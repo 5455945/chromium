@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 namespace gfx {
 
 NativePixmapDmaBuf::NativePixmapDmaBuf(const gfx::Size& size,
-                                       gfx::BufferFormat format,
+                                       viz::SharedImageFormat format,
                                        gfx::NativePixmapHandle handle)
     : size_(size), format_(format), handle_(std::move(handle)) {}
 
@@ -35,29 +35,35 @@ int NativePixmapDmaBuf::GetDmaBufFd(size_t plane) const {
 
 uint32_t NativePixmapDmaBuf::GetDmaBufPitch(size_t plane) const {
   DCHECK_LT(plane, handle_.planes.size());
-  return handle_.planes[plane].stride;
+  return base::checked_cast<uint32_t>(handle_.planes[plane].stride);
 }
 
 size_t NativePixmapDmaBuf::GetDmaBufOffset(size_t plane) const {
   DCHECK_LT(plane, handle_.planes.size());
-  return static_cast<size_t>(handle_.planes[plane].offset);
+  return base::checked_cast<size_t>(handle_.planes[plane].offset);
 }
 
 size_t NativePixmapDmaBuf::GetDmaBufPlaneSize(size_t plane) const {
   DCHECK_LT(plane, handle_.planes.size());
-  return static_cast<size_t>(handle_.planes[plane].size);
+  return base::checked_cast<size_t>(handle_.planes[plane].size);
 }
 
-uint64_t NativePixmapDmaBuf::GetBufferFormatModifier() const {
+uint64_t NativePixmapDmaBuf::GetFormatModifier() const {
   return handle_.modifier;
 }
 
-gfx::BufferFormat NativePixmapDmaBuf::GetBufferFormat() const {
+viz::SharedImageFormat NativePixmapDmaBuf::GetSharedImageFormat() const {
   return format_;
 }
 
 size_t NativePixmapDmaBuf::GetNumberOfPlanes() const {
   return handle_.planes.size();
+}
+
+bool NativePixmapDmaBuf::SupportsZeroCopyWebGPUImport() const {
+  // TODO(crbug.com/40201271): Figure out how to import multi-planar pixmap into
+  // WebGPU without copy.
+  return false;
 }
 
 gfx::Size NativePixmapDmaBuf::GetBufferSize() const {
@@ -70,17 +76,12 @@ uint32_t NativePixmapDmaBuf::GetUniqueId() const {
 
 bool NativePixmapDmaBuf::ScheduleOverlayPlane(
     gfx::AcceleratedWidget widget,
-    int plane_z_order,
-    gfx::OverlayTransform plane_transform,
-    const gfx::Rect& display_bounds,
-    const gfx::RectF& crop_rect,
-    bool enable_blend,
-    std::vector<gfx::GpuFence> acquire_fences,
-    std::vector<gfx::GpuFence> release_fences) {
+    const gfx::OverlayPlaneData& overlay_plane_data,
+    gfx::GpuFenceHandle acquire_fence) {
   return false;
 }
 
-gfx::NativePixmapHandle NativePixmapDmaBuf::ExportHandle() {
+gfx::NativePixmapHandle NativePixmapDmaBuf::ExportHandle() const {
   return gfx::CloneHandleForIPC(handle_);
 }
 

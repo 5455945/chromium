@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,20 @@ void TestFrameSinkManagerImpl::BindReceiver(
     mojo::PendingRemote<mojom::FrameSinkManagerClient> client) {
   receiver_.Bind(std::move(receiver));
   client_.Bind(std::move(client));
+}
+
+void TestFrameSinkManagerImpl::InvalidateFrameSinkId(
+    const FrameSinkId& frame_sink_id,
+    InvalidateFrameSinkIdCallback callback) {
+  if (callback) {
+    std::move(callback).Run();
+  }
+}
+
+void TestFrameSinkManagerImpl::DestroyCompositorFrameSink(
+    const FrameSinkId& frame_sink_id,
+    DestroyCompositorFrameSinkCallback callback) {
+  std::move(callback).Run();
 }
 
 }  // namespace viz

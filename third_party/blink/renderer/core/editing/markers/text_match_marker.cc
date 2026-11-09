@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 namespace blink {
 
-TextMatchMarker::TextMatchMarker(unsigned start_offset,
-                                 unsigned end_offset,
+TextMatchMarker::TextMatchMarker(wtf_size_t start_offset,
+                                 wtf_size_t end_offset,
                                  MatchStatus status)
-    : TextMarkerBase(start_offset, end_offset), match_status_(status) {}
+    : DocumentMarker(start_offset, end_offset), match_status_(status) {}
 
 DocumentMarker::MarkerType TextMatchMarker::GetType() const {
   return DocumentMarker::kTextMatch;
@@ -42,12 +42,6 @@ void TextMatchMarker::SetRect(const PhysicalRect& rect) {
 const PhysicalRect& TextMatchMarker::GetRect() const {
   DCHECK_EQ(layout_status_, LayoutStatus::kValidNotNull);
   return rect_;
-}
-
-void TextMatchMarker::NullifyLayoutRect() {
-  layout_status_ = LayoutStatus::kValidNull;
-  // Now |rendered_rect_| can not be accessed until |SetRenderedRect| is
-  // called.
 }
 
 void TextMatchMarker::Invalidate() {

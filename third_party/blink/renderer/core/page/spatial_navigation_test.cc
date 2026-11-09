@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,6 @@
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 
@@ -27,6 +26,11 @@ class SpatialNavigationTest : public RenderingTest {
  public:
   SpatialNavigationTest()
       : RenderingTest(MakeGarbageCollected<SingleChildLocalFrameClient>()) {}
+
+  void SetUp() override {
+    RenderingTest::SetUp();
+    GetDocument().GetSettings()->SetSpatialNavigationEnabled(true);
+  }
 
   PhysicalRect TopOfVisualViewport() {
     PhysicalRect visual_viewport = RootViewport(&GetFrame());
@@ -124,11 +128,12 @@ TEST_F(SpatialNavigationTest, RootFramesVisualViewport) {
   // Test RootViewport with a pinched viewport.
   VisualViewport& visual_viewport = GetFrame().GetPage()->GetVisualViewport();
   visual_viewport.SetScale(2);
-  visual_viewport.SetLocation(FloatPoint(200, 200));
+  visual_viewport.SetLocation(gfx::PointF(200, 200));
 
   LocalFrameView* root_frame_view = GetFrame().LocalFrameRoot().View();
   const PhysicalRect roots_visible_doc_rect(
-      root_frame_view->GetScrollableArea()->VisibleContentRect());
+      root_frame_view->GetScrollableArea()->VisibleContentRect(
+          kExcludeScrollbars));
   // Convert the root frame's visible rect from document space -> frame space.
   // For the root frame, frame space == root frame space, obviously.
   PhysicalRect viewport_rect_of_root_frame =
@@ -142,11 +147,13 @@ TEST_F(SpatialNavigationTest, FindContainerWhenEnclosingContainerIsDocument) {
       "<!DOCTYPE html>"
       "<a id='child'>link</a>");
 
-  Element* child_element = GetDocument().getElementById("child");
-  Node* enclosing_container = ScrollableAreaOrDocumentOf(child_element);
+  Element* child_element = GetElementById("child");
+  Node* enclosing_container = ScrollableAreaOrDocumentOf(
+      child_element, SpatialNavigationDirection::kNone);
 
   EXPECT_EQ(enclosing_container, GetDocument());
-  EXPECT_TRUE(IsScrollableAreaOrDocument(enclosing_container));
+  EXPECT_TRUE(IsScrollableAreaOrDocument(enclosing_container,
+                                         SpatialNavigationDirection::kNone));
 }
 
 TEST_F(SpatialNavigationTest, FindContainerWhenEnclosingContainerIsIframe) {
@@ -165,16 +172,18 @@ TEST_F(SpatialNavigationTest, FindContainerWhenEnclosingContainerIsIframe) {
       "<a>link</a>");
 
   UpdateAllLifecyclePhasesForTest();
-  Element* iframe = GetDocument().QuerySelector("iframe");
-  Element* link = ChildDocument().QuerySelector("a");
-  Node* enclosing_container = ScrollableAreaOrDocumentOf(link);
+  Element* iframe = GetDocument().QuerySelector(AtomicString("iframe"));
+  Element* link = ChildDocument().QuerySelector(AtomicString("a"));
+  Node* enclosing_container =
+      ScrollableAreaOrDocumentOf(link, SpatialNavigationDirection::kNone);
 
   EXPECT_FALSE(IsOffscreen(iframe));
   EXPECT_FALSE(IsOffscreen(&ChildDocument()));
   EXPECT_FALSE(IsOffscreen(link));
 
   EXPECT_EQ(enclosing_container, ChildDocument());
-  EXPECT_TRUE(IsScrollableAreaOrDocument(enclosing_container));
+  EXPECT_TRUE(IsScrollableAreaOrDocument(enclosing_container,
+                                         SpatialNavigationDirection::kNone));
 }
 
 TEST_F(SpatialNavigationTest,
@@ -195,33 +204,30 @@ TEST_F(SpatialNavigationTest,
       "  <div id='content'>some text here</div>"
       "</div>");
 
-  Element* content = GetDocument().getElementById("content");
-  Element* container = GetDocument().getElementById("container");
-  Node* enclosing_container = ScrollableAreaOrDocumentOf(content);
+  Element* content = GetElementById("content");
+  Element* container = GetElementById("container");
+  Node* enclosing_container =
+      ScrollableAreaOrDocumentOf(content, SpatialNavigationDirection::kNone);
 
-  // TODO(crbug.com/889840):
-  // VisibleBoundsInVisualViewport does not (yet) take div-clipping into
-  // account. The node is off screen, but nevertheless VBIVV returns a non-
-  // empty rect. If you fix VisibleBoundsInVisualViewport, change to
-  // EXPECT_TRUE here and stop using LayoutObject in IsOffscreen().
-  EXPECT_FALSE(
-      content->VisibleBoundsInVisualViewport().IsEmpty());  // EXPECT_TRUE.
+  // TODO(crbug.com/440374239): Update to EXPECT_TRUE once this is fixed.
+  EXPECT_FALSE(content->VisibleBoundsInLocalRoot().IsEmpty());
 
   EXPECT_TRUE(IsOffscreen(content));
   EXPECT_FALSE(IsOffscreen(container));
 
   EXPECT_EQ(enclosing_container, container);
-  EXPECT_TRUE(IsScrollableAreaOrDocument(enclosing_container));
+  EXPECT_TRUE(IsScrollableAreaOrDocument(enclosing_container,
+                                         SpatialNavigationDirection::kNone));
 }
 
-TEST_F(SpatialNavigationTest, ZooomPutsElementOffScreen) {
+TEST_F(SpatialNavigationTest, ZoomPutsElementOffScreen) {
   SetBodyInnerHTML(
       "<!DOCTYPE html>"
       "<button id='a'>hello</button><br>"
       "<button id='b' style='margin-top: 70%'>bello</button>");
 
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
   EXPECT_FALSE(IsOffscreen(a));
   EXPECT_FALSE(IsOffscreen(b));
 
@@ -243,7 +249,7 @@ TEST_F(SpatialNavigationTest, RootViewportRespectsVisibleSize) {
 
 TEST_F(SpatialNavigationTest, StartAtVisibleFocusedElement) {
   SetBodyInnerHTML("<button id='b'>hello</button>");
-  Element* b = GetDocument().getElementById("b");
+  Element* b = GetElementById("b");
 
   EXPECT_EQ(SearchOrigin(RootViewport(&GetFrame()), b,
                          SpatialNavigationDirection::kDown),
@@ -266,7 +272,7 @@ TEST_F(SpatialNavigationTest, StartAtVisibleFocusedScroller) {
       "  <div id='content'>some text here</div>"
       "</div>");
 
-  Element* scroller = GetDocument().getElementById("scroller");
+  Element* scroller = GetElementById("scroller");
   EXPECT_EQ(SearchOrigin(RootViewport(&GetFrame()), scroller,
                          SpatialNavigationDirection::kDown),
             NodeRectInRootFrame(scroller));
@@ -287,7 +293,7 @@ TEST_F(SpatialNavigationTest, StartAtVisibleFocusedIframe) {
       "<!DOCTYPE html>"
       "<div>some text here</div>");
 
-  Element* iframe = GetDocument().getElementById("iframe");
+  Element* iframe = GetElementById("iframe");
   EXPECT_EQ(SearchOrigin(RootViewport(&GetFrame()), iframe,
                          SpatialNavigationDirection::kDown),
             NodeRectInRootFrame(iframe));
@@ -339,7 +345,7 @@ TEST_F(SpatialNavigationTest,
       "<button id='b' style='margin-top: 120%;'>B</button>");  // Outside the
                                                                // visual
                                                                // viewport.
-  Element* b = GetDocument().getElementById("b");
+  Element* b = GetElementById("b");
   EXPECT_TRUE(IsOffscreen(b));
 
   EXPECT_EQ(SearchOrigin(RootViewport(&GetFrame()), b,
@@ -364,16 +370,12 @@ TEST_F(SpatialNavigationTest, StartAtContainersEdge) {
       "  <button id='b'>B</button>"
       "</div>");
 
-  Element* b = GetDocument().getElementById("b");
-  const Element* container = GetDocument().getElementById("container");
+  Element* b = GetElementById("b");
+  const Element* container = GetElementById("container");
   const PhysicalRect container_box = NodeRectInRootFrame(container);
 
-  // TODO(crbug.com/889840):
-  // VisibleBoundsInVisualViewport does not (yet) take div-clipping into
-  // account. The node is off screen, but nevertheless VBIVV returns a non-
-  // empty rect. If you fix VisibleBoundsInVisualViewport, change to
-  // EXPECT_TRUE here and stop using LayoutObject in IsOffscreen().
-  EXPECT_FALSE(b->VisibleBoundsInVisualViewport().IsEmpty());  // EXPECT_TRUE.
+  // TODO(crbug.com/440374239): Update to EXPECT_TRUE once this is fixed.
+  EXPECT_FALSE(b->VisibleBoundsInLocalRoot().IsEmpty());
   EXPECT_TRUE(IsOffscreen(b));
 
   // Go down.
@@ -428,8 +430,8 @@ TEST_F(SpatialNavigationTest,
       "  <button id='b'>B</button>"
       "</div>");
 
-  Element* scroller = GetDocument().getElementById("scroller");
-  Element* b = GetDocument().getElementById("b");
+  Element* scroller = GetElementById("scroller");
+  Element* b = GetElementById("b");
 
   EXPECT_TRUE(IsOffscreen(scroller));
   EXPECT_TRUE(IsOffscreen(b));
@@ -464,12 +466,14 @@ TEST_F(SpatialNavigationTest,
       "  </div>"
       "</div>");
 
-  Element* scroller1 = GetDocument().getElementById("scroller1");
-  Element* scroller2 = GetDocument().getElementById("scroller2");
-  Element* link = GetDocument().getElementById("link");
+  Element* scroller1 = GetElementById("scroller1");
+  Element* scroller2 = GetElementById("scroller2");
+  Element* link = GetElementById("link");
 
-  EXPECT_TRUE(IsScrollableAreaOrDocument(scroller1));
-  EXPECT_TRUE(IsScrollableAreaOrDocument(scroller2));
+  EXPECT_TRUE(
+      IsScrollableAreaOrDocument(scroller1, SpatialNavigationDirection::kNone));
+  EXPECT_TRUE(
+      IsScrollableAreaOrDocument(scroller2, SpatialNavigationDirection::kNone));
   EXPECT_TRUE(IsOffscreen(scroller1));
   EXPECT_TRUE(IsOffscreen(scroller1));
   EXPECT_TRUE(IsOffscreen(link));
@@ -480,7 +484,7 @@ TEST_F(SpatialNavigationTest,
 TEST_F(SpatialNavigationTest, PartiallyVisible) {
   // <button>'s bottom is clipped.
   SetBodyInnerHTML("<button id='b' style='height: 900px;'>B</button>");
-  Element* b = GetDocument().getElementById("b");
+  Element* b = GetElementById("b");
 
   EXPECT_FALSE(IsOffscreen(b));  // <button> is not completely offscreen.
 
@@ -493,7 +497,8 @@ TEST_F(SpatialNavigationTest, PartiallyVisible) {
   // Do some scrolling.
   ScrollableArea* root_scroller = GetDocument().View()->GetScrollableArea();
   root_scroller->SetScrollOffset(ScrollOffset(0, 600),
-                                 mojom::blink::ScrollType::kProgrammatic);
+                                 mojom::blink::ScrollType::kProgrammatic,
+                                 cc::ScrollSourceType::kNone);
   PhysicalRect button_after_scroll = NodeRectInRootFrame(b);
   ASSERT_NE(button_in_root_frame,
             button_after_scroll);  // As we scrolled, the
@@ -525,8 +530,8 @@ TEST_F(SpatialNavigationTest,
       "<a id='link'>link</a>");
 
   UpdateAllLifecyclePhasesForTest();
-  Element* link = ChildDocument().QuerySelector("a");
-  Element* iframe = GetDocument().QuerySelector("iframe");
+  Element* link = ChildDocument().QuerySelector(AtomicString("a"));
+  Element* iframe = GetDocument().QuerySelector(AtomicString("iframe"));
 
   // The <iframe> is not displayed in the visual viewport. In other words, it is
   // being offscreen. And so is also its content, the <a>.
@@ -561,18 +566,13 @@ TEST_F(SpatialNavigationTest, DivsCanClipIframes) {
       "<a>link</a>");
 
   UpdateAllLifecyclePhasesForTest();
-  Element* div = GetDocument().QuerySelector("div");
-  Element* iframe = GetDocument().QuerySelector("iframe");
-  Element* link = ChildDocument().QuerySelector("a");
+  Element* div = GetDocument().QuerySelector(AtomicString("div"));
+  Element* iframe = GetDocument().QuerySelector(AtomicString("iframe"));
+  Element* link = ChildDocument().QuerySelector(AtomicString("a"));
   EXPECT_FALSE(IsOffscreen(div));
 
-  // TODO(crbug.com/889840):
-  // VisibleBoundsInVisualViewport does not (yet) take div-clipping into
-  // account. The node is off screen, but nevertheless VBIVV returns a non-
-  // empty rect. If you fix VisibleBoundsInVisualViewport, change to
-  // EXPECT_TRUE here and stop using LayoutObject in IsOffscreen().
-  EXPECT_FALSE(
-      iframe->VisibleBoundsInVisualViewport().IsEmpty());  // EXPECT_TRUE.
+  // TODO(crbug.com/440374239): Update to EXPECT_TRUE once this is fixed.
+  EXPECT_FALSE(iframe->VisibleBoundsInLocalRoot().IsEmpty());
 
   // The <iframe> is not displayed in the visual viewport because it is clipped
   // by the div. In other words, it is being offscreen. And so is also its
@@ -604,8 +604,10 @@ TEST_F(SpatialNavigationTest, PartiallyVisibleIFrame) {
       "<a id='child'>link</a>");
 
   UpdateAllLifecyclePhasesForTest();
-  Element* child_element = ChildDocument().getElementById("child");
-  Node* enclosing_container = ScrollableAreaOrDocumentOf(child_element);
+  Element* child_element =
+      ChildDocument().getElementById(AtomicString("child"));
+  Node* enclosing_container = ScrollableAreaOrDocumentOf(
+      child_element, SpatialNavigationDirection::kNone);
   EXPECT_EQ(enclosing_container, ChildDocument());
 
   EXPECT_TRUE(IsOffscreen(child_element));         // Completely offscreen.
@@ -654,7 +656,7 @@ TEST_F(SpatialNavigationTest, BottomOfPinchedViewport) {
   // Now, test SearchOrigin with a pinched viewport.
   VisualViewport& visual_viewport = GetFrame().GetPage()->GetVisualViewport();
   visual_viewport.SetScale(2);
-  visual_viewport.SetLocation(FloatPoint(200, 200));
+  visual_viewport.SetLocation(gfx::PointF(200, 200));
   origin = SearchOrigin(RootViewport(&GetFrame()), nullptr,
                         SpatialNavigationDirection::kUp);
   EXPECT_EQ(origin.Height(), 0);
@@ -672,7 +674,7 @@ TEST_F(SpatialNavigationTest, StraightTextNoFragments) {
       "  body {font: 10px/10px Ahem; width: 500px}"
       "</style>"
       "<a href='#' id='a'>blaaaaa blaaaaa blaaaaa</a>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   EXPECT_FALSE(IsFragmentedInline(*a->GetLayoutObject()));
 }
 
@@ -684,7 +686,7 @@ TEST_F(SpatialNavigationTest, LineBrokenTextHasFragments) {
       "  body {font: 10px/10px Ahem; width: 40px}"
       "</style>"
       "<a href='#' id='a'>blaaaaa blaaaaa blaaaaa</a>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   EXPECT_TRUE(IsFragmentedInline(*a->GetLayoutObject()));
 }
 
@@ -695,7 +697,7 @@ TEST_F(SpatialNavigationTest, ManyClientRectsButNotLineBrokenText) {
       "  div {width: 20px; height: 20px;}"
       "</style>"
       "<a href='#' id='a'><div></div></a>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   EXPECT_FALSE(IsFragmentedInline(*a->GetLayoutObject()));
 }
 
@@ -707,7 +709,7 @@ TEST_F(SpatialNavigationTest, UseTheFirstFragment) {
       "  body {font: 10px/10px Ahem; margin: 0; width: 50px;}"
       "</style>"
       "<a href='#' id='a'>12345 12</a>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   EXPECT_TRUE(IsFragmentedInline(*a->GetLayoutObject()));
 
   // Search downards.
@@ -752,7 +754,7 @@ TEST_F(SpatialNavigationTest, InlineImageLink) {
       "<body style='font: 17px Ahem;'>"
       "<a id='a'><img id='pic' width='50' height='50'></a>"
       "</body>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(a));
   PhysicalRect uncropped_link = NodeRectInRootFrame(a);
   EXPECT_EQ(uncropped_link.Width(), 50);
@@ -771,7 +773,7 @@ TEST_F(SpatialNavigationTest, InlineImageLinkWithLineHeight) {
       "<body style='font: 17px Ahem; line-height: 13px;'>"
       "<a id='a'><img id='pic' width='50' height='50'></a>"
       "</body>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(a));
   PhysicalRect uncropped_link = NodeRectInRootFrame(a);
   EXPECT_EQ(uncropped_link.Width(), 50);
@@ -784,9 +786,6 @@ TEST_F(SpatialNavigationTest, InlineImageLinkWithLineHeight) {
 }
 
 TEST_F(SpatialNavigationTest, InlineImageTextLinkWithLineHeight) {
-  // Fails when LayoutNG is disabled. See crbug.com/1160211
-  if (!RuntimeEnabledFeatures::LayoutNGEnabled())
-    return;
   LoadAhem();
   SetBodyInnerHTML(
       "<!DOCTYPE html>"
@@ -795,9 +794,9 @@ TEST_F(SpatialNavigationTest, InlineImageTextLinkWithLineHeight) {
       "<a id='b'>b</a><br/>"
       "<a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(a));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(b));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(c));
@@ -812,9 +811,6 @@ TEST_F(SpatialNavigationTest, InlineImageTextLinkWithLineHeight) {
 }
 
 TEST_F(SpatialNavigationTest, InlineLinkWithInnerBlock) {
-  // Fails when LayoutNG is disabled. See crbug.com/1160211
-  if (!RuntimeEnabledFeatures::LayoutNGEnabled())
-    return;
   LoadAhem();
   SetBodyInnerHTML(
       "<!DOCTYPE html>"
@@ -823,9 +819,9 @@ TEST_F(SpatialNavigationTest, InlineLinkWithInnerBlock) {
       "45px; color: red'>a</span>a</a><a id='b'>bbb</a><br/>"
       "<a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(a));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(b));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(c));
@@ -847,9 +843,9 @@ TEST_F(SpatialNavigationTest, NoOverlappingLinks) {
       "  <a id='a'>aaa</a> <a id='b'>bbb</a><br/>"
       "  <a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   AssertNormalizedHeight(a, 17, false);
   AssertNormalizedHeight(b, 17, false);
   AssertNormalizedHeight(c, 17, false);
@@ -868,9 +864,9 @@ TEST_F(SpatialNavigationTest, OverlappingLinks) {
       "  <a id='a'>aaa</a> <a id='b'>bbb</a><br/>"
       "  <a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   // SpatNav will use the line box's height.
   AssertNormalizedHeight(a, 13, true);
   AssertNormalizedHeight(b, 13, true);
@@ -890,9 +886,9 @@ TEST_F(SpatialNavigationTest, UseInlineBoxHeightWhenShorter) {
       "  <a id='a'>aaa</a> <a id='b'>bbb</a><br/>"
       "  <a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   // SpatNav will use the inline boxes' height (17px) when it's shorter than
   // their line box (20px).
   AssertNormalizedHeight(a, 17, false);
@@ -913,7 +909,7 @@ TEST_F(SpatialNavigationTest, LineBrokenLink) {
       "  body {font: 10px Ahem; line-height: 12px; width: 40px}"
       "</style>"
       "<a id='a'>bla bla bla</a>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   ASSERT_TRUE(IsFragmentedInline(*a->GetLayoutObject()));
   ASSERT_EQ(LineBoxes(*a->GetLayoutObject()), 3);
   PhysicalRect search_origin =
@@ -940,7 +936,7 @@ TEST_F(SpatialNavigationTest, NormalizedLineBrokenLink) {
       "  body {font: 10px Ahem; line-height: 7px; width: 40px}"
       "</style>"
       "<a id='a'>bla bla bla</a>");
-  Element* a = GetDocument().getElementById("a");
+  Element* a = GetElementById("a");
   ASSERT_TRUE(IsFragmentedInline(*a->GetLayoutObject()));
   ASSERT_EQ(LineBoxes(*a->GetLayoutObject()), 3);
   PhysicalRect search_origin =
@@ -960,9 +956,6 @@ TEST_F(SpatialNavigationTest, NormalizedLineBrokenLink) {
 }
 
 TEST_F(SpatialNavigationTest, NormalizedLineBrokenLinkWithImg) {
-  // Fails when LayoutNG is disabled. See crbug.com/1160211
-  if (!RuntimeEnabledFeatures::LayoutNGEnabled())
-    return;
   LoadAhem();
   SetBodyInnerHTML(
       "<!DOCTYPE html>"
@@ -973,8 +966,8 @@ TEST_F(SpatialNavigationTest, NormalizedLineBrokenLinkWithImg) {
       "<a id='a'>aa<img width='10' height='24' src=''>a aaaa</a>"
       "<a id='b'>bb</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
   ASSERT_TRUE(IsFragmentedInline(*a->GetLayoutObject()));
   ASSERT_FALSE(IsFragmentedInline(*b->GetLayoutObject()));
   ASSERT_EQ(LineBoxes(*a->GetLayoutObject()), 2);
@@ -995,9 +988,9 @@ TEST_F(SpatialNavigationTest, PaddedInlineLinkOverlapping) {
       "  <a id='b'>bbb</a><br/>"
       "  <a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   // Padding doesn't grow |a|'s line box.
   AssertNormalizedHeight(a, 13, true);
   AssertNormalizedHeight(b, 13, true);
@@ -1018,9 +1011,9 @@ TEST_F(SpatialNavigationTest, PaddedInlineBlockLinkOverlapping) {
       "  <a id='b'>bbb</a><br/>"
       "  <a id='c'>cccccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(a));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(b));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(c));
@@ -1036,8 +1029,8 @@ TEST_F(SpatialNavigationTest, BoxWithLineHeight) {
       "  aaa bbb<br/>"
       "  <a id='c'>cccccccc</a>"
       "</div>");
-  Element* block = GetDocument().getElementById("block");
-  Element* c = GetDocument().getElementById("c");
+  Element* block = GetElementById("block");
+  Element* c = GetElementById("c");
   ASSERT_TRUE(Intersects(block, c));
 
   // The block's inner line-height does not change the block's outer dimensions.
@@ -1059,8 +1052,8 @@ TEST_F(SpatialNavigationTest, ReplacedInlineElement) {
       "  <img width='20' height='20' id='pic'> bbb<br/>"
       "  <a id='c'>cccccccc</a>"
       "</body>");
-  Element* pic = GetDocument().getElementById("pic");
-  Element* c = GetDocument().getElementById("c");
+  Element* pic = GetElementById("pic");
+  Element* c = GetElementById("c");
   EXPECT_FALSE(Intersects(pic, c));
 
   // The line-height around the img does not change the img's outer dimensions.
@@ -1085,9 +1078,9 @@ TEST_F(SpatialNavigationTest, VerticalText) {
       "<a id='a'>aaaaaaaaaaa</a>"
       "<a id='b'>bbb</a> <a id='c'>cccccc</a>"
       "</div>");
-  Element* a = GetDocument().getElementById("a");
-  Element* b = GetDocument().getElementById("b");
-  Element* c = GetDocument().getElementById("c");
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(a));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(b));
   EXPECT_TRUE(HasSameSearchOriginRectAndCandidateRect(c));
@@ -1112,7 +1105,7 @@ TEST_F(SpatialNavigationTest, TopOfPinchedViewport) {
   // Now, test SearchOrigin with a pinched viewport.
   VisualViewport& visual_viewport = GetFrame().GetPage()->GetVisualViewport();
   visual_viewport.SetScale(2);
-  visual_viewport.SetLocation(FloatPoint(200, 200));
+  visual_viewport.SetLocation(gfx::PointF(200, 200));
   origin = SearchOrigin(RootViewport(&GetFrame()), nullptr,
                         SpatialNavigationDirection::kDown);
   EXPECT_EQ(origin.Height(), 0);
@@ -1138,37 +1131,18 @@ TEST_F(SpatialNavigationTest, HasRemoteFrame) {
 
   Element* iframe =
       webview->MainFrameImpl()->GetFrame()->GetDocument()->getElementById(
-          "iframe");
+          AtomicString("iframe"));
   EXPECT_FALSE(HasRemoteFrame(iframe));
 
-  webview->MainFrameImpl()->FirstChild()->Swap(
-      frame_test_helpers::CreateRemote());
+  frame_test_helpers::SwapRemoteFrame(webview->MainFrameImpl()->FirstChild(),
+                                      frame_test_helpers::CreateRemote());
   EXPECT_TRUE(HasRemoteFrame(iframe));
 }
 
-class SpatialNavigationWithFocuslessModeTest
-    : public SpatialNavigationTest,
-      public ::testing::WithParamInterface<bool> {
- public:
-  SpatialNavigationWithFocuslessModeTest() : use_focusless_mode_(GetParam()) {}
-
-  void SetUp() override {
-    SpatialNavigationTest::SetUp();
-    GetDocument().GetSettings()->SetSpatialNavigationEnabled(true);
-  }
-
- private:
-  ScopedFocuslessSpatialNavigationForTest use_focusless_mode_;
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         SpatialNavigationWithFocuslessModeTest,
-                         ::testing::Bool());
-
-TEST_P(SpatialNavigationWithFocuslessModeTest, PressEnterKeyActiveElement) {
+TEST_F(SpatialNavigationTest, PressEnterKeyActiveElement) {
   SetBodyInnerHTML("<button id='b'>hello</button>");
 
-  Element* b = GetDocument().getElementById("b");
+  Element* b = GetElementById("b");
 
   // Move interest to button.
   WebKeyboardEvent arrow_down{WebInputEvent::Type::kRawKeyDown,
@@ -1194,76 +1168,6 @@ TEST_P(SpatialNavigationWithFocuslessModeTest, PressEnterKeyActiveElement) {
   enter.SetType(WebInputEvent::Type::kKeyUp);
   GetDocument().GetFrame()->GetEventHandler().KeyEvent(enter);
   EXPECT_FALSE(b->IsActive());
-}
-
-class FocuslessSpatialNavigationSimTest : public SimTest {
- public:
-  FocuslessSpatialNavigationSimTest() : use_focusless_mode_(true) {}
-
-  void SetUp() override {
-    SimTest::SetUp();
-    WebView().GetPage()->GetSettings().SetSpatialNavigationEnabled(true);
-  }
-
-  void SimulateKeyPress(int dom_key) {
-    WebKeyboardEvent event{WebInputEvent::Type::kRawKeyDown,
-                           WebInputEvent::kNoModifiers,
-                           WebInputEvent::GetStaticTimeStampForTests()};
-    event.dom_key = dom_key;
-    WebView().MainFrameWidget()->HandleInputEvent(
-        WebCoalescedInputEvent(event, ui::LatencyInfo()));
-
-    if (dom_key == ui::DomKey::ENTER) {
-      event.SetType(WebInputEvent::Type::kChar);
-      WebView().MainFrameWidget()->HandleInputEvent(
-          WebCoalescedInputEvent(event, ui::LatencyInfo()));
-    }
-
-    event.SetType(WebInputEvent::Type::kKeyUp);
-    WebView().MainFrameWidget()->HandleInputEvent(
-        WebCoalescedInputEvent(event, ui::LatencyInfo()));
-  }
-
-  ScopedFocuslessSpatialNavigationForTest use_focusless_mode_;
-};
-
-// Tests that opening a <select> popup works by pressing enter from
-// "interested" mode, without being focused.
-TEST_F(FocuslessSpatialNavigationSimTest, OpenSelectPopup) {
-  // This test requires PagePopup since we're testing opening the <select> drop
-  // down so skip this test on platforms (i.e. Android) that don't use this.
-  if (!RuntimeEnabledFeatures::PagePopupEnabled())
-    return;
-
-  WebView().MainFrameViewWidget()->Resize(gfx::Size(800, 600));
-  WebView().MainFrameWidget()->SetFocus(true);
-  WebView().SetIsActive(true);
-
-  SimRequest request("https://example.com/test.html", "text/html");
-  LoadURL("https://example.com/test.html");
-  request.Complete(R"HTML(
-          <!DOCTYPE html>
-          <select id="target">
-            <option>A</option>
-            <option>B</option>
-            <option>C</option>
-          </select>
-      )HTML");
-  Compositor().BeginFrame();
-
-  auto* select = To<HTMLSelectElement>(GetDocument().getElementById("target"));
-  SimulateKeyPress(ui::DomKey::ARROW_DOWN);
-
-  SpatialNavigationController& spat_nav_controller =
-      GetDocument().GetPage()->GetSpatialNavigationController();
-
-  ASSERT_EQ(select, spat_nav_controller.GetInterestedElement());
-  ASSERT_NE(select, GetDocument().ActiveElement());
-  ASSERT_FALSE(select->PopupIsVisible());
-
-  // The enter key should cause the popup to open.
-  SimulateKeyPress(ui::DomKey::ENTER);
-  EXPECT_TRUE(select->PopupIsVisible());
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,53 +7,55 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/screens/demo_preferences_screen.h"
-#include "chrome/browser/ui/webui/chromeos/login/demo_preferences_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/demo_preferences_screen_handler.h"
 #include "testing/gmock/include/gmock/gmock.h"
+
+class PrefService;
 
 namespace ash {
 
 class MockDemoPreferencesScreen : public DemoPreferencesScreen {
  public:
-  MockDemoPreferencesScreen(DemoPreferencesScreenView* view,
+  // `local_state` must be non-null and must outlive `this`.
+  MockDemoPreferencesScreen(PrefService* local_state,
+                            base::WeakPtr<DemoPreferencesScreenView> view,
                             const ScreenExitCallback& exit_callback);
+
+  MockDemoPreferencesScreen(const MockDemoPreferencesScreen&) = delete;
+  MockDemoPreferencesScreen& operator=(const MockDemoPreferencesScreen&) =
+      delete;
+
   ~MockDemoPreferencesScreen() override;
 
   MOCK_METHOD(void, ShowImpl, ());
   MOCK_METHOD(void, HideImpl, ());
 
   void ExitScreen(Result result);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockDemoPreferencesScreen);
 };
 
-class MockDemoPreferencesScreenView : public DemoPreferencesScreenView {
+class MockDemoPreferencesScreenView final : public DemoPreferencesScreenView {
  public:
   MockDemoPreferencesScreenView();
+
+  MockDemoPreferencesScreenView(const MockDemoPreferencesScreenView&) = delete;
+  MockDemoPreferencesScreenView& operator=(
+      const MockDemoPreferencesScreenView&) = delete;
+
   ~MockDemoPreferencesScreenView() override;
 
   MOCK_METHOD(void, Show, ());
-  MOCK_METHOD(void, Hide, ());
-  MOCK_METHOD(void, MockBind, (DemoPreferencesScreen * screen));
   MOCK_METHOD(void, SetInputMethodId, (const std::string& input_method));
 
-  void Bind(DemoPreferencesScreen* screen) override;
+  base::WeakPtr<DemoPreferencesScreenView> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
  private:
-  DemoPreferencesScreen* screen_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(MockDemoPreferencesScreenView);
+  base::WeakPtrFactory<DemoPreferencesScreenView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::MockDemoPreferencesScreen;
-using ::ash::MockDemoPreferencesScreenView;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_MOCK_DEMO_PREFERENCES_SCREEN_H_

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,15 @@
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_package/signed_exchange_utils.h"
-#include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
-#include "content/public/browser/web_contents.h"
 #include "net/base/ip_endpoint.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -42,6 +40,7 @@ constexpr char kSXGResultCertFetchError[] = "sxg.cert_fetch_error";
 constexpr char kSXGResultCertParseError[] = "sxg.cert_parse_error";
 constexpr char kSXGResultVariantMismatch[] = "sxg.variant_mismatch";
 constexpr char kSXGHeaderIntegrityMismatch[] = "sxg.header_integrity_mismatch";
+constexpr char kSXGResultHadCookie[] = "sxg.had_cookie";
 
 const char* GetResultTypeString(SignedExchangeLoadResult result) {
   switch (result) {
@@ -72,18 +71,23 @@ const char* GetResultTypeString(SignedExchangeLoadResult result) {
     case SignedExchangeLoadResult::kMerkleIntegrityError:
       return kSXGResultMiError;
     case SignedExchangeLoadResult::kSXGServedWithoutNosniff:
-      // TODO(crbug/910516): Need to update the spec to send the report in this
-      // case.
+      // TODO(crbug.com/40604536): Need to update the spec to send the report in
+      // this case.
       return kSXGResultParseError;
     case SignedExchangeLoadResult::kInvalidIntegrityHeader:
       return kSXGResultInvalidIntegrityHeader;
     case SignedExchangeLoadResult::kVariantMismatch:
-      // TODO(crbug/910516): Need to update the spec to send the report in this
-      // case.
+      // TODO(crbug.com/40604536): Need to update the spec to send the report in
+      // this case.
       return kSXGResultVariantMismatch;
+    case SignedExchangeLoadResult::kHadCookieForCookielessOnlySXG:
+      // TODO(crbug.com/40604536): Need to update the spec to send the report in
+      // this case.
+      return kSXGResultHadCookie;
+    case SignedExchangeLoadResult::kPKPViolationError:
+      return kSXGResultCertVerificationError;
   }
   NOTREACHED();
-  return kSXGResultFailed;
 }
 
 bool IsCertRelatedErrorResult(const char* result_string) {
@@ -118,26 +122,16 @@ bool ShouldDowngradeReport(const char* result_string,
   return false;
 }
 
-void ReportResult(int frame_tree_node_id,
-                  network::mojom::SignedExchangeReportPtr report,
-                  const net::NetworkIsolationKey& network_isolation_key) {
-  FrameTreeNode* frame_tree_node =
-      FrameTreeNode::GloballyFindByID(frame_tree_node_id);
-  if (!frame_tree_node)
+void ReportResult(
+    base::WeakPtr<StoragePartitionImpl> storage_partition,
+    network::mojom::SignedExchangeReportPtr report,
+    const net::NetworkAnonymizationKey& network_anonymization_key) {
+  if (!storage_partition) {
     return;
-  RenderFrameHostImpl* frame_host = frame_tree_node->current_frame_host();
-  if (!frame_host)
-    return;
-  SiteInstance* site_instance = frame_host->GetSiteInstance();
-  DCHECK(site_instance);
-  WebContents* web_contents = WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
-    return;
-  StoragePartition* partition =
-      web_contents->GetBrowserContext()->GetStoragePartition(site_instance);
-  DCHECK(partition);
-  partition->GetNetworkContext()->QueueSignedExchangeReport(
-      std::move(report), network_isolation_key);
+  }
+
+  storage_partition->GetNetworkContext()->QueueSignedExchangeReport(
+      std::move(report), network_anonymization_key);
 }
 
 }  // namespace
@@ -147,27 +141,37 @@ std::unique_ptr<SignedExchangeReporter> SignedExchangeReporter::MaybeCreate(
     const GURL& outer_url,
     const std::string& referrer,
     const network::mojom::URLResponseHead& response,
-    const net::NetworkIsolationKey& network_isolation_key,
-    int frame_tree_node_id) {
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    FrameTreeNodeId frame_tree_node_id) {
   if (!signed_exchange_utils::
           IsSignedExchangeReportingForDistributorsEnabled()) {
     return nullptr;
   }
-  return base::WrapUnique(
-      new SignedExchangeReporter(outer_url, referrer, response,
-                                 network_isolation_key, frame_tree_node_id));
+  return base::WrapUnique(new SignedExchangeReporter(
+      outer_url, referrer, response, network_anonymization_key,
+      frame_tree_node_id));
 }
 
 SignedExchangeReporter::SignedExchangeReporter(
     const GURL& outer_url,
     const std::string& referrer,
     const network::mojom::URLResponseHead& response,
-    const net::NetworkIsolationKey& network_isolation_key,
-    int frame_tree_node_id)
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    FrameTreeNodeId frame_tree_node_id)
     : report_(network::mojom::SignedExchangeReport::New()),
       request_start_(response.load_timing.request_start),
-      network_isolation_key_(network_isolation_key),
-      frame_tree_node_id_(frame_tree_node_id) {
+      network_anonymization_key_(network_anonymization_key) {
+  // Resolve the StoragePartition that performed the load now: the report is
+  // queued only after asynchronous work completes, by which time the
+  // FrameTreeNode's current document may have been replaced by one in a
+  // different StoragePartition.
+  if (FrameTreeNode* frame_tree_node =
+          FrameTreeNode::GloballyFindByID(frame_tree_node_id)) {
+    if (RenderFrameHostImpl* frame_host =
+            frame_tree_node->current_frame_host()) {
+      storage_partition_ = frame_host->GetStoragePartition()->GetWeakPtr();
+    }
+  }
   report_->outer_url = outer_url;
   report_->referrer = referrer;
   report_->server_ip_address = response.remote_endpoint.address();
@@ -189,18 +193,18 @@ void SignedExchangeReporter::set_cert_server_ip_address(
 }
 
 void SignedExchangeReporter::set_inner_url(const GURL& inner_url) {
-  DCHECK(report_);
+  CHECK(report_, base::NotFatalUntil::M159);
   report_->inner_url = inner_url;
 }
 
 void SignedExchangeReporter::set_cert_url(const GURL& cert_url) {
-  DCHECK(report_);
+  CHECK(report_, base::NotFatalUntil::M159);
   report_->cert_url = cert_url;
 }
 
 void SignedExchangeReporter::ReportLoadResultAndFinish(
     SignedExchangeLoadResult result) {
-  DCHECK(report_);
+  CHECK(report_, base::NotFatalUntil::M159);
 
   const char* result_string = GetResultTypeString(result);
   report_->success = result == SignedExchangeLoadResult::kSuccess;
@@ -218,15 +222,17 @@ void SignedExchangeReporter::ReportLoadResultAndFinish(
     report_->elapsed_time = base::TimeTicks::Now() - request_start_;
   }
 
-  ReportResult(frame_tree_node_id_, std::move(report_), network_isolation_key_);
+  ReportResult(storage_partition_, std::move(report_),
+               network_anonymization_key_);
 }
 
 void SignedExchangeReporter::ReportHeaderIntegrityMismatch() {
-  DCHECK(report_);
+  CHECK(report_, base::NotFatalUntil::M159);
   report_->success = false;
   report_->type = kSXGHeaderIntegrityMismatch;
   report_->elapsed_time = base::TimeDelta();
-  ReportResult(frame_tree_node_id_, std::move(report_), network_isolation_key_);
+  ReportResult(storage_partition_, std::move(report_),
+               network_anonymization_key_);
 }
 
 }  // namespace content

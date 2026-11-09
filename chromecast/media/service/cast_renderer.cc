@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromecast/base/task_runner_impl.h"
-#include "chromecast/common/mojom/constants.mojom.h"
 #include "chromecast/media/base/audio_device_ids.h"
 #include "chromecast/media/base/video_mode_switcher.h"
 #include "chromecast/media/base/video_resolution_policy.h"
@@ -22,8 +22,11 @@
 #include "chromecast/media/cma/pipeline/media_pipeline_impl.h"
 #include "chromecast/media/cma/pipeline/video_pipeline_client.h"
 #include "chromecast/media/service/video_geometry_setter_service.h"
+#include "chromecast/public/cast_media_shlib.h"
+#include "chromecast/public/graphics_types.h"
 #include "chromecast/public/media/media_pipeline_backend.h"
 #include "chromecast/public/media/media_pipeline_device_params.h"
+#include "chromecast/public/video_plane.h"
 #include "chromecast/public/volume_control.h"
 #include "media/audio/audio_device_description.h"
 #include "media/base/audio_decoder_config.h"
@@ -31,7 +34,6 @@
 #include "media/base/media_log.h"
 #include "media/base/media_resource.h"
 #include "media/base/renderer_client.h"
-#include "services/service_manager/public/mojom/interface_provider.mojom.h"
 
 namespace chromecast {
 namespace media {
@@ -40,7 +42,7 @@ namespace {
 
 // Maximum difference between audio frame PTS and video frame PTS
 // for frames read from the DemuxerStream.
-const base::TimeDelta kMaxDeltaFetcher(base::TimeDelta::FromMilliseconds(2000));
+const base::TimeDelta kMaxDeltaFetcher(base::Milliseconds(2000));
 
 void VideoModeSwitchCompletionCb(::media::PipelineStatusCallback init_cb,
                                  bool success) {
@@ -60,7 +62,8 @@ CastRenderer::CastRenderer(
     VideoModeSwitcher* video_mode_switcher,
     VideoResolutionPolicy* video_resolution_policy,
     const base::UnguessableToken& overlay_plane_id,
-    ::media::mojom::FrameInterfaceFactory* frame_interfaces)
+    ::media::mojom::FrameInterfaceFactory* frame_interfaces,
+    bool is_buffering_enabled)
     : backend_factory_(backend_factory),
       task_runner_(task_runner),
       video_mode_switcher_(video_mode_switcher),
@@ -72,8 +75,9 @@ CastRenderer::CastRenderer(
       media_task_runner_factory_(
           new BalancedMediaTaskRunnerFactory(kMaxDeltaFetcher)),
       video_geometry_setter_service_(nullptr),
+      is_buffering_enabled_(is_buffering_enabled),
       weak_factory_(this) {
-  DCHECK(backend_factory_);
+  CHECK(backend_factory_, base::NotFatalUntil::M163);
   LOG(INFO) << __FUNCTION__ << ": " << this;
 
   if (video_resolution_policy_)
@@ -87,7 +91,7 @@ CastRenderer::CastRenderer(
 
 CastRenderer::~CastRenderer() {
   LOG(INFO) << __FUNCTION__ << ": " << this;
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
 
   if (video_resolution_policy_)
     video_resolution_policy_->RemoveObserver(this);
@@ -102,14 +106,14 @@ void CastRenderer::Initialize(::media::MediaResource* media_resource,
                               ::media::RendererClient* client,
                               ::media::PipelineStatusCallback init_cb) {
   LOG(INFO) << __FUNCTION__ << ": " << this;
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
 
   init_cb_ = std::move(init_cb);
 
   if (video_geometry_setter_service_) {
     video_geometry_setter_service_->GetVideoGeometryChangeSubscriber(
         video_geometry_change_subcriber_remote_.BindNewPipeAndPassReceiver());
-    DCHECK(video_geometry_change_subcriber_remote_);
+    CHECK(video_geometry_change_subcriber_remote_, base::NotFatalUntil::M163);
 
     video_geometry_change_subcriber_remote_->SubscribeToVideoGeometryChange(
         overlay_plane_id_,
@@ -124,8 +128,8 @@ void CastRenderer::Initialize(::media::MediaResource* media_resource,
 void CastRenderer::OnSubscribeToVideoGeometryChange(
     ::media::MediaResource* media_resource,
     ::media::RendererClient* client) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(!application_media_info_manager_remote_);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(!application_media_info_manager_remote_, base::NotFatalUntil::M163);
 
   // Retrieve application_media_info_manager_remote_ if it is available via
   // CastApplicationMediaInfoManager.
@@ -145,7 +149,9 @@ void CastRenderer::OnSubscribeToVideoGeometryChange(
     // default CastApplicationMediaInfo value below will be used.
     OnApplicationMediaInfoReceived(
         media_resource, client,
-        ::media::mojom::CastApplicationMediaInfo::New(std::string(), true));
+        ::media::mojom::CastApplicationMediaInfo::New(
+            std::string(), true /* mixer_audio_enabled */,
+            false /* is_audio_only_session */));
   }
 }
 
@@ -153,61 +159,24 @@ void CastRenderer::OnApplicationMediaInfoReceived(
     ::media::MediaResource* media_resource,
     ::media::RendererClient* client,
     ::media::mojom::CastApplicationMediaInfoPtr application_media_info) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  if (application_media_info->application_session_id.empty()) {
-    OnGetMultiroomInfo(media_resource, client,
-                       std::move(application_media_info),
-                       chromecast::mojom::MultiroomInfo::New());
-    return;
-  }
-  service_connector_->Connect(chromecast::mojom::kChromecastServiceName,
-                              multiroom_manager_.BindNewPipeAndPassReceiver());
-  multiroom_manager_.set_disconnect_handler(
-      base::BindOnce(&CastRenderer::OnGetMultiroomInfo, base::Unretained(this),
-                     media_resource, client, application_media_info.Clone(),
-                     chromecast::mojom::MultiroomInfo::New()));
-  std::string session_id = application_media_info->application_session_id;
-  multiroom_manager_->GetMultiroomInfo(
-      session_id, base::BindOnce(&CastRenderer::OnGetMultiroomInfo,
-                                 base::Unretained(this), media_resource, client,
-                                 std::move(application_media_info)));
-}
-
-void CastRenderer::OnGetMultiroomInfo(
-    ::media::MediaResource* media_resource,
-    ::media::RendererClient* client,
-    ::media::mojom::CastApplicationMediaInfoPtr application_media_info,
-    chromecast::mojom::MultiroomInfoPtr multiroom_info) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(multiroom_info);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   LOG(INFO) << __FUNCTION__ << ": " << this
             << " session_id=" << application_media_info->application_session_id
             << ", mixer_audio_enabled="
-            << application_media_info->mixer_audio_enabled
-            << ", multiroom=" << multiroom_info->multiroom
-            << ", audio_channel=" << multiroom_info->audio_channel;
-  // Close the MultiroomManager message pipe so that a connection error does not
-  // trigger a second call to this function.
-  multiroom_manager_.reset();
+            << application_media_info->mixer_audio_enabled;
   // Create pipeline backend.
   backend_task_runner_.reset(new TaskRunnerImpl());
   // TODO(erickung): crbug.com/443956. Need to provide right LoadType.
   LoadType load_type = kLoadTypeMediaSource;
   MediaPipelineDeviceParams::MediaSyncType sync_type =
-      (load_type == kLoadTypeMediaStream)
+      (load_type == kLoadTypeMediaStream || !is_buffering_enabled_)
           ? MediaPipelineDeviceParams::kModeIgnorePts
           : MediaPipelineDeviceParams::kModeSyncPts;
 
-  const std::string& device_id =
-      (multiroom_info->output_device_id.empty()
-           ? ::media::AudioDeviceDescription::kDefaultDeviceId
-           : multiroom_info->output_device_id);
-  MediaPipelineDeviceParams params(sync_type, backend_task_runner_.get(),
-                                   AudioContentType::kMedia, device_id);
+  MediaPipelineDeviceParams params(
+      sync_type, backend_task_runner_.get(), AudioContentType::kMedia,
+      ::media::AudioDeviceDescription::kDefaultDeviceId);
   params.session_id = application_media_info->application_session_id;
-  params.multiroom = multiroom_info->multiroom;
-  params.audio_channel = multiroom_info->audio_channel;
-  params.output_delay_us = multiroom_info->output_delay.InMicroseconds();
   params.pass_through_audio_support_desired =
       !application_media_info->mixer_audio_enabled;
 
@@ -221,7 +190,7 @@ void CastRenderer::OnGetMultiroomInfo(
       &CastRenderer::OnBufferingStateChange, weak_factory_.GetWeakPtr());
   pipeline_.reset(new MediaPipelineImpl());
   pipeline_->SetClient(std::move(pipeline_client));
-  pipeline_->Initialize(load_type, std::move(backend));
+  pipeline_->Initialize(load_type, std::move(backend), is_buffering_enabled_);
 
   // TODO(servolk): Implement support for multiple streams. For now use the
   // first enabled audio and video streams to preserve the existing behavior.
@@ -328,8 +297,8 @@ void CastRenderer::OnVideoInitializationFinished(
 
 void CastRenderer::SetCdm(::media::CdmContext* cdm_context,
                           CdmAttachedCB cdm_attached_cb) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(cdm_context);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(cdm_context, base::NotFatalUntil::M163);
 
   auto* cast_cdm_context = static_cast<CastCdmContext*>(cdm_context);
 
@@ -344,18 +313,18 @@ void CastRenderer::SetCdm(::media::CdmContext* cdm_context,
   std::move(cdm_attached_cb).Run(true);
 }
 
-void CastRenderer::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {}
+void CastRenderer::SetLatencyHint(std::optional<base::TimeDelta> latency_hint) {
+}
 
 void CastRenderer::Flush(base::OnceClosure flush_cb) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(pipeline_);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(pipeline_, base::NotFatalUntil::M163);
   pipeline_->Flush(std::move(flush_cb));
 }
 
 void CastRenderer::StartPlayingFrom(base::TimeDelta time) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(pipeline_);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(pipeline_, base::NotFatalUntil::M163);
 
   eos_[STREAM_AUDIO] = !pipeline_->HasAudio();
   eos_[STREAM_VIDEO] = !pipeline_->HasVideo();
@@ -363,12 +332,12 @@ void CastRenderer::StartPlayingFrom(base::TimeDelta time) {
 }
 
 void CastRenderer::SetPlaybackRate(double playback_rate) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   pipeline_->SetPlaybackRate(playback_rate);
 }
 
 void CastRenderer::SetVolume(float volume) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   // If pipeline is not initialized, cache the volume and delay the volume set
   // until media pipeline is setup.
   if (!pipeline_) {
@@ -380,13 +349,17 @@ void CastRenderer::SetVolume(float volume) {
 }
 
 base::TimeDelta CastRenderer::GetMediaTime() {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(pipeline_);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(pipeline_, base::NotFatalUntil::M163);
   return pipeline_->GetMediaTime();
 }
 
+::media::RendererType CastRenderer::GetRendererType() {
+  return ::media::RendererType::kCast;
+}
+
 void CastRenderer::OnVideoResolutionPolicyChanged() {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   if (!video_resolution_policy_)
     return;
 
@@ -396,20 +369,69 @@ void CastRenderer::OnVideoResolutionPolicyChanged() {
 
 void CastRenderer::OnVideoGeometryChange(const gfx::RectF& rect_f,
                                          gfx::OverlayTransform transform) {
-  GetOverlayCompositedCallback().Run(rect_f, transform);
+  if (!task_runner_->BelongsToCurrentThread()) {
+    task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&CastRenderer::OnVideoGeometryChange,
+                       weak_factory_.GetWeakPtr(), rect_f, transform));
+    return;
+  }
+
+  VideoPlane* video_plane = CastMediaShlib::GetVideoPlane();
+  if (video_plane == nullptr) {
+    return;
+  }
+
+  VideoPlane::Transform cast_transform = VideoPlane::TRANSFORM_NONE;
+  switch (transform) {
+    case gfx::OVERLAY_TRANSFORM_NONE:
+      cast_transform = VideoPlane::TRANSFORM_NONE;
+      break;
+    case gfx::OVERLAY_TRANSFORM_FLIP_HORIZONTAL:
+      cast_transform = VideoPlane::FLIP_HORIZONTAL;
+      break;
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL:
+      cast_transform = VideoPlane::FLIP_VERTICAL;
+      break;
+    // For rotations, per the documentation in
+    // //chromecast/public/video_plane.h, cast specifies them in the
+    // anticlockwise direction.
+    //
+    // However, note that the previous cast impl actually ignores this (e.g.
+    // it converts OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90 to ROTATE_90):
+    // https://source.chromium.org/chromium/chromium/src/+/main:chromecast/media/base/video_plane_controller.cc;l=46;drc=5e56f4c4b358b8b16e07a2ba62d07f640300fb9e
+    //
+    // So it's not clear what the "correct" behavior is here. Either the cast
+    // documentation or the original cast impl was wrong.
+    case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90:
+      cast_transform = VideoPlane::ROTATE_270;
+      break;
+    case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_180:
+      cast_transform = VideoPlane::ROTATE_180;
+      break;
+    case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270:
+      cast_transform = VideoPlane::ROTATE_90;
+      break;
+    default:
+      LOG(ERROR) << "Unsupported transform: " << transform;
+      return;
+  }
+  video_plane->SetGeometry(
+      RectF(rect_f.x(), rect_f.y(), rect_f.width(), rect_f.height()),
+      cast_transform);
 }
 
 void CastRenderer::OnError(::media::PipelineStatus status) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   if (client_) {
     client_->OnError(status);
   }
 }
 
 void CastRenderer::OnEnded(Stream stream) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(!eos_[stream]);
-  eos_[stream] = true;
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  UNSAFE_TODO(DCHECK(!eos_[stream]));
+  UNSAFE_TODO(eos_[stream]) = true;
   LOG(INFO) << __FUNCTION__ << ": eos_audio=" << eos_[STREAM_AUDIO]
             << " eos_video=" << eos_[STREAM_VIDEO];
   if (eos_[STREAM_AUDIO] && eos_[STREAM_VIDEO])
@@ -418,24 +440,24 @@ void CastRenderer::OnEnded(Stream stream) {
 
 void CastRenderer::OnStatisticsUpdate(
     const ::media::PipelineStatistics& stats) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   client_->OnStatisticsUpdate(stats);
 }
 
 void CastRenderer::OnBufferingStateChange(
     ::media::BufferingState state,
     ::media::BufferingStateChangeReason reason) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   client_->OnBufferingStateChange(state, reason);
 }
 
 void CastRenderer::OnWaiting(::media::WaitingReason reason) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   client_->OnWaiting(reason);
 }
 
 void CastRenderer::OnVideoNaturalSizeChange(const gfx::Size& size) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   client_->OnVideoNaturalSizeChange(size);
 
   video_res_ = size;
@@ -443,15 +465,9 @@ void CastRenderer::OnVideoNaturalSizeChange(const gfx::Size& size) {
 }
 
 void CastRenderer::OnVideoOpacityChange(bool opaque) {
-  DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(opaque);
+  CHECK(task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(opaque, base::NotFatalUntil::M163);
   client_->OnVideoOpacityChange(opaque);
-}
-
-// static
-void CastRenderer::SetOverlayCompositedCallback(
-    const OverlayCompositedCallback& cb) {
-  GetOverlayCompositedCallback() = cb;
 }
 
 }  // namespace media

@@ -1,16 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_LINK_HEADER_UTIL_LINK_HEADER_UTIL_H_
 #define COMPONENTS_LINK_HEADER_UTIL_LINK_HEADER_UTIL_H_
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
-
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace link_header_util {
 
@@ -26,16 +25,20 @@ std::vector<StringIteratorPair> SplitLinkHeader(const std::string& header);
 
 // Parse an individual link header in its URL and parameters. `begin` and `end`
 // indicate the string to parse. If it is successfully parsed as a link header
-// value this method returns true, sets `url` to the URL part of the link header
-// value and adds the parameters from the link header value to `params`. All
-// keys of `params` are lower cased.
-// If any error occurs parsing, this returns false (but might have also modified
-// |url| and/or |params|).
-bool ParseLinkHeaderValue(
-    std::string::const_iterator begin,
-    std::string::const_iterator end,
-    std::string* url,
-    std::unordered_map<std::string, absl::optional<std::string>>* params);
+// value this method returns the URL part of the link header value and adds the
+// parameters from the link header value to `params`. All keys of `params` are
+// lower cased. If any error occurs parsing, this returns nullops (but might
+// have also modified `params`).
+std::optional<std::string> ParseLinkHeaderValue(
+    std::string_view header,
+    std::unordered_map<std::string, std::optional<std::string>>& params);
+
+// Overload that allows consumers not to care about the type returned by
+// SplitLinkHeader, to facilitate switching to making SplitLinkHeader returning
+// a vector of string_views.
+std::optional<std::string> ParseLinkHeaderValue(
+    const StringIteratorPair& string_iterator_pair,
+    std::unordered_map<std::string, std::optional<std::string>>& params);
 
 }  // namespace link_header_util
 

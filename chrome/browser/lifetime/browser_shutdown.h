@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class PrefRegistrySimple;
 
 namespace browser_shutdown {
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 
 // The type of restart to perform during shutdown; see ShutdownPostThreadsStop.
 enum class RestartMode {
@@ -40,7 +40,7 @@ enum class RestartMode {
   kRestartThisSession,
 };
 
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -55,7 +55,10 @@ enum class ShutdownType {
   kEndSession = 3,
   // Exit without onbeforeunload or in-progress download prompts.
   kSilentExit = 4,
-  kMaxValue = kSilentExit
+  // The browser process is exiting but not by a user action. These exit paths
+  // can happen with early exit paths where the browser main is not executed.
+  kOtherExit = 5,
+  kMaxValue = kOtherExit
 };
 
 void RegisterPrefs(PrefRegistrySimple* registry);
@@ -66,7 +69,7 @@ void OnShutdownStarting(ShutdownType type);
 
 // Returns true if OnShutdownStarting has been called to note that shutdown has
 // started.
-// TODO (crbug/1155597): Make this work in sync with
+// TODO (crbug.com/40160014): Make this work in sync with
 // BrowserProcessImpl::IsShuttingDown.
 bool HasShutdownStarted();
 
@@ -75,27 +78,81 @@ bool HasShutdownStarted();
 // This is true for kEndSession and kSilentExit shutdown types.
 bool ShouldIgnoreUnloadHandlers();
 
+// Returns true if OnShutdownStarting has been called and renderer processes
+// should be fast-killed without waiting for unload handlers, workers, or
+// keep-alive requests. This is only enabled on ChromeOS, where session_manager
+// enforces a 3 s SIGTERM timeout across both ShouldIgnoreUnloadHandlers() and
+// kBrowserExit (reached from ExitIgnoreUnloadHandlers() when all browsers are
+// closeable).
+bool ShouldFastShutdownRenderers();
+
 // Get the current shutdown type.
 ShutdownType GetShutdownType();
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 // Performs the shutdown tasks that need to be done before
 // BrowserProcess and the various threads go away.
 //
-// Returns true if the session should be restarted.
-bool ShutdownPreThreadsStop();
+// Returns the type of restart to perform.
+RestartMode ShutdownPreThreadsStop();
 
-// Records the shutdown related prefs, and returns true if the browser should be
-// restarted on exit.
-bool RecordShutdownInfoPrefs();
+// Records the shutdown retrics.
+void RecordShutdownMetrics();
+
+// Records the shutdown related prefs, and returns the type of restart to
+// perform on exit.
+RestartMode RecordShutdownInfoPrefs();
 
 // Performs the remaining shutdown tasks after all threads but the
 // main thread have been stopped.  This includes deleting g_browser_process.
 void ShutdownPostThreadsStop(RestartMode restart_mode);
 #endif
 
-// Called at startup to create a histogram from our previous shutdown time.
-void ReadLastShutdownInfo();
+#if BUILDFLAG(IS_CHROMEOS)
+// Ordered browser shutdown phases on ChromeOS, used for the
+// `cros-shutdown-phase` crash key and `Shutdown.ChromeOS.PhaseDuration.*`
+// histograms.
+enum class ShutdownPhase {
+  kNotStarted = 0,
+  kClosingBrowsers = 1,
+  kAshPreShell = 2,
+  kAshShell = 3,
+  kBrowserProcess = 4,
+  kAshPostProfile = 5,
+  kStoppingThreads = 6,
+  kPostDestroyThreads = 7,
+  kDone = 8,
+};
+
+// Records the duration of the previous shutdown phase (if any), updates the
+// `cros-shutdown-phase` crash key to `phase`, and records the cumulative
+// milliseconds elapsed since the first phase transition in
+// `cros-shutdown-elapsed-ms`.
+void SetShutdownPhase(ShutdownPhase phase);
+
+ShutdownPhase GetShutdownPhaseForTesting();
+
+// Trigger that initiated browser shutdown on ChromeOS, recorded in the
+// `cros-shutdown-trigger` crash key. Unlike `shutdown-type` (which reflects
+// whether browsers were closeable when `ExitIgnoreUnloadHandlers` ran), this
+// distinguishes user logout, restart-to-apply-flags, external SIGTERM, and
+// other shutdown paths (such as last-window close or DevTools Browser.close).
+enum class ShutdownTrigger {
+  kNotSet = 0,
+  kLogout = 1,
+  kSigterm = 2,
+  kRestartFlags = 3,
+  kOther = 4,
+};
+
+// Sets the `cros-shutdown-trigger` crash key on the first call during a
+// shutdown sequence; subsequent calls are ignored so an earlier explicit
+// trigger (`kLogout` or `kRestartFlags`) is not overwritten when
+// `session_manager` follows up with SIGTERM.
+void SetShutdownTrigger(ShutdownTrigger trigger);
+
+ShutdownTrigger GetShutdownTriggerForTesting();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // There are various situations where the browser process should continue to
 // run after the last browser window has closed - the Mac always continues
@@ -121,6 +178,9 @@ bool IsTryingToQuit();
 // Allows setting a fake shutdown type for testing purposes.
 base::AutoReset<ShutdownType> SetShutdownTypeForTesting(
     ShutdownType shutdown_type);
+
+// Allows resetting the shutdown globals for testing purposes.
+void ResetShutdownGlobalsForTesting();
 
 }  // namespace browser_shutdown
 

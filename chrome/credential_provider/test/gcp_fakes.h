@@ -1,20 +1,25 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_CREDENTIAL_PROVIDER_TEST_GCP_FAKES_H_
 #define CHROME_CREDENTIAL_PROVIDER_TEST_GCP_FAKES_H_
 
+#include <condition_variable>
 #include <deque>
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/credential_provider/extension/extension_utils.h"
@@ -27,6 +32,7 @@
 #include "chrome/credential_provider/gaiacp/event_logs_upload_manager.h"
 #include "chrome/credential_provider/gaiacp/gem_device_details_manager.h"
 #include "chrome/credential_provider/gaiacp/internet_availability_checker.h"
+#include "chrome/credential_provider/gaiacp/os_device_manager.h"
 #include "chrome/credential_provider/gaiacp/os_process_manager.h"
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
 #include "chrome/credential_provider/gaiacp/password_recovery_manager.h"
@@ -36,6 +42,8 @@
 #include "chrome/credential_provider/gaiacp/user_policies_manager.h"
 #include "chrome/credential_provider/gaiacp/win_http_url_fetcher.h"
 #include "chrome/credential_provider/setup/gcpw_files.h"
+
+class GaiaId;
 
 namespace base {
 class WaitableEvent;
@@ -71,8 +79,30 @@ class FakeOSProcessManager : public OSProcessManager {
       base::win::ScopedProcessInformation* procinfo) override;
 
  private:
-  OSProcessManager* original_manager_;
+  raw_ptr<OSProcessManager> original_manager_;
   DWORD next_rid_ = 0;
+};
+
+///////////////////////////////////////////////////////////////////////////////
+
+class FakeOSDeviceManager : public OSDeviceManager {
+ public:
+  FakeOSDeviceManager();
+  ~FakeOSDeviceManager() override;
+
+  // OSDeviceManager
+  base::win::ScopedHandle OpenDevice(const std::wstring& device_path) override;
+  uint16_t GetUsagePage(HANDLE device_handle) override;
+
+  void SetExpectedDevicePath(const std::wstring& device_path);
+  void SetOpenDeviceResult(base::win::ScopedHandle handle);
+  void SetUsagePage(uint16_t usage_page);
+
+ private:
+  raw_ptr<OSDeviceManager> original_manager_;
+  std::wstring expected_device_path_;
+  base::win::ScopedHandle open_device_result_;
+  uint16_t usage_page_ = 0;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -119,9 +149,11 @@ class FakeOSUserManager : public OSUserManager {
                            const wchar_t* password,
                            bool interactive,
                            base::win::ScopedHandle* token) override;
+
   HRESULT GetUserSID(const wchar_t* domain,
                      const wchar_t* username,
                      PSID* sid) override;
+
   HRESULT FindUserBySID(const wchar_t* sid,
                         wchar_t* username,
                         DWORD username_size,
@@ -137,8 +169,13 @@ class FakeOSUserManager : public OSUserManager {
                                          const wchar_t* username,
                                          bool allow) override;
 
-  HRESULT SetDefaultPasswordChangePolicies(const wchar_t* domain,
-                                           const wchar_t* username) override;
+  HRESULT GetUserFlagsFake(const wchar_t* domain,
+                           const wchar_t* username,
+                           DWORD* flags);
+
+  HRESULT SetUserFlagsFake(const wchar_t* domain,
+                           const wchar_t* username,
+                           DWORD flags);
 
   bool IsDeviceDomainJoined() override;
 
@@ -165,6 +202,7 @@ class FakeOSUserManager : public OSUserManager {
     std::wstring fullname;
     std::wstring comment;
     std::wstring sid;
+    DWORD flags = 0;
   };
   const UserInfo GetUserInfo(const wchar_t* username);
 
@@ -180,7 +218,7 @@ class FakeOSUserManager : public OSUserManager {
                            const std::wstring& password,
                            const std::wstring& fullname,
                            const std::wstring& comment,
-                           const std::wstring& gaia_id,
+                           const GaiaId& gaia_id,
                            const std::wstring& email,
                            BSTR* sid);
 
@@ -193,7 +231,7 @@ class FakeOSUserManager : public OSUserManager {
                            const std::wstring& password,
                            const std::wstring& fullname,
                            const std::wstring& comment,
-                           const std::wstring& gaia_id,
+                           const GaiaId& gaia_id,
                            const std::wstring& email,
                            const std::wstring& domain,
                            BSTR* sid);
@@ -213,7 +251,15 @@ class FakeOSUserManager : public OSUserManager {
   void RestoreOperation(FAILEDOPERATIONS op) { failure_reasons_.erase(op); }
 
  private:
-  OSUserManager* original_manager_;
+  HRESULT GetUserFlags(const wchar_t* domain,
+                       const wchar_t* username,
+                       DWORD* flags) override;
+
+  HRESULT SetUserFlags(const wchar_t* domain,
+                       const wchar_t* username,
+                       DWORD flags) override;
+
+  raw_ptr<OSUserManager> original_manager_;
   DWORD next_rid_ = 0;
   std::map<std::wstring, UserInfo> username_to_info_;
   bool is_device_domain_joined_ = false;
@@ -270,7 +316,7 @@ class FakeScopedLsaPolicy : public ScopedLsaPolicy {
     return factory_->private_data();
   }
 
-  FakeScopedLsaPolicyFactory* factory_;
+  raw_ptr<FakeScopedLsaPolicyFactory> factory_;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -293,7 +339,7 @@ class FakeScopedUserProfileFactory {
 
 class FakeScopedUserProfile : public ScopedUserProfile {
  public:
-  HRESULT SaveAccountInfo(const base::Value& properties) override;
+  HRESULT SaveAccountInfo(const base::DictValue& properties) override;
 
  private:
   friend class FakeScopedUserProfileFactory;
@@ -414,7 +460,7 @@ class FakeWinHttpUrlFetcher : public WinHttpUrlFetcher {
   std::string response_;
   HANDLE send_response_event_handle_;
   HRESULT response_hr_ = S_OK;
-  RequestData* request_data_ = nullptr;
+  raw_ptr<RequestData> request_data_ = nullptr;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -429,7 +475,7 @@ class FakeAssociatedUserValidator : public AssociatedUserValidator {
   using AssociatedUserValidator::IsUserAccessBlockedForTesting;
 
  private:
-  AssociatedUserValidator* original_validator_ = nullptr;
+  raw_ptr<AssociatedUserValidator> original_validator_ = nullptr;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -450,7 +496,7 @@ class FakeChromeAvailabilityChecker : public ChromeAvailabilityChecker {
   void SetHasSupportedChrome(HasSupportedChromeCheckType has_supported_chrome);
 
  private:
-  ChromeAvailabilityChecker* original_checker_ = nullptr;
+  raw_ptr<ChromeAvailabilityChecker> original_checker_ = nullptr;
 
   // Used during tests to force the credential provider to believe if a
   // supported Chrome version is installed or not. In production a real
@@ -473,7 +519,7 @@ class FakeInternetAvailabilityChecker : public InternetAvailabilityChecker {
       HasInternetConnectionCheckType has_internet_connection);
 
  private:
-  InternetAvailabilityChecker* original_checker_ = nullptr;
+  raw_ptr<InternetAvailabilityChecker> original_checker_ = nullptr;
 
   // Used during tests to force the credential provider to believe if an
   // internet connection is possible or not.  In production the value is
@@ -496,7 +542,7 @@ class FakePasswordRecoveryManager : public PasswordRecoveryManager {
   using PasswordRecoveryManager::SetRequestTimeoutForTesting;
 
  private:
-  PasswordRecoveryManager* original_validator_ = nullptr;
+  raw_ptr<PasswordRecoveryManager> original_validator_ = nullptr;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -513,7 +559,7 @@ class FakeGemDeviceDetailsManager : public GemDeviceDetailsManager {
   using GemDeviceDetailsManager::SetRequestTimeoutForTesting;
 
  private:
-  GemDeviceDetailsManager* original_manager_ = nullptr;
+  raw_ptr<GemDeviceDetailsManager> original_manager_ = nullptr;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -577,9 +623,9 @@ class FakeEventLoggingApiManager : public EventLoggingApiManager {
   ~FakeEventLoggingApiManager() override;
 
  private:
-  EventLoggingApiManager* original_manager_ = nullptr;
+  raw_ptr<EventLoggingApiManager> original_manager_ = nullptr;
 
-  const std::vector<EventLogEntry>& logs_;
+  const raw_ref<const std::vector<EventLogEntry>> logs_;
   EVT_HANDLE query_handle_, publisher_metadata_, render_context_;
   DWORD last_error_;
   size_t next_event_idx_;
@@ -602,7 +648,7 @@ class FakeEventLogsUploadManager : public EventLogsUploadManager {
   uint64_t GetNumLogsUploaded();
 
  private:
-  EventLogsUploadManager* original_manager_ = nullptr;
+  raw_ptr<EventLogsUploadManager> original_manager_ = nullptr;
   FakeEventLoggingApiManager api_manager_;
 };
 
@@ -634,7 +680,7 @@ class FakeUserPoliciesManager : public UserPoliciesManager {
   int GetNumTimesFetchAndStoreCalled() const;
 
  private:
-  UserPoliciesManager* original_manager_ = nullptr;
+  raw_ptr<UserPoliciesManager> original_manager_ = nullptr;
   std::map<std::wstring, UserPolicies> user_policies_;
   int num_times_fetch_called_ = 0;
   std::map<std::wstring, bool> user_policies_stale_;
@@ -653,7 +699,7 @@ class FakeDevicePoliciesManager : public DevicePoliciesManager {
   void GetDevicePolicies(DevicePolicies* device_policies) override;
 
  private:
-  DevicePoliciesManager* original_manager_ = nullptr;
+  raw_ptr<DevicePoliciesManager> original_manager_ = nullptr;
   DevicePolicies device_policies_;
 };
 
@@ -667,7 +713,7 @@ class FakeGCPWFiles : public GCPWFiles {
   std::vector<base::FilePath::StringType> GetEffectiveInstallFiles() override;
 
  private:
-  GCPWFiles* original_files = nullptr;
+  raw_ptr<GCPWFiles> original_files = nullptr;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -725,7 +771,7 @@ class FakeOSServiceManager : public extension::OSServiceManager {
   std::condition_variable cv;
 
   // Original instance of OSServiceManager.
-  extension::OSServiceManager* os_service_manager_ = nullptr;
+  raw_ptr<extension::OSServiceManager> os_service_manager_ = nullptr;
   std::map<std::wstring, ServiceInfo> service_lookup_from_name_;
 };
 
@@ -745,7 +791,7 @@ class FakeTaskManager : public extension::TaskManager {
                    const std::string& task_name) override;
 
   // Original instance of TaskManager.
-  extension::TaskManager* task_manager_ = nullptr;
+  raw_ptr<extension::TaskManager> task_manager_ = nullptr;
 
   // Counts the number of execution per task.
   std::map<std::string, int> num_of_times_executed_;
@@ -763,7 +809,7 @@ class FakeTokenGenerator : public TokenGenerator {
   void SetTokensForTesting(const std::vector<std::string>& test_tokens);
 
  private:
-  TokenGenerator* token_generator_ = nullptr;
+  raw_ptr<TokenGenerator> token_generator_ = nullptr;
   std::vector<std::string> test_tokens_;
 };
 

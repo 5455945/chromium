@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
@@ -25,14 +24,14 @@ static const char kMainWebrtcTestHtmlPage[] =
 
 enum class TargetVideoCaptureImplementation {
   DEFAULT,
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   WIN_MEDIA_FOUNDATION
 #endif
 };
 
 const TargetVideoCaptureImplementation kTargetVideoCaptureImplementations[] = {
     TargetVideoCaptureImplementation::DEFAULT,
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     TargetVideoCaptureImplementation::WIN_MEDIA_FOUNDATION
 #endif
 };
@@ -47,7 +46,7 @@ class WebRtcWebcamBrowserTest
       public testing::WithParamInterface<TargetVideoCaptureImplementation> {
  public:
   WebRtcWebcamBrowserTest() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     if (GetParam() == TargetVideoCaptureImplementation::WIN_MEDIA_FOUNDATION) {
       scoped_feature_list_.InitAndEnableFeature(
           media::kMediaFoundationVideoCapture);
@@ -94,7 +93,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcWebcamBrowserTest,
                        MANUAL_TestAcquiringAndReacquiringWebcam) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url(embedded_test_server()->GetURL(kMainWebrtcTestHtmlPage));
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::WebContents* tab =
       browser()->tab_strip_model()->GetActiveWebContents();
 

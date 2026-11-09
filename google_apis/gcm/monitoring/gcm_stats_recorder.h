@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -126,7 +126,7 @@ class GCM_EXPORT GCMStatsRecorder {
                                       const std::string& receiver_id,
                                       const std::string& message_id,
                                       MCSClient::MessageSendStatus status,
-                                      int byte_size,
+                                      size_t byte_size,
                                       int ttl) = 0;
   // Records that a 'send error' message was received.
   virtual void RecordIncomingSendError(const std::string& app_id,

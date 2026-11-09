@@ -1,13 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "base/time/time.h"
 
 #include <memory>
 
 #include "base/check.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/numerics/clamped_math.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "third_party/icu/source/common/unicode/locid.h"
 #include "third_party/icu/source/i18n/unicode/calendar.h"
@@ -46,10 +47,12 @@ bool ExplodeUsingIcuCalendar(int64_t millis_since_unix_epoch,
   // Windows only works for values on/after 1601-01-01 00:00:00 UTC, just use
   // that as a reasonable lower-bound here as well.
   constexpr int64_t kInputLowerBound =
-      -Time::kTimeTToMicrosecondsOffset / Time::kMicrosecondsPerMillisecond;
-  static_assert(
-      Time::kTimeTToMicrosecondsOffset % Time::kMicrosecondsPerMillisecond == 0,
-      "assumption: no epoch offset sub-milliseconds");
+      -Time::kMicrosecondsFromWindowsToUnixEpoch /
+      Time::kMicrosecondsPerMillisecond;
+  static_assert(Time::kMicrosecondsFromWindowsToUnixEpoch %
+                        Time::kMicrosecondsPerMillisecond ==
+                    0,
+                "assumption: no epoch offset sub-milliseconds");
 
   // The input to icu::Calendar is a double-typed value. To ensure no loss of
   // precision when converting int64_t to double, an upper-bound must also be
@@ -66,8 +69,9 @@ bool ExplodeUsingIcuCalendar(int64_t millis_since_unix_epoch,
   std::unique_ptr<icu::Calendar> calendar = CreateCalendar(is_local);
   UErrorCode status = U_ZERO_ERROR;
   calendar->setTime(millis_since_unix_epoch, status);
-  if (!U_SUCCESS(status))
+  if (!U_SUCCESS(status)) {
     return false;
+  }
 
   using CalendarField = decltype(calendar->get(UCAL_YEAR, status));
   static_assert(sizeof(Time::Exploded::year) >= sizeof(CalendarField),
@@ -115,8 +119,9 @@ bool Time::FromExplodedUsingIcu(bool is_local,
   // ICU's UCalendarMonths is 0-based. E.g., 0 for January.
   CheckedNumeric<int> month = exploded.month;
   month--;
-  if (!month.IsValid())
+  if (!month.IsValid()) {
     return false;
+  }
 
   std::unique_ptr<icu::Calendar> calendar = CreateCalendar(is_local);
 
@@ -131,14 +136,15 @@ bool Time::FromExplodedUsingIcu(bool is_local,
 
   UErrorCode status = U_ZERO_ERROR;
   UDate date = calendar->getTime(status);
-  if (U_FAILURE(status))
+  if (U_FAILURE(status)) {
     return false;
+  }
 
   *millis_since_unix_epoch = saturated_cast<int64_t>(date);
   return true;
 }
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
 
 void Time::Explode(bool is_local, Exploded* exploded) const {
   return ExplodeUsingIcu(ToRoundedDownMillisecondsSinceUnixEpoch(), is_local,
@@ -148,12 +154,13 @@ void Time::Explode(bool is_local, Exploded* exploded) const {
 // static
 bool Time::FromExploded(bool is_local, const Exploded& exploded, Time* time) {
   int64_t millis_since_unix_epoch;
-  if (FromExplodedUsingIcu(is_local, exploded, &millis_since_unix_epoch))
+  if (FromExplodedUsingIcu(is_local, exploded, &millis_since_unix_epoch)) {
     return FromMillisecondsSinceUnixEpoch(millis_since_unix_epoch, time);
+  }
   *time = Time(0);
   return false;
 }
 
-#endif  // defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_FUCHSIA)
 
 }  // namespace base

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,14 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
+#include "base/time/time.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/keyword_id.h"
 #include "components/history/core/browser/url_row.h"
 #include "components/query_parser/query_parser.h"
@@ -28,9 +32,16 @@ class Database;
 
 namespace history {
 
+class KeywordSearchTermRowEnumerator;
+class KeywordSearchTermVisitEnumerator;
 struct KeywordSearchTermRow;
-struct KeywordSearchTermVisit;
-struct NormalizedKeywordSearchTermVisit;
+
+struct URLCountAndLastVisitRow {
+  bool operator==(const URLCountAndLastVisitRow&) const = default;
+
+  int count = 0;
+  base::Time last_visit_time;
+};
 
 class VisitDatabase;  // For friend statement.
 
@@ -47,6 +58,9 @@ class URLDatabase {
   // sure the database is initialized.
   URLDatabase();
 
+  URLDatabase(const URLDatabase&) = delete;
+  URLDatabase& operator=(const URLDatabase&) = delete;
+
   // This object must be destroyed on the thread where all accesses are
   // happening to avoid thread-safety problems.
   virtual ~URLDatabase();
@@ -56,6 +70,12 @@ class URLDatabase {
   // Looks up a url given an id. Fills info with the data. Returns true on
   // success and false otherwise.
   bool GetURLRow(URLID url_id, URLRow* info);
+
+  // Looks up multiple URLs given their IDs. Clears `url_rows` and populates
+  // it with the found rows, keyed by URLID. Returns true on success (even if
+  // some IDs were not found in the database).
+  bool GetURLRows(base::span<const URLID> url_ids,
+                  base::flat_map<URLID, URLRow>* url_rows);
 
   // Looks up the given URL and if it exists, fills the given pointers with the
   // associated info and returns the ID of that URL. If the info pointer is
@@ -97,6 +117,10 @@ class URLDatabase {
   // The caller than adds the URLs it wants to preserve to the temporary table,
   // and then deletes everything else by calling CommitTemporaryURLTable().
   // Returns true on success.
+  //
+  // WARNING: if the temporary table already exists, it is dropped and a new
+  // one created. This is done as the temporary table is only intended to
+  // exist for a short amount of time before it's renamed.
   bool CreateTemporaryURLTable();
 
   // Adds a row to the temporary URL table. This must be called between
@@ -117,6 +141,10 @@ class URLDatabase {
   class URLEnumeratorBase {
    public:
     URLEnumeratorBase();
+
+    URLEnumeratorBase(const URLEnumeratorBase&) = delete;
+    URLEnumeratorBase& operator=(const URLEnumeratorBase&) = delete;
+
     virtual ~URLEnumeratorBase();
 
    private:
@@ -124,8 +152,6 @@ class URLDatabase {
 
     bool initialized_;
     sql::Statement statement_;
-
-    DISALLOW_COPY_AND_ASSIGN(URLEnumeratorBase);
   };
 
   // A basic enumerator to enumerate urls
@@ -133,21 +159,26 @@ class URLDatabase {
    public:
     URLEnumerator();
 
+    URLEnumerator(const URLEnumerator&) = delete;
+    URLEnumerator& operator=(const URLEnumerator&) = delete;
+
     // Retrieves the next url. Returns false if no more urls are available.
     bool GetNextURL(URLRow* r);
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(URLEnumerator);
   };
 
-  // Initializes the given enumerator to enumerator all URLs in the database.
+  // Initializes the given enumerator to enumerate all URLs in the database.
   bool InitURLEnumeratorForEverything(URLEnumerator* enumerator);
 
-  // Initializes the given enumerator to enumerator all URLs in the database
-  // that are historically significant: ones having their URL manually typed
-  // more than once, having been visited within 3 days, or having been visited
-  // more than 3 times in the order of the most significant ones first.
+  // Initializes the given enumerator to enumerate all URLs in the database that
+  // are historically significant: ones having their URL manually typed at least
+  // once, having been visited within 3 days, or having been visited at least 4
+  // times in the order of the most significant ones first.
   bool InitURLEnumeratorForSignificant(URLEnumerator* enumerator);
+
+  // Initializes the given enumerator to enumerate all URLs in the database that
+  // were typed at least once or that have a keyword search term, i.e. the
+  // subset cached by InMemoryDatabase. Requires the keyword search terms table.
+  bool InitURLEnumeratorForTypedOrSearched(URLEnumerator* enumerator);
 
   // Autocomplete --------------------------------------------------------------
 
@@ -181,16 +212,22 @@ class URLDatabase {
 
   // History search ------------------------------------------------------------
 
+  // Returns the number of URLs and the latest visit time for URLs whose URL
+  // begins with `prefix`. Fills `row` with the data and returns true on
+  // success, or false if `prefix` is empty or the query fails.
+  bool GetURLCountAndLastVisitForPrefix(const std::string& prefix,
+                                        URLCountAndLastVisitRow* row);
+
   // Performs a brute force search over the database to find any URLs or titles
   // which match the `query` string, using the default text matching algorithm.
-  // Returns any matches in `results`.
-  bool GetTextMatches(const std::u16string& query, URLRows* results);
+  // Returns any matches.
+  URLRows GetTextMatches(const std::u16string& query);
 
   // Same as GetTextMatches, using `algorithm` as the text matching
   // algorithm.
-  bool GetTextMatchesWithAlgorithm(const std::u16string& query,
-                                   query_parser::MatchingAlgorithm algorithm,
-                                   URLRows* results);
+  URLRows GetTextMatchesWithAlgorithm(
+      const std::u16string& query,
+      query_parser::MatchingAlgorithm algorithm);
 
   // Keyword Search Terms ------------------------------------------------------
 
@@ -198,6 +235,13 @@ class URLDatabase {
   bool SetKeywordSearchTermsForURL(URLID url_id,
                                    KeywordID keyword_id,
                                    const std::u16string& term);
+
+  // Retrieves aggregate values for a subset of fields across all URLs
+  // associated with the given `term`.
+  // Fills `url_info` with the relevant aggregate URL data.
+  // Returns true on success.
+  bool GetAggregateURLDataForKeywordSearchTerm(const std::u16string& term,
+                                               URLRow* url_info);
 
   // Looks up a keyword search term given a url id. Returns all the search terms
   // in `rows`. Returns true on success.
@@ -212,20 +256,30 @@ class URLDatabase {
   // way of SetKeywordSearchTermsForURL.
   void DeleteAllSearchTermsForKeyword(KeywordID keyword_id);
 
-  // Returns up to max_count of the most recent search terms for the specified
-  // keyword.
-  void GetMostRecentKeywordSearchTerms(
-      KeywordID keyword_id,
-      const std::u16string& prefix,
-      int max_count,
-      std::vector<KeywordSearchTermVisit>* matches);
+  // Returns an enumerator to enumerate all the KeywordSearchTermVisits starting
+  // with `prefix` for the given keyword. The visits are ordered first by
+  // |normalized_term| and then by |last_visit_time| in ascending order, i.e.,
+  // from the oldest to the newest.
+  std::unique_ptr<KeywordSearchTermVisitEnumerator>
+  CreateKeywordSearchTermVisitEnumerator(KeywordID keyword_id,
+                                         const std::u16string& prefix);
 
-  // Returns the most recent (i.e., no older than `age_threshold`) normalized
-  // search terms (i.e., search terms in lower case with whitespaces collapsed)
-  // for the specified keyword.
-  std::vector<NormalizedKeywordSearchTermVisit>
-  GetMostRecentNormalizedKeywordSearchTerms(KeywordID keyword_id,
-                                            base::Time age_threshold);
+  // Returns an enumerator to enumerate all the KeywordSearchTermVisits for the
+  // given keyword. The visits are ordered first by |normalized_term| and then
+  // by |last_visit_time| in ascending order, i.e.,from the oldest to the
+  // newest.
+  std::unique_ptr<KeywordSearchTermVisitEnumerator>
+  CreateKeywordSearchTermVisitEnumerator(KeywordID keyword_id);
+
+  // Returns an enumerator over every row of the keyword search terms table, or
+  // nullptr if the table cannot be read.
+  std::unique_ptr<KeywordSearchTermRowEnumerator>
+  CreateKeywordSearchTermRowEnumerator();
+
+  // Inserts `row` verbatim into the keyword search terms table, without
+  // normalizing the term or checking for an existing row. Used to copy rows
+  // between databases; see SetKeywordSearchTermsForURL() for regular updates.
+  bool InsertKeywordSearchTermRow(const KeywordSearchTermRow& row);
 
   // Deletes all searches matching `term`.
   bool DeleteKeywordSearchTerm(const std::u16string& term);
@@ -261,7 +315,8 @@ class URLDatabase {
   //
   // is_temporary is false when generating the "regular" URLs table. The expirer
   // sets this to true to generate the temporary table, which will have a
-  // different name but the same schema.
+  // different name but the same schema. See comment in
+  // CreateTemporaryURLTable() for details on temporary creation.
   bool CreateURLTable(bool is_temporary);
 
   // Creates the index over URLs so we can quickly look up based on URL.
@@ -287,13 +342,14 @@ class URLDatabase {
   // be used in between CreateTemporaryURLTable() and CommitTemporaryURLTable().
   URLID AddURLInternal(const URLRow& info, bool is_temporary);
 
-  // Return ture if the urls table's schema contains "AUTOINCREMENT".
+  // Return true if the urls table's schema contains "AUTOINCREMENT".
   // false if table do not contain AUTOINCREMENT, or the table is not created.
   bool URLTableContainsAutoincrement();
 
   // Convenience to fill a URLRow. Must be in sync with the fields in
-  // kHistoryURLRowFields.
-  static void FillURLRow(const sql::Statement& s, URLRow* i);
+  // kHistoryURLRowFields. Returns true if the data was valid and |*i| was
+  // actually populated.
+  [[nodiscard]] static bool FillURLRow(sql::Statement& s, URLRow* i);
 
   // Returns the database for the functions in this interface. The descendant of
   // this class implements these functions to return its objects.
@@ -308,8 +364,6 @@ class URLDatabase {
   // True if InitKeywordSearchTermsTable() has been invoked. Not all subclasses
   // have keyword search terms.
   bool has_keyword_search_terms_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLDatabase);
 };
 
 // The fields and order expected by FillURLRow(). ID is guaranteed to be first
@@ -329,15 +383,6 @@ class URLDatabase {
 extern const int kLowQualityMatchTypedLimit;
 extern const int kLowQualityMatchVisitLimit;
 extern const int kLowQualityMatchAgeLimitInDays;
-
-// The time interval within which a duplicate query is considered invalid for
-// autocomplete purposes.
-// These invalid duplicates are extracted from search query URLs which are
-// identical or nearly identical to the original search query URL and issued too
-// closely to it, i.e., within this time interval. They are typically recorded
-// as a result of back/forward navigations or user interactions in the search
-// result page and are likely not newly initiated searches.
-extern const base::TimeDelta kAutocompleteDuplicateVisitIntervalThreshold;
 
 // Returns the date threshold for considering an history item as significant.
 base::Time AutocompleteAgeThreshold();

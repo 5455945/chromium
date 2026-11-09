@@ -1,16 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_PAINT_CONTROLLER_TEST_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_PAINT_CONTROLLER_TEST_H_
 
+#include "base/auto_reset.h"
 #include "base/dcheck_is_on.h"
+#include "base/functional/function_ref.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/hit_test_data.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/testing/fake_display_item_client.h"
 #include "third_party/blink/renderer/platform/testing/paint_property_test_helpers.h"
 
@@ -18,77 +21,110 @@ namespace blink {
 
 class GraphicsContext;
 
+class PaintControllerForTest : public PaintController {
+ public:
+  explicit PaintControllerForTest()
+      : PaintController(/*record_debug_info=*/true) {}
+  explicit PaintControllerForTest(
+      PaintControllerPersistentData& persistent_data)
+      : PaintController(/*record_debug_info=*/true, &persistent_data) {}
+};
+
+class AutoCommitPaintController : public PaintControllerForTest {
+ public:
+  using PaintControllerForTest::PaintControllerForTest;
+  ~AutoCommitPaintController() { CommitNewDisplayItems(); }
+};
+
 class PaintControllerTestBase : public testing::Test {
  public:
-  static void DrawNothing(GraphicsContext& context,
-                          const DisplayItemClient& client,
-                          DisplayItem::Type type) {
-    if (DrawingRecorder::UseCachedDrawingIfPossible(context, client, type))
-      return;
-    DrawingRecorder recorder(context, client, type, IntRect());
+  enum DrawResult {
+    kCached,
+    kPaintedNew,
+    kRepaintedCachedItem,
+  };
+
+  static DrawResult Draw(GraphicsContext& context,
+                         const DisplayItemClient& client,
+                         DisplayItem::Type type,
+                         base::FunctionRef<void()> draw_function);
+
+  static DrawResult DrawNothing(GraphicsContext& context,
+                                const DisplayItemClient& client,
+                                DisplayItem::Type type) {
+    return Draw(context, client, type, [&]() {
+      DrawingRecorder recorder(context, client, type, gfx::Rect());
+    });
   }
 
-  static void DrawRect(GraphicsContext& context,
-                       const DisplayItemClient& client,
-                       DisplayItem::Type type,
-                       const IntRect& bounds) {
-    if (DrawingRecorder::UseCachedDrawingIfPossible(context, client, type))
-      return;
-    DrawingRecorder recorder(context, client, type, bounds);
-    context.DrawRect(bounds);
+  static DrawResult DrawRect(GraphicsContext& context,
+                             const DisplayItemClient& client,
+                             DisplayItem::Type type,
+                             const gfx::Rect& bounds) {
+    return Draw(context, client, type, [&]() {
+      DrawingRecorder recorder(context, client, type, bounds);
+      context.FillRect(bounds, AutoDarkMode::Disabled());
+    });
   }
 
  protected:
   PaintControllerTestBase()
-      : root_paint_property_client_("root"),
-        root_paint_chunk_id_(root_paint_property_client_,
-                             DisplayItem::kUninitializedType),
-        paint_controller_(std::make_unique<PaintController>()) {}
+      : root_paint_property_client_(
+            MakeGarbageCollected<FakeDisplayItemClient>("root")),
+        root_paint_chunk_id_(root_paint_property_client_->Id(),
+                             DisplayItem::kUninitializedType) {}
 
-  void SetUp() override {
-    testing::FLAGS_gtest_death_test_style = "threadsafe";
-  }
+  void SetUp() override { GTEST_FLAG_SET(death_test_style, "threadsafe"); }
 
-  void InitRootChunk() { InitRootChunk(GetPaintController()); }
-  void InitRootChunk(PaintController& paint_controller) {
+  void InitRootChunk(PaintController& paint_controller) const {
     paint_controller.UpdateCurrentPaintChunkProperties(
-        &root_paint_chunk_id_, DefaultPaintChunkProperties());
+        root_paint_chunk_id_, *root_paint_property_client_,
+        DefaultPaintChunkProperties());
   }
   const PaintChunk::Id DefaultRootChunkId() const {
     return root_paint_chunk_id_;
   }
 
-  PaintController& GetPaintController() { return *paint_controller_; }
-
-  wtf_size_t NumCachedNewItems() const {
-    return paint_controller_->num_cached_new_items_;
+  PaintControllerPersistentData& GetPersistentData() {
+    CHECK(persistent_data_);
+    return *persistent_data_;
   }
-  wtf_size_t NumCachedNewSubsequences() const {
-    return paint_controller_->num_cached_new_subsequences_;
+
+  static const PaintArtifact& GetNewPaintArtifact(
+      const PaintController& controller) {
+    // This can only be called before CommitNewDisplayItems().
+    DCHECK(controller.new_paint_artifact_);
+    return *controller.new_paint_artifact_;
+  }
+
+  static wtf_size_t NumCachedNewItems(const PaintController& controller) {
+    return controller.num_cached_new_items_;
+  }
+  static wtf_size_t NumCachedNewSubsequences(
+      const PaintController& controller) {
+    return controller.num_cached_new_subsequences_;
   }
 #if DCHECK_IS_ON()
-  wtf_size_t NumIndexedItems() const {
-    return paint_controller_->num_indexed_items_;
+  static wtf_size_t NumIndexedItems(const PaintController& controller) {
+    return controller.num_indexed_items_;
   }
-  wtf_size_t NumSequentialMatches() const {
-    return paint_controller_->num_sequential_matches_;
+  static wtf_size_t NumSequentialMatches(const PaintController& controller) {
+    return controller.num_sequential_matches_;
   }
-  wtf_size_t NumOutOfOrderMatches() const {
-    return paint_controller_->num_out_of_order_matches_;
+  static wtf_size_t NumOutOfOrderMatches(const PaintController& controller) {
+    return controller.num_out_of_order_matches_;
   }
 #endif
 
-  void InvalidateAll() { paint_controller_->InvalidateAllForTesting(); }
+  void InvalidateAll() { persistent_data_->InvalidateAllForTesting(); }
 
-  void CommitAndFinishCycle() {
-    paint_controller_->CommitNewDisplayItems();
-    paint_controller_->FinishCycle();
-  }
-
-  using SubsequenceMarkers = PaintController::SubsequenceMarkers;
   const SubsequenceMarkers* GetSubsequenceMarkers(
       const DisplayItemClient& client) {
-    return paint_controller_->GetSubsequenceMarkers(client);
+    return persistent_data_->GetSubsequenceMarkers(client.Id());
+  }
+
+  bool ClientCacheIsValid(const DisplayItemClient& client) const {
+    return persistent_data_->ClientCacheIsValid(client);
   }
 
   static bool ClientCacheIsValid(const PaintController& paint_controller,
@@ -96,14 +132,11 @@ class PaintControllerTestBase : public testing::Test {
     return paint_controller.ClientCacheIsValid(client);
   }
 
-  bool ClientCacheIsValid(const DisplayItemClient& client) const {
-    return ClientCacheIsValid(*paint_controller_, client);
-  }
-
  private:
-  FakeDisplayItemClient root_paint_property_client_;
+  Persistent<FakeDisplayItemClient> root_paint_property_client_;
   PaintChunk::Id root_paint_chunk_id_;
-  std::unique_ptr<PaintController> paint_controller_;
+  Persistent<PaintControllerPersistentData> persistent_data_ =
+      MakeGarbageCollected<PaintControllerPersistentData>();
 };
 
 // Matcher for checking display item list. Sample usage:
@@ -113,15 +146,15 @@ class PaintControllerTestBase : public testing::Test {
 MATCHER_P(IsSameId, id, "") {
   return arg.GetId() == id;
 }
-MATCHER_P2(IsSameId, client, type, "") {
-  return arg.GetId() == DisplayItem::Id(*client, type);
+MATCHER_P2(IsSameId, client_id, type, "") {
+  return arg.GetId() == DisplayItem::Id(client_id, type);
 }
-MATCHER_P3(IsSameId, client, type, fragment, "") {
-  return arg.GetId() == DisplayItem::Id(*client, type, fragment);
+MATCHER_P3(IsSameId, client_id, type, fragment, "") {
+  return arg.GetId() == DisplayItem::Id(client_id, type, fragment);
 }
 
 // Matcher for checking paint chunks. Sample usage:
-// EXPACT_THAT(paint_controller.PaintChunks(),
+// EXPACT_THAT(paint_controller.GetPaintChunks(),
 //             ELementsAre(IsPaintChunk(0, 1, id1, properties1),
 //                         IsPaintChunk(1, 3, id2, properties2)));
 inline bool CheckChunk(const PaintChunk& chunk,
@@ -135,7 +168,7 @@ inline bool CheckChunk(const PaintChunk& chunk,
                        const PaintChunk::Id& id,
                        const PropertyTreeStateOrAlias& properties,
                        const HitTestData* hit_test_data = nullptr,
-                       const IntRect* bounds = nullptr) {
+                       const gfx::Rect* bounds = nullptr) {
   return chunk.begin_index == begin && chunk.end_index == end &&
          chunk.id == id && chunk.properties == properties &&
          ((!chunk.hit_test_data && !hit_test_data) ||
@@ -161,6 +194,15 @@ MATCHER_P6(IsPaintChunk,
            bounds,
            "") {
   return CheckChunk(arg, begin, end, id, properties, hit_test_data, &bounds);
+}
+
+MATCHER_P3(IsPaintChunkWithTrackedElementData,
+           begin,
+           end,
+           tracked_element_rects,
+           "") {
+  return CheckChunk(arg, begin, end) &&
+         *arg.tracked_element_rects == *tracked_element_rects;
 }
 
 // Shorter names for frequently used display item types in tests.

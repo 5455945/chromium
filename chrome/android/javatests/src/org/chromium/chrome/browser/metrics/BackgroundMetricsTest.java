@@ -1,76 +1,75 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.metrics;
 
-import android.support.test.InstrumentationRegistry;
-import android.support.test.uiautomator.UiDevice;
-
 import androidx.test.filters.MediumTest;
 
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.chrome.browser.init.BrowserParts;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.init.EmptyBrowserParts;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.ChromeApplicationTestUtils;
 import org.chromium.components.metrics.MetricsSwitches;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Tests relating to UMA reported while Chrome is backgrounded.
- */
+/** Tests relating to UMA reported while Chrome is backgrounded. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.
-Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, MetricsSwitches.FORCE_ENABLE_METRICS_REPORTING})
+@CommandLineFlags.Add(MetricsSwitches.FORCE_ENABLE_METRICS_REPORTING)
+@DoNotBatch(reason = "AI automated batching was unsuccessful.")
 public final class BackgroundMetricsTest {
     // Note: these rules might conflict and so calls to their methods must be handled carefully.
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
-
-    @Before
-    public void setUp() {}
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
     private void waitForHistogram(String name, int count) {
-        CriteriaHelper.pollUiThread(() -> {
-            return RecordHistogram.getHistogramTotalCountForTesting(name) >= count;
-        }, "waitForHistogram timeout", 10000, 200);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return RecordHistogram.getHistogramTotalCountForTesting(name) >= count;
+                },
+                "waitForHistogram timeout",
+                10000,
+                200);
     }
 
     public void pressHome() {
-        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
-        device.pressHome();
-        ChromeApplicationTestUtils.waitUntilChromeInBackground();
+        ChromeApplicationTestUtils.fireHomeScreenIntent(mActivityTestRule.getActivity());
     }
 
     private void loadNative() {
-        final AtomicBoolean mNativeLoaded = new AtomicBoolean();
-        final BrowserParts parts = new EmptyBrowserParts() {
-            @Override
-            public void finishNativeInitialization() {
-                mNativeLoaded.set(true);
-            }
-        };
-        PostTask.postTask(UiThreadTaskTraits.DEFAULT, () -> {
-            ChromeBrowserInitializer.getInstance().handlePreNativeStartupAndLoadLibraries(parts);
-            ChromeBrowserInitializer.getInstance().handlePostNativeStartup(true, parts);
-        });
+        final AtomicBoolean nativeLoaded = new AtomicBoolean();
+        final BrowserParts parts =
+                new EmptyBrowserParts() {
+                    @Override
+                    public void finishNativeInitialization() {
+                        nativeLoaded.set(true);
+                    }
+                };
+        PostTask.postTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    ChromeBrowserInitializer.getInstance()
+                            .handlePreNativeStartupAndLoadLibraries(parts);
+                    ChromeBrowserInitializer.getInstance().handlePostNativeStartup(true, parts);
+                });
         CriteriaHelper.pollUiThread(
-                () -> mNativeLoaded.get(), "Failed while waiting for starting native.");
+                () -> nativeLoaded.get(), "Failed while waiting for starting native.");
     }
 
     @Test
@@ -78,12 +77,13 @@ public final class BackgroundMetricsTest {
     @CommandLineFlags.Add({"disable-features=UMABackgroundSessions"})
     public void testBackgroundSessionIsRecordedWithBackgroundSessionsDisabled() throws Throwable {
         // Start Chrome.
-        mActivityTestRule.startMainActivityOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
 
         // Background Chrome and wait for a session to be recorded.
         pressHome();
         waitForHistogram("Session.TotalDuration", 1);
-        Assert.assertEquals(0,
+        Assert.assertEquals(
+                0,
                 RecordHistogram.getHistogramTotalCountForTesting(
                         "Session.Background.TotalDuration"));
 
@@ -97,12 +97,13 @@ public final class BackgroundMetricsTest {
     @CommandLineFlags.Add({"enable-features=UMABackgroundSessions"})
     public void testBackgroundSessionIsRecordedWithBackgroundSessionsEnabled() throws Throwable {
         // Start Chrome.
-        mActivityTestRule.startMainActivityOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
 
         // Background Chrome and wait for a session to be recorded.
         pressHome();
         waitForHistogram("Session.TotalDuration", 1);
-        Assert.assertEquals(0,
+        Assert.assertEquals(
+                0,
                 RecordHistogram.getHistogramTotalCountForTesting(
                         "Session.Background.TotalDuration"));
 
@@ -121,12 +122,13 @@ public final class BackgroundMetricsTest {
     public void testStartInBackgroundRecordsBackgroundSession() throws Throwable {
         // Start native, without an activity.
         loadNative();
-        Assert.assertEquals(0,
+        Assert.assertEquals(
+                0,
                 RecordHistogram.getHistogramTotalCountForTesting(
                         "Session.Background.TotalDuration"));
 
         // Start an activity and verify the background session was recorded.
-        mActivityTestRule.startMainActivityOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
         waitForHistogram("Session.Background.TotalDuration", 1);
     }
 }

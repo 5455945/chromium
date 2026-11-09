@@ -1,44 +1,34 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
 // ClientSocketPoolManager manages access to all ClientSocketPools.  It's a
-// simple container for all of them.  Most importantly, it handles the lifetime
+// simple container for all of them. Most importantly, it handles the lifetime
 // and destruction order properly.
 
 #ifndef NET_SOCKET_CLIENT_SOCKET_POOL_MANAGER_H_
 #define NET_SOCKET_CLIENT_SOCKET_POOL_MANAGER_H_
 
-#include <string>
+#include <vector>
 
+#include "base/values.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
+#include "net/base/network_handle.h"
 #include "net/base/request_priority.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_network_session.h"
 #include "net/socket/client_socket_pool.h"
+#include "net/ssl/ssl_config.h"
 #include "url/scheme_host_port.h"
-
-namespace base {
-class Value;
-namespace trace_event {
-class ProcessMemoryDump;
-}
-}
 
 namespace net {
 
 class ClientSocketHandle;
 class NetLogWithSource;
-class NetworkIsolationKey;
+class NetworkAnonymizationKey;
 class ProxyInfo;
-class ProxyServer;
-
-struct SSLConfig;
-
-// This should rather be a simple constant but Windows shared libs doesn't
-// really offer much flexiblity in exporting contants.
-enum DefaultMaxValues { kDefaultMaxSocketsPerProxyServer = 32 };
+class ProxyChain;
 
 class NET_EXPORT_PRIVATE ClientSocketPoolManager {
  public:
@@ -48,22 +38,28 @@ class NET_EXPORT_PRIVATE ClientSocketPoolManager {
   // The setter methods below affect only newly created socket pools after the
   // methods are called. Normally they should be called at program startup
   // before any ClientSocketPoolManagerImpl is created.
-  static int max_sockets_per_pool(HttpNetworkSession::SocketPoolType pool_type);
-  static void set_max_sockets_per_pool(
-      HttpNetworkSession::SocketPoolType pool_type,
-      int socket_count);
-
-  static int max_sockets_per_group(
+  static size_t socket_soft_cap_per_pool(
       HttpNetworkSession::SocketPoolType pool_type);
-  static void set_max_sockets_per_group(
+  static void set_socket_soft_cap_per_pool_for_test(
       HttpNetworkSession::SocketPoolType pool_type,
-      int socket_count);
+      size_t socket_count);
 
-  static int max_sockets_per_proxy_server(
+  static size_t max_sockets_per_group(
       HttpNetworkSession::SocketPoolType pool_type);
-  static void set_max_sockets_per_proxy_server(
+  static void set_max_sockets_per_group_for_test(
       HttpNetworkSession::SocketPoolType pool_type,
-      int socket_count);
+      size_t socket_count);
+
+  static size_t max_sockets_per_proxy_chain(
+      HttpNetworkSession::SocketPoolType pool_type);
+  static bool allow_size_randomization_for_proxy();
+  // Unlike the other `set_` methods, these ones are used in production code and
+  // thus cannot be marked as `_for_test`. Usage should be carefully audited.
+  // Caller is responsible for following max/min CHECKs on socket_count.
+  static void set_max_sockets_per_proxy_chain(
+      HttpNetworkSession::SocketPoolType pool_type,
+      size_t socket_count);
+  static void set_allow_size_randomization_for_proxy(bool allow);
 
   static base::TimeDelta unused_idle_socket_timeout(
       HttpNetworkSession::SocketPoolType pool_type);
@@ -74,39 +70,30 @@ class NET_EXPORT_PRIVATE ClientSocketPoolManager {
                                          const char* net_log_reason_utf8) = 0;
   virtual void CloseIdleSockets(const char* net_log_reason_utf8) = 0;
 
-  // Returns the socket pool for the specified ProxyServer (Which may be
-  // ProxyServer::Direct()).
-  virtual ClientSocketPool* GetSocketPool(const ProxyServer& proxy_server) = 0;
+  // Returns the socket pool for the specified ProxyChain (Which may be
+  // ProxyChain::Direct()).
+  virtual ClientSocketPool* GetSocketPool(const ProxyChain& proxy_chain) = 0;
 
   // Creates a Value summary of the state of the socket pools.
-  virtual std::unique_ptr<base::Value> SocketPoolInfoToValue() const = 0;
-
-  // Dumps memory allocation stats. |parent_dump_absolute_name| is the name
-  // used by the parent MemoryAllocatorDump in the memory dump hierarchy.
-  virtual void DumpMemoryStats(
-      base::trace_event::ProcessMemoryDump* pmd,
-      const std::string& parent_dump_absolute_name) const = 0;
+  virtual base::Value SocketPoolInfoToValue() const = 0;
 };
 
 // A helper method that uses the passed in proxy information to initialize a
 // ClientSocketHandle with the relevant socket pool. Use this method for
-// HTTP/HTTPS requests. |ssl_config_for_origin| is only used if the request
-// uses SSL and |ssl_config_for_proxy| is used if the proxy server is HTTPS.
-// |resolution_callback| will be invoked after the the hostname is
-// resolved.  If |resolution_callback| does not return OK, then the
-// connection will be aborted with that value.
+// HTTP/HTTPS requests. `allowed_bad_certs` is only used if the request
+// uses SSL.
 int InitSocketHandleForHttpRequest(
     url::SchemeHostPort endpoint,
     int request_load_flags,
     RequestPriority request_priority,
     HttpNetworkSession* session,
     const ProxyInfo& proxy_info,
-    const SSLConfig& ssl_config_for_origin,
-    const SSLConfig& ssl_config_for_proxy,
+    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs,
     PrivacyMode privacy_mode,
-    NetworkIsolationKey network_isolation_key,
+    NetworkAnonymizationKey network_anonymization_key,
     SecureDnsPolicy secure_dns_policy,
     const SocketTag& socket_tag,
+    handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     ClientSocketHandle* socket_handle,
     CompletionOnceCallback callback,
@@ -114,23 +101,18 @@ int InitSocketHandleForHttpRequest(
 
 // A helper method that uses the passed in proxy information to initialize a
 // ClientSocketHandle with the relevant socket pool. Use this method for
-// HTTP/HTTPS requests for WebSocket handshake.
-// |ssl_config_for_origin| is only used if the request
-// uses SSL and |ssl_config_for_proxy| is used if the proxy server is HTTPS.
-// |resolution_callback| will be invoked after the the hostname is
-// resolved.  If |resolution_callback| does not return OK, then the
-// connection will be aborted with that value.
-// This function uses WEBSOCKET_SOCKET_POOL socket pools.
+// HTTP/HTTPS requests for WebSocket handshake. This function uses
+// kWebSocket socket pools.
 int InitSocketHandleForWebSocketRequest(
     url::SchemeHostPort endpoint,
     int request_load_flags,
     RequestPriority request_priority,
     HttpNetworkSession* session,
     const ProxyInfo& proxy_info,
-    const SSLConfig& ssl_config_for_origin,
-    const SSLConfig& ssl_config_for_proxy,
+    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs,
     PrivacyMode privacy_mode,
-    NetworkIsolationKey network_isolation_key,
+    NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     ClientSocketHandle* socket_handle,
     CompletionOnceCallback callback,
@@ -138,18 +120,20 @@ int InitSocketHandleForWebSocketRequest(
 
 // Similar to InitSocketHandleForHttpRequest except that it initiates the
 // desired number of preconnect streams from the relevant socket pool.
-int PreconnectSocketsForHttpRequest(url::SchemeHostPort endpoint,
-                                    int request_load_flags,
-                                    RequestPriority request_priority,
-                                    HttpNetworkSession* session,
-                                    const ProxyInfo& proxy_info,
-                                    const SSLConfig& ssl_config_for_origin,
-                                    const SSLConfig& ssl_config_for_proxy,
-                                    PrivacyMode privacy_mode,
-                                    NetworkIsolationKey network_isolation_key,
-                                    SecureDnsPolicy secure_dns_policy,
-                                    const NetLogWithSource& net_log,
-                                    int num_preconnect_streams);
+int PreconnectSocketsForHttpRequest(
+    url::SchemeHostPort endpoint,
+    int request_load_flags,
+    RequestPriority request_priority,
+    HttpNetworkSession* session,
+    const ProxyInfo& proxy_info,
+    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs,
+    PrivacyMode privacy_mode,
+    NetworkAnonymizationKey network_anonymization_key,
+    SecureDnsPolicy secure_dns_policy,
+    handles::NetworkHandle target_network,
+    const NetLogWithSource& net_log,
+    int num_preconnect_streams,
+    ClientSocketPool::PreconnectCompletionCallback callback);
 
 }  // namespace net
 

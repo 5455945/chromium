@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -53,8 +53,8 @@ ScopedWindowCaptureRequest::ScopedWindowCaptureRequest(Window* window)
 
 void ScopedWindowCaptureRequest::AttachToCurrentWindow(
     bool increment_requests) {
-  DCHECK(window_);
-  DCHECK(!window_->IsRootWindow());
+  CHECK(window_, base::NotFatalUntil::M163);
+  CHECK(!window_->IsRootWindow(), base::NotFatalUntil::M163);
   if (increment_requests)
     window_->OnScopedWindowCaptureRequestAdded();
   window_->AddObserver(this);

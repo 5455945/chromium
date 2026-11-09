@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,34 +14,34 @@ namespace net {
 
 namespace {
 
-base::Value NetLogInitEndInfoParams(int result,
-                                    int total_size,
-                                    bool is_chunked) {
-  base::Value dict(base::Value::Type::DICTIONARY);
+base::DictValue NetLogInitEndInfoParams(int result,
+                                        int total_size,
+                                        bool is_chunked) {
+  base::DictValue dict;
 
-  dict.SetIntKey("net_error", result);
-  dict.SetIntKey("total_size", total_size);
-  dict.SetBoolKey("is_chunked", is_chunked);
+  dict.Set("net_error", result);
+  dict.Set("total_size", total_size);
+  dict.Set("is_chunked", is_chunked);
   return dict;
 }
 
-base::Value CreateReadInfoParams(int current_position) {
-  base::Value dict(base::Value::Type::DICTIONARY);
+base::DictValue CreateReadInfoParams(int current_position) {
+  base::DictValue dict;
 
-  dict.SetIntKey("current_position", current_position);
+  dict.Set("current_position", current_position);
   return dict;
 }
 
 }  // namespace
 
 UploadDataStream::UploadDataStream(bool is_chunked, int64_t identifier)
-    : total_size_(0),
-      current_position_(0),
-      identifier_(identifier),
+    : UploadDataStream(is_chunked, /*has_null_source=*/false, identifier) {}
+UploadDataStream::UploadDataStream(bool is_chunked,
+                                   bool has_null_source,
+                                   int64_t identifier)
+    : identifier_(identifier),
       is_chunked_(is_chunked),
-      initialized_successfully_(false),
-      is_eof_(false) {
-}
+      has_null_source_(has_null_source) {}
 
 UploadDataStream::~UploadDataStream() = default;
 
@@ -70,6 +70,7 @@ int UploadDataStream::Read(IOBuffer* buf,
                            CompletionOnceCallback callback) {
   DCHECK(!callback.is_null() || IsInMemory());
   DCHECK(initialized_successfully_);
+  CHECK(buf);
   DCHECK_GT(buf_len, 0);
 
   net_log_.BeginEvent(NetLogEventType::UPLOAD_DATA_STREAM_READ,
@@ -83,6 +84,9 @@ int UploadDataStream::Read(IOBuffer* buf,
     DCHECK(!IsInMemory());
     callback_ = std::move(callback);
   } else {
+    if (result < ERR_IO_PENDING) {
+      LOG(ERROR) << "ReadInternal failed with Error: " << result;
+    }
     OnReadCompleted(result);
   }
 
@@ -169,9 +173,10 @@ void UploadDataStream::OnReadCompleted(int result) {
   if (result > 0) {
     current_position_ += result;
     if (!is_chunked_) {
-      DCHECK_LE(current_position_, total_size_);
-      if (current_position_ == total_size_)
+      CHECK_LE(current_position_, total_size_);
+      if (current_position_ == total_size_) {
         is_eof_ = true;
+      }
     }
   }
 

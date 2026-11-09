@@ -1,46 +1,76 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/color/chrome_color_mixers.h"
 
-#include "base/bind.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
-#include "ui/color/color_id.h"
-#include "ui/color/color_mixer.h"
-#include "ui/color/color_provider.h"
-#include "ui/color/color_recipe.h"
+#include <memory>
+#include <string_view>
+
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "chrome/browser/ui/color/chrome_color_mixer.h"
+#include "chrome/browser/ui/color/chrome_color_provider_utils.h"
+#include "chrome/browser/ui/color/material_chrome_color_mixer.h"
+#include "chrome/browser/ui/color/material_new_tab_page_color_mixer.h"
+#include "chrome/browser/ui/color/material_omnibox_color_mixer.h"
+#include "chrome/browser/ui/color/material_side_panel_color_mixer.h"
+#include "chrome/browser/ui/color/material_tab_strip_color_mixer.h"
+#include "chrome/browser/ui/color/native_chrome_color_mixer.h"
+#include "chrome/browser/ui/color/new_tab_page_color_mixer.h"
+#include "chrome/browser/ui/color/omnibox_color_mixer.h"
+#include "chrome/browser/ui/color/product_specifications_color_mixer.h"
+#include "chrome/browser/ui/color/tab_strip_color_mixer.h"
+#include "ui/color/color_provider_utils.h"
 
 namespace {
 
-constexpr float kMinOmniboxToolbarContrast = 1.3f;
+class ChromeColorProviderUtilsCallbacks
+    : public ui::ColorProviderUtilsCallbacks {
+ public:
+  bool ColorIdToCSSColorId(ui::ColorId color_id,
+                           std::string_view* css_name) override;
+};
 
-ui::ColorTransform ChooseOmniboxBgBlendTarget() {
-  return base::BindRepeating(
-      [](SkColor input_color, const ui::ColorMixer& mixer) {
-        const SkColor toolbar_color = mixer.GetResultColor(kColorToolbar);
-        const SkColor endpoint_color =
-            color_utils::GetEndpointColorWithMinContrast(toolbar_color);
-        return (color_utils::GetContrastRatio(toolbar_color, endpoint_color) >=
-                kMinOmniboxToolbarContrast)
-                   ? endpoint_color
-                   : color_utils::GetColorWithMaxContrast(endpoint_color);
-      });
+bool ChromeColorProviderUtilsCallbacks::ColorIdToCSSColorId(
+    ui::ColorId color_id,
+    std::string_view* css_name) {
+  std::string_view name = ChromeColorIdToCSSColorId(color_id);
+  if (!name.empty()) {
+    *css_name = name;
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
 
-void AddChromeColorMixers(ui::ColorProvider* provider) {
-  ui::ColorMixer& mixer = provider->AddMixer();
+void AddChromeColorMixers(ui::ColorProvider* provider,
+                          const ui::ColorProviderKey& key) {
+  static base::NoDestructor<ChromeColorProviderUtilsCallbacks>
+      chrome_color_provider_utils_callbacks;
+  ui::SetColorProviderUtilsCallbacks(
+      chrome_color_provider_utils_callbacks.get());
+  AddChromeColorMixer(provider, key);
+  AddNewTabPageColorMixer(provider, key);
+  AddOmniboxColorMixer(provider, key);
+  AddProductSpecificationsColorMixer(provider, key);
+  AddTabStripColorMixer(provider, key);
 
-  // TODO(pkasting): Pre-color pipeline this is only enabled for custom themes.
-  // Agree on consistent behavior before enabling this.
-  mixer[kColorOmniboxBackground] = ui::BlendForMinContrast(
-      kColorToolbar, kColorToolbar, ChooseOmniboxBgBlendTarget(),
-      kMinOmniboxToolbarContrast);
-  mixer[kColorOmniboxText] =
-      ui::GetColorWithMaxContrast(kColorOmniboxBackground);
-  // TODO(tluk) Behavior change for dark mode to a darker toolbar color for
-  // better color semantics. Follow up with UX team before landing change.
-  mixer[kColorToolbar] = {ui::kColorPrimaryBackground};
+  AddMaterialChromeColorMixer(provider, key);
+  AddMaterialNewTabPageColorMixer(provider, key);
+  AddMaterialOmniboxColorMixer(provider, key);
+  AddMaterialSidePanelColorMixer(provider, key);
+  AddMaterialTabStripColorMixer(provider, key);
+
+  // Must be the last one in order to override other mixer colors.
+  AddNativeChromeColorMixer(provider, key);
+
+  if (key.custom_theme) {
+    key.custom_theme->AddColorMixers(provider, key);
+  }
+
+  if (key.app_controller) {
+    key.app_controller->AddColorMixers(provider, key);
+  }
 }

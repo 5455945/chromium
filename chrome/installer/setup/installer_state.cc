@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/win/registry.h"
-#include "build/branding_buildflags.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/installer/setup/setup_util.h"
 #include "chrome/installer/util/google_update_settings.h"
@@ -56,7 +55,7 @@ InstallerState::InstallerState(Level level)
   set_level(level);
 }
 
-InstallerState::~InstallerState() {}
+InstallerState::~InstallerState() = default;
 
 void InstallerState::Initialize(const base::CommandLine& command_line,
                                 const InitialPreferences& prefs,
@@ -74,8 +73,9 @@ void InstallerState::Initialize(const base::CommandLine& command_line,
   if (!msi_) {
     const ProductState* product_state =
         machine_state.GetProductState(system_install());
-    if (product_state != nullptr)
+    if (product_state != nullptr) {
       msi_ = product_state->is_msi();
+    }
   }
 
   const bool is_uninstall = command_line.HasSwitch(switches::kUninstall);

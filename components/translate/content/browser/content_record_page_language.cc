@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,7 @@ std::string GetPageLanguageFromNavigation(content::NavigationEntry* entry) {
   return data ? data->page_language : "";
 }
 
-void SetPageLanguageInNavigation(const std::string& page_language,
+void SetPageLanguageInNavigation(std::string_view page_language,
                                  content::NavigationEntry* entry) {
   auto data = std::make_unique<LanguageDetectionData>();
   data->page_language = page_language;

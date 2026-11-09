@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/task/sequence_manager/test/sequence_manager_for_test.h"
 #include "base/test/null_task_runner.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "base/time/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
@@ -30,121 +31,103 @@ class BudgetPoolTest : public testing::Test {
   ~BudgetPoolTest() override = default;
 
   void SetUp() override {
-    clock_.Advance(base::TimeDelta::FromMicroseconds(5000));
+    clock_.Advance(base::Microseconds(5000));
     null_task_runner_ = base::MakeRefCounted<base::NullTaskRunner>();
-    scheduler_ = std::make_unique<MainThreadSchedulerImpl>(
-        base::sequence_manager::SequenceManagerForTest::Create(
-            nullptr, null_task_runner_, &clock_),
-        absl::nullopt);
-    task_queue_throttler_ = scheduler_->task_queue_throttler();
     start_time_ = clock_.NowTicks();
   }
 
-  void TearDown() override {
-    scheduler_->Shutdown();
-    scheduler_.reset();
-  }
-
   base::TimeTicks MillisecondsAfterStart(int milliseconds) {
-    return start_time_ + base::TimeDelta::FromMilliseconds(milliseconds);
+    return start_time_ + base::Milliseconds(milliseconds);
   }
 
   base::TimeTicks SecondsAfterStart(int seconds) {
-    return start_time_ + base::TimeDelta::FromSeconds(seconds);
+    return start_time_ + base::Seconds(seconds);
   }
 
  protected:
   base::SimpleTestTickClock clock_;
   scoped_refptr<base::NullTaskRunner> null_task_runner_;
-  std::unique_ptr<MainThreadSchedulerImpl> scheduler_;
-  TaskQueueThrottler* task_queue_throttler_;  // NOT OWNED
+  TraceableVariableController tracing_controller_;
   base::TimeTicks start_time_;
 };
 
 TEST_F(BudgetPoolTest, CPUTimeBudgetPool) {
-  CPUTimeBudgetPool* pool =
-      task_queue_throttler_->CreateCPUTimeBudgetPool("test");
+  std::unique_ptr<CPUTimeBudgetPool> pool = std::make_unique<CPUTimeBudgetPool>(
+      "test", &tracing_controller_, start_time_);
 
   pool->SetTimeBudgetRecoveryRate(SecondsAfterStart(0), 0.1);
 
-  EXPECT_TRUE(pool->CanRunTasksAt(SecondsAfterStart(0), false));
+  EXPECT_TRUE(pool->CanRunTasksAt(SecondsAfterStart(0)));
   EXPECT_EQ(SecondsAfterStart(0),
             pool->GetNextAllowedRunTime(SecondsAfterStart(0)));
 
   // Run an expensive task and make sure that we're throttled.
-  pool->RecordTaskRunTime(nullptr, SecondsAfterStart(0),
-                          MillisecondsAfterStart(100));
+  pool->RecordTaskRunTime(SecondsAfterStart(0), MillisecondsAfterStart(100));
 
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(500), false));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(500)));
   EXPECT_EQ(MillisecondsAfterStart(1000),
             pool->GetNextAllowedRunTime(SecondsAfterStart(0)));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(1000), false));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(1000)));
 
   // Run a cheap task and make sure that it doesn't affect anything.
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(2000), false));
-  pool->RecordTaskRunTime(nullptr, MillisecondsAfterStart(2000),
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(2000)));
+  pool->RecordTaskRunTime(MillisecondsAfterStart(2000),
                           MillisecondsAfterStart(2020));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(2020), false));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(2020)));
   EXPECT_EQ(MillisecondsAfterStart(2020),
             pool->GetNextAllowedRunTime(SecondsAfterStart(0)));
-
-  pool->Close();
 }
 
 TEST_F(BudgetPoolTest, WakeUpBudgetPool) {
-  WakeUpBudgetPool* pool =
-      task_queue_throttler_->CreateWakeUpBudgetPool("test");
+  std::unique_ptr<WakeUpBudgetPool> pool =
+      std::make_unique<WakeUpBudgetPool>("test");
 
-  scoped_refptr<base::sequence_manager::TaskQueue> queue =
-      scheduler_->NewTaskQueueForTest();
-
-  pool->SetWakeUpInterval(base::TimeTicks(), base::TimeDelta::FromSeconds(10));
-  pool->SetWakeUpDuration(base::TimeDelta::FromMilliseconds(10));
+  pool->SetWakeUpInterval(base::TimeTicks(), base::Seconds(10));
+  pool->SetWakeUpDuration(base::Milliseconds(10));
 
   // Can't run tasks until a wake-up.
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(0), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(5), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(9), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(10), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(11), false));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(0)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(5)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(9)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(10)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(11)));
 
   pool->OnWakeUp(MillisecondsAfterStart(0));
 
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(0), false));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(5), false));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(9), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(10), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(11), false));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(0)));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(5)));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(9)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(10)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(11)));
 
   // GetNextAllowedRunTime should return the desired time when in the
   // wakeup window and return the next wakeup otherwise.
   EXPECT_EQ(start_time_, pool->GetNextAllowedRunTime(start_time_));
-  EXPECT_EQ(base::TimeTicks() + base::TimeDelta::FromSeconds(10),
+  EXPECT_EQ(base::TimeTicks() + base::Seconds(10),
             pool->GetNextAllowedRunTime(MillisecondsAfterStart(15)));
 
-  pool->RecordTaskRunTime(queue.get(), MillisecondsAfterStart(5),
-                          MillisecondsAfterStart(7));
+  pool->RecordTaskRunTime(MillisecondsAfterStart(5), MillisecondsAfterStart(7));
 
   // Make sure that nothing changes after a task inside wakeup window.
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(0), false));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(5), false));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(9), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(10), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(11), false));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(0)));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(5)));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(9)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(10)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(11)));
   EXPECT_EQ(start_time_, pool->GetNextAllowedRunTime(start_time_));
-  EXPECT_EQ(base::TimeTicks() + base::TimeDelta::FromSeconds(10),
+  EXPECT_EQ(base::TimeTicks() + base::Seconds(10),
             pool->GetNextAllowedRunTime(MillisecondsAfterStart(15)));
 
   pool->OnWakeUp(MillisecondsAfterStart(12005));
-  pool->RecordTaskRunTime(queue.get(), MillisecondsAfterStart(12005),
+  pool->RecordTaskRunTime(MillisecondsAfterStart(12005),
                           MillisecondsAfterStart(12007));
 
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(12005), false));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(12007), false));
-  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(12014), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(12015), false));
-  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(12016), false));
-  EXPECT_EQ(base::TimeTicks() + base::TimeDelta::FromSeconds(20),
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(12005)));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(12007)));
+  EXPECT_TRUE(pool->CanRunTasksAt(MillisecondsAfterStart(12014)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(12015)));
+  EXPECT_FALSE(pool->CanRunTasksAt(MillisecondsAfterStart(12016)));
+  EXPECT_EQ(base::TimeTicks() + base::Seconds(20),
             pool->GetNextAllowedRunTime(SecondsAfterStart(13)));
 }
 

@@ -1,178 +1,236 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.night_mode.settings;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+
 import static org.chromium.chrome.browser.flags.ChromeFeatureList.DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING;
-import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_DARKEN_WEBSITES_ENABLED;
 import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.UI_THEME_SETTING;
 
-import android.os.Build;
 import android.view.View;
 import android.widget.LinearLayout;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.night_mode.NightModeUtils;
 import org.chromium.chrome.browser.night_mode.R;
 import org.chromium.chrome.browser.night_mode.ThemeType;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.browser_ui.settings.BlankUiTestActivitySettingsTestRule;
+import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
+import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridgeJni;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescription;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionLayout;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.ui.test.util.DummyUiActivityTestCase;
+import org.chromium.components.content_settings.ContentSettingsType;
+import org.chromium.components.feature_engagement.Tracker;
 
-/**
- * Tests for ThemeSettingsFragment.
- */
-// clang-format off
-@RunWith(ChromeJUnit4ClassRunner.class)
-public class ThemeSettingsFragmentTest extends DummyUiActivityTestCase {
-    // clang-format on
+/** Tests for ThemeSettingsFragment. */
+@RunWith(BaseJUnit4ClassRunner.class)
+@DisableFeatures(DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING)
+public class ThemeSettingsFragmentTest {
+
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Rule
-    public SettingsActivityTestRule<ThemeSettingsFragment> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(ThemeSettingsFragment.class);
+    public BlankUiTestActivitySettingsTestRule mSettingsTestRule =
+            new BlankUiTestActivitySettingsTestRule();
+
+    @Mock public WebsitePreferenceBridge.Natives mMockWebsitePreferenceBridgeJni;
+    @Mock public Profile mProfile;
+    @Mock public Tracker mTracker;
 
     private ThemeSettingsFragment mFragment;
     private RadioButtonGroupThemePreference mPreference;
 
-    @Override
-    public void setUpTest() throws Exception {
-        super.setUpTest();
-        SharedPreferencesManager.getInstance().removeKey(UI_THEME_SETTING);
-        SharedPreferencesManager.getInstance().removeKey(UI_THEME_DARKEN_WEBSITES_ENABLED);
-        mSettingsActivityTestRule.startSettingsActivity();
-        mFragment = mSettingsActivityTestRule.getFragment();
-        mPreference = (RadioButtonGroupThemePreference) mFragment.findPreference(
-                ThemeSettingsFragment.PREF_UI_THEME_PREF);
-    }
+    // Boolean used for web content auto dark mode.
+    private boolean mForceDarkModeEnabled;
 
-    @Override
-    public void tearDownTest() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            SharedPreferencesManager.getInstance().removeKey(UI_THEME_SETTING);
-            SharedPreferencesManager.getInstance().removeKey(UI_THEME_DARKEN_WEBSITES_ENABLED);
-        });
+    @Before
+    public void setUp() {
+        ChromeSharedPreferences.getInstance().removeKey(UI_THEME_SETTING);
 
-        super.tearDownTest();
+        WebsitePreferenceBridgeJni.setInstanceForTesting(mMockWebsitePreferenceBridgeJni);
+
+        TrackerFactory.setTrackerForTests(mTracker);
+
+        // Default value for feature DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING.
+        mForceDarkModeEnabled = true;
+        Mockito.doAnswer(invocation -> mForceDarkModeEnabled)
+                .when(mMockWebsitePreferenceBridgeJni)
+                .isContentSettingEnabled(any(), eq(ContentSettingsType.AUTO_DARK_WEB_CONTENT));
+        Mockito.doAnswer(
+                        invocation -> {
+                            mForceDarkModeEnabled = (boolean) invocation.getArguments()[2];
+                            return null;
+                        })
+                .when(mMockWebsitePreferenceBridgeJni)
+                .setContentSettingEnabled(
+                        any(), eq(ContentSettingsType.AUTO_DARK_WEB_CONTENT), anyBoolean());
     }
 
     @Test
     @SmallTest
     @Feature({"Themes"})
     public void testSelectThemes() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            int expectedDefaultTheme = ThemeType.LIGHT;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Assert.assertFalse("Q should not default to light.",
-                        NightModeUtils.isNightModeDefaultToLight());
-                expectedDefaultTheme = ThemeType.SYSTEM_DEFAULT;
-            }
+        launchThemeSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    int expectedDefaultTheme = ThemeType.SYSTEM_DEFAULT;
 
-            Assert.assertEquals("Incorrect default theme setting.", expectedDefaultTheme,
-                    NightModeUtils.getThemeSetting());
-            assertButtonCheckedCorrectly("Light", expectedDefaultTheme);
+                    Assert.assertEquals(
+                            "Incorrect default theme setting.",
+                            expectedDefaultTheme,
+                            NightModeUtils.getThemeSetting());
+                    assertButtonCheckedCorrectly("Light", expectedDefaultTheme);
 
-            // Select System default
-            Assert.assertEquals(R.id.system_default, getButton(0).getId());
-            selectButton(0);
-            assertButtonCheckedCorrectly("System default", 0);
-            Assert.assertEquals(ThemeType.SYSTEM_DEFAULT, mPreference.getSetting());
-            Assert.assertEquals(mPreference.getSetting(),
-                    SharedPreferencesManager.getInstance().readInt(UI_THEME_SETTING));
+                    // Select System default
+                    Assert.assertEquals(R.id.system_default, getButton(0).getId());
+                    selectButton(0);
+                    assertButtonCheckedCorrectly("System default", 0);
+                    Assert.assertEquals(ThemeType.SYSTEM_DEFAULT, mPreference.getSetting());
+                    Assert.assertEquals(
+                            mPreference.getSetting(),
+                            ChromeSharedPreferences.getInstance().readInt(UI_THEME_SETTING));
 
-            // Select Light
-            Assert.assertEquals(R.id.light, getButton(1).getId());
-            selectButton(1);
-            assertButtonCheckedCorrectly("Light", 1);
-            Assert.assertEquals(ThemeType.LIGHT, mPreference.getSetting());
-            Assert.assertEquals(mPreference.getSetting(),
-                    SharedPreferencesManager.getInstance().readInt(UI_THEME_SETTING));
+                    // Select Light
+                    Assert.assertEquals(R.id.light, getButton(1).getId());
+                    selectButton(1);
+                    assertButtonCheckedCorrectly("Light", 1);
+                    Assert.assertEquals(ThemeType.LIGHT, mPreference.getSetting());
+                    Assert.assertEquals(
+                            mPreference.getSetting(),
+                            ChromeSharedPreferences.getInstance().readInt(UI_THEME_SETTING));
 
-            // Select Dark
-            Assert.assertEquals(R.id.dark, getButton(2).getId());
-            selectButton(2);
-            assertButtonCheckedCorrectly("Dark", 2);
-            Assert.assertEquals(ThemeType.DARK, mPreference.getSetting());
-            Assert.assertEquals(mPreference.getSetting(),
-                    SharedPreferencesManager.getInstance().readInt(UI_THEME_SETTING));
-        });
+                    // Select Dark
+                    Assert.assertEquals(R.id.dark, getButton(2).getId());
+                    selectButton(2);
+                    assertButtonCheckedCorrectly("Dark", 2);
+                    Assert.assertEquals(ThemeType.DARK, mPreference.getSetting());
+                    Assert.assertEquals(
+                            mPreference.getSetting(),
+                            ChromeSharedPreferences.getInstance().readInt(UI_THEME_SETTING));
+                });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
     @Test
     @SmallTest
     @Feature({"Themes"})
-    @Features.EnableFeatures(DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING)
+    @EnableFeatures(DARKEN_WEBSITES_CHECKBOX_IN_THEMES_SETTING)
     public void testDarkenWebsiteButton() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            int expectedDefaultTheme = ThemeType.LIGHT;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Assert.assertFalse("Q should not default to light.",
-                        NightModeUtils.isNightModeDefaultToLight());
-                expectedDefaultTheme = ThemeType.SYSTEM_DEFAULT;
-            }
+        launchThemeSettings();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    int expectedDefaultTheme = ThemeType.SYSTEM_DEFAULT;
 
-            LinearLayout checkboxContainer = mPreference.getCheckboxContainerForTesting();
-            RadioButtonWithDescriptionLayout group = mPreference.getGroupForTesting();
+                    LinearLayout checkboxContainer = mPreference.getCheckboxContainerForTesting();
+                    RadioButtonWithDescriptionLayout group = mPreference.getGroupForTesting();
 
-            Assert.assertEquals("Incorrect default theme setting.", expectedDefaultTheme,
-                    NightModeUtils.getThemeSetting());
-            assertButtonCheckedCorrectly("Light", expectedDefaultTheme);
+                    Assert.assertEquals(
+                            "Incorrect default theme setting.",
+                            expectedDefaultTheme,
+                            NightModeUtils.getThemeSetting());
+                    assertButtonCheckedCorrectly("Light", expectedDefaultTheme);
 
-            // Select System default
-            selectButton(0);
-            Assert.assertTrue(
-                    "Darken website button should be visible when system default is checked",
-                    checkboxContainer.getVisibility() == View.VISIBLE);
-            Assert.assertEquals(
-                    "Darken website button should be below the system default option when system"
-                            + " default is checked",
-                    1, group.indexOfChild(checkboxContainer));
+                    // Select System default
+                    selectButton(0);
+                    Assert.assertTrue(
+                            "Darken website button should be visible when system default is"
+                                    + " checked",
+                            checkboxContainer.getVisibility() == View.VISIBLE);
+                    Assert.assertEquals(
+                            "Darken website button should be below the system default option when"
+                                    + " system default is checked",
+                            1,
+                            group.indexOfChild(checkboxContainer));
 
-            // Select Light
-            selectButton(1);
-            Assert.assertTrue(
-                    "Darken website button should be invisible when light theme is checked",
-                    checkboxContainer.getVisibility() != View.VISIBLE);
+                    // Select Light
+                    selectButton(1);
+                    Assert.assertTrue(
+                            "Darken website button should be invisible when light theme is checked",
+                            checkboxContainer.getVisibility() != View.VISIBLE);
 
-            // Select Dark
-            selectButton(2);
-            Assert.assertTrue("Darken website button should be visible when dark theme is checked",
-                    checkboxContainer.getVisibility() == View.VISIBLE);
-            Assert.assertEquals("Darken website button should be below the dark theme option"
-                            + " when dark theme is checked",
-                    3, group.indexOfChild(checkboxContainer));
+                    // Select Dark
+                    selectButton(2);
+                    Assert.assertTrue(
+                            "Darken website button should be visible when dark theme is checked",
+                            checkboxContainer.getVisibility() == View.VISIBLE);
+                    Assert.assertEquals(
+                            "Darken website button should be below the dark theme option"
+                                    + " when dark theme is checked",
+                            3,
+                            group.indexOfChild(checkboxContainer));
 
-            // Check darken website button
-            checkboxContainer.performClick();
-            SharedPreferencesManager sharedPreferencesManager =
-                    SharedPreferencesManager.getInstance();
-            Assert.assertTrue("Darken website feature should be enabled when darken website button"
-                            + " is checked",
-                    mPreference.isDarkenWebsitesEnabled());
-            Assert.assertTrue("Darken website feature should be enabled when darken website button"
-                            + " is checked",
-                    sharedPreferencesManager.readBoolean(UI_THEME_DARKEN_WEBSITES_ENABLED, false));
+                    // Checks for Darken website button.
+                    Assert.assertTrue(
+                            "Darken website check box should be checked by default.",
+                            mPreference.isDarkenWebsitesEnabled());
 
-            // Check system default, darken website button should stay checked
-            selectButton(1);
-            Assert.assertTrue(
-                    "Darken website button should stay its state when changing theme preference",
-                    mPreference.isDarkenWebsitesEnabled());
-            Assert.assertTrue(
-                    "Darken website button should stay its state when changing theme preference",
-                    sharedPreferencesManager.readBoolean(UI_THEME_DARKEN_WEBSITES_ENABLED, false));
-        });
+                    // Toggle the check box.
+                    checkboxContainer.performClick();
+                    Assert.assertFalse(
+                            "Darken website check box should be unchecked.",
+                            mPreference.isDarkenWebsitesEnabled());
+                    Mockito.verify(mMockWebsitePreferenceBridgeJni, Mockito.times(1))
+                            .setContentSettingEnabled(
+                                    any(),
+                                    eq(ContentSettingsType.AUTO_DARK_WEB_CONTENT),
+                                    eq(false));
+
+                    checkboxContainer.performClick();
+                    Assert.assertTrue(
+                            "Darken website check box should be checked again.",
+                            mPreference.isDarkenWebsitesEnabled());
+                    Mockito.verify(mMockWebsitePreferenceBridgeJni, Mockito.times(1))
+                            .setContentSettingEnabled(
+                                    any(), eq(ContentSettingsType.AUTO_DARK_WEB_CONTENT), eq(true));
+
+                    // Check system default, darken website button should stay checked.
+                    selectButton(1);
+                    Assert.assertTrue(
+                            "Darken website button should stay its state when changing theme"
+                                    + " preference.",
+                            mPreference.isDarkenWebsitesEnabled());
+                    Mockito.verify(mMockWebsitePreferenceBridgeJni, Mockito.times(1))
+                            .setContentSettingEnabled(
+                                    any(), eq(ContentSettingsType.AUTO_DARK_WEB_CONTENT), eq(true));
+                });
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+    }
+
+    private void launchThemeSettings() {
+        mSettingsTestRule.launchPreference(
+                ThemeSettingsFragment.class,
+                /* fragmentArgs= */ null,
+                (fragment) -> ((ThemeSettingsFragment) fragment).setProfile(mProfile));
+
+        mFragment = (ThemeSettingsFragment) mSettingsTestRule.getPreferenceFragment();
+        mPreference =
+                (RadioButtonGroupThemePreference)
+                        mFragment.findPreference(ThemeSettingsFragment.PREF_UI_THEME_PREF);
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
     private RadioButtonWithDescription getButton(int index) {

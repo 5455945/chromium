@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,37 +9,44 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/cancelable_callback.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "chrome/browser/extensions/activity_log/activity_log_task_runner.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/scoped_test_user_manager.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/user_manager_delegate_impl.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -47,17 +54,20 @@ class FullStreamUIPolicyTest : public testing::Test {
  public:
   FullStreamUIPolicyTest()
       : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    test_user_manager_ = std::make_unique<ash::ScopedTestUserManager>();
-#endif
+    // Run activity log database tasks on the main thread. By default they run
+    // on a BEST_EFFORT thread pool thread, which on Windows has background
+    // priority with very low I/O priority. On loaded bots, database operations
+    // there can take long enough to exceed test timeouts.
+    SetActivityLogTaskRunnerForTesting(
+        base::SingleThreadTaskRunner::GetCurrentDefault().get());
     base::CommandLine no_program_command_line(base::CommandLine::NO_PROGRAM);
     profile_ = std::make_unique<TestingProfile>();
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     command_line->AppendSwitch(switches::kEnableExtensionActivityLogging);
     command_line->AppendSwitch(switches::kEnableExtensionActivityLogTesting);
-    extension_service_ = static_cast<TestExtensionSystem*>(
-        ExtensionSystem::Get(profile_.get()))->CreateExtensionService
-            (&no_program_command_line, base::FilePath(), false);
+    static_cast<TestExtensionSystem*>(ExtensionSystem::Get(profile_.get()))
+        ->CreateExtensionService(&no_program_command_line, base::FilePath(),
+                                 false);
 
     // Run pending async tasks resulting from profile construction to ensure
     // these are complete before the test begins.
@@ -65,12 +75,13 @@ class FullStreamUIPolicyTest : public testing::Test {
   }
 
   ~FullStreamUIPolicyTest() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    test_user_manager_.reset();
+#if BUILDFLAG(IS_CHROMEOS)
+    user_manager_.Reset();
 #endif
     base::RunLoop().RunUntilIdle();
-    profile_.reset(NULL);
+    profile_.reset();
     base::RunLoop().RunUntilIdle();
+    SetActivityLogTaskRunnerForTesting(nullptr);
   }
 
   // A wrapper function for CheckReadFilteredData, so that we don't need to
@@ -98,22 +109,23 @@ class FullStreamUIPolicyTest : public testing::Test {
     // Submit a request to the policy to read back some data, and call the
     // checker function when results are available.  This will happen on the
     // database thread.
+    base::RunLoop run_loop;
     policy->ReadFilteredData(
         extension_id, type, api_name, page_url, arg_url, days_ago,
         base::BindOnce(&FullStreamUIPolicyTest::CheckWrapper,
-                       std::move(checker),
-                       base::RunLoop::QuitCurrentWhenIdleClosureDeprecated()));
+                       std::move(checker), run_loop.QuitClosure()));
 
     // Set up a timeout for receiving results; if we haven't received anything
     // when the timeout triggers then assume that the test is broken.
     base::CancelableOnceClosure timeout(
-        base::BindOnce(&FullStreamUIPolicyTest::TimeoutCallback));
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+        base::BindOnce(&FullStreamUIPolicyTest::TimeoutCallback,
+                       run_loop.QuitWhenIdleClosure()));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE, timeout.callback(), TestTimeouts::action_timeout());
 
     // Wait for results; either the checker or the timeout callbacks should
     // cause the main loop to exit.
-    base::RunLoop().Run();
+    run_loop.Run();
 
     timeout.Cancel();
   }
@@ -126,34 +138,34 @@ class FullStreamUIPolicyTest : public testing::Test {
     std::move(done).Run();
   }
 
-  static void TimeoutCallback() {
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
+  static void TimeoutCallback(base::OnceClosure quit_closure) {
+    std::move(quit_closure).Run();
     FAIL() << "Policy test timed out waiting for results";
   }
 
   static void RetrieveActions_LogAndFetchActions(
       std::unique_ptr<std::vector<scoped_refptr<Action>>> i) {
-    ASSERT_EQ(2, static_cast<int>(i->size()));
+    ASSERT_EQ(2u, i->size());
   }
 
   static void RetrieveActions_FetchFilteredActions0(
       std::unique_ptr<std::vector<scoped_refptr<Action>>> i) {
-    ASSERT_EQ(0, static_cast<int>(i->size()));
+    ASSERT_EQ(0u, i->size());
   }
 
   static void RetrieveActions_FetchFilteredActions1(
       std::unique_ptr<std::vector<scoped_refptr<Action>>> i) {
-    ASSERT_EQ(1, static_cast<int>(i->size()));
+    ASSERT_EQ(1u, i->size());
   }
 
   static void RetrieveActions_FetchFilteredActions2(
       std::unique_ptr<std::vector<scoped_refptr<Action>>> i) {
-    ASSERT_EQ(2, static_cast<int>(i->size()));
+    ASSERT_EQ(2u, i->size());
   }
 
   static void RetrieveActions_FetchFilteredActions300(
       std::unique_ptr<std::vector<scoped_refptr<Action>>> i) {
-    ASSERT_EQ(300, static_cast<int>(i->size()));
+    ASSERT_EQ(300u, i->size());
   }
 
   static void Arguments_Present(std::unique_ptr<Action::ActionVector> i) {
@@ -165,7 +177,7 @@ class FullStreamUIPolicyTest : public testing::Test {
 
   static void Arguments_GetTodaysActions(
       std::unique_ptr<Action::ActionVector> actions) {
-    ASSERT_EQ(2, static_cast<int>(actions->size()));
+    ASSERT_EQ(2u, actions->size());
     CheckAction(*actions->at(0), "punky", Action::ACTION_DOM_ACCESS, "lets",
                 "[\"vamoose\"]", "http://www.google.com/", "Page Title",
                 "http://www.arg-url.com/");
@@ -175,7 +187,7 @@ class FullStreamUIPolicyTest : public testing::Test {
 
   static void Arguments_GetOlderActions(
       std::unique_ptr<Action::ActionVector> actions) {
-    ASSERT_EQ(2, static_cast<int>(actions->size()));
+    ASSERT_EQ(2u, actions->size());
     CheckAction(*actions->at(0), "punky", Action::ACTION_DOM_ACCESS, "lets",
                 "[\"vamoose\"]", "http://www.google.com/", "", "");
     CheckAction(*actions->at(1), "punky", Action::ACTION_API_CALL, "brewster",
@@ -183,7 +195,7 @@ class FullStreamUIPolicyTest : public testing::Test {
   }
 
   static void AllURLsRemoved(std::unique_ptr<Action::ActionVector> actions) {
-    ASSERT_EQ(2, static_cast<int>(actions->size()));
+    ASSERT_EQ(2u, actions->size());
     CheckAction(*actions->at(0), "punky", Action::ACTION_API_CALL, "lets",
                 "[\"vamoose\"]", "", "", "");
     CheckAction(*actions->at(1), "punky", Action::ACTION_DOM_ACCESS, "lets",
@@ -192,7 +204,7 @@ class FullStreamUIPolicyTest : public testing::Test {
 
   static void SomeURLsRemoved(std::unique_ptr<Action::ActionVector> actions) {
     // These will be in the vector in reverse time order.
-    ASSERT_EQ(5, static_cast<int>(actions->size()));
+    ASSERT_EQ(5u, actions->size());
     CheckAction(*actions->at(0), "punky", Action::ACTION_DOM_ACCESS, "lets",
                 "[\"vamoose\"]", "http://www.google.com/", "Google",
                 "http://www.args-url.com/");
@@ -235,15 +247,14 @@ class FullStreamUIPolicyTest : public testing::Test {
     // Use a mock clock to ensure that events are not recorded on the wrong day
     // when the test is run close to local midnight.
     base::SimpleTestClock mock_clock;
-    mock_clock.SetNow(base::Time::Now().LocalMidnight() +
-                      base::TimeDelta::FromHours(12));
+    mock_clock.SetNow(base::Time::Now().LocalMidnight() + base::Hours(12));
     policy->SetClockForTesting(&mock_clock);
 
     // Record some actions
-    scoped_refptr<Action> action = new Action(
-        "punky1", mock_clock.Now() - base::TimeDelta::FromMinutes(40),
-        Action::ACTION_DOM_ACCESS, "lets1");
-    action->mutable_args()->AppendString("vamoose1");
+    scoped_refptr<Action> action =
+        new Action("punky1", mock_clock.Now() - base::Minutes(40),
+                   Action::ACTION_DOM_ACCESS, "lets1");
+    action->mutable_args().Append("vamoose1");
     action->set_page_url(GURL("http://www.google1.com"));
     action->set_page_title("Google1");
     action->set_arg_url(GURL("http://www.args-url1.com"));
@@ -252,10 +263,9 @@ class FullStreamUIPolicyTest : public testing::Test {
     // database.
     policy->ProcessAction(action);
 
-    action = new Action("punky2",
-                        mock_clock.Now() - base::TimeDelta::FromMinutes(30),
+    action = new Action("punky2", mock_clock.Now() - base::Minutes(30),
                         Action::ACTION_API_CALL, "lets2");
-    action->mutable_args()->AppendString("vamoose2");
+    action->mutable_args().Append("vamoose2");
     action->set_page_url(GURL("http://www.google2.com"));
     action->set_page_title("Google2");
     action->set_arg_url(GURL("http://www.args-url2.com"));
@@ -277,12 +287,12 @@ class FullStreamUIPolicyTest : public testing::Test {
   }
 
   static void AllActionsDeleted(std::unique_ptr<Action::ActionVector> actions) {
-    ASSERT_EQ(0, static_cast<int>(actions->size()));
+    ASSERT_EQ(0u, actions->size());
   }
 
   static void NoActionsDeleted(std::unique_ptr<Action::ActionVector> actions) {
     // These will be in the vector in reverse time order.
-    ASSERT_EQ(4, static_cast<int>(actions->size()));
+    ASSERT_EQ(4u, actions->size());
     CheckAction(*actions->at(0), "punky2", Action::ACTION_API_CALL, "lets2",
                 "[\"vamoose2\"]", "http://www.google2.com/", "Google2",
                 "http://www.args-url2.com/");
@@ -303,7 +313,7 @@ class FullStreamUIPolicyTest : public testing::Test {
 
   static void Action1Deleted(std::unique_ptr<Action::ActionVector> actions) {
     // These will be in the vector in reverse time order.
-    ASSERT_EQ(2, static_cast<int>(actions->size()));
+    ASSERT_EQ(2u, actions->size());
     CheckAction(*actions->at(0), "punky2", Action::ACTION_API_CALL, "lets2",
                 "[\"vamoose2\"]", "http://www.google2.com/", "Google2",
                 "http://www.args-url2.com/");
@@ -316,7 +326,7 @@ class FullStreamUIPolicyTest : public testing::Test {
 
   static void Action2Deleted(std::unique_ptr<Action::ActionVector> actions) {
     // These will be in the vector in reverse time order.
-    ASSERT_EQ(2, static_cast<int>(actions->size()));
+    ASSERT_EQ(2u, actions->size());
     CheckAction(*actions->at(0), "punky1", Action::ACTION_DOM_ACCESS, "lets1",
                 "[\"vamoose1\"]", "http://www.google1.com/", "Google1",
                 "http://www.args-url1.com/");
@@ -328,13 +338,16 @@ class FullStreamUIPolicyTest : public testing::Test {
   }
 
  protected:
-  ExtensionService* extension_service_;
   std::unique_ptr<TestingProfile> profile_;
   content::BrowserTaskEnvironment task_environment_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
-  std::unique_ptr<ash::ScopedTestUserManager> test_user_manager_;
+  user_manager::ScopedUserManager user_manager_{
+      std::make_unique<user_manager::UserManagerImpl>(
+          std::make_unique<ash::UserManagerDelegateImpl>(),
+          g_browser_process->local_state(),
+          ash::CrosSettings::Get())};
 #endif
 };
 
@@ -343,19 +356,16 @@ TEST_F(FullStreamUIPolicyTest, Construct) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .Build();
-  extension_service_->AddExtension(extension.get());
-  std::unique_ptr<base::ListValue> args(new base::ListValue());
-  scoped_refptr<Action> action = new Action(extension->id(),
-                                            base::Time::Now(),
-                                            Action::ACTION_API_CALL,
-                                            "tabs.testMethod");
-  action->set_args(std::move(args));
+  ExtensionRegistrar::Get(profile_.get())->AddExtension(extension);
+  scoped_refptr<Action> action =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
+                 "tabs.testMethod");
+  action->set_args(base::ListValue());
   policy->ProcessAction(action);
   policy->Close();
 }
@@ -365,28 +375,25 @@ TEST_F(FullStreamUIPolicyTest, LogAndFetchActions) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .Build();
-  extension_service_->AddExtension(extension.get());
+  ExtensionRegistrar::Get(profile_.get())->AddExtension(extension);
   GURL gurl("http://www.google.com");
 
   // Write some API calls
-  scoped_refptr<Action> action_api = new Action(extension->id(),
-                                                base::Time::Now(),
-                                                Action::ACTION_API_CALL,
-                                                "tabs.testMethod");
-  action_api->set_args(std::make_unique<base::ListValue>());
+  scoped_refptr<Action> action_api =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
+                 "tabs.testMethod");
+  action_api->set_args(base::ListValue());
   policy->ProcessAction(action_api);
 
-  scoped_refptr<Action> action_dom = new Action(extension->id(),
-                                                base::Time::Now(),
-                                                Action::ACTION_DOM_ACCESS,
-                                                "document.write");
-  action_dom->set_args(std::make_unique<base::ListValue>());
+  scoped_refptr<Action> action_dom =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_DOM_ACCESS,
+                 "document.write");
+  action_dom->set_args(base::ListValue());
   action_dom->set_page_url(gurl);
   policy->ProcessAction(action_dom);
 
@@ -403,28 +410,25 @@ TEST_F(FullStreamUIPolicyTest, LogAndFetchFilteredActions) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .Build();
-  extension_service_->AddExtension(extension.get());
+  ExtensionRegistrar::Get(profile_.get())->AddExtension(extension);
   GURL gurl("http://www.google.com");
 
   // Write some API calls
-  scoped_refptr<Action> action_api = new Action(extension->id(),
-                                                base::Time::Now(),
-                                                Action::ACTION_API_CALL,
-                                                "tabs.testMethod");
-  action_api->set_args(std::make_unique<base::ListValue>());
+  scoped_refptr<Action> action_api =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
+                 "tabs.testMethod");
+  action_api->set_args(base::ListValue());
   policy->ProcessAction(action_api);
 
-  scoped_refptr<Action> action_dom = new Action(extension->id(),
-                                                base::Time::Now(),
-                                                Action::ACTION_DOM_ACCESS,
-                                                "document.write");
-  action_dom->set_args(std::make_unique<base::ListValue>());
+  scoped_refptr<Action> action_dom =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_DOM_ACCESS,
+                 "document.write");
+  action_dom->set_args(base::ListValue());
   action_dom->set_page_url(gurl);
   policy->ProcessAction(action_dom);
 
@@ -483,21 +487,18 @@ TEST_F(FullStreamUIPolicyTest, LogWithArguments) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .Build();
-  extension_service_->AddExtension(extension.get());
+  ExtensionRegistrar::Get(profile_.get())->AddExtension(extension);
 
-  std::unique_ptr<base::ListValue> args(new base::ListValue());
-  args->Set(0, std::make_unique<base::Value>("hello"));
-  args->Set(1, std::make_unique<base::Value>("world"));
-  scoped_refptr<Action> action = new Action(extension->id(),
-                                            base::Time::Now(),
-                                            Action::ACTION_API_CALL,
-                                            "extension.connect");
+  auto args = base::ListValue().Append("hello");
+  args.Append("world");
+  scoped_refptr<Action> action =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
+                 "extension.connect");
   action->set_args(std::move(args));
 
   policy->ProcessAction(action);
@@ -516,22 +517,21 @@ TEST_F(FullStreamUIPolicyTest, GetTodaysActions) {
   // care of destruction; this is safe since the policy outlives all our
   // accesses to the mock clock.
   base::SimpleTestClock mock_clock;
-  mock_clock.SetNow(base::Time::Now().LocalMidnight() +
-                    base::TimeDelta::FromHours(12));
+  mock_clock.SetNow(base::Time::Now().LocalMidnight() + base::Hours(12));
   policy->SetClockForTesting(&mock_clock);
 
   // Record some actions
   scoped_refptr<Action> action =
-      new Action("punky", mock_clock.Now() - base::TimeDelta::FromMinutes(40),
+      new Action("punky", mock_clock.Now() - base::Minutes(40),
                  Action::ACTION_API_CALL, "brewster");
-  action->mutable_args()->AppendString("woof");
+  action->mutable_args().Append("woof");
   action->set_arg_url(GURL("http://www.arg-url.com"));
   action->set_page_title("Page Title");
   policy->ProcessAction(action);
 
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google.com"));
   action->set_arg_url(GURL("http://www.arg-url.com"));
   action->set_page_title("Page Title");
@@ -539,7 +539,7 @@ TEST_F(FullStreamUIPolicyTest, GetTodaysActions) {
 
   action = new Action("scoobydoo", mock_clock.Now(), Action::ACTION_DOM_ACCESS,
                       "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google.com"));
   action->set_arg_url(GURL("http://www.arg-url.com"));
   policy->ProcessAction(action);
@@ -558,34 +558,31 @@ TEST_F(FullStreamUIPolicyTest, GetOlderActions) {
   // Use a mock clock to ensure that events are not recorded on the wrong day
   // when the test is run close to local midnight.
   base::SimpleTestClock mock_clock;
-  mock_clock.SetNow(base::Time::Now().LocalMidnight() +
-                    base::TimeDelta::FromHours(12));
+  mock_clock.SetNow(base::Time::Now().LocalMidnight() + base::Hours(12));
   policy->SetClockForTesting(&mock_clock);
 
   // Record some actions
   scoped_refptr<Action> action =
-      new Action("punky",
-                 mock_clock.Now() - base::TimeDelta::FromDays(3) -
-                     base::TimeDelta::FromMinutes(40),
+      new Action("punky", mock_clock.Now() - base::Days(3) - base::Minutes(40),
                  Action::ACTION_API_CALL, "brewster");
-  action->mutable_args()->AppendString("woof");
+  action->mutable_args().Append("woof");
   policy->ProcessAction(action);
 
-  action = new Action("punky", mock_clock.Now() - base::TimeDelta::FromDays(3),
+  action = new Action("punky", mock_clock.Now() - base::Days(3),
                       Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google.com"));
   policy->ProcessAction(action);
 
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("too new");
+  action->mutable_args().Append("too new");
   action->set_page_url(GURL("http://www.google.com"));
   policy->ProcessAction(action);
 
-  action = new Action("punky", mock_clock.Now() - base::TimeDelta::FromDays(7),
+  action = new Action("punky", mock_clock.Now() - base::Days(7),
                       Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("too old");
+  action->mutable_args().Append("too old");
   action->set_page_url(GURL("http://www.google.com"));
   policy->ProcessAction(action);
 
@@ -602,23 +599,22 @@ TEST_F(FullStreamUIPolicyTest, RemoveAllURLs) {
   // Use a mock clock to ensure that events are not recorded on the wrong day
   // when the test is run close to local midnight.
   base::SimpleTestClock mock_clock;
-  mock_clock.SetNow(base::Time::Now().LocalMidnight() +
-                    base::TimeDelta::FromHours(12));
+  mock_clock.SetNow(base::Time::Now().LocalMidnight() + base::Hours(12));
   policy->SetClockForTesting(&mock_clock);
 
   // Record some actions
   scoped_refptr<Action> action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google.com"));
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.google.com"));
   policy->ProcessAction(action);
 
-  mock_clock.Advance(base::TimeDelta::FromSeconds(1));
+  mock_clock.Advance(base::Seconds(1));
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_API_CALL, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google2.com"));
   action->set_page_title("Google");
   // Deliberately no arg url set to make sure it still works when there is no
@@ -641,25 +637,24 @@ TEST_F(FullStreamUIPolicyTest, RemoveSpecificURLs) {
   // Use a mock clock to ensure that events are not recorded on the wrong day
   // when the test is run close to local midnight.
   base::SimpleTestClock mock_clock;
-  mock_clock.SetNow(base::Time::Now().LocalMidnight() +
-                    base::TimeDelta::FromHours(12));
+  mock_clock.SetNow(base::Time::Now().LocalMidnight() + base::Hours(12));
   policy->SetClockForTesting(&mock_clock);
 
   // Record some actions
   // This should have the page url and args url cleared.
   scoped_refptr<Action> action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google1.com"));
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.google1.com"));
   policy->ProcessAction(action);
 
   // This should have the page url cleared but not args url.
-  mock_clock.Advance(base::TimeDelta::FromSeconds(1));
+  mock_clock.Advance(base::Seconds(1));
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google1.com"));
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.google.com"));
@@ -667,29 +662,29 @@ TEST_F(FullStreamUIPolicyTest, RemoveSpecificURLs) {
 
   // This should have the page url cleared. The args url is deliberately not set
   // to make sure this doesn't cause any issues.
-  mock_clock.Advance(base::TimeDelta::FromSeconds(1));
+  mock_clock.Advance(base::Seconds(1));
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google2.com"));
   action->set_page_title("Google");
   policy->ProcessAction(action);
 
   // This should have the args url cleared but not the page url or page title.
-  mock_clock.Advance(base::TimeDelta::FromSeconds(1));
+  mock_clock.Advance(base::Seconds(1));
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google.com"));
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.google1.com"));
   policy->ProcessAction(action);
 
   // This should have neither cleared.
-  mock_clock.Advance(base::TimeDelta::FromSeconds(1));
+  mock_clock.Advance(base::Seconds(1));
   action =
       new Action("punky", mock_clock.Now(), Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_url(GURL("http://www.google.com"));
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.args-url.com"));
@@ -714,15 +709,14 @@ TEST_F(FullStreamUIPolicyTest, RemoveExtensionData) {
   // Use a mock clock to ensure that events are not recorded on the wrong day
   // when the test is run close to local midnight.
   base::SimpleTestClock mock_clock;
-  mock_clock.SetNow(base::Time::Now().LocalMidnight() +
-                    base::TimeDelta::FromHours(12));
+  mock_clock.SetNow(base::Time::Now().LocalMidnight() + base::Hours(12));
   policy->SetClockForTesting(&mock_clock);
 
   // Record some actions
   scoped_refptr<Action> action =
       new Action("deleteextensiondata", mock_clock.Now(),
                  Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.google.com"));
   policy->ProcessAction(action);
@@ -731,7 +725,7 @@ TEST_F(FullStreamUIPolicyTest, RemoveExtensionData) {
 
   scoped_refptr<Action> action2 = new Action("dontdelete", mock_clock.Now(),
                                              Action::ACTION_DOM_ACCESS, "lets");
-  action->mutable_args()->AppendString("vamoose");
+  action->mutable_args().Append("vamoose");
   action->set_page_title("Google");
   action->set_arg_url(GURL("http://www.google.com"));
   policy->ProcessAction(action2);
@@ -757,18 +751,17 @@ TEST_F(FullStreamUIPolicyTest, CapReturns) {
 
   for (int i = 0; i < 305; i++) {
     scoped_refptr<Action> action =
-        new Action("punky",
-                   base::Time::Now(),
-                   Action::ACTION_API_CALL,
+        new Action("punky", base::Time::Now(), Action::ACTION_API_CALL,
                    base::StringPrintf("apicall_%d", i));
     policy->ProcessAction(action);
   }
 
   policy->Flush();
-  GetActivityLogTaskRunner()->PostTaskAndReply(
-      FROM_HERE, base::DoNothing(),
-      base::RunLoop::QuitCurrentWhenIdleClosureDeprecated());
-  base::RunLoop().Run();
+  base::RunLoop run_loop;
+  GetActivityLogTaskRunner()->PostTaskAndReply(FROM_HERE, base::DoNothing(),
+                                               run_loop.QuitClosure());
+
+  run_loop.Run();
 
   CheckReadFilteredData(
       policy, "punky", Action::ACTION_ANY, "", "", "", -1,
@@ -782,28 +775,25 @@ TEST_F(FullStreamUIPolicyTest, DeleteDatabase) {
   policy->Init();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "Test extension")
                            .Set("version", "1.0.0")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .Build();
-  extension_service_->AddExtension(extension.get());
+  ExtensionRegistrar::Get(profile_.get())->AddExtension(extension);
   GURL gurl("http://www.google.com");
 
   // Write some API calls.
-  scoped_refptr<Action> action_api = new Action(extension->id(),
-                                                base::Time::Now(),
-                                                Action::ACTION_API_CALL,
-                                                "tabs.testMethod");
-  action_api->set_args(std::make_unique<base::ListValue>());
+  scoped_refptr<Action> action_api =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_API_CALL,
+                 "tabs.testMethod");
+  action_api->set_args(base::ListValue());
   policy->ProcessAction(action_api);
 
-  scoped_refptr<Action> action_dom = new Action(extension->id(),
-                                                base::Time::Now(),
-                                                Action::ACTION_DOM_ACCESS,
-                                                "document.write");
-  action_dom->set_args(std::make_unique<base::ListValue>());
+  scoped_refptr<Action> action_dom =
+      new Action(extension->id(), base::Time::Now(), Action::ACTION_DOM_ACCESS,
+                 "document.write");
+  action_dom->set_args(base::ListValue());
   action_dom->set_page_url(gurl);
   policy->ProcessAction(action_dom);
 

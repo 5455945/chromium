@@ -1,21 +1,18 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_live_tab_context.h"
-#include "chrome/browser/ui/user_education/reopen_tab_in_product_help.h"
-#include "chrome/browser/ui/user_education/reopen_tab_in_product_help_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_observer.h"
 
@@ -31,55 +28,57 @@ const char kBrowserTabRestorerKey[] = "BrowserTabRestorer";
 // BrowserTabRestorer is installed on the Profile (by way of user data), only
 // one instance is created per profile at a time.
 class BrowserTabRestorer : public sessions::TabRestoreServiceObserver,
-                           public BrowserListObserver,
                            public base::SupportsUserData::Data {
  public:
+  BrowserTabRestorer(const BrowserTabRestorer&) = delete;
+  BrowserTabRestorer& operator=(const BrowserTabRestorer&) = delete;
+
   ~BrowserTabRestorer() override;
 
-  static void CreateIfNecessary(Browser* browser);
+  static void CreateIfNecessary(BrowserWindowInterface* browser);
 
  private:
-  explicit BrowserTabRestorer(Browser* browser);
+  explicit BrowserTabRestorer(BrowserWindowInterface* browser);
 
   // TabRestoreServiceObserver:
   void TabRestoreServiceDestroyed(
       sessions::TabRestoreService* service) override;
   void TabRestoreServiceLoaded(sessions::TabRestoreService* service) override;
 
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override;
+  void OnBrowserRemoved(BrowserWindowInterface* browser);
 
-  Browser* browser_;
-  sessions::TabRestoreService* tab_restore_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserTabRestorer);
+  const raw_ptr<BrowserWindowInterface> browser_;
+  raw_ptr<sessions::TabRestoreService> tab_restore_service_;
+  base::CallbackListSubscription browser_did_close_subscription_;
 };
 
 BrowserTabRestorer::~BrowserTabRestorer() {
   tab_restore_service_->RemoveObserver(this);
-  BrowserList::RemoveObserver(this);
 }
 
 // static
-void BrowserTabRestorer::CreateIfNecessary(Browser* browser) {
-  DCHECK(browser);
-  if (browser->profile()->GetUserData(kBrowserTabRestorerKey))
+void BrowserTabRestorer::CreateIfNecessary(BrowserWindowInterface* browser) {
+  CHECK(browser, base::NotFatalUntil::M162);
+  if (browser->GetProfile()->GetUserData(kBrowserTabRestorerKey)) {
     return;  // Only allow one restore for a given profile at a time.
+  }
 
   // BrowserTabRestorer is deleted at the appropriate time.
   new BrowserTabRestorer(browser);
 }
 
-BrowserTabRestorer::BrowserTabRestorer(Browser* browser)
+BrowserTabRestorer::BrowserTabRestorer(BrowserWindowInterface* browser)
     : browser_(browser),
       tab_restore_service_(
-          TabRestoreServiceFactory::GetForProfile(browser->profile())) {
-  DCHECK(tab_restore_service_);
-  DCHECK(!tab_restore_service_->IsLoaded());
+          TabRestoreServiceFactory::GetForProfile(browser->GetProfile())) {
+  CHECK(tab_restore_service_, base::NotFatalUntil::M162);
+  CHECK(!tab_restore_service_->IsLoaded(), base::NotFatalUntil::M162);
   tab_restore_service_->AddObserver(this);
-  BrowserList::AddObserver(this);
-  browser_->profile()->SetUserData(kBrowserTabRestorerKey,
-                                   base::WrapUnique(this));
+  browser_did_close_subscription_ =
+      browser->RegisterBrowserDidClose(base::BindRepeating(
+          &BrowserTabRestorer::OnBrowserRemoved, base::Unretained(this)));
+  browser_->GetProfile()->SetUserData(kBrowserTabRestorerKey,
+                                      base::WrapUnique(this));
   tab_restore_service_->LoadTabsFromLastSession();
 }
 
@@ -88,31 +87,41 @@ void BrowserTabRestorer::TabRestoreServiceDestroyed(
 
 void BrowserTabRestorer::TabRestoreServiceLoaded(
     sessions::TabRestoreService* service) {
+  // Restore tab can move all of the tabs out of `browser_`, which can also
+  // destroy `this` via `OnBrowserRemoved`. Watch for browser destruction.
+  const auto weak_browser = browser_->GetWeakPtr();
   RestoreTab(browser_);
+
   // This deletes us.
-  browser_->profile()->SetUserData(kBrowserTabRestorerKey, NULL);
+  if (weak_browser) {
+    weak_browser->GetProfile()->SetUserData(kBrowserTabRestorerKey, nullptr);
+  }
 }
 
-void BrowserTabRestorer::OnBrowserRemoved(Browser* browser) {
+void BrowserTabRestorer::OnBrowserRemoved(BrowserWindowInterface* browser) {
   // This deletes us.
-  browser_->profile()->SetUserData(kBrowserTabRestorerKey, NULL);
+  browser_->GetProfile()->SetUserData(kBrowserTabRestorerKey, nullptr);
 }
 
 }  // namespace
 
-void RestoreTab(Browser* browser) {
+void RestoreTab(BrowserWindowInterface* browser) {
   base::RecordAction(base::UserMetricsAction("RestoreTab"));
-  auto* reopen_tab_iph =
-      ReopenTabInProductHelpFactory::GetForProfile(browser->profile());
-  reopen_tab_iph->TabReopened();
 
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser->profile());
-  if (!service)
+      TabRestoreServiceFactory::GetForProfile(browser->GetProfile());
+  if (!service) {
     return;
+  }
 
   if (service->IsLoaded()) {
-    service->RestoreMostRecentEntry(browser->live_tab_context());
+    sessions::LiveTabContext* const live_tab_context =
+        BrowserLiveTabContext::From(browser);
+    CHECK(live_tab_context);
+    // This can destroy the browser if the last tabs there are in a group and
+    // are moved to a different browser as part of the restore. Do not attempt
+    // to access `browser` after this.
+    service->RestoreMostRecentEntry(live_tab_context);
     return;
   }
 

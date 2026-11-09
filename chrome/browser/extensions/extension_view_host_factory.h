@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,33 +7,46 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "build/build_config.h"
+#include "extensions/buildflags/buildflags.h"
 
-class Browser;
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class BrowserWindowInterface;
 class GURL;
-class Profile;
+
+namespace tabs {
+class TabInterface;
+}
 
 namespace extensions {
 
+class Extension;
 class ExtensionViewHost;
 
 // A utility class to make ExtensionViewHosts for UI views that are backed
 // by extensions.
 class ExtensionViewHostFactory {
  public:
+  ExtensionViewHostFactory(const ExtensionViewHostFactory&) = delete;
+  ExtensionViewHostFactory& operator=(const ExtensionViewHostFactory&) = delete;
+
   // Creates a new ExtensionHost with its associated view, grouping it in the
   // appropriate SiteInstance (and therefore process) based on the URL and
   // profile.
-  static std::unique_ptr<ExtensionViewHost> CreatePopupHost(const GURL& url,
-                                                            Browser* browser);
+  static std::unique_ptr<ExtensionViewHost> CreatePopupHost(
+      const Extension& extension,
+      const GURL& url,
+      BrowserWindowInterface* browser);
 
-  // Some dialogs may not be associated with a particular browser window and
-  // hence only require a |profile|.
-  static std::unique_ptr<ExtensionViewHost> CreateDialogHost(const GURL& url,
-                                                             Profile* profile);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ExtensionViewHostFactory);
+  // Creates a new ExtensionHost with its associated view, grouping it in the
+  // appropriate SiteInstance (and therefore process) based on the URL and
+  // profile.
+  static std::unique_ptr<ExtensionViewHost> CreateSidePanelHost(
+      const Extension& extension,
+      const GURL& url,
+      BrowserWindowInterface* browser,
+      tabs::TabInterface* tab_interface);
 };
 
 }  // namespace extensions

@@ -1,95 +1,202 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_encoded_video_frame_delegate.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
+#include <variant>
 
+#include "base/check.h"
+#include "base/feature_list.h"
+#include "base/synchronization/lock.h"
+#include "base/time/time.h"
+#include "base/types/expected.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_encoded_video_frame_type.h"
+#include "third_party/blink/renderer/core/typed_arrays/array_buffer/array_buffer_contents.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+#include "third_party/blink/renderer/modules/peerconnection/peer_connection_features.h"
+#include "third_party/blink/renderer/modules/peerconnection/peer_connection_util.h"
+#include "third_party/blink/renderer/platform/peerconnection/webrtc_util.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/webrtc/api/frame_transformer_factory.h"
 #include "third_party/webrtc/api/frame_transformer_interface.h"
+#include "third_party/webrtc/api/units/timestamp.h"
+#include "third_party/webrtc/api/video/video_frame_metadata.h"
 
 namespace blink {
 
-const void* const RTCEncodedVideoFramesAttachment::kAttachmentKey = nullptr;
+const void* const RTCEncodedVideoFramesAttachment::kAttachmentKey =
+    &RTCEncodedVideoFramesAttachment::kAttachmentKey;
 
 RTCEncodedVideoFrameDelegate::RTCEncodedVideoFrameDelegate(
     std::unique_ptr<webrtc::TransformableVideoFrameInterface> webrtc_frame)
     : webrtc_frame_(std::move(webrtc_frame)) {}
 
-String RTCEncodedVideoFrameDelegate::Type() const {
-  MutexLocker lock(mutex_);
-  if (!webrtc_frame_)
-    return "empty";
-
-  return webrtc_frame_->IsKeyFrame() ? "key" : "delta";
+V8RTCEncodedVideoFrameType::Enum RTCEncodedVideoFrameDelegate::ComputeType()
+    const {
+  return webrtc_frame_->IsKeyFrame() ? V8RTCEncodedVideoFrameType::Enum::kKey
+                                     : V8RTCEncodedVideoFrameType::Enum::kDelta;
+}
+V8RTCEncodedVideoFrameType::Enum RTCEncodedVideoFrameDelegate::Type() const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? ComputeType() : post_neuter_metadata_.frame_type;
 }
 
-uint64_t RTCEncodedVideoFrameDelegate::Timestamp() const {
-  MutexLocker lock(mutex_);
-  return webrtc_frame_ ? webrtc_frame_->GetTimestamp() : 0;
+std::optional<uint32_t> RTCEncodedVideoFrameDelegate::RtpTimestamp() const {
+  base::AutoLock lock(lock_);
+  std::optional<webrtc::RtpTimestampInfo> rtp_timestamp_info =
+      webrtc_frame_ ? std::make_optional(webrtc_frame_->GetRtpTimestampInfo())
+                    : post_neuter_metadata_.rtp_timestamp_info;
+  if (rtp_timestamp_info &&
+      std::holds_alternative<webrtc::RtpTimestampWithOffset>(
+          *rtp_timestamp_info)) {
+    return std::get<webrtc::RtpTimestampWithOffset>(*rtp_timestamp_info);
+  }
+  return std::nullopt;
+}
+
+std::optional<webrtc::Timestamp>
+RTCEncodedVideoFrameDelegate::PresentationTimestamp() const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? webrtc_frame_->GetPresentationTimestamp()
+                       : post_neuter_metadata_.presentation_timestamp;
 }
 
 DOMArrayBuffer* RTCEncodedVideoFrameDelegate::CreateDataBuffer() const {
-  ArrayBufferContents contents;
-  {
-    MutexLocker lock(mutex_);
-    if (!webrtc_frame_)
-      return nullptr;
-
-    auto data = webrtc_frame_->GetData();
-    contents =
-        ArrayBufferContents(data.size(), 1, ArrayBufferContents::kNotShared,
-                            ArrayBufferContents::kDontInitialize);
-    if (UNLIKELY(!contents.Data()))
-      OOM_CRASH(data.size());
-    memcpy(contents.Data(), data.data(), data.size());
-  }
-  return DOMArrayBuffer::Create(std::move(contents));
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? DOMArrayBuffer::Create(webrtc_frame_->GetData())
+                       : DOMArrayBuffer::Create(ArrayBufferContents());
 }
 
 void RTCEncodedVideoFrameDelegate::SetData(const DOMArrayBuffer* data) {
-  MutexLocker lock(mutex_);
+  base::AutoLock lock(lock_);
   if (webrtc_frame_ && data) {
-    webrtc_frame_->SetData(rtc::ArrayView<const uint8_t>(
-        static_cast<const uint8_t*>(data->Data()), data->ByteLength()));
+    webrtc_frame_->SetData(data->ByteSpan());
   }
 }
 
-DOMArrayBuffer* RTCEncodedVideoFrameDelegate::CreateAdditionalDataBuffer()
-    const {
-  ArrayBufferContents contents;
-  {
-    MutexLocker lock(mutex_);
-    if (!webrtc_frame_)
-      return nullptr;
-
-    auto additional_data = webrtc_frame_->GetAdditionalData();
-    contents = ArrayBufferContents(additional_data.size(), 1,
-                                   ArrayBufferContents::kNotShared,
-                                   ArrayBufferContents::kDontInitialize);
-    if (UNLIKELY(!contents.Data()))
-      OOM_CRASH(additional_data.size());
-    memcpy(contents.Data(), additional_data.data(), additional_data.size());
+std::optional<uint8_t> RTCEncodedVideoFrameDelegate::PayloadType() const {
+  base::AutoLock lock(lock_);
+  // The slightly inelegant construction here is to allow for a future change
+  // of return value of GetPayloadType from uint8_t to webrtc::PayloadType
+  if (webrtc_frame_) {
+    return static_cast<uint8_t>(webrtc_frame_->GetPayloadType());
+  } else {
+    return post_neuter_metadata_.payload_type;
   }
-  return DOMArrayBuffer::Create(std::move(contents));
+  // Elegant version:
+  // return webrtc_frame_ ? std::make_optional(webrtc_frame_->GetPayloadType())
+  //                     : post_neuter_metadata_.payload_type;
 }
 
-uint32_t RTCEncodedVideoFrameDelegate::Ssrc() const {
-  MutexLocker lock(mutex_);
-  return webrtc_frame_ ? webrtc_frame_->GetSsrc() : 0;
+std::optional<std::string> RTCEncodedVideoFrameDelegate::MimeType() const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? std::make_optional(webrtc_frame_->GetMimeType())
+                       : post_neuter_metadata_.mime_type;
 }
 
-const webrtc::VideoFrameMetadata* RTCEncodedVideoFrameDelegate::GetMetadata()
+std::optional<webrtc::VideoFrameMetadata>
+RTCEncodedVideoFrameDelegate::GetMetadata() const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? std::optional<webrtc::VideoFrameMetadata>(
+                             webrtc_frame_->Metadata())
+                       : post_neuter_metadata_.video_frame_metadata;
+}
+
+std::optional<base::TimeTicks>
+RTCEncodedVideoFrameDelegate::ComputeReceiveTime() const {
+  return ConvertToOptionalTimeTicks(webrtc_frame_->ReceiveTime());
+}
+
+std::optional<base::TimeTicks> RTCEncodedVideoFrameDelegate::ReceiveTime()
     const {
-  MutexLocker lock(mutex_);
-  return webrtc_frame_ ? &webrtc_frame_->GetMetadata() : nullptr;
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? ComputeReceiveTime()
+                       : post_neuter_metadata_.receive_time;
+}
+
+std::optional<CaptureTimeInfo>
+RTCEncodedVideoFrameDelegate::ComputeCaptureTime() const {
+  if (!webrtc_frame_->CaptureTime() ||
+      webrtc_frame_->GetDirection() !=
+          webrtc::TransformableFrameInterface::Direction::kReceiver) {
+    return std::nullopt;
+  }
+  return CaptureTimeInfo(
+      {.capture_time = base::Microseconds(webrtc_frame_->CaptureTime()->us()),
+       .clock_type = CaptureTimeInfo::ClockType::kNtpRealClock});
+}
+
+std::optional<CaptureTimeInfo> RTCEncodedVideoFrameDelegate::CaptureTime()
+    const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? ComputeCaptureTime()
+                       : post_neuter_metadata_.capture_time;
+}
+
+std::optional<base::TimeDelta>
+RTCEncodedVideoFrameDelegate::ComputeSenderCaptureTimeOffset() const {
+  return ConvertToOptionalTimeDelta(webrtc_frame_->SenderCaptureTimeOffset());
+}
+
+std::optional<base::TimeDelta>
+RTCEncodedVideoFrameDelegate::SenderCaptureTimeOffset() const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? ComputeSenderCaptureTimeOffset()
+                       : post_neuter_metadata_.sender_capture_time_offset;
+}
+
+base::expected<void, String> RTCEncodedVideoFrameDelegate::SetMetadata(
+    const webrtc::VideoFrameMetadata& metadata,
+    uint32_t rtpTimestamp) {
+  base::AutoLock lock(lock_);
+  if (!webrtc_frame_) {
+    return base::unexpected("underlying webrtc frame is empty.");
+  }
+  webrtc_frame_->SetMetadata(metadata);
+  webrtc_frame_->SetRTPTimestamp(rtpTimestamp);
+  return base::ok();
 }
 
 std::unique_ptr<webrtc::TransformableVideoFrameInterface>
 RTCEncodedVideoFrameDelegate::PassWebRtcFrame() {
-  MutexLocker lock(mutex_);
+  base::AutoLock lock(lock_);
+  if (webrtc_frame_) {
+    if (base::FeatureList::IsEnabled(
+            kWebRtcEncodedTransformRememberVideoFrameType)) {
+      post_neuter_metadata_.frame_type = ComputeType();
+    }
+    if (base::FeatureList::IsEnabled(kWebRtcEncodedTransformRememberMetadata)) {
+      post_neuter_metadata_.payload_type =
+          static_cast<uint8_t>(webrtc_frame_->GetPayloadType());
+      post_neuter_metadata_.mime_type = webrtc_frame_->GetMimeType();
+      post_neuter_metadata_.video_frame_metadata = webrtc_frame_->Metadata();
+      post_neuter_metadata_.receive_time = ComputeReceiveTime();
+      post_neuter_metadata_.capture_time = ComputeCaptureTime();
+      post_neuter_metadata_.sender_capture_time_offset =
+          ComputeSenderCaptureTimeOffset();
+      post_neuter_metadata_.rtp_timestamp_info =
+          webrtc_frame_->GetRtpTimestampInfo();
+      post_neuter_metadata_.presentation_timestamp =
+          webrtc_frame_->GetPresentationTimestamp();
+    }
+  }
   return std::move(webrtc_frame_);
+}
+
+std::unique_ptr<webrtc::TransformableVideoFrameInterface>
+RTCEncodedVideoFrameDelegate::CloneWebRtcFrame() {
+  base::AutoLock lock(lock_);
+  if (!webrtc_frame_) {
+    return nullptr;
+  }
+  return webrtc::CloneVideoFrame(webrtc_frame_.get());
 }
 
 }  // namespace blink

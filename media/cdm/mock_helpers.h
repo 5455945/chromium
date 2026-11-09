@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,6 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "media/cdm/cdm_allocator.h"
 #include "media/cdm/cdm_auxiliary_helper.h"
@@ -24,6 +22,10 @@ class MockCdmAuxiliaryHelper : public CdmAuxiliaryHelper {
  public:
   // `allocator` is optional; can be null if no need to create buffers/frames.
   explicit MockCdmAuxiliaryHelper(std::unique_ptr<CdmAllocator> allocator);
+
+  MockCdmAuxiliaryHelper(const MockCdmAuxiliaryHelper&) = delete;
+  MockCdmAuxiliaryHelper& operator=(const MockCdmAuxiliaryHelper&) = delete;
+
   ~MockCdmAuxiliaryHelper() override;
 
   // CdmAuxiliaryHelper implementation.
@@ -52,14 +54,17 @@ class MockCdmAuxiliaryHelper : public CdmAuxiliaryHelper {
   MOCK_METHOD1(GetStorageIdCalled, std::vector<uint8_t>(uint32_t version));
   void GetStorageId(uint32_t version, StorageIdCB callback) override;
 
-#if defined(OS_WIN)
-  MOCK_METHOD(void, GetCdmOriginId, (GetCdmOriginIdCB callback), (override));
-#endif  // defined(OS_WIN)
+  MOCK_METHOD(void, RecordUkm, (const CdmMetricsData&), (override));
+
+#if BUILDFLAG(IS_WIN)
+  MOCK_METHOD(void,
+              GetMediaFoundationCdmData,
+              (GetMediaFoundationCdmDataCB callback),
+              (override));
+#endif  // BUILDFLAG(IS_WIN)
 
  private:
   std::unique_ptr<CdmAllocator> allocator_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockCdmAuxiliaryHelper);
 };
 
 }  // namespace media

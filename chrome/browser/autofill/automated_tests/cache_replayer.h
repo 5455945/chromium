@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file_path.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
-#include "components/autofill/core/browser/proto/server.pb.h"
 #include "content/public/test/url_loader_interceptor.h"
-#include "third_party/protobuf/src/google/protobuf/stubs/statusor.h"
 
 namespace autofill {
 namespace test {
@@ -23,79 +22,35 @@ using ServerCache = std::map<std::string, std::string>;
 // Splits raw HTTP request text into a pair, where the first element represent
 // the head with headers and the second element represents the body that
 // contains the data payload.
-std::pair<std::string, std::string> SplitHTTP(const std::string& http_text);
+std::pair<std::string, std::string> SplitHTTP(std::string_view http_text);
 
 // Streams in text format. For consistency, taken from anonymous namespace in
-// components/autofill/core/browser/autofill_download_manager.cc
+// components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_manager.cc
 std::ostream& operator<<(std::ostream& out,
-                         const autofill::AutofillQueryContents& query);
-std::ostream& operator<<(std::ostream& out,
-                         const autofill::AutofillPageQueryRequest& query);
+                         const AutofillPageQueryRequest& query);
 
 // Streams in text format. For consistency, taken from anonymous namespace in
 // components/autofill/core/browser/form_structure.cc
-std::ostream& operator<<(
-    std::ostream& out,
-    const autofill::AutofillQueryResponseContents& response);
 std::ostream& operator<<(std::ostream& out,
-                         const autofill::AutofillQueryResponse& response);
+                         const AutofillQueryResponse& response);
 enum class RequestType {
   kQueryProtoGET,
   kQueryProtoPOST,
   kNone,
 };
 
-class LegacyEnv {
- public:
-  using Query = AutofillQueryContents;
-  using Response = AutofillQueryResponseContents;
-};
-
-class ApiEnv {
- public:
-  using Query = AutofillPageQueryRequest;
-  using Response = AutofillQueryResponse;
-};
-
 // Gets a key from a given query request.
-template <typename Env>
-std::string GetKeyFromQuery(const typename Env::Query& query_request);
-template <>
-std::string GetKeyFromQuery<LegacyEnv>(const LegacyEnv::Query& query_request);
-template <>
-std::string GetKeyFromQuery<ApiEnv>(const ApiEnv::Query& query_request);
+std::string GetKeyFromQuery(const AutofillPageQueryRequest& query_request);
 
 bool GetResponseForQuery(const ServerCache& cache,
                          const AutofillPageQueryRequest& query,
                          std::string* http_text);
 
-// Conversion between different versions of queries.
-template <typename ReadEnv>
-AutofillPageQueryRequest ConvertQuery(const typename ReadEnv::Query& in);
-template <>
-AutofillPageQueryRequest ConvertQuery<LegacyEnv>(
-    const typename LegacyEnv::Query& in);
-template <>
-AutofillPageQueryRequest ConvertQuery<ApiEnv>(const typename ApiEnv::Query& in);
-
-// Conversion between different versions of responses.
-template <typename ReadEnv>
-AutofillQueryResponse ConvertResponse(const typename ReadEnv::Response& in,
-                                      const typename ReadEnv::Query& query);
-template <>
-AutofillQueryResponse ConvertResponse<LegacyEnv>(
-    const typename LegacyEnv::Response& in,
-    const typename LegacyEnv::Query& query);
-template <>
-AutofillQueryResponse ConvertResponse<ApiEnv>(
-    const typename ApiEnv::Response& in,
-    const typename ApiEnv::Query& query);
-
 // Switch `--autofill-server-type` is used to override the default behavior of
 // using the cached responses from the wpr archive. The valid values match the
 // enum AutofillServerBehaviorType below. Options are:
 // SavedCache, ProductionServer, or OnlyLocalHeuristics.
-constexpr char kAutofillServerBehaviorParam[] = "autofill-server-type";
+inline constexpr char kAutofillServerBehaviorParam[] = "autofill-server-type";
 enum class AutofillServerBehaviorType {
   kSavedCache,          // Uses cached responses. This is the Default.
   kProductionServer,    // Connects to live Autofill Server for recommendations.

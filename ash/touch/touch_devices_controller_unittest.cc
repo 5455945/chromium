@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/touch/touch_devices_controller.h"
 
 #include "ash/accelerators/debug_commands.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/public/cpp/ash_pref_names.h"
 #include "ash/public/cpp/ash_prefs.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/session/test_session_controller_client.h"
@@ -55,6 +55,12 @@ void SetTapDraggingEnabled(bool enabled) {
 class TouchDevicesControllerSigninTest : public NoSessionAshTestBase {
  public:
   TouchDevicesControllerSigninTest() = default;
+
+  TouchDevicesControllerSigninTest(const TouchDevicesControllerSigninTest&) =
+      delete;
+  TouchDevicesControllerSigninTest& operator=(
+      const TouchDevicesControllerSigninTest&) = delete;
+
   ~TouchDevicesControllerSigninTest() override = default;
 
   // NoSessionAshTestBase:
@@ -71,18 +77,16 @@ class TouchDevicesControllerSigninTest : public NoSessionAshTestBase {
   }
 
   void CreateTestUserSessions() {
-    GetSessionControllerClient()->Reset();
-    GetSessionControllerClient()->AddUserSession(kUser1Email);
-    GetSessionControllerClient()->AddUserSession(kUser2Email);
+    ClearLogin();
+    SimulateUserLogin(AccountId::FromUserEmail(kUser1Email));
+    SimulateUserLogin(AccountId::FromUserEmail(kUser2Email));
+    SwitchActiveUser(kUser1Email);
   }
 
   void SwitchActiveUser(const std::string& email) {
     GetSessionControllerClient()->SwitchActiveUser(
         AccountId::FromUserEmail(email));
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TouchDevicesControllerSigninTest);
 };
 
 TEST_F(TouchDevicesControllerSigninTest, PrefsAreRegistered) {
@@ -112,7 +116,7 @@ TEST_F(TouchDevicesControllerSigninTest, SetTapDraggingEnabled) {
 // Tests that touchpad enabled user pref works properly under debug accelerator.
 TEST_F(TouchDevicesControllerSigninTest, ToggleTouchpad) {
   ASSERT_TRUE(GetUserPrefTouchpadEnabled());
-  debug::PerformDebugActionIfEnabled(DEBUG_TOGGLE_TOUCH_PAD);
+  debug::PerformDebugActionIfEnabled(AcceleratorAction::kDebugToggleTouchPad);
   EXPECT_FALSE(GetUserPrefTouchpadEnabled());
 
   // Switch to user 2 and switch back.
@@ -121,7 +125,7 @@ TEST_F(TouchDevicesControllerSigninTest, ToggleTouchpad) {
   SwitchActiveUser(kUser1Email);
   EXPECT_FALSE(GetUserPrefTouchpadEnabled());
 
-  debug::PerformDebugActionIfEnabled(DEBUG_TOGGLE_TOUCH_PAD);
+  debug::PerformDebugActionIfEnabled(AcceleratorAction::kDebugToggleTouchPad);
   EXPECT_TRUE(GetUserPrefTouchpadEnabled());
 }
 
@@ -151,7 +155,8 @@ TEST_F(TouchDevicesControllerSigninTest, SetTouchscreenEnabled) {
   ASSERT_TRUE(GetGlobalTouchscreenEnabled());
   ASSERT_TRUE(GetUserPrefTouchscreenEnabled());
 
-  debug::PerformDebugActionIfEnabled(DEBUG_TOGGLE_TOUCH_SCREEN);
+  debug::PerformDebugActionIfEnabled(
+      AcceleratorAction::kDebugToggleTouchScreen);
   EXPECT_TRUE(GetGlobalTouchscreenEnabled());
   EXPECT_FALSE(GetUserPrefTouchscreenEnabled());
 
@@ -162,7 +167,8 @@ TEST_F(TouchDevicesControllerSigninTest, SetTouchscreenEnabled) {
   EXPECT_TRUE(GetGlobalTouchscreenEnabled());
   EXPECT_FALSE(GetUserPrefTouchscreenEnabled());
 
-  debug::PerformDebugActionIfEnabled(DEBUG_TOGGLE_TOUCH_SCREEN);
+  debug::PerformDebugActionIfEnabled(
+      AcceleratorAction::kDebugToggleTouchScreen);
   EXPECT_TRUE(GetUserPrefTouchscreenEnabled());
   EXPECT_TRUE(GetGlobalTouchscreenEnabled());
 
@@ -183,24 +189,13 @@ TEST_F(TouchDevicesControllerPrefsTest, RecordUma) {
   auto* controller = Shell::Get()->touch_devices_controller();
   ASSERT_FALSE(controller->tap_dragging_enabled_for_test());
 
-  TestSessionControllerClient* session = GetSessionControllerClient();
-  // Disable auto-provision of PrefService.
-  constexpr bool kProvidePrefService = false;
-  // Add and switch to |kUser1Email|, but user pref service is not ready.
-  session->AddUserSession(kUser1Email, user_manager::USER_TYPE_REGULAR,
-                          kProvidePrefService);
-  const AccountId kUserAccount1 = AccountId::FromUserEmail(kUser1Email);
-  session->SwitchActiveUser(kUserAccount1);
-
   base::HistogramTester histogram_tester;
   histogram_tester.ExpectTotalCount("Touchpad.TapDragging.Started", 0);
   histogram_tester.ExpectTotalCount("Touchpad.TapDragging.Changed", 0);
 
   // Simulate active user pref service is changed.
-  auto pref_service = std::make_unique<TestingPrefServiceSimple>();
-  RegisterUserProfilePrefs(pref_service->registry(), true /* for_test */);
-  GetSessionControllerClient()->SetUserPrefService(kUserAccount1,
-                                                   std::move(pref_service));
+  SimulateUserLogin(AccountId::FromUserEmail(kUser1Email));
+
   histogram_tester.ExpectTotalCount("Touchpad.TapDragging.Started", 1);
   histogram_tester.ExpectTotalCount("Touchpad.TapDragging.Changed", 0);
 

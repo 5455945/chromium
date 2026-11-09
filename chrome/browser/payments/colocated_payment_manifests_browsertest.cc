@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,16 @@ namespace payments {
 namespace {
 
 class ColocatedPaymentManifestsTest
-    : public PaymentRequestPlatformBrowserTestBase {};
+    : public PaymentRequestPlatformBrowserTestBase {
+ protected:
+  ColocatedPaymentManifestsTest() { SetBypassUserInteractionForTesting(); }
+};
 
 // When "/pay" contains both the payment method manifest and the web app
 // manifest, then payment should still work.
 IN_PROC_BROWSER_TEST_F(ColocatedPaymentManifestsTest, CanPay) {
   std::string method_name =
-      https_server()->GetURL("a.com", "/orenpay.com/pay").spec();
+      https_server()->GetURL("a.com", "/orenpay.test/pay").spec();
   ASSERT_NE('/', method_name[method_name.length() - 1]);
 
   NavigateTo("b.com", "/can_make_payment_checker.html");

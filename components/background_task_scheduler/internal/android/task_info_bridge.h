@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ namespace background_task {
 // Helper class to convert TaskInfo params to Java.
 class TaskInfoBridge {
  public:
-  static base::android::ScopedJavaLocalRef<jobject> CreateTaskInfo(
+  static jni_zero::ScopedJavaLocalRef<jobject> CreateTaskInfo(
       JNIEnv* env,
       const TaskInfo& task_info);
 };

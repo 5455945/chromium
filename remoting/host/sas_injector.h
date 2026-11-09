@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ namespace remoting {
 // sequence is Ctrl+Alt+Delete.
 class SasInjector {
  public:
-  virtual ~SasInjector() {}
+  virtual ~SasInjector() = default;
 
   // Sends Secure Attention Sequence to the console session.
   virtual bool InjectSas() = 0;

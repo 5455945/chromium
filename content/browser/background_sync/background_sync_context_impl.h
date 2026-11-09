@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <memory>
 
 #include "base/containers/unique_ptr_adapters.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
@@ -19,12 +18,17 @@
 #include "content/public/browser/background_sync_context.h"
 #include "third_party/blink/public/mojom/background_sync/background_sync.mojom.h"
 
+namespace blink {
+class StorageKey;
+}  // namespace blink
+
 namespace content {
 
 class BackgroundSyncManager;
 class DevToolsBackgroundServicesContextImpl;
 class OneShotBackgroundSyncServiceImpl;
 class PeriodicBackgroundSyncServiceImpl;
+class RenderProcessHost;
 class ServiceWorkerContextWrapper;
 
 // One instance of this exists per StoragePartition, and services multiple child
@@ -42,11 +46,14 @@ class CONTENT_EXPORT BackgroundSyncContextImpl
 
   BackgroundSyncContextImpl();
 
+  BackgroundSyncContextImpl(const BackgroundSyncContextImpl&) = delete;
+  BackgroundSyncContextImpl& operator=(const BackgroundSyncContextImpl&) =
+      delete;
+
   // Called when StoragePartition is being setup.
   void Init(
       const scoped_refptr<ServiceWorkerContextWrapper>& service_worker_context,
-      const scoped_refptr<DevToolsBackgroundServicesContextImpl>&
-          devtools_context);
+      DevToolsBackgroundServicesContextImpl& devtools_context);
 
   // Called when StoragePartition is being torn down. Must be called before
   // deleting `this`.
@@ -54,11 +61,15 @@ class CONTENT_EXPORT BackgroundSyncContextImpl
 
   // Creates a OneShotBackgroundSyncServiceImpl that is owned by `this`.
   void CreateOneShotSyncService(
+      const blink::StorageKey& storage_key,
+      RenderProcessHost* render_process_host,
       mojo::PendingReceiver<blink::mojom::OneShotBackgroundSyncService>
           receiver);
 
   // Creates a PeriodicBackgroundSyncServiceImpl that is owned by `this`.
   void CreatePeriodicSyncService(
+      const blink::StorageKey& storage_key,
+      RenderProcessHost* render_process_host,
       mojo::PendingReceiver<blink::mojom::PeriodicBackgroundSyncService>
           receiver);
 
@@ -99,7 +110,7 @@ class CONTENT_EXPORT BackgroundSyncContextImpl
 
   virtual void CreateBackgroundSyncManager(
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
-      scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context);
+      DevToolsBackgroundServicesContextImpl& devtools_context);
 
   // The services are owned by this. They're either deleted during Shutdown()
   // or when the channel is closed via *ServiceHadConnectionError.
@@ -116,8 +127,6 @@ class CONTENT_EXPORT BackgroundSyncContextImpl
       test_wakeup_delta_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(BackgroundSyncContextImpl);
 };
 
 }  // namespace content

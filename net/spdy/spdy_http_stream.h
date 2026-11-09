@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,16 @@
 
 #include <stdint.h>
 
-#include <list>
 #include <memory>
+#include <string>
+#include <string_view>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/byte_size.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/timer/timer.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/load_timing_info.h"
@@ -23,6 +26,7 @@
 #include "net/spdy/spdy_read_queue.h"
 #include "net/spdy/spdy_session.h"
 #include "net/spdy/spdy_stream.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 
 namespace net {
 
@@ -39,9 +43,12 @@ class NET_EXPORT_PRIVATE SpdyHttpStream : public SpdyStream::Delegate,
   static const size_t kRequestBodyBufferSize;
   // |spdy_session| must not be NULL.
   SpdyHttpStream(const base::WeakPtr<SpdySession>& spdy_session,
-                 spdy::SpdyStreamId pushed_stream_id,
                  NetLogSource source_dependency,
-                 std::vector<std::string> dns_aliases);
+                 base::flat_set<std::string> dns_aliases);
+
+  SpdyHttpStream(const SpdyHttpStream&) = delete;
+  SpdyHttpStream& operator=(const SpdyHttpStream&) = delete;
+
   ~SpdyHttpStream() override;
 
   SpdyStream* stream() { return stream_; }
@@ -50,9 +57,8 @@ class NET_EXPORT_PRIVATE SpdyHttpStream : public SpdyStream::Delegate,
   void Cancel();
 
   // HttpStream implementation.
-
-  int InitializeStream(const HttpRequestInfo* request_info,
-                       bool can_send_early,
+  void RegisterRequest(const HttpRequestInfo* request_info) override;
+  int InitializeStream(bool can_send_early,
                        RequestPriority priority,
                        const NetLogWithSource& net_log,
                        CompletionOnceCallback callback) override;
@@ -74,30 +80,32 @@ class NET_EXPORT_PRIVATE SpdyHttpStream : public SpdyStream::Delegate,
   // Total number of bytes received over the network of SPDY data, headers, and
   // push_promise frames associated with this stream, including the size of
   // frame headers, after SSL decryption and not including proxy overhead.
-  int64_t GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
   // Total number of bytes sent over the network of SPDY frames associated with
   // this stream, including the size of frame headers, before SSL encryption and
   // not including proxy overhead. Note that some SPDY frames such as pings are
   // not associated with any stream, and are not included in this value.
-  int64_t GetTotalSentBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
   bool GetAlternativeService(
       AlternativeService* alternative_service) const override;
   bool GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const override;
-  bool GetRemoteEndpoint(IPEndPoint* endpoint) override;
+  void PopulateLoadTimingInternalInfo(
+      LoadTimingInternalInfo* load_timing_internal_info) const override;
+  int GetRemoteEndpoint(IPEndPoint* endpoint) override;
   void PopulateNetErrorDetails(NetErrorDetails* details) override;
   void SetPriority(RequestPriority priority) override;
-  const std::vector<std::string>& GetDnsAliases() const override;
-  base::StringPiece GetAcceptChViaAlps() const override;
+  const base::flat_set<std::string>& GetDnsAliases() const override;
+  std::string_view GetAcceptChViaAlps() const override;
+  void SetHTTP11Required() override;
 
   // SpdyStream::Delegate implementation.
   void OnHeadersSent() override;
-  void OnEarlyHintsReceived(const spdy::Http2HeaderBlock& headers) override;
+  void OnEarlyHintsReceived(const quiche::HttpHeaderBlock& headers) override;
   void OnHeadersReceived(
-      const spdy::Http2HeaderBlock& response_headers,
-      const spdy::Http2HeaderBlock* pushed_request_headers) override;
+      const quiche::HttpHeaderBlock& response_headers) override;
   void OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) override;
   void OnDataSent() override;
-  void OnTrailers(const spdy::Http2HeaderBlock& trailers) override;
+  void OnTrailers(const quiche::HttpHeaderBlock& trailers) override;
   void OnClose(int status) override;
   bool CanGreaseFrameType() const override;
   NetLogSource source_dependency() const override;
@@ -150,11 +158,6 @@ class NET_EXPORT_PRIVATE SpdyHttpStream : public SpdyStream::Delegate,
 
   const base::WeakPtr<SpdySession> spdy_session_;
 
-  // The ID of the pushed stream if one is claimed by this request.
-  // In this case, the request fails if it cannot use that pushed stream.
-  // Otherwise set to kNoPushedStreamFound.
-  const spdy::SpdyStreamId pushed_stream_id_;
-
   bool is_reused_;
   SpdyStreamRequest stream_request_;
   const NetLogSource source_dependency_;
@@ -164,40 +167,38 @@ class NET_EXPORT_PRIVATE SpdyHttpStream : public SpdyStream::Delegate,
   // After InitializeStream() is called but before OnClose() is called,
   //   |*stream_| is guaranteed to be valid.
   // After OnClose() is called, stream_ == nullptr.
-  SpdyStream* stream_;
+  raw_ptr<SpdyStream> stream_ = nullptr;
 
   // False before OnClose() is called, true after.
-  bool stream_closed_;
+  bool stream_closed_ = false;
 
   // Set only when |stream_closed_| is true.
-  int closed_stream_status_;
-  spdy::SpdyStreamId closed_stream_id_;
+  int closed_stream_status_ = ERR_FAILED;
+  spdy::SpdyStreamId closed_stream_id_ = 0;
   bool closed_stream_has_load_timing_info_;
   LoadTimingInfo closed_stream_load_timing_info_;
   // After |stream_| has been closed, this keeps track of the total number of
   // bytes received over the network for |stream_| while it was open.
-  int64_t closed_stream_received_bytes_;
+  base::ByteSize closed_stream_received_bytes_;
   // After |stream_| has been closed, this keeps track of the total number of
   // bytes sent over the network for |stream_| while it was open.
-  int64_t closed_stream_sent_bytes_;
+  base::ByteSize closed_stream_sent_bytes_;
 
   // The request to send.
   // Set to null before response body is starting to be read. This is to allow
   // |this| to be shared for reading and to possibly outlive request_info_'s
   // owner. Setting to null happens after headers are completely read or upload
   // data stream is uploaded, whichever is later.
-  const HttpRequestInfo* request_info_;
+  raw_ptr<const HttpRequestInfo> request_info_ = nullptr;
 
   // |response_info_| is the HTTP response data object which is filled in
   // when a response HEADERS comes in for the stream.
-  // It is not owned by this stream object, or point to |push_response_info_|.
-  HttpResponseInfo* response_info_;
+  // It is not owned by this stream object.
+  raw_ptr<HttpResponseInfo> response_info_ = nullptr;
 
-  std::unique_ptr<HttpResponseInfo> push_response_info_;
+  bool response_headers_complete_ = false;
 
-  bool response_headers_complete_;
-
-  bool upload_stream_in_progress_;
+  bool upload_stream_in_progress_ = false;
 
   // We buffer the response body as it arrives asynchronously from the stream.
   SpdyReadQueue response_body_queue_;
@@ -207,26 +208,26 @@ class NET_EXPORT_PRIVATE SpdyHttpStream : public SpdyStream::Delegate,
 
   // User provided buffer for the ReadResponseBody() response.
   scoped_refptr<IOBuffer> user_buffer_;
-  int user_buffer_len_;
+  int user_buffer_len_ = 0;
 
   // Temporary buffer used to read the request body from UploadDataStream.
   scoped_refptr<IOBufferWithSize> request_body_buf_;
-  int request_body_buf_size_;
+  int request_body_buf_size_ = 0;
 
   // Timer to execute DoBufferedReadCallback() with a delay.
   base::OneShotTimer buffered_read_timer_;
 
-  bool was_alpn_negotiated_;
+  // Stores any DNS aliases for the remote endpoint. Includes all known aliases,
+  // e.g. from A, AAAA, or HTTPS, not just from the address used for the
+  // connection, in no particular order. These are stored in the stream instead
+  // of the session due to complications related to IP-pooling.
+  base::flat_set<std::string> dns_aliases_;
 
-  // Stores any DNS aliases for the remote endpoint. The alias chain is
-  // preserved in reverse order, from canonical name (i.e. address record name)
-  // through to query name. These are stored in the stream instead of the
-  // session due to complications related to IP-pooling.
-  std::vector<std::string> dns_aliases_;
+  // Keep track of the priority of the request for setting the priority header
+  // right before sending the request.
+  RequestPriority priority_ = RequestPriority::DEFAULT_PRIORITY;
 
   base::WeakPtrFactory<SpdyHttpStream> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SpdyHttpStream);
 };
 
 }  // namespace net

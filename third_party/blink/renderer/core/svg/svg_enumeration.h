@@ -31,9 +31,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_ENUMERATION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_ENUMERATION_H_
 
+#include "base/check_op.h"
+#include "base/memory/raw_ref.h"
 #include "third_party/blink/renderer/core/svg/properties/svg_property.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
@@ -53,7 +56,8 @@ class SVGEnumeration : public SVGPropertyBase {
 
   template <typename Enum>
   explicit SVGEnumeration(Enum new_value)
-      : SVGEnumeration(new_value, GetEnumerationMap<Enum>()) {}
+      : SVGEnumeration(static_cast<uint16_t>(new_value),
+                       GetEnumerationMap<Enum>()) {}
 
   uint16_t Value() const {
     return value_ <= MaxExposedEnumValue() ? value_ : 0;
@@ -68,19 +72,18 @@ class SVGEnumeration : public SVGPropertyBase {
   }
   template <typename Enum>
   void SetEnumValue(Enum value) {
-    SetValue(value);
+    SetValue(static_cast<uint16_t>(value));
   }
 
   // SVGPropertyBase:
   SVGEnumeration* Clone() const {
-    return MakeGarbageCollected<SVGEnumeration>(value_, map_);
+    return MakeGarbageCollected<SVGEnumeration>(value_, *map_);
   }
-  SVGPropertyBase* CloneForAnimation(const String&) const override;
 
   String ValueAsString() const override;
   SVGParsingError SetValueAsString(const String&);
 
-  void Add(const SVGPropertyBase*, const SVGElement*) override;
+  bool Add(const SVGPropertyBase*, const SVGElement*) override;
   void CalculateAnimatedValue(
       const SMILAnimationEffectParameters&,
       float percentage,
@@ -111,7 +114,16 @@ class SVGEnumeration : public SVGPropertyBase {
   virtual void NotifyChange() {}
 
   uint16_t value_;
-  const SVGEnumerationMap& map_;
+  const raw_ref<const SVGEnumerationMap,
+                UnprotectedInRelease | DanglingUntriaged>
+      map_;
+};
+
+template <>
+struct DowncastTraits<SVGEnumeration> {
+  static bool AllowFrom(const SVGPropertyBase& value) {
+    return value.GetType() == SVGEnumeration::ClassType();
+  }
 };
 
 #define DECLARE_SVG_ENUM_MAP(cpp_enum_type) \

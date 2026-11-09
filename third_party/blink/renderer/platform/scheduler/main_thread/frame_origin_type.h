@@ -1,9 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_MAIN_THREAD_FRAME_ORIGIN_TYPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_MAIN_THREAD_FRAME_ORIGIN_TYPE_H_
+
+#include "third_party/perfetto/include/perfetto/tracing/string_helpers.h"
 
 namespace blink {
 class FrameScheduler;
@@ -16,13 +18,12 @@ enum class FrameOriginType {
   kMainFrame = 0,
   kSameOriginToMainFrame = 1,
   kCrossOriginToMainFrame = 2,
-  // TODO(dcheng): Get rid of this and use the kMaxValue idiom.
-  kCount = 3,
+  kMaxValue = kCrossOriginToMainFrame,
 };
 
 FrameOriginType GetFrameOriginType(FrameScheduler* frame_scheduler);
 
-const char* FrameOriginTypeToString(FrameOriginType origin);
+perfetto::StaticString FrameOriginTypeToString(FrameOriginType origin);
 
 }  // namespace scheduler
 }  // namespace blink

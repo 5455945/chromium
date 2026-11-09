@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include "android_webview/browser/permission/aw_permission_request_delegate.h"
 #include "android_webview/browser/permission/permission_request_handler_client.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -50,11 +52,11 @@ void PermissionRequestHandler::SendRequest(
     return;
   }
 
-  base::WeakPtr<AwPermissionRequest> weak_request;
-  base::android::ScopedJavaLocalRef<jobject> java_peer =
-      AwPermissionRequest::Create(std::move(request), &weak_request);
-  requests_.push_back(weak_request);
-  client_->OnPermissionRequest(java_peer, weak_request.get());
+  base::WeakPtr<AwPermissionRequest> weak_request =
+      client_->OnPermissionRequest(std::move(request));
+  if (weak_request) {
+    requests_.push_back(weak_request);
+  }
   PruneRequests();
 }
 
@@ -75,7 +77,7 @@ void PermissionRequestHandler::PreauthorizePermission(const GURL& origin,
   if (!resources)
     return;
 
-  std::string key = origin.GetOrigin().spec();
+  std::string key = origin.DeprecatedGetOriginAsURL().spec();
   if (key.empty()) {
     LOG(ERROR) << "The origin of preauthorization is empty, ignore it.";
     return;
@@ -109,10 +111,16 @@ PermissionRequestHandler::RequestIterator PermissionRequestHandler::FindRequest(
 }
 
 void PermissionRequestHandler::CancelRequestInternal(RequestIterator i) {
-  AwPermissionRequest* request = i->get();
+  // Use a WeakPtr to check if the request is still alive after the synchronous
+  // JNI call to OnPermissionRequestCanceled. The embedder might synchronously
+  // delete the request (e.g., by calling grant() or deny()) inside the
+  // cancellation callback.
+  base::WeakPtr<AwPermissionRequest> request = *i;
   if (request) {
-    client_->OnPermissionRequestCanceled(request);
-    request->CancelAndDelete();
+    client_->OnPermissionRequestCanceled(request.get());
+    if (request) {
+      request->CancelAndDelete();
+    }
   }
 }
 
@@ -133,7 +141,7 @@ void PermissionRequestHandler::PruneRequests() {
 bool PermissionRequestHandler::Preauthorized(const GURL& origin,
                                              int64_t resources) {
   std::map<std::string, int64_t>::iterator i =
-      preauthorized_permission_.find(origin.GetOrigin().spec());
+      preauthorized_permission_.find(origin.DeprecatedGetOriginAsURL().spec());
 
   return i != preauthorized_permission_.end() &&
          (resources & i->second) == resources;

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,15 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key_result.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key_subtle.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/dbus/constants/attestation_constants.h"
-#include "components/pref_registry/pref_registry_syncable.h"
+#include "chromeos/ash/components/dbus/attestation/attestation_ca.pb.h"
+#include "chromeos/ash/components/dbus/constants/attestation_constants.h"
 
 class Profile;
 class AttestationFlow;
@@ -25,33 +26,39 @@ namespace attestation {
 
 //========================= TpmChallengeKeyFactory =============================
 
-TpmChallengeKey* TpmChallengeKeyFactory::next_result_for_testing_ = nullptr;
+namespace {
+
+// The `ScopedOneshotOverrideForTesting` that is alive, if any.
+TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting* g_oneshot_override =
+    nullptr;
+
+}  // namespace
+
+TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting::
+    ScopedOneshotOverrideForTesting(std::unique_ptr<TpmChallengeKey> instance)
+    : instance_(std::move(instance)) {
+  CHECK_IS_TEST();
+  CHECK(instance_);
+  CHECK(!g_oneshot_override) << "Only one override allowed";
+  g_oneshot_override = this;
+}
+
+TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting::
+    ~ScopedOneshotOverrideForTesting() {
+  g_oneshot_override = nullptr;
+}
 
 // static
 std::unique_ptr<TpmChallengeKey> TpmChallengeKeyFactory::Create() {
-  if (UNLIKELY(next_result_for_testing_)) {
-    std::unique_ptr<TpmChallengeKey> result(next_result_for_testing_);
-    next_result_for_testing_ = nullptr;
-    return result;
+  if (g_oneshot_override) [[unlikely]] {
+    CHECK(g_oneshot_override->instance_) << "Create() can be called only once";
+    return std::move(g_oneshot_override->instance_);
   }
 
   return std::make_unique<TpmChallengeKeyImpl>();
 }
 
-// static
-void TpmChallengeKeyFactory::SetForTesting(
-    std::unique_ptr<TpmChallengeKey> next_result) {
-  // unique_ptr itself cannot be stored in a static variable because of its
-  // complex destructor.
-  next_result_for_testing_ = next_result.release();
-}
-
 //=========================== TpmChallengeKeyImpl ==============================
-
-void TpmChallengeKey::RegisterProfilePrefs(
-    user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kAttestationEnabled, false);
-}
 
 TpmChallengeKeyImpl::TpmChallengeKeyImpl() {
   tpm_challenge_key_subtle_ = TpmChallengeKeySubtleFactory::Create();
@@ -68,18 +75,22 @@ TpmChallengeKeyImpl::~TpmChallengeKeyImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-void TpmChallengeKeyImpl::BuildResponse(AttestationKeyType key_type,
-                                        Profile* profile,
-                                        TpmChallengeKeyCallback callback,
-                                        const std::string& challenge,
-                                        bool register_key,
-                                        const std::string& key_name) {
+void TpmChallengeKeyImpl::BuildResponse(
+    ::attestation::VerifiedAccessFlow flow_type,
+    Profile* profile,
+    TpmChallengeKeyCallback callback,
+    const std::string& challenge,
+    bool register_key,
+    ::attestation::KeyType key_crypto_type,
+    const std::string& key_name,
+    const std::optional<std::string>& signals) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(callback_.is_null());
-  DCHECK(!callback.is_null());
+  CHECK(callback_.is_null(), base::NotFatalUntil::M161);
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   // For device key: if |register_key| is true, |key_name| should not be empty.
-  DCHECK((key_type != KEY_DEVICE) || (register_key == !key_name.empty()))
+  DCHECK((flow_type != ::attestation::ENTERPRISE_MACHINE) ||
+         (register_key == !key_name.empty()))
       << "Invalid arguments: " << register_key << " " << !key_name.empty();
 
   register_key_ = register_key;
@@ -88,9 +99,11 @@ void TpmChallengeKeyImpl::BuildResponse(AttestationKeyType key_type,
 
   // Empty |key_name| means that some default name will be used.
   tpm_challenge_key_subtle_->StartPrepareKeyStep(
-      key_type, /*will_register_key=*/register_key_, key_name, profile,
+      flow_type, /*will_register_key=*/register_key_, key_crypto_type, key_name,
+      profile,
       base::BindOnce(&TpmChallengeKeyImpl::OnPrepareKeyDone,
-                     weak_factory_.GetWeakPtr()));
+                     weak_factory_.GetWeakPtr()),
+      signals);
 }
 
 void TpmChallengeKeyImpl::OnPrepareKeyDone(

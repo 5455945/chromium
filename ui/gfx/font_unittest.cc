@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/font_names_testing.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/gfx/system_fonts_win.h"
 #endif
 
@@ -24,9 +24,12 @@ class FontTest : public testing::Test {
  public:
   FontTest() = default;
 
+  FontTest(const FontTest&) = delete;
+  FontTest& operator=(const FontTest&) = delete;
+
  protected:
   void SetUp() override {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // System fonts is keeping a cache of loaded system fonts. These fonts are
     // scaled based on global callbacks configured on startup. The tests in this
     // file are testing these callbacks and need to be sure we cleared the
@@ -34,9 +37,6 @@ class FontTest : public testing::Test {
     win::ResetSystemFontsForTesting();
 #endif
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FontTest);
 };
 
 TEST_F(FontTest, DefaultFont) {
@@ -54,26 +54,24 @@ TEST_F(FontTest, DefaultFont) {
 
 TEST_F(FontTest, LoadArial) {
   Font cf(kTestFontName, 16);
-#if defined(OS_APPLE)
-  EXPECT_TRUE(cf.GetNativeFont());
+#if BUILDFLAG(IS_APPLE)
+  EXPECT_TRUE(cf.GetCTFont());
 #endif
   EXPECT_EQ(cf.GetStyle(), Font::NORMAL);
   EXPECT_EQ(cf.GetFontSize(), 16);
   EXPECT_EQ(cf.GetFontName(), kTestFontName);
-  EXPECT_EQ(base::ToLowerASCII(kTestFontName),
-            base::ToLowerASCII(cf.GetActualFontName()));
+  EXPECT_THAT(cf.GetActualFontNames(), testing::Contains(kTestFontName));
 }
 
 TEST_F(FontTest, LoadArialBold) {
   Font cf(kTestFontName, 16);
   Font bold(cf.Derive(0, Font::NORMAL, Font::Weight::BOLD));
-#if defined(OS_APPLE)
-  EXPECT_TRUE(bold.GetNativeFont());
+#if BUILDFLAG(IS_APPLE)
+  EXPECT_TRUE(bold.GetCTFont());
 #endif
   EXPECT_EQ(bold.GetStyle(), Font::NORMAL);
   EXPECT_EQ(bold.GetWeight(), Font::Weight::BOLD);
-  EXPECT_EQ(base::ToLowerASCII(kTestFontName),
-            base::ToLowerASCII(cf.GetActualFontName()));
+  EXPECT_THAT(bold.GetActualFontNames(), testing::Contains(kTestFontName));
 }
 
 TEST_F(FontTest, Ascent) {
@@ -109,19 +107,17 @@ TEST_F(FontTest, AvgWidths) {
 // http://crbug.com/347429
 TEST_F(FontTest, GetActualFontName) {
   Font arial(kTestFontName, 16);
-  EXPECT_EQ(base::ToLowerASCII(kTestFontName),
-            base::ToLowerASCII(arial.GetActualFontName()))
+  EXPECT_THAT(arial.GetActualFontNames(), testing::Contains(kTestFontName))
       << "********\n"
-      << "Your test environment seems to be missing Arial font, which is "
-      << "needed for unittests.  Check if Arial font is installed.\n"
+      << "Your test environment seems to be missing the " << kTestFontName
+      << " font, which is needed for unittests. Check if " << kTestFontName
+      << " font is installed.\n"
       << "********";
   Font symbol(kSymbolFontName, 16);
-  EXPECT_EQ(base::ToLowerASCII(kSymbolFontName),
-            base::ToLowerASCII(symbol.GetActualFontName()))
+  EXPECT_THAT(symbol.GetActualFontNames(), testing::Contains(kSymbolFontName))
       << "********\n"
       << "Your test environment seems to be missing the " << kSymbolFontName
-      << " font, which is "
-      << "needed for unittests.  Check if " << kSymbolFontName
+      << " font, which is needed for unittests. Check if " << kSymbolFontName
       << " font is installed.\n"
       << "********";
 
@@ -144,7 +140,7 @@ TEST_F(FontTest, DeriveFont) {
   EXPECT_EQ(cf.GetWeight(), cf_underlined_resized.GetWeight());
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 TEST_F(FontTest, DeriveResizesIfSizeTooSmall) {
   Font cf(kTestFontName, 8);
   gfx::win::SetGetMinimumFontSizeCallback([] { return 5; });
@@ -160,7 +156,7 @@ TEST_F(FontTest, DeriveKeepsOriginalSizeIfHeightOk) {
   Font derived_font = cf.Derive(-2, cf.GetStyle(), cf.GetWeight());
   EXPECT_EQ(6, derived_font.GetFontSize());
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 TEST_F(FontTest, WeightConversion) {
   struct WeightMatchExpectation {

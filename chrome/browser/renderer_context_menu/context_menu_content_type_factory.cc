@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,22 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/common/url_constants.h"
+#include "build/build_config.h"
+#include "chrome/common/webui_url_constants.h"
 #include "components/renderer_context_menu/context_menu_content_type.h"
+#include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/buildflags/buildflags.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/glic/host/guest_util.h"            // nogncheck
+#include "chrome/browser/glic/public/glic_keyed_service.h"  // nogncheck
+#include "chrome/browser/renderer_context_menu/context_menu_content_type_glic.h"
+#include "chrome/browser/renderer_context_menu/context_menu_content_type_read_anything.h"
+#endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/app_mode/app_mode_utils.h"
@@ -23,18 +31,17 @@
 #include "chrome/browser/renderer_context_menu/context_menu_content_type_platform_app.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/view_type_utils.h"
-#include "extensions/common/extension.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "components/session_manager/core/session_manager.h"
 #endif
 
 namespace {
 
 bool IsUserSessionBlocked() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (session_manager::SessionManager::Get() &&
       session_manager::SessionManager::Get()->IsUserSessionBlocked()) {
     return true;
@@ -46,49 +53,69 @@ bool IsUserSessionBlocked() {
 // Context menu content with no supported groups.
 class NullContextMenuContentType : public ContextMenuContentType {
  public:
-  NullContextMenuContentType(content::WebContents* web_contents,
-                             const content::ContextMenuParams& params)
-      : ContextMenuContentType(web_contents, params, false) {}
+  explicit NullContextMenuContentType(const content::ContextMenuParams& params)
+      : ContextMenuContentType(params, false) {}
+
+  NullContextMenuContentType(const NullContextMenuContentType&) = delete;
+  NullContextMenuContentType& operator=(const NullContextMenuContentType&) =
+      delete;
+
   ~NullContextMenuContentType() override = default;
 
   bool SupportsGroup(int group) override { return false; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NullContextMenuContentType);
 };
 
 }  // namespace
 
-ContextMenuContentTypeFactory::ContextMenuContentTypeFactory() {
-}
+ContextMenuContentTypeFactory::ContextMenuContentTypeFactory() = default;
 
-ContextMenuContentTypeFactory::~ContextMenuContentTypeFactory() {
-}
+ContextMenuContentTypeFactory::~ContextMenuContentTypeFactory() = default;
 
 // static.
 std::unique_ptr<ContextMenuContentType> ContextMenuContentTypeFactory::Create(
-    content::WebContents* web_contents,
+    content::RenderFrameHost* render_frame_host,
     const content::ContextMenuParams& params) {
-  if (IsUserSessionBlocked())
-    return std::make_unique<NullContextMenuContentType>(web_contents, params);
+  if (IsUserSessionBlocked()) {
+    return std::make_unique<NullContextMenuContentType>(params);
+  }
 
-  return CreateInternal(web_contents, params);
+  return CreateInternal(render_frame_host, params);
 }
 
 // static
 std::unique_ptr<ContextMenuContentType>
 ContextMenuContentTypeFactory::CreateInternal(
-    content::WebContents* web_contents,
+    content::RenderFrameHost* render_frame_host,
     const content::ContextMenuParams& params) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  if (chrome::IsRunningInForcedAppMode()) {
-    return base::WrapUnique(
-        new ContextMenuContentTypeAppMode(web_contents, params));
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS)
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+#endif
+#if !BUILDFLAG(IS_ANDROID)
+  if (params.page_url.SchemeIs(content::kChromeUIUntrustedScheme) &&
+      params.page_url.host() ==
+          chrome::kChromeUIUntrustedReadAnythingSidePanelHost) {
+    return std::make_unique<ContextMenuContentTypeReadAnything>(params);
   }
 
-  if (extensions::WebViewGuest::FromWebContents(web_contents)) {
-    return base::WrapUnique(
-        new ContextMenuContentTypeWebView(web_contents, params));
+  if (glic::GlicKeyedService::IsNoWebviewEnabled(
+          web_contents ? web_contents->GetBrowserContext() : nullptr)) {
+    if (glic::IsAnyGlicWebContents(web_contents)) {
+      return std::make_unique<ContextMenuContentTypeGlic>(params);
+    }
+  }
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (IsRunningInForcedAppMode()) {
+    return base::WrapUnique(new ContextMenuContentTypeAppMode(params));
+  }
+
+  extensions::WebViewGuest* web_view_guest =
+      extensions::WebViewGuest::FromRenderFrameHost(render_frame_host);
+  if (web_view_guest) {
+    return base::WrapUnique(new ContextMenuContentTypeWebView(
+        web_view_guest->GetWeakPtr(), params));
   }
 
   const extensions::mojom::ViewType view_type =
@@ -100,11 +127,10 @@ ContextMenuContentTypeFactory::CreateInternal(
   }
 
   if (view_type == extensions::mojom::ViewType::kExtensionPopup) {
-    return base::WrapUnique(
-        new ContextMenuContentTypeExtensionPopup(web_contents, params));
+    return base::WrapUnique(new ContextMenuContentTypeExtensionPopup(params));
   }
 
 #endif
 
-  return std::make_unique<ContextMenuContentType>(web_contents, params, true);
+  return std::make_unique<ContextMenuContentType>(params, true);
 }

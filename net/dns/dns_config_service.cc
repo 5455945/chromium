@@ -1,41 +1,36 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/dns/dns_config_service.h"
 
+#include <memory>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "net/dns/dns_hosts.h"
 #include "net/dns/serial_worker.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 
 // static
 const base::TimeDelta DnsConfigService::kInvalidationTimeout =
-    base::TimeDelta::FromMilliseconds(150);
+    base::Milliseconds(150);
 
 DnsConfigService::DnsConfigService(
-    base::FilePath::StringPieceType hosts_file_path,
-    absl::optional<base::TimeDelta> config_change_delay)
-    : watch_failed_(false),
-      have_config_(false),
-      have_hosts_(false),
-      need_update_(false),
-      last_sent_empty_(true),
-      config_change_delay_(config_change_delay),
+    base::FilePath::StringViewType hosts_file_path,
+    std::optional<base::TimeDelta> config_change_delay)
+    : config_change_delay_(config_change_delay),
       hosts_file_path_(hosts_file_path) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
@@ -92,30 +87,37 @@ void DnsConfigService::Watcher::CheckOnCorrectSequence() {
 }
 
 DnsConfigService::HostsReader::HostsReader(
-    base::FilePath::StringPieceType hosts_file_path,
+    base::FilePath::StringViewType hosts_file_path,
     DnsConfigService& service)
     : service_(&service), hosts_file_path_(hosts_file_path) {}
 
 DnsConfigService::HostsReader::~HostsReader() = default;
 
-absl::optional<DnsHosts> DnsConfigService::HostsReader::ReadHosts() {
+DnsConfigService::HostsReader::WorkItem::WorkItem(
+    std::unique_ptr<DnsHostsParser> dns_hosts_parser)
+    : dns_hosts_parser_(std::move(dns_hosts_parser)) {
+  DCHECK(dns_hosts_parser_);
+}
+
+DnsConfigService::HostsReader::WorkItem::~WorkItem() = default;
+
+std::optional<DnsHosts> DnsConfigService::HostsReader::WorkItem::ReadHosts() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
-  DCHECK(!hosts_file_path_.empty());
   DnsHosts dns_hosts;
-  if (!ParseHostsFile(hosts_file_path_, &dns_hosts))
-    return absl::nullopt;
+  if (!dns_hosts_parser_->ParseHosts(&dns_hosts))
+    return std::nullopt;
 
   return dns_hosts;
 }
 
-bool DnsConfigService::HostsReader::AddAdditionalHostsTo(
+bool DnsConfigService::HostsReader::WorkItem::AddAdditionalHostsTo(
     DnsHosts& in_out_dns_hosts) {
   // Nothing to add in base implementation.
   return true;
 }
 
-void DnsConfigService::HostsReader::DoWork() {
+void DnsConfigService::HostsReader::WorkItem::DoWork() {
   hosts_ = ReadHosts();
   if (!hosts_.has_value())
     return;
@@ -124,11 +126,23 @@ void DnsConfigService::HostsReader::DoWork() {
     hosts_.reset();
 }
 
-void DnsConfigService::HostsReader::OnWorkFinished() {
-  if (hosts_.has_value()) {
-    service_->OnHostsRead(std::move(hosts_).value());
+std::unique_ptr<SerialWorker::WorkItem>
+DnsConfigService::HostsReader::CreateWorkItem() {
+  return std::make_unique<WorkItem>(
+      std::make_unique<DnsHostsFileParser>(hosts_file_path_));
+}
+
+bool DnsConfigService::HostsReader::OnWorkFinished(
+    std::unique_ptr<SerialWorker::WorkItem> serial_worker_work_item) {
+  DCHECK(serial_worker_work_item);
+
+  WorkItem* work_item = static_cast<WorkItem*>(serial_worker_work_item.get());
+  if (work_item->hosts_.has_value()) {
+    service_->OnHostsRead(std::move(work_item->hosts_).value());
+    return true;
   } else {
     LOG(WARNING) << "Failed to read DnsHosts.";
+    return false;
   }
 }
 
@@ -138,7 +152,7 @@ void DnsConfigService::ReadHostsNow() {
   if (!hosts_reader_) {
     DCHECK(!hosts_file_path_.empty());
     hosts_reader_ =
-        base::MakeRefCounted<HostsReader>(hosts_file_path_.value(), *this);
+        std::make_unique<HostsReader>(hosts_file_path_.value(), *this);
   }
   hosts_reader_->WorkNow();
 }
@@ -161,7 +175,6 @@ void DnsConfigService::InvalidateHosts() {
 
 void DnsConfigService::OnConfigRead(DnsConfig config) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(config.IsValid());
 
   if (!config.EqualsIgnoreHosts(dns_config_)) {
     dns_config_.CopyIgnoreHosts(config);
@@ -231,7 +244,7 @@ void DnsConfigService::OnCompleteConfig() {
 void DnsConfigService::OnConfigChanged(bool succeeded) {
   if (config_change_delay_) {
     // Ignore transient flutter of config source by delaying the signal a bit.
-    base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&DnsConfigService::OnConfigChangedDelayed,
                        weak_factory_.GetWeakPtr(), succeeded),

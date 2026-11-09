@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,9 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/containers/span.h"
-#include "base/macros.h"
 #include "base/values.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/hashed_extension_id.h"
@@ -21,27 +20,29 @@
 namespace extensions {
 struct InstallWarning;
 
-// Wraps the DictionaryValue form of extension's manifest. Enforces access to
+// Wraps the base::DictValue form of extension's manifest. Enforces access to
 // properties of the manifest using ManifestFeatureProvider.
 class Manifest final {
  public:
   // Do not change the order of entries or remove entries in this list as this
-  // is used in ExtensionType enum in tools/metrics/histograms/enums.xml.
-  enum Type {
-    TYPE_UNKNOWN = 0,
-    TYPE_EXTENSION = 1,
-    TYPE_THEME = 2,
-    TYPE_USER_SCRIPT = 3,
-    TYPE_HOSTED_APP = 4,
+  // is used in ExtensionType enum in
+  // tools/metrics/histograms/metadata/extensions/enums.xml.
+  enum class Type {
+    kUnknown = 0,
+    kExtension = 1,
+    kTheme = 2,
+    kUserScript = 3,
+    kHostedApp = 4,
     // This is marked legacy because platform apps are preferred. For
     // backwards compatibility, we can't remove support for packaged apps
-    TYPE_LEGACY_PACKAGED_APP = 5,
-    TYPE_PLATFORM_APP = 6,
-    TYPE_SHARED_MODULE = 7,
-    TYPE_LOGIN_SCREEN_EXTENSION = 8,
+    kLegacyPackagedApp = 5,
+    kPlatformApp = 6,
+    kSharedModule = 7,
+    kLoginScreenExtension = 8,
+    kChromeOSSystemExtension = 9,
 
     // New enum values must go above here.
-    NUM_LOAD_TYPES
+    kNumLoadTypes,
   };
 
   // Given two install sources, return the one which should take priority
@@ -51,7 +52,7 @@ class Manifest final {
       mojom::ManifestLocation loc1,
       mojom::ManifestLocation loc2);
 
-  // Whether the |location| is external or not.
+  // Whether the `location` is external or not.
   static inline bool IsExternalLocation(mojom::ManifestLocation location) {
     return location == mojom::ManifestLocation::kExternalPref ||
            location == mojom::ManifestLocation::kExternalRegistry ||
@@ -61,13 +62,13 @@ class Manifest final {
            location == mojom::ManifestLocation::kExternalComponent;
   }
 
-  // Whether the |location| is unpacked (no CRX) or not.
+  // Whether the `location` is unpacked (no CRX) or not.
   static inline bool IsUnpackedLocation(mojom::ManifestLocation location) {
     return location == mojom::ManifestLocation::kUnpacked ||
            location == mojom::ManifestLocation::kCommandLine;
   }
 
-  // Whether extensions with |location| are auto-updatable or not.
+  // Whether extensions with `location` are auto-updatable or not.
   static inline bool IsAutoUpdateableLocation(
       mojom::ManifestLocation location) {
     // Only internal and external extensions can be autoupdated.
@@ -75,14 +76,14 @@ class Manifest final {
            IsExternalLocation(location);
   }
 
-  // Whether the |location| is a source of extensions force-installed through
+  // Whether the `location` is a source of extensions force-installed through
   // policy.
   static inline bool IsPolicyLocation(mojom::ManifestLocation location) {
     return location == mojom::ManifestLocation::kExternalPolicy ||
            location == mojom::ManifestLocation::kExternalPolicyDownload;
   }
 
-  // Whether the |location| is an extension intended to be an internal part of
+  // Whether the `location` is an extension intended to be an internal part of
   // Chrome.
   static inline bool IsComponentLocation(mojom::ManifestLocation location) {
     return location == mojom::ManifestLocation::kComponent ||
@@ -101,26 +102,30 @@ class Manifest final {
     return IsUnpackedLocation(location);
   }
 
-  // Returns the Manifest::Type for the given |value|.
-  static Type GetTypeFromManifestValue(const base::DictionaryValue& value,
+  // Returns the Manifest::Type for the given `value`.
+  static Type GetTypeFromManifestValue(const base::DictValue& value,
                                        bool for_login_screen = false);
 
-  // Returns true if an item with the given |location| should always be loaded,
+  // Returns true if an item with the given `location` should always be loaded,
   // even if extensions are otherwise disabled.
   static bool ShouldAlwaysLoadExtension(mojom::ManifestLocation location,
                                         bool is_theme);
 
   // Creates a Manifest for a login screen context. Note that this won't always
-  // result in a Manifest of TYPE_LOGIN_SCREEN_EXTENSION, since other items
+  // result in a Manifest of Type::kLoginScreenExtension, since other items
   // (like platform apps) may be installed in the same login screen profile.
   static std::unique_ptr<Manifest> CreateManifestForLoginScreen(
       mojom::ManifestLocation location,
-      std::unique_ptr<base::DictionaryValue> value,
+      base::DictValue value,
       ExtensionId extension_id);
 
   Manifest(mojom::ManifestLocation location,
-           std::unique_ptr<base::DictionaryValue> value,
+           base::DictValue value,
            ExtensionId extension_id);
+
+  Manifest(const Manifest&) = delete;
+  Manifest& operator=(const Manifest&) = delete;
+
   ~Manifest();
 
   const ExtensionId& extension_id() const { return extension_id_; }
@@ -128,11 +133,9 @@ class Manifest final {
 
   mojom::ManifestLocation location() const { return location_; }
 
-  // Returns false and |error| will be non-empty if the manifest is malformed.
-  // |warnings| will be populated if there are keys in the manifest that cannot
-  // be specified by the extension type.
-  bool ValidateManifest(std::string* error,
-                        std::vector<InstallWarning>* warnings) const;
+  // Populates `warnings` if manifest contains keys not permitted for the
+  // chosen extension type.
+  void ValidateManifest(std::vector<InstallWarning>* warnings) const;
 
   // The version of this extension's manifest. We increase the manifest
   // version when making breaking changes to the extension system. If the
@@ -143,65 +146,51 @@ class Manifest final {
   // Returns the manifest type.
   Type type() const { return type_; }
 
-  bool is_theme() const { return type_ == TYPE_THEME; }
+  bool is_theme() const { return type_ == Type::kTheme; }
   bool is_app() const {
     return is_legacy_packaged_app() || is_hosted_app() || is_platform_app();
   }
-  bool is_platform_app() const { return type_ == TYPE_PLATFORM_APP; }
-  bool is_hosted_app() const { return type_ == TYPE_HOSTED_APP; }
+  bool is_platform_app() const { return type_ == Type::kPlatformApp; }
+  bool is_hosted_app() const { return type_ == Type::kHostedApp; }
   bool is_legacy_packaged_app() const {
-    return type_ == TYPE_LEGACY_PACKAGED_APP;
+    return type_ == Type::kLegacyPackagedApp;
   }
-  bool is_extension() const { return type_ == TYPE_EXTENSION; }
+  bool is_extension() const { return type_ == Type::kExtension; }
   bool is_login_screen_extension() const {
-    return type_ == TYPE_LOGIN_SCREEN_EXTENSION;
+    return type_ == Type::kLoginScreenExtension;
   }
-  bool is_shared_module() const { return type_ == TYPE_SHARED_MODULE; }
+  bool is_shared_module() const { return type_ == Type::kSharedModule; }
+  bool is_chromeos_system_extension() const {
+    return type_ == Type::kChromeOSSystemExtension;
+  }
 
-  // These access the wrapped manifest value, returning false when the property
-  // does not exist or if the manifest type can't access it.
-  // TODO(karandeepb): These methods should be changed to use base::StringPiece.
-  // Better, we should pass a list of path components instead of a unified
-  // |path| to do away with our usage of deprecated base::Value methods.
-  bool HasKey(const std::string& key) const;
-  bool HasPath(const std::string& path) const;
-  bool Get(const std::string& path, const base::Value** out_value) const;
-  bool GetBoolean(const std::string& path, bool* out_value) const;
-  bool GetInteger(const std::string& path, int* out_value) const;
-  bool GetString(const std::string& path, std::string* out_value) const;
-  bool GetString(const std::string& path, std::u16string* out_value) const;
-  // Deprecated: Use the GetDictionary() overload that accepts a base::Value
-  // output parameter instead.
-  bool GetDictionary(const std::string& path,
-                     const base::DictionaryValue** out_value) const;
-  bool GetDictionary(const std::string& path,
-                     const base::Value** out_value) const;
-  // Deprecated: Use the GetList() overload that accepts a base::Value output
-  // parameter instead.
-  bool GetList(const std::string& path,
-               const base::ListValue** out_value) const;
+  // These access the wrapped manifest value, returning nullptr/nullopt when the
+  // property does not exist or if the manifest type can't access it.
+  const base::Value* FindKey(std::string_view path) const;
+  const base::Value* FindPath(std::string_view path) const;
+  std::optional<bool> FindBoolPath(std::string_view path) const;
+  std::optional<int> FindIntPath(std::string_view path) const;
+  const std::string* FindStringPath(std::string_view path) const;
+
+  const base::DictValue* FindDictPath(std::string_view path) const;
+
+  // Deprecated: Use the FindDictPath(asValue) functions instead.
   bool GetList(const std::string& path, const base::Value** out_value) const;
 
-  bool GetPathOfType(const std::string& path,
-                     base::Value::Type type,
-                     const base::Value** out_value) const;
-
-  // Returns true if this equals the |other| manifest.
+  // Returns true if this equals the `other` manifest.
   bool EqualsForTesting(const Manifest& other) const;
 
-  // Gets the underlying DictionaryValue representing the manifest.
+  // Gets the underlying base::DictValue representing the manifest.
   // Note: only use this when you KNOW you don't need the validation.
-  const base::DictionaryValue* value() const { return value_.get(); }
+  const base::DictValue* value() const { return &value_; }
 
-  // Gets the underlying DictionaryValue representing the manifest with all
+  // Gets the underlying `base::DictValue` representing the manifest with all
   // unavailable manifest keys removed.
-  const base::DictionaryValue& available_values() const {
-    return *available_values_;
-  }
+  const base::DictValue& available_values() const { return available_values_; }
 
  private:
   Manifest(mojom::ManifestLocation location,
-           std::unique_ptr<base::DictionaryValue> value,
+           base::DictValue value,
            ExtensionId extension_id,
            bool for_login_screen);
 
@@ -209,7 +198,7 @@ class Manifest final {
   // like directory structures and URLs, and is expected to not change across
   // versions. It is generated as a SHA-256 hash of the extension's public
   // key, or as a hash of the path in the case of unpacked extensions.
-  const std::string extension_id_;
+  const ExtensionId extension_id_;
 
   // The hex-encoding of the SHA1 of the extension id; used to determine feature
   // availability.
@@ -219,16 +208,14 @@ class Manifest final {
   const mojom::ManifestLocation location_;
 
   // The underlying dictionary representation of the manifest.
-  const std::unique_ptr<const base::DictionaryValue> value_;
+  const base::DictValue value_;
 
-  // Same as |value_| but comprises only of keys available to this manifest.
-  std::unique_ptr<const base::DictionaryValue> available_values_;
+  // Same as `value_` but comprises only of keys available to this manifest.
+  base::DictValue available_values_;
 
   const Type type_;
 
   const int manifest_version_;
-
-  DISALLOW_COPY_AND_ASSIGN(Manifest);
 };
 
 }  // namespace extensions

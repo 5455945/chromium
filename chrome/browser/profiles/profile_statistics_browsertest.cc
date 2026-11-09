@@ -1,6 +1,8 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/profiles/profile_statistics.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -11,21 +13,30 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "chrome/browser/password_manager/password_store_factory.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/profiles/profile_statistics.h"
+#include "chrome/browser/autofill/personal_context_entity_metadata_manager_factory.h"
+#include "chrome/browser/autofill/personal_data_manager_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_statistics_aggregator.h"
 #include "chrome/browser/profiles/profile_statistics_common.h"
 #include "chrome/browser/profiles/profile_statistics_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_manager/autofill_ai/personal_context_entity_metadata_manager.h"
+#include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
+#include "components/autofill/core/browser/webdata/personal_context/personal_context_entity_metadata_sync_bridge.h"
+#include "components/autofill/core/browser/webdata/personal_context/personal_context_entity_metadata_sync_bridge_test_util.h"
+#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
-#include "components/password_manager/core/browser/test_password_store.h"
+#include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 
@@ -61,10 +72,10 @@ std::string ProfileCategoryStatToString(
     return ::testing::AssertionSuccess();
   } else {
     return ::testing::AssertionFailure()
-        << "Value of: " << actual_expression
-        << "\n  Actual: " << ProfileCategoryStatToString(actual_value)
-        << "\nExpected: " << expected_expression
-        << "\nWhich is: " << ProfileCategoryStatToString(expected_value);
+           << "Value of: " << actual_expression
+           << "\n  Actual: " << ProfileCategoryStatToString(actual_value)
+           << "\nExpected: " << expected_expression
+           << "\nWhich is: " << ProfileCategoryStatToString(expected_value);
   }
 }
 
@@ -73,23 +84,22 @@ std::string ProfileCategoryStatToString(
     const char* expected_expression,
     const profiles::ProfileCategoryStats& actual_value,
     const profiles::ProfileCategoryStats& expected_value) {
-  if (actual_value.size() == expected_value.size() &&
-      std::is_permutation(actual_value.cbegin(),
-                          actual_value.cend(),
-                          expected_value.cbegin(),
-                          IsProfileCategoryStatEqual)) {
+  if (std::ranges::is_permutation(actual_value, expected_value,
+                                  IsProfileCategoryStatEqual)) {
     return ::testing::AssertionSuccess();
   } else {
     ::testing::AssertionResult result = testing::AssertionFailure();
     result << "ProfileCategoryStats are not equal.";
 
     result << "\n  Actual: " << actual_expression << "\nWhich is:";
-    for (const auto& value : actual_value)
+    for (const auto& value : actual_value) {
       result << "\n    " << ProfileCategoryStatToString(value);
+    }
 
     result << "\nExpected: " << expected_expression << "\nWhich is:";
-    for (const auto& value : expected_value)
+    for (const auto& value : expected_value) {
       result << "\n    " << ProfileCategoryStatToString(value);
+    }
 
     return result;
   }
@@ -129,22 +139,24 @@ class ProfileStatisticsAggregatorState {
     EXPECT_EQ(oldCount + 1u, newCount);
     for (size_t i = 0u; i < oldCount; i++) {
       // Exisiting statistics must be the same.
-      EXPECT_PRED_FORMAT2(AssertionProfileCategoryStatEqual,
-                          stats_[i], stats_return[i]);
+      EXPECT_PRED_FORMAT2(AssertionProfileCategoryStatEqual, stats_[i],
+                          stats_return[i]);
     }
 
     for (size_t i = 0u; i < newCount; i++) {
       // The category must be a valid category.
       EXPECT_EQ(1u, stats_categories_.count(stats_return[i].category));
       // The categories in |stats_return| must all different.
-      for (size_t j = 0u; j < i; j++)
+      for (size_t j = 0u; j < i; j++) {
         EXPECT_NE(stats_return[i].category, stats_return[j].category);
+      }
     }
     stats_ = stats_return;
 
     EXPECT_GE(num_of_stats_categories_, newCount);
-    if (required_stat_count_ <= newCount)
+    if (required_stat_count_ <= newCount) {
       run_loop_->Quit();
+    }
   }
 
  private:
@@ -160,24 +172,47 @@ class ProfileStatisticsAggregatorState {
 
 class ProfileStatisticsBrowserTest : public InProcessBrowserTest {
  public:
-  void SetUpOnMainThread() override {
-    // Use TestPasswordStore to remove a possible race. Normally the
-    // PasswordStore does its database manipulation on the DB thread, which
-    // creates a possible race during navigation. Specifically the
-    // PasswordManager will ignore any forms in a page if the load from the
-    // PasswordStore has not completed.
-    PasswordStoreFactory::GetInstance()->SetTestingFactory(
-        browser()->profile(),
-        base::BindRepeating(
-            &password_manager::BuildPasswordStore<
-                content::BrowserContext, password_manager::TestPasswordStore>));
+  void SetUpInProcessBrowserTestFixture() override {
+    InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
+    create_services_subscription_ =
+        BrowserContextDependencyManager::GetInstance()
+            ->RegisterCreateServicesCallbackForTesting(
+                base::BindRepeating([](content::BrowserContext* context) {
+                  // Use TestPasswordStore to remove a possible race. Normally
+                  // the PasswordStore does its database manipulation on the DB
+                  // thread, which creates a possible race during navigation.
+                  // Specifically the PasswordManager will ignore any forms in a
+                  // page if the load from the PasswordStore has not completed.
+                  ProfilePasswordStoreFactory::GetInstance()->SetTestingFactory(
+                      context, base::BindRepeating(
+                                   &password_manager::BuildPasswordStore<
+                                       content::BrowserContext,
+                                       password_manager::TestPasswordStore>));
+                  // The default PersonalContextEntityMetadataManager can't
+                  // record suppressions without Sync. The test bridge finishes
+                  // loading during browser startup, before the test body runs.
+                  auto create_manager = [](content::BrowserContext*)
+                      -> std::unique_ptr<KeyedService> {
+                    return std::make_unique<
+                        autofill::PersonalContextEntityMetadataManager>(
+                        autofill::
+                            CreateTestPersonalContextEntityMetadataSyncBridge());
+                  };
+                  autofill::PersonalContextEntityMetadataManagerFactory::
+                      GetInstance()
+                          ->SetTestingFactory(
+                              context, base::BindRepeating(create_manager));
+                }));
   }
+
+ private:
+  base::CallbackListSubscription create_services_subscription_;
 };
 
 using ProfileStatisticsBrowserDeathTest = ProfileStatisticsBrowserTest;
 
 IN_PROC_BROWSER_TEST_F(ProfileStatisticsBrowserTest, GatherStatistics) {
-  Profile* profile = ProfileManager::GetActiveUserProfile();
+  Profile* profile = browser()->GetProfile();
   ASSERT_TRUE(profile);
   ProfileStatistics* profile_stat =
       ProfileStatisticsFactory::GetForProfile(profile);
@@ -190,13 +225,60 @@ IN_PROC_BROWSER_TEST_F(ProfileStatisticsBrowserTest, GatherStatistics) {
 
   profiles::ProfileCategoryStats stats = state.GetStats();
   for (const auto& stat : stats) {
-      EXPECT_EQ(0, stat.count);
+    EXPECT_EQ(0, stat.count);
   }
+}
+
+// Tests that the Autofill statistic covers all Autofill data deleted with the
+// profile, i.e. addresses, payment methods and entity suppression metadata,
+// and not just autocomplete entries.
+IN_PROC_BROWSER_TEST_F(ProfileStatisticsBrowserTest,
+                       GatherStatisticsCountsAllAutofillData) {
+  Profile* profile = browser()->GetProfile();
+  ASSERT_TRUE(profile);
+
+  autofill::PersonalDataManager* personal_data_manager =
+      autofill::PersonalDataManagerFactory::GetForBrowserContext(profile);
+  ASSERT_TRUE(personal_data_manager);
+
+  personal_data_manager->address_data_manager().AddProfile(
+      autofill::test::GetFullProfile());
+  autofill::PersonalDataChangedWaiter(*personal_data_manager).Wait();
+  personal_data_manager->address_data_manager().AddProfile(
+      autofill::test::GetFullProfile2());
+  autofill::PersonalDataChangedWaiter(*personal_data_manager).Wait();
+  personal_data_manager->payments_data_manager().AddCreditCard(
+      autofill::test::GetCreditCard());
+  autofill::PersonalDataChangedWaiter(*personal_data_manager).Wait();
+
+  autofill::PersonalContextEntityMetadataManager* entity_metadata_manager =
+      autofill::PersonalContextEntityMetadataManagerFactory::GetForProfile(
+          profile);
+  ASSERT_TRUE(entity_metadata_manager);
+  // The passport satisfies a single merge constraint, i.e. one entry.
+  ASSERT_TRUE(entity_metadata_manager->SuppressEntity(
+      autofill::test::GetPassportEntityInstance()));
+
+  ProfileStatistics* profile_stat =
+      ProfileStatisticsFactory::GetForProfile(profile);
+  ProfileStatisticsAggregatorState state;
+  profile_stat->GatherStatistics(
+      base::BindRepeating(&ProfileStatisticsAggregatorState::StatsCallback,
+                          base::Unretained(&state)));
+  state.WaitForStats();
+
+  profiles::ProfileCategoryStats stats = state.GetStats();
+  auto autofill_stat =
+      std::ranges::find(stats, profiles::kProfileStatisticsAutofill,
+                        &profiles::ProfileCategoryStat::category);
+  ASSERT_NE(autofill_stat, stats.end());
+  // 2 addresses + 1 payment method + 1 entity suppression.
+  EXPECT_EQ(4, autofill_stat->count);
 }
 
 IN_PROC_BROWSER_TEST_F(ProfileStatisticsBrowserTest,
                        GatherStatisticsTwoCallbacks) {
-  Profile* profile = ProfileManager::GetActiveUserProfile();
+  Profile* profile = browser()->GetProfile();
   ASSERT_TRUE(profile);
   ProfileStatistics* profile_stat =
       ProfileStatisticsFactory::GetForProfile(profile);
@@ -217,6 +299,6 @@ IN_PROC_BROWSER_TEST_F(ProfileStatisticsBrowserTest,
   state1.WaitForStats();
   state2.WaitForStats();
 
-  EXPECT_PRED_FORMAT2(AssertionProfileCategoryStatsEqual,
-      state1.GetStats(), state2.GetStats());
+  EXPECT_PRED_FORMAT2(AssertionProfileCategoryStatsEqual, state1.GetStats(),
+                      state2.GetStats());
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,15 @@
 
 #include <stdint.h>
 
-#include "base/callback_forward.h"
+#include <string>
+
+#include "base/functional/callback_forward.h"
+#include "ui/base/mojom/menu_source_type.mojom-shared.h"
 #include "ui/views/controls/menu/menu_runner.h"
+
+namespace gfx {
+class RoundedCornersF;
+}  // namespace gfx
 
 namespace views {
 class MenuButtonController;
@@ -17,8 +24,8 @@ namespace internal {
 
 // An abstract interface for menu runner implementations.
 // Invoke Release() to destroy. Release() deletes immediately if the menu isn't
-// showing. If the menu is showing Release() cancels the menu and when the
-// nested RunMenuAt() call returns deletes itself and the menu.
+// showing. If the menu is showing Release() cancels the menu and deletes itself
+// and the menu once closed.
 class MenuRunnerImplInterface {
  public:
   // Creates a concrete instance for running |menu_model|.
@@ -28,19 +35,35 @@ class MenuRunnerImplInterface {
       int32_t run_types,
       base::RepeatingClosure on_menu_closed_callback);
 
-  // Returns true if we're in a nested run loop running the menu.
+  // Returns true if the menu is currently running.
   virtual bool IsRunning() const = 0;
 
   // See description above class for details.
   virtual void Release() = 0;
 
   // Runs the menu. See MenuRunner::RunMenuAt for more details.
-  virtual void RunMenuAt(Widget* parent,
-                         MenuButtonController* button_controller,
-                         const gfx::Rect& bounds,
-                         MenuAnchorPosition anchor,
-                         int32_t run_types,
-                         gfx::NativeView native_view_for_gestures) = 0;
+  virtual void RunMenuAt(
+      Widget* parent,
+      MenuButtonController* button_controller,
+      const gfx::Rect& bounds,
+      MenuAnchorPosition anchor,
+      ui::mojom::MenuSourceType source_type,
+      int32_t run_types,
+      gfx::NativeView native_view_for_gestures,
+      std::optional<gfx::RoundedCornersF> corners,
+      std::optional<std::string> show_menu_host_duration_histogram) = 0;
+  void RunMenuAt(
+      Widget* parent,
+      MenuButtonController* button_controller,
+      const gfx::Rect& bounds,
+      MenuAnchorPosition anchor,
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone,
+      int32_t run_types = MenuRunner::NO_FLAGS,
+      gfx::NativeView native_view_for_gestures = {},
+      std::optional<gfx::RoundedCornersF> corners = std::nullopt) {
+    RunMenuAt(parent, button_controller, bounds, anchor, source_type, run_types,
+              native_view_for_gestures, corners, std::nullopt);
+  }
 
   // Hides and cancels the menu.
   virtual void Cancel() = 0;

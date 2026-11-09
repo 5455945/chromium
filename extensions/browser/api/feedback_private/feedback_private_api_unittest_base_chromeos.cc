@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,19 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "components/feedback/content/feedback_uploader_factory.h"
 #include "components/feedback/system_logs/system_logs_source.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/browser/api/api_resource_manager.h"
+#include "extensions/browser/api/extensions_api_client.h"
+#include "extensions/browser/api/feedback_private/feedback_private_delegate.h"
 #include "extensions/browser/api/feedback_private/log_source_access_manager.h"
 #include "extensions/browser/api/feedback_private/log_source_resource.h"
 #include "extensions/common/api/feedback_private.h"
-#include "extensions/shell/browser/api/feedback_private/shell_feedback_private_delegate.h"
-#include "extensions/shell/browser/shell_extensions_api_client.h"
 
 namespace extensions {
 
@@ -42,6 +43,9 @@ class TestSingleLogSource : public SystemLogsSource {
   explicit TestSingleLogSource(LogSource type)
       : SystemLogsSource(ToString(type)) {}
 
+  TestSingleLogSource(const TestSingleLogSource&) = delete;
+  TestSingleLogSource& operator=(const TestSingleLogSource&) = delete;
+
   ~TestSingleLogSource() override = default;
 
   // Fetch() will return a single different string each time, in the following
@@ -58,7 +62,7 @@ class TestSingleLogSource : public SystemLogsSource {
     // Do not directly pass the result to the callback, because that's not how
     // log sources actually work. Instead, simulate the asynchronous operation
     // of a SystemLogsSource by invoking the callback separately.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), std::move(result_map)));
   }
 
@@ -82,30 +86,68 @@ class TestSingleLogSource : public SystemLogsSource {
   // Keep track of how many times Fetch() has been called, in order to determine
   // its behavior each time.
   int call_count_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSingleLogSource);
 };
 
-class TestFeedbackPrivateDelegate : public ShellFeedbackPrivateDelegate {
+class TestFeedbackPrivateDelegate : public FeedbackPrivateDelegate {
  public:
   TestFeedbackPrivateDelegate() = default;
+
+  TestFeedbackPrivateDelegate(const TestFeedbackPrivateDelegate&) = delete;
+  TestFeedbackPrivateDelegate& operator=(const TestFeedbackPrivateDelegate&) =
+      delete;
+
   ~TestFeedbackPrivateDelegate() override = default;
+
+  // FeedbackPrivateDelegate:
+  base::DictValue GetStrings(content::BrowserContext* context,
+                             bool from_crash) const override {
+    return {};
+  }
+
+  void FetchSystemInformation(
+      content::BrowserContext* context,
+      system_logs::SysLogsFetcherCallback callback) const override {}
 
   std::unique_ptr<system_logs::SystemLogsSource> CreateSingleLogSource(
       api::feedback_private::LogSource source_type) const override {
     return std::make_unique<TestSingleLogSource>(source_type);
   }
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestFeedbackPrivateDelegate);
+  void FetchExtraLogs(scoped_refptr<feedback::FeedbackData> feedback_data,
+                      FetchExtraLogsCallback callback) const override {}
+
+  api::feedback_private::LandingPageType GetLandingPageType(
+      const feedback::FeedbackData& feedback_data) const override {
+    return api::feedback_private::LandingPageType::kNoLandingPage;
+  }
+
+  std::string GetSignedInUserEmail(
+      content::BrowserContext* context) const override {
+    return "";
+  }
+
+  void NotifyFeedbackDelayed() const override {}
+
+  feedback::FeedbackUploader* GetFeedbackUploaderForContext(
+      content::BrowserContext* context) const override {
+    return feedback::FeedbackUploaderFactory::GetForBrowserContext(context);
+  }
+
+  void OpenFeedback(
+      content::BrowserContext* context,
+      api::feedback_private::FeedbackSource source) const override {}
 };
 
-class TestExtensionsAPIClient : public ShellExtensionsAPIClient {
+class TestExtensionsAPIClient : public ExtensionsAPIClient {
  public:
   TestExtensionsAPIClient() = default;
+
+  TestExtensionsAPIClient(const TestExtensionsAPIClient&) = delete;
+  TestExtensionsAPIClient& operator=(const TestExtensionsAPIClient&) = delete;
+
   ~TestExtensionsAPIClient() override = default;
 
-  // ShellExtensionsApiClient implementation:
+  // ExtensionsAPIClient implementation:
   FeedbackPrivateDelegate* GetFeedbackPrivateDelegate() override {
     if (!feedback_private_delegate_) {
       feedback_private_delegate_ =
@@ -116,8 +158,6 @@ class TestExtensionsAPIClient : public ShellExtensionsAPIClient {
 
  private:
   std::unique_ptr<FeedbackPrivateDelegate> feedback_private_delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestExtensionsAPIClient);
 };
 
 }  // namespace

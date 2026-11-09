@@ -1,49 +1,25 @@
 // Protocol Buffers - Google's data interchange format
 // Copyright 2008 Google Inc.  All rights reserved.
-// https://developers.google.com/protocol-buffers/
 //
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file or at
+// https://developers.google.com/open-source/licenses/bsd
 
 package com.google.protobuf.util;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.math.IntMath.checkedAdd;
-import static com.google.common.math.IntMath.checkedSubtract;
-import static com.google.common.math.LongMath.checkedAdd;
-import static com.google.common.math.LongMath.checkedMultiply;
-import static com.google.common.math.LongMath.checkedSubtract;
 import static com.google.protobuf.util.Timestamps.MICROS_PER_SECOND;
 import static com.google.protobuf.util.Timestamps.MILLIS_PER_SECOND;
 import static com.google.protobuf.util.Timestamps.NANOS_PER_MICROSECOND;
 import static com.google.protobuf.util.Timestamps.NANOS_PER_MILLISECOND;
 import static com.google.protobuf.util.Timestamps.NANOS_PER_SECOND;
+import static java.lang.Math.addExact;
+import static java.lang.Math.multiplyExact;
+import static java.lang.Math.subtractExact;
 
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import com.google.errorprone.annotations.CompileTimeConstant;
 import com.google.protobuf.Duration;
+import java.io.Serializable;
 import java.text.ParseException;
 import java.util.Comparator;
 
@@ -72,23 +48,25 @@ public final class Durations {
 
   private Durations() {}
 
-  private static final Comparator<Duration> COMPARATOR =
-      new Comparator<Duration>() {
-        @Override
-        public int compare(Duration d1, Duration d2) {
-          checkValid(d1);
-          checkValid(d2);
-          int secDiff = Long.compare(d1.getSeconds(), d2.getSeconds());
-          return (secDiff != 0) ? secDiff : Integer.compare(d1.getNanos(), d2.getNanos());
-        }
-      };
+  private static enum DurationComparator implements Comparator<Duration>, Serializable {
+    INSTANCE;
+
+    @Override
+    public int compare(Duration d1, Duration d2) {
+      checkValid(d1);
+      checkValid(d2);
+      int secDiff = Long.compare(d1.getSeconds(), d2.getSeconds());
+      return (secDiff != 0) ? secDiff : Integer.compare(d1.getNanos(), d2.getNanos());
+    }
+  }
 
   /**
    * Returns a {@link Comparator} for {@link Duration}s which sorts in increasing chronological
-   * order. Nulls and invalid {@link Duration}s are not allowed (see {@link #isValid}).
+   * order. Nulls and invalid {@link Duration}s are not allowed (see {@link #isValid}). The returned
+   * comparator is serializable.
    */
   public static Comparator<Duration> comparator() {
-    return COMPARATOR;
+    return DurationComparator.INSTANCE;
   }
 
   /**
@@ -99,7 +77,7 @@ public final class Durations {
    *     and a value greater than {@code 0} if {@code x > y}
    */
   public static int compare(Duration x, Duration y) {
-    return COMPARATOR.compare(x, y);
+    return DurationComparator.INSTANCE.compare(x, y);
   }
 
   /**
@@ -146,6 +124,12 @@ public final class Durations {
     return (duration.getSeconds() == 0) ? duration.getNanos() < 0 : duration.getSeconds() < 0;
   }
 
+  /** Returns whether the given {@link Duration} is positive or not. */
+  public static boolean isPositive(Duration duration) {
+    checkValid(duration);
+    return !isNegative(duration) && !duration.equals(ZERO);
+  }
+
   /**
    * Ensures that the given {@link Duration} is not negative.
    *
@@ -154,8 +138,10 @@ public final class Durations {
    */
   @CanIgnoreReturnValue
   public static Duration checkNotNegative(Duration duration) {
-    checkValid(duration);
-    checkArgument(!isNegative(duration), "duration (%s) must not be negative", toString(duration));
+    if (isNegative(duration)) {
+      throw new IllegalArgumentException(
+          "duration (" + toString(duration) + ") must not be negative");
+    }
     return duration;
   }
 
@@ -167,11 +153,9 @@ public final class Durations {
    */
   @CanIgnoreReturnValue
   public static Duration checkPositive(Duration duration) {
-    checkValid(duration);
-    checkArgument(
-        !isNegative(duration) && !duration.equals(ZERO),
-        "duration (%s) must be positive",
-        toString(duration));
+    if (!isPositive(duration)) {
+      throw new IllegalArgumentException("duration (" + toString(duration) + ") must be positive");
+    }
     return duration;
   }
 
@@ -182,12 +166,14 @@ public final class Durations {
     int nanos = duration.getNanos();
     if (!isValid(seconds, nanos)) {
       throw new IllegalArgumentException(
-          String.format(
-              "Duration is not valid. See proto definition for valid values. "
-                  + "Seconds (%s) must be in range [-315,576,000,000, +315,576,000,000]. "
-                  + "Nanos (%s) must be in range [-999,999,999, +999,999,999]. "
-                  + "Nanos must have the same sign as seconds",
-              seconds, nanos));
+          "Duration is not valid. See proto definition for valid values. "
+              + "Seconds ("
+              + seconds
+              + ") must be in range [-315,576,000,000, +315,576,000,000]. "
+              + "Nanos ("
+              + nanos
+              + ") must be in range [-999,999,999, +999,999,999]. "
+              + "Nanos must have the same sign as seconds");
     }
     return duration;
   }
@@ -233,13 +219,13 @@ public final class Durations {
   }
 
   /**
-   * Parse from a string to produce a duration.
+   * Parse a string to produce a duration.
    *
-   * @return A Duration parsed from the string.
-   * @throws ParseException if parsing fails.
+   * @return a Duration parsed from the string
+   * @throws ParseException if the string is not in the duration format
    */
   public static Duration parse(String value) throws ParseException {
-    // Must ended with "s".
+    // Must end with "s".
     if (value.isEmpty() || value.charAt(value.length() - 1) != 's') {
       throw new ParseException("Invalid duration string: " + value, 0);
     }
@@ -255,7 +241,12 @@ public final class Durations {
       nanoValue = secondValue.substring(pointPosition + 1);
       secondValue = secondValue.substring(0, pointPosition);
     }
-    long seconds = Long.parseLong(secondValue);
+    long seconds;
+    try {
+      seconds = Long.parseLong(secondValue);
+    } catch (NumberFormatException e) {
+      throw new ParseException("Invalid duration string: " + value, 0);
+    }
     int nanos = nanoValue.isEmpty() ? 0 : Timestamps.parseNanos(nanoValue);
     if (seconds < 0) {
       throw new ParseException("Invalid duration string: " + value, 0);
@@ -267,7 +258,28 @@ public final class Durations {
     try {
       return normalizedDuration(seconds, nanos);
     } catch (IllegalArgumentException e) {
-      throw new ParseException("Duration value is out of range.", 0);
+      ParseException ex = new ParseException("Duration value is out of range.", 0);
+      ex.initCause(e);
+      throw ex;
+    }
+  }
+
+  /**
+   * Parses a string in RFC 3339 format into a {@link Duration}.
+   *
+   * <p>Identical to {@link #parse(String)}, but throws an {@link IllegalArgumentException} instead
+   * of a {@link ParseException} if parsing fails.
+   *
+   * @return a {@link Duration} parsed from the string
+   * @throws IllegalArgumentException if parsing fails
+   */
+  public static Duration parseUnchecked(@CompileTimeConstant String value) {
+    try {
+      return parse(value);
+    } catch (ParseException e) {
+      // While `java.time.format.DateTimeParseException` is a more accurate representation of the
+      // failure, this library is currently not JDK8 ready because of Android dependencies.
+      throw new IllegalArgumentException(e);
     }
   }
 
@@ -276,28 +288,19 @@ public final class Durations {
   /** Create a Duration from the number of days. */
   @SuppressWarnings("GoodTime") // this is a legacy conversion API
   public static Duration fromDays(long days) {
-    return Duration.newBuilder()
-        .setSeconds(checkedMultiply(days, SECONDS_PER_DAY))
-        .setNanos(0)
-        .build();
+    return Durations.fromSeconds(multiplyExact(days, SECONDS_PER_DAY));
   }
 
   /** Create a Duration from the number of hours. */
   @SuppressWarnings("GoodTime") // this is a legacy conversion API
   public static Duration fromHours(long hours) {
-    return Duration.newBuilder()
-        .setSeconds(checkedMultiply(hours, SECONDS_PER_HOUR))
-        .setNanos(0)
-        .build();
+    return Durations.fromSeconds(multiplyExact(hours, SECONDS_PER_HOUR));
   }
 
   /** Create a Duration from the number of minutes. */
   @SuppressWarnings("GoodTime") // this is a legacy conversion API
   public static Duration fromMinutes(long minutes) {
-    return Duration.newBuilder()
-        .setSeconds(checkedMultiply(minutes, SECONDS_PER_MINUTE))
-        .setNanos(0)
-        .build();
+    return Durations.fromSeconds(multiplyExact(minutes, SECONDS_PER_MINUTE));
   }
 
   /** Create a Duration from the number of seconds. */
@@ -392,8 +395,8 @@ public final class Durations {
   @SuppressWarnings("GoodTime") // this is a legacy conversion API
   public static long toMillis(Duration duration) {
     checkValid(duration);
-    return checkedAdd(
-        checkedMultiply(duration.getSeconds(), MILLIS_PER_SECOND),
+    return addExact(
+        multiplyExact(duration.getSeconds(), (long) MILLIS_PER_SECOND),
         duration.getNanos() / NANOS_PER_MILLISECOND);
   }
 
@@ -404,8 +407,8 @@ public final class Durations {
   @SuppressWarnings("GoodTime") // this is a legacy conversion API
   public static long toMicros(Duration duration) {
     checkValid(duration);
-    return checkedAdd(
-        checkedMultiply(duration.getSeconds(), MICROS_PER_SECOND),
+    return addExact(
+        multiplyExact(duration.getSeconds(), (long) MICROS_PER_SECOND),
         duration.getNanos() / NANOS_PER_MICROSECOND);
   }
 
@@ -413,8 +416,8 @@ public final class Durations {
   @SuppressWarnings("GoodTime") // this is a legacy conversion API
   public static long toNanos(Duration duration) {
     checkValid(duration);
-    return checkedAdd(
-        checkedMultiply(duration.getSeconds(), NANOS_PER_SECOND), duration.getNanos());
+    return addExact(
+        multiplyExact(duration.getSeconds(), (long) NANOS_PER_SECOND), duration.getNanos());
   }
 
   // Math operations
@@ -424,7 +427,7 @@ public final class Durations {
     checkValid(d1);
     checkValid(d2);
     return normalizedDuration(
-        checkedAdd(d1.getSeconds(), d2.getSeconds()), checkedAdd(d1.getNanos(), d2.getNanos()));
+        addExact(d1.getSeconds(), d2.getSeconds()), addExact(d1.getNanos(), d2.getNanos()));
   }
 
   /** Subtract a duration from another. */
@@ -432,13 +435,13 @@ public final class Durations {
     checkValid(d1);
     checkValid(d2);
     return normalizedDuration(
-        checkedSubtract(d1.getSeconds(), d2.getSeconds()),
-        checkedSubtract(d1.getNanos(), d2.getNanos()));
+        subtractExact(d1.getSeconds(), d2.getSeconds()),
+        subtractExact(d1.getNanos(), d2.getNanos()));
   }
 
   static Duration normalizedDuration(long seconds, int nanos) {
     if (nanos <= -NANOS_PER_SECOND || nanos >= NANOS_PER_SECOND) {
-      seconds = checkedAdd(seconds, nanos / NANOS_PER_SECOND);
+      seconds = addExact(seconds, nanos / NANOS_PER_SECOND);
       nanos %= NANOS_PER_SECOND;
     }
     if (seconds > 0 && nanos < 0) {

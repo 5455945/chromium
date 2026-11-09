@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,16 @@
 
 #include <memory>
 #include <queue>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
 #include "components/cast/message_port/message_port.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/openscreen/src/platform/api/task_runner.h"
 #include "third_party/openscreen/src/platform/api/tls_connection.h"
 #include "third_party/openscreen/src/platform/base/ip_address.h"
+#include "third_party/openscreen/src/platform/base/span.h"
 
 using ::testing::_;
 using ::testing::Mock;
@@ -27,21 +29,22 @@ class MockMessagePort : public cast_api_bindings::MessagePort {
  public:
   ~MockMessagePort() override = default;
 
-  MOCK_METHOD1(PostMessage, bool(base::StringPiece));
+  MOCK_METHOD1(PostMessage, bool(std::string_view));
   MOCK_METHOD2(PostMessageWithTransferables,
-               bool(base::StringPiece,
+               bool(std::string_view,
                     std::vector<std::unique_ptr<MessagePort>>));
   MOCK_METHOD1(SetReceiver, void(cast_api_bindings::MessagePort::Receiver*));
   MOCK_METHOD0(Close, void());
   MOCK_CONST_METHOD0(CanPostMessage, bool());
 };
 
-class MockTlsConnectionClient : public openscreen::TlsConnection::Client {
+class MockConnectionClient : public openscreen::Connection::Client {
  public:
-  ~MockTlsConnectionClient() override = default;
+  ~MockConnectionClient() override = default;
 
-  MOCK_METHOD2(OnRead, void(openscreen::TlsConnection*, std::vector<uint8_t>));
-  MOCK_METHOD2(OnError, void(openscreen::TlsConnection*, openscreen::Error));
+  MOCK_METHOD2(OnRead, void(openscreen::Connection*, std::vector<uint8_t>));
+  MOCK_METHOD2(OnError,
+               void(openscreen::Connection*, const openscreen::Error&));
 };
 
 class MockTaskRunner : public openscreen::TaskRunner {
@@ -53,7 +56,7 @@ class MockTaskRunner : public openscreen::TaskRunner {
                void(Task, openscreen::Clock::duration));
   MOCK_METHOD0(IsRunningOnTaskRunner, bool());
 
-  void PostPackagedTask(Task task) {
+  void PostPackagedTask(Task task) override {
     tasks_.push(std::move(task));
     PostTask();
   }
@@ -81,22 +84,22 @@ class MessagePortTlsConnectionTest : public testing::Test {
 
     EXPECT_CALL(*message_port_, SetReceiver(_));
     connection_ = std::make_unique<MessagePortTlsConnection>(
-        std::move(message_port), &task_runner_);
+        std::move(message_port), task_runner_);
     connection_as_receiver_ = connection_.get();
   }
   ~MessagePortTlsConnectionTest() override = default;
 
  protected:
   std::unique_ptr<MessagePortTlsConnection> connection_;
-  cast_api_bindings::MessagePort::Receiver* connection_as_receiver_;
+  raw_ptr<cast_api_bindings::MessagePort::Receiver> connection_as_receiver_;
 
-  MockMessagePort* message_port_;
-  StrictMock<MockTlsConnectionClient> client_;
+  raw_ptr<MockMessagePort> message_port_;
+  StrictMock<MockConnectionClient> client_;
   StrictMock<MockTaskRunner> task_runner_;
 };
 
 TEST_F(MessagePortTlsConnectionTest, OnMessage) {
-  base::StringPiece message = "foo";
+  std::string_view message = "foo";
 
   // No operation done when no client is set.
   connection_as_receiver_->OnMessage(message, {});
@@ -160,11 +163,12 @@ TEST_F(MessagePortTlsConnectionTest, OnPipeError) {
 }
 
 TEST_F(MessagePortTlsConnectionTest, Send) {
-  const base::StringPiece message = "foobar";
+  const std::string_view message = "foobar";
 
   // Set data is always forwarded to the underlying MessagePort's Send().
   EXPECT_CALL(*message_port_, PostMessage(message));
-  connection_->Send(message.data(), message.length());
+  connection_->Send(openscreen::ByteView(
+      reinterpret_cast<const uint8_t*>(message.data()), message.size()));
 }
 
 }  // namespace openscreen_platform

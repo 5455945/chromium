@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,7 +27,7 @@ enum RequestDestination {
   kEmpty = 0,
   kAudio = 1,
   kAudioWorklet = 2,
-  // kDocument is for a main resource request in a main frame, or a Portal.
+  // kDocument is for a main resource request in a main frame.
   kDocument = 3,
   kEmbed = 4,
   kFont = 5,
@@ -44,16 +44,41 @@ enum RequestDestination {
   kStyle = 16,
   kTrack = 17,
   kVideo = 18,
-  // kWebBundle represents a request for a WebBundle. A <link> element whose
-  // rel is "webbundle" uses this destination.
+  // kWebBundle represents a request for a WebBundle. A <script> element whose
+  // type is "webbundle" uses this destination.
   //
-  // e.g. <link rel=webbundle href="example.com/foo.wbn" resources="...">
+  // e.g. <script type=webbundle> { "source": "foo.wbn", ... } </script>
   //
   // Fetch specifiction does not define this destination yet.
   // Tracking issue: https://github.com/whatwg/fetch/issues/1120
   kWebBundle = 19,
   kWorker = 20,
   kXslt = 21,
+  // kFencedframe represents a main resource request in a fenced frame. A
+  // <fencedframe> element uses this destination.
+  //
+  // e.g. <fencedframe src="example.com"></fencedframe>
+  //
+  // Fenced Frame is not standardized yet. See
+  // https://github.com/shivanigithub/fenced-frame for the explainer and
+  // crbug.com/1123606 for the implementation.
+  kFencedframe = 22,
+  // Requests from the federated credential management API,
+  // https://fedidcg.github.io/FedCM/
+  kWebIdentity = 23,
+  // Requests for compression dictionary
+  kCompressionDictionary = 24,
+  // Requests for speculation rules.
+  // https://wicg.github.io/nav-speculation/speculation-rules.html
+  kSpeculationRules = 25,
+  // Requests for JSON modules
+  kJson = 26,
+  // Deprecated. Requests for shared storage worklet.
+  // kSharedStorageWorklet = 27,
+  // Requests for email verification.
+  kEmailVerification = 28,
+  // Requests for text modules.
+  kText = 29,
 };
 
 // Corresponds to Fetch request's "redirect mode":
@@ -67,7 +92,7 @@ enum RedirectMode {
 // Corresponds to Fetch request's "credentials mode":
 // https://fetch.spec.whatwg.org/#concept-request-credentials-mode
 enum CredentialsMode {
-  // TODO(https://crbug.com/775438): Due to a bug, this does not properly
+  // TODO(crbug.com/40089326): Due to a bug, this does not properly
   // correspond to Fetch's "credentials mode", in that client certificates will
   // be sent is available, or the handshake will be aborted in order to allow
   // selecting a client cert. The correct behavior is to omit all client certs
@@ -77,7 +102,7 @@ enum CredentialsMode {
   kSameOrigin,
   kInclude,
 
-  // TODO(https://crbug.com/775438): This works around kOmit not doing the
+  // TODO(crbug.com/40089326): This works around kOmit not doing the
   // spec-defined behavior. This is a temporary workaround that explicitly
   // indicates the caller wants the spec-defined behavior. It's named as such
   // because this should be only temporary, until kOmit is fixed.

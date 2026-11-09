@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,16 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 
+#include "base/values.h"
 #include "net/base/auth.h"
 #include "net/base/net_export.h"
-#include "net/http/http_util.h"
 
 template <class T> class scoped_refptr;
 
-namespace base {
-class Value;
+namespace url {
+class SchemeHostPort;
 }
 
 namespace net {
@@ -26,13 +27,13 @@ class HttpAuthHandlerFactory;
 class HttpResponseHeaders;
 class HostResolver;
 class NetLogWithSource;
-class NetworkIsolationKey;
+class NetworkAnonymizationKey;
 class SSLInfo;
 
 // Utility class for http authentication.
 class NET_EXPORT_PRIVATE HttpAuth {
  public:
-  // Http authentication can be done the the proxy server, origin server,
+  // Http authentication can be done to the proxy server, origin server,
   // or both. This enum tracks who the target is.
   enum Target {
     AUTH_NONE = -1,
@@ -41,6 +42,7 @@ class NET_EXPORT_PRIVATE HttpAuth {
     AUTH_PROXY = 0,
     AUTH_SERVER = 1,
     AUTH_NUM_TARGETS = 2,
+    kMaxValue = AUTH_SERVER,
   };
 
   // What the HTTP WWW-Authenticate/Proxy-Authenticate headers indicate about
@@ -115,8 +117,8 @@ class NET_EXPORT_PRIVATE HttpAuth {
     kNone,
     // Delegate if approved by KDC policy. Implemented in GSSAPI.
     kByKdcPolicy,
-    // Unconstrained delegation. On Windows both kByKdcPolicy and kUnconstraned
-    // check KDC policy.
+    // Unconstrained delegation. On Windows, both kByKdcPolicy and
+    // kUnconstrained will check KDC policy.
     kUnconstrained,
   };
 
@@ -125,36 +127,36 @@ class NET_EXPORT_PRIVATE HttpAuth {
   struct Identity {
     Identity();
 
-    IdentitySource source;
-    bool invalid;
+    IdentitySource source = IDENT_SRC_NONE;
+    bool invalid = true;
     AuthCredentials credentials;
   };
 
   // Get the name of the header containing the auth challenge
   // (either WWW-Authenticate or Proxy-Authenticate).
-  static std::string GetChallengeHeaderName(Target target);
+  static std::string_view GetChallengeHeaderName(Target target);
 
   // Get the name of the header where the credentials go
   // (either Authorization or Proxy-Authorization).
-  static std::string GetAuthorizationHeaderName(Target target);
+  static std::string_view GetAuthorizationHeaderName(Target target);
 
   // Returns a string representation of a Target value that can be used in log
   // messages.
-  static std::string GetAuthTargetString(Target target);
+  static std::string_view GetAuthTargetString(Target target);
 
   // Returns a string representation of an authentication Scheme.
-  static const char* SchemeToString(Scheme scheme);
+  static std::string_view SchemeToString(Scheme scheme);
 
   // Returns an authentication Scheme from a string which was produced by
   // SchemeToString().
   static Scheme StringToScheme(const std::string& str);
 
   // Returns a string representation of an authorization result.
-  static const char* AuthorizationResultToString(
+  static std::string_view AuthorizationResultToString(
       AuthorizationResult authorization_result);
 
   // Returns a value for logging an authorization result to a NetLog.
-  static base::Value NetLogAuthorizationResultParams(
+  static base::DictValue NetLogAuthorizationResultParams(
       const char* name,
       AuthorizationResult authorization_result);
 
@@ -165,8 +167,9 @@ class NET_EXPORT_PRIVATE HttpAuth {
   //
   // |disabled_schemes| is the set of schemes that we should not use.
   //
-  // |origin| is used by the NTLM and Negotiation authentication scheme to
-  // construct the service principal name. It is ignored by other schemes.
+  // |scheme_host_port| is used by the NTLM and Negotiation authentication
+  // scheme to construct the service principal name. It is ignored by other
+  // schemes.
   //
   // |ssl_info| is passed through to the scheme specific authentication handlers
   // to use as appropriate.
@@ -174,9 +177,9 @@ class NET_EXPORT_PRIVATE HttpAuth {
       HttpAuthHandlerFactory* http_auth_handler_factory,
       const HttpResponseHeaders& response_headers,
       const SSLInfo& ssl_info,
-      const NetworkIsolationKey& network_isolation_key,
+      const NetworkAnonymizationKey& network_anonymization_key,
       Target target,
-      const GURL& origin,
+      const url::SchemeHostPort& scheme_host_port,
       const std::set<Scheme>& disabled_schemes,
       const NetLogWithSource& net_log,
       HostResolver* host_resolver,

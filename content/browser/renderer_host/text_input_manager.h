@@ -1,18 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_TEXT_INPUT_MANAGER_H__
 #define CONTENT_BROWSER_RENDERER_HOST_TEXT_INPUT_MANAGER_H__
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 
 #include "base/i18n/rtl.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "content/common/content_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/mojom/page/widget.mojom-forward.h"
 #include "ui/base/ime/mojom/text_input_state.mojom.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/gfx/geometry/rect.h"
@@ -57,9 +60,12 @@ class CONTENT_EXPORT TextInputManager {
         TextInputManager* text_input_manager,
         RenderWidgetHostViewBase* updated_view) {}
     // Called when |updated_view| has changed its CompositionRangeInfo.
+    // |character_bounds_changed| marks whether the current
+    // CompositionRangeInfo::character_bounds should be updated.
     virtual void OnImeCompositionRangeChanged(
         TextInputManager* text_input_manager,
-        RenderWidgetHostViewBase* updated_view) {}
+        RenderWidgetHostViewBase* updated_view,
+        bool character_bounds_changed) {}
     // Called when the text selection for the |updated_view_| has changed.
     virtual void OnTextSelectionChanged(
         TextInputManager* text_input_manager,
@@ -70,6 +76,8 @@ class CONTENT_EXPORT TextInputManager {
   struct SelectionRegion {
     SelectionRegion();
     SelectionRegion(const SelectionRegion& other);
+    SelectionRegion& operator=(const SelectionRegion& other);
+    bool operator==(const SelectionRegion& other) const;
 
     // The begining of the selection region.
     gfx::SelectionBound anchor;
@@ -135,8 +143,17 @@ class CONTENT_EXPORT TextInputManager {
     std::u16string text_;
   };
 
-  explicit TextInputManager(bool should_do_learning);
+  TextInputManager();
+
+  TextInputManager(const TextInputManager&) = delete;
+  TextInputManager& operator=(const TextInputManager&) = delete;
+
   ~TextInputManager();
+
+  // Returns true if `state` describes a password or password-like field: a
+  // native password input, a password input that has been revealed, or a field
+  // heuristically detected as a custom password field.
+  static bool IsPasswordLike(const ui::mojom::TextInputState& state);
 
   // Returns the currently active widget, i.e., the RWH which is associated with
   // |active_view_|.
@@ -159,13 +176,14 @@ class CONTENT_EXPORT TextInputManager {
   gfx::Range GetAutocorrectRange() const;
 
   // Returns the grammar fragment which contains |range|. If non-existent,
-  // returns an empty Fragment.
-  absl::optional<ui::GrammarFragment> GetGrammarFragment(
-      gfx::Range range) const;
+  // returns nullopt.
+  std::optional<ui::GrammarFragment> GetGrammarFragment(gfx::Range range) const;
 
   // Returns the selection bounds information for |view|. If |view| == nullptr,
   // it will return the corresponding information for |active_view_| or nullptr
-  // if there are no active views.
+  // if there are no active views. If |view| has non-empty EditContext selection
+  // bounds, a SelectionRegion constructed from those bounds is returned instead
+  // of the DOM selection.
   const SelectionRegion* GetSelectionRegion(
       RenderWidgetHostViewBase* view = nullptr) const;
 
@@ -173,11 +191,39 @@ class CONTENT_EXPORT TextInputManager {
   // |active_view_|. Returns nullptr If |active_view_| == nullptr.
   const TextInputManager::CompositionRangeInfo* GetCompositionRangeInfo() const;
 
+#if BUILDFLAG(IS_WIN)
+  // `ProximateCharacterRangeBounds` is provided by the renderer and contains a
+  // character offset range and associated character bounding boxes in widget
+  // coordinates for a subset of the actual character bounding boxes. This data
+  // enables StylusHandwritingWin gesture support for renderer content, but is
+  // a compromise since it only contains a limited subset of content for
+  // performance (CPU and memory) reasons, since computing and copying all of
+  // the character bounds from a renderer document may be costly and slow for
+  // large documents.
+  //
+  // For views content, since they exist in the browser process it's possible to
+  // retrieve accurate results without ProximateCharacterRangeBounds.
+  // ProximateCharacterRangeBounds will not be updated for views content, and
+  // shouldn't be relied upon for views use cases as it could be null or stale.
+  // Views that implement `ui::TextInputClient` should instead implement both
+  // `GetProximateCharacterBounds` and `GetProximateCharacterIndexFromPoint` to
+  // query their content directly. For example, `views::Textfield` could collect
+  // character bounds through `gfx::RenderText`, GetRenderText().
+  const blink::mojom::ProximateCharacterRangeBounds*
+  GetProximateCharacterBoundsInfo(const RenderWidgetHostViewBase& view) const;
+#endif  // BUILDFLAG(IS_WIN)
+
   // The following method returns the text selection state for the given |view|.
   // If |view| == nullptr, it will assume |active_view_| and return its state.
   // In the case of |active_view_| == nullptr, the method will return nullptr.
   const TextSelection* GetTextSelection(
       RenderWidgetHostViewBase* view = nullptr) const;
+
+  // Returns the bounds of the text control in the root frame.
+  const std::optional<gfx::Rect> GetTextControlBounds() const;
+
+  // Returns the bounds of the selected text in the root frame.
+  const std::optional<gfx::Rect> GetTextSelectionBounds() const;
 
   // ---------------------------------------------------------------------------
   // The following methods are called by RWHVs on the tab to update their IME-
@@ -186,6 +232,16 @@ class CONTENT_EXPORT TextInputManager {
   // Updates the TextInputState for |view|.
   void UpdateTextInputState(RenderWidgetHostViewBase* view,
                             const ui::mojom::TextInputState& state);
+
+#if BUILDFLAG(IS_WIN)
+  // Takes ownership of `proximate_bounds` so it can be retrieved later by
+  // GetProximateCharacterBoundsInfo(). When populated by the renderer process,
+  // enables StylusHandwritingWin gesture support for renderer content.
+  // If `proximate_bounds` is null, removes `view` from the cache.
+  void UpdateProximateCharacterBounds(
+      RenderWidgetHostViewBase& view,
+      blink::mojom::ProximateCharacterRangeBoundsPtr proximate_bounds);
+#endif  // BUILDFLAG(IS_WIN)
 
   // The current IME composition has been cancelled on the renderer side for
   // the widget corresponding to |view|.
@@ -210,7 +266,7 @@ class CONTENT_EXPORT TextInputManager {
   void ImeCompositionRangeChanged(
       RenderWidgetHostViewBase* view,
       const gfx::Range& range,
-      const std::vector<gfx::Rect>& character_bounds);
+      const std::optional<std::vector<gfx::Rect>>& character_bounds);
 
   // Updates the new text selection information for the |view|.
   void SelectionChanged(RenderWidgetHostViewBase* view,
@@ -229,8 +285,18 @@ class CONTENT_EXPORT TextInputManager {
   // should be reset to none.
   void Unregister(RenderWidgetHostViewBase* view);
 
+  // Called when |view|'s document enters the back-forward cache. If |view| is
+  // the currently active view, the active view is cleared while the view
+  // remains registered, so its cached state can be reused on restore.
+  void DidEnterBackForwardCache(RenderWidgetHostViewBase* view);
+
   // Returns true if |view| is already registered.
   bool IsRegistered(RenderWidgetHostViewBase* view) const;
+
+  // Returns true if |view| is currently the focused view. For popup widgets,
+  // popups do not hold frame focus directly, so this check is performed
+  // against the focus state of the frame that created the popup.
+  bool IsViewFocused(RenderWidgetHostViewBase* view) const;
 
   // Add and remove observers for notifications regarding updates in the
   // TextInputState. Clients must be sure to remove themselves before they go
@@ -248,9 +314,24 @@ class CONTENT_EXPORT TextInputManager {
       RenderWidgetHostViewBase* view);
   const gfx::Range* GetCompositionRangeForTesting() const;
 
-  bool should_do_learning() const { return should_do_learning_; }
-
  private:
+  struct ViewState {
+    ViewState();
+    ViewState(const ViewState&) = delete;
+    ViewState& operator=(const ViewState&) = delete;
+    ~ViewState();
+
+    ui::mojom::TextInputStatePtr text_input_state =
+        ui::mojom::TextInputState::New();
+    SelectionRegion selection_region;
+    std::optional<SelectionRegion> edit_context_selection_region;
+    CompositionRangeInfo composition_range_info;
+    TextSelection text_selection;
+#if BUILDFLAG(IS_WIN)
+    blink::mojom::ProximateCharacterRangeBoundsPtr proximate_character_bounds;
+#endif  // BUILDFLAG(IS_WIN)
+  };
+
   // This class is used to create maps which hold specific IME state for a
   // view.
   template <class Value>
@@ -263,23 +344,18 @@ class CONTENT_EXPORT TextInputManager {
   // The view with active text input state, i.e., a focused <input> element.
   // It will be nullptr if no such view exists. Note that the active view
   // cannot have a |TextInputState.type| of ui::TEXT_INPUT_TYPE_NONE.
-  RenderWidgetHostViewBase* active_view_;
+  raw_ptr<RenderWidgetHostViewBase> active_view_;
 
-  // The following maps track corresponding IME state for views. For each view,
-  // the values in the map are initialized and cleared in Register and
-  // Unregister methods, respectively.
-  ViewMap<ui::mojom::TextInputStatePtr> text_input_state_map_;
-  ViewMap<SelectionRegion> selection_region_map_;
-  ViewMap<CompositionRangeInfo> composition_range_info_map_;
-  ViewMap<TextSelection> text_selection_map_;
+  // Tracks IME state for registered views. For each view, the entry in the map
+  // is initialized and cleared in Register and Unregister methods,
+  // respectively.
+  ViewMap<ViewState> view_map_;
 
-  // Whether the text input should be used to improve typing suggestions for the
-  // user.
-  bool should_do_learning_;
+  // TextInputManager::Observer reentrantly issues further notifications upon
+  // `OnUpdateTextInputStateCalled()` (e.g. `SelectionBoundsChange()`).
+  base::ReentrantObserverList<Observer>::Unchecked observer_list_;
 
-  base::ObserverList<Observer>::Unchecked observer_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(TextInputManager);
+  base::WeakPtrFactory<TextInputManager> weak_ptr_factory_{this};
 };
 }
 

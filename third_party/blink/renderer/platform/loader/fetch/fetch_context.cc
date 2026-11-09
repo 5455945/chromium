@@ -49,18 +49,17 @@ void FetchContext::PrepareRequest(ResourceRequest&,
                                   WebScopedVirtualTimePauser&,
                                   ResourceType) {}
 
-void FetchContext::AddResourceTiming(const ResourceTimingInfo&) {}
+void FetchContext::AddResourceTiming(mojom::blink::ResourceTimingInfoPtr,
+                                     const AtomicString&) {}
 
-void FetchContext::PopulateResourceRequest(
+void FetchContext::UpgradeResourceRequestForLoader(
     ResourceType,
-    const ClientHintsPreferences&,
-    const FetchParameters::ResourceWidth&,
+    const std::optional<float> resource_width,
     ResourceRequest&,
     const ResourceLoaderOptions&) {}
 
-mojo::PendingReceiver<mojom::blink::WorkerTimingContainer>
-FetchContext::TakePendingWorkerTimingReceiver(int request_id) {
-  return mojo::NullReceiver();
+bool FetchContext::StartSpeculativeImageDecode(Resource* resource) {
+  return false;
 }
 
 }  // namespace blink

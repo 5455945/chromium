@@ -49,6 +49,10 @@ svg:not(:root), symbol, image, marker, pattern, foreignObject {
     overflow: hidden
 }
 
+svg:not(:root) {
+  overflow-clip-margin: content-box;
+}
+
 svg:root {
     width: 100%;
     height: 100%;
@@ -91,7 +95,7 @@ tspan, textPath {
 */
 @media ua-forced-colors {
   svg {
-      forced-color-adjust: none;
+      forced-color-adjust: preserve-parent-color;
   }
 
   foreignObject {

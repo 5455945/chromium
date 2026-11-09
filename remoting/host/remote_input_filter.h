@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,28 @@
 #include <list>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
-#include "remoting/protocol/input_event_tracker.h"
+#include "remoting/protocol/input_filter.h"
 #include "remoting/protocol/input_stub.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 #include "ui/events/event.h"
 
 namespace remoting {
 
 // Filtering InputStub that filters remotely-injected input if it has been
 // notified of local input recently.
-class RemoteInputFilter : public protocol::InputStub {
+class RemoteInputFilter : public protocol::InputFilter {
  public:
-  // Creates a filter forwarding events to the specified InputEventTracker.
-  // The filter needs a tracker to release buttons & keys when blocking input.
-  explicit RemoteInputFilter(protocol::InputEventTracker* event_tracker);
+  // Creates a filter which forwards events to `input_stub`.
+  // `release_all_keys`: A callback to release all currently pressed keys, mouse
+  // buttons, and touch points. The callback will never be called after `this`
+  // is destroyed.
+  RemoteInputFilter(InputStub* input_stub, base::RepeatingClosure release_all);
+
+  RemoteInputFilter(const RemoteInputFilter&) = delete;
+  RemoteInputFilter& operator=(const RemoteInputFilter&) = delete;
+
   ~RemoteInputFilter() override;
 
   // Informs the filter that local mouse or touch activity has been detected.
@@ -50,7 +57,7 @@ class RemoteInputFilter : public protocol::InputStub {
   bool ShouldIgnoreInput() const;
   void LocalInputDetected();
 
-  protocol::InputEventTracker* event_tracker_;
+  base::RepeatingClosure release_all_;
 
   // Queue of recently-injected mouse positions and keypresses used to
   // distinguish echoes of injected events from movements from a local
@@ -63,8 +70,6 @@ class RemoteInputFilter : public protocol::InputStub {
 
   // If |true| than the filter assumes that injecting input causes an echo.
   bool expect_local_echo_;
-
-  DISALLOW_COPY_AND_ASSIGN(RemoteInputFilter);
 };
 
 }  // namespace remoting

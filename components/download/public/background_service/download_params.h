@@ -1,23 +1,37 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE_DOWNLOAD_PARAMS_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE_DOWNLOAD_PARAMS_H_
 
-#include "base/callback.h"
+#include <map>
+#include <optional>
+#include <string>
+
+#include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "components/download/public/background_service/clients.h"
+#include "net/base/isolation_info.h"
 #include "net/http/http_request_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "url/gurl.h"
+#include "url/origin.h"
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
 
 namespace download {
 
 // The parameters describing when to run a download.  This allows the caller to
 // specify restrictions on what impact this download will have on the device
-// (battery, network conditions, priority, etc.).
-struct SchedulingParams {
+// (battery, network conditions, priority, etc.). On iOS, the network and
+// battery requirements are mapped to NSURLSessionConfiguration.discretionary.
+struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
+    SchedulingParams {
  public:
   enum class NetworkRequirements {
     // The download can occur under all network conditions.
@@ -81,7 +95,7 @@ struct SchedulingParams {
   bool operator==(const SchedulingParams& rhs) const;
 
   // Cancel the download after this time.  Will cancel in-progress downloads.
-  // base::Time::Max() if not specified.
+  // base::Time::Max() if not specified. Not supported on iOS.
   base::Time cancel_time;
 
   // The suggested priority.  Non-UI priorities may not be honored by the
@@ -92,11 +106,15 @@ struct SchedulingParams {
 };
 
 // The parameters describing how to build the request when starting a download.
-struct RequestParams {
+struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
+    RequestParams {
  public:
   RequestParams();
   RequestParams(const RequestParams& other);
-  ~RequestParams() = default;
+  RequestParams& operator=(const RequestParams& other);
+  RequestParams(RequestParams&& other);
+  RequestParams& operator=(RequestParams&& other);
+  ~RequestParams();
 
   GURL url;
 
@@ -105,17 +123,50 @@ struct RequestParams {
   net::HttpRequestHeaders request_headers;
 
   // If the request will fetch HTTP error response body and treat them as
-  // a successful download.
+  // a successful download. Not supported on iOS.
   bool fetch_error_body;
 
   // Whether the download is not trustworthy and requires safe browsing checks.
+  // Not supported on iOS.
   bool require_safety_checks;
+
+  // The credentials mode of the request. Not supported on iOS.
+  ::network::mojom::CredentialsMode credentials_mode;
+
+  // The fetch request mode of the request. Not supported on iOS.
+  ::network::mojom::RequestMode fetch_request_mode =
+      ::network::mojom::RequestMode::kNavigate;
+
+  // The isolation info of the request, this won't be persisted to db and will
+  // be invalidate during download resumption in new browser session. Not
+  // supported on iOS.
+  std::optional<net::IsolationInfo> isolation_info;
+
+  // First-party URL redirect policy: During server redirects, whether the
+  // first-party URL for cookies will need to be changed. Download is normally
+  // considered a main frame navigation. However, this is not true for
+  // background fetch.
+  bool update_first_party_url_on_redirect = true;
+
+  // The origin that initiated the request. This is used to perform
+  // security checks. Normally, these checks aren't required for downloads,
+  // but necessary for background fetch.
+  // See |request_initiator| in url_request.mojom for a more detailed
+  // explanation.
+  std::optional<url::Origin> initiator;
+
+  // The custom URLLoaderFactory to use for the request. If null, a default
+  // URLLoaderFactory will be used.
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
 };
 
 // The parameters that describe a download request made to the DownloadService.
 // The |client| needs to be properly created and registered for this service for
 // the download to be accepted.
-struct DownloadParams {
+struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
+    DownloadParams {
+  using CustomData = std::map<std::string, std::string>;
+
   enum StartResult {
     // The download is accepted and persisted.
     ACCEPTED,
@@ -154,12 +205,18 @@ struct DownloadParams {
   // The feature that is requesting this download.
   DownloadClient client;
 
-  // A unique GUID that represents this download.  See |base::GenerateGUID()|.
+  // A unique GUID that represents this download.  See
+  // `base::Uuid::GenerateRandomV4().AsLowercaseString()`.
   std::string guid;
 
   // A callback that will be notified if this download has been accepted and
   // persisted by the DownloadService.
   StartCallback callback;
+
+  // Custom key value pair to store custom data for various purposes. Has a 1024
+  // bytes size limit for each key or value. Will be sent back to clients when
+  // download is completed or failed. Not supported on iOS.
+  CustomData custom_data;
 
   // The parameters that determine under what device conditions this download
   // will occur.

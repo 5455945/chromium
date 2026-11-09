@@ -5,10 +5,11 @@
 <translation id="1408730541890277710">使用 Alt 屬性文字取代圖片</translation>
 <translation id="145360476452865422">動畫政策：</translation>
 <translation id="1555130319947370107">藍色</translation>
-<translation id="1588438908519853928">一般</translation>
+<translation id="1588438908519853928">正常</translation>
 <translation id="1591070050619849194">停用所有圖像動畫。</translation>
 <translation id="1703735871906654364">鍵盤瀏覽</translation>
 <translation id="1791496371305830581">允許全部動態圖像。</translation>
+<translation id="1974060860693918893">進階選項</translation>
 <translation id="1996252509865389616">要啟用嗎？</translation>
 <translation id="2079545284768500474">復原</translation>
 <translation id="2179565792157161713">在新分頁中開啟詳細說明</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">圖片轉 Alt 屬性文字檢視器</translation>
 <translation id="381767806621926835">在任何包含「longdesc」或「aria-describedat」屬性的元素上按一下滑鼠右鍵，即可查看其詳細說明。</translation>
 <translation id="4023902424053835668">使用方向鍵瀏覽網頁文字。</translation>
+<translation id="4384008284958619421">新型螢幕閱讀器和 Google Chrome 現在原生支援無障礙元素描述和 ARIA 標準。</translation>
 <translation id="4388820049312272371">透過閃爍以突顯游標位置。</translation>
 <translation id="4394049700291259645">停用</translation>
 <translation id="4769065380738716500">Alt 屬性文字已取代圖片。</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">顏色強化工具</translation>
 <translation id="633394792577263429">按住 &lt;span class='key'&gt;Control&lt;/span&gt; 鍵即可逐字移動。</translation>
 <translation id="6550675742724504774">選項</translation>
+<translation id="6699630355767768222">第 3 步：覆寫顏色軸以進行校正。</translation>
 <translation id="6838518108677880446">設定：</translation>
 <translation id="690628312087070417">當插入符號大幅度跳動：</translation>
 <translation id="6965382102122355670">確定</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">取消</translation>
 <translation id="786423340267544509">為包含「longdesc」或「aria-describedat」屬性的元素加上框線。</translation>
 <translation id="7942349550061667556">紅色</translation>
+<translation id="8081200409424070383">「詳細描述」將於 2026 年 11 月 20 日淘汰。</translation>
 <translation id="8260673944985561857">「鍵盤瀏覽」選項</translation>
 <translation id="8321034316479930120">動畫政策</translation>
 <translation id="8480209185614411573">高對比</translation>
 <translation id="8609925175482059018">按下 &lt;span class='key'&gt;F7&lt;/span&gt; 即可開啟鍵盤瀏覽，再按一次即可關閉。</translation>
+<translation id="8798099450830957504">預設</translation>
 <translation id="894241283505723656">操作選單中新增詳細說明選項</translation>
 </translationbundle>

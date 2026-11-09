@@ -1,51 +1,61 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 
+#include <memory>
+
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
-#if defined(OS_ANDROID)
-#include "chrome/browser/profiles/profile_android.h"
-#endif
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_io_data.h"
-#if defined(OS_ANDROID)
-#include "chrome/browser/ui/android/omnibox/jni_headers/ChromeAutocompleteSchemeClassifier_jni.h"
-#endif
+#include "components/custom_handlers/protocol_handler_registry.h"
 #include "content/public/common/url_constants.h"
 #include "url/url_util.h"
 
-#if defined(OS_ANDROID)
-static jlong
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/web_applications/app_service/publisher_helper.h"
+#include "chromeos/constants/chromeos_features.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+// Must come after other includes, because FromJniType() uses Profile.
+#include "chrome/browser/ui/android/omnibox/jni_headers/ChromeAutocompleteSchemeClassifier_jni.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+static jni_zero::JniUniquePtr<AutocompleteSchemeClassifier>
 JNI_ChromeAutocompleteSchemeClassifier_CreateAutocompleteClassifier(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jprofile) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(jprofile);
-  DCHECK(profile);
+    Profile* profile) {
+  CHECK(profile, base::NotFatalUntil::M161);
 
-  return reinterpret_cast<intptr_t>(
-      new ChromeAutocompleteSchemeClassifier(profile));
+  return jni_zero::MakeUnique(std::unique_ptr<AutocompleteSchemeClassifier>(
+      std::make_unique<ChromeAutocompleteSchemeClassifier>(profile)));
 }
+#endif
 
-static void JNI_ChromeAutocompleteSchemeClassifier_DeleteAutocompleteClassifier(
-    JNIEnv* env,
-    jlong chrome_autocomplete_scheme_classifier) {
-  delete reinterpret_cast<ChromeAutocompleteSchemeClassifier*>(
-      chrome_autocomplete_scheme_classifier);
+#if BUILDFLAG(IS_CHROMEOS)
+namespace {
+bool IsCustomSchemeHandledByWebApp(Profile* profile,
+                                   const std::string& scheme) {
+  return !web_app::GetWebAppIdsForProtocolUrl(
+              profile, GURL(scheme + url::kStandardSchemeSeparator))
+              .empty();
 }
+}  // namespace
 #endif
 
 ChromeAutocompleteSchemeClassifier::ChromeAutocompleteSchemeClassifier(
     Profile* profile)
-    : profile_(profile) {
-}
+    : profile_(profile) {}
 
-ChromeAutocompleteSchemeClassifier::~ChromeAutocompleteSchemeClassifier() {
-}
+ChromeAutocompleteSchemeClassifier::~ChromeAutocompleteSchemeClassifier() =
+    default;
 
 metrics::OmniboxInputType
 ChromeAutocompleteSchemeClassifier::GetInputTypeForScheme(
@@ -55,16 +65,17 @@ ChromeAutocompleteSchemeClassifier::GetInputTypeForScheme(
   }
   if (base::IsStringASCII(scheme) &&
       (ProfileIOData::IsHandledProtocol(scheme) ||
-       base::LowerCaseEqualsASCII(scheme, content::kViewSourceScheme) ||
-       base::LowerCaseEqualsASCII(scheme, url::kJavaScriptScheme) ||
-       base::LowerCaseEqualsASCII(scheme, url::kDataScheme))) {
+       base::EqualsCaseInsensitiveASCII(scheme, content::kViewSourceScheme) ||
+       base::EqualsCaseInsensitiveASCII(scheme, url::kJavaScriptScheme) ||
+       base::EqualsCaseInsensitiveASCII(scheme, url::kDataScheme))) {
     return metrics::OmniboxInputType::URL;
   }
 
   // Also check for schemes registered via registerProtocolHandler(), which
   // can be handled by web pages/apps.
-  ProtocolHandlerRegistry* registry = profile_ ?
-      ProtocolHandlerRegistryFactory::GetForBrowserContext(profile_) : NULL;
+  custom_handlers::ProtocolHandlerRegistry* registry =
+      profile_ ? ProtocolHandlerRegistryFactory::GetForBrowserContext(profile_)
+               : nullptr;
   if (registry && registry->IsHandledProtocol(scheme))
     return metrics::OmniboxInputType::URL;
 
@@ -87,22 +98,29 @@ ChromeAutocompleteSchemeClassifier::GetInputTypeForScheme(
       return metrics::OmniboxInputType::QUERY;
 
     case ExternalProtocolHandler::UNKNOWN: {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-      // Linux impl of GetApplicationNameForProtocol doesn't distinguish
+#if BUILDFLAG(IS_LINUX)
+      // Linux impl of GetApplicationNameForScheme doesn't distinguish
       // between URL schemes with handers and those without. This will
       // make the default behaviour be search on Linux.
       return metrics::OmniboxInputType::EMPTY;
+#elif BUILDFLAG(IS_CHROMEOS)
+      return IsCustomSchemeHandledByWebApp(profile_, scheme)
+                 ? metrics::OmniboxInputType::URL
+                 : metrics::OmniboxInputType::EMPTY;
 #else
       // If block state is unknown, check if there is an application registered
       // for the url scheme.
       GURL url(scheme + "://");
       std::u16string application_name =
-          shell_integration::GetApplicationNameForProtocol(url);
+          shell_integration::GetApplicationNameForScheme(url);
       return application_name.empty() ? metrics::OmniboxInputType::EMPTY
                                       : metrics::OmniboxInputType::URL;
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     }
   }
   NOTREACHED();
-  return metrics::OmniboxInputType::EMPTY;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(ChromeAutocompleteSchemeClassifier)
+#endif

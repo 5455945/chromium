@@ -1,18 +1,17 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_POLICY_BROWSER_DM_TOKEN_STORAGE_ANDROID_H_
 #define CHROME_BROWSER_POLICY_BROWSER_DM_TOKEN_STORAGE_ANDROID_H_
 
-#include "components/enterprise/browser/controller/browser_dm_token_storage.h"
-
 #include <string>
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 
 namespace policy {
 
@@ -34,8 +33,11 @@ class BrowserDMTokenStorageAndroid : public BrowserDMTokenStorage::Delegate {
   std::string InitEnrollmentToken() override;
   std::string InitDMToken() override;
   bool InitEnrollmentErrorOption() override;
+  bool CanInitEnrollmentToken() const override;
   BrowserDMTokenStorage::StoreTask SaveDMTokenTask(
       const std::string& token,
+      const std::string& client_id) override;
+  BrowserDMTokenStorage::StoreTask DeleteDMTokenTask(
       const std::string& client_id) override;
   scoped_refptr<base::TaskRunner> SaveDMTokenTaskRunner() override;
 

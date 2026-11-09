@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
+#include <optional>
+
 #include "media/base/media_export.h"
 #include "media/formats/mpeg/mpeg_audio_stream_parser_base.h"
 
@@ -15,23 +16,21 @@ namespace media {
 
 class MEDIA_EXPORT ADTSStreamParser : public MPEGAudioStreamParserBase {
  public:
+  using Header = MPEGAudioStreamParserBase::Header;
+
+  static std::optional<Header> ParseHeader(base::span<const uint8_t> data);
+
   ADTSStreamParser();
+
+  ADTSStreamParser(const ADTSStreamParser&) = delete;
+  ADTSStreamParser& operator=(const ADTSStreamParser&) = delete;
+
   ~ADTSStreamParser() override;
 
-  // MPEGAudioStreamParserBase overrides.
-  int ParseFrameHeader(const uint8_t* data,
-                       int size,
-                       int* frame_size,
-                       int* sample_rate,
-                       ChannelLayout* channel_layout,
-                       int* sample_count,
-                       bool* metadata_frame,
-                       std::vector<uint8_t>* extra_data) override;
-
  private:
-  size_t adts_parse_error_limit_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(ADTSStreamParser);
+  // MPEGAudioStreamParserBase overrides.
+  Header FfiHeaderToHeader(
+      const formats::mpeg::MpegAudioHeaderInfo& ffi_header) const override;
 };
 
 }  // namespace media

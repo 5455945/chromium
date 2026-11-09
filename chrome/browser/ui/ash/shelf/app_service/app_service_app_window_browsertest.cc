@@ -1,14 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/strings/stringprintf.h"
@@ -16,41 +20,45 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
+#include "chrome/browser/ash/borealis/borealis_service_factory.h"
 #include "chrome/browser/ash/borealis/borealis_window_manager.h"
 #include "chrome/browser/ash/borealis/borealis_window_manager_mock.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
+#include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
-#include "chrome/browser/web_applications/components/web_application_info.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/session/arc_bridge_service.h"
-#include "components/arc/test/arc_util_test_support.h"
-#include "components/arc/test/fake_app_instance.h"
+#include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
+#include "components/app_constants/constants.h"
 #include "components/exo/shell_surface_util.h"
+#include "components/services/app_service/public/cpp/app_instance_waiter.h"
 #include "components/services/app_service/public/cpp/instance.h"
 #include "components/services/app_service/public/cpp/instance_registry.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/app_window/app_window.h"
-#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/display.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/views/widget/widget.h"
-
-using extensions::AppWindow;
-using extensions::Extension;
 
 namespace mojo {
 
@@ -69,13 +77,17 @@ namespace {
 
 constexpr char kTestAppName[] = "Test ARC App";
 constexpr char kTestAppName2[] = "Test ARC App 2";
+constexpr char kTestPaymentAppName[] = "Test ARC Payment App";
 constexpr char kTestAppPackage[] = "test.arc.app.package";
 constexpr char kTestAppActivity[] = "test.arc.app.package.activity";
 constexpr char kTestAppActivity2[] = "test.arc.gitapp.package.activity2";
+constexpr char kTestPaymentAppPackage[] = "org.chromium.arc.payment_app";
+constexpr char kTestPaymentAppActivity[] =
+    "org.chromium.arc.payment_app.InvokePaymentAppActivity";
 
 ash::ShelfAction SelectItem(
     const ash::ShelfID& id,
-    ui::EventType event_type = ui::ET_MOUSE_PRESSED,
+    ui::EventType event_type = ui::EventType::kMousePressed,
     int64_t display_id = display::kInvalidDisplayId,
     ash::ShelfLaunchSource source = ash::LAUNCH_FROM_UNKNOWN) {
   return SelectShelfItem(id, event_type, display_id, source);
@@ -89,9 +101,14 @@ std::string GetTestApp2Id(const std::string& package_name) {
   return ArcAppListPrefs::GetAppId(package_name, kTestAppActivity2);
 }
 
+std::string GetTestPaymentAppId(const std::string& package_name) {
+  return ArcAppListPrefs::GetAppId(package_name, kTestPaymentAppActivity);
+}
+
 std::vector<arc::mojom::AppInfoPtr> GetTestAppsList(
     const std::string& package_name,
-    bool multi_app) {
+    bool multi_app,
+    bool payment_app) {
   std::vector<arc::mojom::AppInfoPtr> apps;
 
   arc::mojom::AppInfoPtr app(arc::mojom::AppInfo::New());
@@ -106,6 +123,15 @@ std::vector<arc::mojom::AppInfoPtr> GetTestAppsList(
     app->name = kTestAppName2;
     app->package_name = package_name;
     app->activity = kTestAppActivity2;
+    app->sticky = false;
+    apps.push_back(std::move(app));
+  }
+
+  if (payment_app) {
+    app = arc::mojom::AppInfo::New();
+    app->name = kTestPaymentAppName;
+    app->package_name = package_name;
+    app->activity = kTestPaymentAppActivity;
     app->sticky = false;
     apps.push_back(std::move(app));
   }
@@ -125,7 +151,9 @@ std::string CreateIntentUriWithShelfGroupAndLogicalWindow(
 // Creates an exo app window and sets its shell application id. The returned
 // Widget is owned by its NativeWidget (the underlying aura::Window).
 views::Widget* CreateExoWindow(const std::string& window_app_id) {
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(5, 5, 20, 20);
   params.context = ash::Shell::GetPrimaryRootWindow();
   views::Widget* widget = new views::Widget();
@@ -167,51 +195,56 @@ class AppServiceAppWindowBrowserTest
   }
 
   apps::InstanceState GetAppInstanceState(const std::string& app_id,
-                                          aura::Window* window) {
-    auto instance_state = apps::InstanceState::kUnknown;
-    app_service_proxy_->InstanceRegistry().ForOneInstance(
-        apps::Instance::InstanceKey(window),
-        [&app_id, &instance_state](const apps::InstanceUpdate& inner) {
-          if (inner.AppId() == app_id) {
-            instance_state = inner.State();
+                                          const aura::Window* window) {
+    std::set<apps::InstanceState> states;
+    app_service_proxy_->InstanceRegistry().ForInstancesWithWindow(
+        window, [&](const apps::InstanceUpdate& update) {
+          if (update.AppId() == app_id) {
+            states.insert(update.State());
           }
         });
-    return instance_state;
+    if (states.size() == 1) {
+      return *states.begin();
+    }
+    return apps::InstanceState::kUnknown;
   }
 
-  ChromeShelfController* controller_ = nullptr;
-  apps::AppServiceProxyChromeOs* app_service_proxy_ = nullptr;
+  raw_ptr<ChromeShelfController, DanglingUntriaged> controller_ = nullptr;
+  raw_ptr<apps::AppServiceProxy, DanglingUntriaged> app_service_proxy_ =
+      nullptr;
 };
 
 // Test that we have the correct instance for Chrome apps.
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest, ExtensionAppsWindow) {
   const extensions::Extension* app =
       LoadAndLaunchPlatformApp("launch", "Launched");
-  extensions::AppWindow* window = CreateAppWindow(profile(), app);
-  ASSERT_TRUE(window);
+  extensions::AppWindow* app_window = CreateAppWindow(profile(), app);
+  ASSERT_TRUE(app_window);
 
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app->id());
-  EXPECT_EQ(1u, windows.size());
+  auto instances =
+      app_service_proxy_->InstanceRegistry().GetInstances(app->id());
+  EXPECT_EQ(1u, instances.size());
+  auto* window = (*instances.begin())->Window();
 
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app->id(), *windows.begin()));
+            GetAppInstanceState(app->id(), window));
 
   const ash::ShelfItem& item = GetLastShelfItem();
   // Since it is already active, clicking it should minimize.
   SelectItem(item.id);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
-            GetAppInstanceState(app->id(), *windows.begin()));
+            GetAppInstanceState(app->id(), window));
 
   // Click the item again to activate the app.
   SelectItem(item.id);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app->id(), *windows.begin()));
+            GetAppInstanceState(app->id(), window));
 
-  CloseAppWindow(window);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app->id());
-  EXPECT_EQ(0u, windows.size());
+  CloseAppWindow(app_window);
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app->id());
+  EXPECT_TRUE(instances.empty());
 }
 
 // Test that we have the correct instances with more than one window.
@@ -220,18 +253,20 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest, MultipleWindows) {
       LoadAndLaunchPlatformApp("launch", "Launched");
   extensions::AppWindow* app_window1 = CreateAppWindow(profile(), app);
 
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app->id());
-  auto* window1 = *windows.begin();
+  auto instances =
+      app_service_proxy_->InstanceRegistry().GetInstances(app->id());
+  auto* window1 = (*instances.begin())->Window();
 
   // Add a second window; confirm the shelf item stays; check the app menu.
   extensions::AppWindow* app_window2 = CreateAppWindow(profile(), app);
 
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app->id());
-  EXPECT_EQ(2u, windows.size());
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app->id());
+  EXPECT_EQ(2u, instances.size());
   aura::Window* window2 = nullptr;
-  for (auto* window : windows) {
-    if (window != window1)
-      window2 = window;
+  for (const apps::Instance* instance : instances) {
+    if (instance->Window() != window1) {
+      window2 = instance->Window();
+    }
   }
 
   // The window1 is inactive.
@@ -246,8 +281,8 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest, MultipleWindows) {
 
   // Close the second window; confirm the shelf item stays; check the app menu.
   CloseAppWindow(app_window2);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app->id());
-  EXPECT_EQ(1u, windows.size());
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app->id());
+  EXPECT_EQ(1u, instances.size());
 
   // The window1 is active again.
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
@@ -256,25 +291,30 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest, MultipleWindows) {
 
   // Close the first window; the shelf item should be removed.
   CloseAppWindow(app_window1);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app->id());
-  EXPECT_EQ(0u, windows.size());
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app->id());
+  EXPECT_TRUE(instances.empty());
 }
 
 // Test that we have the correct instances with one HostedApp and one window.
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest,
                        HostedAppandExtensionApp) {
   const extensions::Extension* extension1 = InstallHostedApp();
+  // Allowlist the deprecated hosted app so it can still be launched for the
+  // test.
+  apps::chrome_app_deprecation::ScopedAddAppToAllowlistForTesting allowlist(
+      extension1->id());
   LaunchHostedApp(extension1);
 
   std::string app_id1 = extension1->id();
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id1);
-  EXPECT_EQ(1u, windows.size());
-  auto* window1 = *windows.begin();
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id1);
+  EXPECT_EQ(1u, instances.size());
+  auto* instance1 = (*instances.begin()).get();
+  EXPECT_NE(instance1->Window(), instance1->Window()->GetToplevelWindow());
 
   // The window1 is active.
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible | apps::InstanceState::kActive,
-            GetAppInstanceState(app_id1, window1));
+            GetAppInstanceState(app_id1, instance1->Window()));
 
   // Add an Extension app.
   const extensions::Extension* extension2 =
@@ -282,82 +322,48 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest,
   auto* app_window = CreateAppWindow(profile(), extension2);
 
   std::string app_id2 = extension2->id();
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id2);
-  EXPECT_EQ(1u, windows.size());
-  auto* window2 = *windows.begin();
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id2);
+  EXPECT_EQ(1u, instances.size());
+  auto* instance2 = (*instances.begin()).get();
+  EXPECT_EQ(instance2->Window(), instance2->Window()->GetToplevelWindow());
 
   // The window1 is inactive.
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id1, window1));
+            GetAppInstanceState(app_id1, instance1->Window()));
 
   // The window2 is active.
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible | apps::InstanceState::kActive,
-            GetAppInstanceState(app_id2, window2));
+            GetAppInstanceState(app_id2, instance2->Window()));
 
   // Close the Extension app's window..
   CloseAppWindow(app_window);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id2);
-  EXPECT_EQ(0u, windows.size());
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id2);
+  EXPECT_TRUE(instances.empty());
 
   // The window1 is active.
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible | apps::InstanceState::kActive,
-            GetAppInstanceState(app_id1, window1));
+            GetAppInstanceState(app_id1, instance1->Window()));
 
   // Close the HostedApp.
   TabStripModel* tab_strip = browser()->tab_strip_model();
   tab_strip->CloseWebContentsAt(tab_strip->active_index(),
-                                TabStripModel::CLOSE_NONE);
+                                TabCloseTypes::CLOSE_NONE);
 
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id1);
-  EXPECT_EQ(0u, windows.size());
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id1);
+  EXPECT_TRUE(instances.empty());
 }
 
-class AppServiceAppWindowLacrosBrowserTest
-    : public AppServiceAppWindowBrowserTest {
- public:
-  AppServiceAppWindowLacrosBrowserTest() {
-    feature_list_.InitAndEnableFeature(chromeos::features::kLacrosSupport);
-  }
-  ~AppServiceAppWindowLacrosBrowserTest() override = default;
+IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest, AshBrowserWindow) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://blank")));
 
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(AppServiceAppWindowLacrosBrowserTest, LacrosWindow) {
-  // Create a fake Lacros window. The native window owns the widget.
-  views::Widget* widget = CreateExoWindow("org.chromium.lacros.12345");
-
-  using extension_misc::kLacrosAppId;
-  auto windows =
-      app_service_proxy_->InstanceRegistry().GetWindows(kLacrosAppId);
-  EXPECT_EQ(1u, windows.size());
-  EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
-                apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(kLacrosAppId, *windows.begin()));
-
-  // Find the Lacros shelf item.
-  int lacros_index = shelf_model()->ItemIndexByAppID(kLacrosAppId);
-  ASSERT_NE(-1, lacros_index);
-  const ash::ShelfItem& item = shelf_model()->items()[lacros_index];
-
-  // Since it is already active, clicking it should minimize.
-  SelectItem(item.id);
-  EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
-            GetAppInstanceState(kLacrosAppId, *windows.begin()));
-
-  // Click the item again to activate the window.
-  SelectItem(item.id);
-  EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
-                apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(kLacrosAppId, *windows.begin()));
-
-  widget->CloseNow();
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(kLacrosAppId);
-  EXPECT_EQ(0u, windows.size());
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(
+      app_constants::kChromeAppId);
+  EXPECT_EQ(1u, instances.size());
+  auto* instance = (*instances.begin()).get();
+  EXPECT_EQ(instance->Window(), instance->Window()->GetToplevelWindow());
 }
 
 class AppServiceAppWindowBorealisBrowserTest
@@ -371,17 +377,13 @@ class AppServiceAppWindowBorealisBrowserTest
     vm_tools::apps::ApplicationList list;
     list.set_vm_name(vm);
     list.set_container_name(container);
-    list.set_vm_type(vm_tools::apps::ApplicationList_VmType_BOREALIS);
+    list.set_vm_type(vm_tools::apps::BOREALIS);
     vm_tools::apps::App* app = list.add_apps();
     app->set_desktop_file_id(name);
     app->mutable_name()->add_values()->set_value(name);
     app->set_no_display(false);
     guest_os::GuestOsRegistryServiceFactory::GetForProfile(profile())
         ->UpdateApplicationList(list);
-
-    // We need to propagate the newly created app to the various registries
-    // before it can be used.
-    app_service_proxy_->FlushMojoCallsForTesting();
 
     return guest_os::GuestOsRegistryService::GenerateAppId(name, vm, container);
   }
@@ -392,46 +394,39 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBorealisBrowserTest,
   // Generate a fake app.
   std::string app_id = MakeBorealisApp("vm", "container", "foo");
 
-  views::Widget* widget = CreateExoWindow("org.chromium.borealis.wmclass.foo");
+  views::Widget* widget =
+      CreateExoWindow("org.chromium.guest_os.borealis.wmclass.foo");
 
   EXPECT_EQ(1u,
-            app_service_proxy_->InstanceRegistry().GetWindows(app_id).size());
+            app_service_proxy_->InstanceRegistry().GetInstances(app_id).size());
   EXPECT_NE(-1, shelf_model()->ItemIndexByAppID(app_id));
 
   widget->CloseNow();
   EXPECT_TRUE(
-      app_service_proxy_->InstanceRegistry().GetWindows(app_id).empty());
+      app_service_proxy_->InstanceRegistry().GetInstances(app_id).empty());
 }
 
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBorealisBrowserTest,
                        BorealisUnknownApp) {
-  views::Widget* widget = CreateExoWindow("org.chromium.borealis.wmclass.bar");
-  std::string app_id = "borealis_anon:org.chromium.borealis.wmclass.bar";
+  views::Widget* widget =
+      CreateExoWindow("org.chromium.guest_os.borealis.wmclass.bar");
+  std::string app_id =
+      "borealis_anon:org.chromium.guest_os.borealis.wmclass.bar";
 
   EXPECT_EQ(1u,
-            app_service_proxy_->InstanceRegistry().GetWindows(app_id).size());
+            app_service_proxy_->InstanceRegistry().GetInstances(app_id).size());
   ASSERT_NE(-1, shelf_model()->ItemIndexByAppID(app_id));
 
-  // Initially, anonymous apps haven't been published, as that is an
-  // asynchronous operation. This means their shelf item has no title.
-  EXPECT_TRUE(shelf_model()
-                  ->items()[shelf_model()->ItemIndexByAppID(app_id)]
-                  .title.empty());
-
-  // Flushing calls here simulates the fraction-of-seconds delay between the
-  // window appearing and its app being published.
-  app_service_proxy_->FlushMojoCallsForTesting();
-
-  // Now that the app is published, it will have a name based on the window title
-  EXPECT_EQ(
-      "foo",
-      base::UTF16ToUTF8(shelf_model()
-                            ->items()[shelf_model()->ItemIndexByAppID(app_id)]
-                            .title));
+  // Now that the app is published, it will have a name based on the window
+  // title
+  EXPECT_EQ("foo", base::UTF16ToUTF8(
+                       shelf_model()
+                           ->items()[shelf_model()->ItemIndexByAppID(app_id)]
+                           .title));
 
   widget->CloseNow();
   EXPECT_TRUE(
-      app_service_proxy_->InstanceRegistry().GetWindows(app_id).empty());
+      app_service_proxy_->InstanceRegistry().GetInstances(app_id).empty());
 }
 
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBorealisBrowserTest,
@@ -444,13 +439,15 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBorealisBrowserTest,
       borealis::BorealisWindowManager::AppWindowLifetimeObserver>
       observation(&observer);
   observation.Observe(
-      &borealis::BorealisService::GetForProfile(profile())->WindowManager());
+      &borealis::BorealisServiceFactory::GetForProfile(profile())
+           ->WindowManager());
 
   testing::InSequence sequence;
   EXPECT_CALL(observer, OnSessionStarted());
   EXPECT_CALL(observer, OnAppStarted(app_id));
   EXPECT_CALL(observer, OnWindowStarted(app_id, testing::_));
-  views::Widget* widget = CreateExoWindow("org.chromium.borealis.wmclass.foo");
+  views::Widget* widget =
+      CreateExoWindow("org.chromium.guest_os.borealis.wmclass.foo");
 
   EXPECT_CALL(observer, OnWindowFinished(app_id, widget->GetNativeWindow()));
   EXPECT_CALL(observer, OnAppFinished(app_id, widget->GetNativeWindow()));
@@ -475,11 +472,11 @@ class AppServiceAppWindowWebAppBrowserTest
   // |SetUpWebApp()| must be called after |SetUpOnMainThread()| to make sure
   // the Network Service process has been setup properly.
   std::string CreateWebApp() const {
-    auto web_app_info = std::make_unique<WebApplicationInfo>();
-    web_app_info->start_url = GetAppURL();
+    auto web_app_info =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(GetAppURL());
     web_app_info->scope = GetAppURL().GetWithoutFilename();
 
-    std::string app_id = web_app::test::InstallWebApp(browser()->profile(),
+    std::string app_id = web_app::test::InstallWebApp(browser()->GetProfile(),
                                                       std::move(web_app_info));
     CreateWebAppWindow(app_id);
     return app_id;
@@ -492,7 +489,7 @@ class AppServiceAppWindowWebAppBrowserTest
   void CreateWebAppWindow(const std::string& app_id) const {
     content::TestNavigationObserver navigation_observer(GetAppURL());
     navigation_observer.StartWatchingNewWebContents();
-    web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+    web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
     navigation_observer.WaitForNavigationFinished();
   }
 
@@ -505,30 +502,32 @@ class AppServiceAppWindowWebAppBrowserTest
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowWebAppBrowserTest, WebAppsWindow) {
   std::string app_id = CreateWebApp();
 
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  EXPECT_EQ(1u, windows.size());
-  aura::Window* window = *windows.begin();
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  EXPECT_EQ(1u, instances.size());
+  EXPECT_NE((*instances.begin())->Window(),
+            (*instances.begin())->Window()->GetToplevelWindow());
+  const auto* instance = (*instances.begin()).get();
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window));
+            GetAppInstanceState(app_id, instance->Window()));
 
   const ash::ShelfItem& item = GetLastShelfItem();
   // Since it is already active, clicking it should minimize.
   SelectItem(item.id);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
-            GetAppInstanceState(app_id, window));
+            GetAppInstanceState(app_id, instance->Window()));
 
   // Click the item again to activate the app.
   SelectItem(item.id);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window));
+            GetAppInstanceState(app_id, instance->Window()));
 
   controller_->Close(item.id);
   // Make sure that the window is closed.
   base::RunLoop().RunUntilIdle();
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  EXPECT_EQ(0u, windows.size());
+  EXPECT_TRUE(
+      app_service_proxy_->InstanceRegistry().GetInstances(app_id).empty());
 }
 
 // Tests that web app with multiple open windows can be activated from the app
@@ -537,52 +536,53 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowWebAppBrowserTest,
                        LaunchFromAppList) {
   std::string app_id = CreateWebApp();
 
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  ASSERT_EQ(1u, windows.size());
-  aura::Window* window1 = *windows.begin();
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  ASSERT_EQ(1u, instances.size());
+  const auto* instance1 = (*instances.begin()).get();
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window1));
+            GetAppInstanceState(app_id, instance1->Window()));
 
   const ash::ShelfItem item = GetLastShelfItem();
   // Since it is already active, clicking it should minimize.
   SelectItem(item.id);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
-            GetAppInstanceState(app_id, window1));
+            GetAppInstanceState(app_id, instance1->Window()));
 
   // Create another window.
   CreateWebAppWindow(app_id);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  ASSERT_EQ(2u, windows.size());
-  aura::Window* window2 =
-      *windows.begin() == window1 ? *windows.rbegin() : *windows.begin();
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  ASSERT_EQ(2u, instances.size());
+  const auto* instance2 = *instances.begin() == instance1
+                              ? (*instances.rbegin()).get()
+                              : (*instances.begin()).get();
 
   ASSERT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window2));
+            GetAppInstanceState(app_id, instance2->Window()));
 
   // Bring the browser window to foreground.
-  browser()->window()->Show();
+  browser()->GetWindow()->Show();
 
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window2));
+            GetAppInstanceState(app_id, instance2->Window()));
 
   // Launching the first app from the app list should activate it.
-  SelectItem(item.id, ui::ET_MOUSE_PRESSED, display::kInvalidDisplayId,
+  SelectItem(item.id, ui::EventType::kMousePressed, display::kInvalidDisplayId,
              ash::LAUNCH_FROM_APP_LIST);
 
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window1));
+            GetAppInstanceState(app_id, instance1->Window()));
 
   // Selecting an active app from the app list should not minimize it.
-  SelectItem(item.id, ui::ET_MOUSE_PRESSED, display::kInvalidDisplayId,
+  SelectItem(item.id, ui::EventType::kMousePressed, display::kInvalidDisplayId,
              ash::LAUNCH_FROM_APP_LIST);
 
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
-            GetAppInstanceState(app_id, window1));
+            GetAppInstanceState(app_id, instance1->Window()));
 }
 
 class AppServiceAppWindowArcAppBrowserTest
@@ -609,8 +609,11 @@ class AppServiceAppWindowArcAppBrowserTest
     run_loop.Run();
   }
 
-  void InstallTestApps(const std::string& package_name, bool multi_app) {
-    app_host()->OnAppListRefreshed(GetTestAppsList(package_name, multi_app));
+  void InstallTestApps(const std::string& package_name,
+                       bool multi_app,
+                       bool payment_app) {
+    app_host()->OnAppListRefreshed(
+        GetTestAppsList(package_name, multi_app, payment_app));
 
     std::unique_ptr<ArcAppListPrefs::AppInfo> app_info =
         app_prefs()->GetApp(GetTestApp1Id(package_name));
@@ -622,6 +625,12 @@ class AppServiceAppWindowArcAppBrowserTest
       ASSERT_TRUE(app_info2);
       EXPECT_TRUE(app_info2->ready);
     }
+    if (payment_app) {
+      std::unique_ptr<ArcAppListPrefs::AppInfo> payment_app_info =
+          app_prefs()->GetApp(GetTestPaymentAppId(package_name));
+      ASSERT_TRUE(payment_app_info);
+      EXPECT_TRUE(payment_app_info->ready);
+    }
   }
 
   void SendPackageAdded(const std::string& package_name, bool package_synced) {
@@ -631,7 +640,6 @@ class AppServiceAppWindowArcAppBrowserTest
     package_info.last_backup_android_id = 1;
     package_info.last_backup_time = 1;
     package_info.sync = package_synced;
-    package_info.system = false;
     app_host()->OnPackageAdded(arc::mojom::ArcPackageInfo::From(package_info));
 
     base::RunLoop().RunUntilIdle();
@@ -643,8 +651,9 @@ class AppServiceAppWindowArcAppBrowserTest
   }
 
   void StopInstance() {
-    if (app_instance_)
+    if (app_instance_) {
       arc_brige_service()->app()->CloseInstance(app_instance_.get());
+    }
     arc_session_manager()->Shutdown();
   }
 
@@ -670,7 +679,7 @@ class AppServiceAppWindowArcAppBrowserTest
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, ArcAppsWindow) {
   // Install app to remember existing apps.
   StartInstance();
-  InstallTestApps(kTestAppPackage, true);
+  InstallTestApps(kTestAppPackage, true, false);
   SendPackageAdded(kTestAppPackage, false);
 
   // Create the window for app1.
@@ -684,22 +693,20 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, ArcAppsWindow) {
   EXPECT_TRUE(controller_->GetItem(ash::ShelfID(app_id1)));
 
   // Check the window state in instance for app1
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id1);
-  EXPECT_EQ(1u, windows.size());
-  aura::Window* window1 = *windows.begin();
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id1);
+  EXPECT_EQ(1u, instances.size());
+  aura::Window* window1 = (*instances.begin())->Window();
   apps::InstanceState latest_state =
-      app_service_proxy_->InstanceRegistry().GetState(
-          apps::Instance::InstanceKey(window1));
+      app_service_proxy_->InstanceRegistry().GetState(window1);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
             latest_state);
 
   app_host()->OnTaskSetActive(1);
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window1));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window1);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
             latest_state);
-  controller_->PinAppWithID(app_id1);
+  controller_->shelf_model()->PinExistingItemWithID(app_id1);
 
   // Create the task id for app2 first, then create the window.
   const std::string app_id2 = GetTestApp2Id(kTestAppPackage);
@@ -710,31 +717,27 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, ArcAppsWindow) {
   EXPECT_TRUE(controller_->GetItem(ash::ShelfID(app_id2)));
 
   // Check the window state in instance for app2
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id2);
-  EXPECT_EQ(1u, windows.size());
-  aura::Window* window2 = *windows.begin();
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window2));
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id2);
+  EXPECT_EQ(1u, instances.size());
+  aura::Window* window2 = (*instances.begin())->Window();
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window2);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
             latest_state);
 
   // App1 is inactive.
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window1));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window1);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible,
             latest_state);
 
   // Select the app1
   SelectItem(ash::ShelfID(app_id1));
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window1));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window1);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
             latest_state);
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window2));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window2);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible,
             latest_state);
@@ -742,12 +745,11 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, ArcAppsWindow) {
   // Close the window for app1, and destroy the task.
   arc_window1->CloseNow();
   app_host()->OnTaskDestroyed(1);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id1);
-  EXPECT_EQ(0u, windows.size());
+  EXPECT_TRUE(
+      app_service_proxy_->InstanceRegistry().GetInstances(app_id1).empty());
 
   // App2 is activated.
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window2));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window2);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
             latest_state);
@@ -755,8 +757,8 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, ArcAppsWindow) {
   // destroy the task for app2 and close the window.
   app_host()->OnTaskDestroyed(2);
   arc_window2->CloseNow();
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id2);
-  EXPECT_EQ(0u, windows.size());
+  EXPECT_TRUE(
+      app_service_proxy_->InstanceRegistry().GetInstances(app_id2).empty());
 
   StopInstance();
 }
@@ -766,7 +768,7 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, ArcAppsWindow) {
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, LogicalWindowId) {
   // Install app to remember existing apps.
   StartInstance();
-  InstallTestApps(kTestAppPackage, true);
+  InstallTestApps(kTestAppPackage, true, false);
   SendPackageAdded(kTestAppPackage, false);
 
   // Create the windows for the app.
@@ -786,36 +788,33 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, LogicalWindowId) {
                             /*session_id=*/0);
 
   // Both windows should show up in the instance registry.
-  auto windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  EXPECT_EQ(2u, windows.size());
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  EXPECT_EQ(2u, instances.size());
 
   // Of those two, one should be hidden.
-  auto is_hidden = [](aura::Window* w) {
-    return w->GetProperty(ash::kHideInShelfKey);
+  auto is_hidden = [](const apps::Instance* instance) {
+    return instance->Window()->GetProperty(ash::kHideInShelfKey);
   };
-  EXPECT_EQ(1, std::count_if(windows.begin(), windows.end(), is_hidden));
+  EXPECT_EQ(1, std::ranges::count_if(instances, is_hidden));
 
   // The hidden window should be task_id 2.
   aura::Window* window1 =
-      *(std::find_if_not(windows.begin(), windows.end(), is_hidden));
+      (*(std::ranges::find_if_not(instances, is_hidden)))->Window();
   aura::Window* window2 =
-      *(std::find_if(windows.begin(), windows.end(), is_hidden));
+      (*(std::ranges::find_if(instances, is_hidden)))->Window();
 
   apps::InstanceState latest_state =
-      app_service_proxy_->InstanceRegistry().GetState(
-          apps::Instance::InstanceKey(window1));
+      app_service_proxy_->InstanceRegistry().GetState(window1);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
             latest_state);
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window2));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window2);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
             latest_state);
 
   // If the user focuses window 2, it should become active, but still hidden in
   // the shelf.
   app_host()->OnTaskSetActive(2);
-  latest_state = app_service_proxy_->InstanceRegistry().GetState(
-      apps::Instance::InstanceKey(window2));
+  latest_state = app_service_proxy_->InstanceRegistry().GetState(window2);
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kActive | apps::InstanceState::kVisible,
             latest_state);
@@ -824,13 +823,92 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, LogicalWindowId) {
   // Close first window. No window should be hidden anymore.
   arc_window1->CloseNow();
   app_host()->OnTaskDestroyed(1);
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  EXPECT_EQ(1u, windows.size());
-  EXPECT_EQ(0, std::count_if(windows.begin(), windows.end(), is_hidden));
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  EXPECT_EQ(1u, instances.size());
+  EXPECT_EQ(0, std::ranges::count_if(instances, is_hidden));
 
   // Close second window.
   app_host()->OnTaskDestroyed(2);
   arc_window2->CloseNow();
-  windows = app_service_proxy_->InstanceRegistry().GetWindows(app_id);
-  EXPECT_EQ(0u, windows.size());
+  EXPECT_TRUE(
+      app_service_proxy_->InstanceRegistry().GetInstances(app_id).empty());
+}
+
+// Test what happens when ARC is used to launch a payment task for a PWA app,
+// as the ARC task should not be shown on the shelf.
+IN_PROC_BROWSER_TEST_F(AppServiceAppWindowArcAppBrowserTest, PaymentApp) {
+  // Install app to remember existing apps.
+  StartInstance();
+  InstallTestApps(kTestPaymentAppPackage, false, true);
+  SendPackageAdded(kTestPaymentAppPackage, false);
+
+  // Create the windows for the payment app.
+  views::Widget* payment_window = CreateExoWindow("org.chromium.arc.1");
+
+  // Simulate task creation so the app is marked as running/open.
+  const std::string payment_app_id =
+      GetTestPaymentAppId(kTestPaymentAppPackage);
+  std::unique_ptr<ArcAppListPrefs::AppInfo> info =
+      app_prefs()->GetApp(payment_app_id);
+  app_host()->OnTaskCreated(1, info->package_name, info->activity, info->name,
+                            info->intent_uri, /*session_id=*/0);
+
+  // There should NOT be an entry on the shelf for the payment task
+  EXPECT_FALSE(controller_->GetItem(ash::ShelfID(payment_app_id)));
+
+  // The payment window should still show up in the instance registry.
+  auto instances =
+      app_service_proxy_->InstanceRegistry().GetInstances(payment_app_id);
+  EXPECT_EQ(1u, instances.size());
+
+  // The payment window should be hidden
+  auto is_hidden = [](const apps::Instance* instance) {
+    return instance->Window()->GetProperty(ash::kHideInShelfKey);
+  };
+  EXPECT_EQ(1, std::ranges::count_if(instances, is_hidden));
+
+  // No windows should remain if we close the payment window
+  payment_window->CloseNow();
+  app_host()->OnTaskDestroyed(1);
+  EXPECT_TRUE(app_service_proxy_->InstanceRegistry()
+                  .GetInstances(payment_app_id)
+                  .empty());
+}
+
+using AppServiceAppWindowSystemWebAppBrowserTest =
+    AppServiceAppWindowWebAppBrowserTest;
+
+IN_PROC_BROWSER_TEST_F(AppServiceAppWindowSystemWebAppBrowserTest,
+                       SystemWebAppWindow) {
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
+      ->InstallSystemAppsForTesting();
+
+  const std::string app_id = ash::kOsSettingsAppId;
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
+
+  auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  EXPECT_EQ(1u, instances.size());
+  const auto* instance = (*instances.begin()).get();
+  EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
+                apps::InstanceState::kActive | apps::InstanceState::kVisible,
+            GetAppInstanceState(app_id, instance->Window()));
+
+  const ash::ShelfItem& item = GetLastShelfItem();
+  // Since it is already active, clicking it should minimize.
+  SelectItem(item.id);
+  EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning,
+            GetAppInstanceState(app_id, instance->Window()));
+
+  // Click the item again to activate the app.
+  SelectItem(item.id);
+  EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
+                apps::InstanceState::kActive | apps::InstanceState::kVisible,
+            GetAppInstanceState(app_id, instance->Window()));
+
+  ui_test_utils::BrowserDestroyedObserver browser_destroyed_observer;
+  controller_->Close(item.id);
+  // Make sure that the window is closed.
+  browser_destroyed_observer.Wait();
+  instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
+  EXPECT_TRUE(instances.empty());
 }

@@ -1,17 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_FILTER_GZIP_SOURCE_STREAM_H_
 #define NET_FILTER_GZIP_SOURCE_STREAM_H_
 
+#include <stdint.h>
+
 #include <memory>
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
 #include "net/base/net_export.h"
 #include "net/filter/filter_source_stream.h"
 #include "net/filter/gzip_header.h"
+#include "net/filter/source_stream_type.h"
 
 typedef struct z_stream_s z_stream;
 
@@ -28,12 +31,15 @@ class IOBuffer;
 //
 class NET_EXPORT_PRIVATE GzipSourceStream : public FilterSourceStream {
  public:
+  GzipSourceStream(const GzipSourceStream&) = delete;
+  GzipSourceStream& operator=(const GzipSourceStream&) = delete;
+
   ~GzipSourceStream() override;
 
   // Creates a GzipSourceStream. Return nullptr if initialization fails.
   static std::unique_ptr<GzipSourceStream> Create(
       std::unique_ptr<SourceStream> previous,
-      SourceStream::SourceType type);
+      SourceStreamType type);
 
  private:
   enum InputState {
@@ -64,7 +70,7 @@ class NET_EXPORT_PRIVATE GzipSourceStream : public FilterSourceStream {
   };
 
   GzipSourceStream(std::unique_ptr<SourceStream> previous,
-                   SourceStream::SourceType type);
+                   SourceStreamType type);
 
   // Returns true if initialization is successful, false otherwise.
   // For instance, this method returns false if there is not enough memory or
@@ -73,12 +79,12 @@ class NET_EXPORT_PRIVATE GzipSourceStream : public FilterSourceStream {
 
   // SourceStream implementation
   std::string GetTypeAsString() const override;
-  int FilterData(IOBuffer* output_buffer,
-                 int output_buffer_size,
-                 IOBuffer* input_buffer,
-                 int input_buffer_size,
-                 int* consumed_bytes,
-                 bool upstream_end_reached) override;
+  base::expected<size_t, Error> FilterData(IOBuffer* output_buffer,
+                                           size_t output_buffer_size,
+                                           IOBuffer* input_buffer,
+                                           size_t input_buffer_size,
+                                           size_t* consumed_bytes,
+                                           bool upstream_end_reached) override;
 
   // Inserts a zlib header to the data stream before calling zlib inflate.
   // This is used to work around server bugs. The function returns true on
@@ -93,24 +99,22 @@ class NET_EXPORT_PRIVATE GzipSourceStream : public FilterSourceStream {
   // While in STATE_SNIFFING_DEFLATE_HEADER, it may be determined that a zlib
   // header needs to be added, and all received data needs to be replayed. In
   // that case, this buffer holds the data to be replayed.
-  std::string replay_data_;
+  std::vector<uint8_t> replay_data_;
 
   // Used to parse the gzip header in gzip stream.
   // It is used when the decoding mode is GZIP_SOURCE_STREAM_GZIP.
   GZipHeader gzip_header_;
 
   // Tracks how many bytes of gzip footer are yet to be filtered.
-  size_t gzip_footer_bytes_left_;
+  size_t gzip_footer_bytes_left_ = 0;
 
   // Tracks the state of the input stream.
-  InputState input_state_;
+  InputState input_state_ = STATE_START;
 
   // Used when replaying data.
-  InputState replay_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(GzipSourceStream);
+  InputState replay_state_ = STATE_COMPRESSED_BODY;
 };
 
 }  // namespace net
 
-#endif  // NET_FILTER_GZIP_SOURCE_STREAM_H__
+#endif  // NET_FILTER_GZIP_SOURCE_STREAM_H_

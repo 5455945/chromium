@@ -1,11 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_TEST_TEST_BROWSER_DIALOG_H_
 #define CHROME_BROWSER_UI_TEST_TEST_BROWSER_DIALOG_H_
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -17,6 +16,10 @@
 // A dialog-specific subclass of TestBrowserUi, which will verify that a test
 // showed a single dialog.
 class TestBrowserDialog : public TestBrowserUi {
+ public:
+  TestBrowserDialog(const TestBrowserDialog&) = delete;
+  TestBrowserDialog& operator=(const TestBrowserDialog&) = delete;
+
  protected:
   TestBrowserDialog();
   ~TestBrowserDialog() override;
@@ -45,6 +48,14 @@ class TestBrowserDialog : public TestBrowserUi {
   // baseline. Or else the previous gold image are still valid (which they
   // should not be because they have wrong text).
   // Consider using the cl number as baseline.
+  //
+  // NOTE: This is optional for pixel testing.
+  // Actually it has some drawbacks. For various reasons, the pixel output from
+  // a View is not always deterministic. Even with fuzzy matching, one test may
+  // still need to match with multiple gold images. When you call
+  // set_baseline(), all previous gold images become invalid. And usually test
+  // author only approve 1 new gold image to pass CQ. Then the test would become
+  // flaky and cause trouble for gardeners.
   void set_baseline(const std::string& baseline) { baseline_ = baseline; }
 
   // Whether to close asynchronously using Widget::Close(). This covers
@@ -53,6 +64,12 @@ class TestBrowserDialog : public TestBrowserUi {
   // the destruction of dialogs, e.g., during logoff which bypass
   // Widget::CanClose() and DialogDelegate::Close().
   virtual bool AlwaysCloseAsynchronously();
+
+  // Whether to wait for the dialog widget to become visible in VerifyUi() by
+  // pumping the run loop. Subclasses that run blocking modal loops should
+  // return false to avoid deadlocks. Defaults to true on macOS to account for
+  // asynchronous modal sheet presentation, and false on other platforms.
+  virtual bool ShouldWaitForDialogBeforeVerify();
 
   // Get the name of a non-dialog window that should be included in testing.
   // VerifyUi() only considers dialog windows and windows with a matching name.
@@ -73,10 +90,8 @@ class TestBrowserDialog : public TestBrowserUi {
   // If set to true, the dialog bounds will be verified to fit inside the
   // display's work area.
   // This should always be true, but some dialogs don't yet size themselves
-  // properly. https://crbug.com/893292.
+  // properly. https://crbug.com/41419544.
   bool should_verify_dialog_bounds_ = true;
-
-  DISALLOW_COPY_AND_ASSIGN(TestBrowserDialog);
 };
 
 template <class Base>

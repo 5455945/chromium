@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/fetch/fetch_data_loader.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/bytes_consumer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -21,11 +21,12 @@ class BytesConsumerTestUtil {
  public:
   class MockBytesConsumer : public BytesConsumer {
    public:
-    MOCK_METHOD2(BeginRead, Result(const char**, size_t*));
+    MOCK_METHOD1(BeginRead, Result(base::span<const char>&));
     MOCK_METHOD1(EndRead, Result(size_t));
     MOCK_METHOD1(DrainAsBlobDataHandle,
                  scoped_refptr<BlobDataHandle>(BlobSizePolicy));
-    MOCK_METHOD0(DrainAsDataPipe, mojo::ScopedDataPipeConsumerHandle());
+    MOCK_METHOD1(DrainAsDataPipe,
+                 mojo::ScopedDataPipeConsumerHandle(DrainedDataPipeClient**));
     MOCK_METHOD0(DrainAsFormData, scoped_refptr<EncodedFormData>());
     MOCK_METHOD1(SetClient, void(Client*));
     MOCK_METHOD0(ClearClient, void());
@@ -53,7 +54,7 @@ class BytesConsumerTestUtil {
     MOCK_METHOD1(DidFetchDataLoadedString, void(const String&));
     MOCK_METHOD0(DidFetchDataLoadStream, void());
     MOCK_METHOD0(DidFetchDataLoadFailed, void());
-    MOCK_METHOD0(Abort, void());
+    MOCK_METHOD1(Abort, void(ScriptValue));
 
     void DidFetchDataLoadedArrayBuffer(DOMArrayBuffer* array_buffer) override {
       DidFetchDataLoadedArrayBufferMock(array_buffer);
@@ -67,8 +68,6 @@ class BytesConsumerTestUtil {
       DidFetchDataLoadedFormDataMock(FormData);
     }
   };
-
-  static String CharVectorToString(const Vector<char>&);
 };
 
 }  // namespace blink

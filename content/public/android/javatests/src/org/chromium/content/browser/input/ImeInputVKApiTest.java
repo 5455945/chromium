@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,23 +16,20 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content_public.browser.test.ContentJUnit4ClassRunner;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
 
-/**
- * IME (input method editor) and text input tests for VK policy and show/hide APIs.
- */
+/** IME (input method editor) and text input tests for VK policy and show/hide APIs. */
 @RunWith(ContentJUnit4ClassRunner.class)
 @CommandLineFlags.Add({"enable-blink-features=VirtualKeyboard", "expose-internals-for-testing"})
 @Batch(ImeTest.IME_BATCH)
 public class ImeInputVKApiTest {
-    @Rule
-    public ImeActivityTestRule mRule = new ImeActivityTestRule();
-    @Rule
-    public ExpectedException thrown = ExpectedException.none();
+    @Rule public ImeActivityTestRule mRule = new ImeActivityTestRule();
+    @Rule public ExpectedException thrown = ExpectedException.none();
 
     @Before
     public void setUp() throws Exception {
@@ -119,6 +116,7 @@ public class ImeInputVKApiTest {
     @Test
     @MediumTest
     @Feature({"VKGeometryChange", "Main"})
+    @DisabledTest(message = "https://crbug.com/580803463")
     public void testKeyboardGeometryChangeEventWithInsertText() throws Throwable {
         mRule.assertWaitForKeyboardStatus(true);
 
@@ -135,31 +133,38 @@ public class ImeInputVKApiTest {
         // Check the VK bounding rectangle and the event getting fired.
         String code = "numEvents";
         String expectedValue = "1";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.x";
         expectedValue = "0";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.y > 0";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.width > 0";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.height > 0";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "new_vv_width === old_vv_width";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "new_vv_height === old_vv_height";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
 
         // Hide keyboard when manual policy element has focus and hide API is called.
@@ -175,31 +180,38 @@ public class ImeInputVKApiTest {
 
         code = "numEvents";
         expectedValue = "2";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.x";
         expectedValue = "0";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.y";
         expectedValue = "0";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.width";
         expectedValue = "0";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "VKRect.height";
         expectedValue = "0";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "new_vv_width === old_vv_width";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
         code = "new_vv_height === old_vv_height";
         expectedValue = "true";
-        Assert.assertEquals(expectedValue,
+        Assert.assertEquals(
+                expectedValue,
                 JavaScriptUtils.executeJavaScriptAndWaitForResult(mRule.getWebContents(), code));
     }
 }

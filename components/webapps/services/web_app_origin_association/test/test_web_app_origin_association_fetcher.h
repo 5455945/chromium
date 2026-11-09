@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,6 @@
 #include <map>
 
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_fetcher.h"
-
-namespace network {
-class SharedURLLoaderFactory;
-}  // namespace network
 
 namespace webapps {
 
@@ -27,9 +23,11 @@ class TestWebAppOriginAssociationFetcher
 
   // WebAppOriginAssociationFetcher:
   void FetchWebAppOriginAssociationFile(
-      const apps::UrlHandlerInfo& url_handler,
-      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      const url::Origin& origin,
+      network::mojom::IPAddressSpace initiator_address_space,
       FetchFileCallback callback) override;
+  void FetchWebAppOriginAssociationFile(const url::Origin& origin,
+                                        FetchFileCallback callback) override;
 
   void SetData(std::map<url::Origin, std::string> data);
 

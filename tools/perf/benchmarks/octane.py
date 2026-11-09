@@ -1,4 +1,4 @@
-# Copyright 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -16,13 +16,18 @@ import page_sets
 from benchmarks import press
 
 
-@benchmark.Info(emails=['hablich@chromium.org'],
-                component='Blink>JavaScript')
-class Octane(press._PressBenchmark): # pylint: disable=protected-access
+@benchmark.Info(
+  emails=['vahl@chromium.org', 'mlippautz@chromium.org'],
+  component='Blink>JavaScript',
+)
+class Octane(press._PressBenchmark):
   """Google's Octane JavaScript benchmark.
 
   http://chromium.github.io/octane/index.html?auto=1
   """
+
+  SCHEDULED = False
+
   @classmethod
   def Name(cls):
     return 'octane'

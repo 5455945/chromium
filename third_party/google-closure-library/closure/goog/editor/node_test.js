@@ -1,16 +1,8 @@
-// Copyright 2008 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.editor.nodeTest');
 goog.setTestOnly();
@@ -115,10 +107,6 @@ testSuite({
     // but this test shows different behavior for IE10 and 11. If we discover
     // that we care about quirks mode documents we should investigate
     // this failure.
-    expectedFailures.expectFailureFor(
-        (userAgent.WEBKIT && !userAgent.isVersionOrHigher('530')) ||
-        (userAgent.IE && userAgent.isVersionOrHigher('10') &&
-         !userAgent.isVersionOrHigher('11')));
     expectedFailures.run(() => {
       assertFalse(
           'Empty sourceless iframe is quirks mode, not standards mode',
@@ -433,7 +421,11 @@ testSuite({
     parentNode.innerHTML = '<div>foo</div><b>foo2</b>';
 
     const index = editorNode.findInChildren(
-        parentNode, (node) => node.tagName == TagName.B);
+        parentNode, /**
+                       @suppress {strictMissingProperties} suppression added to
+                       enable type checking
+                     */
+        (node) => node.tagName == TagName.B);
     assertEquals('Should find second child', index, 1);
   },
 
@@ -519,8 +511,7 @@ testSuite({
 
     const tagsToIgnore = googArray.flatten(structuralTags, ambiguousTags);
 
-    if ((userAgent.IE && !userAgent.isDocumentModeOrHigher(9)) ||
-        (userAgent.GECKO && !userAgent.isVersionOrHigher('2'))) {
+    if (userAgent.IE && !userAgent.isDocumentModeOrHigher(9)) {
       googArray.extend(tagsToIgnore, legacyAmbiguousTags);
     }
 
@@ -615,6 +606,7 @@ testSuite({
 
   testFindTopMostEditableAncestor() {
     const root = document.getElementById('editableTest');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const span = googDom.getElementsByTagName(TagName.SPAN, root)[0];
     const textNode = span.firstChild;
 
@@ -625,17 +617,30 @@ testSuite({
     assertEquals(
         'Should not walk out of editable node.', null,
         editorNode.findTopMostEditableAncestor(
-            textNode, (node) => node.tagName == TagName.BODY));
+            textNode, /**
+                         @suppress {strictMissingProperties} suppression added
+                         to enable type checking
+                       */
+            (node) => node.tagName == TagName.BODY));
     assertEquals(
         'Should not match editable container.', null,
         editorNode.findTopMostEditableAncestor(
-            textNode, (node) => node.tagName == TagName.DIV));
+            textNode, /**
+                         @suppress {strictMissingProperties} suppression added
+                         to enable type checking
+                       */
+            (node) => node.tagName == TagName.DIV));
     assertEquals(
         'Should find node in editable container.', span,
         editorNode.findTopMostEditableAncestor(
-            textNode, (node) => node.tagName == TagName.SPAN));
+            textNode, /**
+                         @suppress {strictMissingProperties} suppression added
+                         to enable type checking
+                       */
+            (node) => node.tagName == TagName.SPAN));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testSplitDomTreeAt() {
     const innerHTML = '<p>1<b>2</b>3</p>';
     const root = googDom.createElement(TagName.DIV);

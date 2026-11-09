@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,17 @@
 
 #include <stddef.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/process/launch.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
-#include "chromeos/login/login_state/login_state.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/ozone/public/input_controller.h"
 #include "ui/ozone/public/ozone_platform.h"
@@ -26,7 +25,7 @@ using content::BrowserThread;
 
 namespace {
 
-// The prefix "hack-33025" was historically chosen in http://crbug.com/139715.
+// The prefix "hack-33025" was historically chosen in http://crbug.com/40249554.
 // We continue to go with it in order to be compatible with the existing touch
 // log processing toolchain.
 const char kDeviceStatusLogDataKey[] = "hack-33025-touchpad";
@@ -136,7 +135,7 @@ void OnEventLogCollected(
     std::unique_ptr<system_logs::SystemLogsResponse> response,
     system_logs::SysLogsSourceCallback callback,
     const std::vector<base::FilePath>& log_paths) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   system_logs::SystemLogsResponse* response_ptr = response.get();
   base::ThreadPool::PostTaskAndReply(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
@@ -152,13 +151,13 @@ void OnStatusLogCollected(
     std::unique_ptr<system_logs::SystemLogsResponse> response,
     system_logs::SysLogsSourceCallback callback,
     const std::string& log) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   (*response)[kDeviceStatusLogDataKey] = log;
 
   // Collect touch event logs.
   // The user-specific log directory will not exist if we are not logged in
   // yet, so choose the location based on that.
-  base::FilePath base_log_path(chromeos::LoginState::Get()->IsUserLoggedIn()
+  base::FilePath base_log_path(ash::LoginState::Get()->IsUserLoggedIn()
                                    ? kTouchEventLogDir
                                    : kNotLoggedInTouchEventLogDir);
   ui::InputController* input_controller =
@@ -173,8 +172,8 @@ void OnStatusLogCollected(
 namespace system_logs {
 
 void TouchLogSource::Fetch(SysLogsSourceCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!callback.is_null());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!callback.is_null(), base::NotFatalUntil::M160);
 
   // Collect touch device status logs.
   auto response = std::make_unique<SystemLogsResponse>();

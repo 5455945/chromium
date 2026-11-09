@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/task_manager/providers/task.h"
 #include "content/public/browser/dedicated_worker_service.h"
@@ -21,6 +22,10 @@ class Profile;
 
 namespace content {
 class RenderProcessHost;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace task_manager {
@@ -46,20 +51,21 @@ class PerProfileWorkerTaskTracker
       delete;
 
   // content::DedicatedWorkerService::Observer:
-  void OnWorkerCreated(
-      const blink::DedicatedWorkerToken& worker_token,
-      int worker_process_id,
-      content::GlobalRenderFrameHostId ancestor_render_frame_host_id) override;
+  void OnWorkerCreated(const blink::DedicatedWorkerToken& worker_token,
+                       content::ChildProcessId worker_process_id,
+                       const url::Origin& security_origin,
+                       content::DedicatedWorkerCreator creator) override;
   void OnBeforeWorkerDestroyed(
       const blink::DedicatedWorkerToken& worker_token,
-      content::GlobalRenderFrameHostId ancestor_render_frame_host_id) override;
+      content::DedicatedWorkerCreator creator) override;
   void OnFinalResponseURLDetermined(
       const blink::DedicatedWorkerToken& worker_token,
       const GURL& url) override;
 
   // content::SharedWorkerService::Observer:
   void OnWorkerCreated(const blink::SharedWorkerToken& shared_worker_token,
-                       int worker_process_id,
+                       content::ChildProcessId worker_process_id,
+                       const url::Origin& security_origin,
                        const base::UnguessableToken& dev_tools_token) override;
   void OnBeforeWorkerDestroyed(
       const blink::SharedWorkerToken& shared_worker_token) override;
@@ -113,7 +119,7 @@ class PerProfileWorkerTaskTracker
       base::flat_map<WorkerId, std::unique_ptr<WorkerTask>>* out_worker_tasks);
 
   // The provider that gets notified when a WorkerTask is created/deleted.
-  WorkerTaskProvider* const worker_task_provider_;  // Owner.
+  const raw_ptr<WorkerTaskProvider> worker_task_provider_;  // Owner.
 
   // For dedicated workers:
   base::ScopedObservation<content::DedicatedWorkerService,

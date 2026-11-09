@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "google_apis/gcm/protocol/mcs.pb.h"
@@ -75,9 +75,9 @@ class HeartbeatManagerTest : public testing::Test {
 };
 
 HeartbeatManagerTest::HeartbeatManagerTest()
-    : manager_(
-          new TestHeartbeatManager(base::SequencedTaskRunnerHandle::Get(),
-                                   base::SequencedTaskRunnerHandle::Get())),
+    : manager_(new TestHeartbeatManager(
+          base::SequencedTaskRunner::GetCurrentDefault(),
+          base::SequencedTaskRunner::GetCurrentDefault())),
       heartbeats_sent_(0),
       reconnects_triggered_(0) {}
 
@@ -156,7 +156,7 @@ TEST_F(HeartbeatManagerTest, UpdateIntervalThenStart) {
   EXPECT_TRUE(manager()->GetNextHeartbeatTime().is_null());
   StartManager();
   EXPECT_LE(manager()->GetNextHeartbeatTime() - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kIntervalMs));
+            base::Milliseconds(kIntervalMs));
 }
 
 // Updating the heartbeat interval after starting should only use the new
@@ -166,7 +166,7 @@ TEST_F(HeartbeatManagerTest, StartThenUpdateInterval) {
   StartManager();
   base::TimeTicks heartbeat = manager()->GetNextHeartbeatTime();
   EXPECT_GT(heartbeat - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kIntervalMs));
+            base::Milliseconds(kIntervalMs));
 
   // Updating the interval should not affect an outstanding heartbeat.
   manager()->UpdateHeartbeatConfig(BuildHeartbeatConfig(kIntervalMs));
@@ -178,7 +178,7 @@ TEST_F(HeartbeatManagerTest, StartThenUpdateInterval) {
   manager()->OnHeartbeatAcked();
 
   EXPECT_LE(manager()->GetNextHeartbeatTime() - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kIntervalMs));
+            base::Milliseconds(kIntervalMs));
   EXPECT_NE(heartbeat, manager()->GetNextHeartbeatTime());
 }
 
@@ -203,95 +203,6 @@ TEST_F(HeartbeatManagerTest, MissedHeartbeat) {
   // Do nothing before the period is reached.
   manager()->TriggerMissedHeartbeatCheck();
   EXPECT_EQ(0, heartbeats_sent());
-}
-
-// Sets the client hearbeat interval and checks that it is picked up by the
-// manager.
-TEST_F(HeartbeatManagerTest, SetClientHeartbeatInterval) {
-  const int kIntervalMs = 180 * 1000;  // 180 seconds.
-  StartManager();
-  manager()->TriggerHearbeat();
-  manager()->OnHeartbeatAcked();
-
-  base::TimeTicks heartbeat = manager()->GetNextHeartbeatTime();
-  EXPECT_GT(heartbeat - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kIntervalMs));
-
-  manager()->SetClientHeartbeatIntervalMs(kIntervalMs);
-  EXPECT_EQ(1, reconnects_triggered());
-
-  // Triggering and acking the heartbeat should result in a heartbeat being
-  // posted with the new interval.
-  manager()->TriggerHearbeat();
-  manager()->OnHeartbeatAcked();
-
-  EXPECT_LE(manager()->GetNextHeartbeatTime() - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kIntervalMs));
-  EXPECT_GT(heartbeat, manager()->GetNextHeartbeatTime());
-
-  const int kLongerIntervalMs = 2 * kIntervalMs;
-  // Updating the interval should not affect an outstanding heartbeat.
-  manager()->SetClientHeartbeatIntervalMs(kLongerIntervalMs);
-  // No extra reconnects happen here, because the heartbeat is longer.
-  EXPECT_EQ(1, reconnects_triggered());
-
-  // Triggering and acking the heartbeat should result in a heartbeat being
-  // posted with the old, shorter interval.
-  manager()->TriggerHearbeat();
-  manager()->OnHeartbeatAcked();
-
-  EXPECT_LE(manager()->GetNextHeartbeatTime() - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kIntervalMs));
-}
-
-// Verifies that setting the client interval too low or too high will set it to
-// a value within a reasonable scope.
-TEST_F(HeartbeatManagerTest, ClientIntervalInvalid) {
-  // Less than min value.
-  int interval_ms = manager()->GetMinClientHeartbeatIntervalMs() - 60 * 1000;
-  manager()->SetClientHeartbeatIntervalMs(interval_ms);
-  EXPECT_TRUE(manager()->GetNextHeartbeatTime().is_null());
-  StartManager();
-  base::TimeDelta till_heartbeat = manager()->GetNextHeartbeatTime() -
-      base::TimeTicks::Now();
-  EXPECT_GT(till_heartbeat, base::TimeDelta::FromMilliseconds(
-      manager()->GetMinClientHeartbeatIntervalMs()));
-  EXPECT_LE(till_heartbeat, base::TimeDelta::FromMilliseconds(
-      manager()->GetMaxClientHeartbeatIntervalMs()));
-
-  // More than max value.
-  interval_ms = manager()->GetMaxClientHeartbeatIntervalMs() + 60 * 1000;
-  // Triggering and acking the heartbeat should result in a heartbeat being
-  // posted with the new interval.
-  manager()->TriggerHearbeat();
-  manager()->OnHeartbeatAcked();
-
-  till_heartbeat = manager()->GetNextHeartbeatTime() - base::TimeTicks::Now();
-  EXPECT_LE(till_heartbeat, base::TimeDelta::FromMilliseconds(
-      manager()->GetMaxClientHeartbeatIntervalMs()));
-}
-
-// Verifies that client interval is reset appropriately after the heartbeat is
-// triggered. See http://crbug.com/591490 for details.
-TEST_F(HeartbeatManagerTest, ClientIntervalAfterHeartbeatTriggered) {
-  const int kCustomIntervalMs = 180 * 1000;  // 180 seconds.
-  manager()->SetClientHeartbeatIntervalMs(kCustomIntervalMs);
-  StartManager();
-
-  // This changes the interval as manager awaits a heartbeat ack.
-  manager()->TriggerHearbeat();
-  const int kDefaultAckIntervalMs = 60 * 1000;  // 60 seconds.
-  base::TimeTicks heartbeat = manager()->GetNextHeartbeatTime();
-  EXPECT_LE(heartbeat - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kDefaultAckIntervalMs));
-
-  // This should reset the interval to the custom interval.
-  manager()->OnHeartbeatAcked();
-  heartbeat = manager()->GetNextHeartbeatTime();
-  EXPECT_GT(heartbeat - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kDefaultAckIntervalMs));
-  EXPECT_LE(heartbeat - base::TimeTicks::Now(),
-            base::TimeDelta::FromMilliseconds(kCustomIntervalMs));
 }
 
 }  // namespace

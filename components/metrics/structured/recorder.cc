@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,17 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/no_destructor.h"
 #include "base/task/current_thread.h"
-#include "base/task/post_task.h"
-#include "components/metrics/structured/event_base.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/metrics/structured/histogram_util.h"
+#include "components/metrics/structured/lib/histogram_util.h"
+#include "components/metrics/structured/structured_metrics_features.h"
 
-namespace metrics {
-namespace structured {
+namespace metrics::structured {
 
 Recorder::Recorder() = default;
+
 Recorder::~Recorder() = default;
 
 Recorder* Recorder::GetInstance() {
@@ -23,39 +24,40 @@ Recorder* Recorder::GetInstance() {
   return recorder.get();
 }
 
-void Recorder::Record(const EventBase& event) {
-  // All calls to StructuredMetricsProvider (the observer) must be on the UI
-  // sequence, so re-call Record if needed. If a UI task runner hasn't been set
-  // yet, ignore this Record.
-  if (!ui_task_runner_)
-    return;
-
-  if (!ui_task_runner_->RunsTasksInCurrentSequence()) {
-    ui_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&Recorder::Record, base::Unretained(this), event));
-    return;
-  }
-
-  DCHECK(base::CurrentUIThread::IsSet());
-  for (auto& observer : observers_)
-    observer.OnRecord(event);
-
-  if (observers_.empty()) {
+void Recorder::RecordEvent(Event&& event) {
+  // If the recorder is null, this doesn't need to be run on the same sequence.
+  if (recorder_ == nullptr) {
     // Other values of EventRecordingState are recorded in
     // StructuredMetricsProvider::OnRecord.
     LogEventRecordingState(EventRecordingState::kProviderMissing);
+    return;
   }
+
+  // All calls to StructuredMetricsProvider (the observer) must be on the UI
+  // sequence, so re-call Record if needed. If a UI task runner hasn't been set
+  // yet, ignore this Record.
+  if (!ui_task_runner_) {
+    LogInternalError(StructuredMetricsError::kUninitializedClient);
+    return;
+  }
+
+  if (!ui_task_runner_->RunsTasksInCurrentSequence()) {
+    ui_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&Recorder::RecordEvent,
+                                  base::Unretained(this), std::move(event)));
+    return;
+  }
+
+  DCHECK(base::CurrentUIThread::IsSet());
+
+  delegating_events_processor_.OnEventsRecord(&event);
+  recorder_->OnEventRecord(event);
 }
 
-void Recorder::ProfileAdded(const base::FilePath& profile_path) {
-  // All calls to the StructuredMetricsProvider (the observer) must be on the UI
-  // sequence.
-  DCHECK(base::CurrentUIThread::IsSet());
-  // TODO(crbug.com/1016655 ): investigate whether we can verify that
-  // |profile_path| corresponds to a valid (non-guest, non-signin) profile.
-  for (auto& observer : observers_)
-    observer.OnProfileAdded(profile_path);
+void Recorder::OnSystemProfileInitialized() {
+  if (recorder_) {
+    recorder_->OnSystemProfileInitialized();
+  }
 }
 
 void Recorder::SetUiTaskRunner(
@@ -63,13 +65,30 @@ void Recorder::SetUiTaskRunner(
   ui_task_runner_ = ui_task_runner;
 }
 
-void Recorder::AddObserver(Observer* observer) {
-  observers_.AddObserver(observer);
+void Recorder::SetRecorder(RecorderImpl* recorder) {
+  recorder_ = recorder;
 }
 
-void Recorder::RemoveObserver(Observer* observer) {
-  observers_.RemoveObserver(observer);
+void Recorder::UnsetRecorder(RecorderImpl* recorder) {
+  // Only reset if this is the same recorder. Otherwise, changing the recorder
+  // isn't needed.
+  if (recorder_ == recorder) {
+    recorder_ = nullptr;
+  }
 }
 
-}  // namespace structured
-}  // namespace metrics
+void Recorder::AddEventsProcessor(
+    std::unique_ptr<EventsProcessorInterface> events_processor) {
+  delegating_events_processor_.AddEventsProcessor(std::move(events_processor));
+}
+
+void Recorder::OnProvideIndependentMetrics(
+    ChromeUserMetricsExtension* uma_proto) {
+  delegating_events_processor_.OnProvideIndependentMetrics(uma_proto);
+}
+
+void Recorder::OnEventRecorded(StructuredEventProto* event) {
+  delegating_events_processor_.OnEventRecorded(event);
+}
+
+}  // namespace metrics::structured

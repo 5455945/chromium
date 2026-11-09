@@ -25,19 +25,21 @@
 #include "third_party/blink/renderer/platform/graphics/filters/fe_convolve_matrix.h"
 
 #include <memory>
+#include <vector>
 
 #include "base/numerics/checked_math.h"
-#include "base/stl_util.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/types/optional_util.h"
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_builder.h"
-#include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 
 namespace blink {
 
 FEConvolveMatrix::FEConvolveMatrix(Filter* filter,
-                                   const IntSize& kernel_size,
+                                   const gfx::Size& kernel_size,
                                    float divisor,
                                    float bias,
-                                   const IntPoint& target_offset,
+                                   const gfx::Vector2d& target_offset,
                                    FEConvolveMatrix::EdgeModeType edge_mode,
                                    bool preserve_alpha,
                                    const Vector<float>& kernel_matrix)
@@ -50,12 +52,12 @@ FEConvolveMatrix::FEConvolveMatrix(Filter* filter,
       preserve_alpha_(preserve_alpha),
       kernel_matrix_(kernel_matrix) {}
 
-FloatRect FEConvolveMatrix::MapEffect(const FloatRect& rect) const {
+gfx::RectF FEConvolveMatrix::MapEffect(const gfx::RectF& rect) const {
   if (!ParametersValid())
     return rect;
-  FloatRect result = rect;
-  result.MoveBy(FloatPoint(-target_offset_));
-  result.Expand(FloatSize(kernel_size_));
+  gfx::RectF result = rect;
+  result.Offset(gfx::Vector2dF(-target_offset_));
+  result.set_size(result.size() + gfx::SizeF(kernel_size_));
   return result;
 }
 
@@ -73,7 +75,7 @@ bool FEConvolveMatrix::SetBias(float bias) {
   return true;
 }
 
-bool FEConvolveMatrix::SetTargetOffset(const IntPoint& target_offset) {
+bool FEConvolveMatrix::SetTargetOffset(const gfx::Vector2d& target_offset) {
   if (target_offset_ == target_offset)
     return false;
   target_offset_ = target_offset;
@@ -110,18 +112,27 @@ static SkTileMode ToSkiaTileMode(FEConvolveMatrix::EdgeModeType edge_mode) {
 bool FEConvolveMatrix::ParametersValid() const {
   if (kernel_size_.IsEmpty())
     return false;
-  uint64_t kernel_area = kernel_size_.Area();
+  uint64_t kernel_area = kernel_size_.Area64();
   if (!base::CheckedNumeric<int>(kernel_area).IsValid())
     return false;
-  if (SafeCast<size_t>(kernel_area) != kernel_matrix_.size())
+  if (base::checked_cast<size_t>(kernel_area) != kernel_matrix_.size())
     return false;
-  if (target_offset_.X() < 0 || target_offset_.X() >= kernel_size_.Width())
+  if (target_offset_.x() < 0 || target_offset_.x() >= kernel_size_.width())
     return false;
-  if (target_offset_.Y() < 0 || target_offset_.Y() >= kernel_size_.Height())
-    return false;
-  if (!divisor_)
+  if (target_offset_.y() < 0 || target_offset_.y() >= kernel_size_.height())
     return false;
   return true;
+}
+
+float FEConvolveMatrix::ComputeDivisor() const {
+  if (divisor_) {
+    return divisor_;
+  }
+  float divisor_value = 0;
+  for (const float v : kernel_matrix_) {
+    divisor_value += v;
+  }
+  return divisor_value ? divisor_value : 1;
 }
 
 sk_sp<PaintFilter> FEConvolveMatrix::CreateImageFilter() {
@@ -131,25 +142,26 @@ sk_sp<PaintFilter> FEConvolveMatrix::CreateImageFilter() {
   sk_sp<PaintFilter> input(paint_filter_builder::Build(
       InputEffect(0), OperatingInterpolationSpace()));
   SkISize kernel_size(
-      SkISize::Make(kernel_size_.Width(), kernel_size_.Height()));
+      SkISize::Make(kernel_size_.width(), kernel_size_.height()));
   // parametersValid() above checks that the kernel area fits in int.
-  int num_elements = SafeCast<int>(kernel_size_.Area());
-  SkScalar gain = SkFloatToScalar(1.0f / divisor_);
+  int num_elements = base::checked_cast<int>(kernel_size_.Area64());
+  SkScalar gain = SkFloatToScalar(1.0f / ComputeDivisor());
   SkScalar bias = SkFloatToScalar(bias_ * 255);
-  SkIPoint target = SkIPoint::Make(target_offset_.X(), target_offset_.Y());
+  SkIPoint target = SkIPoint::Make(target_offset_.x(), target_offset_.y());
   SkTileMode tile_mode = ToSkiaTileMode(edge_mode_);
   bool convolve_alpha = !preserve_alpha_;
-  auto kernel = std::make_unique<SkScalar[]>(num_elements);
-  for (int i = 0; i < num_elements; ++i)
+  std::vector<SkScalar> kernel(num_elements);
+  for (int i = 0; i < num_elements; ++i) {
     kernel[i] = SkFloatToScalar(kernel_matrix_[num_elements - 1 - i]);
-  absl::optional<PaintFilter::CropRect> crop_rect = GetCropRect();
+  }
+  std::optional<PaintFilter::CropRect> crop_rect = GetCropRect();
   return sk_make_sp<MatrixConvolutionPaintFilter>(
-      kernel_size, kernel.get(), gain, bias, target, tile_mode, convolve_alpha,
-      std::move(input), base::OptionalOrNullptr(crop_rect));
+      kernel_size, kernel, gain, bias, target, tile_mode, convolve_alpha,
+      std::move(input), base::OptionalToPtr(crop_rect));
 }
 
-static WTF::TextStream& operator<<(WTF::TextStream& ts,
-                                   const FEConvolveMatrix::EdgeModeType& type) {
+static StringBuilder& operator<<(StringBuilder& ts,
+                                 const FEConvolveMatrix::EdgeModeType& type) {
   switch (type) {
     case FEConvolveMatrix::EDGEMODE_UNKNOWN:
       ts << "UNKNOWN";
@@ -167,16 +179,17 @@ static WTF::TextStream& operator<<(WTF::TextStream& ts,
   return ts;
 }
 
-WTF::TextStream& FEConvolveMatrix::ExternalRepresentation(WTF::TextStream& ts,
-                                                          int indent) const {
+StringBuilder& FEConvolveMatrix::ExternalRepresentation(
+    StringBuilder& ts,
+    wtf_size_t indent) const {
   WriteIndent(ts, indent);
   ts << "[feConvolveMatrix";
   FilterEffect::ExternalRepresentation(ts);
-  ts << " order=\"" << FloatSize(kernel_size_) << "\" "
+  ts << " order=\"" << kernel_size_.ToString() << "\" "
      << "kernelMatrix=\"" << kernel_matrix_ << "\" "
      << "divisor=\"" << divisor_ << "\" "
      << "bias=\"" << bias_ << "\" "
-     << "target=\"" << target_offset_ << "\" "
+     << "target=\"" << target_offset_.ToString() << "\" "
      << "edgeMode=\"" << edge_mode_ << "\" "
      << "preserveAlpha=\"" << preserve_alpha_ << "\"]\n";
   InputEffect(0)->ExternalRepresentation(ts, indent + 1);

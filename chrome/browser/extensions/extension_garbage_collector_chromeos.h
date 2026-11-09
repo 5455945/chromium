@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_GARBAGE_COLLECTOR_CHROMEOS_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_GARBAGE_COLLECTOR_CHROMEOS_H_
 
-#include "base/macros.h"
 #include "chrome/browser/extensions/extension_garbage_collector.h"
 
 namespace extensions {
@@ -16,12 +15,18 @@ namespace extensions {
 class ExtensionGarbageCollectorChromeOS : public ExtensionGarbageCollector {
  public:
   explicit ExtensionGarbageCollectorChromeOS(content::BrowserContext* context);
+
+  ExtensionGarbageCollectorChromeOS(const ExtensionGarbageCollectorChromeOS&) =
+      delete;
+  ExtensionGarbageCollectorChromeOS& operator=(
+      const ExtensionGarbageCollectorChromeOS&) = delete;
+
   ~ExtensionGarbageCollectorChromeOS() override;
 
   static ExtensionGarbageCollectorChromeOS* Get(
       content::BrowserContext* context);
 
-  // Enable or disable garbage collection. See |disable_garbage_collection_|.
+  // Enable or disable garbage collection. See `disable_garbage_collection_`.
   void disable_garbage_collection() { disable_garbage_collection_ = true; }
   void enable_garbage_collection() { disable_garbage_collection_ = false; }
 
@@ -42,15 +47,13 @@ class ExtensionGarbageCollectorChromeOS : public ExtensionGarbageCollector {
   // TODO(rkc): HACK alert - this is only in place to allow the
   // kiosk_mode_screensaver to prevent its extension from getting garbage
   // collected. Remove this once KioskModeScreensaver is removed.
-  // See crbug.com/280363
+  // See crbug.com/41042294
   bool disable_garbage_collection_;
 
   // Shared extensions need to be processed only once but instances of this
   // class are created per-profile so this static variable prevents multiple
   // processing.
   static bool shared_extensions_garbage_collected_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionGarbageCollectorChromeOS);
 };
 
 }  // namespace extensions

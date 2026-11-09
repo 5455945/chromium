@@ -1,19 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/nearby_connections_conversions.h"
 
-#include <utility>
-
-#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "chromeos/services/nearby/public/mojom/nearby_connections.mojom.h"
-#include "chromeos/services/nearby/public/mojom/nearby_connections_types.mojom.h"
+#include "base/functional/callback.h"
+#include "base/task/sequenced_task_runner.h"
+#include "chromeos/ash/services/nearby/public/mojom/nearby_connections.mojom.h"
+#include "chromeos/ash/services/nearby/public/mojom/nearby_connections_types.mojom.h"
 
-namespace location {
-namespace nearby {
-namespace connections {
+namespace nearby::connections {
 
 Strategy StrategyFromMojom(mojom::Strategy strategy) {
   switch (strategy) {
@@ -58,29 +56,32 @@ mojom::Status StatusToMojom(Status::Value status) {
       return mojom::Status::kWifiLanError;
     case Status::Value::kPayloadUnknown:
       return mojom::Status::kPayloadUnknown;
+    case Status::Value::kAlreadyListening:
+      return mojom::Status::kAlreadyListening;
+    case Status::Value::kReset:
+      return mojom::Status::kReset;
+    case Status::Value::kTimeout:
+      return mojom::Status::kTimeout;
+    case Status::Value::kUnknown:
+      return mojom::Status::kUnknown;
+    case Status::Value::kNextValue:
+      return mojom::Status::kNextValue;
   }
 }
 
 ResultCallback ResultCallbackFromMojom(StatusCallback callback) {
-  // Since std::function must be CopyAssignable, use std::shared_ptr to capture
-  // |callback| inside lambda, and only use callback first time ResultCallback
-  // is invoked.
-  // Also capture the current sequence runner to run |callback| in the correct
-  // sequence.
-  return {[callback = std::make_shared<StatusCallback>(std::move(callback)),
-           task_runner =
-               base::SequencedTaskRunnerHandle::Get()](Status status) {
-    if (*callback) {
-      task_runner->PostTask(
-          FROM_HERE,
-          base::BindOnce(std::move(*callback), StatusToMojom(status.value)));
-    }
-  }};
+  return [callback = std::move(callback),
+          task_runner = base::SequencedTaskRunner::GetCurrentDefault()](
+             Status status) mutable {
+    task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), StatusToMojom(status.value)));
+  };
 }
 
 std::vector<uint8_t> ByteArrayToMojom(const ByteArray& byte_array) {
-  return std::vector<uint8_t>(byte_array.data(),
-                              byte_array.data() + byte_array.size());
+  return std::vector<uint8_t>(
+      byte_array.data(), UNSAFE_TODO(byte_array.data() + byte_array.size()));
 }
 
 ByteArray ByteArrayFromMojom(const std::vector<uint8_t>& byte_array) {
@@ -122,6 +123,14 @@ mojom::Medium MediumToMojom(Medium medium) {
       return mojom::Medium::kWifiDirect;
     case Medium::WEB_RTC:
       return mojom::Medium::kWebRtc;
+    case Medium::BLE_L2CAP:
+      return mojom::Medium::kBleL2Cap;
+    case Medium::USB:
+      return mojom::Medium::kUsb;
+    case Medium::WEB_RTC_NON_CELLULAR:
+      return mojom::Medium::kWebRtcNonCellular;
+    case Medium::AWDL:
+      return mojom::Medium::kAwdl;
   }
 }
 
@@ -132,9 +141,8 @@ BooleanMediumSelector MediumSelectorFromMojom(
       .ble = allowed_mediums->ble,
       .web_rtc = allowed_mediums->web_rtc,
       .wifi_lan = allowed_mediums->wifi_lan,
+      .wifi_direct = allowed_mediums->wifi_direct,
   };
 }
 
-}  // namespace connections
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::connections

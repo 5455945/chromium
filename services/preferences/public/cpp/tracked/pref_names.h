@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 namespace user_prefs {
 
 extern const char kPreferenceResetTime[];
+extern const char kTrackedPreferencesReset[];
 
+extern const char kScheduleToFlushToDisk[];
 }  // namespace user_prefs
 
 #endif  // SERVICES_PREFERENCES_PUBLIC_CPP_TRACKED_PREF_NAMES_H_

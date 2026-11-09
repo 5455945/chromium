@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,7 +50,7 @@ class CC_EXPORT SurfaceLayer : public Layer {
   // surface is ignored and the content will be stretched to fill the bounds.
   void SetStretchContentToFillBounds(bool stretch_content_to_fill_bounds);
   bool stretch_content_to_fill_bounds() const {
-    return stretch_content_to_fill_bounds_;
+    return stretch_content_to_fill_bounds_.Read(*this);
   }
 
   void SetSurfaceHitTestable(bool surface_hit_testable);
@@ -59,21 +59,24 @@ class CC_EXPORT SurfaceLayer : public Layer {
 
   void SetIsReflection(bool is_reflection);
 
-  void SetMayContainVideo(bool may_contain_video);
+  void SetOverrideChildPaintFlags(bool override_child_paint_flags);
 
   // Layer overrides.
-  std::unique_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl) override;
+  std::unique_ptr<LayerImpl> CreateLayerImpl(
+      LayerTreeImpl* tree_impl) const override;
+  bool RequiresSetNeedsDisplayOnHdrHeadroomChange() const override;
   void SetLayerTreeHost(LayerTreeHost* host) override;
-  void PushPropertiesTo(LayerImpl* layer) override;
 
-  const viz::SurfaceId& surface_id() const { return surface_range_.end(); }
-
-  const absl::optional<viz::SurfaceId>& oldest_acceptable_fallback() const {
-    return surface_range_.start();
+  const viz::SurfaceId& surface_id() const {
+    return surface_range_.Read(*this).end();
   }
 
-  absl::optional<uint32_t> deadline_in_frames() const {
-    return deadline_in_frames_;
+  const std::optional<viz::SurfaceId>& oldest_acceptable_fallback() const {
+    return surface_range_.Read(*this).start();
+  }
+
+  std::optional<uint32_t> deadline_in_frames() const {
+    return deadline_in_frames_.Read(*this);
   }
 
  protected:
@@ -81,16 +84,20 @@ class CC_EXPORT SurfaceLayer : public Layer {
   explicit SurfaceLayer(UpdateSubmissionStateCB);
   bool HasDrawableContent() const override;
 
+  void PushDirtyPropertiesTo(LayerImpl* layer,
+                             uint8_t dirty_flag,
+                             CommitState& commit_state) override;
+
  private:
   ~SurfaceLayer() override;
 
-  UpdateSubmissionStateCB update_submission_state_callback_;
+  ProtectedSequenceWritable<UpdateSubmissionStateCB>
+      update_submission_state_callback_;
 
-  bool may_contain_video_ = false;
-  viz::SurfaceRange surface_range_;
-  absl::optional<uint32_t> deadline_in_frames_ = 0u;
+  ProtectedSequenceReadable<viz::SurfaceRange> surface_range_;
+  ProtectedSequenceWritable<std::optional<uint32_t>> deadline_in_frames_;
 
-  bool stretch_content_to_fill_bounds_ = false;
+  ProtectedSequenceReadable<bool> stretch_content_to_fill_bounds_;
 
   // Whether or not the surface should submit hit test data when submitting
   // compositor frame. The bit represents that the surface layer may be
@@ -98,16 +105,24 @@ class CC_EXPORT SurfaceLayer : public Layer {
   // the hit test information of that iframe. This bit is different from a layer
   // being hit testable in the renderer, a hit testable surface layer may not
   // be surface hit testable (e.g., a surface layer created by video).
-  bool surface_hit_testable_ = false;
+  ProtectedSequenceReadable<bool> surface_hit_testable_;
 
   // Whether or not the surface can accept pointer events. It is set to true if
   // the frame owner has pointer-events: none property.
   // TODO(sunxd): consider renaming it to oopif_has_pointer_events_none_ for
   // disambiguation.
-  bool has_pointer_events_none_ = false;
+  ProtectedSequenceWritable<bool> has_pointer_events_none_;
 
   // This surface layer is reflecting the root surface of another display.
-  bool is_reflection_ = false;
+  ProtectedSequenceReadable<bool> is_reflection_;
+
+  // If true, then this layer should override its child layer's PaintFlags.
+  // This is used for SurfaceLayers where the child layer is in the same DOM.
+  ProtectedSequenceWritable<bool> override_child_paint_flags_{false};
+
+  // Keep track when we change LayerTreeHosts as SurfaceLayerImpl needs to know
+  // in order to keep the visibility callback state consistent.
+  ProtectedSequenceWritable<bool> callback_layer_tree_host_changed_;
 };
 
 }  // namespace cc

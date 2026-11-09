@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,39 @@
 #define CONTENT_BROWSER_IMAGE_CAPTURE_IMAGE_CAPTURE_IMPL_H_
 
 #include "base/memory/weak_ptr.h"
-#include "content/public/browser/document_service_base.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/document_service.h"
 #include "media/capture/mojom/image_capture.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 
 namespace content {
 
-class ImageCaptureImpl final
-    : public content::DocumentServiceBase<media::mojom::ImageCapture> {
+class CONTENT_EXPORT ImageCaptureImpl final
+    : public content::DocumentService<media::mojom::ImageCapture> {
  public:
   static void Create(
       RenderFrameHost* render_frame_host,
-      mojo::PendingReceiver<media::mojom::ImageCapture> receiver);
+      mojo::PendingReceiver<media::mojom::ImageCapture> receiver,
+      bool skip_connecting_to_media_stream_manager_for_testing = false);
+
+  ImageCaptureImpl(RenderFrameHost& render_frame_host,
+                   mojo::PendingReceiver<media::mojom::ImageCapture> receiver,
+                   bool skip_connecting_to_media_stream_manager_for_testing,
+                   base::SelfDeletingPassKey key);
+  ImageCaptureImpl(const ImageCaptureImpl&) = delete;
+  ImageCaptureImpl& operator=(const ImageCaptureImpl&) = delete;
 
   void GetPhotoState(const std::string& source_id,
                      GetPhotoStateCallback callback) override;
 
-  void SetOptions(const std::string& source_id,
-                  media::mojom::PhotoSettingsPtr settings,
-                  SetOptionsCallback callback) override;
+  void SetPhotoOptions(const std::string& source_id,
+                       media::mojom::PhotoSettingsPtr settings,
+                       SetPhotoOptionsCallback callback) override;
 
   void TakePhoto(const std::string& source_id,
                  TakePhotoCallback callback) override;
 
  private:
-  ImageCaptureImpl(RenderFrameHost* render_frame_host,
-                   mojo::PendingReceiver<media::mojom::ImageCapture> receiver);
   ~ImageCaptureImpl() override;
 
   void OnGetPhotoState(GetPhotoStateCallback callback,
@@ -39,9 +46,9 @@ class ImageCaptureImpl final
 
   bool HasPanTiltZoomPermissionGranted();
 
-  base::WeakPtrFactory<ImageCaptureImpl> weak_factory_{this};
+  bool skip_connecting_to_media_stream_manager_for_testing_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(ImageCaptureImpl);
+  base::WeakPtrFactory<ImageCaptureImpl> weak_factory_{this};
 };
 
 }  // namespace content

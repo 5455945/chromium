@@ -1,6 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+// This is C code and has minimal dependencies, so it cannot use C++ safety
+// utilities like base::span or the UNSAFE_TODO macro. As a consequence, this
+// pragma cannot be removed.
+#ifdef UNSAFE_BUFFERS_BUILD
+#pragma allow_unsafe_buffers
+#endif
 
 // https://chromium.googlesource.com/chromium/src/+/main/docs/linux/suid_sandbox.md
 
@@ -44,7 +51,13 @@
 
 static bool DropRoot();
 
-#define HANDLE_EINTR(x) TEMP_FAILURE_RETRY(x)
+#define HANDLE_EINTR(x) ({ \
+  long eintr_wrapper_result; \
+  do { \
+    eintr_wrapper_result = (x); \
+  } while (eintr_wrapper_result == -1L && errno == EINTR); \
+  eintr_wrapper_result; \
+})
 
 static void FatalError(const char* msg, ...)
     __attribute__((noreturn, format(printf, 1, 2)));
@@ -57,7 +70,7 @@ static void FatalError(const char* msg, ...) {
   fprintf(stderr, ": %s\n", strerror(errno));
   fflush(stderr);
   va_end(ap);
-  _exit(1);
+  _exit(kSuidSandboxExitFatalError);
 }
 
 static void ExitWithErrorSignalHandler(int signal) {
@@ -459,7 +472,7 @@ int main(int argc, char** argv) {
 
   // Protect the core setuid sandbox functionality with an API version
   if (!CheckAndExportApiVersion()) {
-    return 1;
+    return kSuidSandboxExitApiVersionFailure;
   }
 
   if (geteuid() != 0) {
@@ -470,16 +483,15 @@ int main(int argc, char** argv) {
   }
 
   if (!MoveToNewNamespaces())
-    return 1;
+    return kSuidSandboxExitNamespaceFailure;
   if (!SpawnChrootHelper())
-    return 1;
+    return kSuidSandboxExitChrootHelperFailure;
   if (!DropRoot())
-    return 1;
+    return kSuidSandboxExitDropRootFailure;
   if (!SetupChildEnvironment())
-    return 1;
+    return kSuidSandboxExitEnvironmentFailure;
 
   execv(argv[1], &argv[1]);
-  FatalError("execv failed");
-
-  return 1;
+  perror("execv failed");
+  return kSuidSandboxExitExecFailure;
 }

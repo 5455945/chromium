@@ -1,13 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/web_package/web_bundle_utils.h"
 
-#include "base/guid.h"
+#include <optional>
+#include <string_view>
+
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/uuid.h"
 #include "components/web_package/mojom/web_bundle_parser.mojom.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -29,12 +34,15 @@ network::mojom::URLResponseHeadPtr CreateResourceResponse(
 
 std::string CreateHeaderString(
     const web_package::mojom::BundleResponsePtr& response) {
-  std::vector<std::string> header_strings;
+  std::vector<std::string_view> header_strings;
+  header_strings.reserve(6 + 4 * response->response_headers.size());
+
   header_strings.push_back("HTTP/1.1 ");
-  header_strings.push_back(base::NumberToString(response->response_code));
+  std::string response_code_as_string =
+      base::NumberToString(response->response_code);
+  header_strings.push_back(response_code_as_string);
   header_strings.push_back(" ");
-  header_strings.push_back(net::GetHttpReasonPhrase(
-      static_cast<net::HttpStatusCode>(response->response_code)));
+  header_strings.push_back(net::GetHttpReasonPhrase(response->response_code));
   header_strings.push_back(kCrLf);
   for (const auto& it : response->response_headers) {
     header_strings.push_back(it.first);
@@ -43,8 +51,7 @@ std::string CreateHeaderString(
     header_strings.push_back(kCrLf);
   }
   header_strings.push_back(kCrLf);
-  return net::HttpUtil::AssembleRawHeaders(
-      base::JoinString(header_strings, ""));
+  return net::HttpUtil::AssembleRawHeaders(base::StrCat(header_strings));
 }
 
 network::mojom::URLResponseHeadPtr CreateResourceResponseFromHeaderString(
@@ -59,17 +66,18 @@ network::mojom::URLResponseHeadPtr CreateResourceResponseFromHeaderString(
 }
 
 bool HasNoSniffHeader(const network::mojom::URLResponseHead& response) {
-  std::string content_type_options;
-  response.headers->EnumerateHeader(nullptr, kContentTypeOptionsHeaderName,
-                                    &content_type_options);
-  return base::LowerCaseEqualsASCII(content_type_options, kNoSniffHeaderValue);
+  std::optional<std::string_view> content_type_options =
+      response.headers->EnumerateHeader(nullptr, kContentTypeOptionsHeaderName);
+  return content_type_options &&
+         base::EqualsCaseInsensitiveASCII(*content_type_options,
+                                          kNoSniffHeaderValue);
 }
 
-bool IsValidUrnUuidURL(const GURL& url) {
+bool IsValidUuidInPackageURL(const GURL& url) {
   std::string spec = url.spec();
-  return base::StartsWith(spec,
-                          "urn:uuid:", base::CompareCase::INSENSITIVE_ASCII) &&
-         base::GUID::ParseCaseInsensitive(base::StringPiece(spec).substr(9))
+  return base::StartsWith(
+             spec, "uuid-in-package:", base::CompareCase::INSENSITIVE_ASCII) &&
+         base::Uuid::ParseCaseInsensitive(std::string_view(spec).substr(16))
              .is_valid();
 }
 

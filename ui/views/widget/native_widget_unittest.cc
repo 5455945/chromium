@@ -1,8 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/test/views_test_base.h"
@@ -16,23 +16,29 @@ class ScopedTestWidget {
  public:
   explicit ScopedTestWidget(internal::NativeWidgetPrivate* native_widget)
       : native_widget_(native_widget) {}
+
+  ScopedTestWidget(const ScopedTestWidget&) = delete;
+  ScopedTestWidget& operator=(const ScopedTestWidget&) = delete;
+
   ~ScopedTestWidget() {
-    // |CloseNow| deletes both |native_widget_| and its associated
-    // |Widget|.
-    native_widget_->GetWidget()->CloseNow();
+    // `CloseNow` deletes both `native_widget_` and its associated `Widget`.
+    native_widget_.ExtractAsDangling()->GetWidget()->CloseNow();
   }
 
   internal::NativeWidgetPrivate* operator->() const { return native_widget_; }
   internal::NativeWidgetPrivate* get() const { return native_widget_; }
 
  private:
-  internal::NativeWidgetPrivate* native_widget_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedTestWidget);
+  raw_ptr<internal::NativeWidgetPrivate> native_widget_;
 };
 
 class NativeWidgetTest : public ViewsTestBase {
  public:
   NativeWidgetTest() = default;
+
+  NativeWidgetTest(const NativeWidgetTest&) = delete;
+  NativeWidgetTest& operator=(const NativeWidgetTest&) = delete;
+
   ~NativeWidgetTest() override = default;
 
   internal::NativeWidgetPrivate* CreateNativeWidgetOfType(
@@ -52,9 +58,6 @@ class NativeWidgetTest : public ViewsTestBase {
   internal::NativeWidgetPrivate* CreateNativeSubWidget() {
     return CreateNativeWidgetOfType(Widget::InitParams::TYPE_CONTROL);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NativeWidgetTest);
 };
 
 TEST_F(NativeWidgetTest, CreateNativeWidget) {
@@ -97,6 +100,25 @@ TEST_F(NativeWidgetTest, GetTopLevelNativeWidget2) {
   // NativeViewHost only had a weak reference to the |child_widget|'s
   // NativeView. Delete it and the associated Widget.
   child_widget->CloseNow();
+}
+
+// GetTopLevelNativeWidget() finds the closest top-level widget.
+TEST_F(NativeWidgetTest, GetTopLevelNativeWidget3) {
+  ScopedTestWidget root_widget(CreateNativeWidget());
+  ScopedTestWidget child_widget(CreateNativeWidget());
+  ScopedTestWidget grandchild_widget(CreateNativeSubWidget());
+  ASSERT_TRUE(root_widget->GetWidget()->is_top_level());
+  ASSERT_TRUE(child_widget->GetWidget()->is_top_level());
+  ASSERT_FALSE(grandchild_widget->GetWidget()->is_top_level());
+
+  Widget::ReparentNativeView(grandchild_widget->GetNativeView(),
+                             child_widget->GetNativeView());
+  Widget::ReparentNativeView(child_widget->GetNativeView(),
+                             root_widget->GetNativeView());
+
+  EXPECT_EQ(child_widget.get(),
+            internal::NativeWidgetPrivate::GetTopLevelNativeWidget(
+                grandchild_widget->GetWidget()->GetNativeView()));
 }
 
 }  // namespace views

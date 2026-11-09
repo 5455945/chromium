@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace i18n {
+namespace base::i18n {
 
 // This test string contains 4 characters:
 //   x
@@ -203,5 +202,4 @@ TEST(CharIteratorsTest, TestUTF16_LowerBound) {
   ASSERT_EQ(5u, UTF16CharIterator::LowerBound(str, 5).array_pos());
 }
 
-}  // namespace i18n
-}  // namespace base
+}  // namespace base::i18n

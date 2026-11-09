@@ -1,39 +1,46 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "google_apis/gaia/gaia_oauth_client.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
+#include "google_apis/credentials_mode.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/backoff_entry.h"
-#include "net/base/escape.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "net/url_request/url_request_throttler_entry.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 namespace {
 const char kAccessTokenValue[] = "access_token";
 const char kRefreshTokenValue[] = "refresh_token";
 const char kExpiresInValue[] = "expires_in";
-}
+}  // namespace
 
 namespace gaia {
 
@@ -47,18 +54,12 @@ class GaiaOAuthClient::Core
         url_loader_factory_(url_loader_factory),
         delegate_(nullptr),
         request_type_(NO_PENDING_REQUEST) {
-    backoff_policy_.num_errors_to_ignore =
-        net::URLRequestThrottlerEntry::kDefaultNumErrorsToIgnore;
-    backoff_policy_.initial_delay_ms =
-        net::URLRequestThrottlerEntry::kDefaultInitialDelayMs;
-    backoff_policy_.multiply_factor =
-        net::URLRequestThrottlerEntry::kDefaultMultiplyFactor;
-    backoff_policy_.jitter_factor =
-        net::URLRequestThrottlerEntry::kDefaultJitterFactor;
-    backoff_policy_.maximum_backoff_ms =
-        net::URLRequestThrottlerEntry::kDefaultMaximumBackoffMs;
-    backoff_policy_.entry_lifetime_ms =
-        net::URLRequestThrottlerEntry::kDefaultEntryLifetimeMs;
+    backoff_policy_.num_errors_to_ignore = 2;
+    backoff_policy_.initial_delay_ms = 700;
+    backoff_policy_.multiply_factor = 1.4;
+    backoff_policy_.jitter_factor = 0.4;
+    backoff_policy_.maximum_backoff_ms = 15 * 60 * 1000;
+    backoff_policy_.entry_lifetime_ms = 2 * 60 * 1000;
     backoff_policy_.always_use_initial_delay = false;
   }
 
@@ -82,7 +83,7 @@ class GaiaOAuthClient::Core
                    Delegate* delegate);
   void GetAccountCapabilities(
       const std::string& oauth_access_token,
-      const std::vector<std::string>& capabilities_names,
+      base::span<const std::string_view> capabilities_names,
       int max_retries,
       Delegate* delegate);
   void GetTokenInfo(const std::string& qualifier,
@@ -91,7 +92,7 @@ class GaiaOAuthClient::Core
                     Delegate* delegate);
 
   // Called as a SimpleURLLoader callback
-  void OnURLLoadComplete(std::unique_ptr<std::string> body);
+  void OnURLLoadComplete(std::optional<std::string> body);
 
  private:
   friend class base::RefCountedThreadSafe<Core>;
@@ -133,7 +134,7 @@ class GaiaOAuthClient::Core
   // Actually sends the request.
   void SendRequestImpl();
 
-  void HandleResponse(std::unique_ptr<std::string> body,
+  void HandleResponse(std::optional<std::string> body,
                       bool* should_retry_request);
 
   net::BackoffEntry::Policy backoff_policy_;
@@ -148,7 +149,7 @@ class GaiaOAuthClient::Core
   std::string http_method_override_header_;
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  GaiaOAuthClient::Delegate* delegate_;
+  raw_ptr<GaiaOAuthClient::Delegate> delegate_;
   std::unique_ptr<network::SimpleURLLoader> request_;
   RequestType request_type_;
 
@@ -161,13 +162,12 @@ void GaiaOAuthClient::Core::GetTokensFromAuthCode(
     int max_retries,
     GaiaOAuthClient::Delegate* delegate) {
   std::string post_body =
-      "code=" + net::EscapeUrlEncodedData(auth_code, true) +
-      "&client_id=" + net::EscapeUrlEncodedData(oauth_client_info.client_id,
-                                                true) +
+      "code=" + base::EscapeUrlEncodedData(auth_code, true) + "&client_id=" +
+      base::EscapeUrlEncodedData(oauth_client_info.client_id, true) +
       "&client_secret=" +
-      net::EscapeUrlEncodedData(oauth_client_info.client_secret, true) +
+      base::EscapeUrlEncodedData(oauth_client_info.client_secret, true) +
       "&redirect_uri=" +
-      net::EscapeUrlEncodedData(oauth_client_info.redirect_uri, true) +
+      base::EscapeUrlEncodedData(oauth_client_info.redirect_uri, true) +
       "&grant_type=authorization_code";
   net::MutableNetworkTrafficAnnotationTag traffic_annotation(
       net::DefineNetworkTrafficAnnotation("gaia_oauth_client_get_tokens", R"(
@@ -193,9 +193,8 @@ void GaiaOAuthClient::Core::GetTokensFromAuthCode(
             "This feature cannot be disabled in settings, but if the user "
             "signs out of Chrome, this request would not be made."
           chrome_policy {
-            SigninAllowed {
-              policy_options {mode: MANDATORY}
-              SigninAllowed: false
+            BrowserSignin {
+              BrowserSignin: 0
             }
           }
         })"));
@@ -213,16 +212,16 @@ void GaiaOAuthClient::Core::RefreshToken(
     int max_retries,
     GaiaOAuthClient::Delegate* delegate) {
   std::string post_body =
-      "refresh_token=" + net::EscapeUrlEncodedData(refresh_token, true) +
-      "&client_id=" + net::EscapeUrlEncodedData(oauth_client_info.client_id,
-                                                true) +
+      "refresh_token=" + base::EscapeUrlEncodedData(refresh_token, true) +
+      "&client_id=" +
+      base::EscapeUrlEncodedData(oauth_client_info.client_id, true) +
       "&client_secret=" +
-      net::EscapeUrlEncodedData(oauth_client_info.client_secret, true) +
+      base::EscapeUrlEncodedData(oauth_client_info.client_secret, true) +
       "&grant_type=refresh_token";
 
   if (!scopes.empty()) {
     std::string scopes_string = base::JoinString(scopes, " ");
-    post_body += "&scope=" + net::EscapeUrlEncodedData(scopes_string, true);
+    post_body += "&scope=" + base::EscapeUrlEncodedData(scopes_string, true);
   }
 
   net::MutableNetworkTrafficAnnotationTag traffic_annotation(
@@ -247,9 +246,8 @@ void GaiaOAuthClient::Core::RefreshToken(
             "This feature cannot be disabled in settings, but if the user "
             "signs out of Chrome, this request would not be made."
           chrome_policy {
-            SigninAllowed {
-              policy_options {mode: MANDATORY}
-              SigninAllowed: false
+            BrowserSignin {
+              BrowserSignin: 0
             }
           }
         })"));
@@ -273,8 +271,8 @@ void GaiaOAuthClient::Core::GetUserId(const std::string& oauth_access_token,
 }
 
 void GaiaOAuthClient::Core::GetUserInfo(const std::string& oauth_access_token,
-                                      int max_retries,
-                                      Delegate* delegate) {
+                                        int max_retries,
+                                        Delegate* delegate) {
   GetUserInfoImpl(USER_INFO, oauth_access_token, max_retries, delegate);
 }
 
@@ -304,9 +302,8 @@ void GaiaOAuthClient::Core::GetUserInfoImpl(
             "This feature cannot be disabled in settings, but if the user "
             "signs out of Chrome, this request would not be made."
           chrome_policy {
-            SigninAllowed {
-              policy_options {mode: MANDATORY}
-              SigninAllowed: false
+            BrowserSignin {
+              BrowserSignin: 0
             }
           }
         })"));
@@ -322,7 +319,7 @@ void GaiaOAuthClient::Core::GetTokenInfo(const std::string& qualifier,
                                          int max_retries,
                                          Delegate* delegate) {
   std::string post_body =
-      qualifier + "=" + net::EscapeUrlEncodedData(query, true);
+      qualifier + "=" + base::EscapeUrlEncodedData(query, true);
   net::MutableNetworkTrafficAnnotationTag traffic_annotation(
       net::DefineNetworkTrafficAnnotation("gaia_oauth_client_get_token_info",
                                           R"(
@@ -350,9 +347,8 @@ void GaiaOAuthClient::Core::GetTokenInfo(const std::string& qualifier,
             "This feature cannot be disabled in settings, but if the user "
             "signs out of Chrome, this request would not be made."
           chrome_policy {
-            SigninAllowed {
-              policy_options {mode: MANDATORY}
-              SigninAllowed: false
+            BrowserSignin {
+              BrowserSignin: 0
             }
           }
         })"));
@@ -365,19 +361,9 @@ void GaiaOAuthClient::Core::GetTokenInfo(const std::string& qualifier,
 
 void GaiaOAuthClient::Core::GetAccountCapabilities(
     const std::string& oauth_access_token,
-    const std::vector<std::string>& capabilities_names,
+    base::span<const std::string_view> capabilities_names,
     int max_retries,
     Delegate* delegate) {
-  DCHECK(!capabilities_names.empty());
-
-  std::string post_body = base::StrCat(
-      {"names=", net::EscapeUrlEncodedData(*capabilities_names.begin(), true)});
-  for (auto it = capabilities_names.begin() + 1; it != capabilities_names.end();
-       ++it) {
-    base::StrAppend(&post_body,
-                    {"&names=", net::EscapeUrlEncodedData(*it, true)});
-  }
-
   std::string auth = base::StrCat({"Bearer ", oauth_access_token});
 
   net::MutableNetworkTrafficAnnotationTag traffic_annotation(
@@ -405,16 +391,26 @@ void GaiaOAuthClient::Core::GetAccountCapabilities(
             "This feature cannot be disabled in settings, but if the user "
             "signs out of Chrome, this request would not be made."
           chrome_policy {
-            SigninAllowed {
-              SigninAllowed: false
+            BrowserSignin {
+              BrowserSignin: 0
             }
           }
         })"));
 
-  MakeRequest(ACCOUNT_CAPABILITIES,
-              GURL(GaiaUrls::GetInstance()->account_capabilities_url()),
-              post_body, auth, /*http_method_override_header=*/"GET",
-              max_retries, delegate, traffic_annotation);
+  std::string post_body =
+      base::StrCat({"names=", base::EscapeUrlEncodedData(
+                                  *capabilities_names.begin(), true)});
+  for (auto it = capabilities_names.begin() + 1;
+       it != capabilities_names.end(); ++it) {
+    base::StrAppend(&post_body,
+                    {"&names=", base::EscapeUrlEncodedData(*it, true)});
+  }
+
+  MakeRequest(
+      ACCOUNT_CAPABILITIES,
+      GURL(GaiaUrls::GetInstance()->account_capabilities_batch_get_url()),
+      post_body, auth, /*http_method_override_header=*/"GET", max_retries,
+      delegate, traffic_annotation);
 }
 
 void GaiaOAuthClient::Core::MakeRequest(
@@ -441,7 +437,7 @@ void GaiaOAuthClient::Core::MakeRequest(
 
 void GaiaOAuthClient::Core::SendRequest() {
   if (backoff_entry_.ShouldRejectRequest()) {
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&GaiaOAuthClient::Core::SendRequestImpl,
                        weak_ptr_factory_.GetWeakPtr()),
@@ -457,9 +453,11 @@ void GaiaOAuthClient::Core::SendRequestImpl() {
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url_;
   resource_request->method = post_body_.empty() ? "GET" : "POST";
-  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-  if (!authorization_header_.empty())
+  resource_request->credentials_mode =
+      google_apis::GetOmitCredentialsModeForGaiaRequests();
+  if (!authorization_header_.empty()) {
     resource_request->headers.SetHeader("Authorization", authorization_header_);
+  }
   if (!http_method_override_header_.empty()) {
     resource_request->headers.SetHeader("X-HTTP-Method-Override",
                                         http_method_override_header_);
@@ -485,8 +483,7 @@ void GaiaOAuthClient::Core::SendRequestImpl() {
                      base::Unretained(this)));
 }
 
-void GaiaOAuthClient::Core::OnURLLoadComplete(
-    std::unique_ptr<std::string> body) {
+void GaiaOAuthClient::Core::OnURLLoadComplete(std::optional<std::string> body) {
   bool should_retry = false;
   base::WeakPtr<GaiaOAuthClient::Core> weak_this =
       weak_ptr_factory_.GetWeakPtr();
@@ -497,12 +494,13 @@ void GaiaOAuthClient::Core::OnURLLoadComplete(
     backoff_entry_.InformOfRequest(false);
     SendRequest();
   } else {
-    if (weak_this)
+    if (weak_this) {
       backoff_entry_.InformOfRequest(true);
+    }
   }
 }
 
-void GaiaOAuthClient::Core::HandleResponse(std::unique_ptr<std::string> body,
+void GaiaOAuthClient::Core::HandleResponse(std::optional<std::string> body,
                                            bool* should_retry_request) {
   *should_retry_request = false;
   // Move ownership of the request fetcher into a local scoped_ptr which
@@ -510,8 +508,9 @@ void GaiaOAuthClient::Core::HandleResponse(std::unique_ptr<std::string> body,
   std::unique_ptr<network::SimpleURLLoader> source = std::move(request_);
 
   int response_code = -1;
-  if (source->ResponseInfo() && source->ResponseInfo()->headers)
+  if (source->ResponseInfo() && source->ResponseInfo()->headers) {
     response_code = source->ResponseInfo()->headers->response_code();
+  }
 
   // HTTP_BAD_REQUEST means the arguments are invalid.  HTTP_UNAUTHORIZED means
   // the access or refresh token is invalid. No point retrying. We are
@@ -522,18 +521,13 @@ void GaiaOAuthClient::Core::HandleResponse(std::unique_ptr<std::string> body,
     return;
   }
 
-  std::unique_ptr<base::DictionaryValue> response_dict;
+  std::optional<base::DictValue> response_dict;
   if (response_code == net::HTTP_OK && body) {
-    std::string data = std::move(*body);
-    std::unique_ptr<base::Value> message_value =
-        base::JSONReader::ReadDeprecated(data);
-    if (message_value.get() && message_value->is_dict()) {
-      response_dict.reset(
-          static_cast<base::DictionaryValue*>(message_value.release()));
-    }
+    response_dict =
+        base::JSONReader::ReadDict(*body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   }
 
-  if (!response_dict.get()) {
+  if (!response_dict) {
     // If we don't have an access token yet and the the error was not
     // RC_BAD_REQUEST, we may need to retry.
     if ((max_retries_ != -1) && (num_retries_ >= max_retries_)) {
@@ -552,36 +546,49 @@ void GaiaOAuthClient::Core::HandleResponse(std::unique_ptr<std::string> body,
   switch (type) {
     case USER_EMAIL: {
       std::string email;
-      response_dict->GetString("email", &email);
+      if (const std::string* dict_value = response_dict->FindString("email")) {
+        email = *dict_value;
+      }
       delegate_->OnGetUserEmailResponse(email);
       break;
     }
 
     case USER_ID: {
       std::string id;
-      response_dict->GetString("id", &id);
+      if (const std::string* dict_value = response_dict->FindString("id")) {
+        id = *dict_value;
+      }
       delegate_->OnGetUserIdResponse(id);
       break;
     }
 
     case USER_INFO: {
-      delegate_->OnGetUserInfoResponse(std::move(response_dict));
+      delegate_->OnGetUserInfoResponse(*response_dict);
       break;
     }
 
     case TOKEN_INFO: {
-      delegate_->OnGetTokenInfoResponse(std::move(response_dict));
+      delegate_->OnGetTokenInfoResponse(*response_dict);
       break;
     }
 
     case TOKENS_FROM_AUTH_CODE:
     case REFRESH_TOKEN: {
       std::string access_token;
+      if (const std::string* dict_value =
+              response_dict->FindString(kAccessTokenValue)) {
+        access_token = *dict_value;
+      }
       std::string refresh_token;
+      if (const std::string* dict_value =
+              response_dict->FindString(kRefreshTokenValue)) {
+        refresh_token = *dict_value;
+      }
       int expires_in_seconds = 0;
-      response_dict->GetString(kAccessTokenValue, &access_token);
-      response_dict->GetString(kRefreshTokenValue, &refresh_token);
-      response_dict->GetInteger(kExpiresInValue, &expires_in_seconds);
+      if (const std::optional<int> dict_value =
+              response_dict->FindInt(kExpiresInValue)) {
+        expires_in_seconds = *dict_value;
+      }
 
       if (access_token.empty()) {
         delegate_->OnOAuthError();
@@ -591,15 +598,14 @@ void GaiaOAuthClient::Core::HandleResponse(std::unique_ptr<std::string> body,
       if (type == REFRESH_TOKEN) {
         delegate_->OnRefreshTokenResponse(access_token, expires_in_seconds);
       } else {
-        delegate_->OnGetTokensResponse(refresh_token,
-                                       access_token,
+        delegate_->OnGetTokensResponse(refresh_token, access_token,
                                        expires_in_seconds);
       }
       break;
     }
 
     case ACCOUNT_CAPABILITIES: {
-      delegate_->OnGetAccountCapabilitiesResponse(std::move(response_dict));
+      delegate_->OnGetAccountCapabilitiesResponse(*response_dict);
       break;
     }
 
@@ -613,36 +619,29 @@ GaiaOAuthClient::GaiaOAuthClient(
   core_ = new Core(std::move(url_loader_factory));
 }
 
-GaiaOAuthClient::~GaiaOAuthClient() {
-}
+GaiaOAuthClient::~GaiaOAuthClient() {}
 
 void GaiaOAuthClient::GetTokensFromAuthCode(
     const OAuthClientInfo& oauth_client_info,
     const std::string& auth_code,
     int max_retries,
     Delegate* delegate) {
-  return core_->GetTokensFromAuthCode(oauth_client_info,
-                                      auth_code,
-                                      max_retries,
+  return core_->GetTokensFromAuthCode(oauth_client_info, auth_code, max_retries,
                                       delegate);
 }
 
-void GaiaOAuthClient::RefreshToken(
-    const OAuthClientInfo& oauth_client_info,
-    const std::string& refresh_token,
-    const std::vector<std::string>& scopes,
-    int max_retries,
-    Delegate* delegate) {
-  return core_->RefreshToken(oauth_client_info,
-                             refresh_token,
-                             scopes,
-                             max_retries,
-                             delegate);
+void GaiaOAuthClient::RefreshToken(const OAuthClientInfo& oauth_client_info,
+                                   const std::string& refresh_token,
+                                   const std::vector<std::string>& scopes,
+                                   int max_retries,
+                                   Delegate* delegate) {
+  return core_->RefreshToken(oauth_client_info, refresh_token, scopes,
+                             max_retries, delegate);
 }
 
 void GaiaOAuthClient::GetUserEmail(const std::string& access_token,
-                                  int max_retries,
-                                  Delegate* delegate) {
+                                   int max_retries,
+                                   Delegate* delegate) {
   return core_->GetUserEmail(access_token, max_retries, delegate);
 }
 
@@ -674,7 +673,7 @@ void GaiaOAuthClient::GetTokenHandleInfo(const std::string& token_handle,
 
 void GaiaOAuthClient::GetAccountCapabilities(
     const std::string& oauth_access_token,
-    const std::vector<std::string>& capabilities_names,
+    base::span<const std::string_view> capabilities_names,
     int max_retries,
     Delegate* delegate) {
   return core_->GetAccountCapabilities(oauth_access_token, capabilities_names,

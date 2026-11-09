@@ -1,49 +1,34 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/xr/xr_depth_manager.h"
 
+#include <utility>
+
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/modules/xr/xr_cpu_depth_information.h"
+#include "third_party/blink/renderer/modules/xr/xr_frame.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
+#include "third_party/blink/renderer/modules/xr/xr_view.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace {
 
 constexpr char kInvalidUsageMode[] =
     "Unable to obtain XRCPUDepthInformation in \"gpu-optimized\" usage mode.";
 
-String UsageToString(device::mojom::XRDepthUsage usage) {
-  switch (usage) {
-    case device::mojom::XRDepthUsage::kCPUOptimized:
-      return "cpu-optimized";
-    case device::mojom::XRDepthUsage::kGPUOptimized:
-      return "gpu-optimized";
-  }
-}
-
-String DataFormatToString(device::mojom::XRDepthDataFormat data_format) {
-  switch (data_format) {
-    case device::mojom::XRDepthDataFormat::kLuminanceAlpha:
-      return "luminance-alpha";
-    case device::mojom::XRDepthDataFormat::kFloat32:
-      return "float32";
-  }
-}
-
 }  // namespace
 
 namespace blink {
 
 XRDepthManager::XRDepthManager(
-    base::PassKey<XRSession> pass_key,
-    XRSession* session,
+    base::PassKey<XRViewData> pass_key,
     const device::mojom::blink::XRDepthConfig& depth_configuration)
-    : session_(session),
-      usage_(depth_configuration.depth_usage),
-      data_format_(depth_configuration.depth_data_format),
-      usage_str_(UsageToString(usage_)),
-      data_format_str_(DataFormatToString(data_format_)) {
+    : usage_(depth_configuration.depth_usage),
+      data_format_(depth_configuration.depth_data_format) {
   DVLOG(3) << __func__ << ": usage_=" << usage_
            << ", data_format_=" << data_format_;
 }
@@ -54,33 +39,45 @@ void XRDepthManager::ProcessDepthInformation(
     device::mojom::blink::XRDepthDataPtr depth_data) {
   DVLOG(3) << __func__ << ": depth_data valid? " << !!depth_data;
 
-  // Throw away old data, we won't need it anymore because we'll either replace
-  // it with new data, or no new data is available (& we don't want to keep the
-  // old data in that case as well).
-  depth_data_ = nullptr;
-  data_ = nullptr;
-
   if (depth_data) {
     DVLOG(3) << __func__ << ": depth_data->which()="
              << static_cast<uint32_t>(depth_data->which());
-
     switch (depth_data->which()) {
-      case device::mojom::blink::XRDepthData::Tag::DATA_STILL_VALID:
+      case device::mojom::blink::XRDepthData::Tag::kDataStillValid:
         // Stale depth buffer is still the most recent information we have.
         // Current API shape is not well-suited to return data pertaining to
         // older frames, so we just discard the data we previously got and will
         // not set the new one.
+        data_dirty_ = !!depth_data_;
+        depth_data_ = nullptr;
         break;
-      case device::mojom::blink::XRDepthData::Tag::UPDATED_DEPTH_DATA:
+      case device::mojom::blink::XRDepthData::Tag::kUpdatedDepthData: {
         // We got new depth buffer - store the current depth data as a member.
-        depth_data_ = std::move(depth_data->get_updated_depth_data());
+        auto updated_data = std::move(depth_data->get_updated_depth_data());
+        if (updated_data->shared_buffer.IsValid()) {
+          const uint32_t buffer_id = updated_data->buffer_id;
+          if (buffer_id < shared_buffer_regions_.size() &&
+              (!shared_buffer_regions_[buffer_id].IsValid() ||
+               shared_buffer_regions_[buffer_id].GetGUID() !=
+                   updated_data->shared_buffer.GetGUID())) {
+            shared_buffer_regions_[buffer_id] =
+                std::move(updated_data->shared_buffer);
+            data_buffers_[buffer_id] = nullptr;
+          }
+        }
+        depth_data_ = std::move(updated_data);
+        data_dirty_ = true;
         break;
+      }
     }
+  } else {
+    data_dirty_ = !!depth_data_;
+    depth_data_ = nullptr;
   }
 }
 
 XRCPUDepthInformation* XRDepthManager::GetCpuDepthInformation(
-    const XRFrame* xr_frame,
+    const XRView* xr_view,
     ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
@@ -90,19 +87,28 @@ XRCPUDepthInformation* XRDepthManager::GetCpuDepthInformation(
     return nullptr;
   }
 
+  // If we've reached this point, we belong to the same session as the frame.
+  if (!xr_view->session()->IsDepthActive()) {
+    return nullptr;
+  }
+
   if (!depth_data_) {
     return nullptr;
   }
 
   EnsureData();
+  if (!data_) {
+    return nullptr;
+  }
 
   return MakeGarbageCollected<XRCPUDepthInformation>(
-      xr_frame, depth_data_->size, depth_data_->norm_texture_from_norm_view,
+      xr_view, depth_data_->view_geometry, depth_data_->size,
+      depth_data_->norm_texture_from_norm_view,
       depth_data_->raw_value_to_meters, data_format_, data_);
 }
 
 XRWebGLDepthInformation* XRDepthManager::GetWebGLDepthInformation(
-    const XRFrame* xr_frame,
+    const XRView* xr_view,
     ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
@@ -112,25 +118,71 @@ XRWebGLDepthInformation* XRDepthManager::GetWebGLDepthInformation(
     return nullptr;
   }
 
+  // If we've reached this point, we belong to the same session as the frame.
+  if (!xr_view->session()->IsDepthActive()) {
+    return nullptr;
+  }
+
   NOTREACHED();
-  return nullptr;
 }
 
 void XRDepthManager::EnsureData() {
-  DCHECK(depth_data_);
+  CHECK(depth_data_);
 
-  if (data_) {
+  const uint32_t buffer_id = depth_data_->buffer_id;
+  if (buffer_id < shared_buffer_regions_.size() &&
+      shared_buffer_regions_[buffer_id].IsValid() &&
+      depth_data_->pixel_data.size() == 0) {
+    const size_t expected_size = shared_buffer_regions_[buffer_id].GetSize();
+    auto& data_buffer = data_buffers_[buffer_id];
+    if (!data_buffer || data_buffer->IsDetached() ||
+        data_buffer->ByteSpan().size() != expected_size) {
+      base::UnsafeSharedMemoryRegion dup_region =
+          shared_buffer_regions_[buffer_id].Duplicate();
+      if (dup_region.IsValid()) {
+        // Wrap the platform shared memory handle directly into the V8
+        // ArrayBuffer backing store (zero-copy mapping via gin mapper).
+        ArrayBufferContents contents(
+            base::UnsafeSharedMemoryRegion::TakeHandleForSerialization(
+                std::move(dup_region)),
+            /*offset=*/0, expected_size, ArrayBufferContents::kNotShared);
+        if (contents.IsValid()) {
+          data_buffer = DOMArrayBuffer::Create(std::move(contents));
+        }
+      }
+    }
+    data_ = data_buffer;
+    data_dirty_ = false;
     return;
   }
 
-  // Copy the pixel data into ArrayBuffer:
-  data_ = DOMArrayBuffer::Create(depth_data_->pixel_data.data(),
-                                 depth_data_->pixel_data.size());
+  if (!data_dirty_) {
+    return;
+  }
+
+  if (depth_data_->pixel_data.size() == 0) {
+    data_ = nullptr;
+    data_dirty_ = false;
+    return;
+  }
+
+  // Recreate `data_` if needed, otherwise just copy the bits over to prevent
+  // a reallocation.
+  if (!data_ || data_->IsDetached() ||
+      data_->ByteSpan().size() != depth_data_->pixel_data.size()) {
+    data_ = DOMArrayBuffer::Create(depth_data_->pixel_data);
+  } else {
+    data_->ByteSpan().copy_from(depth_data_->pixel_data);
+  }
+
+  data_dirty_ = false;
 }
 
 void XRDepthManager::Trace(Visitor* visitor) const {
-  visitor->Trace(session_);
   visitor->Trace(data_);
+  for (const auto& buffer : data_buffers_) {
+    visitor->Trace(buffer);
+  }
 }
 
 }  // namespace blink

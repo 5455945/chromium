@@ -1,92 +1,38 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/debug/profiler.h"
 
-#include <string>
-
 #include "base/allocator/buildflags.h"
-#include "base/debug/debugging_buildflags.h"
+#include "base/check.h"
 #include "base/process/process_handle.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/current_module.h"
 #include "base/win/pe_image.h"
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-// TODO(peria): Enable profiling on Windows.
-#if BUILDFLAG(ENABLE_PROFILING) && BUILDFLAG(USE_TCMALLOC) && !defined(OS_WIN)
-#include "third_party/tcmalloc/chromium/src/gperftools/profiler.h"
-#endif
+namespace base::debug {
 
-namespace base {
-namespace debug {
+void StartProfiling(const std::string& name) {}
 
-// TODO(peria): Enable profiling on Windows.
-#if BUILDFLAG(ENABLE_PROFILING) && BUILDFLAG(USE_TCMALLOC) && !defined(OS_WIN)
+void StopProfiling() {}
 
-static int profile_count = 0;
-
-void StartProfiling(const std::string& name) {
-  ++profile_count;
-  std::string full_name(name);
-  std::string pid = NumberToString(GetCurrentProcId());
-  std::string count = NumberToString(profile_count);
-  ReplaceSubstringsAfterOffset(&full_name, 0, "{pid}", pid);
-  ReplaceSubstringsAfterOffset(&full_name, 0, "{count}", count);
-  ProfilerStart(full_name.c_str());
-}
-
-void StopProfiling() {
-  ProfilerFlush();
-  ProfilerStop();
-}
-
-void FlushProfiling() {
-  ProfilerFlush();
-}
-
-bool BeingProfiled() {
-  return ProfilingIsEnabledForAllThreads();
-}
-
-void RestartProfilingAfterFork() {
-  ProfilerRegisterThread();
-}
-
-bool IsProfilingSupported() {
-  return true;
-}
-
-#else
-
-void StartProfiling(const std::string& name) {
-}
-
-void StopProfiling() {
-}
-
-void FlushProfiling() {
-}
+void FlushProfiling() {}
 
 bool BeingProfiled() {
   return false;
 }
 
-void RestartProfilingAfterFork() {
-}
+void RestartProfilingAfterFork() {}
 
 bool IsProfilingSupported() {
   return false;
 }
 
-#endif
-
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
 
 ReturnAddressLocationResolver GetProfilerReturnAddrResolutionFunc() {
   return nullptr;
@@ -100,7 +46,7 @@ MoveDynamicSymbol GetProfilerMoveDynamicSymbolFunc() {
   return nullptr;
 }
 
-#else  // defined(OS_WIN)
+#else  // BUILDFLAG(IS_WIN)
 
 namespace {
 
@@ -110,10 +56,11 @@ struct FunctionSearchContext {
 };
 
 // Callback function to PEImage::EnumImportChunks.
-bool FindResolutionFunctionInImports(
-    const base::win::PEImage &image, const char* module_name,
-    PIMAGE_THUNK_DATA unused_name_table, PIMAGE_THUNK_DATA import_address_table,
-    PVOID cookie) {
+bool FindResolutionFunctionInImports(const base::win::PEImage& image,
+                                     const char* module_name,
+                                     PIMAGE_THUNK_DATA unused_name_table,
+                                     PIMAGE_THUNK_DATA import_address_table,
+                                     PVOID cookie) {
   FunctionSearchContext* context =
       reinterpret_cast<FunctionSearchContext*>(cookie);
 
@@ -151,7 +98,7 @@ template <typename FunctionType>
 FunctionType FindFunctionInImports(const char* function_name) {
   base::win::PEImage image(CURRENT_MODULE());
 
-  FunctionSearchContext ctx = { function_name, NULL };
+  FunctionSearchContext ctx = {function_name, NULL};
   image.EnumImportChunks(FindResolutionFunctionInImports, &ctx, nullptr);
 
   return reinterpret_cast<FunctionType>(ctx.function);
@@ -165,16 +112,13 @@ ReturnAddressLocationResolver GetProfilerReturnAddrResolutionFunc() {
 }
 
 AddDynamicSymbol GetProfilerAddDynamicSymbolFunc() {
-  return FindFunctionInImports<AddDynamicSymbol>(
-      "AddDynamicSymbol");
+  return FindFunctionInImports<AddDynamicSymbol>("AddDynamicSymbol");
 }
 
 MoveDynamicSymbol GetProfilerMoveDynamicSymbolFunc() {
-  return FindFunctionInImports<MoveDynamicSymbol>(
-      "MoveDynamicSymbol");
+  return FindFunctionInImports<MoveDynamicSymbol>("MoveDynamicSymbol");
 }
 
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,11 +22,12 @@ class UnitTrieWriter(json5_generator.Writer):
         }
 
     @template_expander.use_jinja(
-        'core/css/templates/css_primitive_value_unit_trie.cc.tmpl')
+        'core/css/templates/css_primitive_value_unit_trie.cc.tmpl'
+    )
     def generate_implementation(self):
         return {
             'input_files': self._input_files,
-            'length_tries': trie_builder.trie_list_by_str_length(self._units)
+            'length_tries': trie_builder.trie_list_by_str_length(self._units),
         }
 
 

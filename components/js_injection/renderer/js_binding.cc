@@ -1,96 +1,167 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/js_injection/renderer/js_binding.h"
 
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <variant>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/memory/shared_memory_mapping.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/strings/string_util.h"
+#include "build/build_config.h"
+#include "components/js_injection/common/interfaces.mojom.h"
 #include "components/js_injection/renderer/js_communication.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
+#include "gin/array_buffer.h"
+#include "gin/converter.h"
 #include "gin/data_object_builder.h"
-#include "gin/handle.h"
 #include "gin/object_template_builder.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
+#include "third_party/blink/public/common/messaging/string_message_codec.h"
+#include "third_party/blink/public/mojom/script/script_evaluation_params.mojom.h"
+#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
-#include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_message_port_converter.h"
+#include "third_party/blink/public/web/web_script_source.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8.h"
 
 namespace {
+
 constexpr char kPostMessage[] = "postMessage";
 constexpr char kOnMessage[] = "onmessage";
 constexpr char kAddEventListener[] = "addEventListener";
 constexpr char kRemoveEventListener[] = "removeEventListener";
-}  // anonymous namespace
+
+class V8ArrayBufferPayload : public blink::WebMessageArrayBufferPayload {
+ public:
+  explicit V8ArrayBufferPayload(v8::Local<v8::ArrayBuffer> array_buffer)
+      : array_buffer_(array_buffer) {
+    CHECK(!array_buffer.IsEmpty());
+  }
+
+  // Although resize *may* be supported, it's not needed to be handled for JS to
+  // browser messaging.
+  bool GetIsResizableByUserJavaScript() const override { return false; }
+
+  size_t GetMaxByteLength() const override { return GetLength(); }
+
+  size_t GetLength() const override {
+    return array_buffer_.span().size_bytes();
+  }
+
+  std::optional<base::span<const uint8_t>> GetAsSpanIfPossible()
+      const override {
+    return array_buffer_.span();
+  }
+
+  void CopyInto(base::span<uint8_t> dest) const override {
+    base::span<const uint8_t> source = array_buffer_.span();
+    dest.copy_prefix_from(source.first(std::min(source.size(), dest.size())));
+  }
+
+ private:
+  // Use gin::ArrayBuffer as a wrapper around the backing store, since it is
+  // allowed to hold the shared_ptr to the backing store.
+  const gin::ArrayBuffer array_buffer_;
+};
+
+v8::Local<v8::Context> GetScriptContext(blink::WebLocalFrame* web_frame,
+                                        int32_t world_id) {
+  v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
+  if (world_id != content::ISOLATED_WORLD_ID_GLOBAL) {
+    return web_frame->GetScriptContextFromWorldId(isolate, world_id);
+  } else {
+    return web_frame->MainWorldScriptContext();
+  }
+}
+
+}  // namespace
 
 namespace js_injection {
 
-gin::WrapperInfo JsBinding::kWrapperInfo = {gin::kEmbedderNativeGin};
-
 // static
-std::unique_ptr<JsBinding> JsBinding::Install(
+cppgc::WeakPersistent<JsBinding> JsBinding::Install(
     content::RenderFrame* render_frame,
     const std::u16string& js_object_name,
-    JsCommunication* js_java_configurator) {
+    base::WeakPtr<JsCommunication> js_communication,
+    v8::Isolate* isolate,
+    v8::Local<v8::Context> context,
+    int32_t world_id) {
   CHECK(!js_object_name.empty())
       << "JavaScript wrapper name shouldn't be empty";
 
-  v8::Isolate* isolate = blink::MainThreadIsolate();
-  v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Context> context =
-      render_frame->GetWebFrame()->MainWorldScriptContext();
-  if (context.IsEmpty())
-    return nullptr;
+  std::optional<v8::HandleScope> handle_scope;
+  std::optional<v8::Context::Scope> context_scope;
+  // The scopes may have already been setup outside this method.
+  if (!isolate) {
+    blink::WebLocalFrame* web_frame = render_frame->GetWebFrame();
+    isolate = web_frame->GetAgentGroupScheduler()->Isolate();
+    handle_scope.emplace(isolate);
+    context = GetScriptContext(web_frame, world_id);
+    if (context.IsEmpty()) {
+      return nullptr;
+    }
 
-  v8::Context::Scope context_scope(context);
-  std::unique_ptr<JsBinding> js_binding(
-      new JsBinding(render_frame, js_object_name, js_java_configurator));
-  gin::Handle<JsBinding> bindings =
-      gin::CreateHandle(isolate, js_binding.get());
-  if (bindings.IsEmpty())
+    context_scope.emplace(context);
+  }
+  JsBinding* js_binding = cppgc::MakeGarbageCollected<JsBinding>(
+      isolate->GetCppHeap()->GetAllocationHandle(), js_object_name,
+      js_communication, world_id);
+  v8::Local<v8::Object> wrapper;
+  if (!js_binding->GetWrapper(isolate).ToLocal(&wrapper)) {
     return nullptr;
+  }
 
   v8::Local<v8::Object> global = context->Global();
   global
-      ->CreateDataProperty(context,
-                           gin::StringToSymbol(isolate, js_object_name),
-                           bindings.ToV8())
+      ->CreateDataProperty(
+          context, gin::StringToSymbol(isolate, js_object_name), wrapper)
       .Check();
 
   return js_binding;
 }
 
-JsBinding::JsBinding(content::RenderFrame* render_frame,
-                     const std::u16string& js_object_name,
-                     JsCommunication* js_java_configurator)
-    : render_frame_(render_frame),
-      js_object_name_(js_object_name),
-      js_java_configurator_(js_java_configurator) {
-  mojom::JsToBrowserMessaging* js_to_java_messaging =
-      js_java_configurator_->GetJsToJavaMessage(js_object_name_);
-  if (js_to_java_messaging) {
-    js_to_java_messaging->SetBrowserToJsMessaging(
-        receiver_.BindNewEndpointAndPassRemote());
-  }
-}
+JsBinding::JsBinding(const std::u16string& js_object_name,
+                     base::WeakPtr<JsCommunication> js_communication,
+                     int32_t world_id)
+    : js_object_name_(js_object_name),
+      world_id_(world_id),
+      js_communication_(js_communication) {}
 
 JsBinding::~JsBinding() = default;
 
-void JsBinding::OnPostMessage(const std::u16string& message) {
-  v8::Isolate* isolate = blink::MainThreadIsolate();
-  v8::HandleScope handle_scope(isolate);
-
-  blink::WebLocalFrame* web_frame = render_frame_->GetWebFrame();
-  if (!web_frame)
+void JsBinding::OnPostMessage(blink::WebMessagePayload message) {
+  // If `js_communication_` is null, this object will soon be destroyed.
+  if (!js_communication_)
     return;
 
-  v8::Local<v8::Context> context = web_frame->MainWorldScriptContext();
+  content::RenderFrame* render_frame = js_communication_->render_frame();
+  if (!render_frame) {
+    return;
+  }
+  blink::WebLocalFrame* web_frame = render_frame->GetWebFrame();
+  if (!web_frame)
+    return;
+  v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
+  v8::HandleScope handle_scope(isolate);
+
+  v8::Local<v8::Context> context = GetScriptContext(web_frame, world_id_);
   if (context.IsEmpty())
     return;
 
@@ -100,23 +171,164 @@ void JsBinding::OnPostMessage(const std::u16string& message) {
   v8::TryCatch try_catch(isolate);
   try_catch.SetVerbose(true);
 
+  v8::Local<v8::Value> v8_message = std::visit(
+      absl::Overload{
+          [isolate](std::u16string& string_value) -> v8::Local<v8::Value> {
+            return gin::ConvertToV8(isolate, std::move(string_value));
+          },
+          [isolate](std::unique_ptr<blink::WebMessageArrayBufferPayload>&
+                        array_buffer_value) -> v8::Local<v8::Value> {
+            auto backing_store = v8::ArrayBuffer::NewBackingStore(
+                isolate, array_buffer_value->GetLength());
+            CHECK(backing_store->ByteLength() ==
+                  array_buffer_value->GetLength());
+            array_buffer_value->CopyInto(UNSAFE_TODO(
+                base::span(static_cast<uint8_t*>(backing_store->Data()),
+                           backing_store->ByteLength())));
+            return v8::ArrayBuffer::New(isolate, std::move(backing_store));
+          },
+#if BUILDFLAG(IS_ANDROID)
+          [isolate](base::UnsafeSharedMemoryRegion& shared_memory)
+              -> v8::Local<v8::Value> {
+            if (!shared_memory.IsValid()) {
+              return gin::DataObjectBuilder(isolate)
+                  .Set("error",
+                       gin::ConvertToV8(
+                           isolate,
+                           std::string_view(
+                               "Error: Invalid SharedArrayBuffer received")))
+                  .Build();
+            }
+            if (shared_memory.GetSize() > v8::ArrayBuffer::kMaxByteLength) {
+              return gin::DataObjectBuilder(isolate)
+                  .Set("error",
+                       gin::ConvertToV8(
+                           isolate,
+                           std::string_view("Error: Invalid SharedArrayBuffer "
+                                            "received. Buffer too large.")))
+                  .Build();
+            }
+            base::WritableSharedMemoryMapping mapping =
+                shared_memory.Map(gin::GetSharedMemoryMapperForArrayBuffers());
+            if (!mapping.IsValid()) {
+              return gin::DataObjectBuilder(isolate)
+                  .Set("error",
+                       gin::ConvertToV8(
+                           isolate,
+                           std::string_view("Error: Invalid SharedArrayBuffer "
+                                            "received. Unable to memory map.")))
+                  .Build();
+            }
+            void* data = mapping.data();
+            size_t size = mapping.size();
+
+            // Move the mapping information to the heap and make sure it will be
+            // cleaned up by the backing store deleter.
+            std::unique_ptr<v8::BackingStore> backing_store =
+                v8::SharedArrayBuffer::NewBackingStore(
+                    data, size,
+                    [](void* data, size_t length, void* deleter_data) {
+                      delete static_cast<base::WritableSharedMemoryMapping*>(
+                          deleter_data);
+                    },
+                    /*deleter_data=*/
+                    new base::WritableSharedMemoryMapping(std::move(mapping)));
+            return v8::SharedArrayBuffer::New(isolate,
+                                              std::move(backing_store));
+          },
+#endif
+      },
+      message);
+
   // Simulate MessageEvent's data property. See
   // https://html.spec.whatwg.org/multipage/comms.html#messageevent
   v8::Local<v8::Object> event =
-      gin::DataObjectBuilder(isolate).Set("data", message).Build();
+      gin::DataObjectBuilder(isolate).Set("data", v8_message).Build();
   v8::Local<v8::Value> argv[] = {event};
 
   v8::Local<v8::Object> self = GetWrapper(isolate).ToLocalChecked();
   v8::Local<v8::Function> on_message = GetOnMessage(isolate);
   if (!on_message.IsEmpty()) {
-    web_frame->RequestExecuteV8Function(context, on_message, self, 1, argv,
-                                        nullptr);
+    web_frame->RequestExecuteV8Function(context, on_message, self, 1, argv, {});
   }
 
+  // Copy the listeners so that if the listener modifies the list in some way
+  // there isn't a UAF.
+  v8::LocalVector<v8::Function> listeners_copy(isolate);
+  listeners_copy.reserve(listeners_.size());
   for (const auto& listener : listeners_) {
-    web_frame->RequestExecuteV8Function(context, listener.Get(isolate), self, 1,
-                                        argv, nullptr);
+    listeners_copy.push_back(listener.Get(isolate));
   }
+  for (const auto& listener : listeners_copy) {
+    // Ensure the listener is still registered.
+    if (find_listener(listener) != listeners_.end()) {
+      web_frame->RequestExecuteV8Function(context, listener, self, 1, argv, {});
+    }
+  }
+}
+
+void JsBinding::OnExecuteJavaScript(const std::u16string& javascript,
+                                    bool wants_result,
+                                    OnExecuteJavaScriptCallback callback) {
+  // If `js_communication_` is null, this object will soon be destroyed.
+  if (!js_communication_) {
+    if (wants_result) {
+      std::move(callback).Run(
+          base::unexpected(mojom::JavaScriptExecutionError::kFrameDestroyed));
+    }
+    return;
+  }
+
+  content::RenderFrame* render_frame = js_communication_->render_frame();
+  if (!render_frame) {
+    if (wants_result) {
+      std::move(callback).Run(
+          base::unexpected(mojom::JavaScriptExecutionError::kFrameDestroyed));
+    }
+    return;
+  }
+  blink::WebLocalFrame* web_frame = render_frame->GetWebFrame();
+  if (!web_frame) {
+    if (wants_result) {
+      std::move(callback).Run(
+          base::unexpected(mojom::JavaScriptExecutionError::kFrameDestroyed));
+    }
+    return;
+  }
+  v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
+  v8::HandleScope handle_scope(isolate);
+
+  v8::Local<v8::Context> context = GetScriptContext(web_frame, world_id_);
+  if (context.IsEmpty()) {
+    if (wants_result) {
+      std::move(callback).Run(
+          base::unexpected(mojom::JavaScriptExecutionError::kFrameDestroyed));
+    }
+    return;
+  }
+
+  blink::WebScriptSource web_script_source(
+      blink::WebString::FromUtf16(javascript));
+  web_frame->RequestExecuteScript(
+      world_id_, base::span_from_ref(web_script_source),
+      blink::mojom::UserActivationOption::kDoNotActivate,
+      blink::mojom::EvaluationTiming::kSynchronous,
+      blink::mojom::LoadEventBlockingOption::kDoNotBlock,
+      base::BindOnce(
+          [](bool wants_result, OnExecuteJavaScriptCallback callback,
+             std::optional<base::Value> value, base::TimeTicks start_time) {
+            if (wants_result) {
+              std::move(callback).Run(value ? std::move(*value)
+                                            : base::Value());
+            }
+          },
+          wants_result, std::move(callback)),
+      blink::BackForwardCacheAware::kAllow,
+      wants_result
+          ? blink::mojom::WantResultOption::kWantResultDateAndRegExpAllowed
+          : blink::mojom::WantResultOption::kNoResult,
+      blink::mojom::PromiseResultOption::kDoNotWait,
+      /*script_injector_id=*/blink::WebString());
 }
 
 void JsBinding::ReleaseV8GlobalObjects() {
@@ -124,25 +336,51 @@ void JsBinding::ReleaseV8GlobalObjects() {
   on_message_.Reset();
 }
 
+void JsBinding::Bind(
+    mojo::PendingAssociatedReceiver<mojom::BrowserToJsMessaging> receiver) {
+  receiver_.reset();
+  return receiver_.Bind(std::move(receiver));
+}
+
+void JsBinding::Dispose() {
+  // Explicitly reset the receiver to prevent IPC messages from being dispatched
+  // to this object while it is awaiting lazy sweeping. This prevents a UAF if
+  // synchronous JS execution triggers a nested GC. See crbug.com/503889643.
+  receiver_.reset();
+}
+
 gin::ObjectTemplateBuilder JsBinding::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
   return gin::Wrappable<JsBinding>::GetObjectTemplateBuilder(isolate)
-      .SetMethod(kPostMessage, &JsBinding::PostMessage)
-      .SetMethod(kAddEventListener, &JsBinding::AddEventListener)
-      .SetMethod(kRemoveEventListener, &JsBinding::RemoveEventListener)
-      .SetProperty(kOnMessage, &JsBinding::GetOnMessage,
-                   &JsBinding::SetOnMessage);
+      .SetMethod<&JsBinding::PostMessage>(kPostMessage)
+      .SetMethod<&JsBinding::AddEventListener>(kAddEventListener)
+      .SetMethod<&JsBinding::RemoveEventListener>(kRemoveEventListener)
+      .SetProperty<&JsBinding::GetOnMessage, &JsBinding::SetOnMessage>(
+          kOnMessage);
 }
 
 void JsBinding::PostMessage(gin::Arguments* args) {
-  std::u16string message;
-  if (!args->GetNext(&message)) {
+  v8::Local<v8::Value> js_payload;
+  if (!args->GetNext(&js_payload)) {
+    args->ThrowError();
+    return;
+  }
+  blink::WebMessagePayload message_payload;
+  if (js_payload->IsString()) {
+    std::u16string string;
+    gin::Converter<std::u16string>::FromV8(args->isolate(), js_payload,
+                                           &string);
+    message_payload = std::move(string);
+  } else if (js_payload->IsArrayBuffer()) {
+    v8::Local<v8::ArrayBuffer> array_buffer = js_payload.As<v8::ArrayBuffer>();
+    message_payload = std::make_unique<V8ArrayBufferPayload>(array_buffer);
+  } else {
     args->ThrowError();
     return;
   }
 
   std::vector<blink::MessagePortChannel> ports;
-  std::vector<v8::Local<v8::Object>> objs;
+  v8::LocalVector<v8::Object> objs(args->isolate());
   // If we get more than two arguments and the second argument is not an array
   // of ports, we can't process.
   if (args->Length() >= 2 && !args->GetNext(&objs)) {
@@ -151,7 +389,7 @@ void JsBinding::PostMessage(gin::Arguments* args) {
   }
 
   for (auto& obj : objs) {
-    absl::optional<blink::MessagePortChannel> port =
+    std::optional<blink::MessagePortChannel> port =
         blink::WebMessagePortConverter::DisentangleAndExtractMessagePortChannel(
             args->isolate(), obj);
     // If the port is null we should throw an exception.
@@ -163,10 +401,13 @@ void JsBinding::PostMessage(gin::Arguments* args) {
   }
 
   mojom::JsToBrowserMessaging* js_to_java_messaging =
-      js_java_configurator_->GetJsToJavaMessage(js_object_name_);
+      js_communication_
+          ? js_communication_->GetJsToJavaMessage(js_object_name_, world_id_)
+          : nullptr;
   if (js_to_java_messaging) {
     js_to_java_messaging->PostMessage(
-        message, blink::MessagePortChannel::ReleaseHandles(ports));
+        std::move(message_payload),
+        blink::MessagePortChannel::ReleaseHandles(ports));
   }
 }
 
@@ -194,12 +435,12 @@ void JsBinding::AddEventListener(gin::Arguments* args) {
     return;
   }
 
-  if (base::Contains(listeners_, listener))
+  if (find_listener(listener) != listeners_.end()) {
     return;
+  }
 
-  v8::Local<v8::Context> context = args->GetHolderCreationContext();
   listeners_.push_back(
-      v8::Global<v8::Function>(context->GetIsolate(), listener));
+      v8::Global<v8::Function>(v8::Isolate::GetCurrent(), listener));
 }
 
 // RemoveEventListener() needs to match EventTarget's RemoveEventListener() in
@@ -226,11 +467,9 @@ void JsBinding::RemoveEventListener(gin::Arguments* args) {
     return;
   }
 
-  auto iter = std::find(listeners_.begin(), listeners_.end(), listener);
-  if (iter == listeners_.end())
-    return;
-
-  listeners_.erase(iter);
+  if (auto iter = find_listener(listener); iter != listeners_.end()) {
+    listeners_.erase(iter);
+  }
 }
 
 v8::Local<v8::Function> JsBinding::GetOnMessage(v8::Isolate* isolate) {
@@ -242,6 +481,10 @@ void JsBinding::SetOnMessage(v8::Isolate* isolate, v8::Local<v8::Value> value) {
     on_message_.Reset(isolate, value.As<v8::Function>());
   else
     on_message_.Reset();
+}
+
+const gin::WrapperInfo* JsBinding::wrapper_info() const {
+  return &kWrapperInfo;
 }
 
 }  // namespace js_injection

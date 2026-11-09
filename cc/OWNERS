@@ -9,18 +9,23 @@ set noparent
 # layers
 pdr@chromium.org
 wangxianzhu@chromium.org
+vmiura@chromium.org
+zmo@chromium.org
+zork@chromium.org
 
 # mac-specific
 ccameron@chromium.org
 
 # scheduling / begin frames
-sunnyps@chromium.org
+jonross@chromium.org
+szager@chromium.org
 
 # tiles, tile management, and raster work
+vmiura@chromium.org
 vmpstr@chromium.org
 
 # texture uploading
-sunnyps@chromium.org
+vasilyt@chromium.org
 
 # math / geometry
 dbaron@chromium.org
@@ -28,13 +33,11 @@ flackr@chromium.org
 
 # property trees
 chrishtr@chromium.org
-weiliangc@chromium.org
 pdr@chromium.org
 wangxianzhu@chromium.org
 
 # animation
 flackr@chromium.org
-smcgruer@chromium.org
 
 # images
 vmpstr@chromium.org
@@ -45,18 +48,23 @@ jonross@chromium.org
 
 # input, scrolling
 bokan@chromium.org
-
-# scroll snap
-majidvp@chromium.org
+flackr@chromium.org
+jonross@chromium.org
 
 # metrics
-sadrul@chromium.org
+jonross@chromium.org
+gaiko@google.com
+# ScrollJank metrics
+petrcermak@chromium.org
 
 # paint
-sunnyps@chromium.org
 vasilyt@chromium.org
-reed@google.com
 fmalita@chromium.org
 
+# EU coverage
+blundell@chromium.org
+
 # general
+vmiura@chromium.org
 vmpstr@chromium.org
+khushalsagar@chromium.org

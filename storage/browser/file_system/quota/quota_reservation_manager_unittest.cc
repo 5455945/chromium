@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "storage/browser/file_system/quota/open_file_handle.h"
 #include "storage/browser/file_system/quota/quota_reservation.h"
 #include "storage/browser/file_system/quota/quota_reservation_manager.h"
@@ -34,12 +32,6 @@ const int64_t kInitialFileSize = 1;
 
 using ReserveQuotaCallback = QuotaReservationManager::ReserveQuotaCallback;
 
-int64_t GetFileSize(const base::FilePath& path) {
-  int64_t size = 0;
-  base::GetFileSize(path, &size);
-  return size;
-}
-
 void SetFileSize(const base::FilePath& path, int64_t size) {
   base::File file(path, base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_WRITE);
   ASSERT_TRUE(file.IsValid());
@@ -49,6 +41,10 @@ void SetFileSize(const base::FilePath& path, int64_t size) {
 class FakeBackend : public QuotaReservationManager::QuotaBackend {
  public:
   FakeBackend() = default;
+
+  FakeBackend(const FakeBackend&) = delete;
+  FakeBackend& operator=(const FakeBackend&) = delete;
+
   ~FakeBackend() override = default;
 
   void ReserveQuota(const url::Origin& origin,
@@ -58,7 +54,7 @@ class FakeBackend : public QuotaReservationManager::QuotaBackend {
     EXPECT_EQ(this->origin(), origin);
     EXPECT_EQ(kType, type);
     on_memory_usage_ += delta;
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(base::IgnoreResult(std::move(callback)),
                                   base::File::FILE_OK, delta));
   }
@@ -94,8 +90,6 @@ class FakeBackend : public QuotaReservationManager::QuotaBackend {
   const url::Origin origin_ = url::Origin::Create(GURL("http://example.com"));
   int64_t on_memory_usage_ = kInitialFileSize;
   int64_t on_disk_usage_ = kInitialFileSize;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBackend);
 };
 
 class FakeWriter {
@@ -131,15 +125,16 @@ class FakeWriter {
       consumed = max_offset - max_written_offset_;
       max_written_offset_ = max_offset;
     }
-    if (GetFileSize(path_) < max_offset)
+    if (base::GetFileSize(path_).value_or(0) < max_offset) {
       SetFileSize(path_, max_offset);
+    }
     return consumed;
   }
 
   int64_t Append(int64_t amount) {
     dirty_ = true;
     append_mode_write_amount_ += amount;
-    SetFileSize(path_, GetFileSize(path_) + amount);
+    SetFileSize(path_, base::GetFileSize(path_).value_or(0) + amount);
     return amount;
   }
 
@@ -181,6 +176,11 @@ void RefreshReservation(QuotaReservation* reservation, int64_t size) {
 class QuotaReservationManagerTest : public testing::Test {
  public:
   QuotaReservationManagerTest() = default;
+
+  QuotaReservationManagerTest(const QuotaReservationManagerTest&) = delete;
+  QuotaReservationManagerTest& operator=(const QuotaReservationManagerTest&) =
+      delete;
+
   ~QuotaReservationManagerTest() override = default;
 
   void SetUp() override {
@@ -215,8 +215,6 @@ class QuotaReservationManagerTest : public testing::Test {
   base::ScopedTempDir work_dir_;
   base::FilePath file_path_;
   std::unique_ptr<QuotaReservationManager> reservation_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuotaReservationManagerTest);
 };
 
 TEST_F(QuotaReservationManagerTest, BasicTest) {
@@ -237,7 +235,8 @@ TEST_F(QuotaReservationManagerTest, BasicTest) {
   }
 
   EXPECT_EQ(3, reservation->remaining_quota());
-  EXPECT_EQ(kInitialFileSize + 10 + 20, GetFileSize(file_path()));
+  EXPECT_EQ(kInitialFileSize + 10 + 20,
+            base::GetFileSize(file_path()).value_or(0));
   EXPECT_EQ(kInitialFileSize + 10 + 20, fake_backend()->on_disk_usage());
   EXPECT_EQ(kInitialFileSize + 10 + 20 + 3, fake_backend()->on_memory_usage());
 
@@ -251,7 +250,7 @@ TEST_F(QuotaReservationManagerTest, BasicTest) {
   }
 
   EXPECT_EQ(5, reservation->remaining_quota());
-  EXPECT_EQ(3, GetFileSize(file_path()));
+  EXPECT_EQ(3, base::GetFileSize(file_path()).value_or(0));
   EXPECT_EQ(3, fake_backend()->on_disk_usage());
   EXPECT_EQ(3 + 5, fake_backend()->on_memory_usage());
 
@@ -284,7 +283,8 @@ TEST_F(QuotaReservationManagerTest, MultipleWriter) {
     writer3.ReportUsage();
   }
 
-  EXPECT_EQ(kInitialFileSize + 20 + 30 + 40, GetFileSize(file_path()));
+  EXPECT_EQ(kInitialFileSize + 20 + 30 + 40,
+            base::GetFileSize(file_path()).value_or(0));
   EXPECT_EQ(kInitialFileSize + 10 + 20 + 30 + 40 + 5,
             fake_backend()->on_memory_usage());
   EXPECT_EQ(kInitialFileSize + 20 + 30 + 40, fake_backend()->on_disk_usage());
@@ -328,7 +328,8 @@ TEST_F(QuotaReservationManagerTest, MultipleClient) {
   writer1.reset();
   writer2.reset();
 
-  EXPECT_EQ(kInitialFileSize + 10 + 20, GetFileSize(file_path()));
+  EXPECT_EQ(kInitialFileSize + 10 + 20,
+            base::GetFileSize(file_path()).value_or(0));
   EXPECT_EQ(kInitialFileSize + 10 + 20 + 2 + 3,
             fake_backend()->on_memory_usage());
   EXPECT_EQ(kInitialFileSize + 10 + 20, fake_backend()->on_disk_usage());
@@ -359,7 +360,7 @@ TEST_F(QuotaReservationManagerTest, ClientCrash) {
   }
   reservation1 = nullptr;
 
-  EXPECT_EQ(kInitialFileSize + 10, GetFileSize(file_path()));
+  EXPECT_EQ(kInitialFileSize + 10, base::GetFileSize(file_path()).value_or(0));
   EXPECT_EQ(kInitialFileSize + 15 + 20, fake_backend()->on_memory_usage());
   EXPECT_EQ(kInitialFileSize + 10, fake_backend()->on_disk_usage());
 

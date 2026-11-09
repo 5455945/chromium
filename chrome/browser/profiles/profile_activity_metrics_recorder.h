@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,23 @@
 #define CHROME_BROWSER_PROFILES_PROFILE_ACTIVITY_METRICS_RECORDER_H_
 
 #include <stddef.h>
+
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/user_metrics.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 
-class Browser;
+class BrowserWindowInterface;
+class GlobalBrowserCollection;
 
 class ProfileActivityMetricsRecorder
-    : public BrowserListObserver,
+    : public BrowserCollectionObserver,
       public metrics::DesktopSessionDurationTracker::Observer,
       public ProfileObserver {
  public:
@@ -34,8 +37,8 @@ class ProfileActivityMetricsRecorder
   // Cleans up any global state for testing.
   static void CleanupForTesting();
 
-  // BrowserListObserver overrides:
-  void OnBrowserSetLastActive(Browser* browser) override;
+  // BrowserCollectionObserver overrides:
+  void OnBrowserActivated(BrowserWindowInterface* browser) override;
 
   // metrics::DesktopSessionDurationTracker::Observer overrides:
   void OnSessionEnded(base::TimeDelta session_length,
@@ -51,16 +54,22 @@ class ProfileActivityMetricsRecorder
   void OnUserAction(const std::string& action, base::TimeTicks action_time);
 
   // The profile of the last active window.
-  Profile* last_active_profile_ = nullptr;
+  raw_ptr<Profile, AcrossTasksDanglingUntriaged> last_active_profile_ = nullptr;
 
   // Profile of the currently running session, if there is any. Reset after
   // inactivity.
-  Profile* running_session_profile_ = nullptr;
+  raw_ptr<Profile, AcrossTasksDanglingUntriaged> running_session_profile_ =
+      nullptr;
   base::TimeTicks running_session_start_;
   base::TimeTicks last_session_end_;
 
   base::ActionCallback action_callback_;
 
+  // TODO(crbug.com/495682727): remove when the ProfileActivityMetricsRecorder
+  // is no longer outliving the GlobalBrowserCollection it observes.
+  base::ScopedObservation<GlobalBrowserCollection,
+                          BrowserCollectionObserver>::LeakedDanglingUntriaged
+      browser_collection_observation_{this};
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
 };
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,24 +9,25 @@
 
 #include <vector>
 
-#include "base/macros.h"
-#include "sandbox/win/src/sid.h"
+#include "base/win/sid.h"
 
 namespace sandbox {
 
 class SecurityCapabilities final : public SECURITY_CAPABILITIES {
  public:
-  explicit SecurityCapabilities(const Sid& package_sid);
-  SecurityCapabilities(const Sid& package_sid,
-                       const std::vector<Sid>& capabilities);
+  explicit SecurityCapabilities(const base::win::Sid& package_sid);
+  SecurityCapabilities(const base::win::Sid& package_sid,
+                       const std::vector<base::win::Sid>& capabilities);
+
+  SecurityCapabilities(const SecurityCapabilities&) = delete;
+  SecurityCapabilities& operator=(const SecurityCapabilities&) = delete;
+
   ~SecurityCapabilities();
 
  private:
-  std::vector<Sid> capabilities_;
+  std::vector<base::win::Sid> capabilities_;
   std::vector<SID_AND_ATTRIBUTES> capability_sids_;
-  Sid package_sid_;
-
-  DISALLOW_COPY_AND_ASSIGN(SecurityCapabilities);
+  base::win::Sid package_sid_;
 };
 
 }  // namespace sandbox

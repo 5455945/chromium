@@ -1,4 +1,4 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 import re
@@ -13,46 +13,46 @@ import re
 #   - "additionalProperties": false is not supported. Instead, it is assumed by
 #     default. The value of "additionalProperties" has to be a schema.
 ALLOWED_ATTRIBUTES_AND_TYPES = {
-    'boolean': {
-        'type': str,  # required
-        'id': str,  # optional
-        'description': str,  # optional
-        'sensitiveValue': bool  # optional
-    },
-    'string': {
-        'type': str,  # required
-        'id': str,  # optional
-        'description': str,  # optional
-        'enum': list,  # optional
-        'pattern': str,  # optional
-        'sensitiveValue': bool  # optional
-    },
-    'integer': {
-        'type': str,  # required
-        'id': str,  # optional
-        'description': str,  # optional
-        'enum': list,  # optional
-        'minimum': int,  # optional
-        'maximum': int,  # optional
-        'sensitiveValue': bool  # optional
-    },
-    'array': {
-        'type': str,  # required
-        'id': str,  # optional
-        'items': dict,  # required,
-        'description': str,  # optional
-        'sensitiveValue': bool  # optional
-    },
-    'object': {
-        'type': str,  # required
-        'id': str,  # optional
-        'description': str,  # optional
-        'properties': dict,  #           one of these 3 properties is required
-        'patternProperties': dict,  #    one of these 3 properties is required
-        'additionalProperties': dict,  # one of these 3 properties is required
-        'required': list,  # optional
-        'sensitiveValue': bool  # optional
-    }
+  'boolean': {
+    'type': str,  # required
+    'id': str,  # optional
+    'description': str,  # optional
+    'sensitiveValue': bool,  # optional
+  },
+  'string': {
+    'type': str,  # required
+    'id': str,  # optional
+    'description': str,  # optional
+    'enum': list,  # optional
+    'pattern': str,  # optional
+    'sensitiveValue': bool,  # optional
+  },
+  'integer': {
+    'type': str,  # required
+    'id': str,  # optional
+    'description': str,  # optional
+    'enum': list,  # optional
+    'minimum': int,  # optional
+    'maximum': int,  # optional
+    'sensitiveValue': bool,  # optional
+  },
+  'array': {
+    'type': str,  # required
+    'id': str,  # optional
+    'items': dict,  # required,
+    'description': str,  # optional
+    'sensitiveValue': bool,  # optional
+  },
+  'object': {
+    'type': str,  # required
+    'id': str,  # optional
+    'description': str,  # optional
+    'properties': dict,  #           one of these 3 properties is required
+    'patternProperties': dict,  #    one of these 3 properties is required
+    'additionalProperties': dict,  # one of these 3 properties is required
+    'required': list,  # optional
+    'sensitiveValue': bool,  # optional
+  },
 }
 
 # Dict of allowed attributes and their expected types for schemas with a $ref.
@@ -76,7 +76,7 @@ class SchemaValidator(object):
     self.schemas_by_id = {}
     self.invalid_ref_ids = set()
     self.found_ref_ids = set()
-    self.num_errors = 0
+    self.errors = []
     self.enforce_use_entire_schema = False
     self.expected_properties = {}
     self.expected_pattern_properties = {}
@@ -85,7 +85,7 @@ class SchemaValidator(object):
     self.used_pattern_properties = {}
     self.used_additional_properties = {}
 
-  def ValidateSchema(self, schema):
+  def ValidateSchema(self, schema, schemas_by_id):
     """Checks if |schema| is a valid schema and only uses valid $ref links.
 
     See _ValidateSchemaInternal() for a detailed description of the schema
@@ -93,11 +93,14 @@ class SchemaValidator(object):
     valid.
     Args:
       schema (dict): The JSON schema.
+      schemas_by_id (dict): A dictionary of all the schemas that can refered to
+                            using $ref.
     Returns:
-      bool: Whether the schema is valid or not.
+      A list contains all schema errors.
     """
     self.found_ref_ids.clear()
-    self.num_errors = 0
+    self.errors = []
+    self.schemas_by_id = schemas_by_id
 
     self._ValidateSchemaInternal(schema)
 
@@ -108,7 +111,7 @@ class SchemaValidator(object):
       else:
         self._Error("Unknown $ref '%s'." % unknown_ref_id)
 
-    return self.num_errors == 0
+    return self.errors
 
   def _ValidateSchemaInternal(self, schema):
     """Check if |schema| is a valid schema.
@@ -126,7 +129,7 @@ class SchemaValidator(object):
     Args:
       schema (dict): The JSON schema.
     """
-    num_errors_before = self.num_errors
+    num_errors_before = len(self.errors)
     # Check that schema is of type dict.
     if not isinstance(schema, dict):
       self._Error("Schema must be a dict.")
@@ -137,14 +140,19 @@ class SchemaValidator(object):
       ref_id = schema['$ref']
       for name, value in schema.items():
         if name not in ALLOWED_REF_ATTRIBUTES_AND_TYPES:
-          self._Error("Attribute '%s' is not allowed for schema with $ref '%s'."
-                      % (name, ref_id))
+          self._Error(
+            "Attribute '%s' is not allowed for schema with $ref '%s'."
+            % (name, ref_id)
+          )
         expected_type = ALLOWED_REF_ATTRIBUTES_AND_TYPES[name]
         if not isinstance(value, expected_type):
           self._Error(
-              ("Attribute value for '%s' (%s) has incorrect type (Expected "
-               "type: '%s'; actual type: '%s')") % (name, value, expected_type,
-                                                    type(value)))
+            (
+              "Attribute value for '%s' (%s) has incorrect type (Expected "
+              "type: '%s'; actual type: '%s')"
+            )
+            % (name, value, expected_type, type(value))
+          )
       self.found_ref_ids.add(ref_id)
       return
 
@@ -165,12 +173,17 @@ class SchemaValidator(object):
         expected_type = allowed_attributes[attribute_name]
         if not isinstance(attribute_value, expected_type):
           self._Error(
-              ("Attribute '%s' has incorrect type (Expected type: '%s'; actual "
-               "type: '%s').") % (attribute_name, expected_type,
-                                  type(attribute_value)))
+            (
+              "Attribute '%s' has incorrect type (Expected type: '%s'; actual "
+              "type: '%s')."
+            )
+            % (attribute_name, expected_type, type(attribute_value))
+          )
       else:
-        self._Error("Attribute '%s' is not allowed for type '%s'." %
-                    (attribute_name, schema_type))
+        self._Error(
+          "Attribute '%s' is not allowed for type '%s'."
+          % (attribute_name, schema_type)
+        )
 
     # Validate schemas depending on 'type'.
     if schema_type == 'string':
@@ -188,7 +201,7 @@ class SchemaValidator(object):
       ref_id = schema['id']
       if ref_id in self.schemas_by_id:
         self._Error("ID '%s' is not unique." % ref_id)
-      if self.num_errors == num_errors_before:
+      if len(self.errors) == num_errors_before:
         self.schemas_by_id[ref_id] = schema
       else:
         self.invalid_ref_ids.add(ref_id)
@@ -217,10 +230,15 @@ class SchemaValidator(object):
     """
     if 'enum' in schema:
       self._ValidateEnum(schema['enum'], 'integer')
-    if ('minimum' in schema and 'maximum' in schema and
-        schema['minimum'] > schema['maximum']):
-      self._Error("Invalid range specified: [%s; %s]" % (schema['minimum'],
-                                                         schema['maximum']))
+    if (
+      'minimum' in schema
+      and 'maximum' in schema
+      and schema['minimum'] > schema['maximum']
+    ):
+      self._Error(
+        "Invalid range specified: [%s; %s]"
+        % (schema['minimum'], schema['maximum'])
+      )
 
   def _ValidateArraySchema(self, schema):
     """Validates a |schema| with type 'array'.
@@ -256,13 +274,15 @@ class SchemaValidator(object):
       if not required_properties:
         self._Error("Attribute 'required' may not be empty (omit it if empty).")
       if not all(
-          isinstance(required_property, str)
-          for required_property in required_properties):
+        isinstance(required_property, str)
+        for required_property in required_properties
+      ):
         self._Error("Attribute 'required' may only contain strings.")
       properties = schema.get('properties', {})
       unknown_properties = [
-          property_name for property_name in required_properties
-          if property_name not in properties
+        property_name
+        for property_name in required_properties
+        if property_name not in properties
       ]
       if unknown_properties:
         self._Error("Unknown properties in 'required': %s" % unknown_properties)
@@ -289,9 +309,10 @@ class SchemaValidator(object):
       self._ValidateSchemaInternal(additional_properties)
     if not has_any_properties:
       self._Error(
-          "Schema of type 'object' must have at least one of the following "
-          "attributes: ['properties', 'patternProperties' or "
-          "'additionalProperties'].")
+        "Schema of type 'object' must have at least one of the following "
+        "attributes: ['properties', 'patternProperties' or "
+        "'additionalProperties']."
+      )
 
   def _ValidateEnum(self, enum, schema_type):
     """Validates an |enum| of type |schema_type|.
@@ -306,8 +327,13 @@ class SchemaValidator(object):
       self._Error("Attribute 'enum' may not be empty.")
     item_type = ENUM_ITEM_TYPES[schema_type]
     if not all(isinstance(enum_value, item_type) for enum_value in enum):
-      self._Error(("Attribute 'enum' for type '%s' may only contain elements of"
-                   " type %s: %s") % (schema_type, item_type, enum))
+      self._Error(
+        (
+          "Attribute 'enum' for type '%s' may only contain elements of"
+          " type %s: %s"
+        )
+        % (schema_type, item_type, enum)
+      )
 
   def _ValidatePattern(self, pattern):
     """Validates a regex |pattern|.
@@ -336,7 +362,7 @@ class SchemaValidator(object):
       enforce_use_entire_schema (bool): Whether each property hsa to be used at
         least once.
     Returns:
-      bool: Whether the value is valid or not.
+      A list contains all value errors.
     """
     self.enforce_use_entire_schema = enforce_use_entire_schema
     self.expected_properties = {}
@@ -345,7 +371,7 @@ class SchemaValidator(object):
     self.used_properties = {}
     self.used_pattern_properties = {}
     self.used_additional_properties = {}
-    self.num_errors = 0
+    self.errors = []
 
     self._ValidateValueInternal(schema, value)
 
@@ -353,15 +379,16 @@ class SchemaValidator(object):
     # used at least once for each schema.
     if self.enforce_use_entire_schema:
       if self.expected_properties != self.used_properties:
-        for schema_id, expected_properties \
-            in self.expected_properties.items():
+        for schema_id, expected_properties in self.expected_properties.items():
           used_properties = self.used_properties.get(schema_id, set())
           unused_properties = expected_properties.difference(used_properties)
           if unused_properties:
             self._Error("Unused properties: %s" % unused_properties)
       if self.expected_pattern_properties != self.used_pattern_properties:
-        for schema_id, expected_properties \
-            in self.expected_pattern_properties.items():
+        for (
+          schema_id,
+          expected_properties,
+        ) in self.expected_pattern_properties.items():
           used_properties = self.used_pattern_properties.get(schema_id, set())
           unused_properties = expected_properties.difference(used_properties)
           if unused_properties:
@@ -369,7 +396,7 @@ class SchemaValidator(object):
       if self.expected_additional_properties != self.used_additional_properties:
         self._Error("Unused additional properties.")
 
-    return self.num_errors == 0
+    return self.errors
 
   def _ValidateValueInternal(self, schema, value):
     """Validates that |value| complies to |schema|.
@@ -402,8 +429,9 @@ class SchemaValidator(object):
     else:
       # Type mismatch or unknown type.
       self._Error(
-          "Type mismatch or unknown (schema_type: %s; value_type: %s): %s" %
-          (schema_type, type(value), value))
+        "Type mismatch or unknown (schema_type: %s; value_type: %s): %s"
+        % (schema_type, type(value), value)
+      )
 
   def ValidateIntegerValue(self, schema, value):
     """Validates an integer |value| according to |schema|.
@@ -418,11 +446,13 @@ class SchemaValidator(object):
     """
     if 'enum' in schema:
       self._ValidateEnumValue(schema['enum'], value)
-    if (('minimum' in schema and value < schema['minimum']) or
-        ('maximum' in schema and value > schema['maximum'])):
+    if ('minimum' in schema and value < schema['minimum']) or (
+      'maximum' in schema and value > schema['maximum']
+    ):
       self._Error(
-          "Value %s not in range [%s,%s]." %
-          (value, schema.get('minimum', '-inf'), schema.get('maximum', '+inf')))
+        "Value %s not in range [%s,%s]."
+        % (value, schema.get('minimum', '-inf'), schema.get('maximum', '+inf'))
+      )
 
   def ValidateStringValue(self, schema, value):
     """Validates a string |value| according to |schema|.
@@ -441,7 +471,8 @@ class SchemaValidator(object):
       pattern = schema['pattern']
       if not re.search(pattern, value):
         self._Error(
-            "String value '%s' does not match pattern '%s'." % (value, pattern))
+          "String value '%s' does not match pattern '%s'." % (value, pattern)
+        )
 
   def ValidateArrayValue(self, schema, child_values):
     """Validates an array |child_values| according to |schema|.
@@ -484,9 +515,11 @@ class SchemaValidator(object):
     if schema_id not in self.expected_properties:
       self.expected_properties[schema_id] = set(properties.keys())
       self.expected_pattern_properties[schema_id] = set(
-          pattern_properties.keys())
+        pattern_properties.keys()
+      )
       self.expected_additional_properties[schema_id] = (
-          'additionalProperties' in schema)
+        'additionalProperties' in schema
+      )
       self.used_properties[schema_id] = set()
       self.used_pattern_properties[schema_id] = set()
       self.used_additional_properties[schema_id] = False
@@ -499,9 +532,14 @@ class SchemaValidator(object):
         property_schema = properties[property_key]
         self.used_properties[schema_id].add(property_key)
       elif pattern_properties:
-        matched_pattern = next((pattern
-                                for pattern in pattern_properties.keys()
-                                if re.search(pattern, property_key)), "")
+        matched_pattern = next(
+          (
+            pattern
+            for pattern in pattern_properties.keys()
+            if re.search(pattern, property_key)
+          ),
+          "",
+        )
         property_schema = pattern_properties.get(matched_pattern, {})
         self.used_pattern_properties[schema_id].add(matched_pattern)
       if not property_schema and additional_properties:
@@ -515,8 +553,9 @@ class SchemaValidator(object):
     # Check that all 'required' properties are existing.
     if 'required' in schema:
       missing_required = [
-          required_key for required_key in schema['required']
-          if required_key not in value
+        required_key
+        for required_key in schema['required']
+        if required_key not in value
       ]
       if missing_required:
         self._Error("Required property missing: %s" % missing_required)
@@ -534,8 +573,7 @@ class SchemaValidator(object):
   def _Error(self, message):
     """Captures an error.
 
-    Logs the error |message| and increases the error count |num_errors| by one.
+    Stores error |messages|.
     Args:
       message (str): The error message."""
-    self.num_errors += 1
-    print(message)
+    self.errors.append(message)

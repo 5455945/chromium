@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <memory>
 
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
 #include "components/strings/grit/components_strings.h"
@@ -17,14 +18,13 @@
 // static
 void GoogleApiKeysInfoBarDelegate::Create(
     infobars::ContentInfoBarManager* infobar_manager) {
-  infobar_manager->AddInfoBar(
-      CreateConfirmInfoBar(std::unique_ptr<ConfirmInfoBarDelegate>(
+  infobar_manager->AddInfoBar(CreateConfirmInfoBar(
+      ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(),
+      base::WrapUnique<ConfirmInfoBarDelegate>(
           new GoogleApiKeysInfoBarDelegate())));
 }
 
-GoogleApiKeysInfoBarDelegate::GoogleApiKeysInfoBarDelegate()
-    : ConfirmInfoBarDelegate() {
-}
+GoogleApiKeysInfoBarDelegate::GoogleApiKeysInfoBarDelegate() = default;
 
 infobars::InfoBarDelegate::InfoBarIdentifier
 GoogleApiKeysInfoBarDelegate::GetIdentifier() const {

@@ -1,15 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <initializer_list>
+
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/permissions_policy/dom_feature_policy.h"
 #include "third_party/blink/renderer/core/permissions_policy/iframe_policy.h"
 #include "third_party/blink/renderer/core/permissions_policy/permissions_policy_parser.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
@@ -17,7 +24,9 @@ namespace blink {
 namespace {
 constexpr char kSelfOrigin[] = "https://selforigin.com";
 constexpr char kOriginA[] = "https://example.com";
+constexpr char kOriginASubdomain[] = "https://sub.example.com";
 constexpr char kOriginB[] = "https://example.net";
+constexpr char kOriginBSubdomain[] = "https://sub.example.net";
 }  // namespace
 
 using testing::UnorderedElementsAre;
@@ -27,16 +36,17 @@ class PolicyTest : public testing::Test {
   void SetUp() override {
     page_holder_ = std::make_unique<DummyPageHolder>();
 
-    auto origin = SecurityOrigin::CreateFromString(kSelfOrigin);
+    scoped_refptr origin = SecurityOrigin::CreateFromString(kSelfOrigin);
 
-    auto permissions_policy = PermissionsPolicy::CreateFromParentPolicy(
-        nullptr, ParsedPermissionsPolicy(), origin->ToUrlOrigin());
+    PolicyParserMessageBuffer dummy_logger("", true /* discard_message */);
     auto header = PermissionsPolicyParser::ParseHeader(
         "fullscreen *; payment 'self'; midi 'none'; camera 'self' "
         "https://example.com https://example.net",
-        /* permissions_policy_header */ g_empty_string, origin.get(),
-        dummy_logger_, dummy_logger_);
-    permissions_policy->SetHeaderPolicy(header);
+        "gyroscope=(self \"https://*.example.com\" \"https://example.net\")",
+        *origin, dummy_logger, dummy_logger);
+    auto permissions_policy =
+        network::PermissionsPolicy::CreateFromParentPolicy(
+            nullptr, header, {}, origin->ToUrlOrigin());
 
     auto& security_context =
         page_holder_->GetFrame().DomWindow()->GetSecurityContext();
@@ -46,10 +56,8 @@ class PolicyTest : public testing::Test {
 
   DOMFeaturePolicy* GetPolicy() const { return policy_; }
 
-  PolicyParserMessageBuffer dummy_logger_ =
-      PolicyParserMessageBuffer("", true /* discard_message */);
-
  protected:
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<DummyPageHolder> page_holder_;
   Persistent<DOMFeaturePolicy> policy_;
 };
@@ -68,8 +76,9 @@ class IFramePolicyTest : public PolicyTest {
   void SetUp() override {
     PolicyTest::SetUp();
     policy_ = MakeGarbageCollected<IFramePolicy>(
-        page_holder_->GetFrame().DomWindow(), ParsedPermissionsPolicy(),
-        SecurityOrigin::CreateFromString(kSelfOrigin));
+        page_holder_->GetFrame().DomWindow(),
+        network::ParsedPermissionsPolicy(),
+        *SecurityOrigin::CreateFromString(kSelfOrigin));
   }
 };
 
@@ -90,6 +99,13 @@ TEST_F(DOMFeaturePolicyTest, TestAllowsFeature) {
   EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "geolocation", kSelfOrigin));
   EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "sync-xhr"));
   EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "sync-xhr", kOriginA));
+  EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "gyroscope"));
+  EXPECT_FALSE(GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginA));
+  EXPECT_TRUE(
+      GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginASubdomain));
+  EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginB));
+  EXPECT_FALSE(
+      GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginBSubdomain));
 }
 
 TEST_F(DOMFeaturePolicyTest, TestGetAllowList) {
@@ -102,10 +118,13 @@ TEST_F(DOMFeaturePolicyTest, TestGetAllowList) {
   EXPECT_THAT(GetPolicy()->getAllowlistForFeature(nullptr, "fullscreen"),
               UnorderedElementsAre("*"));
   EXPECT_TRUE(
-      GetPolicy()->getAllowlistForFeature(nullptr, "badfeature").IsEmpty());
-  EXPECT_TRUE(GetPolicy()->getAllowlistForFeature(nullptr, "midi").IsEmpty());
+      GetPolicy()->getAllowlistForFeature(nullptr, "badfeature").empty());
+  EXPECT_TRUE(GetPolicy()->getAllowlistForFeature(nullptr, "midi").empty());
   EXPECT_THAT(GetPolicy()->getAllowlistForFeature(nullptr, "sync-xhr"),
               UnorderedElementsAre("*"));
+  EXPECT_THAT(
+      GetPolicy()->getAllowlistForFeature(nullptr, "gyroscope"),
+      UnorderedElementsAre(kSelfOrigin, kOriginB, "https://*.example.com"));
 }
 
 TEST_F(DOMFeaturePolicyTest, TestAllowedFeatures) {
@@ -113,6 +132,7 @@ TEST_F(DOMFeaturePolicyTest, TestAllowedFeatures) {
   EXPECT_TRUE(allowed_features.Contains("fullscreen"));
   EXPECT_TRUE(allowed_features.Contains("payment"));
   EXPECT_TRUE(allowed_features.Contains("camera"));
+  EXPECT_TRUE(allowed_features.Contains("gyroscope"));
   // "geolocation" has default policy as allowed on self origin.
   EXPECT_TRUE(allowed_features.Contains("geolocation"));
   EXPECT_FALSE(allowed_features.Contains("badfeature"));
@@ -139,6 +159,13 @@ TEST_F(IFramePolicyTest, TestAllowsFeature) {
   EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "geolocation", kSelfOrigin));
   EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "sync-xhr"));
   EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "sync-xhr", kOriginA));
+  EXPECT_TRUE(GetPolicy()->allowsFeature(nullptr, "gyroscope"));
+  EXPECT_FALSE(GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginA));
+  EXPECT_FALSE(
+      GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginASubdomain));
+  EXPECT_FALSE(GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginB));
+  EXPECT_FALSE(
+      GetPolicy()->allowsFeature(nullptr, "gyroscope", kOriginBSubdomain));
 }
 
 TEST_F(IFramePolicyTest, TestGetAllowList) {
@@ -151,10 +178,12 @@ TEST_F(IFramePolicyTest, TestGetAllowList) {
   EXPECT_THAT(GetPolicy()->getAllowlistForFeature(nullptr, "fullscreen"),
               UnorderedElementsAre(kSelfOrigin));
   EXPECT_TRUE(
-      GetPolicy()->getAllowlistForFeature(nullptr, "badfeature").IsEmpty());
-  EXPECT_TRUE(GetPolicy()->getAllowlistForFeature(nullptr, "midi").IsEmpty());
+      GetPolicy()->getAllowlistForFeature(nullptr, "badfeature").empty());
+  EXPECT_TRUE(GetPolicy()->getAllowlistForFeature(nullptr, "midi").empty());
   EXPECT_THAT(GetPolicy()->getAllowlistForFeature(nullptr, "sync-xhr"),
               UnorderedElementsAre("*"));
+  EXPECT_THAT(GetPolicy()->getAllowlistForFeature(nullptr, "gyroscope"),
+              UnorderedElementsAre(kSelfOrigin));
 }
 
 TEST_F(IFramePolicyTest, TestSameOriginAllowedFeatures) {
@@ -165,6 +194,7 @@ TEST_F(IFramePolicyTest, TestSameOriginAllowedFeatures) {
   EXPECT_TRUE(allowed_features.Contains("payment"));
   EXPECT_TRUE(allowed_features.Contains("camera"));
   EXPECT_TRUE(allowed_features.Contains("geolocation"));
+  EXPECT_TRUE(allowed_features.Contains("gyroscope"));
   // "midi" is restricted by the parent document's policy.
   EXPECT_FALSE(allowed_features.Contains("midi"));
   // "sync-xhr" is allowed on all origins.
@@ -176,7 +206,8 @@ TEST_F(IFramePolicyTest, TestSameOriginAllowedFeatures) {
 TEST_F(IFramePolicyTest, TestCrossOriginAllowedFeatures) {
   // Update the iframe's policy, given a new origin.
   GetPolicy()->UpdateContainerPolicy(
-      ParsedPermissionsPolicy(), SecurityOrigin::CreateFromString(kOriginA));
+      network::ParsedPermissionsPolicy(),
+      *SecurityOrigin::CreateFromString(kOriginA));
   Vector<String> allowed_features = GetPolicy()->allowedFeatures(nullptr);
   // None of these features should be allowed in a cross-origin context.
   EXPECT_FALSE(allowed_features.Contains("fullscreen"));
@@ -184,24 +215,28 @@ TEST_F(IFramePolicyTest, TestCrossOriginAllowedFeatures) {
   EXPECT_FALSE(allowed_features.Contains("camera"));
   EXPECT_FALSE(allowed_features.Contains("geolocation"));
   EXPECT_FALSE(allowed_features.Contains("midi"));
+  EXPECT_FALSE(allowed_features.Contains("gyroscope"));
   // "sync-xhr" is allowed on all origins.
   EXPECT_TRUE(allowed_features.Contains("sync-xhr"));
   // This feature does not exist, so should not be advertised as allowed.
   EXPECT_FALSE(allowed_features.Contains("badfeature"));
 }
 
-TEST_F(IFramePolicyTest, TestCombinedPolicy) {
-  ParsedPermissionsPolicy container_policy =
+TEST_F(IFramePolicyTest, TestCombinedPolicyOnOriginA) {
+  PolicyParserMessageBuffer dummy_logger("", true /* discard_message */);
+  network::ParsedPermissionsPolicy container_policy =
       PermissionsPolicyParser::ParseAttribute(
-          "geolocation 'src'; payment 'none'; midi; camera 'src'",
-          SecurityOrigin::CreateFromString(kSelfOrigin),
-          SecurityOrigin::CreateFromString(kOriginA), dummy_logger_);
+          "geolocation 'src'; payment 'none'; midi; camera 'src'; gyroscope "
+          "'src'",
+          *SecurityOrigin::CreateFromString(kSelfOrigin),
+          *SecurityOrigin::CreateFromString(kOriginA), dummy_logger);
   GetPolicy()->UpdateContainerPolicy(
-      container_policy, SecurityOrigin::CreateFromString(kOriginA));
+      container_policy, *SecurityOrigin::CreateFromString(kOriginA));
   Vector<String> allowed_features = GetPolicy()->allowedFeatures(nullptr);
   // These features are not explicitly allowed.
   EXPECT_FALSE(allowed_features.Contains("fullscreen"));
   EXPECT_FALSE(allowed_features.Contains("payment"));
+  EXPECT_FALSE(allowed_features.Contains("gyroscope"));
   // These features are explicitly allowed.
   EXPECT_TRUE(allowed_features.Contains("geolocation"));
   EXPECT_TRUE(allowed_features.Contains("camera"));
@@ -212,6 +247,179 @@ TEST_F(IFramePolicyTest, TestCombinedPolicy) {
   EXPECT_TRUE(allowed_features.Contains("sync-xhr"));
   // This feature does not exist, so should not be advertised as allowed.
   EXPECT_FALSE(allowed_features.Contains("badfeature"));
+}
+
+TEST_F(IFramePolicyTest, TestCombinedPolicyOnOriginASubdomain) {
+  PolicyParserMessageBuffer dummy_logger("", true /* discard_message */);
+  network::ParsedPermissionsPolicy container_policy =
+      PermissionsPolicyParser::ParseAttribute(
+          "geolocation 'src'; payment 'none'; midi; camera 'src'; gyroscope "
+          "'src'",
+          *SecurityOrigin::CreateFromString(kSelfOrigin),
+          *SecurityOrigin::CreateFromString(kOriginASubdomain), dummy_logger);
+  GetPolicy()->UpdateContainerPolicy(
+      container_policy, *SecurityOrigin::CreateFromString(kOriginASubdomain));
+  Vector<String> allowed_features = GetPolicy()->allowedFeatures(nullptr);
+  // These features are not explicitly allowed.
+  EXPECT_FALSE(allowed_features.Contains("fullscreen"));
+  EXPECT_FALSE(allowed_features.Contains("payment"));
+  // These features are explicitly allowed.
+  EXPECT_TRUE(allowed_features.Contains("geolocation"));
+  // These are allowed by the attribute, but still blocked by the parent policy.
+  EXPECT_FALSE(allowed_features.Contains("midi"));
+  EXPECT_FALSE(allowed_features.Contains("camera"));
+  // These features are allowed via wildcard matching.
+  EXPECT_TRUE(allowed_features.Contains("gyroscope"));
+  // "sync-xhr" is still implicitly allowed on all origins.
+  EXPECT_TRUE(allowed_features.Contains("sync-xhr"));
+  // This feature does not exist, so should not be advertised as allowed.
+  EXPECT_FALSE(allowed_features.Contains("badfeature"));
+}
+
+TEST_F(IFramePolicyTest, TestCombinedPolicyOnOriginB) {
+  PolicyParserMessageBuffer dummy_logger("", true /* discard_message */);
+  network::ParsedPermissionsPolicy container_policy =
+      PermissionsPolicyParser::ParseAttribute(
+          "geolocation 'src'; payment 'none'; midi; camera 'src'; gyroscope "
+          "'src'",
+          *SecurityOrigin::CreateFromString(kSelfOrigin),
+          *SecurityOrigin::CreateFromString(kOriginB), dummy_logger);
+  GetPolicy()->UpdateContainerPolicy(
+      container_policy, *SecurityOrigin::CreateFromString(kOriginB));
+  Vector<String> allowed_features = GetPolicy()->allowedFeatures(nullptr);
+  // These features are not explicitly allowed.
+  EXPECT_FALSE(allowed_features.Contains("fullscreen"));
+  EXPECT_FALSE(allowed_features.Contains("payment"));
+  // These features are explicitly allowed.
+  EXPECT_TRUE(allowed_features.Contains("geolocation"));
+  EXPECT_TRUE(allowed_features.Contains("camera"));
+  EXPECT_TRUE(allowed_features.Contains("gyroscope"));
+  // These are allowed by the attribute, but still blocked by the parent policy.
+  EXPECT_FALSE(allowed_features.Contains("midi"));
+  // "sync-xhr" is still implicitly allowed on all origins.
+  EXPECT_TRUE(allowed_features.Contains("sync-xhr"));
+  // This feature does not exist, so should not be advertised as allowed.
+  EXPECT_FALSE(allowed_features.Contains("badfeature"));
+}
+
+TEST_F(IFramePolicyTest, TestCombinedPolicyOnOriginBSubdomain) {
+  PolicyParserMessageBuffer dummy_logger("", true /* discard_message */);
+  network::ParsedPermissionsPolicy container_policy =
+      PermissionsPolicyParser::ParseAttribute(
+          "geolocation 'src'; payment 'none'; midi; camera 'src'; gyroscope "
+          "'src'",
+          *SecurityOrigin::CreateFromString(kSelfOrigin),
+          *SecurityOrigin::CreateFromString(kOriginBSubdomain), dummy_logger);
+  GetPolicy()->UpdateContainerPolicy(
+      container_policy, *SecurityOrigin::CreateFromString(kOriginBSubdomain));
+  Vector<String> allowed_features = GetPolicy()->allowedFeatures(nullptr);
+  // These features are not explicitly allowed.
+  EXPECT_FALSE(allowed_features.Contains("fullscreen"));
+  EXPECT_FALSE(allowed_features.Contains("payment"));
+  EXPECT_FALSE(allowed_features.Contains("gyroscope"));
+  // These features are explicitly allowed.
+  EXPECT_TRUE(allowed_features.Contains("geolocation"));
+  // These are allowed by the attribute, but still blocked by the parent policy.
+  EXPECT_FALSE(allowed_features.Contains("midi"));
+  EXPECT_FALSE(allowed_features.Contains("camera"));
+  // "sync-xhr" is still implicitly allowed on all origins.
+  EXPECT_TRUE(allowed_features.Contains("sync-xhr"));
+  // This feature does not exist, so should not be advertised as allowed.
+  EXPECT_FALSE(allowed_features.Contains("badfeature"));
+}
+
+TEST_F(DOMFeaturePolicyTest, UseCountersSkipExcludedFeatures) {
+  ScriptState* script_state =
+      ToScriptStateForMainWorld(&page_holder_->GetFrame());
+  const Document& document = page_holder_->GetDocument();
+
+  // Queries for excluded features are not counted.
+  for (const char* feature : {
+           "attribution-reporting",
+           "browsing-topics",
+           "fenced-unpartitioned-storage-read",
+           "interest-cohort",
+           "join-ad-interest-group",
+           "private-aggregation",
+           "record-ad-auction-events",
+           "run-ad-auction",
+           "shared-storage",
+           "shared-storage-select-url",
+       }) {
+    GetPolicy()->allowsFeature(script_state, feature);
+    GetPolicy()->allowsFeature(script_state, feature, kOriginA);
+    GetPolicy()->getAllowlistForFeature(script_state, feature);
+  }
+  EXPECT_FALSE(document.IsUseCounted(WebFeature::kFeaturePolicyJSAPI));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureDocument));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureOriginDocument));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIGetAllowlistDocument));
+
+  // Queries for other features are counted.
+  GetPolicy()->allowsFeature(script_state, "camera");
+  EXPECT_TRUE(document.IsUseCounted(WebFeature::kFeaturePolicyJSAPI));
+  EXPECT_TRUE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureDocument));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureIFrame));
+
+  GetPolicy()->allowsFeature(script_state, "camera", kOriginA);
+  EXPECT_TRUE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureOriginDocument));
+
+  GetPolicy()->getAllowlistForFeature(script_state, "camera");
+  EXPECT_TRUE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIGetAllowlistDocument));
+}
+
+TEST_F(IFramePolicyTest, UseCountersSkipExcludedFeatures) {
+  ScriptState* script_state =
+      ToScriptStateForMainWorld(&page_holder_->GetFrame());
+  const Document& document = page_holder_->GetDocument();
+
+  // Queries for excluded features are not counted.
+  for (const char* feature : {
+           "attribution-reporting",
+           "browsing-topics",
+           "fenced-unpartitioned-storage-read",
+           "interest-cohort",
+           "join-ad-interest-group",
+           "private-aggregation",
+           "record-ad-auction-events",
+           "run-ad-auction",
+           "shared-storage",
+           "shared-storage-select-url",
+       }) {
+    GetPolicy()->allowsFeature(script_state, feature);
+    GetPolicy()->allowsFeature(script_state, feature, kOriginA);
+    GetPolicy()->getAllowlistForFeature(script_state, feature);
+  }
+  EXPECT_FALSE(document.IsUseCounted(WebFeature::kFeaturePolicyJSAPI));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureIFrame));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureOriginIFrame));
+  EXPECT_FALSE(
+      document.IsUseCounted(WebFeature::kFeaturePolicyJSAPIGetAllowlistIFrame));
+
+  // Queries for other features are counted.
+  GetPolicy()->allowsFeature(script_state, "camera");
+  EXPECT_TRUE(document.IsUseCounted(WebFeature::kFeaturePolicyJSAPI));
+  EXPECT_TRUE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureIFrame));
+  EXPECT_FALSE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureDocument));
+
+  GetPolicy()->allowsFeature(script_state, "camera", kOriginA);
+  EXPECT_TRUE(document.IsUseCounted(
+      WebFeature::kFeaturePolicyJSAPIAllowsFeatureOriginIFrame));
+
+  GetPolicy()->getAllowlistForFeature(script_state, "camera");
+  EXPECT_TRUE(
+      document.IsUseCounted(WebFeature::kFeaturePolicyJSAPIGetAllowlistIFrame));
 }
 
 }  // namespace blink

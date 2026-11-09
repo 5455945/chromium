@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,16 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "device/bluetooth/bluetooth_device_win.h"
 #include "device/bluetooth/bluetooth_init_win.h"
@@ -62,18 +63,11 @@ std::string IPEndPointToBluetoothAddress(const net::IPEndPoint& end_point) {
 namespace device {
 
 struct BluetoothSocketWin::ServiceRegData {
-  ServiceRegData() {
-    ZeroMemory(&address, sizeof(address));
-    ZeroMemory(&address_info, sizeof(address_info));
-    ZeroMemory(&uuid, sizeof(uuid));
-    ZeroMemory(&service, sizeof(service));
-  }
-
-  SOCKADDR_BTH address;
-  CSADDR_INFO address_info;
-  GUID uuid;
+  SOCKADDR_BTH address = {};
+  CSADDR_INFO address_info = {};
+  GUID uuid = {};
   std::u16string name;
-  WSAQUERYSET service;
+  WSAQUERYSET service = {};
 };
 
 // static
@@ -188,12 +182,11 @@ void BluetoothSocketWin::DoConnect(base::OnceClosure success_callback,
     return;
   }
 
-  std::unique_ptr<net::TCPSocket> scoped_socket(
-      new net::TCPSocket(NULL, NULL, net::NetLogSource()));
+  std::unique_ptr<net::TCPSocket> scoped_socket =
+      net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
   net::EnsureWinsockInit();
   SOCKET socket_fd = socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM);
-  SOCKADDR_BTH sa;
-  ZeroMemory(&sa, sizeof(sa));
+  SOCKADDR_BTH sa{};
   sa.addressFamily = AF_BTH;
   sa.port = rfcomm_channel_;
   sa.btAddr = bth_addr_;
@@ -255,14 +248,13 @@ void BluetoothSocketWin::DoListen(const BluetoothUUID& uuid,
   // Note that |socket_fd| belongs to a non-TCP address family (i.e. AF_BTH),
   // TCPSocket methods that involve address could not be called. So bind()
   // is called on |socket_fd| directly.
-  std::unique_ptr<net::TCPSocket> scoped_socket(
-      new net::TCPSocket(NULL, NULL, net::NetLogSource()));
+  std::unique_ptr<net::TCPSocket> scoped_socket =
+      net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
   scoped_socket->AdoptUnconnectedSocket(socket_fd);
 
-  SOCKADDR_BTH sa;
+  SOCKADDR_BTH sa{};
   struct sockaddr* sock_addr = reinterpret_cast<struct sockaddr*>(&sa);
   int sock_addr_len = sizeof(sa);
-  ZeroMemory(&sa, sock_addr_len);
   sa.addressFamily = AF_BTH;
   sa.port = rfcomm_channel ? rfcomm_channel : BT_PORT_ANY;
   if (bind(socket_fd, sock_addr, sock_addr_len) < 0) {

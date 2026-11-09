@@ -1,30 +1,40 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_USB_USB_SERVICE_WIN_H_
 #define SERVICES_DEVICE_USB_USB_SERVICE_WIN_H_
 
-#include "services/device/usb/usb_service.h"
-
 #include <list>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/threading/sequence_bound.h"
 #include "device/base/device_monitor_win.h"
 #include "services/device/usb/usb_device_win.h"
+#include "services/device/usb/usb_service.h"
 
 namespace device {
+
+// Returns the interface number extracted from `instance_id` or
+// `hardware_ids` for a device node created by a USB composite device driver,
+// or -1 if the interface number could not be determined.
+int GetInterfaceNumber(const std::wstring& instance_id,
+                       const std::vector<std::wstring>& hardware_ids);
 
 class UsbServiceWin final : public DeviceMonitorWin::Observer,
                             public UsbService {
  public:
   UsbServiceWin();
+
+  UsbServiceWin(const UsbServiceWin&) = delete;
+  UsbServiceWin& operator=(const UsbServiceWin&) = delete;
+
   ~UsbServiceWin() override;
 
  private:
@@ -67,7 +77,7 @@ class UsbServiceWin final : public DeviceMonitorWin::Observer,
   std::list<GetDevicesCallback> enumeration_callbacks_;
 
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
-  std::unique_ptr<BlockingTaskRunnerHelper, base::OnTaskRunnerDeleter> helper_;
+  base::SequenceBound<BlockingTaskRunnerHelper> helper_;
   std::unordered_map<std::wstring, scoped_refptr<UsbDeviceWin>>
       devices_by_path_;
 
@@ -75,8 +85,6 @@ class UsbServiceWin final : public DeviceMonitorWin::Observer,
       device_observation_{this};
 
   base::WeakPtrFactory<UsbServiceWin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UsbServiceWin);
 };
 
 }  // namespace device

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,12 @@
 
 #include <ostream>
 
+#include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram.h"
+#include "base/observer_list.h"
 #include "build/build_config.h"
+#include "components/sync/base/features.h"
 #include "components/sync/engine/cancelation_signal.h"
 #include "components/sync/engine/net/url_translator.h"
 #include "components/sync/engine/syncer.h"
@@ -29,13 +33,11 @@ const char* GetServerConnectionCodeString(
   switch (code) {
     ENUM_CASE(NONE);
     ENUM_CASE(CONNECTION_UNAVAILABLE);
-    ENUM_CASE(IO_ERROR);
     ENUM_CASE(SYNC_SERVER_ERROR);
     ENUM_CASE(SYNC_AUTH_ERROR);
     ENUM_CASE(SERVER_CONNECTION_OK);
   }
   NOTREACHED();
-  return "";
 }
 
 #undef ENUM_CASE
@@ -46,8 +48,7 @@ HttpResponse::HttpResponse()
     : server_status(NONE),
       net_error_code(-1),
       http_status_code(-1),
-      content_length(-1),
-      payload_length(-1) {}
+      content_length(-1) {}
 
 // static
 HttpResponse HttpResponse::Uninitialized() {
@@ -59,13 +60,6 @@ HttpResponse HttpResponse::ForNetError(int net_error_code) {
   HttpResponse response;
   response.server_status = CONNECTION_UNAVAILABLE;
   response.net_error_code = net_error_code;
-  return response;
-}
-
-// static
-HttpResponse HttpResponse::ForIoError() {
-  HttpResponse response;
-  response.server_status = IO_ERROR;
   return response;
 }
 
@@ -91,9 +85,11 @@ HttpResponse HttpResponse::ForHttpStatusCode(int http_status_code) {
 }
 
 // static
-HttpResponse HttpResponse::ForSuccess() {
+HttpResponse HttpResponse::ForSuccessForTest() {
+  CHECK_IS_TEST();
   HttpResponse response;
   response.server_status = SERVER_CONNECTION_OK;
+  response.http_status_code = net::HTTP_OK;
   return response;
 }
 
@@ -102,28 +98,48 @@ ServerConnectionManager::ServerConnectionManager()
 
 ServerConnectionManager::~ServerConnectionManager() = default;
 
-bool ServerConnectionManager::SetAccessToken(const std::string& access_token) {
+bool ServerConnectionManager::SetAccessTokenInfo(
+    const signin::AccessTokenInfo& access_token_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
 
-  if (!access_token.empty()) {
-    access_token_.assign(access_token);
+  cached_access_token_info_ = access_token_info;
+  if (IsAccessTokenInfoValid(cached_access_token_info_)) {
     return true;
   }
 
-  access_token_.clear();
+  ClearCachedAccessToken();
 
-  // The access token could be non-empty in cases like server outage/bug. E.g.
-  // token returned by first request is considered invalid by sync server and
-  // because of token server's caching policy, etc, same token is returned on
-  // second request. Need to notify sync frontend again to request new token,
-  // otherwise backend will stay in SYNC_AUTH_ERROR state while frontend thinks
-  // everything is fine and takes no actions.
+  // The token was probably expired. Notify sync frontend again to request new
+  // token, otherwise backend will stay in SYNC_AUTH_ERROR state while frontend
+  // thinks everything is fine and takes no actions.
   SetServerResponse(HttpResponse::ForHttpStatusCode(net::HTTP_UNAUTHORIZED));
   return false;
 }
 
-void ServerConnectionManager::ClearAccessToken() {
-  access_token_.clear();
+bool ServerConnectionManager::HasCachedAccessToken() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
+  return !cached_access_token_info_.token.empty();
+}
+
+void ServerConnectionManager::ClearCachedAccessToken() {
+  cached_access_token_info_ = signin::AccessTokenInfo();
+}
+
+// static
+bool ServerConnectionManager::IsAccessTokenInfoValid(
+    const signin::AccessTokenInfo& access_token_info) {
+  if (access_token_info.token.empty()) {
+    return false;
+  }
+
+  // Assume the token is valid if the expiration time is not set.
+  if (access_token_info.expiration_time.is_null()) {
+    return true;
+  }
+
+  return access_token_info.expiration_time > base::Time::Now();
 }
 
 void ServerConnectionManager::SetServerResponse(
@@ -142,19 +158,30 @@ void ServerConnectionManager::SetServerResponse(
 
 void ServerConnectionManager::NotifyStatusChanged() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  for (auto& observer : listeners_) {
+  for (ServerConnectionEventListener& observer : listeners_) {
     observer.OnServerConnectionEvent(
         ServerConnectionEvent(server_response_.server_status));
   }
+}
+
+HttpResponse ServerConnectionManager::PostBufferWithAccessToken(
+    const std::string& buffer_in,
+    std::string* buffer_out,
+    const signin::AccessTokenInfo& access_token_info) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  HttpResponse http_response =
+      PostBuffer(buffer_in, buffer_out, access_token_info);
+  SetServerResponse(http_response);
+  return server_response_;
 }
 
 HttpResponse ServerConnectionManager::PostBufferWithCachedAuth(
     const std::string& buffer_in,
     std::string* buffer_out) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  HttpResponse http_response = PostBuffer(buffer_in, access_token_, buffer_out);
-  SetServerResponse(http_response);
-  return http_response;
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
+  return PostBufferWithAccessToken(buffer_in, buffer_out,
+                                   cached_access_token_info_);
 }
 
 void ServerConnectionManager::AddListener(

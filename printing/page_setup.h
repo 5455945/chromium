@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,18 @@
 namespace printing {
 
 // Margins for a page setup.
-class COMPONENT_EXPORT(PRINTING) PageMargins {
+class COMPONENT_EXPORT(PRINTING_SETTINGS) PageMargins {
  public:
   PageMargins();
+  PageMargins(int header, int footer, int left, int right, int top, int bottom);
+
+  bool operator==(const PageMargins& other) const;
 
   void Clear();
 
-  // Equality operator.
-  bool Equals(const PageMargins& rhs) const;
+  std::string ToString() const;
+
+  bool IsEmpty() const;
 
   // Vertical space for the overlay from the top of the sheet.
   int header;
@@ -33,20 +37,24 @@ class COMPONENT_EXPORT(PRINTING) PageMargins {
 
 // Settings that define the size and printable areas of a page. Unit is
 // unspecified.
-class COMPONENT_EXPORT(PRINTING) PageSetup {
+class COMPONENT_EXPORT(PRINTING_SETTINGS) PageSetup {
  public:
   PageSetup();
+  PageSetup(const gfx::Size& physical_size,
+            const gfx::Rect& printable_area,
+            const PageMargins& requested_margins,
+            bool forced_margins,
+            int text_height);
   PageSetup(const PageSetup& other);
   ~PageSetup();
+
+  bool operator==(const PageSetup& other) const;
 
   // Gets a symmetrical printable area.
   static gfx::Rect GetSymmetricalPrintableArea(const gfx::Size& page_size,
                                                const gfx::Rect& printable_area);
 
   void Clear();
-
-  // Equality operator.
-  bool Equals(const PageSetup& rhs) const;
 
   void Init(const gfx::Size& physical_size,
             const gfx::Rect& printable_area,
@@ -66,6 +74,9 @@ class COMPONENT_EXPORT(PRINTING) PageSetup {
   const gfx::Rect& content_area() const { return content_area_; }
   const gfx::Rect& printable_area() const { return printable_area_; }
   const PageMargins& effective_margins() const { return effective_margins_; }
+  const PageMargins& requested_margins() const { return requested_margins_; }
+  bool forced_margins() const { return forced_margins_; }
+  int text_height() const { return text_height_; }
 
  private:
   // Store `requested_margins_` and update page setup values.

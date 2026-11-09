@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,16 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/process/launch.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/interstitials/enterprise_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/stateful_ssl_host_state_delegate_factory.h"
@@ -31,54 +29,33 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/browser/ui/webui/settings/chromeos/constants/routes.mojom.h"
 #include "chrome/common/webui_url_constants.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/base_paths_win.h"
 #include "base/path_service.h"
 #include "base/win/windows_version.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 using content::Referrer;
-
-namespace {
-
-void RecordRecurrentErrorAction(
-    SSLErrorControllerClient::RecurrentErrorAction action,
-    int cert_error) {
-  UMA_HISTOGRAM_ENUMERATION("interstitial.ssl_recurrent_error.action", action);
-  if (cert_error == net::ERR_CERTIFICATE_TRANSPARENCY_REQUIRED) {
-    UMA_HISTOGRAM_ENUMERATION(
-        "interstitial.ssl_recurrent_error.ct_error.action", action);
-  }
-}
-
-bool HasSeenRecurrentErrorInternal(content::WebContents* web_contents,
-                                   int cert_error) {
-  StatefulSSLHostStateDelegate* state =
-      StatefulSSLHostStateDelegateFactory::GetForProfile(
-          Profile::FromBrowserContext(web_contents->GetBrowserContext()));
-  return state->HasSeenRecurrentErrors(cert_error);
-}
-
-}  // namespace
 
 SSLErrorControllerClient::SSLErrorControllerClient(
     content::WebContents* web_contents,
     const net::SSLInfo& ssl_info,
-    int cert_error,
+    net::Error cert_error,
     const GURL& request_url,
     std::unique_ptr<security_interstitials::MetricsHelper> metrics_helper,
     std::unique_ptr<security_interstitials::SettingsPageHelper>
@@ -89,47 +66,46 @@ SSLErrorControllerClient::SSLErrorControllerClient(
           Profile::FromBrowserContext(web_contents->GetBrowserContext())
               ->GetPrefs(),
           g_browser_process->GetApplicationLocale(),
-          GURL(chrome::kChromeUINewTabURL),
+          chrome::ChromeUINewTabURLAsGURL(),
           std::move(settings_page_helper)),
       ssl_info_(ssl_info),
       request_url_(request_url),
-      cert_error_(cert_error) {
-  if (HasSeenRecurrentErrorInternal(web_contents_, cert_error_)) {
-    RecordRecurrentErrorAction(RecurrentErrorAction::kShow, cert_error_);
-  }
-}
+      cert_error_(cert_error) {}
 
-SSLErrorControllerClient::~SSLErrorControllerClient() {}
+SSLErrorControllerClient::~SSLErrorControllerClient() = default;
 
 void SSLErrorControllerClient::GoBack() {
   SecurityInterstitialControllerClient::GoBackAfterNavigationCommitted();
 }
 
 void SSLErrorControllerClient::Proceed() {
-  if (HasSeenRecurrentErrorInternal(web_contents_, cert_error_)) {
-    RecordRecurrentErrorAction(RecurrentErrorAction::kProceed, cert_error_);
-  }
-
-  MaybeTriggerSecurityInterstitialProceededEvent(web_contents_, request_url_,
-                                                 "SSL_ERROR", cert_error_);
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Hosted Apps should not be allowed to run if there is a problem with their
+  content::WebContents* const web_contents = this->web_contents();
+  MaybeTriggerSecurityInterstitialProceededEvent(
+      web_contents, request_url_, "SSL_ERROR", cert_error_,
+      base::UTF16ToUTF8(web_contents->GetTitle()));
+#if !BUILDFLAG(IS_ANDROID)
+  // Web Apps should not be allowed to run if there is a problem with their
   // certificate. So, when users click proceed on an interstitial, move the tab
   // to a regular Chrome window and proceed as usual there.
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents_);
+  // TODO(crbug.com/505461569): Support Android.
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (web_app::AppBrowserController::IsWebApp(browser))
     chrome::OpenInChrome(browser);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   Profile* profile =
-      Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
   StatefulSSLHostStateDelegate* state =
       static_cast<StatefulSSLHostStateDelegate*>(
           profile->GetSSLHostStateDelegate());
   // StatefulSSLHostStateDelegate can be null during tests.
   if (state) {
-    state->AllowCert(request_url_.host(), *ssl_info_.cert.get(), cert_error_,
-                     web_contents_);
+    // Notifies the browser process when a certificate exception is allowed.
+    web_contents->SetAlwaysSendSubresourceNotifications();
+
+    state->AllowCert(request_url_.GetHost(), *ssl_info_.cert.get(), cert_error_,
+                     InterstitialRenderFrameHost()->GetStoragePartition());
     Reload();
   }
 }
@@ -139,12 +115,12 @@ bool SSLErrorControllerClient::CanLaunchDateAndTimeSettings() {
 }
 
 void SSLErrorControllerClient::LaunchDateAndTimeSettings() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
       ProfileManager::GetActiveUserProfile(),
-      chromeos::settings::mojom::kDateAndTimeSectionPath);
+      chromeos::settings::mojom::kSystemPreferencesSectionPath);
 #else
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
@@ -152,6 +128,11 @@ void SSLErrorControllerClient::LaunchDateAndTimeSettings() {
 #endif
 }
 
-bool SSLErrorControllerClient::HasSeenRecurrentError() {
-  return HasSeenRecurrentErrorInternal(web_contents_, cert_error_);
+#if !BUILDFLAG(IS_ANDROID)
+void SSLErrorControllerClient::ShowCertificateViewer() {
+  // TODO(crbug.com/436274249): support "view certificate" on android too.
+  ::ShowCertificateViewer(
+      web_contents(), web_contents()->GetTopLevelNativeWindow(),
+      ssl_info_.cert.get(), CertificateViewerEntrypoint::kSslInterstitial);
 }
+#endif

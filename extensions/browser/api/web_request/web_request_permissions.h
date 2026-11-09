@@ -1,19 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_WEB_REQUEST_WEB_REQUEST_PERMISSIONS_H_
 #define EXTENSIONS_BROWSER_API_WEB_REQUEST_WEB_REQUEST_PERMISSIONS_H_
 
-#include <map>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
-#include "extensions/browser/api/web_request/web_request_resource_type.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
-#include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class GURL;
 
@@ -22,13 +23,19 @@ class PermissionHelper;
 struct WebRequestInfo;
 }
 
+namespace url {
+class Origin;
+}
+
 // This class is used to test whether extensions may modify web requests. It
 // should be used on the IO thread.
 class WebRequestPermissions {
  public:
   // Different host permission checking modes for CanExtensionAccessURL.
   enum HostPermissionsCheck {
-    DO_NOT_CHECK_HOST = 0,  // No check.
+    // No host permission check. Requests initiated by policy or user blocked
+    // hosts are still denied.
+    DO_NOT_CHECK_HOST = 0,
     // Permission needed for given request URL.
     // TODO(karandeepb): Remove this checking mode.
     REQUIRE_HOST_PERMISSION_FOR_URL,
@@ -39,34 +46,32 @@ class WebRequestPermissions {
     REQUIRE_ALL_URLS
   };
 
+  WebRequestPermissions() = delete;
+  WebRequestPermissions(const WebRequestPermissions&) = delete;
+  WebRequestPermissions& operator=(const WebRequestPermissions&) = delete;
+
   // Returns true if the request shall not be reported to extensions.
   static bool HideRequest(extensions::PermissionHelper* permission_helper,
                           const extensions::WebRequestInfo& request);
 
-  // Helper function used only in tests, sets a variable which enables or
-  // disables a CHECK.
-  static void AllowAllExtensionLocationsInPublicSessionForTesting(bool value);
-
-  // |host_permission_check| controls how permissions are checked with regard to
-  // |url| and |initiator| if an initiator exists.
+  // `host_permission_check` controls how permissions are checked with regard to
+  // `url` and `initiator` if an initiator exists.
   static extensions::PermissionsData::PageAccess CanExtensionAccessURL(
       extensions::PermissionHelper* permission_helper,
-      const std::string& extension_id,
+      const extensions::ExtensionId& extension_id,
       const GURL& url,
       int tab_id,
       bool crosses_incognito,
       HostPermissionsCheck host_permissions_check,
-      const absl::optional<url::Origin>& initiator,
+      const std::optional<url::Origin>& initiator,
       extensions::WebRequestResourceType web_request_type);
 
   static bool CanExtensionAccessInitiator(
       extensions::PermissionHelper* permission_helper,
       const extensions::ExtensionId extension_id,
-      const absl::optional<url::Origin>& initiator,
+      const std::optional<url::Origin>& initiator,
       int tab_id,
       bool crosses_incognito);
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(WebRequestPermissions);
 };
 
 #endif  // EXTENSIONS_BROWSER_API_WEB_REQUEST_WEB_REQUEST_PERMISSIONS_H_

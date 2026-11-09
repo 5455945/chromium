@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef CONTENT_SHELL_BROWSER_SHELL_H_
@@ -10,31 +10,33 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
-#include "content/public/browser/session_storage_namespace.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/shell/browser/shell_platform_delegate.h"
-#include "ipc/ipc_channel.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class GURL;
 
 namespace content {
+class FileSelectListener;
 class BrowserContext;
 class JavaScriptDialogManager;
 class ShellDevToolsFrontend;
 class SiteInstance;
 class WebContents;
+class RenderFrameHost;
 
 // This represents one window of the Content Shell, i.e. all the UI including
 // buttons and url bar, as well as the web content area.
-class Shell : public WebContentsDelegate,
-              public WebContentsObserver {
+class Shell : public WebContentsDelegate, public WebContentsObserver {
  public:
   ~Shell() override;
 
@@ -46,7 +48,7 @@ class Shell : public WebContentsDelegate,
                            const std::string& data,
                            const GURL& base_url);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Android-only path to allow loading long data strings.
   void LoadDataAsStringWithBaseURL(const GURL& url,
                                    const std::string& data,
@@ -56,15 +58,21 @@ class Shell : public WebContentsDelegate,
   void Reload();
   void ReloadBypassingCache();
   void Stop();
-  void UpdateNavigationControls(bool to_different_document);
+  void UpdateNavigationControls(bool should_show_loading_ui);
   void Close();
   void ShowDevTools();
   void CloseDevTools();
   // Resizes the web content view to the given dimensions.
   void ResizeWebContentForTests(const gfx::Size& content_size);
 
-  // Do one-time initialization at application startup.
+  // Do one-time initialization at application startup. This must be matched
+  // with a Shell::Shutdown() at application termination, where |platform|
+  // will be released.
   static void Initialize(std::unique_ptr<ShellPlatformDelegate> platform);
+
+  // Closes all windows, pumps teardown tasks and signal the main message loop
+  // to quit.
+  static void Shutdown();  // Idempotent, can be called twice.
 
   static Shell* CreateNewWindow(
       BrowserContext* browser_context,
@@ -76,11 +84,7 @@ class Shell : public WebContentsDelegate,
   static Shell* FromWebContents(WebContents* web_contents);
 
   // Returns the currently open windows.
-  static std::vector<Shell*>& windows() { return windows_; }
-
-  // Closes all windows, pumps teardown tasks, then returns. The main message
-  // loop will be signalled to quit, before the call returns.
-  static void CloseAllWindows();
+  static base::span<const raw_ptr<Shell>> windows();
 
   // Stores the supplied |quit_closure|, to be run when the last Shell instance
   // is destroyed.
@@ -98,29 +102,33 @@ class Shell : public WebContentsDelegate,
 
   WebContents* web_contents() const { return web_contents_.get(); }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   gfx::NativeWindow window();
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Public to be called by an ObjC bridge object.
   void ActionPerformed(int control);
   void URLEntered(const std::string& url_string);
 #endif
 
   // WebContentsDelegate
-  WebContents* OpenURLFromTab(WebContents* source,
-                              const OpenURLParams& params) override;
-  void AddNewContents(WebContents* source,
-                      std::unique_ptr<WebContents> new_contents,
-                      const GURL& target_url,
-                      WindowOpenDisposition disposition,
-                      const gfx::Rect& initial_rect,
-                      bool user_gesture,
-                      bool* was_blocked) override;
+  WebContents* OpenURLFromTab(
+      WebContents* source,
+      const OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
+  WebContents* AddNewContents(
+      WebContents* source,
+      std::unique_ptr<WebContents> new_contents,
+      const GURL& target_url,
+      ui::mojom::WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override;
   void LoadingStateChanged(WebContents* source,
-                           bool to_different_document) override;
-#if defined(OS_ANDROID)
+                           bool should_show_loading_ui) override;
+#if BUILDFLAG(IS_ANDROID)
   void SetOverlayMode(bool use_overlay_mode) override;
 #endif
   void EnterFullscreenModeForTab(
@@ -130,7 +138,17 @@ class Shell : public WebContentsDelegate,
   bool IsFullscreenForTabOrPending(const WebContents* web_contents) override;
   blink::mojom::DisplayMode GetDisplayMode(
       const WebContents* web_contents) override;
-  void RequestToLockMouse(WebContents* web_contents,
+#if !BUILDFLAG(IS_ANDROID)
+  void RegisterProtocolHandler(RenderFrameHost* requesting_frame,
+                               const std::string& protocol,
+                               const GURL& url,
+                               bool user_gesture) override;
+  void UnregisterProtocolHandler(RenderFrameHost* requesting_frame,
+                                 const std::string& protocol,
+                                 const GURL& url,
+                                 bool user_gesture) override;
+#endif
+  void RequestPointerLock(WebContents* web_contents,
                           bool user_gesture,
                           bool last_unlocked_by_target) override;
   void CloseContents(WebContents* source) override;
@@ -139,39 +157,43 @@ class Shell : public WebContentsDelegate,
                               InvalidateTypes changed_flags) override;
   JavaScriptDialogManager* GetJavaScriptDialogManager(
       WebContents* source) override;
-#if defined(OS_MAC)
-  void DidNavigateMainFramePostCommit(WebContents* contents) override;
+#if BUILDFLAG(IS_MAC)
   bool HandleKeyboardEvent(WebContents* source,
-                           const NativeWebKeyboardEvent& event) override;
+                           const input::NativeWebKeyboardEvent& event) override;
 #endif
   bool DidAddMessageToConsole(WebContents* source,
                               blink::mojom::ConsoleMessageLevel log_level,
                               const std::u16string& message,
                               int32_t line_no,
                               const std::u16string& source_id) override;
-  void PortalWebContentsCreated(WebContents* portal_web_contents) override;
   void RendererUnresponsive(
       WebContents* source,
       RenderWidgetHost* render_widget_host,
       base::RepeatingClosure hang_monitor_restarter) override;
   void ActivateContents(WebContents* contents) override;
-  bool IsBackForwardCacheSupported() override;
-  bool IsPrerender2Supported() override;
-  std::unique_ptr<content::WebContents> ActivatePortalWebContents(
-      content::WebContents* predecessor_contents,
-      std::unique_ptr<content::WebContents> portal_contents) override;
-  void UpdateInspectedWebContentsIfNecessary(
-      content::WebContents* old_contents,
-      content::WebContents* new_contents,
-      base::OnceCallback<void()> callback) override;
-  bool ShouldAllowRunningInsecureContent(content::WebContents* web_contents,
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  std::unique_ptr<ColorChooser> OpenColorChooser(
+      WebContents* web_contents,
+      SkColor color,
+      const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions)
+      override;
+#endif
+  void RunFileChooser(RenderFrameHost* render_frame_host,
+                      scoped_refptr<FileSelectListener> listener,
+                      const blink::mojom::FileChooserParams& params) override;
+  void EnumerateDirectory(WebContents* web_contents,
+                          scoped_refptr<FileSelectListener> listener,
+                          const base::FilePath& path) override;
+  bool IsBackForwardCacheSupported(WebContents& contents) override;
+  PreloadingEligibility IsPrerender2Supported(
+      WebContents& web_contents,
+      PreloadingTriggerType trigger_type) override;
+  bool ShouldAllowRunningInsecureContent(WebContents* web_contents,
                                          bool allowed_per_prefs,
                                          const url::Origin& origin,
                                          const GURL& resource_url) override;
   PictureInPictureResult EnterPictureInPicture(
-      content::WebContents* web_contents,
-      const viz::SurfaceId&,
-      const gfx::Size& natural_size) override;
+      WebContents* web_contents) override;
   bool ShouldResumeRequestsForCreatedWindow() override;
   void SetContentsBounds(WebContents* source, const gfx::Rect& bounds) override;
 
@@ -180,6 +202,11 @@ class Shell : public WebContentsDelegate,
   void set_delay_popup_contents_delegate_for_testing(bool delay) {
     delay_popup_contents_delegate_for_testing_ = delay;
   }
+
+  void set_hold_file_chooser() { hold_file_chooser_ = true; }
+
+  // Counts both RunFileChooser and EnumerateDirectory.
+  size_t run_file_chooser_count() const { return run_file_chooser_count_; }
 
  private:
   class DevToolsWebContentsObserver;
@@ -206,20 +233,20 @@ class Shell : public WebContentsDelegate,
   void ToggleFullscreenModeForTab(WebContents* web_contents,
                                   bool enter_fullscreen);
   // WebContentsObserver
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void LoadProgressChanged(double progress) override;
 #endif
   void TitleWasSet(NavigationEntry* entry) override;
   void RenderFrameCreated(RenderFrameHost* frame_host) override;
-
-  void OnDevToolsWebContentsDestroyed();
+#if BUILDFLAG(IS_MAC)
+  void PrimaryPageChanged(Page& page) override;
+#endif
 
   std::unique_ptr<JavaScriptDialogManager> dialog_manager_;
 
   std::unique_ptr<WebContents> web_contents_;
 
-  std::unique_ptr<DevToolsWebContentsObserver> devtools_observer_;
-  ShellDevToolsFrontend* devtools_frontend_ = nullptr;
+  base::WeakPtr<ShellDevToolsFrontend> devtools_frontend_;
 
   bool is_fullscreen_ = false;
 
@@ -227,11 +254,9 @@ class Shell : public WebContentsDelegate,
 
   bool delay_popup_contents_delegate_for_testing_ = false;
 
-  // A container of all the open windows. We use a vector so we can keep track
-  // of ordering.
-  static std::vector<Shell*> windows_;
-
-  static base::OnceCallback<void(Shell*)> shell_created_callback_;
+  bool hold_file_chooser_ = false;
+  scoped_refptr<FileSelectListener> held_file_chooser_listener_;
+  size_t run_file_chooser_count_ = 0u;
 };
 
 }  // namespace content

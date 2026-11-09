@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,8 @@
 #include "third_party/blink/renderer/core/script/script_element_base.h"
 
 namespace blink {
+
+class HTMLScriptElementOrSVGScriptElement;
 
 class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
                               public ScriptElementBase {
@@ -28,12 +30,14 @@ class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
   MOCK_CONST_METHOD0(EventAttributeValue, String());
   MOCK_CONST_METHOD0(ForAttributeValue, String());
   MOCK_CONST_METHOD0(IntegrityAttributeValue, String());
+  MOCK_CONST_METHOD0(SignatureAttributeValue, String());
   MOCK_CONST_METHOD0(ReferrerPolicyAttributeValue, String());
-  MOCK_CONST_METHOD0(ImportanceAttributeValue, String());
+  MOCK_CONST_METHOD0(FetchPriorityAttributeValue, String());
   MOCK_CONST_METHOD0(LanguageAttributeValue, String());
   MOCK_CONST_METHOD0(NomoduleAttributeValue, bool());
   MOCK_CONST_METHOD0(SourceAttributeValue, String());
   MOCK_CONST_METHOD0(TypeAttributeValue, String());
+  MOCK_CONST_METHOD0(CacheHintAttributeValue, String());
   MOCK_METHOD0(ChildTextContent, String());
   MOCK_CONST_METHOD0(ScriptTextInternalSlot, String());
   MOCK_CONST_METHOD0(HasSourceAttribute, bool());
@@ -42,10 +46,9 @@ class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
   MOCK_CONST_METHOD0(GetNonceForElement, const AtomicString&());
   MOCK_CONST_METHOD0(ElementHasDuplicateAttributes, bool());
   MOCK_CONST_METHOD0(InitiatorName, AtomicString());
+  MOCK_CONST_METHOD0(IsPotentiallyRenderBlocking, bool());
   MOCK_METHOD3(AllowInlineScriptForCSP,
-               bool(const AtomicString&,
-                    const WTF::OrdinalNumber&,
-                    const String&));
+               bool(const AtomicString&, const TextPosition&, const String&));
   MOCK_CONST_METHOD0(GetDocument, Document&());
   MOCK_CONST_METHOD0(GetExecutionContext, ExecutionContext*());
   MOCK_METHOD0(AsV8HTMLOrSVGScriptElement, V8HTMLOrSVGScriptElement*());

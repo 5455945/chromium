@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handler.h"
 #include "extensions/common/url_pattern.h"
@@ -19,7 +18,12 @@ namespace extensions {
 
 struct UrlHandlerInfo {
   UrlHandlerInfo();
+
+  UrlHandlerInfo(const UrlHandlerInfo&) = delete;
+  UrlHandlerInfo& operator=(const UrlHandlerInfo&) = delete;
+
   UrlHandlerInfo(UrlHandlerInfo&& other);
+
   ~UrlHandlerInfo();
 
   // ID identifying this handler in the manifest.
@@ -28,11 +32,13 @@ struct UrlHandlerInfo {
   std::string title;
   // URL patterns associated with this handler.
   URLPatternSet patterns;
-
-  DISALLOW_COPY_AND_ASSIGN(UrlHandlerInfo);
 };
 
+// UrlHandlers allow platform apps to declare they handle specific URLs. See
+// https://developer.chrome.com/docs/apps/manifest/url_handlers
 struct UrlHandlers : public Extension::ManifestData {
+  static const char* kManifestDataKey;
+
   UrlHandlers();
   ~UrlHandlers() override;
 
@@ -43,9 +49,6 @@ struct UrlHandlers : public Extension::ManifestData {
   // Determines whether |app| has at least one URL handler that matches
   // |url|.
   static bool CanPlatformAppHandleUrl(const Extension* app, const GURL& url);
-
-  // Determines whether |app| has at least one URL handler that matches |url|.
-  static bool CanBookmarkAppHandleUrl(const Extension* app, const GURL& url);
 
   // Finds a matching URL handler for |app|, if any. Returns nullptr if none
   // are found.
@@ -60,6 +63,10 @@ struct UrlHandlers : public Extension::ManifestData {
 class UrlHandlersParser : public ManifestHandler {
  public:
   UrlHandlersParser();
+
+  UrlHandlersParser(const UrlHandlersParser&) = delete;
+  UrlHandlersParser& operator=(const UrlHandlersParser&) = delete;
+
   ~UrlHandlersParser() override;
 
   // ManifestHandler API
@@ -67,8 +74,6 @@ class UrlHandlersParser : public ManifestHandler {
 
  private:
   base::span<const char* const> Keys() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(UrlHandlersParser);
 };
 
 }  // namespace extensions

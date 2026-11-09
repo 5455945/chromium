@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,17 @@
 #include <dshow.h>
 #include <wrl/client.h>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 
 namespace media {
 
 class PinBase : public IPin,
                 public IMemInputPin,
-                public base::RefCounted<PinBase> {
+                public base::RefCountedThreadSafe<PinBase> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   explicit PinBase(IBaseFilter* owner);
 
   // Function used for changing the owner.
@@ -96,7 +99,7 @@ class PinBase : public IPin,
   IFACEMETHODIMP_(ULONG) Release() override;
 
  protected:
-  friend class base::RefCounted<PinBase>;
+  friend class base::RefCountedThreadSafe<PinBase>;
   virtual ~PinBase();
 
  private:
@@ -104,7 +107,7 @@ class PinBase : public IPin,
   Microsoft::WRL::ComPtr<IPin> connected_pin_;
   // owner_ is the filter owning this pin. We don't reference count it since
   // that would create a circular reference count.
-  IBaseFilter* owner_;
+  raw_ptr<IBaseFilter, DanglingUntriaged> owner_;
 };
 
 }  // namespace media

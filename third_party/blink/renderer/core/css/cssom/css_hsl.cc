@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,15 +13,17 @@
 namespace blink {
 
 CSSHSL::CSSHSL(const Color& input_color) {
-  double h, s, l;
-  input_color.GetHSL(h, s, l);
-  h_ = CSSUnitValue::Create(h * 360, CSSPrimitiveValue::UnitType::kDegrees);
-  s_ = CSSUnitValue::Create(s * 100, CSSPrimitiveValue::UnitType::kPercentage);
-  l_ = CSSUnitValue::Create(l * 100, CSSPrimitiveValue::UnitType::kPercentage);
+  Color hsl_color = input_color;
+  hsl_color.ConvertToColorSpace(Color::ColorSpace::kHSL);
 
-  double a = double(input_color.Alpha()) / 255;
-  alpha_ =
-      CSSUnitValue::Create(a * 100, CSSPrimitiveValue::UnitType::kPercentage);
+  h_ = CSSUnitValue::Create(hsl_color.Param0(),
+                            CSSPrimitiveValue::UnitType::kDegrees);
+  s_ = CSSUnitValue::Create(hsl_color.Param1() * 100.0,
+                            CSSPrimitiveValue::UnitType::kPercentage);
+  l_ = CSSUnitValue::Create(hsl_color.Param2() * 100.0,
+                            CSSPrimitiveValue::UnitType::kPercentage);
+  alpha_ = CSSUnitValue::Create(hsl_color.Alpha() * 100.0,
+                                CSSPrimitiveValue::UnitType::kPercentage);
 }
 
 CSSHSL::CSSHSL(CSSNumericValue* h,
@@ -47,7 +49,8 @@ CSSHSL* CSSHSL::Create(CSSNumericValue* hue,
   if (!(s = ToPercentage(saturation)) || !(l = ToPercentage(lightness)) ||
       !(a = ToPercentage(alpha))) {
     exception_state.ThrowTypeError(
-        "Saturation, lightness and alpha values must all be percentages.");
+        "Saturation, lightness and alpha must be interpretable as "
+        "percentages.");
     return nullptr;
   }
 
@@ -67,45 +70,47 @@ V8CSSNumberish* CSSHSL::alpha() const {
 }
 
 void CSSHSL::setH(CSSNumericValue* hue, ExceptionState& exception_state) {
-  if (CSSOMTypes::IsCSSStyleValueAngle(*hue))
+  if (CSSOMTypes::IsCSSStyleValueAngle(*hue)) {
     h_ = hue;
-  else
+  } else {
     exception_state.ThrowTypeError("Hue must be a CSS angle type.");
+  }
 }
 
-void CSSHSL::setS(
-    const V8CSSNumberish* saturation,
-    ExceptionState& exception_state) {
-  if (auto* value = ToPercentage(saturation))
+void CSSHSL::setS(const V8CSSNumberish* saturation,
+                  ExceptionState& exception_state) {
+  if (auto* value = ToPercentage(saturation)) {
     s_ = value;
-  else
-    exception_state.ThrowTypeError("Saturation must be a percentage.");
+  } else {
+    exception_state.ThrowTypeError(
+        "Saturation must be interpretable as a percentage.");
+  }
 }
 
-void CSSHSL::setL(
-    const V8CSSNumberish* lightness,
-    ExceptionState& exception_state) {
-  if (auto* value = ToPercentage(lightness))
+void CSSHSL::setL(const V8CSSNumberish* lightness,
+                  ExceptionState& exception_state) {
+  if (auto* value = ToPercentage(lightness)) {
     l_ = value;
-  else
-    exception_state.ThrowTypeError("Lightness must be a percentage.");
+  } else {
+    exception_state.ThrowTypeError(
+        "Lightness must be interpretable as a percentage.");
+  }
 }
 
-void CSSHSL::setAlpha(
-    const V8CSSNumberish* alpha,
-    ExceptionState& exception_state) {
-  if (auto* value = ToPercentage(alpha))
+void CSSHSL::setAlpha(const V8CSSNumberish* alpha,
+                      ExceptionState& exception_state) {
+  if (auto* value = ToPercentage(alpha)) {
     alpha_ = value;
-  else
-    exception_state.ThrowTypeError("Alpha must be a percentage.");
+  } else {
+    exception_state.ThrowTypeError(
+        "Alpha must be interpretable as a percentage.");
+  }
 }
 
 Color CSSHSL::ToColor() const {
-  // MakeRGBAFromHSLA expects hue in the range [0, 6)
-  return MakeRGBAFromHSLA(
-      h_->to(CSSPrimitiveValue::UnitType::kDegrees)->value() / 60,
-      ComponentToColorInput(s_), ComponentToColorInput(l_),
-      ComponentToColorInput(alpha_));
+  return Color::FromHSLA(h_->to(CSSPrimitiveValue::UnitType::kDegrees)->value(),
+                         ComponentToColorInput(s_), ComponentToColorInput(l_),
+                         ComponentToColorInput(alpha_));
 }
 
 }  // namespace blink

@@ -1,48 +1,59 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/platform/media/key_system_config_selector.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/pattern.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "media/base/cdm_config.h"
 #include "media/base/eme_constants.h"
 #include "media/base/key_systems.h"
 #include "media/base/media_permission.h"
+#include "media/base/media_switches.h"
 #include "media/base/mime_util.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/web_encrypted_media_types.h"
 #include "third_party/blink/public/platform/web_media_key_system_configuration.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
-namespace media {
+namespace blink {
 
 namespace {
 
-using blink::WebEncryptedMediaSessionType;
-using blink::WebMediaKeySystemConfiguration;
-using blink::WebMediaKeySystemMediaCapability;
-using blink::WebString;
+using ::media::EmeConfig;
+using ::media::EmeConfigRuleState;
+using ::media::EmeFeatureSupport;
+using ::media::EmeInitDataType;
+using ::media::EmeMediaType;
 using MediaKeysRequirement = WebMediaKeySystemConfiguration::Requirement;
 using EncryptionScheme = WebMediaKeySystemMediaCapability::EncryptionScheme;
 
 // Key system strings. Clear Key support is hardcoded in KeySystemConfigSelector
-// so kClearKeyKeySystem is the real key system string. The rest key system
-// strings are for testing purpose only.
-const char kClearKeyKeySystem[] = "org.w3.clearkey";
+// so media::kClearKeyKeySystem is the real key system string. The rest key
+// system strings are for testing purpose only.
 const char kSupportedKeySystem[] = "keysystem.test.supported";
+const char kSupportedSubKeySystem[] = "keysystem.test.supported.sub";
 const char kUnsupportedKeySystem[] = "keysystem.test.unsupported";
 
 // Robustness strings for kSupportedKeySystem.
 const char kSupportedRobustness[] = "supported";
 const char kRecommendIdentifierRobustness[] = "recommend_identifier";
 const char kRequireIdentifierRobustness[] = "require_identifier";
+const char kDisallowedIdentifierRobustness[] = "disallow_identifier";
+const char kDisallowIdentifierAndDisallowHwSecureCodecRobustness[] =
+    "disallow_identifier_and_disallow_hw_secure_codec";
+const char kDisallowIdentifierAndRequireHwSecureCodecRobustness[] =
+    "disallow_identifier_and_require_hw_secure_codec";
 const char kDisallowHwSecureCodecRobustness[] = "disallow_hw_secure_codec";
 const char kRequireHwSecureCodecRobustness[] = "require_hw_secure_codec";
 const char kRequireIdentifierAndHwSecureCodecRobustness[] =
@@ -98,11 +109,10 @@ media::EncryptionScheme ConvertEncryptionScheme(
   }
 
   NOTREACHED();
-  return media::EncryptionScheme::kUnencrypted;
 }
 
 WebString MakeCodecs(const std::string& a, const std::string& b) {
-  return WebString::FromUTF8(a + "," + b);
+  return WebString::FromUtf8(a + "," + b);
 }
 
 WebString GetSupportedVideoCodecs() {
@@ -146,7 +156,7 @@ bool IsSupportedMediaType(const std::string& container_mime_type,
     return false;
 
   std::vector<std::string> codec_vector;
-  SplitCodecs(codecs, &codec_vector);
+  media::SplitCodecs(codecs, &codec_vector);
   for (const std::string& codec : codec_vector) {
     DCHECK_NE(codec, kExtendedVideoCodecStripped)
         << "codecs passed into this function should not be stripped";
@@ -193,20 +203,37 @@ WebMediaKeySystemConfiguration UsableConfiguration() {
   return config;
 }
 
-class FakeKeySystems : public KeySystems {
+class FakeKeySystems : public media::KeySystems {
  public:
   ~FakeKeySystems() override = default;
 
-  void UpdateIfNeeded() override { ++update_count; }
+  void UpdateIfNeeded(const std::string& key_system,
+                      base::OnceClosure done_cb) override {
+    // Call the callback directly since it's always up to date.
+    std::move(done_cb).Run();
+  }
+
+  std::string GetBaseKeySystemName(
+      const std::string& key_system) const override {
+    DCHECK(IsSupportedKeySystem(key_system));
+    return key_system == kSupportedSubKeySystem ? kSupportedKeySystem
+                                                : key_system;
+  }
 
   bool IsSupportedKeySystem(const std::string& key_system) const override {
     // Based on EME spec, Clear Key key system is always supported.
-    return key_system == kSupportedKeySystem ||
-           key_system == kClearKeyKeySystem;
+    return key_system == media::kClearKeyKeySystem ||
+           key_system == kSupportedKeySystem ||
+           key_system == kSupportedSubKeySystem;
+  }
+
+  bool ShouldUseBaseKeySystemName(
+      const std::string& key_system) const override {
+    return key_system == kSupportedSubKeySystem;
   }
 
   bool CanUseAesDecryptor(const std::string& key_system) const override {
-    return key_system == kClearKeyKeySystem;
+    return key_system == media::kClearKeyKeySystem;
   }
 
   // TODO(sandersd): Move implementation into KeySystemConfigSelector?
@@ -223,35 +250,35 @@ class FakeKeySystems : public KeySystems {
         return init_data_type_keyids_supported_;
     }
     NOTREACHED();
-    return false;
   }
 
-  EmeConfigRule GetEncryptionSchemeConfigRule(
+  EmeConfig::Rule GetEncryptionSchemeConfigRule(
       const std::string& key_system,
       media::EncryptionScheme encryption_scheme) const override {
     if (encryption_scheme ==
         ConvertEncryptionScheme(kSupportedEncryptionScheme)) {
-      return EmeConfigRule::SUPPORTED;
+      return EmeConfig::SupportedRule();
     }
 
     if (encryption_scheme ==
         ConvertEncryptionScheme(kDisallowHwSecureCodecEncryptionScheme)) {
-      return EmeConfigRule::HW_SECURE_CODECS_NOT_ALLOWED;
+      return EmeConfig{.hw_secure_codecs = EmeConfigRuleState::kNotAllowed};
     }
 
-    return EmeConfigRule::NOT_SUPPORTED;
+    return EmeConfig::UnsupportedRule();
   }
 
-  EmeConfigRule GetContentTypeConfigRule(
+  EmeConfig::Rule GetContentTypeConfigRule(
       const std::string& key_system,
       EmeMediaType media_type,
       const std::string& container_mime_type,
       const std::vector<std::string>& codecs) const override {
     DCHECK(IsValidContainerMimeType(container_mime_type))
         << "Invalid container mime type should not be passed in";
+
     if (container_mime_type == kUnsupportedContainer ||
         !IsCompatibleWithEmeMediaType(media_type, container_mime_type)) {
-      return EmeConfigRule::NOT_SUPPORTED;
+      return EmeConfig::UnsupportedRule();
     }
 
     bool hw_secure_codec_required_ = false;
@@ -262,7 +289,7 @@ class FakeKeySystems : public KeySystems {
 
       if (codec == kUnsupportedCodec ||
           !IsCompatibleWithEmeMediaType(media_type, codec)) {
-        return EmeConfigRule::NOT_SUPPORTED;
+        return EmeConfig::UnsupportedRule();
       } else if (codec == kRequireHwSecureCodec) {
         hw_secure_codec_required_ = true;
       } else if (codec == kDisallowHwSecureCodec) {
@@ -271,57 +298,79 @@ class FakeKeySystems : public KeySystems {
     }
 
     if (hw_secure_codec_required_) {
-      if (hw_secure_codec_not_allowed_)
-        return EmeConfigRule::NOT_SUPPORTED;
-      else
-        return EmeConfigRule::HW_SECURE_CODECS_REQUIRED;
+      if (hw_secure_codec_not_allowed_) {
+        return EmeConfig::UnsupportedRule();
+      } else {
+        return EmeConfig{.hw_secure_codecs = EmeConfigRuleState::kRequired};
+      }
     }
 
-    if (hw_secure_codec_not_allowed_)
-      return EmeConfigRule::HW_SECURE_CODECS_NOT_ALLOWED;
+    if (hw_secure_codec_not_allowed_) {
+      return EmeConfig{.hw_secure_codecs = EmeConfigRuleState::kNotAllowed};
+    }
 
-    return EmeConfigRule::SUPPORTED;
+    return EmeConfig::SupportedRule();
   }
 
-  EmeConfigRule GetRobustnessConfigRule(
+  EmeConfig::Rule GetRobustnessConfigRule(
       const std::string& key_system,
       EmeMediaType media_type,
       const std::string& requested_robustness,
       const bool* hw_secure_requirement) const override {
-    // TODO(crbug.com/1204284): Remove the `hw_secure_requirement` parameter.
+    // TODO(crbug.com/40179944): Remove the `hw_secure_requirement` parameter.
     // This only exists as a temporary solution until a larger refactoring is
     // done. We are only testing the explicit thing it is fixing here.
     if (hw_secure_requirement && *hw_secure_requirement &&
         distinctive_identifier == EmeFeatureSupport::NOT_SUPPORTED) {
-      return EmeConfigRule::NOT_SUPPORTED;
+      return EmeConfig::UnsupportedRule();
     }
-    if (requested_robustness.empty())
-      return EmeConfigRule::SUPPORTED;
-    if (requested_robustness == kSupportedRobustness)
-      return EmeConfigRule::SUPPORTED;
-    if (requested_robustness == kRequireIdentifierRobustness)
-      return EmeConfigRule::IDENTIFIER_REQUIRED;
-    if (requested_robustness == kRecommendIdentifierRobustness)
-      return EmeConfigRule::IDENTIFIER_RECOMMENDED;
-    if (requested_robustness == kDisallowHwSecureCodecRobustness)
-      return EmeConfigRule::HW_SECURE_CODECS_NOT_ALLOWED;
-    if (requested_robustness == kRequireHwSecureCodecRobustness)
-      return EmeConfigRule::HW_SECURE_CODECS_REQUIRED;
-    if (requested_robustness == kRequireIdentifierAndHwSecureCodecRobustness)
-      return EmeConfigRule::IDENTIFIER_AND_HW_SECURE_CODECS_REQUIRED;
+    if (requested_robustness.empty() ||
+        requested_robustness == kSupportedRobustness) {
+      return EmeConfig::SupportedRule();
+    }
+    if (requested_robustness == kRequireIdentifierRobustness) {
+      return EmeConfig{.identifier = EmeConfigRuleState::kRequired};
+    }
+    if (requested_robustness == kRecommendIdentifierRobustness) {
+      return EmeConfig{.identifier = EmeConfigRuleState::kRecommended};
+    }
+    if (requested_robustness == kDisallowedIdentifierRobustness) {
+      return EmeConfig{.identifier = EmeConfigRuleState::kNotAllowed};
+    }
+    if (requested_robustness == kDisallowHwSecureCodecRobustness) {
+      return EmeConfig{.hw_secure_codecs = EmeConfigRuleState::kNotAllowed};
+    }
+    if (requested_robustness ==
+        kDisallowIdentifierAndDisallowHwSecureCodecRobustness) {
+      return EmeConfig{.identifier = EmeConfigRuleState::kNotAllowed,
+                       .hw_secure_codecs = EmeConfigRuleState::kNotAllowed};
+    }
+    if (requested_robustness ==
+        kDisallowIdentifierAndRequireHwSecureCodecRobustness) {
+      return EmeConfig{.identifier = EmeConfigRuleState::kNotAllowed,
+                       .hw_secure_codecs = EmeConfigRuleState::kRequired};
+    }
+    if (requested_robustness == kRequireHwSecureCodecRobustness) {
+      return EmeConfig{.hw_secure_codecs = EmeConfigRuleState::kRequired};
+    }
+    if (requested_robustness == kRequireIdentifierAndHwSecureCodecRobustness) {
+      return EmeConfig{.identifier = EmeConfigRuleState::kRequired,
+                       .hw_secure_codecs = EmeConfigRuleState::kRequired};
+    }
     if (requested_robustness ==
         kRequireIdentifierPersistenceAndHwSecureCodecRobustness) {
-      return EmeConfigRule::
-          IDENTIFIER_PERSISTENCE_AND_HW_SECURE_CODECS_REQUIRED;
+      return EmeConfig{.identifier = EmeConfigRuleState::kRequired,
+                       .persistence = EmeConfigRuleState::kRequired,
+                       .hw_secure_codecs = EmeConfigRuleState::kRequired};
     }
-    if (requested_robustness == kUnsupportedRobustness)
-      return EmeConfigRule::NOT_SUPPORTED;
+    if (requested_robustness == kUnsupportedRobustness) {
+      return EmeConfig::UnsupportedRule();
+    }
 
     NOTREACHED();
-    return EmeConfigRule::NOT_SUPPORTED;
   }
 
-  EmeSessionTypeSupport GetPersistentLicenseSessionSupport(
+  EmeConfig::Rule GetPersistentLicenseSessionSupport(
       const std::string& key_system) const override {
     return persistent_license;
   }
@@ -340,8 +389,7 @@ class FakeKeySystems : public KeySystems {
   bool init_data_type_cenc_supported_ = false;
   bool init_data_type_keyids_supported_ = false;
 
-  // INVALID so that they must be set in any test that needs them.
-  EmeSessionTypeSupport persistent_license = EmeSessionTypeSupport::INVALID;
+  EmeConfig::Rule persistent_license = EmeConfig::UnsupportedRule();
 
   // Every test implicitly requires these, so they must be set. They are set to
   // values that are likely to cause tests to fail if they are accidentally
@@ -349,11 +397,9 @@ class FakeKeySystems : public KeySystems {
   // the default values may be changed.
   EmeFeatureSupport persistent_state = EmeFeatureSupport::NOT_SUPPORTED;
   EmeFeatureSupport distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
-
-  int update_count = 0;
 };
 
-class FakeMediaPermission : public MediaPermission {
+class FakeMediaPermission : public media::MediaPermission {
  public:
   // MediaPermission implementation.
   void HasPermission(Type type,
@@ -369,21 +415,29 @@ class FakeMediaPermission : public MediaPermission {
 
   bool IsEncryptedMediaEnabled() override { return is_encrypted_media_enabled; }
 
+#if BUILDFLAG(IS_WIN)
+  void IsHardwareSecureDecryptionAllowed(
+      IsHardwareSecureDecryptionAllowedCB cb) override {
+    std::move(cb).Run(is_hardware_secure_decryption_allowed);
+  }
+#endif  // BUILDFLAG(IS_WIN)
+
   int requests = 0;
   bool is_granted = false;
   bool is_encrypted_media_enabled = true;
+#if BUILDFLAG(IS_WIN)
+  bool is_hardware_secure_decryption_allowed = true;
+#endif  // BUILDFLAG(IS_WIN)
 };
 
 class FakeWebLocalFrameDelegate
     : public KeySystemConfigSelector::WebLocalFrameDelegate {
  public:
-  FakeWebLocalFrameDelegate()
-      : KeySystemConfigSelector::WebLocalFrameDelegate(nullptr) {}
-  bool IsCrossOriginToMainFrame() override { return is_cross_origin_; }
+  FakeWebLocalFrameDelegate() = default;
+  bool IsCrossOriginToOutermostMainFrame() override { return is_cross_origin_; }
   bool AllowStorageAccessSync(
-      blink::WebContentSettingsClient::StorageType storage_type) override {
-    if (storage_type ==
-        blink::WebContentSettingsClient::StorageType::kLocalStorage) {
+      WebContentSettingsClient::StorageType storage_type) override {
+    if (storage_type == WebContentSettingsClient::StorageType::kIndexedDB) {
       return local_storage_allowed_;
     }
     return true;
@@ -418,12 +472,12 @@ class KeySystemConfigSelectorTest : public testing::Test {
     web_frame_delegate_ = std::make_unique<FakeWebLocalFrameDelegate>();
 
     key_system_config_selector.SetIsSupportedMediaTypeCBForTesting(
-        base::BindRepeating(&IsSupportedMediaType));
+        BindRepeating(&IsSupportedMediaType));
 
     key_system_config_selector.SelectConfig(
         key_system_, configs_,
-        base::BindOnce(&KeySystemConfigSelectorTest::OnConfigSelected,
-                       base::Unretained(this)));
+        BindOnce(&KeySystemConfigSelectorTest::OnConfigSelected,
+                 Unretained(this)));
   }
 
   void SelectConfigReturnsConfig() {
@@ -462,7 +516,7 @@ class KeySystemConfigSelectorTest : public testing::Test {
 
   void OnConfigSelected(KeySystemConfigSelector::Status status,
                         WebMediaKeySystemConfiguration* config,
-                        CdmConfig* cdm_config) {
+                        media::CdmConfig* cdm_config) {
     if (status == KeySystemConfigSelector::Status::kSupported) {
       succeeded_count_++;
       config_ = *config;
@@ -477,12 +531,12 @@ class KeySystemConfigSelectorTest : public testing::Test {
   std::unique_ptr<FakeWebLocalFrameDelegate> web_frame_delegate_;
 
   // Held values for the call to SelectConfig().
-  WebString key_system_ = WebString::FromUTF8(kSupportedKeySystem);
+  WebString key_system_ = WebString::FromUtf8(kSupportedKeySystem);
   std::vector<WebMediaKeySystemConfiguration> configs_;
 
-  // Holds the selected configuration and CdmConfig.
+  // Holds the selected key system, configuration and CdmConfig.
   WebMediaKeySystemConfiguration config_;
-  CdmConfig cdm_config_;
+  media::CdmConfig cdm_config_;
 
   int succeeded_count_;
   int not_supported_count_;
@@ -552,17 +606,6 @@ TEST_F(KeySystemConfigSelectorTest, UsableConfig) {
   EXPECT_FALSE(cdm_config_.use_hw_secure_codecs);
 }
 
-// KeySystemConfigSelector should make sure it uses up-to-date KeySystems.
-TEST_F(KeySystemConfigSelectorTest, UpdateKeySystems) {
-  configs_.push_back(UsableConfiguration());
-
-  ASSERT_EQ(key_systems_->update_count, 0);
-  SelectConfig();
-  EXPECT_EQ(key_systems_->update_count, 1);
-  SelectConfig();
-  EXPECT_EQ(key_systems_->update_count, 2);
-}
-
 TEST_F(KeySystemConfigSelectorTest, Label) {
   auto config = UsableConfiguration();
   config.label = "foo";
@@ -588,9 +631,17 @@ TEST_F(KeySystemConfigSelectorTest, KeySystem_Unsupported) {
 }
 
 TEST_F(KeySystemConfigSelectorTest, KeySystem_ClearKey) {
-  key_system_ = kClearKeyKeySystem;
+  key_system_ = media::kClearKeyKeySystem;
   configs_.push_back(UsableConfiguration());
   SelectConfigReturnsConfig();
+  DCHECK_EQ(cdm_config_.key_system, media::kClearKeyKeySystem);
+}
+
+TEST_F(KeySystemConfigSelectorTest, KeySystem_SubKeySystem) {
+  key_system_ = kSupportedSubKeySystem;
+  configs_.push_back(UsableConfiguration());
+  SelectConfigReturnsConfig();
+  DCHECK_EQ(cdm_config_.key_system, kSupportedKeySystem);
 }
 
 // --- Disable EncryptedMedia ---
@@ -599,7 +650,7 @@ TEST_F(KeySystemConfigSelectorTest, EncryptedMediaDisabled_ClearKey) {
   media_permission_->is_encrypted_media_enabled = false;
 
   // Clear Key key system is always supported.
-  key_system_ = kClearKeyKeySystem;
+  key_system_ = media::kClearKeyKeySystem;
   configs_.push_back(UsableConfiguration());
   SelectConfigReturnsConfig();
 }
@@ -737,13 +788,13 @@ TEST_F(KeySystemConfigSelectorTest,
   config.distinctive_identifier = MediaKeysRequirement::kOptional;
   configs_.push_back(config);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   SelectConfigRequestsPermissionAndReturnsConfig();
   EXPECT_EQ(MediaKeysRequirement::kRequired, config_.distinctive_identifier);
   EXPECT_TRUE(cdm_config_.allow_distinctive_identifier);
 #else
   SelectConfigReturnsError();
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 TEST_F(KeySystemConfigSelectorTest,
@@ -756,13 +807,13 @@ TEST_F(KeySystemConfigSelectorTest,
   config.distinctive_identifier = MediaKeysRequirement::kRequired;
   configs_.push_back(config);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   SelectConfigRequestsPermissionAndReturnsConfig();
   EXPECT_EQ(MediaKeysRequirement::kRequired, config_.distinctive_identifier);
   EXPECT_TRUE(cdm_config_.allow_distinctive_identifier);
 #else
   SelectConfigReturnsError();
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 // --- persistentState ---
@@ -866,7 +917,7 @@ TEST_F(KeySystemConfigSelectorTest, SessionTypes_Empty) {
 TEST_F(KeySystemConfigSelectorTest, SessionTypes_SubsetSupported) {
   // Allow persistent state, as it would be required to be successful.
   key_systems_->persistent_state = EmeFeatureSupport::REQUESTABLE;
-  key_systems_->persistent_license = EmeSessionTypeSupport::NOT_SUPPORTED;
+  key_systems_->persistent_license = EmeConfig::UnsupportedRule();
 
   std::vector<WebEncryptedMediaSessionType> session_types;
   session_types.push_back(WebEncryptedMediaSessionType::kTemporary);
@@ -882,7 +933,7 @@ TEST_F(KeySystemConfigSelectorTest, SessionTypes_SubsetSupported) {
 TEST_F(KeySystemConfigSelectorTest, SessionTypes_AllSupported) {
   // Allow persistent state, and expect it to be required.
   key_systems_->persistent_state = EmeFeatureSupport::REQUESTABLE;
-  key_systems_->persistent_license = EmeSessionTypeSupport::SUPPORTED;
+  key_systems_->persistent_license = EmeConfig::SupportedRule();
 
   std::vector<WebEncryptedMediaSessionType> session_types;
   session_types.push_back(WebEncryptedMediaSessionType::kTemporary);
@@ -906,7 +957,8 @@ TEST_F(KeySystemConfigSelectorTest, SessionTypes_PermissionCanBeRequired) {
   key_systems_->distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
   key_systems_->persistent_state = EmeFeatureSupport::REQUESTABLE;
   key_systems_->persistent_license =
-      EmeSessionTypeSupport::SUPPORTED_WITH_IDENTIFIER;
+      EmeConfig{.identifier = EmeConfigRuleState::kRequired,
+                .persistence = EmeConfigRuleState::kRequired};
 
   std::vector<WebEncryptedMediaSessionType> session_types;
   session_types.push_back(WebEncryptedMediaSessionType::kPersistentLicense);
@@ -1023,7 +1075,7 @@ TEST_F(KeySystemConfigSelectorTest, VideoCapabilities_IncompatibleCodec) {
 
 TEST_F(KeySystemConfigSelectorTest,
        VideoCapabilities_UnsupportedByAesDecryptorCodec_ClearKey) {
-  key_system_ = kClearKeyKeySystem;
+  key_system_ = media::kClearKeyKeySystem;
 
   std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
   video_capabilities[0].content_type = "a";
@@ -1249,6 +1301,26 @@ TEST_F(KeySystemConfigSelectorTest,
   EXPECT_EQ(MediaKeysRequirement::kRequired, config_.distinctive_identifier);
 }
 
+TEST_F(
+    KeySystemConfigSelectorTest,
+    VideoCapabilities_DisallowedIdentifierRobustness_PermissionNotRequested) {
+  media_permission_->is_granted = true;
+  key_systems_->distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
+
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kSupportedVideoCodec;
+  video_capabilities[0].robustness = kDisallowedIdentifierRobustness;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  configs_.push_back(config);
+
+  SelectConfigReturnsConfig();
+  EXPECT_EQ(MediaKeysRequirement::kNotAllowed, config_.distinctive_identifier);
+}
+
 TEST_F(KeySystemConfigSelectorTest,
        VideoCapabilities_Robustness_NoPermissionRecommendedCrossOrigin) {
   key_systems_->distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
@@ -1264,24 +1336,24 @@ TEST_F(KeySystemConfigSelectorTest,
   config.video_capabilities = video_capabilities;
   configs_.push_back(config);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   SelectConfigRequestsPermissionAndReturnsConfig();
 #else
   SelectConfigReturnsConfig();
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(MediaKeysRequirement::kNotAllowed, config_.distinctive_identifier);
   ASSERT_EQ(1u, config_.video_capabilities.size());
 }
 
 TEST_F(KeySystemConfigSelectorTest,
        VideoCapabilities_EncryptionScheme_Supported) {
-  std::vector<blink::WebMediaKeySystemMediaCapability> video_capabilities(1);
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
   video_capabilities[0].content_type = "a";
   video_capabilities[0].mime_type = kSupportedVideoContainer;
   video_capabilities[0].codecs = kSupportedVideoCodec;
   video_capabilities[0].encryption_scheme = kSupportedEncryptionScheme;
 
-  blink::WebMediaKeySystemConfiguration config = EmptyConfiguration();
+  WebMediaKeySystemConfiguration config = EmptyConfiguration();
   config.video_capabilities = video_capabilities;
   configs_.push_back(config);
 
@@ -1293,14 +1365,14 @@ TEST_F(KeySystemConfigSelectorTest,
 
 TEST_F(KeySystemConfigSelectorTest,
        VideoCapabilities_EncryptionScheme_DisallowHwSecureCodec) {
-  std::vector<blink::WebMediaKeySystemMediaCapability> video_capabilities(1);
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
   video_capabilities[0].content_type = "a";
   video_capabilities[0].mime_type = kSupportedVideoContainer;
   video_capabilities[0].codecs = kSupportedVideoCodec;
   video_capabilities[0].encryption_scheme =
       kDisallowHwSecureCodecEncryptionScheme;
 
-  blink::WebMediaKeySystemConfiguration config = EmptyConfiguration();
+  WebMediaKeySystemConfiguration config = EmptyConfiguration();
   config.video_capabilities = video_capabilities;
   configs_.push_back(config);
 
@@ -1488,13 +1560,13 @@ TEST_F(KeySystemConfigSelectorTest,
 }
 
 TEST_F(KeySystemConfigSelectorTest, HwSecureCodec_EncryptionScheme_Supported) {
-  std::vector<blink::WebMediaKeySystemMediaCapability> video_capabilities(1);
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
   video_capabilities[0].content_type = "a";
   video_capabilities[0].mime_type = kSupportedVideoContainer;
   video_capabilities[0].codecs = kRequireHwSecureCodec;
   video_capabilities[0].encryption_scheme = kSupportedEncryptionScheme;
 
-  blink::WebMediaKeySystemConfiguration config = EmptyConfiguration();
+  WebMediaKeySystemConfiguration config = EmptyConfiguration();
   config.video_capabilities = video_capabilities;
   configs_.push_back(config);
 
@@ -1507,14 +1579,14 @@ TEST_F(KeySystemConfigSelectorTest, HwSecureCodec_EncryptionScheme_Supported) {
 
 TEST_F(KeySystemConfigSelectorTest,
        HwSecureCodec_EncryptionScheme_DisallowHwSecureCodec) {
-  std::vector<blink::WebMediaKeySystemMediaCapability> video_capabilities(1);
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
   video_capabilities[0].content_type = "a";
   video_capabilities[0].mime_type = kSupportedVideoContainer;
   video_capabilities[0].codecs = kRequireHwSecureCodec;
   video_capabilities[0].encryption_scheme =
       kDisallowHwSecureCodecEncryptionScheme;
 
-  blink::WebMediaKeySystemConfiguration config = EmptyConfiguration();
+  WebMediaKeySystemConfiguration config = EmptyConfiguration();
   config.video_capabilities = video_capabilities;
   configs_.push_back(config);
 
@@ -1616,6 +1688,76 @@ TEST_F(KeySystemConfigSelectorTest,
   SelectConfigReturnsError();
 }
 
+TEST_F(KeySystemConfigSelectorTest,
+       RequireIdentifierAndDisallowHwSecureCodec_PermissionRequested) {
+  media_permission_->is_granted = true;
+  key_systems_->distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
+
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "require_hw_secure_codec";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kDisallowHwSecureCodec;
+  video_capabilities[0].robustness = kRequireIdentifierRobustness;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  configs_.push_back(config);
+
+  SelectConfigRequestsPermissionAndReturnsConfig();
+  EXPECT_EQ(MediaKeysRequirement::kRequired, config_.distinctive_identifier);
+  ASSERT_EQ(1u, config_.video_capabilities.size());
+  EXPECT_EQ("require_hw_secure_codec",
+            config_.video_capabilities[0].content_type);
+  EXPECT_FALSE(cdm_config_.use_hw_secure_codecs);
+}
+
+TEST_F(KeySystemConfigSelectorTest,
+       DisallowIdentifierAndDisallowHwSecureCodec_NotSupported) {
+  // NOTE: Robustness disallows identifier, but JS requires it.
+
+  // Arrange
+  media_permission_->is_granted = true;
+  key_systems_->distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
+
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kSupportedVideoCodec;
+  video_capabilities[0].robustness =
+      kDisallowIdentifierAndDisallowHwSecureCodecRobustness;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  config.distinctive_identifier = MediaKeysRequirement::kRequired;
+  configs_.push_back(config);
+
+  // Act/Assert
+  SelectConfigReturnsError();
+}
+
+TEST_F(KeySystemConfigSelectorTest,
+       DisallowIdentifierAndRequireHwSecureCodec_NotSupported) {
+  // NOTE: Robustness disallows identifier, but JS requires it.
+
+  // Arrange
+  media_permission_->is_granted = true;
+  key_systems_->distinctive_identifier = EmeFeatureSupport::REQUESTABLE;
+
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kSupportedVideoCodec;
+  video_capabilities[0].robustness =
+      kDisallowIdentifierAndRequireHwSecureCodecRobustness;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  config.distinctive_identifier = MediaKeysRequirement::kRequired;
+  configs_.push_back(config);
+
+  // Act/Assert
+  SelectConfigReturnsError();
+}
 // --- Identifier, Persistence and HW Secure Robustness ---
 
 TEST_F(KeySystemConfigSelectorTest,
@@ -1847,4 +1989,90 @@ TEST_F(KeySystemConfigSelectorTest,
   ASSERT_EQ("b", config_.label);
 }
 
-}  // namespace media
+// hardware secure decryption preferences
+#if BUILDFLAG(IS_WIN)
+TEST_F(KeySystemConfigSelectorTest, HardwareDecryption_Allowed) {
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kRequireHwSecureCodec;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  configs_.push_back(config);
+
+  media_permission_->is_hardware_secure_decryption_allowed = true;
+  SelectConfigReturnsConfig();
+}
+
+TEST_F(KeySystemConfigSelectorTest, HardwareDecryption_NotAllowed) {
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kRequireHwSecureCodec;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  configs_.push_back(config);
+
+  media_permission_->is_hardware_secure_decryption_allowed = false;
+
+  if (media::kHardwareSecureDecryptionFallbackPerSite.Get()) {
+    SelectConfigReturnsError();
+  } else {
+    SelectConfigReturnsConfig();
+  }
+}
+
+TEST_F(KeySystemConfigSelectorTest, NotHardwareSecureDecryption_Allowed) {
+  auto config = UsableConfiguration();
+  configs_.push_back(config);
+
+  media_permission_->is_hardware_secure_decryption_allowed = false;
+  SelectConfig();
+}
+
+TEST_F(KeySystemConfigSelectorTest,
+       DisableHardwareSecureDecryptionFallbackFeature) {
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kRequireHwSecureCodec;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  configs_.push_back(config);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      media::kHardwareSecureDecryptionFallback, {{"per_site", "false"}});
+
+  media_permission_->is_hardware_secure_decryption_allowed = true;
+  SelectConfigReturnsConfig();
+  media_permission_->is_hardware_secure_decryption_allowed = false;
+  SelectConfigReturnsConfig();
+}
+
+TEST_F(KeySystemConfigSelectorTest,
+       EnableHardwareSecureDecryptionFallbackFeature) {
+  std::vector<WebMediaKeySystemMediaCapability> video_capabilities(1);
+  video_capabilities[0].content_type = "a";
+  video_capabilities[0].mime_type = kSupportedVideoContainer;
+  video_capabilities[0].codecs = kRequireHwSecureCodec;
+
+  auto config = EmptyConfiguration();
+  config.video_capabilities = video_capabilities;
+  configs_.push_back(config);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      media::kHardwareSecureDecryptionFallback, {{"per_site", "true"}});
+
+  media_permission_->is_hardware_secure_decryption_allowed = true;
+  SelectConfigReturnsConfig();
+  media_permission_->is_hardware_secure_decryption_allowed = false;
+  SelectConfigReturnsError();
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+}  // namespace blink

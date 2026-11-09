@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/task_manager/providers/web_contents/web_contents_tag.h"
 
 namespace base {
@@ -44,7 +45,8 @@ class WebContentsTagsManager {
   // or else the corresponding task for the |tag| will continue to exist.
   void ClearFromProvider(const WebContentsTag* tag);
 
-  const std::vector<WebContentsTag*>& tracked_tags() const {
+  const std::vector<raw_ptr<WebContentsTag, VectorExperimental>>& tracked_tags()
+      const {
     return tracked_tags_;
   }
 
@@ -55,10 +57,10 @@ class WebContentsTagsManager {
   ~WebContentsTagsManager();
 
   // The provider that's currently observing the creation of WebContents.
-  WebContentsTaskProvider* provider_;
+  raw_ptr<WebContentsTaskProvider> provider_;
 
   // A set of all the WebContentsTags seen so far.
-  std::vector<WebContentsTag*> tracked_tags_;
+  std::vector<raw_ptr<WebContentsTag, VectorExperimental>> tracked_tags_;
 };
 
 }  // namespace task_manager

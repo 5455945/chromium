@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,7 +32,6 @@ struct TestPreferences {
   bool web_security_enabled;
   bool disable_reading_from_canvas;
   bool strict_mixed_content_checking;
-  bool strict_powerful_feature_restrictions;
   bool spatial_navigation_enabled;
 
   TestPreferences();

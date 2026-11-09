@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,9 +11,9 @@ static_library("navigation_metrics") {
   deps = [
     "//base",
     "//base:i18n",
-    "//components/dom_distiller/core:core",
+    "//components/dom_distiller/core",
     "//components/profile_metrics",
-    "//components/url_formatter:url_formatter",
+    "//components/url_formatter",
     "//url",
   ]
 }

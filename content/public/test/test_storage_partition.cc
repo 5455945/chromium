@@ -1,38 +1,48 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/test/test_storage_partition.h"
 
+#include <tuple>
+
 #include "components/leveldb_proto/public/proto_database_provider.h"
 #include "content/public/browser/file_system_access_entry_factory.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
+#include "services/network/test/test_url_loader_factory.h"
+#include "storage/browser/quota/quota_manager.h"
 
 namespace content {
 
 TestStoragePartition::TestStoragePartition() {}
 TestStoragePartition::~TestStoragePartition() {}
 
-base::FilePath TestStoragePartition::GetPath() {
-  return file_path_;
+const StoragePartitionConfig& TestStoragePartition::GetConfig() const {
+  return config_;
 }
 
-base::FilePath TestStoragePartition::GetBucketBasePath() {
-  return file_path_.Append(storage::kWebStorageDirectory);
+const base::FilePath& TestStoragePartition::GetPath() const {
+  return file_path_;
 }
 
 network::mojom::NetworkContext* TestStoragePartition::GetNetworkContext() {
   return network_context_;
 }
 
-scoped_refptr<network::SharedURLLoaderFactory>
-TestStoragePartition::GetURLLoaderFactoryForBrowserProcess() {
+bool TestStoragePartition::IsNetworkContextInitialized() {
+  return network_context_ != nullptr;
+}
+
+cert_verifier::mojom::CertVerifierServiceUpdater*
+TestStoragePartition::GetCertVerifierServiceUpdater() {
   return nullptr;
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
-TestStoragePartition::GetURLLoaderFactoryForBrowserProcessWithCORBEnabled() {
-  return nullptr;
+TestStoragePartition::GetURLLoaderFactoryForBrowserProcess() {
+  return test_url_loader_factory_->GetSafeWeakWrapper();
 }
 
 std::unique_ptr<network::PendingSharedURLLoaderFactory>
@@ -45,21 +55,21 @@ TestStoragePartition::GetCookieManagerForBrowserProcess() {
   return cookie_manager_for_browser_process_;
 }
 
-void TestStoragePartition::CreateHasTrustTokensAnswerer(
-    mojo::PendingReceiver<network::mojom::HasTrustTokensAnswerer> receiver,
+void TestStoragePartition::CreateTrustTokenQueryAnswerer(
+    mojo::PendingReceiver<network::mojom::TrustTokenQueryAnswerer> receiver,
     const url::Origin& top_frame_origin) {
   NOTREACHED() << "Not implemented.";
 }
 
 mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
-TestStoragePartition::CreateURLLoaderNetworkObserverForFrame(int process_id,
-                                                             int routing_id) {
+TestStoragePartition::CreateURLLoaderNetworkObserverForFrame(
+    const content::GlobalRenderFrameHostId& frame_id) {
   return mojo::NullRemote();
 }
 
 mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
 TestStoragePartition::CreateURLLoaderNetworkObserverForNavigationRequest(
-    int frame_tree_id) {
+    NavigationRequest& navigation_request) {
   return mojo::NullRemote();
 }
 
@@ -67,8 +77,8 @@ storage::QuotaManager* TestStoragePartition::GetQuotaManager() {
   return quota_manager_;
 }
 
-AppCacheService* TestStoragePartition::GetAppCacheService() {
-  return app_cache_service_;
+storage::QuotaManagerProxy* TestStoragePartition::GetQuotaManagerProxy() {
+  return quota_manager_ ? quota_manager_->proxy() : nullptr;
 }
 
 BackgroundSyncContext* TestStoragePartition::GetBackgroundSyncContext() {
@@ -77,10 +87,6 @@ BackgroundSyncContext* TestStoragePartition::GetBackgroundSyncContext() {
 
 storage::FileSystemContext* TestStoragePartition::GetFileSystemContext() {
   return file_system_context_;
-}
-
-storage::DatabaseTracker* TestStoragePartition::GetDatabaseTracker() {
-  return database_tracker_;
 }
 
 DOMStorageContext* TestStoragePartition::GetDOMStorageContext() {
@@ -92,7 +98,7 @@ TestStoragePartition::GetLocalStorageControl() {
   // Bind and throw away the receiver. If testing is required, then add a method
   // to set the remote.
   if (!local_storage_control_.is_bound())
-    ignore_result(local_storage_control_.BindNewPipeAndPassReceiver());
+    std::ignore = local_storage_control_.BindNewPipeAndPassReceiver();
   return local_storage_control_.get();
 }
 
@@ -100,16 +106,12 @@ storage::mojom::IndexedDBControl& TestStoragePartition::GetIndexedDBControl() {
   // Bind and throw away the receiver. If testing is required, then add a method
   // to set the remote.
   if (!indexed_db_control_.is_bound())
-    ignore_result(indexed_db_control_.BindNewPipeAndPassReceiver());
+    std::ignore = indexed_db_control_.BindNewPipeAndPassReceiver();
   return *indexed_db_control_;
 }
 
 FileSystemAccessEntryFactory*
 TestStoragePartition::GetFileSystemAccessEntryFactory() {
-  return nullptr;
-}
-
-FontAccessContext* TestStoragePartition::GetFontAccessContext() {
   return nullptr;
 }
 
@@ -130,7 +132,7 @@ TestStoragePartition::GetCacheStorageControl() {
   // Bind and throw away the receiver. If testing is required, then add a method
   // to set the remote.
   if (!cache_storage_control_.is_bound())
-    ignore_result(cache_storage_control_.BindNewPipeAndPassReceiver());
+    std::ignore = cache_storage_control_.BindNewPipeAndPassReceiver();
   return cache_storage_control_.get();
 }
 
@@ -144,6 +146,24 @@ TestStoragePartition::GetPlatformNotificationContext() {
   return platform_notification_context_;
 }
 
+
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+CdmStorageDataModel* TestStoragePartition::GetCdmStorageDataModel() {
+  return nullptr;
+}
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+network::mojom::DeviceBoundSessionManager*
+TestStoragePartition::GetDeviceBoundSessionManager() {
+  return device_bound_session_manager_.get();
+}
+
+void TestStoragePartition::OverrideDeviceBoundSessionManagerForTesting(
+    std::unique_ptr<network::mojom::DeviceBoundSessionManager>
+        device_bound_session_manager) {
+  device_bound_session_manager_ = std::move(device_bound_session_manager);
+}
+
 DevToolsBackgroundServicesContext*
 TestStoragePartition::GetDevToolsBackgroundServicesContext() {
   return devtools_background_services_context_;
@@ -151,10 +171,6 @@ TestStoragePartition::GetDevToolsBackgroundServicesContext() {
 
 ContentIndexContext* TestStoragePartition::GetContentIndexContext() {
   return content_index_context_;
-}
-
-NativeIOContext* TestStoragePartition::GetNativeIOContext() {
-  return native_io_context_;
 }
 
 leveldb_proto::ProtoDatabaseProvider*
@@ -170,7 +186,6 @@ TestStoragePartition::GetProtoDatabaseProviderForTesting() {
   return nullptr;
 }
 
-#if !defined(OS_ANDROID)
 HostZoomMap* TestStoragePartition::GetHostZoomMap() {
   return host_zoom_map_;
 }
@@ -182,25 +197,27 @@ HostZoomLevelContext* TestStoragePartition::GetHostZoomLevelContext() {
 ZoomLevelDelegate* TestStoragePartition::GetZoomLevelDelegate() {
   return zoom_level_delegate_;
 }
-#endif  // !defined(OS_ANDROID)
 
 void TestStoragePartition::ClearDataForOrigin(
     uint32_t remove_mask,
-    uint32_t quota_storage_remove_mask,
-    const GURL& storage_origin) {}
-
-void TestStoragePartition::ClearData(
-    uint32_t remove_mask,
-    uint32_t quota_storage_remove_mask,
     const GURL& storage_origin,
-    const base::Time begin,
-    const base::Time end,
     base::OnceClosure callback) {}
 
+void TestStoragePartition::ClearDataForBuckets(
+    const blink::StorageKey& storage_key,
+    const std::set<std::string>& buckets,
+    base::OnceClosure callback) {}
+
+void TestStoragePartition::ClearData(uint32_t remove_mask,
+                                     const blink::StorageKey& storage_key,
+                                     const base::Time begin,
+                                     const base::Time end,
+                                     base::OnceClosure callback) {}
+
 void TestStoragePartition::ClearData(
     uint32_t remove_mask,
-    uint32_t quota_storage_remove_mask,
-    OriginMatcherFunction origin_matcher,
+    BrowsingDataFilterBuilder* filter_builder,
+    StorageKeyPolicyMatcherFunction storage_key_policy_matcher,
     network::mojom::CookieDeletionFilterPtr cookie_deletion_filter,
     bool perform_storage_cleanup,
     const base::Time begin,
@@ -217,6 +234,8 @@ void TestStoragePartition::Flush() {}
 
 void TestStoragePartition::ResetURLLoaderFactories() {}
 
+void TestStoragePartition::ClearBluetoothAllowedDevicesMap() {}
+
 void TestStoragePartition::AddObserver(DataRemovalObserver* observer) {
   data_removal_observer_count_++;
 }
@@ -229,16 +248,22 @@ int TestStoragePartition::GetDataRemovalObserverCount() {
   return data_removal_observer_count_;
 }
 
-void TestStoragePartition::ClearBluetoothAllowedDevicesMapForTesting() {}
-
 void TestStoragePartition::FlushNetworkInterfaceForTesting() {}
 
-void TestStoragePartition::WaitForDeletionTasksForTesting() {}
+void TestStoragePartition::FlushCertVerifierInterfaceForTesting() {}
 
-void TestStoragePartition::WaitForCodeCacheShutdownForTesting() {}
+void TestStoragePartition::WaitForDeletionTasksForTesting() {}
 
 void TestStoragePartition::SetNetworkContextForTesting(
     mojo::PendingRemote<network::mojom::NetworkContext>
         network_context_remote) {}
+
+base::WeakPtr<StoragePartition> TestStoragePartition::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
+void TestStoragePartition::InvalidateWeakPtrs() {
+  weak_factory_.InvalidateWeakPtrs();
+}
 
 }  // namespace content

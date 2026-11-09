@@ -1,14 +1,28 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_TABS_TAB_MENU_MODEL_H_
 #define CHROME_BROWSER_UI_TABS_TAB_MENU_MODEL_H_
 
-#include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_sub_menu_model.h"
-#include "ui/base/models/simple_menu_model.h"
+#include <memory>
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "components/tabs/public/tab_interface.h"
+#include "extensions/buildflags/buildflags.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/menus/simple_menu_model.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+namespace extensions {
+class ContextMenuMatcher;
+}
+#endif
 
 class TabStripModel;
+class TabMenuModelDelegate;
 
 // A menu model that builds the contents of the tab context menu. To make sure
 // the menu reflects the real state of the tab a new TabMenuModel should be
@@ -21,25 +35,91 @@ class TabStripModel;
 // likely having to expand it later on:
 //   ExistingTabGroupSubMenuModel
 //   ExistingWindowSubMenuModel
-//   SendTabToSelfSubMenuModel
+//   ExistingComparisonTableSubMenuModel
 class TabMenuModel : public ui::SimpleMenuModel {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAddANoteTabMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSplitTabsMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kArrangeSplitTabsMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSwapSplitTabsMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAddNewTabAdjacentMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAddToNewGroupItemIdentifier);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kDuplicateMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kFocusSelectionMenuItem);
+
   TabMenuModel(ui::SimpleMenuModel::Delegate* delegate,
+               TabMenuModelDelegate* tab_menu_model_delegate,
+               TabStripModel* tab_strip,
+               tabs::TabHandle context_tab);
+  // TODO(crbug.com/435178910): Temporary forwarding shim until callers migrate.
+  TabMenuModel(ui::SimpleMenuModel::Delegate* delegate,
+               TabMenuModelDelegate* tab_menu_model_delegate,
                TabStripModel* tab_strip,
                int index);
   TabMenuModel(const TabMenuModel&) = delete;
   TabMenuModel& operator=(const TabMenuModel&) = delete;
   ~TabMenuModel() override;
 
+  // ui::SimpleMenuModel:
+  bool IsItemCheckedAt(size_t index) const override;
+  bool IsEnabledAt(size_t index) const override;
+  bool IsVisibleAt(size_t index) const override;
+  void ActivatedAt(size_t index) override;
+  void ActivatedAt(size_t index, int event_flags) override;
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  // Returns the `ContextMenuMatcher` managing the extension-provided menu
+  // items. This must be public because `TabContextMenuController`, which
+  // acts as the `ui::SimpleMenuModel::Delegate` for the tab strip context menu,
+  // needs to query this to check and execute custom extension-provided command
+  // states.
+  extensions::ContextMenuMatcher* extension_items() const {
+    return extension_items_.get();
+  }
+#endif
+
  private:
-  void Build(TabStripModel* tab_strip, int index);
+  void Build(tabs::TabHandle context_tab);
+  void BuildForWebApp(tabs::TabHandle context_tab);
+  void BuildSendTabToSelfItem(tabs::TabHandle context_tab,
+                              const std::vector<tabs::TabHandle>& tabs);
+  void AppendGlicItems(tabs::TabHandle context_tab,
+                       const std::vector<tabs::TabHandle>& tabs);
+  void AppendAiModeItems(tabs::TabHandle context_tab,
+                         const std::vector<tabs::TabHandle>& tabs,
+                         bool show_share,
+                         bool show_unshare);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  // Support for appending and executing commands for extension items in the
+  // tab context menu.
+  // Returns the `ContextMenuMatcher` if the item at `index` is an
+  // extension-provided item.
+  extensions::ContextMenuMatcher* GetMatcherIfExtension(size_t index) const;
+#endif
 
   std::unique_ptr<ui::SimpleMenuModel> add_to_existing_group_submenu_;
   std::unique_ptr<ui::SimpleMenuModel> add_to_existing_window_submenu_;
+  std::unique_ptr<ui::SimpleMenuModel>
+      add_to_existing_comparison_table_submenu_;
+  std::unique_ptr<ui::SimpleMenuModel> swap_with_split_submenu_;
+  std::unique_ptr<ui::SimpleMenuModel> arrange_split_view_submenu_;
+  std::unique_ptr<ui::SimpleMenuModel> split_mute_submenu_;
+  std::unique_ptr<ui::SimpleMenuModel> glic_tab_sub_menu_model_;
+  std::unique_ptr<ui::SimpleMenuModel> contextual_tasks_tab_sub_menu_model_;
+  std::unique_ptr<ui::SimpleMenuModel> send_tab_to_self_submenu_;
 
-  // Send tab to self submenu.
-  std::unique_ptr<send_tab_to_self::SendTabToSelfSubMenuModel>
-      send_tab_to_self_sub_menu_model_;
+  // `tab_strip_` needs to outlive this class.
+  raw_ptr<TabStripModel> tab_strip_;
+  raw_ptr<TabMenuModelDelegate> tab_menu_model_delegate_;
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  std::unique_ptr<extensions::ContextMenuMatcher> extension_items_;
+#endif
+  // Uses WeakPtr because the menu model outlives the tab in tests. The
+  // recommended RegisterWillDetach approach failed to prevent dangling pointers
+  // during teardown.
+  base::WeakPtr<tabs::TabInterface> tab_interface_;
 };
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_MENU_MODEL_H_

@@ -1,17 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_URL_REQUEST_REDIRECT_INFO_H_
 #define NET_URL_REQUEST_REDIRECT_INFO_H_
 
+#include <optional>
 #include <string>
 
+#include "base/time/time.h"
 #include "net/base/net_export.h"
 #include "net/cookies/site_for_cookies.h"
 #include "net/url_request/referrer_policy.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace net {
 
@@ -41,12 +43,13 @@ struct NET_EXPORT RedirectInfo {
       FirstPartyURLPolicy original_first_party_url_policy,
       ReferrerPolicy original_referrer_policy,
       const std::string& original_referrer,
+      const std::optional<url::Origin>& original_initiator,
       // The HTTP status code of the redirect response.
       int http_status_code,
       // The new location URL of the redirect response.
       const GURL& new_location,
       // Referrer-Policy header of the redirect response.
-      const absl::optional<std::string>& referrer_policy_header,
+      const std::optional<std::string>& referrer_policy_header,
       // Whether the URL was upgraded to HTTPS due to upgrade-insecure-requests.
       bool insecure_scheme_was_upgraded,
       // This method copies the URL fragment of the original URL to the new URL
@@ -57,10 +60,14 @@ struct NET_EXPORT RedirectInfo {
       // Whether the redirect is caused by a failure of signed exchange loading.
       bool is_signed_exchange_fallback_redirect = false);
 
+  // The original request's initiator. This is used for some checks if a
+  // redirect is safe.
+  std::optional<url::Origin> original_initiator;
+
   // The status code for the redirect response. This is almost redundant with
   // the response headers, but some URLRequestJobs emit redirects without
   // headers.
-  int status_code;
+  int status_code = -1;
 
   // The new request method. Depending on the response code, the request method
   // may change.
@@ -77,14 +84,19 @@ struct NET_EXPORT RedirectInfo {
 
   // True if this redirect was upgraded to HTTPS due to the
   // upgrade-insecure-requests policy.
-  bool insecure_scheme_was_upgraded;
+  bool insecure_scheme_was_upgraded = false;
 
   // True if this is a redirect from Signed Exchange to its fallback URL.
-  bool is_signed_exchange_fallback_redirect;
+  bool is_signed_exchange_fallback_redirect = false;
 
   // The new referrer policy that should be obeyed if there are
   // subsequent redirects.
-  ReferrerPolicy new_referrer_policy;
+  ReferrerPolicy new_referrer_policy =
+      ReferrerPolicy::CLEAR_ON_TRANSITION_FROM_SECURE_TO_INSECURE;
+
+  // When navigation is restarted due to a Critical-CH header this stores the
+  // time at which the the restart was initiated.
+  base::TimeTicks critical_ch_restart_time;
 };
 
 }  // namespace net

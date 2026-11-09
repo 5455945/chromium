@@ -1,16 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_SCTP_TRANSPORT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_SCTP_TRANSPORT_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 
-#include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/renderer/core/dom/events/event_target.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/sctp_transport_proxy.h"
+#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/sctp_transport_interface.h"
 
@@ -18,12 +28,13 @@ namespace blink {
 
 class SctpTransportProxy;
 class RTCDtlsTransport;
+class V8RTCSctpTransportState;
 
 enum class RTCSctpTransportState { kChecking, kConnected, kClosed };
 
 // Blink bindings for the RTCSctpTransport JavaScript object.
 class MODULES_EXPORT RTCSctpTransport final
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public ExecutionContextClient,
       public SctpTransportProxy::Delegate {
   DEFINE_WRAPPERTYPEINFO();
@@ -31,20 +42,20 @@ class MODULES_EXPORT RTCSctpTransport final
  public:
   RTCSctpTransport(
       ExecutionContext* context,
-      rtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport);
+      webrtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport);
   // Constructor with explicit thread injection, used for testing.
   RTCSctpTransport(
       ExecutionContext* context,
-      rtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport,
+      webrtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport,
       scoped_refptr<base::SingleThreadTaskRunner> main_thread,
       scoped_refptr<base::SingleThreadTaskRunner> worker_thread);
   ~RTCSctpTransport() override;
 
   // rtc_sctp_transport.idl
   RTCDtlsTransport* transport() const;
-  String state() const;
+  V8RTCSctpTransportState state() const;
   double maxMessageSize() const;
-  absl::optional<int16_t> maxChannels() const;
+  std::optional<int16_t> maxChannels() const;
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(statechange, kStatechange)
 
@@ -58,7 +69,7 @@ class MODULES_EXPORT RTCSctpTransport final
   // Others
   void ChangeState(webrtc::SctpTransportInformation info);
   void SetTransport(RTCDtlsTransport*);
-  rtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport();
+  webrtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport();
   // Called from owning RtcPeerConnection when it is closed.
   void Close();
   // For garbage collection.
@@ -66,7 +77,7 @@ class MODULES_EXPORT RTCSctpTransport final
 
  private:
   webrtc::SctpTransportInformation current_state_;
-  rtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport_;
+  webrtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport_;
   std::unique_ptr<SctpTransportProxy> proxy_;
   Member<RTCDtlsTransport> dtls_transport_;
   bool start_completed_ = false;

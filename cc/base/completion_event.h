@@ -1,4 +1,4 @@
-// Copyright 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +18,9 @@ namespace cc {
 // It is safe to destroy this object as soon as Wait() returns.
 class CompletionEvent {
  public:
-  CompletionEvent()
-      : event_(base::WaitableEvent::ResetPolicy::AUTOMATIC,
-               base::WaitableEvent::InitialState::NOT_SIGNALED) {
+  explicit CompletionEvent(base::WaitableEvent::ResetPolicy policy =
+                               base::WaitableEvent::ResetPolicy::AUTOMATIC)
+      : event_(policy, base::WaitableEvent::InitialState::NOT_SIGNALED) {
 #if DCHECK_IS_ON()
     waited_ = false;
     signaled_ = false;
@@ -39,6 +39,12 @@ class CompletionEvent {
     DCHECK(!waited_);
     waited_ = true;
 #endif
+    if (IsSignaled()) {
+      // The event has already been signaled and cannot be re-signaled.
+      // There is a non-trivial amount of machinery in WaitableEvent to quickly
+      // return if already signaled, which can be short-circuited.
+      return;
+    }
     // http://crbug.com/902653
     base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
     event_.Wait();

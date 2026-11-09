@@ -1,51 +1,64 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/ash/sharesheet/sharesheet_header_view.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "ash/public/cpp/ash_typography.h"
-#include "ash/public/cpp/file_icon_util.h"
 #include "ash/public/cpp/image_util.h"
-#include "ash/public/cpp/style/color_provider.h"
-#include "base/bind.h"
-#include "base/files/file_util.h"
+#include "ash/public/cpp/rounded_image_view.h"
+#include "ash/style/color_util.h"
+#include "ash/style/dark_light_mode_controller_impl.h"
+#include "ash/style/style_util.h"
+#include "ash/style/typography.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ash/file_manager/fileapi_util.h"
-#include "chrome/browser/chromeos/file_manager/app_id.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/apps/app_service/file_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sharesheet/sharesheet_metrics.h"
 #include "chrome/browser/sharesheet/sharesheet_types.h"
 #include "chrome/browser/ui/ash/sharesheet/sharesheet_bubble_view.h"
 #include "chrome/browser/ui/ash/sharesheet/sharesheet_constants.h"
 #include "chrome/browser/ui/ash/sharesheet/sharesheet_util.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/constants/chromeos_features.h"
+#include "chromeos/ui/base/file_icon_util.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
-#include "storage/browser/file_system/file_system_context.h"
+#include "components/services/app_service/public/cpp/intent_util.h"
+#include "components/url_formatter/elide_url.h"
+#include "components/url_formatter/url_formatter.h"
+#include "components/vector_icons/vector_icons.h"
 #include "storage/browser/file_system/file_system_url.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/chromeos/styles/cros_styles.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/views/controls/image_view.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/layout_provider.h"
+#include "ui/views/style/typography.h"
+#include "ui/views/style/typography_provider.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 
@@ -89,13 +102,24 @@ namespace sharesheet {
 // ------------------------------------------------------
 
 class SharesheetHeaderView::SharesheetImagePreview : public views::View {
+  METADATA_HEADER(SharesheetImagePreview, views::View)
+
  public:
-  METADATA_HEADER(SharesheetImagePreview);
   explicit SharesheetImagePreview(size_t file_count) {
+    const bool is_dark_mode_enabled =
+        DarkLightModeControllerImpl::Get()->IsDarkModeEnabled();
     SetBackground(views::CreateRoundedRectBackground(
-        kImagePreviewPlaceholderBackgroundColor,
+        cros_styles::ResolveColor(cros_styles::ColorName::kHighlightColor,
+                                  is_dark_mode_enabled,
+                                  /*use_debug_colors=*/false),
         views::LayoutProvider::Get()->GetCornerRadiusMetric(
-            views::Emphasis::kMedium)));
+            views::Emphasis::kMedium),
+        1));
+    SetBorder(views::CreateRoundedRectBorder(
+        /*thickness=*/1,
+        views::LayoutProvider::Get()->GetCornerRadiusMetric(
+            views::Emphasis::kMedium),
+        cros_tokens::kCrosSysOutline));
     SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical,
         /* inside_border_insets */ gfx::Insets(),
@@ -116,7 +140,7 @@ class SharesheetHeaderView::SharesheetImagePreview : public views::View {
 
     // If we need to have more than 1 icon, add two rows so that we can
     // layout the icons in a grid.
-    DCHECK_GT(grid_icon_count, 1);
+    CHECK_GT(grid_icon_count, 1u, base::NotFatalUntil::M162);
     AddRowToImageContainerView();
     AddRowToImageContainerView();
 
@@ -124,18 +148,20 @@ class SharesheetHeaderView::SharesheetImagePreview : public views::View {
       // If we have |enumeration|, add it as a label at the bottom right of
       // SharesheetImagePreview.
       if (enumeration != 0 && index == kImagePreviewMaxIcons - 1) {
-        // TODO(crbug.com/1189945) : Add a sharesheet context to replace
-        // |CONTEXT_DOWNLOAD_SHELF_STATUS|.
         auto* label =
             children()[1]->AddChildView(std::make_unique<views::Label>(
                 base::StrCat({u"+", base::NumberToString16(enumeration)}),
-                CONTEXT_DOWNLOAD_SHELF_STATUS, STYLE_SHARESHEET));
+                CONTEXT_SHARESHEET_BUBBLE_SMALL, STYLE_SHARESHEET));
         label->SetLineHeight(kImagePreviewFileEnumerationLineHeight);
-        label->SetEnabledColor(kButtonTextColor);
+        label->SetEnabledColor(cros_styles::ResolveColor(
+            cros_styles::ColorName::kTextColorProminent, is_dark_mode_enabled,
+            /*use_debug_colors=*/false));
         label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+        auto second_tone_icon_color_prominent = ColorUtil::GetSecondToneColor(
+            StyleUtil::GetColorProviderForNativeTheme()->GetColor(
+                cros_tokens::kIconColorProminent));
         label->SetBackground(views::CreateRoundedRectBackground(
-            kImagePreviewPlaceholderBackgroundColor,
-            kImagePreviewIconCornerRadius));
+            second_tone_icon_color_prominent, kImagePreviewIconCornerRadius));
         label->SetPreferredSize(kImagePreviewQuarterSize);
         return;
       }
@@ -147,19 +173,16 @@ class SharesheetHeaderView::SharesheetImagePreview : public views::View {
   SharesheetImagePreview(const SharesheetImagePreview&) = delete;
   SharesheetImagePreview& operator=(const SharesheetImagePreview&) = delete;
 
-  ~SharesheetImagePreview() override {
-    ::sharesheet::SharesheetMetrics::RecordSharesheetImagePreviewPressed(
-        was_pressed_);
-  }
+  ~SharesheetImagePreview() override = default;
 
-  views::ImageView* GetImageViewAt(size_t index) {
+  RoundedImageView* GetImageViewAt(size_t index) {
     if (index >= image_views_.size()) {
       return nullptr;
     }
     return image_views_[index];
   }
 
-  const size_t GetImageViewCount() { return image_views_.size(); }
+  size_t GetImageViewCount() { return image_views_.size(); }
 
   void SetBackgroundColorForIndex(const int index, const SkColor& color) {
     auto alpha_color =
@@ -169,27 +192,6 @@ class SharesheetHeaderView::SharesheetImagePreview : public views::View {
   }
 
  private:
-  // views::View:
-  bool OnMousePressed(const ui::MouseEvent& event) override {
-    was_pressed_ = true;
-    return false;
-  }
-
-  void OnGestureEvent(ui::GestureEvent* event) override {
-    if (event->type() == ui::ET_GESTURE_TAP)
-      was_pressed_ = true;
-  }
-
-  void OnThemeChanged() override {
-    View::OnThemeChanged();
-    SetBorder(views::CreateRoundedRectBorder(
-        /*thickness=*/1,
-        views::LayoutProvider::Get()->GetCornerRadiusMetric(
-            views::Emphasis::kMedium),
-        GetNativeTheme()->GetSystemColor(
-            ui::NativeTheme::kColorId_UnfocusedBorderColor)));
-  }
-
   void AddRowToImageContainerView() {
     auto* row = AddChildView(std::make_unique<views::View>());
     row->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -200,8 +202,10 @@ class SharesheetHeaderView::SharesheetImagePreview : public views::View {
 
   void AddImageViewTo(views::View* parent_view, const gfx::Size& size) {
     auto* image_view =
-        parent_view->AddChildView(std::make_unique<views::ImageView>());
-    image_view->SetImageSize(size);
+        parent_view->AddChildView(std::make_unique<RoundedImageView>(
+            kImagePreviewIconCornerRadius,
+            RoundedImageView::Alignment::kCenter));
+    image_view->SetPreferredSize(size);
     image_views_.push_back(image_view);
   }
 
@@ -224,24 +228,20 @@ class SharesheetHeaderView::SharesheetImagePreview : public views::View {
     AddImageViewTo(parent_view, size);
   }
 
-  std::vector<views::ImageView*> image_views_;
-
-  // Used for recording UMA to indicate whether or not a user tried to interact
-  // with the image preview.
-  bool was_pressed_ = false;
+  std::vector<raw_ptr<RoundedImageView, VectorExperimental>> image_views_;
 };
 
-BEGIN_METADATA(SharesheetHeaderView, SharesheetImagePreview, views::View)
+BEGIN_METADATA(SharesheetHeaderView, SharesheetImagePreview)
 END_METADATA
 
 // SharesheetHeaderView --------------------------------------------------------
 
-SharesheetHeaderView::SharesheetHeaderView(apps::mojom::IntentPtr intent,
-                                           Profile* profile,
-                                           bool show_content_previews)
+SharesheetHeaderView::SharesheetHeaderView(apps::IntentPtr intent,
+                                           Profile* profile)
     : profile_(profile),
       intent_(std::move(intent)),
       thumbnail_loader_(profile) {
+  SetID(HEADER_VIEW_ID);
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
       /* inside_border_insets */ gfx::Insets(kSpacing),
@@ -252,185 +252,201 @@ SharesheetHeaderView::SharesheetHeaderView(apps::mojom::IntentPtr intent,
   // Sets all views to be vertically centre-aligned.
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  SetFocusBehavior(View::FocusBehavior::ACCESSIBLE_ONLY);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kGenericContainer);
+  GetViewAccessibility().SetName(
+      std::u16string(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
 
-  const bool has_files =
-      (intent_->files.has_value() && !intent_->files.value().empty());
+  const bool has_files = !intent_->files.empty();
   // The image view is initialised first to ensure its left most placement.
-  if (show_content_previews) {
-    auto file_count = (has_files) ? intent_->files.value().size() : 0;
-    image_preview_ =
-        AddChildView(std::make_unique<SharesheetImagePreview>(file_count));
-  }
+  auto file_count = intent_->files.size();
+  image_preview_ =
+      AddChildView(std::make_unique<SharesheetImagePreview>(file_count));
+
   // A separate view is created for the share title and preview string views.
   text_view_ = AddChildView(std::make_unique<views::View>());
+  text_view_->SetID(HEADER_VIEW_TEXT_PREVIEW_ID);
   text_view_->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
       /* inside_border_insets */ gfx::Insets(),
       /* between_child_spacing */ 0, /* collapse_margins_spacing */ true));
   text_view_->AddChildView(
       CreateShareLabel(l10n_util::GetStringUTF16(IDS_SHARESHEET_TITLE_LABEL),
-                       CONTEXT_SHARESHEET_BUBBLE_TITLE, kTitleTextLineHeight,
-                       kTitleTextColor, gfx::ALIGN_LEFT));
-  if (show_content_previews) {
-    ShowTextPreview();
-    if (has_files) {
-      ResolveImages();
-    } else {
-      DCHECK_GT(image_preview_->GetImageViewCount(), 0);
-      const auto icon_color = ColorProvider::Get()->GetContentLayerColor(
-          ColorProvider::ContentLayerType::kIconColorProminent);
-      gfx::ImageSkia file_type_icon = gfx::CreateVectorIcon(
-          GetTextVectorIcon(),
-          sharesheet::kImagePreviewPlaceholderIconContentSize, icon_color);
-      image_preview_->GetImageViewAt(0)->SetImage(
-          CreateMimeTypeIcon(file_type_icon, kImagePreviewFullSize));
-      image_preview_->SetBackgroundColorForIndex(0, icon_color);
-    }
+                       TypographyToken::kCrosTitle1,
+                       cros_tokens::kCrosSysOnSurface, gfx::ALIGN_LEFT));
+
+  ShowTextPreview();
+  if (has_files) {
+    ResolveImages();
+  } else {
+    CHECK_GT(image_preview_->GetImageViewCount(), 0u,
+             base::NotFatalUntil::M162);
+    const auto icon_color =
+        StyleUtil::GetColorProviderForNativeTheme()->GetColor(
+            cros_tokens::kIconColorProminent);
+    gfx::ImageSkia file_type_icon = gfx::CreateVectorIcon(
+        GetTextVectorIcon(),
+        sharesheet::kImagePreviewPlaceholderIconContentSize, icon_color);
+    image_preview_->GetImageViewAt(0)->SetImage(
+        CreateMimeTypeIcon(file_type_icon, kImagePreviewFullSize));
+    image_preview_->SetBackgroundColorForIndex(0, icon_color);
   }
 }
 
 SharesheetHeaderView::~SharesheetHeaderView() = default;
 
-void SharesheetHeaderView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  node_data->role = ax::mojom::Role::kGenericContainer;
-  node_data->SetNameExplicitlyEmpty();
-}
-
 void SharesheetHeaderView::ShowTextPreview() {
-  std::vector<std::u16string> text_fields = ExtractShareText();
+  std::vector<std::unique_ptr<views::Label>> preview_labels =
+      ExtractShareText();
 
-  std::u16string filenames_tooltip_text = u"";
-  if (intent_->files.has_value() && !intent_->files.value().empty()) {
+  if (!intent_->files.empty()) {
     std::vector<std::u16string> file_names;
-    for (const auto& file : intent_->files.value()) {
-      const auto& file_path = GetFilePathFromFileSystemUrl(file->url);
+    for (const auto& file : intent_->files) {
+      auto file_path = apps::GetFileSystemURL(profile_, file->url).path();
       file_names.push_back(file_path.BaseName().LossyDisplayName());
     }
     std::u16string file_text;
+    std::u16string filenames_tooltip_text;
     if (file_names.size() == 1) {
       file_text = file_names[0];
     } else {
       // If there is more than 1 file, show an enumeration of the number of
       // files.
-      auto size = intent_->files.value().size();
-      DCHECK_NE(size, 0);
+      auto size = intent_->files.size();
+      CHECK_NE(size, 0u, base::NotFatalUntil::M162);
       file_text =
           l10n_util::GetPluralStringFUTF16(IDS_SHARESHEET_FILES_LABEL, size);
       filenames_tooltip_text = ConcatenateFileNames(file_names);
     }
-    text_fields.push_back(file_text);
+    auto file_label = CreatePreviewLabel(file_text);
+    if (!filenames_tooltip_text.empty()) {
+      file_label->SetCustomTooltipText(filenames_tooltip_text);
+      file_label->GetViewAccessibility().SetName(
+          base::StrCat({file_text, u" ", filenames_tooltip_text}));
+    }
+    preview_labels.push_back(std::move(file_label));
   }
 
-  if (text_fields.size() == 0)
+  if (preview_labels.size() == 0) {
     return;
+  }
 
   int index = 0;
-  int max_lines = std::min(text_fields.size(), kTextPreviewMaximumLines);
-  for (; index < max_lines - 1; ++index) {
-    AddTextLine(text_fields[index]);
+  int max_lines = std::min(preview_labels.size(), kTextPreviewMaximumLines);
+  for (; index < max_lines; ++index) {
+    text_view_->AddChildView(std::move(preview_labels[index]));
   }
-  // File names must always be on the last line, so |filenames_tooltip_text| is
-  // only passed in on the last line of text. If there are no files, it will be
-  // empty and the tooltip will instead be set to what the text says.
-  DCHECK_LT(index, text_fields.size());
-  AddTextLine(text_fields[index], filenames_tooltip_text);
 
   // If we have 2 or more lines of text, shorten the vertical insets.
   if (index >= 1) {
     static_cast<views::BoxLayout*>(GetLayoutManager())
         ->set_inside_border_insets(
-            gfx::Insets(/* vertical */ kHeaderViewNarrowInsideBorderInsets,
-                        /* horizontal */ kSpacing));
+            gfx::Insets::VH(kHeaderViewNarrowInsideBorderInsets, kSpacing));
   }
 }
 
-void SharesheetHeaderView::AddTextLine(const std::u16string& text,
-                                       const std::u16string& tooltip_text) {
-  auto* new_line = text_view_->AddChildView(CreateShareLabel(
-      text, CONTEXT_SHARESHEET_BUBBLE_BODY, kPrimaryTextLineHeight,
-      kPrimaryTextColor, gfx::ALIGN_LEFT, views::style::STYLE_PRIMARY));
-  new_line->SetHandlesTooltips(true);
-  if (tooltip_text.empty()) {
-    return;
-  }
-  new_line->SetTooltipText(tooltip_text);
-  // We only get to here if this line is showing the number of files.
-  // By default the accessible name is set to the label text. We set it here
-  // so that it is also gives the list of file names.
-  new_line->SetAccessibleName(
-      base::StrCat({new_line->GetText(), u" ", tooltip_text}));
-}
-
-std::vector<std::u16string> SharesheetHeaderView::ExtractShareText() {
-  std::vector<std::u16string> text_fields;
+std::vector<std::unique_ptr<views::Label>>
+SharesheetHeaderView::ExtractShareText() {
+  std::vector<std::unique_ptr<views::Label>> preview_labels;
 
   if (intent_->share_title.has_value() &&
       !(intent_->share_title.value().empty())) {
     std::string title_text = intent_->share_title.value();
-    text_fields.push_back(base::ASCIIToUTF16(title_text));
+    preview_labels.push_back(CreatePreviewLabel(base::UTF8ToUTF16(title_text)));
   }
 
-  if (intent_->share_text.has_value() &&
-      !(intent_->share_text.value().empty())) {
-    std::string extracted_text = intent_->share_text.value();
-    size_t last_space = extracted_text.find_last_of(' ');
-    GURL extracted_url;
+  if (intent_->share_text.has_value()) {
+    apps_util::SharedText extracted_text =
+        apps_util::ExtractSharedText(intent_->share_text.value());
 
-    if (last_space == std::string::npos) {
-      extracted_url = GURL(extracted_text);
-      if (extracted_url.is_valid())
-        extracted_text.clear();
-    } else {
-      extracted_url = GURL(extracted_text.substr(last_space + 1));
-      if (extracted_url.is_valid())
-        extracted_text.erase(last_space);
+    if (!extracted_text.text.empty()) {
+      preview_labels.push_back(
+          CreatePreviewLabel(base::UTF8ToUTF16(extracted_text.text)));
     }
 
-    if (!extracted_text.empty())
-      text_fields.push_back(base::ASCIIToUTF16(extracted_text));
+    if (!extracted_text.url.is_empty()) {
+      // The remaining width available for the text_view is : Full bubble width
+      // - 2x margins - between_child_spacing - width of image preview.
+      float available_width = kDefaultBubbleWidth - 2 * kSpacing -
+                              kHeaderViewBetweenChildSpacing -
+                              kImagePreviewFullIconSize;
+      // Format URL to be elided correctly to prevent origin spoofing.
+      auto elided_url = url_formatter::ElideUrl(
+          extracted_text.url,
+          views::TypographyProvider::Get().GetFont(
+              CONTEXT_SHARESHEET_BUBBLE_BODY, views::style::STYLE_PRIMARY),
+          available_width);
+      auto url_label = CreatePreviewLabel(elided_url);
 
-    if (extracted_url.is_valid()) {
-      text_fields.push_back(base::ASCIIToUTF16(extracted_url.spec()));
+      // This formats the URL the same as ElideUrl does, but without elision.
+      //
+      // We format the URL to match the location bar so the user is not
+      // surprised by what is being shared. This means:
+      // - International characters are unescaped (human readable) where safe.
+      // - Characters representing emojis are unescaped.
+      // - No elisions that change the meaning of the URL.
+      // - Spaces are not unescaped. We cannot share a URL with unescaped spaces
+      // as the receiving program may think the URL ends at the space. Hence we
+      // align the preview with the content to be shared.
+      const auto format_types = url_formatter::kFormatUrlOmitDefaults &
+                                ~url_formatter::kFormatUrlOmitHTTP;
+      const auto formatted_text = url_formatter::FormatUrl(
+          extracted_text.url, format_types, base::UnescapeRule::NORMAL,
+          /*new_parsed=*/nullptr,
+          /*prefix_end=*/nullptr, /*offset_for_adjustment=*/nullptr);
+      url_label->SetCustomTooltipText(formatted_text);
+      url_label->GetViewAccessibility().SetName(formatted_text);
+      preview_labels.push_back(std::move(url_label));
       text_icon_ = TextPlaceholderIcon::kLink;
     }
   }
 
-  return text_fields;
+  return preview_labels;
+}
+
+std::unique_ptr<views::Label> SharesheetHeaderView::CreatePreviewLabel(
+    const std::u16string& text) {
+  return CreateShareLabel(text, TypographyToken::kCrosBody2,
+                          cros_tokens::kCrosSysOnSurfaceVariant,
+                          gfx::ALIGN_LEFT);
 }
 
 const gfx::VectorIcon& SharesheetHeaderView::GetTextVectorIcon() {
   switch (text_icon_) {
     case (TextPlaceholderIcon::kGenericText):
-      return kSharesheetTextIcon;
+      return chromeos::kTextIcon;
     case (TextPlaceholderIcon::kLink):
-      return kSharesheetLinkIcon;
+      return ::features::IsRoundedIconsEnabled() ? vector_icons::kLinkIcon
+                                                 : vector_icons::kLinkOldIcon;
   }
 }
 
 void SharesheetHeaderView::ResolveImages() {
-  for (int i = 0; i < image_preview_->GetImageViewCount(); ++i) {
+  for (size_t i = 0; i < image_preview_->GetImageViewCount(); ++i) {
     ResolveImage(i);
   }
 }
 
 void SharesheetHeaderView::ResolveImage(size_t index) {
-  const auto& file_path =
-      GetFilePathFromFileSystemUrl(intent_->files.value()[index]->url);
+  auto file_path =
+      apps::GetFileSystemURL(profile_, intent_->files[index]->url).path();
 
-  const auto& size = GetImagePreviewSize(index, intent_->files.value().size());
+  auto size = GetImagePreviewSize(index, intent_->files.size());
   auto image = std::make_unique<HoldingSpaceImage>(
       size, file_path,
       base::BindRepeating(&SharesheetHeaderView::LoadImage,
                           weak_ptr_factory_.GetWeakPtr()),
       HoldingSpaceImage::CreateDefaultPlaceholderImageSkiaResolver(
           /*use_light_mode_as_default=*/true));
-  DCHECK_GT(image_preview_->GetImageViewCount(), index);
-  image_preview_->GetImageViewAt(index)->SetImage(image->GetImageSkia(size));
-  // TODO(crbug.com/2896003) Here and above, update this to check whether we're
-  // in dark mode or not.
+  CHECK_GT(image_preview_->GetImageViewCount(), index,
+           base::NotFatalUntil::M162);
+  const bool is_dark_mode_enabled =
+      DarkLightModeControllerImpl::Get()->IsDarkModeEnabled();
+  image_preview_->GetImageViewAt(index)->SetImage(
+      image->GetImageSkia(size, is_dark_mode_enabled));
+
   const auto icon_color =
-      GetIconColorForPath(file_path, /* dark_background= */ false);
+      chromeos::GetIconColorForPath(file_path, is_dark_mode_enabled);
   image_preview_->SetBackgroundColorForIndex(index, icon_color);
   image_subscription_.push_back(image->AddImageSkiaChangedCallback(
       base::BindRepeating(&SharesheetHeaderView::OnImageLoaded,
@@ -450,20 +466,15 @@ void SharesheetHeaderView::LoadImage(
 }
 
 void SharesheetHeaderView::OnImageLoaded(const gfx::Size& size, size_t index) {
-  DCHECK_GT(image_preview_->GetImageViewCount(), index);
-  image_preview_->GetImageViewAt(index)->SetImage(
-      images_[index]->GetImageSkia(size));
+  CHECK_GT(image_preview_->GetImageViewCount(), index,
+           base::NotFatalUntil::M162);
+  image_preview_->GetImageViewAt(index)->SetImage(images_[index]->GetImageSkia(
+      size, DarkLightModeControllerImpl::Get()->IsDarkModeEnabled()));
+  // TODO(crbug.com/40213603): Investigate why this SchedulePaint is needed.
+  image_preview_->GetImageViewAt(index)->SchedulePaint();
 }
 
-const base::FilePath SharesheetHeaderView::GetFilePathFromFileSystemUrl(
-    const GURL& file_system_url) {
-  storage::FileSystemContext* fs_context =
-      file_manager::util::GetFileManagerFileSystemContext(profile_);
-  storage::FileSystemURL fs_url = fs_context->CrackURL(file_system_url);
-  return fs_url.path();
-}
-
-BEGIN_METADATA(SharesheetHeaderView, views::View)
+BEGIN_METADATA(SharesheetHeaderView)
 END_METADATA
 
 }  // namespace sharesheet

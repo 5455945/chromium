@@ -1,10 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/google/core/common/google_switches.h"
 
 namespace switches {
+
+// Specifies an alternate suggestion URL to use for speaking to Google. Useful
+// for testing.
+const char kGoogleBaseSuggestionURL[] = "google-base-suggestion-url";
 
 // Specifies an alternate URL to use for speaking to Google. Useful for testing.
 const char kGoogleBaseURL[] = "google-base-url";

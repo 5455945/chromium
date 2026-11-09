@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,17 +41,16 @@ class CORE_EXPORT TextOffsetMapping final {
     // |first| and |last|(inclusive) represent inline layout object run, they
     // should be descendants of |block_flow|.
     InlineContents(const LayoutBlockFlow& block_flow,
+                   const LayoutObject* block_in_inline_before,
                    const LayoutObject& first,
-                   const LayoutObject& last);
+                   const LayoutObject& last,
+                   const LayoutObject* block_in_inline_after);
     // |block_flow| must be non-anonymous empty block or block containing only
     // anonymous object.
     InlineContents(const LayoutBlockFlow& block_flow);
     InlineContents() = default;
 
     bool operator==(const InlineContents& other) const;
-    bool operator!=(const InlineContents& other) const {
-      return !operator==(other);
-    }
 
     const LayoutBlockFlow* GetEmptyBlock() const;
     const LayoutObject& FirstLayoutObject() const;
@@ -74,8 +73,18 @@ class CORE_EXPORT TextOffsetMapping final {
     PositionInFlatTree LastPositionBeforeBlockFlow() const;
 
     const LayoutBlockFlow* block_flow_ = nullptr;
+    // The block-in-inline in |block_flow_| before |first_|, e.g.
+    //  <span><div>...</div>abc</span>
+    //  LayoutInline {SPAN}
+    //    LayoutBlockFlow (anonymous) <= block-in-inline
+    //      LayoutBlockFlow {DIV}
+    //        ...
+    //      LayoutBlockFlow (anonymous)
+    //        LayoutText "abc"
+    const LayoutObject* block_in_inline_before_ = nullptr;
     const LayoutObject* first_ = nullptr;
     const LayoutObject* last_ = nullptr;
+    const LayoutObject* block_in_inline_after_ = nullptr;
   };
 
   // |BackwardRange| class is used with range-for to traverse inline contents
@@ -84,11 +93,16 @@ class CORE_EXPORT TextOffsetMapping final {
     STACK_ALLOCATED();
 
    public:
-    class CORE_EXPORT Iterator
-        : public std::iterator<std::input_iterator_tag, InlineContents> {
+    class CORE_EXPORT Iterator {
       STACK_ALLOCATED();
 
      public:
+      using iterator_category = std::input_iterator_tag;
+      using value_type = InlineContents;
+      using difference_type = std::ptrdiff_t;
+      using pointer = InlineContents*;
+      using reference = InlineContents&;
+
       explicit Iterator(const InlineContents& current) : current_(current) {}
       Iterator() = default;
 
@@ -97,9 +111,6 @@ class CORE_EXPORT TextOffsetMapping final {
 
       bool operator==(const Iterator& other) const {
         return current_ == other.current_;
-      }
-      bool operator!=(const Iterator& other) const {
-        return !operator==(other);
       }
 
      private:
@@ -121,11 +132,16 @@ class CORE_EXPORT TextOffsetMapping final {
     STACK_ALLOCATED();
 
    public:
-    class CORE_EXPORT Iterator
-        : public std::iterator<std::forward_iterator_tag, InlineContents> {
+    class CORE_EXPORT Iterator {
       STACK_ALLOCATED();
 
      public:
+      using iterator_category = std::forward_iterator_tag;
+      using value_type = InlineContents;
+      using difference_type = std::ptrdiff_t;
+      using pointer = InlineContents*;
+      using reference = InlineContents&;
+
       explicit Iterator(const InlineContents& current) : current_(current) {}
       Iterator() = default;
 
@@ -134,9 +150,6 @@ class CORE_EXPORT TextOffsetMapping final {
 
       bool operator==(const Iterator& other) const {
         return current_ == other.current_;
-      }
-      bool operator!=(const Iterator& other) const {
-        return !operator==(other);
       }
 
      private:
@@ -170,18 +183,13 @@ class CORE_EXPORT TextOffsetMapping final {
   int ComputeTextOffset(const PositionInFlatTree&) const;
 
   // Returns position before |offset| in |text16_|
-  PositionInFlatTree GetPositionBefore(unsigned offset) const;
+  PositionInFlatTree GetPositionBefore(wtf_size_t offset) const;
 
   // Returns position after |offset| in |text16_|
-  PositionInFlatTree GetPositionAfter(unsigned offset) const;
+  PositionInFlatTree GetPositionAfter(wtf_size_t offset) const;
 
   // Returns a range specified by |start| and |end| offset in |text16_|.
-  EphemeralRangeInFlatTree ComputeRange(unsigned start, unsigned end) const;
-
-  // Returns an offset in |text16_| before non-whitespace character from
-  // |offset|, inclusive, otherwise returns |text16_.length()|.
-  // This function is used for computing trailing whitespace after word.
-  unsigned FindNonWhitespaceCharacterFrom(unsigned offset) const;
+  EphemeralRangeInFlatTree ComputeRange(wtf_size_t start, wtf_size_t end) const;
 
   // Helper functions to construct |TextOffsetMapping|.
 

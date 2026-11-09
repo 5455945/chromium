@@ -1,22 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/accessibility/soda_installer_impl.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
-#include "base/no_destructor.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
-#include "base/numerics/ranges.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/soda_component_installer.h"
 #include "chrome/browser/component_updater/soda_language_pack_component_installer.h"
@@ -25,33 +28,6 @@
 #include "components/update_client/crx_update_item.h"
 #include "media/base/media_switches.h"
 #include "ui/base/l10n/l10n_util.h"
-
-namespace {
-
-int GetDownloadProgress(
-    const std::map<std::string, update_client::CrxUpdateItem>&
-        downloading_components) {
-  int total_bytes = 0;
-  int downloaded_bytes = 0;
-
-  for (auto component : downloading_components) {
-    if (component.second.downloaded_bytes >= 0 &&
-        component.second.total_bytes > 0) {
-      downloaded_bytes += component.second.downloaded_bytes;
-      total_bytes += component.second.total_bytes;
-    }
-  }
-
-  if (total_bytes == 0)
-    return -1;
-
-  DCHECK_LE(downloaded_bytes, total_bytes);
-  return 100 *
-         base::ClampToRange(static_cast<double>(downloaded_bytes) / total_bytes,
-                            0.0, 1.0);
-}
-
-}  // namespace
 
 namespace speech {
 
@@ -67,20 +43,32 @@ base::FilePath SodaInstallerImpl::GetSodaBinaryPath() const {
 }
 
 base::FilePath SodaInstallerImpl::GetLanguagePath(
-    const std::string& language) const {
-  DLOG(FATAL) << "GetLanguagePath not supported on this platform";
+    std::string_view language) const {
+  std::optional<speech::SodaLanguagePackComponentConfig> config =
+      speech::GetLanguageComponentConfig(language);
+  if (config.has_value() &&
+      config.value().language_code != speech::LanguageCode::kNone) {
+    return g_browser_process->local_state()->GetFilePath(
+        config.value().config_path_pref);
+  }
+
   return base::FilePath();
 }
 
 void SodaInstallerImpl::InstallSoda(PrefService* global_prefs) {
-  soda_binary_installed_ = false;
+  if (soda_binary_installed_ || is_soda_downloading_ ||
+      never_download_soda_for_testing_) {
+    return;
+  }
+
+  is_soda_downloading_ = true;
   component_updater::RegisterSodaComponent(
       g_browser_process->component_updater(), global_prefs,
       base::BindOnce(&SodaInstallerImpl::OnSodaBinaryInstalled,
                      weak_factory_.GetWeakPtr()),
       base::BindOnce(&component_updater::SodaComponentInstallerPolicy::
                          UpdateSodaComponentOnDemand));
-
+  soda_binary_install_start_time_ = base::Time::Now();
   if (!component_updater_observation_.IsObservingSource(
           g_browser_process->component_updater())) {
     component_updater_observation_.Observe(
@@ -88,17 +76,27 @@ void SodaInstallerImpl::InstallSoda(PrefService* global_prefs) {
   }
 }
 
-void SodaInstallerImpl::InstallLanguage(const std::string& language,
+void SodaInstallerImpl::InstallLanguage(std::string_view language,
                                         PrefService* global_prefs) {
-  // TODO(crbug.com/1161569): SODA is only available for en-US right now.
-  DCHECK_EQ(language, kUsEnglishLocale);
-  language_installed_ = false;
+  if (never_download_soda_for_testing_) {
+    return;
+  }
+
+  speech::LanguageCode locale = speech::GetLanguageCode(language);
+  if (installed_languages_.contains(locale) ||
+      language_pack_progress_.contains(locale)) {
+    return;
+  }
+
+  language_pack_progress_.insert({locale, 0.0});
   SodaInstaller::RegisterLanguage(language, global_prefs);
   component_updater::RegisterSodaLanguageComponent(
-      g_browser_process->component_updater(), language, global_prefs,
+      g_browser_process->component_updater(), language,
       base::BindOnce(&SodaInstallerImpl::OnSodaLanguagePackInstalled,
                      weak_factory_.GetWeakPtr()));
 
+  language_pack_install_start_time_[locale] = base::Time::Now();
+
   if (!component_updater_observation_.IsObservingSource(
           g_browser_process->component_updater())) {
     component_updater_observation_.Observe(
@@ -106,80 +104,111 @@ void SodaInstallerImpl::InstallLanguage(const std::string& language,
   }
 }
 
-bool SodaInstallerImpl::IsSodaInstalled() const {
-  return soda_binary_installed_ && language_installed_;
-}
+void SodaInstallerImpl::UninstallLanguage(std::string_view language,
+                                          PrefService* global_prefs) {
+  speech::LanguageCode language_code = speech::GetLanguageCode(language);
+  if (language_code != speech::LanguageCode::kNone) {
+    // Remove the language from the preference tracking installed language packs
+    // and unregister the corresponding component from the component updater
+    // service to remove the files and prevent future updates.
+    SodaInstaller::UnregisterLanguage(language, global_prefs);
+    const std::string crx_id = component_updater::
+        SodaLanguagePackComponentInstallerPolicy::GetExtensionId(language_code);
+    auto* component_updater_service = g_browser_process->component_updater();
+    if (component_updater_service) {
+      component_updater_service->UnregisterComponent(crx_id);
+    }
 
-bool SodaInstallerImpl::IsLanguageInstalled(const std::string& language) const {
-  // TODO(crbug.com/1161569): SODA is only available for en-US right now.
-  // Update this to check installation of language pack when available.
-  return language == kUsEnglishLocale && language_installed_;
+    std::set<speech::LanguageCode>::iterator it =
+        installed_languages_.find(language_code);
+    if (it != installed_languages_.end()) {
+      installed_languages_.erase(it);
+    }
+  }
 }
 
 std::vector<std::string> SodaInstallerImpl::GetAvailableLanguages() const {
-  // TODO(crbug.com/1161569): SODA is only available for English right now.
-  // Update this to check available languages.
-  return {kUsEnglishLocale};
+  return GetLiveCaptionEnabledLanguages();
 }
 
 void SodaInstallerImpl::UninstallSoda(PrefService* global_prefs) {
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+      base::BindOnce(&SodaInstallerImpl::DeleteSodaFiles));
+
   SodaInstaller::UnregisterLanguages(global_prefs);
-  base::DeletePathRecursively(speech::GetSodaDirectory());
-  base::DeletePathRecursively(speech::GetSodaLanguagePacksDirectory());
-  global_prefs->SetTime(prefs::kSodaScheduledDeletionTime, base::Time());
+  global_prefs->ClearPref(prefs::kSodaBinaryPath);
+
+  soda_binary_installed_ = false;
+  is_soda_downloading_ = false;
+  soda_installer_initialized_ = false;
+  installed_languages_.clear();
+  language_pack_progress_.clear();
 }
 
-void SodaInstallerImpl::OnEvent(Events event, const std::string& id) {
+void SodaInstallerImpl::OnEvent(const update_client::CrxUpdateItem& item) {
   if (!component_updater::SodaLanguagePackComponentInstallerPolicy::
            GetExtensionIds()
-               .contains(id) &&
-      id != component_updater::SodaComponentInstallerPolicy::GetExtensionId()) {
+               .contains(item.id) &&
+      item.id !=
+          component_updater::SodaComponentInstallerPolicy::GetExtensionId()) {
     return;
   }
 
   LanguageCode language_code = LanguageCode::kNone;
-  if (id != component_updater::SodaComponentInstallerPolicy::GetExtensionId()) {
-    language_code = GetLanguageCodeByComponentId(id);
-    DCHECK_NE(language_code, LanguageCode::kNone);
+  if (item.id !=
+      component_updater::SodaComponentInstallerPolicy::GetExtensionId()) {
+    language_code = GetLanguageCodeByComponentId(item.id);
+    CHECK_NE(language_code, LanguageCode::kNone, base::NotFatalUntil::M161);
   }
 
-  switch (event) {
-    case Events::COMPONENT_UPDATE_FOUND:
-    case Events::COMPONENT_UPDATE_READY:
-    case Events::COMPONENT_WAIT:
-    case Events::COMPONENT_UPDATE_DOWNLOADING:
-    case Events::COMPONENT_UPDATE_UPDATING: {
-      update_client::CrxUpdateItem item;
-      g_browser_process->component_updater()->GetComponentDetails(id, &item);
-      downloading_components_[id] = item;
-      const int combined_progress =
-          GetDownloadProgress(downloading_components_);
+  switch (item.state) {
+    case update_client::ComponentState::kCanUpdate:
+    case update_client::ComponentState::kDownloading:
+    case update_client::ComponentState::kDecompressing:
+    case update_client::ComponentState::kPatching:
+    case update_client::ComponentState::kUpdating:
+      downloading_components_[language_code] = item;
 
-      // When GetDownloadProgress returns -1, do nothing. It returns -1 when the
-      // downloaded or total bytes is unknown.
-      if (combined_progress != -1) {
-        NotifyOnSodaProgress(combined_progress);
-      }
-
-      if (language_code != LanguageCode::kNone) {
-        const int language_progress = GetDownloadProgress(
-            std::map<std::string, update_client::CrxUpdateItem>{{id, item}});
-        if (language_progress != -1) {
-          NotifyOnSodaLanguagePackProgress(language_progress, language_code);
+      if (language_code == LanguageCode::kNone &&
+          !language_pack_progress_.empty()) {
+        for (auto language : language_pack_progress_) {
+          UpdateAndNotifyOnSodaProgress(language.first);
         }
+      } else {
+        UpdateAndNotifyOnSodaProgress(language_code);
       }
-
-    } break;
-    case Events::COMPONENT_UPDATE_ERROR:
-      if (language_code != LanguageCode::kNone) {
-        NotifyOnSodaLanguagePackError(language_code);
-      }
-
-      NotifyOnSodaError();
       break;
-    case Events::COMPONENT_CHECKING_FOR_UPDATES:
-    case Events::COMPONENT_UPDATED:
-    case Events::COMPONENT_NOT_UPDATED:
+    case update_client::ComponentState::kUpdateError:
+      is_soda_downloading_ = false;
+
+      if (language_code != LanguageCode::kNone) {
+        language_pack_progress_.erase(language_code);
+        base::UmaHistogramTimes(
+            GetInstallationFailureTimeMetricForLanguagePack(language_code),
+            base::Time::Now() -
+                language_pack_install_start_time_[language_code]);
+
+        base::UmaHistogramBoolean(
+            GetInstallationResultMetricForLanguagePack(language_code), false);
+      } else {
+        base::UmaHistogramTimes(
+            kSodaBinaryInstallationFailureTimeTaken,
+            base::Time::Now() - soda_binary_install_start_time_);
+
+        base::UmaHistogramBoolean(kSodaBinaryInstallationResult, false);
+      }
+
+      NotifyOnSodaInstallError(
+          language_code, speech::SodaInstaller::ErrorCode::kUnspecifiedError);
+      break;
+    case update_client::ComponentState::kNew:
+    case update_client::ComponentState::kChecking:
+    case update_client::ComponentState::kUpdated:
+    case update_client::ComponentState::kUpToDate:
+    case update_client::ComponentState::kRun:
       // Do nothing.
       break;
   }
@@ -187,19 +216,63 @@ void SodaInstallerImpl::OnEvent(Events event, const std::string& id) {
 
 void SodaInstallerImpl::OnSodaBinaryInstalled() {
   soda_binary_installed_ = true;
-  if (language_installed_) {
-    NotifyOnSodaInstalled();
+  is_soda_downloading_ = false;
+  for (LanguageCode language : installed_languages_) {
+    NotifyOnSodaInstalled(language);
   }
+
+  base::UmaHistogramTimes(kSodaBinaryInstallationSuccessTimeTaken,
+                          base::Time::Now() - soda_binary_install_start_time_);
+  base::UmaHistogramBoolean(kSodaBinaryInstallationResult, true);
 }
 
 void SodaInstallerImpl::OnSodaLanguagePackInstalled(
     speech::LanguageCode language_code) {
-  language_installed_ = true;
-  NotifyOnSodaLanguagePackInstalled(language_code);
+  installed_languages_.insert(language_code);
+  language_pack_progress_.erase(language_code);
 
   if (soda_binary_installed_) {
-    NotifyOnSodaInstalled();
+    NotifyOnSodaInstalled(language_code);
   }
+
+  base::UmaHistogramTimes(
+      GetInstallationSuccessTimeMetricForLanguagePack(language_code),
+      base::Time::Now() - language_pack_install_start_time_[language_code]);
+  base::UmaHistogramBoolean(
+      GetInstallationResultMetricForLanguagePack(language_code), true);
+}
+
+// static
+void SodaInstallerImpl::DeleteSodaFiles() {
+  base::DeletePathRecursively(speech::GetSodaDirectory());
+  base::DeletePathRecursively(speech::GetSodaLanguagePacksDirectory());
+}
+
+void SodaInstallerImpl::UpdateAndNotifyOnSodaProgress(
+    speech::LanguageCode language_code) {
+  int total_bytes = 0;
+  int downloaded_bytes = 0;
+  speech::LanguageCode soda_code = speech::LanguageCode::kNone;
+
+  if (downloading_components_.contains(soda_code)) {
+    total_bytes += downloading_components_[soda_code].total_bytes;
+    downloaded_bytes += downloading_components_[soda_code].downloaded_bytes;
+  }
+
+  if (language_code != soda_code) {
+    total_bytes += downloading_components_[language_code].total_bytes;
+    downloaded_bytes += downloading_components_[language_code].downloaded_bytes;
+  }
+
+  if (total_bytes == 0)
+    return;
+
+  int progress =
+      100 * std::clamp(static_cast<double>(downloaded_bytes) / total_bytes,
+                        0.0, 1.0);
+  if (language_code != soda_code)
+    language_pack_progress_[language_code] = progress;
+  NotifyOnSodaProgress(language_code, progress);
 }
 
 }  // namespace speech

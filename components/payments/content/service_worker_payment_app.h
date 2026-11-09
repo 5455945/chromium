@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,33 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
+#include <optional>
+
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app.h"
 #include "components/payments/content/payment_request_spec.h"
-#include "components/payments/content/web_app_manifest.h"
+#include "components/payments/content/web_app_installation_info.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/stored_payment_app.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_handler_host.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+#include "url/origin.h"
 
 namespace content {
 class PaymentAppProvider;
 class WebContents;
 }  // namespace content
 
-namespace url {
-class Origin;
-}  // namespace url
-
 namespace payments {
 
 class PaymentHandlerHost;
 
 // Represents a service worker based payment app.
-class ServiceWorkerPaymentApp : public PaymentApp,
-                                public content::WebContentsObserver {
+class ServiceWorkerPaymentApp : public PaymentApp {
  public:
   // This constructor is used for a payment app that has been installed in
   // Chrome. The `spec` parameter should not be null.
@@ -45,28 +44,34 @@ class ServiceWorkerPaymentApp : public PaymentApp,
       base::WeakPtr<PaymentRequestSpec> spec,
       std::unique_ptr<content::StoredPaymentApp> stored_payment_app_info,
       bool is_incognito,
-      const base::RepeatingClosure& show_processing_spinner);
+      bool prefs_can_make_payment,
+      const base::RepeatingClosure& show_processing_spinner,
+      const base::RepeatingClosure& show_loading_view);
 
   // This constructor is used for a payment app that has not been installed in
   // Chrome but can be installed when paying with it. The `spec` parameter
   // should not be null.
   ServiceWorkerPaymentApp(
       content::WebContents* web_contents,
+      content::GlobalRenderFrameHostId requesting_frame_id,
       const GURL& top_origin,
       const GURL& frame_origin,
       base::WeakPtr<PaymentRequestSpec> spec,
       std::unique_ptr<WebAppInstallationInfo> installable_payment_app_info,
       const std::string& enabled_method,
       bool is_incognito,
-      const base::RepeatingClosure& show_processing_spinner);
+      bool prefs_can_make_payment,
+      const base::RepeatingClosure& show_processing_spinner,
+      const base::RepeatingClosure& show_loading_view);
+
+  ServiceWorkerPaymentApp(const ServiceWorkerPaymentApp&) = delete;
+  ServiceWorkerPaymentApp& operator=(const ServiceWorkerPaymentApp&) = delete;
+
   ~ServiceWorkerPaymentApp() override;
 
   // The callback for ValidateCanMakePayment.
-  // The first return value is a pointer point to the corresponding
-  // ServiceWorkerPaymentApp of the result. The second return value is
-  // the result.
   using ValidateCanMakePaymentCallback =
-      base::OnceCallback<void(ServiceWorkerPaymentApp*, bool)>;
+      base::OnceCallback<void(base::WeakPtr<ServiceWorkerPaymentApp>)>;
 
   // Validates whether this payment app can be used for this payment request. It
   // fires CanMakePaymentEvent to the payment app to do validation. The result
@@ -79,26 +84,19 @@ class ServiceWorkerPaymentApp : public PaymentApp,
   void InvokePaymentApp(base::WeakPtr<Delegate> delegate) override;
   void OnPaymentAppWindowClosed() override;
   bool IsCompleteForPayment() const override;
-  uint32_t GetCompletenessScore() const override;
   bool CanPreselect() const override;
   std::u16string GetMissingInfoLabel() const override;
   bool HasEnrolledInstrument() const override;
-  void RecordUse() override;
   bool NeedsInstallation() const override;
   std::string GetId() const override;
+  std::optional<url::Origin> GetPaymentHandlerOrigin() const override;
   std::u16string GetLabel() const override;
   std::u16string GetSublabel() const override;
-  bool IsValidForModifier(
-      const std::string& method,
-      bool supported_networks_specified,
-      const std::set<std::string>& supported_networks) const override;
+  bool IsValidForModifier(const std::string& method) const override;
   base::WeakPtr<PaymentApp> AsWeakPtr() override;
   const SkBitmap* icon_bitmap() const override;
   std::set<std::string> GetApplicationIdentifiersThatHideThisApp()
       const override;
-  bool IsReadyForMinimalUI() const override;
-  std::string GetAccountBalance() const override;
-  void DisableShowingOwnUI() override;
   bool HandlesShippingAddress() const override;
   bool HandlesPayerName() const override;
   bool HandlesPayerEmail() const override;
@@ -123,6 +121,13 @@ class ServiceWorkerPaymentApp : public PaymentApp,
   void OnCanMakePaymentEventResponded(
       ValidateCanMakePaymentCallback callback,
       mojom::CanMakePaymentResponsePtr response);
+  void CallValidateCanMakePaymentCallback(
+      ValidateCanMakePaymentCallback callback);
+
+  bool GetCanMakePaymentEventSkippedForTesting() const {
+    DCHECK(can_make_payment_result_);
+    return can_make_payment_event_skipped_;
+  }
 
   // Called from two places:
   // 1) From PaymentAppProvider after a just-in-time installable payment handler
@@ -133,6 +138,8 @@ class ServiceWorkerPaymentApp : public PaymentApp,
 
   content::PaymentAppProvider* GetPaymentAppProvider();
 
+  void OnPaymentHandlerDisconnected();
+
   GURL top_origin_;
   GURL frame_origin_;
   base::WeakPtr<PaymentRequestSpec> spec_;
@@ -141,10 +148,12 @@ class ServiceWorkerPaymentApp : public PaymentApp,
   base::WeakPtr<Delegate> delegate_;
 
   bool is_incognito_;
+  bool prefs_can_make_payment_;
 
   // Disables user interaction by showing a spinner. Used when the app is
   // invoked.
   base::RepeatingClosure show_processing_spinner_;
+  base::RepeatingClosure show_loading_view_;
 
   base::WeakPtr<PaymentHandlerHost> payment_handler_host_;
   mojo::PendingRemote<mojom::PaymentHandlerHost> payment_handler_host_remote_;
@@ -155,6 +164,7 @@ class ServiceWorkerPaymentApp : public PaymentApp,
   // PaymentAppProvider::CanMakePayment result of this payment app.
   bool can_make_payment_result_;
   bool has_enrolled_instrument_result_;
+  bool can_make_payment_event_skipped_;
 
   // Below variables are used for installable ServiceWorkerPaymentApp
   // specifically.
@@ -162,16 +172,24 @@ class ServiceWorkerPaymentApp : public PaymentApp,
   std::unique_ptr<WebAppInstallationInfo> installable_web_app_info_;
   std::string installable_enabled_method_;
 
-  // Minimal UI fields.
-  bool is_ready_for_minimal_ui_ = false;
-  std::string account_balance_;
-  bool can_show_own_ui_ = true;
-
   ukm::SourceId ukm_source_id_ = ukm::kInvalidSourceId;
 
-  base::WeakPtrFactory<ServiceWorkerPaymentApp> weak_ptr_factory_{this};
+  base::WeakPtr<content::WebContents> web_contents_;
 
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerPaymentApp);
+  // The frame ID is used by payment app service worker registration to enforce
+  // connection allowlists checks. Those checks only apply if there is an
+  // initiator frame of the PaymentRequest API. By default, it is an invalid
+  // `GlobalRenderFrameHostId`, which bypasses the connection allowlists checks.
+  // The invalid ID is used for payment app that does not require service worker
+  // registration, for example,  a payment app that has been installed in
+  // Chrome. See: https://github.com/WICG/connection-allowlists.
+  //
+  // TODO(crbug.com/537630723): Replace this with a `WeakDocumentPtr` to avoid
+  // referencing a reused `RenderFrameHost` via the `GlobalRenderFrameHostId`,
+  // which can happen when there is a same-site navigation.
+  content::GlobalRenderFrameHostId requesting_frame_id_;
+
+  base::WeakPtrFactory<ServiceWorkerPaymentApp> weak_ptr_factory_{this};
 };
 
 }  // namespace payments

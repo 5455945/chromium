@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,12 @@
 #include <sys/types.h>
 
 #include "base/files/file.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "components/feedback/system_logs/system_logs_source.h"
 
-namespace base {
-class Time;
-}
-
 namespace system_logs {
 
-// Gathers log data from a single source.
+// Gathers log data from a single source, possibly incrementally.
 class SingleLogFileLogSource : public SystemLogsSource {
  public:
   enum class SupportedSource {
@@ -49,12 +44,11 @@ class SingleLogFileLogSource : public SystemLogsSource {
   };
 
   explicit SingleLogFileLogSource(SupportedSource source);
-  ~SingleLogFileLogSource() override;
 
-  // During testing, use this to set a custom Chrome start time to override the
-  // actual start time. Does not take ownership of |start_time|. Call this again
-  // with |start_time|=nullptr when done with testing.
-  static void SetChromeStartTimeForTesting(const base::Time* start_time);
+  SingleLogFileLogSource(const SingleLogFileLogSource&) = delete;
+  SingleLogFileLogSource& operator=(const SingleLogFileLogSource&) = delete;
+
+  ~SingleLogFileLogSource() override;
 
   // system_logs::SystemLogsSource:
   void Fetch(SysLogsSourceCallback callback) override;
@@ -103,12 +97,20 @@ class SingleLogFileLogSource : public SystemLogsSource {
   // Path to system log file directory.
   base::FilePath log_file_dir_path_;
 
-  // The maximum size of a read from the system log file.
+  // The maximum size of a read from |file_|.
   size_t max_read_size_;
 
-  base::WeakPtrFactory<SingleLogFileLogSource> weak_ptr_factory_{this};
+  // Keeps track of how much data has been read or skipped from |file_|.
+  size_t file_cursor_position_;
 
-  DISALLOW_COPY_AND_ASSIGN(SingleLogFileLogSource);
+  // Handle for reading the log file that is source of logging data.
+  base::File file_;
+
+  // File system inode value that was associated with |log_file_path_| when it
+  // was originally opened for reading.
+  ino_t file_inode_;
+
+  base::WeakPtrFactory<SingleLogFileLogSource> weak_ptr_factory_{this};
 };
 
 }  // namespace system_logs

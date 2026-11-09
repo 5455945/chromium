@@ -1,43 +1,58 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 
+#include <algorithm>
+#include <limits>
+#include <string_view>
+
+#import "base/apple/foundation_util.h"
+#include "base/apple/owned_objc.h"
+#include "base/auto_reset.h"
 #include "base/check_op.h"
-#import "base/mac/foundation_util.h"
-#import "base/mac/mac_util.h"
-#import "base/mac/scoped_nsobject.h"
-#include "base/notreached.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #import "components/remote_cocoa/app_shim/drag_drop_client.h"
 #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_host_helper.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
 #import "ui/base/cocoa/appkit_utils.h"
-#include "ui/base/cocoa/cocoa_base_utils.h"
+#include "ui/base/cocoa/drag_permission.h"
+#include "ui/base/cocoa/find_pasteboard.h"
+#include "ui/base/cocoa/tracking_area.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_mac.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_edit_commands.h"
 #include "ui/base/ime/text_input_client.h"
+#include "ui/events/base_event_utils.h"
 #import "ui/events/cocoa/cocoa_event_utils.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #import "ui/events/keycodes/keyboard_code_conversion_mac.h"
 #include "ui/events/platform/platform_event_source.h"
-#include "ui/gfx/canvas_paint_mac.h"
 #include "ui/gfx/decorated_text.h"
 #import "ui/gfx/decorated_text_mac.h"
 #include "ui/gfx/geometry/rect.h"
 #import "ui/gfx/mac/coordinate_conversion.h"
-#import "ui/gfx/path_mac.h"
 #include "ui/gfx/scoped_ns_graphics_context_save_gstate_mac.h"
 
 namespace {
 
 NSString* const kFullKeyboardAccessChangedNotification =
     @"com.apple.KeyboardUIModeDidChange";
+
+// Histograms for the cost of ending the deferral. See
+// tools/metrics/histograms/metadata/input/histograms.xml.
+constexpr char kDeferredActivationDurationHistogram[] =
+    "InputMethod.Mac.DeferredActivation.Duration";
+constexpr char kDeferredActivationKeyDelayHistogram[] =
+    "InputMethod.Mac.DeferredActivation.KeyDelay";
 
 // Convert a |point| in |source_window|'s AppKit coordinate system (origin at
 // the bottom left of the window) to |target_window|'s content rect, with the
@@ -47,15 +62,32 @@ gfx::Point MovePointToWindow(const NSPoint& point,
                              NSWindow* source_window,
                              NSWindow* target_window) {
   NSPoint point_in_screen =
-      source_window ? ui::ConvertPointFromWindowToScreen(source_window, point)
-                    : point;
-
+      source_window ? [source_window convertPointToScreen:point] : point;
   NSPoint point_in_window =
-      ui::ConvertPointFromScreenToWindow(target_window, point_in_screen);
+      [target_window convertPointFromScreen:point_in_screen];
+
   NSRect content_rect =
       [target_window contentRectForFrameRect:[target_window frame]];
   return gfx::Point(point_in_window.x,
                     NSHeight(content_rect) - point_in_window.y);
+}
+
+// Convert a |point| in |source_window|'s AppKit coordinate system (origin at
+// the bottom left of the window) to |target_view|'s coordinate, with the
+// origin at the top left of the view.
+// If |source_window| is nil, |point| will be treated as screen coordinates.
+gfx::Point MovePointToView(const NSPoint& point,
+                           NSWindow* source_window,
+                           NSView* target_view) {
+  NSPoint point_in_screen =
+      source_window ? [source_window convertPointToScreen:point] : point;
+  NSPoint point_in_window =
+      [target_view.window convertPointFromScreen:point_in_screen];
+
+  NSPoint point_in_view = [target_view convertPoint:point_in_window
+                                           fromView:nil];
+  return gfx::Point(point_in_window.x,
+                    NSHeight([target_view frame]) - point_in_view.y);
 }
 
 // Some keys are silently consumed by -[NSView interpretKeyEvents:]
@@ -64,14 +96,15 @@ gfx::Point MovePointToWindow(const NSPoint& point,
 bool ShouldIgnoreAcceleratorWithMarkedText(NSEvent* event) {
   ui::KeyboardCode key = ui::KeyboardCodeFromNSEvent(event);
   switch (key) {
-    // crbug/883952: Kanji IME completes composition and dismisses itself.
+    // http://crbug.com/883952: Kanji IME completes composition and dismisses
+    // itself.
     case ui::VKEY_RETURN:
     // Kanji IME: select candidate words.
     // Pinyin IME: change tone.
     case ui::VKEY_TAB:
     // Dismiss IME.
     case ui::VKEY_ESCAPE:
-    // crbug/915924: Pinyin IME selects candidate.
+    // http://crbug.com/915924: Pinyin IME selects candidate.
     case ui::VKEY_LEFT:
     case ui::VKEY_RIGHT:
     case ui::VKEY_UP:
@@ -104,14 +137,61 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 
 }  // namespace
 
-@interface BridgedContentView ()
+// Records the action message that AppKit's key bindings produce for a key
+// event (e.g. moveToBeginningOfLine: for Cmd+Left), without the side effects
+// of running -[BridgedContentView keyDown:].
+@interface MenuKeyEquivalentInterpreter : NSResponder
+@property(assign, nonatomic) SEL commandSelector;
+@end
+
+@implementation MenuKeyEquivalentInterpreter
+@synthesize commandSelector = _commandSelector;
+
+- (void)doCommandBySelector:(SEL)selector {
+  _commandSelector = selector;
+}
+
+- (void)insertText:(id)string {
+}
+@end
+
+namespace {
+
+// Returns the text editing action that AppKit's key bindings map `event` to,
+// if BridgedContentView implements it, or nullptr. insert* actions are
+// excluded since -doCommandBySelector: leaves them to -keyDown:. The returned
+// selector names a method that returns void, so it is safe to call with
+// -performSelector: under ARC.
+SEL EditingActionForKeyEquivalent(NSEvent* event) {
+  MenuKeyEquivalentInterpreter* interpreter =
+      [[MenuKeyEquivalentInterpreter alloc] init];
+  [interpreter interpretKeyEvents:@[ event ]];
+  SEL selector = interpreter.commandSelector;
+  if (!selector || [NSStringFromSelector(selector) hasPrefix:@"insert"] ||
+      ![BridgedContentView instancesRespondToSelector:selector] ||
+      [BridgedContentView instanceMethodForSelector:selector] ==
+          [ToolTipBaseView instanceMethodForSelector:selector]) {
+    return nullptr;
+  }
+  NSMethodSignature* signature =
+      [BridgedContentView instanceMethodSignatureForSelector:selector];
+  if (std::string_view(signature.methodReturnType) != @encode(void)) {
+    return nullptr;
+  }
+  return selector;
+}
+
+}  // namespace
+
+@interface BridgedContentView () {
+  // When the -[NSApp updateWindows] call that ended the last deferral started
+  // and returned. Null when no key event can still have waited for it.
+  base::TimeTicks _deferredActivationStart;
+  base::TimeTicks _deferredActivationEnd;
+}
 
 // Dispatch |event| to |bridge_|'s host.
 - (void)dispatchKeyEvent:(ui::KeyEvent*)event;
-
-// Returns true if active menu controller corresponds to this widget. Note that
-// this will synchronously call into the browser process.
-- (BOOL)hasActiveMenuController;
 
 // Dispatch |event| to |menu_controller| and return true if |event| is
 // swallowed.
@@ -164,6 +244,10 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 // views::View and that client is right-to-left.
 - (BOOL)isTextRTL;
 
+// Records how long |event| waited for the activation that ended the last
+// deferral, if it arrived before that activation returned.
+- (void)recordDeferredActivationKeyDelay:(NSEvent*)event;
+
 // Menu action handlers.
 - (void)undo:(id)sender;
 - (void)redo:(id)sender;
@@ -180,6 +264,7 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 @synthesize bridge = _bridge;
 @synthesize drawMenuBackgroundForBlur = _drawMenuBackgroundForBlur;
 @synthesize keyDownEventForTesting = _keyDownEvent;
+@synthesize deferInputContextActivation = _deferInputContextActivation;
 
 - (instancetype)initWithBridge:(remote_cocoa::NativeWidgetNSWindowBridge*)bridge
                         bounds:(gfx::Rect)bounds {
@@ -187,19 +272,8 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // case for something other than that.
   DCHECK(bounds.origin().IsOrigin());
   NSRect initialFrame = NSMakeRect(0, 0, bounds.width(), bounds.height());
-  if ((self = [super initWithFrame:initialFrame])) {
+  if ((self = [super initWithFrame:initialFrame tracking:NO])) {
     _bridge = bridge;
-
-    // Apple's documentation says that NSTrackingActiveAlways is incompatible
-    // with NSTrackingCursorUpdate, so use NSTrackingActiveInActiveApp.
-    _cursorTrackingArea.reset([[CrTrackingArea alloc]
-        initWithRect:NSZeroRect
-             options:NSTrackingMouseMoved | NSTrackingCursorUpdate |
-                     NSTrackingActiveInActiveApp | NSTrackingInVisibleRect |
-                     NSTrackingMouseEnteredAndExited
-               owner:self
-            userInfo:nil]);
-    [self addTrackingArea:_cursorTrackingArea.get()];
 
     // Get notified whenever Full Keyboard Access mode is changed.
     [[NSDistributedNotificationCenter defaultCenter]
@@ -217,7 +291,7 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   return self;
 }
 
-- (ui::TextInputClient*)textInputClient {
+- (ui::TextInputClient*)textInputClientForTesting {
   return _bridge ? _bridge->host_helper()->GetTextInputClient() : nullptr;
 }
 
@@ -239,14 +313,64 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // By the time |self| is dealloc'd, it should never be in an NSWindow, and it
   // should never be the current input context.
   DCHECK_EQ(nil, [self window]);
-  [super dealloc];
 }
 
 - (void)clearView {
   _bridge = nullptr;
   [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
-  [_cursorTrackingArea.get() clearOwner];
-  [self removeTrackingArea:_cursorTrackingArea.get()];
+  if (_cursorTrackingArea.get()) {
+    [_cursorTrackingArea.get() clearOwner];
+    [self removeTrackingArea:_cursorTrackingArea.get()];
+    _cursorTrackingArea.reset(nil);
+  }
+}
+
+- (void)setDeferInputContextActivation:(BOOL)defer {
+  if (_deferInputContextActivation == defer) {
+    return;
+  }
+  _deferInputContextActivation = defer;
+  if (defer) {
+    return;
+  }
+
+  // The deferral usually ends from a compositor callback, not from an event,
+  // so AppKit would not look at -inputContext again until it
+  // runs -[NSApp updateWindows] after the next event. Call it now, so the
+  // input method is active before that event (often a key press) is handled.
+  // This is where the activation cost moves to: it is the call that blocked
+  // the main thread while the window was being shown.
+  NSWindow* window = self.window;
+  if (_bridge && window.isKeyWindow && window.firstResponder == self &&
+      [self inputContext]) {
+    TRACE_EVENT("ui", "BridgedContentView::ActivateDeferredInputContext");
+    // The activation runs inside this synchronous call, so timing the call
+    // measures what the deferral moved here from the window's show.
+    _deferredActivationStart = base::TimeTicks::Now();
+    [NSApp updateWindows];
+    _deferredActivationEnd = base::TimeTicks::Now();
+    base::UmaHistogramTimes(kDeferredActivationDurationHistogram,
+                            _deferredActivationEnd - _deferredActivationStart);
+  }
+}
+
+- (void)recordDeferredActivationKeyDelay:(NSEvent*)event {
+  if (_deferredActivationEnd.is_null()) {
+    return;
+  }
+  const base::TimeTicks keyTime =
+      ui::EventTimeStampFromSeconds(event.timestamp);
+  if (keyTime >= _deferredActivationEnd) {
+    // Keys arrive in order, so no later key waited for this activation either.
+    _deferredActivationStart = base::TimeTicks();
+    _deferredActivationEnd = base::TimeTicks();
+    return;
+  }
+  // Count only the part of the wait the activation caused: a key that arrived
+  // before the activation started waited for all of it.
+  base::UmaHistogramTimes(
+      kDeferredActivationKeyDelayHistogram,
+      _deferredActivationEnd - std::max(keyTime, _deferredActivationStart));
 }
 
 - (bool)needsUpdateWindows {
@@ -258,33 +382,78 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // iteration through most runloop modes, it does not call it when running
   // NSEventTrackingRunLoopMode, and not _within_ a run loop iteration, where
   // the inputContext may change before further event processing.
-  NSTextInputContext* current = [NSTextInputContext currentInputContext];
-  if (!current)
-    return false;
+  NSTextInputContext* current = nil;
+  {
+    // AppKit may activate the input method for a newly focused view inside
+    // this query. With an input method such as Japanese, that waits on the
+    // input method process, so trace it.
+    TRACE_EVENT("ui", "BridgedContentView::CurrentInputContext");
+    current = [NSTextInputContext currentInputContext];
+  }
 
   NSTextInputContext* newContext = [self inputContext];
-  // If the newContext is non-nil, then it can only be [super inputContext]. So
-  // the input context is either not changing, or it was not from |self|. In
-  // both cases, there's no need to call -updateWindows.
+  // A non-nil newContext is normally either not changing or not from |self|,
+  // except when a Views menu is active and switches between menu items and a
+  // menu-hosted text input client within the same window.
   if (newContext) {
     DCHECK_EQ(newContext, [super inputContext]);
+    NSWindow* window = self.window;
+    return window.isKeyWindow && window.firstResponder == self &&
+           [self hasActiveMenuController] && current != newContext;
+  }
+  if (!current) {
     return false;
   }
 
   return current == [super inputContext];
 }
 
-// If |point| is classified as a draggable background (HTCAPTION), return nil so
-// that it can lead to a window drag or double-click in the title bar. Dragging
-// could be optimized by telling the window server which regions should be
-// instantly draggable without asking (tracked at https://crbug.com/830962).
+// NSWindow calls -[contentView hitTest:] to determine the target NSView for
+// mouse up and down events. The default implementation recursively calls
+// hitTest: on each subview until it finds a non-nil target.
 - (NSView*)hitTest:(NSPoint)point {
-  gfx::Point flippedPoint(point.x, NSHeight(self.superview.bounds) - point.y);
-  bool isDraggableBackground = false;
-  _bridge->host()->GetIsDraggableBackgroundAt(flippedPoint,
-                                              &isDraggableBackground);
-  if (isDraggableBackground)
+  // `point` is in superview's coordinate. Convert it to local coordinate.
+  // This is important when the window has a native titlebar, in which case the
+  // superview is taller than the contentView.
+  NSPoint pointInView = [self convertPoint:point fromView:self.superview];
+  gfx::Point flippedPoint(point.x, NSHeight(self.frame) - pointInView.y);
+  remote_cocoa::mojom::HitTestResult hitTestResult;
+  _bridge->host()->GetHitTestResult(flippedPoint, &hitTestResult);
+
+  // If `point` is classified as a draggable background (HTCAPTION), return nil
+  // so that it can lead to a window drag or double-click in the title bar.
+  // Dragging could be optimized by telling the window server which regions
+  // should be instantly draggable without asking (tracked at
+  // https://crbug.com/830962).
+  if (hitTestResult ==
+      remote_cocoa::mojom::HitTestResult::kDraggableBackground) {
+    NSEvent* currentEvent = [NSApp currentEvent];
+    if (currentEvent) {
+      NSEventType type = [currentEvent type];
+      // In AppKit, 2-finger trackpad swipes and scrolling gestures are
+      // dispatched as continuous NSEventTypeScrollWheel events.
+      // NSEventTypeSwipe is a discrete, high-level event that is not emitted
+      // for standard 2-finger trackpad swipes, but is instead specific to
+      // particular macOS settings (e.g. 3-finger page swipes). Allow
+      // scroll wheel events over draggable background areas (such as the
+      // VerticalTabStrip) to pass through to Views rather than being
+      // swallowed by the window manager to support swiping to switch the
+      // window's focused group.
+      if (type == NSEventTypeScrollWheel) {
+        return self;
+      }
+    }
     return nil;
+  }
+
+  // Send event to views::RootView.
+  if (hitTestResult == remote_cocoa::mojom::HitTestResult::kRootView) {
+    // Most commonly this NSView is NSWindow's contentView. However in immersive
+    // fullscreen, the view may be a subview of another AppKit-owned view in the
+    // titlebar.
+    return self;
+  }
+
   return [super hitTest:point];
 }
 
@@ -298,7 +467,7 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (ui::PlatformEventSource::ShouldIgnoreNativePlatformEvents())
     return;
 
-  BOOL isScrollEvent = [theEvent type] == NSScrollWheel;
+  BOOL isScrollEvent = [theEvent type] == NSEventTypeScrollWheel;
 
   // If it's the view's window, process normally.
   if ([target isEqual:source]) {
@@ -306,42 +475,119 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
       [self scrollWheel:theEvent];
     } else {
       [self mouseEvent:theEvent];
-      if ([theEvent type] == NSLeftMouseUp)
+      if ([theEvent type] == NSEventTypeLeftMouseUp)
         [self handleLeftMouseUp:theEvent];
     }
     return;
   }
 
-  gfx::Point event_location =
-      MovePointToWindow([theEvent locationInWindow], source, target);
-  [self updateTooltipIfRequiredAt:event_location];
+  gfx::Point event_location;
+  if (remote_cocoa::IsNSToolbarFullScreenWindow(target)) {
+    // We are in immersive fullscreen. This event is generated from the overlay
+    // window which sits atop the toolbar. Convert the event location to the
+    // content view coordinate, which should have the same bounds as the overlay
+    // window.
+    // This is to handle the case that `target` may contain the titlebar which
+    // the overlay window does not contain. Without this, buttons in the toolbar
+    // are not clickable when the titlebar is revealed.
+    event_location = MovePointToView(theEvent.locationInWindow, source, self);
+  } else {
+    event_location =
+        MovePointToWindow(theEvent.locationInWindow, source, target);
+  }
+
+  // Forward tooltip updates to the window where the mouse event actually
+  // occurred. This is how it works with Aura, and is critical for nested
+  // menus on Mac: when the mouse is over a submenu, events are captured by
+  // the parent menu's BridgedContentView, but tooltips must be set on the
+  // submenu's view for them to display correctly.
+  auto* event_window =
+      base::apple::ObjCCast<NativeWidgetMacNSWindow>(theEvent.window);
+  remote_cocoa::NativeWidgetNSWindowBridge* event_bridge =
+      [event_window bridge];
+  BridgedContentView* event_view =
+      event_bridge ? event_bridge->ns_view() : nullptr;
+  if (event_view) {
+    gfx::Point location_in_event_view =
+        MovePointToView(theEvent.locationInWindow, source, event_view);
+    [event_view updateTooltipIfRequiredAt:location_in_event_view
+                                   bridge:event_bridge];
+  } else {
+    [self updateTooltipIfRequiredAt:event_location bridge:_bridge];
+  }
 
   if (isScrollEvent) {
-    auto event = std::make_unique<ui::ScrollEvent>(theEvent);
+    auto event =
+        std::make_unique<ui::ScrollEvent>(base::apple::OwnedNSEvent(theEvent));
     event->set_location(event_location);
     _bridge->host()->OnScrollEvent(std::move(event));
   } else {
-    auto event = std::make_unique<ui::MouseEvent>(theEvent);
+    auto event =
+        std::make_unique<ui::MouseEvent>(base::apple::OwnedNSEvent(theEvent));
     event->set_location(event_location);
     _bridge->host()->OnMouseEvent(std::move(event));
   }
 }
 
-- (void)updateTooltipIfRequiredAt:(const gfx::Point&)locationInContent {
-  DCHECK(_bridge);
-  std::u16string newTooltipText;
-
-  _bridge->host()->GetTooltipTextAt(locationInContent, &newTooltipText);
-  if (newTooltipText != _lastTooltipText) {
-    std::swap(newTooltipText, _lastTooltipText);
-    [self setToolTipAtMousePoint:base::SysUTF16ToNSString(_lastTooltipText)];
-  }
+- (void)updateTooltipIfRequiredAt:(const gfx::Point&)locationInContent
+                           bridge:(remote_cocoa::NativeWidgetNSWindowBridge*)
+                                      bridge {
+  DCHECK(bridge);
+  __weak BridgedContentView* weakSelf = self;
+  bridge->host()->GetTooltipTextAt(
+      locationInContent,
+      base::BindOnce(
+          [](__weak BridgedContentView* weakView,
+             const std::u16string& newTooltipText) {
+            if (!weakView) {
+              return;
+            }
+            __strong BridgedContentView* strongSelf = weakView;
+            if (newTooltipText != strongSelf->_lastTooltipText) {
+              strongSelf->_lastTooltipText = newTooltipText;
+              [strongSelf setToolTipAtMousePoint:base::SysUTF16ToNSString(
+                                                     newTooltipText)];
+            }
+          },
+          weakSelf));
 }
 
 - (void)updateFullKeyboardAccess {
   if (!_bridge)
     return;
   _bridge->host()->SetKeyboardAccessible([NSApp isFullKeyboardAccessEnabled]);
+}
+
+- (void)updateCursorTrackingArea {
+  if (_cursorTrackingArea.get()) {
+    [_cursorTrackingArea.get() clearOwner];
+    [self removeTrackingArea:_cursorTrackingArea.get()];
+    _cursorTrackingArea.reset(nil);
+  }
+  if (![self window])
+    return;
+
+  NSTrackingAreaOptions options =
+      NSTrackingMouseMoved | NSTrackingCursorUpdate | NSTrackingInVisibleRect |
+      NSTrackingMouseEnteredAndExited;
+  if ([[self window] level] == kCGFloatingWindowLevel) {
+    // Floating windows should know when the mouse enters or leaves, regardless
+    // of the first responder, window, or application status.
+    // https://crbug.com/1214013
+    options |= NSTrackingActiveAlways;
+  } else {
+    // Apple's documentation says that NSTrackingActiveAlways is incompatible
+    // with NSTrackingCursorUpdate, so use NSTrackingActiveInActiveApp for all
+    // other levels. See history from  https://crrev.com/314660
+    options |= NSTrackingActiveInActiveApp | NSTrackingCursorUpdate;
+  }
+
+  CrTrackingArea* trackingArea = [[CrTrackingArea alloc] initWithRect:NSZeroRect
+                                                              options:options
+                                                                owner:self
+                                                             userInfo:nil];
+  _cursorTrackingArea.reset(trackingArea);
+  [self addTrackingArea:_cursorTrackingArea.get()];
 }
 
 // BridgedContentView private implementation.
@@ -356,6 +602,37 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (_bridge)
     _bridge->host()->GetHasMenuController(&hasMenuController);
   return hasMenuController;
+}
+
+- (BOOL)performMenuKeyEquivalent:(NSEvent*)theEvent {
+  if (!_bridge || ![self hasActiveMenuController] ||
+      [theEvent type] != NSEventTypeKeyDown) {
+    return NO;
+  }
+  // As in -keyDown:, end any deferral first so -inputContext reflects a
+  // focused menu Textfield.
+  if (_deferInputContextActivation) {
+    self.deferInputContextActivation = NO;
+  }
+  // With a text input context (a focused menu Textfield), key equivalents
+  // bound to text editing actions, such as Cmd+Left and Cmd+Backspace, edit
+  // the text rather than reaching the menu or the main menu as raw keys.
+  if ([self inputContext] && ![self hasMarkedText]) {
+    if (SEL selector = EditingActionForKeyEquivalent(theEvent)) {
+      base::AutoReset<NSEvent*> key_down_event(&_keyDownEvent, theEvent);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+      // ARC warns because it can't tell whether -performSelector: returns an
+      // object it must retain or release. `selector` is a text editing action
+      // that returns void (EditingActionForKeyEquivalent() checks this), so
+      // there is nothing to retain or release.
+      [self performSelector:selector withObject:nil];
+#pragma clang diagnostic pop
+      return YES;
+    }
+  }
+  ui::KeyEvent event((base::apple::OwnedNSEvent(theEvent)));
+  return [self dispatchKeyEventToMenuController:&event];
 }
 
 - (BOOL)dispatchKeyEventToMenuController:(ui::KeyEvent*)event {
@@ -376,10 +653,20 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (!_hasUnhandledKeyDownEvent)
     return NO;
 
-  ui::KeyEvent event(_keyDownEvent);
+  ui::KeyEvent event((base::apple::OwnedNSEvent(_keyDownEvent)));
   [self handleKeyEvent:&event];
   _hasUnhandledKeyDownEvent = NO;
   return event.handled();
+}
+
+- (void)scheduleTextEditCommand:(ui::TextEditCommand)command {
+  bool out_enabled = false;
+  if (_bridge &&
+      _bridge->text_input_host()->IsTextEditCommandEnabled(command,
+                                                           &out_enabled) &&
+      out_enabled) {
+    _bridge->text_input_host()->SetTextEditCommandForNextKeyEvent(command);
+  }
 }
 
 - (void)handleAction:(ui::TextEditCommand)command
@@ -392,11 +679,11 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // Always propagate the shift modifier if present. Shift doesn't always alter
   // the command selector, but should always be passed along. Control and Alt
   // have different meanings on Mac, so they do not propagate automatically.
-  if ([_keyDownEvent modifierFlags] & NSShiftKeyMask)
+  if ([_keyDownEvent modifierFlags] & NSEventModifierFlagShift)
     eventFlags |= ui::EF_SHIFT_DOWN;
 
   // Generate a synthetic event with the keycode toolkit-views expects.
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, keyCode, domCode, eventFlags);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, keyCode, domCode, eventFlags);
 
   // If the current event is a key event, assume it's the event that led to this
   // edit command and attach it. Note that it isn't always the case that the
@@ -404,18 +691,29 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // key events!
   if (NSApp.currentEvent.type == NSEventTypeKeyDown ||
       NSApp.currentEvent.type == NSEventTypeKeyUp) {
-    event.SetNativeEvent(NSApp.currentEvent);
+    event.SetNativeEvent(base::apple::OwnedNSEvent(NSApp.currentEvent));
   }
 
-  if ([self dispatchKeyEventToMenuController:&event])
-    return;
-
   // If there's an active TextInputClient, schedule the editing command to be
-  // performed.
-  // TODO(https://crbug.com/901490): Add mojo support for ui::TextEditCommand.
-  if ([self textInputClient] &&
-          [self textInputClient] -> IsTextEditCommandEnabled(command)) {
-    [self textInputClient] -> SetTextEditCommandForNextKeyEvent(command);
+  // performed. With an active menu, schedule it before dispatch: the menu
+  // routes the key to its focused Textfield, which performs the command
+  // (TextInputHost reports commands disabled while the menu has none). Up/Down
+  // move the menu selection rather than the caret of a focused menu Textfield,
+  // matching native macOS textfields embedded in menus. Otherwise, e.g. for an
+  // editable combobox menu, schedule only if the menu does not consume the key,
+  // so no command is left pending.
+  const bool has_active_menu = [self hasActiveMenuController];
+  if (has_active_menu && command != ui::TextEditCommand::MOVE_UP &&
+      command != ui::TextEditCommand::MOVE_DOWN) {
+    [self scheduleTextEditCommand:command];
+  }
+
+  if ([self dispatchKeyEventToMenuController:&event]) {
+    return;
+  }
+
+  if (!has_active_menu) {
+    [self scheduleTextEditCommand:command];
   }
 
   [self dispatchKeyEvent:&event];
@@ -494,17 +792,24 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // Currently there seems to be no use case to pass non-character events routed
   // from insertText: handlers to the View hierarchy.
   if (isFinalInsertForKeyEvent && ![self hasMarkedText]) {
-    ui::KeyEvent charEvent([text characterAtIndex:0],
-                           ui::KeyboardCodeFromNSEvent(_keyDownEvent),
-                           ui::DomCodeFromNSEvent(_keyDownEvent), ui::EF_NONE);
+    int flags = ui::EF_NONE;
+    if ([_keyDownEvent isARepeat])
+      flags |= ui::EF_IS_REPEAT;
+    ui::KeyEvent charEvent = ui::KeyEvent::FromCharacter(
+        [text characterAtIndex:0], ui::KeyboardCodeFromNSEvent(_keyDownEvent),
+        ui::DomCodeFromNSEvent(_keyDownEvent), flags);
     [self handleKeyEvent:&charEvent];
     _hasUnhandledKeyDownEvent = NO;
     if (charEvent.handled())
       return;
   }
 
-  // Forward the |text| to |textInputClient_| if no menu is active.
-  if ([self hasTextInputClient] && ![self hasActiveMenuController]) {
+  // Forward the |text| to |textInputClient_| if no menu is active, if the
+  // active menu has a text input context, or if an IME is committing text
+  // outside of a keyDown event (e.g. during -[NSApp updateWindows]).
+  if ([self hasTextInputClient] &&
+      (![self hasActiveMenuController] || [self inputContext] != nil ||
+       !_keyDownEvent)) {
     // Note we don't check isFinalInsertForKeyEvent, nor use |keyDownEvent_|
     // to generate the synthetic ui::KeyEvent since:  For composed text,
     // [keyDownEvent_ characters] might not be the same as |text|. This is
@@ -585,13 +890,14 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (!_bridge)
     return;
 
-  DCHECK([theEvent type] != NSScrollWheel);
-  auto event = std::make_unique<ui::MouseEvent>(theEvent);
+  DCHECK([theEvent type] != NSEventTypeScrollWheel);
+  auto event =
+      std::make_unique<ui::MouseEvent>(base::apple::OwnedNSEvent(theEvent));
   [self adjustUiEventLocation:event.get() fromNativeEvent:theEvent];
 
   // Aura updates tooltips with the help of aura::Window::AddPreTargetHandler().
   // Mac hooks in here.
-  [self updateTooltipIfRequiredAt:event->location()];
+  [self updateTooltipIfRequiredAt:event->location() bridge:_bridge];
   _bridge->host()->OnMouseEvent(std::move(event));
 }
 
@@ -642,8 +948,10 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // When this view is added to a window, AppKit calls setFrameSize before it is
   // added to the window, so the behavior in setFrameSize is not triggered.
   NSWindow* window = [self window];
-  if (window)
+  if (window) {
     [self setFrameSize:NSZeroSize];
+    [self updateCursorTrackingArea];
+  }
 }
 
 - (void)setFrameSize:(NSSize)newSize {
@@ -672,7 +980,7 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 }
 
 - (BOOL)isOpaque {
-  return _bridge ? !_bridge->is_translucent_window() : NO;
+  return [self.window isOpaque];
 }
 
 // To maximize consistency with the Cocoa browser (mac_views_browser=0), accept
@@ -705,8 +1013,13 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 }
 
 - (NSTextInputContext*)inputContext {
-  if (!_bridge)
+  // Returning nil while deferred is safe: AppKit then has no input method to
+  // activate for this view, and -interpretKeyEvents: would fall back to the
+  // key bindings path (-insertText: and -doCommandBySelector:). Keys never take
+  // that path while deferred, because -keyDown: ends the deferral first.
+  if (!_bridge || _deferInputContextActivation) {
     return nil;
+  }
   bool hasTextInputContext = false;
   _bridge->text_input_host()->HasInputContext(&hasTextInputContext);
   return hasTextInputContext ? [super inputContext] : nil;
@@ -726,14 +1039,64 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   return YES;
 }
 
+- (void)contextMenuKeyDown:(NSEvent*)event {
+  base::apple::OwnedNSEvent owned_event(event);
+  ui::KeyEvent original_event(owned_event);
+
+  // Dispatch the original key event first so that existing handlers (if any)
+  // take priority over the context menu.
+  [self handleKeyEvent:&original_event];
+  if (original_event.handled()) {
+    return;
+  }
+
+  int event_flags = [event isARepeat] ? ui::EF_IS_REPEAT : ui::EF_NONE;
+  ui::KeyEvent context_menu_event(ui::EventType::kKeyPressed, ui::VKEY_APPS,
+                                  ui::DomCode::CONTEXT_MENU, event_flags);
+
+  context_menu_event.SetNativeEvent(owned_event);
+  if ([self dispatchKeyEventToMenuController:&context_menu_event]) {
+    return;
+  }
+
+  [self dispatchKeyEvent:&context_menu_event];
+  if (context_menu_event.handled()) {
+    return;
+  }
+
+  if (@available(macOS 15.0, *)) {
+    [super contextMenuKeyDown:event];
+  }
+}
+
 - (void)keyDown:(NSEvent*)theEvent {
+  // The input method must see this key. Ending the deferral calls
+  // -[NSApp updateWindows] synchronously, so the input method is active
+  // before -interpretKeyEvents: below hands it the key.
+  if (_deferInputContextActivation) {
+    self.deferInputContextActivation = NO;
+  }
+  [self recordDeferredActivationKeyDelay:theEvent];
+
   BOOL hadMarkedTextAtKeyDown = [self hasMarkedText];
 
   // Convert the event into an action message, according to OSX key mappings.
   _keyDownEvent = theEvent;
   _hasUnhandledKeyDownEvent = YES;
   _wantsKeyHandledForInsert = NO;
-  [self interpretKeyEvents:@[ theEvent ]];
+
+  // interpretKeyEvents treats Mac Eisu / Kana keydown as insertion of space
+  // character in omnibox when the current input source is not Japanese.
+  // processInputKeyBindings should be called to switch input sources.
+  if (theEvent.keyCode == kVK_JIS_Eisu || theEvent.keyCode == kVK_JIS_Kana) {
+    if ([NSTextInputContext
+            respondsToSelector:@selector(processInputKeyBindings:)]) {
+      [NSTextInputContext performSelector:@selector(processInputKeyBindings:)
+                               withObject:theEvent];
+    }
+  } else {
+    [self interpretKeyEvents:@[ theEvent ]];
+  }
 
   // When there is marked text, -[NSView interpretKeyEvents:] may handle the
   // event by updating the IME state without updating the composition text.
@@ -762,7 +1125,7 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 }
 
 - (void)keyUp:(NSEvent*)theEvent {
-  ui::KeyEvent event(theEvent);
+  ui::KeyEvent event((base::apple::OwnedNSEvent(theEvent)));
   [self handleKeyEvent:&event];
 }
 
@@ -774,7 +1137,7 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
     // is also sent, so we should drop this one. See https://crbug.com/889618
     return;
   }
-  ui::KeyEvent event(theEvent);
+  ui::KeyEvent event((base::apple::OwnedNSEvent(theEvent)));
   [self handleKeyEvent:&event];
 }
 
@@ -782,12 +1145,13 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (!_bridge)
     return;
 
-  auto event = std::make_unique<ui::ScrollEvent>(theEvent);
+  auto event =
+      std::make_unique<ui::ScrollEvent>(base::apple::OwnedNSEvent(theEvent));
   [self adjustUiEventLocation:event.get() fromNativeEvent:theEvent];
 
   // Aura updates tooltips with the help of aura::Window::AddPreTargetHandler().
   // Mac hooks in here.
-  [self updateTooltipIfRequiredAt:event->location()];
+  [self updateTooltipIfRequiredAt:event->location() bridge:_bridge];
   _bridge->host()->OnScrollEvent(std::move(event));
 }
 
@@ -803,18 +1167,19 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 
   // We need to invert deltas in order to match GestureEventDetails's
   // directions.
-  ui::GestureEventDetails swipeDetails(ui::ET_GESTURE_SWIPE, -[event deltaX],
-                                       -[event deltaY]);
+  ui::GestureEventDetails swipeDetails(ui::EventType::kGestureSwipe,
+                                       -[event deltaX], -[event deltaY]);
   swipeDetails.set_device_type(ui::GestureDeviceType::DEVICE_TOUCHPAD);
   swipeDetails.set_touch_points(3);
 
-  gfx::PointF location = ui::EventLocationFromNative(event);
+  base::apple::OwnedNSEvent owned_event(event);
+  gfx::PointF location = ui::EventLocationFromNative(owned_event);
   // Note this uses the default unique_touch_event_id of 0 (Swipe events do not
   // support -[NSEvent eventNumber]). This doesn't seem like a real omission
   // because the three-finger swipes are instant and can't be tracked anyway.
   auto gestureEvent = std::make_unique<ui::GestureEvent>(
-      location.x(), location.y(), ui::EventFlagsFromNative(event),
-      ui::EventTimeFromNative(event), swipeDetails);
+      location.x(), location.y(), ui::EventFlagsFromNative(owned_event),
+      ui::EventTimeFromNative(owned_event), swipeDetails);
   _bridge->host()->OnGestureEvent(std::move(gestureEvent));
 }
 
@@ -822,8 +1187,8 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (!_bridge)
     return;
 
-  const gfx::Point locationInContent =
-      gfx::ToFlooredPoint(ui::EventLocationFromNative(theEvent));
+  const gfx::Point locationInContent = gfx::ToFlooredPoint(
+      ui::EventLocationFromNative(base::apple::OwnedNSEvent(theEvent)));
 
   bool foundWord = false;
   gfx::DecoratedText decoratedWord;
@@ -1271,47 +1636,61 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
           eventFlags:0];
 }
 
-// Support for Services in context menus.
-// Currently we only support reading and writing plain strings.
 - (id)validRequestorForSendType:(NSString*)sendType
                      returnType:(NSString*)returnType {
-  NSString* const utf8Type = base::mac::CFToNSCast(kUTTypeUTF8PlainText);
-  BOOL canWrite =
-      [sendType isEqualToString:utf8Type] && [self selectedRange].length > 0;
-  BOOL canRead = [returnType isEqualToString:utf8Type];
-  // Valid if (sendType, returnType) is either (string, nil), (nil, string),
-  // or (string, string).
-  BOOL valid =
-      [self hasTextInputClient] && ((canWrite && (canRead || !returnType)) ||
-                                    (canRead && (canWrite || !sendType)));
-  return valid
-             ? self
-             : [super validRequestorForSendType:sendType returnType:returnType];
+  UTType* sendUTType = ui::UTTypeForServicesType(sendType);
+  UTType* acceptUTType = ui::UTTypeForServicesType(returnType);
+
+  const BOOL hasTextInputClient = [self hasTextInputClient];
+  const BOOL canSendText = [sendUTType isEqual:UTTypeUTF8PlainText] &&
+                           hasTextInputClient &&
+                           [self selectedRange].length > 0;
+  const BOOL canAcceptText =
+      [acceptUTType isEqual:UTTypeUTF8PlainText] && hasTextInputClient;
+
+  // This is a valid requestor if the send/accept types can be fulfilled or if
+  // they are `nil` (and therefore not the wrong type).
+  if ((canSendText && !acceptUTType) || (!sendUTType && canAcceptText) ||
+      (canSendText && canAcceptText)) {
+    return self;
+  }
+  return [super validRequestorForSendType:sendType returnType:returnType];
 }
 
 // NSServicesMenuRequestor protocol
 
 - (BOOL)writeSelectionToPasteboard:(NSPasteboard*)pboard types:(NSArray*)types {
-  // NB: The NSServicesMenuRequestor protocol has not (as of 10.14) been
-  // upgraded to request UTIs rather than obsolete PboardType constants. Handle
-  // either for when it is upgraded.
-  DCHECK([types containsObject:NSStringPboardType] ||
-         [types containsObject:base::mac::CFToNSCast(kUTTypeUTF8PlainText)]);
+  NSSet<UTType*>* typeSet = ui::UTTypesForServicesTypeArray(types);
 
-  bool result = NO;
-  std::u16string text;
-  if (_bridge)
-    _bridge->text_input_host()->GetSelectionText(&result, &text);
-  if (!result)
-    return NO;
-  return [pboard writeObjects:@[ base::SysUTF16ToNSString(text) ]];
+  bool wasAbleToWriteAtLeastOneType = false;
+
+  if ([typeSet containsObject:UTTypeUTF8PlainText]) {
+    bool result = false;
+    std::u16string selection_text;
+    if (_bridge)
+      _bridge->text_input_host()->GetSelectionText(&result, &selection_text);
+
+    if (result) {
+      NSString* text = base::SysUTF16ToNSString(selection_text);
+      wasAbleToWriteAtLeastOneType |= [pboard writeObjects:@[ text ]];
+    }
+  }
+
+  return wasAbleToWriteAtLeastOneType;
 }
 
 - (BOOL)readSelectionFromPasteboard:(NSPasteboard*)pboard {
-  NSArray* objects = [pboard readObjectsForClasses:@ [[NSString class]]
-      options:0];
-  DCHECK([objects count] == 1);
-  [self insertText:[objects lastObject]];
+  NSArray* objects = [pboard readObjectsForClasses:@[ [NSString class] ]
+                                           options:nil];
+  if (!objects.count) {
+    return NO;
+  }
+
+  // It's expected that there only will be one string object on the pasteboard,
+  // but if there is more than one, catenate them. This is the same compat
+  // technique used by the compatibility call, -[NSPasteboard stringForType:].
+  NSString* allTheText = [objects componentsJoinedByString:@"\n"];
+  [self insertText:allTheText];
   return YES;
 }
 
@@ -1328,16 +1707,12 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 - (NSAttributedString*)attributedSubstringForProposedRange:(NSRange)range
                                                actualRange:
                                                    (NSRangePointer)actualRange {
-  // On TouchBar Macs, the IME subsystem sometimes sends an invalid range with a
-  // non-zero length. This will cause a DCHECK in gfx::Range, so repair it here.
-  // See https://crbug.com/888782.
-  if (range.location == NSNotFound)
-    range.length = 0;
   std::u16string substring;
   gfx::Range actual_range = gfx::Range::InvalidRange();
   if (_bridge) {
     _bridge->text_input_host()->GetAttributedSubstringForRange(
-        gfx::Range(range), &substring, &actual_range);
+        gfx::Range::FromPossiblyInvalidNSRange(range), &substring,
+        &actual_range);
   }
   if (actualRange) {
     // To maintain consistency with NSTextView, return range {0,0} for an out of
@@ -1345,11 +1720,11 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
     *actualRange =
         actual_range.IsValid() ? actual_range.ToNSRange() : NSMakeRange(0, 0);
   }
+
   return substring.empty()
              ? nil
-             : [[[NSAttributedString alloc]
-                   initWithString:base::SysUTF16ToNSString(substring)]
-                   autorelease];
+             : [[NSAttributedString alloc]
+                   initWithString:base::SysUTF16ToNSString(substring)];
 }
 
 - (NSUInteger)characterIndexForPoint:(NSPoint)aPoint {
@@ -1389,7 +1764,13 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   }
 
   if ([self respondsToSelector:selector]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    // ARC complains about -performSelector re lifetimes. The selectors used
+    // here are from a very small set used for text editing, so there's no
+    // danger of lifetime issues.
     [self performSelector:selector withObject:nil];
+#pragma clang diagnostic pop
     _hasUnhandledKeyDownEvent = NO;
     return;
   }
@@ -1412,6 +1793,13 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   if (actualNSRange)
     *actualNSRange = actualRange.ToNSRange();
   return gfx::ScreenRectToNSRect(rect);
+}
+
+- (NSInteger)windowLevel {
+  if ([self hasActiveMenuController]) {
+    return NSPopUpMenuWindowLevel;
+  }
+  return [[self window] level];
 }
 
 - (BOOL)hasMarkedText {
@@ -1468,20 +1856,36 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   return @[];
 }
 
+- (void)copyToFindPboard:(id)sender {
+  NSString* selection =
+      [[self attributedSubstringForProposedRange:[self selectedRange]
+                                     actualRange:nullptr] string];
+  if (selection.length > 0)
+    [[FindPasteboard sharedInstance] setFindText:selection];
+}
+
 // NSUserInterfaceValidations protocol implementation.
 
 - (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item {
+  // Special case this, since there's no cross-platform text command for it.
+  if (item.action == @selector(copyToFindPboard:))
+    return [self selectedRange].length > 0;
+
   ui::TextEditCommand command = GetTextEditCommandForMenuAction([item action]);
 
   if (command == ui::TextEditCommand::INVALID_COMMAND)
     return NO;
 
-  // TODO(https://crbug.com/901490): Add mojo support for ui::TextEditCommand.
-  if ([self textInputClient])
-    return [self textInputClient] -> IsTextEditCommandEnabled(command);
+  bool out_enabled = false;
+  _bridge->text_input_host()->IsTextEditCommandEnabled(command, &out_enabled);
+  if (out_enabled) {
+    return YES;
+  }
 
   // views::Label does not implement the TextInputClient interface but still
   // needs to intercept the Copy and Select All menu actions.
+  // We can't tell if TextInputClient returned NO or was absent entirely.
+  // So if we got NO from IsTextEditCommandEnabled, try this special case.
   if (command != ui::TextEditCommand::COPY &&
       command != ui::TextEditCommand::SELECT_ALL)
     return NO;
@@ -1499,11 +1903,18 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
 }
 
 - (void)draggingSession:(NSDraggingSession*)session
+       willBeginAtPoint:(NSPoint)screenPoint {
+  ui::SetDragSessionInProgress(true);
+}
+
+- (void)draggingSession:(NSDraggingSession*)session
            endedAtPoint:(NSPoint)screenPoint
               operation:(NSDragOperation)operation {
+  ui::SetDragSessionInProgress(false);
   remote_cocoa::DragDropClient* client = [self dragDropClient];
-  if (client)
+  if (client) {
     client->EndDrag();
+  }
 }
 
 // NSAccessibility formal protocol implementation:

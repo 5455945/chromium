@@ -1,14 +1,35 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/feed/core/v2/enums.h"
 
 #include <ostream>
+#include <string_view>
 
 namespace feed {
 
 // Included for debug builds only for reduced binary size.
+
+std::ostream& operator<<(std::ostream& out, NetworkRequestType value) {
+#ifndef NDEBUG
+  switch (value) {
+    case NetworkRequestType::kFeedQuery:
+      return out << "kFeedQuery";
+    case NetworkRequestType::kUploadActions:
+      return out << "kUploadActions";
+    case NetworkRequestType::kNextPage:
+      return out << "kNextPage";
+    case NetworkRequestType::kQueryInteractiveFeed:
+      return out << "kQueryInteractiveFeed";
+    case NetworkRequestType::kQueryBackgroundFeed:
+      return out << "kQueryBackgroundFeed";
+    case NetworkRequestType::kQueryNextPage:
+      return out << "kQueryNextPage";
+  }
+#endif
+  return out << (static_cast<int>(value));
+}
 
 std::ostream& operator<<(std::ostream& out, LoadStreamStatus value) {
 #ifndef NDEBUG
@@ -67,6 +88,20 @@ std::ostream& operator<<(std::ostream& out, LoadStreamStatus value) {
       return out << "kAbortWithPendingClearAll";
     case LoadStreamStatus::kAlreadyHaveUnreadContent:
       return out << "kAlreadyHaveUnreadContent";
+    case LoadStreamStatus::kNotAWebFeedSubscriber_DEPRECATED:
+      return out << "kNotAWebFeedSubscriber_DEPRECATED";
+    case LoadStreamStatus::kAccountTokenFetchFailedWrongAccount:
+      return out << "kAccountTokenFetchFailedWrongAccount";
+    case LoadStreamStatus::kAccountTokenFetchTimedOut:
+      return out << "kAccountTokenFetchTimedOut";
+    case LoadStreamStatus::kNetworkFetchTimedOut:
+      return out << "kNetworkFetchTimedOut";
+    case LoadStreamStatus::kLoadNotAllowedDisabled:
+      return out << "kLoadNotAllowedDisabled";
+    case LoadStreamStatus::kLoadNotAllowedDisabledByDse:
+      return out << "kLoadNotAllowedDisabledByDse";
+    case LoadStreamStatus::kNoCardReceived:
+      return out << "kNoCardReceived";
   }
 #else
   return out << (static_cast<int>(value));
@@ -103,6 +138,14 @@ bool IsLoadingSuccessfulAndFresh(LoadStreamStatus status) {
     case LoadStreamStatus::kDataInStoreIsForAnotherUser:
     case LoadStreamStatus::kAbortWithPendingClearAll:
     case LoadStreamStatus::kAlreadyHaveUnreadContent:
+    case LoadStreamStatus::kNotAWebFeedSubscriber_DEPRECATED:
+
+    case LoadStreamStatus::kAccountTokenFetchFailedWrongAccount:
+    case LoadStreamStatus::kAccountTokenFetchTimedOut:
+    case LoadStreamStatus::kNetworkFetchTimedOut:
+    case LoadStreamStatus::kLoadNotAllowedDisabled:
+    case LoadStreamStatus::kLoadNotAllowedDisabledByDse:
+    case LoadStreamStatus::kNoCardReceived:
       return false;
   }
 }
@@ -159,19 +202,35 @@ std::ostream& operator<<(std::ostream& out, UploadActionsBatchStatus value) {
 #endif  // ifndef NDEBUG
 }
 
-std::ostream& operator<<(std::ostream& out, WebFeedRefreshStatus value) {
-  switch (value) {
-    case WebFeedRefreshStatus::kNoStatus:
-      return out << "kNoStatus";
-    case WebFeedRefreshStatus::kSuccess:
-      return out << "kSuccess";
-    case WebFeedRefreshStatus::kNetworkFailure:
-      return out << "kNetworkFailure";
-    case WebFeedRefreshStatus::kNetworkRequestThrottled:
-      return out << "kNetworkRequestThrottled";
-    case WebFeedRefreshStatus::kAbortFetchWebFeedPendingClearAll:
-      return out << "kAbortFetchWebFeedPendingClearAll";
+std::string_view ToString(UserSettingsOnStart v) {
+  switch (v) {
+    case UserSettingsOnStart::kFeedNotEnabledByPolicy:
+      return "FeedNotEnabledByPolicy";
+    case UserSettingsOnStart::kFeedNotVisibleSignedOut:
+      return "FeedNotVisibleSignedOut";
+    case UserSettingsOnStart::kFeedNotVisibleSignedIn:
+      return "FeedNotVisibleSignedIn";
+    case UserSettingsOnStart::kSignedOut:
+      return "SignedOut";
+    case UserSettingsOnStart::kSignedInWaaOnDpOn:
+      return "SignedInWaaOnDpOn";
+    case UserSettingsOnStart::kSignedInWaaOnDpOff:
+      return "SignedInWaaOnDpOff";
+    case UserSettingsOnStart::kSignedInWaaOffDpOn:
+      return "SignedInWaaOffDpOn";
+    case UserSettingsOnStart::kSignedInWaaOffDpOff:
+      return "SignedInWaaOffDpOff";
+    case UserSettingsOnStart::kSignedInNoRecentData:
+      return "SignedInNoRecentData";
+    case UserSettingsOnStart::kFeedNotEnabled:
+      return "FeedNotEnabled";
+    case UserSettingsOnStart::kFeedNotEnabledByDse:
+      return "FeedNotEnabledByDse";
   }
+  return "Unknown";
+}
+std::ostream& operator<<(std::ostream& out, UserSettingsOnStart value) {
+  return out << ToString(value);
 }
 
 }  // namespace feed

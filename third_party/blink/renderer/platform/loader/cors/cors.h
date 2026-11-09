@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/mojom/cors.mojom-blink-forward.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/renderer/platform/network/http_header_set.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -21,11 +20,6 @@ class HTTPHeaderMap;
 class KURL;
 class ResourceResponse;
 class SecurityOrigin;
-
-enum class CorsFlag : uint8_t {
-  Unset,
-  Set,
-};
 
 // CORS related utility functions.
 namespace cors {
@@ -40,10 +34,9 @@ PLATFORM_EXPORT bool IsNoCorsSafelistedHeader(const String& name,
 PLATFORM_EXPORT bool IsPrivilegedNoCorsHeaderName(const String& name);
 PLATFORM_EXPORT bool IsNoCorsSafelistedHeaderName(const String& name);
 PLATFORM_EXPORT Vector<String> PrivilegedNoCorsHeaderNames();
-PLATFORM_EXPORT bool IsForbiddenHeaderName(const String& name);
+PLATFORM_EXPORT bool IsForbiddenRequestHeader(const String& name,
+                                              const String& value);
 PLATFORM_EXPORT bool ContainsOnlyCorsSafelistedHeaders(const HTTPHeaderMap&);
-
-PLATFORM_EXPORT bool IsOkStatus(int status);
 
 // Calculates and returns the CORS flag used in several "fetch" algorithms in
 // https://fetch.spec.whatwg.org/. This function is corresponding to the CORS
@@ -67,6 +60,10 @@ PLATFORM_EXPORT bool IsCorsSafelistedResponseHeader(const String&);
 
 // Checks whether request mode 'no-cors' is allowed for a certain context.
 PLATFORM_EXPORT bool IsNoCorsAllowedContext(mojom::blink::RequestContextType);
+
+// Checks if the `network::features::kBypassRequestForbiddenHeadersCheck`
+// feature is enabled.
+PLATFORM_EXPORT bool IsBypassRequestForbiddenHeadersCheckEnabled();
 
 }  // namespace cors
 

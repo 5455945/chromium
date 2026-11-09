@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <va/va.h>
 #include <memory>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "media/gpu/media_gpu_export.h"
 #include "ui/gfx/geometry/size.h"
@@ -25,26 +25,29 @@ class VaapiWrapper;
 // VaapiWrapper, and pass them to this class.
 class MEDIA_GPU_EXPORT VaapiJpegEncoder {
  public:
-  // |vaapi_wrapper| should be initialized in VaapiWrapper::kEncode
-  // mode with VAProfileJPEGBaseline profile.
+  // |vaapi_wrapper| should be initialized in
+  // VaapiWrapper::kEncodeConstantBitrate mode with VAProfileJPEGBaseline
+  // profile.
   explicit VaapiJpegEncoder(scoped_refptr<VaapiWrapper> vaapi_wrapper);
+
+  VaapiJpegEncoder(const VaapiJpegEncoder&) = delete;
+  VaapiJpegEncoder& operator=(const VaapiJpegEncoder&) = delete;
+
   ~VaapiJpegEncoder();
 
   // Encode a JPEG picture. It will fill VA-API parameters and call
-  // corresponding VA-API methods according to |input_size|.
-  // |exif_buffer| contains the EXIF data that will be inserted to the JPEG
+  // corresponding VA-API methods according to `input_size`.
+  // `exif_buffer` contains the EXIF data that will be inserted to the JPEG
   // image.
-  // |exif_buffer_size| is the size of |exif_buffer|.
-  // |quality| is the JPEG image quality
-  // |surface_id| is the VA surface that contains input image.
-  // |output_buffer_id| is the ID of VA buffer that encoded image will be
+  // `quality` is the JPEG image quality
+  // `surface_id` is the VA surface that contains input image.
+  // `output_buffer_id` is the ID of VA buffer that encoded image will be
   // stored. The size of it should be at least as large as
   // GetMaxCodedBufferSize().
-  // |exif_offset| is the offset where Exif data should be filled into.
+  // `exif_offset` is the offset where Exif data should be filled into.
   // Return false on failure.
   bool Encode(const gfx::Size& input_size,
-              const uint8_t* exif_buffer,
-              size_t exif_buffer_size,
+              base::span<const uint8_t> exif_buffer,
               int quality,
               VASurfaceID surface_id,
               VABufferID output_buffer_id,
@@ -63,8 +66,6 @@ class MEDIA_GPU_EXPORT VaapiJpegEncoder {
   std::unique_ptr<VAQMatrixBufferJPEG> q_matrix_cached_;
   std::unique_ptr<VAHuffmanTableBufferJPEGBaseline> huff_table_param_cached_;
   std::unique_ptr<VAEncSliceParameterBufferJPEG> slice_param_cached_;
-
-  DISALLOW_COPY_AND_ASSIGN(VaapiJpegEncoder);
 };
 
 }  // namespace media

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,13 @@
 #include <string>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/model_config.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/model_config_loader.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 namespace power {
@@ -27,6 +26,10 @@ namespace auto_screen_brightness {
 class ModelConfigLoaderImpl : public ModelConfigLoader {
  public:
   ModelConfigLoaderImpl();
+
+  ModelConfigLoaderImpl(const ModelConfigLoaderImpl&) = delete;
+  ModelConfigLoaderImpl& operator=(const ModelConfigLoaderImpl&) = delete;
+
   ~ModelConfigLoaderImpl() override;
 
   // ModelConfigLoader overrides:
@@ -72,8 +75,6 @@ class ModelConfigLoaderImpl : public ModelConfigLoader {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<ModelConfigLoaderImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ModelConfigLoaderImpl);
 };
 
 }  // namespace auto_screen_brightness

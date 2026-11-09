@@ -1,10 +1,9 @@
-#!/usr/bin/env python
-# Copyright 2019 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-"""Looks for crash reports in tools/clang/crashreports and uploads them to GCS.
-"""
+"""Looks for crash reports in out/clang-crashreports and uploads them to GCS."""
 
 from __future__ import print_function
 
@@ -13,6 +12,7 @@ import datetime
 import getpass
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,10 +21,96 @@ import tempfile
 
 
 GCS_BUCKET = 'chrome-clang-crash-reports'
-THIS_DIR = os.path.dirname(__file__)
-CRASHREPORTS_DIR = os.path.join(THIS_DIR, '..', 'crashreports')
-GSUTIL = os.path.join(
-    THIS_DIR, '..', '..', '..', 'third_party', 'depot_tools', 'gsutil.py')
+SRC_DIR = os.path.abspath(
+  os.path.join(os.path.dirname(__file__), '..', '..', '..')
+)
+CRASHREPORTS_DIR = os.path.join(SRC_DIR, 'out', 'clang-crashreports')
+GSUTIL = os.path.join(SRC_DIR, 'third_party', 'depot_tools', 'gsutil.py')
+SISO_BINARY = os.path.join(SRC_DIR, 'third_party', 'siso', 'cipd', 'siso')
+
+
+def FetchRbeCrashReports():
+  """Look for crash reports in Siso logs and download them from CAS."""
+  # Look in the out/ directory for siso_output files.
+  out_dir = os.path.dirname(CRASHREPORTS_DIR)
+  logs = glob.glob(os.path.join(out_dir, '*', 'siso_output'))
+
+  if not logs:
+    return
+
+  if len(logs) > 1:
+    logs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+    print(
+      "Found multiple siso_output files. Using the latest one: %s" % logs[0]
+    )
+
+  log = logs[0]
+  print('processing %s...' % log)
+  commands = []
+  # Siso logs auxiliary outputs in the format: path <tab> digest <tab> command
+  pattern = re.compile(r'out/clang-crashreports/.*?\t[0-9a-fA-F]+/\d+\t(.*)')
+
+  try:
+    with open(log, 'r') as f:
+      for line in f:
+        match = pattern.search(line)
+        if match:
+          commands.append(match.group(1))
+  except (IOError, OSError) as e:
+    print('cannot read %s: %s' % (log, e))
+    return
+
+  if not commands:
+    return
+
+  if not os.path.exists(CRASHREPORTS_DIR):
+    os.makedirs(CRASHREPORTS_DIR)
+
+  for cmd in commands:
+    try:
+      # The command string is like: siso fetch -reapi_instance=... ...
+      # We want to run it with the correctly resolved SISO_BINARY.
+      # The log says "siso", but we need to use the absolute path to siso.
+      args = cmd.split(' ')
+      if args[0] == 'siso':
+        args[0] = SISO_BINARY
+      else:
+        sys.stderr.write('Expected siso command, got %s\n' % args[0])
+        continue
+
+      print('running %s' % ' '.join(args))
+      subprocess.check_call(args)
+      print('done')
+    except subprocess.CalledProcessError:
+      print('failed')
+
+
+def ArchiveAndUpload(dest, files):
+  """Compresses the given files into a tarball and uploads it to GCS."""
+  # zipfile.ZipFile() defaults to Z_DEFAULT_COMPRESSION (6) and that can't
+  # be overridden until Python 3.7. tarfile always uses compression level 9,
+  # so use tarfile.
+  tmp_name = None
+  try:
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.tgz') as tmp:
+      tmp_name = tmp.name
+      sys.stdout.write('compressing... ')
+      sys.stdout.flush()
+      with tarfile.open(mode='w:gz', fileobj=tmp) as tgz:
+        for f in files:
+          tgz.add(f, os.path.basename(f))
+    sys.stdout.write('uploading... ')
+    sys.stdout.flush()
+    subprocess.check_call([sys.executable, GSUTIL, '-q', 'cp', tmp_name, dest])
+    print('done')
+    print('    %s' % dest)
+  except subprocess.CalledProcessError as e:
+    print('upload failed; if it was due to missing permissions, try running')
+    print('download_from_google_storage --config')
+    print('and then try again')
+  finally:
+    if tmp_name:
+      os.remove(tmp_name)
 
 
 def ProcessCrashreport(base, source):
@@ -47,28 +133,15 @@ def ProcessCrashreport(base, source):
   # /v1/yyyy-mm-dd/botname-basename.tgz
   now = datetime.datetime.now()
   dest = 'gs://%s/v1/%04d/%02d/%02d/%s-%s.tgz' % (
-      GCS_BUCKET, now.year, now.month, now.day, source, base)
+    GCS_BUCKET,
+    now.year,
+    now.month,
+    now.day,
+    source,
+    base,
+  )
 
-  # zipfile.ZipFile() defaults to Z_DEFAULT_COMPRESSION (6) and that can't
-  # be overridden until Python 3.7. tarfile always uses compression level 9,
-  # so use tarfile.
-  tmp_name = None
-  try:
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.tgz') as tmp:
-      tmp_name = tmp.name
-      sys.stdout.write('compressing... ')
-      sys.stdout.flush()
-      with tarfile.open(mode='w:gz', fileobj=tmp) as tgz:
-        for f in files:
-          tgz.add(f, os.path.basename(f))
-    sys.stdout.write('uploading... ')
-    sys.stdout.flush()
-    subprocess.check_call([sys.executable, GSUTIL, '-q', 'cp', tmp_name, dest])
-    print('done')
-    print('    %s' % dest)
-  finally:
-    if tmp_name:
-      os.remove(tmp_name)
+  ArchiveAndUpload(dest, files)
 
 
 def DeleteCrashFiles():
@@ -78,23 +151,48 @@ def DeleteCrashFiles():
       shutil.rmtree(os.path.join(root, d))
     for f in files:
       if f != '.gitignore':
-        print('removing', f)
+        print('removing', os.path.join(root, f))
         os.remove(os.path.join(root, f))
     del dirs[:]  # Abort os.walk() after one level.
 
 
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument('--delete', dest='delete', action='store_true',
-                      help='Delete all crashreports after processing them '
-                           '(default)')
-  parser.add_argument('--no-delete', dest='delete', action='store_false',
-                      help='Do not delete crashreports after processing them')
+  parser.add_argument(
+    '--delete',
+    dest='delete',
+    action='store_true',
+    help='Delete all crashreports after processing them (default)',
+  )
+  parser.add_argument(
+    '--no-delete',
+    dest='delete',
+    action='store_false',
+    help='Do not delete crashreports after processing them',
+  )
   parser.set_defaults(delete=True)
-  parser.add_argument('--source',  default='user-' + getpass.getuser(),
-                      help='Source of the crash -- usually a bot name. '
-                           'Leave empty to use your username.')
+  parser.add_argument(
+    '--source',
+    default='user-' + getpass.getuser(),
+    help='Source of the crash -- usually a bot name. '
+    'Leave empty to use your username.',
+  )
+  parser.add_argument(
+    '--download-only',
+    action='store_true',
+    help='Download crash reports from RBE and exit without '
+    'processing or uploading them',
+  )
   args = parser.parse_args()
+
+  # If the crash happened on RBE, the crash report is on the RBE worker.
+  # Siso logs the digest of the crash report in siso_output.
+  # We need to fetch it to the local machine to process and upload it.
+  FetchRbeCrashReports()
+
+  if args.download_only:
+    return
+
   # When clang notices that it crashes, it tries to write a .sh file containing
   # the command used to invoke clang, a source file containing the whole
   # input source code with an extension matching the input file (.c, .cpp, ...),
@@ -104,9 +202,58 @@ def main():
   # As a heuristic, find all .sh files in the crashreports directory, then
   # zip each up along with all other files that have the same basename with
   # different extensions.
-  for reproducer in glob.glob(os.path.join(CRASHREPORTS_DIR, '*.sh')):
+  clang_reproducers = glob.glob(os.path.join(CRASHREPORTS_DIR, '*.sh'))
+  # lld reproducers just leave a .tar
+  lld_reproducers = glob.glob(
+    os.path.join(CRASHREPORTS_DIR, 'linker-crash*.tar')
+  )
+  reproducers = clang_reproducers + lld_reproducers
+  for reproducer in reproducers:
     base = os.path.splitext(os.path.basename(reproducer))[0]
     ProcessCrashreport(base, args.source)
+
+  # If no .sh or .tar reproducer scripts were found, but the crash
+  # reports directory contains leftover files or directories, log a
+  # clear diagnostic notice and upload them before deleting them.
+  # This typically occurs when Clang crashes but its Driver recovery
+  # preprocessor pass (-E) aborts early (e.g., due to Clang Modules or
+  # invalid module cache paths), preventing the emission of the .sh
+  # reproducer script while still leaving behind auxiliary outputs
+  # like preprocessed .cpp files or .cache directories downloaded
+  # from RBE.
+  if not reproducers and os.path.exists(CRASHREPORTS_DIR):
+    leftover_artifacts = sorted(
+      [f for f in os.listdir(CRASHREPORTS_DIR) if f != '.gitignore']
+    )
+    if leftover_artifacts:
+      print(
+        '\nNotice: Found crash artifacts in %s but no .sh '
+        'reproducer scripts or .tar files were found.' % CRASHREPORTS_DIR
+      )
+      print('Uploading leftover artifacts: %s' % ', '.join(leftover_artifacts))
+      print(
+        'This usually happens if the Clang Driver aborted '
+        'diagnostic generation during the preprocessor '
+        'recovery pass.\n'
+      )
+      now = datetime.datetime.now()
+      base = 'incomplete-crash-report-missing-reproducer-' + now.strftime(
+        '%H%M%S'
+      )
+      dest = 'gs://%s/v1/%04d/%02d/%02d/%s-%s.tgz' % (
+        GCS_BUCKET,
+        now.year,
+        now.month,
+        now.day,
+        args.source,
+        base,
+      )
+      leftover_files = [
+        os.path.join(CRASHREPORTS_DIR, f) for f in leftover_artifacts
+      ]
+      sys.stdout.write('processing leftover artifacts... ')
+      sys.stdout.flush()
+      ArchiveAndUpload(dest, leftover_files)
 
   if args.delete:
     DeleteCrashFiles()

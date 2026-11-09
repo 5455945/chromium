@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,14 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "chrome/browser/history/top_sites_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "components/history/core/browser/top_sites.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -24,8 +26,9 @@ TopSitesGetFunction::~TopSitesGetFunction() = default;
 ExtensionFunction::ResponseAction TopSitesGetFunction::Run() {
   scoped_refptr<history::TopSites> ts = TopSitesFactory::GetForProfile(
       Profile::FromBrowserContext(browser_context()));
-  if (!ts)
+  if (!ts) {
     return RespondNow(Error(kUnknownErrorDoNotUse));
+  }
 
   ts->GetMostVisitedURLs(
       base::BindOnce(&TopSitesGetFunction::OnMostVisitedURLsAvailable, this));
@@ -37,22 +40,21 @@ ExtensionFunction::ResponseAction TopSitesGetFunction::Run() {
 
 void TopSitesGetFunction::OnMostVisitedURLsAvailable(
     const history::MostVisitedURLList& data) {
-  std::unique_ptr<base::ListValue> pages_value(new base::ListValue);
-  for (size_t i = 0; i < data.size(); i++) {
-    const history::MostVisitedURL& url = data[i];
+  base::ListValue pages_value;
+  for (const auto& url : data) {
     if (!url.url.is_empty()) {
-      std::unique_ptr<base::DictionaryValue> page_value(
-          new base::DictionaryValue());
-      page_value->SetString("url", url.url.spec());
-      if (url.title.empty())
-        page_value->SetString("title", url.url.spec());
-      else
-        page_value->SetString("title", url.title);
-      pages_value->Append(std::move(page_value));
+      base::DictValue page_value;
+      page_value.Set("url", url.url.spec());
+      if (url.title.empty()) {
+        page_value.Set("title", url.url.spec());
+      } else {
+        page_value.Set("title", url.title);
+      }
+      pages_value.Append(std::move(page_value));
     }
   }
 
-  Respond(OneArgument(base::Value::FromUniquePtrValue(std::move(pages_value))));
+  Respond(WithArguments(std::move(pages_value)));
 }
 
 }  // namespace extensions

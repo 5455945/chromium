@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 
 #include <objbase.h>
 
+#include <utility>
+
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr_exclusion.h"
 
 namespace base {
 namespace win {
@@ -23,6 +25,17 @@ template <typename T>
 class ScopedCoMem {
  public:
   ScopedCoMem() : mem_ptr_(nullptr) {}
+
+  ScopedCoMem(const ScopedCoMem&) = delete;
+  ScopedCoMem& operator=(const ScopedCoMem&) = delete;
+
+  ScopedCoMem(ScopedCoMem&& other)
+      : mem_ptr_(std::exchange(other.mem_ptr_, nullptr)) {}
+  ScopedCoMem& operator=(ScopedCoMem&& other) {
+    Reset(std::exchange(other.mem_ptr_, nullptr));
+    return *this;
+  }
+
   ~ScopedCoMem() { Reset(nullptr); }
 
   T** operator&() {               // NOLINT
@@ -43,17 +56,19 @@ class ScopedCoMem {
   }
 
   void Reset(T* ptr) {
-    if (mem_ptr_)
+    if (mem_ptr_) {
       CoTaskMemFree(mem_ptr_);
+    }
     mem_ptr_ = ptr;
   }
 
   T* get() const { return mem_ptr_; }
 
  private:
-  T* mem_ptr_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedCoMem);
+  // RAW_PTR_EXCLUSION: This memory is handled by the OS instead
+  // of PartitionAlloc, so there's no point rewriting it to a
+  // raw_ptr
+  RAW_PTR_EXCLUSION T* mem_ptr_;
 };
 
 }  // namespace win

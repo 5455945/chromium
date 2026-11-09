@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -76,6 +76,13 @@
 //       Apple keyboards with USB 0x070049 [Insert] labelled "Help" have not
 //       been made since 2007.
 
+// ChromeOS notes:
+//
+//  Any keys that are added or updated specifically for use in the ChromeOS
+//  top-row should also be updated in sections of Input Diagnostics:
+//    ash/webui/diagnostics_ui/mojom/input_data_provider.mojom: enum TopRowKey
+//    ash/webui/diagnostics_ui/backend/input_data_provider_keyboard.cc: kScancodeMapping
+
 DOM_CODE_DECLARATION {
 
   //            USB     evdev    XKB     Win     Mac   Code
@@ -88,17 +95,10 @@ DOM_CODE_DECLARATION {
   //            USB     evdev    XKB     Win     Mac   Code
   DOM_CODE(0x000010, 0x0000, 0x0000, 0x0000, 0xffff, "Hyper", HYPER),
   DOM_CODE(0x000011, 0x0000, 0x0000, 0x0000, 0xffff, "Super", SUPER),
-  DOM_CODE(0x000012, 0x0000, 0x0000, 0x0000, 0xffff, "Fn", FN),
   DOM_CODE(0x000013, 0x0000, 0x0000, 0x0000, 0xffff, "FnLock", FN_LOCK),
   DOM_CODE(0x000014, 0x0000, 0x0000, 0x0000, 0xffff, "Suspend", SUSPEND),
   DOM_CODE(0x000015, 0x0000, 0x0000, 0x0000, 0xffff, "Resume", RESUME),
   DOM_CODE(0x000016, 0x0000, 0x0000, 0x0000, 0xffff, "Turbo", TURBO),
-  // TODO(b/146683484): HID usage for privacy screen control is not yet
-  // approved. Once it is update the code here.
-  // TODO(https://crbug.com/952051): Privacy screen will not have a DOM |code|
-  // name defined as it is not exposed to web content.
-  DOM_CODE(0x000017, 0x0279, 0x0281, 0x0000, 0xffff, "PrivacyScreenToggle",
-             PRIVACY_SCREEN_TOGGLE),  // Privacy Screen Toggle
 
   // =========================================
   // USB Usage Page 0x01: Generic Desktop Page
@@ -106,9 +106,16 @@ DOM_CODE_DECLARATION {
 
   // Sleep could be encoded as USB#0c0032, but there's no corresponding WakeUp
   // in the 0x0c USB page.
-  //            USB     evdev    XKB     Win     Mac
+  //            USB     evdev    XKB     Win   Mac
   DOM_CODE(0x010082, 0x008e, 0x0096, 0xe05f, 0xffff, "Sleep", SLEEP), // SystemSleep
   DOM_CODE(0x010083, 0x008f, 0x0097, 0xe063, 0xffff, "WakeUp", WAKE_UP),
+  DOM_CODE(0x010097, 0x01d0, 0x01d8, 0x0000, 0xffff, "Fn", FN),
+  DOM_CODE(0x01009b, 0x024f, 0x0257, 0x0000, 0xffff, NULL,
+             DO_NOT_DISTURB), // System Do Not Disturb
+  DOM_CODE(0x0100a9, 0x00f8, 0x0100, 0x0000, 0xffff, NULL,
+             MICROPHONE_MUTE_TOGGLE),  // Microphone Mute Toggle
+  DOM_CODE(0x0100aa, 0x024e, 0x0256, 0x0000, 0xffff, NULL,
+             ACCESSIBILITY),  // System Accessibility Binding
   DOM_CODE(0x0100b5, 0x00e3, 0x00eb, 0x0000, 0xffff, "DisplayToggleIntExt",
              DISPLAY_TOGGLE_INT_EXT),  // System Display Toggle Int/Ext
 
@@ -476,8 +483,11 @@ DOM_CODE_DECLARATION {
   DOM_CODE(0x0c0073, 0x0250, 0x0258, 0x0000, 0xffff, NULL, BRIGHTNESS_MINIMIUM),
   DOM_CODE(0x0c0074, 0x0251, 0x0259, 0x0000, 0xffff, NULL, BRIGHTNESS_MAXIMUM),
   DOM_CODE(0x0c0075, 0x00f4, 0x00fc, 0x0000, 0xffff, NULL, BRIGHTNESS_AUTO),
+  DOM_CODE(0x0c0078, 0x024d, 0x0255, 0x0000, 0xffff, NULL, CAMERA_ACCESS_TOGGLE),
   DOM_CODE(0x0c0079, 0x00e6, 0x00ee, 0x0000, 0xffff, NULL, KBD_ILLUM_UP),
   DOM_CODE(0x0c007a, 0x00e5, 0x00ed, 0x0000, 0xffff, NULL, KBD_ILLUM_DOWN),
+  DOM_CODE(0x0c007c, 0x00e4, 0x00ec, 0x0000, 0xffff, NULL,
+             KEYBOARD_BACKLIGHT_TOGGLE),  // Keyboard Backlight Toggle
   DOM_CODE(0x0c0083, 0x0195, 0x019d, 0x0000, 0xffff, NULL, MEDIA_LAST),
   DOM_CODE(0x0c008c, 0x00a9, 0x00b1, 0x0000, 0xffff, NULL, LAUNCH_PHONE),
   DOM_CODE(0x0c008d, 0x016a, 0x0172, 0x0000, 0xffff, NULL, PROGRAM_GUIDE),
@@ -500,6 +510,8 @@ DOM_CODE_DECLARATION {
   DOM_CODE(0x0c00cd, 0x00a4, 0x00ac, 0xe022, 0xffff, "MediaPlayPause",
              MEDIA_PLAY_PAUSE),
   DOM_CODE(0x0c00cf, 0x0246, 0x024e, 0x0000, 0xffff, NULL, SPEECH_INPUT_TOGGLE),
+  DOM_CODE(0x0c00d8, 0x024a, 0x0252, 0x0000, 0xffff, NULL, DICTATE),
+  DOM_CODE(0x0c00d9, 0x0249, 0x0251, 0x0000, 0xffff, NULL, EMOJI_PICKER),
   DOM_CODE(0x0c00e5, 0x00d1, 0x00d9, 0x0000, 0xffff, NULL, BASS_BOOST),
   //DOM_CODE(0x0c00e6, 0x0000, 0x0000, 0x0000, 0xffff, NULL, SURROUND_MODE),
   //DOM_CODE(0x0c0150, 0x0000, 0x0000, 0x0000, 0xffff, NULL, AUDIO_BALANCE_RIGHT),
@@ -594,4 +606,7 @@ DOM_CODE_DECLARATION {
              KEYBOARD_LAYOUT_SELECT),
   DOM_CODE(0x0c029f, 0x0078, 0x0080, 0x0000, 0xffff, "ShowAllWindows",
              SHOW_ALL_WINDOWS),  // AC Desktop Show All Windows
+  DOM_CODE(0x0c02a2, 0x00cc, 0x00d4, 0x0000, 0xffff, NULL, ALL_APPLICATIONS),
+  DOM_CODE(0x0c02d0, 0x0279, 0x0281, 0x0000, 0xffff, NULL,
+             PRIVACY_SCREEN_TOGGLE),  // Privacy Screen Toggle
 };

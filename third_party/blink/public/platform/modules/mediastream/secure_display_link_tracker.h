@@ -1,11 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_MODULES_MEDIASTREAM_SECURE_DISPLAY_LINK_TRACKER_H_
 #define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_MODULES_MEDIASTREAM_SECURE_DISPLAY_LINK_TRACKER_H_
 
+#include "base/check.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -22,7 +24,7 @@ class SecureDisplayLinkTracker {
   void Add(T* link, bool is_link_secure);
   void Remove(T* link);
   void Update(T* link, bool is_link_secure);
-  bool is_capturing_secure() const { return insecure_links_.IsEmpty(); }
+  bool is_capturing_secure() const { return insecure_links_.empty(); }
 
  private:
   // Record every insecure links.

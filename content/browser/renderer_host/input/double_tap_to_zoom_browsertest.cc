@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 
 #include "base/command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "cc/base/features.h"
 #include "cc/trees/render_frame_metadata.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -71,12 +74,7 @@ class DoubleTapToZoomBrowserTest
       public ::testing::WithParamInterface<
           std::tuple<std::string, bool, std::string>> {
  public:
-  DoubleTapToZoomBrowserTest() {
-    std::vector<base::Feature> enable_features;
-    enable_features.push_back(features::kRemoveMobileViewportDoubleTap);
-    feature_list_.InitWithFeatures(enable_features,
-                                   std::vector<base::Feature>());
-  }
+  DoubleTapToZoomBrowserTest() {}
   ~DoubleTapToZoomBrowserTest() override = default;
 
  protected:
@@ -89,9 +87,6 @@ class DoubleTapToZoomBrowserTest
   void LoadURL() {
     EXPECT_TRUE(NavigateToURL(shell(), HtmlAsDataUrl(std::get<0>(GetParam()))));
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(DoubleTapToZoomBrowserTest, MobileOptimizedStatus) {
@@ -104,6 +99,26 @@ IN_PROC_BROWSER_TEST_P(DoubleTapToZoomBrowserTest, MobileOptimizedStatus) {
       frame_observer.LastRenderFrameMetadata();
   EXPECT_EQ(expected_is_viewport_mobile_optimized,
             last_metadata.is_mobile_optimized)
+      << std::get<2>(GetParam());
+}
+
+// TODO(crbug.com/40805444): Flaky on mac and linux.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#define MAYBE_TapDelayEnabled DISABLED_TapDelayEnabled
+#else
+#define MAYBE_TapDelayEnabled TapDelayEnabled
+#endif
+IN_PROC_BROWSER_TEST_P(DoubleTapToZoomBrowserTest, MAYBE_TapDelayEnabled) {
+  bool expected_is_viewport_mobile_optimized = std::get<1>(GetParam());
+  LoadURL();
+  WebContents* main_contents = shell()->web_contents();
+  RenderFrameSubmissionObserver frame_observer(main_contents);
+  frame_observer.WaitForMetadataChange();
+
+  ASSERT_EQ(!expected_is_viewport_mobile_optimized,
+            EvalJs(shell(),
+                   "let kTapDelayEnabled = 3965;"
+                   "internals.isUseCounted(document, kTapDelayEnabled)"))
       << std::get<2>(GetParam());
 }
 

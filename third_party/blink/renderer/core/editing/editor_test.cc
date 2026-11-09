@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,7 +45,7 @@ class EditorTest : public EditingTestBase {
 };
 
 TEST_F(EditorTest, CanCopyCrossingShadowBoundary) {
-  const SelectionInDOMTree selection = SetSelectionTextToBody(
+  const SelectionInDomTree selection = SetSelectionTextToBody(
       "<p><template data-mode=open>^abc</template></p><b>|</b>");
   Selection().SetSelection(selection, SetSelectionOptions());
   EXPECT_TRUE(GetDocument().GetFrame()->GetEditor().CanCopy());
@@ -58,18 +58,18 @@ TEST_F(EditorTest, copyGeneratedPassword) {
   const char* body_content = "<input type='password' id='password'></input>";
   SetBodyContent(body_content);
 
-  auto& element =
-      To<HTMLInputElement>(*GetDocument().getElementById("password"));
+  auto& element = To<HTMLInputElement>(*GetElementById("password"));
 
   const String kPasswordValue = "secret";
-  element.focus();
-  element.setValue(kPasswordValue);
+  element.Focus();
+  element.SetValue(kPasswordValue);
   element.SetSelectionRange(0, kPasswordValue.length());
 
   Editor& editor = GetDocument().GetFrame()->GetEditor();
   EXPECT_FALSE(editor.CanCopy());
 
-  element.SetShouldRevealPassword(true);
+  element.SetShouldRevealPassword(true,
+                                  PasswordVisibilityAnnouncement::kSilent);
   EXPECT_TRUE(editor.CanCopy());
 }
 
@@ -77,8 +77,7 @@ TEST_F(EditorTest, CopyVisibleSelection) {
   const char* body_content = "<input id=hiding value=HEY>";
   SetBodyContent(body_content);
 
-  auto& text_control =
-      To<HTMLInputElement>(*GetDocument().getElementById("hiding"));
+  auto& text_control = To<HTMLInputElement>(*GetElementById("hiding"));
   text_control.select();
 
   ExecuteCopy();
@@ -94,44 +93,41 @@ TEST_F(EditorTest, DontCopyHiddenSelections) {
       "<input id=hiding value=HEY>";
   SetBodyContent(body_content);
 
-  auto& text_control =
-      To<HTMLInputElement>(*GetDocument().getElementById("hiding"));
+  auto& text_control = To<HTMLInputElement>(*GetElementById("hiding"));
   text_control.select();
 
-  auto& checkbox =
-      To<HTMLInputElement>(*GetDocument().getElementById("checkbox"));
-  checkbox.focus();
+  auto& checkbox = To<HTMLInputElement>(*GetElementById("checkbox"));
+  checkbox.Focus();
 
   ExecuteCopy();
 
   const String copied =
       GetDocument().GetFrame()->GetSystemClipboard()->ReadPlainText();
-  EXPECT_TRUE(copied.IsEmpty()) << copied << " was copied.";
+  EXPECT_TRUE(copied.empty()) << copied << " was copied.";
 }
 
 TEST_F(EditorTest, ReplaceSelection) {
   const char* body_content = "<input id=text value='HELLO'>";
   SetBodyContent(body_content);
 
-  auto& text_control =
-      To<HTMLInputElement>(*GetDocument().getElementById("text"));
+  auto& text_control = To<HTMLInputElement>(*GetElementById("text"));
   text_control.select();
   text_control.SetSelectionRange(2, 2);
 
   Editor& editor = GetDocument().GetFrame()->GetEditor();
   editor.ReplaceSelection("NEW");
 
-  EXPECT_EQ("HENEWLLO", text_control.value());
+  EXPECT_EQ("HENEWLLO", text_control.Value());
 }
 
 // http://crbug.com/263819
 TEST_F(EditorTest, RedoWithDisconnectedEditable) {
   SetBodyContent("<p contenteditable id=target></p>");
   auto& target = *GetElementById("target");
-  target.focus();
+  target.Focus();
   GetDocument().execCommand("insertHtml", false, "<b>xyz</b>",
                             ASSERT_NO_EXCEPTION);
-  ASSERT_EQ("<b>xyz</b>", target.innerHTML());
+  ASSERT_EQ("<b>xyz</b>", target.GetInnerHTMLString());
   ASSERT_EQ(0, SizeOfRedoStack());
   ASSERT_EQ(1, SizeOfUndoStack());
 
@@ -149,9 +145,9 @@ TEST_F(EditorTest, RedoWithDisconnectedEditable) {
 TEST_F(EditorTest, RedoWithDisconnectedInput) {
   SetBodyContent("<input id=target>");
   auto& input = *To<HTMLInputElement>(GetElementById("target"));
-  input.focus();
+  input.Focus();
   GetDocument().execCommand("insertText", false, "xyz", ASSERT_NO_EXCEPTION);
-  ASSERT_EQ("xyz", input.value());
+  ASSERT_EQ("xyz", input.Value());
   ASSERT_EQ(0, SizeOfRedoStack());
   ASSERT_EQ(1, SizeOfUndoStack());
 
@@ -169,10 +165,10 @@ TEST_F(EditorTest, RedoWithDisconnectedInput) {
 TEST_F(EditorTest, UndoWithDisconnectedEditable) {
   SetBodyContent("<p contenteditable id=target></p>");
   auto& target = *GetElementById("target");
-  target.focus();
+  target.Focus();
   GetDocument().execCommand("insertHtml", false, "<b>xyz</b>",
                             ASSERT_NO_EXCEPTION);
-  ASSERT_EQ("<b>xyz</b>", target.innerHTML());
+  ASSERT_EQ("<b>xyz</b>", target.GetInnerHTMLString());
   ASSERT_EQ(0, SizeOfRedoStack());
   ASSERT_EQ(1, SizeOfUndoStack());
 
@@ -186,9 +182,9 @@ TEST_F(EditorTest, UndoWithDisconnectedEditable) {
 TEST_F(EditorTest, UndoWithDisconnectedInput) {
   SetBodyContent("<input id=target>");
   auto& input = *To<HTMLInputElement>(GetElementById("target"));
-  input.focus();
+  input.Focus();
   GetDocument().execCommand("insertText", false, "xyz", ASSERT_NO_EXCEPTION);
-  ASSERT_EQ("xyz", input.value());
+  ASSERT_EQ("xyz", input.Value());
   ASSERT_EQ(0, SizeOfRedoStack());
   ASSERT_EQ(1, SizeOfUndoStack());
 
@@ -201,10 +197,10 @@ TEST_F(EditorTest, UndoWithDisconnectedInput) {
 
 // http://crbug.com/873037
 TEST_F(EditorTest, UndoWithInvalidSelection) {
-  const SelectionInDOMTree selection = SetSelectionTextToBody(
+  const SelectionInDomTree selection = SetSelectionTextToBody(
       "<div contenteditable><div></div><b>^abc|</b></div>");
   Selection().SetSelection(selection, SetSelectionOptions());
-  auto& abc = To<Text>(*selection.Base().ComputeContainerNode());
+  auto& abc = To<Text>(*selection.Anchor().ComputeContainerNode());
   // Push Text node "abc" into undo stack
   GetDocument().execCommand("italic", false, "", ASSERT_NO_EXCEPTION);
   // Change Text node "abc" in undo stack

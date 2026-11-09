@@ -1,17 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
-#include "components/network_session_configurator/common/network_switches.h"
-#include "content/browser/generic_sensor/sensor_provider_proxy_impl.h"
+#include "content/browser/generic_sensor/web_contents_sensor_provider_proxy.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -19,6 +17,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/content_mock_cert_verifier.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -47,18 +46,31 @@ class GenericSensorBrowserTest : public ContentBrowserTest {
     scoped_feature_list_.InitWithFeatures(
         {features::kGenericSensorExtraClasses}, {});
 
-    SensorProviderProxyImpl::OverrideSensorProviderBinderForTesting(
+    WebContentsSensorProviderProxy::OverrideSensorProviderBinderForTesting(
         base::BindRepeating(
             &GenericSensorBrowserTest::BindSensorProviderReceiver,
             base::Unretained(this)));
   }
 
+  GenericSensorBrowserTest(const GenericSensorBrowserTest&) = delete;
+  GenericSensorBrowserTest& operator=(const GenericSensorBrowserTest&) = delete;
+
   ~GenericSensorBrowserTest() override {
-    SensorProviderProxyImpl::OverrideSensorProviderBinderForTesting(
+    WebContentsSensorProviderProxy::OverrideSensorProviderBinderForTesting(
         base::NullCallback());
   }
 
+ protected:
+  std::unique_ptr<net::EmbeddedTestServer> https_embedded_test_server_;
+
+  void set_sensor_provider_available(bool sensor_provider_available) {
+    sensor_provider_available_ = sensor_provider_available;
+  }
+
+ private:
   void SetUpOnMainThread() override {
+    ContentBrowserTest::SetUpOnMainThread();
+    mock_cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
     https_embedded_test_server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::TYPE_HTTPS);
     // Serve both a.com and b.com (and any other domain).
@@ -71,9 +83,17 @@ class GenericSensorBrowserTest : public ContentBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    // HTTPS server only serves a valid cert for localhost, so this is needed
-    // to load pages from other hosts without an error.
-    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
+    mock_cert_verifier_.SetUpCommandLine(command_line);
+  }
+
+  void SetUpInProcessBrowserTestFixture() override {
+    ContentBrowserTest::SetUpInProcessBrowserTestFixture();
+    mock_cert_verifier_.SetUpInProcessBrowserTestFixture();
+  }
+
+  void TearDownInProcessBrowserTestFixture() override {
+    ContentBrowserTest::TearDownInProcessBrowserTestFixture();
+    mock_cert_verifier_.TearDownInProcessBrowserTestFixture();
   }
 
   void BindSensorProviderReceiver(
@@ -89,19 +109,10 @@ class GenericSensorBrowserTest : public ContentBrowserTest {
     fake_sensor_provider_->Bind(std::move(receiver));
   }
 
-  void set_sensor_provider_available(bool sensor_provider_available) {
-    sensor_provider_available_ = sensor_provider_available;
-  }
-
- protected:
-  std::unique_ptr<net::EmbeddedTestServer> https_embedded_test_server_;
-
- private:
+  content::ContentMockCertVerifier mock_cert_verifier_;
   base::test::ScopedFeatureList scoped_feature_list_;
   bool sensor_provider_available_ = true;
   std::unique_ptr<FakeSensorProvider> fake_sensor_provider_;
-
-  DISALLOW_COPY_AND_ASSIGN(GenericSensorBrowserTest);
 };
 
 IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, AmbientLightSensorTest) {
@@ -110,7 +121,7 @@ IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, AmbientLightSensorTest) {
   GURL test_url =
       GetTestUrl("generic_sensor", "ambient_light_sensor_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest,
@@ -131,9 +142,9 @@ IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest,
   navigation_observer.Wait();
 
   content::RenderFrameHost* iframe =
-      ChildFrameAt(shell()->web_contents()->GetMainFrame(), 0);
+      ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_TRUE(iframe);
-  EXPECT_EQ("pass", iframe->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", iframe->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, SensorProviderUnavailable) {
@@ -143,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, SensorProviderUnavailable) {
   GURL test_url = GetTestUrl("generic_sensor",
                              "ambient_light_sensor_unavailable_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 }  //  namespace

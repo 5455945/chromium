@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "components/update_client/unzipper.h"
+#include "third_party/zlib/google/zip.h"
 
 namespace update_client {
 
@@ -17,7 +18,9 @@ namespace update_client {
 // Android WebView or Content dependencies are not allowed.
 class InProcessUnzipperFactory : public UnzipperFactory {
  public:
-  InProcessUnzipperFactory();
+  using SymlinkOption = ::zip::UnzipSymlinkOption;
+
+  explicit InProcessUnzipperFactory(SymlinkOption symlink_option);
   InProcessUnzipperFactory(const InProcessUnzipperFactory&) = delete;
   InProcessUnzipperFactory& operator=(const InProcessUnzipperFactory&) = delete;
 
@@ -25,6 +28,9 @@ class InProcessUnzipperFactory : public UnzipperFactory {
 
  protected:
   ~InProcessUnzipperFactory() override;
+
+ private:
+  const SymlinkOption symlink_option_;
 };
 
 }  // namespace update_client

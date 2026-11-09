@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,58 +6,103 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <set>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/i18n/time_formatting.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/critical_actions/critical_action_factory.h"
+#include "chrome/browser/critical_actions/critical_action_ui_utils.h"
+#include "chrome/browser/critical_actions/glic_linkout_handler.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/history_utils.h"
+#include "chrome/browser/history/web_history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/account_preview_data_service_factory.h"
+#include "chrome/browser/signin/chrome_signin_pref_names.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/profiles/profile_view_utils.h"
+#include "chrome/browser/ui/url_identity.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/common/buildflags.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/glic_enums.mojom.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
+#include "components/critical_actions/core/browser/critical_action_service.h"
+#include "components/critical_actions/core/browser/critical_action_types.h"
+#include "components/critical_actions/core/browser/features.h"
 #include "components/favicon/core/fallback_url_util.h"
 #include "components/favicon/core/large_icon_service.h"
 #include "components/favicon_base/favicon_url_parser.h"
-#include "components/history_clusters/core/memories_features.h"
+#include "components/history/core/browser/features.h"
+#include "components/history/core/browser/time_period_filter_utils.h"
+#include "components/history_clusters/core/config.h"
+#include "components/history_clusters/core/features.h"
+#include "components/history_clusters/core/history_clusters_prefs.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/prefs/pref_service.h"
 #include "components/query_parser/snippet.h"
+#include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_prefs.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/sync/driver/sync_service.h"
+#include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
+#include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync/service/sync_service.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/device_info_sync_service.h"
 #include "components/sync_device_info/device_info_tracker.h"
-#include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
+#include "ui/webui/resources/cr_components/history/history.mojom.h"
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "chrome/browser/supervised_user/supervised_user_navigation_observer.h"
-#include "chrome/browser/supervised_user/supervised_user_service.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "chrome/browser/supervised_user/supervised_user_url_filter.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/signin/signin_ui_util.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/hats/hats_service.h"
+#include "chrome/browser/ui/hats/hats_service_factory.h"
+#include "chrome/browser/ui/hats/survey_config.h"
+#include "chrome/browser/ui/webui/signin/signin_utils.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"  // nogncheck
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_android.h"
+#include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/settings/jni_headers/SettingsNavigationFactory_jni.h"
 #endif
 
 using bookmarks::BookmarkModel;
@@ -66,6 +111,29 @@ using history::HistoryService;
 using history::WebHistoryService;
 
 namespace {
+
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+constexpr int kHistorySyncPromoShownThreshold = 5;
+constexpr base::TimeDelta kHistorySyncPromoCooldown = base::Days(7);
+
+history::mojom::AccountInfoPtr CreateAccountInfoDataMojo(
+    const AccountInfo& info) {
+  auto account_info_mojo = history::mojom::AccountInfo::New();
+  account_info_mojo->name = std::string(info.GetFullName().value_or(""));
+  account_info_mojo->email = std::string(info.GetEmail());
+  account_info_mojo->account_image_src =
+      GURL(signin::GetAccountPictureUrl(info));
+  return account_info_mojo;
+}
+#endif
+
+constexpr char kOpenConversationResultHistogram[] =
+    "CriticalActions.OpenConversationResult";
+
+void RecordOpenConversationResult(
+    critical_actions::OpenConversationResult result) {
+  base::UmaHistogramEnumeration(kOpenConversationResultHistogram, result);
+}
 
 // Identifiers for the type of device from which a history entry originated.
 static const char kDeviceTypeLaptop[] = "laptop";
@@ -80,21 +148,30 @@ void GetDeviceNameAndType(const syncer::DeviceInfoTracker* tracker,
                           std::string* type) {
   // DeviceInfoTracker must be syncing in order for remote history entries to
   // be available.
-  DCHECK(tracker);
-  DCHECK(tracker->IsSyncing());
+  CHECK(tracker, base::NotFatalUntil::M162);
+  CHECK(tracker->IsSyncing(), base::NotFatalUntil::M162);
 
-  std::unique_ptr<syncer::DeviceInfo> device_info =
-      tracker->GetDeviceInfo(client_id);
-  if (device_info.get()) {
+  const syncer::DeviceInfo* device_info =
+      tracker->GetChromeDeviceInfo(client_id);
+  if (device_info) {
     *name = device_info->client_name();
-    switch (device_info->device_type()) {
-      case sync_pb::SyncEnums::TYPE_PHONE:
+    switch (device_info->form_factor()) {
+      case syncer::DeviceInfo::FormFactor::kPhone:
         *type = kDeviceTypePhone;
         break;
-      case sync_pb::SyncEnums::TYPE_TABLET:
+      case syncer::DeviceInfo::FormFactor::kTablet:
         *type = kDeviceTypeTablet;
         break;
-      default:
+      // return the laptop icon as default.
+      case syncer::DeviceInfo::FormFactor::kUnknown:
+        [[fallthrough]];
+      case syncer::DeviceInfo::FormFactor::kAutomotive:
+        [[fallthrough]];
+      case syncer::DeviceInfo::FormFactor::kWearable:
+        [[fallthrough]];
+      case syncer::DeviceInfo::FormFactor::kTv:
+        [[fallthrough]];
+      case syncer::DeviceInfo::FormFactor::kDesktop:
         *type = kDeviceTypeLaptop;
     }
     return;
@@ -104,12 +181,9 @@ void GetDeviceNameAndType(const syncer::DeviceInfoTracker* tracker,
   *type = kDeviceTypeLaptop;
 }
 
-// Formats |entry|'s URL and title and adds them to |result|.
-void SetHistoryEntryUrlAndTitle(
-    const BrowsingHistoryService::HistoryEntry& entry,
-    base::Value* result) {
-  result->SetStringKey("url", entry.url.spec());
-
+// Formats `entry`'s URL and title and adds them to `result`.
+std::pair<std::string, std::string> SetHistoryEntryUrlAndTitle(
+    const BrowsingHistoryService::HistoryEntry& entry) {
   bool using_url_as_the_title = false;
   std::u16string title_to_set(entry.title);
   if (entry.title.empty()) {
@@ -122,18 +196,20 @@ void SetHistoryEntryUrlAndTitle(
   // as the title, we mark the title as LTR since URLs are always treated as
   // left to right strings.
   if (base::i18n::IsRTL()) {
-    if (using_url_as_the_title)
+    if (using_url_as_the_title) {
       base::i18n::WrapStringWithLTRFormatting(&title_to_set);
-    else
+    } else {
       base::i18n::AdjustStringForLocaleDirection(&title_to_set);
+    }
   }
 
   // Number of chars to truncate titles when making them "short".
   static const size_t kShortTitleLength = 300;
-  if (title_to_set.size() > kShortTitleLength)
+  if (title_to_set.size() > kShortTitleLength) {
     title_to_set.resize(kShortTitleLength);
+  }
 
-  result->SetStringKey("title", title_to_set);
+  return std::make_tuple(entry.url.spec(), base::UTF16ToUTF8(title_to_set));
 }
 
 // Helper function to check if entry is present in local database (local-side
@@ -148,7 +224,6 @@ bool IsUrlInLocalDatabase(const BrowsingHistoryService::HistoryEntry& entry) {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 // Helper function to check if entry is present in user remote data (server-side
@@ -164,53 +239,88 @@ bool IsEntryInRemoteUserData(
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
-// Converts |entry| to a base::Value to be owned by the caller.
-base::Value HistoryEntryToValue(
+// Expected URL types for `UrlIdentity::CreateFromUrl()`.
+constexpr UrlIdentity::TypeSet allowed_types = {
+    UrlIdentity::Type::kDefault, UrlIdentity::Type::kFile,
+    UrlIdentity::Type::kIsolatedWebApp, UrlIdentity::Type::kChromeExtension};
+constexpr UrlIdentity::FormatOptions url_identity_options{
+    .default_options = {UrlIdentity::DefaultFormatOptions::
+                            kOmitSchemePathAndTrivialSubdomains}};
+
+history::mojom::FilteringBehavior FilteringBehaviorToMojom(
+    supervised_user::FilteringBehavior filtering_behavior) {
+  switch (filtering_behavior) {
+    case supervised_user::FilteringBehavior::kAllow:
+      return history::mojom::FilteringBehavior::kAllow;
+    case supervised_user::FilteringBehavior::kBlock:
+      return history::mojom::FilteringBehavior::kBlock;
+    case supervised_user::FilteringBehavior::kInvalid:
+      return history::mojom::FilteringBehavior::kInvalid;
+    default:
+      return history::mojom::FilteringBehavior::kUnknown;
+  }
+}
+
+// Converts `entry` to a history::mojom::QueryResult to be owned by the caller.
+history::mojom::HistoryEntryPtr HistoryEntryToMojom(
     const BrowsingHistoryService::HistoryEntry& entry,
     BookmarkModel* bookmark_model,
-    Profile* profile,
+    Profile& profile,
     const syncer::DeviceInfoTracker* tracker,
     base::Clock* clock) {
-  base::Value result(base::Value::Type::DICTIONARY);
-  SetHistoryEntryUrlAndTitle(entry, &result);
+  auto result_mojom = history::mojom::HistoryEntry::New();
+  base::DictValue dictionary;
+  auto url_and_title = SetHistoryEntryUrlAndTitle(entry);
+  result_mojom->url = std::move(url_and_title.first);
+  result_mojom->title = std::move(url_and_title.second);
 
-  std::u16string domain = url_formatter::IDNToUnicode(entry.url.host());
+  // UrlIdentity holds a user-identifiable string for a URL. We will display
+  // this string to the user.
+  std::u16string domain =
+      UrlIdentity::CreateFromUrl(&profile, entry.url, allowed_types,
+                                 url_identity_options)
+          .name;
+
   // When the domain is empty, use the scheme instead. This allows for a
   // sensible treatment of e.g. file: URLs when group by domain is on.
-  if (domain.empty())
-    domain = base::UTF8ToUTF16(entry.url.scheme() + ":");
+  if (domain.empty()) {
+    domain = base::UTF8ToUTF16(base::StrCat({entry.url.scheme(), ":"}));
+  }
 
   // The items which are to be written into result are also described in
   // chrome/browser/resources/history/history.js in @typedef for
   // HistoryEntry. Please update it whenever you add or remove
   // any keys in result.
-  result.SetStringKey("domain", domain);
+  result_mojom->domain = base::UTF16ToUTF8(domain);
 
-  result.SetStringKey(
-      "fallbackFaviconText",
-      base::UTF16ToASCII(favicon::GetFallbackIconText(entry.url)));
+  result_mojom->fallback_favicon_text =
+      base::UTF16ToUTF8(favicon::GetFallbackIconText(entry.url));
 
-  result.SetDoubleKey("time", entry.time.ToJsTime());
+  result_mojom->time = entry.time.InMillisecondsFSinceUnixEpoch();
 
-  // Pass the timestamps in a list.
-  base::Value timestamps(base::Value::Type::LIST);
-  for (int64_t timestamp : entry.all_timestamps) {
-    timestamps.Append(base::Time::FromInternalValue(timestamp).ToJsTime());
+  // Pass the timestamps in a map.
+  base::flat_map<std::string, std::vector<double>> all_timestamps;
+  for (const auto& [url, timestamps] : entry.all_timestamps) {
+    std::vector<double> timestamps_for_url;
+    // Add all timestamps for this URL.
+    for (const base::Time& timestamp : timestamps) {
+      timestamps_for_url.push_back(timestamp.InMillisecondsFSinceUnixEpoch());
+    }
+    all_timestamps[url.spec()] = std::move(timestamps_for_url);
   }
-  result.SetKey("allTimestamps", std::move(timestamps));
+  result_mojom->all_timestamps = std::move(all_timestamps);
 
   // Always pass the short date since it is needed both in the search and in
   // the monthly view.
-  result.SetStringKey("dateShort", base::TimeFormatShortDate(entry.time));
+  result_mojom->date_short =
+      base::UTF16ToUTF8(base::TimeFormatShortDate(entry.time));
 
   std::u16string snippet_string;
   std::u16string date_relative_day;
   std::u16string date_time_of_day;
   bool is_blocked_visit = false;
-  int host_filtering_behavior = -1;
 
   // Only pass in the strings we need (search results need a shortdate
   // and snippet, browse results need day and time information). Makes sure that
@@ -218,9 +328,8 @@ base::Value HistoryEntryToValue(
   if (entry.is_search_result) {
     snippet_string = entry.snippet;
   } else {
-    base::Time midnight = clock->Now().LocalMidnight();
     std::u16string date_str =
-        ui::TimeFormat::RelativeDate(entry.time, &midnight);
+        ui::TimeFormat::RelativeDate(entry.time, clock->Now().LocalMidnight());
     if (date_str.empty()) {
       date_str = base::TimeFormatFriendlyDate(entry.time);
     } else {
@@ -234,219 +343,325 @@ base::Value HistoryEntryToValue(
 
   std::string device_name;
   std::string device_type;
-  if (!entry.client_id.empty())
+  if (!entry.client_id.empty()) {
     GetDeviceNameAndType(tracker, entry.client_id, &device_name, &device_type);
-  result.SetStringKey("deviceName", device_name);
-  result.SetStringKey("deviceType", device_type);
-
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-  SupervisedUserService* supervised_user_service = nullptr;
-  if (profile->IsSupervised()) {
-    supervised_user_service =
-        SupervisedUserServiceFactory::GetForProfile(profile);
   }
-  if (supervised_user_service) {
-    const SupervisedUserURLFilter* url_filter =
-        supervised_user_service->GetURLFilter();
-    int filtering_behavior =
-        url_filter->GetFilteringBehaviorForURL(entry.url.GetWithEmptyPath());
+
+  result_mojom->device_name = std::move(device_name);
+  result_mojom->device_type = std::move(device_type);
+
+  supervised_user::FilteringBehavior filtering_behavior;
+  if (profile.IsChild()) {
+    filtering_behavior =
+        supervised_user::SupervisedUserUrlFilteringServiceFactory::
+            GetForProfile(&profile)
+                ->GetFilteringBehavior(entry.url.GetWithEmptyPath())
+                .behavior;
     is_blocked_visit = entry.blocked_visit;
-    host_filtering_behavior = filtering_behavior;
-  }
-#endif
-
-  result.SetStringKey("dateTimeOfDay", date_time_of_day);
-  result.SetStringKey("dateRelativeDay", date_relative_day);
-  result.SetStringKey("snippet", snippet_string);
-  result.SetBoolKey("starred", bookmark_model->IsBookmarked(entry.url));
-  result.SetIntKey("hostFilteringBehavior", host_filtering_behavior);
-  result.SetBoolKey("blockedVisit", is_blocked_visit);
-  result.SetBoolKey("isUrlInRemoteUserData", IsEntryInRemoteUserData(entry));
-  result.SetStringKey("remoteIconUrlForUma",
-                      entry.remote_icon_url_for_uma.spec());
-
-  // Additional debugging fields that are only shown if the
-  // history_clusters::kDebug feature is enabled.
-  if (base::FeatureList::IsEnabled(history_clusters::kDebug)) {
-    base::Value debug(base::Value::Type::DICTIONARY);
-    debug.SetBoolKey("isUrlInLocalDatabase", IsUrlInLocalDatabase(entry));
-    debug.SetIntKey("visitCount", entry.visit_count);
-    debug.SetIntKey("typedCount", entry.typed_count);
-    result.SetKey("debug", std::move(debug));
+    result_mojom->host_filtering_behavior =
+        FilteringBehaviorToMojom(filtering_behavior);
+  } else {
+    result_mojom->host_filtering_behavior =
+        history::mojom::FilteringBehavior::kUnknown;
   }
 
-  return result;
+  result_mojom->date_time_of_day = base::UTF16ToUTF8(date_time_of_day);
+  result_mojom->date_relative_day = base::UTF16ToUTF8(date_relative_day);
+  result_mojom->snippet = base::UTF16ToUTF8(snippet_string);
+  result_mojom->starred = bookmark_model->IsBookmarked(entry.url);
+  result_mojom->blocked_visit = is_blocked_visit;
+  result_mojom->is_url_in_remote_user_data = IsEntryInRemoteUserData(entry);
+  result_mojom->remote_icon_url_for_uma = entry.remote_icon_url_for_uma.spec();
+  result_mojom->is_actor_visit = entry.is_actor_visit;
+
+  // Additional debugging fields shown only if the debug feature is enabled.
+  if (history_clusters::GetConfig().user_visible_debug) {
+    auto debug_mojom = history::mojom::DebugInfo::New();
+    debug_mojom->is_url_in_local_database = IsUrlInLocalDatabase(entry);
+    debug_mojom->visit_count = entry.visit_count;
+    debug_mojom->typed_count = entry.typed_count;
+    result_mojom->debug = std::move(debug_mojom);
+  }
+
+  // Initialize critical_actions array.
+  result_mojom->critical_actions =
+      std::vector<history::mojom::CriticalActionPtr>();
+
+  return result_mojom;
+}
+
+history::mojom::CriticalActionPtr CriticalActionToMojom(
+    const critical_actions::CriticalActionEntry& action,
+    const GURL& page_url) {
+  auto action_mojom = history::mojom::CriticalAction::New();
+  action_mojom->id = action.critical_action_id;
+  action_mojom->linkout_url =
+      critical_actions::GetCriticalActionLinkoutUrl(action.action_type,
+                                                    page_url);
+  action_mojom->label = action.GetLabel();
+  action_mojom->tooltip = action.GetTooltip();
+  action_mojom->action_type =
+      static_cast<history::mojom::CriticalActionType>(action.action_type);
+  return action_mojom;
+}
+
+struct ActionGroupKey {
+  std::string_view conversation_id;
+  std::string_view actor_task_id;
+  int64_t visit_id;
+  critical_actions::ActionType action_type;
+  auto operator<=>(const ActionGroupKey&) const = default;
+};
+
+std::vector<critical_actions::CriticalActionEntry> DeduplicateCriticalActions(
+    const std::vector<critical_actions::CriticalActionEntry>& raw_actions,
+    base::TimeDelta time_tolerance) {
+  if (raw_actions.empty()) {
+    return {};
+  }
+
+  base::flat_map<ActionGroupKey, base::Time> group_latest_times;
+  std::vector<critical_actions::CriticalActionEntry> deduped_results;
+  deduped_results.reserve(raw_actions.size());
+
+  for (const auto& action : raw_actions) {
+    ActionGroupKey key{.conversation_id = action.conversation_id,
+                       .actor_task_id = action.actor_task_id,
+                       .visit_id = action.visit_id,
+                       .action_type = action.action_type};
+
+    auto it = group_latest_times.find(key);
+
+    // The database returns actions sorted by timestamp DESC (latest first).
+    // A subsequent action falls into the tolerance window of the previous
+    // action if its timestamp is greater than or equal to the
+    // (last_accepted_timestamp - time_tolerance).
+    if (it != group_latest_times.end() &&
+        action.timestamp >= (it->second - time_tolerance)) {
+      continue;  // It's a duplicate, skip it.
+    }
+
+    group_latest_times[key] = action.timestamp;
+    deduped_results.push_back(action);
+  }
+
+  return deduped_results;
 }
 
 }  // namespace
 
-BrowsingHistoryHandler::BrowsingHistoryHandler()
-    : clock_(base::DefaultClock::GetInstance()),
-      browsing_history_service_(nullptr) {}
-
-BrowsingHistoryHandler::~BrowsingHistoryHandler() {}
-
-void BrowsingHistoryHandler::OnJavascriptAllowed() {
-  if (!browsing_history_service_ && initial_results_.is_none()) {
-    // Page was refreshed, so need to call StartQueryHistory here
-    StartQueryHistory();
-  }
-
-  for (auto& callback : deferred_callbacks_) {
-    std::move(callback).Run();
-  }
-  deferred_callbacks_.clear();
-}
-
-void BrowsingHistoryHandler::OnJavascriptDisallowed() {
-  weak_factory_.InvalidateWeakPtrs();
-  browsing_history_service_ = nullptr;
-  initial_results_ = base::Value();
-  deferred_callbacks_.clear();
-  query_history_callback_id_.clear();
-  remove_visits_callback_.clear();
-}
-
-void BrowsingHistoryHandler::RegisterMessages() {
-  // Create our favicon data source.
-  Profile* profile = GetProfile();
-  content::URLDataSource::Add(
-      profile, std::make_unique<FaviconSource>(
-                   profile, chrome::FaviconUrlFormat::kFavicon2));
-
-  web_ui()->RegisterMessageCallback(
-      "queryHistory",
-      base::BindRepeating(&BrowsingHistoryHandler::HandleQueryHistory,
-                          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "queryHistoryContinuation",
-      base::BindRepeating(
-          &BrowsingHistoryHandler::HandleQueryHistoryContinuation,
-          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "removeVisits",
-      base::BindRepeating(&BrowsingHistoryHandler::HandleRemoveVisits,
-                          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "clearBrowsingData",
-      base::BindRepeating(&BrowsingHistoryHandler::HandleClearBrowsingData,
-                          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "removeBookmark",
-      base::BindRepeating(&BrowsingHistoryHandler::HandleRemoveBookmark,
-                          base::Unretained(this)));
-}
-
-void BrowsingHistoryHandler::StartQueryHistory() {
-  Profile* profile = GetProfile();
+BrowsingHistoryHandler::BrowsingHistoryHandler(
+    mojo::PendingReceiver<history::mojom::PageHandler> pending_page_handler,
+    Profile* profile,
+    content::WebContents* web_contents)
+    : profile_(profile),
+      web_contents_(web_contents),
+      page_handler_(this, std::move(pending_page_handler)),
+      identity_manager_(
+          CHECK_DEREF(IdentityManagerFactory::GetForProfile(profile))),
+      clock_(base::DefaultClock::GetInstance()),
+      browsing_history_service_(nullptr) {
   HistoryService* local_history = HistoryServiceFactory::GetForProfile(
-      profile, ServiceAccessType::EXPLICIT_ACCESS);
+      profile_, ServiceAccessType::EXPLICIT_ACCESS);
+  WebHistoryService* web_history =
+      WebHistoryServiceFactory::GetForProfile(profile_);
   syncer::SyncService* sync_service =
-      SyncServiceFactory::GetForProfile(profile);
+      SyncServiceFactory::GetForProfile(profile_);
+  auto* device_info_service =
+      DeviceInfoSyncServiceFactory::GetForProfile(profile_);
   browsing_history_service_ = std::make_unique<BrowsingHistoryService>(
-      this, local_history, sync_service);
-
-  // 150 = RESULTS_PER_PAGE from chrome/browser/resources/history/constants.js
-  SendHistoryQuery(150, std::u16string());
+      this, local_history, web_history, sync_service,
+      device_info_service ? device_info_service->GetDeviceInfoTracker()
+                          : nullptr);
 }
 
-void BrowsingHistoryHandler::HandleQueryHistory(const base::ListValue* args) {
-  AllowJavascript();
-  const base::Value& callback_id = args->GetList()[0];
-  if (!initial_results_.is_none()) {
-    ResolveJavascriptCallback(callback_id, std::move(initial_results_));
-    initial_results_ = base::Value();
+BrowsingHistoryHandler::~BrowsingHistoryHandler() = default;
+
+#if !BUILDFLAG(IS_ANDROID)
+void BrowsingHistoryHandler::SetSidePanelUIEmbedder(
+    base::WeakPtr<TopChromeWebUIController::Embedder> side_panel_embedder) {
+  side_panel_embedder_ = side_panel_embedder;
+}
+#endif
+
+void BrowsingHistoryHandler::SetPage(
+    mojo::PendingRemote<history::mojom::Page> pending_page) {
+  page_.Bind(std::move(pending_page));
+  // TODO(mfacey@): Explore whether deferred_callbacks_ can be removed.
+  for (auto& deferred_callback : deferred_callbacks_) {
+    std::move(deferred_callback).Run();
+  }
+  deferred_callbacks_.clear();
+
+#if !BUILDFLAG(IS_ANDROID)
+  HatsService* hats_service =
+      HatsServiceFactory::GetForProfile(profile_,
+                                        /* create_if_necessary = */ true);
+  if (!hats_service) {
     return;
   }
 
+  // Experiment group HaTS survey should trigger if the HaTS experiment group
+  // feature is enabled and any of the history improvement features is enabled.
+  // Check the HaTS feature last, so that clients are only counted as active if
+  // one of the other feature is enabled.
+  if (base::FeatureList::IsEnabled(
+          history::kBrowsingHistorySimilarVisitsGrouping) &&
+      base::FeatureList::IsEnabled(
+          features::kHappinessTrackingSurveysForDesktopHistoryPageExperiment)) {
+    hats_service->LaunchDelayedSurveyForWebContents(
+        kHatsSurveyTriggerHistoryPageExperiment, web_contents_,
+        features::kHappinessTrackingSurveysForDesktopHistoryPageExperimentTime
+            .Get()
+            .InMilliseconds());
+  }
+
+  // Control group HaTS survey should trigger if the HaTS control group feature
+  // is enabled and none of the history improvement features is enabled.
+  // Check the HaTS feature last, so that clients are only counted as active if
+  // all of the other features are disabled.
+  if (!base::FeatureList::IsEnabled(
+          history::kBrowsingHistorySimilarVisitsGrouping) &&
+      base::FeatureList::IsEnabled(
+          features::kHappinessTrackingSurveysForDesktopHistoryPageControl)) {
+    hats_service->LaunchDelayedSurveyForWebContents(
+        kHatsSurveyTriggerHistoryPageControl, web_contents_,
+        features::kHappinessTrackingSurveysForDesktopHistoryPageControlTime
+            .Get()
+            .InMilliseconds());
+  }
+#endif
+}
+
+void BrowsingHistoryHandler::ShowSidePanelUI() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (side_panel_embedder_) {
+    side_panel_embedder_->ShowUI();
+  }
+#endif
+}
+
+void BrowsingHistoryHandler::QueryHistory(
+    const std::string& query,
+    int max_count,
+    std::optional<base::Time> begin_time,
+    std::optional<base::Time> end_time,
+    bool include_user_visits,
+    bool include_actor_visits,
+    const std::vector<std::string>& client_ids,
+    QueryHistoryCallback callback) {
   // Reset the query history continuation callback. Since it is repopulated in
   // OnQueryComplete(), it cannot be reset earlier, as the early return above
   // prevents the QueryHistory() call to the browsing history service.
   query_history_continuation_.Reset();
 
   // Cancel the previous query if it is still in flight.
-  if (!query_history_callback_id_.empty()) {
-    RejectJavascriptCallback(base::Value(query_history_callback_id_),
-                             base::Value());
-  }
-  query_history_callback_id_ = callback_id.GetString();
-
-  // Parse the arguments from JavaScript. There are two required arguments:
-  // - the text to search for (may be empty)
-  // - the maximum number of results to return (may be 0, meaning that there
-  //   is no maximum).
-  const base::Value& search_text = args->GetList()[1];
-
-  const base::Value& count = args->GetList()[2];
-  if (!count.is_int()) {
-    NOTREACHED() << "Failed to convert argument 2.";
-    return;
+  if (query_history_callback_) {
+    std::move(query_history_callback_).Run(history::mojom::QueryResult::New());
   }
 
-  SendHistoryQuery(count.GetInt(), base::UTF8ToUTF16(search_text.GetString()));
+  query_history_callback_ = std::move(callback);
+
+  SendHistoryQuery(max_count, query, begin_time, end_time, include_user_visits,
+                   include_actor_visits, client_ids);
 }
 
-void BrowsingHistoryHandler::SendHistoryQuery(int max_count,
-                                              const std::u16string& query) {
+void BrowsingHistoryHandler::SendHistoryQuery(
+    int max_count,
+    const std::string& query,
+    std::optional<base::Time> begin_time,
+    std::optional<base::Time> end_time,
+    bool include_user_visits,
+    bool include_actor_visits,
+    const std::vector<std::string>& client_ids) {
+  query_timer_ = base::ElapsedTimer();
   history::QueryOptions options;
   options.max_count = max_count;
-  options.duplicate_policy = history::QueryOptions::REMOVE_DUPLICATES_PER_DAY;
-  browsing_history_service_->QueryHistory(query, options);
-}
+  options.policy_for_404_visits = history::VisitQuery404sPolicy::kExclude404s;
+  // `BrowsingHistoryService` has more elaborate deduplication logic. Using the
+  // DB-level deduplication would also drop some data, like the visit IDs of
+  // the merged visits.
+  options.duplicate_policy = history::QueryOptions::KEEP_ALL_DUPLICATES;
+  options.include_actor_visits = include_actor_visits;
+  options.include_user_visits = include_user_visits;
+  std::string text_query;
+  const std::string kHostPrefix = "host:";
 
-void BrowsingHistoryHandler::HandleQueryHistoryContinuation(
-    const base::ListValue* args) {
-  CHECK(args->GetList().size() == 1);
-  const base::Value& callback_id = args->GetList()[0];
-  // Cancel the previous query if it is still in flight.
-  if (!query_history_callback_id_.empty()) {
-    RejectJavascriptCallback(base::Value(query_history_callback_id_),
-                             base::Value());
+  if (base::FeatureList::IsEnabled(
+          history::kBrowsingHistoryImprovedHostnameSuffixMatching)) {
+    // New logic: Tokenize, extract any "host:<domain>" token, rejoin remainder.
+    std::vector<std::string_view> tokens = base::SplitStringPiece(
+        query, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    std::vector<std::string_view> other_tokens;
+    for (std::string_view token : tokens) {
+      if (options.hostname_suffix.empty() && token.starts_with(kHostPrefix)) {
+        options.hostname_suffix =
+            std::string(token.substr(kHostPrefix.length()));
+      } else {
+        other_tokens.push_back(token);
+      }
+    }
+    text_query = base::JoinString(other_tokens, " ");
+  } else {
+    // Legacy logic: Only match "host:" at index 0; treat entire rest as host.
+    if (query.starts_with(kHostPrefix)) {
+      options.hostname_suffix = query.substr(kHostPrefix.length());
+      text_query.clear();
+    } else {
+      text_query = query;
+    }
   }
-  query_history_callback_id_ = callback_id.GetString();
 
-  DCHECK(query_history_continuation_);
-  std::move(query_history_continuation_).Run();
+  query_hostname_suffix_ = options.hostname_suffix;
+
+  if (begin_time.has_value()) {
+    options.begin_time = begin_time.value();
+  }
+  if (end_time.has_value()) {
+    options.end_time = end_time.value();
+  }
+
+  options.client_ids = client_ids;
+
+  browsing_history_service_->QueryHistory(base::UTF8ToUTF16(text_query),
+                                          options);
 }
 
-void BrowsingHistoryHandler::HandleRemoveVisits(const base::ListValue* args) {
-  CHECK(args->GetList().size() == 2);
-  const base::Value& callback_id = args->GetList()[0];
-  CHECK(remove_visits_callback_.empty());
-  remove_visits_callback_ = callback_id.GetString();
+void BrowsingHistoryHandler::QueryHistoryContinuation(
+    QueryHistoryContinuationCallback callback) {
+  // Cancel the previous query if it is still in flight.
+  if (query_history_callback_) {
+    std::move(query_history_callback_).Run(history::mojom::QueryResult::New());
+  }
+  query_history_callback_ = std::move(callback);
+
+  if (!query_history_continuation_.is_null()) {
+    std::move(query_history_continuation_).Run();
+  }
+}
+
+void BrowsingHistoryHandler::RemoveVisits(
+    const std::vector<history::mojom::RemovalItemPtr> items,
+    RemoveVisitsCallback callback) {
+  remove_visits_callbacks_.push(std::move(callback));
 
   std::vector<BrowsingHistoryService::HistoryEntry> items_to_remove;
-  const base::Value& items = args->GetList()[1];
-  base::Value::ConstListView list = items.GetList();
-  items_to_remove.reserve(list.size());
-  for (size_t i = 0; i < list.size(); ++i) {
-    // Each argument is a dictionary with properties "url" and "timestamps".
-    if (!list[i].is_dict()) {
+  items_to_remove.reserve(items.size());
+  for (const auto& item : items) {
+    const std::string& url = item->url;
+    const std::vector<double>& timestamps = item->timestamps;
+    if (url.empty()) {
       NOTREACHED() << "Unable to extract arguments";
-      return;
     }
 
-    const std::string* url_ptr = list[i].FindStringKey("url");
-    const base::Value* timestamps_ptr = list[i].FindListKey("timestamps");
-    if (!url_ptr || !timestamps_ptr) {
-      NOTREACHED() << "Unable to extract arguments";
-      return;
-    }
-
-    base::Value::ConstListView timestamps = timestamps_ptr->GetList();
-    DCHECK_GT(timestamps.size(), 0U);
+    CHECK_GT(timestamps.size(), 0U, base::NotFatalUntil::M162);
     BrowsingHistoryService::HistoryEntry entry;
-    entry.url = GURL(*url_ptr);
+    entry.url = GURL(url);
 
-    for (size_t ts_index = 0; ts_index < timestamps.size(); ++ts_index) {
-      if (!timestamps[ts_index].is_double() && !timestamps[ts_index].is_int()) {
-        NOTREACHED() << "Unable to extract visit timestamp.";
-        continue;
-      }
-
+    for (const auto& timestamp : timestamps) {
       base::Time visit_time =
-          base::Time::FromJsTime(timestamps[ts_index].GetDouble());
-      entry.all_timestamps.insert(visit_time.ToInternalValue());
+          base::Time::FromMillisecondsSinceUnixEpoch(timestamp);
+      entry.all_timestamps[entry.url].insert(visit_time);
     }
 
     items_to_remove.push_back(entry);
@@ -455,20 +670,215 @@ void BrowsingHistoryHandler::HandleRemoveVisits(const base::ListValue* args) {
   browsing_history_service_->RemoveVisits(items_to_remove);
 }
 
-void BrowsingHistoryHandler::HandleClearBrowsingData(
-    const base::ListValue* args) {
-  // TODO(beng): This is an improper direct dependency on Browser. Route this
-  // through some sort of delegate.
-  Browser* browser =
-      chrome::FindBrowserWithWebContents(web_ui()->GetWebContents());
-  chrome::ShowClearBrowsingDataDialog(browser);
+void BrowsingHistoryHandler::OpenClearBrowsingDataDialog() {
+#if BUILDFLAG(IS_ANDROID)
+  ui::WindowAndroid* window =
+      web_contents_ ? web_contents_->GetTopLevelNativeWindow() : nullptr;
+  if (window) {
+    Java_SettingsNavigationFactory_showClearBrowsingData(
+        base::android::AttachCurrentThread(), window->GetJavaObject());
+  } else {
+    DLOG(WARNING)
+        << "Cannot open Clear Browsing Data: TopLevelNativeWindow is null";
+  }
+#else
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents_);
+  if (browser) {
+    chrome::ShowClearBrowsingDataDialog(browser);
+  }
+#endif
 }
 
-void BrowsingHistoryHandler::HandleRemoveBookmark(const base::ListValue* args) {
-  std::u16string url = ExtractStringValue(args);
-  Profile* profile = GetProfile();
-  BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile);
-  bookmarks::RemoveAllBookmarks(model, GURL(url));
+void BrowsingHistoryHandler::TurnOnHistorySync(
+    history::mojom::AccessPoint access_point) {
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents_);
+  if (browser) {
+    signin_metrics::AccessPoint signin_access_point;
+    switch (access_point) {
+      case history::mojom::AccessPoint::kRecentTabs:
+        signin_access_point = signin_metrics::AccessPoint::kRecentTabs;
+        break;
+      case history::mojom::AccessPoint::kHistoryPage:
+        signin_access_point = signin_metrics::AccessPoint::kHistoryPage;
+        break;
+    }
+    signin_ui_util::SignInAndEnableHistorySync(browser, profile_,
+                                               signin_access_point);
+  }
+#else
+  // This is not expected to be called on Android or ChromeOS as history sync
+  // promos are disabled on those platforms.
+  NOTREACHED();
+#endif
+}
+
+#if BUILDFLAG(IS_ANDROID)
+// On Android, history sync promos are not shown in History WebUI.
+// However, history.mojom and the frontend templates guard these calls with
+// !is_chromeos rather than desktop-only flags. Because Android is not ChromeOS,
+// omitting them from C++ would break the Mojo interface and crash WebUI
+// initialization. Returning false from ShouldShowHistoryPageHistorySyncPromo()
+// suppresses the promo cleanly without adding !is_android conditionals across
+// shared WebUI resources.
+void BrowsingHistoryHandler::ShouldShowHistoryPageHistorySyncPromo(
+    ShouldShowHistoryPageHistorySyncPromoCallback callback) {
+  std::move(callback).Run(false);
+}
+
+void BrowsingHistoryHandler::RecordHistoryPageHistorySyncPromoDismissed() {}
+
+void BrowsingHistoryHandler::IncrementHistoryPageHistorySyncPromoShownCount() {}
+#elif !BUILDFLAG(IS_CHROMEOS)
+void BrowsingHistoryHandler::ShouldShowHistoryPageHistorySyncPromo(
+    ShouldShowHistoryPageHistorySyncPromoCallback callback) {
+  const int promo_shown_count = GetHistoryPageHistorySyncPromoShownCount();
+
+  // If the promo has been shown more than the threshold, the promo should not
+  // be shown.
+  if (promo_shown_count >= kHistorySyncPromoShownThreshold) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  const bool shown_after_dismissal =
+      IsHistoryPageHistorySyncPromoShownAfterDismissal();
+  // If the promo was dismissed and shown once after dismissal, the promo should
+  // not be shown anymore.
+  if (shown_after_dismissal) {
+    std::move(callback).Run(false);
+    return;
+  }
+  const base::Time last_dismissed_timestamp =
+      GetHistoryPageHistorySyncPromoLastDismissedTimestamp();
+  const bool was_dismissed = !last_dismissed_timestamp.is_null();
+  // If the promo was dismissed and the cooldown has not passed, the promo
+  // should not be shown.
+  if (was_dismissed &&
+      clock_->Now() < last_dismissed_timestamp + kHistorySyncPromoCooldown) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  std::move(callback).Run(true);
+}
+
+void BrowsingHistoryHandler::RecordHistoryPageHistorySyncPromoDismissed() {
+  SetHistoryPageHistorySyncPromoLastDismissedTimestamp(clock_->Now());
+}
+
+void BrowsingHistoryHandler::IncrementHistoryPageHistorySyncPromoShownCount() {
+  IncrementHistoryPageHistorySyncPromoShownCountPref();
+
+  const base::Time last_dismissed_timestamp =
+      GetHistoryPageHistorySyncPromoLastDismissedTimestamp();
+  const bool was_dismissed = !last_dismissed_timestamp.is_null();
+  if (was_dismissed) {
+    SetHistoryPageHistorySyncPromoShownAfterDismissal();
+  }
+}
+
+int BrowsingHistoryHandler::GetHistoryPageHistorySyncPromoShownCount() const {
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  if (account.GetGaiaId().empty()) {
+    return profile_->GetPrefs()->GetInteger(
+        prefs::kHistoryPageHistorySyncPromoShownCountPerProfile);
+  }
+
+  return SigninPrefs(*profile_->GetPrefs())
+      .GetHistoryPageHistorySyncPromoShownCount(account.GetGaiaId());
+}
+
+base::Time
+BrowsingHistoryHandler::GetHistoryPageHistorySyncPromoLastDismissedTimestamp()
+    const {
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  if (account.GetGaiaId().empty()) {
+    return profile_->GetPrefs()->GetTime(
+        prefs::kHistoryPageHistorySyncPromoLastDismissedTimestampPerProfile);
+  }
+
+  return SigninPrefs(*profile_->GetPrefs())
+      .GetHistoryPageHistorySyncPromoLastDismissedTimestamp(account.GetGaiaId())
+      .value_or(base::Time());
+}
+
+bool BrowsingHistoryHandler::IsHistoryPageHistorySyncPromoShownAfterDismissal()
+    const {
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  if (account.GetGaiaId().empty()) {
+    return profile_->GetPrefs()->GetBoolean(
+        prefs::kHistoryPageHistorySyncPromoShownAfterDismissalPerProfile);
+  }
+
+  return SigninPrefs(*profile_->GetPrefs())
+      .GetHistoryPageHistorySyncPromoShownAfterDismissal(account.GetGaiaId());
+}
+
+void BrowsingHistoryHandler::
+    SetHistoryPageHistorySyncPromoLastDismissedTimestamp(base::Time time) {
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  if (account.GetGaiaId().empty()) {
+    profile_->GetPrefs()->SetTime(
+        prefs::kHistoryPageHistorySyncPromoLastDismissedTimestampPerProfile,
+        time);
+  } else {
+    SigninPrefs(*profile_->GetPrefs())
+        .SetHistoryPageHistorySyncPromoLastDismissedTimestamp(
+            account.GetGaiaId(), time);
+  }
+}
+
+void BrowsingHistoryHandler::
+    IncrementHistoryPageHistorySyncPromoShownCountPref() {
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  if (account.GetGaiaId().empty()) {
+    const int promo_shown_count = profile_->GetPrefs()->GetInteger(
+        prefs::kHistoryPageHistorySyncPromoShownCountPerProfile);
+    profile_->GetPrefs()->SetInteger(
+        prefs::kHistoryPageHistorySyncPromoShownCountPerProfile,
+        promo_shown_count + 1);
+  } else {
+    SigninPrefs(*profile_->GetPrefs())
+        .IncrementHistoryPageHistorySyncPromoShownCount(account.GetGaiaId());
+  }
+}
+
+void BrowsingHistoryHandler::
+    SetHistoryPageHistorySyncPromoShownAfterDismissal() {
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  if (account.GetGaiaId().empty()) {
+    profile_->GetPrefs()->SetBoolean(
+        prefs::kHistoryPageHistorySyncPromoShownAfterDismissalPerProfile, true);
+  } else {
+    SigninPrefs(*profile_->GetPrefs())
+        .SetHistoryPageHistorySyncPromoShownAfterDismissal(account.GetGaiaId());
+  }
+}
+#endif
+
+void BrowsingHistoryHandler::RemoveBookmark(const std::string& url) {
+  BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile_);
+  bookmarks::RemoveAllBookmarks(model, GURL(url), FROM_HERE);
+}
+//
+void BrowsingHistoryHandler::SetLastSelectedTab(const int last_tab) {
+  profile_->GetPrefs()->SetInteger(history_clusters::prefs::kLastSelectedTab,
+                                   last_tab);
 }
 
 void BrowsingHistoryHandler::OnQueryComplete(
@@ -476,61 +886,157 @@ void BrowsingHistoryHandler::OnQueryComplete(
     const BrowsingHistoryService::QueryResultsInfo& query_results_info,
     base::OnceClosure continuation_closure) {
   query_history_continuation_ = std::move(continuation_closure);
-  Profile* profile = Profile::FromWebUI(web_ui());
+  CHECK(profile_);
+
+  if (base::FeatureList::IsEnabled(
+          critical_actions::features::kCriticalActionHistory)) {
+    std::vector<int64_t> visit_ids;
+    for (const auto& entry : results) {
+      visit_ids.insert(visit_ids.end(), entry.all_visit_ids.begin(),
+                       entry.all_visit_ids.end());
+    }
+
+    if (!visit_ids.empty()) {
+      critical_actions::CriticalActionService* critical_action_service =
+          critical_actions::CriticalActionFactory::GetForProfile(profile_);
+      if (critical_action_service) {
+        critical_actions::CriticalActionQueryOptions options;
+        options.visit_ids = std::move(visit_ids);
+        critical_action_service->GetCriticalActions(
+            options,
+            base::BindOnce(&BrowsingHistoryHandler::CriticalActionsFetched,
+                           weak_factory_.GetWeakPtr(), results,
+                           query_results_info, base::ElapsedTimer()));
+        return;
+      }
+    }
+  }
+
+  HandleQueryResults(results, query_results_info, {});
+}
+
+void BrowsingHistoryHandler::CriticalActionsFetched(
+    const std::vector<BrowsingHistoryService::HistoryEntry>& results,
+    const BrowsingHistoryService::QueryResultsInfo& query_results_info,
+    base::ElapsedTimer critical_actions_timer,
+    std::vector<critical_actions::CriticalActionEntry> critical_actions) {
+  base::UmaHistogramTimes("HistoryPage.CriticalActionsQueryTime",
+                          critical_actions_timer.Elapsed());
+  HandleQueryResults(results, query_results_info, std::move(critical_actions));
+}
+
+void BrowsingHistoryHandler::HandleQueryResults(
+    const std::vector<BrowsingHistoryService::HistoryEntry>& results,
+    const BrowsingHistoryService::QueryResultsInfo& query_results_info,
+    std::vector<critical_actions::CriticalActionEntry> critical_actions) {
+  if (query_timer_.has_value()) {
+    const bool queried_critical_actions =
+        !results.empty() &&
+        base::FeatureList::IsEnabled(
+            critical_actions::features::kCriticalActionHistory);
+    if (queried_critical_actions) {
+      base::UmaHistogramTimes(
+          "HistoryPage.QueryHistoryTotalTime.WithCriticalActions",
+          query_timer_->Elapsed());
+    } else {
+      base::UmaHistogramTimes(
+          "HistoryPage.QueryHistoryTotalTime.WithoutCriticalActions",
+          query_timer_->Elapsed());
+    }
+    query_timer_.reset();
+  }
+
   BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(profile);
+      BookmarkModelFactory::GetForBrowserContext(profile_);
 
   const syncer::DeviceInfoTracker* tracker =
-      DeviceInfoSyncServiceFactory::GetForProfile(profile)
+      DeviceInfoSyncServiceFactory::GetForProfile(profile_)
           ->GetDeviceInfoTracker();
 
-  // Convert the result vector into a ListValue.
-  DCHECK(tracker);
-  base::Value results_value(base::Value::Type::LIST);
+  CHECK(tracker, base::NotFatalUntil::M162);
+
+  // Deduplicate actions belonging to the same task and visit.
+  // 5 seconds is chosen as a safe heuristic upper bound to accommodate
+  // potential latency delays between the Actor and Chrome side logs
+  // of the same event, while being small enough to avoid merging separate
+  // events.
+  // `processed_actions` owns the entries; `actions_by_visit_id` below borrows
+  // them so that conversion can happen in the per-entry loop, where the
+  // visit's URL is available to resolve the linkout destination.
+  std::vector<critical_actions::CriticalActionEntry> processed_actions =
+      DeduplicateCriticalActions(critical_actions, base::Seconds(5));
+
+  absl::flat_hash_map<history::VisitID,
+                      std::vector<const critical_actions::CriticalActionEntry*>>
+      actions_by_visit_id;
+
+  for (const auto& action : processed_actions) {
+    if (action.action_type != critical_actions::ActionType::kUnknown) {
+      actions_by_visit_id[action.visit_id].push_back(&action);
+    }
+  }
+
+  std::vector<history::mojom::HistoryEntryPtr> results_mojom;
   for (const BrowsingHistoryService::HistoryEntry& entry : results) {
-    results_value.Append(
-        HistoryEntryToValue(entry, bookmark_model, profile, tracker, clock_));
+    history::mojom::HistoryEntryPtr entry_mojom =
+        HistoryEntryToMojom(entry, bookmark_model, *profile_, tracker, clock_);
+
+    if (!actions_by_visit_id.empty()) {
+      CHECK(base::FeatureList::IsEnabled(
+          critical_actions::features::kCriticalActionHistory));
+      for (history::VisitID visit_id : entry.all_visit_ids) {
+        auto it = actions_by_visit_id.find(visit_id);
+        if (it != actions_by_visit_id.end()) {
+          for (const critical_actions::CriticalActionEntry* action :
+               it->second) {
+            entry_mojom->critical_actions.push_back(
+                CriticalActionToMojom(*action, entry.url));
+          }
+        }
+      }
+      if (!entry_mojom->critical_actions.empty()) {
+        base::UmaHistogramCounts100("HistoryPage.CriticalActionsPerVisitCount",
+                                    entry_mojom->critical_actions.size());
+      }
+    }
+
+    results_mojom.push_back(std::move(entry_mojom));
   }
 
-  base::Value results_info(base::Value::Type::DICTIONARY);
-  // The items which are to be written into results_info_value_ are also
-  // described in chrome/browser/resources/history/history.js in @typedef for
-  // HistoryQuery. Please update it whenever you add or remove any keys in
-  // results_info_value_.
-  results_info.SetStringKey("term", query_results_info.search_text);
-  results_info.SetBoolKey("finished", query_results_info.reached_beginning);
+  auto results_info = history::mojom::HistoryQuery::New();
+  // The items which are to be written into results_info_ are also
+  // described in ui/webui/resources/cr_components/history/history.mojom.
+  // For host-only queries (`search_text` empty), fall back to
+  // `query_hostname_suffix_` so the frontend detects search mode.
+  results_info->term = !query_results_info.search_text.empty()
+                           ? base::UTF16ToUTF8(query_results_info.search_text)
+                           : query_hostname_suffix_;
+  results_info->finished = query_results_info.reached_beginning;
 
-  base::Value final_results(base::Value::Type::DICTIONARY);
-  final_results.SetKey("info", std::move(results_info));
-  final_results.SetKey("value", std::move(results_value));
+  auto final_results = history::mojom::QueryResult::New();
+  final_results->info = std::move(results_info);
+  final_results->value = std::move(results_mojom);
 
-  if (query_history_callback_id_.empty()) {
-    // This can happen if JS isn't ready yet when the first query comes back.
-    initial_results_ = std::move(final_results);
-    return;
+  if (query_history_callback_) {
+    std::move(query_history_callback_).Run(std::move(final_results));
   }
-
-  ResolveJavascriptCallback(base::Value(query_history_callback_id_),
-                            std::move(final_results));
-  query_history_callback_id_.clear();
 }
 
 void BrowsingHistoryHandler::OnRemoveVisitsComplete() {
-  CHECK(!remove_visits_callback_.empty());
-  ResolveJavascriptCallback(base::Value(remove_visits_callback_),
-                            base::Value());
-  remove_visits_callback_.clear();
+  CHECK(!remove_visits_callbacks_.empty());
+  std::move(remove_visits_callbacks_.front()).Run();
+  remove_visits_callbacks_.pop();
 }
 
 void BrowsingHistoryHandler::OnRemoveVisitsFailed() {
-  CHECK(!remove_visits_callback_.empty());
-  RejectJavascriptCallback(base::Value(remove_visits_callback_), base::Value());
-  remove_visits_callback_.clear();
+  CHECK(!remove_visits_callbacks_.empty());
+  std::move(remove_visits_callbacks_.front()).Run();
+  remove_visits_callbacks_.pop();
 }
 
 void BrowsingHistoryHandler::HistoryDeleted() {
-  if (IsJavascriptAllowed()) {
-    FireWebUIListener("history-deleted", base::Value());
+  if (page_) {
+    page_->OnHistoryDeleted();
   } else {
     deferred_callbacks_.push_back(base::BindOnce(
         &BrowsingHistoryHandler::HistoryDeleted, weak_factory_.GetWeakPtr()));
@@ -540,8 +1046,8 @@ void BrowsingHistoryHandler::HistoryDeleted() {
 void BrowsingHistoryHandler::HasOtherFormsOfBrowsingHistory(
     bool has_other_forms,
     bool has_synced_results) {
-  if (IsJavascriptAllowed()) {
-    FireWebUIListener("has-other-forms-changed", base::Value(has_other_forms));
+  if (page_) {
+    page_->OnHasOtherFormsChanged(has_other_forms);
   } else {
     deferred_callbacks_.push_back(base::BindOnce(
         &BrowsingHistoryHandler::HasOtherFormsOfBrowsingHistory,
@@ -550,5 +1056,133 @@ void BrowsingHistoryHandler::HasOtherFormsOfBrowsingHistory(
 }
 
 Profile* BrowsingHistoryHandler::GetProfile() {
-  return Profile::FromWebUI(web_ui());
+  return profile_;
+}
+
+void BrowsingHistoryHandler::RequestAccountInfo(
+    RequestAccountInfoCallback callback) {
+#if BUILDFLAG(IS_ANDROID)
+  // Sign-in and sync promo cards are disabled on Android History WebUI; return
+  // an empty AccountInfo without observing IdentityManager for promo updates.
+  std::move(callback).Run(history::mojom::AccountInfo::New());
+#elif !BUILDFLAG(IS_CHROMEOS)
+  AccountInfo account_info = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+  std::move(callback).Run(CreateAccountInfoDataMojo(account_info));
+
+  if (!identity_manager_observation_.IsObserving()) {
+    identity_manager_observation_.Observe(&identity_manager_.get());
+  }
+#else
+  // This is not expected to be called on ChromeOS as the screen that uses this
+  // function is never shown for ChromeOS (using <if expr="not is_chromeos">).
+  NOTREACHED();
+#endif
+}
+
+void BrowsingHistoryHandler::OnExtendedAccountInfoUpdated(
+    const AccountInfo& info) {
+#if BUILDFLAG(IS_ANDROID)
+  // Promos are disabled on Android History WebUI, so account updates are
+  // ignored.
+  return;
+#elif !BUILDFLAG(IS_CHROMEOS)
+  AccountInfo account_to_display = signin_ui_util::GetSingleAccountForPromos(
+      &identity_manager_.get(),
+      AccountPreviewDataServiceFactory::GetForProfile(profile_));
+
+  if (info.IsEmpty() || !info.IsValid() ||
+      info.GetAccountId() != account_to_display.GetAccountId()) {
+    return;
+  }
+  page_->SendAccountInfo(CreateAccountInfoDataMojo(info));
+#else
+  // This is not expected to be called on ChromeOS as the screen that uses this
+  // function is never shown for ChromeOS (using <if expr="not is_chromeos">).
+  NOTREACHED();
+#endif
+}
+
+void BrowsingHistoryHandler::OpenCriticalActionConversation(
+    const std::string& critical_action_id,
+    OpenCriticalActionConversationCallback callback) {
+  if (critical_action_id.empty()) {
+    RecordOpenConversationResult(
+        critical_actions::OpenConversationResult::kErrorInvalidActionEntry);
+    std::move(callback).Run(
+        history::mojom::OpenConversationResult::kErrorInvalidActionEntry);
+    return;
+  }
+
+  critical_actions::CriticalActionService* critical_action_service =
+      critical_actions::CriticalActionFactory::GetForProfile(profile_);
+  if (!critical_action_service) {
+    RecordOpenConversationResult(
+        critical_actions::OpenConversationResult::kErrorInternal);
+    std::move(callback).Run(
+        history::mojom::OpenConversationResult::kErrorInternal);
+    return;
+  }
+
+  critical_action_service->GetCriticalAction(
+      critical_action_id,
+      base::BindOnce(
+          &BrowsingHistoryHandler::OnCriticalActionRetrievedForLinkout,
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void BrowsingHistoryHandler::GetTimePeriodOptions(
+    GetTimePeriodOptionsCallback callback) {
+  std::vector<history::mojom::TimePeriodOptionPtr> options_mojom;
+  for (const history::TimePeriodOption& option :
+       history::ComputeTimePeriodOptions(clock_->Now())) {
+    auto option_mojom = history::mojom::TimePeriodOption::New();
+    option_mojom->id =
+        static_cast<history::mojom::TimePeriodOptionId>(option.id);
+    option_mojom->label = base::UTF16ToUTF8(option.label);
+    if (!option.begin_time.is_null()) {
+      option_mojom->begin_time = option.begin_time;
+    }
+    if (!option.end_time.is_null()) {
+      option_mojom->end_time = option.end_time;
+    }
+    options_mojom.push_back(std::move(option_mojom));
+  }
+  std::move(callback).Run(std::move(options_mojom));
+}
+
+void BrowsingHistoryHandler::OnCriticalActionRetrievedForLinkout(
+    OpenCriticalActionConversationCallback callback,
+    std::optional<critical_actions::CriticalActionEntry> entry) {
+  if (!entry) {
+    RecordOpenConversationResult(
+        critical_actions::OpenConversationResult::kErrorInvalidActionEntry);
+    std::move(callback).Run(
+        history::mojom::OpenConversationResult::kErrorInvalidActionEntry);
+    return;
+  }
+
+  critical_actions::GlicLinkoutHandler::GetInstance()->OpenConversation(
+      web_contents_, *entry,
+      glic::mojom::InvocationSource::kHistoryPageChatLinkout,
+      base::BindOnce(
+          [](OpenCriticalActionConversationCallback cb,
+             critical_actions::OpenConversationResult result) {
+            RecordOpenConversationResult(result);
+            std::move(cb).Run(
+                static_cast<history::mojom::OpenConversationResult>(result));
+          },
+          std::move(callback)));
+}
+
+void BrowsingHistoryHandler::GetSyncedDevicesForFiltering(
+    GetSyncedDevicesForFilteringCallback callback) {
+  std::move(callback).Run(base::ToVector(
+      browsing_history_service_->GetSyncedDevicesForFiltering(),
+      [](auto& device) {
+        return history::mojom::Device::New(std::move(device.name),
+                                           device.is_local_device,
+                                           std::move(device.client_ids));
+      }));
 }

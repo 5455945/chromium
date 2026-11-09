@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "third_party/metrics_proto/system_profile.pb.h"
 
 namespace metrics {
+namespace {
 
 class EntropyStateProviderTest : public testing::Test {
  public:
@@ -43,4 +44,5 @@ TEST_F(EntropyStateProviderTest, PopulateAllLowEntropySources) {
   EXPECT_EQ(pseudo_low_source, system_profile.pseudo_low_entropy_source());
 }
 
+}  // namespace
 }  // namespace metrics

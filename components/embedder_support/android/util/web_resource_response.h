@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "third_party/jni_zero/default_conversions.h"
 
 namespace net {
 class HttpResponseHeaders;
@@ -26,6 +26,10 @@ class WebResourceResponse {
   // org.chromium.components.embedder_support.util.WebResourceResponseInfo
   // class.
   explicit WebResourceResponse(const base::android::JavaRef<jobject>& obj);
+
+  WebResourceResponse(const WebResourceResponse&) = delete;
+  WebResourceResponse& operator=(const WebResourceResponse&) = delete;
+
   ~WebResourceResponse();
 
   bool HasInputStream(JNIEnv* env) const;
@@ -41,12 +45,20 @@ class WebResourceResponse {
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
-
-  bool input_stream_transferred_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebResourceResponse);
 };
 
 }  // namespace embedder_support
+
+namespace jni_zero {
+template <>
+inline std::unique_ptr<embedder_support::WebResourceResponse> FromJniType(
+    JNIEnv*,
+    const base::android::JavaRef<jobject>& obj) {
+  if (!obj) {
+    return nullptr;
+  }
+  return std::make_unique<embedder_support::WebResourceResponse>(obj);
+}
+}  // namespace jni_zero
 
 #endif  // COMPONENTS_EMBEDDER_SUPPORT_ANDROID_UTIL_WEB_RESOURCE_RESPONSE_H_

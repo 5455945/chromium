@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,24 @@
 #include "components/payments/content/secure_payment_confirmation_model.h"
 #include "components/payments/content/secure_payment_confirmation_view.h"
 
+namespace gfx {
+class Size;
+}
+
 namespace payments {
 
 class PaymentRequest;
+
+// LINT.IfChange(SecurePaymentRequestOutcome)
+enum class SecurePaymentRequestOutcome {
+  kUnknown = 0,
+  kAccept = 1,
+  kAnotherWay = 2,
+  kCancel = 3,
+  kOptOut = 4,
+  kMaxValue = kOptOut,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/payment/enums.xml:SecurePaymentRequestOutcome)
 
 // Controls the user interface in the secure payment confirmation flow.
 class SecurePaymentConfirmationController
@@ -35,30 +50,37 @@ class SecurePaymentConfirmationController
   void CloseDialog() override;
   void ShowErrorMessage() override;
   void ShowProcessingSpinner() override;
+  void ShowLoadingView() override {}
   bool IsInteractive() const override;
-  void ShowCvcUnmaskPrompt(
-      const autofill::CreditCard& credit_card,
-      base::WeakPtr<autofill::payments::FullCardRequest::ResultDelegate>
-          result_delegate,
-      content::WebContents* web_contents) override;
   void ShowPaymentHandlerScreen(
       const GURL& url,
+      const std::optional<gfx::Size>& preferred_web_contents_size,
       PaymentHandlerOpenWindowCallback callback) override;
   void ConfirmPaymentForTesting() override;
+  bool ClickOptOutForTesting() override;
 
   // InitializationTask::Observer:
   void OnInitialized(InitializationTask* initialization_task) override;
 
   // Callbacks for user interaction.
-  void OnDismiss();
-  void OnCancel();
   void OnConfirm();
+  void OnAnotherWay();
+  void OnCancel();
+  void OnOptOut();
+
+  void SetIsDialogShowingForTesting(bool is_dialog_showing) {
+    is_dialog_showing_ = is_dialog_showing;
+  }
+  void SetIsErrorDialogForTesting(bool is_error_dialog) {
+    is_error_dialog_ = is_error_dialog;
+  }
 
   base::WeakPtr<SecurePaymentConfirmationController> GetWeakPtr();
 
  private:
   void SetupModelAndShowDialogIfApplicable();
 
+  // Can be null when the webpage closes or the iframe refreshes or navigates.
   base::WeakPtr<PaymentRequest> request_;
 
   SecurePaymentConfirmationModel model_;
@@ -70,6 +92,8 @@ class SecurePaymentConfirmationController
   base::WeakPtr<SecurePaymentConfirmationView> view_;
 
   int number_of_initialization_tasks_ = 0;
+  bool is_dialog_showing_ = false;
+  bool is_error_dialog_ = false;
 
   base::WeakPtrFactory<SecurePaymentConfirmationController> weak_ptr_factory_{
       this};

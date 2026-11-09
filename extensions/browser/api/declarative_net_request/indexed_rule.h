@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,18 @@
 #define EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_INDEXED_RULE_H_
 
 #include <stdint.h>
+
+#include <optional>
 #include <string>
-#include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
 #include "components/url_pattern_index/flat/url_pattern_index_generated.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
-namespace extensions {
-namespace declarative_net_request {
+namespace extensions::declarative_net_request {
 
 enum class ParseResult;
 
@@ -28,9 +26,13 @@ enum class ParseResult;
 // UrlRule as specified by the url_pattern_index component.
 struct IndexedRule {
   IndexedRule();
-  ~IndexedRule();
+  IndexedRule(const IndexedRule&) = delete;
   IndexedRule(IndexedRule&& other);
+
+  IndexedRule& operator=(const IndexedRule&) = delete;
   IndexedRule& operator=(IndexedRule&& other);
+
+  ~IndexedRule();
 
   static ParseResult CreateIndexedRule(
       extensions::api::declarative_net_request::Rule parsed_rule,
@@ -39,7 +41,7 @@ struct IndexedRule {
       IndexedRule* indexed_rule);
 
   api::declarative_net_request::RuleActionType action_type =
-      api::declarative_net_request::RULE_ACTION_TYPE_NONE;
+      api::declarative_net_request::RuleActionType::kNone;
 
   // These fields correspond to the attributes of a flatbuffer UrlRule, as
   // specified by the url_pattern_index component.
@@ -58,24 +60,30 @@ struct IndexedRule {
   std::string url_pattern;
 
   // Lower-cased and sorted as required by the url_pattern_index component.
-  std::vector<std::string> domains;
-  std::vector<std::string> excluded_domains;
+  std::vector<std::string> initiator_domains;
+  std::vector<std::string> excluded_initiator_domains;
+  std::vector<std::string> request_domains;
+  std::vector<std::string> excluded_request_domains;
+  std::vector<std::string> top_domains;
+  std::vector<std::string> excluded_top_domains;
 
-  // Note: For redirect rules, exactly one of |redirect_url|,
-  // |regex_substitution| or |url_transform|  will be set.
+  // Note: For redirect rules, exactly one of `redirect_url`,
+  // `regex_substitution` or `url_transform` will be set.
   // The redirect url for the rule.
-  absl::optional<std::string> redirect_url;
+  std::optional<std::string> redirect_url;
   // The regex substitution for this rule.
-  absl::optional<std::string> regex_substitution;
+  std::optional<std::string> regex_substitution;
   // UrlTransform for this rule.
-  std::unique_ptr<api::declarative_net_request::URLTransform> url_transform;
+  std::optional<api::declarative_net_request::URLTransform> url_transform;
 
   // List of request headers to modify. Valid iff this is a modify headers rule.
-  std::vector<api::declarative_net_request::ModifyHeaderInfo> request_headers;
+  std::vector<api::declarative_net_request::ModifyHeaderInfo>
+      request_headers_to_modify;
 
   // List of response headers to modify. Valid iff this is a modify headers
   // rule.
-  std::vector<api::declarative_net_request::ModifyHeaderInfo> response_headers;
+  std::vector<api::declarative_net_request::ModifyHeaderInfo>
+      response_headers_to_modify;
 
   // Set of tab IDs this rule applies to.
   base::flat_set<int> tab_ids;
@@ -83,7 +91,12 @@ struct IndexedRule {
   // Set of tab IDs this rule doesn't apply to.
   base::flat_set<int> excluded_tab_ids;
 
-  DISALLOW_COPY_AND_ASSIGN(IndexedRule);
+  // List of response headers this rule applies to.
+  std::vector<api::declarative_net_request::HeaderInfo> response_headers;
+
+  // List of response headers this rule doesn't apply to.
+  std::vector<api::declarative_net_request::HeaderInfo>
+      excluded_response_headers;
 };
 
 // Compute the rule priority for indexing, by combining the priority from
@@ -92,7 +105,6 @@ uint64_t ComputeIndexedRulePriority(
     int parsed_rule_priority,
     api::declarative_net_request::RuleActionType action_type);
 
-}  // namespace declarative_net_request
-}  // namespace extensions
+}  // namespace extensions::declarative_net_request
 
 #endif  // EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_INDEXED_RULE_H_

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -79,28 +79,21 @@ struct SignalKeyInternal {
 // old keys will no longer be usable, and since this key is persisted to disk,
 // this is something that should be avoided.
 // See https://en.cppreference.com/w/cpp/named_req/StandardLayoutType
-static_assert(std::is_standard_layout<SignalKeyInternal>::value,
+static_assert(std::is_standard_layout_v<SignalKeyInternal>,
               "SignalKeyInternal must have a standard layout.");
 
 // Ensure there is no implicit padding.
-// TODO(C++17): Use std::has_unique_object_representations instead.
-static_assert(sizeof(SignalKeyInternal) == 32, "Size must be 32");
-static_assert(sizeof(SignalKeyInternal) ==
-                  sizeof(SignalKeyInternal::Prefix::kind) +
-                      sizeof(SignalKeyInternal::Prefix::padding) +
-                      sizeof(SignalKeyInternal::Prefix::name_hash) +
-                      sizeof(SignalKeyInternal::time_range_end_sec) +
-                      sizeof(SignalKeyInternal::time_range_start_sec),
-              "Sum of the size of all fields must be 32");
+static_assert(std::has_unique_object_representations_v<SignalKeyInternal>,
+              "SignalKeyInternal must have a unique object representation.");
 
 // A machine readable representation of the SignalKeyInternal.
 // See ToDebugString and operator<< implementation for a human readable
 // format.
 std::string SignalKeyInternalToBinary(const SignalKeyInternal& input);
 // Parses a machine readable representation of a SignalKeyInternal into
-// a SignalKeyInternal.
-void SignalKeyInternalFromBinary(const std::string& input,
-                                 SignalKeyInternal* output);
+// a SignalKeyInternal. Returns whether the conversion succeeded.
+[[nodiscard]] bool SignalKeyInternalFromBinary(const std::string& input,
+                                               SignalKeyInternal* output);
 // Returns a human readable representation of the SignalKeyInternal.
 std::string SignalKeyInternalToDebugString(const SignalKeyInternal& input);
 
@@ -110,9 +103,10 @@ std::string SignalKeyInternalToDebugString(const SignalKeyInternal& input);
 std::string SignalKeyInternalPrefixToBinary(
     const SignalKeyInternal::Prefix& input);
 // Parses a machine readable representation of a SignalKeyInternal::Prefix into
-// a SignalKeyInternal::Prefix.
-void SignalKeyInternalPrefixFromBinary(const std::string& input,
-                                       SignalKeyInternal::Prefix* output);
+// a SignalKeyInternal::Prefix. Returns whether the conversion succeeded.
+[[nodiscard]] bool SignalKeyInternalPrefixFromBinary(
+    const std::string& input,
+    SignalKeyInternal::Prefix* output);
 // Returns a human readable representation of the SignalKeyInternal::Prefix.
 std::string SignalKeyInternalPrefixToDebugString(
     const SignalKeyInternal::Prefix& input);
@@ -122,6 +116,10 @@ std::string SignalKeyInternalPrefixToDebugString(
 std::ostream& operator<<(std::ostream& os, const SignalKeyInternal& key);
 std::ostream& operator<<(std::ostream& os,
                          const SignalKeyInternal::Prefix& prefix);
+
+bool operator==(const SignalKeyInternal::Prefix& lhs,
+                const SignalKeyInternal::Prefix& rhs);
+bool operator==(const SignalKeyInternal& lhs, const SignalKeyInternal& rhs);
 
 }  // namespace segmentation_platform
 

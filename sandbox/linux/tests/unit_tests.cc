@@ -1,6 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "sandbox/linux/tests/unit_tests.h"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -15,11 +17,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <tuple>
+
+#include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/debug/leak_annotations.h"
-#include "base/files/file_util.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/strings/pattern.h"
 #include "build/build_config.h"
-#include "sandbox/linux/tests/unit_tests.h"
 
 // Specifically, PNaCl toolchain does not have this flag.
 #if !defined(POLLRDHUP)
@@ -55,12 +60,22 @@ int CountThreads() {
   return num_threads;
 }
 
+// Helper for DeathSEGVMessage and DeathSEGVMessagePattern.
+// Checks that the process died with SIGSEGV.
+void CheckDeathBySEGV(int status, const std::string& details) {
+  const bool subprocess_got_sigsegv =
+      WIFSIGNALED(status) && (SIGSEGV == WTERMSIG(status));
+
+  ASSERT_TRUE(subprocess_got_sigsegv)
+      << "Exit status: " << status << " " << details;
+}
+
 }  // namespace
 
 namespace sandbox {
 
 bool IsAndroid() {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   return true;
 #else
   return false;
@@ -78,19 +93,13 @@ bool IsArchitectureArm() {
 static const int kExpectedValue = 1;
 static const int kIgnoreThisTest = 43;
 static const int kExitWithAssertionFailure = 1;
-#if !defined(OS_NACL_NONSFI)
 static const int kExitForTimeout = 2;
-#endif
 
-// PNaCl toolchain's signal ABIs are incompatible with Linux's.
-// So, for simplicity, just drop the "timeout" feature from unittest framework
-// with relying on the buildbot's timeout feature.
-#if !defined(OS_NACL_NONSFI)
 static void SigAlrmHandler(int) {
   const char failure_message[] = "Timeout reached!\n";
   // Make sure that we never block here.
   if (!fcntl(2, F_SETFL, O_NONBLOCK)) {
-    ignore_result(write(2, failure_message, sizeof(failure_message) - 1));
+    std::ignore = write(2, failure_message, sizeof(failure_message) - 1);
   }
   _exit(kExitForTimeout);
 }
@@ -117,7 +126,6 @@ static void SetProcessTimeout(int time_in_seconds) {
   SANDBOX_ASSERT(alarm(time_in_seconds) == 0);  // There should be no previous
                                                 // alarm.
 }
-#endif  // !defined(OS_NACL_NONSFI)
 
 // Runs a test in a sub-process. This is necessary for most of the code
 // in the BPF sandbox, as it potentially makes global state changes and as
@@ -163,16 +171,14 @@ void UnitTests::RunTestInProcess(SandboxTestRunner* test_runner,
     SANDBOX_ASSERT(!close(fds[0]));
     SANDBOX_ASSERT(!close(fds[1]));
 
-#if !defined(OS_NACL_NONSFI)
     SetProcessTimeout(GetSubProcessTimeoutTimeInSeconds());
-#endif
 
     // Disable core files. They are not very useful for our individual test
     // cases.
     struct rlimit no_core = {0};
     setrlimit(RLIMIT_CORE, &no_core);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // On Android Oreo and higher, the system applies a seccomp filter to all
     // processes. It has its own SIGSYS handler that is un-hooked here in the
     // test child process, so that the Chromium handler can be used. This
@@ -247,7 +253,8 @@ void UnitTests::DeathSuccess(int status, const std::string& msg, const void*) {
   ASSERT_TRUE(subprocess_terminated_normally) << details;
   int subprocess_exit_status = WEXITSTATUS(status);
   ASSERT_EQ(kExpectedValue, subprocess_exit_status) << details;
-#if !defined(LEAK_SANITIZER)
+// TODO(crbug.com/375489584): re-enable the test for UBSan.
+#if !defined(LEAK_SANITIZER) && !defined(UNDEFINED_SANITIZER)
   // LSan may print warnings to stdout, breaking this expectation.
   bool subprocess_exited_but_printed_messages = !msg.empty();
   EXPECT_FALSE(subprocess_exited_but_printed_messages) << details;
@@ -277,18 +284,16 @@ void UnitTests::DeathMessage(int status,
   int subprocess_exit_status = WEXITSTATUS(status);
   ASSERT_EQ(1, subprocess_exit_status) << details;
 
-  bool subprocess_exited_without_matching_message =
-      msg.find(expected_msg) == std::string::npos;
+  bool subprocess_exited_without_matching_message = !msg.contains(expected_msg);
 
 // In official builds CHECK messages are dropped, look for SIGABRT or SIGTRAP.
 // See https://crbug.com/437312 and https://crbug.com/612507.
-#if defined(OFFICIAL_BUILD) && defined(NDEBUG) && !defined(OS_ANDROID)
+#if defined(OFFICIAL_BUILD) && defined(NDEBUG) && !BUILDFLAG(IS_ANDROID)
   if (subprocess_exited_without_matching_message) {
     static const char kSigTrapMessage[] = "Received signal 5";
     static const char kSigAbortMessage[] = "Received signal 6";
     subprocess_exited_without_matching_message =
-        msg.find(kSigTrapMessage) == std::string::npos &&
-        msg.find(kSigAbortMessage) == std::string::npos;
+        !msg.contains(kSigTrapMessage) && !msg.contains(kSigAbortMessage);
   }
 #endif
   EXPECT_FALSE(subprocess_exited_without_matching_message) << details;
@@ -299,22 +304,20 @@ void UnitTests::DeathSEGVMessage(int status,
                                  const void* aux) {
   std::string details(TestFailedMessage(msg));
   const char* expected_msg = static_cast<const char*>(aux);
+  CheckDeathBySEGV(status, details);
+  bool subprocess_exited_without_matching_message = !msg.contains(expected_msg);
+  EXPECT_FALSE(subprocess_exited_without_matching_message) << details;
+}
 
-#if defined(OS_CHROMEOS)
-  // This hack is required for ChromeOS since its signal handler does not
-  // return indicating the handled signal, but with a simple _exit(1) only.
-  const bool subprocess_got_sigsegv =
-      WIFEXITED(status) && (WEXITSTATUS(status) == 1);
-#else
-  const bool subprocess_got_sigsegv =
-      WIFSIGNALED(status) && (SIGSEGV == WTERMSIG(status));
-#endif
-
-  ASSERT_TRUE(subprocess_got_sigsegv) << "Exit status: " << status
-                                      << " " << details;
-
+void UnitTests::DeathSEGVMessagePattern(int status,
+                                        const std::string& msg,
+                                        const void* aux) {
+  std::string details(TestFailedMessage(msg));
+  const char* expected_msg = static_cast<const char*>(aux);
+  CheckDeathBySEGV(status, details);
+  std::string pattern(expected_msg);
   bool subprocess_exited_without_matching_message =
-      msg.find(expected_msg) == std::string::npos;
+      !base::MatchPattern(msg, pattern);
   EXPECT_FALSE(subprocess_exited_without_matching_message) << details;
 }
 
@@ -343,7 +346,7 @@ void UnitTests::DeathBySignal(int status,
 }
 
 void UnitTests::AssertionFailure(const char* expr, const char* file, int line) {
-  fprintf(stderr, "%s:%d:%s", file, line, expr);
+  UNSAFE_TODO(fprintf(stderr, "%s:%d:%s", file, line, expr));
   fflush(stderr);
   _exit(kExitWithAssertionFailure);
 }

@@ -1,15 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_WM_WINDOW_CYCLE_WINDOW_CYCLE_EVENT_FILTER_H_
 #define ASH_WM_WINDOW_CYCLE_WINDOW_CYCLE_EVENT_FILTER_H_
 
+#include <optional>
+
 #include "ash/ash_export.h"
 #include "ash/wm/window_cycle/window_cycle_controller.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -32,6 +33,10 @@ class ASH_EXPORT WindowCycleEventFilter : public ui::EventHandler {
   static constexpr float kHorizontalThresholdDp = 330.f;
 
   WindowCycleEventFilter();
+
+  WindowCycleEventFilter(const WindowCycleEventFilter&) = delete;
+  WindowCycleEventFilter& operator=(const WindowCycleEventFilter&) = delete;
+
   ~WindowCycleEventFilter() override;
 
   // Overridden from ui::EventHandler:
@@ -54,25 +59,19 @@ class ASH_EXPORT WindowCycleEventFilter : public ui::EventHandler {
   class AltReleaseHandler : public ui::EventHandler {
    public:
     AltReleaseHandler();
+
+    AltReleaseHandler(const AltReleaseHandler&) = delete;
+    AltReleaseHandler& operator=(const AltReleaseHandler&) = delete;
+
     ~AltReleaseHandler() override;
 
     // ui::EventHandler:
     void OnKeyEvent(ui::KeyEvent* event) override;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(AltReleaseHandler);
   };
 
   // Depending on the values of |event| either repeatedly cycle through windows,
   // stop repeatedly cycling through windows, or cycle once.
   void HandleTriggerKey(ui::KeyEvent* event);
-
-  // Returns whether |event| is a trigger key (tab, left, right, w (when
-  // debugging)).
-  bool IsTriggerKey(ui::KeyEvent* event) const;
-
-  // Returns whether |event| is an exit key (return, space).
-  bool IsExitKey(ui::KeyEvent* event) const;
 
   // Returns whether the window cycle should repeatedly cycle in the
   // direction given by |event|.
@@ -131,18 +130,16 @@ class ASH_EXPORT WindowCycleEventFilter : public ui::EventHandler {
 
   // Stores the current scroll session data. If it does not exist, there is no
   // active scroll session.
-  absl::optional<ScrollData> scroll_data_;
+  std::optional<ScrollData> scroll_data_;
 
   // When a user taps on a preview item it should move the focus ring to it.
   // However, the focus ring should not move if the user is scrolling. Store
   // |tapped_window_| on tap events and determine whether this is a tap or
   // scroll with subsequent events.
-  aura::Window* tapped_window_ = nullptr;
+  raw_ptr<aura::Window> tapped_window_ = nullptr;
 
   // Tracks whether the user is touch scrolling the window cycle list.
   bool touch_scrolling_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowCycleEventFilter);
 };
 
 }  // namespace ash

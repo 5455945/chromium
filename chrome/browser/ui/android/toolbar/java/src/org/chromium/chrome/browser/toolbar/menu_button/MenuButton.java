@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.toolbar.menu_button;
+
+import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
@@ -24,42 +26,49 @@ import android.widget.ImageView;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.view.ViewCompat;
+import androidx.core.widget.ImageViewCompat;
 
 import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.EnsuresNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.theme.ThemeColorProvider.TintObserver;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.toolbar.R;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
-import org.chromium.components.browser_ui.widget.animation.Interpolators;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.widget.highlight.PulseDrawable;
-import org.chromium.ui.interpolators.BakedBezierInterpolator;
+import org.chromium.ui.interpolators.Interpolators;
 
-/**
- * The overflow menu button.
- */
+import java.util.function.Supplier;
+
+/** The overflow menu button. */
+@NullMarked
 public class MenuButton extends FrameLayout implements TintObserver {
     /** The {@link ImageButton} for the menu button. */
     private ImageButton mMenuImageButton;
 
     /** The view for the update badge. */
     private ImageView mUpdateBadgeView;
-    private boolean mUseLightDrawables;
 
-    private AppMenuButtonHelper mAppMenuButtonHelper;
+    private @BrandedColorScheme int mBrandedColorScheme;
+
+    private @Nullable AppMenuButtonHelper mAppMenuButtonHelper;
 
     private boolean mHighlightingMenu;
-    private PulseDrawable mHighlightDrawable;
+    private @Nullable PulseDrawable mHighlightDrawable;
     private Drawable mOriginalBackground;
 
-    private AnimatorSet mMenuBadgeAnimatorSet;
+    private @Nullable AnimatorSet mMenuBadgeAnimatorSet;
     private boolean mIsMenuBadgeAnimationRunning;
 
-    /** A provider that notifies components when the theme color changes.*/
-    private BitmapDrawable mMenuImageButtonAnimationDrawable;
-    private BitmapDrawable mUpdateBadgeAnimationDrawable;
+    /** A provider that notifies components when the theme color changes. */
+    private @Nullable BitmapDrawable mMenuImageButtonAnimationDrawable;
 
-    private Supplier<MenuButtonState> mStateSupplier;
+    private @Nullable BitmapDrawable mUpdateBadgeAnimationDrawable;
+
+    private @Nullable Supplier<MenuButtonState> mStateSupplier;
 
     public MenuButton(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -92,9 +101,9 @@ public class MenuButton extends FrameLayout implements TintObserver {
     /**
      * Sets the update badge to visible.
      *
-     * @param visible Whether the update badge should be visible. Always sets visibility to GONE
-     *                if the update type does not require a badge.
-     * TODO(crbug.com/865801): Clean this up when MenuButton and UpdateMenuItemHelper is MVCed.
+     * @param visible Whether the update badge should be visible. Always sets visibility to GONE if
+     *     the update type does not require a badge. TODO(crbug.com/40585866): Clean this up when
+     *     MenuButton and UpdateMenuItemHelper is MVCed.
      */
     private void setUpdateBadgeVisibility(boolean visible) {
         if (mUpdateBadgeView == null) return;
@@ -110,42 +119,61 @@ public class MenuButton extends FrameLayout implements TintObserver {
         }
     }
 
+    @EnsuresNonNull({"mMenuImageButtonAnimationDrawable"})
     private void updateImageResources() {
-        mMenuImageButtonAnimationDrawable = (BitmapDrawable) mMenuImageButton.getDrawable()
-                                                    .getConstantState()
-                                                    .newDrawable()
-                                                    .mutate();
+        assumeNonNull(mMenuImageButton.getDrawable().getConstantState());
+        mMenuImageButtonAnimationDrawable =
+                (BitmapDrawable)
+                        mMenuImageButton.getDrawable().getConstantState().newDrawable().mutate();
 
-        mMenuImageButtonAnimationDrawable.setBounds(mMenuImageButton.getPaddingLeft(),
+        mMenuImageButtonAnimationDrawable.setBounds(
+                mMenuImageButton.getPaddingLeft(),
                 mMenuImageButton.getPaddingTop(),
                 mMenuImageButton.getWidth() - mMenuImageButton.getPaddingRight(),
                 mMenuImageButton.getHeight() - mMenuImageButton.getPaddingBottom());
         mMenuImageButtonAnimationDrawable.setGravity(Gravity.CENTER);
-        int color = ThemeUtils.getThemedToolbarIconTint(getContext(), mUseLightDrawables)
-                            .getDefaultColor();
+        int color =
+                ThemeUtils.getThemedToolbarIconTint(getContext(), mBrandedColorScheme)
+                        .getDefaultColor();
         mMenuImageButtonAnimationDrawable.setColorFilter(color, PorterDuff.Mode.SRC_IN);
+
+        // Not reliably set in tests.
+        if (mStateSupplier == null) return;
 
         // As an optimization, don't re-calculate drawable state for the update badge unless we
         // intend to actually show it.
         MenuButtonState buttonState = mStateSupplier.get();
         if (buttonState == null || mUpdateBadgeView == null) return;
-        @DrawableRes
-        int drawable = mUseLightDrawables ? buttonState.lightBadgeIcon : buttonState.darkBadgeIcon;
+        @DrawableRes int drawable = getUpdateBadgeIcon(buttonState, mBrandedColorScheme);
         mUpdateBadgeView.setImageDrawable(
                 ApiCompatibilityUtils.getDrawable(getResources(), drawable));
-        mUpdateBadgeAnimationDrawable = (BitmapDrawable) mUpdateBadgeView.getDrawable()
-                                                .getConstantState()
-                                                .newDrawable()
-                                                .mutate();
-        mUpdateBadgeAnimationDrawable.setBounds(mUpdateBadgeView.getPaddingLeft(),
+        assumeNonNull(mUpdateBadgeView.getDrawable().getConstantState());
+        mUpdateBadgeAnimationDrawable =
+                (BitmapDrawable)
+                        mUpdateBadgeView.getDrawable().getConstantState().newDrawable().mutate();
+        mUpdateBadgeAnimationDrawable.setBounds(
+                mUpdateBadgeView.getPaddingLeft(),
                 mUpdateBadgeView.getPaddingTop(),
                 mUpdateBadgeView.getWidth() - mUpdateBadgeView.getPaddingRight(),
                 mUpdateBadgeView.getHeight() - mUpdateBadgeView.getPaddingBottom());
         mUpdateBadgeAnimationDrawable.setGravity(Gravity.CENTER);
     }
 
+    private @DrawableRes int getUpdateBadgeIcon(
+            MenuButtonState buttonState, @BrandedColorScheme int brandedColorScheme) {
+        @DrawableRes int drawable = buttonState.adaptiveBadgeIcon;
+        if (brandedColorScheme == BrandedColorScheme.DARK_BRANDED_THEME
+                || brandedColorScheme == BrandedColorScheme.INCOGNITO) {
+            drawable = buttonState.lightBadgeIcon;
+        } else if (brandedColorScheme == BrandedColorScheme.LIGHT_BRANDED_THEME) {
+            drawable = buttonState.darkBadgeIcon;
+        }
+        return drawable;
+    }
+
     /**
      * Set the supplier of menu button state.
+     *
      * @param supplier Supplier of menu button state.
      */
     void setStateSupplier(Supplier<MenuButtonState> supplier) {
@@ -173,22 +201,23 @@ public class MenuButton extends FrameLayout implements TintObserver {
 
         mMenuBadgeAnimatorSet = createShowUpdateBadgeAnimation(mMenuImageButton, mUpdateBadgeView);
 
-        mMenuBadgeAnimatorSet.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationStart(Animator animation) {
-                mIsMenuBadgeAnimationRunning = true;
-            }
+        mMenuBadgeAnimatorSet.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationStart(Animator animation) {
+                        mIsMenuBadgeAnimationRunning = true;
+                    }
 
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                mIsMenuBadgeAnimationRunning = false;
-            }
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        mIsMenuBadgeAnimationRunning = false;
+                    }
 
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                mIsMenuBadgeAnimationRunning = false;
-            }
-        });
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        mIsMenuBadgeAnimationRunning = false;
+                    }
+                });
 
         mMenuBadgeAnimatorSet.start();
     }
@@ -214,22 +243,23 @@ public class MenuButton extends FrameLayout implements TintObserver {
 
         mMenuBadgeAnimatorSet = createHideUpdateBadgeAnimation(mMenuImageButton, mUpdateBadgeView);
 
-        mMenuBadgeAnimatorSet.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationStart(Animator animation) {
-                mIsMenuBadgeAnimationRunning = true;
-            }
+        mMenuBadgeAnimatorSet.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationStart(Animator animation) {
+                        mIsMenuBadgeAnimationRunning = true;
+                    }
 
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                mIsMenuBadgeAnimationRunning = false;
-            }
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        mIsMenuBadgeAnimationRunning = false;
+                    }
 
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                mIsMenuBadgeAnimationRunning = false;
-            }
-        });
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        mIsMenuBadgeAnimationRunning = false;
+                    }
+                });
 
         mMenuBadgeAnimatorSet.start();
     }
@@ -256,13 +286,17 @@ public class MenuButton extends FrameLayout implements TintObserver {
         if (mHighlightingMenu) {
             if (mHighlightDrawable == null) {
                 mHighlightDrawable = PulseDrawable.createCircle(getContext());
-                mHighlightDrawable.setInset(ViewCompat.getPaddingStart(mMenuImageButton),
+                mHighlightDrawable.setInset(
+                        ViewCompat.getPaddingStart(mMenuImageButton),
                         mMenuImageButton.getPaddingTop(),
                         ViewCompat.getPaddingEnd(mMenuImageButton),
                         mMenuImageButton.getPaddingBottom());
             }
-            mHighlightDrawable.setUseLightPulseColor(
-                    getContext().getResources(), mUseLightDrawables);
+            // TODO(crbug.com/40191664) This doesn't work well with website themes.
+            boolean isLightPulseColor =
+                    mBrandedColorScheme == BrandedColorScheme.DARK_BRANDED_THEME
+                            || mBrandedColorScheme == BrandedColorScheme.INCOGNITO;
+            mHighlightDrawable.setUseLightPulseColor(getContext(), isLightPulseColor);
             setBackground(mHighlightDrawable);
             mHighlightDrawable.start();
         } else {
@@ -287,15 +321,17 @@ public class MenuButton extends FrameLayout implements TintObserver {
         drawable.draw(canvas);
     }
 
-    @VisibleForTesting
-    public boolean getUseLightDrawablesForTesting() {
-        return mUseLightDrawables;
+    public @BrandedColorScheme int getBrandedColorSchemeForTesting() {
+        return mBrandedColorScheme;
     }
 
     @Override
-    public void onTintChanged(ColorStateList tintList, boolean useLight) {
-        ApiCompatibilityUtils.setImageTintList(mMenuImageButton, tintList);
-        mUseLightDrawables = useLight;
+    public void onTintChanged(
+            @Nullable ColorStateList tintList,
+            @Nullable ColorStateList activityFocusTintList,
+            @BrandedColorScheme int brandedColorScheme) {
+        ImageViewCompat.setImageTintList(mMenuImageButton, tintList);
+        mBrandedColorScheme = brandedColorScheme;
         updateImageResources();
         updateMenuButtonHighlightDrawable();
     }
@@ -306,8 +342,9 @@ public class MenuButton extends FrameLayout implements TintObserver {
             updateImageResources();
         }
 
-        return isShowingAppMenuUpdateBadge() ? mUpdateBadgeAnimationDrawable
-                                             : mMenuImageButtonAnimationDrawable;
+        return isShowingAppMenuUpdateBadge()
+                ? assumeNonNull(mUpdateBadgeAnimationDrawable)
+                : assumeNonNull(mMenuImageButtonAnimationDrawable);
     }
 
     /**
@@ -322,13 +359,13 @@ public class MenuButton extends FrameLayout implements TintObserver {
             final View menuButton, final View menuBadge) {
         // Create badge ObjectAnimators.
         ObjectAnimator badgeFadeAnimator = ObjectAnimator.ofFloat(menuBadge, View.ALPHA, 1.f);
-        badgeFadeAnimator.setInterpolator(BakedBezierInterpolator.FADE_IN_CURVE);
+        badgeFadeAnimator.setInterpolator(Interpolators.LINEAR_OUT_SLOW_IN_INTERPOLATOR);
 
         int pixelTranslation =
                 menuBadge.getResources().getDimensionPixelSize(R.dimen.menu_badge_translation_y);
         ObjectAnimator badgeTranslateYAnimator =
                 ObjectAnimator.ofFloat(menuBadge, View.TRANSLATION_Y, pixelTranslation, 0.f);
-        badgeTranslateYAnimator.setInterpolator(BakedBezierInterpolator.TRANSFORM_CURVE);
+        badgeTranslateYAnimator.setInterpolator(Interpolators.FAST_OUT_SLOW_IN_INTERPOLATOR);
 
         // Create menu button ObjectAnimator.
         ObjectAnimator menuButtonFadeAnimator = ObjectAnimator.ofFloat(menuButton, View.ALPHA, 0.f);
@@ -338,21 +375,22 @@ public class MenuButton extends FrameLayout implements TintObserver {
         AnimatorSet set = new AnimatorSet();
         set.playTogether(badgeFadeAnimator, badgeTranslateYAnimator, menuButtonFadeAnimator);
         set.setDuration(350);
-        set.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                // Make sure the menu button is visible again.
-                menuButton.setAlpha(1.f);
-            }
+        set.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        // Make sure the menu button is visible again.
+                        menuButton.setAlpha(1.f);
+                    }
 
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                // Jump to the end state if the animation is canceled.
-                menuBadge.setAlpha(1.f);
-                menuBadge.setTranslationY(0.f);
-                menuButton.setAlpha(1.f);
-            }
-        });
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        // Jump to the end state if the animation is canceled.
+                        menuBadge.setAlpha(1.f);
+                        menuBadge.setTranslationY(0.f);
+                        menuButton.setAlpha(1.f);
+                    }
+                });
 
         return set;
     }
@@ -369,34 +407,34 @@ public class MenuButton extends FrameLayout implements TintObserver {
             final View menuButton, final View menuBadge) {
         // Create badge ObjectAnimator.
         ObjectAnimator badgeFadeAnimator = ObjectAnimator.ofFloat(menuBadge, View.ALPHA, 0.f);
-        badgeFadeAnimator.setInterpolator(BakedBezierInterpolator.FADE_OUT_CURVE);
+        badgeFadeAnimator.setInterpolator(Interpolators.FAST_OUT_LINEAR_IN_INTERPOLATOR);
 
         // Create menu button ObjectAnimator.
         ObjectAnimator menuButtonFadeAnimator = ObjectAnimator.ofFloat(menuButton, View.ALPHA, 1.f);
-        menuButtonFadeAnimator.setInterpolator(BakedBezierInterpolator.FADE_IN_CURVE);
+        menuButtonFadeAnimator.setInterpolator(Interpolators.LINEAR_OUT_SLOW_IN_INTERPOLATOR);
 
         // Create AnimatorSet and listeners.
         AnimatorSet set = new AnimatorSet();
         set.playTogether(badgeFadeAnimator, menuButtonFadeAnimator);
         set.setDuration(200);
-        set.addListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                menuBadge.setVisibility(View.GONE);
-            }
+        set.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        menuBadge.setVisibility(View.GONE);
+                    }
 
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                // Jump to the end state if the animation is canceled.
-                menuButton.setAlpha(1.f);
-                menuBadge.setVisibility(View.GONE);
-            }
-        });
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        // Jump to the end state if the animation is canceled.
+                        menuButton.setAlpha(1.f);
+                        menuBadge.setVisibility(View.GONE);
+                    }
+                });
 
         return set;
     }
 
-    @VisibleForTesting
     void setOriginalBackgroundForTesting(Drawable background) {
         mOriginalBackground = background;
         setBackground(mOriginalBackground);

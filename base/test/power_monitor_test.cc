@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_monitor_source.h"
+#include "base/power_monitor/power_observer.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 
-namespace base {
-namespace test {
+namespace base::test {
 
 class PowerMonitorTestSource : public PowerMonitorSource {
  public:
@@ -18,30 +18,39 @@ class PowerMonitorTestSource : public PowerMonitorSource {
   ~PowerMonitorTestSource() override = default;
 
   // Retrieve current states.
-  PowerThermalObserver::DeviceThermalState GetCurrentThermalState() override;
-  bool IsOnBatteryPower() override;
+  PowerThermalObserver::DeviceThermalState GetCurrentThermalState()
+      const override;
+  PowerStateObserver::BatteryPowerStatus GetBatteryPowerStatus() const override;
+  bool IsPowerSaverModeEnabled() const override;
 
   // Sends asynchronous notifications to registered observers.
   void Suspend();
   void Resume();
-  void SetOnBatteryPower(bool on_battery_power);
+  void SetBatteryPowerStatus(
+      PowerStateObserver::BatteryPowerStatus battery_power_status);
 
   // Sends asynchronous notifications to registered observers and ensures they
   // are executed (i.e. RunUntilIdle()).
-  void GeneratePowerStateEvent(bool on_battery_power);
+  void GeneratePowerStateEvent(
+      PowerStateObserver::BatteryPowerStatus battery_power_status);
   void GenerateSuspendEvent();
   void GenerateResumeEvent();
   void GenerateThermalThrottlingEvent(
       PowerThermalObserver::DeviceThermalState new_thermal_state);
+  void GenerateSpeedLimitEvent(int speed_limit);
+  void GeneratePowerSaverModeEvent(bool enabled);
 
  protected:
-  bool test_on_battery_power_ = false;
+  PowerStateObserver::BatteryPowerStatus test_power_status_ =
+      PowerStateObserver::BatteryPowerStatus::kUnknown;
   PowerThermalObserver::DeviceThermalState current_thermal_state_ =
       PowerThermalObserver::DeviceThermalState::kUnknown;
+  int current_speed_limit_ = PowerThermalObserver::kSpeedLimitMax;
+  bool power_saver_mode_enabled_ = false;
 };
 
 PowerThermalObserver::DeviceThermalState
-PowerMonitorTestSource::GetCurrentThermalState() {
+PowerMonitorTestSource::GetCurrentThermalState() const {
   return current_thermal_state_;
 }
 
@@ -53,13 +62,15 @@ void PowerMonitorTestSource::Resume() {
   ProcessPowerEvent(RESUME_EVENT);
 }
 
-void PowerMonitorTestSource::SetOnBatteryPower(bool on_battery_power) {
-  test_on_battery_power_ = on_battery_power;
+void PowerMonitorTestSource::SetBatteryPowerStatus(
+    PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  test_power_status_ = battery_power_status;
   ProcessPowerEvent(POWER_STATE_EVENT);
 }
 
-void PowerMonitorTestSource::GeneratePowerStateEvent(bool on_battery_power) {
-  SetOnBatteryPower(on_battery_power);
+void PowerMonitorTestSource::GeneratePowerStateEvent(
+    PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  SetBatteryPowerStatus(battery_power_status);
   RunLoop().RunUntilIdle();
 }
 
@@ -73,8 +84,9 @@ void PowerMonitorTestSource::GenerateResumeEvent() {
   RunLoop().RunUntilIdle();
 }
 
-bool PowerMonitorTestSource::IsOnBatteryPower() {
-  return test_on_battery_power_;
+PowerStateObserver::BatteryPowerStatus
+PowerMonitorTestSource::GetBatteryPowerStatus() const {
+  return test_power_status_;
 }
 
 void PowerMonitorTestSource::GenerateThermalThrottlingEvent(
@@ -84,23 +96,41 @@ void PowerMonitorTestSource::GenerateThermalThrottlingEvent(
   RunLoop().RunUntilIdle();
 }
 
+void PowerMonitorTestSource::GenerateSpeedLimitEvent(int speed_limit) {
+  ProcessSpeedLimitEvent(speed_limit);
+  current_speed_limit_ = speed_limit;
+  RunLoop().RunUntilIdle();
+}
+
+bool PowerMonitorTestSource::IsPowerSaverModeEnabled() const {
+  return power_saver_mode_enabled_;
+}
+
+void PowerMonitorTestSource::GeneratePowerSaverModeEvent(bool enabled) {
+  power_saver_mode_enabled_ = enabled;
+  ProcessPowerSaverModeEvent(enabled);
+  RunLoop().RunUntilIdle();
+}
+
 ScopedPowerMonitorTestSource::ScopedPowerMonitorTestSource() {
   auto power_monitor_test_source = std::make_unique<PowerMonitorTestSource>();
   power_monitor_test_source_ = power_monitor_test_source.get();
-  base::PowerMonitor::Initialize(std::move(power_monitor_test_source));
+  base::PowerMonitor::GetInstance()->Initialize(
+      std::move(power_monitor_test_source));
 }
 
 ScopedPowerMonitorTestSource::~ScopedPowerMonitorTestSource() {
-  base::PowerMonitor::ShutdownForTesting();
+  base::PowerMonitor::GetInstance()->ShutdownForTesting();
 }
 
 PowerThermalObserver::DeviceThermalState
-ScopedPowerMonitorTestSource::GetCurrentThermalState() {
+ScopedPowerMonitorTestSource::GetCurrentThermalState() const {
   return power_monitor_test_source_->GetCurrentThermalState();
 }
 
-bool ScopedPowerMonitorTestSource::IsOnBatteryPower() {
-  return power_monitor_test_source_->IsOnBatteryPower();
+PowerStateObserver::BatteryPowerStatus
+ScopedPowerMonitorTestSource::GetBatteryPowerStatus() const {
+  return power_monitor_test_source_->GetBatteryPowerStatus();
 }
 
 void ScopedPowerMonitorTestSource::Suspend() {
@@ -111,8 +141,9 @@ void ScopedPowerMonitorTestSource::Resume() {
   power_monitor_test_source_->Resume();
 }
 
-void ScopedPowerMonitorTestSource::SetOnBatteryPower(bool on_battery_power) {
-  power_monitor_test_source_->SetOnBatteryPower(on_battery_power);
+void ScopedPowerMonitorTestSource::SetBatteryPowerStatus(
+    PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  power_monitor_test_source_->SetBatteryPowerStatus(battery_power_status);
 }
 
 void ScopedPowerMonitorTestSource::GenerateSuspendEvent() {
@@ -124,8 +155,8 @@ void ScopedPowerMonitorTestSource::GenerateResumeEvent() {
 }
 
 void ScopedPowerMonitorTestSource::GeneratePowerStateEvent(
-    bool on_battery_power) {
-  power_monitor_test_source_->GeneratePowerStateEvent(on_battery_power);
+    PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  power_monitor_test_source_->GeneratePowerStateEvent(battery_power_status);
 }
 
 void ScopedPowerMonitorTestSource::GenerateThermalThrottlingEvent(
@@ -133,12 +164,26 @@ void ScopedPowerMonitorTestSource::GenerateThermalThrottlingEvent(
   power_monitor_test_source_->GenerateThermalThrottlingEvent(new_thermal_state);
 }
 
+void ScopedPowerMonitorTestSource::GenerateSpeedLimitEvent(int speed_limit) {
+  power_monitor_test_source_->GenerateSpeedLimitEvent(speed_limit);
+}
+
+void ScopedPowerMonitorTestSource::GeneratePowerSaverModeEvent(bool enabled) {
+  power_monitor_test_source_->GeneratePowerSaverModeEvent(enabled);
+}
+
 PowerMonitorTestObserver::PowerMonitorTestObserver() = default;
 PowerMonitorTestObserver::~PowerMonitorTestObserver() = default;
 
-void PowerMonitorTestObserver::OnPowerStateChange(bool on_battery_power) {
-  last_power_state_ = on_battery_power;
+void PowerMonitorTestObserver::OnBatteryPowerStatusChange(
+    PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  last_power_status_ = battery_power_status;
   power_state_changes_++;
+}
+
+void PowerMonitorTestObserver::OnPowerSaverModeChange(bool enabled) {
+  last_power_saver_mode_ = enabled;
+  power_saver_mode_changes_++;
 }
 
 void PowerMonitorTestObserver::OnSuspend() {
@@ -155,5 +200,9 @@ void PowerMonitorTestObserver::OnThermalStateChange(
   last_thermal_state_ = new_state;
 }
 
-}  // namespace test
-}  // namespace base
+void PowerMonitorTestObserver::OnSpeedLimitChange(int speed_limit) {
+  speed_limit_changes_++;
+  last_speed_limit_ = speed_limit;
+}
+
+}  // namespace base::test

@@ -1,16 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_FEATURE_ENGAGEMENT_TRACKER_FACTORY_H_
 #define CHROME_BROWSER_FEATURE_ENGAGEMENT_TRACKER_FACTORY_H_
 
-#include "base/macros.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 namespace base {
 template <typename T>
-struct DefaultSingletonTraits;
+class NoDestructor;
 }  // namespace base
 
 namespace content {
@@ -22,7 +21,7 @@ class Tracker;
 
 // TrackerFactory is the main client class for interaction with
 // the feature_engagement component.
-class TrackerFactory : public BrowserContextKeyedServiceFactory {
+class TrackerFactory : public ProfileKeyedServiceFactory {
  public:
   // Returns singleton instance of TrackerFactory.
   static TrackerFactory* GetInstance();
@@ -31,19 +30,18 @@ class TrackerFactory : public BrowserContextKeyedServiceFactory {
   static feature_engagement::Tracker* GetForBrowserContext(
       content::BrowserContext* context);
 
+  TrackerFactory(const TrackerFactory&) = delete;
+  TrackerFactory& operator=(const TrackerFactory&) = delete;
+
  private:
-  friend struct base::DefaultSingletonTraits<TrackerFactory>;
+  friend base::NoDestructor<TrackerFactory>;
 
   TrackerFactory();
   ~TrackerFactory() override;
 
   // BrowserContextKeyedServiceFactory overrides:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
-  content::BrowserContext* GetBrowserContextToUse(
-      content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(TrackerFactory);
 };
 
 }  // namespace feature_engagement

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,7 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
-#include "base/strings/string_piece_forward.h"
+#include <string_view>
 
 namespace device {
 
@@ -24,11 +23,16 @@ class FakeBluetoothAdapterWinrt
           ABI::Windows::Devices::Bluetooth::IBluetoothAdapter> {
  public:
   FakeBluetoothAdapterWinrt(
-      base::StringPiece address,
+      std::string_view address,
       Microsoft::WRL::ComPtr<ABI::Windows::Devices::Radios::IRadio> radio);
+
+  FakeBluetoothAdapterWinrt(const FakeBluetoothAdapterWinrt&) = delete;
+  FakeBluetoothAdapterWinrt& operator=(const FakeBluetoothAdapterWinrt&) =
+      delete;
+
   ~FakeBluetoothAdapterWinrt() override;
 
-  static uint64_t ToRawBluetoothAddress(base::StringPiece address);
+  static uint64_t ToRawBluetoothAddress(std::string_view address);
 
   // IBluetoothAdapter:
   IFACEMETHODIMP get_DeviceId(HSTRING* value) override;
@@ -47,8 +51,6 @@ class FakeBluetoothAdapterWinrt
  private:
   uint64_t raw_address_;
   Microsoft::WRL::ComPtr<ABI::Windows::Devices::Radios::IRadio> radio_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothAdapterWinrt);
 };
 
 class FakeBluetoothAdapterStaticsWinrt
@@ -60,6 +62,12 @@ class FakeBluetoothAdapterStaticsWinrt
   explicit FakeBluetoothAdapterStaticsWinrt(
       Microsoft::WRL::ComPtr<
           ABI::Windows::Devices::Bluetooth::IBluetoothAdapter> default_adapter);
+
+  FakeBluetoothAdapterStaticsWinrt(const FakeBluetoothAdapterStaticsWinrt&) =
+      delete;
+  FakeBluetoothAdapterStaticsWinrt& operator=(
+      const FakeBluetoothAdapterStaticsWinrt&) = delete;
+
   ~FakeBluetoothAdapterStaticsWinrt() override;
 
   // IBluetoothAdapterStatics:
@@ -77,8 +85,6 @@ class FakeBluetoothAdapterStaticsWinrt
  private:
   Microsoft::WRL::ComPtr<ABI::Windows::Devices::Bluetooth::IBluetoothAdapter>
       default_adapter_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothAdapterStaticsWinrt);
 };
 
 }  // namespace device

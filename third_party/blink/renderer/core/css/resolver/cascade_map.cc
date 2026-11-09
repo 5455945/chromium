@@ -1,150 +1,249 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/resolver/cascade_map.h"
+
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/css/properties/css_property.h"
 
 namespace blink {
 
 static_assert(
-    std::is_trivially_destructible<CascadePriority>::value,
-    "~CascadePriority is never called on CascadePriority objects created here");
+    std::is_trivially_destructible<CascadeMap::CascadePriorityList>::value,
+    "Destructor is never called on CascadePriorityList objects created here");
 
-namespace {
-
-inline void AddCustom(const CSSPropertyName& name,
-                      CascadePriority priority,
-                      CascadeMap::CustomMap& map) {
-  auto result = map.insert(name, priority);
-  if (result.is_new_entry || result.stored_value->value < priority)
-    result.stored_value->value = priority;
-}
-
-inline void AddNative(CSSPropertyID id,
-                      CascadePriority priority,
-                      CascadeMap::NativeMap& map) {
-  CascadePriority* p = map.Buffer() + static_cast<size_t>(id);
-  if (!map.Bits().Has(id) || *p < priority) {
-    map.Bits().Set(id);
-    new (p) CascadePriority(priority);
-  }
-}
-
-inline CascadePriority* FindCustom(const CSSPropertyName& name,
-                                   CascadeMap::CustomMap& map) {
-  auto iter = map.find(name);
-  if (iter != map.end())
-    return &iter->value;
-  return nullptr;
-}
-
-inline CascadePriority* FindNative(const CSSPropertyName& name,
-                                   CascadeMap::NativeMap& map) {
-  size_t index = static_cast<size_t>(name.Id());
-  DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
-  return map.Bits().Has(name.Id()) ? (map.Buffer() + index) : nullptr;
-}
-
-inline CascadePriority AtCustom(const CSSPropertyName& name,
-                                const CascadeMap::CustomMap& map) {
-  return map.at(name);
-}
-
-inline CascadePriority AtNative(const CSSPropertyName& name,
-                                const CascadeMap::NativeMap& map) {
-  size_t index = static_cast<size_t>(name.Id());
-  DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
-  return map.Bits().Has(name.Id()) ? map.Buffer()[index] : CascadePriority();
-}
-
-}  // namespace
+static_assert(
+    !VectorTraits<CascadeMap::CascadePriorityList::Node>::kNeedsDestruction,
+    "Backing vector should not need destruction");
 
 CascadePriority CascadeMap::At(const CSSPropertyName& name) const {
-  if (name.IsCustomProperty())
-    return AtCustom(name, custom_properties_);
-  return AtNative(name, native_properties_);
+  if (const CascadePriority* find_result = Find(name)) {
+    return *find_result;
+  }
+  return CascadePriority();
 }
 
-CascadePriority CascadeMap::At(const CSSPropertyName& name,
-                               CascadeOrigin origin) const {
+const CascadePriority* CascadeMap::Find(const CSSPropertyName& name) const {
   if (name.IsCustomProperty()) {
-    if (origin <= CascadeOrigin::kUserAgent)
-      return CascadePriority();
-    if (origin <= CascadeOrigin::kUser)
-      return AtCustom(name, custom_user_properties_);
-    return AtCustom(name, custom_properties_);
+    auto iter = custom_properties_.find(name.ToAtomicString());
+    if (iter != custom_properties_.end()) {
+      return &iter->value.Top(backing_vector_);
+    }
+    return nullptr;
   }
-
-  if (origin <= CascadeOrigin::kUserAgent)
-    return AtNative(name, native_ua_properties_);
-  if (origin <= CascadeOrigin::kUser)
-    return AtNative(name, native_user_properties_);
-  return AtNative(name, native_properties_);
+  size_t index = static_cast<size_t>(name.Id());
+  DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
+  return native_properties_.Bits().Has(name.Id())
+             ? UNSAFE_BUFFERS(&native_properties_.Buffer()[index])
+                   .Top(backing_vector_)
+             : nullptr;
 }
 
 CascadePriority* CascadeMap::Find(const CSSPropertyName& name) {
-  if (name.IsCustomProperty())
-    return FindCustom(name, custom_properties_);
-  return FindNative(name, native_properties_);
+  const CascadeMap* const_this = this;
+  return const_cast<CascadePriority*>(const_this->Find(name));
 }
 
-CascadePriority* CascadeMap::Find(const CSSPropertyName& name,
-                                  CascadeOrigin origin) {
+const CascadePriority* CascadeMap::Find(const CSSPropertyName& name,
+                                        CascadeOrigin origin) const {
+  auto find_origin = [this](const CascadeMap::CascadePriorityList& list,
+                            CascadeOrigin origin) -> const CascadePriority* {
+    for (auto iter = list.Begin(backing_vector_);
+         iter != list.End(backing_vector_); ++iter) {
+      if (origin >= iter->GetOrigin()) {
+        return &(*iter);
+      }
+    }
+    return nullptr;
+  };
+
   if (name.IsCustomProperty()) {
-    if (origin <= CascadeOrigin::kUserAgent)
-      return nullptr;
-    if (origin <= CascadeOrigin::kUser)
-      return FindCustom(name, custom_user_properties_);
-    return FindCustom(name, custom_properties_);
+    DCHECK(custom_properties_.Contains(name.ToAtomicString()));
+    return find_origin(custom_properties_.find(name.ToAtomicString())->value,
+                       origin);
   }
 
-  if (origin <= CascadeOrigin::kUserAgent)
-    return FindNative(name, native_ua_properties_);
-  if (origin <= CascadeOrigin::kUser)
-    return FindNative(name, native_user_properties_);
-  return FindNative(name, native_properties_);
+  DCHECK(native_properties_.Bits().Has(name.Id()));
+  size_t index = static_cast<size_t>(name.Id());
+  DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
+  return find_origin(UNSAFE_BUFFERS(native_properties_.Buffer()[index]),
+                     origin);
 }
 
-void CascadeMap::Add(const CSSPropertyName& name, CascadePriority priority) {
-  CascadeOrigin origin = priority.GetOrigin();
+CascadePriority& CascadeMap::Top(CascadePriorityList& list) {
+  return list.Top(backing_vector_);
+}
+
+const CascadePriority* CascadeMap::FindRevertLayer(const CSSPropertyName& name,
+                                                   uint64_t revert_from) const {
+  auto find_revert_layer = [this](
+                               const CascadeMap::CascadePriorityList& list,
+                               uint64_t revert_from) -> const CascadePriority* {
+    for (auto iter = list.Begin(backing_vector_);
+         iter != list.End(backing_vector_); ++iter) {
+      if (iter->ForLayerComparison() < revert_from) {
+        return &(*iter);
+      }
+    }
+    return nullptr;
+  };
 
   if (name.IsCustomProperty()) {
-    DCHECK_NE(CascadeOrigin::kUserAgent, origin);
-    if (origin <= CascadeOrigin::kUser)
-      AddCustom(name, priority, custom_user_properties_);
-    AddCustom(name, priority, custom_properties_);
+    DCHECK(custom_properties_.Contains(name.ToAtomicString()));
+    return find_revert_layer(
+        custom_properties_.find(name.ToAtomicString())->value, revert_from);
+  }
+
+  DCHECK(native_properties_.Bits().Has(name.Id()));
+  size_t index = static_cast<size_t>(name.Id());
+  DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
+  return find_revert_layer(UNSAFE_BUFFERS(native_properties_.Buffer()[index]),
+                           revert_from);
+}
+
+const CascadePriority* CascadeMap::FindRevertRule(
+    const CSSPropertyName& name,
+    CascadePriority revert_from) const {
+  auto find_revert_rule =
+      [this](const CascadeMap::CascadePriorityList& list,
+             CascadePriority revert_from) -> const CascadePriority* {
+    for (auto iter = list.Begin(backing_vector_);
+         iter != list.End(backing_vector_); ++iter) {
+      if (*iter < revert_from &&
+          iter->GetRuleIndex() != revert_from.GetRuleIndex()) {
+        return &(*iter);
+      }
+    }
+    return nullptr;
+  };
+
+  if (name.IsCustomProperty()) {
+    DCHECK(custom_properties_.Contains(name.ToAtomicString()));
+    return find_revert_rule(
+        custom_properties_.find(name.ToAtomicString())->value, revert_from);
+  }
+
+  DCHECK(native_properties_.Bits().Has(name.Id()));
+  size_t index = static_cast<size_t>(name.Id());
+  DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
+  return find_revert_rule(UNSAFE_BUFFERS(native_properties_.Buffer()[index]),
+                          revert_from);
+}
+
+void CascadeMap::Add(const AtomicString& custom_property_name,
+                     CascadePriority priority) {
+  auto result =
+      custom_properties_.insert(custom_property_name, CascadePriorityList());
+  CascadePriorityList* list = &result.stored_value->value;
+  if (list->IsEmpty()) {
+    list->Push(backing_vector_, priority);
     return;
   }
+  Add(list, priority);
+}
 
-  DCHECK(!CSSProperty::Get(name.Id()).IsSurrogate());
+static CSSPropertyID UnvisitedID(CSSPropertyID id) {
+  CSSPropertyID unvisited_id =
+      CSSProperty::UnvisitedID(static_cast<unsigned>(id));
+  return unvisited_id == CSSPropertyID::kInvalid ? id : unvisited_id;
+}
 
-  CSSPropertyID id = name.Id();
-  size_t index = static_cast<size_t>(id);
+void CascadeMap::Add(CSSPropertyID id, CascadePriority priority) {
+  DCHECK_NE(id, CSSPropertyID::kInvalid);
+  DCHECK_NE(id, CSSPropertyID::kVariable);
+  DCHECK(!CSSProperty::Get(id).IsSurrogate());
+
+  size_t index = static_cast<size_t>(static_cast<unsigned>(id));
   DCHECK_LT(index, static_cast<size_t>(kNumCSSProperties));
 
-  // Set bit in high_priority_, if appropriate.
-  static_assert(static_cast<int>(kLastHighPriorityCSSProperty) < 64,
-                "CascadeMap supports at most 63 high-priority properties");
-  if (IsHighPriority(id))
-    high_priority_ |= (1ull << index);
-  has_important_ |= priority.IsImportant();
+  if (priority.IsImportant()) {
+    if (!important_set_) {
+      important_set_.reset(new CSSBitset);
+    }
+    // Mark that our winning declaration for this property is going to be
+    // an !important declaration; this declaration may not be the eventual
+    // winner, but it can only lose to other !important declarations,
+    // so we never need to unset the bit. (The winning declaration could
+    // resolve to a revert to a non-!important declaration, but the bitmap
+    // does not attempt to track resolved values, only declarations.)
+    //
+    // We use the unvisited ID because visited/unvisited colors are currently
+    // interpolated together.
+    // TODO(crbug.com/40680035): Interpolate visited colors separately.
+    important_set_->Set(UnvisitedID(id));
+  }
 
-  if (origin <= CascadeOrigin::kUserAgent)
-    AddNative(id, priority, native_ua_properties_);
-  if (origin <= CascadeOrigin::kUser)
-    AddNative(id, priority, native_user_properties_);
-  AddNative(id, priority, native_properties_);
+  CascadePriorityList* list =
+      UNSAFE_BUFFERS(&native_properties_.Buffer()[index]);
+  if (!presentation_attribute_style_lost_ && !priority.IsInlineStyle() &&
+      CSSProperty::Get(id).SupportsIncrementalStyle()) {
+    const bool is_presentation_hint =
+        priority.GetOrigin() == CascadeOrigin::kAuthorPresentationalHint;
+    if (native_properties_.Bits().Has(id) &&
+        (is_presentation_hint || presentation_attribute_properties_.Has(id))) {
+      // The top may be inline style, so check for non-inline losses below it.
+      for (auto it = list->Begin(backing_vector_);
+           it != list->End(backing_vector_); ++it) {
+        if ((is_presentation_hint && !it->IsInlineStyle() && *it >= priority) ||
+            (it->GetOrigin() == CascadeOrigin::kAuthorPresentationalHint &&
+             *it < priority)) {
+          presentation_attribute_style_lost_ = true;
+          break;
+        }
+      }
+    }
+    if (is_presentation_hint) {
+      presentation_attribute_properties_.Set(id);
+    }
+  }
+  if (!native_properties_.Bits().Has(id)) {
+    native_properties_.Bits().Set(id);
+    new (list) CascadeMap::CascadePriorityList(backing_vector_, priority);
+    return;
+  }
+  Add(list, priority);
+}
+
+void CascadeMap::Add(CascadePriorityList* list, CascadePriority priority) {
+  CascadePriority& top = list->Top(backing_vector_);
+  DCHECK(priority.ForLayerComparison() >= top.ForLayerComparison());
+  if (top >= priority) {
+    if (priority.IsInlineStyle()) {
+      inline_style_lost_ = true;
+    }
+    list->InsertKeepingSorted(backing_vector_, priority);
+    return;
+  }
+  if (top.IsInlineStyle()) {
+    // Something with a higher priority overrides something from the
+    // inline style, so we need to set the flag. But note that
+    // we _could_ have this layer be negated by “revert”; if so,
+    // this value will be a false positive. But since we only
+    // use it to disable an optimization (incremental inline
+    // style computation), false positives are fine.
+    inline_style_lost_ = true;
+  }
+  list->Push(backing_vector_, priority);
 }
 
 void CascadeMap::Reset() {
-  high_priority_ = 0;
-  has_important_ = false;
+  inline_style_lost_ = false;
+  presentation_attribute_style_lost_ = false;
+  presentation_attribute_properties_.Reset();
   native_properties_.Bits().Reset();
-  native_ua_properties_.Bits().Reset();
-  native_user_properties_.Bits().Reset();
   custom_properties_.clear();
-  custom_user_properties_.clear();
+  backing_vector_.clear();
+  important_set_.reset();
+#if DCHECK_IS_ON()
+  important_set_released_ = false;
+#endif
+}
+
+void CascadeMap::ClearAppliedFlags() {
+  for (CascadePriorityList::Node& node : backing_vector_) {
+    node.priority = CascadePriority(node.priority, /*already_applied=*/false);
+  }
 }
 
 }  // namespace blink

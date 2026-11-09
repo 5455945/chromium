@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.filter;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.offline_items_collection.OfflineItem;
 
@@ -16,6 +17,7 @@ import java.util.Set;
  * deleted (and can potentially be un-deleted).  This effectively makes a subset of items cease to
  * exist for all down-stream consumers.
  */
+@NullMarked
 public class DeleteUndoOfflineItemFilter extends OfflineItemFilter {
     private final Set<ContentId> mPendingDeletions = new HashSet<>();
 

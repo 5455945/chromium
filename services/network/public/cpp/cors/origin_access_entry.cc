@@ -1,8 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/cors/origin_access_entry.h"
+
+#include <optional>
+#include <string_view>
 
 #include "base/strings/string_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
@@ -10,13 +13,24 @@
 #include "url/origin.h"
 #include "url/url_util.h"
 
-namespace network {
-
-namespace cors {
+namespace network::cors {
 
 namespace {
 
-bool IsSubdomainOfHost(const std::string& subdomain, const std::string& host) {
+bool IsPublicSuffixSubdomainOfHost(const std::string& subdomain,
+                                   const std::string& host) {
+  std::optional<std::string_view> public_suffix =
+      net::registry_controlled_domains::PermissiveGetHostRegistry(
+          subdomain,
+          net::registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
+          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+  return public_suffix.has_value() && !public_suffix->empty() &&
+         IsSubdomainOfHost(*public_suffix, host);
+}
+
+}  // namespace
+
+bool IsSubdomainOfHost(std::string_view subdomain, std::string_view host) {
   if (subdomain.length() <= host.length())
     return false;
 
@@ -28,8 +42,6 @@ bool IsSubdomainOfHost(const std::string& subdomain, const std::string& host) {
 
   return true;
 }
-
-}  // namespace
 
 OriginAccessEntry::OriginAccessEntry(
     const std::string& protocol,
@@ -53,17 +65,20 @@ OriginAccessEntry::OriginAccessEntry(
   // Call sites in Blink passes some things that aren't technically hosts like
   // "*.foo", so use the permissive variant.
   size_t public_suffix_length =
-      net::registry_controlled_domains::PermissiveGetHostRegistryLength(
+      net::registry_controlled_domains::PermissiveGetHostRegistry(
           host_, net::registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
-          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-  if (public_suffix_length == 0)
+          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)
+          .transform(&std::string_view::size)
+          .value_or(0);
+  if (public_suffix_length == 0) {
     public_suffix_length = host_.length();
+  }
 
   if (host_.length() <= public_suffix_length + 1) {
     host_is_public_suffix_ = true;
   } else if (domain_match_mode_ ==
-                 mojom::CorsDomainMatchMode::kAllowRegistrableDomains &&
-             public_suffix_length) {
+             mojom::CorsDomainMatchMode::kAllowRegistrableDomains) {
+    DCHECK(public_suffix_length);
     // The "2" in the next line is 1 for the '.', plus a 1-char minimum label
     // length.
     const size_t dot =
@@ -133,6 +148,10 @@ OriginAccessEntry::MatchResult OriginAccessEntry::MatchesDomain(
   if (host_is_public_suffix_)
     return kMatchesOriginButIsPublicSuffix;
 
+  // Determine whether host_ matches domain's public suffix.
+  if (IsPublicSuffixSubdomainOfHost(domain, host_))
+    return kMatchesOriginButIsPublicSuffix;
+
   return kMatchesOrigin;
 }
 
@@ -142,6 +161,4 @@ OriginAccessEntry::CreateCorsOriginPattern() const {
       protocol_, host_, port_, domain_match_mode_, port_match_mode_, priority_);
 }
 
-}  // namespace cors
-
-}  // namespace network
+}  // namespace network::cors

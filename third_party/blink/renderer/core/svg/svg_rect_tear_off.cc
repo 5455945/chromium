@@ -30,7 +30,8 @@
 
 #include "third_party/blink/renderer/core/svg/svg_rect_tear_off.h"
 
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -45,7 +46,7 @@ void SVGRectTearOff::setX(float f, ExceptionState& exception_state) {
     return;
   }
   Target()->SetX(f);
-  CommitChange();
+  CommitChange(SVGPropertyCommitReason::kUpdated);
 }
 
 void SVGRectTearOff::setY(float f, ExceptionState& exception_state) {
@@ -54,7 +55,7 @@ void SVGRectTearOff::setY(float f, ExceptionState& exception_state) {
     return;
   }
   Target()->SetY(f);
-  CommitChange();
+  CommitChange(SVGPropertyCommitReason::kUpdated);
 }
 
 void SVGRectTearOff::setWidth(float f, ExceptionState& exception_state) {
@@ -63,7 +64,7 @@ void SVGRectTearOff::setWidth(float f, ExceptionState& exception_state) {
     return;
   }
   Target()->SetWidth(f);
-  CommitChange();
+  CommitChange(SVGPropertyCommitReason::kUpdated);
 }
 
 void SVGRectTearOff::setHeight(float f, ExceptionState& exception_state) {
@@ -72,12 +73,20 @@ void SVGRectTearOff::setHeight(float f, ExceptionState& exception_state) {
     return;
   }
   Target()->SetHeight(f);
-  CommitChange();
+  CommitChange(SVGPropertyCommitReason::kUpdated);
 }
 
-SVGRectTearOff* SVGRectTearOff::CreateDetached(const FloatRect& rect) {
+SVGRectTearOff* SVGRectTearOff::CreateDetached(const gfx::RectF& r) {
+  return CreateDetached(r.x(), r.y(), r.width(), r.height());
+}
+
+SVGRectTearOff* SVGRectTearOff::CreateDetached(float x,
+                                               float y,
+                                               float width,
+                                               float height) {
   return MakeGarbageCollected<SVGRectTearOff>(
-      MakeGarbageCollected<SVGRect>(rect), nullptr, kPropertyIsNotAnimVal);
+      MakeGarbageCollected<SVGRect>(x, y, width, height), nullptr,
+      kPropertyIsNotAnimVal);
 }
 
 }  // namespace blink

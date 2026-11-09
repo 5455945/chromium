@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,21 +11,33 @@
 #include <memory>
 #include <vector>
 
-#include "base/message_loop/message_pump_libevent.h"
-#include "base/synchronization/waitable_event.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/message_loop/message_pump_epoll.h"
 #include "base/threading/thread.h"
+#include "base/threading/thread_checker.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/ozone/platform/wayland/test/global_object.h"
 #include "ui/ozone/platform/wayland/test/mock_wp_presentation.h"
+#include "ui/ozone/platform/wayland/test/mock_xdg_activation_v1.h"
+#include "ui/ozone/platform/wayland/test/mock_xdg_foreign_v2.h"
 #include "ui/ozone/platform/wayland/test/mock_xdg_shell.h"
+#include "ui/ozone/platform/wayland/test/mock_xdg_toplevel_icon.h"
 #include "ui/ozone/platform/wayland/test/mock_zwp_linux_dmabuf.h"
+#include "ui/ozone/platform/wayland/test/test_alpha_compositing.h"
 #include "ui/ozone/platform/wayland/test/test_compositor.h"
 #include "ui/ozone/platform/wayland/test/test_data_device_manager.h"
+#include "ui/ozone/platform/wayland/test/test_fractional_scale.h"
 #include "ui/ozone/platform/wayland/test/test_output.h"
+#include "ui/ozone/platform/wayland/test/test_overlay_prioritizer.h"
 #include "ui/ozone/platform/wayland/test/test_seat.h"
 #include "ui/ozone/platform/wayland/test/test_subcompositor.h"
 #include "ui/ozone/platform/wayland/test/test_viewporter.h"
-#include "ui/ozone/platform/wayland/test/test_zwp_linux_explicit_synchronization.h"
+#include "ui/ozone/platform/wayland/test/test_wp_color_manager.h"
+#include "ui/ozone/platform/wayland/test/test_wp_linux_drm_syncobj.h"
+#include "ui/ozone/platform/wayland/test/test_wp_pointer_gestures.h"
 #include "ui/ozone/platform/wayland/test/test_zwp_text_input_manager.h"
+#include "ui/ozone/platform/wayland/test/test_zxdg_output_manager.h"
 
 struct wl_client;
 struct wl_display;
@@ -39,21 +51,47 @@ struct DisplayDeleter {
 };
 
 // Server configuration related enums and structs.
-enum class ShellVersion { kV6, kStable };
 enum class PrimarySelectionProtocol { kNone, kGtk, kZwp };
+enum class ShouldUseLinuxDrmSyncobjProtocol { kNone, kUse };
+// Text input protocol type.
+enum class ZwpTextInputType { kV1, kV3 };
 
 struct ServerConfig {
-  ShellVersion shell_version = ShellVersion::kStable;
+  ZwpTextInputType text_input_type = ZwpTextInputType::kV1;
+  TestCompositor::Version compositor_version = TestCompositor::Version::kV4;
   PrimarySelectionProtocol primary_selection_protocol =
       PrimarySelectionProtocol::kNone;
+  ShouldUseLinuxDrmSyncobjProtocol use_linux_drm_syncobj =
+      ShouldUseLinuxDrmSyncobjProtocol::kNone;
+  bool supports_viewporter_surface_scaling = true;
+  // Whether to advertise the wp_color_manager_v1 global.
+  bool supports_color_management = false;
 };
 
+class TestWaylandServerThread;
+
+// A custom listener that holds wl_listener and the pointer to a test_server.
+struct TestServerListener {
+ public:
+  explicit TestServerListener(TestWaylandServerThread* server)
+      : test_server(server) {}
+  wl_listener listener;
+  const raw_ptr<TestWaylandServerThread> test_server;
+};
+
+class TestSelectionDeviceManager;
+
 class TestWaylandServerThread : public base::Thread,
-                                base::MessagePumpLibevent::FdWatcher {
+                                base::MessagePumpEpoll::FdWatcher {
  public:
   class OutputDelegate;
 
   TestWaylandServerThread();
+  explicit TestWaylandServerThread(const ServerConfig& config);
+
+  TestWaylandServerThread(const TestWaylandServerThread&) = delete;
+  TestWaylandServerThread& operator=(const TestWaylandServerThread&) = delete;
+
   ~TestWaylandServerThread() override;
 
   // Starts the test Wayland server thread. If this succeeds, the WAYLAND_SOCKET
@@ -61,27 +99,31 @@ class TestWaylandServerThread : public base::Thread,
   // descriptor that a client can connect to. The caller is responsible for
   // ensuring that this file descriptor gets closed (for example, by calling
   // wl_display_connect).
-  // Instantiates an xdg_shell of version |shell_version|; versions 6 and 7
-  // (stable) are supported.
-  bool Start(const ServerConfig& config);
+  bool Start();
 
-  // Pauses the server thread when it becomes idle.
-  void Pause();
+  // Runs 'callback' or 'closure' on the server thread; blocks until the
+  // callable is run and all pending Wayland requests and events are delivered.
+  void RunAndWait(base::OnceCallback<void(TestWaylandServerThread*)> callback);
+  void RunAndWait(base::OnceClosure closure);
 
-  // Resumes the server thread after flushing client connections.
-  void Resume();
+  // Posts a 'callback' or 'closure' to the server thread.
+  void Post(base::OnceCallback<void(TestWaylandServerThread*)> callback);
+  void Post(base::OnceClosure closure);
 
-  // Initializes and returns WpPresentation.
-  MockWpPresentation* EnsureWpPresentation();
+  // Returns WpPresentation. If it hasn't been initialized yet, initializes that
+  // first and then returns.
+  MockWpPresentation* EnsureAndGetWpPresentation();
 
   template <typename T>
   T* GetObject(uint32_t id) {
+    // All the protocol calls must be made on the correct thread.
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     wl_resource* resource = wl_client_get_object(client_, id);
     return resource ? T::FromResource(resource) : nullptr;
   }
 
-  TestOutput* CreateAndInitializeOutput() {
-    auto output = std::make_unique<TestOutput>();
+  TestOutput* CreateAndInitializeOutput(TestOutputMetrics metrics = {}) {
+    auto output = std::make_unique<TestOutput>(std::move(metrics));
     output->Initialize(display());
 
     TestOutput* output_ptr = output.get();
@@ -96,67 +138,106 @@ class TestWaylandServerThread : public base::Thread,
   TestZwpTextInputManagerV1* text_input_manager_v1() {
     return &zwp_text_input_manager_v1_;
   }
-  TestZwpLinuxExplicitSynchronizationV1*
-  zwp_linux_explicit_synchronization_v1() {
-    return &zwp_linux_explicit_synchronization_v1_;
+  TestZwpTextInputManagerV3* text_input_manager_v3() {
+    return &zwp_text_input_manager_v3_;
+  }
+
+  TestWpLinuxDrmSyncobjManagerV1* wp_linux_drm_syncobj_manager_v1() {
+    return &wp_linux_drm_syncobj_manager_v1_;
   }
   MockZwpLinuxDmabufV1* zwp_linux_dmabuf_v1() { return &zwp_linux_dmabuf_v1_; }
+  TestWpColorManager* wp_color_manager() { return &wp_color_manager_; }
 
   wl_display* display() const { return display_.get(); }
 
-  void set_output_delegate(OutputDelegate* delegate) {
-    output_delegate_ = delegate;
+  TestSelectionDeviceManager* primary_selection_device_manager() {
+    return primary_selection_device_manager_.get();
   }
 
+  TestWpPointerGestures& wp_pointer_gestures() { return wp_pointer_gestures_; }
+
+  MockXdgActivationV1* xdg_activation_v1() { return &xdg_activation_v1_; }
+
+  MockXdgExporterV2* xdg_exporter_v2() { return &xdg_exporter_v2_; }
+
+  MockXdgToplevelIconManagerV1* xdg_toplevel_icon_manager_v1() {
+    return &xdg_toplevel_icon_manager_v1_;
+  }
+
+  wl_client* client() const { return client_; }
+
+  void OnClientDestroyed(wl_client* client);
+
+  // Returns next available serial. Must be called on the server thread.
+  uint32_t GetNextSerial() const;
+  // Returns next available timestamp. Suitable for events sent from the server
+  // the client. Must be called on the server thread.
+  uint32_t GetNextTime();
+
  private:
-  void SetupOutputs();
-  void DoPause();
+  bool SetupPrimarySelectionManager(PrimarySelectionProtocol protocol);
+  bool SetupLinuxDrmSyncobjProtocol(ShouldUseLinuxDrmSyncobjProtocol usage);
 
-  std::unique_ptr<base::MessagePump> CreateMessagePump();
+  std::unique_ptr<base::MessagePump> CreateMessagePump(
+      base::OnceClosure closure);
 
-  // base::MessagePumpLibevent::FdWatcher
+  // Executes the closure and flushes the server event queue. Must be run on
+  // server's thread.
+  void DoRun(base::OnceClosure closure);
+
+  // base::MessagePumpEpoll::FdWatcher
   void OnFileCanReadWithoutBlocking(int fd) override;
   void OnFileCanWriteWithoutBlocking(int fd) override;
 
-  std::unique_ptr<wl_display, DisplayDeleter> display_;
-  wl_client* client_ = nullptr;
-  wl_event_loop* event_loop_ = nullptr;
+  // wl_protocol_logger. Whenever there is a call to a protocol from the server
+  // side, the logger is invoked. This is handy as we can use this to verify all
+  // the protocol calls happen only when the server thread is not running. This
+  // helps to avoid thread races as the client runs on a different from the
+  // server tread.
+  static void ProtocolLogger(void* user_data,
+                             enum wl_protocol_logger_type direction,
+                             const struct wl_protocol_logger_message* message);
 
-  base::WaitableEvent pause_event_;
-  base::WaitableEvent resume_event_;
+  std::unique_ptr<wl_display, DisplayDeleter> display_;
+  TestServerListener client_destroy_listener_;
+  raw_ptr<wl_client> client_ = nullptr;
+  raw_ptr<wl_event_loop> event_loop_ = nullptr;
+  raw_ptr<wl_protocol_logger> protocol_logger_ = nullptr;
+
+  ServerConfig config_;
 
   // Represent Wayland global objects
   TestCompositor compositor_;
+
   TestSubCompositor sub_compositor_;
   TestViewporter viewporter_;
+  TestFractionalScaleManager fractional_scale_manager_;
+  TestAlphaCompositing alpha_compositing_;
   TestDataDeviceManager data_device_manager_;
   TestOutput output_;
+  TestOverlayPrioritizer overlay_prioritizer_;
   TestSeat seat_;
+  TestZXdgOutputManager zxdg_output_manager_;
   MockXdgShell xdg_shell_;
-  MockZxdgShellV6 zxdg_shell_v6_;
   TestZwpTextInputManagerV1 zwp_text_input_manager_v1_;
-  TestZwpLinuxExplicitSynchronizationV1 zwp_linux_explicit_synchronization_v1_;
+  TestZwpTextInputManagerV3 zwp_text_input_manager_v3_;
+  TestWpLinuxDrmSyncobjManagerV1 wp_linux_drm_syncobj_manager_v1_;
   MockZwpLinuxDmabufV1 zwp_linux_dmabuf_v1_;
   MockWpPresentation wp_presentation_;
+  TestWpPointerGestures wp_pointer_gestures_;
+  MockXdgActivationV1 xdg_activation_v1_;
+  MockXdgExporterV2 xdg_exporter_v2_;
+  MockXdgToplevelIconManagerV1 xdg_toplevel_icon_manager_v1_;
+  TestWpColorManager wp_color_manager_;
+  std::unique_ptr<TestSelectionDeviceManager> primary_selection_device_manager_;
 
   std::vector<std::unique_ptr<GlobalObject>> globals_;
 
-  base::MessagePumpLibevent::FdWatchController controller_;
+  base::MessagePumpEpoll::FdWatchController controller_;
 
-  OutputDelegate* output_delegate_ = nullptr;
+  THREAD_CHECKER(thread_checker_);
 
-  DISALLOW_COPY_AND_ASSIGN(TestWaylandServerThread);
-};
-
-class TestWaylandServerThread::OutputDelegate {
- public:
-  // Tests may implement this such that it emulates different display/output
-  // test scenarios. For example, multi-screen, lazy configuration, arbitrary
-  // ordering of the outputs metadata events, etc.
-  virtual void SetupOutputs(TestOutput* primary_output) = 0;
-
- protected:
-  virtual ~OutputDelegate() = default;
+  base::WeakPtrFactory<TestWaylandServerThread> weak_ptr_factory_{this};
 };
 
 }  // namespace wl

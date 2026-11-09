@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,12 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/auto_reset.h"
-#include "base/callback.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/events/events_export.h"
 #include "ui/events/platform/platform_event_source.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
 
@@ -23,7 +22,7 @@ class Point;
 }
 
 namespace x11 {
-class XScopedEventSelector;
+class ScopedEventSelector;
 }
 
 namespace ui {
@@ -35,6 +34,10 @@ class X11HotplugEventHandler;
 class X11EventWatcher {
  public:
   X11EventWatcher() = default;
+
+  X11EventWatcher(const X11EventWatcher&) = delete;
+  X11EventWatcher& operator=(const X11EventWatcher&) = delete;
+
   virtual ~X11EventWatcher() = default;
 
   // Starts watching for X Events and feeding them into X11EventSource to be
@@ -43,9 +46,6 @@ class X11EventWatcher {
 
   // Stops watching for X Events.
   virtual void StopWatching() = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(X11EventWatcher);
 };
 
 // PlatformEventSource implementation for X11, both Ozone and non-Ozone.
@@ -56,6 +56,10 @@ class EVENTS_EXPORT X11EventSource : public PlatformEventSource,
                                      x11::EventObserver {
  public:
   explicit X11EventSource(x11::Connection* connection);
+
+  X11EventSource(const X11EventSource&) = delete;
+  X11EventSource& operator=(const X11EventSource&) = delete;
+
   ~X11EventSource() override;
 
   static bool HasInstance();
@@ -68,13 +72,21 @@ class EVENTS_EXPORT X11EventSource : public PlatformEventSource,
   // current event does not have a timestamp.
   x11::Time GetTimestamp();
 
-  // Returns the root pointer location only if there is an event being
-  // dispatched that contains that information.
-  absl::optional<gfx::Point> GetRootCursorLocationFromCurrentEvent() const;
-
   // Explicitly asks the X11 server for the current timestamp, and updates
   // |last_seen_server_time_| with this value.
   x11::Time GetCurrentServerTime();
+
+  // The cursor location of the most recently processed input event, or nullopt
+  // if no input events have been processed yet.
+  const std::optional<gfx::Point>& last_cursor_location() const {
+    return last_cursor_location_;
+  }
+
+  void set_last_cursor_location(const gfx::Point& last_cursor_location) {
+    last_cursor_location_ = last_cursor_location;
+  }
+
+  void ClearLastCursorLocation();
 
  private:
   // x11::EventObserver:
@@ -86,17 +98,17 @@ class EVENTS_EXPORT X11EventSource : public PlatformEventSource,
   std::unique_ptr<X11EventWatcher> watcher_;
 
   // The connection to the X11 server used to receive the events.
-  x11::Connection* connection_;
+  raw_ptr<x11::Connection> connection_;
+
+  std::optional<gfx::Point> last_cursor_location_;
 
   // State necessary for UpdateLastSeenServerTime
   bool dummy_initialized_;
   x11::Window dummy_window_;
   x11::Atom dummy_atom_;
-  std::unique_ptr<x11::XScopedEventSelector> dummy_window_events_;
+  x11::ScopedEventSelector dummy_window_events_;
 
   std::unique_ptr<X11HotplugEventHandler> hotplug_event_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(X11EventSource);
 };
 
 }  // namespace ui

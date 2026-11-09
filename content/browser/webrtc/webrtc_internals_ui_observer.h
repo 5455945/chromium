@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ class WebRTCInternalsUIObserver {
  public:
   virtual ~WebRTCInternalsUIObserver() {}
 
-  // This is called on the browser IO thread. |event_data| can be NULL if there
+  // This is called on the browser UI thread. |event_data| can be NULL if there
   // are no arguments.
   virtual void OnUpdate(const std::string& event_name,
                         const base::Value* event_data) = 0;

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -20,8 +20,6 @@ class MediaStreamTrack;
 class MediaStreamTrackProcessorInit;
 class ReadableStream;
 class ScriptState;
-class UnderlyingSinkBase;
-class WritableStream;
 
 class MODULES_EXPORT MediaStreamTrackProcessor : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
@@ -46,30 +44,27 @@ class MODULES_EXPORT MediaStreamTrackProcessor : public ScriptWrappable {
 
   // MediaStreamTrackProcessor interface
   ReadableStream* readable(ScriptState* script_state);
-  WritableStream* writableControl(ScriptState* script_state);
+  uint64_t totalFrames() const;
+  uint64_t discardedFrames() const;
 
   // Closes |audio_underlying_source_| and |video_underlying_source_| if they
   // exist.
   void CloseSources();
 
-  MediaStreamTrack* InputTrack() { return input_track_; }
+  MediaStreamTrack* InputTrack() { return input_track_.Get(); }
 
   void Trace(Visitor* visitor) const override;
 
  private:
   void CreateVideoSourceStream(ScriptState* script_state);
   void CreateAudioSourceStream(ScriptState* script_state);
-  void CreateVideoControlStream(ScriptState* script_state);
-  void CreateAudioControlStream(ScriptState* script_state);
 
   class UnderlyingSourceCloser;
 
   Member<MediaStreamTrack> input_track_;
   Member<MediaStreamVideoTrackUnderlyingSource> video_underlying_source_;
   Member<MediaStreamAudioTrackUnderlyingSource> audio_underlying_source_;
-  Member<UnderlyingSinkBase> signal_underlying_sink_;
   Member<ReadableStream> source_stream_;
-  Member<WritableStream> control_stream_;
   Member<UnderlyingSourceCloser> source_closer_;
   uint16_t buffer_size_;
 };

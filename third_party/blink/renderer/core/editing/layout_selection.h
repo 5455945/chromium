@@ -22,25 +22,26 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_LAYOUT_SELECTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_LAYOUT_SELECTION_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+
+namespace gfx {
+class Rect;
+}
 
 namespace blink {
 
-class InlineTextBox;
-class IntRect;
+class FrameSelection;
+class InlineCursor;
+class InlineCursorPosition;
 class LayoutObject;
 class LayoutText;
-class NGInlineCursor;
-class NGInlineCursorPosition;
-struct NGTextOffset;
-class FrameSelection;
-struct LayoutSelectionStatus;
-struct LayoutTextSelectionStatus;
 class SelectionPaintRange;
 enum class SelectionState;
+struct LayoutSelectionStatus;
+struct LayoutTextSelectionStatus;
+struct TextOffsetRange;
 
 class LayoutSelection final : public GarbageCollected<LayoutSelection> {
  public:
@@ -49,27 +50,19 @@ class LayoutSelection final : public GarbageCollected<LayoutSelection> {
   void SetHasPendingSelection();
   void Commit();
 
-  IntRect AbsoluteSelectionBounds();
-  void InvalidatePaintForSelection();
+  gfx::Rect AbsoluteSelectionBounds();
+  void InvalidateStyleAndPaintForSelection();
 
   LayoutTextSelectionStatus ComputeSelectionStatus(const LayoutText&) const;
-  LayoutSelectionStatus ComputeSelectionStatus(const NGInlineCursor&) const;
+  LayoutSelectionStatus ComputeSelectionStatus(const InlineCursor&) const;
 
   // Compute the layout selection state relative to the current item of the
-  // given NGInlineCursor. E.g. a state of kStart means that the selection
+  // given InlineCursor. E.g. a state of kStart means that the selection
   // starts within the position (and ends elsewhere), where kStartAndEnd means
   // the selection both starts and ends within the position. This information is
   // used at paint time to determine the edges of the layout selection.
-  SelectionState ComputeSelectionStateForCursor(
-      const NGInlineCursorPosition&) const;
-
-  // Compute the layout selection state relative to the InlineTextBox.
-  // E.g. a state of kStart means that the selection starts within the line
-  // (and ends elsewhere), where kStartAndEnd means the selection both starts
-  // and ends within the line. This information is used at paint time to
-  // determine the edges of the layout selection.
-  SelectionState ComputeSelectionStateForInlineTextBox(
-      const InlineTextBox&) const;
+  SelectionState ComputePaintingSelectionStateForCursor(
+      const InlineCursorPosition&) const;
 
   static bool IsSelected(const LayoutObject&);
 
@@ -78,11 +71,11 @@ class LayoutSelection final : public GarbageCollected<LayoutSelection> {
   void Trace(Visitor*) const;
 
  private:
-  LayoutSelectionStatus ComputeSelectionStatus(const NGInlineCursor&,
-                                               const NGTextOffset&) const;
+  LayoutSelectionStatus ComputeSelectionStatus(const InlineCursor&,
+                                               const TextOffsetRange&) const;
   SelectionState ComputeSelectionStateFromOffsets(SelectionState state,
-                                                  unsigned start_offset,
-                                                  unsigned end_offset) const;
+                                                  wtf_size_t start_offset,
+                                                  wtf_size_t end_offset) const;
 
   void AssertIsValid() const;
 

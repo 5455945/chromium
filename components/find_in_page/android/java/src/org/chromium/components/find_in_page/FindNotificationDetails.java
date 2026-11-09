@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,13 @@ package org.chromium.components.find_in_page;
 
 import android.graphics.Rect;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * Java equivalent to the C++ FindNotificationDetails class
  * defined in components/find_in_page/find_notification_details.h
  */
+@NullMarked
 public class FindNotificationDetails {
     /** How many matches were found. */
     public final int numberOfMatches;
@@ -29,8 +32,11 @@ public class FindNotificationDetails {
     /** Whether this is the last Find Result update for the request. */
     public final boolean finalUpdate;
 
-    public FindNotificationDetails(int numberOfMatches, Rect rendererSelectionRect,
-            int activeMatchOrdinal, boolean finalUpdate) {
+    public FindNotificationDetails(
+            int numberOfMatches,
+            Rect rendererSelectionRect,
+            int activeMatchOrdinal,
+            boolean finalUpdate) {
         this.numberOfMatches = numberOfMatches;
         this.rendererSelectionRect = rendererSelectionRect;
         this.activeMatchOrdinal = activeMatchOrdinal;

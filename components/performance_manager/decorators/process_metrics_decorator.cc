@@ -1,35 +1,37 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/performance_manager/public/decorators/process_metrics_decorator.h"
 
 #include <memory>
+#include <utility>
 
-#include "base/feature_list.h"
+#include "base/check.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "build/build_config.h"
+#include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/graph_impl.h"
-#include "components/performance_manager/graph/node_attached_data_impl.h"
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/graph/system_node_impl.h"
-#include "components/performance_manager/public/features.h"
-#include "services/resource_coordinator/public/cpp/memory_instrumentation/global_memory_dump.h"
-#include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
+#include "components/performance_manager/graph/worker_node_impl.h"
+#include "components/performance_manager/public/graph/graph.h"
+#include "components/performance_manager/public/graph/node_data_describer_registry.h"
+#include "components/performance_manager/public/graph/node_data_describer_util.h"
+#include "components/performance_manager/public/resource_attribution/frame_context.h"
+#include "components/performance_manager/public/resource_attribution/process_context.h"
+#include "components/performance_manager/public/resource_attribution/worker_context.h"
 
 namespace performance_manager {
 
 namespace {
 
-// The default process metrics refresh interval.
-constexpr base::TimeDelta kDefaultRefreshTimerPeriod =
-    base::TimeDelta::FromMinutes(2);
-
-#if !defined(OS_ANDROID)
-// The fast process metrics refresh interval. Used in certain situations, see
-// the comment in ProcessMetricsDecorator::StartTimer for more details.
-constexpr base::TimeDelta kFastRefreshTimerPeriod =
-    base::TimeDelta::FromSeconds(20);
-#endif
+// The process metrics refresh interval.
+constexpr base::TimeDelta kMetricsRefreshInterval = base::Minutes(2);
 
 }  // namespace
 
@@ -37,6 +39,50 @@ ProcessMetricsDecorator::ProcessMetricsDecorator() {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 ProcessMetricsDecorator::~ProcessMetricsDecorator() = default;
+
+class ProcessMetricsDecorator::NodeMetricsUpdater {
+ public:
+  explicit NodeMetricsUpdater(
+      const resource_attribution::MemorySummaryResult& memory_summary)
+      : memory_summary_(memory_summary) {}
+
+  void operator()(const resource_attribution::ProcessContext& context) const {
+    if (!context.GetProcessNode()) {
+      return;
+    }
+    auto* process_node = ProcessNodeImpl::FromNode(context.GetProcessNode());
+    process_node->set_private_footprint(memory_summary_->private_footprint);
+    process_node->set_resident_set(memory_summary_->resident_set_size);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+    process_node->set_private_swap(memory_summary_->private_swap);
+#endif
+  }
+
+  void operator()(const resource_attribution::FrameContext& context) const {
+    if (!context.GetFrameNode()) {
+      return;
+    }
+    auto* frame_node = FrameNodeImpl::FromNode(context.GetFrameNode());
+    frame_node->SetPrivateFootprintEstimate(memory_summary_->private_footprint);
+    frame_node->SetResidentSetEstimate(memory_summary_->resident_set_size);
+  }
+
+  void operator()(const resource_attribution::WorkerContext& context) const {
+    if (!context.GetWorkerNode()) {
+      return;
+    }
+    auto* worker_node = WorkerNodeImpl::FromNode(context.GetWorkerNode());
+    worker_node->SetPrivateFootprintEstimate(
+        memory_summary_->private_footprint);
+    worker_node->SetResidentSetEstimate(memory_summary_->resident_set_size);
+  }
+
+  void operator()(const auto& context) const { NOTREACHED(); }
+
+ private:
+  const raw_ref<const resource_attribution::MemorySummaryResult>
+      memory_summary_;
+};
 
 // Concrete implementation of a
 // ProcessMetricsDecorator::ScopedMetricsInterestToken
@@ -51,14 +97,14 @@ class ProcessMetricsDecorator::ScopedMetricsInterestTokenImpl
   ~ScopedMetricsInterestTokenImpl() override;
 
  protected:
-  Graph* graph_;
+  raw_ptr<Graph> graph_;
 };
 
 ProcessMetricsDecorator::ScopedMetricsInterestTokenImpl::
     ScopedMetricsInterestTokenImpl(Graph* graph)
     : graph_(graph) {
   auto* decorator = graph->GetRegisteredObjectAs<ProcessMetricsDecorator>();
-  DCHECK(decorator);
+  CHECK(decorator);
   decorator->OnMetricsInterestTokenCreated();
 }
 
@@ -66,8 +112,9 @@ ProcessMetricsDecorator::ScopedMetricsInterestTokenImpl::
     ~ScopedMetricsInterestTokenImpl() {
   auto* decorator = graph_->GetRegisteredObjectAs<ProcessMetricsDecorator>();
   // This could be destroyed after removing the decorator from the graph.
-  if (decorator)
+  if (decorator) {
     decorator->OnMetricsInterestTokenReleased();
+  }
 }
 
 // static
@@ -78,109 +125,95 @@ ProcessMetricsDecorator::RegisterInterestForProcessMetrics(Graph* graph) {
 
 void ProcessMetricsDecorator::OnPassedToGraph(Graph* graph) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  graph_ = graph;
-  graph_->RegisterObject(this);
+  graph->GetNodeDataDescriberRegistry()->RegisterDescriber(
+      this, "ProcessMetricsDecorator");
 }
 
 void ProcessMetricsDecorator::OnTakenFromGraph(Graph* graph) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  StopTimer();
-  graph_->UnregisterObject(this);
-  graph_ = nullptr;
+  graph->GetNodeDataDescriberRegistry()->UnregisterDescriber(this);
+}
+
+base::DictValue ProcessMetricsDecorator::DescribeSystemNodeData(
+    const SystemNode*) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::DictValue ret;
+  ret.Set("interest_token_count",
+          base::NumberToString(metrics_interest_token_count_));
+  return ret;
+}
+
+bool ProcessMetricsDecorator::IsTimerRunningForTesting() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return scoped_query_.has_value();
+}
+
+base::TimeDelta ProcessMetricsDecorator::GetTimerDelayForTesting() const {
+  return kMetricsRefreshInterval;
 }
 
 void ProcessMetricsDecorator::OnMetricsInterestTokenCreated() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   ++metrics_interest_token_count_;
-  if (metrics_interest_token_count_ == 1)
-    StartTimer();
+  if (metrics_interest_token_count_ == 1) {
+    CHECK(!scoped_query_.has_value());
+    scoped_query_ =
+        resource_attribution::QueryBuilder()
+            .AddAllContextsOfType<resource_attribution::ProcessContext>()
+            .AddAllContextsOfType<resource_attribution::FrameContext>()
+            .AddAllContextsOfType<resource_attribution::WorkerContext>()
+            .AddResourceType(resource_attribution::ResourceType::kMemorySummary)
+            .CreateScopedQuery();
+    query_observer_.Observe(base::OptionalToPtr(scoped_query_));
+    // Take the first metrics measurement immediately.
+    scoped_query_->QueryOnce();
+    scoped_query_->Start(kMetricsRefreshInterval,
+                         /* observe_other_queries= */ true);
+  }
 }
 
 void ProcessMetricsDecorator::OnMetricsInterestTokenReleased() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_GT(metrics_interest_token_count_, 0U);
+  CHECK(scoped_query_.has_value());
+  CHECK_GT(metrics_interest_token_count_, 0U);
   --metrics_interest_token_count_;
-  if (metrics_interest_token_count_ == 0)
-    StopTimer();
-}
-
-void ProcessMetricsDecorator::StartTimer() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::TimeDelta refresh_period = kDefaultRefreshTimerPeriod;
-
-#if !defined(OS_ANDROID)
-  // Bump the refresh frequency when urgent discarding is done from the graph or
-  // when discarding tabs on high PMF as these features relies on relatively
-  // fresh data.
-  // TODO(sebmarchand): Measure the performance impact of this.
-  if (base::FeatureList::IsEnabled(
-          features::kUrgentDiscardingFromPerformanceManager) ||
-      base::FeatureList::IsEnabled(features::kHighPMFDiscardPolicy)) {
-    refresh_period = kFastRefreshTimerPeriod;
-  }
-#endif
-
-  refresh_timer_.Start(
-      FROM_HERE, refresh_period,
-      base::BindRepeating(&ProcessMetricsDecorator::RefreshMetrics,
-                          base::Unretained(this)));
-}
-
-void ProcessMetricsDecorator::StopTimer() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  refresh_timer_.Stop();
-}
-
-void ProcessMetricsDecorator::RefreshMetrics() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  RequestProcessesMemoryMetrics(base::BindOnce(
-      &ProcessMetricsDecorator::DidGetMemoryUsage, weak_factory_.GetWeakPtr()));
-}
-
-void ProcessMetricsDecorator::RequestProcessesMemoryMetrics(
-    memory_instrumentation::MemoryInstrumentation::RequestGlobalDumpCallback
-        callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // TODO(sebmarchand): Use the synchronous calls once they are available.
-  auto* mem_instrumentation =
-      memory_instrumentation::MemoryInstrumentation::GetInstance();
-  // The memory instrumentation service is not available in unit tests unless
-  // explicitly created.
-  if (mem_instrumentation) {
-    mem_instrumentation->RequestPrivateMemoryFootprint(base::kNullProcessId,
-                                                       std::move(callback));
+  if (metrics_interest_token_count_ == 0) {
+    query_observer_.Reset();
+    scoped_query_.reset();
   }
 }
 
-void ProcessMetricsDecorator::DidGetMemoryUsage(
-    bool success,
-    std::unique_ptr<memory_instrumentation::GlobalMemoryDump> process_dumps) {
+void ProcessMetricsDecorator::OnResourceUsageUpdated(
+    const resource_attribution::QueryResultMap& results) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!success)
+  CHECK_GT(metrics_interest_token_count_, 0U);
+  if (results.empty()) {
     return;
-
-  auto* graph_impl = GraphImpl::FromGraph(graph_);
-
-  // Refresh the process nodes with the data contained in |process_dumps|.
-  // Processes for which we don't receive any data will retain the previously
-  // set value.
-  // TODO(sebmarchand): Check if we should set the data to 0 instead, or add a
-  // timestamp to the data.
-  for (const auto& process_dump_iter : process_dumps->process_dumps()) {
-    // Check if there's a process node associated with this PID.
-    auto* node = graph_impl->GetProcessNodeByPid(process_dump_iter.pid());
-    if (!node)
-      continue;
-
-    node->set_private_footprint_kb(
-        process_dump_iter.os_dump().private_footprint_kb);
-    node->set_resident_set_kb(process_dump_iter.os_dump().resident_set_kb);
   }
-
-  GraphImpl::FromGraph(graph_)
+  for (const auto& [resource_context, result] : results) {
+    std::visit(NodeMetricsUpdater(result.memory_summary_result.value()),
+               resource_context);
+  }
+  GraphImpl::FromGraph(GetOwningGraph())
       ->GetSystemNodeImpl()
       ->OnProcessMemoryMetricsAvailable();
-  refresh_timer_.Reset();
+}
+
+void ProcessMetricsDecorator::RequestImmediateMetrics(
+    base::OnceClosure on_metrics_received) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Callers should have an interest token before calling
+  // RequestImmediateMetrics().
+  CHECK_GT(metrics_interest_token_count_, 0U);
+  resource_attribution::QueryBuilder()
+      .AddAllContextsOfType<resource_attribution::ProcessContext>()
+      .AddAllContextsOfType<resource_attribution::FrameContext>()
+      .AddAllContextsOfType<resource_attribution::WorkerContext>()
+      .AddResourceType(resource_attribution::ResourceType::kMemorySummary)
+      .QueryOnce(
+          base::BindOnce(&ProcessMetricsDecorator::OnResourceUsageUpdated,
+                         weak_factory_.GetWeakPtr())
+              .Then(std::move(on_metrics_received)));
 }
 
 }  // namespace performance_manager

@@ -1,13 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_NOTIFICATIONS_EXTENSION_NOTIFICATION_HANDLER_H_
 #define CHROME_BROWSER_EXTENSIONS_API_NOTIFICATIONS_EXTENSION_NOTIFICATION_HANDLER_H_
 
-#include "base/macros.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/values.h"
 #include "chrome/browser/notifications/notification_handler.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/event_args.h"
+#include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -18,11 +24,16 @@ namespace extensions {
 class ExtensionNotificationHandler : public NotificationHandler {
  public:
   ExtensionNotificationHandler();
+
+  ExtensionNotificationHandler(const ExtensionNotificationHandler&) = delete;
+  ExtensionNotificationHandler& operator=(const ExtensionNotificationHandler&) =
+      delete;
+
   ~ExtensionNotificationHandler() override;
 
   // Extracts an extension ID from the URL for an app window, or an empty string
   // if the URL is not a valid app window URL.
-  static std::string GetExtensionId(const GURL& url);
+  static ExtensionId GetExtensionId(const GURL& url);
 
   // NotificationHandler implementation.
   void OnClose(Profile* profile,
@@ -33,21 +44,23 @@ class ExtensionNotificationHandler : public NotificationHandler {
   void OnClick(Profile* profile,
                const GURL& origin,
                const std::string& notification_id,
-               const absl::optional<int>& action_index,
-               const absl::optional<std::u16string>& reply,
+               const std::optional<int>& action_index,
+               const std::optional<std::u16string>& reply,
                base::OnceClosure completed_closure) override;
-  void DisableNotifications(Profile* profile, const GURL& origin) override;
+  void DisableNotifications(Profile* profile,
+                            const GURL& origin,
+                            const std::optional<std::string>& notification_id,
+                            const std::optional<bool>& is_suspicious) override;
+  void OpenSettings(Profile* profile, const GURL& origin) override;
 
  protected:
   // Overriden in unit tests.
   virtual void SendEvent(Profile* profile,
-                         const std::string& extension_id,
+                         const ExtensionId& extension_id,
                          events::HistogramValue histogram_value,
                          const std::string& name,
                          EventRouter::UserGestureState user_gesture,
-                         std::unique_ptr<base::ListValue> args);
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionNotificationHandler);
+                         scoped_refptr<const EventArgs> args);
 };
 
 }  // namespace extensions

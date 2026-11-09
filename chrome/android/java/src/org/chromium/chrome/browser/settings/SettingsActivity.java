@@ -1,113 +1,209 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.settings;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.settings.SettingsIntentUtil.EXTRA_SHOW_FRAGMENT;
+import static org.chromium.chrome.browser.settings.SettingsIntentUtil.EXTRA_SHOW_FRAGMENT_ARGUMENTS;
+import static org.chromium.chrome.browser.settings.SettingsIntentUtil.EXTRA_SHOW_FRAGMENT_STANDALONE;
+
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.content.res.Resources;
-import android.graphics.BitmapFactory;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.widget.Toolbar;
 import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentTransaction;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
-import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
 
 import com.google.android.material.appbar.AppBarLayout;
 
-import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.base.IntentUtils;
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.Log;
+import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ApplicationLifetime;
 import org.chromium.chrome.browser.ChromeBaseAppCompatActivity;
-import org.chromium.chrome.browser.LaunchIntentDispatcher;
-import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragmentBasic;
-import org.chromium.chrome.browser.feedback.FragmentHelpAndFeedbackLauncher;
-import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
-import org.chromium.chrome.browser.flags.CachedFeatureFlags;
+import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchControllerFactory;
+import org.chromium.chrome.browser.back_press.BackPressHelper;
+import org.chromium.chrome.browser.back_press.BackPressHelper.OnKeyDownHandler;
+import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
+import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
+import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.image_descriptions.ImageDescriptionsController;
-import org.chromium.chrome.browser.image_descriptions.ImageDescriptionsSettings;
+import org.chromium.chrome.browser.glic.GlicHelper;
+import org.chromium.chrome.browser.init.ActivityLifecycleDispatcherImpl;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
-import org.chromium.chrome.browser.language.settings.LanguageSettings;
-import org.chromium.chrome.browser.locale.LocaleManager;
-import org.chromium.chrome.browser.password_check.PasswordCheckComponentUiFactory;
-import org.chromium.chrome.browser.password_check.PasswordCheckEditFragmentView;
-import org.chromium.chrome.browser.password_check.PasswordCheckFactory;
-import org.chromium.chrome.browser.password_check.PasswordCheckFragmentView;
-import org.chromium.chrome.browser.password_entry_edit.CredentialEditUiFactory;
-import org.chromium.chrome.browser.password_entry_edit.CredentialEntryFragmentViewBase;
-import org.chromium.chrome.browser.privacy_sandbox.FlocSettingsFragment;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxSettingsFragment;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.profiles.ProfileManagerUtils;
-import org.chromium.chrome.browser.safety_check.SafetyCheckCoordinator;
-import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
-import org.chromium.chrome.browser.safety_check.SafetyCheckUpdatesDelegateImpl;
-import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
-import org.chromium.chrome.browser.signin.SyncConsentActivityLauncherImpl;
-import org.chromium.chrome.browser.site_settings.ChromeSiteSettingsDelegate;
+import org.chromium.chrome.browser.settings.search.SettingsSearchCoordinator;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderCoordinator;
+import org.chromium.chrome.browser.ui.device_lock.MissingDeviceLockLauncher;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarManageable;
-import org.chromium.components.browser_ui.settings.FragmentSettingsLauncher;
-import org.chromium.components.browser_ui.settings.SettingsLauncher;
-import org.chromium.components.browser_ui.site_settings.SiteSettingsPreferenceFragment;
+import org.chromium.chrome.browser.util.DefaultBrowserInfo;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFactory;
+import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
+import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
+import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager.AppHeaderObserver;
+import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
+import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
+import org.chromium.components.browser_ui.settings.PreferenceUpdateObserver;
+import org.chromium.components.browser_ui.settings.SettingsFragment;
+import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.util.ToolbarUtils;
+import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
+import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
+import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
+import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.UiUtils;
+import org.chromium.ui.base.ActivityWindowAndroid;
+import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.IntentRequestTracker;
+import org.chromium.ui.base.UiAndroidFeatureList;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.display.DisplayUtil;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
+
+import java.lang.ref.WeakReference;
+import java.util.List;
 
 /**
  * The Chrome settings activity.
  *
- * This activity displays a single {@link Fragment}, typically a {@link PreferenceFragmentCompat}.
- * As the user navigates through settings, a separate Settings activity is created for each
- * screen. Thus each fragment may freely modify its activity's action bar or title. This mimics the
- * behavior of {@link android.preference.PreferenceActivity}.
+ * <p>This activity displays a single {@link Fragment}, typically a {@link
+ * PreferenceFragmentCompat}. There are two types of fragments shown in the activity:
+ * <i>embeddable</i> fragments that implement {@link EmbeddableSettingsPage}, and <i>standalone</i>
+ * fragments that do not implement it. Embeddable fragments may be embedded into a column in the
+ * multi-column settings UI, if it is enabled and the window is large enough. Standalone fragments,
+ * in contrast, are always shown as occupying the whole window.
+ *
+ * <p>Embeddable fragments must not modify the activity UI outside of the fragment, e.g. the
+ * activity title and the action bar, because the same activity instance is shared among multiple
+ * fragments as the user navigates through the settings. Instead, fragments should implement methods
+ * in {@link EmbeddableSettingsPage} to ask the activity to update its UI appropriately.
+ *
+ * <p>Standalone fragments may modify the activity UI as needed. A standalone fragment is always
+ * launched with a fresh settings activity instance that is not shared with other fragments.
  */
+@NullMarked
 public class SettingsActivity extends ChromeBaseAppCompatActivity
-        implements PreferenceFragmentCompat.OnPreferenceStartFragmentCallback, SnackbarManageable {
-    /**
-     * Preference fragments may implement this interface to intercept "Back" button taps in this
-     * activity.
-     */
-    public interface OnBackPressedListener {
-        /**
-         * Called when the user taps "Back".
-         * @return Whether "Back" button was handled by the fragment. If this method returns false,
-         *         the activity should handle the event itself.
-         */
-        boolean onBackPressed();
-    }
+        implements PreferenceFragmentCompat.OnPreferenceStartFragmentCallback,
+                SnackbarManageable,
+                AppHeaderObserver,
+                PreferenceUpdateObserver,
+                SettingsMenuHelper.Delegate,
+                SettingsContainmentHelper.Delegate,
+                MultiColumnSettings.Observer,
+                SettingsActivityInterface,
+                SettingsHost {
+    private static final String TAG = "SettingsActivity";
 
-    static final String EXTRA_SHOW_FRAGMENT = "show_fragment";
-    static final String EXTRA_SHOW_FRAGMENT_ARGUMENTS = "show_fragment_args";
+    // Key used to store activity start time in the Bundle to have it survive activity re-creation.
+    private static final String KEY_START_TIME = "start_time";
 
     /** The current instance of SettingsActivity in the resumed state, if any. */
-    private static SettingsActivity sResumedInstance;
+    private static @Nullable SettingsActivity sResumedInstance;
 
     /** Whether this activity has been created for the first time but not yet resumed. */
     private boolean mIsNewlyCreated;
 
     private static boolean sActivityNotExportedChecked;
 
-    /** An instance of settings launcher that can be injected into a fragment */
-    private SettingsLauncher mSettingsLauncher = new SettingsLauncherImpl();
+    private boolean mStandalone;
+    private Profile mProfile;
+    private ScrimManager mScrimManager;
+    private ManagedBottomSheetController mManagedBottomSheetController;
+    private final OneshotSupplierImpl<WindowAndroid> mWindowAndroidSupplier =
+            new OneshotSupplierImpl<>();
 
-    private SnackbarManager mSnackbarManager;
+    private final OneshotSupplierImpl<BottomSheetController> mBottomSheetControllerSupplier =
+            new OneshotSupplierImpl<>();
+
+    private final OneshotSupplierImpl<SnackbarManager> mSnackbarManagerSupplier =
+            new OneshotSupplierImpl<>();
+
+    // Number of popback requested after the fragment manager saved its state.
+    private int mPendingPopBackCount;
+
+    // An intent that was received in onNewIntent and would cause fragment transactions, but is
+    // pending for processing in the next onResume call. See onNewIntent for why we can not directly
+    // process those intents in onNewIntent.
+    private @Nullable Intent mPendingNewIntent;
+
+    // Used to avoid finishing the same fragment multiple times. If the referent is identical to the
+    // result of getMainFragment(), it should be considered already finished. Otherwise it should be
+    // ignored.
+    private @Nullable WeakReference<Fragment> mFinishedMainFragment;
+
+    // This is only used on automotive.
+    private @Nullable MissingDeviceLockLauncher mMissingDeviceLockLauncher;
+
+    // Null in standalone mode.
+    private @Nullable MultiColumnSettings mMultiColumnSettings;
+
+    // Used to manage and show new intents;
+    private IntentRequestTracker mIntentRequestTracker;
+
+    private static final String MAIN_FRAGMENT_TAG = "settings_main";
+    public static final String MULTI_COLUMN_FRAGMENT_TAG = "multi_column_settings";
+
+    private SettingsContainmentHelper mContainmentHelper =
+            new SettingsContainmentHelper(this, this);
+
+    private @Nullable SettingsSearchCoordinator mSearchCoordinator;
+
+    private @Nullable OnKeyDownHandler mMainFragmentKeyDownHandler;
+    private @Nullable OnKeyDownHandler mBottomSheetKeyDownHandler;
+
+    private @Nullable MultiColumnTitleUpdater mMultiColumnTitleUpdater;
+
+    // Used to record the Settings activity usage duration in ms. This is recorded at |onDestroy|
+    // of the activity for the main settings only when user actually quits the Settings, not for
+    // activity destruction & re-creation due to configuration change or OS.
+    private long mStartTime;
+
+    // Whether the start time is saved for the restoration after re-creation. These transient
+    // destroy events won't record the duration if this is true.
+    private boolean mStartTimeSaved;
+
+    private @Nullable AppHeaderCoordinator mAppHeaderCoordinator;
+
+    private @Nullable List<SettingsIndexData.Entry> mInitialBreadcrumbPath;
 
     @SuppressLint("InlinedApi")
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        mStandalone = getIntent().getBooleanExtra(EXTRA_SHOW_FRAGMENT_STANDALONE, false);
+
         setTitle(R.string.settings);
         ensureActivityNotExported();
 
@@ -116,47 +212,357 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
         // killed, or for tests. This should happen before super.onCreate() because it might
         // recreate a fragment, and a fragment might depend on the native library.
         ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+        mProfile = ProfileManager.getLastUsedRegularProfile();
+
+        // Initialize the singleton for the Settings UI context to prevent NullPointerException
+        // when checking isEnabledAndDeviceCompatible() during search index generation.
+        // This is needed because SettingsActivity can be launched independently (from Android
+        // notifications or launcher shortcuts) without a preceding ChromeTabbedActivity to
+        // initialize the tablet state in AuxiliarySearchControllerFactory.
+        AuxiliarySearchControllerFactory.getInstance()
+                .setIsTablet(DeviceFormFactor.isNonMultiDisplayContextOnTablet(this));
+
+        if (!mStandalone) {
+            if (savedInstanceState == null) {
+                mInitialBreadcrumbPath =
+                        SettingsBreadcrumbUtil.getInitialBreadcrumbPath(
+                                /* context= */ this,
+                                assertNonNull(mProfile),
+                                getIntent().getStringExtra(EXTRA_SHOW_FRAGMENT),
+                                getIntent().getBundleExtra(EXTRA_SHOW_FRAGMENT_ARGUMENTS));
+            } else {
+                mInitialBreadcrumbPath =
+                        SettingsBreadcrumbUtil.getInitialBreadcrumbPath(savedInstanceState);
+            }
+        }
+
+        // Register fragment lifecycle callbacks before calling super.onCreate() because it may
+        // create fragments if there is a saved instance state.
+        FragmentManager fragmentManager = getSupportFragmentManager();
+        fragmentManager.registerFragmentLifecycleCallbacks(
+                new FragmentDependencyProvider(
+                        this,
+                        /* shownInTab= */ false,
+                        mProfile,
+                        mWindowAndroidSupplier,
+                        getActivityResultTracker(),
+                        mSnackbarManagerSupplier,
+                        mBottomSheetControllerSupplier,
+                        getModalDialogManagerSupplier(),
+                        () -> mSearchCoordinator),
+                /* recursive= */ true);
+        fragmentManager.registerFragmentLifecycleCallbacks(
+                new WideDisplayPaddingApplier(
+                        this, this::isTwoColumnSettingsVisible, MAIN_FRAGMENT_TAG),
+                /* recursive= */ true);
+        fragmentManager.registerFragmentLifecycleCallbacks(
+                new SettingsMetricsReporter(MAIN_FRAGMENT_TAG), /* recursive= */ true);
+
+        mContainmentHelper.registerCallbacks(fragmentManager);
 
         super.onCreate(savedInstanceState);
-
-        if (!CachedFeatureFlags.isEnabled(ChromeFeatureList.THEME_REFACTOR_ANDROID)) {
-            setTheme(R.style.ThemeRefactorOverlay_Disabled_Settings);
-        }
 
         setContentView(R.layout.settings_activity);
 
         Toolbar actionBar = findViewById(R.id.action_bar);
         setSupportActionBar(actionBar);
-        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-
-        if (CachedFeatureFlags.isEnabled(ChromeFeatureList.THEME_REFACTOR_ANDROID)) {
-            // Setting the outline provider to null to prevent the elevation shadow being drawn.
-            // This is needed because we can't remove the shadow in xml pre-P.
-            AppBarLayout appBarLayout = findViewById(R.id.app_bar_layout);
-            appBarLayout.setOutlineProvider(null);
-        }
+        assumeNonNull(getSupportActionBar()).setDisplayHomeAsUpEnabled(true);
 
         mIsNewlyCreated = savedInstanceState == null;
-
-        String initialFragment = getIntent().getStringExtra(EXTRA_SHOW_FRAGMENT);
-        Bundle initialArguments = getIntent().getBundleExtra(EXTRA_SHOW_FRAGMENT_ARGUMENTS);
 
         // If savedInstanceState is non-null, then the activity is being
         // recreated and super.onCreate() has already recreated the fragment.
         if (savedInstanceState == null) {
-            if (initialFragment == null) initialFragment = MainSettings.class.getName();
-
-            Fragment fragment = Fragment.instantiate(this, initialFragment, initialArguments);
-            getSupportFragmentManager().beginTransaction().replace(R.id.content, fragment).commit();
+            // In standalone mode, we shouldn't have multi column.
+            if (!mStandalone) {
+                // Do NOT set MAIN_FRAGMENT_TAG in this case, so page-title updating,
+                // setting the padding depending on window size, and metrics are temporarily
+                // disabled for development.
+                // TODO(crbug.com/404074032): Implement them back.
+                var transaction = fragmentManager.beginTransaction();
+                mMultiColumnSettings = new MultiColumnSettings();
+                mMultiColumnSettings.setPendingFragmentIntent(getIntent());
+                transaction.replace(
+                        R.id.settings_content, mMultiColumnSettings, MULTI_COLUMN_FRAGMENT_TAG);
+                transaction.commit();
+            } else {
+                Fragment fragment = instantiateMainFragment(getIntent());
+                var transaction = fragmentManager.beginTransaction();
+                transaction.replace(R.id.settings_content, fragment, MAIN_FRAGMENT_TAG);
+                setFragmentAnimation(transaction, fragment);
+                transaction.commit();
+            }
+        } else {
+            mMultiColumnSettings =
+                    (MultiColumnSettings)
+                            fragmentManager.findFragmentByTag(MULTI_COLUMN_FRAGMENT_TAG);
         }
 
-        Resources res = getResources();
+        if (!mStandalone) {
+            assert mMultiColumnSettings != null;
+            mMultiColumnSettings.addObserver(this);
+            createMultiColumnTitleUpdater(savedInstanceState);
+            createSearchCoordinator(savedInstanceState);
+        }
 
-        setTaskDescription(new ActivityManager.TaskDescription(res.getString(R.string.app_name),
-                BitmapFactory.decodeResource(res, R.mipmap.app_icon),
-                ApiCompatibilityUtils.getColor(res, R.color.default_primary_color)));
+        maybeCreateAppHeaderCoordinator(savedInstanceState);
 
         setStatusBarColor();
+        initBottomSheet();
+
+        mSnackbarManagerSupplier.set(
+                new SnackbarManager(this, getContentView(), null, null, getModalDialogManager()));
+
+        mIntentRequestTracker = IntentRequestTracker.createFromActivity(this);
+        mWindowAndroidSupplier.set(
+                new ActivityWindowAndroid(
+                        this,
+                        /* listenToActivityState= */ true,
+                        mIntentRequestTracker,
+                        getInsetObserver(),
+                        /* occlusionTrackingAllowed= */ true));
+
+        int backgroundColor = SemanticColorUtils.getSettingsBackgroundColor(this);
+        findViewById(R.id.settings_content).setBackgroundColor(backgroundColor);
+        findViewById(R.id.app_bar_layout).setBackgroundColor(backgroundColor);
+        AppBarLayout appBarLayout = findViewById(R.id.app_bar_layout);
+        appBarLayout.setElevation(0);
+        appBarLayout.setStateListAnimator(null);
+
+        mStartTime = 0;
+        if (savedInstanceState != null) {
+            long startTime = savedInstanceState.getLong(KEY_START_TIME, 0);
+            if (startTime > 0) mStartTime = startTime;
+        } else if (isForMainSettings()) {
+            mStartTime = SystemClock.elapsedRealtime();
+            RecordHistogram.recordBooleanHistogram("Settings.Opened", true);
+        }
+    }
+
+    private void maybeCreateAppHeaderCoordinator(@Nullable Bundle savedInstanceState) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            return;
+        }
+
+        var delegate =
+                new BrowserStateBrowserControlsVisibilityDelegate(
+                        ObservableSuppliers.alwaysFalse());
+        mAppHeaderCoordinator =
+                new AppHeaderCoordinator(
+                        this,
+                        getWindow().getDecorView().getRootView(),
+                        delegate,
+                        getInsetObserver(),
+                        new ActivityLifecycleDispatcherImpl(this),
+                        savedInstanceState,
+                        /* persistentState= */ null,
+                        assumeNonNull(getEdgeToEdgeManager()).getEdgeToEdgeStateProvider(),
+                        /* windowIdSupplier= */ null);
+        mAppHeaderCoordinator.addObserver(this);
+        if (mAppHeaderCoordinator.getAppHeaderState() != null) {
+            setCaptionBarHeight(mAppHeaderCoordinator.getAppHeaderState().getAppHeaderHeight());
+        }
+    }
+
+    /** AppHeaderObserver implementation */
+    @Override
+    @SuppressWarnings("NewApi") // AppHeaderCoordinator
+    public void onAppHeaderStateChanged(AppHeaderState newState) {
+        setCaptionBarHeight(newState.getAppHeaderHeight());
+        assumeNonNull(mAppHeaderCoordinator)
+                .onBackgroundColorChanged(SemanticColorUtils.getSettingsBackgroundColor(this));
+    }
+
+    private void setCaptionBarHeight(int height) {
+        var appBar = (ViewGroup) findViewById(R.id.app_bar_layout);
+        appBar.setPadding(
+                appBar.getPaddingLeft(),
+                height,
+                appBar.getPaddingRight(),
+                appBar.getPaddingBottom());
+    }
+
+    private boolean isForMainSettings() {
+        return getIntent().getStringExtra(EXTRA_SHOW_FRAGMENT) == null;
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (mMultiColumnSettings != null) {
+            mContainmentHelper.updateContainmentForAttachedFragments(getSupportFragmentManager());
+        }
+        if (mSearchCoordinator != null) mSearchCoordinator.onConfigurationChanged(newConfig);
+    }
+
+    @Override
+    public void onHeaderLayoutUpdated() {
+        mContainmentHelper.updateContainmentForAttachedFragments(getSupportFragmentManager());
+    }
+
+    @Override
+    protected boolean applyOverrides(Context baseContext, Configuration overrideConfig) {
+        boolean result = super.applyOverrides(baseContext, overrideConfig);
+        if (!UiAndroidFeatureList.sRefactorMinWidthContextOverride.isEnabled()) {
+
+            // We override the smallestScreenWidthDp here to ensure mIsTablet which relies on
+            // smallestScreenWidthDp is set based on display size instead of window size.
+            overrideConfig.smallestScreenWidthDp =
+                    DisplayUtil.getCurrentSmallestScreenWidth(baseContext);
+            return true;
+        }
+        return result;
+    }
+
+    @RequiresNonNull("mMultiColumnSettings")
+    private void createMultiColumnTitleUpdater(@Nullable Bundle savedInstanceState) {
+        getSupportFragmentManager()
+                .registerFragmentLifecycleCallbacks(
+                        new FragmentManager.FragmentLifecycleCallbacks() {
+
+                            @Override
+                            public void onFragmentViewCreated(
+                                    FragmentManager fm,
+                                    Fragment f,
+                                    View v,
+                                    @Nullable Bundle savedFragmentState) {
+                                assert mMultiColumnSettings != null;
+
+                                // Pass the Activity's bundle, as the title updater state is
+                                // tied to the activity lifecycle.
+                                createMultiColumTitleUpdaterInternal(
+                                        savedInstanceState,
+                                        v.findViewById(R.id.settings_title_in_detailed_pane));
+                                fm.unregisterFragmentLifecycleCallbacks(this);
+                            }
+                        },
+                        false);
+    }
+
+    @RequiresNonNull("mMultiColumnSettings")
+    private void createMultiColumTitleUpdaterInternal(
+            @Nullable Bundle savedInstanceState, LinearLayout titleContainer) {
+        mMultiColumnTitleUpdater =
+                new MultiColumnTitleUpdater(
+                        savedInstanceState,
+                        mMultiColumnSettings,
+                        /* shownInTab= */ false,
+                        titleContainer,
+                        this::setTitle,
+                        this::onTitleTapped,
+                        mInitialBreadcrumbPath,
+                        /* onSearchVisibilityChanged= */ null);
+        mMultiColumnSettings.addObserver(mMultiColumnTitleUpdater);
+    }
+
+    @RequiresNonNull("mMultiColumnSettings")
+    private void createSearchCoordinator(@Nullable Bundle savedState) {
+        Toolbar actionBar = findViewById(R.id.action_bar);
+        mSearchCoordinator =
+                new SettingsSearchCoordinator(
+                        this,
+                        actionBar,
+                        this::isTwoColumnSettingsVisible,
+                        mMultiColumnSettings,
+                        mContainmentHelper,
+                        mProfile,
+                        this::updateFirstVisibleTitle,
+                        getModalDialogManagerSupplier(),
+                        /* shownInTab= */ false);
+        if (savedState != null) {
+            // Title text view gets temporarily hidden while restoring the
+            // search UI to avoid flickering. See https://crbug.com/482952320.
+            assumeNonNull(ToolbarUtils.getTitleTextView(actionBar)).setVisibility(View.INVISIBLE);
+        }
+        mMultiColumnSettings.setOnCreateViewRunnable(
+                () -> assumeNonNull(mSearchCoordinator).initializeSearchUi(savedState));
+        mMultiColumnSettings.addObserver(mSearchCoordinator);
+    }
+
+    private void updateFirstVisibleTitle(int index) {
+        assumeNonNull(mMultiColumnTitleUpdater).setFirstVisibleTitleIndex(index);
+    }
+
+    private void onTitleTapped(@Nullable String entryName) {
+        if (mSearchCoordinator != null) mSearchCoordinator.onTitleTapped(entryName);
+    }
+
+    @Override
+    public void onPreferencesUpdated(PreferenceFragmentCompat fragment) {
+        mContainmentHelper.postUpdateContainmentOnLayout(fragment);
+    }
+
+    /** Returns true if two-column mode is visible. */
+    @Override
+    public boolean isTwoColumnSettingsVisible() {
+        return mMultiColumnSettings != null && mMultiColumnSettings.isTwoColumn();
+    }
+
+    @Override
+    public void applyThemeOverlays() {
+        applySingleThemeOverlay(R.style.ThemeOverlay_Chromium_Settings_Containment);
+        super.applyThemeOverlays();
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+
+        if (mStandalone) {
+            // A standalone activity attempted to launch a non-standalone activity, but the intent
+            // was delivered to the standalone activity itself because of FLAG_ACTIVITY_SINGLE_TOP.
+            // Resend the intent without the flag to start a new activity. Bouncing activities has
+            // some cost in terms of time to launch the final activity, but this is fairly a rare
+            // flow anyway.
+            intent.removeFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(intent);
+            return;
+        }
+
+        // Android system briefly pauses an activity before calling its onNewIntent, then resume it
+        // soon. We defer making a fragment transaction to onResume because doing it here breaks
+        // fragment animations as all pending animations are cleared when an activity is resumed.
+        assert mPendingNewIntent == null;
+        if (mMultiColumnSettings != null) {
+            mMultiColumnSettings.setPendingFragmentIntent(intent);
+        } else {
+            mPendingNewIntent = intent;
+        }
+    }
+
+    private Fragment instantiateMainFragment(Intent intent) {
+        String fragmentName = intent.getStringExtra(EXTRA_SHOW_FRAGMENT);
+        if (fragmentName == null) {
+            fragmentName = MainSettings.class.getName();
+        }
+        Bundle arguments = intent.getBundleExtra(EXTRA_SHOW_FRAGMENT_ARGUMENTS);
+
+        return Fragment.instantiate(this, fragmentName, arguments);
+    }
+
+    /** Set up the bottom sheet for this activity. */
+    private void initBottomSheet() {
+        ViewGroup sheetContainer = findViewById(R.id.sheet_container);
+        // TODO: Observe scrim changes if status bar needs to change color with the scrim.
+        mScrimManager =
+                new ScrimManager(
+                        this,
+                        (ViewGroup) sheetContainer.getParent(),
+                        ScrimClient.SETTINGS_ACTIVITY);
+
+        mManagedBottomSheetController =
+                BottomSheetControllerFactory.createBottomSheetController(
+                        () -> mScrimManager,
+                        getWindow(),
+                        KeyboardVisibilityDelegate.getInstance(),
+                        () -> sheetContainer,
+                        () -> 0,
+                        /* desktopWindowStateManager= */ null,
+                        getInsetObserver(),
+                        /* enableLargeFormFactorUi= */ ChromeFeatureList
+                                .sBottomSheetOnDesktopWindowing
+                                .isEnabled());
+        mBottomSheetControllerSupplier.set(mManagedBottomSheetController);
     }
 
     // OnPreferenceStartFragmentCallback:
@@ -164,37 +570,44 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
     @Override
     public boolean onPreferenceStartFragment(
             PreferenceFragmentCompat caller, Preference preference) {
-        startFragment(preference.getFragment(), preference.getExtras());
+        startSettings(preference.getFragment(), preference.getExtras());
         return true;
     }
 
     /**
-     * Starts a new Settings activity showing the desired fragment.
+     * Starts a new settings showing the desired fragment.
      *
      * @param fragmentClass The Class of the fragment to show.
      * @param args Arguments to pass to Fragment.instantiate(), or null.
      */
-    public void startFragment(String fragmentClass, Bundle args) {
-        Intent intent = new Intent(Intent.ACTION_MAIN);
-        intent.setClass(this, getClass());
-        intent.putExtra(EXTRA_SHOW_FRAGMENT, fragmentClass);
-        intent.putExtra(EXTRA_SHOW_FRAGMENT_ARGUMENTS, args);
+    public void startSettings(@Nullable String fragmentClass, @Nullable Bundle args) {
+        // Pass this host's isShownInTab() rather than letting SettingsIntentUtil consult the
+        // global SettingsInTab state. Settings hosted by this activity must keep navigating
+        // within the activity, even if the global state changed (e.g. the device was unfolded)
+        // after settings was opened. See crbug.com/562619494.
+        Intent intent =
+                SettingsIntentUtil.createIntent(
+                        this,
+                        fragmentClass,
+                        args,
+                        /* addToBackStack= */ false,
+                        /* tag= */ null,
+                        /* useSettingsInTab= */ isShownInTab());
         startActivity(intent);
     }
 
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
-        ViewGroup contentView = findViewById(android.R.id.content);
-        mSnackbarManager = new SnackbarManager(this, contentView, null);
+        initBackPressHandler();
+    }
 
-        Fragment fragment = getMainFragment();
-
-        if (fragment instanceof SiteSettingsPreferenceFragment) {
-            ChromeSiteSettingsDelegate delegate =
-                    (ChromeSiteSettingsDelegate) (((SiteSettingsPreferenceFragment) fragment)
-                                                          .getSiteSettingsDelegate());
-            delegate.setSnackbarManager(mSnackbarManager);
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (ChromeFeatureList.sGlicShowTaskInProgressSnackbar.getValue()) {
+            GlicHelper.maybeShowGlicTaskInProgressSnackbar(
+                    this, mProfile, this, GlicHelper.Caller.SETTINGS_ACTIVITY);
         }
     }
 
@@ -204,7 +617,8 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
 
         // Prevent the user from interacting with multiple instances of SettingsActivity at the same
         // time (e.g. in multi-instance mode on a Samsung device), which would cause many fun bugs.
-        if (sResumedInstance != null && sResumedInstance.getTaskId() != getTaskId()
+        if (sResumedInstance != null
+                && sResumedInstance.getTaskId() != getTaskId()
                 && !mIsNewlyCreated) {
             // This activity was unpaused or recreated while another instance of SettingsActivity
             // was already showing. The existing instance takes precedence.
@@ -218,6 +632,87 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
             sResumedInstance = this;
             mIsNewlyCreated = false;
         }
+
+        checkForMissingDeviceLockOnAutomotive();
+
+        if (mPendingPopBackCount > 0) {
+            RecordHistogram.recordCount100Histogram(
+                    "Android.Settings.PendingPopBackWorked", mPendingPopBackCount);
+            FragmentManager fragmentManager =
+                    mMultiColumnSettings == null
+                            ? getSupportFragmentManager()
+                            : mMultiColumnSettings.getChildFragmentManager();
+            if (fragmentManager.getBackStackEntryCount() <= mPendingPopBackCount) {
+                if (mMultiColumnSettings != null && mMultiColumnSettings.canBeBackToMain()) {
+                    mMultiColumnSettings.showMainSettings();
+                } else {
+                    finish();
+                }
+            } else {
+                var entry =
+                        fragmentManager.getBackStackEntryAt(
+                                fragmentManager.getBackStackEntryCount() - mPendingPopBackCount);
+                fragmentManager.popBackStack(
+                        entry.getId(), FragmentManager.POP_BACK_STACK_INCLUSIVE);
+            }
+            mPendingPopBackCount = 0;
+        }
+        // If there is a pending intent to process from onNewIntent, process it now.
+        if (mPendingNewIntent != null) {
+            // If multi-column is enabled, fragment instantiation is handled in MultiColumnSettings.
+            assert mMultiColumnSettings == null;
+
+            Fragment fragment = instantiateMainFragment(mPendingNewIntent);
+            mPendingNewIntent = null;
+
+            var transaction = getSupportFragmentManager().beginTransaction();
+            transaction.setReorderingAllowed(true);
+            setFragmentAnimation(transaction, fragment);
+            transaction
+                    .replace(R.id.settings_content, fragment, MAIN_FRAGMENT_TAG)
+                    .addToBackStack(null)
+                    .commit();
+        }
+        mStartTimeSaved = false;
+    }
+
+    private static @SettingsFragment.AnimationType int getAnimationType(Fragment fragment) {
+        if (fragment instanceof SettingsFragment settingsFragment) {
+            // The fragment is (being) migrated. Respect the animation type that the fragment says.
+            return settingsFragment.getAnimationType();
+        }
+
+        // The fragment is not yet migrated with auditing. Fallback to the legacy animation type.
+        Log.w(TAG, "Non-migrated Settings fragment is found: %s", fragment.getClass().getName());
+        return SettingsFragment.AnimationType.TWEEN;
+    }
+
+    private static void setFragmentAnimation(FragmentTransaction transaction, Fragment fragment) {
+        switch (getAnimationType(fragment)) {
+            case SettingsFragment.AnimationType.TWEEN -> transaction.setCustomAnimations(
+                    R.anim.shared_x_axis_open_enter,
+                    R.anim.shared_x_axis_open_exit,
+                    R.anim.shared_x_axis_close_enter,
+                    R.anim.shared_x_axis_close_exit);
+            case SettingsFragment.AnimationType.PROPERTY -> transaction.setCustomAnimations(
+                    R.animator.shared_x_axis_open_enter,
+                    R.animator.shared_x_axis_open_exit,
+                    R.animator.shared_x_axis_close_enter,
+                    R.animator.shared_x_axis_close_exit);
+        }
+    }
+
+    private void checkForMissingDeviceLockOnAutomotive() {
+        if (DeviceInfo.isAutomotive()) {
+            if (mMissingDeviceLockLauncher == null) {
+                mMissingDeviceLockLauncher =
+                        new MissingDeviceLockLauncher(
+                                this,
+                                mProfile,
+                                assertNonNull(getModalDialogManagerSupplier().get()));
+            }
+            mMissingDeviceLockLauncher.checkPrivateDataIsProtectedByDeviceLock();
+        }
     }
 
     @Override
@@ -230,6 +725,46 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
     protected void onStop() {
         super.onStop();
         if (sResumedInstance == this) sResumedInstance = null;
+        if (mSearchCoordinator != null) mSearchCoordinator.onStop();
+    }
+
+    @Override
+    protected void onDestroy() {
+        mScrimManager.destroy();
+        SnackbarManager snackbarManager = mSnackbarManagerSupplier.get();
+        if (snackbarManager != null) {
+            snackbarManager.destroy();
+        }
+        if (mMultiColumnTitleUpdater != null) {
+            assert mMultiColumnSettings != null;
+            mMultiColumnSettings.removeObserver(mMultiColumnTitleUpdater);
+        }
+        mContainmentHelper.unregisterCallbacks(getSupportFragmentManager());
+        if (mSearchCoordinator != null) {
+            if (mMultiColumnSettings != null) {
+                mMultiColumnSettings.removeObserver(mSearchCoordinator);
+            }
+            mSearchCoordinator.destroy();
+        }
+        if (mMultiColumnSettings != null) {
+            mMultiColumnSettings.removeObserver(this);
+        }
+
+        WindowAndroid windowAndroid = mWindowAndroidSupplier.get();
+        if (windowAndroid != null) {
+            windowAndroid.destroy();
+        }
+
+        if (!mStartTimeSaved && isForMainSettings()) {
+            long timeSpent = SystemClock.elapsedRealtime() - mStartTime;
+            RecordHistogram.recordLongTimesHistogram("Settings.SessionDuration", timeSpent);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
+                && mAppHeaderCoordinator != null) {
+            mAppHeaderCoordinator.destroy();
+            mAppHeaderCoordinator = null;
+        }
+        super.onDestroy();
     }
 
     /**
@@ -237,144 +772,150 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
      * PreferenceFragmentCompat}. This does not include dialogs or other {@link Fragment}s shown on
      * top of the main content.
      */
+    @Override
     @VisibleForTesting
-    public Fragment getMainFragment() {
-        return getSupportFragmentManager().findFragmentById(R.id.content);
+    public @Nullable Fragment getMainFragment() {
+        if (mMultiColumnSettings == null) {
+            return getSupportFragmentManager().findFragmentById(R.id.settings_content);
+        }
+        if (!mMultiColumnSettings.isAdded()) {
+            return null;
+        }
+        return mMultiColumnSettings
+                .getChildFragmentManager()
+                .findFragmentById(R.id.preferences_detail);
+    }
+
+    /** Returns the MultiColumnSettings if not in standalone mode. */
+    @Override
+    @VisibleForTesting
+    public @Nullable MultiColumnSettings getMultiColumnSettings() {
+        return mMultiColumnSettings;
+    }
+
+    @Override
+    public PreferenceUpdateObserver getPreferenceUpdateObserver() {
+        return this;
+    }
+
+    @Override
+    public boolean isShownInTab() {
+        // This activity hosts settings itself, so settings is never shown in a browser tab here.
+        return false;
+    }
+
+    /**
+     * Returns the intent request tracker for the Settings Activity. If the tracker does not exist
+     * yet create one and return that.
+     *
+     * @return IntentRequestTracker The intent request tracker for the Settings Activity.
+     */
+    public IntentRequestTracker getIntentRequestTracker() {
+        return mIntentRequestTracker;
     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        super.onCreateOptionsMenu(menu);
-        // By default, every screen in Settings shows a "Help & feedback" menu item.
-        MenuItem help = menu.add(
-                Menu.NONE, R.id.menu_id_general_help, Menu.CATEGORY_SECONDARY, R.string.menu_help);
-        help.setIcon(VectorDrawableCompat.create(
-                getResources(), R.drawable.ic_help_and_feedback, getTheme()));
-        return true;
+        SettingsMenuHelper.onCreateOptionsMenu(menu, this, this);
+        return super.onCreateOptionsMenu(menu);
     }
 
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
-        if (menu.size() == 1) {
-            MenuItem item = menu.getItem(0);
-            if (item.getIcon() != null) item.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
-        }
+        SettingsMenuHelper.onPrepareOptionsMenu(menu, this);
         return super.onPrepareOptionsMenu(menu);
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        Fragment mainFragment = getMainFragment();
-        if (mainFragment != null && mainFragment.onOptionsItemSelected(item)) {
-            return true;
-        }
-
-        if (item.getItemId() == android.R.id.home) {
-            finish();
-            return true;
-        } else if (item.getItemId() == R.id.menu_id_general_help) {
-            HelpAndFeedbackLauncherImpl.getInstance().show(this,
-                    getString(R.string.help_context_settings), Profile.getLastUsedRegularProfile(),
-                    null);
+        if (SettingsMenuHelper.onOptionsItemSelected(item, this, this)) {
             return true;
         }
         return super.onOptionsItemSelected(item);
     }
 
     @Override
-    public void onBackPressed() {
-        Fragment activeFragment = getMainFragment();
-        if (!(activeFragment instanceof OnBackPressedListener)) {
-            super.onBackPressed();
-            return;
-        }
-        OnBackPressedListener listener = (OnBackPressedListener) activeFragment;
-        if (!listener.onBackPressed()) {
-            // Fragment hasn't handled this event, fall back to AppCompatActivity handling.
-            super.onBackPressed();
-        }
+    public @Nullable SettingsSearchCoordinator getSearchCoordinator() {
+        return mSearchCoordinator;
     }
 
     @Override
-    public void onAttachFragment(Fragment fragment) {
-        if (fragment instanceof SiteSettingsPreferenceFragment) {
-            ((SiteSettingsPreferenceFragment) fragment)
-                    .setSiteSettingsDelegate(new ChromeSiteSettingsDelegate(
-                            this, Profile.getLastUsedRegularProfile()));
+    public HelpAndFeedbackLauncher getHelpAndFeedbackLauncher() {
+        return HelpAndFeedbackLauncherFactory.getForProfile(mProfile);
+    }
+
+    @Override
+    public void finishSettings() {
+        finish();
+    }
+
+    @Override
+    public boolean onPreparePanel(int featureId, @Nullable View view, Menu menu) {
+        boolean res = super.onPreparePanel(featureId, view, menu);
+        if (mSearchCoordinator != null) mSearchCoordinator.updateHelpMenuVisibility();
+        return res;
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        mIntentRequestTracker.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (mMainFragmentKeyDownHandler != null
+                && mMainFragmentKeyDownHandler.onKeyDown(keyCode, event)) {
+            return true;
         }
-        if (fragment instanceof FragmentSettingsLauncher) {
-            FragmentSettingsLauncher fragmentSettingsLauncher = (FragmentSettingsLauncher) fragment;
-            fragmentSettingsLauncher.setSettingsLauncher(mSettingsLauncher);
+        if (mBottomSheetKeyDownHandler != null
+                && mBottomSheetKeyDownHandler.onKeyDown(keyCode, event)) {
+            return true;
         }
-        if (fragment instanceof FragmentHelpAndFeedbackLauncher) {
-            FragmentHelpAndFeedbackLauncher fragmentHelpAndFeedbackLauncher =
-                    (FragmentHelpAndFeedbackLauncher) fragment;
-            fragmentHelpAndFeedbackLauncher.setHelpAndFeedbackLauncher(
-                    HelpAndFeedbackLauncherImpl.getInstance());
+
+        // Finish the current settings when the ESC key is pressed.
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            Fragment mainFragment = getMainFragment();
+            assumeNonNull(mainFragment);
+            finishCurrentSettings(mainFragment);
+            return true;
         }
-        if (fragment instanceof SafetyCheckSettingsFragment) {
-            SafetyCheckCoordinator.create((SafetyCheckSettingsFragment) fragment,
-                    new SafetyCheckUpdatesDelegateImpl(this), mSettingsLauncher,
-                    SyncConsentActivityLauncherImpl.get());
+        return super.onKeyDown(keyCode, event);
+    }
+
+    private void initBackPressHandler() {
+        // Handlers registered last will be called first.
+        registerMainFragmentBackPressHandler();
+        registerBottomSheetBackPressHandler();
+    }
+
+    private void registerMainFragmentBackPressHandler() {
+        Fragment activeFragment = getMainFragment();
+        if (activeFragment instanceof BackPressHandler backPressHandler) {
+            // We do not support embeddable fragments to implement BackPressHandler as it requires
+            // keeping track of the main fragment while there is no real use case for it.
+            assert mStandalone;
+            mMainFragmentKeyDownHandler =
+                    BackPressHelper.create(
+                            activeFragment.getViewLifecycleOwner(),
+                            getOnBackPressedDispatcher(),
+                            backPressHandler);
         }
-        if (fragment instanceof PasswordCheckFragmentView) {
-            PasswordCheckComponentUiFactory.create((PasswordCheckFragmentView) fragment,
-                    HelpAndFeedbackLauncherImpl.getInstance(), mSettingsLauncher,
-                    LaunchIntentDispatcher::createCustomTabActivityIntent,
-                    IntentUtils::addTrustedIntentExtras);
-        } else if (fragment instanceof PasswordCheckEditFragmentView) {
-            PasswordCheckEditFragmentView editFragment = (PasswordCheckEditFragmentView) fragment;
-            editFragment.setCheckProvider(
-                    () -> PasswordCheckFactory.getOrCreate(mSettingsLauncher));
-        }
-        if (fragment instanceof CredentialEntryFragmentViewBase) {
-            CredentialEditUiFactory.create((CredentialEntryFragmentViewBase) fragment,
-                    HelpAndFeedbackLauncherImpl.getInstance());
-        }
-        if (fragment instanceof SearchEngineSettings) {
-            SearchEngineSettings settings = (SearchEngineSettings) fragment;
-            settings.setDisableAutoSwitchRunnable(
-                    () -> LocaleManager.getInstance().setSearchEngineAutoSwitch(false));
-            settings.setSettingsLauncher(mSettingsLauncher);
-        }
-        if (fragment instanceof ImageDescriptionsSettings) {
-            Profile profile = Profile.getLastUsedRegularProfile();
-            ImageDescriptionsSettings imageFragment = (ImageDescriptionsSettings) fragment;
-            Bundle extras = imageFragment.getArguments();
-            if (extras != null) {
-                extras.putBoolean(ImageDescriptionsSettings.IMAGE_DESCRIPTIONS,
-                        ImageDescriptionsController.getInstance().imageDescriptionsEnabled(
-                                profile));
-                extras.putBoolean(ImageDescriptionsSettings.IMAGE_DESCRIPTIONS_DATA_POLICY,
-                        ImageDescriptionsController.getInstance().onlyOnWifiEnabled(profile));
-            }
-            imageFragment.setDelegate(ImageDescriptionsController.getInstance().getDelegate());
-        }
-        if (fragment instanceof PrivacySandboxSettingsFragment) {
-            ((PrivacySandboxSettingsFragment) fragment)
-                    .setCustomTabIntentHelper(
-                            LaunchIntentDispatcher::createCustomTabActivityIntent);
-        }
-        if (fragment instanceof FlocSettingsFragment) {
-            ((FlocSettingsFragment) fragment)
-                    .setCustomTabIntentHelper(
-                            LaunchIntentDispatcher::createCustomTabActivityIntent);
-        }
-        if (fragment instanceof LanguageSettings) {
-            ((LanguageSettings) fragment).setRestartAction(() -> {
-                ApplicationLifetime.terminate(true);
-            });
-        }
-        if (fragment instanceof ClearBrowsingDataFragmentBasic) {
-            ((ClearBrowsingDataFragmentBasic) fragment)
-                    .setCustomTabIntentHelper(
-                            LaunchIntentDispatcher::createCustomTabActivityIntent);
-        }
+    }
+
+    private void registerBottomSheetBackPressHandler() {
+        mBottomSheetKeyDownHandler =
+                BackPressHelper.create(
+                        this,
+                        getOnBackPressedDispatcher(),
+                        mManagedBottomSheetController.getBottomSheetBackPressHandler());
     }
 
     @Override
     public SnackbarManager getSnackbarManager() {
-        return mSnackbarManager;
+        SnackbarManager ret = mSnackbarManagerSupplier.get();
+        assert ret != null;
+        return ret;
     }
 
     private void ensureActivityNotExported() {
@@ -394,23 +935,142 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
         }
     }
 
-    /**
-     * Set device status bar to match the activity background color, if supported.
-     */
+    /** Set device status bar to match the activity background color, if supported. */
     private void setStatusBarColor() {
-        // On P+, the status bar color is set via the XML theme.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return;
-
-        if (UiUtils.isSystemUiThemingDisabled()) return;
-
-        // Dark status icons only supported on M+.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        if (!DeviceInfo.isAutomotive()
+                && !DeviceFormFactor.isNonMultiDisplayContextOnTablet(this)) {
+            return;
+        }
 
         // Use transparent color, so the AppBarLayout can color the status bar on scroll.
-        ApiCompatibilityUtils.setStatusBarColor(getWindow(), Color.TRANSPARENT);
+        UiUtils.setStatusBarColor(getWindow(), Color.TRANSPARENT);
 
         // Set status bar icon color according to background color.
-        ApiCompatibilityUtils.setStatusBarIconColor(getWindow().getDecorView().getRootView(),
+        UiUtils.setStatusBarIconColor(
+                getWindow().getDecorView().getRootView(),
                 getResources().getBoolean(R.bool.window_light_status_bar));
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            int color = SemanticColorUtils.getDefaultBgColor(this);
+            var taskDescription =
+                    new ActivityManager.TaskDescription.Builder().setStatusBarColor(color).build();
+            setTaskDescription(taskDescription);
+        }
+    }
+
+    @Override
+    protected ModalDialogManager createModalDialogManager() {
+        return new ModalDialogManager(new AppModalPresenter(this), ModalDialogType.APP);
+    }
+
+    /**
+     * Finishes the current fragment.
+     *
+     * <p>This method asks the activity to show the previous fragment. If the back stack is empty,
+     * the activity itself is finished.
+     *
+     * <p>If the given fragment is not the current one, or the fragment is already finished, this
+     * method does nothing. In other words, this method is idempotent.
+     *
+     * <p>This method executes navigations asynchronously. It means that it is safe to call this
+     * method on the UI thread in most cases, particularly even in the middle of executing fragment
+     * transactions. On the other hand, you have to be careful when you want to go back multiple
+     * pages using this method; it may not work as you expect to call this method multiple times in
+     * a row because the subsequent method calls are ignored due to fragment mismatch. Use {@link
+     * executePendingNavigations} to synchronously execute pending navigations to work around this
+     * problem.
+     *
+     * <p>This method is package-private because it is used by {@link SettingsNavigationImpl}. Use
+     * {@link SettingsNavigation} to call this method from fragments, instead of calling it
+     * directly.
+     *
+     * @param fragment The expected current fragment.
+     */
+    @SuppressLint("ReferenceEquality")
+    @Override
+    public void finishCurrentSettings(Fragment fragment) {
+        if (getMainFragment() != fragment) {
+            return;
+        }
+        if (mFinishedMainFragment != null && mFinishedMainFragment.get() == fragment) {
+            return;
+        }
+
+        mFinishedMainFragment = new WeakReference<>(fragment);
+
+        FragmentManager fragmentManager =
+                mMultiColumnSettings == null
+                        ? getSupportFragmentManager()
+                        : mMultiColumnSettings.getChildFragmentManager();
+        if (fragmentManager.getBackStackEntryCount() == 0) {
+            if (mMultiColumnSettings != null && mMultiColumnSettings.canBeBackToMain()) {
+                if (fragmentManager.isStateSaved()) {
+                    ++mPendingPopBackCount;
+                } else {
+                    mMultiColumnSettings.showMainSettings();
+                }
+            } else {
+                finish();
+            }
+        } else {
+            if (fragmentManager.isStateSaved()) {
+                ++mPendingPopBackCount;
+            } else {
+                fragmentManager.popBackStack();
+            }
+        }
+    }
+
+    /**
+     * Executes pending navigations immediately.
+     *
+     * <p>See {@link finishCurrentSettings} for a valid use case of this method.
+     *
+     * <p>This method is package-private because it is used by {@link SettingsNavigationImpl}. Use
+     * {@link SettingsNavigation} to call this method from fragments, instead of calling it
+     * directly.
+     */
+    void executePendingNavigations() {
+        getSupportFragmentManager().executePendingTransactions();
+        if (mMultiColumnSettings != null && mMultiColumnSettings.isAdded()) {
+            mMultiColumnSettings.getChildFragmentManager().executePendingTransactions();
+        }
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (mSearchCoordinator != null) mSearchCoordinator.onSaveInstanceState(outState);
+        if (mMultiColumnTitleUpdater != null) {
+            mMultiColumnTitleUpdater.onSaveInstanceState(outState);
+        }
+        if (mStartTime > 0) {
+            outState.putLong(KEY_START_TIME, mStartTime);
+            mStartTimeSaved = true;
+        }
+
+        SettingsBreadcrumbUtil.saveInitialBreadcrumbPath(outState, mInitialBreadcrumbPath);
+    }
+
+    @Override
+    public void onTopResumedActivityChanged(boolean isTopResumedActivity) {
+        super.onTopResumedActivityChanged(isTopResumedActivity);
+        // In SettingsActivity, there are two entry points that can trigger the DB setting.
+        // So we need to reset the cached default browser info to make sure it's up to date
+        if (isInMultiWindowMode() && !isTopResumedActivity) {
+            DefaultBrowserInfo.resetDefaultInfoTask();
+        }
+    }
+
+    public @Nullable SettingsSearchCoordinator getSearchCoordinatorForTesting() {
+        return mSearchCoordinator;
+    }
+
+    void setContainmentHelperForTesting(SettingsContainmentHelper containmentHelper) {
+        mContainmentHelper = containmentHelper;
+    }
+
+    void setMultiColumnSettingsForTesting(@Nullable MultiColumnSettings multiColumnSettings) {
+        mMultiColumnSettings = multiColumnSettings;
     }
 }

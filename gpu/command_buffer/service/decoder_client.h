@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,25 +10,25 @@
 #include <string>
 
 #include "base/containers/span.h"
-#include "gpu/gpu_export.h"
+#include "gpu/command_buffer/service/gpu_command_buffer_service_export.h"
+#include "gpu/ipc/common/gpu_disk_cache_type.h"
 #include "ui/gl/gpu_preference.h"
 #include "url/gurl.h"
 
 namespace gpu {
 
-class GPU_EXPORT DecoderClient {
+class GPU_COMMAND_BUFFER_SERVICE_EXPORT DecoderClient {
  public:
   virtual ~DecoderClient() = default;
 
   // Prints a message (error/warning) to the console.
   virtual void OnConsoleMessage(int32_t id, const std::string& message) = 0;
 
-  // Notifies the renderer process that the active GPU changed.
-  virtual void OnGpuSwitched(gl::GpuPreference active_gpu_heuristic) {}
-
-  // Cache a newly linked shader.
-  virtual void CacheShader(const std::string& key,
-                           const std::string& shader) = 0;
+  // Cache a blob (i.e. shader intermediates, shader bytecodes, pipelines, etc)
+  // to persistent storage.
+  virtual void CacheBlob(gpu::GpuDiskCacheType type,
+                         const std::string& key,
+                         const std::string& blob) = 0;
 
   // Called when the decoder releases a fence sync. Allows the client to
   // reschedule waiting decoders.
@@ -43,10 +43,6 @@ class GPU_EXPORT DecoderClient {
   // Called from PerformPollingWork when the decoder needs to be rescheduled
   // because the fence completed.
   virtual void OnRescheduleAfterFinished() = 0;
-
-  // Called when SwapBuffers, PostSubBufferCHROMIUM,
-  // SwapBuffersWithBoundsCHROMIUM or CommitOverlayPlanesCHROMIUM is called.
-  virtual void OnSwapBuffers(uint64_t swap_id, uint32_t flags) = 0;
 
   // Notifies the client that the shared GrContext may have been used by this
   // decoder and its GPU memory should be cleaned up.

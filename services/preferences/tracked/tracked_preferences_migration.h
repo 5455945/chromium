@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 #include <set>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "components/prefs/pref_name_set.h"
 #include "services/preferences/tracked/pref_hash_store.h"
 
 class InterceptablePrefFilter;
@@ -22,14 +23,14 @@ class PrefHashStore;
 // (un)protected_store_cleaner| and
 // |register_on_successful_(un)protected_store_write_callback| are used to do
 // post-migration cleanup tasks. Those should be bound to weak pointers to avoid
-// blocking shutdown. |(un)protected_pref_hash_store| is used to migrate MACs
-// along with their protected preferences. Migrated MACs will only be cleared
-// from their old location in a subsequent run. The migration framework is
-// resilient to a failed cleanup (it will simply try again in the next Chrome
-// run).
+// blocking shutdown. |(un)protected_pref_hash_store| is used to migrate
+// authenticators along with their protected preferences. Migrated
+// authenticators will only be cleared from their old location in a subsequent
+// run. The migration framework is resilient to a failed cleanup (it will simply
+// try again in the next Chrome run).
 void SetupTrackedPreferencesMigration(
-    const std::set<std::string>& unprotected_pref_names,
-    const std::set<std::string>& protected_pref_names,
+    const PrefNameSet& unprotected_pref_names,
+    const PrefNameSet& protected_pref_names,
     const base::RepeatingCallback<void(const std::string& key)>&
         unprotected_store_cleaner,
     const base::RepeatingCallback<void(const std::string& key)>&

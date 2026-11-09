@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,10 +42,14 @@ ResultExpr ImeProcessPolicy::EvaluateSyscall(int sysno) const {
     case __NR_getrusage:
       return RestrictGetrusage();
 #endif
+#if defined(__NR_prlimit64)
+    case __NR_prlimit64:
+      return RestrictPrlimitToGetrlimit(GetPolicyPid());
+#endif
     default:
       auto* sandbox_linux = SandboxLinux::GetInstance();
       if (sandbox_linux->ShouldBrokerHandleSyscall(sysno))
-        return sandbox_linux->HandleViaBroker();
+        return sandbox_linux->HandleViaBroker(sysno);
 
       return BPFBasePolicy::EvaluateSyscall(sysno);
   }

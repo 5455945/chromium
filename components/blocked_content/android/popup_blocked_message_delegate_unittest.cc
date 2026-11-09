@@ -1,9 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/blocked_content/android/popup_blocked_message_delegate.h"
 
+#include "base/android/jni_android.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/blocked_content/popup_blocker_tab_helper.h"
@@ -14,10 +16,13 @@
 #include "components/messages/android/mock_message_dispatcher_bridge.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/tabs/public/mock_tab_interface.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/test_renderer_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 #include "url/gurl.h"
 
 namespace blocked_content {
@@ -33,14 +38,11 @@ class PopupBlockedMessageDelegateTest
 
   // content::RenderViewHostTestHarness:
   void SetUp() override;
+  void TearDown() override;
 
-  PopupBlockerTabHelper* helper() { return helper_; }
+  PopupBlockerTabHelper* helper() { return helper_.get(); }
 
   HostContentSettingsMap* settings_map() { return settings_map_.get(); }
-
-  base::RepeatingCallback<int(int)> GetResourceIdMapper() {
-    return base::BindRepeating(ResourceMap);
-  }
 
   bool EnqueueMessage(int num_pops,
                       base::OnceClosure on_accept_callback,
@@ -54,15 +56,15 @@ class PopupBlockedMessageDelegateTest
     return popup_blocked_message_delegate_;
   }
 
-  static int ResourceMap(int id) { return -1; }
-
  private:
-  PopupBlockerTabHelper* helper_ = nullptr;
+  ui::UnownedUserDataHost user_data_host_;
+  tabs::MockTabInterface tab_;
+  std::unique_ptr<PopupBlockerTabHelper> helper_;
   base::test::ScopedFeatureList feature_list_;
   sync_preferences::TestingPrefServiceSyncable pref_service_;
   scoped_refptr<HostContentSettingsMap> settings_map_;
   messages::MockMessageDispatcherBridge message_dispatcher_bridge_;
-  PopupBlockedMessageDelegate* popup_blocked_message_delegate_;
+  raw_ptr<PopupBlockedMessageDelegate> popup_blocked_message_delegate_;
 };
 
 PopupBlockedMessageDelegateTest::~PopupBlockedMessageDelegateTest() {
@@ -78,22 +80,32 @@ void PopupBlockedMessageDelegateTest::SetUp() {
   HostContentSettingsMap::RegisterProfilePrefs(pref_service_.registry());
   settings_map_ = base::MakeRefCounted<HostContentSettingsMap>(
       &pref_service_, false /* is_off_the_record */,
-      false /* store_last_modified */, false /* restore_session*/);
+      false /* store_last_modified */, false /* restore_session*/,
+      false /* should_record_metrics */);
   content_settings::PageSpecificContentSettings::CreateForWebContents(
       web_contents(),
       std::make_unique<
           content_settings::TestPageSpecificContentSettingsDelegate>(
           /*prefs=*/nullptr, settings_map_.get()));
 
-  PopupBlockerTabHelper::CreateForWebContents(web_contents());
-  helper_ = PopupBlockerTabHelper::FromWebContents(web_contents());
+  tabs::TabLookupFromWebContents::CreateForWebContents(web_contents(), &tab_);
+  ON_CALL(tab_, GetUnownedUserDataHost())
+      .WillByDefault(::testing::ReturnRef(user_data_host_));
+  helper_ = std::make_unique<PopupBlockerTabHelper>(tab_, web_contents());
 
   PopupBlockedMessageDelegate::CreateForWebContents(web_contents());
   popup_blocked_message_delegate_ =
       PopupBlockedMessageDelegate::FromWebContents(web_contents());
   NavigateAndCommit(GURL(kPageUrl));
+  message_dispatcher_bridge_.SetMessagesEnabledForEmbedder(true);
   messages::MessageDispatcherBridge::SetInstanceForTesting(
       &message_dispatcher_bridge_);
+}
+
+void PopupBlockedMessageDelegateTest::TearDown() {
+  helper_.reset();
+  messages::MessageDispatcherBridge::SetInstanceForTesting(nullptr);
+  content::RenderViewHostTestHarness::TearDown();
 }
 
 messages::MessageWrapper* PopupBlockedMessageDelegateTest::GetMessageWrapper() {
@@ -107,7 +119,6 @@ bool PopupBlockedMessageDelegateTest::EnqueueMessage(
   EXPECT_CALL(message_dispatcher_bridge_, EnqueueMessage)
       .WillOnce(testing::Return(success));
   return GetDelegate()->ShowMessage(num_pops, settings_map(),
-                                    GetResourceIdMapper(),
                                     std::move(on_accept_callback));
 }
 
@@ -130,12 +141,12 @@ TEST_F(PopupBlockedMessageDelegateTest, MessagePropertyValues) {
   EXPECT_EQ(l10n_util::GetPluralStringFUTF16(IDS_POPUPS_BLOCKED_INFOBAR_TEXT,
                                              num_popups),
             GetMessageWrapper()->GetTitle());
-  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_SHOW_CONTENT),
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_POPUPS_BLOCKED_INFOBAR_BUTTON_SHOW),
             GetMessageWrapper()->GetPrimaryButtonText());
 
   // Should update title; #EnqueueMessage ensure message is enqueued only once.
   GetDelegate()->ShowMessage(num_popups + 1, settings_map(),
-                             GetResourceIdMapper(), base::NullCallback());
+                             base::NullCallback());
   EXPECT_EQ(l10n_util::GetPluralStringFUTF16(IDS_POPUPS_BLOCKED_INFOBAR_TEXT,
                                              num_popups + 1),
             GetMessageWrapper()->GetTitle());

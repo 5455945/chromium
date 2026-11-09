@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,10 @@
 #include "content/public/browser/background_sync_registration.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/mojom/background_sync/background_sync.mojom-shared.h"
+
+namespace blink {
+enum class ServiceWorkerStatusCode;
+}  // namespace blink
 
 namespace url {
 class Origin;

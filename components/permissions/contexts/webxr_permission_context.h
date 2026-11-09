@@ -1,18 +1,25 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_CONTEXTS_WEBXR_PERMISSION_CONTEXT_H_
 #define COMPONENTS_PERMISSIONS_CONTEXTS_WEBXR_PERMISSION_CONTEXT_H_
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/permissions/content_setting_permission_context_base.h"
 #include "components/permissions/permission_context_base.h"
+#include "components/permissions/permission_request_data.h"
+
+namespace content {
+struct PermissionResult;
+}  // namespace content
 
 namespace permissions {
-class WebXrPermissionContext : public PermissionContextBase {
+struct PermissionPromptDecision;
+
+class WebXrPermissionContext : public ContentSettingPermissionContextBase {
  public:
   WebXrPermissionContext(content::BrowserContext* browser_context,
                          ContentSettingsType content_settings_type);
@@ -22,9 +29,7 @@ class WebXrPermissionContext : public PermissionContextBase {
 
  private:
   // PermissionContextBase:
-  bool IsRestrictedToSecureOrigins() const override;
-
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // On Android we need to do some additional checking for OS level permissions,
   // which do not need to happen on Desktop. Note that NotifyPermissionSet is
   // only called after a "RequestPermission" call (and not if we are just
@@ -33,19 +38,21 @@ class WebXrPermissionContext : public PermissionContextBase {
   // https://immersive-web.github.io/webxr/#dom-xrsystem-requestsession
   // When implementing navigator.xr.permission methods, we should ensure that
   // GetPermissionStatus is also updated to check these permissions.
-  void NotifyPermissionSet(const PermissionRequestID& id,
-                           const GURL& requesting_origin,
-                           const GURL& embedding_origin,
-                           BrowserPermissionCallback callback,
-                           bool persist,
-                           ContentSetting content_setting,
-                           bool is_one_time) override;
+  void NotifyPermissionSet(
+      const PermissionRequestData& request_data,
+      BrowserPermissionCallback callback,
+      bool persist,
+      const content::PermissionResult* permission_result,
+      const permissions::PermissionPromptDecision& decision) override;
 
-  void OnAndroidPermissionDecided(const PermissionRequestID& id,
-                                  const GURL& requesting_origin,
-                                  const GURL& embedding_origin,
-                                  BrowserPermissionCallback callback,
-                                  bool permission_granted);
+  void UpdateTabContext(const PermissionRequestData& request_data,
+                        bool allowed) override;
+
+  void OnAndroidPermissionDecided(
+      const PermissionRequestData& request_data,
+      const content::PermissionResult& website_permission_result,
+      BrowserPermissionCallback callback,
+      bool permission_granted);
 #endif
 
   ContentSettingsType content_settings_type_;

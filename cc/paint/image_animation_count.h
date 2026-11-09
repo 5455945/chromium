@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,11 +19,15 @@ namespace cc {
 //   * By making kAnimationLoopOnce be 0, we allow the animation cycling code in
 //     BitmapImage.cpp to avoid special-casing it, and simply treat all
 //     non-negative loop counts identically.
-//   * By making the other two constants negative, we avoid conflicts with any
+//   * By making the other three constants negative, we avoid conflicts with any
 //     real loop count values.
+//   * The Paused value is intended to freeze the frame of an image animation.
+//   It starts image animation, but not update the frame index at the animation
+//   controller.
 const int kAnimationLoopOnce = 0;
 const int kAnimationLoopInfinite = -1;
 const int kAnimationNone = -2;
+const int kAnimationPaused = -3;
 
 }  // namespace cc
 

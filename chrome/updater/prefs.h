@@ -1,19 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_UPDATER_PREFS_H_
 #define CHROME_UPDATER_PREFS_H_
 
+#include <string>
+
+#include "base/functional/function_ref.h"
 #include "base/memory/ref_counted.h"
+#include "chrome/updater/updater_scope.h"
 
 class PrefService;
 
 namespace updater {
 
 enum class UpdaterScope;
-
-extern const char kPrefUpdateTime[];
 
 class UpdaterPrefs : public base::RefCountedThreadSafe<UpdaterPrefs> {
  public:
@@ -44,9 +46,11 @@ class GlobalPrefs : virtual public UpdaterPrefs {
   GlobalPrefs() = default;
 
   virtual std::string GetActiveVersion() const = 0;
-  virtual void SetActiveVersion(std::string value) = 0;
+  virtual void SetActiveVersion(const std::string& value) = 0;
   virtual bool GetSwapping() const = 0;
   virtual void SetSwapping(bool value) = 0;
+  virtual bool GetMigratedLegacyUpdaters() const = 0;
+  virtual void SetMigratedLegacyUpdaters() = 0;
 
   // The server starts counter is a global pref value that counts the number of
   // active server starts for the updater. If there are no apps registered by
@@ -63,6 +67,9 @@ class GlobalPrefs : virtual public UpdaterPrefs {
 // Open the global prefs. These prefs are protected by a mutex, and shared by
 // all updaters on the system. Returns nullptr if the mutex cannot be acquired.
 scoped_refptr<GlobalPrefs> CreateGlobalPrefs(UpdaterScope scope);
+
+// Similar to `CreateGlobalPrefs`, but bypasses the `WrongUser` check for tests.
+scoped_refptr<GlobalPrefs> CreateGlobalPrefsForTesting(UpdaterScope scope);
 
 // Open the version-specific prefs. These prefs are not protected by any mutex
 // and not shared with other versions of the updater.

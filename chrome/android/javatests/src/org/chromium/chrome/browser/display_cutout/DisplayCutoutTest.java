@@ -1,88 +1,110 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.display_cutout;
 
-import android.os.Build;
+import android.os.Build.VERSION_CODES;
 import android.view.WindowManager;
 
 import androidx.test.filters.LargeTest;
 
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.MinAndroidSdkLevel;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.Features;
 import org.chromium.blink.mojom.ViewportFit;
-import org.chromium.chrome.browser.app.ChromeActivity;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.page.WebPageStation;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests the display cutout.
- */
+/** Tests the display cutout. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@MinAndroidSdkLevel(Build.VERSION_CODES.P)
+// The combination of these two features causes the first page load to layout correctly in this
+// test suite. TODO(crbug.com/377778493): To fix this test to work properly w/ EdgeToEdge.
+@Features.DisableFeatures({
+    ChromeFeatureList.DRAW_CUTOUT_EDGE_TO_EDGE,
+})
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/376095153
 public class DisplayCutoutTest {
-    @Rule
-    public DisplayCutoutTestRule mTestRule =
-            new DisplayCutoutTestRule<ChromeActivity>(ChromeActivity.class);
+    private final AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+    private final DisplayCutoutTestRule mDisplayCutoutTestRule = new DisplayCutoutTestRule();
 
-    /**
-     * Test that no safe area is applied when we have viewport fit auto
-     */
+    @Rule
+    public final RuleChain mRuleChain =
+            RuleChain.outerRule(mActivityTestRule).around(mDisplayCutoutTestRule);
+
+    private WebPageStation mPage;
+
+    @Before
+    public void setUp() {
+        WebPageStation page = mActivityTestRule.startOnBlankPage();
+        mDisplayCutoutTestRule.attach(page.getActivity(), page.getTab());
+        mPage =
+                page.loadWebPageProgrammatically(
+                        mActivityTestRule.getTestServer().getURL(DisplayCutoutTestRule.TEST_PAGE));
+    }
+
+    /** Test that no safe area is applied when we have viewport fit auto */
     @Test
     @LargeTest
     public void testViewportFitAuto() throws TimeoutException {
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_AUTO);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_AUTO);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
-    /**
-     * Test that no safe area is applied when we have viewport fit contain.
-     */
+    /** Test that no safe area is applied when we have viewport fit contain. */
     @Test
     @LargeTest
     public void testViewportFitContain() throws TimeoutException {
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_CONTAIN);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_CONTAIN);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
     }
 
-    /**
-     * Test that the safe area is applied when we have viewport fit cover.
-     */
+    /** Test that the safe area is applied when we have viewport fit cover. */
     @Test
     @LargeTest
+    @DisableIf.Build(supported_abis_includes = "arm64-v8a", message = "https://crbug.com/402051996")
     public void testViewportFitCover() throws TimeoutException {
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
 
-        mTestRule.exitFullscreen();
+        mDisplayCutoutTestRule.exitFullscreen();
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
@@ -91,85 +113,105 @@ public class DisplayCutoutTest {
      */
     @Test
     @LargeTest
+    @DisabledTest(message = "issuetracker.google.com/353900381")
     public void testViewportFitCoverForced() throws TimeoutException {
-        mTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.enterFullscreen();
 
         // Set the viewport fit internally as this value is internal only.
-        mTestRule.setViewportFitInternal(ViewportFit.COVER_FORCED_BY_USER_AGENT);
+        mDisplayCutoutTestRule.setViewportFitInternal(ViewportFit.COVER_FORCED_BY_USER_AGENT);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
 
-        mTestRule.exitFullscreen();
+        mDisplayCutoutTestRule.exitFullscreen();
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
     /**
-     * Test that no safe area is applied when we have no viewport fit.
+     * Test without Fullscreen to make sure that viewport fit cover does not draw under the cutout.
      */
     @Test
     @LargeTest
+    public void testViewportFitCover_NotFullscreen() throws TimeoutException {
+        // Start without entering fullscreen.
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
+        try {
+            mDisplayCutoutTestRule.waitForSafeArea(
+                    DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+            mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
+        } catch (AssertionError e) {
+            throw new AssertionError(
+                    "When not in Fullscreen the Safe Area should not include the cutout!", e);
+        }
+    }
+
+    /** Test that no safe area is applied when we have no viewport fit. */
+    @Test
+    @LargeTest
+    @DisableIf.Build(
+            supported_abis_includes = "armeabi-v7a",
+            message = "https://crbug.com/402051996")
+    @DisableIf.Build(supported_abis_includes = "arm64-v8a", message = "https://crbug.com/402051996")
     public void testViewportFitDefault() throws TimeoutException {
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
 
-        mTestRule.setViewportFit("");
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.setViewportFit("");
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
-    /**
-     * Test that the safe area is calculated correctly using the device's dip scale.
-     */
+    /** Test that the safe area is calculated correctly using the device's dip scale. */
     @Test
     @LargeTest
+    @DisableIf.Build(sdk_equals = 34, message = "crbug.com/403286999")
     public void testViewportFitDipScale() throws TimeoutException {
-        mTestRule.enterFullscreen();
-        mTestRule.setDipScale(DisplayCutoutTestRule.TEST_HIGH_DIP_SCALE);
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setDipScale(DisplayCutoutTestRule.TEST_HIGH_DIP_SCALE);
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT_HIGH_DIP);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(
+                DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT_HIGH_DIP);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
     }
 
-    /**
-     * Test that the safe area is calculated correctly when using a subframe.
-     */
+    /** Test that the safe area is calculated correctly when using a subframe. */
     @Test
     @LargeTest
     public void testViewportFitSubframe() throws TimeoutException {
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_CONTAIN);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_CONTAIN);
 
-        mTestRule.enterFullscreenOnSubframe();
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.enterFullscreenOnSubframe();
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
-        mTestRule.waitForSafeAreaOnSubframe(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
+        mDisplayCutoutTestRule.waitForSafeAreaOnSubframe(
+                DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
     }
 
-    /**
-     * Test that we do not break if we have cover but no cutout.
-     */
+    /** Test that we do not break if we have cover but no cutout. */
     @Test
     @LargeTest
+    @DisableIf.Build(supported_abis_includes = "arm64-v8a", message = "https://crbug.com/402051996")
     public void testViewportFitCoverNoCutout() throws TimeoutException {
-        mTestRule.setDeviceHasCutout(false);
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
+        mDisplayCutoutTestRule.setDeviceHasCutout(false);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
     }
 
@@ -179,33 +221,38 @@ public class DisplayCutoutTest {
      */
     @Test
     @LargeTest
+    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.TIRAMISU, message = "crbug.com/365516493")
     public void testBrowserDisplayCutoutTakesPrecedence() throws Exception {
-        final ObservableSupplierImpl<Integer> browserCutoutModeSupplier =
-                TestThreadUtils.runOnUiThreadBlocking(
-                        () -> { return new ObservableSupplierImpl<Integer>(); });
+        final SettableMonotonicObservableSupplier<Integer> browserCutoutModeSupplier =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            return ObservableSuppliers.createMonotonic();
+                        });
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            browserCutoutModeSupplier.set(
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
-            Tab tab = mTestRule.getActivity().getActivityTab();
-            mTestRule.setDisplayCutoutController(
-                    DisplayCutoutTestRule.TestDisplayCutoutController.create(
-                            tab, browserCutoutModeSupplier));
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    browserCutoutModeSupplier.set(
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
+                    Tab tab = mPage.getTab();
+                    mDisplayCutoutTestRule.setDisplayCutoutController(
+                            DisplayCutoutTestRule.TestDisplayCutoutController.create(
+                                    tab, browserCutoutModeSupplier));
+                });
 
-        mTestRule.enterFullscreen();
-        mTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
+        mDisplayCutoutTestRule.enterFullscreen();
+        mDisplayCutoutTestRule.setViewportFit(DisplayCutoutTestRule.VIEWPORT_FIT_COVER);
 
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITH_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            browserCutoutModeSupplier.set(
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
-        });
-        mTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
-        mTestRule.waitForLayoutInDisplayCutoutMode(
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    browserCutoutModeSupplier.set(
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
+                });
+        mDisplayCutoutTestRule.waitForSafeArea(DisplayCutoutTestRule.TEST_SAFE_AREA_WITHOUT_CUTOUT);
+        mDisplayCutoutTestRule.waitForLayoutInDisplayCutoutMode(
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
     }
 }

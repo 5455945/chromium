@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -74,8 +74,6 @@ int ReadBufferingStreamSocket::DoLoop(int result) {
       case STATE_NONE:
       default:
         NOTREACHED() << "Unexpected state: " << current_state;
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && state_ != STATE_NONE);
   return rv;
@@ -130,8 +128,8 @@ int ReadBufferingStreamSocket::CopyToCaller(IOBuffer* buf, int buf_len) {
   DCHECK(buffer_full_);
 
   buf_len = std::min(buf_len, read_buffer_->RemainingCapacity());
-  memcpy(buf->data(), read_buffer_->data(), buf_len);
-  read_buffer_->set_offset(read_buffer_->offset() + buf_len);
+  buf->span().copy_prefix_from(read_buffer_->first(buf_len));
+  read_buffer_->DidConsume(buf_len);
   if (read_buffer_->RemainingCapacity() == 0) {
     read_buffer_ = nullptr;
     buffer_full_ = false;

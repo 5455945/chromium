@@ -1,11 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/mac/foundation_util.h"
-#import "base/mac/scoped_nsobject.h"
+#import "base/apple/foundation_util.h"
+#import "base/mac/mac_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #import "testing/gtest_mac.h"
 #include "ui/gfx/geometry/point.h"
@@ -14,8 +15,7 @@
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 
 namespace {
 
@@ -25,10 +25,10 @@ id<NSAccessibility> ToNSAccessibility(id obj) {
 
 // Unboxes an accessibilityValue into an int via NSNumber.
 int IdToInt(id value) {
-  return base::mac::ObjCCastStrict<NSNumber>(value).intValue;
+  return base::apple::ObjCCastStrict<NSNumber>(value).intValue;
 }
 
-// TODO(https://crbug.com/936990): NSTabItemView is not an NSView (despite the
+// TODO(crbug.com/41444230): NSTabItemView is not an NSView (despite the
 // name) and doesn't conform to NSAccessibility, so we have to fall back to the
 // legacy NSObject accessibility API to get its accessibility properties.
 id GetLegacyA11yAttributeValue(id obj, NSString* attribute) {
@@ -42,7 +42,7 @@ id GetLegacyA11yAttributeValue(id obj, NSString* attribute) {
 
 class TabbedPaneAccessibilityMacTest : public WidgetTest {
  public:
-  TabbedPaneAccessibilityMacTest() = default;
+  static constexpr int kTabbedPaneID = 123;
 
   // WidgetTest:
   void SetUp() override {
@@ -55,20 +55,26 @@ class TabbedPaneAccessibilityMacTest : public WidgetTest {
     // Create two tabs and position/size them.
     tabbed_pane->AddTab(u"Tab 1", std::make_unique<View>());
     tabbed_pane->AddTab(u"Tab 2", std::make_unique<View>());
-    tabbed_pane->Layout();
+    tabbed_pane->DeprecatedLayoutImmediately();
+    tabbed_pane->SetID(kTabbedPaneID);
 
-    tabbed_pane_ =
-        widget_->GetContentsView()->AddChildView(std::move(tabbed_pane));
+    widget_->GetContentsView()->AddChildView(std::move(tabbed_pane));
     widget_->Show();
   }
 
   void TearDown() override {
-    widget_->CloseNow();
+    widget_.ExtractAsDangling()->CloseNow();
     WidgetTest::TearDown();
   }
 
-  Tab* GetTabAt(size_t index) {
-    return static_cast<Tab*>(tabbed_pane_->tab_strip_->children()[index]);
+  TabbedPane* tabbed_pane() {
+    return static_cast<TabbedPane*>(
+        widget_->GetContentsView()->GetViewByID(kTabbedPaneID));
+  }
+
+  TabbedPaneTab* GetTabAt(size_t index) {
+    return static_cast<TabbedPaneTab*>(
+        tabbed_pane()->tab_strip_->children()[index]);
   }
 
   id<NSAccessibility> A11yElementAtPoint(const gfx::Point& point) {
@@ -83,21 +89,17 @@ class TabbedPaneAccessibilityMacTest : public WidgetTest {
   }
 
  protected:
-  Widget* widget_ = nullptr;
-  TabbedPane* tabbed_pane_ = nullptr;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TabbedPaneAccessibilityMacTest);
+  raw_ptr<Widget> widget_ = nullptr;
 };
 
 // Test the Tab's a11y information compared to a Cocoa NSTabViewItem.
 TEST_F(TabbedPaneAccessibilityMacTest, AttributesMatchAppKit) {
   // Create a Cocoa NSTabView to test against and select the first tab.
-  base::scoped_nsobject<NSTabView> cocoa_tab_group(
-      [[NSTabView alloc] initWithFrame:NSMakeRect(50, 50, 100, 100)]);
+  NSTabView* cocoa_tab_group =
+      [[NSTabView alloc] initWithFrame:NSMakeRect(50, 50, 100, 100)];
   NSArray* cocoa_tabs = @[
-    [[[NSTabViewItem alloc] init] autorelease],
-    [[[NSTabViewItem alloc] init] autorelease],
+    [[NSTabViewItem alloc] init],
+    [[NSTabViewItem alloc] init],
   ];
   for (size_t i = 0; i < [cocoa_tabs count]; ++i) {
     [cocoa_tabs[i] setLabel:[NSString stringWithFormat:@"Tab %zu", i + 1]];
@@ -108,10 +110,12 @@ TEST_F(TabbedPaneAccessibilityMacTest, AttributesMatchAppKit) {
   EXPECT_NSEQ(
       GetLegacyA11yAttributeValue(cocoa_tabs[0], NSAccessibilityRoleAttribute),
       A11yElementAtPoint(TabCenterPoint(0)).accessibilityRole);
+
   EXPECT_NSEQ(
       GetLegacyA11yAttributeValue(cocoa_tabs[0],
                                   NSAccessibilityRoleDescriptionAttribute),
       A11yElementAtPoint(TabCenterPoint(0)).accessibilityRoleDescription);
+
   EXPECT_NSEQ(
       GetLegacyA11yAttributeValue(cocoa_tabs[0], NSAccessibilityTitleAttribute),
       A11yElementAtPoint(TabCenterPoint(0)).accessibilityTitle);
@@ -167,5 +171,4 @@ TEST_F(TabbedPaneAccessibilityMacTest, WritableValue) {
   EXPECT_TRUE(GetTabAt(0)->selected());
 }
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test

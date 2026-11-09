@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,19 @@
 #define COMPONENTS_VIZ_TEST_TEST_GLES2_INTERFACE_H_
 
 #include <stddef.h>
+
+#include <limits>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/gles2_interface_stub.h"
@@ -60,19 +64,12 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   void UseProgram(GLuint program) override;
   void Flush() override;
   void Finish() override;
-  void ShallowFinishCHROMIUM() override;
 
   void BindBuffer(GLenum target, GLuint buffer) override;
   void BindRenderbuffer(GLenum target, GLuint buffer) override;
   void BindFramebuffer(GLenum target, GLuint buffer) override;
 
   void PixelStorei(GLenum pname, GLint param) override;
-
-  GLuint CreateImageCHROMIUM(ClientBuffer buffer,
-                             GLsizei width,
-                             GLsizei height,
-                             GLenum internalformat) override;
-  void DestroyImageCHROMIUM(GLuint image_id) override;
 
   void* MapBufferCHROMIUM(GLuint target, GLenum access) override;
   GLboolean UnmapBufferCHROMIUM(GLuint target) override;
@@ -85,18 +82,19 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   void EndQueryEXT(GLenum target) override;
   void GetQueryObjectuivEXT(GLuint id, GLenum pname, GLuint* params) override;
 
-  void ProduceTextureDirectCHROMIUM(GLuint texture, GLbyte* mailbox) override;
-  GLuint CreateAndConsumeTextureCHROMIUM(const GLbyte* mailbox) override;
   GLuint CreateAndTexStorage2DSharedImageCHROMIUM(
       const GLbyte* mailbox) override;
 
-  void ResizeCHROMIUM(GLuint width,
-                      GLuint height,
-                      float device_scale,
-                      GLcolorSpace color_space,
-                      GLboolean has_alpha) override;
   void LoseContextCHROMIUM(GLenum current, GLenum other) override;
   GLenum GetGraphicsResetStatusKHR() override;
+
+  void ReadPixels(GLint x,
+                  GLint y,
+                  GLsizei width,
+                  GLsizei height,
+                  GLenum format,
+                  GLenum type,
+                  void* pixels) override;
 
   // Overridden from gpu::InterfaceBase
   void GenSyncTokenCHROMIUM(GLbyte* sync_token) override;
@@ -108,7 +106,7 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
 
   size_t NumUsedTextures() const { return used_textures_.size(); }
   bool UsedTexture(int texture) const {
-    return base::Contains(used_textures_, texture);
+    return used_textures_.contains(texture);
   }
   void ResetUsedTextures() { used_textures_.clear(); }
 
@@ -116,9 +114,7 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   size_t NumRenderbuffers() const;
 
   bool IsContextLost() { return context_lost_; }
-  void set_test_support(TestContextSupport* test_support) {
-    test_support_ = test_support;
-  }
+  void set_test_support(TestContextSupport* test_support);
   const gpu::Capabilities& test_capabilities() const {
     return test_capabilities_;
   }
@@ -126,33 +122,12 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
     return last_waited_sync_token_;
   }
   void set_context_lost(bool context_lost) { context_lost_ = context_lost; }
-  void set_times_bind_texture_succeeds(int times);
 
-  void set_have_extension_io_surface(bool have);
-  void set_have_extension_egl_image(bool have);
-  void set_have_post_sub_buffer(bool have);
-  void set_have_swap_buffers_with_bounds(bool have);
-  void set_have_commit_overlay_planes(bool have);
-  void set_have_discard_framebuffer(bool have);
-  void set_support_compressed_texture_etc1(bool support);
-  void set_support_texture_format_bgra8888(bool support);
-  void set_support_texture_storage(bool support);
-  void set_support_texture_usage(bool support);
-  void set_support_sync_query(bool support);
-  void set_support_texture_rectangle(bool support);
   void set_support_texture_half_float_linear(bool support);
   void set_support_texture_norm16(bool support);
-  void set_msaa_is_slow(bool msaa_is_slow);
-  void set_gpu_rasterization(bool gpu_rasterization);
-  void set_avoid_stencil_buffers(bool avoid_stencil_buffers);
-  void set_support_multisample_compatibility(bool support);
-  void set_support_texture_storage_image(bool support);
-  void set_support_texture_npot(bool support);
-  void set_supports_oop_raster(bool support);
   void set_max_texture_size(int size);
-  void set_supports_shared_image_swap_chain(bool support);
-  void set_supports_gpu_memory_buffer_format(gfx::BufferFormat format,
-                                             bool support);
+  void set_supports_texture_rg(bool support);
+
   // When set, MapBufferCHROMIUM will return NULL after this many times.
   void set_times_map_buffer_chromium_succeeds(int times) {
     times_map_buffer_chromium_succeeds_ = times;
@@ -173,16 +148,9 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   virtual GLuint NextRenderbufferId();
   virtual void RetireRenderbufferId(GLuint id);
 
-  void SetMaxSamples(int max_samples);
   void set_context_lost_callback(base::OnceClosure callback) {
     context_lost_callback_ = std::move(callback);
   }
-
-  int width() const { return width_; }
-  int height() const { return height_; }
-  bool reshape_called() const { return reshape_called_; }
-  void clear_reshape_called() { reshape_called_ = false; }
-  float scale_factor() const { return scale_factor_; }
 
   enum UpdateType { NO_UPDATE = 0, PREPARE_TEXTURE, POST_SUB_BUFFER };
 
@@ -193,19 +161,19 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
  protected:
   struct Buffer {
     Buffer();
+
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
+
     ~Buffer();
 
     GLenum target;
-    std::unique_ptr<uint8_t[]> pixels;
-    size_t size;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Buffer);
+    base::HeapArray<uint8_t> pixels;
   };
 
   unsigned context_id_;
   gpu::Capabilities test_capabilities_;
-  int times_bind_texture_succeeds_ = -1;
+  gpu::GLCapabilities test_gl_capabilities_;
   int times_end_query_succeeds_ = -1;
   bool context_lost_ = false;
   int times_map_buffer_chromium_succeeds_ = -1;
@@ -218,12 +186,9 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   unsigned next_framebuffer_id_ = 1;
   std::unordered_set<unsigned> framebuffer_set_;
   unsigned current_framebuffer_ = 0;
-  std::vector<TestGLES2Interface*> shared_contexts_;
-  bool reshape_called_ = false;
-  int width_ = 0;
-  int height_ = 0;
-  float scale_factor_ = -1.f;
-  TestContextSupport* test_support_ = nullptr;
+  std::vector<raw_ptr<TestGLES2Interface, VectorExperimental>> shared_contexts_;
+  raw_ptr<TestContextSupport> test_support_ = nullptr;
+  const uint64_t test_command_buffer_id_ = 1u;
   gfx::Rect update_rect_;
   UpdateType last_update_type_ = NO_UPDATE;
   GLuint64 next_insert_fence_sync_ = 1;
@@ -237,7 +202,6 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   unsigned next_texture_id_ = 1;
   unsigned next_renderbuffer_id_ = 1;
   std::unordered_map<unsigned, std::unique_ptr<Buffer>> buffers_;
-  std::unordered_set<unsigned> images_;
   std::unordered_set<unsigned> textures_;
   std::unordered_set<unsigned> renderbuffer_set_;
 

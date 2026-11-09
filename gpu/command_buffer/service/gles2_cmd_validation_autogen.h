@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -92,7 +92,6 @@ class CmpFunctionValidator {
 CmpFunctionValidator cmp_function;
 
 ValueValidator<GLenum> compressed_texture_format;
-ValueValidator<GLenum> coverage_modulation_components;
 class DrawModeValidator {
  public:
   bool IsValid(const GLenum value) const;
@@ -115,6 +114,7 @@ FaceTypeValidator face_type;
 
 ValueValidator<GLenum> framebuffer_attachment_parameter;
 ValueValidator<GLenum> framebuffer_parameter;
+ValueValidator<GLenum> framebuffer_pixel_local_storage_parameter;
 ValueValidator<GLenum> framebuffer_target;
 ValueValidator<GLenum> g_l_state;
 class GetMaxIndexTypeValidator {
@@ -218,12 +218,6 @@ class StringTypeValidator {
   bool IsValid(const GLenum value) const;
 };
 StringTypeValidator string_type;
-
-class SwapBuffersFlagsValidator {
- public:
-  bool IsValid(const GLbitfield value) const;
-};
-SwapBuffersFlagsValidator swap_buffers_flags;
 
 ValueValidator<GLbitfield> sync_flush_flags;
 class SyncParameterValidator {

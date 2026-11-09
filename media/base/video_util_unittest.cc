@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,14 @@
 #include <cmath>
 #include <memory>
 
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "media/base/limits.h"
 #include "media/base/video_frame.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace {
 
@@ -22,9 +28,9 @@ void FillPlaneWithPattern(uint8_t* data,
 
   uint32_t val = 0;
   uint8_t* src = data;
-  for (int i = 0; i < visible_size.height(); ++i, src += stride) {
+  for (int i = 0; i < visible_size.height(); ++i, UNSAFE_TODO(src += stride)) {
     for (int j = 0; j < visible_size.width(); ++j, ++val)
-      src[j] = val & 0xff;
+      UNSAFE_TODO(src[j]) = val & 0xff;
   }
 }
 
@@ -42,18 +48,18 @@ scoped_refptr<media::VideoFrame> CreateFrameWithPatternFilled(
   scoped_refptr<media::VideoFrame> frame(media::VideoFrame::CreateFrame(
       format, coded_size, visible_rect, natural_size, timestamp));
 
-  FillPlaneWithPattern(frame->data(media::VideoFrame::kYPlane),
-                       frame->stride(media::VideoFrame::kYPlane),
+  FillPlaneWithPattern(frame->writable_data(media::VideoFrame::Plane::kY),
+                       frame->stride(media::VideoFrame::Plane::kY),
                        frame->visible_rect().size());
   FillPlaneWithPattern(
-      frame->data(media::VideoFrame::kUPlane),
-      frame->stride(media::VideoFrame::kUPlane),
-      media::VideoFrame::PlaneSize(format, media::VideoFrame::kUPlane,
+      frame->writable_data(media::VideoFrame::Plane::kU),
+      frame->stride(media::VideoFrame::Plane::kU),
+      media::VideoFrame::PlaneSize(format, media::VideoFrame::Plane::kU,
                                    frame->visible_rect().size()));
   FillPlaneWithPattern(
-      frame->data(media::VideoFrame::kVPlane),
-      frame->stride(media::VideoFrame::kVPlane),
-      media::VideoFrame::PlaneSize(format, media::VideoFrame::kVPlane,
+      frame->writable_data(media::VideoFrame::Plane::kV),
+      frame->stride(media::VideoFrame::Plane::kV),
+      media::VideoFrame::PlaneSize(format, media::VideoFrame::Plane::kV,
                                    frame->visible_rect().size()));
   return frame;
 }
@@ -80,60 +86,68 @@ bool VerifyPlanCopyWithPadding(const uint8_t* src,
     return false;
 
   const uint8_t *src_ptr = src, *dst_ptr = dst;
-  for (size_t i = 0; i < src_height;
-       ++i, src_ptr += src_stride, dst_ptr += dst_stride) {
-    if (memcmp(src_ptr, dst_ptr, src_width))
+  for (size_t i = 0; i < src_height; ++i, UNSAFE_TODO(src_ptr += src_stride),
+              UNSAFE_TODO(dst_ptr += dst_stride)) {
+    if (UNSAFE_TODO(memcmp(src_ptr, dst_ptr, src_width))) {
       return false;
+    }
     for (size_t j = src_width; j < dst_width; ++j) {
-      if (src_ptr[src_width - 1] != dst_ptr[j])
+      if (UNSAFE_TODO(src_ptr[src_width - 1]) != UNSAFE_TODO(dst_ptr[j])) {
         return false;
+      }
     }
   }
   if (src_height < dst_height) {
-    src_ptr = dst + (src_height - 1) * dst_stride;
-    if (memcmp(src_ptr, dst_ptr, dst_width))
+    src_ptr = UNSAFE_TODO(dst + (src_height - 1) * dst_stride);
+    if (UNSAFE_TODO(memcmp(src_ptr, dst_ptr, dst_width))) {
       return false;
+    }
   }
   return true;
 }
 
 bool VerifyCopyWithPadding(const media::VideoFrame& src_frame,
                            const media::VideoFrame& dst_frame) {
-  if (!src_frame.IsMappable() || !dst_frame.IsMappable() ||
-      src_frame.visible_rect().size() != dst_frame.visible_rect().size())
+  if (!src_frame.HasDirectCpuAccess() || !dst_frame.HasDirectCpuAccess() ||
+      src_frame.visible_rect().size() != dst_frame.visible_rect().size()) {
     return false;
+  }
 
   if (!VerifyPlanCopyWithPadding(
-          src_frame.visible_data(media::VideoFrame::kYPlane),
-          src_frame.stride(media::VideoFrame::kYPlane),
+          src_frame.visible_data(media::VideoFrame::Plane::kY),
+          src_frame.stride(media::VideoFrame::Plane::kY),
           src_frame.visible_rect().size(),
-          dst_frame.data(media::VideoFrame::kYPlane),
-          dst_frame.stride(media::VideoFrame::kYPlane), dst_frame.coded_size()))
+          dst_frame.data(media::VideoFrame::Plane::kY),
+          dst_frame.stride(media::VideoFrame::Plane::kY),
+          dst_frame.coded_size())) {
     return false;
+  }
   if (!VerifyPlanCopyWithPadding(
-          src_frame.visible_data(media::VideoFrame::kUPlane),
-          src_frame.stride(media::VideoFrame::kUPlane),
+          src_frame.visible_data(media::VideoFrame::Plane::kU),
+          src_frame.stride(media::VideoFrame::Plane::kU),
           media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
-                                       media::VideoFrame::kUPlane,
+                                       media::VideoFrame::Plane::kU,
                                        src_frame.visible_rect().size()),
-          dst_frame.data(media::VideoFrame::kUPlane),
-          dst_frame.stride(media::VideoFrame::kUPlane),
+          dst_frame.data(media::VideoFrame::Plane::kU),
+          dst_frame.stride(media::VideoFrame::Plane::kU),
           media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
-                                       media::VideoFrame::kUPlane,
-                                       dst_frame.coded_size())))
+                                       media::VideoFrame::Plane::kU,
+                                       dst_frame.coded_size()))) {
     return false;
+  }
   if (!VerifyPlanCopyWithPadding(
-          src_frame.visible_data(media::VideoFrame::kVPlane),
-          src_frame.stride(media::VideoFrame::kVPlane),
+          src_frame.visible_data(media::VideoFrame::Plane::kV),
+          src_frame.stride(media::VideoFrame::Plane::kV),
           media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
-                                       media::VideoFrame::kVPlane,
+                                       media::VideoFrame::Plane::kV,
                                        src_frame.visible_rect().size()),
-          dst_frame.data(media::VideoFrame::kVPlane),
-          dst_frame.stride(media::VideoFrame::kVPlane),
+          dst_frame.data(media::VideoFrame::Plane::kV),
+          dst_frame.stride(media::VideoFrame::Plane::kV),
           media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
-                                       media::VideoFrame::kVPlane,
-                                       dst_frame.coded_size())))
+                                       media::VideoFrame::Plane::kV,
+                                       dst_frame.coded_size()))) {
     return false;
+  }
 
   return true;
 }
@@ -144,31 +158,10 @@ namespace media {
 
 class VideoUtilTest : public testing::Test {
  public:
-  VideoUtilTest()
-      : height_(0),
-        y_stride_(0),
-        u_stride_(0),
-        v_stride_(0) {
-  }
+  VideoUtilTest() = default;
   VideoUtilTest(const VideoUtilTest&) = delete;
   VideoUtilTest& operator=(const VideoUtilTest&) = delete;
   ~VideoUtilTest() override = default;
-
-  void CreateSourceFrame(int width, int height,
-                         int y_stride, int u_stride, int v_stride) {
-    EXPECT_GE(y_stride, width);
-    EXPECT_GE(u_stride, width / 2);
-    EXPECT_GE(v_stride, width / 2);
-
-    height_ = height;
-    y_stride_ = y_stride;
-    u_stride_ = u_stride;
-    v_stride_ = v_stride;
-
-    y_plane_.reset(new uint8_t[y_stride * height]);
-    u_plane_.reset(new uint8_t[u_stride * height / 2]);
-    v_plane_.reset(new uint8_t[v_stride * height / 2]);
-  }
 
   void CreateDestinationFrame(int width, int height) {
     gfx::Size size(width, height);
@@ -177,15 +170,6 @@ class VideoUtilTest : public testing::Test {
   }
 
  private:
-  std::unique_ptr<uint8_t[]> y_plane_;
-  std::unique_ptr<uint8_t[]> u_plane_;
-  std::unique_ptr<uint8_t[]> v_plane_;
-
-  int height_;
-  int y_stride_;
-  int u_stride_;
-  int v_stride_;
-
   scoped_refptr<VideoFrame> destination_frame_;
 };
 
@@ -269,8 +253,10 @@ uint8_t* target4x6_270_y_n = target4x6_90_n_y;
 uint8_t* target4x6_270_y_y = target4x6_90_n_n;
 
 struct VideoRotationTestData {
-  uint8_t* src;
-  uint8_t* target;
+  // These fields are not raw_ptr<>s because they only ever point to
+  // statically-allocated data which is never freed, and hence cannot dangle.
+  RAW_PTR_EXCLUSION uint8_t* src;
+  RAW_PTR_EXCLUSION uint8_t* target;
   int width;
   int height;
   int rotation;
@@ -325,32 +311,32 @@ const VideoRotationTestData kVideoRotationTestData[] = {
 class VideoUtilRotationTest
     : public testing::TestWithParam<VideoRotationTestData> {
  public:
-  VideoUtilRotationTest() {
-    dest_.reset(new uint8_t[GetParam().width * GetParam().height]);
+  VideoUtilRotationTest()
+      : dest_(base::HeapArray<uint8_t>::Uninit(GetParam().width *
+                                               GetParam().height)) {
+    std::ranges::fill(dest_, 255);
   }
   VideoUtilRotationTest(const VideoUtilRotationTest&) = delete;
   VideoUtilRotationTest& operator=(const VideoUtilRotationTest&) = delete;
   ~VideoUtilRotationTest() override = default;
 
-  uint8_t* dest_plane() { return dest_.get(); }
+  base::span<uint8_t> dest_plane() { return dest_; }
 
  private:
-  std::unique_ptr<uint8_t[]> dest_;
+  base::HeapArray<uint8_t> dest_;
 };
 
 TEST_P(VideoUtilRotationTest, Rotate) {
   int rotation = GetParam().rotation;
   EXPECT_TRUE((rotation >= 0) && (rotation < 360) && (rotation % 90 == 0));
 
-  int size = GetParam().width * GetParam().height;
-  uint8_t* dest = dest_plane();
-  memset(dest, 255, size);
+  base::span<uint8_t> dest = dest_plane();
 
-  RotatePlaneByPixels(GetParam().src, dest, GetParam().width,
-                      GetParam().height, rotation,
-                      GetParam().flip_vert, GetParam().flip_horiz);
-
-  EXPECT_EQ(memcmp(dest, GetParam().target, size), 0);
+  RotatePlaneByPixels(GetParam().src, dest.data(), GetParam().width,
+                      GetParam().height, rotation, GetParam().flip_vert,
+                      GetParam().flip_horiz);
+  auto expected = UNSAFE_TODO(base::span(GetParam().target, dest.size()));
+  EXPECT_EQ(dest, expected);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -410,6 +396,58 @@ TEST_F(VideoUtilTest, ComputeLetterboxRegionForI420) {
                   .IsEmpty());
 }
 
+// Tests the MinimallyShrinkRectForI420 function.
+TEST_F(VideoUtilTest, MinimallyShrinkRectForI420) {
+  // A few no-ops:
+  EXPECT_EQ(gfx::Rect(2, 2, 100, 100),
+            MinimallyShrinkRectForI420(gfx::Rect(2, 2, 100, 100)));
+  EXPECT_EQ(gfx::Rect(2, -2, 100, 100),
+            MinimallyShrinkRectForI420(gfx::Rect(2, -2, 100, 100)));
+  EXPECT_EQ(gfx::Rect(-2, 2, 100, 100),
+            MinimallyShrinkRectForI420(gfx::Rect(-2, 2, 100, 100)));
+
+  // Origin has odd coordinates:
+  EXPECT_EQ(gfx::Rect(2, 2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(1, 1, 100, 100)));
+  EXPECT_EQ(gfx::Rect(0, 2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(-1, 1, 100, 100)));
+  EXPECT_EQ(gfx::Rect(2, 0, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(1, -1, 100, 100)));
+
+  // Size is odd:
+  EXPECT_EQ(gfx::Rect(2, 2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(2, 2, 99, 99)));
+  EXPECT_EQ(gfx::Rect(-2, 2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(-2, 2, 99, 99)));
+  EXPECT_EQ(gfx::Rect(2, -2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(2, -2, 99, 99)));
+
+  // Both are odd:
+  EXPECT_EQ(gfx::Rect(2, 2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(1, 1, 99, 99)));
+  EXPECT_EQ(gfx::Rect(0, 2, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(-1, 1, 99, 99)));
+  EXPECT_EQ(gfx::Rect(2, 0, 98, 98),
+            MinimallyShrinkRectForI420(gfx::Rect(1, -1, 99, 99)));
+
+  // Check the biggest rectangle that the function will accept:
+  constexpr int kMinDimension = -1 * limits::kMaxDimension;
+  if (limits::kMaxDimension % 2 == 0) {
+    EXPECT_EQ(gfx::Rect(kMinDimension, kMinDimension, 2 * limits::kMaxDimension,
+                        2 * limits::kMaxDimension),
+              MinimallyShrinkRectForI420(gfx::Rect(kMinDimension, kMinDimension,
+                                                   2 * limits::kMaxDimension,
+                                                   2 * limits::kMaxDimension)));
+  } else {
+    EXPECT_EQ(
+        gfx::Rect(kMinDimension + 1, kMinDimension + 1,
+                  2 * limits::kMaxDimension - 2, 2 * limits::kMaxDimension - 2),
+        MinimallyShrinkRectForI420(gfx::Rect(kMinDimension, kMinDimension,
+                                             2 * limits::kMaxDimension,
+                                             2 * limits::kMaxDimension)));
+  }
+}
+
 TEST_F(VideoUtilTest, ScaleSizeToEncompassTarget) {
   EXPECT_EQ(gfx::Size(1000, 750),
             ScaleSizeToEncompassTarget(gfx::Size(640, 480),
@@ -428,6 +466,44 @@ TEST_F(VideoUtilTest, ScaleSizeToEncompassTarget) {
                                        gfx::Size(200000000, 200000000)));
   EXPECT_TRUE(ScaleSizeToEncompassTarget(
       gfx::Size(0, 0), gfx::Size(2000000000, 2000000000)).IsEmpty());
+}
+
+TEST_F(VideoUtilTest, CropSizeForScalingToTarget) {
+  // Test same aspect ratios.
+  EXPECT_EQ(gfx::Rect(0, 0, 640, 360),
+            CropSizeForScalingToTarget(gfx::Size(640, 360), gfx::Size(16, 9)));
+  EXPECT_EQ(gfx::Rect(0, 0, 320, 240),
+            CropSizeForScalingToTarget(gfx::Size(320, 240), gfx::Size(4, 3)));
+  EXPECT_EQ(
+      gfx::Rect(0, 0, 320, 240),
+      CropSizeForScalingToTarget(gfx::Size(321, 241), gfx::Size(4, 3), 2));
+
+  // Test cropping 4:3 from 16:9.
+  EXPECT_EQ(gfx::Rect(80, 0, 480, 360),
+            CropSizeForScalingToTarget(gfx::Size(640, 360), gfx::Size(4, 3)));
+  EXPECT_EQ(gfx::Rect(53, 0, 320, 240),
+            CropSizeForScalingToTarget(gfx::Size(426, 240), gfx::Size(4, 3)));
+  EXPECT_EQ(
+      gfx::Rect(52, 0, 320, 240),
+      CropSizeForScalingToTarget(gfx::Size(426, 240), gfx::Size(4, 3), 2));
+
+  // Test cropping 16:9 from 4:3.
+  EXPECT_EQ(gfx::Rect(0, 30, 320, 180),
+            CropSizeForScalingToTarget(gfx::Size(320, 240), gfx::Size(16, 9)));
+  EXPECT_EQ(gfx::Rect(0, 9, 96, 54),
+            CropSizeForScalingToTarget(gfx::Size(96, 72), gfx::Size(16, 9)));
+  EXPECT_EQ(gfx::Rect(0, 8, 96, 54),
+            CropSizeForScalingToTarget(gfx::Size(96, 72), gfx::Size(16, 9), 2));
+
+  // Test abnormal inputs.
+  EXPECT_EQ(gfx::Rect(),
+            CropSizeForScalingToTarget(gfx::Size(0, 1), gfx::Size(1, 1)));
+  EXPECT_EQ(gfx::Rect(),
+            CropSizeForScalingToTarget(gfx::Size(1, 0), gfx::Size(1, 1)));
+  EXPECT_EQ(gfx::Rect(),
+            CropSizeForScalingToTarget(gfx::Size(1, 1), gfx::Size(0, 1)));
+  EXPECT_EQ(gfx::Rect(),
+            CropSizeForScalingToTarget(gfx::Size(1, 1), gfx::Size(1, 0)));
 }
 
 TEST_F(VideoUtilTest, PadToMatchAspectRatio) {
@@ -474,15 +550,20 @@ TEST_F(VideoUtilTest, LetterboxVideoFrame) {
                   x < view_area.x() + view_area.width() &&
                   y >= view_area.y() &&
                   y < view_area.y() + view_area.height();
-              EXPECT_EQ(frame->data(VideoFrame::kYPlane)[
-                  y * frame->stride(VideoFrame::kYPlane) + x],
-                        inside ? 0x01 : 0x00);
-              EXPECT_EQ(frame->data(VideoFrame::kUPlane)[
-                  (y / 2) * frame->stride(VideoFrame::kUPlane) + (x / 2)],
-                        inside ? 0x02 : 0x80);
-              EXPECT_EQ(frame->data(VideoFrame::kVPlane)[
-                  (y / 2) * frame->stride(VideoFrame::kVPlane) + (x / 2)],
-                        inside ? 0x03 : 0x80);
+              UNSAFE_TODO(
+                  EXPECT_EQ(frame->data(VideoFrame::Plane::kY)
+                                [y * frame->stride(VideoFrame::Plane::kY) + x],
+                            inside ? 0x01 : 0x00));
+              UNSAFE_TODO(EXPECT_EQ(
+                  frame->data(VideoFrame::Plane::kU)
+                      [(y / 2) * frame->stride(VideoFrame::Plane::kU) +
+                       (x / 2)],
+                  inside ? 0x02 : 0x80));
+              UNSAFE_TODO(EXPECT_EQ(
+                  frame->data(VideoFrame::Plane::kV)
+                      [(y / 2) * frame->stride(VideoFrame::Plane::kV) +
+                       (x / 2)],
+                  inside ? 0x03 : 0x80));
             }
           }
         }
@@ -525,9 +606,8 @@ TEST_F(VideoUtilTest, I420CopyWithPadding) {
 
 TEST_F(VideoUtilTest, WrapAsI420VideoFrame) {
   gfx::Size size(640, 480);
-  scoped_refptr<VideoFrame> src_frame =
-      VideoFrame::CreateFrame(PIXEL_FORMAT_I420A, size, gfx::Rect(size), size,
-                              base::TimeDelta::FromDays(1));
+  scoped_refptr<VideoFrame> src_frame = VideoFrame::CreateFrame(
+      PIXEL_FORMAT_I420A, size, gfx::Rect(size), size, base::Days(1));
 
   scoped_refptr<VideoFrame> dst_frame = WrapAsI420VideoFrame(src_frame);
   EXPECT_EQ(dst_frame->format(), PIXEL_FORMAT_I420);
@@ -536,8 +616,8 @@ TEST_F(VideoUtilTest, WrapAsI420VideoFrame) {
   EXPECT_EQ(dst_frame->visible_rect(), src_frame->visible_rect());
   EXPECT_EQ(dst_frame->natural_size(), src_frame->natural_size());
 
-  std::vector<size_t> planes = {VideoFrame::kYPlane, VideoFrame::kUPlane,
-                                VideoFrame::kVPlane};
+  std::vector<size_t> planes = {VideoFrame::Plane::kY, VideoFrame::Plane::kU,
+                                VideoFrame::Plane::kV};
   for (auto plane : planes)
     EXPECT_EQ(dst_frame->data(plane), src_frame->data(plane));
 
@@ -546,7 +626,8 @@ TEST_F(VideoUtilTest, WrapAsI420VideoFrame) {
   // ASAN.
   src_frame.reset();
   for (auto plane : planes)
-    memset(dst_frame->data(plane), 1, dst_frame->stride(plane));
+    UNSAFE_TODO(
+        memset(dst_frame->writable_data(plane), 1, dst_frame->stride(plane)));
 }
 
 }  // namespace media

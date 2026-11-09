@@ -1,37 +1,39 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "media/mojo/clients/mojo_renderer.h"
 
 #include <stdint.h>
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/gmock_callback_support.h"
-#include "base/test/test_message_loop.h"
-#include "base/threading/platform_thread.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/task_environment.h"
 #include "base/timer/elapsed_timer.h"
 #include "media/base/cdm_config.h"
 #include "media/base/cdm_context.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_helpers.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "media/cdm/default_cdm_factory.h"
-#include "media/mojo/clients/mojo_renderer.h"
+#include "media/gfx/video_overlay_factory.h"
 #include "media/mojo/common/media_type_converters.h"
 #include "media/mojo/mojom/content_decryption_module.mojom.h"
 #include "media/mojo/mojom/renderer.mojom.h"
 #include "media/mojo/services/mojo_cdm_service.h"
 #include "media/mojo/services/mojo_cdm_service_context.h"
 #include "media/mojo/services/mojo_renderer_service.h"
-#include "media/renderers/video_overlay_factory.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -40,6 +42,7 @@ using ::base::test::RunOnceCallback;
 using ::base::test::RunOnceClosure;
 using ::testing::_;
 using ::testing::DoAll;
+using ::testing::InvokeWithoutArgs;
 using ::testing::Return;
 using ::testing::SaveArg;
 using ::testing::StrictMock;
@@ -48,17 +51,9 @@ namespace media {
 
 namespace {
 const int64_t kStartPlayingTimeInMs = 100;
-const char kClearKeyKeySystem[] = "org.w3.clearkey";
 
 ACTION_P2(GetMediaTime, start_time, elapsed_timer) {
   return start_time + elapsed_timer->Elapsed();
-}
-
-void WaitFor(base::TimeDelta duration) {
-  base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, run_loop.QuitClosure(), duration);
-  run_loop.Run();
 }
 }  // namespace
 
@@ -75,7 +70,7 @@ class MojoRendererTest : public ::testing::Test {
         remote_renderer_remote.InitWithNewPipeAndPassReceiver());
 
     mojo_renderer_ = std::make_unique<MojoRenderer>(
-        message_loop_.task_runner(),
+        task_environment_.GetMainThreadTaskRunner(),
         std::unique_ptr<VideoOverlayFactory>(nullptr), nullptr,
         std::move(remote_renderer_remote));
 
@@ -87,7 +82,14 @@ class MojoRendererTest : public ::testing::Test {
         .WillRepeatedly(Return(base::TimeDelta()));
   }
 
-  ~MojoRendererTest() override = default;
+  MojoRendererTest(const MojoRendererTest&) = delete;
+  MojoRendererTest& operator=(const MojoRendererTest&) = delete;
+
+  ~MojoRendererTest() override {
+    // Flush pending tasks so that the self-owned `MojoRendererService` is torn
+    // down while the fixture members it references are still alive.
+    Destroy();
+  }
 
   void Destroy() {
     mojo_renderer_.reset();
@@ -118,14 +120,13 @@ class MojoRendererTest : public ::testing::Test {
     video_stream_->set_video_decoder_config(
         is_encrypted ? TestVideoConfig::NormalEncrypted()
                      : TestVideoConfig::Normal());
-    std::vector<DemuxerStream*> streams;
     streams_.push_back(audio_stream_.get());
     EXPECT_CALL(demuxer_, GetAllStreams()).WillRepeatedly(Return(streams_));
   }
 
   void InitializeAndExpect(PipelineStatus status) {
     DVLOG(1) << __func__ << ": " << status;
-    EXPECT_CALL(*this, OnInitialized(status));
+    EXPECT_CALL(*this, OnInitialized(SameStatusCode(status)));
     mojo_renderer_->Initialize(&demuxer_, &renderer_client_,
                                base::BindOnce(&MojoRendererTest::OnInitialized,
                                               base::Unretained(this)));
@@ -171,7 +172,7 @@ class MojoRendererTest : public ::testing::Test {
   }
 
   void OnCdmServiceInitialized(mojom::CdmContextPtr cdm_context,
-                               const std::string& error_message) {
+                               CreateCdmStatus status) {
     cdm_context_.set_cdm_id(cdm_context->cdm_id);
   }
 
@@ -179,7 +180,7 @@ class MojoRendererTest : public ::testing::Test {
     mojo_cdm_service_ =
         std::make_unique<MojoCdmService>(&mojo_cdm_service_context_);
     mojo_cdm_service_->Initialize(
-        &cdm_factory_, kClearKeyKeySystem, CdmConfig(),
+        &cdm_factory_, {kClearKeyKeySystem, false, false, false},
         base::BindOnce(&MojoRendererTest::OnCdmServiceInitialized,
                        base::Unretained(this)));
     base::RunLoop().RunUntilIdle();
@@ -192,12 +193,11 @@ class MojoRendererTest : public ::testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  void Play() {
-    StartPlayingFrom(base::TimeDelta::FromMilliseconds(kStartPlayingTimeInMs));
-  }
+  void Play() { StartPlayingFrom(base::Milliseconds(kStartPlayingTimeInMs)); }
 
   // Fixture members.
-  base::TestMessageLoop message_loop_;
+  base::test::SingleThreadTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
   // The MojoRenderer that we are testing.
   std::unique_ptr<MojoRenderer> mojo_renderer_;
@@ -208,10 +208,10 @@ class MojoRendererTest : public ::testing::Test {
   mojo::Remote<mojom::ContentDecryptionModule> cdm_remote_;
 
   // Client side mock demuxer and demuxer streams.
-  StrictMock<MockDemuxer> demuxer_;
   std::unique_ptr<StrictMock<MockDemuxerStream>> audio_stream_;
   std::unique_ptr<StrictMock<MockDemuxerStream>> video_stream_;
-  std::vector<DemuxerStream*> streams_;
+  std::vector<raw_ptr<DemuxerStream>> streams_;
+  StrictMock<MockDemuxer> demuxer_;
 
   // Service side bindings (declaration order is critical).
   MojoCdmServiceContext mojo_cdm_service_context_;
@@ -219,19 +219,45 @@ class MojoRendererTest : public ::testing::Test {
   std::unique_ptr<MojoCdmService> mojo_cdm_service_;
 
   // Service side mocks and helpers.
-  StrictMock<MockRenderer>* mock_renderer_;
-  RendererClient* remote_renderer_client_;
+  raw_ptr<StrictMock<MockRenderer>, AcrossTasksDanglingUntriaged>
+      mock_renderer_;
+  raw_ptr<RendererClient, DanglingUntriaged> remote_renderer_client_;
 
   mojo::SelfOwnedReceiverRef<mojom::Renderer> renderer_receiver_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MojoRendererTest);
 };
 
 TEST_F(MojoRendererTest, Initialize_Success) {
   Initialize();
 }
 
+// Regression test for crbug.com/503617302.
+TEST_F(MojoRendererTest, Initialize_Twice) {
+  // Create a service directly to bypass client-side checks in MojoRenderer.
+  auto mock_renderer = std::make_unique<StrictMock<MockRenderer>>();
+  mojo::Remote<mojom::Renderer> remote;
+  auto receiver_ref = MojoRendererService::Create(
+      &mojo_cdm_service_context_, std::move(mock_renderer),
+      remote.BindNewPipeAndPassReceiver());
+
+  mojo::PendingAssociatedRemote<mojom::RendererClient> client_remote_1;
+  auto client_receiver_1 = client_remote_1.InitWithNewEndpointAndPassReceiver();
+  std::vector<mojo::PendingRemote<mojom::DemuxerStream>> streams;
+  mojo::PendingRemote<mojom::DemuxerStream> stream_remote;
+  auto stream_receiver = stream_remote.InitWithNewPipeAndPassReceiver();
+  streams.push_back(std::move(stream_remote));
+  remote->Initialize(std::move(client_remote_1), std::move(streams),
+                     base::DoNothing());
+
+  mojo::PendingAssociatedRemote<mojom::RendererClient> client_remote_2;
+  auto client_receiver_2 = client_remote_2.InitWithNewEndpointAndPassReceiver();
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  remote->Initialize(std::move(client_remote_2), std::nullopt,
+                     base::DoNothing());
+
+  EXPECT_EQ("MojoRendererService is already initialized",
+            bad_message_observer.WaitForBadMessage());
+}
 TEST_F(MojoRendererTest, Initialize_Failure) {
   CreateAudioStream();
   // Mojo Renderer only expects a boolean result, which will be translated
@@ -265,7 +291,9 @@ TEST_F(MojoRendererTest, Flush_ConnectionError) {
   Initialize();
 
   // Upon connection error, OnError() should be called once and only once.
-  EXPECT_CALL(renderer_client_, OnError(PIPELINE_ERROR_DECODE)).Times(1);
+  EXPECT_CALL(renderer_client_,
+              OnError(HasStatusCode(PIPELINE_ERROR_DISCONNECTED)))
+      .Times(1);
   EXPECT_CALL(*mock_renderer_, OnFlush(_))
       .WillOnce(InvokeWithoutArgs(this, &MojoRendererTest::ConnectionError));
   Flush();
@@ -275,7 +303,9 @@ TEST_F(MojoRendererTest, Flush_AfterConnectionError) {
   Initialize();
 
   // Upon connection error, OnError() should be called once and only once.
-  EXPECT_CALL(renderer_client_, OnError(PIPELINE_ERROR_DECODE)).Times(1);
+  EXPECT_CALL(renderer_client_,
+              OnError(HasStatusCode(PIPELINE_ERROR_DISCONNECTED)))
+      .Times(1);
   ConnectionError();
 
   Flush();
@@ -342,7 +372,9 @@ TEST_F(MojoRendererTest, SetCdm_BeforeInitialize) {
 TEST_F(MojoRendererTest, SetCdm_AfterInitializeAndConnectionError) {
   CreateCdm();
   Initialize();
-  EXPECT_CALL(renderer_client_, OnError(PIPELINE_ERROR_DECODE)).Times(1);
+  EXPECT_CALL(renderer_client_,
+              OnError(HasStatusCode(PIPELINE_ERROR_DISCONNECTED)))
+      .Times(1);
   ConnectionError();
   SetCdmAndExpect(false);
 }
@@ -375,9 +407,8 @@ TEST_F(MojoRendererTest, GetMediaTime) {
   Initialize();
   EXPECT_EQ(base::TimeDelta(), mojo_renderer_->GetMediaTime());
 
-  const base::TimeDelta kSleepTime = base::TimeDelta::FromMilliseconds(500);
-  const base::TimeDelta kStartTime =
-      base::TimeDelta::FromMilliseconds(kStartPlayingTimeInMs);
+  constexpr base::TimeDelta kAdvanceTime = base::Milliseconds(500);
+  const base::TimeDelta kStartTime = base::Milliseconds(kStartPlayingTimeInMs);
 
   // Media time should not advance since playback rate is 0.
   EXPECT_CALL(*mock_renderer_, SetPlaybackRate(0));
@@ -386,7 +417,7 @@ TEST_F(MojoRendererTest, GetMediaTime) {
       .WillRepeatedly(Return(kStartTime));
   mojo_renderer_->SetPlaybackRate(0);
   mojo_renderer_->StartPlayingFrom(kStartTime);
-  WaitFor(kSleepTime);
+  task_environment_.FastForwardBy(kAdvanceTime);
   EXPECT_EQ(kStartTime, mojo_renderer_->GetMediaTime());
 
   // Media time should now advance since playback rate is > 0.
@@ -395,7 +426,7 @@ TEST_F(MojoRendererTest, GetMediaTime) {
   EXPECT_CALL(*mock_renderer_, GetMediaTime())
       .WillRepeatedly(GetMediaTime(kStartTime, elapsed_timer.get()));
   mojo_renderer_->SetPlaybackRate(1.0);
-  WaitFor(kSleepTime);
+  task_environment_.FastForwardBy(kAdvanceTime);
   EXPECT_GT(mojo_renderer_->GetMediaTime(), kStartTime);
 
   // Flushing should pause media-time updates.
@@ -403,8 +434,48 @@ TEST_F(MojoRendererTest, GetMediaTime) {
   Flush();
   base::TimeDelta pause_time = mojo_renderer_->GetMediaTime();
   EXPECT_GT(pause_time, kStartTime);
-  WaitFor(kSleepTime);
+  task_environment_.FastForwardBy(kAdvanceTime);
   EXPECT_EQ(pause_time, mojo_renderer_->GetMediaTime());
+  Destroy();
+}
+
+// Media time interpolated by MojoRenderer should keep up with the remote
+// renderer between periodic time updates at playback rates above 2x, rather
+// than being clamped to the upper bound of the last time update.
+TEST_F(MojoRendererTest, GetMediaTime_HighPlaybackRate) {
+  Initialize();
+
+  // Must match `kTimeUpdateInterval` in mojo_renderer_service.cc.
+  constexpr base::TimeDelta kTimeUpdateInterval = base::Milliseconds(125);
+  constexpr double kPlaybackRate = 4.0;
+  const base::TimeDelta kStartTime = base::Milliseconds(kStartPlayingTimeInMs);
+
+  // The remote renderer's media time advances at `kPlaybackRate`.
+  base::ElapsedTimer elapsed_timer;
+  auto remote_media_time = [&]() {
+    return kStartTime + elapsed_timer.Elapsed() * kPlaybackRate;
+  };
+  EXPECT_CALL(*mock_renderer_, SetPlaybackRate(kPlaybackRate));
+  EXPECT_CALL(*mock_renderer_, StartPlayingFrom(kStartTime));
+  EXPECT_CALL(*mock_renderer_, GetMediaTime())
+      .WillRepeatedly(remote_media_time);
+  mojo_renderer_->SetPlaybackRate(kPlaybackRate);
+  mojo_renderer_->StartPlayingFrom(kStartTime);
+
+  // Wait for the first periodic time update.
+  task_environment_.FastForwardBy(kTimeUpdateInterval);
+  EXPECT_EQ(remote_media_time(), mojo_renderer_->GetMediaTime());
+
+  // Sample the media time throughout the next few update intervals. At 4x,
+  // more than `2 * kTimeUpdateInterval` of media time elapses within a single
+  // update interval, so an upper bound that is not scaled by the playback rate
+  // would stall the interpolated media time until the next time update.
+  constexpr int kSamplesPerInterval = 5;
+  for (int i = 0; i < 3 * kSamplesPerInterval; ++i) {
+    task_environment_.FastForwardBy(kTimeUpdateInterval / kSamplesPerInterval);
+    EXPECT_EQ(remote_media_time(), mojo_renderer_->GetMediaTime());
+  }
+
   Destroy();
 }
 
@@ -442,8 +513,10 @@ TEST_F(MojoRendererTest, OnEnded) {
 TEST_F(MojoRendererTest, Destroy_PendingInitialize) {
   CreateAudioStream();
   EXPECT_CALL(*mock_renderer_, OnInitialize(_, _, _))
-      .WillRepeatedly(RunOnceCallback<2>(PIPELINE_ERROR_ABORT));
-  EXPECT_CALL(*this, OnInitialized(PIPELINE_ERROR_INITIALIZATION_FAILED));
+      .WillRepeatedly(
+          base::test::RunOnceCallbackRepeatedly<2>(PIPELINE_ERROR_ABORT));
+  EXPECT_CALL(*this, OnInitialized(
+                         HasStatusCode(PIPELINE_ERROR_INITIALIZATION_FAILED)));
   mojo_renderer_->Initialize(
       &demuxer_, &renderer_client_,
       base::BindOnce(&MojoRendererTest::OnInitialized, base::Unretained(this)));
@@ -452,7 +525,7 @@ TEST_F(MojoRendererTest, Destroy_PendingInitialize) {
 
 TEST_F(MojoRendererTest, Destroy_PendingFlush) {
   EXPECT_CALL(*mock_renderer_, OnSetCdm(_, _))
-      .WillRepeatedly(RunOnceCallback<1>(true));
+      .WillRepeatedly(base::test::RunOnceCallbackRepeatedly<1>(true));
   EXPECT_CALL(*this, OnCdmAttached(false));
   mojo_renderer_->SetCdm(
       &cdm_context_,
@@ -470,13 +543,11 @@ TEST_F(MojoRendererTest, Destroy_PendingSetCdm) {
   Destroy();
 }
 
-// TODO(xhwang): Add more tests on OnError. For example, ErrorDuringFlush,
-// ErrorAfterFlush etc.
-
 TEST_F(MojoRendererTest, ErrorDuringPlayback) {
   Initialize();
 
-  EXPECT_CALL(renderer_client_, OnError(PIPELINE_ERROR_DECODE)).Times(1);
+  EXPECT_CALL(renderer_client_, OnError(HasStatusCode(PIPELINE_ERROR_DECODE)))
+      .Times(1);
 
   Play();
   remote_renderer_client_->OnError(PIPELINE_ERROR_DECODE);
@@ -485,6 +556,75 @@ TEST_F(MojoRendererTest, ErrorDuringPlayback) {
   EXPECT_CALL(*mock_renderer_, SetPlaybackRate(0.0)).Times(1);
   mojo_renderer_->SetPlaybackRate(0.0);
   Flush();
+}
+
+TEST_F(MojoRendererTest, ErrorBeforeFlush) {
+  Initialize();
+  Play();
+
+  EXPECT_CALL(renderer_client_, OnError(HasStatusCode(PIPELINE_ERROR_DECODE)))
+      .Times(1);
+  remote_renderer_client_->OnError(PIPELINE_ERROR_DECODE);
+  Flush();
+}
+
+TEST_F(MojoRendererTest, ErrorDuringFlush) {
+  Initialize();
+  Play();
+
+  EXPECT_CALL(renderer_client_, OnError(HasStatusCode(PIPELINE_ERROR_DECODE)))
+      .Times(1);
+  EXPECT_CALL(*mock_renderer_, OnFlush(_))
+      .WillOnce(DoAll(
+          [&]() { remote_renderer_client_->OnError(PIPELINE_ERROR_DECODE); },
+          RunOnceClosure<0>()));
+  Flush();
+}
+
+TEST_F(MojoRendererTest, OnTracksChanged) {
+  Initialize();
+  Play();
+
+  // Create a second audio stream to switch to.
+  std::unique_ptr<StrictMock<MockDemuxerStream>> audio_stream_2 =
+      CreateStream(DemuxerStream::AUDIO);
+  audio_stream_2->set_audio_decoder_config(TestAudioConfig::Normal());
+  EXPECT_CALL(*audio_stream_2, ManagesTrackSwitchesInternally())
+      .WillOnce(Return(false));
+
+  // Switching to a new stream that does not manage track switches internally
+  // should flush and restart playback at the current media time.
+  EXPECT_CALL(*mock_renderer_, OnFlush(_)).WillOnce(RunOnceClosure<0>());
+  EXPECT_CALL(*mock_renderer_, StartPlayingFrom(_)).Times(1);
+
+  bool track_change_completed = false;
+  mojo_renderer_->OnTracksChanged(
+      DemuxerStream::AUDIO, audio_stream_2.get(),
+      base::BindOnce([](bool* completed) { *completed = true; },
+                     &track_change_completed));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(track_change_completed);
+
+  // Switching between active streams where the stream manages track switches
+  // internally (e.g., HLS/MSE) should complete immediately without flushing.
+  EXPECT_CALL(*audio_stream_, ManagesTrackSwitchesInternally())
+      .WillOnce(Return(true));
+  track_change_completed = false;
+  mojo_renderer_->OnTracksChanged(
+      DemuxerStream::AUDIO, audio_stream_.get(),
+      base::BindOnce([](bool* completed) { *completed = true; },
+                     &track_change_completed));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(track_change_completed);
+
+  // Disabling the track (nullptr) should complete immediately without flushing.
+  track_change_completed = false;
+  mojo_renderer_->OnTracksChanged(
+      DemuxerStream::AUDIO, nullptr,
+      base::BindOnce([](bool* completed) { *completed = true; },
+                     &track_change_completed));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(track_change_completed);
 }
 
 }  // namespace media

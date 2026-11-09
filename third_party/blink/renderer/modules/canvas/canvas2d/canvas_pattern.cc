@@ -25,16 +25,27 @@
 
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_pattern.h"
 
+#include <utility>
+
+#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/geometry/dom_matrix_read_only.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/graphics/image.h"
+#include "third_party/blink/renderer/platform/graphics/image_orientation.h"
+#include "third_party/blink/renderer/platform/graphics/pattern.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+class DOMMatrix2DInit;
+class ExecutionContext;
 
 Pattern::RepeatMode CanvasPattern::ParseRepetitionType(
     const String& type,
     ExceptionState& exception_state) {
-  if (type.IsEmpty() || type == "repeat")
+  if (type.empty() || type == "repeat")
     return Pattern::kRepeatModeXY;
 
   if (type == "no-repeat")
@@ -48,20 +59,20 @@ Pattern::RepeatMode CanvasPattern::ParseRepetitionType(
 
   exception_state.ThrowDOMException(
       DOMExceptionCode::kSyntaxError,
-      "The provided type ('" + type +
-          "') is not one of 'repeat', 'no-repeat', 'repeat-x', or 'repeat-y'.");
+      StrCat({"The provided type ('", type,
+              "') is not one of 'repeat', 'no-repeat', 'repeat-x', or "
+              "'repeat-y'."}));
   return Pattern::kRepeatModeNone;
 }
 
 CanvasPattern::CanvasPattern(scoped_refptr<Image> image,
                              Pattern::RepeatMode repeat,
-                             bool origin_clean)
-    : pattern_(Pattern::CreateImagePattern(std::move(image), repeat)),
-      origin_clean_(origin_clean) {
-  identifiability_study_helper_.MaybeUpdateBuilder(
-      CanvasOps::kCreatePattern, image ? image->width() : 0,
-      image ? image->height() : 0, repeat);
-}
+                             bool origin_clean,
+                             RespectImageOrientationEnum respect_orientation)
+    : pattern_(Pattern::CreateImagePattern(std::move(image),
+                                           repeat,
+                                           respect_orientation)),
+      origin_clean_(origin_clean) {}
 
 void CanvasPattern::setTransform(DOMMatrix2DInit* transform,
                                  ExceptionState& exception_state) {
@@ -71,14 +82,7 @@ void CanvasPattern::setTransform(DOMMatrix2DInit* transform,
   if (!m) {
     return;
   }
-  identifiability_study_helper_.MaybeUpdateBuilder(
-      m->m11(), m->m12(), m->m21(), m->m22(), m->m41(), m->m42());
-
   pattern_transform_ = m->GetAffineTransform();
-}
-
-IdentifiableToken CanvasPattern::GetIdentifiableToken() const {
-  return identifiability_study_helper_.GetToken();
 }
 
 }  // namespace blink

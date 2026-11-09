@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,12 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/devtools/device/android_device_manager.h"
-
-namespace crypto {
-class RSAPrivateKey;
-}
+#include "crypto/keypair.h"
 
 class AndroidUsbDevice;
+class Profile;
 
 class UsbDeviceProvider : public AndroidDeviceManager::DeviceProvider {
  public:
@@ -43,7 +41,7 @@ class UsbDeviceProvider : public AndroidDeviceManager::DeviceProvider {
 
   typedef std::map<std::string, scoped_refptr<AndroidUsbDevice> > UsbDeviceMap;
 
-  std::unique_ptr<crypto::RSAPrivateKey> rsa_key_;
+  crypto::keypair::PrivateKey rsa_key_;
   UsbDeviceMap device_map_;
 };
 

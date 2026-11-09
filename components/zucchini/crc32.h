@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <stdint.h>
 
+#include "base/containers/span.h"
+
 namespace zucchini {
 
-// Calculates CRC-32 of the given range [|first|, |last|).
-uint32_t CalculateCrc32(const uint8_t* first, const uint8_t* last);
+// Calculates CRC-32 of `data`.
+uint32_t CalculateCrc32(base::span<const uint8_t> data);
 
 }  // namespace zucchini
 

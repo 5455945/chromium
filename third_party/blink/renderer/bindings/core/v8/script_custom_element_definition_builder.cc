@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,13 +15,12 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_custom_element_form_associated_callback.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_custom_element_form_disabled_callback.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_custom_element_form_state_restore_callback.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_custom_element_tool_fill_callback.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_void_function.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 #include "third_party/blink/renderer/platform/bindings/callback_method_retriever.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
 
 namespace blink {
 
@@ -37,8 +36,6 @@ ScriptCustomElementDefinitionBuilder::ScriptCustomElementDefinitionBuilder(
 }
 
 bool ScriptCustomElementDefinitionBuilder::CheckConstructorIntrinsics() {
-  DCHECK(GetScriptState()->World().IsMainWorld());
-
   if (!Constructor()->IsConstructor()) {
     exception_state_.ThrowTypeError(
         "constructor argument is not a constructor");
@@ -48,8 +45,7 @@ bool ScriptCustomElementDefinitionBuilder::CheckConstructorIntrinsics() {
 }
 
 bool ScriptCustomElementDefinitionBuilder::CheckConstructorNotRegistered() {
-  if (!ScriptCustomElementDefinition::ForConstructor(
-          GetScriptState(), data_.registry_, Constructor()->CallbackObject()))
+  if (!data_.registry_->DefinitionForConstructor(Constructor()))
     return true;
 
   // Constructor is already registered.
@@ -84,6 +80,15 @@ bool ScriptCustomElementDefinitionBuilder::RememberOriginalProperties() {
     data_.disconnected_callback_ =
         V8VoidFunction::Create(v8_disconnected_callback_.As<v8::Function>());
   }
+  v8_connected_move_callback_ =
+      retriever.GetMethodOrUndefined("connectedMoveCallback", exception_state_);
+  if (exception_state_.HadException()) {
+    return false;
+  }
+  if (v8_connected_move_callback_->IsFunction()) {
+    data_.connected_move_callback_ =
+        V8VoidFunction::Create(v8_connected_move_callback_.As<v8::Function>());
+  }
   v8_adopted_callback_ =
       retriever.GetMethodOrUndefined("adoptedCallback", exception_state_);
   if (exception_state_.HadException())
@@ -107,7 +112,7 @@ bool ScriptCustomElementDefinitionBuilder::RememberOriginalProperties() {
   if (data_.attribute_changed_callback_) {
     v8::Isolate* isolate = Isolate();
     v8::Local<v8::Context> current_context = isolate->GetCurrentContext();
-    v8::TryCatch try_catch(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state_);
     v8::Local<v8::Value> v8_observed_attributes;
 
     if (!Constructor()
@@ -115,7 +120,6 @@ bool ScriptCustomElementDefinitionBuilder::RememberOriginalProperties() {
              ->Get(current_context,
                    V8AtomicString(isolate, "observedAttributes"))
              .ToLocal(&v8_observed_attributes)) {
-      exception_state_.RethrowV8Exception(try_catch.Exception());
       return false;
     }
 
@@ -134,14 +138,13 @@ bool ScriptCustomElementDefinitionBuilder::RememberOriginalProperties() {
   {
     auto* isolate = Isolate();
     v8::Local<v8::Context> current_context = isolate->GetCurrentContext();
-    v8::TryCatch try_catch(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state_);
     v8::Local<v8::Value> v8_disabled_features;
 
     if (!Constructor()
              ->CallbackObject()
              ->Get(current_context, V8AtomicString(isolate, "disabledFeatures"))
              .ToLocal(&v8_disabled_features)) {
-      exception_state_.RethrowV8Exception(try_catch.Exception());
       return false;
     }
 
@@ -157,14 +160,13 @@ bool ScriptCustomElementDefinitionBuilder::RememberOriginalProperties() {
   {
     auto* isolate = Isolate();
     v8::Local<v8::Context> current_context = isolate->GetCurrentContext();
-    v8::TryCatch try_catch(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state_);
     v8::Local<v8::Value> v8_form_associated;
 
     if (!Constructor()
              ->CallbackObject()
              ->Get(current_context, V8AtomicString(isolate, "formAssociated"))
              .ToLocal(&v8_form_associated)) {
-      exception_state_.RethrowV8Exception(try_catch.Exception());
       return false;
     }
 
@@ -214,16 +216,24 @@ bool ScriptCustomElementDefinitionBuilder::RememberOriginalProperties() {
           V8CustomElementFormStateRestoreCallback::Create(
               v8_form_state_restore_callback_.As<v8::Function>());
     }
+
+    v8_tool_fill_callback_ =
+        retriever.GetMethodOrUndefined("toolFillCallback", exception_state_);
+    if (exception_state_.HadException()) {
+      return false;
+    }
+    if (v8_tool_fill_callback_->IsFunction()) {
+      data_.tool_fill_callback_ = V8CustomElementToolFillCallback::Create(
+          v8_tool_fill_callback_.As<v8::Function>());
+    }
   }
 
   return true;
 }
 
 CustomElementDefinition* ScriptCustomElementDefinitionBuilder::Build(
-    const CustomElementDescriptor& descriptor,
-    CustomElementDefinition::Id id) {
-  return MakeGarbageCollected<ScriptCustomElementDefinition>(data_, descriptor,
-                                                             id);
+    const CustomElementDescriptor& descriptor) {
+  return MakeGarbageCollected<ScriptCustomElementDefinition>(data_, descriptor);
 }
 
 v8::Isolate* ScriptCustomElementDefinitionBuilder::Isolate() {

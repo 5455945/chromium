@@ -1,19 +1,31 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 
 #include <memory>
 
 #include "base/files/file_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_with_install.h"
+#include "chrome/browser/extensions/test_standalone_window_controller.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/extension_test_util.h"
+#include "components/sessions/core/session_id.h"
+#include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_manager.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/api/extension_action/action_info_test_util.h"
+#include "extensions/common/extension_builder.h"
 #include "extensions/test/test_extension_dir.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace {
@@ -44,7 +56,7 @@ TEST_P(ExtensionActionAPIUnitTest, MultiIcons) {
   TestExtensionDir test_extension_dir;
   test_extension_dir.WriteManifest(base::StringPrintf(
       kManifestTemplate, GetManifestVersionForActionType(GetParam()),
-      GetManifestKeyForActionType(GetParam())));
+      ActionInfo::GetManifestKeyForActionType(GetParam())));
 
   {
     std::string icon_file_content;
@@ -67,10 +79,10 @@ TEST_P(ExtensionActionAPIUnitTest, MultiIcons) {
   const ExtensionIconSet& icons = action_info->default_icon;
 
   EXPECT_EQ(4u, icons.map().size());
-  EXPECT_EQ("icon19.png", icons.Get(19, ExtensionIconSet::MATCH_EXACTLY));
-  EXPECT_EQ("icon24.png", icons.Get(24, ExtensionIconSet::MATCH_EXACTLY));
-  EXPECT_EQ("icon24.png", icons.Get(31, ExtensionIconSet::MATCH_EXACTLY));
-  EXPECT_EQ("icon38.png", icons.Get(38, ExtensionIconSet::MATCH_EXACTLY));
+  EXPECT_EQ("icon19.png", icons.Get(19, ExtensionIconSet::Match::kExactly));
+  EXPECT_EQ("icon24.png", icons.Get(24, ExtensionIconSet::Match::kExactly));
+  EXPECT_EQ("icon24.png", icons.Get(31, ExtensionIconSet::Match::kExactly));
+  EXPECT_EQ("icon38.png", icons.Get(38, ExtensionIconSet::Match::kExactly));
 }
 
 // Test that localization in the manifest properly applies to the "action"
@@ -89,7 +101,7 @@ TEST_P(ExtensionActionAPIUnitTest, ActionLocalization) {
          })";
   test_dir.WriteManifest(
       base::StringPrintf(kManifest, GetManifestVersionForActionType(GetParam()),
-                         GetManifestKeyForActionType(GetParam())));
+                         ActionInfo::GetManifestKeyForActionType(GetParam())));
 
   constexpr char kMessages[] =
       R"({
@@ -98,7 +110,7 @@ TEST_P(ExtensionActionAPIUnitTest, ActionLocalization) {
            }
          })";
   {
-    // TODO(https://crbug.com/1135378): It's a bit clunky to write to nested
+    // TODO(crbug.com/40151844): It's a bit clunky to write to nested
     // files in a TestExtensionDir. It'd be nice to provide better support for
     // this.
     base::ScopedAllowBlockingForTesting allow_blocking;
@@ -122,11 +134,44 @@ TEST_P(ExtensionActionAPIUnitTest, ActionLocalization) {
             action->GetTitle(ExtensionAction::kDefaultTabId));
 }
 
+#if BUILDFLAG(IS_ANDROID)
+// Android only supports manifest V3, which has chrome.action but not
+// chrome.browserAction or chrome.pageAction.
 INSTANTIATE_TEST_SUITE_P(All,
                          ExtensionActionAPIUnitTest,
-                         testing::Values(ActionInfo::TYPE_BROWSER,
-                                         ActionInfo::TYPE_PAGE,
-                                         ActionInfo::TYPE_ACTION));
+                         testing::Values(ActionInfo::Type::kAction));
+#else
+INSTANTIATE_TEST_SUITE_P(All,
+                         ExtensionActionAPIUnitTest,
+                         testing::Values(ActionInfo::Type::kBrowser,
+                                         ActionInfo::Type::kPage,
+                                         ActionInfo::Type::kAction));
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// Verifies that ActionOpenPopupFunction populates a non-empty error rather than
+// hitting DCHECK(!error.empty()) when given the windowId of a standalone
+// WindowController with no BrowserWindowInterface.
+TEST_F(ExtensionServiceTestWithInstall,
+       ActionOpenPopup_StandaloneWindowRejected) {
+  InitializeEmptyExtensionService();
+
+  const SessionID standalone_window_id = SessionID::NewUnique();
+  TestStandaloneWindowController standalone_controller(
+      /*base_window=*/nullptr, profile(), standalone_window_id,
+      /*web_contents=*/nullptr);
+
+  auto extension = ExtensionBuilder("action_ext")
+                       .SetManifestKey("action", base::DictValue())
+                       .Build();
+  ExtensionRegistrar::Get(profile())->AddExtension(extension);
+  auto popup_func = base::MakeRefCounted<ActionOpenPopupFunction>();
+  popup_func->set_extension(extension);
+  std::string args =
+      base::StringPrintf("[{\"windowId\": %d}]", standalone_window_id.id());
+  std::string error = api_test_utils::RunFunctionAndReturnError(
+      popup_func.get(), args, profile());
+  EXPECT_EQ("Could not find an active browser window.", error);
+}
 
 }  // namespace
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,19 @@
 #include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/logging.h"
+#include "build/build_config.h"
+#include "printing/backend/cups_helper.h"
 #include "printing/backend/cups_jobs.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "printing/backend/cups_connection_pool.h"
+#endif
 
 namespace printing {
 
 namespace {
-
-constexpr int kTimeoutMs = 3000;
 
 // The number of jobs we'll retrieve for a queue.  We expect a user to queue at
 // most 10 jobs per printer.  If they queue more, they won't receive updates for
@@ -64,21 +69,24 @@ QueueStatus::~QueueStatus() = default;
 
 class CupsConnectionImpl : public CupsConnection {
  public:
-  CupsConnectionImpl(const GURL& print_server_url,
-                     http_encryption_t encryption,
-                     bool blocking)
-      : print_server_url_(print_server_url),
-        cups_encryption_(encryption),
-        blocking_(false),
-        cups_http_(nullptr) {}
+  CupsConnectionImpl() = default;
 
-  CupsConnectionImpl(CupsConnectionImpl&& connection)
-      : print_server_url_(connection.print_server_url_),
-        cups_encryption_(connection.cups_encryption_),
-        blocking_(connection.blocking_),
-        cups_http_(std::move(connection.cups_http_)) {}
+  CupsConnectionImpl(const CupsConnectionImpl&) = delete;
+  CupsConnectionImpl& operator=(const CupsConnectionImpl&) = delete;
 
-  ~CupsConnectionImpl() override {}
+  ~CupsConnectionImpl() override {
+#if BUILDFLAG(IS_CHROMEOS)
+    if (cups_http_) {
+      // If there is a connection pool, then the connection we have came from
+      // it.  We must add the connection back to the pool for possible reuse
+      // rather than letting it be automatically closed, since we can never get
+      // it back after closing it.
+      CupsConnectionPool* connection_pool = CupsConnectionPool::GetInstance();
+      if (connection_pool)
+        connection_pool->AddConnection(std::move(cups_http_));
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  }
 
   bool GetDests(std::vector<std::unique_ptr<CupsPrinter>>& printers) override {
     printers.clear();
@@ -86,18 +94,11 @@ class CupsConnectionImpl : public CupsConnection {
       LOG(WARNING) << "CUPS connection failed: ";
       return false;
     }
-
-    // On macOS, AirPrint destinations show up even if they're not added to the
-    // system, and their capabilities cannot be read in that situation
-    // (crbug.com/1027834). Therefore, only show discovered destinations that
-    // have been added locally. Also exclude fax and scanner devices.
-    constexpr cups_ptype_t kMask =
-        CUPS_PRINTER_FAX | CUPS_PRINTER_SCANNER | CUPS_PRINTER_DISCOVERED;
     DestinationEnumerator enumerator;
     const int success =
-        cupsEnumDests(CUPS_DEST_FLAGS_NONE, kTimeoutMs,
+        cupsEnumDests(CUPS_DEST_FLAGS_NONE, kCupsTimeoutMs,
                       /*cancel=*/nullptr,
-                      /*type=*/CUPS_PRINTER_LOCAL, kMask,
+                      /*type=*/CUPS_PRINTER_LOCAL, kDestinationsFilterMask,
                       &DestinationEnumerator::cups_callback, &enumerator);
 
     if (!success) {
@@ -173,8 +174,6 @@ class CupsConnectionImpl : public CupsConnection {
                                       printer_status);
   }
 
-  std::string server_name() const override { return print_server_url_.host(); }
-
   int last_error() const override { return cupsLastError(); }
   std::string last_error_message() const override {
     return cupsLastErrorString();
@@ -186,36 +185,29 @@ class CupsConnectionImpl : public CupsConnection {
     if (cups_http_)
       return true;  // we're already connected
 
-    std::string host;
-    int port;
-
-    if (!print_server_url_.is_empty()) {
-      host = print_server_url_.host();
-      port = print_server_url_.IntPort();
-    } else {
-      host = cupsServer();
-      port = ippPort();
+#if BUILDFLAG(IS_CHROMEOS)
+    // If a connection pool has been created for this process then we must
+    // allocate a connection from that, and not try to create a new one now.
+    CupsConnectionPool* connection_pool = CupsConnectionPool::GetInstance();
+    if (connection_pool) {
+      cups_http_ = connection_pool->TakeConnection();
+      if (!cups_http_)
+        LOG(WARNING) << "No available connections in the CUPS connection pool";
+      return !!cups_http_;
     }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-    cups_http_.reset(httpConnect2(host.c_str(), port, nullptr, AF_UNSPEC,
-                                  cups_encryption_, blocking_ ? 1 : 0,
-                                  kTimeoutMs, nullptr));
+    cups_http_ = HttpConnect2(cupsServer(), ippPort(), nullptr, AF_UNSPEC,
+                              HTTP_ENCRYPT_NEVER, /*blocking=*/0,
+                              kCupsTimeoutMs, nullptr);
     return !!cups_http_;
   }
-
-  GURL print_server_url_;
-  http_encryption_t cups_encryption_;
-  bool blocking_;
 
   ScopedHttpPtr cups_http_;
 };
 
-std::unique_ptr<CupsConnection> CupsConnection::Create(
-    const GURL& print_server_url,
-    http_encryption_t encryption,
-    bool blocking) {
-  return std::make_unique<CupsConnectionImpl>(print_server_url, encryption,
-                                              blocking);
+std::unique_ptr<CupsConnection> CupsConnection::Create() {
+  return std::make_unique<CupsConnectionImpl>();
 }
 
 }  // namespace printing

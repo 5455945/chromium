@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/system/sys_info.h"
@@ -28,11 +28,22 @@ const char kCollectionOutcomeHistogramPrefix[] = "ChromeOS.CWP.Collect";
 const int kMinIntervalBetweenSessionRestoreCollectionsInSec = 30;
 
 // Returns a random TimeDelta uniformly selected between zero and |max|.
-base::TimeDelta RandomTimeDelta(base::TimeDelta max) {
-  if (max.is_zero())
-    return max;
-  return base::TimeDelta::FromMicroseconds(
-      base::RandGenerator(max.InMicroseconds()));
+base::TimeDelta RandTimeDelta(base::TimeDelta max) {
+  return max.is_positive() ? base::RandTimeDeltaUpTo(max) : max;
+}
+
+template <typename T>
+void ClearUnknownFields(T* unknown_fields) {
+  // When compiled with the MessageLite runtime, `mutable_unknown_fields()`
+  // returns a `std::string*`. When compiled with the full protobuf runtime, the
+  // return type is a `google::protobuf::UnknownFieldSet*`.
+  if constexpr (std::is_same_v<T, std::string>) {
+    unknown_fields->clear();
+  } else if constexpr (std::is_same_v<T, google::protobuf::UnknownFieldSet>) {
+    unknown_fields->Clear();
+  } else {
+    static_assert(false, "Unsupported type");
+  }
 }
 
 // PerfDataProto is defined elsewhere with more fields than the definition in
@@ -49,24 +60,33 @@ void RemoveUnknownFieldsFromMessagesWithStrings(PerfDataProto* proto) {
   // Clean up PerfEvent::MMapEvent and PerfEvent::CommEvent.
   for (PerfDataProto::PerfEvent& event : *proto->mutable_events()) {
     if (event.has_comm_event())
-      event.mutable_comm_event()->mutable_unknown_fields()->clear();
+      ClearUnknownFields(event.mutable_comm_event()->mutable_unknown_fields());
     if (event.has_mmap_event())
-      event.mutable_mmap_event()->mutable_unknown_fields()->clear();
+      ClearUnknownFields(event.mutable_mmap_event()->mutable_unknown_fields());
   }
   // Clean up PerfBuildID.
   for (PerfDataProto::PerfBuildID& build_id : *proto->mutable_build_ids()) {
-    build_id.mutable_unknown_fields()->clear();
+    ClearUnknownFields(build_id.mutable_unknown_fields());
   }
   // Clean up StringMetadata and StringMetadata::StringAndMd5sumPrefix.
   if (proto->has_string_metadata()) {
-    proto->mutable_string_metadata()->mutable_unknown_fields()->clear();
+    ClearUnknownFields(
+        proto->mutable_string_metadata()->mutable_unknown_fields());
     if (proto->string_metadata().has_perf_command_line_whole()) {
-      proto->mutable_string_metadata()
-          ->mutable_perf_command_line_whole()
-          ->mutable_unknown_fields()
-          ->clear();
+      ClearUnknownFields(proto->mutable_string_metadata()
+                             ->mutable_perf_command_line_whole()
+                             ->mutable_unknown_fields());
     }
   }
+  for (PerfDataProto::PerfEventType& event_type :
+       *proto->mutable_event_types()) {
+    ClearUnknownFields(event_type.mutable_unknown_fields());
+  }
+  for (PerfDataProto::PerfPMUMappingsMetadata& mapping :
+       *proto->mutable_pmu_mappings()) {
+    ClearUnknownFields(mapping.mutable_unknown_fields());
+  }
+  ClearUnknownFields(proto->mutable_unknown_fields());
 }
 
 }  // namespace
@@ -104,7 +124,7 @@ void MetricCollector::RecordUserLogin(base::TimeTicks login_time) {
 }
 void MetricCollector::StopTimer() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  timer_.AbandonAndStop();
+  timer_.Stop();
 }
 
 void MetricCollector::ScheduleSuspendDoneCollection(
@@ -123,7 +143,7 @@ void MetricCollector::ScheduleSuspendDoneCollection(
 
   // Randomly pick a delay before doing the collection.
   base::TimeDelta collection_delay =
-      RandomTimeDelta(resume_params.max_collection_delay);
+      RandTimeDelta(resume_params.max_collection_delay);
   timer_.Start(FROM_HERE, collection_delay,
                base::BindOnce(&MetricCollector::CollectPerfDataAfterResume,
                               GetWeakPtr(), sleep_duration, collection_delay));
@@ -151,8 +171,8 @@ void MetricCollector::ScheduleSessionRestoreCollection(int num_tabs_restored) {
     return;
   }
 
-  const auto min_interval = base::TimeDelta::FromSeconds(
-      kMinIntervalBetweenSessionRestoreCollectionsInSec);
+  const auto min_interval =
+      base::Seconds(kMinIntervalBetweenSessionRestoreCollectionsInSec);
   const base::TimeDelta time_since_last_collection =
       (base::TimeTicks::Now() - last_session_restore_collection_time_);
   // Do not collect if there hasn't been enough elapsed time since the last
@@ -168,7 +188,7 @@ void MetricCollector::ScheduleSessionRestoreCollection(int num_tabs_restored) {
 
   // Randomly pick a delay before doing the collection.
   base::TimeDelta collection_delay =
-      RandomTimeDelta(restore_params.max_collection_delay);
+      RandTimeDelta(restore_params.max_collection_delay);
   timer_.Start(
       FROM_HERE, collection_delay,
       base::BindOnce(&MetricCollector::CollectPerfDataAfterSessionRestore,
@@ -227,7 +247,7 @@ void MetricCollector::ScheduleIntervalCollection() {
   // Pick a random time in the current interval.
   base::TimeTicks scheduled_time =
       next_profiling_interval_start_ +
-      RandomTimeDelta(collection_params_.periodic_interval);
+      RandTimeDelta(collection_params_.periodic_interval);
   // If the scheduled time has already passed in the time it took to make the
   // above calculations, trigger the collection event immediately.
   if (scheduled_time < now)
@@ -291,7 +311,7 @@ void MetricCollector::SaveSerializedPerfProto(
   sampled_profile->mutable_perf_data()->Swap(&perf_data_proto);
 
   sampled_profile->set_ms_after_boot(base::SysInfo::Uptime().InMilliseconds());
-  DCHECK(!login_time_.is_null());
+  CHECK(!login_time_.is_null(), base::NotFatalUntil::M161);
   sampled_profile->set_ms_after_login(
       (base::TimeTicks::Now() - login_time_).InMilliseconds());
 

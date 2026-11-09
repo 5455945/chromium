@@ -1,11 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_CONTENT_SETTINGS_CONTENT_SETTING_IMAGE_MODEL_STATES_H_
 #define CHROME_BROWSER_UI_CONTENT_SETTINGS_CONTENT_SETTING_IMAGE_MODEL_STATES_H_
 
-#include "base/macros.h"
+#include <array>
+
 #include "chrome/browser/ui/content_settings/content_setting_image_model.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -17,6 +18,11 @@ using ImageType = ContentSettingImageModel::ImageType;
 class ContentSettingImageModelStates
     : public content::WebContentsUserData<ContentSettingImageModelStates> {
  public:
+  ContentSettingImageModelStates(const ContentSettingImageModelStates&) =
+      delete;
+  ContentSettingImageModelStates& operator=(
+      const ContentSettingImageModelStates&) = delete;
+
   ~ContentSettingImageModelStates() override;
 
   static ContentSettingImageModelStates* Get(content::WebContents* contents);
@@ -33,6 +39,9 @@ class ContentSettingImageModelStates
   void SetPromoWasShown(ImageType type, bool promo_was_shown);
   bool PromoWasShown(ImageType type) const;
 
+  void SetIconShownRecorded(ImageType type, bool recorded);
+  bool IconShownRecorded(ImageType type) const;
+
  private:
   friend class content::WebContentsUserData<ContentSettingImageModelStates>;
   explicit ContentSettingImageModelStates(content::WebContents* contents);
@@ -43,25 +52,32 @@ class ContentSettingImageModelStates
 
   // Array of bool for whether an animation has run for a given image model.
   // This bit is reset to false when the image is hidden.
-  bool animations_[static_cast<int>(ImageType::NUM_IMAGE_TYPES)] = {};
+  std::array<bool, static_cast<size_t>(ImageType::kMaxValue) + 1> animations_ =
+      {};
 
   // Array of bool for whether accessibility has been notified when an image
   // needs to be read out. Bit is stored per image type. This bit is reset to
   // false when the image is hidden.
-  bool accessibility_notified_[static_cast<int>(ImageType::NUM_IMAGE_TYPES)] =
-      {};
+  std::array<bool, static_cast<size_t>(ImageType::kMaxValue) + 1>
+      accessibility_notified_ = {};
 
   // Array of bool for whether the bubble was auto-opened for a given image
   // model. This bit is reset to false when the image is hidden.
-  bool auto_opened_bubbles_[static_cast<int>(ImageType::NUM_IMAGE_TYPES)] = {};
+  std::array<bool, static_cast<size_t>(ImageType::kMaxValue) + 1>
+      auto_opened_bubbles_ = {};
 
   // Array of bool for whether the indicator had a promo shown for a image
   // model. This bit is reset to false when the image is hidden.
-  bool promo_was_shown_[static_cast<int>(ImageType::NUM_IMAGE_TYPES)] = {};
+  std::array<bool, static_cast<size_t>(ImageType::kMaxValue) + 1>
+      promo_was_shown_ = {};
+
+  // Array of bool for whether a metric was recorded for the icon being shown
+  // for a given image model. This bit is reset to false when the image is
+  // hidden.
+  std::array<bool, static_cast<size_t>(ImageType::kMaxValue) + 1>
+      icon_shown_recorded_ = {};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(ContentSettingImageModelStates);
 };
 
 #endif  // CHROME_BROWSER_UI_CONTENT_SETTINGS_CONTENT_SETTING_IMAGE_MODEL_STATES_H_

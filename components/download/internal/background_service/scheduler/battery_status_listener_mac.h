@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_INTERNAL_BACKGROUND_SERVICE_SCHEDULER_BATTERY_STATUS_LISTENER_MAC_H_
 #define COMPONENTS_DOWNLOAD_INTERNAL_BACKGROUND_SERVICE_SCHEDULER_BATTERY_STATUS_LISTENER_MAC_H_
 
-#include "base/macros.h"
 #include "components/download/internal/background_service/scheduler/battery_status_listener.h"
 
 namespace download {
@@ -17,16 +16,19 @@ namespace download {
 class BatteryStatusListenerMac : public BatteryStatusListener {
  public:
   BatteryStatusListenerMac();
+
+  BatteryStatusListenerMac(const BatteryStatusListenerMac&) = delete;
+  BatteryStatusListenerMac& operator=(const BatteryStatusListenerMac&) = delete;
+
   ~BatteryStatusListenerMac() override;
 
  private:
   // BatteryStatusListener implementation.
   int GetBatteryPercentage() override;
-  bool IsOnBatteryPower() override;
+  base::PowerStateObserver::BatteryPowerStatus GetBatteryPowerStatus()
+      const override;
   void Start(Observer* observer) override;
   void Stop() override;
-
-  DISALLOW_COPY_AND_ASSIGN(BatteryStatusListenerMac);
 };
 
 }  // namespace download

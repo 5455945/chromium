@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,11 @@
 
 #include "base/check_op.h"
 #include "base/values.h"
-#include "chrome/browser/extensions/external_provider_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/browser/external_provider_interface.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 
@@ -15,13 +18,13 @@ namespace extensions {
 
 ExternalLoader::ExternalLoader() = default;
 
-void ExternalLoader::Init(ExternalProviderImpl* owner) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ExternalLoader::Init(ExternalProviderInterface* owner) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   owner_ = owner;
 }
 
 const base::FilePath ExternalLoader::GetBaseCrxFilePath() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
 
   // By default, relative paths are not supported.
   // Subclasses that wish to support them should override this method.
@@ -29,22 +32,20 @@ const base::FilePath ExternalLoader::GetBaseCrxFilePath() {
 }
 
 void ExternalLoader::OwnerShutdown() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   owner_ = nullptr;
 }
 
 ExternalLoader::~ExternalLoader() = default;
 
-void ExternalLoader::LoadFinished(
-    std::unique_ptr<base::DictionaryValue> prefs) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ExternalLoader::LoadFinished(base::DictValue prefs) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   if (owner_)
     owner_->SetPrefs(std::move(prefs));
 }
 
-void ExternalLoader::OnUpdated(
-    std::unique_ptr<base::DictionaryValue> updated_prefs) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ExternalLoader::OnUpdated(base::DictValue updated_prefs) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   if (owner_)
     owner_->UpdatePrefs(std::move(updated_prefs));
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,13 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/accelerator_map.h"
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ui/base/ui_base_features.h"
 #endif
 
@@ -73,6 +76,12 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorManager {
   // Returns whether |accelerator| is already registered.
   bool IsRegistered(const Accelerator& accelerator) const;
 
+#if DCHECK_IS_ON()
+  // Returns the number of accelerators |target| is registered for. This walks
+  // every registered accelerator, so use it only in DCHECKs.
+  size_t GetAcceleratorCountForTarget(AcceleratorTarget* target) const;
+#endif
+
   // Activates the target associated with the specified accelerator.
   // First, AcceleratorPressed handler of the most recently registered target
   // is called, and if that handler processes the event (i.e. returns true),
@@ -84,12 +93,16 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorManager {
   // Whether the given |accelerator| has a priority handler associated with it.
   bool HasPriorityHandler(const Accelerator& accelerator) const;
 
-#if defined(OS_CHROMEOS)
+  // Returns true if there are no accelerators registered.
+  bool IsEmpty() const { return accelerators_.empty(); }
+
+#if BUILDFLAG(IS_CHROMEOS)
   void SetUsePositionalLookup(bool use_positional_lookup) {
-    DCHECK(::features::IsImprovedKeyboardShortcutsEnabled());
+    CHECK(::features::IsImprovedKeyboardShortcutsEnabled(),
+          base::NotFatalUntil::M163);
     accelerators_.set_use_positional_lookup(use_positional_lookup);
   }
-#endif  // defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
  private:
   // Private helper class to manage the accelerator targets and priority. Each
@@ -128,7 +141,7 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorManager {
     size_t size() const { return targets_.size(); }
 
    private:
-    std::list<AcceleratorTarget*> targets_;
+    std::list<raw_ptr<AcceleratorTarget, CtnExperimental>> targets_;
     bool has_priority_handler_ = false;
   };
 

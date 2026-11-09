@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/public/overlay_surface_candidate.h"
+
+#include <variant>
 
 #include "ui/gfx/geometry/rect_conversions.h"
 
@@ -26,12 +28,20 @@ bool OverlaySurfaceCandidate::operator<(
   int rheight = param.buffer_size.height();
   gfx::Rect lrect = gfx::ToNearestRect(display_rect);
   gfx::Rect rrect = gfx::ToNearestRect(param.display_rect);
+  gfx::OverlayTransform ltransform =
+      std::holds_alternative<gfx::OverlayTransform>(transform)
+          ? std::get<gfx::OverlayTransform>(transform)
+          : gfx::OVERLAY_TRANSFORM_INVALID;
+  gfx::OverlayTransform rtransform =
+      std::holds_alternative<gfx::OverlayTransform>(param.transform)
+          ? std::get<gfx::OverlayTransform>(param.transform)
+          : gfx::OVERLAY_TRANSFORM_INVALID;
 
-  return std::tie(plane_z_order, format, lrect, lwidth, lheight, transform,
-                  crop_rect, is_opaque, native_pixmap_unique_id) <
+  return std::tie(plane_z_order, format, lrect, lwidth, lheight, ltransform,
+                  crop_rect, is_opaque, opacity, color_space, overlay_type) <
          std::tie(param.plane_z_order, param.format, rrect, rwidth, rheight,
-                  param.transform, param.crop_rect, param.is_opaque,
-                  param.native_pixmap_unique_id);
+                  rtransform, param.crop_rect, param.is_opaque, param.opacity,
+                  color_space, param.overlay_type);
 }
 
 }  // namespace ui

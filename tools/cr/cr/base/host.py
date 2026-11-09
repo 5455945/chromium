@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 from __future__ import print_function
 
 import os
-import pipes
+import shlex
 import signal
 import subprocess
 
@@ -15,6 +15,7 @@ import cr
 
 # Controls what verbosity level turns on command trail logging
 _TRAIL_VERBOSITY = 2
+
 
 def PrintTrail(trail):
   print('Command expanded the following variables:')
@@ -50,10 +51,16 @@ class Host(cr.Plugin, cr.Plugin.Type):
       if host.Matches():
         return host
 
-  def _Execute(self, command,
-               shell=False, capture=False, silent=False,
-               ignore_dry_run=False, return_status=False,
-               ignore_interrupt_signal=False):
+  def _Execute(
+    self,
+    command,
+    shell=False,
+    capture=False,
+    silent=False,
+    ignore_dry_run=False,
+    return_status=False,
+    ignore_interrupt_signal=False,
+  ):
     """This is the only method that launches external programs.
 
     It is a thin wrapper around subprocess.Popen that handles cr specific
@@ -94,9 +101,11 @@ class Host(cr.Plugin, cr.Plugin.Type):
         out = open(os.devnull, "w")
       try:
         p = subprocess.Popen(
-            command, shell=shell,
-            env={k: str(v) for k, v in cr.context.exported.items()},
-            stdout=out)
+          command,
+          shell=shell,
+          env={k: str(v) for k, v in cr.context.exported.items()},
+          stdout=out,
+        )
       except OSError:
         print('Failed to exec', command)
         # Don't log the trail if we already have
@@ -117,12 +126,14 @@ class Host(cr.Plugin, cr.Plugin.Type):
       if p.returncode != 0:
         print('Error {0} executing command {1}'.format(p.returncode, command))
         exit(p.returncode)
+      if output is not None:
+        output = output.decode('utf-8')
       return output or ''
     return ''
 
   @cr.Plugin.activemethod
   def Shell(self, *command):
-    command = ' '.join([pipes.quote(arg) for arg in command])
+    command = ' '.join([shlex.quote(arg) for arg in command])
     return self._Execute([command], shell=True, ignore_interrupt_signal=True)
 
   @cr.Plugin.activemethod
@@ -135,8 +146,7 @@ class Host(cr.Plugin, cr.Plugin.Type):
 
   @cr.Plugin.activemethod
   def CaptureShell(self, *command):
-    return self._Execute(command,
-                         shell=True, capture=True, ignore_dry_run=True)
+    return self._Execute(command, shell=True, capture=True, ignore_dry_run=True)
 
   @cr.Plugin.activemethod
   def Capture(self, *command):
@@ -144,8 +154,7 @@ class Host(cr.Plugin, cr.Plugin.Type):
 
   @cr.Plugin.activemethod
   def ExecuteStatus(self, *command):
-    return self._Execute(command,
-                         ignore_dry_run=True, return_status=True)
+    return self._Execute(command, ignore_dry_run=True, return_status=True)
 
   @cr.Plugin.activemethod
   def YesNo(self, question, default=True):

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -64,7 +64,6 @@ CSSRotate* FromCSSRotateXYZ(const CSSFunctionValue& value) {
                                CSSUnitValue::Create(1), angle);
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -128,7 +127,6 @@ CSSRotate* CSSRotate::FromCSSValue(const CSSFunctionValue& value) {
       return FromCSSRotateXYZ(value);
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -163,19 +161,15 @@ DOMMatrix* CSSRotate::toMatrix(ExceptionState& exception_state) const {
 }
 
 const CSSFunctionValue* CSSRotate::ToCSSValue() const {
-  DCHECK(x_->to(CSSPrimitiveValue::UnitType::kNumber));
-  DCHECK(y_->to(CSSPrimitiveValue::UnitType::kNumber));
-  DCHECK(z_->to(CSSPrimitiveValue::UnitType::kNumber));
-  DCHECK(angle_->to(CSSPrimitiveValue::UnitType::kRadians));
-
   CSSFunctionValue* result = MakeGarbageCollected<CSSFunctionValue>(
       is2D() ? CSSValueID::kRotate : CSSValueID::kRotate3d);
   if (!is2D()) {
     const CSSValue* x = x_->ToCSSValue();
     const CSSValue* y = y_->ToCSSValue();
     const CSSValue* z = z_->ToCSSValue();
-    if (!x || !y || !z)
+    if (!x || !y || !z) {
       return nullptr;
+    }
 
     result->Append(*x);
     result->Append(*y);
@@ -183,8 +177,14 @@ const CSSFunctionValue* CSSRotate::ToCSSValue() const {
   }
 
   const CSSValue* angle = angle_->ToCSSValue();
-  if (!angle)
+  if (!angle) {
     return nullptr;
+  }
+
+  DCHECK(x_->to(CSSPrimitiveValue::UnitType::kNumber));
+  DCHECK(y_->to(CSSPrimitiveValue::UnitType::kNumber));
+  DCHECK(z_->to(CSSPrimitiveValue::UnitType::kNumber));
+  DCHECK(angle_->to(CSSPrimitiveValue::UnitType::kRadians));
 
   result->Append(*angle);
   return result;

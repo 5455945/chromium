@@ -1,45 +1,43 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import <Foundation/Foundation.h>
-#include <stddef.h>
-
-#include "base/stl_util.h"
 #import "ios/web/navigation/nscoder_util.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "testing/platform_test.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import <Foundation/Foundation.h>
+
+#import <array>
+#import <string_view>
+
+#import "testing/gtest/include/gtest/gtest.h"
+#import "testing/platform_test.h"
 
 namespace web {
 namespace {
 
-typedef PlatformTest NSCoderStdStringTest;
+using NSCoderStdStringTest = PlatformTest;
 
-const char* testStrings[] = {
+constexpr auto kTestStrings = std::to_array<std::string_view>({
     "Arf",
     "",
     "This is working™",
     "古池や蛙飛込む水の音\nふるいけやかわずとびこむみずのおと",
     "ἀγεωμέτρητος μηδεὶς εἰσίτω",
-    "Bang!\t\n"
-};
+    "Bang!\t\n",
+});
 
 TEST_F(NSCoderStdStringTest, encodeDecode) {
-  for (size_t i = 0; i < base::size(testStrings); ++i) {
+  for (std::string_view test_string : kTestStrings) {
     NSKeyedArchiver* archiver =
         [[NSKeyedArchiver alloc] initRequiringSecureCoding:NO];
-    nscoder_util::EncodeString(archiver, @"test", testStrings[i]);
+    nscoder_util::EncodeString(archiver, @"test", test_string);
 
     NSKeyedUnarchiver* unarchiver =
         [[NSKeyedUnarchiver alloc] initForReadingFromData:[archiver encodedData]
                                                     error:nil];
     const std::string decoded = nscoder_util::DecodeString(unarchiver, @"test");
 
-    EXPECT_EQ(decoded, testStrings[i]);
+    EXPECT_EQ(decoded, test_string);
   }
 }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,16 @@
 #include "base/check_op.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/time/time.h"
 #include "build/build_config.h"
 #include "ui/gfx/geometry/cubic_bezier.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size_f.h"
+#include "ui/gfx/geometry/three_point_cubic_bezier.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/geometry/transform_operations.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <float.h>
 #endif
 
@@ -39,14 +44,26 @@ double Tween::CalculateValue(Tween::Type type, double state) {
         return pow(state * 2, 2) / 2.0;
       return 1.0 - (pow((state - 1.0) * 2, 2) / 2.0);
 
-    case EASE_IN_OUT_2:
-      return gfx::CubicBezier(0.33, 0, 0.67, 1).Solve(state);
+    case EASE_IN_OUT_EMPHASIZED: {
+      static const gfx::ThreePointCubicBezier bezier(
+          0.05, 0, 0.133333, 0.06, 0.166666, 0.4, 0.208333, 0.82, 0.25, 1);
+      return bezier.Solve(state);
+    }
 
-    case EASE_OUT_3:
-      return gfx::CubicBezier(0.6, 0, 0, 1).Solve(state);
+    case EASE_IN_OUT_2: {
+      static const gfx::CubicBezier bezier(0.33, 0, 0.67, 1);
+      return bezier.Solve(state);
+    }
 
-    case EASE_OUT_4:
-      return gfx::CubicBezier(1, 0, 0.8, 1).Solve(state);
+    case EASE_OUT_3: {
+      static const gfx::CubicBezier bezier(0.6, 0, 0, 1);
+      return bezier.Solve(state);
+    }
+
+    case EASE_OUT_4: {
+      static const gfx::CubicBezier bezier(1, 0, 0.8, 1);
+      return bezier.Solve(state);
+    }
 
     case LINEAR:
       return state;
@@ -54,45 +71,129 @@ double Tween::CalculateValue(Tween::Type type, double state) {
     case EASE_OUT:
       return 1.0 - pow(1.0 - state, 2);
 
-    case EASE_OUT_2:
-      return gfx::CubicBezier(0.4, 0, 0, 1).Solve(state);
+    case EASE_OUT_2: {
+      static const gfx::CubicBezier bezier(0.4, 0, 0, 1);
+      return bezier.Solve(state);
+    }
 
     case SMOOTH_IN_OUT:
       return sin(state);
 
-    case FAST_OUT_SLOW_IN:
-      return gfx::CubicBezier(0.4, 0, 0.2, 1).Solve(state);
+    case FAST_OUT_SLOW_IN: {
+      static const gfx::CubicBezier bezier(0.4, 0, 0.2, 1);
+      return bezier.Solve(state);
+    }
 
-    case FAST_OUT_SLOW_IN_2:
-      return gfx::CubicBezier(0.2, 0, 0.2, 1).Solve(state);
+    case FAST_OUT_SLOW_IN_2: {
+      static const gfx::CubicBezier bezier(0.2, 0, 0.2, 1);
+      return bezier.Solve(state);
+    }
 
-    case FAST_OUT_SLOW_IN_3:
-      return gfx::CubicBezier(0.2, 0, 0, 1).Solve(state);
+    case FAST_OUT_SLOW_IN_3: {
+      static const gfx::CubicBezier bezier(0.2, 0, 0, 1);
+      return bezier.Solve(state);
+    }
 
-    case LINEAR_OUT_SLOW_IN:
-      return gfx::CubicBezier(0, 0, .2, 1).Solve(state);
+    case LINEAR_OUT_SLOW_IN: {
+      static const gfx::CubicBezier bezier(0, 0, .2, 1);
+      return bezier.Solve(state);
+    }
 
-    case SLOW_OUT_LINEAR_IN:
-      return gfx::CubicBezier(0, 0, 1, .2).Solve(state);
+    case SLOW_OUT_LINEAR_IN: {
+      static const gfx::CubicBezier bezier(0, 0, 1, .2);
+      return bezier.Solve(state);
+    }
 
-    case FAST_OUT_LINEAR_IN:
-      return gfx::CubicBezier(0.4, 0, 1, 1).Solve(state);
+    case FAST_OUT_LINEAR_IN: {
+      static const gfx::CubicBezier bezier(0.4, 0, 1, 1);
+      return bezier.Solve(state);
+    }
 
     case ZERO:
       return 0;
 
-    case ACCEL_LIN_DECEL_60:
-      return gfx::CubicBezier(0, 0, 0.4, 1).Solve(state);
+    case ACCEL_LIN_DECEL_60: {
+      static const gfx::CubicBezier bezier(0, 0, 0.4, 1);
+      return bezier.Solve(state);
+    }
 
-    case ACCEL_LIN_DECEL_100:
-      return gfx::CubicBezier(0, 0, 0, 1).Solve(state);
+    case ACCEL_LIN_DECEL_100: {
+      static const gfx::CubicBezier bezier(0, 0, 0, 1);
+      return bezier.Solve(state);
+    }
 
-    case ACCEL_20_DECEL_60:
-      return gfx::CubicBezier(0.2, 0, 0.4, 1).Solve(state);
+    case ACCEL_LIN_DECEL_100_3: {
+      static const gfx::CubicBezier bezier(0, 0, 0, 0.97);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_20_DECEL_60: {
+      static const gfx::CubicBezier bezier(0.2, 0, 0.4, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_20_DECEL_100: {
+      static const gfx::CubicBezier bezier(0.2, 0, 0, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_30_DECEL_20_85: {
+      static const gfx::CubicBezier bezier(0.3, 0, 0.8, 0.15);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_30_DECEL_LIN: {
+      static const gfx::CubicBezier bezier(0.3, 0, 1, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_40_DECEL_20: {
+      static const gfx::CubicBezier bezier(0.4, 0, 0.8, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_45_DECEL_88: {
+      static const gfx::CubicBezier bezier(0.45, 0.00, 0.12, 1.00);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_80_DECEL_20: {
+      static const gfx::CubicBezier bezier(0.8, 0, 0.8, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_0_40_DECEL_100: {
+      static const gfx::CubicBezier bezier(0, 0.4, 0, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_40_DECEL_100_3: {
+      static const gfx::CubicBezier bezier(0.40, 0, 0, 0.97);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_0_80_DECEL_80: {
+      static const gfx::CubicBezier bezier(0, 0.8, 0.2, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_0_100_DECEL_80: {
+      static const gfx::CubicBezier bezier(0, 1, 0.2, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_5_70_DECEL_90: {
+      static const gfx::CubicBezier bezier(0.05, 0.7, 0.1, 1);
+      return bezier.Solve(state);
+    }
+
+    case ACCEL_90_DECEL_5_70: {
+      static const gfx::CubicBezier bezier(0.9, 0, 0.95, 0.3);
+      return bezier.Solve(state);
+    }
   }
 
   NOTREACHED();
-  return state;
 }
 
 namespace {
@@ -114,9 +215,41 @@ uint8_t BlendColorComponents(uint8_t start,
   return FloatToColorByte(blended_premultiplied / blended_alpha);
 }
 
+float BlendColorComponentsFloat(float start,
+                                float target,
+                                float start_alpha,
+                                float target_alpha,
+                                float blended_alpha,
+                                double progress) {
+  // Since progress can be outside [0, 1], blending can produce a value outside
+  // [0, 1].
+  float blended_premultiplied = Tween::FloatValueBetween(
+      progress, start * start_alpha, target * target_alpha);
+  return blended_premultiplied / blended_alpha;
+}
+
 }  // namespace
 
 // static
+SkColor4f Tween::ColorValueBetween(double value,
+                                   SkColor4f start,
+                                   SkColor4f target) {
+  float start_a = start.fA;
+  float target_a = target.fA;
+  float blended_a = FloatValueBetween(value, start_a, target_a);
+  if (blended_a <= 0.f)
+    return SkColors::kTransparent;
+  blended_a = std::min(blended_a, 1.f);
+
+  auto blended_r = BlendColorComponentsFloat(start.fR, target.fR, start_a,
+                                             target_a, blended_a, value);
+  auto blended_g = BlendColorComponentsFloat(start.fG, target.fG, start_a,
+                                             target_a, blended_a, value);
+  auto blended_b = BlendColorComponentsFloat(start.fB, target.fB, start_a,
+                                             target_a, blended_a, value);
+
+  return SkColor4f{blended_r, blended_g, blended_b, blended_a};
+}
 SkColor Tween::ColorValueBetween(double value, SkColor start, SkColor target) {
   float start_a = SkColorGetA(start) / 255.f;
   float target_a = SkColorGetA(target) / 255.f;
@@ -135,8 +268,8 @@ SkColor Tween::ColorValueBetween(double value, SkColor start, SkColor target) {
       BlendColorComponents(SkColorGetB(start), SkColorGetB(target), start_a,
                            target_a, blended_a, value);
 
-  return SkColorSetARGB(
-      FloatToColorByte(blended_a), blended_r, blended_g, blended_b);
+  return SkColorSetARGB(FloatToColorByte(blended_a), blended_r, blended_g,
+                        blended_b);
 }
 
 // static
@@ -150,21 +283,6 @@ float Tween::FloatValueBetween(double value, float start, float target) {
 }
 
 // static
-float Tween::ClampedFloatValueBetween(const base::TimeTicks& time,
-                                      const base::TimeTicks& start_time,
-                                      float start,
-                                      const base::TimeTicks& target_time,
-                                      float target) {
-  if (time <= start_time)
-    return start;
-  if (time >= target_time)
-    return target;
-
-  const double progress = (time - start_time) / (target_time - start_time);
-  return FloatValueBetween(progress, start, target);
-}
-
-// static
 int Tween::IntValueBetween(double value, int start, int target) {
   if (start == target)
     return start;
@@ -173,7 +291,7 @@ int Tween::IntValueBetween(double value, int start, int target) {
     delta--;
   else
     delta++;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return start + static_cast<int>(value * _nextafter(delta, 0));
 #else
   return start + static_cast<int>(value * nextafter(delta, 0));

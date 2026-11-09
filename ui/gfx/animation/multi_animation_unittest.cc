@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,8 @@ namespace gfx {
 TEST(MultiAnimationTest, Basic) {
   // Create a MultiAnimation with two parts.
   MultiAnimation::Parts parts;
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(100),
-                                       Tween::LINEAR));
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(100),
-                                       Tween::EASE_OUT));
+  parts.emplace_back(base::Milliseconds(100), Tween::LINEAR);
+  parts.emplace_back(base::Milliseconds(100), Tween::EASE_OUT);
 
   MultiAnimation animation(parts);
   AnimationContainerElement* as_element =
@@ -24,18 +22,16 @@ TEST(MultiAnimationTest, Basic) {
   as_element->SetStartTime(base::TimeTicks());
 
   // Step to 50, which is half way through the first part.
-  as_element->Step(base::TimeTicks() + base::TimeDelta::FromMilliseconds(50));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(50));
   EXPECT_EQ(.5, animation.GetCurrentValue());
 
   // Step to 120, which is 20% through the second part.
-  as_element->Step(base::TimeTicks() +
-                   base::TimeDelta::FromMilliseconds(120));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(120));
   EXPECT_DOUBLE_EQ(Tween::CalculateValue(Tween::EASE_OUT, .2),
                    animation.GetCurrentValue());
 
   // Step to 320, which is 20% through the second part.
-  as_element->Step(base::TimeTicks() +
-                   base::TimeDelta::FromMilliseconds(320));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(320));
   EXPECT_DOUBLE_EQ(Tween::CalculateValue(Tween::EASE_OUT, .2),
                    animation.GetCurrentValue());
 }
@@ -43,8 +39,7 @@ TEST(MultiAnimationTest, Basic) {
 // Makes sure multi-animation stops if cycles is false.
 TEST(MultiAnimationTest, DontCycle) {
   MultiAnimation::Parts parts;
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(200),
-                                       Tween::LINEAR));
+  parts.emplace_back(base::Milliseconds(200), Tween::LINEAR);
   MultiAnimation animation(parts);
   AnimationContainerElement* as_element =
       static_cast<AnimationContainerElement*>(&animation);
@@ -52,7 +47,7 @@ TEST(MultiAnimationTest, DontCycle) {
   animation.set_continuous(false);
 
   // Step to 300, which is greater than the cycle time.
-  as_element->Step(base::TimeTicks() + base::TimeDelta::FromMilliseconds(300));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(300));
   EXPECT_EQ(1.0, animation.GetCurrentValue());
   EXPECT_FALSE(animation.is_animating());
 }
@@ -76,8 +71,7 @@ class CurrentValueDelegate : public AnimationDelegate {
 // and not running continuously.
 TEST(MultiAnimationTest, ExceedCycleNonContinuous) {
   MultiAnimation::Parts parts;
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(200),
-                                       Tween::LINEAR));
+  parts.emplace_back(base::Milliseconds(200), Tween::LINEAR);
   MultiAnimation animation(parts);
   CurrentValueDelegate delegate;
   animation.set_delegate(&delegate);
@@ -87,22 +81,21 @@ TEST(MultiAnimationTest, ExceedCycleNonContinuous) {
   as_element->SetStartTime(base::TimeTicks());
 
   // Step to 300, which is greater than the cycle time.
-  as_element->Step(base::TimeTicks() + base::TimeDelta::FromMilliseconds(300));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(300));
   EXPECT_EQ(1.0, delegate.latest_current_value());
 }
 
 // Makes sure multi-animation cycles correctly.
 TEST(MultiAnimationTest, Cycle) {
   MultiAnimation::Parts parts;
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(200),
-                                       Tween::LINEAR));
+  parts.emplace_back(base::Milliseconds(200), Tween::LINEAR);
   MultiAnimation animation(parts);
   AnimationContainerElement* as_element =
       static_cast<AnimationContainerElement*>(&animation);
   as_element->SetStartTime(base::TimeTicks());
 
   // Step to 300, which is greater than the cycle time.
-  as_element->Step(base::TimeTicks() + base::TimeDelta::FromMilliseconds(300));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(300));
   EXPECT_EQ(.5, animation.GetCurrentValue());
 }
 
@@ -114,11 +107,9 @@ TEST(MultiAnimationTest, GetCurrentValueDerivedFromStartAndEndOfCurrentPart) {
   constexpr double kSecondPartStart = 0.8;
   constexpr double kSecondPartEnd = 0.4;
   MultiAnimation::Parts parts;
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(100),
-                                       Tween::LINEAR));
-  parts.push_back(MultiAnimation::Part(base::TimeDelta::FromMilliseconds(100),
-                                       Tween::EASE_OUT, kSecondPartStart,
-                                       kSecondPartEnd));
+  parts.emplace_back(base::Milliseconds(100), Tween::LINEAR);
+  parts.emplace_back(base::Milliseconds(100), Tween::EASE_OUT, kSecondPartStart,
+                     kSecondPartEnd);
 
   MultiAnimation animation(parts);
   animation.set_continuous(false);
@@ -127,7 +118,7 @@ TEST(MultiAnimationTest, GetCurrentValueDerivedFromStartAndEndOfCurrentPart) {
   as_element->SetStartTime(base::TimeTicks());
 
   // Step to 150, which is half way through the second part.
-  as_element->Step(base::TimeTicks() + base::TimeDelta::FromMilliseconds(150));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(150));
   const double current_animation_value =
       Tween::CalculateValue(Tween::EASE_OUT, .5);
   EXPECT_DOUBLE_EQ(Tween::DoubleValueBetween(current_animation_value,
@@ -136,7 +127,7 @@ TEST(MultiAnimationTest, GetCurrentValueDerivedFromStartAndEndOfCurrentPart) {
 
   // Step to 200 which is at the end. The final value should now be kPartEnd as
   // the animation is not continuous.
-  as_element->Step(base::TimeTicks() + base::TimeDelta::FromMilliseconds(200));
+  as_element->Step(base::TimeTicks() + base::Milliseconds(200));
   EXPECT_DOUBLE_EQ(kSecondPartEnd, animation.GetCurrentValue());
 }
 

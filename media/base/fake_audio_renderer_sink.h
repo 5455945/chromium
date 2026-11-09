@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/audio_renderer_sink.h"
 #include "media/base/output_device_info.h"
@@ -29,12 +29,15 @@ class FakeAudioRendererSink : public AudioRendererSink {
 
   explicit FakeAudioRendererSink(const AudioParameters& hardware_params);
 
+  FakeAudioRendererSink(const FakeAudioRendererSink&) = delete;
+  FakeAudioRendererSink& operator=(const FakeAudioRendererSink&) = delete;
+
   void Initialize(const AudioParameters& params,
                   RenderCallback* callback) override;
   void Start() override;
   void Stop() override;
   void Flush() override;
-  void Pause() override;
+  void Pause(PauseReason reason) override;
   void Play() override;
   bool SetVolume(double volume) override;
   OutputDeviceInfo GetOutputDeviceInfo() override;
@@ -56,19 +59,20 @@ class FakeAudioRendererSink : public AudioRendererSink {
   void SetIsOptimizedForHardwareParameters(bool value);
 
   State state() const { return state_; }
-
- protected:
-  ~FakeAudioRendererSink() override;
+  std::optional<PauseReason> last_pause_reason() const {
+    return last_pause_reason_;
+  }
 
  private:
+  ~FakeAudioRendererSink() override;
+
   void ChangeState(State new_state);
 
   State state_;
-  RenderCallback* callback_;
+  raw_ptr<RenderCallback> callback_;
   OutputDeviceInfo output_device_info_;
   bool is_optimized_for_hw_params_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeAudioRendererSink);
+  std::optional<PauseReason> last_pause_reason_;
 };
 
 }  // namespace media

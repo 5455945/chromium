@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <set>
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 
 // Custom spellcheck dictionary. Words in this dictionary are always correctly
 // spelled. Words that are not in this dictionary may or may not be correctly
@@ -16,10 +17,17 @@
 class CustomDictionaryEngine {
  public:
   CustomDictionaryEngine();
+
+  CustomDictionaryEngine(const CustomDictionaryEngine&) = delete;
+  CustomDictionaryEngine& operator=(const CustomDictionaryEngine&) = delete;
+
   ~CustomDictionaryEngine();
 
   // Initialize the custom dictionary engine.
   void Init(const std::set<std::string>& words);
+
+  // Initialize the custom dictionary engine asynchronously on a worker thread.
+  void InitAsync(const std::vector<std::string>& custom_words);
 
   // Spellcheck |text|. Assumes that another spelling engine has set
   // |misspelling_start| and |misspelling_len| to indicate a misspelling.
@@ -33,10 +41,12 @@ class CustomDictionaryEngine {
                                  const std::set<std::string>& words_removed);
 
  private:
+  void OnDictionaryBuilt(std::set<std::u16string> dictionary);
+
   // Correctly spelled words.
   std::set<std::u16string> dictionary_;
 
-  DISALLOW_COPY_AND_ASSIGN(CustomDictionaryEngine);
+  base::WeakPtrFactory<CustomDictionaryEngine> weak_ptr_factory_{this};
 };
 
 #endif  // COMPONENTS_SPELLCHECK_RENDERER_CUSTOM_DICTIONARY_ENGINE_H_

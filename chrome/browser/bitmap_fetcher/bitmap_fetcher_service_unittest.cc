@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
+#include "build/build_config.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
@@ -20,7 +20,7 @@ class TestService : public BitmapFetcherService {
  public:
   explicit TestService(content::BrowserContext* context)
       : BitmapFetcherService(context) {}
-  ~TestService() override {}
+  ~TestService() override = default;
 
   // Create a fetcher, but don't start downloading. That allows side-stepping
   // the decode step, which requires a utility process.
@@ -53,7 +53,7 @@ class BitmapFetcherServiceTest : public testing::Test {
   }
   size_t cache_size() const { return service_->cache_.size(); }
 
-  void OnBitmapFetched(const SkBitmap& bitmap) { images_changed_count_++; }
+  void OnBitmapFetched(const SkBitmap bitmap) { images_changed_count_++; }
 
   BitmapFetcherService::RequestId RequestImage(const GURL& url) {
     return service_->RequestImageForTesting(
@@ -74,7 +74,6 @@ class BitmapFetcherServiceTest : public testing::Test {
     image.allocN32Pixels(2, 2);
     image.eraseColor(SK_ColorGREEN);
 
-    fetcher->SetStartTimeForTesting();
     fetcher->OnImageDecoded(image);
   }
 
@@ -82,7 +81,6 @@ class BitmapFetcherServiceTest : public testing::Test {
     BitmapFetcher* fetcher =
         const_cast<BitmapFetcher*>(service_->FindFetcherForUrl(url));
     ASSERT_TRUE(fetcher);
-    fetcher->SetStartTimeForTesting();
     fetcher->OnImageDecoded(SkBitmap());
   }
 
@@ -165,6 +163,19 @@ TEST_F(BitmapFetcherServiceTest, CancelRequest) {
   EXPECT_EQ(4, images_changed_count());
 }
 
+TEST_F(BitmapFetcherServiceTest, CacheRequest) {
+  RequestImage(url1_);
+  CompleteFetch(url1_);
+
+  // No caching on Android.
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_EQ(0U, cache_size());
+#else
+  EXPECT_EQ(1U, cache_size());
+#endif
+}
+
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(BitmapFetcherServiceTest, FailedNullRequestsAreHandled) {
   RequestImage(url1_);
   RequestImage(url2_);
@@ -188,3 +199,4 @@ TEST_F(BitmapFetcherServiceTest, FailedRequestsDontEnterCache) {
   FailFetch(url2_);
   EXPECT_EQ(1U, cache_size());
 }
+#endif  // !BUILDFLAG(IS_ANDROID)

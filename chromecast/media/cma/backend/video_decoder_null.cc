@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromecast/public/media/cast_decoder_buffer.h"
 
 namespace chromecast {
@@ -30,16 +30,16 @@ VideoDecoderNull::VideoDecoderNull()
 VideoDecoderNull::~VideoDecoderNull() {}
 
 void VideoDecoderNull::SetDelegate(Delegate* delegate) {
-  DCHECK(delegate);
+  CHECK(delegate, base::NotFatalUntil::M163);
   delegate_ = delegate;
 }
 
 MediaPipelineBackend::BufferStatus VideoDecoderNull::PushBuffer(
     CastDecoderBuffer* buffer) {
-  DCHECK(delegate_);
-  DCHECK(buffer);
+  CHECK(delegate_, base::NotFatalUntil::M163);
+  CHECK(buffer, base::NotFatalUntil::M163);
   if (buffer->end_of_stream()) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&VideoDecoderNull::OnEndOfStream,
                                   weak_factory_.GetWeakPtr()));
   }
@@ -61,7 +61,7 @@ bool VideoDecoderNull::Initialize() {
 }
 
 void VideoDecoderNull::SetObserver(VideoDecoderForMixer::Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M163);
   observer_ = observer;
 }
 

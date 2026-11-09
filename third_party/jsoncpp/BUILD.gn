@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,14 +6,6 @@ import("//testing/libfuzzer/fuzzer_test.gni")
 
 config("jsoncpp_config") {
   include_dirs = [ "source/include" ]
-
-  # TODO(crbug.com/983223): Update JsonCpp BUILD.gn to remove deprecated
-  # declaration flag.
-  # This temporary flag allowing clients to update to the new version, and then
-  # update to the new StreamWriter and CharReader classes.
-  if (!is_win || is_clang) {
-    cflags_cc = [ "-Wno-deprecated-declarations" ]
-  }
 }
 
 source_set("jsoncpp") {
@@ -46,6 +38,13 @@ source_set("jsoncpp") {
   if (!is_win || is_clang) {
     cflags_cc = [ "-Wno-implicit-fallthrough" ]
   }
+
+  # jsoncpp makes use of static objects for things like a null singleton.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+
+  # TODO(https://github.com/open-source-parsers/jsoncpp/pull/1612): Remove this
+  # when the PR is merged.
+  use_libcxx_modules = false
 }
 
 if (build_with_chromium) {

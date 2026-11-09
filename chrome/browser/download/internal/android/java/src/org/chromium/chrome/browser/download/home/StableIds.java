@@ -1,10 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** Helper class to manage stable ID for items in the recycler view. */
+@NullMarked
 public class StableIds {
     /** The stable ID associated with the storage header. */
     public static long STORAGE_HEADER = Long.MAX_VALUE - 1;
@@ -18,6 +21,6 @@ public class StableIds {
     /** The stable ID associated with the pagination header. */
     public static long PAGINATION_HEADER = Long.MAX_VALUE - 4;
 
-    /** The stable ID associated with the scheduled for later section. */
-    public static long SCHEDULE_LATER_SECTION = Long.MAX_VALUE - 5;
+    /** The stable ID associated with the search header. */
+    public static long SEARCH_HEADER = Long.MAX_VALUE - 5;
 }

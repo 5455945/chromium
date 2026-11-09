@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,24 +13,22 @@ static const FillLayer* GetFillLayerForSize(const CSSProperty& property,
   switch (property.PropertyID()) {
     case CSSPropertyID::kBackgroundSize:
       return &style.BackgroundLayers();
-    case CSSPropertyID::kWebkitMaskSize:
+    case CSSPropertyID::kMaskSize:
       return &style.MaskLayers();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
 static FillLayer* AccessFillLayerForSize(const CSSProperty& property,
-                                         ComputedStyle& style) {
+                                         ComputedStyleBuilder& builder) {
   switch (property.PropertyID()) {
     case CSSPropertyID::kBackgroundSize:
-      return &style.AccessBackgroundLayers();
-    case CSSPropertyID::kWebkitMaskSize:
-      return &style.AccessMaskLayers();
+      return &builder.AccessBackgroundLayers();
+    case CSSPropertyID::kMaskSize:
+      return &builder.AccessMaskLayers();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -43,16 +41,21 @@ SizeList SizeListPropertyFunctions::GetInitialSizeList(
 SizeList SizeListPropertyFunctions::GetSizeList(const CSSProperty& property,
                                                 const ComputedStyle& style) {
   SizeList result;
+  // Interpolation is defined on computed values, so this walks the layers the
+  // computed value reports - see FillLayer::NextForComputedValue().
   for (const FillLayer* fill_layer = GetFillLayerForSize(property, style);
-       fill_layer && fill_layer->IsSizeSet(); fill_layer = fill_layer->Next())
+       fill_layer && fill_layer->IsPropertySet(FillLayer::Property::kSize);
+       fill_layer =
+           fill_layer->NextForComputedValue(FillLayer::Property::kSize)) {
     result.push_back(fill_layer->Size());
+  }
   return result;
 }
 
 void SizeListPropertyFunctions::SetSizeList(const CSSProperty& property,
-                                            ComputedStyle& style,
+                                            ComputedStyleBuilder& builder,
                                             const SizeList& size_list) {
-  FillLayer* fill_layer = AccessFillLayerForSize(property, style);
+  FillLayer* fill_layer = AccessFillLayerForSize(property, builder);
   FillLayer* prev = nullptr;
   for (const FillSize& size : size_list) {
     if (!fill_layer)

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,19 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.download.home.list.ListItem;
 import org.chromium.chrome.browser.download.internal.R;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * A {@link RecyclerView.ViewHolder} meant to display a divider between items of a group card.
- */
+/** A {@link RecyclerView.ViewHolder} meant to display a divider between items of a group card. */
+@NullMarked
 public class CardDividerMiddleViewHolder extends ListItemViewHolder {
-    /**
-     * Creates a new {@link CardDividerMiddleViewHolder} instance.
-     */
+    /** Creates a new {@link CardDividerMiddleViewHolder} instance. */
     public static CardDividerMiddleViewHolder create(ViewGroup parent) {
-        View view = LayoutInflater.from(parent.getContext())
-                            .inflate(R.layout.download_manager_card_divider_middle, null);
+        View view =
+                LayoutInflater.from(parent.getContext())
+                        .inflate(R.layout.download_manager_card_divider_middle, null);
         return new CardDividerMiddleViewHolder(view);
     }
 

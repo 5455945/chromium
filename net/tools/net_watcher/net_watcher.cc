@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,13 @@
 
 #include <memory>
 #include <string>
-#include <unordered_set>
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/logging/logging_settings.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
@@ -27,27 +26,23 @@
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/network_change_notifier.h"
-#include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_config_service.h"
+#include "net/proxy_resolution/proxy_config_with_annotation.h"
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 #include "net/base/network_change_notifier_linux.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #endif
 
-#if defined(OS_APPLE)
-#include "base/mac/scoped_nsautorelease_pool.h"
+#if BUILDFLAG(IS_APPLE)
+#include "base/apple/scoped_nsautorelease_pool.h"
 #endif
 
 namespace {
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 // Flag to specifies which network interfaces to ignore. Interfaces should
 // follow as a comma seperated list.
 const char kIgnoreNetifFlag[] = "ignore-netif";
@@ -81,11 +76,22 @@ const char* ConnectionTypeToString(
   }
 }
 
+const char* IPAddressChangeTypeToString(
+    net::NetworkChangeNotifier::IPAddressChangeType type) {
+  switch (type) {
+    case net::NetworkChangeNotifier::IP_ADDRESS_CHANGE_NONE:
+      return "IP_ADDRESS_CHANGE_NONE";
+    case net::NetworkChangeNotifier::IP_ADDRESS_CHANGE_NORMAL:
+      return "IP_ADDRESS_CHANGE_NORMAL";
+    case net::NetworkChangeNotifier::IP_ADDRESS_CHANGE_IPV6_TEMPADDR:
+      return "IP_ADDRESS_CHANGE_IPV6_TEMPADDR";
+    default:
+      return "IP_ADDRESS_CHANGE_UNEXPECTED";
+  }
+}
+
 std::string ProxyConfigToString(const net::ProxyConfig& config) {
-  base::Value config_value = config.ToValue();
-  std::string str;
-  base::JSONWriter::Write(config_value, &str);
-  return str;
+  return base::WriteJson(config.ToValue()).value_or("");
 }
 
 const char* ConfigAvailabilityToString(
@@ -112,10 +118,18 @@ class NetWatcher :
  public:
   NetWatcher() = default;
 
+  NetWatcher(const NetWatcher&) = delete;
+  NetWatcher& operator=(const NetWatcher&) = delete;
+
   ~NetWatcher() override = default;
 
   // net::NetworkChangeNotifier::IPAddressObserver implementation.
-  void OnIPAddressChanged() override { LOG(INFO) << "OnIPAddressChanged()"; }
+  void OnIPAddressChanged(
+      net::NetworkChangeNotifier::IPAddressChangeType change_type =
+          net::NetworkChangeNotifier::IP_ADDRESS_CHANGE_NORMAL) override {
+    LOG(INFO) << "OnIPAddressChanged("
+              << IPAddressChangeTypeToString(change_type) << ")";
+  }
 
   // net::NetworkChangeNotifier::ConnectionTypeObserver implementation.
   void OnConnectionTypeChanged(
@@ -141,16 +155,13 @@ class NetWatcher :
     LOG(INFO) << "OnProxyConfigChanged(" << ProxyConfigToString(config.value())
               << ", " << ConfigAvailabilityToString(availability) << ")";
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NetWatcher);
 };
 
 }  // namespace
 
 int main(int argc, char* argv[]) {
-#if defined(OS_APPLE)
-  base::mac::ScopedNSAutoreleasePool pool;
+#if BUILDFLAG(IS_APPLE)
+  base::apple::ScopedNSAutoreleasePool pool;
 #endif
   base::AtExitManager exit_manager;
   base::CommandLine::Init(argc, argv);
@@ -166,23 +177,21 @@ int main(int argc, char* argv[]) {
 
   NetWatcher net_watcher;
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   std::string ignored_netifs_str =
       command_line->GetSwitchValueASCII(kIgnoreNetifFlag);
-  std::unordered_set<std::string> ignored_interfaces;
+  absl::flat_hash_set<std::string> ignored_interfaces;
   if (!ignored_netifs_str.empty()) {
-    for (const std::string& ignored_netif :
-         base::SplitString(ignored_netifs_str, ",", base::TRIM_WHITESPACE,
-                           base::SPLIT_WANT_ALL)) {
+    for (const std::string_view ignored_netif :
+         base::SplitStringPiece(ignored_netifs_str, ",", base::TRIM_WHITESPACE,
+                                base::SPLIT_WANT_ALL)) {
       LOG(INFO) << "Ignoring: " << ignored_netif;
-      ignored_interfaces.insert(ignored_netif);
+      ignored_interfaces.emplace(ignored_netif);
     }
   }
-  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier(
-      new net::NetworkChangeNotifierLinux(ignored_interfaces));
+  auto network_change_notifier =
+      std::make_unique<net::NetworkChangeNotifierLinux>(ignored_interfaces);
 #else
   std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier(
       net::NetworkChangeNotifier::CreateIfNeeded());
@@ -190,7 +199,7 @@ int main(int argc, char* argv[]) {
 
   // Use the network loop as the file loop also.
   std::unique_ptr<net::ProxyConfigService> proxy_config_service(
-      net::ConfiguredProxyResolutionService::CreateSystemProxyConfigService(
+      net::ProxyConfigService::CreateSystemProxyConfigService(
           io_task_executor.task_runner()));
 
   // Uses |network_change_notifier|.

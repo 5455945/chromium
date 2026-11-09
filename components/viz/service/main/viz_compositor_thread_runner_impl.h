@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,33 @@
 #define COMPONENTS_VIZ_SERVICE_MAIN_VIZ_COMPOSITOR_THREAD_RUNNER_IMPL_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "components/ui_devtools/buildflags.h"
 #include "components/viz/service/main/viz_compositor_thread_runner.h"
-#include "services/network/public/mojom/tcp_socket.mojom.h"
+#include "gpu/command_buffer/service/shared_context_state.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/java_handler_thread.h"
 #endif
 
 namespace base {
 class Thread;
+class WaitableEvent;
 }  // namespace base
 
-namespace ui_devtools {
-class UiDevToolsServer;
-}  // namespace ui_devtools
-
 namespace viz {
-class OutputSurfaceProvider;
 class FrameSinkManagerImpl;
-class ServerSharedBitmapManager;
+class GmbVideoFramePoolContextProvider;
+class HintSessionFactory;
+class OutputSurfaceProvider;
+class SharedImageInterfaceProvider;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 using VizCompositorThreadType = base::android::JavaHandlerThread;
 #else
 using VizCompositorThreadType = base::Thread;
@@ -40,50 +41,58 @@ using VizCompositorThreadType = base::Thread;
 class VizCompositorThreadRunnerImpl : public VizCompositorThreadRunner {
  public:
   VizCompositorThreadRunnerImpl();
+
+  VizCompositorThreadRunnerImpl(const VizCompositorThreadRunnerImpl&) = delete;
+  VizCompositorThreadRunnerImpl& operator=(
+      const VizCompositorThreadRunnerImpl&) = delete;
+
   // Performs teardown on thread and then stops thread.
   ~VizCompositorThreadRunnerImpl() override;
 
   // VizCompositorThreadRunner overrides.
   base::SingleThreadTaskRunner* task_runner() override;
-  base::PlatformThreadId thread_id() override;
-  void CreateFrameSinkManager(mojom::FrameSinkManagerParamsPtr params) override;
+  bool CreateHintSessionFactory(
+      base::flat_set<base::PlatformThreadId> thread_ids,
+      base::RepeatingClosure* wake_up_closure) override;
+  void SetIOThreadId(base::PlatformThreadId io_thread_id) override {}
+  void SetGpuMainThreadId(base::PlatformThreadId gpu_main_thread_id) override {}
+  void NotifyWorkloadIncrease() override;
   void CreateFrameSinkManager(mojom::FrameSinkManagerParamsPtr params,
-                              gpu::CommandBufferTaskExecutor* task_executor,
-                              GpuServiceImpl* gpu_service,
-                              gfx::RenderingPipeline* gpu_pipeline) override;
-#if BUILDFLAG(USE_VIZ_DEVTOOLS)
-  void CreateVizDevTools(mojom::VizDevToolsParamsPtr params) override;
-#endif
+                              GpuServiceImpl* gpu_service) override;
+  void RequestBeginFrameForGpuService(bool toggle) override;
 
  private:
+  void CreateHintSessionFactoryOnCompositorThread(
+      base::flat_set<base::PlatformThreadId> thread_ids,
+      base::RepeatingClosure* wake_up_closure,
+      base::WaitableEvent* event);
+  void NotifyWorkloadIncreaseOnCompositorThread();
+  void WakeUpOnCompositorThread();
   void CreateFrameSinkManagerOnCompositorThread(
       mojom::FrameSinkManagerParamsPtr params,
-      gpu::CommandBufferTaskExecutor* task_executor,
-      GpuServiceImpl* gpu_service,
-      gfx::RenderingPipeline* gpu_pipeline);
-#if BUILDFLAG(USE_VIZ_DEVTOOLS)
-  void CreateVizDevToolsOnCompositorThread(mojom::VizDevToolsParamsPtr params);
-  void InitVizDevToolsOnCompositorThread(mojom::VizDevToolsParamsPtr params);
-#endif
+      GpuServiceImpl* gpu_service);
+  void RequestBeginFrameForGpuServiceOnCompositorThread(bool toggle);
   void TearDownOnCompositorThread();
-
-  // Start variables to be accessed only on |task_runner_|.
-  std::unique_ptr<ServerSharedBitmapManager> server_shared_bitmap_manager_;
-  std::unique_ptr<OutputSurfaceProvider> output_surface_provider_;
-  std::unique_ptr<FrameSinkManagerImpl> frame_sink_manager_;
-#if BUILDFLAG(USE_VIZ_DEVTOOLS)
-  std::unique_ptr<ui_devtools::UiDevToolsServer> devtools_server_;
-
-  // If the FrameSinkManager is not ready yet, then we stash the pending
-  // VizDevToolsParams.
-  mojom::VizDevToolsParamsPtr pending_viz_dev_tools_params_;
-#endif
-  // End variables to be accessed only on |task_runner_|.
 
   std::unique_ptr<VizCompositorThreadType> thread_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
-  DISALLOW_COPY_AND_ASSIGN(VizCompositorThreadRunnerImpl);
+  // Sequence checker for tasks that run on the gpu "thread".
+  SEQUENCE_CHECKER(gpu_sequence_checker_);
+
+  std::unique_ptr<SharedImageInterfaceProvider>
+      shared_image_interface_provider_;
+
+  // Start variables to be accessed only on |task_runner_|.
+  std::unique_ptr<HintSessionFactory> hint_session_factory_;
+  std::unique_ptr<OutputSurfaceProvider> output_surface_provider_;
+  // `gmb_video_frame_pool_context_provider_` depends on
+  // `gpu_memory_buffer_manager_`. It must be created last, deleted first.
+  std::unique_ptr<GmbVideoFramePoolContextProvider>
+      gmb_video_frame_pool_context_provider_;
+  std::unique_ptr<FrameSinkManagerImpl> frame_sink_manager_;
+  base::WeakPtrFactory<VizCompositorThreadRunnerImpl> weak_factory_{this};
+  // End variables to be accessed only on |task_runner_|.
 };
 
 }  // namespace viz

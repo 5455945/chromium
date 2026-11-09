@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 
 #include <memory>
 
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_mock_time_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/public/platform/web_prescient_networking.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -23,14 +26,24 @@
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/link_loader_client.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetch_request.h"
+#include "third_party/blink/renderer/core/loader/pending_link_preload.h"
+#include "third_party/blink/renderer/core/loader/resource/link_dictionary_resource.h"
+#include "third_party/blink/renderer/core/loader/shared_dictionary_hint_type.h"
 #include "third_party/blink/renderer/core/testing/dummy_modulator.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/core/testing/scoped_mock_overlay_scrollbars.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_request.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
+#include "third_party/blink/renderer/platform/scheduler/public/main_thread_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 
 namespace blink {
@@ -53,10 +66,6 @@ class MockLinkLoaderClient final
   void LinkLoaded() override {}
   void LinkLoadingErrored() override {}
 
-  scoped_refptr<base::SingleThreadTaskRunner> GetLoadingTaskRunner() override {
-    return Thread::Current()->GetTaskRunner();
-  }
-
  private:
   const bool should_load_;
 };
@@ -65,9 +74,7 @@ class NetworkHintsMock : public WebPrescientNetworking {
  public:
   NetworkHintsMock() = default;
 
-  void PrefetchDNS(const WebString& hostname) override {
-    did_dns_prefetch_ = true;
-  }
+  void PrefetchDNS(const WebURL& url) override { did_dns_prefetch_ = true; }
   void Preconnect(const WebURL& url, bool allow_credentials) override {
     did_preconnect_ = true;
     is_https_ = url.ProtocolIs("https");
@@ -98,7 +105,7 @@ class LinkLoaderPreloadTestBase : public testing::Test,
   };
 
   LinkLoaderPreloadTestBase() {
-    dummy_page_holder_ = std::make_unique<DummyPageHolder>(IntSize(500, 500));
+    dummy_page_holder_ = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
   }
 
   ~LinkLoaderPreloadTestBase() override {
@@ -114,8 +121,7 @@ class LinkLoaderPreloadTestBase : public testing::Test,
     Persistent<MockLinkLoaderClient> loader_client =
         MakeGarbageCollected<MockLinkLoaderClient>(
             expected.link_loader_should_load_value);
-    auto* loader = MakeGarbageCollected<LinkLoader>(
-        loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
+    auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
     // TODO(crbug.com/751425): We should use the mock functionality
     // via |dummy_page_holder_|.
     url_test_helpers::RegisterMockedErrorURLLoad(params.href);
@@ -139,6 +145,8 @@ class LinkLoaderPreloadTestBase : public testing::Test,
       ASSERT_EQ(0, fetcher->CountPreloads());
     }
   }
+
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<DummyPageHolder> dummy_page_holder_;
 };
 
@@ -193,11 +201,11 @@ TEST_P(LinkLoaderPreloadTest, Preload) {
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, String(),
       test_case.as, String(), String(), String(), String(),
-      network::mojom::ReferrerPolicy::kDefault, KURL(NullURL(), test_case.href),
-      String(), String());
+      network::mojom::ReferrerPolicy::kDefault, KURL(NullUrl(), test_case.href),
+      String(), String(), String());
   Expectations expectations = {
       test_case.priority, test_case.context, test_case.expecting_load,
-      test_case.expecting_load ? params.href : NullURL(),
+      test_case.expecting_load ? params.href : NullUrl(),
       network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
@@ -280,11 +288,11 @@ TEST_P(LinkLoaderPreloadMimeTypeTest, Preload) {
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, test_case.type,
       test_case.as, String(), String(), String(), String(),
-      network::mojom::ReferrerPolicy::kDefault, KURL(NullURL(), test_case.href),
-      String(), String());
+      network::mojom::ReferrerPolicy::kDefault, KURL(NullUrl(), test_case.href),
+      String(), String(), String());
   Expectations expectations = {
       test_case.priority, test_case.context, test_case.expecting_load,
-      test_case.expecting_load ? params.href : NullURL(),
+      test_case.expecting_load ? params.href : NullUrl(),
       network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
@@ -311,15 +319,16 @@ class LinkLoaderPreloadMediaTest
 
 TEST_P(LinkLoaderPreloadMediaTest, Preload) {
   const auto& test_case = GetParam();
-  LinkLoadParameters params(
-      LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, "image/gif",
-      "image", test_case.media, String(), String(), String(),
-      network::mojom::ReferrerPolicy::kDefault,
-      KURL(NullURL(), "http://example.test/cat.gif"), String(), String());
+  LinkLoadParameters params(LinkRelAttribute("preload"),
+                            kCrossOriginAttributeNotSet, "image/gif", "image",
+                            test_case.media, String(), String(), String(),
+                            network::mojom::ReferrerPolicy::kDefault,
+                            KURL(NullUrl(), "http://example.test/cat.gif"),
+                            String(), String(), String());
   Expectations expectations = {
       test_case.priority, mojom::blink::RequestContextType::IMAGE,
       test_case.link_loader_should_load_value,
-      test_case.expecting_load ? params.href : NullURL(),
+      test_case.expecting_load ? params.href : NullUrl(),
       network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
@@ -345,7 +354,8 @@ TEST_P(LinkLoaderPreloadReferrerPolicyTest, Preload) {
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, "image/gif",
       "image", String(), String(), String(), String(), referrer_policy,
-      KURL(NullURL(), "http://example.test/cat.gif"), String(), String());
+      KURL(NullUrl(), "http://example.test/cat.gif"), String(), String(),
+      String());
   Expectations expectations = {ResourceLoadPriority::kLow,
                                mojom::blink::RequestContextType::IMAGE, true,
                                params.href, referrer_policy};
@@ -382,15 +392,16 @@ TEST_P(LinkLoaderPreloadNonceTest, Preload) {
           network::mojom::ContentSecurityPolicyType::kEnforce,
           network::mojom::ContentSecurityPolicySource::kHTTP,
           *(dummy_page_holder_->GetFrame().DomWindow()->GetSecurityOrigin())));
-  LinkLoadParameters params(
-      LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, String(),
-      "script", String(), test_case.nonce, String(), String(),
-      network::mojom::ReferrerPolicy::kDefault,
-      KURL(NullURL(), "http://example.test/cat.js"), String(), String());
+  LinkLoadParameters params(LinkRelAttribute("preload"),
+                            kCrossOriginAttributeNotSet, String(), "script",
+                            String(), test_case.nonce, String(), String(),
+                            network::mojom::ReferrerPolicy::kDefault,
+                            KURL(NullUrl(), "http://example.test/cat.js"),
+                            String(), String(), String());
   Expectations expectations = {
       ResourceLoadPriority::kHigh, mojom::blink::RequestContextType::SCRIPT,
       test_case.expecting_load,
-      test_case.expecting_load ? params.href : NullURL(),
+      test_case.expecting_load ? params.href : NullUrl(),
       network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
@@ -433,16 +444,16 @@ TEST_P(LinkLoaderPreloadImageSrcsetTest, Preload) {
   const auto& test_case = GetParam();
   dummy_page_holder_->GetDocument().SetBaseURLOverride(
       KURL("http://example.test/"));
-  dummy_page_holder_->GetPage().SetDeviceScaleFactorDeprecated(
+  dummy_page_holder_->GetDocument().GetFrame()->SetLayoutZoomFactor(
       test_case.scale_factor);
   LinkLoadParameters params(
       LinkRelAttribute("preload"), kCrossOriginAttributeNotSet, "image/gif",
       "image", String(), String(), String(), String(),
-      network::mojom::ReferrerPolicy::kDefault, KURL(NullURL(), test_case.href),
-      test_case.image_srcset, test_case.image_sizes);
+      network::mojom::ReferrerPolicy::kDefault, KURL(NullUrl(), test_case.href),
+      test_case.image_srcset, test_case.image_sizes, String());
   Expectations expectations = {ResourceLoadPriority::kLow,
                                mojom::blink::RequestContextType::IMAGE, true,
-                               KURL(NullURL(), test_case.expected_url),
+                               KURL(NullUrl(), test_case.expected_url),
                                network::mojom::ReferrerPolicy::kDefault};
   TestPreload(params, expectations);
 }
@@ -455,36 +466,62 @@ struct ModulePreloadTestParams {
   const char* href;
   const char* nonce;
   const char* integrity;
+  const char* fetch_priority_hint;
   CrossOriginAttributeValue cross_origin;
   network::mojom::ReferrerPolicy referrer_policy;
   bool expecting_load;
   network::mojom::CredentialsMode expected_credentials_mode;
+  mojom::blink::FetchPriorityHint expected_fetch_priority_hint;
 };
 
 constexpr ModulePreloadTestParams kModulePreloadTestParams[] = {
-    {"", nullptr, nullptr, kCrossOriginAttributeNotSet,
+    {"", nullptr, nullptr, nullptr, kCrossOriginAttributeNotSet,
      network::mojom::ReferrerPolicy::kDefault, false,
-     network::mojom::CredentialsMode::kSameOrigin},
-    {"http://example.test/cat.js", nullptr, nullptr,
+     network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto},
+    {"http://example.test/cat.js", nullptr, nullptr, nullptr,
      kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
-     true, network::mojom::CredentialsMode::kSameOrigin},
-    {"http://example.test/cat.js", nullptr, nullptr,
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto},
+    {"http://example.test/cat.js", nullptr, nullptr, nullptr,
      kCrossOriginAttributeAnonymous, network::mojom::ReferrerPolicy::kDefault,
-     true, network::mojom::CredentialsMode::kSameOrigin},
-    {"http://example.test/cat.js", "nonce", nullptr,
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto},
+    {"http://example.test/cat.js", "nonce", nullptr, nullptr,
      kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kNever, true,
-     network::mojom::CredentialsMode::kSameOrigin},
-    {"http://example.test/cat.js", nullptr, "sha384-abc",
+     network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto},
+    {"http://example.test/cat.js", nullptr, "sha384-abc", nullptr,
      kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
-     true, network::mojom::CredentialsMode::kSameOrigin}};
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto},
+    {"http://example.test/cat.js", nullptr, nullptr, "auto",
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto},
+    {"http://example.test/cat.js", nullptr, nullptr, "low",
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kLow},
+    {"http://example.test/cat.js", nullptr, nullptr, "high",
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kHigh},
+    {"http://example.test/cat.js", nullptr, nullptr, "invalid",
+     kCrossOriginAttributeNotSet, network::mojom::ReferrerPolicy::kDefault,
+     true, network::mojom::CredentialsMode::kSameOrigin,
+     mojom::blink::FetchPriorityHint::kAuto}};
 
 class LinkLoaderModulePreloadTest
     : public testing::TestWithParam<ModulePreloadTestParams>,
-      private ScopedMockOverlayScrollbars {};
+      private ScopedMockOverlayScrollbars {
+ private:
+  test::TaskEnvironment task_environment_;
+};
 
 class ModulePreloadTestModulator final : public DummyModulator {
  public:
-  ModulePreloadTestModulator(const ModulePreloadTestParams* params)
+  explicit ModulePreloadTestModulator(const ModulePreloadTestParams* params)
       : params_(params), fetched_(false) {}
 
   void FetchSingle(const ModuleScriptFetchRequest& request,
@@ -494,22 +531,26 @@ class ModulePreloadTestModulator final : public DummyModulator {
                    SingleModuleClient*) override {
     fetched_ = true;
 
-    EXPECT_EQ(KURL(NullURL(), params_->href), request.Url());
+    EXPECT_EQ(KURL(NullUrl(), params_->href), request.Url());
     EXPECT_EQ(params_->nonce, request.Options().Nonce());
     EXPECT_EQ(kNotParserInserted, request.Options().ParserState());
     EXPECT_EQ(params_->expected_credentials_mode,
               request.Options().CredentialsMode());
-    EXPECT_EQ(Referrer::NoReferrer(), request.ReferrerString());
+    EXPECT_EQ(Referrer::ClientReferrerString(), request.ReferrerString());
     EXPECT_EQ(params_->referrer_policy, request.Options().GetReferrerPolicy());
     EXPECT_EQ(params_->integrity,
               request.Options().GetIntegrityAttributeValue());
+    EXPECT_EQ(params_->expected_fetch_priority_hint,
+              request.Options().FetchPriorityHint());
     EXPECT_EQ(ModuleScriptCustomFetchType::kNone, custom_fetch_type);
   }
 
   bool fetched() const { return fetched_; }
 
  private:
-  const ModulePreloadTestParams* params_;
+  raw_ptr<const ModulePreloadTestParams,
+          UnprotectedInRelease | DanglingUntriaged>
+      params_;
   bool fetched_;
 };
 
@@ -523,14 +564,14 @@ TEST_P(LinkLoaderModulePreloadTest, ModulePreload) {
       modulator);
   Persistent<MockLinkLoaderClient> loader_client =
       MakeGarbageCollected<MockLinkLoaderClient>(true);
-  auto* loader = MakeGarbageCollected<LinkLoader>(
-      loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
-  KURL href_url = KURL(NullURL(), test_case.href);
+  auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
+  KURL href_url = KURL(NullUrl(), test_case.href);
   LinkLoadParameters params(
       LinkRelAttribute("modulepreload"), test_case.cross_origin,
       String() /* type */, String() /* as */, String() /* media */,
-      test_case.nonce, test_case.integrity, String(), test_case.referrer_policy,
-      href_url, String() /* image_srcset */, String() /* image_sizes */);
+      test_case.nonce, test_case.integrity, test_case.fetch_priority_hint,
+      test_case.referrer_policy, href_url, String() /* image_srcset */,
+      String() /* image_sizes */, String() /* blocking */);
   loader->LoadLink(params, dummy_page_holder->GetDocument());
   ASSERT_EQ(test_case.expecting_load, modulator->fetched());
 }
@@ -539,76 +580,10 @@ INSTANTIATE_TEST_SUITE_P(LinkLoaderModulePreloadTest,
                          LinkLoaderModulePreloadTest,
                          testing::ValuesIn(kModulePreloadTestParams));
 
-class LinkLoaderTestPrefetchPrivacyChanges
-    : public testing::Test,
-      public testing::WithParamInterface<bool>,
-      private ScopedMockOverlayScrollbars {
- public:
-  LinkLoaderTestPrefetchPrivacyChanges()
-      : privacy_changes_enabled_(GetParam()) {}
-  void SetUp() override {
-    std::vector<base::Feature> enable_features;
-    std::vector<base::Feature> disabled_features;
-    if (GetParam()) {
-      enable_features.push_back(features::kPrefetchPrivacyChanges);
-    } else {
-      disabled_features.push_back(features::kPrefetchPrivacyChanges);
-    }
-    feature_list_.InitWithFeatures(enable_features, disabled_features);
-  }
-
- protected:
-  const bool privacy_changes_enabled_;
-  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(LinkLoaderTestPrefetchPrivacyChanges,
-                         LinkLoaderTestPrefetchPrivacyChanges,
-                         testing::Values(false, true));
-
-TEST_P(LinkLoaderTestPrefetchPrivacyChanges, PrefetchPrivacyChanges) {
-  auto dummy_page_holder = std::make_unique<DummyPageHolder>(IntSize(500, 500));
-  dummy_page_holder->GetFrame().GetSettings()->SetScriptEnabled(true);
-  Persistent<MockLinkLoaderClient> loader_client =
-      MakeGarbageCollected<MockLinkLoaderClient>(true);
-  auto* loader = MakeGarbageCollected<LinkLoader>(
-      loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
-  KURL href_url = KURL(NullURL(), "http://example.test/cat.jpg");
-  // TODO(crbug.com/751425): We should use the mock functionality
-  // via |dummy_page_holder|.
-  url_test_helpers::RegisterMockedErrorURLLoad(href_url);
-  LinkLoadParameters params(
-      LinkRelAttribute("prefetch"), kCrossOriginAttributeNotSet, "image/jpg",
-      "", "", "", "", String(), network::mojom::ReferrerPolicy::kDefault,
-      href_url, String() /* image_srcset */, String() /* image_sizes */);
-  loader->LoadLink(params, dummy_page_holder->GetDocument());
-  ASSERT_TRUE(dummy_page_holder->GetDocument().Fetcher());
-  Resource* resource = loader->GetResourceForTesting();
-  EXPECT_TRUE(resource);
-
-  if (privacy_changes_enabled_) {
-    EXPECT_EQ(resource->GetResourceRequest().GetRedirectMode(),
-              network::mojom::RedirectMode::kError);
-    EXPECT_EQ(resource->GetResourceRequest().GetReferrerPolicy(),
-              network::mojom::ReferrerPolicy::kNever);
-  } else {
-    EXPECT_EQ(resource->GetResourceRequest().GetRedirectMode(),
-              network::mojom::RedirectMode::kFollow);
-    EXPECT_EQ(resource->GetResourceRequest().GetReferrerPolicy(),
-              ReferrerUtils::MojoReferrerPolicyResolveDefault(
-                  network::mojom::ReferrerPolicy::kDefault));
-  }
-
-  WebURLLoaderMockFactory::GetSingletonInstance()
-      ->UnregisterAllURLsAndClearMemoryCache();
-}
-
 class LinkLoaderTest : public testing::Test,
                        private ScopedMockOverlayScrollbars {
  protected:
+  test::TaskEnvironment task_environment_;
   ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
 };
 
@@ -638,14 +613,13 @@ TEST_F(LinkLoaderTest, Prefetch) {
   // Test the cases with a single header
   for (const auto& test_case : cases) {
     auto dummy_page_holder =
-        std::make_unique<DummyPageHolder>(IntSize(500, 500));
+        std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
     dummy_page_holder->GetFrame().GetSettings()->SetScriptEnabled(true);
     Persistent<MockLinkLoaderClient> loader_client =
         MakeGarbageCollected<MockLinkLoaderClient>(
             test_case.link_loader_should_load_value);
-    auto* loader = MakeGarbageCollected<LinkLoader>(
-        loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
-    KURL href_url = KURL(NullURL(), test_case.href);
+    auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
+    KURL href_url = KURL(NullUrl(), test_case.href);
     // TODO(crbug.com/751425): We should use the mock functionality
     // via |dummy_page_holder|.
     url_test_helpers::RegisterMockedErrorURLLoad(href_url);
@@ -653,7 +627,7 @@ TEST_F(LinkLoaderTest, Prefetch) {
         LinkRelAttribute("prefetch"), kCrossOriginAttributeNotSet,
         test_case.type, "", test_case.media, "", "", String(),
         test_case.referrer_policy, href_url, String() /* image_srcset */,
-        String() /* image_sizes */);
+        String() /* image_sizes */, String() /* blocking */);
     loader->LoadLink(params, dummy_page_holder->GetDocument());
     ASSERT_TRUE(dummy_page_holder->GetDocument().Fetcher());
     Resource* resource = loader->GetResourceForTesting();
@@ -669,7 +643,7 @@ TEST_F(LinkLoaderTest, Prefetch) {
                   resource->GetResourceRequest().GetReferrerPolicy());
       }
     }
-    WebURLLoaderMockFactory::GetSingletonInstance()
+    URLLoaderMockFactory::GetSingletonInstance()
         ->UnregisterAllURLsAndClearMemoryCache();
   }
 }
@@ -688,7 +662,7 @@ TEST_F(LinkLoaderTest, DNSPrefetch) {
   // Test the cases with a single header
   for (const auto& test_case : cases) {
     auto dummy_page_holder =
-        std::make_unique<DummyPageHolder>(IntSize(500, 500));
+        std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
     dummy_page_holder->GetDocument().GetSettings()->SetDNSPrefetchingEnabled(
         true);
     dummy_page_holder->GetFrame().SetPrescientNetworkingForTesting(
@@ -697,14 +671,14 @@ TEST_F(LinkLoaderTest, DNSPrefetch) {
         dummy_page_holder->GetFrame().PrescientNetworking());
     Persistent<MockLinkLoaderClient> loader_client =
         MakeGarbageCollected<MockLinkLoaderClient>(test_case.should_load);
-    auto* loader = MakeGarbageCollected<LinkLoader>(
-        loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
+    auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
     KURL href_url = KURL(KURL(String("http://example.com")), test_case.href);
     LinkLoadParameters params(
         LinkRelAttribute("dns-prefetch"), kCrossOriginAttributeNotSet, String(),
         String(), String(), String(), String(), String(),
         network::mojom::ReferrerPolicy::kDefault, href_url,
-        String() /* image_srcset */, String() /* image_sizes */);
+        String() /* image_srcset */, String() /* image_sizes */,
+        String() /* blocking */);
     loader->LoadLink(params, dummy_page_holder->GetDocument());
     EXPECT_FALSE(mock_network_hints->DidPreconnect());
     EXPECT_EQ(test_case.should_load, mock_network_hints->DidDnsPrefetch());
@@ -730,21 +704,21 @@ TEST_F(LinkLoaderTest, Preconnect) {
   // Test the cases with a single header
   for (const auto& test_case : cases) {
     auto dummy_page_holder =
-        std::make_unique<DummyPageHolder>(IntSize(500, 500));
+        std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
     dummy_page_holder->GetFrame().SetPrescientNetworkingForTesting(
         std::make_unique<NetworkHintsMock>());
     auto* mock_network_hints = static_cast<NetworkHintsMock*>(
         dummy_page_holder->GetFrame().PrescientNetworking());
     Persistent<MockLinkLoaderClient> loader_client =
         MakeGarbageCollected<MockLinkLoaderClient>(test_case.should_load);
-    auto* loader = MakeGarbageCollected<LinkLoader>(
-        loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
+    auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
     KURL href_url = KURL(KURL(String("http://example.com")), test_case.href);
     LinkLoadParameters params(
         LinkRelAttribute("preconnect"), test_case.cross_origin, String(),
         String(), String(), String(), String(), String(),
         network::mojom::ReferrerPolicy::kDefault, href_url,
-        String() /* image_srcset */, String() /* image_sizes */);
+        String() /* image_srcset */, String() /* image_sizes */,
+        String() /* blocking */);
     loader->LoadLink(params, dummy_page_holder->GetDocument());
     EXPECT_EQ(test_case.should_load, mock_network_hints->DidPreconnect());
     EXPECT_EQ(test_case.is_https, mock_network_hints->IsHTTPS());
@@ -759,14 +733,14 @@ TEST_F(LinkLoaderTest, Preconnect) {
 }
 
 TEST_F(LinkLoaderTest, PreloadAndPrefetch) {
-  auto dummy_page_holder = std::make_unique<DummyPageHolder>(IntSize(500, 500));
+  auto dummy_page_holder =
+      std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
   ResourceFetcher* fetcher = dummy_page_holder->GetDocument().Fetcher();
   ASSERT_TRUE(fetcher);
   dummy_page_holder->GetFrame().GetSettings()->SetScriptEnabled(true);
   Persistent<MockLinkLoaderClient> loader_client =
       MakeGarbageCollected<MockLinkLoaderClient>(true);
-  auto* loader = MakeGarbageCollected<LinkLoader>(
-      loader_client.Get(), loader_client.Get()->GetLoadingTaskRunner());
+  auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
   KURL href_url = KURL(KURL(), "https://www.example.com/");
   // TODO(crbug.com/751425): We should use the mock functionality
   // via |dummy_page_holder|.
@@ -775,7 +749,8 @@ TEST_F(LinkLoaderTest, PreloadAndPrefetch) {
       LinkRelAttribute("preload prefetch"), kCrossOriginAttributeNotSet,
       "application/javascript", "script", "", "", "", String(),
       network::mojom::ReferrerPolicy::kDefault, href_url,
-      String() /* image_srcset */, String() /* image_sizes */);
+      String() /* image_srcset */, String() /* image_sizes */,
+      String() /* blocking */);
   loader->LoadLink(params, dummy_page_holder->GetDocument());
   ASSERT_EQ(1, fetcher->CountPreloads());
   Resource* resource = loader->GetResourceForTesting();
@@ -783,6 +758,117 @@ TEST_F(LinkLoaderTest, PreloadAndPrefetch) {
   EXPECT_TRUE(resource->IsLinkPreload());
 }
 
+class DictionaryLinkTest : public testing::Test {
+ public:
+  DictionaryLinkTest() {}
+
+  void SetUp() override {
+    test_task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>();
+  }
+
+  void RunIdleTasks() {
+    ThreadScheduler::Current()
+        ->ToMainThreadScheduler()
+        ->StartIdlePeriodForTesting();
+    platform_->RunUntilIdle();
+  }
+
+ protected:
+  test::TaskEnvironment task_environment_;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
+  scoped_refptr<base::TestMockTimeTaskRunner> test_task_runner_;
+};
+
+TEST_F(DictionaryLinkTest, LoadDictionaryFromLink) {
+  static constexpr char href[] = "http://example.test/test.dict";
+  base::HistogramTester histogram_tester;
+
+  // Test the cases with a single header
+  auto dummy_page_holder =
+      std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  dummy_page_holder->GetFrame().GetSettings()->SetScriptEnabled(true);
+  Persistent<MockLinkLoaderClient> loader_client =
+      MakeGarbageCollected<MockLinkLoaderClient>(true);
+  auto* loader = MakeGarbageCollected<LinkLoader>(loader_client.Get());
+  KURL href_url = KURL(NullUrl(), href);
+  // TODO(crbug.com/751425): We should use the mock functionality
+  // via |dummy_page_holder|.
+  url_test_helpers::RegisterMockedErrorURLLoad(href_url);
+  LinkLoadParameters params(
+      LinkRelAttribute("compression-dictionary"), kCrossOriginAttributeNotSet,
+      String() /* type */, String() /* as */, String() /* media */,
+      String() /* nonce */, String() /* integrity */,
+      String() /* fetch_priority_hint */,
+      network::mojom::ReferrerPolicy::kDefault, href_url,
+      String() /* image_srcset */, String() /* image_sizes */,
+      String() /* blocking */);
+  loader->LoadLink(params, dummy_page_holder->GetDocument());
+  RunIdleTasks();
+  Resource* resource = loader->GetResourceForTesting();
+  EXPECT_TRUE(resource);
+  URLLoaderMockFactory::GetSingletonInstance()
+      ->UnregisterAllURLsAndClearMemoryCache();
+  histogram_tester.ExpectUniqueSample("Blink.SharedDictionary.Hint.Discovery",
+                                      SharedDictionaryHintType::kHtmlLinkTag,
+                                      1);
+}
+
 }  // namespace
+
+// Required to be outside the anomymous namespace for testing
+class DictionaryLoadFromHeaderTest : public SimTest {
+ public:
+  DictionaryLoadFromHeaderTest() {}
+
+  void SetUp() override {
+    SimTest::SetUp();
+
+    SimRequestBase::Params params;
+    String link_header =
+        String("<") + dict_href_ + ">; rel=\"compression-dictionary\"";
+    params.response_http_headers.Set(http_names::kLink, link_header);
+    main_resource_ =
+        std::make_unique<SimRequest>(page_href_, "text/html", params);
+  }
+
+  void RunIdleTasks() {
+    ThreadScheduler::Current()
+        ->ToMainThreadScheduler()
+        ->StartIdlePeriodForTesting();
+    base::RunLoop().RunUntilIdle();
+  }
+
+ protected:
+  static constexpr char page_href_[] = "http://example.test/test.html";
+  static constexpr char dict_href_[] = "http://example.test/test.dict";
+
+  std::unique_ptr<SimRequest> main_resource_;
+};
+
+TEST_F(DictionaryLoadFromHeaderTest, LoadDictionaryFromHeader) {
+  base::HistogramTester histogram_tester;
+
+  // Test the cases with a single header
+  KURL dict_url = KURL(NullUrl(), dict_href_);
+  ResourceResponse dict_response(dict_url);
+  dict_response.SetHttpStatusCode(200);
+  url_test_helpers::RegisterMockedURLLoadWithCustomResponse(
+      dict_url, "", WrappedResourceResponse(dict_response));
+
+  LoadURL(page_href_);
+  main_resource_->Complete("");
+
+  RunIdleTasks();
+  Resource* dictionary_resource =
+      GetDocument().GetPendingLinkPreloadForTesting(dict_url);
+  ASSERT_TRUE(dictionary_resource != nullptr);
+  ASSERT_TRUE(dictionary_resource->IsLoading());
+  URLLoaderMockFactory::GetSingletonInstance()->ServeAsynchronousRequests();
+  ASSERT_TRUE(dictionary_resource->IsLoaded());
+  URLLoaderMockFactory::GetSingletonInstance()
+      ->UnregisterAllURLsAndClearMemoryCache();
+  histogram_tester.ExpectUniqueSample("Blink.SharedDictionary.Hint.Discovery",
+                                      SharedDictionaryHintType::kHttpHeader, 1);
+}
 
 }  // namespace blink

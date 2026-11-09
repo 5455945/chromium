@@ -1,12 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/thumbnail/generator/thumbnail_util.h"
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "content/public/browser/browser_thread.h"
 #include "skia/ext/image_operations.h"
@@ -14,7 +13,8 @@
 namespace {
 
 SkBitmap ScaleDownBitmapOnIOThread(int icon_size, SkBitmap bitmap) {
-  DCHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M163);
 
   if (bitmap.drawsNothing())
     return bitmap;
@@ -38,8 +38,9 @@ SkBitmap ScaleDownBitmapOnIOThread(int icon_size, SkBitmap bitmap) {
 void ScaleDownBitmap(int icon_size,
                      const SkBitmap& bitmap,
                      base::OnceCallback<void(SkBitmap)> callback) {
-  DCHECK(callback);
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(callback, base::NotFatalUntil::M163);
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M163);
 
   // Scale down bitmap on another thread.
   base::ThreadPool::PostTaskAndReplyWithResult(

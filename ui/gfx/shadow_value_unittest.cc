@@ -1,67 +1,67 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/gfx/shadow_value.h"
+
 #include <stddef.h>
 
-#include "base/cxx17_backports.h"
+#include <array>
+#include <vector>
+
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/vector2d.h"
-#include "ui/gfx/shadow_value.h"
 
 namespace gfx {
 
 TEST(ShadowValueTest, GetMargin) {
-  constexpr struct TestCase {
+  struct TestCase {
     Insets expected_margin;
-    size_t shadow_count;
-    ShadowValue shadows[2];
-  } kTestCases[] = {
+    ShadowValues shadows;
+  };
+  const auto kTestCases = std::to_array<TestCase>({
       {
-          Insets(), 0, {},
+          Insets(),
+          {},
       },
       {
-          Insets(-2, -2, -2, -2),
-          1,
+          Insets(-2),
           {
               {gfx::Vector2d(0, 0), 4, 0},
           },
       },
       {
-          Insets(0, -1, -4, -3),
-          1,
+          Insets::TLBR(0, -1, -4, -3),
           {
               {gfx::Vector2d(1, 2), 4, 0},
           },
       },
       {
-          Insets(-4, -3, 0, -1),
-          1,
+          Insets::TLBR(-4, -3, 0, -1),
           {
               {gfx::Vector2d(-1, -2), 4, 0},
           },
       },
       {
-          Insets(0, -1, -5, -4),
-          2,
+          Insets::TLBR(0, -1, -5, -4),
           {
-              {gfx::Vector2d(1, 2), 4, 0}, {gfx::Vector2d(2, 3), 4, 0},
+              {gfx::Vector2d(1, 2), 4, 0},
+              {gfx::Vector2d(2, 3), 4, 0},
           },
       },
       {
-          Insets(-4, -3, -5, -4),
-          2,
+          Insets::TLBR(-4, -3, -5, -4),
           {
-              {gfx::Vector2d(-1, -2), 4, 0}, {gfx::Vector2d(2, 3), 4, 0},
+              {gfx::Vector2d(-1, -2), 4, 0},
+              {gfx::Vector2d(2, 3), 4, 0},
           },
       },
-  };
+  });
 
-  for (size_t i = 0; i < base::size(kTestCases); ++i) {
-    Insets margin = ShadowValue::GetMargin(
-        ShadowValues(kTestCases[i].shadows,
-                     kTestCases[i].shadows + kTestCases[i].shadow_count));
+  for (size_t i = 0; i < std::size(kTestCases); ++i) {
+    Insets margin = ShadowValue::GetMargin(kTestCases[i].shadows);
 
     EXPECT_EQ(kTestCases[i].expected_margin, margin) << " i=" << i;
   }

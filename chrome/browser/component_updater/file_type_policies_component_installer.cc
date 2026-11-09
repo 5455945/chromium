@@ -1,46 +1,46 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/component_updater/file_type_policies_component_installer.h"
+
+#include <stdint.h>
 
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/version.h"
 #include "components/component_updater/component_updater_paths.h"
-#include "components/safe_browsing/content/common/file_type_policies.h"
-
-using component_updater::ComponentUpdateService;
+#include "components/safe_browsing/content/common/file_type_policies/file_type_policies.h"
 
 namespace {
 
-const base::FilePath::CharType kFileTypePoliciesBinaryPbFileName[] =
+constexpr base::FilePath::CharType kFileTypePoliciesBinaryPbFileName[] =
     FILE_PATH_LITERAL("download_file_types.pb");
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the extension.
 // The extension id is: khaoiebndkojlmppeemjhbpbandiljpe
-const uint8_t kFileTypePoliciesPublicKeySHA256[32] = {
+constexpr uint8_t kFileTypePoliciesPublicKeySHA256[32] = {
     0xa7, 0x0e, 0x84, 0x1d, 0x3a, 0xe9, 0xbc, 0xff, 0x44, 0xc9, 0x71,
     0xf1, 0x0d, 0x38, 0xb9, 0xf4, 0x65, 0x92, 0x31, 0x01, 0x47, 0x3f,
     0x1b, 0x7c, 0x11, 0xb0, 0x85, 0x0f, 0xa3, 0xfd, 0xe1, 0xe5};
 
-const char kFileTypePoliciesManifestName[] = "File Type Policies";
+constexpr char kFileTypePoliciesManifestName[] = "File Type Policies";
 
 void LoadFileTypesFromDisk(const base::FilePath& pb_path) {
-  if (pb_path.empty())
+  if (pb_path.empty()) {
     return;
+  }
 
   VLOG(1) << "Reading Download File Types from file: " << pb_path.value();
   std::string binary_pb;
@@ -61,7 +61,7 @@ namespace component_updater {
 
 bool FileTypePoliciesComponentInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool FileTypePoliciesComponentInstallerPolicy::RequiresNetworkEncryption()
@@ -71,7 +71,7 @@ bool FileTypePoliciesComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 FileTypePoliciesComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -86,7 +86,7 @@ base::FilePath FileTypePoliciesComponentInstallerPolicy::GetInstalledPath(
 void FileTypePoliciesComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   VLOG(1) << "Component ready, version " << version.GetString() << " in "
           << install_dir.value();
 
@@ -97,7 +97,7 @@ void FileTypePoliciesComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool FileTypePoliciesComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // No need to actually validate the proto here, since we'll do the checking
   // in PopulateFromDynamicUpdate().
@@ -111,9 +111,7 @@ base::FilePath FileTypePoliciesComponentInstallerPolicy::GetRelativeInstallDir()
 
 void FileTypePoliciesComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(kFileTypePoliciesPublicKeySHA256,
-               kFileTypePoliciesPublicKeySHA256 +
-                   base::size(kFileTypePoliciesPublicKeySHA256));
+  hash->assign_range(kFileTypePoliciesPublicKeySHA256);
 }
 
 std::string FileTypePoliciesComponentInstallerPolicy::GetName() const {

@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -75,6 +75,18 @@ cast_source_set("connectivity_checker") {
     "//chromecast/base/metrics",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
+  ]
+}
+
+cast_source_set("socket_util") {
+  sources = [
+    "socket_util.cc",
+    "socket_util.h",
+  ]
+
+  deps = [
+    "//base",
+    "//net",
   ]
 }
 

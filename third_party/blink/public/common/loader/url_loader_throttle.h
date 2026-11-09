@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,14 @@
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_LOADER_URL_LOADER_THROTTLE_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
+#include "base/types/strong_alias.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/request_priority.h"
 #include "services/network/public/mojom/url_loader.mojom-forward.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
@@ -20,11 +23,11 @@
 class GURL;
 
 namespace net {
-class HttpRequestHeaders;
 struct RedirectInfo;
 }
 
 namespace network {
+struct HttpRequestHeadersUpdateParams;
 struct ResourceRequest;
 struct URLLoaderCompletionStatus;
 }  // namespace network
@@ -53,32 +56,25 @@ class BLINK_COMMON_EXPORT URLLoaderThrottle {
     // Cancels the resource load with the specified error code and an optional,
     // application-defined reason description.
     virtual void CancelWithError(int error_code,
-                                 base::StringPiece custom_reason = "") = 0;
+                                 std::string_view custom_reason = "") = 0;
+
+    // Cancels the resource load with the specified error code and an optional,
+    // application-defined reason description with optional extended_reason().
+    virtual void CancelWithExtendedError(int error_code,
+                                         int extended_reason_code,
+                                         std::string_view custom_reason = "") {}
 
     // Resumes the deferred resource load. It is a no-op if the resource load is
     // not deferred or has already been canceled.
     virtual void Resume() = 0;
-
-    virtual void SetPriority(net::RequestPriority priority);
-
-    // Updates the request headers which is deferred  to be sent. This method
-    // needs to be called when the response is deferred on WillStartRequest or
-    // WillRedirectRequest and before calling Delegate::Resume().
-    virtual void UpdateDeferredRequestHeaders(
-        const net::HttpRequestHeaders& modified_request_headers,
-        const net::HttpRequestHeaders& modified_cors_exempt_request_headers);
 
     // Updates the response head which is deferred to be sent. This method needs
     // to be called when the response is deferred on
     // URLLoaderThrottle::WillProcessResponse() and before calling
     // Delegate::Resume().
     virtual void UpdateDeferredResponseHead(
-        network::mojom::URLResponseHeadPtr new_response_head);
-
-    // Pauses/resumes reading response body if the resource is fetched from
-    // network.
-    virtual void PauseReadingBodyFromNet();
-    virtual void ResumeReadingBodyFromNet();
+        network::mojom::URLResponseHeadPtr new_response_head,
+        mojo::ScopedDataPipeConsumerHandle body);
 
     // Replaces the URLLoader and URLLoaderClient endpoints held by the
     // ThrottlingURLLoader instance.
@@ -88,52 +84,11 @@ class BLINK_COMMON_EXPORT URLLoaderThrottle {
             new_client_receiver,
         mojo::PendingRemote<network::mojom::URLLoader>* original_loader,
         mojo::PendingReceiver<network::mojom::URLLoaderClient>*
-            original_client_receiver);
+            original_client_receiver,
+        mojo::ScopedDataPipeConsumerHandle* body);
 
-    // Restarts the URL loader using |additional_load_flags|.
-    //
-    // Restarting is only valid while executing within
-    // BeforeWillProcessResponse(), or during its deferred handling (before
-    // having called Resume()).
-    //
-    // When a URL loader is restarted, throttles will NOT have their
-    // WillStartRequest() method called again - that is only called for the
-    // initial request start.
-    //
-    // If multiple throttles call RestartWithFlags() then the URL loader will be
-    // restarted using a combined value of all of the |additional_load_flags|.
-    virtual void RestartWithFlags(int additional_load_flags);
-
-    // Restarts the URL loader using |additional_load_flags| and the unmodified
-    // URL if it was changed in WillStartRequest().
-    //
-    // If called on an URL loader that did not modify the URL in
-    // WillStartRequest(), this method has the same outcome as
-    // RestartWithFlags().
-    //
-    // Restarting is only valid while executing within
-    // BeforeWillProcessResponse(), or during its deferred handling (before
-    // having called Resume()).
-    //
-    // When a URL loader is restarted, throttles will NOT have their
-    // WillStartRequest() method called again - that is only called for the
-    // initial request start.
-    //
-    // If multiple throttles call RestartWithFlags() and
-    // RestartWithURLResetAndFlags() then the URL loader will be restarted
-    // using a combined value of all of the |additional_load_flags|.
-    virtual void RestartWithURLResetAndFlags(int additional_load_flags);
-
-    // Restarts the URL loader immediately using |additional_load_flags| and the
-    // unmodified URL if it was changed in WillStartRequest().
-    //
-    // Restarting is only valid before BeforeWillProcessResponse() is called.
-    virtual void RestartWithURLResetAndFlagsNow(int additional_load_flags);
-
-    // Restarts the URL loader immediately after adding the provided headers to
-    // the new request.
-    virtual void RestartWithModifiedHeadersNow(
-        const net::HttpRequestHeaders& modified_headers);
+    // Indicates a restart did occur due to a Critical-CH HTTP Header.
+    virtual void DidRestartForCriticalClientHint() {}
 
    protected:
     virtual ~Delegate();
@@ -185,12 +140,9 @@ class BLINK_COMMON_EXPORT URLLoaderThrottle {
       net::RedirectInfo* redirect_info,
       const network::mojom::URLResponseHead& response_head,
       bool* defer,
-      std::vector<std::string>* to_be_removed_request_headers,
-      net::HttpRequestHeaders* modified_request_headers,
-      net::HttpRequestHeaders* modified_cors_exempt_request_headers);
+      network::HttpRequestHeadersUpdateParams* headers_update_params);
 
   // Called when the response headers and meta data are available.
-  // TODO(776312): Migrate this URL to URLResponseHead.
   virtual void WillProcessResponse(
       const GURL& response_url,
       network::mojom::URLResponseHead* response_head,
@@ -200,8 +152,17 @@ class BLINK_COMMON_EXPORT URLLoaderThrottle {
   // throttle defers the navigation in WillProcessResponse().
   virtual const char* NameForLoggingWillProcessResponse();
 
+  // When `*restart_with_url_reset` is set to true in
+  // `BeforeWillProcessResponse` or `BeforeWillRedirectRequest`, the caller
+  // should restart the URL loader using the original URL before modified by
+  // WillStartRequest(). When a URL loader is restarted, throttles will NOT have
+  // their WillStartRequest() method called again - that is only called for the
+  // initial request start.
+  using RestartWithURLReset =
+      base::StrongAlias<struct RestartWithURLResetTag, bool>;
+
   // Called prior WillProcessResponse() to allow throttles to restart the URL
-  // load by calling delegate_->RestartWithFlags().
+  // load by setting `RestartWithURLReset` to true.
   //
   // Having this method separate from WillProcessResponse() ensures that
   // WillProcessResponse() is called at most once even in the presence of
@@ -209,29 +170,32 @@ class BLINK_COMMON_EXPORT URLLoaderThrottle {
   virtual void BeforeWillProcessResponse(
       const GURL& response_url,
       const network::mojom::URLResponseHead& response_head,
-      bool* defer);
+      RestartWithURLReset* restart_with_url_reset);
+
+  // Called prior WillRedirectRequest() to allow throttles to restart the URL
+  // load by setting `RestartWithURLReset` to true.
+  //
+  // Having this method separate from WillRedirectRequest() ensures that
+  // WillRedirectRequest() is called at most once per redirect even in the
+  // presence of restarts.
+  //
+  // Note: restarting with the url reset triggers an internal redirect, which
+  // will cause this to be run again. Ensure that this doesn't cause loops.
+  virtual void BeforeWillRedirectRequest(
+      const net::RedirectInfo& redirect_info,
+      const network::mojom::URLResponseHead& response_head,
+      RestartWithURLReset* restart_with_url_reset);
 
   // Called if there is a non-OK net::Error in the completion status.
   virtual void WillOnCompleteWithError(
-      const network::URLLoaderCompletionStatus& status,
-      bool* defer);
-
-  // Called when an ACCEPT_CH frame is observed.
-  virtual void HandleAcceptCHFrameReceived(
-      const GURL& url,
-      const std::vector<network::mojom::WebClientHintsType>& accept_ch_frame);
-
-  // Must return true if the throttle may make cross-scheme redirects
-  // (which is usually considered unsafe, so allowed only if the setting
-  // is made very explicitly).
-  virtual bool makes_unsafe_redirect();
+      const network::URLLoaderCompletionStatus& status);
 
   void set_delegate(Delegate* delegate) { delegate_ = delegate; }
 
  protected:
   URLLoaderThrottle();
 
-  Delegate* delegate_ = nullptr;
+  raw_ptr<Delegate> delegate_ = nullptr;
 };
 
 }  // namespace blink

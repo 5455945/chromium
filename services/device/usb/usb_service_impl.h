@@ -1,33 +1,28 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_USB_USB_SERVICE_IMPL_H_
 #define SERVICES_DEVICE_USB_USB_SERVICE_IMPL_H_
 
-#include "services/device/usb/usb_service.h"
-
 #include <stddef.h>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "services/device/usb/scoped_libusb_device_ref.h"
 #include "services/device/usb/usb_context.h"
 #include "services/device/usb/usb_device_impl.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/device/usb/usb_service.h"
 #include "third_party/libusb/src/libusb/libusb.h"
-
-#if defined(OS_WIN)
-#include "base/scoped_observation.h"
-#include "device/base/device_monitor_win.h"
-#endif  // OS_WIN
 
 struct libusb_context;
 
@@ -37,34 +32,29 @@ typedef struct libusb_context* PlatformUsbContext;
 
 class UsbDeviceImpl;
 
-class UsbServiceImpl final :
-#if defined(OS_WIN)
-    public DeviceMonitorWin::Observer,
-#endif  // OS_WIN
-    public UsbService {
+class UsbServiceImpl final : public UsbService {
  public:
   UsbServiceImpl();
+
+  UsbServiceImpl(const UsbServiceImpl&) = delete;
+  UsbServiceImpl& operator=(const UsbServiceImpl&) = delete;
+
   ~UsbServiceImpl() override;
 
  private:
   // device::UsbService implementation
   void GetDevices(GetDevicesCallback callback) override;
 
-#if defined(OS_WIN)
-  // device::DeviceMonitorWin::Observer implementation
-  void OnDeviceAdded(const GUID& class_guid,
-                     const std::wstring& device_path) override;
-  void OnDeviceRemoved(const GUID& class_guid,
-                       const std::wstring& device_path) override;
-#endif  // OS_WIN
-
   void OnUsbContext(scoped_refptr<UsbContext> context);
 
   // Enumerate USB devices from OS and update devices_ map.
   void RefreshDevices();
   void OnDeviceList(
-      absl::optional<std::vector<ScopedLibusbDeviceRef>> platform_devices);
+      std::optional<std::vector<ScopedLibusbDeviceRef>> platform_devices);
   void RefreshDevicesComplete();
+
+  // Called when libusb could not be initialized.
+  void OnUsbUnavailable();
 
   // Creates a new UsbDevice based on the given libusb device.
   void EnumerateDevice(ScopedLibusbDeviceRef platform_device,
@@ -94,14 +84,11 @@ class UsbServiceImpl final :
 
   // When available the device list will be updated when new devices are
   // connected instead of only when a full enumeration is requested.
-  // TODO(reillyg): Support this on all platforms. crbug.com/411715
-  bool hotplug_enabled_ = false;
   libusb_hotplug_callback_handle hotplug_handle_;
 
   // Enumeration callbacks are queued until an enumeration completes.
   bool enumeration_ready_ = false;
   bool enumeration_in_progress_ = false;
-  base::queue<std::wstring> pending_path_enumerations_;
   std::vector<GetDevicesCallback> pending_enumeration_callbacks_;
 
   // The map from libusb_device to UsbDeviceImpl. The key is a weak pointer to
@@ -117,20 +104,13 @@ class UsbServiceImpl final :
   // Tracks libusb_devices that might be removed while they are being
   // enumerated. This is a weak pointer to a libusb_device object owned by a
   // UsbDeviceImpl.
-  std::set<libusb_device*> devices_being_enumerated_;
-
-#if defined(OS_WIN)
-  base::ScopedObservation<DeviceMonitorWin, DeviceMonitorWin::Observer>
-      device_observation_{this};
-#endif  // OS_WIN
+  std::set<raw_ptr<libusb_device>> devices_being_enumerated_;
 
   // This WeakPtr is used to safely post hotplug events back to the thread this
   // object lives on.
   base::WeakPtr<UsbServiceImpl> weak_self_;
 
   base::WeakPtrFactory<UsbServiceImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UsbServiceImpl);
 };
 
 }  // namespace device

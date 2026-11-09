@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,24 +8,28 @@
 #include <set>
 
 #include "base/files/file_path.h"
+#include "content/public/common/buildflags.h"
+#include "content/public/common/child_process_id.h"
 
-namespace ash {
+#if !BUILDFLAG(ENABLE_PLUGINS)
+#error "Plugins should be enabled"
+#endif
+
+namespace chromeos {
 
 class KioskSessionPluginHandlerDelegate {
  public:
   // Whether the plugin identified by the path should be handled.
   virtual bool ShouldHandlePlugin(const base::FilePath& plugin_path) const = 0;
 
-  // Invoked after a plugin is crashed.
-  virtual void OnPluginCrashed(const base::FilePath& plugin_path) = 0;
-
   // Invoked after plugins are hung.
-  virtual void OnPluginHung(const std::set<int>& hung_plugins) = 0;
+  virtual void OnPluginHung(
+      const std::set<content::ChildProcessId>& hung_plugins) = 0;
 
  protected:
-  virtual ~KioskSessionPluginHandlerDelegate() {}
+  virtual ~KioskSessionPluginHandlerDelegate() = default;
 };
 
-}  // namespace ash
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_APP_MODE_KIOSK_SESSION_PLUGIN_HANDLER_DELEGATE_H_

@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_GLOBAL_RULES_TRACKER_H_
 #define EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_GLOBAL_RULES_TRACKER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "extensions/common/extension_id.h"
 
 namespace extensions {
@@ -40,7 +41,7 @@ class GlobalRulesTracker {
   // Clears the extension's allocated rule count.
   void ClearExtensionAllocation(const ExtensionId& extension_id);
 
-  // Returns |allocated_global_rule_count_|.
+  // Returns `allocated_global_rule_count_`.
   size_t GetAllocatedGlobalRuleCountForTesting() const;
 
  private:
@@ -50,12 +51,12 @@ class GlobalRulesTracker {
 
   // The number of static rules from all extensions which contribute to the
   // global rule pool. Any enabled static rules for an extension past
-  // |GUARANTEED_MINIMUM_STATIC_RULES| count towards this. This value must never
-  // exceed |kMaxStaticRulesPerProfile|.
+  // `GUARANTEED_MINIMUM_STATIC_RULES` count towards this. This value must never
+  // exceed `kMaxStaticRulesPerProfile`.
   size_t allocated_global_rule_count_ = 0;
 
-  ExtensionPrefs* const extension_prefs_;
-  ExtensionRegistry* const extension_registry_;
+  const raw_ptr<ExtensionPrefs> extension_prefs_;
+  const raw_ptr<ExtensionRegistry> extension_registry_;
 };
 
 }  // namespace declarative_net_request

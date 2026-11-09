@@ -1,157 +1,133 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.share.screenshot;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import android.app.Activity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 
-import androidx.test.filters.MediumTest;
-
-import org.junit.Assert;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.Callback;
-import org.chromium.base.test.UiThreadTest;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.R;
+import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
-import org.chromium.ui.test.util.DummyUiActivityTestCase;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Tests for the {@link ScreenshotShareSheetView}.
- */
-@RunWith(ChromeJUnit4ClassRunner.class)
-@Features.EnableFeatures(ChromeFeatureList.CHROME_SHARE_SCREENSHOT)
-public class ScreenshotShareSheetViewTest extends DummyUiActivityTestCase {
+/** Tests for the {@link ScreenshotShareSheetView}. */
+@RunWith(BaseRobolectricTestRunner.class)
+public class ScreenshotShareSheetViewTest {
+    private Activity mActivity;
     private ScreenshotShareSheetView mScreenshotView;
     private PropertyModel mScreenshotModel;
     private PropertyModelChangeProcessor mScreenshotMCP;
 
-    private AtomicBoolean mCloseClicked = new AtomicBoolean();
-    private AtomicBoolean mShareClicked = new AtomicBoolean();
-    private AtomicBoolean mSaveClicked = new AtomicBoolean();
-    private AtomicBoolean mInstallClicked = new AtomicBoolean();
+    private final AtomicBoolean mCloseClicked = new AtomicBoolean();
+    private final AtomicBoolean mShareClicked = new AtomicBoolean();
+    private final AtomicBoolean mSaveClicked = new AtomicBoolean();
 
-    private Callback<Integer> mMockNoArgListener = new Callback<Integer>() {
-        @Override
-        public void onResult(@ScreenshotShareSheetViewProperties.NoArgOperation Integer operation) {
-            if (ScreenshotShareSheetViewProperties.NoArgOperation.SHARE == operation) {
-                mShareClicked.set(true);
-            } else if (ScreenshotShareSheetViewProperties.NoArgOperation.SAVE == operation) {
-                mSaveClicked.set(true);
-            } else if (ScreenshotShareSheetViewProperties.NoArgOperation.DELETE == operation) {
-                mCloseClicked.set(true);
-            } else if (ScreenshotShareSheetViewProperties.NoArgOperation.INSTALL == operation) {
-                mInstallClicked.set(true);
-            }
-        }
-    };
+    private final Callback<Integer> mMockNoArgListener =
+            new Callback<>() {
+                @Override
+                public void onResult(
+                        @ScreenshotShareSheetViewProperties.NoArgOperation Integer operation) {
+                    if (ScreenshotShareSheetViewProperties.NoArgOperation.SHARE == operation) {
+                        mShareClicked.set(true);
+                    } else if (ScreenshotShareSheetViewProperties.NoArgOperation.SAVE
+                            == operation) {
+                        mSaveClicked.set(true);
+                    } else if (ScreenshotShareSheetViewProperties.NoArgOperation.DELETE
+                            == operation) {
+                        mCloseClicked.set(true);
+                    }
+                }
+            };
 
-    @Override
-    public void setUpTest() throws Exception {
-        super.setUpTest();
-        ViewGroup view = new LinearLayout(getActivity());
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+    @Before
+    public void setUp() {
+        mActivity = Robolectric.buildActivity(TestActivity.class).setup().get();
+        ViewGroup view = new LinearLayout(mActivity);
+        FrameLayout.LayoutParams params =
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        mActivity.setContentView(view, params);
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            getActivity().setContentView(view, params);
+        mScreenshotView =
+                (ScreenshotShareSheetView)
+                        mActivity
+                                .getLayoutInflater()
+                                .inflate(R.layout.screenshot_share_sheet, null);
 
-            mScreenshotView = (ScreenshotShareSheetView) getActivity().getLayoutInflater().inflate(
-                    R.layout.screenshot_share_sheet, null);
-
-            view.addView(mScreenshotView);
-        });
-
-        SelectionDelegate<Integer> mSelectionDelegate = new SelectionDelegate<>();
+        view.addView(mScreenshotView);
 
         mScreenshotModel =
                 new PropertyModel.Builder(ScreenshotShareSheetViewProperties.ALL_KEYS)
-                        .with(ScreenshotShareSheetViewProperties.NO_ARG_OPERATION_LISTENER,
+                        .with(
+                                ScreenshotShareSheetViewProperties.NO_ARG_OPERATION_LISTENER,
                                 mMockNoArgListener)
                         .build();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mScreenshotMCP = PropertyModelChangeProcessor.create(
-                    mScreenshotModel, mScreenshotView, ScreenshotShareSheetViewBinder::bind);
-        });
+        mScreenshotMCP =
+                PropertyModelChangeProcessor.create(
+                        mScreenshotModel, mScreenshotView, ScreenshotShareSheetViewBinder::bind);
     }
 
     @Test
-    @MediumTest
-    @UiThreadTest
     public void testClickToClose() {
         ImageView closeButton = mScreenshotView.findViewById(R.id.close_button);
 
-        Assert.assertFalse(mCloseClicked.get());
+        assertFalse(mCloseClicked.get());
         closeButton.performClick();
-        Assert.assertTrue(mCloseClicked.get());
+        assertTrue(mCloseClicked.get());
         mCloseClicked.set(false);
     }
 
     @Test
-    @MediumTest
-    @UiThreadTest
     public void testClickDeleteToClose() {
         View deleteButton = mScreenshotView.findViewById(R.id.delete);
 
-        Assert.assertFalse(mCloseClicked.get());
+        assertFalse(mCloseClicked.get());
         deleteButton.performClick();
-        Assert.assertTrue(mCloseClicked.get());
+        assertTrue(mCloseClicked.get());
         mCloseClicked.set(false);
     }
 
     @Test
-    @MediumTest
-    @UiThreadTest
     public void testShare() {
         View shareButton = mScreenshotView.findViewById(R.id.share);
 
-        Assert.assertFalse(mShareClicked.get());
+        assertFalse(mShareClicked.get());
         shareButton.performClick();
-        Assert.assertTrue(mShareClicked.get());
+        assertTrue(mShareClicked.get());
         mShareClicked.set(false);
     }
 
     @Test
-    @MediumTest
-    @UiThreadTest
     public void testSave() {
         View saveButton = mScreenshotView.findViewById(R.id.save);
 
-        Assert.assertFalse(mSaveClicked.get());
+        assertFalse(mSaveClicked.get());
         saveButton.performClick();
-        Assert.assertTrue(mSaveClicked.get());
+        assertTrue(mSaveClicked.get());
         mSaveClicked.set(false);
     }
 
-    @Test
-    @MediumTest
-    @UiThreadTest
-    public void testClickToEdit() {
-        View installButton = mScreenshotView.findViewById(R.id.edit);
-
-        Assert.assertFalse(mInstallClicked.get());
-        installButton.performClick();
-        Assert.assertTrue(mInstallClicked.get());
-        mInstallClicked.set(false);
-    }
-
-    @Override
-    public void tearDownTest() throws Exception {
+    @After
+    public void tearDown() {
         mScreenshotMCP.destroy();
-        super.tearDownTest();
     }
 }

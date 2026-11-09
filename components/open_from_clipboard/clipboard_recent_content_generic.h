@@ -1,14 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_OPEN_FROM_CLIPBOARD_CLIPBOARD_RECENT_CONTENT_GENERIC_H_
 #define COMPONENTS_OPEN_FROM_CLIPBOARD_CLIPBOARD_RECENT_CONTENT_GENERIC_H_
 
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/open_from_clipboard/clipboard_recent_content.h"
-#include "ui/gfx/image/image.h"
+#include "ui/base/clipboard/clipboard_url_info.h"
 #include "url/gurl.h"
 
 // An implementation of ClipboardRecentContent that uses
@@ -21,13 +21,19 @@
 class ClipboardRecentContentGeneric : public ClipboardRecentContent {
  public:
   ClipboardRecentContentGeneric();
+
+  ClipboardRecentContentGeneric(const ClipboardRecentContentGeneric&) = delete;
+  ClipboardRecentContentGeneric& operator=(
+      const ClipboardRecentContentGeneric&) = delete;
+
   ~ClipboardRecentContentGeneric() override;
 
+  // Return if system's clipboard contains an image that will not trigger a
+  // system notification that the clipboard has been accessed.
+  void HasRecentImageFromClipboard(base::OnceCallback<void(bool)> callback);
+
   // ClipboardRecentContent implementation.
-  absl::optional<GURL> GetRecentURLFromClipboard() override;
-  absl::optional<std::u16string> GetRecentTextFromClipboard() override;
   void GetRecentImageFromClipboard(GetRecentImageCallback callback) override;
-  bool HasRecentImageFromClipboard() override;
   void HasRecentContentFromClipboard(std::set<ClipboardContentType> types,
                                      HasDataCallback callback) override;
   void GetRecentURLFromClipboard(GetRecentURLCallback callback) override;
@@ -40,7 +46,12 @@ class ClipboardRecentContentGeneric : public ClipboardRecentContent {
   // Returns true if the URL is appropriate to be suggested.
   static bool IsAppropriateSuggestion(const GURL& url);
 
-  DISALLOW_COPY_AND_ASSIGN(ClipboardRecentContentGeneric);
+  void OnReadURLAsAsciiText(GetRecentURLCallback callback,
+                            std::string gurl_string);
+  void OnReadText(GetRecentURLCallback callback, std::u16string gurl_string16);
+  void OnReadURL(GetRecentURLCallback callback, ui::ClipboardUrlInfo url_info);
+
+  base::WeakPtrFactory<ClipboardRecentContentGeneric> weak_factory_{this};
 };
 
 #endif  // COMPONENTS_OPEN_FROM_CLIPBOARD_CLIPBOARD_RECENT_CONTENT_GENERIC_H_

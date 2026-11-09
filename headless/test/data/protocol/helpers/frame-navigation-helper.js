@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
   /**
    * @param {!TestRunner} testRunner Host TestRunner instance.
    * @param {!Proxy} dp DevTools session protocol instance.
-   * @param {!Page} page TestRunner.Page instance.
+   * @param {!Page} page Page instance.
    */
   constructor(testRunner, dp, page) {
     this.testRunner_ = testRunner;
@@ -101,5 +101,4 @@
   getFrameId_(frameId) {
     return frameId === this.mainFrameId_ ? 'MainFrame' : `<${typeof frameId}>`
   }
-
 });

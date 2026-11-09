@@ -1,14 +1,16 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_auralinux.h"
 
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/strings/pattern.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
@@ -26,11 +28,9 @@ struct PlatformConstantToNameEntry {
 };
 
 const char* GetNameForPlatformConstant(
-    const PlatformConstantToNameEntry table[],
-    size_t table_size,
+    base::span<const PlatformConstantToNameEntry> table,
     int32_t value) {
-  for (size_t i = 0; i < table_size; ++i) {
-    auto& entry = table[i];
+  for (const auto& entry : table) {
     if (entry.value == value)
       return entry.name;
   }
@@ -109,8 +109,37 @@ const char* ATSPIStateToString(AtspiStateType state) {
 #endif
   };
 
-  return GetNameForPlatformConstant(state_table, base::size(state_table),
-                                    state);
+  return GetNameForPlatformConstant(state_table, state);
+}
+
+const char* ATSPIRelationToString(AtspiRelationType relation) {
+  // These roles are listed in the order they are defined in the enum so that
+  // we can more easily discard ones that are too new for the version of
+  // atspi2 that we are compiling against.
+  static const PlatformConstantToNameEntry relation_table[] = {
+      QUOTE(ATSPI_RELATION_NULL),
+      QUOTE(ATSPI_RELATION_LABEL_FOR),
+      QUOTE(ATSPI_RELATION_LABELLED_BY),
+      QUOTE(ATSPI_RELATION_CONTROLLER_FOR),
+      QUOTE(ATSPI_RELATION_CONTROLLED_BY),
+      QUOTE(ATSPI_RELATION_MEMBER_OF),
+      QUOTE(ATSPI_RELATION_TOOLTIP_FOR),
+      QUOTE(ATSPI_RELATION_NODE_CHILD_OF),
+      QUOTE(ATSPI_RELATION_NODE_PARENT_OF),
+      QUOTE(ATSPI_RELATION_EXTENDED),
+      QUOTE(ATSPI_RELATION_FLOWS_TO),
+      QUOTE(ATSPI_RELATION_FLOWS_FROM),
+      QUOTE(ATSPI_RELATION_SUBWINDOW_OF),
+      QUOTE(ATSPI_RELATION_EMBEDS),
+      QUOTE(ATSPI_RELATION_EMBEDDED_BY),
+      QUOTE(ATSPI_RELATION_POPUP_FOR),
+      QUOTE(ATSPI_RELATION_PARENT_WINDOW_OF),
+      QUOTE(ATSPI_RELATION_DESCRIPTION_FOR),
+      QUOTE(ATSPI_RELATION_DESCRIBED_BY),
+      QUOTE(ATSPI_RELATION_LAST_DEFINED),
+  };
+
+  return GetNameForPlatformConstant(relation_table, relation);
 }
 
 const char* ATSPIRoleToString(AtspiRole role) {
@@ -251,7 +280,7 @@ const char* ATSPIRoleToString(AtspiRole role) {
 #endif
   };
 
-  return GetNameForPlatformConstant(role_table, base::size(role_table), role);
+  return GetNameForPlatformConstant(role_table, role);
 }
 
 // This is used to ensure a standard set of AtkRole name conversions between
@@ -259,7 +288,7 @@ const char* ATSPIRoleToString(AtspiRole role) {
 // a new role and newer versions may have changed the name returned by
 // atk_role_get_name. This table should be kept up to date with newer ATK
 // releases.
-const char* const kRoleNames[] = {
+constexpr auto kRoleNames = std::to_array<const char*>({
     "invalid",  // ATK_ROLE_INVALID.
     "accelerator label",
     "alert",
@@ -385,15 +414,96 @@ const char* const kRoleNames[] = {
     "footnote",           // ATK_ROLE_FOOTNOTE = 122.
     "content deletion",   // ATK_ROLE_CONTENT_DELETION = 123.
     "content insertion",  // ATK_ROLE_CONTENT_DELETION = 124.
-};
+});
 
 const char* AtkRoleToString(AtkRole role) {
+  // Role strings in test output need to be stable across systems.
+  //
+  // ATK also provides `atk_role_get_name()` for human-readable output, but its
+  // returned string has not historically been stable across ATK versions /
+  // distributions (e.g. some environments return "button" for
+  // ATK_ROLE_PUSH_BUTTON where others return "push button"). For accessibility
+  // tree dumps and their expectations, prefer this fixed mapping.
   if (role < G_N_ELEMENTS(kRoleNames))
     return kRoleNames[role];
   return "<unknown AtkRole>";
 }
 
+std::vector<AtspiAccessible*> ChildrenOf(AtspiAccessible* node) {
+  GError* error = nullptr;
+
+  auto children = std::vector<AtspiAccessible*>();
+  int child_count = atspi_accessible_get_child_count(node, &error);
+
+  if (error) {
+    LOG(ERROR) << error->message;
+    return children;
+  }
+
+  for (int i = 0; i < child_count; i++) {
+    AtspiAccessible* child =
+        atspi_accessible_get_child_at_index(node, i, &error);
+    if (error) {
+      LOG(ERROR) << error->message;
+      continue;
+    }
+
+    children.push_back(child);
+  }
+
+  return children;
+}
+
+AtspiAccessible* FindActiveDocument(AtspiAccessible* node) {
+  GError* error = nullptr;
+
+  AtspiRole role = atspi_accessible_get_role(node, &error);
+  CHECK_ATSPI_ERROR_NULLPTR(error)
+
+  // Get embeds relation pointing to active web document.
+  if (role == ATSPI_ROLE_FRAME) {
+    g_autoptr(GArray) relations =
+        atspi_accessible_get_relation_set(node, &error);
+    CHECK_ATSPI_ERROR_NULLPTR(error)
+    if (!relations) {
+      return nullptr;
+    }
+
+    for (guint idx = 0; idx < relations->len; idx++) {
+      AtspiRelation* relation =
+          UNSAFE_TODO(g_array_index(relations, AtspiRelation*, idx));
+      if (atspi_relation_get_relation_type(relation) == ATSPI_RELATION_EMBEDS &&
+          atspi_relation_get_n_targets(relation) > 0) {
+        return atspi_relation_get_target(relation, 0);
+      }
+    }
+    return nullptr;
+  }
+
+  int child_count = atspi_accessible_get_child_count(node, &error);
+  CHECK_ATSPI_ERROR_NULLPTR(error)
+
+  for (int i = 0; i < child_count; i++) {
+    AtspiAccessible* child =
+        atspi_accessible_get_child_at_index(node, i, &error);
+    CHECK_ATSPI_ERROR_NULLPTR(error)
+
+    CHECK(child);
+    AtspiAccessible* found = FindActiveDocument(child);
+    if (found) {
+      return found;
+    }
+  }
+
+  return nullptr;
+}
+
 AtspiAccessible* FindAccessible(const AXTreeSelector& selector) {
+  if (selector.empty()) {
+    LOG(ERROR) << "No PID or application title provided by selector.";
+    return nullptr;
+  }
+
   std::string title;
   if (selector.types & AXTreeSelector::Chrome) {
     title = kChromeTitle;
@@ -417,18 +527,33 @@ AtspiAccessible* FindAccessible(const AXTreeSelector& selector) {
         atspi_accessible_get_child_at_index(desktop, i, &error);
     CHECK_ATSPI_ERROR_NULLPTR(error)
 
-    char* name = atspi_accessible_get_name(child, &error);
-    if (!error && name) {
-      if ((!title.empty() && title == name) ||
-          base::MatchPattern(name, selector.pattern)) {
-        matched_children.emplace_back(name, child);
+    if (selector.widget) {
+      uint application_pid = atspi_accessible_get_process_id(child, &error);
+      CHECK_ATSPI_ERROR_NULLPTR(error)
+      if (selector.widget == application_pid) {
+        return child;
       }
+    } else if (!title.empty()) {
+      char* name = atspi_accessible_get_name(child, &error);
+      if (!error && name) {
+        if ((!title.empty() && title == name) ||
+            (!selector.pattern.empty() &&
+             base::MatchPattern(name, selector.pattern))) {
+          matched_children.emplace_back(name, child);
+        }
+      }
+      free(name);
     }
-    free(name);
   }
 
-  if (matched_children.size() == 0) {
-    LOG(ERROR) << "No application matched.";
+  if (matched_children.empty()) {
+    std::string selectorType;
+    if (selector.widget) {
+      selectorType = "the provided pid.";
+    } else if (!title.empty()) {
+      selectorType = "the provided browser.";
+    }
+    LOG(ERROR) << "No application matched " << selectorType;
     return nullptr;
   }
 
@@ -441,7 +566,40 @@ AtspiAccessible* FindAccessible(const AXTreeSelector& selector) {
     return nullptr;
   }
 
-  return matched_children[0].second;
+  AtspiAccessible* node = matched_children[0].second;
+
+  // Active tab
+  if (selector.types & AXTreeSelector::ActiveTab) {
+    node = FindActiveDocument(node);
+    if (!node) {
+      LOG(ERROR) << "No active document was found.";
+      return nullptr;
+    }
+  }
+
+  return node;
+}
+
+std::string GetDOMId(AtspiAccessible* node) {
+  std::string id;
+  GError* error = nullptr;  // todo: should I handle these errors?
+  GHashTable* attributes = atspi_accessible_get_attributes(node, &error);
+  if (!error) {
+    GHashTableIter i;
+    void* key = nullptr;
+    void* value = nullptr;
+
+    g_hash_table_iter_init(&i, attributes);
+    while (g_hash_table_iter_next(&i, &key, &value)) {
+      if (UNSAFE_TODO(strcmp(static_cast<char*>(key), "id")) == 0) {
+        id = static_cast<char*>(value);
+        break;
+      }
+    }
+  }
+  g_clear_error(&error);
+  g_hash_table_unref(attributes);
+  return id;
 }
 
 }  // namespace ui

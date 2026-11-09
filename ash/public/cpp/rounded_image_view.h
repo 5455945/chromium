@@ -1,12 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_PUBLIC_CPP_ROUNDED_IMAGE_VIEW_H_
 #define ASH_PUBLIC_CPP_ROUNDED_IMAGE_VIEW_H_
 
+#include <array>
+
 #include "ash/public/cpp/ash_public_export.h"
-#include "base/macros.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/metadata/view_factory.h"
@@ -16,6 +18,8 @@ namespace ash {
 
 // A custom image view with rounded edges.
 class ASH_PUBLIC_EXPORT RoundedImageView : public views::View {
+  METADATA_HEADER(RoundedImageView, views::View)
+
  public:
   enum class Alignment {
     // The image's drawn portion always contains the image's origin.
@@ -28,6 +32,10 @@ class ASH_PUBLIC_EXPORT RoundedImageView : public views::View {
 
   RoundedImageView();
   RoundedImageView(int corner_radius, Alignment alignment);
+
+  RoundedImageView(const RoundedImageView&) = delete;
+  RoundedImageView& operator=(const RoundedImageView&) = delete;
+
   ~RoundedImageView() override;
 
   // Set the image that should be displayed. The image contents is copied to the
@@ -47,9 +55,9 @@ class ASH_PUBLIC_EXPORT RoundedImageView : public views::View {
   void SetCornerRadius(int corner_radius);
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnPaint(gfx::Canvas* canvas) override;
-  const char* GetClassName() const override;
 
   const gfx::ImageSkia& original_image() const { return original_image_; }
 
@@ -59,11 +67,9 @@ class ASH_PUBLIC_EXPORT RoundedImageView : public views::View {
 
   gfx::ImageSkia original_image_;
   gfx::ImageSkia resized_image_;
-  int corner_radius_[4];
+  std::array<int, 4> corner_radius_;
 
   const Alignment alignment_;
-
-  DISALLOW_COPY_AND_ASSIGN(RoundedImageView);
 };
 
 BEGIN_VIEW_BUILDER(ASH_PUBLIC_EXPORT, RoundedImageView, views::View)

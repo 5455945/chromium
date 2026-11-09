@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,34 @@
 
 #include <stddef.h>
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "cc/trees/render_frame_metadata.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/browser/devtools/devtools_video_consumer.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "content/browser/devtools/protocol/devtools_download_manager_delegate.h"
 #include "content/browser/devtools/protocol/page.h"
+#include "content/browser/preloading/prerender/prerender_final_status.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
+#include "content/public/browser/devtools_manager_delegate.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/common/javascript_dialog_type.h"
-#include "third_party/blink/public/mojom/manifest/manifest_manager.mojom.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 class SkBitmap;
 
@@ -40,14 +46,11 @@ namespace gfx {
 class Image;
 }  // namespace gfx
 
-namespace blink {
-struct DeviceEmulationParams;
-}
-
 namespace content {
 
 class BackForwardCacheCanStoreDocumentResult;
 class DevToolsAgentHostImpl;
+class DevToolsIOContext;
 class FrameTreeNode;
 class NavigationRequest;
 class RenderFrameHostImpl;
@@ -57,15 +60,26 @@ namespace protocol {
 
 class BrowserHandler;
 class EmulationHandler;
+class MediaRecorder;
 
 class PageHandler : public DevToolsDomainHandler,
                     public Page::Backend,
                     public RenderWidgetHostObserver,
                     public download::DownloadItem::Observer {
  public:
-  PageHandler(EmulationHandler* emulation_handler,
-              BrowserHandler* browser_handler,
-              bool allow_file_access);
+  PageHandler(
+      DevToolsIOContext* io_context,
+      EmulationHandler* emulation_handler,
+      BrowserHandler* browser_handler,
+      bool allow_unsafe_operations,
+      bool is_trusted,
+      std::optional<url::Origin> navigation_initiator_origin,
+      bool may_read_local_files,
+      base::RepeatingCallback<void(std::string)> prepare_for_reload_callback);
+
+  PageHandler(const PageHandler&) = delete;
+  PageHandler& operator=(const PageHandler&) = delete;
+
   ~PageHandler() override;
 
   static std::vector<PageHandler*> EnabledForWebContents(
@@ -76,46 +90,58 @@ class PageHandler : public DevToolsDomainHandler,
   void SetRenderer(int process_host_id,
                    RenderFrameHostImpl* frame_host) override;
   // Instrumentation signals.
-  void OnSynchronousSwapCompositorFrame(
-      const cc::RenderFrameMetadata& frame_metadata);
   void DidAttachInterstitialPage();
   void DidDetachInterstitialPage();
-  bool screencast_enabled() const { return enabled_ && screencast_enabled_; }
   using JavaScriptDialogCallback =
       content::JavaScriptDialogManager::DialogClosedCallback;
   void DidRunJavaScriptDialog(const GURL& url,
+                              const base::UnguessableToken& frame_id,
                               const std::u16string& message,
                               const std::u16string& default_prompt,
                               JavaScriptDialogType dialog_type,
                               bool has_non_devtools_handlers,
                               JavaScriptDialogCallback callback);
   void DidRunBeforeUnloadConfirm(const GURL& url,
+                                 const base::UnguessableToken& frame_id,
                                  bool has_non_devtools_handlers,
                                  JavaScriptDialogCallback callback);
-  void DidCloseJavaScriptDialog(bool success, const std::u16string& user_input);
+  void DidCloseJavaScriptDialog(const base::UnguessableToken& frame_id,
+                                bool success,
+                                const std::u16string& user_input);
   void NavigationReset(NavigationRequest* navigation_request);
   void DownloadWillBegin(FrameTreeNode* ftn, download::DownloadItem* item);
+  void DidStartNavigating(FrameTreeNode& ftn,
+                          const GURL& url,
+                          const base::UnguessableToken& loader_id,
+                          const blink::mojom::NavigationType& navigation_type);
 
-  WebContentsImpl* GetWebContents();
+  void OnFrameDetached(const base::UnguessableToken& frame_id);
+  void DidChangeFrameLoadingState(const FrameTreeNode& ftn);
 
   bool ShouldBypassCSP();
   void BackForwardCacheNotUsed(
       const NavigationRequest* nav_request,
-      const BackForwardCacheCanStoreDocumentResult* result);
+      const BackForwardCacheCanStoreDocumentResult* result,
+      const BackForwardCacheCanStoreTreeResult* tree_result);
 
-  Response Enable() override;
+  void IsPrerenderingAllowed(bool& is_allowed);
+  void ReadyToCommitNavigation(NavigationRequest* navigation_request);
+
+  Response Enable(
+      std::optional<bool> enable_file_chooser_opened_event) override;
   Response Disable() override;
 
   Response Crash() override;
   Response Close() override;
-  void Reload(Maybe<bool> bypassCache,
-              Maybe<std::string> script_to_evaluate_on_load,
+  void Reload(std::optional<bool> bypassCache,
+              std::optional<std::string> script_to_evaluate_on_load,
+              std::optional<std::string> loader_id,
               std::unique_ptr<ReloadCallback> callback) override;
   void Navigate(const std::string& url,
-                Maybe<std::string> referrer,
-                Maybe<std::string> transition_type,
-                Maybe<std::string> frame_id,
-                Maybe<std::string> referrer_policy,
+                std::optional<std::string> referrer,
+                std::optional<std::string> transition_type,
+                std::optional<std::string> frame_id,
+                std::optional<std::string> referrer_policy,
                 std::unique_ptr<NavigateCallback> callback) override;
   Response StopLoading() override;
 
@@ -127,49 +153,48 @@ class PageHandler : public DevToolsDomainHandler,
   Response ResetNavigationHistory() override;
 
   void CaptureScreenshot(
-      Maybe<std::string> format,
-      Maybe<int> quality,
-      Maybe<Page::Viewport> clip,
-      Maybe<bool> from_surface,
-      Maybe<bool> capture_beyond_viewport,
+      std::optional<std::string> format,
+      std::optional<int> quality,
+      std::unique_ptr<Page::Viewport> clip,
+      std::optional<bool> from_surface,
+      std::optional<bool> capture_beyond_viewport,
+      std::optional<bool> optimize_for_speed,
       std::unique_ptr<CaptureScreenshotCallback> callback) override;
   void CaptureSnapshot(
-      Maybe<std::string> format,
+      std::optional<std::string> format,
       std::unique_ptr<CaptureSnapshotCallback> callback) override;
-  void PrintToPDF(Maybe<bool> landscape,
-                  Maybe<bool> display_header_footer,
-                  Maybe<bool> print_background,
-                  Maybe<double> scale,
-                  Maybe<double> paper_width,
-                  Maybe<double> paper_height,
-                  Maybe<double> margin_top,
-                  Maybe<double> margin_bottom,
-                  Maybe<double> margin_left,
-                  Maybe<double> margin_right,
-                  Maybe<String> page_ranges,
-                  Maybe<bool> ignore_invalid_page_ranges,
-                  Maybe<String> header_template,
-                  Maybe<String> footer_template,
-                  Maybe<bool> prefer_css_page_size,
-                  Maybe<String> transfer_mode,
-                  std::unique_ptr<PrintToPDFCallback> callback) override;
-  Response StartScreencast(Maybe<std::string> format,
-                           Maybe<int> quality,
-                           Maybe<int> max_width,
-                           Maybe<int> max_height,
-                           Maybe<int> every_nth_frame) override;
+  Response StartScreencast(std::optional<std::string> format,
+                           std::optional<int> quality,
+                           std::optional<int> max_width,
+                           std::optional<int> max_height,
+                           std::optional<int> every_nth_frame,
+                           std::optional<int> max_frames_in_flight,
+                           std::optional<bool> send_last_frame) override;
+  void StartScreenRecording(
+      std::optional<bool> audio,
+      std::optional<int> max_width,
+      std::optional<int> max_height,
+      std::optional<int> frame_rate,
+      std::optional<std::string> capture_area,
+      std::unique_ptr<StartScreenRecordingCallback> callback) override;
+  void StopScreenRecording(
+      std::unique_ptr<StopScreenRecordingCallback> callback) override;
+  void OnMediaRecorderFlushed();
   Response StopScreencast() override;
   Response ScreencastFrameAck(int session_id) override;
 
-  Response HandleJavaScriptDialog(bool accept,
-                                  Maybe<std::string> prompt_text) override;
+  Response HandleJavaScriptDialog(
+      bool accept,
+      std::optional<std::string> prompt_text) override;
 
   Response BringToFront() override;
 
-  Response SetDownloadBehavior(const std::string& behavior,
-                               Maybe<std::string> download_path) override;
+  Response SetDownloadBehavior(
+      const std::string& behavior,
+      std::optional<std::string> download_path) override;
 
   void GetAppManifest(
+      std::optional<std::string> manifest_id,
       std::unique_ptr<GetAppManifestCallback> callback) override;
 
   Response SetWebLifecycleState(const std::string& state) override;
@@ -179,36 +204,79 @@ class PageHandler : public DevToolsDomainHandler,
   void GetManifestIcons(
       std::unique_ptr<GetManifestIconsCallback> callback) override;
 
+  void GetAppId(std::unique_ptr<GetAppIdCallback> callback) override;
+  void GetSubApps(std::unique_ptr<GetSubAppsCallback> callback) override;
+  void GetSiblingSubApps(
+      std::unique_ptr<GetSiblingSubAppsCallback> callback) override;
+
   Response SetBypassCSP(bool enabled) override;
+  Response AddCompilationCache(const std::string& url,
+                               const Binary& data) override;
+
+  Response SetPrerenderingAllowed(bool is_allowed) override;
+
+  Response AddScriptToEvaluateOnNewDocument(
+      const std::string& source,
+      std::optional<std::string> world_name,
+      std::optional<bool> include_command_line_api,
+      std::optional<bool> run_immediately,
+      std::string* identifier) override;
+  Response RemoveScriptToEvaluateOnNewDocument(
+      const std::string& identifier) override;
+  Response AddScriptToEvaluateOnLoad(const std::string& source,
+                                     std::string* identifier) override;
+  Response RemoveScriptToEvaluateOnLoad(const std::string& identifier) override;
+
+  Response AssureTopLevelActiveFrame();
 
  private:
-  enum EncodingFormat { PNG, JPEG };
+  // Asks the embedder for the capture device of the browser window that shows
+  // the target, and starts `media_recorder_` with it.
+  void StartBrowserWindowRecording(
+      bool audio,
+      int max_width,
+      int max_height,
+      int frame_rate,
+      std::unique_ptr<StartScreenRecordingCallback> callback);
+  void OnBrowserWindowCaptureDevice(
+      base::WeakPtr<MediaRecorder> recorder,
+      bool audio,
+      int max_width,
+      int max_height,
+      int frame_rate,
+      std::unique_ptr<StartScreenRecordingCallback> callback,
+      base::expected<DevToolsManagerDelegate::BrowserWindowCaptureDevice,
+                     std::string> device);
+  void OnBrowserWindowRecordingStarted(
+      base::WeakPtr<MediaRecorder> recorder,
+      std::unique_ptr<StartScreenRecordingCallback> callback,
+      Response response);
 
-  bool ShouldCaptureNextScreencastFrame();
+  struct PendingScreenshotRequest;
+
+  using BitmapEncoder =
+      base::RepeatingCallback<std::optional<std::vector<uint8_t>>(
+          const SkBitmap& bitmap)>;
+
+  void CaptureFullPageScreenshot(
+      std::optional<std::string> format,
+      std::optional<int> quality,
+      std::optional<bool> optimize_for_speed,
+      std::unique_ptr<CaptureScreenshotCallback> callback,
+      const gfx::Size& full_page_size);
+  bool EnoughScreencastFramesInFlight();
   void NotifyScreencastVisibility(bool visible);
-  void InnerSwapCompositorFrame();
   void OnFrameFromVideoConsumer(scoped_refptr<media::VideoFrame> frame);
-  void ScreencastFrameCaptured(
+  void MaybeSendLastScreencastFrame();
+  void SendScreencastFrame(
       std::unique_ptr<Page::ScreencastFrameMetadata> metadata,
       const SkBitmap& bitmap);
   void ScreencastFrameEncoded(
       std::unique_ptr<Page::ScreencastFrameMetadata> metadata,
-      const protocol::Binary& data);
+      std::optional<std::vector<uint8_t>> data);
 
-  void ScreenshotCaptured(
-      std::unique_ptr<CaptureScreenshotCallback> callback,
-      const std::string& format,
-      int quality,
-      const gfx::Size& original_view_size,
-      const gfx::Size& requested_image_size,
-      const blink::DeviceEmulationParams& original_params,
-      const absl::optional<blink::web_pref::WebPreferences>& original_web_prefs,
-      const gfx::Image& image);
-
-  void GotManifest(std::unique_ptr<GetAppManifestCallback> callback,
-                   const GURL& manifest_url,
-                   const ::blink::Manifest& parsed_manifest,
-                   blink::mojom::ManifestDebugInfoPtr debug_info);
+  void ScreenshotCaptured(std::unique_ptr<PendingScreenshotRequest> request,
+                          const gfx::Image& image);
 
   // RenderWidgetHostObserver overrides.
   void RenderWidgetHostVisibilityChanged(RenderWidgetHost* widget_host,
@@ -219,33 +287,50 @@ class PageHandler : public DevToolsDomainHandler,
   void OnDownloadUpdated(download::DownloadItem* item) override;
   void OnDownloadDestroyed(download::DownloadItem* item) override;
 
+  // Returns WebContents only if `host_` is a top level frame. Otherwise, it
+  // returns Response with an error.
+  using ResponseOrWebContents = std::variant<Response, WebContentsImpl*>;
+  ResponseOrWebContents GetWebContentsForTopLevelActiveFrame();
+
+  // Returns an error response if the client's trust level or local file access
+  // permission does not allow it to navigate the page to `url`. `host_` must
+  // not be null.
+  Response CheckNavigationAllowed(const GURL& url);
+
+  const bool allow_unsafe_operations_;
+  const bool is_trusted_;
+  const std::optional<url::Origin> navigation_initiator_origin_;
+  const bool may_read_local_files_;
+
   bool enabled_;
   bool bypass_csp_ = false;
 
-  bool screencast_enabled_;
-  std::string screencast_format_;
-  int screencast_quality_;
-  int screencast_max_width_;
-  int screencast_max_height_;
-  int capture_every_nth_frame_;
-  int capture_retry_count_;
-  absl::optional<cc::RenderFrameMetadata> frame_metadata_;
-  int session_id_;
-  int frame_counter_;
-  int frames_in_flight_;
+  BitmapEncoder screencast_encoder_;
+  int screencast_max_width_ = -1;
+  int screencast_max_height_ = -1;
+  int capture_every_nth_frame_ = 1;
+  int max_frames_in_flight_ = 1;
+  bool send_last_frame_ = false;
+  int session_id_ = 0;
+  int frame_counter_ = 0;
+  int frames_in_flight_ = 0;
+  std::unique_ptr<Page::ScreencastFrameMetadata> last_frame_metadata_;
+  SkBitmap last_frame_;
 
   // |video_consumer_| consumes video frames from FrameSinkVideoCapturerImpl,
   // and provides PageHandler with these frames via OnFrameFromVideoConsumer.
   // This is only used if Viz is enabled and if OS is not Android.
   std::unique_ptr<DevToolsVideoConsumer> video_consumer_;
+  std::unique_ptr<MediaRecorder> media_recorder_;
 
   // The last surface size used to determine if frames with new sizes need
   // to be requested. This changes due to window resizing.
   gfx::Size last_surface_size_;
 
-  RenderFrameHostImpl* host_;
-  EmulationHandler* emulation_handler_;
-  BrowserHandler* browser_handler_;
+  raw_ptr<DevToolsIOContext> io_context_;
+  raw_ptr<RenderFrameHostImpl> host_;
+  raw_ptr<EmulationHandler> emulation_handler_;
+  raw_ptr<BrowserHandler> browser_handler_;
 
   std::unique_ptr<Page::Frontend> frontend_;
 
@@ -255,11 +340,22 @@ class PageHandler : public DevToolsDomainHandler,
   // Maps DevTools navigation tokens to pending NavigateCallbacks.
   base::flat_map<base::UnguessableToken, std::unique_ptr<NavigateCallback>>
       navigate_callbacks_;
-  base::flat_set<download::DownloadItem*> pending_downloads_;
+  base::flat_set<raw_ptr<download::DownloadItem, CtnExperimental>>
+      pending_downloads_;
+
+  bool is_prerendering_allowed_ = true;
+  base::RepeatingCallback<void(std::string)> prepare_for_reload_callback_;
+  bool have_pending_reload_ = false;
+  std::string pending_script_to_evaluate_on_load_;
+  url::Origin initiating_origin_;
+
+  Response AddScriptToEvaluateOnNewDocumentInternal(
+      const std::string& source,
+      std::optional<std::string> world_name,
+      std::optional<bool> include_command_line_api,
+      std::string* identifier);
 
   base::WeakPtrFactory<PageHandler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PageHandler);
 };
 
 }  // namespace protocol

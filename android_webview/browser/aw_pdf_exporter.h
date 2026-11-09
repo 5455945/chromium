@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "printing/buildflags/buildflags.h"
 
+#if BUILDFLAG(ENABLE_PRINTING)
 #include "printing/page_range.h"
+#endif
 
 namespace content {
 class WebContents;
@@ -21,31 +24,43 @@ class PrintSettings;
 
 namespace android_webview {
 
+// Native companion to Java AwPdfExporter.
+// Owned by native AwContents, which lazy-instantiates this object when
+// instructed to by the Java side.
+//
+// The Java AwPdfExporter holds a pointer to this native component but is not
+// responsible for its lifetime.
+// The Java AwPdfExporter is similarly owned by the Java AwContents.
+//
+// Lifetime: WebView
 class AwPdfExporter {
  public:
   AwPdfExporter(JNIEnv* env,
                 const base::android::JavaRef<jobject>& obj,
                 content::WebContents* web_contents);
 
+  AwPdfExporter(const AwPdfExporter&) = delete;
+  AwPdfExporter& operator=(const AwPdfExporter&) = delete;
+
   ~AwPdfExporter();
 
   void ExportToPdf(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
+                   const base::android::JavaRef<jobject>& obj,
                    int fd,
-                   const base::android::JavaParamRef<jintArray>& pages,
-                   const base::android::JavaParamRef<jobject>& cancel_signal);
+                   const base::android::JavaRef<jintArray>& pages,
+                   const base::android::JavaRef<jobject>& cancel_signal);
 
  private:
+#if BUILDFLAG(ENABLE_PRINTING)
   std::unique_ptr<printing::PrintSettings> CreatePdfSettings(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj,
       const printing::PageRanges& page_ranges);
+#endif
   void DidExportPdf(int page_count);
 
   JavaObjectWeakGlobalRef java_ref_;
-  content::WebContents* web_contents_;
-
-  DISALLOW_COPY_AND_ASSIGN(AwPdfExporter);
+  raw_ptr<content::WebContents> web_contents_;
 };
 
 }  // namespace android_webview

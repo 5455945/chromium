@@ -1,10 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as Console from 'devtools/panels/console/console.js';
+
 (async function() {
   TestRunner.addResult(`Test that logging an error in console would linkify relative URLs\n`);
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
   await TestRunner.evaluateInPagePromise(`
 console.log(\`Error with relative links
@@ -18,8 +22,8 @@ console.log(\`Error with relative links
     `);
 
     await ConsoleTestRunner.dumpConsoleMessages();
-    var consoleView = Console.ConsoleView.instance();
-    var links = consoleView._visibleViewMessages[0].element().querySelectorAll('.console-message-text .devtools-link');
+    var consoleView = Console.ConsoleView.ConsoleView.instance();
+    var links = consoleView.visibleViewMessages[0].element().querySelectorAll('.console-message-text .devtools-link');
     for (var link of links)
       TestRunner.addResult(`Link: ${link.textContent}, href: ${link.href}`);
     TestRunner.completeTest();

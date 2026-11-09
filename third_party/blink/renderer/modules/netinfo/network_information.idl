@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,5 +36,5 @@ typedef unsigned long long Milliseconds;
     [MeasureAs=NetInfoEffectiveType] readonly attribute EffectiveConnectionType effectiveType;
     [MeasureAs=NetInfoRtt] readonly attribute Milliseconds rtt;
     [MeasureAs=NetInfoDownlink] readonly attribute Megabit downlink;
-    [HighEntropy=Direct, MeasureAs=NetInfoSaveData] readonly attribute boolean saveData;
+    [MeasureAs=NetInfoSaveData] readonly attribute boolean saveData;
 };

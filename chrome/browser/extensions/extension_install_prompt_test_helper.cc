@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,44 +7,66 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-ExtensionInstallPromptTestHelper::ExtensionInstallPromptTestHelper() {}
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+ExtensionInstallPromptTestHelper::ExtensionInstallPromptTestHelper() = default;
 ExtensionInstallPromptTestHelper::ExtensionInstallPromptTestHelper(
     base::OnceClosure quit_closure)
     : quit_closure_(std::move(quit_closure)) {}
-ExtensionInstallPromptTestHelper::~ExtensionInstallPromptTestHelper() {}
+ExtensionInstallPromptTestHelper::~ExtensionInstallPromptTestHelper() = default;
 
 ExtensionInstallPrompt::DoneCallback
 ExtensionInstallPromptTestHelper::GetCallback() {
-  return base::BindOnce(&ExtensionInstallPromptTestHelper::HandleResult,
+  return base::BindOnce(&ExtensionInstallPromptTestHelper::HandlePayload,
                         base::Unretained(this));
 }
 
-ExtensionInstallPrompt::Result
-ExtensionInstallPromptTestHelper::result() const {
-  if (!result_.get()) {
-    ADD_FAILURE() << "Result was never set!";
+ExtensionInstallPrompt::DoneCallbackPayload
+ExtensionInstallPromptTestHelper::payload() const {
+  if (!payload_.get()) {
+    ADD_FAILURE() << "Payload was never set!";
+    return ExtensionInstallPrompt::DoneCallbackPayload(
+        ExtensionInstallPrompt::Result::ACCEPTED);  // Avoid crashing.
+  }
+  return *payload_;
+}
+
+ExtensionInstallPrompt::Result ExtensionInstallPromptTestHelper::result()
+    const {
+  if (!payload_.get()) {
+    ADD_FAILURE() << "Payload was never set!";
     return ExtensionInstallPrompt::Result::ACCEPTED;  // Avoid crashing.
   }
-  return *result_;
+  return payload_->result;
 }
 
-void ExtensionInstallPromptTestHelper::ClearResultForTesting() {
-  if (!result_.get()) {
-    ADD_FAILURE() << "Result was never set!";
+std::string ExtensionInstallPromptTestHelper::justification() const {
+  if (!payload_.get()) {
+    ADD_FAILURE() << "Payload was never set!";
+    return std::string();  // Avoid crashing.
+  }
+  return payload_->justification;
+}
+
+void ExtensionInstallPromptTestHelper::ClearPayloadForTesting() {
+  if (!payload_.get()) {
+    ADD_FAILURE() << "Payload was never set!";
     return;
   }
-  result_.reset();
+  payload_.reset();
 }
 
-void ExtensionInstallPromptTestHelper::HandleResult(
-    ExtensionInstallPrompt::Result result) {
-  if (result_.get())
-    ADD_FAILURE() << "HandleResult() called twice!";
+void ExtensionInstallPromptTestHelper::HandlePayload(
+    ExtensionInstallPrompt::DoneCallbackPayload payload) {
+  if (payload_.get())
+    ADD_FAILURE() << "HandlePayload() called twice!";
   if (quit_closure_)
     std::move(quit_closure_).Run();
-  result_ = std::make_unique<ExtensionInstallPrompt::Result>(result);
+  payload_ = std::make_unique<ExtensionInstallPrompt::DoneCallbackPayload>(
+      std::move(payload));
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,19 +12,18 @@
 #include "base/component_export.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "storage/browser/blob/shareable_file_reference.h"
+#include "components/services/storage/public/cpp/quota_error_or.h"
 #include "storage/browser/file_system/file_stream_writer.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/file_system/task_runner_bound_observer_list.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
-#include "url/gurl.h"
 
 namespace storage {
 
 class FileSystemContext;
 class FileStreamWriter;
+class ScopedFile;
 
 class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
     : public FileStreamWriter {
@@ -33,6 +32,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
                           const FileSystemURL& url,
                           int64_t initial_offset,
                           const UpdateObserverList& observers);
+
+  SandboxFileStreamWriter(const SandboxFileStreamWriter&) = delete;
+  SandboxFileStreamWriter& operator=(const SandboxFileStreamWriter&) = delete;
+
   ~SandboxFileStreamWriter() override;
 
   // FileStreamWriter overrides.
@@ -40,7 +43,8 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
             int buf_len,
             net::CompletionOnceCallback callback) override;
   int Cancel(net::CompletionOnceCallback callback) override;
-  int Flush(net::CompletionOnceCallback callback) override;
+  int Flush(FlushMode flush_mode,
+            net::CompletionOnceCallback callback) override;
 
   // Used only by tests.
   void set_default_quota(int64_t quota) { default_quota_ = quota; }
@@ -57,11 +61,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
                              base::File::Error file_error,
                              const base::File::Info& file_info,
                              const base::FilePath& platform_path,
-                             scoped_refptr<ShareableFileReference> file_ref);
-  void DidGetUsageAndQuota(net::CompletionOnceCallback callback,
-                           blink::mojom::QuotaStatusCode status,
-                           int64_t usage,
-                           int64_t quota);
+                             ScopedFile temp_file);
+  void DidGetBucketSpaceRemaining(
+      net::CompletionOnceCallback callback,
+      storage::QuotaErrorOr<int64_t> space_remaining);
   void DidInitializeForWrite(net::IOBuffer* buf, int buf_len, int init_status);
 
   // Will call |write_callback_| if set, or return synchronously.
@@ -91,8 +94,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamWriter
   int64_t default_quota_;
 
   base::WeakPtrFactory<SandboxFileStreamWriter> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SandboxFileStreamWriter);
 };
 
 }  // namespace storage

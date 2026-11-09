@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/time/time.h"
 #include "gpu/command_buffer/client/client_test_helper.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_mock.h"
 #include "gpu/command_buffer/service/gpu_service_test.h"
@@ -54,22 +55,22 @@ class MockOutputter : public Outputter {
 class GPUTracerTester : public GPUTracer {
  public:
   explicit GPUTracerTester(GLES2Decoder* decoder)
-      : GPUTracer(decoder), tracing_enabled_(0) {
+      : GPUTracer(decoder), tracing_enabled_(false) {
     gpu_timing_client_->SetCpuTimeForTesting(base::BindRepeating(&FakeCpuTime));
-
-    // Force tracing to be dependent on our mock variable here.
-    gpu_trace_srv_category_ = &tracing_enabled_;
-    gpu_trace_dev_category_ = &tracing_enabled_;
   }
 
   ~GPUTracerTester() override = default;
 
-  void SetTracingEnabled(bool enabled) {
-    tracing_enabled_ = enabled ? 1 : 0;
+  void SetTracingEnabled(bool enabled) { tracing_enabled_ = enabled; }
+
+  bool is_gpu_service_tracing_enabled() override { return tracing_enabled_; }
+
+  bool is_gpu_device_tracing_enabled() override {
+    return tracing_enabled_ && can_trace_dev_;
   }
 
  private:
-  unsigned char tracing_enabled_;
+  bool tracing_enabled_;
 };
 
 class BaseGpuTest : public GpuServiceTest {
@@ -80,18 +81,10 @@ class BaseGpuTest : public GpuServiceTest {
  protected:
   void SetUp() override {
     g_fakeCPUTime = 0;
-    const char* gl_version = "3.2";
+    const char* gl_version = "OpenGL ES 3.0";
     const char* extensions = "";
-    if (GetTimerType() == gl::GPUTiming::kTimerTypeEXT) {
-      gl_version = "2.1";
-      extensions = "GL_EXT_timer_query";
-    } else if (GetTimerType() == gl::GPUTiming::kTimerTypeDisjoint) {
-      gl_version = "OpenGL ES 3.0";
+    if (GetTimerType() == gl::GPUTiming::kTimerTypeDisjoint) {
       extensions = "GL_EXT_disjoint_timer_query";
-    } else if (GetTimerType() == gl::GPUTiming::kTimerTypeARB) {
-      // TODO(sievers): The tracer should not depend on ARB_occlusion_query.
-      // Try merge Query APIs (core, ARB, EXT) into a single binding each.
-      extensions = "GL_ARB_timer_query GL_ARB_occlusion_query";
     }
     GpuServiceTest::SetUpWithGLVersion(gl_version, extensions);
 
@@ -115,7 +108,7 @@ class BaseGpuTest : public GpuServiceTest {
   void ExpectTraceQueryMocks() {
     if (gpu_timing_client_->IsAvailable()) {
       // Delegate query APIs used by GPUTrace to a GlFakeQueries
-      const bool elapsed = (GetTimerType() == gl::GPUTiming::kTimerTypeEXT);
+      const bool elapsed = false;
       gl_fake_queries_.ExpectGPUTimerQuery(*gl_, elapsed);
     }
   }
@@ -186,11 +179,7 @@ class BaseGpuTest : public GpuServiceTest {
   }
 
   void ExpectTracerOffsetQueryMocks() {
-    if (GetTimerType() != gl::GPUTiming::kTimerTypeARB) {
-      gl_fake_queries_.ExpectNoOffsetCalculationQuery(*gl_);
-    } else {
-      gl_fake_queries_.ExpectOffsetCalculationQuery(*gl_);
-    }
+    gl_fake_queries_.ExpectNoOffsetCalculationQuery(*gl_);
   }
 
   gl::GPUTiming::TimerType GetTimerType() { return test_timer_type_; }
@@ -229,7 +218,7 @@ class BaseGpuTraceTest : public BaseGpuTest {
     if (tracing_device)
       ExpectTraceQueryMocks();
 
-    scoped_refptr<GPUTrace> trace = new GPUTrace(
+    auto trace = base::MakeRefCounted<GPUTrace>(
         &outputter_, gpu_timing_client_.get(), tracer_source, category_name,
         trace_name, tracing_service, tracing_device);
 
@@ -265,32 +254,11 @@ class BaseGpuTraceTest : public BaseGpuTest {
   }
 };
 
-class GpuARBTimerTraceTest : public BaseGpuTraceTest {
- public:
-  GpuARBTimerTraceTest() : BaseGpuTraceTest(gl::GPUTiming::kTimerTypeARB) {}
-};
-
 class GpuDisjointTimerTraceTest : public BaseGpuTraceTest {
  public:
   GpuDisjointTimerTraceTest()
       : BaseGpuTraceTest(gl::GPUTiming::kTimerTypeDisjoint) {}
 };
-
-TEST_F(GpuARBTimerTraceTest, ARBTimerTraceTestOff) {
-  DoTraceTest(false, false);
-}
-
-TEST_F(GpuARBTimerTraceTest, ARBTimerTraceTestServiceOnly) {
-  DoTraceTest(true, false);
-}
-
-TEST_F(GpuARBTimerTraceTest, ARBTimerTraceTestDeviceOnly) {
-  DoTraceTest(false, true);
-}
-
-TEST_F(GpuARBTimerTraceTest, ARBTimerTraceTestBothOn) {
-  DoTraceTest(true, true);
-}
 
 TEST_F(GpuDisjointTimerTraceTest, DisjointTimerTraceTestOff) {
   DoTraceTest(false, false);
@@ -621,16 +589,6 @@ class InvalidTimerTracerTest : public BaseGpuTracerTest {
       : BaseGpuTracerTest(gl::GPUTiming::kTimerTypeInvalid) {}
 };
 
-class GpuEXTTimerTracerTest : public BaseGpuTracerTest {
- public:
-  GpuEXTTimerTracerTest() : BaseGpuTracerTest(gl::GPUTiming::kTimerTypeEXT) {}
-};
-
-class GpuARBTimerTracerTest : public BaseGpuTracerTest {
- public:
-  GpuARBTimerTracerTest() : BaseGpuTracerTest(gl::GPUTiming::kTimerTypeARB) {}
-};
-
 class GpuDisjointTimerTracerTest : public BaseGpuTracerTest {
  public:
   GpuDisjointTimerTracerTest()
@@ -638,14 +596,6 @@ class GpuDisjointTimerTracerTest : public BaseGpuTracerTest {
 };
 
 TEST_F(InvalidTimerTracerTest, InvalidTimerBasicTracerTest) {
-  DoBasicTracerTest();
-}
-
-TEST_F(GpuEXTTimerTracerTest, EXTTimerBasicTracerTest) {
-  DoBasicTracerTest();
-}
-
-TEST_F(GpuARBTimerTracerTest, ARBTimerBasicTracerTest) {
   DoBasicTracerTest();
 }
 
@@ -657,14 +607,6 @@ TEST_F(InvalidTimerTracerTest, InvalidTimerDisabledTest) {
   DoDisabledTracingTest();
 }
 
-TEST_F(GpuEXTTimerTracerTest, EXTTimerDisabledTest) {
-  DoDisabledTracingTest();
-}
-
-TEST_F(GpuARBTimerTracerTest, ARBTimerDisabledTest) {
-  DoDisabledTracingTest();
-}
-
 TEST_F(GpuDisjointTimerTracerTest, DisjointTimerDisabledTest) {
   DoDisabledTracingTest();
 }
@@ -673,27 +615,11 @@ TEST_F(InvalidTimerTracerTest, InvalidTimerTracerMarkersTest) {
   DoTracerMarkersTest();
 }
 
-TEST_F(GpuEXTTimerTracerTest, EXTTimerTracerMarkersTest) {
-  DoTracerMarkersTest();
-}
-
-TEST_F(GpuARBTimerTracerTest, ARBTimerTracerMarkersTest) {
-  DoTracerMarkersTest();
-}
-
 TEST_F(GpuDisjointTimerTracerTest, DisjointTimerBasicTracerMarkersTest) {
   DoTracerMarkersTest();
 }
 
 TEST_F(InvalidTimerTracerTest, InvalidTimerOngoingTracerMarkersTest) {
-  DoOngoingTracerMarkerTest();
-}
-
-TEST_F(GpuEXTTimerTracerTest, EXTTimerOngoingTracerMarkersTest) {
-  DoOngoingTracerMarkerTest();
-}
-
-TEST_F(GpuARBTimerTracerTest, ARBTimerBasicOngoingTracerMarkersTest) {
   DoOngoingTracerMarkerTest();
 }
 
@@ -713,7 +639,7 @@ class GPUTracerTest : public GpuServiceTest {
  protected:
   void SetUp() override {
     g_fakeCPUTime = 0;
-    GpuServiceTest::SetUpWithGLVersion("3.2", "");
+    GpuServiceTest::SetUpWithGLVersion("OpenGL ES 2.0", "");
     decoder_ = std::make_unique<MockGLES2Decoder>(
         &client_, &command_buffer_service_, &outputter_);
     EXPECT_CALL(*decoder_, GetGLContext())

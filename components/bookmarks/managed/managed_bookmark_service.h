@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_client.h"
 #include "components/bookmarks/browser/bookmark_node.h"
@@ -31,6 +32,10 @@ class ManagedBookmarkService : public KeyedService,
 
   ManagedBookmarkService(PrefService* prefs,
                          GetManagementDomainCallback callback);
+
+  ManagedBookmarkService(const ManagedBookmarkService&) = delete;
+  ManagedBookmarkService& operator=(const ManagedBookmarkService&) = delete;
+
   ~ManagedBookmarkService() override;
 
   // Called upon creation of the BookmarkModel.
@@ -40,21 +45,15 @@ class ManagedBookmarkService : public KeyedService,
   // will be invoked in the Profile's IO task runner.
   LoadManagedNodeCallback GetLoadManagedNodeCallback();
 
-  // Returns true if the |node| can have its title updated.
+  // Returns true if the `node` can have its title updated.
   bool CanSetPermanentNodeTitle(const BookmarkNode* node);
 
-  // Returns true if |node| should sync.
-  bool CanSyncNode(const BookmarkNode* node);
-
-  // Returns true if |node| can be edited by the user.
-  // TODO(joaodasilva): the model should check this more aggressively, and
-  // should give the client a means to temporarily disable those checks.
-  // http://crbug.com/49598
-  bool CanBeEditedByUser(const BookmarkNode* node);
+  // Returns true if `node` is a descendant of the managed node.
+  bool IsNodeManaged(const BookmarkNode* node);
 
   // Top-level managed bookmarks folder, defined by an enterprise policy; may be
   // null.
-  const BookmarkNode* managed_node() { return managed_node_; }
+  const BookmarkNode* managed_node() const { return managed_node_; }
 
  private:
   // KeyedService implementation.
@@ -64,28 +63,29 @@ class ManagedBookmarkService : public KeyedService,
   void BookmarkModelChanged() override;
 
   // BookmarkModelObserver implementation.
-  void BookmarkModelLoaded(BookmarkModel* bookmark_model,
-                           bool ids_reassigned) override;
-  void BookmarkModelBeingDeleted(BookmarkModel* bookmark_model) override;
+  void BookmarkModelLoaded(bool ids_reassigned) override;
+  void BookmarkModelBeingDeleted() override;
 
   // Cleanup, called when service is shutdown or when BookmarkModel is being
   // destroyed.
   void Cleanup();
 
   // Pointer to the PrefService. Must outlive ManagedBookmarkService.
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
 
   // Pointer to the BookmarkModel; may be null. Only valid between the calls to
   // BookmarkModelCreated() and to BookmarkModelBeingDestroyed().
-  BookmarkModel* bookmark_model_;
+  raw_ptr<BookmarkModel> bookmark_model_;
+
+  // Observation for the bookmark_model_
+  base::ScopedObservation<BookmarkModel, BaseBookmarkModelObserver>
+      bookmark_model_observation_{this};
 
   // Managed bookmarks are defined by an enterprise policy. The lifetime of the
   // BookmarkPermanentNode is controlled by BookmarkModel.
   std::unique_ptr<ManagedBookmarksTracker> managed_bookmarks_tracker_;
   GetManagementDomainCallback managed_domain_callback_;
-  BookmarkPermanentNode* managed_node_;
-
-  DISALLOW_COPY_AND_ASSIGN(ManagedBookmarkService);
+  raw_ptr<BookmarkPermanentNode> managed_node_;
 };
 
 }  // namespace bookmarks

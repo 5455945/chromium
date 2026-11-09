@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,32 +7,30 @@
 #import "ios/web/public/ui/context_menu_params.h"
 #import "ios/web/public/web_state.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 @implementation CRWFakeWebStateDelegate {
   // Backs up the property with the same name.
   std::unique_ptr<web::WebState::OpenURLParams> _openURLParams;
   // Backs up the property with the same name.
-  std::unique_ptr<web::ContextMenuParams> _contextMenuParams;
-  // Backs up the property with the same name.
   BOOL _javaScriptDialogPresenterRequested;
+  // Backs up the property with the same name.
+  GURL _lastRequestedGeolocationOrigin;
 }
 
 @synthesize webState = _webState;
 @synthesize webStateCreationRequested = _webStateCreationRequested;
 @synthesize webStateClosingRequested = _webStateClosingRequested;
 @synthesize repostFormWarningRequested = _repostFormWarningRequested;
-@synthesize authenticationRequested = _authenticationRequested;
-@synthesize shouldPreviewLinkWithURLReturnValue =
-    _shouldPreviewLinkWithURLReturnValue;
-@synthesize linkURL = _linkURL;
-@synthesize previewingViewControllerForLinkWithURLReturnValue =
-    _previewingViewControllerForLinkWithURLReturnValue;
-@synthesize previewingViewController = _previewingViewController;
-@synthesize commitPreviewingViewControllerRequested =
-    _commitPreviewingViewControllerRequested;
+@synthesize copyAllowedRequested = _copyAllowedRequested;
+@synthesize pasteAllowedRequested = _pasteAllowedRequested;
+@synthesize cutAllowedRequested = _cutAllowedRequested;
+@synthesize didFinishClipboardReadRequested = _didFinishClipboardReadRequested;
+@synthesize permissionsRequestHandled = _permissionsRequestHandled;
+@synthesize geolocationRequestHandled = _geolocationRequestHandled;
+@synthesize lastRequestedGeolocationOrigin = _lastRequestedGeolocationOrigin;
+@synthesize httpAuthenticationRequested = _httpAuthenticationRequested;
+@synthesize clientCertAuthenticationRequested =
+    _clientCertAuthenticationRequested;
+@synthesize proxyAuthenticationRequested = _proxyAuthenticationRequested;
 @synthesize isAppLaunchingAllowedForWebStateReturnValue =
     _isAppLaunchingAllowedForWebStateReturnValue;
 
@@ -58,15 +56,35 @@
 }
 
 - (void)webState:(web::WebState*)webState
-    handleContextMenu:(const web::ContextMenuParams&)params {
-  _webState = webState;
-  _contextMenuParams.reset(new web::ContextMenuParams(params));
-}
-
-- (void)webState:(web::WebState*)webState
     runRepostFormDialogWithCompletionHandler:(void (^)(BOOL))handler {
   _webState = webState;
   _repostFormWarningRequested = YES;
+}
+
+- (void)webState:(web::WebState*)webState
+    shouldAllowCopyWithDecisionHandler:(void (^)(BOOL))handler {
+  _webState = webState;
+  _copyAllowedRequested = YES;
+  handler(YES);
+}
+
+- (void)webState:(web::WebState*)webState
+    shouldAllowPasteWithDecisionHandler:(void (^)(BOOL))handler {
+  _webState = webState;
+  _pasteAllowedRequested = YES;
+  handler(YES);
+}
+
+- (void)webState:(web::WebState*)webState
+    shouldAllowCutWithDecisionHandler:(void (^)(BOOL))handler {
+  _webState = webState;
+  _cutAllowedRequested = YES;
+  handler(YES);
+}
+
+- (void)webStateDidFinishClipboardRead:(web::WebState*)webState {
+  _webState = webState;
+  _didFinishClipboardReadRequested = YES;
 }
 
 - (web::JavaScriptDialogPresenter*)javaScriptDialogPresenterForWebState:
@@ -77,45 +95,60 @@
 }
 
 - (void)webState:(web::WebState*)webState
+    handlePermissions:(NSArray<NSNumber*>*)permissions
+      decisionHandler:(web::WebStatePermissionDecisionHandler)decisionHandler {
+  _webState = webState;
+  _permissionsRequestHandled = YES;
+  decisionHandler(web::PermissionDecisionGrant);
+}
+
+- (void)webState:(web::WebState*)webState
+    requestGeolocation:(const GURL&)origin
+       decisionHandler:(web::WebStatePermissionDecisionHandler)decisionHandler {
+  _webState = webState;
+  _geolocationRequestHandled = YES;
+  _lastRequestedGeolocationOrigin = origin;
+  decisionHandler(web::PermissionDecisionGrant);
+}
+
+- (void)webState:(web::WebState*)webState
     didRequestHTTPAuthForProtectionSpace:(NSURLProtectionSpace*)protectionSpace
                       proposedCredential:(NSURLCredential*)proposedCredential
                        completionHandler:(void (^)(NSString* username,
                                                    NSString* password))handler {
   _webState = webState;
-  _authenticationRequested = YES;
+  _httpAuthenticationRequested = YES;
+}
+
+- (void)webState:(web::WebState*)webState
+    didRequestClientCertAuthForProtectionSpace:
+        (NSURLProtectionSpace*)protectionSpace
+                             completionHandler:
+                                 (void (^)(SecIdentityRef))handler {
+  _webState = webState;
+  _clientCertAuthenticationRequested = YES;
+}
+
+- (void)webState:(web::WebState*)webState
+    didRequestProxyAuthForProtectionSpace:(NSURLProtectionSpace*)protectionSpace
+                       proposedCredential:(NSURLCredential*)proposedCredential
+                          failureResponse:(NSURLResponse*)failureResponse
+                        completionHandler:(void (^)(NSString* username,
+                                                    NSString* password,
+                                                    NSError* error))handler {
+  _webState = webState;
+  _proxyAuthenticationRequested = YES;
+  if (handler) {
+    handler(@"user", @"password", nil);
+  }
 }
 
 - (const web::WebState::OpenURLParams*)openURLParams {
   return _openURLParams.get();
 }
 
-- (web::ContextMenuParams*)contextMenuParams {
-  return _contextMenuParams.get();
-}
-
 - (BOOL)javaScriptDialogPresenterRequested {
   return _javaScriptDialogPresenterRequested;
-}
-
-- (BOOL)webState:(web::WebState*)webState
-    shouldPreviewLinkWithURL:(const GURL&)linkURL {
-  _webState = webState;
-  _linkURL = linkURL;
-  return _shouldPreviewLinkWithURLReturnValue;
-}
-
-- (UIViewController*)webState:(web::WebState*)webState
-    previewingViewControllerForLinkWithURL:(const GURL&)linkURL {
-  _webState = webState;
-  _linkURL = linkURL;
-  return _previewingViewControllerForLinkWithURLReturnValue;
-}
-
-- (void)webState:(web::WebState*)webState
-    commitPreviewingViewController:(UIViewController*)previewingViewController {
-  _webState = webState;
-  _previewingViewController = previewingViewController;
-  _commitPreviewingViewControllerRequested = YES;
 }
 
 - (BOOL)isAppLaunchingAllowedForWebState:(web::WebState*)webState {

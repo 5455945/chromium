@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,6 +28,13 @@ class ASH_PUBLIC_EXPORT AccessibilityEventRewriterDelegate {
   // propagation.
   virtual void DispatchKeyEventToChromeVox(std::unique_ptr<ui::Event> event,
                                            bool capture) = 0;
+
+  // Used to send key events to the ChromeVox extension in manifest v3 via the
+  // accessibility private extension API. Returns `true` if the key event was
+  // sent, and `false` otherwise.
+  virtual bool DispatchKeyEventToChromeVoxMv3(
+      unsigned int id,
+      std::unique_ptr<ui::Event> event) = 0;
 
   // Used to send mouse events to accessibility component extensions.
   virtual void DispatchMouseEvent(std::unique_ptr<ui::Event> event) = 0;

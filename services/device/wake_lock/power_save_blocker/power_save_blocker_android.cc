@@ -1,95 +1,111 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/wake_lock/power_save_blocker/power_save_blocker.h"
 
 #include "base/android/jni_android.h"
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
-#include "services/device/wake_lock/power_save_blocker/jni_headers/PowerSaveBlocker_jni.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "ui/android/view_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/wake_lock/power_save_blocker/jni_headers/PowerSaveBlocker_jni.h"
 
 namespace device {
 
 using base::android::AttachCurrentThread;
+using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
-class PowerSaveBlocker::Delegate
-    : public base::RefCountedThreadSafe<PowerSaveBlocker::Delegate> {
+class PowerSaveBlocker::Delegate {
  public:
-  Delegate(scoped_refptr<base::SequencedTaskRunner> ui_task_runner);
+  explicit Delegate(mojom::WakeLockType type);
 
-  // Does the actual work to apply or remove the desired power save block.
-  void ApplyBlock(ui::ViewAndroid* view_android);
-  void RemoveBlock();
+  Delegate(const Delegate&) = delete;
+  Delegate& operator=(const Delegate&) = delete;
 
- private:
-  friend class base::RefCountedThreadSafe<Delegate>;
   ~Delegate();
 
+  // Does the actual work to apply or remove the desired power save block.
+  void ApplyBlock(ScopedJavaGlobalRef<jobject> container_view);
+  void ApplyWakeLock();
+
+ private:
+  mojom::WakeLockType type_;
   base::android::ScopedJavaGlobalRef<jobject> java_power_save_blocker_;
 
-  scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
-  DISALLOW_COPY_AND_ASSIGN(Delegate);
+  size_t block_count_ = 0;
+  bool wake_lock_applied_ = false;
 };
 
-PowerSaveBlocker::Delegate::Delegate(
-    scoped_refptr<base::SequencedTaskRunner> ui_task_runner)
-    : ui_task_runner_(ui_task_runner) {
+PowerSaveBlocker::Delegate::Delegate(mojom::WakeLockType type) : type_(type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   JNIEnv* env = AttachCurrentThread();
   java_power_save_blocker_.Reset(Java_PowerSaveBlocker_create(env));
 }
 
-PowerSaveBlocker::Delegate::~Delegate() {}
-
-void PowerSaveBlocker::Delegate::ApplyBlock(ui::ViewAndroid* view_android) {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(view_android);
+PowerSaveBlocker::Delegate::~Delegate() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   ScopedJavaLocalRef<jobject> obj(java_power_save_blocker_);
-  ScopedJavaLocalRef<jobject> container_view(view_android->GetContainerView());
-  if (container_view.is_null())
-    return;
-
-  Java_PowerSaveBlocker_applyBlock(AttachCurrentThread(), obj, container_view);
+  // removeBlock() releases the OS wake lock if one is held, otherwise it
+  // releases a view block, so the two are dropped by separate calls.
+  if (wake_lock_applied_) {
+    Java_PowerSaveBlocker_removeBlock(AttachCurrentThread(), obj);
+  }
+  for (size_t i = 0; i < block_count_; ++i) {
+    Java_PowerSaveBlocker_removeBlock(AttachCurrentThread(), obj);
+  }
 }
 
-void PowerSaveBlocker::Delegate::RemoveBlock() {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+void PowerSaveBlocker::Delegate::ApplyBlock(
+    ScopedJavaGlobalRef<jobject> container_view) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   ScopedJavaLocalRef<jobject> obj(java_power_save_blocker_);
-  Java_PowerSaveBlocker_removeBlock(AttachCurrentThread(), obj);
+  if (container_view.is_null()) {
+    return;
+  }
+
+  Java_PowerSaveBlocker_applyBlock(AttachCurrentThread(), obj, container_view);
+  block_count_++;
+}
+
+void PowerSaveBlocker::Delegate::ApplyWakeLock() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  ScopedJavaLocalRef<jobject> obj(java_power_save_blocker_);
+  Java_PowerSaveBlocker_applyWakeLock(AttachCurrentThread(), obj,
+                                      static_cast<jint>(type_));
+  wake_lock_applied_ = true;
 }
 
 PowerSaveBlocker::PowerSaveBlocker(
     mojom::WakeLockType type,
     mojom::WakeLockReason reason,
     const std::string& description,
-    scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> blocking_task_runner)
-    : ui_task_runner_(ui_task_runner),
-      blocking_task_runner_(blocking_task_runner) {
-  // Don't support PreventAppSuspension.
-}
+    scoped_refptr<base::SequencedTaskRunner> ui_task_runner)
+    : delegate_(ui_task_runner, type) {}
 
-PowerSaveBlocker::~PowerSaveBlocker() {
-  if (delegate_.get()) {
-    ui_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&Delegate::RemoveBlock, delegate_));
-  }
-}
+PowerSaveBlocker::~PowerSaveBlocker() = default;
 
 void PowerSaveBlocker::InitDisplaySleepBlocker(ui::ViewAndroid* view_android) {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(view_android);
+  delegate_.AsyncCall(&PowerSaveBlocker::Delegate::ApplyBlock)
+      .WithArgs(ScopedJavaGlobalRef<jobject>(view_android->GetContainerView()));
+}
 
-  delegate_ = new Delegate(ui_task_runner_);
-  delegate_->ApplyBlock(view_android);
+void PowerSaveBlocker::InitWithoutContext() {
+  delegate_.AsyncCall(&PowerSaveBlocker::Delegate::ApplyWakeLock);
 }
 
 }  // namespace device
+
+DEFINE_JNI(PowerSaveBlocker)

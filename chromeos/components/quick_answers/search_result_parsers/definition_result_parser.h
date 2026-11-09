@@ -1,30 +1,38 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMEOS_COMPONENTS_QUICK_ANSWERS_SEARCH_RESULT_PARSERS_DEFINITION_RESULT_PARSER_H_
 #define CHROMEOS_COMPONENTS_QUICK_ANSWERS_SEARCH_RESULT_PARSERS_DEFINITION_RESULT_PARSER_H_
 
+#include "base/values.h"
 #include "chromeos/components/quick_answers/search_result_parsers/result_parser.h"
 
 namespace base {
-class Value;
+class GURL;
 }  // namespace base
 
-namespace chromeos {
 namespace quick_answers {
 
 class DefinitionResultParser : public ResultParser {
  public:
   // ResultParser:
-  bool Parse(const base::Value* result, QuickAnswer* quick_answer) override;
+  bool Parse(const base::DictValue& result, QuickAnswer* quick_answer) override;
+  std::unique_ptr<StructuredResult> ParseInStructuredResult(
+      const base::DictValue& result) override;
+  bool PopulateQuickAnswer(const StructuredResult& structured_result,
+                           QuickAnswer* quick_answer) override;
+  bool SupportsNewInterface() const override;
 
  private:
-  const std::string* ExtractDefinition(const base::Value* definition_entry);
-  const std::string* ExtractPhonetics(const base::Value* definition_entry);
+  const base::DictValue* ExtractFirstSenseFamily(
+      const base::DictValue& definition_entry);
+  const base::DictValue* ExtractFirstPhonetics(
+      const base::DictValue& definition_entry);
+  std::unique_ptr<PhoneticsInfo> ParsePhoneticsInfo(
+      const base::DictValue& entry_result);
 };
 
 }  // namespace quick_answers
-}  // namespace chromeos
 
 #endif  // CHROMEOS_COMPONENTS_QUICK_ANSWERS_SEARCH_RESULT_PARSERS_DEFINITION_RESULT_PARSER_H_

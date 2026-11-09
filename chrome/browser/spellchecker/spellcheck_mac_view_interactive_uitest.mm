@@ -1,10 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
@@ -21,7 +21,7 @@ namespace {
 
 class SpellCheckMacViewInteractiveUiTest : public InProcessBrowserTest {
  public:
-  SpellCheckMacViewInteractiveUiTest() {}
+  SpellCheckMacViewInteractiveUiTest() = default;
 };
 
 #if BUILDFLAG(ENABLE_SPELLCHECK)
@@ -31,16 +31,16 @@ IN_PROC_BROWSER_TEST_F(SpellCheckMacViewInteractiveUiTest,
 
   ASSERT_TRUE(embedded_test_server()->Start());
   auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
-  ui_test_utils::NavigateToURL(browser(),
-                               embedded_test_server()->GetURL("/title1.html"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
 
-  SEL show_guess_panel = NSSelectorFromString(@"showGuessPanel:");
-  [web_contents->GetRenderWidgetHostView()->GetNativeView().GetNativeNSView()
-      performSelector:show_guess_panel];
+  [(id)web_contents->GetRenderWidgetHostView()
+          ->GetNativeView()
+          .GetNativeNSView() showGuessPanel:nil];
   test_helper.RunUntilBind();
   spellcheck::SpellCheckMockPanelHost* host =
       test_helper.GetSpellCheckMockPanelHostForProcess(
-          web_contents->GetMainFrame()->GetProcess());
+          web_contents->GetPrimaryMainFrame()->GetProcess());
   EXPECT_TRUE(host->SpellingPanelVisible());
 }
 #endif

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,29 +8,28 @@
 #include <utility>
 
 #include "base/base_paths.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/upgrade_detector/installed_version_monitor.h"
 
-#if defined(OS_MAC)
-#include "base/mac/bundle_locations.h"
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/bundle_locations.h"
 #endif
 
 namespace {
 
 base::FilePath GetDefaultMonitorLocation() {
-#if defined(OS_MAC)
-  return base::mac::OuterBundlePath();
+#if BUILDFLAG(IS_MAC)
+  return base::apple::OuterBundlePath();
 #else
   return base::PathService::CheckedGet(base::DIR_EXE);
 #endif
@@ -40,7 +39,7 @@ base::FilePath GetDefaultMonitorLocation() {
 
 DirectoryMonitor::DirectoryMonitor(base::FilePath install_dir)
     : install_dir_(std::move(install_dir)) {
-  DCHECK(!install_dir_.empty());
+  CHECK(!install_dir_.empty(), base::NotFatalUntil::M163);
 }
 
 DirectoryMonitor::~DirectoryMonitor() {
@@ -49,13 +48,13 @@ DirectoryMonitor::~DirectoryMonitor() {
 }
 
 void DirectoryMonitor::Start(Callback on_change_callback) {
-  DCHECK(!watcher_);
+  CHECK(!watcher_, base::NotFatalUntil::M163);
   task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
       {base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN, base::MayBlock()});
   watcher_ = std::make_unique<base::FilePathWatcher>();
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // The normal Watch risks triggering a macOS Catalina+ consent dialog, so use
   // a trivial watch here.
   const base::FilePathWatcher::Type watch_type =
@@ -82,7 +81,7 @@ void DirectoryMonitor::Start(Callback on_change_callback) {
                 main_sequence->PostTask(
                     FROM_HERE, base::BindOnce(on_change_callback, error));
               },
-              base::RetainedRef(base::SequencedTaskRunnerHandle::Get()),
+              base::RetainedRef(base::SequencedTaskRunner::GetCurrentDefault()),
               on_change_callback)),
       base::BindOnce(
           [](const Callback& on_change_callback, bool start_result) {

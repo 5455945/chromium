@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
 #include "ui/message_center/message_center_export.h"
 #include "ui/message_center/message_center_types.h"
 #include "ui/message_center/notification_list.h"
@@ -59,6 +59,9 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   static void Initialize();
   // Creates the global message center object with custom LockScreenController.
   static void Initialize(std::unique_ptr<LockScreenController> controller);
+  // Sets the global message center for testing.
+  static void InitializeForTesting(
+      std::unique_ptr<MessageCenter> message_center);
 
   // Returns the global message center object. Returns null if Initialize is
   // not called.
@@ -66,6 +69,9 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
 
   // Destroys the global message_center object.
   static void Shutdown();
+
+  MessageCenter(const MessageCenter&) = delete;
+  MessageCenter& operator=(const MessageCenter&) = delete;
 
   // Management of the observer list.
   virtual void AddObserver(MessageCenterObserver* observer) = 0;
@@ -79,10 +85,14 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   // Returns true if chrome vox spoken feedback is enabled.
   virtual bool IsSpokenFeedbackEnabled() const = 0;
 
-  // Find the oldest notification by the corresponding notifier id. Returns null
-  // if not found. The returned instance is owned by the message center.
-  virtual Notification* FindOldestNotificationByNotiferId(
-      const NotifierId& notifier_id) = 0;
+  // Returns the notification with the corresponding id. If not found, returns
+  // nullptr. Notification instance is owned by this list.
+  virtual Notification* FindNotificationById(const std::string& id) = 0;
+
+  // Find the parent notification for the corresponding notification. This is
+  // the oldest notification with the same url. Returns nullptr if not found.
+  // The returned instance is owned by the message center.
+  virtual Notification* FindParentNotification(Notification* notification) = 0;
 
   virtual Notification* FindPopupNotificationById(const std::string& id) = 0;
 
@@ -104,10 +114,24 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   // in this list.
   virtual const NotificationList::Notifications& GetVisibleNotifications() = 0;
 
-  // Gets all notifications being shown as popups.  This should not be affected
+  // Gets all notifications to be shown to the user in the message center if not
+  // for the given blocker.
+  virtual NotificationList::Notifications GetVisibleNotificationsWithoutBlocker(
+      const NotificationBlocker* blocker) const = 0;
+
+  // Gets all notifications being shown as popups. This should not be affected
   // by the change queue since notifications are not held up while the state is
   // VISIBILITY_TRANSIENT or VISIBILITY_SETTINGS.
+  //
+  // Popups returned by this method are assumed to have now been shown to the
+  // user.
   virtual NotificationList::PopupNotifications GetPopupNotifications() = 0;
+
+  // Gets all notifications that would be popups if not for the given blocker.
+  // Ignores limits in the number of popups (e.g. for screen space).
+  virtual NotificationList::PopupNotifications
+  GetPopupNotificationsWithoutBlocker(
+      const NotificationBlocker& blocker) const = 0;
 
   // Management of NotificationBlockers.
   virtual void AddNotificationBlocker(NotificationBlocker* blocker) = 0;
@@ -131,7 +155,7 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
 
   // Sets the icon image. Icon appears at the top-left of the notification.
   virtual void SetNotificationIcon(const std::string& notification_id,
-                                   const gfx::Image& image) = 0;
+                                   const ui::ImageModel& image) = 0;
 
   // Sets the large image for the notifications of type == TYPE_IMAGE. Specified
   // image will appear below of the notification.
@@ -155,36 +179,46 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   virtual void ClickOnNotificationButtonWithReply(
       const std::string& id,
       int button_index,
-      const std::u16string& reply) = 0;
+      std::u16string_view reply) = 0;
 
   // Called by the UI classes when the settings buttons is clicked
   // to trigger the notification's delegate and update the message
   // center observers.
   virtual void ClickOnSettingsButton(const std::string& id) = 0;
 
+  // Called when the snooze buttons is clicked to trigger the notification's
+  // delegate.
+  virtual void ClickOnSnoozeButton(const std::string& id) = 0;
+
   // This should be called by UI classes when a user select from notification
   // inline settings to disable notifications from the same origin of the
   // notification.
   virtual void DisableNotification(const std::string& id) = 0;
 
-  // This should be called by UI classes after a visible notification popup
-  // closes, indicating that the notification has been shown to the user.
-  // |mark_notification_as_read|, if false, will unset the read bit on a
-  // notification, increasing the unread count of the center.
+  // Called by the UI classes to mark a popup as shown, preventing it from being
+  // shown in the future. `mark_notification_as_read`, if false, will unset the
+  // read bit on a notification, increasing the unread count of the center.
   virtual void MarkSinglePopupAsShown(const std::string& id,
                                       bool mark_notification_as_read) = 0;
 
+  // Resets the timer for the popup associated with the provided notification
+  // id.
+  virtual void ResetPopupTimer(const std::string& id) = 0;
+
+  // Resets the state for a popup so it is shown again.
   virtual void ResetSinglePopup(const std::string& id) = 0;
 
   // This should be called by UI classes when a notification is first displayed
   // to the user, in order to decrement the unread_count for the tray, and to
   // notify observers that the notification is visible.
-  virtual void DisplayedNotification(
-      const std::string& id,
-      const DisplaySource source) = 0;
+  virtual void DisplayedNotification(const std::string& id,
+                                     const DisplaySource source) = 0;
 
   // This can be called to change the quiet mode state (without a timeout).
-  virtual void SetQuietMode(bool in_quiet_mode) = 0;
+  virtual void SetQuietMode(
+      bool in_quiet_mode,
+      QuietModeSourceType type = QuietModeSourceType::kUserAction) = 0;
+  virtual QuietModeSourceType GetLastQuietModeChangeSourceType() const = 0;
 
   // Used to set the spoken feedback state.
   virtual void SetSpokenFeedbackEnabled(bool enabled) = 0;
@@ -198,6 +232,19 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
 
   // Allows querying the visibility of the center.
   virtual bool IsMessageCenterVisible() const = 0;
+
+  // Access for the `ExpandState` stored for each notification in the
+  // `NotificationList`. The `ExpandState` is kept alongside other
+  // notifications' state information in the `NotificationState` struct. The
+  // `ExpandState signifies whether the notification has been manually expanded
+  // or collapsed by the user.
+  virtual ExpandState GetNotificationExpandState(const std::string& id) = 0;
+  virtual void SetNotificationExpandState(const std::string& id,
+                                          const ExpandState state) = 0;
+
+  // Called when `MessageView::SetExpanded` or the overrides are called. It
+  // will trigger 'ExpandStateChanged' in the notification's delegate.
+  virtual void OnSetExpanded(const std::string& id, bool expanded) = 0;
 
   // Informs the MessageCenter whether there's a bubble anchored to a system
   // tray which holds notifications. If false, only toasts are shown (e.g. on
@@ -222,22 +269,25 @@ class MESSAGE_CENTER_EXPORT MessageCenter {
   virtual const std::u16string& GetSystemNotificationAppName() const = 0;
   virtual void SetSystemNotificationAppName(const std::u16string& name) = 0;
 
+  // Called when a message view associated with `notification_id` is hovered on.
+  virtual void OnMessageViewHovered(const std::string& notification_id) = 0;
+
+  virtual ~MessageCenter();
+
  protected:
   friend class ::DownloadNotification;
   friend class ::DownloadNotificationTestBase;
   friend class MessageCenterImplTest;
   friend class MessageCenterImplTestWithChangeQueue;
   friend class MessageCenterImplTestWithoutChangeQueue;
+  friend class NotificationViewControllerTest;
   friend class UiControllerTest;
   friend class TrayViewControllerTest;
   friend class MessagePopupCollectionTest;
+  friend class MessagePopupViewTest;
   virtual void DisableTimersForTest() = 0;
 
   MessageCenter();
-  virtual ~MessageCenter();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MessageCenter);
 };
 
 }  // namespace message_center

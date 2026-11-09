@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,12 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/shared_worker_instance.h"
+#include "third_party/blink/public/mojom/devtools/devtools_agent.mojom.h"
 
 namespace blink {
 class StorageKey;
@@ -21,7 +23,8 @@ namespace content {
 
 class SharedWorkerHost;
 
-class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
+class CONTENT_EXPORT SharedWorkerDevToolsAgentHost
+    : public DevToolsAgentHostImpl {
  public:
   using List = std::vector<scoped_refptr<SharedWorkerDevToolsAgentHost>>;
 
@@ -31,10 +34,15 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
       SharedWorkerHost* worker_host,
       const base::UnguessableToken& devtools_worker_token);
 
+  SharedWorkerDevToolsAgentHost(const SharedWorkerDevToolsAgentHost&) = delete;
+  SharedWorkerDevToolsAgentHost& operator=(
+      const SharedWorkerDevToolsAgentHost&) = delete;
+
   // DevToolsAgentHost override.
   BrowserContext* GetBrowserContext() override;
   std::string GetType() override;
   std::string GetTitle() override;
+  std::string GetDescription() override;
   GURL GetURL() override;
   bool Activate() override;
   void Reload() override;
@@ -43,6 +51,7 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
   NetworkLoaderFactoryParamsAndInfo CreateNetworkFactoryParamsForDevTools()
       override;
   RenderProcessHost* GetProcessHost() override;
+  protocol::TargetAutoAttacher* auto_attacher() override;
 
   blink::StorageKey GetStorageKey() const;
 
@@ -62,8 +71,11 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
   ~SharedWorkerDevToolsAgentHost() override;
 
   // DevToolsAgentHostImpl overrides.
-  bool AttachSession(DevToolsSession* session, bool acquire_wake_lock) override;
+  bool AttachSession(DevToolsSession* session) override;
   void DetachSession(DevToolsSession* session) override;
+  void UpdateRendererChannel(bool force) override;
+
+  std::unique_ptr<protocol::TargetAutoAttacher> auto_attacher_;
 
   enum WorkerState {
     WORKER_NOT_READY,
@@ -71,11 +83,13 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
     WORKER_TERMINATED,
   };
   WorkerState state_;
-  SharedWorkerHost* worker_host_;
+  raw_ptr<SharedWorkerHost> worker_host_;
   base::UnguessableToken devtools_worker_token_;
   SharedWorkerInstance instance_;
-
-  DISALLOW_COPY_AND_ASSIGN(SharedWorkerDevToolsAgentHost);
+  mojo::PendingRemote<blink::mojom::DevToolsAgent> pending_agent_remote_;
+  mojo::PendingReceiver<blink::mojom::DevToolsAgentHost>
+      pending_agent_host_receiver_;
+  const base::UnguessableToken browser_context_token_;
 };
 
 }  // namespace content

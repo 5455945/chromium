@@ -26,16 +26,15 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import six
-from six.moves.urllib import parse
+from urllib import parse
 
-from mod_pywebsocket.extensions import PerMessageDeflateExtensionProcessor
-from mod_pywebsocket.extensions import ExtensionProcessorInterface
-from mod_pywebsocket.common import ExtensionParameter
+from pywebsocket3.extensions import PerMessageDeflateExtensionProcessor
+from pywebsocket3.extensions import ExtensionProcessorInterface  # noqa: F401
+from pywebsocket3.common import ExtensionParameter  # noqa: F401
 
-_GOODBYE_MESSAGE = u'Goodbye'
-_ENABLE_MESSAGE = u'EnableCompression'
-_DISABLE_MESSAGE = u'DisableCompression'
+_GOODBYE_MESSAGE = 'Goodbye'
+_ENABLE_MESSAGE = 'EnableCompression'
+_DISABLE_MESSAGE = 'DisableCompression'
 _bfinal = False
 
 
@@ -74,7 +73,7 @@ def web_socket_transfer_data(request):
         line = request.ws_stream.receive_message()
         if line is None:
             return
-        if isinstance(line, six.text_type):
+        if isinstance(line, str):
             if processor:
                 if line == _ENABLE_MESSAGE:
                     processor.enable_outgoing_compression()

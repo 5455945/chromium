@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 
 #include <vector>
 
-#include "chrome/browser/chromeos/printing/history/print_job_info.pb.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_histogram_value.h"
+
+namespace ash::printing::proto {
+class PrintJobInfo;
+}  // namespace ash::printing::proto
 
 namespace extensions {
 
@@ -21,9 +24,10 @@ class PrintingMetricsGetPrintJobsFunction : public ExtensionFunction {
   ResponseAction Run() override;
 
  private:
-  void OnPrintJobsRetrieved(bool success,
-                            std::vector<chromeos::printing::proto::PrintJobInfo>
-                                print_job_info_protos);
+  void OnPrintJobsRetrieved(
+      bool success,
+      std::vector<ash::printing::proto::PrintJobInfo> proto_infos);
+
   DECLARE_EXTENSION_FUNCTION("printingMetrics.getPrintJobs",
                              PRINTINGMETRICS_GETPRINTJOBS)
 };

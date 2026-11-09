@@ -1,4 +1,4 @@
-// Copyright (c) 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -97,7 +97,7 @@ class CaptureHandleManagerTest : public RenderViewHostImplTestHarness {
   std::unique_ptr<TestWebContents> MakeTestWebContents() {
     scoped_refptr<SiteInstance> instance =
         SiteInstance::Create(GetBrowserContext());
-    instance->GetProcess()->Init();
+    instance->GetOrCreateProcessForTesting()->Init();
 
     return TestWebContents::Create(GetBrowserContext(), std::move(instance));
   }
@@ -113,11 +113,11 @@ class CaptureHandleManagerTest : public RenderViewHostImplTestHarness {
     CHECK_LT(device_count_, kMaxDevices);
     auto& device = devices_[++device_count_];
 
-    const WebContentsMediaCaptureId id(frame->GetProcess()->GetID(),
+    const WebContentsMediaCaptureId id(frame->GetProcess()->GetDeprecatedID(),
                                        frame->GetRoutingID());
     device.id = id.ToString();
     device.display_media_info = media::mojom::DisplayMediaInformation::New();
-    (*device.display_media_info)->capture_handle = std::move(capture_handle);
+    device.display_media_info->capture_handle = std::move(capture_handle);
 
     return device;
   }
@@ -125,7 +125,8 @@ class CaptureHandleManagerTest : public RenderViewHostImplTestHarness {
   MediaStreamDevice& MakeDevice(
       std::unique_ptr<TestWebContents>& web_contents,
       media::mojom::CaptureHandlePtr capture_handle = nullptr) {
-    return MakeDevice(web_contents->GetMainFrame(), std::move(capture_handle));
+    return MakeDevice(web_contents->GetPrimaryMainFrame(),
+                      std::move(capture_handle));
   }
 
  protected:
@@ -133,58 +134,60 @@ class CaptureHandleManagerTest : public RenderViewHostImplTestHarness {
 
  private:
   static constexpr size_t kMaxCallbackHelpers = 10;
-  CallbackHelper callback_helpers_[kMaxCallbackHelpers];
+  std::array<CallbackHelper, kMaxCallbackHelpers> callback_helpers_;
   size_t callback_helper_count_ = 0;
 
   static constexpr size_t kMaxDevices = 10;
-  MediaStreamDevice devices_[kMaxDevices];
+  std::array<MediaStreamDevice, kMaxDevices> devices_;
   size_t device_count_ = 0;
 };
 
 TEST_F(CaptureHandleManagerTest,
-       OnTabCaptureStartedProducesNoCallbackIfDeviceHasNoCaptureHandle) {
+       OnCaptureStartedProducesNoCallbackIfDeviceHasNoCaptureHandle) {
   auto captured = MakeTestWebContents();
   auto capturer = MakeTestWebContents();
 
   auto& callback_helper = MakeCallbackHelper();
   EXPECT_CALL(callback_helper, Method(_, _, _)).Times(0);
-  manager_.OnTabCaptureStarted(kLabel, MakeDevice(captured),
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, MakeDevice(captured),
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 }
 
 TEST_F(CaptureHandleManagerTest,
-       OnTabCaptureStartedProducesCallbackIfDeviceHasOldCaptureHandle) {
+       OnCaptureStartedProducesCallbackIfDeviceHasOldCaptureHandle) {
   auto captured = MakeTestWebContents();
   auto capturer = MakeTestWebContents();
 
   auto& captured_device = MakeDevice(captured, MakeCaptureHandle(u"same"));
 
-  captured->SetCaptureHandleConfig(MakePermissiveConfigWithHandle(u"same"));
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
+      MakePermissiveConfigWithHandle(u"same"));
 
   auto& callback_helper = MakeCallbackHelper();
   EXPECT_CALL(callback_helper, Method(_, _, _)).Times(0);
-  manager_.OnTabCaptureStarted(kLabel, captured_device,
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, captured_device,
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 }
 
 TEST_F(CaptureHandleManagerTest,
-       OnTabCaptureStartedProducesCallbackIfDeviceHasNewCaptureHandle) {
+       OnCaptureStartedProducesCallbackIfDeviceHasNewCaptureHandle) {
   auto captured = MakeTestWebContents();
   auto capturer = MakeTestWebContents();
 
   auto& captured_device = MakeDevice(captured, MakeCaptureHandle(u"old"));
 
-  captured->SetCaptureHandleConfig(MakePermissiveConfigWithHandle(u"new"));
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
+      MakePermissiveConfigWithHandle(u"new"));
 
   auto& callback_helper = MakeCallbackHelper();
   EXPECT_CALL(callback_helper, Method(kLabel, captured_device.type,
                                       IsCaptureHandle(url::Origin(), u"new")))
       .Times(1);
-  manager_.OnTabCaptureStarted(kLabel, captured_device,
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, captured_device,
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 }
 
 TEST_F(CaptureHandleManagerTest, CallbackInvokedWhenCaptureHandleChanges) {
@@ -192,17 +195,19 @@ TEST_F(CaptureHandleManagerTest, CallbackInvokedWhenCaptureHandleChanges) {
   auto capturer = MakeTestWebContents();
 
   auto& captured_device = MakeDevice(captured, MakeCaptureHandle(u"before"));
-  captured->SetCaptureHandleConfig(MakePermissiveConfigWithHandle(u"before"));
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
+      MakePermissiveConfigWithHandle(u"before"));
 
   auto& callback_helper = MakeCallbackHelper();
-  manager_.OnTabCaptureStarted(kLabel, captured_device,
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, captured_device,
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 
   EXPECT_CALL(callback_helper, Method(kLabel, captured_device.type,
                                       IsCaptureHandle(url::Origin(), u"after")))
       .Times(1);
-  captured->SetCaptureHandleConfig(MakePermissiveConfigWithHandle(u"after"));
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
+      MakePermissiveConfigWithHandle(u"after"));
 }
 
 TEST_F(CaptureHandleManagerTest, CaptureHandleResetByNavigation) {
@@ -216,12 +221,13 @@ TEST_F(CaptureHandleManagerTest, CaptureHandleResetByNavigation) {
   captured->NavigateAndCommit(kGurl1);
   auto& captured_device =
       MakeDevice(captured, MakeCaptureHandle(kOrigin1, u"handle"));
-  captured->SetCaptureHandleConfig(MakePermissiveConfigWithHandle(u"handle"));
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
+      MakePermissiveConfigWithHandle(u"handle"));
 
   auto& callback_helper = MakeCallbackHelper();
-  manager_.OnTabCaptureStarted(kLabel, captured_device,
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, captured_device,
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 
   EXPECT_CALL(callback_helper,
               Method(kLabel, captured_device.type, IsNullCaptureHandle()))
@@ -246,12 +252,12 @@ TEST_F(CaptureHandleManagerTest,
   auto& captured_device = MakeDevice(captured);
 
   auto& callback_helper = MakeCallbackHelper();
-  manager_.OnTabCaptureStarted(kLabel, captured_device,
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, captured_device,
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 
   EXPECT_CALL(callback_helper, Method(_, _, _)).Times(0);
-  captured->SetCaptureHandleConfig(
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
       MakeRestrictiveConfigWithHandle({kAllowedOrigin}, u"handle"));
 }
 
@@ -270,15 +276,15 @@ TEST_F(CaptureHandleManagerTest, CallbackInvokedWhenConfigAllowsCapturer) {
   auto& captured_device = MakeDevice(captured);
 
   auto& callback_helper = MakeCallbackHelper();
-  manager_.OnTabCaptureStarted(kLabel, captured_device,
-                               capturer->GetMainFrame()->GetGlobalId(),
-                               callback_helper.AsCallback());
+  manager_.OnCaptureStarted(kLabel, captured_device,
+                            capturer->GetPrimaryMainFrame()->GetGlobalId(),
+                            callback_helper.AsCallback());
 
   EXPECT_CALL(callback_helper,
               Method(kLabel, captured_device.type,
                      IsCaptureHandle(kCapturedOrigin, u"handle")))
       .Times(1);
-  captured->SetCaptureHandleConfig(
+  captured->GetPrimaryPage().SetCaptureHandleConfig(
       MakeRestrictiveConfigWithHandle({kAllowedOrigin}, u"handle"));
 }
 

@@ -32,19 +32,17 @@
 
 #include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
 
-#include <memory>
-
 #include "base/compiler_specific.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
-#include "third_party/blink/renderer/platform/image-encoders/image_encoder.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "base/types/optional_util.h"
+#include "third_party/blink/renderer/platform/image-encoders/image_encoder_utils.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
-#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSurface.h"
-#include "third_party/skia/include/core/SkSwizzle.h"
-#include "third_party/skia/include/encode/SkJpegEncoder.h"
+#include "ui/gfx/hdr_metadata.h"
+#include "ui/gfx/skia_span_util.h"
 
 namespace blink {
 
@@ -68,33 +66,33 @@ ImageDataBuffer::ImageDataBuffer(scoped_refptr<StaticBitmapImage> image) {
   }
 #endif
 
-  if (paint_image.IsTextureBacked() || paint_image.IsLazyGenerated() ||
-      paint_image_info.alphaType() != kUnpremul_SkAlphaType) {
+  hdr_metadata_ = image->GetHdrMetadata();
+  const SkColorInfo target_color_info =
+      ImageEncoderUtils::GetColorInfoForEncoder(paint_image_info.colorInfo(),
+                                                hdr_metadata_);
+
+  if (target_color_info != paint_image_info.colorInfo() ||
+      paint_image.IsTextureBacked() || paint_image.IsLazyGenerated()) {
     // Unpremul is handled upfront, using readPixels, which will correctly clamp
     // premul color values that would otherwise cause overflows in the skia
     // encoder unpremul logic.
-    SkColorType colorType = paint_image.GetColorType();
-    if (colorType == kRGBA_8888_SkColorType ||
-        colorType == kBGRA_8888_SkColorType)
-      colorType = kN32_SkColorType;  // Work around for bug with JPEG encoder
     const SkImageInfo info =
-        SkImageInfo::Make(paint_image_info.width(), paint_image_info.height(),
-                          paint_image_info.colorType(), kUnpremul_SkAlphaType,
-                          paint_image_info.refColorSpace());
-    const size_t rowBytes = info.minRowBytes();
-    size_t size = info.computeByteSize(rowBytes);
+        SkImageInfo::Make(paint_image_info.dimensions(), target_color_info);
+    const size_t row_bytes = info.minRowBytes();
+    size_t size = info.computeByteSize(row_bytes);
     if (SkImageInfo::ByteSizeOverflowed(size))
       return;
 
     sk_sp<SkData> data = SkData::MakeUninitialized(size);
     pixmap_ = {info, data->writable_data(), info.minRowBytes()};
-    if (!paint_image.readPixels(info, pixmap_.writable_addr(), rowBytes, 0,
+    if (!paint_image.readPixels(info, pixmap_.writable_addr(), row_bytes, 0,
                                 0)) {
       pixmap_.reset();
       return;
     }
     MSAN_CHECK_MEM_IS_INITIALIZED(pixmap_.addr(), pixmap_.computeByteSize());
-    retained_image_ = SkImage::MakeRasterData(info, std::move(data), rowBytes);
+    retained_image_ =
+        SkImages::RasterFromData(info, std::move(data), row_bytes);
   } else {
     retained_image_ = paint_image.GetSwSkImage();
     if (!retained_image_->peekPixels(&pixmap_))
@@ -102,12 +100,22 @@ ImageDataBuffer::ImageDataBuffer(scoped_refptr<StaticBitmapImage> image) {
     MSAN_CHECK_MEM_IS_INITIALIZED(pixmap_.addr(), pixmap_.computeByteSize());
   }
   is_valid_ = true;
-  size_ = IntSize(image->width(), image->height());
 }
 
-ImageDataBuffer::ImageDataBuffer(const SkPixmap& pixmap)
-    : pixmap_(pixmap), size_(IntSize(pixmap.width(), pixmap.height())) {
-  is_valid_ = pixmap_.addr() && !size_.IsEmpty();
+ImageDataBuffer::ImageDataBuffer(const SkPixmap& pixmap,
+                                 const gfx::HDRMetadata& hdr_metadata)
+    : pixmap_(pixmap),
+      hdr_metadata_(hdr_metadata),
+      is_valid_(pixmap_.addr() &&
+                !gfx::Size(pixmap.width(), pixmap.height()).IsEmpty()) {
+  // Any color space or alpha conversion should have been performed by the
+  // caller higher up in the stack (e.g. in CanvasAsyncBlobCreator).
+  if (ImageEncoderUtils::GetColorInfoForEncoder(pixmap_.info().colorInfo(),
+                                                hdr_metadata_) !=
+      pixmap_.info().colorInfo()) {
+    DLOG(WARNING) << "Encoding image without prior color space or alpha "
+                     "conversion; precision or colors may be lost.";
+  }
 }
 
 std::unique_ptr<ImageDataBuffer> ImageDataBuffer::Create(
@@ -120,62 +128,42 @@ std::unique_ptr<ImageDataBuffer> ImageDataBuffer::Create(
 }
 
 std::unique_ptr<ImageDataBuffer> ImageDataBuffer::Create(
-    const SkPixmap& pixmap) {
+    const SkPixmap& pixmap,
+    const gfx::HDRMetadata& hdr_metadata) {
   std::unique_ptr<ImageDataBuffer> buffer =
-      base::WrapUnique(new ImageDataBuffer(pixmap));
+      base::WrapUnique(new ImageDataBuffer(pixmap, hdr_metadata));
   if (!buffer->IsValid())
     return nullptr;
   return buffer;
 }
 
-const unsigned char* ImageDataBuffer::Pixels() const {
+base::span<const uint8_t> ImageDataBuffer::PixelData() const {
   DCHECK(is_valid_);
-  return static_cast<const unsigned char*>(pixmap_.addr());
+  return gfx::SkPixmapToSpan(pixmap_);
 }
 
 bool ImageDataBuffer::EncodeImage(const ImageEncodingMimeType mime_type,
                                   const double& quality,
                                   Vector<unsigned char>* encoded_image) const {
-  return EncodeImageInternal(mime_type, quality, encoded_image, pixmap_);
-}
-
-bool ImageDataBuffer::EncodeImageInternal(const ImageEncodingMimeType mime_type,
-                                          const double& quality,
-                                          Vector<unsigned char>* encoded_image,
-                                          const SkPixmap& pixmap) const {
-  DCHECK(is_valid_);
-
-  if (mime_type == kMimeTypeJpeg) {
-    SkJpegEncoder::Options options;
-    options.fQuality = ImageEncoder::ComputeJpegQuality(quality);
-    options.fAlphaOption = SkJpegEncoder::AlphaOption::kBlendOnBlack;
-    if (options.fQuality == 100) {
-      options.fDownsample = SkJpegEncoder::Downsample::k444;
-    }
-    return ImageEncoder::Encode(encoded_image, pixmap, options);
-  }
-
-  if (mime_type == kMimeTypeWebp) {
-    SkWebpEncoder::Options options = ImageEncoder::ComputeWebpOptions(quality);
-    return ImageEncoder::Encode(encoded_image, pixmap, options);
-  }
-
-  DCHECK_EQ(mime_type, kMimeTypePng);
-  SkPngEncoder::Options options;
-  options.fFilterFlags = SkPngEncoder::FilterFlag::kSub;
-  options.fZLibLevel = 3;
-  return ImageEncoder::Encode(encoded_image, pixmap, options);
+  std::optional<skhdr::Metadata> hdr_metadata =
+      ImageEncoderUtils::ToSkHdrMetadata(hdr_metadata_);
+  return ImageEncoder::Encode(encoded_image, pixmap_,
+                              base::OptionalToPtr(hdr_metadata), mime_type,
+                              quality);
 }
 
 String ImageDataBuffer::ToDataURL(const ImageEncodingMimeType mime_type,
                                   const double& quality) const {
   DCHECK(is_valid_);
   Vector<unsigned char> result;
-  if (!EncodeImageInternal(mime_type, quality, &result, pixmap_))
+  std::optional<skhdr::Metadata> hdr_metadata =
+      ImageEncoderUtils::ToSkHdrMetadata(hdr_metadata_);
+  if (!ImageEncoder::Encode(&result, pixmap_, base::OptionalToPtr(hdr_metadata),
+                            mime_type, quality)) {
     return "data:,";
-
-  return "data:" + ImageEncodingMimeTypeName(mime_type) + ";base64," +
-         Base64Encode(result);
+  }
+  return StrCat({"data:", ImageEncoderUtils::MimeTypeName(mime_type),
+                 ";base64,", Base64Encode(result)});
 }
 
 }  // namespace blink

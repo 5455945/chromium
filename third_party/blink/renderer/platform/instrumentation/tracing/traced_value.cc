@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,8 +42,8 @@ void TracedValue::SetBooleanWithCopiedName(const char* name, bool value) {
 }
 
 void TracedValue::SetString(const char* name, const String& value) {
-  StringUTF8Adaptor adaptor(value);
-  traced_value_->SetString(name, adaptor.AsStringPiece());
+  StringUtf8Adaptor adaptor(value);
+  traced_value_->SetString(name, adaptor.AsStringView());
 }
 
 void TracedValue::SetValue(const char* name, TracedValue* value) {
@@ -52,8 +52,8 @@ void TracedValue::SetValue(const char* name, TracedValue* value) {
 
 void TracedValue::SetStringWithCopiedName(const char* name,
                                           const String& value) {
-  StringUTF8Adaptor adaptor(value);
-  traced_value_->SetStringWithCopiedName(name, adaptor.AsStringPiece());
+  StringUtf8Adaptor adaptor(value);
+  traced_value_->SetStringWithCopiedName(name, adaptor.AsStringView());
 }
 
 void TracedValue::BeginDictionary(const char* name) {
@@ -89,8 +89,8 @@ void TracedValue::PushBoolean(bool value) {
 }
 
 void TracedValue::PushString(const String& value) {
-  StringUTF8Adaptor adaptor(value);
-  traced_value_->AppendString(adaptor.AsStringPiece());
+  StringUtf8Adaptor adaptor(value);
+  traced_value_->AppendString(adaptor.AsStringView());
 }
 
 void TracedValue::BeginArray() {
@@ -109,13 +109,8 @@ void TracedValue::AppendAsTraceFormat(std::string* out) const {
   traced_value_->AppendAsTraceFormat(out);
 }
 
-bool TracedValue::AppendToProto(ProtoAppender* appender) {
+bool TracedValue::AppendToProto(ProtoAppender* appender) const {
   return traced_value_->AppendToProto(appender);
-}
-
-void TracedValue::EstimateTraceMemoryOverhead(
-    base::trace_event::TraceEventMemoryOverhead* overhead) {
-  traced_value_->EstimateTraceMemoryOverhead(overhead);
 }
 
 TracedValueJSON::TracedValueJSON()
@@ -125,15 +120,13 @@ TracedValueJSON::~TracedValueJSON() = default;
 String TracedValueJSON::ToJSON() const {
   return String(
       static_cast<base::trace_event::TracedValueJSON*>(traced_value_.get())
-          ->ToJSON()
-          .c_str());
+          ->ToJSON());
 }
 
 String TracedValueJSON::ToFormattedJSON() const {
   return String(
       static_cast<base::trace_event::TracedValueJSON*>(traced_value_.get())
-          ->ToFormattedJSON()
-          .c_str());
+          ->ToFormattedJSON());
 }
 
 }  // namespace blink

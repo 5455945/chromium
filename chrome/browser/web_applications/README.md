@@ -1,243 +1,199 @@
-# Web Apps
+# Web Apps on Desktop
 
-This directory holds the core of Chromium's web app system. For a quick code
-starting point see [WebAppProvider::Start()](web_app_provider.h), this is the
-entry point where everything web app related begins.
-
-
-## What are web apps?
-
-Simply put web apps are sites that the user installs onto their machine
-mimicking a native app install on their respective operating system.
-
-### User entry points
-
-Sites that meet our install promotion requirements will have an install prompt
-appear in the omnibox on the right.
- - Example site: https://developers.google.com/
-Users can also install any site they like via `Menu > More tools > Create
-shortcut...`.
-
-Users can see all of their web apps on chrome://apps (viewable on non-ChromeOS).
-
-### Developer interface
-
-Sites customise how their installed site integrates at the OS level using a
-[web app manifest](https://www.w3.org/TR/appmanifest/).
-See developer guides for in depth overviews:
- - https://web.dev/progressive-web-apps/
- - https://web.dev/codelab-make-installable/
-
-## Terms & Phrases
-
-### Manifest, or WebManifest
-
-This refers to the the document described by the [appmanifest](https://www.w3.org/TR/appmanifest/) spec, with some extra features described by [manifest-incubations](https://wicg.github.io/manifest-incubations/index.html). This document describes metadata and developer configuration of an installable webapp.
-
-For code representations of the manifest see [the list](docs/manifest_representations.md).
-
-### Manifest Link
-
-A manifest link is something that looks like this in a html document:
-```html
-<link rel="manifest" href="manifest.webmanifest">
-```
-This link ties the manifest to the document, and subsequently used in the spec algorithms defined in [appmanifest](https://www.w3.org/TR/appmanifest/) or [manifest-incubations](https://wicg.github.io/manifest-incubations/index.html) to describe the webapp and determine if it is installable.
-
-### Installable
-
-If a document or page is considered "installable", then the user agent can create some form of installed web app for that page. To be installable, [web_app::CanCreateWebApp](https://source.chromium.org/search?q=web_app::CanCreateWebApp) must return true, where:
-* The user profile must allow webapps to be installed
-* The web contents of the page must not be crashed
-* The last navigation on the web contents must not be an error (like a 404)
-* The url must be `http`, `https`, or `chrome-extension`
-
-This is different than [promotable](#promotable) below, which determines if Chrome will promote installation of the page.
-
-### Promotable
-
-A document is considered "promotable" if it fulfils a set of criteria. This criteria may change to further encourage a better user experience for installable web apps. There are also a few optional checks that depend on the promotability checker. This general criteria as of 2021/04/20:
-* The document contains a manifest link.
-* The linked manifest can be [processed](https://www.w3.org/TR/appmanifest/#processing) according to the spec and is valid.
-* The processed manifest contains the fields:
-  * `name`
-  * `start_url`
-  * `icons` with at least one icon with a valid response that is a parsable image.
-  * `display` field that is not `"browser"`
-* "Serviceworker check": The `start_url` is 'controlled' (can be served by) a [serviceworker](https://developers.google.com/web/ilt/pwa/introduction-to-service-worker). **Optionally turned off** 
-* "Engagement check": The user has engaged with, or interacted with, the page or origin a certain amount (currently at least one click and some seconds on the site). **Optionally turned off** 
-
-Notes:
-* Per spec, the document origin and the `start_url` origin must match.
-* Per spec, the `start_url` origin does not have to match the `manifest_url` origin
-* The `start_url` could be different than the `document_url`.
-
-### Scope
-
-Scope refers to the prefix that a WebApp controls. All paths at or nested inside of a WebApp's scope is thought of as "controlled" or "in-scope" of that WebApp. This is a simple string prefix match. For example, if `scope` is `/my-app`, then the following will be "in-scope":
-* `/my-app/index.html`
-* `/my-app/sub/dir/hello.html`
-* `/my-app-still-prefixed/index.html` (Note: if the scope was `/my-app/`, then this would not be out-of-scope)
-
-And the following will "out-of-scope":
-* `/my-other-app/index.html`
-* `/index.html`
-
-### Display Mode
-
-The `display` of a webapp determines how the developer would like the app to look like to the user. See the [spec](https://www.w3.org/TR/appmanifest/#display-modes) for how the `display` member is processed in the manifest and what the display modes mean.
-
-### User Display Mode
-
-In addition to the developer-specified [`display`](#display-mode), the user can specify how they want a WebApp to be displayed, with the only option being whether to "open in a window" or not. Internally, this is expressed in the same display mode enumeration type as [`display`](#display-mode), but only the `kStandalone` and `kBrowser` values are used to specify "open in a window" and "do not open in a window", respectively.
-
-#### Effective Display Mode
-The psuedocode to determine the ACTUAL display mode a WebApp is displayed is:
-
-```js
-if (user_display_mode == kStandalone)
-  return developer_specified_display_mode;
-else
-  return kBrowser; // Open in a tab.
-```
-
-#### Open-in-window
-This refers to the user specifying that a WebApp should open in the developer specified display mode.
-
-#### Open-in-browser-tab
-This refers to the user specifying that a WebApp should NOT open in a window, and thus the WebApp, if launched, will just be opened in a browser tab.
-
-### Placeholder app
-There are some webapps which are managed by external sources - for example, the enterprise policy force-install apps, or the system web apps for ChromeOS. These are generally not installed by user interaction, and the WebAppProvider needs to install something for each of these apps.
-
-Sometimes, the installation of these apps can fail because the install url is not reachable (usually a cert or login needs to occur, and the url is redirected). When this happens, the system [can](https://source.chromium.org/search?q=ExternalInstallOptions::install_placeholder) install a "placeholder" app, which is a fake application that, when launched navigates to the install url of the application, given by the external app manager.
-
-When any web contents, either in-(placeholder)-app or in the browser, successfully [navigates](https://source.chromium.org/search?q=WebAppTabHelper::ReinstallPlaceholderAppIfNecessary) to a install url that the placeholder app is installed for, the web app installation is restarted for the true app, and after that installation succeeds the placeholder app is uninstalled.
-
-### Locally Installed
-When signing into a non-ChromeOS device, all web apps are installed but not **locally installed**. This means that OS integration is not triggered (so there are no platform shortcuts created), install icons will still show up for the app websites, and the app icon will appear greyed out on chrome://apps.
-
-For an app to become locally installed, the user must do one of the following:
-* Navigate to `chrome://apps`, find the greyed-out icon of the app, right click on it, and select "Install".
-* Follow any of the normal installation routes to install that app (e.g. visit the app page in the browser and interact with the omnibox install icon)
-
-This was done because on non-ChromeOS devices it was considered a bad user experience to fully install all of the profile's web apps (creating platform shortcuts, etc), as this might not be expected by the user.
-
-## What makes up Chromium's implementation?
-
-The task of turning web sites into "apps" in the user's OS environment has many parts to it. Before going into the parts, here is where they live:
-
-[![](docs/webappprovider_component_ownership.jpg)](https://docs.google.com/drawings/d/1TqUF2Pqh2S5qPGyA6njQWxOgSgKQBPePKPIH_srGeRk/edit?usp=sharing)
-
-* The `WebAppProvider` core system lives on the `Profile` object.
-* The `WebAppUiManagerImpl` also lives on the `Profile` object (to avoid deps issues).
-* The `AppBrowserController` (typically `WebAppBrowserController` for our interests) lives on the `Browser` object.
-* The `WebAppTabHelperBase` lives on the `WebContents` object.
-
-While most on-disk storage is done in the [`WebAppSyncBridge`](#webappsyncbridge), the system also sometimes uses the `PrefService`. Most of these prefs live on the `Profile` (`profile->GetPrefs()`), but some prefs are in the global browser prefs (`g_browser_process->local_state()`). See the [storage](#storage) section below for more info.
-
-There is a presentation that also goes over the class structure and dependency diagram [here](https://docs.google.com/presentation/d/1bJfUFPMh7J_Avw3J4HBvAN2RWnV4T9LOXr0JSAgQAvg/pub), but it may be out of date.
-
-Here is more info for some (but not all) of the key parts:
-
-### [`WebAppProvider`](web_app_provider.h)
-
-This is a per-profile object housing all the various web app subsystems. This is
-the "main()" of the web app implementation where everything starts.
-
-
-### [`WebApp`](web_app.h)
-
-This is the representation of an installed web app in RAM. Its member fields
-largely reflect all the ways a site can configure their
-[web app manifest](https://www.w3.org/TR/appmanifest/) plus miscellaneous
-internal bookkeeping and user settings.
-
-
-### [`WebAppRegistrar`](web_app_registrar.h)
-
-This is where all the [`WebApp`](web_app.h)s live in memory and what many other
-subsystems query to look up any given web app's fields. Mutations to the
-registry have to go via [`WebAppSyncBridge`](web_app_sync_bridge.h).
-
-Why is it full of `GetAppXYZ()` getters for every field instead of just
-returning a `WebApp` reference? Because web apps used to be backed by
-`Extension`s and in that mode there were no `WebApp`s; instead everything was
-stored on an `Extension`.
-
-### [`WebAppSyncBridge`](web_app_sync_bridge.h)
-
-This is "bridge" between the WebAppProvider system's in-memory representation of web apps and the sync system's database representation (along with sync system functionality like add/remove/modify operations). This integration is a little complex and deserves it's own document, but it basically:
-* Stores all WebApps into a database and updates the database if any fields change.
-* Updates the system when there are changes from the sync system.
-  * Installs new apps, uninstalls apps the user uninstalled elsewhere, updates metadata like user display mode preference, etc.
-* Tells the sync system if there are local changes (installs, uninstalls, etc).
-
-There is also a slide in a presentation [here](https://docs.google.com/presentation/d/e/2PACX-1vQxYZoCyhZ4xHS4pVuBC9YoE0O-QpW2Wj3scl6jtr3TEYheeod5Ch4b7OVEQEj_Hc6PM1RBGzovug3C/pub?start=false&loop=false&delayms=3000&slide=id.g59d9cb05b6_6_5) which illustrates how this system works, but it may be out of date.
-
-Note: This only stores per-web-app data, and that data will be deleted if the web app is uninstalled. To store data that persists after uninstall, or applies to a more general scope than a single web app, then the `PrefService` can be used, either on the `Profile` object (per-profile data, `profile->GetPrefs()`) or on the browser process (`g_browser_process->local_state()`). Example of needing prefs:
-* Storing if an app was previously installed as a preinstalled app in the past.
-* Information is needed during chrome startup before profiles are loaded.
-* A feature needs to store global data - e.g. "When was the last time we showed the in-product-help banner for any webapp?"
-
-### [`WebAppInstallManager`](web_app_install_manager.h)
-
-This is where web apps are created, updated and removed. The install manager
-spawns [`WebAppInstallTask`](web_app_install_task.h)s for each "job".
-
-Installation comes in many different forms from a simple "here's all the
-[info](components/web_application_info.h) necessary please install it" to
-"please install the site currently loaded in this web contents and fetch all the
-manifest data it specifies" with a few inbetweens.
-
-
-### [`ExternallyManagedAppManager`](components/externally_managed_app_manager.h)
-
-This is for all installs that are not initiated by the user. This includes
-[preinstalled apps](preinstalled_web_app_manager.h),
-[policy installed apps](policy/web_app_policy_manager.h) and
-[system web apps](system_web_apps/system_web_app_manager.h).
-
-These all specify a set of [install URLs](components/external_install_options.h)
-which the `ExternallyManagedAppManager` synchronises the set of currently
-installed web apps with.
-
-
-### [`WebAppInstallFinalizer`](web_app_install_finalizer.h)
-
-This is the tail end of the installation process where we write all our web app
-metadata to [disk](web_app_database.h) and deploy OS integrations (like
-[desktop shortcuts](components/web_app_shortcut.h) and
-[file handlers](components/file_handler_manager.h)) using the
-[`OsIntegrationManager`](components/os_integration_manager.h).
-
-This also manages the uninstallation process.
-
-### [`WebAppUiManager`](../ui/web_applications/web_app_ui_manager_impl.h)
-
-Sometimes we need to query window state from chrome/browser/ui land even though
-our BUILD.gn targets disallow this as it would be a circular dependency. This
-[abstract class](web_app_ui_manager.h) + [impl](web_app_ui_manager_impl.h)
-injects the dependency at link time (see
-[`WebAppUiManager::Create()`](https://source.chromium.org/search?q=WebAppUiManager::Create)'s
-declaration and definition locations).
-
-## Storage
-
-TODO
-
-## Deep Dives
-
-* [Installation Sources & Pipeline](docs/installation_pipeline.md)
-* [Operating system integration](docs/os_integration.md)
-* TODO: Uninstallation
-* TODO: Manifest Update
-
-## Testing
-
-See [the testing docs](docs/testing.md).
+See [presentation slides](https://tinyurl.com/dpwa-architecture-public) about
+the WebAppProvider system architecture.
 
 ## Debugging
 
-Use [chrome://internals/web-app](chrome://internals/web-app) to inspect internal
-web app state.
+Use `chrome://web-app-internals` (generated
+[here](https://source.chromium.org/search?q=WebAppInternalsHandler::BuildDebugInfo))
+to inspect internal web app state. Test failures will print this information out
+automatically to help with debugging.
+
+The codebase has a number of useful DVLOGs (like in `web_app_command_manager.cc`
+and `web_app_lock_manager.cc`). Use the normal vmodule command line args to see
+these (e.g. `--vmodule=web_app*=1`).
+
+For developers wanting to test the behavior of the web app itself, Chrome
+DevTools Protocol can be used. See
+[Instruction of using PWA via CDP](docs/cdp-integration.md).
+
+## Documentation Guidelines
+
+- Markdown documentation (files like this):
+  - Contains information that can't be documented in class-level documentation.
+  - Answers questions like: What is the goal of a group of classes together? How
+    does a group of classes work together?
+  - Explains concepts that are used across different files.
+  - Should be unlikely to become out-of-date.
+    - Any source links should link to a codesearch 'search' page and not the
+      specific line number.
+    - Avoid implementation details.
+- Class-level documentation (documentation in header files):
+  - Answers questions like: Why does this class exist? What is the
+    responsibility of this class? If this class involves a process with stages,
+    what are those stages / steps?
+  - Should be updated actively when that given file is changed.
+- Documentation inside of methods should only be used to explain the "why" of
+  code if it is not obvious.
+
+## What makes up Chromium's implementation?
+
+The task of turning websites into "apps" in the user's OS environment has many
+parts to it. Before going into the parts, here is where they live:
+
+![](docs/webappprovider_component_ownership.jpg)
+
+See the drawing source
+[here](https://docs.google.com/drawings/d/1TqUF2Pqh2S5qPGyA6njQWxOgSgKQBPePKPIH_srGeRk/edit?usp=sharing).
+
+- The `WebAppProvider` core system lives on the `Profile` object.
+- The `WebAppUiManager` interface lives on `WebAppProvider` (implemented by
+  `WebAppUiManagerImpl` in `chrome/browser/ui/web_applications/` to prevent
+  dependency cycles).
+- The `AppBrowserController` (typically `WebAppBrowserController` for our
+  interests) lives on the `Browser` object.
+- The `WebAppTabHelper` lives on the `WebContents` object.
+
+While most on-disk storage is done in the
+[`WebAppSyncBridge`](#databases-and-sources-of-truth), the system also sometimes
+uses the `PrefService`. Most of these prefs live on the `Profile`
+(`profile->GetPrefs()`), but some prefs are in the global browser prefs
+(`g_browser_process->local_state()`).
+
+Presentation:
+[https://tinyurl.com/dpwa-architecture-public](https://tinyurl.com/dpwa-architecture-public)
+
+Older presentation:
+[https://tinyurl.com/bmo-public](https://tinyurl.com/bmo-public)
+
+## Architecture Philosophy
+
+- Tests (especially browser tests / integration tests) should generally operate
+  on the [public interface](#usage) as much as possible. Unit tests can touch
+  internals where convenient to set up initial state, but generally still test
+  the operations via the public interface.
+- [External dependencies](#external-dependencies) should be behind fake-able
+  interfaces, allowing unit & browser tests to swap these out. However, internal
+  parts of our system should not be mocked out or faked - this tightly couples
+  the internal implementation to our tests. If it is impossible to trigger a
+  condition with the public interface, then that condition should be removed (or
+  the public interface improved).
+  - See [this presentation](https://www.youtube.com/watch?v=EZ05e7EMOLM) about
+    testing that might clarify our approach.
+
+## Usage
+
+The safest way to use the WebAppProvider system is using the
+`WebAppCommandScheduler` (via `WebAppProvider::scheduler()`), which serves as an
+entry point for operations on the system for safely reading or writing state.
+Unsafe state access is available via `WebAppProvider::registrar_unsafe()`, but
+this is not guaranteed to be consistent as an async operation could be occurring
+at any time (install, uninstall, update, etc).
+
+For information about creating safe read/write operations on the system, see the
+[commands README.md](commands/README.md).
+
+## External Dependencies
+
+The goal is to have all of these behind an abstraction that has a fake to allow
+easy unit testing of our system. Some of these dependencies are behind a nice
+fake-able interface, and some are not (yet).
+
+- **Extensions** - Some of our code still talks to the extensions system,
+  specifically the `PreinstalledWebAppManager`.
+- **`content::WebContents`**: The WebAppProvider system interacts with
+  `content::WebContents` for various tasks like loading URLs (via
+  `WebAppUrlLoader`), retrieving web app manifest data and icons (via
+  `WebAppDataRetriever` and `WebAppIconDownloader` respectively), and observing
+  navigations and destruction. The `WebContentsManager` serves as a centralized
+  point of dependency for these interactions and acts as a factory for these
+  components, allowing for easier management and faking in tests via the
+  `FakeWebContentsManager`.
+- **OS Integration**: Each OS integration has fairly custom code on each OS to
+  do the operation. The `OsIntegrationManager` and the respective sub-managers
+  own this.
+- **Sync system**: There is a tight coupling between our system and the sync
+  system through the WebAppSyncBridge. Faking this is easy and is handled by the
+  `FakeWebAppProvider`.
+- **UI**: There are parts of the system that are coupled to UI, like showing
+  dialogs, determining information about app windows, etc. These are put behind
+  the `WebAppUiManager`, and faked by the `FakeWebAppUiManager`.
+- **Policy**: Our code depends on the policy system setting its policies in
+  appropriate prefs for us to read. Because we just look at prefs, we don't need
+  a "fake" here.
+
+## Databases and Sources of Truth
+
+These store data for our system. Some of it is per-web-app, and some of it is
+global.
+
+- **`WebAppRegistrar`**: This attempts to unify the reading of much of this
+  data, and also holds an in-memory copy of the database data (in WebApp
+  objects).
+- **`WebAppDatabase`** / **`WebAppSyncBridge`**: This stores the web_app.proto
+  object in a database, which is the preferred place to store information about
+  a web app.
+- **Icons on disk**: These are managed by the `WebAppIconManager` and stored on
+  disk in the user's profile.
+- **Prefs**: The `PrefService` is used to store information that is either
+  global, or needs to persist after a web app is uninstalled. Most of these
+  prefs live on the `Profile` (`profile->GetPrefs()`), but some prefs are in the
+  global browser prefs (`g_browser_process->local_state()`). Some users of
+  prefs:
+  - AppShimRegistry
+  - UserUninstalledPreinstalledWebAppPrefs
+- **OS Integration**: Various OS integration requires storing state on the
+  operating system. Sometimes we are able to read this state back, sometimes
+  not.
+
+Accessing any of this information without an applicable 'lock' on the system is
+considered unsafe.
+
+## Subsystem Orchestration & Architecture
+
+The **[`WebAppProvider`](web_app_provider.h)** is the per-profile coordinator
+housing the desktop PWA engine. Subsystems interact through a unified lifecycle:
+
+1. **Commands & Locks:** All state mutations and asynchronous reads execute as
+   `WebAppCommand`s scheduled via `WebAppCommandScheduler`. Commands acquire
+   fine-grained locks from `WebAppLockManager` to guarantee mutual exclusion and
+   prevent race conditions.
+2. **Resource Access:** Once granted a lock, commands access subsystem state
+   exclusively via lock resource mixins (e.g. `WithAppResources`).
+3. **Persistence & Synchronization:** Changes commit to disk and Chrome Sync via
+   `WebAppSyncBridge` / `WebAppDatabase`, which maintains the in-memory
+   `WebAppRegistrar` and broadcasts lifecycle events through
+   `WebAppInstallManager`.
+4. **External Boundaries & Fakes:** To maintain clean architectural layering and
+   testability, external dependencies are isolated behind interfaces faked by
+   `FakeWebAppProvider`:
+   - **UI:** `WebAppUiManager` (implemented in
+     `chrome/browser/ui/web_applications/`)
+   - **WebContents / Network:** `WebContentsManager`
+   - **OS Integration:** `OsIntegrationManager` (shortcuts, file handlers,
+     protocol handlers)
+   - **Extensions:** `ExtensionsManager` (decouples legacy extension
+     dependencies)
+
+## Deep Dives
+
+- [Commands Architecture](commands/README.md)
+- [Locking Hierarchy & Deadlock Prevention](locks/README.md)
+- [Jobs Architecture](jobs/README.md)
+- [Installation Pipeline](docs/installation_pipeline.md)
+- [Manifest Representations in Code](docs/manifest_representations.md)
+- [Integration Testing Framework](docs/integration-testing-framework.md)
+- [OS Integration](docs/os_integration.md)
+- [Manifest Update Process](docs/manifest_update_process.md)
+- [Isolated Web Apps](docs/isolated_web_apps.md)
+- [WebUI Web App](docs/webui_web_app.md)
+- [Why is this test failing?](docs/why-is-this-test-failing.md)
+- [How to create WebAppIntegration Tests](docs/how-to-create-webapp-integration-tests.md)
+- [Navigation Capturing](docs/navigation_capturing.md)
+- [Desktop UI Controllers](../ui/web_applications/README.md)
+- [Desktop Views UI Dialogs](../ui/views/web_apps/README.md)
+
+## Testing
+
+Please see [testing.md](docs/testing.md).

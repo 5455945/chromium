@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,15 @@
 #include <memory>
 
 #include "media/base/audio_decoder.h"
+#include "media/base/media_types.h"
 #include "media/base/status.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_webcodecs_error_callback.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/modules/webcodecs/codec_config_eval.h"
 #include "third_party/blink/renderer/modules/webcodecs/decoder_template.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 
 namespace media {
@@ -34,10 +32,10 @@ namespace blink {
 
 class AudioData;
 class AudioDecoderConfig;
+class AudioDecoderSupport;
 class EncodedAudioChunk;
 class ExceptionState;
 class AudioDecoderInit;
-class ScriptPromise;
 class V8AudioDataOutputCallback;
 
 class MODULES_EXPORT AudioDecoderTraits {
@@ -66,8 +64,6 @@ class MODULES_EXPORT AudioDecoderTraits {
   static void UpdateDecoderLog(const MediaDecoderType& decoder,
                                const MediaConfigType& media_config,
                                media::MediaLog* media_log);
-  static media::StatusOr<OutputType*> MakeOutput(scoped_refptr<MediaOutputType>,
-                                                 ExecutionContext*);
   static const char* GetName();
 };
 
@@ -79,26 +75,36 @@ class MODULES_EXPORT AudioDecoder : public DecoderTemplate<AudioDecoderTraits> {
                               const AudioDecoderInit*,
                               ExceptionState&);
 
-  static ScriptPromise isConfigSupported(ScriptState*,
-                                         const AudioDecoderConfig*,
-                                         ExceptionState&);
+  static ScriptPromise<AudioDecoderSupport>
+  isConfigSupported(ScriptState*, const AudioDecoderConfig*, ExceptionState&);
+
+  // Returns parsed AudioType if the configuration is valid.
+  static std::optional<media::AudioType> IsValidAudioDecoderConfig(
+      const AudioDecoderConfig& config,
+      String* js_error_message);
 
   // For use by MediaSource and by ::MakeMediaConfig.
-  static CodecConfigEval MakeMediaAudioDecoderConfig(
+  static std::optional<media::AudioDecoderConfig> MakeMediaAudioDecoderConfig(
       const ConfigType& config,
-      MediaConfigType& out_media_config,
-      String& out_console_message);
+      String* js_error_message);
 
   AudioDecoder(ScriptState*, const AudioDecoderInit*, ExceptionState&);
   ~AudioDecoder() override = default;
 
+  // EventTarget interface
+  const AtomicString& InterfaceName() const override;
+
  protected:
-  CodecConfigEval MakeMediaConfig(const ConfigType& config,
-                                  MediaConfigType* out_media_config,
-                                  String* out_console_message) override;
-  media::StatusOr<scoped_refptr<media::DecoderBuffer>> MakeDecoderBuffer(
-      const InputType& chunk,
-      bool verify_key_frame) override;
+  bool IsValidConfig(const ConfigType& config,
+                     String* js_error_message) override;
+  std::optional<media::AudioDecoderConfig> MakeMediaConfig(
+      const ConfigType& config,
+      String* js_error_message) override;
+  base::expected<scoped_refptr<media::DecoderBuffer>, media::DecoderStatus>
+  MakeInput(const InputType& chunk, bool verify_key_frame) override;
+  base::expected<OutputType*, media::DecoderStatus> MakeOutput(
+      scoped_refptr<MediaOutputType> output,
+      ExecutionContext* context) override;
 };
 
 }  // namespace blink

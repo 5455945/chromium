@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/macros.h"
+#include <array>
+
+#include "base/containers/span.h"
 #include "base/strings/string_split.h"
 #include "net/base/net_export.h"
 #include "net/disk_cache/blockfile/addr.h"
@@ -49,10 +51,16 @@ class NET_EXPORT_PRIVATE Stats {
   };
 
   Stats();
+
+  Stats(const Stats&) = delete;
+  Stats& operator=(const Stats&) = delete;
+
   ~Stats();
 
   // Initializes this object with |data| from disk.
-  bool Init(void* data, int num_bytes, Addr address);
+  // The data may be modified in case of some recoverable errors or format
+  // changes.
+  bool Init(base::span<uint8_t> data, Addr address);
 
   // Generates a size distribution histogram.
   void InitSizeHistogram();
@@ -69,8 +77,6 @@ class NET_EXPORT_PRIVATE Stats {
   int64_t GetCounter(Counters counter) const;
 
   void GetItems(StatsItems* items);
-  int GetHitRatio() const;
-  int GetResurrectRatio() const;
   void ResetRatios();
 
   // Returns the lower bound of the space used by entries bigger than 512 KB.
@@ -78,7 +84,7 @@ class NET_EXPORT_PRIVATE Stats {
 
   // Writes the stats into |data|, to be stored at the given cache address.
   // Returns the number of bytes copied.
-  int SerializeStats(void* data, int num_bytes, Addr* address);
+  int SerializeStats(base::span<uint8_t> data, Addr* address);
 
  private:
   // Supports generation of SizeStats histogram data.
@@ -87,10 +93,8 @@ class NET_EXPORT_PRIVATE Stats {
   int GetRatio(Counters hit, Counters miss) const;
 
   Addr storage_addr_;
-  int data_sizes_[kDataSizesLength];
-  int64_t counters_[MAX_COUNTER];
-
-  DISALLOW_COPY_AND_ASSIGN(Stats);
+  std::array<int, kDataSizesLength> data_sizes_;
+  std::array<int64_t, MAX_COUNTER> counters_;
 };
 
 }  // namespace disk_cache

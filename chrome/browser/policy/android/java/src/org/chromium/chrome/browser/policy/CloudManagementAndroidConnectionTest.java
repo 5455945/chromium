@@ -1,35 +1,31 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.policy;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
-/**
- * Unit tests for CloudManagementAndroidConnection.
- */
+/** Unit tests for CloudManagementAndroidConnection. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class CloudManagementAndroidConnectionTest {
-    private static final String CLIENT_ID = "client-id";
     private static final String SAVED_CLIENT_ID = "saved-client-id";
+    private static final String GSERVICES_ANDROID_ID = "gservices-android-id";
 
-    /* Simple implementation of {@link CloudManagementAndroidConnection} that overrides {@link
-     * generateClientIdInternal} for easier testing. */
+    /**
+     * Simple implementation of {@link CloudManagementAndroidConnection} that overrides {@link
+     * generateClientIdInternal} for easier testing.
+     */
     private static class FakeCloudManagementAndroidConnectionDelegate
             implements CloudManagementAndroidConnectionDelegate {
         @Override
-        public String generateClientId() {
-            return CLIENT_ID;
+        public String getGservicesAndroidId() {
+            return GSERVICES_ANDROID_ID;
         }
     }
 
@@ -40,23 +36,21 @@ public final class CloudManagementAndroidConnectionTest {
     }
 
     @Test
-    @SmallTest
     public void testGetClientId_Generated() {
-        Assert.assertEquals(CloudManagementSharedPreferences.readClientId(), "");
+        Assert.assertEquals("", CloudManagementSharedPreferences.readClientId());
 
         CloudManagementAndroidConnection connection =
                 CloudManagementAndroidConnection.getInstance();
-        Assert.assertEquals(connection.getClientId(), CLIENT_ID);
-        Assert.assertEquals(CloudManagementSharedPreferences.readClientId(), CLIENT_ID);
+        Assert.assertEquals(GSERVICES_ANDROID_ID, connection.getClientId());
+        Assert.assertEquals(GSERVICES_ANDROID_ID, CloudManagementSharedPreferences.readClientId());
     }
 
     @Test
-    @SmallTest
     public void testGetClientId_ReadFromSharedPreferences() {
         CloudManagementSharedPreferences.saveClientId(SAVED_CLIENT_ID);
 
         CloudManagementAndroidConnection connection =
                 CloudManagementAndroidConnection.getInstance();
-        Assert.assertEquals(connection.getClientId(), SAVED_CLIENT_ID);
+        Assert.assertEquals(SAVED_CLIENT_ID, connection.getClientId());
     }
 }

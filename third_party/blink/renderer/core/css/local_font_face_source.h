@@ -1,12 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_LOCAL_FONT_FACE_SOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_LOCAL_FONT_FACE_SOURCE_H_
 
-#include "base/memory/weak_ptr.h"
 #include "third_party/blink/renderer/core/css/css_font_face_source.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
@@ -35,6 +35,8 @@ class LocalFontFaceSource final : public CSSFontFaceSource,
   // behaving similar to a RemoteFontFaceSource. This is needed on Windows 7 and
   // 8 where the font lookup map needs to be built first.
   bool IsLocalNonBlocking() const override;
+  bool IsLocalFont() const override { return true; }
+  const AtomicString& GetLocalFontName() const override { return font_name_; }
   bool IsLocalFontAvailable(const FontDescription&) const override;
   bool IsLoaded() const override;
   bool IsLoading() const override;
@@ -47,17 +49,12 @@ class LocalFontFaceSource final : public CSSFontFaceSource,
   void NotifyFontUniqueNameLookupReady();
 
  protected:
-  scoped_refptr<SimpleFontData> CreateLoadingFallbackFontData(
-      const FontDescription&);
+  const SimpleFontData* CreateLoadingFallbackFontData(const FontDescription&);
 
  private:
-  scoped_refptr<SimpleFontData> CreateFontData(
+  const SimpleFontData* CreateFontData(
       const FontDescription&,
       const FontSelectionCapabilities&) override;
-
-  void ReportFontLookup(const FontDescription& font_description,
-                        SimpleFontData* font_data,
-                        bool is_loading_fallback = false) override;
 
   class LocalFontHistograms {
     DISALLOW_NEW();

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,9 +25,14 @@ class MockMessageDispatcherBridge : public MessageDispatcherBridge {
   MOCK_METHOD(void,
               DismissMessage,
               (MessageWrapper * message,
-               content::WebContents* web_contents,
                DismissReason dismiss_reason),
               (override));
+  MOCK_METHOD(bool,
+              EnqueueWindowScopedMessage,
+              (MessageWrapper*, ui::WindowAndroid*, MessagePriority),
+              (override));
+  int MapToJavaDrawableId(int resource_id) override;
+  void SetMessagesEnabledForEmbedder(bool messages_enabled_for_embedder);
 };
 
 }  // namespace messages

@@ -1,9 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/paint_preview/common/file_stream.h"
 
+#include "base/compiler_specific.h"
 #include "base/files/scoped_temp_dir.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,7 +29,7 @@ TEST(PaintPreviewFileStreamTest, TestWriteRead) {
   EXPECT_FALSE(wstream.DidWriteFail());
   base::File read_file(file_path, base::File::FLAG_OPEN |
                                       base::File::FLAG_READ |
-                                      base::File::FLAG_EXCLUSIVE_READ);
+                                      base::File::FLAG_WIN_EXCLUSIVE_READ);
   FileRStream rstream(std::move(read_file));
   EXPECT_FALSE(rstream.isAtEnd());
   std::vector<uint8_t> read_data(test_data.size(), 0xFF);
@@ -119,12 +120,12 @@ TEST(PaintPreviewFileStreamTest, TestSkip) {
   // Write half the data.
   EXPECT_TRUE(wstream.write(test_data.data(), 4));
   EXPECT_EQ(wstream.bytesWritten(), 4U);
-  EXPECT_TRUE(wstream.write(test_data.data() + 4, 4));
+  EXPECT_TRUE(wstream.write(&test_data[4], 4));
   EXPECT_EQ(wstream.bytesWritten(), test_data.size());
   wstream.Close();
   base::File read_file(file_path, base::File::FLAG_OPEN |
                                       base::File::FLAG_READ |
-                                      base::File::FLAG_EXCLUSIVE_READ);
+                                      base::File::FLAG_WIN_EXCLUSIVE_READ);
   FileRStream rstream(std::move(read_file));
   EXPECT_FALSE(rstream.isAtEnd());
   EXPECT_EQ(rstream.read(nullptr, test_data.size()), test_data.size());
@@ -145,7 +146,7 @@ TEST(PaintPreviewFileStreamTest, TestReadAndSkip) {
   wstream.Close();
   base::File read_file(file_path, base::File::FLAG_OPEN |
                                       base::File::FLAG_READ |
-                                      base::File::FLAG_EXCLUSIVE_READ);
+                                      base::File::FLAG_WIN_EXCLUSIVE_READ);
   const size_t kSkipBytes = 3;
   FileRStream rstream(std::move(read_file));
   EXPECT_FALSE(rstream.isAtEnd());

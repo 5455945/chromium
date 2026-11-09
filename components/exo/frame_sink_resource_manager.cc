@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 namespace exo {
 
-FrameSinkResourceManager::FrameSinkResourceManager() {}
+FrameSinkResourceManager::FrameSinkResourceManager() = default;
 FrameSinkResourceManager::~FrameSinkResourceManager() {
   ClearAllCallbacks();
 }
@@ -43,9 +43,11 @@ void FrameSinkResourceManager::ReclaimResource(viz::ReturnedResource resource) {
 void FrameSinkResourceManager::ClearAllCallbacks() {
   for (auto& callback : release_callbacks_)
     std::move(callback.second)
-        .Run(viz::ReturnedResource(viz::kInvalidResourceId, gpu::SyncToken(),
-                                   /*release_fence=*/gfx::GpuFenceHandle(),
-                                   /*count=*/0, /*lost=*/true));
+        .Run(viz::ReturnedResource(
+            viz::kInvalidResourceId,
+            gpu::SharedImageExportResult::CreateEmptyResult(),
+            /*release_fence=*/gfx::GpuFenceHandle(),
+            /*count=*/0, /*lost=*/true));
   release_callbacks_.clear();
 }
 

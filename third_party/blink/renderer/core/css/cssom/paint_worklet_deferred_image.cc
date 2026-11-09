@@ -1,63 +1,68 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/cssom/paint_worklet_deferred_image.h"
 
-#include <utility>
-
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
+#include "base/notreached.h"
+#include "third_party/blink/renderer/core/css/cssom/paint_worklet_input.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
-#include "third_party/blink/renderer/platform/graphics/paint/paint_record.h"
-#include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_shader.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 
 namespace blink {
 
-namespace {
-void DrawInternal(cc::PaintCanvas* canvas,
-                  const FloatRect& dest_rect,
-                  const FloatRect& src_rect,
-                  const SkSamplingOptions& sampling,
-                  const PaintFlags& flags,
-                  Image::ImageClampingMode clamping_mode,
-                  const PaintImage& image) {
-  canvas->drawImageRect(image, src_rect, dest_rect, sampling, &flags,
-                        WebCoreClampingModeToSkiaRectConstraint(clamping_mode));
+scoped_refptr<PaintWorkletDeferredImage> PaintWorkletDeferredImage::Create(
+    scoped_refptr<PaintWorkletInput> input,
+    const gfx::SizeF& size) {
+  return base::AdoptRef(new PaintWorkletDeferredImage(std::move(input), size));
 }
-}  // namespace
+
+PaintWorkletDeferredImage::PaintWorkletDeferredImage(
+    scoped_refptr<PaintWorkletInput> input,
+    const gfx::SizeF& size)
+    : GeneratedImage(size) {
+  // We should never have a `PaintWorkletDeferredImage` in html-in-canvas
+  // (compositing is disabled for native paint animations, CSS Paint API images
+  // are suppressed by `kReadBackAllowedRendering`, and `CanvasImageProvider`
+  // cannot rasterize `DeferredPaintRecord`s). Pessimistically mark these images
+  // as read-back disallowed.
+  image_ = PaintImageBuilder::WithDefault()
+               .set_deferred_paint_record(std::move(input))
+               .set_id(paint_image_id())
+               .set_is_read_back_disallowed(true)
+               .TakePaintImage();
+}
 
 void PaintWorkletDeferredImage::Draw(cc::PaintCanvas* canvas,
-                                     const PaintFlags& flags,
-                                     const FloatRect& dest_rect,
-                                     const FloatRect& src_rect,
-                                     const SkSamplingOptions& sampling,
-                                     RespectImageOrientationEnum,
-                                     ImageClampingMode clamping_mode,
-                                     ImageDecodingMode) {
-  DrawInternal(canvas, dest_rect, src_rect, sampling, flags, clamping_mode,
-               image_);
+                                     const cc::PaintFlags& flags,
+                                     const gfx::RectF& dest_rect,
+                                     const gfx::RectF& src_rect,
+                                     const ImageDrawOptions& draw_options) {
+  canvas->drawImageRect(image_, gfx::RectFToSkRect(src_rect),
+                        gfx::RectFToSkRect(dest_rect),
+                        draw_options.sampling_options, &flags,
+                        ToSkiaRectConstraint(draw_options.clamping_mode));
 }
 
-void PaintWorkletDeferredImage::DrawTile(GraphicsContext& context,
-                                         const FloatRect& src_rect,
-                                         RespectImageOrientationEnum) {
-  DrawInternal(context.Canvas(), FloatRect(), src_rect,
-               context.ImageSamplingOptions(), context.FillFlags(),
-               kClampImageToSourceRect, image_);
+void PaintWorkletDeferredImage::DrawTile(cc::PaintCanvas*,
+                                         const gfx::RectF&,
+                                         const ImageDrawOptions&) {
+  // Because `CreateShader()` is overridden, this hook won't be used.
+  // See `GeneratedImage::CreateShader()`.
+  NOTREACHED();
 }
 
 sk_sp<PaintShader> PaintWorkletDeferredImage::CreateShader(
-    const FloatRect& tile_rect,
+    const gfx::RectF& tile_rect,
     const SkMatrix* pattern_matrix,
-    const FloatRect& src_rect,
-    RespectImageOrientationEnum) {
-  SkRect tile = SkRect::MakeXYWH(tile_rect.X(), tile_rect.Y(),
-                                 tile_rect.Width(), tile_rect.Height());
-  sk_sp<PaintShader> shader = PaintShader::MakeImage(
-      image_, SkTileMode::kRepeat, SkTileMode::kRepeat, pattern_matrix, &tile);
-
-  return shader;
+    const gfx::RectF& src_rect,
+    const ImageDrawOptions&) {
+  SkRect tile = gfx::RectFToSkRect(tile_rect);
+  return PaintShader::MakeImage(image_, SkTileMode::kRepeat,
+                                SkTileMode::kRepeat, pattern_matrix, &tile);
 }
 
 }  // namespace blink

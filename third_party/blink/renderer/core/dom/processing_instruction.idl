@@ -28,4 +28,12 @@
     // ProcessingInstruction includes LinkStyle
     // https://drafts.csswg.org/cssom/#requirements-on-user-agents-implementing-the-xml-stylesheet-processing-instruction
     readonly attribute StyleSheet? sheet;
+
+    [Affects=Nothing] DOMString? getAttribute(DOMString name);
+    [Affects=Nothing] boolean hasAttribute(DOMString name);
+    [RaisesException] void setAttribute(DOMString name, DOMString value);
+    void removeAttribute(DOMString name);
+    [RaisesException] void toggleAttribute(DOMString name, optional boolean force);
+    [Affects=Nothing] boolean hasAttributes();
+    [Affects=Nothing] sequence<DOMString> getAttributeNames();
 };

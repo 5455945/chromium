@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_observer.h"
@@ -20,15 +20,15 @@ namespace message_center {
 // A class that manages all the timers running for individual notification popup
 // windows.  It supports weak pointers in order to allow safe callbacks when
 // timers expire.
-// We can use SupportsWeakPtr<> because PopupTimer does not
-// access this class in its destructor so it is safe to invalidate weak pointers
-// after we destroy |popup_timers_|
 class MESSAGE_CENTER_EXPORT PopupTimersController
-    : public base::SupportsWeakPtr<PopupTimersController>,
-      public MessageCenterObserver,
+    : public MessageCenterObserver,
       public PopupTimer::Delegate {
  public:
   explicit PopupTimersController(MessageCenter* message_center);
+
+  PopupTimersController(const PopupTimersController&) = delete;
+  PopupTimersController& operator=(const PopupTimersController&) = delete;
+
   ~PopupTimersController() override;
 
   // MessageCenterObserver implementation.
@@ -66,14 +66,14 @@ class MESSAGE_CENTER_EXPORT PopupTimersController
 
  private:
   // Weak, global.
-  MessageCenter* message_center_;
+  raw_ptr<MessageCenter> message_center_;
 
   // The PopupTimerCollection contains all the managed timers by their ID.
   using PopupTimerCollection =
       std::map<std::string, std::unique_ptr<PopupTimer>>;
   PopupTimerCollection popup_timers_;
 
-  DISALLOW_COPY_AND_ASSIGN(PopupTimersController);
+  base::WeakPtrFactory<PopupTimersController> weak_ptr_factory_{this};
 };
 
 }  // namespace message_center

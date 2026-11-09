@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_INSERT_TEXT_COMMAND_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_INSERT_TEXT_COMMAND_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/commands/composite_edit_command.h"
 
 namespace blink {
@@ -39,6 +40,7 @@ class CORE_EXPORT InsertTextCommand : public CompositeEditCommand {
 
   InsertTextCommand(Document&,
                     const String& text,
+                    PasswordEchoBehavior,
                     RebalanceType = kRebalanceLeadingAndTrailingWhitespaces);
 
   String TextDataForInputEvent() const final;
@@ -56,6 +58,7 @@ class CORE_EXPORT InsertTextCommand : public CompositeEditCommand {
   friend class TypingCommand;
 
   String text_;
+  PasswordEchoBehavior password_echo_behavior_;
   RebalanceType rebalance_type_;
 };
 

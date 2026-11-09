@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,46 +8,111 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/feature_list.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
+#include "components/webui/flags/flags_state.h"
+#include "components/webui/flags/flags_storage.h"
 #include "ui/display/display_observer.h"
 
 class ChromeBrowserMainParts;
-class UsageScenarioTracker;
+class PrefRegistrySimple;
+class PrefService;
+
+#if !BUILDFLAG(IS_ANDROID)
+class BatteryDischargeReporter;
+class PerformanceInterventionMetricsReporter;
 class PowerMetricsReporter;
+class ProcessMonitor;
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+class PressureMetricsReporter;
+#endif  // BUILDFLAG(IS_LINUX)
+
+#if BUILDFLAG(IS_ANDROID)
+bool IsBundleForMixedDeviceAccordingToVersionCode(
+    const std::string& version_code);
+#endif
+
+namespace web_app {
+class SamplingMetricsProvider;
+}  // namespace web_app
 
 namespace chrome {
 void AddMetricsExtraParts(ChromeBrowserMainParts* main_parts);
 }
 
-namespace ui {
-class InputDeviceEventObserver;
-}  // namespace ui
+#if BUILDFLAG(IS_WIN)
+namespace features {
+BASE_DECLARE_FEATURE(kWindowsIsPinnedToTaskbar3);
+}  // namespace features
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+namespace version_info {
+enum class Channel;
+}  // namespace version_info
+
+double GetTpmMetricsSamplingProbability(version_info::Channel channel);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 class ChromeBrowserMainExtraPartsMetrics : public ChromeBrowserMainExtraParts,
                                            public display::DisplayObserver {
  public:
   ChromeBrowserMainExtraPartsMetrics();
+
+  ChromeBrowserMainExtraPartsMetrics(
+      const ChromeBrowserMainExtraPartsMetrics&) = delete;
+  ChromeBrowserMainExtraPartsMetrics& operator=(
+      const ChromeBrowserMainExtraPartsMetrics&) = delete;
+
   ~ChromeBrowserMainExtraPartsMetrics() override;
 
   // Overridden from ChromeBrowserMainExtraParts:
+  void PreCreateThreads() override;
+  void PostCreateMainMessageLoop() override;
   void PreProfileInit() override;
   void PreBrowserStart() override;
   void PostBrowserStart() override;
   void PreMainMessageLoopRun() override;
+  void PostDestroyThreads() override;
+
+  // Registers local state prefs used by this class.
+  static void RegisterPrefs(PrefRegistrySimple* registry);
+
+ protected:
+  // The --enable-benchmarking flag is transient and should go away after 3
+  // launches. This method handles both the countdown and the reset. This logic
+  // introduces an implicit dependency between the implementation of
+  // chrome://flags and the storage layer in flags_ui::PrefServiceFlagsStorage.
+  // This was deemed better than exposing one-off logic into the
+  // flags_ui::PrefServiceFlagsStorage layer to handle this use case.
+  //
+  // |pref_service| is used to store the countdown state. |storage| is used to
+  // check whether --enable-benchmarking flag has been enabled, and to later
+  // reset the flag if necessary. |access| is unused.
+  //
+  // Protected for testing.
+  static void HandleEnableBenchmarkingCountdown(
+      PrefService* pref_service,
+      std::unique_ptr<flags_ui::FlagsStorage> storage,
+      flags_ui::FlagAccess access);
+
+  // This method asynchronously invokes HandleEnableBenchmarkingCountdown with
+  // parameters (fetched asynchronously).
+  //
+  // Protected for testing.
+  virtual void HandleEnableBenchmarkingCountdownAsync();
 
  private:
-#if defined(OS_MAC)
-  // Records Mac specific metrics.
-  void RecordMacMetrics();
-#endif  // defined(OS_MAC)
-
   // DisplayObserver overrides.
   void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 
@@ -57,29 +122,29 @@ class ChromeBrowserMainExtraPartsMetrics : public ChromeBrowserMainExtraParts,
   // A cached value for the number of displays.
   int display_count_;
 
-  // True iff |this| instance is registered as an observer of the native
-  // screen.
-  bool is_screen_observer_;
+  std::optional<display::ScopedDisplayObserver> display_observer_;
 
-#if defined(USE_OZONE) || defined(USE_X11)
-  std::unique_ptr<ui::InputDeviceEventObserver> input_device_event_observer_;
-#endif  // defined(USE_OZONE) || defined(USE_X11)
+#if !BUILDFLAG(IS_ANDROID)
+  // The process monitor instance. Allows collecting metrics about every child
+  // process.
+  std::unique_ptr<ProcessMonitor> process_monitor_;
 
-#if defined(OS_MAC) || defined(OS_WIN)
-  // Tracks coarse usage scenarios that affect performance during a given
-  // interval of time (e.g. navigating to a new page, watching a video). The
-  // data tracked by this is used by other classes (see below) to report metrics
-  // that correlate performance with usage scenarios, which is necessary to
-  // optimize the performance of specific scenarios.
-  std::unique_ptr<UsageScenarioTracker> usage_scenario_tracker_;
-
-  // Reports power metrics coupled with the data tracked by
-  // |usage_scenario_tracker_|, used to analyze the correlation between usage
-  // scenarios and power consumption.
+  // Reports power metrics.
   std::unique_ptr<PowerMetricsReporter> power_metrics_reporter_;
-#endif  // defined(OS_MAC) || defined (OS_WIN)
 
-  DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainExtraPartsMetrics);
+  std::unique_ptr<BatteryDischargeReporter> battery_discharge_reporter_;
+
+  std::unique_ptr<PerformanceInterventionMetricsReporter>
+      performance_intervention_metrics_reporter_;
+
+  // Reports PWA metrics.
+  std::unique_ptr<web_app::SamplingMetricsProvider> web_app_metrics_provider_;
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_LINUX)
+  // Reports pressure metrics.
+  std::unique_ptr<PressureMetricsReporter> pressure_metrics_reporter_;
+#endif  // BUILDFLAG(IS_LINUX)
 };
 
 #endif  // CHROME_BROWSER_METRICS_CHROME_BROWSER_MAIN_EXTRA_PARTS_METRICS_H_

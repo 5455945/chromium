@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "ash/display/window_tree_host_manager.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "ui/base/ime/chromeos/ime_bridge_observer.h"
-#include "ui/base/ime/input_method_observer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/timer/timer.h"
+#include "ui/base/cursor/cursor_size.h"
+#include "ui/display/manager/display_manager_observer.h"
 #include "ui/events/event_handler.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -26,6 +27,7 @@ class WindowTreeHost;
 
 namespace ui {
 class Layer;
+class LayerSolidColor;
 }  // namespace ui
 
 namespace views {
@@ -43,10 +45,8 @@ namespace ash {
 class ASH_EXPORT DockedMagnifierController
     : public SessionObserver,
       public ui::EventHandler,
-      public ui::IMEBridgeObserver,
-      public ui::InputMethodObserver,
       public views::WidgetObserver,
-      public WindowTreeHostManager::Observer {
+      public display::DisplayManagerObserver {
  public:
   DockedMagnifierController();
   DockedMagnifierController(const DockedMagnifierController&) = delete;
@@ -58,19 +58,21 @@ class ASH_EXPORT DockedMagnifierController
   // the rest of the screen.
   static constexpr int kSeparatorHeight = 10;
 
-  // The value by which the screen height is divided to calculate the height of
-  // the magnifier viewport.
-  static constexpr int kScreenHeightDivisor = 3;
+  // The default value by which the screen height is divided to calculate the
+  // height of the magnifier viewport.
+  static constexpr float kDefaultScreenHeightDivisor = 3.0f;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   // Get the Docked Magnifier settings for the current active user prefs.
   bool GetEnabled() const;
   float GetScale() const;
+  float GetScreenHeightDivisor() const;
 
   // Set the Docked Magnifier settings in the current active user prefs.
   void SetEnabled(bool enabled);
   void SetScale(float scale);
+  void SetScreenHeightDivisor(float screen_height_divisor);
 
   // Maps the current scale value to an index in the range between the minimum
   // and maximum scale values, and steps up or down the scale depending on the
@@ -90,23 +92,11 @@ class ASH_EXPORT DockedMagnifierController
   void OnScrollEvent(ui::ScrollEvent* event) override;
   void OnTouchEvent(ui::TouchEvent* event) override;
 
-  // ui::IMEBridgeObserver:
-  void OnRequestSwitchEngine() override {}
-  void OnInputContextHandlerChanged() override;
-
-  // ui::InputMethodObserver:
-  void OnFocus() override {}
-  void OnBlur() override {}
-  void OnTextInputStateChanged(const ui::TextInputClient* client) override {}
-  void OnInputMethodDestroyed(const ui::InputMethod* input_method) override;
-  void OnShowVirtualKeyboardIfEnabled() override {}
-  void OnCaretBoundsChanged(const ui::TextInputClient* client) override;
-
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
 
-  // ash::WindowTreeHostManager::Observer:
-  void OnDisplayConfigurationChanged() override;
+  // display::DisplayManagerObserver:
+  void OnDidApplyDisplayChanges() override;
 
   // Getters and setters of the enabled status of the Fullscreen Magnifier.
   // We need these so that we can guarantee that both magnifiers are mutually
@@ -125,15 +115,30 @@ class ASH_EXPORT DockedMagnifierController
   // if disabled.
   int GetTotalMagnifierHeight() const;
 
+  // Returns the total bounds of the magnifier region (i.e. magnifier viewport
+  // plus the separator) if the magnifier is shown for the given |root|. Returns
+  // empty bounds otherwise.
+  gfx::Rect GetTotalMagnifierBoundsForRoot(aura::Window* root) const;
+
   const views::Widget* GetViewportWidgetForTesting() const;
 
   const ui::Layer* GetViewportMagnifierLayerForTesting() const;
 
   float GetMinimumPointOfInterestHeightForTesting() const;
 
-  gfx::Point GetLastCaretScreenPointForTesting() const;
-
  private:
+  // If user has large cursor enabled, don't change the cursor size.
+  // Otherwise, set the cursor to be the specified size.
+  void MaybeSetCursorSize(ui::CursorSize cursor_size);
+
+  // If user is starting or continuing to drag the separator, move the
+  // separator and resize the viewport.
+  void MaybePerformViewportResizing(ui::MouseEvent* event);
+
+  // Resets the large docked magnifier viewport resizing cursor if
+  // it was locked because it was over the separator.
+  void MaybeResetResizingCursor();
+
   // Switches the current source root window to |new_root_window| if it's
   // different than |current_source_root_window_|, destroys (if any) old
   // viewport layers and widgets, and recreates them if |new_root_window| is not
@@ -173,10 +178,18 @@ class ASH_EXPORT DockedMagnifierController
   // follow the caret.
   void OnMoveMagnifierTimer();
 
+  // Whether or not user has started resizing the Docked Magnifier.
+  bool is_resizing_ = false;
+
+  // Vertical offset from user's mouse cursor to the top of separator. Stored to
+  // later compute how far offset the new separator position should be based on
+  // location user initially clicked separator.
+  int resize_offset_ = 0;
+
   // The current root window of the source display from which we are reflecting
   // and magnifying into the viewport. It is set to |nullptr| when the magnifier
   // is disabled. The viewport is placed on the same display.
-  aura::Window* current_source_root_window_ = nullptr;
+  raw_ptr<aura::Window> current_source_root_window_ = nullptr;
 
   // The height below which the point of interest is not allowed to go. This is
   // so that we can avoid mirroring the magnifier viewport into itself.
@@ -185,43 +198,36 @@ class ASH_EXPORT DockedMagnifierController
   // Indicates the the above value is valid and doesn't need to be recalculated.
   bool is_minimum_point_of_interest_height_valid_ = false;
 
+  // Indicates cursor is locked, because cursor has moved over separator.
+  bool is_cursor_locked_ = false;
+
   // The viewport widget which occupies the top 1/4th of the current display on
   // which it is shown. It contains all the magnifier related layer.
-  views::Widget* viewport_widget_ = nullptr;
+  raw_ptr<views::Widget> viewport_widget_ = nullptr;
 
   // A solid color layer that shows a dark gray background behind the magnifier
   // layer.
-  std::unique_ptr<ui::Layer> viewport_background_layer_;
+  std::unique_ptr<ui::LayerSolidColor> viewport_background_layer_;
 
   // The layer into which the current display's compositor is reflected and
   // magnified. It is transformed such that only the area around the point of
   // interest shows up in the viewport.
-  std::unique_ptr<ui::Layer> viewport_magnifier_layer_;
+  std::unique_ptr<ui::LayerSolidColor> viewport_magnifier_layer_;
 
   // A solid color layer that shows a black line separating the magnifier
   // viewport from the rest of the display contents.
-  std::unique_ptr<ui::Layer> separator_layer_;
+  std::unique_ptr<ui::LayerSolidColor> separator_layer_;
 
   // The pref service of the currently active user. Can be null in
   // ash_unittests.
-  PrefService* active_user_pref_service_ = nullptr;
-
-  // The currently active input method, observed for caret bounds changes.
-  ui::InputMethod* input_method_ = nullptr;
+  raw_ptr<PrefService> active_user_pref_service_ = nullptr;
 
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 
-  // Most recent caret position.
-  gfx::Point last_caret_screen_point_;
-
   // Timer for moving magnifier window when it fires.
   base::OneShotTimer move_magnifier_timer_;
-
-  // Last move magnifier to rect time - used for ignoring caret updates for a
-  // few milliseconds after the last move magnifier to rect call.
-  base::TimeTicks last_move_magnifier_to_rect_;
 };
 
 }  // namespace ash
 
-#endif  // ASH_ACCESSIBILITY_MAGNIFIER_docked_magnifier_controller_H_
+#endif  // ASH_ACCESSIBILITY_MAGNIFIER_DOCKED_MAGNIFIER_CONTROLLER_H_

@@ -1,28 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/android/cdm/media_drm_storage_factory.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/media/android/cdm/media_drm_origin_id_manager.h"
 #include "chrome/browser/media/android/cdm/media_drm_origin_id_manager_factory.h"
-#include "chrome/browser/media/android/cdm/per_device_provisioning_permission.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/cdm/browser/media_drm_storage_impl.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/web_contents.h"
 #include "media/base/android/media_drm_bridge.h"
 #include "media/base/media_switches.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -36,8 +34,10 @@ using OriginIdReadyCB =
 enum class GetOriginIdResult {
   kSuccessWithPreProvisionedOriginId = 0,
   kSuccessWithNewlyProvisionedOriginId = 1,
+  // Obsolete: Unprovisioned / empty origin ID fallback is not supported.
   kSuccessWithUnprovisionedOriginId = 2,
   kFailureOnPerAppProvisioningDevice = 3,
+  // Obsolete: Devices without per-application provisioning are not supported.
   kFailureOnNonPerAppProvisioningDevice = 4,
   kFailureWithNoFactory = 5,
   kMaxValue = kFailureWithNoFactory,
@@ -53,9 +53,9 @@ GetOriginIdResult ConvertGetOriginIdStatusToResult(GetOriginIdStatus status) {
       break;
   }
 
-  return media::MediaDrmBridge::IsPerApplicationProvisioningSupported()
-             ? GetOriginIdResult::kFailureOnPerAppProvisioningDevice
-             : GetOriginIdResult::kFailureOnNonPerAppProvisioningDevice;
+  // All supported Android devices run Android Q or higher, which supports
+  // per-application provisioning.
+  return GetOriginIdResult::kFailureOnPerAppProvisioningDevice;
 }
 
 // Update UMA with |result|.
@@ -73,14 +73,11 @@ void ReportStatusToUmaAndNotifyCaller(OriginIdReadyCB callback,
 
 void CreateOriginIdWithMediaDrmOriginIdManager(Profile* profile,
                                                OriginIdReadyCB callback) {
-  // Only need to origin IDs if MediaDrm supports it.
-  DCHECK(media::MediaDrmBridge::IsPerOriginProvisioningSupported());
-
   auto* origin_id_manager =
       MediaDrmOriginIdManagerFactory::GetForProfile(profile);
   if (!origin_id_manager) {
     ReportResultToUma(GetOriginIdResult::kFailureWithNoFactory);
-    std::move(callback).Run(false, absl::nullopt);
+    std::move(callback).Run(false, std::nullopt);
     return;
   }
 
@@ -89,30 +86,11 @@ void CreateOriginIdWithMediaDrmOriginIdManager(Profile* profile,
 }
 
 void CreateOriginId(OriginIdReadyCB callback) {
-  // Only need to origin IDs if MediaDrm supports it.
-  DCHECK(media::MediaDrmBridge::IsPerOriginProvisioningSupported());
-
   auto origin_id = base::UnguessableToken::Create();
   DVLOG(2) << __func__ << ": origin_id = " << origin_id;
 
   ReportResultToUma(GetOriginIdResult::kSuccessWithUnprovisionedOriginId);
   std::move(callback).Run(true, origin_id);
-}
-
-void AllowEmptyOriginId(content::RenderFrameHost* render_frame_host,
-                        base::OnceCallback<void(bool)> callback) {
-  DCHECK(media::MediaDrmBridge::IsPerOriginProvisioningSupported());
-
-  if (media::MediaDrmBridge::IsPerApplicationProvisioningSupported()) {
-    // If per-application provisioning is supported by the device, use of the
-    // empty origin ID won't work so don't allow it.
-    std::move(callback).Run(false);
-    return;
-  }
-
-  // Check if the user will allow use of the per-device identifier.
-  RequestPerDeviceProvisioningPermission(render_frame_host,
-                                         std::move(callback));
 }
 
 }  // namespace
@@ -121,18 +99,19 @@ void CreateMediaDrmStorage(
     content::RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<media::mojom::MediaDrmStorage> receiver) {
   DVLOG(1) << __func__;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(render_frame_host);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(render_frame_host);
 
-  content::WebContents* web_contents =
-      content::WebContents::FromRenderFrameHost(render_frame_host);
-  DCHECK(web_contents) << "WebContents not available.";
-
-  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+  content::BrowserContext* browser_context =
+      render_frame_host->GetBrowserContext();
   DCHECK(browser_context) << "BrowserContext not available.";
 
   Profile* profile = Profile::FromBrowserContext(browser_context);
   DCHECK(profile) << "Profile not available.";
+  if (profile->IsOffTheRecord()) {
+    DVLOG(1) << __func__ << ": MediaDrm storage not available off the record.";
+    return;
+  }
 
   PrefService* pref_service = profile->GetPrefs();
   DCHECK(pref_service) << "PrefService not available.";
@@ -151,9 +130,7 @@ void CreateMediaDrmStorage(
           : base::BindRepeating(&CreateOriginId);
 
   // The object will be deleted on connection error, or when the frame navigates
-  // away. See DocumentServiceBase for details.
-  new cdm::MediaDrmStorageImpl(
-      render_frame_host, pref_service, get_origin_id_cb,
-      base::BindRepeating(&AllowEmptyOriginId, render_frame_host),
-      std::move(receiver));
+  // away. See DocumentService for details.
+  base::MakeSelfDeleting<cdm::MediaDrmStorageImpl>(
+      *render_frame_host, pref_service, get_origin_id_cb, std::move(receiver));
 }

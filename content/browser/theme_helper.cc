@@ -1,9 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/theme_helper.h"
 
+#include "base/no_destructor.h"
+#include "build/build_config.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/common/renderer.mojom.h"
 
@@ -25,16 +27,16 @@ mojom::UpdateSystemColorInfoParamsPtr MakeUpdateSystemColorInfoParams(
     ui::NativeTheme* native_theme) {
   mojom::UpdateSystemColorInfoParamsPtr params =
       mojom::UpdateSystemColorInfoParams::New();
-  params->is_dark_mode = native_theme->ShouldUseDarkColors();
-  params->forced_colors = native_theme->InForcedColorsMode();
-  const auto& colors = native_theme->GetSystemColors();
-  params->colors.insert(colors.begin(), colors.end());
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  params->accent_color = native_theme->user_color();
+#endif
 
   return params;
 }
 
 void ThemeHelper::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
-  DCHECK(theme_observation_.IsObservingSource(observed_theme));
+  CHECK(theme_observation_.IsObservingSource(observed_theme),
+        base::NotFatalUntil::M159);
 
   mojom::UpdateSystemColorInfoParamsPtr params =
       MakeUpdateSystemColorInfoParams(observed_theme);

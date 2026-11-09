@@ -1,12 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/audio_parameters.h"
+
 #include <stddef.h>
 
-#include "base/cxx17_backports.h"
+#include <array>
+
+#include "audio_parameters.h"
 #include "base/strings/string_number_conversions.h"
-#include "media/base/audio_parameters.h"
+#include "media/base/channel_layout.h"
+#include "media/base/limits.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
@@ -36,101 +41,127 @@ TEST(AudioParameters, Constructor_ParameterValues) {
   AudioParameters::Format expected_format =
       AudioParameters::AUDIO_PCM_LOW_LATENCY;
   int expected_channels = 6;
-  ChannelLayout expected_channel_layout = CHANNEL_LAYOUT_5_1;
+  constexpr ChannelLayout expected_channel_layout = CHANNEL_LAYOUT_5_1;
   int expected_rate = 44100;
   int expected_samples = 880;
 
-  AudioParameters params(expected_format, expected_channel_layout,
-                         expected_rate, expected_samples);
+  AudioParameters params(
+      expected_format,
+      ChannelLayoutConfig::FromLayout<expected_channel_layout>(), expected_rate,
+      expected_samples);
 
   EXPECT_EQ(expected_format, params.format());
   EXPECT_EQ(expected_channels, params.channels());
   EXPECT_EQ(expected_channel_layout, params.channel_layout());
   EXPECT_EQ(expected_rate, params.sample_rate());
   EXPECT_EQ(expected_samples, params.frames_per_buffer());
+  EXPECT_FALSE(params.RequireEncapsulation());
+}
+
+TEST(AudioParameters, Constructor_ParameterValuesPlusHardwareCapabilities) {
+  AudioParameters::Format expected_format =
+      AudioParameters::AUDIO_PCM_LOW_LATENCY;
+  int expected_channels = 6;
+  constexpr ChannelLayout expected_channel_layout = CHANNEL_LAYOUT_5_1;
+  int expected_rate = 44100;
+  int expected_samples = 880;
+
+  AudioParameters::HardwareCapabilities hardware_capabilities(0, true);
+  hardware_capabilities.require_audio_offload = true;
+  AudioParameters params(
+      expected_format,
+      ChannelLayoutConfig::FromLayout<expected_channel_layout>(), expected_rate,
+      expected_samples, hardware_capabilities);
+
+  EXPECT_EQ(expected_format, params.format());
+  EXPECT_EQ(expected_channels, params.channels());
+  EXPECT_EQ(expected_channel_layout, params.channel_layout());
+  EXPECT_EQ(expected_rate, params.sample_rate());
+  EXPECT_EQ(expected_samples, params.frames_per_buffer());
+  EXPECT_TRUE(params.RequireEncapsulation());
+  EXPECT_TRUE(params.RequireOffload());
+}
+
+TEST(AudioParameters, HardwareCapabilitiesTotalChannelsValidation) {
+  AudioParameters::HardwareCapabilities capabilities(128, 1024);
+  capabilities.total_channels = 0;
+  AudioParameters params(AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                         ChannelLayoutConfig::Stereo(), 48000, 480,
+                         capabilities);
+  EXPECT_TRUE(params.IsValid());
+
+  capabilities.total_channels = limits::kMaxChannels;
+  params.set_hardware_capabilities(capabilities);
+  EXPECT_TRUE(params.IsValid());
+
+  capabilities.total_channels = -1;
+  params.set_hardware_capabilities(capabilities);
+  EXPECT_FALSE(params.IsValid());
+
+  capabilities.total_channels = limits::kMaxChannels + 1;
+  params.set_hardware_capabilities(capabilities);
+  EXPECT_FALSE(params.IsValid());
 }
 
 TEST(AudioParameters, GetBytesPerBuffer) {
   EXPECT_EQ(100, AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                                 CHANNEL_LAYOUT_MONO, 1000, 100)
+                                 ChannelLayoutConfig::Mono(), 1000, 100)
                      .GetBytesPerBuffer(kSampleFormatU8));
   EXPECT_EQ(200, AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                                 CHANNEL_LAYOUT_MONO, 1000, 100)
+                                 ChannelLayoutConfig::Mono(), 1000, 100)
                      .GetBytesPerBuffer(kSampleFormatS16));
   EXPECT_EQ(200, AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                                 CHANNEL_LAYOUT_STEREO, 1000, 100)
+                                 ChannelLayoutConfig::Stereo(), 1000, 100)
                      .GetBytesPerBuffer(kSampleFormatU8));
   EXPECT_EQ(200, AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                                 CHANNEL_LAYOUT_MONO, 1000, 200)
+                                 ChannelLayoutConfig::Mono(), 1000, 200)
                      .GetBytesPerBuffer(kSampleFormatU8));
   EXPECT_EQ(800, AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                                 CHANNEL_LAYOUT_STEREO, 1000, 200)
+                                 ChannelLayoutConfig::Stereo(), 1000, 200)
                      .GetBytesPerBuffer(kSampleFormatS16));
-  EXPECT_EQ(300,
-            AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                            CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 1000, 100)
-                .GetBytesPerBuffer(kSampleFormatU8));
 }
 
 TEST(AudioParameters, Compare) {
-  AudioParameters values[] = {
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                      1000, 100),
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                      1000, 200),
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                      2000, 100),
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                      2000, 200),
-
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
-                      1000, 100),
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
-                      1000, 200),
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
-                      2000, 100),
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
-                      2000, 200),
+  auto values = std::to_array<AudioParameters>({
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(), 1000, 100),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(), 1000, 200),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(), 2000, 100),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(), 2000, 200),
 
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 1000, 100),
+                      ChannelLayoutConfig::Stereo(), 1000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 1000, 200),
+                      ChannelLayoutConfig::Stereo(), 1000, 200),
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 2000, 100),
+                      ChannelLayoutConfig::Stereo(), 2000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 2000, 200),
+                      ChannelLayoutConfig::Stereo(), 2000, 200),
 
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_MONO, 1000, 100),
+                      ChannelLayoutConfig::Mono(), 1000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_MONO, 1000, 200),
+                      ChannelLayoutConfig::Mono(), 1000, 200),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_MONO, 2000, 100),
+                      ChannelLayoutConfig::Mono(), 2000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_MONO, 2000, 200),
+                      ChannelLayoutConfig::Mono(), 2000, 200),
 
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO, 1000, 100),
+                      ChannelLayoutConfig::Stereo(), 1000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO, 1000, 200),
+                      ChannelLayoutConfig::Stereo(), 1000, 200),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO, 2000, 100),
+                      ChannelLayoutConfig::Stereo(), 2000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO, 2000, 200),
+                      ChannelLayoutConfig::Stereo(), 2000, 200),
+  });
 
-      AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 1000, 100),
-      AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 1000, 200),
-      AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 2000, 100),
-      AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC, 2000, 200),
-  };
-
-  for (size_t i = 0; i < base::size(values); ++i) {
-    for (size_t j = 0; j < base::size(values); ++j) {
+  for (size_t i = 0; i < std::size(values); ++i) {
+    for (size_t j = 0; j < std::size(values); ++j) {
       SCOPED_TRACE("i=" + base::NumberToString(i) +
                    " j=" + base::NumberToString(j));
       EXPECT_EQ(i < j, values[i] < values[j]);
@@ -142,15 +173,121 @@ TEST(AudioParameters, Compare) {
 }
 
 TEST(AudioParameters, Constructor_ValidChannelCounts) {
-  int expected_channels = 8;
+  constexpr int expected_channels = 8;
   ChannelLayout expected_layout = CHANNEL_LAYOUT_DISCRETE;
+  ChannelLayoutConfig channel_layout_config(CHANNEL_LAYOUT_DISCRETE,
+                                            expected_channels);
 
   AudioParameters params(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                         expected_layout, 44100, 880);
-  params.set_channels_for_discrete(expected_channels);
+                         channel_layout_config, 44100, 880);
   EXPECT_EQ(expected_channels, params.channels());
   EXPECT_EQ(expected_layout, params.channel_layout());
   EXPECT_TRUE(params.IsValid());
+}
+
+TEST(AudioParameters, Constructor_ValidChannelCountsFor514Downmix) {
+  constexpr int expected_channels = 6;
+  constexpr ChannelLayout expected_layout = CHANNEL_LAYOUT_5_1_4_DOWNMIX;
+  ChannelLayoutConfig channel_layout_config(expected_layout, expected_channels);
+
+  AudioParameters params(AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                         channel_layout_config, 44100, 880);
+  EXPECT_EQ(expected_channels, params.channels());
+  EXPECT_EQ(expected_layout, params.channel_layout());
+  EXPECT_TRUE(params.IsValid());
+
+  params.Reset(AudioParameters::AUDIO_PCM_LOW_LATENCY,
+               ChannelLayoutConfig::FromLayout<expected_layout>(), 44100, 880);
+  EXPECT_EQ(6, params.channels());
+  EXPECT_EQ(expected_layout, params.channel_layout());
+  EXPECT_TRUE(params.IsValid());
+}
+
+TEST(AudioParameters, Constructor_CopyChannelLayoutConfig) {
+  int expected_channels = 8;
+  ChannelLayout expected_layout = CHANNEL_LAYOUT_DISCRETE;
+  ChannelLayoutConfig channel_layout_config(CHANNEL_LAYOUT_DISCRETE,
+                                            expected_channels);
+
+  AudioParameters params1(AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                          channel_layout_config, 44100, 880);
+  AudioParameters params2(AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                          params1.channel_layout_config(), 44100, 880);
+
+  EXPECT_EQ(expected_channels, params2.channels());
+  EXPECT_EQ(expected_layout, params2.channel_layout());
+  EXPECT_TRUE(params2.IsValid());
+}
+
+TEST(AudioParameters, EffectsMaskToStringFuchsiaUsage) {
+  // Fuchsia effects values are represented by an integer encoded in a small
+  // range of bits, so verify that the to-string helper correctly decodes the
+  // integer to a single item, given that bit values overlap.
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_UNKNOWN),
+            "NONE");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND),
+            "FUCHSIA_RENDER_USAGE_BACKGROUND");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_MEDIA),
+            "FUCHSIA_RENDER_USAGE_MEDIA");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION),
+            "FUCHSIA_RENDER_USAGE_INTERRUPTION");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_SYSTEM_AGENT),
+            "FUCHSIA_RENDER_USAGE_SYSTEM_AGENT");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION),
+            "FUCHSIA_RENDER_USAGE_COMMUNICATION");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_ACCESSIBILITY),
+            "FUCHSIA_RENDER_USAGE_ACCESSIBILITY");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                7 << AudioParameters::FUCHSIA_RENDER_USAGE_SHIFT),
+            "FUCHSIA_RENDER_USAGE_INVALID");
+}
+
+TEST(AudioOutputBufferParametersHelperTest, LoadAndWriteGlitchInfo) {
+  AudioOutputBufferParameters params = {};
+  AudioOutputBufferParametersHelper helper;
+
+  // Check initial state.
+  AudioGlitchInfo glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(base::TimeDelta(), glitch_info.duration);
+  EXPECT_EQ(0u, glitch_info.count);
+
+  // Write a glitch.
+  AudioGlitchInfo glitch1{.duration = base::Milliseconds(100), .count = 1};
+  AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(params,
+                                                                glitch1);
+
+  // Check that the glitch is read.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch1.duration, glitch_info.duration);
+  EXPECT_EQ(glitch1.count, glitch_info.count);
+
+  // Check that the internal state is updated, so we don't read it again.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(base::TimeDelta(), glitch_info.duration);
+  EXPECT_EQ(0u, glitch_info.count);
+
+  // Write another glitch.
+  AudioGlitchInfo glitch2{.duration = base::Milliseconds(200), .count = 2};
+  AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(params,
+                                                                glitch2);
+
+  // Check that we read the new glitch.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch2.duration, glitch_info.duration);
+  EXPECT_EQ(glitch2.count, glitch_info.count);
+
+  // Check that a new helper reads the cumulative glitch info.
+  AudioOutputBufferParametersHelper helper2;
+  glitch_info = helper2.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch1.duration + glitch2.duration, glitch_info.duration);
+  EXPECT_EQ(glitch1.count + glitch2.count, glitch_info.count);
 }
 
 }  // namespace media

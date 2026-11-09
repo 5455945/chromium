@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "dbus/object_path.h"
@@ -39,6 +39,12 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattDescriptorClient
   };
 
   FakeBluetoothGattDescriptorClient();
+
+  FakeBluetoothGattDescriptorClient(const FakeBluetoothGattDescriptorClient&) =
+      delete;
+  FakeBluetoothGattDescriptorClient& operator=(
+      const FakeBluetoothGattDescriptorClient&) = delete;
+
   ~FakeBluetoothGattDescriptorClient() override;
 
   // DBusClient override.
@@ -53,7 +59,7 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattDescriptorClient
                  ValueCallback callback,
                  ErrorCallback error_callback) override;
   void WriteValue(const dbus::ObjectPath& object_path,
-                  const std::vector<uint8_t>& value,
+                  base::span<const uint8_t> value,
                   base::OnceClosure callback,
                   ErrorCallback error_callback) override;
 
@@ -87,7 +93,8 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattDescriptorClient
 
     std::unique_ptr<Properties> properties;
   };
-  typedef std::map<dbus::ObjectPath, DescriptorData*> PropertiesMap;
+  typedef std::map<dbus::ObjectPath, raw_ptr<DescriptorData, CtnExperimental>>
+      PropertiesMap;
   PropertiesMap properties_;
 
   // List of observers interested in event notifications from us.
@@ -99,8 +106,6 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattDescriptorClient
   // invalidate its weak pointers before any other members are destroyed.
   base::WeakPtrFactory<FakeBluetoothGattDescriptorClient> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothGattDescriptorClient);
 };
 
 }  // namespace bluez

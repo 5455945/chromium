@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,8 +26,14 @@ aura::client::WindowType GetAuraWindowTypeForWidgetType(
       return aura::client::WINDOW_TYPE_TOOLTIP;
     default:
       NOTREACHED() << "Unhandled widget type " << type;
-      return aura::client::WINDOW_TYPE_UNKNOWN;
   }
+}
+
+bool ShouldEnableDragDrop(const Widget::InitParams& params) {
+  return params.accept_drag_drop.value_or(
+      params.accept_events && params.type != Widget::InitParams::TYPE_TOOLTIP &&
+      params.type != Widget::InitParams::TYPE_POPUP &&
+      params.type != Widget::InitParams::TYPE_DRAG);
 }
 
 }  // namespace views

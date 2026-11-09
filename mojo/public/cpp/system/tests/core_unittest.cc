@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,17 @@
 // TODO(vtl): Maybe rename "CoreCppTest" -> "CoreTest" if/when this gets
 // compiled into a different binary from the C API tests.
 
-#include "mojo/public/cpp/system/core.h"
-
 #include <stddef.h>
 #include <stdint.h>
+
 #include <map>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "mojo/public/cpp/system/buffer.h"
+#include "mojo/public/cpp/system/data_pipe.h"
+#include "mojo/public/cpp/system/functions.h"
+#include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/wait.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -82,16 +86,16 @@ TEST(CoreCppTest, Basic) {
     handle_to_int[h3] = 3;
 
     EXPECT_EQ(4u, handle_to_int.size());
-    EXPECT_FALSE(handle_to_int.find(h0) == handle_to_int.end());
+    EXPECT_TRUE(handle_to_int.contains(h0));
     EXPECT_EQ(0, handle_to_int[h0]);
-    EXPECT_FALSE(handle_to_int.find(h1) == handle_to_int.end());
+    EXPECT_TRUE(handle_to_int.contains(h1));
     EXPECT_EQ(1, handle_to_int[h1]);
-    EXPECT_FALSE(handle_to_int.find(h2) == handle_to_int.end());
+    EXPECT_TRUE(handle_to_int.contains(h2));
     EXPECT_EQ(2, handle_to_int[h2]);
-    EXPECT_FALSE(handle_to_int.find(h3) == handle_to_int.end());
+    EXPECT_TRUE(handle_to_int.contains(h3));
     EXPECT_EQ(3, handle_to_int[h3]);
-    EXPECT_TRUE(handle_to_int.find(Handle(static_cast<MojoHandle>(13579))) ==
-                handle_to_int.end());
+    EXPECT_FALSE(
+        handle_to_int.contains(Handle(static_cast<MojoHandle>(13579))));
 
     // TODO(vtl): With C++11, support |std::unordered_map|s, etc. (Or figure out
     // how to support the variations of |hash_map|.)
@@ -137,7 +141,7 @@ TEST(CoreCppTest, Basic) {
     EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT,
               WriteMessageRaw(h_invalid, nullptr, 0, nullptr, 0,
                               MOJO_WRITE_MESSAGE_FLAG_NONE));
-    char buffer[10] = {0};
+    char buffer[10] = {};
     EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT,
               WriteMessageRaw(h_invalid, buffer, sizeof(buffer), nullptr, 0,
                               MOJO_WRITE_MESSAGE_FLAG_NONE));
@@ -146,7 +150,6 @@ TEST(CoreCppTest, Basic) {
                              MOJO_READ_MESSAGE_FLAG_NONE));
 
     // Basic tests of waiting and closing.
-    MojoHandle hv0 = kInvalidHandleValue;
     {
       ScopedMessagePipeHandle h0;
       ScopedMessagePipeHandle h1;
@@ -157,10 +160,6 @@ TEST(CoreCppTest, Basic) {
       EXPECT_TRUE(h0.get().is_valid());
       EXPECT_TRUE(h1.get().is_valid());
       EXPECT_NE(h0.get().value(), h1.get().value());
-      // Save the handle values, so we can check that things got closed
-      // correctly.
-      hv0 = h0.get().value();
-      MojoHandle hv1 = h1.get().value();
       MojoHandleSignalsState state = h0->QuerySignalsState();
 
       EXPECT_EQ(MOJO_HANDLE_SIGNAL_WRITABLE, state.satisfied_signals);
@@ -188,10 +187,6 @@ TEST(CoreCppTest, Basic) {
       Close(std::move(h1));
       EXPECT_FALSE(h1.get().is_valid());
 
-      // Make sure |h1| is closed.
-      EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT,
-                Wait(Handle(hv1), ~MOJO_HANDLE_SIGNAL_NONE));
-
       EXPECT_EQ(MOJO_RESULT_FAILED_PRECONDITION,
                 Wait(h0.get(), MOJO_HANDLE_SIGNAL_READABLE, &state));
 
@@ -199,9 +194,6 @@ TEST(CoreCppTest, Basic) {
       EXPECT_FALSE(state.satisfiable_signals & MOJO_HANDLE_SIGNAL_WRITABLE);
       EXPECT_FALSE(state.satisfiable_signals & MOJO_HANDLE_SIGNAL_READABLE);
     }
-    // |hv0| should have been closed when |h0| went out of scope, so this close
-    // should fail.
-    EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT, MojoClose(hv0));
 
     // Actually test writing/reading messages.
     {
@@ -247,8 +239,6 @@ TEST(CoreCppTest, Basic) {
       EXPECT_EQ(MOJO_RESULT_OK,
                 WriteMessageRaw(h1.get(), kHello, kHelloSize - 1, handles,
                                 handles_count, MOJO_WRITE_MESSAGE_FLAG_NONE));
-      // |handles[0]| should actually be invalid now.
-      EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT, MojoClose(handles[0]));
 
       // Read "hello" and the sent handle.
       EXPECT_EQ(MOJO_RESULT_OK,
@@ -264,9 +254,7 @@ TEST(CoreCppTest, Basic) {
       EXPECT_NE(kInvalidHandleValue, read_handles[0]->value());
 
       // Read from the sent/received handle.
-      mp.handle1.reset(MessagePipeHandle(read_handles[0]->value()));
-      // Save |handles[0]| to check that it gets properly closed.
-      hv0 = read_handles[0].release().value();
+      mp.handle1.reset(MessagePipeHandle(read_handles[0].release().value()));
 
       EXPECT_EQ(MOJO_RESULT_OK,
                 Wait(mp.handle1.get(), MOJO_HANDLE_SIGNAL_READABLE, &state));
@@ -280,8 +268,48 @@ TEST(CoreCppTest, Basic) {
       EXPECT_EQ(kWorld, std::string(bytes.begin(), bytes.end()));
       EXPECT_TRUE(read_handles.empty());
     }
-    EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT, MojoClose(hv0));
   }
+}
+
+// Regression test: reading a message that carries handles while passing
+// |handles| == nullptr must return an error.
+TEST(CoreCppTest, ReadMessageRawNullHandlesWithHandleBearingMessage) {
+  ScopedMessagePipeHandle h0;
+  ScopedMessagePipeHandle h1;
+  CreateMessagePipe(nullptr, &h0, &h1);
+
+  // Create a second pipe so we have a handle to attach to the message.
+  MessagePipe mp;
+
+  // Attach |mp.handle1| to a message written from h1 -> h0.
+  const char kHello[] = "hello";
+  const uint32_t kHelloSize = static_cast<uint32_t>(sizeof(kHello) - 1);
+  MojoHandle handles[1];
+  handles[0] = mp.handle1.release().value();
+  EXPECT_NE(kInvalidHandleValue, handles[0]);
+  EXPECT_EQ(MOJO_RESULT_OK,
+            WriteMessageRaw(h1.get(), kHello, kHelloSize, handles,
+                            /*num_handles=*/1, MOJO_WRITE_MESSAGE_FLAG_NONE));
+
+  MojoHandleSignalsState state;
+  EXPECT_EQ(MOJO_RESULT_OK,
+            Wait(h0.get(), MOJO_HANDLE_SIGNAL_READABLE, &state));
+
+  // The message carries a handle but must not crash when we pass |handles| ==
+  // nullptr.
+  std::vector<uint8_t> bytes;
+  EXPECT_EQ(MOJO_RESULT_RESOURCE_EXHAUSTED,
+            ReadMessageRaw(h0.get(), &bytes, /*handles=*/nullptr,
+                           MOJO_READ_MESSAGE_FLAG_NONE));
+
+  // On the error path the payload is not populated.
+  EXPECT_TRUE(bytes.empty());
+
+  // No handle leak: the dropped message's destructor closes the attached
+  // handle (the released |mp.handle1|), so |mp.handle0| observes PEER_CLOSED.
+  EXPECT_EQ(MOJO_RESULT_OK,
+            Wait(mp.handle0.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED, &state));
+  EXPECT_TRUE(state.satisfied_signals & MOJO_HANDLE_SIGNAL_PEER_CLOSED);
 }
 
 TEST(CoreCppTest, TearDownWithMessagesEnqueued) {
@@ -295,8 +323,9 @@ TEST(CoreCppTest, TearDownWithMessagesEnqueued) {
     // Send a handle over the previously-establish message pipe.
     ScopedMessagePipeHandle h2;
     ScopedMessagePipeHandle h3;
-    if (CreateMessagePipe(nullptr, &h2, &h3) != MOJO_RESULT_OK)
+    if (CreateMessagePipe(nullptr, &h2, &h3) != MOJO_RESULT_OK) {
       CreateMessagePipe(nullptr, &h2, &h3);  // Must be old EDK.
+    }
 
     // Write a message to |h2|, before we send |h3|.
     const char kWorld[] = "world!";
@@ -319,8 +348,6 @@ TEST(CoreCppTest, TearDownWithMessagesEnqueued) {
     EXPECT_EQ(MOJO_RESULT_OK,
               WriteMessageRaw(h1.get(), kHello, kHelloSize, &h3_value, 1,
                               MOJO_WRITE_MESSAGE_FLAG_NONE));
-    // |h3_value| should actually be invalid now.
-    EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT, MojoClose(h3_value));
 
     EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h0.release().value()));
     EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h1.release().value()));
@@ -337,8 +364,9 @@ TEST(CoreCppTest, TearDownWithMessagesEnqueued) {
     // Send a handle over the previously-establish message pipe.
     ScopedMessagePipeHandle h2;
     ScopedMessagePipeHandle h3;
-    if (CreateMessagePipe(nullptr, &h2, &h3) != MOJO_RESULT_OK)
+    if (CreateMessagePipe(nullptr, &h2, &h3) != MOJO_RESULT_OK) {
       CreateMessagePipe(nullptr, &h2, &h3);  // Must be old EDK.
+    }
 
     // Write a message to |h2|, before we send |h3|.
     const char kWorld[] = "world!";
@@ -361,8 +389,6 @@ TEST(CoreCppTest, TearDownWithMessagesEnqueued) {
     EXPECT_EQ(MOJO_RESULT_OK,
               WriteMessageRaw(h1.get(), kHello, kHelloSize, &h3_value, 1,
                               MOJO_WRITE_MESSAGE_FLAG_NONE));
-    // |h3_value| should actually be invalid now.
-    EXPECT_EQ(MOJO_RESULT_INVALID_ARGUMENT, MojoClose(h3_value));
 
     EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h2.release().value()));
     EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h0.release().value()));
@@ -393,7 +419,7 @@ TEST(CoreCppTest, BasicSharedBuffer) {
   // Map everything.
   ScopedSharedBufferMapping mapping = h0->Map(100);
   ASSERT_TRUE(mapping);
-  static_cast<char*>(mapping.get())[50] = 'x';
+  UNSAFE_TODO(static_cast<char*>(mapping.get())[50]) = 'x';
 
   // Duplicate |h0| to |h1|.
   ScopedSharedBufferHandle h1 =
@@ -404,7 +430,7 @@ TEST(CoreCppTest, BasicSharedBuffer) {
   h0.reset();
 
   // The mapping should still be good.
-  static_cast<char*>(mapping.get())[51] = 'y';
+  UNSAFE_TODO(static_cast<char*>(mapping.get())[51]) = 'y';
 
   // Unmap it.
   mapping.reset();
@@ -415,7 +441,7 @@ TEST(CoreCppTest, BasicSharedBuffer) {
 
   // It should have what we wrote.
   EXPECT_EQ('x', static_cast<char*>(mapping.get())[0]);
-  EXPECT_EQ('y', static_cast<char*>(mapping.get())[1]);
+  UNSAFE_TODO(EXPECT_EQ('y', static_cast<char*>(mapping.get())[1]));
 
   // Unmap it.
   mapping.reset();

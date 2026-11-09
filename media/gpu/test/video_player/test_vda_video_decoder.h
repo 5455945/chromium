@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,18 @@
 #define MEDIA_GPU_TEST_VIDEO_PLAYER_TEST_VDA_VIDEO_DECODER_H_
 
 #include <stdint.h>
+
 #include <map>
 #include <memory>
 
-#include "base/containers/mru_cache.h"
-#include "base/macros.h"
+#include "base/containers/lru_cache.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
-#include "gpu/ipc/service/gpu_memory_buffer_factory.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "media/base/video_decoder.h"
-#include "media/gpu/test/video_player/video_decoder_client.h"
+#include "media/gpu/test/video_player/decoder_wrapper.h"
 #include "media/media_buildflags.h"
 #include "media/video/video_decode_accelerator.h"
 
@@ -24,7 +27,7 @@ class VideoFrame;
 
 namespace test {
 
-class FrameRenderer;
+class FrameRendererDummy;
 
 // The test VDA video decoder translates between the media::VideoDecoder and the
 // media::VideoDecodeAccelerator interfaces. This makes it possible to run
@@ -32,11 +35,16 @@ class FrameRenderer;
 class TestVDAVideoDecoder : public media::VideoDecoder,
                             public VideoDecodeAccelerator::Client {
  public:
+  using OnProvidePictureBuffersCB = base::RepeatingCallback<bool(void)>;
   // Constructor for the TestVDAVideoDecoder.
   TestVDAVideoDecoder(bool use_vd_vda,
+                      OnProvidePictureBuffersCB on_provide_picture_buffers_cb,
                       const gfx::ColorSpace& target_color_space,
-                      FrameRenderer* const frame_renderer,
-                      gpu::GpuMemoryBufferFactory* gpu_memory_buffer_factory);
+                      FrameRendererDummy* const frame_renderer,
+                      bool linear_output = false);
+
+  TestVDAVideoDecoder(const TestVDAVideoDecoder&) = delete;
+  TestVDAVideoDecoder& operator=(const TestVDAVideoDecoder&) = delete;
 
   ~TestVDAVideoDecoder() override;
 
@@ -57,18 +65,12 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
 
  private:
   // media::VideoDecodeAccelerator::Client implementation
-  void NotifyInitializationComplete(Status status) override;
-  void ProvidePictureBuffers(uint32_t requested_num_of_buffers,
-                             VideoPixelFormat format,
-                             uint32_t textures_per_buffer,
-                             const gfx::Size& dimensions,
-                             uint32_t texture_target) override;
-  void ProvidePictureBuffersWithVisibleRect(uint32_t requested_num_of_buffers,
-                                            VideoPixelFormat format,
-                                            uint32_t textures_per_buffer,
-                                            const gfx::Size& dimensions,
-                                            const gfx::Rect& visible_rect,
-                                            uint32_t texture_target) override;
+  void NotifyInitializationComplete(DecoderStatus status) override;
+  void ProvidePictureBuffersWithVisibleRect(
+      uint32_t requested_num_of_buffers,
+      VideoPixelFormat format,
+      const gfx::Size& dimensions,
+      const gfx::Rect& visible_rect) override;
   void DismissPictureBuffer(int32_t picture_buffer_id) override;
   void PictureReady(const Picture& picture) override;
   void ReusePictureBufferTask(int32_t picture_buffer_id);
@@ -79,7 +81,7 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
 
   // Helper thunk to avoid dereferencing WeakPtrs on the wrong thread.
   static void ReusePictureBufferThunk(
-      absl::optional<base::WeakPtr<TestVDAVideoDecoder>> decoder_client,
+      std::optional<base::WeakPtr<TestVDAVideoDecoder>> decoder_client,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       int32_t picture_buffer_id);
 
@@ -101,28 +103,34 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
   // Whether VdVideoDecodeAccelerator is used.
   bool use_vd_vda_;
 
+  // Called when the decoder requests buffers for decoding onto. The callback
+  // returns true if the request should be completed.
+  OnProvidePictureBuffersCB on_provide_picture_buffers_cb_;
+
   // Output color space, used as hint to decoder to avoid conversions.
   const gfx::ColorSpace target_color_space_;
 
   // Frame renderer used to manage GL context.
-  FrameRenderer* const frame_renderer_;
+  const raw_ptr<FrameRendererDummy> frame_renderer_;
 
-#if BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
-  // Owned by VideoDecoderClient.
-  gpu::GpuMemoryBufferFactory* const gpu_memory_buffer_factory_;
-#endif  // BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+  // Whether the decoder output buffers should be allocated with a linear
+  // layout.
+  const bool linear_output_;
+#endif  // BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 
   // Map of video frames the decoder uses as output, keyed on picture buffer id.
   std::map<int32_t, scoped_refptr<VideoFrame>> video_frames_;
   // Map of video frame decoded callbacks, keyed on bitstream buffer id.
   std::map<int32_t, DecodeCB> decode_cbs_;
   // Records the time at which each bitstream buffer decode operation started.
-  base::MRUCache<int32_t, base::TimeDelta> decode_start_timestamps_;
+  base::LRUCache<int32_t, base::TimeDelta> decode_start_timestamps_;
 
   int32_t next_bitstream_buffer_id_ = 0;
   int32_t next_picture_buffer_id_ = 0;
 
   std::unique_ptr<VideoDecodeAccelerator> decoder_;
+  scoped_refptr<gpu::TestSharedImageInterface> test_sii_;
 
   scoped_refptr<base::SequencedTaskRunner> vda_wrapper_task_runner_;
 
@@ -130,8 +138,6 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
 
   base::WeakPtr<TestVDAVideoDecoder> weak_this_;
   base::WeakPtrFactory<TestVDAVideoDecoder> weak_this_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TestVDAVideoDecoder);
 };
 
 }  // namespace test

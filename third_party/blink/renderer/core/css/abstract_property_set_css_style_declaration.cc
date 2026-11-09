@@ -22,12 +22,17 @@
 
 #include "third_party/blink/renderer/core/css/abstract_property_set_css_style_declaration.h"
 
-#include "third_party/blink/renderer/core/css/css_custom_property_declaration.h"
+#include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
+#include "third_party/blink/renderer/core/css/css_style_sheet.h"
+#include "third_party/blink/renderer/core/css/parser/css_property_parser.h"
 #include "third_party/blink/renderer/core/css/style_attribute_mutation_scope.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/style_property_shorthand.h"
 
 namespace blink {
 
@@ -36,12 +41,13 @@ unsigned AbstractPropertySetCSSStyleDeclaration::length() const {
 }
 
 String AbstractPropertySetCSSStyleDeclaration::item(unsigned i) const {
-  if (i >= PropertySet().PropertyCount())
+  if (i >= PropertySet().PropertyCount()) {
     return "";
-  CSSPropertyValueSet::PropertyReference property = PropertySet().PropertyAt(i);
-  if (property.Id() == CSSPropertyID::kVariable)
-    return To<CSSCustomPropertyDeclaration>(property.Value()).GetName();
-  return property.Name().ToAtomicString();
+  }
+  const CSSPropertyName name = PropertySet().PropertyAt(i).Name();
+  return name.IsCustomProperty()
+             ? HygienicToAuthoredCustomPropertyName(name.ToAtomicString())
+             : name.ToAtomicString();
 }
 
 String AbstractPropertySetCSSStyleDeclaration::cssText() const {
@@ -58,21 +64,36 @@ void AbstractPropertySetCSSStyleDeclaration::setCSSText(
   const SecureContextMode mode = execution_context
                                      ? execution_context->GetSecureContextMode()
                                      : SecureContextMode::kInsecureContext;
-  PropertySet().ParseDeclarationList(text, mode, ContextStyleSheet());
+  SetCSSTextInternal(text, mode);
 
   DidMutate(kPropertyChanged);
 
   mutation_scope.EnqueueMutationRecord();
 }
 
+void AbstractPropertySetCSSStyleDeclaration::SetCSSTextInternal(
+    const String& text,
+    SecureContextMode secure_context_mode) {
+  PropertySet().ParseDeclarationList(text, secure_context_mode,
+                                     ContextStyleSheet());
+}
+
+const CSSPropertyValueSet&
+AbstractPropertySetCSSStyleDeclaration::GetPropertyValueSet() const {
+  return PropertySet();
+}
+
 String AbstractPropertySetCSSStyleDeclaration::getPropertyValue(
     const String& property_name) {
   CSSPropertyID property_id =
       CssPropertyID(GetExecutionContext(), property_name);
-  if (!IsValidCSSPropertyID(property_id))
+  if (!IsValidCSSPropertyID(property_id)) {
     return String();
-  if (property_id == CSSPropertyID::kVariable)
-    return PropertySet().GetPropertyValue(AtomicString(property_name));
+  }
+  if (property_id == CSSPropertyID::kVariable) {
+    return PropertySet().GetPropertyValue(
+        AuthoredToHygienicCustomPropertyName(AtomicString(property_name)));
+  }
   return PropertySet().GetPropertyValue(property_id);
 }
 
@@ -80,14 +101,17 @@ String AbstractPropertySetCSSStyleDeclaration::getPropertyPriority(
     const String& property_name) {
   CSSPropertyID property_id =
       CssPropertyID(GetExecutionContext(), property_name);
-  if (!IsValidCSSPropertyID(property_id))
+  if (!IsValidCSSPropertyID(property_id)) {
     return String();
+  }
 
   bool important = false;
-  if (property_id == CSSPropertyID::kVariable)
-    important = PropertySet().PropertyIsImportant(AtomicString(property_name));
-  else
+  if (property_id == CSSPropertyID::kVariable) {
+    important = PropertySet().PropertyIsImportant(
+        AuthoredToHygienicCustomPropertyName(AtomicString(property_name)));
+  } else {
     important = PropertySet().PropertyIsImportant(property_id);
+  }
   return important ? "important" : "";
 }
 
@@ -98,11 +122,13 @@ String AbstractPropertySetCSSStyleDeclaration::GetPropertyShorthand(
 
   // Custom properties don't have shorthands, so we can ignore them here.
   if (!IsValidCSSPropertyID(property_id) ||
-      !CSSProperty::Get(property_id).IsLonghand())
+      !CSSProperty::Get(property_id).IsLonghand()) {
     return String();
+  }
   CSSPropertyID shorthand_id = PropertySet().GetPropertyShorthand(property_id);
-  if (!IsValidCSSPropertyID(shorthand_id))
+  if (!IsValidCSSPropertyID(shorthand_id)) {
     return String();
+  }
   return CSSProperty::Get(shorthand_id).GetPropertyNameString();
 }
 
@@ -112,8 +138,9 @@ bool AbstractPropertySetCSSStyleDeclaration::IsPropertyImplicit(
       CssPropertyID(GetExecutionContext(), property_name);
 
   // Custom properties don't have shorthands, so we can ignore them here.
-  if (property_id < kFirstCSSProperty)
+  if (property_id < kFirstCSSProperty) {
     return false;
+  }
   return PropertySet().IsPropertyImplicit(property_id);
 }
 
@@ -125,12 +152,14 @@ void AbstractPropertySetCSSStyleDeclaration::setProperty(
     ExceptionState& exception_state) {
   CSSPropertyID property_id =
       UnresolvedCSSPropertyID(execution_context, property_name);
-  if (!IsValidCSSPropertyID(property_id))
+  if (!IsValidCSSPropertyID(property_id) || !IsPropertyValid(property_id)) {
     return;
+  }
 
-  bool important = EqualIgnoringASCIICase(priority, "important");
-  if (!important && !priority.IsEmpty())
+  bool important = EqualIgnoringAsciiCase(priority, "important");
+  if (!important && !priority.empty()) {
     return;
+  }
 
   const SecureContextMode mode = execution_context
                                      ? execution_context->GetSecureContextMode()
@@ -144,8 +173,9 @@ String AbstractPropertySetCSSStyleDeclaration::removeProperty(
     ExceptionState& exception_state) {
   CSSPropertyID property_id =
       CssPropertyID(GetExecutionContext(), property_name);
-  if (!IsValidCSSPropertyID(property_id))
+  if (!IsValidCSSPropertyID(property_id)) {
     return String();
+  }
 
   StyleAttributeMutationScope mutation_scope(this);
   WillMutate();
@@ -153,17 +183,33 @@ String AbstractPropertySetCSSStyleDeclaration::removeProperty(
   String result;
   bool changed = false;
   if (property_id == CSSPropertyID::kVariable) {
-    changed =
-        PropertySet().RemoveProperty(AtomicString(property_name), &result);
+    changed = PropertySet().RemoveProperty(
+        AuthoredToHygienicCustomPropertyName(AtomicString(property_name)),
+        &result);
   } else {
     changed = PropertySet().RemoveProperty(property_id, &result);
   }
 
   DidMutate(changed ? kPropertyChanged : kNoChanges);
 
-  if (changed)
+  if (changed) {
     mutation_scope.EnqueueMutationRecord();
+  }
   return result;
+}
+
+void AbstractPropertySetCSSStyleDeclaration::QuietlyRemoveProperty(
+    const String& property_name) {
+  CSSPropertyID property_id =
+      CssPropertyID(GetExecutionContext(), property_name);
+  CHECK(IsValidCSSPropertyID(property_id));
+  if (property_id == CSSPropertyID::kVariable) {
+    PropertySet().RemoveProperty(
+        AuthoredToHygienicCustomPropertyName(AtomicString(property_name)),
+        /*return_text=*/nullptr);
+  } else {
+    PropertySet().RemoveProperty(property_id, /*return_text=*/nullptr);
+  }
 }
 
 const CSSValue*
@@ -174,10 +220,11 @@ AbstractPropertySetCSSStyleDeclaration::GetPropertyCSSValueInternal(
 
 const CSSValue*
 AbstractPropertySetCSSStyleDeclaration::GetPropertyCSSValueInternal(
-    AtomicString custom_property_name) {
+    const AtomicString& custom_property_name) {
   DCHECK_EQ(CSSPropertyID::kVariable,
             CssPropertyID(GetExecutionContext(), custom_property_name));
-  return PropertySet().GetPropertyCSSValue(custom_property_name);
+  return PropertySet().GetPropertyCSSValue(
+      AuthoredToHygienicCustomPropertyName(custom_property_name));
 }
 
 String AbstractPropertySetCSSStyleDeclaration::GetPropertyValueInternal(
@@ -185,40 +232,139 @@ String AbstractPropertySetCSSStyleDeclaration::GetPropertyValueInternal(
   return PropertySet().GetPropertyValue(property_id);
 }
 
+String AbstractPropertySetCSSStyleDeclaration::GetPropertyValueWithHint(
+    const String& property_name,
+    unsigned index) {
+  CSSPropertyID property_id =
+      CssPropertyID(GetExecutionContext(), property_name);
+  if (!IsValidCSSPropertyID(property_id)) {
+    return String();
+  }
+  if (property_id == CSSPropertyID::kVariable) {
+    return PropertySet().GetPropertyValueWithHint(
+        AuthoredToHygienicCustomPropertyName(AtomicString(property_name)),
+        index);
+  }
+  return PropertySet().GetPropertyValue(property_id);
+}
+
+String AbstractPropertySetCSSStyleDeclaration::GetPropertyPriorityWithHint(
+    const String& property_name,
+    unsigned index) {
+  CSSPropertyID property_id =
+      CssPropertyID(GetExecutionContext(), property_name);
+  if (!IsValidCSSPropertyID(property_id)) {
+    return String();
+  }
+  bool important = false;
+  if (property_id == CSSPropertyID::kVariable) {
+    important = PropertySet().PropertyIsImportantWithHint(
+        AuthoredToHygienicCustomPropertyName(AtomicString(property_name)),
+        index);
+  } else {
+    important = PropertySet().PropertyIsImportant(property_id);
+  }
+  return important ? "important" : "";
+}
+
 DISABLE_CFI_PERF
 void AbstractPropertySetCSSStyleDeclaration::SetPropertyInternal(
     CSSPropertyID unresolved_property,
     const String& custom_property_name,
-    const String& value,
+    StringView value,
     bool important,
     SecureContextMode secure_context_mode,
     ExceptionState&) {
+  if (!IsPropertyValid(unresolved_property)) {
+    return;
+  }
   StyleAttributeMutationScope mutation_scope(this);
   WillMutate();
 
-  bool did_change = false;
+  MutableCSSPropertyValueSet::SetResult result;
   if (unresolved_property == CSSPropertyID::kVariable) {
     AtomicString atomic_name(custom_property_name);
-
-    bool is_animation_tainted = IsKeyframeStyle();
-    did_change =
-        PropertySet()
-            .SetProperty(atomic_name, value, important, secure_context_mode,
-                         ContextStyleSheet(), is_animation_tainted)
-            .did_change;
+    PrepareCustomProperty(atomic_name, value, important);
+    result = PropertySet().ParseAndSetCustomProperty(
+        atomic_name, value, important, secure_context_mode, ContextStyleSheet(),
+        /*is_animation_tainted=*/IsKeyframeStyle());
   } else {
-    did_change = PropertySet()
-                     .SetProperty(unresolved_property, value, important,
-                                  secure_context_mode, ContextStyleSheet())
-                     .did_change;
+    result = PropertySet().ParseAndSetProperty(unresolved_property, value,
+                                               important, secure_context_mode,
+                                               ContextStyleSheet());
   }
 
-  DidMutate(did_change ? kPropertyChanged : kNoChanges);
-
-  if (!did_change)
+  if (result == MutableCSSPropertyValueSet::kParseError ||
+      result == MutableCSSPropertyValueSet::kUnchanged) {
+    DidMutate(kNoChanges);
     return;
+  }
+
+  CSSPropertyID property_id = ResolveCSSPropertyID(unresolved_property);
+
+  if (result == MutableCSSPropertyValueSet::kModifiedExisting &&
+      CSSProperty::Get(property_id).SupportsIncrementalStyle()) {
+    DidMutate(kIndependentPropertyChanged);
+  } else {
+    DidMutate(kPropertyChanged);
+  }
 
   mutation_scope.EnqueueMutationRecord();
+}
+
+bool AbstractPropertySetCSSStyleDeclaration::FastPathSetProperty(
+    CSSPropertyID unresolved_property,
+    double value) {
+  if (unresolved_property == CSSPropertyID::kVariable) {
+    // We don't bother with the fast path for custom properties,
+    // even though we could.
+    return false;
+  }
+  if (!std::isfinite(value)) {
+    // Just to be on the safe side.
+    return false;
+  }
+  if (!IsPropertyValid(unresolved_property)) {
+    // There's no point in trying an invalid property further, so treat it as
+    // handled.
+    return true;
+  }
+  CSSPropertyID property_id = ResolveCSSPropertyID(unresolved_property);
+  const CSSProperty& property = CSSProperty::Get(property_id);
+  if (!property.AcceptsNumericLiteral()) {
+    // Not all properties are prepared to accept numeric literals;
+    // e.g. widths could accept doubles but want to convert them
+    // to lengths, and shorthand properties may want to do their
+    // own things. We don't support either yet, only specifically
+    // allowlisted properties.
+    return false;
+  }
+
+  StyleAttributeMutationScope mutation_scope(this);
+  WillMutate();
+
+  const CSSValue* css_value = CSSNumericLiteralValue::Create(
+      value, CSSPrimitiveValue::UnitType::kNumber);
+  MutableCSSPropertyValueSet::SetResult result =
+      PropertySet().SetLonghandProperty(
+          CSSPropertyValue(CSSPropertyName(property_id), *css_value,
+                           /*important=*/false));
+
+  if (result == MutableCSSPropertyValueSet::kParseError ||
+      result == MutableCSSPropertyValueSet::kUnchanged) {
+    DidMutate(kNoChanges);
+    return true;
+  }
+
+  if (result == MutableCSSPropertyValueSet::kModifiedExisting &&
+      property.SupportsIncrementalStyle()) {
+    DidMutate(kIndependentPropertyChanged);
+  } else {
+    DidMutate(kPropertyChanged);
+  }
+
+  mutation_scope.EnqueueMutationRecord();
+  return true;
 }
 
 DISABLE_CFI_PERF

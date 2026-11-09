@@ -1,34 +1,40 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/bindings/receiver.h"
+
 #include <stdint.h>
+
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/bind.h"
 #include "base/threading/thread.h"
+#include "build/blink_buildflags.h"
+#include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/lib/validation_errors.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/bindings/tests/receiver_unittest.test-mojom.h"
 #include "mojo/public/cpp/system/functions.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/sample_interfaces.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/sample_service.mojom.h"
+#include "mojo/public/cpp/test_support/validation_errors_test_util.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_interfaces.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -44,9 +50,13 @@ class ServiceImpl : public sample::Service {
   explicit ServiceImpl(base::OnceClosure destruction_callback)
       : destruction_callback_(std::move(destruction_callback)) {}
 
+  ServiceImpl(const ServiceImpl&) = delete;
+  ServiceImpl& operator=(const ServiceImpl&) = delete;
+
   ~ServiceImpl() override {
-    if (destruction_callback_)
+    if (destruction_callback_) {
       std::move(destruction_callback_).Run();
+    }
   }
 
  private:
@@ -60,13 +70,11 @@ class ServiceImpl : public sample::Service {
   void GetPort(PendingReceiver<sample::Port> port) override {}
 
   base::OnceClosure destruction_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceImpl);
 };
 
 using ReceiverTest = BindingsTestBase;
 
-TEST_P(ReceiverTest, Reset) {
+TEST_F(ReceiverTest, Reset) {
   bool called = false;
   Remote<sample::Service> remote;
 
@@ -87,7 +95,7 @@ TEST_P(ReceiverTest, Reset) {
 }
 
 // Tests that destroying a mojo::Binding closes the bound message pipe handle.
-TEST_P(ReceiverTest, DestroyClosesMessagePipe) {
+TEST_F(ReceiverTest, DestroyClosesMessagePipe) {
   bool encountered_error = false;
   ServiceImpl impl;
   Remote<sample::Service> remote;
@@ -127,7 +135,7 @@ TEST_P(ReceiverTest, DestroyClosesMessagePipe) {
 
 // Tests that the binding's connection error handler gets called when the other
 // end is closed.
-TEST_P(ReceiverTest, Disconnect) {
+TEST_F(ReceiverTest, Disconnect) {
   bool called = false;
   {
     ServiceImpl impl;
@@ -151,7 +159,7 @@ TEST_P(ReceiverTest, Disconnect) {
 
 // Tests that calling Close doesn't result in the connection error handler being
 // called.
-TEST_P(ReceiverTest, ResetDoesntCallDisconnectHandler) {
+TEST_F(ReceiverTest, ResetDoesntCallDisconnectHandler) {
   ServiceImpl impl;
   Remote<sample::Service> remote;
   Receiver<sample::Service> receiver(&impl,
@@ -182,6 +190,9 @@ class ServiceImplWithReceiver : public ServiceImpl {
         &ServiceImplWithReceiver::OnDisconnect, base::Unretained(this)));
   }
 
+  ServiceImplWithReceiver(const ServiceImplWithReceiver&) = delete;
+  ServiceImplWithReceiver& operator=(const ServiceImplWithReceiver&) = delete;
+
  private:
   ~ServiceImplWithReceiver() override { std::move(closure_).Run(); }
 
@@ -189,12 +200,10 @@ class ServiceImplWithReceiver : public ServiceImpl {
 
   Receiver<sample::Service> receiver_;
   base::OnceClosure closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceImplWithReceiver);
 };
 
 // Tests that the receiver may be deleted in its disconnect handler.
-TEST_P(ReceiverTest, SelfDeleteOnDisconnect) {
+TEST_F(ReceiverTest, SelfDeleteOnDisconnect) {
   bool was_deleted = false;
   Remote<sample::Service> remote;
   base::RunLoop run_loop;
@@ -208,7 +217,7 @@ TEST_P(ReceiverTest, SelfDeleteOnDisconnect) {
 }
 
 // Tests that explicitly calling Unbind followed by rebinding works.
-TEST_P(ReceiverTest, Unbind) {
+TEST_F(ReceiverTest, Unbind) {
   ServiceImpl impl;
   Remote<sample::Service> remote;
   Receiver<sample::Service> receiver(&impl,
@@ -258,6 +267,10 @@ TEST_P(ReceiverTest, Unbind) {
 class IntegerAccessorImpl : public sample::IntegerAccessor {
  public:
   IntegerAccessorImpl() = default;
+
+  IntegerAccessorImpl(const IntegerAccessorImpl&) = delete;
+  IntegerAccessorImpl& operator=(const IntegerAccessorImpl&) = delete;
+
   ~IntegerAccessorImpl() override = default;
 
  private:
@@ -266,11 +279,9 @@ class IntegerAccessorImpl : public sample::IntegerAccessor {
     std::move(callback).Run(1, sample::Enum::VALUE);
   }
   void SetInteger(int64_t data, sample::Enum type) override {}
-
-  DISALLOW_COPY_AND_ASSIGN(IntegerAccessorImpl);
 };
 
-TEST_P(ReceiverTest, PauseResume) {
+TEST_F(ReceiverTest, PauseResume) {
   bool called = false;
   base::RunLoop run_loop;
   Remote<sample::Service> remote;
@@ -296,7 +307,7 @@ TEST_P(ReceiverTest, PauseResume) {
 }
 
 // Verifies the disconnect handler is not run while a receiver is paused.
-TEST_P(ReceiverTest, ErrorHandleNotRunWhilePaused) {
+TEST_F(ReceiverTest, ErrorHandleNotRunWhilePaused) {
   bool called = false;
   base::RunLoop run_loop;
   Remote<sample::Service> remote;
@@ -323,12 +334,17 @@ TEST_P(ReceiverTest, ErrorHandleNotRunWhilePaused) {
 class PingServiceImpl : public test::PingService {
  public:
   PingServiceImpl() = default;
+
+  PingServiceImpl(const PingServiceImpl&) = delete;
+  PingServiceImpl& operator=(const PingServiceImpl&) = delete;
+
   ~PingServiceImpl() override = default;
 
   // test::PingService:
   void Ping(PingCallback callback) override {
-    if (ping_handler_)
+    if (ping_handler_) {
       ping_handler_.Run();
+    }
     std::move(callback).Run();
   }
 
@@ -338,8 +354,6 @@ class PingServiceImpl : public test::PingService {
 
  private:
   base::RepeatingClosure ping_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(PingServiceImpl);
 };
 
 class CallbackFilter : public MessageFilter {
@@ -374,7 +388,7 @@ class CallbackFilter : public MessageFilter {
 
 // Verifies that message filters are notified in the order they were added and
 // are always notified before a message is dispatched.
-TEST_P(ReceiverTest, MessageFilter) {
+TEST_F(ReceiverTest, MessageFilter) {
   Remote<test::PingService> remote;
   PingServiceImpl impl;
   Receiver<test::PingService> receiver(&impl,
@@ -408,7 +422,7 @@ void Fail() {
   FAIL() << "Unexpected connection error";
 }
 
-TEST_P(ReceiverTest, FlushForTesting) {
+TEST_F(ReceiverTest, FlushForTesting) {
   bool called = false;
   Remote<sample::Service> remote;
   ServiceImpl impl;
@@ -428,7 +442,7 @@ TEST_P(ReceiverTest, FlushForTesting) {
   EXPECT_TRUE(called);
 }
 
-TEST_P(ReceiverTest, FlushForTestingWithClosedPeer) {
+TEST_F(ReceiverTest, FlushForTestingWithClosedPeer) {
   bool called = false;
   Remote<sample::Service> remote;
   ServiceImpl impl;
@@ -444,7 +458,7 @@ TEST_P(ReceiverTest, FlushForTestingWithClosedPeer) {
   receiver.FlushForTesting();
 }
 
-TEST_P(ReceiverTest, DisconnectWithReason) {
+TEST_F(ReceiverTest, DisconnectWithReason) {
   Remote<sample::Service> remote;
   ServiceImpl impl;
   Receiver<sample::Service> receiver(&impl,
@@ -462,6 +476,24 @@ TEST_P(ReceiverTest, DisconnectWithReason) {
   run_loop.Run();
 }
 
+TEST_F(ReceiverTest, PendingRemoteResetWithReason) {
+  ServiceImpl impl;
+  Receiver<sample::Service> receiver(&impl);
+  PendingRemote<sample::Service> pending_remote =
+      receiver.BindNewPipeAndPassRemote();
+
+  base::RunLoop run_loop;
+  receiver.set_disconnect_with_reason_handler(base::BindLambdaForTesting(
+      [&](uint32_t custom_reason, const std::string& description) {
+        EXPECT_EQ(1234u, custom_reason);
+        EXPECT_EQ("hello", description);
+        run_loop.Quit();
+      }));
+
+  pending_remote.ResetWithReason(1234u, "hello");
+  run_loop.Run();
+}
+
 template <typename T>
 struct WeakPtrImplRefTraits {
   using PointerType = base::WeakPtr<T>;
@@ -473,7 +505,7 @@ struct WeakPtrImplRefTraits {
 template <typename T>
 using WeakReceiver = Receiver<T, WeakPtrImplRefTraits<T>>;
 
-TEST_P(ReceiverTest, CustomImplPointerType) {
+TEST_F(ReceiverTest, CustomImplPointerType) {
   PingServiceImpl impl;
   base::WeakPtrFactory<test::PingService> weak_factory(&impl);
 
@@ -502,7 +534,7 @@ TEST_P(ReceiverTest, CustomImplPointerType) {
   }
 }
 
-TEST_P(ReceiverTest, ReportBadMessage) {
+TEST_F(ReceiverTest, ReportBadMessage) {
   bool called = false;
   Remote<test::PingService> remote;
   auto pending_receiver = remote.BindNewPipeAndPassReceiver();
@@ -529,7 +561,7 @@ TEST_P(ReceiverTest, ReportBadMessage) {
   SetDefaultProcessErrorHandler(base::NullCallback());
 }
 
-TEST_P(ReceiverTest, GetBadMessageCallback) {
+TEST_F(ReceiverTest, GetBadMessageCallback) {
   Remote<test::PingService> remote;
   base::RunLoop run_loop;
   PingServiceImpl impl;
@@ -556,7 +588,7 @@ TEST_P(ReceiverTest, GetBadMessageCallback) {
   SetDefaultProcessErrorHandler(base::NullCallback());
 }
 
-TEST_P(ReceiverTest, InvalidPendingReceivers) {
+TEST_F(ReceiverTest, InvalidPendingReceivers) {
   PendingReceiver<sample::Service> uninitialized_pending;
   EXPECT_FALSE(uninitialized_pending);
 
@@ -566,7 +598,7 @@ TEST_P(ReceiverTest, InvalidPendingReceivers) {
   EXPECT_FALSE(null_pending);
 }
 
-TEST_P(ReceiverTest, GenericPendingReceiver) {
+TEST_F(ReceiverTest, GenericPendingReceiver) {
   Remote<sample::Service> remote;
   GenericPendingReceiver receiver;
   EXPECT_FALSE(receiver.is_valid());
@@ -585,7 +617,7 @@ TEST_P(ReceiverTest, GenericPendingReceiver) {
   EXPECT_FALSE(receiver.is_valid());
 }
 
-TEST_P(ReceiverTest, GenericPendingAssociatedReceiver) {
+TEST_F(ReceiverTest, GenericPendingAssociatedReceiver) {
   AssociatedRemote<sample::Service> remote;
   GenericPendingAssociatedReceiver receiver;
   EXPECT_FALSE(receiver.is_valid());
@@ -620,10 +652,10 @@ class RebindTestImpl : public mojom::RebindTestInterface {
   }
 
  private:
-  base::WaitableEvent* event_;
+  raw_ptr<base::WaitableEvent> event_;
 };
 
-TEST_P(ReceiverTest, RebindWithScheduledSyncMessage) {
+TEST_F(ReceiverTest, RebindWithScheduledSyncMessage) {
   base::WaitableEvent event{base::WaitableEvent::ResetPolicy::MANUAL,
                             base::WaitableEvent::InitialState::NOT_SIGNALED};
   RebindTestImpl impl{&event};
@@ -671,6 +703,10 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
     receiver_.set_disconnect_handler(base::BindOnce(
         &TestGenericBinderImpl::OnDisconnect, base::Unretained(this)));
   }
+
+  TestGenericBinderImpl(const TestGenericBinderImpl&) = delete;
+  TestGenericBinderImpl& operator=(const TestGenericBinderImpl&) = delete;
+
   ~TestGenericBinderImpl() override = default;
 
   bool connected() const { return connected_; }
@@ -694,8 +730,9 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_receiver_storage_ = std::move(receiver);
       next_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
   void BindReceiver(GenericPendingReceiver receiver) override {
@@ -703,8 +740,9 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_receiver_storage_ = std::move(receiver);
       next_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
   void BindOptionalAssociatedReceiver(
@@ -713,8 +751,9 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_associated_receiver_storage_ = std::move(receiver);
       next_associated_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
   void BindAssociatedReceiver(
@@ -723,35 +762,36 @@ class TestGenericBinderImpl : public mojom::TestGenericBinder {
       *next_associated_receiver_storage_ = std::move(receiver);
       next_associated_receiver_storage_ = nullptr;
     }
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
   }
 
  private:
   void OnDisconnect() {
-    if (wait_loop_)
+    if (wait_loop_) {
       wait_loop_->Quit();
+    }
     connected_ = false;
   }
 
   Receiver<mojom::TestGenericBinder> receiver_;
   bool connected_ = true;
-  absl::optional<base::RunLoop> wait_loop_;
-  GenericPendingReceiver* next_receiver_storage_ = nullptr;
-  GenericPendingAssociatedReceiver* next_associated_receiver_storage_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TestGenericBinderImpl);
+  std::optional<base::RunLoop> wait_loop_;
+  raw_ptr<GenericPendingReceiver> next_receiver_storage_ = nullptr;
+  raw_ptr<GenericPendingAssociatedReceiver> next_associated_receiver_storage_ =
+      nullptr;
 };
 
 using ReceiverSerializationTest = ReceiverTest;
 
-TEST_P(ReceiverSerializationTest, NullGenericPendingReceiver) {
+TEST_F(ReceiverSerializationTest, NullGenericPendingReceiver) {
   Remote<mojom::TestGenericBinder> remote;
+  GenericPendingReceiver receiver;
   TestGenericBinderImpl binder(remote.BindNewPipeAndPassReceiver());
 
   // Bind a null, nullable receiver.
   remote->BindOptionalReceiver(GenericPendingReceiver());
-  GenericPendingReceiver receiver;
   binder.WaitForNextReceiver(&receiver);
   EXPECT_FALSE(receiver.is_valid());
 
@@ -796,13 +836,13 @@ TEST_P(ReceiverSerializationTest, NullGenericPendingReceiver) {
   EXPECT_FALSE(binder.connected());
 }
 
-TEST_P(ReceiverSerializationTest, NullGenericPendingAssociatedReceiver) {
+TEST_F(ReceiverSerializationTest, NullGenericPendingAssociatedReceiver) {
   Remote<mojom::TestGenericBinder> remote;
+  GenericPendingAssociatedReceiver receiver;
   TestGenericBinderImpl binder(remote.BindNewPipeAndPassReceiver());
 
   // Bind a null, nullable associated receiver.
   remote->BindOptionalAssociatedReceiver(GenericPendingAssociatedReceiver());
-  GenericPendingAssociatedReceiver receiver;
   binder.WaitForNextAssociatedReceiver(&receiver);
   EXPECT_FALSE(receiver.is_valid());
 
@@ -850,7 +890,7 @@ TEST_P(ReceiverSerializationTest, NullGenericPendingAssociatedReceiver) {
 
 using SelfOwnedReceiverTest = BindingsTestBase;
 
-TEST_P(SelfOwnedReceiverTest, CloseDestroysImplAndPipe) {
+TEST_F(SelfOwnedReceiverTest, CloseDestroysImplAndPipe) {
   base::RunLoop run_loop;
   bool disconnected = false;
   bool was_deleted = false;
@@ -884,7 +924,7 @@ TEST_P(SelfOwnedReceiverTest, CloseDestroysImplAndPipe) {
   ASSERT_TRUE(was_deleted);
 }
 
-TEST_P(SelfOwnedReceiverTest, DisconnectDestroysImplAndPipe) {
+TEST_F(SelfOwnedReceiverTest, DisconnectDestroysImplAndPipe) {
   Remote<sample::Service> remote;
   bool was_deleted = false;
   base::RunLoop run_loop;
@@ -905,14 +945,93 @@ TEST_P(SelfOwnedReceiverTest, DisconnectDestroysImplAndPipe) {
   EXPECT_TRUE(was_deleted);
 }
 
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(ReceiverTest);
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(SelfOwnedReceiverTest);
+class MultiprocessReceiverTest : public core::test::MojoTestBase,
+                                 public mojom::TestInterface1 {
+ public:
+  ~MultiprocessReceiverTest() override = default;
 
-// These tests only make sense for serialized messages.
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    ReceiverSerializationTest,
-    testing::Values(mojo::BindingsTestSerializationMode::kSerializeBeforeSend));
+ private:
+  base::test::SingleThreadTaskEnvironment task_environment_;
+};
+
+class InterfaceDropper : public mojom::InterfaceDropper {
+ public:
+  explicit InterfaceDropper(PendingReceiver<mojom::InterfaceDropper> receiver)
+      : receiver_(this, std::move(receiver)) {}
+
+  void set_disconnect_handler(base::OnceClosure callback) {
+    receiver_.set_disconnect_handler(std::move(callback));
+  }
+
+ private:
+  // mojom::InterfaceDropper:
+  void Drop(PendingRemote<mojom::TestInterface1> remote) override {
+    // Nothing to do but let `remote` go out of scope, effectively closing it
+    // and signaling peer closure to the Receiver in another process.
+  }
+
+  Receiver<mojom::InterfaceDropper> receiver_;
+};
+
+DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessReceiverClient,
+                                  MultiprocessReceiverTest,
+                                  test_pipe) {
+  // This client sits in a loop listening for new interface remotes to drop.
+  // Each dropped remote sends a signal back to the main test process to notify
+  // the receiver there, and those notifications are meant to elicit a potential
+  // race in the internal dispatch machinery of that receiver. The client
+  // terminates when the InterfaceDropper is disconnected, which happens once
+  // the test is done throwing remotes at it.
+  MojoHandle dropper_pipe;
+  ReadMessageWithHandle(test_pipe, &dropper_pipe);
+  base::RunLoop loop;
+  InterfaceDropper dropper{PendingReceiver<mojom::InterfaceDropper>(
+      MakeScopedHandle(MessagePipeHandle(dropper_pipe)))};
+  dropper.set_disconnect_handler(loop.QuitClosure());
+  loop.Run();
+  MojoClose(test_pipe);
+}
+
+// iOS doesn't have the ability to fork processes yet.
+#if !BUILDFLAG(IS_IOS)
+TEST_F(MultiprocessReceiverTest, MultiprocessReceiver) {
+  // Regression test for https://crbug.com/1371860.
+  //
+  // This test establishes a remote connection to an InterfaceDropper
+  // implementation in the client process; then it continually creates new test
+  // interface endpoints, sending one end to the client to be destroyed from
+  // there; and binding the other end as a local receiver that is also
+  // immediately destroyed.
+  //
+  // This effectively exercises potential races between receiver lifetime and
+  // incoming IO thread activity, as an event to signal peer closure on the new
+  // receiver may arrive on the IO thread during receiver teardown on this
+  // thread.
+  RunTestClient("MultiprocessReceiverClient", [&](MojoHandle client) {
+    Remote<mojom::InterfaceDropper> dropper;
+    MojoHandle dropper_pipe =
+        dropper.BindNewPipeAndPassReceiver().PassPipe().release().value();
+    WriteMessageWithHandle(client, "", dropper_pipe);
+
+    constexpr size_t kNumIterations = 1000;
+    constexpr size_t kNumReceiversPerIteration = 10;
+    for (size_t i = 0; i < kNumIterations; ++i) {
+      std::vector<std::optional<Receiver<mojom::TestInterface1>>> receivers(
+          kNumReceiversPerIteration);
+      for (auto& receiver : receivers) {
+        receiver.emplace(this);
+        auto remote = receiver->BindNewPipeAndPassRemote();
+
+        // Installing a disconnect handler ensures that we set up the machinery
+        // necessary to watch for incoming IO events targeting this receiver.
+        receiver->set_disconnect_handler(base::BindOnce([] {}));
+
+        dropper->Drop(std::move(remote));
+      }
+    }
+  });
+}
+#endif  // BUILDFLAG(USE_BLINK)
 
 }  // namespace receiver_unittest
 }  // namespace test

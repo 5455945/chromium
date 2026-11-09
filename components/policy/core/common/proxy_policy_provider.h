@@ -1,11 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_POLICY_CORE_COMMON_PROXY_POLICY_PROVIDER_H_
 #define COMPONENTS_POLICY_CORE_COMMON_PROXY_POLICY_PROVIDER_H_
 
-#include "base/macros.h"
+#include <memory>
+#include <variant>
+
+#include "base/memory/raw_ptr.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
 #include "components/policy/policy_export.h"
 
@@ -40,15 +43,39 @@ class POLICY_EXPORT ProxyPolicyProvider
     : public ConfigurationPolicyProvider,
       public ConfigurationPolicyProvider::Observer {
  public:
+  // Unspecified vs. nullptr:
+  // - Unspecified: The delegate has never been set since construction.
+  // - nullptr: The delegate has been set to nullptr explicitly via
+  //   SetOwnedDelegate/SetUnownedDelegate. This makes IsFirstPolicyLoadComplete
+  //   return true.
+  // Can transition from Unspecified to Owned/Unowned, but cannot transition
+  // back to Unspecified afterwards.
+  //
+  // State transition diagram:
+  //
+  //  ctor --> Unspecified
+  //               |
+  //               +--SetOwnedDelegate----> OwnedDelegate
+  //               |                              ^
+  //               |                              | SetOwned/UnownedDelegate
+  //               |                              v
+  //               +--SetUnownedDelegate-> UnownedDelegate
+  using Unspecified = std::monostate;
+  using OwnedDelegate = std::unique_ptr<ConfigurationPolicyProvider>;
+  using UnownedDelegate = raw_ptr<ConfigurationPolicyProvider>;
+
   ProxyPolicyProvider();
+  ProxyPolicyProvider(const ProxyPolicyProvider&) = delete;
+  ProxyPolicyProvider& operator=(const ProxyPolicyProvider&) = delete;
   ~ProxyPolicyProvider() override;
 
   // Updates the provider this proxy delegates to.
-  void SetDelegate(ConfigurationPolicyProvider* delegate);
+  void SetOwnedDelegate(OwnedDelegate delegate);
+  void SetUnownedDelegate(UnownedDelegate delegate);
 
   // ConfigurationPolicyProvider:
   void Shutdown() override;
-  void RefreshPolicies() override;
+  void RefreshPolicies(PolicyFetchReason reason) override;
   bool IsFirstPolicyLoadComplete(PolicyDomain domain) const override;
 
   // ConfigurationPolicyProvider::Observer:
@@ -61,10 +88,15 @@ class POLICY_EXPORT ProxyPolicyProvider
   }
 
  private:
-  ConfigurationPolicyProvider* delegate_;
-  bool block_policy_updates_for_testing_ = false;
+  ConfigurationPolicyProvider* delegate();
+  const ConfigurationPolicyProvider* delegate() const;
 
-  DISALLOW_COPY_AND_ASSIGN(ProxyPolicyProvider);
+  void ResetDelegate();
+  void OnDelegateChanged();
+
+  std::variant<Unspecified, UnownedDelegate, OwnedDelegate> delegate_ =
+      Unspecified();
+  bool block_policy_updates_for_testing_ = false;
 };
 
 }  // namespace policy

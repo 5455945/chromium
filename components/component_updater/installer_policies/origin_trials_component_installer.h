@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "components/component_updater/component_installer.h"
@@ -23,7 +22,6 @@ class OriginTrialsComponentInstallerPolicy : public ComponentInstallerPolicy {
  public:
   static void GetComponentHash(std::vector<uint8_t>* hash);
   OriginTrialsComponentInstallerPolicy() = default;
-  ~OriginTrialsComponentInstallerPolicy() override = default;
   OriginTrialsComponentInstallerPolicy(
       const OriginTrialsComponentInstallerPolicy&) = delete;
   OriginTrialsComponentInstallerPolicy& operator=(
@@ -33,17 +31,17 @@ class OriginTrialsComponentInstallerPolicy : public ComponentInstallerPolicy {
   void GetHash(std::vector<uint8_t>* hash) const override;
 
  private:
-  bool VerifyInstallation(const base::DictionaryValue& manifest,
+  bool VerifyInstallation(const base::DictValue& manifest,
                           const base::FilePath& install_dir) const override;
   bool SupportsGroupPolicyEnabledComponentUpdates() const override;
   bool RequiresNetworkEncryption() const override;
   update_client::CrxInstaller::Result OnCustomInstall(
-      const base::DictionaryValue& manifest,
+      const base::DictValue& manifest,
       const base::FilePath& install_dir) override;
   void OnCustomUninstall() override;
   void ComponentReady(const base::Version& version,
                       const base::FilePath& install_dir,
-                      std::unique_ptr<base::DictionaryValue> manifest) override;
+                      base::DictValue manifest) override;
   base::FilePath GetRelativeInstallDir() const override;
   std::string GetName() const override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,14 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/types/expected.h"
 #include "components/password_manager/core/browser/hsts_query.h"
-#include "components/password_manager/core/browser/password_store_consumer.h"
+#include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
+#include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "url/origin.h"
 
 namespace password_manager {
@@ -49,8 +53,7 @@ class HttpPasswordStoreMigrator : public PasswordStoreConsumer {
 
     // Notify the embedder that |forms| were migrated to HTTPS. |forms| contain
     // the updated HTTPS scheme.
-    virtual void ProcessMigratedForms(
-        std::vector<std::unique_ptr<PasswordForm>> forms) = 0;
+    virtual void ProcessMigratedForms(std::vector<PasswordForm> forms) = 0;
   };
 
   // |https_origin| should specify a valid HTTPS URL.
@@ -58,14 +61,21 @@ class HttpPasswordStoreMigrator : public PasswordStoreConsumer {
                             PasswordStoreInterface* store,
                             network::mojom::NetworkContext* network_context,
                             Consumer* consumer);
+
+  HttpPasswordStoreMigrator(const HttpPasswordStoreMigrator&) = delete;
+  HttpPasswordStoreMigrator& operator=(const HttpPasswordStoreMigrator&) =
+      delete;
+
   ~HttpPasswordStoreMigrator() override;
 
   // Creates HTTPS version of |http_form|.
   static PasswordForm MigrateHttpFormToHttps(const PasswordForm& http_form);
 
   // PasswordStoreConsumer:
-  void OnGetPasswordStoreResults(
-      std::vector<std::unique_ptr<PasswordForm>> results) override;
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      PasswordStoreInterface* store,
+      base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+          results_or_error) override;
 
   // Callback for PostHSTSQueryForHostAndNetworkContext.
   void OnHSTSQueryResult(HSTSResult is_hsts);
@@ -73,8 +83,8 @@ class HttpPasswordStoreMigrator : public PasswordStoreConsumer {
  private:
   void ProcessPasswordStoreResults();
 
-  PasswordStoreInterface* const store_;
-  Consumer* consumer_;
+  const raw_ptr<PasswordStoreInterface> store_;
+  raw_ptr<Consumer> consumer_;
 
   // |ProcessPasswordStoreResults| requires that both |OnHSTSQueryResult| and
   // |OnGetPasswordStoreResults| have returned. Since this can happen in an
@@ -83,11 +93,10 @@ class HttpPasswordStoreMigrator : public PasswordStoreConsumer {
   bool got_hsts_query_result_ = false;
   bool got_password_store_results_ = false;
   HttpPasswordMigrationMode mode_ = HttpPasswordMigrationMode::kMove;
-  std::vector<std::unique_ptr<PasswordForm>> results_;
+  std::vector<PasswordForm> results_;
   url::Origin http_origin_domain_;
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(HttpPasswordStoreMigrator);
+  base::WeakPtrFactory<HttpPasswordStoreMigrator> weak_ptr_factory_{this};
 };
 
 }  // namespace password_manager

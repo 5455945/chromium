@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 #define REMOTING_PROTOCOL_WEBRTC_EVENT_LOG_DATA_H_
 
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // A data store which records the most recent RTC event log data. This is
 // written to by an RTCEventLogOutput instance, which is owned by the
@@ -43,34 +45,38 @@ class WebrtcEventLogData {
   // than RTCP packets). If that ever happens, the log_event will be stored in
   // a new section anyway - the buffer's reserved capacity may be exceeded and
   // re-allocation may occur.
-  void Write(const std::string& log_event);
+  void Write(std::string_view log_event);
 
   // Removes all event data, so the instance can be reused.
   void Clear();
 
  private:
   // Returns true if a new section must be created to store the event.
-  bool NeedNewSection(const std::string& log_event) const;
+  bool NeedNewSection(size_t log_event_size) const
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Appends a new section of zero size to the end of the list, removing the
   // oldest one if necessary. On return, the section at the end (the list's
   // "back") will be empty, ready to accept the new data.
-  void CreateNewSection();
+  void CreateNewSection() EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
-  base::circular_deque<LogSection> sections_;
+  // Removes all event data without acquiring lock_.
+  void ClearLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  mutable base::Lock lock_;
+  base::circular_deque<LogSection> sections_ GUARDED_BY(lock_);
 
   // Value chosen to keep the memory-usage within reasonable limits, but also
   // allow for recording "most" sessions entirely.
   const int kMaxSections = 1000;
-  int max_sections_ = kMaxSections;
+  int max_sections_ GUARDED_BY(lock_) = kMaxSections;
 
   // A larger value will reduce memory-allocations at the cost of discarding a
   // larger chunk of the event log.
   const int kMaxSectionSize = 102400;  // 100K
-  int max_section_size_ = kMaxSectionSize;
+  int max_section_size_ GUARDED_BY(lock_) = kMaxSectionSize;
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_WEBRTC_EVENT_LOG_DATA_H_

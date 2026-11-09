@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ import android.os.Bundle;
 interface IChildProcessTest {
   // Called by the service when onConnectionSetup is received. Echos back the parameters received
   // so far.
-  oneway void onConnectionSetup(boolean serviceCreatedCalled, in Bundle serviceBundle, in Bundle connectionBundle);
+  oneway void onConnectionSetup(boolean serviceCreatedCalled, in Bundle serviceBundle);
 
   oneway void onLoadNativeLibrary(boolean loadedSuccessfully);
 

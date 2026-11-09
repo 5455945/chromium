@@ -1,21 +1,23 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/image_writer_private/image_writer_utility_client.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
-#include "chrome/browser/service_sandbox_type.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/services/removable_storage_writer/public/mojom/removable_storage_writer.mojom.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/service_process_host.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace extensions {
@@ -46,6 +48,11 @@ class ImageWriterUtilityClient::RemovableStorageWriterClientImpl
                        image_writer_utility_client_));
   }
 
+  RemovableStorageWriterClientImpl(const RemovableStorageWriterClientImpl&) =
+      delete;
+  RemovableStorageWriterClientImpl& operator=(
+      const RemovableStorageWriterClientImpl&) = delete;
+
   ~RemovableStorageWriterClientImpl() override = default;
 
  private:
@@ -53,7 +60,7 @@ class ImageWriterUtilityClient::RemovableStorageWriterClientImpl
     image_writer_utility_client_->OperationProgress(progress);
   }
 
-  void Complete(const absl::optional<std::string>& error) override {
+  void Complete(const std::optional<std::string>& error) override {
     if (error) {
       image_writer_utility_client_->OperationFailed(error.value());
     } else {
@@ -64,9 +71,7 @@ class ImageWriterUtilityClient::RemovableStorageWriterClientImpl
   mojo::Receiver<chrome::mojom::RemovableStorageWriterClient> receiver_;
 
   // |image_writer_utility_client_| owns |this|.
-  ImageWriterUtilityClient* const image_writer_utility_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(RemovableStorageWriterClientImpl);
+  const raw_ptr<ImageWriterUtilityClient> image_writer_utility_client_;
 };
 
 ImageWriterUtilityClient::ImageWriterUtilityClient(
@@ -84,8 +89,9 @@ ImageWriterUtilityClient::~ImageWriterUtilityClient() {
 // static
 scoped_refptr<ImageWriterUtilityClient> ImageWriterUtilityClient::Create(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner) {
-  if (g_factory_for_testing)
+  if (g_factory_for_testing) {
     return g_factory_for_testing->Run();
+  }
   return base::WrapRefCounted(new ImageWriterUtilityClient(task_runner));
 }
 
@@ -101,7 +107,7 @@ void ImageWriterUtilityClient::Write(ProgressCallback progress_callback,
                                      const base::FilePath& source,
                                      const base::FilePath& target) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!removable_storage_writer_client_);
+  CHECK(!removable_storage_writer_client_, base::NotFatalUntil::M161);
 
   progress_callback_ = std::move(progress_callback);
   success_callback_ = std::move(success_callback);
@@ -123,7 +129,7 @@ void ImageWriterUtilityClient::Verify(ProgressCallback progress_callback,
                                       const base::FilePath& source,
                                       const base::FilePath& target) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!removable_storage_writer_client_);
+  CHECK(!removable_storage_writer_client_, base::NotFatalUntil::M161);
 
   progress_callback_ = std::move(progress_callback);
   success_callback_ = std::move(success_callback);
@@ -141,11 +147,11 @@ void ImageWriterUtilityClient::Verify(ProgressCallback progress_callback,
 
 void ImageWriterUtilityClient::Cancel(CancelCallback cancel_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(cancel_callback);
+  CHECK(cancel_callback, base::NotFatalUntil::M161);
 
   ResetRequest();
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                   std::move(cancel_callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, std::move(cancel_callback));
 }
 
 void ImageWriterUtilityClient::Shutdown() {
@@ -158,8 +164,9 @@ void ImageWriterUtilityClient::Shutdown() {
 void ImageWriterUtilityClient::BindServiceIfNeeded() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (removable_storage_writer_)
+  if (removable_storage_writer_) {
     return;
+  }
 
   content::ServiceProcessHost::Launch(
       removable_storage_writer_.BindNewPipeAndPassReceiver(),
@@ -179,22 +186,25 @@ void ImageWriterUtilityClient::OnConnectionError() {
 }
 
 void ImageWriterUtilityClient::OperationProgress(int64_t progress) {
-  if (progress_callback_)
+  if (progress_callback_) {
     progress_callback_.Run(progress);
+  }
 }
 
 void ImageWriterUtilityClient::OperationSucceeded() {
   SuccessCallback success_callback = std::move(success_callback_);
   ResetRequest();
-  if (success_callback)
+  if (success_callback) {
     std::move(success_callback).Run();
+  }
 }
 
 void ImageWriterUtilityClient::OperationFailed(const std::string& error) {
   ErrorCallback error_callback = std::move(error_callback_);
   ResetRequest();
-  if (error_callback)
+  if (error_callback) {
     std::move(error_callback).Run(error);
+  }
 }
 
 void ImageWriterUtilityClient::ResetRequest() {

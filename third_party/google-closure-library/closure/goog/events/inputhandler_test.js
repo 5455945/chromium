@@ -1,16 +1,8 @@
-// Copyright 2013 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.events.InputHandlerTest');
 goog.setTestOnly();
@@ -20,6 +12,7 @@ const EventType = goog.require('goog.events.EventType');
 const GoogTestingEvent = goog.require('goog.testing.events.Event');
 const InputHandler = goog.require('goog.events.InputHandler');
 const KeyCodes = goog.require('goog.events.KeyCodes');
+const dispose = goog.require('goog.dispose');
 const dom = goog.require('goog.dom');
 const events = goog.require('goog.testing.events');
 const recordFunction = goog.require('goog.testing.recordFunction');
@@ -39,7 +32,7 @@ function fireFakeInputEvent(input) {
   // Simulate the input event that IE fires on focus when a placeholder
   // is present.
   input.focus();
-  if (userAgent.IE && userAgent.isVersionOrHigher(10)) {
+  if (userAgent.IE) {
     // IE fires an input event with keycode 0
     fireInputEvent(input, 0);
   }
@@ -51,14 +44,15 @@ function fireInputEvent(input, keyCode) {
   inputEvent.charCode = keyCode;
   events.fireBrowserEvent(inputEvent);
 }
+
 testSuite({
   setUp() {
     eventHandler = new EventHandler();
   },
 
   tearDown() {
-    goog.dispose(inputHandler);
-    goog.dispose(eventHandler);
+    dispose(inputHandler);
+    dispose(eventHandler);
   },
 
   testInputWithPlaceholder() {
@@ -73,6 +67,10 @@ testSuite({
     const input = dom.getElement('input-w-placeholder');
     inputHandler = new InputHandler(input);
     const callback = listenToInput(inputHandler);
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     input.value = 'foo';
     fireFakeInputEvent(input);
     assertEquals(0, callback.getCallCount());
@@ -83,6 +81,10 @@ testSuite({
     inputHandler = new InputHandler(input);
     const callback = listenToInput(inputHandler);
     input.focus();
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     input.value = 'foo';
 
     fireInputEvent(input, KeyCodes.M);

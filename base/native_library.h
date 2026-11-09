@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,71 +9,62 @@
 // a loadable module.
 
 #include <string>
+#include <string_view>
 
 #include "base/base_export.h"
 #include "base/files/file_path.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
-#elif defined(OS_APPLE)
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+#elif BUILDFLAG(IS_APPLE)
 #import <CoreFoundation/CoreFoundation.h>
 #endif  // OS_*
 
 namespace base {
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 using NativeLibrary = HMODULE;
-#elif defined(OS_APPLE)
-enum NativeLibraryType {
-  BUNDLE,
-  DYNAMIC_LIB
-};
-enum NativeLibraryObjCStatus {
-  OBJC_UNKNOWN,
-  OBJC_PRESENT,
-  OBJC_NOT_PRESENT,
-};
+#elif BUILDFLAG(IS_APPLE)
+enum NativeLibraryType { BUNDLE, DYNAMIC_LIB };
 struct NativeLibraryStruct {
   NativeLibraryType type;
-  CFBundleRefNum bundle_resource_ref;
-  NativeLibraryObjCStatus objc_status;
   union {
     CFBundleRef bundle;
-    void* dylib;
+    //// This field is not a raw_ptr<> because it was filtered by the rewriter
+    // for: #union
+    RAW_PTR_EXCLUSION void* dylib;
   };
 };
 using NativeLibrary = NativeLibraryStruct*;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 using NativeLibrary = void*;
 #endif  // OS_*
 
 struct BASE_EXPORT NativeLibraryLoadError {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   NativeLibraryLoadError() : code(0) {}
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
   // Returns a string representation of the load error.
   std::string ToString() const;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   DWORD code;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   std::string message;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 };
 
 struct BASE_EXPORT NativeLibraryOptions {
-  NativeLibraryOptions() = default;
-  NativeLibraryOptions(const NativeLibraryOptions& options) = default;
-
-  // If |true|, a loaded library is required to prefer local symbol resolution
-  // before considering global symbols. Note that this is already the default
-  // behavior on most systems. Setting this to |false| does not guarantee the
-  // inverse, i.e., it does not force a preference for global symbols over local
-  // ones.
-  bool prefer_own_symbols = false;
+#if BUILDFLAG(IS_WIN)
+  // If true, verifies the Authenticode signature and publisher before loading
+  // the DLL.
+  bool verify_signature = false;
+  // If true, enforces verification in non-release branded builds.
+  bool force_verify_in_dev_builds = false;
+#endif
 };
 
 // Loads a native library from disk.  Release it with UnloadNativeLibrary when
@@ -82,13 +73,20 @@ struct BASE_EXPORT NativeLibraryOptions {
 BASE_EXPORT NativeLibrary LoadNativeLibrary(const FilePath& library_path,
                                             NativeLibraryLoadError* error);
 
-#if defined(OS_WIN)
+// Loads a native library from disk with custom options (such as signature
+// verification).
+BASE_EXPORT NativeLibrary
+LoadNativeLibraryWithOptions(const FilePath& library_path,
+                             const NativeLibraryOptions& options,
+                             NativeLibraryLoadError* error);
+
+#if BUILDFLAG(IS_WIN)
 // Loads a native library from the system directory using the appropriate flags.
 // The function first checks to see if the library is already loaded and will
 // get a handle if so. This method results in a lock that may block the calling
 // thread.
 BASE_EXPORT NativeLibrary
-LoadSystemLibrary(FilePath::StringPieceType name,
+LoadSystemLibrary(FilePath::StringViewType name,
                   NativeLibraryLoadError* error = nullptr);
 
 // Gets the module handle for the specified system library and pins it to
@@ -97,24 +95,16 @@ LoadSystemLibrary(FilePath::StringPieceType name,
 // method returns null and includes the error. This method results in a lock
 // that may block the calling thread.
 BASE_EXPORT NativeLibrary
-PinSystemLibrary(FilePath::StringPieceType name,
+PinSystemLibrary(FilePath::StringViewType name,
                  NativeLibraryLoadError* error = nullptr);
 #endif
-
-// Loads a native library from disk.  Release it with UnloadNativeLibrary when
-// you're done.  Returns NULL on failure.
-// If |error| is not NULL, it may be filled in on load error.
-BASE_EXPORT NativeLibrary LoadNativeLibraryWithOptions(
-    const FilePath& library_path,
-    const NativeLibraryOptions& options,
-    NativeLibraryLoadError* error);
 
 // Unloads a native library.
 BASE_EXPORT void UnloadNativeLibrary(NativeLibrary library);
 
 // Gets a function pointer from a native library.
 BASE_EXPORT void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
-                                                      StringPiece name);
+                                                      const char* name);
 
 // Returns the full platform-specific name for a native library. |name| must be
 // ASCII. This is also the default name for the output of a gn |shared_library|
@@ -123,13 +113,13 @@ BASE_EXPORT void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
 // - "mylib.dll" on Windows
 // - "libmylib.so" on Linux
 // - "libmylib.dylib" on Mac
-BASE_EXPORT std::string GetNativeLibraryName(StringPiece name);
+BASE_EXPORT std::string GetNativeLibraryName(std::string_view name);
 
 // Returns the full platform-specific name for a gn |loadable_module| target.
 // See tools/gn/docs/reference.md#loadable_module
 // The returned name is the same as GetNativeLibraryName() on all platforms
 // except for Mac where for "mylib" it returns "mylib.so".
-BASE_EXPORT std::string GetLoadableModuleName(StringPiece name);
+BASE_EXPORT std::string GetLoadableModuleName(std::string_view name);
 
 }  // namespace base
 

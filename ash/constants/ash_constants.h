@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,43 +7,60 @@
 #ifndef ASH_CONSTANTS_ASH_CONSTANTS_H_
 #define ASH_CONSTANTS_ASH_CONSTANTS_H_
 
-#include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace ash {
 
-COMPONENT_EXPORT(ASH_CONSTANTS)
-extern const base::FilePath::CharType kDriveCacheDirname[];
-COMPONENT_EXPORT(ASH_CONSTANTS)
-extern const base::FilePath::CharType kNssCertDbPath[];
-COMPONENT_EXPORT(ASH_CONSTANTS)
-extern const base::FilePath::CharType kNssKeyDbPath[];
 
-// Background color used for the Chrome OS boot splash screen.
-constexpr SkColor kChromeOsBootColor = SkColorSetRGB(0xfe, 0xfe, 0xfe);
+inline constexpr base::FilePath::CharType kChromeOSAssetPath[] =
+    "/usr/share/chromeos-assets/";
+inline constexpr base::FilePath::CharType kDriveCacheDirname[] =
+    FILE_PATH_LITERAL("GCache");
+inline constexpr base::FilePath::CharType kNssCertDbPath[] =
+    FILE_PATH_LITERAL(".pki/nssdb/cert9.db");
+inline constexpr base::FilePath::CharType kNssKeyDbPath[] =
+    FILE_PATH_LITERAL(".pki/nssdb/key4.db");
 
 // The border thickness of keyboard focus for launcher items and system tray.
 constexpr int kFocusBorderThickness = 2;
 
-constexpr int kDefaultLargeCursorSize = 64;
+// The thickness of the focus bar for launcher search.
+constexpr int kFocusBarThickness = 3;
 
-constexpr SkColor kDefaultCursorColor = SK_ColorBLACK;
+// Offset added to the shelf so tray bubble bounds are in the correct display.
+constexpr int kShelfDisplayOffset = 1;
+
+constexpr int kDefaultLargeCursorSize = 64;
+constexpr int kMinLargeCursorSize = 25;
+constexpr int kMaxLargeCursorSize = 128;
+
+// A placeholder color value that indicates the cursor color should be inverted.
+constexpr SkColor kAccessibilityCursorColorInverted = 1;
+
+constexpr int kDefaultCaretBlinkIntervalMs = 500;
+
+// Default notification flash color is yellow.
+constexpr SkColor kDefaultFlashNotificationsColor = 0xffff00;
 
 // These device types are a subset of ui::InputDeviceType. These strings are
 // also used in Switch Access webui.
-COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kSwitchAccessInternalDevice[];
-COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kSwitchAccessUsbDevice[];
-COMPONENT_EXPORT(ASH_CONSTANTS)
-extern const char kSwitchAccessBluetoothDevice[];
-COMPONENT_EXPORT(ASH_CONSTANTS) extern const char kSwitchAccessUnknownDevice[];
+inline constexpr char kSwitchAccessInternalDevice[] = "internal";
+inline constexpr char kSwitchAccessUsbDevice[] = "usb";
+inline constexpr char kSwitchAccessBluetoothDevice[] = "bluetooth";
+inline constexpr char kSwitchAccessUnknownDevice[] = "unknown";
+
+// The string that represents the current time. Only used in pixel tests.
+inline constexpr char kFakeNowTimeStringInPixelTest[] =
+    "Sun, 6 May 2018 14:30:00 CDT";
 
 // The default delay before Switch Access automatically moves to the next
 // element on the page that is interesting, based on the Switch Access
-// predicates.
+// predicates. This value is mostly overridden by the setup guide's default
+// value.
 constexpr base::TimeDelta kDefaultSwitchAccessAutoScanSpeed =
-    base::TimeDelta::FromMilliseconds(1200);
+    base::Milliseconds(1800);
 
 // The default speed in dips per second that the gliding point scan cursor
 // in switch access moves across the screen.
@@ -62,16 +79,140 @@ constexpr bool kDefaultKeyAutoRepeatEnabled = true;
 // Whether dark mode is enabled by default.
 constexpr bool kDefaultDarkModeEnabled = false;
 
-// Whether color mode is themed by default.
-constexpr bool kDefaultColorModeThemed = true;
+// Maximum number of times that dark/light mode educational nudge can be shown.
+constexpr int kDarkLightModeNudgeMaxShownCount = 3;
 
 // The default delay before a held keypress will start to auto repeat.
-constexpr base::TimeDelta kDefaultKeyAutoRepeatDelay =
-    base::TimeDelta::FromMilliseconds(500);
+constexpr base::TimeDelta kDefaultKeyAutoRepeatDelay = base::Milliseconds(500);
 
 // The default interval between auto-repeated key events.
 constexpr base::TimeDelta kDefaultKeyAutoRepeatInterval =
-    base::TimeDelta::FromMilliseconds(50);
+    base::Milliseconds(50);
+
+// Constants for notification.
+inline constexpr char kPrivacyIndicatorsNotificationIdPrefix[] =
+    "privacy-indicators";
+inline constexpr char kPrivacyIndicatorsNotifierId[] = "ash.privacy-indicators";
+inline constexpr char kPrivacyIndicatorsMultiCaptureNotifierId[] =
+    "ash.multi-capture-active-privacy-indicators";
+
+// The default delay between last key release and accepting a new key press.
+inline constexpr base::TimeDelta kDefaultAccessibilityBounceKeysDelay =
+    base::Milliseconds(500);
+
+// The default delay before accepting a held key press.
+inline constexpr base::TimeDelta kDefaultAccessibilitySlowKeysDelay =
+    base::Milliseconds(500);
+
+// The default value for audio strategy in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxAudioStrategy[] =
+    "audioNormal";
+
+// The default value for the braille table in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxBrailleTable[] = "";
+
+// The default value for the 6-dot braille table in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxBrailleTable6[] =
+    "en-ueb-g2";
+
+// The default value for the 8-dot braille table in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxBrailleTable8[] =
+    "en-nabcc";
+
+// The default value for the braille table type in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxBrailleTableType[] =
+    "brailleTable8";
+
+// The default value for the capital strategy in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxCapitalStrategy[] =
+    "increasePitch";
+
+// The default value for the capital strategy backup pref in ChromeVox, used
+// on the settings page for saving a user's preference when they toggle
+// |usePitchChanges|.
+inline constexpr char kDefaultAccessibilityChromeVoxCapitalStrategyBackup[] =
+    "";
+
+// The default value for number reading style in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxNumberReadingStyle[] =
+    "asWords";
+
+// The default value for the preferred braille display address in ChromeVox.
+inline constexpr char
+    kDefaultAccessibilityChromeVoxPreferredBrailleDisplayAddress[] = "";
+
+enum ChromeVoxPunctuationEcho {
+  kPunctuationEchoNone = 0,
+  kPunctuationEchoSome = 1,
+  kPunctuationEchoAll = 2
+};
+
+// The default value for punctuation echo in ChromeVox.
+constexpr int kDefaultAccessibilityChromeVoxPunctuationEcho =
+    ChromeVoxPunctuationEcho::kPunctuationEchoSome;
+
+// The default value for the number of virtual braille columns in ChromeVox.
+constexpr int kDefaultAccessibilityChromeVoxVirtualBrailleColumns = 40;
+
+// The default value for the number of virtual braille rows in ChromeVox.
+constexpr int kDefaultAccessibilityChromeVoxVirtualBrailleRows = 1;
+
+// The default value for voice name in ChromeVox.
+inline constexpr char kDefaultAccessibilityChromeVoxVoiceName[] =
+    "chromeos_system_voice";
+
+// Whether the enhanced network voices feature in Select-to-speak is allowed by
+// default.
+constexpr bool
+    kDefaultAccessibilityEnhancedNetworkVoicesInSelectToSpeakAllowed = true;
+
+// Whether Select-to-speak shades the background contents that aren't being read
+// by default.
+constexpr bool kDefaultAccessibilitySelectToSpeakBackgroundShading = false;
+
+// Whether enhanced network TTS voices are enabled for Select-to-speak by
+// default.
+constexpr bool kDefaultAccessibilitySelectToSpeakEnhancedNetworkVoices = false;
+
+// The default preferred enhanced voice for Select-to-speak.
+inline constexpr char kDefaultAccessibilitySelectToSpeakEnhancedVoiceName[] =
+    "default-wavenet";
+
+// Whether the initial popup authorizing enhanced network voices for
+// Select-to-speak has been shown to the user by default.
+constexpr bool kDefaultAccessibilitySelectToSpeakEnhancedVoicesDialogShown =
+    false;
+
+// The default word highlighting color for Select-to-speak.
+inline constexpr char kDefaultAccessibilitySelectToSpeakHighlightColor[] =
+    "#5e9bff";
+
+// Whether Select-to-speak shows navigation controls by default.
+constexpr bool kDefaultAccessibilitySelectToSpeakNavigationControls = true;
+
+// The default preferred voice for Select-to-speak.
+inline constexpr char kDefaultAccessibilitySelectToSpeakVoiceName[] =
+    "select_to_speak_system_voice";
+
+// Whether Select-to-speak enables automatic voice switching between different
+// languages by default.
+constexpr bool kDefaultAccessibilitySelectToSpeakVoiceSwitching = false;
+
+// Whether Select-to-speak highlights each word as it is read by default.
+constexpr bool kDefaultAccessibilitySelectToSpeakWordHighlight = true;
+
+// How much to scale cursor speed in various directions.
+constexpr int kDefaultFaceGazeCursorSpeed = 10;
+
+// Whether to use cursor acceleration.
+constexpr bool kDefaultFaceGazeCursorUseAcceleration = true;
+
+// How much FaceGaze should threshold velocity, e.g. to implement deadzone.
+constexpr int kDefaultFaceGazeVelocityThreshold = 9;
+
+// How much FaceGaze should dampen the mouse speed during a precision click.
+// Note that this value represents a percentage, e.g. 50%.
+constexpr int kDefaultFaceGazePrecisionClickSpeedFactor = 50;
 
 }  // namespace ash
 

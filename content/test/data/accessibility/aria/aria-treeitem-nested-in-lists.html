@@ -20,32 +20,46 @@
 @BLINK-ALLOW:posInSet*
 @BLINK-DENY:setSize=0
 @BLINK-DENY:posInSet=0
+@BLINK-ALLOW:next*
+@BLINK-ALLOW:prev*
+@BLINK-ALLOW:isLineBreakingObject=true
 -->
 <!DOCTYPE html>
 <html>
+<head>
+<style>
+  .no-bullets {
+    list-style-type: none;
+  }
+</style>
+</head>
 <body>
-    <ul role="tree">
-    <li>
+  <ul role="tree" class="no-bullets">
+    <li role="none">
       <div role="treeitem" aria-posinset="2" aria-setsize="5">treeitem 2 of 5, level 1</div>
     </li>
-    <li>
+    <li role="none">
       <div role="treeitem" aria-posinset="3" aria-setsize="5">treeitem 3 of 5, level 1</div>
     </li>
-    <li>
+    <li role="none">
       <div role="treeitem" aria-level="2">treeitem 1 of 2, level 2</div>
     </li>
-    <li>
+    <li role="none">
       <div role="treeitem" aria-level="3">treeitem 1 of 1, level 3</div>
     </li>
-    <li>
+    <li role="none">
       <div role="treeitem" aria-level="2">treeitem 2 of 2, level 2</div>
     </li>
-    </ul>
+  </ul>
 
-  <style>
-    li {
-      list-style-type: none;
-    }
-  </style>
+  <ul role="tree">schedule
+    <li role="treeitem">wake up
+    <li role="treeitem">drink coffee
+    <ul role="tree">tasks
+      <li role="treeitem" aria-level='2'>meeting
+      <li role="treeitem" aria-level='2'>lunch
+    </ul>
+    <li role="treeitem">cook dinner
+  </ul>
 </body>
 </html>

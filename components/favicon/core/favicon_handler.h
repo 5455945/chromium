@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,17 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/cancelable_callback.h"
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/favicon/core/favicon_driver_observer.h"
 #include "components/favicon/core/favicon_url.h"
 #include "components/favicon_base/favicon_callback.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
@@ -68,7 +67,7 @@ class CoreFaviconService;
 // download the favicon.
 //
 // When the renderer downloads favicons, it considers the entire list of
-// favicon candidates, if |download_largest_favicon_| is true, the largest
+// favicon candidates, if `download_largest_favicon_` is true, the largest
 // favicon will be used, otherwise the one that best matches the preferred size
 // is chosen (or the first one if there is no preferred  size). Once the
 // matching favicon has been determined, SetFavicon is called which updates
@@ -93,10 +92,10 @@ class FaviconHandler {
     // is called with the results. Returns the unique id of the download
     // request, which will also be passed to the callback. In case of error, 0
     // is returned and no callback will be called.
-    // Bitmaps with pixel sizes larger than |max_bitmap_size| are filtered out
+    // Bitmaps with pixel sizes larger than `max_bitmap_size` are filtered out
     // from the bitmap results. If there are no bitmap results <=
-    // |max_bitmap_size|, the smallest bitmap is resized to |max_bitmap_size|
-    // and is the only result. A |max_bitmap_size| of 0 means unlimited.
+    // `max_bitmap_size`, the smallest bitmap is resized to `max_bitmap_size`
+    // and is the only result. A `max_bitmap_size` of 0 means unlimited.
     virtual int DownloadImage(const GURL& url,
                               int max_image_size,
                               ImageDownloadCallback callback) = 0;
@@ -126,15 +125,19 @@ class FaviconHandler {
         FaviconDriverObserver::NotificationIconType notification_icon_type) = 0;
   };
 
-  // |service| may be null (which means favicons are not saved). If |service|
-  // is non-null it must outlive this class. |delegate| must not be nullptr and
+  // `service` may be null (which means favicons are not saved). If `service`
+  // is non-null it must outlive this class. `delegate` must not be nullptr and
   // must outlive this class.
   FaviconHandler(CoreFaviconService* service,
                  Delegate* delegate,
                  FaviconDriverObserver::NotificationIconType handler_type);
+
+  FaviconHandler(const FaviconHandler&) = delete;
+  FaviconHandler& operator=(const FaviconHandler&) = delete;
+
   ~FaviconHandler();
 
-  // Initiates loading the favicon for the specified url. |is_same_document| is
+  // Initiates loading the favicon for the specified url. `is_same_document` is
   // true for fragment navigations and history pushState/replaceState, see
   // NavigationHandle::IsSameDocument().
   void FetchFavicon(const GURL& page_url, bool is_same_document);
@@ -152,12 +155,17 @@ class FaviconHandler {
   // For testing.
   const std::vector<GURL> GetIconURLs() const;
 
+  // Cancels pending favicon work and resets internal state for the previous
+  // page. Called when a committed navigation will not start a new favicon
+  // lookup (e.g. an error page).
+  void CancelPendingFaviconRequests();
+
   // Returns whether the handler is waiting for a download to complete or for
   // data from the CoreFaviconService. Reserved for testing.
   bool HasPendingTasksForTest();
 
-  // Get the maximal icon size in pixels for a handler of type |handler_type|.
-  // |candidates_from_web_manifest| represents whether the icons are coming
+  // Get the maximal icon size in pixels for a handler of type `handler_type`.
+  // `candidates_from_web_manifest` represents whether the icons are coming
   // from a Web Manifest.
   static int GetMaximalIconSize(
       FaviconDriverObserver::NotificationIconType handler_type,
@@ -193,6 +201,10 @@ class FaviconHandler {
   static favicon_base::IconTypeSet GetIconTypesFromHandlerType(
       FaviconDriverObserver::NotificationIconType handler_type);
 
+  // Cancels any in-flight tasks/downloads and resets per-navigation state.
+  // Clears `page_urls_` when `reset_page_urls` is true.
+  void ResetState(bool reset_page_urls);
+
   // Called with the result of looking up cached icon data for the manifest's
   // URL, which is used as icon URL.
   void OnFaviconDataForManifestFromFaviconService(
@@ -207,8 +219,8 @@ class FaviconHandler {
   // or, if a Web Manifest was provided, the list of icons there.
   void OnGotFinalIconURLCandidates(const std::vector<FaviconURL>& candidates);
 
-  // Called when the history request for favicon data mapped to |url_| has
-  // completed and the renderer has told us the icon URLs used by |url_|,
+  // Called when the history request for favicon data mapped to `url_` has
+  // completed and the renderer has told us the icon URLs used by `url_`,
   // including the case where no relevant candidates exists.
   void OnGotInitialHistoryDataAndIconURLCandidates();
 
@@ -216,14 +228,14 @@ class FaviconHandler {
   void OnFaviconDataForInitialURLFromFaviconService(const std::vector<
       favicon_base::FaviconRawBitmapResult>& favicon_bitmap_results);
 
-  // If the favicon currently mapped to |url_| has expired, downloads the
+  // If the favicon currently mapped to `url_` has expired, downloads the
   // current candidate favicon from the renderer. Otherwise requests data for
   // the current favicon from history. If data is requested from history,
   // OnFaviconData() is called with the history data once it has been retrieved.
   void DownloadCurrentCandidateOrAskFaviconService();
 
-  // Requests the favicon for |icon_url| from the favicon service. Unless in
-  // incognito, it also updates the page URL (url_) to |icon_url| mappings.
+  // Requests the favicon for `icon_url` from the favicon service. Unless in
+  // incognito, it also updates the page URL (url_) to `icon_url` mappings.
   void GetFaviconAndUpdateMappingsUnlessIncognito(
       const GURL& icon_url,
       favicon_base::IconType icon_type,
@@ -238,8 +250,8 @@ class FaviconHandler {
   void ScheduleImageDownload(const GURL& image_url,
                              favicon_base::IconType icon_type);
 
-  // Triggered when a download of an image has finished. |bitmaps| and
-  // |original_bitmap_sizes| must contain the same number of elements (i.e. same
+  // Triggered when a download of an image has finished. `bitmaps` and
+  // `original_bitmap_sizes` must contain the same number of elements (i.e. same
   // vector size).
   void OnDidDownloadFavicon(
       favicon_base::IconType icon_type,
@@ -249,7 +261,7 @@ class FaviconHandler {
       const std::vector<SkBitmap>& bitmaps,
       const std::vector<gfx::Size>& original_bitmap_sizes);
 
-  // Returns true if the next candidate in |final_candidates_| should be
+  // Returns true if the next candidate in `final_candidates_` should be
   // downloaded.
   bool ShouldDownloadNextCandidate() const;
 
@@ -258,17 +270,17 @@ class FaviconHandler {
                   const gfx::Image& image,
                   favicon_base::IconType icon_type);
 
-  // Deletes the favicon mappings for |page_urls_|, if:
+  // Deletes the favicon mappings for `page_urls_`, if:
   // - We're not in incognito.
-  // - A mapping is known to exist (reflected by |notification_icon_type_|).
+  // - A mapping is known to exist (reflected by `notification_icon_type_`).
   // - All download attempts returned 404s OR no relevant candidate was
-  //   provided (as per |icon_types_|).
+  //   provided (as per `icon_types_`).
   void MaybeDeleteFaviconMappings();
 
-  // Notifies |driver_| that FaviconHandler found an icon which matches the
-  // |handler_type_| criteria. NotifyFaviconUpdated() can be called multiple
+  // Notifies `driver_` that FaviconHandler found an icon which matches the
+  // `handler_type_` criteria. NotifyFaviconUpdated() can be called multiple
   // times for the same page if:
-  // - a better match is found for |handler_type_| (e.g. newer bitmap data)
+  // - a better match is found for `handler_type_` (e.g. newer bitmap data)
   // - Javascript changes the page's icon URLs.
   void NotifyFaviconUpdated(
       const std::vector<favicon_base::FaviconRawBitmapResult>&
@@ -312,14 +324,14 @@ class FaviconHandler {
 
   // Whether the history data returned in
   // OnFaviconDataForInitialURLFromFaviconService() is out of date or is known
-  // to be incomplete. If true, it means there is a favicon mapped to |url_| in
+  // to be incomplete. If true, it means there is a favicon mapped to `url_` in
   // history, but we need to redownload the icon URLs because the icon in the
   // database has expired or the data in the database is incomplete.
   bool initial_history_result_expired_or_incomplete_;
 
   // Whether FaviconHandler should ignore history state and determine the
-  // optimal icon URL out of |image_urls_| for |url_| by downloading
-  // |image_urls_| one by one.
+  // optimal icon URL out of `image_urls_` for `url_` by downloading
+  // `image_urls_` one by one.
   bool redownload_icons_;
 
   // Requests to the renderer to download a manifest.
@@ -354,7 +366,7 @@ class FaviconHandler {
 
   // The prioritized favicon candidates from the page back from the renderer.
   // Populated by OnGotFinalIconURLCandidates().
-  absl::optional<std::vector<FaviconCandidate>> final_candidates_;
+  std::optional<std::vector<FaviconCandidate>> final_candidates_;
 
   // The icon URL and the icon type of the favicon in the most recent
   // FaviconDriver::OnFaviconAvailable() notification.
@@ -362,12 +374,12 @@ class FaviconHandler {
   favicon_base::IconType notification_icon_type_;
 
   // The CoreFaviconService which implements favicon operations. May be null.
-  CoreFaviconService* service_;
+  raw_ptr<CoreFaviconService> service_;
 
   // This handler's delegate.
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
-  // The index of the favicon URL in |image_urls_| which is currently being
+  // The index of the favicon URL in `image_urls_` which is currently being
   // requested from history or downloaded.
   size_t current_candidate_index_;
 
@@ -376,8 +388,6 @@ class FaviconHandler {
   // UpdateFaviconCandidate()), the favicon service and the delegate are
   // notified.
   DownloadedFavicon best_favicon_;
-
-  DISALLOW_COPY_AND_ASSIGN(FaviconHandler);
 };
 
 }  // namespace favicon

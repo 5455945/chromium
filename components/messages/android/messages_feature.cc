@@ -1,52 +1,48 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/messages/android/messages_feature.h"
 
+#include "base/android/feature_map.h"
+#include "base/feature_list.h"
+#include "base/no_destructor.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/messages/android/feature_flags_jni_headers/MessageFeatureMap_jni.h"
+
 namespace messages {
 
-const base::Feature kMessagesForAndroidInfrastructure{
-    "MessagesForAndroidInfrastructure", base::FEATURE_ENABLED_BY_DEFAULT};
+namespace {
 
-const base::Feature kMessagesForAndroidPasswords{
-    "MessagesForAndroidPasswords", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature* const kFeaturesExposedToJava[] = {
+    &kMessagesForAndroidFullyVisibleCallback, &kMessagesAndroidExtraHistograms,
+    &kMessagesCloseButton, &kDismissNavigationMessagesOnPrimaryPageChanged};
 
-extern const base::Feature kMessagesForAndroidPopupBlocked{
-    "MessagesForAndroidPopupBlocked", base::FEATURE_DISABLED_BY_DEFAULT};
-
-extern const base::Feature kMessagesForAndroidSafetyTip{
-    "MessagesForAndroidSafetyTip", base::FEATURE_DISABLED_BY_DEFAULT};
-
-extern const base::Feature kMessagesForAndroidSaveCard{
-    "MessagesForAndroidSaveCard", base::FEATURE_DISABLED_BY_DEFAULT};
-
-const base::Feature kMessagesForAndroidUpdatePassword{
-    "MessagesForAndroidUpdatePassword", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsPasswordMessagesUiEnabled() {
-  return base::FeatureList::IsEnabled(kMessagesForAndroidInfrastructure) &&
-         base::FeatureList::IsEnabled(kMessagesForAndroidPasswords);
+// static
+base::android::FeatureMap* GetFeatureMap() {
+  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
+      kFeaturesExposedToJava);
+  return kFeatureMap.get();
 }
 
-bool IsPopupBlockedMessagesUiEnabled() {
-  return base::FeatureList::IsEnabled(kMessagesForAndroidInfrastructure) &&
-         base::FeatureList::IsEnabled(kMessagesForAndroidPopupBlocked);
-}
+}  // namespace
 
-bool IsSafetyTipMessagesUiEnabled() {
-  return base::FeatureList::IsEnabled(kMessagesForAndroidInfrastructure) &&
-         base::FeatureList::IsEnabled(kMessagesForAndroidSafetyTip);
-}
+BASE_FEATURE(kMessagesForAndroidFullyVisibleCallback,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-bool IsSaveCardMessagesUiEnabled() {
-  return base::FeatureList::IsEnabled(kMessagesForAndroidInfrastructure) &&
-         base::FeatureList::IsEnabled(kMessagesForAndroidSaveCard);
-}
+// Feature that enables extra histogram recordings.
+BASE_FEATURE(kMessagesAndroidExtraHistograms, base::FEATURE_ENABLED_BY_DEFAULT);
 
-bool IsUpdatePasswordMessagesUiEnabled() {
-  return base::FeatureList::IsEnabled(kMessagesForAndroidInfrastructure) &&
-         base::FeatureList::IsEnabled(kMessagesForAndroidUpdatePassword);
+BASE_FEATURE(kMessagesCloseButton, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDismissNavigationMessagesOnPrimaryPageChanged,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+static int64_t JNI_MessageFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace messages
+
+DEFINE_JNI(MessageFeatureMap)

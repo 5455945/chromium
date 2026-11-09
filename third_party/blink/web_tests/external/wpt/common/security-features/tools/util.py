@@ -1,7 +1,4 @@
-from __future__ import print_function
-
 import os, sys, json, json5, re
-import collections
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 template_directory = os.path.abspath(
@@ -31,7 +28,7 @@ def load_spec_json(path_to_spec):
     re_error_location = re.compile('line ([0-9]+) column ([0-9]+)')
     with open(path_to_spec, "r") as f:
         try:
-            return json5.load(f, object_pairs_hook=collections.OrderedDict)
+            return json5.load(f)
         except ValueError as ex:
             print(ex.message)
             match = re_error_location.search(ex.message)
@@ -149,7 +146,19 @@ class PolicyDelivery(object):
     def get_another_policy(self, delivery_type):
         # type: (str) -> PolicyDelivery
         if self.key == 'referrerPolicy':
-            if self.value == 'no-referrer':
+            # Return 'unsafe-url' (i.e. more unsafe policy than `self.value`)
+            # as long as possible, to make sure the tests to fail if the
+            # returned policy is used unexpectedly instead of `self.value`.
+            # Using safer policy wouldn't be distinguishable from acceptable
+            # arbitrary policy enforcement by user agents, as specified at
+            # Step 7 of
+            # https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer:
+            # "The user agent MAY alter referrerURL or referrerOrigin at this
+            # point to enforce arbitrary policy considerations in the
+            # interests of minimizing data leakage."
+            # See also the comments at `referrerUrlResolver` in
+            # `wpt/referrer-policy/generic/test-case.sub.js`.
+            if self.value != 'unsafe-url':
                 return PolicyDelivery(delivery_type, self.key, 'unsafe-url')
             else:
                 return PolicyDelivery(delivery_type, self.key, 'no-referrer')

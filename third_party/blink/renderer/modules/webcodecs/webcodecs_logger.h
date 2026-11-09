@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_WEBCODECS_LOGGER_H_
 
 #include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
 #include "media/base/video_frame.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
@@ -13,7 +14,6 @@
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
 namespace blink {
 
@@ -34,7 +34,7 @@ class MODULES_EXPORT WebCodecsLogger : public GarbageCollected<WebCodecsLogger>,
   // without having close() called on them. This is a web page application
   // error which can cause a web page to stall.
   class VideoFrameCloseAuditor
-      : public WTF::ThreadSafeRefCounted<VideoFrameCloseAuditor> {
+      : public ThreadSafeRefCounted<VideoFrameCloseAuditor> {
    public:
     void ReportUnclosedFrame();
     void Clear();
@@ -42,7 +42,7 @@ class MODULES_EXPORT WebCodecsLogger : public GarbageCollected<WebCodecsLogger>,
     bool were_frames_not_closed() { return were_frames_not_closed_; }
 
    private:
-    friend class WTF::ThreadSafeRefCounted<VideoFrameCloseAuditor>;
+    friend class ThreadSafeRefCounted<VideoFrameCloseAuditor>;
     ~VideoFrameCloseAuditor() = default;
 
     bool were_frames_not_closed_ = false;
@@ -62,33 +62,14 @@ class MODULES_EXPORT WebCodecsLogger : public GarbageCollected<WebCodecsLogger>,
   // Returns |close_auditor_| and starts |timer_| if needed.
   scoped_refptr<VideoFrameCloseAuditor> GetCloseAuditor();
 
-  void LogCropDeprecation();
-  void LogPlaneInitSrcDeprecation();
-  void LogPlanesDeprecation();
-  void LogCodedRegionDeprecation();
-  void LogVisibleRegionDeprecation();
-  void LogPlanarConstructionDeprecation();
-
   void Trace(Visitor*) const override;
 
  private:
-  enum class Deprecation : uint32_t {
-    kCrop = 1,
-    kPlaneInitSrc = 2,
-    kPlanes = 4,
-    kCodedRegion = 8,
-    kVisibleRegion = 16,
-    kPlanarConstruction = 32,
-  };
-
   void LogCloseErrors(TimerBase*);
-  void LogDeprecation(Deprecation, const String& message);
 
   base::TimeTicks last_auditor_access_;
   scoped_refptr<VideoFrameCloseAuditor> close_auditor_;
   HeapTaskRunnerTimer<WebCodecsLogger> timer_;
-
-  uint32_t logged_deprecations_ = 0;
 };
 
 }  // namespace blink

@@ -1,14 +1,13 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder_factory.h"
 
-#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
 namespace policy {
@@ -16,28 +15,35 @@ namespace policy {
 // static
 UserCloudPolicyTokenForwarderFactory*
 UserCloudPolicyTokenForwarderFactory::GetInstance() {
-  return base::Singleton<UserCloudPolicyTokenForwarderFactory>::get();
+  static base::NoDestructor<UserCloudPolicyTokenForwarderFactory> instance;
+  return instance.get();
 }
 
 UserCloudPolicyTokenForwarderFactory::UserCloudPolicyTokenForwarderFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "UserCloudPolicyTokenForwarder",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kNone)
+              .WithAshInternals(ProfileSelection::kNone)
+              .Build()) {
   DependsOn(IdentityManagerFactory::GetInstance());
 }
 
-UserCloudPolicyTokenForwarderFactory::~UserCloudPolicyTokenForwarderFactory() {}
+UserCloudPolicyTokenForwarderFactory::~UserCloudPolicyTokenForwarderFactory() =
+    default;
 
-KeyedService* UserCloudPolicyTokenForwarderFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+UserCloudPolicyTokenForwarderFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = static_cast<Profile*>(context);
-  UserCloudPolicyManagerChromeOS* manager =
-      profile->GetUserCloudPolicyManagerChromeOS();
+  UserCloudPolicyManagerAsh* manager = profile->GetUserCloudPolicyManagerAsh();
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
   if (!manager || !identity_manager)
     return nullptr;
-  return new UserCloudPolicyTokenForwarder(manager, identity_manager);
+  return std::make_unique<UserCloudPolicyTokenForwarder>(manager,
+                                                         identity_manager);
 }
 
 bool UserCloudPolicyTokenForwarderFactory::ServiceIsCreatedWithBrowserContext()

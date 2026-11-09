@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2014 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,37 +8,39 @@
 Usage: tools/boilerplate.py path/to/file.{h,cc}
 """
 
-from __future__ import print_function
+from __future__ import print_function, unicode_literals
 
 from datetime import date
+import io
 import os
 import os.path
 import sys
 
 LINES = [
-    'Copyright %d The Chromium Authors. All rights reserved.' %
-        date.today().year,
-    'Use of this source code is governed by a BSD-style license that can be',
-    'found in the LICENSE file.'
+  f'Copyright {date.today().year} The Chromium Authors',
+  'Use of this source code is governed by a BSD-style license that can be',
+  'found in the LICENSE file.',
 ]
 
 NO_COMPILE_LINES = [
-    'This is a "No Compile Test" suite.',
-    'https://dev.chromium.org/developers/testing/no-compile-tests'
+  'This is a "No Compile Test" suite.',
+  'https://dev.chromium.org/developers/testing/no-compile-tests',
 ]
 
 EXTENSIONS_TO_COMMENTS = {
-    'h': '//',
-    'cc': '//',
-    'nc': '//',
-    'mm': '//',
-    'js': '//',
-    'py': '#',
-    'gn': '#',
-    'gni': '#',
-    'mojom': '//',
-    'typemap': '#',
-    "swift": "//",
+  'cc': '//',
+  'gn': '#',
+  'gni': '#',
+  'h': '//',
+  'js': '//',
+  'mm': '//',
+  'mojom': '//',
+  'nc': '//',
+  'proto': '//',
+  'py': '#',
+  'swift': '//',
+  'ts': '//',
+  'typemap': '#',
 }
 
 
@@ -54,7 +56,7 @@ def _GetHeader(filename):
 
 
 def _GetNoCompileHeader(filename):
-  assert (filename.endswith(".nc"))
+  assert filename.endswith(".nc")
   return '\n' + _GetHeaderImpl(filename, NO_COMPILE_LINES)
 
 
@@ -62,14 +64,9 @@ def _CppHeader(filename):
   guard = filename.upper() + '_'
   for char in '/\\.+':
     guard = guard.replace(char, '_')
-  return '\n'.join([
-    '',
-    '#ifndef ' + guard,
-    '#define ' + guard,
-    '',
-    '#endif  // ' + guard,
-    ''
-  ])
+  return '\n'.join(
+    ['', '#ifndef ' + guard, '#define ' + guard, '', '#endif  // ' + guard, '']
+  )
 
 
 def _RemoveCurrentDirectoryPrefix(filename):
@@ -78,13 +75,13 @@ def _RemoveCurrentDirectoryPrefix(filename):
     current_dir_prefixes.append(os.curdir + os.altsep)
   for prefix in current_dir_prefixes:
     if filename.startswith(prefix):
-      return filename[len(prefix):]
+      return filename[len(prefix) :]
   return filename
 
 
 def _RemoveTestSuffix(filename):
   base, _ = os.path.splitext(filename)
-  suffixes = [ '_test', '_unittest', '_browsertest' ]
+  suffixes = ['_test', '_unittest', '_browsertest']
   for suffix in suffixes:
     l = len(suffix)
     if base[-l:] == suffix:
@@ -105,19 +102,17 @@ def _FilePathSlashesToCpp(filename):
 
 
 def _CppImplementation(filename):
-  return '\n#include "' + _FilePathSlashesToCpp(_RemoveTestSuffix(filename)) \
+  return (
+    '\n#include "'
+    + _FilePathSlashesToCpp(_RemoveTestSuffix(filename))
     + '.h"\n'
+  )
 
 
 def _ObjCppImplementation(filename):
-  implementation = '\n#import "' + _RemoveTestSuffix(filename) + '.h"\n'
-  if not _IsIOSFile(filename):
-    return implementation
-  implementation += '\n'
-  implementation += '#if !defined(__has_feature) || !__has_feature(objc_arc)\n'
-  implementation += '#error "This file requires ARC support."\n'
-  implementation += '#endif\n'
-  return implementation
+  return (
+    '\n#import "' + _FilePathSlashesToCpp(_RemoveTestSuffix(filename)) + '.h"\n'
+  )
 
 
 def _CreateFile(filename):
@@ -135,26 +130,35 @@ def _CreateFile(filename):
   elif filename.endswith('.mm'):
     contents += _ObjCppImplementation(filename)
 
-  fd = open(filename, 'wb')
-  fd.write(contents)
-  fd.close()
+  with io.open(filename, mode='w', newline='\n') as fd:
+    fd.write(contents)
+
+
+# A file is safe to overwrite if it's an empty file we can write to.
+def _IsSafeToOverwrite(path):
+  return (
+    os.path.isfile(path)
+    and os.path.getsize(path) == 0
+    and os.access(path, os.W_OK)
+  )
 
 
 def Main():
   files = sys.argv[1:]
   if len(files) < 1:
     print(
-        'Usage: boilerplate.py path/to/file.h path/to/file.cc', file=sys.stderr)
+      'Usage: boilerplate.py path/to/file.h path/to/file.cc', file=sys.stderr
+    )
     return 1
 
   # Perform checks first so that the entire operation is atomic.
   for f in files:
     _, ext = os.path.splitext(f)
-    if not ext[1:] in EXTENSIONS_TO_COMMENTS:
+    if ext[1:] not in EXTENSIONS_TO_COMMENTS:
       print('Unknown file type for %s' % f, file=sys.stderr)
       return 2
 
-    if os.path.exists(f):
+    if os.path.exists(f) and not _IsSafeToOverwrite(f):
       print('A file at path %s already exists' % f, file=sys.stderr)
       return 2
 

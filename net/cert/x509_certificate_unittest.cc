@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,40 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string_view>
 
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/hash/sha1.h"
 #include "base/pickle.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "crypto/rsa_private_key.h"
+#include "base/strings/string_view_util.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/time/time.h"
 #include "net/base/net_errors.h"
 #include "net/cert/asn1_util.h"
-#include "net/cert/internal/parse_certificate.h"
-#include "net/cert/pem.h"
 #include "net/cert/x509_util.h"
+#include "net/test/cert_builder.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/test_certificate_data.h"
 #include "net/test/test_data_directory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/boringssl/src/pki/parse_certificate.h"
+#include "third_party/boringssl/src/pki/pem.h"
 
 using base::HexEncode;
 using base::Time;
 
 namespace net {
+
+namespace {
+
+constexpr char kPrintableStringParseModeHistogram[] =
+    "Net.Certificate.PrintableStringRequiredParseMode";
 
 // Certificates for test data. They're obtained with:
 //
@@ -80,34 +90,42 @@ void CheckGoogleCert(const scoped_refptr<X509Certificate>& google_cert,
   EXPECT_EQ("Mountain View", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
-  EXPECT_EQ(0U, subject.street_addresses.size());
   ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Google Inc", subject.organization_names[0]);
   EXPECT_EQ(0U, subject.organization_unit_names.size());
-  EXPECT_EQ(0U, subject.domain_components.size());
 
   const CertPrincipal& issuer = google_cert->issuer();
   EXPECT_EQ("Thawte SGC CA", issuer.common_name);
   EXPECT_EQ("", issuer.locality_name);
   EXPECT_EQ("", issuer.state_or_province_name);
   EXPECT_EQ("ZA", issuer.country_name);
-  EXPECT_EQ(0U, issuer.street_addresses.size());
   ASSERT_EQ(1U, issuer.organization_names.size());
   EXPECT_EQ("Thawte Consulting (Pty) Ltd.", issuer.organization_names[0]);
   EXPECT_EQ(0U, issuer.organization_unit_names.size());
-  EXPECT_EQ(0U, issuer.domain_components.size());
 
   // Use DoubleT because its epoch is the same on all platforms
-  const Time& valid_start = google_cert->valid_start();
-  EXPECT_EQ(valid_from, valid_start.ToDoubleT());
+  Time valid_start = google_cert->valid_start();
+  EXPECT_EQ(valid_from, valid_start.InSecondsFSinceUnixEpoch());
 
-  const Time& valid_expiry = google_cert->valid_expiry();
-  EXPECT_EQ(valid_to, valid_expiry.ToDoubleT());
+  Time valid_expiry = google_cert->valid_expiry();
+  EXPECT_EQ(valid_to, valid_expiry.InSecondsFSinceUnixEpoch());
 
   EXPECT_EQ(expected_fingerprint, X509Certificate::CalculateFingerprint256(
                                       google_cert->cert_buffer()));
 
 }
+
+void ExpectX509CertificateMembersEqual(
+    const scoped_refptr<X509Certificate>& a,
+    const scoped_refptr<X509Certificate>& b) {
+  EXPECT_TRUE(a->subject().EqualsForTesting(b->subject()));
+  EXPECT_TRUE(a->issuer().EqualsForTesting(b->issuer()));
+  EXPECT_EQ(a->valid_start(), b->valid_start());
+  EXPECT_EQ(a->valid_expiry(), b->valid_expiry());
+  EXPECT_EQ(a->serial_number(), b->serial_number());
+}
+
+}  // namespace
 
 TEST(X509CertificateTest, GoogleCertParsing) {
   scoped_refptr<X509Certificate> google_cert(
@@ -128,32 +146,35 @@ TEST(X509CertificateTest, WebkitCertParsing) {
   EXPECT_EQ("Cupertino", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
-  EXPECT_EQ(0U, subject.street_addresses.size());
   ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Apple Inc.", subject.organization_names[0]);
   ASSERT_EQ(1U, subject.organization_unit_names.size());
   EXPECT_EQ("Mac OS Forge", subject.organization_unit_names[0]);
-  EXPECT_EQ(0U, subject.domain_components.size());
 
   const CertPrincipal& issuer = webkit_cert->issuer();
   EXPECT_EQ("Go Daddy Secure Certification Authority", issuer.common_name);
   EXPECT_EQ("Scottsdale", issuer.locality_name);
   EXPECT_EQ("Arizona", issuer.state_or_province_name);
   EXPECT_EQ("US", issuer.country_name);
-  EXPECT_EQ(0U, issuer.street_addresses.size());
   ASSERT_EQ(1U, issuer.organization_names.size());
   EXPECT_EQ("GoDaddy.com, Inc.", issuer.organization_names[0]);
   ASSERT_EQ(1U, issuer.organization_unit_names.size());
   EXPECT_EQ("http://certificates.godaddy.com/repository",
-      issuer.organization_unit_names[0]);
-  EXPECT_EQ(0U, issuer.domain_components.size());
+            issuer.organization_unit_names[0]);
 
   // Use DoubleT because its epoch is the same on all platforms
-  const Time& valid_start = webkit_cert->valid_start();
-  EXPECT_EQ(1205883319, valid_start.ToDoubleT());  // Mar 18 23:35:19 2008 GMT
+  Time valid_start = webkit_cert->valid_start();
+  EXPECT_EQ(
+      1205883319,
+      valid_start.InSecondsFSinceUnixEpoch());  // Mar 18 23:35:19 2008 GMT
 
-  const Time& valid_expiry = webkit_cert->valid_expiry();
-  EXPECT_EQ(1300491319, valid_expiry.ToDoubleT());  // Mar 18 23:35:19 2011 GMT
+  Time valid_expiry = webkit_cert->valid_expiry();
+  EXPECT_EQ(
+      1300491319,
+      valid_expiry.InSecondsFSinceUnixEpoch());  // Mar 18 23:35:19 2011 GMT
+
+  EXPECT_EQ(bssl::SignatureAlgorithm::kRsaPkcs1Sha1,
+            webkit_cert->signature_algorithm());
 
   std::vector<std::string> dns_names;
   EXPECT_TRUE(webkit_cert->GetSubjectAltName(&dns_names, nullptr));
@@ -180,35 +201,37 @@ TEST(X509CertificateTest, ThawteCertParsing) {
   EXPECT_EQ("Mountain View", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
-  EXPECT_EQ(0U, subject.street_addresses.size());
   ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Thawte Inc", subject.organization_names[0]);
   EXPECT_EQ(0U, subject.organization_unit_names.size());
-  EXPECT_EQ(0U, subject.domain_components.size());
 
   const CertPrincipal& issuer = thawte_cert->issuer();
   EXPECT_EQ("thawte Extended Validation SSL CA", issuer.common_name);
   EXPECT_EQ("", issuer.locality_name);
   EXPECT_EQ("", issuer.state_or_province_name);
   EXPECT_EQ("US", issuer.country_name);
-  EXPECT_EQ(0U, issuer.street_addresses.size());
   ASSERT_EQ(1U, issuer.organization_names.size());
   EXPECT_EQ("thawte, Inc.", issuer.organization_names[0]);
   ASSERT_EQ(1U, issuer.organization_unit_names.size());
   EXPECT_EQ("Terms of use at https://www.thawte.com/cps (c)06",
             issuer.organization_unit_names[0]);
-  EXPECT_EQ(0U, issuer.domain_components.size());
 
   // Use DoubleT because its epoch is the same on all platforms
-  const Time& valid_start = thawte_cert->valid_start();
-  EXPECT_EQ(1227052800, valid_start.ToDoubleT());  // Nov 19 00:00:00 2008 GMT
+  Time valid_start = thawte_cert->valid_start();
+  EXPECT_EQ(
+      1227052800,
+      valid_start.InSecondsFSinceUnixEpoch());  // Nov 19 00:00:00 2008 GMT
 
-  const Time& valid_expiry = thawte_cert->valid_expiry();
-  EXPECT_EQ(1263772799, valid_expiry.ToDoubleT());  // Jan 17 23:59:59 2010 GMT
+  Time valid_expiry = thawte_cert->valid_expiry();
+  EXPECT_EQ(
+      1263772799,
+      valid_expiry.InSecondsFSinceUnixEpoch());  // Jan 17 23:59:59 2010 GMT
+  EXPECT_EQ(bssl::SignatureAlgorithm::kRsaPkcs1Sha1,
+            thawte_cert->signature_algorithm());
 }
 
 // Test that all desired AttributeAndValue pairs can be extracted when only
-// a single RelativeDistinguishedName is present. "Normally" there is only
+// a single bssl::RelativeDistinguishedName is present. "Normally" there is only
 // one AVA per RDN, but some CAs place all AVAs within a single RDN.
 // This is a regression test for http://crbug.com/101009
 TEST(X509CertificateTest, MultivalueRDN) {
@@ -223,13 +246,10 @@ TEST(X509CertificateTest, MultivalueRDN) {
   EXPECT_EQ("", subject.locality_name);
   EXPECT_EQ("", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
-  EXPECT_EQ(0U, subject.street_addresses.size());
   ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Chromium", subject.organization_names[0]);
   ASSERT_EQ(1U, subject.organization_unit_names.size());
   EXPECT_EQ("Chromium net_unittests", subject.organization_unit_names[0]);
-  ASSERT_EQ(1U, subject.domain_components.size());
-  EXPECT_EQ("Chromium", subject.domain_components[0]);
 }
 
 // Test that characters which would normally be escaped in the string form,
@@ -247,17 +267,15 @@ TEST(X509CertificateTest, UnescapedSpecialCharacters) {
   EXPECT_EQ("Mountain View", subject.locality_name);
   EXPECT_EQ("California", subject.state_or_province_name);
   EXPECT_EQ("US", subject.country_name);
-  ASSERT_EQ(1U, subject.street_addresses.size());
-  EXPECT_EQ("1600 Amphitheatre Parkway", subject.street_addresses[0]);
   ASSERT_EQ(1U, subject.organization_names.size());
   EXPECT_EQ("Chromium = \"net_unittests\"", subject.organization_names[0]);
   ASSERT_EQ(2U, subject.organization_unit_names.size());
   EXPECT_EQ("net_unittests", subject.organization_unit_names[0]);
   EXPECT_EQ("Chromium", subject.organization_unit_names[1]);
-  EXPECT_EQ(0U, subject.domain_components.size());
 }
 
 TEST(X509CertificateTest, InvalidPrintableStringIsUtf8) {
+  base::HistogramTester histogram_tester;
   base::FilePath certs_dir =
       GetTestNetDataDirectory().AppendASCII("parse_certificate_unittest");
 
@@ -267,7 +285,7 @@ TEST(X509CertificateTest, InvalidPrintableStringIsUtf8) {
           "subject_printable_string_containing_utf8_client_cert.pem"),
       &file_data));
 
-  net::PEMTokenizer pem_tokenizer(file_data, {"CERTIFICATE"});
+  bssl::PEMTokenizer pem_tokenizer(file_data, {"CERTIFICATE"});
   ASSERT_TRUE(pem_tokenizer.GetNext());
   std::string cert_der(pem_tokenizer.data());
   ASSERT_FALSE(pem_tokenizer.GetNext());
@@ -284,9 +302,68 @@ TEST(X509CertificateTest, InvalidPrintableStringIsUtf8) {
   scoped_refptr<X509Certificate> cert =
       X509Certificate::CreateFromBufferUnsafeOptions(
           bssl::UpRef(cert_handle.get()), {}, options);
+  // The name contains non-ASCII characters, so only kAsUTF8Hack suffices. The
+  // failed parse with default options above records nothing.
+  histogram_tester.ExpectUniqueSample(
+      kPrintableStringParseModeHistogram,
+      X509Certificate::PrintableStringParseMode::kAsUTF8Hack, 1);
 
   const CertPrincipal& subject = cert->subject();
   EXPECT_EQ("Foo@#_ Clïênt Cërt", subject.common_name);
+}
+
+TEST(X509CertificateTest, PrintableStringRequiredParseModeHistogram) {
+  X509Certificate::UnsafeCreateOptions options;
+  options.printable_string_is_utf8 = true;
+
+  scoped_refptr<X509Certificate> ok_cert =
+      ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
+  ASSERT_TRUE(ok_cert);
+
+  {
+    // Without printable_string_is_utf8, nothing is recorded.
+    base::HistogramTester histogram_tester;
+    EXPECT_TRUE(X509Certificate::CreateFromBuffer(
+        bssl::UpRef(ok_cert->cert_buffer()), {}));
+    histogram_tester.ExpectTotalCount(kPrintableStringParseModeHistogram, 0);
+  }
+
+  {
+    // All names are valid PrintableStrings.
+    base::HistogramTester histogram_tester;
+    EXPECT_TRUE(X509Certificate::CreateFromBufferUnsafeOptions(
+        bssl::UpRef(ok_cert->cert_buffer()), {}, options));
+    histogram_tester.ExpectUniqueSample(
+        kPrintableStringParseModeHistogram,
+        X509Certificate::PrintableStringParseMode::kDefault, 1);
+  }
+
+  // These certificates contain '&', which is ASCII but not allowed in a
+  // PrintableString, in the subject and issuer respectively.
+  for (const char* file_name : {"subject_not_printable_string.pem",
+                                "issuer_bad_printable_string.pem"}) {
+    SCOPED_TRACE(file_name);
+    std::string file_data;
+    ASSERT_TRUE(
+        base::ReadFileToString(GetTestNetDataDirectory()
+                                   .AppendASCII("parse_certificate_unittest")
+                                   .AppendASCII(file_name),
+                               &file_data));
+    bssl::PEMTokenizer pem_tokenizer(file_data, {"CERTIFICATE"});
+    ASSERT_TRUE(pem_tokenizer.GetNext());
+    bssl::UniquePtr<CRYPTO_BUFFER> cert_handle =
+        x509_util::CreateCryptoBuffer(pem_tokenizer.data());
+
+    EXPECT_FALSE(
+        X509Certificate::CreateFromBuffer(bssl::UpRef(cert_handle.get()), {}));
+
+    base::HistogramTester histogram_tester;
+    EXPECT_TRUE(X509Certificate::CreateFromBufferUnsafeOptions(
+        bssl::UpRef(cert_handle.get()), {}, options));
+    histogram_tester.ExpectUniqueSample(
+        kPrintableStringParseModeHistogram,
+        X509Certificate::PrintableStringParseMode::kAllowASCII, 1);
+  }
 }
 
 TEST(X509CertificateTest, TeletexStringIsLatin1) {
@@ -364,10 +441,7 @@ TEST(X509CertificateTest, SerialNumbers) {
     0x01,0x2a,0x39,0x76,0x0d,0x3f,0x4f,0xc9,
     0x0b,0xe7,0xbd,0x2b,0xcf,0x95,0x2e,0x7a,
   };
-
-  ASSERT_EQ(sizeof(google_serial), google_cert->serial_number().size());
-  EXPECT_TRUE(memcmp(google_cert->serial_number().data(), google_serial,
-                     sizeof(google_serial)) == 0);
+  EXPECT_EQ(google_cert->serial_number(), google_serial);
 }
 
 TEST(X509CertificateTest, SerialNumberZeroPadded) {
@@ -380,9 +454,7 @@ TEST(X509CertificateTest, SerialNumberZeroPadded) {
   // Check a serial number where the first byte is >= 0x80, the DER returned by
   // serial() should contain the leading 0 padding byte.
   static const uint8_t expected_serial[3] = {0x00, 0x80, 0x01};
-  ASSERT_EQ(sizeof(expected_serial), cert->serial_number().size());
-  EXPECT_TRUE(memcmp(cert->serial_number().data(), expected_serial,
-                     sizeof(expected_serial)) == 0);
+  EXPECT_EQ(cert->serial_number(), expected_serial);
 }
 
 TEST(X509CertificateTest, SerialNumberZeroPadded21BytesLong) {
@@ -398,9 +470,7 @@ TEST(X509CertificateTest, SerialNumberZeroPadded21BytesLong) {
   static const uint8_t expected_serial[21] = {
       0x00, 0x80, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13};
-  ASSERT_EQ(sizeof(expected_serial), cert->serial_number().size());
-  EXPECT_TRUE(memcmp(cert->serial_number().data(), expected_serial,
-                     sizeof(expected_serial)) == 0);
+  EXPECT_EQ(cert->serial_number(), expected_serial);
 }
 
 TEST(X509CertificateTest, SerialNumberNegative) {
@@ -413,9 +483,7 @@ TEST(X509CertificateTest, SerialNumberNegative) {
   // RFC 5280 does not allow serial numbers to be negative, but serial number
   // parsing is currently permissive, so this does not cause an error.
   static const uint8_t expected_serial[2] = {0x80, 0x01};
-  ASSERT_EQ(sizeof(expected_serial), cert->serial_number().size());
-  EXPECT_TRUE(memcmp(cert->serial_number().data(), expected_serial,
-                     sizeof(expected_serial)) == 0);
+  EXPECT_EQ(cert->serial_number(), expected_serial);
 }
 
 TEST(X509CertificateTest, SerialNumber37BytesLong) {
@@ -432,9 +500,7 @@ TEST(X509CertificateTest, SerialNumber37BytesLong) {
       0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
       0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
       0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25};
-  ASSERT_EQ(sizeof(expected_serial), cert->serial_number().size());
-  EXPECT_TRUE(memcmp(cert->serial_number().data(), expected_serial,
-                     sizeof(expected_serial)) == 0);
+  EXPECT_EQ(cert->serial_number(), expected_serial);
 }
 
 TEST(X509CertificateTest, SHA256FingerprintsCorrectly) {
@@ -535,17 +601,13 @@ TEST(X509CertificateTest, ParseSubjectAltNames) {
   static const uint8_t kIPv4Address[] = {
       0x7F, 0x00, 0x00, 0x02
   };
-  ASSERT_EQ(base::size(kIPv4Address), ip_addresses[0].size());
-  EXPECT_EQ(0, memcmp(ip_addresses[0].data(), kIPv4Address,
-                      base::size(kIPv4Address)));
+  EXPECT_EQ(ip_addresses[0], base::as_string_view(kIPv4Address));
 
   static const uint8_t kIPv6Address[] = {
       0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
   };
-  ASSERT_EQ(base::size(kIPv6Address), ip_addresses[1].size());
-  EXPECT_EQ(0, memcmp(ip_addresses[1].data(), kIPv6Address,
-                      base::size(kIPv6Address)));
+  EXPECT_EQ(ip_addresses[1], base::as_string_view(kIPv6Address));
 
   // Ensure the subjectAltName dirName has not influenced the handling of
   // the subject commonName.
@@ -568,15 +630,11 @@ TEST(X509CertificateTest, ExtractSPKIFromDERCert) {
       ImportCertFromFile(certs_dir, "nist.der");
   ASSERT_NE(static_cast<X509Certificate*>(nullptr), cert.get());
 
-  base::StringPiece spkiBytes;
+  std::string_view spkiBytes;
   EXPECT_TRUE(asn1::ExtractSPKIFromDERCert(
-      x509_util::CryptoBufferAsStringPiece(cert->cert_buffer()), &spkiBytes));
-
-  uint8_t hash[base::kSHA1Length];
-  base::SHA1HashBytes(reinterpret_cast<const uint8_t*>(spkiBytes.data()),
-                      spkiBytes.size(), hash);
-
-  EXPECT_EQ(0, memcmp(hash, kNistSPKIHash, sizeof(hash)));
+      base::as_string_view(cert->cert_span()), &spkiBytes));
+  base::SHA1Digest hash = base::SHA1Hash(base::as_byte_span(spkiBytes));
+  EXPECT_EQ(base::span(hash), base::as_byte_span(kNistSPKIHash));
 }
 
 TEST(X509CertificateTest, HasCanSignHttpExchangesDraftExtension) {
@@ -616,20 +674,19 @@ TEST(X509CertificateTest, ExtractExtension) {
   ASSERT_TRUE(cert);
 
   bool present, critical;
-  base::StringPiece contents;
+  std::string_view contents;
   ASSERT_TRUE(asn1::ExtractExtensionFromDERCert(
       x509_util::CryptoBufferAsStringPiece(cert->cert_buffer()),
-      BasicConstraintsOid().AsStringPiece(), &present, &critical, &contents));
+      base::as_string_view(bssl::kBasicConstraintsOid), &present, &critical,
+      &contents));
   EXPECT_TRUE(present);
   EXPECT_TRUE(critical);
-  ASSERT_EQ(base::StringPiece("\x30\x00", 2), contents);
+  ASSERT_EQ(std::string_view("\x30\x00", 2), contents);
 
   static constexpr uint8_t kNonsenseOID[] = {0x56, 0x1d, 0x13};
   ASSERT_TRUE(asn1::ExtractExtensionFromDERCert(
       x509_util::CryptoBufferAsStringPiece(cert->cert_buffer()),
-      base::StringPiece(reinterpret_cast<const char*>(kNonsenseOID),
-                        sizeof(kNonsenseOID)),
-      &present, &critical, &contents));
+      base::as_string_view(kNonsenseOID), &present, &critical, &contents));
   ASSERT_FALSE(present);
 
   scoped_refptr<X509Certificate> uid_cert =
@@ -637,10 +694,11 @@ TEST(X509CertificateTest, ExtractExtension) {
   ASSERT_TRUE(uid_cert);
   ASSERT_TRUE(asn1::ExtractExtensionFromDERCert(
       x509_util::CryptoBufferAsStringPiece(uid_cert->cert_buffer()),
-      BasicConstraintsOid().AsStringPiece(), &present, &critical, &contents));
+      base::as_string_view(bssl::kBasicConstraintsOid), &present, &critical,
+      &contents));
   EXPECT_TRUE(present);
   EXPECT_FALSE(critical);
-  ASSERT_EQ(base::StringPiece("\x30\x00", 2), contents);
+  ASSERT_EQ(std::string_view("\x30\x00", 2), contents);
 }
 
 // Tests CRYPTO_BUFFER deduping via X509Certificate::CreateFromBuffer.  We
@@ -651,14 +709,14 @@ TEST(X509CertificateTest, Cache) {
   bssl::UniquePtr<CRYPTO_BUFFER> thawte_cert_handle;
 
   // Add a single certificate to the certificate cache.
-  google_cert_handle = X509Certificate::CreateCertBufferFromBytes(google_der);
+  google_cert_handle = x509_util::CreateCryptoBuffer(google_der);
   ASSERT_TRUE(google_cert_handle);
   scoped_refptr<X509Certificate> cert1(
       X509Certificate::CreateFromBuffer(std::move(google_cert_handle), {}));
   ASSERT_TRUE(cert1);
 
   // Add the same certificate, but as a new handle.
-  google_cert_handle = X509Certificate::CreateCertBufferFromBytes(google_der);
+  google_cert_handle = x509_util::CreateCryptoBuffer(google_der);
   ASSERT_TRUE(google_cert_handle);
   scoped_refptr<X509Certificate> cert2(
       X509Certificate::CreateFromBuffer(std::move(google_cert_handle), {}));
@@ -674,8 +732,8 @@ TEST(X509CertificateTest, Cache) {
   // Add the same certificate, but this time with an intermediate. This
   // should result in the intermediate being cached. Note that this is not
   // a legitimate chain, but is suitable for testing.
-  google_cert_handle = X509Certificate::CreateCertBufferFromBytes(google_der);
-  thawte_cert_handle = X509Certificate::CreateCertBufferFromBytes(thawte_der);
+  google_cert_handle = x509_util::CreateCryptoBuffer(google_der);
+  thawte_cert_handle = x509_util::CreateCryptoBuffer(thawte_der);
   ASSERT_TRUE(google_cert_handle);
   ASSERT_TRUE(thawte_cert_handle);
   std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediates;
@@ -692,12 +750,85 @@ TEST(X509CertificateTest, Cache) {
             cert3->intermediate_buffers().size());
 }
 
+TEST(X509CertificateTest, CloneWithDifferentIntermediates) {
+  CertificateList certs = CreateCertificateListFromFile(
+      GetTestCertsDirectory(), "multi-root-chain1.pem",
+      X509Certificate::FORMAT_PEM_CERT_SEQUENCE);
+  ASSERT_EQ(4u, certs.size());
+
+  auto leaf_with_no_intermediates = certs[0];
+
+  {
+    auto cloned =
+        leaf_with_no_intermediates->CloneWithDifferentIntermediates({});
+    // Intermediates are equal, so should return a reference to the same object.
+    EXPECT_EQ(leaf_with_no_intermediates.get(), cloned.get());
+  }
+  {
+    std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediates;
+    intermediates.push_back(bssl::UpRef(certs[1]->cert_buffer()));
+    intermediates.push_back(bssl::UpRef(certs[2]->cert_buffer()));
+    auto cloned = leaf_with_no_intermediates->CloneWithDifferentIntermediates(
+        std::move(intermediates));
+    ASSERT_TRUE(cloned);
+    EXPECT_NE(leaf_with_no_intermediates.get(), cloned.get());
+    EXPECT_EQ(leaf_with_no_intermediates->cert_buffer(), cloned->cert_buffer());
+    ExpectX509CertificateMembersEqual(leaf_with_no_intermediates, cloned);
+    ASSERT_EQ(2u, cloned->intermediate_buffers().size());
+    EXPECT_TRUE(x509_util::CryptoBufferEqual(
+        certs[1]->cert_buffer(), cloned->intermediate_buffers()[0].get()));
+    EXPECT_TRUE(x509_util::CryptoBufferEqual(
+        certs[2]->cert_buffer(), cloned->intermediate_buffers()[1].get()));
+  }
+
+  std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> leaf_intermediates;
+  leaf_intermediates.push_back(bssl::UpRef(certs[1]->cert_buffer()));
+  leaf_intermediates.push_back(bssl::UpRef(certs[2]->cert_buffer()));
+  auto leaf_with_intermediates = X509Certificate::CreateFromBuffer(
+      bssl::UpRef(certs[0]->cert_buffer()), std::move(leaf_intermediates));
+  ASSERT_TRUE(leaf_with_intermediates);
+
+  {
+    auto cloned = leaf_with_intermediates->CloneWithDifferentIntermediates({});
+    EXPECT_NE(leaf_with_intermediates.get(), cloned.get());
+    EXPECT_EQ(leaf_with_intermediates->cert_buffer(), cloned->cert_buffer());
+    ExpectX509CertificateMembersEqual(leaf_with_intermediates, cloned);
+    ASSERT_EQ(0u, cloned->intermediate_buffers().size());
+  }
+  {
+    std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediates;
+    intermediates.push_back(bssl::UpRef(certs[1]->cert_buffer()));
+    intermediates.push_back(bssl::UpRef(certs[2]->cert_buffer()));
+    auto cloned = leaf_with_intermediates->CloneWithDifferentIntermediates(
+        std::move(intermediates));
+    // Intermediates are equal, so should return a reference to the same object.
+    EXPECT_EQ(leaf_with_intermediates.get(), cloned.get());
+  }
+  {
+    std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediates;
+    intermediates.push_back(bssl::UpRef(certs[2]->cert_buffer()));
+    intermediates.push_back(bssl::UpRef(certs[1]->cert_buffer()));
+    auto cloned = leaf_with_intermediates->CloneWithDifferentIntermediates(
+        std::move(intermediates));
+    // Intermediates are different (same buffers but in different order).
+    ASSERT_TRUE(cloned);
+    EXPECT_NE(leaf_with_intermediates.get(), cloned.get());
+    EXPECT_EQ(leaf_with_intermediates->cert_buffer(), cloned->cert_buffer());
+    ExpectX509CertificateMembersEqual(leaf_with_intermediates, cloned);
+    ASSERT_EQ(2u, cloned->intermediate_buffers().size());
+    EXPECT_TRUE(x509_util::CryptoBufferEqual(
+        certs[2]->cert_buffer(), cloned->intermediate_buffers()[0].get()));
+    EXPECT_TRUE(x509_util::CryptoBufferEqual(
+        certs[1]->cert_buffer(), cloned->intermediate_buffers()[1].get()));
+  }
+}
+
 TEST(X509CertificateTest, Pickle) {
   bssl::UniquePtr<CRYPTO_BUFFER> google_cert_handle =
-      X509Certificate::CreateCertBufferFromBytes(google_der);
+      x509_util::CreateCryptoBuffer(google_der);
   ASSERT_TRUE(google_cert_handle);
   bssl::UniquePtr<CRYPTO_BUFFER> thawte_cert_handle =
-      X509Certificate::CreateCertBufferFromBytes(thawte_der);
+      x509_util::CreateCryptoBuffer(thawte_der);
   ASSERT_TRUE(thawte_cert_handle);
 
   std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediates;
@@ -713,14 +844,12 @@ TEST(X509CertificateTest, Pickle) {
   scoped_refptr<X509Certificate> cert_from_pickle =
       X509Certificate::CreateFromPickle(&iter);
   ASSERT_TRUE(cert_from_pickle);
-  EXPECT_TRUE(x509_util::CryptoBufferEqual(cert->cert_buffer(),
-                                           cert_from_pickle->cert_buffer()));
-  const auto& cert_intermediates = cert->intermediate_buffers();
-  const auto& pickle_intermediates = cert_from_pickle->intermediate_buffers();
-  ASSERT_EQ(cert_intermediates.size(), pickle_intermediates.size());
-  for (size_t i = 0; i < cert_intermediates.size(); ++i) {
-    EXPECT_TRUE(x509_util::CryptoBufferEqual(cert_intermediates[i].get(),
-                                             pickle_intermediates[i].get()));
+  const auto& cert_buffers = cert->cert_buffers();
+  const auto& pickle_buffers = cert_from_pickle->cert_buffers();
+  ASSERT_EQ(cert_buffers.size(), pickle_buffers.size());
+  for (size_t i = 0; i < cert_buffers.size(); ++i) {
+    EXPECT_TRUE(x509_util::CryptoBufferEqual(cert_buffers[i].get(),
+                                             pickle_buffers[i].get()));
   }
 }
 
@@ -735,7 +864,7 @@ TEST(X509CertificateTest, IntermediateCertificates) {
 
   bssl::UniquePtr<CRYPTO_BUFFER> google_handle;
   // Create object with no intermediates:
-  google_handle = X509Certificate::CreateCertBufferFromBytes(google_der);
+  google_handle = x509_util::CreateCryptoBuffer(google_der);
   scoped_refptr<X509Certificate> cert1;
   cert1 =
       X509Certificate::CreateFromBuffer(bssl::UpRef(google_handle.get()), {});
@@ -860,16 +989,14 @@ TEST(X509CertificateTest, IsIssuedByEncoded) {
       ImportCertFromFile(certs_dir, "mit.davidben.der"));
   ASSERT_NE(static_cast<X509Certificate*>(nullptr), mit_davidben_cert.get());
 
-  std::string mit_issuer(reinterpret_cast<const char*>(MITDN),
-                         sizeof(MITDN));
+  std::string mit_issuer{base::as_string_view(MITDN)};
 
   // Test a certificate from Google, issued by Thawte
   scoped_refptr<X509Certificate> google_cert(
       ImportCertFromFile(certs_dir, "google.single.der"));
   ASSERT_NE(static_cast<X509Certificate*>(nullptr), google_cert.get());
 
-  std::string thawte_issuer(reinterpret_cast<const char*>(ThawteDN),
-                            sizeof(ThawteDN));
+  std::string thawte_issuer{base::as_string_view(ThawteDN)};
 
   // Check that the David Ben certificate is issued by MIT, but not
   // by Thawte.
@@ -903,7 +1030,7 @@ TEST(X509CertificateTest, IsSelfSigned) {
   EXPECT_FALSE(X509Certificate::IsSelfSigned(cert->cert_buffer()));
 
   scoped_refptr<X509Certificate> self_signed(
-      ImportCertFromFile(certs_dir, "aia-root.pem"));
+      ImportCertFromFile(certs_dir, "root_ca_cert.pem"));
   ASSERT_NE(static_cast<X509Certificate*>(nullptr), self_signed.get());
   EXPECT_TRUE(X509Certificate::IsSelfSigned(self_signed->cert_buffer()));
 
@@ -916,75 +1043,50 @@ TEST(X509CertificateTest, IsSelfSigned) {
       ImportCertFromFile(certs_dir, "self-signed-invalid-sig.pem"));
   ASSERT_NE(static_cast<X509Certificate*>(nullptr), bad_sig.get());
   EXPECT_FALSE(X509Certificate::IsSelfSigned(bad_sig->cert_buffer()));
+
+  constexpr char invalid_cert_data[] = "this is not a certificate";
+  bssl::UniquePtr<CRYPTO_BUFFER> invalid_cert_handle =
+      x509_util::CreateCryptoBuffer(std::string_view(invalid_cert_data));
+  ASSERT_TRUE(invalid_cert_handle);
+  EXPECT_FALSE(X509Certificate::IsSelfSigned(invalid_cert_handle.get()));
 }
 
 TEST(X509CertificateTest, IsIssuedByEncodedWithIntermediates) {
-  static const unsigned char kPolicyRootDN[] = {
-    0x30, 0x1e, 0x31, 0x1c, 0x30, 0x1a, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c,
-    0x13, 0x50, 0x6f, 0x6c, 0x69, 0x63, 0x79, 0x20, 0x54, 0x65, 0x73, 0x74,
-    0x20, 0x52, 0x6f, 0x6f, 0x74, 0x20, 0x43, 0x41
-  };
-  static const unsigned char kPolicyIntermediateDN[] = {
-    0x30, 0x26, 0x31, 0x24, 0x30, 0x22, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c,
-    0x1b, 0x50, 0x6f, 0x6c, 0x69, 0x63, 0x79, 0x20, 0x54, 0x65, 0x73, 0x74,
-    0x20, 0x49, 0x6e, 0x74, 0x65, 0x72, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74,
-    0x65, 0x20, 0x43, 0x41
-  };
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
 
-  base::FilePath certs_dir = GetTestCertsDirectory();
+  std::string intermediate_dn = intermediate->GetSubject();
+  std::string root_dn = root->GetSubject();
 
-  CertificateList policy_chain = CreateCertificateListFromFile(
-      certs_dir, "explicit-policy-chain.pem", X509Certificate::FORMAT_AUTO);
-  ASSERT_EQ(3u, policy_chain.size());
-
-  // The intermediate CA certificate's policyConstraints extension has a
-  // requireExplicitPolicy field with SkipCerts=0.
-  std::string policy_intermediate_dn(
-      reinterpret_cast<const char*>(kPolicyIntermediateDN),
-      sizeof(kPolicyIntermediateDN));
-  std::string policy_root_dn(reinterpret_cast<const char*>(kPolicyRootDN),
-                             sizeof(kPolicyRootDN));
-
-  std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> intermediates;
-  intermediates.push_back(bssl::UpRef(policy_chain[1]->cert_buffer()));
-  scoped_refptr<X509Certificate> cert_chain = X509Certificate::CreateFromBuffer(
-      bssl::UpRef(policy_chain[0]->cert_buffer()), std::move(intermediates));
+  // Create an X509Certificate object containing the leaf and the intermediate
+  // but not the root.
+  scoped_refptr<X509Certificate> cert_chain = leaf->GetX509CertificateChain();
   ASSERT_TRUE(cert_chain);
 
-  std::vector<std::string> issuers;
-
   // Check that the chain is issued by the intermediate.
-  issuers.clear();
-  issuers.push_back(policy_intermediate_dn);
-  EXPECT_TRUE(cert_chain->IsIssuedByEncoded(issuers));
+  EXPECT_TRUE(cert_chain->IsIssuedByEncoded({intermediate_dn}));
 
   // Check that the chain is also issued by the root.
-  issuers.clear();
-  issuers.push_back(policy_root_dn);
-  EXPECT_TRUE(cert_chain->IsIssuedByEncoded(issuers));
+  EXPECT_TRUE(cert_chain->IsIssuedByEncoded({root_dn}));
 
   // Check that the chain is issued by either the intermediate or the root.
-  issuers.clear();
-  issuers.push_back(policy_intermediate_dn);
-  issuers.push_back(policy_root_dn);
-  EXPECT_TRUE(cert_chain->IsIssuedByEncoded(issuers));
+  EXPECT_TRUE(cert_chain->IsIssuedByEncoded({intermediate_dn, root_dn}));
 
   // Check that an empty issuers list returns false.
-  issuers.clear();
-  EXPECT_FALSE(cert_chain->IsIssuedByEncoded(issuers));
+  EXPECT_FALSE(cert_chain->IsIssuedByEncoded({}));
 
   // Check that the chain is not issued by Verisign
-  std::string mit_issuer(reinterpret_cast<const char*>(VerisignDN),
-                         sizeof(VerisignDN));
-  issuers.clear();
-  issuers.push_back(mit_issuer);
-  EXPECT_FALSE(cert_chain->IsIssuedByEncoded(issuers));
+  std::string verisign_issuer{base::as_string_view(VerisignDN)};
+  EXPECT_FALSE(cert_chain->IsIssuedByEncoded({verisign_issuer}));
+
+  // Check that the chain is issued by root, though the extraneous Verisign
+  // name is also given.
+  EXPECT_TRUE(cert_chain->IsIssuedByEncoded({verisign_issuer, root_dn}));
 }
 
 const struct CertificateFormatTestData {
   const char* file_name;
   X509Certificate::Format format;
-  SHA256HashValue* chain_fingerprints[3];
+  std::array<SHA256HashValue*, 3> chain_fingerprints;
 } kFormatTestData[] = {
     // DER Parsing - single certificate, DER encoded
     {"google.single.der",
@@ -1090,7 +1192,7 @@ const struct CertificateFormatTestData {
 class X509CertificateParseTest
     : public testing::TestWithParam<CertificateFormatTestData> {
  public:
-  virtual ~X509CertificateParseTest() = default;
+  ~X509CertificateParseTest() override = default;
   void SetUp() override { test_data_ = GetParam(); }
   void TearDown() override {}
 
@@ -1103,11 +1205,11 @@ TEST_P(X509CertificateParseTest, CanParseFormat) {
   CertificateList certs = CreateCertificateListFromFile(
       certs_dir, test_data_.file_name, test_data_.format);
   ASSERT_FALSE(certs.empty());
-  ASSERT_LE(certs.size(), base::size(test_data_.chain_fingerprints));
+  ASSERT_LE(certs.size(), std::size(test_data_.chain_fingerprints));
   CheckGoogleCert(certs.front(), google_parse_fingerprint,
                   kGoogleParseValidFrom, kGoogleParseValidTo);
 
-  for (size_t i = 0; i < base::size(test_data_.chain_fingerprints); ++i) {
+  for (size_t i = 0; i < std::size(test_data_.chain_fingerprints); ++i) {
     if (!test_data_.chain_fingerprints[i]) {
       // No more test certificates expected - make sure no more were
       // returned before marking this test a success.
@@ -1262,11 +1364,15 @@ const CertificateNameVerifyTestData kNameVerifyTestData[] = {
     {true, "FE80::200:f8ff:fe21:67cf", "",
      "x00000000000000000000000006070808,xfe800000000000000200f8fffe2167cf,"
      "xff0000000000000000000000060708ff,10.0.0.1"},
-    // Numeric only hostnames (none of these are considered valid IP addresses).
+    // Invalid hostnames with final numeric component.
     {false, "121.2.3.512", "1*1.2.3.512,*1.2.3.512,1*.2.3.512,*.2.3.512",
      "121.2.3.0"},
     {false, "1.2.3.4.5.6", "*.2.3.4.5.6"},
-    {true, "1.2.3.4.5", "1.2.3.4.5"},
+    {false, "1.2.3.4.5", "1.2.3.4.5"},
+    {false, "a.0.0.1", "*.0.0.1"},
+    // IP addresses in dNSName should not match commonName
+    {false, "127.0.0.1", "127.0.0.1"},
+    {false, "127.0.0.1", "*.0.0.1"},
     // Invalid host names.
     {false, ".", ""},
     {false, ".", "."},
@@ -1318,13 +1424,13 @@ TEST_P(X509CertificateNameVerifyTest, VerifyHostname) {
         ip_addressses.push_back(std::move(bytes));
         ASSERT_EQ(16U, ip_addressses.back().size()) << i;
       } else {  // Decimal groups
-        std::vector<std::string> decimals_ascii = base::SplitString(
+        std::vector<std::string> decimals_ascii_list = base::SplitString(
             addr_ascii, ".", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-        EXPECT_EQ(4U, decimals_ascii.size()) << i;
+        EXPECT_EQ(4U, decimals_ascii_list.size()) << i;
         std::string addr_bytes;
-        for (size_t j = 0; j < decimals_ascii.size(); ++j) {
+        for (const auto& decimals_ascii : decimals_ascii_list) {
           int decimal_value;
-          EXPECT_TRUE(base::StringToInt(decimals_ascii[j], &decimal_value));
+          EXPECT_TRUE(base::StringToInt(decimals_ascii, &decimal_value));
           EXPECT_GE(decimal_value, 0);
           EXPECT_LE(decimal_value, 255);
           addr_bytes.push_back(static_cast<char>(decimal_value));
@@ -1345,17 +1451,15 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::ValuesIn(kNameVerifyTestData));
 
 const struct PublicKeyInfoTestData {
-  const char* cert_file;
+  const char* file_name;
   size_t expected_bits;
   X509Certificate::PublicKeyType expected_type;
 } kPublicKeyInfoTestData[] = {
-    {"768-rsa-ee-by-768-rsa-intermediate.pem", 768,
-     X509Certificate::kPublicKeyTypeRSA},
-    {"1024-rsa-ee-by-768-rsa-intermediate.pem", 1024,
-     X509Certificate::kPublicKeyTypeRSA},
-    {"prime256v1-ecdsa-ee-by-1024-rsa-intermediate.pem", 256,
-     X509Certificate::kPublicKeyTypeECDSA},
-    {"large_key.pem", 8200, X509Certificate::kPublicKeyTypeRSA},
+    {"rsa-768", 768, X509Certificate::kPublicKeyTypeRSA},
+    {"rsa-1024", 1024, X509Certificate::kPublicKeyTypeRSA},
+    {"rsa-2048", 2048, X509Certificate::kPublicKeyTypeRSA},
+    {"rsa-8000", 8000, X509Certificate::kPublicKeyTypeRSA},
+    {"ec-prime256v1", 256, X509Certificate::kPublicKeyTypeECDSA},
 };
 
 class X509CertificatePublicKeyInfoTest
@@ -1365,15 +1469,16 @@ class X509CertificatePublicKeyInfoTest
 TEST_P(X509CertificatePublicKeyInfoTest, GetPublicKeyInfo) {
   PublicKeyInfoTestData data = GetParam();
 
-  scoped_refptr<X509Certificate> cert(
-      ImportCertFromFile(GetTestCertsDirectory(), data.cert_file));
-  ASSERT_TRUE(cert.get());
+  auto [leaf, root] = CertBuilder::CreateSimpleChain2();
+
+  ASSERT_TRUE(leaf->UseKeyFromFile(GetTestCertsDirectory().AppendASCII(
+      base::StrCat({data.file_name, "-1.key"}))));
 
   size_t actual_bits = 0;
   X509Certificate::PublicKeyType actual_type =
       X509Certificate::kPublicKeyTypeUnknown;
 
-  X509Certificate::GetPublicKeyInfo(cert->cert_buffer(), &actual_bits,
+  X509Certificate::GetPublicKeyInfo(leaf->GetCertBuffer(), &actual_bits,
                                     &actual_type);
 
   EXPECT_EQ(data.expected_bits, actual_bits);

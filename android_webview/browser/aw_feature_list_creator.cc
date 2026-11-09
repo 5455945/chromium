@@ -1,49 +1,69 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/aw_feature_list_creator.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "android_webview/browser/aw_browser_context.h"
+#include "android_webview/browser/aw_browser_context_store.h"
 #include "android_webview/browser/aw_browser_process.h"
+#include "android_webview/browser/aw_enterprise_authentication_app_link_manager.h"
 #include "android_webview/browser/aw_metrics_service_client_delegate.h"
+#include "android_webview/browser/content_restriction/aw_content_restriction_manager_client.h"
+#include "android_webview/browser/metrics/android_metrics_provider.h"
+#include "android_webview/browser/metrics/aw_entropy_state_provider.h"
 #include "android_webview/browser/metrics/aw_metrics_service_client.h"
+#include "android_webview/browser/safe_browsing/aw_url_checker_delegate_impl.h"
+#include "android_webview/browser/supervised_user/aw_supervised_user_url_classifier.h"
+#include "android_webview/browser/tracing/aw_tracing_delegate.h"
+#include "android_webview/browser/variations/aw_entropy_providers.h"
 #include "android_webview/browser/variations/variations_seed_loader.h"
+#include "android_webview/common/aw_cached_flags.h"
+#include "android_webview/common/aw_features.h"
 #include "android_webview/common/aw_switches.h"
 #include "android_webview/proto/aw_variations_seed.pb.h"
-#include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/metrics/field_trial.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "cc/base/switches.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/embedder_support/android/metrics/android_metrics_service_client.h"
 #include "components/embedder_support/origin_trials/origin_trial_prefs.h"
+#include "components/embedder_support/origin_trials/pref_names.h"
+#include "components/metrics/android_metrics_helper.h"
+#include "components/metrics/entropy_state.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/metrics_state_manager.h"
 #include "components/metrics/persistent_histograms.h"
 #include "components/policy/core/browser/configuration_policy_pref_store.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/in_memory_pref_store.h"
 #include "components/prefs/json_pref_store.h"
+#include "components/prefs/pref_name_set.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_service_factory.h"
 #include "components/prefs/segregated_pref_store.h"
+#include "components/tracing/common/pref_names.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/pref_names.h"
 #include "components/variations/service/safe_seed_manager.h"
 #include "components/variations/service/variations_service.h"
+#include "components/variations/variations_safe_seed_store.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/common/content_switch_dependent_feature_overrides.h"
 #include "net/base/features.h"
 #include "net/nqe/pref_names.h"
@@ -54,9 +74,123 @@ namespace {
 
 bool g_signature_verification_enabled = true;
 
+// A list of Finch study names that should NOT use the nonembedded low entropy
+// source.
+const char* const kNonembeddedLowEntropySourceDenylist[] = {
+    "AsyncThreadPoolInit",
+    "AttributionReportingDeprecation",
+    "AudioRendererMixerImmediatePause",
+    "AutofillAiCrowdsourcingPredictions",
+    "AutofillAndroidUseGlobalIdForFormComparison",
+    "AutofillFixIframeOwnership",
+    "AutofillMoveSmallFormLogicToClient",
+    "AutofillOnlyConsiderSingleFieldFormsAsSearchForms",
+    "AutofillSupportSplitZipCode",
+    "BrokenAlternativeServiceDelays",
+    "ComponentsBase32InRust",
+    "CompressionDictionaryTTL",
+    "DefaultANGLEVulkan",
+    "DisablePersistBrokenAlternativeServices",
+    "DomStorageSqliteNewDatabases",
+    "EnableQuicReadMultipleAndUdpGRO",
+    "FlushPersistentSystemProfileOnWrite",
+    "GamepadPollingInterval",
+    "HardenUrlProvisionFetcher",
+    "HarfRustShaping",
+    "HeapVectorPromptlyFree",
+    "IcuNormalizerMigration",
+    "IdbSqliteOnDiskRollout",
+    "IndexedDBConnectionDeduplication",
+    "LazyParseInlineStyleSheets",
+    "MediaCodecLinearBlock",
+    "MetricsLogTrimmingLimitsWebView",
+    "MojoDirectSharedMemoryAllocation",
+    "MutationEvents",
+    "MutationEventsTurnDownHighRisk",
+    "NetTaskScheduler",
+    "NetworkQualityEstimatorAsyncNotifyHeadersReceived",
+    "NoSelectionMenuCaching",
+    "PartitionAllocBackupRefPtrAndroid",
+    "PartitionAllocMiracleObject",
+    "PartitionAllocTighterAlignedAllocBound",
+    "PaymentRequestEnforceLNAWithClientSecurityState",
+    "Prerender2FallbackPrefetchSpecRules",
+    "PreviewHandwritingGesture",
+    "PrioritizeMainFrameNavigationNetworkResponse",
+    "QUIC",
+    "RebindServiceBatchApi",
+    "RequiresLoadIgnoreLimitsForDomWindowsOnly",
+    "RestrictLinkHeaderOnSubresource",
+    "RustyIcoFeature",
+    "ScrollJankV4MetricFastScrollContinuityRequiresSameDirection",
+    "ScrollPredictorEnhancements",
+    "SimpleCachePrefetchExperiment2",
+    "TextClassifierTimeout",
+    "ThreeDSecureTelemetry",
+    "UMA-Uniformity-Trial-0.5-Percent-1",
+    "UMA-Uniformity-Trial-0.5-Percent-2",
+    "UMA-Uniformity-Trial-1-Percent",
+    "UMA-Uniformity-Trial-10-Percent",
+    "UMA-Uniformity-Trial-10-Percent-sanity",
+    "UMA-Uniformity-Trial-20-Percent",
+    "UMA-Uniformity-Trial-5-Percent",
+    "UMA-Uniformity-Trial-50-Percent",
+    "UnthrottleAsyncTouchMovesV2",
+    "UseDynamicBackingAllocations",
+    "UseRustCborParser",
+    "UseRustCborWriter",
+    "V8DateTimePatternGeneratorCacheEviction",
+    "V8SqrtAllocationLimits",
+    "V8Turbolev",
+    "VariationsFeatureAccessLogging",
+    "VulkanImaginationMSAA",
+    "WebViewAndroidThreadPriority",
+    "WebViewBackgroundTracingInit",
+    "WebViewBoostRendererPriorityOnNavigation",
+    "WebViewEnableDnsPlatform",
+    "WebViewInitInConstructor",
+    "WebViewMemoryProfilingClient",
+    "WebViewMigrateVisitedLinks",
+    "WebViewMoveWorkToProviderInit",
+    "WebViewMultiProfileSkipDefaultProfile",
+    "WebViewPrefetchAheadOfPrerender",
+    "WebViewPrefetchOffTheMainThread",
+    "WebViewPrewarmDictionaryOnPreconnect",
+    "WebViewReducedFinchTime",
+    "WebViewSurfaceControlV2",
+    "WebviewSingleSharedContextState",
+    "XMLParsingRustNonXslt",
+    "XSLTSpecialTrialWebView",
+};
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(LimitedEntropySourceState)
+enum class LimitedEntropySourceState {
+  kUnset = 0,
+  kSetValid = 1,
+  kSetInvalid = 2,
+  kMaxValue = kSetInvalid,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/variations/enums.xml:LimitedEntropySourceState)
+
 // These prefs go in the JsonPrefStore, and will persist across runs. Other
 // prefs go in the InMemoryPrefStore, and will be lost when the process ends.
 const char* const kPersistentPrefsAllowlist[] = {
+    // Restricted content blocking.
+    android_webview::prefs::kShouldBlockRestrictedContent,
+
+    // Safe Browsing user opt-in.
+    android_webview::prefs::kSafeBrowsingUserOptIn,
+
+    // Last known value of the app's cache quota.
+    android_webview::prefs::kLastKnownAppCacheQuota,
+
+    // Origin Trial config overrides.
+    embedder_support::prefs::kOriginTrialPublicKey,
+    embedder_support::prefs::kOriginTrialDisabledFeatures,
+    embedder_support::prefs::kOriginTrialDisabledTokens,
     // Randomly-generated GUID which pseudonymously identifies uploaded metrics.
     metrics::prefs::kMetricsClientID,
     // Random seed value for variation's entropy providers. Used to assign
@@ -73,7 +207,6 @@ const char* const kPersistentPrefsAllowlist[] = {
     metrics::prefs::kStabilityFileMetricsUnsentSamplesCount,
     metrics::prefs::kStabilityLaunchCount,
     metrics::prefs::kStabilityPageLoadCount,
-    metrics::prefs::kStabilityRendererHangCount,
     metrics::prefs::kStabilityRendererLaunchCount,
     // Unsent logs.
     metrics::prefs::kMetricsInitialLogs,
@@ -89,6 +222,20 @@ const char* const kPersistentPrefsAllowlist[] = {
     // determine if the seed is expired.
     variations::prefs::kVariationsLastFetchTime,
     variations::prefs::kVariationsSeedDate,
+
+    // The state of the previous background tracing session.
+    tracing::kBackgroundTracingSessionState,
+
+    // System-level info.
+    metrics::prefs::kVersionCodePref,
+    prefs::kPrimaryCpuAbiBitnessPref,
+
+    // Records about profiles/contexts and their stored data
+    prefs::kProfileListPref,
+    prefs::kProfileCounterPref,
+
+    // Content restriction enabled state.
+    android_webview::prefs::kContentRestrictionEnabled,
 };
 
 void HandleReadError(PersistentPrefStore::PrefReadError error) {}
@@ -117,25 +264,51 @@ AwFeatureListCreator::AwFeatureListCreator()
 
 AwFeatureListCreator::~AwFeatureListCreator() {}
 
+void AwFeatureListCreator::CreateFeatureListAndFieldTrials() {
+  TRACE_EVENT0("startup",
+               "AwFeatureListCreator::CreateFeatureListAndFieldTrials");
+  CreateLocalState();
+  AwMetricsServiceClient::SetInstance(std::make_unique<AwMetricsServiceClient>(
+      std::make_unique<AwMetricsServiceClientDelegate>()));
+  AwMetricsServiceClient::GetInstance()->Initialize(local_state_.get());
+  SetUpFieldTrials();
+}
+
+void AwFeatureListCreator::CreateLocalState() {
+  browser_policy_connector_ = std::make_unique<AwBrowserPolicyConnector>();
+  local_state_ = CreatePrefService();
+}
+
+void AwFeatureListCreator::DisableSignatureVerificationForTesting() {
+  g_signature_verification_enabled = false;
+}
+
 std::unique_ptr<PrefService> AwFeatureListCreator::CreatePrefService() {
   auto pref_registry = base::MakeRefCounted<user_prefs::PrefRegistrySyncable>();
 
-  AwMetricsServiceClient::RegisterPrefs(pref_registry.get());
+  AwMetricsServiceClient::RegisterMetricsPrefs(pref_registry.get());
   variations::VariationsService::RegisterPrefs(pref_registry.get());
 
   embedder_support::OriginTrialPrefs::RegisterPrefs(pref_registry.get());
   AwBrowserProcess::RegisterNetworkContextLocalStatePrefs(pref_registry.get());
+  EnterpriseAuthenticationAppLinkManager::RegisterPrefs(pref_registry.get());
+  AwBrowserProcess::RegisterAppCacheQuotaLocalStatePref(pref_registry.get());
+  AwTracingDelegate::RegisterPrefs(pref_registry.get());
+  AwBrowserContextStore::RegisterPrefs(pref_registry.get());
+  AwSupervisedUserUrlClassifier::RegisterPrefs(pref_registry.get());
+  AwUrlCheckerDelegateImpl::RegisterPrefs(pref_registry.get());
+  AwContentRestrictionManagerClient::RegisterPrefs(pref_registry.get());
 
   PrefServiceFactory pref_service_factory;
 
-  std::set<std::string> persistent_prefs;
+  PrefNameSet persistent_prefs;
   for (const char* const pref_name : kPersistentPrefsAllowlist)
     persistent_prefs.insert(pref_name);
 
   persistent_prefs.insert(std::string(metrics::prefs::kMetricsLastSeenPrefix) +
                           kBrowserMetricsName);
   persistent_prefs.insert(std::string(metrics::prefs::kMetricsLastSeenPrefix) +
-                          metrics::kCrashpadHistogramAllocatorName);
+                          kCrashpadHistogramAllocatorName);
 
   // SegregatedPrefStore may be validated with a MAC (message authentication
   // code). On Android, the store is protected by app sandboxing, so validation
@@ -159,52 +332,76 @@ std::unique_ptr<PrefService> AwFeatureListCreator::CreatePrefService() {
 }
 
 void AwFeatureListCreator::SetUpFieldTrials() {
-  auto* metrics_client = AwMetricsServiceClient::GetInstance();
-
-  // Chrome uses the default entropy provider here (rather than low entropy
-  // provider). The default provider needs to know whether UMA is enabled, but
-  // WebView determines UMA by querying GMS, which is very slow. So WebView
-  // always uses the low entropy provider. Both providers guarantee permanent
-  // consistency, which is the main requirement. The difference is that the low
-  // entropy provider has fewer unique experiment combinations. This is better
-  // for privacy (since experiment state doesn't identify users), but also means
-  // fewer combinations tested in the wild.
-  DCHECK(!field_trial_list_);
-  field_trial_list_ = std::make_unique<base::FieldTrialList>(
-      metrics_client->CreateLowEntropyProvider());
+  // The FieldTrialList should have been instantiated in
+  // AndroidMetricsServiceClient::Initialize().
+  DCHECK(base::FieldTrialList::GetInstance());
 
   // Convert the AwVariationsSeed proto to a SeedResponse object.
   std::unique_ptr<AwVariationsSeed> seed_proto = TakeSeed();
   std::unique_ptr<variations::SeedResponse> seed;
   base::Time seed_date;  // Initializes to null time.
+  int nonembedded_low_entropy_source = -1;
+  std::string limited_entropy_randomization_source;
   if (seed_proto) {
-    seed = std::make_unique<variations::SeedResponse>();
-    seed->data = seed_proto->seed_data();
-    seed->signature = seed_proto->signature();
-    seed->country = seed_proto->country();
-    seed->date = seed_proto->date();
-    seed->is_gzip_compressed = seed_proto->is_gzip_compressed();
-
     // We set the seed fetch time to when the service downloaded the seed rather
     // than base::Time::Now() because we want to compute seed freshness based on
     // the initial download time, which happened in the service at some earlier
     // point.
-    seed_date = base::Time::FromJavaTime(seed->date);
+    seed_date = base::Time::FromMillisecondsSinceUnixEpoch(seed_proto->date());
+
+    seed = std::make_unique<variations::SeedResponse>();
+    seed->data = seed_proto->seed_data();
+    seed->signature = seed_proto->signature();
+    seed->country = seed_proto->country();
+    seed->date = seed_date;
+    seed->is_gzip_compressed = seed_proto->is_gzip_compressed();
+
+    // Use the cached flag as a kill switch to gate the nonembedded low entropy
+    // source logic. Reading without checking for presence would result in a
+    // default value of 0, which would be indistinguishable from a valid low
+    // entropy source.
+    if (!CachedFlags::IsEnabled(
+            features::kWebViewNonembeddedLowEntropySourceKillSwitch) &&
+        seed_proto->has_low_entropy_source()) {
+      nonembedded_low_entropy_source = seed_proto->low_entropy_source();
+    }
+    LimitedEntropySourceState limited_source_state;
+    if (!seed_proto->has_limited_entropy_randomization_source()) {
+      limited_source_state = LimitedEntropySourceState::kUnset;
+    } else if (metrics::EntropyState::IsValidLimitedEntropyRandomizationSource(
+                   seed_proto->limited_entropy_randomization_source())) {
+      limited_source_state = LimitedEntropySourceState::kSetValid;
+      limited_entropy_randomization_source =
+          seed_proto->limited_entropy_randomization_source();
+    } else {
+      limited_source_state = LimitedEntropySourceState::kSetInvalid;
+    }
+    base::UmaHistogramEnumeration(
+        "Variations.LimitedEntropyRandomizationSource.State",
+        limited_source_state);
   }
 
   client_ = std::make_unique<AwVariationsServiceClient>();
   auto seed_store = std::make_unique<variations::VariationsSeedStore>(
       local_state_.get(), /*initial_seed=*/std::move(seed),
-      /*signature_verification_enabled=*/g_signature_verification_enabled,
+      /*signature_verification_enabled_on_load=*/
+      client_->EnableSignatureVerificationOnLoad() &&
+          g_signature_verification_enabled,
+      /*signature_verification_enabled_on_receive=*/
+      g_signature_verification_enabled,
+      std::make_unique<variations::VariationsSafeSeedStore>(
+          local_state_.get(), client_->GetVariationsSeedFileDir(),
+          client_->GetChannelForVariations(), /*entropy_providers=*/nullptr),
+      client_->GetChannelForVariations(), client_->GetVariationsSeedFileDir(),
+      /*entropy_providers=*/nullptr,
       /*use_first_run_prefs=*/false);
 
   if (!seed_date.is_null())
     seed_store->RecordLastFetchTime(seed_date);
 
-  variations::UIStringOverrider ui_string_overrider;
   variations_field_trial_creator_ =
       std::make_unique<variations::VariationsFieldTrialCreator>(
-          client_.get(), std::move(seed_store), ui_string_overrider);
+          client_.get(), std::move(seed_store));
   variations_field_trial_creator_->OverrideVariationsPlatform(
       variations::Study::PLATFORM_ANDROID_WEBVIEW);
 
@@ -217,37 +414,55 @@ void AwFeatureListCreator::SetUpFieldTrials() {
   // able to break seed downloads. See https://crbug.com/801771 for more info.
   variations::SafeSeedManager ignored_safe_seed_manager(local_state_.get());
 
-  // Populate FieldTrialList. Since |low_entropy_provider| is null, it will fall
-  // back to the provider we previously gave to FieldTrialList, which is a low
-  // entropy provider. The X-Client-Data header is not reported on WebView, so
-  // we pass an empty object as the |low_entropy_source_value|.
-  variations_field_trial_creator_->SetupFieldTrials(
-      cc::switches::kEnableGpuBenchmarking, switches::kEnableFeatures,
-      switches::kDisableFeatures, std::vector<std::string>(),
-      GetSwitchDependentFeatureOverrides(
-          *base::CommandLine::ForCurrentProcess()),
-      /*low_entropy_provider=*/nullptr, std::make_unique<base::FeatureList>(),
-      metrics_client->metrics_state_manager(), aw_field_trials_.get(),
-      &ignored_safe_seed_manager, /*low_entropy_source_value=*/absl::nullopt);
-}
+  base::Time fetch_time = variations_field_trial_creator_->GetSeedFetchTime();
+  long seed_freshness_minutes = (base::Time::Now() - fetch_time).InMinutes();
+  CacheSeedFreshness(seed_freshness_minutes);
 
-void AwFeatureListCreator::CreateLocalState() {
-  browser_policy_connector_ = std::make_unique<AwBrowserPolicyConnector>();
-  local_state_ = CreatePrefService();
-}
+  auto feature_list = std::make_unique<base::FeatureList>();
+  // Experiment variation ids if any.
+  std::vector<std::string> variation_ids;
 
-void AwFeatureListCreator::CreateFeatureListAndFieldTrials() {
-  TRACE_EVENT0("startup",
-               "AwFeatureListCreator::CreateFeatureListAndFieldTrials");
-  CreateLocalState();
-  AwMetricsServiceClient::SetInstance(std::make_unique<AwMetricsServiceClient>(
-      std::make_unique<AwMetricsServiceClientDelegate>()));
-  AwMetricsServiceClient::GetInstance()->Initialize(local_state_.get());
-  SetUpFieldTrials();
-}
+  auto* metrics_client = AwMetricsServiceClient::GetInstance();
+  const base::CommandLine* command_line =
+      base::CommandLine::ForCurrentProcess();
 
-void AwFeatureListCreator::DisableSignatureVerificationForTesting() {
-  g_signature_verification_enabled = false;
+  // Always create the standard providers first to handle benchmarking logic
+  // and default entropy state.
+  auto standard_providers =
+      metrics_client->metrics_state_manager()->CreateEntropyProviders(
+          /*enable_limited_entropy_mode=*/false);
+
+  std::unique_ptr<const variations::EntropyProviders> entropy_providers;
+  std::optional<int> low_entropy_source_value;
+
+  if (nonembedded_low_entropy_source >= 0) {
+    local_state_->SetInteger(prefs::kWebViewLowEntropySource,
+                             nonembedded_low_entropy_source);
+    low_entropy_source_value = nonembedded_low_entropy_source;
+
+    // If we have a nonembedded low entropy source, wrap the standard providers.
+    entropy_providers = std::make_unique<AwEntropyProviders>(
+        std::move(standard_providers),
+        /*nonembedded_low_entropy_source=*/nonembedded_low_entropy_source,
+        std::make_unique<std::set<std::string_view>>(
+            std::from_range, kNonembeddedLowEntropySourceDenylist),
+        limited_entropy_randomization_source);
+  } else {
+    low_entropy_source_value =
+        metrics_client->metrics_state_manager()->GetLowEntropySource();
+    entropy_providers = std::move(standard_providers);
+  }
+
+  // Populate FieldTrialList.
+  // If you update this, consider whether "WebViewEnvironment" in
+  // components/variations/variations_seed_processor_unittest.cc needs updates.
+  // variation_ids can be overridden by calls to ForceVariationIds in other
+  // places.
+  variations_field_trial_creator_->SetUpFieldTrials(
+      variation_ids, GetSwitchDependentFeatureOverrides(*command_line),
+      std::move(feature_list), metrics_client->metrics_state_manager(),
+      aw_field_trials_.get(), &ignored_safe_seed_manager,
+      low_entropy_source_value, *entropy_providers);
 }
 
 }  // namespace android_webview

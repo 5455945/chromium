@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -102,6 +102,9 @@ def ExpandThinArchives(paths, output_directory):
       continue
     num_archives += 1
     abs_path = os.path.join(output_directory, path)
+    if not os.path.exists(abs_path):
+      logging.warning('Linker input not found: %s', path)
+      continue
     if not IsThinArchive(abs_path):
       expanded_paths.append(path)
       continue
@@ -111,8 +114,9 @@ def ExpandThinArchives(paths, output_directory):
     for subpath, _ in IterArchiveChunks(abs_path):
       expanded_paths.append(CreateThinObjectPath(path, subpath))
 
-  logging.info('%d of %d .a files were thin archives',
-               len(thin_paths), num_archives)
+  logging.info(
+    '%d of %d .a files were thin archives', len(thin_paths), num_archives
+  )
   return expanded_paths, thin_paths
 
 

@@ -1,8 +1,9 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Utility script to run chromoting test driver tests on the Chromoting bot."""
+
+from __future__ import print_function
 
 import argparse
 
@@ -38,7 +39,7 @@ def LaunchCTDCommand(args, command):
 
   if not host_jid:
     # Host-JID not found in log. Let's not attempt to run this test.
-    print 'Host-JID not found in log %s.' % host_log_file_names[-1]
+    print('Host-JID not found in log %s.' % host_log_file_names[-1])
     return '[Command failed]: %s, %s' % (command, host_log_file_names)
 
   retries = 0
@@ -104,28 +105,35 @@ def main(args):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('-f', '--commands_file',
-                      help='path to file listing commands to be launched.')
-  parser.add_argument('-p', '--prod_dir',
-                      help='path to folder having product and test binaries.')
-  parser.add_argument('-c', '--cfg_file',
-                      help='path to test host config file.')
-  parser.add_argument('--me2me_manifest_file',
-                      help='path to me2me host manifest file.')
-  parser.add_argument('--it2me_manifest_file',
-                      help='path to it2me host manifest file.')
   parser.add_argument(
-      '-u', '--user_profile_dir',
-      help='path to user-profile-dir, used by connect-to-host tests.')
+    '-f',
+    '--commands_file',
+    help='path to file listing commands to be launched.',
+  )
+  parser.add_argument(
+    '-p', '--prod_dir', help='path to folder having product and test binaries.'
+  )
+  parser.add_argument('-c', '--cfg_file', help='path to test host config file.')
+  parser.add_argument(
+    '--me2me_manifest_file', help='path to me2me host manifest file.'
+  )
+  parser.add_argument(
+    '--it2me_manifest_file', help='path to it2me host manifest file.'
+  )
+  parser.add_argument(
+    '-u',
+    '--user_profile_dir',
+    help='path to user-profile-dir, used by connect-to-host tests.',
+  )
   command_line_args = parser.parse_args()
   host_logs = ''
   failing_tests = ''
   try:
     failing_tests, host_logs = main(command_line_args)
     if failing_tests:
-      print '++++++++++FAILED TESTS++++++++++'
-      print failing_tests.rstrip('\n')
-      print '++++++++++++++++++++++++++++++++'
+      print('++++++++++FAILED TESTS++++++++++')
+      print(failing_tests.rstrip('\n'))
+      print('++++++++++++++++++++++++++++++++')
       raise Exception('At least one test failed.')
   finally:
     # Stop host and cleanup user-profile-dir.

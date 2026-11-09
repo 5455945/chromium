@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,37 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/input/cursor_manager.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/host/host_frame_sink_client.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
+#include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
+#include "content/public/common/page_visibility_state.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_renderer_host.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "ui/base/cursor/cursor.h"
 #include "ui/base/ime/dummy_text_input_client.h"
-#include "ui/base/layout.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/resource/resource_scale_factor.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #endif
 
@@ -48,8 +55,8 @@ class Rect;
 namespace content {
 
 class FrameTree;
-class SiteInstance;
 class TestRenderFrameHost;
+class TestPageBroadcast;
 class TestWebContents;
 
 // TestRenderWidgetHostView ----------------------------------------------------
@@ -64,19 +71,17 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
 
   // RenderWidgetHostView:
   void InitAsChild(gfx::NativeView parent_view) override {}
-  void SetSize(const gfx::Size& size) override {}
-  void SetBounds(const gfx::Rect& rect) override {}
+  void SetSize(const gfx::Size& size) override;
+  void SetBounds(const gfx::Rect& rect) override;
   gfx::NativeView GetNativeView() override;
   gfx::NativeViewAccessible GetNativeViewAccessible() override;
   ui::TextInputClient* GetTextInputClient() override;
   bool HasFocus() override;
-  void Show() override;
   void Hide() override;
   bool IsShowing() override;
-  void WasUnOccluded() override;
   void WasOccluded() override;
   gfx::Rect GetViewBounds() override;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   void SetActive(bool active) override;
   void ShowDefinitionForSelection() override {}
   void SpeakSelection() override;
@@ -84,41 +89,65 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   void ShowSharePicker(
       const std::string& title,
       const std::string& text,
-      const std::string& url,
+      const GURL& url,
       const std::vector<std::string>& file_paths,
       blink::mojom::ShareService::ShareCallback callback) override;
-#endif  // defined(OS_MAC)
+  uint64_t GetNSViewId() const override;
+#endif  // BUILDFLAG(IS_MAC)
 
+#if BUILDFLAG(IS_ANDROID)
+  bool IsTouchSequencePotentiallyActiveOnViz() override;
+
+  void RequestInputBackForDragAndDrop(
+      WeakDocumentPtr source_document,
+      blink::mojom::DragDataPtr drag_data,
+      blink::DragOperationsMask drag_operations_mask,
+      SkBitmap bitmap,
+      gfx::Vector2d cursor_offset_in_dip,
+      gfx::Rect drag_obj_rect_in_dip,
+      blink::mojom::DragEventSourceInfoPtr event_info) override {}
+#endif
+
+  // Notified in response to a CommitPending where there is no content for
+  // TakeFallbackContentFrom to use.
+  void ClearFallbackSurfaceForCommitPending() override;
   // Advances the fallback surface to the first surface after navigation. This
   // ensures that stale surfaces are not presented to the user for an indefinite
   // period of time.
   void ResetFallbackToFirstNavigationSurface() override {}
 
+  void OnUnconfirmedTapConvertedToTap() override;
+
   void TakeFallbackContentFrom(RenderWidgetHostView* view) override;
-  void EnsureSurfaceSynchronizedForWebTest() override;
 
   // RenderWidgetHostViewBase:
-  uint32_t GetCaptureSequenceNumber() const override;
   void InitAsPopup(RenderWidgetHostView* parent_host_view,
-                   const gfx::Rect& bounds) override {}
+                   const gfx::Rect& bounds,
+                   const gfx::Rect& anchor_rect) override {}
   void Focus() override {}
   void SetIsLoading(bool is_loading) override {}
-  void UpdateCursor(const WebCursor& cursor) override;
+  void UpdateCursor(const ui::Cursor& cursor) override;
   void RenderProcessGone() override;
-  void Destroy() override;
+  void ShowWithVisibility(PageVisibilityState page_visibility) override;
+  void DestroyImpl() override;
   void UpdateTooltipUnderCursor(const std::u16string& tooltip_text) override {}
   void UpdateTooltipFromKeyboard(const std::u16string& tooltip_text,
                                  const gfx::Rect& bounds) override {}
-  gfx::Rect GetBoundsInRootWindow() override;
-  blink::mojom::PointerLockResult LockMouse(bool) override;
-  blink::mojom::PointerLockResult ChangeMouseLock(bool) override;
-  void UnlockMouse() override;
+  void ClearKeyboardTriggeredTooltip() override {}
+  gfx::Rect GetBoundsInScreen() override;
+  const viz::LocalSurfaceId& IncrementSurfaceIdForNavigation() override;
+  blink::mojom::PointerLockResult LockPointer(bool) override;
+  blink::mojom::PointerLockResult ChangePointerLock(bool) override;
+  void UnlockPointer() override;
   const viz::FrameSinkId& GetFrameSinkId() const override;
   const viz::LocalSurfaceId& GetLocalSurfaceId() const override;
   viz::SurfaceId GetCurrentSurfaceId() const override;
+  bool HasSavedCompositorFrame() const override;
   std::unique_ptr<SyntheticGestureTarget> CreateSyntheticGestureTarget()
       override;
   ui::Compositor* GetCompositor() override;
+  input::CursorManager* GetCursorManager() override;
+  void InvalidateLocalSurfaceIdAndAllocationGroup() override {}
 
   bool is_showing() const { return is_showing_; }
   bool is_occluded() const { return is_occluded_; }
@@ -128,37 +157,93 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
   void OnFrameTokenChanged(uint32_t frame_token,
                            base::TimeTicks activation_time) override;
 
-  const WebCursor& last_cursor() const { return last_cursor_; }
+  const ui::Cursor& last_cursor() const { return last_cursor_; }
 
   void SetCompositor(ui::Compositor* compositor) { compositor_ = compositor; }
+
+  // Clears `clear_fallback_surface_for_commit_pending_called_` and
+  // `take_fallback_content_from_called_`.
+  void ClearFallbackSurfaceCalled();
+  bool clear_fallback_surface_for_commit_pending_called() const {
+    return clear_fallback_surface_for_commit_pending_called_;
+  }
+
+  bool take_fallback_content_from_called() const {
+    return take_fallback_content_from_called_;
+  }
 
  protected:
   // RenderWidgetHostViewBase:
   void UpdateBackgroundColor() override;
-  absl::optional<DisplayFeature> GetDisplayFeature() override;
-  void SetDisplayFeatureForTesting(
+  std::optional<DisplayFeature> GetDisplayFeature() override;
+  void DisableDisplayFeatureOverrideForEmulation() override;
+  void OverrideDisplayFeatureForEmulation(
       const DisplayFeature* display_feature) override;
+  void NotifyHostAndDelegateOnWasShown(
+      std::optional<blink::RecordContentToVisibleTimeRequest>
+          visible_time_request) override;
+  void RequestSuccessfulPresentationTimeFromHostOrDelegate(
+      blink::RecordContentToVisibleTimeRequest) override;
+  void CancelSuccessfulPresentationTimeRequestForHostAndDelegate() override;
+  void CleanUpHostObservers() override {}
 
   viz::FrameSinkId frame_sink_id_;
 
  private:
   bool is_showing_;
   bool is_occluded_;
+  PageVisibilityState page_visibility_ = PageVisibilityState::kHidden;
+#if !BUILDFLAG(IS_IOS)
   ui::DummyTextInputClient text_input_client_;
-  WebCursor last_cursor_;
+#endif
+  ui::Cursor last_cursor_;
 
-  // Latest capture sequence number which is incremented when the caller
-  // requests surfaces be synchronized via
-  // EnsureSurfaceSynchronizedForWebTest().
-  uint32_t latest_capture_sequence_number_ = 0u;
+  bool clear_fallback_surface_for_commit_pending_called_ = false;
+  bool take_fallback_content_from_called_ = false;
 
 #if defined(USE_AURA)
   std::unique_ptr<aura::Window> window_;
 #endif
 
-  absl::optional<DisplayFeature> display_feature_;
+  std::optional<DisplayFeature> display_feature_;
 
-  ui::Compositor* compositor_ = nullptr;
+  raw_ptr<ui::Compositor, DanglingUntriaged> compositor_ = nullptr;
+
+  input::CursorManager cursor_manager_;
+
+  gfx::Rect bounds_;
+};
+
+// TestRenderWidgetHostViewChildFrame -----------------------------------------
+
+// Test version of RenderWidgetHostViewChildFrame to use in unit tests.
+class TestRenderWidgetHostViewChildFrame
+    : public RenderWidgetHostViewChildFrame {
+ public:
+  explicit TestRenderWidgetHostViewChildFrame(RenderWidgetHost* rwh);
+  ~TestRenderWidgetHostViewChildFrame() override = default;
+
+  blink::WebInputEvent::Type last_gesture_seen() { return last_gesture_seen_; }
+
+  void Reset();
+  void SetCompositor(ui::Compositor* compositor);
+  ui::Compositor* GetCompositor() override;
+
+ private:
+  void SetBounds(const gfx::Rect& rect) override {}
+  void Hide() override {}
+  void SetInsets(const gfx::Insets& insets) override {}
+
+  void SendInitialPropertiesIfNeeded() override {}
+  void ShowWithVisibility(PageVisibilityState) override {}
+  void DidNavigate() override {}
+
+  void ProcessGestureEvent(const blink::WebGestureEvent& event,
+                           const ui::LatencyInfo&) override;
+
+  blink::WebInputEvent::Type last_gesture_seen_ =
+      blink::WebInputEvent::Type::kUndefined;
+  raw_ptr<ui::Compositor> compositor_;
 };
 
 // TestRenderViewHost ----------------------------------------------------------
@@ -196,23 +281,31 @@ class TestRenderWidgetHostView : public RenderWidgetHostViewBase,
 // similar to (b) above, essentially it gets very tricky.  By using
 // the split interface we avoid complexity within content and maintain
 // reasonable utility for embedders.
-class TestRenderViewHost
-    : public RenderViewHostImpl,
-      public RenderViewHostTester {
+class TestRenderViewHost : public RenderViewHostImpl,
+                           public RenderViewHostTester {
  public:
-  TestRenderViewHost(FrameTree* frame_tree,
-                     SiteInstance* instance,
-                     std::unique_ptr<RenderWidgetHostImpl> widget,
-                     RenderViewHostDelegate* delegate,
-                     int32_t routing_id,
-                     int32_t main_frame_routing_id,
-                     bool swapped_out);
+  TestRenderViewHost(
+      FrameTree* frame_tree,
+      SiteInstanceGroup* group,
+      const StoragePartitionConfig& storage_partition_config,
+      std::unique_ptr<RenderWidgetHostImpl> widget,
+      RenderViewHostDelegate* delegate,
+      int32_t routing_id,
+      int32_t main_frame_routing_id,
+      scoped_refptr<BrowsingContextState> main_browsing_context_state,
+      CreateRenderViewHostCase create_case);
+
+  TestRenderViewHost(const TestRenderViewHost&) = delete;
+  TestRenderViewHost& operator=(const TestRenderViewHost&) = delete;
+
   // RenderViewHostImpl overrides.
-  MockRenderProcessHost* GetProcess() override;
+  MockRenderProcessHost* GetProcess() const override;
   bool CreateRenderView(
-      const absl::optional<blink::FrameToken>& opener_frame_token,
+      const std::optional<blink::FrameToken>& opener_frame_token,
       int proxy_route_id,
-      bool window_was_created_with_opener) override;
+      bool window_was_created_with_opener,
+      const std::optional<base::UnguessableToken>& navigation_metrics_token)
+      override;
   bool IsTestRenderViewHost() const override;
 
   // RenderViewHostTester implementation.
@@ -231,7 +324,7 @@ class TestRenderViewHost
   }
 
   // The opener frame route id passed to CreateRenderView().
-  const absl::optional<blink::FrameToken>& opener_frame_token() const {
+  const std::optional<blink::FrameToken>& opener_frame_token() const {
     return opener_frame_token_;
   }
 
@@ -255,18 +348,23 @@ class TestRenderViewHost
       const base::FilePath* file_path_for_history_item);
 
   // See set_delete_counter() above. May be NULL.
-  int* delete_counter_;
+  raw_ptr<int> delete_counter_;
 
   // See opener_frame_token() above.
-  absl::optional<blink::FrameToken> opener_frame_token_;
+  std::optional<blink::FrameToken> opener_frame_token_;
 
-  DISALLOW_COPY_AND_ASSIGN(TestRenderViewHost);
+  std::unique_ptr<TestPageBroadcast> page_broadcast_;
 };
 
 // Adds methods to get straight at the impl classes.
 class RenderViewHostImplTestHarness : public RenderViewHostTestHarness {
  public:
   RenderViewHostImplTestHarness();
+
+  RenderViewHostImplTestHarness(const RenderViewHostImplTestHarness&) = delete;
+  RenderViewHostImplTestHarness& operator=(
+      const RenderViewHostImplTestHarness&) = delete;
+
   ~RenderViewHostImplTestHarness() override;
 
   // contents() is equivalent to static_cast<TestWebContents*>(web_contents())
@@ -275,23 +373,23 @@ class RenderViewHostImplTestHarness : public RenderViewHostTestHarness {
   // RVH/RFH getters are shorthand for oft-used bits of web_contents().
 
   // test_rvh() is equivalent to any of the following:
-  //   contents()->GetMainFrame()->GetRenderViewHost()
+  //   contents()->GetPrimaryMainFrame()->GetRenderViewHost()
   //   contents()->GetRenderViewHost()
   //   static_cast<TestRenderViewHost*>(rvh())
   //
   // Since most functionality will eventually shift from RVH to RFH, you may
-  // prefer to use the GetMainFrame() method in tests.
+  // prefer to use the GetPrimaryMainFrame() method in tests.
   TestRenderViewHost* test_rvh();
 
-  // main_test_rfh() is equivalent to contents()->GetMainFrame()
-  // TODO(nick): Replace all uses with contents()->GetMainFrame()
+  // main_test_rfh() is equivalent to contents()->GetPrimaryMainFrame()
+  // TODO(nick): Replace all uses with contents()->GetPrimaryMainFrame()
   TestRenderFrameHost* main_test_rfh();
 
  private:
-  typedef std::unique_ptr<ui::test::ScopedSetSupportedScaleFactors>
-      ScopedSetSupportedScaleFactors;
-  ScopedSetSupportedScaleFactors scoped_set_supported_scale_factors_;
-  DISALLOW_COPY_AND_ASSIGN(RenderViewHostImplTestHarness);
+  base::test::ScopedFeatureList scoped_feature_list_;
+
+  ui::test::ScopedSetSupportedResourceScaleFactors
+      scoped_set_supported_scale_factors_{{ui::k100Percent}};
 };
 
 }  // namespace content

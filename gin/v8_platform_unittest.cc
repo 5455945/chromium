@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,65 +7,19 @@
 #include <atomic>
 
 #include "base/barrier_closure.h"
+#include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_waitable_event.h"
 #include "base/trace_event/trace_event.h"
+#include "partition_alloc/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-class TestTraceStateObserver
-    : public v8::TracingController::TraceStateObserver {
- public:
-  void OnTraceEnabled() final { ++enabled_; }
-  void OnTraceDisabled() final { ++disabled_; }
-  int Enabled() { return enabled_; }
-  int Disabled() { return disabled_; }
-
- private:
-  int enabled_ = 0;
-  int disabled_ = 0;
-};
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC) && PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+#include "partition_alloc/partition_address_space.h"
+#endif
 
 namespace gin {
-
-TEST(V8PlatformTest, TraceStateObserverAPI) {
-  TestTraceStateObserver test_observer;
-  ASSERT_EQ(0, test_observer.Enabled());
-  ASSERT_EQ(0, test_observer.Disabled());
-
-  V8Platform::Get()->GetTracingController()->AddTraceStateObserver(
-      &test_observer);
-  base::trace_event::TraceLog::GetInstance()->SetEnabled(
-      base::trace_event::TraceConfig("*", ""),
-      base::trace_event::TraceLog::RECORDING_MODE);
-  ASSERT_EQ(1, test_observer.Enabled());
-  ASSERT_EQ(0, test_observer.Disabled());
-  base::trace_event::TraceLog::GetInstance()->SetDisabled();
-  ASSERT_EQ(1, test_observer.Enabled());
-  ASSERT_EQ(1, test_observer.Disabled());
-
-  V8Platform::Get()->GetTracingController()->RemoveTraceStateObserver(
-      &test_observer);
-  base::trace_event::TraceLog::GetInstance()->SetEnabled(
-      base::trace_event::TraceConfig("*", ""),
-      base::trace_event::TraceLog::RECORDING_MODE);
-  base::trace_event::TraceLog::GetInstance()->SetDisabled();
-  ASSERT_EQ(1, test_observer.Enabled());
-  ASSERT_EQ(1, test_observer.Disabled());
-}
-
-TEST(V8PlatformTest, TraceStateObserverFired) {
-  TestTraceStateObserver test_observer;
-  ASSERT_EQ(0, test_observer.Enabled());
-  ASSERT_EQ(0, test_observer.Disabled());
-
-  base::trace_event::TraceLog::GetInstance()->SetEnabled(
-      base::trace_event::TraceConfig("*", ""),
-      base::trace_event::TraceLog::RECORDING_MODE);
-  V8Platform::Get()->GetTracingController()->AddTraceStateObserver(
-      &test_observer);
-  ASSERT_EQ(1, test_observer.Enabled());
-  ASSERT_EQ(0, test_observer.Disabled());
-}
 
 // Tests that PostJob runs a task and is done after Join.
 TEST(V8PlatformTest, PostJobSimple) {
@@ -81,7 +35,7 @@ TEST(V8PlatformTest, PostJobSimple) {
       return *num_tasks_to_run;
     }
 
-    std::atomic_size_t* num_tasks_to_run;
+    raw_ptr<std::atomic_size_t> num_tasks_to_run;
   };
   auto handle =
       V8Platform::Get()->PostJob(v8::TaskPriority::kUserVisible,
@@ -126,9 +80,9 @@ TEST(V8PlatformTest, PostJobLifetime) {
       return *num_tasks_to_run_;
     }
 
-    std::atomic_size_t* num_tasks_to_run_;
+    raw_ptr<std::atomic_size_t> num_tasks_to_run_;
     base::RepeatingClosure threads_running_barrier_;
-    base::TestWaitableEvent* threads_continue_;
+    raw_ptr<base::TestWaitableEvent> threads_continue_;
   };
 
   base::test::TaskEnvironment task_environment;
@@ -145,6 +99,16 @@ TEST(V8PlatformTest, PostJobLifetime) {
 
   // Release workers and let the job get destroyed.
   threads_continue.Signal();
+}
+
+TEST(V8PlatformTest, GetZeroSegmentSize) {
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC) && PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+  EXPECT_EQ(
+      V8Platform::Get()->GetZeroSegmentSize(),
+      partition_alloc::internal::PartitionAddressSpace::GetZeroSegmentSize());
+#else
+  EXPECT_EQ(V8Platform::Get()->GetZeroSegmentSize(), 0u);
+#endif
 }
 
 }  // namespace gin

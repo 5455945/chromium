@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,27 @@
 
 #include "base/feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "media/base/media_export.h"
 
 namespace features {
 
-MEDIA_EXPORT extern const base::Feature kAudioServiceOutOfProcessKillAtHang;
-MEDIA_EXPORT extern const base::Feature kDumpOnAudioServiceHang;
-
-#if defined(OS_ANDROID)
-MEDIA_EXPORT extern const base::Feature kUseAAudioDriver;
+#if BUILDFLAG(IS_ANDROID)
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAAudioDriver);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAAudioInput);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAAudioPerStreamDeviceSelection);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAAudioInputRetryOnStartFailure);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAlwaysUseAudioManagerOutputFramesPerBuffer);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAudioStereoInputStreamParameters);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAAudioVariableSizedCallbacks);
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-MEDIA_EXPORT extern const base::Feature kCrOSSystemAEC;
-MEDIA_EXPORT extern const base::Feature kCrOSSystemAECDeactivatedGroups;
-MEDIA_EXPORT extern const base::Feature kCrOSEnforceSystemAecNsAgc;
-MEDIA_EXPORT extern const base::Feature kCrOSEnforceSystemAecNs;
-MEDIA_EXPORT extern const base::Feature kCrOSEnforceSystemAecAgc;
-MEDIA_EXPORT extern const base::Feature kCrOSEnforceSystemAec;
+#if BUILDFLAG(IS_MAC)
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kMacCatapRestartOnDeviceChange);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kMacCatapRestartAudioProcessOnTimeout);
 #endif
 
-#if defined(OS_MAC) || BUILDFLAG(IS_CHROMEOS_ASH)
-MEDIA_EXPORT extern const base::Feature kForceEnableSystemAec;
-#endif
-
-#if defined(OS_WIN)
-MEDIA_EXPORT extern const base::Feature kAllowIAudioClient3;
-#endif
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kAudioThreadHangMonitorRearmAfterLateCheck);
+MEDIA_EXPORT BASE_DECLARE_FEATURE(kWebAudioRemoveAudioDestinationResampler);
 
 }  // namespace features
 

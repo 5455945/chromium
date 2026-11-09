@@ -1,10 +1,9 @@
 include_rules = [
+  "+components/crash/core/common",
+  "+components/dbus",
+  "+components/viz/common/resources/shared_image_format.h",
+  "+components/viz/common/resources/shared_image_format_utils.h",
   "+dbus",
-  # For Lacros.
-  "+chromeos/crosapi/mojom",
-  "+chromeos/crosapi/cpp/crosapi_constants.h",
-  "+chromeos/lacros/lacros_service.h",
-  "+chromeos/ui/base",
-  # Common includes.
+  "+net/base/mime_util.h",
   "+ui/base/linux",
 ]

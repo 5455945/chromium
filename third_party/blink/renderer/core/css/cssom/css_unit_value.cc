@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,24 +33,36 @@ CSSPrimitiveValue::UnitType ToCanonicalUnit(CSSPrimitiveValue::UnitType unit) {
 CSSPrimitiveValue::UnitType ToCanonicalUnitIfPossible(
     CSSPrimitiveValue::UnitType unit) {
   const auto canonical_unit = ToCanonicalUnit(unit);
-  if (canonical_unit == CSSPrimitiveValue::UnitType::kUnknown)
+  if (canonical_unit == CSSPrimitiveValue::UnitType::kUnknown) {
     return unit;
+  }
   return canonical_unit;
 }
 
 bool IsValueOutOfRangeForProperty(CSSPropertyID property_id,
                                   double value,
                                   CSSPrimitiveValue::UnitType unit) {
+  // Flexible lengths ('fr') have no representation inside a calc(), so an
+  // out-of-range <flex> can't be preserved by wrapping it in a CSSMathSum.
+  // Leave it unwrapped: a negative <flex> is invalid per the grammar, and
+  // wrapping it would build an invalid calc expression (a DCHECK failure in
+  // CSSMathExpressionNode).
+  if (CSSPrimitiveValue::IsFlex(unit)) {
+    return false;
+  }
+
   // FIXME: Avoid this CSSProperty::Get call as it can be costly.
   // The caller often has a CSSProperty already, so we can just pass it here.
   if (LengthPropertyFunctions::GetValueRange(CSSProperty::Get(property_id)) ==
-          kValueRangeNonNegative &&
-      value < 0)
+          Length::ValueRange::kNonNegative &&
+      value < 0) {
     return true;
+  }
 
   // For non-length properties and special cases.
   switch (property_id) {
     case CSSPropertyID::kOrder:
+    case CSSPropertyID::kReadingOrder:
     case CSSPropertyID::kZIndex:
     case CSSPropertyID::kMathDepth:
       return round(value) != value;
@@ -61,27 +73,69 @@ bool IsValueOutOfRangeForProperty(CSSPropertyID property_id,
     case CSSPropertyID::kWidows:
     case CSSPropertyID::kColumnCount:
       return round(value) != value || value < 1;
+    case CSSPropertyID::kAnimationDuration:
+    case CSSPropertyID::kAnimationIterationCount:
+    case CSSPropertyID::kBackgroundSize:
     case CSSPropertyID::kBlockSize:
+    case CSSPropertyID::kBorderBlockEndWidth:
+    case CSSPropertyID::kBorderBlockStartWidth:
+    case CSSPropertyID::kBorderImageOutset:
+    case CSSPropertyID::kBorderImageSlice:
+    case CSSPropertyID::kBorderImageWidth:
+    case CSSPropertyID::kBorderInlineEndWidth:
+    case CSSPropertyID::kBorderInlineStartWidth:
     case CSSPropertyID::kColumnRuleWidth:
     case CSSPropertyID::kFlexGrow:
     case CSSPropertyID::kFlexShrink:
     case CSSPropertyID::kFontSize:
     case CSSPropertyID::kFontSizeAdjust:
     case CSSPropertyID::kFontStretch:
+    case CSSPropertyID::kGridAutoColumns:
+    case CSSPropertyID::kGridAutoRows:
     case CSSPropertyID::kInlineSize:
-    case CSSPropertyID::kLineHeightStep:
     case CSSPropertyID::kMaxBlockSize:
     case CSSPropertyID::kMaxInlineSize:
     case CSSPropertyID::kMinBlockSize:
     case CSSPropertyID::kMinInlineSize:
+    case CSSPropertyID::kPaddingBlockEnd:
+    case CSSPropertyID::kPaddingBlockStart:
+    case CSSPropertyID::kPaddingInlineEnd:
+    case CSSPropertyID::kPaddingInlineStart:
     case CSSPropertyID::kR:
     case CSSPropertyID::kRx:
     case CSSPropertyID::kRy:
+    case CSSPropertyID::kScrollPaddingBlockEnd:
+    case CSSPropertyID::kScrollPaddingBlockStart:
+    case CSSPropertyID::kScrollPaddingBottom:
+    case CSSPropertyID::kScrollPaddingInlineEnd:
+    case CSSPropertyID::kScrollPaddingInlineStart:
+    case CSSPropertyID::kScrollPaddingLeft:
+    case CSSPropertyID::kScrollPaddingRight:
+    case CSSPropertyID::kScrollPaddingTop:
+    case CSSPropertyID::kStrokeMiterlimit:
+    case CSSPropertyID::kTransitionDuration:
       return value < 0;
     case CSSPropertyID::kFontWeight:
-      return value < 0 || value > 1000;
+      return value < 1 || value > 1000;
     default:
       return false;
+  }
+}
+
+// The numeric range a wrapped out-of-range value should carry so that its
+// computed value is clamped to the property's range at computed-value time
+// (CSS Typed OM 4.3.2), matching a parsed calc(). Almost all properties that
+// reach here are non-negative and clamp to [0, inf); the few that permit
+// negative values (restricted only to integers) keep the full range.
+CSSPrimitiveValue::ValueRange RangeForWrappedValue(CSSPropertyID property_id) {
+  switch (property_id) {
+    case CSSPropertyID::kOrder:
+    case CSSPropertyID::kReadingOrder:
+    case CSSPropertyID::kZIndex:
+    case CSSPropertyID::kMathDepth:
+      return CSSPrimitiveValue::ValueRange::kAll;
+    default:
+      return CSSPrimitiveValue::ValueRange::kNonNegative;
   }
 }
 
@@ -92,7 +146,7 @@ CSSUnitValue* CSSUnitValue::Create(double value,
                                    ExceptionState& exception_state) {
   CSSPrimitiveValue::UnitType unit = UnitFromName(unit_name);
   if (!IsValidUnit(unit)) {
-    exception_state.ThrowTypeError("Invalid unit: " + unit_name);
+    exception_state.ThrowTypeError(StrCat({"Invalid unit: ", unit_name}));
     return nullptr;
   }
   return MakeGarbageCollected<CSSUnitValue>(value, unit);
@@ -106,20 +160,24 @@ CSSUnitValue* CSSUnitValue::Create(double value,
 
 CSSUnitValue* CSSUnitValue::FromCSSValue(const CSSNumericLiteralValue& value) {
   CSSPrimitiveValue::UnitType unit = value.GetType();
-  if (unit == CSSPrimitiveValue::UnitType::kInteger)
+  if (unit == CSSPrimitiveValue::UnitType::kInteger) {
     unit = CSSPrimitiveValue::UnitType::kNumber;
+  }
 
-  if (!IsValidUnit(unit))
+  if (!IsValidUnit(unit)) {
     return nullptr;
-  return MakeGarbageCollected<CSSUnitValue>(value.GetDoubleValue(), unit);
+  }
+  return MakeGarbageCollected<CSSUnitValue>(value.ClampedDoubleValue(), unit);
 }
 
 String CSSUnitValue::unit() const {
-  if (unit_ == CSSPrimitiveValue::UnitType::kNumber)
+  if (unit_ == CSSPrimitiveValue::UnitType::kNumber) {
     return "number";
-  if (unit_ == CSSPrimitiveValue::UnitType::kPercentage)
+  }
+  if (unit_ == CSSPrimitiveValue::UnitType::kPercentage) {
     return "percent";
-  return CSSPrimitiveValue::UnitTypeToString(unit_);
+  }
+  return CSSPrimitiveValue::UnitTypeToString(unit_).ToString();
 }
 
 CSSStyleValue::StyleValueType CSSUnitValue::GetType() const {
@@ -128,16 +186,18 @@ CSSStyleValue::StyleValueType CSSUnitValue::GetType() const {
 
 CSSUnitValue* CSSUnitValue::ConvertTo(
     CSSPrimitiveValue::UnitType target_unit) const {
-  if (unit_ == target_unit)
+  if (unit_ == target_unit) {
     return Create(value_, unit_);
+  }
 
   // Instead of defining the scale factors for every unit to every other unit,
   // we simply convert to the canonical unit and back since we already have
   // the scale factors for canonical units.
   const auto canonical_unit = ToCanonicalUnit(unit_);
   if (canonical_unit != ToCanonicalUnit(target_unit) ||
-      canonical_unit == CSSPrimitiveValue::UnitType::kUnknown)
+      canonical_unit == CSSPrimitiveValue::UnitType::kUnknown) {
     return nullptr;
+  }
 
   const double scale_factor =
       CSSPrimitiveValue::ConversionToCanonicalUnitsScaleFactor(unit_) /
@@ -146,11 +206,12 @@ CSSUnitValue* CSSUnitValue::ConvertTo(
   return CSSUnitValue::Create(value_ * scale_factor, target_unit);
 }
 
-absl::optional<CSSNumericSumValue> CSSUnitValue::SumValue() const {
+std::optional<CSSNumericSumValue> CSSUnitValue::SumValue() const {
   CSSNumericSumValue sum;
   CSSNumericSumValue::UnitMap unit_map;
-  if (unit_ != CSSPrimitiveValue::UnitType::kNumber)
+  if (unit_ != CSSPrimitiveValue::UnitType::kNumber) {
     unit_map.insert(ToCanonicalUnitIfPossible(unit_), 1);
+  }
 
   sum.terms.emplace_back(
       value_ * CSSPrimitiveValue::ConversionToCanonicalUnitsScaleFactor(unit_),
@@ -160,8 +221,9 @@ absl::optional<CSSNumericSumValue> CSSUnitValue::SumValue() const {
 
 bool CSSUnitValue::Equals(const CSSNumericValue& other) const {
   auto* other_unit_value = DynamicTo<CSSUnitValue>(other);
-  if (!other_unit_value)
+  if (!other_unit_value) {
     return false;
+  }
 
   return value_ == other_unit_value->value_ && unit_ == other_unit_value->unit_;
 }
@@ -173,10 +235,13 @@ const CSSNumericLiteralValue* CSSUnitValue::ToCSSValue() const {
 const CSSPrimitiveValue* CSSUnitValue::ToCSSValueWithProperty(
     CSSPropertyID property_id) const {
   if (IsValueOutOfRangeForProperty(property_id, value_, unit_)) {
-    // Wrap out of range values with a calc.
+    // Wrap out of range values with a calc, carrying the property's numeric
+    // range so the computed value is clamped to it (e.g. a negative
+    // <percentage>/<number> for a non-negative property clamps to 0).
     CSSMathExpressionNode* node = ToCalcExpressionNode();
     node->SetIsNestedCalc();
-    return CSSMathFunctionValue::Create(node);
+    return CSSMathFunctionValue::Create(node,
+                                        RangeForWrappedValue(property_id));
   }
 
   return CSSNumericLiteralValue::Create(value_, unit_);
@@ -193,8 +258,9 @@ CSSNumericValue* CSSUnitValue::Negate() {
 
 CSSNumericValue* CSSUnitValue::Invert() {
   if (unit_ == CSSPrimitiveValue::UnitType::kNumber) {
-    if (value_ == 0)
+    if (value_ == 0) {
       return nullptr;
+    }
     return CSSUnitValue::Create(1.0 / value_, unit_);
   }
   return CSSMathInvert::Create(this);

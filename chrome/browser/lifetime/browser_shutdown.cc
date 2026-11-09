@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,78 +10,77 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/auto_reset.h"
 #include "base/clang_profiling_buildflags.h"
 #include "base/command_line.h"
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/path_service.h"
+#include "base/notimplemented.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "build/config/compiler/compiler_buildflags.h"
-#include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/lifetime/switch_utils.h"
+#include "chrome/browser/profiles/nuke_profile_directory_utils.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/metrics/metrics_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/tracing/common/tracing_switches.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/tracing_controller.h"
 #include "content/public/common/content_switches.h"
 #include "printing/buildflags/buildflags.h"
 #include "rlz/buildflags/buildflags.h"
+#include "services/network/public/mojom/cookie_manager.mojom.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/browser/first_run/upgrade_util_win.h"
 #include "chrome/browser/win/browser_util.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_result_codes.h"
+#include "chrome/common/chrome_switches.h"
+#include "content/public/browser/browser_main_runner.h"
 #endif
 
-#if !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/first_run/upgrade_util.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/chromeos/boot_times_recorder.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
+#include "chrome/browser/lifetime/application_lifetime_chromeos.h"
 #include "chrome/browser/lifetime/termination_notification.h"
-#endif
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
+#include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
-#include "chrome/browser/background/background_mode_manager.h"
-#endif
-
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW) && !BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/service_process/service_process_control.h"
+#include "chrome/browser/background/extensions/background_mode_manager.h"
 #endif
 
 #if BUILDFLAG(ENABLE_RLZ)
-#include "components/rlz/rlz_tracker.h"  // nogncheck crbug.com/1125897
+#include "components/rlz/rlz_tracker.h"  // nogncheck crbug.com/40147906
 #endif
 
-#if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO)
-#include "content/public/browser/browser_child_process_host_iterator.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
-#include "content/public/browser/gpu_utils.h"
-#include "content/public/common/content_features.h"
-#include "content/public/common/profiling_utils.h"
+#if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
+#include "base/run_loop.h"
+#include "content/public/browser/profiling_utils.h"
 #endif
-
-using base::TimeDelta;
 
 namespace browser_shutdown {
 namespace {
@@ -91,22 +90,18 @@ bool g_trying_to_quit = false;
 
 base::Time* g_shutdown_started = nullptr;
 ShutdownType g_shutdown_type = ShutdownType::kNotValid;
-int g_shutdown_num_processes;
-int g_shutdown_num_processes_slow;
 
-constexpr char kShutdownMsFile[] = "chrome_shutdown_ms.txt";
-
-base::FilePath GetShutdownMsPath() {
-  base::FilePath shutdown_ms_file;
-  base::PathService::Get(chrome::DIR_USER_DATA, &shutdown_ms_file);
-  return shutdown_ms_file.AppendASCII(kShutdownMsFile);
-}
+#if BUILDFLAG(IS_CHROMEOS)
+ShutdownPhase g_shutdown_phase = ShutdownPhase::kNotStarted;
+base::TimeTicks g_shutdown_phase_started;
+base::TimeTicks g_shutdown_started_ticks;
+ShutdownTrigger g_shutdown_trigger = ShutdownTrigger::kNotSet;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 const char* ToShutdownTypeString(ShutdownType type) {
   switch (type) {
     case ShutdownType::kNotValid:
       NOTREACHED();
-      break;
     case ShutdownType::kWindowClose:
       return "close";
     case ShutdownType::kBrowserExit:
@@ -115,197 +110,316 @@ const char* ToShutdownTypeString(ShutdownType type) {
       return "end";
     case ShutdownType::kSilentExit:
       return "silent_exit";
+    case ShutdownType::kOtherExit:
+      return "other_exit";
   }
   return "";
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
+const char* ToShutdownPhaseCrashKeyString(ShutdownPhase phase) {
+  switch (phase) {
+    case ShutdownPhase::kNotStarted:
+      NOTREACHED();
+    case ShutdownPhase::kClosingBrowsers:
+      return "closing-browsers";
+    case ShutdownPhase::kAshPreShell:
+      return "ash-pre-shell";
+    case ShutdownPhase::kAshShell:
+      return "ash-shell";
+    case ShutdownPhase::kBrowserProcess:
+      return "browser-process";
+    case ShutdownPhase::kAshPostProfile:
+      return "ash-post-profile";
+    case ShutdownPhase::kStoppingThreads:
+      return "stopping-threads";
+    case ShutdownPhase::kPostDestroyThreads:
+      return "post-destroy-threads";
+    case ShutdownPhase::kDone:
+      return "done";
+  }
+  NOTREACHED();
+}
+
+const char* GetShutdownPhaseHistogramName(ShutdownPhase phase) {
+  switch (phase) {
+    case ShutdownPhase::kNotStarted:
+    case ShutdownPhase::kDone:
+      return nullptr;
+    case ShutdownPhase::kClosingBrowsers:
+      return "Shutdown.ChromeOS.PhaseDuration.ClosingBrowsers";
+    case ShutdownPhase::kAshPreShell:
+      return "Shutdown.ChromeOS.PhaseDuration.AshPreShell";
+    case ShutdownPhase::kAshShell:
+      return "Shutdown.ChromeOS.PhaseDuration.AshShell";
+    case ShutdownPhase::kBrowserProcess:
+      return "Shutdown.ChromeOS.PhaseDuration.BrowserProcess";
+    case ShutdownPhase::kAshPostProfile:
+      return "Shutdown.ChromeOS.PhaseDuration.AshPostProfile";
+    case ShutdownPhase::kStoppingThreads:
+      return "Shutdown.ChromeOS.PhaseDuration.StoppingThreads";
+    case ShutdownPhase::kPostDestroyThreads:
+      return "Shutdown.ChromeOS.PhaseDuration.PostDestroyThreads";
+  }
+  NOTREACHED();
+}
+
+const char* ToShutdownTriggerCrashKeyString(ShutdownTrigger trigger) {
+  switch (trigger) {
+    case ShutdownTrigger::kNotSet:
+      NOTREACHED();
+    case ShutdownTrigger::kLogout:
+      return "logout";
+    case ShutdownTrigger::kSigterm:
+      return "sigterm";
+    case ShutdownTrigger::kRestartFlags:
+      return "restart-flags";
+    case ShutdownTrigger::kOther:
+      return "other";
+  }
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+// Utility function to verify that globals are accessed on the UI/Main thread.
+void CheckAccessedOnCorrectThread() {
+  // Some APIs below are accessed after UI thread has been torn down, so cater
+  // for both situations here.
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI) ||
+            !content::BrowserThread::IsThreadInitialized(
+                content::BrowserThread::UI),
+        base::NotFatalUntil::M161);
 }
 
 }  // namespace
 
 void RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterIntegerPref(prefs::kShutdownType,
-                                static_cast<int>(ShutdownType::kNotValid));
-  registry->RegisterIntegerPref(prefs::kShutdownNumProcesses, 0);
-  registry->RegisterIntegerPref(prefs::kShutdownNumProcessesSlow, 0);
   registry->RegisterBooleanPref(prefs::kRestartLastSessionOnShutdown, false);
+  registry->RegisterBooleanPref(prefs::kRestartInBackgroundOnShutdown, false);
 }
 
 void OnShutdownStarting(ShutdownType type) {
-  if (g_shutdown_type != ShutdownType::kNotValid)
+  CheckAccessedOnCorrectThread();
+  if (g_shutdown_type != ShutdownType::kNotValid) {
     return;
+  }
 
-  static crash_reporter::CrashKeyString<8> shutdown_type_key("shutdown-type");
+  static crash_reporter::CrashKeyString<11> shutdown_type_key("shutdown-type");
   shutdown_type_key.Set(ToShutdownTypeString(type));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  SetShutdownTrigger(ShutdownTrigger::kOther);
+  SetShutdownPhase(ShutdownPhase::kClosingBrowsers);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   g_shutdown_type = type;
   // For now, we're only counting the number of renderer processes
   // since we can't safely count the number of plugin processes from this
   // thread, and we'd really like to avoid anything which might add further
   // delays to shutdown time.
-  DCHECK(!g_shutdown_started);
+  CHECK(!g_shutdown_started, base::NotFatalUntil::M161);
   g_shutdown_started = new base::Time(base::Time::Now());
 
-  // TODO(https://crbug.com/1071664): Check if this should also be enabled for
-  // coverage builds.
-#if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO)
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kSingleProcess)) {
-    content::WaitForProcessesToDumpProfilingInfo wait_for_profiling_data;
-
-    // Ask all the renderer processes to dump their profiling data.
-    for (content::RenderProcessHost::iterator i(
-             content::RenderProcessHost::AllHostsIterator());
-         !i.IsAtEnd(); i.Advance()) {
-      DCHECK(!i.GetCurrentValue()->GetProcess().is_current());
-      if (!i.GetCurrentValue()->IsInitializedAndNotDead())
-        continue;
-      i.GetCurrentValue()->DumpProfilingData(base::BindOnce(
-          &base::WaitableEvent::Signal,
-          base::Unretained(wait_for_profiling_data.GetNewWaitableEvent())));
+  // Start flushing cookies and storage partitions asynchronously so network
+  // and DOMStorage persistence runs in parallel with browser and profile
+  // teardown instead of blocking BrowserProcessIOThread::ProcessHostCleanUp().
+  if (g_browser_process && g_browser_process->profile_manager()) {
+    for (Profile* profile :
+         g_browser_process->profile_manager()->GetLoadedProfiles()) {
+      profile->ForEachLoadedStoragePartition(
+          [](content::StoragePartition* partition) {
+            partition->GetCookieManagerForBrowserProcess()->FlushCookieStore(
+                base::NullCallback());
+            partition->Flush();
+          });
     }
-
-    auto dump_child_profiling_data =
-        base::BindOnce([]() {
-          // Use a nested WaitForProcessesToDumpProfilingInfo object to wait on
-          // the IO thread. This isn't needed when the |kProcessHostOnUI| on UI
-          // feature is enabled but it doesn't hurt and keeps the code simple.
-          // TODO(sebmarchand): Remove the nested
-          // |WaitForProcessesToDumpProfilingInfo| once the |kProcessHostOnUI|
-          // feature is enabled by default.
-          content::WaitForProcessesToDumpProfilingInfo
-              nested_wait_for_profiling_data;
-          for (content::BrowserChildProcessHostIterator browser_child_iter;
-               !browser_child_iter.Done(); ++browser_child_iter) {
-            browser_child_iter.GetHost()->DumpProfilingData(base::BindOnce(
-                &base::WaitableEvent::Signal,
-                base::Unretained(
-                    nested_wait_for_profiling_data.GetNewWaitableEvent())));
-          }
-          nested_wait_for_profiling_data.WaitForAll();
-        });
-    // Ask all the other child processes to dump their profiling data on the
-    // proper thread depending on whether or not the |kProcessHostOnUI| feature
-    // is enabled.
-    if (base::FeatureList::IsEnabled(features::kProcessHostOnUI)) {
-      std::move(dump_child_profiling_data).Run();
-    } else {
-      // Ask all the other child processes to dump their profiling data, this
-      // has to be done on the IO thread.
-      content::GetIOThreadTaskRunner({})->PostTaskAndReply(
-          FROM_HERE, std::move(dump_child_profiling_data),
-          base::BindOnce(
-              &base::WaitableEvent::Signal,
-              base::Unretained(wait_for_profiling_data.GetNewWaitableEvent())));
-    }
-
-    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kInProcessGPU)) {
-      content::DumpGpuProfilingData(base::BindOnce(
-          &base::WaitableEvent::Signal,
-          base::Unretained(wait_for_profiling_data.GetNewWaitableEvent())));
-    }
-
-    // This will block until all the child processes have saved their profiling
-    // data to disk.
-    wait_for_profiling_data.WaitForAll();
   }
-#endif  // BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO)
+
+  // TODO(crbug.com/469788783):  Coverage builds appear to work without this. Check
+  // if this is still needed for PGO.
+#if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
+  // Wait for all the child processes to dump their profiling data without
+  // blocking the main thread.
+  if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
+    base::RunLoop nested_run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    content::AskAllChildrenToDumpProfilingData(nested_run_loop.QuitClosure());
+    nested_run_loop.Run();
+  }
+#endif
 
   // Call FastShutdown on all of the RenderProcessHosts.  This will be
   // a no-op in some cases, so we still need to go through the normal
   // shutdown path for the ones that didn't exit here.
-  g_shutdown_num_processes = 0;
-  g_shutdown_num_processes_slow = 0;
-  for (content::RenderProcessHost::iterator i(
-          content::RenderProcessHost::AllHostsIterator());
-       !i.IsAtEnd(); i.Advance()) {
-    ++g_shutdown_num_processes;
-    if (!i.GetCurrentValue()->FastShutdownIfPossible())
-      ++g_shutdown_num_processes_slow;
+  if (g_browser_process) {
+#if BUILDFLAG(IS_CHROMEOS)
+    int tab_count = 0;
+    // GlobalFeatures is null in unit tests using a bare TestingBrowserProcess.
+    if (g_browser_process->GetFeatures() &&
+        GlobalBrowserCollection::GetInstance()) {
+      GlobalBrowserCollection::GetInstance()->ForEach(
+          [&tab_count](BrowserWindowInterface* browser) {
+            if (const TabStripModel* tab_strip_model =
+                    browser->GetTabStripModel()) {
+              tab_count += tab_strip_model->count();
+            }
+            return true;
+          });
+    }
+    base::UmaHistogramCounts1000("Shutdown.ChromeOS.TabsAtShutdown", tab_count);
+    int renderer_count = 0;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    const bool fast_shutdown = ShouldFastShutdownRenderers();
+    for (content::RenderProcessHost::iterator i(
+             content::RenderProcessHost::AllHostsIterator());
+         !i.IsAtEnd(); i.Advance()) {
+      content::RenderProcessHost* rph = i.GetCurrentValue();
+#if BUILDFLAG(IS_CHROMEOS)
+      if (rph->IsInitializedAndNotDead()) {
+        ++renderer_count;
+      }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+      rph->FastShutdownIfPossible(
+          /*page_count=*/0,
+          /*skip_unload_handlers=*/fast_shutdown,
+          /*ignore_workers=*/fast_shutdown,
+          /*ignore_keep_alive=*/fast_shutdown,
+          /*ignore_pending_reuse=*/fast_shutdown);
+    }
+#if BUILDFLAG(IS_CHROMEOS)
+    base::UmaHistogramCounts100("Shutdown.ChromeOS.RenderersAtShutdown",
+                                renderer_count);
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 }
 
 bool HasShutdownStarted() {
+  CheckAccessedOnCorrectThread();
   return g_shutdown_type != ShutdownType::kNotValid;
 }
 
 bool ShouldIgnoreUnloadHandlers() {
+  CheckAccessedOnCorrectThread();
   return g_shutdown_type == ShutdownType::kEndSession ||
          g_shutdown_type == ShutdownType::kSilentExit;
 }
 
+bool ShouldFastShutdownRenderers() {
+  CheckAccessedOnCorrectThread();
+#if BUILDFLAG(IS_CHROMEOS)
+  return ShouldIgnoreUnloadHandlers() ||
+         g_shutdown_type == ShutdownType::kBrowserExit;
+#else
+  return false;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
+
 ShutdownType GetShutdownType() {
+  CheckAccessedOnCorrectThread();
   return g_shutdown_type;
 }
 
-#if !defined(OS_ANDROID)
-bool ShutdownPreThreadsStop() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  chromeos::BootTimesRecorder::Get()->AddLogoutTimeMarker(
-      "BrowserShutdownStarted", false);
-#endif
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW) && !BUILDFLAG(IS_CHROMEOS_ASH)
-  // Shutdown the IPC channel to the service processes.
-  ServiceProcessControl::GetInstance()->Disconnect();
+#if !BUILDFLAG(IS_ANDROID)
+RestartMode ShutdownPreThreadsStop() {
+#if BUILDFLAG(IS_CHROMEOS)
+  SetShutdownPhase(ShutdownPhase::kBrowserProcess);
+  ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserShutdownStarted",
+                                                     false);
 #endif
 
   // WARNING: During logoff/shutdown (WM_ENDSESSION) we may not have enough
   // time to get here. If you have something that *must* happen on end session,
   // consider putting it in BrowserProcessImpl::EndSession.
-  PrefService* prefs = g_browser_process->local_state();
-
   metrics::MetricsService* metrics = g_browser_process->metrics_service();
-  if (metrics)
-    metrics->RecordCompletedSessionEnd();
+  if (metrics) {
+    // TODO(crbug.com/40849295): LogCleanShutdown() is called earlier on in
+    // shutdown. See whether this call can be removed.
+    metrics->LogCleanShutdown();
+  }
 
-  bool restart_last_session = RecordShutdownInfoPrefs();
-
-  prefs->CommitPendingWrite();
+  RestartMode restart_mode = RecordShutdownInfoPrefs();
+  g_browser_process->local_state()->CommitPendingWrite();
 
 #if BUILDFLAG(ENABLE_RLZ)
-  // Cleanup any statics created by RLZ. Must be done before NotificationService
-  // is destroyed.
   rlz::RLZTracker::CleanupRlz();
 #endif
 
-  return restart_last_session;
+  return restart_mode;
 }
 
-bool RecordShutdownInfoPrefs() {
-  PrefService* prefs = g_browser_process->local_state();
-  if (g_shutdown_type != ShutdownType::kNotValid &&
-      g_shutdown_num_processes > 0) {
-    // Record the shutdown info so that we can put it into a histogram at next
-    // startup.
-    prefs->SetInteger(prefs::kShutdownType, static_cast<int>(g_shutdown_type));
-    prefs->SetInteger(prefs::kShutdownNumProcesses, g_shutdown_num_processes);
-    prefs->SetInteger(prefs::kShutdownNumProcessesSlow,
-                      g_shutdown_num_processes_slow);
+void RecordShutdownMetrics() {
+  base::UmaHistogramEnumeration("Shutdown.ShutdownType2", g_shutdown_type);
+
+  const char* time_metric_name = nullptr;
+  switch (g_shutdown_type) {
+    case ShutdownType::kNotValid:
+      time_metric_name = "Shutdown.NotValid.Time2";
+      break;
+
+    case ShutdownType::kSilentExit:
+      time_metric_name = "Shutdown.SilentExit.Time2";
+      break;
+
+    case ShutdownType::kWindowClose:
+      time_metric_name = "Shutdown.WindowClose.Time2";
+      break;
+
+    case ShutdownType::kBrowserExit:
+      time_metric_name = "Shutdown.BrowserExit.Time2";
+      break;
+
+    case ShutdownType::kEndSession:
+      time_metric_name = "Shutdown.EndSession.Time2";
+      break;
+
+    case ShutdownType::kOtherExit:
+      time_metric_name = "Shutdown.OtherExit.Time2";
+      break;
   }
+  CHECK(time_metric_name, base::NotFatalUntil::M161);
+
+  if (g_shutdown_started) {
+    base::TimeDelta shutdown_delta = base::Time::Now() - *g_shutdown_started;
+    base::UmaHistogramMediumTimes(time_metric_name, shutdown_delta);
+  }
+}
+
+RestartMode RecordShutdownInfoPrefs() {
+  CheckAccessedOnCorrectThread();
+  PrefService* prefs = g_browser_process->local_state();
 
   // Check local state for the restart flag so we can restart the session later.
-  bool restart_last_session = false;
-  if (prefs->HasPrefPath(prefs::kRestartLastSessionOnShutdown)) {
-    restart_last_session =
-        prefs->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+  RestartMode restart_mode = RestartMode::kNoRestart;
+  if (prefs->GetBoolean(prefs::kRestartLastSessionOnShutdown)) {
+    restart_mode = RestartMode::kRestartLastSession;
     prefs->ClearPref(prefs::kRestartLastSessionOnShutdown);
   }
-  return restart_last_session;
+
+  if (prefs->GetBoolean(prefs::kRestartInBackgroundOnShutdown)) {
+    // kRestartInBackgroundOnShutdown is only supported if we are already
+    // restarting the last session.
+    if (restart_mode == RestartMode::kRestartLastSession) {
+      restart_mode = RestartMode::kRestartInBackground;
+    }
+    prefs->ClearPref(prefs::kRestartInBackgroundOnShutdown);
+  }
+  return restart_mode;
 }
 
 void ShutdownPostThreadsStop(RestartMode restart_mode) {
-  delete g_browser_process;
-  g_browser_process = nullptr;
+  CheckAccessedOnCorrectThread();
+  // At this point, no BrowserProcess instance should exist.
+  CHECK(!g_browser_process);
 
-  // crbug.com/95079 - This needs to happen after the browser process object
+  // crbug.com/40622231 - This needs to happen after the browser process object
   // goes away.
-  ProfileManager::NukeDeletedProfilesFromDisk();
+  NukeDeletedProfilesFromDisk();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  chromeos::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserDeleted",
-                                                          true);
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserDeleted",
+                                                     /*send_to_uma=*/false);
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (!browser_util::IsBrowserAlreadyRunning() &&
       g_shutdown_type != ShutdownType::kEndSession) {
     upgrade_util::SwapNewChromeExeIfPresent();
@@ -313,156 +427,114 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
 #endif
 
   if (restart_mode != RestartMode::kNoRestart) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     NOTIMPLEMENTED();
 #else
-    const base::CommandLine& old_cl(*base::CommandLine::ForCurrentProcess());
-    base::CommandLine new_cl(old_cl.GetProgram());
-    base::CommandLine::SwitchMap switches = old_cl.GetSwitches();
-
-    // Remove switches that shouldn't persist across any restart.
-    about_flags::RemoveFlagsSwitches(&switches);
-
-    switch (restart_mode) {
-      case RestartMode::kNoRestart:
-        NOTREACHED();
-        break;
-
-      case RestartMode::kRestartInBackground:
-        new_cl.AppendSwitch(switches::kNoStartupWindow);
-        FALLTHROUGH;
-
-      case RestartMode::kRestartLastSession:
-        // Relaunch the browser without any command line URLs or certain one-off
-        // switches.
-        switches::RemoveSwitchesForAutostart(&switches);
-        break;
-
-      case RestartMode::kRestartThisSession:
-        // Copy URLs and other arguments to the new command line.
-        for (const auto& arg : old_cl.GetArgs())
-          new_cl.AppendArgNative(arg);
-        break;
+    base::CommandLine new_cl = upgrade_util::GetRelaunchCommandLine(
+        *base::CommandLine::ForCurrentProcess(), restart_mode);
+#if BUILDFLAG(IS_WIN)
+    // An isolated browser must communicate its need for a restart to the stub
+    // via its process exit code. Select the exit code based on the flavor of
+    // restart and tell the runner to return this value so that it bubbles up
+    // and out of ChromeMain and is eventually returned from wWinMain.
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kIsolated)) {
+      content::BrowserMainRunner::SetOverrideResultCode(
+          restart_mode == RestartMode::kRestartInBackground
+              ? CHROME_RESULT_CODE_NORMAL_EXIT_RELAUNCH_BACKGROUND
+              : CHROME_RESULT_CODE_NORMAL_EXIT_RELAUNCH_REQUESTED);
     }
-
-    // Append the old switches to the new command line.
-    for (const auto& it : switches)
-      new_cl.AppendSwitchNative(it.first, it.second);
-
+    const bool wait_for_parent =
+        base::FeatureList::IsEnabled(features::kRelaunchWaitForParentProcess);
+    upgrade_util::RelaunchChromeBrowser(new_cl,
+                                        /*force_breakaway_from_job=*/false,
+                                        wait_for_parent);
+#else
     upgrade_util::RelaunchChromeBrowser(new_cl);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
-  if (g_shutdown_type != ShutdownType::kNotValid &&
-      g_shutdown_num_processes > 0) {
-    // Measure total shutdown time as late in the process as possible
-    // and then write it to a file to be read at startup.
-    // We can't use prefs since all services are shutdown at this point.
-    TimeDelta shutdown_delta = base::Time::Now() - *g_shutdown_started;
-    std::string shutdown_ms =
-        base::NumberToString(shutdown_delta.InMilliseconds());
-    int len = static_cast<int>(shutdown_ms.length()) + 1;
-    base::FilePath shutdown_ms_file = GetShutdownMsPath();
-    // Note: ReadLastShutdownFile() is done as a BLOCK_SHUTDOWN task so there's
-    // an implicit sequencing between it and this write which happens after
-    // threads have been stopped (and thus ThreadPoolInstance::Shutdown() is
-    // complete).
-    base::WriteFile(shutdown_ms_file, shutdown_ms.c_str(), len);
-  }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  NotifyAndTerminate(false /* fast_path */);
+#if BUILDFLAG(IS_CHROMEOS)
+  chrome::StopSession();
 #endif
 }
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-void ReadLastShutdownFile(ShutdownType type,
-                          int num_procs,
-                          int num_procs_slow) {
-  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
-                                                base::BlockingType::MAY_BLOCK);
-
-  base::FilePath shutdown_ms_file = GetShutdownMsPath();
-  std::string shutdown_ms_str;
-  int64_t shutdown_ms = 0;
-  if (base::ReadFileToString(shutdown_ms_file, &shutdown_ms_str))
-    base::StringToInt64(shutdown_ms_str, &shutdown_ms);
-  base::DeleteFile(shutdown_ms_file);
-
-  if (shutdown_ms == 0 || num_procs == 0)
-    return;
-
-  const char* time2_metric_name = nullptr;
-  const char* per_proc_metric_name = nullptr;
-
-  switch (type) {
-    case ShutdownType::kNotValid:
-    case ShutdownType::kSilentExit:
-      // The histograms below have expired, so do not record metrics for silent
-      // exits; see https://crbug.com/975118.
-      break;
-
-    case ShutdownType::kWindowClose:
-      time2_metric_name = "Shutdown.window_close.time2";
-      per_proc_metric_name = "Shutdown.window_close.time_per_process";
-      break;
-
-    case ShutdownType::kBrowserExit:
-      time2_metric_name = "Shutdown.browser_exit.time2";
-      per_proc_metric_name = "Shutdown.browser_exit.time_per_process";
-      break;
-
-    case ShutdownType::kEndSession:
-      time2_metric_name = "Shutdown.end_session.time2";
-      per_proc_metric_name = "Shutdown.end_session.time_per_process";
-      break;
+#if BUILDFLAG(IS_CHROMEOS)
+void SetShutdownPhase(ShutdownPhase phase) {
+  CheckAccessedOnCorrectThread();
+  const base::TimeTicks now = base::TimeTicks::Now();
+  if (const char* histogram_name =
+          GetShutdownPhaseHistogramName(g_shutdown_phase)) {
+    base::UmaHistogramMediumTimes(histogram_name,
+                                  now - g_shutdown_phase_started);
   }
-  if (!time2_metric_name)
+
+  g_shutdown_phase = phase;
+  g_shutdown_phase_started = now;
+
+  static crash_reporter::CrashKeyString<24> shutdown_phase_key(
+      "cros-shutdown-phase");
+  static crash_reporter::CrashKeyString<16> shutdown_elapsed_ms_key(
+      "cros-shutdown-elapsed-ms");
+  if (phase == ShutdownPhase::kNotStarted) {
+    g_shutdown_started_ticks = base::TimeTicks();
+    shutdown_phase_key.Clear();
+    shutdown_elapsed_ms_key.Clear();
+  } else {
+    if (g_shutdown_started_ticks.is_null()) {
+      g_shutdown_started_ticks = now;
+    }
+    shutdown_phase_key.Set(ToShutdownPhaseCrashKeyString(phase));
+    shutdown_elapsed_ms_key.Set(base::NumberToString(
+        (now - g_shutdown_started_ticks).InMilliseconds()));
+  }
+}
+
+ShutdownPhase GetShutdownPhaseForTesting() {
+  CheckAccessedOnCorrectThread();
+  return g_shutdown_phase;
+}
+
+void SetShutdownTrigger(ShutdownTrigger trigger) {
+  CheckAccessedOnCorrectThread();
+  static crash_reporter::CrashKeyString<16> shutdown_trigger_key(
+      "cros-shutdown-trigger");
+  if (trigger == ShutdownTrigger::kNotSet) {
+    g_shutdown_trigger = ShutdownTrigger::kNotSet;
+    shutdown_trigger_key.Clear();
     return;
-
-  base::UmaHistogramMediumTimes(time2_metric_name,
-                                TimeDelta::FromMilliseconds(shutdown_ms));
-  base::UmaHistogramTimes(per_proc_metric_name,
-                          TimeDelta::FromMilliseconds(shutdown_ms / num_procs));
-  base::UmaHistogramCounts100("Shutdown.renderers.total", num_procs);
-  base::UmaHistogramCounts100("Shutdown.renderers.slow", num_procs_slow);
+  }
+  if (g_shutdown_trigger != ShutdownTrigger::kNotSet) {
+    return;
+  }
+  g_shutdown_trigger = trigger;
+  shutdown_trigger_key.Set(ToShutdownTriggerCrashKeyString(trigger));
 }
 
-void ReadLastShutdownInfo() {
-  PrefService* prefs = g_browser_process->local_state();
-  ShutdownType type =
-      static_cast<ShutdownType>(prefs->GetInteger(prefs::kShutdownType));
-  int num_procs = prefs->GetInteger(prefs::kShutdownNumProcesses);
-  int num_procs_slow = prefs->GetInteger(prefs::kShutdownNumProcessesSlow);
-  // clear the prefs immediately so we don't pick them up on a future run
-  prefs->SetInteger(prefs::kShutdownType,
-                    static_cast<int>(ShutdownType::kNotValid));
-  prefs->SetInteger(prefs::kShutdownNumProcesses, 0);
-  prefs->SetInteger(prefs::kShutdownNumProcessesSlow, 0);
-
-  base::UmaHistogramEnumeration("Shutdown.ShutdownType", type);
-
-  base::ThreadPool::PostTask(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
-       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-      base::BindOnce(&ReadLastShutdownFile, type, num_procs, num_procs_slow));
+ShutdownTrigger GetShutdownTriggerForTesting() {
+  CheckAccessedOnCorrectThread();
+  return g_shutdown_trigger;
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void SetTryingToQuit(bool quitting) {
+  CheckAccessedOnCorrectThread();
   g_trying_to_quit = quitting;
 
-  if (quitting)
+  if (quitting) {
     return;
+  }
 
   // Reset the restart-related preferences. They get set unconditionally through
   // calls such as chrome::AttemptRestart(), and need to be reset if the restart
   // attempt is cancelled.
   PrefService* pref_service = g_browser_process->local_state();
   if (pref_service) {
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
     pref_service->ClearPref(prefs::kWasRestarted);
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
     pref_service->ClearPref(prefs::kRestartLastSessionOnShutdown);
   }
 
@@ -472,12 +544,30 @@ void SetTryingToQuit(bool quitting) {
 }
 
 bool IsTryingToQuit() {
+  CheckAccessedOnCorrectThread();
   return g_trying_to_quit;
 }
 
 base::AutoReset<ShutdownType> SetShutdownTypeForTesting(
     ShutdownType shutdown_type) {
+  CheckAccessedOnCorrectThread();
   return base::AutoReset<ShutdownType>(&g_shutdown_type, shutdown_type);
+}
+
+void ResetShutdownGlobalsForTesting() {
+  CheckAccessedOnCorrectThread();
+  if (g_shutdown_started) {
+    delete g_shutdown_started;
+    g_shutdown_started = nullptr;
+  }
+
+  g_trying_to_quit = false;
+  g_shutdown_type = ShutdownType::kNotValid;
+#if BUILDFLAG(IS_CHROMEOS)
+  g_shutdown_phase = ShutdownPhase::kNotStarted;
+  SetShutdownPhase(ShutdownPhase::kNotStarted);
+  SetShutdownTrigger(ShutdownTrigger::kNotSet);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace browser_shutdown

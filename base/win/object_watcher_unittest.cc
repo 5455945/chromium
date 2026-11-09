@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <windows.h>
 
-#include <process.h>
+#include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -19,9 +20,15 @@ namespace {
 
 class QuitDelegate : public ObjectWatcher::Delegate {
  public:
+  explicit QuitDelegate(base::OnceClosure quit_closure)
+      : quit_closure_(std::move(quit_closure)) {}
+
   void OnObjectSignaled(HANDLE object) override {
-    RunLoop::QuitCurrentWhenIdleDeprecated();
+    std::move(quit_closure_).Run();
   }
+
+ private:
+  base::OnceClosure quit_closure_;
 };
 
 class DecrementCountDelegate : public ObjectWatcher::Delegate {
@@ -30,7 +37,7 @@ class DecrementCountDelegate : public ObjectWatcher::Delegate {
   void OnObjectSignaled(HANDLE object) override { --(*counter_); }
 
  private:
-  int* counter_;
+  raw_ptr<int> counter_;
 };
 
 void RunTest_BasicSignal(
@@ -41,20 +48,21 @@ void RunTest_BasicSignal(
   EXPECT_FALSE(watcher.IsWatching());
 
   // A manual-reset event that is not yet signaled.
-  HANDLE event = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+  HANDLE event = ::CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
-  QuitDelegate delegate;
+  base::RunLoop loop;
+  QuitDelegate delegate(loop.QuitWhenIdleClosure());
   bool ok = watcher.StartWatchingOnce(event, &delegate);
   EXPECT_TRUE(ok);
   EXPECT_TRUE(watcher.IsWatching());
   EXPECT_EQ(event, watcher.GetWatchedObject());
 
-  SetEvent(event);
+  ::SetEvent(event);
 
-  RunLoop().Run();
+  loop.Run();
 
   EXPECT_FALSE(watcher.IsWatching());
-  CloseHandle(event);
+  ::CloseHandle(event);
 }
 
 void RunTest_BasicCancel(
@@ -64,15 +72,16 @@ void RunTest_BasicCancel(
   ObjectWatcher watcher;
 
   // A manual-reset event that is not yet signaled.
-  HANDLE event = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+  HANDLE event = ::CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
-  QuitDelegate delegate;
+  base::RunLoop loop;
+  QuitDelegate delegate(loop.QuitWhenIdleClosure());
   bool ok = watcher.StartWatchingOnce(event, &delegate);
   EXPECT_TRUE(ok);
 
   watcher.StopWatching();
 
-  CloseHandle(event);
+  ::CloseHandle(event);
 }
 
 void RunTest_CancelAfterSet(
@@ -83,26 +92,26 @@ void RunTest_CancelAfterSet(
 
   int counter = 1;
   DecrementCountDelegate delegate(&counter);
-
+  base::RunLoop loop;
   // A manual-reset event that is not yet signaled.
-  HANDLE event = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+  HANDLE event = ::CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
   bool ok = watcher.StartWatchingOnce(event, &delegate);
   EXPECT_TRUE(ok);
 
-  SetEvent(event);
+  ::SetEvent(event);
 
   // Let the background thread do its business
-  Sleep(30);
+  ::Sleep(30);
 
   watcher.StopWatching();
 
-  RunLoop().RunUntilIdle();
+  loop.RunUntilIdle();
 
   // Our delegate should not have fired.
   EXPECT_EQ(1, counter);
 
-  CloseHandle(event);
+  ::CloseHandle(event);
 }
 
 void RunTest_SignalBeforeWatch(
@@ -112,16 +121,17 @@ void RunTest_SignalBeforeWatch(
   ObjectWatcher watcher;
 
   // A manual-reset event that is signaled before we begin watching.
-  HANDLE event = CreateEvent(nullptr, TRUE, TRUE, nullptr);
+  HANDLE event = ::CreateEvent(nullptr, TRUE, TRUE, nullptr);
 
-  QuitDelegate delegate;
+  base::RunLoop loop;
+  QuitDelegate delegate(loop.QuitWhenIdleClosure());
   bool ok = watcher.StartWatchingOnce(event, &delegate);
   EXPECT_TRUE(ok);
 
-  RunLoop().Run();
+  loop.Run();
 
   EXPECT_FALSE(watcher.IsWatching());
-  CloseHandle(event);
+  ::CloseHandle(event);
 }
 
 void RunTest_OutlivesTaskEnvironment(
@@ -129,34 +139,40 @@ void RunTest_OutlivesTaskEnvironment(
   // Simulate a task environment that dies before an ObjectWatcher.  This
   // ordinarily doesn't happen when people use the Thread class, but it can
   // happen when people use the Singleton pattern or atexit.
-  HANDLE event = CreateEvent(nullptr, TRUE, FALSE, nullptr);  // not signaled
+  HANDLE event = ::CreateEvent(nullptr, TRUE, FALSE, nullptr);  // not signaled
   {
     ObjectWatcher watcher;
     {
       test::TaskEnvironment task_environment(main_thread_type);
 
-      QuitDelegate delegate;
+      base::RunLoop loop;
+      QuitDelegate delegate(loop.QuitWhenIdleClosure());
       watcher.StartWatchingOnce(event, &delegate);
     }
   }
-  CloseHandle(event);
+  ::CloseHandle(event);
 }
 
 class QuitAfterMultipleDelegate : public ObjectWatcher::Delegate {
  public:
-  QuitAfterMultipleDelegate(HANDLE event, int iterations)
-      : event_(event), iterations_(iterations) {}
+  QuitAfterMultipleDelegate(HANDLE event,
+                            int iterations,
+                            base::OnceClosure quit_closure)
+      : event_(event),
+        iterations_(iterations),
+        quit_closure_(std::move(quit_closure)) {}
   void OnObjectSignaled(HANDLE object) override {
     if (--iterations_) {
-      SetEvent(event_);
+      ::SetEvent(event_);
     } else {
-      RunLoop::QuitCurrentWhenIdleDeprecated();
+      std::move(quit_closure_).Run();
     }
   }
 
  private:
   HANDLE event_;
   int iterations_;
+  base::OnceClosure quit_closure_;
 };
 
 void RunTest_ExecuteMultipleTimes(
@@ -167,21 +183,22 @@ void RunTest_ExecuteMultipleTimes(
   EXPECT_FALSE(watcher.IsWatching());
 
   // An auto-reset event that is not yet signaled.
-  HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+  HANDLE event = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-  QuitAfterMultipleDelegate delegate(event, 2);
+  base::RunLoop loop;
+  QuitAfterMultipleDelegate delegate(event, 2, loop.QuitWhenIdleClosure());
   bool ok = watcher.StartWatchingMultipleTimes(event, &delegate);
   EXPECT_TRUE(ok);
   EXPECT_TRUE(watcher.IsWatching());
   EXPECT_EQ(event, watcher.GetWatchedObject());
 
-  SetEvent(event);
+  ::SetEvent(event);
 
-  RunLoop().Run();
+  loop.Run();
 
   EXPECT_TRUE(watcher.IsWatching());
   EXPECT_TRUE(watcher.StopWatching());
-  CloseHandle(event);
+  ::CloseHandle(event);
 }
 
 }  // namespace

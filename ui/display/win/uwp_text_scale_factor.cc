@@ -1,26 +1,24 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/display/win/uwp_text_scale_factor.h"
 
 #include <windows.h>
-
 #include <windows.ui.viewmanagement.h>
 #include <wrl/client.h>
 #include <wrl/event.h>
 
+#include <memory>
+
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/threading/thread_checker.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_hstring.h"
-#include "base/win/windows_version.h"
 
-namespace display {
-namespace win {
+namespace display::win {
 
 namespace {
 
@@ -50,14 +48,7 @@ bool g_default_instance_cleaned_up = false;
 // when creating the UWP UI Settings object, so we've moved the initialization
 // to a separate function.
 bool CreateUiSettingsComObject(ComPtr<IUISettings2>& ptr) {
-  DCHECK(!ptr);
-
-  // This is required setup before using ScopedHString.
-  if (!(base::win::ResolveCoreWinRTDelayload() &&
-        base::win::ScopedHString::ResolveCoreWinRTStringDelayload())) {
-    DLOG(ERROR) << "Failed loading functions from combase.dll";
-    return false;
-  }
+  CHECK(!ptr, base::NotFatalUntil::M163);
 
   // Create the COM object.
   auto hstring = base::win::ScopedHString::Create(
@@ -89,11 +80,6 @@ class UwpTextScaleFactorImpl : public UwpTextScaleFactor {
  public:
   UwpTextScaleFactorImpl()
       : text_scale_factor_changed_token_(kInvalidEventRegistrationToken) {
-    // There's no point in doing this initialization if we're earlier than
-    // Windows 10, since UWP is a Win10 feature.
-    if (base::win::GetVersion() < base::win::Version::WIN10)
-      return;
-
     // We want to bracket all use of our COM object with COM initialization
     // in order to be sure we don't leak COM listeners into the OS. This may
     // extend the lifetime of COM on this thread but we do not expect it to be
@@ -162,7 +148,7 @@ class UwpTextScaleFactorImpl : public UwpTextScaleFactor {
     // Windows documents this property to always have a value greater than or
     // equal to 1. Let's make sure that's the case - if we don't, we could get
     // bizarre behavior and divide-by-zeros later on.
-    DCHECK_GE(result, 1.0);
+    CHECK_GE(result, 1.0, base::NotFatalUntil::M163);
     return static_cast<float>(result);
   }
 
@@ -187,9 +173,7 @@ class UwpTextScaleFactorImpl : public UwpTextScaleFactor {
 UwpTextScaleFactor::UwpTextScaleFactor() = default;
 
 UwpTextScaleFactor::~UwpTextScaleFactor() {
-  for (auto& observer : observer_list_) {
-    observer.OnUwpTextScaleFactorCleanup(this);
-  }
+  observer_list_.Notify(&Observer::OnUwpTextScaleFactorCleanup, this);
 }
 
 float UwpTextScaleFactor::GetTextScaleFactor() const {
@@ -205,9 +189,7 @@ void UwpTextScaleFactor::RemoveObserver(Observer* observer) {
 }
 
 void UwpTextScaleFactor::NotifyUwpTextScaleFactorChanged() {
-  for (auto& observer : observer_list_) {
-    observer.OnUwpTextScaleFactorChanged();
-  }
+  observer_list_.Notify(&Observer::OnUwpTextScaleFactorChanged);
 }
 
 void UwpTextScaleFactor::SetImplementationForTesting(
@@ -233,5 +215,4 @@ void UwpTextScaleFactor::Observer::OnUwpTextScaleFactorCleanup(
   source->RemoveObserver(this);
 }
 
-}  // namespace win
-}  // namespace display
+}  // namespace display::win

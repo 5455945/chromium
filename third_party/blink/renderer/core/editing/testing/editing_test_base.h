@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,16 @@
 
 namespace blink {
 
+class Editor;
 class FrameSelection;
 class HTMLElement;
+class Range;
 
 class EditingTestBase : public PageTestBase {
   USING_FAST_MALLOC(EditingTestBase);
 
  public:
-  static ShadowRoot* CreateShadowRootForElementWithIDAndSetInnerHTML(
+  static ShadowRoot* CreateShadowRootForElementWithIdAndSetInnerHtml(
       TreeScope&,
       const char* host_element_id,
       const char* shadow_root_content);
@@ -31,32 +33,39 @@ class EditingTestBase : public PageTestBase {
   EditingTestBase();
   ~EditingTestBase() override;
 
+  Editor& GetEditor() const;
+
   // Returns |Position| for specified |caret_text|, which is HTML markup with
   // caret marker "|".
   Position SetCaretTextToBody(const std::string& caret_text);
 
-  // Returns |SelectionInDOMTree| for specified |selection_text| by using
+  // Returns |SelectionInDomTree| for specified |selection_text| by using
   // |SetSelectionText()| on BODY.
-  SelectionInDOMTree SetSelectionTextToBody(const std::string& selection_text);
+  SelectionInDomTree SetSelectionTextToBody(const std::string& selection_text);
 
   // Sets |HTMLElement#innerHTML| with |selection_text|, which is HTML markup
-  // with selection markers "^" and "|" and returns |SelectionInDOMTree| of
+  // with selection markers "^" and "|" and returns |SelectionInDomTree| of
   // specified selection markers.
   // See also |GetSelectionText()| which returns selection text from specified
-  // |ContainerNode| and |SelectionInDOMTree|.
+  // |ContainerNode| and |SelectionInDomTree|.
   // Note: Unlike |assert_selection()|, this function doesn't change
   // |FrameSelection|.
-  SelectionInDOMTree SetSelectionText(HTMLElement*,
+  SelectionInDomTree SetSelectionText(HTMLElement*,
                                       const std::string& selection_text);
 
   // Returns selection text for child nodes of BODY with specific |Position|.
   std::string GetCaretTextFromBody(const Position&) const;
 
   // Returns selection text for child nodes of BODY with specified
-  // |SelectionInDOMTree|.
-  std::string GetSelectionTextFromBody(const SelectionInDOMTree&) const;
+  // |SelectionInDomTree|.
+  std::string GetSelectionTextFromBody(const SelectionInDomTree&) const;
 
   std::string GetSelectionTextFromBody() const;
+
+  // Returns selection text for child nodes of BODY with specified
+  // |EphemeralRange| or |Range|.
+  std::string GetRangeTextFromBody(const EphemeralRange&) const;
+  std::string GetRangeTextFromBody(const Range*) const;
 
   // Returns selection text for child nodes of BODY with specified
   // |SelectionInFlatTree|.

@@ -13,6 +13,23 @@ MockRuntime.prototype.getMissingFrameCount = function() {
   return this.presentation_provider_.missing_frame_count_;
 };
 
+
+
+// Note that if getEnvironmentProvider hasn't finished running yet this will be
+// undefined. It's recommended that you allow a successful task to post first
+// before attempting to close.
+MockRuntime.prototype.closeEnvironmentIntegrationProvider = function() {
+  if (this.environmentProviderReceiver_) {
+    this.environmentProviderReceiver_.$.close();
+  }
+};
+
+MockRuntime.prototype.closeDataProvider = function() {
+  this.closeEnvironmentIntegrationProvider();
+  this.dataProviderReceiver_.$.close();
+  this.sessionOptions_ = null;
+};
+
 MockRuntime.prototype._injectAdditionalFrameData_preLightEstimation = MockRuntime.prototype._injectAdditionalFrameData;
 MockRuntime.prototype._injectAdditionalFrameData = function(options, frameData) {
   this._injectAdditionalFrameData_preLightEstimation(options, frameData);
@@ -32,12 +49,13 @@ MockRuntime.prototype._injectAdditionalFrameData = function(options, frameData) 
     reflectionProbe: {
       cubeMap: {
         widthAndHeight: 16,
-        positiveX: new Array(16 * 16).fill({ red: 0, green: 0, blue: 0, alpha: 0 }),
-        negativeX: new Array(16 * 16).fill({ red: 0, green: 0, blue: 0, alpha: 0 }),
-        positiveY: new Array(16 * 16).fill({ red: 0, green: 0, blue: 0, alpha: 0 }),
-        negativeY: new Array(16 * 16).fill({ red: 0, green: 0, blue: 0, alpha: 0 }),
-        positiveZ: new Array(16 * 16).fill({ red: 0, green: 0, blue: 0, alpha: 0 }),
-        negativeZ: new Array(16 * 16).fill({ red: 0, green: 0, blue: 0, alpha: 0 }),
+        // Arrays should be widthAndHeight^2 * 4 channels per pixel (r, g, b, a).
+        positiveX: new Array(16 * 16 * 4).fill(0),
+        negativeX: new Array(16 * 16 * 4).fill(0),
+        positiveY: new Array(16 * 16 * 4).fill(0),
+        negativeY: new Array(16 * 16 * 4).fill(0),
+        positiveZ: new Array(16 * 16 * 4).fill(0),
+        negativeZ: new Array(16 * 16 * 4).fill(0),
       },
     },
   };

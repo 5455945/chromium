@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,8 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/developer_console_logger.h"
 #include "components/webdata/common/web_data_service_base.h"
@@ -37,7 +36,7 @@ namespace payments {
 
 class PaymentManifestDownloader;
 class PaymentManifestParser;
-class PaymentManifestWebDataService;
+class WebPaymentsWebDataService;
 
 // Verifies that payment handlers (i.e., service worker payment apps) can use
 // the payment method names that they claim. Each object can be used to verify
@@ -53,7 +52,7 @@ class PaymentManifestWebDataService;
 // checks for --unsafely-treat-insecure-origin-as-secure=<origin> flag. For
 // example:
 //  base::CommandLine::Init(0, nullptr);
-class ManifestVerifier final : public WebDataServiceConsumer {
+class ManifestVerifier final {
  public:
   // The callback that will be invoked with the validated payment handlers.
   // These payment handlers will have only the valid payment method names
@@ -76,9 +75,12 @@ class ManifestVerifier final : public WebDataServiceConsumer {
                    content::WebContents* web_contents,
                    PaymentManifestDownloader* downloader,
                    PaymentManifestParser* parser,
-                   PaymentManifestWebDataService* cache);
+                   WebPaymentsWebDataService* cache);
 
-  ~ManifestVerifier() override;
+  ManifestVerifier(const ManifestVerifier&) = delete;
+  ManifestVerifier& operator=(const ManifestVerifier&) = delete;
+
+  ~ManifestVerifier();
 
   // Initiates the verification. This object should be deleted after
   // |finished_using_resources| is invoked.
@@ -88,9 +90,9 @@ class ManifestVerifier final : public WebDataServiceConsumer {
 
  private:
   // Called when a manifest is retrieved from cache.
-  void OnWebDataServiceRequestDone(
-      WebDataServiceBase::Handle h,
-      std::unique_ptr<WDTypedResult> result) override;
+  void OnGetPaymentMethodManifest(const GURL& method_manifest_url,
+                                  WebDataServiceBase::Handle handle,
+                                  std::unique_ptr<WDTypedResult> result);
 
   // Called when a manifest is downloaded. The "method manifest URL after
   // redirects" is intentionally not used.
@@ -100,12 +102,6 @@ class ManifestVerifier final : public WebDataServiceConsumer {
       const std::string& content,
       const std::string& error_message);
 
-  // Called when a manifest is parsed.
-  void OnPaymentMethodManifestParsed(
-      const GURL& method_manifest_url,
-      const std::vector<GURL>& default_applications,
-      const std::vector<url::Origin>& supported_origins);
-
   // Called immediately preceding the verification callback invocation.
   void RemoveInvalidPaymentApps();
 
@@ -113,13 +109,13 @@ class ManifestVerifier final : public WebDataServiceConsumer {
   DeveloperConsoleLogger log_;
 
   // Downloads the manifests.
-  PaymentManifestDownloader* downloader_;
+  raw_ptr<PaymentManifestDownloader, DanglingUntriaged> downloader_;
 
   // Parses the manifests.
-  PaymentManifestParser* parser_;
+  raw_ptr<PaymentManifestParser, DanglingUntriaged> parser_;
 
   // Caches the manifests.
-  PaymentManifestWebDataService* cache_;
+  raw_ptr<WebPaymentsWebDataService> cache_;
 
   // The list of payment apps being verified.
   content::InstalledPaymentAppsFinder::PaymentApps apps_;
@@ -136,22 +132,29 @@ class ManifestVerifier final : public WebDataServiceConsumer {
   // cache.
   base::OnceClosure finished_using_resources_callback_;
 
-  // The mapping of payment method names to the id of the apps that want to
-  // use these payment method names.
-  std::map<GURL, std::vector<int64_t>> manifest_url_to_app_id_map_;
+  struct ManifestState {
+    ManifestState();
+    ~ManifestState();
 
-  // The mapping of cache request handles to the payment method manifest URLs.
-  std::map<WebDataServiceBase::Handle, GURL> cache_request_handles_;
+    // The IDs of the apps that want to use this payment method name.
+    std::vector<int64_t> app_ids;
 
-  // The set of payment method manifest URLs for which the cached value was
-  // used.
-  std::set<GURL> cached_manifest_urls_;
+    // Cached native payment app IDs. Note that the supported native payment
+    // app IDs have been cached for a payment method in the same cache in
+    // PaymentManifestVerifier.java. Do not override them since we do not
+    // refresh them in this class.
+    std::vector<std::string> cached_supported_native_app_ids;
 
-  // The mapping of payment method names to cached native payment app Ids.
-  // Note that the supported native payment app Ids have been cached for a
-  // payment method in the same cache in PaymentManifestVerifier.java. Do not
-  // override them since we do not refresh them in this class.
-  std::map<GURL, std::vector<std::string>> cached_supported_native_app_ids_;
+    // Whether the cached manifest value was used to verify payment apps.
+    bool used_cached_manifest = false;
+  };
+
+  // Per-manifest verification state keyed by payment method manifest URL.
+  std::map<GURL, ManifestState> manifests_;
+
+  // The set of ongoing cache request handles, used to clean up any outstanding
+  // requests when the class is torn down.
+  std::set<WebDataServiceBase::Handle> cache_request_handles_;
 
   // The number of manifests that have not been verified yet. A manifest can be
   // either be retrieved from cache or downloaded for verification. Once this
@@ -168,8 +171,6 @@ class ManifestVerifier final : public WebDataServiceConsumer {
   std::string first_error_message_;
 
   base::WeakPtrFactory<ManifestVerifier> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ManifestVerifier);
 };
 
 }  // namespace payments

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/cancelable_callback.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "components/download/internal/background_service/controller.h"
@@ -22,13 +23,13 @@
 #include "components/download/internal/background_service/log_source.h"
 #include "components/download/internal/background_service/model.h"
 #include "components/download/internal/background_service/scheduler/device_status_listener.h"
+#include "components/download/internal/background_service/service_config_impl.h"
 #include "components/download/internal/background_service/startup_status.h"
 #include "components/download/internal/background_service/stats.h"
 #include "components/download/public/background_service/client.h"
 #include "components/download/public/background_service/download_params.h"
 #include "components/download/public/background_service/navigation_monitor.h"
 #include "components/download/public/task/task_scheduler.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace download {
 
@@ -56,7 +57,8 @@ class ControllerImpl : public Controller,
  public:
   // |config| and |log_sink| are externally owned and must be guaranteed to
   // outlive this class.
-  ControllerImpl(Configuration* config,
+  ControllerImpl(std::unique_ptr<Configuration> config,
+                 std::unique_ptr<Logger> logger,
                  LogSink* log_sink,
                  std::unique_ptr<ClientSet> clients,
                  std::unique_ptr<DownloadDriver> driver,
@@ -67,10 +69,16 @@ class ControllerImpl : public Controller,
                  std::unique_ptr<TaskScheduler> task_scheduler,
                  std::unique_ptr<FileMonitor> file_monitor,
                  const base::FilePath& download_file_dir);
+
+  ControllerImpl(const ControllerImpl&) = delete;
+  ControllerImpl& operator=(const ControllerImpl&) = delete;
+
   ~ControllerImpl() override;
 
   // Controller implementation.
   void Initialize(base::OnceClosure callback) override;
+  const ServiceConfig& GetConfig() override;
+  BackgroundDownloadService::ServiceStatus GetStatus() override;
   State GetState() override;
   void StartDownload(DownloadParams params) override;
   void PauseDownload(const std::string& guid) override;
@@ -82,6 +90,7 @@ class ControllerImpl : public Controller,
   void OnStartScheduledTask(DownloadTaskType task_type,
                             TaskFinishedCallback callback) override;
   bool OnStopScheduledTask(DownloadTaskType task_type) override;
+  Logger* GetLogger() override;
 
  private:
   // DownloadDriver::Client implementation.
@@ -113,7 +122,7 @@ class ControllerImpl : public Controller,
   Controller::State GetControllerState() override;
   const StartupStatus& GetStartupStatus() override;
   LogSource::EntryDetailsList GetServiceDownloads() override;
-  absl::optional<EntryDetails> GetServiceDownload(
+  std::optional<EntryDetails> GetServiceDownload(
       const std::string& guid) override;
 
   // MemoryDumpProvider implementation.
@@ -135,6 +144,9 @@ class ControllerImpl : public Controller,
   // Checks if initialization is complete and successful.  If so, completes the
   // internal state initialization.
   void AttemptToFinalizeSetup();
+
+  // Posts a task to execute AttemptToFinalizeSetup().
+  void PostAttemptToFinalizeSetup();
 
   // Called when setup and recovery failed.  Shuts down the service and notifies
   // the Clients.
@@ -193,7 +205,6 @@ class ControllerImpl : public Controller,
 
   // Handles and clears any pending task finished callbacks.
   void HandleTaskFinished(DownloadTaskType task_type,
-                          bool needs_reschedule,
                           stats::ScheduledTaskStatus status);
   void OnCompleteCleanupTask();
 
@@ -211,9 +222,8 @@ class ControllerImpl : public Controller,
 
   void HandleExternalDownload(const std::string& guid, bool active);
   void PrepareToStartDownload(Entry* entry);
-  void OnDownloadReadyToStart(
-      const std::string& guid,
-      scoped_refptr<network::ResourceRequestBody> post_body);
+  void OnDownloadReadyToStart(const std::string& guid,
+                              DownloadRequestParameters params);
 
   // Postable methods meant to just be pass throughs to Client APIs.  This is
   // meant to help prevent reentrancy.
@@ -248,18 +258,19 @@ class ControllerImpl : public Controller,
   // received upload data from their respective clients.
   void KillTimedOutUploads();
 
-  Configuration* config_;
-  LogSink* log_sink_;
-
   // The directory in which the downloaded files are stored.
   const base::FilePath download_file_dir_;
 
   // Owned Dependencies.
+  std::unique_ptr<Configuration> config_;
+  ServiceConfigImpl service_config_;
+  std::unique_ptr<Logger> logger_;
+  raw_ptr<LogSink, DanglingUntriaged> log_sink_;
   std::unique_ptr<ClientSet> clients_;
   std::unique_ptr<DownloadDriver> driver_;
   std::unique_ptr<Model> model_;
   std::unique_ptr<DeviceStatusListener> device_status_listener_;
-  NavigationMonitor* navigation_monitor_;
+  raw_ptr<NavigationMonitor> navigation_monitor_;
   std::unique_ptr<Scheduler> scheduler_;
   std::unique_ptr<TaskScheduler> task_scheduler_;
   std::unique_ptr<FileMonitor> file_monitor_;
@@ -270,6 +281,7 @@ class ControllerImpl : public Controller,
   StartupStatus startup_status_;
   std::set<std::string> externally_active_downloads_;
   std::set<std::string> pending_uploads_;
+  std::set<std::string> guids_with_custom_request_params_;
   std::map<std::string, DownloadParams::StartCallback> start_callbacks_;
   std::map<DownloadTaskType, TaskFinishedCallback> task_finished_callbacks_;
   base::CancelableOnceClosure cancel_downloads_callback_;
@@ -277,8 +289,6 @@ class ControllerImpl : public Controller,
 
   // Only used to post tasks on the same thread.
   base::WeakPtrFactory<ControllerImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ControllerImpl);
 };
 
 }  // namespace download

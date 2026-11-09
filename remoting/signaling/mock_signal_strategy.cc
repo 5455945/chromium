@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,14 @@ MockSignalStrategy::MockSignalStrategy(const SignalingAddress& address)
 MockSignalStrategy::~MockSignalStrategy() = default;
 
 const SignalingAddress& MockSignalStrategy::GetLocalAddress() const {
+  return local_address_;
+}
+
+MockFtlSignalStrategy::MockFtlSignalStrategy(const SignalingAddress& address)
+    : local_address_(address) {}
+MockFtlSignalStrategy::~MockFtlSignalStrategy() = default;
+
+const SignalingAddress& MockFtlSignalStrategy::GetLocalAddress() const {
   return local_address_;
 }
 

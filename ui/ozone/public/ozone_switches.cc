@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,14 +18,23 @@ const char kEnableWaylandIme[] = "enable-wayland-ime";
 // Disable wayland input method editor.
 const char kDisableWaylandIme[] = "disable-wayland-ime";
 
+// Specify wayland text-input protocol version.
+// Defaults to "1" for text-input-v1. Can specify value "3" for experimental
+// text-input-v3 support.
+const char kWaylandTextInputVersion[] = "wayland-text-input-version";
+
+// Use explicit grab when opening popup windows.
+// See https://crbug.com/1220274
+const char kUseWaylandExplicitGrab[] = "use-wayland-explicit-grab";
+
 // Disable explicit DMA-fences
 const char kDisableExplicitDmaFences[] = "disable-explicit-dma-fences";
 
-// Disable running as system compositor.
-const char kDisableRunningAsSystemCompositor[] =
-    "disable-running-as-system-compositor";
+// Specifies ozone screen size.
+const char kOzoneOverrideScreenSize[] = "ozone-override-screen-size";
 
-// Disable buffer bandwidth compression
-const char kDisableBufferBWCompression[] = "disable-buffer-bw-compression";
+// Allows explicitly picking a DRM render node to create gbm_device for
+// rendering.
+const char kRenderNodeOverride[] = "render-node-override";
 
 }  // namespace switches

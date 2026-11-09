@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,11 @@ namespace ash {
 class AlwaysOnTopControllerTest : public AshTestBase {
  public:
   AlwaysOnTopControllerTest() = default;
+
+  AlwaysOnTopControllerTest(const AlwaysOnTopControllerTest&) = delete;
+  AlwaysOnTopControllerTest& operator=(const AlwaysOnTopControllerTest&) =
+      delete;
+
   ~AlwaysOnTopControllerTest() override = default;
 
   void SetUp() override {
@@ -33,9 +38,6 @@ class AlwaysOnTopControllerTest : public AshTestBase {
         keyboard::switches::kEnableVirtualKeyboard);
     AshTestBase::SetUp();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(AlwaysOnTopControllerTest);
 };
 
 class TestLayoutManager : public WorkspaceLayoutManager {
@@ -43,6 +45,9 @@ class TestLayoutManager : public WorkspaceLayoutManager {
   explicit TestLayoutManager(aura::Window* window)
       : WorkspaceLayoutManager(window),
         keyboard_displacing_bounds_changed_(false) {}
+
+  TestLayoutManager(const TestLayoutManager&) = delete;
+  TestLayoutManager& operator=(const TestLayoutManager&) = delete;
 
   ~TestLayoutManager() override = default;
 
@@ -57,7 +62,6 @@ class TestLayoutManager : public WorkspaceLayoutManager {
 
  private:
   bool keyboard_displacing_bounds_changed_;
-  DISALLOW_COPY_AND_ASSIGN(TestLayoutManager);
 };
 
 // Verifies that the always on top controller is notified of keyboard bounds
@@ -79,7 +83,7 @@ TEST_F(AlwaysOnTopControllerTest, NotifyKeyboardBoundsChanging) {
   EXPECT_FALSE(manager->keyboard_displacing_bounds_changed());
 
   keyboard_controller->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // Verify that test manager was notified of bounds change.
   EXPECT_TRUE(manager->keyboard_displacing_bounds_changed());
@@ -91,9 +95,8 @@ TEST_F(AlwaysOnTopControllerTest,
   AlwaysOnTopController* always_on_top_controller =
       controller->always_on_top_controller();
 
-  const gfx::Rect bounds(100, 100, 200, 200);
   std::unique_ptr<aura::Window> always_on_top_window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = {100, 100, 200, 200}}));
   always_on_top_window->SetProperty(aura::client::kZOrderingKey,
                                     ui::ZOrderLevel::kFloatingWindow);
 
@@ -110,7 +113,7 @@ TEST_F(AlwaysOnTopControllerTest, PipContainerReturnedForFloatingPipWindow) {
 
   const gfx::Rect bounds(100, 100, 200, 200);
   std::unique_ptr<aura::Window> pip_window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
 
   WindowState* window_state = WindowState::Get(pip_window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
@@ -133,7 +136,7 @@ TEST_F(AlwaysOnTopControllerTest,
 
   const gfx::Rect bounds(100, 100, 200, 200);
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
 
   aura::Window* container =
       always_on_top_controller->GetContainer(window.get());
@@ -145,7 +148,7 @@ TEST_F(AlwaysOnTopControllerTest,
        FloatingWindowMovedBetweenContainersWhenPipStateChanges) {
   const gfx::Rect bounds(100, 100, 200, 200);
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(bounds));
+      CreateTestWindowInShell({.bounds = bounds}));
   window->SetProperty(aura::client::kZOrderingKey,
                       ui::ZOrderLevel::kFloatingWindow);
 

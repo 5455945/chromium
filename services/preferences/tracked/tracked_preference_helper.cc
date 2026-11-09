@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,29 +31,31 @@ TrackedPreferenceHelper::TrackedPreferenceHelper(
 TrackedPreferenceHelper::ResetAction TrackedPreferenceHelper::GetAction(
     ValueState value_state) const {
   switch (value_state) {
-    case ValueState::UNCHANGED:
+    case ValueState::UNCHANGED_HMAC:
+    case ValueState::UNCHANGED_ENCRYPTED:
+    case ValueState::UNCHANGED_VIA_HMAC_FALLBACK:
       // Desired case, nothing to do.
       return DONT_RESET;
-    case ValueState::CLEARED:
+    case ValueState::CLEARED_HMAC:
+    case ValueState::CLEARED_ENCRYPTED:
+    case ValueState::CLEARED_VIA_HMAC_FALLBACK:
       // Unfortunate case, but there is nothing we can do.
       return DONT_RESET;
     case ValueState::TRUSTED_NULL_VALUE:  // Falls through.
     case ValueState::TRUSTED_UNKNOWN_VALUE:
       // It is okay to seed the hash in this case.
       return DONT_RESET;
-    case ValueState::SECURE_LEGACY:
-      // Accept secure legacy device ID based hashes.
-      return DONT_RESET;
     case ValueState::UNSUPPORTED:
       NOTREACHED()
           << "GetAction should not be called with an UNSUPPORTED value state";
-      return DONT_RESET;
     case ValueState::UNTRUSTED_UNKNOWN_VALUE:  // Falls through.
-    case ValueState::CHANGED:
+    case ValueState::CHANGED_HMAC:             // Falls through.
+    case ValueState::CHANGED_VIA_HMAC_FALLBACK:
       return enforce_ ? DO_RESET : WANTED_RESET;
+    case ValueState::CHANGED_ENCRYPTED:
+      return enforce_ ? DO_RESET_ENCRYPTED : WANTED_RESET_ENCRYPTED;
   }
   NOTREACHED() << "Unexpected ValueState: " << value_state;
-  return DONT_RESET;
 }
 
 bool TrackedPreferenceHelper::IsPersonal() const {
@@ -62,21 +64,41 @@ bool TrackedPreferenceHelper::IsPersonal() const {
 
 void TrackedPreferenceHelper::ReportValidationResult(
     ValueState value_state,
-    base::StringPiece validation_type_suffix) const {
+    std::string_view validation_type_suffix) const {
   const char* histogram_name = nullptr;
   switch (value_state) {
-    case ValueState::UNCHANGED:
+    case ValueState::UNCHANGED_HMAC:
       histogram_name = user_prefs::tracked::kTrackedPrefHistogramUnchanged;
       break;
-    case ValueState::CLEARED:
+    case ValueState::CLEARED_HMAC:
       histogram_name = user_prefs::tracked::kTrackedPrefHistogramCleared;
       break;
-    case ValueState::SECURE_LEGACY:
-      histogram_name =
-          user_prefs::tracked::kTrackedPrefHistogramMigratedLegacyDeviceId;
-      break;
-    case ValueState::CHANGED:
+    case ValueState::CHANGED_HMAC:
       histogram_name = user_prefs::tracked::kTrackedPrefHistogramChanged;
+      break;
+    case ValueState::UNCHANGED_ENCRYPTED:
+      histogram_name =
+          user_prefs::tracked::kTrackedPrefHistogramUnchangedEncrypted;
+      break;
+    case ValueState::CLEARED_ENCRYPTED:
+      histogram_name =
+          user_prefs::tracked::kTrackedPrefHistogramClearedEncrypted;
+      break;
+    case ValueState::CHANGED_ENCRYPTED:
+      histogram_name =
+          user_prefs::tracked::kTrackedPrefHistogramChangedEncrypted;
+      break;
+    case ValueState::UNCHANGED_VIA_HMAC_FALLBACK:
+      histogram_name =
+          user_prefs::tracked::kTrackedPrefHistogramUnchangedViaHmacFallback;
+      break;
+    case ValueState::CLEARED_VIA_HMAC_FALLBACK:
+      histogram_name =
+          user_prefs::tracked::kTrackedPrefHistogramClearedViaHmacFallback;
+      break;
+    case ValueState::CHANGED_VIA_HMAC_FALLBACK:
+      histogram_name =
+          user_prefs::tracked::kTrackedPrefHistogramChangedViaHmacFallback;
       break;
     case ValueState::UNTRUSTED_UNKNOWN_VALUE:
       histogram_name = user_prefs::tracked::kTrackedPrefHistogramInitialized;
@@ -92,7 +114,6 @@ void TrackedPreferenceHelper::ReportValidationResult(
     case ValueState::UNSUPPORTED:
       NOTREACHED() << "ReportValidationResult should not be called with an "
                       "UNSUPPORTED value state";
-      return;
   }
   DCHECK(histogram_name);
 
@@ -119,10 +140,30 @@ void TrackedPreferenceHelper::ReportAction(ResetAction reset_action) const {
           user_prefs::tracked::kTrackedPrefHistogramWantedReset, reporting_id_,
           reporting_ids_count_);
       break;
+    case WANTED_RESET_ENCRYPTED:
+      UMA_HISTOGRAM_EXACT_LINEAR(
+          user_prefs::tracked::kTrackedPrefHistogramWantedResetEncrypted,
+          reporting_id_, reporting_ids_count_);
+      break;
     case DO_RESET:
       UMA_HISTOGRAM_EXACT_LINEAR(
           user_prefs::tracked::kTrackedPrefHistogramReset, reporting_id_,
           reporting_ids_count_);
       break;
+    case DO_RESET_ENCRYPTED:
+      UMA_HISTOGRAM_EXACT_LINEAR(
+          user_prefs::tracked::kTrackedPrefHistogramResetEncrypted,
+          reporting_id_, reporting_ids_count_);
+      break;
   }
+}
+
+void TrackedPreferenceHelper::ReportAuthDataCalculated() const {
+  UMA_HISTOGRAM_EXACT_LINEAR(
+      user_prefs::tracked::kTrackedPrefHistogramAuthDataCalculated,
+      reporting_id_, reporting_ids_count_);
+}
+
+size_t TrackedPreferenceHelper::GetReportingId() const {
+  return reporting_id_;
 }

@@ -1,133 +1,141 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sharing_hub/sharing_hub_model.h"
 
+#include "base/base64.h"
+#include "base/check_deref.h"
+#include "base/logging.h"
+#include "base/metrics/user_metrics.h"
+#include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/send_tab_to_self/send_tab_to_self_util.h"
-#include "chrome/browser/share/core/share_targets.h"
-#include "chrome/browser/share/proto/share_target.pb.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/sharing_hub/sharing_hub_features.h"
+#include "chrome/browser/shell_integration.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/qrcode_generator/qrcode_generator_bubble_controller.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/image/image.h"
+#include "ui/gfx/image/image_skia_rep.h"
+#include "ui/gfx/vector_icon_types.h"
+#include "ui/strings/grit/ui_strings.h"
+#include "ui/views/vector_icons.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace sharing_hub {
 
+SharingHubAction::SharingHubAction(int command_id,
+                                   std::u16string title,
+                                   const gfx::VectorIcon* icon,
+                                   std::string feature_name_for_metrics,
+                                   int announcement_id)
+    : command_id(command_id),
+      title(title),
+      icon(CHECK_DEREF(icon)),
+      feature_name_for_metrics(feature_name_for_metrics),
+      announcement_id(announcement_id) {}
+
+SharingHubAction::SharingHubAction(const SharingHubAction& src) = default;
+SharingHubAction& SharingHubAction::operator=(const SharingHubAction& src) =
+    default;
+SharingHubAction::SharingHubAction(SharingHubAction&& src) = default;
+SharingHubAction& SharingHubAction::operator=(SharingHubAction&& src) = default;
+
 SharingHubModel::SharingHubModel(content::BrowserContext* context)
     : context_(context) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   PopulateFirstPartyActions();
-  sharing::ShareTargets::GetInstance()->AddObserver(this);
 }
 
-SharingHubModel::~SharingHubModel() {
-  sharing::ShareTargets::GetInstance()->RemoveObserver(this);
-}
+SharingHubModel::~SharingHubModel() = default;
 
-void SharingHubModel::GetFirstPartyActionList(
-    content::WebContents* web_contents,
-    std::vector<SharingHubAction>* list) {
+std::vector<SharingHubAction> SharingHubModel::GetFirstPartyActionList(
+    content::WebContents* web_contents) const {
+  std::vector<SharingHubAction> results;
   for (const auto& action : first_party_action_list_) {
     if (action.command_id == IDC_SEND_TAB_TO_SELF) {
-      if (DoShowSendTabToSelfForWebContents(web_contents)) {
-        list->push_back(action);
+      if (send_tab_to_self::ShouldDisplayEntryPoint(web_contents)) {
+        results.push_back(action);
       }
     } else if (action.command_id == IDC_QRCODE_GENERATOR) {
       if (qrcode_generator::QRCodeGeneratorBubbleController::
               IsGeneratorAvailable(web_contents->GetLastCommittedURL())) {
-        list->push_back(action);
+        results.push_back(action);
+      }
+    } else if (action.command_id == IDC_SAVE_PAGE) {
+      if (auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents)) {
+        if (chrome::CanSavePage(tab->GetBrowserWindowInterface())) {
+          results.push_back(action);
+        }
       }
     } else {
-      list->push_back(action);
+      results.push_back(action);
     }
   }
-}
-
-void SharingHubModel::GetThirdPartyActionList(
-    content::WebContents* web_contents,
-    std::vector<SharingHubAction>* list) {
-  for (const auto& action : third_party_action_list_) {
-    list->push_back(action);
-  }
-}
-
-void SharingHubModel::ExecuteThirdPartyAction(Profile* profile, int id) {
-  auto url_it = third_party_action_urls_.find(id);
-  if (url_it == third_party_action_urls_.end())
-    return;
-
-  NavigateParams params(profile, url_it->second, ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  params.tabstrip_add_types = TabStripModel::ADD_ACTIVE;
-  Navigate(&params);
+  return results;
 }
 
 void SharingHubModel::PopulateFirstPartyActions() {
-  first_party_action_list_.push_back(
-      {IDC_COPY_URL, l10n_util::GetStringUTF16(IDS_SHARING_HUB_COPY_LINK_LABEL),
-       kCopyIcon, true});
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  first_party_action_list_.push_back(
-      {IDC_SEND_TAB_TO_SELF,
-       l10n_util::GetStringUTF16(IDS_CONTEXT_MENU_SEND_TAB_TO_SELF),
-       kSendTabToSelfIcon, true});
+  first_party_action_list_.emplace_back(
+      IDC_COPY_URL, l10n_util::GetStringUTF16(IDS_SHARING_HUB_COPY_LINK_LABEL),
+      &(features::IsRoundedIconsEnabled() ? vector_icons::kContentCopyIcon
+                                          : kCopyOldIcon),
+      "SharingHubDesktop.CopyURLSelected", IDS_LINK_COPIED);
 
-  first_party_action_list_.push_back(
-      {IDC_QRCODE_GENERATOR,
-       l10n_util::GetStringUTF16(IDS_OMNIBOX_QRCODE_GENERATOR_ICON_LABEL),
-       kQrcodeGeneratorIcon, true});
+  if (DesktopScreenshotsFeatureEnabled(context_)) {
+    first_party_action_list_.emplace_back(
+        IDC_SHARING_HUB_SCREENSHOT,
+        l10n_util::GetStringUTF16(IDS_SHARING_HUB_SCREENSHOT_LABEL),
+        &(features::IsRoundedIconsEnabled() ? kScreenshotRegionIcon
+                                            : kSharingHubScreenshotOldIcon),
+        "SharingHubDesktop.ScreenshotSelected", 0);
+  }
+
+  first_party_action_list_.emplace_back(
+      IDC_SEND_TAB_TO_SELF, l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF),
+      &(features::IsRoundedIconsEnabled() ? kDevicesIcon : kDevicesOldIcon),
+      "SharingHubDesktop.SendTabToSelfSelected", 0);
+
+  first_party_action_list_.emplace_back(
+      IDC_QRCODE_GENERATOR,
+      l10n_util::GetStringUTF16(IDS_SHARING_HUB_GENERATE_QR_CODE_LABEL),
+      &kQrcodeGeneratorCustomIcon, "SharingHubDesktop.QRCodeSelected", 0);
 
   if (media_router::MediaRouterEnabled(context_)) {
-    first_party_action_list_.push_back(
-        {IDC_ROUTE_MEDIA,
-         l10n_util::GetStringUTF16(IDS_SHARING_HUB_MEDIA_ROUTER_LABEL),
-         vector_icons::kMediaRouterIdleIcon, true});
+    first_party_action_list_.emplace_back(
+        IDC_ROUTE_MEDIA,
+        l10n_util::GetStringUTF16(IDS_SHARING_HUB_MEDIA_ROUTER_LABEL),
+        &(features::IsRoundedIconsEnabled()
+              ? vector_icons::kCastIcon
+              : vector_icons::kMediaRouterIdleOldIcon),
+        "SharingHubDesktop.CastSelected", 0);
   }
 
-  first_party_action_list_.push_back(
-      {IDC_SAVE_PAGE,
-       l10n_util::GetStringUTF16(IDS_SHARING_HUB_SAVE_PAGE_LABEL),
-       kSavePageIcon, true});
-}
-
-void SharingHubModel::PopulateThirdPartyActions() {
-  // Note: The third party action id must be greater than 0, otherwise the
-  // action will be disabled in the app menu.
-  std::string locale = "GLOBAL";
-  int id = 1;
-  if (third_party_targets_) {
-    for (const sharing::mojom::ShareTarget& target :
-         third_party_targets_->targets()) {
-      // get ICON from target.icon();
-      third_party_action_list_.push_back({id,
-                                          base::ASCIIToUTF16(target.nickname()),
-                                          kQrcodeGeneratorIcon, false});
-      third_party_action_urls_[id] = GURL(target.url());
-      id++;
-    }
-  }
-}
-
-bool SharingHubModel::DoShowSendTabToSelfForWebContents(
-    content::WebContents* web_contents) {
-  return send_tab_to_self::ShouldOfferFeature(web_contents);
-}
-
-void SharingHubModel::OnShareTargetsUpdated(
-    std::unique_ptr<sharing::mojom::ShareTargets> share_target) {
-  third_party_targets_ = std::move(share_target);
-  PopulateThirdPartyActions();
+  first_party_action_list_.emplace_back(
+      IDC_SAVE_PAGE, l10n_util::GetStringUTF16(IDS_SHARING_HUB_SAVE_PAGE_LABEL),
+      &(features::IsRoundedIconsEnabled() ? kSystemUpdateAltIcon
+                                          : kSavePageOldIcon),
+      "SharingHubDesktop.SavePageSelected", 0);
 }
 
 }  // namespace sharing_hub

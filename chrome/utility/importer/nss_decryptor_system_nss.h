@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 struct FirefoxRawPasswordInfo;
 
-namespace importer {
+namespace user_data_importer {
 struct ImportedPasswordForm;
 }
 
@@ -25,6 +25,10 @@ class FilePath;
 class NSSDecryptor {
  public:
   NSSDecryptor();
+
+  NSSDecryptor(const NSSDecryptor&) = delete;
+  NSSDecryptor& operator=(const NSSDecryptor&) = delete;
+
   ~NSSDecryptor();
 
   // Initializes NSS if it hasn't already been initialized.
@@ -37,8 +41,9 @@ class NSSDecryptor {
   // Reads and parses the Firefox password file logins.json, decrypts the
   // username/password and reads other related information.
   // The result will be stored in |forms|.
-  bool ReadAndParseLogins(const base::FilePath& json_file,
-                          std::vector<importer::ImportedPasswordForm>* forms);
+  bool ReadAndParseLogins(
+      const base::FilePath& json_file,
+      std::vector<user_data_importer::ImportedPasswordForm>* forms);
 
  private:
   // Does not actually free the slot, since we'll free it when NSSDecryptor is
@@ -49,7 +54,7 @@ class NSSDecryptor {
   // into ImportedPasswordForm.
   bool CreatePasswordFormFromRawInfo(
       const FirefoxRawPasswordInfo& raw_password_info,
-      importer::ImportedPasswordForm* form);
+      user_data_importer::ImportedPasswordForm* form);
 
   PK11SlotInfo* GetKeySlotForDB() const { return db_slot_; }
 
@@ -57,9 +62,7 @@ class NSSDecryptor {
       PK11SlotInfo* slot, SECItem* data, SECItem* result, void* cx) const;
 
   bool is_nss_initialized_;
-  PK11SlotInfo* db_slot_;
-
-  DISALLOW_COPY_AND_ASSIGN(NSSDecryptor);
+  raw_ptr<PK11SlotInfo> db_slot_;
 };
 
 #endif  // CHROME_UTILITY_IMPORTER_NSS_DECRYPTOR_SYSTEM_NSS_H_

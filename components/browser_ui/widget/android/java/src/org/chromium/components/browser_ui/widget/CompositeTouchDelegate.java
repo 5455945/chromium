@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@ import android.graphics.Rect;
 import android.view.MotionEvent;
 import android.view.TouchDelegate;
 import android.view.View;
+
+import org.chromium.build.annotations.NullMarked;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,12 +29,11 @@ import java.util.List;
  * of the ancestor view. Only the first matching TouchDelegate that can handle a touch event will be
  * sent the event.
  */
+@NullMarked
 public class CompositeTouchDelegate extends TouchDelegate {
     private final List<TouchDelegate> mDelegates = new ArrayList<>();
 
-    /**
-     * @param view Used to get the context.
-     */
+    /** @param view Used to get the context. */
     public CompositeTouchDelegate(View view) {
         super(new Rect(), view);
     }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -17,6 +17,7 @@
 #define NET_SOCKET_SSL_SERVER_SOCKET_H_
 
 #include <memory>
+#include <vector>
 
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
@@ -24,20 +25,16 @@
 #include "net/socket/stream_socket.h"
 #include "third_party/boringssl/src/include/openssl/base.h"
 
-namespace crypto {
-class RSAPrivateKey;
-}  // namespace crypto
-
 namespace net {
 
 struct SSLServerConfig;
-class SSLPrivateKey;
+struct SSLServerCredential;
 class X509Certificate;
 
 // A server socket that uses SSL as the transport layer.
 class SSLServerSocket : public SSLSocket {
  public:
-  ~SSLServerSocket() override {}
+  ~SSLServerSocket() override = default;
 
   // Perform the SSL server handshake, and notify the supplied callback
   // if the process completes asynchronously.  If Disconnect is called before
@@ -48,7 +45,7 @@ class SSLServerSocket : public SSLSocket {
 
 class SSLServerContext {
  public:
-  virtual ~SSLServerContext() {}
+  virtual ~SSLServerContext() = default;
 
   // Creates an SSL server socket over an already-connected transport socket.
   // The caller must ensure the returned socket does not outlive the server
@@ -66,23 +63,17 @@ class SSLServerContext {
 // The caller must provide the server certificate and private key to use.
 // It takes a reference to |certificate| and |pkey|.
 // The |ssl_config| parameter is copied.
-//
 NET_EXPORT std::unique_ptr<SSLServerContext> CreateSSLServerContext(
     X509Certificate* certificate,
     EVP_PKEY* pkey,
     const SSLServerConfig& ssl_config);
 
-// As above, but takes an RSAPrivateKey object. Deprecated, use the EVP_PKEY
-// version instead.
-// TODO(mattm): convert existing callers and remove this function.
+// Creates an SSL server socket context supporting multiple credentials.
+//
+// The `credentials` are specified in order from highest to lowest priority,
+// and must be non-empty.
 NET_EXPORT std::unique_ptr<SSLServerContext> CreateSSLServerContext(
-    X509Certificate* certificate,
-    const crypto::RSAPrivateKey& key,
-    const SSLServerConfig& ssl_config);
-
-NET_EXPORT std::unique_ptr<SSLServerContext> CreateSSLServerContext(
-    X509Certificate* certificate,
-    scoped_refptr<SSLPrivateKey> key,
+    std::vector<SSLServerCredential> credentials,
     const SSLServerConfig& ssl_config);
 
 }  // namespace net

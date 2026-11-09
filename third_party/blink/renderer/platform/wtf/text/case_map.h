@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,13 @@
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
 
-namespace WTF {
+namespace blink {
 
 class TextOffsetMap;
 
 // This class performs the full Unicode case-mapping.
 //
-// See LowerASCII/UpperASCII() variants for faster, ASCII-only,
+// See ToAsciiLower/ToAsciiUpper() variants for faster, ASCII-only,
 // locale-independent case-mapping.
 class WTF_EXPORT CaseMap {
  public:
@@ -23,15 +23,16 @@ class WTF_EXPORT CaseMap {
   // |CaseMap|.
   class WTF_EXPORT WTF_EXPORT Locale {
    public:
-    Locale() : case_map_locale_(nullptr) {}
+    Locale() = default;
     explicit Locale(const AtomicString& locale);
 
    private:
-    const char* case_map_locale_;
+    const char* case_map_locale_ = nullptr;
 
     static const char* turkic_or_azeri_;
     static const char* greek_;
     static const char* lithuanian_;
+    static const char* dutch_;
 
     friend class CaseMap;
   };
@@ -47,6 +48,12 @@ class WTF_EXPORT CaseMap {
                  TextOffsetMap* offset_map = nullptr) const;
   String ToUpper(const String& source,
                  TextOffsetMap* offset_map = nullptr) const;
+  String ToTitle(const String& source,
+                 TextOffsetMap* offset_map = nullptr,
+                 UChar previous_character = 0) const;
+  String ToTitle(const String& source,
+                 TextOffsetMap* offset_map,
+                 UChar32 previous_character) const;
 
   // Fast code path for simple cases, only for root locale.
   // TODO(crbug.com/627682): This should move to private, once
@@ -73,8 +80,6 @@ class WTF_EXPORT CaseMap {
   const char* case_map_locale_;
 };
 
-}  // namespace WTF
-
-using WTF::CaseMap;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_CASE_MAP_H_

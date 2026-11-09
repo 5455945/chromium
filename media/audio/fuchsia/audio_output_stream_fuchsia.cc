@@ -1,18 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/audio/fuchsia/audio_output_stream_fuchsia.h"
 
+#include <fuchsia/media/cpp/fidl.h>
 #include <lib/sys/cpp/component_context.h>
 #include <zircon/syscalls.h>
 
-#include "base/bind.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/writable_shared_memory_region.h"
 #include "media/audio/fuchsia/audio_manager_fuchsia.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_sample_types.h"
 #include "media/base/audio_timestamp_helper.h"
 
@@ -20,17 +22,37 @@ namespace media {
 
 namespace {
 
-// Current AudioRenderer implementation allows only one buffer with id=0.
-// TODO(crbug.com/1131179): Replace with an incrementing buffer id now that
-// AddPayloadBuffer() and RemovePayloadBuffer() are implemented properly in
-// AudioRenderer.
 const uint32_t kBufferId = 0;
 
-fuchsia::media::AudioRenderUsage GetStreamUsage(
+fuchsia::media::AudioRenderUsage2 GetStreamUsage(
     const AudioParameters& parameters) {
-  if (parameters.latency_tag() == AudioLatency::LATENCY_RTC)
-    return fuchsia::media::AudioRenderUsage::COMMUNICATION;
-  return fuchsia::media::AudioRenderUsage::MEDIA;
+  using AudioRenderUsage2 = fuchsia::media::AudioRenderUsage2;
+
+  const int usage =
+      parameters.effects() & AudioParameters::FUCHSIA_RENDER_USAGE_MASK;
+  switch (usage) {
+    case AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND:
+      return AudioRenderUsage2::BACKGROUND;
+    case AudioParameters::FUCHSIA_RENDER_USAGE_MEDIA:
+      return AudioRenderUsage2::MEDIA;
+    case AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION:
+      return AudioRenderUsage2::INTERRUPTION;
+    case AudioParameters::FUCHSIA_RENDER_USAGE_SYSTEM_AGENT:
+      return AudioRenderUsage2::SYSTEM_AGENT;
+    case AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION:
+      return AudioRenderUsage2::COMMUNICATION;
+    case AudioParameters::FUCHSIA_RENDER_USAGE_ACCESSIBILITY:
+      return AudioRenderUsage2::ACCESSIBILITY;
+    case AudioParameters::FUCHSIA_RENDER_USAGE_UNKNOWN:
+      // If the usage flags are not set then use COMMUNICATION for WebRTC and
+      // MEDIA for everything else.
+      return (parameters.latency_tag() == AudioLatency::Type::kRtc)
+                 ? AudioRenderUsage2::COMMUNICATION
+                 : AudioRenderUsage2::MEDIA;
+    default:
+      NOTREACHED() << "Invalid FUCHSIA_RENDER_USAGE value: "
+                   << (usage >> AudioParameters::FUCHSIA_RENDER_USAGE_SHIFT);
+  }
 }
 
 }  // namespace
@@ -59,7 +81,7 @@ bool AudioOutputStreamFuchsia::Open() {
   audio_renderer_.set_error_handler(
       fit::bind_member(this, &AudioOutputStreamFuchsia::OnRendererError));
 
-  audio_renderer_->SetUsage(GetStreamUsage(parameters_));
+  audio_renderer_->SetUsage2(GetStreamUsage(parameters_));
 
   // Inform the |audio_renderer_| of the format required by the caller.
   fuchsia::media::AudioStreamType format;
@@ -172,9 +194,16 @@ bool AudioOutputStreamFuchsia::InitializePayloadBuffer() {
 }
 
 void AudioOutputStreamFuchsia::OnMinLeadTimeChanged(int64_t min_lead_time) {
+  // AudioRenderer may initially send `min_lead_time=0`. This event can be
+  // ignored. It's expected to send a valid value soon after processing
+  // `SetPcmStreamType()`. See fxbug.dev/122532.
+  if (min_lead_time <= 0) {
+    return;
+  }
+
   bool min_lead_time_was_unknown = !min_lead_time_.has_value();
 
-  min_lead_time_ = base::TimeDelta::FromNanoseconds(min_lead_time);
+  min_lead_time_ = base::Nanoseconds(min_lead_time);
 
   // When min_lead_time_ increases we may need to reallocate |payload_buffer_|.
   // Code below just unmaps the current buffer. The new buffer will be allocated
@@ -188,6 +217,7 @@ void AudioOutputStreamFuchsia::OnMinLeadTimeChanged(int64_t min_lead_time) {
     // Discard all packets currently in flight. This is required because
     // AddPayloadBuffer() will fail if there are any packets in flight.
     audio_renderer_->DiscardAllPacketsNoReply();
+    audio_renderer_->RemovePayloadBuffer(kBufferId);
   }
 
   // If playback was started but we were waiting for MinLeadTime, then start
@@ -251,20 +281,20 @@ void AudioOutputStreamFuchsia::PumpSamples() {
   }
 
   // Request more samples from |callback_|.
-  int frames_filled = callback_->OnMoreData(delay, now, 0, audio_bus_.get());
-  DCHECK_EQ(frames_filled, audio_bus_->frames());
+  const int frames_filled =
+      callback_->OnMoreData(delay, now, {}, audio_bus_.get());
+  CHECK_EQ(frames_filled, audio_bus_->frames());
 
   audio_bus_->Scale(volume_);
 
   // Save samples to the |payload_buffer_|.
-  size_t packet_size = parameters_.GetBytesPerBuffer(kSampleFormatF32);
-  DCHECK_LE(payload_buffer_pos_ + packet_size, payload_buffer_.size());
+  const size_t packet_size = parameters_.GetBytesPerBuffer(kSampleFormatF32);
+
+  auto dest_span = payload_buffer_.GetMemoryAsSpan<uint8_t>().subspan(
+      payload_buffer_pos_, packet_size);
 
   // We skip clipping since that occurs at the shared memory boundary.
-  audio_bus_->ToInterleaved<Float32SampleTypeTraitsNoClip>(
-      audio_bus_->frames(),
-      reinterpret_cast<float*>(static_cast<uint8_t*>(payload_buffer_.memory()) +
-                               payload_buffer_pos_));
+  audio_bus_->ToInterleavedBytes<Float32SampleTypeTraitsNoClip>(dest_span);
 
   // Send a new packet.
   fuchsia::media::StreamPacket packet;
@@ -286,14 +316,15 @@ void AudioOutputStreamFuchsia::PumpSamples() {
   payload_buffer_pos_ =
       (payload_buffer_pos_ + packet_size) % payload_buffer_.size();
 
-  SchedulePumpSamples(now);
+  SchedulePumpSamples();
 }
 
-void AudioOutputStreamFuchsia::SchedulePumpSamples(base::TimeTicks now) {
+void AudioOutputStreamFuchsia::SchedulePumpSamples() {
   base::TimeTicks next_pump_time = GetCurrentStreamTime() -
                                    min_lead_time_.value() -
                                    parameters_.GetBufferDuration() / 2;
-  timer_.Start(FROM_HERE, next_pump_time - now,
+
+  timer_.Start(FROM_HERE, next_pump_time,
                base::BindOnce(&AudioOutputStreamFuchsia::PumpSamples,
                               base::Unretained(this)));
 }

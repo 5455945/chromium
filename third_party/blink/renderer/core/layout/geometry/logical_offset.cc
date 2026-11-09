@@ -1,13 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/layout/geometry/logical_offset.h"
 
 #include "third_party/blink/renderer/core/layout/geometry/logical_size.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_size.h"
 #include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
+#include "third_party/blink/renderer/platform/geometry/physical_offset.h"
+#include "third_party/blink/renderer/platform/geometry/physical_size.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -21,7 +21,7 @@ PhysicalOffset LogicalOffset::ConvertToPhysical(
 }
 
 String LogicalOffset::ToString() const {
-  return String::Format("%d,%d", inline_offset.ToInt(), block_offset.ToInt());
+  return StrCat({inline_offset.ToString(), ",", block_offset.ToString()});
 }
 
 std::ostream& operator<<(std::ostream& os, const LogicalOffset& value) {

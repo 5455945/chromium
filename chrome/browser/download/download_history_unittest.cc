@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,20 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/uuid.h"
+#include "chrome/test/base/testing_profile.h"
 #include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_utils.h"
 #include "components/download/public/common/mock_download_item.h"
@@ -33,10 +37,17 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/api/downloads/downloads_api.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/test/android/content_uri_test_utils.h"
+#else
+#include "chrome/browser/download/download_item_web_app_data.h"
 #endif
 
 using testing::_;
@@ -62,13 +73,16 @@ enum class LoadDownloadRowResult {
 struct CreateDownloadHistoryEntry {
   explicit CreateDownloadHistoryEntry(
       const history::DownloadRow& row,
-      LoadDownloadRowResult result = LoadDownloadRowResult::kCreateDownload) {
+      LoadDownloadRowResult result = LoadDownloadRowResult::kCreateDownload,
+      const base::FilePath& display_name = base::FilePath()) {
     this->row = row;
     this->result = result;
+    this->display_name = display_name;
   }
 
   history::DownloadRow row;
   LoadDownloadRowResult result;
+  base::FilePath display_name;
 };
 
 class FakeHistoryAdapter : public DownloadHistory::HistoryAdapter {
@@ -89,11 +103,11 @@ class FakeHistoryAdapter : public DownloadHistory::HistoryAdapter {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     CHECK(expect_query_downloads_.has_value());
 
-    // Use swap to reset the absl::optional<...> to a known state before
-    // moving the value (moving the value out of a absl::optional<...>
-    // does not reset it to absl::nullopt).
+    // Use swap to reset the std::optional<...> to a known state before
+    // moving the value (moving the value out of a std::optional<...>
+    // does not reset it to std::nullopt).
     using std::swap;
-    absl::optional<std::vector<history::DownloadRow>> rows;
+    std::optional<std::vector<history::DownloadRow>> rows;
     swap(rows, expect_query_downloads_);
 
     std::move(callback).Run(std::move(*rows));
@@ -181,7 +195,7 @@ class FakeHistoryAdapter : public DownloadHistory::HistoryAdapter {
   void ExpectNoDownloadsRemoved() {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     content::RunAllPendingInMessageLoop(content::BrowserThread::UI);
-    EXPECT_EQ(0, static_cast<int>(remove_downloads_.size()));
+    EXPECT_EQ(0u, remove_downloads_.size());
   }
 
   void ExpectDownloadsRemoved(const IdSet& ids) {
@@ -199,7 +213,7 @@ class FakeHistoryAdapter : public DownloadHistory::HistoryAdapter {
   bool should_commit_immediately_ = false;
   base::OnceClosure create_download_callback_;
   history::DownloadRow update_download_;
-  absl::optional<std::vector<history::DownloadRow>> expect_query_downloads_;
+  std::optional<std::vector<history::DownloadRow>> expect_query_downloads_;
   IdSet remove_downloads_;
   history::DownloadRow create_download_row_;
 };
@@ -220,7 +234,11 @@ class DownloadHistoryTest : public testing::Test {
   DownloadHistoryTest& operator=(const DownloadHistoryTest&) = delete;
 
  protected:
-  void TearDown() override { download_history_.reset(); }
+  void TearDown() override {
+    history_ = nullptr;
+    manager_observer_ = nullptr;
+    download_history_.reset();
+  }
 
   NiceMock<content::MockDownloadManager>& manager() { return *manager_.get(); }
   download::MockDownloadItem& item(size_t index) { return *items_[index]; }
@@ -235,18 +253,22 @@ class DownloadHistoryTest : public testing::Test {
   }
 
   content::MockDownloadManager::CreateDownloadItemAdapter
-  GetCreateDownloadItemAdapterFromDownloadRow(const history::DownloadRow& row) {
+  GetCreateDownloadItemAdapterFromDownloadRow(
+      const history::DownloadRow& row,
+      const base::FilePath& display_name = base::FilePath()) {
     return content::MockDownloadManager::CreateDownloadItemAdapter(
         row.guid, history::ToContentDownloadId(row.id), row.current_path,
-        row.target_path, row.url_chain, row.referrer_url, row.site_url,
-        row.tab_url, row.tab_referrer_url, absl::nullopt, row.mime_type,
-        row.original_mime_type, row.start_time, row.end_time, row.etag,
-        row.last_modified, row.received_bytes, row.total_bytes, std::string(),
+        row.target_path, row.url_chain, row.referrer_url,
+        row.embedder_download_data, row.tab_url, row.tab_referrer_url,
+        std::nullopt, row.mime_type, row.original_mime_type, row.start_time,
+        row.end_time, row.etag, row.last_modified, row.received_bytes,
+        row.total_bytes, std::string(),
         history::ToContentDownloadState(row.state),
         history::ToContentDownloadDangerType(row.danger_type),
         history::ToContentDownloadInterruptReason(row.interrupt_reason),
         row.opened, row.last_access_time, row.transient,
-        history::ToContentReceivedSlices(row.download_slice_info));
+        history::ToContentReceivedSlices(row.download_slice_info),
+        display_name);
   }
 
   // Creates the DownloadHistory. If |return_null_item| is true, |manager_|
@@ -262,7 +284,8 @@ class DownloadHistoryTest : public testing::Test {
     for (const auto& entry : entries) {
       rows.emplace_back(entry.row);
       content::MockDownloadManager::CreateDownloadItemAdapter adapter =
-          GetCreateDownloadItemAdapterFromDownloadRow(entry.row);
+          GetCreateDownloadItemAdapterFromDownloadRow(entry.row,
+                                                      entry.display_name);
       switch (entry.result) {
         case LoadDownloadRowResult::kRemoveDownload:
           EXPECT_CALL(manager(), MockCreateDownloadItem(adapter))
@@ -284,7 +307,7 @@ class DownloadHistoryTest : public testing::Test {
     EXPECT_CALL(manager(), GetAllDownloads(_)).WillRepeatedly(Return());
     download_history_ = std::make_unique<DownloadHistory>(
         &manager(), std::unique_ptr<DownloadHistory::HistoryAdapter>(history_));
-    content::RunAllPendingInMessageLoop(content::BrowserThread::UI);
+    task_environment_.RunUntilIdle();
     history_->ExpectQueryDownloadsDone();
   }
 
@@ -361,13 +384,15 @@ class DownloadHistoryTest : public testing::Test {
     row->target_path = base::FilePath(path);
     row->url_chain.push_back(GURL(url_string));
     row->referrer_url = GURL(referrer_string);
-    row->site_url = GURL("http://example.com");
+    row->embedder_download_data =
+        manager_->StoragePartitionConfigToSerializedEmbedderDownloadData(
+            content::StoragePartitionConfig::CreateDefault(&profile_));
     row->tab_url = GURL("http://example.com/tab-url");
     row->tab_referrer_url = GURL("http://example.com/tab-referrer-url");
     row->mime_type = "application/octet-stream";
     row->original_mime_type = "application/octet-stream";
-    row->start_time = now - base::TimeDelta::FromMinutes(10);
-    row->end_time = now - base::TimeDelta::FromMinutes(1);
+    row->start_time = now - base::Minutes(10);
+    row->end_time = now - base::Minutes(1);
     row->etag = "Etag";
     row->last_modified = "abc";
     row->received_bytes = 100;
@@ -379,7 +404,7 @@ class DownloadHistoryTest : public testing::Test {
         download::DOWNLOAD_INTERRUPT_REASON_NONE);
     row->id =
         history::ToHistoryDownloadId(static_cast<uint32_t>(items_.size() + 1));
-    row->guid = base::GenerateGUID();
+    row->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
     row->opened = false;
     row->last_access_time = now;
     row->transient = false;
@@ -415,8 +440,8 @@ class DownloadHistoryTest : public testing::Test {
         .WillRepeatedly(Return(row->original_mime_type));
     EXPECT_CALL(item(index), GetReferrerUrl())
         .WillRepeatedly(ReturnRefOfCopy(row->referrer_url));
-    EXPECT_CALL(item(index), GetSiteUrl())
-        .WillRepeatedly(ReturnRefOfCopy(row->site_url));
+    EXPECT_CALL(item(index), GetSerializedEmbedderDownloadData())
+        .WillRepeatedly(ReturnRefOfCopy(row->embedder_download_data));
     EXPECT_CALL(item(index), GetTabUrl())
         .WillRepeatedly(ReturnRefOfCopy(row->tab_url));
     EXPECT_CALL(item(index), GetTabReferrerUrl())
@@ -460,12 +485,19 @@ class DownloadHistoryTest : public testing::Test {
     EXPECT_CALL(manager(), GetDownload(row->id))
         .WillRepeatedly(Return(&item(index)));
     EXPECT_CALL(item(index), IsTemporary()).WillRepeatedly(Return(false));
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+    EXPECT_CALL(item(index), UpdateObservers()).Times(testing::AnyNumber());
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     new extensions::DownloadedByExtension(&item(index), row->by_ext_id,
                                           row->by_ext_name);
 #endif
+#if !BUILDFLAG(IS_ANDROID)
+    if (!row->by_web_app_id.empty()) {
+      DownloadItemWebAppData::CreateAndAttachToItem(&item(index),
+                                                    row->by_web_app_id);
+    }
+#endif
 
-    std::vector<download::DownloadItem*> items;
+    std::vector<raw_ptr<download::DownloadItem, VectorExperimental>> items;
     for (size_t i = 0; i < items_.size(); ++i) {
       items.push_back(&item(i));
     }
@@ -486,13 +518,13 @@ class DownloadHistoryTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   std::vector<std::unique_ptr<StrictMockDownloadItem>> items_;
   std::unique_ptr<NiceMock<content::MockDownloadManager>> manager_;
-  FakeHistoryAdapter* history_ = nullptr;
+  raw_ptr<FakeHistoryAdapter> history_ = nullptr;
   std::unique_ptr<DownloadHistory> download_history_;
-  content::DownloadManager::Observer* manager_observer_ = nullptr;
+  raw_ptr<content::DownloadManager::Observer> manager_observer_ = nullptr;
   size_t download_created_index_ = 0;
   base::test::ScopedFeatureList feature_list_;
+  TestingProfile profile_;
 };
-
 
 // Test loading an item from the database, changing it and removing it.
 TEST_F(DownloadHistoryTest, DownloadHistoryTest_LoadWithDownloadDB) {
@@ -537,7 +569,7 @@ TEST_F(DownloadHistoryTest, DownloadHistoryTest_OnHistoryQueryComplete_Pre) {
       *query_callback_ = std::move(callback);
     }
 
-    history::HistoryService::DownloadQueryCallback* query_callback_;
+    raw_ptr<history::HistoryService::DownloadQueryCallback> query_callback_;
   };
 
   TestDownloadHistoryObserver observer;
@@ -559,6 +591,258 @@ TEST_F(DownloadHistoryTest, DownloadHistoryTest_OnHistoryQueryComplete_Pre) {
   std::move(query_callback).Run(std::move(query_results));
   EXPECT_TRUE(observer.on_history_query_complete_called_);
   history->RemoveObserver(&observer);
+}
+
+// Test that Download.History.DownloadCount histogram is emitted with the number
+// of rows received from history query.
+TEST_F(DownloadHistoryTest, DownloadHistoryTest_DownloadCountHistogram) {
+  base::HistogramTester histogram_tester;
+  class TestHistoryAdapter : public DownloadHistory::HistoryAdapter {
+   public:
+    explicit TestHistoryAdapter(
+        history::HistoryService::DownloadQueryCallback* callback_storage)
+        : HistoryAdapter(nullptr), query_callback_(callback_storage) {}
+    void QueryDownloads(
+        history::HistoryService::DownloadQueryCallback callback) override {
+      *query_callback_ = std::move(callback);
+    }
+
+    raw_ptr<history::HistoryService::DownloadQueryCallback> query_callback_;
+  };
+
+  history::HistoryService::DownloadQueryCallback query_callback;
+  auto test_history_adapter =
+      std::make_unique<TestHistoryAdapter>(&query_callback);
+
+  std::unique_ptr<DownloadHistory> history(
+      new DownloadHistory(&manager(), std::move(test_history_adapter)));
+  ASSERT_FALSE(query_callback.is_null());
+
+  std::vector<history::DownloadRow> query_results(3);
+  query_results[0].id = 1;
+  query_results[1].id = 2;
+  query_results[2].id = 3;
+  std::move(query_callback).Run(std::move(query_results));
+
+  histogram_tester.ExpectUniqueSample("Download.History.DownloadCount", 3, 1);
+}
+
+// Test that Download.History.DownloadCount.PostRemoval* histograms are emitted
+// with the number of downloads loaded, excluding removed rows.
+TEST_F(DownloadHistoryTest, DownloadCountPostRemovalHistograms) {
+  // Loading `old` requires kRemoveOldDownloadsFromHistory to be disabled.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      download::features::kRemoveOldDownloadsFromHistory);
+  base::HistogramTester histogram_tester;
+  const base::Time now = base::Time::Now();
+
+  history::DownloadRow removed, recent, last_90_days, old;
+  // Removed because the DownloadManager doesn't create an item for it.
+  InitDownloadRow(FILE_PATH_LITERAL("/foo/removed.pdf"),
+                  "http://example.com/removed.pdf",
+                  "http://example.com/referrer.html",
+                  download::DownloadItem::COMPLETE, &removed);
+  removed.id = 101;
+  InitBasicItem(FILE_PATH_LITERAL("/foo/recent.pdf"),
+                "http://example.com/recent.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &recent);
+  InitBasicItem(FILE_PATH_LITERAL("/foo/last_90_days.pdf"),
+                "http://example.com/last_90_days.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &last_90_days);
+  last_90_days.start_time = now - base::Days(60);
+  InitBasicItem(FILE_PATH_LITERAL("/foo/old.pdf"), "http://example.com/old.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &old);
+  old.start_time = now - base::Days(200);
+
+  CreateDownloadHistory({CreateDownloadHistoryEntry(
+                             removed, LoadDownloadRowResult::kRemoveDownload),
+                         CreateDownloadHistoryEntry(recent),
+                         CreateDownloadHistoryEntry(last_90_days),
+                         CreateDownloadHistoryEntry(old)});
+
+  histogram_tester.ExpectUniqueSample("Download.History.DownloadCount", 4, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.DownloadCount.PostRemoval", 3, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.DownloadCount.PostRemoval.Last30Days", 1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.DownloadCount.PostRemoval.Last90Days", 2, 1);
+  histogram_tester.ExpectTotalCount(
+      "Download.History.HeavyProfile.MaxDownloadsPerDay", 0);
+  histogram_tester.ExpectTotalCount(
+      "Download.History.HeavyProfile.PercentByExtension", 0);
+}
+
+// Test that Download.History.HeavyProfile.* histograms are emitted only for
+// time windows that meet the heavy profile threshold.
+TEST_F(DownloadHistoryTest, HeavyProfileHistograms) {
+  auto scoped_threshold =
+      DownloadHistory::SetHeavyProfileThresholdForTesting(4);
+  base::HistogramTester histogram_tester;
+  const base::Time now = base::Time::Now();
+  // Anchor timestamps to the start of a 24-hour Windows-epoch day bucket so
+  // `recent1` and `recent2` always fall in the same day bucket.
+  const base::Time yesterday = base::Time::FromDeltaSinceWindowsEpoch(
+      base::Days(now.ToDeltaSinceWindowsEpoch().InDaysFloored() - 1));
+
+  history::DownloadRow removed, recent1, recent2, recent3, last_90_days, old;
+  InitDownloadRow(FILE_PATH_LITERAL("/foo/removed.pdf"),
+                  "blob:https://alpha.example.com/removed",
+                  "https://alpha.example.com/referrer.html",
+                  download::DownloadItem::CANCELLED, &removed);
+  removed.id = 101;
+  removed.by_ext_id = "ext";
+  removed.by_web_app_id = "app";
+  removed.opened = true;
+  removed.start_time = yesterday + base::Hours(1);
+
+  InitBasicItem(FILE_PATH_LITERAL("/foo/report.pdf"),
+                "blob:https://alpha.example.com/1",
+                "https://alpha.example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &recent1);
+  recent1.tab_url = GURL("https://alpha.example.com/page1");
+  recent1.start_time = yesterday + base::Hours(1);
+  recent1.by_ext_id = "ext_1";
+  recent1.by_ext_name = "ext_name_1";
+  recent1.opened = true;
+
+  InitBasicItem(FILE_PATH_LITERAL("/foo/report (1).pdf"),
+                "data:text/plain,hello",
+                "https://alpha.example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &recent2);
+  recent2.tab_url = GURL("https://alpha.example.com/page2");
+  recent2.start_time = yesterday + base::Hours(2);
+  recent2.by_web_app_id = "app_1";
+
+  InitBasicItem(FILE_PATH_LITERAL("/foo/dir (1)/other.pdf"), "about:blank", "",
+                download::DownloadItem::CANCELLED, &recent3);
+  recent3.tab_url = GURL();
+  recent3.start_time = yesterday - base::Days(10) + base::Hours(1);
+
+  InitBasicItem(FILE_PATH_LITERAL("/foo/report - 2026-10-15T150004.123.pdf"),
+                "https://alpha.example.com/report.pdf", "",
+                download::DownloadItem::COMPLETE, &last_90_days);
+  last_90_days.tab_url = GURL();
+  last_90_days.start_time = yesterday - base::Days(60) + base::Hours(1);
+  last_90_days.opened = true;
+
+  InitBasicItem(FILE_PATH_LITERAL("/foo/archive (copy).zip"),
+                "https://gamma.example.com/archive.zip",
+                "https://gamma.example.com/referrer.html",
+                download::DownloadItem::INTERRUPTED, &old);
+  old.tab_url = GURL("https://gamma.example.com/page");
+  old.start_time = yesterday - base::Days(200) + base::Hours(1);
+  old.by_ext_id = "ext_2";
+  old.by_ext_name = "ext_name_2";
+
+  CreateDownloadHistory({CreateDownloadHistoryEntry(
+                             removed, LoadDownloadRowResult::kRemoveDownload),
+                         CreateDownloadHistoryEntry(recent1),
+                         CreateDownloadHistoryEntry(recent2),
+                         CreateDownloadHistoryEntry(recent3),
+                         CreateDownloadHistoryEntry(last_90_days),
+                         CreateDownloadHistoryEntry(old)});
+
+  // Only 3 downloads were started in the last 30 days (< threshold of 4).
+  histogram_tester.ExpectTotalCount(
+      "Download.History.HeavyProfile.MaxDownloadsPerDay.Last30Days", 0);
+  histogram_tester.ExpectTotalCount(
+      "Download.History.HeavyProfile.PercentByExtension.Last30Days", 0);
+
+  // 4 downloads were started in the last 90 days (>= threshold of 4).
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.MaxDownloadsPerDay.Last90Days", 2, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentBlobOrDataUrl.Last90Days", 50, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentByExtension.Last90Days", 25, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentByWebApp.Last90Days", 25, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentFromTopOrigin.Last90Days", 75, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentIncomplete.Last90Days", 25, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentInPeakDay.Last90Days", 50, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentOpened.Last90Days", 50, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentUniquifiedDuplicates.Last90Days",
+      50, 1);
+
+  // 5 downloads were loaded in total (>= threshold of 4).
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.MaxDownloadsPerDay", 2, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentBlobOrDataUrl", 40, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentByExtension", 40, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentByWebApp", 20, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentFromTopOrigin", 60, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentIncomplete", 40, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentInPeakDay", 40, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentOpened", 40, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.HeavyProfile.PercentUniquifiedDuplicates", 40, 1);
+}
+
+TEST_F(DownloadHistoryTest, GetPathWithoutUniquifier) {
+  auto strip = [](const base::FilePath::CharType* path) {
+    return DownloadHistory::GetPathWithoutUniquifier(base::FilePath(path));
+  };
+
+  // Unmodified paths without uniquifiers.
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report.pdf")), "/foo/report.pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report")), "/foo/report");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/archive (copy).zip")),
+            "/foo/archive (copy).zip");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report ().pdf")),
+            "/foo/report ().pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (0).pdf")),
+            "/foo/report (0).pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (01).pdf")),
+            "/foo/report (01).pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (101).pdf")),
+            "/foo/report (101).pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/Tax (2024).pdf")),
+            "/foo/Tax (2024).pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (1)extra.pdf")),
+            "/foo/report (1)extra.pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/dir (1)/report.pdf")),
+            "/foo/dir (1)/report.pdf");
+  EXPECT_EQ(
+      strip(FILE_PATH_LITERAL("/foo/dir - 2026-10-15T150004.123/report.pdf")),
+      "/foo/dir - 2026-10-15T150004.123/report.pdf");
+
+  // Numeric uniquifiers.
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (1).pdf")), "/foo/report.pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (99).pdf")),
+            "/foo/report.pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (100).pdf")),
+            "/foo/report.pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (1)")), "/foo/report");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/archive (1).tar.gz")),
+            "/foo/archive.tar.gz");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report (1) (2).pdf")),
+            "/foo/report (1).pdf");
+
+  // Timestamp uniquifiers.
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report - 2026-10-15T150004.123.pdf")),
+            "/foo/report.pdf");
+  EXPECT_EQ(strip(FILE_PATH_LITERAL("/foo/report - 2026-10-15T150004.123")),
+            "/foo/report");
+  EXPECT_EQ(
+      strip(FILE_PATH_LITERAL("/foo/archive - 2026-10-15T150004.123.tar.gz")),
+      "/foo/archive.tar.gz");
 }
 
 // Test that the OnHistoryQueryComplete() observer method is invoked for an
@@ -676,7 +960,7 @@ TEST_F(DownloadHistoryTest, DownloadHistoryTest_RemoveWhileAdding) {
   // immediately remove the item's record from history.
   item(0).NotifyObserversDownloadRemoved();
   EXPECT_CALL(manager(), GetDownload(item(0).GetId()))
-      .WillRepeatedly(Return(static_cast<download::DownloadItem*>(NULL)));
+      .WillRepeatedly(Return(static_cast<download::DownloadItem*>(nullptr)));
   ExpectNoDownloadsRemoved();
   EXPECT_FALSE(DownloadHistory::IsPersisted(&item(0)));
 
@@ -845,6 +1129,31 @@ TEST_F(DownloadHistoryTest, CreateInProgressDownload) {
   EXPECT_FALSE(DownloadHistory::IsPersisted(&item(0)));
 }
 
+// Test that in-progress save package updates are only persisted when fields
+// actually change.
+TEST_F(DownloadHistoryTest, InProgressSavePackageNoopSecondUpdate) {
+  CreateDownloadHistory({});
+
+  history::DownloadRow row;
+  InitBasicItem(FILE_PATH_LITERAL("/foo/bar.pdf"), "http://example.com/bar.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::IN_PROGRESS, &row);
+  EXPECT_CALL(item(0), IsSavePackageDownload()).WillRepeatedly(Return(true));
+
+  // Save package downloads are persisted even while in progress.
+  CallOnDownloadCreated(0);
+  ExpectDownloadCreated(row);
+
+  EXPECT_CALL(item(0), GetReceivedBytes()).WillRepeatedly(Return(200));
+  item(0).NotifyObserversDownloadUpdated();
+  row.received_bytes = 200;
+  ExpectDownloadUpdated(row, false);
+
+  // No additional update should be issued if the state is unchanged.
+  item(0).NotifyObserversDownloadUpdated();
+  ExpectNoDownloadUpdated();
+}
+
 // Test that in-progress download already in history will be updated once it
 // becomes non-resumable.
 TEST_F(DownloadHistoryTest, InProgressHistoryItemBecomesNonResumable) {
@@ -896,7 +1205,7 @@ TEST_F(DownloadHistoryTest, CreateLargeDataURLCompletedItem) {
 
   history::DownloadRow row;
   std::string data_url = "data:text/html,";
-  data_url.append(std::string(2048, 'a'));
+  data_url.append(std::string(10000, 'a'));
   InitBasicItem(FILE_PATH_LITERAL("/foo/bar.pdf"), data_url.c_str(),
                 "http://example.com/referrer.html",
                 download::DownloadItem::IN_PROGRESS, &row);
@@ -910,7 +1219,7 @@ TEST_F(DownloadHistoryTest, CreateLargeDataURLCompletedItem) {
   EXPECT_CALL(item(0), GetState())
       .WillRepeatedly(Return(download::DownloadItem::COMPLETE));
   row.state = history::DownloadState::COMPLETE;
-  data_url.resize(1024);
+  data_url.resize(8192);
   row.url_chain.back() = GURL(data_url);
   item(0).NotifyObserversDownloadUpdated();
   ExpectDownloadCreated(row);
@@ -983,5 +1292,170 @@ TEST_F(DownloadHistoryTest,
   EXPECT_TRUE(DownloadHistory::IsPersisted(&item(0)));
   EXPECT_TRUE(DownloadHistory::IsPersisted(&item(1)));
 }
+
+class DownloadHistoryRemoveOldDownloadsTest
+    : public DownloadHistoryTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  DownloadHistoryRemoveOldDownloadsTest() {
+    feature_list_.InitWithFeatureState(
+        download::features::kRemoveOldDownloadsFromHistory, GetParam());
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         DownloadHistoryRemoveOldDownloadsTest,
+                         testing::Bool());
+
+// Tests that completed downloads started more than 90 days ago are removed from
+// history instead of being loaded iff kRemoveOldDownloadsFromHistory is
+// enabled, and that other downloads are loaded either way.
+TEST_P(DownloadHistoryRemoveOldDownloadsTest, LoadHistory) {
+  const bool enabled = GetParam();
+  base::HistogramTester histogram_tester;
+  const base::Time now = base::Time::Now();
+
+  history::DownloadRow recent, completed_89_days_ago, interrupted_old,
+      completed_old;
+  InitBasicItem(FILE_PATH_LITERAL("/foo/recent.pdf"),
+                "http://example.com/recent.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &recent);
+  InitBasicItem(FILE_PATH_LITERAL("/foo/completed_89_days_ago.pdf"),
+                "http://example.com/completed_89_days_ago.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &completed_89_days_ago);
+  completed_89_days_ago.start_time = now - base::Days(89);
+  // Old interrupted downloads are left to DownloadManager to clear.
+  InitBasicItem(FILE_PATH_LITERAL("/foo/interrupted_old.pdf"),
+                "http://example.com/interrupted_old.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::INTERRUPTED, &interrupted_old);
+  interrupted_old.start_time = now - base::Days(200);
+  if (enabled) {
+    InitDownloadRow(FILE_PATH_LITERAL("/foo/completed_old.pdf"),
+                    "http://example.com/completed_old.pdf",
+                    "http://example.com/referrer.html",
+                    download::DownloadItem::COMPLETE, &completed_old);
+  } else {
+    InitBasicItem(FILE_PATH_LITERAL("/foo/completed_old.pdf"),
+                  "http://example.com/completed_old.pdf",
+                  "http://example.com/referrer.html",
+                  download::DownloadItem::COMPLETE, &completed_old);
+  }
+  completed_old.start_time = now - base::Days(91);
+
+  CreateDownloadHistory(
+      {CreateDownloadHistoryEntry(recent),
+       CreateDownloadHistoryEntry(completed_89_days_ago),
+       CreateDownloadHistoryEntry(interrupted_old),
+       CreateDownloadHistoryEntry(
+           completed_old, enabled ? LoadDownloadRowResult::kSkipCreation
+                                  : LoadDownloadRowResult::kCreateDownload)});
+
+  if (enabled) {
+    ExpectDownloadsRemoved({completed_old.id});
+  } else {
+    ExpectNoDownloadsRemoved();
+  }
+  histogram_tester.ExpectUniqueSample("Download.History.DownloadCount", 4, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Download.History.DownloadCount.PostRemoval", enabled ? 3 : 4, 1);
+}
+
+#if BUILDFLAG(IS_ANDROID)
+// Test loading history download rows with content URIs retrieves display names.
+TEST_F(DownloadHistoryTest, LoadContentUriDownloads) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  // 1. Test a content document URI (handled by DownloadDocumentUriBridge).
+  base::FilePath doc_file = temp_dir.GetPath().AppendASCII("test_doc_file.txt");
+  ASSERT_TRUE(base::WriteFile(doc_file, "test content"));
+  std::optional<base::FilePath> doc_uri =
+      base::test::android::GetInMemoryContentDocumentUriFromCacheDirFilePath(
+          doc_file);
+  ASSERT_TRUE(doc_uri.has_value());
+  ASSERT_TRUE(doc_uri->IsContentUri());
+
+  history::DownloadRow row0;
+  InitBasicItem(doc_uri->value().c_str(), "http://example.com/doc.txt",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &row0);
+
+  // 2. Test a FileProvider content URI (handled by DownloadCollectionBridge).
+  base::FilePath collection_file =
+      temp_dir.GetPath().AppendASCII("test_collection_file.txt");
+  ASSERT_TRUE(base::WriteFile(collection_file, "test content"));
+  std::optional<base::FilePath> collection_uri =
+      base::test::android::GetContentUriFromCacheDirFilePath(collection_file);
+  ASSERT_TRUE(collection_uri.has_value());
+  ASSERT_TRUE(collection_uri->IsContentUri());
+
+  history::DownloadRow row1;
+  InitBasicItem(collection_uri->value().c_str(),
+                "http://example.com/collection.txt",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &row1);
+
+  std::vector<CreateDownloadHistoryEntry> rows = {
+      CreateDownloadHistoryEntry(row0, LoadDownloadRowResult::kCreateDownload,
+                                 base::FilePath("test_doc_file.txt")),
+      CreateDownloadHistoryEntry(row1, LoadDownloadRowResult::kCreateDownload,
+                                 base::FilePath("test_collection_file.txt"))};
+  CreateDownloadHistory(std::move(rows));
+  ExpectNoDownloadCreated();
+}
+
+// Test loading history download rows with content URIs when
+// kRetrieveDisplayNamesForHistoryDownloads is disabled.
+TEST_F(DownloadHistoryTest, LoadContentUriDownloadsFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      download::features::kRetrieveDisplayNamesForHistoryDownloads);
+
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath doc_file = temp_dir.GetPath().AppendASCII("test_doc_file.txt");
+  ASSERT_TRUE(base::WriteFile(doc_file, "test content"));
+  std::optional<base::FilePath> doc_uri =
+      base::test::android::GetInMemoryContentDocumentUriFromCacheDirFilePath(
+          doc_file);
+  ASSERT_TRUE(doc_uri.has_value());
+  ASSERT_TRUE(doc_uri->IsContentUri());
+
+  history::DownloadRow row0;
+  InitBasicItem(doc_uri->value().c_str(), "http://example.com/doc.txt",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &row0);
+
+  std::vector<CreateDownloadHistoryEntry> rows = {CreateDownloadHistoryEntry(
+      row0, LoadDownloadRowResult::kCreateDownload, base::FilePath())};
+  CreateDownloadHistory(std::move(rows));
+  ExpectNoDownloadCreated();
+}
+#else
+// Test that web app id is inserted into history.
+TEST_F(DownloadHistoryTest, ByWebAppId) {
+  // Create a fresh item not from download DB
+  CreateDownloadHistory({});
+
+  history::DownloadRow row;
+  row.by_web_app_id = "by_web_app_id";
+  InitBasicItem(FILE_PATH_LITERAL("/foo/bar.pdf"), "http://example.com/bar.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::COMPLETE, &row);
+
+  EXPECT_CALL(item(0), IsDone()).WillRepeatedly(Return(true));
+
+  CallOnDownloadCreated(0);
+  ExpectDownloadCreated(row);
+  EXPECT_TRUE(DownloadHistory::IsPersisted(&item(0)));
+  EXPECT_NE(DownloadItemWebAppData::Get(&item(0)), nullptr);
+}
+#endif
 
 }  // anonymous namespace

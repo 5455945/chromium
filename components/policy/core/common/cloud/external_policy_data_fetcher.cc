@@ -1,23 +1,27 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/external_policy_data_fetcher.h"
 
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace policy {
 
@@ -29,6 +33,8 @@ class ExternalPolicyDataFetcher::Job
       base::WeakPtr<ExternalPolicyDataFetcher> fetcher,
       scoped_refptr<base::SequencedTaskRunner> fetcher_task_runner,
       ExternalPolicyDataFetcher::FetchCallback callback);
+  Job(const Job&) = delete;
+  Job& operator=(const Job&) = delete;
 
   void Start(const GURL& url, int64_t max_size);
   void Cancel();
@@ -36,7 +42,7 @@ class ExternalPolicyDataFetcher::Job
                          const network::mojom::URLResponseHead& response_head);
 
   // network::SimpleURLLoaderStreamConsumer implementation
-  void OnDataReceived(base::StringPiece string_piece,
+  void OnDataReceived(std::string_view string_piece,
                       base::OnceClosure resume) override;
   void OnComplete(bool success) override;
   void OnRetry(base::OnceClosure start_retry) override;
@@ -54,8 +60,6 @@ class ExternalPolicyDataFetcher::Job
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
   std::string response_body_;
   int64_t max_size_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(Job);
 };
 
 ExternalPolicyDataFetcher::Job::Job(
@@ -144,7 +148,7 @@ void ExternalPolicyDataFetcher::Job::OnResponseStarted(
 }
 
 void ExternalPolicyDataFetcher::Job::OnDataReceived(
-    base::StringPiece string_piece,
+    std::string_view string_piece,
     base::OnceClosure resume) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -220,7 +224,7 @@ ExternalPolicyDataFetcher::ExternalPolicyDataFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     scoped_refptr<base::SequencedTaskRunner> task_runner)
     : task_runner_(std::move(task_runner)),
-      job_task_runner_(base::ThreadTaskRunnerHandle::Get()) {
+      job_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {
   // |url_loader_factory| is null in some tests.
   if (url_loader_factory)
     pending_url_loader_factory_ = url_loader_factory->Clone();
@@ -270,7 +274,7 @@ void ExternalPolicyDataFetcher::CancelJob(Job* job) {
   // OnJobFinished() callback may still be pending for the canceled |job|.
   job_task_runner_->PostTaskAndReply(
       FROM_HERE, base::BindOnce(&Job::Cancel, base::Unretained(job)),
-      base::BindOnce(base::DoNothing::Once<Job*>(), base::Owned(job)));
+      base::DoNothingWithBoundArgs(base::Owned(job)));
 }
 
 void ExternalPolicyDataFetcher::OnJobFinished(

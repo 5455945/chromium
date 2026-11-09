@@ -1,16 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
@@ -22,18 +20,18 @@
 #include "content/public/browser/platform_notification_context.h"
 #include "content/public/browser/service_worker_context_observer.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/service_worker_test_helpers.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/browser/shell_content_browser_client.h"
-#include "content/test/test_content_browser_client.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_event_status.mojom.h"
 #include "url/gurl.h"
 
@@ -43,6 +41,11 @@ namespace content {
 class ServiceWorkerClientsApiBrowserTest : public ContentBrowserTest {
  public:
   ServiceWorkerClientsApiBrowserTest() = default;
+
+  ServiceWorkerClientsApiBrowserTest(
+      const ServiceWorkerClientsApiBrowserTest&) = delete;
+  ServiceWorkerClientsApiBrowserTest& operator=(
+      const ServiceWorkerClientsApiBrowserTest&) = delete;
 
   void SetUp() override {
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
@@ -64,8 +67,6 @@ class ServiceWorkerClientsApiBrowserTest : public ContentBrowserTest {
 
  private:
   scoped_refptr<ServiceWorkerContextWrapper> wrapper_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerClientsApiBrowserTest);
 };
 
 // Tests a successful WindowClient.navigate() call.
@@ -124,7 +125,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerClientsApiBrowserTest,
   EXPECT_EQ("navigate failed", EvalJs(shell(), "requestToNavigate();"));
 
   // The browser-initiated navigation should finish.
-  navigation.WaitForNavigationFinished();  // Resume navigation.
+  ASSERT_TRUE(navigation.WaitForNavigationFinished());  // Resume navigation.
   EXPECT_TRUE(navigation.was_successful());
 }
 

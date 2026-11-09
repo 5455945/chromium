@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "content/common/content_export.h"
@@ -28,7 +28,7 @@ class RenderFrameHost;
 // Note: DevToolsFrontendHost is not supported on Android.
 class DevToolsFrontendHost {
  public:
-  using HandleMessageCallback = base::RepeatingCallback<void(base::Value)>;
+  using HandleMessageCallback = base::RepeatingCallback<void(base::DictValue)>;
 
   // Creates a new DevToolsFrontendHost for RenderFrameHost where DevTools
   // frontend is loaded.
@@ -47,11 +47,10 @@ class DevToolsFrontendHost {
   // Returns bundled DevTools frontend resource by |path|. Returns null if
   // |path| does not correspond to any frontend resource.
   CONTENT_EXPORT static scoped_refptr<base::RefCountedMemory>
-  GetFrontendResourceBytes(const std::string& path);
+  GetFrontendResourceBytes(std::string_view path);
 
   // Convenience wrapper to return GetFrontendResourceBytes() as a string.
-  CONTENT_EXPORT static std::string GetFrontendResource(
-      const std::string& path);
+  CONTENT_EXPORT static std::string GetFrontendResource(std::string_view path);
 };
 
 }  // namespace content

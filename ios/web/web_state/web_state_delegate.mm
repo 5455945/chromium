@@ -1,12 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/public/web_state_delegate.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/functional/bind.h"
 
 namespace web {
 
@@ -35,80 +33,114 @@ WebState* WebStateDelegate::OpenURLFromWebState(
   return nullptr;
 }
 
-void WebStateDelegate::HandleContextMenu(WebState*, const ContextMenuParams&) {}
-
 void WebStateDelegate::ShowRepostFormWarningDialog(
     WebState*,
+    FormWarningType warning_type,
     base::OnceCallback<void(bool)> callback) {
   std::move(callback).Run(true);
 }
+
+void WebStateDelegate::ShouldAllowCopy(
+    WebState* source,
+    base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(true);
+}
+
+void WebStateDelegate::ShouldAllowPaste(
+    WebState* source,
+    base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(true);
+}
+
+void WebStateDelegate::ShouldAllowCut(WebState* source,
+                                      base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(true);
+}
+
+void WebStateDelegate::DidFinishClipboardRead(WebState* source) {}
 
 JavaScriptDialogPresenter* WebStateDelegate::GetJavaScriptDialogPresenter(
     WebState*) {
   return nullptr;
 }
 
+void WebStateDelegate::HandlePermissionsDecisionRequest(
+    WebState* source,
+    NSArray<NSNumber*>* permissions,
+    WebStatePermissionDecisionHandler handler) {
+  handler(PermissionDecisionShowDefaultPrompt);
+}
+
+void WebStateDelegate::RequestGeolocationPermission(
+    WebState* source,
+    const GURL& origin,
+    WebStatePermissionDecisionHandler handler) {
+  handler(PermissionDecisionShowDefaultPrompt);
+}
+
 void WebStateDelegate::OnAuthRequired(WebState* source,
                                       NSURLProtectionSpace* protection_space,
                                       NSURLCredential* proposed_credential,
-                                      AuthCallback callback) {
+                                      HTTPAuthCallback callback) {
   std::move(callback).Run(nil, nil);
 }
 
-bool WebStateDelegate::ShouldPreviewLink(WebState* source,
-                                         const GURL& link_url) {
-  return false;
+void WebStateDelegate::OnAuthRequired(WebState* source,
+                                      NSURLProtectionSpace* protection_space,
+                                      ClientCertAuthCallback callback) {
+  std::move(callback).Run(nil);
 }
 
-UIViewController* WebStateDelegate::GetPreviewingViewController(
+void WebStateDelegate::OnProxyAuthChallenge(
     WebState* source,
-    const GURL& link_url) {
-  return nullptr;
+    NSURLProtectionSpace* protection_space,
+    NSURLCredential* proposed_credential,
+    NSURLResponse* failure_response,
+    ProxyAuthCallback callback) {
+  OnAuthRequired(source, protection_space, proposed_credential,
+                 base::BindOnce(
+                     [](ProxyAuthCallback callback, NSString* username,
+                        NSString* password) {
+                       std::move(callback).Run(username, password, nil);
+                     },
+                     std::move(callback)));
 }
-
-void WebStateDelegate::CommitPreviewingViewController(
-    WebState* source,
-    UIViewController* previewing_view_controller) {}
 
 UIView* WebStateDelegate::GetWebViewContainer(WebState* source) {
   return nil;
 }
 
 void WebStateDelegate::Attach(WebState* source) {
-  DCHECK(attached_states_.find(source) == attached_states_.end());
+  DCHECK(!attached_states_.contains(source));
   attached_states_.insert(source);
 }
 
 void WebStateDelegate::Detach(WebState* source) {
-  DCHECK(attached_states_.find(source) != attached_states_.end());
+  DCHECK(attached_states_.contains(source));
   attached_states_.erase(source);
 }
 
 void WebStateDelegate::ContextMenuConfiguration(
     WebState* source,
     const ContextMenuParams& params,
-    UIContextMenuContentPreviewProvider preview_provider,
-    void (^completion_handler)(UIContextMenuConfiguration*))
-    API_AVAILABLE(ios(13.0)) {
+    void (^completion_handler)(UIContextMenuConfiguration*)) {
   completion_handler(nil);
 }
 
-void WebStateDelegate::ContextMenuDidEnd(WebState* source, const GURL& link_url)
-    API_AVAILABLE(ios(13.0)) {}
+UIContextMenuConfiguration*
+WebStateDelegate::GetCustomContextMenuConfiguration() {
+  return nil;
+}
 
 void WebStateDelegate::ContextMenuWillCommitWithAnimator(
     WebState* source,
-    const GURL& link_url,
-    id<UIContextMenuInteractionCommitAnimating> animator)
-    API_AVAILABLE(ios(13.0)) {}
-
-void WebStateDelegate::ContextMenuWillPresent(WebState* source,
-                                              const GURL& link_url)
-    API_AVAILABLE(ios(13.0)) {}
+    id<UIContextMenuInteractionCommitAnimating> animator) {}
 
 id<CRWResponderInputView> WebStateDelegate::GetResponderInputView(
     WebState* source) {
   return nil;
 }
 
-}  // web
+void WebStateDelegate::OnNewWebViewCreated(WebState* source) {}
+
+}  // namespace web

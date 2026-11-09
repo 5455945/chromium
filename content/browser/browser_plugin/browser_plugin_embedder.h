@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,11 @@
 #ifndef CONTENT_BROWSER_BROWSER_PLUGIN_BROWSER_PLUGIN_EMBEDDER_H_
 #define CONTENT_BROWSER_BROWSER_PLUGIN_BROWSER_PLUGIN_EMBEDDER_H_
 
-#include "base/macros.h"
-#include "content/common/content_export.h"
+#include "base/memory/raw_ptr.h"
+
+namespace input {
+struct NativeWebKeyboardEvent;
+}  // namespace input
 
 namespace content {
 
@@ -23,12 +26,14 @@ class BrowserPluginGuest;
 class BrowserPluginGuestManager;
 class WebContents;
 class WebContentsImpl;
-struct NativeWebKeyboardEvent;
 
 // TODO(wjmaclean): Get rid of "BrowserPlugin" in the name of this class.
 // Perhaps "WebContentsEmbedderDelegate" would be better?
-class CONTENT_EXPORT BrowserPluginEmbedder {
+class BrowserPluginEmbedder {
  public:
+  BrowserPluginEmbedder(const BrowserPluginEmbedder&) = delete;
+  BrowserPluginEmbedder& operator=(const BrowserPluginEmbedder&) = delete;
+
   ~BrowserPluginEmbedder();
 
   static BrowserPluginEmbedder* Create(WebContentsImpl* web_contents);
@@ -37,7 +42,7 @@ class CONTENT_EXPORT BrowserPluginEmbedder {
   void CancelGuestDialogs();
 
   // Used to handle special keyboard events.
-  bool HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
+  bool HandleKeyboardEvent(const input::NativeWebKeyboardEvent& event);
 
   // Returns the "full page" guest if there is one. That is, if there is a
   // single BrowserPlugin in the embedder which takes up the full page, then it
@@ -53,18 +58,8 @@ class CONTENT_EXPORT BrowserPluginEmbedder {
 
   BrowserPluginGuestManager* GetBrowserPluginGuestManager() const;
 
-  // Closes modal dialogs in |guest_web_contents|.
-  static bool CancelDialogs(WebContents* guest_web_contents);
-
-  static bool UnlockMouseIfNecessaryCallback(bool* mouse_unlocked,
-                                             WebContents* guest);
-
-  static bool GuestCurrentlyAudibleCallback(WebContents* guest);
-
   // Pointer to the WebContentsImpl that owns this object.
-  WebContentsImpl* web_contents_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserPluginEmbedder);
+  raw_ptr<WebContentsImpl, DanglingUntriaged> web_contents_;
 };
 
 }  // namespace content

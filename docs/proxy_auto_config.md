@@ -1,7 +1,7 @@
 # Proxy Auto Config Using WPAD
 
 Most systems support manually configuring a proxy for web access, but this is
-cumbersome and kind of techical, so Chrome also supports
+cumbersome and kind of technical, so Chrome also supports
 [WPAD](http://en.wikipedia.org/wiki/Web_Proxy_Autodiscovery_Protocol) for proxy
 configuration (enabled if "automatically detect proxy settings" is enabled on
 Windows).
@@ -17,7 +17,7 @@ autoconfig is turned on and there's no WPAD server.
 
 ## Solution
 
-There's a couple of simplifying assumptions we make:
+There are a couple of simplifying assumptions we make:
 
 *   If there is a WPAD server, it is on the same network as us, and hence likely
     to respond to lookups far more quickly than a random internet DNS server

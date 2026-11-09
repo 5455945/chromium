@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "components/download/public/common/base_file.h"
 #include "content/browser/download/save_types.h"
 
@@ -24,17 +23,26 @@ namespace content {
 class SaveFile {
  public:
   SaveFile(std::unique_ptr<SaveFileCreateInfo> info, bool calculate_hash);
+
+  SaveFile(const SaveFile&) = delete;
+  SaveFile& operator=(const SaveFile&) = delete;
+
   virtual ~SaveFile();
 
   // BaseFile delegated functions.
   download::DownloadInterruptReason Initialize();
-  download::DownloadInterruptReason AppendDataToFile(const char* data,
-                                                     size_t data_len);
+  download::DownloadInterruptReason AppendDataToFile(
+      base::span<const uint8_t> data);
   download::DownloadInterruptReason Rename(const base::FilePath& full_path);
   void Detach();
   void Cancel();
   void Finish();
-  void AnnotateWithSourceInformation();
+  void AnnotateWithSourceInformation(
+      const std::string& client_guid,
+      const GURL& source_url,
+      const GURL& referrer_url,
+      mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
+      download::BaseFile::OnAnnotationDoneCallback on_annotation_done_callback);
   base::FilePath FullPath() const;
   bool InProgress() const;
   int64_t BytesSoFar() const;
@@ -48,11 +56,11 @@ class SaveFile {
   }
   const SaveFileCreateInfo& create_info() const { return *info_; }
 
+  void RunQuarantineCallback();
+
  private:
   download::BaseFile file_;
   std::unique_ptr<SaveFileCreateInfo> info_;
-
-  DISALLOW_COPY_AND_ASSIGN(SaveFile);
 };
 
 }  // namespace content

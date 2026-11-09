@@ -1,4 +1,8 @@
 file://chrome/browser/media/router/OWNERS
 
-# Additional members without committer privileges, for potential FYI reviews.
-leilei@chromium.org
+### Primary contributors
+bmyersmorgan@google.com
+jophba@chromium.org
+
+### Secondary contributors
+zijiehe@google.com

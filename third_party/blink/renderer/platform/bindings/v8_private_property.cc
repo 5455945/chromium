@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 
 namespace blink {
 
@@ -23,19 +22,12 @@ static_assert(
     std::is_trivially_destructible<V8PrivateProperty::SymbolKey>::value,
     "SymbolKey is not trivially destructible");
 
-v8::MaybeLocal<v8::Value> V8PrivateProperty::Symbol::GetFromMainWorld(
-    ScriptWrappable* script_wrappable) {
-  v8::Local<v8::Object> wrapper = script_wrappable->MainWorldWrapper(isolate_);
-  return wrapper.IsEmpty() ? v8::MaybeLocal<v8::Value>()
-                           : GetOrUndefined(wrapper);
-}
-
 V8PrivateProperty::Symbol V8PrivateProperty::GetWindowDocumentCachedAccessor(
     v8::Isolate* isolate) {
   V8PrivateProperty* private_prop =
       V8PerIsolateData::From(isolate)->PrivateProperty();
-  if (UNLIKELY(
-          private_prop->symbol_window_document_cached_accessor_.IsEmpty())) {
+  if (private_prop->symbol_window_document_cached_accessor_.IsEmpty())
+      [[unlikely]] {
     // This private property is used in Window, and Window and Document are
     // stored in the V8 context snapshot.  So, this private property needs to
     // be restorable from the snapshot, and only v8::Private::ForApi supports
@@ -69,7 +61,6 @@ V8PrivateProperty::Symbol V8PrivateProperty::GetCachedAccessor(
       return GetWindowDocumentCachedAccessor(isolate);
   }
   NOTREACHED();
-  return GetEmptySymbol();
 }
 
 V8PrivateProperty::Symbol V8PrivateProperty::GetSymbol(
@@ -80,7 +71,7 @@ V8PrivateProperty::Symbol V8PrivateProperty::GetSymbol(
   auto& symbol_map = private_prop->symbol_map_;
   auto iter = symbol_map.find(&key);
   v8::Local<v8::Private> v8_private;
-  if (UNLIKELY(iter == symbol_map.end())) {
+  if (iter == symbol_map.end()) [[unlikely]] {
     v8_private = CreateV8Private(isolate, nullptr);
     symbol_map.insert(&key, v8::Eternal<v8::Private>(isolate, v8_private));
   } else {

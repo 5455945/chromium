@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This file is a no-op if the required LowLevelAlloc support is missing.
-#include "absl/base/internal/low_level_alloc.h"
-#ifndef ABSL_LOW_LEVEL_ALLOC_MISSING
+#include "absl/base/internal/low_level_alloc.h"  // IWYU pragma: keep
 
-#include "absl/synchronization/internal/per_thread_sem.h"
+// This file is a no-op if the required LowLevelAlloc support is missing.
+#ifndef ABSL_LOW_LEVEL_ALLOC_MISSING
 
 #include <atomic>
 
 #include "absl/base/attributes.h"
+#include "absl/base/config.h"
 #include "absl/base/internal/thread_identity.h"
+#include "absl/synchronization/internal/create_thread_identity.h"
+#include "absl/synchronization/internal/kernel_timeout.h"
+#include "absl/synchronization/internal/per_thread_sem.h"
 #include "absl/synchronization/internal/waiter.h"
 
 namespace absl {
@@ -40,17 +43,6 @@ std::atomic<int> *PerThreadSem::GetThreadBlockedCounter() {
   return identity->blocked_count_ptr;
 }
 
-void PerThreadSem::Init(base_internal::ThreadIdentity *identity) {
-  new (Waiter::GetWaiter(identity)) Waiter();
-  identity->ticker.store(0, std::memory_order_relaxed);
-  identity->wait_start.store(0, std::memory_order_relaxed);
-  identity->is_idle.store(false, std::memory_order_relaxed);
-}
-
-void PerThreadSem::Destroy(base_internal::ThreadIdentity *identity) {
-  Waiter::GetWaiter(identity)->~Waiter();
-}
-
 void PerThreadSem::Tick(base_internal::ThreadIdentity *identity) {
   const int ticker =
       identity->ticker.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -58,7 +50,7 @@ void PerThreadSem::Tick(base_internal::ThreadIdentity *identity) {
   const bool is_idle = identity->is_idle.load(std::memory_order_relaxed);
   if (wait_start && (ticker - wait_start > Waiter::kIdlePeriods) && !is_idle) {
     // Wakeup the waiting thread since it is time for it to become idle.
-    Waiter::GetWaiter(identity)->Poke();
+    ABSL_INTERNAL_C_SYMBOL(AbslInternalPerThreadSemPoke)(identity);
   }
 }
 
@@ -68,9 +60,20 @@ ABSL_NAMESPACE_END
 
 extern "C" {
 
+ABSL_ATTRIBUTE_WEAK void ABSL_INTERNAL_C_SYMBOL(AbslInternalPerThreadSemInit)(
+    absl::base_internal::ThreadIdentity *identity) {
+  new (absl::synchronization_internal::Waiter::GetWaiter(identity))
+      absl::synchronization_internal::Waiter();
+}
+
 ABSL_ATTRIBUTE_WEAK void ABSL_INTERNAL_C_SYMBOL(AbslInternalPerThreadSemPost)(
     absl::base_internal::ThreadIdentity *identity) {
   absl::synchronization_internal::Waiter::GetWaiter(identity)->Post();
+}
+
+ABSL_ATTRIBUTE_WEAK void ABSL_INTERNAL_C_SYMBOL(AbslInternalPerThreadSemPoke)(
+    absl::base_internal::ThreadIdentity *identity) {
+  absl::synchronization_internal::Waiter::GetWaiter(identity)->Poke();
 }
 
 ABSL_ATTRIBUTE_WEAK bool ABSL_INTERNAL_C_SYMBOL(AbslInternalPerThreadSemWait)(

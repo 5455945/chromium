@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,12 @@ enum class TabChangeType {
 
   // Only the loading state changed.
   kLoadingOnly,
+
+  // Only the attention state changed.
+  kAttentionOnly,
+
+  // Only the resource usage changed.
+  kResourceUsageOnly,
 };
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_CHANGE_TYPE_H_

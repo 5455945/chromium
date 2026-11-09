@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,24 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/uuid.h"
 #include "components/download/content/public/all_download_item_notifier.h"
 #include "components/download/internal/background_service/test/mock_download_driver_client.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/mock_simple_download_manager.h"
 #include "content/public/test/fake_download_item.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
-using testing::Invoke;
 using testing::NiceMock;
 using testing::Return;
 
@@ -34,6 +37,7 @@ ACTION_P(PopulateVector, items) {
 }
 
 const char kFakeGuid[] = "fake_guid";
+const char kFakeURL[] = "https://www.example.com/kale";
 
 // Matcher to compare driver entries. Not all the memeber fields are compared.
 // Currently no comparison in non test code, so no operator== override for
@@ -53,31 +57,33 @@ MATCHER_P(DriverEntryEqual, entry, "") {
 class DownloadDriverImplTest : public testing::Test {
  public:
   DownloadDriverImplTest()
-      : coordinator_(base::NullCallback(), false),
+      : coordinator_(base::NullCallback()),
         task_runner_(new base::TestSimpleTaskRunner),
-        handle_(task_runner_) {}
+        current_default_handle_(task_runner_) {}
+
+  DownloadDriverImplTest(const DownloadDriverImplTest&) = delete;
+  DownloadDriverImplTest& operator=(const DownloadDriverImplTest&) = delete;
 
   ~DownloadDriverImplTest() override = default;
 
   void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeature(
+        download::features::kDeferredDownloadHistoryLoading);
     EXPECT_CALL(mock_client_, IsTrackingDownload(_))
         .WillRepeatedly(Return(true));
     driver_ = std::make_unique<DownloadDriverImpl>(&coordinator_);
     coordinator_.SetSimpleDownloadManager(&mock_manager_, true);
+    ON_CALL(mock_manager_, CanDownload(_)).WillByDefault(Return(true));
   }
 
-  // TODO(xingliu): implements test download manager for embedders to test.
+ protected:
   SimpleDownloadManagerCoordinator coordinator_;
   NiceMock<MockSimpleDownloadManager> mock_manager_;
   MockDriverClient mock_client_;
   std::unique_ptr<DownloadDriverImpl> driver_;
-
- protected:
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
-  base::ThreadTaskRunnerHandle handle_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadDriverImplTest);
+  base::SingleThreadTaskRunner::CurrentDefaultHandle current_default_handle_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Ensure the download manager can be initialized after the download driver.
@@ -99,6 +105,37 @@ TEST_F(DownloadDriverImplTest, TestHardRecover) {
   EXPECT_CALL(mock_client_, OnDriverHardRecoverComplete(true)).Times(1);
   driver_->HardRecover();
   task_runner_->RunUntilIdle();
+}
+
+TEST_F(DownloadDriverImplTest, WaitForActiveDownloadsInitialization) {
+  driver_->Initialize(&mock_client_);
+  EXPECT_FALSE(driver_->IsReady());
+
+  EXPECT_CALL(mock_client_, OnDriverReady(true)).Times(1);
+  mock_manager_.NotifyOnDownloadInitialized();
+  task_runner_->RunUntilIdle();
+
+  EXPECT_TRUE(driver_->IsReady());
+}
+
+TEST_F(DownloadDriverImplTest, DriverInitializeAfterManagerReady) {
+  mock_manager_.NotifyOnDownloadInitialized();
+  EXPECT_CALL(mock_client_, OnDriverReady(true)).Times(1);
+  driver_->Initialize(&mock_client_);
+  task_runner_->RunUntilIdle();
+  EXPECT_TRUE(driver_->IsReady());
+}
+
+TEST_F(DownloadDriverImplTest, CoordinatorBufferingCallbacks) {
+  SimpleDownloadManagerCoordinator coordinator(base::NullCallback());
+  bool callback_run = false;
+  coordinator.WaitForActiveDownloadsInitialization(
+      base::BindLambdaForTesting([&]() { callback_run = true; }));
+  EXPECT_FALSE(callback_run);
+  coordinator.SetSimpleDownloadManager(&mock_manager_, true);
+  mock_manager_.NotifyOnDownloadInitialized();
+  task_runner_->RunUntilIdle();
+  EXPECT_TRUE(callback_run);
 }
 // Ensure driver remove call before download created will result in content
 // layer remove call and not propagating the event to driver's client.
@@ -154,11 +191,13 @@ TEST_F(DownloadDriverImplTest, DownloadItemUpdateEvents) {
       .RetiresOnSaturation();
   static_cast<AllDownloadEventNotifier::Observer*>(driver_.get())
       ->OnDownloadUpdated(&coordinator_, &fake_item);
+  task_runner_->RunUntilIdle();
 
   // Nothing happens for cancelled state.
   fake_item.SetState(DownloadState::CANCELLED);
   static_cast<AllDownloadEventNotifier::Observer*>(driver_.get())
       ->OnDownloadUpdated(&coordinator_, &fake_item);
+  task_runner_->RunUntilIdle();
 
   fake_item.SetReceivedBytes(1024);
   fake_item.SetState(DownloadState::COMPLETE);
@@ -169,6 +208,7 @@ TEST_F(DownloadDriverImplTest, DownloadItemUpdateEvents) {
       .RetiresOnSaturation();
   static_cast<AllDownloadEventNotifier::Observer*>(driver_.get())
       ->OnDownloadUpdated(&coordinator_, &fake_item);
+  task_runner_->RunUntilIdle();
 
   fake_item.SetState(DownloadState::INTERRUPTED);
   fake_item.SetLastReason(
@@ -180,25 +220,26 @@ TEST_F(DownloadDriverImplTest, DownloadItemUpdateEvents) {
       .RetiresOnSaturation();
   static_cast<AllDownloadEventNotifier::Observer*>(driver_.get())
       ->OnDownloadUpdated(&coordinator_, &fake_item);
+  task_runner_->RunUntilIdle();
 }
 
 TEST_F(DownloadDriverImplTest, TestGetActiveDownloadsCall) {
   using DownloadState = download::DownloadItem::DownloadState;
   content::FakeDownloadItem item1;
   item1.SetState(DownloadState::IN_PROGRESS);
-  item1.SetGuid(base::GenerateGUID());
+  item1.SetGuid(base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   content::FakeDownloadItem item2;
   item2.SetState(DownloadState::CANCELLED);
-  item2.SetGuid(base::GenerateGUID());
+  item2.SetGuid(base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   content::FakeDownloadItem item3;
   item3.SetState(DownloadState::COMPLETE);
-  item3.SetGuid(base::GenerateGUID());
+  item3.SetGuid(base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   content::FakeDownloadItem item4;
   item4.SetState(DownloadState::INTERRUPTED);
-  item4.SetGuid(base::GenerateGUID());
+  item4.SetGuid(base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   std::vector<download::DownloadItem*> items{&item1, &item2, &item3, &item4};
 
@@ -235,6 +276,52 @@ TEST_F(DownloadDriverImplTest, TestCreateDriverEntry) {
   EXPECT_EQ(kUrls, entry.url_chain);
   EXPECT_EQ(DriverEntry::State::IN_PROGRESS, entry.state);
   EXPECT_EQ(headers, entry.response_headers);
+}
+
+bool HasHeader(const DownloadUrlParameters::RequestHeadersType& headers,
+               const std::string& header) {
+  for (const auto& pair : headers) {
+    if (pair.first == header)
+      return true;
+  }
+  return false;
+}
+
+// Range header set in RequestParams will be set correctly in
+// DownloadUrlParameters when calling |DownloadDriver::Start|.
+TEST_F(DownloadDriverImplTest, Start_WithRangeHeader) {
+  RequestParams request_params;
+  request_params.url = GURL(kFakeURL);
+  request_params.request_headers.SetHeader("Range", "bytes=5-10");
+  EXPECT_CALL(mock_manager_, DownloadUrlMock(_)).RetiresOnSaturation();
+  driver_->Start(request_params, kFakeGuid, base::FilePath(), nullptr,
+                 TRAFFIC_ANNOTATION_FOR_TESTS);
+  const auto* download_url_parameters =
+      mock_manager_.GetDownloadUrlParameters();
+  DCHECK(download_url_parameters);
+  EXPECT_FALSE(download_url_parameters->use_if_range());
+  auto range_request_offset = download_url_parameters->range_request_offset();
+  EXPECT_EQ(5, range_request_offset.first);
+  EXPECT_EQ(10, range_request_offset.second);
+  EXPECT_FALSE(HasHeader(download_url_parameters->request_headers(),
+                         net::HttpRequestHeaders::kRange));
+  EXPECT_FALSE(HasHeader(download_url_parameters->request_headers(),
+                         net::HttpRequestHeaders::kIfRange));
+
+  request_params.request_headers.SetHeader("Range", "bytes=-10");
+  EXPECT_CALL(mock_manager_, DownloadUrlMock(_)).RetiresOnSaturation();
+  driver_->Start(request_params, kFakeGuid, base::FilePath(), nullptr,
+                 TRAFFIC_ANNOTATION_FOR_TESTS);
+  download_url_parameters = mock_manager_.GetDownloadUrlParameters();
+  DCHECK(download_url_parameters);
+  EXPECT_FALSE(download_url_parameters->use_if_range());
+  range_request_offset = download_url_parameters->range_request_offset();
+  EXPECT_EQ(kInvalidRange, range_request_offset.first);
+  EXPECT_EQ(10, range_request_offset.second);
+  EXPECT_FALSE(HasHeader(download_url_parameters->request_headers(),
+                         net::HttpRequestHeaders::kRange));
+  EXPECT_FALSE(HasHeader(download_url_parameters->request_headers(),
+                         net::HttpRequestHeaders::kIfRange));
 }
 
 }  // namespace download

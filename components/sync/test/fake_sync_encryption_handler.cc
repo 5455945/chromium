@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include "base/base64.h"
 #include "base/logging.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/custom_passphrase_bootstrap_token.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
 
 namespace syncer {
@@ -17,7 +18,7 @@ FakeSyncEncryptionHandler::~FakeSyncEncryptionHandler() = default;
 
 void FakeSyncEncryptionHandler::NotifyInitialStateToObservers() {}
 
-ModelTypeSet FakeSyncEncryptionHandler::GetEncryptedTypes() {
+DataTypeSet FakeSyncEncryptionHandler::GetEncryptedTypes() {
   return AlwaysEncryptedUserTypes();
 }
 
@@ -36,17 +37,14 @@ bool FakeSyncEncryptionHandler::NeedKeystoreKey() const {
 
 bool FakeSyncEncryptionHandler::SetKeystoreKeys(
     const std::vector<std::vector<uint8_t>>& keys) {
-  if (keys.empty())
+  if (keys.empty()) {
     return false;
+  }
   std::vector<uint8_t> new_key = keys.back();
-  if (new_key.empty())
+  if (new_key.empty()) {
     return false;
+  }
   keystore_key_ = new_key;
-
-  DVLOG(1) << "Keystore bootstrap token updated.";
-  for (auto& observer : observers_)
-    observer.OnBootstrapTokenUpdated(base::Base64Encode(keystore_key_),
-                                     KEYSTORE_BOOTSTRAP_TOKEN);
 
   return true;
 }
@@ -66,6 +64,11 @@ void FakeSyncEncryptionHandler::SetEncryptionPassphrase(
 
 void FakeSyncEncryptionHandler::SetDecryptionPassphrase(
     const std::string& passphrase) {
+  // Do nothing.
+}
+
+void FakeSyncEncryptionHandler::SetDecryptionBootstrapToken(
+    const CustomPassphraseBootstrapToken& bootstrap_token) {
   // Do nothing.
 }
 

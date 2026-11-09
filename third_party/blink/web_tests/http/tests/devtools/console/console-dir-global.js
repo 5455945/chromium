@@ -1,11 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as ObjectUI from 'devtools/ui/legacy/components/object_ui/object_ui.js';
 
 (async function() {
   TestRunner.addResult(`Tests that console dumps global object with properties.\n`);
 
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
 
   await TestRunner.evaluateInPagePromise(`
@@ -15,9 +19,10 @@
     };
   `);
 
-  TestRunner.RuntimeAgent.evaluate('window', 'console', false).then(evalCallback);
+  TestRunner.RuntimeAgent.invoke_evaluate({expression: 'window', objectGroup: 'console', includeCommandLineAPI: false})
+      .then(evalCallback);
 
-  function evalCallback(result) {
+  function evalCallback({result}) {
     if (!result) {
       testController.notifyDone('Exception');
       return;
@@ -32,7 +37,7 @@
 
   function getPropertiesCallback(allProperties) {
     const properties = allProperties.properties;
-    properties.sort(ObjectUI.ObjectPropertiesSection.CompareProperties);
+    properties.sort(ObjectUI.ObjectPropertiesSection.compareProperties);
 
     var golden = {
       'window': 1,

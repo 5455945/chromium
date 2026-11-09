@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@ namespace test {
 base::Time FakeClock::GetTime(const char* time_str) {
   base::Time time;
   bool success = base::Time::FromString(time_str, &time);
-  DCHECK(success);
+  CHECK(success, base::NotFatalUntil::M161);
   return time;
 }
 

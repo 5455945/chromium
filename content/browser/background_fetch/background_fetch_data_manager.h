@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,19 +12,21 @@
 #include <tuple>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/sequence_checker.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_registration_id.h"
 #include "content/browser/background_fetch/background_fetch_scheduler.h"
 #include "content/browser/background_fetch/storage/database_task.h"
 #include "content/browser/background_fetch/storage/get_initialization_data_task.h"
 #include "content/common/content_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom-forward.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 
@@ -38,21 +40,19 @@ namespace content {
 class BackgroundFetchDataManagerObserver;
 class BackgroundFetchRequestInfo;
 class BackgroundFetchRequestMatchParams;
-class BrowserContext;
 class ChromeBlobStorageContext;
 class ServiceWorkerContextWrapper;
-class StoragePartition;
+class StoragePartitionImpl;
 
 // The BackgroundFetchDataManager is a wrapper around persistent storage (the
 // Service Worker database), exposing APIs for the read and write queries needed
 // for Background Fetch.
 //
 // There must only be a single instance of this class per StoragePartition, and
-// it must only be used on the service worker core thread, since it relies on
-// there being no other code concurrently reading/writing the Background Fetch
-// keys of the same Service Worker database (except for deletions, e.g. it's
-// safe for the Service Worker code to remove a ServiceWorkerRegistration and
-// all its keys).
+// it must only be used on the UI thread, since it relies on there being no
+// other code concurrently reading/writing the Background Fetch keys of the same
+// Service Worker database (except for deletions, e.g. it's safe for the Service
+// Worker code to remove a ServiceWorkerRegistration and all its keys).
 //
 // Storage schema is documented in storage/README.md
 class CONTENT_EXPORT BackgroundFetchDataManager
@@ -74,9 +74,9 @@ class CONTENT_EXPORT BackgroundFetchDataManager
   using MarkRegistrationForDeletionCallback =
       base::OnceCallback<void(blink::mojom::BackgroundFetchError,
                               blink::mojom::BackgroundFetchFailureReason)>;
-  using GetRequestBlobCallback =
-      base::OnceCallback<void(blink::mojom::BackgroundFetchError,
-                              blink::mojom::SerializedBlobPtr)>;
+  using GetRequestBodyCallback = base::OnceCallback<void(
+      blink::mojom::BackgroundFetchError,
+      mojo::PendingRemote<network::mojom::DataPipeGetter>)>;
   using MarkRequestCompleteCallback =
       base::OnceCallback<void(blink::mojom::BackgroundFetchError)>;
   using NextRequestCallback =
@@ -84,15 +84,18 @@ class CONTENT_EXPORT BackgroundFetchDataManager
                               scoped_refptr<BackgroundFetchRequestInfo>)>;
 
   BackgroundFetchDataManager(
-      BrowserContext* browser_context,
-      StoragePartition* storage_partition,
+      base::WeakPtr<StoragePartitionImpl> storage_partition,
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
       scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy);
+
+  BackgroundFetchDataManager(const BackgroundFetchDataManager&) = delete;
+  BackgroundFetchDataManager& operator=(const BackgroundFetchDataManager&) =
+      delete;
 
   ~BackgroundFetchDataManager() override;
 
   // Grabs a reference to CacheStorageManager.
-  virtual void InitializeOnCoreThread();
+  virtual void Initialize();
 
   // Adds or removes the given |observer| to this data manager instance.
   void AddObserver(BackgroundFetchDataManagerObserver* observer);
@@ -100,7 +103,7 @@ class CONTENT_EXPORT BackgroundFetchDataManager
 
   // Gets the required data to initialize BackgroundFetchContext with the
   // appropriate JobControllers. This will be called when BackgroundFetchContext
-  // is being initialized on the service worker core thread.
+  // is being initialized.
   void GetInitializationData(GetInitializationDataCallback callback);
 
   // Creates and stores a new registration with the given properties. Will
@@ -112,6 +115,7 @@ class CONTENT_EXPORT BackgroundFetchDataManager
       blink::mojom::BackgroundFetchOptionsPtr options,
       const SkBitmap& icon,
       bool start_paused,
+      const net::IsolationInfo& isolation_info,
       CreateRegistrationCallback callback);
 
   // Get the BackgroundFetchRegistration.
@@ -134,12 +138,12 @@ class CONTENT_EXPORT BackgroundFetchDataManager
   void PopNextRequest(const BackgroundFetchRegistrationId& registration_id,
                       NextRequestCallback callback);
 
-  // Retrieves the request blob associated with |request_info|. THis should be
-  // called for requests that are known to have a blob.
-  void GetRequestBlob(
+  // Retrieves the request body associated with |request_info|. This should be
+  // called for requests that are known to have a body.
+  void GetRequestBody(
       const BackgroundFetchRegistrationId& registration_id,
       const scoped_refptr<BackgroundFetchRequestInfo>& request_info,
-      GetRequestBlobCallback callback);
+      GetRequestBodyCallback callback);
 
   // Marks |request_info| as complete and calls |callback| when done.
   void MarkRequestAsComplete(
@@ -184,7 +188,11 @@ class CONTENT_EXPORT BackgroundFetchDataManager
     return observers_;
   }
 
-  void ShutdownOnCoreThread();
+  void Shutdown();
+
+  ServiceWorkerContextWrapper* service_worker_context() const {
+    return service_worker_context_.get();
+  }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(BackgroundFetchDataManagerTest, Cleanup);
@@ -193,17 +201,14 @@ class CONTENT_EXPORT BackgroundFetchDataManager
   friend class background_fetch::DatabaseTask;
 
   // Accessors for tests and DatabaseTasks.
-  ServiceWorkerContextWrapper* service_worker_context() const {
-    return service_worker_context_.get();
-  }
   std::set<std::string>& ref_counted_unique_ids() {
     return ref_counted_unique_ids_;
   }
   ChromeBlobStorageContext* blob_storage_context() const {
     return blob_storage_context_.get();
   }
-  storage::QuotaManagerProxy* quota_manager_proxy() const {
-    return quota_manager_proxy_.get();
+  const scoped_refptr<storage::QuotaManagerProxy>& quota_manager_proxy() const {
+    return quota_manager_proxy_;
   }
 
   void AddDatabaseTask(std::unique_ptr<background_fetch::DatabaseTask> task);
@@ -244,9 +249,7 @@ class CONTENT_EXPORT BackgroundFetchDataManager
 
   scoped_refptr<ServiceWorkerContextWrapper> service_worker_context_;
 
-  // BackgroundFetchDataManager is owned by BackgroundFetchContext which
-  // itself is owned by the StoragePartitionImpl.
-  StoragePartition* storage_partition_;
+  base::WeakPtr<StoragePartitionImpl> storage_partition_;
 
   scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy_;
 
@@ -269,13 +272,14 @@ class CONTENT_EXPORT BackgroundFetchDataManager
   // |unique_id|. These remotes are created opportunistically in
   // GetOrOpenCacheStorage(). They are cleared after the Cache has been
   // deleted.
-  // TODO(crbug.com/711354): Possibly update key when CORS support is added.
+  // TODO(crbug.com/40515511): Possibly update key when CORS support is added.
   std::map<std::string, mojo::Remote<blink::mojom::CacheStorage>>
       cache_storage_remote_map_;
+  mojo::Remote<blink::mojom::CacheStorage> null_remote_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<BackgroundFetchDataManager> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BackgroundFetchDataManager);
 };
 
 }  // namespace content

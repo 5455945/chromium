@@ -1,55 +1,63 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_NQE_NETWORK_QUALITY_ESTIMATOR_PARAMS_H_
 #define NET_NQE_NETWORK_QUALITY_ESTIMATOR_PARAMS_H_
 
+#include <array>
 #include <map>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
 #include "net/nqe/effective_connection_type.h"
 #include "net/nqe/network_quality.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 
 // Forces NQE to return a specific effective connection type. Set using the
-// |params| provided to the NetworkQualityEstimatorParams constructor.
+// `params` provided to the NetworkQualityEstimatorParams constructor.
 NET_EXPORT extern const char kForceEffectiveConnectionType[];
 NET_EXPORT extern const char kEffectiveConnectionTypeSlow2GOnCellular[];
 
 // HTTP RTT thresholds for different effective connection types.
-NET_EXPORT extern const base::TimeDelta
-    kHttpRttEffectiveConnectionTypeThresholds[EFFECTIVE_CONNECTION_TYPE_LAST];
+inline constexpr std::array<base::TimeDelta, EFFECTIVE_CONNECTION_TYPE_LAST>
+    kHttpRttEffectiveConnectionTypeThresholds = {
+        base::Milliseconds(0),    base::Milliseconds(0),
+        base::Milliseconds(2010), base::Milliseconds(1420),
+        base::Milliseconds(272),  base::Milliseconds(0)};
 
 // NetworkQualityEstimatorParams computes the configuration parameters for
 // the network quality estimator.
 class NET_EXPORT NetworkQualityEstimatorParams {
  public:
-  // |params| is the map containing all field trial parameters related to
+  // `params` is the map containing all field trial parameters related to
   // NetworkQualityEstimator field trial.
   explicit NetworkQualityEstimatorParams(
       const std::map<std::string, std::string>& params);
 
+  NetworkQualityEstimatorParams(const NetworkQualityEstimatorParams&) = delete;
+  NetworkQualityEstimatorParams& operator=(
+      const NetworkQualityEstimatorParams&) = delete;
+
   ~NetworkQualityEstimatorParams();
 
-  // Returns the default observation for connection |type|. The default
+  // Returns the default observation for connection `type`. The default
   // observations are different for different connection types (e.g., 2G, 3G,
   // 4G, WiFi). The default observations may be used to determine the network
   // quality in absence of any other information.
   const nqe::internal::NetworkQuality& DefaultObservation(
       NetworkChangeNotifier::ConnectionType type) const;
 
-  // Returns the typical network quality for connection |type|.
+  // Returns the typical network quality for connection `type`.
   const nqe::internal::NetworkQuality& TypicalNetworkQuality(
       EffectiveConnectionType type) const;
 
-  // Returns the threshold for effective connection type |type|.
+  // Returns the threshold for effective connection type `type`.
   const nqe::internal::NetworkQuality& ConnectionThreshold(
       EffectiveConnectionType type) const;
 
@@ -68,19 +76,12 @@ class NET_EXPORT NetworkQualityEstimatorParams {
     return weight_multiplier_per_second_;
   }
 
-  // Returns the factor by which the weight of an observation reduces for every
-  // signal strength level difference between the current signal strength, and
-  // the signal strength at the time when the observation was taken.
-  double weight_multiplier_per_signal_strength_level() const {
-    return weight_multiplier_per_signal_strength_level_;
-  }
-
   // Returns an unset value if the effective connection type has not been forced
-  // via the |params| provided to this class. Otherwise, returns a value set to
+  // via the `params` provided to this class. Otherwise, returns a value set to
   // the effective connection type that has been forced. Forced ECT can be
-  // forced based on |connection_type| (e.g. Slow-2G on cellular, and default on
+  // forced based on `connection_type` (e.g. Slow-2G on cellular, and default on
   // other connection type).
-  absl::optional<EffectiveConnectionType> GetForcedEffectiveConnectionType(
+  std::optional<EffectiveConnectionType> GetForcedEffectiveConnectionType(
       NetworkChangeNotifier::ConnectionType connection_type);
 
   void SetForcedEffectiveConnectionType(
@@ -128,7 +129,7 @@ class NET_EXPORT NetworkQualityEstimatorParams {
   // multiplied when computing the HTTP RTT. The multiplied value of the
   // end to end RTT serves as an upper bound to the HTTP RTT estimate. e.g., if
   // the multiplied end to end RTT is 100 msec., then HTTP RTT estimate can't be
-  // more than |upper_bound_http_rtt_endtoend_rtt_multiplier| times 100 msec.
+  // more than `upper_bound_http_rtt_endtoend_rtt_multiplier` times 100 msec.
   // Returns a negative value if the param is not set.
   double upper_bound_http_rtt_endtoend_rtt_multiplier() const {
     return upper_bound_http_rtt_endtoend_rtt_multiplier_;
@@ -179,25 +180,25 @@ class NET_EXPORT NetworkQualityEstimatorParams {
     return historical_time_threshold_;
   }
 
-  // Determines if the responses smaller than |kMinTransferSizeInBytes|
-  // or shorter than |kMinTransferSizeInBytes| can be used in estimating the
+  // Determines if the responses smaller than `kMinTransferSizeInBytes`
+  // or shorter than `kMinTransferSizeInBytes` can be used in estimating the
   // network quality. Set to true only for tests.
   bool use_small_responses() const;
 
   // Returns the typical HTTP RTT that maps to the given
-  // |effective_connection_type|. May return invalid value if
-  // |effective_connection_type| is less than Slow2G or faster than 4G,
+  // `effective_connection_type`. May return invalid value if
+  // `effective_connection_type` is less than Slow2G or faster than 4G,
   static base::TimeDelta GetDefaultTypicalHttpRtt(
       EffectiveConnectionType effective_connection_type);
 
   // Returns the typical downslink throughput (in kbps) that maps to the given
-  // |effective_connection_type|. May return invalid value if
-  // |effective_connection_type| is less than Slow2G or faster than 4G,
+  // `effective_connection_type`. May return invalid value if
+  // `effective_connection_type` is less than Slow2G or faster than 4G,
   static int32_t GetDefaultTypicalDownlinkKbps(
       EffectiveConnectionType effective_connection_type);
 
-  // |use_small_responses| should only be true when testing.
-  // Allows the responses smaller than |kMinTransferSizeInBits| to be used for
+  // `use_small_responses` should only be true when testing.
+  // Allows the responses smaller than `kMinTransferSizeInBits` to be used for
   // network quality estimation.
   void SetUseSmallResponsesForTesting(bool use_small_responses);
 
@@ -224,11 +225,13 @@ class NET_EXPORT NetworkQualityEstimatorParams {
 
   // Number of observations received after which the effective connection type
   // should be recomputed.
-  size_t count_new_observations_received_compute_ect() const { return 50; }
+  size_t count_new_observations_received_compute_ect() const {
+    return count_new_observations_received_compute_ect_;
+  }
 
   // Maximum number of observations that can be held in a single
   // ObservationBuffer.
-  size_t observation_buffer_size() const { return 300; }
+  size_t observation_buffer_size() const { return observation_buffer_size_; }
 
   // Minimun interval between consecutive notifications from socket
   // watchers who live on the same thread as the network quality estimator.
@@ -240,12 +243,6 @@ class NET_EXPORT NetworkQualityEstimatorParams {
   // quality estimate.
   bool use_end_to_end_rtt() const { return use_end_to_end_rtt_; }
 
-  // Return true if ECT value should be capped based on the current signal
-  // strength.
-  bool cap_ect_based_on_signal_strength() const {
-    return cap_ect_based_on_signal_strength_;
-  }
-
   // Returns a multiplier which is used to clamp Kbps on slow connections. For
   // a given ECT, the upper bound on Kbps is computed based on this returned
   // multiplier and the typical Kbps for the given ECT. If
@@ -253,18 +250,6 @@ class NET_EXPORT NetworkQualityEstimatorParams {
   // disabled.
   double upper_bound_typical_kbps_multiplier() const {
     return upper_bound_typical_kbps_multiplier_;
-  }
-
-  // Returns true if the signal strength or detailed network ID should be
-  // queried.
-  bool get_signal_strength_and_detailed_network_id() const {
-    return get_signal_strength_and_detailed_network_id_;
-  }
-
-  // Returns the minimum duration between two consecutuve calls for querying the
-  // current WiFi network's signal strength.
-  base::TimeDelta wifi_signal_strength_query_interval() const {
-    return wifi_signal_strength_query_interval_;
   }
 
   // Returns true if RTTs should be adjusted based on RTT counts.
@@ -277,7 +262,7 @@ class NET_EXPORT NetworkQualityEstimatorParams {
     return adjust_rtt_based_on_rtt_counts_;
   }
 
-  // Sets the forced effective connection type as |type|.
+  // Sets the forced effective connection type as `type`.
   void SetForcedEffectiveConnectionTypeForTesting(EffectiveConnectionType type);
 
  private:
@@ -289,51 +274,52 @@ class NET_EXPORT NetworkQualityEstimatorParams {
   const int throughput_min_transfer_size_kilobytes_;
   const double throughput_hanging_requests_cwnd_size_multiplier_;
   const double weight_multiplier_per_second_;
-  const double weight_multiplier_per_signal_strength_level_;
-  absl::optional<EffectiveConnectionType> forced_effective_connection_type_;
+  std::optional<EffectiveConnectionType> forced_effective_connection_type_;
   const bool forced_effective_connection_type_on_cellular_only_;
   bool persistent_cache_reading_enabled_;
   const base::TimeDelta min_socket_watcher_notification_interval_;
-  const double lower_bound_http_rtt_transport_rtt_multiplier_;
+  const double lower_bound_http_rtt_transport_rtt_multiplier_ = 1.0;
   const double upper_bound_http_rtt_endtoend_rtt_multiplier_;
   const int hanging_request_http_rtt_upper_bound_transport_rtt_multiplier_;
   const int hanging_request_http_rtt_upper_bound_http_rtt_multiplier_;
-  const base::TimeDelta hanging_request_upper_bound_min_http_rtt_;
+  const base::TimeDelta hanging_request_upper_bound_min_http_rtt_ =
+      base::Milliseconds(500);
   const size_t http_rtt_transport_rtt_min_count_;
   const base::TimeDelta increase_in_transport_rtt_logging_interval_;
   const base::TimeDelta recent_time_threshold_;
   const base::TimeDelta historical_time_threshold_;
   const int hanging_request_duration_http_rtt_multiplier_;
-  const base::TimeDelta hanging_request_min_duration_;
+  const base::TimeDelta hanging_request_min_duration_ =
+      base::Milliseconds(3000);
   const bool add_default_platform_observations_;
+  const size_t count_new_observations_received_compute_ect_;
+  const size_t observation_buffer_size_;
   const base::TimeDelta socket_watchers_min_notification_interval_;
-  const bool use_end_to_end_rtt_;
-  const bool cap_ect_based_on_signal_strength_;
+  const bool use_end_to_end_rtt_ = true;
   const double upper_bound_typical_kbps_multiplier_;
-  const bool get_signal_strength_and_detailed_network_id_;
-  const base::TimeDelta wifi_signal_strength_query_interval_;
   const bool adjust_rtt_based_on_rtt_counts_;
 
-  bool use_small_responses_;
+  bool use_small_responses_ = false;
 
-  // Default network quality observations obtained from |params_|.
-  nqe::internal::NetworkQuality
-      default_observations_[NetworkChangeNotifier::CONNECTION_LAST + 1];
+  // Default network quality observations obtained from `params_`.
+  std::array<nqe::internal::NetworkQuality,
+             NetworkChangeNotifier::CONNECTION_LAST + 1>
+      default_observations_;
 
   // Typical network quality for different effective connection types obtained
-  // from |params_|.
-  nqe::internal::NetworkQuality typical_network_quality_
-      [EffectiveConnectionType::EFFECTIVE_CONNECTION_TYPE_LAST];
+  // from `params_`.
+  std::array<nqe::internal::NetworkQuality,
+             EffectiveConnectionType::EFFECTIVE_CONNECTION_TYPE_LAST>
+      typical_network_quality_;
 
   // Thresholds for different effective connection types obtained from
-  // |params_|. These thresholds encode how different connection types behave
+  // `params_`. These thresholds encode how different connection types behave
   // in general.
-  nqe::internal::NetworkQuality connection_thresholds_
-      [EffectiveConnectionType::EFFECTIVE_CONNECTION_TYPE_LAST];
+  std::array<nqe::internal::NetworkQuality,
+             EffectiveConnectionType::EFFECTIVE_CONNECTION_TYPE_LAST>
+      connection_thresholds_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkQualityEstimatorParams);
 };
 
 }  // namespace net

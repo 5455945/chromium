@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,17 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/cdm_context.h"
 #include "media/base/content_decryption_module.h"
 #include "media/base/media_export.h"
+#include "media/cdm/cdm_document_service.h"
+#include "media/cdm/win/media_foundation_cdm_util.h"
+#include "media/cdm/win/virtual_core_window_impl.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace media {
 
@@ -24,8 +29,8 @@ class MediaFoundationCdmSession;
 
 // A CDM implementation based on Media Foundation IMFContentDecryptionModule on
 // Windows.
-class MEDIA_EXPORT MediaFoundationCdm : public ContentDecryptionModule,
-                                        public CdmContext {
+class MEDIA_EXPORT MediaFoundationCdm final : public ContentDecryptionModule,
+                                              public CdmContext {
  public:
   // Checks whether MediaFoundationCdm is available based on OS version. Further
   // checks need to be made to determine the usability and the capabilities.
@@ -36,19 +41,28 @@ class MEDIA_EXPORT MediaFoundationCdm : public ContentDecryptionModule,
   using CreateMFCdmCB = base::RepeatingCallback<
       void(HRESULT&, Microsoft::WRL::ComPtr<IMFContentDecryptionModule>&)>;
 
-  // Callback to MediaFoundationCDM to resolve the promise.
-  using IsTypeSupportedResultCB = base::OnceCallback<void(bool is_supported)>;
+  // Callback for `IsTypeSupportedCB` below.
+  using IsTypeSupportedResultCB = base::OnceCallback<void(
+      IsTypeSupportedValueOrError is_supported_or_error)>;
 
   // Callback to IMFMediaFoundataionCdmFactory's IsTypeSupported.
   using IsTypeSupportedCB =
-      base::RepeatingCallback<void(const std::string&,
+      base::RepeatingCallback<void(const std::string& content_type,
                                    IsTypeSupportedResultCB)>;
+
+  // Callback to notify the CDM of an event, with an optional HRESULT associated
+  // with that event (e.g. errors).
+  using CdmEventCB = base::RepeatingCallback<void(CdmEvent, HRESULT hresult)>;
 
   // Constructs `MediaFoundationCdm`. Note that `Initialize()` must be called
   // before calling any other methods.
+  // TODO(xhwang): Use a helper to reduce the number of callbacks.
   MediaFoundationCdm(
+      const std::string& uma_prefix,
+      HWND content_protection_hwnd,
       const CreateMFCdmCB& create_mf_cdm_cb,
       const IsTypeSupportedCB& is_type_supported_cb,
+      const CdmEventCB& cdm_event_cb,
       const SessionMessageCB& session_message_cb,
       const SessionClosedCB& session_closed_cb,
       const SessionKeysChangeCB& session_keys_change_cb,
@@ -62,33 +76,33 @@ class MEDIA_EXPORT MediaFoundationCdm : public ContentDecryptionModule,
 
   // ContentDecryptionModule implementation.
   void SetServerCertificate(const std::vector<uint8_t>& certificate,
-                            std::unique_ptr<SimpleCdmPromise> promise) final;
-  void GetStatusForPolicy(HdcpVersion min_hdcp_version,
-                          std::unique_ptr<KeyStatusCdmPromise> promise) final;
+                            std::unique_ptr<SimpleCdmPromise> promise) override;
+  void GetStatusForPolicy(
+      HdcpVersion min_hdcp_version,
+      std::unique_ptr<KeyStatusCdmPromise> promise) override;
   void CreateSessionAndGenerateRequest(
       CdmSessionType session_type,
       EmeInitDataType init_data_type,
       const std::vector<uint8_t>& init_data,
-      std::unique_ptr<NewSessionCdmPromise> promise) final;
+      std::unique_ptr<NewSessionCdmPromise> promise) override;
   void LoadSession(CdmSessionType session_type,
                    const std::string& session_id,
-                   std::unique_ptr<NewSessionCdmPromise> promise) final;
+                   std::unique_ptr<NewSessionCdmPromise> promise) override;
   void UpdateSession(const std::string& session_id,
                      const std::vector<uint8_t>& response,
-                     std::unique_ptr<SimpleCdmPromise> promise) final;
+                     std::unique_ptr<SimpleCdmPromise> promise) override;
   void CloseSession(const std::string& session_id,
-                    std::unique_ptr<SimpleCdmPromise> promise) final;
+                    std::unique_ptr<SimpleCdmPromise> promise) override;
   void RemoveSession(const std::string& session_id,
-                     std::unique_ptr<SimpleCdmPromise> promise) final;
-  CdmContext* GetCdmContext() final;
+                     std::unique_ptr<SimpleCdmPromise> promise) override;
+  CdmContext* GetCdmContext() override;
 
   // CdmContext implementation.
-  bool RequiresMediaFoundationRenderer() final;
-  bool GetMediaFoundationCdmProxy(
-      GetMediaFoundationCdmProxyCB get_mf_cdm_proxy_cb) final;
+  bool RequiresMediaFoundationRenderer() override;
+  scoped_refptr<MediaFoundationCdmProxy> GetMediaFoundationCdmProxy() override;
 
  private:
-  ~MediaFoundationCdm() final;
+  ~MediaFoundationCdm() override;
 
   // Returns whether the |session_id| is accepted by the |this|.
   bool OnSessionId(int session_token,
@@ -104,15 +118,31 @@ class MEDIA_EXPORT MediaFoundationCdm : public ContentDecryptionModule,
   // Called when hardware context reset happens.
   void OnHardwareContextReset();
 
-  // Called when IsTypeSupported() result is available.
-  void OnIsTypeSupportedResult(std::unique_ptr<KeyStatusCdmPromise> promise,
-                               bool is_supported);
+  // Called when CdmEvent happens.
+  void OnCdmEvent(CdmEvent event, HRESULT hresult);
+
+  // Called when GetStatusForPolicy() result is available.
+  void OnGetStatusForPolicyResult(std::unique_ptr<KeyStatusCdmPromise> promise,
+                                  IsTypeSupportedValueOrError value_or_error);
+
+  // Prefix for UMA reported in `this` and the `sessions_`.
+  const std::string uma_prefix_;
+
+  // Wraps the browser-owned HWND used for GPU adapter selection. Created
+  // in the constructor when an HWND is provided. Kept alive for the
+  // lifetime of the CDM and reused across hardware context reset
+  // recoveries. `nullptr` when adapter selection is unavailable (feature
+  // flag off, tests, headless, etc.).
+  Microsoft::WRL::ComPtr<VirtualCoreWindowImpl> virtual_core_window_;
 
   // Callback to create `mf_cdm_`.
   CreateMFCdmCB create_mf_cdm_cb_;
 
   // Callback to MFCdmFactory's IsTypeSupported().
   IsTypeSupportedCB is_type_supported_cb_;
+
+  // Callback to report fatal errors.
+  CdmEventCB cdm_event_cb_;
 
   // Callbacks for firing session events.
   SessionMessageCB session_message_cb_;
@@ -127,12 +157,17 @@ class MEDIA_EXPORT MediaFoundationCdm : public ContentDecryptionModule,
   int next_session_token_ = 0;
 
   // Session token to session map for sessions waiting for session ID.
-  std::map<int, std::unique_ptr<MediaFoundationCdmSession>> pending_sessions_;
+  absl::flat_hash_map<int, std::unique_ptr<MediaFoundationCdmSession>>
+      pending_sessions_;
 
   // Session ID to session map.
-  std::map<std::string, std::unique_ptr<MediaFoundationCdmSession>> sessions_;
+  absl::flat_hash_map<std::string, std::unique_ptr<MediaFoundationCdmSession>>
+      sessions_;
 
   scoped_refptr<MediaFoundationCdmProxy> cdm_proxy_;
+
+  // Whether SetServerCertificate() has been called successfully.
+  bool server_certificate_set_ = false;
 
   // This must be the last member.
   base::WeakPtrFactory<MediaFoundationCdm> weak_factory_{this};

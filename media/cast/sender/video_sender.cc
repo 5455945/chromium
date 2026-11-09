@@ -1,50 +1,102 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/cast/sender/video_sender.h"
 
 #include <stdint.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "media/cast/net/cast_transport_config.h"
+#include "media/base/media_switches.h"
+#include "media/base/video_encoder_metrics_provider.h"
+#include "media/cast/common/openscreen_conversion_helpers.h"
+#include "media/cast/common/rtp_time.h"
+#include "media/cast/common/sender_encoded_frame.h"
+#include "media/cast/encoding/video_encoder.h"
+#include "media/cast/sender/openscreen_frame_sender.h"
 #include "media/cast/sender/performance_metrics_overlay.h"
-#include "media/cast/sender/video_encoder.h"
+#include "media/cast/sender/video_bitrate_suggester.h"
+#include "third_party/openscreen/src/cast/streaming/public/encoded_frame.h"
+#include "third_party/openscreen/src/cast/streaming/public/sender.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
-namespace media {
-namespace cast {
+namespace media::cast {
 
 namespace {
+
+perfetto::NamedTrack GetTracingTrack(const media::VideoFrame* frame) {
+  return perfetto::NamedTrack::FromPointer("media::cast::VideoSender", frame);
+}
 
 // The following two constants are used to adjust the target
 // playout delay (when allowed). They were calculated using
 // a combination of cast_benchmark runs and manual testing.
 //
 // This is how many round trips we think we need on the network.
-const int kRoundTripsNeeded = 4;
+constexpr int kRoundTripsNeeded = 4;
 
 // This is an estimate of all the the constant time needed independent of
 // network quality (e.g., additional time that accounts for encode and decode
 // time).
-const int kConstantTimeMs = 75;
+constexpr int kConstantTimeMs = 75;
 
 // The target maximum utilization of the encoder and network resources.  This is
 // used to attenuate the actual measured utilization values in order to provide
 // "breathing room" (i.e., to ensure there will be sufficient CPU and bandwidth
 // available to handle the occasional more-complex frames).
-const int kTargetUtilizationPercentage = 75;
+constexpr int kTargetUtilizationPercentage = 75;
 
-// This is the minimum duration in milliseconds that the sender sends key frame
-// request to the encoder on receiving Pli messages. This is used to prevent
-// sending multiple requests while the sender is waiting for an encoded key
-// frame or receiving multiple Pli messages in a short period.
-const int64_t kMinKeyFrameRequestOnPliIntervalMs = 500;
+// The raw (pre-attenuation) utilization reported when the encoder drops a
+// frame. A drop means the encoder could not fit the frame in its budget, so it
+// is treated as full utilization.
+constexpr double kEncoderDroppedFrameUtilization = 1.0;
+
+// This is the minimum duration that the sender sends key frame to the encoder
+// on receiving Pli messages. This is used to prevent sending multiple requests
+// while the sender is waiting for an encoded key frame or receiving multiple
+// Pli messages in a short period.
+constexpr base::TimeDelta kMinKeyFrameRequestInterval = base::Milliseconds(500);
+
+// This is the minimum amount of frames between issuing key frame requests.
+constexpr int kMinKeyFrameRequestFrameInterval = 6;
+
+// UMA histogram name for video bitrate setting.
+constexpr char kHistogramBitrate[] = "CastStreaming.Sender.Video.Bitrate2";
+
+// UMA histogram for the percentage of dropped video frames.
+constexpr char kHistogramDroppedFrames[] =
+    "CastStreaming.Sender.Video.PercentDroppedFrames";
+
+// UMA histogram for recording when a frame is dropped.
+constexpr char kHistogramFrameDropped[] =
+    "CastStreaming.Sender.Video.FrameDropped";
+
+// UMA histograms for the session-average encoder utilization, as a percentage.
+// Values above 100 indicate the encoder could not keep up.
+constexpr char kHistogramAverageEncoderUtilizationHardware[] =
+    "CastStreaming.Sender.Video.AverageEncoderUtilization.Hardware";
+constexpr char kHistogramAverageEncoderUtilizationSoftware[] =
+    "CastStreaming.Sender.Video.AverageEncoderUtilization.Software";
+
+// UMA histograms for the percentage of encoded frames whose encoder utilization
+// was above 100%, i.e. frames encoded while the encoder could not keep up. This
+// catches sustained overload that a session average below 100% would hide.
+constexpr char kHistogramPercentFramesEncoderOverutilizedHardware[] =
+    "CastStreaming.Sender.Video.PercentFramesEncoderOverutilized.Hardware";
+constexpr char kHistogramPercentFramesEncoderOverutilizedSoftware[] =
+    "CastStreaming.Sender.Video.PercentFramesEncoderOverutilized.Software";
+
+// Encoder utilization is clamped to [0.0, 2.0], i.e. [0, 200] percent.
+constexpr int kMaxEncoderUtilizationPercent = 200;
 
 // Extract capture begin/end timestamps from |video_frame|'s metadata and log
 // it.
@@ -71,80 +123,85 @@ void LogVideoCaptureTimestamps(CastEnvironment* cast_environment,
     // The frame capture timestamps were not provided by the video capture
     // source.  Simply log the events as happening right now.
     capture_begin_event->timestamp = capture_end_event->timestamp =
-        cast_environment->Clock()->NowTicks();
+        cast_environment->NowTicks();
   }
 
-  cast_environment->logger()->DispatchFrameEvent(
-      std::move(capture_begin_event));
-  cast_environment->logger()->DispatchFrameEvent(std::move(capture_end_event));
+  cast_environment->logger().DispatchFrameEvent(std::move(capture_begin_event));
+  cast_environment->logger().DispatchFrameEvent(std::move(capture_end_event));
 }
 
 }  // namespace
 
-// Note, we use a fixed bitrate value when external video encoder is used.
-// Some hardware encoder shows bad behavior if we set the bitrate too
-// frequently, e.g. quality drop, not abiding by target bitrate, etc.
-// See details: crbug.com/392086.
 VideoSender::VideoSender(
+    std::unique_ptr<VideoEncoder> video_encoder,
     scoped_refptr<CastEnvironment> cast_environment,
     const FrameSenderConfig& video_config,
-    StatusChangeCallback status_change_cb,
-    const CreateVideoEncodeAcceleratorCallback& create_vea_cb,
-    CastTransport* const transport_sender,
-    PlayoutDelayChangeCB playout_delay_change_cb,
-    media::VideoCaptureFeedbackCB feedback_callback)
-    : FrameSender(
-          cast_environment,
-          transport_sender,
-          video_config,
-          video_config.use_external_encoder
-              ? NewFixedCongestionControl(
-                    (video_config.min_bitrate + video_config.max_bitrate) / 2)
-              : NewAdaptiveCongestionControl(cast_environment->Clock(),
-                                             video_config.max_bitrate,
-                                             video_config.min_bitrate,
-                                             video_config.max_frame_rate)),
-      frames_in_encoder_(0),
-      last_bitrate_(0),
+    std::unique_ptr<openscreen::cast::Sender> sender,
+    VideoSender::PlayoutDelayChangeCB playout_delay_change_cb,
+    media::VideoCaptureFeedbackCB feedback_cb,
+    VideoBitrateSuggester::GetVideoNetworkBandwidthCB get_bandwidth_cb)
+    : frame_sender_(FrameSender::Create(cast_environment,
+                                        video_config,
+                                        std::move(sender),
+                                        *this)),
+      video_encoder_(std::move(video_encoder)),
+      cast_environment_(cast_environment),
+      bitrate_suggester_(
+          std::make_unique<VideoBitrateSuggester>(video_config,
+                                                  std::move(get_bandwidth_cb))),
+      min_playout_delay_(video_config.min_playout_delay),
+      max_playout_delay_(video_config.max_playout_delay),
       playout_delay_change_cb_(std::move(playout_delay_change_cb)),
-      feedback_cb_(feedback_callback),
-      low_latency_mode_(false),
-      last_reported_encoder_utilization_(-1.0),
-      last_reported_lossy_utilization_(-1.0) {
-  video_encoder_ = VideoEncoder::Create(cast_environment_, video_config,
-                                        status_change_cb, create_vea_cb);
-  if (!video_encoder_) {
-    cast_environment_->PostTask(
-        CastEnvironment::MAIN, FROM_HERE,
-        base::BindOnce(std::move(status_change_cb), STATUS_UNSUPPORTED_CODEC));
+      feedback_cb_(feedback_cb),
+      is_hardware_encoder_(video_config.use_hardware_encoder) {
+  CHECK(video_encoder_);
+}
+
+VideoSender::~VideoSender() {
+  // Record the number of frames dropped during this session.
+  base::UmaHistogramPercentage(kHistogramDroppedFrames,
+                               (number_of_frames_dropped_ * 100) /
+                                   std::max(1, number_of_frames_inserted_));
+
+  // Record the encoder utilization during this session. Only frames that were
+  // actually encoded have a utilization value, so frames dropped before
+  // encoding are not included here; they are covered by the dropped frame
+  // histograms above.
+  if (encoder_utilization_samples_ > 0) {
+    const int average_utilization_percent = base::ClampRound(
+        encoder_utilization_sum_ * 100 / encoder_utilization_samples_);
+    base::UmaHistogramExactLinear(
+        is_hardware_encoder_ ? kHistogramAverageEncoderUtilizationHardware
+                             : kHistogramAverageEncoderUtilizationSoftware,
+        std::min(average_utilization_percent, kMaxEncoderUtilizationPercent),
+        kMaxEncoderUtilizationPercent + 1);
+    base::UmaHistogramPercentage(
+        is_hardware_encoder_
+            ? kHistogramPercentFramesEncoderOverutilizedHardware
+            : kHistogramPercentFramesEncoderOverutilizedSoftware,
+        (encoder_overutilized_frames_ * 100) / encoder_utilization_samples_);
   }
 }
 
-VideoSender::~VideoSender() = default;
-
 void VideoSender::InsertRawVideoFrame(
     scoped_refptr<media::VideoFrame> video_frame,
-    const base::TimeTicks& reference_time) {
-  DCHECK(cast_environment_->CurrentlyOn(CastEnvironment::MAIN));
-
-  if (!video_encoder_) {
-    NOTREACHED();
-    return;
-  }
+    base::TimeTicks reference_time) {
+  CHECK(cast_environment_->CurrentlyOn(CastEnvironment::ThreadId::kMain));
+  CHECK(video_encoder_);
 
   const RtpTimeTicks rtp_timestamp =
-      RtpTimeTicks::FromTimeDelta(video_frame->timestamp(), kVideoFrequency);
+      ToRtpTimeTicks(video_frame->timestamp(), kVideoFrequency);
   LogVideoCaptureTimestamps(cast_environment_.get(), *video_frame,
                             rtp_timestamp);
 
   // Used by chrome/browser/media/cast_mirroring_performance_browsertest.cc
-  TRACE_EVENT_INSTANT2("cast_perf_test", "InsertRawVideoFrame",
-                       TRACE_EVENT_SCOPE_THREAD, "timestamp",
-                       (reference_time - base::TimeTicks()).InMicroseconds(),
-                       "rtp_timestamp", rtp_timestamp.lower_32_bits());
+  TRACE_EVENT_INSTANT("cast_perf_test", "InsertRawVideoFrame", "timestamp",
+                      (reference_time - base::TimeTicks()).InMicroseconds(),
+                      "rtp_timestamp", rtp_timestamp.lower_32_bits());
 
   {
-    bool new_low_latency_mode = video_frame->metadata().interactive_content;
+    const bool new_low_latency_mode =
+        video_frame->metadata().interactive_content;
     if (new_low_latency_mode && !low_latency_mode_) {
       VLOG(1) << "Interactive mode playout time " << min_playout_delay_;
       playout_delay_change_cb_.Run(min_playout_delay_);
@@ -161,23 +218,23 @@ void VideoSender::InsertRawVideoFrame(
       (rtp_timestamp <= last_enqueued_frame_rtp_timestamp_ ||
        reference_time <= last_enqueued_frame_reference_time_)) {
     VLOG(1) << "Dropping video frame: RTP or reference time did not increase.";
-    TRACE_EVENT_INSTANT2("cast.stream", "Video Frame Drop",
-                         TRACE_EVENT_SCOPE_THREAD,
-                         "rtp_timestamp", rtp_timestamp.lower_32_bits(),
-                         "reason", "time did not increase");
+    TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop", "rtp_timestamp",
+                        rtp_timestamp.lower_32_bits(), "reason",
+                        "time did not increase");
     return;
   }
 
   // Request a key frame when a Pli message was received, and it has been passed
   // long enough from the last time sending key frame request on receiving a Pli
   // message.
-  if (picture_lost_at_receiver_) {
-    const int64_t min_attemp_interval_ms =
-        std::max(kMinKeyFrameRequestOnPliIntervalMs,
-                 6 * target_playout_delay_.InMilliseconds());
+  if (frame_sender_->NeedsKeyFrame()) {
+    const base::TimeDelta min_attempt_interval = std::max(
+        kMinKeyFrameRequestInterval,
+        kMinKeyFrameRequestFrameInterval * frame_sender_->TargetPlayoutDelay());
+
     if (last_time_attempted_to_resolve_pli_.is_null() ||
-        ((reference_time - last_time_attempted_to_resolve_pli_)
-             .InMilliseconds() > min_attemp_interval_ms)) {
+        ((reference_time - last_time_attempted_to_resolve_pli_) >
+         min_attempt_interval)) {
       video_encoder_->GenerateKeyFrame();
       last_time_attempted_to_resolve_pli_ = reference_time;
     }
@@ -185,45 +242,53 @@ void VideoSender::InsertRawVideoFrame(
 
   // Two video frames are needed to compute the exact media duration added by
   // the next frame.  If there are no frames in the encoder, compute a guess
-  // based on the configured |max_frame_rate_|.  Any error introduced by this
+  // based on the configured max frame rate.  Any error introduced by this
   // guess will be eliminated when |duration_in_encoder_| is updated in
-  // OnEncodedVideoFrame().
-  const base::TimeDelta duration_added_by_next_frame = frames_in_encoder_ > 0 ?
-      reference_time - last_enqueued_frame_reference_time_ :
-      base::TimeDelta::FromSecondsD(1.0 / max_frame_rate_);
+  // OnEncodedVideoFrame().  Cap the duration at the inverse of the max frame
+  // rate so that idle gaps during static screen capture do not inflate the
+  // estimated in-flight media duration and cause spurious frame drops.
+  const base::TimeDelta max_frame_duration =
+      base::Seconds(1.0 / frame_sender_->MaxFrameRate());
+  const base::TimeDelta duration_added_by_next_frame =
+      frames_in_encoder_ > 0
+          ? std::min(reference_time - last_enqueued_frame_reference_time_,
+                     max_frame_duration)
+          : max_frame_duration;
 
-  if (ShouldDropNextFrame(duration_added_by_next_frame)) {
-    base::TimeDelta new_target_delay = std::min(
-        current_round_trip_time_ * kRoundTripsNeeded +
-        base::TimeDelta::FromMilliseconds(kConstantTimeMs),
-        max_playout_delay_);
+  number_of_frames_inserted_++;
+  const CastStreamingFrameDropReason reason =
+      frame_sender_->ShouldDropNextFrame(duration_added_by_next_frame);
+  const bool should_drop_frame =
+      reason != CastStreamingFrameDropReason::kNotDropped;
+  bitrate_suggester_->RecordShouldDropNextFrame(should_drop_frame);
+  if (should_drop_frame) {
+    base::TimeDelta new_target_delay =
+        std::min(frame_sender_->CurrentRoundTripTime() * kRoundTripsNeeded +
+                     base::Milliseconds(kConstantTimeMs),
+                 max_playout_delay_);
     // In case of low latency mode, we prefer frame drops over increasing
     // playout time.
-    if (!low_latency_mode_ && new_target_delay > target_playout_delay_) {
+    if (!low_latency_mode_ &&
+        new_target_delay > frame_sender_->TargetPlayoutDelay()) {
       // In case we detect user is no longer in a low latency mode and there is
       // a need to drop a frame, we ensure the playout delay is at-least the
       // the starting value for playing animated content.
       // This is intended to minimize freeze when moving from an interactive
       // session to watching animating content while being limited by end-to-end
       // delay.
-      VLOG(1) << "Ensure playout time is at least " << animated_playout_delay_;
-      if (new_target_delay < animated_playout_delay_)
-        new_target_delay = animated_playout_delay_;
+      VLOG(1) << "Ensure playout time is at least " << min_playout_delay_;
+      if (new_target_delay < min_playout_delay_) {
+        new_target_delay = min_playout_delay_;
+      }
       VLOG(1) << "New target delay: " << new_target_delay.InMilliseconds();
       playout_delay_change_cb_.Run(new_target_delay);
     }
 
-    // Some encoder implementations have a frame window for analysis. Since we
-    // are dropping this frame, unless we instruct the encoder to flush all the
-    // frames that have been enqueued for encoding, frames_in_encoder_ and
-    // last_enqueued_frame_reference_time_ will never be updated and we will
-    // drop every subsequent frame for the rest of the session.
-    video_encoder_->EmitFrames();
-
-    TRACE_EVENT_INSTANT2("cast.stream", "Video Frame Drop",
-                         TRACE_EVENT_SCOPE_THREAD,
-                         "rtp_timestamp", rtp_timestamp.lower_32_bits(),
-                         "reason", "too much in flight");
+    number_of_frames_dropped_++;
+    base::UmaHistogramEnumeration(kHistogramFrameDropped, reason);
+    TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop (raw frame)",
+                        "duration", duration_added_by_next_frame, "reason",
+                        reason);
     return;
   }
 
@@ -232,107 +297,211 @@ void VideoSender::InsertRawVideoFrame(
     return;
   }
 
-  const int bitrate = congestion_control_->GetBitrate(
-      reference_time + target_playout_delay_, target_playout_delay_);
-  if (bitrate != last_bitrate_) {
-    video_encoder_->SetBitRate(bitrate);
-    last_bitrate_ = bitrate;
+  const uint32_t suggested_bitrate = bitrate_suggester_->GetSuggestedBitrate();
+
+  // To avoid thrashing the encoder, which can cause dropped frames, only update
+  // the encoder if the suggested bitrate has changed by a significant amount.
+  // We use 5% as the threshold for this "bitrate hysteresis".
+  constexpr double kBitrateThreshold = 0.05;
+  const bool should_update_bitrate =
+      last_bitrate_ == 0 || std::abs(static_cast<int64_t>(suggested_bitrate) -
+                                     static_cast<int64_t>(last_bitrate_)) >
+                                (last_bitrate_ * kBitrateThreshold);
+
+  if (should_update_bitrate) {
+    video_encoder_->SetBitRate(suggested_bitrate);
+    last_bitrate_ = suggested_bitrate;
   }
 
-  TRACE_COUNTER_ID1("cast.stream", "Video Target Bitrate", this, bitrate);
+  // Report the bitrate every 500 frames.
+  constexpr int kSampleInterval = 500;
+  frames_since_bitrate_reported_ =
+      ++frames_since_bitrate_reported_ % kSampleInterval;
+  if (frames_since_bitrate_reported_ == 0) {
+    base::UmaHistogramCounts100000(kHistogramBitrate, suggested_bitrate / 1000);
+  }
 
-  const scoped_refptr<VideoFrame> frame_to_encode =
-      MaybeRenderPerformanceMetricsOverlay(
-          GetTargetPlayoutDelay(), low_latency_mode_, bitrate,
-          frames_in_encoder_ + 1, last_reported_encoder_utilization_,
-          last_reported_lossy_utilization_, std::move(video_frame));
+  TRACE_COUNTER_ID1("cast.stream", "Video Target Bitrate", this,
+                    suggested_bitrate);
+
+  if (base::FeatureList::IsEnabled(media::kCastStreamingPerformanceOverlay)) {
+    video_frame = RenderPerformanceMetricsOverlay(
+        frame_sender_->GetTargetPlayoutDelay(), low_latency_mode_,
+        suggested_bitrate, frames_in_encoder_ + 1,
+        last_reported_encoder_utilization_, last_reported_lossiness_,
+        std::move(video_frame));
+  }
+
   if (video_encoder_->EncodeVideoFrame(
-          frame_to_encode, reference_time,
+          video_frame, reference_time,
           base::BindOnce(&VideoSender::OnEncodedVideoFrame, AsWeakPtr(),
-                         frame_to_encode, bitrate))) {
-    TRACE_EVENT_ASYNC_BEGIN1("cast.stream", "Video Encode",
-                             frame_to_encode.get(), "rtp_timestamp",
-                             rtp_timestamp.lower_32_bits());
+                         video_frame, reference_time))) {
+    TRACE_EVENT_BEGIN("cast.stream", "Video Encode",
+                      GetTracingTrack(video_frame.get()), "rtp_timestamp",
+                      rtp_timestamp.lower_32_bits());
     frames_in_encoder_++;
     duration_in_encoder_ += duration_added_by_next_frame;
     last_enqueued_frame_rtp_timestamp_ = rtp_timestamp;
     last_enqueued_frame_reference_time_ = reference_time;
   } else {
     VLOG(1) << "Encoder rejected a frame.  Skipping...";
-    TRACE_EVENT_INSTANT1("cast.stream", "Video Encode Reject",
-                         TRACE_EVENT_SCOPE_THREAD,
-                         "rtp_timestamp", rtp_timestamp.lower_32_bits());
+    TRACE_EVENT_INSTANT("cast.stream", "Video Encode Reject", "rtp_timestamp",
+                        rtp_timestamp.lower_32_bits());
   }
 }
 
-std::unique_ptr<VideoFrameFactory> VideoSender::CreateVideoFrameFactory() {
-  return video_encoder_ ? video_encoder_->CreateVideoFrameFactory() : nullptr;
+void VideoSender::SetTargetPlayoutDelay(
+    base::TimeDelta new_target_playout_delay) {
+  frame_sender_->SetTargetPlayoutDelay(new_target_playout_delay);
+}
+
+base::TimeDelta VideoSender::GetTargetPlayoutDelay() const {
+  return frame_sender_->GetTargetPlayoutDelay();
+}
+
+uint32_t VideoSender::GetEncoderBitrate() const {
+  return last_bitrate_;
+}
+
+double VideoSender::GetEncoderUtilization() const {
+  return last_reported_encoder_utilization_;
+}
+
+double VideoSender::GetLossiness() const {
+  return last_reported_lossiness_;
+}
+
+int VideoSender::GetFramesInserted() const {
+  return number_of_frames_inserted_;
+}
+
+int VideoSender::GetFramesDropped() const {
+  return number_of_frames_dropped_;
+}
+
+int VideoSender::GetFramesDroppedByEncoder() const {
+  return number_of_frames_dropped_by_encoder_;
 }
 
 base::WeakPtr<VideoSender> VideoSender::AsWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
+VideoSender::VideoSender() = default;
+
 int VideoSender::GetNumberOfFramesInEncoder() const {
   return frames_in_encoder_;
 }
 
-base::TimeDelta VideoSender::GetInFlightMediaDuration() const {
-  if (GetUnacknowledgedFrameCount() > 0) {
-    const FrameId oldest_unacked_frame_id = latest_acked_frame_id_ + 1;
-    return last_enqueued_frame_reference_time_ -
-        GetRecordedReferenceTime(oldest_unacked_frame_id);
-  } else {
-    return duration_in_encoder_;
-  }
+base::TimeDelta VideoSender::GetEncoderBacklogDuration() const {
+  return duration_in_encoder_;
 }
 
 void VideoSender::OnEncodedVideoFrame(
     scoped_refptr<media::VideoFrame> video_frame,
-    int encoder_bitrate,
+    const base::TimeTicks reference_time,
     std::unique_ptr<SenderEncodedFrame> encoded_frame) {
-  DCHECK(cast_environment_->CurrentlyOn(CastEnvironment::MAIN));
+  CHECK(cast_environment_->CurrentlyOn(CastEnvironment::ThreadId::kMain));
 
   frames_in_encoder_--;
-  DCHECK_GE(frames_in_encoder_, 0);
+  CHECK_GE(frames_in_encoder_, 0);
 
-  // Encoding was exited with errors.
-  if (!encoded_frame)
-    return;
-
+  // Update |duration_in_encoder_| so that |frame_sender_| doesn't regard the
+  // encoder as really slow, capping per-frame duration so static screen gaps
+  // between queued frames do not inflate the encoder backlog.
+  const base::TimeDelta max_backlog_duration =
+      frames_in_encoder_ * base::Seconds(1.0 / frame_sender_->MaxFrameRate());
   duration_in_encoder_ =
-      last_enqueued_frame_reference_time_ - encoded_frame->reference_time;
+      std::min(last_enqueued_frame_reference_time_ - reference_time,
+               max_backlog_duration);
 
-  last_reported_encoder_utilization_ = encoded_frame->encoder_utilization;
-  last_reported_lossy_utilization_ = encoded_frame->lossy_utilization;
-
-  TRACE_EVENT_ASYNC_END2("cast.stream", "Video Encode", video_frame.get(),
-                         "encoder_utilization",
-                         last_reported_encoder_utilization_,
-                         "lossy_utilization", last_reported_lossy_utilization_);
-
-  // Report the resource utilization for processing this frame.  Take the
-  // greater of the two utilization values and attenuate them such that the
-  // target utilization is reported as the maximum sustainable amount.
-  const double attenuated_utilization =
-      std::max(last_reported_encoder_utilization_,
-               last_reported_lossy_utilization_) /
-      (kTargetUtilizationPercentage / 100.0);
-  if (attenuated_utilization >= 0.0) {
-    // Key frames are artificially capped to 1.0 because their actual
-    // utilization is atypical compared to the other frames in the stream, and
-    // this can misguide the producer of the input video frames.
-    VideoCaptureFeedback feedback;
-    feedback.resource_utilization =
-        encoded_frame->dependency == EncodedFrame::KEY
-            ? std::min(1.0, attenuated_utilization)
-            : attenuated_utilization;
-    if (feedback_cb_)
-      feedback_cb_.Run(feedback);
+  TRACE_EVENT_END("cast.stream", GetTracingTrack(video_frame.get()),
+                  "encoder_utilization", last_reported_encoder_utilization_,
+                  "lossiness", last_reported_lossiness_);
+  // The encode failed.
+  if (!encoded_frame) {
+    DVLOG(3) << "Encode failed";
+    return;
   }
 
-  SendEncodedFrame(encoder_bitrate, std::move(encoded_frame));
+  // The encoder dropped the frame, typically due to rate control.
+  if (encoded_frame->data.empty()) {
+    OnFrameDroppedByEncoder(*encoded_frame);
+    return;
+  }
+
+  last_reported_encoder_utilization_ = encoded_frame->encoder_utilization;
+  last_reported_lossiness_ = encoded_frame->lossiness;
+
+  if (last_reported_encoder_utilization_ >= 0.0) {
+    encoder_utilization_sum_ += last_reported_encoder_utilization_;
+    ++encoder_utilization_samples_;
+    if (last_reported_encoder_utilization_ > 1.0) {
+      ++encoder_overutilized_frames_;
+    }
+  }
+
+  // Report the resource utilization for processing this frame.
+  ReportResourceUtilization(
+      std::max(last_reported_encoder_utilization_, last_reported_lossiness_),
+      encoded_frame->is_key_frame);
+
+  const RtpTimeTicks rtp_timestamp = encoded_frame->rtp_timestamp;
+  const CastStreamingFrameDropReason reason =
+      frame_sender_->EnqueueFrame(std::move(encoded_frame));
+  if (reason != CastStreamingFrameDropReason::kNotDropped) {
+    video_encoder_->GenerateKeyFrame();
+
+    base::UmaHistogramEnumeration(kHistogramFrameDropped, reason);
+    TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop (already encoded)",
+                        "rtp_timestamp", rtp_timestamp.lower_32_bits(),
+                        "reason", reason);
+  }
 }
 
-}  // namespace cast
-}  // namespace media
+void VideoSender::OnFrameDroppedByEncoder(
+    const SenderEncodedFrame& encoded_frame) {
+  DVLOG(3) << "Frame dropped by encoder";
+  // Counted separately from `number_of_frames_dropped_`, which tracks
+  // sender-side (network or receiver) drops and is used to gate bandwidth
+  // reductions in the session.
+  number_of_frames_dropped_by_encoder_++;
+  frame_sender_->ReportFrameDroppedByEncoder(encoded_frame.rtp_timestamp);
+  base::UmaHistogramEnumeration(
+      kHistogramFrameDropped, CastStreamingFrameDropReason::kDroppedByEncoder);
+  TRACE_EVENT_INSTANT("cast.stream", "Video Frame Drop (encoder)",
+                      "rtp_timestamp",
+                      encoded_frame.rtp_timestamp.lower_32_bits());
+
+  // The encoder utilization is still measured for dropped frames, but
+  // lossiness is not meaningful for an empty output.
+  last_reported_encoder_utilization_ = encoded_frame.encoder_utilization;
+  ReportResourceUtilization(
+      std::max({last_reported_encoder_utilization_, last_reported_lossiness_,
+                kEncoderDroppedFrameUtilization}),
+      /*is_key_frame=*/false);
+}
+
+void VideoSender::ReportResourceUtilization(double utilization,
+                                            bool is_key_frame) {
+  // Attenuate the utilization such that the target utilization is reported as
+  // the maximum sustainable amount.
+  const double attenuated_utilization =
+      utilization / (kTargetUtilizationPercentage / 100.0);
+  if (attenuated_utilization < 0.0) {
+    return;
+  }
+
+  // Key frames are artificially capped to 1.0 because their actual
+  // utilization is atypical compared to the other frames in the stream, and
+  // this can misguide the producer of the input video frames.
+  VideoCaptureFeedback feedback;
+  feedback.resource_utilization = is_key_frame
+                                      ? std::min(1.0, attenuated_utilization)
+                                      : attenuated_utilization;
+  if (feedback_cb_) {
+    feedback_cb_.Run(feedback);
+  }
+}
+
+}  // namespace media::cast

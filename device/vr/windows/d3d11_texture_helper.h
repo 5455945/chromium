@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,22 @@
 #include <DXGI1_4.h>
 #include <wrl.h>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/win/scoped_handle.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "ui/gfx/geometry/rect_f.h"
 
+namespace viz {
+class ContextProvider;
+}
 namespace device {
 
 class D3D11TextureHelper {
  public:
   D3D11TextureHelper();
   ~D3D11TextureHelper();
-
-  void Reset();
 
   bool EnsureInitialized();
   bool SetAdapterLUID(const LUID& luid);
@@ -29,11 +33,18 @@ class D3D11TextureHelper {
   void CleanupNoSubmit();
   void SetSourceAndOverlayVisible(bool source_visible, bool overlay_visible);
 
-  bool CompositeToBackBuffer();
-  void SetSourceTexture(base::win::ScopedHandle texture_handle,
+  bool CopyToBackBuffer(
+      const scoped_refptr<viz::ContextProvider>& context_provider,
+      Microsoft::WRL::ComPtr<ID3D11Texture2D> source);
+  bool CompositeToBackBuffer(
+      const scoped_refptr<viz::ContextProvider>& context_provider);
+
+  void SetSourceTexture(scoped_refptr<gpu::ClientSharedImage> shared_image,
+                        const gpu::SyncToken& sync_token,
                         gfx::RectF left,
                         gfx::RectF right);
-  bool SetOverlayTexture(base::win::ScopedHandle texture_handle,
+  bool SetOverlayTexture(scoped_refptr<gpu::ClientSharedImage> shared_image,
+                         const gpu::SyncToken& sync_token,
                          gfx::RectF left,
                          gfx::RectF right);
 
@@ -44,8 +55,11 @@ class D3D11TextureHelper {
     force_viewport_ = true;
   }
   gfx::Size BackBufferSize() { return target_size_; }
-  void SetBackbuffer(Microsoft::WRL::ComPtr<ID3D11Texture2D> back_buffer);
+  void SetBackbuffer(Microsoft::WRL::ComPtr<ID3D11Texture2D> back_buffer,
+                     bool contains_source = false,
+                     bool y_flipped = false);
   Microsoft::WRL::ComPtr<ID3D11Device> GetDevice();
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> GetDeviceContext();
 
   void SetDefaultSize(gfx::Size size) { default_size_ = size; }
 
@@ -58,6 +72,8 @@ class D3D11TextureHelper {
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> shader_resource_;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
     Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyed_mutex_;
+    scoped_refptr<gpu::ClientSharedImage> shared_image_;
+    gpu::SyncToken sync_token_;
     gfx::RectF left_;   // 0 to 1 in each direction
     gfx::RectF right_;  // 0 to 1 in each direction
     bool submitted_this_frame_ = false;
@@ -105,6 +121,9 @@ class D3D11TextureHelper {
 
   bool bgra_ = false;
   bool force_viewport_ = false;
+
+  bool backbuffer_contains_source_ = false;
+  bool backbuffer_y_flipped_ = false;
 
   gfx::RectF target_left_;   // 0 to 1 in each direction
   gfx::RectF target_right_;  // 0 to 1 in each direction

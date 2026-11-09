@@ -1,12 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/error_page/content/browser/net_error_auto_reloader.h"
 
 #include <algorithm>
+#include <array>
+#include <map>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
@@ -48,20 +50,39 @@ bool ShouldAutoReload(content::NavigationHandle* handle) {
          handle->GetURL().SchemeIsHTTPOrHTTPS() &&
          // Don't auto reload if the error was a secure DNS network error, since
          // the reload may interfere with the captive portal probe state.
-         // TODO(crbug.com/1016164): Explore how to allow reloads for secure DNS
-         // network errors without interfering with the captive portal probe
+         // TODO(crbug.com/40104002): Explore how to allow reloads for secure
+         // DNS network errors without interfering with the captive portal probe
          // state.
          !handle->GetResolveErrorInfo().is_secure_network_error &&
          // Don't auto reload if the error is caused by the server returning a
          // non-2xx HTTP response code.
-         net_error != net::ERR_HTTP_RESPONSE_CODE_FAILURE;
+         net_error != net::ERR_HTTP_RESPONSE_CODE_FAILURE &&
+         // Do not auto-reload if the error is caused by private network access
+         // preflight failures because user reloads have different initiator
+         // policies.
+         net_error != net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS &&
+         // Do not auto-reload if the error is caused by connection allowlist.
+         net_error != net::ERR_NETWORK_ACCESS_REVOKED &&
+         // Do not auto-reload unsafe redirects. Among other things, this error
+         // is used when a redirect is blocked by the initiator's connection
+         // allowlist, and since auto-reloads are browser-initiated, they would
+         // not be subject to the initiator's connection allowlist. As a result,
+         // the reload would succeed, which is not how the allowlist is expected
+         // to behave.
+         net_error != net::ERR_UNSAFE_REDIRECT;
 }
 
 base::TimeDelta GetNextReloadDelay(size_t reload_count) {
-  static const int kDelaysMs[] = {1000,   5000,   30000,  60000,
-                                  300000, 600000, 1800000};
-  return base::TimeDelta::FromMilliseconds(
-      kDelaysMs[std::min(reload_count, base::size(kDelaysMs) - 1)]);
+  constexpr static const auto kDelays = std::to_array<base::TimeDelta>({
+      base::Seconds(1),
+      base::Seconds(5),
+      base::Seconds(30),
+      base::Minutes(1),
+      base::Minutes(5),
+      base::Minutes(10),
+      base::Minutes(30),
+  });
+  return kDelays[std::min(reload_count, std::size(kDelays) - 1)];
 }
 
 // Helper to block a navigation that would result in re-committing the same
@@ -71,9 +92,9 @@ class IgnoreDuplicateErrorThrottle : public content::NavigationThrottle {
   using ShouldSuppressCallback =
       base::OnceCallback<bool(content::NavigationHandle*)>;
 
-  IgnoreDuplicateErrorThrottle(content::NavigationHandle* handle,
+  IgnoreDuplicateErrorThrottle(content::NavigationThrottleRegistry& registry,
                                ShouldSuppressCallback should_suppress)
-      : content::NavigationThrottle(handle),
+      : content::NavigationThrottle(registry),
         should_suppress_(std::move(should_suppress)) {
     DCHECK(should_suppress_);
   }
@@ -85,8 +106,9 @@ class IgnoreDuplicateErrorThrottle : public content::NavigationThrottle {
   // content::NavigationThrottle:
   content::NavigationThrottle::ThrottleCheckResult WillFailRequest() override {
     DCHECK(should_suppress_);
-    if (std::move(should_suppress_).Run(navigation_handle()))
+    if (std::move(should_suppress_).Run(navigation_handle())) {
       return content::NavigationThrottle::ThrottleAction::CANCEL;
+    }
     return content::NavigationThrottle::ThrottleAction::PROCEED;
   }
 
@@ -108,10 +130,11 @@ NetErrorAutoReloader::ErrorPageInfo::~ErrorPageInfo() = default;
 
 NetErrorAutoReloader::NetErrorAutoReloader(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
+      content::WebContentsUserData<NetErrorAutoReloader>(*web_contents),
       connection_tracker_(content::GetNetworkConnectionTracker()) {
   connection_tracker_->AddNetworkConnectionObserver(this);
 
-  network::mojom::ConnectionType connection_type;
+  net::NetworkChangeNotifier::ConnectionType connection_type;
   if (connection_tracker_->GetConnectionType(
           &connection_type,
           base::BindOnce(&NetErrorAutoReloader::SetInitialConnectionType,
@@ -123,49 +146,75 @@ NetErrorAutoReloader::NetErrorAutoReloader(content::WebContents* web_contents)
 NetErrorAutoReloader::~NetErrorAutoReloader() {
   // NOTE: Tests may call `DisableConnectionChangeObservationForTesting` to null
   // this out.
-  if (connection_tracker_)
+  if (connection_tracker_) {
     connection_tracker_->RemoveNetworkConnectionObserver(this);
+  }
 }
 
 // static
-std::unique_ptr<content::NavigationThrottle>
-NetErrorAutoReloader::MaybeCreateThrottleFor(
-    content::NavigationHandle* handle) {
+void NetErrorAutoReloader::MaybeCreateAndAddNavigationThrottle(
+    content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  if (!handle.IsInPrimaryMainFrame()) {
+    return;
+  }
+
   // Note that `CreateForWebContents` is a no-op if `contents` already has a
   // NetErrorAutoReloader. See WebContentsUserData.
-  content::WebContents* contents = handle->GetWebContents();
+  content::WebContents* contents = handle.GetWebContents();
   CreateForWebContents(contents);
-  return FromWebContents(contents)->MaybeCreateThrottle(handle);
+  FromWebContents(contents)->MaybeCreateAndAdd(registry);
 }
 
 void NetErrorAutoReloader::DidStartNavigation(
     content::NavigationHandle* handle) {
-  if (!handle->IsInMainFrame())
+  if (!handle->IsInPrimaryMainFrame()) {
     return;
+  }
 
   // Suppress automatic reload as long as any navigations are pending.
   PauseAutoReloadTimerIfRunning();
-  pending_navigations_.insert(handle);
+  pending_navigations_.emplace(handle, IsSuppressedErrorPage(false));
 }
 
 void NetErrorAutoReloader::DidFinishNavigation(
     content::NavigationHandle* handle) {
-  if (!handle->IsInMainFrame())
+  if (!handle->IsInPrimaryMainFrame()) {
     return;
+  }
 
-  pending_navigations_.erase(handle);
+  auto pending_navigation = pending_navigations_.find(handle);
+  bool is_suppressed_error_page = false;
+  // Per comments above MaybeCreateAndAddNavigationThrottle(), the
+  // NetErrorAutoReloader is only created for a WebContents as needed, when
+  // creating throttles, so it never receives the navigation start event for a
+  // tab's initial navigation, and as a result, the first navigation is never
+  // added to `pending_navigations_`. This isn't a problem, as the
+  // NetErrorAutoReloader doesn't do anything until after an error page commits,
+  // but it does mean that we have to handle the case where the committed
+  // navigation isn't listed in `pending_navigations_`.
+  if (pending_navigation != pending_navigations_.end()) {
+    is_suppressed_error_page =
+        pending_navigation->second == IsSuppressedErrorPage(true);
+    pending_navigations_.erase(pending_navigation);
+  }
+
   if (!handle->HasCommitted()) {
     // This navigation was cancelled and not committed. If there are still other
     // pending navigations, or we aren't sitting on a error page which allows
     // auto-reload, there's nothing to do.
-    if (!pending_navigations_.empty() || !current_reloadable_error_page_info_)
+    if (!pending_navigations_.empty() || !current_reloadable_error_page_info_) {
       return;
+    }
 
-    // The last pending navigation was just cancelled and we're sitting on an
-    // error page which allows auto-reload. Schedule the next auto-reload
-    // attempt.
+    // There are no pending navigations, so there's no auto-reload in progress.
     is_auto_reload_in_progress_ = false;
-    ScheduleNextAutoReload();
+
+    // The last pending navigation was just cancelled due to resulting in an
+    // identical error page as before. Schedule the next auto-reload attempt.
+    if (is_suppressed_error_page) {
+      ScheduleNextAutoReload();
+    }
     return;
   }
 
@@ -193,8 +242,9 @@ void NetErrorAutoReloader::DidFinishNavigation(
   // We only schedule a reload if there are no other pending navigations.
   // If there are and they end up getting terminated without a commit, we
   // will schedule the next auto-reload at that time.
-  if (pending_navigations_.empty())
+  if (pending_navigations_.empty()) {
     ScheduleNextAutoReload();
+  }
 }
 
 void NetErrorAutoReloader::NavigationStopped() {
@@ -216,8 +266,9 @@ void NetErrorAutoReloader::OnVisibilityChanged(content::Visibility visibility) {
 }
 
 void NetErrorAutoReloader::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
-  is_online_ = (type != network::mojom::ConnectionType::CONNECTION_NONE);
+    net::NetworkChangeNotifier::ConnectionType type) {
+  is_online_ =
+      (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
   if (!is_online_) {
     PauseAutoReloadTimerIfRunning();
   } else if (pending_navigations_.empty()) {
@@ -239,11 +290,12 @@ void NetErrorAutoReloader::DisableConnectionChangeObservationForTesting() {
 }
 
 void NetErrorAutoReloader::SetInitialConnectionType(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   // NOTE: Tests may call `DisableConnectionChangeObservationForTesting` to null
   // this out.
-  if (connection_tracker_)
+  if (connection_tracker_) {
     OnConnectionChanged(type);
+  }
 }
 
 bool NetErrorAutoReloader::IsWebContentsVisible() {
@@ -262,14 +314,16 @@ void NetErrorAutoReloader::PauseAutoReloadTimerIfRunning() {
 }
 
 void NetErrorAutoReloader::ResumeAutoReloadIfPaused() {
-  if (current_reloadable_error_page_info_ && !next_reload_timer_)
+  if (current_reloadable_error_page_info_ && !next_reload_timer_) {
     ScheduleNextAutoReload();
+  }
 }
 
 void NetErrorAutoReloader::ScheduleNextAutoReload() {
   DCHECK(current_reloadable_error_page_info_);
-  if (!is_online_ || !IsWebContentsVisible())
+  if (!is_online_ || !IsWebContentsVisible()) {
     return;
+  }
 
   // Note that Unretained is safe here because base::OneShotTimer will never
   // run its callback once destructed.
@@ -282,30 +336,34 @@ void NetErrorAutoReloader::ScheduleNextAutoReload() {
 
 void NetErrorAutoReloader::ReloadMainFrame() {
   DCHECK(current_reloadable_error_page_info_);
-  if (!is_online_ || !IsWebContentsVisible())
+  if (!is_online_ || !IsWebContentsVisible()) {
     return;
+  }
 
   ++num_reloads_for_current_error_;
   is_auto_reload_in_progress_ = true;
-  web_contents()->GetMainFrame()->Reload();
+  web_contents()->GetPrimaryMainFrame()->Reload();
 }
 
-std::unique_ptr<content::NavigationThrottle>
-NetErrorAutoReloader::MaybeCreateThrottle(content::NavigationHandle* handle) {
-  DCHECK(handle->IsInMainFrame());
+void NetErrorAutoReloader::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  DCHECK(handle.IsInPrimaryMainFrame());
   if (!current_reloadable_error_page_info_ ||
-      current_reloadable_error_page_info_->url != handle->GetURL() ||
+      current_reloadable_error_page_info_->url != handle.GetURL() ||
       !is_auto_reload_in_progress_) {
-    return nullptr;
+    return;
   }
 
-  return std::make_unique<IgnoreDuplicateErrorThrottle>(
-      handle, base::BindOnce(&NetErrorAutoReloader::ShouldSuppressErrorPage,
-                             base::Unretained(this)));
+  registry.AddThrottle(std::make_unique<IgnoreDuplicateErrorThrottle>(
+      registry, base::BindOnce(&NetErrorAutoReloader::ShouldSuppressErrorPage,
+                               base::Unretained(this))));
 }
 
 bool NetErrorAutoReloader::ShouldSuppressErrorPage(
     content::NavigationHandle* handle) {
+  DCHECK(pending_navigations_.contains(handle));
+
   // We already verified these conditions when the throttle was created, but now
   // that the throttle is about to fail its navigation, we double-check in case
   // another navigation has committed in the interim.
@@ -315,9 +373,10 @@ bool NetErrorAutoReloader::ShouldSuppressErrorPage(
     return false;
   }
 
+  pending_navigations_[handle] = IsSuppressedErrorPage(true);
   return true;
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(NetErrorAutoReloader)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(NetErrorAutoReloader);
 
 }  // namespace error_page

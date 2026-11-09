@@ -23,13 +23,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_LINKED_HASH_SET_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_LINKED_HASH_SET_H_
 
+#include <iterator>
+
 #include "third_party/blink/renderer/platform/wtf/allocator/partition_allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/sanitizers.h"
+#include "third_party/blink/renderer/platform/wtf/type_traits.h"
 #include "third_party/blink/renderer/platform/wtf/vector_backed_linked_list.h"
 
-namespace WTF {
+namespace blink {
 
 // LinkedHashSet provides a Set interface like HashSet, but also has a
 // predictable iteration order. It has O(1) insertion, removal, and test for
@@ -38,9 +41,18 @@ namespace WTF {
 // The linked list is implementing in a vector (with links being indexes instead
 // of pointers), to simplify the move of backing during GC compaction.
 //
-// Unlike ListHashSet, this container supports WeakMember<T>.
+// This container supports WeakMember<T>.
 //
-// LinkedHashSet iterators are invalidated by mutation of the collection.
+// LinkedHashSet iterators are not invalidated by mutation of the
+// collection, unless they point to removed items. This means, for example, that
+// you can safely modify the container while iterating over it generally, as
+// long as you don't remove the current item. Moving items does not invalidate
+// iterator, so that it may cause unexpected behavior (i.e. loop unexpectedly
+// ends when moving the current item to last).
+// However, this does NOT apply to HeapLinkedHashSet<WeakMember<T>> and
+// GCedHeapLinkedHashSet<WeakMember<T>>: modifying a weak LinkedHashSet while an
+// iterator is active is not allowed because rehashing the underlying map
+// invalidates the internal iterator used to strongify weak entries during GC.
 //
 // Note: empty/deleted values as defined in HashTraits are not allowed.
 template <typename ValueArg,
@@ -51,18 +63,20 @@ class LinkedHashSet {
 
  private:
   using Value = ValueArg;
-  using Map = HashMap<Value,
-                      wtf_size_t,
-                      typename DefaultHash<Value>::Hash,
-                      TraitsArg,
-                      HashTraits<wtf_size_t>,
-                      Allocator>;
+  using Map =
+      HashMap<Value, wtf_size_t, TraitsArg, HashTraits<wtf_size_t>, Allocator>;
   using ListType = VectorBackedLinkedList<Value, Allocator>;
   using BackingIterator = typename ListType::const_iterator;
   using BackingReverseIterator = typename ListType::const_reverse_iterator;
   using BackingConstIterator = typename ListType::const_iterator;
 
  public:
+  using value_type = ValueArg;
+  using reference = value_type&;
+  using const_reference = const value_type&;
+  using pointer = value_type*;
+  using const_pointer = const value_type*;
+
   // TODO(keinakashima): add security check
   struct AddResult final {
     STACK_ALLOCATED();
@@ -77,21 +91,50 @@ class LinkedHashSet {
   template <typename T>
   class IteratorWrapper {
    public:
-    const Value& operator*() const { return *(iterator_.Get()); }
-    const Value* operator->() const { return iterator_.Get(); }
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = typename T::value_type;
+    using size_type = typename T::size_type;
+    using difference_type = typename T::difference_type;
+    using pointer = typename T::pointer;
+    using reference = typename T::reference;
+
+    constexpr IteratorWrapper() = default;
+
+    IteratorWrapper(const IteratorWrapper&) = default;
+    IteratorWrapper& operator=(const IteratorWrapper&) = default;
+
+    const Value& operator*() const {
+      CheckModifications();
+      return *iterator_;
+    }
+    const Value* operator->() const {
+      CheckModifications();
+      return &*iterator_;
+    }
 
     IteratorWrapper& operator++() {
+      CheckModifications();
       ++iterator_;
       return *this;
     }
 
     IteratorWrapper& operator--() {
+      CheckModifications();
       --iterator_;
       return *this;
     }
 
-    IteratorWrapper& operator++(int) = delete;
-    IteratorWrapper& operator--(int) = delete;
+    IteratorWrapper operator++(int) {
+      auto copy = *this;
+      operator++();
+      return copy;
+    }
+
+    IteratorWrapper operator--(int) {
+      auto copy = *this;
+      operator--();
+      return copy;
+    }
 
     bool operator==(const IteratorWrapper& other) const {
       // No need to compare map_iterator_ here because it is not related to
@@ -100,13 +143,15 @@ class LinkedHashSet {
       return iterator_ == other.iterator_;
     }
 
-    bool operator!=(const IteratorWrapper& other) const {
-      return !(*this == other);
-    }
-
    protected:
     IteratorWrapper(const T& it, const Map& map)
         : iterator_(it), map_iterator_(map.begin()) {}
+
+    void CheckModifications() const {
+      if constexpr (IsWeakV<Value>) {
+        map_iterator_.impl_.CheckModifications();
+      }
+    }
 
     // LinkedHashSet::list_ iterator.
     T iterator_;
@@ -126,9 +171,9 @@ class LinkedHashSet {
   using reverse_iterator = IteratorWrapper<BackingReverseIterator>;
   using const_reverse_iterator = IteratorWrapper<BackingReverseIterator>;
 
-  typedef typename TraitsArg::PeekInType ValuePeekInType;
+  using ValuePeekInType = typename TraitsArg::PeekInType;
 
-  LinkedHashSet();
+  LinkedHashSet() = default;
   LinkedHashSet(const LinkedHashSet&) = default;
   LinkedHashSet(LinkedHashSet&&) = default;
   LinkedHashSet& operator=(const LinkedHashSet&) = default;
@@ -142,7 +187,7 @@ class LinkedHashSet {
     DCHECK(value_to_index_.size() == list_.size());
     return list_.size();
   }
-  bool IsEmpty() const { return list_.empty(); }
+  bool empty() const { return list_.empty(); }
 
   iterator begin() { return MakeIterator(list_.begin()); }
   const_iterator begin() const { return MakeIterator(list_.cbegin()); }
@@ -173,6 +218,16 @@ class LinkedHashSet {
   const_iterator find(ValuePeekInType) const;
   bool Contains(ValuePeekInType) const;
 
+  // An alternate version of find() that finds the object by hashing and
+  // comparing with some other type, to avoid the cost of type conversion.
+  // The HashTranslator interface is defined in HashSet.
+  template <typename HashTranslator, typename T>
+  iterator Find(const T&);
+  template <typename HashTranslator, typename T>
+  const_iterator Find(const T&) const;
+  template <typename HashTranslator, typename T>
+  bool Contains(const T&) const;
+
   template <typename IncomingValueType>
   AddResult insert(IncomingValueType&&);
 
@@ -191,15 +246,19 @@ class LinkedHashSet {
   template <typename IncomingValueType>
   AddResult PrependOrMoveToFirst(IncomingValueType&&);
 
+  // Moves |target| right before |new_position| in a linked list. This operation
+  // is executed by just updating indices of related nodes.
+  void MoveTo(const_iterator target, const_iterator new_position);
+
   void erase(ValuePeekInType);
   void erase(const_iterator);
   void RemoveFirst();
   void pop_back();
   void clear();
 
-  template <typename VisitorDispatcher, typename A = Allocator>
-  std::enable_if_t<A::kIsGarbageCollected> Trace(
-      VisitorDispatcher visitor) const {
+  void Trace(auto visitor) const
+    requires Allocator::kIsGarbageCollected
+  {
     value_to_index_.Trace(visitor);
     list_.Trace(visitor);
   }
@@ -229,18 +288,21 @@ class LinkedHashSet {
     return reverse_iterator(it, value_to_index_);
   }
 
-  Map value_to_index_;
-  ListType list_;
-};
+  GC_PLUGIN_IGNORE("crbug.com/428987863") Map value_to_index_;
+  GC_PLUGIN_IGNORE("crbug.com/428987863") ListType list_;
 
-template <typename T, typename TraitsArg, typename Allocator>
-inline LinkedHashSet<T, TraitsArg, Allocator>::LinkedHashSet() {
-  static_assert(Allocator::kIsGarbageCollected ||
-                    !IsPointerToGarbageCollectedType<T>::value,
-                "Cannot put raw pointers to garbage-collected classes into "
-                "an off-heap LinkedHashSet. Use "
-                "HeapLinkedHashSet<Member<T>> instead.");
-}
+  struct TypeConstraints {
+    constexpr TypeConstraints() {
+      static_assert(!IsStackAllocatedTypeV<Value>);
+      static_assert(Allocator::kIsGarbageCollected ||
+                        !IsPointerToGarbageCollectedType<Value>,
+                    "Cannot put raw pointers to garbage-collected classes into "
+                    "an off-heap LinkedHashSet. Use "
+                    "HeapLinkedHashSet<Member<T>> instead.");
+    }
+  };
+  NO_UNIQUE_ADDRESS TypeConstraints type_constraints_;
+};
 
 template <typename T, typename TraitsArg, typename Allocator>
 inline void LinkedHashSet<T, TraitsArg, Allocator>::Swap(LinkedHashSet& other) {
@@ -272,6 +334,35 @@ template <typename T, typename TraitsArg, typename Allocator>
 bool LinkedHashSet<T, TraitsArg, Allocator>::Contains(
     ValuePeekInType value) const {
   return value_to_index_.Contains(value);
+}
+
+template <typename ValueType, typename TraitsArg, typename Allocator>
+template <typename HashTranslator, typename T>
+inline typename LinkedHashSet<ValueType, TraitsArg, Allocator>::iterator
+LinkedHashSet<ValueType, TraitsArg, Allocator>::Find(const T& value) {
+  typename Map::const_iterator it =
+      value_to_index_.template Find<HashTranslator>(value);
+  if (it == value_to_index_.end())
+    return end();
+  return MakeIterator(list_.MakeIterator(it->value));
+}
+
+template <typename ValueType, typename TraitsArg, typename Allocator>
+template <typename HashTranslator, typename T>
+inline typename LinkedHashSet<ValueType, TraitsArg, Allocator>::const_iterator
+LinkedHashSet<ValueType, TraitsArg, Allocator>::Find(const T& value) const {
+  typename Map::const_iterator it =
+      value_to_index_.template Find<HashTranslator>(value);
+  if (it == value_to_index_.end())
+    return end();
+  return MakeIterator(list_.MakeConstIterator(it->value));
+}
+
+template <typename ValueType, typename TraitsArg, typename Allocator>
+template <typename HashTranslator, typename T>
+bool LinkedHashSet<ValueType, TraitsArg, Allocator>::Contains(
+    const T& value) const {
+  return value_to_index_.template Contains<HashTranslator>(value);
 }
 
 template <typename T, typename TraitsArg, typename Allocator>
@@ -322,6 +413,13 @@ LinkedHashSet<T, TraitsArg, Allocator>::PrependOrMoveToFirst(
 }
 
 template <typename T, typename TraitsArg, typename Allocator>
+void LinkedHashSet<T, TraitsArg, Allocator>::MoveTo(
+    const_iterator target,
+    const_iterator new_position) {
+  list_.MoveTo(target.iterator_, new_position.iterator_);
+}
+
+template <typename T, typename TraitsArg, typename Allocator>
 inline void LinkedHashSet<T, TraitsArg, Allocator>::erase(
     ValuePeekInType value) {
   erase(find(value));
@@ -342,13 +440,13 @@ inline void LinkedHashSet<T, TraitsArg, Allocator>::erase(const_iterator it) {
 
 template <typename T, typename TraitsArg, typename Allocator>
 inline void LinkedHashSet<T, TraitsArg, Allocator>::RemoveFirst() {
-  DCHECK(!IsEmpty());
+  DCHECK(!empty());
   erase(begin());
 }
 
 template <typename T, typename TraitsArg, typename Allocator>
 inline void LinkedHashSet<T, TraitsArg, Allocator>::pop_back() {
-  DCHECK(!IsEmpty());
+  DCHECK(!empty());
   erase(--end());
 }
 
@@ -379,21 +477,19 @@ LinkedHashSet<T, TraitsArg, Allocator>::InsertOrMoveBefore(
     BackingConstIterator stored_position_iterator = list_.insert(
         position.iterator_, std::forward<IncomingValueType>(value));
     result.stored_value->value = stored_position_iterator.GetIndex();
-    return AddResult(stored_position_iterator.Get(), true);
+    return AddResult(&*stored_position_iterator, true);
   }
 
   BackingConstIterator stored_position_iterator =
       list_.MakeConstIterator(result.stored_value->value);
   if (type == MoveType::kDontMove)
-    return AddResult(stored_position_iterator.Get(), false);
+    return AddResult(&*stored_position_iterator, false);
 
   BackingConstIterator moved_position_iterator =
       list_.MoveTo(stored_position_iterator, position.iterator_);
-  return AddResult(moved_position_iterator.Get(), false);
+  return AddResult(&*moved_position_iterator, false);
 }
 
-}  // namespace WTF
-
-using WTF::LinkedHashSet;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_LINKED_HASH_SET_H_

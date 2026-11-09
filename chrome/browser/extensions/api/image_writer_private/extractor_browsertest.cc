@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,19 @@
 #include "base/run_loop.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
-#include "chrome/browser/extensions/api/image_writer_private/error_messages.h"
+#include "base/threading/thread_restrictions.h"
+#include "chrome/browser/extensions/api/image_writer_private/error_constants.h"
 #include "chrome/browser/extensions/api/image_writer_private/extraction_properties.h"
+#include "chrome/browser/extensions/api/image_writer_private/tar_extractor.h"
 #include "chrome/browser/extensions/api/image_writer_private/test_utils.h"
 #include "chrome/browser/extensions/api/image_writer_private/xz_extractor.h"
+#include "chrome/browser/extensions/api/image_writer_private/zip_extractor.h"
+#include "chrome/browser/extensions/api/image_writer_private/zstd_extractor.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
+#include "third_party/zlib/google/zip.h"
 
-namespace extensions {
-namespace image_writer {
+namespace extensions::image_writer {
 
 using ::testing::_;
 using ::testing::NiceMock;
@@ -54,8 +58,28 @@ class ExtractorBrowserTest : public InProcessBrowserTest {
   base::ScopedTempDir temp_dir_;
 };
 
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractTar) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  base::FilePath test_data_dir;
+  ASSERT_TRUE(GetTestDataDirectory(&test_data_dir));
+  properties_.image_path = test_data_dir.AppendASCII("test.tar");
+
+  base::FilePath out_path;
+  base::RunLoop run_loop;
+  EXPECT_CALL(open_callback_, Run(_)).WillOnce(SaveArg<0>(&out_path));
+  EXPECT_CALL(complete_callback_, Run())
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  TarExtractor::Extract(std::move(properties_));
+  run_loop.Run();
+
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(out_path, &contents));
+  EXPECT_EQ("foo\n", contents);
+}
+
 IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractTarXz) {
-  base::ThreadRestrictions::SetIOAllowed(true);
+  base::ScopedAllowBlockingForTesting allow_blocking;
 
   base::FilePath test_data_dir;
   ASSERT_TRUE(GetTestDataDirectory(&test_data_dir));
@@ -75,7 +99,7 @@ IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractTarXz) {
 }
 
 IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractNonExistentTarXz) {
-  base::ThreadRestrictions::SetIOAllowed(true);
+  base::ScopedAllowBlockingForTesting allow_blocking;
 
   base::FilePath test_data_dir;
   ASSERT_TRUE(GetTestDataDirectory(&test_data_dir));
@@ -88,5 +112,139 @@ IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractNonExistentTarXz) {
   run_loop.Run();
 }
 
-}  // namespace image_writer
-}  // namespace extensions
+// Tests that an archive containing a single 0-byte file is successfully
+// extracted. This validates that the utility process correctly handles empty
+// files and without sending invalid progress events.
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ZeroByteTarXzFile) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  // Use a tar.xz containing an empty file.
+  base::FilePath test_data_dir;
+  ASSERT_TRUE(GetTestDataDirectory(&test_data_dir));
+  properties_.image_path = test_data_dir.AppendASCII("empty_file.tar.xz");
+
+  base::FilePath out_path;
+  base::RunLoop run_loop;
+  EXPECT_CALL(open_callback_, Run(_)).WillOnce(SaveArg<0>(&out_path));
+
+  EXPECT_CALL(complete_callback_, Run())
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+
+  // Calling progress callback with total bytes == 0 causes 0 division, so it
+  // should not be called.
+  EXPECT_CALL(progress_callback_, Run(0, _)).Times(0);
+  XzExtractor::Extract(std::move(properties_));
+  run_loop.Run();
+
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(out_path, &contents));
+  EXPECT_TRUE(contents.empty());
+}
+
+// Tests that a zip archive containing a 0-byte file is successfully extracted.
+// This verifies that the browser-process ZipExtractor handles empty entries
+// without sending invalid progress events.
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ZeroByteZipFile) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  base::FilePath temp_dir_path;
+  base::CreateTemporaryDirInDir(temp_dir_.GetPath(),
+                                FILE_PATH_LITERAL("source"), &temp_dir_path);
+  base::FilePath empty_data_file = temp_dir_path.AppendASCII("empty");
+  ASSERT_TRUE(base::WriteFile(empty_data_file, /*data=*/""));
+
+  base::FilePath zip_file = temp_dir_.GetPath().AppendASCII("empty_file.zip");
+  ASSERT_TRUE(
+      zip::Zip(temp_dir_path, zip_file, /*include_hidden_files=*/false));
+
+  properties_.image_path = zip_file;
+
+  base::FilePath out_path;
+  base::RunLoop run_loop;
+  EXPECT_CALL(open_callback_, Run(_)).WillOnce(SaveArg<0>(&out_path));
+  EXPECT_CALL(complete_callback_, Run())
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  EXPECT_CALL(progress_callback_, Run(_, _)).Times(0);
+
+  ZipExtractor::Extract(std::move(properties_));
+  run_loop.Run();
+}
+
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractBigTarXzFile) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  base::FilePath test_data_dir;
+  ASSERT_TRUE(GetTestDataDirectory(&test_data_dir));
+  properties_.image_path = test_data_dir.AppendASCII("2MBzeros.tar.xz");
+
+  base::FilePath out_path;
+  base::RunLoop run_loop;
+  EXPECT_CALL(open_callback_, Run(_)).WillOnce(SaveArg<0>(&out_path));
+  EXPECT_CALL(complete_callback_, Run())
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  XzExtractor::Extract(std::move(properties_));
+  run_loop.Run();
+
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(out_path, &contents));
+  EXPECT_EQ(contents, std::string(2097152, '\0'));
+}
+
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractZstd) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  base::FilePath zstd_file = temp_dir_.GetPath().AppendASCII("test.zst");
+  constexpr uint8_t kZstdTestFrame[] = {
+      0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x04, 0x21, 0x00, 0x00, 'f', 'o', 'o', '\n',
+  };
+  ASSERT_TRUE(base::WriteFile(zstd_file, kZstdTestFrame));
+  properties_.image_path = zstd_file;
+
+  base::FilePath out_path;
+  base::RunLoop run_loop;
+  EXPECT_CALL(open_callback_, Run(_)).WillOnce(SaveArg<0>(&out_path));
+  EXPECT_CALL(complete_callback_, Run())
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  std::unique_ptr<ZstdExtractor> extractor =
+      ZstdExtractor::Extract(std::move(properties_));
+  run_loop.Run();
+
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(out_path, &contents));
+  EXPECT_EQ("foo\n", contents);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, ExtractNonExistentZstd) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  properties_.image_path = temp_dir_.GetPath().AppendASCII("non_existent.zst");
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(failure_callback_, Run(error::kUnzipGenericError))
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  std::unique_ptr<ZstdExtractor> extractor =
+      ZstdExtractor::Extract(std::move(properties_));
+  run_loop.Run();
+}
+
+IN_PROC_BROWSER_TEST_F(ExtractorBrowserTest, CancelExtractZstd) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  base::FilePath zstd_file = temp_dir_.GetPath().AppendASCII("test.zst");
+  constexpr uint8_t kZstdTestFrame[] = {
+      0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x04, 0x21, 0x00, 0x00, 'f', 'o', 'o', '\n',
+  };
+  ASSERT_TRUE(base::WriteFile(zstd_file, kZstdTestFrame));
+  properties_.image_path = zstd_file;
+
+  EXPECT_CALL(open_callback_, Run(_)).Times(1);
+  EXPECT_CALL(complete_callback_, Run()).Times(0);
+  EXPECT_CALL(failure_callback_, Run(_)).Times(0);
+
+  std::unique_ptr<ZstdExtractor> extractor =
+      ZstdExtractor::Extract(std::move(properties_));
+  extractor.reset();
+  base::RunLoop().RunUntilIdle();
+}
+
+}  // namespace extensions::image_writer

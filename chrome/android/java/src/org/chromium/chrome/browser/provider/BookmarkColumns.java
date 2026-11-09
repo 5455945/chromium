@@ -1,16 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.provider;
 
-/**
- * Copy of android.provider.Browser.BookmarkColumns.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Copy of android.provider.Browser.BookmarkColumns. */
+@NullMarked
 public class BookmarkColumns implements BaseColumns {
     /**
      * The URL of the bookmark or history item.
-     * <p>Type: TEXT (URL)</p>
+     *
+     * <p>Type: TEXT (URL)
      */
     public static final String URL = "url";
 

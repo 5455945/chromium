@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,33 +23,34 @@ using ManifestKeys = api::omnibox::ManifestKeys;
 }  // namespace
 
 // static
+const char* OmniboxInfo::kManifestDataKey = ManifestKeys::kOmnibox;
+
+// static
 const std::string& OmniboxInfo::GetKeyword(const Extension* extension) {
-  OmniboxInfo* info = static_cast<OmniboxInfo*>(
-      extension->GetManifestData(ManifestKeys::kOmnibox));
+  const auto* info = extension->GetManifestData<OmniboxInfo>();
   return info ? info->keyword : base::EmptyString();
 }
 
-OmniboxHandler::OmniboxHandler() {
-}
+OmniboxHandler::OmniboxHandler() = default;
 
-OmniboxHandler::~OmniboxHandler() {
-}
+OmniboxHandler::~OmniboxHandler() = default;
 
 bool OmniboxHandler::Parse(Extension* extension, std::u16string* error) {
   ManifestKeys manifest_keys;
   if (!ManifestKeys::ParseFromDictionary(
-          extension->manifest()->available_values(), &manifest_keys, error)) {
+          extension->manifest()->available_values(), manifest_keys, *error)) {
     return false;
   }
 
+  CHECK(manifest_keys.omnibox.has_value());
   auto info = std::make_unique<OmniboxInfo>();
-  info->keyword = manifest_keys.omnibox.keyword;
+  info->keyword = manifest_keys.omnibox->keyword;
   if (info->keyword.empty()) {
-    *error = base::ASCIIToUTF16(manifest_errors::kEmptyOmniboxKeyword);
+    *error = manifest_errors::kEmptyOmniboxKeyword;
     return false;
   }
 
-  extension->SetManifestData(ManifestKeys::kOmnibox, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

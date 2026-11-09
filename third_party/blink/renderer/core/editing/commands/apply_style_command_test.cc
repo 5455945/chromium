@@ -1,18 +1,22 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/commands/apply_style_command.h"
 
+#include "build/build_config.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/editing_style.h"
+#include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/core/keywords.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -34,19 +38,20 @@ TEST_F(ApplyStyleCommandTest, RemoveRedundantBlocksWithStarEditableStyle) {
       "</li>"
       "</ul></div></div>");
 
-  Element* li = GetDocument().QuerySelector("li");
+  Element* li = QuerySelector("li");
 
   LocalFrame* frame = GetDocument().GetFrame();
   frame->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position(li, PositionAnchorType::kBeforeAnchor))
           .Build(),
       SetSelectionOptions());
 
   auto* style =
       MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
-  style->SetProperty(CSSPropertyID::kTextAlign, "center", /* important */ false,
-                     SecureContextMode::kInsecureContext);
+  style->ParseAndSetProperty(CSSPropertyID::kTextAlign, "center",
+                             /* important */ false,
+                             SecureContextMode::kInsecureContext);
   MakeGarbageCollected<ApplyStyleCommand>(
       GetDocument(), MakeGarbageCollected<EditingStyle>(style),
       InputEvent::InputType::kFormatJustifyCenter,
@@ -69,14 +74,15 @@ TEST_F(ApplyStyleCommandTest, JustifyRightDetachesDestination) {
       "</ruby");
   Element* body = GetDocument().body();
   // The bug doesn't reproduce with a contenteditable <div> as container.
-  body->setAttribute(html_names::kContenteditableAttr, "true");
+  body->setAttribute(html_names::kContenteditableAttr, keywords::kTrue);
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   Selection().SelectAll();
 
   auto* style =
       MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
-  style->SetProperty(CSSPropertyID::kTextAlign, "right", /* important */ false,
-                     SecureContextMode::kInsecureContext);
+  style->ParseAndSetProperty(CSSPropertyID::kTextAlign, "right",
+                             /* important */ false,
+                             SecureContextMode::kInsecureContext);
   MakeGarbageCollected<ApplyStyleCommand>(
       GetDocument(), MakeGarbageCollected<EditingStyle>(style),
       InputEvent::InputType::kFormatJustifyCenter,
@@ -93,15 +99,41 @@ TEST_F(ApplyStyleCommandTest, FontSizeDeltaWithSpanElement) {
       SetSelectionOptions());
 
   auto* style = MakeGarbageCollected<MutableCSSPropertyValueSet>(kUASheetMode);
-  style->SetProperty(CSSPropertyID::kInternalFontSizeDelta, "3px",
-                     /* important */ false,
-                     GetFrame().DomWindow()->GetSecureContextMode());
+  style->ParseAndSetProperty(CSSPropertyID::kInternalFontSizeDelta, "3px",
+                             /* important */ false,
+                             GetFrame().DomWindow()->GetSecureContextMode());
   MakeGarbageCollected<ApplyStyleCommand>(
       GetDocument(), MakeGarbageCollected<EditingStyle>(style),
       InputEvent::InputType::kNone)
       ->Apply();
-  EXPECT_EQ("<div contenteditable><div></div><span>^a|</span></div>",
-            GetSelectionTextFromBody());
+  EXPECT_EQ(
+      "<div contenteditable><div></div><span style=\"font-size: "
+      "4px;\">^a|</span><span></span></div>",
+      GetSelectionTextFromBody());
+}
+
+// This is a regression test for https://crbug.com/471876082
+TEST_F(ApplyStyleCommandTest, FontSizeDeltaWithPartiallySelectedSpans) {
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable><span>SPA^N1</span>#<span>spa|n2</span></div>"),
+      SetSelectionOptions());
+
+  auto* style = MakeGarbageCollected<MutableCSSPropertyValueSet>(kUASheetMode);
+  style->ParseAndSetProperty(CSSPropertyID::kInternalFontSizeDelta, "3px",
+                             /* important */ false,
+                             GetFrame().DomWindow()->GetSecureContextMode());
+  MakeGarbageCollected<ApplyStyleCommand>(
+      GetDocument(), MakeGarbageCollected<EditingStyle>(style),
+      InputEvent::InputType::kNone)
+      ->Apply();  // Shouldn't crash.
+
+  EXPECT_EQ(
+      "<div contenteditable><span>SPA<span style=\"font-size: "
+      "4px;\">^N1</span></span><span style=\"font-size: "
+      "4px;\">#</span><span><span style=\"font-size: "
+      "4px;\">spa|</span>n2</span></div>",
+      GetSelectionTextFromBody());
 }
 
 // This is a regression test for https://crbug.com/1172007
@@ -115,9 +147,9 @@ TEST_F(ApplyStyleCommandTest, JustifyRightWithSVGForeignObject) {
       SetSelectionOptions());
 
   auto* style = MakeGarbageCollected<MutableCSSPropertyValueSet>(kUASheetMode);
-  style->SetProperty(CSSPropertyID::kTextAlign, "right",
-                     /* important */ false,
-                     GetFrame().DomWindow()->GetSecureContextMode());
+  style->ParseAndSetProperty(CSSPropertyID::kTextAlign, "right",
+                             /* important */ false,
+                             GetFrame().DomWindow()->GetSecureContextMode());
   MakeGarbageCollected<ApplyStyleCommand>(
       GetDocument(), MakeGarbageCollected<EditingStyle>(style),
       InputEvent::InputType::kFormatJustifyRight,
@@ -125,11 +157,10 @@ TEST_F(ApplyStyleCommandTest, JustifyRightWithSVGForeignObject) {
       ->Apply();
   EXPECT_EQ(
       "<svg>"
-      "<foreignObject>"
-      "<div style=\"text-align: right;\">|1</div>"
+      "<foreignObject>|1"
       "</foreignObject>"
       "<foreignObject>"
-      "<div style=\"text-align: right;\">2</div><b></b>"
+      " 2<b></b>"
       "</foreignObject>"
       "</svg>",
       GetSelectionTextFromBody());
@@ -143,17 +174,19 @@ TEST_F(ApplyStyleCommandTest, JustifyCenterWithNonEditable) {
       SetSelectionOptions());
 
   auto* style = MakeGarbageCollected<MutableCSSPropertyValueSet>(kUASheetMode);
-  style->SetProperty(CSSPropertyID::kTextAlign, "center",
-                     /* important */ false,
-                     GetFrame().DomWindow()->GetSecureContextMode());
+  style->ParseAndSetProperty(CSSPropertyID::kTextAlign, "center",
+                             /* important */ false,
+                             GetFrame().DomWindow()->GetSecureContextMode());
   MakeGarbageCollected<ApplyStyleCommand>(
       GetDocument(), MakeGarbageCollected<EditingStyle>(style),
       InputEvent::InputType::kFormatJustifyCenter,
       ApplyStyleCommand::kForceBlockProperties)
       ->Apply();
 
-  EXPECT_EQ("<div style=\"text-align: center;\">|<br>x</div>",
-            GetSelectionTextFromBody());
+  EXPECT_EQ(
+      "<div style=\"text-align: center;\">|x</div><div "
+      "contenteditable=\"false\"></div>",
+      GetSelectionTextFromBody());
 }
 
 // This is a regression test for https://crbug.com/1199902
@@ -162,11 +195,62 @@ TEST_F(ApplyStyleCommandTest, StyledInlineElementIsActuallyABlock) {
   Selection().SetSelection(SetSelectionTextToBody("^<sub>a</sub>|"),
                            SetSelectionOptions());
   GetDocument().setDesignMode("on");
-  Element* styled_inline_element = GetDocument().QuerySelector("sub");
+  Element* styled_inline_element = QuerySelector("sub");
   bool remove_only = true;
   // Shouldn't crash.
   MakeGarbageCollected<ApplyStyleCommand>(styled_inline_element, remove_only)
       ->Apply();
   EXPECT_EQ("^a|", GetSelectionTextFromBody());
+}
+
+// This is a regression test for https://crbug.com/1239729
+TEST_F(ApplyStyleCommandTest, ItalicCrossingIgnoredContentBoundary) {
+  GetDocument().setDesignMode("on");
+  SetBodyContent("a<select multiple size=4><option></option></select>b");
+
+  Element* body = GetDocument().body();
+  Element* select = QuerySelector("select");
+  Element* option = QuerySelector("option");
+  EXPECT_FALSE(EditingIgnoresContent(*body));
+  EXPECT_TRUE(EditingIgnoresContent(*select));
+  EXPECT_FALSE(EditingIgnoresContent(*option));
+
+  Selection().SetSelection(SelectionInDomTree::Builder()
+                               .Collapse(Position(body, 0))
+                               .Extend(Position(option, 0))
+                               .Build(),
+                           SetSelectionOptions());
+
+  auto* style = MakeGarbageCollected<MutableCSSPropertyValueSet>(kUASheetMode);
+  style->ParseAndSetProperty(CSSPropertyID::kFontStyle, "italic",
+                             /* important */ false,
+                             GetFrame().DomWindow()->GetSecureContextMode());
+  MakeGarbageCollected<ApplyStyleCommand>(
+      GetDocument(), MakeGarbageCollected<EditingStyle>(style),
+      InputEvent::InputType::kFormatItalic)
+      ->Apply();
+
+  EXPECT_EQ("<i>^a<select multiple size=\"4\"><option>|</option></select></i>b",
+            GetSelectionTextFromBody());
+}
+
+// This is a regression test for https://crbug.com/1246190
+TEST_F(ApplyStyleCommandTest, RemoveEmptyItalic) {
+  GetDocument().setDesignMode("on");
+  InsertStyleElement("i {display: inline-block; width: 1px; height: 1px}");
+  SetBodyContent("<div><input><i></i>&#x20;</div>A");
+
+  Element* div = QuerySelector("div");
+  Element* i = QuerySelector("i");
+  Selection().SetSelection(
+      SelectionInDomTree::Builder().Collapse(Position(i, 0)).Build(),
+      SetSelectionOptions());
+  auto* command = MakeGarbageCollected<ApplyStyleCommand>(
+      GetDocument(), MakeGarbageCollected<EditingStyle>(div),
+      InputEvent::InputType::kFormatRemove);
+
+  // Shouldn't crash.
+  EXPECT_TRUE(command->Apply());
+  EXPECT_EQ("<div><input>| </div>A", GetSelectionTextFromBody());
 }
 }  // namespace blink

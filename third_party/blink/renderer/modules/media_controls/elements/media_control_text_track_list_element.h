@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,6 +31,9 @@ class MediaControlTextTrackListElement final
   // Creates the track element in the list when a valid track is passed in and
   // the "Off" item when the parameter is null.
   Element* CreateTextTrackListItem(TextTrack*);
+
+  // Creates the action row that opens the OS caption style settings.
+  Element* CreateCaptionSettingsItem();
 
   // Creates the header element of the text track list.
   Element* CreateTextTrackHeaderItem();

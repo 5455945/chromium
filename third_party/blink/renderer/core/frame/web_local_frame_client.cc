@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,13 @@
 
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader.h"
 
 namespace blink {
 
-BrowserInterfaceBrokerProxy* WebLocalFrameClient::GetBrowserInterfaceBroker() {
-  // TODO(dtapuska): We should make this interface a pure virtual so we don't
-  // have this implementation in the base class.
-  return &GetEmptyBrowserInterfaceBroker();
+void WebLocalFrameClient::SetImplForOwnership(WebLocalFrameImpl* frame) {
+  impl_for_ownership_ = frame;
 }
 
 AssociatedInterfaceProvider*
@@ -25,4 +24,10 @@ WebLocalFrameClient::GetRemoteNavigationAssociatedInterfaces() {
   // have this implementation in the base class.
   return AssociatedInterfaceProvider::GetEmptyAssociatedInterfaceProvider();
 }
+
+std::unique_ptr<URLLoader> WebLocalFrameClient::CreateURLLoaderForTesting() {
+  return nullptr;
+}
+
+
 }  // namespace blink

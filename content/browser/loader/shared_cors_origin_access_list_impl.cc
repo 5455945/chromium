@@ -1,12 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/loader/shared_cors_origin_access_list_impl.h"
 
-#include "base/bind.h"
 #include "base/feature_list.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -24,7 +23,7 @@ void SharedCorsOriginAccessListImpl::SetForOrigin(
     std::vector<network::mojom::CorsOriginPatternPtr> allow_patterns,
     std::vector<network::mojom::CorsOriginPatternPtr> block_patterns,
     base::OnceClosure closure) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   origin_access_list_.SetAllowListForOrigin(source_origin, allow_patterns);
   origin_access_list_.SetBlockListForOrigin(source_origin, block_patterns);
   std::move(closure).Run();
@@ -32,7 +31,7 @@ void SharedCorsOriginAccessListImpl::SetForOrigin(
 
 const network::cors::OriginAccessList&
 SharedCorsOriginAccessListImpl::GetOriginAccessList() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   return origin_access_list_;
 }
 

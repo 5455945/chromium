@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,17 +13,17 @@ SystemNotificationHelper* g_instance = nullptr;
 }  // namespace
 
 SystemNotificationHelper* SystemNotificationHelper::GetInstance() {
-  DCHECK(g_instance);
+  CHECK(g_instance, base::NotFatalUntil::M161);
   return g_instance;
 }
 
 SystemNotificationHelper::SystemNotificationHelper() {
-  DCHECK(!g_instance);
+  CHECK(!g_instance, base::NotFatalUntil::M161);
   g_instance = this;
 }
 
 SystemNotificationHelper::~SystemNotificationHelper() {
-  DCHECK_EQ(g_instance, this);
+  CHECK_EQ(g_instance, this, base::NotFatalUntil::M161);
   g_instance = nullptr;
 
   if (system_service_)

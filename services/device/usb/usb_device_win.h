@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <string>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "services/device/usb/usb_device.h"
 
 namespace device {
@@ -40,6 +40,9 @@ class UsbDeviceWin : public UsbDevice {
                uint32_t port_number,
                DriverType driver_type);
 
+  UsbDeviceWin(const UsbDeviceWin&) = delete;
+  UsbDeviceWin& operator=(const UsbDeviceWin&) = delete;
+
   // UsbDevice implementation:
   void Open(OpenCallback callback) override;
 
@@ -57,7 +60,9 @@ class UsbDeviceWin : public UsbDevice {
 
   // Opens the device's parent hub in order to read the device, configuration
   // and string descriptors.
-  void ReadDescriptors(base::OnceCallback<void(bool)> callback);
+  void ReadDescriptors(
+      scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
+      base::OnceCallback<void(bool)> callback);
 
   void UpdateFunction(int interface_number, const FunctionInfo& function_info);
 
@@ -75,7 +80,7 @@ class UsbDeviceWin : public UsbDevice {
   void OnReadWebUsbCapabilityDescriptor(
       base::OnceCallback<void(bool)> callback,
       scoped_refptr<UsbDeviceHandle> device_handle,
-      const absl::optional<WebUsbPlatformCapabilityDescriptor>& descriptor);
+      const std::optional<WebUsbPlatformCapabilityDescriptor>& descriptor);
   void OnOpenedToReadWebUsbLandingPage(
       base::OnceCallback<void(bool)> callback,
       uint8_t vendor_code,
@@ -92,8 +97,6 @@ class UsbDeviceWin : public UsbDevice {
   const std::wstring hub_path_;
   base::flat_map<int, FunctionInfo> functions_;
   const DriverType driver_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(UsbDeviceWin);
 };
 
 }  // namespace device

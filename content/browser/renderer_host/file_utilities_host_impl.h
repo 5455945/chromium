@@ -1,22 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_FILE_UTILITIES_HOST_IMPL_H_
 #define CONTENT_BROWSER_RENDERER_HOST_FILE_UTILITIES_HOST_IMPL_H_
 
+#include "build/build_config.h"
+#include "content/common/content_export.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/file/file_utilities.mojom.h"
 
 namespace content {
 
-class FileUtilitiesHostImpl : public blink::mojom::FileUtilitiesHost {
+class CONTENT_EXPORT FileUtilitiesHostImpl
+    : public blink::mojom::FileUtilitiesHost {
  public:
-  explicit FileUtilitiesHostImpl(int process_id);
+  explicit FileUtilitiesHostImpl(ChildProcessId process_id);
   ~FileUtilitiesHostImpl() override;
 
   static void Create(
-      int process_id,
+      ChildProcessId process_id,
       mojo::PendingReceiver<blink::mojom::FileUtilitiesHost> receiver);
 
  private:
@@ -24,7 +28,7 @@ class FileUtilitiesHostImpl : public blink::mojom::FileUtilitiesHost {
   void GetFileInfo(const base::FilePath& path,
                    GetFileInfoCallback callback) override;
 
-  const int process_id_;
+  const ChildProcessId process_id_;
 };
 
 }  // namespace content

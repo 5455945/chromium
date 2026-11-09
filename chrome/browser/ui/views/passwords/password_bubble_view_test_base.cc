@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/passwords/password_bubble_view_test_base.h"
 
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
+#include "components/tabs/public/tab_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -16,7 +17,8 @@ using ::testing::ReturnRef;
 
 class TestManagePasswordsUIController : public ManagePasswordsUIController {
  public:
-  explicit TestManagePasswordsUIController(
+  TestManagePasswordsUIController(
+      tabs::TabInterface& tab,
       content::WebContents* web_contents,
       base::WeakPtr<PasswordsModelDelegate> model_delegate);
 
@@ -24,23 +26,17 @@ class TestManagePasswordsUIController : public ManagePasswordsUIController {
     return model_delegate_;
   }
 
-  void DidFinishNavigation(
-      content::NavigationHandle* navigation_handle) override {}
-
  private:
   base::WeakPtr<PasswordsModelDelegate> model_delegate_;
 };
 
 TestManagePasswordsUIController::TestManagePasswordsUIController(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents,
     base::WeakPtr<PasswordsModelDelegate> model_delegate)
-    : ManagePasswordsUIController(web_contents),
+    : ManagePasswordsUIController(tab, web_contents),
       model_delegate_(std::move(model_delegate)) {
   DCHECK(model_delegate_);
-  // Do not silently replace an existing ManagePasswordsUIController
-  // because it unregisters itself in WebContentsDestroyed().
-  EXPECT_FALSE(web_contents->GetUserData(UserDataKey()));
-  web_contents->SetUserData(UserDataKey(), base::WrapUnique(this));
 }
 
 }  // namespace
@@ -64,18 +60,28 @@ PasswordBubbleViewTestBase::PasswordBubbleViewTestBase()
   // |test_web_contents_|, and will be retrieved correctly via
   // ManagePasswordsUIController::FromWebContents in
   // PasswordsModelDelegateFromWebContents().
-  new TestManagePasswordsUIController(
-      test_web_contents_.get(), model_delegate_weak_ptr_factory_.GetWeakPtr());
+  tabs::TabLookupFromWebContents::CreateForWebContents(test_web_contents_.get(),
+                                                       &mock_tab_);
+  auto controller = std::make_unique<TestManagePasswordsUIController>(
+      mock_tab_, test_web_contents_.get(),
+      model_delegate_weak_ptr_factory_.GetWeakPtr());
+  // Set a stub password manager client to avoid a DCHECK failure in
+  // |ManagePasswordsState|.
+  controller->set_client(&password_manager_client_);
+  manage_passwords_ui_controller_ = std::move(controller);
 }
 
 PasswordBubbleViewTestBase::~PasswordBubbleViewTestBase() = default;
 
 void PasswordBubbleViewTestBase::CreateAnchorViewAndShow() {
-  anchor_widget_ = CreateTestWidget(views::Widget::InitParams::TYPE_WINDOW);
+  anchor_widget_ =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+                       views::Widget::InitParams::TYPE_WINDOW);
   anchor_widget_->Show();
 }
 
 void PasswordBubbleViewTestBase::TearDown() {
   anchor_widget_.reset();
+  manage_passwords_ui_controller_.reset();
   ChromeViewsTestBase::TearDown();
 }

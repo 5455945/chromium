@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "base/lazy_instance.h"
 #include "device/bluetooth/bluetooth_advertisement.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "net/base/io_buffer.h"
 
 namespace extensions {
@@ -22,6 +23,17 @@ ApiResourceManager<BluetoothApiAdvertisement>::GetFactoryInstance() {
   return g_server_factory.Pointer();
 }
 
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<
+    BluetoothApiAdvertisement>>::ServiceIsCreatedWithBrowserContext() const {
+  if (ExtensionsBrowserClient::Get() &&
+      ExtensionsBrowserClient::Get()
+          ->IsLazyChromeOSResourceKeyedServiceInstantiationEnabled()) {
+    return false;
+  }
+  return true;
+}
+
 BluetoothApiAdvertisement::BluetoothApiAdvertisement(
     const std::string& owner_extension_id,
     scoped_refptr<device::BluetoothAdvertisement> advertisement)
@@ -29,6 +41,6 @@ BluetoothApiAdvertisement::BluetoothApiAdvertisement(
   DCHECK_CURRENTLY_ON(kThreadId);
 }
 
-BluetoothApiAdvertisement::~BluetoothApiAdvertisement() {}
+BluetoothApiAdvertisement::~BluetoothApiAdvertisement() = default;
 
 }  // namespace extensions

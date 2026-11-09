@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,8 +23,7 @@ class FakeHostResolver : public network::mojom::HostResolver {
  public:
   enum Response {
     kNoResponse = 0,
-    kEmptyResponse = 1,
-    kOneAddressResponse = 2,
+    kOneAddressResponse = 1,
   };
 
   struct SingleResult {
@@ -49,11 +48,12 @@ class FakeHostResolver : public network::mojom::HostResolver {
 
   ~FakeHostResolver() override;
 
-  void ResolveHost(const net::HostPortPair& host,
-                   const net::NetworkIsolationKey& network_isolation_key,
-                   network::mojom::ResolveHostParametersPtr optional_parameters,
-                   mojo::PendingRemote<network::mojom::ResolveHostClient>
-                       pending_response_client) override;
+  void ResolveHost(
+      network::mojom::HostResolverHostPtr host,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      network::mojom::ResolveHostParametersPtr optional_parameters,
+      mojo::PendingRemote<network::mojom::ResolveHostClient>
+          pending_response_client) override;
 
   void MdnsListen(
       const net::HostPortPair& host,
@@ -73,11 +73,12 @@ class HangingHostResolver : public network::mojom::HostResolver {
       mojo::PendingReceiver<network::mojom::HostResolver> resolver_receiver);
   ~HangingHostResolver() override;
 
-  void ResolveHost(const net::HostPortPair& host,
-                   const net::NetworkIsolationKey& network_isolation_key,
-                   network::mojom::ResolveHostParametersPtr optional_parameters,
-                   mojo::PendingRemote<network::mojom::ResolveHostClient>
-                       response_client) override;
+  void ResolveHost(
+      network::mojom::HostResolverHostPtr host,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      network::mojom::ResolveHostParametersPtr optional_parameters,
+      mojo::PendingRemote<network::mojom::ResolveHostClient> response_client)
+      override;
 
   void MdnsListen(
       const net::HostPortPair& host,
@@ -98,7 +99,7 @@ class FakeHostResolverNetworkContext : public network::TestNetworkContext {
   ~FakeHostResolverNetworkContext() override;
 
   void CreateHostResolver(
-      const absl::optional<net::DnsConfigOverrides>& config_overrides,
+      const std::optional<net::DnsConfigOverrides>& config_overrides,
       mojo::PendingReceiver<network::mojom::HostResolver> receiver) override;
 
  private:
@@ -114,7 +115,7 @@ class HangingHostResolverNetworkContext : public network::TestNetworkContext {
   ~HangingHostResolverNetworkContext() override;
 
   void CreateHostResolver(
-      const absl::optional<net::DnsConfigOverrides>& config_overrides,
+      const std::optional<net::DnsConfigOverrides>& config_overrides,
       mojo::PendingReceiver<network::mojom::HostResolver> receiver) override;
 
  private:

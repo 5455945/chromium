@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 #include <unordered_map>
 
 #include "base/files/scoped_file.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/values.h"
@@ -34,6 +36,8 @@ class CrostiniPortForwarder : public KeyedService {
    public:
     // Called when a port's active state changes.
     virtual void OnActivePortsChanged(const base::ListValue& activePorts) = 0;
+    virtual void OnActiveNetworkChanged(const base::Value& interface,
+                                        const base::Value& ipAddress) = 0;
   };
 
   enum class Protocol {
@@ -44,7 +48,7 @@ class CrostiniPortForwarder : public KeyedService {
   struct PortRuleKey {
     uint16_t port_number;
     Protocol protocol_type;
-    ContainerId container_id;
+    guest_os::GuestId container_id;
 
     bool operator==(const PortRuleKey& other) const {
       return port_number == other.port_number &&
@@ -73,20 +77,20 @@ class CrostiniPortForwarder : public KeyedService {
   // pass. This means a port setting has been successfully updated in the
   // iptables and the profile preference setting has also been successfully
   // updated.
-  void ActivatePort(const ContainerId& container_id,
+  void ActivatePort(const guest_os::GuestId& container_id,
                     uint16_t port_number,
                     const Protocol& protocol_type,
                     ResultCallback result_callback);
-  void AddPort(const ContainerId& container_id,
+  void AddPort(const guest_os::GuestId& container_id,
                uint16_t port_number,
                const Protocol& protocol_type,
                const std::string& label,
                ResultCallback result_callback);
-  void DeactivatePort(const ContainerId& container_id,
+  void DeactivatePort(const guest_os::GuestId& container_id,
                       uint16_t port_number,
                       const Protocol& protocol_type,
                       ResultCallback result_callback);
-  void RemovePort(const ContainerId& container_id,
+  void RemovePort(const guest_os::GuestId& container_id,
                   uint16_t port_number,
                   const Protocol& protocol_type,
                   ResultCallback result_callback);
@@ -96,23 +100,27 @@ class CrostiniPortForwarder : public KeyedService {
 
   // Deactivate all ports belonging to the container_id and removes them from
   // the preferences.
-  void RemoveAllPorts(const ContainerId& container_id);
+  void RemoveAllPorts(const guest_os::GuestId& container_id);
 
   // Deactivate all active ports belonging to the container_id and set their
   // preference to inactive such that these ports will not be automatically
   // re-forwarded on re-startup. This is called on container shutdown.
-  void DeactivateAllActivePorts(const ContainerId& container_id);
+  void DeactivateAllActivePorts(const guest_os::GuestId& container_id);
 
   base::ListValue GetActivePorts();
+  base::ListValue GetActiveNetworkInfo();
 
   size_t GetNumberOfForwardedPortsForTesting();
-  absl::optional<base::Value> ReadPortPreferenceForTesting(
+  std::optional<base::Value> ReadPortPreferenceForTesting(
       const PortRuleKey& key);
-  void ActiveNetworksChanged(const std::string& interface);
-
-  static CrostiniPortForwarder* GetForProfile(Profile* profile);
+  void ActiveNetworksChanged(const std::string& interface,
+                             const std::string& ip_address);
 
   explicit CrostiniPortForwarder(Profile* profile);
+
+  CrostiniPortForwarder(const CrostiniPortForwarder&) = delete;
+  CrostiniPortForwarder& operator=(const CrostiniPortForwarder&) = delete;
+
   ~CrostiniPortForwarder() override;
 
  private:
@@ -123,10 +131,10 @@ class CrostiniPortForwarder : public KeyedService {
   void SignalActivePortsChanged();
   bool MatchPortRuleDict(const base::Value& dict, const PortRuleKey& key);
   bool MatchPortRuleContainerId(const base::Value& dict,
-                                const ContainerId& container_id);
+                                const guest_os::GuestId& container_id);
   void AddNewPortPreference(const PortRuleKey& key, const std::string& label);
   bool RemovePortPreference(const PortRuleKey& key);
-  absl::optional<base::Value> ReadPortPreference(const PortRuleKey& key);
+  std::optional<base::Value> ReadPortPreference(const PortRuleKey& key);
 
   void OnActivatePortCompleted(ResultCallback result_callback,
                                PortRuleKey key,
@@ -135,10 +143,10 @@ class CrostiniPortForwarder : public KeyedService {
                                          PortRuleKey key,
                                          bool success);
   void TryDeactivatePort(const PortRuleKey& key,
-                         const ContainerId& container_id,
+                         const guest_os::GuestId& container_id,
                          base::OnceCallback<void(bool)> result_callback);
   void TryActivatePort(const PortRuleKey& key,
-                       const ContainerId& container_id,
+                       const guest_os::GuestId& container_id,
                        base::OnceCallback<void(bool)> result_callback);
   void UpdateActivePortInterfaces();
 
@@ -149,14 +157,13 @@ class CrostiniPortForwarder : public KeyedService {
 
   // Current interface to forward ports on.
   std::string current_interface_;
+  std::string ip_address_;
 
   base::ObserverList<Observer> observers_;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   base::WeakPtrFactory<CrostiniPortForwarder> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CrostiniPortForwarder);
 
 };  // class
 

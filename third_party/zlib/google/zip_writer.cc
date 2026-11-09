@@ -1,14 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/zlib/google/zip_writer.h"
 
 #include <algorithm>
+#include <tuple>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "third_party/zlib/google/redact.h"
 #include "third_party/zlib/google/zip_internal.h"
 
 namespace zip {
@@ -31,26 +36,29 @@ bool ZipWriter::ShouldContinue() {
 }
 
 bool ZipWriter::AddFileContent(const base::FilePath& path, base::File file) {
-  char buf[zip::internal::kZipBufSize];
+  uint8_t buf[zip::internal::kZipBufSize];
 
   while (ShouldContinue()) {
-    const int num_bytes =
-        file.ReadAtCurrentPos(buf, zip::internal::kZipBufSize);
+    const std::optional<size_t> num_bytes = file.ReadAtCurrentPos(buf);
 
-    if (num_bytes < 0) {
-      DPLOG(ERROR) << "Cannot read file '" << path << "'";
+    if (!num_bytes) {
+      PLOG(ERROR) << "Cannot read file " << Redact(path);
       return false;
     }
 
-    if (num_bytes == 0)
+    if (*num_bytes == 0) {
       return true;
+    }
 
-    if (zipWriteInFileInZip(zip_file_, buf, num_bytes) != ZIP_OK) {
-      DLOG(ERROR) << "Cannot write data from file '" << path << "' to ZIP";
+    if (zipWriteInFileInZip(zip_file_, buf,
+                            base::checked_cast<unsigned int>(*num_bytes)) !=
+        ZIP_OK) {
+      PLOG(ERROR) << "Cannot write data from file " << Redact(path)
+                  << " to ZIP";
       return false;
     }
 
-    progress_.bytes += num_bytes;
+    progress_.bytes += *num_bytes;
   }
 
   return false;
@@ -60,13 +68,21 @@ bool ZipWriter::OpenNewFileEntry(const base::FilePath& path,
                                  bool is_directory,
                                  base::Time last_modified) {
   std::string str_path = path.AsUTF8Unsafe();
+
 #if defined(OS_WIN)
   base::ReplaceSubstringsAfterOffset(&str_path, 0u, "\\", "/");
 #endif
-  if (is_directory)
-    str_path += "/";
 
-  return zip::internal::ZipOpenNewFileInZip(zip_file_, str_path, last_modified);
+  Compression compression = kDeflated;
+
+  if (is_directory) {
+    str_path += "/";
+  } else {
+    compression = GetCompressionMethod(path);
+  }
+
+  return zip::internal::ZipOpenNewFileInZip(zip_file_, str_path, last_modified,
+                                            compression);
 }
 
 bool ZipWriter::CloseNewFileEntry() {
@@ -74,9 +90,12 @@ bool ZipWriter::CloseNewFileEntry() {
 }
 
 bool ZipWriter::AddFileEntry(const base::FilePath& path, base::File file) {
-  base::File::Info info;
-  if (!file.GetInfo(&info))
-    return false;
+  FileAccessor::Info info;
+  if (!file_accessor_->GetInfo(path, &info)) {
+    LOG(ERROR) << "Cannot get info: " << Redact(path);
+    progress_.errors++;
+    return continue_on_error_;
+  }
 
   if (!OpenNewFileEntry(path, /*is_directory=*/false, info.last_modified))
     return false;
@@ -90,12 +109,10 @@ bool ZipWriter::AddFileEntry(const base::FilePath& path, base::File file) {
 
 bool ZipWriter::AddDirectoryEntry(const base::FilePath& path) {
   FileAccessor::Info info;
-  if (!file_accessor_->GetInfo(path, &info))
-    return false;
-
-  if (!info.is_directory) {
-    LOG(ERROR) << "Not a directory: '" << path << "'";
-    return false;
+  if (!file_accessor_->GetInfo(path, &info) || !info.is_directory) {
+    LOG(ERROR) << "Not a directory: " << Redact(path);
+    progress_.errors++;
+    return continue_on_error_;
   }
 
   if (!OpenNewFileEntry(path, /*is_directory=*/true, info.last_modified))
@@ -114,7 +131,7 @@ bool ZipWriter::AddDirectoryEntry(const base::FilePath& path) {
   return AddDirectoryContents(path);
 }
 
-#if defined(OS_POSIX)
+#if defined(OS_POSIX) || defined(OS_FUCHSIA)
 // static
 std::unique_ptr<ZipWriter> ZipWriter::CreateWithFd(
     int zip_file_fd,
@@ -141,7 +158,7 @@ std::unique_ptr<ZipWriter> ZipWriter::Create(
                                               APPEND_STATUS_CREATE);
 
   if (!zip_file) {
-    DLOG(ERROR) << "Cannot create ZIP file '" << zip_file_path << "'";
+    PLOG(ERROR) << "Cannot create ZIP file " << Redact(zip_file_path);
     return nullptr;
   }
 
@@ -184,8 +201,8 @@ bool ZipWriter::AddMixedEntries(Paths paths) {
   while (!paths.empty()) {
     // Work with chunks of 50 paths at most.
     const size_t n = std::min<size_t>(paths.size(), 50);
-    const Paths relative_paths = paths.subspan(0, n);
-    paths = paths.subspan(n, paths.size() - n);
+    Paths relative_paths;
+    std::tie(relative_paths, paths) = paths.split_at(n);
 
     files.clear();
     if (!file_accessor_->Open(relative_paths, &files) || files.size() != n)
@@ -224,8 +241,8 @@ bool ZipWriter::AddFileEntries(Paths paths) {
   while (!paths.empty()) {
     // Work with chunks of 50 paths at most.
     const size_t n = std::min<size_t>(paths.size(), 50);
-    const Paths relative_paths = paths.subspan(0, n);
-    paths = paths.subspan(n, paths.size() - n);
+    Paths relative_paths;
+    std::tie(relative_paths, paths) = paths.split_at(n);
 
     DCHECK_EQ(relative_paths.size(), n);
 
@@ -239,7 +256,12 @@ bool ZipWriter::AddFileEntries(Paths paths) {
       base::File& file = files[i];
 
       if (!file.IsValid()) {
-        LOG(ERROR) << "Cannot open '" << relative_path << "'";
+        LOG(ERROR) << "Cannot open " << Redact(relative_path);
+        progress_.errors++;
+
+        if (continue_on_error_)
+          continue;
+
         return false;
       }
 
@@ -263,8 +285,10 @@ bool ZipWriter::AddDirectoryEntries(Paths paths) {
 bool ZipWriter::AddDirectoryContents(const base::FilePath& path) {
   std::vector<base::FilePath> files, subdirs;
 
-  if (!file_accessor_->List(path, &files, &subdirs))
-    return false;
+  if (!file_accessor_->List(path, &files, &subdirs)) {
+    progress_.errors++;
+    return continue_on_error_;
+  }
 
   Filter(&files);
   Filter(&subdirs);

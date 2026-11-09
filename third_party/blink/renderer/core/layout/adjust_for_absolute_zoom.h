@@ -26,10 +26,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_ADJUST_FOR_ABSOLUTE_ZOOM_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_ADJUST_FOR_ABSOLUTE_ZOOM_H_
 
-#include "third_party/blink/renderer/core/layout/geometry/physical_size.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
+#include "third_party/blink/renderer/platform/geometry/physical_size.h"
 
 namespace blink {
 
@@ -37,6 +39,15 @@ class AdjustForAbsoluteZoom {
   STATIC_ONLY(AdjustForAbsoluteZoom);
 
  public:
+  inline static float GetAbsoluteZoom(const LayoutObject& layout_object) {
+    if (layout_object.GetDocument().StandardizedBrowserZoomEnabled()) {
+      if (LocalFrame* frame = layout_object.GetFrame()) {
+        return frame->LayoutZoomFactor();
+      }
+    }
+    return layout_object.Style().EffectiveZoom();
+  }
+
   // FIXME: Reduce/remove the dependency on zoom adjusted int values.
   // The float or LayoutUnit versions of layout values should be used.
   static int AdjustInt(int value, float zoom_factor) {
@@ -61,11 +72,15 @@ class AdjustForAbsoluteZoom {
   }
   inline static int AdjustInt(int value, LayoutObject* layout_object) {
     DCHECK(layout_object);
-    return AdjustInt(value, layout_object->StyleRef());
+    return AdjustInt(value, layout_object->Style());
   }
 
   inline static float AdjustFloat(float value, const ComputedStyle& style) {
     return value / style.EffectiveZoom();
+  }
+  inline static float AdjustFloat(float value,
+                                  const LayoutObject& layout_object) {
+    return AdjustFloat(value, layout_object.Style());
   }
 
   inline static double AdjustDouble(double value, const ComputedStyle& style) {
@@ -78,25 +93,34 @@ class AdjustForAbsoluteZoom {
   }
   inline static LayoutUnit AdjustLayoutUnit(LayoutUnit value,
                                             LayoutObject& layout_object) {
-    return AdjustLayoutUnit(value, layout_object.StyleRef());
+    return AdjustLayoutUnit(value, layout_object.Style());
   }
   inline static PhysicalSize AdjustPhysicalSize(PhysicalSize size,
                                                 const ComputedStyle& style) {
     return PhysicalSize(AdjustLayoutUnit(size.width, style),
                         AdjustLayoutUnit(size.height, style));
   }
+  inline static gfx::SizeF AdjustSize(gfx::SizeF size,
+                                      const ComputedStyle& style) {
+    return gfx::SizeF{AdjustFloat(size.width(), style),
+                      AdjustFloat(size.height(), style)};
+  }
 
-  inline static void AdjustFloatQuad(FloatQuad& quad,
-                                     const LayoutObject& layout_object) {
-    float zoom = layout_object.StyleRef().EffectiveZoom();
+  inline static void AdjustQuadMaybeExcludingCSSZoom(
+      gfx::QuadF& quad,
+      const LayoutObject& layout_object) {
+    float zoom = GetAbsoluteZoom(layout_object);
     if (zoom != 1)
       quad.Scale(1 / zoom, 1 / zoom);
   }
-  inline static void AdjustFloatRect(FloatRect& rect,
-                                     const LayoutObject& layout_object) {
-    float zoom = layout_object.StyleRef().EffectiveZoom();
-    if (zoom != 1)
+  inline static void AdjustRectMaybeExcludingCSSZoom(
+      gfx::RectF& rect,
+      const LayoutObject& layout_object) {
+    float zoom = GetAbsoluteZoom(layout_object);
+
+    if (zoom != 1) {
       rect.Scale(1 / zoom, 1 / zoom);
+    }
   }
 
   inline static float AdjustScroll(float scroll_offset, float zoom_factor) {
@@ -107,7 +131,7 @@ class AdjustForAbsoluteZoom {
     return AdjustScroll(scroll_offset, style.EffectiveZoom());
   }
   inline static double AdjustScroll(double value, LayoutObject& layout_object) {
-    return AdjustScroll(value, layout_object.StyleRef());
+    return AdjustScroll(value, layout_object.Style());
   }
 };
 

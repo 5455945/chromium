@@ -36,7 +36,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
-#if !defined(OS_MAC) && !defined(OS_WIN)
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
 #include <sys/utsname.h>
 #include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
@@ -55,32 +55,14 @@ String NavigatorID::appName() {
 String NavigatorID::appVersion() {
   // Version is everything in the user agent string past the "Mozilla/" prefix.
   const String& agent = userAgent();
-  return agent.Substring(agent.find('/') + 1);
+  return agent.substr(agent.find('/') + 1);
 }
 
 String NavigatorID::platform() const {
-  // Call userAgent() so the usage can be reported
-  userAgent();
-
-  // If the User-Agent string is frozen, platform should be a value
-  // matching the frozen string per https://github.com/WICG/ua-client-hints. See
-  // content::frozen_user_agent_strings.
-  if (base::FeatureList::IsEnabled(features::kFreezeUserAgent)) {
-#if defined(OS_ANDROID)
-    return "Linux armv81";
-#elif defined(OS_MAC)
-    return "MacIntel";
-#elif defined(OS_WIN)
-    return "Win32";
-#else
-    return "Linux x86_64";
-#endif
-  }
-
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Match Safari and Mozilla on Mac x86.
   return "MacIntel";
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   // Match Safari and Mozilla on Windows.
   return "Win32";
 #else  // Unix-like systems
@@ -103,6 +85,23 @@ String NavigatorID::platform() const {
 
 String NavigatorID::product() {
   return "Gecko";
+}
+
+String NavigatorID::productSub() const {
+  return "20030107";
+}
+
+String NavigatorID::vendor() const {
+  // Do not change without good cause. History:
+  // https://code.google.com/p/chromium/issues/detail?id=276813
+  // https://www.w3.org/Bugs/Public/show_bug.cgi?id=27786
+  // https://groups.google.com/a/chromium.org/forum/#!topic/blink-dev/QrgyulnqvmE
+  // https://html.spec.whatwg.org/multipage/system-state.html#dom-navigator-vendor
+  return "Google Inc.";
+}
+
+String NavigatorID::vendorSub() const {
+  return "";
 }
 
 }  // namespace blink

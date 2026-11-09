@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -26,8 +26,10 @@ def Compare(file1, file2, **kwargs):
   im2 = Image.open(file2)
 
   if im1.size != im2.size:
-    return ("The images are of different size (%s vs %s)" %
-            (im1.size, im2.size), im1)
+    return (
+      "The images are of different size (%s vs %s)" % (im1.size, im2.size),
+      im1,
+    )
 
   diff = ImageChops.difference(im1, im2)
 

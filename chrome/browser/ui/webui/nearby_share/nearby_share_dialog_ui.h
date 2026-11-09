@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,44 @@
 #include <memory>
 #include <vector>
 
+#include "ash/constants/webui_url_constants.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/nearby_sharing/attachment.h"
 #include "chrome/browser/sharesheet/sharesheet_controller.h"
 #include "chrome/browser/ui/webui/nearby_share/nearby_share.mojom.h"
-#include "chrome/browser/ui/webui/nearby_share/public/mojom/nearby_share_settings.mojom.h"
+#include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"
+#include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/webui_config.h"
+#include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "ui/views/controls/webview/web_contents_delegate_views.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 
 class NearbySharingService;
 
+namespace views {
+class WebView;
+}  // namespace views
+
 namespace nearby_share {
 
+class NearbyShareDialogUI;
+
+// WebUIConfig for chrome://nearby
+class NearbyShareDialogUIConfig
+    : public content::DefaultWebUIConfig<NearbyShareDialogUI> {
+ public:
+  NearbyShareDialogUIConfig()
+      : DefaultWebUIConfig(content::kChromeUIScheme,
+                           ash::kChromeUINearbyShareHost) {}
+
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+};
+
 // The WebUI controller for chrome://nearby.
-class NearbyShareDialogUI : public ui::MojoWebUIController {
+class NearbyShareDialogUI
+    : public ui::MojoWebUIController,
+      public views::WebContentsDelegateViews<NearbyShareDialogUI> {
  public:
   explicit NearbyShareDialogUI(content::WebUI* web_ui);
   NearbyShareDialogUI(const NearbyShareDialogUI&) = delete;
@@ -31,6 +56,7 @@ class NearbyShareDialogUI : public ui::MojoWebUIController {
     sharesheet_controller_ = controller;
   }
   void SetAttachments(std::vector<std::unique_ptr<Attachment>> attachments);
+  void SetWebView(views::WebView* web_view);
 
   // Instantiates the implementor of the mojom::DiscoveryManager mojo
   // interface passing the pending receiver that will be internally bound.
@@ -43,8 +69,15 @@ class NearbyShareDialogUI : public ui::MojoWebUIController {
   void BindInterface(
       mojo::PendingReceiver<nearby_share::mojom::ContactManager> receiver);
 
+  // content::WebContentsDelegate:
+  void WebContentsCreated(content::WebContents* source_contents,
+                          const content::GlobalRenderFrameHostId& opener_id,
+                          const std::string& frame_name,
+                          const GURL& target_url,
+                          content::WebContents* new_contents) override;
+
  private:
-  void HandleClose(const base::ListValue* args);
+  void HandleClose(const base::ListValue& args);
 
   // Search for a query parameter such as file, text, address, phone, or url,
   // then use it to populate an attachment, if found; otherwise, do nothing.
@@ -56,10 +89,11 @@ class NearbyShareDialogUI : public ui::MojoWebUIController {
   // A pointer to the Sharesheet controller is provided by
   // |NearbyShareAction::LaunchAction| when this WebUI controller is created. It
   // is used to close the Sharesheet in |HandleClose|.
-  sharesheet::SharesheetController* sharesheet_controller_ = nullptr;
+  raw_ptr<sharesheet::SharesheetController, DanglingUntriaged>
+      sharesheet_controller_ = nullptr;
 
   std::vector<std::unique_ptr<Attachment>> attachments_;
-  NearbySharingService* nearby_service_;
+  raw_ptr<NearbySharingService> nearby_service_;
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.support_lib_boundary;
+
+import org.jspecify.annotations.NullMarked;
 
 /**
  * Boundary interface to be implemented by any type which is constructed on the support library
@@ -14,6 +16,7 @@ package org.chromium.support_lib_boundary;
  * objects created on the chromium side have the same feature list as the WebView APK itself (as
  * returned by {@link WebViewProviderFactoryBoundaryInterface#getSupportedFeatures}).
  */
+@NullMarked
 public interface FeatureFlagHolderBoundaryInterface {
     /**
      * Indicate the list of {@link org.chromium.support_lib_boundary.util.Features} supported by

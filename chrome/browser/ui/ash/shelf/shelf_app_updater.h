@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,14 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "components/services/app_service/public/cpp/shortcut/shortcut.h"
+
+namespace apps {
+class PackageId;
+class PromiseAppUpdate;
+class ShortcutUpdate;
+}  // namespace apps
 
 namespace content {
 class BrowserContext;
@@ -23,16 +30,27 @@ class ShelfAppUpdater {
     virtual void OnAppUpdated(content::BrowserContext* browser_context,
                               const std::string& app_id,
                               bool reload_icon) {}
+    virtual void OnAppShowInShelfChanged(
+        content::BrowserContext* browser_context,
+        const std::string& app_id,
+        bool show_in_shelf) {}
     virtual void OnAppUninstalledPrepared(
         content::BrowserContext* browser_context,
         const std::string& app_id,
         bool by_migration) {}
     virtual void OnAppUninstalled(content::BrowserContext* browser_context,
                                   const std::string& app_id) {}
+    virtual void OnPromiseAppUpdate(const apps::PromiseAppUpdate& update) {}
+    virtual void OnPromiseAppRemoved(const apps::PackageId& package_id) {}
+    virtual void OnShortcutUpdated(const apps::ShortcutUpdate& update) {}
+    virtual void OnShortcutRemoved(const apps::ShortcutId& id) {}
 
    protected:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
   };
+
+  ShelfAppUpdater(const ShelfAppUpdater&) = delete;
+  ShelfAppUpdater& operator=(const ShelfAppUpdater&) = delete;
 
   virtual ~ShelfAppUpdater();
 
@@ -45,10 +63,8 @@ class ShelfAppUpdater {
 
  private:
   // Unowned pointers
-  Delegate* delegate_;
-  content::BrowserContext* browser_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfAppUpdater);
+  raw_ptr<Delegate> delegate_;
+  raw_ptr<content::BrowserContext> browser_context_;
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_SHELF_APP_UPDATER_H_

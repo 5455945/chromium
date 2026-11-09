@@ -1,9 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_WEB_PREFERENCES_WEB_PREFERENCES_MOJOM_TRAITS_H_
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_WEB_PREFERENCES_WEB_PREFERENCES_MOJOM_TRAITS_H_
+
+#include <optional>
 
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
@@ -11,6 +13,7 @@
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 namespace mojo {
 
@@ -47,9 +50,9 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.fantasy_font_family_map;
   }
 
-  static const std::map<std::string, std::u16string>&
-  pictograph_font_family_map(const blink::web_pref::WebPreferences& r) {
-    return r.pictograph_font_family_map;
+  static const std::map<std::string, std::u16string>& math_font_family_map(
+      const blink::web_pref::WebPreferences& r) {
+    return r.math_font_family_map;
   }
 
   static uint32_t default_font_size(const blink::web_pref::WebPreferences& r) {
@@ -70,7 +73,7 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.minimum_logical_font_size;
   }
 
-  static std::string default_encoding(
+  static const std::string& default_encoding(
       const blink::web_pref::WebPreferences& r) {
     return r.default_encoding;
   }
@@ -120,6 +123,15 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.allow_scripts_to_close_windows;
   }
 
+  static bool allow_unrestricted_window_focus(
+      const blink::web_pref::WebPreferences& r) {
+    return r.allow_unrestricted_window_focus;
+  }
+
+  static bool clipboard_focus_exempt(const blink::web_pref::WebPreferences& r) {
+    return r.clipboard_focus_exempt;
+  }
+
   static bool remote_fonts_enabled(const blink::web_pref::WebPreferences& r) {
     return r.remote_fonts_enabled;
   }
@@ -127,10 +139,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
   static bool javascript_can_access_clipboard(
       const blink::web_pref::WebPreferences& r) {
     return r.javascript_can_access_clipboard;
-  }
-
-  static bool xslt_enabled(const blink::web_pref::WebPreferences& r) {
-    return r.xslt_enabled;
   }
 
   static bool dns_prefetching_enabled(
@@ -142,22 +150,16 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.data_saver_enabled;
   }
 
-  static bool data_saver_holdback_web_api_enabled(
-      const blink::web_pref::WebPreferences& r) {
-    return r.data_saver_holdback_web_api_enabled;
+  static bool battery_saver_enabled(const blink::web_pref::WebPreferences& r) {
+    return r.battery_saver_enabled;
+  }
+
+  static bool preloading_disabled(const blink::web_pref::WebPreferences& r) {
+    return r.preloading_disabled;
   }
 
   static bool local_storage_enabled(const blink::web_pref::WebPreferences& r) {
     return r.local_storage_enabled;
-  }
-
-  static bool databases_enabled(const blink::web_pref::WebPreferences& r) {
-    return r.databases_enabled;
-  }
-
-  static bool application_cache_enabled(
-      const blink::web_pref::WebPreferences& r) {
-    return r.application_cache_enabled;
   }
 
   static bool tabs_to_links(const blink::web_pref::WebPreferences& r) {
@@ -192,23 +194,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.webgl2_enabled;
   }
 
-  static bool pepper_3d_enabled(const blink::web_pref::WebPreferences& r) {
-    return r.pepper_3d_enabled;
-  }
-
-  static bool flash_3d_enabled(const blink::web_pref::WebPreferences& r) {
-    return r.flash_3d_enabled;
-  }
-
-  static bool flash_stage3d_enabled(const blink::web_pref::WebPreferences& r) {
-    return r.flash_stage3d_enabled;
-  }
-
-  static bool flash_stage3d_baseline_enabled(
-      const blink::web_pref::WebPreferences& r) {
-    return r.flash_stage3d_baseline_enabled;
-  }
-
   static bool privileged_webgl_extensions_enabled(
       const blink::web_pref::WebPreferences& r) {
     return r.privileged_webgl_extensions_enabled;
@@ -223,14 +208,19 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.hide_scrollbars;
   }
 
+  static bool prefers_default_scrollbar_styles(
+      const blink::web_pref::WebPreferences& r) {
+    return r.prefers_default_scrollbar_styles;
+  }
+
   static bool accelerated_2d_canvas_enabled(
       const blink::web_pref::WebPreferences& r) {
     return r.accelerated_2d_canvas_enabled;
   }
 
-  static bool new_canvas_2d_api_enabled(
+  static bool canvas_2d_layers_enabled(
       const blink::web_pref::WebPreferences& r) {
-    return r.new_canvas_2d_api_enabled;
+    return r.canvas_2d_layers_enabled;
   }
 
   static bool antialiased_2d_canvas_disabled(
@@ -273,11 +263,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.strict_mixed_content_checking;
   }
 
-  static bool strict_powerful_feature_restrictions(
-      const blink::web_pref::WebPreferences& r) {
-    return r.strict_powerful_feature_restrictions;
-  }
-
   static bool allow_geolocation_on_insecure_origins(
       const blink::web_pref::WebPreferences& r) {
     return r.allow_geolocation_on_insecure_origins;
@@ -293,8 +278,18 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.block_mixed_plugin_content;
   }
 
-  static bool password_echo_enabled(const blink::web_pref::WebPreferences& r) {
-    return r.password_echo_enabled;
+  static bool highlight_ads(const blink::web_pref::WebPreferences& r) {
+    return r.highlight_ads;
+  }
+
+  static bool password_echo_enabled_physical(
+      const blink::web_pref::WebPreferences& r) {
+    return r.password_echo_enabled_physical;
+  }
+
+  static bool password_echo_enabled_touch(
+      const blink::web_pref::WebPreferences& r) {
+    return r.password_echo_enabled_touch;
   }
 
   static bool should_clear_document_background(
@@ -306,13 +301,17 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.enable_scroll_animator;
   }
 
-  static bool threaded_scrolling_enabled(
-      const blink::web_pref::WebPreferences& r) {
-    return r.threaded_scrolling_enabled;
-  }
-
   static bool prefers_reduced_motion(const blink::web_pref::WebPreferences& r) {
     return r.prefers_reduced_motion;
+  }
+
+  static bool prefers_reduced_transparency(
+      const blink::web_pref::WebPreferences& r) {
+    return r.prefers_reduced_transparency;
+  }
+
+  static bool inverted_colors(const blink::web_pref::WebPreferences& r) {
+    return r.inverted_colors;
   }
 
   static bool touch_event_feature_detection_enabled(
@@ -333,6 +332,11 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
   static blink::mojom::PointerType primary_pointer_type(
       const blink::web_pref::WebPreferences& r) {
     return r.primary_pointer_type;
+  }
+
+  static blink::mojom::OutputDeviceUpdateAbilityType
+  output_device_update_ability_type(const blink::web_pref::WebPreferences& r) {
+    return r.output_device_update_ability_type;
   }
 
   static uint32_t available_hover_types(
@@ -365,9 +369,9 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.target_blank_implies_no_opener_enabled_will_be_removed;
   }
 
-  static bool allow_non_empty_navigator_plugins(
+  static bool ignore_permission_for_device_changed_event(
       const blink::web_pref::WebPreferences& r) {
-    return r.allow_non_empty_navigator_plugins;
+    return r.ignore_permission_for_device_changed_event;
   }
 
   static uint32_t number_of_cpu_cores(
@@ -391,6 +395,11 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
 
   static bool viewport_meta_enabled(const blink::web_pref::WebPreferences& r) {
     return r.viewport_meta_enabled;
+  }
+
+  static bool auto_zoom_focused_editable_to_legible_scale(
+      const blink::web_pref::WebPreferences& r) {
+    return r.auto_zoom_focused_editable_to_legible_scale;
   }
 
   static bool shrinks_viewport_contents_to_fit(
@@ -428,15 +437,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.spatial_navigation_enabled;
   }
 
-  static bool navigate_on_drag_drop(const blink::web_pref::WebPreferences& r) {
-    return r.navigate_on_drag_drop;
-  }
-
-  static bool fake_no_alloc_direct_call_for_testing_enabled(
-      const blink::web_pref::WebPreferences& r) {
-    return r.fake_no_alloc_direct_call_for_testing_enabled;
-  }
-
   static const blink::mojom::V8CacheOptions& v8_cache_options(
       const blink::web_pref::WebPreferences& r) {
     return r.v8_cache_options;
@@ -444,6 +444,11 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
 
   static bool record_whole_document(const blink::web_pref::WebPreferences& r) {
     return r.record_whole_document;
+  }
+
+  static bool stylus_handwriting_enabled(
+      const blink::web_pref::WebPreferences& r) {
+    return r.stylus_handwriting_enabled;
   }
 
   static bool cookie_enabled(const blink::web_pref::WebPreferences& r) {
@@ -509,11 +514,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.text_track_window_color;
   }
 
-  static const std::string& text_track_window_padding(
-      const blink::web_pref::WebPreferences& r) {
-    return r.text_track_window_padding;
-  }
-
   static const std::string& text_track_window_radius(
       const blink::web_pref::WebPreferences& r) {
     return r.text_track_window_radius;
@@ -528,6 +528,11 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.immersive_mode_enabled;
   }
 
+  static bool immersive_video_playback_enabled(
+      const blink::web_pref::WebPreferences& r) {
+    return r.immersive_video_playback_enabled;
+  }
+
   static bool double_tap_to_zoom_enabled(
       const blink::web_pref::WebPreferences& r) {
     return r.double_tap_to_zoom_enabled;
@@ -537,23 +542,36 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.fullscreen_supported;
   }
 
-  static bool text_autosizing_enabled(
+  static bool text_size_adjust_enabled(
       const blink::web_pref::WebPreferences& r) {
-    return r.text_autosizing_enabled;
+    return r.text_size_adjust_enabled;
   }
 
   static const GURL& web_app_scope(const ::blink::web_pref::WebPreferences& r) {
     return r.web_app_scope;
   }
 
-#if defined(OS_ANDROID)
+  static const GURL& web_app_custom_manifest_url(
+      const ::blink::web_pref::WebPreferences& r) {
+    return r.web_app_custom_manifest_url;
+  }
+
+  static bool is_initial_profile(const ::blink::web_pref::WebPreferences& r) {
+    return r.is_initial_profile;
+  }
+
+#if BUILDFLAG(IS_ANDROID)
   static float font_scale_factor(const blink::web_pref::WebPreferences& r) {
     return r.font_scale_factor;
   }
 
-  static float device_scale_adjustment(
+  static int font_weight_adjustment(const blink::web_pref::WebPreferences& r) {
+    return r.font_weight_adjustment;
+  }
+
+  static int text_size_contrast_factor(
       const blink::web_pref::WebPreferences& r) {
-    return r.device_scale_adjustment;
+    return r.text_size_contrast_factor;
   }
 
   static bool force_enable_zoom(const blink::web_pref::WebPreferences& r) {
@@ -568,11 +586,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
   static bool support_deprecated_target_density_dpi(
       const blink::web_pref::WebPreferences& r) {
     return r.support_deprecated_target_density_dpi;
-  }
-
-  static bool use_legacy_background_size_shorthand_behavior(
-      const blink::web_pref::WebPreferences& r) {
-    return r.use_legacy_background_size_shorthand_behavior;
   }
 
   static bool wide_viewport_quirk(const blink::web_pref::WebPreferences& r) {
@@ -657,7 +670,29 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
       const blink::web_pref::WebPreferences& r) {
     return r.disable_accelerated_small_canvases;
   }
-#endif
+
+  static bool long_press_link_select_text(
+      const blink::web_pref::WebPreferences& r) {
+    return r.long_press_link_select_text;
+  }
+
+  static bool scale_all_fonts_if_no_meta_text_scale_tag(
+      const blink::web_pref::WebPreferences& r) {
+    return r.scale_all_fonts_if_no_meta_text_scale_tag;
+  }
+
+  static bool should_screenshot_on_mainframe_same_doc_navigation(
+      const blink::web_pref::WebPreferences& r) {
+    return r.should_screenshot_on_mainframe_same_doc_navigation;
+  }
+
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
+  static bool disable_webauthn(const blink::web_pref::WebPreferences& r) {
+    return r.disable_webauthn;
+  }
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
 
   static bool force_dark_mode_enabled(
       const blink::web_pref::WebPreferences& r) {
@@ -696,6 +731,36 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.autoplay_policy;
   }
 
+  static bool require_transient_activation_for_get_display_media(
+      const blink::web_pref::WebPreferences& r) {
+    return r.require_transient_activation_for_get_display_media;
+  }
+
+  static bool require_transient_activation_for_show_file_or_directory_picker(
+      const blink::web_pref::WebPreferences& r) {
+    return r.require_transient_activation_for_show_file_or_directory_picker;
+  }
+
+  static bool in_forced_colors(const blink::web_pref::WebPreferences& r) {
+    return r.in_forced_colors;
+  }
+
+  static bool is_forced_colors_disabled(
+      const blink::web_pref::WebPreferences& r) {
+    return r.is_forced_colors_disabled;
+  }
+
+  static std::optional<SkColor> root_scrollbar_theme_color(
+      const blink::web_pref::WebPreferences& r) {
+    return r.root_scrollbar_theme_color;
+  }
+
+  static blink::mojom::PreferredColorScheme
+  preferred_root_scrollbar_color_scheme(
+      const blink::web_pref::WebPreferences& r) {
+    return r.preferred_root_scrollbar_color_scheme;
+  }
+
   static blink::mojom::PreferredColorScheme preferred_color_scheme(
       const blink::web_pref::WebPreferences& r) {
     return r.preferred_color_scheme;
@@ -731,23 +796,6 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.lazy_load_enabled;
   }
 
-  static const std::map<blink::mojom::EffectiveConnectionType, int32_t>&
-  lazy_frame_loading_distance_thresholds_px(
-      const blink::web_pref::WebPreferences& r) {
-    return r.lazy_frame_loading_distance_thresholds_px;
-  }
-
-  static const std::map<blink::mojom::EffectiveConnectionType, int32_t>&
-  lazy_image_loading_distance_thresholds_px(
-      const blink::web_pref::WebPreferences& r) {
-    return r.lazy_image_loading_distance_thresholds_px;
-  }
-
-  static const std::map<blink::mojom::EffectiveConnectionType, int32_t>&
-  lazy_image_first_k_fully_load(const blink::web_pref::WebPreferences& r) {
-    return r.lazy_image_first_k_fully_load;
-  }
-
   static bool allow_mixed_content_upgrades(
       const blink::web_pref::WebPreferences& r) {
     return r.allow_mixed_content_upgrades;
@@ -762,14 +810,59 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::WebPreferencesDataView,
     return r.touch_drag_drop_enabled;
   }
 
+  static bool touch_dragend_context_menu(
+      const blink::web_pref::WebPreferences& r) {
+    return r.touch_dragend_context_menu;
+  }
+
   static bool webxr_immersive_ar_allowed(
       const blink::web_pref::WebPreferences& r) {
     return r.webxr_immersive_ar_allowed;
   }
 
-  static const url::Origin& litepage_subresource_redirect_origin(
+  static bool renderer_wide_named_frame_lookup(
       const blink::web_pref::WebPreferences& r) {
-    return r.litepage_subresource_redirect_origin;
+    return r.renderer_wide_named_frame_lookup;
+  }
+
+  static bool strict_mime_type_check_for_worker_scripts_enabled(
+      const blink::web_pref::WebPreferences& r) {
+    return r.strict_mime_type_check_for_worker_scripts_enabled;
+  }
+
+  static bool modal_context_menu(const blink::web_pref::WebPreferences& r) {
+    return r.modal_context_menu;
+  }
+
+  static bool dynamic_safe_area_insets_enabled(
+      const blink::web_pref::WebPreferences& r) {
+    return r.dynamic_safe_area_insets_enabled;
+  }
+
+
+  static bool payment_request_enabled(
+      const blink::web_pref::WebPreferences& r) {
+    return r.payment_request_enabled;
+  }
+
+  static bool ai_ot_apis_enabled(const blink::web_pref::WebPreferences& r) {
+    return r.ai_ot_apis_enabled;
+  }
+
+#if BUILDFLAG(IS_MAC)
+  static bool should_disable_external_popups(
+      const blink::web_pref::WebPreferences& r) {
+    return r.should_disable_external_popups;
+  }
+#endif  // BUILDFLAG(IS_MAC)
+
+  static bool is_indigo_onboarding(const blink::web_pref::WebPreferences& r) {
+    return r.is_indigo_onboarding;
+  }
+
+  static bool is_xslt_deprecation_banner_suppressed(
+      const blink::web_pref::WebPreferences& r) {
+    return r.is_xslt_deprecation_banner_suppressed;
   }
 
   static bool Read(blink::mojom::WebPreferencesDataView r,

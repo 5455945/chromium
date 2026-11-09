@@ -1,16 +1,8 @@
-// Copyright 2011 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the Licensegg at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /** @fileoverview Shared unit tests for styles. */
 
@@ -19,33 +11,35 @@ goog.setTestOnly();
 
 const Box = goog.require('goog.math.Box');
 const BrowserEvent = goog.require('goog.events.BrowserEvent');
+const Const = goog.require('goog.string.Const');
 const Coordinate = goog.require('goog.math.Coordinate');
 const ExpectedFailures = goog.require('goog.testing.ExpectedFailures');
 const GoogRect = goog.require('goog.math.Rect');
 const MockUserAgent = goog.require('goog.testing.MockUserAgent');
 const Size = goog.require('goog.math.Size');
 const TagName = goog.require('goog.dom.TagName');
+const TrustedResourceUrl = goog.require('goog.html.TrustedResourceUrl');
 const UserAgents = goog.require('goog.userAgentTestUtil.UserAgents');
-const asserts = goog.require('goog.testing.asserts');
 const color = goog.require('goog.color');
+const dispose = goog.require('goog.dispose');
 const googArray = goog.require('goog.array');
 const googDom = goog.require('goog.dom');
 const googObject = goog.require('goog.object');
 const googStyle = goog.require('goog.style');
+const isSafari = goog.require('goog.labs.userAgent.browser');
+const jsunit = goog.require('goog.testing.jsunit');
+const safe = goog.require('goog.dom.safe');
 const testSuite = goog.require('goog.testing.testSuite');
 const testing = goog.require('goog.html.testing');
 const userAgent = goog.require('goog.userAgent');
 const userAgentTestUtil = goog.require('goog.userAgentTestUtil');
-const util = goog.require('goog.labs.userAgent.util');
 
 // Delay running the tests after page load. This test has some asynchronous
 // behavior that interacts with page load detection.
-goog.testing.jsunit.AUTO_RUN_DELAY_IN_MS = 500;
+/** @suppress {constantProperty} suppression added to enable type checking */
+jsunit.AUTO_RUN_DELAY_IN_MS = 500;
 
-// IE before version 6 will always be border box in compat mode.
-const isBorderBox = googDom.isCss1CompatMode() ?
-    (userAgent.IE && !userAgent.isVersionOrHigher('6')) :
-    true;
+const isBorderBox = !googDom.isCss1CompatMode();
 const EPSILON = 2;
 let expectedFailures;
 const $ = googDom.getElement;
@@ -90,9 +84,6 @@ function assertUserAgent(
   mockUserAgent.setNavigator(mockNavigator);
   mockUserAgent.setUserAgentString(uaString);
 
-  // Force User-Agent lib to reread the global userAgent.
-  util.setUserAgent(null);
-
   userAgentTestUtil.reinitializeUserAgent();
   for (const ua in UserAgents) {
     const isExpected = googArray.contains(expectedAgents, UserAgents[ua]);
@@ -133,9 +124,10 @@ testSuite({
     const testViewport = googDom.getElement('test-viewport');
     testViewport.setAttribute('style', '');
     googDom.removeChildren(testViewport);
-    goog.dispose(mockUserAgent);
+    dispose(mockUserAgent);
 
     // Prevent multiple vendor prefixed mock elements from poisoning the cache.
+    /** @suppress {visibility} suppression added to enable type checking */
     googStyle.styleNameCache_ = {};
   },
 
@@ -252,20 +244,15 @@ testSuite({
     }
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testGetComputedBoxSizing() {
-    if (!userAgent.IE || userAgent.isVersionOrHigher(8)) {
-      const defaultBoxSizing =
-          googDom.isCss1CompatMode() ? 'content-box' : 'border-box';
-      let el = googDom.getElement('box-sizing-unset');
-      assertEquals(defaultBoxSizing, googStyle.getComputedBoxSizing(el));
+    const defaultBoxSizing =
+        googDom.isCss1CompatMode() ? 'content-box' : 'border-box';
+    let el = googDom.getElement('box-sizing-unset');
+    assertEquals(defaultBoxSizing, googStyle.getComputedBoxSizing(el));
 
-      el = googDom.getElement('box-sizing-border-box');
-      assertEquals('border-box', googStyle.getComputedBoxSizing(el));
-    } else {
-      // IE7 and below don't support box-sizing.
-      assertNull(googStyle.getComputedBoxSizing(
-          googDom.getElement('box-sizing-border-box')));
-    }
+    el = googDom.getElement('box-sizing-border-box');
+    assertEquals('border-box', googStyle.getComputedBoxSizing(el));
   },
 
   testGetComputedPosition() {
@@ -275,16 +262,9 @@ testSuite({
     assertEquals(
         'position:relative in style attribute', 'relative',
         googStyle.getComputedPosition($('style-position-relative')));
-    if (userAgent.IE && !googDom.isCss1CompatMode() &&
-        !userAgent.isVersionOrHigher(10)) {
-      assertEquals(
-          'position:fixed in style attribute', 'static',
-          googStyle.getComputedPosition($('style-position-fixed')));
-    } else {
-      assertEquals(
-          'position:fixed in style attribute', 'fixed',
-          googStyle.getComputedPosition($('style-position-fixed')));
-    }
+    assertEquals(
+        'position:fixed in style attribute', 'fixed',
+        googStyle.getComputedPosition($('style-position-fixed')));
     assertEquals(
         'position:absolute in css', 'absolute',
         googStyle.getComputedPosition($('css-position-absolute')));
@@ -388,11 +368,9 @@ testSuite({
     assertEquals('10%', el.style.left);
     assertEquals('25%', el.style.top);
 
-    // ignores stupid units
+    // ignores bad units
     googStyle.setPosition(el, 0, 0);
-    // TODO(user): IE errors if you set these values.  Should we make setStyle
-    // catch these?  Or leave it up to the app.  Fixing the tests for now.
-    // goog.style.setPosition(el, '10rainbows', '25rainbows');
+    googStyle.setPosition(el, '10rainbows', '25rainbows');
     assertEquals('0px', el.style.left);
     assertEquals('0px', el.style.top);
 
@@ -443,10 +421,9 @@ testSuite({
       assertEquals(2000, pos.x);
       assertEquals(2000, pos.y);
 
-      // The following tests do not work in Gecko 1.8 and below, due to an
-      // obscure off-by-one bug in goog.style.getPageOffset.  Same for IE.
-      if (!userAgent.IE &&
-          !(userAgent.GECKO && !userAgent.isVersionOrHigher('1.9'))) {
+      // The following tests do not work in IE, due to an
+      // obscure off-by-one bug in goog.style.getPageOffset.
+      if (!userAgent.IE) {
         window.scroll(1, 1);
         let pos = googStyle.getClientPosition(div);
         assertEquals(1999, pos.x);
@@ -479,6 +456,7 @@ testSuite({
     const mockEvent = {};
     mockEvent.clientX = 100;
     mockEvent.clientY = 200;
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const pos = googStyle.getClientPosition(mockEvent);
     assertEquals(100, pos.x);
     assertEquals(200, pos.y);
@@ -490,6 +468,7 @@ testSuite({
     mockTouchEvent.changedTouches[0].clientX = 100;
     mockTouchEvent.changedTouches[0].clientY = 200;
 
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const pos = googStyle.getClientPosition(mockTouchEvent);
     assertEquals(100, pos.x);
     assertEquals(200, pos.y);
@@ -504,6 +483,7 @@ testSuite({
     mockTouchEvent.changedTouches[0].clientX = 100;
     mockTouchEvent.changedTouches[0].clientY = 200;
 
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const pos = googStyle.getClientPosition(mockTouchEvent);
     assertEquals(100, pos.x);
     assertEquals(200, pos.y);
@@ -515,6 +495,7 @@ testSuite({
     mockTouchEvent.changedTouches[0].clientX = 100;
     mockTouchEvent.changedTouches[0].clientY = 200;
 
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const e = new BrowserEvent(mockTouchEvent);
 
     const pos = googStyle.getClientPosition(e);
@@ -591,15 +572,8 @@ testSuite({
       div.style.borderWidth = '3px';
       document.body.appendChild(div);
       const pos = googStyle.getPageOffset(div);
-      // FF3 (but not beyond) gets confused by document margins.
-      if (userAgent.GECKO && userAgent.isVersionOrHigher('1.9') &&
-          !userAgent.isVersionOrHigher('1.9.1')) {
-        assertEquals(141, pos.x);
-        assertEquals(241, pos.y);
-      } else {
-        assertRoughlyEquals(101, pos.x, 0.1);
-        assertRoughlyEquals(201, pos.y, 0.1);
-      }
+      assertRoughlyEquals(101, pos.x, 0.1);
+      assertRoughlyEquals(201, pos.y, 0.1);
     } finally {
       document.body.removeChild(div);
       document.documentElement.style.margin = '';
@@ -620,10 +594,9 @@ testSuite({
       assertEquals(10000, pos.x);
       assertEquals(20000, pos.y);
 
-      // The following tests do not work in Gecko 1.8 and below, due to an
-      // obscure off-by-one bug in goog.style.getPageOffset.  Same for IE.
-      if (!(userAgent.IE) &&
-          !(userAgent.GECKO && !userAgent.isVersionOrHigher('1.9'))) {
+      // The following tests do not work in IE, due to an
+      // obscure off-by-one bug in goog.style.getPageOffset.
+      if (!userAgent.IE) {
         window.scroll(1, 1);
         pos = googStyle.getPageOffset(div);
         assertEquals(10000, pos.x);
@@ -650,7 +623,7 @@ testSuite({
   testGetPageOffsetFixedPositionElements() {
     // Skip these tests in certain browsers.
     // position:fixed is not supported in IE before version 7
-    if (!userAgent.IE || !userAgent.isVersionOrHigher('6')) {
+    if (!userAgent.IE) {
       // Test with a position fixed element
       let div = googDom.createDom(TagName.DIV);
       div.style.position = 'fixed';
@@ -688,10 +661,7 @@ testSuite({
       document.body.appendChild(div);
 
       // Test all major positioning methods.
-      // Disabled for IE9 and below - IE8 returns dimensions multiplied by 100.
-      // IE9 is flaky. See b/22873770.
-      expectedFailures.expectFailureFor(
-          userAgent.IE && !userAgent.isVersionOrHigher(10));
+
       try {
         // Test all major positioning methods.
         const pos = googStyle.getClientPosition(div);
@@ -727,11 +697,9 @@ testSuite({
     assertEquals('10%', el.style.width);
     assertEquals('25%', el.style.height);
 
-    // ignores stupid units
+    // ignores bad units
     googStyle.setSize(el, 0, 0);
-    // TODO(user): IE errors if you set these values.  Should we make setStyle
-    // catch these?  Or leave it up to the app.  Fixing the tests for now.
-    // goog.style.setSize(el, '10rainbows', '25rainbows');
+    googStyle.setSize(el, '10rainbows', '25rainbows');
     assertEquals('0px', el.style.width);
     assertEquals('0px', el.style.height);
 
@@ -900,8 +868,9 @@ testSuite({
     const doc = googDom.getFrameContentDocument(frame);
     const rect = doc.getElementById('rect');
     const dims = googStyle.getSize(rect);
-    if (userAgent.GECKO && userAgent.isVersionOrHigher(53)) {
-      // Firefox >= 53 auto-scales iframe SVG content to fit the frame
+    if (userAgent.GECKO && userAgent.isVersionOrHigher(53) &&
+        !userAgent.isVersionOrHigher(68)) {
+      // Firefox >= 53 < 68 auto-scales iframe SVG content to fit the frame
       // b/38432885 | https://bugzilla.mozilla.org/show_bug.cgi?id=1366126
       assertEquals(75, dims.width);
       assertEquals(75, dims.height);
@@ -926,6 +895,7 @@ testSuite({
     const el = $('rotated');
     googStyle.setSize(el, 300, 200);
 
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const noRotateDims = googStyle.getTransformedSize(el);
     assertEquals(300, noRotateDims.width);
     assertEquals(200, noRotateDims.height);
@@ -952,6 +922,7 @@ testSuite({
     const el = $('scaled');
     googStyle.setSize(el, 300, 200);
 
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const noScaleDims = googStyle.getTransformedSize(el);
     assertEquals(300, noScaleDims.width);
     assertEquals(200, noScaleDims.height);
@@ -999,6 +970,30 @@ testSuite({
     assertEquals(originalBackground, googStyle.getBackgroundColor(el));
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
+  testInstallSafeStyleSheetWithNonce() {
+    if (isSafari) {
+      // Safari has a quirk where dynamically installed stylesheets lose
+      // their nonce attribute. This causes this test to fail, but is
+      // not a reliability concern (since we don't yet use CSP to restrict
+      // CSS loading).
+      return;
+    }
+    const result =
+        googStyle.installSafeStyleSheet(testing.newSafeStyleSheetForTest(''));
+
+    const styles = document.head.querySelectorAll('style[nonce]');
+    assert(styles.length > 1);
+    const lastStyleSheet = styles[styles.length - 1];
+    // Some browsers don't expose the nonce via getAttribute so try and retrieve
+    // it as a normal property first.
+    assertEquals(
+        'NONCE', /** @type {?} */ (lastStyleSheet).nonce ||
+            lastStyleSheet.getAttribute('nonce'));
+
+    googStyle.uninstallStyles(result);
+  },
+
   testSetSafeStyleSheet() {
     const el = $('installTest1');
 
@@ -1032,9 +1027,7 @@ testSuite({
   testIsUnselectable() {
     assertEquals(
         userAgent.GECKO, googStyle.isUnselectable($('unselectable-gecko')));
-    assertEquals(
-        userAgent.IE || userAgent.OPERA,
-        googStyle.isUnselectable($('unselectable-ie')));
+    assertEquals(userAgent.IE, googStyle.isUnselectable($('unselectable-ie')));
     // Note: Firefox can go either way here - newer versions see -webkit-*
     // properties and automatically add Moz* to the style object.
     if (!userAgent.GECKO) {
@@ -1049,7 +1042,7 @@ testSuite({
     assertFalse(googStyle.isUnselectable(el));
 
     function assertDescendantsUnselectable(unselectable) {
-      googArray.forEach(el.getElementsByTagName('*'), (descendant) => {
+      Array.prototype.forEach.call(el.getElementsByTagName('*'), descendant => {
         // Skip MathML or any other elements that do not have a style property.
         if (descendant.style) {
           assertEquals(unselectable, googStyle.isUnselectable(descendant));
@@ -1133,6 +1126,10 @@ testSuite({
     assertFalse(isNaN(rect.height));
   },
 
+  /**
+     @suppress {strictMissingProperties} suppression added to enable type
+     checking
+   */
   testGetContentBoxSize() {
     // Strict mode
     const getContentBoxSize = googStyle.getContentBoxSize;
@@ -1178,6 +1175,10 @@ testSuite({
     assertEquals(el.offsetHeight, rect.height);
   },
 
+  /**
+     @suppress {strictMissingProperties} suppression added to enable type
+     checking
+   */
   testSetBorderBoxSize() {
     // Strict mode
     const el = $('size-e');
@@ -1217,7 +1218,6 @@ testSuite({
     } else if (userAgent.WEBKIT) {
       assertEquals('border-box', el.style.WebkitBoxSizing);
     } else if (
-        userAgent.OPERA ||
         userAgent.IE && userAgent.isDocumentModeOrHigher(8)) {
       assertEquals('border-box', el.style.boxSizing);
     }
@@ -1234,6 +1234,10 @@ testSuite({
     assertEquals(isIeLt8Quirks ? 39 : 20, el.offsetHeight);
   },
 
+  /**
+     @suppress {strictMissingProperties} suppression added to enable type
+     checking
+   */
   testSetContentBoxSize() {
     // Strict mode
     const el = $('size-e');
@@ -1274,7 +1278,6 @@ testSuite({
     } else if (userAgent.WEBKIT) {
       assertEquals('content-box', el.style.WebkitBoxSizing);
     } else if (
-        userAgent.OPERA ||
         userAgent.IE && userAgent.isDocumentModeOrHigher(8)) {
       assertEquals('content-box', el.style.boxSizing);
     }
@@ -1283,6 +1286,7 @@ testSuite({
     setContentBoxSize(el, new Size(-10, -10));
 
     // NOTE(nicksantos): I'm not really sure why IE7 is special here.
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const isIeLt8Quirks = userAgent.IE &&
         !userAgent.isDocumentModeOrHigher('8') && !googDom.isCss1CompatMode();
     assertEquals(20, el.offsetWidth);
@@ -1338,7 +1342,8 @@ testSuite({
   testGetPaddingBoxUnattached() {
     const el = googDom.createElement(TagName.DIV);
     const box = googStyle.getPaddingBox(el);
-    if (userAgent.WEBKIT) {
+    if (userAgent.WEBKIT ||
+        (userAgent.GECKO && userAgent.isVersionOrHigher(64))) {
       assertTrue(isNaN(box.top));
       assertTrue(isNaN(box.right));
       assertTrue(isNaN(box.bottom));
@@ -1638,6 +1643,7 @@ testSuite({
     assertTrue(googStyle.isElementShown(el));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testGetOpacity() {
     const el1 = {style: {opacity: '0.3'}};
 
@@ -1673,6 +1679,7 @@ testSuite({
     assertEquals('', googStyle.getOpacity($('test-opacity')));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testSetOpacity() {
     const el1 = {style: {opacity: '0.3'}};
     googStyle.setOpacity(el1, 0.8);
@@ -1706,79 +1713,94 @@ testSuite({
 
   testFramedPageOffset() {
     // Set up a complicated iframe ancestor chain.
-    const iframe = googDom.getElement('test-frame-offset');
-    const iframeDoc = googDom.getFrameContentDocument(iframe);
-    const iframeWindow = googDom.getWindow(iframeDoc);
+    const iframe = createTestFrame();
+    iframe.id = 'test-frame-offset';
+    try {
+      document.body.appendChild(iframe);
+      const iframeDoc = googDom.getFrameContentDocument(iframe);
+      const iframeWindow = googDom.getWindow(iframeDoc);
 
-    const iframePos = 'style="display:block;position:absolute;' +
-        'top:50px;left:50px;width:50px;height:50px;"';
-    iframeDoc.write(
-        `<iframe id="test-frame-offset-2" ${iframePos}></iframe>` +
-        '<div id="test-element-2" ' +
-        ' style="position:absolute;left:300px;top:300px">hi mom!</div>');
-    iframeDoc.close();
-    const iframe2 = iframeDoc.getElementById('test-frame-offset-2');
-    const testElement2 = iframeDoc.getElementById('test-element-2');
-    const iframeDoc2 = googDom.getFrameContentDocument(iframe2);
-    const iframeWindow2 = googDom.getWindow(iframeDoc2);
+      const iframePos = 'style="display:block;position:absolute;' +
+          'top:50px;left:50px;width:50px;height:50px;"';
+      iframeDoc.write(
+          `<iframe id="test-frame-offset-2" ${iframePos}></iframe>` +
+          '<div id="test-element-2" ' +
+          ' style="position:absolute;left:300px;top:300px">hi mom!</div>');
+      iframeDoc.close();
+      const iframe2 = iframeDoc.getElementById('test-frame-offset-2');
+      const testElement2 = iframeDoc.getElementById('test-element-2');
+      const iframeDoc2 = googDom.getFrameContentDocument(iframe2);
+      const iframeWindow2 = googDom.getWindow(iframeDoc2);
 
-    iframeDoc2.write(
-        '<div id="test-element-3" ' +
-        ' style="position:absolute;left:500px;top:500px">hi mom!</div>');
-    iframeDoc2.close();
-    const testElement3 = iframeDoc2.getElementById('test-element-3');
+      iframeDoc2.write(
+          '<div id="test-element-3" ' +
+          ' style="position:absolute;left:500px;top:500px">hi mom!</div>');
+      iframeDoc2.close();
+      const testElement3 = iframeDoc2.getElementById('test-element-3');
 
-    assertCoordinateApprox(300, 300, 0, googStyle.getPageOffset(testElement2));
-    assertCoordinateApprox(500, 500, 0, googStyle.getPageOffset(testElement3));
+      assertCoordinateApprox(
+          300, 300, 0, googStyle.getPageOffset(testElement2));
+      assertCoordinateApprox(
+          500, 500, 0, googStyle.getPageOffset(testElement3));
 
-    assertCoordinateApprox(
-        350, 350, 0, googStyle.getFramedPageOffset(testElement2, window));
-    assertCoordinateApprox(
-        300, 300, 0, googStyle.getFramedPageOffset(testElement2, iframeWindow));
+      assertCoordinateApprox(
+          350, 350, 0, googStyle.getFramedPageOffset(testElement2, window));
+      assertCoordinateApprox(
+          300, 300, 0,
+          googStyle.getFramedPageOffset(testElement2, iframeWindow));
 
-    assertCoordinateApprox(
-        600, 600, 0, googStyle.getFramedPageOffset(testElement3, window));
-    assertCoordinateApprox(
-        550, 550, 0, googStyle.getFramedPageOffset(testElement3, iframeWindow));
-    assertCoordinateApprox(
-        500, 500, 0,
-        googStyle.getFramedPageOffset(testElement3, iframeWindow2));
+      assertCoordinateApprox(
+          600, 600, 0, googStyle.getFramedPageOffset(testElement3, window));
+      assertCoordinateApprox(
+          550, 550, 0,
+          googStyle.getFramedPageOffset(testElement3, iframeWindow));
+      assertCoordinateApprox(
+          500, 500, 0,
+          googStyle.getFramedPageOffset(testElement3, iframeWindow2));
 
-    // Scroll the iframes a bit.
-    window.scrollBy(0, 5);
-    iframeWindow.scrollBy(0, 11);
-    iframeWindow2.scrollBy(0, 18);
+      // Scroll the iframes a bit.
+      window.scrollBy(0, 5);
+      iframeWindow.scrollBy(0, 11);
+      iframeWindow2.scrollBy(0, 18);
 
-    // On Firefox 2, scrolling inner iframes causes off by one errors
-    // in the page position, because we're using screen coords to compute them.
-    assertCoordinateApprox(300, 300, 2, googStyle.getPageOffset(testElement2));
-    assertCoordinateApprox(500, 500, 2, googStyle.getPageOffset(testElement3));
+      // On Firefox 2, scrolling inner iframes causes off by one errors
+      // in the page position, because we're using screen coords to compute
+      // them.
+      assertCoordinateApprox(
+          300, 300, 2, googStyle.getPageOffset(testElement2));
+      assertCoordinateApprox(
+          500, 500, 2, googStyle.getPageOffset(testElement3));
 
-    assertCoordinateApprox(
-        350, 350 - 11, 2, googStyle.getFramedPageOffset(testElement2, window));
-    assertCoordinateApprox(
-        300, 300, 2, googStyle.getFramedPageOffset(testElement2, iframeWindow));
+      assertCoordinateApprox(
+          350, 350 - 11, 2,
+          googStyle.getFramedPageOffset(testElement2, window));
+      assertCoordinateApprox(
+          300, 300, 2,
+          googStyle.getFramedPageOffset(testElement2, iframeWindow));
 
-    assertCoordinateApprox(
-        600, 600 - 18 - 11, 2,
-        googStyle.getFramedPageOffset(testElement3, window));
-    assertCoordinateApprox(
-        550, 550 - 18, 2,
-        googStyle.getFramedPageOffset(testElement3, iframeWindow));
-    assertCoordinateApprox(
-        500, 500, 2,
-        googStyle.getFramedPageOffset(testElement3, iframeWindow2));
+      assertCoordinateApprox(
+          600, 600 - 18 - 11, 2,
+          googStyle.getFramedPageOffset(testElement3, window));
+      assertCoordinateApprox(
+          550, 550 - 18, 2,
+          googStyle.getFramedPageOffset(testElement3, iframeWindow));
+      assertCoordinateApprox(
+          500, 500, 2,
+          googStyle.getFramedPageOffset(testElement3, iframeWindow2));
 
-    // In IE, if the element is in a frame that's been removed from the DOM and
-    // relativeWin is not that frame's contentWindow, the contentWindow's parent
-    // reference points to itself. We want to guarantee that we don't fall into
-    // an infinite loop.
-    const iframeParent = iframe.parentElement;
-    iframeParent.removeChild(iframe);
-    // We don't check the value returned as it differs by browser. 0,0 for
-    // Chrome and FF. IE returns 30000 or 30198 for x in IE8-9 and 300 in
-    // IE10-11
-    googStyle.getFramedPageOffset(testElement2, window);
+      // In IE, if the element is in a frame that's been removed from the DOM
+      // and relativeWin is not that frame's contentWindow, the contentWindow's
+      // parent reference points to itself. We want to guarantee that we don't
+      // fall into an infinite loop.
+      const iframeParent = iframe.parentElement;
+      iframeParent.removeChild(iframe);
+      // We don't check the value returned as it differs by browser. 0,0 for
+      // Chrome and FF. IE returns 30000 or 30198 for x in IE8-9 and 300 in
+      // IE10-11
+      googStyle.getFramedPageOffset(testElement2, window);
+    } finally {
+      googDom.removeNode(iframe);
+    }
   },
 
   testTranslateRectForAnotherFrame() {
@@ -1892,6 +1914,7 @@ testSuite({
     assertEquals(iframeViewportSize.width, visible.right);
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testGetVisibleRectForElementWithBodyScrolled() {
     const container = googDom.getElement('test-visible2');
     const dom = googDom.getDomHelper(container);
@@ -1948,6 +1971,7 @@ testSuite({
     assertNull(googStyle.getVisibleRectForElement(el));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testGetVisibleRectForElementWithNestedAreaAndNonOffsetAncestor() {
     // IE7 quirks mode somehow consider container2 below as offset parent
     // of the element, which is incorrect.
@@ -2020,6 +2044,7 @@ testSuite({
     assertNull(googStyle.getVisibleRectForElement(el));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testGetVisibleRectForElementInsideNestedScrollableArea() {
     const container = googDom.getElement('test-visible2');
     const dom = googDom.getDomHelper(container);
@@ -2245,6 +2270,7 @@ testSuite({
     assertEquals(parent, googStyle.getOffsetParent(child));
   },
 
+  /** @suppress {missingProperties} suppression added to enable type checking */
   testShadowDomOffsetParent() {
     // Ignore browsers that don't support shadowDOM.
     if (!document.createShadowRoot) {
@@ -2263,11 +2289,6 @@ testSuite({
   },
 
   testGetViewportPageOffset() {
-    expectedFailures.expectFailureFor(
-        userAgent.IE && !userAgent.isVersionOrHigher(10),
-        'Test has been flaky for ie9-win7 and ie8-winxp image. Disabling. ' +
-            'See b/22873770.');
-
     try {
       const testViewport = googDom.getElement('test-viewport');
       testViewport.style.height = '5000px';
@@ -2306,6 +2327,7 @@ testSuite({
     // First check the element is actually translated, and we haven't missed
     // one of the vendor-specific transform properties
     const position = googStyle.getClientPosition(element);
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const translation = googStyle.getCssTranslation(element);
     const expectedTranslation = new Coordinate(20, 30);
 
@@ -2317,6 +2339,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * with a vendor prefix for Webkit.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleNameWebkit() {
     const mockElement = {'style': {'WebkitTransformOrigin': ''}};
@@ -2330,6 +2353,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * when it exists without a vendor prefix for Webkit.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleNameWebkitNoPrefix() {
     const mockElement = {
@@ -2345,6 +2369,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * with a vendor prefix for Gecko.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleNameGecko() {
     const mockElement = {'style': {'MozTransformOrigin': ''}};
@@ -2358,6 +2383,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * when it exists without a vendor prefix for Gecko.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleNameGeckoNoPrefix() {
     const mockElement = {
@@ -2373,6 +2399,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * with a vendor prefix for IE.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleNameIE() {
     const mockElement = {'style': {'msTransformOrigin': ''}};
@@ -2386,6 +2413,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * when it exists without a vendor prefix for IE.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleNameIENoPrefix() {
     const mockElement = {
@@ -2398,37 +2426,11 @@ testSuite({
         googStyle.getVendorStyleName_(mockElement, 'transform-origin'));
   },
 
-  /**
-   * Test for the proper vendor style name for a CSS property
-   * with a vendor prefix for Opera.
-   */
-  testGetVendorStyleNameOpera() {
-    const mockElement = {'style': {'OTransformOrigin': ''}};
-
-    assertUserAgent([UserAgents.OPERA], 'Opera');
-    assertEquals(
-        '-o-transform-origin',
-        googStyle.getVendorStyleName_(mockElement, 'transform-origin'));
-  },
-
-  /**
-   * Test for the proper vendor style name for a CSS property
-   * when it exists without a vendor prefix for Opera.
-   */
-  testGetVendorStyleNameOperaNoPrefix() {
-    const mockElement = {
-      'style': {'OTransformOrigin': '', 'transformOrigin': ''},
-    };
-
-    assertUserAgent([UserAgents.OPERA], 'Opera');
-    assertEquals(
-        'transform-origin',
-        googStyle.getVendorStyleName_(mockElement, 'transform-origin'));
-  },
 
   /**
    * Test for the proper vendor style name for a CSS property
    * with a vendor prefix for Webkit.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorJsStyleNameWebkit() {
     const mockElement = {'style': {'WebkitTransformOrigin': ''}};
@@ -2442,6 +2444,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * when it exists without a vendor prefix for Webkit.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorJsStyleNameWebkitNoPrefix() {
     const mockElement = {
@@ -2457,6 +2460,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * with a vendor prefix for Gecko.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorJsStyleNameGecko() {
     const mockElement = {'style': {'MozTransformOrigin': ''}};
@@ -2470,6 +2474,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * when it exists without a vendor prefix for Gecko.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorJsStyleNameGeckoNoPrefix() {
     const mockElement = {
@@ -2485,6 +2490,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * with a vendor prefix for IE.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorJsStyleNameIE() {
     const mockElement = {'style': {'msTransformOrigin': ''}};
@@ -2498,6 +2504,7 @@ testSuite({
   /**
    * Test for the proper vendor style name for a CSS property
    * when it exists without a vendor prefix for IE.
+   * @suppress {visibility,checkTypes} suppression added to enable type checking
    */
   testGetVendorJsStyleNameIENoPrefix() {
     const mockElement = {
@@ -2510,50 +2517,12 @@ testSuite({
         googStyle.getVendorJsStyleName_(mockElement, 'transform-origin'));
   },
 
-  /**
-   * Test for the proper vendor style name for a CSS property
-   * with a vendor prefix for Opera.
-   */
-  testGetVendorJsStyleNameOpera() {
-    const mockElement = {'style': {'OTransformOrigin': ''}};
 
-    assertUserAgent([UserAgents.OPERA], 'Opera');
-    assertEquals(
-        'OTransformOrigin',
-        googStyle.getVendorJsStyleName_(mockElement, 'transform-origin'));
-  },
-
-  /**
-   * Test for the proper vendor style name for a CSS property
-   * when it exists without a vendor prefix for Opera.
-   */
-  testGetVendorJsStyleNameOperaNoPrefix() {
-    const mockElement = {
-      'style': {'OTransformOrigin': '', 'transformOrigin': ''},
-    };
-
-    assertUserAgent([UserAgents.OPERA], 'Opera');
-    assertEquals(
-        'transformOrigin',
-        googStyle.getVendorJsStyleName_(mockElement, 'transform-origin'));
-  },
-
-  /**
-   * Test for the setting a style name for a CSS property
-   * with a vendor prefix for Webkit.
-   */
-  testSetVendorStyleWebkit() {
-    const mockElement = {'style': {'WebkitTransform': ''}};
-    const styleValue = 'translate3d(0,0,0)';
-
-    assertUserAgent([UserAgents.WEBKIT], 'WebKit');
-    googStyle.setStyle(mockElement, 'transform', styleValue);
-    assertEquals(styleValue, mockElement.style.WebkitTransform);
-  },
 
   /**
    * Test for the setting a style name for a CSS property
    * with a vendor prefix for Mozilla.
+   * @suppress {checkTypes} suppression added to enable type checking
    */
   testSetVendorStyleGecko() {
     const mockElement = {'style': {'MozTransform': ''}};
@@ -2567,6 +2536,7 @@ testSuite({
   /**
    * Test for the setting a style name for a CSS property
    * with a vendor prefix for IE.
+   * @suppress {checkTypes} suppression added to enable type checking
    */
   testSetVendorStyleIE() {
     const mockElement = {'style': {'msTransform': ''}};
@@ -2577,22 +2547,11 @@ testSuite({
     assertEquals(styleValue, mockElement.style.msTransform);
   },
 
-  /**
-   * Test for the setting a style name for a CSS property
-   * with a vendor prefix for Opera.
-   */
-  testSetVendorStyleOpera() {
-    const mockElement = {'style': {'OTransform': ''}};
-    const styleValue = 'translate3d(0,0,0)';
-
-    assertUserAgent([UserAgents.OPERA], 'Opera');
-    googStyle.setStyle(mockElement, 'transform', styleValue);
-    assertEquals(styleValue, mockElement.style.OTransform);
-  },
 
   /**
    * Test for the getting a style name for a CSS property
    * with a vendor prefix for Webkit.
+   * @suppress {checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleWebkit() {
     const mockElement = {'style': {'WebkitTransform': ''}};
@@ -2606,6 +2565,7 @@ testSuite({
   /**
    * Test for the getting a style name for a CSS property
    * with a vendor prefix for Mozilla.
+   * @suppress {checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleGecko() {
     const mockElement = {'style': {'MozTransform': ''}};
@@ -2619,6 +2579,7 @@ testSuite({
   /**
    * Test for the getting a style name for a CSS property
    * with a vendor prefix for IE.
+   * @suppress {checkTypes} suppression added to enable type checking
    */
   testGetVendorStyleIE() {
     const mockElement = {'style': {'msTransform': ''}};
@@ -2629,19 +2590,11 @@ testSuite({
     assertEquals(styleValue, googStyle.getStyle(mockElement, 'transform'));
   },
 
+
   /**
-   * Test for the getting a style name for a CSS property
-   * with a vendor prefix for Opera.
+     @suppress {strictMissingProperties} suppression added to enable type
+     checking
    */
-  testGetVendorStyleOpera() {
-    const mockElement = {'style': {'OTransform': ''}};
-    const styleValue = 'translate3d(0,0,0)';
-
-    assertUserAgent([UserAgents.OPERA], 'Opera');
-    googStyle.setStyle(mockElement, 'transform', styleValue);
-    assertEquals(styleValue, googStyle.getStyle(mockElement, 'transform'));
-  },
-
   testParseStyleAttributeWithColon() {
     // Regression test for https://github.com/google/closure-library/issues/127.
     const cssObj = googStyle.parseStyleAttribute(
@@ -2656,3 +2609,13 @@ testSuite({
         cssObj.MsFilter);
   },
 });
+
+/**
+ * @return {!HTMLIFrameElement}
+ */
+function createTestFrame() {
+  const frame = googDom.createDom(TagName.IFRAME);
+  safe.setIframeSrc(
+      frame, TrustedResourceUrl.fromConstant(Const.from('about:blank')));
+  return frame;
+}

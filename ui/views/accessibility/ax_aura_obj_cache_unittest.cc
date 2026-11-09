@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node.h"
@@ -15,12 +17,13 @@
 #include "ui/accessibility/ax_tree_serializer.h"
 #include "ui/accessibility/ax_tree_source_checker.h"
 #include "ui/aura/window.h"
+#include "ui/base/buildflags.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/accessibility/ax_aura_obj_wrapper.h"
-#include "ui/views/accessibility/ax_event_manager.h"
-#include "ui/views/accessibility/ax_event_observer.h"
 #include "ui/views/accessibility/ax_tree_source_views.h"
+#include "ui/views/accessibility/ax_update_notifier.h"
+#include "ui/views/accessibility/ax_update_observer.h"
 #include "ui/views/accessibility/ax_virtual_view.h"
 #include "ui/views/accessibility/ax_virtual_view_wrapper.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -28,24 +31,17 @@
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget_delegate.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 namespace {
 
-// This class can be used as a deleter for std::unique_ptr<Widget>
-// to call function Widget::CloseNow automatically.
-struct WidgetCloser {
-  inline void operator()(Widget* widget) const { widget->CloseNow(); }
-};
-
-using WidgetAutoclosePtr = std::unique_ptr<Widget, WidgetCloser>;
-
 bool HasNodeWithName(ui::AXNode* node, const std::string& name) {
-  if (node->GetStringAttribute(ax::mojom::StringAttribute::kName) == name)
+  if (node->GetStringAttribute(ax::mojom::StringAttribute::kName) == name) {
     return true;
-  for (auto* child : node->children()) {
-    if (HasNodeWithName(child, name))
+  }
+  for (ui::AXNode* child : node->children()) {
+    if (HasNodeWithName(child, name)) {
       return true;
+    }
   }
   return false;
 }
@@ -53,6 +49,8 @@ bool HasNodeWithName(ui::AXNode* node, const std::string& name) {
 bool HasNodeWithName(const ui::AXTree& tree, const std::string& name) {
   return HasNodeWithName(tree.root(), name);
 }
+
+}  // namespace
 
 class AXAuraObjCacheTest : public WidgetTest {
  public:
@@ -64,15 +62,27 @@ class AXAuraObjCacheTest : public WidgetTest {
     wrapper->Serialize(&data);
     return data;
   }
+
+ protected:
+  std::unique_ptr<Widget> CreateTopLevelWindowWidget() {
+    auto widget = std::make_unique<Widget>();
+    Widget::InitParams params =
+        CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                     Widget::InitParams::TYPE_WINDOW);
+    params.bounds = gfx::Rect(0, 0, 200, 200);
+    params.activatable = Widget::InitParams::Activatable::kYes;
+    widget->Init(std::move(params));
+    widget->Show();
+    return widget;
+  }
 };
 
 TEST_F(AXAuraObjCacheTest, TestViewRemoval) {
   AXAuraObjCache cache;
-  WidgetAutoclosePtr widget(CreateTopLevelPlatformWidget());
-  View* parent = new View();
-  widget->GetRootView()->AddChildView(parent);
-  View* child = new View();
-  parent->AddChildView(child);
+  std::unique_ptr<Widget> widget(
+      CreateTopLevelPlatformWidget(Widget::InitParams::CLIENT_OWNS_WIDGET));
+  auto* parent = widget->GetRootView()->AddChildView(std::make_unique<View>());
+  auto* child = parent->AddChildView(std::make_unique<View>());
 
   AXAuraObjWrapper* ax_widget = cache.GetOrCreate(widget.get());
   ASSERT_NE(nullptr, ax_widget);
@@ -82,20 +92,16 @@ TEST_F(AXAuraObjCacheTest, TestViewRemoval) {
   ASSERT_NE(nullptr, ax_child);
 
   // Everything should have an ID, indicating it's in the cache.
-  ASSERT_GT(cache.GetID(widget.get()), 0);
-  ASSERT_GT(cache.GetID(parent), 0);
-  ASSERT_GT(cache.GetID(child), 0);
+  ASSERT_NE(cache.GetID(widget.get()), ui::kInvalidAXNodeID);
+  ASSERT_NE(cache.GetID(parent), ui::kInvalidAXNodeID);
+  ASSERT_NE(cache.GetID(child), ui::kInvalidAXNodeID);
 
   // Removing the parent view should remove both the parent and child
   // from the cache, but leave the widget.
-  widget->GetRootView()->RemoveChildView(parent);
-  ASSERT_GT(cache.GetID(widget.get()), 0);
+  widget->GetRootView()->RemoveChildViewT(parent);
+  ASSERT_NE(cache.GetID(widget.get()), ui::kInvalidAXNodeID);
   ASSERT_EQ(ui::kInvalidAXNodeID, cache.GetID(parent));
   ASSERT_EQ(ui::kInvalidAXNodeID, cache.GetID(child));
-
-  // Explicitly delete |parent| to prevent a memory leak, since calling
-  // RemoveChildView() doesn't delete it.
-  delete parent;
 }
 
 // Helper for the ViewDestruction test.
@@ -105,21 +111,18 @@ class ViewBlurObserver : public ViewObserver {
     observation_.Observe(view);
   }
 
-  // This is fired while the view is being destroyed, after the cache entry is
-  // removed by the AXWidgetObjWrapper. Re-create the cache entry so we can
-  // test that it will also be removed.
   void OnViewBlurred(View* view) override {
     ASSERT_FALSE(was_called());
     observation_.Reset();
 
-    ASSERT_EQ(cache_->GetID(view), 0);
-    cache_->GetOrCreate(view);
+    // The cache entry gets deleted in
+    // AXViewObjWrapper::OnViewIsDeleting which occurs later in ~View.
   }
 
   bool was_called() { return !observation_.IsObserving(); }
 
  private:
-  AXAuraObjCache* cache_;
+  raw_ptr<AXAuraObjCache> cache_;
   base::ScopedObservation<View, ViewObserver> observation_{this};
 };
 
@@ -128,61 +131,112 @@ class ViewBlurObserver : public ViewObserver {
 TEST_F(AXAuraObjCacheTest, ViewDestruction) {
   AXAuraObjCache cache;
 
-  WidgetAutoclosePtr widget(CreateTopLevelPlatformWidget());
-  auto* button = new LabelButton(Button::PressedCallback(), u"button");
-  widget->GetRootView()->AddChildView(button);
+  std::unique_ptr<Widget> widget(
+      CreateTopLevelPlatformWidget(Widget::InitParams::CLIENT_OWNS_WIDGET));
+  auto button =
+      std::make_unique<LabelButton>(Button::PressedCallback(), u"button");
+  auto* button_ptr = button.get();
+  widget->GetRootView()->AddChildView(std::move(button));
   widget->Activate();
-  button->RequestFocus();
+  button_ptr->RequestFocus();
   base::RunLoop().RunUntilIdle();
-  ASSERT_TRUE(button->HasFocus());
+  ASSERT_TRUE(button_ptr->HasFocus());
 
   cache.GetOrCreate(widget.get());
-  cache.GetOrCreate(button);
+  cache.GetOrCreate(button_ptr);
   // Everything should have an ID, indicating it's in the cache.
-  EXPECT_GT(cache.GetID(widget.get()), 0);
-  EXPECT_GT(cache.GetID(button), 0);
+  EXPECT_NE(cache.GetID(widget.get()), ui::kInvalidAXNodeID);
+  EXPECT_NE(cache.GetID(button_ptr), ui::kInvalidAXNodeID);
 
-  ViewBlurObserver observer(&cache, button);
-  delete button;
+  ViewBlurObserver observer(&cache, button_ptr);
+  widget->GetRootView()->RemoveChildViewT(button_ptr);
 
   // The button object is destroyed, so there should be no stale cache entries.
-  EXPECT_NE(button, nullptr);
-  EXPECT_EQ(ui::kInvalidAXNodeID, cache.GetID(button));
+  EXPECT_NE(button_ptr, nullptr);
+  EXPECT_EQ(ui::kInvalidAXNodeID, cache.GetID(button_ptr));
   EXPECT_TRUE(observer.was_called());
+}
+
+TEST_F(AXAuraObjCacheTest, CacheDestructionUAF) {
+  // This test ensures that a UAF is not possible during cache destruction.
+  // Two top-level widgets need to be created and inserted into |root_windows_|.
+  // This test uses manual memory management, rather than managed helpers
+  // that other tests are using. Ensure there is not a UAF crash when deleting
+  // the cache.
+  auto cache = std::make_unique<AXAuraObjCache>();
+
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  params.bounds = gfx::Rect(0, 0, 200, 200);
+  widget->Init(std::move(params));
+  cache->OnRootWindowObjCreated(widget->GetNativeWindow());
+
+  widget->Activate();
+  base::RunLoop().RunUntilIdle();
+
+  cache->GetOrCreate(widget.get());
+
+  // Everything should have an ID, indicating it's in the cache.
+  EXPECT_NE(cache->GetID(widget.get()), ui::kInvalidAXNodeID);
+
+  // Create a second top-level widget to ensure |root_windows_| isn't empty.
+  auto widget2 = std::make_unique<Widget>();
+  Widget::InitParams params2 = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  params2.bounds = gfx::Rect(0, 0, 200, 200);
+  widget2->Init(std::move(params2));
+  cache->OnRootWindowObjCreated(widget2->GetNativeWindow());
+
+  cache->GetOrCreate(widget2.get());
+  widget2->Activate();
+  base::RunLoop().RunUntilIdle();
+
+  // Everything should have an ID, indicating it's in the cache.
+  EXPECT_NE(cache->GetID(widget2.get()), ui::kInvalidAXNodeID);
+
+  // Delete the first widget, then delete the cache.
+  cache->OnRootWindowObjDestroyed(widget->GetNativeWindow());
+  widget.reset();
+  cache.reset();
 }
 
 TEST_F(AXAuraObjCacheTest, ValidTree) {
   // Create a parent window.
   auto parent_widget = std::make_unique<Widget>();
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(0, 0, 200, 200);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   parent_widget->Init(std::move(params));
   parent_widget->GetNativeWindow()->SetTitle(u"ParentWindow");
   parent_widget->Show();
 
   // Create a child window.
-  Widget* child_widget = new Widget();  // Owned by parent_widget.
-  params = CreateParams(Widget::InitParams::TYPE_BUBBLE);
+  auto child_widget = std::make_unique<Widget>();  // Owned by parent_widget.
+  params = CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                        Widget::InitParams::TYPE_BUBBLE);
   params.parent = parent_widget->GetNativeWindow();
   params.child = true;
   params.bounds = gfx::Rect(100, 100, 200, 200);
-  params.ownership = views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET;
   child_widget->Init(std::move(params));
   child_widget->GetNativeWindow()->SetTitle(u"ChildWindow");
   child_widget->Show();
 
   // Create a child view.
-  auto* button = new LabelButton(Button::PressedCallback(), u"ChildButton");
+  auto button =
+      std::make_unique<LabelButton>(Button::PressedCallback(), u"ChildButton");
   button->SetSize(gfx::Size(20, 20));
-  child_widget->GetContentsView()->AddChildView(button);
+  child_widget->GetContentsView()->AddChildView(std::move(button));
 
   // Use AXAuraObjCache to serialize the node tree.
   AXAuraObjCache cache;
   ui::AXTreeID tree_id = ui::AXTreeID::CreateNewAXTreeID();
   AXTreeSourceViews tree_source(
-      cache.GetOrCreate(parent_widget->GetNativeWindow()), tree_id, &cache);
-  ui::AXTreeSerializer<AXAuraObjWrapper*> serializer(&tree_source);
+      cache.GetOrCreate(parent_widget->GetNativeWindow())->GetUniqueId(),
+      tree_id, &cache);
+  ui::AXTreeSerializer<AXAuraObjWrapper*, std::vector<AXAuraObjWrapper*>,
+                       ui::AXTreeUpdate*, ui::AXTreeData*, ui::AXNodeData>
+      serializer(&tree_source);
   ui::AXTreeUpdate serialized_tree;
   serializer.SerializeChanges(tree_source.GetRoot(), &serialized_tree);
 
@@ -198,40 +252,34 @@ TEST_F(AXAuraObjCacheTest, ValidTree) {
 
 TEST_F(AXAuraObjCacheTest, GetFocusIsUnignoredAncestor) {
   AXAuraObjCache cache;
-  auto widget = std::make_unique<Widget>();
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
-  params.bounds = gfx::Rect(0, 0, 200, 200);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.activatable = views::Widget::InitParams::Activatable::kYes;
-  widget->Init(std::move(params));
-  widget->Show();
+  auto widget = CreateTopLevelWindowWidget();
 
   // Note that AXAuraObjCache::GetFocusedView has some logic to force focus on
   // the first child of the client view when one cannot be found from the
-  // FocusManager.
-  auto* client = widget->non_client_view()->client_view();
+  // FocusManager if it has a child tree id.
+  ClientView* client = widget->non_client_view()->client_view();
   ASSERT_NE(nullptr, client);
-  auto* client_child = client->children().front();
+  View* client_child = client->children().front();
   ASSERT_NE(nullptr, client_child);
-  client_child->GetViewAccessibility().OverrideRole(ax::mojom::Role::kDialog);
+  client_child->GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
+  client_child->GetViewAccessibility().SetChildTreeID(
+      ui::AXTreeID::CreateNewAXTreeID());
 
-  View* parent = new View();
-  widget->GetRootView()->AddChildView(parent);
-  parent->GetViewAccessibility().OverrideRole(ax::mojom::Role::kTextField);
+  auto* parent = widget->GetRootView()->AddChildView(std::make_unique<View>());
+  parent->GetViewAccessibility().SetRole(ax::mojom::Role::kTextField);
   parent->SetFocusBehavior(View::FocusBehavior::ALWAYS);
 
-  View* child = new View();
-  parent->AddChildView(child);
-  child->GetViewAccessibility().OverrideRole(ax::mojom::Role::kGroup);
+  auto* child = parent->AddChildView(std::make_unique<View>());
+  child->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   child->SetFocusBehavior(View::FocusBehavior::ALWAYS);
 
-  auto* ax_widget = cache.GetOrCreate(widget.get());
+  AXAuraObjWrapper* ax_widget = cache.GetOrCreate(widget.get());
   ASSERT_NE(nullptr, ax_widget);
-  auto* ax_client_child = cache.GetOrCreate(client_child);
+  AXAuraObjWrapper* ax_client_child = cache.GetOrCreate(client_child);
   ASSERT_NE(nullptr, ax_client_child);
-  auto* ax_parent = cache.GetOrCreate(parent);
+  AXAuraObjWrapper* ax_parent = cache.GetOrCreate(parent);
   ASSERT_NE(nullptr, ax_parent);
-  auto* ax_child = cache.GetOrCreate(child);
+  AXAuraObjWrapper* ax_child = cache.GetOrCreate(child);
   ASSERT_NE(nullptr, ax_child);
 
   ASSERT_EQ(nullptr, cache.GetFocus());
@@ -247,11 +295,13 @@ TEST_F(AXAuraObjCacheTest, GetFocusIsUnignoredAncestor) {
   ASSERT_EQ(ax::mojom::Role::kGroup, GetData(cache.GetFocus()).role);
   ASSERT_EQ(ax_child, cache.GetFocus());
 
-  child->GetViewAccessibility().OverrideIsIgnored(true);
+  // Ignore should cause focus to move upwards.
+  child->GetViewAccessibility().SetIsIgnored(true);
   ASSERT_EQ(ax::mojom::Role::kTextField, GetData(cache.GetFocus()).role);
   ASSERT_EQ(ax_parent, cache.GetFocus());
 
-  parent->GetViewAccessibility().OverrideIsIgnored(true);
+  // Propagate focus to ancestor should also cause focus to move upward.
+  parent->GetViewAccessibility().set_propagate_focus_to_ancestor(true);
   ASSERT_EQ(ax::mojom::Role::kWindow, GetData(cache.GetFocus()).role);
   ASSERT_EQ(cache.GetOrCreate(widget->GetRootView()), cache.GetFocus());
 
@@ -263,21 +313,26 @@ class TestingWidgetDelegateView : public WidgetDelegateView {
   explicit TestingWidgetDelegateView(base::RunLoop* run_loop)
       : run_loop_(run_loop) {}
   ~TestingWidgetDelegateView() override {
-    NotifyAccessibilityEvent(ax::mojom::Event::kChildrenChanged, false);
+    NotifyAccessibilityEventDeprecated(ax::mojom::Event::kChildrenChanged,
+                                       false);
     run_loop_->QuitWhenIdle();
+  }
+  void WidgetIsZombie(Widget* widget) override {
+    NotifyAccessibilityEventDeprecated(ax::mojom::Event::kChildrenChanged,
+                                       false);
   }
   TestingWidgetDelegateView(const TestingWidgetDelegateView&) = delete;
   TestingWidgetDelegateView& operator=(const TestingWidgetDelegateView&) =
       delete;
 
  private:
-  base::RunLoop* run_loop_;
+  raw_ptr<base::RunLoop> run_loop_;
 };
 
-class TestingAXEventObserver : public AXEventObserver {
+class TestingAXEventObserver : public AXUpdateObserver {
  public:
   explicit TestingAXEventObserver(AXAuraObjCache* cache) : cache_(cache) {
-    observation_.Observe(AXEventManager::Get());
+    observation_.Observe(AXUpdateNotifier::Get());
   }
   ~TestingAXEventObserver() override = default;
   TestingAXEventObserver(const TestingAXEventObserver&) = delete;
@@ -285,67 +340,175 @@ class TestingAXEventObserver : public AXEventObserver {
 
  private:
   void OnViewEvent(View* view, ax::mojom::Event event_type) override {
-    auto* ax_view = cache_->GetOrCreate(view);
+    AXAuraObjWrapper* ax_view = cache_->GetOrCreate(view);
     while (ax_view != nullptr) {
       ax_view = ax_view->GetParent();
     }
   }
 
-  AXAuraObjCache* cache_;
-  base::ScopedObservation<AXEventManager, AXEventObserver> observation_{this};
+  raw_ptr<AXAuraObjCache> cache_;
+  base::ScopedObservation<AXUpdateNotifier, AXUpdateObserver> observation_{
+      this};
 };
 
 TEST_F(AXAuraObjCacheTest, DoNotCreateWidgetWrapperOnDestroyed) {
   AXAuraObjCache cache;
   TestingAXEventObserver observer(&cache);
-  auto* widget = new Widget;
+  auto widget = std::make_unique<Widget>();
 
   base::RunLoop run_loop;
-  auto* delegate = new TestingWidgetDelegateView(&run_loop);
+  auto delegate = std::make_unique<TestingWidgetDelegateView>(&run_loop);
 
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(0, 0, 200, 200);
   params.activatable = views::Widget::InitParams::Activatable::kYes;
-  params.delegate = delegate;
+  params.delegate = delegate.release();
   widget->Init(std::move(params));
   widget->Show();
+  auto* widget_ptr = widget.get();
 
-  EXPECT_NE(ui::kInvalidAXNodeID, cache.GetID(widget));
+  EXPECT_NE(ui::kInvalidAXNodeID, cache.GetID(widget_ptr));
 
-  // Widget is closed asynchronously.
-  widget->Close();
+  // NativeWidget is closed asynchronously.
+  widget.reset();
   run_loop.Run();
 
-  EXPECT_EQ(ui::kInvalidAXNodeID, cache.GetID(widget));
+  EXPECT_EQ(ui::kInvalidAXNodeID, cache.GetID(widget_ptr));
 }
 
 TEST_F(AXAuraObjCacheTest, VirtualViews) {
   AXAuraObjCache cache;
-  auto widget = std::make_unique<Widget>();
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
-  params.bounds = gfx::Rect(0, 0, 200, 200);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.activatable = views::Widget::InitParams::Activatable::kYes;
-  widget->Init(std::move(params));
-  widget->Show();
+  auto widget = CreateTopLevelWindowWidget();
 
-  View* parent = new View();
-  widget->GetRootView()->AddChildView(parent);
-  auto* virtual_label = new AXVirtualView;
-  virtual_label->GetCustomData().role = ax::mojom::Role::kStaticText;
-  virtual_label->GetCustomData().SetName("Label");
-  parent->GetViewAccessibility().AddVirtualChildView(
-      base::WrapUnique(virtual_label));
+  auto* parent = widget->GetRootView()->AddChildView(std::make_unique<View>());
+  auto virtual_label = std::make_unique<AXVirtualView>();
+  auto* virtual_label_ptr = virtual_label.get();
+  virtual_label->SetRole(ax::mojom::Role::kStaticText);
+  virtual_label->SetName("Label");
+  parent->GetViewAccessibility().AddVirtualChildView(std::move(virtual_label));
 
-  auto* wrapper = virtual_label->GetOrCreateWrapper(&cache);
+  AXAuraObjWrapper* wrapper = virtual_label_ptr->GetOrCreateWrapper(&cache);
   ui::AXNodeID id = wrapper->GetUniqueId();
-  auto* wrapper2 = cache.Get(id);
+  AXAuraObjWrapper* wrapper2 = cache.Get(id);
   EXPECT_EQ(wrapper, wrapper2);
 
-  parent->GetViewAccessibility().RemoveVirtualChildView(virtual_label);
+  parent->GetViewAccessibility().RemoveVirtualChildView(virtual_label_ptr);
   EXPECT_EQ(nullptr, cache.Get(id));
 }
 
-}  // namespace
-}  // namespace test
-}  // namespace views
+// Linux and Windows build with both USE_AURA and HAS_NATIVE_ACCESSIBILITY,
+// meaning they would run these tests but they use ViewAXPlatformNodeDelegate
+// for popup focus overrides, which doesn't use AXAuraObjCache, so these tests
+// would fail.
+#if !BUILDFLAG(HAS_NATIVE_ACCESSIBILITY)
+class AXAuraObjCachePopupFocusOverrideTest : public AXAuraObjCacheTest {
+ public:
+  AXAuraObjCachePopupFocusOverrideTest() = default;
+  ~AXAuraObjCachePopupFocusOverrideTest() override = default;
+
+  void SetUp() override {
+    AXAuraObjCacheTest::SetUp();
+    widget_ = CreateTopLevelWindowWidget();
+    cache_.OnRootWindowObjCreated(widget_->GetNativeWindow());
+    focused_view_ = AddFocusedChildView(widget_.get());
+  }
+
+  void TearDown() override {
+    cache_.OnRootWindowObjDestroyed(widget_->GetNativeWindow());
+    focused_view_ = nullptr;
+    widget_.reset();
+    AXAuraObjCacheTest::TearDown();
+  }
+
+ protected:
+  std::unique_ptr<Widget> CreateChildPopupWidget(aura::Window* parent) {
+    auto popup_widget = std::make_unique<Widget>();
+    Widget::InitParams popup_params = CreateParams(
+        Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+    popup_params.bounds = gfx::Rect(50, 50, 100, 100);
+    popup_params.parent = parent;
+    popup_widget->Init(std::move(popup_params));
+    popup_widget->Show();
+    return popup_widget;
+  }
+
+  View* AddFocusedChildView(Widget* widget) {
+    auto* view = widget->GetRootView()->AddChildView(std::make_unique<View>());
+    view->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+    view->RequestFocus();
+    return view;
+  }
+
+  View* AddPopupOverrideChildView(Widget* widget) {
+    auto* view = widget->GetRootView()->AddChildView(std::make_unique<View>());
+    view->GetViewAccessibility().SetPopupFocusOverride();
+    return view;
+  }
+
+  AXAuraObjCache cache_;
+  std::unique_ptr<Widget> widget_;
+  raw_ptr<View> focused_view_ = nullptr;
+};
+
+TEST_F(AXAuraObjCachePopupFocusOverrideTest, ExplicitRelease) {
+  EXPECT_EQ(cache_.GetOrCreate(focused_view_), cache_.GetFocus());
+  EXPECT_TRUE(focused_view_->GetViewAccessibility().IsFocusedForTesting());
+
+  View* popup_container =
+      widget_->GetRootView()->AddChildView(std::make_unique<View>());
+  View* popup_item = popup_container->AddChildView(std::make_unique<View>());
+  popup_item->GetViewAccessibility().SetPopupFocusOverride();
+  EXPECT_EQ(popup_item, AXAuraObjCache::GetPopupFocusOverride());
+  EXPECT_EQ(cache_.GetOrCreate(popup_item), cache_.GetFocus());
+  EXPECT_TRUE(popup_item->GetViewAccessibility().IsFocusedForTesting());
+  EXPECT_FALSE(focused_view_->GetViewAccessibility().IsFocusedForTesting());
+
+  // Calling EndPopupFocusOverride() on the container view (as PopupBaseView and
+  // SubmenuView do) clears the active popup focus override.
+  popup_container->GetViewAccessibility().EndPopupFocusOverride();
+  EXPECT_EQ(nullptr, AXAuraObjCache::GetPopupFocusOverride());
+  EXPECT_EQ(cache_.GetOrCreate(focused_view_), cache_.GetFocus());
+  EXPECT_FALSE(popup_item->GetViewAccessibility().IsFocusedForTesting());
+  EXPECT_TRUE(focused_view_->GetViewAccessibility().IsFocusedForTesting());
+}
+
+TEST_F(AXAuraObjCachePopupFocusOverrideTest, ClearedOnViewDestruction) {
+  View* popup_view = AddPopupOverrideChildView(widget_.get());
+  View* other_view =
+      widget_->GetRootView()->AddChildView(std::make_unique<View>());
+  EXPECT_EQ(popup_view, AXAuraObjCache::GetPopupFocusOverride());
+  EXPECT_EQ(cache_.GetOrCreate(popup_view), cache_.GetFocus());
+
+  // Destroying an unrelated view must not clear the active override.
+  widget_->GetRootView()->RemoveChildViewT(other_view);
+  EXPECT_EQ(popup_view, AXAuraObjCache::GetPopupFocusOverride());
+  EXPECT_EQ(cache_.GetOrCreate(popup_view), cache_.GetFocus());
+
+  // Destroying the overridden view clears the override and restores focus.
+  widget_->GetRootView()->RemoveChildViewT(popup_view);
+  EXPECT_EQ(nullptr, AXAuraObjCache::GetPopupFocusOverride());
+  EXPECT_EQ(cache_.GetOrCreate(focused_view_), cache_.GetFocus());
+}
+
+TEST_F(AXAuraObjCachePopupFocusOverrideTest, WidgetVisibilityAndClosure) {
+  auto popup_widget = CreateChildPopupWidget(widget_->GetNativeWindow());
+  View* popup_view = AddPopupOverrideChildView(popup_widget.get());
+  EXPECT_EQ(cache_.GetOrCreate(popup_view), cache_.GetFocus());
+
+  popup_widget->Hide();
+  EXPECT_EQ(cache_.GetOrCreate(focused_view_), cache_.GetFocus());
+
+  popup_widget->Show();
+  EXPECT_EQ(cache_.GetOrCreate(popup_view), cache_.GetFocus());
+
+  popup_widget->Close();
+  EXPECT_TRUE(popup_widget->IsClosed());
+  EXPECT_EQ(cache_.GetOrCreate(focused_view_), cache_.GetFocus());
+
+  popup_widget.reset();
+  EXPECT_EQ(nullptr, AXAuraObjCache::GetPopupFocusOverride());
+}
+#endif  // !BUILDFLAG(HAS_NATIVE_ACCESSIBILITY)
+
+}  // namespace views::test

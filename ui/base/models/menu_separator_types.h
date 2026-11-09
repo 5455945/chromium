@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,6 +30,10 @@ enum MenuSeparatorType {
   // Separator with left padding - top to bottom: Line only,
   //                               horizontal: Starts after left padding.
   PADDED_SEPARATOR,
+
+  // Separator between menu items - thin line matching the horizontal insets
+  // of menu items, without vertical spacing.
+  MENU_ITEM_SEPARATOR,
 };
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,15 +11,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/gcm_driver/crypto/proto/gcm_encryption_data.pb.h"
 #include "components/gcm_driver/gcm_delayed_task_controller.h"
 #include "components/leveldb_proto/public/proto_database.h"
-#include "crypto/ec_private_key.h"
+#include "crypto/keypair.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -37,12 +36,16 @@ namespace gcm {
 class GCMKeyStore {
  public:
   using KeysCallback =
-      base::OnceCallback<void(std::unique_ptr<crypto::ECPrivateKey> key,
+      base::OnceCallback<void(std::optional<crypto::keypair::PrivateKey> key,
                               const std::string& auth_secret)>;
 
   GCMKeyStore(
       const base::FilePath& key_store_path,
       const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner);
+
+  GCMKeyStore(const GCMKeyStore&) = delete;
+  GCMKeyStore& operator=(const GCMKeyStore&) = delete;
+
   ~GCMKeyStore();
 
   // Retrieves the public/private key-pair associated with the |app_id| +
@@ -87,7 +90,7 @@ class GCMKeyStore {
   void DidInitialize(leveldb_proto::Enums::InitStatus status);
   void DidLoadKeys(bool success,
                    std::unique_ptr<std::vector<EncryptionData>> entries);
-  void DidStoreKeys(std::unique_ptr<crypto::ECPrivateKey> key,
+  void DidStoreKeys(crypto::keypair::PrivateKey key,
                     const std::string& auth_secret,
                     KeysCallback callback,
                     bool success);
@@ -134,14 +137,12 @@ class GCMKeyStore {
   // Nested map from app_id to a map from authorized_entity to the loaded key
   // pair and authentication secrets.
   using KeyPairAndAuthSecret =
-      std::pair<std::unique_ptr<crypto::ECPrivateKey>, std::string>;
+      std::pair<crypto::keypair::PrivateKey, std::string>;
   std::unordered_map<std::string,
                      std::unordered_map<std::string, KeyPairAndAuthSecret>>
       key_data_;
 
   base::WeakPtrFactory<GCMKeyStore> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(GCMKeyStore);
 };
 
 }  // namespace gcm

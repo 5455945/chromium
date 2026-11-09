@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,8 @@
       {
         "id": "AddEventListenerOptions",
         "type": "string",
-        "enum": ["requestHeaders", "responseHeaders", "blocking", "asyncBlocking", "requestBody", "extraHeaders"]
+        "enum": ["requestHeaders", "responseHeaders", "blocking", "asyncBlocking",
+         "requestBody", "extraHeaders", "securityInfo", "securityInfoRawDer"]
       }
     ],
     "functions": [
@@ -55,6 +56,15 @@
             "$ref": "webRequest.BlockingResponse",
             "optional": true,
             "name": "response"
+          },
+          {
+            "type": "array",
+            "optional": true,
+            "name": "extraInfoSpec",
+            "description": "For per-context dispatch, the extra information the responding listener was registered with. Legacy per-listener calls omit it: the subEventName identifies the listener and its registered spec.",
+            "items": {
+              "$ref": "AddEventListenerOptions"
+            }
           }
         ]
       }

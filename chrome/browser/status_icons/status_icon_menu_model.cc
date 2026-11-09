@@ -1,10 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/status_icons/status_icon_menu_model.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/observer_list.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/gfx/image/image.h"
 
@@ -30,8 +31,7 @@ StatusIconMenuModel::StatusIconMenuModel(Delegate* delegate)
     : ui::SimpleMenuModel(this), delegate_(delegate) {
 }
 
-StatusIconMenuModel::~StatusIconMenuModel() {
-}
+StatusIconMenuModel::~StatusIconMenuModel() = default;
 
 void StatusIconMenuModel::SetCommandIdChecked(int command_id, bool checked) {
   item_states_[command_id].checked = checked;
@@ -129,6 +129,12 @@ ui::ImageModel StatusIconMenuModel::GetIconForCommandId(int command_id) const {
   return ui::ImageModel();
 }
 
+void StatusIconMenuModel::ExecuteCommand(int command_id, int event_flags) {
+  if (delegate_) {
+    delegate_->ExecuteCommand(command_id, event_flags);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // StatusIconMenuModel, protected:
 
@@ -139,12 +145,4 @@ void StatusIconMenuModel::MenuItemsChanged() {
 void StatusIconMenuModel::NotifyMenuStateChanged() {
   for (Observer& observer : observer_list_)
     observer.OnMenuStateChanged();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// StatusIconMenuModel, private:
-
-void StatusIconMenuModel::ExecuteCommand(int command_id, int event_flags) {
-  if (delegate_)
-    delegate_->ExecuteCommand(command_id, event_flags);
 }

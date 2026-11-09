@@ -1,39 +1,34 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/public/browser_state.h"
+#import "ios/web/public/browser_state.h"
 
-#include <memory>
+#import <memory>
+#import <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/guid.h"
-#include "base/location.h"
-#include "base/memory/ref_counted.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/no_destructor.h"
-#include "base/process/process_handle.h"
-#include "base/task/post_task.h"
-#include "base/token.h"
-#include "components/leveldb_proto/public/proto_database_provider.h"
-#include "ios/web/public/browsing_data/cookie_blocking_mode.h"
-#include "ios/web/public/init/network_context_owner.h"
-#include "ios/web/public/security/certificate_policy_cache.h"
-#include "ios/web/public/thread/web_task_traits.h"
-#include "ios/web/public/thread/web_thread.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
+#import "base/location.h"
+#import "base/memory/ref_counted.h"
+#import "base/metrics/histogram_functions.h"
+#import "base/no_destructor.h"
+#import "base/process/process_handle.h"
+#import "base/token.h"
+#import "components/leveldb_proto/public/proto_database_provider.h"
+#import "ios/web/public/init/network_context_owner.h"
+#import "ios/web/public/security/certificate_policy_cache.h"
+#import "ios/web/public/thread/web_task_traits.h"
+#import "ios/web/public/thread/web_thread.h"
+#import "ios/web/security/certificate_policy_cache_impl.h"
 #import "ios/web/web_state/ui/wk_content_rule_list_provider.h"
-#include "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
-#include "ios/web/webui/url_data_manager_ios_backend.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "net/url_request/url_request_context_getter.h"
-#include "net/url_request/url_request_context_getter_observer.h"
-#include "services/network/network_context.h"
-#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
+#import "ios/web/webui/url_data_manager_ios_backend.h"
+#import "mojo/public/cpp/bindings/remote.h"
+#import "net/url_request/url_request_context_getter.h"
+#import "net/url_request/url_request_context_getter_observer.h"
+#import "services/network/network_context.h"
+#import "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 
 namespace web {
 namespace {
@@ -48,8 +43,9 @@ const char kCertificatePolicyCacheKeyName[] = "cert_policy_cache";
 // Wraps a CertificatePolicyCache as a SupportsUserData::Data; this is necessary
 // since reference counted objects can't be user data.
 struct CertificatePolicyCacheHandle : public base::SupportsUserData::Data {
-  explicit CertificatePolicyCacheHandle(CertificatePolicyCache* cache)
-      : policy_cache(cache) {}
+  explicit CertificatePolicyCacheHandle(
+      scoped_refptr<CertificatePolicyCache> cache)
+      : policy_cache(std::move(cache)) {}
 
   scoped_refptr<CertificatePolicyCache> policy_cache;
 };
@@ -61,9 +57,10 @@ scoped_refptr<CertificatePolicyCache> BrowserState::GetCertificatePolicyCache(
     BrowserState* browser_state) {
   DCHECK_CURRENTLY_ON(WebThread::UI);
   if (!browser_state->GetUserData(kCertificatePolicyCacheKeyName)) {
-    browser_state->SetUserData(kCertificatePolicyCacheKeyName,
-                               std::make_unique<CertificatePolicyCacheHandle>(
-                                   new CertificatePolicyCache()));
+    browser_state->SetUserData(
+        kCertificatePolicyCacheKeyName,
+        std::make_unique<CertificatePolicyCacheHandle>(
+            base::MakeRefCounted<CertificatePolicyCacheImpl>()));
   }
 
   CertificatePolicyCacheHandle* handle =
@@ -72,9 +69,7 @@ scoped_refptr<CertificatePolicyCache> BrowserState::GetCertificatePolicyCache(
   return handle->policy_cache;
 }
 
-BrowserState::BrowserState()
-    : url_data_manager_ios_backend_(nullptr),
-      cookie_blocking_mode_(CookieBlockingMode::kAllow) {
+BrowserState::BrowserState() : url_data_manager_ios_backend_(nullptr) {
   // (Refcounted)?BrowserStateKeyedServiceFactories needs to be able to convert
   // a base::SupportsUserData to a BrowserState. Moreover, since the factories
   // may be passed a content::BrowserContext instead of a BrowserState, attach
@@ -93,20 +88,21 @@ BrowserState::~BrowserState() {
   shared_url_loader_factory_->Detach();
 
   if (network_context_) {
-    base::DeleteSoon(FROM_HERE, {web::WebThread::IO},
-                     network_context_owner_.release());
+    web::GetIOThreadTaskRunner({})->DeleteSoon(
+        FROM_HERE, network_context_owner_.release());
   }
 
   // Delete the URLDataManagerIOSBackend instance on the IO thread if it has
   // been created. Note that while this check can theoretically race with a
-  // call to |GetURLDataManagerIOSBackendOnIOThread()|, if any clients of this
+  // call to `GetURLDataManagerIOSBackendOnIOThread()`, if any clients of this
   // BrowserState are still accessing it on the IO thread at this point,
   // they're going to have a bad time anyway.
   if (url_data_manager_ios_backend_) {
-    bool posted = base::DeleteSoon(FROM_HERE, {web::WebThread::IO},
-                                   url_data_manager_ios_backend_);
-    if (!posted)
+    bool posted = web::GetIOThreadTaskRunner({})->DeleteSoon(
+        FROM_HERE, url_data_manager_ios_backend_.get());
+    if (!posted) {
       delete url_data_manager_ios_backend_;
+    }
   }
 }
 
@@ -115,8 +111,10 @@ network::mojom::URLLoaderFactory* BrowserState::GetURLLoaderFactory() {
     CreateNetworkContextIfNecessary();
     auto url_loader_factory_params =
         network::mojom::URLLoaderFactoryParams::New();
-    url_loader_factory_params->process_id = network::mojom::kBrowserProcessId;
-    url_loader_factory_params->is_corb_enabled = false;
+    url_loader_factory_params->process_id =
+        network::OriginatingProcessId::browser();
+    url_loader_factory_params->is_orb_enabled = false;
+    url_loader_factory_params->is_trusted = true;
     network_context_->CreateURLLoaderFactory(
         url_loader_factory_.BindNewPipeAndPassReceiver(),
         std::move(url_loader_factory_params));
@@ -132,6 +130,11 @@ network::mojom::CookieManager* BrowserState::GetCookieManager() {
         cookie_manager_.BindNewPipeAndPassReceiver());
   }
   return cookie_manager_.get();
+}
+
+network::mojom::NetworkContext* BrowserState::GetNetworkContext() {
+  CreateNetworkContextIfNecessary();
+  return network_context_.get();
 }
 
 leveldb_proto::ProtoDatabaseProvider* BrowserState::GetProtoDatabaseProvider() {
@@ -155,17 +158,24 @@ BrowserState::GetSharedURLLoaderFactory() {
   return shared_url_loader_factory_;
 }
 
+const base::Uuid& BrowserState::GetWebKitStorageID() const {
+  static const base::NoDestructor<base::Uuid> kInvalidUuid;
+  return *kInvalidUuid;
+}
+
 URLDataManagerIOSBackend*
 BrowserState::GetURLDataManagerIOSBackendOnIOThread() {
   DCHECK_CURRENTLY_ON(web::WebThread::IO);
-  if (!url_data_manager_ios_backend_)
+  if (!url_data_manager_ios_backend_) {
     url_data_manager_ios_backend_ = new URLDataManagerIOSBackend();
+  }
   return url_data_manager_ios_backend_;
 }
 
 void BrowserState::CreateNetworkContextIfNecessary() {
-  if (network_context_owner_)
+  if (network_context_owner_) {
     return;
+  }
 
   DCHECK(!network_context_);
 
@@ -187,35 +197,6 @@ BrowserState* BrowserState::FromSupportsUserData(
     return nullptr;
   }
   return static_cast<BrowserState*>(supports_user_data);
-}
-
-CookieBlockingMode BrowserState::GetCookieBlockingMode() const {
-  return cookie_blocking_mode_;
-}
-
-void BrowserState::SetCookieBlockingMode(
-    CookieBlockingMode cookie_blocking_mode,
-    base::OnceClosure callback) {
-  if (cookie_blocking_mode == cookie_blocking_mode_) {
-    std::move(callback).Run();
-    return;
-  }
-  cookie_blocking_mode_ = cookie_blocking_mode;
-  WKWebViewConfigurationProvider& config_provider =
-      WKWebViewConfigurationProvider::FromBrowserState(this);
-  // Cookie blocking needs the injected Javascript to be updated because the
-  // source of the injected Javascript depends on the current cookie blocking
-  // mode to set up the blocking correctly.
-  config_provider.UpdateScripts();
-
-  config_provider.GetContentRuleListProvider()->UpdateContentRuleLists(
-      base::BindOnce(
-          [](base::OnceClosure callback, bool success) {
-            base::UmaHistogramBoolean(
-                "IOS.ContentRuleListProviderUpdateSuccess", success);
-            std::move(callback).Run();
-          },
-          std::move(callback)));
 }
 
 }  // namespace web

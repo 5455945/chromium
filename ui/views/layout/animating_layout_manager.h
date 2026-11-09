@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "ui/gfx/animation/tween.h"
@@ -24,8 +25,7 @@ namespace views {
 
 // Layout manager which explicitly animates its child views and/or its preferred
 // size when the target layout changes (the target layout being provided by a
-// separate, non-animating layout manager; typically a FlexLayout or
-// InterpolatingLayoutManager).
+// separate, non-animating layout manager; typically a FlexLayout).
 //
 // For example, consider a view in which multiple buttons can be displayed
 // depending on context, in a horizontal row. When we add a button, we want all
@@ -112,9 +112,17 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
     // A view fading in will slide out from under the view on its trailing edge;
     // if no view is present a suitable substitute fade is chosen.
     kSlideFromTrailingEdge,
+    // A view fading in will slide out from the trailing edge and fade in. If
+    // the view does not paint to a layer (which is necessary to perform an
+    // opacity animation) we fall back to |kSlideFromTrailingEdge|.
+    kFadeAndSlideFromTrailingEdge,
   };
 
   AnimatingLayoutManager();
+
+  AnimatingLayoutManager(const AnimatingLayoutManager&) = delete;
+  AnimatingLayoutManager& operator=(const AnimatingLayoutManager&) = delete;
+
   ~AnimatingLayoutManager() override;
 
   BoundsAnimationMode bounds_animation_mode() const {
@@ -130,6 +138,19 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
   gfx::Tween::Type tween_type() const { return tween_type_; }
   AnimatingLayoutManager& SetTweenType(gfx::Tween::Type tween_type);
 
+  base::TimeDelta opacity_animation_duration() const {
+    return opacity_animation_duration_;
+  }
+  // Note this is only needed if using kFadeAndSlideFromTrailingEdge. The
+  // duration will not run longer than |animation_duration_| and if shorter than
+  // |animation_duration_| the opacity animation will run during the latter part
+  // of the fade in the the start of the fade out.
+  AnimatingLayoutManager& SetOpacityAnimationDuration(
+      base::TimeDelta animation_duration);
+
+  gfx::Tween::Type opacity_tween_type() const { return opacity_tween_type_; }
+  AnimatingLayoutManager& SetOpacityTweenType(gfx::Tween::Type tween_type);
+
   LayoutOrientation orientation() const { return orientation_; }
   AnimatingLayoutManager& SetOrientation(LayoutOrientation orientation);
 
@@ -143,7 +164,7 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
   // only be set once.
   template <class T>
   T* SetTargetLayoutManager(std::unique_ptr<T> layout_manager) {
-    DCHECK_EQ(0U, num_owned_layouts());
+    CHECK_EQ(0U, num_owned_layouts(), base::NotFatalUntil::M163);
     T* const result = AddOwnedLayout(std::move(layout_manager));
     ResetLayout();
     return result;
@@ -175,9 +196,12 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
 
   // LayoutManagerBase:
   gfx::Size GetPreferredSize(const View* host) const override;
+  gfx::Size GetPreferredSize(const View* host,
+                             const SizeBounds& available_size) const override;
   gfx::Size GetMinimumSize(const View* host) const override;
   int GetPreferredHeightForWidth(const View* host, int width) const override;
-  std::vector<View*> GetChildViewsInPaintOrder(const View* host) const override;
+  std::vector<raw_ptr<View, VectorExperimental>> GetChildViewsInPaintOrder(
+      const View* host) const override;
   bool OnViewRemoved(View* host, View* view) override;
 
   // Queues an action to take place after the current animation completes.
@@ -206,9 +230,9 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
     return starting_layout_;
   }
 
-  const ProposedLayout& target_layout_for_testing() const {
-    return target_layout_;
-  }
+  const ProposedLayout& target_layout() const { return target_layout_; }
+
+  void disable_widget_check_for_testing() { check_widget_ = false; }
 
  protected:
   // LayoutManagerBase:
@@ -224,9 +248,8 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
   class AnimationDelegate;
   friend class AnimationDelegate;
 
-  // Cleans up after an animation, runs delayed actions, and sends
-  // notifications.
-  void OnAnimationEnded();
+  // Cleans up after an animation and readies actions to be posted.
+  void EndAnimation();
 
   // Equivalent to calling ResetLayoutToSize(GetAvailableTargetLayoutSize()).
   // Convenience method.
@@ -240,7 +263,7 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
   bool RecalculateTarget();
 
   // Called by the animation logic every time a new frame happens.
-  void AnimateTo(double value);
+  void AnimateTo(double value, double fade_in_opacity, double fade_out_opacity);
 
   // Notifies all observers that the animation state has changed.
   void NotifyIsAnimatingChanged();
@@ -254,7 +277,9 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
 
   // Updates the current layout to |percent| interpolated between the starting
   // and target layouts.
-  void UpdateCurrentLayout(double percent);
+  void UpdateCurrentLayout(double percent,
+                           double fade_in_opacity,
+                           double fade_out_opacity);
 
   // Updates information about which views are fading in or out during the
   // current animation.
@@ -276,6 +301,11 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
                                  double scale_percent,
                                  bool slide_from_leading) const;
 
+  ChildLayout CalculateFadeAndSlideFade(const LayoutFadeInfo& fade_info,
+                                        double scale_percent,
+                                        double opacity_value,
+                                        bool slide_from_leading) const;
+
   // Returns the space in which to calculate the target layout.
   gfx::Size GetAvailableTargetLayoutSize();
 
@@ -293,10 +323,18 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
 
   // How long each animation takes. Depending on how far along an animation is,
   // a new target layout will either cause the animation to restart or redirect.
-  base::TimeDelta animation_duration_ = base::TimeDelta::FromMilliseconds(250);
+  base::TimeDelta animation_duration_ = base::Milliseconds(250);
 
   // The motion curve of the animation to perform.
   gfx::Tween::Type tween_type_ = gfx::Tween::EASE_IN_OUT;
+
+  // How long each opacity animation takes. Note this is only used if using the
+  // kFadeAndSlideFromTrailingEdge FadeInOutMode. And is capped at the
+  // |animation_duraction_|.
+  base::TimeDelta opacity_animation_duration_ = base::Milliseconds(0);
+
+  // The motion curve of the opacity animation to perform.
+  gfx::Tween::Type opacity_tween_type_ = gfx::Tween::LINEAR;
 
   // The layout orientation, used for side and scale fades.
   LayoutOrientation orientation_ = LayoutOrientation::kHorizontal;
@@ -353,13 +391,19 @@ class VIEWS_EXPORT AnimatingLayoutManager : public LayoutManagerBase {
   std::vector<base::OnceClosure> queued_actions_;
   std::vector<base::OnceClosure> queued_actions_to_run_;
 
+  // Signal that we want to post queued actions at the end of the next layout
+  // cycle.
+  bool hold_queued_actions_for_layout_ = false;
+
   // True when there's a pending PostTask() to RunQueuedActions(). Used to avoid
   // scheduling redundant tasks.
   bool run_queued_actions_is_pending_ = false;
 
-  base::WeakPtrFactory<AnimatingLayoutManager> weak_ptr_factory_{this};
+  // Whether or not the host's widget should be checked for invalid state. Can
+  // be disabled for tests that do not use a widget.
+  bool check_widget_ = true;
 
-  DISALLOW_COPY_AND_ASSIGN(AnimatingLayoutManager);
+  base::WeakPtrFactory<AnimatingLayoutManager> weak_ptr_factory_{this};
 };
 
 }  // namespace views

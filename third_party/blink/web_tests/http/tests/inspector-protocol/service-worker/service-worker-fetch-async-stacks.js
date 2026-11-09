@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} =
       await testRunner.startBlank('Async stack trace for service worker fetch.');
 
@@ -8,11 +8,23 @@
   await dp.Target.setAutoAttach({autoAttach: true, waitForDebuggerOnStart: true, flatten: true});
   const onAttached = async event => {
     swdp = session.createChild(event.params.sessionId).protocol;
-    swDebuggerId = (await swdp.Debugger.enable()).result.debuggerId;
-    await swdp.Debugger.setAsyncCallStackDepth({maxDepth: 32});
+    const idCallback = swdp.Debugger.enable();
+    const stackCallback = swdp.Debugger.setAsyncCallStackDepth({maxDepth: 32});
     swdp.Runtime.runIfWaitingForDebugger();
+    swDebuggerId = (await idCallback).result.debuggerId;
+    await stackCallback;
   };
   dp.Target.onAttachedToTarget(onAttached);
+
+  // Enable the debugger before registering a service worker so that
+  // the debugger can be attached even when the
+  // AllowDevToolsMainThreadDebuggerForMultipleMainFrames feature is disabled.
+  // When the feature is disabled, a renderer disallows the debugger when
+  // there are multiple browsing contexts. The following code will create a
+  // new browsing context, so enabling the debugger after registering a service
+  // worker will fail. Enabling the debugger earlier works around the issue.
+  // TODO(https://crbug.com/1434900): Remove this workaround.
+  await dp.Debugger.enable();
 
   await dp.ServiceWorker.enable();
   await session.navigate('resources/service-worker-fetch.html');

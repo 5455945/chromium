@@ -1,20 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_CAPTURE_VIDEO_ANDROID_VIDEO_CAPTURE_DEVICE_FACTORY_ANDROID_H_
 #define MEDIA_CAPTURE_VIDEO_ANDROID_VIDEO_CAPTURE_DEVICE_FACTORY_ANDROID_H_
 
-#include "media/capture/video/video_capture_device_factory.h"
-
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
+#include "media/capture/video/android/camera_availability_observer.h"
 #include "media/capture/video/video_capture_device.h"
+#include "media/capture/video/video_capture_device_factory.h"
 
 namespace media {
+
+class VideoCaptureDeviceAndroid;
 
 // VideoCaptureDeviceFactory on Android. This class implements the static
 // VideoCapture methods and the factory of VideoCaptureAndroid.
@@ -22,27 +24,26 @@ class CAPTURE_EXPORT VideoCaptureDeviceFactoryAndroid
     : public VideoCaptureDeviceFactory {
  public:
   static base::android::ScopedJavaLocalRef<jobject> createVideoCaptureAndroid(
-      int id,
-      jlong nativeVideoCaptureDeviceAndroid);
+      const std::string& id,
+      VideoCaptureDeviceAndroid* nativeVideoCaptureDeviceAndroid);
 
-  VideoCaptureDeviceFactoryAndroid();
+  explicit VideoCaptureDeviceFactoryAndroid(
+      const gpu::GpuDriverBugWorkarounds& gpu_workarounds);
+
+  VideoCaptureDeviceFactoryAndroid(const VideoCaptureDeviceFactoryAndroid&) =
+      delete;
+  VideoCaptureDeviceFactoryAndroid& operator=(
+      const VideoCaptureDeviceFactoryAndroid&) = delete;
+
   ~VideoCaptureDeviceFactoryAndroid() override;
 
-  std::unique_ptr<VideoCaptureDevice> CreateDevice(
+  VideoCaptureErrorOrDevice CreateDevice(
       const VideoCaptureDeviceDescriptor& device_descriptor) override;
   void GetDevicesInfo(GetDevicesInfoCallback callback) override;
-
-  static bool IsLegacyOrDeprecatedDevice(const std::string& device_id);
-
-  // Configures all subsequent CreateDevice()s in test mode.
-  void ConfigureForTesting() { test_mode_ = true; }
 
  private:
   VideoCaptureFormats GetSupportedFormats(int device_index,
                                           const std::string& display_name);
-
-  // Switch to indicate that all created Java capturers will be in test mode.
-  bool test_mode_ = false;
 
   // VideoCaptureFormats and zooms are cached, so GetSupportedFormats() and
   // Java_VideoCaptureFactory_isZoomSupported() respectively don't need to be
@@ -52,7 +53,9 @@ class CAPTURE_EXPORT VideoCaptureDeviceFactoryAndroid
   base::flat_map<std::string, VideoCaptureFormats> supported_formats_cache_;
   base::flat_map<std::string, bool> zooms_cache_;
 
-  DISALLOW_COPY_AND_ASSIGN(VideoCaptureDeviceFactoryAndroid);
+  const gpu::GpuDriverBugWorkarounds gpu_workarounds_;
+
+  CameraAvailabilityObserver camera_availability_observer_;
 };
 
 }  // namespace media

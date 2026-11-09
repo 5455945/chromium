@@ -1,8 +1,12 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/test/layer_test_common.h"
+
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "cc/base/math_util.h"
 #include "cc/base/region.h"
@@ -17,6 +21,27 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 
 namespace cc {
+
+LayerTreeSettings CommitToActiveTreeLayerListSettings() {
+  LayerTreeSettings settings;
+  settings.commit_to_active_tree = true;
+  settings.use_layer_lists = true;
+  return settings;
+}
+
+LayerTreeSettings CommitToPendingTreeLayerListSettings() {
+  LayerTreeSettings settings;
+  settings.commit_to_active_tree = false;
+  settings.use_layer_lists = true;
+  return settings;
+}
+
+LayerTreeSettings CommitToPendingTreeLayerTreeSettings() {
+  LayerTreeSettings settings;
+  settings.commit_to_active_tree = false;
+  settings.use_layer_lists = false;
+  return settings;
+}
 
 // Align with expected and actual output.
 static const char* kQuadString = "    Quad: ";
@@ -113,15 +138,16 @@ void PrepareForUpdateDrawProperties(LayerTreeImpl* layer_tree_impl) {
   // TODO(wangxianzhu): We should DCHECK(!needs_rebuild) after we remove all
   // unnecessary setting of the flag in layer list mode.
   auto* property_trees = layer_tree_impl->property_trees();
-  property_trees->needs_rebuild = false;
+  property_trees->set_needs_rebuild(false);
 
   // The following are needed for tests that modify impl-side property trees.
   // In production code impl-side property trees are pushed from the main
   // thread and the following are done in other ways.
   std::vector<std::unique_ptr<RenderSurfaceImpl>> old_render_surfaces;
-  property_trees->effect_tree.TakeRenderSurfaces(&old_render_surfaces);
-  property_trees->effect_tree.CreateOrReuseRenderSurfaces(&old_render_surfaces,
-                                                          layer_tree_impl);
+  property_trees->effect_tree_mutable().TakeRenderSurfaces(
+      &old_render_surfaces);
+  property_trees->effect_tree_mutable().CreateOrReuseRenderSurfaces(
+      &old_render_surfaces, layer_tree_impl);
   layer_tree_impl->MoveChangeTrackingToLayers();
   property_trees->ResetCachedData();
 }
@@ -130,7 +156,8 @@ void UpdateDrawProperties(LayerTreeImpl* layer_tree_impl,
                           LayerImplList* output_update_layer_list) {
   PrepareForUpdateDrawProperties(layer_tree_impl);
   layer_tree_impl->UpdateDrawProperties(
-      /*update_image_animation_controller*/ true, output_update_layer_list);
+      /*update_tiles=*/true, /*update_image_animation_controller=*/true,
+      output_update_layer_list);
 }
 
 void UpdateDrawProperties(LayerTreeHost* layer_tree_host,
@@ -139,7 +166,7 @@ void UpdateDrawProperties(LayerTreeHost* layer_tree_host,
   if (layer_tree_host->IsUsingLayerLists()) {
     // TODO(wangxianzhu): We should DCHECK(!needs_rebuild) after we remove all
     // unnecessary setting of the flag in layer list mode.
-    layer_tree_host->property_trees()->needs_rebuild = false;
+    layer_tree_host->property_trees()->set_needs_rebuild(false);
   } else {
     PropertyTreeBuilder::BuildPropertyTrees(layer_tree_host);
   }

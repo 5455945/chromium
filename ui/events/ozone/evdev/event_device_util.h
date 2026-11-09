@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,39 @@
 
 #include <limits.h>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+
 namespace ui {
 
 #define EVDEV_LONG_BITS (CHAR_BIT * sizeof(long))
+#define EVDEV_INT64_BITS (CHAR_BIT * sizeof(int64_t))
 #define EVDEV_BITS_TO_LONGS(x) (((x) + EVDEV_LONG_BITS - 1) / EVDEV_LONG_BITS)
+#define EVDEV_BITS_TO_INT64(x) (((x) + EVDEV_INT64_BITS - 1) / EVDEV_INT64_BITS)
 
-static inline bool EvdevBitIsSet(const unsigned long* data, int bit) {
-  return data[bit / EVDEV_LONG_BITS] & (1UL << (bit % EVDEV_LONG_BITS));
+static inline bool EvdevBitIsSet(base::span<const unsigned long> data,
+                                 int bit) {
+  return data[bit / EVDEV_LONG_BITS] &
+         (1UL << (bit % EVDEV_LONG_BITS));
 }
 
-static inline void EvdevSetBit(unsigned long* data, int bit) {
+static inline bool EvdevBitUint64IsSet(base::span<const uint64_t> data,
+                                       int bit) {
+  return data[bit / EVDEV_INT64_BITS] &
+         ((uint64_t)1 << (bit % EVDEV_INT64_BITS));
+}
+
+static inline void EvdevSetBit(base::span<unsigned long> data, int bit) {
   data[bit / EVDEV_LONG_BITS] |= (1UL << (bit % EVDEV_LONG_BITS));
+}
+
+static inline void EvdevSetUint64Bit(base::span<uint64_t> data, int bit) {
+  data[bit / EVDEV_INT64_BITS] |=
+      ((uint64_t)1 << (bit % EVDEV_INT64_BITS));
+}
+
+static inline void EvdevClearBit(base::span<unsigned long> data, int bit) {
+  data[bit / EVDEV_LONG_BITS] &= ~(1UL << (bit % EVDEV_LONG_BITS));
 }
 
 }  // namespace ui

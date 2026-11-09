@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,27 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/interaction/safe_castable.h"
+#include "ui/base/themed_vector_icon.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/color_palette.h"
-#include "ui/native_theme/native_theme.h"
-#include "ui/native_theme/themed_vector_icon.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/views_export.h"
-
-#if defined(OS_WIN)
-#include <windows.h>
-#endif  // defined(OS_WIN)
 
 namespace gfx {
 class Canvas;
-}
+}  // namespace gfx
 
 namespace ui {
 class ThemedVectorIcon;
-}
+}  // namespace ui
 
 namespace views {
 
@@ -46,43 +47,94 @@ class View;
 // View::OnPaintBackground()
 //
 /////////////////////////////////////////////////////////////////////////////
-class VIEWS_EXPORT Background {
+class VIEWS_EXPORT Background : public ui::SafeCastable {
  public:
+  // If you need to cast safely to a specific subclass, add safe-cast metadata
+  // for that subclass as well, so that `IsA()` and `AsA()` work for them.
+  DECLARE_SAFE_CAST_TARGET()
+
   Background();
-  virtual ~Background();
+  Background(const Background&) = delete;
+  Background& operator=(const Background&) = delete;
+  ~Background() override;
 
   // Render the background for the provided view
   virtual void Paint(gfx::Canvas* canvas, View* view) const = 0;
 
-  // Set a solid, opaque color to be used when drawing backgrounds of native
-  // controls.  Unfortunately alpha=0 is not an option.
-  void SetNativeControlColor(SkColor color);
+  // This is called by the View on which it is attached. This is overridden for
+  // subclasses that depend on theme colors.
+  virtual void OnViewThemeChanged(View* view);
 
-  // Returns the "background color".  This is equivalent to the color set in
-  // SetNativeControlColor().  For solid backgrounds, this is the color; for
-  // gradient backgrounds, it's the midpoint of the gradient; for painter
-  // backgrounds, this is not useful (returns a default color).
-  SkColor get_color() const { return color_; }
+  // Returns the rounded corner radii of the background. Returns `std::nullopt`
+  // by default.
+  virtual std::optional<gfx::RoundedCornersF> GetRoundedCornerRadii() const;
+
+  // Returns the "background color".  After resolution, this color is the color
+  // for solid backgrounds; for gradient backgrounds, it's the midpoint of the
+  // gradient; for painter backgrounds, this is not useful (returns a default
+  // color).
+  ui::ColorVariant color() const { return color_; }
+
+  virtual void SetInternalName(const std::string& name);
+
+ protected:
+  // Set a solid color to be used when drawing backgrounds. Restricted to
+  // subclasses: callers holding a generic `Background*` cannot know how the
+  // concrete subclass uses the color, if at all. To change a view's
+  // background, install a new one with `View::SetBackground()`.
+  void set_color(ui::ColorVariant color);
 
  private:
-  SkColor color_ = gfx::kPlaceholderColor;
-
-  DISALLOW_COPY_AND_ASSIGN(Background);
+  ui::ColorVariant color_;
 };
 
 // Creates a background that fills the canvas in the specified color.
-VIEWS_EXPORT std::unique_ptr<Background> CreateSolidBackground(SkColor color);
+VIEWS_EXPORT std::unique_ptr<Background> CreateSolidBackground(
+    ui::ColorVariant color);
+
+// Creates a background backed by a `ui::LAYER_SOLID_COLOR`. This implementation
+// of background is more efficient than its counterpart.
+// But it has its restrictions:
+//   * Since this background paints the view to a `ui::LAYER_SOLID_COLOR`,
+//   nothing else can be painted by the view or its subtree. (including the
+//   Border)
+//   * For non-zero radii, the view (its layer) will clip its subtree to its
+//   bounds. For example, if the view is focusable, the focus ring will get
+//   clipped and will not be visible.
+VIEWS_EXPORT std::unique_ptr<Background> CreateLayerBasedSolidBackground(
+    ui::ColorVariant color);
+
+VIEWS_EXPORT std::unique_ptr<Background> CreateLayerBasedRoundedBackground(
+    ui::ColorVariant color,
+    const gfx::RoundedCornersF& radii);
 
 // Creates a background that fills the canvas with rounded corners.
+// If using a rounded rect border as well, pass its radius as `radius` and its
+// thickness as `for_border_thickness`.  This will inset the background properly
+// so it doesn't bleed through the border.
 VIEWS_EXPORT std::unique_ptr<Background> CreateRoundedRectBackground(
-    SkColor color,
-    float radius);
+    ui::ColorVariant color,
+    float radius,
+    int for_border_thickness = 0);
 
-// Creates a background that fills the canvas in the color specified by the
-// view's NativeTheme and the given color identifier.
-VIEWS_EXPORT std::unique_ptr<Background> CreateThemedSolidBackground(
-    View* view,
-    ui::NativeTheme::ColorId color_id);
+// Same as above except each corner radius can be different and customized.
+VIEWS_EXPORT std::unique_ptr<Background> CreateRoundedRectBackground(
+    ui::ColorVariant color,
+    float top_radius,
+    float bottom_radius,
+    int for_border_thickness = 0);
+
+// Same as above except each corner radius can be different and customized.
+VIEWS_EXPORT std::unique_ptr<Background> CreateRoundedRectBackground(
+    ui::ColorVariant color,
+    const gfx::RoundedCornersF& radii,
+    int for_border_thickness = 0);
+
+// Same as above except the background is inset by the specified insets.
+VIEWS_EXPORT std::unique_ptr<Background> CreateRoundedRectBackground(
+    ui::ColorVariant color,
+    const gfx::RoundedCornersF& radii,
+    const gfx::Insets& insets);
 
 // Creates a background from the specified Painter.
 VIEWS_EXPORT std::unique_ptr<Background> CreateBackgroundFromPainter(
@@ -90,8 +142,19 @@ VIEWS_EXPORT std::unique_ptr<Background> CreateBackgroundFromPainter(
 
 // Creates a background from the specified ThemedVectorIcon.
 VIEWS_EXPORT std::unique_ptr<Background> CreateThemedVectorIconBackground(
-    View* view,
     const ui::ThemedVectorIcon& icon);
+
+// Creates a background that fills the canvas in a pill/capsule shape, where
+// the corner radius is dynamically computed as half of the minimum of the
+// height and width of the region being filled.
+VIEWS_EXPORT std::unique_ptr<Background> CreatePillBackground(
+    ui::ColorVariant color,
+    int for_border_thickness = 0);
+
+// Same as above except the background is inset by the specified insets.
+VIEWS_EXPORT std::unique_ptr<Background> CreatePillBackground(
+    ui::ColorVariant color,
+    const gfx::Insets& insets);
 
 }  // namespace views
 

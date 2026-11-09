@@ -1,26 +1,29 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_ARC_ENTERPRISE_CERT_STORE_CERT_STORE_SERVICE_H_
 #define CHROME_BROWSER_ASH_ARC_ENTERPRISE_CERT_STORE_CERT_STORE_SERVICE_H_
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/containers/queue.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/arc/enterprise/cert_store/arc_cert_installer.h"
+#include "chromeos/ash/services/keymanagement/public/mojom/cert_store_types.mojom.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/browser_context.h"
 #include "net/cert/cert_database.h"
 #include "net/cert/nss_cert_database.h"
 #include "net/cert/scoped_nss_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+class NssService;
 
 namespace arc {
 
@@ -28,23 +31,14 @@ namespace arc {
 class CertStoreService : public KeyedService,
                          public net::CertDatabase::Observer {
  public:
-  struct KeyInfo {
-    std::string nickname;
-    std::string id;
-  };
-
-  // Returns singleton instance for the given BrowserContext,
-  // or nullptr if the browser |context| is not allowed to use ARC.
-  static CertStoreService* GetForBrowserContext(
-      content::BrowserContext* context);
-
-  // Return the factory instance for this class.
-  static BrowserContextKeyedServiceFactory* GetFactory();
-
-  explicit CertStoreService(content::BrowserContext* context);
+  // `nss_service` is the one belonging to `context`, and must be non-null
+  // whenever `context` is. Both are null only when a unit test constructs this
+  // directly, which leaves the service inert.
+  CertStoreService(content::BrowserContext* context, NssService* nss_service);
 
   // This constructor is public only for testing.
   CertStoreService(content::BrowserContext* context,
+                   NssService* nss_service,
                    std::unique_ptr<ArcCertInstaller> installer);
 
   ~CertStoreService() override;
@@ -53,11 +47,7 @@ class CertStoreService : public KeyedService,
   CertStoreService& operator=(const CertStoreService&) = delete;
 
   // CertDatabase::Observer overrides.
-  void OnCertDBChanged() override;
-
-  // Returns a real nickname and chaps id for a dummy SPKI |dummy_spki|.
-  // Returns nullopt if the key is unknown.
-  absl::optional<KeyInfo> GetKeyInfoForDummySpki(const std::string& dummy_spki);
+  void OnClientCertStoreChanged() override;
 
   std::vector<std::string> get_required_cert_names() const {
     return certificate_cache_.get_required_cert_names();
@@ -70,10 +60,13 @@ class CertStoreService : public KeyedService,
   }
 
  private:
+  using BuildAllowedCertDescriptionsCallback =
+      base::OnceCallback<void(std::vector<CertDescription> allowed_certs)>;
   using FilterAllowedCertificatesCallback =
       base::OnceCallback<void(net::ScopedCERTCertificateList allowed_certs)>;
 
-  // TODO(b/177051802) Some of certificate cache is obsolete. Clean up.
+  //  Stores certificates required in ARC. This is used to check if a policy
+  //  update is needed.
   class CertificateCache {
    public:
     CertificateCache();
@@ -81,14 +74,10 @@ class CertStoreService : public KeyedService,
     CertificateCache& operator=(const CertificateCache&) = delete;
     ~CertificateCache();
 
-    void Update(const std::vector<CertDescription>& certificates);
-    void Update(std::map<std::string, std::string> dummy_spki_by_name);
+    // Returns true if new certificates are different from previous ones.
+    // If true, policy update is needed.
+    bool Update(const std::vector<CertDescription>& certificates);
 
-    absl::optional<KeyInfo> GetKeyInfoForDummySpki(
-        const std::string& dummy_spki);
-
-    bool need_policy_update() { return need_policy_update_; }
-    void clear_need_policy_update() { need_policy_update_ = false; }
     std::vector<std::string> get_required_cert_names() const {
       return std::vector<std::string>(required_cert_names_.begin(),
                                       required_cert_names_.end());
@@ -98,37 +87,79 @@ class CertStoreService : public KeyedService,
     }
 
    private:
-    bool need_policy_update_ = false;
+    //  Set of certificates that must be installed in ARC. Corresponds to
+    //  corporate usage keys.
     std::set<std::string> required_cert_names_;
-    // Map dummy SPKI to real key info.
-    std::map<std::string, KeyInfo> key_info_by_dummy_spki_cache_;
-    // Map cert name to dummy SPKI.
-    std::map<std::string, std::string> dummy_spki_by_name_cache_;
-    // Intermediate map name to real SPKI.
-    std::map<std::string, KeyInfo> key_info_by_name_cache_;
   };
 
   void UpdateCertificates();
-  void FilterAllowedCertificatesRecursively(
-      FilterAllowedCertificatesCallback callback,
+
+  void OnCertificatesListed(keymanagement::mojom::ChapsSlot slot,
+                            std::vector<CertDescription> certificates,
+                            net::ScopedCERTCertificateList cert_list);
+
+  // Processes |cert_queue| one by one recursively. Certs from from the given
+  // |slot|, and are accummulated in the list of |allowed_certs|, which is
+  // initially empty. Must be recursive because of async calls.
+  void BuildAllowedCertDescriptionsRecursively(
+      BuildAllowedCertDescriptionsCallback callback,
+      keymanagement::mojom::ChapsSlot slot,
       base::queue<net::ScopedCERTCertificate> cert_queue,
-      net::ScopedCERTCertificateList allowed_certs) const;
-  void FilterAllowedCertificateAndRecurse(
-      FilterAllowedCertificatesCallback callback,
+      std::vector<CertDescription> allowed_certs) const;
+  // Decides to either proceed to build a |CertDescription| for the given |cert|
+  // when it is allowed by |certificate_allowed|, or skip it and proceed to the
+  // recursive call to BuildAllowedCertDescriptionsRecursively.
+  void BuildAllowedCertDescriptionAndRecurse(
+      BuildAllowedCertDescriptionsCallback callback,
+      keymanagement::mojom::ChapsSlot slot,
       base::queue<net::ScopedCERTCertificate> cert_queue,
-      net::ScopedCERTCertificateList allowed_certs,
+      std::vector<CertDescription> allowed_certs,
       net::ScopedCERTCertificate cert,
       bool certificate_allowed) const;
+  // Appends the given |cert_description| to |allowed_certs| and proceeds to the
+  // the recursive call to BuildAllowedCertDescriptionsRecursively.
+  void AppendCertDescriptionAndRecurse(
+      BuildAllowedCertDescriptionsCallback callback,
+      keymanagement::mojom::ChapsSlot slot,
+      base::queue<net::ScopedCERTCertificate> cert_queue,
+      std::vector<CertDescription> allowed_certs,
+      std::optional<CertDescription> cert_description) const;
+  // Final callback called once all |cert_descriptions| have been processed by
+  // BuildAllowedCertDescriptionsRecursively on the given |slot|. May either
+  // restart the process to gather certificates on the system slot (when |slot|
+  // is the user slot), or proceed to update keymaster keys.
+  void OnBuiltAllowedCertDescriptions(
+      keymanagement::mojom::ChapsSlot slot,
+      std::vector<CertDescription> cert_descriptions) const;
+  void OnBuiltAllowedCertDescriptionsForKeymaster(
+      keymanagement::mojom::ChapsSlot slot,
+      std::vector<CertDescription> cert_descriptions) const;
+  void OnBuiltAllowedCertDescriptionsForKeyMint(
+      keymanagement::mojom::ChapsSlot slot,
+      std::vector<CertDescription> cert_descriptions) const;
 
-  void OnGetNSSCertDatabaseForProfile(net::NSSCertDatabase* database);
-  void OnCertificatesListed(net::ScopedCERTCertificateList cert_list);
+  // Done with the user slot, so try to process additional certs in the system
+  // slot. If there is no system slot (e.g. the user is not allowed to access
+  // it), this call won't mutate |cert_descriptions|, and only return the user
+  // slot certificates. However, it's necessary to perform this check
+  // asynchronously on the IO thread (through ListCerts), because that's the
+  // only thread that knows if the system slot is enabled.
+  void ListCertsInSystemSlot(
+      std::vector<CertDescription> cert_descriptions) const;
+  void ListCertsInUserSlot(
+      std::vector<CertDescription> cert_descriptions) const;
+
+  // Processes metadata from |allowed_certs| stored in the given |slot| and
+  // appends them to |certificates|.
   void OnFilteredAllowedCertificates(
+      keymanagement::mojom::ChapsSlot slot,
+      std::vector<CertDescription> certificates,
       net::ScopedCERTCertificateList allowed_certs);
-  void OnUpdatedKeymasterKeys(std::vector<CertDescription> certificates,
-                              bool success);
-  void OnArcCertsInstalled(bool success);
+  void OnUpdatedKeys(std::vector<CertDescription> certificates, bool success);
+  void OnArcCertsInstalled(bool need_policy_update, bool success);
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
+  const raw_ptr<NssService> nss_service_;
 
   std::unique_ptr<ArcCertInstaller> installer_;
   CertificateCache certificate_cache_;

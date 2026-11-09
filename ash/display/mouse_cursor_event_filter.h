@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,10 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "ash/display/window_tree_host_manager.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "ui/display/manager/display_manager_observer.h"
 #include "ui/events/event_handler.h"
-#include "ui/gfx/geometry/rect.h"
 
 namespace aura {
 class Window;
@@ -27,9 +25,13 @@ class MouseWarpController;
 // environment.
 class ASH_EXPORT MouseCursorEventFilter
     : public ui::EventHandler,
-      public WindowTreeHostManager::Observer {
+      public display::DisplayManagerObserver {
  public:
   MouseCursorEventFilter();
+
+  MouseCursorEventFilter(const MouseCursorEventFilter&) = delete;
+  MouseCursorEventFilter& operator=(const MouseCursorEventFilter&) = delete;
+
   ~MouseCursorEventFilter() override;
 
   bool mouse_warp_enabled() const { return mouse_warp_enabled_; }
@@ -40,9 +42,9 @@ class ASH_EXPORT MouseCursorEventFilter
   void ShowSharedEdgeIndicator(aura::Window* from);
   void HideSharedEdgeIndicator();
 
-  // WindowTreeHostManager::Observer:
+  // display::DisplayManagerObserver:
   void OnDisplaysInitialized() override;
-  void OnDisplayConfigurationChanged() override;
+  void OnDidApplyDisplayChanges() override;
 
   // ui::EventHandler:
   void OnMouseEvent(ui::MouseEvent* event) override;
@@ -65,8 +67,6 @@ class ASH_EXPORT MouseCursorEventFilter
   bool mouse_warp_enabled_;
 
   std::unique_ptr<MouseWarpController> mouse_warp_controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(MouseCursorEventFilter);
 };
 
 }  // namespace ash

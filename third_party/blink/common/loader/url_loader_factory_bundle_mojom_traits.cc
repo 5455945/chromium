@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "third_party/blink/public/mojom/loader/local_resource_loader_config.mojom.h"
 #include "url/mojom/origin_mojom_traits.h"
 
 namespace mojo {
@@ -19,12 +20,6 @@ using Traits =
 mojo::PendingRemote<network::mojom::URLLoaderFactory> Traits::default_factory(
     BundleInfoType& bundle) {
   return std::move(bundle->pending_default_factory());
-}
-
-// static
-mojo::PendingRemote<network::mojom::URLLoaderFactory> Traits::appcache_factory(
-    BundleInfoType& bundle) {
-  return std::move(bundle->pending_appcache_factory());
 }
 
 // static
@@ -45,13 +40,17 @@ bool Traits::bypass_redirect_checks(BundleInfoType& bundle) {
 }
 
 // static
+blink::mojom::LocalResourceLoaderConfigPtr Traits::local_resource_loader_config(
+    BundleInfoType& bundle) {
+  return std::move(bundle->local_resource_loader_config());
+}
+
+// static
 bool Traits::Read(blink::mojom::URLLoaderFactoryBundleDataView data,
                   BundleInfoType* out_bundle) {
   *out_bundle = std::make_unique<blink::PendingURLLoaderFactoryBundle>();
 
   (*out_bundle)->pending_default_factory() = data.TakeDefaultFactory<
-      mojo::PendingRemote<network::mojom::URLLoaderFactory>>();
-  (*out_bundle)->pending_appcache_factory() = data.TakeAppcacheFactory<
       mojo::PendingRemote<network::mojom::URLLoaderFactory>>();
   if (!data.ReadSchemeSpecificFactories(
           &(*out_bundle)->pending_scheme_specific_factories())) {
@@ -63,6 +62,11 @@ bool Traits::Read(blink::mojom::URLLoaderFactoryBundleDataView data,
   }
 
   (*out_bundle)->set_bypass_redirect_checks(data.bypass_redirect_checks());
+
+  if (!data.ReadLocalResourceLoaderConfig(
+          &(*out_bundle)->local_resource_loader_config())) {
+    return false;
+  }
 
   return true;
 }

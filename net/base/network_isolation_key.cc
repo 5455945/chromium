@@ -1,12 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/base/network_isolation_key.h"
+
+#include <cstddef>
+#include <optional>
 #include <string>
 
-#include "base/values.h"
-#include "net/base/network_isolation_key.h"
+#include "base/check.h"
+#include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/unguessable_token.h"
+#include "net/base/features.h"
+#include "net/base/network_isolation_partition.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "schemeful_site.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
@@ -15,36 +26,57 @@ namespace net {
 
 namespace {
 
-std::string GetSiteDebugString(const absl::optional<SchemefulSite>& site) {
-  return site ? site->GetDebugString() : "null";
+std::string GetNetworkIsolationPartitionStringForCacheKey(
+    NetworkIsolationPartition network_isolation_partition) {
+  return base::NumberToString(
+      base::strict_cast<int32_t>(network_isolation_partition));
 }
 
 }  // namespace
 
-NetworkIsolationKey::NetworkIsolationKey(const SchemefulSite& top_frame_site,
-                                         const SchemefulSite& frame_site)
+NetworkIsolationKey::NetworkIsolationKey(
+    const SchemefulSite& top_frame_site,
+    const SchemefulSite& frame_site,
+    const std::optional<base::UnguessableToken>& nonce,
+    NetworkIsolationPartition network_isolation_partition)
     : NetworkIsolationKey(SchemefulSite(top_frame_site),
                           SchemefulSite(frame_site),
-                          false /* opaque_and_non_transient */) {}
+                          std::optional<base::UnguessableToken>(nonce),
+                          network_isolation_partition) {}
 
-NetworkIsolationKey::NetworkIsolationKey(SchemefulSite&& top_frame_site,
-                                         SchemefulSite&& frame_site)
-    : NetworkIsolationKey(std::move(top_frame_site),
-                          std::move(frame_site),
-                          false /* opaque_and_non_transient */) {}
+NetworkIsolationKey::NetworkIsolationKey(
+    SchemefulSite&& top_frame_site,
+    SchemefulSite&& frame_site,
+    std::optional<base::UnguessableToken>&& nonce,
+    NetworkIsolationPartition network_isolation_partition)
+    : NetworkIsolationKey(
+          base::MakeRefCounted<Data>(std::move(top_frame_site),
+                                     std::move(frame_site),
+                                     std::move(nonce),
+                                     network_isolation_partition)) {}
 
-NetworkIsolationKey::NetworkIsolationKey(const url::Origin& top_frame_origin,
-                                         const url::Origin& frame_origin)
-    : NetworkIsolationKey(SchemefulSite(top_frame_origin),
-                          SchemefulSite(frame_origin)) {}
+NetworkIsolationKey::NetworkIsolationKey()
+    : NetworkIsolationKey(Data::GetEmptyData()) {}
 
-NetworkIsolationKey::NetworkIsolationKey() = default;
+// static
+NetworkIsolationKey NetworkIsolationKey::CreateEmptyWithPartition(
+    NetworkIsolationPartition network_isolation_partition) {
+  return NetworkIsolationKey(base::MakeRefCounted<Data>(
+      /*top_frame_site=*/std::nullopt, /*frame_site=*/std::nullopt,
+      /*nonce=*/std::nullopt, network_isolation_partition));
+}
 
 NetworkIsolationKey::NetworkIsolationKey(
     const NetworkIsolationKey& network_isolation_key) = default;
 
 NetworkIsolationKey::NetworkIsolationKey(
     NetworkIsolationKey&& network_isolation_key) = default;
+
+NetworkIsolationKey::NetworkIsolationKey(const scoped_refptr<const Data>& data)
+    : data_(data) {
+  CHECK(data_);
+  CHECK(!data_->nonce() || !data_->nonce()->is_empty());
+}
 
 NetworkIsolationKey::~NetworkIsolationKey() = default;
 
@@ -54,167 +86,118 @@ NetworkIsolationKey& NetworkIsolationKey::operator=(
 NetworkIsolationKey& NetworkIsolationKey::operator=(
     NetworkIsolationKey&& network_isolation_key) = default;
 
-NetworkIsolationKey NetworkIsolationKey::CreateTransient() {
+NetworkIsolationKey NetworkIsolationKey::CreateTransientForTesting() {
   SchemefulSite site_with_opaque_origin;
   return NetworkIsolationKey(site_with_opaque_origin, site_with_opaque_origin);
 }
 
-NetworkIsolationKey NetworkIsolationKey::CreateOpaqueAndNonTransient() {
-  SchemefulSite site_with_opaque_origin;
-  return NetworkIsolationKey(SchemefulSite(site_with_opaque_origin),
-                             SchemefulSite(site_with_opaque_origin),
-                             true /* opaque_and_non_transient */);
-}
-
 NetworkIsolationKey NetworkIsolationKey::CreateWithNewFrameSite(
     const SchemefulSite& new_frame_site) const {
-  if (!top_frame_site_)
+  if (data_->is_empty()) {
     return NetworkIsolationKey();
-  NetworkIsolationKey key(top_frame_site_.value(), new_frame_site);
-  key.opaque_and_non_transient_ = opaque_and_non_transient_;
-  return key;
-}
-
-NetworkIsolationKey NetworkIsolationKey::CreateWithNewFrameOrigin(
-    const url::Origin& new_frame_origin) const {
-  return CreateWithNewFrameSite(SchemefulSite(new_frame_origin));
-}
-
-std::string NetworkIsolationKey::ToString() const {
-  if (IsTransient())
-    return "";
-
-  if (IsOpaque()) {
-    // This key is opaque but not transient.
-
-    absl::optional<std::string> serialized_top_frame_site =
-        SerializeSiteWithNonce(top_frame_site_.value());
-    absl::optional<std::string> serialized_frame_site =
-        SerializeSiteWithNonce(frame_site_.value());
-
-    // SerializeSiteWithNonce() can't fail for valid origins, and only valid
-    // origins can be opaque.
-    DCHECK(serialized_top_frame_site);
-    DCHECK(serialized_frame_site);
-
-    return "opaque non-transient " + *serialized_top_frame_site + " " +
-           *serialized_frame_site;
   }
+  return NetworkIsolationKey(data_->top_frame_site().value(), new_frame_site,
+                             data_->nonce(),
+                             data_->network_isolation_partition());
+}
 
-  return top_frame_site_->Serialize() + " " + frame_site_->Serialize();
+std::optional<std::string> NetworkIsolationKey::ToCacheKeyString() const {
+  if (IsTransient())
+    return std::nullopt;
+
+  std::string network_isolation_partition_string =
+      GetNetworkIsolationPartition() == NetworkIsolationPartition::kGeneral
+          ? ""
+          : " " + GetNetworkIsolationPartitionStringForCacheKey(
+                      GetNetworkIsolationPartition());
+  return base::StrCat({GetTopFrameSite()->Serialize(), " ",
+                       GetFrameSite()->Serialize(),
+                       network_isolation_partition_string});
 }
 
 std::string NetworkIsolationKey::ToDebugString() const {
-  // The space-separated serialization of |top_frame_site_| and
-  // |frame_site_|.
-  std::string return_string = GetSiteDebugString(top_frame_site_);
-  return_string += " " + GetSiteDebugString(frame_site_);
+  std::string partition =
+      GetNetworkIsolationPartition() == NetworkIsolationPartition::kGeneral
+          ? ""
+          : base::StrCat({" (",
+                          NetworkIsolationPartitionToDebugString(
+                              GetNetworkIsolationPartition()),
+                          ")"});
 
-  if (IsFullyPopulated() && IsOpaque() && opaque_and_non_transient_) {
-    return_string += " non-transient";
+  if (data_->is_empty()) {
+    return base::StrCat({"null null", partition});
   }
 
-  return return_string;
-}
+  std::string top_frame_site = GetTopFrameSite()->GetDebugString();
+  std::string frame_site = GetFrameSite()->GetDebugString();
+  std::string nonce =
+      GetNonce().has_value()
+          ? base::StrCat({" (with nonce ", GetNonce()->ToString(), ")"})
+          : "";
 
-bool NetworkIsolationKey::IsFullyPopulated() const {
-  return top_frame_site_.has_value() && frame_site_.has_value();
+  return base::StrCat({top_frame_site, " ", frame_site, nonce, partition});
 }
 
 bool NetworkIsolationKey::IsTransient() const {
-  if (!IsFullyPopulated())
+  if (IsEmpty()) {
     return true;
-  if (opaque_and_non_transient_) {
-    DCHECK(IsOpaque());
-    return false;
   }
   return IsOpaque();
 }
 
-bool NetworkIsolationKey::ToValue(base::Value* out_value) const {
-  if (IsEmpty()) {
-    *out_value = base::Value(base::Value::Type::LIST);
-    return true;
-  }
-
-  if (IsTransient())
-    return false;
-
-  absl::optional<std::string> top_frame_value =
-      SerializeSiteWithNonce(*top_frame_site_);
-  if (!top_frame_value)
-    return false;
-  *out_value = base::Value(base::Value::Type::LIST);
-  out_value->Append(std::move(*top_frame_value));
-
-  absl::optional<std::string> frame_value =
-      SerializeSiteWithNonce(*frame_site_);
-  if (!frame_value)
-    return false;
-  out_value->Append(std::move(*frame_value));
-
-  return true;
-}
-
-bool NetworkIsolationKey::FromValue(
-    const base::Value& value,
-    NetworkIsolationKey* network_isolation_key) {
-  if (!value.is_list())
-    return false;
-
-  base::Value::ConstListView list = value.GetList();
-  if (list.empty()) {
-    *network_isolation_key = NetworkIsolationKey();
-    return true;
-  }
-
-  if (list.size() != 2 || !list[0].is_string() || !list[1].is_string())
-    return false;
-
-  absl::optional<SchemefulSite> top_frame_site =
-      SchemefulSite::DeserializeWithNonce(list[0].GetString());
-  if (!top_frame_site)
-    return false;
-
-  // An opaque origin key will only be serialized into a base::Value if
-  // |opaque_and_non_transient_| is set. Therefore if either origin is opaque,
-  // |opaque_and_non_transient_| must be true.
-  bool opaque_and_non_transient = top_frame_site->opaque();
-
-  absl::optional<SchemefulSite> frame_site =
-      SchemefulSite::DeserializeWithNonce(list[1].GetString());
-  if (!frame_site)
-    return false;
-
-  opaque_and_non_transient |= frame_site->opaque();
-
-  *network_isolation_key =
-      NetworkIsolationKey(std::move(*top_frame_site), std::move(*frame_site));
-  network_isolation_key->opaque_and_non_transient_ = opaque_and_non_transient;
-  return true;
-}
-
 bool NetworkIsolationKey::IsEmpty() const {
-  return !top_frame_site_.has_value() && !frame_site_.has_value();
-}
-
-NetworkIsolationKey::NetworkIsolationKey(SchemefulSite&& top_frame_site,
-                                         SchemefulSite&& frame_site,
-                                         bool opaque_and_non_transient)
-    : opaque_and_non_transient_(opaque_and_non_transient),
-      top_frame_site_(std::move(top_frame_site)),
-      frame_site_(std::move(frame_site)) {
-  DCHECK(!opaque_and_non_transient || top_frame_site_->opaque());
-  DCHECK(!opaque_and_non_transient || frame_site.opaque());
+  return data_->is_empty();
 }
 
 bool NetworkIsolationKey::IsOpaque() const {
-  return top_frame_site_->opaque() || frame_site_->opaque();
+  if (GetTopFrameSite()->opaque()) {
+    return true;
+  }
+  if (GetFrameSite()->opaque()) {
+    return true;
+  }
+  if (GetNonce().has_value()) {
+    return true;
+  }
+  return false;
 }
 
-absl::optional<std::string> NetworkIsolationKey::SerializeSiteWithNonce(
-    const SchemefulSite& site) {
-  return *(const_cast<SchemefulSite&>(site).SerializeWithNonce());
+NET_EXPORT std::ostream& operator<<(std::ostream& os,
+                                    const NetworkIsolationKey& nik) {
+  os << nik.ToDebugString();
+  return os;
 }
+
+// static
+scoped_refptr<NetworkIsolationKey::Data>
+NetworkIsolationKey::Data::GetEmptyData() {
+  static base::NoDestructor<scoped_refptr<NetworkIsolationKey::Data>>
+      empty_data(base::MakeRefCounted<Data>(base::PassKey<Data>()));
+  return *empty_data;
+}
+
+NetworkIsolationKey::Data::Data(base::PassKey<Data>)
+    : network_isolation_partition_(NetworkIsolationPartition::kGeneral) {
+  CHECK(is_empty());
+}
+
+NetworkIsolationKey::Data::Data(
+    std::optional<SchemefulSite>&& top_frame_site,
+    std::optional<SchemefulSite>&& frame_site,
+    std::optional<base::UnguessableToken>&& nonce,
+    NetworkIsolationPartition network_isolation_partition)
+    : top_frame_site_(std::move(top_frame_site)),
+      frame_site_(std::move(frame_site)),
+      nonce_(std::move(nonce)),
+      network_isolation_partition_(network_isolation_partition) {
+  if (is_empty()) {
+    CHECK(!frame_site_.has_value());
+    CHECK(!nonce_.has_value());
+  } else {
+    CHECK(frame_site_.has_value());
+  }
+}
+
+NetworkIsolationKey::Data::~Data() = default;
 
 }  // namespace net

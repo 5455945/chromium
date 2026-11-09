@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 #define CHROMEOS_COMPONENTS_MOJO_BOOTSTRAP_PENDING_CONNECTION_MANAGER_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/no_destructor.h"
 #include "base/unguessable_token.h"
 
@@ -54,7 +54,7 @@ class PendingConnectionManagerTest;
 //       invitation_.AttachMessagePipe("myservice-bootstrap");
 //
 //   base::UnguessableToken token = base::UnguessableToken::Create();
-//   PendingConnectionManager::Get().ExpectOpenIpcChannel(
+//   PendingConnectionManager::GetForMyService().ExpectOpenIpcChannel(
 //       token_, base::BindOnce(&MyClass::AcceptConnection,
 //                              base::Unretained(this)));
 //   StartMySystemService(token_.ToString());
@@ -72,7 +72,7 @@ class PendingConnectionManagerTest;
 //     dbus::ExportedObject::ResponseSender response_sender) {
 //   std::string token = // Pop token passed to StartMySystemService()
 //   base::ScopedFD fd = // Pop FD
-//   CHECK(PendingConnectionManager::Get().OpenIpcChannel(
+//   CHECK(PendingConnectionManager::GetForMyService().OpenIpcChannel(
 //       token, std::move(fd)));
 // }
 //
@@ -95,7 +95,14 @@ class COMPONENT_EXPORT(MOJO_BOOTSTRAP) PendingConnectionManager {
  public:
   using OpenIpcChannelCallback = base::OnceCallback<void(base::ScopedFD)>;
 
-  static PendingConnectionManager& Get();
+  // Returns the PendingConnectionManager for DriveFS.
+  static PendingConnectionManager& GetForDriveFs();
+
+  // Returns the PendingConnectionManager for SmbFs.
+  static PendingConnectionManager& GetForSmbFs();
+
+  PendingConnectionManager(const PendingConnectionManager&) = delete;
+  PendingConnectionManager& operator=(const PendingConnectionManager&) = delete;
 
   // Responds to a file descriptor request for |token| with |fd|. |token| is the
   // UnguessableToken::ToString() representation of the |token| parameter to
@@ -119,8 +126,6 @@ class COMPONENT_EXPORT(MOJO_BOOTSTRAP) PendingConnectionManager {
 
   base::flat_map<std::string, OpenIpcChannelCallback>
       open_ipc_channel_callbacks_;
-
-  DISALLOW_COPY_AND_ASSIGN(PendingConnectionManager);
 };
 
 }  // namespace mojo_bootstrap

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,19 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/scoped_file.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "chromeos/components/sensors/ash/sensor_hal_dispatcher.h"
+#include "base/functional/bind.h"
+#include "chrome/browser/ash/net/rollback_network_config/rollback_network_config_service.h"
+#include "chromeos/ash/services/rollback_network_config/public/mojom/rollback_network_config.mojom.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
+#include "mojo/core/configuration.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
+namespace ash {
 
 MojoConnectionServiceProvider::MojoConnectionServiceProvider() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -35,18 +36,10 @@ void MojoConnectionServiceProvider::Start(
 
   exported_object_->ExportMethod(
       ::mojo_connection_service::kMojoConnectionServiceInterface,
-      ::mojo_connection_service::kBootstrapMojoConnectionForIioServiceMethod,
-      base::BindRepeating(
-          &MojoConnectionServiceProvider::BootstrapMojoConnectionForIioService,
-          weak_ptr_factory_.GetWeakPtr()),
-      base::BindOnce(&MojoConnectionServiceProvider::OnExported,
-                     weak_ptr_factory_.GetWeakPtr()));
-
-  exported_object_->ExportMethod(
-      ::mojo_connection_service::kMojoConnectionServiceInterface,
-      ::mojo_connection_service::kBootstrapMojoConnectionForSensorClientsMethod,
+      ::mojo_connection_service::
+          kBootstrapMojoConnectionForRollbackNetworkConfigMethod,
       base::BindRepeating(&MojoConnectionServiceProvider::
-                              BootstrapMojoConnectionForSensorClients,
+                              BootstrapMojoConnectionForRollbackNetworkConfig,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&MojoConnectionServiceProvider::OnExported,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -60,35 +53,20 @@ void MojoConnectionServiceProvider::OnExported(
                           << method_name;
 }
 
-void MojoConnectionServiceProvider::BootstrapMojoConnectionForIioService(
-    dbus::MethodCall* method_call,
-    dbus::ExportedObject::ResponseSender response_sender) {
+void MojoConnectionServiceProvider::
+    BootstrapMojoConnectionForRollbackNetworkConfig(
+        dbus::MethodCall* method_call,
+        dbus::ExportedObject::ResponseSender response_sender) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   mojo::PlatformChannel platform_channel;
   mojo::ScopedMessagePipeHandle pipe;
   SendInvitation(&platform_channel, &pipe);
 
-  sensors::SensorHalDispatcher::GetInstance()->RegisterServer(
-      mojo::PendingRemote<sensors::mojom::SensorHalServer>(std::move(pipe),
-                                                           0u /* version */));
-
-  SendResponse(std::move(platform_channel), method_call,
-               std::move(response_sender));
-}
-
-void MojoConnectionServiceProvider::BootstrapMojoConnectionForSensorClients(
-    dbus::MethodCall* method_call,
-    dbus::ExportedObject::ResponseSender response_sender) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  mojo::PlatformChannel platform_channel;
-  mojo::ScopedMessagePipeHandle pipe;
-  SendInvitation(&platform_channel, &pipe);
-
-  sensors::SensorHalDispatcher::GetInstance()->RegisterClient(
-      mojo::PendingRemote<sensors::mojom::SensorHalClient>(std::move(pipe),
-                                                           0u /* version */));
+  rollback_network_config::BindToInProcessInstance(
+      mojo::PendingReceiver<
+          rollback_network_config::mojom::RollbackNetworkConfig>(
+          std::move(pipe)));
 
   SendResponse(std::move(platform_channel), method_call,
                std::move(response_sender));
@@ -101,6 +79,9 @@ void MojoConnectionServiceProvider::SendInvitation(
   mojo::OutgoingInvitation invitation;
   // Include an initial Mojo pipe in the invitation.
   *pipe = invitation.AttachMessagePipe(0);
+  if (!mojo::core::GetConfiguration().is_broker_process) {
+    invitation.set_extra_flags(MOJO_SEND_INVITATION_FLAG_SHARE_BROKER);
+  }
   mojo::OutgoingInvitation::Send(std::move(invitation),
                                  base::kNullProcessHandle,
                                  platform_channel->TakeLocalEndpoint());
@@ -122,4 +103,4 @@ void MojoConnectionServiceProvider::SendResponse(
   std::move(response_sender).Run(std::move(response));
 }
 
-}  // namespace chromeos
+}  // namespace ash

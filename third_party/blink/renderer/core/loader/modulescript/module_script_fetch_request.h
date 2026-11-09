@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,26 +30,32 @@ class ModuleScriptFetchRequest final {
                            network::mojom::RequestDestination destination,
                            const ScriptFetchOptions& options,
                            const String& referrer_string,
-                           const TextPosition& referrer_position)
+                           const TextPosition& referrer_position,
+                           const v8::ModuleImportPhase import_phase)
       : url_(url),
         expected_module_type_(module_type),
         context_type_(context_type),
         destination_(destination),
         options_(options),
         referrer_string_(referrer_string),
-        referrer_position_(referrer_position) {}
+        referrer_position_(referrer_position),
+        import_phase_(import_phase) {}
 
-  static ModuleScriptFetchRequest CreateForTest(const KURL& url,
-                                                ModuleType module_type) {
+  static ModuleScriptFetchRequest CreateForTest(
+      const KURL& url,
+      ModuleType module_type,
+      v8::ModuleImportPhase import_phase = v8::ModuleImportPhase::kEvaluation) {
     return ModuleScriptFetchRequest(
         url, module_type, mojom::blink::RequestContextType::SCRIPT,
         network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-        Referrer::ClientReferrerString(), TextPosition::MinimumPosition());
+        Referrer::ClientReferrerString(), TextPosition::MinimumPosition(),
+        import_phase);
   }
   ~ModuleScriptFetchRequest() = default;
 
   const KURL& Url() const { return url_; }
   ModuleType GetExpectedModuleType() const { return expected_module_type_; }
+  v8::ModuleImportPhase GetModuleImportPhase() const { return import_phase_; }
   mojom::blink::RequestContextType ContextType() const { return context_type_; }
   network::mojom::RequestDestination Destination() const {
     return destination_;
@@ -66,6 +72,7 @@ class ModuleScriptFetchRequest final {
   const ScriptFetchOptions options_;
   const String referrer_string_;
   const TextPosition referrer_position_;
+  const v8::ModuleImportPhase import_phase_;
 };
 
 }  // namespace blink

@@ -1,9 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/search/ntp_test_utils.h"
 
+#include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
@@ -35,11 +37,11 @@ void SetUserSelectedDefaultSearchProvider(Profile* profile,
 
 GURL GetFinalNtpUrl(Profile* profile) {
   if (search::GetNewTabPageURL(profile) ==
-      GURL(chrome::kChromeUINewTabPageURL)) {
+      chrome::ChromeUINewTabPageURLAsGURL()) {
     // If chrome://newtab/ already maps to the local/WebUI NTP, then that will
     // load correctly, even without network.  The URL associated with the
     // WebContents will stay chrome://newtab/.
-    return GURL(chrome::kChromeUINewTabURL);
+    return chrome::ChromeUINewTabURLAsGURL();
   }
   // If chrome://newtab/ maps to a remote URL, then it will fail to load in a
   // browser_test environment.  In this case, we will get redirected to the

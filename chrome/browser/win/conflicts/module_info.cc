@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,7 +54,7 @@ bool ConvertToLongPath(const std::u16string& short_path,
   DWORD return_value =
       ::GetLongPathName(base::as_wcstr(short_path), long_path_buf, MAX_PATH);
   if (return_value != 0 && return_value < MAX_PATH) {
-    *long_path = base::AsString16(std::wstring(long_path_buf));
+    *long_path = base::AsString16(long_path_buf);
     return true;
   }
 
@@ -125,7 +125,7 @@ ModuleInspectionResult InspectModule(const base::FilePath& module_path) {
 // (1601-01-01 00:00:00 UTC).
 uint32_t CalculateTimeStamp(base::Time time) {
   const auto delta = time.ToDeltaSinceWindowsEpoch();
-  return delta < base::TimeDelta() ? 0 : static_cast<uint32_t>(delta.InHours());
+  return delta.is_negative() ? 0 : static_cast<uint32_t>(delta.InHours());
 }
 
 std::string GenerateCodeId(const ModuleInfoKey& module_key) {
@@ -136,13 +136,13 @@ std::string GenerateCodeId(const ModuleInfoKey& module_key) {
 uint32_t ProcessTypeToBit(content::ProcessType process_type) {
   uint32_t bit_index =
       static_cast<uint32_t>(process_type) - kFirstValidProcessType;
-  DCHECK_GE(31u, bit_index);
+  CHECK_GE(31u, bit_index, base::NotFatalUntil::M163);
   uint32_t bit = (1 << bit_index);
   return bit;
 }
 
 content::ProcessType BitIndexToProcessType(uint32_t bit_index) {
-  DCHECK_GE(31u, bit_index);
+  CHECK_GE(31u, bit_index, base::NotFatalUntil::M163);
   return static_cast<content::ProcessType>(bit_index + kFirstValidProcessType);
 }
 

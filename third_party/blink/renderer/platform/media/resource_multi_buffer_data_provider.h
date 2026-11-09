@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,33 +10,57 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "third_party/blink/public/platform/media/multi_buffer.h"
-#include "third_party/blink/public/platform/media/url_index.h"
+#include "net/base/url_util.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/web/web_associated_url_loader_client.h"
-#include "third_party/blink/public/web/web_frame.h"
+#include "third_party/blink/renderer/platform/media/multi_buffer.h"
+#include "third_party/blink/renderer/platform/media/url_index.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "url/gurl.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace base {
 class SingleThreadTaskRunner;
 }
 
 namespace blink {
-class WebAssociatedURLLoader;
-}  // namespace blink
 
-namespace media {
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(kDeferMediaAcceptEncodingInjection);
+
+class WebAssociatedURLLoader;
 
 class PLATFORM_EXPORT ResourceMultiBufferDataProvider
     : public MultiBuffer::DataProvider,
-      public blink::WebAssociatedURLLoaderClient {
+      public WebAssociatedURLLoaderClient {
  public:
   // NUmber of times we'll retry if the connection fails.
   enum { kMaxRetries = 30 };
+
+  // Per-request redirect tracking state, reset at the start of each network
+  // request in `Start()`.
+  struct RedirectState {
+    // Post-redirect URL if the current request followed at least one HTTP
+    // redirect; empty otherwise.
+    KURL redirects_to;
+
+    // Worst-case relation (`kSameOrigin < kSameSite < kCrossSite`) of any URL
+    // in the current request's redirect chain relative to
+    // `url_data_->security_origin()`.
+    net::OriginRelation max_origin_relation = net::OriginRelation::kSameOrigin;
+
+    // True if any redirect hop in the current request crossed origins.
+    bool has_cross_origin_redirect = false;
+
+    // Service worker bypass mode for retargeted follow-up range requests.
+    // Matching `blink::ResourceLoader::WillFollowRedirect`, any redirect hop
+    // not synthesized by a Service Worker latches `kSkip` when
+    // `media::kDisallowMixedOpaqueMediaResponses` is enabled.
+    UrlData::ServiceWorkerMode service_worker_mode =
+        UrlData::ServiceWorkerMode::kAllow;
+  };
 
   ResourceMultiBufferDataProvider(
       UrlData* url_data,
@@ -52,25 +76,24 @@ class PLATFORM_EXPORT ResourceMultiBufferDataProvider
   MultiBufferBlockId Tell() const override;
   bool Available() const override;
   int64_t AvailableBytes() const override;
-  scoped_refptr<DataBuffer> Read() override;
+  scoped_refptr<media::DataBuffer> Read() override;
   void SetDeferred(bool defer) override;
 
-  // blink::WebAssociatedURLLoaderClient implementation.
-  bool WillFollowRedirect(
-      const blink::WebURL& new_url,
-      const blink::WebURLResponse& redirect_response) override;
-  void DidSendData(uint64_t bytesSent, uint64_t totalBytesToBeSent) override;
-  void DidReceiveResponse(const blink::WebURLResponse& response) override;
+  // WebAssociatedURLLoaderClient implementation.
+  bool WillFollowRedirect(const WebURL& new_url,
+                          const WebURLResponse& redirect_response) override;
+  void DidSendData(uint64_t bytes_sent,
+                   uint64_t total_bytes_to_be_sent) override;
+  void DidReceiveResponse(const WebURLResponse& response) override;
   void DidDownloadData(uint64_t data_length) override;
-  void DidReceiveData(const char* data, int data_length) override;
+  void DidReceiveData(base::span<const char> data_length) override;
   void DidFinishLoading() override;
-  void DidFail(const blink::WebURLError&) override;
+  void DidFail(const WebURLError&) override;
 
   // Use protected instead of private for testing purposes.
  protected:
   friend class MultiBufferDataSourceTest;
   friend class ResourceMultiBufferDataProviderTest;
-  friend class MockBufferedDataSource;
 
   // Callback used when we're asked to fetch data after the end of the file.
   void Terminate();
@@ -90,8 +113,13 @@ class PLATFORM_EXPORT ResourceMultiBufferDataProvider
   int64_t block_size() const;
 
   // If we have made a range request, verify the response from the server.
-  bool VerifyPartialResponse(const blink::WebURLResponse& response,
+  bool VerifyPartialResponse(const WebURLResponse& response,
                              const scoped_refptr<UrlData>& url_data);
+
+  // Validates that |length| is compatible with any existing length on
+  // |url_data_| and |destination_url_data|, and updates |destination_url_data|.
+  bool TrySetLength(const scoped_refptr<UrlData>& destination_url_data,
+                    int64_t length);
 
   // Current Position.
   MultiBufferBlockId pos_;
@@ -100,10 +128,10 @@ class PLATFORM_EXPORT ResourceMultiBufferDataProvider
   // We don't need (or want) a scoped_refptr for this one, because
   // we are owned by it. Note that we may change this when we encounter
   // a redirect because we actually change ownership.
-  UrlData* url_data_;
+  raw_ptr<UrlData> url_data_;
 
   // Temporary storage for incoming data.
-  std::list<scoped_refptr<DataBuffer>> fifo_;
+  std::list<scoped_refptr<media::DataBuffer>> fifo_;
 
   // How many retries have we done at the current position.
   int retries_;
@@ -112,16 +140,12 @@ class PLATFORM_EXPORT ResourceMultiBufferDataProvider
   // const to make it obvious that redirects cannot change it.
   const UrlData::CorsMode cors_mode_;
 
-  // The origin for the initial request.
-  // const to make it obvious that redirects cannot change it.
-  const GURL origin_;
-
   // Keeps track of an active WebAssociatedURLLoader.
   // Only valid while loading resource.
-  std::unique_ptr<blink::WebAssociatedURLLoader> active_loader_;
+  std::unique_ptr<WebAssociatedURLLoader> active_loader_;
 
-  // When we encounter a redirect, this is the source of the redirect.
-  GURL redirects_to_;
+  // Tracks redirects followed by the current request. Reset on `Start()`.
+  RedirectState redirect_state_;
 
   // If the server tries to gives us more bytes than we want, this how
   // many bytes we need to discard before we get to the right place.
@@ -130,11 +154,17 @@ class PLATFORM_EXPORT ResourceMultiBufferDataProvider
   // Is the client an audio element?
   bool is_client_audio_element_ = false;
 
+  // True if any response handled by this data provider was fetched via a
+  // service worker.
+  bool was_fetched_via_service_worker_ = false;
+
+  size_t total_bytes_received_ = 0;
+
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   base::WeakPtrFactory<ResourceMultiBufferDataProvider> weak_factory_{this};
 };
 
-}  // namespace media
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIA_RESOURCE_MULTI_BUFFER_DATA_PROVIDER_H_

@@ -1,13 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/platform/bluetooth_adapter.h"
-#include "base/metrics/histogram_functions.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+#include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
+
+namespace nearby::chrome {
 
 BluetoothAdapter::BluetoothAdapter(
     const mojo::SharedRemote<bluetooth::mojom::Adapter>& adapter)
@@ -66,7 +67,15 @@ std::string BluetoothAdapter::GetName() const {
   return success ? info->name : std::string();
 }
 
-bool BluetoothAdapter::SetName(absl::string_view name) {
+bool BluetoothAdapter::SetName(std::string_view name) {
+  return SetName(name, /*persist=*/true);
+}
+
+bool BluetoothAdapter::SetName(std::string_view name, bool persist) {
+  // The `persist` parameter is ignored by ChromeOS; we always persist the
+  // requested adapter name change. The `persist` argument only exists to
+  // support Windows. See b/234135746 for more context."
+
   bool set_name_success = false;
   bool call_success = adapter_->SetName(name.data(), &set_name_success);
 
@@ -83,6 +92,15 @@ std::string BluetoothAdapter::GetMacAddress() const {
   return success ? info->address : std::string();
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+std::string BluetoothAdapter::GetAddress() const {
+  return GetMacAddress();
+}
+
+BluetoothAdapter::UniqueId BluetoothAdapter::GetUniqueId() const {
+  // The unique id is not used by ChromeOS and this remains unimplemented. If
+  // functionality is needed later on, this can be implemented.
+  NOTIMPLEMENTED();
+  return 0;
+}
+
+}  // namespace nearby::chrome

@@ -1,11 +1,9 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
-#include <vector>
 
-#include "components/dom_distiller/core/article_distillation_update.h"
 #include "components/dom_distiller/core/test_request_view_handle.h"
 #include "components/grit/components_resources.h"
 #include "components/strings/grit/components_strings.h"
@@ -183,48 +181,51 @@ TEST_F(DomDistillerRequestViewTest, TestContentNeverEmpty) {
     EXPECT_THAT(handle.GetJavaScriptBuffer(), Not(HasSubstr(valid_content)));
     handle.ClearJavaScriptBuffer();
   }
-
-  // Test empty string page update
-  {
-    std::vector<scoped_refptr<ArticleDistillationUpdate::RefCountedPageProto>>
-        pages;
-    scoped_refptr<base::RefCountedData<DistilledPageProto>> page_proto =
-        new base::RefCountedData<DistilledPageProto>();
-    page_proto->data.set_html("");
-    pages.push_back(page_proto);
-
-    std::unique_ptr<ArticleDistillationUpdate> article_update(
-        new ArticleDistillationUpdate(pages, false, false));
-
-    handle.OnArticleUpdated(*article_update);
-
-    EXPECT_THAT(handle.GetJavaScriptBuffer(), HasSubstr(no_content));
-    EXPECT_THAT(handle.GetJavaScriptBuffer(), Not(HasSubstr(valid_content)));
-    handle.ClearJavaScriptBuffer();
-  }
 }
 
 TEST_F(DomDistillerRequestViewTest, TestLoadingIndicator) {
-  const std::string no_content =
-      l10n_util::GetStringUTF8(IDS_DOM_DISTILLER_VIEWER_NO_DATA_CONTENT);
-  // Showing the indicator does mean passing 'false' as the parameter.
-  const std::string show_loader = "showLoadingIndicator(false);";
-
   TestRequestViewHandle handle(distilled_page_prefs_.get());
   handle.TakeViewerHandle(nullptr);
+  EXPECT_THAT(handle.GetJavaScriptBuffer(),
+              Not(HasSubstr("hideLoadingIndicator();")));
 
-  std::vector<scoped_refptr<ArticleDistillationUpdate::RefCountedPageProto>>
-      pages;
-  scoped_refptr<base::RefCountedData<DistilledPageProto>> page_proto =
-      new base::RefCountedData<DistilledPageProto>();
-  pages.push_back(page_proto);
+  DistilledArticleProto article_proto;
+  article_proto.add_pages();
+  handle.OnArticleReady(&article_proto);
 
-  std::unique_ptr<ArticleDistillationUpdate> article_update(
-      new ArticleDistillationUpdate(pages, true, false));
+  EXPECT_THAT(handle.GetJavaScriptBuffer(),
+              HasSubstr("hideLoadingIndicator();"));
+}
 
-  handle.OnArticleUpdated(*article_update);
+TEST_F(DomDistillerRequestViewTest, TestSetLinksEnabled) {
+  TestRequestViewHandle handle(distilled_page_prefs_.get());
 
-  EXPECT_THAT(handle.GetJavaScriptBuffer(), HasSubstr(show_loader));
+  // Test links disabled for distiller page.
+  {
+    distilled_page_prefs_->SetLinksEnabled(false);
+
+    std::unique_ptr<DistilledArticleProto> article_proto =
+        std::make_unique<DistilledArticleProto>();
+
+    handle.OnArticleReady(article_proto.get());
+
+    EXPECT_THAT(handle.GetJavaScriptBuffer(),
+                HasSubstr("setLinksEnabled(false)"));
+    handle.ClearJavaScriptBuffer();
+  }
+  // Test links enabled for distiller page.
+  {
+    distilled_page_prefs_->SetLinksEnabled(true);
+
+    std::unique_ptr<DistilledArticleProto> article_proto =
+        std::make_unique<DistilledArticleProto>();
+
+    handle.OnArticleReady(article_proto.get());
+
+    EXPECT_THAT(handle.GetJavaScriptBuffer(),
+                HasSubstr("setLinksEnabled(true)"));
+    handle.ClearJavaScriptBuffer();
+  }
 }
 
 }  // namespace dom_distiller

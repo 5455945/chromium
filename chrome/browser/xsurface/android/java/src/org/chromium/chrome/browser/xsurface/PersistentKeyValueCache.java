@@ -1,21 +1,27 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.xsurface;
 
-import androidx.annotation.Nullable;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
-/** A simple key-value cache that is persisting all data on disk. Automatically evicts old data. */
+/**
+ * Implemented in Chromium.
+ *
+ * <p>A simple key-value cache that is persisting all data on disk. Automatically evicts old data.
+ */
+@NullMarked
 public interface PersistentKeyValueCache {
     /** Consumes the result of PersistentKeyValueCache.lookup(). */
-    public interface ValueConsumer {
+    interface ValueConsumer {
         /**
          * Called when a lookup is complete.
          *
          * @param value The value found. null if no value was present.
          */
-        void run(@Nullable byte[] value);
+        void run(byte @Nullable [] value);
     }
 
     /**

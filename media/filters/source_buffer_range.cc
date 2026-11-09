@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,10 @@
 #include <sstream>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/not_fatal_until.h"
+#include "media/base/stream_parser_buffer.h"
 #include "media/base/timestamp_constants.h"
 
 namespace media {
@@ -21,13 +24,12 @@ SourceBufferRange::SourceBufferRange(
     : gap_policy_(gap_policy),
       next_buffer_index_(-1),
       interbuffer_distance_cb_(std::move(interbuffer_distance_cb)),
-      size_in_bytes_(0),
       range_start_pts_(range_start_pts),
       keyframe_map_index_base_(0) {
   DVLOG(3) << __func__;
   DCHECK(interbuffer_distance_cb_);
   CHECK(!new_buffers.empty());
-  DCHECK(new_buffers.front()->is_key_frame());
+  CHECK(new_buffers.front()->is_key_frame());
   AppendBuffersToEnd(new_buffers, range_start_pts_);
 }
 
@@ -105,8 +107,12 @@ void SourceBufferRange::AppendBuffersToEnd(
   DVLOG(1) << __func__;
   DVLOG(4) << ToStringForDebugging();
 
-  CHECK(buffers_.empty() ||
-        CanAppendBuffersToEnd(new_buffers, new_buffers_group_start_pts));
+  if (buffers_.empty()) {
+    CHECK(!new_buffers.empty());
+    CHECK(new_buffers.front()->is_key_frame());
+  } else {
+    CHECK(CanAppendBuffersToEnd(new_buffers, new_buffers_group_start_pts));
+  }
 
   DCHECK(new_buffers_group_start_pts == kNoTimestamp ||
          new_buffers.front()->is_key_frame())
@@ -117,13 +123,15 @@ void SourceBufferRange::AppendBuffersToEnd(
   for (BufferQueue::const_iterator itr = new_buffers.begin();
        itr != new_buffers.end(); ++itr) {
     DCHECK((*itr)->timestamp() != kNoTimestamp);
-    DCHECK((*itr)->GetDecodeTimestamp() != kNoDecodeTimestamp());
+    DCHECK((*itr)->GetDecodeTimestamp() != kNoDecodeTimestamp);
 
     buffers_.push_back(*itr);
     UpdateEndTime(*itr);
-    size_in_bytes_ += (*itr)->data_size();
+    memory_usage_in_bytes_ += (*itr)->GetMemoryUsage();
 
     if ((*itr)->is_key_frame()) {
+      CHECK(keyframe_map_.empty() ||
+            (*itr)->timestamp() >= keyframe_map_.rbegin()->first);
       keyframe_map_.insert(std::make_pair(
           (*itr)->timestamp(), buffers_.size() - 1 + keyframe_map_index_base_));
     }
@@ -178,6 +186,7 @@ void SourceBufferRange::Seek(base::TimeDelta timestamp) {
 
   auto result = GetFirstKeyframeAtOrBefore(timestamp);
   next_buffer_index_ = result->second - keyframe_map_index_base_;
+  CHECK_GE(next_buffer_index_, 0);
   CHECK_LT(next_buffer_index_, static_cast<int>(buffers_.size()))
       << next_buffer_index_ << ", size = " << buffers_.size();
 }
@@ -257,9 +266,11 @@ std::unique_ptr<SourceBufferRange> SourceBufferRange::SplitRange(
   // into |removed_buffers|.
   int keyframe_index =
       new_beginning_keyframe->second - keyframe_map_index_base_;
+  CHECK_GE(keyframe_index, 0);
   CHECK_LT(keyframe_index, static_cast<int>(buffers_.size()));
   BufferQueue::iterator starting_point = buffers_.begin() + keyframe_index;
-  BufferQueue removed_buffers(starting_point, buffers_.end());
+  BufferQueue removed_buffers =
+      UNSAFE_TODO(BufferQueue(starting_point, buffers_.end()));
 
   base::TimeDelta new_range_start_pts =
       std::max(timestamp, GetStartTimestamp());
@@ -316,7 +327,7 @@ size_t SourceBufferRange::DeleteGOPFromFront(BufferQueue* deleted_buffers) {
   size_t total_bytes_deleted = 0;
 
   KeyframeMap::const_iterator front = keyframe_map_.begin();
-  DCHECK(front != keyframe_map_.end());
+  CHECK(front != keyframe_map_.end());
 
   // Delete the keyframe at the start of |keyframe_map_|.
   keyframe_map_.erase(front);
@@ -326,13 +337,15 @@ size_t SourceBufferRange::DeleteGOPFromFront(BufferQueue* deleted_buffers) {
   int end_index = keyframe_map_.size() > 0
                       ? keyframe_map_.begin()->second - keyframe_map_index_base_
                       : buffers_.size();
+  CHECK_GE(end_index, 0);
+  CHECK_LE(end_index, static_cast<int>(buffers_.size()));
 
   // Delete buffers from the beginning of the buffered range up until (but not
   // including) the next keyframe.
   for (int i = 0; i < end_index; i++) {
-    size_t bytes_deleted = buffers_.front()->data_size();
-    DCHECK_GE(size_in_bytes_, bytes_deleted);
-    size_in_bytes_ -= bytes_deleted;
+    size_t bytes_deleted = buffers_.front()->GetMemoryUsage();
+    DCHECK_GE(memory_usage_in_bytes_, bytes_deleted);
+    memory_usage_in_bytes_ -= bytes_deleted;
     total_bytes_deleted += bytes_deleted;
     deleted_buffers->push_back(buffers_.front());
     buffers_.pop_front();
@@ -370,19 +383,20 @@ size_t SourceBufferRange::DeleteGOPFromBack(BufferQueue* deleted_buffers) {
 
   // Remove the last GOP's keyframe from the |keyframe_map_|.
   KeyframeMap::const_iterator back = keyframe_map_.end();
-  DCHECK_GT(keyframe_map_.size(), 0u);
+  CHECK(!keyframe_map_.empty());
   --back;
 
   // The index of the first buffer in the last GOP is equal to the new size of
   // |buffers_| after that GOP is deleted.
   size_t goal_size = back->second - keyframe_map_index_base_;
+  CHECK_LE(goal_size, buffers_.size());
   keyframe_map_.erase(back);
 
   size_t total_bytes_deleted = 0;
   while (buffers_.size() != goal_size) {
-    size_t bytes_deleted = buffers_.back()->data_size();
-    DCHECK_GE(size_in_bytes_, bytes_deleted);
-    size_in_bytes_ -= bytes_deleted;
+    size_t bytes_deleted = buffers_.back()->GetMemoryUsage();
+    DCHECK_GE(memory_usage_in_bytes_, bytes_deleted);
+    memory_usage_in_bytes_ -= bytes_deleted;
     total_bytes_deleted += bytes_deleted;
     // We're removing buffers from the back, so push each removed buffer to the
     // front of |deleted_buffers| so that |deleted_buffers| are in nondecreasing
@@ -410,6 +424,8 @@ size_t SourceBufferRange::GetRemovalGOP(
   if (gop_itr == keyframe_map_.end())
     return 0;
   int keyframe_index = gop_itr->second - keyframe_map_index_base_;
+  CHECK_GE(keyframe_index, 0);
+  CHECK_LT(keyframe_index, static_cast<int>(buffers_.size()));
   BufferQueue::const_iterator buffer_itr = buffers_.begin() + keyframe_index;
   auto gop_end = keyframe_map_.end();
   if (end_timestamp < GetBufferedEndTimestamp())
@@ -428,10 +444,12 @@ size_t SourceBufferRange::GetRemovalGOP(
     int next_gop_index = gop_itr == keyframe_map_.end()
                              ? buffers_.size()
                              : gop_itr->second - keyframe_map_index_base_;
+    CHECK_GE(next_gop_index, 0);
+    CHECK_LE(next_gop_index, static_cast<int>(buffers_.size()));
     BufferQueue::const_iterator next_gop_start =
         buffers_.begin() + next_gop_index;
     for (; buffer_itr != next_gop_start; ++buffer_itr) {
-      gop_size += (*buffer_itr)->data_size();
+      gop_size += (*buffer_itr)->GetMemoryUsage();
     }
 
     bytes_removed += gop_size;
@@ -449,6 +467,7 @@ bool SourceBufferRange::FirstGOPEarlierThanMediaTime(
   DVLOG(1) << __func__;
   DVLOG(4) << ToStringForDebugging();
 
+  CHECK(!keyframe_map_.empty());
   if (keyframe_map_.size() == 1u)
     return (GetBufferedEndTimestamp() <= media_time);
 
@@ -465,6 +484,7 @@ bool SourceBufferRange::FirstGOPContainsNextBufferPosition() const {
     return false;
 
   // If there is only one GOP, it must contain the next buffer position.
+  CHECK(!keyframe_map_.empty());
   if (keyframe_map_.size() == 1u)
     return true;
 
@@ -481,6 +501,7 @@ bool SourceBufferRange::LastGOPContainsNextBufferPosition() const {
     return false;
 
   // If there is only one GOP, it must contain the next buffer position.
+  CHECK(!keyframe_map_.empty());
   if (keyframe_map_.size() == 1u)
     return true;
 
@@ -523,6 +544,14 @@ base::TimeDelta SourceBufferRange::GetEndTimestamp() const {
   return highest_frame_->timestamp();
 }
 
+base::TimeDelta SourceBufferRange::GetLastGOPKeyframeTimestamp() const {
+  DVLOG(1) << __func__;
+  DVLOG(4) << ToStringForDebugging();
+
+  CHECK(!keyframe_map_.empty());
+  return keyframe_map_.rbegin()->first;
+}
+
 base::TimeDelta SourceBufferRange::GetBufferedEndTimestamp() const {
   DVLOG(1) << __func__;
   DVLOG(4) << ToStringForDebugging();
@@ -537,7 +566,7 @@ base::TimeDelta SourceBufferRange::GetBufferedEndTimestamp() const {
   // report 1 microsecond for the last buffer's duration if it is a 0 duration
   // buffer.
   if (duration.is_zero())
-    duration = base::TimeDelta::FromMicroseconds(1);
+    duration = base::Microseconds(1);
 
   return GetEndTimestamp() + duration;
 }
@@ -574,13 +603,14 @@ base::TimeDelta SourceBufferRange::FindHighestBufferedTimestampAtOrBefore(
   }
 
   auto key_iter = GetFirstKeyframeAtOrBefore(timestamp);
-  DCHECK(key_iter != keyframe_map_.end())
+  CHECK(key_iter != keyframe_map_.end())
       << "BelongsToRange() semantics failed.";
   DCHECK(key_iter->first <= timestamp);
 
   // Scan forward in |buffers_| to find the highest frame with timestamp <=
   // |timestamp|. Stop once a frame with timestamp > |timestamp| is encountered.
   size_t key_index = key_iter->second - keyframe_map_index_base_;
+  CHECK_LT(key_index, buffers_.size());
   SourceBufferRange::BufferQueue::const_iterator search_iter =
       buffers_.begin() + key_index;
   CHECK(search_iter != buffers_.end());
@@ -595,9 +625,6 @@ base::TimeDelta SourceBufferRange::FindHighestBufferedTimestampAtOrBefore(
     if (cur_frame_time > timestamp)
       return result;
   }
-
-  NOTREACHED();
-  return base::TimeDelta();
 }
 
 base::TimeDelta SourceBufferRange::NextKeyframeTimestamp(
@@ -705,9 +732,9 @@ void SourceBufferRange::FreeBufferRange(
     const BufferQueue::const_iterator& ending_point) {
   for (BufferQueue::const_iterator itr = starting_point; itr != ending_point;
        ++itr) {
-    size_t itr_data_size = static_cast<size_t>((*itr)->data_size());
-    DCHECK_GE(size_in_bytes_, itr_data_size);
-    size_in_bytes_ -= itr_data_size;
+    size_t itr_data_size = static_cast<size_t>((*itr)->GetMemoryUsage());
+    DCHECK_GE(memory_usage_in_bytes_, itr_data_size);
+    memory_usage_in_bytes_ -= itr_data_size;
   }
   buffers_.erase(starting_point, ending_point);
 }
@@ -818,14 +845,17 @@ size_t SourceBufferRange::GetBufferIndexAt(base::TimeDelta timestamp,
   // a GOP may not match the DTS-sorted sequence of frames within the GOP.
   DCHECK_GT(buffers_.size(), 0u);
   size_t search_index = gop_iter->second - keyframe_map_index_base_;
+  CHECK_LT(search_index, buffers_.size());
   SourceBufferRange::BufferQueue::const_iterator search_iter =
       buffers_.begin() + search_index;
   gop_iter++;
 
+  size_t next_gop_index = gop_iter == keyframe_map_.end()
+                              ? buffers_.size()
+                              : gop_iter->second - keyframe_map_index_base_;
+  CHECK_LE(next_gop_index, buffers_.size());
   SourceBufferRange::BufferQueue::const_iterator next_gop_start =
-      gop_iter == keyframe_map_.end()
-          ? buffers_.end()
-          : buffers_.begin() + (gop_iter->second - keyframe_map_index_base_);
+      buffers_.begin() + next_gop_index;
 
   while (search_iter != next_gop_start) {
     if (((*search_iter)->timestamp() > timestamp) ||
@@ -891,8 +921,8 @@ bool SourceBufferRange::TruncateAt(const size_t starting_point,
   if (HasNextBufferPosition()) {
     if (static_cast<size_t>(next_buffer_index_) >= starting_point) {
       if (HasNextBuffer() && deleted_buffers) {
-        BufferQueue saved(buffers_.begin() + next_buffer_index_,
-                          buffers_.end());
+        BufferQueue saved = UNSAFE_TODO(
+            BufferQueue(buffers_.begin() + next_buffer_index_, buffers_.end()));
         deleted_buffers->swap(saved);
       }
       ResetNextBufferPosition();
@@ -932,8 +962,10 @@ void SourceBufferRange::UpdateEndTimeUsingLastGOP() {
 
   // Iterate through the frames of the last GOP in this range, finding the
   // frame with the highest PTS.
+  size_t last_gop_index = last_gop->second - keyframe_map_index_base_;
+  CHECK_LT(last_gop_index, buffers_.size());
   for (BufferQueue::const_iterator buffer_itr =
-           buffers_.begin() + (last_gop->second - keyframe_map_index_base_);
+           buffers_.begin() + last_gop_index;
        buffer_itr != buffers_.end(); ++buffer_itr) {
     UpdateEndTime(*buffer_itr);
   }
@@ -951,9 +983,9 @@ std::string SourceBufferRange::ToStringForDebugging() const {
          << ", buffers.size()=" << buffers_.size()
          << ", keyframe_map_.size()=" << keyframe_map_.size()
          << ", keyframe_map_:\n";
-  for (const auto& entry : keyframe_map_) {
-    result << "\t pts " << entry.first.InMicroseconds()
-           << ", unadjusted idx = " << entry.second << "\n";
+  for (const auto& [time_delta, idx] : keyframe_map_) {
+    result << "\t pts " << time_delta.InMicroseconds()
+           << ", unadjusted idx = " << idx << "\n";
   }
 #endif  // !defined(NDEBUG) || defined(DCHECK_ALWAYS_ON)
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,16 @@ chrome.runtime.onConnect.addListener(function listener(port) {
 
 chrome.runtime.onMessage.addListener(
     function listener(message, sender, sendResponse) {
-  chrome.test.assertEq('async bounce', message);
-  chrome.runtime.onMessage.removeListener(listener);
-  // Respond asynchronously.
-  setTimeout(() => { sendResponse('bounced'); }, 0);
-  // When returning a result asynchronously, the listener must return true -
-  // otherwise the channel is immediately closed.
-  return true;
-});
+      chrome.test.assertEq('async bounce', message);
+      chrome.runtime.onMessage.removeListener(listener);
+      // Respond asynchronously.
+      setTimeout(() => {
+        sendResponse('bounced');
+      }, 0);
+      // When returning a result asynchronously, the listener must return true -
+      // otherwise the channel is immediately closed.
+      return true;
+    });
 
 chrome.runtime.sendMessage('startFlow', function(response) {
   chrome.test.assertEq('started', response);

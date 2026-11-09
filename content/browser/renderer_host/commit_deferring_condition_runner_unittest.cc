@@ -1,10 +1,12 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/commit_deferring_condition_runner.h"
 
-#include "content/browser/renderer_host/commit_deferring_condition.h"
+#include "base/memory/raw_ptr.h"
+#include "content/public/browser/commit_deferring_condition.h"
+#include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/test/mock_commit_deferring_condition.h"
 
@@ -18,7 +20,9 @@ class CommitDeferringConditionRunnerTest
 
   void SetUp() override {
     RenderViewHostTestHarness::SetUp();
-    runner_ = base::WrapUnique(new CommitDeferringConditionRunner(*this));
+    runner_ = base::WrapUnique(new CommitDeferringConditionRunner(
+        *this, CommitDeferringCondition::NavigationType::kOther,
+        /*candidate_prerender_frame_tree_node_id=*/std::nullopt));
   }
 
   // Whether the callback was called.
@@ -28,14 +32,32 @@ class CommitDeferringConditionRunnerTest
 
   CommitDeferringConditionRunner* runner() { return runner_.get(); }
 
+ protected:
+  std::unique_ptr<CommitDeferringConditionRunner> runner_;
+
  private:
   // CommitDeferringConditionRunner::Delegate:
-  void OnCommitDeferringConditionChecksComplete() override {
+  void OnCommitDeferringConditionChecksComplete(
+      CommitDeferringCondition::NavigationType navigation_type,
+      std::optional<FrameTreeNodeId> candidate_prerender_frame_tree_node_id)
+      override {
+    EXPECT_EQ(navigation_type,
+              CommitDeferringCondition::NavigationType::kOther);
+    EXPECT_FALSE(candidate_prerender_frame_tree_node_id.has_value());
     was_delegate_notified_ = true;
   }
 
-  std::unique_ptr<CommitDeferringConditionRunner> runner_;
   bool was_delegate_notified_ = false;
+};
+
+// CommitDeferringCondition always need a NavigationHandle. Since we don't have
+// a navigation here, this class is just used to provide it with a
+// MockNavigationHandle.
+class MockHandleConditionWrapper : public MockNavigationHandle,
+                                   public MockCommitDeferringConditionWrapper {
+ public:
+  explicit MockHandleConditionWrapper(CommitDeferringCondition::Result result)
+      : MockCommitDeferringConditionWrapper(*this, result) {}
 };
 
 // Check that the runner notifies the delegate synchronously when there are no
@@ -49,7 +71,8 @@ TEST_F(CommitDeferringConditionRunnerTest, NoRegisteredConditions) {
 // Test that when a condition defers asynchronously, the delegate isn't
 // notified until the condition signals completion.
 TEST_F(CommitDeferringConditionRunnerTest, BasicAsync) {
-  MockCommitDeferringConditionWrapper condition(/*is_ready_to_commit=*/false);
+  MockHandleConditionWrapper condition(
+      CommitDeferringCondition::Result::kDefer);
   runner()->AddConditionForTesting(condition.PassToDelegate());
   runner()->ProcessChecks();
   EXPECT_FALSE(was_delegate_notified());
@@ -62,10 +85,22 @@ TEST_F(CommitDeferringConditionRunnerTest, BasicAsync) {
 // Test that if a condition is already satisfied when ProcessChecks is
 // called, the delegate is notified synchronously.
 TEST_F(CommitDeferringConditionRunnerTest, BasicSync) {
-  MockCommitDeferringConditionWrapper condition(/*is_ready_to_commit=*/true);
+  MockHandleConditionWrapper condition(
+      CommitDeferringCondition::Result::kProceed);
   runner()->AddConditionForTesting(condition.PassToDelegate());
   runner()->ProcessChecks();
   EXPECT_TRUE(was_delegate_notified());
+  EXPECT_TRUE(condition.WasInvoked());
+}
+
+// Test that if a condition indicating the cancellation of the commit,
+// the delegate is not notified.
+TEST_F(CommitDeferringConditionRunnerTest, BasicCancelled) {
+  MockHandleConditionWrapper condition(
+      CommitDeferringCondition::Result::kCancelled);
+  runner()->AddConditionForTesting(condition.PassToDelegate());
+  runner()->ProcessChecks();
+  EXPECT_FALSE(was_delegate_notified());
   EXPECT_TRUE(condition.WasInvoked());
 }
 
@@ -76,16 +111,20 @@ TEST_F(CommitDeferringConditionRunnerTest, MultipleConditionsLastAsync) {
   // Add conditions, alternating between those that are already satisfied at
   // ProcessChecks time and those that complete asynchronously.
   // Complete -> Async -> Complete -> Async
-  MockCommitDeferringConditionWrapper condition1(/*is_ready_to_commit=*/true);
+  MockHandleConditionWrapper condition1(
+      CommitDeferringCondition::Result::kProceed);
   runner()->AddConditionForTesting(condition1.PassToDelegate());
 
-  MockCommitDeferringConditionWrapper condition2(/*is_ready_to_commit=*/false);
+  MockHandleConditionWrapper condition2(
+      CommitDeferringCondition::Result::kDefer);
   runner()->AddConditionForTesting(condition2.PassToDelegate());
 
-  MockCommitDeferringConditionWrapper condition3(/*is_ready_to_commit=*/true);
+  MockHandleConditionWrapper condition3(
+      CommitDeferringCondition::Result::kProceed);
   runner()->AddConditionForTesting(condition3.PassToDelegate());
 
-  MockCommitDeferringConditionWrapper condition4(/*is_ready_to_commit=*/false);
+  MockHandleConditionWrapper condition4(
+      CommitDeferringCondition::Result::kDefer);
   runner()->AddConditionForTesting(condition4.PassToDelegate());
 
   runner()->ProcessChecks();
@@ -120,16 +159,20 @@ TEST_F(CommitDeferringConditionRunnerTest, MultipleConditionsLastSync) {
   // Add conditions, alternating between those that are already satisfied at
   // ProcessChecks time and those that complete asynchronously.
   // Async -> Complete -> Async -> Complete
-  MockCommitDeferringConditionWrapper condition1(/*is_ready_to_commit=*/false);
+  MockHandleConditionWrapper condition1(
+      CommitDeferringCondition::Result::kDefer);
   runner()->AddConditionForTesting(condition1.PassToDelegate());
 
-  MockCommitDeferringConditionWrapper condition2(/*is_ready_to_commit=*/true);
+  MockHandleConditionWrapper condition2(
+      CommitDeferringCondition::Result::kProceed);
   runner()->AddConditionForTesting(condition2.PassToDelegate());
 
-  MockCommitDeferringConditionWrapper condition3(/*is_ready_to_commit=*/false);
+  MockHandleConditionWrapper condition3(
+      CommitDeferringCondition::Result::kDefer);
   runner()->AddConditionForTesting(condition3.PassToDelegate());
 
-  MockCommitDeferringConditionWrapper condition4(/*is_ready_to_commit=*/true);
+  MockHandleConditionWrapper condition4(
+      CommitDeferringCondition::Result::kProceed);
   runner()->AddConditionForTesting(condition4.PassToDelegate());
 
   runner()->ProcessChecks();
@@ -155,6 +198,102 @@ TEST_F(CommitDeferringConditionRunnerTest, MultipleConditionsLastSync) {
   EXPECT_TRUE(condition4.WasInvoked());
   EXPECT_TRUE(was_delegate_notified());
   EXPECT_FALSE(is_deferring());
+}
+
+// Test with multiple conditions, with one indicating that the commit is
+// cancelled invoked in the middle.
+TEST_F(CommitDeferringConditionRunnerTest, MultipleConditionsWithCancelled) {
+  MockHandleConditionWrapper condition1(
+      CommitDeferringCondition::Result::kProceed);
+  runner()->AddConditionForTesting(condition1.PassToDelegate());
+
+  MockHandleConditionWrapper condition2(
+      CommitDeferringCondition::Result::kCancelled);
+  runner()->AddConditionForTesting(condition2.PassToDelegate());
+
+  MockHandleConditionWrapper condition3(
+      CommitDeferringCondition::Result::kProceed);
+  runner()->AddConditionForTesting(condition3.PassToDelegate());
+
+  runner()->ProcessChecks();
+
+  // Only the first two conditions are invoked, as the commit is cancelled with
+  // the second condition.
+  EXPECT_FALSE(was_delegate_notified());
+  EXPECT_TRUE(condition1.WasInvoked());
+  EXPECT_TRUE(condition2.WasInvoked());
+  EXPECT_FALSE(condition3.WasInvoked());
+  EXPECT_FALSE(is_deferring());
+}
+
+class SynchronousResumeCondition : public CommitDeferringCondition {
+ public:
+  explicit SynchronousResumeCondition(NavigationHandle& handle,
+                                      bool* was_invoked_ptr)
+      : CommitDeferringCondition(handle), was_invoked_ptr_(was_invoked_ptr) {}
+  Result WillCommitNavigation(base::OnceClosure resume_closure) override {
+    *was_invoked_ptr_ = true;
+    std::move(resume_closure).Run();
+    return Result::kDefer;
+  }
+  const char* TraceEventName() const override {
+    return "SynchronousResumeCondition";
+  }
+
+ private:
+  raw_ptr<bool> was_invoked_ptr_;
+};
+
+// Test that if a condition calls the resume closure synchronously, the runner
+// correctly handles it and proceeds to the next condition or notified the
+// delegate.
+// Regression test for https://crbug.com/502293787.
+TEST_F(CommitDeferringConditionRunnerTest, BasicSyncResume) {
+  MockNavigationHandle handle;
+  bool was_invoked = false;
+  auto condition =
+      std::make_unique<SynchronousResumeCondition>(handle, &was_invoked);
+  runner()->AddConditionForTesting(std::move(condition));
+
+  MockHandleConditionWrapper condition2(
+      CommitDeferringCondition::Result::kProceed);
+  runner()->AddConditionForTesting(condition2.PassToDelegate());
+
+  runner()->ProcessChecks();
+  EXPECT_TRUE(was_delegate_notified());
+  EXPECT_TRUE(was_invoked);
+  EXPECT_FALSE(is_deferring());
+}
+
+class DeletingCondition : public CommitDeferringCondition {
+ public:
+  DeletingCondition(NavigationHandle& handle,
+                    base::OnceClosure delete_runner_callback)
+      : CommitDeferringCondition(handle),
+        delete_runner_callback_(std::move(delete_runner_callback)) {}
+  Result WillCommitNavigation(base::OnceClosure resume_closure) override {
+    std::move(delete_runner_callback_).Run();
+    return Result::kCancelled;
+  }
+  const char* TraceEventName() const override { return "DeletingCondition"; }
+
+ private:
+  base::OnceClosure delete_runner_callback_;
+};
+
+// Test that if a condition deletes the runner during WillCommitNavigation, the
+// runner handles it safely.
+TEST_F(CommitDeferringConditionRunnerTest, DeleteRunnerDuringCall) {
+  MockNavigationHandle handle;
+  auto condition = std::make_unique<DeletingCondition>(
+      handle, base::BindOnce(
+                  [](std::unique_ptr<CommitDeferringConditionRunner>* runner) {
+                    runner->reset();
+                  },
+                  &runner_));
+  runner()->AddConditionForTesting(std::move(condition));
+  runner()->ProcessChecks();
+  EXPECT_EQ(runner(), nullptr);
 }
 
 }  // namespace content

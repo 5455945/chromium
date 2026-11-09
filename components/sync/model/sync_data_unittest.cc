@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "base/memory/ref_counted_memory.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/protocol/entity_specifics.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using std::string;
@@ -17,7 +17,7 @@ namespace syncer {
 namespace {
 
 const char kSyncTag[] = "3984729834";
-const ModelType kDatatype = PREFERENCES;
+const DataType kDatatype = PREFERENCES;
 const char kNonUniqueTitle[] = "my preference";
 
 TEST(SyncDataTest, NoArgCtor) {

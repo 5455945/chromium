@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,8 +20,17 @@ sync_preferences::PrefServiceSyncable* PrefServiceSyncableFromProfile(
 std::unique_ptr<sync_preferences::PrefServiceSyncable>
 CreateIncognitoPrefServiceSyncable(
     sync_preferences::PrefServiceSyncable* pref_service,
-    PrefStore* incognito_extension_pref_store) {
+    scoped_refptr<PrefStore> incognito_extension_pref_store) {
   return pref_service->CreateIncognitoPrefService(
-      incognito_extension_pref_store,
+      std::move(incognito_extension_pref_store),
       prefs::GetIncognitoPersistentPrefsAllowlist());
+}
+
+std::unique_ptr<sync_preferences::PrefServiceSyncable>
+CreateAutomationPrefService(
+    sync_preferences::PrefServiceSyncable* pref_service,
+    scoped_refptr<PrefStore> incognito_extension_pref_store) {
+  return pref_service->CreateIncognitoPrefService(
+      std::move(incognito_extension_pref_store),
+      /* persistent_pref_names */ {});
 }

@@ -1,11 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SOCKET_UDP_SOCKET_GLOBAL_LIMITS_H_
 #define NET_SOCKET_UDP_SOCKET_GLOBAL_LIMITS_H_
 
-#include "base/compiler_specific.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 
@@ -19,6 +18,8 @@ namespace net {
 // returned to the global counter.
 class NET_EXPORT OwnedUDPSocketCount {
  public:
+  static constexpr int kMaxUdpSockets = 6000;
+
   // The default constructor builds an empty OwnedUDPSocketCount (does not own a
   // count).
   OwnedUDPSocketCount();
@@ -49,7 +50,7 @@ class NET_EXPORT OwnedUDPSocketCount {
   friend NET_EXPORT OwnedUDPSocketCount TryAcquireGlobalUDPSocketCount();
   explicit OwnedUDPSocketCount(bool empty);
 
-  bool empty_;
+  bool empty_ = true;
 };
 
 // Attempts to increase the global "open UDP socket" [1] count.
@@ -64,8 +65,7 @@ class NET_EXPORT OwnedUDPSocketCount {
 // successfully called Open(), and has not yet called Close(). This is
 // analogous to the number of open platform socket handles, and in practice
 // should also be a good proxy for the number of consumed UDP ports.
-NET_EXPORT OwnedUDPSocketCount TryAcquireGlobalUDPSocketCount()
-    WARN_UNUSED_RESULT;
+[[nodiscard]] NET_EXPORT OwnedUDPSocketCount TryAcquireGlobalUDPSocketCount();
 
 // Returns the current count of open UDP sockets (for testing only).
 NET_EXPORT int GetGlobalUDPSocketCountForTesting();

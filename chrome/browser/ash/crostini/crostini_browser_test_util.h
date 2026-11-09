@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
-#include "chrome/test/base/browser_process_platform_part_test_api_chromeos.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chromeos/disks/disk_mount_manager.h"
-#include "chromeos/disks/mock_disk_mount_manager.h"
+#include "chromeos/ash/components/disks/disk_mount_manager.h"
+#include "chromeos/ash/components/disks/mock_disk_mount_manager.h"
 #include "services/network/public/mojom/network_change_manager.mojom-forward.h"
 
 class CrostiniBrowserTestChromeBrowserMainExtraParts;
@@ -23,12 +23,16 @@ class CrostiniBrowserTestBase : public InProcessBrowserTest {
  public:
   explicit CrostiniBrowserTestBase(bool register_termina);
 
+  CrostiniBrowserTestBase(const CrostiniBrowserTestBase&) = delete;
+  CrostiniBrowserTestBase& operator=(const CrostiniBrowserTestBase&) = delete;
+
   // BrowserTestBase:
   void CreatedBrowserMainParts(
       content::BrowserMainParts* browser_main_parts) override;
   void SetUpOnMainThread() override;
 
-  void SetConnectionType(network::mojom::ConnectionType connection_type);
+  void SetConnectionType(
+      net::NetworkChangeNotifier::ConnectionType connection_type);
 
   void UnregisterTermina();
 
@@ -39,20 +43,20 @@ class CrostiniBrowserTestBase : public InProcessBrowserTest {
   crostini::FakeCrostiniFeatures fake_crostini_features_;
 
   // Owned by content::Browser
-  CrostiniBrowserTestChromeBrowserMainExtraParts* extra_parts_ = nullptr;
+  raw_ptr<CrostiniBrowserTestChromeBrowserMainExtraParts, DanglingUntriaged>
+      extra_parts_ = nullptr;
 
  private:
   void DiskMountImpl(const std::string& source_path,
                      const std::string& source_format,
                      const std::string& mount_label,
                      const std::vector<std::string>& mount_options,
-                     chromeos::MountType type,
-                     chromeos::MountAccessMode access_mode);
+                     ash::MountType type,
+                     ash::MountAccessMode access_mode,
+                     ash::disks::DiskMountManager::MountPathCallback callback);
 
-  // Owned by chromeos::disks::DiskMountManager;
-  chromeos::disks::MockDiskMountManager* dmgr_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrostiniBrowserTestBase);
+  // Owned by ash::disks::DiskMountManager;
+  raw_ptr<ash::disks::MockDiskMountManager, DanglingUntriaged> dmgr_;
 };
 
 #endif  // CHROME_BROWSER_ASH_CROSTINI_CROSTINI_BROWSER_TEST_UTIL_H_

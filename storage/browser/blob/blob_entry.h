@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,20 +11,21 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "storage/browser/blob/blob_memory_controller.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace storage {
 class BlobDataHandle;
 class ShareableBlobDataItem;
 
 // Represents a blob in BlobStorageRegistry. Exported only for unit tests.
-class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
+class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry
+    : public base::RefCounted<BlobEntry> {
  public:
   using TransportAllowedCallback = base::OnceCallback<
       void(BlobStatus, std::vector<BlobMemoryController::FileCreationInfo>)>;
@@ -36,6 +37,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
     ItemCopyEntry(scoped_refptr<ShareableBlobDataItem> source_item,
                   size_t source_item_offset,
                   scoped_refptr<ShareableBlobDataItem> dest_item);
+
+    ItemCopyEntry(const ItemCopyEntry&) = delete;
+    ItemCopyEntry& operator=(const ItemCopyEntry&) = delete;
+
     ~ItemCopyEntry();
     ItemCopyEntry(ItemCopyEntry&& other);
     BlobEntry::ItemCopyEntry& operator=(BlobEntry::ItemCopyEntry&& rhs);
@@ -43,9 +48,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
     scoped_refptr<ShareableBlobDataItem> source_item;
     size_t source_item_offset = 0;
     scoped_refptr<ShareableBlobDataItem> dest_item;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(ItemCopyEntry);
   };
 
   // Building state for pending blobs. State can include:
@@ -59,6 +61,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
     BuildingState(bool transport_items_present,
                   TransportAllowedCallback transport_allowed_callback,
                   size_t num_building_dependent_blobs);
+
+    BuildingState(const BuildingState&) = delete;
+    BuildingState& operator=(const BuildingState&) = delete;
+
     ~BuildingState();
 
     // Cancels pending memory or file requests, and calls aborted callback if it
@@ -66,10 +72,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
     void CancelRequestsAndAbort();
 
     const bool transport_items_present;
-    // We can have trasnport data that's either populated or unpopulated. If we
+    // We can have transport data that's either populated or unpopulated. If we
     // need population, this is populated.
     TransportAllowedCallback transport_allowed_callback;
-    std::vector<ShareableBlobDataItem*> transport_items;
+    std::vector<raw_ptr<ShareableBlobDataItem>> transport_items;
 
     BuildAbortedCallback build_aborted_callback;
 
@@ -94,14 +100,12 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
     // When our blob is no longer in PENDING_CONSTRUCTION state these callbacks
     // are called.
     std::vector<BlobStatusCallback> build_started_callbacks;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(BuildingState);
   };
 
-  BlobEntry(const std::string& content_type,
-            const std::string& content_disposition);
-  ~BlobEntry();
+  explicit BlobEntry(const std::string& content_type);
+
+  BlobEntry(const BlobEntry&) = delete;
+  BlobEntry& operator=(const BlobEntry&) = delete;
 
   // Appends the given shared blob data item to this object.
   void AppendSharedBlobItem(scoped_refptr<ShareableBlobDataItem> item);
@@ -118,13 +122,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
 
   BlobStatus status() const { return status_; }
 
-  size_t refcount() const { return refcount_; }
+  size_t handle_count() const { return handle_count_; }
 
   const std::string& content_type() const { return content_type_; }
-
-  const std::string& content_disposition() const {
-    return content_disposition_;
-  }
 
   // Total size of this blob in bytes.
   uint64_t total_size() const { return size_; }
@@ -139,26 +139,28 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
  protected:
   friend class BlobStorageContext;
 
-  void IncrementRefCount() { ++refcount_; }
-  void DecrementRefCount() { --refcount_; }
+  void IncrementHandleCount() { ++handle_count_; }
+  void DecrementHandleCount() { --handle_count_; }
+
+  void OnCancelBuilding(BlobStatus reason);
 
   void set_status(BlobStatus status) { status_ = status; }
   void set_size(uint64_t size) { size_ = size; }
-
-  void ClearItems();
-  void ClearOffsets();
 
   void set_building_state(std::unique_ptr<BuildingState> building_state) {
     building_state_ = std::move(building_state);
   }
 
  private:
+  friend class base::RefCounted<BlobEntry>;
+
+  ~BlobEntry();
+
   BlobStatus status_ = BlobStatus::PENDING_QUOTA;
-  size_t refcount_ = 0;
+  size_t handle_count_ = 0;
 
   // Metadata.
   std::string content_type_;
-  std::string content_disposition_;
 
   std::vector<scoped_refptr<ShareableBlobDataItem>> items_;
 
@@ -171,8 +173,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobEntry {
 
   // Only populated if our status is PENDING_*.
   std::unique_ptr<BuildingState> building_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(BlobEntry);
 };
 
 }  // namespace storage

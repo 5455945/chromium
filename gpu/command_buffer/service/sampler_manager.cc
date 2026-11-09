@@ -1,11 +1,11 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/command_buffer/service/sampler_manager.h"
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/service/error_state.h"
 #include "gpu/command_buffer/service/feature_info.h"
@@ -150,8 +150,8 @@ void SamplerManager::Destroy(bool have_context) {
 
 Sampler* SamplerManager::CreateSampler(GLuint client_id, GLuint service_id) {
   DCHECK_NE(0u, service_id);
-  auto result = samplers_.insert(std::make_pair(client_id,
-      scoped_refptr<Sampler>(new Sampler(this, client_id, service_id))));
+  auto result = samplers_.insert(std::make_pair(
+      client_id, base::MakeRefCounted<Sampler>(this, client_id, service_id)));
   DCHECK(result.second);
   return result.first->second.get();
 }

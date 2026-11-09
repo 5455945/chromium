@@ -2,9 +2,8 @@ noparent = True
 
 include_rules = [
   "+base",
-  "+chrome/browser/web_applications/components",
+  "+chrome/browser/web_applications",
   "+chrome/common",
-  "+chrome/install_static",
   "+chrome/installer/util",
   "+chrome/test/base",
   "+components/version_info",

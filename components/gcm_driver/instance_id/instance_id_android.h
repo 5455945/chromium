@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,9 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/id_map.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "components/gcm_driver/instance_id/instance_id.h"
@@ -29,14 +28,23 @@ class InstanceIDAndroid : public InstanceID {
   class ScopedBlockOnAsyncTasksForTesting {
    public:
     ScopedBlockOnAsyncTasksForTesting();
+
+    ScopedBlockOnAsyncTasksForTesting(
+        const ScopedBlockOnAsyncTasksForTesting&) = delete;
+    ScopedBlockOnAsyncTasksForTesting& operator=(
+        const ScopedBlockOnAsyncTasksForTesting&) = delete;
+
     ~ScopedBlockOnAsyncTasksForTesting();
 
    private:
     bool previous_value_;
-    DISALLOW_COPY_AND_ASSIGN(ScopedBlockOnAsyncTasksForTesting);
   };
 
   InstanceIDAndroid(const std::string& app_id, gcm::GCMDriver* gcm_driver);
+
+  InstanceIDAndroid(const InstanceIDAndroid&) = delete;
+  InstanceIDAndroid& operator=(const InstanceIDAndroid&) = delete;
+
   ~InstanceIDAndroid() override;
 
   // InstanceID implementation:
@@ -57,26 +65,13 @@ class InstanceIDAndroid : public InstanceID {
   void DeleteIDImpl(DeleteIDCallback callback) override;
 
   // Methods called from Java via JNI:
-  void DidGetID(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& obj,
-                jint request_id,
-                const base::android::JavaParamRef<jstring>& jid);
+  void DidGetID(JNIEnv* env, int32_t request_id, const std::string& id);
   void DidGetCreationTime(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj,
-                          jint request_id,
-                          jlong creation_time_unix_ms);
-  void DidGetToken(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jint request_id,
-                   const base::android::JavaParamRef<jstring>& jtoken);
-  void DidDeleteToken(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jint request_id,
-                      jboolean success);
-  void DidDeleteID(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   jint request_id,
-                   jboolean success);
+                          int32_t request_id,
+                          int64_t creation_time_unix_ms);
+  void DidGetToken(JNIEnv* env, int32_t request_id, const std::string& token);
+  void DidDeleteToken(JNIEnv* env, int32_t request_id, bool success);
+  void DidDeleteID(JNIEnv* env, int32_t request_id, bool success);
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
@@ -89,8 +84,6 @@ class InstanceIDAndroid : public InstanceID {
   base::IDMap<std::unique_ptr<DeleteIDCallback>> delete_id_callbacks_;
 
   base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(InstanceIDAndroid);
 };
 
 }  // namespace instance_id

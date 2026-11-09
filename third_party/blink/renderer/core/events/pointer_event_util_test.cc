@@ -1,11 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "third_party/blink/renderer/core/events/pointer_event_util.h"
+
+#include <numbers>
 #include <tuple>
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/core/events/pointer_event_util.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
@@ -59,16 +61,16 @@ TEST_P(AzimuthInValidRangeWithParameterTests,
       PointerEventUtil::TransformToAzimuthInValidRange(azimuth_angle_));
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     AzimuthInValidRangeTests,
     AzimuthInValidRangeWithParameterTests,
     ::testing::Values(
         std::make_tuple(0, 0),
         std::make_tuple(kPiOverTwoDouble, kPiOverTwoDouble),
-        std::make_tuple(kPiDouble, kPiDouble),
+        std::make_tuple(std::numbers::pi, std::numbers::pi),
         std::make_tuple(3 * kPiOverTwoDouble, 3 * kPiOverTwoDouble),
         std::make_tuple(kTwoPiDouble, kTwoPiDouble),
-        std::make_tuple(3 * kPiDouble, kPiDouble),
+        std::make_tuple(3 * std::numbers::pi, std::numbers::pi),
         std::make_tuple(5.0 * kPiOverTwoDouble, kPiOverTwoDouble)));
 
 TEST_P(AltitudeInValidRangeWithParameterTests,
@@ -78,12 +80,12 @@ TEST_P(AltitudeInValidRangeWithParameterTests,
       PointerEventUtil::TransformToAltitudeInValidRange(altitude_angle_));
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     AltitudeInValidRangeTests,
     AltitudeInValidRangeWithParameterTests,
     ::testing::Values(std::make_tuple(0, 0),
                       std::make_tuple(kPiOverTwoDouble, kPiOverTwoDouble),
-                      std::make_tuple(kPiDouble, kPiOverTwoDouble),
+                      std::make_tuple(std::numbers::pi, kPiOverTwoDouble),
                       std::make_tuple(3 * kPiOverTwoDouble, kPiOverTwoDouble),
                       std::make_tuple(kTwoPiDouble, kPiOverTwoDouble)));
 
@@ -92,14 +94,14 @@ TEST_P(TiltInValidRangeWithParameterTests, CheckTiltTransformedCorrectly) {
             PointerEventUtil::TransformToTiltInValidRange(tilt_angle_));
 }
 
-INSTANTIATE_TEST_CASE_P(TiltInValidRangeTests,
-                        TiltInValidRangeWithParameterTests,
-                        ::testing::Values(std::make_tuple(0, 0),
-                                          std::make_tuple(45, 45),
-                                          std::make_tuple(90, 90),
-                                          std::make_tuple(135, -45),
-                                          std::make_tuple(180, 0),
-                                          std::make_tuple(225, 45),
-                                          std::make_tuple(270, 90),
-                                          std::make_tuple(360, 0)));
+INSTANTIATE_TEST_SUITE_P(TiltInValidRangeTests,
+                         TiltInValidRangeWithParameterTests,
+                         ::testing::Values(std::make_tuple(0, 0),
+                                           std::make_tuple(45, 45),
+                                           std::make_tuple(90, 90),
+                                           std::make_tuple(135, -45),
+                                           std::make_tuple(180, 0),
+                                           std::make_tuple(225, 45),
+                                           std::make_tuple(270, 90),
+                                           std::make_tuple(360, 0)));
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,8 +28,8 @@ struct MapTraits<base::flat_map<K, V, Compare>> {
     return input.begin();
   }
 
-  static void AdvanceIterator(ConstIterator& iterator) { iterator++; }
-  static void AdvanceIterator(Iterator& iterator) { iterator++; }
+  static void AdvanceIterator(ConstIterator& iterator) { ++iterator; }
+  static void AdvanceIterator(Iterator& iterator) { ++iterator; }
 
   static const K& GetKey(Iterator& iterator) { return iterator->first; }
   static const K& GetKey(ConstIterator& iterator) { return iterator->first; }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,8 @@ struct EnumTraits<chromeos_camera::mojom::DecodeError,
   static chromeos_camera::mojom::DecodeError ToMojom(
       chromeos_camera::MjpegDecodeAccelerator::Error error);
 
-  static bool FromMojom(chromeos_camera::mojom::DecodeError input,
-                        chromeos_camera::MjpegDecodeAccelerator::Error* out);
+  static chromeos_camera::MjpegDecodeAccelerator::Error FromMojom(
+      chromeos_camera::mojom::DecodeError input);
 };
 
 template <>

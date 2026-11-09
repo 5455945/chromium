@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,7 @@ class LayoutShiftNormalizationTest : public testing::Test {
       const std::vector<page_load_metrics::mojom::LayoutShiftPtr>& new_shifts,
       base::TimeTicks current_time) {
     // Update layout shift normalization.
-    layout_shift_normalization_.AddNewLayoutShifts(
-        new_shifts, current_time, cumulative_layoutshift_score_);
+    layout_shift_normalization_.AddNewLayoutShifts(new_shifts, current_time);
   }
 
   const page_load_metrics::NormalizedCLSData& normalized_cls_data() const {
@@ -30,16 +29,14 @@ class LayoutShiftNormalizationTest : public testing::Test {
       std::vector<std::pair<int, double>> shifts_data) {
     for (auto shift : shifts_data) {
       new_shifts.emplace_back(page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::TimeDelta::FromMilliseconds(std::get<0>(shift)),
-          std::get<1>(shift)));
-      // Update CLS.
-      cumulative_layoutshift_score_ += std::get<1>(shift);
+          current_time - base::Milliseconds(std::get<0>(shift)),
+          std::get<1>(shift), /*after_input_or_scroll*/ false,
+          /*performance_timeline_navigation_id=*/1u));
     }
   }
 
  private:
   page_load_metrics::LayoutShiftNormalization layout_shift_normalization_;
-  float cumulative_layoutshift_score_ = 0.0;
 };
 
 TEST_F(LayoutShiftNormalizationTest, MultipleShifts) {
@@ -95,7 +92,7 @@ TEST_F(LayoutShiftNormalizationTest, MultipleShiftsFromTwoRenderers) {
 TEST_F(LayoutShiftNormalizationTest, MultipleShiftsFromDifferentTimes) {
   base::TimeTicks current_time = base::TimeTicks::Now();
   // Insert the first set of new layout shifts. The insertion order matters.
-  auto current_time_1 = current_time - base::TimeDelta::FromMilliseconds(5000);
+  auto current_time_1 = current_time - base::Milliseconds(5000);
   std::vector<page_load_metrics::mojom::LayoutShiftPtr> new_shifts_1;
   InsertNewLayoutShifts(new_shifts_1, current_time_1,
                         {{2100, 1.5}, {1800, 1.5}});
@@ -111,7 +108,7 @@ TEST_F(LayoutShiftNormalizationTest, MultipleShiftsFromDifferentTimes) {
 
   // Insert the third set of new layout shifts. The insertion order
   // matters.
-  auto current_time_3 = current_time + base::TimeDelta::FromMilliseconds(6000);
+  auto current_time_3 = current_time + base::Milliseconds(6000);
   std::vector<page_load_metrics::mojom::LayoutShiftPtr> new_shifts_3;
   InsertNewLayoutShifts(new_shifts_3, current_time_3, {{0, 0.5}});
   AddNewLayoutShifts(new_shifts_3, current_time_3);

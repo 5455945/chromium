@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,15 @@
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/core/dom/abort_signal.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_remote_gatt_server.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_associated_receiver.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -24,17 +28,12 @@ class BluetoothRemoteGATTCharacteristic;
 class BluetoothRemoteGATTDescriptor;
 class BluetoothRemoteGATTServer;
 class BluetoothRemoteGATTService;
-class ScriptPromiseResolver;
+class DOMWrapperWorld;
 class WatchAdvertisementsOptions;
 
 // BluetoothDevice represents a physical bluetooth device in the DOM. See IDL.
-//
-// Callbacks providing WebBluetoothDevice objects are handled by
-// CallbackPromiseAdapter templatized with this class. See this class's
-// "Interface required by CallbackPromiseAdapter" section and the
-// CallbackPromiseAdapter class comments.
-class BluetoothDevice final
-    : public EventTargetWithInlineData,
+class MODULES_EXPORT BluetoothDevice final
+    : public EventTarget,
       public ExecutionContextClient,
       public ActiveScriptWrappable<BluetoothDevice>,
       public mojom::blink::WebBluetoothAdvertisementClient {
@@ -43,7 +42,8 @@ class BluetoothDevice final
  public:
   BluetoothDevice(ExecutionContext*,
                   mojom::blink::WebBluetoothDevicePtr,
-                  Bluetooth*);
+                  Bluetooth*,
+                  const DOMWrapperWorld* world = nullptr);
 
   BluetoothRemoteGATTService* GetOrCreateRemoteGATTService(
       mojom::blink::WebBluetoothRemoteGATTServicePtr,
@@ -79,21 +79,27 @@ class BluetoothDevice final
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const override;
 
-  Bluetooth* GetBluetooth() { return bluetooth_; }
+  Bluetooth* GetBluetooth() { return bluetooth_.Get(); }
+
+  const mojom::blink::WebBluetoothDevicePtr& GetDevice() const {
+    return device_;
+  }
 
   // Interface required by Garbage Collection:
   void Trace(Visitor*) const override;
 
   // IDL exposed interface:
-  ScriptPromise watchAdvertisements(ScriptState*,
-                                    const WatchAdvertisementsOptions*,
-                                    ExceptionState&);
-  String id() { return device_->id; }
+  ScriptPromise<IDLUndefined> watchAdvertisements(
+      ScriptState*,
+      const WatchAdvertisementsOptions*,
+      ExceptionState&);
+  ScriptPromise<IDLUndefined> forget(ScriptState*, ExceptionState&);
+  String id() { return String(device_->id.DeviceIdInBase64()); }
   String name() { return device_->name; }
-  BluetoothRemoteGATTServer* gatt() { return gatt_; }
+  BluetoothRemoteGATTServer* gatt() { return gatt_.Get(); }
   bool watchingAdvertisements() { return client_receiver_.is_bound(); }
 
-  void AbortWatchAdvertisements();
+  void AbortWatchAdvertisements(AbortSignal* signal);
 
   // WebBluetoothAdvertisementClient:
   void AdvertisingEvent(mojom::blink::WebBluetoothAdvertisingEventPtr) override;
@@ -119,12 +125,27 @@ class BluetoothDevice final
   mojom::blink::WebBluetoothDevicePtr device_;
   Member<BluetoothRemoteGATTServer> gatt_;
   Member<Bluetooth> bluetooth_;
+  // The V8 world in which this BluetoothDevice instance was created.
+  // Used to tag and safely route events (like `advertisementreceived`) to the
+  // correct world, especially during Mojo callbacks which lack V8 context.
+  // When `WebBluetoothWorldIsolatedCache` is disabled, this is `nullptr`,
+  // in which case `CanBeDispatchedInWorld` will always return true (legacy
+  // behavior).
+  Member<const DOMWrapperWorld> world_;
 
-  Member<ScriptPromiseResolver> watch_advertisements_resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> watch_advertisements_resolver_;
 
   HeapMojoAssociatedReceiver<mojom::blink::WebBluetoothAdvertisementClient,
                              BluetoothDevice>
       client_receiver_;
+
+  // Any unaborted signal passed to watchAdvertisements() can abort
+  // advertisements for this device, regardless of previous aborts from other
+  // signals. Abort algorithm handles therefore need to remain alive as long as
+  // both the device and associated signal remain alive, so we store the handles
+  // in a map keyed weakly by AbortSignal.
+  HeapHashMap<WeakMember<AbortSignal>, Member<AbortSignal::AlgorithmHandle>>
+      abort_handle_map_;
 };
 
 }  // namespace blink

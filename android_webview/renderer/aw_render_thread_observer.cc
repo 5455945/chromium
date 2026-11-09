@@ -1,10 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/renderer/aw_render_thread_observer.h"
 
-#include "components/power_scheduler/power_scheduler.h"
+#include "base/android/library_loader/anchor_functions_buildflags.h"
+#include "base/android/library_loader/library_prefetcher.h"
+#include "base/task/thread_pool.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/platform/web_cache.h"
 #include "third_party/blink/public/platform/web_network_state_notifier.h"
@@ -22,7 +24,7 @@ void AwRenderThreadObserver::RegisterMojoInterfaces(
   // base::Unretained can be used here because the associated_interfaces
   // is owned by the RenderThread and will live for the duration of the
   // RenderThread.
-  associated_interfaces->AddInterface(
+  associated_interfaces->AddInterface<mojom::Renderer>(
       base::BindRepeating(&AwRenderThreadObserver::OnRendererAssociatedRequest,
                           base::Unretained(this)));
 }
@@ -45,14 +47,13 @@ void AwRenderThreadObserver::SetJsOnlineProperty(bool network_up) {
   blink::WebNetworkStateNotifier::SetOnLine(network_up);
 }
 
-void AwRenderThreadObserver::SetCpuAffinityToLittleCores() {
-  power_scheduler::PowerScheduler::GetInstance()->SetPolicy(
-      power_scheduler::SchedulingPolicy::kLittleCoresOnly);
-}
-
-void AwRenderThreadObserver::EnableIdleThrottling() {
-  power_scheduler::PowerScheduler::GetInstance()->SetPolicy(
-      power_scheduler::SchedulingPolicy::kThrottleIdle);
+void AwRenderThreadObserver::PrefetchNativeLibrary() {
+#if BUILDFLAG(SUPPORTS_CODE_ORDERING)
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &base::android::NativeLibraryPrefetcher::PrefetchNativeLibrary));
+#endif
 }
 
 }  // namespace android_webview

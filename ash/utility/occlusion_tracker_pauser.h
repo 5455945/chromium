@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -26,27 +27,32 @@ class ASH_EXPORT OcclusionTrackerPauser : public ui::CompositorObserver {
   OcclusionTrackerPauser& operator=(const OcclusionTrackerPauser&) = delete;
   ~OcclusionTrackerPauser() override;
 
-  // Pause the occlusion tracker until all new animations added after this
-  // are finished. If non zero 'extra_pause_duration' is specified, it'll wait
-  // then unpause the tracker.
-  void PauseUntilAnimationsEnd(
-      const base::TimeDelta& extra_pause_duration = base::TimeDelta());
+  // Pause the occlusion tracker until all new animations added after this are
+  // finished. If the timeout is elapsed before all new animations are finished,
+  // the pause will be unpaused. This function requires there to be at least one
+  // animation running, or at least one animation about to run as a
+  // precondition.
+  void PauseUntilAnimationsEnd(base::TimeDelta timeout);
 
   // ui::CompositorObserver:
-  void OnFirstAnimationStarted(ui::Compositor* compositor) override {}
-  void OnLastAnimationEnded(ui::Compositor* compositor) override;
+  void OnFirstAnimationStarted(ui::Compositor* compositor) override;
+  void OnFirstNonAnimatedFrameStarted(ui::Compositor* compositor) override;
   void OnCompositingShuttingDown(ui::Compositor* compositor) override;
+  void OnDidBeginMainFrame(ui::Compositor* compositor) override;
 
  private:
-  void Pause(ui::Compositor* compositor,
-             const base::TimeDelta& extra_pause_duration);
+  void Pause(ui::Compositor* compositor);
   void OnFinish(ui::Compositor* compositor);
-  void Unpause();
+  void Shutdown(bool timed_out);
 
   base::OneShotTimer timer_;
-  base::TimeDelta extra_pause_duration_;
   base::ScopedMultiSourceObservation<ui::Compositor, ui::CompositorObserver>
       observations_{this};
+
+  // Keeps track of compositors that are animating. We can unpause when this is
+  // empty.
+  base::flat_set<raw_ptr<ui::Compositor, CtnExperimental>>
+      animating_compositors_;
 
   std::unique_ptr<aura::WindowOcclusionTracker::ScopedPause> scoped_pause_;
 };

@@ -1,21 +1,17 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/bind.h"
-#include "mojo/public/cpp/bindings/tests/enum_default_unittest.test-mojom-forward.h"
-#include "mojo/public/cpp/bindings/tests/enum_default_unittest.test-mojom-shared.h"
-#include "mojo/public/cpp/bindings/tests/enum_default_unittest.test-mojom.h"
-
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/tests/enum_default_unittest.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {

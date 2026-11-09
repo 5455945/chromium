@@ -1,12 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_WEB_MODAL_SINGLE_WEB_CONTENTS_DIALOG_MANAGER_H_
 #define COMPONENTS_WEB_MODAL_SINGLE_WEB_CONTENTS_DIALOG_MANAGER_H_
 
-#include "base/macros.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 class WebContents;
@@ -20,17 +19,20 @@ class WebContentsModalDialogHost;
 // WebContentsModalDialogManager.
 class SingleWebContentsDialogManagerDelegate {
  public:
-  SingleWebContentsDialogManagerDelegate() {}
-  virtual ~SingleWebContentsDialogManagerDelegate() {}
+  SingleWebContentsDialogManagerDelegate() = default;
+
+  SingleWebContentsDialogManagerDelegate(
+      const SingleWebContentsDialogManagerDelegate&) = delete;
+  SingleWebContentsDialogManagerDelegate& operator=(
+      const SingleWebContentsDialogManagerDelegate&) = delete;
+
+  virtual ~SingleWebContentsDialogManagerDelegate() = default;
 
   virtual content::WebContents* GetWebContents() const = 0;
 
   // Notify the delegate that the dialog is closing. The native
   // manager will be deleted before the end of this call.
   virtual void WillClose(gfx::NativeWindow dialog) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SingleWebContentsDialogManagerDelegate);
 };
 
 // Provides an interface for platform-specific UI implementation for the web
@@ -42,7 +44,12 @@ class SingleWebContentsDialogManagerDelegate {
 // notify its delegate (WillClose method).
 class SingleWebContentsDialogManager {
  public:
-  virtual ~SingleWebContentsDialogManager() {}
+  SingleWebContentsDialogManager(const SingleWebContentsDialogManager&) =
+      delete;
+  SingleWebContentsDialogManager& operator=(
+      const SingleWebContentsDialogManager&) = delete;
+
+  virtual ~SingleWebContentsDialogManager() = default;
 
   // Makes the web contents modal dialog visible. Only one web contents modal
   // dialog is shown at a time per tab.
@@ -68,11 +75,12 @@ class SingleWebContentsDialogManager {
   // Return the dialog under management by this object.
   virtual gfx::NativeWindow dialog() = 0;
 
- protected:
-  SingleWebContentsDialogManager() {}
+  // Returns true if the web contents modal dialog is the currently active
+  // window, otherwise false.
+  virtual bool IsActive() const = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(SingleWebContentsDialogManager);
+ protected:
+  SingleWebContentsDialogManager() = default;
 };
 
 }  // namespace web_modal

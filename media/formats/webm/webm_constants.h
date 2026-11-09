@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -136,7 +136,7 @@ const int kWebMIdLaceNumber = 0xCC;
 const int kWebMIdLanguage = 0x22B59C;
 const int kWebMIdLuminanceMax = 0x55D9;
 const int kWebMIdLuminanceMin = 0x55DA;
-const int kWebMIdMasteringMetadata = 0x55D0;
+const int kWebMIdColorVolumeMetadata = 0x55D0;
 const int kWebMIdMatrixCoefficients = 0x55B1;
 const int kWebMIdMaxBlockAdditionId = 0x55EE;
 const int kWebMIdMaxCache = 0x6DF8;
@@ -253,6 +253,31 @@ const int kWebMTrackTypeVideo = 1;
 const int kWebMTrackTypeAudio = 2;
 const int kWebMTrackTypeSubtitlesOrCaptions = 0x11;
 const int kWebMTrackTypeDescriptionsOrMetadata = 0x21;
+
+// Values for StereoMode are spec'd here:
+// https://www.matroska.org/technical/elements.html#StereoMode
+const int kWebMStereoModeMono = 0;
+const int kWebMStereoModeLeftRight = 1;
+const int kWebMStereoModeBottomTop = 2;
+const int kWebMStereoModeTopBottom = 3;
+const int kWebMStereoModeCheckerboardRL = 4;
+const int kWebMStereoModeCheckerboardLR = 5;
+const int kWebMStereoModeRowInterleavedRL = 6;
+const int kWebMStereoModeRowInterleavedLR = 7;
+const int kWebMStereoModeColInterleavedRL = 8;
+const int kWebMStereoModeColInterleavedLR = 9;
+const int kWebMStereoModeAnaglyphCyanRed = 10;
+const int kWebMStereoModeRightLeft = 11;
+const int kWebMStereoModeAnaglyphGreenMag = 12;
+const int kWebMStereoModeBothEyesBlockLR = 13;
+const int kWebMStereoModeBothEyesBlockRL = 14;
+
+// Values for ProjectionType are spec'd here:
+// https://www.matroska.org/technical/elements.html#ProjectionType
+const int kWebMProjectionTypeRectangular = 0;
+const int kWebMProjectionTypeEquirectangular = 1;
+const int kWebMProjectionTypeCubemap = 2;
+const int kWebMProjectionTypeMesh = 3;
 
 MEDIA_EXPORT extern const char kWebMCodecSubtitles[];
 MEDIA_EXPORT extern const char kWebMCodecCaptions[];

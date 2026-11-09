@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@ import androidx.annotation.NonNull;
 
 import org.junit.Assert;
 
-import org.chromium.base.test.util.ScalableTimeout;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabTestUtils;
 import org.chromium.chrome.test.ChromeActivityTestRule;
@@ -19,7 +18,6 @@ import org.chromium.chrome.test.ChromeActivityTestRule;
  * Custom ActivityTestRule for all instrumentation tests that require a {@link CustomTabActivity}.
  */
 public class CustomTabActivityTestRule extends ChromeActivityTestRule<CustomTabActivity> {
-    protected static final long STARTUP_TIMEOUT_MS = ScalableTimeout.scaleTimeout(5L * 1000);
     protected static final long LONG_TIMEOUT_MS = 10L * 1000;
     private static int sCustomTabId;
 
@@ -36,23 +34,28 @@ public class CustomTabActivityTestRule extends ChromeActivityTestRule<CustomTabA
         intent.putExtra(CustomTabsTestUtils.EXTRA_CUSTOM_TAB_ID, sCustomTabId++);
     }
 
-    public static int getCustomTabIdFromIntent(Intent intent) {
-        return intent.getIntExtra(CustomTabsTestUtils.EXTRA_CUSTOM_TAB_ID, -1);
+    @Override
+    public CustomTabActivity launchActivity(@NonNull Intent intent) {
+        putCustomTabIdInIntent(intent);
+        return super.launchActivity(intent);
     }
 
-    @Override
-    public void launchActivity(@NonNull Intent intent) {
-        putCustomTabIdInIntent(intent);
-        super.launchActivity(intent);
+    /**
+     * Start a {@link CustomTabActivity} with given {@link Intent}, and wait till a tab is
+     * initialized and the first frame is drawn.
+     */
+    public void startCustomTabActivityWithIntent(Intent intent) {
+        startCustomTabActivityWithIntentNotWaitingForFirstFrame(intent);
+        waitForFirstFrame();
     }
 
     /**
      * Start a {@link CustomTabActivity} with given {@link Intent}, and wait till a tab is
      * initialized.
      */
-    public void startCustomTabActivityWithIntent(Intent intent) {
+    public void startCustomTabActivityWithIntentNotWaitingForFirstFrame(Intent intent) {
         startActivityCompletely(intent);
-        final Tab tab = getActivity().getActivityTab();
+        final Tab tab = getActivityTab();
         Assert.assertTrue(TabTestUtils.isCustomTab(tab));
     }
 }

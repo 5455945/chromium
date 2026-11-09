@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/media_export.h"
 #include "media/base/media_log.h"
@@ -25,6 +25,10 @@ class VideoDecoderConfig;
 class MEDIA_EXPORT WebMVideoClient : public WebMParserClient {
  public:
   explicit WebMVideoClient(MediaLog* media_log);
+
+  WebMVideoClient(const WebMVideoClient&) = delete;
+  WebMVideoClient& operator=(const WebMVideoClient&) = delete;
+
   ~WebMVideoClient() override;
 
   // Reset this object's state so it can process a new video track element.
@@ -50,10 +54,10 @@ class MEDIA_EXPORT WebMVideoClient : public WebMParserClient {
   WebMParserClient* OnListStart(int id) override;
   bool OnListEnd(int id) override;
   bool OnUInt(int id, int64_t val) override;
-  bool OnBinary(int id, const uint8_t* data, int size) override;
+  bool OnBinary(int id, base::span<const uint8_t> data) override;
   bool OnFloat(int id, double val) override;
 
-  MediaLog* media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
   int64_t pixel_width_;
   int64_t pixel_height_;
   int64_t crop_bottom_;
@@ -71,8 +75,6 @@ class MEDIA_EXPORT WebMVideoClient : public WebMParserClient {
 
   WebMProjectionParser projection_parser_;
   bool projection_parsed_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(WebMVideoClient);
 };
 
 }  // namespace media

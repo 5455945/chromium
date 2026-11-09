@@ -1,10 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/media_internals_proxy.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "build/build_config.h"
 #include "content/browser/media/media_internals.h"
@@ -20,8 +20,8 @@ MediaInternalsProxy::MediaInternalsProxy() {
 MediaInternalsProxy::~MediaInternalsProxy() {}
 
 void MediaInternalsProxy::Attach(MediaInternalsMessageHandler* handler) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!update_callback_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!update_callback_, base::NotFatalUntil::M160);
 
   update_callback_ =
       base::BindRepeating(&MediaInternalsProxy::UpdateUIOnUIThread, handler);
@@ -29,20 +29,21 @@ void MediaInternalsProxy::Attach(MediaInternalsMessageHandler* handler) {
 }
 
 void MediaInternalsProxy::Detach() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   MediaInternals::GetInstance()->RemoveUpdateCallback(update_callback_);
   update_callback_.Reset();
 }
 
 void MediaInternalsProxy::GetEverything() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   MediaInternals::GetInstance()->SendHistoricalMediaEvents();
   MediaInternals::GetInstance()->SendGeneralAudioInformation();
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   MediaInternals::GetInstance()->SendAudioFocusState();
 #endif
+  MediaInternals::GetInstance()->GetRegisteredCdms();
 
   // Ask MediaInternals for its data on IO thread.
   GetIOThreadTaskRunner({})->PostTask(
@@ -51,7 +52,7 @@ void MediaInternalsProxy::GetEverything() {
 }
 
 void MediaInternalsProxy::GetEverythingOnIOThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   // TODO(xhwang): Investigate whether we can update on UI thread directly.
   MediaInternals::GetInstance()->SendAudioStreamData();
   MediaInternals::GetInstance()->SendVideoCaptureDeviceCapabilities();
@@ -61,7 +62,7 @@ void MediaInternalsProxy::GetEverythingOnIOThread() {
 void MediaInternalsProxy::UpdateUIOnUIThread(
     MediaInternalsMessageHandler* handler,
     const std::u16string& update) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   handler->OnUpdate(update);
 }
 

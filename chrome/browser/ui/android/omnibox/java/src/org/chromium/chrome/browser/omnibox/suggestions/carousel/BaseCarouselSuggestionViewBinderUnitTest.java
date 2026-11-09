@@ -1,31 +1,41 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox.suggestions.carousel;
 
-import static org.mockito.Mockito.anyInt;
-import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
 
+import android.content.Context;
 import android.content.res.Resources;
-import android.view.View;
-import android.widget.TextView;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.view.ViewGroup.MarginLayoutParams;
 
-import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
-import org.chromium.chrome.R;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
+import org.chromium.base.ContextUtils;
+import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+import org.chromium.chrome.browser.omnibox.suggestions.RecyclerViewSelectionController;
+import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
+import org.chromium.chrome.browser.omnibox.suggestions.base.SpacingRecyclerViewItemDecoration;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -35,113 +45,216 @@ import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Tests for {@link BaseCarouselSuggestionViewBinder}.
- */
-@RunWith(LocalRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+/** Tests for {@link BaseCarouselSuggestionViewBinder}. */
+@RunWith(BaseRobolectricTestRunner.class)
 public class BaseCarouselSuggestionViewBinderUnitTest {
-    static final int SUGGESTION_VERTICAL_PADDING = 123;
 
-    @Mock
-    BaseCarouselSuggestionView mView;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    @Mock
-    TextView mHeaderTextView;
-
-    @Mock
-    View mHeaderView;
-
-    @Mock
-    View mItemView;
-
-    @Mock
-    SimpleRecyclerViewAdapter mAdapter;
-
-    @Mock
-    Resources mResources;
-
-    ModelList mTiles;
-
-    PropertyModel mModel;
+    @Mock private PropertyModel mPropertyModel;
+    @Mock private RecyclerViewSelectionController mSelectionController;
+    private BaseCarouselSuggestionView mView;
+    private Context mContext;
+    private Resources mResources;
+    private ModelList mTiles;
+    private SimpleRecyclerViewAdapter mAdapter;
+    private PropertyModel mModel;
+    private BaseCarouselSuggestionViewBinder mBinder;
+    private OmniboxResourceProvider mResourceProvider;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        mModel = new PropertyModel(BaseCarouselSuggestionViewProperties.ALL_KEYS);
-        PropertyModelChangeProcessor.create(mModel, mView, BaseCarouselSuggestionViewBinder::bind);
+        mContext = ContextUtils.getApplicationContext();
+        mResources = mContext.getResources();
 
+        mResourceProvider = new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
+        mBinder = new BaseCarouselSuggestionViewBinder();
         mTiles = new ModelList();
-
-        when(mView.getHeaderTextView()).thenReturn(mHeaderTextView);
-        when(mView.getHeaderView()).thenReturn(mHeaderView);
-        when(mView.getAdapter()).thenReturn(mAdapter);
-        when(mAdapter.getModelList()).thenReturn(mTiles);
-        when(mView.getResources()).thenReturn(mResources);
-
-        when(mResources.getDimensionPixelSize(eq(R.dimen.omnibox_carousel_suggestion_padding)))
-                .thenReturn(SUGGESTION_VERTICAL_PADDING);
-    }
-
-    @Test
-    public void headerTitle_set() {
-        mModel.set(BaseCarouselSuggestionViewProperties.TITLE, "title");
-        verify(mHeaderTextView, times(1)).setText(eq("title"));
-        verifyNoMoreInteractions(mHeaderTextView);
-    }
-
-    @Test
-    public void headerTitle_updateToSameIsNoOp() {
-        mModel.set(BaseCarouselSuggestionViewProperties.TITLE, "title");
-        reset(mHeaderTextView);
-        mModel.set(BaseCarouselSuggestionViewProperties.TITLE, "title");
-        verifyNoMoreInteractions(mHeaderTextView);
+        mAdapter = new SimpleRecyclerViewAdapter(mTiles);
+        mModel =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider)
+                        .build();
+        mView = new BaseCarouselSuggestionView(mContext, mAdapter);
+        mView.setSelectionControllerForTesting(mSelectionController);
+        PropertyModelChangeProcessor.create(mModel, mView, mBinder);
     }
 
     @Test
     public void modelList_setItems() {
         final List<ListItem> tiles = new ArrayList<>();
-        tiles.add(new ListItem(0, null));
-        tiles.add(new ListItem(0, null));
-        tiles.add(new ListItem(0, null));
+        tiles.add(new ListItem(0, mPropertyModel));
+        tiles.add(new ListItem(0, mPropertyModel));
+        tiles.add(new ListItem(0, mPropertyModel));
 
-        Assert.assertEquals(0, mTiles.size());
+        assertEquals(0, mTiles.size());
         mModel.set(BaseCarouselSuggestionViewProperties.TILES, tiles);
-        Assert.assertEquals(3, mTiles.size());
-        Assert.assertEquals(tiles.get(0), mTiles.get(0));
-        Assert.assertEquals(tiles.get(1), mTiles.get(1));
-        Assert.assertEquals(tiles.get(2), mTiles.get(2));
+        assertEquals(3, mTiles.size());
+        assertEquals(tiles.get(0), mTiles.get(0));
+        assertEquals(tiles.get(1), mTiles.get(1));
+        assertEquals(tiles.get(2), mTiles.get(2));
     }
 
     @Test
     public void modelList_clearItems() {
         final List<ListItem> tiles = new ArrayList<>();
-        tiles.add(new ListItem(0, null));
-        tiles.add(new ListItem(0, null));
-        tiles.add(new ListItem(0, null));
+        tiles.add(new ListItem(0, mPropertyModel));
+        tiles.add(new ListItem(0, mPropertyModel));
+        tiles.add(new ListItem(0, mPropertyModel));
 
-        Assert.assertEquals(0, mTiles.size());
+        assertEquals(0, mTiles.size());
         mModel.set(BaseCarouselSuggestionViewProperties.TILES, tiles);
-        Assert.assertEquals(3, mTiles.size());
+        assertEquals(3, mTiles.size());
+        verify(mSelectionController).reset();
+
+        clearInvocations(mSelectionController);
+
         mModel.set(BaseCarouselSuggestionViewProperties.TILES, null);
-        Assert.assertEquals(0, mTiles.size());
+        assertEquals(0, mTiles.size());
+        verify(mSelectionController).reset();
     }
 
     @Test
-    public void headerTitle_visibilityChangeAltersTopPadding() {
-        mModel.set(BaseCarouselSuggestionViewProperties.SHOW_TITLE, true);
-        verify(mHeaderView, times(1)).setVisibility(eq(View.VISIBLE));
-        verify(mHeaderView, times(1)).setVisibility(anyInt());
-        verify(mView, times(1))
-                .setPaddingRelative(eq(0), eq(0), eq(0), eq(SUGGESTION_VERTICAL_PADDING));
-        verify(mView, times(1)).setPaddingRelative(anyInt(), anyInt(), anyInt(), anyInt());
+    public void createModel_noPaddingValues() {
+        mView.setPaddingRelative(1, 2, 3, 4);
+        var model =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS).build();
+        PropertyModelChangeProcessor.create(model, mView, mBinder);
 
-        mModel.set(BaseCarouselSuggestionViewProperties.SHOW_TITLE, false);
-        verify(mHeaderView, times(1)).setVisibility(eq(View.GONE));
-        verify(mHeaderView, times(2)).setVisibility(anyInt());
-        verify(mView, times(1))
-                .setPaddingRelative(eq(0), eq(SUGGESTION_VERTICAL_PADDING), eq(0),
-                        eq(SUGGESTION_VERTICAL_PADDING));
-        verify(mView, times(2)).setPaddingRelative(anyInt(), anyInt(), anyInt(), anyInt());
+        assertEquals(1, mView.getPaddingStart());
+        assertEquals(2, mView.getPaddingTop());
+        assertEquals(3, mView.getPaddingEnd());
+        assertEquals(4, mView.getPaddingBottom());
+    }
+
+    @Test
+    public void createModel_specificPaddingValues() {
+        var model =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(BaseCarouselSuggestionViewProperties.TOP_PADDING, 13)
+                        .with(BaseCarouselSuggestionViewProperties.BOTTOM_PADDING, 75)
+                        .build();
+        PropertyModelChangeProcessor.create(model, mView, mBinder);
+
+        assertEquals(0, mView.getPaddingStart());
+        assertEquals(13, mView.getPaddingTop());
+        assertEquals(0, mView.getPaddingEnd());
+        assertEquals(75, mView.getPaddingBottom());
+    }
+
+    @Test
+    public void createModel_backgroundDisabled() {
+        var layoutParams = new MarginLayoutParams(/* width= */ 0, /* height= */ 0);
+        var view = new BaseCarouselSuggestionView(mContext, mAdapter);
+        view.setLayoutParams(layoutParams);
+
+        var model =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(BaseCarouselSuggestionViewProperties.APPLY_BACKGROUND, false)
+                        .build();
+
+        PropertyModelChangeProcessor.create(model, view, mBinder);
+
+        assertEquals(Color.TRANSPARENT, ((ColorDrawable) view.getBackground()).getColor());
+        assertNull(view.getOutlineProvider());
+        assertFalse(view.getClipToOutline());
+        assertSame(layoutParams, view.getLayoutParams());
+        assertEquals(0, layoutParams.getMarginStart());
+        assertEquals(0, layoutParams.getMarginEnd());
+    }
+
+    @Test
+    public void createModel_backgroundEnabled_nonIncognito() {
+        var layoutParams = new MarginLayoutParams(/* width= */ 0, /* height= */ 0);
+        var view = new BaseCarouselSuggestionView(mContext, mAdapter);
+        view.setLayoutParams(layoutParams);
+
+        var model =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider)
+                        .with(BaseCarouselSuggestionViewProperties.APPLY_BACKGROUND, true)
+                        .build();
+
+        PropertyModelChangeProcessor.create(model, view, mBinder);
+
+        assertEquals(
+                mResourceProvider.getStandardSuggestionBackgroundColor(),
+                ((ColorDrawable) view.getBackground()).getColor());
+        assertNotNull(view.getOutlineProvider());
+        assertTrue(view.getClipToOutline());
+        assertSame(layoutParams, view.getLayoutParams());
+        assertEquals(mResourceProvider.getSideSpacing(), layoutParams.getMarginStart());
+        assertEquals(mResourceProvider.getSideSpacing(), layoutParams.getMarginEnd());
+    }
+
+    @Test
+    public void createModel_backgroundEnabled_incognito() {
+        var layoutParams = new MarginLayoutParams(/* width= */ 0, /* height= */ 0);
+        var view = new BaseCarouselSuggestionView(mContext, mAdapter);
+        view.setLayoutParams(layoutParams);
+
+        var model =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider)
+                        .with(SuggestionCommonProperties.COLOR_SCHEME, BrandedColorScheme.INCOGNITO)
+                        .with(BaseCarouselSuggestionViewProperties.APPLY_BACKGROUND, true)
+                        .build();
+
+        mResourceProvider.setBrandedColorScheme(BrandedColorScheme.INCOGNITO);
+        PropertyModelChangeProcessor.create(model, view, mBinder);
+
+        assertEquals(
+                mContext.getColor(R.color.search_suggestion_bg_color_incognito),
+                ((ColorDrawable) view.getBackground()).getColor());
+        // Same as in the non-incognito variant.
+        assertNotNull(view.getOutlineProvider());
+        assertTrue(view.getClipToOutline());
+        assertSame(layoutParams, view.getLayoutParams());
+        assertEquals(mResourceProvider.getSideSpacing(), layoutParams.getMarginStart());
+        assertEquals(mResourceProvider.getSideSpacing(), layoutParams.getMarginEnd());
+    }
+
+    @Test
+    public void itemDecoration_setItemWidth() {
+        // View was initially created with no decorations.
+        assertEquals(0, mView.getItemDecorationCount());
+
+        // Create a new model with a decoration attached.
+        var decoration = new SpacingRecyclerViewItemDecoration(10, 5);
+        mModel =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(BaseCarouselSuggestionViewProperties.ITEM_DECORATION, decoration)
+                        .build();
+        PropertyModelChangeProcessor.create(mModel, mView, mBinder);
+
+        assertEquals(1, mView.getItemDecorationCount());
+        assertSame(decoration, mView.getItemDecorationAt(0));
+    }
+
+    @Test
+    public void bindContentDescription_nullDescription() {
+        mModel =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(BaseCarouselSuggestionViewProperties.CONTENT_DESCRIPTION, null)
+                        .build();
+        mView = new BaseCarouselSuggestionView(mContext, mAdapter);
+        PropertyModelChangeProcessor.create(mModel, mView, mBinder);
+
+        assertNull(mView.getContentDescription());
+    }
+
+    @Test
+    public void bindContentDescription_nonNullDescription() {
+        mModel =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(
+                                BaseCarouselSuggestionViewProperties.CONTENT_DESCRIPTION,
+                                "description")
+                        .build();
+        mView = new BaseCarouselSuggestionView(mContext, mAdapter);
+        PropertyModelChangeProcessor.create(mModel, mView, mBinder);
+
+        assertEquals("description", mView.getContentDescription());
     }
 }

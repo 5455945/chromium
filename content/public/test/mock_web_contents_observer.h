@@ -1,13 +1,13 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_TEST_MOCK_WEB_CONTENTS_OBSERVER_H_
 #define CONTENT_PUBLIC_TEST_MOCK_WEB_CONTENTS_OBSERVER_H_
 
-#include "content/public/browser/ax_event_notification_details.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/accessibility/ax_updates_and_events.h"
 
 namespace content {
 
@@ -37,12 +37,16 @@ class MockWebContentsObserver : public WebContentsObserver {
               RenderFrameDeleted,
               (RenderFrameHost* render_frame_host),
               (override));
-  MOCK_METHOD(void, PrimaryPageChanged, (), (override));
+  MOCK_METHOD(void, PrimaryPageChanged, (Page & page), (override));
+  MOCK_METHOD(void, PrimaryPageWillBeDeactivated, (Page & page), (override));
   MOCK_METHOD(void,
               RenderFrameHostChanged,
               (RenderFrameHost* old_host, RenderFrameHost* new_host),
               (override));
-  MOCK_METHOD(void, FrameDeleted, (int frame_tree_node_id), (override));
+  MOCK_METHOD(void,
+              FrameDeleted,
+              (FrameTreeNodeId frame_tree_node_id),
+              (override));
   MOCK_METHOD(void,
               RenderFrameHostStateChanged,
               (RenderFrameHost* render_frame_host,
@@ -56,7 +60,7 @@ class MockWebContentsObserver : public WebContentsObserver {
               (RenderViewHost* render_view_host),
               (override));
   MOCK_METHOD(void,
-              RenderProcessGone,
+              PrimaryMainFrameRenderProcessGone,
               (base::TerminationStatus status),
               (override));
   MOCK_METHOD(void,
@@ -87,23 +91,11 @@ class MockWebContentsObserver : public WebContentsObserver {
               DidFinishNavigation,
               (NavigationHandle* navigation_handle),
               (override));
-  MOCK_METHOD(void,
-              DidActivatePortal,
-              (WebContents* predecessor_web_contents,
-               base::TimeTicks activation_time),
-              (override));
   MOCK_METHOD(void, DidStartLoading, (), (override));
-  MOCK_METHOD(void, DidReceiveResponse, (), (override));
   MOCK_METHOD(void, DidStopLoading, (), (override));
   MOCK_METHOD(void, LoadProgressChanged, (double progress), (override));
-  MOCK_METHOD(void,
-              DocumentAvailableInMainFrame,
-              (RenderFrameHost* render_frame_host),
-              (override));
-  MOCK_METHOD(void,
-              DocumentOnLoadCompletedInMainFrame,
-              (RenderFrameHost* render_frame_host),
-              (override));
+  MOCK_METHOD(void, PrimaryMainDocumentElementAvailable, (), (override));
+  MOCK_METHOD(void, DocumentOnLoadCompletedInPrimaryMainFrame, (), (override));
   MOCK_METHOD(void,
               DOMContentLoaded,
               (RenderFrameHost* render_frame_host),
@@ -130,8 +122,10 @@ class MockWebContentsObserver : public WebContentsObserver {
               ResourceLoadComplete,
               (RenderFrameHost* render_frame_host,
                const GlobalRequestID& request_id,
+               const GURL& original_url,
                const blink::mojom::ResourceLoadInfo& resource_load_info),
               (override));
+  MOCK_METHOD(void, OnFedCmFederatedLogin, (bool success), (override));
   MOCK_METHOD(void,
               OnCookiesAccessed,
               (RenderFrameHost* render_frame_host,
@@ -174,7 +168,10 @@ class MockWebContentsObserver : public WebContentsObserver {
               (override));
   MOCK_METHOD(void, DidGetIgnoredUIEvent, (), (override));
   MOCK_METHOD(void, OnVisibilityChanged, (Visibility visibility), (override));
-  MOCK_METHOD(void, MainFrameWasResized, (bool width_changed), (override));
+  MOCK_METHOD(void,
+              PrimaryMainFrameWasResized,
+              (bool width_changed),
+              (override));
   MOCK_METHOD(void,
               FrameNameChanged,
               (RenderFrameHost* render_frame_host, const std::string& name),
@@ -192,26 +189,10 @@ class MockWebContentsObserver : public WebContentsObserver {
               (RenderFrameHost* render_frame_host,
                const gfx::Size& frame_size),
               (override));
-  MOCK_METHOD(void, TitleWasSet, (NavigationEntry* entry), (override));
-  MOCK_METHOD(void,
-              AppCacheAccessed,
-              (const GURL& manifest_url, bool blocked_by_policy),
-              (override));
-  MOCK_METHOD(void, PepperInstanceCreated, (), (override));
-  MOCK_METHOD(void, PepperInstanceDeleted, (), (override));
+  MOCK_METHOD(void, TitleWasSet, (NavigationEntry * entry), (override));
   MOCK_METHOD(void,
               ViewportFitChanged,
               (blink::mojom::ViewportFit value),
-              (override));
-  MOCK_METHOD(void,
-              PluginCrashed,
-              (const base::FilePath& plugin_path, base::ProcessId plugin_pid),
-              (override));
-  MOCK_METHOD(void,
-              PluginHungStatusChanged,
-              (int plugin_child_id,
-               const base::FilePath& plugin_path,
-               bool is_hung),
               (override));
   MOCK_METHOD(void,
               InnerWebContentsCreated,
@@ -220,12 +201,16 @@ class MockWebContentsObserver : public WebContentsObserver {
   MOCK_METHOD(void,
               InnerWebContentsAttached,
               (WebContents* inner_web_contents,
-               RenderFrameHost* render_frame_host,
-               bool is_full_page),
+               RenderFrameHost* render_frame_host),
               (override));
   MOCK_METHOD(void,
-              InnerWebContentsDetached,
-              (WebContents* inner_web_contents),
+              SurfaceEmbedChildWebContentsAttached,
+              (WebContents * inner_web_contents,
+               RenderFrameHost* embedder_render_frame_host),
+              (override));
+  MOCK_METHOD(void,
+              SurfaceEmbedChildWebContentsDetached,
+              (WebContents * inner_web_contents),
               (override));
   MOCK_METHOD(void,
               DidCloneToNewWebContents,
@@ -238,8 +223,9 @@ class MockWebContentsObserver : public WebContentsObserver {
               (override));
   MOCK_METHOD(void,
               DidUpdateFaviconURL,
-              (RenderFrameHost* render_frame_host,
-               const std::vector<blink::mojom::FaviconURLPtr>& candidates),
+              (RenderFrameHost * render_frame_host,
+               const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+               blink::mojom::FaviconUpdateReason reason),
               (override));
   MOCK_METHOD(void, OnAudioStateChanged, (bool audible), (override));
   MOCK_METHOD(void,
@@ -247,8 +233,8 @@ class MockWebContentsObserver : public WebContentsObserver {
               (RenderFrameHost* rfh, bool audible),
               (override));
   MOCK_METHOD(void,
-              OnIsConnectedToBluetoothDeviceChanged,
-              (bool is_connected_to_bluetooth_device),
+              OnCapabilityTypesChanged,
+              (WebContentsCapabilityType capability_type, bool used),
               (override));
   MOCK_METHOD(void, DidUpdateAudioMutingState, (bool muted), (override));
   MOCK_METHOD(void,
@@ -261,19 +247,17 @@ class MockWebContentsObserver : public WebContentsObserver {
               (viz::VerticalScrollDirection scroll_direction),
               (override));
   MOCK_METHOD(void, BeforeFormRepostWarningShow, (), (override));
-  MOCK_METHOD(void,
-              BeforeUnloadFired,
-              (bool proceed, const base::TimeTicks& proceed_time),
-              (override));
+  MOCK_METHOD(void, BeforeUnloadFired, (bool proceed), (override));
   MOCK_METHOD(void, BeforeUnloadDialogCancelled, (), (override));
   MOCK_METHOD(void, AXTreeIDForMainFrameHasChanged, (), (override));
   MOCK_METHOD(void,
               AccessibilityEventReceived,
-              (const AXEventNotificationDetails& details),
+              (const ui::AXUpdatesAndEvents& details),
               (override));
   MOCK_METHOD(void,
               AccessibilityLocationChangesReceived,
-              (const std::vector<AXLocationChangeNotificationDetails>& details),
+              (const ui::AXTreeID& tree_id,
+               ui::AXLocationAndScrollUpdates& details),
               (override));
   MOCK_METHOD(void, DidChangeThemeColor, (), (override));
   MOCK_METHOD(void, OnBackgroundColorChanged, (), (override));
@@ -284,7 +268,7 @@ class MockWebContentsObserver : public WebContentsObserver {
                const std::u16string& message,
                int32_t line_no,
                const std::u16string& source_id,
-               const absl::optional<std::u16string>& untrusted_stack_trace),
+               const std::optional<std::u16string>& untrusted_stack_trace),
               (override));
   MOCK_METHOD(void,
               MediaStartedPlaying,
@@ -312,11 +296,6 @@ class MockWebContentsObserver : public WebContentsObserver {
               MediaMutedStatusChanged,
               (const MediaPlayerId& id, bool muted),
               (override));
-  MOCK_METHOD(void,
-              MediaBufferUnderflow,
-              (const MediaPlayerId& id),
-              (override));
-  MOCK_METHOD(void, MediaPlayerSeek, (const MediaPlayerId& id), (override));
   MOCK_METHOD(void, MediaDestroyed, (const MediaPlayerId& id), (override));
   MOCK_METHOD(void,
               OnPageScaleFactorChanged,
@@ -333,17 +312,11 @@ class MockWebContentsObserver : public WebContentsObserver {
               (override));
   MOCK_METHOD(void,
               OnFocusChangedInPage,
-              (FocusedNodeDetails* details),
+              (const FocusedNodeDetails& details),
               (override));
   MOCK_METHOD(void,
               DidUpdateWebManifestURL,
               (RenderFrameHost * target_frame, const GURL& manifest_url),
-              (override));
-  MOCK_METHOD(void,
-              OnInterfaceRequestFromFrame,
-              (RenderFrameHost* render_frame_host,
-               const std::string& interface_name,
-               mojo::ScopedMessagePipeHandle* interface_pipe),
               (override));
   MOCK_METHOD(void,
               AudioContextPlaybackStarted,
@@ -365,6 +338,11 @@ class MockWebContentsObserver : public WebContentsObserver {
                const GURL& scope,
                AllowServiceWorkerResult allowed),
               (override));
+  MOCK_METHOD(void,
+              AboutToBeDiscarded,
+              (WebContents * new_contents),
+              (override));
+  MOCK_METHOD(void, WasDiscarded, (), (override));
 };
 
 }  // namespace content

@@ -1,25 +1,34 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/test/test_blink_web_unit_test_support.h"
 #include "third_party/blink/public/platform/web_cache.h"
 #include "third_party/blink/public/web/web_navigation_params.h"
+#include "third_party/blink/public/web/web_view_client.h"
+#include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
 
-SimTest::SimTest() {
-  Document::SetThreadedParsingEnabledForTesting(false);
+SimTest::SimTest(
+    std::optional<base::test::TaskEnvironment::TimeSource> time_source)
+    : task_environment_(
+          time_source.has_value()
+              ? time_source.value()
+              : base::test::TaskEnvironment::TimeSource::DEFAULT) {
+  Document::SetForceSynchronousParsingForTesting(true);
   // Threaded animations are usually enabled for blink. However these tests use
   // synchronous compositing, which can not run threaded animations.
   bool was_threaded_animation_enabled =
@@ -30,9 +39,12 @@ SimTest::SimTest() {
 }
 
 SimTest::~SimTest() {
-  Document::SetThreadedParsingEnabledForTesting(true);
+  // Clear lazily loaded style sheets.
+  CSSDefaultStyleSheets::Instance().PrepareForLeakDetection();
+  Document::SetForceSynchronousParsingForTesting(false);
   content::TestBlinkWebUnitTestSupport::SetThreadedAnimationEnabled(true);
   WebCache::Clear();
+  ThreadState::Current()->CollectAllGarbageForTesting();
 }
 
 void SimTest::SetUp() {
@@ -43,26 +55,23 @@ void SimTest::SetUp() {
   // WebViewImpl given to SetWebView().
   network_ = std::make_unique<SimNetwork>();
   compositor_ = std::make_unique<SimCompositor>();
-  web_frame_client_ =
-      std::make_unique<frame_test_helpers::TestWebFrameClient>();
-  web_view_client_ = std::make_unique<frame_test_helpers::TestWebViewClient>();
+  web_frame_client_ = CreateWebFrameClientForMainFrame();
   page_ = std::make_unique<SimPage>();
-  web_view_helper_ =
-      std::make_unique<frame_test_helpers::WebViewHelper>(base::BindRepeating(
-          &SimTest::CreateTestWebFrameWidget, base::Unretained(this)));
+  web_view_helper_ = std::make_unique<frame_test_helpers::WebViewHelper>(
+      blink::BindRepeating(&SimTest::CreateWebFrameWidget, Unretained(this)));
   // These tests don't simulate a browser interface and hence fetching code
   // caching doesn't work in these tests. Currently tests that use this testing
   // set up don't test / need code caches. Disable code caches for these tests.
   DocumentLoader::DisableCodeCacheForTesting();
 
-  web_view_helper_->Initialize(web_frame_client_.get(), web_view_client_.get());
-  compositor_->SetWebView(WebView(), *web_view_client_);
+  web_view_helper_->Initialize(web_frame_client_.get());
+  compositor_->SetWebView(WebView());
   page_->SetPage(WebView().GetPage());
   local_frame_root_ = WebView().MainFrameImpl();
   compositor_->SetLayerTreeHost(
       local_frame_root_->FrameWidgetImpl()->LayerTreeHostForTesting());
 
-  WebView().MainFrameViewWidget()->Resize(gfx::Size(300, 200));
+  ResizeView(gfx::Size(300, 200));
 }
 
 void SimTest::TearDown() {
@@ -70,15 +79,14 @@ void SimTest::TearDown() {
   //
   // Use RunUntilIdle() instead of blink::test::RunPendingTask(), because
   // blink::test::RunPendingTask() posts directly to
-  // Thread::Current()->GetTaskRunner(), which makes it incompatible with a
-  // TestingPlatformSupportWithMockScheduler.
+  // scheduler::GetSingleThreadTaskRunnerForTesting(), which makes it
+  // incompatible with a TestingPlatformSupportWithMockScheduler.
   base::RunLoop().RunUntilIdle();
 
   // Shut down this stuff before settings change to keep the world
   // consistent, and before the subclass tears down.
   web_view_helper_.reset();
   page_.reset();
-  web_view_client_.reset();
   web_frame_client_.reset();
   compositor_.reset();
   network_.reset();
@@ -88,13 +96,46 @@ void SimTest::TearDown() {
 
 void SimTest::InitializeRemote() {
   web_view_helper_->InitializeRemote();
-  compositor_->SetWebView(WebView(), *web_view_client_);
+  compositor_->SetWebView(WebView());
   page_->SetPage(WebView().GetPage());
   web_frame_client_ =
       std::make_unique<frame_test_helpers::TestWebFrameClient>();
   local_frame_root_ = web_view_helper_->CreateLocalChild(
       *WebView().MainFrame()->ToWebRemoteFrame(), "local_frame_root",
       WebFrameOwnerProperties(), nullptr, web_frame_client_.get());
+  compositor_->SetLayerTreeHost(
+      local_frame_root_->FrameWidgetImpl()->LayerTreeHostForTesting());
+}
+
+void SimTest::InitializeFencedFrameRoot(
+    blink::FencedFrame::DeprecatedFencedFrameMode mode) {
+  web_view_helper_->InitializeWithOpener(/*opener=*/nullptr,
+                                         /*frame_client=*/nullptr,
+                                         /*view_client=*/nullptr,
+                                         /*update_settings_func=*/nullptr,
+                                         mode);
+  compositor_->SetWebView(WebView());
+  page_->SetPage(WebView().GetPage());
+  web_frame_client_ =
+      std::make_unique<frame_test_helpers::TestWebFrameClient>();
+  local_frame_root_ = WebView().MainFrameImpl();
+  compositor_->SetLayerTreeHost(
+      local_frame_root_->FrameWidgetImpl()->LayerTreeHostForTesting());
+}
+
+void SimTest::InitializePrerenderPageRoot() {
+  web_view_helper_->InitializeWithOpener(
+      /*opener=*/nullptr,
+      /*frame_client=*/nullptr,
+      /*view_client=*/nullptr,
+      /*update_settings_func=*/nullptr,
+      /*fenced_frame_mode=*/std::nullopt,
+      /*is_prerendering=*/true);
+  compositor_->SetWebView(WebView());
+  page_->SetPage(WebView().GetPage());
+  web_frame_client_ =
+      std::make_unique<frame_test_helpers::TestWebFrameClient>();
+  local_frame_root_ = WebView().MainFrameImpl();
   compositor_->SetLayerTreeHost(
       local_frame_root_->FrameWidgetImpl()->LayerTreeHostForTesting());
 }
@@ -118,11 +159,11 @@ SimPage& SimTest::GetPage() {
   return *page_;
 }
 
-Document& SimTest::GetDocument() {
+Document& SimTest::GetDocument() const {
   return *WebView().MainFrameImpl()->GetFrame()->GetDocument();
 }
 
-WebViewImpl& SimTest::WebView() {
+WebViewImpl& SimTest::WebView() const {
   return *web_view_helper_->GetWebView();
 }
 
@@ -134,27 +175,36 @@ WebLocalFrameImpl& SimTest::LocalFrameRoot() {
   return *local_frame_root_;
 }
 
-frame_test_helpers::TestWebViewClient& SimTest::WebViewClient() {
-  return *web_view_client_;
-}
-
 frame_test_helpers::TestWebFrameClient& SimTest::WebFrameClient() {
   return *web_frame_client_;
 }
 
-SimWebFrameWidget& SimTest::GetWebFrameWidget() {
-  return *static_cast<SimWebFrameWidget*>(local_frame_root_->FrameWidgetImpl());
+frame_test_helpers::TestWebFrameWidget& SimTest::GetWebFrameWidget() {
+  return *static_cast<frame_test_helpers::TestWebFrameWidget*>(
+      local_frame_root_->FrameWidgetImpl());
 }
 
 SimCompositor& SimTest::Compositor() {
   return *compositor_;
 }
 
+frame_test_helpers::WebViewHelper& SimTest::WebViewHelper() {
+  return *web_view_helper_;
+}
+
+Element* SimTest::GetElementById(const char* id) const {
+  return GetDocument().getElementById(AtomicString(id));
+}
+
 Vector<String>& SimTest::ConsoleMessages() {
   return web_frame_client_->ConsoleMessages();
 }
 
-SimWebFrameWidget* SimTest::CreateSimWebFrameWidget(
+void SimTest::ResizeView(const gfx::Size& size) {
+  web_view_helper_->Resize(size);
+}
+
+frame_test_helpers::TestWebFrameWidget* SimTest::CreateWebFrameWidget(
     base::PassKey<WebLocalFrame> pass_key,
     CrossVariantMojoAssociatedRemote<mojom::blink::FrameWidgetHostInterfaceBase>
         frame_widget_host,
@@ -170,35 +220,21 @@ SimWebFrameWidget* SimTest::CreateSimWebFrameWidget(
     bool never_composited,
     bool is_for_child_local_root,
     bool is_for_nested_main_frame,
-    SimCompositor* compositor) {
-  return MakeGarbageCollected<SimWebFrameWidget>(
-      compositor, std::move(pass_key), std::move(frame_widget_host),
-      std::move(frame_widget), std::move(widget_host), std::move(widget),
-      std::move(task_runner), frame_sink_id, hidden, never_composited,
-      is_for_child_local_root, is_for_nested_main_frame);
-}
-
-frame_test_helpers::TestWebFrameWidget* SimTest::CreateTestWebFrameWidget(
-    base::PassKey<WebLocalFrame> pass_key,
-    CrossVariantMojoAssociatedRemote<mojom::blink::FrameWidgetHostInterfaceBase>
-        frame_widget_host,
-    CrossVariantMojoAssociatedReceiver<mojom::blink::FrameWidgetInterfaceBase>
-        frame_widget,
-    CrossVariantMojoAssociatedRemote<mojom::blink::WidgetHostInterfaceBase>
-        widget_host,
-    CrossVariantMojoAssociatedReceiver<mojom::blink::WidgetInterfaceBase>
-        widget,
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    const viz::FrameSinkId& frame_sink_id,
-    bool hidden,
-    bool never_composited,
-    bool is_for_child_local_root,
-    bool is_for_nested_main_frame) {
-  return CreateSimWebFrameWidget(
+    bool is_for_scalable_page) {
+  return MakeGarbageCollected<frame_test_helpers::TestWebFrameWidget>(
       std::move(pass_key), std::move(frame_widget_host),
       std::move(frame_widget), std::move(widget_host), std::move(widget),
       std::move(task_runner), frame_sink_id, hidden, never_composited,
-      is_for_child_local_root, is_for_nested_main_frame, compositor_.get());
+      is_for_child_local_root, is_for_nested_main_frame, is_for_scalable_page);
+}
+
+std::unique_ptr<frame_test_helpers::TestWebFrameClient>
+SimTest::CreateWebFrameClientForMainFrame() {
+  return std::make_unique<frame_test_helpers::TestWebFrameClient>();
+}
+
+void SimTest::SetPreferCompositingToLCDText(bool enabled) {
+  GetDocument().GetSettings()->SetPreferCompositingToLCDTextForTesting(enabled);
 }
 
 }  // namespace blink

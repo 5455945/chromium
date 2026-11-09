@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,14 @@
 #include <memory>
 
 #include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
 #include "ui/gfx/x/xproto.h"
 
 namespace x11 {
-class XScopedEventSelector;
+class ScopedEventSelector;
 }
 
 namespace ui {
@@ -50,11 +51,11 @@ class COMPONENT_EXPORT(UI_BASE_X) X11WorkspaceHandler
   x11::Window x_root_window_;
 
   // Events selected on x_root_window_.
-  std::unique_ptr<x11::XScopedEventSelector> x_root_window_events_;
+  x11::ScopedEventSelector x_root_window_events_;
 
   std::string workspace_;
 
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 
   base::WeakPtrFactory<X11WorkspaceHandler> weak_factory_{this};
 };

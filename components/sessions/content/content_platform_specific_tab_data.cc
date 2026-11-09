@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,11 +13,10 @@ ContentPlatformSpecificTabData::ContentPlatformSpecificTabData(
     content::WebContents* web_contents)
     :  // TODO(ajwong): This does not correctly handle storage for isolated
        // apps.
-      session_storage_namespace_(web_contents->GetController()
-                                     .GetDefaultSessionStorageNamespace()) {}
+      session_storage_namespace_(
+          web_contents->GetController().GetDefaultSessionStorageNamespace()) {}
 
-ContentPlatformSpecificTabData::ContentPlatformSpecificTabData() {}
-
-ContentPlatformSpecificTabData::~ContentPlatformSpecificTabData() {}
+ContentPlatformSpecificTabData::ContentPlatformSpecificTabData() = default;
+ContentPlatformSpecificTabData::~ContentPlatformSpecificTabData() = default;
 
 }  // namespace sessions

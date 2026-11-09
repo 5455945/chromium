@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,15 +11,19 @@
 #include <map>
 
 #include "base/check_op.h"
-#include "base/containers/mru_cache.h"
-#include "base/lazy_instance.h"
-#include "base/macros.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/lru_cache.h"
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
+#include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/core/SkFont.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/skia_util.h"
+#include "ui/gfx/switches.h"
 
 namespace gfx {
 
@@ -37,7 +41,7 @@ struct FontData {
   explicit FontData(GlyphCache* glyph_cache) : glyph_cache_(glyph_cache) {}
 
   SkFont font_;
-  GlyphCache* glyph_cache_;
+  raw_ptr<GlyphCache> glyph_cache_;
 };
 
 // Deletes the object at the given pointer after casting it to the given type.
@@ -65,7 +69,7 @@ void GetGlyphWidthAndExtents(const SkFont& font,
   SkRect sk_bounds;
   uint16_t glyph = static_cast<uint16_t>(codepoint);
 
-  font.getWidths(&glyph, 1, &sk_width, &sk_bounds);
+  font.getWidthsBounds({&glyph, 1}, {&sk_width, 1}, {&sk_bounds, 1}, nullptr);
   if (width)
     *width = SkiaScalarToHarfBuzzUnits(sk_width);
   if (extents) {
@@ -139,7 +143,7 @@ hb_position_t GetGlyphKerning(FontData* font_data,
                                static_cast<uint16_t>(second_glyph) };
   int32_t kerning_adjustments[1] = { 0 };
 
-  if (!typeface->getKerningPairAdjustments(glyphs, 2, kerning_adjustments))
+  if (!typeface->getKerningPairAdjustments(glyphs, kerning_adjustments))
     return 0;
 
   SkScalar upm = SkIntToScalar(typeface->getUnitsPerEm());
@@ -196,6 +200,9 @@ class FontFuncs {
     hb_font_funcs_make_immutable(font_funcs_);
   }
 
+  FontFuncs(const FontFuncs&) = delete;
+  FontFuncs& operator=(const FontFuncs&) = delete;
+
   ~FontFuncs() {
     hb_font_funcs_destroy(font_funcs_);
   }
@@ -203,32 +210,61 @@ class FontFuncs {
   hb_font_funcs_t* get() { return font_funcs_; }
 
  private:
-  hb_font_funcs_t* font_funcs_;
-
-  DISALLOW_COPY_AND_ASSIGN(FontFuncs);
+  raw_ptr<hb_font_funcs_t> font_funcs_;
 };
 
-base::LazyInstance<FontFuncs>::Leaky g_font_funcs = LAZY_INSTANCE_INITIALIZER;
+FontFuncs& GetFontFuncs() {
+  static base::NoDestructor<FontFuncs> font_funcs;
+  return *font_funcs;
+}
 
 // Returns the raw data of the font table |tag|.
 hb_blob_t* GetFontTable(hb_face_t* face, hb_tag_t tag, void* user_data) {
   SkTypeface* typeface = reinterpret_cast<SkTypeface*>(user_data);
 
-  const size_t table_size = typeface->getTableSize(tag);
-  if (!table_size)
-    return 0;
+  if (base::FeatureList::IsEnabled(features::kHarfBuzzZeroCopyFontTable)) {
+    // Use SkTypeface::copyTableData rather than getTableData. On platforms like
+    // Windows (DirectWrite) and macOS (CoreText), copyTableData returns an
+    // SkData that wraps the underlying memory-mapped font table directly
+    // without copying. Using getTableData requires allocating a buffer and
+    // copying the entire table via memcpy, which causes UI-thread jank by
+    // triggering synchronous page faults / disk I/O for large font tables
+    // (e.g. fallback fonts).
+    sk_sp<SkData> table = typeface->copyTableData(tag);
+    if (!table) {
+      return nullptr;
+    }
 
-  std::unique_ptr<char[]> buffer(new char[table_size]);
-  if (!buffer)
-    return 0;
-  size_t actual_size = typeface->getTableData(tag, 0, table_size, buffer.get());
-  if (table_size != actual_size)
-    return 0;
+    // Wrap the table data in a read-only HarfBuzz blob. HarfBuzz will only read
+    // the specific pages/records it needs during shaping. When the blob is
+    // destroyed, the custom callback releases the SkData ref (which in turn
+    // calls IDWriteFontFace::ReleaseFontTable on Windows).
+    const char* buffer = reinterpret_cast<const char*>(table->data());
+    const size_t size = table->size();
+    return hb_blob_create(
+        buffer, base::checked_cast<unsigned int>(size), HB_MEMORY_MODE_READONLY,
+        table.release(),
+        [](void* ctx) { SkSafeUnref(static_cast<SkData*>(ctx)); });
+  }
 
-  char* buffer_raw = buffer.release();
-  return hb_blob_create(buffer_raw, static_cast<uint32_t>(table_size),
+  auto buffer = base::HeapArray<char>::Uninit(typeface->getTableSize(tag));
+  // If the buffer has no data, then `getTableSize` produced a size of 0, and
+  // the buffer allocated no memory as a result.
+  if (buffer.empty()) {
+    return nullptr;
+  }
+  size_t actual_size =
+      typeface->getTableData(tag, 0, buffer.size(), buffer.data());
+  if (buffer.size() != actual_size) {
+    return nullptr;
+  }
+
+  auto unowned_buffer = std::move(buffer).leak();
+  char* buffer_raw = unowned_buffer.data();
+  return hb_blob_create(buffer_raw,
+                        static_cast<uint32_t>(unowned_buffer.size()),
                         HB_MEMORY_MODE_WRITABLE, buffer_raw,
-                        DeleteArrayByType<char>);
+                        base::HeapArray<char>::DeleteLeakedData);
 }
 
 // For a given skia typeface, maps to its harfbuzz face and its glyphs cache.
@@ -245,7 +281,14 @@ class TypefaceData {
     data.face_ = nullptr;
   }
 
-  ~TypefaceData() { hb_face_destroy(face_); }
+  TypefaceData(const TypefaceData&) = delete;
+  TypefaceData& operator=(const TypefaceData&) = delete;
+
+  ~TypefaceData() {
+    auto* tmp = face_.get();
+    face_ = nullptr;
+    hb_face_destroy(tmp);
+  }
 
   hb_face_t* face() { return face_; }
   GlyphCache* glyphs() { return &glyphs_; }
@@ -254,12 +297,10 @@ class TypefaceData {
   TypefaceData() = delete;
 
   GlyphCache glyphs_;
-  hb_face_t* face_ = nullptr;
+  raw_ptr<hb_face_t> face_ = nullptr;
 
   // The skia typeface must outlive |face_| since it's being used by harfbuzz.
   sk_sp<SkTypeface> sk_typeface_;
-
-  DISALLOW_COPY_AND_ASSIGN(TypefaceData);
 };
 
 }  // namespace
@@ -270,7 +311,7 @@ hb_font_t* CreateHarfBuzzFont(sk_sp<SkTypeface> skia_face,
                               const FontRenderParams& params,
                               bool subpixel_rendering_suppressed) {
   // A cache from Skia font to harfbuzz typeface information.
-  using TypefaceCache = base::MRUCache<SkFontID, TypefaceData>;
+  using TypefaceCache = base::LRUCache<SkTypefaceID, TypefaceData>;
 
   constexpr int kTypefaceCacheSize = 64;
   static base::NoDestructor<TypefaceCache> face_caches(kTypefaceCacheSize);
@@ -295,7 +336,7 @@ hb_font_t* CreateHarfBuzzFont(sk_sp<SkTypeface> skia_face,
   // TODO(ckocagil): Do we need to update these params later?
   internal::ApplyRenderParams(params, subpixel_rendering_suppressed,
                               &hb_font_data->font_);
-  hb_font_set_funcs(harfbuzz_font, g_font_funcs.Get().get(), hb_font_data,
+  hb_font_set_funcs(harfbuzz_font, GetFontFuncs().get(), hb_font_data,
                     DeleteByType<FontData>);
   hb_font_make_immutable(harfbuzz_font);
   return harfbuzz_font;

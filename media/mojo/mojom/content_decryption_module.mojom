@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@ module media.mojom;
 
 import "media/mojo/mojom/decryptor.mojom";
 import "media/mojo/mojom/media_types.mojom";
-import "url/mojom/url.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 
 // See media::EmeInitDataType.
@@ -30,6 +29,7 @@ enum CdmKeyStatus {
     OUTPUT_DOWNSCALED,
     KEY_STATUS_PENDING,
     RELEASED,
+    USABLE_IN_FUTURE,
 };
 
 // See media::HdcpVersion
@@ -37,8 +37,12 @@ enum CdmKeyStatus {
 enum HdcpVersion;
 
 // See media::CdmConfig
-[Native]
-struct CdmConfig;
+struct CdmConfig {
+  string key_system;
+  bool allow_distinctive_identifier;
+  bool allow_persistent_state;
+  bool use_hw_secure_codecs;
+};
 
 // Transport layer of media::CdmPromise (see media/base/cdm_promise.h).
 // - When |success| is true, the promise is resolved and all other fields should
@@ -139,7 +143,7 @@ interface ContentDecryptionModuleClient {
   // when the session is no longer needed, or when system resources are lost.
   // After `OnSessionClosed()` is called for a `session_id`, no methods in this
   // interface should be called with the same `session_id`.
-  // See http://w3c.github.io/encrypted-media/#session-close
+  // See http://w3c.github.io/encrypted-media/#session-closed
   OnSessionClosed(string session_id, CdmSessionClosedReason reason);
 
   // Called when there has been a change in the keys in the session or their
@@ -169,18 +173,18 @@ struct CdmContext {
 
 // Factory interface used for creating ContentDecryptionModule instances.
 interface CdmFactory {
-  // Creates a CDM based on the |key_system| and |cdm_config| provided. A
-  // |key_system| is a generic term for a decryption mechanism and/or content
+  // Creates a CDM based on the `cdm_config` provided. The `key_system` in
+  // `cdm_config` is a generic term for a decryption mechanism and/or content
   // protection provider. It should be a reverse domain name,
   // e.g. "com.example.somesystem". However, this call may be initiated by an
   // untrusted process (e.g. renderer), so the implementation must fully
-  // validate |key_system| before creating the CDM. |cdm_config| specifies other
-  // properties of the CDM which may influence creation. Upon failure, the
-  // returned |cdm| and |cdm_context| will be null, and |error_message| will
-  // specify the error reason. Upon success, |cdm| and |cdm_context| will be
-  // valid, and |error_message| will be empty.
-  CreateCdm(string key_system, CdmConfig cdm_config) =>
+  // validate `key_system` before creating the CDM. `cdm_config` also specifies
+  // other properties of the CDM which may influence creation. Upon failure,
+  // the returned `cdm` and `cdm_context` will be null, and `status`
+  // will specify the error reason. Upon success, `cdm` and `cdm_context` will
+  // be valid, and `status` will be CreateCdmStatus::kSuccess.
+  CreateCdm(CdmConfig cdm_config) =>
             (pending_remote<ContentDecryptionModule>? cdm,
              CdmContext? cdm_context,
-             string error_message);
+             CreateCdmStatus status);
 };

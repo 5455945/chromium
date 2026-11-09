@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Unit tests for 'grit xmb' tool.'''
 
-from __future__ import print_function
-
 import io
 import os
 import sys
+
 if __name__ == '__main__':
   sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 import unittest
 import xml.sax
 
-from six import StringIO
+from io import StringIO
 
 from grit import grd_reader
 from grit import util
@@ -26,7 +25,8 @@ from grit.tool import xmb
 class XmbUnittest(unittest.TestCase):
   def setUp(self):
     self.res_tree = grd_reader.Parse(
-        io.BytesIO(u'''<?xml version="1.0" encoding="UTF-8"?>
+      io.BytesIO(
+        '''<?xml version="1.0" encoding="UTF-8"?>
       <grit latest_public_release="2" source_lang_id="en-US" current_release="3" base_dir=".">
         <release seq="3">
           <includes>
@@ -43,30 +43,34 @@ class XmbUnittest(unittest.TestCase):
               Yibbee
             </message>
             <message name="IDS_UNICODE">
-              Ol\xe1, \u4eca\u65e5\u306f! \U0001F60A
+              Ol\xe1, \u4eca\u65e5\u306f! \U0001f60a
             </message>
           </messages>
           <structures>
             <structure type="dialog" name="IDD_SPACYBOX" encoding="utf-16" file="grit/testdata/klonk.rc" />
           </structures>
         </release>
-      </grit>'''.encode('utf-8')), '.')
+      </grit>'''.encode()
+      ),
+      '.',
+    )
     self.xmb_file = io.BytesIO()
 
   def testNormalOutput(self):
     xmb.OutputXmb().Process(self.res_tree, self.xmb_file)
     output = self.xmb_file.getvalue().decode('utf-8')
-    self.failUnless(output.count('Joi'))
-    self.failUnless(output.count('Yibbee'))
-    self.failUnless(output.count(u'Ol\xe1, \u4eca\u65e5\u306f! \U0001F60A'))
+    self.assertTrue(output.count('Joi'))
+    self.assertTrue(output.count('Yibbee'))
+    self.assertTrue(output.count('Ol\xe1, \u4eca\u65e5\u306f! \U0001f60a'))
 
   def testLimitList(self):
     limit_file = StringIO(
-      'IDS_BONGOBINGO\nIDS_DOES_NOT_EXIST\nIDS_ALSO_DOES_NOT_EXIST')
+      'IDS_BONGOBINGO\nIDS_DOES_NOT_EXIST\nIDS_ALSO_DOES_NOT_EXIST'
+    )
     xmb.OutputXmb().Process(self.res_tree, self.xmb_file, limit_file, False)
     output = self.xmb_file.getvalue().decode('utf-8')
-    self.failUnless(output.count('Yibbee'))
-    self.failUnless(not output.count('Joi'))
+    self.assertTrue(output.count('Yibbee'))
+    self.assertTrue(not output.count('Joi'))
 
   def testLimitGrd(self):
     limit_file = StringIO('''<?xml version="1.0" encoding="UTF-8"?>
@@ -80,13 +84,15 @@ class XmbUnittest(unittest.TestCase):
         </release>
       </grit>''')
     tool = xmb.OutputXmb()
-    class DummyOpts(object):
+
+    class DummyOpts:
       extra_verbose = False
+
     tool.o = DummyOpts()
     tool.Process(self.res_tree, self.xmb_file, limit_file, True, dir='.')
     output = self.xmb_file.getvalue().decode('utf-8')
-    self.failUnless(output.count('Joi'))
-    self.failUnless(not output.count('Yibbee'))
+    self.assertTrue(output.count('Joi'))
+    self.assertTrue(not output.count('Yibbee'))
 
   def testSubstitution(self):
     self.res_tree.SetOutputLanguage('en')
@@ -94,8 +100,9 @@ class XmbUnittest(unittest.TestCase):
     self.res_tree.RunGatherers()
     xmb.OutputXmb().Process(self.res_tree, self.xmb_file)
     output = self.xmb_file.getvalue().decode('utf-8')
-    self.failUnless(output.count(
-        '<ph name="GOOD_1"><ex>excellent</ex>[GOOD]</ph>'))
+    self.assertTrue(
+      output.count('<ph name="GOOD_1"><ex>excellent</ex>[GOOD]</ph>')
+    )
 
   def testLeadingTrailingWhitespace(self):
     # Regression test for problems outputting messages with leading or
@@ -106,7 +113,7 @@ class XmbUnittest(unittest.TestCase):
     self.res_tree.RunGatherers()
     xmb.OutputXmb().Process(self.res_tree, self.xmb_file)
     output = self.xmb_file.getvalue().decode('utf-8')
-    self.failUnless(output.count('OK ? </msg>'))
+    self.assertTrue(output.count('OK ? </msg>'))
 
   def testDisallowedChars(self):
     # Validate that the invalid unicode is not accepted. Since it's not valid,
@@ -120,13 +127,14 @@ class XmbUnittest(unittest.TestCase):
             <message name="ID_FOO">''')
     # UTF-8 corresponding to to \U00110000
     # http://apps.timwhitlock.info/unicode/inspect/hex/110000
-    bad_xml.write(b'\xF4\x90\x80\x80')
+    bad_xml.write(b'\xf4\x90\x80\x80')
     bad_xml.write(b'''</message>
           </messages>
         </release>
       </grit>''')
     bad_xml.seek(0)
     self.assertRaises(xml.sax.SAXParseException, grd_reader.Parse, bad_xml, '.')
+
 
 if __name__ == '__main__':
   unittest.main()

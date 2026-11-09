@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -56,4 +56,4 @@ class EditTracker {
   RenameCategory category_;
 };
 
-#endif  // #define TOOLS_CLANG_REWRITE_TO_CHROME_STYLE_EDIT_TRACKER_H_
+#endif  // TOOLS_CLANG_REWRITE_TO_CHROME_STYLE_EDIT_TRACKER_H_

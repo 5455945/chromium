@@ -1,45 +1,104 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/wm/window_mirror_view.h"
 
 #include <algorithm>
-#include <memory>
+#include <tuple>
 
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/window_state.h"
+#include "ash/wm/window_util.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
-#include "ui/aura/window_occlusion_tracker.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
-#include "ui/gfx/transform.h"
+#include "ui/decoration/shadow.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/widget/widget.h"
+#include "ui/wm/core/shadow_controller.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
 namespace {
 
-void EnsureAllChildrenAreVisible(ui::Layer* layer) {
-  for (auto* child : layer->children())
-    EnsureAllChildrenAreVisible(child);
+void CollectWindowLayers(const aura::Window* window,
+                         base::flat_set<const ui::Layer*>& window_layers) {
+  window_layers.insert(window->layer());
+  for (const aura::Window* child : window->children()) {
+    CollectWindowLayers(child, window_layers);
+  }
+}
 
-  layer->SetVisible(true);
-  layer->SetOpacity(1);
+void EnsureWindowLayersAreVisible(
+    const base::flat_set<const ui::Layer*>& window_layers,
+    const ui::Layer* src_layer,
+    ui::Layer* mirror_layer) {
+  if (window_layers.contains(src_layer)) {
+    mirror_layer->SetVisible(true);
+    mirror_layer->SetOpacity(1.f);
+  } else if (!mirror_layer->visible()) {
+    return;
+  }
+
+  CHECK_EQ(src_layer->children().size(), mirror_layer->children().size());
+  for (size_t i = 0; i < src_layer->children().size(); ++i) {
+    EnsureWindowLayersAreVisible(window_layers, src_layer->children()[i],
+                                 mirror_layer->children()[i]);
+  }
+}
+
+void DeleteNode(ui::Layer* node) {
+  while (node->children().size()) {
+    auto child = node->children().back();
+    CHECK_EQ(child->parent(), node);
+    node->Remove(child);
+    DeleteNode(child);
+  }
+  delete node;
+}
+
+// Excludes the shadow container layer from the mirrored window layer hierarchy.
+// The shadow container (named "Shadow Parent Container" or matching the source
+// window's shadow layer) holds all shadow sublayers (nine-patch, fading
+// shadows). Removing it from the root's direct children automatically discards
+// the entire shadow.
+// TODO(oshima): Avoid relying on layer names or bounds heuristics by either
+// matching the child index from the source window's layer or supporting a
+// layer filter callback in wm::MirrorLayers to skip mirroring the shadow.
+void ExcludeShadowContainer(ui::Layer* root, ui::Layer* shadow_layer) {
+  std::vector<ui::Layer*> to_remove;
+  for (ui::Layer* child : root->children()) {
+    if (child->name() == "Decoration-Shadow:Container" ||
+        (shadow_layer && child->bounds() == shadow_layer->bounds() &&
+         (child->bounds().x() < 0 || child->bounds().y() < 0))) {
+      to_remove.push_back(child);
+    }
+  }
+
+  for (ui::Layer* child : to_remove) {
+    DeleteNode(child);
+  }
 }
 
 }  // namespace
 
 WindowMirrorView::WindowMirrorView(aura::Window* source,
-                                   bool trilinear_filtering_on_init,
-                                   bool show_non_client_view)
+                                   bool show_non_client_view,
+                                   bool sync_bounds,
+                                   bool exclude_shadow)
     : source_(source),
-      trilinear_filtering_on_init_(trilinear_filtering_on_init),
-      show_non_client_view_(show_non_client_view) {
+      show_non_client_view_(show_non_client_view),
+      sync_bounds_(sync_bounds),
+      exclude_shadow_(exclude_shadow) {
+  CHECK(source_);
   source_->AddObserver(this);
-  DCHECK(source);
 }
 
 WindowMirrorView::~WindowMirrorView() {
@@ -47,6 +106,9 @@ WindowMirrorView::~WindowMirrorView() {
   if (source_) {
     DCHECK(source_->layer());
     source_->RemoveObserver(this);
+  }
+  if (target_) {
+    target_->RemoveObserver(this);
   }
 }
 
@@ -57,20 +119,39 @@ void WindowMirrorView::RecreateMirrorLayers() {
   InitLayerOwner();
 }
 
+std::unique_ptr<ui::Layer> WindowMirrorView::RecreateLayer() {
+  // Move the mirror layer to the recreated layer for close animation,
+  // so that deleting the source_ will not delete the mirror layer.
+  std::unique_ptr<ui::Layer> old_layer = views::View::RecreateLayer();
+  if (layer_owner_) {
+    ui::Layer* old_mirror_layer = layer_owner_->release();
+    CHECK(old_mirror_layer);
+    old_layer->Add(old_mirror_layer);
+  }
+  if (source_) {
+    InitLayerOwner();
+  }
+  return old_layer;
+}
+
 void WindowMirrorView::OnWindowDestroying(aura::Window* window) {
-  DCHECK_EQ(source_, window);
   if (source_ == window) {
     source_->RemoveObserver(this);
     source_ = nullptr;
   }
+  if (target_ == window) {
+    target_->RemoveObserver(this);
+    target_ = nullptr;
+  }
 }
 
-gfx::Size WindowMirrorView::CalculatePreferredSize() const {
+gfx::Size WindowMirrorView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return show_non_client_view_ ? source_->bounds().size()
                                : GetClientAreaBounds().size();
 }
 
-void WindowMirrorView::Layout() {
+void WindowMirrorView::Layout(PassKey) {
   // If |layer_owner_| hasn't been initialized (|this| isn't on screen), no-op.
   if (!layer_owner_ || !source_)
     return;
@@ -96,6 +177,7 @@ void WindowMirrorView::Layout() {
   // Reposition such that the client area is the only part visible.
   transform.Translate(-client_area_bounds.x(), -client_area_bounds.y());
   GetMirrorLayer()->SetTransform(transform);
+  GetMirrorLayer()->SetClipRect(client_area_bounds);
 }
 
 bool WindowMirrorView::GetNeedsNotificationWhenVisibleBoundsChange() const {
@@ -111,6 +193,7 @@ void WindowMirrorView::AddedToWidget() {
   // Set and insert the new target window associated with this mirror view.
   target_ = GetWidget()->GetNativeWindow();
   target_->TrackOcclusionState();
+  target_->AddObserver(this);
 
   if (source_) {
     // Force the occlusion tracker to treat the source as visible.
@@ -123,41 +206,50 @@ void WindowMirrorView::AddedToWidget() {
 }
 
 void WindowMirrorView::RemovedFromWidget() {
-  target_ = nullptr;
+  if (target_) {
+    target_->RemoveObserver(this);
+    target_ = nullptr;
+  }
 }
 
 ui::Layer* WindowMirrorView::GetMirrorLayerForTesting() {
+  if (!layer_owner_) {
+    InitLayerOwner();
+  }
   return GetMirrorLayer();
 }
 
 void WindowMirrorView::InitLayerOwner() {
-  layer_owner_ = wm::MirrorLayers(source_, /*sync_bounds=*/false);
+  layer_owner_ = wm::MirrorLayers(source_, sync_bounds_);
   layer_owner_->root()->SetOpacity(1.f);
 
   SetPaintToLayer();
 
   ui::Layer* mirror_layer = GetMirrorLayer();
   layer()->Add(mirror_layer);
-  // This causes us to clip the non-client areas of the window.
-  layer()->SetMasksToBounds(true);
 
-  // Some extra work is needed when the source window is minimized or is on an
-  // inactive desk.
-  if (WindowState::Get(source_)->IsMinimized() ||
+  // Some extra work is needed when the source window is minimized, tucked
+  // offscreen or is on an inactive desk.
+  if (window_util::IsMinimizedOrTucked(source_) ||
       !desks_util::BelongsToActiveDesk(source_)) {
-    EnsureAllChildrenAreVisible(mirror_layer);
+    base::flat_set<const ui::Layer*> window_layers;
+    CollectWindowLayers(source_, window_layers);
+    EnsureWindowLayersAreVisible(window_layers, source_->layer(), mirror_layer);
   }
 
-  if (trilinear_filtering_on_init_) {
-    mirror_layer->AddCacheRenderSurfaceRequest();
-    mirror_layer->AddTrilinearFilteringRequest();
+  if (exclude_shadow_) {
+    ui::Decoration* shadow_decoration =
+        ::wm::ShadowController::GetShadowDecorationForWindow(source_);
+    ExcludeShadowContainer(
+        layer_owner_->root(),
+        shadow_decoration ? shadow_decoration->layer() : nullptr);
   }
 
-  Layout();
+  DeprecatedLayoutImmediately();
 }
 
 ui::Layer* WindowMirrorView::GetMirrorLayer() {
-  return layer_owner_->root();
+  return layer_owner_ ? layer_owner_->root() : nullptr;
 }
 
 gfx::Rect WindowMirrorView::GetClientAreaBounds() const {
@@ -166,7 +258,7 @@ gfx::Rect WindowMirrorView::GetClientAreaBounds() const {
   const int inset = source_->GetProperty(aura::client::kTopViewInset);
   if (inset > 0) {
     gfx::Rect bounds(source_->bounds().size());
-    bounds.Inset(0, inset, 0, 0);
+    bounds.Inset(gfx::Insets::TLBR(inset, 0, 0, 0));
     return bounds;
   }
   // The source window may not have a widget in unit tests.
@@ -176,5 +268,8 @@ gfx::Rect WindowMirrorView::GetClientAreaBounds() const {
   views::View* client_view = widget->client_view();
   return client_view->ConvertRectToWidget(client_view->GetLocalBounds());
 }
+
+BEGIN_METADATA(WindowMirrorView)
+END_METADATA
 
 }  // namespace ash

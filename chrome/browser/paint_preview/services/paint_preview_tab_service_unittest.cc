@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,11 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/paint_preview/services/paint_preview_tab_service_file_mixin.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/paint_preview/common/mock_paint_preview_recorder.h"
 #include "components/paint_preview/common/mojom/paint_preview_recorder.mojom.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/test/navigation_simulator.h"
@@ -21,6 +23,7 @@
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "ui/base/page_transition_types.h"
 
 namespace paint_preview {
 
@@ -28,32 +31,15 @@ namespace {
 
 constexpr char kFeatureName[] = "tab_service_test";
 
-class MockPaintPreviewRecorder : public mojom::PaintPreviewRecorder {
+class LaxMockPaintPreviewRecorder : public MockPaintPreviewRecorder {
  public:
-  MockPaintPreviewRecorder() = default;
-  ~MockPaintPreviewRecorder() override = default;
+  LaxMockPaintPreviewRecorder() = default;
+  ~LaxMockPaintPreviewRecorder() override = default;
 
-  MockPaintPreviewRecorder(const MockPaintPreviewRecorder&) = delete;
-  MockPaintPreviewRecorder& operator=(const MockPaintPreviewRecorder&) = delete;
-
-  void CapturePaintPreview(
-      mojom::PaintPreviewCaptureParamsPtr params,
-      mojom::PaintPreviewRecorder::CapturePaintPreviewCallback callback)
-      override {
-    std::move(callback).Run(status_, mojom::PaintPreviewCaptureResponse::New());
-  }
-
-  void SetResponse(mojom::PaintPreviewStatus status) { status_ = status; }
-
-  void BindRequest(mojo::ScopedInterfaceEndpointHandle handle) {
-    binding_.reset();
-    binding_.Bind(mojo::PendingAssociatedReceiver<mojom::PaintPreviewRecorder>(
-        std::move(handle)));
+  void CheckParams(const mojom::PaintPreviewCaptureParamsPtr& params) override {
   }
 
  private:
-  mojom::PaintPreviewStatus status_;
-  mojo::AssociatedReceiver<mojom::PaintPreviewRecorder> binding_{this};
 };
 
 std::vector<base::FilePath> ListDir(const base::FilePath& path) {
@@ -102,12 +88,12 @@ class PaintPreviewTabServiceTest : public ChromeRenderViewHostTestHarness {
 
   PaintPreviewTabService* GetService() { return service_.get(); }
 
-  void OverrideInterface(MockPaintPreviewRecorder* recorder) {
+  void OverrideInterface(LaxMockPaintPreviewRecorder* recorder) {
     blink::AssociatedInterfaceProvider* remote_interfaces =
-        web_contents()->GetMainFrame()->GetRemoteAssociatedInterfaces();
+        web_contents()->GetPrimaryMainFrame()->GetRemoteAssociatedInterfaces();
     remote_interfaces->OverrideBinderForTesting(
         mojom::PaintPreviewRecorder::Name_,
-        base::BindRepeating(&MockPaintPreviewRecorder::BindRequest,
+        base::BindRepeating(&LaxMockPaintPreviewRecorder::BindRequest,
                             base::Unretained(recorder)));
   }
 
@@ -122,10 +108,8 @@ class PaintPreviewTabServiceTest : public ChromeRenderViewHostTestHarness {
     for (const auto& i : tab_ids) {
       auto key_path = path.AppendASCII(base::NumberToString(i));
       EXPECT_TRUE(base::CreateDirectory(key_path));
-      EXPECT_EQ(static_cast<size_t>(
-                    base::WriteFile(key_path.AppendASCII("proto.pb"),
-                                    fake_content.data(), fake_content.size())),
-                fake_content.size());
+      EXPECT_TRUE(
+          base::WriteFile(key_path.AppendASCII("proto.pb"), fake_content));
     }
 
     return std::make_unique<PaintPreviewTabService>(
@@ -142,12 +126,12 @@ class PaintPreviewTabServiceTest : public ChromeRenderViewHostTestHarness {
 TEST_F(PaintPreviewTabServiceTest, CaptureTab) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(mojom::PaintPreviewStatus::kOk);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
   OverrideInterface(&recorder);
 
   auto* service = GetService();
-  service->CaptureTab(kTabId, web_contents(), false,
+  service->CaptureTab(kTabId, web_contents(), false, 1.0, 10, 20,
                       base::BindOnce([](PaintPreviewTabService::Status status) {
                         EXPECT_EQ(status, PaintPreviewTabService::Status::kOk);
                       }));
@@ -165,6 +149,7 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTab) {
   service->TabClosed(kTabId);
   EXPECT_FALSE(service->HasCaptureForTab(kTabId));
   task_environment()->RunUntilIdle();
+
   service->GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&FileManager::DirectoryExists, file_manager, key),
@@ -175,13 +160,13 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTab) {
 TEST_F(PaintPreviewTabServiceTest, CaptureTabFailed) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(mojom::PaintPreviewStatus::kFailed);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse(base::unexpected(mojom::PaintPreviewStatus::kFailed));
   OverrideInterface(&recorder);
 
   auto* service = GetService();
   service->CaptureTab(
-      kTabId, web_contents(), false,
+      kTabId, web_contents(), false, 1.0, 10, 20,
       base::BindOnce([](PaintPreviewTabService::Status status) {
         EXPECT_EQ(status, PaintPreviewTabService::Status::kCaptureFailed);
       }));
@@ -209,12 +194,12 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTabFailed) {
 TEST_F(PaintPreviewTabServiceTest, CaptureTabTwice) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(mojom::PaintPreviewStatus::kOk);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
   OverrideInterface(&recorder);
 
   auto* service = GetService();
-  service->CaptureTab(kTabId, web_contents(), false,
+  service->CaptureTab(kTabId, web_contents(), false, 1.0, 10, 20,
                       base::BindOnce([](PaintPreviewTabService::Status status) {
                         EXPECT_EQ(status, PaintPreviewTabService::Status::kOk);
                       }));
@@ -232,7 +217,7 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTabTwice) {
       base::BindOnce(&FileManager::CreateOrGetDirectory, file_manager, key,
                      false),
       base::BindOnce(
-          [](base::FilePath* out, const absl::optional<base::FilePath>& path) {
+          [](base::FilePath* out, const std::optional<base::FilePath>& path) {
             EXPECT_TRUE(path.has_value());
             *out = path.value();
           },
@@ -241,7 +226,8 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTabTwice) {
   auto files_1 = ListDir(path_1);
   ASSERT_EQ(1U, files_1.size());
 
-  service->CaptureTab(kTabId, web_contents(), false,
+  recorder.SetResponse();
+  service->CaptureTab(kTabId, web_contents(), false, 1.0, 10, 20,
                       base::BindOnce([](PaintPreviewTabService::Status status) {
                         EXPECT_EQ(status, PaintPreviewTabService::Status::kOk);
                       }));
@@ -257,7 +243,7 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTabTwice) {
       base::BindOnce(&FileManager::CreateOrGetDirectory, file_manager, key,
                      false),
       base::BindOnce(
-          [](base::FilePath* out, const absl::optional<base::FilePath>& path) {
+          [](base::FilePath* out, const std::optional<base::FilePath>& path) {
             EXPECT_TRUE(path.has_value());
             *out = path.value();
           },
@@ -367,7 +353,7 @@ TEST_F(PaintPreviewTabServiceTest, EarlyDeletion) {
   EXPECT_FALSE(service->CacheInitialized());
   EXPECT_FALSE(service->HasCaptureForTab(1));
   task_environment()->RunUntilIdle();
-  task_environment()->AdvanceClock(base::TimeDelta::FromSeconds(10));
+  task_environment()->AdvanceClock(base::Seconds(10));
   task_environment()->RunUntilIdle();
 
   EXPECT_TRUE(service->CacheInitialized());
@@ -384,7 +370,7 @@ TEST_F(PaintPreviewTabServiceTest, EarlyAudit) {
   EXPECT_FALSE(service->HasCaptureForTab(1));
   EXPECT_FALSE(service->HasCaptureForTab(3));
   task_environment()->RunUntilIdle();
-  task_environment()->AdvanceClock(base::TimeDelta::FromSeconds(10));
+  task_environment()->AdvanceClock(base::Seconds(10));
   task_environment()->RunUntilIdle();
 
   EXPECT_TRUE(service->CacheInitialized());
@@ -395,12 +381,12 @@ TEST_F(PaintPreviewTabServiceTest, EarlyAudit) {
 TEST_F(PaintPreviewTabServiceTest, EarlyCapture) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(mojom::PaintPreviewStatus::kOk);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
   OverrideInterface(&recorder);
 
   auto service = BuildServiceWithCache({});
-  service->CaptureTab(kTabId, web_contents(), false,
+  service->CaptureTab(kTabId, web_contents(), false, 1.0, 10, 20,
                       base::BindOnce([](PaintPreviewTabService::Status status) {
                         EXPECT_EQ(status, PaintPreviewTabService::Status::kOk);
                       }));
@@ -429,8 +415,8 @@ TEST_F(PaintPreviewTabServiceTest, EarlyCapture) {
 TEST_F(PaintPreviewTabServiceTest, CaptureTabAndCleanup) {
   const int kTabId = 1U;
 
-  MockPaintPreviewRecorder recorder;
-  recorder.SetResponse(mojom::PaintPreviewStatus::kOk);
+  LaxMockPaintPreviewRecorder recorder;
+  recorder.SetResponse();
   OverrideInterface(&recorder);
 
   auto service = BuildServiceWithCache({kTabId + 1});
@@ -442,12 +428,11 @@ TEST_F(PaintPreviewTabServiceTest, CaptureTabAndCleanup) {
                                 .AppendASCII(base::NumberToString(kTabId + 1));
   // The threshold for cleanup is 25 MB.
   std::string data(25 * 1000 * 1000, 'x');
-  EXPECT_TRUE(base::WriteFile(old_path.AppendASCII("foo.txt"), data.data(),
-                              data.size()));
+  EXPECT_TRUE(base::WriteFile(old_path.AppendASCII("foo.txt"), data));
   EXPECT_TRUE(base::PathExists(old_path));
   EXPECT_TRUE(service->HasCaptureForTab(kTabId + 1));
 
-  service->CaptureTab(kTabId, web_contents(), false,
+  service->CaptureTab(kTabId, web_contents(), false, 1.0, 10, 20,
                       base::BindOnce([](PaintPreviewTabService::Status status) {
                         EXPECT_EQ(status, PaintPreviewTabService::Status::kOk);
                       }));

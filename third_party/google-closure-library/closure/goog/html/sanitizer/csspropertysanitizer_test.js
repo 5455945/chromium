@@ -1,16 +1,8 @@
-// Copyright 2018 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /** @fileoverview Tests for {@link goog.html.sanitizer.CssPropertySanitizer} */
 
@@ -31,6 +23,7 @@ const NAME = 'foo';
  * @param {string} name
  * @param {string} value
  * @return {!CSSStyleDeclaration}
+ * @suppress {checkTypes} suppression added to enable type checking
  */
 function getProcessedPropertyValue(name, value) {
   const div = document.createElement('div');
@@ -98,12 +91,8 @@ testSuite({
   testBrowserBehavior_escapedQuotes() {
     // Verify how browsers deal with escaped quotes inside strings.
     let expectedValue;
-    if (product.CHROME || product.FIREFOX) {
+    if (product.CHROME || product.FIREFOX || product.SAFARI) {
       expectedValue = 'url("http://foo.com/a\\")")';
-    } else if (product.SAFARI) {
-      // It interprets \" as ", urlescapes it and closes the url() call for us
-      // at the end of input.
-      expectedValue = 'url("http://foo.com/a%22)")';
     } else if (product.IE || product.EDGE) {
       // Same for IE, except that no urlescaping happens, so even the output
       // value is malformed.
@@ -113,10 +102,8 @@ testSuite({
         expectedValue,
         getProcessedPropertyValue(
             'background-image', 'url("http://foo.com/a\\")'));
-    if (product.CHROME || product.FIREFOX) {
+    if (product.CHROME || product.FIREFOX || product.SAFARI) {
       expectedValue = 'url("http://foo.com/a\\"b)")';
-    } else if (product.SAFARI) {
-      expectedValue = 'url("http://foo.com/a%22b)")';
     } else if (product.IE || product.EDGE) {
       expectedValue = 'url("http://foo.com/a"b)")';
     }
@@ -130,12 +117,8 @@ testSuite({
     // Same as above, but check what happens if there are other values after the
     // string-based one.
     let expectedValue;
-    if (product.CHROME || product.FIREFOX) {
+    if (product.CHROME || product.FIREFOX || product.SAFARI) {
       expectedValue = 'url("http://foo.com/a\\"), rgba(1,1,1,0)")';
-    } else if (product.SAFARI) {
-      // Safari and IE/EDGE do the same thing as above, it's more obvious from
-      // this input.
-      expectedValue = 'url("http://foo.com/a%22),%20rgba(1,1,1,0)")';
     } else if (product.IE || product.EDGE) {
       expectedValue = 'url("http://foo.com/a"), rgba(1,1,1,0)")';
     }
@@ -162,13 +145,14 @@ testSuite({
             'background-image', 'url("http://foo.com", abc)'));
   },
 
+  /** @suppress {missingProperties} suppression added to enable type checking */
   testBrowserBehavior_relative() {
     // Safari is the only browser that resolves relative URLs.
     assertTrue(
         getProcessedPropertyValue('background-image', 'url(/foo.com/a.jpg)')
-            .startsWith(product.SAFARI ? 'url("http://' : 'url("/foo.com'));
+            .startsWith('url("/foo.com'));
     assertTrue(getProcessedPropertyValue('background-image', 'url(a.jpg)')
-                   .startsWith(product.SAFARI ? 'url("http://' : 'url("a.jpg'));
+                   .startsWith('url("a.jpg'));
   },
 
   testSanitizeProperty_basic() {
@@ -216,6 +200,7 @@ testSuite({
         CssPropertySanitizer.sanitizeProperty(NAME, expectedValue));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testSanitizeProperty_url() {
     const url = 'url("http://foo.com")';
     assertEquals(null, CssPropertySanitizer.sanitizeProperty(NAME, url));
@@ -249,5 +234,16 @@ testSuite({
         null,
         CssPropertySanitizer.sanitizeProperty(
             NAME, 'rgba(1,1,1,0), url(http://foo.com)', SafeUrl.sanitize));
+  },
+
+  testSanitizeProperty_mixedCaseFunction() {
+    const lowerCaseValue = 'translatex(10px)';
+    assertEquals(
+        lowerCaseValue,
+        CssPropertySanitizer.sanitizeProperty(NAME, lowerCaseValue));
+    const mixedCaseValue = 'translateX(10px)';
+    assertEquals(
+        mixedCaseValue,
+        CssPropertySanitizer.sanitizeProperty(NAME, mixedCaseValue));
   }
 });

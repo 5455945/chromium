@@ -1,11 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_RENDER_TEXT_TEST_API_H_
 #define UI_GFX_RENDER_TEXT_TEST_API_H_
 
-#include "base/macros.h"
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
 #include "ui/gfx/break_list.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/render_text.h"
@@ -17,6 +19,9 @@ namespace test {
 class RenderTextTestApi {
  public:
   RenderTextTestApi(RenderText* render_text) : render_text_(render_text) {}
+
+  RenderTextTestApi(const RenderTextTestApi&) = delete;
+  RenderTextTestApi& operator=(const RenderTextTestApi&) = delete;
 
   static const cc::PaintFlags& GetRendererPaint(
       internal::SkiaTextRenderer* renderer) {
@@ -42,9 +47,11 @@ class RenderTextTestApi {
     render_text_->Draw(canvas, select_all);
   }
 
-  const std::u16string& GetLayoutText() {
-    return render_text_->GetLayoutText();
+  HorizontalAlignment GetCurrentHorizontalAlignment() {
+    return render_text_->GetCurrentHorizontalAlignment();
   }
+
+  std::u16string_view GetLayoutText() { return render_text_->GetLayoutText(); }
 
   const BreakList<SkColor>& colors() const { return render_text_->colors(); }
 
@@ -58,6 +65,14 @@ class RenderTextTestApi {
 
   const BreakList<Font::Weight>& weights() const {
     return render_text_->weights();
+  }
+
+  const BreakList<cc::PaintFlags::Style>& fill_styles() const {
+    return render_text_->fill_styles();
+  }
+
+  const BreakList<SkScalar>& stroke_widths() const {
+    return render_text_->stroke_widths();
   }
 
   const internal::StyleArray& styles() const { return render_text_->styles(); }
@@ -117,9 +132,7 @@ class RenderTextTestApi {
   }
 
  private:
-  RenderText* render_text_;
-
-  DISALLOW_COPY_AND_ASSIGN(RenderTextTestApi);
+  raw_ptr<RenderText> render_text_;
 };
 
 }  // namespace test

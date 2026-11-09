@@ -1,46 +1,49 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/webui/shared_resources_data_source_ios.h"
+#import "ios/web/webui/shared_resources_data_source_ios.h"
 
-#include <stddef.h>
+#import <stddef.h>
 
-#include "base/check.h"
-#include "base/memory/ref_counted_memory.h"
-#include "base/strings/string_util.h"
+#import "base/check.h"
+#import "base/memory/ref_counted_memory.h"
+#import "base/strings/string_util.h"
+#import "ios/web/grit/ios_web_resources.h"
+#import "ios/web/grit/ios_web_resources_map.h"
 #import "ios/web/public/web_client.h"
-#include "net/base/mime_util.h"
-#include "ui/base/webui/resource_path.h"
-#include "ui/base/webui/web_ui_util.h"
-#include "ui/resources/grit/webui_generated_resources.h"
-#include "ui/resources/grit/webui_generated_resources_map.h"
-#include "ui/resources/grit/webui_resources.h"
-#include "ui/resources/grit/webui_resources_map.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/webui/web_ui_constants.h"
+#import "mojo/public/js/grit/mojo_bindings_resources.h"
+#import "mojo/public/js/grit/mojo_bindings_resources_map.h"
+#import "net/base/mime_util.h"
+#import "ui/base/webui/resource_path.h"
+#import "ui/base/webui/web_ui_util.h"
+#import "ui/webui/resources/grit/webui_resources.h"
+#import "ui/webui/resources/grit/webui_resources_map.h"
 
 namespace web {
 
 namespace {
 
-// Value duplicated from content/public/common/url_constants.h
-// TODO(stuartmorgan): Revisit how to share this in a more maintainable way.
-const char kWebUIResourcesHost[] = "resources";
-
 // Maps a path name (i.e. "/js/path.js") to a resource map entry. Returns
 // nullptr if not found.
-const webui::ResourcePath* PathToResource(const std::string& path) {
-  for (size_t i = 0; i < kWebuiResourcesSize; ++i) {
-    if (path == kWebuiResources[i].path)
-      return &kWebuiResources[i];
+const webui::ResourcePath* PathToResource(std::string_view path) {
+  for (const auto& resource : kWebuiResources) {
+    if (path == resource.path) {
+      return &resource;
+    }
   }
-  for (size_t i = 0; i < kWebuiGeneratedResourcesSize; ++i) {
-    if (path == kWebuiGeneratedResources[i].path)
-      return &kWebuiGeneratedResources[i];
+  for (const auto& resource : kMojoBindingsResources) {
+    if (path == resource.path) {
+      return &resource;
+    }
   }
+  for (const auto& resource : kIosWebResources) {
+    if (path == resource.path) {
+      return &resource;
+    }
+  }
+
   return nullptr;
 }
 
@@ -55,7 +58,7 @@ std::string SharedResourcesDataSourceIOS::GetSource() const {
 }
 
 void SharedResourcesDataSourceIOS::StartDataRequest(
-    const std::string& path,
+    std::string_view path,
     URLDataSourceIOS::GotDataCallback callback) {
   const webui::ResourcePath* resource = PathToResource(path);
   DCHECK(resource) << " path: " << path;
@@ -65,8 +68,8 @@ void SharedResourcesDataSourceIOS::StartDataRequest(
 
   int idr = resource ? resource->id : -1;
   if (idr == IDR_WEBUI_CSS_TEXT_DEFAULTS_CSS) {
-    std::string css = webui::GetWebUiCssTextDefaults();
-    bytes = base::RefCountedString::TakeString(&css);
+    bytes = base::MakeRefCounted<base::RefCountedString>(
+        webui::GetWebUiCssTextDefaults());
   } else {
     bytes = web_client->GetDataResourceBytes(idr);
   }
@@ -75,7 +78,7 @@ void SharedResourcesDataSourceIOS::StartDataRequest(
 }
 
 std::string SharedResourcesDataSourceIOS::GetMimeType(
-    const std::string& path) const {
+    std::string_view path) const {
   std::string mime_type;
   net::GetMimeTypeFromFile(base::FilePath().AppendASCII(path), &mime_type);
   return mime_type;

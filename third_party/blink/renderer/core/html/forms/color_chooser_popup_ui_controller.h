@@ -26,6 +26,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_COLOR_CHOOSER_POPUP_UI_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_COLOR_CHOOSER_POPUP_UI_CONTROLLER_H_
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/forms/color_chooser_ui_controller.h"
 #include "third_party/blink/renderer/core/page/page_popup_client.h"
@@ -55,17 +57,19 @@ class CORE_EXPORT ColorChooserPopupUIController final
 
   // ColorChooser functions
   void EndChooser() override;
-  AXObject* RootAXObject() override;
+  AXObject* RootAXObject(Element* popup_owner) override;
+  bool IsPickerVisible() const override;
 
   // PagePopupClient functions:
-  void WriteDocument(SharedBuffer*) override;
+  void WriteDocument(SegmentedBuffer&) override;
   Locale& GetLocale() override;
-  void SetValueAndClosePopup(int, const String&) override;
+  void SetValueAndClosePopup(int, const String&, bool) override;
   void SetValue(const String&) override;
   void CancelPopup() override;
   Element& OwnerElement() override;
   void DidClosePopup() override;
   PagePopupController* CreatePagePopupController(Page&, PagePopup&) override;
+  void AdjustSettings(Settings& popup_settings) override;
 
   void OpenEyeDropper();
   void EyeDropperResponseHandler(bool success, uint32_t color);
@@ -75,12 +79,12 @@ class CORE_EXPORT ColorChooserPopupUIController final
 
   void OpenPopup();
 
-  void WriteColorPickerDocument(SharedBuffer*);
-  void WriteColorSuggestionPickerDocument(SharedBuffer*);
+  void WriteColorPickerDocument(SegmentedBuffer&);
+  void WriteColorSuggestionPickerDocument(SegmentedBuffer&);
 
   Member<ChromeClient> chrome_client_;
-  PagePopup* popup_;
-  Locale& locale_;
+  raw_ptr<PagePopup, UnprotectedInRelease | DanglingUntriaged> popup_;
+  const raw_ref<Locale, UnprotectedInRelease | DanglingUntriaged> locale_;
   HeapMojoRemote<mojom::blink::EyeDropperChooser> eye_dropper_chooser_;
 };
 

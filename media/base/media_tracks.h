@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "media/base/media_export.h"
 #include "media/base/media_track.h"
+#include "media/base/stream_parser.h"
 
 namespace media {
 
@@ -22,37 +22,52 @@ class MEDIA_EXPORT MediaTracks {
  public:
   using MediaTracksCollection = std::vector<std::unique_ptr<MediaTrack>>;
 
+  template <typename T>
+  using ConfigMap = std::map<StreamParser::TrackId, T>;
+
   MediaTracks();
+
+  MediaTracks(const MediaTracks&) = delete;
+  MediaTracks& operator=(const MediaTracks&) = delete;
+
   ~MediaTracks();
 
   // Adds a new audio track. The |bytestreamTrackId| must uniquely identify the
   // track within the bytestream.
   MediaTrack* AddAudioTrack(const AudioDecoderConfig& config,
-                            StreamParser::TrackId bytestream_track_id,
+                            bool enabled,
+                            StreamParser::TrackId stream_id,
                             const MediaTrack::Kind& kind,
                             const MediaTrack::Label& label,
-                            const MediaTrack::Language& language);
+                            const MediaTrack::Language& language,
+                            bool exclusive = true);
   // Adds a new video track. The |bytestreamTrackId| must uniquely identify the
   // track within the bytestream.
   MediaTrack* AddVideoTrack(const VideoDecoderConfig& config,
-                            StreamParser::TrackId bytestream_track_id,
+                            bool enabled,
+                            StreamParser::TrackId stream_id,
                             const MediaTrack::Kind& kind,
                             const MediaTrack::Label& label,
                             const MediaTrack::Language& language);
 
   const MediaTracksCollection& tracks() const { return tracks_; }
 
+  const ConfigMap<AudioDecoderConfig>& GetAudioConfigs() const {
+    return audio_configs_;
+  }
+  const ConfigMap<VideoDecoderConfig>& GetVideoConfigs() const {
+    return video_configs_;
+  }
+
   const AudioDecoderConfig& getAudioConfig(
-      StreamParser::TrackId bytestream_track_id) const;
+      StreamParser::TrackId stream_id) const;
   const VideoDecoderConfig& getVideoConfig(
-      StreamParser::TrackId bytestream_track_id) const;
+      StreamParser::TrackId stream_id) const;
 
  private:
   MediaTracksCollection tracks_;
-  std::map<StreamParser::TrackId, AudioDecoderConfig> audio_configs_;
-  std::map<StreamParser::TrackId, VideoDecoderConfig> video_configs_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaTracks);
+  ConfigMap<AudioDecoderConfig> audio_configs_;
+  ConfigMap<VideoDecoderConfig> video_configs_;
 };
 
 }  // namespace media

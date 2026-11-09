@@ -1,18 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_BLUETOOTH_BLUETOOTH_DEVICE_CHOOSER_CONTROLLER_H_
 #define CONTENT_BROWSER_BLUETOOTH_BLUETOOTH_DEVICE_CHOOSER_CONTROLLER_H_
 
+#include <optional>
 #include <string>
 #include <unordered_set>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
+#include "content/browser/devtools/devtools_device_request_prompt_info.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/bluetooth_chooser.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
 
 namespace device {
@@ -20,12 +23,11 @@ class BluetoothAdapter;
 class BluetoothDevice;
 class BluetoothDiscoverySession;
 class BluetoothDiscoveryFilter;
-}
+}  // namespace device
 
 namespace content {
 
 class RenderFrameHost;
-class WebContents;
 class WebBluetoothServiceImpl;
 
 // Class that interacts with a chooser and starts a bluetooth discovery session.
@@ -46,7 +48,7 @@ class CONTENT_EXPORT BluetoothDeviceChooserController final {
   // |adapter| should be the adapter used to scan for Bluetooth devices.
   BluetoothDeviceChooserController(
       WebBluetoothServiceImpl* web_bluetooth_service_,
-      RenderFrameHost* render_frame_host,
+      RenderFrameHost& render_frame_host,
       scoped_refptr<device::BluetoothAdapter> adapter);
   ~BluetoothDeviceChooserController();
 
@@ -94,10 +96,31 @@ class CONTENT_EXPORT BluetoothDeviceChooserController final {
           TestScanDurationSetting::IMMEDIATE_TIMEOUT);
 
   static std::unique_ptr<device::BluetoothDiscoveryFilter> ComputeScanFilter(
-      const absl::optional<
+      const std::optional<
           std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>>& filters);
 
  private:
+  class BluetoothDeviceRequestPromptInfo final
+      : public DevtoolsDeviceRequestPromptInfo {
+   public:
+    explicit BluetoothDeviceRequestPromptInfo(
+        BluetoothDeviceChooserController& controller);
+    ~BluetoothDeviceRequestPromptInfo() override;
+
+    std::vector<DevtoolsDeviceRequestPromptDevice> GetDevices() override;
+    bool SelectDevice(const std::string& device_id) override;
+    void Cancel() override;
+
+   private:
+    // The controller that owns this instance.
+    raw_ref<BluetoothDeviceChooserController> controller_;
+  };
+
+  // Checks adapter permissions and powered states and starts getting devices
+  // if the adapter status allows us to do so. It can be called multiple times
+  // to re-check the adapter status when it has changed.
+  void CheckAdapterAndStartGettingDevices();
+
   // Populates the chooser with the GATT connected devices.
   void PopulateConnectedDevices();
 
@@ -131,12 +154,17 @@ class CONTENT_EXPORT BluetoothDeviceChooserController final {
 
   // The adapter used to get existing devices and start a discovery session.
   scoped_refptr<device::BluetoothAdapter> adapter_;
-  // The WebBluetoothServiceImpl that owns this instance.
-  WebBluetoothServiceImpl* web_bluetooth_service_;
-  // The RenderFrameHost that owns web_bluetooth_service_.
-  RenderFrameHost* render_frame_host_;
-  // The WebContents that owns render_frame_host_.
-  WebContents* web_contents_;
+  // The WebBluetoothServiceImpl that owns this instance, and the
+  // RenderFrameHost that owns `web_bluetooth_service_`.
+  // Destroying `chooser_` during member destruction may synchronously destroy
+  // the hosting WebContents and therefore both `web_bluetooth_service_` and
+  // `render_frame_host_`. This is safe because neither is accessed after
+  // `chooser_` is destroyed.
+  raw_ptr<WebBluetoothServiceImpl, DisableDanglingPtrDetection>
+      web_bluetooth_service_;
+  raw_ref<RenderFrameHost, DisableDanglingPtrDetection> render_frame_host_;
+
+  BluetoothDeviceRequestPromptInfo prompt_info_;
 
   // Contains the filters and optional services used when scanning.
   blink::mojom::WebBluetoothRequestDeviceOptionsPtr options_;

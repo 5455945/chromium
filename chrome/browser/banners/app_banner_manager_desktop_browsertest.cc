@@ -1,40 +1,47 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/banners/app_banner_manager_desktop.h"
 
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/auto_reset.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/banners/app_banner_manager_browsertest_base.h"
-#include "chrome/browser/banners/app_banner_manager_desktop.h"
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
-#include "chrome/browser/web_applications/components/external_install_options.h"
-#include "chrome/browser/web_applications/components/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/components/web_app_constants.h"
-#include "chrome/browser/web_applications/components/web_app_helpers.h"
-#include "chrome/browser/web_applications/components/web_app_provider_base.h"
+#include "chrome/browser/ui/web_applications/web_app_dialogs.h"
+#include "chrome/browser/web_applications/external_install_options.h"
+#include "chrome/browser/web_applications/externally_managed_app_manager.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
+#include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/password_manager/content/common/web_ui_constants.h"
+#include "components/password_manager/core/common/password_manager_features.h"
 #include "components/webapps/browser/banners/app_banner_metrics.h"
 #include "components/webapps/browser/banners/app_banner_settings_helper.h"
+#include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/browser/uninstall_result_code.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -48,10 +55,8 @@ class AppBannerManagerDesktopBrowserTest
     : public AppBannerManagerBrowserTestBase {
  public:
   AppBannerManagerDesktopBrowserTest() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    // With Lacros, web apps are not installed using the Ash browser.
-    scoped_feature_list_.InitAndDisableFeature(features::kWebAppsCrosapi);
-#endif
+    scoped_feature_list_.InitAndDisableFeature(
+        ::features::kWebAppInstallDialog);
   }
 
   void SetUp() override {
@@ -60,15 +65,7 @@ class AppBannerManagerDesktopBrowserTest
   }
 
   void SetUpOnMainThread() override {
-    // Trigger banners instantly.
-    AppBannerSettingsHelper::SetTotalEngagementToTrigger(0);
-    chrome::SetAutoAcceptPWAInstallConfirmationForTesting(true);
-
     AppBannerManagerBrowserTestBase::SetUpOnMainThread();
-  }
-
-  void TearDown() override {
-    chrome::SetAutoAcceptPWAInstallConfirmationForTesting(false);
   }
 
   AppBannerManagerDesktopBrowserTest(
@@ -78,7 +75,11 @@ class AppBannerManagerDesktopBrowserTest
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-};
+  base::AutoReset<web_app::InstallDialogTestResponse>
+      auto_accept_pwa_install_confirmation_{
+          web_app::SetPwaInstallationAutoRespondForTesting(
+              web_app::InstallDialogTestResponse::kAcceptAndLaunch)};
+};  // namespace webapps
 
 IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
                        WebAppBannerResolvesUserChoice) {
@@ -89,21 +90,22 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(browser(),
-                                 GetBannerURLWithAction("stash_event"));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), GetBannerURLWithAction("stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
     // Trigger the installation prompt and wait for installation to occur.
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
-    ExecuteScript(browser(), "callStashedPrompt();", true /* with_gesture */);
+    manager->SetCompleteCallback(run_loop.QuitClosure());
+    ExecuteScript(web_contents, "callStashedPrompt();",
+                  true /* with_gesture */);
     run_loop.Run();
-    EXPECT_EQ(State::COMPLETE, manager->state());
+    EXPECT_EQ(State::COMPLETE, manager->state_for_testing());
   }
 
   // Ensure that the userChoice promise resolves.
@@ -115,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
                             blink::mojom::DisplayMode::kStandalone, 1);
 }
 
-// TODO(crbug.com/988292): Flakes on most platforms.
+// TODO(crbug.com/40637899): Flakes on most platforms.
 IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
                        DISABLED_WebAppBannerFiresAppInstalled) {
   content::WebContents* web_contents =
@@ -124,35 +126,37 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(
-        browser(), GetBannerURLWithAction("verify_appinstalled_stash_event"));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), GetBannerURLWithAction("verify_appinstalled_stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
     // Trigger the installation prompt and wait for installation to occur.
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetCompleteCallback(run_loop.QuitClosure());
 
     const GURL url = GetBannerURL();
     bool callback_called = false;
 
     web_app::SetInstalledCallbackForTesting(
-        base::BindLambdaForTesting([&](const web_app::AppId& installed_app_id,
-                                       web_app::InstallResultCode code) {
-          EXPECT_EQ(web_app::InstallResultCode::kSuccessNewInstall, code);
-          EXPECT_EQ(installed_app_id, web_app::GenerateAppIdFromURL(url));
+        base::BindLambdaForTesting([&](const webapps::AppId& installed_app_id,
+                                       webapps::InstallResultCode code) {
+          EXPECT_EQ(webapps::InstallResultCode::kSuccessNewInstall, code);
+          EXPECT_EQ(installed_app_id, web_app::GenerateAppId(
+                                          /*manifest_id=*/std::nullopt, url));
           callback_called = true;
         }));
 
-    ExecuteScript(browser(), "callStashedPrompt();", true /* with_gesture */);
+    ExecuteScript(web_contents, "callStashedPrompt();",
+                  true /* with_gesture */);
 
     run_loop.Run();
 
-    EXPECT_EQ(State::COMPLETE, manager->state());
+    EXPECT_EQ(State::COMPLETE, manager->state_for_testing());
     EXPECT_TRUE(callback_called);
   }
 
@@ -162,19 +166,26 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
   EXPECT_EQ(title, watcher.WaitAndGetTitle());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest, DestroyWebContents) {
+// TODO(crbug.com/40817384): Flaky failures.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#define MAYBE_DestroyWebContents DISABLED_DestroyWebContents
+#else
+#define MAYBE_DestroyWebContents DestroyWebContents
+#endif
+IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
+                       MAYBE_DestroyWebContents) {
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   auto* manager = TestAppBannerManagerDesktop::FromWebContents(web_contents);
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(browser(),
-                                 GetBannerURLWithAction("stash_event"));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), GetBannerURLWithAction("stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
@@ -183,14 +194,15 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest, DestroyWebContents) {
     bool callback_called = false;
 
     web_app::SetInstalledCallbackForTesting(
-        base::BindLambdaForTesting([&](const web_app::AppId& installed_app_id,
-                                       web_app::InstallResultCode code) {
-          EXPECT_EQ(web_app::InstallResultCode::kWebContentsDestroyed, code);
+        base::BindLambdaForTesting([&](const webapps::AppId& installed_app_id,
+                                       webapps::InstallResultCode code) {
+          EXPECT_EQ(webapps::InstallResultCode::kWebContentsDestroyed, code);
           callback_called = true;
           run_loop.Quit();
         }));
 
-    ExecuteScript(browser(), "callStashedPrompt();", true /* with_gesture */);
+    ExecuteScript(web_contents, "callStashedPrompt();",
+                  true /* with_gesture */);
 
     // Closing WebContents destroys WebContents and AppBannerManager.
     browser()->tab_strip_model()->CloseWebContentsAt(
@@ -213,20 +225,19 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GetBannerURLWithManifestAndQuery("/banners/minimal-ui.json",
-                                                    "action", "stash_event"));
+                                                    "action", "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   // Install the app via the menu instead of the banner.
-  chrome::SetAutoAcceptPWAInstallConfirmationForTesting(true);
-  browser()->command_controller()->ExecuteCommand(IDC_INSTALL_PWA);
+  chrome::BrowserCommandController::From(browser())->ExecuteCommand(
+      IDC_INSTALL_PWA);
   manager->AwaitAppInstall();
-  chrome::SetAutoAcceptPWAInstallConfirmationForTesting(false);
 
   EXPECT_FALSE(manager->IsPromptAvailableForTesting());
 
@@ -244,22 +255,22 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GetBannerURLWithManifestAndQuery("/banners/fullscreen.json",
-                                                    "action", "stash_event"));
+                                                    "action", "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   // Install the app via the menu instead of the banner.
-  chrome::SetAutoAcceptPWAInstallConfirmationForTesting(true);
-  browser()
-      ->window()
-      ->ExecutePageActionIconForTesting(PageActionIconType::kPwaInstall);
+  actions::ActionManager::Get()
+      .FindAction(kActionInstallPwa,
+                  BrowserActions::From(browser())->root_action_item())
+      ->InvokeAction();
+
   manager->AwaitAppInstall();
-  chrome::SetAutoAcceptPWAInstallConfirmationForTesting(false);
 
   EXPECT_FALSE(manager->IsPromptAvailableForTesting());
 
@@ -277,21 +288,21 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
   web_app::ExternalInstallOptions options =
       web_app::CreateInstallOptions(GetBannerURL());
   options.install_source = web_app::ExternalInstallSource::kExternalPolicy;
-  options.user_display_mode = web_app::DisplayMode::kBrowser;
-  web_app::ExternallyManagedAppManagerInstall(browser()->profile(), options);
+  options.user_display_mode = web_app::mojom::UserDisplayMode::kBrowser;
+  web_app::ExternallyManagedAppManagerInstall(browser()->GetProfile(), options);
 
   // Run promotability check.
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(browser(), GetBannerURL());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetBannerURL()));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
-  EXPECT_EQ(AppBannerManager::InstallableWebAppCheckResult::kPromotable,
-            manager->GetInstallableWebAppCheckResultForTesting());
+  EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
+            manager->GetInstallableWebAppCheckResult());
   EXPECT_TRUE(manager->IsPromptAvailableForTesting());
 }
 
@@ -300,42 +311,50 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
   TestAppBannerManagerDesktop* manager =
       TestAppBannerManagerDesktop::FromWebContents(
           browser()->tab_strip_model()->GetActiveWebContents());
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // Install web app by policy.
   web_app::ExternalInstallOptions options =
       web_app::CreateInstallOptions(GetBannerURL());
   options.install_source = web_app::ExternalInstallSource::kExternalPolicy;
-  options.user_display_mode = web_app::DisplayMode::kBrowser;
+  options.user_display_mode = web_app::mojom::UserDisplayMode::kBrowser;
   web_app::ExternallyManagedAppManagerInstall(profile, options);
 
-  // Uninstall web app by policy.
+  // Uninstall web app by policy by synchronizing with an empty
+  // `ExternalInstallOptions` vector.
   {
     base::RunLoop run_loop;
-    web_app::WebAppProviderBase::GetProviderBase(profile)
+    web_app::WebAppProvider::GetForTest(profile)
         ->externally_managed_app_manager()
-        .UninstallApps({GetBannerURL()},
-                       web_app::ExternalInstallSource::kExternalPolicy,
-                       base::BindLambdaForTesting(
-                           [&run_loop](const GURL& app_url, bool succeeded) {
-                             EXPECT_TRUE(succeeded);
-                             run_loop.Quit();
-                           }));
+        .SynchronizeInstalledApps(
+            {}, web_app::ExternalInstallSource::kExternalPolicy,
+            base::BindLambdaForTesting(
+                [&](std::map<GURL /*install_url*/,
+                             web_app::ExternallyManagedAppManagerInstallResult>
+                        install_results,
+                    std::map<GURL /*install_url*/, webapps::UninstallResultCode>
+                        uninstall_results) {
+                  EXPECT_TRUE(install_results.empty());
+                  ASSERT_TRUE(uninstall_results.contains(GetBannerURL()));
+                  EXPECT_EQ(webapps::UninstallResultCode::kAppRemoved,
+                            uninstall_results[GetBannerURL()]);
+                  run_loop.Quit();
+                }));
     run_loop.Run();
   }
 
   // Run promotability check.
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(browser(), GetBannerURL());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetBannerURL()));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
-  EXPECT_EQ(AppBannerManager::InstallableWebAppCheckResult::kPromotable,
-            manager->GetInstallableWebAppCheckResultForTesting());
+  EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
+            manager->GetInstallableWebAppCheckResult());
   EXPECT_TRUE(manager->IsPromptAvailableForTesting());
 }
 
@@ -349,21 +368,20 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GetBannerURLWithManifestAndQuery(
                        "/banners/manifest_display_override.json", "action",
-                       "stash_event"));
+                       "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   // Install the app via the menu instead of the banner.
-  chrome::SetAutoAcceptPWAInstallConfirmationForTesting(true);
-  browser()->command_controller()->ExecuteCommand(IDC_INSTALL_PWA);
+  chrome::BrowserCommandController::From(browser())->ExecuteCommand(
+      IDC_INSTALL_PWA);
   manager->AwaitAppInstall();
-  chrome::SetAutoAcceptPWAInstallConfirmationForTesting(false);
 
   EXPECT_FALSE(manager->IsPromptAvailableForTesting());
 
@@ -380,24 +398,25 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(),
         GetBannerURLWithManifestAndQuery(
             "/banners/manifest_display_override_display_is_browser.json",
-            "action", "stash_event"));
+            "action", "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
     // Trigger the installation prompt and wait for installation to occur.
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
-    ExecuteScript(browser(), "callStashedPrompt();", true /* with_gesture */);
+    manager->SetCompleteCallback(run_loop.QuitClosure());
+    ExecuteScript(web_contents, "callStashedPrompt();",
+                  true /* with_gesture */);
     run_loop.Run();
-    EXPECT_EQ(State::COMPLETE, manager->state());
+    EXPECT_EQ(State::COMPLETE, manager->state_for_testing());
   }
 
   // Ensure that the userChoice promise resolves.
@@ -420,22 +439,74 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
       web_app::CreateInstallOptions(GetBannerURLWithManifest(
           "/banners/manifest_display_override_contains_browser.json"));
   options.install_source = web_app::ExternalInstallSource::kExternalPolicy;
-  options.user_display_mode = web_app::DisplayMode::kBrowser;
-  web_app::ExternallyManagedAppManagerInstall(browser()->profile(), options);
+  options.user_display_mode = web_app::mojom::UserDisplayMode::kBrowser;
+  web_app::ExternallyManagedAppManagerInstall(browser()->GetProfile(), options);
 
   // Run promotability check.
   {
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
 
-    ui_test_utils::NavigateToURL(browser(), GetBannerURL());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetBannerURL()));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT, manager->state());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
-  EXPECT_EQ(AppBannerManager::InstallableWebAppCheckResult::kPromotable,
-            manager->GetInstallableWebAppCheckResultForTesting());
+  EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
+            manager->GetInstallableWebAppCheckResult());
   EXPECT_TRUE(manager->IsPromptAvailableForTesting());
+}
+
+class AppBannerManagerDesktopBrowserTestForPasswordManagerPage
+    : public AppBannerManagerDesktopBrowserTest {
+ public:
+  void SetUp() override {
+    TestAppBannerManagerDesktop::SetUp();
+    AppBannerManagerBrowserTestBase::SetUp();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTestForPasswordManagerPage,
+                       WebUiPasswordManagerApp) {
+  TestAppBannerManagerDesktop* manager =
+      TestAppBannerManagerDesktop::FromWebContents(
+          browser()->tab_strip_model()->GetActiveWebContents());
+
+  // Simulate loading a PasswordManager page.
+  {
+    base::RunLoop run_loop;
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
+
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(),
+        GURL(base::StrCat(
+            {"chrome://", password_manager::kChromeUIPasswordManagerHost}))));
+    run_loop.Run();
+  }
+
+  EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
+            manager->GetInstallableWebAppCheckResult());
+}
+
+IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
+                       PipelineRunsAfterStop) {
+  TestAppBannerManagerDesktop* manager =
+      TestAppBannerManagerDesktop::FromWebContents(
+          browser()->tab_strip_model()->GetActiveWebContents());
+
+  {
+    base::RunLoop run_loop;
+    manager->SetBannerPromptReplyCallback(run_loop.QuitClosure());
+
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(),
+        embedded_test_server()->GetURL("/web_apps/stop-loading-early.html")));
+    run_loop.Run();
+  }
+
+  EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
+            manager->GetInstallableWebAppCheckResult())
+      << manager->debug_log();
 }
 
 }  // namespace webapps

@@ -1,43 +1,25 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/parser/css_supports_parser.h"
 
+#include "third_party/blink/renderer/core/css/css_identifier_value.h"
+#include "third_party/blink/renderer/core/css/parser/at_rule_descriptor_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_impl.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/core/css/parser/css_selector_parser.h"
+#include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
+#include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 
 namespace blink {
 
-namespace {
-
-// https://drafts.csswg.org/css-syntax/#typedef-any-value
-bool IsNextTokenAllowedForAnyValue(CSSParserTokenRange& range) {
-  switch (range.Peek().GetType()) {
-    case kBadStringToken:
-    case kEOFToken:
-    case kBadUrlToken:
-      return false;
-    case kRightParenthesisToken:
-    case kRightBracketToken:
-    case kRightBraceToken:
-      return range.Peek().GetBlockType() == CSSParserToken::kBlockEnd;
-    default:
-      return true;
-  }
-}
-
-// https://drafts.csswg.org/css-syntax/#typedef-any-value
-bool ConsumeAnyValue(CSSParserTokenRange& range) {
-  DCHECK(!range.AtEnd());
-  while (IsNextTokenAllowedForAnyValue(range))
-    range.Consume();
-  return range.AtEnd();
-}
-
-}  // namespace
+using css_parsing_utils::AtIdent;
+using css_parsing_utils::ConsumeAnyValue;
+using css_parsing_utils::ConsumeIfIdent;
 
 CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsCondition(
     CSSParserTokenStream& stream,
@@ -47,19 +29,13 @@ CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsCondition(
   return supports_parser.ConsumeSupportsCondition(stream);
 }
 
-bool CSSSupportsParser::AtIdent(const CSSParserToken& token,
-                                const char* ident) {
-  return token.GetType() == kIdentToken &&
-         EqualIgnoringASCIICase(token.Value(), ident);
-}
-
-bool CSSSupportsParser::ConsumeIfIdent(CSSParserTokenStream& stream,
-                                       const char* ident) {
-  if (!AtIdent(stream.Peek(), ident))
-    return false;
-  stream.ConsumeIncludingWhitespace();
-  return true;
-}
+//
+// Every non-static Consume function should:
+//
+//  1. Assume that the calling function already consumed whitespace.
+//  2. Clean up trailing whitespace if a supported condition was consumed.
+//  3. Otherwise, leave the stream untouched.
+//
 
 // <supports-condition> = not <supports-in-parens>
 //                   | <supports-in-parens> [ and <supports-in-parens> ]*
@@ -67,70 +43,25 @@ bool CSSSupportsParser::ConsumeIfIdent(CSSParserTokenStream& stream,
 CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsCondition(
     CSSParserTokenStream& stream) {
   // not <supports-in-parens>
-  stream.ConsumeWhitespace();
-  if (ConsumeIfIdent(stream, "not"))
+  if (ConsumeIfIdent(stream, "not")) {
     return !ConsumeSupportsInParens(stream);
+  }
 
   // <supports-in-parens> [ and <supports-in-parens> ]*
   // | <supports-in-parens> [ or <supports-in-parens> ]*
   Result result = ConsumeSupportsInParens(stream);
 
-  stream.ConsumeWhitespace();
   if (AtIdent(stream.Peek(), "and")) {
-    stream.ConsumeWhitespace();
     while (ConsumeIfIdent(stream, "and")) {
       result = result & ConsumeSupportsInParens(stream);
-      stream.ConsumeWhitespace();
     }
   } else if (AtIdent(stream.Peek(), "or")) {
-    stream.ConsumeWhitespace();
     while (ConsumeIfIdent(stream, "or")) {
       result = result | ConsumeSupportsInParens(stream);
-      stream.ConsumeWhitespace();
     }
   }
 
   return result;
-}
-
-bool CSSSupportsParser::IsSupportsInParens(const CSSParserToken& token) {
-  // All three productions for <supports-in-parens> must start with either a
-  // left parenthesis or a function.
-  return token.GetType() == kLeftParenthesisToken ||
-         token.GetType() == kFunctionToken;
-}
-
-bool CSSSupportsParser::IsEnclosedSupportsCondition(
-    const CSSParserToken& first_token,
-    const CSSParserToken& second_token) {
-  return (first_token.GetType() == kLeftParenthesisToken) &&
-         (AtIdent(second_token, "not") ||
-          second_token.GetType() == kLeftParenthesisToken ||
-          second_token.GetType() == kFunctionToken);
-}
-
-bool CSSSupportsParser::IsSupportsSelectorFn(
-    const CSSParserToken& first_token,
-    const CSSParserToken& second_token) {
-  return (first_token.GetType() == kFunctionToken &&
-          first_token.FunctionId() == CSSValueID::kSelector);
-}
-
-bool CSSSupportsParser::IsSupportsDecl(const CSSParserToken& first_token,
-                                       const CSSParserToken& second_token) {
-  return first_token.GetType() == kLeftParenthesisToken &&
-         second_token.GetType() == kIdentToken;
-}
-
-bool CSSSupportsParser::IsSupportsFeature(const CSSParserToken& first_token,
-                                          const CSSParserToken& second_token) {
-  return IsSupportsSelectorFn(first_token, second_token) ||
-         IsSupportsDecl(first_token, second_token);
-}
-
-bool CSSSupportsParser::IsGeneralEnclosed(const CSSParserToken& first_token) {
-  return first_token.GetType() == kLeftParenthesisToken ||
-         first_token.GetType() == kFunctionToken;
 }
 
 // <supports-in-parens> = ( <supports-condition> )
@@ -138,80 +69,250 @@ bool CSSSupportsParser::IsGeneralEnclosed(const CSSParserToken& first_token) {
 //                    | <general-enclosed>
 CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsInParens(
     CSSParserTokenStream& stream) {
-  CSSParserToken first_token = stream.Peek();
-  if (!IsSupportsInParens(first_token))
-    return Result::kParseFailure;
-
-  CSSParserTokenStream::BlockGuard guard(stream);
-  stream.ConsumeWhitespace();
-
   // ( <supports-condition> )
-  if (IsEnclosedSupportsCondition(first_token, stream.Peek())) {
+  if (stream.Peek().GetType() == kLeftParenthesisToken) {
+    CSSParserTokenStream::RestoringBlockGuard guard(stream);
+    stream.ConsumeWhitespace();
     Result result = ConsumeSupportsCondition(stream);
-    return guard.AtEndOfBlock() ? result : Result::kParseFailure;
+    if (result == Result::kSupported && guard.Release()) {
+      stream.ConsumeWhitespace();
+      return result;
+    }
+    // Otherwise, fall through.
+    //
+    // Note that even when the result is kParseFailure, we still want to fall
+    // through here, in case it's valid as <general-enclosed>. If it's not,
+    // we'll gain back the kParseFailure at the end of this function.
   }
 
   // <supports-feature>
-  if (IsSupportsFeature(first_token, stream.Peek())) {
-    Result result = ConsumeSupportsFeature(first_token, stream);
-    return guard.AtEndOfBlock() ? result : Result::kParseFailure;
+  if (ConsumeSupportsFeature(stream)) {
+    return Result::kSupported;
   }
 
   // <general-enclosed>
-  return ConsumeGeneralEnclosed(first_token, stream);
+  if (ConsumeGeneralEnclosed(stream)) {
+    // <general-enclosed> evaluates to kUnsupported, even when parsed
+    // successfully.
+    return Result::kUnsupported;
+  }
+
+  return Result::kParseFailure;
 }
 
-// <supports-feature> = <supports-selector-fn> | <supports-decl>
-CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsFeature(
-    const CSSParserToken& first_token,
-    CSSParserTokenStream& stream) {
+// https://drafts.csswg.org/css-conditional-4/#at-supports-ext
+// <supports-feature> = <supports-selector-fn> | <supports-font-tech-fn>
+//                    | <supports-font-format-fn> | <supports-at-rule-fn>
+//                    | <supports-decl>
+//
+// <supports-at-rule-fn> is currently only documented here:
+// https://github.com/w3c/csswg-drafts/issues/2463#issuecomment-1016720310
+bool CSSSupportsParser::ConsumeSupportsFeature(CSSParserTokenStream& stream) {
   // <supports-selector-fn>
-  if (IsSupportsSelectorFn(first_token, stream.Peek()))
-    return ConsumeSupportsSelectorFn(first_token, stream);
-
+  if (ConsumeSupportsSelectorFn(stream)) {
+    return true;
+  }
+  // <supports-font-tech-fn>
+  if (ConsumeFontTechFn(stream)) {
+    return true;
+  }
+  // <supports-font-format-fn>
+  if (ConsumeFontFormatFn(stream)) {
+    return true;
+  }
+  // <supports-at-rule-fn>
+  if (ConsumeAtRuleFn(stream)) {
+    return true;
+  }
+  // <supports-named-feature-fn>
+  if (ConsumeNamedFeatureFn(stream)) {
+    return true;
+  }
+  if (parser_.GetMode() == CSSParserMode::kUASheetMode) {
+    if (ConsumeBlinkFeatureFn(stream)) {
+      return true;
+    }
+  }
   // <supports-decl>
-  return ConsumeSupportsDecl(first_token, stream);
+  return ConsumeSupportsDecl(stream);
 }
 
 // <supports-selector-fn> = selector( <complex-selector> )
-CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsSelectorFn(
-    const CSSParserToken& first_token,
+bool CSSSupportsParser::ConsumeSupportsSelectorFn(
     CSSParserTokenStream& stream) {
-  DCHECK(IsSupportsSelectorFn(first_token, stream.Peek()));
-  auto block = stream.ConsumeUntilPeekedTypeIs<kRightParenthesisToken>();
-  if (CSSSelectorParser::SupportsComplexSelector(block, parser_.GetContext()))
-    return Result::kSupported;
-  return Result::kUnsupported;
+  if (stream.Peek().FunctionId() != CSSValueID::kSelector) {
+    return false;
+  }
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  if (CSSSelectorParser::SupportsComplexSelector(stream, parser_.GetContext(),
+                                                 parser_.GetStyleSheet()) &&
+      guard.Release()) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+  return false;
+}
+
+bool CSSSupportsParser::ConsumeFontFormatFn(CSSParserTokenStream& stream) {
+  if (stream.Peek().FunctionId() != CSSValueID::kFontFormat) {
+    return false;
+  }
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  CSSIdentifierValue* consumed_value =
+      css_parsing_utils::ConsumeFontFormatIdent(stream);
+
+  if (consumed_value &&
+      css_parsing_utils::IsSupportedKeywordFormat(
+          consumed_value->GetValueID()) &&
+      guard.Release()) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+
+  return false;
+}
+
+bool CSSSupportsParser::ConsumeFontTechFn(CSSParserTokenStream& stream) {
+  if (stream.Peek().FunctionId() != CSSValueID::kFontTech) {
+    return false;
+  }
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  CSSIdentifierValue* consumed_value =
+      css_parsing_utils::ConsumeFontTechIdent(stream);
+
+  if (consumed_value &&
+      css_parsing_utils::IsSupportedKeywordTech(consumed_value->GetValueID()) &&
+      guard.Release()) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+
+  return false;
+}
+
+// <supports-at-rule-fn> = at-rule( <at-keyword-token> )
+bool CSSSupportsParser::ConsumeAtRuleFn(CSSParserTokenStream& stream) {
+  if (!RuntimeEnabledFeatures::CSSSupportsAtRuleFunctionEnabled()) {
+    return false;
+  }
+
+  if (stream.Peek().FunctionId() != CSSValueID::kAtRule) {
+    return false;
+  }
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  if (stream.Peek().GetType() != kAtKeywordToken) {
+    return false;
+  }
+  CSSParserToken name_token = stream.ConsumeIncludingWhitespace();
+  const StringView name = name_token.Value();
+  const CSSAtRuleID at_rule_id = CssAtRuleID(name);
+  if (at_rule_id == CSSAtRuleID::kCSSAtRuleInvalid) {
+    return false;
+  }
+
+  // @charset is accepted in parsing but is not a valid at-rule.
+  if (guard.Release() && at_rule_id != CSSAtRuleID::kCSSAtRuleCharset) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+  return false;
+}
+
+namespace {
+bool IsSupportedNamedFeature(CSSValueID id) {
+  // When this list becomes longer we should use an algorithm better than
+  // linear search.
+  if (id == CSSValueID::kAnchorPositionFollowsTransforms) {
+    return true;
+  }
+  if (id == CSSValueID::kSingleAxisScrollContainer) {
+    return RuntimeEnabledFeatures::SingleAxisScrollContainersEnabled();
+  }
+  return false;
+}
+}  // namespace
+
+bool CSSSupportsParser::ConsumeNamedFeatureFn(CSSParserTokenStream& stream) {
+  if (!RuntimeEnabledFeatures::CSSSupportsNamedFeatureFunctionEnabled()) {
+    return false;
+  }
+
+  if (stream.Peek().FunctionId() != CSSValueID::kNamedFeature) {
+    return false;
+  }
+
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  CSSIdentifierValue* consumed_value = css_parsing_utils::ConsumeIdent(stream);
+
+  if (consumed_value && IsSupportedNamedFeature(consumed_value->GetValueID()) &&
+      guard.Release()) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+
+  return false;
 }
 
 // <supports-decl> = ( <declaration> )
-CSSSupportsParser::Result CSSSupportsParser::ConsumeSupportsDecl(
-    const CSSParserToken& first_token,
-    CSSParserTokenStream& stream) {
-  if (!IsSupportsDecl(first_token, stream.Peek()))
-    return Result::kParseFailure;
-  if (parser_.ConsumeSupportsDeclaration(stream))
-    return Result::kSupported;
-  return Result::kUnsupported;
+bool CSSSupportsParser::ConsumeSupportsDecl(CSSParserTokenStream& stream) {
+  if (stream.Peek().GetType() != kLeftParenthesisToken) {
+    return false;
+  }
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  if (stream.Peek().GetType() == kIdentToken &&
+      parser_.ConsumeSupportsDeclaration(stream) && guard.Release()) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+  return false;
 }
 
-// <general-enclosed> = [ <function-token> <any-value> ) ]
-//                  | ( <ident> <any-value> )
-CSSSupportsParser::Result CSSSupportsParser::ConsumeGeneralEnclosed(
-    const CSSParserToken& first_token,
-    CSSParserTokenStream& stream) {
-  if (IsGeneralEnclosed(first_token)) {
-    auto block = stream.ConsumeUntilPeekedTypeIs<kRightParenthesisToken>();
-    // Note that <any-value> matches a sequence of one or more tokens, hence the
-    // block-range can't be empty.
-    // https://drafts.csswg.org/css-syntax-3/#typedef-any-value
-    if (block.AtEnd() || !ConsumeAnyValue(block))
-      return Result::kParseFailure;
-
-    stream.ConsumeWhitespace();
-    return Result::kUnsupported;
+// <general-enclosed> = [ <function-token> <any-value>? ) ]
+//                  | ( <any-value>? )
+bool CSSSupportsParser::ConsumeGeneralEnclosed(CSSParserTokenStream& stream) {
+  if (stream.Peek().GetType() != kLeftParenthesisToken &&
+      stream.Peek().GetType() != kFunctionToken) {
+    return false;
   }
-  return Result::kParseFailure;
+
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  ConsumeAnyValue(stream);
+  if (guard.Release()) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+  return false;
+}
+
+bool CSSSupportsParser::ConsumeBlinkFeatureFn(CSSParserTokenStream& stream) {
+  if (stream.Peek().FunctionId() != CSSValueID::kBlinkFeature) {
+    return false;
+  }
+  CSSParserTokenStream::RestoringBlockGuard guard(stream);
+  stream.ConsumeWhitespace();
+
+  if (stream.Peek().GetType() == kIdentToken) {
+    const CSSParserToken& feature_name = stream.ConsumeIncludingWhitespace();
+    if (RuntimeEnabledFeatures::IsFeatureEnabledFromString(
+            StringUtf8Adaptor(feature_name.Value()).AsStringView()) &&
+        guard.Release()) {
+      stream.ConsumeWhitespace();
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace blink

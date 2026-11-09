@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
@@ -17,10 +17,13 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/trace_event/trace_buffer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_event_impl.h"
+#include "base/trace_event/trace_log.h"
 #include "base/values.h"
+#include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source_type.h"
 #include "net/log/net_log_with_source.h"
@@ -39,55 +42,58 @@ const char kNetLogTracingCategory[] = "netlog";
 
 struct TraceEntryInfo {
   std::string category;
-  std::string id;
+  std::string track_id;  // Should map 1:1 to a netlog source
   std::string phase;
   std::string name;
   std::string source_type;
 };
 
-TraceEntryInfo GetTraceEntryInfoFromValue(const base::Value& value) {
+TraceEntryInfo GetTraceEntryInfoFromValue(const base::DictValue& value) {
   TraceEntryInfo info;
-  if (const std::string* cat = value.FindStringKey("cat")) {
+  // See perfetto::trace_processor::json::JsonExporter::ExportSlices() for where
+  // these values come from.
+  if (const std::string* cat = value.FindString("cat")) {
     info.category = *cat;
   } else {
     ADD_FAILURE() << "Missing 'cat'";
   }
-  if (const std::string* id = value.FindStringKey("id")) {
-    info.id = *id;
+  if (const std::string* track_id = value.FindStringByDottedPath("id2.local")) {
+    info.track_id = *track_id;
   } else {
-    ADD_FAILURE() << "Missing 'id'";
+    ADD_FAILURE() << "Missing 'id2.local'";
   }
-  if (const std::string* ph = value.FindStringKey("ph")) {
+  if (const std::string* ph = value.FindString("ph")) {
     info.phase = *ph;
   } else {
     ADD_FAILURE() << "Missing 'ph'";
   }
-  if (const std::string* name = value.FindStringKey("name")) {
+  if (const std::string* name = value.FindString("name")) {
     info.name = *name;
   } else {
     ADD_FAILURE() << "Missing 'name'";
   }
-  if (const std::string* type = value.FindStringPath("args.source_type")) {
+  if (const std::string* type =
+          value.FindStringByDottedPath("args.source_type")) {
     info.source_type = *type;
   } else {
-    ADD_FAILURE() << "Missing 'args.source_type'";
+    EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_END), info.phase);
   }
 
   return info;
 }
 
-void EnableTraceLog(base::StringPiece category) {
+void EnableTraceLog(std::string_view category) {
   TraceLog::GetInstance()->SetEnabled(
-      base::trace_event::TraceConfig(category, ""), TraceLog::RECORDING_MODE);
-  // AsyncEnabledStateObserver will receive enabled notification one message
-  // loop iteration later.
+      base::trace_event::TraceConfig(category, ""));
+  // TraceNetLogObserver will receive enabled notification one message loop
+  // iteration later.
   base::RunLoop().RunUntilIdle();
 }
 
 void DisableTraceLog() {
   TraceLog::GetInstance()->SetDisabled();
-  // AsyncEnabledStateObserver will receive disabled notification one message
-  // loop iteration later.
+  // TraceNetLogObserver will receive disabled notification one message loop
+  // iteration later.
   base::RunLoop().RunUntilIdle();
 }
 
@@ -106,34 +112,32 @@ class TraceNetLogObserverTest : public TestWithTaskEnvironment {
   TraceNetLogObserverTest() {
     TraceLog* tracelog = TraceLog::GetInstance();
     DCHECK(tracelog);
-    DCHECK(!tracelog->IsEnabled());
+    DCHECK(!base::TrackEvent::IsEnabled());
     trace_buffer_.SetOutputCallback(json_output_.GetCallback());
     trace_net_log_observer_ = std::make_unique<TraceNetLogObserver>();
-    trace_events_ = std::make_unique<base::ListValue>();
   }
 
   ~TraceNetLogObserverTest() override {
-    DCHECK(!TraceLog::GetInstance()->IsEnabled());
+    DCHECK(!base::TrackEvent::IsEnabled());
   }
 
   void OnTraceDataCollected(
       base::RunLoop* run_loop,
       const scoped_refptr<base::RefCountedString>& events_str,
       bool has_more_events) {
-    DCHECK(trace_events_->empty());
+    DCHECK(trace_events_.empty());
     trace_buffer_.Start();
-    trace_buffer_.AddFragment(events_str->data());
+    trace_buffer_.AddFragment(events_str->as_string());
     trace_buffer_.Finish();
 
-    std::unique_ptr<base::Value> trace_value;
-    trace_value = base::JSONReader::ReadDeprecated(json_output_.json_output,
-                                                   base::JSON_PARSE_RFC);
+    std::optional<base::Value> trace_value;
+    trace_value =
+        base::JSONReader::Read(json_output_.json_output, base::JSON_PARSE_RFC);
 
     ASSERT_TRUE(trace_value) << json_output_.json_output;
-    base::ListValue* trace_events = nullptr;
-    ASSERT_TRUE(trace_value->GetAsList(&trace_events));
+    ASSERT_TRUE(trace_value->is_list());
 
-    trace_events_ = FilterNetLogTraceEvents(*trace_events);
+    trace_events_ = FilterNetLogTraceEvents(trace_value->GetList());
 
     if (!has_more_events)
       run_loop->Quit();
@@ -148,21 +152,28 @@ class TraceNetLogObserverTest : public TestWithTaskEnvironment {
     run_loop.Run();
   }
 
-  void set_trace_net_log_observer(TraceNetLogObserver* trace_net_log_observer) {
-    trace_net_log_observer_.reset(trace_net_log_observer);
+  void set_trace_net_log_observer(
+      std::unique_ptr<TraceNetLogObserver> trace_net_log_observer) {
+    trace_net_log_observer_ = std::move(trace_net_log_observer);
   }
 
-  static std::unique_ptr<base::ListValue> FilterNetLogTraceEvents(
+  static base::ListValue FilterNetLogTraceEvents(
       const base::ListValue& trace_events) {
-    std::unique_ptr<base::ListValue> filtered_trace_events(
-        new base::ListValue());
-    for (size_t i = 0; i < trace_events.GetSize(); i++) {
-      const base::Value* dict = &trace_events.GetList()[i];
-      if (!dict->is_dict()) {
+    base::ListValue filtered_trace_events;
+
+    for (const auto& event : trace_events) {
+      if (!event.is_dict()) {
         ADD_FAILURE() << "Unexpected non-dictionary event in trace_events";
         continue;
       }
-      const std::string* category = dict->FindStringPath("cat");
+      const auto& dict = event.GetDict();
+
+      if (const std::string* s = dict.FindString("s");
+          s != nullptr && *s == "t") {
+        continue;  // Ignore events on thread tracks
+      }
+
+      const std::string* category = dict.FindStringByDottedPath("cat");
       if (!category) {
         ADD_FAILURE()
             << "Unexpected item without a category field in trace_events";
@@ -170,214 +181,204 @@ class TraceNetLogObserverTest : public TestWithTaskEnvironment {
       }
       if (*category != kNetLogTracingCategory)
         continue;
-      filtered_trace_events->Append(dict->CreateDeepCopy());
+      filtered_trace_events.Append(event.Clone());
     }
     return filtered_trace_events;
   }
 
-  base::ListValue* trace_events() const { return trace_events_.get(); }
+  const base::ListValue& trace_events() const { return trace_events_; }
 
-  RecordingTestNetLog* net_log() { return &net_log_; }
+  void clear_trace_events() {
+    trace_events_.clear();
+    json_output_.json_output.clear();
+  }
+
+  size_t trace_events_size() const { return trace_events_.size(); }
+
+  RecordingNetLogObserver* net_log_observer() { return &net_log_observer_; }
 
   TraceNetLogObserver* trace_net_log_observer() const {
     return trace_net_log_observer_.get();
   }
 
  private:
-  std::unique_ptr<base::ListValue> trace_events_;
+  base::test::TracingEnvironment tracing_environment_;
+  base::ListValue trace_events_;
   base::trace_event::TraceResultBuffer trace_buffer_;
   base::trace_event::TraceResultBuffer::SimpleOutput json_output_;
-  RecordingTestNetLog net_log_;
+  RecordingNetLogObserver net_log_observer_;
   std::unique_ptr<TraceNetLogObserver> trace_net_log_observer_;
 };
 
 TEST_F(TraceNetLogObserverTest, TracingNotEnabled) {
-  trace_net_log_observer()->WatchForTraceStart(net_log());
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
 
   EndTraceAndFlush();
   trace_net_log_observer()->StopWatchForTraceStart();
 
-  EXPECT_EQ(0u, trace_events()->GetSize());
-}
-
-// This test will result in a deadlock if EnabledStateObserver instead
-// of AsyncEnabledStateObserver is used. Regression test for crbug.com/760817.
-TEST_F(TraceNetLogObserverTest, TracingDisabledDuringOnAddEntry) {
-  trace_net_log_observer()->WatchForTraceStart(net_log());
-  TraceLog* trace_log = TraceLog::GetInstance();
-  trace_log->SetTraceBufferForTesting(base::WrapUnique(
-      base::trace_event::TraceBuffer::CreateTraceBufferVectorOfSize(1)));
-  EnableTraceLogWithNetLog();
-  // TraceLog will disable itself when an event makes the TraceBuffer full.
-  while (!trace_log->BufferIsFull()) {
-    net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
-  }
-
-  base::RunLoop().RunUntilIdle();
-  ASSERT_FALSE(trace_log->IsEnabled());
-  ASSERT_FALSE(trace_net_log_observer()->net_log());
-  trace_net_log_observer()->StopWatchForTraceStart();
-  // Flush now so that TraceLog's buffer is empty in the next test.
-  EndTraceAndFlush();
+  EXPECT_EQ(0u, trace_events_size());
 }
 
 TEST_F(TraceNetLogObserverTest, TraceEventCaptured) {
-  auto entries = net_log()->GetEntries();
+  auto entries = net_log_observer()->GetEntries();
   EXPECT_TRUE(entries.empty());
 
-  trace_net_log_observer()->WatchForTraceStart(net_log());
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
   EnableTraceLogWithNetLog();
   NetLogWithSource net_log_with_source =
-      NetLogWithSource::Make(net_log(), net::NetLogSourceType::NONE);
-  net_log()->AddGlobalEntry(NetLogEventType::CANCELLED);
+      NetLogWithSource::Make(NetLog::Get(), net::NetLogSourceType::NONE);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::CANCELLED);
   net_log_with_source.BeginEvent(NetLogEventType::URL_REQUEST_START_JOB);
-  net_log_with_source.EndEvent(NetLogEventType::REQUEST_ALIVE);
+  net_log_with_source.EndEvent(NetLogEventType::URL_REQUEST_START_JOB);
 
-  entries = net_log()->GetEntries();
+  entries = net_log_observer()->GetEntries();
   EXPECT_EQ(3u, entries.size());
   EndTraceAndFlush();
   trace_net_log_observer()->StopWatchForTraceStart();
-  EXPECT_EQ(3u, trace_events()->GetSize());
-  const base::Value* item1 = &trace_events()->GetList()[0];
-  ASSERT_TRUE(item1->is_dict());
-  const base::Value* item2 = &trace_events()->GetList()[1];
-  ;
-  ASSERT_TRUE(item2->is_dict());
-  const base::Value* item3 = &trace_events()->GetList()[2];
-  ;
-  ASSERT_TRUE(item3->is_dict());
 
-  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(*item1);
-  TraceEntryInfo actual_item2 = GetTraceEntryInfoFromValue(*item2);
-  TraceEntryInfo actual_item3 = GetTraceEntryInfoFromValue(*item3);
+  EXPECT_EQ(3u, trace_events_size());
+
+  const base::Value* item1 = &trace_events()[0];
+  ASSERT_TRUE(item1->is_dict());
+  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(item1->GetDict());
   EXPECT_EQ(kNetLogTracingCategory, actual_item1.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[0].source.id), actual_item1.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_INSTANT),
             actual_item1.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::CANCELLED),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::CANCELLED),
             actual_item1.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[0].source.type),
             actual_item1.source_type);
 
+  const base::Value* item2 = &trace_events()[1];
+  ASSERT_TRUE(item2->is_dict());
+  TraceEntryInfo actual_item2 = GetTraceEntryInfoFromValue(item2->GetDict());
   EXPECT_EQ(kNetLogTracingCategory, actual_item2.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[1].source.id), actual_item2.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_BEGIN),
             actual_item2.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::URL_REQUEST_START_JOB),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::URL_REQUEST_START_JOB),
             actual_item2.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[1].source.type),
             actual_item2.source_type);
 
+  const base::Value* item3 = &trace_events()[2];
+  ASSERT_TRUE(item3->is_dict());
+  TraceEntryInfo actual_item3 = GetTraceEntryInfoFromValue(item3->GetDict());
   EXPECT_EQ(kNetLogTracingCategory, actual_item3.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[2].source.id), actual_item3.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_END),
             actual_item3.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::REQUEST_ALIVE),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::URL_REQUEST_START_JOB),
             actual_item3.name);
-  EXPECT_EQ(NetLog::SourceTypeToString(entries[2].source.type),
-            actual_item3.source_type);
+
+  EXPECT_NE(actual_item1.track_id, actual_item2.track_id);
+  EXPECT_EQ(actual_item2.track_id, actual_item3.track_id);
 }
 
 TEST_F(TraceNetLogObserverTest, EnableAndDisableTracing) {
-  trace_net_log_observer()->WatchForTraceStart(net_log());
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
   EnableTraceLogWithNetLog();
-  net_log()->AddGlobalEntry(NetLogEventType::CANCELLED);
-  DisableTraceLog();
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
-  EnableTraceLogWithNetLog();
-  net_log()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
-
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::CANCELLED);
   EndTraceAndFlush();
-  trace_net_log_observer()->StopWatchForTraceStart();
 
-  auto entries = net_log()->GetEntries();
-  EXPECT_EQ(3u, entries.size());
-  EXPECT_EQ(2u, trace_events()->GetSize());
-  const base::Value* item1 = &trace_events()->GetList()[0];
+  auto entries = net_log_observer()->GetEntries();
+  EXPECT_EQ(1u, entries.size());
+  EXPECT_EQ(1u, trace_events_size());
+  const base::Value* item1 = &trace_events()[0];
   ASSERT_TRUE(item1->is_dict());
-  const base::Value* item2 = &trace_events()->GetList()[1];
-  ASSERT_TRUE(item2->is_dict());
-
-  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(*item1);
-  TraceEntryInfo actual_item2 = GetTraceEntryInfoFromValue(*item2);
+  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(item1->GetDict());
   EXPECT_EQ(kNetLogTracingCategory, actual_item1.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[0].source.id), actual_item1.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_INSTANT),
             actual_item1.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::CANCELLED),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::CANCELLED),
             actual_item1.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[0].source.type),
             actual_item1.source_type);
 
+  clear_trace_events();
+
+  // This entry is emitted while tracing is off.
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+
+  EnableTraceLogWithNetLog();
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
+  EndTraceAndFlush();
+  trace_net_log_observer()->StopWatchForTraceStart();
+
+  entries = net_log_observer()->GetEntries();
+  EXPECT_EQ(3u, entries.size());
+  EXPECT_EQ(1u, trace_events_size());
+  const base::Value* item2 = &trace_events()[0];
+  ASSERT_TRUE(item2->is_dict());
+  TraceEntryInfo actual_item2 = GetTraceEntryInfoFromValue(item2->GetDict());
   EXPECT_EQ(kNetLogTracingCategory, actual_item2.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[2].source.id), actual_item2.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_INSTANT),
             actual_item2.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::URL_REQUEST_START_JOB),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::URL_REQUEST_START_JOB),
             actual_item2.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[2].source.type),
             actual_item2.source_type);
+
+  EXPECT_EQ(actual_item1.track_id, actual_item2.track_id);
 }
 
 TEST_F(TraceNetLogObserverTest, DestroyObserverWhileTracing) {
-  trace_net_log_observer()->WatchForTraceStart(net_log());
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
   EnableTraceLogWithNetLog();
-  net_log()->AddGlobalEntry(NetLogEventType::CANCELLED);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::CANCELLED);
   trace_net_log_observer()->StopWatchForTraceStart();
   set_trace_net_log_observer(nullptr);
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
 
   EndTraceAndFlush();
 
-  auto entries = net_log()->GetEntries();
+  auto entries = net_log_observer()->GetEntries();
   EXPECT_EQ(2u, entries.size());
-  EXPECT_EQ(1u, trace_events()->GetSize());
+  EXPECT_EQ(1u, trace_events_size());
 
-  const base::Value* item1 = &trace_events()->GetList()[0];
+  const base::Value* item1 = &trace_events()[0];
   ASSERT_TRUE(item1->is_dict());
 
-  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(*item1);
+  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(item1->GetDict());
   EXPECT_EQ(kNetLogTracingCategory, actual_item1.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[0].source.id), actual_item1.id);
+  EXPECT_NE(actual_item1.track_id, "");
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_INSTANT),
             actual_item1.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::CANCELLED),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::CANCELLED),
             actual_item1.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[0].source.type),
             actual_item1.source_type);
 }
 
 TEST_F(TraceNetLogObserverTest, DestroyObserverWhileNotTracing) {
-  trace_net_log_observer()->WatchForTraceStart(net_log());
-  net_log()->AddGlobalEntry(NetLogEventType::CANCELLED);
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::CANCELLED);
   trace_net_log_observer()->StopWatchForTraceStart();
   set_trace_net_log_observer(nullptr);
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
-  net_log()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
 
   EndTraceAndFlush();
 
-  auto entries = net_log()->GetEntries();
+  auto entries = net_log_observer()->GetEntries();
   EXPECT_EQ(3u, entries.size());
-  EXPECT_EQ(0u, trace_events()->GetSize());
+  EXPECT_EQ(0u, trace_events_size());
 }
 
 TEST_F(TraceNetLogObserverTest, CreateObserverAfterTracingStarts) {
   set_trace_net_log_observer(nullptr);
   EnableTraceLogWithNetLog();
-  set_trace_net_log_observer(new TraceNetLogObserver());
-  trace_net_log_observer()->WatchForTraceStart(net_log());
-  net_log()->AddGlobalEntry(NetLogEventType::CANCELLED);
+  set_trace_net_log_observer(std::make_unique<TraceNetLogObserver>());
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::CANCELLED);
   trace_net_log_observer()->StopWatchForTraceStart();
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
-  net_log()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
 
   EndTraceAndFlush();
 
-  auto entries = net_log()->GetEntries();
+  auto entries = net_log_observer()->GetEntries();
   EXPECT_EQ(3u, entries.size());
-  EXPECT_EQ(1u, trace_events()->GetSize());
+  EXPECT_EQ(1u, trace_events_size());
 }
 
 TEST_F(TraceNetLogObserverTest,
@@ -386,98 +387,107 @@ TEST_F(TraceNetLogObserverTest,
 
   EnableTraceLogWithoutNetLog();
 
-  set_trace_net_log_observer(new TraceNetLogObserver());
-  trace_net_log_observer()->WatchForTraceStart(net_log());
-  net_log()->AddGlobalEntry(NetLogEventType::CANCELLED);
+  set_trace_net_log_observer(std::make_unique<TraceNetLogObserver>());
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::CANCELLED);
   trace_net_log_observer()->StopWatchForTraceStart();
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
-  net_log()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::URL_REQUEST_START_JOB);
 
   EndTraceAndFlush();
 
-  auto entries = net_log()->GetEntries();
+  auto entries = net_log_observer()->GetEntries();
   EXPECT_EQ(3u, entries.size());
-  EXPECT_EQ(0u, trace_events()->GetSize());
+  EXPECT_EQ(0u, trace_events_size());
 }
 
 TEST_F(TraceNetLogObserverTest, EventsWithAndWithoutParameters) {
-  trace_net_log_observer()->WatchForTraceStart(net_log());
+  trace_net_log_observer()->WatchForTraceStart(NetLog::Get());
   EnableTraceLogWithNetLog();
 
-  net_log()->AddGlobalEntryWithStringParams(NetLogEventType::CANCELLED, "foo",
-                                            "bar");
-  net_log()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
+  NetLog::Get()->AddGlobalEntryWithStringParams(NetLogEventType::CANCELLED,
+                                                "foo", "bar");
+  NetLog::Get()->AddGlobalEntry(NetLogEventType::REQUEST_ALIVE);
 
   EndTraceAndFlush();
   trace_net_log_observer()->StopWatchForTraceStart();
 
-  auto entries = net_log()->GetEntries();
+  auto entries = net_log_observer()->GetEntries();
   EXPECT_EQ(2u, entries.size());
-  EXPECT_EQ(2u, trace_events()->GetSize());
-  const base::Value* item1 = &trace_events()->GetList()[0];
+  EXPECT_EQ(2u, trace_events_size());
+  const base::Value* item1 = &trace_events()[0];
   ASSERT_TRUE(item1->is_dict());
-  const base::Value* item2 = &trace_events()->GetList()[1];
+  const base::Value* item2 = &trace_events()[1];
   ASSERT_TRUE(item2->is_dict());
 
-  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(*item1);
-  TraceEntryInfo actual_item2 = GetTraceEntryInfoFromValue(*item2);
+  TraceEntryInfo actual_item1 = GetTraceEntryInfoFromValue(item1->GetDict());
+  TraceEntryInfo actual_item2 = GetTraceEntryInfoFromValue(item2->GetDict());
+
   EXPECT_EQ(kNetLogTracingCategory, actual_item1.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[0].source.id), actual_item1.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_INSTANT),
             actual_item1.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::CANCELLED),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::CANCELLED),
             actual_item1.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[0].source.type),
             actual_item1.source_type);
 
   EXPECT_EQ(kNetLogTracingCategory, actual_item2.category);
-  EXPECT_EQ(base::StringPrintf("0x%d", entries[1].source.id), actual_item2.id);
   EXPECT_EQ(std::string(1, TRACE_EVENT_PHASE_NESTABLE_ASYNC_INSTANT),
             actual_item2.phase);
-  EXPECT_EQ(NetLog::EventTypeToString(NetLogEventType::REQUEST_ALIVE),
+  EXPECT_EQ(NetLogEventTypeToString(NetLogEventType::REQUEST_ALIVE),
             actual_item2.name);
   EXPECT_EQ(NetLog::SourceTypeToString(entries[1].source.type),
             actual_item2.source_type);
 
-  const std::string* item1_params = item1->FindStringPath("args.params.foo");
+  const std::string* item1_params =
+      item1->GetDict().FindStringByDottedPath("args.params.foo");
   ASSERT_TRUE(item1_params);
   EXPECT_EQ("bar", *item1_params);
+  const std::string* item1_param_source_start_time =
+      item1->GetDict().FindStringByDottedPath("args.params.source_start_time");
+  EXPECT_NE(item1_param_source_start_time, nullptr);
 
-  const base::Value* item2_params = item2->FindDictPath("args.params");
-  ASSERT_TRUE(item2_params);
-  EXPECT_TRUE(item2_params->DictEmpty());
+  // Events emitted by TraceNetLogObserver always have params.
+  const base::DictValue* item2_args =
+      item2->GetDict().FindDictByDottedPath("args");
+  EXPECT_TRUE(item2_args->contains("params"));
+  const std::string* item2_param_source_start_time =
+      item2->GetDict().FindStringByDottedPath("args.params.source_start_time");
+  EXPECT_NE(item2_param_source_start_time, nullptr);
+
+  EXPECT_NE(actual_item1.track_id, actual_item2.track_id);
 }
 
 TEST(TraceNetLogObserverCategoryTest, DisabledCategory) {
   base::test::TaskEnvironment task_environment;
+  base::test::TracingEnvironment tracing_environment;
   TraceNetLogObserver observer;
-  TestNetLog net_log;
-  observer.WatchForTraceStart(&net_log);
+  observer.WatchForTraceStart(NetLog::Get());
 
-  EXPECT_FALSE(net_log.IsCapturing());
+  EXPECT_FALSE(NetLog::Get()->IsCapturing());
 
   EnableTraceLogWithoutNetLog();
 
-  EXPECT_FALSE(net_log.IsCapturing());
+  EXPECT_FALSE(NetLog::Get()->IsCapturing());
   observer.StopWatchForTraceStart();
-  EXPECT_FALSE(net_log.IsCapturing());
+  EXPECT_FALSE(NetLog::Get()->IsCapturing());
 
   DisableTraceLog();
 }
 
 TEST(TraceNetLogObserverCategoryTest, EnabledCategory) {
   base::test::TaskEnvironment task_environment;
+  base::test::TracingEnvironment tracing_environment;
   TraceNetLogObserver observer;
-  TestNetLog net_log;
-  observer.WatchForTraceStart(&net_log);
+  observer.WatchForTraceStart(NetLog::Get());
 
-  EXPECT_FALSE(net_log.IsCapturing());
+  EXPECT_FALSE(NetLog::Get()->IsCapturing());
 
   EnableTraceLogWithNetLog();
 
-  EXPECT_TRUE(net_log.IsCapturing());
+  EXPECT_TRUE(NetLog::Get()->IsCapturing());
   observer.StopWatchForTraceStart();
-  EXPECT_FALSE(net_log.IsCapturing());
+  EXPECT_FALSE(NetLog::Get()->IsCapturing());
 
   DisableTraceLog();
 }

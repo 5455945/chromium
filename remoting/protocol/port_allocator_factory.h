@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,31 +7,38 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "third_party/webrtc/p2p/base/port_allocator.h"
 
-namespace cricket {
-class PortAllocator;
-}  // namespace cricket
+namespace remoting::protocol {
 
-namespace remoting {
-namespace protocol {
-
+struct NetworkSettings;
 class SessionOptionsProvider;
 class TransportContext;
 
-// Factory class used for creating cricket::PortAllocator that is used
+// Factory class used for creating webrtc::PortAllocator that is used
 // to allocate ICE candidates.
 class PortAllocatorFactory {
  public:
-  virtual ~PortAllocatorFactory() {}
+  using ApplyNetworkSettingsCallback =
+      base::OnceCallback<void(const NetworkSettings&)>;
+  struct CreatePortAllocatorResult {
+    CreatePortAllocatorResult();
+    CreatePortAllocatorResult(CreatePortAllocatorResult&&);
+    ~CreatePortAllocatorResult();
+    std::unique_ptr<webrtc::PortAllocator> allocator;
+    ApplyNetworkSettingsCallback apply_network_settings;
+  };
 
-  virtual std::unique_ptr<cricket::PortAllocator> CreatePortAllocator(
+  virtual ~PortAllocatorFactory() = default;
+
+  virtual CreatePortAllocatorResult CreatePortAllocator(
       scoped_refptr<TransportContext> transport_context,
       base::WeakPtr<SessionOptionsProvider> session_options_provider) = 0;
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_PORT_ALLOCATOR_FACTORY_H_

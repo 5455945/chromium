@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,8 @@ namespace image_fetcher {
 // Enum for the result of the fetch, reported through UMA. Present in enums.xml
 // as ImageFetcherEvent. New values should be added at the end and things
 // should not be renumbered.
-// GENERATED_JAVA_ENUM_PACKAGE: (
-// org.chromium.chrome.browser.image_fetcher)
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.image_fetcher
+// LINT.IfChange(ImageFetcherEvent)
 enum class ImageFetcherEvent {
   kImageRequest = 0,
   kCacheHit = 1,
@@ -31,8 +31,11 @@ enum class ImageFetcherEvent {
   kImageQueuedForTranscodingDecoded = 10,
   kImageQueuedForTranscodingStoredBack = 11,
   kLoadImageMetadata = 12,
-  kMaxValue = kLoadImageMetadata,
+  kCacheDataStoreInitializationFailed = 13,
+  kCacheMetadataStoreInitializationFailed = 14,
+  kMaxValue = kCacheMetadataStoreInitializationFailed,
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:ImageFetcherEvent)
 
 class ImageFetcherMetricsReporter {
  public:

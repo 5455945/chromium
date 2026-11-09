@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,131 +6,137 @@
 
 #include <string>
 
+#include "base/metrics/histogram_functions.h"
+#include "base/sequence_checker.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
+#include "components/services/storage/public/cpp/buckets/bucket_id.h"
+#include "components/services/storage/public/cpp/buckets/constants.h"
 #include "sql/database.h"
 #include "sql/meta_table.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
 #include "storage/browser/quota/quota_database.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/blink/public/mojom/buckets/bucket_manager_host.mojom.h"
 
 namespace storage {
 
+namespace {
+
+// Quota type for deprecated temporary quota.
+constexpr int kDeprecatedTemporaryQuotaType = 0;
+
+}  // namespace
+
 // static
 bool QuotaDatabaseMigrations::UpgradeSchema(QuotaDatabase& quota_database) {
-  DCHECK_EQ(0, quota_database.db_->transaction_nesting());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(quota_database.sequence_checker_);
+  CHECK(!quota_database.db_->HasActiveTransactions());
 
-  // Reset tables for versions lower than 5 since they are unsupported.
-  if (quota_database.meta_table_->GetVersionNumber() < 5)
-    return quota_database.ResetSchema();
-
-  if (quota_database.meta_table_->GetVersionNumber() == 5) {
-    if (!MigrateFromVersion5ToVersion7(quota_database))
-      return false;
+  // Reset tables for versions lower than 10 since they are unsupported.
+  if (quota_database.meta_table_->GetVersionNumber() < 10) {
+    return false;
   }
 
-  if (quota_database.meta_table_->GetVersionNumber() == 6) {
-    if (!MigrateFromVersion6ToVersion7(quota_database))
+  if (quota_database.meta_table_->GetVersionNumber() == 10) {
+    bool success = MigrateFromVersion10ToVersion11(quota_database);
+    RecordMigrationHistogram(/*old_version=*/10, /*new_version=*/11, success);
+    if (!success) {
       return false;
+    }
   }
 
-  return quota_database.meta_table_->GetVersionNumber() == 7;
+  return quota_database.meta_table_->GetVersionNumber() == 11;
 }
 
-bool QuotaDatabaseMigrations::MigrateFromVersion5ToVersion7(
-    QuotaDatabase& quota_database) {
-  sql::Database* db = quota_database.db_.get();
-  sql::Transaction transaction(db);
-  if (!transaction.Begin())
-    return false;
-
-  // Create tables with latest schema.
-  for (size_t i = 0; i < QuotaDatabase::kTableCount; ++i) {
-    if (!quota_database.CreateTable(QuotaDatabase::kTables[i]))
-      return false;
-  }
-
-  // Create all indexes for tables.
-  for (size_t i = 0; i < QuotaDatabase::kIndexCount; ++i) {
-    if (!quota_database.CreateIndex(QuotaDatabase::kIndexes[i]))
-      return false;
-  }
-
-  // Copy OriginInfoTable data into new bucket table.
-  const char kImportOriginInfoSql[] =
-      // clang-format off
-      "INSERT INTO buckets("
-          "origin,"
-          "type,"
-          "name,"
-          "use_count,"
-          "last_accessed,"
-          "last_modified,"
-          "expiration,"
-          "quota) "
-        "SELECT "
-          "origin,"
-          "type,"
-          "?,"
-          "used_count,"
-          "last_access_time,"
-          "last_modified_time,"
-          "?,"
-          "0 "
-        "FROM OriginInfoTable";
-  // clang-format on
-  sql::Statement import_origin_info_statement(
-      db->GetCachedStatement(SQL_FROM_HERE, kImportOriginInfoSql));
-  import_origin_info_statement.BindString(0, QuotaDatabase::kDefaultBucketName);
-  import_origin_info_statement.BindTime(1, base::Time::Max());
-  if (!import_origin_info_statement.Run())
-    return false;
-
-  // Delete OriginInfoTable.
-  const char kDeleteOriginInfoTableSql[] = "DROP TABLE OriginInfoTable";
-  if (!db->Execute(kDeleteOriginInfoTableSql))
-    return false;
-
-  // Copy HostQuotaTable data into the new quota table.
-  const char kImportQuotaSql[] =
-      // clang-format off
-      "INSERT INTO quota(host, type, quota) "
-        "SELECT host, type, quota "
-        "FROM HostQuotaTable";
-  // clang-format on
-  sql::Statement import_quota_statement(
-      db->GetCachedStatement(SQL_FROM_HERE, kImportQuotaSql));
-  if (!import_quota_statement.Run())
-    return false;
-
-  // Delete HostQuotaTable.
-  const char kDeleteQuotaHostTableSql[] = "DROP TABLE HostQuotaTable";
-  if (!db->Execute(kDeleteQuotaHostTableSql))
-    return false;
-
-  // Delete EvictionInfoTable.
-  const char kDeleteEvictionInfoTableSql[] = "DROP TABLE EvictionInfoTable";
-  if (!db->Execute(kDeleteEvictionInfoTableSql))
-    return false;
-
-  // Upgrade to version 7 since it already deletes EvictionInfoTable.
-  quota_database.meta_table_->SetVersionNumber(7);
-  quota_database.meta_table_->SetCompatibleVersionNumber(7);
-  return transaction.Commit();
+void QuotaDatabaseMigrations::RecordMigrationHistogram(int old_version,
+                                                       int new_version,
+                                                       bool success) {
+  base::UmaHistogramBoolean(
+      base::StrCat({"Quota.DatabaseMigrationFromV",
+                    base::NumberToString(old_version), "ToV",
+                    base::NumberToString(new_version)}),
+      success);
 }
 
-bool QuotaDatabaseMigrations::MigrateFromVersion6ToVersion7(
+bool QuotaDatabaseMigrations::MigrateFromVersion10ToVersion11(
     QuotaDatabase& quota_database) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(quota_database.sequence_checker_);
+
   sql::Database* db = quota_database.db_.get();
   sql::Transaction transaction(db);
-  if (!transaction.Begin())
+  if (!transaction.Begin()) {
     return false;
+  }
 
-  const char kDeleteEvictionInfoTableSql[] = "DROP TABLE eviction_info";
-  if (!db->Execute(kDeleteEvictionInfoTableSql))
+  // Delete buckets that aren't of the temporary type (see crbug.com/40211051).
+  static constexpr char kDeleteTemporaryTypeBuckets[] =
+      "DELETE FROM buckets WHERE type != ? ";
+  sql::Statement delete_statement(
+      db->GetCachedStatement(SQL_FROM_HERE, kDeleteTemporaryTypeBuckets));
+  delete_statement.BindInt(0, kDeprecatedTemporaryQuotaType);
+  if (!delete_statement.Run()) {
     return false;
+  }
 
-  quota_database.meta_table_->SetVersionNumber(7);
-  quota_database.meta_table_->SetCompatibleVersionNumber(7);
-  return transaction.Commit();
+  // Drop all indices with type (see crbug.com/40211051).
+  static constexpr char kDropStorageKeyIndex[] =
+      "DROP INDEX buckets_by_storage_key";
+  if (!db->Execute(kDropStorageKeyIndex)) {
+    return false;
+  }
+  static constexpr char kDropHostIndex[] = "DROP INDEX buckets_by_host";
+  if (!db->Execute(kDropHostIndex)) {
+    return false;
+  }
+  static constexpr char kDropLastAccessedIndex[] =
+      "DROP INDEX buckets_by_last_accessed";
+  if (!db->Execute(kDropLastAccessedIndex)) {
+    return false;
+  }
+  static constexpr char kDropLastModifiedIndex[] =
+      "DROP INDEX buckets_by_last_modified";
+  if (!db->Execute(kDropLastModifiedIndex)) {
+    return false;
+  }
+
+  // Drop type column from buckets table (see crbug.com/40211051).
+  static constexpr char kDropTypeColumn[] =
+      "ALTER TABLE buckets DROP COLUMN type";
+  sql::Statement drop_statement(
+      db->GetCachedStatement(SQL_FROM_HERE, kDropTypeColumn));
+  if (!drop_statement.Run()) {
+    return false;
+  }
+
+  // Create all dropped indices without type (see crbug.com/40211051).
+  static constexpr char kCreateStorageKeyIndex[] =
+      "CREATE UNIQUE INDEX buckets_by_storage_key ON buckets(storage_key, "
+      "name)";
+  if (!db->Execute(kCreateStorageKeyIndex)) {
+    return false;
+  }
+  static constexpr char kCreateHostIndex[] =
+      "CREATE INDEX buckets_by_host ON buckets(host)";
+  if (!db->Execute(kCreateHostIndex)) {
+    return false;
+  }
+  static constexpr char kCreateLastAccessedIndex[] =
+      "CREATE INDEX buckets_by_last_accessed ON buckets(last_accessed)";
+  if (!db->Execute(kCreateLastAccessedIndex)) {
+    return false;
+  }
+  static constexpr char kCreateLastModifiedIndex[] =
+      "CREATE INDEX buckets_by_last_modified ON buckets(last_modified);";
+  if (!db->Execute(kCreateLastModifiedIndex)) {
+    return false;
+  }
+
+  // Mark database as up to date.
+  return quota_database.meta_table_->SetVersionNumber(11) &&
+         quota_database.meta_table_->SetCompatibleVersionNumber(11) &&
+         transaction.Commit();
 }
 
 }  // namespace storage

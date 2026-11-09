@@ -1,15 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.payments;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.mojo.bindings.Struct;
 
 import java.nio.ByteBuffer;
 import java.util.Collection;
 
 /** Helper class for serializing a collection of Mojo structs. */
+@NullMarked
 public class MojoStructCollection {
     /**
      * Serialize a collection of Mojo structs.

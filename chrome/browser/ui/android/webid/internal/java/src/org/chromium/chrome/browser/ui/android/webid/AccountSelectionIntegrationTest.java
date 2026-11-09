@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,187 +8,608 @@ import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.core.Is.is;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
 import static org.chromium.base.test.util.CriteriaHelper.pollUiThread;
-import static org.chromium.content_public.browser.test.util.TestThreadUtils.runOnUiThreadBlocking;
 
 import android.annotation.SuppressLint;
+import android.text.Spanned;
+import android.text.style.ClickableSpan;
 import android.view.View;
 import android.widget.TextView;
 
-import androidx.annotation.Nullable;
+import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.espresso.Espresso;
+import androidx.test.espresso.NoMatchingViewException;
 import androidx.test.filters.MediumTest;
+import androidx.test.runner.lifecycle.Stage;
 
-import org.junit.Before;
-import org.junit.Rule;
+import org.hamcrest.Matchers;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
+import org.chromium.base.test.params.ParameterAnnotations;
+import org.chromium.base.test.params.ParameterSet;
+import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.ScalableTimeout;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.blink.mojom.RpContext;
+import org.chromium.blink.mojom.RpMode;
+import org.chromium.chrome.browser.IntentHandler;
+import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.ui.android.webid.data.Account;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.HeaderType;
+import org.chromium.chrome.browser.ui.android.webid.data.RelyingPartyData;
+import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
-import org.chromium.url.GURL;
-import org.chromium.url.JUnitTestGURLs;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
+import org.chromium.components.browser_ui.bottomsheet.TestBottomSheetContent;
+import org.chromium.components.browser_ui.bottomsheet.UserCriticalFeature;
+import org.chromium.content.webid.IdentityRequestDialogDismissReason;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Integration tests for the Account Selection component check that the calls to the Account
- * Selection API end up rendering a View.
+ * Selection API end up rendering a View. This class is parameterized to run all tests for each RP
+ * mode.
  */
-@RunWith(ChromeJUnit4ClassRunner.class)
+@RunWith(ParameterizedRunner.class)
+@ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-public class AccountSelectionIntegrationTest {
-    private static final String EXAMPLE_URL = JUnitTestGURLs.EXAMPLE_URL;
-    private static final GURL TEST_URL_1 = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1);
-    private static final GURL TEST_URL_2 = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_2);
-    private static final GURL TEST_PROFILE_PIC =
-            JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1_WITH_PATH);
+public class AccountSelectionIntegrationTest extends AccountSelectionIntegrationTestBase {
+    @ParameterAnnotations.ClassParameter
+    private static final List<ParameterSet> sClassParams =
+            Arrays.asList(
+                    new ParameterSet().value(RpMode.PASSIVE).name("passive"),
+                    new ParameterSet().value(RpMode.ACTIVE).name("active"));
 
-    private static final Account ANA =
-            new Account("Ana", "ana@one.test", "Ana Doe", "Ana", TEST_PROFILE_PIC, TEST_URL_1);
-    private static final Account BOB =
-            new Account("Bob", "", "Bob", "", TEST_PROFILE_PIC, TEST_URL_2);
+    private final @BottomSheetController.SheetState int mExpectedSheetState;
 
-    private AccountSelectionComponent mAccountSelection;
+    @Mock AccountSelectionComponent.Delegate mCustomTabMockBridge;
 
-    @Mock
-    private AccountSelectionComponent.Delegate mMockBridge;
-
-    @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
-
-    private BottomSheetController mBottomSheetController;
-
-    @Before
-    public void setUp() throws InterruptedException {
-        MockitoAnnotations.initMocks(this);
-        mAccountSelection = new AccountSelectionCoordinator();
-        mActivityTestRule.startMainActivityOnBlankPage();
-        runOnUiThreadBlocking(() -> {
-            mBottomSheetController = BottomSheetControllerProvider.from(
-                    mActivityTestRule.getActivity().getWindowAndroid());
-            mAccountSelection.initialize(
-                    mActivityTestRule.getActivity(), mBottomSheetController, mMockBridge);
-        });
+    public AccountSelectionIntegrationTest(@RpMode.EnumType int rpMode) {
+        mRpMode = rpMode;
+        mExpectedSheetState =
+                rpMode == RpMode.ACTIVE
+                        ? BottomSheetController.SheetState.HALF
+                        : BottomSheetController.SheetState.FULL;
     }
 
     @Test
     @MediumTest
     public void testBackDismissesAndCallsCallback() {
         runOnUiThreadBlocking(
-                () -> { mAccountSelection.showAccounts(EXAMPLE_URL, Arrays.asList(ANA, BOB)); });
-        pollUiThread(() -> getBottomSheetState() == BottomSheetController.SheetState.FULL);
+                () -> {
+                    mAccountSelection.showAccounts(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            Arrays.asList(mReturningAna, mNewBob),
+                            Arrays.asList(mIdpData),
+                            /* newAccounts= */ Collections.emptyList());
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
 
         Espresso.pressBack();
 
-        waitForEvent(mMockBridge).onDismissed();
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.BACK_PRESS);
         verify(mMockBridge, never()).onAccountSelected(any());
+    }
+
+    @Test
+    @MediumTest
+    public void testSwipeDismissesAndCallsCallback() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showAccounts(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            Arrays.asList(mReturningAna, mNewBob),
+                            Arrays.asList(mIdpData),
+                            /* newAccounts= */ Collections.emptyList());
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+        BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
+        runOnUiThreadBlocking(
+                () -> {
+                    sheetSupport.suppressSheet(BottomSheetController.StateChangeReason.SWIPE);
+                });
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.SWIPE);
+        verify(mMockBridge, never()).onAccountSelected(any());
+    }
+
+    private void testClickOnConsentLink(int linkIndex, String expectedUrl) {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showAccounts(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            Arrays.asList(mNewBob),
+                            Arrays.asList(mIdpData),
+                            /* newAccounts= */ Collections.emptyList());
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        View contentView = mBottomSheetController.getCurrentSheetContent().getContentView();
+        assertNotNull(contentView);
+        if (mRpMode == RpMode.ACTIVE) {
+            // Active mode only shows the disclosure text on the request permission dialog, which
+            // the continue button opens.
+            runOnUiThreadBlocking(
+                    () -> {
+                        // Do not let test inputs be ignored.
+                        mAccountSelection.getMediator().setComponentShowTime(-1000);
+                        contentView
+                                .findViewById(R.id.account_selection_continue_btn)
+                                .performClick();
+                    });
+        }
+        TextView consent = contentView.findViewById(R.id.user_data_sharing_consent);
+        if (consent == null) {
+            throw new NoMatchingViewException.Builder()
+                    .includeViewHierarchy(true)
+                    .withRootView(contentView)
+                    .build();
+        }
+        assertTrue(consent.getText() instanceof Spanned);
+        Spanned spannedString = (Spanned) consent.getText();
+        ClickableSpan[] spans =
+                spannedString.getSpans(0, spannedString.length(), ClickableSpan.class);
+        assertEquals("Expected two clickable links", 2, spans.length);
+
+        CustomTabActivity activity =
+                ApplicationTestUtils.waitForActivityWithClass(
+                        CustomTabActivity.class,
+                        Stage.RESUMED,
+                        () -> spans[linkIndex].onClick(null));
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return activity.getActivityTab() != null
+                            && activity.getActivityTab().getUrl().getSpec().equals(expectedUrl);
+                });
+    }
+
+    @Test
+    @MediumTest
+    public void testClickPrivacyPolicyLink() {
+        testClickOnConsentLink(0, mTestUrlPrivacyPolicy);
+    }
+
+    @Test
+    @MediumTest
+    public void testClickTermsOfServiceLink() {
+        testClickOnConsentLink(1, mTestUrlTermsOfService);
     }
 
     @Test
     @MediumTest
     @SuppressLint("SetTextI18n")
     public void testDismissedIfUnableToShow() throws Exception {
-        BottomSheetContent otherBottomSheetContent = runOnUiThreadBlocking(() -> {
-            TextView highPriorityBottomSheetContentView =
-                    new TextView(mActivityTestRule.getActivity());
-            highPriorityBottomSheetContentView.setText("Another bottom sheet content");
-            BottomSheetContent content =
-                    createTestBottomSheetContent(highPriorityBottomSheetContentView);
-            mBottomSheetController.requestShowContent(content, false);
-            return content;
-        });
-        pollUiThread(() -> getBottomSheetState() == SheetState.PEEK);
+        BottomSheetContent otherBottomSheetContent =
+                runOnUiThreadBlocking(
+                        () -> {
+                            TextView highPriorityBottomSheetContentView =
+                                    new TextView(mActivityTestRule.getActivity());
+                            highPriorityBottomSheetContentView.setText(
+                                    "Another bottom sheet content");
+                            TestBottomSheetContent content =
+                                    new TestBottomSheetContent(
+                                            mActivityTestRule.getActivity(),
+                                            BottomSheetContent.ContentPriority.HIGH,
+                                            /* hasCustomLifecycle= */ false,
+                                            highPriorityBottomSheetContentView);
+                            content.setSheetType(
+                                    new BottomSheetType.Builder()
+                                            .setUserInitiated(mRpMode != RpMode.PASSIVE)
+                                            .setModal(mRpMode != RpMode.PASSIVE)
+                                            .setUserCritical(
+                                                    UserCriticalFeature.FEDERATED_ACCOUNT_SELECTION)
+                                            .build());
+                            mBottomSheetController.requestShowContent(content, false);
+                            return content;
+                        });
+        pollUiThread(() -> getBottomSheetState() != SheetState.HIDDEN);
         Espresso.onView(withText("Another bottom sheet content")).check(matches(isDisplayed()));
 
         runOnUiThreadBlocking(
-                () -> { mAccountSelection.showAccounts(EXAMPLE_URL, Arrays.asList(ANA, BOB)); });
-        waitForEvent(mMockBridge).onDismissed();
+                () -> {
+                    mAccountSelection.showAccounts(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            Arrays.asList(mReturningAna, mNewBob),
+                            Arrays.asList(mIdpData),
+                            /* newAccounts= */ Collections.emptyList());
+                });
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.OTHER);
         verify(mMockBridge, never()).onAccountSelected(any());
         Espresso.onView(withText("Another bottom sheet content")).check(matches(isDisplayed()));
 
         runOnUiThreadBlocking(
-                () -> { mBottomSheetController.hideContent(otherBottomSheetContent, false); });
+                () -> {
+                    mBottomSheetController.hideContent(otherBottomSheetContent, false);
+                });
         pollUiThread(() -> getBottomSheetState() == BottomSheetController.SheetState.HIDDEN);
     }
 
-    public static <T> T waitForEvent(T mock) {
-        return verify(mock,
-                timeout(ScalableTimeout.scaleTimeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL)));
+    @Test
+    @MediumTest
+    public void testFailureDialogBackDismissesAndCallsCallback() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.BACK_PRESS);
+
+        Espresso.pressBack();
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.BACK_PRESS);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
     }
 
-    private @SheetState int getBottomSheetState() {
-        return mBottomSheetController.getSheetState();
+    @Test
+    @MediumTest
+    public void testFailureDialogSwipeDismissesAndCallsCallback() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.SWIPE);
+
+        BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
+        runOnUiThreadBlocking(
+                () -> {
+                    sheetSupport.suppressSheet(BottomSheetController.StateChangeReason.SWIPE);
+                });
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.SWIPE);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
     }
 
-    private BottomSheetContent createTestBottomSheetContent(View contentView) {
-        return new BottomSheetContent() {
-            @Override
-            public View getContentView() {
-                return contentView;
-            }
+    @Test
+    @MediumTest
+    public void testShowAndCloseModalDialog() {
+        when(mMockBridge.getWebContents()).thenReturn(mAccountSelection.getWebContents());
+        doAnswer(
+                        i -> {
+                            mAccountSelection.setPopupComponent(
+                                    (AccountSelectionComponent) i.getArguments()[0]);
+                            return null;
+                        })
+                .when(mMockBridge)
+                .setPopupComponent(any());
+        CustomTabActivity activity =
+                ApplicationTestUtils.waitForActivityWithClass(
+                        CustomTabActivity.class,
+                        Stage.RESUMED,
+                        () -> mAccountSelection.showModalDialog(TEST_URL));
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(activity.getActivityTab(), Matchers.notNullValue());
+                    Criteria.checkThat(activity.getActivityTab().getUrl(), is(TEST_URL));
+                    Criteria.checkThat(activity.getIntent(), Matchers.notNullValue());
+                    Criteria.checkThat(
+                            activity.getIntent().getIntExtra(IntentHandler.EXTRA_FEDCM_ID, -1),
+                            Matchers.not(-1));
+                });
 
-            @Nullable
-            @Override
-            public View getToolbarView() {
-                return null;
-            }
+        ApplicationTestUtils.waitForActivityWithClass(
+                CustomTabActivity.class,
+                Stage.DESTROYED,
+                () -> {
+                    BottomSheetController customTabController =
+                            BottomSheetControllerProvider.from(activity.getWindowAndroid());
+                    AccountSelectionComponent customTabComponent =
+                            new AccountSelectionCoordinator(
+                                    activity.getActivityTab(),
+                                    activity.getWindowAndroid(),
+                                    customTabController,
+                                    mRpMode,
+                                    /* canShowUi= */ true,
+                                    mCustomTabMockBridge);
+                    Criteria.checkThat(mAccountSelection.getWebContents(), Matchers.notNullValue());
+                    Criteria.checkThat(mAccountSelection.getRpWebContents(), Matchers.nullValue());
+                    Criteria.checkThat(
+                            customTabComponent.getWebContents(), Matchers.notNullValue());
+                    Criteria.checkThat(
+                            customTabComponent.getRpWebContents(), Matchers.notNullValue());
+                    mAccountSelection.closeModalDialog();
+                });
+        verify(mCustomTabMockBridge, never()).getWebContents();
+    }
 
-            @Override
-            public int getVerticalScrollOffset() {
-                return 0;
-            }
+    @Test
+    @MediumTest
+    public void testShowModalDialogAndFinish() {
+        CustomTabActivity activity =
+                ApplicationTestUtils.waitForActivityWithClass(
+                        CustomTabActivity.class,
+                        Stage.RESUMED,
+                        () -> mAccountSelection.showModalDialog(TEST_URL));
+        runOnUiThreadBlocking(
+                () -> {
+                    activity.finish();
+                });
+        CriteriaHelper.pollUiThread(() -> activity.isDestroyed());
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        verify(mMockBridge, never()).onAccountSelected(any());
+    }
 
-            @Override
-            public void destroy() {}
+    @Test
+    @MediumTest
+    public void testIncorrectCloseModalDialog() {
+        // closeModalDialog() on the mAccountSelection should do nothing.
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.closeModalDialog();
+                });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            mActivityTestRule.getActivity().isDestroyed(), Matchers.is(false));
+                });
+    }
 
-            @Override
-            public int getPriority() {
-                return ContentPriority.HIGH;
-            }
+    @Test
+    @MediumTest
+    public void testDismissAddAccountCctReopensAccountChooser() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showAccounts(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            Arrays.asList(mNewBobWithAddAccount, mReturningAnaWithAddAccount),
+                            Arrays.asList(mIdpDataWithAddAccount),
+                            /* newAccounts= */ Collections.emptyList());
+                    mAccountSelection.getMediator().setComponentShowTime(-1000);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
 
-            @Override
-            public boolean swipeToDismissEnabled() {
-                return false;
-            }
+        View contentView = mBottomSheetController.getCurrentSheetContent().getContentView();
+        assertNotNull(contentView);
 
-            @Override
-            public int getSheetContentDescriptionStringId() {
-                return 0;
-            }
+        RecyclerView accountsList = contentView.findViewById(R.id.sheet_item_list);
+        int expectedChildCount = mRpMode == RpMode.ACTIVE ? 3 : 4;
+        assertEquals(expectedChildCount, accountsList.getChildCount());
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_LOGIN,
+                accountsList.getAdapter().getItemViewType(expectedChildCount - 1));
 
-            @Override
-            public int getSheetHalfHeightAccessibilityStringId() {
-                return 0;
-            }
+        // Close the use other account CCT when it is opened.
+        doAnswer(
+                        new Answer<>() {
+                            @Override
+                            public Void answer(InvocationOnMock invocation) {
+                                mAccountSelection
+                                        .getMediator()
+                                        .onDismissed(IdentityRequestDialogDismissReason.OTHER);
+                                return null;
+                            }
+                        })
+                .when(mMockBridge)
+                .onLoginToIdP(any(), any());
 
-            @Override
-            public int getSheetFullHeightAccessibilityStringId() {
-                return 0;
-            }
+        // Click "Use a different account".
+        runOnUiThreadBlocking(
+                () -> {
+                    accountsList.getChildAt(expectedChildCount - 1).performClick();
+                });
 
-            @Override
-            public int getSheetClosedAccessibilityStringId() {
-                return 0;
-            }
-        };
+        // Verify that account chooser remains open.
+        assertEquals(HeaderType.SIGN_IN, mAccountSelection.getMediator().getHeaderType());
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        verify(mMockBridge, never()).onAccountSelected(any());
+    }
+
+    @Test
+    @MediumTest
+    public void testFailureDialogContinueRecordsMismatchDialogResultHistogram() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.CONTINUED);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.getMediator().setComponentShowTime(-1000);
+                    mBottomSheetController
+                            .getCurrentSheetContent()
+                            .getContentView()
+                            .findViewById(R.id.account_selection_continue_btn)
+                            .performClick();
+                });
+
+        // Continue also dismisses the dialog, so we simulate a subsequent dismissal to
+        // prevent double counting.
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection
+                            .getMediator()
+                            .onDismissed(IdentityRequestDialogDismissReason.OTHER);
+                });
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    public void testFailureDialogTapScrimRecordsMismatchDialogResultHistogram() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.TAP_SCRIM);
+
+        BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
+        runOnUiThreadBlocking(
+                () -> {
+                    sheetSupport.forceClickOutsideTheSheet();
+                });
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.TAP_SCRIM);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @DisableFeatures(ChromeFeatureList.BOTTOM_SHEET_ON_DESKTOP_WINDOWING)
+    public void testFailureDialogCloseButtonRecordsMismatchDialogResultHistogram() {
+        if (mRpMode == RpMode.ACTIVE) return;
+
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.DISMISSED_BY_CLOSE_ICON);
+
+        // Click close button in header.
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.getMediator().setComponentShowTime(-1000);
+                    mBottomSheetController
+                            .getCurrentSheetContent()
+                            .getContentView()
+                            .findViewById(R.id.close_button)
+                            .performClick();
+                });
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.CLOSE_BUTTON);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    public void testFailureDialogDestroyRecordsMismatchDialogResultHistogram() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.DISMISSED_FOR_OTHER_REASONS);
+
+        // Simulate sheet suppression due to navigation / destruction.
+        BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
+        runOnUiThreadBlocking(
+                () -> {
+                    sheetSupport.suppressSheet(BottomSheetController.StateChangeReason.NAVIGATION);
+                });
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
     }
 }

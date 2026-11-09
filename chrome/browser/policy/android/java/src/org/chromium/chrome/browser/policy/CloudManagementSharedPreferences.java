@@ -1,18 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.policy;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 
-/**
- * Gets and sets preferences associated with cloud management.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+
+/** Gets and sets preferences associated with cloud management. */
 @JNINamespace("policy::android")
+@NullMarked
 public class CloudManagementSharedPreferences {
     /**
      * Sets the "Cloud management DM token" preference.
@@ -20,19 +22,26 @@ public class CloudManagementSharedPreferences {
      * @param dmToken The token provided by the DM server when browser registration succeeds.
      */
     @CalledByNative
-    public static void saveDmToken(String dmToken) {
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.CLOUD_MANAGEMENT_DM_TOKEN, dmToken);
+    public static void saveDmToken(@JniType("std::string") String dmToken) {
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.CLOUD_MANAGEMENT_DM_TOKEN, dmToken);
+    }
+
+    /** Deletes the "Cloud management DM token" preference. */
+    @CalledByNative
+    public static void deleteDmToken() {
+        ChromeSharedPreferences.getInstance()
+                .removeKey(ChromePreferenceKeys.CLOUD_MANAGEMENT_DM_TOKEN);
     }
 
     /**
-     * Returns the value of the "Cloud management DM token" preference, which is non-empty
-     * if browser registration succeeded.
+     * Returns the value of the "Cloud management DM token" preference, which is non-empty if
+     * browser registration succeeded.
      */
     @CalledByNative
-    public static String readDmToken() {
-        return SharedPreferencesManager.getInstance().readString(
-                ChromePreferenceKeys.CLOUD_MANAGEMENT_DM_TOKEN, "");
+    public static @JniType("std::string") String readDmToken() {
+        return ChromeSharedPreferences.getInstance()
+                .readString(ChromePreferenceKeys.CLOUD_MANAGEMENT_DM_TOKEN, "");
     }
 
     /**
@@ -41,15 +50,13 @@ public class CloudManagementSharedPreferences {
      * @param clientId The ID generated to represent the current browser installation.
      */
     public static void saveClientId(String clientId) {
-        SharedPreferencesManager.getInstance().writeString(
-                ChromePreferenceKeys.CLOUD_MANAGEMENT_CLIENT_ID, clientId);
+        ChromeSharedPreferences.getInstance()
+                .writeString(ChromePreferenceKeys.CLOUD_MANAGEMENT_CLIENT_ID, clientId);
     }
 
-    /**
-     * Returns the value of the "Cloud management client ID" preference.
-     */
+    /** Returns the value of the "Cloud management client ID" preference. */
     public static String readClientId() {
-        return SharedPreferencesManager.getInstance().readString(
-                ChromePreferenceKeys.CLOUD_MANAGEMENT_CLIENT_ID, "");
+        return ChromeSharedPreferences.getInstance()
+                .readString(ChromePreferenceKeys.CLOUD_MANAGEMENT_CLIENT_ID, "");
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,26 @@
 
 #include <memory>
 
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-namespace chromeos {
+namespace ash {
 
-OAuth2TokenInitializer::OAuth2TokenInitializer() {}
+OAuth2TokenInitializer::OAuth2TokenInitializer() = default;
 
-OAuth2TokenInitializer::~OAuth2TokenInitializer() {}
+OAuth2TokenInitializer::~OAuth2TokenInitializer() = default;
 
-void OAuth2TokenInitializer::Start(const UserContext& user_context,
-                                   FetchOAuth2TokensCallback callback) {
-  DCHECK(!user_context.GetAuthCode().empty());
+void OAuth2TokenInitializer::Start(
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    const UserContext& user_context,
+    FetchOAuth2TokensCallback callback) {
+  CHECK(!user_context.GetAuthCode().empty(), base::NotFatalUntil::M161);
   callback_ = std::move(callback);
   user_context_ = user_context;
   oauth2_token_fetcher_ = std::make_unique<OAuth2TokenFetcher>(
-      this, g_browser_process->system_network_context_manager()
-                ->GetSharedURLLoaderFactory());
-  if (user_context.GetDeviceId().empty())
+      this, std::move(shared_url_loader_factory));
+  if (user_context.GetDeviceId().empty()) {
     NOTREACHED() << "Device ID is not set";
+  }
   oauth2_token_fetcher_->StartExchangeFromAuthCode(user_context.GetAuthCode(),
                                                    user_context.GetDeviceId());
 }
@@ -40,15 +39,6 @@ void OAuth2TokenInitializer::OnOAuth2TokensAvailable(
   user_context_.SetIsUnderAdvancedProtection(
       result.is_under_advanced_protection);
 
-  const bool support_usm =
-      base::FeatureList::IsEnabled(features::kCrOSEnableUSMUserService);
-  if (result.is_child_account &&
-      user_context_.GetUserType() != user_manager::USER_TYPE_CHILD) {
-    LOG(FATAL) << "Incorrect child user type " << user_context_.GetUserType();
-  } else if (user_context_.GetUserType() == user_manager::USER_TYPE_CHILD &&
-             !result.is_child_account && !support_usm) {
-    LOG(FATAL) << "Incorrect non-child token for the child user.";
-  }
   std::move(callback_).Run(true, user_context_);
 }
 
@@ -57,4 +47,4 @@ void OAuth2TokenInitializer::OnOAuth2TokensFetchFailed() {
   std::move(callback_).Run(false, user_context_);
 }
 
-}  // namespace chromeos
+}  // namespace ash

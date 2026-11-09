@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,24 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "base/values.h"
 
 namespace base {
-class DictionaryValue;
-class ListValue;
 class Location;
 class SingleThreadTaskRunner;
 }  // namespace base
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // PairingRegistry holds information about paired clients to support
 // PIN-less authentication. For each paired client, the registry holds
@@ -48,9 +47,9 @@ class PairingRegistry : public base::RefCountedThreadSafe<PairingRegistry> {
     ~Pairing();
 
     static Pairing Create(const std::string& client_name);
-    static Pairing CreateFromValue(const base::DictionaryValue& pairing);
+    static Pairing CreateFromValue(const base::DictValue& pairing);
 
-    std::unique_ptr<base::DictionaryValue> ToValue() const;
+    base::DictValue ToValue() const;
 
     bool operator==(const Pairing& other) const;
 
@@ -73,7 +72,7 @@ class PairingRegistry : public base::RefCountedThreadSafe<PairingRegistry> {
 
   // Delegate callbacks.
   typedef base::OnceCallback<void(bool success)> DoneCallback;
-  typedef base::OnceCallback<void(std::unique_ptr<base::ListValue> pairings)>
+  typedef base::OnceCallback<void(base::ListValue pairings)>
       GetAllPairingsCallback;
   typedef base::OnceCallback<void(Pairing pairing)> GetPairingCallback;
 
@@ -82,13 +81,18 @@ class PairingRegistry : public base::RefCountedThreadSafe<PairingRegistry> {
   static const char kClientNameKey[];
   static const char kSharedSecretKey[];
 
+  // Returns the canonical lowercase UUID string representation of |client_id|,
+  // or std::nullopt if the |client_id| is not a valid UUID.
+  static std::optional<std::string> GetCanonicalClientId(
+      std::string_view client_id);
+
   // Interface representing the persistent storage back-end.
   class Delegate {
    public:
     virtual ~Delegate() {}
 
     // Retrieves all JSON-encoded pairings from persistent storage.
-    virtual std::unique_ptr<base::ListValue> LoadAll() = 0;
+    virtual base::ListValue LoadAll() = 0;
 
     // Deletes all pairings in persistent storage.
     virtual bool DeleteAll() = 0;
@@ -106,6 +110,9 @@ class PairingRegistry : public base::RefCountedThreadSafe<PairingRegistry> {
   PairingRegistry(
       scoped_refptr<base::SingleThreadTaskRunner> delegate_task_runner,
       std::unique_ptr<Delegate> delegate);
+
+  PairingRegistry(const PairingRegistry&) = delete;
+  PairingRegistry& operator=(const PairingRegistry&) = delete;
 
   // Creates a pairing for a new client and saves it to disk.
   //
@@ -161,11 +168,11 @@ class PairingRegistry : public base::RefCountedThreadSafe<PairingRegistry> {
                                                Pairing pairing);
   void InvokeGetAllPairingsCallbackAndScheduleNext(
       GetAllPairingsCallback callback,
-      std::unique_ptr<base::ListValue> pairings);
+      base::ListValue pairings);
 
   // Sanitize |pairings| by parsing each entry and removing the secret from it.
   void SanitizePairings(GetAllPairingsCallback callback,
-                        std::unique_ptr<base::ListValue> pairings);
+                        base::ListValue pairings);
 
   // Queue management methods.
   void ServiceOrQueueRequest(base::OnceClosure request);
@@ -182,11 +189,8 @@ class PairingRegistry : public base::RefCountedThreadSafe<PairingRegistry> {
   std::unique_ptr<Delegate> delegate_;
 
   base::queue<base::OnceClosure> pending_requests_;
-
-  DISALLOW_COPY_AND_ASSIGN(PairingRegistry);
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_PAIRING_REGISTRY_H_

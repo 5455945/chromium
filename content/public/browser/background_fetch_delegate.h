@@ -1,20 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_BACKGROUND_FETCH_DELEGATE_H_
 #define CONTENT_PUBLIC_BROWSER_BACKGROUND_FETCH_DELEGATE_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
-#include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/byte_size.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/web_contents.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom-forward.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -53,8 +57,6 @@ enum class BackgroundFetchPermission {
 class CONTENT_EXPORT BackgroundFetchDelegate {
  public:
   using GetIconDisplaySizeCallback = base::OnceCallback<void(const gfx::Size&)>;
-  using GetUploadDataCallback =
-      base::OnceCallback<void(blink::mojom::SerializedBlobPtr)>;
 
   // Client interface that a BackgroundFetchDelegate would use to signal the
   // progress of a background fetch.
@@ -62,10 +64,32 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
    public:
     virtual ~Client() {}
 
+    // Contains request parameters that are not persisted and need to be
+    // re-provided by the client when a download is resumed after a restart.
+    struct CONTENT_EXPORT GetUploadDataResponse {
+      GetUploadDataResponse();
+      ~GetUploadDataResponse();
+      GetUploadDataResponse(const GetUploadDataResponse&) = delete;
+      GetUploadDataResponse& operator=(const GetUploadDataResponse&) = delete;
+      GetUploadDataResponse(GetUploadDataResponse&& other);
+      GetUploadDataResponse& operator=(GetUploadDataResponse&& other);
+
+      // The request body to use for the download.
+      mojo::PendingRemote<network::mojom::DataPipeGetter> data_pipe_getter;
+      base::ByteSize size;
+
+      // The custom URLLoaderFactory to use for the request.
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
+    };
+
+    using GetUploadDataCallback =
+        base::OnceCallback<void(GetUploadDataResponse)>;
+
     // Called when the entire download job has been cancelled by the delegate,
     // e.g. because the user clicked cancel on a notification.
     virtual void OnJobCancelled(
         const std::string& job_unique_id,
+        const std::string& download_guid,
         blink::mojom::BackgroundFetchFailureReason reason_to_abort) = 0;
 
     // Called after the download has started with the initial response
@@ -102,6 +126,8 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
                                GetUploadDataCallback callback) = 0;
   };
 
+  using GetUploadDataCallback = Client::GetUploadDataCallback;
+
   BackgroundFetchDelegate();
 
   virtual ~BackgroundFetchDelegate();
@@ -126,9 +152,12 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
       const std::string& download_guid,
       const std::string& method,
       const GURL& url,
+      ::network::mojom::CredentialsMode credentials_mode,
+      ::network::mojom::RequestMode request_mode,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
       const net::HttpRequestHeaders& headers,
-      bool has_request_body) = 0;
+      bool has_request_body,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) = 0;
 
   // Aborts any downloads associated with |job_unique_id|.
   virtual void Abort(const std::string& job_unique_id) = 0;
@@ -139,8 +168,8 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
   // Updates the UI shown for the fetch job associated with |job_unique_id| to
   // display a new |title| or |icon|.
   virtual void UpdateUI(const std::string& job_unique_id,
-                        const absl::optional<std::string>& title,
-                        const absl::optional<SkBitmap>& icon) = 0;
+                        const std::optional<std::string>& title,
+                        const std::optional<SkBitmap>& icon) = 0;
 };
 
 }  // namespace content

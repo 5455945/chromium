@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,10 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/inspector/inspector_audits_issue.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
+#include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -52,6 +54,8 @@ class IsolatedWorldCSPDelegate final
     return security_origin_.get();
   }
 
+  bool ScriptSrcExtendedHashesEnabled() override { return false; }
+
   const KURL& Url() const override {
     // This is used to populate violation data's violation url. See
     // https://w3c.github.io/webappsec-csp/#violation-url.
@@ -69,14 +73,15 @@ class IsolatedWorldCSPDelegate final
   // supported.
   void SetSandboxFlags(network::mojom::blink::WebSandboxFlags) override {}
   void SetRequireTrustedTypes() override {}
-  void AddInsecureRequestPolicy(mojom::blink::InsecureRequestPolicy) override {}
+  void ApplyInsecureRequestPolicy(
+      mojom::blink::InsecureRequestPolicy) override {}
+  void NotifyBrowserOfInsecureRequestPolicy(
+      mojom::blink::InsecureRequestPolicy) override {}
 
   // TODO(crbug.com/916885): Figure out if we want to support violation
   // reporting for isolated world CSPs.
-  std::unique_ptr<SourceLocation> GetSourceLocation() override {
-    return nullptr;
-  }
-  absl::optional<uint16_t> GetStatusCode() override { return absl::nullopt; }
+  SourceLocation* GetSourceLocation() override { return nullptr; }
+  std::optional<uint16_t> GetStatusCode() override { return std::nullopt; }
   String GetDocumentReferrer() override { return g_empty_string; }
   void DispatchViolationEvent(const SecurityPolicyViolationEventInit&,
                               Element*) override {
@@ -102,13 +107,18 @@ class IsolatedWorldCSPDelegate final
     window_->AddConsoleMessage(console_message);
   }
 
-  void AddInspectorIssue(mojom::blink::InspectorIssueInfoPtr info) override {
-    window_->AddInspectorIssue(std::move(info));
+  void AddInspectorIssue(AuditsIssue issue) override {
+    window_->AddInspectorIssue(std::move(issue));
   }
 
   void DisableEval(const String& error_message) override {
     window_->GetScriptController().DisableEvalForIsolatedWorld(world_id_,
                                                                error_message);
+  }
+
+  void SetWasmEvalErrorMessage(const String& error_message) override {
+    window_->GetScriptController().SetWasmEvalErrorMessageForIsolatedWorld(
+        world_id_, error_message);
   }
 
   void ReportBlockedScriptExecutionToInspector(
@@ -119,7 +129,7 @@ class IsolatedWorldCSPDelegate final
   }
 
   void DidAddContentSecurityPolicies(
-      WTF::Vector<network::mojom::blink::ContentSecurityPolicyPtr>) override {}
+      Vector<network::mojom::blink::ContentSecurityPolicyPtr>) override {}
 
  private:
   const Member<LocalDOMWindow> window_;
@@ -182,7 +192,7 @@ ContentSecurityPolicy* IsolatedWorldCSP::CreateIsolatedWorldCSP(
   IsolatedWorldCSPDelegate* delegate =
       MakeGarbageCollected<IsolatedWorldCSPDelegate>(
           window, self_origin, world_id,
-          policy.IsEmpty() ? CSPType::kEmpty : CSPType::kNonEmpty);
+          policy.empty() ? CSPType::kEmpty : CSPType::kNonEmpty);
   csp->BindToDelegate(*delegate);
   csp->AddPolicies(ParseContentSecurityPolicies(
       policy, network::mojom::blink::ContentSecurityPolicyType::kEnforce,

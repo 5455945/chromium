@@ -39,25 +39,24 @@
 // required types without reference to the generator output headers.
 
 #include <memory>
-#include "base/gtest_prod_util.h"
+#include <optional>
+
+#include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/struct_ptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "mojo/public/cpp/system/data_pipe.h"
+#include "third_party/blink/public/mojom/blob/data_element.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/blob/file_backed_blob_factory.mojom-blink-forward.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
-namespace network {
-namespace mojom {
-namespace blink {
-class DataPipeGetter;
-}  // namespace blink
-}  // namespace mojom
-}  // namespace network
+namespace base {
+class Time;
+}
 
 namespace blink {
 namespace mojom {
@@ -82,14 +81,20 @@ class PLATFORM_EXPORT RawData : public ThreadSafeRefCounted<RawData> {
     return base::AdoptRef(new RawData());
   }
 
-  const char* data() const { return data_.data(); }
-  size_t length() const { return data_.size(); }
-  Vector<char>* MutableData() { return &data_; }
+  const uint8_t* data() const { return data_.data(); }
+  size_t size() const { return data_.size(); }
+
+  // Iterators, so this type meets the requirements of
+  // `std::ranges::contiguous_range`.
+  auto begin() const { return data_.begin(); }
+  auto end() const { return data_.end(); }
+
+  Vector<uint8_t>& MutableData() { return data_; }
 
  private:
   RawData();
 
-  Vector<char> data_;
+  Vector<uint8_t> data_;
 };
 
 class PLATFORM_EXPORT BlobData {
@@ -98,56 +103,32 @@ class PLATFORM_EXPORT BlobData {
  public:
   static constexpr int64_t kToEndOfFile = -1;
   enum class FileCompositionStatus {
-    SINGLE_UNKNOWN_SIZE_FILE,
-    NO_UNKNOWN_SIZE_FILES
+    kSingleUnknownSizeFile,
+    kNoUnknownSizeFiles
   };
 
   explicit BlobData(
-      FileCompositionStatus = FileCompositionStatus::NO_UNKNOWN_SIZE_FILES);
+      FileCompositionStatus = FileCompositionStatus::kNoUnknownSizeFiles);
   BlobData(const BlobData&) = delete;
   BlobData& operator=(const BlobData&) = delete;
   ~BlobData();
 
-  // Calling append* on objects returned by createFor___WithUnknownSize will
-  // check-fail. The caller can only have an unknown-length file if it is the
-  // only item in the blob.
-  static std::unique_ptr<BlobData> CreateForFileWithUnknownSize(
-      const String& path);
-  static std::unique_ptr<BlobData> CreateForFileWithUnknownSize(
-      const String& path,
-      const absl::optional<base::Time>& expected_modification_time);
-  static std::unique_ptr<BlobData> CreateForFileSystemURLWithUnknownSize(
-      const KURL& file_system_url,
-      const absl::optional<base::Time>& expected_modification_time);
-
-  // Detaches from current thread so that it can be passed to another thread.
-  void DetachFromCurrentThread();
-
   const String& ContentType() const { return content_type_; }
   void SetContentType(const String&);
 
-  const Vector<mojom::blink::DataElementPtr>& Elements() const {
+  const Vector<mojom::blink::DataElementPtr>& ElementsForTesting() const {
     return elements_;
   }
   Vector<mojom::blink::DataElementPtr> ReleaseElements();
 
-  void AppendBytes(const void*, size_t length);
+  void AppendBytes(base::span<const uint8_t> bytes);
   void AppendData(scoped_refptr<RawData>);
-  void AppendFile(const String& path,
-                  int64_t offset,
-                  int64_t length,
-                  const absl::optional<base::Time>& expected_modification_time);
 
   // The given blob must not be a file with unknown size. Please use the
   // File::appendTo instead.
   void AppendBlob(scoped_refptr<BlobDataHandle>,
                   int64_t offset,
                   int64_t length);
-  void AppendFileSystemURL(
-      const KURL&,
-      int64_t offset,
-      int64_t length,
-      const absl::optional<base::Time>& expected_modification_time);
   void AppendText(const String&, bool normalize_line_endings_to_native);
 
   // The value of the size property for a Blob who has this data.
@@ -156,11 +137,11 @@ class PLATFORM_EXPORT BlobData {
   uint64_t length() const;
 
   bool IsSingleUnknownSizeFile() const {
-    return file_composition_ == FileCompositionStatus::SINGLE_UNKNOWN_SIZE_FILE;
+    return file_composition_ == FileCompositionStatus::kSingleUnknownSizeFile;
   }
 
  private:
-  void AppendDataInternal(base::span<const char> data,
+  void AppendDataInternal(base::span<const uint8_t> data,
                           scoped_refptr<RawData> = nullptr);
 
   String content_type_;
@@ -168,7 +149,15 @@ class PLATFORM_EXPORT BlobData {
 
   Vector<mojom::blink::DataElementPtr> elements_;
   size_t current_memory_population_ = 0;
-  BlobBytesProvider* last_bytes_provider_ = nullptr;
+
+  // These two members are used to combine multiple consecutive 'bytes' elements
+  // (as created by `AppendBytes`, `AppendData` or `AppendText`) into a single
+  // element. When one has a value the other also has a value. Before using
+  // `elements_` to actually create a blob, `last_bytes_provider_` should be
+  // bound to `last_bytes_provider_receiver_`.
+  std::unique_ptr<BlobBytesProvider> last_bytes_provider_;
+  mojo::PendingReceiver<mojom::blink::BytesProvider>
+      last_bytes_provider_receiver_;
 };
 
 class PLATFORM_EXPORT BlobDataHandle
@@ -177,31 +166,46 @@ class PLATFORM_EXPORT BlobDataHandle
 
  public:
   // For empty blob construction.
-  static scoped_refptr<BlobDataHandle> Create() {
-    return base::AdoptRef(new BlobDataHandle());
-  }
+  static scoped_refptr<BlobDataHandle> Create();
+  static scoped_refptr<BlobDataHandle> CreateForFile(
+      mojom::blink::FileBackedBlobFactory* file_backed_blob_factory,
+      const String& path,
+      int64_t offset,
+      int64_t length,
+      const std::optional<base::Time>& expected_modification_time,
+      const String& content_type,
+      mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+          snapshot_permission_token = {});
 
   // For initial creation.
   static scoped_refptr<BlobDataHandle> Create(std::unique_ptr<BlobData> data,
-                                              uint64_t size) {
-    return base::AdoptRef(new BlobDataHandle(std::move(data), size));
-  }
+                                              uint64_t size);
 
-  // For deserialization of script values and ipc messages.
-  static scoped_refptr<BlobDataHandle> Create(const String& uuid,
-                                              const String& type,
-                                              uint64_t size) {
+  static scoped_refptr<BlobDataHandle> CreateForTesting(const String& uuid,
+                                                        const String& type,
+                                                        uint64_t size) {
     return base::AdoptRef(new BlobDataHandle(uuid, type, size));
   }
 
+  // For reinflation from IPC.
   static scoped_refptr<BlobDataHandle> Create(
       const String& uuid,
       const String& type,
       uint64_t size,
       mojo::PendingRemote<mojom::blink::Blob>);
 
-  String Uuid() const { return uuid_.IsolatedCopy(); }
-  String GetType() const { return type_.IsolatedCopy(); }
+  // The UUID may not be known:
+  // * If the blob was registered from the renderer, but the browser hasn't
+  // responded yet with the UUID
+  // * if the blob was reinflated from serialization, and didn't come with a
+  // known UUID (only the remote) If the UUID is needed, this call is guaranteed
+  // to return it, but may block on the browser process.
+  String GetUuidMayBlock();
+
+  // This will return without blocking but may return an empty UUID.
+  String MaybeUuid() const;
+
+  String GetType() const { return type_; }
   uint64_t size() const { return size_; }
 
   bool IsSingleUnknownSizeFile() const { return is_single_unknown_size_file_; }
@@ -210,22 +214,17 @@ class PLATFORM_EXPORT BlobDataHandle
 
   mojo::PendingRemote<mojom::blink::Blob> CloneBlobRemote();
   void CloneBlobRemote(mojo::PendingReceiver<mojom::blink::Blob>);
-  mojo::PendingRemote<network::mojom::blink::DataPipeGetter> AsDataPipeGetter();
 
   void ReadAll(mojo::ScopedDataPipeProducerHandle,
                mojo::PendingRemote<mojom::blink::BlobReaderClient>);
-  void ReadRange(uint64_t offset,
-                 uint64_t length,
-                 mojo::ScopedDataPipeProducerHandle,
-                 mojo::PendingRemote<mojom::blink::BlobReaderClient>);
 
   // This does synchronous IPC, and possibly synchronous file operations. Think
   // twice before calling this function.
   bool CaptureSnapshot(uint64_t* snapshot_size,
-                       absl::optional<base::Time>* snapshot_modification_time);
+                       std::optional<base::Time>* snapshot_modification_time);
 
   void SetBlobRemoteForTesting(mojo::PendingRemote<mojom::blink::Blob> remote) {
-    MutexLocker locker(blob_remote_mutex_);
+    base::AutoLock locker(blob_remote_lock_);
     blob_remote_ = std::move(remote);
   }
 
@@ -234,24 +233,44 @@ class PLATFORM_EXPORT BlobDataHandle
 
  private:
   BlobDataHandle();
-  BlobDataHandle(std::unique_ptr<BlobData>, uint64_t size);
+  BlobDataHandle(const String& type,
+                 uint64_t size,
+                 bool is_single_unknown_size_file);
   BlobDataHandle(const String& uuid, const String& type, uint64_t size);
   BlobDataHandle(const String& uuid,
                  const String& type,
                  uint64_t size,
                  mojo::PendingRemote<mojom::blink::Blob>);
 
-  const String uuid_;
+  // Creates the blob in the BlobRegistry.
+  void Register(Vector<mojom::blink::DataElementPtr> elements);
+  // Creates the blob in the provided FileBackedBlobFactory, falling back to
+  // BlobRegistry if that's null.
+  void RegisterFile(
+      mojom::blink::FileBackedBlobFactory* file_backed_blob_factory,
+      mojom::blink::DataElementFilePtr file_element,
+      mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+          snapshot_permission_token);
+  void DidGetUuid(const String& uuid);
+
+  // This UUID is deprecated and should not be used to reference the blob in the
+  // backend (BlobRegistry). TODO(crbug.com/40529364): remove.
+  // `uuid_`, if non-empty, is generated synchronously when the blob is
+  // registered. Otherwise, it remains empty and `async_uuid_` is later
+  // supplied.
+  String uuid_;
   const String type_;
   const uint64_t size_;
   const bool is_single_unknown_size_file_;
   // This class is supposed to be thread safe. So to be able to use the mojo
   // Blob interface from multiple threads store a PendingRemote combined with
-  // a mutex, and make sure any access to the mojo interface is done protected
-  // by the mutex.
+  // a lock, and make sure any access to the mojo interface is done protected
+  // by the lock.
   mojo::PendingRemote<mojom::blink::Blob> blob_remote_
-      GUARDED_BY(blob_remote_mutex_);
-  Mutex blob_remote_mutex_;
+      GUARDED_BY(blob_remote_lock_);
+  mutable base::Lock blob_remote_lock_;
+  String async_uuid_ GUARDED_BY(async_uuid_lock_);
+  mutable base::Lock async_uuid_lock_;
 };
 
 }  // namespace blink

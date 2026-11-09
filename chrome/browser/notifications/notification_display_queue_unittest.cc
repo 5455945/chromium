@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -51,14 +52,14 @@ class FakeNotificationBlocker : public NotificationBlocker {
     NotifyBlockingStateChanged();
   }
 
-  void SetBlockedOrigin(const absl::optional<GURL>& blocked_origin) {
+  void SetBlockedOrigin(const std::optional<GURL>& blocked_origin) {
     blocked_origin_ = blocked_origin;
     NotifyBlockingStateChanged();
   }
 
  private:
   bool should_block_ = false;
-  absl::optional<GURL> blocked_origin_;
+  std::optional<GURL> blocked_origin_;
 };
 
 class NotificationDisplayServiceMock : public NotificationDisplayService {
@@ -81,6 +82,8 @@ class NotificationDisplayServiceMock : public NotificationDisplayService {
 
   MOCK_METHOD2(Close, void(NotificationHandler::Type, const std::string&));
   MOCK_METHOD1(GetDisplayed, void(DisplayedNotificationsCallback));
+  MOCK_METHOD2(GetDisplayedForOrigin,
+               void(const GURL& origin, DisplayedNotificationsCallback));
   MOCK_METHOD1(AddObserver, void(Observer* observer));
   MOCK_METHOD1(RemoveObserver, void(Observer* observer));
 };
@@ -94,7 +97,7 @@ message_center::Notification CreateNotification(const std::string& id,
                                                 const GURL& origin) {
   return message_center::Notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, id, /*title=*/std::u16string(),
-      /*message=*/std::u16string(), /*icon=*/gfx::Image(),
+      /*message=*/std::u16string(), /*icon=*/ui::ImageModel(),
       /*display_source=*/std::u16string(), origin, message_center::NotifierId(),
       message_center::RichNotificationData(),
       base::MakeRefCounted<message_center::NotificationDelegate>());
@@ -132,7 +135,8 @@ class NotificationDisplayQueueTest : public testing::Test {
  private:
   NotificationDisplayServiceMock service_;
   NotificationDisplayQueue queue_{&service_};
-  FakeNotificationBlocker* notification_blocker_ = nullptr;
+  raw_ptr<FakeNotificationBlocker, DanglingUntriaged> notification_blocker_ =
+      nullptr;
 };
 
 TEST_F(NotificationDisplayQueueTest, ShouldEnqueueWithoutBlockers) {
@@ -160,12 +164,17 @@ TEST_F(NotificationDisplayQueueTest, ShouldEnqueueForNonWebNotification) {
 
 TEST_F(NotificationDisplayQueueTest, EnqueueNotification) {
   std::string notification_id = "id";
+  GURL origin("https://example.com");
   queue().EnqueueNotification(NotificationHandler::Type::TRANSIENT,
-                              CreateNotification(notification_id),
+                              CreateNotification(notification_id, origin),
                               /*metadata=*/nullptr);
-  std::set<std::string> queued = queue().GetQueuedNotificationIds();
-  EXPECT_EQ(1u, queued.size());
-  EXPECT_EQ(1u, queued.count(notification_id));
+  EXPECT_THAT(queue().GetQueuedNotificationIds(),
+              testing::ElementsAre(notification_id));
+  EXPECT_THAT(queue().GetQueuedNotificationIdsForOrigin(origin),
+              testing::ElementsAre(notification_id));
+  EXPECT_TRUE(queue()
+                  .GetQueuedNotificationIdsForOrigin(GURL("https://foo.bar"))
+                  .empty());
 }
 
 TEST_F(NotificationDisplayQueueTest, RemoveQueuedNotification) {

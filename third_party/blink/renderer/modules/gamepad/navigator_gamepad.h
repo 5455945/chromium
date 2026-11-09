@@ -26,6 +26,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_NAVIGATOR_GAMEPAD_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_NAVIGATOR_GAMEPAD_H_
 
+#include <array>
+
+#include "base/time/time.h"
+#include "device/gamepad/public/cpp/gamepads.h"
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -36,6 +40,8 @@
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace device {
 class Gamepad;
@@ -45,7 +51,7 @@ namespace blink {
 
 class GamepadDispatcher;
 class GamepadHapticActuator;
-class GamepadList;
+class GamepadStateCompareResult;
 class Navigator;
 
 class MODULES_EXPORT NavigatorGamepad final
@@ -63,8 +69,13 @@ class MODULES_EXPORT NavigatorGamepad final
   explicit NavigatorGamepad(Navigator&);
   ~NavigatorGamepad() override;
 
-  static GamepadList* getGamepads(Navigator&, ExceptionState&);
-  GamepadList* Gamepads();
+  static HeapVector<Member<Gamepad>> getGamepads(Navigator&, ExceptionState&);
+  HeapVector<Member<Gamepad>> Gamepads();
+
+  void SetGamepadsForTesting(HeapVector<Member<Gamepad>> gamepads) {
+    gamepads_ = std::move(gamepads);
+    should_skip_sample_for_testing_ = true;
+  }
 
   void Trace(Visitor*) const override;
 
@@ -72,9 +83,23 @@ class MODULES_EXPORT NavigatorGamepad final
   void SampleGamepads();
 
   void DidRemoveGamepadEventListeners();
-  bool StartUpdatingIfAttached();
   void SampleAndCompareGamepadState();
-  void DispatchGamepadEvent(const AtomicString&, Gamepad*);
+
+  // Dispatch gamepad events. Dispatching an event calls the event
+  // listeners synchronously.
+  //
+  // Note: In some instances the gamepad connection state may change while
+  // inside an event listener. This is most common when using test APIs
+  // that allow the gamepad state to be changed from javascript. The set
+  // of event listeners may also change if listeners are added or removed
+  // by another listener.
+  void MaybeDispatchGamepadEvents(
+      uint32_t index,
+      const GamepadStateCompareResult& compare_result);
+  void DispatchGamepadConnectionChangedEvent(const AtomicString&, Gamepad*);
+  void DispatchGamepadRawInputChangedEvent(
+      uint32_t index,
+      const GamepadStateCompareResult& compare_result);
 
   // PageVisibilityObserver
   void PageVisibilityChanged() override;
@@ -93,12 +118,15 @@ class MODULES_EXPORT NavigatorGamepad final
   // Gamepad::Client
   GamepadHapticActuator* GetVibrationActuatorForGamepad(
       const Gamepad&) override;
+  void SetTouchEvents(const Gamepad&,
+                      GamepadTouchVector&,
+                      base::span<const device::GamepadTouch>) override;
 
   // A reference to the buffer containing the last-received gamepad state. May
   // be nullptr if no data has been received yet. Do not overwrite this buffer
   // as it may have already been returned to the page. Instead, write to
   // |gamepads_back_| and swap buffers.
-  Member<GamepadList> gamepads_;
+  HeapVector<Member<Gamepad>> gamepads_;
 
   // True if the buffer referenced by |gamepads_| has been exposed to the page.
   // When the buffer is not exposed, prefer to reuse it.
@@ -106,9 +134,20 @@ class MODULES_EXPORT NavigatorGamepad final
 
   // A reference to the buffer for receiving new gamepad state. May be
   // overwritten.
-  Member<GamepadList> gamepads_back_;
+  HeapVector<Member<Gamepad>> gamepads_back_;
+
+  // True if the buffer referenced by |gamepads_back_| has been exposed to the
+  // page.
+  bool is_gamepads_back_exposed_ = false;
 
   HeapVector<Member<GamepadHapticActuator>> vibration_actuators_;
+
+  // Together the following keep track of the nextTouchId per Gamepad
+  using TouchIdMap =
+      HashMap<uint32_t, uint32_t, IntWithZeroKeyHashTraits<uint32_t>>;
+
+  std::array<TouchIdMap, device::Gamepads::kItemsLengthCap> touch_id_map_;
+  std::array<uint32_t, device::Gamepads::kItemsLengthCap> next_touch_id_;
 
   // The timestamp for the navigationStart attribute. Gamepad timestamps are
   // reported relative to this value.
@@ -123,8 +162,17 @@ class MODULES_EXPORT NavigatorGamepad final
   // disconnection events.
   bool has_connection_event_listener_ = false;
 
+  // True if there is at least one listener for gamepad raw input changed
+  // events.
+  bool has_input_changed_event_listener_ = false;
+
   // True while processing gamepad events.
   bool processing_events_ = false;
+
+  bool should_skip_sample_for_testing_ = false;
+
+  // Store the timestamps of raw input change events for UMA metrics.
+  Vector<std::optional<base::TimeTicks>> raw_input_change_event_timestamps_;
 
   Member<GamepadDispatcher> gamepad_dispatcher_;
 };

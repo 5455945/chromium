@@ -30,22 +30,25 @@ Most targets produce two separate `.jar` files:
 
 ### Step 1: Create interface .jar with turbine or ijar
 
-For prebuilt `.jar` files, use [//third_party/ijar] to create interface `.jar`
-from prebuilt `.jar`.
-
-For non-prebuilt targets, use [//third_party/turbine] to create interface `.jar`
-from `.java` source files. Turbine is much faster than javac, and so enables
-full compilation to happen more concurrently.
-
 What are interface jars?:
 
-* The contain `.class` files with all non-public symbols and function bodies
+* They contain `.class` files with all private symbols and all method bodies
   removed.
 * Dependant targets use interface `.jar` files to skip having to be rebuilt
   when only private implementation details change.
 
-[//third_party/ijar]: /third_party/ijar/README.chromium
-[//third_party/turbine]: /third_party/turbine/README.chromium
+For prebuilt `.jar` files: we use [`ijar`] to create interface `.jar` files
+from the prebuilt ones.
+
+For non-prebuilt `.jar` files`: we use [`//third_party/turbine`] to create
+interface `.jar` files directly from `.java` source files. Turbine is faster
+than javac because it does not compile method bodies. Although Turbine causes
+us to compile files twice, it speeds up builds by allowing `javac` compilation
+of targets to happen concurrently with their dependencies. We also use Turbine
+to run our annotation processors.
+
+[`ijar`]: /third_party/android_build_tools/bazel_tools/README.chromium
+[`//third_party/turbine`]: /third_party/turbine/README.chromium
 
 ### Step 2a: Compile with javac
 
@@ -74,6 +77,9 @@ This step can be disabled via GN arg: `use_errorprone_java_compiler = false`
   patterns, including some [custom to Chromium][ep_plugins].
 * ErrorProne used to replace step 1a, but was changed to a concurrent step after
   being identified as being slower.
+* Large targets are split across multiple concurrent ErrorProne processes
+  (based on their size and on the number of CPUs). Each process finds
+  classes from the other shards via the target's header jar.
 
 [ErrorProne]: https://errorprone.info/
 [ep_plugins]: /tools/android/errorprone_plugin/
@@ -105,12 +111,9 @@ This step happens only when targets that have `jar_excluded_patterns` or
   further on in the build process.
   * E.g.: `R.class` files - a part of [Android Resources].
   * E.g.: `GEN_JNI.class` - a part of our [JNI] glue.
-  * E.g.: `AppHooksImpl.class` - how `chrome_java` wires up different
-    implementations for [non-public builds][apphooks].
 
-[JNI]: /base/android/jni_generator/README.md
+[JNI]: /third_party/jni_zero/README.md
 [Android Resources]: life_of_a_resource.md
-[apphooks]: /chrome/android/java/src/org/chromium/chrome/browser/AppHooksImpl.java
 
 ### Step 6: Per-Library Dexing
 
@@ -118,15 +121,19 @@ This step happens only when targets have `supports_android = true`.
 
 * [d8] converts `.jar` files containing `.class` files into `.dex.jar` files
   containing `classes.dex` files.
-* Dexing is incremental - it will reuse dex'ed classes from a previous build if
-  the corresponding `.class` file is unchanged.
-* These per-library `.dex.jar` files are used directly by [incremental install],
-  and are inputs to the Apk step when `enable_proguard = false`.
+* Desugaring some constructs (e.g. Java `record` classes) makes d8 emit
+  "global synthetics": classes shared by the whole app rather than owned by one
+  library. Per-library dexing discards them (`--ignore-globals` in
+  `dex.py`) and the final dex step of debug APKs adds
+  `//third_party/r8/cipd/lib/global_synthetics.dex.jar`, built by the r8 3pp
+  package and holding every global synthetic for `min_supported_sdk_version`.
+  R8 builds need nothing extra.
+* These per-library `.dex.jar` files are inputs to the Apk step when
+  `enable_proguard = false`.
   * Even when `is_java_debug = false`, many apk targets do not enable ProGuard
     (e.g. unit tests).
 
 [d8]: https://developer.android.com/studio/command-line/d8
-[incremental install]: /build/android/incremental_install/README.md
 
 ### Step 7: Apk / Bundle Module Compile
 
@@ -137,11 +144,9 @@ This step happens only when targets have `supports_android = true`.
   * Final `GEN_JNI.java` for [JNI glue].
   * `BuildConfig.java` and `NativeLibraries.java` (//base dependencies).
 
-[JNI glue]: /base/android/jni_generator/README.md
+[JNI glue]: /third_party/jni_zero/README.md
 
 ### Step 8: Final Dexing
-
-This step is skipped when building using [Incremental Install].
 
 When `is_java_debug = true`:
 * [d8] merges all library `.dex.jar` files into a final `.mergeddex.jar`.
@@ -151,7 +156,6 @@ When `is_java_debug = false`:
   files and outputs a final `.r8dex.jar`.
   * For App Bundles, R8 creates a `.r8dex.jar` for each module.
 
-[Incremental Install]: /build/android/incremental_install/README.md
 [R8]: https://r8.googlesource.com/r8
 
 ## Test APKs with apk_under_test
@@ -217,68 +221,4 @@ and custom build steps.
 
 ## Static Analysis & Code Checks
 
-We use several tools for static analysis.
-
-### [ErrorProne](https://errorprone.info/)
-* Runs as part of normal compilation. Controlled by GN arg: `use_errorprone_java_compiler`.
-* Most useful check:
-  * Enforcement of `@GuardedBy` annotations.
-* List of enabled / disabled checks exists [within javac.py](https://cs.chromium.org/chromium/src/build/android/gyp/javac.py?l=30)
-  * Many checks are currently disabled because there is work involved in fixing
-    violations they introduce. Please help!
-* Custom checks for Chrome:
-  * [//tools/android/errorprone_plugin/src/org/chromium/tools/errorprone/plugin/](/tools/android/errorprone_plugin/src/org/chromium/tools/errorprone/plugin/)
-* Use ErrorProne checks when you need something more sophisticated than pattern
-  matching.
-* Checks run on the entire codebase, not only on changed lines.
-* Does not run when `chromium_code = false` (e.g. for //third_party).
-
-### [Android Lint](https://developer.android.com/studio/write/lint)
-* Runs as part of normal compilation. Controlled by GN arg: `disable_android_lint` 
-* Most useful check:
-  * Enforcing `@TargetApi` annotations (ensure you don't call a function that
-    does not exist on all versions of Android unless guarded by an version
-    check).
-* List of disabled checks:
-  * [//build/android/lint/suppressions.xml](/build/android/lint/suppressions.xml)
-* Custom lint checks [are possible](lint_plugins), but we don't have any.
-* Checks run on the entire codebase, not only on changed lines.
-* Does not run when `chromium_code = false` (e.g. for //third_party).
-
-[lint_plugins]: http://tools.android.com/tips/lint-custom-rules
-
-### [Bytecode Processor](/build/android/bytecode/)
-* Performs a single check:
-  * That target `deps` are not missing any entries.
-  * In other words: Enforces that targets do not rely on indirect dependencies
-    to populate their classpath.
-* Checks run on the entire codebase, not only on changed lines.
-
-### [PRESUBMIT.py](/PRESUBMIT.py):
-* Checks for banned patterns via `_BANNED_JAVA_FUNCTIONS`.
-  * (These should likely be moved to checkstyle).
-* Checks for a random set of things in `ChecksAndroidSpecificOnUpload()`.
-  * Including running Checkstyle.
-  * (Some of these other checks should likely also be moved to checkstyle).
-* Checks run only on changed lines.
-
-### [Checkstyle](https://checkstyle.sourceforge.io/)
-* Checks Java style rules that are not covered by clang-format.
-  * E.g.: Unused imports and naming conventions.
-* Allows custom checks to be added via XML. Here [is ours].
-* Preferred over adding checks directly in PRESUBMIT.py because the tool
-  understands `@SuppressWarnings` annotations.
-* Checks run only on changed lines.
-
-[is ours]:  /tools/android/checkstyle/chromium-style-5.0.xml
-
-### [clang-format](https://clang.llvm.org/docs/ClangFormat.html)
-* Formats `.java` files via `git cl format`.
-* Can be toggle on/off with code comments.
-  ```java
-  // clang-format off
-  ... non-formatted code here ...
-  // clang-format on
-  ```
-* Does not work great for multiple annotations or on some lambda expressions,
-  but is generally agreed it is better than not having it at all.
+See [static_analysis.md](static_analysis.md)

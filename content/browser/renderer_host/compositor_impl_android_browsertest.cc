@@ -1,19 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/renderer_host/compositor_impl_android.h"
+
 #include "base/android/application_status_listener.h"
-#include "base/android/build_info.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
+#include "cc/slim/layer.h"
 #include "components/viz/common/features.h"
+#include "components/viz/common/gpu/raster_context_provider.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/gpu/gpu_process_host.h"
-#include "content/browser/renderer_host/compositor_impl_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/android/compositor_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/gpu_stream_constants.h"
 #include "content/public/test/browser_test.h"
@@ -23,48 +28,40 @@
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "content/test/gpu_browsertest_helpers.h"
-#include "gpu/command_buffer/client/gles2_interface.h"
+#include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "media/base/media_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
 #include "ui/android/window_android.h"
+#include "ui/gfx/android/android_surface_control_compat.h"
 #include "url/gurl.h"
 
 namespace content {
 
 namespace {
 
-enum class CompositorImplMode {
-  kNormal,
-  kSkiaRenderer,
+class StubCompositorClient : public CompositorClient {
+ public:
+  StubCompositorClient() = default;
+  ~StubCompositorClient() override = default;
+
+  void RecreateSurface() override {}
+  void UpdateLayerTreeHost() override {}
+  void DidSwapFrame(int pending_frames) override {}
+  void DidSwapBuffers(const gfx::Size& swap_size) override {}
 };
 
-class CompositorImplBrowserTest
-    : public testing::WithParamInterface<CompositorImplMode>,
-      public ContentBrowserTest {
+class CompositorImplBrowserTest : public ContentBrowserTest {
  public:
   CompositorImplBrowserTest() {}
 
-  void SetUp() override {
-    std::vector<base::Feature> features;
-
-    switch (GetParam()) {
-      case CompositorImplMode::kNormal:
-        break;
-      case CompositorImplMode::kSkiaRenderer:
-        features = std::vector<base::Feature>({features::kUseSkiaRenderer});
-        break;
-    }
-
-    AppendFeatures(&features);
-    scoped_feature_list_.InitWithFeatures(features, {});
-
-    ContentBrowserTest::SetUp();
-  }
+  CompositorImplBrowserTest(const CompositorImplBrowserTest&) = delete;
+  CompositorImplBrowserTest& operator=(const CompositorImplBrowserTest&) =
+      delete;
 
   virtual std::string GetTestUrl() { return "/title1.html"; }
-  virtual void AppendFeatures(std::vector<base::Feature>* features) {}
 
  protected:
   void SetUpOnMainThread() override {
@@ -92,16 +89,7 @@ class CompositorImplBrowserTest
     return static_cast<RenderWidgetHostViewAndroid*>(
         web_contents()->GetRenderWidgetHostView());
   }
-
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(CompositorImplBrowserTest);
 };
-
-INSTANTIATE_TEST_SUITE_P(P,
-                         CompositorImplBrowserTest,
-                         ::testing::Values(CompositorImplMode::kNormal,
-                                           CompositorImplMode::kSkiaRenderer));
 
 class CompositorImplLowEndBrowserTest : public CompositorImplBrowserTest {
  public:
@@ -112,18 +100,18 @@ class CompositorImplLowEndBrowserTest : public CompositorImplBrowserTest {
   }
 };
 
-INSTANTIATE_TEST_SUITE_P(P,
-                         CompositorImplLowEndBrowserTest,
-                         ::testing::Values(CompositorImplMode::kNormal));
-
 // RunLoop implementation that calls glFlush() every second until it observes
 // OnContextLost().
 class ContextLostRunLoop : public viz::ContextLostObserver {
  public:
-  ContextLostRunLoop(viz::ContextProvider* context_provider)
+  explicit ContextLostRunLoop(viz::RasterContextProvider* context_provider)
       : context_provider_(context_provider) {
     context_provider_->AddObserver(this);
   }
+
+  ContextLostRunLoop(const ContextLostRunLoop&) = delete;
+  ContextLostRunLoop& operator=(const ContextLostRunLoop&) = delete;
+
   ~ContextLostRunLoop() override { context_provider_->RemoveObserver(this); }
 
   void RunUntilContextLost() {
@@ -136,32 +124,36 @@ class ContextLostRunLoop : public viz::ContextLostObserver {
       run_loop_.Quit();
       return;
     }
-    context_provider_->ContextGL()->Flush();
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    context_provider_->RasterInterface()->Flush();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&ContextLostRunLoop::CheckForContextLoss,
                        base::Unretained(this)),
-        base::TimeDelta::FromSeconds(1));
+        base::Seconds(1));
   }
 
  private:
   // viz::LostContextProvider:
   void OnContextLost() override { did_lose_context_ = true; }
 
-  viz::ContextProvider* const context_provider_;
+  const raw_ptr<viz::RasterContextProvider> context_provider_;
   bool did_lose_context_ = false;
   base::RunLoop run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContextLostRunLoop);
 };
 
 // RunLoop implementation that runs until it observes a swap with size.
 class CompositorSwapRunLoop {
  public:
   CompositorSwapRunLoop(CompositorImpl* compositor) : compositor_(compositor) {
+    static_cast<Compositor*>(compositor_)
+        ->SetDidSwapBuffersCallbackEnabled(true);
     compositor_->SetSwapCompletedWithSizeCallbackForTesting(base::BindRepeating(
         &CompositorSwapRunLoop::DidSwap, base::Unretained(this)));
   }
+
+  CompositorSwapRunLoop(const CompositorSwapRunLoop&) = delete;
+  CompositorSwapRunLoop& operator=(const CompositorSwapRunLoop&) = delete;
+
   ~CompositorSwapRunLoop() {
     compositor_->SetSwapCompletedWithSizeCallbackForTesting(base::DoNothing());
   }
@@ -174,19 +166,17 @@ class CompositorSwapRunLoop {
     run_loop_.Quit();
   }
 
-  CompositorImpl* compositor_;
+  raw_ptr<CompositorImpl> compositor_;
   base::RunLoop run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(CompositorSwapRunLoop);
 };
 
-IN_PROC_BROWSER_TEST_P(CompositorImplLowEndBrowserTest,
+IN_PROC_BROWSER_TEST_F(CompositorImplLowEndBrowserTest,
                        CompositorImplDropsResourcesOnBackground) {
   auto* rwhva = render_widget_host_view_android();
   auto* compositor = compositor_impl();
   auto context = GpuBrowsertestCreateContext(
       GpuBrowsertestEstablishGpuChannelSyncRunLoop());
-  context->BindToCurrentThread();
+  context->BindToCurrentSequence();
 
   // Run until we've swapped once. At this point we should have a valid frame.
   CompositorSwapRunLoop(compositor_impl()).RunUntilSwap();
@@ -197,7 +187,7 @@ IN_PROC_BROWSER_TEST_P(CompositorImplLowEndBrowserTest,
   base::android::ApplicationStatusListener::NotifyApplicationStateChange(
       base::android::APPLICATION_STATE_HAS_STOPPED_ACTIVITIES);
   rwhva->OnRootWindowVisibilityChanged(false);
-  rwhva->Hide();
+  web_contents()->WasHidden();
 
   // Ensure that context is eventually dropped and at that point we do not have
   // a valid frame.
@@ -208,7 +198,7 @@ IN_PROC_BROWSER_TEST_P(CompositorImplLowEndBrowserTest,
   compositor->SetVisibleForTesting(true);
   base::android::ApplicationStatusListener::NotifyApplicationStateChange(
       base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES);
-  rwhva->Show();
+  web_contents()->WasShown();
   rwhva->OnRootWindowVisibilityChanged(true);
 
   // Wait for a swap after becoming visible.
@@ -216,38 +206,22 @@ IN_PROC_BROWSER_TEST_P(CompositorImplLowEndBrowserTest,
   EXPECT_TRUE(rwhva->HasValidFrame());
 }
 
-IN_PROC_BROWSER_TEST_P(CompositorImplBrowserTest,
+IN_PROC_BROWSER_TEST_F(CompositorImplBrowserTest,
                        CompositorImplReceivesSwapCallbacks) {
-  // OOP-R is required for this test to succeed with SkDDL, but is disabled on
-  // Android L and lower.
-  if (GetParam() == CompositorImplMode::kSkiaRenderer &&
-      base::android::BuildInfo::GetInstance()->sdk_int() <
-          base::android::SDK_VERSION_MARSHMALLOW) {
-    return;
-  }
   CompositorSwapRunLoop(compositor_impl()).RunUntilSwap();
 }
 
 // This test waits for a presentation feedback token to arrive from the GPU. If
 // this test is timing out then it demonstrates a bug.
-IN_PROC_BROWSER_TEST_P(CompositorImplBrowserTest,
+IN_PROC_BROWSER_TEST_F(CompositorImplBrowserTest,
                        CompositorImplReceivesPresentationTimeCallbacks) {
-  // OOP-R is required for this test to succeed with SkDDL, but is disabled on
-  // Android L and lower.
-  if (GetParam() == CompositorImplMode::kSkiaRenderer &&
-      base::android::BuildInfo::GetInstance()->sdk_int() <
-          base::android::SDK_VERSION_MARSHMALLOW) {
-    return;
-  }
-
   // Presentation feedback occurs after the GPU has presented content to the
   // display. This is later than the buffers swap.
   base::RunLoop loop;
   // The callback will cancel the loop used to wait.
   static_cast<content::Compositor*>(compositor_impl())
-      ->RequestPresentationTimeForNextFrame(base::BindOnce(
-          [](base::OnceClosure quit,
-             const gfx::PresentationFeedback& feedback) {
+      ->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+          [](base::OnceClosure quit, const viz::FrameTimingDetails& details) {
             std::move(quit).Run();
           },
           loop.QuitClosure()));
@@ -279,7 +253,14 @@ class CompositorImplBrowserTestRefreshRate
   std::unique_ptr<base::RunLoop> run_loop_;
 };
 
-IN_PROC_BROWSER_TEST_P(CompositorImplBrowserTestRefreshRate, VideoPreference) {
+IN_PROC_BROWSER_TEST_F(CompositorImplBrowserTestRefreshRate, VideoPreference) {
+  if (gfx::SurfaceControl::SupportsSetFrameRate()) {
+    // If SurfaceControl allows specifying the frame rate for each Surface, it's
+    // done within the GPU process instead of sending the frame preference back
+    // to the browser (and so our TestHooks are not consulted).
+    GTEST_SKIP();
+  }
+
   window()->SetTestHooks(this);
   expected_refresh_rate_ = 60.f;
   run_loop_ = std::make_unique<base::RunLoop>();
@@ -288,9 +269,115 @@ IN_PROC_BROWSER_TEST_P(CompositorImplBrowserTestRefreshRate, VideoPreference) {
   window()->SetTestHooks(nullptr);
 }
 
-INSTANTIATE_TEST_SUITE_P(P,
-                         CompositorImplBrowserTestRefreshRate,
-                         ::testing::Values(CompositorImplMode::kNormal));
+class CompositorImplOcclusionBrowserTest
+    : public CompositorImplBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  CompositorImplOcclusionBrowserTest() {
+    feature_list_.InitWithFeatureState(
+        features::kPropagateOcclusionToVizAndroid,
+        IsOcclusionPropagationEnabled());
+  }
+
+  bool IsOcclusionPropagationEnabled() const { return GetParam(); }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         CompositorImplOcclusionBrowserTest,
+                         testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(CompositorImplOcclusionBrowserTest,
+                       WindowOcclusionAffectsVisibility) {
+  CompositorSwapRunLoop(compositor_impl()).RunUntilSwap();
+
+  auto* compositor = compositor_impl();
+  // Initially, the display should be visible.
+  EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+            compositor->GetDisplayVisibility());
+
+  // Pausing drawing while visible should retain buffers.
+  static_cast<Compositor*>(compositor)->SetDrawPaused(true);
+  EXPECT_EQ(viz::mojom::DisplayVisibility::kPaused,
+            compositor->GetDisplayVisibility());
+  static_cast<Compositor*>(compositor)->SetDrawPaused(false);
+  EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+            compositor->GetDisplayVisibility());
+
+  // Occlude the window via WindowAndroid to verify end-to-end propagation.
+  window()->OnOcclusionChanged(/*env=*/nullptr, /*occluded=*/true);
+
+  if (IsOcclusionPropagationEnabled()) {
+    // The display should now be set to invisible.
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kInvisible,
+              compositor->GetDisplayVisibility());
+
+    // Pausing and unpausing drawing while occluded should keep the display
+    // in kInvisible and BeginFrames deferred.
+    static_cast<Compositor*>(compositor)->SetDrawPaused(true);
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kInvisible,
+              compositor->GetDisplayVisibility());
+    static_cast<Compositor*>(compositor)->SetDrawPaused(false);
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kInvisible,
+              compositor->GetDisplayVisibility());
+
+    // Damage the compositor and request a composite while occluded (which is
+    // deferred by defer_begin_frame_), then unocclude the window and verify it
+    // swaps.
+    static_cast<Compositor*>(compositor)->SetBackgroundColor(SK_ColorRED);
+    static_cast<Compositor*>(compositor)->SetNeedsComposite();
+    window()->OnOcclusionChanged(/*env=*/nullptr, /*occluded=*/false);
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+              compositor->GetDisplayVisibility());
+    CompositorSwapRunLoop(compositor).RunUntilSwap();
+
+    // Detaching from an occluded window resets the compositor's occlusion state
+    // so it does not retain stale occlusion from its previous window.
+    window()->OnOcclusionChanged(/*env=*/nullptr, /*occluded=*/true);
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kInvisible,
+              compositor->GetDisplayVisibility());
+    window()->DetachCompositor();
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+              compositor->GetDisplayVisibility());
+
+    window()->AttachCompositor(compositor);
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+              compositor->GetDisplayVisibility());
+  } else {
+    // Occluding the window should not affect display visibility when feature is
+    // disabled.
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+              compositor->GetDisplayVisibility());
+
+    // Frames should continue swapping even while occluded.
+    static_cast<Compositor*>(compositor)->SetBackgroundColor(SK_ColorRED);
+    static_cast<Compositor*>(compositor)->SetNeedsComposite();
+    CompositorSwapRunLoop(compositor).RunUntilSwap();
+
+    window()->OnOcclusionChanged(/*env=*/nullptr, /*occluded=*/false);
+    EXPECT_EQ(viz::mojom::DisplayVisibility::kVisible,
+              compositor->GetDisplayVisibility());
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(CompositorImplBrowserTest, CompositorImplOffscreen) {
+  StubCompositorClient client;
+  auto window_for_testing = ui::WindowAndroid::CreateForTesting();
+  std::unique_ptr<Compositor> compositor(
+      Compositor::CreateOffscreen(&client, window_for_testing->get()));
+  auto* compositor_impl = static_cast<CompositorImpl*>(compositor.get());
+
+  CompositorSwapRunLoop swap_run_loop(compositor_impl);
+
+  compositor->SetWindowBounds(gfx::Size(100, 100));
+  compositor->SetRootLayer(cc::slim::Layer::Create());
+  compositor->SetBackgroundColor(SK_ColorRED);
+  compositor->SetNeedsComposite();
+
+  swap_run_loop.RunUntilSwap();
+}
 
 }  // namespace
 }  // namespace content

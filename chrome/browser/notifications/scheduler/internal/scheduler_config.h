@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,33 +12,37 @@
 namespace notifications {
 
 // Configure the maxmium number of notifications daily shown for all types.
-constexpr char kMaxDailyShownAllTypeConfig[] = "max_daily_shown_all_type";
+inline constexpr char kMaxDailyShownAllTypeConfig[] =
+    "max_daily_shown_all_type";
 
 // Configure the maxmium number of notifications daily shown per type.
-constexpr char kMaxDailyShownPerTypeConfig[] = "max_daily_shown_per_type";
+inline constexpr char kMaxDailyShownPerTypeConfig[] =
+    "max_daily_shown_per_type";
 
 // Configure the initial number of notifications daily shown per type.
-constexpr char kInitialDailyShownPerTypeConfig[] =
+inline constexpr char kInitialDailyShownPerTypeConfig[] =
     "initial_daily_shown_per_type";
 
 // Configure the expiration duration for notifications.
-constexpr char kNotificationExpirationConfig[] =
+inline constexpr char kNotificationExpirationConfig[] =
     "notification_expiration_in_days";
 
 // Configure the expiration duration for impressions.
-constexpr char kImpressionExpirationConfig[] = "impression_expiration_in_days";
+inline constexpr char kImpressionExpirationConfig[] =
+    "impression_expiration_in_days";
 
 // Configure the expiration duration for suppression.
-constexpr char kSuppressionDurationConfig[] = "suppression_duration_in_days";
+inline constexpr char kSuppressionDurationConfig[] =
+    "suppression_duration_in_days";
 
 // Configure the number of dismiss count.
-constexpr char kDismissCountConfig[] = "dismiss_count";
+inline constexpr char kDismissCountConfig[] = "dismiss_count";
 
 // Configure the duration of a dismiss.
-constexpr char kDismissDurationConfig[] = "dismiss_duration_in_days";
+inline constexpr char kDismissDurationConfig[] = "dismiss_duration_in_days";
 
 // Configure the duration of background task window.
-constexpr char kBackgroundTaskWindowDurationConfig[] =
+inline constexpr char kBackgroundTaskWindowDurationConfig[] =
     "background_task_window_duration_in_hours";
 
 // Configuration of notification scheduler system.

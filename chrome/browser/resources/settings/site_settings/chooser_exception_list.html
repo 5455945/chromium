@@ -1,21 +1,33 @@
-    <style include="cr-shared-style settings-shared">
-      #empty-list-message {
-        padding: 0 var(--cr-section-padding);
-        padding-top: 30px;
-      }
-    </style>
+    <!-- Confirm reset settings dialog. -->
+    <cr-dialog id="confirmResetSettings" close-text="$i18n{close}">
+      <div slot="body">${this.resetPermissionsMessage_}</div>
+      <div slot="button-container">
+        <cr-button class="cancel-button" @click="${this.onCloseDialogClick_}">
+          $i18n{cancel}
+        </cr-button>
+        <cr-button class="action-button" @click="${this.onResetSettingsClick_}">
+          $i18n{siteSettingsSiteResetAll}
+        </cr-button>
+      </div>
+    </cr-dialog>
 
-    <div id="empty-list-message"
-        hidden$="[[hasExceptions_(chooserExceptions.*)]]">
-      <div class="secondary">[[emptyListMessage_]]</div>
+    <div id="emptyListMessage" ?hidden="${this.hasExceptions_()}">
+      <div class="secondary">${this.emptyListMessage_}</div>
     </div>
 
-    <template is="dom-repeat" items="[[chooserExceptions]]">
-      <chooser-exception-list-entry exception="[[item]]"
-          on-show-tooltip="onShowTooltip_">
-      </chooser-exception-list-entry>
-    </template>
+    <div ?hidden="${!this.hasExceptions_()}">
+      <cr-button id="resetSettingsButton" role="button" aria-disabled="false"
+          @click="${this.onConfirmClearSettingsClick_}">
+        $i18n{siteSettingsReset}
+      </cr-button>
+    </div>
 
-    <paper-tooltip id="tooltip" manual-mode position="top">
-      [[tooltipText_]]
-    </paper-tooltip>
+    ${this.chooserExceptions.map(item => html`
+      <chooser-exception-list-entry .exception="${item}"
+          @show-tooltip="${this.onShowTooltip_}">
+      </chooser-exception-list-entry>
+    `)}
+
+    <cr-tooltip id="tooltip" manual-mode position="top">
+      ${this.tooltipText_}
+    </cr-tooltip>

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 #define COMPONENTS_SAFE_BROWSING_CORE_BROWSER_PASSWORD_PROTECTION_PASSWORD_PROTECTION_SERVICE_BASE_H_
 
 #include <set>
+#include <vector>
 
-#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/sequence_checker.h"
 #include "base/task/cancelable_task_tracker.h"
-#include "base/threading/thread_checker.h"
 #include "build/build_config.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
@@ -22,7 +22,8 @@
 #include "components/password_manager/core/browser/password_reuse_detector.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/metrics_collector/safe_browsing_metrics_collector.h"
 #include "components/safe_browsing/core/browser/password_protection/metrics_util.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/browser/safe_browsing_token_fetcher.h"
@@ -30,13 +31,15 @@
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/sessions/core/session_id.h"
 #include "components/signin/public/identity_manager/account_info.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
-#include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "ui/gfx/geometry/size.h"
 
 class GURL;
+
+namespace signin {
+class IdentityManager;
+}
 
 namespace safe_browsing {
 
@@ -69,7 +72,12 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
       std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
       bool is_off_the_record,
       signin::IdentityManager* identity_manager,
-      bool try_token_fetch);
+      bool try_token_fetch,
+      SafeBrowsingMetricsCollector* metrics_collector);
+
+  PasswordProtectionServiceBase(const PasswordProtectionServiceBase&) = delete;
+  PasswordProtectionServiceBase& operator=(
+      const PasswordProtectionServiceBase&) = delete;
 
   ~PasswordProtectionServiceBase() override;
 
@@ -109,20 +117,18 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
       const std::string& verdict_token,
       ReusedPasswordAccountType password_type) = 0;
 
-// The following functions are disabled on Android, because enterprise reporting
-// extension is not supported.
-#if !defined(OS_ANDROID)
   // Triggers the safeBrowsingPrivate.OnPolicySpecifiedPasswordReuseDetected.
   virtual void MaybeReportPasswordReuseDetected(
-      PasswordProtectionRequest* request,
+      const GURL& main_frame_url,
       const std::string& username,
       PasswordType password_type,
-      bool is_phishing_url) = 0;
+      bool is_phishing_url,
+      bool warning_shown,
+      const ReferrerChain& referrer_chain) = 0;
 
   // Called when a protected password change is detected. Must be called on
   // UI thread.
   virtual void ReportPasswordChanged() = 0;
-#endif
 
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager();
 
@@ -239,6 +245,11 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
   // Returns the URL where PasswordProtectionRequest instances send requests.
   static GURL GetPasswordProtectionRequestUrl();
 
+  std::set<scoped_refptr<PasswordProtectionRequest>>&
+  get_pending_requests_for_testing() {
+    return pending_requests_;
+  }
+
  protected:
   friend class PasswordProtectionRequest;
   friend class PasswordProtectionRequestContent;
@@ -290,6 +301,7 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
       LoginReputationClientRequest::Frame* frame) = 0;
 
   virtual void FillUserPopulation(
+      const GURL& main_frame_url,
       LoginReputationClientRequest* request_proto) = 0;
 
   virtual bool IsExtendedReporting() = 0;
@@ -303,23 +315,18 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
       LoginReputationClientRequest::TriggerType trigger_type,
       ReusedPasswordAccountType password_type) = 0;
 
-  // If primary account is syncing.
-  virtual bool IsPrimaryAccountSyncing() const = 0;
+  // If primary account is syncing history.
+  virtual bool IsPrimaryAccountSyncingHistory() const = 0;
 
   // If primary account is signed in.
   virtual bool IsPrimaryAccountSignedIn() const = 0;
 
-  // If a domain is not defined for the primary account. This means the primary
-  // account is a Gmail account.
-  virtual bool IsPrimaryAccountGmail() const = 0;
-
-  // If the domain for the non sync account is equal to |kNoHostedDomainFound|,
-  // this means that the account is a Gmail account.
-  virtual bool IsOtherGaiaAccountGmail(const std::string& username) const = 0;
+  // If |username| maps to a consumer account (vs. an enterprise account).
+  virtual bool IsAccountConsumer(const std::string& username) const = 0;
 
   // Gets the account based off of the username from a list of signed in
   // accounts.
-  virtual AccountInfo GetSignedInNonSyncAccount(
+  virtual AccountInfo GetAccountInfoForUsername(
       const std::string& username) const = 0;
 
   // If Safe browsing endpoint is not enabled in the country.
@@ -329,13 +336,6 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
   // the reused |password_type| and the |main_frame_url|.
   virtual bool CanShowInterstitial(ReusedPasswordAccountType password_type,
                                    const GURL& main_frame_url) = 0;
-
-  void CheckCsdAllowlistOnIOThread(const GURL& url, bool* check_result);
-
-  // Gets the type of sync account associated with current profile or
-  // |NOT_SIGNED_IN|.
-  virtual LoginReputationClientRequest::PasswordReuseEvent::SyncAccountType
-  GetSyncAccountType() const = 0;
 
   // Get information about Delayed Warnings and Omnibox URL display experiments.
   // This information is sent in PhishGuard pings.
@@ -349,13 +349,9 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
       const GURL& url,
       ReusedPasswordAccountType password_type) = 0;
 
-  const std::list<std::string>& common_spoofed_domains() const {
-    return common_spoofed_domains_;
-  }
-
-  // Subclasses may override this method to either cancel or resume deferred
-  // navigations. By default, deferred navigations are not handled.
-  virtual void MaybeHandleDeferredNavigations(
+  // Subclasses may override this method to resume deferred navigations when a
+  // request finishes. By default, deferred navigations are not handled.
+  virtual void ResumeDeferredNavigationsIfNeeded(
       PasswordProtectionRequest* request) {}
 
   bool CanGetAccessToken();
@@ -395,10 +391,12 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
                            TestRemoveCachedVerdictOnURLsDeleted);
   FRIEND_TEST_ALL_PREFIXES(PasswordProtectionServiceTest,
                            TestCleanUpExpiredVerdict);
+  FRIEND_TEST_ALL_PREFIXES(PasswordProtectionServiceTest,
+                           NoSendPingPrivateIpHostname);
 
   // Overridden from history::HistoryServiceObserver.
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
 
   void HistoryServiceBeingDeleted(
       history::HistoryService* history_service) override;
@@ -423,7 +421,7 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
   virtual gfx::Size GetCurrentContentAreaSize() const = 0;
 #endif
 
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
 
   std::vector<std::string> saved_passwords_matching_domains_;
 
@@ -434,10 +432,6 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
   // cookie store.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  // List of most commonly spoofed domains to default to on the password warning
-  // dialog.
-  std::list<std::string> common_spoofed_domains_;
-
   base::ScopedObservation<history::HistoryService,
                           history::HistoryServiceObserver>
       history_service_observation_{this};
@@ -447,7 +441,7 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
   base::CancelableTaskTracker tracker_;
 
   // Unowned object used for getting preference settings.
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
 
   // The token fetcher used for getting access token.
   std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher_;
@@ -458,14 +452,16 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
 
   // Use identity manager to check if account is signed in, before fetching
   // access token.
-  signin::IdentityManager* identity_manager_;
+  raw_ptr<signin::IdentityManager> identity_manager_;
 
   // A boolean indicates whether access token fetch should be attempted or not.
   // Use this to disable token fetches from ios and certain tests.
   bool try_token_fetch_;
 
+  // Unowned object used for recording metrics/prefs.
+  raw_ptr<SafeBrowsingMetricsCollector> metrics_collector_;
+
   base::WeakPtrFactory<PasswordProtectionServiceBase> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(PasswordProtectionServiceBase);
 };
 
 }  // namespace safe_browsing

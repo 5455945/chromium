@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTIES_CSS_PROPERTY_REF_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTIES_CSS_PROPERTY_REF_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/properties/longhands/custom_property.h"
 
 namespace blink {
@@ -19,7 +20,7 @@ class Document;
 //
 // Usage:
 //
-//   CSSPropertyRef ref(some_string, document);
+//   CSSPropertyRef ref(&some_string, document);
 //
 //   if (ref.IsValid()) {
 //     LOG(INFO) << ref.GetProperty().GetName();
@@ -29,17 +30,22 @@ class Document;
 // CSSPropertyRef (e.g. if a non-existent property name is provided), so be
 // sure to always check IsValid() before calling GetProperty().
 class CORE_EXPORT CSSPropertyRef {
-  DISALLOW_NEW();
+  STACK_ALLOCATED();
 
  public:
   // Look up (or create) a CSSProperty.
   //
   // If the incoming 'name' is not a CSS property, the CSSPropertyRef is
   // invalid.
-  CSSPropertyRef(const String& name, const Document&);
+  //
+  // “name” must live at least as long as the CSSPropertyRef.
+  // See CustomProperty.
+  CSSPropertyRef(const AtomicString* name, const Document&);
 
   // Like above, but will never produce an invalid CSSPropertyRef.
-  CSSPropertyRef(const CSSPropertyName&, const Document&);
+  // “name” must live at least as long as the CSSPropertyRef.
+  // See CustomProperty.
+  CSSPropertyRef(const CSSPropertyName* name, const Document&);
 
   // If you already have a CSSProperty& object, you may use it to get
   // a CSSPropertyRef again.
@@ -55,18 +61,18 @@ class CORE_EXPORT CSSPropertyRef {
 
   const CSSProperty& GetProperty() const {
     DCHECK(IsValid());
-    if (property_id_ == CSSPropertyID::kVariable)
+    if (property_id_ == CSSPropertyID::kVariable) {
       return custom_property_;
+    }
     return CSSProperty::Get(ResolveCSSPropertyID(property_id_));
   }
 
   const CSSUnresolvedProperty& GetUnresolvedProperty() const {
-    if (IsPropertyAlias(property_id_))
-      return *CSSUnresolvedProperty::GetAliasProperty(property_id_);
+    if (IsPropertyAlias(property_id_)) {
+      return *GetPropertyInternal(property_id_);
+    }
     return GetProperty();
   }
-
-  void Trace(Visitor* visitor) const { visitor->Trace(custom_property_); }
 
  private:
   CSSPropertyID property_id_;

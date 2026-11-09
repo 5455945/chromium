@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,55 @@ module blink.mojom;
 import "mojo/public/mojom/base/read_only_buffer.mojom";
 import "mojo/public/mojom/base/string16.mojom";
 import "mojo/public/mojom/base/time.mojom";
+import "mojo/public/mojom/base/values.mojom";
 import "services/network/public/mojom/cookie_manager.mojom";
 import "services/network/public/mojom/url_loader_factory.mojom";
+import "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom";
 import "third_party/blink/public/mojom/background_fetch/background_fetch.mojom";
 import "third_party/blink/public/mojom/devtools/console_message.mojom";
 import "third_party/blink/public/mojom/fetch/fetch_api_response.mojom";
-import "third_party/blink/public/mojom/frame/reporting_observer.mojom";
 import "third_party/blink/public/mojom/loader/url_loader_factory_bundle.mojom";
 import "third_party/blink/public/mojom/messaging/transferable_message.mojom";
 import "third_party/blink/public/mojom/notifications/notification.mojom";
-import "third_party/blink/public/mojom/payments/payment_app.mojom";
+import "third_party/blink/public/mojom/payments/payment_app_events.mojom";
 import "third_party/blink/public/mojom/push_messaging/push_messaging.mojom";
 import "third_party/blink/public/mojom/service_worker/dispatch_fetch_event_params.mojom";
+import "third_party/blink/public/mojom/service_worker/service_worker_ancestor_frame_type.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_client.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_error_type.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_event_status.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_fetch_response_callback.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_object.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom";
+import "third_party/blink/public/mojom/service_worker/service_worker_router_rule.mojom";
+import "third_party/blink/public/mojom/storage_key/storage_key.mojom";
+import "ui/gfx/geometry/mojom/geometry.mojom";
 import "url/mojom/origin.mojom";
 import "url/mojom/url.mojom";
+
+// Enum to represent the service worker focus error.
+enum FocusError {
+  CLIENT_NOT_FOUND,
+  CLIENT_INACTIVE
+};
+
+// The result of a FocusClient request. On success, |client| tells service worker client
+// information of the focused window. Otherwise, |error_code| describes the failure.
+union FocusResult {
+  ServiceWorkerClientInfo client;
+  FocusError error_code;
+};
+
+// Options for ServiceWorkerHost.OpenPaymentHandlerWindow(). Corresponds to the
+// PaymentHandlerOpenWindowOptions dictionary of
+// PaymentRequestEvent#openWindow(url, options).
+// This is experimental and not spec'd (or enabled) yet.
+struct PaymentHandlerOpenWindowOptions {
+  // The payment app's preferred inner size (i.e. the size of the window's
+  // content area, excluding browser UI) for the window, or null if it did not
+  // set one. It is a hint; the browser may use a different size.
+  gfx.mojom.Size? preferred_inner_size;
+};
 
 // Host for a running service worker execution context. Implemented in the
 // browser process. The service worker running in the renderer process uses this
@@ -61,16 +90,18 @@ interface ServiceWorkerHost {
   OpenNewTab(url.mojom.Url url)
     => (bool success, ServiceWorkerClientInfo? client, string? error_msg);
 
-  // Corresponds to PaymentRequestEvent#openWindow(url).
+  // Corresponds to PaymentRequestEvent#openWindow(url, options).
   // Spec: https://w3c.github.io/payment-handler/#openwindow-method
-  // Requests the browser to open a payment handler window with |url|.
+  // Requests the browser to open a payment handler window with |url| and
+  // |options|.
   // If the window was successfully opened, |success| is true. |client| contains
   // information about the newly opened window, but may be null if that
   // information could not be obtained (this can happen for a cross-origin
   // window, or if the browser process could not get the information in time
   // before the window was closed).
   // If |success| is false, |error_msg| describes the failure.
-  OpenPaymentHandlerWindow(url.mojom.Url url)
+  OpenPaymentHandlerWindow(url.mojom.Url url,
+                           PaymentHandlerOpenWindowOptions options)
     => (bool success, ServiceWorkerClientInfo? client, string? error_msg);
 
   // Corresponds to Client#postMessage(). Requests the browser to post |message|
@@ -79,10 +110,7 @@ interface ServiceWorkerHost {
 
   // Corresponds to WindowClient#focus(). Requests the browser to focus the
   // client with |client_uuid|.
-  // On success, |client| contains service worker client information of the
-  // focused window.
-  // Otherwise, |client| is null.
-  FocusClient(string client_uuid) => (ServiceWorkerClientInfo? client);
+  FocusClient(string client_uuid) => (FocusResult result);
 
   // Corresponds to WindowClient#navigate(). Requests the browser to navigate
   // the client with |client_uuid| to |url|.
@@ -109,6 +137,16 @@ interface ServiceWorkerHost {
   // On success, |error| is kNone without |error_msg| set.
   // Otherwise, |error| and |error_msg| describe the failure.
   ClaimClients() => (ServiceWorkerErrorType error, string? error_msg);
+
+  // Corresponds to InstallEvent#addRoutes(). Adds service worker router rules,
+  // which are evaluated before the regular navigation path. i.e. evaluated
+  // before the service worker fetch handler is invoked.
+  //
+  // The callback with |is_parse_error| true indicates that the evaluator faced
+  // a parse error of regex, and could not initialize the router evaluator.
+  // Otherwise, |is_parse_error| is false to indicate that the evaluator is
+  // initialized.
+  AddRoutes(ServiceWorkerRouterRules rules) => (bool is_parse_error);
 };
 
 struct ExtendableMessageEvent {
@@ -149,7 +187,7 @@ const int32 kServiceWorkerDefaultIdleDelayInSeconds = 30;
 // An interface for talking to a running service worker thread. The browser
 // process uses this interface to request the renderer to do things like
 // dispatch events to the service worker. This interface is bound on the
-// service worker thread and is implemented by ServiceWorkerContextClient.
+// service worker thread and is implemented by ServiceWorkerGlobalScope.
 //
 // This is the master interface for the Mojo message pipe between the browser
 // process and the service worker thread in the renderer process. Other service
@@ -179,19 +217,18 @@ interface ServiceWorker {
   // ServiceWorkerGlobalScope#registration object and
   // ServiceWorkerGlobalScope#serviceWorker object. JavaScript execution of the
   // service worker does not start until this message is received.
-  // When the service worker is new and going to be registered,
-  // |subresource_loader_factories| is non-null and it should be used for all
-  // subsequent requests.
   // |reporting_observer_receiver| will be set to the worker global scope so
   // that reports queued to the remote of |reporting_observer_receiver| will
   // be notified to ReportingObservers registered with the global scope.
   InitializeGlobalScope(
       pending_associated_remote<ServiceWorkerHost> service_worker_host,
+      pending_associated_remote<blink.mojom.AssociatedInterfaceProvider> associated_interfaces_to_browser,
+      pending_associated_receiver<blink.mojom.AssociatedInterfaceProvider> associated_interfaces_from_browser,
       ServiceWorkerRegistrationObjectInfo registration_info,
       ServiceWorkerObjectInfo service_worker_info,
       FetchHandlerExistence fetch_handler_existence,
-      URLLoaderFactoryBundle? subresource_loader_factories,
-      pending_receiver<ReportingObserver>? reporting_observer_receiver);
+      AncestorFrameType ancestor_frame_type,
+      blink.mojom.StorageKey storage_key);
 
   // These methods dispatch InstallEvent and ActivateEvent to the
   // ServiceWorkerGlobalScope.
@@ -252,6 +289,10 @@ interface ServiceWorker {
   // content, or null.
   DispatchPushEvent(string? payload)
       => (ServiceWorkerEventStatus status);
+  // Like DispatchPushEvent, but records any network requests made during the
+  // push event in |requested_urls|.
+  DispatchPushEventRecordingNetworkRequests(string? payload)
+      => (ServiceWorkerEventStatus status, array<url.mojom.Url>? requested_urls);
   // Whenever a PushSubscription changes, a change event is generated with
   // (optionally) the previous subscription and the new subscription.
   // |old_subscription| can be null when there was a partial database corruption
@@ -305,6 +346,30 @@ interface ServiceWorker {
   // events are handled.
   SetIdleDelay(mojo_base.mojom.TimeDelta delay);
 
+  // Notifies the renderer of an active keepalive. Resets the idle timeout
+  // and provides a `keepalive_sequence_number` to allow the browser to detect
+  // and reject stale idle termination requests.
+  AddKeepAlive(uint64 keepalive_sequence_number);
+
+  // Check if the event queue is empty.
+  // Schedules idle timeout callback if there is no ongoing event.
+  ClearKeepAlive();
+
   // Adds a message to DevTools console which is associated with this worker.
   AddMessageToConsole(ConsoleMessageLevel level, string message);
+
+  // Executes the given `javascript` in the context of the running worker.
+  // `wants_result` indicates whether a result from the executing `javascript`
+  // should be returned via the provided callback.
+  // Currently, this only supports synchronous script execution, and the
+  // returned value is the result of the final execution in the provided
+  // javascript.
+  // If an exception is thrown, a stringified version is returned through the
+  // error parameter.
+  // TODO(devlin): Expand this to allow returning a promise for asynchronous
+  // execution.
+  ExecuteScriptForTest(
+      mojo_base.mojom.BigString16 javascript,
+      bool wants_result)
+      => (mojo_base.mojom.Value result, string? error);
 };

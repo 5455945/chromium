@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">すべての画像アニメーションを無効にする。</translation>
 <translation id="1703735871906654364">カーソル ブラウジング</translation>
 <translation id="1791496371305830581">すべての画像アニメーションを許可する。</translation>
+<translation id="1974060860693918893">詳細設定</translation>
 <translation id="1996252509865389616">有効にする</translation>
 <translation id="2079545284768500474">元に戻す</translation>
 <translation id="2179565792157161713">詳しい説明を新しいタブで開く</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Image Alt Text Viewer</translation>
 <translation id="381767806621926835">「longdesc」または「aria-describedat」属性が指定された要素を右クリックすると、詳しい説明が表示されます。</translation>
 <translation id="4023902424053835668">矢印キーを使ってウェブページのテキストを閲覧します。</translation>
+<translation id="4384008284958619421">最新のスクリーン リーダーと Google Chrome で、アクセシビリティに配慮した要素の説明と ARIA 標準がネイティブでサポートされるようになりました。</translation>
 <translation id="4388820049312272371">カーソルの位置を短い点滅で強調表示する。</translation>
 <translation id="4394049700291259645">無効にする</translation>
 <translation id="4769065380738716500">画像の代わりに代替（alt）テキストを表示しています。</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">カラー エンハンサー</translation>
 <translation id="633394792577263429">単語単位で移動するには &lt;span class='key'&gt;Control&lt;/span&gt; キーを押したままにします。</translation>
 <translation id="6550675742724504774">オプション</translation>
+<translation id="6699630355767768222">ステップ 3: 色の軸をオーバーライドして補正する。</translation>
 <translation id="6838518108677880446">設定:</translation>
 <translation id="690628312087070417">カーソルが離れた場所に移動した場合:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -60,9 +63,11 @@
 <translation id="7658239707568436148">キャンセル</translation>
 <translation id="786423340267544509">aria-describedat または longdesc 属性が指定された要素を枠線付きで表示する</translation>
 <translation id="7942349550061667556">赤</translation>
+<translation id="8081200409424070383">Long Descriptions は 2026 年 11 月 20 日にサポートを終了します。</translation>
 <translation id="8260673944985561857">カーソル ブラウジングのオプション</translation>
 <translation id="8321034316479930120">アニメーションのポリシー</translation>
 <translation id="8480209185614411573">ハイ コントラスト</translation>
 <translation id="8609925175482059018">&lt;span class='key'&gt;F7&lt;/span&gt; を押すとカーソル ブラウジングがオンになり、もう一度押すとオフになります。</translation>
+<translation id="8798099450830957504">既定</translation>
 <translation id="894241283505723656">Long Descriptions in Context Menu</translation>
 </translationbundle>

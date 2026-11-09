@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/test/test_browser_context.h"
@@ -41,13 +42,14 @@ class ManagementPolicyMock : public ManagementPolicy::Provider {
   bool UserMayLoad(const Extension* extension,
                    std::u16string* error) const override {
     EXPECT_EQ(extension_, extension);
-    if (!may_load_)
+    if (!may_load_) {
       *error = kDummyPolicyError;
+    }
     return may_load_;
   }
 
  private:
-  const Extension* extension_;
+  raw_ptr<const Extension> extension_;
   bool may_load_;
 };
 
@@ -108,7 +110,7 @@ TEST_F(PolicyCheckTest, PolicyFailure) {
   runner_.Run(&policy_check);
   EXPECT_TRUE(runner_.called());
   EXPECT_THAT(runner_.errors(), testing::UnorderedElementsAre(
-                                    PreloadCheck::DISALLOWED_BY_POLICY));
+                                    PreloadCheck::Error::kDisallowedByPolicy));
   EXPECT_EQ(kDummyPolicyError, policy_check.GetErrorMessage());
 }
 

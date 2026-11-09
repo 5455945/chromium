@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,72 @@ namespace content {
 
 namespace {
 
+std::optional<blink::InspectorPlayerError> ErrorFromParams(
+    const base::DictValue& param) {
+  std::optional<int> code = param.FindInt(media::StatusConstants::kCodeKey);
+  const std::string* group =
+      param.FindString(media::StatusConstants::kGroupKey);
+  const std::string* message =
+      param.FindString(media::StatusConstants::kMsgKey);
+
+  // message might be empty or not present, but group and code are required.
+  CHECK(code.has_value() && group);
+
+  blink::InspectorPlayerErrors caused_by;
+  if (const auto* c = param.FindDict(media::StatusConstants::kCauseKey)) {
+    auto parsed_cause = ErrorFromParams(*c);
+    if (parsed_cause.has_value())
+      caused_by.push_back(*parsed_cause);
+  }
+
+  std::vector<blink::InspectorPlayerError::SourceLocation> stack_vec;
+  if (const auto* vec = param.FindList(media::StatusConstants::kStackKey)) {
+    for (const auto& loc : *vec) {
+      const auto& loc_dict = loc.GetDict();
+      const std::string* file =
+          loc_dict.FindString(media::StatusConstants::kFileKey);
+      std::optional<int> line =
+          loc_dict.FindInt(media::StatusConstants::kLineKey);
+      if (!file || !line.has_value())
+        continue;
+      blink::InspectorPlayerError::SourceLocation entry = {
+          blink::WebString::FromUtf8(*file), *line};
+      stack_vec.push_back(std::move(entry));
+    }
+  }
+
+  std::vector<blink::InspectorPlayerError::Data> data_vec;
+  if (auto* data = param.FindDict(media::StatusConstants::kDataKey)) {
+    for (const auto [key, value] : *data) {
+      std::string json = base::WriteJson(value).value_or("");
+      blink::InspectorPlayerError::Data entry = {
+          blink::WebString::FromUtf8(key), blink::WebString::FromUtf8(json)};
+      data_vec.push_back(std::move(entry));
+    }
+  }
+
+  blink::InspectorPlayerError result = {
+      blink::WebString::FromUtf8(*group),
+      *code,
+      blink::WebString::FromUtf8(message ? *message : ""),
+      std::move(stack_vec),
+      std::move(caused_by),
+      std::move(data_vec)};
+
+  return std::move(result);
+}
+
 blink::WebString ToString(const base::Value& value) {
   if (value.is_string()) {
-    return blink::WebString::FromUTF8(value.GetString());
+    return blink::WebString::FromUtf8(value.GetString());
   }
-  std::string output_str;
-  base::JSONWriter::Write(value, &output_str);
-  return blink::WebString::FromUTF8(output_str);
+  std::string output_str = base::WriteJson(value).value_or("");
+  return blink::WebString::FromUtf8(output_str);
+}
+
+blink::WebString ToString(const base::DictValue& value) {
+  std::string output_str = base::WriteJson(value).value_or("");
+  return blink::WebString::FromUtf8(output_str);
 }
 
 // TODO(tmathmeyer) stop using a string here eventually. This means rewriting
@@ -31,27 +90,30 @@ blink::InspectorPlayerMessage::Level LevelFromString(const std::string& level) {
     return blink::InspectorPlayerMessage::Level::kWarning;
   if (level == "info")
     return blink::InspectorPlayerMessage::Level::kInfo;
-  if (level == "debug")
-    return blink::InspectorPlayerMessage::Level::kDebug;
-  NOTREACHED();
-  return blink::InspectorPlayerMessage::Level::kError;
+  CHECK_EQ(level, "debug");
+  return blink::InspectorPlayerMessage::Level::kDebug;
 }
 
 }  // namespace
 
 InspectorMediaEventHandler::InspectorMediaEventHandler(
-    blink::MediaInspectorContext* inspector_context)
+    blink::MediaInspectorContext* inspector_context,
+    int dom_node_id)
     : inspector_context_(inspector_context),
-      player_id_(inspector_context_->CreatePlayer()) {}
+      player_id_(inspector_context_->CreatePlayer()) {
+  inspector_context->SetDomNodeIdForPlayer(player_id_, dom_node_id);
+}
 
 // TODO(tmathmeyer) It would be wonderful if the definition for MediaLogRecord
 // and InspectorPlayerEvent / InspectorPlayerProperty could be unified so that
 // this method is no longer needed. Refactor MediaLogRecord at some point.
 void InspectorMediaEventHandler::SendQueuedMediaEvents(
     std::vector<media::MediaLogRecord> events_to_send) {
-  // If the video player is gone, the whole frame
-  if (video_player_destroyed_)
+  // If the video player is gone, drop the events to avoid a dangling pointer.
+  if (video_player_destroyed_) {
+    DCHECK(!inspector_context_);
     return;
+  }
 
   blink::InspectorPlayerProperties properties;
   blink::InspectorPlayerMessages messages;
@@ -61,18 +123,18 @@ void InspectorMediaEventHandler::SendQueuedMediaEvents(
   for (media::MediaLogRecord event : events_to_send) {
     switch (event.type) {
       case media::MediaLogRecord::Type::kMessage: {
-        for (auto&& itr : event.params.DictItems()) {
+        for (const auto [level, text] : event.params) {
           blink::InspectorPlayerMessage msg = {
-              LevelFromString(itr.first),
-              blink::WebString::FromUTF8(itr.second.GetString())};
+              LevelFromString(level),
+              blink::WebString::FromUtf8(text.GetString())};
           messages.emplace_back(std::move(msg));
         }
         break;
       }
       case media::MediaLogRecord::Type::kMediaPropertyChange: {
-        for (auto&& itr : event.params.DictItems()) {
+        for (const auto [name, value] : event.params) {
           blink::InspectorPlayerProperty prop = {
-              blink::WebString::FromUTF8(itr.first), ToString(itr.second)};
+              blink::WebString::FromUtf8(name), ToString(value)};
           properties.emplace_back(std::move(prop));
         }
         break;
@@ -83,12 +145,10 @@ void InspectorMediaEventHandler::SendQueuedMediaEvents(
         break;
       }
       case media::MediaLogRecord::Type::kMediaStatus: {
-        base::Value* code = event.params.FindKey(media::MediaLog::kStatusText);
-        DCHECK_NE(code, nullptr);
-        blink::InspectorPlayerError error = {
-            blink::InspectorPlayerError::Type::kPipelineError, ToString(*code)};
-        errors.emplace_back(std::move(error));
-        break;
+        std::optional<blink::InspectorPlayerError> error =
+            ErrorFromParams(event.params);
+        if (error.has_value())
+          errors.emplace_back(std::move(*error));
       }
     }
   }
@@ -108,7 +168,10 @@ void InspectorMediaEventHandler::SendQueuedMediaEvents(
 
 void InspectorMediaEventHandler::OnWebMediaPlayerDestroyed() {
   video_player_destroyed_ = true;
-  inspector_context_->DestroyPlayer(player_id_);
+  if (inspector_context_) {
+    inspector_context_->DestroyPlayer(player_id_);
+    inspector_context_ = nullptr;
+  }
 }
 
 }  // namespace content

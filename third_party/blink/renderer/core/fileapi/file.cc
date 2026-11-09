@@ -27,101 +27,76 @@
 
 #include <memory>
 
+#include "base/memory/scoped_refptr.h"
+#include "third_party/blink/public/mojom/filesystem/file_system.mojom-blink.h"
 #include "third_party/blink/public/platform/file_path_conversion.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_file_property_bag.h"
+#include "third_party/blink/renderer/core/core_initializer.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/fileapi/file_backed_blob_factory_dispatcher.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/form_controller.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/bindings/to_v8.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
-#include "third_party/blink/renderer/platform/wtf/date_math.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
-static String GetContentTypeFromFileName(const String& name,
+static String GetContentTypeFromFileName(const StringView& name,
                                          File::ContentTypeLookupPolicy policy) {
-  String type;
-  wtf_size_t index = name.ReverseFind('.');
-  if (index != WTF::kNotFound) {
+  wtf_size_t index = name.rfind('.');
+  if (index != kNotFound) {
+    StringView extension = name.substr(index + 1);
     if (policy == File::kWellKnownContentTypes) {
-      type = MIMETypeRegistry::GetWellKnownMIMETypeForExtension(
-          name.Substring(index + 1));
+      return MIMETypeRegistry::GetWellKnownMIMETypeForExtension(extension);
     } else {
       DCHECK_EQ(policy, File::kAllContentTypes);
-      type =
-          MIMETypeRegistry::GetMIMETypeForExtension(name.Substring(index + 1));
+      return MIMETypeRegistry::GetMIMETypeForExtension(extension);
     }
   }
-  return type;
+  return String();
 }
 
-static std::unique_ptr<BlobData> CreateBlobDataForFileWithType(
+static scoped_refptr<BlobDataHandle> CreateBlobDataHandleForFile(
+    ExecutionContext* context,
     const String& path,
-    const String& content_type) {
-  std::unique_ptr<BlobData> blob_data =
-      BlobData::CreateForFileWithUnknownSize(path);
-  blob_data->SetContentType(content_type);
-  return blob_data;
-}
-
-static std::unique_ptr<BlobData> CreateBlobDataForFile(
-    const String& path,
-    File::ContentTypeLookupPolicy policy) {
-  if (path.IsEmpty()) {
+    const std::optional<String>& name,
+    File::ContentTypeLookupPolicy policy,
+    mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+        snapshot_permission_token) {
+  if (path.empty() && !name) {
     auto blob_data = std::make_unique<BlobData>();
     blob_data->SetContentType("application/octet-stream");
-    return blob_data;
+    return BlobDataHandle::Create(std::move(blob_data), /*size=*/0);
   }
-  return CreateBlobDataForFileWithType(
-      path, GetContentTypeFromFileName(path, policy));
+  return BlobDataHandle::CreateForFile(
+      FileBackedBlobFactoryDispatcher::GetFileBackedBlobFactory(context), path,
+      /*offset=*/0, BlobData::kToEndOfFile,
+      /*expected_modification_time=*/std::nullopt,
+      GetContentTypeFromFileName(name.value_or(path), policy),
+      std::move(snapshot_permission_token));
 }
 
-static std::unique_ptr<BlobData> CreateBlobDataForFileWithName(
-    const String& path,
+static scoped_refptr<BlobDataHandle> CreateBlobDataHandleForFileWithMetadata(
+    ExecutionContext* context,
     const String& file_system_name,
-    File::ContentTypeLookupPolicy policy) {
-  return CreateBlobDataForFileWithType(
-      path, GetContentTypeFromFileName(file_system_name, policy));
-}
-
-static std::unique_ptr<BlobData> CreateBlobDataForFileWithMetadata(
-    const String& file_system_name,
-    const FileMetadata& metadata) {
-  std::unique_ptr<BlobData> blob_data;
-  if (metadata.length == BlobData::kToEndOfFile) {
-    blob_data = BlobData::CreateForFileWithUnknownSize(
-        metadata.platform_path, metadata.modification_time);
-  } else {
-    blob_data = std::make_unique<BlobData>();
-    blob_data->AppendFile(metadata.platform_path, 0, metadata.length,
-                          metadata.modification_time);
-  }
-  blob_data->SetContentType(GetContentTypeFromFileName(
-      file_system_name, File::kWellKnownContentTypes));
-  return blob_data;
-}
-
-static std::unique_ptr<BlobData> CreateBlobDataForFileSystemURL(
-    const KURL& file_system_url,
-    const FileMetadata& metadata) {
-  std::unique_ptr<BlobData> blob_data;
-  if (metadata.length == BlobData::kToEndOfFile) {
-    blob_data = BlobData::CreateForFileSystemURLWithUnknownSize(
-        file_system_url, metadata.modification_time);
-  } else {
-    blob_data = std::make_unique<BlobData>();
-    blob_data->AppendFileSystemURL(file_system_url, 0, metadata.length,
-                                   metadata.modification_time);
-  }
-  blob_data->SetContentType(GetContentTypeFromFileName(
-      file_system_url.GetPath(), File::kWellKnownContentTypes));
-  return blob_data;
+    const FileMetadata& metadata,
+    mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+        snapshot_permission_token) {
+  return BlobDataHandle::CreateForFile(
+      FileBackedBlobFactoryDispatcher::GetFileBackedBlobFactory(context),
+      metadata.platform_path,
+      /*offset=*/0, metadata.length, metadata.modification_time,
+      GetContentTypeFromFileName(file_system_name,
+                                 File::kWellKnownContentTypes),
+      std::move(snapshot_permission_token));
 }
 
 // static
@@ -133,16 +108,17 @@ File* File::Create(ExecutionContext* context,
 
   base::Time last_modified;
   if (options->hasLastModified()) {
-    // We don't use base::Time::FromJsTime(double) here because
-    // options->lastModified() is a 64-bit integer, and casting it to
+    // We don't use base::Time::FromMillisecondsSinceUnixEpoch(double) here
+    // because options->lastModified() is a 64-bit integer, and casting it to
     // double is lossy.
-    last_modified = base::Time::UnixEpoch() +
-                    base::TimeDelta::FromMilliseconds(options->lastModified());
+    last_modified =
+        base::Time::UnixEpoch() + base::Milliseconds(options->lastModified());
   } else {
     last_modified = base::Time::Now();
   }
   DCHECK(options->hasEndings());
-  bool normalize_line_endings_to_native = options->endings() == "native";
+  const bool normalize_line_endings_to_native =
+      options->endings() == V8EndingType::Enum::kNative;
   if (normalize_line_endings_to_native)
     UseCounter::Count(context, WebFeature::kFileAPINativeLineEndings);
 
@@ -157,7 +133,8 @@ File* File::Create(ExecutionContext* context,
       BlobDataHandle::Create(std::move(blob_data), file_size));
 }
 
-File* File::CreateFromControlState(const FormControlState& state,
+File* File::CreateFromControlState(ExecutionContext* context,
+                                   const FormControlState& state,
                                    wtf_size_t& index) {
   if (index + 2 >= state.ValueSize()) {
     index = state.ValueSize();
@@ -166,9 +143,9 @@ File* File::CreateFromControlState(const FormControlState& state,
   String path = state[index++];
   String name = state[index++];
   String relative_path = state[index++];
-  if (relative_path.IsEmpty())
-    return File::CreateForUserProvidedFile(path, name);
-  return File::CreateWithRelativePath(path, relative_path);
+  if (relative_path.empty())
+    return File::CreateForUserProvidedFile(context, path, name);
+  return File::CreateWithRelativePath(context, path, name, relative_path);
 }
 
 String File::PathFromControlState(const FormControlState& state,
@@ -182,35 +159,52 @@ String File::PathFromControlState(const FormControlState& state,
   return path;
 }
 
-File* File::CreateWithRelativePath(const String& path,
+File* File::CreateWithRelativePath(ExecutionContext* context,
+                                   const String& path,
+                                   const String& name,
                                    const String& relative_path) {
-  File* file = MakeGarbageCollected<File>(path, File::kAllContentTypes,
-                                          File::kIsUserVisible);
+  File* file = MakeGarbageCollected<File>(
+      context, path, name, File::kAllContentTypes, File::kIsUserVisible);
   file->relative_path_ = relative_path;
   return file;
 }
 
-File::File(const String& path,
-           ContentTypeLookupPolicy policy,
-           UserVisibility user_visibility)
-    : Blob(BlobDataHandle::Create(CreateBlobDataForFile(path, policy),
-                                  std::numeric_limits<uint64_t>::max())),
-      has_backing_file_(true),
-      user_visibility_(user_visibility),
-      path_(path),
-      name_(FilePathToWebString(WebStringToFilePath(path).BaseName())) {}
+// static
+File* File::CreateForFileSystemFile(ExecutionContext& context,
+                                    const KURL& url,
+                                    const FileMetadata& metadata,
+                                    UserVisibility user_visibility) {
+  String content_type =
+      GetContentTypeFromFileName(url.GetPath(), File::kWellKnownContentTypes);
+  // RegisterBlob doesn't take nullable strings.
+  if (content_type.IsNull()) {
+    content_type = g_empty_string;
+  }
 
-File::File(const String& path,
-           const String& name,
+  scoped_refptr<BlobDataHandle> handle;
+  CoreInitializer::GetInstance().GetFileSystemManager(&context).RegisterBlob(
+      content_type, url, metadata.length, metadata.modification_time, &handle);
+
+  return MakeGarbageCollected<File>(url, metadata, user_visibility, handle);
+}
+
+File::File(ExecutionContext* context,
+           const String& path,
+           const std::optional<String>& name,
            ContentTypeLookupPolicy policy,
-           UserVisibility user_visibility)
-    : Blob(BlobDataHandle::Create(
-          CreateBlobDataForFileWithName(path, name, policy),
-          std::numeric_limits<uint64_t>::max())),
+           UserVisibility user_visibility,
+           mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+               snapshot_permission_token)
+    : Blob(CreateBlobDataHandleForFile(context,
+                                       path,
+                                       name,
+                                       policy,
+                                       std::move(snapshot_permission_token))),
       has_backing_file_(true),
       user_visibility_(user_visibility),
       path_(path),
-      name_(name) {}
+      name_(
+          name.value_or(FilePathToString(StringToFilePath(path).BaseName()))) {}
 
 File::File(const String& path,
            const String& name,
@@ -218,10 +212,10 @@ File::File(const String& path,
            UserVisibility user_visibility,
            bool has_snapshot_data,
            uint64_t size,
-           const absl::optional<base::Time>& last_modified,
+           const std::optional<base::Time>& last_modified,
            scoped_refptr<BlobDataHandle> blob_data_handle)
     : Blob(std::move(blob_data_handle)),
-      has_backing_file_(!path.IsEmpty() || !relative_path.IsEmpty()),
+      has_backing_file_(!path.empty() || !relative_path.empty()),
       user_visibility_(user_visibility),
       path_(path),
       name_(name),
@@ -232,7 +226,7 @@ File::File(const String& path,
 }
 
 File::File(const String& name,
-           const absl::optional<base::Time>& modification_time,
+           const std::optional<base::Time>& modification_time,
            scoped_refptr<BlobDataHandle> blob_data_handle)
     : Blob(std::move(blob_data_handle)),
       has_backing_file_(false),
@@ -244,31 +238,36 @@ File::File(const String& name,
     snapshot_size_ = size;
 }
 
-File::File(const String& name,
+File::File(ExecutionContext* context,
+           const String& name,
            const FileMetadata& metadata,
-           UserVisibility user_visibility)
-    : Blob(BlobDataHandle::Create(
-          CreateBlobDataForFileWithMetadata(name, metadata),
-          metadata.length)),
+           UserVisibility user_visibility,
+           mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+               snapshot_permission_token)
+    : Blob(CreateBlobDataHandleForFileWithMetadata(
+          context,
+          name,
+          metadata,
+          std::move(snapshot_permission_token))),
       has_backing_file_(true),
       user_visibility_(user_visibility),
       path_(metadata.platform_path),
       name_(name),
       snapshot_modification_time_(metadata.modification_time) {
-  if (metadata.length >= 0)
+  if (metadata.length >= 0) {
     snapshot_size_ = metadata.length;
+  }
 }
 
 File::File(const KURL& file_system_url,
            const FileMetadata& metadata,
-           UserVisibility user_visibility)
-    : Blob(BlobDataHandle::Create(
-          CreateBlobDataForFileSystemURL(file_system_url, metadata),
-          metadata.length)),
+           UserVisibility user_visibility,
+           scoped_refptr<BlobDataHandle> blob_data_handle)
+    : Blob(std::move(blob_data_handle)),
       has_backing_file_(false),
       user_visibility_(user_visibility),
-      name_(DecodeURLEscapeSequences(file_system_url.LastPathComponent(),
-                                     DecodeURLMode::kUTF8OrIsomorphic)),
+      name_(DecodeUrlEscapeSequences(file_system_url.LastPathComponent(),
+                                     DecodeUrlMode::kUtf8OrIsomorphic)),
       file_system_url_(file_system_url),
       snapshot_size_(metadata.length),
       snapshot_modification_time_(metadata.modification_time) {
@@ -310,14 +309,13 @@ int64_t File::lastModified() const {
   return (LastModifiedTime() - base::Time::UnixEpoch()).InMilliseconds();
 }
 
-ScriptValue File::lastModifiedDate(ScriptState* script_state) const {
+ScriptObject File::lastModifiedDate(ScriptState* script_state) const {
   // lastModifiedDate returns a Date instance,
   // http://www.w3.org/TR/FileAPI/#dfn-lastModifiedDate
-  return ScriptValue(script_state->GetIsolate(),
-                     ToV8(LastModifiedTime(), script_state));
+  return ToV8FromDate(script_state, std::make_optional(LastModifiedTime()));
 }
 
-absl::optional<base::Time> File::LastModifiedTimeForSerialization() const {
+std::optional<base::Time> File::LastModifiedTimeForSerialization() const {
   CaptureSnapshotIfNeeded();
 
   return snapshot_modification_time_;
@@ -334,28 +332,6 @@ uint64_t File::size() const {
   return 0;
 }
 
-Blob* File::slice(int64_t start,
-                  int64_t end,
-                  const String& content_type,
-                  ExceptionState& exception_state) const {
-  if (!has_backing_file_)
-    return Blob::slice(start, end, content_type, exception_state);
-
-  // FIXME: Calling size triggers capturing a snapshot, if we don't have one
-  // already. This involves synchronous file operation. We need to figure out
-  // how to make it asynchronous (or make sure snapshot state is always passed
-  // in when creating a File instance).
-  ClampSliceOffsets(size(), start, end);
-
-  uint64_t length = end - start;
-  auto blob_data = std::make_unique<BlobData>();
-  blob_data->SetContentType(NormalizeType(content_type));
-  DCHECK(!path_.IsEmpty());
-  blob_data->AppendFile(path_, start, length, snapshot_modification_time_);
-  return MakeGarbageCollected<Blob>(
-      BlobDataHandle::Create(std::move(blob_data), length));
-}
-
 void File::CaptureSnapshotIfNeeded() const {
   if (HasValidSnapshotMetadata() && snapshot_modification_time_)
     return;
@@ -365,19 +341,6 @@ void File::CaptureSnapshotIfNeeded() const {
                                            &snapshot_modification_time_)) {
     snapshot_size_ = snapshot_size;
   }
-}
-
-void File::AppendTo(BlobData& blob_data) const {
-  if (!has_backing_file_) {
-    Blob::AppendTo(blob_data);
-    return;
-  }
-
-  // FIXME: This involves synchronous file operation. We need to figure out how
-  // to make it asynchronous.
-  CaptureSnapshotIfNeeded();
-  DCHECK(!path_.IsEmpty());
-  blob_data.AppendFile(path_, 0, *snapshot_size_, snapshot_modification_time_);
 }
 
 bool File::HasSameSource(const File& other) const {
@@ -393,7 +356,17 @@ bool File::HasSameSource(const File& other) const {
   if (!file_system_url_.IsEmpty())
     return file_system_url_ == other.file_system_url_;
 
-  return Uuid() == other.Uuid();
+  CHECK(GetBlobDataHandle());
+  if (GetBlobDataHandle().get() == other.GetBlobDataHandle().get()) {
+    return true;
+  }
+
+  String uuid = GetBlobDataHandle()->GetUuidMayBlock();
+  if (uuid.empty()) {
+    return false;
+  }
+
+  return uuid == other.GetBlobDataHandle()->GetUuidMayBlock();
 }
 
 bool File::AppendToControlState(FormControlState& state) {

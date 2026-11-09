@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,9 @@ class ReadingListModel;
 // taken to not modify the model.
 class ReadingListModelObserver {
  public:
+  ReadingListModelObserver(const ReadingListModelObserver&) = delete;
+  ReadingListModelObserver& operator=(const ReadingListModelObserver&) = delete;
+
   // Invoked when the model has finished loading. Until this method is called it
   // is unsafe to use the model.
   virtual void ReadingListModelLoaded(const ReadingListModel* model) = 0;
@@ -40,17 +43,10 @@ class ReadingListModelObserver {
   // Invoked when elements are about to be removed from the read or unread list.
   virtual void ReadingListWillRemoveEntry(const ReadingListModel* model,
                                           const GURL& url) {}
-  // Invoked when elements |MarkEntryUpdated| is called on an entry. This means
-  // that the order of the entry may change and read/unread list may change
-  // too.
-  virtual void ReadingListWillMoveEntry(const ReadingListModel* model,
-                                        const GURL& url) {}
 
-  // Invoked when elements |MarkEntryUpdated| has been called on an entry. This
-  // means that the order of the entry may have changed and read/unread list may
-  // have changed too.
-  virtual void ReadingListDidMoveEntry(const ReadingListModel* model,
-                                       const GURL& url) {}
+  // Invoked when elements have been removed.
+  virtual void ReadingListDidRemoveEntry(const ReadingListModel* model,
+                                         const GURL& url) {}
 
   // Invoked when elements are added.
   virtual void ReadingListWillAddEntry(const ReadingListModel* model,
@@ -68,16 +64,18 @@ class ReadingListModelObserver {
   virtual void ReadingListWillUpdateEntry(const ReadingListModel* model,
                                           const GURL& url) {}
 
+  // Invoked when an entry is changed.
+  virtual void ReadingListDidUpdateEntry(const ReadingListModel* model,
+                                         const GURL& url) {}
+
   // Called after all the changes signaled by calls to the "Will" methods are
   // done. All the "Will" methods are called as necessary, then the changes
   // are applied and then this method is called.
   virtual void ReadingListDidApplyChanges(ReadingListModel* model) {}
 
  protected:
-  ReadingListModelObserver() {}
-  virtual ~ReadingListModelObserver() {}
-
-  DISALLOW_COPY_AND_ASSIGN(ReadingListModelObserver);
+  ReadingListModelObserver() = default;
+  virtual ~ReadingListModelObserver() = default;
 };
 
 #endif  // COMPONENTS_READING_LIST_CORE_READING_LIST_MODEL_OBSERVER_H_

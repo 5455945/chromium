@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,16 @@
 // of network_interfaces_win.cc to tests.
 
 #include <winsock2.h>
+
 #include <iphlpapi.h>
 #include <wlanapi.h>
 
+#include "base/containers/span.h"
 #include "base/win/scoped_handle.h"
 #include "net/base/net_export.h"
 #include "net/base/network_interfaces.h"
 
-namespace net {
-namespace internal {
+namespace net::internal {
 
 struct NET_EXPORT WlanApi {
   typedef DWORD (WINAPI *WlanOpenHandleFunc)(
@@ -46,7 +47,6 @@ struct NET_EXPORT WlanApi {
     return ERROR_SUCCESS;
   }
 
-  HMODULE module;
   WlanOpenHandleFunc open_handle_func;
   WlanEnumInterfacesFunc enum_interfaces_func;
   WlanQueryInterfaceFunc query_interface_func;
@@ -86,8 +86,11 @@ NET_EXPORT bool GetNetworkListImpl(
     int policy,
     const IP_ADAPTER_ADDRESSES* ip_adapter_addresses);
 
-}  // namespace internal
+// Creates a span referencing the WLAN_INTERFACE_INFOs in a
+// WLAN_INTERFACE_INFO_LIST.
+NET_EXPORT base::span<WLAN_INTERFACE_INFO> WlanInterfaceInfoListToSpan(
+    WLAN_INTERFACE_INFO_LIST* interface_list);
 
-}  // namespace net
+}  // namespace net::internal
 
-#endif   // NET_BASE_NETWORK_INTERFACES_WIN_H_
+#endif  // NET_BASE_NETWORK_INTERFACES_WIN_H_

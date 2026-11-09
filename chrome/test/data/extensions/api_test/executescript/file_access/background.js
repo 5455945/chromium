@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,19 +18,19 @@ chrome.test.getConfig(function(config) {
 
         // Inject a script into this tab.
         chrome.tabs.executeScript(
-          tabs[0].id, { code: 'console.log("injected");' }, function() {
-            if (canExecuteScript) {
-              chrome.test.assertTrue(chrome.runtime.lastError === undefined);
-            } else {
-              const expectedError =
-                  `Cannot access contents of url "${tabs[0].url}". Extension `+
-                  `manifest must request permission to access this host.`;
-              chrome.test.assertEq(
-                  expectedError, chrome.runtime.lastError.message);
-            }
-            chrome.test.succeed();
-          });
+            tabs[0].id, {code: `console.log('injected');`}, function() {
+              if (canExecuteScript) {
+                chrome.test.assertTrue(chrome.runtime.lastError === undefined);
+              } else {
+                const expectedError = `Cannot access contents of url "${
+                                          tabs[0].url}". Extension ` +
+                    `manifest must request permission to access this host.`;
+                chrome.test.assertEq(
+                    expectedError, chrome.runtime.lastError.message);
+              }
+              chrome.test.succeed();
+            });
       });
-    }
+    },
   ]);
 });

@@ -1,29 +1,11 @@
 /*
- * fontconfig/fc-case/fccase.tmpl.h
- *
- * Copyright © 2003 Keith Packard
- *
- * Permission to use, copy, modify, distribute, and sell this software and its
- * documentation for any purpose is hereby granted without fee, provided that
- * the above copyright notice appear in all copies and that both that
- * copyright notice and this permission notice appear in supporting
- * documentation, and that the name of the author(s) not be used in
- * advertising or publicity pertaining to distribution of the software without
- * specific, written prior permission.  The authors make no
- * representations about the suitability of this software for any purpose.  It
- * is provided "as is" without express or implied warranty.
- *
- * THE AUTHOR(S) DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
- * INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO
- * EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY SPECIAL, INDIRECT OR
- * CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
- * DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
- * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
- * PERFORMANCE OF THIS SOFTWARE.
+ * This file was generated against CaseFolding.txt from Unicode.org.
+ * All the data in array is a part of them and licensed under a terms of use:
+ *   https://www.unicode.org/terms_of_use.html
  */
 
-#define FC_NUM_CASE_FOLD	295
-#define FC_NUM_CASE_FOLD_CHARS	471
+#define FC_NUM_CASE_FOLD	316
+#define FC_NUM_CASE_FOLD_CHARS	473
 #define FC_MAX_CASE_FOLD_CHARS	6
 #define FC_MAX_CASE_FOLD_EXPAND	4
 #define FC_MIN_FOLD_CHAR	0x00000041
@@ -146,6 +128,7 @@ static const FcCaseFold    fcCaseFold[FC_NUM_CASE_FOLD] = {
     { 0x00001c86, FC_CASE_FOLD_RANGE,    0x0001,  -6204 },
     { 0x00001c87, FC_CASE_FOLD_RANGE,    0x0001,  -6180 },
     { 0x00001c88, FC_CASE_FOLD_RANGE,    0x0001, -30269 },
+    { 0x00001c89, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
     { 0x00001c90, FC_CASE_FOLD_RANGE,    0x002b,  -3008 },
     { 0x00001cbd, FC_CASE_FOLD_RANGE,    0x0003,  -3008 },
     { 0x00001e00, FC_CASE_FOLD_EVEN_ODD, 0x0095,      1 },
@@ -264,7 +247,7 @@ static const FcCaseFold    fcCaseFold[FC_NUM_CASE_FOLD] = {
     { 0x00002160, FC_CASE_FOLD_RANGE,    0x0010,     16 },
     { 0x00002183, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
     { 0x000024b6, FC_CASE_FOLD_RANGE,    0x001a,     26 },
-    { 0x00002c00, FC_CASE_FOLD_RANGE,    0x002f,     48 },
+    { 0x00002c00, FC_CASE_FOLD_RANGE,    0x0030,     48 },
     { 0x00002c60, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
     { 0x00002c62, FC_CASE_FOLD_RANGE,    0x0001, -10743 },
     { 0x00002c63, FC_CASE_FOLD_RANGE,    0x0001,  -3814 },
@@ -300,11 +283,18 @@ static const FcCaseFold    fcCaseFold[FC_NUM_CASE_FOLD] = {
     { 0x0000a7b1, FC_CASE_FOLD_RANGE,    0x0001,  23254 },
     { 0x0000a7b2, FC_CASE_FOLD_RANGE,    0x0001,  23275 },
     { 0x0000a7b3, FC_CASE_FOLD_RANGE,    0x0001,    928 },
-    { 0x0000a7b4, FC_CASE_FOLD_EVEN_ODD, 0x000b,      1 },
-    { 0x0000a7c2, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
+    { 0x0000a7b4, FC_CASE_FOLD_EVEN_ODD, 0x000f,      1 },
     { 0x0000a7c4, FC_CASE_FOLD_RANGE,    0x0001,    -48 },
     { 0x0000a7c5, FC_CASE_FOLD_RANGE,    0x0001,  23229 },
     { 0x0000a7c6, FC_CASE_FOLD_RANGE,    0x0001,  30152 },
+    { 0x0000a7c7, FC_CASE_FOLD_EVEN_ODD, 0x0003,      1 },
+    { 0x0000a7cb, FC_CASE_FOLD_RANGE,    0x0001,  23193 },
+    { 0x0000a7cc, FC_CASE_FOLD_EVEN_ODD, 0x000f,      1 },
+    { 0x0000a7dc, FC_CASE_FOLD_RANGE,    0x0001,  22975 },
+    { 0x0000a7dd, FC_CASE_FOLD_RANGE,    0x0001,  23194 },
+    { 0x0000a7e2, FC_CASE_FOLD_RANGE,    0x0001,  23194 },
+    { 0x0000a7f5, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
+    { 0x0000ab6c, FC_CASE_FOLD_RANGE,    0x0002,    -33 },
     { 0x0000ab70, FC_CASE_FOLD_RANGE,    0x0050,  26672 },
     { 0x0000fb00, FC_CASE_FOLD_FULL,     0x0002,    435 },
     { 0x0000fb01, FC_CASE_FOLD_FULL,     0x0002,    437 },
@@ -321,9 +311,22 @@ static const FcCaseFold    fcCaseFold[FC_NUM_CASE_FOLD] = {
     { 0x0000ff21, FC_CASE_FOLD_RANGE,    0x001a,     32 },
     { 0x00010400, FC_CASE_FOLD_RANGE,    0x0028,     40 },
     { 0x000104b0, FC_CASE_FOLD_RANGE,    0x0024,     40 },
+    { 0x00010570, FC_CASE_FOLD_RANGE,    0x000b,     39 },
+    { 0x0001057c, FC_CASE_FOLD_RANGE,    0x000f,     39 },
+    { 0x0001058c, FC_CASE_FOLD_RANGE,    0x0007,     39 },
+    { 0x00010594, FC_CASE_FOLD_RANGE,    0x0002,     39 },
     { 0x00010c80, FC_CASE_FOLD_RANGE,    0x0033,     64 },
+    { 0x00010d50, FC_CASE_FOLD_RANGE,    0x0016,     32 },
     { 0x000118a0, FC_CASE_FOLD_RANGE,    0x0020,     32 },
     { 0x00016e40, FC_CASE_FOLD_RANGE,    0x0020,     32 },
+    { 0x00016ea0, FC_CASE_FOLD_RANGE,    0x0019,     27 },
+    { 0x0001df40, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
+    { 0x0001df48, FC_CASE_FOLD_EVEN_ODD, 0x0003,      1 },
+    { 0x0001df4d, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
+    { 0x0001df51, FC_CASE_FOLD_EVEN_ODD, 0x0001,      1 },
+    { 0x0001df68, FC_CASE_FOLD_EVEN_ODD, 0x0007,      1 },
+    { 0x0001df72, FC_CASE_FOLD_EVEN_ODD, 0x000d,      1 },
+    { 0x0001df95, FC_CASE_FOLD_FULL,     0x0002,    471 },
     { 0x0001e900, FC_CASE_FOLD_RANGE,    0x0022,     34 },
 };
 
@@ -357,5 +360,5 @@ static const FcChar8	fcCaseFoldChars[FC_NUM_CASE_FOLD_CHARS] = {
 0xb9,0xcf,0x8e,0xce,0xb9,0xcf,0x89,0xcd,0x82,0xcf,0x89,0xcd,0x82,0xce,0xb9,0xcf,
 0x89,0xce,0xb9,0x66,0x66,0x66,0x69,0x66,0x6c,0x66,0x66,0x69,0x66,0x66,0x6c,0x73,
 0x74,0x73,0x74,0xd5,0xb4,0xd5,0xb6,0xd5,0xb4,0xd5,0xa5,0xd5,0xb4,0xd5,0xab,0xd5,
-0xbe,0xd5,0xb6,0xd5,0xb4,0xd5,0xad
+0xbe,0xd5,0xb6,0xd5,0xb4,0xd5,0xad,0x73,0x73
 };

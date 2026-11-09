@@ -1,16 +1,18 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_IOS_BROWSER_AUTOFILL_CLIENT_IOS_BRIDGE_H_
 #define COMPONENTS_AUTOFILL_IOS_BROWSER_AUTOFILL_CLIENT_IOS_BRIDGE_H_
 
-#include <vector>
+#import <vector>
 
-#include "base/memory/weak_ptr.h"
+#import "base/functional/callback_forward.h"
+#import "base/memory/weak_ptr.h"
+#import "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
-class AutofillPopupDelegate;
+class AutofillSuggestionDelegate;
 struct Suggestion;
 }
 
@@ -18,13 +20,16 @@ struct Suggestion;
 @protocol AutofillClientIOSBridge
 
 - (void)showAutofillPopup:(const std::vector<autofill::Suggestion>&)suggestions
-            popupDelegate:
-                (const base::WeakPtr<autofill::AutofillPopupDelegate>&)delegate;
+       suggestionDelegate:
+           (const base::WeakPtr<autofill::AutofillSuggestionDelegate>&)delegate
+                   formId:(autofill::FormGlobalId)formId
+                  fieldId:(autofill::FieldGlobalId)fieldId;
 
 - (void)hideAutofillPopup;
 
 // Checks whether the qurrent query is the most recent one.
-- (bool)isQueryIDRelevant:(int)queryID;
+- (bool)isLastQueriedField:(autofill::FieldGlobalId)fieldId;
+
 
 @end
 

@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.list;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.list.ListItem.ViewListItem;
 import org.chromium.ui.modelutil.ListObservable;
 import org.chromium.ui.modelutil.ListObservable.ListObserver;
@@ -20,8 +20,9 @@ import java.util.List;
  * A wrapper class that adds decoration {@link ListItem}s to a {@link ListItemModel}.
  * TODO(bauerb): Replace this with InnerNode (once it has been migrated to the UI architecture)
  */
-class DecoratedListItemModel
-        extends ListObservableImpl<Void> implements ListObserver<Void>, SimpleList<ListItem> {
+@NullMarked
+class DecoratedListItemModel extends ListObservableImpl<Void>
+        implements ListObserver<Void>, SimpleList<ListItem> {
     private final ListItemModel mModel;
 
     private final List<ViewListItem> mHeaderItems = new ArrayList<>();
@@ -70,8 +71,7 @@ class DecoratedListItemModel
     @Override
     public void onItemRangeChanged(
             ListObservable source, int index, int count, @Nullable Void payload) {
-        assert payload == null;
-        notifyItemRangeChanged(convertIndexFromSource(index), count, payload);
+        notifyItemRangeChanged(convertIndexFromSource(index), count, null);
     }
 
     private int convertIndexForSource(int index) {

@@ -1,13 +1,12 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.printing;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
-import android.os.Build;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
 import android.print.PrintJob;
@@ -16,31 +15,45 @@ import android.print.PrintManager;
 import android.text.TextUtils;
 
 import org.chromium.base.Log;
-import org.chromium.base.annotations.RemovableInRelease;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.List;
 
-/**
- * An implementation of {@link PrintManagerDelegate} using the Android framework print manager.
- */
-@TargetApi(Build.VERSION_CODES.KITKAT)
+/** An implementation of {@link PrintManagerDelegate} using the Android framework print manager. */
+@NullMarked
 public class PrintManagerDelegateImpl implements PrintManagerDelegate {
     private static final String TAG = "printing";
+    private final Activity mActivity;
     private final PrintManager mPrintManager;
 
     public PrintManagerDelegateImpl(Activity activity) {
+        mActivity = activity;
         mPrintManager = (PrintManager) activity.getSystemService(Context.PRINT_SERVICE);
     }
 
     @Override
-    public void print(String printJobName, PrintDocumentAdapter documentAdapter,
-            PrintAttributes attributes) {
+    public boolean print(
+            String printJobName,
+            PrintDocumentAdapter documentAdapter,
+            @Nullable PrintAttributes attributes) {
+        if (mActivity.isFinishing() || mActivity.isDestroyed()) {
+            Log.w(TAG, "Cannot start printing: activity is finishing or destroyed.");
+            return false;
+        }
         dumpJobStatesForDebug();
-        mPrintManager.print(printJobName, documentAdapter, attributes);
+        try {
+            mPrintManager.print(printJobName, documentAdapter, attributes);
+            return true;
+        } catch (ActivityNotFoundException | IllegalStateException e) {
+            Log.e(TAG, "Printing failed.", e);
+            return false;
+        }
     }
 
-    @RemovableInRelease
     private void dumpJobStatesForDebug() {
+        if (!Log.isLoggable(TAG, Log.VERBOSE)) return;
+
         List<PrintJob> printJobs = mPrintManager.getPrintJobs();
         String[] states = new String[printJobs.size()];
 

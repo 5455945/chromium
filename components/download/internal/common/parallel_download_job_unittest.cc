@@ -1,13 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/download/internal/common/parallel_download_job.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
@@ -40,10 +42,10 @@ class MockDownloadDestinationObserver : public DownloadDestinationObserver {
   void DestinationError(
       DownloadInterruptReason reason,
       int64_t bytes_so_far,
-      std::unique_ptr<crypto::SecureHash> hash_state) override {}
+      std::optional<crypto::hash::Hasher> hash_state) override {}
   void DestinationCompleted(
       int64_t total_bytes,
-      std::unique_ptr<crypto::SecureHash> hash_state) override {}
+      std::optional<crypto::hash::Hasher> hash_state) override {}
   MOCK_METHOD2(CurrentUpdateStatus, void(int64_t, int64_t));
 };
 
@@ -66,6 +68,10 @@ class ParallelDownloadJobForTest : public ParallelDownloadJob {
         request_count_(request_count),
         min_slice_size_(min_slice_size),
         min_remaining_time_(min_remaining_time) {}
+
+  ParallelDownloadJobForTest(const ParallelDownloadJobForTest&) = delete;
+  ParallelDownloadJobForTest& operator=(const ParallelDownloadJobForTest&) =
+      delete;
 
   void CreateRequest(int64_t offset) override {
     auto worker = std::make_unique<DownloadWorker>(this, offset);
@@ -101,7 +107,6 @@ class ParallelDownloadJobForTest : public ParallelDownloadJob {
   int request_count_;
   int min_slice_size_;
   int min_remaining_time_;
-  DISALLOW_COPY_AND_ASSIGN(ParallelDownloadJobForTest);
 };
 
 class ParallelDownloadJobTest : public testing::Test {

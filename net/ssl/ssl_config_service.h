@@ -1,19 +1,46 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SSL_SSL_CONFIG_SERVICE_H_
 #define NET_SSL_SSL_CONFIG_SERVICE_H_
 
+#include <optional>
+#include <string_view>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
+#include "net/base/ech_mode.h"
 #include "net/base/net_export.h"
+#include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_config.h"
 
 namespace net {
 
+// Represents a given named group in TLS, used in supported_groups and
+// key_share.
+struct NET_EXPORT SSLNamedGroupInfo {
+  // NamedGroup enum codepoint for the group, from
+  // https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.7.
+  uint16_t group_id = 0u;
+  // Whether the group should be sent in the key_share extension for the
+  // initial ClientHello.
+  bool send_key_share = false;
+
+  bool operator==(const SSLNamedGroupInfo&) const = default;
+};
+
+struct NET_EXPORT TimeBoundTrustAnchorIDs {
+  // The latest time this set of Trust Anchor IDs should be used.
+  base::Time max_usable_time;
+
+  // The set of Trust Anchor IDs, in TLS encoded form.
+  std::vector<uint8_t> trust_anchor_ids;
+
+  bool operator==(const TimeBoundTrustAnchorIDs&) const = default;
+};
+
+// Configuration options for SSL connections.
 struct NET_EXPORT SSLContextConfig {
   SSLContextConfig();
   SSLContextConfig(const SSLContextConfig&);
@@ -22,20 +49,41 @@ struct NET_EXPORT SSLContextConfig {
   SSLContextConfig& operator=(const SSLContextConfig&);
   SSLContextConfig& operator=(SSLContextConfig&&);
 
+  bool operator==(const SSLContextConfig&) const;
+
+  // Returns a copy of the list of group IDs given by `supported_named_groups`.
+  // If `key_shares_only` is false, the returned vector is the list of groups to
+  // include in the supported_groups extension. If `key_shares_only` is true,
+  // only the groups that have `send_key_share == true` are included in the
+  // returned vector, which will be the list of groups to include in the
+  // key_share extension.
+  std::vector<uint16_t> GetSupportedGroups(bool key_shares_only = false) const;
+
+  // Returns true if Trust Anchor IDs should be advertised in the TLS
+  // handshake. This will be false if the feature is disabled or no Trust
+  // Anchor IDs are configured.
+  bool ShouldAdvertiseTrustAnchorIDs() const;
+
+  // Returns the amount of bytes of padding that should be requested from the
+  // server for the TLS handshake. This will return nullopt if a padding request
+  // should not be sent.
+  std::optional<uint16_t> RequestServerPadding() const;
+
+  // Helper function to select TLS Trust Anchor IDs to advertise in the TLS
+  // handshake, so that the server can serve a certificate that the client
+  // trusts. The list is returned in wire format (a series of 8-bit length
+  // prefixed non-empty strings) such that it can be passed into BoringSSL.
+  const std::vector<uint8_t>& SelectAllTrustAnchorIDs() const;
+
   // The minimum and maximum protocol versions that are enabled.
   // (Use the SSL_PROTOCOL_VERSION_xxx enumerators defined in ssl_config.h.)
-  // SSL 2.0 and SSL 3.0 are not supported. If version_max < version_min, it
-  // means no protocol versions are enabled.
-  //
-  // version_min_warn is the minimum protocol version that won't cause cert
-  // errors (e.g., in Chrome we'll show a security interstitial for connections
-  // using a version lower than version_min_warn).
+  // SSL 2.0/3.0 and TLS 1.0/1.1 are not supported. If version_max <
+  // version_min, it means no protocol versions are enabled.
   uint16_t version_min = kDefaultSSLVersionMin;
-  uint16_t version_min_warn = kDefaultSSLVersionMinWarn;
   uint16_t version_max = kDefaultSSLVersionMax;
 
-  // Presorted list of cipher suites which should be explicitly prevented from
-  // being used in addition to those disabled by the net built-in policy.
+  // A list of cipher suites which should be explicitly prevented from being
+  // used in addition to those disabled by the net built-in policy.
   //
   // Though cipher suites are sent in TLS as "uint8_t CipherSuite[2]", in
   // big-endian form, they should be declared in host byte order, with the
@@ -44,16 +92,23 @@ struct NET_EXPORT SSLContextConfig {
   // disable TLS_ECDH_ECDSA_WITH_RC4_128_SHA, specify 0xC002.
   std::vector<uint16_t> disabled_cipher_suites;
 
-  // If false, disables post-quantum key agreement in TLS connections.
-  bool cecpq2_enabled = true;
+  // This configures a compliance policy that sets the cipher order for
+  // TLS 1.3 to prefer AES-256-GCM over AES-128-GCM over ChaCha20-Poly1305.
+  bool tls13_cipher_prefer_aes_256 = false;
 
-  // If false, disables 3DES cipher suites in TLS connections.
-  //
-  // TODO(https://crbug.com/1203442): Disable this by default, once the change
-  // has successfully shipped in Chrome 93.
-  bool triple_des_enabled = true;
+  // Ordered list of NamedGroups that are supported, used to configure
+  // supported_groups and key_share. Set to `kDefaultSSLSupportedGroups` by
+  // default.
+  std::vector<SSLNamedGroupInfo> supported_named_groups;
 
-  // ADDING MORE HERE? Don't forget to update |SSLContextConfigsAreEqual|.
+  // An optional, preferred, set of trusted TLS Trust Anchor IDs which should be
+  // used if the system time is not after the `max_usable_time`.
+  std::optional<TimeBoundTrustAnchorIDs> time_bound_trust_anchor_ids;
+
+  // TLS Trust Anchor IDs that are configured as trusted, in TLS encoded form.
+  // This should be used if `time_bound_trust_anchor_ids` is not present or if
+  // the system time is after `time_bound_trust_anchor_ids->max_usable_time`.
+  std::vector<uint8_t> trust_anchor_ids;
 };
 
 // The interface for retrieving global SSL configuration.  This interface
@@ -69,7 +124,7 @@ class NET_EXPORT SSLConfigService {
     virtual void OnSSLContextConfigChanged() = 0;
 
    protected:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   SSLConfigService();
@@ -77,6 +132,9 @@ class NET_EXPORT SSLConfigService {
 
   // May not be thread-safe, should only be called on the IO thread.
   virtual SSLContextConfig GetSSLContextConfig() = 0;
+
+  // Returns the host-specific EchMode for `hostname`.
+  virtual EchMode GetEchMode(std::string_view hostname) const = 0;
 
   // Returns true if connections to |hostname| can reuse, or are permitted to
   // reuse, connections on which a client cert has been negotiated. Note that
@@ -102,7 +160,7 @@ class NET_EXPORT SSLConfigService {
   // removed in a future release. Please leave a comment on
   // https://crbug.com/855690 if you believe this is needed.
   virtual bool CanShareConnectionWithClientCerts(
-      const std::string& hostname) const = 0;
+      std::string_view hostname) const = 0;
 
   // Add an observer of this service.
   void AddObserver(Observer* observer);
@@ -113,12 +171,6 @@ class NET_EXPORT SSLConfigService {
   // Calls the OnSSLContextConfigChanged method of registered observers. Should
   // only be called on the IO thread.
   void NotifySSLContextConfigChange();
-
-  // Checks if the config-service managed fields in two SSLContextConfigs are
-  // the same.
-  static bool SSLContextConfigsAreEqualForTesting(
-      const SSLContextConfig& config1,
-      const SSLContextConfig& config2);
 
  protected:
   // Process before/after config update. If |force_notification| is true,

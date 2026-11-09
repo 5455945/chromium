@@ -1,14 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_ANDROID_GESTURE_LISTENER_MANAGER_H_
 #define CONTENT_BROWSER_ANDROID_GESTURE_LISTENER_MANAGER_H_
 
-#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "cc/mojom/root_scroll_offset_update_frequency.mojom-shared.h"
 #include "content/browser/android/render_widget_host_connector.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 
 namespace blink {
@@ -17,34 +21,37 @@ class WebGestureEvent;
 
 namespace gfx {
 class SizeF;
-class Vector2dF;
+class PointF;
 }  // namespace gfx
 
 namespace content {
 
-class NavigationHandle;
 class WebContentsImpl;
 
 // Native class for GestureListenerManagerImpl.
-class CONTENT_EXPORT GestureListenerManager : public RenderWidgetHostConnector {
+class CONTENT_EXPORT GestureListenerManager
+    : public RenderWidgetHostConnector,
+      public RenderWidgetHost::InputEventObserver,
+      public WebContentsObserver {
  public:
-  GestureListenerManager(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj,
-                         WebContentsImpl* web_contents);
+  explicit GestureListenerManager(WebContentsImpl* web_contents);
+
+  GestureListenerManager(const GestureListenerManager&) = delete;
+  GestureListenerManager& operator=(const GestureListenerManager&) = delete;
+
   ~GestureListenerManager() override;
 
-  void ResetGestureDetection(JNIEnv* env,
-                             const base::android::JavaParamRef<jobject>& obj);
-  void SetDoubleTapSupportEnabled(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jboolean enabled);
-  void SetMultiTouchZoomSupportEnabled(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jboolean enabled);
-  bool has_listeners_attached() const { return has_listeners_attached_; }
-  void SetHasListenersAttached(JNIEnv* env, jboolean enabled);
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env);
+
+  void ResetGestureDetection(JNIEnv* env);
+  void SetDoubleTapSupportEnabled(JNIEnv* env, bool enabled);
+  void SetMultiTouchZoomSupportEnabled(JNIEnv* env, bool enabled);
+  cc::mojom::RootScrollOffsetUpdateFrequency
+  root_scroll_offset_update_frequency() const {
+    return root_scroll_offset_update_frequency_.value_or(
+        cc::mojom::RootScrollOffsetUpdateFrequency::kNone);
+  }
+  void SetRootScrollOffsetUpdateFrequency(JNIEnv* env, int32_t frequency);
   void GestureEventAck(const blink::WebGestureEvent& event,
                        blink::mojom::InputEventResultState ack_result);
   void DidStopFlinging();
@@ -52,7 +59,7 @@ class CONTENT_EXPORT GestureListenerManager : public RenderWidgetHostConnector {
 
   // All sizes and offsets are in CSS pixels (except |top_show_pix|)
   // as cached by the renderer.
-  void UpdateScrollInfo(const gfx::Vector2dF& scroll_offset,
+  void UpdateScrollInfo(const gfx::PointF& scroll_offset,
                         float page_scale_factor,
                         const float min_page_scale,
                         const float max_page_scale,
@@ -62,14 +69,31 @@ class CONTENT_EXPORT GestureListenerManager : public RenderWidgetHostConnector {
                         const float top_shown_pix,
                         bool top_changed);
   void UpdateOnTouchDown();
-  void OnRootScrollOffsetChanged(const gfx::Vector2dF& root_scroll_offset);
+  void UpdateOnTouchUp();
+  void OnRootScrollOffsetChanged(const gfx::PointF& root_scroll_offset);
 
-  // RendetWidgetHostConnector implementation.
+  // RenderWidgetHostConnector implementation.
   void UpdateRenderProcessConnection(
       RenderWidgetHostViewAndroid* old_rwhva,
       RenderWidgetHostViewAndroid* new_rhwva) override;
 
-  void OnNavigationFinished(NavigationHandle* navigation_handle);
+  // Start WebContentsObserver overrides
+  void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
+  void RenderFrameHostChanged(RenderFrameHost* old_host,
+                              RenderFrameHost* new_host) override;
+  // End WebContentsObserver overrides
+
+  // Start RenderWidgetHost::InputEventObserver overrides
+  void OnInputEvent(const RenderWidgetHost& widget,
+                    const blink::WebInputEvent& event,
+                    InputEventSource source) override;
+  void OnInputEventAck(const RenderWidgetHost& widget,
+                       blink::mojom::InputEventResultSource source,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent&) override;
+  // End RenderWidgetHost::InputEventObserver overrides
+
+  void OnPrimaryPageChanged();
   void OnRenderProcessGone();
 
   bool IsScrollInProgressForTesting();
@@ -78,18 +102,18 @@ class CONTENT_EXPORT GestureListenerManager : public RenderWidgetHostConnector {
   class ResetScrollObserver;
 
   void ResetPopupsAndInput(bool render_process_gone);
+  void UnobserveRenderFrames();
 
   std::unique_ptr<ResetScrollObserver> reset_scroll_observer_;
-  WebContentsImpl* web_contents_;
-  RenderWidgetHostViewAndroid* rwhva_ = nullptr;
+  raw_ptr<WebContentsImpl> web_contents_;
+  raw_ptr<RenderWidgetHostViewAndroid> rwhva_ = nullptr;
+  bool is_in_a_fling_ = false;
 
-  // A weak reference to the Java GestureListenerManager object.
-  JavaObjectWeakGlobalRef java_ref_;
+  // Highest update frequency requested by any of the listeners.
+  std::optional<cc::mojom::RootScrollOffsetUpdateFrequency>
+      root_scroll_offset_update_frequency_;
 
-  // True if there is at least one listener attached.
-  bool has_listeners_attached_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(GestureListenerManager);
+  base::flat_set<GlobalRenderFrameHostId> observed_render_frames_;
 };
 
 }  // namespace content

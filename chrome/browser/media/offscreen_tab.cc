@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,27 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/media_router/browser/presentation/presentation_navigation_policy.h"
 #include "components/media_router/browser/presentation/receiver_presentation_service_delegate_impl.h"  // nogncheck
 #include "content/public/browser/keyboard_event_processing_result.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/presentation_receiver_flags.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 #if defined(USE_AURA)
-#include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
+#include "ui/base/base_window.h"
 #endif  // defined(USE_AURA)
 
 using content::WebContents;
@@ -33,8 +36,8 @@ namespace {
 
 // Time intervals used by the logic that detects when the capture of an
 // offscreen tab has stopped, to automatically tear it down and free resources.
-constexpr base::TimeDelta kMaxWaitForCapture = base::TimeDelta::FromMinutes(1);
-constexpr base::TimeDelta kPollInterval = base::TimeDelta::FromSeconds(1);
+constexpr base::TimeDelta kMaxWaitForCapture = base::Minutes(1);
+constexpr base::TimeDelta kPollInterval = base::Seconds(1);
 
 }  // namespace
 
@@ -57,6 +60,9 @@ class OffscreenTab::WindowAdoptionAgent final : protected aura::WindowObserver {
     }
   }
 
+  WindowAdoptionAgent(const WindowAdoptionAgent&) = delete;
+  WindowAdoptionAgent& operator=(const WindowAdoptionAgent&) = delete;
+
   ~WindowAdoptionAgent() final {
     if (content_window_)
       content_window_->RemoveObserver(this);
@@ -69,14 +75,14 @@ class OffscreenTab::WindowAdoptionAgent final : protected aura::WindowObserver {
     // Post a task to return to the event loop before finding a new parent, to
     // avoid clashing with the currently-in-progress window tree hierarchy
     // changes.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&WindowAdoptionAgent::FindNewParent,
                                   weak_ptr_factory_.GetWeakPtr()));
   }
 
   // aura::WindowObserver implementation.
   void OnWindowDestroyed(aura::Window* window) final {
-    DCHECK_EQ(content_window_, window);
+    CHECK_EQ(content_window_, window, base::NotFatalUntil::M161);
     content_window_ = nullptr;
   }
 
@@ -94,11 +100,9 @@ class OffscreenTab::WindowAdoptionAgent final : protected aura::WindowObserver {
     // necessary to find a new parent.
     if (content_window_->GetRootWindow())
       return;
-    BrowserList* const browsers = BrowserList::GetInstance();
-    Browser* const active_browser =
-        browsers ? browsers->GetLastActive() : nullptr;
-    BrowserWindow* const active_window =
-        active_browser ? active_browser->window() : nullptr;
+    BrowserWindowInterface* const bwi =
+        GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+    ui::BaseWindow* const active_window = bwi ? bwi->GetWindow() : nullptr;
     aura::Window* const native_window =
         active_window ? active_window->GetNativeWindow() : nullptr;
     aura::Window* const root_window =
@@ -113,10 +117,8 @@ class OffscreenTab::WindowAdoptionAgent final : protected aura::WindowObserver {
     }
   }
 
-  aura::Window* content_window_;
+  raw_ptr<aura::Window> content_window_;
   base::WeakPtrFactory<WindowAdoptionAgent> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WindowAdoptionAgent);
 };
 #endif  // defined(USE_AURA)
 
@@ -128,7 +130,7 @@ OffscreenTab::OffscreenTab(Owner* owner, content::BrowserContext* context)
       content_capture_was_detected_(false),
       navigation_policy_(
           std::make_unique<media_router::DefaultNavigationPolicy>()) {
-  DCHECK(owner_);
+  CHECK(owner_, base::NotFatalUntil::M161);
   otr_profile_->AddObserver(this);
 }
 
@@ -136,14 +138,14 @@ OffscreenTab::~OffscreenTab() {
   DVLOG(1) << "Destroying OffscreenTab for start_url=" << start_url_.spec();
   if (otr_profile_) {
     otr_profile_->RemoveObserver(this);
-    ProfileDestroyer::DestroyProfileWhenAppropriate(otr_profile_);
+    ProfileDestroyer::DestroyOTRProfileWhenAppropriate(otr_profile_);
   }
 }
 
 void OffscreenTab::Start(const GURL& start_url,
                          const gfx::Size& initial_size,
                          const std::string& optional_presentation_id) {
-  DCHECK(start_time_.is_null());
+  CHECK(start_time_.is_null(), base::NotFatalUntil::M161);
   start_url_ = start_url;
   DVLOG(1) << "Starting OffscreenTab with initial size of "
            << initial_size.ToString() << " for start_url=" << start_url_.spec();
@@ -154,6 +156,7 @@ void OffscreenTab::Start(const GURL& start_url,
     params.starting_sandbox_flags = content::kPresentationReceiverSandboxFlags;
 
   offscreen_tab_web_contents_ = WebContents::Create(params);
+  offscreen_tab_web_contents_->SetOwnerLocationForDebug(FROM_HERE);
   offscreen_tab_web_contents_->SetDelegate(this);
   WebContentsObserver::Observe(offscreen_tab_web_contents_.get());
 
@@ -207,7 +210,8 @@ void OffscreenTab::Close() {
 }
 
 void OffscreenTab::CloseContents(WebContents* source) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), source);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), source,
+           base::NotFatalUntil::M161);
   // Javascript in the page called window.close().
   DVLOG(1) << "OffscreenTab for start_url=" << start_url_.spec() << " will die";
   owner_->DestroyTab(this);
@@ -215,15 +219,17 @@ void OffscreenTab::CloseContents(WebContents* source) {
 }
 
 bool OffscreenTab::ShouldSuppressDialogs(WebContents* source) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), source);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), source,
+           base::NotFatalUntil::M161);
   // Suppress all because there is no possible direct user interaction with
   // dialogs.
-  // TODO(crbug.com/734191): This does not suppress window.print().
+  // TODO(crbug.com/40526231): This does not suppress window.print().
   return true;
 }
 
 bool OffscreenTab::ShouldFocusLocationBarByDefault(WebContents* source) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), source);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), source,
+           base::NotFatalUntil::M161);
   // Indicate the location bar should be focused instead of the page, even
   // though there is no location bar.  This will prevent the page from
   // automatically receiving input focus, which should never occur since there
@@ -231,7 +237,7 @@ bool OffscreenTab::ShouldFocusLocationBarByDefault(WebContents* source) {
   return true;
 }
 
-bool OffscreenTab::ShouldFocusPageAfterCrash() {
+bool OffscreenTab::ShouldFocusPageAfterCrash(content::WebContents* source) {
   // Never focus the page.  Not even after a crash.
   return false;
 }
@@ -244,7 +250,7 @@ void OffscreenTab::CanDownload(const GURL& url,
 }
 
 bool OffscreenTab::HandleContextMenu(
-    content::RenderFrameHost* render_frame_host,
+    content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params) {
   // Context menus should never be shown.  Do nothing, but indicate the context
   // menu was shown so that default implementation in libcontent does not
@@ -254,8 +260,9 @@ bool OffscreenTab::HandleContextMenu(
 
 content::KeyboardEventProcessingResult OffscreenTab::PreHandleKeyboardEvent(
     WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), source);
+    const input::NativeWebKeyboardEvent& event) {
+  CHECK_EQ(offscreen_tab_web_contents_.get(), source,
+           base::NotFatalUntil::M161);
   // Intercept and silence all keyboard events before they can be sent to the
   // renderer.
   return content::KeyboardEventProcessingResult::HANDLED;
@@ -263,7 +270,8 @@ content::KeyboardEventProcessingResult OffscreenTab::PreHandleKeyboardEvent(
 
 bool OffscreenTab::PreHandleGestureEvent(WebContents* source,
                                          const blink::WebGestureEvent& event) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), source);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), source,
+           base::NotFatalUntil::M161);
   // Intercept and silence all gesture events before they can be sent to the
   // renderer.
   return true;
@@ -272,13 +280,15 @@ bool OffscreenTab::PreHandleGestureEvent(WebContents* source,
 bool OffscreenTab::CanDragEnter(WebContents* source,
                                 const content::DropData& data,
                                 blink::DragOperationsMask operations_allowed) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), source);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), source,
+           base::NotFatalUntil::M161);
   // Halt all drag attempts onto the page since there should be no direct user
   // interaction with it.
   return false;
 }
 
 bool OffscreenTab::IsWebContentsCreationOverridden(
+    content::RenderFrameHost* opener,
     content::SiteInstance* source_site_instance,
     content::mojom::WindowContainerType window_container_type,
     const GURL& opener_url,
@@ -294,7 +304,8 @@ void OffscreenTab::EnterFullscreenModeForTab(
     content::RenderFrameHost* requesting_frame,
     const blink::mojom::FullscreenOptions& options) {
   auto* contents = WebContents::FromRenderFrameHost(requesting_frame);
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), contents);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), contents,
+           base::NotFatalUntil::M161);
 
   if (in_fullscreen_mode())
     return;
@@ -306,7 +317,8 @@ void OffscreenTab::EnterFullscreenModeForTab(
 }
 
 void OffscreenTab::ExitFullscreenModeForTab(WebContents* contents) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), contents);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), contents,
+           base::NotFatalUntil::M161);
 
   if (!in_fullscreen_mode())
     return;
@@ -316,13 +328,15 @@ void OffscreenTab::ExitFullscreenModeForTab(WebContents* contents) {
 }
 
 bool OffscreenTab::IsFullscreenForTabOrPending(const WebContents* contents) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), contents);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), contents,
+           base::NotFatalUntil::M161);
   return in_fullscreen_mode();
 }
 
 blink::mojom::DisplayMode OffscreenTab::GetDisplayMode(
     const WebContents* contents) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), contents);
+  CHECK_EQ(offscreen_tab_web_contents_.get(), contents,
+           base::NotFatalUntil::M161);
   return in_fullscreen_mode() ? blink::mojom::DisplayMode::kFullscreen
                               : blink::mojom::DisplayMode::kBrowser;
 }
@@ -331,23 +345,21 @@ void OffscreenTab::RequestMediaAccessPermission(
     WebContents* contents,
     const content::MediaStreamRequest& request,
     content::MediaResponseCallback callback) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(), contents);
-  owner_->RequestMediaAccessPermission(request, std::move(callback));
+  std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                          blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED,
+                          nullptr);
 }
 
 bool OffscreenTab::CheckMediaAccessPermission(
     content::RenderFrameHost* render_frame_host,
-    const GURL& security_origin,
+    const url::Origin& security_origin,
     blink::mojom::MediaStreamType type) {
-  DCHECK_EQ(offscreen_tab_web_contents_.get(),
-            content::WebContents::FromRenderFrameHost(render_frame_host));
-  return type == blink::mojom::MediaStreamType::GUM_TAB_AUDIO_CAPTURE ||
-         type == blink::mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE;
+  return false;
 }
 
 void OffscreenTab::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK(offscreen_tab_web_contents_.get());
+  CHECK(offscreen_tab_web_contents_.get(), base::NotFatalUntil::M161);
   if (!navigation_policy_->AllowNavigation(navigation_handle)) {
     DVLOG(2) << "Closing because NavigationPolicy disallowed "
              << "StartNavigation to " << navigation_handle->GetURL().spec();
@@ -356,7 +368,7 @@ void OffscreenTab::DidStartNavigation(
 }
 
 void OffscreenTab::DieIfContentCaptureEnded() {
-  DCHECK(offscreen_tab_web_contents_.get());
+  CHECK(offscreen_tab_web_contents_.get(), base::NotFatalUntil::M161);
 
   if (content_capture_was_detected_) {
     if (!offscreen_tab_web_contents_->IsBeingCaptured()) {
@@ -391,7 +403,7 @@ void OffscreenTab::DieIfContentCaptureEnded() {
 }
 
 void OffscreenTab::OnProfileWillBeDestroyed(Profile* profile) {
-  DCHECK(profile == otr_profile_);
+  CHECK(profile == otr_profile_, base::NotFatalUntil::M161);
   otr_profile_ = nullptr;
   owner_->DestroyTab(this);
 }

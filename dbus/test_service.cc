@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,16 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
+#include "base/time/time.h"
+#include "base/uuid.h"
 #include "dbus/bus.h"
 #include "dbus/exported_object.h"
 #include "dbus/message.h"
@@ -28,8 +29,8 @@
 namespace dbus {
 
 // Echo, SlowEcho, AsyncEcho, BrokenMethod, GetAll, Get, Set, PerformAction,
-// GetManagedObjects
-const int TestService::kNumMethodsToExport = 9;
+// GetManagedObjects.
+constexpr int TestService::kNumMethodsToExport = 9;
 
 TestService::Options::Options()
     : request_ownership_options(Bus::REQUIRE_PRIMARY) {
@@ -50,7 +51,8 @@ TestService::TestService(const Options& options)
       exported_object_(nullptr),
       exported_object_manager_(nullptr) {
   if (service_name_.empty()) {
-    service_name_ = "org.chromium.TestService-" + base::GenerateGUID();
+    service_name_ = "org.chromium.TestService-" +
+                    base::Uuid::GenerateRandomV4().AsLowercaseString();
   }
 }
 
@@ -77,6 +79,10 @@ void TestService::ShutdownAndBlock() {
 
 bool TestService::HasDBusThread() {
   return bus_->HasDBusThread();
+}
+
+std::string TestService::GetConnectionName() {
+  return bus_->GetConnectionName();
 }
 
 void TestService::ShutdownAndBlockInternal() {
@@ -113,7 +119,7 @@ void TestService::SendTestSignalFromRootInternal(const std::string& message) {
   bus_->RequestOwnership(
       service_name_, request_ownership_options_,
       base::BindOnce(&TestService::OnOwnership, base::Unretained(this),
-                     base::DoNothing::Once<bool>()));
+                     base::DoNothing()));
 
   // Use "/" just like dbus-send does.
   ExportedObject* root_object = bus_->GetExportedObject(ObjectPath("/"));
@@ -179,7 +185,7 @@ void TestService::OnExported(const std::string& interface_name,
     bus_->RequestOwnership(
         service_name_, request_ownership_options_,
         base::BindOnce(&TestService::OnOwnership, base::Unretained(this),
-                       base::DoNothing::Once<bool>()));
+                       base::DoNothing()));
   }
 }
 
@@ -188,7 +194,7 @@ void TestService::Run(base::RunLoop* run_loop) {
   bus_options.bus_type = Bus::SESSION;
   bus_options.connection_type = Bus::PRIVATE;
   bus_options.dbus_task_runner = dbus_task_runner_;
-  bus_ = new Bus(bus_options);
+  bus_ = new Bus(std::move(bus_options));
 
   exported_object_ = bus_->GetExportedObject(
       ObjectPath("/org/chromium/TestObject"));
@@ -392,7 +398,7 @@ void TestService::GetProperty(MethodCall* method_call,
 
     writer.OpenVariant("ay", &variant_writer);
     const uint8_t bytes[] = {0x54, 0x65, 0x73, 0x74};
-    variant_writer.AppendArrayOfBytes(bytes, sizeof(bytes));
+    variant_writer.AppendArrayOfBytes(bytes);
     writer.CloseContainer(&variant_writer);
 
     std::move(response_sender).Run(std::move(response));
@@ -484,14 +490,12 @@ void TestService::OwnershipReleased(
                                   std::move(response_sender)));
 }
 
-
 void TestService::OwnershipRegained(
     MethodCall* method_call,
     ExportedObject::ResponseSender response_sender,
     bool success) {
   PerformActionResponse(method_call, std::move(response_sender));
 }
-
 
 void TestService::GetManagedObjects(
     MethodCall* method_call,
@@ -594,7 +598,7 @@ void TestService::AddPropertiesToWriter(MessageWriter* writer) {
   dict_entry_writer.AppendString("Bytes");
   dict_entry_writer.OpenVariant("ay", &variant_writer);
   const uint8_t bytes[] = {0x54, 0x65, 0x73, 0x74};
-  variant_writer.AppendArrayOfBytes(bytes, sizeof(bytes));
+  variant_writer.AppendArrayOfBytes(bytes);
   dict_entry_writer.CloseContainer(&variant_writer);
   array_writer.CloseContainer(&dict_entry_writer);
 

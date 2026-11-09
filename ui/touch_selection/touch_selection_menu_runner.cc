@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,16 @@ TouchSelectionMenuRunner* g_touch_selection_menu_runner = nullptr;
 
 }  // namespace
 
+TouchSelectionMenuClient::TouchSelectionMenuClient() = default;
+
+TouchSelectionMenuClient::~TouchSelectionMenuClient() = default;
+
+base::WeakPtr<TouchSelectionMenuClient> TouchSelectionMenuClient::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
 TouchSelectionMenuRunner::~TouchSelectionMenuRunner() {
-  DCHECK_EQ(this, g_touch_selection_menu_runner);
+  CHECK_EQ(this, g_touch_selection_menu_runner, base::NotFatalUntil::M163);
   g_touch_selection_menu_runner = nullptr;
 }
 
@@ -23,7 +31,7 @@ TouchSelectionMenuRunner* TouchSelectionMenuRunner::GetInstance() {
 }
 
 TouchSelectionMenuRunner::TouchSelectionMenuRunner() {
-  DCHECK(!g_touch_selection_menu_runner);
+  CHECK(!g_touch_selection_menu_runner, base::NotFatalUntil::M163);
   g_touch_selection_menu_runner = this;
 }
 

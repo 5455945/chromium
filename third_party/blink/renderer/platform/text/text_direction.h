@@ -28,9 +28,11 @@
 
 #include <cstdint>
 #include <iosfwd>
+
 #include "base/i18n/rtl.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -53,7 +55,7 @@ inline bool IsRtl(TextDirection direction) {
   return direction != TextDirection::kLtr;
 }
 
-inline TextDirection DirectionFromLevel(unsigned level) {
+inline TextDirection DirectionFromLevel(wtf_size_t level) {
   return level & 1 ? TextDirection::kRtl : TextDirection::kLtr;
 }
 
@@ -67,7 +69,6 @@ inline base::i18n::TextDirection ToBaseTextDirection(TextDirection direction) {
       return base::i18n::TextDirection::RIGHT_TO_LEFT;
   }
   NOTREACHED();
-  return base::i18n::TextDirection::UNKNOWN_DIRECTION;
 }
 
 }  // namespace blink

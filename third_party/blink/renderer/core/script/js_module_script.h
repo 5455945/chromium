@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,16 @@
 #include "third_party/blink/renderer/core/script/module_script.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/parkable_string.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
+#include "v8/include/v8.h"
 
 namespace blink {
 
 class KURL;
 class Modulator;
 class ModuleScriptCreationParams;
+class ReferrerScriptInfo;
 
 // JSModuleScript is a model object for the "JavaScript module script" spec
 // concept. https://html.spec.whatwg.org/C/#javascript-module-script
@@ -50,10 +52,18 @@ class CORE_EXPORT JSModuleScript final : public ModuleScript,
                  ModuleRecordProduceCacheData*);
   ~JSModuleScript() override = default;
 
+  // The v8::ScriptOrigin for the module script that Create() compiles from
+  // `params` (the module counterpart of ClassicScript::CreateScriptOrigin()).
+  static v8::ScriptOrigin CreateScriptOrigin(
+      v8::Isolate*,
+      const ModuleScriptCreationParams& params,
+      const ReferrerScriptInfo& referrer_info,
+      const TextPosition& start_position);
+
   void ProduceCache() override;
 
   void Trace(Visitor*) const override;
-  const char* NameInHeapSnapshot() const override { return "JSModuleScript"; }
+  const char* GetHumanReadableName() const override { return "JSModuleScript"; }
 
  private:
   friend class ModuleScriptTest;
@@ -68,12 +78,8 @@ class CORE_EXPORT JSModuleScript final : public ModuleScript,
       const TextPosition&,
       ModuleRecordProduceCacheData* produce_cache_data);
 
-  const TextPosition& StartPosition() const { return start_position_; }
-
   // For V8CodeCache statistics.
   const size_t source_text_length_;
-
-  const TextPosition start_position_;
 
   // Only for ProduceCache(). JSModuleScript keeps |produce_cache_data_|
   // because:

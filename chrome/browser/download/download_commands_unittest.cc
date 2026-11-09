@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,10 @@
 #include <vector>
 
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/download/download_item_model.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -34,7 +37,7 @@ class DownloadCommandsTest : public testing::Test {
       : model_(std::make_unique<DownloadItemModel>(&item_)),
         commands_(model_->GetWeakPtr()) {}
 
-  ~DownloadCommandsTest() override {}
+  ~DownloadCommandsTest() override = default;
 
  protected:
   // Sets up defaults for the download item.
@@ -112,6 +115,26 @@ TEST_F(DownloadCommandsTest, Finished) {
   EXPECT_FALSE(IsCommandEnabled(DownloadCommands::RESUME));
 }
 
+TEST_F(DownloadCommandsTest, OpenWith) {
+  // "Open with..." is only offered on Windows when
+  // `kEnableDownloadOpenWithContextMenu` is enabled, once the download is
+  // complete and can be shown in the folder.
+  EXPECT_FALSE(IsCommandEnabled(DownloadCommands::OPEN_WITH));
+  ON_CALL(item(), IsDone()).WillByDefault(Return(true));
+#if BUILDFLAG(IS_WIN)
+  EXPECT_TRUE(IsCommandEnabled(DownloadCommands::OPEN_WITH));
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(
+        download::features::kEnableDownloadOpenWithContextMenu);
+    EXPECT_FALSE(IsCommandEnabled(DownloadCommands::OPEN_WITH));
+  }
+  ON_CALL(item(), CanShowInFolder()).WillByDefault(Return(false));
+#endif
+  EXPECT_FALSE(IsCommandEnabled(DownloadCommands::OPEN_WITH));
+  EXPECT_FALSE(IsCommandChecked(DownloadCommands::OPEN_WITH));
+}
+
 TEST_F(DownloadCommandsTest, PausedResumable) {
   ON_CALL(item(), IsPaused()).WillByDefault(Return(true));
   ON_CALL(item(), CanResume()).WillByDefault(Return(true));
@@ -171,7 +194,7 @@ TEST_F(DownloadCommandsTest,
   GURL learn_more_url = commands().GetLearnMoreURLForInterruptedDownload();
   std::string name_value_pair = base::StringPrintf(
       "ctx=%d", download::DOWNLOAD_INTERRUPT_REASON_NETWORK_DISCONNECTED);
-  EXPECT_LT(0u, learn_more_url.query().find(name_value_pair))
+  EXPECT_LT(0u, learn_more_url.GetQuery().find(name_value_pair))
       << learn_more_url.spec();
 }
 

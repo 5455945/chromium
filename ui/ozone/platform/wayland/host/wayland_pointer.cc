@@ -1,91 +1,144 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/platform/wayland/host/wayland_pointer.h"
 
 #include <linux/input.h>
+#include <wayland-util.h>
 
+#include <optional>
+
+#include "base/logging.h"
+#include "base/notimplemented.h"
+#include "base/trace_event/trace_event.h"
+#include "base/version.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
+#include "ui/ozone/common/features.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+#include "ui/ozone/platform/wayland/host/wayland_serial_tracker.h"
 #include "ui/ozone/platform/wayland/host/wayland_window.h"
-
-// TODO(forney): Handle version 5 of wl_pointer.
+#include "ui/ozone/platform/wayland/host/wayland_window_drag_controller.h"
 
 namespace ui {
+
+namespace {
+
+// See TODO in //ui/ozone/common/features.cc
+wl::EventDispatchPolicy GetEventDispatchPolicy() {
+  return IsDispatchPointerEventsOnFrameEventEnabled()
+             ? wl::EventDispatchPolicy::kOnFrame
+             : wl::EventDispatchPolicy::kImmediate;
+}
+
+}  // namespace
 
 WaylandPointer::WaylandPointer(wl_pointer* pointer,
                                WaylandConnection* connection,
                                Delegate* delegate)
     : obj_(pointer), connection_(connection), delegate_(delegate) {
-  static const wl_pointer_listener listener = {
-      &WaylandPointer::Enter,       &WaylandPointer::Leave,
-      &WaylandPointer::Motion,      &WaylandPointer::Button,
-      &WaylandPointer::Axis,        &WaylandPointer::Frame,
-      &WaylandPointer::AxisSource,  &WaylandPointer::AxisStop,
-      &WaylandPointer::AxisDiscrete};
-
-  wl_pointer_add_listener(obj_.get(), &listener, this);
+  static constexpr wl_pointer_listener kPointerListener = {
+      .enter = &OnEnter,
+      .leave = &OnLeave,
+      .motion = &OnMotion,
+      .button = &OnButton,
+      .axis = &OnAxis,
+      .frame = &OnFrame,
+      .axis_source = &OnAxisSource,
+      .axis_stop = &OnAxisStop,
+      .axis_discrete = &OnAxisDiscrete,
+      .axis_value120 = &OnAxisValue120,
+      .axis_relative_direction = &OnAxisRelativeDirection,
+  };
+  wl_pointer_add_listener(obj_.get(), &kPointerListener, this);
 }
 
 WaylandPointer::~WaylandPointer() {
+  // If a cursor already exists, we need to reset it first before
+  // destroying the pointer to prevent dangling references.
+  connection_->ResetCursor();
   // Even though, WaylandPointer::Leave is always called when Wayland destroys
   // wl_pointer, it's better to be explicit as some Wayland compositors may have
   // bugs.
-  delegate_->OnPointerFocusChanged(nullptr, {});
-  delegate_->OnResetPointerFlags();
+  delegate_->OnPointerFocusChanged(nullptr, {}, EventTimeForNow(),
+                                   wl::EventDispatchPolicy::kImmediate);
+  delegate_->ReleasePressedPointerButtons(nullptr, EventTimeForNow());
 }
 
 // static
-void WaylandPointer::Enter(void* data,
-                           wl_pointer* obj,
-                           uint32_t serial,
-                           wl_surface* surface,
-                           wl_fixed_t surface_x,
-                           wl_fixed_t surface_y) {
-  DCHECK(data);
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
-  pointer->connection_->set_pointer_enter_serial(serial);
+void WaylandPointer::OnEnter(void* data,
+                             wl_pointer* pointer,
+                             uint32_t serial,
+                             wl_surface* surface,
+                             wl_fixed_t surface_x,
+                             wl_fixed_t surface_y) {
+  // enter event doesn't have timestamp. Use EventTimeForNow().
+  const auto timestamp = EventTimeForNow();
+  auto* self = static_cast<WaylandPointer*>(data);
+
+  self->connection_->serial_tracker().UpdateSerial(wl::SerialType::kMouseEnter,
+                                                   serial);
+  WaylandWindow* window = wl::RootWindowFromWlSurface(surface);
+  TRACE_EVENT_INSTANT("wayland.debug", "WaylandPointer::OnEnter", "window",
+                      window ? window->GetBoundsInDIP().ToString() : "null");
+  if (!window) {
+    return;
+  }
+  self->delegate_->OnPointerFocusChanged(
+      window,
+      gfx::PointF(static_cast<float>(wl_fixed_to_double(surface_x)),
+                  static_cast<float>(wl_fixed_to_double(surface_y))),
+      timestamp, GetEventDispatchPolicy());
+}
+
+// static
+void WaylandPointer::OnLeave(void* data,
+                             wl_pointer* pointer,
+                             uint32_t serial,
+                             wl_surface* surface) {
+  // leave event doesn't have timestamp. Use EventTimeForNow().
+  const auto timestamp = EventTimeForNow();
+  auto* self = static_cast<WaylandPointer*>(data);
 
   WaylandWindow* window = wl::RootWindowFromWlSurface(surface);
-  gfx::PointF location{static_cast<float>(wl_fixed_to_double(surface_x)),
-                       static_cast<float>(wl_fixed_to_double(surface_y))};
-  pointer->delegate_->OnPointerFocusChanged(window, location);
+  TRACE_EVENT_INSTANT("wayland.debug", "WaylandPointer::OnLeave", "window",
+                      window ? window->GetBoundsInDIP().ToString() : "null");
+
+  self->connection_->serial_tracker().ResetSerial(wl::SerialType::kMouseEnter);
+  self->delegate_->OnPointerFocusChanged(nullptr,
+                                         self->delegate_->GetPointerLocation(),
+                                         timestamp, GetEventDispatchPolicy());
 }
 
 // static
-void WaylandPointer::Leave(void* data,
-                           wl_pointer* obj,
-                           uint32_t serial,
-                           wl_surface* surface) {
-  DCHECK(data);
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
-  pointer->delegate_->OnPointerFocusChanged(
-      nullptr, pointer->delegate_->GetPointerLocation());
+void WaylandPointer::OnMotion(void* data,
+                              wl_pointer* pointer,
+                              uint32_t time,
+                              wl_fixed_t surface_x,
+                              wl_fixed_t surface_y) {
+  auto* self = static_cast<WaylandPointer*>(data);
+  TRACE_EVENT_INSTANT("wayland.debug", "WaylandPointer::OnMotion", "x",
+                      surface_x, "y", surface_y);
+
+  self->delegate_->OnPointerMotionEvent(
+      gfx::PointF(wl_fixed_to_double(surface_x), wl_fixed_to_double(surface_y)),
+      wl::EventMillisecondsToTimeTicks(time), GetEventDispatchPolicy(),
+      /*is_synthesized=*/false);
 }
 
 // static
-void WaylandPointer::Motion(void* data,
-                            wl_pointer* obj,
-                            uint32_t time,
-                            wl_fixed_t surface_x,
-                            wl_fixed_t surface_y) {
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
-  gfx::PointF location(wl_fixed_to_double(surface_x),
-                       wl_fixed_to_double(surface_y));
-  pointer->delegate_->OnPointerMotionEvent(location);
-}
-
-// static
-void WaylandPointer::Button(void* data,
-                            wl_pointer* obj,
-                            uint32_t serial,
-                            uint32_t time,
-                            uint32_t button,
-                            uint32_t state) {
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
+void WaylandPointer::OnButton(void* data,
+                              wl_pointer* pointer,
+                              uint32_t serial,
+                              uint32_t time,
+                              uint32_t button,
+                              uint32_t state) {
+  TRACE_EVENT_INSTANT("wayland.debug", "WaylandPointer::OnButton", "button",
+                      button, "state", state);
+  auto* self = static_cast<WaylandPointer*>(data);
   int changed_button;
   switch (button) {
     case BTN_LEFT:
@@ -109,69 +162,122 @@ void WaylandPointer::Button(void* data,
       return;
   }
 
-  EventType type = state == WL_POINTER_BUTTON_STATE_PRESSED ? ET_MOUSE_PRESSED
-                                                            : ET_MOUSE_RELEASED;
-  if (type == ET_MOUSE_PRESSED)
-    pointer->connection_->set_serial(serial, type);
-  pointer->delegate_->OnPointerButtonEvent(type, changed_button);
+  EventType type = state == WL_POINTER_BUTTON_STATE_PRESSED
+                       ? EventType::kMousePressed
+                       : EventType::kMouseReleased;
+  if (type == EventType::kMousePressed) {
+    self->connection_->serial_tracker().UpdateSerial(
+        wl::SerialType::kMousePress, serial);
+  }
+  self->delegate_->OnPointerButtonEvent(
+      type, changed_button, wl::EventMillisecondsToTimeTicks(time),
+      /*window=*/nullptr, GetEventDispatchPolicy(),
+      /*allow_release_of_unpressed_button=*/false, /*is_synthesized=*/false);
 }
 
 // static
-void WaylandPointer::Axis(void* data,
-                          wl_pointer* obj,
-                          uint32_t time,
-                          uint32_t axis,
-                          wl_fixed_t value) {
-  static const double kAxisValueScale = 10.0;
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
+void WaylandPointer::OnAxis(void* data,
+                            wl_pointer* pointer,
+                            uint32_t time,
+                            uint32_t axis,
+                            wl_fixed_t value) {
+  double delta = -wl_fixed_to_double(value);
+  if (!IsWaylandUnscaledTouchpadScrollingEnabled()) {
+    // Wayland compositors send axis events with values in the surface
+    // coordinate
+    // space. They send a value of 10 per mouse wheel click by convention, so
+    // clients (e.g. GTK+) typically scale down by this amount to convert to
+    // discrete step coordinates. wl_pointer version 5 improves the situation by
+    // adding axis sources and discrete axis events.
+    constexpr double kAxisValueScale = 10.0;
+    delta = delta / kAxisValueScale * MouseWheelEvent::kWheelDelta;
+  }
+  const auto timestamp = wl::EventMillisecondsToTimeTicks(time);
+  auto* self = static_cast<WaylandPointer*>(data);
+  self->OnAxisImpl(delta, axis, timestamp, /*is_high_resolution=*/false);
+}
+
+// ---- Version 5 ----
+
+// static
+void WaylandPointer::OnFrame(void* data, wl_pointer* pointer) {
+  auto* self = static_cast<WaylandPointer*>(data);
+  // The frame event ends the sequence of pointer events.  Clear the flag.  The
+  // next frame will set it when necessary.
+  self->axis_source_received_ = false;
+  self->delegate_->OnPointerFrameEvent();
+}
+
+// static
+void WaylandPointer::OnAxisSource(void* data,
+                                  wl_pointer* pointer,
+                                  uint32_t axis_source) {
+  auto* self = static_cast<WaylandPointer*>(data);
+  self->axis_source_received_ = true;
+  self->delegate_->OnPointerAxisSourceEvent(axis_source);
+}
+
+// static
+void WaylandPointer::OnAxisStop(void* data,
+                                wl_pointer* pointer,
+                                uint32_t time,
+                                uint32_t axis) {
+  auto* self = static_cast<WaylandPointer*>(data);
+  self->delegate_->OnPointerAxisStopEvent(
+      axis, wl::EventMillisecondsToTimeTicks(time));
+}
+
+// static
+void WaylandPointer::OnAxisDiscrete(void* data,
+                                    wl_pointer* pointer,
+                                    uint32_t axis,
+                                    int32_t discrete) {
+  // Deprecated since version 8
+  NOTIMPLEMENTED_LOG_ONCE();
+}
+
+// --- Version 8 ---
+
+// static
+void WaylandPointer::OnAxisValue120(void* data,
+                                    wl_pointer* pointer,
+                                    uint32_t axis,
+                                    int32_t value120) {
+  const double delta = -value120;
+  auto* self = static_cast<WaylandPointer*>(data);
+  self->OnAxisImpl(delta, axis, /*timestamp=*/std::nullopt,
+                   /*is_high_resolution=*/true);
+}
+
+void WaylandPointer::OnAxisImpl(double delta,
+                                uint32_t axis,
+                                std::optional<base::TimeTicks> timestamp,
+                                bool is_high_resolution) {
   gfx::Vector2dF offset;
-  // Wayland compositors send axis events with values in the surface coordinate
-  // space. They send a value of 10 per mouse wheel click by convention, so
-  // clients (e.g. GTK+) typically scale down by this amount to convert to
-  // discrete step coordinates. wl_pointer version 5 improves the situation by
-  // adding axis sources and discrete axis events.
   if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-    offset.set_y(-wl_fixed_to_double(value) / kAxisValueScale *
-                 MouseWheelEvent::kWheelDelta);
+    offset.set_y(delta);
   } else if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
-    offset.set_x(-wl_fixed_to_double(value) / kAxisValueScale *
-                 MouseWheelEvent::kWheelDelta);
+    offset.set_x(delta);
   } else {
     return;
   }
-  pointer->delegate_->OnPointerAxisEvent(offset);
+  delegate_->OnPointerAxisEvent(offset, timestamp, is_high_resolution);
+
+  // If we did not receive the axis event source explicitly, set it to the mouse
+  // wheel so far.  Should this be a part of some complex event coming from the
+  // different source, the compositor will let us know sooner or later.
+  if (!axis_source_received_) {
+    delegate_->OnPointerAxisSourceEvent(WL_POINTER_AXIS_SOURCE_WHEEL);
+  }
 }
 
-// static
-void WaylandPointer::Frame(void* data, wl_pointer* obj) {
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
-  pointer->delegate_->OnPointerFrameEvent();
-}
+// --- Version 9 ---
 
 // static
-void WaylandPointer::AxisSource(void* data,
-                                wl_pointer* obj,
-                                uint32_t axis_source) {
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
-  pointer->delegate_->OnPointerAxisSourceEvent(axis_source);
-}
-
-// static
-void WaylandPointer::AxisStop(void* data,
-                              wl_pointer* obj,
-                              uint32_t time,
-                              uint32_t axis) {
-  WaylandPointer* pointer = static_cast<WaylandPointer*>(data);
-  pointer->delegate_->OnPointerAxisStopEvent(axis);
-}
-
-// static
-void WaylandPointer::AxisDiscrete(void* data,
-                                  wl_pointer* obj,
-                                  uint32_t axis,
-                                  int32_t discrete) {
-  // TODO(fukino): Use this events for better handling of mouse wheel events.
-  // crbug.com/1129259.
+void WaylandPointer::OnAxisRelativeDirection(void* data,
+                                             wl_pointer* obj,
+                                             uint32_t axis,
+                                             uint32_t direction) {
   NOTIMPLEMENTED_LOG_ONCE();
 }
 

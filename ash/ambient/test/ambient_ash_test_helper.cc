@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,16 @@
 
 namespace ash {
 
-AmbientAshTestHelper::AmbientAshTestHelper() {
-  ambient_client_ = std::make_unique<TestAmbientClient>(&wake_lock_provider_);
-}
+AmbientAshTestHelper::AmbientAshTestHelper() = default;
 
 AmbientAshTestHelper::~AmbientAshTestHelper() = default;
 
-void AmbientAshTestHelper::IssueAccessToken(const std::string& token,
-                                            bool with_error) {
-  ambient_client_->IssueAccessToken(token, with_error);
+void AmbientAshTestHelper::IssueAccessToken(bool is_empty) {
+  ambient_client_.IssueAccessToken(is_empty);
 }
 
 bool AmbientAshTestHelper::IsAccessTokenRequestPending() const {
-  return ambient_client_->IsAccessTokenRequestPending();
+  return ambient_client_.IsAccessTokenRequestPending();
 }
 
 }  // namespace ash

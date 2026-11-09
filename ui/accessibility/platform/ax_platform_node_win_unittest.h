@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ACCESSIBILITY_PLATFORM_AX_PLATFORM_NODE_WIN_UNITTEST_H_
 #define UI_ACCESSIBILITY_PLATFORM_AX_PLATFORM_NODE_WIN_UNITTEST_H_
 
-#include "ui/accessibility/platform/ax_platform_node_unittest.h"
+#include <wrl/implements.h>
 
 #include <memory>
 #include <unordered_set>
@@ -13,7 +13,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "ui/accessibility/ax_position.h"
 #include "ui/accessibility/platform/ax_fragment_root_delegate_win.h"
-#include "ui/base/win/accessibility_misc_utils.h"
+#include "ui/accessibility/platform/ax_platform_node_unittest.h"
+
+#include <UIAutomationCore.h>
 
 struct IAccessible;
 struct IAccessible2;
@@ -37,29 +39,23 @@ class AXPlatformNode;
 
 class TestFragmentRootDelegate : public AXFragmentRootDelegateWin {
  public:
-  TestFragmentRootDelegate();
-  virtual ~TestFragmentRootDelegate();
+  TestFragmentRootDelegate() = default;
   gfx::NativeViewAccessible GetChildOfAXFragmentRoot() override;
   gfx::NativeViewAccessible GetParentOfAXFragmentRoot() override;
   bool IsAXFragmentRootAControlElement() override;
+
   gfx::NativeViewAccessible child_ = nullptr;
   gfx::NativeViewAccessible parent_ = nullptr;
   bool is_control_element_ = true;
 };
 
 class MockIRawElementProviderSimple
-    : public CComObjectRootEx<CComMultiThreadModel>,
-      public IRawElementProviderSimple {
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          IRawElementProviderSimple> {
  public:
-  BEGIN_COM_MAP(MockIRawElementProviderSimple)
-  COM_INTERFACE_ENTRY(IRawElementProviderSimple)
-  END_COM_MAP()
-
   MockIRawElementProviderSimple();
-  ~MockIRawElementProviderSimple();
-
-  static HRESULT CreateMockIRawElementProviderSimple(
-      IRawElementProviderSimple** provider);
+  ~MockIRawElementProviderSimple() override;
 
   //
   // IRawElementProviderSimple methods.
@@ -82,13 +78,11 @@ class AXPlatformNodeWinTest : public AXPlatformNodeTest {
   AXPlatformNodeWinTest();
   ~AXPlatformNodeWinTest() override;
 
-  void SetUp() override;
-
   void TearDown() override;
 
- protected:
-  static const std::u16string kEmbeddedCharacterAsString;
+  void DestroyTree() override;
 
+ protected:
   AXPlatformNode* AXPlatformNodeFromNode(AXNode* node);
   template <typename T>
   Microsoft::WRL::ComPtr<T> QueryInterfaceFromNodeId(AXNodeID id);
@@ -99,8 +93,7 @@ class AXPlatformNodeWinTest : public AXPlatformNodeTest {
   Microsoft::WRL::ComPtr<IRawElementProviderSimple>
   GetIRawElementProviderSimpleFromChildIndex(int child_index);
   Microsoft::WRL::ComPtr<IRawElementProviderSimple>
-  GetIRawElementProviderSimpleFromTree(const ui::AXTreeID tree_id,
-                                       const AXNodeID node_id);
+  GetIRawElementProviderSimpleFromId(const AXNodeID node_id);
   Microsoft::WRL::ComPtr<IRawElementProviderFragment>
   GetRootIRawElementProviderFragment();
   Microsoft::WRL::ComPtr<IRawElementProviderFragment>
@@ -127,10 +120,12 @@ class AXPlatformNodeWinTest : public AXPlatformNodeTest {
   using PatternSet = std::unordered_set<LONG>;
   PatternSet GetSupportedPatternsFromNodeId(AXNodeID id);
 
+  void TestGetColumnHeadersForRole(ax::mojom::Role role);
+
   std::unique_ptr<AXFragmentRootWin> ax_fragment_root_;
 
   std::unique_ptr<TestFragmentRootDelegate> test_fragment_root_delegate_;
-  testing::ScopedAXEmbeddedObjectBehaviorSetter ax_embedded_object_behavior_;
+  ScopedAXEmbeddedObjectBehaviorSetter ax_embedded_object_behavior_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 

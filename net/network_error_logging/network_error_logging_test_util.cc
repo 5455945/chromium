@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,13 @@ TestNetworkErrorLoggingService::TestNetworkErrorLoggingService() = default;
 TestNetworkErrorLoggingService::~TestNetworkErrorLoggingService() = default;
 
 void TestNetworkErrorLoggingService::OnHeader(
-    const NetworkIsolationKey& network_isolation_key,
+    const NetworkAnonymizationKey& network_anonymization_key,
     const url::Origin& origin,
     const IPAddress& received_ip_address,
     const std::string& value) {
   VLOG(1) << "Received NEL policy for " << origin;
   Header header;
-  header.network_isolation_key = network_isolation_key;
+  header.network_anonymization_key = network_anonymization_key;
   header.origin = origin;
   header.received_ip_address = received_ip_address;
   header.value = value;
@@ -38,16 +38,14 @@ void TestNetworkErrorLoggingService::QueueSignedExchangeReport(
     SignedExchangeReportDetails details) {}
 
 void TestNetworkErrorLoggingService::RemoveBrowsingData(
-    const base::RepeatingCallback<bool(const GURL&)>& origin_filter) {}
+    const base::RepeatingCallback<bool(const url::Origin&)>& origin_filter) {}
 
 void TestNetworkErrorLoggingService::RemoveAllBrowsingData() {}
 
 bool TestNetworkErrorLoggingService::Header::MatchesAddressList(
     const AddressList& address_list) const {
-  return std::any_of(address_list.begin(), address_list.end(),
-                     [this](const IPEndPoint& endpoint) {
-                       return endpoint.address() == received_ip_address;
-                     });
+  return std::ranges::contains(address_list, received_ip_address,
+                               &IPEndPoint::address);
 }
 
 }  // namespace net

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,23 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 #include "ash/constants/ash_paths.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "ash/constants/ash_pref_names.h"
+#include "base/check_deref.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_split.h"
@@ -27,21 +31,20 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/app_list/app_list_syncable_service.h"
+#include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ash/customization/customization_wallpaper_downloader.h"
 #include "chrome/browser/ash/customization/customization_wallpaper_util.h"
+#include "chrome/browser/ash/extensions/default_app_order.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/extensions/default_app_order.h"
-#include "chrome/browser/chromeos/net/delay_network_call.h"
+#include "chrome/browser/ash/net/delay_network_call.h"
 #include "chrome/browser/extensions/external_loader.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/app_list_syncable_service.h"
-#include "chrome/browser/ui/app_list/app_list_syncable_service_factory.h"
-#include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/system/statistics_provider.h"
+#include "chromeos/ash/components/system/statistics_provider.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -51,13 +54,17 @@
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace ash {
 namespace {
 
-  // Manifest attributes names.
+using ::extensions::ExternalProviderImpl;
+
+// Manifest attributes names.
 const char kVersionAttr[] = "version";
 const char kDefaultAttr[] = "default";
 const char kInitialLocaleAttr[] = "initial_locale";
@@ -99,59 +106,61 @@ const char kServicesCustomizationKey[] = "customization.manifest_cache";
 // Empty customization document that doesn't customize anything.
 const char kEmptyServicesCustomizationManifest[] = "{ \"version\": \"1.0\" }";
 
-struct CustomizationDocumentTestOverride {
-  ServicesCustomizationDocument* customization_document = nullptr;
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
-};
+constexpr net::NetworkTrafficAnnotationTag kCustomizationDocumentNetworkTag =
+    net::DefineNetworkTrafficAnnotation("customization_document",
+                                        R"(
+        semantics {
+          sender: "Customization document"
+          description:
+            "Get OEM customization manifest from OEM specific URLs that "
+            "provide custom configuration locales, wallpaper etc."
+          trigger:
+            "Triggered on OOBE after user accepts EULA and everytime the "
+            "device boots in. Expected to run only once at OOBE. If the "
+            "network request fails, retried each boot until it succeeds."
+          data: "None."
+          destination: GOOGLE_OWNED_SERVICE
+        }
+        policy {
+         cookies_allowed: NO
+         setting:
+           "This feature is set by OEMs and can be overridden by users."
+         policy_exception_justification:
+           "This request is made based on OEM customization and does not "
+           "send/store any sensitive data."
+        })");
 
-// Global overrider for ServicesCustomizationDocument for tests.
-CustomizationDocumentTestOverride* g_test_overrides = nullptr;
+ServicesCustomizationDocument* g_services_customization_document = nullptr;
 
-// Services customization document load results reported via the
-// "ServicesCustomization.LoadResult" histogram.
-// It is append-only enum due to use in a histogram!
-enum HistogramServicesCustomizationLoadResult {
-  HISTOGRAM_LOAD_RESULT_SUCCESS = 0,
-  HISTOGRAM_LOAD_RESULT_FILE_NOT_FOUND = 1,
-  HISTOGRAM_LOAD_RESULT_PARSING_ERROR = 2,
-  HISTOGRAM_LOAD_RESULT_RETRIES_FAIL = 3,
-  HISTOGRAM_LOAD_RESULT_MAX_VALUE = 4
-};
-
-void LogManifestLoadResult(HistogramServicesCustomizationLoadResult result) {
-  UMA_HISTOGRAM_ENUMERATION("ServicesCustomization.LoadResult",
-                            result,
-                            HISTOGRAM_LOAD_RESULT_MAX_VALUE);
-}
-
-std::string GetLocaleSpecificStringImpl(
-    const base::DictionaryValue* root,
-    const std::string& locale,
-    const std::string& dictionary_name,
-    const std::string& entry_name) {
-  const base::DictionaryValue* dictionary_content = NULL;
-  if (!root || !root->GetDictionary(dictionary_name, &dictionary_content))
+std::string GetLocaleSpecificStringImpl(const base::DictValue& root,
+                                        const std::string& locale,
+                                        const std::string& dictionary_name,
+                                        const std::string& entry_name) {
+  const base::DictValue* dictionary_content = root.FindDict(dictionary_name);
+  if (!dictionary_content)
     return std::string();
 
-  const base::DictionaryValue* locale_dictionary = NULL;
-  if (dictionary_content->GetDictionary(locale, &locale_dictionary)) {
-    std::string result;
-    if (locale_dictionary->GetString(entry_name, &result))
-      return result;
+  const base::DictValue* locale_dictionary =
+      dictionary_content->FindDict(locale);
+  if (locale_dictionary) {
+    const std::string* result = locale_dictionary->FindString(entry_name);
+    if (result)
+      return *result;
   }
 
-  const base::DictionaryValue* default_dictionary = NULL;
-  if (dictionary_content->GetDictionary(kDefaultAttr, &default_dictionary)) {
-    std::string result;
-    if (default_dictionary->GetString(entry_name, &result))
-      return result;
+  const base::DictValue* default_dictionary =
+      dictionary_content->FindDict(kDefaultAttr);
+  if (default_dictionary) {
+    const std::string* result = default_dictionary->FindString(entry_name);
+    if (result)
+      return *result;
   }
 
   return std::string();
 }
 
 void CheckWallpaperCacheExists(const base::FilePath& path, bool* exists) {
-  DCHECK(exists);
+  CHECK(exists, base::NotFatalUntil::M160);
   *exists = base::PathExists(path);
 }
 
@@ -169,26 +178,36 @@ std::string ReadFileInBackground(const base::FilePath& file) {
   return manifest;
 }
 
-}  // anonymous namespace
+// Return true if the customization was applied. Customization is applied only
+// once per machine.
+bool WasOOBECustomizationApplied(const PrefService& local_state) {
+  return local_state.GetBoolean(kServicesCustomizationAppliedPref);
+}
 
-// Template URL where to fetch OEM services customization manifest from.
-const char ServicesCustomizationDocument::kManifestUrl[] =
-    "https://ssl.gstatic.com/chrome/chromeos-customization/%s.json";
+// Save applied state in machine settings.
+void SetApplied(PrefService& local_state, bool val) {
+  local_state.SetBoolean(kServicesCustomizationAppliedPref, val);
+}
+
+}  // anonymous namespace
 
 // A custom extensions::ExternalLoader that the ServicesCustomizationDocument
 // creates and uses to publish OEM default apps to the extensions system.
-class ServicesCustomizationExternalLoader
-    : public extensions::ExternalLoader,
-      public base::SupportsWeakPtr<ServicesCustomizationExternalLoader> {
+class ServicesCustomizationExternalLoader : public extensions::ExternalLoader {
  public:
   explicit ServicesCustomizationExternalLoader(Profile* profile)
-      : is_apps_set_(false), profile_(profile) {}
+      : profile_(profile) {}
+
+  ServicesCustomizationExternalLoader(
+      const ServicesCustomizationExternalLoader&) = delete;
+  ServicesCustomizationExternalLoader& operator=(
+      const ServicesCustomizationExternalLoader&) = delete;
 
   Profile* profile() { return profile_; }
 
   // Used by the ServicesCustomizationDocument to update the current apps.
-  void SetCurrentApps(std::unique_ptr<base::DictionaryValue> prefs) {
-    apps_.Swap(prefs.get());
+  void SetCurrentApps(base::DictValue prefs) {
+    apps_ = std::move(prefs);
     is_apps_set_ = true;
     StartLoading();
   }
@@ -196,7 +215,7 @@ class ServicesCustomizationExternalLoader
   // Implementation of extensions::ExternalLoader:
   void StartLoading() override {
     if (!is_apps_set_) {
-      ServicesCustomizationDocument::GetInstance()->StartFetching();
+      ServicesCustomizationDocument::GetInstance().StartFetching();
       // In case of missing customization ID, SetCurrentApps will be called
       // synchronously from StartFetching and this function will be called
       // recursively so we need to return to avoid calling LoadFinished twice.
@@ -208,19 +227,23 @@ class ServicesCustomizationExternalLoader
     }
 
     VLOG(1) << "ServicesCustomization extension loader publishing "
-            << apps_.DictSize() << " apps.";
-    LoadFinished(apps_.CreateDeepCopy());
+            << apps_.size() << " apps.";
+    LoadFinished(apps_.Clone());
+  }
+
+  base::WeakPtr<ServicesCustomizationExternalLoader> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
   }
 
  protected:
-  ~ServicesCustomizationExternalLoader() override {}
+  ~ServicesCustomizationExternalLoader() override = default;
 
  private:
-  bool is_apps_set_;
-  base::DictionaryValue apps_;
-  Profile* profile_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServicesCustomizationExternalLoader);
+  bool is_apps_set_ = false;
+  base::DictValue apps_;
+  raw_ptr<Profile> profile_;
+  base::WeakPtrFactory<ServicesCustomizationExternalLoader> weak_ptr_factory_{
+      this};
 };
 
 // CustomizationDocument implementation. ---------------------------------------
@@ -229,7 +252,7 @@ CustomizationDocument::CustomizationDocument(
     const std::string& accepted_version)
     : accepted_version_(accepted_version) {}
 
-CustomizationDocument::~CustomizationDocument() {}
+CustomizationDocument::~CustomizationDocument() = default;
 
 bool CustomizationDocument::LoadManifestFromFile(
     const base::FilePath& manifest_path) {
@@ -241,25 +264,21 @@ bool CustomizationDocument::LoadManifestFromFile(
 
 bool CustomizationDocument::LoadManifestFromString(
     const std::string& manifest) {
-  base::JSONReader::ValueWithError parsed_json =
-      base::JSONReader::ReadAndReturnValueWithError(
-          manifest, base::JSON_ALLOW_TRAILING_COMMAS);
-  if (!parsed_json.value) {
-    LOG(ERROR) << parsed_json.error_message;
-    NOTREACHED();
-    return false;
-  }
-  std::unique_ptr<base::Value> root =
-      base::Value::ToUniquePtrValue(std::move(*parsed_json.value));
-
-  root_ = base::DictionaryValue::From(std::move(root));
-  if (!root_) {
-    NOTREACHED();
-    return false;
+  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
+      manifest,
+      base::JSON_ALLOW_TRAILING_COMMAS | base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!parsed_json.has_value()) {
+    NOTREACHED() << parsed_json.error().message;
   }
 
-  std::string result;
-  if (!root_->GetString(kVersionAttr, &result) || result != accepted_version_) {
+  if (!parsed_json->is_dict()) {
+    NOTREACHED();
+  }
+
+  root_ = std::make_unique<base::DictValue>(std::move(*parsed_json).TakeDict());
+
+  const std::string* result = root_->FindString(kVersionAttr);
+  if (!result || *result != accepted_version_) {
     LOG(ERROR) << "Wrong customization manifest version";
     root_.reset();
     return false;
@@ -272,8 +291,8 @@ std::string CustomizationDocument::GetLocaleSpecificString(
     const std::string& locale,
     const std::string& dictionary_name,
     const std::string& entry_name) const {
-  return GetLocaleSpecificStringImpl(
-      root_.get(), locale, dictionary_name, entry_name);
+  return GetLocaleSpecificStringImpl(*root_, locale, dictionary_name,
+                                     entry_name);
 }
 
 // StartupCustomizationDocument implementation. --------------------------------
@@ -283,24 +302,24 @@ StartupCustomizationDocument::StartupCustomizationDocument()
   {
     // Loading manifest causes us to do blocking IO on UI thread.
     // Temporarily allow it until we fix http://crosbug.com/11103
-    base::ThreadRestrictions::ScopedAllowIO allow_io;
+    base::ScopedAllowBlocking allow_blocking;
     base::FilePath startup_customization_manifest;
-    base::PathService::Get(chromeos::FILE_STARTUP_CUSTOMIZATION_MANIFEST,
+    base::PathService::Get(FILE_STARTUP_CUSTOMIZATION_MANIFEST,
                            &startup_customization_manifest);
     LoadManifestFromFile(startup_customization_manifest);
   }
-  Init(chromeos::system::StatisticsProvider::GetInstance());
+  Init(system::StatisticsProvider::GetInstance());
 }
 
 StartupCustomizationDocument::StartupCustomizationDocument(
-    chromeos::system::StatisticsProvider* statistics_provider,
+    system::StatisticsProvider* statistics_provider,
     const std::string& manifest)
     : CustomizationDocument(kAcceptedManifestVersion) {
   LoadManifestFromString(manifest);
   Init(statistics_provider);
 }
 
-StartupCustomizationDocument::~StartupCustomizationDocument() {}
+StartupCustomizationDocument::~StartupCustomizationDocument() = default;
 
 StartupCustomizationDocument* StartupCustomizationDocument::GetInstance() {
   return base::Singleton<
@@ -309,34 +328,54 @@ StartupCustomizationDocument* StartupCustomizationDocument::GetInstance() {
 }
 
 void StartupCustomizationDocument::Init(
-    chromeos::system::StatisticsProvider* statistics_provider) {
+    system::StatisticsProvider* statistics_provider) {
   if (IsReady()) {
-    root_->GetString(kInitialLocaleAttr, &initial_locale_);
-    root_->GetString(kInitialTimezoneAttr, &initial_timezone_);
-    root_->GetString(kKeyboardLayoutAttr, &keyboard_layout_);
+    const std::string* initial_locale_ptr =
+        root_->FindString(kInitialLocaleAttr);
+    if (initial_locale_ptr)
+      initial_locale_ = *initial_locale_ptr;
 
-    std::string hwid;
-    if (statistics_provider->GetMachineStatistic(
-            chromeos::system::kHardwareClassKey, &hwid)) {
-      base::ListValue* hwid_list = NULL;
-      if (root_->GetList(kHwidMapAttr, &hwid_list)) {
-        for (size_t i = 0; i < hwid_list->GetSize(); ++i) {
-          base::DictionaryValue* hwid_dictionary = NULL;
-          std::string hwid_mask;
-          if (hwid_list->GetDictionary(i, &hwid_dictionary) &&
-              hwid_dictionary->GetString(kHwidMaskAttr, &hwid_mask)) {
-            if (base::MatchPattern(hwid, hwid_mask)) {
+    const std::string* initial_timezone_ptr =
+        root_->FindString(kInitialTimezoneAttr);
+    if (initial_timezone_ptr)
+      initial_timezone_ = *initial_timezone_ptr;
+
+    const std::string* keyboard_layout_ptr =
+        root_->FindString(kKeyboardLayoutAttr);
+    if (keyboard_layout_ptr)
+      keyboard_layout_ = *keyboard_layout_ptr;
+
+    if (const std::optional<std::string_view> hwid =
+            statistics_provider->GetMachineStatistic(
+                system::kHardwareClassKey)) {
+      base::ListValue* hwid_list = root_->FindList(kHwidMapAttr);
+      if (hwid_list) {
+        for (const base::Value& hwid_value : *hwid_list) {
+          const base::DictValue* hwid_dictionary = nullptr;
+          if (hwid_value.is_dict())
+            hwid_dictionary = &hwid_value.GetDict();
+
+          const std::string* hwid_mask =
+              hwid_dictionary ? hwid_dictionary->FindString(kHwidMaskAttr)
+                              : nullptr;
+          if (hwid_mask) {
+            if (base::MatchPattern(hwid.value(), *hwid_mask)) {
               // If HWID for this machine matches some mask, use HWID specific
               // settings.
-              std::string result;
-              if (hwid_dictionary->GetString(kInitialLocaleAttr, &result))
-                initial_locale_ = result;
+              const std::string* initial_locale =
+                  hwid_dictionary->FindString(kInitialLocaleAttr);
+              if (initial_locale)
+                initial_locale_ = *initial_locale;
 
-              if (hwid_dictionary->GetString(kInitialTimezoneAttr, &result))
-                initial_timezone_ = result;
+              const std::string* initial_timezone =
+                  hwid_dictionary->FindString(kInitialTimezoneAttr);
+              if (initial_timezone)
+                initial_timezone_ = *initial_timezone;
 
-              if (hwid_dictionary->GetString(kKeyboardLayoutAttr, &result))
-                keyboard_layout_ = result;
+              const std::string* keyboard_layout =
+                  hwid_dictionary->FindString(kKeyboardLayoutAttr);
+              if (keyboard_layout)
+                keyboard_layout_ = *keyboard_layout;
             }
             // Don't break here to allow other entires to be applied if match.
           } else {
@@ -350,18 +389,25 @@ void StartupCustomizationDocument::Init(
   }
 
   // If manifest doesn't exist still apply values from VPD.
-  statistics_provider->GetMachineStatistic(chromeos::system::kInitialLocaleKey,
-                                           &initial_locale_);
-  statistics_provider->GetMachineStatistic(
-      chromeos::system::kInitialTimezoneKey, &initial_timezone_);
-  statistics_provider->GetMachineStatistic(chromeos::system::kKeyboardLayoutKey,
-                                           &keyboard_layout_);
+  if (const std::optional<std::string_view> locale_statistic =
+          statistics_provider->GetMachineStatistic(system::kInitialLocaleKey)) {
+    initial_locale_ = std::string(locale_statistic.value());
+  }
+  if (const std::optional<std::string_view> timezone_statistic =
+          statistics_provider->GetMachineStatistic(
+              system::kInitialTimezoneKey)) {
+    initial_timezone_ = std::string(timezone_statistic.value());
+  }
+  if (const std::optional<std::string_view> keyboard_statistic =
+          statistics_provider->GetMachineStatistic(
+              system::kKeyboardLayoutKey)) {
+    keyboard_layout_ = std::string(keyboard_statistic.value());
+  }
   configured_locales_ = base::SplitString(
       initial_locale_, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
   // Convert ICU locale to chrome ("en_US" to "en-US", etc.).
-  std::for_each(configured_locales_.begin(), configured_locales_.end(),
-                base::i18n::GetCanonicalLocale);
+  std::ranges::for_each(configured_locales_, base::i18n::GetCanonicalLocale);
 
   // Let's always have configured_locales_.front() a valid entry.
   if (configured_locales_.size() == 0)
@@ -375,7 +421,7 @@ StartupCustomizationDocument::configured_locales() const {
 
 const std::string& StartupCustomizationDocument::initial_locale_default()
     const {
-  DCHECK(configured_locales_.size() > 0);
+  CHECK_GT(configured_locales_.size(), 0UL, base::NotFatalUntil::M160);
   return configured_locales_.front();
 }
 
@@ -398,7 +444,7 @@ class ServicesCustomizationDocument::ApplyingTask {
   void Finished(bool success);
 
  private:
-  ServicesCustomizationDocument* document_;
+  raw_ptr<ServicesCustomizationDocument> document_;
 
   // This is error-checking flag to prevent destroying unfinished task
   // or double finish.
@@ -412,55 +458,50 @@ ServicesCustomizationDocument::ApplyingTask::ApplyingTask(
 }
 
 ServicesCustomizationDocument::ApplyingTask::~ApplyingTask() {
-  DCHECK(!engaged_);
+  CHECK(!engaged_, base::NotFatalUntil::M160);
 }
 
 void ServicesCustomizationDocument::ApplyingTask::Finished(bool success) {
-  DCHECK(engaged_);
+  CHECK(engaged_, base::NotFatalUntil::M160);
   if (engaged_) {
     engaged_ = false;
     document_->ApplyingTaskFinished(success);
   }
 }
 
-ServicesCustomizationDocument::ServicesCustomizationDocument()
+ServicesCustomizationDocument::ServicesCustomizationDocument(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : CustomizationDocument(kAcceptedManifestVersion),
+      local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      url_loader_factory_(std::move(url_loader_factory)),
       num_retries_(0),
       load_started_(false),
-      network_delay_(
-          base::TimeDelta::FromMilliseconds(kDefaultNetworkRetryDelayMS)),
-      apply_tasks_started_(0),
-      apply_tasks_finished_(0),
-      apply_tasks_success_(0) {}
-
-ServicesCustomizationDocument::ServicesCustomizationDocument(
-    const std::string& manifest)
-    : CustomizationDocument(kAcceptedManifestVersion),
-      network_delay_(
-          base::TimeDelta::FromMilliseconds(kDefaultNetworkRetryDelayMS)),
       apply_tasks_started_(0),
       apply_tasks_finished_(0),
       apply_tasks_success_(0) {
-  LoadManifestFromString(manifest);
+  CHECK(url_loader_factory_);
+  CHECK(!g_services_customization_document);
+  g_services_customization_document = this;
 }
 
-ServicesCustomizationDocument::~ServicesCustomizationDocument() {}
+ServicesCustomizationDocument::~ServicesCustomizationDocument() {
+  CHECK_EQ(g_services_customization_document, this);
+  g_services_customization_document = nullptr;
+}
 
 // static
-ServicesCustomizationDocument* ServicesCustomizationDocument::GetInstance() {
-  if (g_test_overrides)
-    return g_test_overrides->customization_document;
-
-  return base::Singleton<
-      ServicesCustomizationDocument,
-      base::DefaultSingletonTraits<ServicesCustomizationDocument>>::get();
+ServicesCustomizationDocument& ServicesCustomizationDocument::GetInstance() {
+  return CHECK_DEREF(g_services_customization_document);
 }
 
 // static
 void ServicesCustomizationDocument::RegisterPrefs(
     PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kServicesCustomizationAppliedPref, false);
-  registry->RegisterStringPref(prefs::kCustomizationDefaultWallpaperURL,
+  registry->RegisterStringPref(ash::prefs::kCustomizationDefaultWallpaperURL,
                                std::string());
 }
 
@@ -471,27 +512,9 @@ void ServicesCustomizationDocument::RegisterProfilePrefs(
 }
 
 // static
-bool ServicesCustomizationDocument::WasOOBECustomizationApplied() {
-  PrefService* prefs = g_browser_process->local_state();
-  // prefs can be NULL in some tests.
-  if (prefs)
-    return prefs->GetBoolean(kServicesCustomizationAppliedPref);
-  else
-    return false;
-}
-
-// static
-void ServicesCustomizationDocument::SetApplied(bool val) {
-  PrefService* prefs = g_browser_process->local_state();
-  // prefs can be NULL in some tests.
-  if (prefs)
-    prefs->SetBoolean(kServicesCustomizationAppliedPref, val);
-}
-
-// static
 base::FilePath ServicesCustomizationDocument::GetCustomizedWallpaperCacheDir() {
   base::FilePath custom_wallpaper_dir;
-  if (!base::PathService::Get(chrome::DIR_CHROMEOS_CUSTOM_WALLPAPERS,
+  if (!base::PathService::Get(ash::DIR_CUSTOM_WALLPAPERS,
                               &custom_wallpaper_dir)) {
     LOG(DFATAL) << "Unable to get custom wallpaper dir.";
     return base::FilePath();
@@ -505,14 +528,14 @@ ServicesCustomizationDocument::GetCustomizedWallpaperDownloadedFileName() {
   const base::FilePath dir = GetCustomizedWallpaperCacheDir();
   if (dir.empty()) {
     NOTREACHED();
-    return dir;
   }
   return dir.Append(kCustomizationDefaultWallpaperDownloadedFile);
 }
 
 void ServicesCustomizationDocument::EnsureCustomizationApplied() {
-  if (WasOOBECustomizationApplied())
+  if (WasOOBECustomizationApplied(local_state_.get())) {
     return;
+  }
 
   // When customization manifest is fetched, applying will start automatically.
   if (IsReady())
@@ -533,14 +556,13 @@ void ServicesCustomizationDocument::StartFetching() {
     return;
 
   if (!url_.is_valid()) {
-    std::string customization_id;
-    chromeos::system::StatisticsProvider* provider =
-        chromeos::system::StatisticsProvider::GetInstance();
-    if (provider->GetMachineStatistic(chromeos::system::kCustomizationIdKey,
-                                      &customization_id) &&
-        !customization_id.empty()) {
+    system::StatisticsProvider* provider =
+        system::StatisticsProvider::GetInstance();
+    const std::optional<std::string_view> customization_id =
+        provider->GetMachineStatistic(system::kCustomizationIdKey);
+    if (customization_id && !customization_id->empty()) {
       url_ = GURL(base::StringPrintf(
-          kManifestUrl, base::ToLowerASCII(customization_id).c_str()));
+          kManifestUrl, base::ToLowerASCII(customization_id.value()).c_str()));
     } else {
       // Remember that there is no customization ID in VPD.
       OnCustomizationNotFound();
@@ -553,7 +575,7 @@ void ServicesCustomizationDocument::StartFetching() {
     if (url_.SchemeIsFile()) {
       base::ThreadPool::PostTaskAndReplyWithResult(
           FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
-          base::BindOnce(&ReadFileInBackground, base::FilePath(url_.path())),
+          base::BindOnce(&ReadFileInBackground, base::FilePath(url_.GetPath())),
           base::BindOnce(&ServicesCustomizationDocument::OnManifestRead,
                          weak_ptr_factory_.GetWeakPtr()));
     } else {
@@ -572,7 +594,6 @@ void ServicesCustomizationDocument::OnManifestRead(
 
 void ServicesCustomizationDocument::StartFileFetch() {
   DelayNetworkCall(
-      network_delay_,
       base::BindOnce(&ServicesCustomizationDocument::DoStartFileFetch,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -584,12 +605,11 @@ void ServicesCustomizationDocument::DoStartFileFetch() {
   request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   request->headers.SetHeader("Accept", "application/json");
 
-  url_loader_ = network::SimpleURLLoader::Create(std::move(request),
-                                                 NO_TRAFFIC_ANNOTATION_YET);
+  url_loader_ = network::SimpleURLLoader::Create(
+      std::move(request), kCustomizationDocumentNetworkTag);
 
   url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
-      g_test_overrides ? g_test_overrides->url_loader_factory.get()
-                       : g_browser_process->shared_url_loader_factory().get(),
+      url_loader_factory_.get(),
       base::BindOnce(&ServicesCustomizationDocument::OnSimpleLoaderComplete,
                      base::Unretained(this)));
 }
@@ -597,34 +617,30 @@ void ServicesCustomizationDocument::DoStartFileFetch() {
 bool ServicesCustomizationDocument::LoadManifestFromString(
     const std::string& manifest) {
   if (CustomizationDocument::LoadManifestFromString(manifest)) {
-    LogManifestLoadResult(HISTOGRAM_LOAD_RESULT_SUCCESS);
     OnManifestLoaded();
     return true;
   }
 
-  LogManifestLoadResult(HISTOGRAM_LOAD_RESULT_PARSING_ERROR);
   return false;
 }
 
 void ServicesCustomizationDocument::OnManifestLoaded() {
-  if (!WasOOBECustomizationApplied())
+  if (!WasOOBECustomizationApplied(local_state_.get())) {
     ApplyOOBECustomization();
+  }
 
-  std::unique_ptr<base::DictionaryValue> prefs =
-      GetDefaultAppsInProviderFormat(*root_);
-  for (ExternalLoaders::iterator it = external_loaders_.begin();
-       it != external_loaders_.end(); ++it) {
-    if (*it) {
-      UpdateCachedManifest((*it)->profile());
-      (*it)->SetCurrentApps(
-          std::unique_ptr<base::DictionaryValue>(prefs->DeepCopy()));
-      SetOemFolderName((*it)->profile(), *root_);
+  auto prefs = GetDefaultAppsInProviderFormat(*root_);
+  for (auto& external_loader : external_loaders_) {
+    if (external_loader) {
+      UpdateCachedManifest(external_loader->profile());
+      external_loader->SetCurrentApps(prefs.Clone());
+      SetOemFolderName(external_loader->profile(), *root_);
     }
   }
 }
 
 void ServicesCustomizationDocument::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   int response_code = -1;
   std::string mime_type;
   if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers) {
@@ -645,7 +661,7 @@ void ServicesCustomizationDocument::OnSimpleLoaderComplete(
           FROM_HERE,
           base::BindOnce(&ServicesCustomizationDocument::StartFileFetch,
                          weak_ptr_factory_.GetWeakPtr()),
-          base::TimeDelta::FromSeconds(kRetriesDelayInSec));
+          base::Seconds(kRetriesDelayInSec));
       return;
     }
     // This doesn't stop fetching manifest on next restart.
@@ -653,7 +669,6 @@ void ServicesCustomizationDocument::OnSimpleLoaderComplete(
                << " response code = " << response_code
                << " URL = " << url_.spec();
 
-    LogManifestLoadResult(HISTOGRAM_LOAD_RESULT_RETRIES_FAIL);
   }
   load_started_ = false;
 }
@@ -671,18 +686,18 @@ bool ServicesCustomizationDocument::GetDefaultWallpaperUrl(
   if (!IsReady())
     return false;
 
-  std::string url;
-  if (!root_->GetString(kDefaultWallpaperAttr, &url))
+  const std::string* url = root_->FindString(kDefaultWallpaperAttr);
+  if (!url)
     return false;
 
-  *out_url = GURL(url);
+  *out_url = GURL(*url);
   return true;
 }
 
-std::unique_ptr<base::DictionaryValue>
-ServicesCustomizationDocument::GetDefaultApps() const {
+std::optional<base::DictValue> ServicesCustomizationDocument::GetDefaultApps()
+    const {
   if (!IsReady())
-    return nullptr;
+    return std::nullopt;
 
   return GetDefaultAppsInProviderFormat(*root_);
 }
@@ -695,37 +710,51 @@ std::string ServicesCustomizationDocument::GetOemAppsFolderName(
   return GetOemAppsFolderNameImpl(locale, *root_);
 }
 
-std::unique_ptr<base::DictionaryValue>
-ServicesCustomizationDocument::GetDefaultAppsInProviderFormat(
-    const base::DictionaryValue& root) {
-  std::unique_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
-  const base::ListValue* apps_list = NULL;
-  if (root.GetList(kDefaultAppsAttr, &apps_list)) {
-    for (size_t i = 0; i < apps_list->GetSize(); ++i) {
+base::DictValue ServicesCustomizationDocument::GetDefaultAppsInProviderFormat(
+    const base::DictValue& root) {
+  base::DictValue prefs;
+  const base::ListValue* apps_list = root.FindList(kDefaultAppsAttr);
+  if (apps_list) {
+    for (const base::Value& app_entry_value : *apps_list) {
       std::string app_id;
-      const base::DictionaryValue* app_entry = nullptr;
-      std::unique_ptr<base::DictionaryValue> entry;
-      if (apps_list->GetString(i, &app_id)) {
-        entry = std::make_unique<base::DictionaryValue>();
-      } else if (apps_list->GetDictionary(i, &app_entry)) {
-        if (!app_entry->GetString(kIdAttr, &app_id)) {
+      base::DictValue entry;
+      if (app_entry_value.is_string()) {
+        app_id = app_entry_value.GetString();
+      } else if (app_entry_value.is_dict()) {
+        const base::DictValue& app_entry = app_entry_value.GetDict();
+        const std::string* app_id_ptr = app_entry.FindString(kIdAttr);
+        if (!app_id_ptr) {
           LOG(ERROR) << "Wrong format of default application list";
-          prefs->Clear();
+          prefs.clear();
           break;
         }
-        entry = app_entry->CreateDeepCopy();
-        entry->Remove(kIdAttr, nullptr);
+        app_id = *app_id_ptr;
+        entry = app_entry.Clone();
+        entry.Remove(kIdAttr);
       } else {
         LOG(ERROR) << "Wrong format of default application list";
-        prefs->Clear();
+        prefs.clear();
         break;
       }
-      if (!entry->HasKey(
-              extensions::ExternalProviderImpl::kExternalUpdateUrl)) {
-        entry->SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
-                         extension_urls::GetWebstoreUpdateUrl().spec());
+      base::Value* update_url_value =
+          entry.Find(ExternalProviderImpl::kExternalUpdateUrl);
+      // Fix for crbug.com/502771678. OEM apps must update from the webstore.
+      // Providing a non-webstore update URL is a fatal error.
+      if (update_url_value) {
+        CHECK(update_url_value->is_string());
+        GURL update_url(update_url_value->GetString());
+        CHECK(update_url.is_valid());
+        if (!extension_urls::IsWebstoreUpdateUrl(update_url)) {
+          // Use log because official builds strip the stream passed to CHECK.
+          LOG(FATAL) << "Invalid update URL: " << update_url;
+        }
+        // If we get here, an extension provided a valid update URL.
+      } else {
+        // Provide the default update URL.
+        entry.Set(ExternalProviderImpl::kExternalUpdateUrl,
+                  extension_urls::GetWebstoreUpdateUrl().spec());
       }
-      prefs->SetPath(app_id, base::Value::FromUniquePtrValue(std::move(entry)));
+      prefs.SetByDottedPath(app_id, std::move(entry));
     }
   }
 
@@ -733,7 +762,7 @@ ServicesCustomizationDocument::GetDefaultAppsInProviderFormat(
 }
 
 void ServicesCustomizationDocument::UpdateCachedManifest(Profile* profile) {
-  profile->GetPrefs()->Set(kServicesCustomizationKey, *root_);
+  profile->GetPrefs()->SetDict(kServicesCustomizationKey, root_->Clone());
 }
 
 extensions::ExternalLoader* ServicesCustomizationDocument::CreateExternalLoader(
@@ -747,13 +776,12 @@ extensions::ExternalLoader* ServicesCustomizationDocument::CreateExternalLoader(
     loader->SetCurrentApps(GetDefaultAppsInProviderFormat(*root_));
     SetOemFolderName(profile, *root_);
   } else {
-    const base::DictionaryValue* root =
-        profile->GetPrefs()->GetDictionary(kServicesCustomizationKey);
-    std::string version;
-    if (root && root->GetString(kVersionAttr, &version)) {
+    const base::DictValue& root =
+        profile->GetPrefs()->GetDict(kServicesCustomizationKey);
+    if (root.FindString(kVersionAttr)) {
       // If version exists, profile has cached version of customization.
-      loader->SetCurrentApps(GetDefaultAppsInProviderFormat(*root));
-      SetOemFolderName(profile, *root);
+      loader->SetCurrentApps(GetDefaultAppsInProviderFormat(root));
+      SetOemFolderName(profile, root);
     } else {
       // StartFetching will be called from ServicesCustomizationExternalLoader
       // when StartLoading is called. We can't initiate manifest fetch here
@@ -765,15 +793,14 @@ extensions::ExternalLoader* ServicesCustomizationDocument::CreateExternalLoader(
 }
 
 void ServicesCustomizationDocument::OnCustomizationNotFound() {
-  LogManifestLoadResult(HISTOGRAM_LOAD_RESULT_FILE_NOT_FOUND);
   LoadManifestFromString(kEmptyServicesCustomizationManifest);
 }
 
 void ServicesCustomizationDocument::SetOemFolderName(
     Profile* profile,
-    const base::DictionaryValue& root) {
-  std::string locale = g_browser_process->GetApplicationLocale();
-  std::string name = GetOemAppsFolderNameImpl(locale, root);
+    const base::DictValue& root) {
+  std::string name = GetOemAppsFolderNameImpl(
+      std::string(application_locale_storage_->GetTag().tag_string()), root);
   if (name.empty())
     name = chromeos::default_app_order::GetOemAppsFolderName();
   if (!name.empty()) {
@@ -790,42 +817,24 @@ void ServicesCustomizationDocument::SetOemFolderName(
 
 std::string ServicesCustomizationDocument::GetOemAppsFolderNameImpl(
     const std::string& locale,
-    const base::DictionaryValue& root) const {
-  return GetLocaleSpecificStringImpl(
-      &root, locale, kLocalizedContent, kDefaultAppsFolderName);
-}
-
-// static
-void ServicesCustomizationDocument::InitializeForTesting(
-    scoped_refptr<network::SharedURLLoaderFactory> factory) {
-  g_test_overrides = new CustomizationDocumentTestOverride;
-  g_test_overrides->customization_document = new ServicesCustomizationDocument;
-  g_test_overrides->customization_document->network_delay_ = base::TimeDelta();
-  g_test_overrides->url_loader_factory = std::move(factory);
-}
-
-// static
-void ServicesCustomizationDocument::ShutdownForTesting() {
-  delete g_test_overrides->customization_document;
-  delete g_test_overrides;
-  g_test_overrides = nullptr;
+    const base::DictValue& root) const {
+  return GetLocaleSpecificStringImpl(root, locale, kLocalizedContent,
+                                     kDefaultAppsFolderName);
 }
 
 void ServicesCustomizationDocument::StartOEMWallpaperDownload(
     const GURL& wallpaper_url,
     std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
-  DCHECK(wallpaper_url.is_valid());
+  CHECK(wallpaper_url.is_valid(), base::NotFatalUntil::M160);
 
   const base::FilePath dir = GetCustomizedWallpaperCacheDir();
   const base::FilePath file = GetCustomizedWallpaperDownloadedFileName();
   if (dir.empty() || file.empty()) {
     NOTREACHED();
-    applying->Finished(false);
-    return;
   }
 
   wallpaper_downloader_ = std::make_unique<CustomizationWallpaperDownloader>(
-      wallpaper_url, dir, file,
+      url_loader_factory_, wallpaper_url, dir, file,
       base::BindOnce(&ServicesCustomizationDocument::OnOEMWallpaperDownloaded,
                      weak_ptr_factory_.GetWeakPtr(), std::move(applying)));
 
@@ -842,9 +851,8 @@ void ServicesCustomizationDocument::CheckAndApplyWallpaper() {
 
   GURL wallpaper_url;
   if (!GetDefaultWallpaperUrl(&wallpaper_url)) {
-    PrefService* pref_service = g_browser_process->local_state();
     std::string current_url =
-        pref_service->GetString(prefs::kCustomizationDefaultWallpaperURL);
+        local_state_->GetString(ash::prefs::kCustomizationDefaultWallpaperURL);
     if (!current_url.empty()) {
       VLOG(1) << "ServicesCustomizationDocument::CheckAndApplyWallpaper() : "
               << "No wallpaper URL attribute in customization document, "
@@ -856,7 +864,7 @@ void ServicesCustomizationDocument::CheckAndApplyWallpaper() {
   }
 
   // Should fail if this ever happens in tests.
-  DCHECK(wallpaper_url.is_valid());
+  CHECK(wallpaper_url.is_valid(), base::NotFatalUntil::M160);
   if (!wallpaper_url.is_valid()) {
     if (!wallpaper_url.is_empty()) {
       LOG(WARNING) << "Invalid Customized Wallpaper URL '"
@@ -882,9 +890,9 @@ void ServicesCustomizationDocument::CheckAndApplyWallpaper() {
 void ServicesCustomizationDocument::OnCheckedWallpaperCacheExists(
     std::unique_ptr<bool> exists,
     std::unique_ptr<ServicesCustomizationDocument::ApplyingTask> applying) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(exists);
-  DCHECK(applying);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(exists, base::NotFatalUntil::M160);
+  CHECK(applying, base::NotFatalUntil::M160);
 
   ApplyWallpaper(*exists, std::move(applying));
 }
@@ -895,10 +903,8 @@ void ServicesCustomizationDocument::ApplyWallpaper(
   GURL wallpaper_url;
   const bool wallpaper_url_present = GetDefaultWallpaperUrl(&wallpaper_url);
 
-  PrefService* pref_service = g_browser_process->local_state();
-
   std::string current_url =
-      pref_service->GetString(prefs::kCustomizationDefaultWallpaperURL);
+      local_state_->GetString(ash::prefs::kCustomizationDefaultWallpaperURL);
   if (current_url != wallpaper_url.spec()) {
     if (wallpaper_url_present) {
       VLOG(1) << "ServicesCustomizationDocument::ApplyWallpaper() : "
@@ -920,7 +926,7 @@ void ServicesCustomizationDocument::ApplyWallpaper(
     return;
   }
 
-  DCHECK(wallpaper_url.is_valid());
+  CHECK(wallpaper_url.is_valid(), base::NotFatalUntil::M160);
 
   // Never update system-wide wallpaper (i.e. do not check
   // current_url == wallpaper_url.spec() )
@@ -940,13 +946,15 @@ void ServicesCustomizationDocument::OnOEMWallpaperDownloaded(
     bool success,
     const GURL& wallpaper_url) {
   if (success) {
-    DCHECK(wallpaper_url.is_valid());
+    CHECK(wallpaper_url.is_valid(), base::NotFatalUntil::M160);
 
     VLOG(1) << "Setting default wallpaper to '"
             << GetCustomizedWallpaperDownloadedFileName().value() << "' ('"
             << wallpaper_url.spec() << "')";
+
     customization_wallpaper_util::StartSettingCustomizedDefaultWallpaper(
-        wallpaper_url, GetCustomizedWallpaperDownloadedFileName());
+        &local_state_.get(), wallpaper_url,
+        GetCustomizedWallpaperDownloadedFileName());
   }
   wallpaper_downloader_.reset();
   applying->Finished(success);
@@ -957,7 +965,8 @@ void ServicesCustomizationDocument::ApplyingTaskStarted() {
 }
 
 void ServicesCustomizationDocument::ApplyingTaskFinished(bool success) {
-  DCHECK_GT(apply_tasks_started_, apply_tasks_finished_);
+  CHECK_GT(apply_tasks_started_, apply_tasks_finished_,
+           base::NotFatalUntil::M160);
   ++apply_tasks_finished_;
 
   apply_tasks_success_ += success;
@@ -965,8 +974,9 @@ void ServicesCustomizationDocument::ApplyingTaskFinished(bool success) {
   if (apply_tasks_started_ != apply_tasks_finished_)
     return;
 
-  if (apply_tasks_success_ == apply_tasks_finished_)
-    SetApplied(true);
+  if (apply_tasks_success_ == apply_tasks_finished_) {
+    SetApplied(local_state_.get(), true);
+  }
 }
 
 }  // namespace ash

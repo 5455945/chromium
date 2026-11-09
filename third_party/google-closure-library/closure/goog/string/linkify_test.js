@@ -1,16 +1,8 @@
-// Copyright 2008 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.string.linkifyTest');
 goog.setTestOnly();
@@ -27,11 +19,18 @@ const testingDom = goog.require('goog.testing.dom');
 /** @type {!HTMLDivElement} */
 const div = dom.createElement(TagName.DIV);
 
-function assertLinkify(comment, input, expected, preserveNewlines = undefined) {
+/**
+ * @private
+ */
+function assertLinkify(
+    comment, input, expected, preserveNewlines = undefined,
+    preserveSpacesAndTabs = undefined) {
   assertEquals(
-      comment, expected,
-      SafeHtml.unwrap(linkify.linkifyPlainTextAsHtml(
-          input, {rel: '', target: ''}, preserveNewlines)));
+      comment, expected, SafeHtml.unwrap(linkify.linkifyPlainTextAsHtml(input, {
+        attributes: {rel: '', target: ''},
+        preserveNewlines,
+        preserveSpacesAndTabs,
+      })));
 }
 
 testSuite({
@@ -336,7 +335,7 @@ testSuite({
         linkify.linkifyPlainTextAsHtml(
             'The link for www.google.com is located somewhere in ' +
                 'https://www.google.fr/?hl=en, you should find it easily.',
-            {rel: '', target: ''}));
+            {attributes: {rel: '', target: ''}}));
     testingDom.assertHtmlContentsMatch(
         'The link for <a href="http://www.google.com">www.google.com<\/a> is ' +
             'located somewhere in ' +
@@ -350,7 +349,7 @@ testSuite({
         div,
         linkify.linkifyPlainTextAsHtml(
             'Attribute with <class> name www.w3c.org.',
-            {'class': 'link-added'}));
+            {attributes: {'class': 'link-added'}}));
     testingDom.assertHtmlContentsMatch(
         'Attribute with &lt;class&gt; name <a href="http://www.w3c.org" ' +
             'target="_blank" rel="nofollow" class="link-added">www.w3c.org<\/a>.',
@@ -494,6 +493,10 @@ testSuite({
         'Link inside curly brackets', '{http://www.google.com/}',
         '{<a href="http://www.google.com/">' +
             'http://www.google.com/<\/a>}');
+    assertLinkify(
+        'Curly brackets inside link', 'http://www.google.com/abc{arg=1}',
+        '<a href="http://www.google.com/abc{arg=1}">' +
+            'http://www.google.com/abc{arg=1}<\/a>');
   },
 
   testEndsWithPunctuation_closingPairThenSingle() {
@@ -560,5 +563,51 @@ testSuite({
         'Preserving newlines with no links', 'Line 1\nLine 2',
         'Line 1<br>Line 2',
         /* preserveNewlines */ true);
+  },
+
+  testPreserveSpacesAndTabs() {
+    assertLinkify(
+        'Preserving spaces', ' Example:\n http://www.google.com/ ',
+        '&#160;Example:\n&#160;<a href="http://www.google.com/">http://www.google.com/<\/a>&#160;',
+        /* preserveNewlines */ false,
+        /* preserveSpacesAndTabs */ true);
+    assertLinkify(
+        'Preserving spaces with no links', ' Line 1\n  Line 2 ',
+        '&#160;Line 1\n&#160; Line 2 ',
+        /* preserveNewlines */ false,
+        /* preserveSpacesAndTabs */ true);
+    assertLinkify(
+        'Preserving tabs', 'Example:\thttp://www.google.com/',
+        'Example:<span style="white-space:pre">\t</span><a href="http://www.google.com/">http://www.google.com/<\/a>',
+        /* preserveNewlines */ false,
+        /* preserveSpacesAndTabs */ true);
+    assertLinkify(
+        'Preserving tabs with no links', 'Column 1\t\tColumn 2',
+        'Column 1<span style="white-space:pre">\t\t</span>Column 2',
+        /* preserveNewlines */ false,
+        /* preserveSpacesAndTabs */ true);
+  },
+
+  testPreserveNewlinesSpacesAndTabs() {
+    assertLinkify(
+        'Preserving spaces', ' Example:\n http://www.google.com/ ',
+        '&#160;Example:<br>&#160;<a href="http://www.google.com/">http://www.google.com/<\/a>&#160;',
+        /* preserveNewlines */ true,
+        /* preserveSpacesAndTabs */ true);
+    assertLinkify(
+        'Preserving spaces with no links', ' Line 1\n  Line 2 ',
+        '&#160;Line 1<br>&#160; Line 2 ',
+        /* preserveNewlines */ true,
+        /* preserveSpacesAndTabs */ true);
+    assertLinkify(
+        'Preserving tabs', 'Example:\n\thttp://www.google.com/',
+        'Example:<br><span style="white-space:pre">\t</span><a href="http://www.google.com/">http://www.google.com/<\/a>',
+        /* preserveNewlines */ true,
+        /* preserveSpacesAndTabs */ true);
+    assertLinkify(
+        'Preserving tabs with no links', 'Line 1\n\t\tLine 2',
+        'Line 1<br><span style="white-space:pre">\t\t</span>Line 2',
+        /* preserveNewlines */ true,
+        /* preserveSpacesAndTabs */ true);
   },
 });

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "ui/base/linux/linux_ui_delegate.h"
+#include "ui/linux/linux_ui_delegate.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
 #include "ui/ozone/platform/wayland/host/wayland_surface.h"
@@ -20,7 +20,7 @@ namespace ui {
 
 LinuxUiDelegateWayland::LinuxUiDelegateWayland(WaylandConnection* connection)
     : connection_(connection) {
-  DCHECK(connection_);
+  CHECK(connection_, base::NotFatalUntil::M163);
 }
 
 LinuxUiDelegateWayland::~LinuxUiDelegateWayland() = default;
@@ -29,24 +29,40 @@ LinuxUiBackend LinuxUiDelegateWayland::GetBackend() const {
   return LinuxUiBackend::kWayland;
 }
 
-bool LinuxUiDelegateWayland::ExportWindowHandle(
-    gfx::AcceleratedWidget parent,
-    base::OnceCallback<void(const std::string&)> callback) {
-  auto* parent_window =
-      connection_->wayland_window_manager()->GetWindow(parent);
+void LinuxUiDelegateWayland::ExportWindowHandle(
+    gfx::AcceleratedWidget window_id,
+    base::OnceCallback<void(std::string)> callback) {
+  auto* parent_window = connection_->window_manager()->GetWindow(window_id);
+  auto* toplevel_parent = parent_window;
+  while (toplevel_parent && !toplevel_parent->AsWaylandToplevelWindow()) {
+    toplevel_parent = toplevel_parent->parent_window();
+  }
+
   auto* foreign = connection_->xdg_foreign();
-  if (!parent_window || !foreign)
-    return false;
+  if (!toplevel_parent || !foreign) {
+    std::move(callback).Run("");
+    return;
+  }
 
-  DCHECK_EQ(parent_window->type(), PlatformWindowType::kWindow);
+  CHECK_EQ(toplevel_parent->type(), PlatformWindowType::kWindow,
+           base::NotFatalUntil::M163);
 
-  foreign->ExportSurfaceToForeign(parent_window, std::move(callback));
-  return true;
+  foreign->ExportSurfaceToForeign(
+      toplevel_parent->AsWaylandToplevelWindow(),
+      base::BindOnce(&LinuxUiDelegateWayland::OnHandleForward,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-int LinuxUiDelegateWayland::GetKeyState() {
-  // TODO(crbug/1159460): Test fcitx unikey IME on ozone/wayland.
-  return connection_->event_source()->keyboard_modifiers();
+void LinuxUiDelegateWayland::OnHandleForward(
+    base::OnceCallback<void(std::string)> callback,
+    const std::string& handle) {
+  // An empty handle means export failed; return it as-is instead of a
+  // "wayland:" prefix with no handle.
+  if (handle.empty()) {
+    std::move(callback).Run(std::string());
+    return;
+  }
+  std::move(callback).Run("wayland:" + handle);
 }
 
 }  // namespace ui

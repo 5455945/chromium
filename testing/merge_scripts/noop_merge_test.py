@@ -1,26 +1,19 @@
 #!/usr/bin/env python
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import json
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 
 import common_merge_script_tests
-
-THIS_DIR = os.path.dirname(__file__)
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(THIS_DIR, '..', 'resources')))
 import noop_merge
 
 
 class NoopMergeTest(unittest.TestCase):
-
   def setUp(self):
     super(NoopMergeTest, self).setUp()
     self.temp_dir = tempfile.mkdtemp()
@@ -56,11 +49,11 @@ class NoopMergeTest(unittest.TestCase):
       json.dump(input_json2_contents, f)
     output_json = os.path.join(self.temp_dir, 'output.json')
     self.assertNotEqual(
-        0, noop_merge.noop_merge(output_json, [input_json1, input_json2]))
+      0, noop_merge.noop_merge(output_json, [input_json1, input_json2])
+    )
 
 
 class CommandLineTest(common_merge_script_tests.CommandLineTest):
-
   def __init__(self, methodName='runTest'):
     super(CommandLineTest, self).__init__(methodName, noop_merge)
 

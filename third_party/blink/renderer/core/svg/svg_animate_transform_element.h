@@ -33,6 +33,9 @@ class SVGAnimateTransformElement final : public SVGAnimateElement {
 
  public:
   explicit SVGAnimateTransformElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGAnimateTransformElement;
+  }
 
  private:
   bool HasValidAnimation() const override;
@@ -40,7 +43,8 @@ class SVGAnimateTransformElement final : public SVGAnimateElement {
 
   void ParseAttribute(const AttributeModificationParams&) override;
 
-  SVGPropertyBase* ParseValue(const String&) const override;
+  SVGPropertyBase* CreateUnderlyingValueForAnimation() const override;
+  ParsedAnimationValue ParseValue(const String&) const override;
 
   SVGTransformType transform_type_;
 };

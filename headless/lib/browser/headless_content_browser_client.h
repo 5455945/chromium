@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,35 +8,48 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/common/child_process_id.h"
 #include "headless/public/headless_browser.h"
+#include "services/network/network_service.h"
 #include "third_party/blink/public/mojom/badging/badging.mojom.h"
+#include "third_party/blink/public/mojom/persistent_renderer_prefs.mojom.h"
 
 namespace headless {
 
+class HeadlessBluetoothDelegate;
 class HeadlessBrowserImpl;
 
 class HeadlessContentBrowserClient : public content::ContentBrowserClient {
  public:
   explicit HeadlessContentBrowserClient(HeadlessBrowserImpl* browser);
+
+  HeadlessContentBrowserClient(const HeadlessContentBrowserClient&) = delete;
+  HeadlessContentBrowserClient& operator=(const HeadlessContentBrowserClient&) =
+      delete;
+
   ~HeadlessContentBrowserClient() override;
 
   // content::ContentBrowserClient implementation:
   std::unique_ptr<content::BrowserMainParts> CreateBrowserMainParts(
-      const content::MainFunctionParams&) override;
-  void OverrideWebkitPrefs(content::WebContents* web_contents,
-                           blink::web_pref::WebPreferences* prefs) override;
+      bool is_integration_test) override;
+  void OverrideWebPreferences(content::WebContents* web_contents,
+                              content::SiteInstance& main_frame_site,
+                              blink::web_pref::WebPreferences* prefs) override;
   void RegisterBrowserInterfaceBindersForFrame(
       content::RenderFrameHost* render_frame_host,
       mojo::BinderMapWithContext<content::RenderFrameHost*>* map) override;
+  void RegisterAssociatedInterfaceBindersForRenderFrameHost(
+      content::RenderFrameHost& render_frame_host,
+      blink::AssociatedInterfaceRegistry& associated_registry) override;
   std::unique_ptr<content::DevToolsManagerDelegate>
   CreateDevToolsManagerDelegate() override;
-  scoped_refptr<content::QuotaPermissionContext> CreateQuotaPermissionContext()
-      override;
   content::GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
       content::BrowserContext* context) override;
-#if defined(OS_POSIX) && !defined(OS_MAC)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
   void GetAdditionalMappedFilesForChildProcess(
       const base::CommandLine& command_line,
       int child_process_id,
@@ -44,23 +57,34 @@ class HeadlessContentBrowserClient : public content::ContentBrowserClient {
 #endif
   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
                                       int child_process_id) override;
-  std::string GetApplicationLocale() override;
+  base::i18n::LanguageTag GetApplicationLocale() override;
   std::string GetAcceptLangs(content::BrowserContext* context) override;
   void AllowCertificateError(
       content::WebContents* web_contents,
       int cert_error,
       const net::SSLInfo& ssl_info,
       const GURL& request_url,
-      bool is_main_frame_request,
+      bool is_primary_main_frame_request,
       bool strict_enforcement,
       base::OnceCallback<void(content::CertificateRequestResultType)> callback)
       override;
   base::OnceClosure SelectClientCertificate(
+      content::BrowserContext* browser_context,
+      content::ChildProcessId process_id,
       content::WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
       std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
   bool ShouldEnableStrictSiteIsolation() override;
+  bool ShouldIsolateErrorPage(bool in_main_frame) override;
+  bool ShouldAllowProcessPerSiteForMultipleMainFrames(
+      content::BrowserContext* context) override;
+  std::unique_ptr<content::DigitalIdentityProvider>
+  CreateDigitalIdentityProvider() override;
+
+  bool IsPrivacySandboxReportingDestinationAttested(
+      content::BrowserContext* browser_context,
+      const url::Origin& destination_origin) override;
 
   void ConfigureNetworkContextParams(
       content::BrowserContext* context,
@@ -72,31 +96,59 @@ class HeadlessContentBrowserClient : public content::ContentBrowserClient {
 
   std::string GetProduct() override;
   std::string GetUserAgent() override;
+  blink::UserAgentMetadata GetUserAgentMetadata() override;
 
   bool CanAcceptUntrustedExchangesIfNeeded() override;
-  device::GeolocationManager* GetGeolocationManager() override;
-
-#if defined(HEADLESS_USE_POLICY)
-  std::vector<std::unique_ptr<content::NavigationThrottle>>
-  CreateThrottlesForNavigation(content::NavigationHandle* handle) override;
+  device::GeolocationSystemPermissionManager*
+  GetGeolocationSystemPermissionManager() override;
+#if BUILDFLAG(IS_WIN)
+  void SessionEnding(std::optional<DWORD> control_type) override;
 #endif
+
+  void OnNetworkServiceCreated(
+      ::network::mojom::NetworkService* network_service) override;
+
+  void GetHyphenationDictionary(
+      base::OnceCallback<void(const base::FilePath&)> callback) override;
+
+  std::unique_ptr<content::VideoOverlayWindow>
+  CreateWindowForVideoPictureInPicture(
+      content::VideoPictureInPictureWindowController* controller) override;
+
+  bool ShouldSandboxNetworkService() override;
+
+  content::BluetoothDelegate* GetBluetoothDelegate() override;
+
+  bool IsRendererProcessPriorityEnabled() override;
+  bool IsClipboardPasteAllowed(
+      content::RenderFrameHost* render_frame_host) override;
+  bool IsHandledURL(const GURL& url) override;
 
  private:
   class StubBadgeService;
+
+  class StubPersistentRendererPrefsService;
 
   void BindBadgeService(
       content::RenderFrameHost* render_frame_host,
       mojo::PendingReceiver<blink::mojom::BadgeService> receiver);
 
-  HeadlessBrowserImpl* browser_;  // Not owned.
+  void BindPersistentRendererPrefsService(
+      content::RenderFrameHost* render_frame_host,
+      mojo::PendingReceiver<blink::mojom::PersistentRendererPrefsService>
+          receiver);
 
-  // We store the callback here because we may call it from the I/O thread.
-  HeadlessBrowser::Options::AppendCommandLineFlagsCallback
-      append_command_line_flags_callback_;
+  void HandleExplicitlyAllowedPorts(
+      ::network::mojom::NetworkService* network_service);
+
+  raw_ptr<HeadlessBrowserImpl> browser_;  // Not owned.
 
   std::unique_ptr<StubBadgeService> stub_badge_service_;
 
-  DISALLOW_COPY_AND_ASSIGN(HeadlessContentBrowserClient);
+  std::unique_ptr<StubPersistentRendererPrefsService>
+      stub_persistent_renderer_prefs_service_;
+
+  std::unique_ptr<HeadlessBluetoothDelegate> bluetooth_delegate_;
 };
 
 }  // namespace headless

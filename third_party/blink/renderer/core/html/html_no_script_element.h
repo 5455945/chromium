@@ -41,8 +41,12 @@ class HTMLNoScriptElement final : public HTMLElement {
  public:
   explicit HTMLNoScriptElement(Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLNoScriptElement;
+  }
+
  private:
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override;
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,18 @@ package org.chromium.chrome.browser.thumbnail.generator;
 
 import android.graphics.Bitmap;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 
-/**
- * Contains local media metadata and thumbnails.
- */
+/** Contains local media metadata and thumbnails. */
 public class ThumbnailMediaData {
-    /**
-     * The duration of the media file in seconds. Or -1 if no duration in the metadata.
-     */
+    /** The duration of the media file in seconds. Or -1 if no duration in the metadata. */
     public final double duration;
 
-    /**
-     * Title of the media.
-     */
+    /** Title of the media. */
     public final String title;
 
-    /**
-     * Artist of the media.
-     */
+    /** Artist of the media. */
     public final String artist;
 
     /**
@@ -34,7 +27,11 @@ public class ThumbnailMediaData {
     public final Bitmap thumbnail;
 
     @CalledByNative
-    private ThumbnailMediaData(double duration, String title, String artist, Bitmap thumbnail) {
+    private ThumbnailMediaData(
+            double duration,
+            @JniType("std::string") String title,
+            @JniType("std::string") String artist,
+            @JniType("SkBitmap") Bitmap thumbnail) {
         this.duration = duration;
         this.title = title;
         this.artist = artist;

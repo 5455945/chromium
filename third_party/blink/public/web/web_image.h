@@ -31,9 +31,10 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_IMAGE_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_IMAGE_H_
 
+#include <vector>
+
 #include "base/time/time.h"
 #include "third_party/blink/public/platform/web_common.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace gfx {
@@ -45,7 +46,7 @@ namespace blink {
 class WebData;
 
 // APIs to decode an image from a string of data.
-class WebImage {
+class BLINK_EXPORT WebImage {
  public:
   // An image with a duration associated. An animation is a sequence of
   // AnimationFrames played in succession.
@@ -59,8 +60,7 @@ class WebImage {
   // the first frame is returned. If the image contains EXIF data that changes
   // the orientation, the returned image will be rotated such that the result is
   // top-left oriented.
-  BLINK_EXPORT static SkBitmap FromData(const WebData&,
-                                        const gfx::Size& desired_size);
+  static SkBitmap FromData(const WebData&, const gfx::Size& desired_size);
 
   // Decodes the given data as an SVG image. If the SVG is well-formed, an
   // image of the first frame is returned. If an error is encountered an empty
@@ -69,16 +69,14 @@ class WebImage {
   // image - matching the sizing behavior of an <img> with 'width' and 'height'
   // specified to |desired_size| pixels. If empty, the intrinsic size (if any)
   // of the image will be used.
-  BLINK_EXPORT static SkBitmap DecodeSVG(const WebData&,
-                                         const gfx::Size& desired_size);
+  static SkBitmap DecodeSVG(const WebData&, const gfx::Size& desired_size);
 
   // Returns a list of all frames in the image. Only the first frame at each
   // pixel size will be returned.
-  BLINK_EXPORT static WebVector<SkBitmap> FramesFromData(const WebData&);
+  static std::vector<SkBitmap> FramesFromData(const WebData&);
 
   // Returns a list of all animation frames in the image.
-  BLINK_EXPORT static WebVector<AnimationFrame> AnimationFromData(
-      const WebData&);
+  static std::vector<AnimationFrame> AnimationFromData(const WebData&);
 
   WebImage() = delete;
 };

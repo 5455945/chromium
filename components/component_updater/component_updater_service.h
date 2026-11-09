@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,33 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
 #include "base/version.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/update_client/update_client.h"
-#include "url/gurl.h"
 
 class ComponentsHandler;
 class PluginObserver;
 
+namespace ash {
+class SmartDimComponentIntegrationTest;
+}
+
 namespace policy {
 class ComponentUpdaterPolicyTest;
+}
+
+namespace screen_ai {
+class ScreenAIDownloaderNonChromeOS;
 }
 
 namespace speech {
@@ -32,57 +41,102 @@ class SodaInstallerImpl;
 }
 
 namespace update_client {
-class ComponentInstaller;
 class Configurator;
 struct CrxComponent;
 struct CrxUpdateItem;
+}  // namespace update_client
+
+namespace extensions {
+class AutotestPrivateLoadSmartDimComponentFunction;
 }
 
 namespace component_updater {
 
 // Called when a non-blocking call in this module completes.
-using Callback = update_client::Callback;
+using Callback = ::update_client::Callback;
 
 class OnDemandUpdater;
 class UpdateScheduler;
 
-using Configurator = update_client::Configurator;
-using CrxComponent = update_client::CrxComponent;
-using CrxUpdateItem = update_client::CrxUpdateItem;
+using Configurator = ::update_client::Configurator;
+using CrxComponent = ::update_client::CrxComponent;
+using CrxUpdateItem = ::update_client::CrxUpdateItem;
 
 struct ComponentInfo {
   ComponentInfo(const std::string& id,
                 const std::string& fingerprint,
                 const std::u16string& name,
-                const base::Version& version);
+                const base::Version& version,
+                const std::string& cohort_id);
   ComponentInfo(const ComponentInfo& other);
-  ComponentInfo(ComponentInfo&& other);
+  ComponentInfo& operator=(const ComponentInfo& other);
+  ComponentInfo(ComponentInfo&& other) noexcept;
+  ComponentInfo& operator=(ComponentInfo&& other) noexcept;
   ~ComponentInfo();
 
-  const std::string id;
-  const std::string fingerprint;
-  const std::u16string name;
-  const base::Version version;
+  std::string id;
+  std::string fingerprint;
+  std::u16string name;
+  base::Version version;
+  std::string cohort_id;
 };
 
-// The component update service is in charge of installing or upgrading
-// select parts of chrome. Each part is called a component and managed by
-// instances of CrxComponent registered using RegisterComponent(). On the
-// server, each component is packaged as a CRX which is the same format used
-// to package extensions. To the update service each component is identified
-// by its public key hash (CrxComponent::pk_hash). If there is an update
-// available and its version is bigger than (CrxComponent::version), it will
-// be downloaded, verified and unpacked. Then component-specific installer
+struct ComponentRegistration {
+  ComponentRegistration(
+      const std::string& app_id,
+      const std::string& name,
+      std::vector<uint8_t> public_key_hash,
+      const base::Version& version,
+      const std::string& fingerprint,
+      std::map<std::string, std::string> installer_attributes,
+      scoped_refptr<update_client::ActionHandler> action_handler,
+      scoped_refptr<update_client::CrxInstaller> installer,
+      bool requires_network_encryption,
+      bool supports_group_policy_enable_component_updates,
+      bool allow_cached_copies,
+      bool allow_updates_on_metered_connection,
+      bool allow_updates);
+  ComponentRegistration(const ComponentRegistration& other);
+  ComponentRegistration& operator=(const ComponentRegistration& other);
+  ComponentRegistration(ComponentRegistration&& other) noexcept;
+  ComponentRegistration& operator=(ComponentRegistration&& other) noexcept;
+  ~ComponentRegistration();
+
+  std::string app_id;
+  std::string name;
+  std::vector<uint8_t> public_key_hash;
+  base::Version version;
+  std::string fingerprint;
+  std::map<std::string, std::string> installer_attributes;
+  scoped_refptr<update_client::ActionHandler> action_handler;
+  scoped_refptr<update_client::CrxInstaller> installer;
+  bool requires_network_encryption;
+  bool supports_group_policy_enable_component_updates;
+  bool allow_cached_copies;
+  bool allow_updates_on_metered_connection;
+  bool allow_updates;
+};
+
+// The component update service is in charge of installing or upgrading select
+// parts of chrome. Each part is called a component and managed by instances of
+// ComponentRegistration registered using RegisterComponent(). On the
+// server, each component is packaged as a CRX which is the same format used to
+// package extensions. To the update service each component is identified by
+// its public key hash (CrxComponent::pk_hash). If there is an update available
+// and its version is bigger than (CrxComponent::version), it will be
+// downloaded, verified and unpacked. Then component-specific installer
 // ComponentInstaller::Install (of CrxComponent::installer) will be called.
 //
 // During the normal operation of the component updater some specific
 // notifications are fired, like COMPONENT_UPDATER_STARTED and
 // COMPONENT_UPDATE_FOUND. See notification_type.h for more details.
 //
-// All methods are safe to call ONLY from the browser's main thread.
+// All methods are safe to call ONLY from the browser's main sequence.
 class ComponentUpdateService {
  public:
-  using Observer = update_client::UpdateClient::Observer;
+  using Observer = ::update_client::UpdateClient::Observer;
+
+  virtual ~ComponentUpdateService() = default;
 
   // Adds an observer for this class. An observer should not be added more
   // than once. The caller retains the ownership of the observer object.
@@ -92,8 +146,17 @@ class ComponentUpdateService {
   // the observers are being notified.
   virtual void RemoveObserver(Observer* observer) = 0;
 
-  // Add component to be checked for updates.
-  virtual bool RegisterComponent(const CrxComponent& component) = 0;
+  // Returns the last registered version for the component associated with
+  // |app_id|. Returns kNullVersion if no suitable version is found.
+  virtual base::Version GetRegisteredVersion(const std::string& app_id) = 0;
+
+  // Returns the max previous product version for the component associated with
+  // |app_id|. Returns kNullVersion if no suitable version is found.
+  virtual base::Version GetMaxPreviousProductVersion(
+      const std::string& app_id) = 0;
+
+  // Adds component to be checked for updates.
+  virtual bool RegisterComponent(const ComponentRegistration& component) = 0;
 
   // Unregisters the component with the given ID. This means that the component
   // is not going to be included in future update checks. If a download or
@@ -118,10 +181,10 @@ class ComponentUpdateService {
   // proactively triggered outside the normal component update service schedule.
   virtual OnDemandUpdater& GetOnDemandUpdater() = 0;
 
-  // This method is used to trigger an on-demand update for component |id|.
-  // This can be used when loading a resource that depends on this component.
+  // Triggers an on-demand update for component |id|. This can be used when
+  // loading a resource that depends on this component.
   //
-  // |callback| is called on the main thread once the on-demand update is
+  // |callback| is called on the main sequence once the on-demand update is
   // complete, regardless of success. |callback| may be called immediately
   // within the method body.
   //
@@ -133,17 +196,31 @@ class ComponentUpdateService {
   virtual void MaybeThrottle(const std::string& id,
                              base::OnceClosure callback) = 0;
 
-  virtual ~ComponentUpdateService() = default;
-
- private:
   // Returns details about registered component in the |item| parameter. The
   // function returns true in case of success and false in case of errors.
   virtual bool GetComponentDetails(const std::string& id,
                                    CrxUpdateItem* item) const = 0;
 
+  // Cancels the update of the component with the given `id`, whether the
+  // update is queued or in progress. Other components in the same update task
+  // are not affected. A download in progress is aborted; an update that is
+  // past the point where it can be cancelled runs to completion. The component
+  // ends in `ComponentState::kUpdateError` with `ServiceError::CANCELLED`.
+  // Returns true if an active or queued update for `id` was found.
+  virtual bool Cancel(const std::string& id) = 0;
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // Runs local loop delaying the caller's execution until all the registered
+  // required components are up to date.
+  virtual void EnsureRequiredComponentsReady(base::TimeDelta timeout) = 0;
+#endif
+  virtual void Stop() = 0;
+
+ private:
+  friend class screen_ai::ScreenAIDownloaderNonChromeOS;
   friend class speech::SodaInstallerImpl;
   friend class ::ComponentsHandler;
   FRIEND_TEST_ALL_PREFIXES(ComponentInstallerTest, RegisterComponent);
+  FRIEND_TEST_ALL_PREFIXES(ComponentUpdaterTest, UpdatesDisabled);
 };
 
 using ServiceObserver = ComponentUpdateService::Observer;
@@ -160,16 +237,24 @@ class OnDemandUpdater {
  private:
   friend class OnDemandTester;
   friend class policy::ComponentUpdaterPolicyTest;
-  friend class SupervisedUserWhitelistInstaller;
   friend class ::ComponentsHandler;
+  friend class OnDeviceModelUpdater;
   friend class ::PluginObserver;
   friend class SwReporterOnDemandFetcher;
   friend class SodaComponentInstallerPolicy;
+  friend class WasmTtsEngineComponentInstallerPolicy;
   friend class SodaLanguagePackComponentInstallerPolicy;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  friend class TranslateKitComponentInstallerPolicy;
+  friend class TranslateKitLanguagePackComponentInstallerPolicy;
+  friend class ::extensions::AutotestPrivateLoadSmartDimComponentFunction;
+#if BUILDFLAG(IS_CHROMEOS)
+  friend class ash::SmartDimComponentIntegrationTest;
   friend class CrOSComponentInstaller;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-  friend class VrAssetsComponentInstallerPolicy;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  friend class IwaKeyDistributionComponentInstallerPolicy;
+  friend class PlatformRuntimeComponentInstallerPolicy;
+  friend void UpdateAIEmbeddingsComponentOnDemand(Priority priority,
+                                                  Callback callback);
 
   // Triggers an update check for a component. |id| is a value
   // returned by GetCrxComponentID(). If an update for this component is already
@@ -182,10 +267,17 @@ class OnDemandUpdater {
                               Callback callback) = 0;
 };
 
-// Creates the component updater.
+// Creates the component updater. If `update_checks_disabled` is true,
+// components can be registered but are never checked for updates, neither
+// periodically nor on demand.
 std::unique_ptr<ComponentUpdateService> ComponentUpdateServiceFactory(
     scoped_refptr<Configurator> config,
-    std::unique_ptr<UpdateScheduler> scheduler);
+    std::unique_ptr<UpdateScheduler> scheduler,
+    const std::string& brand,
+    bool update_checks_disabled = false);
+
+// Register prefs required by the component update service.
+void RegisterComponentUpdateServicePrefs(PrefRegistrySimple* registry);
 
 }  // namespace component_updater
 

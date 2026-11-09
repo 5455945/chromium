@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/observer_list_types.h"
 #include "dbus/object_path.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -35,6 +34,10 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAgentManagerClient
     // from the system.
     virtual void AgentManagerRemoved(const dbus::ObjectPath& object_path) {}
   };
+
+  BluetoothAgentManagerClient(const BluetoothAgentManagerClient&) = delete;
+  BluetoothAgentManagerClient& operator=(const BluetoothAgentManagerClient&) =
+      delete;
 
   ~BluetoothAgentManagerClient() override;
 
@@ -79,9 +82,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAgentManagerClient
 
  protected:
   BluetoothAgentManagerClient();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BluetoothAgentManagerClient);
 };
 
 }  // namespace bluez

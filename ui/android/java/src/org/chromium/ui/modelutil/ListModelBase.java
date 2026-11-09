@@ -1,10 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.ui.modelutil;
 
-import androidx.annotation.NonNull;
+import org.chromium.build.annotations.NullMarked;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -20,6 +20,7 @@ import java.util.List;
  * @param <T> The object type that this class manages in a list.
  * @param <P> The payload type for partial change notifications.
  */
+@NullMarked
 public class ListModelBase<T, P> extends ListObservableImpl<P> implements SimpleList<T> {
     private final List<T> mItems = new ArrayList<>();
 
@@ -38,15 +39,20 @@ public class ListModelBase<T, P> extends ListObservableImpl<P> implements Simple
         return mItems.size();
     }
 
-    @NonNull
     @Override
     public Iterator<T> iterator() {
         return mItems.iterator();
     }
 
+    /** Checks if the list model has no items. */
+    public boolean isEmpty() {
+        return mItems.size() <= 0;
+    }
+
     /**
-     * Appends a given {@code item} to the last position of the held {@link List}.
-     * Notifies observers about the inserted item.
+     * Appends a given {@code item} to the last position of the held {@link List}. Notifies
+     * observers about the inserted item.
+     *
      * @param item The item to be stored.
      */
     public void add(T item) {
@@ -189,16 +195,18 @@ public class ListModelBase<T, P> extends ListObservableImpl<P> implements Simple
 
     /**
      * Moves a single {@code item} from current {@code index} to new {@code index}.
+     *
      * @param curIndex The position of the item before move.
      * @param newIndex The position of the item after move.
      */
     public void move(int curIndex, int newIndex) {
+        if (curIndex == newIndex) return;
+
+        assert curIndex >= 0 && curIndex < mItems.size();
+        assert newIndex >= 0 && newIndex < mItems.size();
+
         T item = mItems.remove(curIndex);
-        if (newIndex == mItems.size()) {
-            mItems.add(item);
-        } else {
-            mItems.add(newIndex, item);
-        }
+        mItems.add(newIndex, item);
         notifyItemMoved(curIndex, newIndex);
     }
 

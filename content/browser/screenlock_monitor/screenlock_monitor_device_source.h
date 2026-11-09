@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,27 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/screenlock_monitor/screenlock_monitor_source.h"
 #include "content/common/content_export.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include <wtsapi32.h>
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include <optional>
+
 #include "components/session_manager/core/session_manager_observer.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_WIN)
-namespace base {
-namespace win {
-class MessageWindow;
-}
-}  // namespace base
-#endif  // OS_WIN
+#if BUILDFLAG(IS_WIN)
+#include "base/callback_list.h"
+#include "base/functional/bind.h"
+#include "ui/gfx/win/singleton_hwnd.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace content {
 
@@ -38,9 +37,14 @@ class CONTENT_EXPORT ScreenlockMonitorDeviceSource
     : public ScreenlockMonitorSource {
  public:
   ScreenlockMonitorDeviceSource();
+
+  ScreenlockMonitorDeviceSource(const ScreenlockMonitorDeviceSource&) = delete;
+  ScreenlockMonitorDeviceSource& operator=(
+      const ScreenlockMonitorDeviceSource&) = delete;
+
   ~ScreenlockMonitorDeviceSource() override;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Fake session notification registration/unregistration APIs allow us to test
   // receiving and handling messages that look as if they are sent by other
   // sessions, without having to create a session host and a second session.
@@ -50,15 +54,19 @@ class CONTENT_EXPORT ScreenlockMonitorDeviceSource
   static void SetFakeNotificationAPIsForTesting(
       WTSRegisterSessionNotificationFunction register_function,
       WTSUnRegisterSessionNotificationFunction unregister_function);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
  private:
-#if defined(OS_WIN)
-  // Represents a message-only window for screenlock message handling on Win.
+#if BUILDFLAG(IS_WIN)
+  // Represents a singleton hwnd for screenlock message handling on Win.
   // Only allow ScreenlockMonitor to create it.
   class SessionMessageWindow {
    public:
     SessionMessageWindow();
+
+    SessionMessageWindow(const SessionMessageWindow&) = delete;
+    SessionMessageWindow& operator=(const SessionMessageWindow&) = delete;
+
     ~SessionMessageWindow();
 
     static void SetFakeNotificationAPIsForTesting(
@@ -66,43 +74,46 @@ class CONTENT_EXPORT ScreenlockMonitorDeviceSource
         WTSUnRegisterSessionNotificationFunction unregister_function);
 
    private:
-    bool OnWndProc(UINT message, WPARAM wparam, LPARAM lparam, LRESULT* result);
+    void OnWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
     void ProcessWTSSessionLockMessage(WPARAM event_id);
 
     static WTSRegisterSessionNotificationFunction
         register_session_notification_function_;
     static WTSUnRegisterSessionNotificationFunction
         unregister_session_notification_function_;
-    std::unique_ptr<base::win::MessageWindow> window_;
-
-    DISALLOW_COPY_AND_ASSIGN(SessionMessageWindow);
+    base::CallbackListSubscription hwnd_subscription_ =
+        gfx::SingletonHwnd::GetInstance()->RegisterCallback(
+            base::BindRepeating(&SessionMessageWindow::OnWndProc,
+                                base::Unretained(this)));
   };
 
   SessionMessageWindow session_message_window_;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   void StartListeningForScreenlock();
   void StopListeningForScreenlock();
-#endif  // OS_MAC
+#endif  // BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   class ScreenLockListener : public session_manager::SessionManagerObserver {
    public:
     ScreenLockListener();
+
+    ScreenLockListener(const ScreenLockListener&) = delete;
+    ScreenLockListener& operator=(const ScreenLockListener&) = delete;
+
     ~ScreenLockListener() override;
 
     // session_manager::SessionManagerObserver:
     void OnSessionStateChanged() override;
 
    private:
-    DISALLOW_COPY_AND_ASSIGN(ScreenLockListener);
+    std::optional<ScreenlockEvent> prev_event_;
   };
 
   ScreenLockListener screenlock_listener_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-  DISALLOW_COPY_AND_ASSIGN(ScreenlockMonitorDeviceSource);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,8 @@
 #include "base/cancelable_callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "media/base/media_export.h"
 #include "media/base/waiting.h"
 #include "media/base/win/media_foundation_cdm_proxy.h"
 
@@ -26,7 +27,7 @@ namespace media {
 // required by IMFMediaEngineProtectedContent::SetContentProtectionManager in
 // https://docs.microsoft.com/en-us/windows/win32/api/mfmediaengine/nf-mfmediaengine-imfmediaengineprotectedcontent-setcontentprotectionmanager.
 //
-class MediaFoundationProtectionManager
+class MEDIA_EXPORT MediaFoundationProtectionManager
     : public Microsoft::WRL::RuntimeClass<
           Microsoft::WRL::RuntimeClassFlags<
               Microsoft::WRL::RuntimeClassType::WinRtClassicComMix |
@@ -41,6 +42,9 @@ class MediaFoundationProtectionManager
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       WaitingCB waiting_cb);
   HRESULT SetCdmProxy(scoped_refptr<MediaFoundationCdmProxy> cdm_proxy);
+
+  // IUnknown.
+  IFACEMETHODIMP_(ULONG) Release() override;
 
   // IMFContentProtectionManager.
   IFACEMETHODIMP BeginEnableContent(IMFActivate* enabler_activate,

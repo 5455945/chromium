@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,10 +28,8 @@ struct CONTENT_EXPORT PresentationRequest {
   PresentationRequest(const PresentationRequest& other);
   PresentationRequest& operator=(const PresentationRequest& other);
 
-  bool operator==(const PresentationRequest& other) const;
-  bool operator!=(const PresentationRequest& other) const {
-    return !(*this == other);
-  }
+  friend bool operator==(const PresentationRequest&,
+                         const PresentationRequest&) = default;
 
   // ID of RenderFrameHost that initiated the request.
   GlobalRenderFrameHostId render_frame_host_id;

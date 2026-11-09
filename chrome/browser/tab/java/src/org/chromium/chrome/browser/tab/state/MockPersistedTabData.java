@@ -1,18 +1,28 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tab.state;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.DoNotClassMerge;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.NullUnmarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 
 import java.nio.ByteBuffer;
 
 /**
  * MockPersistedTabData object used for testing
+ *
+ * This class should not be merged because it is being used as a key in a Map
+ * in PersistedTabDataConfiguration.java.
  */
+@DoNotClassMerge
+@NullMarked
 public class MockPersistedTabData extends PersistedTabData {
     private int mField;
 
@@ -21,7 +31,8 @@ public class MockPersistedTabData extends PersistedTabData {
      * @param field field stored in {@link MockPersistedTabData}
      */
     public MockPersistedTabData(Tab tab, int field) {
-        super(tab,
+        super(
+                tab,
                 PersistedTabDataConfiguration.get(MockPersistedTabData.class, tab.isIncognito())
                         .getStorage(),
                 PersistedTabDataConfiguration.get(MockPersistedTabData.class, tab.isIncognito())
@@ -41,10 +52,16 @@ public class MockPersistedTabData extends PersistedTabData {
      * @param tab      {@link Tab} {@link MockPersistedTabData} will be associated with
      * @param callback callback {@link MockPersistedTabData} will be passed back in
      */
-    public static void from(Tab tab, Callback<MockPersistedTabData> callback) {
-        PersistedTabData.from(tab, (data, storage, id) -> {
-            return new MockPersistedTabData(tab, data, storage, id);
-        }, null, MockPersistedTabData.class, callback);
+    @NullUnmarked
+    public static void from(Tab tab, Callback<@Nullable MockPersistedTabData> callback) {
+        PersistedTabData.<@Nullable MockPersistedTabData>from(
+                tab,
+                (data, storage, id, factoryCallback) -> {
+                    factoryCallback.onResult(new MockPersistedTabData(tab, data, storage, id));
+                },
+                null,
+                (Class<@Nullable MockPersistedTabData>) MockPersistedTabData.class,
+                callback);
     }
 
     /**
@@ -64,7 +81,7 @@ public class MockPersistedTabData extends PersistedTabData {
     }
 
     @Override
-    public Supplier<ByteBuffer> getSerializeSupplier() {
+    public Serializer<ByteBuffer> getSerializer() {
         ByteBuffer byteBuffer = ByteBuffer.allocate(4).putInt(mField);
         byteBuffer.rewind();
         return () -> {
@@ -73,8 +90,8 @@ public class MockPersistedTabData extends PersistedTabData {
     }
 
     @Override
-    public boolean deserialize(ByteBuffer data) {
-        mField = data.getInt();
+    public boolean deserialize(@Nullable ByteBuffer data) {
+        mField = assumeNonNull(data).getInt();
         return true;
     }
 

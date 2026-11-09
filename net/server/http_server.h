@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,12 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
+#include "net/base/net_export.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
@@ -27,13 +29,13 @@ class IPEndPoint;
 class ServerSocket;
 class StreamSocket;
 
-class HttpServer {
+class NET_EXPORT HttpServer {
  public:
   // Delegate to handle http/websocket events. Beware that it is not safe to
   // destroy the HttpServer in any of these callbacks.
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     virtual void OnConnect(int connection_id) = 0;
     virtual void OnHttpRequest(int connection_id,
@@ -50,19 +52,23 @@ class HttpServer {
   // callbacks yet.
   HttpServer(std::unique_ptr<ServerSocket> server_socket,
              HttpServer::Delegate* delegate);
+
+  HttpServer(const HttpServer&) = delete;
+  HttpServer& operator=(const HttpServer&) = delete;
+
   ~HttpServer();
 
   void AcceptWebSocket(int connection_id,
                        const HttpServerRequestInfo& request,
                        NetworkTrafficAnnotationTag traffic_annotation);
   void SendOverWebSocket(int connection_id,
-                         base::StringPiece data,
+                         std::string_view data,
                          NetworkTrafficAnnotationTag traffic_annotation);
   // Sends the provided data directly to the given connection. No validation is
   // performed that data constitutes a valid HTTP response. A valid HTTP
   // response may be split across multiple calls to SendRaw.
   void SendRaw(int connection_id,
-               const std::string& data,
+               std::string_view data,
                NetworkTrafficAnnotationTag traffic_annotation);
   // TODO(byungchul): Consider replacing function name with SendResponseInfo
   void SendResponse(int connection_id,
@@ -70,17 +76,17 @@ class HttpServer {
                     NetworkTrafficAnnotationTag traffic_annotation);
   void Send(int connection_id,
             HttpStatusCode status_code,
-            const std::string& data,
-            const std::string& mime_type,
+            std::string_view data,
+            std::string_view mime_type,
             NetworkTrafficAnnotationTag traffic_annotation);
   void Send200(int connection_id,
-               const std::string& data,
-               const std::string& mime_type,
+               std::string_view data,
+               std::string_view mime_type,
                NetworkTrafficAnnotationTag traffic_annotation);
   void Send404(int connection_id,
                NetworkTrafficAnnotationTag traffic_annotation);
   void Send500(int connection_id,
-               const std::string& message,
+               std::string_view message,
                NetworkTrafficAnnotationTag traffic_annotation);
 
   void Close(int connection_id);
@@ -114,8 +120,7 @@ class HttpServer {
   // recv data. If all data has been consumed successfully, but the headers are
   // not fully parsed, *pos will be set to zero. Returns false if an error is
   // encountered while parsing, true otherwise.
-  bool ParseHeaders(const char* data,
-                    size_t data_len,
+  bool ParseHeaders(base::span<const uint8_t> data,
                     HttpServerRequestInfo* info,
                     size_t* pos);
 
@@ -124,18 +129,24 @@ class HttpServer {
   // Whether or not Close() has been called during delegate callback processing.
   bool HasClosedConnection(HttpConnection* connection);
 
+  void DestroyClosedConnections();
+
   const std::unique_ptr<ServerSocket> server_socket_;
   std::unique_ptr<StreamSocket> accepted_socket_;
-  HttpServer::Delegate* const delegate_;
+  const raw_ptr<HttpServer::Delegate> delegate_;
 
-  int last_id_;
+  int last_id_ = 0;
   std::map<int, std::unique_ptr<HttpConnection>> id_to_connection_;
 
-  base::WeakPtrFactory<HttpServer> weak_ptr_factory_{this};
+  // Vector of connections whose destruction is pending. Connections may have
+  // WebSockets with raw pointers to `this`, so should not out live this, but
+  // also cannot safely be destroyed synchronously, so on connection close, add
+  // a Connection here, and post a task to destroy them.
+  std::vector<std::unique_ptr<HttpConnection>> closed_connections_;
 
-  DISALLOW_COPY_AND_ASSIGN(HttpServer);
+  base::WeakPtrFactory<HttpServer> weak_ptr_factory_{this};
 };
 
 }  // namespace net
 
-#endif // NET_SERVER_HTTP_SERVER_H_
+#endif  // NET_SERVER_HTTP_SERVER_H_

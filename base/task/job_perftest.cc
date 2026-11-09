@@ -1,24 +1,24 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
+
 #include <atomic>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/callback_helpers.h"
 #include "base/containers/queue.h"
 #include "base/containers/stack.h"
+#include "base/functional/callback_helpers.h"
 #include "base/synchronization/lock.h"
 #include "base/task/post_job.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -68,10 +68,13 @@ class IndexGenerator {
   explicit IndexGenerator(size_t size) : size_(size) {
     AutoLock auto_lock(lock_);
     pending_indices_.push(0);
-    ranges_to_split_.push({0, size_});
+    ranges_to_split_.emplace(0, size_);
   }
 
-  absl::optional<size_t> GetNext() {
+  IndexGenerator(const IndexGenerator&) = delete;
+  IndexGenerator& operator=(const IndexGenerator&) = delete;
+
+  std::optional<size_t> GetNext() {
     AutoLock auto_lock(lock_);
     if (!pending_indices_.empty()) {
       // Return any pending index first.
@@ -79,8 +82,9 @@ class IndexGenerator {
       pending_indices_.pop();
       return index;
     }
-    if (ranges_to_split_.empty())
-      return absl::nullopt;
+    if (ranges_to_split_.empty()) {
+      return std::nullopt;
+    }
 
     // Split the oldest running range in 2 and return the middle index as
     // starting point.
@@ -90,10 +94,12 @@ class IndexGenerator {
     size_t mid = range.first + size / 2;
     // Both sides of the range are added to |ranges_to_split_| so they may be
     // further split if possible.
-    if (mid - range.first > 1)
-      ranges_to_split_.push({range.first, mid});
-    if (range.second - mid > 1)
-      ranges_to_split_.push({mid, range.second});
+    if (mid - range.first > 1) {
+      ranges_to_split_.emplace(range.first, mid);
+    }
+    if (range.second - mid > 1) {
+      ranges_to_split_.emplace(mid, range.second);
+    }
     return mid;
   }
 
@@ -112,8 +118,6 @@ class IndexGenerator {
   // Pending [start, end] (exclusive) ranges to split and hand out indices from.
   base::queue<std::pair<size_t, size_t>> ranges_to_split_ GUARDED_BY(lock_);
   const size_t size_;
-
-  DISALLOW_COPY_AND_ASSIGN(IndexGenerator);
 };
 
 struct WorkItem {
@@ -133,6 +137,9 @@ class WorkList {
       : num_incomplete_items_(num_work_items),
         items_(num_work_items),
         process_item_(std::move(process_item)) {}
+
+  WorkList(const WorkList&) = delete;
+  WorkList& operator=(const WorkList&) = delete;
 
   // Acquires work item at |index|. Returns true if successful, or false if the
   // item was already acquired.
@@ -157,8 +164,6 @@ class WorkList {
   std::atomic_size_t num_incomplete_items_;
   std::vector<WorkItem> items_;
   RepeatingCallback<void(size_t)> process_item_;
-
-  DISALLOW_COPY_AND_ASSIGN(WorkList);
 };
 
 RepeatingCallback<void(size_t)> BusyWaitCallback(TimeDelta delta) {
@@ -185,6 +190,9 @@ class JobPerfTest : public testing::Test {
  public:
   JobPerfTest() = default;
 
+  JobPerfTest(const JobPerfTest&) = delete;
+  JobPerfTest& operator=(const JobPerfTest&) = delete;
+
   // Process |num_work_items| items with |process_item| in parallel. Work is
   // assigned by having each worker sequentially traversing all items and
   // acquiring unvisited ones.
@@ -205,8 +213,9 @@ class JobPerfTest : public testing::Test {
                                  work_list->NumIncompleteWorkItems(0) != 0 &&
                                  !delegate->ShouldYield();
                    ++i) {
-                if (!work_list->TryAcquire(i))
+                if (!work_list->TryAcquire(i)) {
                   continue;
+                }
                 if (!work_list->ProcessWorkItem(i)) {
                   complete->Signal();
                   return;
@@ -238,8 +247,9 @@ class JobPerfTest : public testing::Test {
     std::atomic_size_t index{0};
 
     // Post extra tasks to disrupt Job execution and cause workers to yield.
-    if (disruptive_post_tasks)
-      DisruptivePostTasks(10, TimeDelta::FromMilliseconds(1));
+    if (disruptive_post_tasks) {
+      DisruptivePostTasks(10, Milliseconds(1));
+    }
 
     const TimeTicks job_run_start = TimeTicks::Now();
 
@@ -284,8 +294,9 @@ class JobPerfTest : public testing::Test {
     IndexGenerator generator(num_work_items);
 
     // Post extra tasks to disrupt Job execution and cause workers to yield.
-    if (disruptive_post_tasks)
-      DisruptivePostTasks(10, TimeDelta::FromMilliseconds(1));
+    if (disruptive_post_tasks) {
+      DisruptivePostTasks(10, Milliseconds(1));
+    }
 
     const TimeTicks job_run_start = TimeTicks::Now();
 
@@ -297,9 +308,10 @@ class JobPerfTest : public testing::Test {
                WaitableEvent* complete, JobDelegate* delegate) {
               while (work_list->NumIncompleteWorkItems(0) != 0 &&
                      !delegate->ShouldYield()) {
-                absl::optional<size_t> index = generator->GetNext();
-                if (!index)
+                std::optional<size_t> index = generator->GetNext();
+                if (!index) {
                   return;
+                }
                 for (size_t i = *index; i < work_list->NumWorkItems(); ++i) {
                   if (delegate->ShouldYield()) {
                     generator->GiveBack(i);
@@ -343,8 +355,9 @@ class JobPerfTest : public testing::Test {
     IndexGenerator generator(num_work_items);
 
     // Post extra tasks to disrupt Job execution and cause workers to yield.
-    if (disruptive_post_tasks)
-      DisruptivePostTasks(10, TimeDelta::FromMilliseconds(1));
+    if (disruptive_post_tasks) {
+      DisruptivePostTasks(10, Milliseconds(1));
+    }
 
     const TimeTicks job_run_start = TimeTicks::Now();
 
@@ -354,9 +367,10 @@ class JobPerfTest : public testing::Test {
                 BindRepeating(
                     [](IndexGenerator* generator, WorkList* work_list,
                        WaitableEvent* complete, JobDelegate* delegate) {
-                      absl::optional<size_t> index = generator->GetNext();
-                      if (!index)
+                      std::optional<size_t> index = generator->GetNext();
+                      if (!index) {
                         return;
+                      }
                       size_t i = *index;
                       while (true) {
                         if (delegate->ShouldYield()) {
@@ -374,8 +388,9 @@ class JobPerfTest : public testing::Test {
                           return;
                         }
                         ++i;
-                        if (i == work_list->NumWorkItems())
+                        if (i == work_list->NumWorkItems()) {
                           i = 0;
+                        }
                       }
                     },
                     Unretained(&generator), Unretained(&work_list),
@@ -395,8 +410,6 @@ class JobPerfTest : public testing::Test {
 
  private:
   test::TaskEnvironment task_environment;
-
-  DISALLOW_COPY_AND_ASSIGN(JobPerfTest);
 };
 
 }  // namespace
@@ -406,8 +419,7 @@ TEST_F(JobPerfTest, NoOpWorkNaiveAssignment) {
 }
 
 TEST_F(JobPerfTest, BusyWaitNaiveAssignment) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithNaiveAssignment(kStoryBusyWaitNaive, 500000, std::move(callback));
 }
 
@@ -421,14 +433,12 @@ TEST_F(JobPerfTest, NoOpDisruptedWorkAtomicAssignment) {
 }
 
 TEST_F(JobPerfTest, BusyWaitAtomicAssignment) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithAtomicAssignment(kStoryBusyWaitAtomic, 500000, std::move(callback));
 }
 
 TEST_F(JobPerfTest, BusyWaitDisruptedWorkAtomicAssignment) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithAtomicAssignment(kStoryBusyWaitAtomicDisrupted, 500000,
                              std::move(callback), true);
 }
@@ -443,15 +453,13 @@ TEST_F(JobPerfTest, NoOpDisruptedWorkDynamicAssignment) {
 }
 
 TEST_F(JobPerfTest, BusyWaitWorkDynamicAssignment) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithDynamicAssignment(kStoryBusyWaitDynamic, 500000,
                               std::move(callback));
 }
 
 TEST_F(JobPerfTest, BusyWaitDisruptedWorkDynamicAssignment) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithDynamicAssignment(kStoryBusyWaitDynamicDisrupted, 500000,
                               std::move(callback), true);
 }
@@ -466,14 +474,12 @@ TEST_F(JobPerfTest, NoOpDisruptedWorkLoopAround) {
 }
 
 TEST_F(JobPerfTest, BusyWaitWorkLoopAround) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithLoopAround(kStoryBusyWaitLoopAround, 500000, std::move(callback));
 }
 
 TEST_F(JobPerfTest, BusyWaitDisruptedWorkLoopAround) {
-  RepeatingCallback<void(size_t)> callback =
-      BusyWaitCallback(TimeDelta::FromMicroseconds(5));
+  RepeatingCallback<void(size_t)> callback = BusyWaitCallback(Microseconds(5));
   RunJobWithLoopAround(kStoryBusyWaitLoopAroundDisrupted, 500000,
                        std::move(callback), true);
 }

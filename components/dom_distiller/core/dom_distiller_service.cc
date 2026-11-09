@@ -1,17 +1,17 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/dom_distiller/core/dom_distiller_service.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/uuid.h"
 #include "components/dom_distiller/core/distilled_content_store.h"
 #include "components/dom_distiller/core/proto/distilled_article.pb.h"
 #include "components/dom_distiller/core/task_tracker.h"
@@ -23,7 +23,7 @@ namespace {
 
 ArticleEntry CreateSkeletonEntryForUrl(const GURL& url) {
   ArticleEntry skeleton;
-  skeleton.entry_id = base::GenerateGUID();
+  skeleton.entry_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
   skeleton.pages.push_back(url);
 
   DCHECK(IsEntryValid(skeleton));
@@ -41,7 +41,8 @@ DomDistillerService::DomDistillerService(
       distiller_factory_(std::move(distiller_factory)),
       distiller_page_factory_(std::move(distiller_page_factory)),
       distilled_page_prefs_(std::move(distilled_page_prefs)),
-      distiller_ui_handle_(std::move(distiller_ui_handle)) {}
+      distiller_ui_handle_(std::move(distiller_ui_handle)),
+      weak_ptr_factory_(this) {}
 
 DomDistillerService::~DomDistillerService() {
   // There shouldn't be any tasks pending at this point.
@@ -64,6 +65,23 @@ std::unique_ptr<ViewerHandle> DomDistillerService::ViewUrl(
     ViewRequestDelegate* delegate,
     std::unique_ptr<DistillerPage> distiller_page,
     const GURL& url) {
+  return ViewUrlImpl(delegate, std::move(distiller_page), url,
+                     /*use_cache=*/true);
+}
+
+std::unique_ptr<ViewerHandle> DomDistillerService::ViewUrlIgnoreCache(
+    ViewRequestDelegate* delegate,
+    std::unique_ptr<DistillerPage> distiller_page,
+    const GURL& url) {
+  return ViewUrlImpl(delegate, std::move(distiller_page), url,
+                     /*use_cache=*/false);
+}
+
+std::unique_ptr<ViewerHandle> DomDistillerService::ViewUrlImpl(
+    ViewRequestDelegate* delegate,
+    std::unique_ptr<DistillerPage> distiller_page,
+    const GURL& url,
+    bool use_cache) {
   if (!url.is_valid()) {
     return nullptr;
   }
@@ -75,8 +93,10 @@ std::unique_ptr<ViewerHandle> DomDistillerService::ViewUrl(
   // If a distiller is already running for one URL, don't start another.
   if (was_created) {
     task_tracker->StartDistiller(distiller_factory_.get(),
-                                 std::move(distiller_page));
-    task_tracker->StartBlobFetcher();
+                                 std::move(distiller_page), use_cache);
+    if (use_cache) {
+      task_tracker->StartBlobFetcher();
+    }
   }
 
   return viewer_handle;
@@ -113,14 +133,12 @@ TaskTracker* DomDistillerService::CreateTaskTracker(const ArticleEntry& entry) {
 }
 
 void DomDistillerService::CancelTask(TaskTracker* task) {
-  auto it = std::find_if(tasks_.begin(), tasks_.end(),
-                         [task](const std::unique_ptr<TaskTracker>& t) {
-                           return task == t.get();
-                         });
+  auto it = std::ranges::find(tasks_, task, &std::unique_ptr<TaskTracker>::get);
   if (it != tasks_.end()) {
     it->release();
     tasks_.erase(it);
-    base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, task);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
+                                                                  task);
   }
 }
 
@@ -130,6 +148,14 @@ DistilledPagePrefs* DomDistillerService::GetDistilledPagePrefs() {
 
 DistillerUIHandle* DomDistillerService::GetDistillerUIHandle() {
   return distiller_ui_handle_.get();
+}
+
+base::WeakPtr<DomDistillerService> DomDistillerService::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+bool DomDistillerService::HasTaskTrackerForTesting(const GURL& url) const {
+  return GetTaskTrackerForUrl(url);
 }
 
 }  // namespace dom_distiller

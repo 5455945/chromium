@@ -1,18 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_FONT_UNIQUE_NAME_LOOKUP_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_FONT_UNIQUE_NAME_LOOKUP_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 
-#if defined(OS_ANDROID) || defined(OS_WIN)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
 #include "third_party/blink/public/common/font_unique_name_lookup/font_table_matcher.h"
 #endif
 
@@ -22,10 +24,17 @@ namespace blink {
 
 class FontTableMatcher;
 
-class FontUniqueNameLookup {
+class PLATFORM_EXPORT FontUniqueNameLookup {
   USING_FAST_MALLOC(FontUniqueNameLookup);
 
  public:
+  enum class FontServiceConnectionState {
+    kNotSupported = 0,
+    kNotBound = 1,
+    kConnected = 2,
+    kDisconnected = 3,
+  };
+
   // Factory function to construct a platform specific font unique name lookup
   // instance. Client must not use this directly as it is thread
   // specific. Retrieve it from FontGlobalContext instead.
@@ -35,7 +44,11 @@ class FontUniqueNameLookup {
 
   FontUniqueNameLookup(const FontUniqueNameLookup&) = delete;
   FontUniqueNameLookup& operator=(const FontUniqueNameLookup&) = delete;
-  virtual ~FontUniqueNameLookup() = default;
+  // Out-of-line so that `font_table_matcher_` is destroyed inside this
+  // component. Subclasses outside it, such as in unit tests, would
+  // otherwise need the definition of FontTableMatcher and of the protobuf
+  // it holds.
+  virtual ~FontUniqueNameLookup();
 
   // Below: Methods for asynchronously retrieving the FontUniqueNameLookup
   // table. Currently needed on Windows, on other platforms the implementation
@@ -55,12 +68,24 @@ class FontUniqueNameLookup {
     NOTREACHED();
   }
 
+  // Performs any global initialization needed for this renderer. This is called
+  // early in renderer startup, as opposed to PrepareFontUniqueNameLookup()
+  // which is called when sync lookup is first needed.
+  virtual void Init() {}
+
+  // Returns a local snapshot for crash diagnostics without binding a service or
+  // sending IPC. The connection can change immediately after this call.
+  virtual FontServiceConnectionState GetFontServiceConnectionStateForCrash()
+      const {
+    return FontServiceConnectionState::kNotSupported;
+  }
+
  protected:
   FontUniqueNameLookup();
 
   // Windows and Android share the concept of connecting to a Mojo service for
   // retrieving a ReadOnlySharedMemoryRegion with the lookup table in it.
-#if defined(OS_WIN) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
   std::unique_ptr<FontTableMatcher> font_table_matcher_;
 #endif
 };

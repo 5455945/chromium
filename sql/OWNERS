@@ -1,8 +1,7 @@
 set noparent
 
-# Primary:
-pwnall@chromium.org
-
-# Secondary:
-cmumford@google.com
-mek@chromium.org
+evanstade@microsoft.com
+etienneb@chromium.org
+grt@chromium.org
+jpgravel@chromium.org
+olivierli@chromium.org

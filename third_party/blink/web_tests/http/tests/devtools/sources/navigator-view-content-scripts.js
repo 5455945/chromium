@@ -1,16 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as Sources from 'devtools/panels/sources/sources.js';
+import * as UI from 'devtools/ui/legacy/legacy.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
 
 (async function() {
   TestRunner.addResult(
       `Verify that removal of one of the multiple projects, all of which are associated with the same frame, doesn't lead navigator to discard the frame treenode.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
 
-  var rootURL = 'http://localhost:8080/LayoutTests/inspector/debugger/';
-  var sourcesNavigatorView = new Sources.NetworkNavigatorView();
-  sourcesNavigatorView.show(UI.inspectorView.element);
+  var rootURL = TestRunner.url('LayoutTests/inspector/debugger/');
+  var sourcesNavigatorView = new Sources.SourcesNavigator.NetworkNavigatorView(Main.MainImpl.MainImpl.universeForTest.networkProjectManager);
+  sourcesNavigatorView.show(UI.InspectorView.InspectorView.instance().element);
 
   TestRunner.addResult('\n\n================================================');
   TestRunner.addResult('Adding urls');

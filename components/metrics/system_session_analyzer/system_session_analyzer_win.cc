@@ -1,11 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/system_session_analyzer/system_session_analyzer_win.h"
 
-#include "base/cxx17_backports.h"
 #include "base/logging.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/time/time.h"
 
 namespace metrics {
@@ -56,7 +56,7 @@ base::Time ULLFileTimeToTime(ULONGLONG time_ulonglong) {
 SystemSessionAnalyzer::SystemSessionAnalyzer(uint32_t max_session_cnt)
     : max_session_cnt_(max_session_cnt), sessions_queried_(0) {}
 
-SystemSessionAnalyzer::~SystemSessionAnalyzer() {}
+SystemSessionAnalyzer::~SystemSessionAnalyzer() = default;
 
 SystemSessionAnalyzer::ExtendedStatus
 SystemSessionAnalyzer::GetExtendedFailureStatus() const {
@@ -87,8 +87,8 @@ bool SystemSessionAnalyzer::GetEventInfo(
   DWORD retrieved_attribute_cnt = 0U;
   if (!::EvtRender(context, event, EvtRenderEventValues, buffer_size,
                    buffer.data(), &buffer_used, &retrieved_attribute_cnt)) {
+    DPLOG(ERROR) << "Failed to render the event.";
     SetExtendedFailureStatus(ExtendedStatus::RENDER_EVENT_FAILURE);
-    DLOG(ERROR) << "Failed to render the event.";
     return false;
   }
 
@@ -171,14 +171,15 @@ bool SystemSessionAnalyzer::FetchEvents(size_t requested_events,
                            events_raw.data(), kTimeoutMs, 0, &event_cnt);
 
   // Ensure handles get closed. The MSDN sample seems to imply handles may need
-  // to be closed event in if EvtNext failed.
+  // to be closed even if EvtNext failed.
   std::vector<EvtHandle> events(desired_event_cnt);
   for (size_t i = 0; i < event_cnt; ++i)
     events[i].reset(events_raw[i]);
 
   if (!success) {
+    // Failed to retrieve the targeted events. The system has likely been
+    // running long enough that the shutdown/startup events have rolled off.
     SetExtendedFailureStatus(ExtendedStatus::RETRIEVE_EVENTS_FAILURE);
-    DLOG(ERROR) << "Failed to retrieve events.";
     return false;
   }
 
@@ -207,6 +208,10 @@ bool SystemSessionAnalyzer::EnsureInitialized() {
 }
 
 bool SystemSessionAnalyzer::EnsureHandlesOpened() {
+  // The first Evt*() call below loads wevtapi.dll, and callers may run this on
+  // a background-priority thread.
+  SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
+
   // Create the event query.
   // Note: requesting events from newest to oldest.
   if (!query_handle_.get()) {
@@ -214,8 +219,8 @@ bool SystemSessionAnalyzer::EnsureHandlesOpened() {
         ::EvtQuery(nullptr, kChannelName, kSessionEventsQuery,
                    EvtQueryChannelPath | EvtQueryReverseDirection));
     if (!query_handle_.get()) {
+      DPLOG(ERROR) << "Event query failed.";
       SetExtendedFailureStatus(ExtendedStatus::EVTQUERY_FAILED);
-      DLOG(ERROR) << "Event query failed.";
       return false;
     }
   }
@@ -300,13 +305,13 @@ bool SystemSessionAnalyzer::ProcessSession(const EventInfo& end,
 
 SystemSessionAnalyzer::EvtHandle SystemSessionAnalyzer::CreateRenderContext() {
   LPCWSTR value_paths[] = {kEventIdPath, kEventTimePath};
-  const DWORD kValueCnt = base::size(value_paths);
+  const DWORD kValueCnt = std::size(value_paths);
 
   EVT_HANDLE context = nullptr;
   context =
       ::EvtCreateRenderContext(kValueCnt, value_paths, EvtRenderContextValues);
   if (!context)
-    DLOG(ERROR) << "Failed to create render context.";
+    DPLOG(ERROR) << "Failed to create render context.";
 
   return EvtHandle(context);
 }

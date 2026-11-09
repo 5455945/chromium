@@ -10,7 +10,8 @@ of Android and the bugs and limitations that exist. This is important if making
 changes to how WebView is packaged, as we typically need to maintain backward
 compatibility. This may not be 100% complete as a lot of things have changed
 over the years that WebView has been updatable. This currently covers Android L
-to Q.
+and beyond, however Android L through Android P are no longer supported for
+WebView updates.
 
 ## General stuff
 
@@ -24,7 +25,6 @@ WebView.
 In N, we made it possible for the Chrome APK to also provide a WebView
 implementation to save space, and introduced mechanisms to enable switching
 between different implementations. This is discussed in more detail in the
-[guide to WebView packaging variants](webview-packaging-variants.md) and in the
 [channel switching documentation](channels.md). For the purposes of this doc,
 you can assume all references to "the APK" or "the WebView APK" refer to the
 currently selected WebView implementation - loading is handled the same way.
@@ -158,7 +158,9 @@ there are any splits, which causes a duplicate classloader to be created when
 a renderer actually starts up; this results in a crash (as it tries to load the
 native library twice, which is forbidden). We work around this in the WebView
 code by
-[using reflection early in initialization](/android_webview/glue/java/src/com/android/webview/chromium/SplitApkWorkaround.java).
+[using reflection early in initialization](https://source.chromium.org/chromium/chromium/src/+/main:android_webview/glue/java/src/com/android/webview/chromium/SplitApkWorkaround.java;l=24;drc=4d56a5dd051beb6486d789f50597e66d4267b2e6)
+(this class has since been deleted from the chromium repo because the code is no
+longer needed).
 
 ## Loading native code with RELRO sharing
 

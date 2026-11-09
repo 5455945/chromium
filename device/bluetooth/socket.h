@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/containers/span.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "device/bluetooth/bluetooth_socket.h"
 #include "device/bluetooth/public/mojom/adapter.mojom.h"
@@ -46,7 +47,7 @@ class Socket : public mojom::Socket {
   void OnReceiveStreamWritable(MojoResult result);
   void ShutdownReceive();
   void ReceiveMore();
-  void OnBluetoothSocketReceive(void* pending_write_buffer,
+  void OnBluetoothSocketReceive(base::span<uint8_t> pending_write_buffer,
                                 int num_bytes_received,
                                 scoped_refptr<net::IOBuffer> io_buffer);
   void OnBluetoothSocketReceiveError(

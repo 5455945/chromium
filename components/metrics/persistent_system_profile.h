@@ -1,14 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_METRICS_PERSISTENT_SYSTEM_PROFILE_H_
 #define COMPONENTS_METRICS_PERSISTENT_SYSTEM_PROFILE_H_
 
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
-#include "base/threading/thread_checker.h"
+#include "base/memory/raw_ptr.h"
+#include "base/sequence_checker.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 
 namespace base {
@@ -23,6 +24,10 @@ namespace metrics {
 class PersistentSystemProfile {
  public:
   PersistentSystemProfile();
+
+  PersistentSystemProfile(const PersistentSystemProfile&) = delete;
+  PersistentSystemProfile& operator=(const PersistentSystemProfile&) = delete;
+
   ~PersistentSystemProfile();
 
   // This object can store records in multiple memory allocators.
@@ -42,7 +47,10 @@ class PersistentSystemProfile {
   void SetSystemProfile(const SystemProfileProto& profile, bool complete);
 
   // Records the existence of a field trial.
-  void AddFieldTrial(base::StringPiece trial, base::StringPiece group);
+  void AddFieldTrial(std::string_view trial, std::string_view group);
+
+  // Removes the field trial from the system profile.
+  void RemoveFieldTrial(std::string_view trial);
 
   // Tests if a persistent memory allocator contains an system profile.
   static bool HasSystemProfile(
@@ -79,7 +87,7 @@ class PersistentSystemProfile {
     // These methods manage writing records to the allocator. Do not mix these
     // with "read" calls; it's one or the other.
     void Reset();
-    bool Write(RecordType type, base::StringPiece record);
+    bool Write(RecordType type, std::string_view record);
 
     // Read a record from the allocator. Do not mix this with "write" calls;
     // it's one or the other.
@@ -110,7 +118,7 @@ class PersistentSystemProfile {
     bool ReadData(RecordType* type, std::string* record) const;
 
     // This never changes but can't be "const" because vector calls operator=().
-    base::PersistentMemoryAllocator* allocator_;  // Storage location.
+    raw_ptr<base::PersistentMemoryAllocator> allocator_;  // Storage location.
 
     // Indicates if a complete profile has been stored.
     bool has_complete_profile_;
@@ -124,7 +132,7 @@ class PersistentSystemProfile {
   };
 
   // Write a record to all registered allocators.
-  void WriteToAll(RecordType type, base::StringPiece record);
+  void WriteToAll(RecordType type, std::string_view record);
 
   // Merges all "update" records into a system profile.
   static void MergeUpdateRecords(
@@ -138,9 +146,7 @@ class PersistentSystemProfile {
   // Indicates if a complete profile has been stored to all allocators.
   bool all_have_complete_profile_ = false;
 
-  THREAD_CHECKER(thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(PersistentSystemProfile);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 // A singleton instance of the above.
@@ -148,13 +154,15 @@ class GlobalPersistentSystemProfile : public PersistentSystemProfile {
  public:
   static GlobalPersistentSystemProfile* GetInstance();
 
+  GlobalPersistentSystemProfile(const GlobalPersistentSystemProfile&) = delete;
+  GlobalPersistentSystemProfile& operator=(
+      const GlobalPersistentSystemProfile&) = delete;
+
  private:
   friend struct base::DefaultSingletonTraits<GlobalPersistentSystemProfile>;
 
-  GlobalPersistentSystemProfile() {}
-  ~GlobalPersistentSystemProfile() {}
-
-  DISALLOW_COPY_AND_ASSIGN(GlobalPersistentSystemProfile);
+  GlobalPersistentSystemProfile() = default;
+  ~GlobalPersistentSystemProfile() = default;
 };
 
 }  // namespace metrics

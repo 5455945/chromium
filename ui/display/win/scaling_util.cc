@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -85,7 +85,8 @@ int ScaleOffset(int unscaled_length, float scale_factor, int unscaled_offset) {
 namespace display {
 namespace win {
 
-bool DisplayInfosTouch(const DisplayInfo& a, const DisplayInfo& b) {
+bool DisplayInfosTouch(const internal::DisplayInfo& a,
+                       const internal::DisplayInfo& b) {
   const gfx::Rect& a_rect = a.screen_rect();
   const gfx::Rect& b_rect = b.screen_rect();
   int max_left = std::max(a_rect.x(), b_rect.x());
@@ -101,8 +102,8 @@ bool DisplayInfosTouch(const DisplayInfo& a, const DisplayInfo& b) {
 }
 
 DisplayPlacement::Position CalculateDisplayPosition(
-    const DisplayInfo& parent,
-    const DisplayInfo& current) {
+    const internal::DisplayInfo& parent,
+    const internal::DisplayInfo& current) {
   const gfx::Rect& parent_rect = parent.screen_rect();
   const gfx::Rect& current_rect = current.screen_rect();
   int max_left = std::max(parent_rect.x(), current_rect.x());
@@ -135,11 +136,11 @@ DisplayPlacement::Position CalculateDisplayPosition(
         : DisplayPlacement::Position::BOTTOM;
   }
   NOTREACHED() << "CalculateDisplayPosition relies on touching DisplayInfos.";
-  return DisplayPlacement::Position::RIGHT;
 }
 
-DisplayPlacement CalculateDisplayPlacement(const DisplayInfo& parent,
-                                           const DisplayInfo& current) {
+DisplayPlacement CalculateDisplayPlacement(
+    const internal::DisplayInfo& parent,
+    const internal::DisplayInfo& current) {
   DCHECK(DisplayInfosTouch(parent, current)) << "DisplayInfos must touch.";
 
   DisplayPlacement placement;
@@ -178,6 +179,7 @@ DisplayPlacement CalculateDisplayPlacement(const DisplayInfo& parent,
   // There are a few ways lines can intersect:
   // End Aligned
   // CURRENT's offset is relative to the end (in our world, BOTTOM_RIGHT).
+  // If PARENT and CURRENT are also begin aligned, that takes precedence.
   //                 +-PARENT----------------+
   //                    +-CURRENT------------+
   //
@@ -197,7 +199,7 @@ DisplayPlacement CalculateDisplayPlacement(const DisplayInfo& parent,
   // PARENT.
   //                 +-PARENT----------------+
   //           +-CURRENT--------------------------+
-  if (parent_end == current_end) {
+  if (parent_end == current_end && parent_begin != current_begin) {
     // End aligned.
     placement.offset_reference =
         DisplayPlacement::OffsetReference::BOTTOM_RIGHT;
@@ -213,7 +215,8 @@ DisplayPlacement CalculateDisplayPlacement(const DisplayInfo& parent,
                                    parent.device_scale_factor(),
                                    parent_end - current_end);
   } else {
-    DCHECK(InRange(parent_begin, current_begin, current_end));
+    CHECK(InRange(parent_begin, current_begin, current_end),
+          base::NotFatalUntil::M163);
     placement.offset = ScaleOffset(current_end - current_begin,
                                    current.device_scale_factor(),
                                    current_begin);

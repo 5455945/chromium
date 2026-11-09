@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,17 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/component_export.h"
 #include "base/time/time.h"
 
 class GoogleServiceAuthError;
 
 // An interface that defines the callbacks for consumers to which
 // OAuth2AccessTokenFetcher can return results.
-class OAuth2AccessTokenConsumer {
+class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2AccessTokenConsumer {
  public:
   // Structure representing information contained in OAuth2 access token.
-  struct TokenResponse {
+  struct COMPONENT_EXPORT(GOOGLE_APIS) TokenResponse {
     TokenResponse();
     TokenResponse(const TokenResponse& response);
     TokenResponse(TokenResponse&& response);
@@ -40,15 +40,15 @@ class OAuth2AccessTokenConsumer {
     std::string id_token;
 
     // Helper class to make building TokenResponse objects clearer.
-    class Builder {
+    class COMPONENT_EXPORT(GOOGLE_APIS) Builder {
      public:
       Builder();
       ~Builder();
 
-      Builder& WithAccessToken(const std::string& access_token);
-      Builder& WithRefreshToken(const std::string& refresh_token);
-      Builder& WithExpirationTime(const base::Time& expiration_time);
-      Builder& WithIdToken(const std::string& id_token);
+      Builder& WithAccessToken(const std::string& token);
+      Builder& WithRefreshToken(const std::string& token);
+      Builder& WithExpirationTime(const base::Time& time);
+      Builder& WithIdToken(const std::string& token);
 
       TokenResponse build();
 
@@ -70,6 +70,11 @@ class OAuth2AccessTokenConsumer {
   };
 
   OAuth2AccessTokenConsumer() = default;
+
+  OAuth2AccessTokenConsumer(const OAuth2AccessTokenConsumer&) = delete;
+  OAuth2AccessTokenConsumer& operator=(const OAuth2AccessTokenConsumer&) =
+      delete;
+
   virtual ~OAuth2AccessTokenConsumer();
 
   // Success callback.
@@ -80,9 +85,6 @@ class OAuth2AccessTokenConsumer {
 
   // Returns the OAuth token consumer name, should be used for logging only.
   virtual std::string GetConsumerName() const = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(OAuth2AccessTokenConsumer);
 };
 
 #endif  // GOOGLE_APIS_GAIA_OAUTH2_ACCESS_TOKEN_CONSUMER_H_

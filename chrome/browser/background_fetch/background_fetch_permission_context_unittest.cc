@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/permissions/permission_util.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/web_contents_tester.h"
@@ -25,6 +26,11 @@ class BackgroundFetchPermissionContextTest
  protected:
   BackgroundFetchPermissionContextTest() = default;
 
+  BackgroundFetchPermissionContextTest(
+      const BackgroundFetchPermissionContextTest&) = delete;
+  BackgroundFetchPermissionContextTest& operator=(
+      const BackgroundFetchPermissionContextTest&) = delete;
+
   ~BackgroundFetchPermissionContextTest() override = default;
 
   ContentSetting GetPermissonStatus(
@@ -35,13 +41,17 @@ class BackgroundFetchPermissionContextTest
 
     if (with_frame) {
       content::WebContentsTester::For(web_contents())->NavigateAndCommit(url);
-      render_frame_host = web_contents()->GetMainFrame();
+      render_frame_host = web_contents()->GetPrimaryMainFrame();
     }
 
     auto permission_result = permission_context->GetPermissionStatus(
+        content::PermissionDescriptorUtil::
+            CreatePermissionDescriptorForPermissionType(
+                blink::PermissionType::BACKGROUND_FETCH),
         render_frame_host, url /* requesting_origin */,
         url /* embedding_origin */);
-    return permission_result.content_setting;
+    return permissions::PermissionUtil::PermissionStatusToContentSetting(
+        permission_result.status);
   }
 
   void SetContentSetting(const GURL& url,
@@ -53,9 +63,6 @@ class BackgroundFetchPermissionContextTest
     host_content_settings_map->SetContentSettingDefaultScope(
         url /* primary_url*/, url /* secondary_url*/, content_type, setting);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BackgroundFetchPermissionContextTest);
 };
 
 // Test that Background Fetch permission is "allow" by default, when queried

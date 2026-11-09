@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "chrome/browser/ash/file_system_provider/fileapi/file_stream_writer.h"
 #include "chrome/browser/ash/file_system_provider/fileapi/provider_async_file_util.h"
 #include "chrome/browser/ash/file_system_provider/fileapi/watcher_manager.h"
+#include "chrome/browser/ash/fileapi/diversion_backend_delegate.h"
 #include "content/public/browser/browser_thread.h"
 #include "storage/browser/file_system/file_stream_reader.h"
 #include "storage/browser/file_system/file_stream_writer.h"
@@ -19,8 +20,7 @@
 
 using content::BrowserThread;
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 namespace {
 
 // Size of the stream reader internal buffer. At most this number of bytes will
@@ -38,12 +38,18 @@ BackendDelegate::BackendDelegate()
       watcher_manager_(new WatcherManager) {
 }
 
-BackendDelegate::~BackendDelegate() {}
+BackendDelegate::~BackendDelegate() = default;
+
+// static
+std::unique_ptr<FileSystemBackendDelegate> BackendDelegate::MakeUnique() {
+  std::unique_ptr<FileSystemBackendDelegate> wrappee(new BackendDelegate());
+  return std::make_unique<ash::DiversionBackendDelegate>(std::move(wrappee));
+}
 
 storage::AsyncFileUtil* BackendDelegate::GetAsyncFileUtil(
     storage::FileSystemType type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK_EQ(storage::kFileSystemTypeProvided, type);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  CHECK_EQ(storage::kFileSystemTypeProvided, type, base::NotFatalUntil::M160);
   return async_file_util_.get();
 }
 
@@ -54,8 +60,9 @@ BackendDelegate::CreateFileStreamReader(
     int64_t max_bytes_to_read,
     const base::Time& expected_modification_time,
     storage::FileSystemContext* context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK_EQ(storage::kFileSystemTypeProvided, url.type());
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  CHECK_EQ(storage::kFileSystemTypeProvided, url.type(),
+           base::NotFatalUntil::M160);
 
   return std::unique_ptr<storage::FileStreamReader>(
       new BufferingFileStreamReader(
@@ -68,8 +75,9 @@ std::unique_ptr<storage::FileStreamWriter>
 BackendDelegate::CreateFileStreamWriter(const storage::FileSystemURL& url,
                                         int64_t offset,
                                         storage::FileSystemContext* context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK_EQ(storage::kFileSystemTypeProvided, url.type());
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  CHECK_EQ(storage::kFileSystemTypeProvided, url.type(),
+           base::NotFatalUntil::M160);
 
   return std::unique_ptr<storage::FileStreamWriter>(
       new BufferingFileStreamWriter(std::unique_ptr<storage::FileStreamWriter>(
@@ -79,18 +87,9 @@ BackendDelegate::CreateFileStreamWriter(const storage::FileSystemURL& url,
 
 storage::WatcherManager* BackendDelegate::GetWatcherManager(
     storage::FileSystemType type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK_EQ(storage::kFileSystemTypeProvided, type);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  CHECK_EQ(storage::kFileSystemTypeProvided, type, base::NotFatalUntil::M160);
   return watcher_manager_.get();
 }
 
-void BackendDelegate::GetRedirectURLForContents(
-    const storage::FileSystemURL& url,
-    storage::URLCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK_EQ(storage::kFileSystemTypeProvided, url.type());
-  std::move(callback).Run(GURL());
-}
-
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

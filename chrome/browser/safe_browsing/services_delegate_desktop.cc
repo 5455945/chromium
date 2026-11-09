@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,16 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/safe_browsing/download_protection/download_protection_delegate_desktop.h"
+#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
+#include "chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
-#include "chrome/browser/safe_browsing/telemetry/telemetry_service.h"
-#include "chrome/common/chrome_switches.h"
-#include "components/keyed_service/core/service_access_type.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/core/browser/db/v4_local_database_manager.h"
-#include "components/safe_browsing/core/browser/verdict_cache_manager.h"
+#include "components/safe_browsing/core/browser/db/sb_local_database_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -30,28 +26,28 @@ namespace safe_browsing {
 
 // static
 std::unique_ptr<ServicesDelegate> ServicesDelegate::Create(
-    SafeBrowsingService* safe_browsing_service) {
+    SafeBrowsingServiceImpl* safe_browsing_service) {
   return base::WrapUnique(
       new ServicesDelegateDesktop(safe_browsing_service, nullptr));
 }
 
 // static
 std::unique_ptr<ServicesDelegate> ServicesDelegate::CreateForTest(
-    SafeBrowsingService* safe_browsing_service,
+    SafeBrowsingServiceImpl* safe_browsing_service,
     ServicesDelegate::ServicesCreator* services_creator) {
   return base::WrapUnique(
       new ServicesDelegateDesktop(safe_browsing_service, services_creator));
 }
 
 ServicesDelegateDesktop::ServicesDelegateDesktop(
-    SafeBrowsingService* safe_browsing_service,
+    SafeBrowsingServiceImpl* safe_browsing_service,
     ServicesDelegate::ServicesCreator* services_creator)
     : ServicesDelegate(safe_browsing_service, services_creator) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 ServicesDelegateDesktop::~ServicesDelegateDesktop() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 ExtendedReportingLevel
@@ -65,7 +61,7 @@ ServicesDelegateDesktop::database_manager() const {
 }
 
 void ServicesDelegateDesktop::Initialize() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (!database_manager_set_for_tests_) {
     if (services_creator_ && services_creator_->CanCreateDatabaseManager())
@@ -88,13 +84,13 @@ void ServicesDelegateDesktop::Initialize() {
 
 void ServicesDelegateDesktop::SetDatabaseManagerForTest(
     SafeBrowsingDatabaseManager* database_manager_to_set) {
-  DCHECK(!database_manager_);
+  CHECK(!database_manager_, base::NotFatalUntil::M162);
   database_manager_set_for_tests_ = true;
   database_manager_ = database_manager_to_set;
 }
 
 void ServicesDelegateDesktop::ShutdownServices() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   download_service_.reset();
 
@@ -104,38 +100,38 @@ void ServicesDelegateDesktop::ShutdownServices() {
 }
 
 void ServicesDelegateDesktop::RefreshState(bool enable) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (download_service_)
     download_service_->SetEnabled(enable);
 }
 
 std::unique_ptr<prefs::mojom::TrackedPreferenceValidationDelegate>
 ServicesDelegateDesktop::CreatePreferenceValidationDelegate(Profile* profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   return incident_service_->CreatePreferenceValidationDelegate(profile);
 }
 
 void ServicesDelegateDesktop::RegisterDelayedAnalysisCallback(
     DelayedAnalysisCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   incident_service_->RegisterDelayedAnalysisCallback(std::move(callback));
 }
 
 void ServicesDelegateDesktop::AddDownloadManager(
     content::DownloadManager* download_manager) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   incident_service_->AddDownloadManager(download_manager);
 }
 
 DownloadProtectionService* ServicesDelegateDesktop::GetDownloadService() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   return download_service_.get();
 }
 
 scoped_refptr<SafeBrowsingDatabaseManager>
 ServicesDelegateDesktop::CreateDatabaseManager() {
-  return V4LocalDatabaseManager::Create(
-      SafeBrowsingService::GetBaseFilename(),
+  return SBLocalDatabaseManager::Create(
+      SafeBrowsingServiceImpl::GetBaseFilename(),
       content::GetUIThreadTaskRunner({}), content::GetIOThreadTaskRunner({}),
       base::BindRepeating(
           &ServicesDelegateDesktop::GetEstimatedExtendedReportingLevel,
@@ -144,7 +140,10 @@ ServicesDelegateDesktop::CreateDatabaseManager() {
 
 DownloadProtectionService*
 ServicesDelegateDesktop::CreateDownloadProtectionService() {
-  return new DownloadProtectionService(safe_browsing_service_);
+  auto delegate = std::make_unique<DownloadProtectionDelegateDesktop>();
+  auto download_service = std::make_unique<DownloadProtectionService>(
+      safe_browsing_service_, std::move(delegate));
+  return download_service.release();
 }
 
 IncidentReportingService*
@@ -152,19 +151,18 @@ ServicesDelegateDesktop::CreateIncidentReportingService() {
   return new IncidentReportingService(safe_browsing_service_);
 }
 
-void ServicesDelegateDesktop::StartOnIOThread(
-    scoped_refptr<network::SharedURLLoaderFactory> sb_url_loader_factory,
+void ServicesDelegateDesktop::StartOnUIThread(
     scoped_refptr<network::SharedURLLoaderFactory> browser_url_loader_factory,
-    const V4ProtocolConfig& v4_config) {
-  if (base::FeatureList::IsEnabled(kSafeBrowsingRemoveCookies)) {
-    database_manager_->StartOnIOThread(browser_url_loader_factory, v4_config);
-  } else {
-    database_manager_->StartOnIOThread(sb_url_loader_factory, v4_config);
-  }
+    const SBProtocolConfig& config) {
+  database_manager_->StartOnUIThread(browser_url_loader_factory, config);
 }
 
-void ServicesDelegateDesktop::StopOnIOThread(bool shutdown) {
-  database_manager_->StopOnIOThread(shutdown);
+void ServicesDelegateDesktop::StopOnUIThread(bool shutdown) {
+  database_manager_->StopOnUIThread(shutdown);
+}
+
+void ServicesDelegateDesktop::OnProfileWillBeDestroyed(Profile* profile) {
+  download_service_->RemovePendingDownloadRequests(profile);
 }
 
 }  // namespace safe_browsing

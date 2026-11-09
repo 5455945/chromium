@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,8 +8,15 @@
 
 #include <windows.h>
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "components/crash/core/app/crash_export_thunks.h"
+#include "components/crash/core/app/crash_reporter_client.h"
 #include "components/crash/core/app/crashpad.h"
 
 void RequestSingleCrashUpload_ExportThunk(const char* local_id) {}
@@ -27,6 +34,14 @@ int CrashForException_ExportThunk(EXCEPTION_POINTERS* info) {
 
 void SetUploadConsent_ExportThunk(bool consent) {}
 
+bool GetUploadConsent_ExportThunk() {
+  return crash_reporter::GetCrashReporterClient()->GetCollectStatsConsent();
+}
+
+void GetProductInfo_ExportThunk(crash_reporter::ProductInfo* product_info) {
+  return crash_reporter::GetCrashReporterClient()->GetProductInfo(product_info);
+}
+
 HANDLE InjectDumpForHungInput_ExportThunk(HANDLE process) {
   return nullptr;
 }
@@ -37,7 +52,13 @@ const wchar_t* GetCrashpadDatabasePath_ExportThunk() {
 
 void ClearReportsBetween_ExportThunk(time_t begin, time_t end) {}
 
-bool DumpHungProcessWithPtype_ExportThunk(HANDLE process_handle,
-                                          const char* ptype) {
-  return false;
+bool WriteUserStreamData_ExportThunk(uint32_t user_stream_type,
+                                     const void* data,
+                                     size_t size) {
+  CHECK(data || size == 0);
+  // SAFETY: Callers pass `data()` and `size()` of a valid
+  // `base::span<const uint8_t>`. Enforced by `CHECK` above.
+  return crash_reporter::WriteUserStreamDataImpl(
+      user_stream_type,
+      UNSAFE_BUFFERS(base::span(static_cast<const uint8_t*>(data), size)));
 }

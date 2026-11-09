@@ -1,47 +1,67 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_dtls_transport.h"
 
+#include <cstddef>
 #include <memory>
 
+#include "base/check.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_dtls_transport_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
-#include "third_party/blink/renderer/core/frame/deprecation.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
+#include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/dtls_transport_proxy.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.h"
-#include "third_party/blink/renderer/modules/peerconnection/rtc_error_util.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_ice_transport.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 #include "third_party/webrtc/api/dtls_transport_interface.h"
-#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/rtc_base/buffer.h"
+#include "third_party/webrtc/rtc_base/ssl_certificate.h"
 
 namespace blink {
 
 namespace {
-String TransportStateToString(webrtc::DtlsTransportState state) {
+V8RTCDtlsTransportState::Enum TransportStateToEnum(
+    webrtc::DtlsTransportState state) {
   switch (state) {
     case webrtc::DtlsTransportState::kNew:
-      return String("new");
+      return V8RTCDtlsTransportState::Enum::kNew;
     case webrtc::DtlsTransportState::kConnecting:
-      return String("connecting");
+      return V8RTCDtlsTransportState::Enum::kConnecting;
     case webrtc::DtlsTransportState::kConnected:
-      return String("connected");
+      return V8RTCDtlsTransportState::Enum::kConnected;
     case webrtc::DtlsTransportState::kClosed:
-      return String("closed");
+      return V8RTCDtlsTransportState::Enum::kClosed;
     case webrtc::DtlsTransportState::kFailed:
-      return String("failed");
-    default:
-      NOTREACHED();
-      return String("failed");
+      return V8RTCDtlsTransportState::Enum::kFailed;
+    case webrtc::DtlsTransportState::kNumValues:
+      // Should not happen.
+      break;
   }
+  NOTREACHED();
 }
 
 std::unique_ptr<DtlsTransportProxy> CreateProxy(
@@ -62,21 +82,21 @@ std::unique_ptr<DtlsTransportProxy> CreateProxy(
 
 RTCDtlsTransport::RTCDtlsTransport(
     ExecutionContext* context,
-    rtc::scoped_refptr<webrtc::DtlsTransportInterface> native_transport,
+    webrtc::scoped_refptr<webrtc::DtlsTransportInterface> native_transport,
     RTCIceTransport* ice_transport)
     : ExecutionContextClient(context),
       current_state_(webrtc::DtlsTransportState::kNew),
       native_transport_(native_transport),
-      proxy_(CreateProxy(context, native_transport, this)),
+      proxy_(CreateProxy(context, native_transport.get(), this)),
       ice_transport_(ice_transport) {}
 
 RTCDtlsTransport::~RTCDtlsTransport() {}
 
-String RTCDtlsTransport::state() const {
+V8RTCDtlsTransportState RTCDtlsTransport::state() const {
   if (closed_from_owner_) {
-    return TransportStateToString(webrtc::DtlsTransportState::kClosed);
+    return V8RTCDtlsTransportState(V8RTCDtlsTransportState::Enum::kClosed);
   }
-  return TransportStateToString(current_state_.state());
+  return V8RTCDtlsTransportState(TransportStateToEnum(current_state_.state()));
 }
 
 const HeapVector<Member<DOMArrayBuffer>>&
@@ -85,7 +105,7 @@ RTCDtlsTransport::getRemoteCertificates() const {
 }
 
 RTCIceTransport* RTCDtlsTransport::iceTransport() const {
-  return ice_transport_;
+  return ice_transport_.Get();
 }
 
 webrtc::DtlsTransportInterface* RTCDtlsTransport::native_transport() {
@@ -100,10 +120,12 @@ void RTCDtlsTransport::ChangeState(webrtc::DtlsTransportInformation info) {
 
 void RTCDtlsTransport::Close() {
   closed_from_owner_ = true;
-  if (current_state_.state() != webrtc::DtlsTransportState::kClosed) {
+  if (!base::FeatureList::IsEnabled(
+          features::kWebRtcSuppressDtlsStateChangeOnClose) &&
+      current_state_.state() != webrtc::DtlsTransportState::kClosed) {
     DispatchEvent(*Event::Create(event_type_names::kStatechange));
   }
-  ice_transport_->stop();
+  ice_transport_->Stop();
 }
 
 // Implementation of DtlsTransportProxy::Delegate
@@ -132,31 +154,26 @@ void RTCDtlsTransport::OnStateChange(webrtc::DtlsTransportInformation info) {
   // If the certificates have changed, copy them as DOMArrayBuffers.
   // This makes sure that getRemoteCertificates() == getRemoteCertificates()
   if (current_state_.remote_ssl_certificates()) {
-    const rtc::SSLCertChain* certs = current_state_.remote_ssl_certificates();
+    const webrtc::SSLCertChain* certs =
+        current_state_.remote_ssl_certificates();
     if (certs->GetSize() != remote_certificates_.size()) {
       remote_certificates_.clear();
       for (size_t i = 0; i < certs->GetSize(); i++) {
         auto& cert = certs->Get(i);
-        rtc::Buffer der_cert;
+        webrtc::Buffer der_cert;
         cert.ToDER(&der_cert);
-        DOMArrayBuffer* dab_cert = DOMArrayBuffer::Create(
-            der_cert.data(), static_cast<unsigned int>(der_cert.size()));
+        DOMArrayBuffer* dab_cert = DOMArrayBuffer::Create(der_cert);
         remote_certificates_.push_back(dab_cert);
       }
     } else {
       // Replace certificates that have changed, if any
-      for (WTF::wtf_size_t i = 0; i < certs->GetSize(); i++) {
+      for (wtf_size_t i = 0; i < certs->GetSize(); i++) {
         auto& cert = certs->Get(i);
-        rtc::Buffer der_cert;
+        webrtc::Buffer der_cert;
         cert.ToDER(&der_cert);
-        DOMArrayBuffer* dab_cert = DOMArrayBuffer::Create(
-            der_cert.data(), static_cast<unsigned int>(der_cert.size()));
         // Don't replace the certificate if it's unchanged.
-        // Should have been "if (*dab_cert != *remote_certificates_[i])"
-        if (dab_cert->ByteLength() != remote_certificates_[i]->ByteLength() ||
-            memcmp(dab_cert->Data(), remote_certificates_[i]->Data(),
-                   dab_cert->ByteLength()) != 0) {
-          remote_certificates_[i] = dab_cert;
+        if (base::span(der_cert) != remote_certificates_[i]->ByteSpan()) {
+          remote_certificates_[i] = DOMArrayBuffer::Create(der_cert);
         }
       }
     }
@@ -180,7 +197,7 @@ void RTCDtlsTransport::Trace(Visitor* visitor) const {
   visitor->Trace(remote_certificates_);
   visitor->Trace(ice_transport_);
   DtlsTransportProxy::Delegate::Trace(visitor);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ExecutionContextClient::Trace(visitor);
 }
 

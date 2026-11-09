@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,149 +6,134 @@
 
 #include <memory>
 
-#include "ash/capture_mode/capture_mode_button.h"
 #include "ash/capture_mode/capture_mode_constants.h"
 #include "ash/capture_mode/capture_mode_controller.h"
 #include "ash/capture_mode/capture_mode_metrics.h"
 #include "ash/capture_mode/capture_mode_session.h"
-#include "ash/capture_mode/capture_mode_source_view.h"
-#include "ash/capture_mode/capture_mode_toggle_button.h"
-#include "ash/capture_mode/capture_mode_type_view.h"
+#include "ash/capture_mode/capture_mode_session_focus_cycler.h"
 #include "ash/resources/vector_icons/vector_icons.h"
-#include "ash/shelf/shelf.h"
-#include "ash/shelf/shelf_layout_manager.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
-#include "base/bind.h"
-#include "ui/aura/window.h"
+#include "ash/style/ash_color_id.h"
+#include "ash/style/icon_button.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
+#include "base/functional/bind.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/background.h"
-#include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/style/platform_style.h"
 
 namespace ash {
 
 namespace {
 
-constexpr gfx::Size kBarSize{376, 64};
-
-constexpr gfx::Insets kBarPadding{/*vertical=*/14, /*horizontal=*/16};
-
-constexpr gfx::RoundedCornersF kBorderRadius{20.f};
-
-constexpr int kSeparatorHeight = 20;
-
-// Distance from the bottom of the bar to the bottom of the display, top of the
-// hotseat or top of the shelf depending on the shelf alignment or hotseat
-// visibility.
-constexpr int kDistanceFromShelfOrHotseatTopDp = 16;
+constexpr auto kBarPadding = gfx::Insets::VH(14, 16);
 
 }  // namespace
 
-CaptureModeBarView::CaptureModeBarView()
-    : capture_type_view_(AddChildView(std::make_unique<CaptureModeTypeView>())),
-      separator_1_(AddChildView(std::make_unique<views::Separator>())),
-      capture_source_view_(
-          AddChildView(std::make_unique<CaptureModeSourceView>())),
-      separator_2_(AddChildView(std::make_unique<views::Separator>())),
-      settings_button_(AddChildView(std::make_unique<CaptureModeToggleButton>(
-          base::BindRepeating(&CaptureModeBarView::OnSettingsButtonPressed,
-                              base::Unretained(this)),
-          kCaptureModeSettingsIcon))),
-      close_button_(AddChildView(std::make_unique<CaptureModeButton>(
-          base::BindRepeating(&CaptureModeBarView::OnCloseButtonPressed,
-                              base::Unretained(this)),
-          kCaptureModeCloseIcon))) {
-  SetPaintToLayer();
-  auto* color_provider = AshColorProvider::Get();
-  SkColor background_color = color_provider->GetBaseLayerColor(
-      AshColorProvider::BaseLayerType::kTransparent80);
-  SetBackground(views::CreateSolidBackground(background_color));
-  layer()->SetFillsBoundsOpaquely(false);
-  layer()->SetRoundedCornerRadius(kBorderRadius);
-  layer()->SetBackgroundBlur(
-      static_cast<float>(AshColorProvider::LayerBlurSigma::kBlurDefault));
-  layer()->SetBackdropFilterQuality(capture_mode::kBlurQuality);
-
-  auto* box_layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, kBarPadding,
-      capture_mode::kBetweenChildSpacing));
-  box_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-
-  // Custom styling for the settings button, which has a dark background and a
-  // light colored icon when selected.
-  const auto normal_icon = gfx::CreateVectorIcon(
-      kCaptureModeSettingsIcon,
-      color_provider->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kButtonIconColor));
-  settings_button_->SetToggledImage(views::Button::STATE_NORMAL, &normal_icon);
-  settings_button_->set_toggled_background_color(
-      color_provider->GetControlsLayerColor(
-          AshColorProvider::ControlsLayerType::
-              kControlBackgroundColorInactive));
-  settings_button_->SetTooltipText(
-      l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_TOOLTIP_SETTINGS));
-
-  const SkColor separator_color = color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSeparatorColor);
-  separator_1_->SetColor(separator_color);
-  separator_1_->SetPreferredHeight(kSeparatorHeight);
-  separator_2_->SetColor(separator_color);
-  separator_2_->SetPreferredHeight(kSeparatorHeight);
-
-  close_button_->SetTooltipText(
-      l10n_util::GetStringUTF16(IDS_APP_ACCNAME_CLOSE));
-}
-
 CaptureModeBarView::~CaptureModeBarView() = default;
 
-// static
-gfx::Rect CaptureModeBarView::GetBounds(aura::Window* root) {
-  DCHECK(root);
+CaptureModeTypeView* CaptureModeBarView::GetCaptureTypeView() const {
+  return nullptr;
+}
 
-  auto bounds = root->GetBoundsInScreen();
-  int bar_y = bounds.bottom();
-  Shelf* shelf = Shelf::ForWindow(root);
-  if (shelf->IsHorizontalAlignment()) {
-    // Get the widget which has the shelf icons. This is the hotseat widget if
-    // the hotseat is extended, shelf widget otherwise.
-    const bool hotseat_extended =
-        shelf->shelf_layout_manager()->hotseat_state() ==
-        HotseatState::kExtended;
-    views::Widget* shelf_widget =
-        hotseat_extended ? static_cast<views::Widget*>(shelf->hotseat_widget())
-                         : static_cast<views::Widget*>(shelf->shelf_widget());
-    bar_y = shelf_widget->GetWindowBoundsInScreen().y();
-  }
+CaptureModeSourceView* CaptureModeBarView::GetCaptureSourceView() const {
+  return nullptr;
+}
 
-  bar_y -= (kDistanceFromShelfOrHotseatTopDp + kBarSize.height());
-  bounds.ClampToCenteredSize(kBarSize);
-  bounds.set_y(bar_y);
-  return bounds;
+PillButton* CaptureModeBarView::GetStartRecordingButton() const {
+  return nullptr;
 }
 
 void CaptureModeBarView::OnCaptureSourceChanged(CaptureModeSource new_source) {
-  capture_source_view_->OnCaptureSourceChanged(new_source);
+  return;
 }
 
 void CaptureModeBarView::OnCaptureTypeChanged(CaptureModeType new_type) {
-  capture_type_view_->OnCaptureTypeChanged(new_type);
-  capture_source_view_->OnCaptureTypeChanged(new_type);
+  return;
 }
 
 void CaptureModeBarView::SetSettingsMenuShown(bool shown) {
   settings_button_->SetToggled(shown);
 }
 
-void CaptureModeBarView::OnSettingsButtonPressed() {
-  CaptureModeController::Get()->capture_mode_session()->SetSettingsMenuShown(
-      !settings_button_->GetToggled());
+bool CaptureModeBarView::IsEventOnSettingsButton(
+    gfx::Point screen_location) const {
+  return settings_button_ &&
+         settings_button_->GetBoundsInScreen().Contains(screen_location);
+}
+
+// TODO(hewer): Add a check and/or test so that the behavior sets
+// `ShouldShowUserNudge()` to false if the `settings_button_` doesn't exist.
+CaptureModeBarView::CaptureModeBarView() {
+  SetPaintToLayer();
+  SetBackground(views::CreateSolidBackground(
+      chromeos::features::IsSystemBlurEnabled()
+          ? static_cast<ui::ColorId>(kColorAshShieldAndBase80)
+          : cros_tokens::kCrosSysSystemOnBaseOpaque));
+
+  if (chromeos::features::IsSystemBlurEnabled()) {
+    layer()->SetFillsBoundsOpaquely(false);
+    layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
+  }
+
+  const gfx::RoundedCornersF rounded_corners(capture_mode::kCaptureBarHeight /
+                                             2.0f);
+  layer()->SetRoundedCornerRadius(rounded_corners);
+
+  decoration_ = SystemDecoration::CreateForView(
+      this, SystemDecoration::ShadowType::kElevation12,
+      SystemDecoration::HighlightBorderMode::kHighlightBorder);
+  decoration_->SetRoundedCorners(rounded_corners);
+
+  auto* box_layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kHorizontal, kBarPadding,
+      capture_mode::kBetweenChildSpacing));
+  box_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+}
+
+void CaptureModeBarView::AppendSettingsButton() {
+  settings_button_ = AddChildView(std::make_unique<IconButton>(
+      base::BindRepeating(&CaptureModeBarView::OnSettingsButtonPressed,
+                          base::Unretained(this)),
+      IconButton::Type::kMediumFloating, &kCaptureModeSettingsIcon,
+      l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_TOOLTIP_SETTINGS),
+      /*is_togglable=*/true,
+      /*has_border=*/true));
+
+  // Customize the settings button toggled color.
+  settings_button_->SetIconToggledColor(kColorAshButtonIconColor);
+  settings_button_->SetBackgroundToggledColor(
+      kColorAshControlBackgroundColorInactive);
+
+  // Add highlight helper to the settings button.
+  CaptureModeSessionFocusCycler::HighlightHelper::Install(settings_button_);
+}
+
+void CaptureModeBarView::AppendCloseButton(int accessible_name_id) {
+  close_button_ = AddChildView(std::make_unique<IconButton>(
+      base::BindRepeating(&CaptureModeBarView::OnCloseButtonPressed,
+                          base::Unretained(this)),
+      IconButton::Type::kMediumFloating, &kCaptureModeCloseIcon,
+      l10n_util::GetStringUTF16(accessible_name_id),
+      /*is_togglable=*/false,
+      /*has_border=*/true));
+
+  // Add highlight helper to the close button.
+  CaptureModeSessionFocusCycler::HighlightHelper::Install(close_button_);
+}
+
+void CaptureModeBarView::OnSettingsButtonPressed(const ui::Event& event) {
+  CaptureModeSession* session = static_cast<CaptureModeSession*>(
+      CaptureModeController::Get()->capture_mode_session());
+  CHECK_EQ(session->session_type(), SessionType::kReal);
+  session->SetSettingsMenuShown(!settings_button_->toggled(),
+                                /*by_key_event=*/event.IsKeyEvent());
 }
 
 void CaptureModeBarView::OnCloseButtonPressed() {
@@ -156,7 +141,7 @@ void CaptureModeBarView::OnCloseButtonPressed() {
   CaptureModeController::Get()->Stop();
 }
 
-BEGIN_METADATA(CaptureModeBarView, views::View)
+BEGIN_METADATA(CaptureModeBarView)
 END_METADATA
 
 }  // namespace ash

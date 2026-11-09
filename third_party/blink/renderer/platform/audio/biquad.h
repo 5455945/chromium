@@ -33,6 +33,7 @@
 
 #include <complex>
 
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -46,22 +47,18 @@ namespace blink {
 //    lowpass, highpass, shelving, parameteric, notch, allpass, ...
 
 class PLATFORM_EXPORT Biquad final {
-  DISALLOW_NEW();
-
  public:
   explicit Biquad(unsigned render_quantum_frames);
   ~Biquad();
 
-  void Process(const float* source_p,
-               float* dest_p,
-               uint32_t frames_to_process);
+  void Process(base::span<const float> source, base::span<float> dest);
 
   bool HasSampleAccurateValues() const { return has_sample_accurate_values_; }
   void SetHasSampleAccurateValues(bool is_sample_accurate) {
     has_sample_accurate_values_ = is_sample_accurate;
   }
 
-  // frequency is 0 - 1 normalized, resonance and dbGain are in decibels.
+  // frequency is 0 - 1 normalized, resonance and db_gain are in decibels.
   // Q is a unitless quality factor.
   void SetLowpassParams(int, double frequency, double resonance);
   void SetHighpassParams(int, double frequency, double resonance);
@@ -80,15 +77,14 @@ class PLATFORM_EXPORT Biquad final {
   // impulse response of the filter falls below a threshold value.
   // The maximum allowed frame value is given by |max_frame|.  This
   // limits how much work is done in computing the frame numer.
-  double TailFrame(int coef_index, double max_frame);
+  double TailFrame(int coef_index, double max_frame) const;
 
   // Filter response at a set of n frequencies. The magnitude and
   // phase response are returned in magResponse and phaseResponse.
   // The phase response is in radians.
-  void GetFrequencyResponse(int n_frequencies,
-                            const float* frequency,
-                            float* mag_response,
-                            float* phase_response);
+  void GetFrequencyResponse(base::span<const float> frequency,
+                            base::span<float> mag_response,
+                            base::span<float> phase_response) const;
 
  private:
   void SetNormalizedCoefficients(int,
@@ -101,7 +97,7 @@ class PLATFORM_EXPORT Biquad final {
 
   // If true, the filter coefficients are (possibly) time-varying due to a
   // timeline automation on at least one filter parameter.
-  bool has_sample_accurate_values_;
+  bool has_sample_accurate_values_ = false;
 
   // Filter coefficients. The filter is defined as
   //
@@ -112,13 +108,11 @@ class PLATFORM_EXPORT Biquad final {
   AudioDoubleArray a1_;
   AudioDoubleArray a2_;
 
-#if defined(OS_MAC)
-  void ProcessFast(const float* source_p,
-                   float* dest_p,
-                   uint32_t frames_to_process);
-  void ProcessSliceFast(double* source_p,
-                        double* dest_p,
-                        double* coefficients_p,
+#if BUILDFLAG(IS_MAC)
+  void ProcessFast(base::span<const float> source, base::span<float> dest);
+  void ProcessSliceFast(base::span<double> source,
+                        base::span<double> dest,
+                        base::span<const double, 5> coefficients,
                         uint32_t frames_to_process);
 
   AudioDoubleArray input_buffer_;
@@ -126,10 +120,10 @@ class PLATFORM_EXPORT Biquad final {
 
 #endif
   // Filter memory
-  double x1_;  // input delayed by 1 sample
-  double x2_;  // input delayed by 2 samples
-  double y1_;  // output delayed by 1 sample
-  double y2_;  // output delayed by 2 samples
+  double x1_ = 0.0;  // input delayed by 1 sample
+  double x2_ = 0.0;  // input delayed by 2 samples
+  double y1_ = 0.0;  // output delayed by 1 sample
+  double y2_ = 0.0;  // output delayed by 2 samples
 };
 
 }  // namespace blink

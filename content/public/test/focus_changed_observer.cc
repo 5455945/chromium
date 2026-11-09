@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,9 +19,9 @@ FocusedNodeDetails FocusChangedObserver::Wait() {
   return *observed_details_;
 }
 
-void FocusChangedObserver::OnFocusChangedInPage(FocusedNodeDetails* details) {
-  DCHECK(details);
-  observed_details_ = *details;
+void FocusChangedObserver::OnFocusChangedInPage(
+    const FocusedNodeDetails& details) {
+  observed_details_ = details;
   run_loop_.Quit();
 }
 

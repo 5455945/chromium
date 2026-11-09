@@ -26,15 +26,17 @@
 
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
-#include "third_party/blink/renderer/core/layout/intrinsic_sizing_info.h"
-#include "third_party/blink/renderer/core/layout/layout_analyzer.h"
+#include "third_party/blink/renderer/core/layout/layout_replaced.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/layout/natural_sizing_info.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/embedded_object_painter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace blink {
@@ -63,7 +65,6 @@ static String LocalizedUnavailablePluginReplacementText(
                         // details.
   }
   NOTREACHED();
-  return String();
 }
 
 void LayoutEmbeddedObject::SetPluginAvailability(
@@ -89,63 +90,73 @@ void LayoutEmbeddedObject::PaintReplaced(
     const PaintInfo& paint_info,
     const PhysicalOffset& paint_offset) const {
   NOT_DESTROYED();
+  if (ChildPaintBlockedByDisplayLock()) {
+    return;
+  }
+  CountSvgFilterPaint();
   EmbeddedObjectPainter(*this).PaintReplaced(paint_info, paint_offset);
 }
 
-void LayoutEmbeddedObject::UpdateLayout() {
+void LayoutEmbeddedObject::UpdateAfterLayout() {
   NOT_DESTROYED();
-  DCHECK(NeedsLayout());
-  LayoutAnalyzer::Scope analyzer(*this);
-
-  UpdateLogicalWidth();
-  UpdateLogicalHeight();
-
-  ClearLayoutOverflow();
-
-  UpdateAfterLayout();
-
+  LayoutEmbeddedContent::UpdateAfterLayout();
   if (!GetEmbeddedContentView() && GetFrameView())
     GetFrameView()->AddPartToUpdate(*this);
-
-  ClearSelfNeedsLayoutOverflowRecalc();
-  ClearNeedsLayout();
 }
 
-void LayoutEmbeddedObject::ComputeIntrinsicSizingInfo(
-    IntrinsicSizingInfo& intrinsic_sizing_info) const {
+void LayoutEmbeddedObject::StyleDidChange(
+    StyleDifference diff,
+    const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
+    const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  DCHECK(!ShouldApplySizeContainment());
-  FrameView* frame_view = ChildFrameView();
-  if (frame_view && frame_view->GetIntrinsicSizingInfo(intrinsic_sizing_info)) {
-    // Handle zoom & vertical writing modes here, as the embedded document
-    // doesn't know about them.
-    intrinsic_sizing_info.size.Scale(StyleRef().EffectiveZoom());
+  LayoutEmbeddedContent::StyleDidChange(diff, old_style, new_style,
+                                        style_change_context);
 
-    // Handle an overridden aspect ratio
-    const StyleAspectRatio& aspect_ratio = StyleRef().AspectRatio();
-    if (aspect_ratio.GetType() == EAspectRatioType::kRatio ||
-        (aspect_ratio.GetType() == EAspectRatioType::kAutoAndRatio &&
-         intrinsic_sizing_info.aspect_ratio.IsEmpty())) {
-      intrinsic_sizing_info.aspect_ratio.SetWidth(
-          aspect_ratio.GetRatio().Width());
-      intrinsic_sizing_info.aspect_ratio.SetHeight(
-          aspect_ratio.GetRatio().Height());
+  // object-fit and object-position change the replaced content rect where the
+  // frame of an embedded object is laid out and painted.
+  if (RuntimeEnabledFeatures::SVGEmbeddedAsReplacedElementEnabled() &&
+      old_style &&
+      (old_style->GetObjectFit() != new_style.GetObjectFit() ||
+       old_style->ObjectPosition() != new_style.ObjectPosition())) {
+    GetFrameView()->SetNeedsUpdateGeometries();
+    if (LayoutView* child_view = ChildLayoutView()) {
+      child_view->SetNeedsPaintPropertyUpdate();
     }
+  }
+}
 
-    if (!IsHorizontalWritingMode())
-      intrinsic_sizing_info.Transpose();
-    return;
+PhysicalNaturalSizingInfo LayoutEmbeddedObject::GetNaturalDimensions() const {
+  NOT_DESTROYED();
+  if (FrameView* frame_view = ChildFrameView()) {
+    if (std::optional<NaturalSizingInfo> sizing_info =
+            frame_view->GetNaturalDimensions()) {
+      // Scale based on our zoom as the embedded document doesn't have that
+      // info.
+      sizing_info->size.Scale(Style().EffectiveZoom());
+      return PhysicalNaturalSizingInfo::FromSizingInfo(*sizing_info);
+    }
+  }
+  return LayoutEmbeddedContent::GetNaturalDimensions();
+}
+
+PhysicalRect LayoutEmbeddedObject::ReplacedContentRectFrom(
+    const PhysicalRect& base_content_rect) const {
+  NOT_DESTROYED();
+
+  // SVG documents in <object>/<embed> elements should behave like images,
+  // respecting CSS properties like object-fit and object-position.
+  // To achieve this, we apply the base class' replaced element sizing logic
+  // with pixel snapping.
+  // TODO(crbug.com/41302806): Only works for same-origin content (LocalFrame).
+  if (RuntimeEnabledFeatures::SVGEmbeddedAsReplacedElementEnabled() &&
+      GetFrameOwnerElement() && GetFrameOwnerElement()->contentDocument() &&
+      GetFrameOwnerElement()->contentDocument()->IsSVGDocument()) {
+    return PreSnappedRectForPersistentSizing(
+        LayoutReplaced::ReplacedContentRectFrom(base_content_rect));
   }
 
-  LayoutEmbeddedContent::ComputeIntrinsicSizingInfo(intrinsic_sizing_info);
-}
-
-bool LayoutEmbeddedObject::NeedsPreferredWidthsRecalculation() const {
-  NOT_DESTROYED();
-  if (LayoutEmbeddedContent::NeedsPreferredWidthsRecalculation())
-    return true;
-  FrameView* frame_view = ChildFrameView();
-  return frame_view && frame_view->HasIntrinsicSizingInfo();
+  return LayoutEmbeddedContent::ReplacedContentRectFrom(base_content_rect);
 }
 
 }  // namespace blink

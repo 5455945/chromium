@@ -57,11 +57,12 @@ class PLATFORM_EXPORT LengthBox {
   const Length& Bottom() const { return bottom_; }
 
   bool operator==(const LengthBox& o) const {
+    if (this == &o) [[unlikely]] {
+      return true;
+    }
     return left_ == o.left_ && right_ == o.right_ && top_ == o.top_ &&
            bottom_ == o.bottom_;
   }
-
-  bool operator!=(const LengthBox& o) const { return !(*this == o); }
 
   bool NonZero() const {
     return !(left_.IsZero() && right_.IsZero() && top_.IsZero() &&

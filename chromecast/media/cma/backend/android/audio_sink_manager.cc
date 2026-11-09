@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,10 +18,11 @@ namespace {
 class AudioSinkManagerInstance : public AudioSinkManager {
  public:
   AudioSinkManagerInstance() {}
-  ~AudioSinkManagerInstance() override {}
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(AudioSinkManagerInstance);
+  AudioSinkManagerInstance(const AudioSinkManagerInstance&) = delete;
+  AudioSinkManagerInstance& operator=(const AudioSinkManagerInstance&) = delete;
+
+  ~AudioSinkManagerInstance() override {}
 };
 
 }  // namespace
@@ -32,22 +33,11 @@ AudioSinkManager* AudioSinkManager::Get() {
   return sink_manager_instance.get();
 }
 
-// static
-AudioSinkAndroid::SinkType AudioSinkManager::GetDefaultSinkType() {
-  return AudioSinkAndroid::kSinkTypeJavaBased;
-}
-
-// static
-bool AudioSinkManager::GetSessionIds(int* media_id, int* communication_id) {
-  return AudioSinkAndroid::GetSessionIds(GetDefaultSinkType(), media_id,
-                                         communication_id);
-}
-
 AudioSinkManager::AudioSinkManager() {}
 AudioSinkManager::~AudioSinkManager() {}
 
 void AudioSinkManager::Add(AudioSinkAndroid* sink) {
-  DCHECK(sink);
+  CHECK(sink, base::NotFatalUntil::M163);
 
   LOG(INFO) << __func__ << " sink(" << sink << "): id=" << sink->device_id()
             << " primary=" << sink->primary()
@@ -59,14 +49,14 @@ void AudioSinkManager::Add(AudioSinkAndroid* sink) {
 }
 
 void AudioSinkManager::Remove(AudioSinkAndroid* sink) {
-  DCHECK(sink);
+  CHECK(sink, base::NotFatalUntil::M163);
 
   LOG(INFO) << __func__ << " sink(" << sink << "): id=" << sink->device_id()
             << " type=" << sink->content_type();
 
   base::AutoLock lock(lock_);
 
-  auto it = std::find(sinks_.begin(), sinks_.end(), sink);
+  auto it = std::ranges::find(sinks_, sink);
   if (it == sinks_.end()) {
     LOG(WARNING) << __func__ << ": Cannot find sink";
     return;
@@ -91,7 +81,7 @@ void AudioSinkManager::SetOutputLimitDb(AudioContentType type, float limit_db) {
 }
 
 void AudioSinkManager::UpdateAllLimiterMultipliers(AudioContentType type) {
-  for (auto* sink : sinks_) {
+  for (AudioSinkAndroid* sink : sinks_) {
     if (sink->content_type() == type)
       UpdateLimiterMultiplier(sink);
   }

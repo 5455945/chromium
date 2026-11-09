@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,12 @@
 
 #include <memory>
 
+#include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/web/web_memory_features.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -22,7 +27,12 @@ class CountingObserver : public MemoryUsageMonitor::Observer {
 
 class MemoryUsageMonitorTest : public testing::Test {
  public:
-  MemoryUsageMonitorTest() = default;
+  explicit MemoryUsageMonitorTest(bool enable_visibility_gate = true) {
+#if BUILDFLAG(IS_ANDROID)
+    scoped_feature_list_.InitWithFeatureState(
+        features::kGateMemoryMetricsOnVisibility, enable_visibility_gate);
+#endif
+  }
 
   void SetUp() override {
     monitor_ = std::make_unique<MemoryUsageMonitor>();
@@ -35,6 +45,11 @@ class MemoryUsageMonitorTest : public testing::Test {
   }
 
  private:
+#if BUILDFLAG(IS_ANDROID)
+  base::test::ScopedFeatureList scoped_feature_list_;
+#endif
+  test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   std::unique_ptr<MemoryUsageMonitor> monitor_;
 };
 
@@ -47,14 +62,14 @@ TEST_F(MemoryUsageMonitorTest, StartStopMonitor) {
   EXPECT_TRUE(MemoryUsageMonitor::Instance().TimerIsActive());
   EXPECT_EQ(0, observer->count());
 
-  test::RunDelayedTasks(base::TimeDelta::FromSeconds(1));
+  test::RunDelayedTasks(base::Seconds(1));
   EXPECT_EQ(1, observer->count());
 
-  test::RunDelayedTasks(base::TimeDelta::FromSeconds(1));
+  test::RunDelayedTasks(base::Seconds(1));
   EXPECT_EQ(2, observer->count());
   MemoryUsageMonitor::Instance().RemoveObserver(observer.get());
 
-  test::RunDelayedTasks(base::TimeDelta::FromSeconds(1));
+  test::RunDelayedTasks(base::Seconds(1));
   EXPECT_EQ(2, observer->count());
   EXPECT_FALSE(MemoryUsageMonitor::Instance().TimerIsActive());
 }
@@ -76,12 +91,55 @@ TEST_F(MemoryUsageMonitorTest, RemoveObserverFromNotification) {
   MemoryUsageMonitor::Instance().AddObserver(observer2.get());
   EXPECT_EQ(0, observer1->count());
   EXPECT_EQ(0, observer2->count());
-  test::RunDelayedTasks(base::TimeDelta::FromSeconds(1));
+  test::RunDelayedTasks(base::Seconds(1));
   EXPECT_EQ(1, observer1->count());
   EXPECT_EQ(1, observer2->count());
-  test::RunDelayedTasks(base::TimeDelta::FromSeconds(1));
+  test::RunDelayedTasks(base::Seconds(1));
   EXPECT_EQ(1, observer1->count());
   EXPECT_EQ(2, observer2->count());
 }
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(MemoryUsageMonitorTest, PauseAndResumeOnVisibilityChanged) {
+  auto observer = std::make_unique<CountingObserver>();
+  WebMemoryFeatures::SetRendererVisible(false);
+  MemoryUsageMonitor::Instance().AddObserver(observer.get());
+
+  EXPECT_FALSE(MemoryUsageMonitor::Instance().TimerIsActive());
+  test::RunDelayedTasks(base::Seconds(1));
+  EXPECT_EQ(0, observer->count());
+
+  WebMemoryFeatures::SetRendererVisible(true);
+  EXPECT_TRUE(MemoryUsageMonitor::Instance().TimerIsActive());
+  test::RunDelayedTasks(base::Seconds(1));
+  EXPECT_EQ(1, observer->count());
+
+  WebMemoryFeatures::SetRendererVisible(false);
+  EXPECT_FALSE(MemoryUsageMonitor::Instance().TimerIsActive());
+  test::RunDelayedTasks(base::Seconds(1));
+  EXPECT_EQ(1, observer->count());
+
+  MemoryUsageMonitor::Instance().RemoveObserver(observer.get());
+}
+
+class MemoryUsageMonitorDisabledFeatureTest : public MemoryUsageMonitorTest {
+ public:
+  MemoryUsageMonitorDisabledFeatureTest()
+      : MemoryUsageMonitorTest(/*enable_visibility_gate=*/false) {}
+};
+
+TEST_F(MemoryUsageMonitorDisabledFeatureTest,
+       MonitorsWhenHiddenIfFeatureDisabled) {
+  auto observer = std::make_unique<CountingObserver>();
+  WebMemoryFeatures::SetRendererVisible(false);
+  MemoryUsageMonitor::Instance().AddObserver(observer.get());
+
+  EXPECT_TRUE(MemoryUsageMonitor::Instance().TimerIsActive());
+  test::RunDelayedTasks(base::Seconds(1));
+  EXPECT_EQ(1, observer->count());
+
+  MemoryUsageMonitor::Instance().RemoveObserver(observer.get());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,18 @@ package org.chromium.chrome.browser.share.qrcode;
 
 import com.google.android.material.tabs.TabLayout;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.ui.base.WindowAndroid;
+
 import java.util.ArrayList;
 
 /**
- * Listener that tracks which tab the user is currently viewing. This is used to turn
- * the camera on and off.
+ * Listener that tracks which tab the user is currently viewing. This is used to turn the camera on
+ * and off.
  */
+@NullMarked
 public class TabLayoutPageListener extends TabLayout.TabLayoutOnPageChangeListener {
-    private ArrayList<QrCodeDialogTab> mTabs;
+    private final ArrayList<QrCodeDialogTab> mTabs;
     private int mVisibleTab;
 
     /**
@@ -40,8 +44,8 @@ public class TabLayoutPageListener extends TabLayout.TabLayoutOnPageChangeListen
             if (mVisibleTab == i) {
                 mTabs.get(i).onResume();
             } else {
-                // Let the other tabs know that they are
-                // no longer in the foreground and pause them.
+                // Let the other tabs know that they are no longer in the foreground and pause
+                // them.
                 mTabs.get(i).onPause();
             }
         }
@@ -53,6 +57,17 @@ public class TabLayoutPageListener extends TabLayout.TabLayoutOnPageChangeListen
      */
     public void resumeSelectedTab() {
         mTabs.get(mVisibleTab).onResume();
+    }
+
+    /**
+     * Called when the fragment's underlying AndroidPermissionDelegate is updated.
+     * Propagates the given AndroidPermissionDelegate to all of the tabs.
+     * @param windowAndroid The updated WindowAndroid.
+     */
+    public void updatePermissions(WindowAndroid windowAndroid) {
+        for (QrCodeDialogTab tab : mTabs) {
+            tab.updatePermissions(windowAndroid);
+        }
     }
 
     /**

@@ -1,15 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_RENDERER_WEBGRAPHICSCONTEXT3D_PROVIDER_IMPL_H_
 #define CONTENT_RENDERER_WEBGRAPHICSCONTEXT3D_PROVIDER_IMPL_H_
 
-#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/viz/common/gpu/context_provider.h"
-#include "content/common/content_export.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/command_buffer/client/webgpu_interface.h"
@@ -24,39 +22,42 @@ class ContextProviderCommandBuffer;
 }  // namespace viz
 
 namespace gpu {
-class GLHelper;
+class ContextSupport;
 }  // namespace gpu
 
 namespace content {
 
-class CONTENT_EXPORT WebGraphicsContext3DProviderImpl
+class WebGraphicsContext3DProviderImpl
     : public blink::WebGraphicsContext3DProvider,
       public viz::ContextLostObserver {
  public:
   WebGraphicsContext3DProviderImpl(
-      scoped_refptr<viz::ContextProviderCommandBuffer> provider);
+      scoped_refptr<viz::ContextProviderCommandBuffer> provider,
+      scoped_refptr<base::SingleThreadTaskRunner> reply_task_runner = nullptr);
+
+  WebGraphicsContext3DProviderImpl(const WebGraphicsContext3DProviderImpl&) =
+      delete;
+  WebGraphicsContext3DProviderImpl& operator=(
+      const WebGraphicsContext3DProviderImpl&) = delete;
+
   ~WebGraphicsContext3DProviderImpl() override;
 
   // WebGraphicsContext3DProvider implementation.
-  bool BindToCurrentThread() override;
+  bool BindToCurrentSequence() override;
   gpu::InterfaceBase* InterfaceBase() override;
   gpu::gles2::GLES2Interface* ContextGL() override;
   gpu::raster::RasterInterface* RasterInterface() override;
   gpu::webgpu::WebGPUInterface* WebGPUInterface() override;
+  gpu::ContextSupport* ContextSupport() override;
   bool IsContextLost() override;
-  GrDirectContext* GetGrContext() override;
   const gpu::Capabilities& GetCapabilities() const override;
   const gpu::GpuFeatureInfo& GetGpuFeatureInfo() const override;
   const blink::WebglPreferences& GetWebglPreferences() const override;
-  gpu::GLHelper* GetGLHelper() override;
   void SetLostContextCallback(base::RepeatingClosure) override;
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t)>) override;
   cc::ImageDecodeCache* ImageDecodeCache(SkColorType color_type) override;
   gpu::SharedImageInterface* SharedImageInterface() override;
-  void CopyVideoFrame(media::PaintCanvasVideoRenderer* video_render,
-                      media::VideoFrame* video_frame,
-                      cc::PaintCanvas* canvas) override;
   viz::RasterContextProvider* RasterContextProvider() const override;
 
  private:
@@ -64,12 +65,10 @@ class CONTENT_EXPORT WebGraphicsContext3DProviderImpl
   void OnContextLost() override;
 
   scoped_refptr<viz::ContextProviderCommandBuffer> provider_;
-  std::unique_ptr<gpu::GLHelper> gl_helper_;
+  scoped_refptr<base::SingleThreadTaskRunner> reply_task_runner_;
   base::RepeatingClosure context_lost_callback_;
   base::flat_map<SkColorType, std::unique_ptr<cc::ImageDecodeCache>>
       image_decode_cache_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebGraphicsContext3DProviderImpl);
 };
 
 }  // namespace content

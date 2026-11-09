@@ -1,39 +1,63 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/metrics/public/cpp/ukm_source.h"
 
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/atomicops.h"
 #include "base/check_op.h"
 #include "base/hash/hash.h"
 #include "base/notreached.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/metrics_proto/ukm/source.pb.h"
 
 namespace ukm {
 
 namespace {
 
-// The maximum length of a URL we will record.
+// The maximum length of a URL we will record. URL exceeding this limit will be
+// truncated.
 constexpr int kMaxURLLength = 2 * 1024;
-
-// The string sent in place of a URL if the real URL was too long.
-constexpr char kMaxUrlLengthMessage[] = "URLTooLong";
 
 // Using a simple global assumes that all access to it will be done on the same
 // thread, namely the UI thread. If this becomes not the case then it can be
-// changed to an Atomic32 (make CustomTabState derive from int32_t) and accessed
-// with no-barrier loads and stores.
-UkmSource::CustomTabState g_custom_tab_state = UkmSource::kCustomTabUnset;
+// changed to an Atomic32 (make AndroidActivityTypeState derive from int32_t)
+// and accessed with no-barrier loads and stores.
+int32_t g_android_activity_type_state = -1;
 
-// Returns a URL that is under the length limit, by returning a constant
-// string when the URl is too long.
-std::string GetShortenedURL(const GURL& url) {
-  if (url.spec().length() > kMaxURLLength)
-    return kMaxUrlLengthMessage;
-  return url.spec();
+// Returns where the URL got truncated.
+TruncationStatus GetTruncationStatus(const GURL& url) {
+  // Determine whether the URL was truncated within the query (preserving the
+  // full path), within the path (preserving the URL without query), or within
+  // the origin.
+  const url::Parsed& parsed = url.parsed_for_possibly_invalid_spec();
+  int query_start = parsed.CountCharactersBefore(url::Parsed::QUERY, true);
+  int path_start = parsed.CountCharactersBefore(url::Parsed::PATH, true);
+
+  if (url.has_query() && kMaxURLLength >= query_start) {
+    return TRUNCATED_AT_FULL_PATH;
+  } else if (kMaxURLLength > path_start) {
+    return TRUNCATED_AT_URL_WITHOUT_QUERY;
+  } else {
+    return TRUNCATED_AT_ORIGIN;
+  }
+}
+
+// Sets the URL on the UrlInfo protobuf, and truncates the string if it's too
+// long. Also sets the truncation_status on the UrlInfo if it's truncated.
+void SetTruncatedURL(const GURL& url, UrlInfo* url_info) {
+  if (url.spec().length() <= kMaxURLLength) {
+    url_info->set_url(url.spec());
+    url_info->set_truncation_status(NOT_TRUNCATED);
+    return;
+  }
+
+  url_info->set_url(url.spec().substr(0, kMaxURLLength));
+  url_info->set_truncation_status(GetTruncationStatus(url));
 }
 
 // Translates ukm::SourceIdType to the equivalent Source proto enum value.
@@ -51,20 +75,57 @@ SourceType ToProtobufSourceType(SourceIdType source_id_type) {
       return SourceType::WEBAPK_ID;
     case SourceIdType::PAYMENT_APP_ID:
       return SourceType::PAYMENT_APP_ID;
-    case SourceIdType::DESKTOP_WEB_APP_ID:
+    case SourceIdType::DEPRECATED_DESKTOP_WEB_APP_ID:
       return SourceType::DESKTOP_WEB_APP_ID;
     case SourceIdType::WORKER_ID:
       return SourceType::WORKER_ID;
-    default:
-      NOTREACHED();
-      return SourceType::DEFAULT;
+    case SourceIdType::NO_URL_ID:
+      return SourceType::NO_URL_ID;
+    case SourceIdType::REDIRECT_ID:
+      return SourceType::REDIRECT_ID;
+    case SourceIdType::WEB_IDENTITY_ID:
+      return SourceType::WEB_IDENTITY_ID;
+    case SourceIdType::CHROMEOS_WEBSITE_ID:
+      return SourceType::CHROMEOS_WEBSITE_ID;
+    case SourceIdType::EXTENSION_ID:
+      return SourceType::EXTENSION_ID;
+    case SourceIdType::NOTIFICATION_ID:
+      return SourceType::NOTIFICATION_ID;
+    case SourceIdType::CDM_ID:
+      return SourceType::CDM_ID;
+    case SourceIdType::IWA_BUNDLE_ID:
+      return SourceType::IWA_BUNDLE_ID;
   }
 }
+
+AndroidActivityType ToProtobufActivityType(int32_t type) {
+  switch (type) {
+    case 0:
+      return AndroidActivityType::TABBED;
+    case 1:
+      return AndroidActivityType::CUSTOM_TAB;
+    case 2:
+      return AndroidActivityType::TRUSTED_WEB_ACTIVITY;
+    case 3:
+      return AndroidActivityType::WEB_APP;
+    case 4:
+      return AndroidActivityType::WEB_APK;
+    case 5:
+      return AndroidActivityType::PRE_FIRST_TAB;
+    case 6:
+      return AndroidActivityType::AUTH_TAB;
+    case 7:
+      return AndroidActivityType::DEV_TOOLS;
+    default:
+      NOTREACHED();
+  }
+}
+
 }  // namespace
 
 // static
-void UkmSource::SetCustomTabVisible(bool visible) {
-  g_custom_tab_state = visible ? kCustomTabTrue : kCustomTabFalse;
+void UkmSource::SetAndroidActivityTypeState(int32_t activity_type) {
+  g_android_activity_type_state = activity_type;
 }
 
 UkmSource::NavigationData::NavigationData() = default;
@@ -75,7 +136,6 @@ UkmSource::NavigationData::NavigationData(const NavigationData& other) =
 
 UkmSource::NavigationData UkmSource::NavigationData::CopyWithSanitizedUrls(
     std::vector<GURL> sanitized_urls) const {
-  DCHECK_LE(sanitized_urls.size(), 2u);
   DCHECK(!sanitized_urls.empty());
   DCHECK(!sanitized_urls.back().is_empty());
   DCHECK(!sanitized_urls.front().is_empty());
@@ -93,27 +153,27 @@ UkmSource::NavigationData UkmSource::NavigationData::CopyWithSanitizedUrls(
   sanitized_navigation_data.is_renderer_initiated = is_renderer_initiated;
   sanitized_navigation_data.is_error_page = is_error_page;
   sanitized_navigation_data.navigation_time = navigation_time;
+  sanitized_navigation_data.resolved_urls = resolved_urls;
   return sanitized_navigation_data;
 }
 
 UkmSource::UkmSource(ukm::SourceId id, const GURL& url)
     : id_(id),
       type_(GetSourceIdType(id_)),
-      custom_tab_state_(g_custom_tab_state),
+      android_activity_type_state_(g_android_activity_type_state),
       creation_time_(base::TimeTicks::Now()) {
-  navigation_data_.urls = {url};
-  DCHECK(!url.is_empty());
+  if (!url.is_empty()) {
+    navigation_data_.urls = {url};
+  }
 }
 
 UkmSource::UkmSource(ukm::SourceId id, const NavigationData& navigation_data)
     : id_(id),
       type_(GetSourceIdType(id_)),
       navigation_data_(navigation_data),
-      custom_tab_state_(g_custom_tab_state),
+      android_activity_type_state_(g_android_activity_type_state),
       creation_time_(base::TimeTicks::Now()) {
   DCHECK(type_ == SourceIdType::NAVIGATION_ID);
-  DCHECK(!navigation_data.urls.empty());
-  DCHECK(!navigation_data.urls.back().is_empty());
 }
 
 UkmSource::~UkmSource() = default;
@@ -126,20 +186,28 @@ void UkmSource::UpdateUrl(const GURL& new_url) {
   navigation_data_.urls = {new_url};
 }
 
+void UkmSource::set_resolved_urls(const std::vector<GURL>& resolved_urls) {
+  navigation_data_.resolved_urls = resolved_urls;
+}
+
 void UkmSource::PopulateProto(Source* proto_source) const {
   DCHECK(!proto_source->has_id());
   DCHECK(!proto_source->has_type());
-  DCHECK(!proto_source->has_url());
-  DCHECK(!proto_source->has_initial_url());
 
   proto_source->set_id(id_);
   proto_source->set_type(ToProtobufSourceType(type_));
   for (const auto& url : urls()) {
-    proto_source->add_urls()->set_url(GetShortenedURL(url));
+    if (!url.is_empty()) {
+      UrlInfo* url_info = proto_source->add_urls();
+      SetTruncatedURL(url, url_info);
+    }
   }
 
-  if (custom_tab_state_ != kCustomTabUnset)
-    proto_source->set_is_custom_tab(custom_tab_state_ == kCustomTabTrue);
+  // -1 corresponds to the unset state. Android activity type values start at 0.
+  // See chrome/browser/flags/ActivityType.java
+  if (android_activity_type_state_ != -1)
+    proto_source->set_android_activity_type(
+        ToProtobufActivityType(android_activity_type_state_));
 
   if (navigation_data_.previous_source_id != kInvalidSourceId)
     proto_source->set_previous_source_id(navigation_data_.previous_source_id);
@@ -160,13 +228,14 @@ void UkmSource::PopulateProto(Source* proto_source) const {
   if (navigation_data_.is_same_document_navigation)
     proto_source->set_is_same_document_navigation(true);
 
-  ukm::Source_SameOriginStatus status = ukm::Source::UNSET;
+  ukm::SameOriginStatus status = ukm::SAME_ORIGIN_STATUS_UNSET;
   if (navigation_data_.same_origin_status ==
-      UkmSource::NavigationData::SameOriginStatus::SAME_ORIGIN) {
-    status = ukm::Source::SAME_ORIGIN;
+      UkmSource::NavigationData::SourceSameOriginStatus::SOURCE_SAME_ORIGIN) {
+    status = ukm::SAME_ORIGIN;
   } else if (navigation_data_.same_origin_status ==
-             UkmSource::NavigationData::SameOriginStatus::CROSS_ORIGIN) {
-    status = ukm::Source::CROSS_ORIGIN;
+             UkmSource::NavigationData::SourceSameOriginStatus::
+                 SOURCE_CROSS_ORIGIN) {
+    status = ukm::CROSS_ORIGIN;
   }
 
   proto_source->mutable_navigation_metadata()->set_same_origin_status(status);
@@ -178,6 +247,13 @@ void UkmSource::PopulateProto(Source* proto_source) const {
   if (navigation_data_.navigation_time) {
     proto_source->set_navigation_time_msec(
         navigation_data_.navigation_time->since_origin().InMilliseconds());
+  }
+
+  for (const auto& url : navigation_data_.resolved_urls) {
+    if (!url.is_empty()) {
+      UrlInfo* url_info = proto_source->add_resolved_urls();
+      SetTruncatedURL(url, url_info);
+    }
   }
 }
 

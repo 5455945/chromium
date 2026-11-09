@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "base/timer/timer.h"
+#include "components/account_id/account_id.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-
-class Profile;
 
 namespace arc {
 
@@ -24,7 +22,13 @@ class ArcAuthContext : public signin::IdentityManager::Observer {
   // must be the |account_id| used by the OAuth Token Service chain.
   // Note: |account_id| can be the Device Account or a Secondary Account stored
   // in Chrome OS Account Manager.
-  ArcAuthContext(Profile* profile, const CoreAccountId& account_id);
+  // `identity_manager` must not be nullptr and must outlive this instance
+  ArcAuthContext(signin::IdentityManager* identity_manager,
+                 const CoreAccountId& account_id);
+
+  ArcAuthContext(const ArcAuthContext&) = delete;
+  ArcAuthContext& operator=(const ArcAuthContext&) = delete;
+
   ~ArcAuthContext() override;
 
   // Prepares the context. Calling while an inflight operation exists will
@@ -34,15 +38,14 @@ class ArcAuthContext : public signin::IdentityManager::Observer {
   using PrepareCallback = base::OnceCallback<void(bool success)>;
   void Prepare(PrepareCallback callback);
 
-  // Creates and starts a request to fetch an access token for the given
-  // |scopes|. The caller owns the returned request. |callback| will be
-  // called with results if the returned request is not deleted.
+  // Creates and starts a request to fetch an access token. The caller owns the
+  // returned request. |callback| will be called with results if the returned
+  // request is not deleted.
   std::unique_ptr<signin::AccessTokenFetcher> CreateAccessTokenFetcher(
-      const std::string& consumer_name,
-      const signin::ScopeSet& scopes,
+      const signin::OAuthConsumerId consumer_id,
       signin::AccessTokenFetcher::TokenCallback callback);
 
-  void RemoveAccessTokenFromCache(const signin::ScopeSet& scopes,
+  void RemoveAccessTokenFromCache(const signin::OAuthConsumerId consumer_id,
                                   const std::string& access_token);
 
   // signin::IdentityManager::Observer:
@@ -53,15 +56,13 @@ class ArcAuthContext : public signin::IdentityManager::Observer {
  private:
   void OnRefreshTokenTimeout();
 
+  const raw_ref<signin::IdentityManager> identity_manager_;
   const CoreAccountId account_id_;
-  signin::IdentityManager* const identity_manager_;
 
   PrepareCallback callback_;
   bool context_prepared_ = false;
 
   base::OneShotTimer refresh_token_timeout_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcAuthContext);
 };
 
 }  // namespace arc

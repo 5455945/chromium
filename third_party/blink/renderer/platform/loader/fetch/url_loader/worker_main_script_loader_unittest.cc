@@ -1,24 +1,30 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/worker_main_script_loader.h"
 
-#include "base/test/scoped_feature_list.h"
+#include "base/containers/span.h"
+#include "base/strings/string_view_util.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info_notifier.mojom.h"
+#include "third_party/blink/public/mojom/navigation/renderer_eviction_reason.mojom-blink.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_observer.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/worker_main_script_loader_client.h"
+#include "third_party/blink/renderer/platform/loader/testing/fake_resource_load_info_notifier.h"
 #include "third_party/blink/renderer/platform/loader/testing/mock_fetch_context.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 
 namespace blink {
@@ -38,10 +44,7 @@ class WorkerMainScriptLoaderTest : public testing::Test {
  public:
   WorkerMainScriptLoaderTest()
       : fake_loader_(pending_remote_loader_.InitWithNewPipeAndPassReceiver()),
-        client_(MakeGarbageCollected<TestClient>()) {
-    scoped_feature_list_.InitWithFeatureState(
-        blink::features::kPlzDedicatedWorker, true);
-  }
+        client_(MakeGarbageCollected<TestClient>()) {}
   ~WorkerMainScriptLoaderTest() override {
     // Forced GC in order to finalize objects depending on MockResourceObserver,
     // see details https://crbug.com/1132634.
@@ -54,11 +57,11 @@ class WorkerMainScriptLoaderTest : public testing::Test {
 
    public:
     // Implements WorkerMainScriptLoaderClient.
-    void DidReceiveData(base::span<const char> data) override {
+    void DidReceiveDataWorkerMainScript(base::span<const char> data) override {
       if (!data_)
-        data_ = SharedBuffer::Create(data.data(), data.size());
+        data_ = SharedBuffer::Create(data);
       else
-        data_->Append(data.data(), data.size());
+        data_->Append(data);
     }
     void OnFinishedLoadingWorkerMainScript() override { finished_ = true; }
     void OnFailedLoadingWorkerMainScript() override { failed_ = true; }
@@ -90,68 +93,26 @@ class WorkerMainScriptLoaderTest : public testing::Test {
     FakeURLLoader& operator=(const FakeURLLoader&) = delete;
 
     // network::mojom::URLLoader overrides.
-    void FollowRedirect(const std::vector<std::string>&,
-                        const net::HttpRequestHeaders&,
-                        const net::HttpRequestHeaders&,
-                        const absl::optional<GURL>&) override {}
+    void FollowRedirect(
+        network::HttpRequestHeadersUpdateParams headers_update_params,
+        const std::optional<GURL>&) override {}
     void SetPriority(net::RequestPriority priority,
                      int32_t intra_priority_value) override {}
-    void PauseReadingBodyFromNet() override {}
-    void ResumeReadingBodyFromNet() override {}
 
    private:
     mojo::Receiver<network::mojom::URLLoader> receiver_;
   };
 
-  class FakeResourceLoadInfoNotifier final
-      : public blink::mojom::ResourceLoadInfoNotifier {
-   public:
-    FakeResourceLoadInfoNotifier() = default;
-
-    FakeResourceLoadInfoNotifier(const FakeResourceLoadInfoNotifier&) = delete;
-    FakeResourceLoadInfoNotifier& operator=(
-        const FakeResourceLoadInfoNotifier&) = delete;
-
-    // blink::mojom::ResourceLoadInfoNotifier overrides.
-#if defined(OS_ANDROID)
-    void NotifyUpdateUserGestureCarryoverInfo() override {}
-#endif
-    void NotifyResourceRedirectReceived(
-        const net::RedirectInfo& redirect_info,
-        network::mojom::URLResponseHeadPtr redirect_response) override {}
-    void NotifyResourceResponseReceived(
-        int64_t request_id,
-        const GURL& final_url,
-        network::mojom::URLResponseHeadPtr head,
-        network::mojom::RequestDestination request_destination,
-        int32_t previews_state) override {}
-    void NotifyResourceTransferSizeUpdated(
-        int64_t request_id,
-        int32_t transfer_size_diff) override {}
-    void NotifyResourceLoadCompleted(
-        blink::mojom::ResourceLoadInfoPtr resource_load_info,
-        const ::network::URLLoaderCompletionStatus& status) override {
-      resource_load_info_ = std::move(resource_load_info);
-    }
-    void NotifyResourceLoadCanceled(int64_t request_id) override {}
-    void Clone(mojo::PendingReceiver<blink::mojom::ResourceLoadInfoNotifier>
-                   pending_resource_load_info_notifier) override {}
-
-    std::string GetMimeType() { return resource_load_info_->mime_type; }
-
-   private:
-    blink::mojom::ResourceLoadInfoPtr resource_load_info_;
-  };
-
   class MockResourceLoadObserver : public ResourceLoadObserver {
    public:
     MOCK_METHOD2(DidStartRequest, void(const FetchParameters&, ResourceType));
-    MOCK_METHOD5(WillSendRequest,
+    MOCK_METHOD6(WillSendRequest,
                  void(const ResourceRequest&,
                       const ResourceResponse& redirect_response,
                       ResourceType,
                       const ResourceLoaderOptions&,
-                      RenderBlockingBehavior));
+                      RenderBlockingBehavior,
+                      const Resource*));
     MOCK_METHOD3(DidChangePriority,
                  void(uint64_t identifier,
                       ResourceLoadPriority,
@@ -163,7 +124,7 @@ class WorkerMainScriptLoaderTest : public testing::Test {
                       const Resource* resource,
                       ResponseSource));
     MOCK_METHOD2(DidReceiveData,
-                 void(uint64_t identifier, base::span<const char> chunk));
+                 void(uint64_t identifier, base::SpanOrSize<const char> chunk));
     MOCK_METHOD2(DidReceiveTransferSizeUpdate,
                  void(uint64_t identifier, int transfer_size_diff));
     MOCK_METHOD2(DidDownloadToBlob, void(uint64_t identifier, BlobDataHandle*));
@@ -171,16 +132,19 @@ class WorkerMainScriptLoaderTest : public testing::Test {
                  void(uint64_t identifier,
                       base::TimeTicks finish_time,
                       int64_t encoded_data_length,
-                      int64_t decoded_body_length,
-                      bool should_report_corb_blocking));
+                      uint64_t encoded_body_length,
+                      int64_t decoded_body_length));
     MOCK_METHOD5(DidFailLoading,
                  void(const KURL&,
                       uint64_t identifier,
                       const ResourceError&,
                       int64_t encoded_data_length,
                       IsInternalRequest));
+    MOCK_METHOD2(DidChangeRenderBlockingBehavior,
+                 void(Resource* resource, const FetchParameters& params));
+    MOCK_METHOD0(InterestedInAllRequests, bool());
     MOCK_METHOD1(EvictFromBackForwardCache,
-                 void(blink::mojom::RendererEvictionReason));
+                 void(mojom::blink::RendererEvictionReason));
   };
 
   MojoCreateDataPipeOptions CreateDataPipeOptions() {
@@ -253,7 +217,6 @@ class WorkerMainScriptLoaderTest : public testing::Test {
   FakeURLLoader fake_loader_;
 
   Persistent<TestClient> client_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(WorkerMainScriptLoaderTest, ResponseWithSucessThenOnComplete) {
@@ -264,7 +227,6 @@ TEST_F(WorkerMainScriptLoaderTest, ResponseWithSucessThenOnComplete) {
   MockResourceLoadObserver* mock_observer =
       MakeGarbageCollected<MockResourceLoadObserver>();
   FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
-  EXPECT_CALL(*mock_observer, WillSendRequest(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidReceiveData(_, _));
   EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _));
@@ -281,9 +243,9 @@ TEST_F(WorkerMainScriptLoaderTest, ResponseWithSucessThenOnComplete) {
   EXPECT_FALSE(client_->LoadingIsFailed());
   EXPECT_EQ(KURL(kTopLevelScriptURL),
             worker_main_script_loader->GetRequestURL());
-  EXPECT_EQ(UTF8Encoding(), worker_main_script_loader->GetScriptEncoding());
-  EXPECT_EQ(kTopLevelScript,
-            std::string(client_->Data()->Data(), client_->Data()->size()));
+  EXPECT_EQ(Utf8Encoding(), worker_main_script_loader->GetScriptEncoding());
+  auto flatten_data = client_->Data()->CopyAs<Vector<char>>();
+  EXPECT_EQ(kTopLevelScript, std::string(base::as_string_view(flatten_data)));
   EXPECT_EQ("text/javascript", fake_resource_load_info_notifier.GetMimeType());
 }
 
@@ -295,7 +257,6 @@ TEST_F(WorkerMainScriptLoaderTest, ResponseWithFailureThenOnComplete) {
   MockResourceLoadObserver* mock_observer =
       MakeGarbageCollected<MockResourceLoadObserver>();
   FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
-  EXPECT_CALL(*mock_observer, WillSendRequest(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _)).Times(0);
   EXPECT_CALL(*mock_observer, DidFailLoading(_, _, _, _, _));
@@ -319,7 +280,6 @@ TEST_F(WorkerMainScriptLoaderTest, DisconnectBeforeOnComplete) {
   MockResourceLoadObserver* mock_observer =
       MakeGarbageCollected<MockResourceLoadObserver>();
   FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
-  EXPECT_CALL(*mock_observer, WillSendRequest(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _)).Times(0);
   EXPECT_CALL(*mock_observer, DidFailLoading(_, _, _, _, _));
@@ -343,7 +303,6 @@ TEST_F(WorkerMainScriptLoaderTest, OnCompleteWithError) {
   MockResourceLoadObserver* mock_observer =
       MakeGarbageCollected<MockResourceLoadObserver>();
   FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
-  EXPECT_CALL(*mock_observer, WillSendRequest(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
   EXPECT_CALL(*mock_observer, DidReceiveData(_, _));
   EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _)).Times(0);
@@ -358,6 +317,127 @@ TEST_F(WorkerMainScriptLoaderTest, OnCompleteWithError) {
 
   EXPECT_FALSE(client_->LoadingIsFinished());
   EXPECT_TRUE(client_->LoadingIsFailed());
+}
+
+TEST_F(WorkerMainScriptLoaderTest, CreateCachedMetadataHandlerNormal) {
+  mojo::ScopedDataPipeProducerHandle body_producer;
+  std::unique_ptr<WorkerMainScriptLoadParameters>
+      worker_main_script_load_params =
+          CreateMainScriptLoaderParams(kHeader, &body_producer);
+  FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
+  MockResourceLoadObserver* mock_observer =
+      MakeGarbageCollected<MockResourceLoadObserver>();
+  EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
+  EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _));
+  WorkerMainScriptLoader* worker_main_script_loader =
+      CreateWorkerMainScriptLoaderAndStartLoading(
+          std::move(worker_main_script_load_params), mock_observer,
+          &fake_resource_load_info_notifier);
+  mojo::BlockingCopyFromString(kTopLevelScript, body_producer);
+  body_producer.reset();
+  Complete(net::OK);
+
+  auto* handler = worker_main_script_loader->CreateCachedMetadataHandler();
+  ASSERT_TRUE(handler);
+  EXPECT_FALSE(handler->HashRequired());
+}
+
+TEST_F(WorkerMainScriptLoaderTest, CreateCachedMetadataHandlerServiceWorker) {
+  mojo::ScopedDataPipeProducerHandle body_producer;
+  std::unique_ptr<WorkerMainScriptLoadParameters>
+      worker_main_script_load_params =
+          CreateMainScriptLoaderParams(kHeader, &body_producer);
+  worker_main_script_load_params->response_head
+      ->was_fetched_via_service_worker = true;
+  FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
+  MockResourceLoadObserver* mock_observer =
+      MakeGarbageCollected<MockResourceLoadObserver>();
+  EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
+  EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _));
+  WorkerMainScriptLoader* worker_main_script_loader =
+      CreateWorkerMainScriptLoaderAndStartLoading(
+          std::move(worker_main_script_load_params), mock_observer,
+          &fake_resource_load_info_notifier);
+  mojo::BlockingCopyFromString(kTopLevelScript, body_producer);
+  body_producer.reset();
+  Complete(net::OK);
+
+  auto* handler = worker_main_script_loader->CreateCachedMetadataHandler();
+  ASSERT_TRUE(handler);
+  EXPECT_TRUE(handler->HashRequired());
+}
+
+TEST_F(WorkerMainScriptLoaderTest,
+       CreateCachedMetadataHandlerServiceWorkerDisabledByFeature) {
+  ScopedServiceWorkerCodeCacheForTest scoped_feature(false);
+  mojo::ScopedDataPipeProducerHandle body_producer;
+  std::unique_ptr<WorkerMainScriptLoadParameters>
+      worker_main_script_load_params =
+          CreateMainScriptLoaderParams(kHeader, &body_producer);
+  worker_main_script_load_params->response_head
+      ->was_fetched_via_service_worker = true;
+  FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
+  MockResourceLoadObserver* mock_observer =
+      MakeGarbageCollected<MockResourceLoadObserver>();
+  EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
+  EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _));
+  WorkerMainScriptLoader* worker_main_script_loader =
+      CreateWorkerMainScriptLoaderAndStartLoading(
+          std::move(worker_main_script_load_params), mock_observer,
+          &fake_resource_load_info_notifier);
+  mojo::BlockingCopyFromString(kTopLevelScript, body_producer);
+  body_producer.reset();
+  Complete(net::OK);
+
+  auto* handler = worker_main_script_loader->CreateCachedMetadataHandler();
+  EXPECT_FALSE(handler);
+}
+
+class MockTestingPlatformForCodeCache : public TestingPlatformSupport {
+ public:
+  MockTestingPlatformForCodeCache() = default;
+  ~MockTestingPlatformForCodeCache() override = default;
+
+  // TestingPlatformSupport:
+  bool ShouldUseCodeCacheWithHashing(const WebURL& request_url) const override {
+    return should_use_code_cache_with_hashing_;
+  }
+
+  void set_should_use_code_cache_with_hashing(
+      bool should_use_code_cache_with_hashing) {
+    should_use_code_cache_with_hashing_ = should_use_code_cache_with_hashing;
+  }
+
+ private:
+  bool should_use_code_cache_with_hashing_ = true;
+};
+
+TEST_F(WorkerMainScriptLoaderTest,
+       CreateCachedMetadataHandlerServiceWorkerDisabledByPlatform) {
+  ScopedTestingPlatformSupport<MockTestingPlatformForCodeCache> platform;
+  platform->set_should_use_code_cache_with_hashing(false);
+
+  mojo::ScopedDataPipeProducerHandle body_producer;
+  std::unique_ptr<WorkerMainScriptLoadParameters>
+      worker_main_script_load_params =
+          CreateMainScriptLoaderParams(kHeader, &body_producer);
+  worker_main_script_load_params->response_head
+      ->was_fetched_via_service_worker = true;
+  FakeResourceLoadInfoNotifier fake_resource_load_info_notifier;
+  MockResourceLoadObserver* mock_observer =
+      MakeGarbageCollected<MockResourceLoadObserver>();
+  EXPECT_CALL(*mock_observer, DidReceiveResponse(_, _, _, _, _));
+  EXPECT_CALL(*mock_observer, DidFinishLoading(_, _, _, _, _));
+  WorkerMainScriptLoader* worker_main_script_loader =
+      CreateWorkerMainScriptLoaderAndStartLoading(
+          std::move(worker_main_script_load_params), mock_observer,
+          &fake_resource_load_info_notifier);
+  mojo::BlockingCopyFromString(kTopLevelScript, body_producer);
+  body_producer.reset();
+  Complete(net::OK);
+
+  auto* handler = worker_main_script_loader->CreateCachedMetadataHandler();
+  EXPECT_FALSE(handler);
 }
 
 }  // namespace

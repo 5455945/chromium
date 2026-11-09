@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2019 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file. -->
+<!--
+Copyright 2019 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
 
 <merge
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <org.chromium.ui.widget.ChromeImageView
+    <ImageView
         android:id="@+id/icon_view"
-        style="@style/ListItemStartIcon" />
+        style="@style/ListItemStartIcon"
+        android:importantForAccessibility="no" />
 
     <LinearLayout
         android:layout_width="0dp"
@@ -48,7 +51,7 @@
                 android:paddingStart="4dp"
                 android:clickable="true"
                 android:maxLines="1"
-                android:textAppearance="@style/TextAppearance.TextMedium.Blue" />
+                android:textAppearance="@style/TextAppearance.TextMedium.Accent1" />
         </LinearLayout>
 
         <LinearLayout
@@ -72,7 +75,7 @@
                 android:paddingStart="4dp"
                 android:clickable="true"
                 android:maxLines="1"
-                android:textAppearance="@style/TextAppearance.TextMedium.Blue" />
+                android:textAppearance="@style/TextAppearance.TextMedium.Accent1" />
         </LinearLayout>
 
         <LinearLayout
@@ -96,7 +99,7 @@
                 android:paddingStart="4dp"
                 android:clickable="true"
                 android:maxLines="1"
-                android:textAppearance="@style/TextAppearance.TextMedium.Blue" />
+                android:textAppearance="@style/TextAppearance.TextMedium.Accent1" />
         </LinearLayout>
     </LinearLayout>
 
@@ -105,7 +108,8 @@
         android:layout_width="32dp"
         android:layout_height="32dp"
         android:layout_marginEnd="10dp"
-        android:src="@drawable/btn_star_filled"
+        android:src="@drawable/ic_star_filled_24dp"
+        android:tint="@color/google_logo_blue"
         android:visibility="gone"
         tools:ignore="ContentDescription"/>
 </merge>

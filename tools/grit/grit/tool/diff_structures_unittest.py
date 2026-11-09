@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Unit tests for the 'grit newgrd' tool.'''
 
-from __future__ import print_function
-
 import os
 import sys
+
 if __name__ == '__main__':
   sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
@@ -17,12 +16,11 @@ import unittest
 from grit.tool import diff_structures
 
 
-class DummyOpts(object):
+class DummyOpts:
   """Options needed by NewGrd."""
 
 
 class DiffStructuresUnittest(unittest.TestCase):
-
   def testMissingFiles(self):
     """Verify failure w/out file inputs."""
     tool = diff_structures.DiffStructures()

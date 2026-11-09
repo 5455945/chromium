@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,19 +36,26 @@ Process Process::Current() {
 
 // static
 Process Process::Open(ProcessId pid) {
+  if (pid == GetCurrentProcId()) {
+    return Current();
+  }
   return Process(pid);
 }
 
 // static
 Process Process::OpenWithExtraPrivileges(ProcessId pid) {
-  return Process(pid);
+  return Open(pid);
 }
 
 // static
 void Process::TerminateCurrentProcessImmediately(int exit_code) {
   // This method is marked noreturn, so we crash rather than just provide an
   // empty stub implementation.
-  IMMEDIATE_CRASH();
+  ImmediateCrash();
+}
+
+bool Process::Terminate(int exit_code, bool wait) const {
+  return false;
 }
 
 bool Process::IsValid() const {
@@ -73,10 +80,6 @@ ProcessId Process::Pid() const {
   return process_;
 }
 
-Time Process::CreationTime() const {
-  return Time();
-}
-
 bool Process::is_current() const {
   return Handle() == kCurrentProcessHandle;
 }
@@ -93,17 +96,15 @@ bool Process::WaitForExitWithTimeout(TimeDelta timeout, int* exit_code) const {
   return false;
 }
 
-void Process::Exited(int exit_code) const {}
+Process::Priority Process::GetPriority() const {
+  return Priority::kUserBlocking;
+}
 
-bool Process::IsProcessBackgrounded() const {
+bool Process::SetPriority(Priority priority) {
   return false;
 }
 
-bool Process::SetProcessBackgrounded(bool value) {
-  return false;
-}
-
-int Process::GetPriority() const {
+int Process::GetOSPriority() const {
   return -1;
 }
 

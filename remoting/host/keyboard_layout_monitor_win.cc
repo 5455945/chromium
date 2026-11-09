@@ -1,27 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/keyboard_layout_monitor.h"
 
 #include <windows.h>
+
 #include <ime.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
-#include "base/no_destructor.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_local.h"
 #include "base/timer/timer.h"
 #include "remoting/proto/control.pb.h"
@@ -34,8 +33,7 @@ namespace remoting {
 
 namespace {
 
-constexpr base::TimeDelta POLL_INTERVAL =
-    base::TimeDelta::FromMilliseconds(1000);
+constexpr base::TimeDelta POLL_INTERVAL = base::Milliseconds(1000);
 // If second is equivalent to first (generates the same functions/characters at
 // all shift levels), second will be removed from the map.
 constexpr std::pair<ui::DomCode, ui::DomCode> POSSIBLE_EQUIVALENTS[] = {
@@ -97,7 +95,7 @@ void KeyboardLayoutMonitorWin::QueryLayout() {
   input_task_runner_->PostTaskAndReply(
       FROM_HERE,
       base::BindOnce(&QueryLayoutOnInputThread,
-                     base::SequencedTaskRunnerHandle::Get(),
+                     base::SequencedTaskRunner::GetCurrentDefault(),
                      weak_ptr_factory_.GetWeakPtr(), previous_layout_),
       base::BindOnce(&KeyboardLayoutMonitorWin::ResetTimer,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -233,7 +231,7 @@ void KeyboardLayoutMonitorWin::QueryLayoutOnInputThread(
           /* numlock_state */ true, shift_level & 1, virtual_key, key);
 
       // First check if the key generates a character.
-      BYTE key_state[256] = {0};
+      BYTE key_state[256] = {};
       // Modifiers set the high-order bit when pressed.
       key_state[VK_SHIFT] = (shift_level & 1) << 7;
       key_state[VK_CONTROL] = key_state[VK_MENU] = (shift_level & 2) << 6;
@@ -257,7 +255,7 @@ void KeyboardLayoutMonitorWin::QueryLayoutOnInputThread(
       // scancode into whatever format ToUnicodeEx expects, passing 0 seems to
       // work just fine.
       int size = ToUnicodeEx(translated_key, 0, key_state, char_buffer,
-                             base::size(char_buffer), 0, layout);
+                             std::size(char_buffer), 0, layout);
       if (size < 0) {
         // We don't handle dead keys specially for the layout, but we do
         // need to clear them from the system keyboard state.
@@ -290,7 +288,7 @@ void KeyboardLayoutMonitorWin::QueryLayoutOnInputThread(
         }
         // The key generated at least one character.
         key_actions[shift_level].set_character(
-            base::WideToUTF8(base::WStringPiece(char_buffer, size)));
+            base::WideToUTF8(std::wstring_view(char_buffer, size)));
         if (shift_level > 2) {
           has_altgr = true;
         }
@@ -381,11 +379,11 @@ void ClearDeadKeys(HKL layout) {
   // which includes the list of currently stored dead keys. Pressing space
   // translates previously pressed dead keys to characters, clearing the dead-
   // key buffer.
-  BYTE key_state[256] = {0};
+  BYTE key_state[256] = {};
   WCHAR char_buffer[16];
   ToUnicodeEx(VK_SPACE,
               ui::KeycodeConverter::DomCodeToNativeKeycode(ui::DomCode::SPACE),
-              key_state, char_buffer, base::size(char_buffer), 0, layout);
+              key_state, char_buffer, std::size(char_buffer), 0, layout);
 }
 
 bool IsNumpadKey(ui::DomCode code) {

@@ -31,10 +31,41 @@ popular SQL database systems, such as
 [PostgreSQL](https://www.postgresql.org/) and [MySQL](https://www.mysql.com/).
 
 
-### Data types
+### Data storage model {#storage-model}
 
-SQLite stores data using [5 major types](https://www.sqlite.org/datatype3.html),
-which are summarized below.
+The main bottleneck in SQLite database performance is usually disk I/O. So,
+designing schemas that perform well requires understanding how SQLite stores
+data on disk.
+
+At a very high level, a SQLite database is a forest of
+[B-trees](https://en.wikipedia.org/wiki/B-tree), some of which are
+[B+-trees](https://en.wikipedia.org/wiki/B%2B_tree). The database file is an
+array of fixed-size pages, where each page stores a B-tree node. The page size
+can only be set when a database file is created, and impacts both SQL statement
+execution speed, and memory consumption.
+
+The data in each table (usually called *rows*, *records*, or *tuples*) is stored
+in a separate B-tree. The data in each index (called *entries*, *records* or
+*tuples*) is also stored in a separate B-tree. So, each B-tree is associated
+with exactly one table. The [*Indexing* section](#indexing-model) goes into
+further details.
+
+Each B-tree node stores multiple tuples of values. The values and their
+encodings are described in the [*Value types* section](#data-types).
+
+Tying everything together: The performance of a SQL statement is roughly the
+number of database pages touched (read / written) by the statement. These pages
+are nodes belonging to the B-trees associated with the tables mentioned in the
+statement. The number of pages touched when accessing a B-tree depends on the
+B-tree's depth. Each B-tree's depth depends on its record count (number of
+records stored in it), and on its node width (how many records fit in a node).
+
+
+#### Value types {#data-types}
+
+SQLite stores values using
+[5 major types](https://www.sqlite.org/datatype3.html), which are summarized
+below.
 
 1. NULL is a special type for the `NULL` value.
 
@@ -77,7 +108,7 @@ Chrome database schemas should avoid type affinity, and should not include any
 information ignored by SQLite.
 
 
-### Indexing
+#### Indexing {#indexing-model}
 
 SQLite [uses B-trees](https://www.sqlite.org/fileformat2.html#pages) to store
 both table and index data.
@@ -120,25 +151,100 @@ index key column values, followed by the record's primary key column values.
 storage costs. This is because indexes for `WITHOUT ROWID` tables enjoy
 [a space optimization](https://sqlite.org/fileformat2.html#representation_of_sql_indices)
 where columns in both the primary key and the index key are not stored twice in
-B-tree nodes.
+B-tree nodes. Note that data in such tables cannot be recovered by `sql::Recovery`.
 
 
-### Query processing
+### Statement execution model {#query-model}
 
-[At a high level](https://www.sqlite.org/arch.html), SQLite compiles SQL queries
-into bytecode executed by a virtual machine called the VDBE, or
-[the bytecode engine](https://www.sqlite.org/opcode.html). A compiled query can
-be executed multiple times, amortizing the costs of query parsing and planning.
-Chrome's SQLite abstraction layer makes it easy to use compiled queries.
+At [a very high level](https://www.sqlite.org/arch.html), SQLite compiles SQL
+statements (often called *queries*) into bytecode executed by a virtual machine
+called the VDBE, or [the bytecode engine](https://www.sqlite.org/opcode.html).
+A compiled statement can be executed multiple times, amortizing the costs of
+query parsing and planning. Chrome's SQLite abstraction layer makes it easy to
+use compiled queries.
 
-The following SQLite documentation pages cover the query planner and
-optimizer.
+Assuming effective use of cached statements, the performance of a SQL statement
+comes down to the *query plan* that SQLite generates for the statement. The
+query plan is the sequence of B-tree accesses used to execute the statement,
+which determines the number of B-tree pages touched.
+
+The rest of this section summarizes the following SQLite documentation pages.
 
 1. [query planner overview](https://www.sqlite.org/queryplanner.html)
 2. [query optimizer overview](https://www.sqlite.org/optoverview.html)
 3. [`EXPLAIN QUERY PLAN` output description](https://www.sqlite.org/eqp.html)
 
-TODO: Present a simplified model that's sufficient for most database design.
+At a high level, a SQLite query plan is a sequence of **nested** loops, where
+each loop iterates over the data in a B-tree. Each loop can use the current
+record of the outer loops.
+
+TODO: Complete this section. Cover joins, sorting, etc.
+
+#### Getting SQLite's query plans
+
+Ideally, the SQL schemas and statements used by Chrome features would be simple
+enough that the query plans would be obvious to the reader.
+
+When this isn't the case, the fastest way to get the query plan is to load the
+schema in [the SQLite shell](https://sqlite.org/cli.html), and use
+[`EXPLAIN QUERY PLAN`](https://www.sqlite.org/eqp.html).
+
+The following command builds a SQLite shell that uses Chrome's build of SQLite,
+and supports the `EXPLAIN QUERY PLAN` command.
+
+```sh
+autoninja -C out/Default sqlite_dev_shell
+```
+
+Inside the SQLite shell, the `.eqp on` directive automatically shows the results
+of `EXPLAIN QUERY PLAN` for every SQL statement executed in the shell.
+
+
+#### Query steps {#query-step-types}
+
+Query steps are the building blocks of SQLite query plans. Each query step is
+essentially a loop that iterates over the records in a B-tree. These loops
+differ in terms of how many B-tree pages they touch, and how many records they
+produce. This sub-section lists the types of steps implemented by SQLite.
+
+##### Scans
+
+Scans visit an entire (table or index) B-tree. For this reason, scans are almost
+never acceptable in Chrome. Most of our features don't have limits on the amount
+of stored data, so scans can result in an unbounded amount of I/O.
+
+A *table scan* visits the entire table's B-tree.
+
+A *covering index scan* visits an entire index B-tree, but doesn't access the
+associated table B-tree.
+
+SQLite doesn't have any special optimization for `COUNT(*)` queries. In other
+words, SQLite does not track subtree sizes in its B-tree nodes.
+
+Reviewers sometimes emphasize performance issues by calling the scans *full*
+table scans and *full* index scans, where "full" references the fact that the
+number of B-tree pages accessed is proportional to the entire data set stored on
+disk.
+
+TODO: Complete this section. Add examples in a way that doesn't make the section
+overly long.
+
+##### Searches
+
+Searches access a subset of a (table or index) B-tree nodes. Searches limit the
+amount of nodes they need to access based on query restrictions, such as terms
+in the `WHERE` clause. Seeing a `SEARCH` in a query plan is not a guarantee of
+performance. Searches can vary wildly in the amount of B-tree pages they need to
+access.
+
+One of the fastest possible searches is a *table search* that performs exactly
+one B-tree lookup, and produces at most one record.
+
+The other fastest possible search is a *covering index search* that also
+performs one lookup, and produces at most one record.
+
+TODO: Complete this section. Add examples in a way that doesn't make the section
+overly long.
 
 
 ## General advice
@@ -154,7 +260,9 @@ disabled in Chrome. In addition, the
 [`EXPLAIN`](https://www.sqlite.org/lang_explain.html) and
 [`EXPLAIN QUERY PLAN`](https://www.sqlite.org/eqp.html) statements show the
 results of SQLite's query planner and optimizer, which are very helpful for
-reasoning about the performance of complex queries.
+reasoning about the performance of complex queries. The SQLite shell directive
+`.eqp on` automatically issues `EXPLAIN QUERY PLAN` for all future commands.
+
 
 The following commands set up SQLite shells using Chrome's build of SQLite.
 
@@ -199,23 +307,23 @@ Format statements like so.
   static constexpr char kOriginInfoSql[] =
       // clang-format off
       "CREATE TABLE origin_infos("
-        "origin TEXT NOT NULL,"
-        "last_modified INTEGER NOT NULL,"
-        "secure INTEGER NOT NULL)";
-      // clang-format on
+          "origin TEXT NOT NULL,"
+          "last_modified INTEGER NOT NULL,"
+          "secure INTEGER NOT NULL)";
+  // clang-format on
 
   static constexpr char kInsertSql[] =
-     // clang-format off
-     "INSERT INTO infos(origin,last_modified,secure) "
-       "VALUES (?,?,?)";
-     // clang-format on
+      // clang-format off
+      "INSERT INTO infos(origin,last_modified,secure) "
+          "VALUES(?,?,?)";
+  // clang-format on
 
   static constexpr char kSelectSql[] =
-     // clang-format off
-     "SELECT origin,last_modified,secure FROM origins "
-       "WHERE last_modified > ? "
-       "ORDER BY last_modified";
-     // clang-format on
+      // clang-format off
+      "SELECT origin,last_modified,secure FROM origins "
+          "WHERE last_modified>? "
+          "ORDER BY last_modified";
+  // clang-format on
 ```
 
 * [SQLite keywords](https://sqlite.org/lang_keywords.html) should use ALL CAPS.
@@ -267,6 +375,11 @@ Format statements like so.
   such as `?NNN` or `:AAAA`, have few benefits in a codebase where the `Bind`
   statements are right next to the queries, and are less known to readers.
 
+* SQL statements should be embedded in C++ as string literals. The `char[]` type
+  makes it possible for us to compute query length at compile time in the
+  future. The `static` and `constexpr` qualifiers both ensure optimal code
+  generation.
+
 * Do not execute multiple SQL statements (e.g., by calling `Step()` or `Run()`
   on `sql::Statement`) on the same C++ line. It's difficult to get more than
   line numbers from crash reports' stack traces.
@@ -314,12 +427,13 @@ advantage of SQLite's rowid optimizations.
 primary key reuse would be unacceptable.
 
 
-### Discouraged features
+### Sophisticated features
 
-SQLite exposes a vast array of functionality via SQL statements. The following
-features are not a good match for SQL statements used by Chrome feature code.
+SQLite exposes a vast array of functionality via SQL statements, many of which
+are not a good match for average Chrome feature code. Use them with care and if
+you know what you're doing.
 
-#### PRAGMA statements
+#### PRAGMA statements {#no-pragmas}
 
 [`PRAGMA` statements](https://www.sqlite.org/pragma.html) should never be used
 directly. Chrome's SQLite abstraction layer should be modified to support the
@@ -330,32 +444,7 @@ Direct `PRAGMA` use limits our ability to customize and secure our SQLite build.
 Furthermore, some `PRAGMA` statements invalidate previously compiled queries,
 reducing the efficiency of Chrome's compiled query cache.
 
-#### Virtual tables
-
-[`CREATE VIRTUAL TABLE` statements](https://www.sqlite.org/vtab.html) should not
-be used. The desired functionality should be implemented in C++, and access
-storage using standard SQL statements.
-
-Virtual tables are [SQLite's module system](https://www.sqlite.org/vtab.html).
-SQL statements on virtual tables are essentially running arbitrary code, which
-makes them very difficult to reason about and maintain. Furthermore, the virtual
-table implementations don't receive the same level of fuzzing coverage as the
-SQLite core.
-
-Chrome's SQLite build has virtual table functionality reduced to the minimum
-needed to support [FTS3](https://www.sqlite.org/fts3.html) in WebSQL, and an
-internal feature.
-[SQLite's run-time loading mechanism](https://www.sqlite.org/loadext.html) is
-disabled, and most
-[built-in virtual tables](https://www.sqlite.org/vtablist.html) are disabled as
-well.
-
-After
-[WebSQL](https://www.w3.org/TR/webdatabase/) is removed from Chrome, we plan
-to disable SQLite's virtual table support using
-[SQLITE_OMIT_VIRTUALTABLE](https://sqlite.org/compile.html#omit_virtualtable).
-
-#### Foreign key constraints
+#### Foreign key constraints {#no-foreign-keys}
 
 [SQL foreign key constraints](https://sqlite.org/foreignkeys.html) should not be
 used. All data validation should be performed using explicit `SELECT` statements
@@ -368,12 +457,15 @@ more difficult to reason about system behavior (Chrome feature code + SQLite)
 when the database gets corrupted. Foreign key constraints also make it more
 difficult to reason about query performance.
 
+As a result, foreign key constraints are not enforced on SQLite databases
+opened with Chrome's `sql::Database` infrastructure.
+
 After
 [WebSQL](https://www.w3.org/TR/webdatabase/) is removed from Chrome, we plan
 to disable SQLite's foreign key support using
 [SQLITE_OMIT_FOREIGN_KEY](https://sqlite.org/compile.html#omit_foreign_key).
 
-#### CHECK constraints
+#### CHECK constraints {#no-checks}
 
 [SQL CHECK constraints](https://sqlite.org/lang_createtable.html#check_constraints)
 should not be used, for the same reasons as foreign key constraints. The
@@ -384,18 +476,26 @@ After
 to disable SQLite's CHECK constraint support using
 [SQLITE_OMIT_CHECK](https://sqlite.org/compile.html#omit_check).
 
-#### Triggers
+#### Triggers {#triggers}
 
-[SQL triggers](https://sqlite.org/lang_createtrigger.html) should not be used.
+[SQL triggers](https://sqlite.org/lang_createtrigger.html) should be used
+thoughtfully.
 
-Triggers significantly increase the difficulty of reviewing and maintaining
-Chrome features that use them.
+Use triggers only if they *increase* legibility and *reduce* query complexity.
+The vast majority of Chrome features should not need triggers as their SQL
+queries are typically very simple, and triggers can obfuscate behavior by
+introducing an easy-to-miss side effect to certain queries. It's generally
+preferred to "manually" execute a second query with the desired effect.
 
-After [WebSQL](https://www.w3.org/TR/webdatabase/) is removed from Chrome, we
-plan to disable SQLite's trigger support using
-[SQLITE_OMIT_TRIGGER](https://sqlite.org/compile.html#omit_trigger).
+There are exceptions to this rule, such as when the follow-up query would itself
+be much more complex than the trigger, and/or a single trigger can take the
+place of multiple queries.
 
-#### Common Table Expressions
+Triggers are disabled by default, with hopes that this will encourage feature
+authors to carefully weigh their use against the alternatives, but can be
+enabled via `DatabaseOptions::set_triggers_enabled()`.
+
+#### Common Table Expressions {#no-ctes}
 
 [SQL Common Table Expressions (CTEs)](https://sqlite.org/lang_with.html) should
 not be used. Chrome's SQL schemas and queries should be simple enough that
@@ -408,7 +508,7 @@ should be implemented in C++.
 Common Table Expressions do not open up any query optimizations that would not
 be available otherwise, and make it more difficult to review / analyze queries.
 
-#### Views
+#### Views {#no-views}
 
 SQL views, managed by the
 [`CREATE VIEW` statement](https://www.sqlite.org/lang_createview.html) and the
@@ -420,12 +520,28 @@ Views are syntactic sugar, and do not open up any new SQL capabilities. SQL
 statements on views are more difficult to understand and maintain, because of
 the extra layer of indirection.
 
+Access to views is disabled by default for SQLite databases opened with Chrome's
+`sql::Database` infrastructure. This is intended to steer feature developers
+away from the discouraged feature.
+
 After
 [WebSQL](https://www.w3.org/TR/webdatabase/) is removed from Chrome, we plan
 to disable SQLite's VIEW support using
 [SQLITE_OMIT_VIEW](https://www.sqlite.org/compile.html#omit_view).
 
-#### Compound SELECT statements
+#### Double-quoted string literals {#no-double-quoted-strings}
+
+String literals should always be single-quoted. That being said, string literals
+should be rare in Chrome code, because any user input must be injected using
+statement parameters and the `Statement::Bind*()` methods.
+
+Double-quoted string literals are non-standard SQL syntax. The SQLite authors
+[currently consider this be a misfeature](https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted).
+
+SQLite support for double-quoted string literals is disabled for databases
+opened with Chrome's `sql::Database` infrastructure.
+
+#### Compound SELECT statements {#no-compound-queries}
 
 [Compound SELECT statements](https://www.sqlite.org/lang_select.html#compound_select_statements)
 should not be used. Such statements should be broken down into
@@ -443,7 +559,7 @@ After
 to disable SQLite's compound SELECT support using
 [SQLITE_OMIT_COMPOUND_SELECT](https://www.sqlite.org/compile.html#omit_compound_select).
 
-#### Built-in functions
+#### Built-in functions {#no-builtin-functions}
 
 SQLite's [built-in functions](https://sqlite.org/lang_corefunc.html) should be
 only be used in SQL statements where they unlock significant performance
@@ -473,8 +589,78 @@ disabled in Chrome's SQLite build.
 #### ATTACH DATABASE statements
 
 [`ATTACH DATABASE` statements](https://www.sqlite.org/lang_attach.html) should
-not be used. Each Chrome feature should store its data in a single database.
+be used thoughtfully. Each Chrome feature should store its data in a single database.
 Chrome code should not assume that transactions across multiple databases are
 atomic.
 
-We plan to remove all existing `ATTACH DATABASE` use from Chrome.
+### Disabled features
+
+We aim to disable SQLite features that should not be used in Chrome, subject to
+the constraint of keeping WebSQL's feature set stable. We currently disable all
+new SQLite features, to avoid expanding the attack surface exposed to WebSQL.
+This stance may change once WebSQL is removed from Chrome.
+
+The following SQLite features have been disabled in Chrome.
+
+#### JSON
+
+Chrome features should prefer
+[procotol buffers](https://developers.google.com/protocol-buffers) to JSON for
+on-disk (persistent) serialization of extensible structured data.
+
+Chrome features should store the values used by indexes directly in their own
+columns, instead of relying on
+[SQLite's JSON support](https://www.sqlite.org/json1.html).
+
+#### UPSERT
+
+[SQLite's UPSERT implementation](https://www.sqlite.org/lang_UPSERT.html) has
+been disabled in order to avoid increasing WebSQL's attack surface. UPSERT is
+disabled using the `SQLITE_OMIT_UPSERT` macro, which is not currently included
+in [the SQLite compile-time option list](https://www.sqlite.org/compile.html),
+but exists in the source code.
+
+We currently think that the new UPSERT functionality is not essential to
+implementing Chrome features efficiently. An example where UPSERT is necessary
+for the success of a Chrome feature would likely get UPSERT enabled.
+
+#### Window functions
+
+[Window functions](https://sqlite.org/windowfunctions.html#biwinfunc) have been
+disabled primarily because they cause a significant binary size increase, which
+leads to a corresponding large increase in the attack surface exposed to WebSQL.
+
+Window functions increase the difficulty of reviewing and maintaining the Chrome
+features that use them, because window functions add complexity to the mental
+model of query performance.
+
+We currently think that this maintenance overhead of window functions exceeds
+any convenience and performance benefits (compared to simpler queries
+coordinated in C++).
+
+#### Virtual tables {#no-virtual-tables}
+
+[`CREATE VIRTUAL TABLE` statements](https://www.sqlite.org/vtab.html) are
+disabled. The desired functionality should be implemented in C++, and access
+storage using standard SQL statements.
+
+Virtual tables are [SQLite's module system](https://www.sqlite.org/vtab.html).
+SQL statements on virtual tables are essentially running arbitrary code, which
+makes them very difficult to reason about and maintain. Furthermore, the virtual
+table implementations don't receive the same level of fuzzing coverage as the
+SQLite core.
+
+Chrome's SQLite build has virtual table functionality reduced to the minimum
+needed to support an internal feature.
+[SQLite's run-time loading mechanism](https://www.sqlite.org/loadext.html) is
+disabled, and most
+[built-in virtual tables](https://www.sqlite.org/vtablist.html) are disabled as
+well.
+
+Ideally we would disable SQLite's virtual table support using
+[SQLITE_OMIT_VIRTUALTABLE](https://sqlite.org/compile.html#omit_virtualtable)
+now that [WebSQL](https://www.w3.org/TR/webdatabase/) has been removed from
+Chrome, but virtual table support is required to use SQLite's
+[built-in corruption recovery module](https://www.sqlite.org/recovery.html). The
+[SQLITE_DBPAGE virtual table](https://www.sqlite.org/dbpage.html) is also
+enabled only for corruption recovery and should not be used in Chrome.

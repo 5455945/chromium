@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,30 +10,40 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/scoped_observation.h"
 #include "build/buildflag.h"
+#include "components/signin/internal/identity_manager/oauth_multilogin_token_request.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
+#include "components/signin/public/base/binding_key_registration_token_result.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/identity_manager/token_binding_info.h"
+#include "crypto/sign.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
 #include "net/base/backoff_entry.h"
 
+#if BUILDFLAG(IS_IOS)
+#include "components/signin/public/identity_manager/access_token_info.h"
+#endif
+
 namespace signin {
 class IdentityManager;
 }
 
-class PrefService;
-class PrefRegistrySimple;
+class AccountInfo;
 class OAuth2AccessTokenConsumer;
+class PrefRegistrySimple;
+class PrefService;
 class ProfileOAuth2TokenServiceDelegate;
 
-// ProfileOAuth2TokenService is a KeyedService that retrieves
-// OAuth2 access tokens for a given set of scopes using the OAuth2 login
-// refresh tokens.
+// ProfileOAuth2TokenService retrieves OAuth2 access tokens for a given set of
+// scopes using the OAuth2 login refresh tokens.
 //
 // To use this service, call StartRequest() with a given set of scopes and a
 // consumer of the request results. The consumer is required to outlive the
@@ -73,15 +83,20 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   ProfileOAuth2TokenService(
       PrefService* user_prefs,
       std::unique_ptr<ProfileOAuth2TokenServiceDelegate> delegate);
+
+  ProfileOAuth2TokenService(const ProfileOAuth2TokenService&) = delete;
+  ProfileOAuth2TokenService& operator=(const ProfileOAuth2TokenService&) =
+      delete;
+
   ~ProfileOAuth2TokenService() override;
 
   // Overridden from OAuth2AccessTokenManager::Delegate.
   std::unique_ptr<OAuth2AccessTokenFetcher> CreateAccessTokenFetcher(
       const CoreAccountId& account_id,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      OAuth2AccessTokenConsumer* consumer) override;
+      OAuth2AccessTokenConsumer* consumer,
+      const std::string& token_binding_challenge) override;
   bool HasRefreshToken(const CoreAccountId& account_id) const override;
-  bool FixRequestErrorIfPossible() override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory()
       const override;
   void OnAccessTokenInvalidated(
@@ -120,12 +135,23 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
       const OAuth2AccessTokenManager::ScopeSet& scopes,
       OAuth2AccessTokenManager::Consumer* consumer);
 
-  // Try to get refresh token from delegate. If it is accessible (i.e. not
-  // empty), return it directly, otherwise start request to get access token.
-  // Used for getting tokens to send to Gaia Multilogin endpoint.
-  std::unique_ptr<OAuth2AccessTokenManager::Request> StartRequestForMultilogin(
+#if BUILDFLAG(IS_IOS)
+  void GetRefreshTokenFromDevice(
       const CoreAccountId& account_id,
-      OAuth2AccessTokenManager::Consumer* consumer);
+      const OAuth2AccessTokenManager::ScopeSet& scopes,
+      base::OnceCallback<void(GoogleServiceAuthError,
+                              signin::AccessTokenInfo access_token_info)>
+          callback);
+#endif
+
+  // Try to get refresh token from delegate. If it is accessible (i.e. not
+  // empty), return it directly (possibly after asynchronously signing
+  // `token_binding_challenge`), otherwise start request to get access token.
+  // Used for getting tokens to send to Gaia Multilogin endpoint.
+  void StartRequestForMultilogin(
+      signin::OAuthMultiloginTokenRequest& request,
+      const std::string& token_binding_challenge = std::string(),
+      const std::string& ephemeral_public_key = std::string());
 
   // This method does the same as |StartRequest| except it uses |client_id| and
   // |client_secret| to identify OAuth client app instead of using
@@ -156,11 +182,13 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
                              const std::string& access_token);
 
   // Removes token from cache (if it is cached) and calls
-  // InvalidateTokenForMultilogin method of the delegate. This should be done if
-  // the token was received from this class, but was not accepted by the server
-  // (e.g., the server returned 401 Unauthorized).
-  virtual void InvalidateTokenForMultilogin(const CoreAccountId& failed_account,
-                                            const std::string& token);
+  // `InvalidateTokenForMultilogin()` method of the delegate with `error`. This
+  // should be done if the token was received from this class, but was not
+  // accepted by the server (e.g., the server returned 401 Unauthorized).
+  virtual void InvalidateTokenForMultilogin(
+      const CoreAccountId& failed_account,
+      const std::string& token,
+      const GoogleServiceAuthError& error);
 
   // If set, this callback will be invoked when a new refresh token is
   // available. Contains diagnostic information about the source of the update
@@ -192,7 +220,8 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
       const CoreAccountId& account_id,
       const std::string& refresh_token,
       signin_metrics::SourceForRefreshTokenOperation source =
-          signin_metrics::SourceForRefreshTokenOperation::kUnknown);
+          signin_metrics::SourceForRefreshTokenOperation::kUnknown,
+      const signin::TokenBindingInfo& token_binding_info = {});
 
   void RevokeCredentials(
       const CoreAccountId& account_id,
@@ -225,11 +254,20 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   }
 
   // Lists account IDs of all accounts with a refresh token maintained by this
-  // instance.
+  // instance, i.e. the accounts available in this profile.
   // Note: For each account returned by |GetAccounts|, |RefreshTokenIsAvailable|
   // will return true.
   // Note: If tokens have not been fully loaded yet, an empty list is returned.
+  // TODO(crbug.com/368409110): Rename to GetAccountsInProfile(), to distinguish
+  // from GetAccountsOnDevice().
   std::vector<CoreAccountId> GetAccounts() const;
+
+#if BUILDFLAG(IS_IOS)
+  // Returns a list of accounts that exist on the device, including those that
+  // are assigned to different profiles, in the order provided by the system
+  // (usually the order in which the accounts were added).
+  std::vector<AccountInfo> GetAccountsOnDevice() const;
+#endif  // BUILDFLAG(IS_IOS)
 
   // Returns true if a refresh token exists for |account_id|. If false, calls to
   // |StartRequest| will result in a Consumer::OnGetTokenFailure callback.
@@ -237,9 +275,12 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   // the list returned by |GetAccounts|.
   bool RefreshTokenIsAvailable(const CoreAccountId& account_id) const;
 
-  // Returns true if a refresh token exists for |account_id| and it is in a
-  // persistent error state.
-  bool RefreshTokenHasError(const CoreAccountId& account_id) const;
+#if BUILDFLAG(IS_IOS)
+  // Returns true if a refresh token exists for |account_id|.
+  // Note: This will return |true| if and only if |account_id| is contained in
+  // the list returned by |GetAccountsOnDevice|.
+  bool RefreshTokenIsAvailableOnDevice(const CoreAccountId& account_id) const;
+#endif  // BUILDFLAG(IS_IOS)
 
   // Returns the auth error associated with |account_id|. Only persistent errors
   // will be returned.
@@ -248,6 +289,39 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   // Exposes the ability to update auth errors to tests.
   void UpdateAuthErrorForTesting(const CoreAccountId& account_id,
                                  const GoogleServiceAuthError& error);
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // Asynchronously generates a registration token for binding a refresh token
+  // to a shared binding key.
+  // `supported_algorithms` is a list of acceptable signature algorithms. This
+  // parameter may be ignored if an existing binding key is reused instead of
+  // generating a new one.
+  // Returns false if the generation cannot be started. In that case, `callback`
+  // will not be invoked.
+  bool GenerateBindingKeyRegistrationToken(
+      base::span<const crypto::sign::SignatureKind> supported_algorithms,
+      std::string_view auth_code,
+      base::OnceCallback<void(
+          std::optional<signin::BindingKeyRegistrationTokenResult>)> callback);
+
+  // Returns the wrapped binding key of a refresh token associated with
+  // `account_id`, if any.
+  // Returns a non-empty vector iff (a) a refresh token exists for `account_id`,
+  // and (b) the refresh token is bound to a device.
+  std::vector<uint8_t> GetWrappedBindingKey(
+      const CoreAccountId& account_id) const;
+
+  // Returns true if a refresh token exists for `account_id` and it is bound to
+  // an mTLS certificate.
+  bool IsRefreshTokenBoundToMtls(const CoreAccountId& account_id) const;
+
+  // Returns whether all bound refresh tokens share the same binding key.
+  //
+  // Unbound tokens are ignored in this check. Returns `true` if there are zero
+  // or one bound tokens, or if all bound tokens use the same key. Returns
+  // `false` only if there are multiple bound tokens with different keys.
+  bool AllBoundTokensShareSameBindingKey() const;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   void set_max_authorization_token_fetch_retries_for_testing(int max_retries);
 
@@ -263,35 +337,33 @@ class ProfileOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
  private:
   friend class signin::IdentityManager;
 
+  void FixAccountErrorIfPossible();
+
   // ProfileOAuth2TokenServiceObserver implementation.
   void OnRefreshTokenAvailable(const CoreAccountId& account_id) override;
   void OnRefreshTokenRevoked(const CoreAccountId& account_id) override;
   void OnRefreshTokensLoaded() override;
 
+  void OnRefreshTokenRevokedNotified(const CoreAccountId& account_id);
+
   // Creates a new device ID if there are no accounts, or if the current device
   // ID is empty.
   void RecreateDeviceIdIfNeeded();
 
-  PrefService* user_prefs_;
+  raw_ptr<PrefService> user_prefs_;
 
   std::unique_ptr<ProfileOAuth2TokenServiceDelegate> delegate_;
+  base::ScopedObservation<ProfileOAuth2TokenServiceDelegate,
+                          ProfileOAuth2TokenServiceObserver>
+      token_service_observation_{this};
 
   // Whether all credentials have been loaded.
   bool all_credentials_loaded_;
 
   std::unique_ptr<OAuth2AccessTokenManager> token_manager_;
 
-  // Callbacks to invoke, if set, for refresh token-related events.
-  RefreshTokenAvailableFromSourceCallback on_refresh_token_available_callback_;
-  RefreshTokenRevokedFromSourceCallback on_refresh_token_revoked_callback_;
-
-  signin_metrics::SourceForRefreshTokenOperation update_refresh_token_source_ =
-      signin_metrics::SourceForRefreshTokenOperation::kUnknown;
-
   FRIEND_TEST_ALL_PREFIXES(ProfileOAuth2TokenServiceTest,
                            SameScopesRequestedForDifferentClients);
-
-  DISALLOW_COPY_AND_ASSIGN(ProfileOAuth2TokenService);
 };
 
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_PROFILE_OAUTH2_TOKEN_SERVICE_H_

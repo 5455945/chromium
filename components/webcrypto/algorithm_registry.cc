@@ -1,14 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/webcrypto/algorithm_registry.h"
 
-#include "base/lazy_instance.h"
+#include "base/no_destructor.h"
 #include "components/webcrypto/algorithm_implementation.h"
 #include "components/webcrypto/algorithm_implementations.h"
 #include "components/webcrypto/status.h"
-#include "crypto/openssl_util.h"
 
 namespace webcrypto {
 
@@ -23,6 +22,7 @@ class AlgorithmRegistry {
         aes_cbc_(CreateAesCbcImplementation()),
         aes_ctr_(CreateAesCtrImplementation()),
         aes_kw_(CreateAesKwImplementation()),
+        chacha20_poly1305_(CreateChaCha20Poly1305Implementation()),
         hmac_(CreateHmacImplementation()),
         rsa_ssa_(CreateRsaSsaImplementation()),
         rsa_oaep_(CreateRsaOaepImplementation()),
@@ -32,9 +32,10 @@ class AlgorithmRegistry {
         hkdf_(CreateHkdfImplementation()),
         pbkdf2_(CreatePbkdf2Implementation()),
         ed25519_(CreateEd25519Implementation()),
-        x25519_(CreateX25519Implementation()) {
-    crypto::EnsureOpenSSLInit();
-  }
+        x25519_(CreateX25519Implementation()),
+        ml_dsa_(CreateMlDsaImplementation()),
+        ml_kem_(CreateMlKemImplementation()),
+        mlkem768_x25519_(CreateMlKem768X25519Implementation()) {}
 
   const AlgorithmImplementation* GetAlgorithm(
       blink::WebCryptoAlgorithmId id) const {
@@ -72,6 +73,17 @@ class AlgorithmRegistry {
         return ed25519_.get();
       case blink::kWebCryptoAlgorithmIdX25519:
         return x25519_.get();
+      case blink::kWebCryptoAlgorithmIdMlDsa44:
+      case blink::kWebCryptoAlgorithmIdMlDsa65:
+      case blink::kWebCryptoAlgorithmIdMlDsa87:
+        return ml_dsa_.get();
+      case blink::kWebCryptoAlgorithmIdMlKem768:
+      case blink::kWebCryptoAlgorithmIdMlKem1024:
+        return ml_kem_.get();
+      case blink::kWebCryptoAlgorithmIdMlKem768X25519:
+        return mlkem768_x25519_.get();
+      case blink::kWebCryptoAlgorithmIdChaCha20Poly1305:
+        return chacha20_poly1305_.get();
       default:
         return nullptr;
     }
@@ -83,6 +95,7 @@ class AlgorithmRegistry {
   const std::unique_ptr<AlgorithmImplementation> aes_cbc_;
   const std::unique_ptr<AlgorithmImplementation> aes_ctr_;
   const std::unique_ptr<AlgorithmImplementation> aes_kw_;
+  const std::unique_ptr<AlgorithmImplementation> chacha20_poly1305_;
   const std::unique_ptr<AlgorithmImplementation> hmac_;
   const std::unique_ptr<AlgorithmImplementation> rsa_ssa_;
   const std::unique_ptr<AlgorithmImplementation> rsa_oaep_;
@@ -93,16 +106,17 @@ class AlgorithmRegistry {
   const std::unique_ptr<AlgorithmImplementation> pbkdf2_;
   const std::unique_ptr<AlgorithmImplementation> ed25519_;
   const std::unique_ptr<AlgorithmImplementation> x25519_;
+  const std::unique_ptr<AlgorithmImplementation> ml_dsa_;
+  const std::unique_ptr<AlgorithmImplementation> ml_kem_;
+  const std::unique_ptr<AlgorithmImplementation> mlkem768_x25519_;
 };
 
 }  // namespace
 
-base::LazyInstance<AlgorithmRegistry>::Leaky g_algorithm_registry =
-    LAZY_INSTANCE_INITIALIZER;
-
 Status GetAlgorithmImplementation(blink::WebCryptoAlgorithmId id,
                                   const AlgorithmImplementation** impl) {
-  *impl = g_algorithm_registry.Get().GetAlgorithm(id);
+  static base::NoDestructor<AlgorithmRegistry> algorithm_registry;
+  *impl = algorithm_registry->GetAlgorithm(id);
   if (*impl)
     return Status::Success();
   return Status::ErrorUnsupported();

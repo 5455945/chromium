@@ -1,4 +1,4 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
+/* Copyright 2012 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -29,13 +29,13 @@
   width: 18px;
 }
 
-@media (max-height:480px) and (max-width:400px) {
+@media (max-height: 480px) and (max-width: 400px) {
   #enterprise-info {
     margin-bottom: 1em;
   }
 }
 
-@media (max-width:400px) {
+@media (max-width: 400px) {
   #enterprise-info {
     margin-top: -2em;
   }

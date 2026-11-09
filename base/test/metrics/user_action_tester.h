@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/user_metrics.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 
 namespace base {
@@ -25,20 +25,24 @@ class TimeTicks;
 class UserActionTester {
  public:
   UserActionTester();
+
+  UserActionTester(const UserActionTester&) = delete;
+  UserActionTester& operator=(const UserActionTester&) = delete;
+
   ~UserActionTester();
 
   // Returns the number of times the given |user_action| occurred.
-  int GetActionCount(const std::string& user_action) const;
+  int GetActionCount(std::string_view user_action) const;
 
   // Returns the time values at which the given |user_action| has occurred.
   // The order of returned values is unspecified.
-  std::vector<TimeTicks> GetActionTimes(const std::string& user_action) const;
+  std::vector<TimeTicks> GetActionTimes(std::string_view user_action) const;
 
   // Resets all user action counts to 0.
   void ResetCounts();
 
  private:
-  typedef std::multimap<std::string, TimeTicks> UserActionTimesMap;
+  typedef std::multimap<std::string, TimeTicks, std::less<>> UserActionTimesMap;
 
   // The callback that is notified when a user actions occurs.
   void OnUserAction(const std::string& user_action, TimeTicks action_time);
@@ -51,8 +55,6 @@ class UserActionTester {
 
   // The callback that is added to the global action callback list.
   base::ActionCallback action_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserActionTester);
 };
 
 }  // namespace base

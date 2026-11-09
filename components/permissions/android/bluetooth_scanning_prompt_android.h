@@ -1,13 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_ANDROID_BLUETOOTH_SCANNING_PROMPT_ANDROID_H_
 #define COMPONENTS_PERMISSIONS_ANDROID_BLUETOOTH_SCANNING_PROMPT_ANDROID_H_
 
+#include "base/android/jni_android.h"
+#include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ptr.h"
+#include "components/permissions/android/jni_headers/BluetoothScanningPermissionDialog_shared_jni.h"
 #include "content/public/browser/bluetooth_scanning_prompt.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/jni_zero.h"
 
 namespace permissions {
 
@@ -18,6 +23,16 @@ class BluetoothScanningPromptAndroidDelegate;
 // devices. This implementation is for Android.
 class BluetoothScanningPromptAndroid : public content::BluetoothScanningPrompt {
  public:
+  // The callback type for creating the java dialog object.
+  using CreateJavaDialogCallback =
+      base::OnceCallback<base::android::ScopedJavaLocalRef<jobject>(
+          JNIEnv*,
+          const base::android::JavaRef<jobject>&,
+          const std::u16string&,
+          JniIntWrapper,
+          const base::android::JavaRef<jobject>&,
+          jni_zero::JniRawPtr<BluetoothScanningPromptAndroid>)>;
+
   BluetoothScanningPromptAndroid(
       content::RenderFrameHost* frame,
       const content::BluetoothScanningPrompt::EventHandler& event_handler,
@@ -36,12 +51,25 @@ class BluetoothScanningPromptAndroid : public content::BluetoothScanningPrompt {
                          const std::u16string& device_name) override;
 
   // Report the dialog's result.
-  void OnDialogFinished(JNIEnv* env, jint event_type);
+  void OnDialogFinished(JNIEnv* env,
+                        content::BluetoothScanningPrompt::Event event);
+
+  static std::unique_ptr<BluetoothScanningPromptAndroid> CreateForTesting(
+      content::RenderFrameHost* frame,
+      const EventHandler& event_handler,
+      std::unique_ptr<BluetoothScanningPromptAndroidDelegate> delegate,
+      CreateJavaDialogCallback create_java_dialog_callback);
 
  private:
+  BluetoothScanningPromptAndroid(
+      content::RenderFrameHost* frame,
+      const content::BluetoothScanningPrompt::EventHandler& event_handler,
+      std::unique_ptr<BluetoothScanningPromptAndroidDelegate> delegate,
+      CreateJavaDialogCallback create_java_dialog_callback);
+
   base::android::ScopedJavaGlobalRef<jobject> java_dialog_;
 
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents> web_contents_;
   content::BluetoothScanningPrompt::EventHandler event_handler_;
   std::unique_ptr<BluetoothScanningPromptAndroidDelegate> delegate_;
 };

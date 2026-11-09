@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_mock_cert_verifier.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
-#include "url/gurl.h"
 
 namespace content {
 
@@ -29,6 +28,8 @@ class SitePerProcessBrowserTestBase : public ContentBrowserTest {
 
  protected:
   std::string DepictFrameTree(FrameTreeNode* node);
+
+  std::string WaitForMessageScript(const std::string& result_expression);
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
@@ -53,6 +54,7 @@ class SitePerProcessBrowserTest
       public ::testing::WithParamInterface<std::string> {
  public:
   SitePerProcessBrowserTest();
+  ~SitePerProcessBrowserTest() override;
 
   SitePerProcessBrowserTest(const SitePerProcessBrowserTest&) = delete;
   SitePerProcessBrowserTest& operator=(const SitePerProcessBrowserTest&) =
@@ -62,6 +64,21 @@ class SitePerProcessBrowserTest
 
  private:
   base::test::ScopedFeatureList feature_list_;
+};
+
+class SitePerProcessIgnoreCertErrorsBrowserTest
+    : public SitePerProcessBrowserTest {
+ public:
+  SitePerProcessIgnoreCertErrorsBrowserTest() = default;
+
+ protected:
+  void SetUpOnMainThread() override;
+  void SetUpCommandLine(base::CommandLine* command_line) override;
+  void SetUpInProcessBrowserTestFixture() override;
+  void TearDownInProcessBrowserTestFixture() override;
+
+ private:
+  content::ContentMockCertVerifier mock_cert_verifier_;
 };
 
 }  // namespace content

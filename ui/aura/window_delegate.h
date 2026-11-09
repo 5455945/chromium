@@ -1,17 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_AURA_WINDOW_DELEGATE_H_
 #define UI_AURA_WINDOW_DELEGATE_H_
 
-#include "base/compiler_specific.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/sanitized_object.h"
 #include "ui/aura/aura_export.h"
 #include "ui/aura/window.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_handler.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class SkPath;
 
@@ -29,12 +28,16 @@ namespace aura {
 
 // Delegate interface for aura::Window.
 class AURA_EXPORT WindowDelegate : public ui::EventHandler {
+  // TODO(crbug.com/429093189): Remove this macro once it gets fixed.
+  SANITIZED_OBJECT();
+
  public:
   // Returns the window's minimum size, or size 0,0 if there is no limit.
   virtual gfx::Size GetMinimumSize() const = 0;
 
-  // Returns the window's maximum size, or size 0,0 if there is no limit.
-  virtual gfx::Size GetMaximumSize() const = 0;
+  // Returns the window's maximum size, or (size 0,0 or std::nullopt) if there
+  // is no limit.
+  virtual std::optional<gfx::Size> GetMaximumSize() const = 0;
 
   // Called when the Window's position and/or size changes.
   virtual void OnBoundsChanged(const gfx::Rect& old_bounds,
@@ -88,10 +91,10 @@ class AURA_EXPORT WindowDelegate : public ui::EventHandler {
   virtual void OnWindowTargetVisibilityChanged(bool visible) = 0;
 
   // Called when the occlusion state or occluded region of the Window changes
-  // while tracked (see WindowOcclusionTracker::Track). |occlusion_state| is
-  // the new occlusion state of the Window.
+  // while tracked (see WindowOcclusionTracker::Track).
   virtual void OnWindowOcclusionChanged(
-      Window::OcclusionState occlusion_state) {}
+      Window::OcclusionState old_occlusion_state,
+      Window::OcclusionState new_occlusion_state) {}
 
   // Called from Window::HitTest to check if the window has a custom hit test
   // mask. It works similar to the views counterparts. That is, if the function

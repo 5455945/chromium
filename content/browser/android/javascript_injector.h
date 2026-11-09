@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,39 +8,43 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "components/origin_matcher/origin_matcher.h"
 #include "content/public/browser/web_contents_user_data.h"
 
 namespace content {
 
 class GinJavaBridgeDispatcherHost;
+class WebContentsImpl;
 
 class JavascriptInjector : public WebContentsUserData<JavascriptInjector> {
  public:
-  JavascriptInjector(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& retained_objects,
-      WebContents* web_contents);
+  JavascriptInjector(JNIEnv* env,
+                     const base::android::JavaRef<jobject>& obj,
+                     const base::android::JavaRef<jobject>& retained_objects,
+                     WebContents* web_contents);
+
+  JavascriptInjector(const JavascriptInjector&) = delete;
+  JavascriptInjector& operator=(const JavascriptInjector&) = delete;
+
   ~JavascriptInjector() override;
 
-  void SetAllowInspection(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj,
-                          jboolean allow);
+  void SetAllowInspection(JNIEnv* env, bool allow);
 
-  void AddInterface(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& /* obj */,
-      const base::android::JavaParamRef<jobject>& object,
-      const base::android::JavaParamRef<jstring>& name,
-      const base::android::JavaParamRef<jclass>& safe_annotation_clazz);
+  // See GinJavaBridgeDispatcherHost::AddNamedObject more information.
+  void AddInterface(JNIEnv* env,
+                    const base::android::JavaRef<jobject>& object,
+                    const base::android::JavaRef<jstring>& name,
+                    const base::android::JavaRef<jclass>& safe_annotation_clazz,
+                    origin_matcher::OriginMatcher matcher);
 
   void RemoveInterface(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& /* obj */,
-                       const base::android::JavaParamRef<jstring>& name);
+                       const base::android::JavaRef<jstring>& name);
 
  private:
   friend class content::WebContentsUserData<JavascriptInjector>;
+
+  WebContentsImpl& GetWebContentsImpl();
+
   // A weak reference to the Java JavascriptInjectorImpl object.
   JavaObjectWeakGlobalRef java_ref_;
 
@@ -48,8 +52,6 @@ class JavascriptInjector : public WebContentsUserData<JavascriptInjector> {
   scoped_refptr<GinJavaBridgeDispatcherHost> java_bridge_dispatcher_host_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(JavascriptInjector);
 };
 
 }  // namespace content

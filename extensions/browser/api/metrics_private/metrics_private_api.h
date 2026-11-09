@@ -1,16 +1,18 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_METRICS_PRIVATE_METRICS_PRIVATE_API_H_
 #define EXTENSIONS_BROWSER_API_METRICS_PRIVATE_METRICS_PRIVATE_API_H_
 
-#include <stddef.h>
-
 #include <string>
 
-#include "base/metrics/histogram.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
+
+// Enabled on all platforms (including desktop Android) because it is used by
+// internal webui (chrome:// pages).
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -21,7 +23,7 @@ class MetricsPrivateGetIsCrashReportingEnabledFunction
                              METRICSPRIVATE_GETISCRASHRECORDINGENABLED)
 
  protected:
-  ~MetricsPrivateGetIsCrashReportingEnabledFunction() override {}
+  ~MetricsPrivateGetIsCrashReportingEnabledFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -33,7 +35,7 @@ class MetricsPrivateGetFieldTrialFunction : public ExtensionFunction {
                              METRICSPRIVATE_GETFIELDTRIAL)
 
  protected:
-  ~MetricsPrivateGetFieldTrialFunction() override {}
+  ~MetricsPrivateGetFieldTrialFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -45,7 +47,7 @@ class MetricsPrivateGetVariationParamsFunction : public ExtensionFunction {
                              METRICSPRIVATE_GETVARIATIONPARAMS)
 
  protected:
-  ~MetricsPrivateGetVariationParamsFunction() override {}
+  ~MetricsPrivateGetVariationParamsFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -57,173 +59,181 @@ class MetricsPrivateRecordUserActionFunction : public ExtensionFunction {
                              METRICSPRIVATE_RECORDUSERACTION)
 
  protected:
-  ~MetricsPrivateRecordUserActionFunction() override {}
+  ~MetricsPrivateRecordUserActionFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsHistogramHelperFunction : public ExtensionFunction {
+class MetricsPrivateRecordExtensionUsageUkmFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordExtensionUsageUkm",
+                             METRICSPRIVATE_RECORDEXTENSIONUSAGEUKM)
+
  protected:
-  ~MetricsHistogramHelperFunction() override {}
-  void RecordValue(const std::string& name,
-                   base::HistogramType type,
-                   int min,
-                   int max,
-                   size_t buckets,
-                   int sample);
+  ~MetricsPrivateRecordExtensionUsageUkmFunction() override = default;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordValueFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordValueFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordValue",
                              METRICSPRIVATE_RECORDVALUE)
 
  protected:
-  ~MetricsPrivateRecordValueFunction() override {}
+  ~MetricsPrivateRecordValueFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordBooleanFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordBooleanFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordBoolean",
                              METRICSPRIVATE_RECORDBOOLEAN)
 
  protected:
-  ~MetricsPrivateRecordBooleanFunction() override {}
+  ~MetricsPrivateRecordBooleanFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordEnumerationValueFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordEnumerationValueFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordEnumerationValue",
                              METRICSPRIVATE_RECORDENUMERATIONVALUE)
 
  protected:
-  ~MetricsPrivateRecordEnumerationValueFunction() override {}
+  ~MetricsPrivateRecordEnumerationValueFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordSparseHashableFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordSparseValueWithHashMetricNameFunction
+    : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordSparseHashable",
-                             METRICSPRIVATE_RECORDSPARSEHASHABLE)
+  DECLARE_EXTENSION_FUNCTION(
+      "metricsPrivate.recordSparseValueWithHashMetricName",
+      METRICSPRIVATE_RECORDSPARSEVALUEWITHHASHMETRICNAME)
 
  protected:
-  ~MetricsPrivateRecordSparseHashableFunction() override {}
+  ~MetricsPrivateRecordSparseValueWithHashMetricNameFunction() override =
+      default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordSparseValueFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordSparseValueWithPersistentHashFunction
+    : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION(
+      "metricsPrivate.recordSparseValueWithPersistentHash",
+      METRICSPRIVATE_RECORDSPARSEVALUEWITHPERSISTENTHASH)
+
+ protected:
+  ~MetricsPrivateRecordSparseValueWithPersistentHashFunction() override =
+      default;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class MetricsPrivateRecordSparseValueFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordSparseValue",
                              METRICSPRIVATE_RECORDSPARSEVALUE)
 
  protected:
-  ~MetricsPrivateRecordSparseValueFunction() override {}
+  ~MetricsPrivateRecordSparseValueFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordPercentageFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordPercentageFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordPercentage",
                              METRICSPRIVATE_RECORDPERCENTAGE)
 
  protected:
-  ~MetricsPrivateRecordPercentageFunction() override {}
+  ~MetricsPrivateRecordPercentageFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordCountFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordCountFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordCount",
                              METRICSPRIVATE_RECORDCOUNT)
 
  protected:
-  ~MetricsPrivateRecordCountFunction() override {}
+  ~MetricsPrivateRecordCountFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordSmallCountFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordSmallCountFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordSmallCount",
                              METRICSPRIVATE_RECORDSMALLCOUNT)
 
  protected:
-  ~MetricsPrivateRecordSmallCountFunction() override {}
+  ~MetricsPrivateRecordSmallCountFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordMediumCountFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordMediumCountFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordMediumCount",
                              METRICSPRIVATE_RECORDMEDIUMCOUNT)
 
  protected:
-  ~MetricsPrivateRecordMediumCountFunction() override {}
+  ~MetricsPrivateRecordMediumCountFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordTimeFunction : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordTimeFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordTime",
                              METRICSPRIVATE_RECORDTIME)
 
  protected:
-  ~MetricsPrivateRecordTimeFunction() override {}
+  ~MetricsPrivateRecordTimeFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordMediumTimeFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordMediumTimeFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordMediumTime",
                              METRICSPRIVATE_RECORDMEDIUMTIME)
 
  protected:
-  ~MetricsPrivateRecordMediumTimeFunction() override {}
+  ~MetricsPrivateRecordMediumTimeFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 };
 
-class MetricsPrivateRecordLongTimeFunction
-    : public MetricsHistogramHelperFunction {
+class MetricsPrivateRecordLongTimeFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("metricsPrivate.recordLongTime",
                              METRICSPRIVATE_RECORDLONGTIME)
 
  protected:
-  ~MetricsPrivateRecordLongTimeFunction() override {}
+  ~MetricsPrivateRecordLongTimeFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -239,11 +249,11 @@ class MetricsPrivateGetHistogramFunction : public ExtensionFunction {
   ResponseAction Run() override;
 
   // Sends an asynchronous response containing data for the histogram named
-  // |name|. Passed to content::FetchHistogramsAsynchronously() to be run after
+  // `name`. Passed to content::FetchHistogramsAsynchronously() to be run after
   // new data from other processes has been collected.
   void RespondOnHistogramsFetched(const std::string& name);
 
-  // Creates a response with current data for the histogram named |name|.
+  // Creates a response with current data for the histogram named `name`.
   ResponseValue GetHistogram(const std::string& name);
 };
 

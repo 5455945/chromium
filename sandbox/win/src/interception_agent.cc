@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
+// Copyright 2006-2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,26 +11,23 @@
 
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
 #include "sandbox/win/src/eat_resolver.h"
 #include "sandbox/win/src/interception_internal.h"
 #include "sandbox/win/src/interceptors.h"
 #include "sandbox/win/src/sandbox_nt_util.h"
-#include "sandbox/win/src/sidestep_resolver.h"
 
 namespace {
 
 // Returns true if target lies between base and base + range.
 bool IsWithinRange(const void* base, size_t range, const void* target) {
-  const char* end = reinterpret_cast<const char*>(base) + range;
+  const char* end = UNSAFE_TODO(reinterpret_cast<const char*>(base) + range);
   return reinterpret_cast<const char*>(target) < end;
 }
 
 }  // namespace
 
 namespace sandbox {
-
-// This is the list of all imported symbols from ntdll.dll.
-SANDBOX_INTERCEPT NtExports g_nt;
 
 // The list of intercepted functions back-pointers.
 SANDBOX_INTERCEPT OriginalFunctions g_originals;
@@ -59,8 +56,8 @@ InterceptionAgent* InterceptionAgent::GetInterceptionAgent() {
 
 bool InterceptionAgent::Init(SharedMemory* shared_memory) {
   interceptions_ = shared_memory;
-  for (int i = 0; i < shared_memory->num_intercepted_dlls; i++)
-    dlls_[i] = nullptr;
+  for (size_t i = 0; i < shared_memory->num_intercepted_dlls; i++)
+    UNSAFE_TODO(dlls_[i]) = nullptr;
   return true;
 }
 
@@ -68,34 +65,31 @@ bool InterceptionAgent::DllMatch(const UNICODE_STRING* full_path,
                                  const UNICODE_STRING* name,
                                  const DllPatchInfo* dll_info) {
   UNICODE_STRING current_name;
-  current_name.Length =
-      static_cast<USHORT>(g_nt.wcslen(dll_info->dll_name) * sizeof(wchar_t));
+  current_name.Length = static_cast<USHORT>(UNSAFE_TODO(
+      GetNtExports()->wcslen(dll_info->dll_name) * sizeof(wchar_t)));
   current_name.MaximumLength = current_name.Length;
   current_name.Buffer = const_cast<wchar_t*>(dll_info->dll_name);
 
   BOOLEAN case_insensitive = TRUE;
-  if (full_path &&
-      !g_nt.RtlCompareUnicodeString(&current_name, full_path, case_insensitive))
+  if (full_path && !GetNtExports()->RtlCompareUnicodeString(
+                       &current_name, full_path, case_insensitive)) {
     return true;
-
-  if (name &&
-      !g_nt.RtlCompareUnicodeString(&current_name, name, case_insensitive))
-    return true;
-
-  return false;
+  }
+  return name && !GetNtExports()->RtlCompareUnicodeString(&current_name, name,
+                                                          case_insensitive);
 }
 
 bool InterceptionAgent::OnDllLoad(const UNICODE_STRING* full_path,
                                   const UNICODE_STRING* name,
                                   void* base_address) {
   DllPatchInfo* dll_info = interceptions_->dll_list;
-  int i = 0;
+  size_t i = 0;
   for (; i < interceptions_->num_intercepted_dlls; i++) {
     if (DllMatch(full_path, name, dll_info))
       break;
 
-    dll_info = reinterpret_cast<DllPatchInfo*>(
-        reinterpret_cast<char*>(dll_info) + dll_info->record_bytes);
+    dll_info = reinterpret_cast<DllPatchInfo*>(UNSAFE_TODO(
+        reinterpret_cast<char*>(dll_info) + dll_info->record_bytes));
   }
 
   // Return now if the dll is not in our list of interest.
@@ -107,39 +101,41 @@ bool InterceptionAgent::OnDllLoad(const UNICODE_STRING* full_path,
     return false;
 
   // Purify causes this condition to trigger.
-  if (dlls_[i])
+  if (UNSAFE_TODO(dlls_[i])) {
     return true;
+  }
 
   size_t buffer_bytes = offsetof(DllInterceptionData, thunks) +
                         dll_info->num_functions * sizeof(ThunkData);
-  dlls_[i] = reinterpret_cast<DllInterceptionData*>(
+  UNSAFE_TODO(dlls_[i]) = reinterpret_cast<DllInterceptionData*>(
       new (NT_PAGE, base_address) char[buffer_bytes]);
 
-  DCHECK_NT(dlls_[i]);
-  if (!dlls_[i])
+  DCHECK_NT(UNSAFE_TODO(dlls_[i]));
+  if (!UNSAFE_TODO(dlls_[i])) {
     return true;
+  }
 
-  dlls_[i]->data_bytes = buffer_bytes;
-  dlls_[i]->num_thunks = 0;
-  dlls_[i]->base = base_address;
-  dlls_[i]->used_bytes = offsetof(DllInterceptionData, thunks);
+  UNSAFE_TODO(dlls_[i])->data_bytes = buffer_bytes;
+  UNSAFE_TODO(dlls_[i])->num_thunks = 0;
+  UNSAFE_TODO(dlls_[i])->base = base_address;
+  UNSAFE_TODO(dlls_[i])->used_bytes = offsetof(DllInterceptionData, thunks);
 
-  VERIFY(PatchDll(dll_info, dlls_[i]));
+  VERIFY(PatchDll(dll_info, UNSAFE_TODO(dlls_[i])));
 
   ULONG old_protect;
   SIZE_T real_size = buffer_bytes;
-  void* to_protect = dlls_[i];
-  VERIFY_SUCCESS(g_nt.ProtectVirtualMemory(NtCurrentProcess, &to_protect,
-                                           &real_size, PAGE_EXECUTE_READ,
-                                           &old_protect));
+  void* to_protect = UNSAFE_TODO(dlls_[i]);
+  VERIFY_SUCCESS(GetNtExports()->ProtectVirtualMemory(
+      NtCurrentProcess, &to_protect, &real_size, PAGE_EXECUTE_READ,
+      &old_protect));
   return true;
 }
 
 void InterceptionAgent::OnDllUnload(void* base_address) {
-  for (int i = 0; i < interceptions_->num_intercepted_dlls; i++) {
-    if (dlls_[i] && dlls_[i]->base == base_address) {
-      operator delete(dlls_[i], NT_PAGE);
-      dlls_[i] = nullptr;
+  for (size_t i = 0; i < interceptions_->num_intercepted_dlls; i++) {
+    if (UNSAFE_TODO(dlls_[i]) && UNSAFE_TODO(dlls_[i])->base == base_address) {
+      operator delete(UNSAFE_TODO(dlls_[i]), NT_PAGE);
+      UNSAFE_TODO(dlls_[i]) = nullptr;
       break;
     }
   }
@@ -155,9 +151,10 @@ bool InterceptionAgent::PatchDll(const DllPatchInfo* dll_info,
   DCHECK_NT(dll_info);
 
   const FunctionInfo* function = reinterpret_cast<const FunctionInfo*>(
-      reinterpret_cast<const char*>(dll_info) + dll_info->offset_to_functions);
+      UNSAFE_TODO(reinterpret_cast<const char*>(dll_info) +
+                  dll_info->offset_to_functions));
 
-  for (int i = 0; i < dll_info->num_functions; i++) {
+  for (size_t i = 0; i < dll_info->num_functions; i++) {
     if (!IsWithinRange(dll_info, dll_info->record_bytes, function->function)) {
       NOTREACHED_NT();
       return false;
@@ -167,33 +164,25 @@ bool InterceptionAgent::PatchDll(const DllPatchInfo* dll_info,
     if (!resolver)
       return false;
 
-    const char* interceptor =
-        function->function + g_nt.strlen(function->function) + 1;
-
-    if (!IsWithinRange(function, function->record_bytes, interceptor) ||
-        !IsWithinRange(dll_info, dll_info->record_bytes, interceptor)) {
-      NOTREACHED_NT();
-      return false;
-    }
-
     NTSTATUS ret = resolver->Setup(
-        thunks->base, interceptions_->interceptor_base, function->function,
-        interceptor, function->interceptor_address, &thunks->thunks[i],
-        sizeof(ThunkData), nullptr);
+        thunks->base, function->function, function->interceptor_address,
+        UNSAFE_TODO(&thunks->thunks[i]), sizeof(ThunkData), nullptr);
     if (!NT_SUCCESS(ret)) {
       NOTREACHED_NT();
       return false;
     }
 
-    DCHECK_NT(!g_originals[function->id] ||
-              g_originals[function->id] == &thunks->thunks[i]);
-    g_originals[function->id] = &thunks->thunks[i];
+    DCHECK_NT(!UNSAFE_TODO(g_originals.functions[function->id]) ||
+              UNSAFE_TODO(g_originals.functions[function->id]) ==
+                  UNSAFE_TODO(&thunks->thunks[i]));
+    UNSAFE_TODO(g_originals.functions[function->id]) =
+        UNSAFE_TODO(&thunks->thunks[i]);
 
     thunks->num_thunks++;
     thunks->used_bytes += sizeof(ThunkData);
 
-    function = reinterpret_cast<const FunctionInfo*>(
-        reinterpret_cast<const char*>(function) + function->record_bytes);
+    function = reinterpret_cast<const FunctionInfo*>(UNSAFE_TODO(
+        reinterpret_cast<const char*>(function) + function->record_bytes));
   }
 
   return true;
@@ -202,32 +191,12 @@ bool InterceptionAgent::PatchDll(const DllPatchInfo* dll_info,
 // This method is called from within the loader lock
 ResolverThunk* InterceptionAgent::GetResolver(InterceptionType type) {
   static EatResolverThunk* eat_resolver = nullptr;
-  static SidestepResolverThunk* sidestep_resolver = nullptr;
-  static SmartSidestepResolverThunk* smart_sidestep_resolver = nullptr;
 
   if (!eat_resolver)
     eat_resolver = new (NT_ALLOC) EatResolverThunk;
-
-#if !defined(_WIN64)
-  // Sidestep is not supported for x64.
-  if (!sidestep_resolver)
-    sidestep_resolver = new (NT_ALLOC) SidestepResolverThunk;
-
-  if (!smart_sidestep_resolver)
-    smart_sidestep_resolver = new (NT_ALLOC) SmartSidestepResolverThunk;
-#endif
-
-  switch (type) {
-    case INTERCEPTION_EAT:
-      return eat_resolver;
-    case INTERCEPTION_SIDESTEP:
-      return sidestep_resolver;
-    case INTERCEPTION_SMART_SIDESTEP:
-      return smart_sidestep_resolver;
-    default:
-      NOTREACHED_NT();
-  }
-
+  if (type == INTERCEPTION_EAT)
+    return eat_resolver;
+  NOTREACHED_NT();
   return nullptr;
 }
 

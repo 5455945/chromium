@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,7 +49,7 @@ class SessionTracker {
   void RecordEntry() {
     DVLOG(1) << __func__;
     ukm::UkmRecorder* ukm_recorder = ukm::UkmRecorder::Get();
-    DCHECK(ukm_recorder);
+    CHECK(ukm_recorder, base::NotFatalUntil::M159);
 
     ukm_entry_->Record(ukm_recorder);
   }

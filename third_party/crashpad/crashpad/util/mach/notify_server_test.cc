@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 #include <stddef.h>
 
+#include "base/apple/scoped_mach_port.h"
 #include "base/compiler_specific.h"
-#include "base/mac/scoped_mach_port.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "test/mac/mach_errors.h"
@@ -33,7 +33,6 @@ namespace {
 using testing::AllOf;
 using testing::DoAll;
 using testing::Eq;
-using testing::Invoke;
 using testing::Pointee;
 using testing::ResultOf;
 using testing::Return;
@@ -163,32 +162,44 @@ mach_port_urefs_t DeadNameRightRefCount(mach_port_t port) {
 class NotifyServerTestBase : public testing::Test,
                              public NotifyServer::Interface {
  public:
+  NotifyServerTestBase(const NotifyServerTestBase&) = delete;
+  NotifyServerTestBase& operator=(const NotifyServerTestBase&) = delete;
+
   // NotifyServer::Interface:
 
-  MOCK_METHOD3(DoMachNotifyPortDeleted,
-               kern_return_t(notify_port_t notify,
-                             mach_port_name_t name,
-                             const mach_msg_trailer_t* trailer));
+  MOCK_METHOD(kern_return_t,
+              DoMachNotifyPortDeleted,
+              (notify_port_t notify,
+               mach_port_name_t name,
+               const mach_msg_trailer_t* trailer),
+              (override));
 
-  MOCK_METHOD4(DoMachNotifyPortDestroyed,
-               kern_return_t(notify_port_t notify,
-                             mach_port_t rights,
-                             const mach_msg_trailer_t* trailer,
-                             bool* destroy_request));
+  MOCK_METHOD(kern_return_t,
+              DoMachNotifyPortDestroyed,
+              (notify_port_t notify,
+               mach_port_t rights,
+               const mach_msg_trailer_t* trailer,
+               bool* destroy_request),
+              (override));
 
-  MOCK_METHOD3(DoMachNotifyNoSenders,
-               kern_return_t(notify_port_t notify,
-                             mach_port_mscount_t mscount,
-                             const mach_msg_trailer_t* trailer));
+  MOCK_METHOD(kern_return_t,
+              DoMachNotifyNoSenders,
+              (notify_port_t notify,
+               mach_port_mscount_t mscount,
+               const mach_msg_trailer_t* trailer),
+              (override));
 
-  MOCK_METHOD2(DoMachNotifySendOnce,
-               kern_return_t(notify_port_t notify,
-                             const mach_msg_trailer_t* trailer));
+  MOCK_METHOD(kern_return_t,
+              DoMachNotifySendOnce,
+              (notify_port_t notify, const mach_msg_trailer_t* trailer),
+              (override));
 
-  MOCK_METHOD3(DoMachNotifyDeadName,
-               kern_return_t(notify_port_t notify,
-                             mach_port_name_t name,
-                             const mach_msg_trailer_t* trailer));
+  MOCK_METHOD(kern_return_t,
+              DoMachNotifyDeadName,
+              (notify_port_t notify,
+               mach_port_name_t name,
+               const mach_msg_trailer_t* trailer),
+              (override));
 
  protected:
   NotifyServerTestBase() : testing::Test(), NotifyServer::Interface() {}
@@ -222,7 +233,7 @@ class NotifyServerTestBase : public testing::Test,
       return false;
     }
 
-    base::mac::ScopedMachSendRight previous_owner(previous);
+    base::apple::ScopedMachSendRight previous_owner(previous);
     EXPECT_EQ(previous, kMachPortNull);
 
     return true;
@@ -269,14 +280,10 @@ class NotifyServerTestBase : public testing::Test,
   }
 
   // testing::Test:
-  void TearDown() override {
-    server_port_.reset();
-  }
+  void TearDown() override { server_port_.reset(); }
 
  private:
-  base::mac::ScopedMachReceiveRight server_port_;
-
-  DISALLOW_COPY_AND_ASSIGN(NotifyServerTestBase);
+  base::apple::ScopedMachReceiveRight server_port_;
 };
 
 using NotifyServerTest = StrictMock<NotifyServerTestBase>;
@@ -311,11 +318,11 @@ TEST_F(NotifyServerTest, NoNotification) {
 // When a send-once right with a dead-name notification request is deallocated,
 // a port-deleted notification should be generated.
 TEST_F(NotifyServerTest, MachNotifyPortDeleted) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
-  base::mac::ScopedMachSendRight send_once_right(
+  base::apple::ScopedMachSendRight send_once_right(
       SendOnceRightFromReceiveRight(receive_right.get()));
   ASSERT_TRUE(send_once_right.is_valid());
 
@@ -338,7 +345,7 @@ TEST_F(NotifyServerTest, MachNotifyPortDeleted) {
 // When a receive right with a port-destroyed notification request is destroyed,
 // a port-destroyed notification should be generated.
 TEST_F(NotifyServerTest, MachNotifyPortDestroyed) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
@@ -362,7 +369,7 @@ TEST_F(NotifyServerTest, MachNotifyPortDestroyed) {
 // When a receive right with a port-destroyed notification request is not
 // destroyed, no port-destroyed notification should be generated.
 TEST_F(NotifyServerTest, MachNotifyPortDestroyed_NoNotification) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
@@ -375,7 +382,7 @@ TEST_F(NotifyServerTest, MachNotifyPortDestroyed_NoNotification) {
 // When a no-senders notification request is registered for a receive right with
 // no senders, a no-senders notification should be generated.
 TEST_F(NotifyServerTest, MachNotifyNoSenders_NoSendRight) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
@@ -395,11 +402,11 @@ TEST_F(NotifyServerTest, MachNotifyNoSenders_NoSendRight) {
 // notification request is deallocated, a no-senders notification should be
 // generated.
 TEST_F(NotifyServerTest, MachNotifyNoSenders_SendRightDeallocated) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
-  base::mac::ScopedMachSendRight send_right(
+  base::apple::ScopedMachSendRight send_right(
       SendRightFromReceiveRight(receive_right.get()));
   ASSERT_TRUE(send_right.is_valid());
 
@@ -420,15 +427,15 @@ TEST_F(NotifyServerTest, MachNotifyNoSenders_SendRightDeallocated) {
 // When the a receive right with a no-senders notification request never loses
 // all senders, no no-senders notification should be generated.
 TEST_F(NotifyServerTest, MachNotifyNoSenders_NoNotification) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
-  base::mac::ScopedMachSendRight send_right_0(
+  base::apple::ScopedMachSendRight send_right_0(
       SendRightFromReceiveRight(receive_right.get()));
   ASSERT_TRUE(send_right_0.is_valid());
 
-  base::mac::ScopedMachSendRight send_right_1(
+  base::apple::ScopedMachSendRight send_right_1(
       SendRightFromReceiveRight(receive_right.get()));
   ASSERT_TRUE(send_right_1.is_valid());
 
@@ -446,7 +453,7 @@ TEST_F(NotifyServerTest, MachNotifyNoSenders_NoNotification) {
 // When a send-once right is deallocated without being used, a send-once
 // notification notification should be sent via the send-once right.
 TEST_F(NotifyServerTest, MachNotifySendOnce_ExplicitDeallocation) {
-  base::mac::ScopedMachSendRight send_once_right(
+  base::apple::ScopedMachSendRight send_once_right(
       SendOnceRightFromReceiveRight(ServerPort()));
   ASSERT_TRUE(send_once_right.is_valid());
 
@@ -465,7 +472,7 @@ TEST_F(NotifyServerTest, MachNotifySendOnce_ExplicitDeallocation) {
 // the send-once right is destroyed, and a send-once notification should appear
 // on the reply port.
 TEST_F(NotifyServerTest, MachNotifySendOnce_ImplicitDeallocation) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
@@ -499,11 +506,11 @@ TEST_F(NotifyServerTest, MachNotifySendOnce_ImplicitDeallocation) {
 // notification request is destroyed, a dead-name notification should be
 // generated.
 TEST_F(NotifyServerTest, MachNotifyDeadName) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
-  base::mac::ScopedMachSendRight send_once_right(
+  base::apple::ScopedMachSendRight send_once_right(
       SendOnceRightFromReceiveRight(receive_right.get()));
   ASSERT_TRUE(send_once_right.is_valid());
 
@@ -520,7 +527,7 @@ TEST_F(NotifyServerTest, MachNotifyDeadName) {
                                          ResultOf(DeadNameRightRefCount, 2)),
                                    ResultOf(AuditPIDFromMachMessageTrailer, 0)))
       .WillOnce(
-           DoAll(WithArg<1>(Invoke(MachPortDeallocate)), Return(MIG_NO_REPLY)))
+          DoAll(WithArg<1>(MachPortDeallocate), Return(MIG_NO_REPLY)))
       .RetiresOnSaturation();
 
   receive_right.reset();
@@ -538,11 +545,11 @@ TEST_F(NotifyServerTest, MachNotifyDeadName) {
 // notification request is not destroyed, no dead-name notification should be
 // generated.
 TEST_F(NotifyServerTest, MachNotifyDeadName_NoNotification) {
-  base::mac::ScopedMachReceiveRight receive_right(
+  base::apple::ScopedMachReceiveRight receive_right(
       NewMachPort(MACH_PORT_RIGHT_RECEIVE));
   ASSERT_TRUE(receive_right.is_valid());
 
-  base::mac::ScopedMachSendRight send_once_right(
+  base::apple::ScopedMachSendRight send_once_right(
       SendOnceRightFromReceiveRight(receive_right.get()));
   ASSERT_TRUE(send_once_right.is_valid());
 

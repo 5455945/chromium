@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_state.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "ui/aura/window.h"
 #include "ui/wm/core/window_util.h"
 
@@ -15,6 +15,12 @@ namespace ash {
 class WindowTransientDescendantIteratorTest : public AshTestBase {
  public:
   WindowTransientDescendantIteratorTest() = default;
+
+  WindowTransientDescendantIteratorTest(
+      const WindowTransientDescendantIteratorTest&) = delete;
+  WindowTransientDescendantIteratorTest& operator=(
+      const WindowTransientDescendantIteratorTest&) = delete;
+
   ~WindowTransientDescendantIteratorTest() override = default;
 
   // Creates a test set of windows parented like a linked list. The result
@@ -23,7 +29,7 @@ class WindowTransientDescendantIteratorTest : public AshTestBase {
       std::vector<std::unique_ptr<aura::Window>>* out_result) {
     ASSERT_TRUE(out_result->empty());
     for (char c : {'A', 'B', 'C', 'D'}) {
-      auto window = CreateTestWindow();
+      auto window = CreateWindowWithAppType();
       window->SetName(std::string(1, c));
       if (!out_result->empty())
         ::wm::AddTransientChild(out_result->back().get(), window.get());
@@ -43,12 +49,12 @@ class WindowTransientDescendantIteratorTest : public AshTestBase {
   void CreateTestInOrderTree(
       std::vector<std::unique_ptr<aura::Window>>* out_result) {
     ASSERT_TRUE(out_result->empty());
-    auto window_a = CreateTestWindow();
-    auto window_b = CreateTestWindow();
-    auto window_c = CreateTestWindow();
-    auto window_d = CreateTestWindow();
-    auto window_e = CreateTestWindow();
-    auto window_f = CreateTestWindow();
+    auto window_a = CreateWindowWithAppType();
+    auto window_b = CreateWindowWithAppType();
+    auto window_c = CreateWindowWithAppType();
+    auto window_d = CreateWindowWithAppType();
+    auto window_e = CreateWindowWithAppType();
+    auto window_f = CreateWindowWithAppType();
 
     window_a->SetName("A");
     window_b->SetName("B");
@@ -72,9 +78,6 @@ class WindowTransientDescendantIteratorTest : public AshTestBase {
     out_result->push_back(std::move(window_e));
     out_result->push_back(std::move(window_f));
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WindowTransientDescendantIteratorTest);
 };
 
 // Tests that case that windows a parented transiently like a linked list.

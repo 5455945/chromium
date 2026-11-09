@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<grit latest_public_release="0" current_release="1" output_all_resource_defines="false">
+<grit latest_public_release="0" current_release="1">
   <outputs>
     <output filename="grit/platform_locale_settings.h" type="rc_header">
       <emit emit_type='prepend'></emit>
     </output>
+    <output filename="platform_locale_settings_af.pak" type="data_package" lang="af" />
     <output filename="platform_locale_settings_am.pak" type="data_package" lang="am" />
     <output filename="platform_locale_settings_ar.pak" type="data_package" lang="ar" />
     <output filename="platform_locale_settings_bg.pak" type="data_package" lang="bg" />
@@ -56,6 +57,7 @@
     <output filename="platform_locale_settings_th.pak" type="data_package" lang="th" />
     <output filename="platform_locale_settings_tr.pak" type="data_package" lang="tr" />
     <output filename="platform_locale_settings_uk.pak" type="data_package" lang="uk" />
+    <output filename="platform_locale_settings_ur.pak" type="data_package" lang="ur" />
     <output filename="platform_locale_settings_vi.pak" type="data_package" lang="vi" />
     <output filename="platform_locale_settings_zh-CN.pak" type="data_package" lang="zh-CN" />
     <output filename="platform_locale_settings_zh-TW.pak" type="data_package" lang="zh-TW" />
@@ -127,7 +129,7 @@
 
       <!-- The default value for |WebPreference::fixed_font_family| -->
       <message name="IDS_FIXED_FONT_FAMILY" use_name_for_id="true">
-        Courier
+        Menlo
       </message>
 
       <!-- The default value for |WebPreference::serif_font_family| -->
@@ -155,9 +157,9 @@
         Papyrus
       </message>
 
-      <!-- The default value for |WebPreference::pictograph_font_family| -->
-      <message name="IDS_PICTOGRAPH_FONT_FAMILY" use_name_for_id="true">
-        Apple Color Emoji
+      <!-- The default value for |WebPreference::math_font_family| -->
+      <message name="IDS_MATH_FONT_FAMILY" use_name_for_id="true">
+        STIX Two Math
       </message>
 
       <!-- The default value for |WebPreference::standard_font_family_map| for
@@ -169,7 +171,7 @@
       <!-- The default value for |WebPreference::fixed_font_family_map| for
            Japanese script. -->
       <message name="IDS_FIXED_FONT_FAMILY_JAPANESE" use_name_for_id="true">
-        Osaka-Mono
+        ,Osaka,BIZ UDGothic,Menlo
       </message>
 
       <!-- The default value for |WebPreference::serif_font_family_map| for
@@ -248,6 +250,48 @@
            Traditional Chinese script.  -->
       <message name="IDS_CURSIVE_FONT_FAMILY_TRADITIONAL_HAN" use_name_for_id="true">
         Kaiti TC
+      </message>
+
+      <!-- The default value for |WebPreference::standard_font_family_map| for
+           Devanagari script. -->
+      <message name="IDS_STANDARD_FONT_FAMILY_DEVANAGARI" use_name_for_id="true">
+        Devanagari MT
+      </message>
+
+      <!-- The default value for |WebPreference::fixed_font_family_map| for
+           Devanagari script. -->
+      <message name="IDS_FIXED_FONT_FAMILY_DEVANAGARI" use_name_for_id="true">
+        Menlo
+      </message>
+
+      <!-- The default value for |WebPreference::serif_font_family_map| for
+           Devanagari script. -->
+      <message name="IDS_SERIF_FONT_FAMILY_DEVANAGARI" use_name_for_id="true">
+        Devanagari MT
+      </message>
+
+      <!-- The default value for |WebPreference::sans_serif_font_family_map| for
+           Devanagari script.  -->
+      <message name="IDS_SANS_SERIF_FONT_FAMILY_DEVANAGARI" use_name_for_id="true">
+        Kohinoor Devanagari
+      </message>
+
+      <!-- The default value for |WebPreference::standard_font_family_map| for
+           Arabic Nastaliq script. -->
+      <message name="IDS_STANDARD_FONT_FAMILY_ARABIC_NASTALIQ" use_name_for_id="true" translateable="false">
+        Noto Nastaliq Urdu
+      </message>
+
+      <!-- The default value for |WebPreference::serif_font_family_map| for
+           Arabic Nastaliq script. -->
+      <message name="IDS_SERIF_FONT_FAMILY_ARABIC_NASTALIQ" use_name_for_id="true" translateable="false">
+        Noto Nastaliq Urdu
+      </message>
+
+      <!-- The default value for |WebPreference::sans_serif_font_family_map| for
+           Arabic Nastaliq script. -->
+      <message name="IDS_SANS_SERIF_FONT_FAMILY_ARABIC_NASTALIQ" use_name_for_id="true" translateable="false">
+        Noto Nastaliq Urdu
       </message>
 
       <!-- The default value for |WebPreference::minimum_font_size| -->

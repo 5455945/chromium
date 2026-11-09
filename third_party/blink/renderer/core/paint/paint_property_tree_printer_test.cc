@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/paint/paint_controller_paint_test.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 #if DCHECK_IS_ON()
 
@@ -32,7 +31,7 @@ INSTANTIATE_PAINT_TEST_SUITE_P(PaintPropertyTreePrinterTest);
 TEST_P(PaintPropertyTreePrinterTest, SimpleTransformTree) {
   SetBodyInnerHTML("hello world");
   String transform_tree_as_string =
-      transformPropertyTreeAsString(*GetDocument().View());
+      TransformPropertyTreeAsString(*GetDocument().View());
   EXPECT_THAT(transform_tree_as_string.Ascii(),
               testing::MatchesRegex("root .*"
                                     "  .*Translation \\(.*\\) .*"));
@@ -40,7 +39,7 @@ TEST_P(PaintPropertyTreePrinterTest, SimpleTransformTree) {
 
 TEST_P(PaintPropertyTreePrinterTest, SimpleClipTree) {
   SetBodyInnerHTML("hello world");
-  String clip_tree_as_string = clipPropertyTreeAsString(*GetDocument().View());
+  String clip_tree_as_string = ClipPropertyTreeAsString(*GetDocument().View());
   EXPECT_THAT(clip_tree_as_string.Ascii().c_str(),
               testing::MatchesRegex("root .*"
                                     "  .*Clip \\(.*\\) .*"));
@@ -49,17 +48,18 @@ TEST_P(PaintPropertyTreePrinterTest, SimpleClipTree) {
 TEST_P(PaintPropertyTreePrinterTest, SimpleEffectTree) {
   SetBodyInnerHTML("<div style='opacity: 0.9;'>hello world</div>");
   String effect_tree_as_string =
-      effectPropertyTreeAsString(*GetDocument().View());
+      EffectPropertyTreeAsString(*GetDocument().View());
   EXPECT_THAT(
       effect_tree_as_string.Ascii().c_str(),
-      testing::MatchesRegex("root .*"
-                            "  Effect \\(LayoutN?G?BlockFlow DIV\\) .*"));
+      testing::MatchesRegex(
+          "root .*"
+          "  Effect \\(LayoutN?G?BlockFlow \\(children-inline\\) DIV\\) .*"));
 }
 
 TEST_P(PaintPropertyTreePrinterTest, SimpleScrollTree) {
   SetBodyInnerHTML("<div style='height: 4000px;'>hello world</div>");
   String scroll_tree_as_string =
-      scrollPropertyTreeAsString(*GetDocument().View());
+      ScrollPropertyTreeAsString(*GetDocument().View());
   EXPECT_THAT(scroll_tree_as_string.Ascii().c_str(),
               testing::MatchesRegex("root .*"
                                     "  Scroll \\(.*\\) .*"));
@@ -70,14 +70,14 @@ TEST_P(PaintPropertyTreePrinterTest, SimpleTransformTreePath) {
       "<div id='transform' style='transform: translate3d(10px, 10px, 10px);'>"
       "</div>");
   LayoutObject* transformed_object =
-      GetDocument().getElementById("transform")->GetLayoutObject();
+      GetElementById("transform")->GetLayoutObject();
   const auto* transformed_object_properties =
       transformed_object->FirstFragment().PaintProperties();
   String transform_path_as_string =
       transformed_object_properties->Transform()->ToTreeString();
   EXPECT_THAT(transform_path_as_string.Ascii().c_str(),
               testing::MatchesRegex("root .*\"scroll\".*"
-                                    "  .*\"parent\".*"
+                                    "  .*\"in_subtree_of_page_scale\".*"
                                     "    .*\"translation2d\".*"
                                     "      .*\"matrix\".*"));
 }
@@ -86,8 +86,7 @@ TEST_P(PaintPropertyTreePrinterTest, SimpleClipTreePath) {
   SetBodyInnerHTML(
       "<div id='clip' style='position: absolute; clip: rect(10px, 80px, 70px, "
       "40px);'></div>");
-  LayoutObject* clipped_object =
-      GetDocument().getElementById("clip")->GetLayoutObject();
+  LayoutObject* clipped_object = GetElementById("clip")->GetLayoutObject();
   const auto* clipped_object_properties =
       clipped_object->FirstFragment().PaintProperties();
   String clip_path_as_string =
@@ -100,15 +99,14 @@ TEST_P(PaintPropertyTreePrinterTest, SimpleClipTreePath) {
 
 TEST_P(PaintPropertyTreePrinterTest, SimpleEffectTreePath) {
   SetBodyInnerHTML("<div id='effect' style='opacity: 0.9;'></div>");
-  LayoutObject* effect_object =
-      GetDocument().getElementById("effect")->GetLayoutObject();
+  LayoutObject* effect_object = GetElementById("effect")->GetLayoutObject();
   const auto* effect_object_properties =
       effect_object->FirstFragment().PaintProperties();
   String effect_path_as_string =
       effect_object_properties->Effect()->ToTreeString();
   EXPECT_THAT(effect_path_as_string.Ascii().c_str(),
               testing::MatchesRegex("root .*\"outputClip\".*"
-                                    "  .*\"parent\".*\"opacity\".*"));
+                                    "  .*\"opacity\".*"));
 }
 
 TEST_P(PaintPropertyTreePrinterTest, SimpleScrollTreePath) {
@@ -117,16 +115,15 @@ TEST_P(PaintPropertyTreePrinterTest, SimpleScrollTreePath) {
       <div id='forceScroll' style='height: 4000px;'></div>
     </div>
   )HTML");
-  LayoutObject* scroll_object =
-      GetDocument().getElementById("scroll")->GetLayoutObject();
+  LayoutObject* scroll_object = GetElementById("scroll")->GetLayoutObject();
   const auto* scroll_object_properties =
       scroll_object->FirstFragment().PaintProperties();
   String scroll_path_as_string = scroll_object_properties->ScrollTranslation()
                                      ->ScrollNode()
                                      ->ToTreeString();
   EXPECT_THAT(scroll_path_as_string.Ascii().c_str(),
-              testing::MatchesRegex("root .* \\{\\}.*"
-                                    "  .*\"parent\".*"));
+              testing::MatchesRegex("root .*"
+                                    "  Scroll.*"));
 }
 
 }  // namespace blink

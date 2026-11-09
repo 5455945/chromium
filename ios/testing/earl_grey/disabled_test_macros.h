@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,13 @@
 // at runtime. Disabling at compile-time is always preferred.
 // Example:
 // - (void)testFoo
-// if (IsIPadIdiom()) {
+// if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
 //   EARL_GREY_TEST_DISABLED(@"Disabled on iPad.");
 // }
-#define EARL_GREY_TEST_DISABLED(message)                                \
-  while (true) {                                                        \
-    NSLog(@"-- Earl Grey Test Disabled -- %@", message);                \
-    return;                                                             \
+#define EARL_GREY_TEST_DISABLED(message)                 \
+  while (true) {                                         \
+    NSLog(@"-- Earl Grey Test Disabled -- %@", message); \
+    return;                                              \
   }
 
 // A macro that forces an Earl Grey test to pass. This should be used when a
@@ -29,13 +29,13 @@
 // Disabling at compile-time is always preferred.
 // Example:
 // - (void)testFoo
-// if (IsIPadIdiom()) {
+// if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
 //   EARL_GREY_TEST_SKIPPED(@"Test not supported on iPad.");
 // }
-#define EARL_GREY_TEST_SKIPPED(message)                                \
-  while (true) {                                                       \
-    NSLog(@"-- Earl Grey Test Skipped -- %@", message);                \
-    return;                                                            \
+#define EARL_GREY_TEST_SKIPPED(message)                 \
+  while (true) {                                        \
+    NSLog(@"-- Earl Grey Test Skipped -- %@", message); \
+    return;                                             \
   }
 
 #endif  // IOS_TESTING_EARL_GREY_DISABLED_TEST_MACROS_H_

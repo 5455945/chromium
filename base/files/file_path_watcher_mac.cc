@@ -1,15 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/files/file_path_watcher.h"
+
 #include <memory>
 
-#include "base/files/file_path_watcher.h"
 #include "base/files/file_path_watcher_kqueue.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
 #include "base/files/file_path_watcher_fsevents.h"
 #endif
 
@@ -30,11 +31,12 @@ class FilePathWatcherImpl : public FilePathWatcher::PlatformDelegate {
     // Use kqueue for non-recursive watches and FSEvents for recursive ones.
     DCHECK(!impl_.get());
     if (type == Type::kRecursive) {
-      if (!FilePathWatcher::RecursiveWatchAvailable())
+      if (!FilePathWatcher::RecursiveWatchAvailable()) {
         return false;
-#if !defined(OS_IOS)
+      }
+#if !BUILDFLAG(IS_IOS)
       impl_ = std::make_unique<FilePathWatcherFSEvents>();
-#endif  // OS_IOS
+#endif  // BUILDFLAG(IS_IOS)
     } else {
       impl_ = std::make_unique<FilePathWatcherKQueue>();
     }
@@ -43,8 +45,9 @@ class FilePathWatcherImpl : public FilePathWatcher::PlatformDelegate {
   }
 
   void Cancel() override {
-    if (impl_.get())
+    if (impl_.get()) {
       impl_->Cancel();
+    }
     set_cancelled();
   }
 
@@ -54,9 +57,7 @@ class FilePathWatcherImpl : public FilePathWatcher::PlatformDelegate {
 
 }  // namespace
 
-FilePathWatcher::FilePathWatcher() {
-  sequence_checker_.DetachFromSequence();
-  impl_ = std::make_unique<FilePathWatcherImpl>();
-}
+FilePathWatcher::FilePathWatcher()
+    : FilePathWatcher(std::make_unique<FilePathWatcherImpl>()) {}
 
 }  // namespace base

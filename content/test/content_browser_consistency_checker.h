@@ -1,12 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_TEST_CONTENT_BROWSER_CONSISTENCY_CHECKER_H_
 #define CONTENT_TEST_CONTENT_BROWSER_CONSISTENCY_CHECKER_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/functional/callback.h"
 
 namespace content {
 
@@ -26,15 +26,18 @@ class WebContents;
 class ContentBrowserConsistencyChecker {
  public:
   ContentBrowserConsistencyChecker();
+
+  ContentBrowserConsistencyChecker(const ContentBrowserConsistencyChecker&) =
+      delete;
+  ContentBrowserConsistencyChecker& operator=(
+      const ContentBrowserConsistencyChecker&) = delete;
+
   ~ContentBrowserConsistencyChecker();
 
  private:
   void OnWebContentsCreated(WebContents* web_contents);
 
-  // The callback needs to be cached so that it can be unregistered.
-  base::RepeatingCallback<void(WebContents*)> creation_hook_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentBrowserConsistencyChecker);
+  base::CallbackListSubscription creation_subscription_;
 };
 
 }  // namespace content

@@ -1,13 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TEST_SCOPED_PATH_OVERRIDE_H_
 #define BASE_TEST_SCOPED_PATH_OVERRIDE_H_
 
+#include <optional>
+
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -19,17 +19,26 @@ class FilePath;
 // scope of the test is left.
 class ScopedPathOverride {
  public:
-  // Contructor that initializes the override to a scoped temp directory.
+  // Constructor that initializes the override to a scoped temp directory.
   explicit ScopedPathOverride(int key);
 
   // Constructor that would use a path provided by the user.
-  ScopedPathOverride(int key, const FilePath& dir);
+  // If `should_skip_check` is set to true, it will call
+  // `PathService::OverrideWithoutCheckForTesting()` which may set an invalid or
+  // non-absolute path for testing.
+  ScopedPathOverride(int key,
+                     const FilePath& dir,
+                     bool should_skip_check = false);
 
   // See PathService::OverrideAndCreateIfNeeded.
   ScopedPathOverride(int key,
                      const FilePath& path,
                      bool is_absolute,
                      bool create);
+
+  ScopedPathOverride(const ScopedPathOverride&) = delete;
+  ScopedPathOverride& operator=(const ScopedPathOverride&) = delete;
+
   ~ScopedPathOverride();
 
  private:
@@ -38,9 +47,7 @@ class ScopedPathOverride {
 
   int key_;
   ScopedTempDir temp_dir_;
-  absl::optional<FilePath> original_override_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedPathOverride);
+  std::optional<FilePath> original_override_;
 };
 
 }  // namespace base

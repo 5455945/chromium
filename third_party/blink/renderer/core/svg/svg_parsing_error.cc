@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -63,9 +63,7 @@ std::pair<const char*, const char*> MessageForStatus(SVGParseStatus status) {
       return std::make_pair("Invalid value, ", ".");
     default:
       NOTREACHED();
-      break;
   }
-  return std::make_pair("", "");
 }
 
 bool DisableLocus(SVGParseStatus status) {
@@ -94,12 +92,12 @@ void AppendValue(StringBuilder& builder,
     DCHECK_LE(context_start, context_end);
     DCHECK_LE(context_end, value.length());
     if (context_start != 0)
-      builder.Append(kHorizontalEllipsisCharacter);
+      builder.Append(uchar::kHorizontalEllipsis);
     EscapeStringForJSON(
-        value.GetString().Substring(context_start, context_end - context_start),
+        StringView(value, context_start, context_end - context_start),
         &builder);
     if (context_end != value.length())
-      builder.Append(kHorizontalEllipsisCharacter);
+      builder.Append(uchar::kHorizontalEllipsis);
   }
   builder.Append('"');
 }

@@ -35,12 +35,11 @@ These commands don't necessarily have anything to do with each other.
 import logging
 import optparse
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from blinkpy.common.host import Host
 from blinkpy.tool.commands.analyze_baselines import AnalyzeBaselines
 from blinkpy.tool.commands.command import HelpPrintingOptionParser
-from blinkpy.tool.commands.copy_existing_baselines import CopyExistingBaselines
-from blinkpy.tool.commands.flaky_tests import FlakyTests
 from blinkpy.tool.commands.help_command import HelpCommand
 from blinkpy.tool.commands.optimize_baselines import OptimizeBaselines
 from blinkpy.tool.commands.pretty_diff import PrettyDiff
@@ -49,7 +48,6 @@ from blinkpy.tool.commands.queries import PrintBaselines
 from blinkpy.tool.commands.queries import PrintExpectations
 from blinkpy.tool.commands.rebaseline import Rebaseline
 from blinkpy.tool.commands.rebaseline_cl import RebaselineCL
-from blinkpy.tool.commands.rebaseline_test import RebaselineTest
 
 _log = logging.getLogger(__name__)
 
@@ -65,33 +63,29 @@ class BlinkTool(Host):
             action='store_true',
             dest='verbose',
             default=False,
-            help='enable all logging'),
-        optparse.make_option(
-            '-d',
-            '--directory',
-            action='append',
-            default=[],
-            help='Directory to look at for changed files'),
+            help='enable all logging',
+        ),
     ]
 
     def __init__(self, path):
-        super(BlinkTool, self).__init__()
+        super().__init__()
         self._path = path
+        io_pool = ThreadPoolExecutor(max_workers=RebaselineCL.MAX_WORKERS)
         self.commands = [
             AnalyzeBaselines(),
-            CopyExistingBaselines(),
             CrashLog(),
-            FlakyTests(),
             OptimizeBaselines(),
             PrettyDiff(),
             PrintBaselines(),
             PrintExpectations(),
             Rebaseline(),
-            RebaselineCL(),
-            RebaselineTest(),
+            RebaselineCL(self, io_pool),
         ]
         self.help_command = HelpCommand(tool=self)
         self.commands.append(self.help_command)
+
+    def __reduce__(self):
+        return (self.__class__, (self._path,))
 
     def main(self, argv=None):
         argv = argv or sys.argv
@@ -102,7 +96,7 @@ class BlinkTool(Host):
 
         command = self.command_by_name(command_name) or self.help_command
         if not command:
-            option_parser.error('%s is not a recognized command', command_name)
+            option_parser.error('%s is not a recognized command' % command_name)
 
         command.set_option_parser(option_parser)
         (options, args) = command.parse_args(args)
@@ -125,15 +119,14 @@ class BlinkTool(Host):
             return (None, args[:])
 
         command = args[command_index]
-        return (command, args[:command_index] + args[command_index + 1:])
+        return (command, args[:command_index] + args[command_index + 1 :])
 
     def _create_option_parser(self):
         usage = 'Usage: %prog [options] COMMAND [ARGS]'
         name = optparse.OptionParser().get_prog_name()
         return HelpPrintingOptionParser(
-            epilog_method=self.help_command.help_epilog,
-            prog=name,
-            usage=usage)
+            epilog_method=self.help_command.help_epilog, prog=name, usage=usage
+        )
 
     def _add_global_options(self, option_parser):
         global_options = self.global_options or []

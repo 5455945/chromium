@@ -1,12 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/settings/profile_info_handler.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
@@ -14,9 +13,9 @@
 #include "chrome/common/pref_names.h"
 #include "ui/base/webui/web_ui_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ui/webui/chromeos/user_image_source.h"
+#include "chrome/browser/ui/webui/ash/user_image/user_image_source.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_manager.h"
 #else
@@ -35,21 +34,16 @@ const char ProfileInfoHandler::kProfileStatsCountReadyEventName[] =
     "profile-stats-count-ready";
 
 ProfileInfoHandler::ProfileInfoHandler(Profile* profile) : profile_(profile) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Set up the chrome://userimage/ source.
-  content::URLDataSource::Add(profile,
-                              std::make_unique<chromeos::UserImageSource>());
-#endif
 }
 
-ProfileInfoHandler::~ProfileInfoHandler() {}
+ProfileInfoHandler::~ProfileInfoHandler() = default;
 
 void ProfileInfoHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
       "getProfileInfo",
       base::BindRepeating(&ProfileInfoHandler::HandleGetProfileInfo,
                           base::Unretained(this)));
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   web_ui()->RegisterMessageCallback(
       "getProfileStatsCount",
       base::BindRepeating(&ProfileInfoHandler::HandleGetProfileStats,
@@ -61,7 +55,7 @@ void ProfileInfoHandler::OnJavascriptAllowed() {
   profile_observation_.Observe(
       &g_browser_process->profile_manager()->GetProfileAttributesStorage());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   user_manager_observation_.Observe(user_manager::UserManager::Get());
 #endif
 }
@@ -69,18 +63,21 @@ void ProfileInfoHandler::OnJavascriptAllowed() {
 void ProfileInfoHandler::OnJavascriptDisallowed() {
   callback_weak_ptr_factory_.InvalidateWeakPtrs();
 
-  DCHECK(profile_observation_.IsObservingSource(
-      &g_browser_process->profile_manager()->GetProfileAttributesStorage()));
+  CHECK(
+      profile_observation_.IsObservingSource(
+          &g_browser_process->profile_manager()->GetProfileAttributesStorage()),
+      base::NotFatalUntil::M162);
   profile_observation_.Reset();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  DCHECK(user_manager_observation_.IsObservingSource(
-      user_manager::UserManager::Get()));
+#if BUILDFLAG(IS_CHROMEOS)
+  CHECK(user_manager_observation_.IsObservingSource(
+            user_manager::UserManager::Get()),
+        base::NotFatalUntil::M162);
   user_manager_observation_.Reset();
 #endif
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void ProfileInfoHandler::OnUserImageChanged(const user_manager::User& user) {
   PushProfileInfo();
 }
@@ -97,18 +94,17 @@ void ProfileInfoHandler::OnProfileAvatarChanged(
   PushProfileInfo();
 }
 
-void ProfileInfoHandler::HandleGetProfileInfo(const base::ListValue* args) {
+void ProfileInfoHandler::HandleGetProfileInfo(const base::ListValue& args) {
   AllowJavascript();
 
-  CHECK_EQ(1U, args->GetSize());
-  const base::Value* callback_id;
-  CHECK(args->Get(0, &callback_id));
+  CHECK_EQ(1U, args.size());
+  const base::Value& callback_id = args[0];
 
-  ResolveJavascriptCallback(*callback_id, *GetAccountNameAndIcon());
+  ResolveJavascriptCallback(callback_id, GetAccountNameAndIcon());
 }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-void ProfileInfoHandler::HandleGetProfileStats(const base::ListValue* args) {
+#if !BUILDFLAG(IS_CHROMEOS)
+void ProfileInfoHandler::HandleGetProfileStats(const base::ListValue& args) {
   AllowJavascript();
 
   ProfileStatisticsFactory::GetForProfile(profile_)->GatherStatistics(
@@ -130,45 +126,44 @@ void ProfileInfoHandler::PushProfileStatsCount(
 #endif
 
 void ProfileInfoHandler::PushProfileInfo() {
-  FireWebUIListener(kProfileInfoChangedEventName, *GetAccountNameAndIcon());
+  FireWebUIListener(kProfileInfoChangedEventName, GetAccountNameAndIcon());
 }
 
-std::unique_ptr<base::DictionaryValue>
-ProfileInfoHandler::GetAccountNameAndIcon() {
+base::DictValue ProfileInfoHandler::GetAccountNameAndIcon() {
   std::string name;
   std::string icon_url;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   const user_manager::User* user =
-      chromeos::ProfileHelper::Get()->GetUserByProfile(profile_);
-  DCHECK(user);
+      ash::ProfileHelper::Get()->GetUserByProfile(profile_);
+  CHECK(user, base::NotFatalUntil::M162);
   name = base::UTF16ToUTF8(user->GetDisplayName());
 
   // Get image as data URL instead of using chrome://userimage source to avoid
   // issues with caching.
   scoped_refptr<base::RefCountedMemory> image =
-      chromeos::UserImageSource::GetUserImage(user->GetAccountId());
-  icon_url = webui::GetPngDataUrl(image->front(), image->size());
-#else   // !BUILDFLAG(IS_CHROMEOS_ASH)
+      ash::UserImageSource::GetUserImage(user->GetAccountId());
+  icon_url = webui::GetPngDataUrl(*image);
+#else   // !BUILDFLAG(IS_CHROMEOS)
   ProfileAttributesEntry* entry =
       g_browser_process->profile_manager()
           ->GetProfileAttributesStorage()
           .GetProfileAttributesWithPath(profile_->GetPath());
   if (entry) {
     name = base::UTF16ToUTF8(entry->GetLocalProfileName());
-    // TODO(crbug.com/710660): return chrome://theme/IDR_PROFILE_AVATAR_*
+    // TODO(crbug.com/40515148): return chrome://theme/IDR_PROFILE_AVATAR_*
     // and update theme_source.cc to get high res avatar icons. This does less
     // work here, sends less over IPC, and is more stable with returned results.
     int kAvatarIconSize = 40.f * web_ui()->GetDeviceScaleFactor();
     gfx::Image icon = profiles::GetSizedAvatarIcon(
-        entry->GetAvatarIcon(), true, kAvatarIconSize, kAvatarIconSize);
+        entry->GetAvatarIcon(), kAvatarIconSize, kAvatarIconSize);
     icon_url = webui::GetBitmapDataUrl(icon.AsBitmap());
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  auto response = std::make_unique<base::DictionaryValue>();
-  response->SetString("name", name);
-  response->SetString("iconUrl", icon_url);
+  base::DictValue response;
+  response.Set("name", name);
+  response.Set("iconUrl", icon_url);
   return response;
 }
 

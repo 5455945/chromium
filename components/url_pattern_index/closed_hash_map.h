@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,6 @@
 
 #include "base/bits.h"
 #include "base/check_op.h"
-#include "base/macros.h"
 #include "base/numerics/safe_conversions.h"
 
 namespace url_pattern_index {
@@ -44,9 +43,7 @@ using HashMap =
 // a 32-bit table independent of the process being 32-bit or 64-bit to ensure
 // that tables can be read in processes of different bitness from those in which
 // they were generated. This is a requirement of consumers of this data
-// structure. In particular, the subresource_filter component in Weblayer
-// generates tables in the 64-bit browser process but also accesses them the
-// 32-bit renderer process.
+// structure.
 //
 // On normal operation load factor varies within range (1/4, 1/2]. The real load
 // factor can be less or equal to 1/4 if rehashing is requested explicitly to
@@ -111,6 +108,9 @@ class ClosedHashMap {
         prober_(prober) {
     entries_.reserve(capacity);
   }
+
+  ClosedHashMap(const ClosedHashMap&) = delete;
+  ClosedHashMap& operator=(const ClosedHashMap&) = delete;
 
   // Returns the number of distinct keys.
   uint32_t size() const { return entries_.size(); }
@@ -242,8 +242,6 @@ class ClosedHashMap {
 
   // The strategy used to find a slot for a key.
   Prober prober_;
-
-  DISALLOW_COPY_AND_ASSIGN(ClosedHashMap);
 };
 
 // The implementation of Prober that uses a simple form of quadratic probing.

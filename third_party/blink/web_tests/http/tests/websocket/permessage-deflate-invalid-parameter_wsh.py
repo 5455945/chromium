@@ -26,9 +26,10 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from six.moves.urllib import parse
-from mod_pywebsocket import handshake
-from mod_pywebsocket.handshake.hybi import compute_accept_from_unicode
+from urllib import parse
+
+from pywebsocket3 import handshake
+from pywebsocket3.handshake.hybi import compute_accept_from_unicode
 
 
 def web_socket_do_extra_handshake(request):
@@ -36,14 +37,21 @@ def web_socket_do_extra_handshake(request):
     parameters = None
     if len(resources) == 2:
         parameters = parse.unquote(resources[1])
-    message_parameters = (b'; %s\r\n' % parameters.encode('utf-8') if parameters else b'\r\n')
+    message_parameters = (
+        b'; %s\r\n' % parameters.encode('utf-8') if parameters else b'\r\n'
+    )
 
-    message = (b'HTTP/1.1 101 Switching Protocols\r\n'
-               b'Upgrade: websocket\r\n'
-               b'Connection: Upgrade\r\n'
-               b'Sec-WebSocket-Accept: %s\r\n'
-               b'Sec-WebSocket-Extensions: permessage-deflate'
-               b'%s\r\n') % (compute_accept_from_unicode(request.headers_in['Sec-WebSocket-Key']), message_parameters)
+    message = (
+        b'HTTP/1.1 101 Switching Protocols\r\n'
+        b'Upgrade: websocket\r\n'
+        b'Connection: Upgrade\r\n'
+        b'Sec-WebSocket-Accept: %s\r\n'
+        b'Sec-WebSocket-Extensions: permessage-deflate'
+        b'%s\r\n'
+    ) % (
+        compute_accept_from_unicode(request.headers_in['Sec-WebSocket-Key']),
+        message_parameters,
+    )
 
     request.connection.write(message)
     # Prevents pywebsocket from sending its own handshake message.

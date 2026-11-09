@@ -1,13 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/data_pipe_element_reader.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include <algorithm>
+
+#include "base/byte_size.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/c/system/types.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -21,7 +27,7 @@ DataPipeElementReader::DataPipeElementReader(
       data_pipe_getter_(std::move(data_pipe_getter)),
       handle_watcher_(FROM_HERE,
                       mojo::SimpleWatcher::ArmingPolicy::MANUAL,
-                      base::SequencedTaskRunnerHandle::Get()) {}
+                      base::SequencedTaskRunner::GetCurrentDefault()) {}
 
 DataPipeElementReader::~DataPipeElementReader() {}
 
@@ -83,9 +89,17 @@ int DataPipeElementReader::Read(net::IOBuffer* buf,
   return result;
 }
 
-void DataPipeElementReader::ReadCallback(int32_t status, uint64_t size) {
-  if (status == net::OK)
-    size_ = size;
+void DataPipeElementReader::ReadCallback(
+    mojom::DataPipeGetter::ReadResult size) {
+  int32_t status = net::OK;
+  if (size.has_value()) {
+    size_ = size->InBytes();
+  } else if (size.error() > 0 || size.error() == net::ERR_IO_PENDING) {
+    mojo::ReportBadMessage("Only net::Errors allowed.");
+    status = net::ERR_INVALID_ARGUMENT;
+  } else {
+    status = size.error();
+  }
   if (init_callback_)
     std::move(init_callback_).Run(status);
 }
@@ -98,30 +112,36 @@ void DataPipeElementReader::OnHandleReadable(MojoResult result) {
   int read_result;
   if (result == MOJO_RESULT_OK) {
     read_result = ReadInternal(buf_.get(), buf_length_);
+    // Unclear if this can happen, but if it can, shouldn't clear `buf_` or
+    // `buf_length_`.
+    if (read_result == net::ERR_IO_PENDING) {
+      return;
+    }
   } else {
     read_result = net::ERR_FAILED;
   }
 
   buf_ = nullptr;
   buf_length_ = 0;
-
-  if (read_result != net::ERR_IO_PENDING)
-    std::move(read_callback_).Run(read_result);
+  std::move(read_callback_).Run(read_result);
 }
 
 int DataPipeElementReader::ReadInternal(net::IOBuffer* buf, int buf_length) {
-  DCHECK(buf);
-  DCHECK_GT(buf_length, 0);
+  CHECK(buf);
+  CHECK_GT(buf_length, 0);
 
   if (BytesRemaining() == 0)
     return net::OK;
 
-  uint32_t num_bytes = buf_length;
-  MojoResult rv =
-      data_pipe_->ReadData(buf->data(), &num_bytes, MOJO_READ_DATA_FLAG_NONE);
+  // Don't try to read more bytes than the advertised size of the element.
+  size_t max_bytes = std::min(base::checked_cast<size_t>(buf_length),
+                              base::checked_cast<size_t>(BytesRemaining()));
+  size_t bytes_received;
+  MojoResult rv = data_pipe_->ReadData(MOJO_READ_DATA_FLAG_NONE,
+                                       buf->first(max_bytes), bytes_received);
   if (rv == MOJO_RESULT_OK) {
-    bytes_read_ += num_bytes;
-    return num_bytes;
+    bytes_read_ += bytes_received;
+    return base::checked_cast<int>(bytes_received);
   }
 
   if (rv == MOJO_RESULT_SHOULD_WAIT) {

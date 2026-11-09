@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "url/gurl.h"
 
@@ -22,6 +21,8 @@ class AwPermissionRequestDelegate;
 // The specific permission request should implement the
 // AwPermissionRequestDelegate interface, See MediaPermissionRequest.
 // This object is owned by the java peer.
+//
+// Lifetime: Temporary
 class AwPermissionRequest {
  public:
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.android_webview.permission
@@ -39,15 +40,16 @@ class AwPermissionRequest {
       std::unique_ptr<AwPermissionRequestDelegate> delegate,
       base::WeakPtr<AwPermissionRequest>* weak_ptr);
 
+  AwPermissionRequest(const AwPermissionRequest&) = delete;
+  AwPermissionRequest& operator=(const AwPermissionRequest&) = delete;
+
   // Return the Java peer. Must be null-checked.
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
   // Invoked by Java peer when request is processed, |granted| indicates the
   // request was granted or not.
-  void OnAccept(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& jcaller,
-                jboolean granted);
-  void Destroy(JNIEnv* env);
+  void OnAccept(bool granted);
+  void Destroy();
 
   // Return the origin which initiated the request.
   const GURL& GetOrigin();
@@ -76,8 +78,6 @@ class AwPermissionRequest {
 
   bool processed_;
   base::WeakPtrFactory<AwPermissionRequest> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AwPermissionRequest);
 };
 
 }  // namespace android_webview

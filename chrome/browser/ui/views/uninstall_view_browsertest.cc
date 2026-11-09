@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,30 +6,31 @@
 
 #include <string>
 
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/uninstall_browser_prompt.h"
 #include "content/public/test/browser_test.h"
 
 class UninstallViewBrowserTest : public DialogBrowserTest {
  public:
-  UninstallViewBrowserTest() {}
+  UninstallViewBrowserTest() = default;
+
+  UninstallViewBrowserTest(const UninstallViewBrowserTest&) = delete;
+  UninstallViewBrowserTest& operator=(const UninstallViewBrowserTest&) = delete;
 
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     // UninstallView may need to know whether Chrome is the default browser,
     // which requires IO. Since this is a test, we'll just allow that.
-    base::ThreadRestrictions::SetIOAllowed(true);
+    base::ScopedAllowBlockingForTesting allow_blocking;
 
-    chrome::ShowUninstallBrowserPrompt();
+    ShowUninstallBrowserPrompt();
 
     // The uninstall dialog is intentionally leaked because it assumes Chrome is
     // about to close anyway, so we have to explicitly exit for the test to end.
     // See ShowUninstallBrowserPrompt in uninstall_view.cc.
     exit(0);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(UninstallViewBrowserTest);
 };
 
 // Invokes a dialog confirming that the user wants to uninstall Chrome.

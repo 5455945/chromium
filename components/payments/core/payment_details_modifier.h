@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,13 @@
 #include <memory>
 #include <vector>
 
+#include "base/values.h"
 #include "components/payments/core/payment_item.h"
 #include "components/payments/core/payment_method_data.h"
 
 // C++ bindings for the PaymentRequest API PaymentDetailsModifier. Conforms to
 // the following spec:
 // https://w3c.github.io/payment-request/#dom-paymentdetailsmodifier
-
-namespace base {
-class DictionaryValue;
-}
 
 namespace payments {
 
@@ -31,11 +28,10 @@ class PaymentDetailsModifier {
 
   PaymentDetailsModifier& operator=(const PaymentDetailsModifier& other);
   bool operator==(const PaymentDetailsModifier& other) const;
-  bool operator!=(const PaymentDetailsModifier& other) const;
 
-  // Creates a base::DictionaryValue with the properties of this
+  // Creates a dictionary base::Value with the properties of this
   // PaymentDetailsModifier.
-  std::unique_ptr<base::DictionaryValue> ToDictionaryValue() const;
+  base::DictValue ToValueDict() const;
 
   // A payment method identifier and any associated payment method specific
   // data. The remaining fields in the PaymentDetailsModifier apply only if the

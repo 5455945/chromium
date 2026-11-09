@@ -1,23 +1,26 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_CLIPBOARD_VIEWS_CLIPBOARD_HISTORY_DELETE_BUTTON_H_
 #define ASH_CLIPBOARD_VIEWS_CLIPBOARD_HISTORY_DELETE_BUTTON_H_
 
+#include "base/memory/raw_ptr.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/image_button.h"
-
-namespace views {
-class InkDropContainerView;
-}  // namespace views
+#include "ui/views/view_targeter_delegate.h"
 
 namespace ash {
 class ClipboardHistoryItemView;
 
 // The button to delete the menu item and its corresponding clipboard data.
-class ClipboardHistoryDeleteButton : public views::ImageButton {
+class ClipboardHistoryDeleteButton : public views::ImageButton,
+                                     public views::ViewTargeterDelegate {
+  METADATA_HEADER(ClipboardHistoryDeleteButton, views::ImageButton)
+
  public:
-  explicit ClipboardHistoryDeleteButton(ClipboardHistoryItemView* listener);
+  ClipboardHistoryDeleteButton(ClipboardHistoryItemView* listener,
+                               const std::u16string& item_text);
   ClipboardHistoryDeleteButton(const ClipboardHistoryDeleteButton& rhs) =
       delete;
   ClipboardHistoryDeleteButton& operator=(
@@ -26,19 +29,23 @@ class ClipboardHistoryDeleteButton : public views::ImageButton {
 
  private:
   // views::ImageButton:
-  const char* GetClassName() const override;
-  void AddLayerBeneathView(ui::Layer* layer) override;
+  void AddLayerToRegion(ui::Layer* layer, views::LayerRegion region) override;
   void OnClickCanceled(const ui::Event& event) override;
   void OnThemeChanged() override;
-  void RemoveLayerBeneathView(ui::Layer* layer) override;
+  void RemoveLayerFromRegions(ui::Layer* layer) override;
+
+  // views::ViewTargeterDelegate:
+  bool DoesIntersectRect(const views::View* target,
+                         const gfx::Rect& rect) const override;
 
   // Used to accommodate the ink drop layer. It ensures that the ink drop is
   // above the view background.
-  views::InkDropContainerView* ink_drop_container_ = nullptr;
+  raw_ptr<views::View> ink_drop_container_ = nullptr;
 
   // The listener of button events.
-  ClipboardHistoryItemView* const listener_;
+  const raw_ptr<ClipboardHistoryItemView> listener_;
 };
+
 }  // namespace ash
 
 #endif  // ASH_CLIPBOARD_VIEWS_CLIPBOARD_HISTORY_DELETE_BUTTON_H_

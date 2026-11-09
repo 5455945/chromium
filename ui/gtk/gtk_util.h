@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,49 +6,60 @@
 #define UI_GTK_GTK_UTIL_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/glib/scoped_gobject.h"
 #include "ui/color/color_id.h"
 #include "ui/gtk/gtk_compat.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/window/frame_buttons.h"
 
+class SkBitmap;
+
 namespace aura {
 class Window;
 }
 
-namespace base {
-class CommandLine;
-}
-
-namespace ui {
-class KeyEvent;
-}
-
 namespace gtk {
+
+class GtkUiPlatform;
 
 const char* GtkCssMenu();
 const char* GtkCssMenuItem();
 const char* GtkCssMenuScrollbar();
 
-void GtkInitFromCommandLine(const base::CommandLine& command_line);
+[[nodiscard]] bool GtkInitFromCommandLine(int* argc, char** argv);
 
 // Sets |dialog| as transient for |parent|, which will keep it on top and center
 // it above |parent|. Do nothing if |parent| is nullptr.
-void SetGtkTransientForAura(GtkWidget* dialog, aura::Window* parent);
+void SetGtkTransientForAura(GtkWidget* dialog,
+                            aura::Window* parent,
+                            GtkUiPlatform* platform);
 
 // Gets the transient parent aura window for |dialog|.
 aura::Window* GetAuraTransientParent(GtkWidget* dialog);
 
 // Clears the transient parent for |dialog|.
-void ClearAuraTransientParent(GtkWidget* dialog, aura::Window* parent);
+void ClearAuraTransientParent(GtkWidget* dialog,
+                              aura::Window* parent,
+                              GtkUiPlatform* platform);
+
+// Disable input events handling on `parent` to make `dialog` modal.  The caller
+// is responsible for running the returned closure when the dialog is hidden to
+// reenable event processing on `parent`.
+[[nodiscard]] base::OnceClosure DisableHostInputHandling(GtkWidget* dialog,
+                                                         aura::Window* parent);
 
 // Parses |button_string| into |leading_buttons| and
 // |trailing_buttons|.  The string is of the format
 // "<button>*:<button*>", for example, "close:minimize:maximize".
-// This format is used by GTK settings and gsettings.
+// This format is used by GTK settings.
 void ParseButtonLayout(const std::string& button_string,
                        std::vector<views::FrameButton>* leading_buttons,
                        std::vector<views::FrameButton>* trailing_buttons);
@@ -58,6 +69,10 @@ class CairoSurface {
   // Attaches a cairo surface to an SkBitmap so that GTK can render
   // into it.  |bitmap| must outlive this CairoSurface.
   explicit CairoSurface(SkBitmap& bitmap);
+
+  // Attaches a cairo surface to a pointer to pixel data.  `pixels`
+  // must outlive this CairoSurface.
+  CairoSurface(void* pixels, int width, int height);
 
   // Creates a new cairo surface with the given size.  The memory for
   // this surface is deallocated when this CairoSurface is destroyed.
@@ -74,8 +89,8 @@ class CairoSurface {
   SkColor GetAveragePixelValue(bool frame);
 
  private:
-  cairo_surface_t* surface_;
-  cairo_t* cairo_;
+  raw_ptr<cairo_surface_t> surface_;
+  raw_ptr<cairo_t> cairo_;
 };
 
 class GtkCssContext {
@@ -111,39 +126,11 @@ class GtkCssContext {
   // GTK4 state.
   // GTK widgets own their children, so instead of keeping a reference to the
   // widget directly, keep a reference to the root widget.
-  GtkWidget* widget_ = nullptr;
+  raw_ptr<GtkWidget> widget_ = nullptr;
   ScopedGObject<GtkWidget> root_;
 };
 
 using ScopedCssProvider = ScopedGObject<GtkCssProvider>;
-
-}  // namespace gtk
-
-// Template override cannot be in the gtk namespace.
-template <>
-inline void ScopedGObject<GtkStyleContext>::Unref() {
-  // Versions of GTK earlier than 3.15.4 had a bug where a g_assert
-  // would be triggered when trying to free a GtkStyleContext that had
-  // a parent whose only reference was the child context in question.
-  // This is a hack to work around that case.  See GTK commit
-  // "gtkstylecontext: Don't try to emit a signal when finalizing".
-  GtkStyleContext* context = obj_;
-  while (context) {
-    GtkStyleContext* parent = gtk_style_context_get_parent(context);
-    if (parent && G_OBJECT(context)->ref_count == 1 &&
-        !gtk::GtkCheckVersion(3, 15, 4)) {
-      g_object_ref(parent);
-      gtk_style_context_set_parent(context, nullptr);
-      g_object_unref(context);
-    } else {
-      g_object_unref(context);
-      return;
-    }
-    context = parent;
-  }
-}
-
-namespace gtk {
 
 // Converts ui::NativeTheme::State to GtkStateFlags.
 GtkStateFlags StateToStateFlags(ui::NativeTheme::State state);
@@ -190,55 +177,80 @@ SkColor GetBgColor(const std::string& css_selector);
 // returns the average color.
 SkColor GetBorderColor(const std::string& css_selector);
 
-// On Gtk3.20 or later, behaves like GetBgColor.  Otherwise, returns
-// the background-color property.
-SkColor GetSelectionBgColor(const std::string& css_selector);
-
 // Get the color of the GtkSeparator specified by |css_selector|.
 SkColor GetSeparatorColor(const std::string& css_selector);
+
+// The four functions above cache their results by selector; call this when the
+// GTK theme (or anything else that affects theme colors) changes.
+COMPONENT_EXPORT(GTK) void ClearStyleColorCache();
+
+// Returns whether the current GTK theme is dark, judged by its window
+// background color. `gtk-application-prefer-dark-theme` only affects themes
+// that ship a dark variant (e.g. Adwaita); most dark themes have no light
+// variant, so the rendered colors are the only reliable signal.
+bool IsGtkThemeDark();
+
+// Returns the GTK theme's accent color, approximated by the background of a
+// focused, selected treeview cell. This may be translucent.
+COMPONENT_EXPORT(GTK) SkColor GetThemeAccentColor();
 
 // Get a GtkSettings property as a C++ string.
 std::string GetGtkSettingsStringProperty(GtkSettings* settings,
                                          const gchar* prop_name);
 
-// Xkb Events store group attribute into XKeyEvent::state bit field, along with
-// other state-related info, while GdkEventKey objects have separate fields for
-// that purpose, they are ::state and ::group. This function is responsible for
-// recomposing them into a single bit field value when translating GdkEventKey
-// into XKeyEvent. This is similar to XkbBuildCoreState(), but assumes state is
-// an uint rather than an uchar.
-//
-// More details:
-// https://gitlab.freedesktop.org/xorg/proto/xorgproto/blob/master/include/X11/extensions/XKB.h#L372
-int BuildXkbStateFromGdkEvent(unsigned int state, unsigned char group);
-
-int GetKeyEventProperty(const ui::KeyEvent& key_event,
-                        const char* property_key);
-
-GdkModifierType GetGdkKeyEventState(const ui::KeyEvent& key_event);
-
-// Translates |key_event| into a GdkEvent. GdkEvent::key::window is the only
-// field not set by this function, callers must set it, as the way for
-// retrieving it may vary depending on the event being processed. E.g: for IME
-// Context impl, X11 window XID is obtained through Event::target() which is
-// root aura::Window targeted by that key event.  Only available in GTK3.
-GdkEvent* GdkEventFromKeyEvent(const ui::KeyEvent& key_event);
-
 GtkIconTheme* GetDefaultIconTheme();
 
-void GtkWindowDestroy(GtkWidget* widget);
+// Prepends `path` to the default icon theme's search path on GTK3. Returns a
+// closure runner that restores the previous search path on destruction.
+[[nodiscard]] COMPONENT_EXPORT(GTK) base::ScopedClosureRunner
+    PrependIconThemeSearchPathForTesting(const base::FilePath& path);
+
+COMPONENT_EXPORT(GTK) void GtkWindowDestroy(GtkWidget* widget);
 
 GtkWidget* GetDummyWindow();
+
+// Returns the CSS min-width and min-height of the content area for the given
+// context, excluding margin, border, and padding.
+gfx::Size GetMinimumContentSize(GtkCssContext context);
 
 gfx::Size GetSeparatorSize(bool horizontal);
 
 float GetDeviceScaleFactor();
 
+// The reference DPI that corresponds to a font scale of 1.0.
+inline constexpr double kDefaultDPI = 96;
+
+// Returns the value of the `gtk-xft-dpi` setting in 1/1024ths of an inch, or 0
+// if it's unset.
+COMPONENT_EXPORT(GTK) int GetXftDpi();
+
+// Returns the font scale implied by the system DPI, rounded to the nearest
+// 1/64th.  Returns 1.0 if the DPI is unknown.
+COMPONENT_EXPORT(GTK) double GetFontScale();
+
+// Returns the default `GtkSettings` instance. This wrapper is required because
+// in component builds, raw GTK symbols loaded via stubs (including
+// `gtk_settings_get_default`) are not exported, preventing direct usage in
+// non-component targets like tests.
+COMPONENT_EXPORT(GTK) GtkSettings* GetDefaultGtkSettings();
+
 // This should only be called on Gtk4.
 GdkTexture* GetTextureFromRenderNode(GskRenderNode* node);
 
-// Gets the GTK theme color for a given `color_id`.
-absl::optional<SkColor> SkColorFromColorId(ui::ColorId color_id);
+double GetOpacityFromContext(GtkStyleContext* context);
+
+// Installs a GLib log writer that intercepts fatal disconnect messages from
+// GDK and triggers the shutdown callback before GDK calls _exit(1).
+COMPONENT_EXPORT(GTK) void InstallGtkLogWriter();
+
+// Sets a callback to be invoked when GDK logs a fatal display disconnect error.
+COMPONENT_EXPORT(GTK) void SetGtkShutdownCb(base::OnceClosure shutdown_cb);
+
+// Returns true if `log_domain` and `message` correspond to a fatal GDK error
+// (such as losing connection to the display server).
+COMPONENT_EXPORT(GTK)
+bool IsGdkFatalErrorMessage(std::string_view log_domain,
+                            std::string_view message);
 
 }  // namespace gtk
 

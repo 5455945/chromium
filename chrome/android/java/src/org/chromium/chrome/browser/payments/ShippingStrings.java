@@ -1,13 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.payments;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.payments.mojom.PaymentShippingType;
 
 /** Container for custom shipping strings. */
+@NullMarked
 public class ShippingStrings {
     private final int mSummaryLabel;
     private final int mAddressLabel;

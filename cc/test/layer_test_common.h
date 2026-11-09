@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,6 @@
 #define CC_TEST_LAYER_TEST_COMMON_H_
 
 #include "cc/layers/layer_collections.h"
-
-#define EXPECT_SET_NEEDS_COMMIT(expect, code_to_test)                 \
-  do {                                                                \
-    EXPECT_CALL(*layer_tree_host_, SetNeedsCommit()).Times((expect)); \
-    code_to_test;                                                     \
-    Mock::VerifyAndClearExpectations(layer_tree_host_.get());         \
-  } while (false)
-
-#define EXPECT_SET_NEEDS_UPDATE(expect, code_to_test)                       \
-  do {                                                                      \
-    EXPECT_CALL(*layer_tree_host_, SetNeedsUpdateLayers()).Times((expect)); \
-    code_to_test;                                                           \
-    Mock::VerifyAndClearExpectations(layer_tree_host_.get());               \
-  } while (false)
 
 namespace gfx {
 class Rect;
@@ -33,6 +19,13 @@ namespace cc {
 
 class LayerTreeHost;
 class LayerTreeImpl;
+class LayerTreeSettings;
+
+// LayerTreeSettings with different combinations of
+// commit_to_active_tree and use_layer_lists.
+LayerTreeSettings CommitToActiveTreeLayerListSettings();
+LayerTreeSettings CommitToPendingTreeLayerListSettings();
+LayerTreeSettings CommitToPendingTreeLayerTreeSettings();
 
 // In tests that build layer tree and property trees directly at impl-side,
 // before calling LayerTreeImpl::UpdateDrawProperties() or any function calling
@@ -65,6 +58,75 @@ void VerifyQuadsExactlyCoverRect(const viz::QuadList& quads,
 void VerifyQuadsAreOccluded(const viz::QuadList& quads,
                             const gfx::Rect& occluded,
                             size_t* partially_occluded_count);
+
+enum LayerTreeImplTestMode {
+  CommitToActiveTree,
+  CommitToPendingTree,
+  CommitToActiveTreeTreesInVizClient,
+  CommitToPendingTreeTreesInVizClient,
+  CommitToActiveTreeTreesInVizService,
+  CommitToActiveTreeAnimationsInVizService,
+};
+
+#define INSTANTIATE_COMMIT_TO_TREE_BASE_TEST_P(name, ...)         \
+  INSTANTIATE_TEST_SUITE_P(                                       \
+      , name, ::testing::Values(__VA_ARGS__),                     \
+      [](const ::testing::TestParamInfo<name::ParamType>& info) { \
+        switch (info.param) {                                     \
+          case CommitToActiveTree:                                \
+            return "CommitToActiveTree";                          \
+          case CommitToPendingTree:                               \
+            return "CommitToPendingTree";                         \
+          case CommitToActiveTreeTreesInVizClient:                \
+            return "CommitToActiveTreeTreesInVizClient";          \
+          case CommitToPendingTreeTreesInVizClient:               \
+            return "CommitToPendingTreeTreesInVizClient";         \
+          case CommitToActiveTreeTreesInVizService:               \
+            return "CommitToActiveTreeTreesInVizService";         \
+          case CommitToActiveTreeAnimationsInVizService:          \
+            return "CommitToActiveTreeAnimationsInVizService";    \
+          default:                                                \
+            NOTREACHED();                                         \
+        }                                                         \
+      })
+
+// For parameterized test suites testing all tree modes including
+// CommitToActiveTree / CommitToPendingTree, for all valid TreesInViz
+// Client / Service combinations.
+#define INSTANTIATE_COMMIT_TO_TREE_TEST_P(name)                                \
+  INSTANTIATE_COMMIT_TO_TREE_BASE_TEST_P(                                      \
+      name, CommitToActiveTree, CommitToPendingTree,                           \
+      CommitToActiveTreeTreesInVizClient, CommitToPendingTreeTreesInVizClient, \
+      CommitToActiveTreeTreesInVizService)
+
+#define INSTANTIATE_ANIMATIONS_TREE_TEST_P(name)                               \
+  INSTANTIATE_COMMIT_TO_TREE_BASE_TEST_P(                                      \
+      name, CommitToActiveTree, CommitToPendingTree,                           \
+      CommitToActiveTreeTreesInVizClient, CommitToPendingTreeTreesInVizClient, \
+      CommitToActiveTreeAnimationsInVizService)
+
+// For parameterized test suites testing all tree modes including
+// CommitToActiveTree / CommitToPendingTree, excluding TreesInViz
+// Client mode.
+#define INSTANTIATE_COMPOSITOR_FRAME_PRODUCING_TREE_TEST_P(name)   \
+  INSTANTIATE_COMMIT_TO_TREE_BASE_TEST_P(name, CommitToActiveTree, \
+                                         CommitToPendingTree,      \
+                                         CommitToActiveTreeTreesInVizService)
+
+// For parameterized test suites testing all tree modes including
+// CommitToActiveTree / CommitToPendingTree, excluding TreesInViz
+// Service mode.
+#define INSTANTIATE_CLIENT_MODE_TREE_TEST_P(name)    \
+  INSTANTIATE_COMMIT_TO_TREE_BASE_TEST_P(            \
+      name, CommitToActiveTree, CommitToPendingTree, \
+      CommitToActiveTreeTreesInVizClient, CommitToPendingTreeTreesInVizClient)
+
+// For parameterized test suites testing commits to Pending
+// tree modes only. This excludes TreesInViz Service mode by, since
+// it does not have a Pending tree.
+#define INSTANTIATE_COMMIT_TO_PENDING_TREE_TEST_P(name)             \
+  INSTANTIATE_COMMIT_TO_TREE_BASE_TEST_P(name, CommitToPendingTree, \
+                                         CommitToPendingTreeTreesInVizClient)
 
 }  // namespace cc
 

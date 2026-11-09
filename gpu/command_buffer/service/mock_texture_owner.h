@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/android/scoped_hardware_buffer_fence_sync.h"
+#include "base/memory/raw_ptr.h"
 #include "gpu/command_buffer/service/texture_owner.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,17 +23,10 @@ namespace gpu {
 // This is a mock with a small amount of fake functionality too.
 class MockTextureOwner : public TextureOwner {
  public:
-  MockTextureOwner(GLuint fake_texture_id,
-                   gl::GLContext* fake_context,
-                   gl::GLSurface* fake_surface,
-                   bool binds_texture_on_update = false);
+  MockTextureOwner();
 
-  MOCK_CONST_METHOD0(GetTextureId, GLuint());
-  MOCK_CONST_METHOD0(GetContext, gl::GLContext*());
-  MOCK_CONST_METHOD0(GetSurface, gl::GLSurface*());
   MOCK_CONST_METHOD0(CreateJavaSurface, gl::ScopedJavaSurface());
-  MOCK_METHOD0(UpdateTexImage, void());
-  MOCK_METHOD1(EnsureTexImageBound, void(GLuint));
+  MOCK_METHOD1(UpdateTexImage, bool(bool));
   MOCK_METHOD0(ReleaseBackBuffers, void());
   MOCK_METHOD0(ReleaseResources, void());
   MOCK_METHOD1(SetFrameAvailableCallback, void(const base::RepeatingClosure&));
@@ -42,19 +36,20 @@ class MockTextureOwner : public TextureOwner {
                     gfx::Rect* visible_rect));
   MOCK_METHOD1(RunWhenBufferIsAvailable, void(base::OnceClosure));
 
+  MOCK_METHOD2(OnMemoryDump,
+               bool(const base::trace_event::MemoryDumpArgs& args,
+                    base::trace_event::ProcessMemoryDump* pmd));
+
   std::unique_ptr<base::android::ScopedHardwareBufferFenceSync>
   GetAHardwareBuffer() override {
     get_a_hardware_buffer_count++;
     return nullptr;
   }
 
-  gl::GLContext* fake_context;
-  gl::GLSurface* fake_surface;
   int get_a_hardware_buffer_count = 0;
-  bool expect_update_tex_image;
 
  protected:
-  ~MockTextureOwner();
+  ~MockTextureOwner() override;
 };
 
 }  // namespace gpu

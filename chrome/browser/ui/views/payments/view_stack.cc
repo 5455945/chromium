@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,7 +29,7 @@ ViewStack::ViewStack()
   slide_out_animator_->set_tween_type(gfx::Tween::FAST_OUT_SLOW_IN);
 }
 
-ViewStack::~ViewStack() {}
+ViewStack::~ViewStack() = default;
 
 void ViewStack::Push(std::unique_ptr<views::View> view, bool animate) {
   gfx::Rect destination = bounds();
@@ -42,7 +42,7 @@ void ViewStack::Push(std::unique_ptr<views::View> view, bool animate) {
   } else {
     view->SetBoundsRect(destination);
   }
-  view->Layout();
+  view->DeprecatedLayoutImmediately();
 
   // Add the new view to the stack so it can be popped later when navigating
   // back to the previous screen.
@@ -62,8 +62,9 @@ void ViewStack::Push(std::unique_ptr<views::View> view, bool animate) {
 }
 
 void ViewStack::Pop(bool animate) {
-  DCHECK_LT(1u,
-            GetSize());  // There must be at least one view left after popping.
+  CHECK_LT(1u, GetSize(),
+           base::NotFatalUntil::M162);  // There must be at least one view left
+                                        // after popping.
 
   // Set the second-to-last view as visible, since it is about to be revealed
   // when the last view animates out.
@@ -80,8 +81,8 @@ void ViewStack::Pop(bool animate) {
 }
 
 void ViewStack::PopMany(int n, bool animate) {
-  DCHECK_LT(static_cast<size_t>(n),
-            GetSize());  // The stack can never be empty.
+  CHECK_LT(static_cast<size_t>(n), GetSize(),
+           base::NotFatalUntil::M162);  // The stack can never be empty.
 
   size_t pre_size = stack_.size();
 
@@ -94,7 +95,7 @@ void ViewStack::PopMany(int n, bool animate) {
   // Erase N - 1 elements now, the last one will be erased when its animation
   // completes
   stack_.erase(stack_.end() - n, stack_.end() - 1);
-  DCHECK_EQ(pre_size - n + 1, stack_.size());
+  CHECK_EQ(pre_size - n + 1, stack_.size(), base::NotFatalUntil::M162);
 
   Pop(animate);
 }
@@ -112,8 +113,9 @@ void ViewStack::RequestFocus() {
   // The view can only be focused if it has a widget already. It's possible that
   // this isn't the case if some views are pushed before the stack is added to a
   // hierarchy that has a widget.
-  if (top()->GetWidget())
+  if (top()->GetWidget()) {
     top()->RequestFocus();
+  }
 }
 
 void ViewStack::OnBoundsChanged(const gfx::Rect& previous_bounds) {
@@ -128,12 +130,12 @@ void ViewStack::HideCoveredViews() {
   }
 }
 
-void ViewStack::UpdateAnimatorBounds(
-    views::BoundsAnimator* animator, const gfx::Rect& target) {
+void ViewStack::UpdateAnimatorBounds(views::BoundsAnimator* animator,
+                                     const gfx::Rect& target) {
   // If an animator is currently animating, figure out which views and update
   // their target bounds.
   if (animator->IsAnimating()) {
-    for (auto* view : stack_) {
+    for (views::View* view : stack_) {
       if (animator->IsAnimating(view)) {
         animator->SetTargetBounds(view, target);
       }
@@ -146,14 +148,13 @@ void ViewStack::OnBoundsAnimatorDone(views::BoundsAnimator* animator) {
     RemoveChildViewT(stack_.back());
     stack_.pop_back();
     DCHECK(!stack_.empty()) << "State stack should never be empty";
-  } else if (animator == slide_in_animator_.get()) {
-    HideCoveredViews();
   } else {
-    NOTREACHED();
+    CHECK_EQ(animator, slide_in_animator_.get());
+    HideCoveredViews();
   }
   RequestFocus();
 }
 
-BEGIN_METADATA(ViewStack, views::View)
+BEGIN_METADATA(ViewStack)
 ADD_READONLY_PROPERTY_METADATA(size_t, Size)
 END_METADATA

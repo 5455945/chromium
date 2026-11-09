@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <map>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "services/service_manager/public/cpp/manifest.h"
 
 namespace service_manager {
@@ -19,6 +19,10 @@ class Catalog {
  public:
   // Constructs a catalog over a set of Manifests to use for lookup.
   explicit Catalog(const std::vector<Manifest>& manifests);
+
+  Catalog(const Catalog&) = delete;
+  Catalog& operator=(const Catalog&) = delete;
+
   ~Catalog();
 
   // Returns manifest data for the service named by |service_name|. If no
@@ -37,14 +41,16 @@ class Catalog {
   // Maintains a mapping from service name to manifest for quick lookup of any
   // manifest regardless of whether it's packaged. The values in this map refer
   // to objects owned by |manifests_| above.
-  const std::map<Manifest::ServiceName, const Manifest*> manifest_map_;
+  const std::map<Manifest::ServiceName,
+                 raw_ptr<const Manifest, CtnExperimental>>
+      manifest_map_;
 
   // Maintains a mapping from service name to parent manifest for quick
   // reverse-lookup of packaged service relationships. The values in this map
   // refer to objects owned by |manifests_| above.
-  const std::map<Manifest::ServiceName, const Manifest*> parent_manifest_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(Catalog);
+  const std::map<Manifest::ServiceName,
+                 raw_ptr<const Manifest, CtnExperimental>>
+      parent_manifest_map_;
 };
 
 }  // namespace service_manager

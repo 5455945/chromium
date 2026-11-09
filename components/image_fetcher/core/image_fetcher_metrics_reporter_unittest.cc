@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,7 @@ const char kUmaClientName[] = "foo";
 const char kUmaClientNameOther[] = "bar";
 
 const char kImageFetcherEventHistogramName[] = "ImageFetcher.Events";
+const char kImageFetcherClientEventHistogramName[] = "ImageFetcher.Events2";
 const char kCacheLoadHistogramName[] = "ImageFetcher.ImageLoadFromCacheTime";
 const char kCacheLoadHistogramNameJava[] =
     "ImageFetcher.ImageLoadFromCacheTimeJava";
@@ -35,15 +36,19 @@ constexpr char kNetworkRequestStatusCodes[] = "ImageFetcher.RequestStatusCode";
 
 class ImageFetcherMetricsReporterTest : public testing::Test {
  public:
-  ImageFetcherMetricsReporterTest() {}
+  ImageFetcherMetricsReporterTest() = default;
+
+  ImageFetcherMetricsReporterTest(const ImageFetcherMetricsReporterTest&) =
+      delete;
+  ImageFetcherMetricsReporterTest& operator=(
+      const ImageFetcherMetricsReporterTest&) = delete;
+
   ~ImageFetcherMetricsReporterTest() override = default;
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
  private:
   base::HistogramTester histogram_tester_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImageFetcherMetricsReporterTest);
 };
 
 TEST_F(ImageFetcherMetricsReporterTest, TestReportEvent) {
@@ -54,12 +59,12 @@ TEST_F(ImageFetcherMetricsReporterTest, TestReportEvent) {
   histogram_tester().ExpectBucketCount(kImageFetcherEventHistogramName,
                                        ImageFetcherEvent::kCacheHit, 2);
   histogram_tester().ExpectBucketCount(
-      std::string(kImageFetcherEventHistogramName)
+      std::string(kImageFetcherClientEventHistogramName)
           .append(".")
           .append(kUmaClientName),
       ImageFetcherEvent::kCacheHit, 1);
   histogram_tester().ExpectBucketCount(
-      std::string(kImageFetcherEventHistogramName)
+      std::string(kImageFetcherClientEventHistogramName)
           .append(".")
           .append(kUmaClientNameOther),
       ImageFetcherEvent::kCacheHit, 1);

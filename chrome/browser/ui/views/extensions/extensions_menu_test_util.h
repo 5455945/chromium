@@ -1,87 +1,101 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_TEST_UTIL_H_
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_TEST_UTIL_H_
 
-#include <memory>
-#include <string>
-
 #include "base/auto_reset.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
+#include "ui/views/view_observer.h"
 
-class Browser;
-class ExtensionsMenuItemView;
+class BrowserWindowInterface;
+class ExtensionsContainer;
+class ExtensionsContainerViews;
+class ExtensionsMenuCoordinator;
 class ExtensionsMenuView;
-class ExtensionsToolbarContainer;
+class ExtensionsToolbarDesktop;
+class HoverButton;
+class ToolbarActionViewModel;
+class WebUIToolbarExtensionsContainer;
 
 // An implementation of ExtensionActionTestHelper that works with the
 // ExtensionsMenu.
-class ExtensionsMenuTestUtil : public ExtensionActionTestHelper {
+//
+// The extensions menu itself is always a Views bubble, so most of this class
+// operates on the platform-abstract ExtensionsContainer and
+// ExtensionsContainerViews interfaces. The toolbar container hosting the
+// extension actions can either be the Views-based ExtensionsToolbarDesktop
+// or, when features::IsWebUIExtensionsContainerEnabled(), the
+// WebUIToolbarExtensionsContainer backing the WebUI toolbar. Only the few
+// operations that need to look at the toolbar's actual buttons branch on which
+// of the two is in use.
+class ExtensionsMenuTestUtil : public ExtensionActionTestHelper,
+                               views::ViewObserver {
  public:
-  ExtensionsMenuTestUtil(Browser* browser, bool is_real_window);
+  explicit ExtensionsMenuTestUtil(BrowserWindowInterface* browser);
   ExtensionsMenuTestUtil(const ExtensionsMenuTestUtil&) = delete;
   ExtensionsMenuTestUtil& operator=(const ExtensionsMenuTestUtil&) = delete;
   ~ExtensionsMenuTestUtil() override;
 
   // ExtensionActionTestHelper:
   int NumberOfBrowserActions() override;
-  int VisibleBrowserActions() override;
   bool HasAction(const extensions::ExtensionId& id) override;
   void InspectPopup(const extensions::ExtensionId& id) override;
-  bool HasIcon(const extensions::ExtensionId& id) override;
   gfx::Image GetIcon(const extensions::ExtensionId& id) override;
   void Press(const extensions::ExtensionId& id) override;
-  std::string GetTooltip(const extensions::ExtensionId& id) override;
   gfx::NativeView GetPopupNativeView() override;
   bool HasPopup() override;
   bool HidePopup() override;
-  void SetWidth(int width) override;
-  ToolbarActionsBar* GetToolbarActionsBar() override;
-  ExtensionsContainer* GetExtensionsContainer() override;
   void WaitForExtensionsContainerLayout() override;
-  std::unique_ptr<ExtensionActionTestHelper> CreateOverflowBar(
-      Browser* browser) override;
-  void LayoutForOverflowBar() override;
-  // TODO(devlin): Some of these popup methods have a common implementation
-  // between this and ExtensionActionTestHelperViews. It would make sense to
-  // extract them (since they aren't dependent on the extension action UI
-  // implementation).
   gfx::Size GetMinPopupSize() override;
   gfx::Size GetMaxPopupSize() override;
-  gfx::Size GetToolbarActionSize() override;
   gfx::Size GetMaxAvailableSizeToFitBubbleOnScreen(
       const extensions::ExtensionId& id) override;
 
- private:
-  class MenuViewObserver;
-  class Wrapper;
+  void OnViewIsDeleting(views::View* observed_view) override;
 
-  // Returns the ExtensionsMenuItemView for the given `id` from the
-  // `menu_view`.
-  ExtensionsMenuItemView* GetMenuItemViewForId(
-      const extensions::ExtensionId& id);
+ private:
+  // Opens the extensions menu if it's not already showing.
+  void OpenExtensionsMenu();
+
+  // Returns whether the extensions menu created by this test helper is showing.
+  bool IsExtensionsMenuShowing();
+
+  // Returns the action button for the given `id` from the `menu_view_`.
+  HoverButton* GetActionButton(const extensions::ExtensionId& id);
+
+  // Returns the ExtensionsMenuCoordinator of whichever container is in use.
+  // Only non-null when extensions_features::kExtensionsMenuAccessControl is
+  // enabled.
+  ExtensionsMenuCoordinator* GetExtensionsMenuCoordinator();
+
+  // Returns the action that owns the currently showing popup, if any.
+  ToolbarActionViewModel* GetPopupOwner();
 
   // An override to allow test instances of the ExtensionsMenuView.
   // This has to be defined before |menu_view_| below.
   base::AutoReset<bool> scoped_allow_extensions_menu_instances_;
 
-  std::unique_ptr<Wrapper> wrapper_;
+  const raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser_;
 
-  Browser* const browser_;
-  ExtensionsToolbarContainer* extensions_container_ = nullptr;
+  // Exactly one of these is non-null, depending on whether the WebUI
+  // extensions container is enabled.
+  raw_ptr<ExtensionsToolbarDesktop, DanglingUntriaged> extensions_toolbar_ =
+      nullptr;
+  raw_ptr<WebUIToolbarExtensionsContainer, DanglingUntriaged>
+      webui_extensions_container_ = nullptr;
 
-  // Helps make sure that |menu_view_| set to null when destroyed by the widget
-  // or via manual means.
-  std::unique_ptr<MenuViewObserver> menu_view_observer_;
-
-  // The owned version of |menu_view_|. Strongly prefer using |menu_view_|. May
-  // be null when ownership is conditionally transferred to the bubble.
-  std::unique_ptr<ExtensionsMenuView> owned_menu_view_;
+  // The platform-abstract interfaces of whichever container is in use.
+  raw_ptr<ExtensionsContainer, DanglingUntriaged> extensions_container_ =
+      nullptr;
+  raw_ptr<ExtensionsContainerViews, DanglingUntriaged>
+      extensions_container_views_ = nullptr;
 
   // The actual pointer to an ExtensionsMenuView, non-null if alive.
-  ExtensionsMenuView* menu_view_ = nullptr;
+  raw_ptr<ExtensionsMenuView> menu_view_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_TEST_UTIL_H_

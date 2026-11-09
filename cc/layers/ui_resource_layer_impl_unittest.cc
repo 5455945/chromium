@@ -1,11 +1,15 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stddef.h>
-
-#include "cc/layers/append_quads_data.h"
 #include "cc/layers/ui_resource_layer_impl.h"
+
+#include <memory>
+#include <utility>
+
+#include "cc/layers/append_quads_context.h"
+#include "cc/layers/append_quads_data.h"
+#include "cc/layers/draw_mode.h"
 #include "cc/resources/ui_resource_bitmap.h"
 #include "cc/resources/ui_resource_client.h"
 #include "cc/test/fake_impl_task_runner_provider.h"
@@ -18,7 +22,8 @@
 #include "components/viz/common/quads/draw_quad.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/transform.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 namespace {
@@ -55,7 +60,9 @@ void QuadSizeTest(FakeUIResourceLayerTreeHostImpl* host_impl,
   auto render_pass = viz::CompositorRenderPass::Create();
 
   AppendQuadsData data;
-  host_impl->active_tree()->root_layer()->AppendQuads(render_pass.get(), &data);
+  host_impl->active_tree()->root_layer()->AppendQuads(
+      AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false}, render_pass.get(),
+      &data);
 
   // Verify quad rects
   const viz::QuadList& quads = render_pass->quad_list;
@@ -103,7 +110,9 @@ void NeedsBlendingTest(FakeUIResourceLayerTreeHostImpl* host_impl,
   auto render_pass = viz::CompositorRenderPass::Create();
 
   AppendQuadsData data;
-  host_impl->active_tree()->root_layer()->AppendQuads(render_pass.get(), &data);
+  host_impl->active_tree()->root_layer()->AppendQuads(
+      AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false}, render_pass.get(),
+      &data);
 
   // Verify needs_blending is set appropriately.
   const viz::QuadList& quads = render_pass->quad_list;
@@ -187,7 +196,7 @@ TEST(UIResourceLayerImplTest, Occlusion) {
   impl.host_impl()->CreateUIResource(uid, bitmap);
 
   UIResourceLayerImpl* ui_resource_layer_impl =
-      impl.AddLayer<UIResourceLayerImpl>();
+      impl.AddLayerInActiveTree<UIResourceLayerImpl>();
   ui_resource_layer_impl->SetBounds(layer_size);
   ui_resource_layer_impl->SetDrawsContent(true);
   ui_resource_layer_impl->SetUIResourceId(uid);

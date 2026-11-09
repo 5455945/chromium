@@ -1,10 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 module ui.mojom;
-
-import "mojo/public/mojom/base/string16.mojom";
 
 enum TextInputMode {
   kDefault,
@@ -103,4 +101,5 @@ struct ImeTextSpan {
   bool remove_on_finish_composing;
   bool interim_char_selection;
   array<string> suggestions;
+  bool should_hide_suggestion_menu;
 };

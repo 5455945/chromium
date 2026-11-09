@@ -26,12 +26,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_FILTER_EFFECT_BUILDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_FILTER_EFFECT_BUILDER_H_
 
+#include "cc/paint/paint_flags.h"
+#include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
-#include "third_party/blink/renderer/platform/graphics/paint/paint_flags.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/skia/include/core/SkTileMode.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -39,7 +39,6 @@ class CompositorFilterOperations;
 class Filter;
 class FilterEffect;
 class FilterOperations;
-class FloatRect;
 class ReferenceFilterOperation;
 class SVGFilterGraphNodeMap;
 
@@ -47,32 +46,41 @@ class CORE_EXPORT FilterEffectBuilder final {
   STACK_ALLOCATED();
 
  public:
-  FilterEffectBuilder(const FloatRect& reference_box,
+  FilterEffectBuilder(const gfx::RectF& reference_box,
+                      std::optional<gfx::SizeF> viewport,
                       float zoom,
-                      const PaintFlags* fill_flags = nullptr,
-                      const PaintFlags* stroke_flags = nullptr,
-                      SkTileMode blur_tile_mode = SkTileMode::kDecal);
+                      Color current_color,
+                      mojom::blink::ColorScheme color_scheme,
+                      bool is_in_canvas_subtree,
+                      const cc::PaintFlags* fill_flags = nullptr,
+                      const cc::PaintFlags* stroke_flags = nullptr);
 
   Filter* BuildReferenceFilter(const ReferenceFilterOperation&,
                                FilterEffect* previous_effect,
-                               SVGFilterGraphNodeMap* = nullptr) const;
+                               SVGFilterGraphNodeMap* = nullptr,
+                               bool input_tainted = false,
+                               bool input_contains_backdrop = false) const;
 
   FilterEffect* BuildFilterEffect(const FilterOperations&,
                                   bool input_tainted = false) const;
   CompositorFilterOperations BuildFilterOperations(
-      const FilterOperations&) const;
+      const FilterOperations&,
+      bool contains_backdrop = false) const;
 
   void SetShorthandScale(float shorthand_scale) {
     shorthand_scale_ = shorthand_scale;
   }
 
  private:
-  const FloatRect reference_box_;
+  const gfx::RectF reference_box_;
+  const std::optional<gfx::SizeF> viewport_;
   const float zoom_;
   float shorthand_scale_;  // Scale factor for shorthand filter functions.
-  const PaintFlags* fill_flags_;
-  const PaintFlags* stroke_flags_;
-  const SkTileMode blur_tile_mode_;
+  const Color current_color_;
+  const mojom::blink::ColorScheme color_scheme_;
+  const bool is_in_canvas_subtree_;
+  const cc::PaintFlags* fill_flags_;
+  const cc::PaintFlags* stroke_flags_;
 };
 
 }  // namespace blink

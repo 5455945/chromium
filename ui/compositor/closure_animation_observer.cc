@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@ namespace ui {
 
 ClosureAnimationObserver::ClosureAnimationObserver(base::OnceClosure closure)
     : closure_(std::move(closure)) {
-  DCHECK(!closure_.is_null());
+  CHECK(!closure_.is_null(), base::NotFatalUntil::M163);
 }
 
 ClosureAnimationObserver::~ClosureAnimationObserver() {

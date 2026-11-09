@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,7 +26,7 @@ const char kHighResAvatarDownloadUrlPrefix[] =
 ProfileAvatarDownloader::ProfileAvatarDownloader(size_t icon_index,
                                                  FetchCompleteCallback callback)
     : icon_index_(icon_index), callback_(std::move(callback)) {
-  DCHECK(!callback_.is_null());
+  CHECK(!callback_.is_null(), base::NotFatalUntil::M162);
   GURL url(std::string(kHighResAvatarDownloadUrlPrefix) +
            profiles::GetDefaultAvatarIconFileNameAtIndex(icon_index));
   net::NetworkTrafficAnnotationTag traffic_annotation =
@@ -54,8 +54,7 @@ ProfileAvatarDownloader::ProfileAvatarDownloader(size_t icon_index,
   fetcher_ = std::make_unique<BitmapFetcher>(url, this, traffic_annotation);
 }
 
-ProfileAvatarDownloader::~ProfileAvatarDownloader() {
-}
+ProfileAvatarDownloader::~ProfileAvatarDownloader() = default;
 
 void ProfileAvatarDownloader::Start() {
   SystemNetworkContextManager* system_network_context_manager =
@@ -67,9 +66,8 @@ void ProfileAvatarDownloader::Start() {
       system_network_context_manager->GetURLLoaderFactory();
   if (loader_factory) {
     fetcher_->Init(
-        std::string(),
         net::ReferrerPolicy::REDUCE_GRANULARITY_ON_TRANSITION_CROSS_ORIGIN,
-        network::mojom::CredentialsMode::kInclude);
+        network::mojom::CredentialsMode::kOmit);
     fetcher_->Start(loader_factory);
   }
 }

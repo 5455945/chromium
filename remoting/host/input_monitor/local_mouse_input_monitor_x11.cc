@@ -1,22 +1,22 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "remoting/host/input_monitor/local_pointer_input_monitor.h"
+#include "remoting/host/input_monitor/local_mouse_input_monitor_x11.h"
 
 #include <sys/select.h>
 #include <unistd.h>
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/host/input_monitor/local_input_monitor_x11_common.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 #include "ui/events/event.h"
@@ -27,63 +27,6 @@
 #include "ui/gfx/x/xproto.h"
 
 namespace remoting {
-
-namespace {
-
-// Note that this class does not detect touch input and so is named accordingly.
-class LocalMouseInputMonitorX11 : public LocalPointerInputMonitor {
- public:
-  LocalMouseInputMonitorX11(
-      scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-      LocalInputMonitor::PointerMoveCallback on_mouse_move);
-  ~LocalMouseInputMonitorX11() override;
-
- private:
-  // The actual implementation resides in LocalMouseInputMonitorX11::Core class.
-  class Core : public base::RefCountedThreadSafe<Core>,
-               public x11::EventObserver {
-   public:
-    Core(scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-         scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-         LocalInputMonitor::PointerMoveCallback on_mouse_move);
-
-    void Start();
-    void Stop();
-
-   private:
-    friend class base::RefCountedThreadSafe<Core>;
-    ~Core() override;
-
-    void StartOnInputThread();
-    void StopOnInputThread();
-
-    // Called when there are pending X events.
-    void OnConnectionData();
-
-    // x11::EventObserver:
-    void OnEvent(const x11::Event& event) override;
-
-    // Task runner on which public methods of this class must be called.
-    scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner_;
-
-    // Task runner on which X Window events are received.
-    scoped_refptr<base::SingleThreadTaskRunner> input_task_runner_;
-
-    // Used to send mouse event notifications.
-    LocalInputMonitor::PointerMoveCallback on_mouse_move_;
-
-    x11::Connection* connection_ = nullptr;
-
-    DISALLOW_COPY_AND_ASSIGN(Core);
-  };
-
-  scoped_refptr<Core> core_;
-
-  SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(LocalMouseInputMonitorX11);
-};
 
 LocalMouseInputMonitorX11::LocalMouseInputMonitorX11(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
@@ -137,9 +80,8 @@ void LocalMouseInputMonitorX11::Core::StartOnInputThread() {
     LOG(ERROR) << "X Input extension not available.";
     return;
   }
-  // Let the server know the client XInput version.
-  connection_->xinput().XIQueryVersion(
-      {x11::Input::major_version, x11::Input::minor_version});
+
+  xtest_device_ids_ = GetXTestDeviceIds(connection_);
 
   auto mask = CommonXIEventMaskForRootWindow();
   connection_->xinput().XISelectEvents(
@@ -153,43 +95,45 @@ void LocalMouseInputMonitorX11::Core::StopOnInputThread() {
   connection_->RemoveEventObserver(this);
 }
 
+bool LocalMouseInputMonitorX11::Core::IsXTestDevice(
+    x11::Input::DeviceId device_id) const {
+  DCHECK(input_task_runner_->BelongsToCurrentThread());
+  return xtest_device_ids_.contains(device_id);
+}
+
 void LocalMouseInputMonitorX11::Core::OnEvent(const x11::Event& event) {
   DCHECK(input_task_runner_->BelongsToCurrentThread());
 
   auto* raw = event.As<x11::Input::RawDeviceEvent>();
   // The X server may send unsolicited MappingNotify events without having
   // selected them.
-  if (!raw)
+  if (!raw) {
     return;
-  if (raw->opcode != x11::Input::RawDeviceEvent::RawMotion)
+  }
+  if (raw->opcode != x11::Input::RawDeviceEvent::RawMotion) {
     return;
+  }
+  // Ignore events injected via XTEST so remote input is not mistaken for local
+  // mouse activity.
+  if (IsXTestDevice(raw->sourceid)) {
+    return;
+  }
 
   connection_->QueryPointer({connection_->default_root()})
       .OnResponse(base::BindOnce(
           [](scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
              LocalInputMonitor::PointerMoveCallback on_mouse_move,
              x11::QueryPointerResponse response) {
-            if (!response)
+            if (!response) {
               return;
+            }
             webrtc::DesktopVector position(response->root_x, response->root_y);
             caller_task_runner->PostTask(
-                FROM_HERE,
-                base::BindOnce(on_mouse_move, position, ui::ET_MOUSE_MOVED));
+                FROM_HERE, base::BindOnce(on_mouse_move, position,
+                                          ui::EventType::kMouseMoved));
           },
           caller_task_runner_, on_mouse_move_));
   connection_->Flush();
-}
-
-}  // namespace
-
-std::unique_ptr<LocalPointerInputMonitor> LocalPointerInputMonitor::Create(
-    scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-    LocalInputMonitor::PointerMoveCallback on_mouse_move,
-    base::OnceClosure disconnect_callback) {
-  return std::make_unique<LocalMouseInputMonitorX11>(
-      caller_task_runner, input_task_runner, std::move(on_mouse_move));
 }
 
 }  // namespace remoting

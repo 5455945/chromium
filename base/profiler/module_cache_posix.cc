@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,26 @@
 #include <dlfcn.h>
 #include <elf.h>
 
+#include <optional>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/debug/elf_reader.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-// arm64 has execute-only memory (XOM) protecting code pages from being read.
-// PosixModule reads executable pages in order to extract module info. This may
-// result in a crash if the module is mapped as XOM so the code is disabled on
-// that arch. See https://crbug.com/957801.
-#if defined(OS_ANDROID) && !defined(ARCH_CPU_ARM64)
+#if BUILDFLAG(IS_ANDROID)
 extern "C" {
 // &__executable_start is the start address of the current module.
 extern const char __executable_start;
 // &__etext is the end addesss of the code segment in the current module.
 extern const char _etext;
 }
-#endif  // defined(OS_ANDROID) && !defined(ARCH_CPU_ARM64)
+#endif
 
 namespace base {
 
 namespace {
 
-#if !defined(ARCH_CPU_ARM64)
 // Returns the unique build ID for a module loaded at |module_addr|. Returns the
 // empty string if the function fails to get the build ID.
 //
@@ -39,14 +37,18 @@ namespace {
 //
 // On POSIX, the unique ID is read from the ELF binary located at |module_addr|.
 // The age field is always 0.
-std::string GetUniqueBuildId(const void* module_addr) {
-  debug::ElfBuildIdBuffer build_id;
-  size_t build_id_length = debug::ReadElfBuildId(module_addr, true, build_id);
-  if (!build_id_length)
-    return std::string();
-
-  // Append 0 for the age value.
-  return std::string(build_id, build_id_length) + "0";
+//
+// PRECONDITIONS: `module_addr` must point to the start of an ELF image that is
+// fully mapped into memory (see base/debug/elf_reader.h).
+UNSAFE_BUFFER_USAGE std::string GetUniqueBuildId(const void* module_addr) {
+  // SAFETY: Required from caller, see UNSAFE_BUFFER_USAGE above.
+  std::string build_id =
+      UNSAFE_BUFFERS(debug::ReadElfBuildId(module_addr, true));
+  if (!build_id.empty()) {
+    // Append 0 for the age value.
+    build_id += '0';
+  }
+  return build_id;
 }
 
 // Returns the offset from |module_addr| to the first byte following the last
@@ -54,12 +56,20 @@ std::string GetUniqueBuildId(const void* module_addr) {
 // It's defined this way so that any executable address from this module is in
 // range [addr, addr + GetLastExecutableOffset(addr)).
 // If no executable segment is found, returns 0.
-size_t GetLastExecutableOffset(const void* module_addr) {
-  const size_t relocation_offset = debug::GetRelocationOffset(module_addr);
+//
+// PRECONDITIONS: `module_addr` must point to the start of an ELF image that is
+// fully mapped into memory (see base/debug/elf_reader.h).
+UNSAFE_BUFFER_USAGE size_t GetLastExecutableOffset(const void* module_addr) {
+  // SAFETY: Required from caller, see UNSAFE_BUFFER_USAGE above.
+  const size_t relocation_offset =
+      UNSAFE_BUFFERS(debug::GetRelocationOffset(module_addr));
   size_t max_offset = 0;
-  for (const Phdr& header : debug::GetElfProgramHeaders(module_addr)) {
-    if (header.p_type != PT_LOAD || !(header.p_flags & PF_X))
+  // SAFETY: Required from caller, see UNSAFE_BUFFER_USAGE above.
+  for (const Phdr& header :
+       UNSAFE_BUFFERS(debug::GetElfProgramHeaders(module_addr))) {
+    if (header.p_type != PT_LOAD || !(header.p_flags & PF_X)) {
       continue;
+    }
 
     max_offset = std::max(
         max_offset, static_cast<size_t>(
@@ -70,20 +80,40 @@ size_t GetLastExecutableOffset(const void* module_addr) {
   return max_offset;
 }
 
-FilePath GetDebugBasenameForModule(const void* base_address, const char* file) {
-#if defined(OS_ANDROID)
+// PRECONDITIONS: `base_address` must point to the start of an ELF image that is
+// fully mapped into memory (see base/debug/elf_reader.h).
+UNSAFE_BUFFER_USAGE FilePath GetDebugBasenameForModule(const void* base_address,
+                                                       std::string_view file) {
+#if BUILDFLAG(IS_ANDROID)
   // Preferentially identify the library using its soname on Android. Libraries
   // mapped directly from apks have the apk filename in |dl_info.dli_fname|, and
   // this doesn't distinguish the particular library.
-  absl::optional<StringPiece> library_name =
-      debug::ReadElfLibraryName(base_address);
-  if (library_name)
+  // SAFETY: Required from caller, see UNSAFE_BUFFER_USAGE above.
+  std::optional<std::string_view> library_name =
+      UNSAFE_BUFFERS(debug::ReadElfLibraryName(base_address));
+  if (library_name) {
     return FilePath(*library_name);
-#endif  // defined(OS_ANDROID)
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // SetProcessTitleFromCommandLine() does not play well with dladdr(). In
+  // particular, after calling our setproctitle(), calling dladdr() with an
+  // address in the main binary will return the complete command line of the
+  // program, including all arguments, in dli_fname. If we get a complete
+  // command-line like "/opt/google/chrome/chrome --type=gpu-process
+  // --gpu-sandbox-failures-fatal=yes --enable-logging ...", strip off
+  // everything that looks like an argument. This is safe on ChromeOS, where we
+  // control the directory and file names and know that no chrome binary or
+  // system library will have a " --" in the path.
+  size_t pos = file.find(" --");
+  if (pos != std::string_view::npos) {
+    file = file.substr(0, pos);
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   return FilePath(file).BaseName();
 }
-#endif  // !defined(ARCH_CPU_ARM64)
 
 class PosixModule : public ModuleCache::Module {
  public:
@@ -123,40 +153,41 @@ PosixModule::PosixModule(uintptr_t base_address,
 // static
 std::unique_ptr<const ModuleCache::Module> ModuleCache::CreateModuleForAddress(
     uintptr_t address) {
-#if defined(ARCH_CPU_ARM64)
-  // arm64 has execute-only memory (XOM) protecting code pages from being read.
-  // PosixModule reads executable pages in order to extract module info. This
-  // may result in a crash if the module is mapped as XOM
-  // (https://crbug.com/957801).
-  return nullptr;
-#else
   Dl_info info;
   if (!dladdr(reinterpret_cast<const void*>(address), &info)) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // dladdr doesn't know about the Chrome module in Android targets using the
     // crazy linker. Explicitly check against the module's extents in that case.
+    // This is checked after dladdr because if dladdr CAN find the Chrome
+    // module, it will return a better fallback basename in `info.dli_fname`.
     if (address >= reinterpret_cast<uintptr_t>(&__executable_start) &&
         address < reinterpret_cast<uintptr_t>(&_etext)) {
       const void* const base_address =
           reinterpret_cast<const void*>(&__executable_start);
+      // SAFETY: `__executable_start` is a linker-defined symbol at the start
+      // of the ELF image of the module containing this code, which has been
+      // loaded, and thus fully mapped into memory.
       return std::make_unique<PosixModule>(
           reinterpret_cast<uintptr_t>(&__executable_start),
-          GetUniqueBuildId(base_address),
+          UNSAFE_BUFFERS(GetUniqueBuildId(base_address)),
           // Extract the soname from the module. It is expected to exist, but if
           // it doesn't use an empty string.
-          GetDebugBasenameForModule(base_address, /* file = */ ""),
-          GetLastExecutableOffset(base_address));
+          UNSAFE_BUFFERS(
+              GetDebugBasenameForModule(base_address, /* file = */ "")),
+          UNSAFE_BUFFERS(GetLastExecutableOffset(base_address)));
     }
 #endif
     return nullptr;
   }
 
+  // SAFETY: `dladdr()` succeeded, so `dli_fbase` is the base address of the
+  // shared object containing `address`, which the dynamic loader has fully
+  // mapped into memory.
   return std::make_unique<PosixModule>(
       reinterpret_cast<uintptr_t>(info.dli_fbase),
-      GetUniqueBuildId(info.dli_fbase),
-      GetDebugBasenameForModule(info.dli_fbase, info.dli_fname),
-      GetLastExecutableOffset(info.dli_fbase));
-#endif
+      UNSAFE_BUFFERS(GetUniqueBuildId(info.dli_fbase)),
+      UNSAFE_BUFFERS(GetDebugBasenameForModule(info.dli_fbase, info.dli_fname)),
+      UNSAFE_BUFFERS(GetLastExecutableOffset(info.dli_fbase)));
 }
 
 }  // namespace base

@@ -1,10 +1,17 @@
-// Copyright (c) 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/vr/openxr/openxr_interaction_profiles.h"
 
+#include "base/no_destructor.h"
+#include "device/vr/openxr/openxr_interaction_profile_paths.h"
+#include "device/vr/public/mojom/openxr_interaction_profile_type.mojom.h"
+
 namespace device {
+
+using device::mojom::OpenXrInteractionProfileType;
+
 OpenXrSystemInputProfiles::OpenXrSystemInputProfiles(
     std::string system_name,
     std::vector<std::string> input_profiles)
@@ -29,7 +36,6 @@ OpenXrControllerInteractionProfile::OpenXrControllerInteractionProfile(
     OpenXrInteractionProfileType type,
     std::string path,
     std::string required_extension,
-    GamepadMapping mapping,
     std::vector<OpenXrButtonPathMap> common_button_maps,
     std::vector<OpenXrButtonPathMap> left_button_maps,
     std::vector<OpenXrButtonPathMap> right_button_maps,
@@ -37,7 +43,6 @@ OpenXrControllerInteractionProfile::OpenXrControllerInteractionProfile(
     : type(type),
       path(path),
       required_extension(required_extension),
-      mapping(mapping),
       common_button_maps(common_button_maps),
       left_button_maps(left_button_maps),
       right_button_maps(right_button_maps),
@@ -60,7 +65,7 @@ GetOpenXrInputProfilesMap() {
           // Microsoft Motion Controller
           {OpenXrInteractionProfileType::kMicrosoftMotion,
            {{"",
-             {"windows-mixed-reality",
+             {"microsoft-mixed-reality", "windows-mixed-reality",
               "generic-trigger-squeeze-touchpad-thumbstick"}}}},
 
           // Khronos Simple Controller
@@ -73,16 +78,27 @@ GetOpenXrInputProfilesMap() {
             {"Oculus Rift S",
              {"oculus-touch-v2", "oculus-touch",
               "generic-trigger-squeeze-thumbstick"}},
-            {"Quest",
+            {"Oculus Quest",
              {"oculus-touch-v2", "oculus-touch",
-              "generic-trigger-squeeze-thumbstick"}},
-            // Name currently reported by OpenXR for the Quest 2
-            {"Miramar",
-             {"oculus-touch-v3", "oculus-touch-v2", "oculus-touch",
               "generic-trigger-squeeze-thumbstick"}},
             // Oculus says this will soon be the name OpenXR reports
             {"Oculus Quest2",
              {"oculus-touch-v3", "oculus-touch-v2", "oculus-touch",
+              "generic-trigger-squeeze-thumbstick"}},
+            {"Moohan",
+             {"samsung-galaxyxr", "oculus-touch",
+              "generic-trigger-squeeze-thumbstick"}}}},
+
+          // Meta Touch Plus Controller
+          {OpenXrInteractionProfileType::kMetaTouchPlus,
+           {{"",
+             {"meta-quest-touch-plus", "oculus-touch-v3", "oculus-touch-v2",
+              "oculus-touch", "generic-trigger-squeeze-thumbstick"}}}},
+
+          // Meta Touch Pro Controller
+          {OpenXrInteractionProfileType::kMetaTouchPro,
+           {{"",
+             {"meta-quest-touch-pro", "oculus-touch-v2", "oculus-touch",
               "generic-trigger-squeeze-thumbstick"}}}},
 
           // Valve Index
@@ -97,7 +113,8 @@ GetOpenXrInputProfilesMap() {
           // Samsung Odyssey
           {OpenXrInteractionProfileType::kSamsungOdyssey,
            {{"",
-             {"samsung-odyssey", "windows-mixed-reality",
+             {"samsung-odyssey", "microsoft-mixed-reality",
+              "windows-mixed-reality",
               "generic-trigger-squeeze-touchpad-thumbstick"}}}},
 
           // HP Reverb G2
@@ -107,10 +124,105 @@ GetOpenXrInputProfilesMap() {
 
           // Microsoft Hand Interaction
           {OpenXrInteractionProfileType::kHandSelectGrasp,
-           {{"", {"generic-hand-select-grasp", "generic-hand-select"}}}},
+           {{"",
+             {"generic-hand-select-grasp", "generic-hand-select",
+              "generic-fixed-hand", "generic-trigger-squeeze"}},
+            {kOpenXrHandJointSystem,
+             {"generic-hand-select-grasp", "generic-hand-select",
+              "generic-hand", "generic-trigger-squeeze"}}}},
+
+          // Vive Cosmos
+          {OpenXrInteractionProfileType::kViveCosmos,
+           {{"", {"htc-vive-cosmos", "generic-trigger-squeeze-thumbstick"}}}},
+
+          // EXT Hand Interaction
+          {OpenXrInteractionProfileType::kExtHand,
+           {
+               {"",
+                {"generic-hand-select-grasp", "generic-hand-select",
+                 "generic-fixed-hand", "generic-trigger-squeeze"}},
+               {kOpenXrHandJointSystem,
+                {"generic-hand-select-grasp", "generic-hand-select",
+                 "generic-hand", "generic-trigger-squeeze"}},
+           }},
+
+          // XR_FB_hand_tracking_aim
+          {OpenXrInteractionProfileType::kMetaHandAim,
+           {{"",
+             {"generic-hand-select", "generic-fixed-hand", "generic-button"}},
+            {kOpenXrHandJointSystem,
+             {"generic-hand-select", "generic-hand", "generic-button"}}}},
       });
   return *kInputProfilesMap;
 }
+
+namespace {
+
+// Returns the bindings for controllers with the Oculus Touch controller's
+// inputs. The Meta Touch Plus and Touch Pro controllers have more inputs, but
+// none that WebXR exposes.
+OpenXrControllerInteractionProfile TouchControllerInteractionProfile(
+    OpenXrInteractionProfileType type,
+    std::string path,
+    std::string required_extension) {
+  return OpenXrControllerInteractionProfile(
+      type, std::move(path), std::move(required_extension),
+      /*common_button_maps=*/
+      {
+          {OpenXrButtonType::kTrigger,
+           {{OpenXrButtonActionType::kPress, "/input/trigger/value"},
+            {OpenXrButtonActionType::kValue, "/input/trigger/value"},
+            {OpenXrButtonActionType::kTouch, "/input/trigger/touch"}}},
+          {OpenXrButtonType::kSqueeze,
+           {
+               {OpenXrButtonActionType::kPress, "/input/squeeze/value"},
+               {OpenXrButtonActionType::kValue, "/input/squeeze/value"},
+           }},
+          {OpenXrButtonType::kThumbstick,
+           {
+               {OpenXrButtonActionType::kPress, "/input/thumbstick/click"},
+               {OpenXrButtonActionType::kTouch, "/input/thumbstick/touch"},
+           }},
+          {OpenXrButtonType::kThumbrest,
+           {
+               {OpenXrButtonActionType::kTouch, "/input/thumbrest/touch"},
+           }},
+      },
+      /*left_button_maps=*/
+      {
+          {OpenXrButtonType::kButton1,
+           {
+               {OpenXrButtonActionType::kPress, "/input/x/click"},
+               {OpenXrButtonActionType::kTouch, "/input/x/touch"},
+           }},
+          {OpenXrButtonType::kButton2,
+           {
+               {OpenXrButtonActionType::kPress, "/input/y/click"},
+               {OpenXrButtonActionType::kTouch, "/input/y/touch"},
+           }},
+          {OpenXrButtonType::kMenu,
+           {{OpenXrButtonActionType::kPress, "/input/menu/click"}}},
+      },
+      /*right_button_maps=*/
+      {
+          {OpenXrButtonType::kButton1,
+           {
+               {OpenXrButtonActionType::kPress, "/input/a/click"},
+               {OpenXrButtonActionType::kTouch, "/input/a/touch"},
+           }},
+          {OpenXrButtonType::kButton2,
+           {
+               {OpenXrButtonActionType::kPress, "/input/b/click"},
+               {OpenXrButtonActionType::kTouch, "/input/b/touch"},
+           }},
+      },
+      /*axis_maps=*/
+      {
+          {OpenXrAxisType::kThumbstick, "/input/thumbstick"},
+      });
+}
+
+}  // namespace
 
 const std::vector<OpenXrControllerInteractionProfile>&
 GetOpenXrControllerInteractionProfiles() {
@@ -121,7 +233,6 @@ GetOpenXrControllerInteractionProfiles() {
           {OpenXrInteractionProfileType::kMicrosoftMotion,
            kMicrosoftMotionInteractionProfilePath,
            /*required_extension=*/"",
-           GamepadMapping::kXrStandard,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -151,8 +262,8 @@ GetOpenXrControllerInteractionProfiles() {
           // Samsung Odyssey
           {OpenXrInteractionProfileType::kSamsungOdyssey,
            kSamsungOdysseyInteractionProfilePath,
-           /*required_extension=*/kExtSamsungOdysseyControllerExtensionName,
-           GamepadMapping::kXrStandard,
+           /*required_extension=*/
+           XR_EXT_SAMSUNG_ODYSSEY_CONTROLLER_EXTENSION_NAME,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -183,7 +294,6 @@ GetOpenXrControllerInteractionProfiles() {
           {OpenXrInteractionProfileType::kKHRSimple,
            kKHRSimpleInteractionProfilePath,
            /*required_extension=*/"",
-           GamepadMapping::kNone,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -195,68 +305,27 @@ GetOpenXrControllerInteractionProfiles() {
           // Khronos Simple Controller
 
           // Oculus Touch Controller
-          {OpenXrInteractionProfileType::kOculusTouch,
-           kOculusTouchInteractionProfilePath,
-           /*required_extension=*/"",
-           GamepadMapping::kXrStandard,
-           /*common_button_maps=*/
-           {
-               {OpenXrButtonType::kTrigger,
-                {{OpenXrButtonActionType::kPress, "/input/trigger/value"},
-                 {OpenXrButtonActionType::kValue, "/input/trigger/value"},
-                 {OpenXrButtonActionType::kTouch, "/input/trigger/touch"}}},
-               {OpenXrButtonType::kSqueeze,
-                {
-                    {OpenXrButtonActionType::kPress, "/input/squeeze/value"},
-                    {OpenXrButtonActionType::kValue, "/input/squeeze/value"},
-                }},
-               {OpenXrButtonType::kThumbstick,
-                {
-                    {OpenXrButtonActionType::kPress, "/input/thumbstick/click"},
-                    {OpenXrButtonActionType::kTouch, "/input/thumbstick/touch"},
-                }},
-               {OpenXrButtonType::kThumbrest,
-                {
-                    {OpenXrButtonActionType::kTouch, "/input/thumbrest/touch"},
-                }},
-           },
-           /*left_button_maps=*/
-           {
-               {OpenXrButtonType::kButton1,
-                {
-                    {OpenXrButtonActionType::kPress, "/input/x/click"},
-                    {OpenXrButtonActionType::kTouch, "/input/x/touch"},
-                }},
-               {OpenXrButtonType::kButton2,
-                {
-                    {OpenXrButtonActionType::kPress, "/input/y/click"},
-                    {OpenXrButtonActionType::kTouch, "/input/y/touch"},
-                }},
-           },
-           /*right_button_maps=*/
-           {
-               {OpenXrButtonType::kButton1,
-                {
-                    {OpenXrButtonActionType::kPress, "/input/a/click"},
-                    {OpenXrButtonActionType::kTouch, "/input/a/touch"},
-                }},
-               {OpenXrButtonType::kButton2,
-                {
-                    {OpenXrButtonActionType::kPress, "/input/b/click"},
-                    {OpenXrButtonActionType::kTouch, "/input/b/touch"},
-                }},
-           },
-           /*axis_maps=*/
-           {
-               {OpenXrAxisType::kThumbstick, "/input/thumbstick"},
-           }},
-          // Oculus Touch Controller
+          TouchControllerInteractionProfile(
+              OpenXrInteractionProfileType::kOculusTouch,
+              kOculusTouchInteractionProfilePath,
+              /*required_extension=*/""),
+
+          // Meta Touch Plus Controller
+          TouchControllerInteractionProfile(
+              OpenXrInteractionProfileType::kMetaTouchPlus,
+              kMetaTouchPlusInteractionProfilePath,
+              XR_META_TOUCH_CONTROLLER_PLUS_EXTENSION_NAME),
+
+          // Meta Touch Pro Controller
+          TouchControllerInteractionProfile(
+              OpenXrInteractionProfileType::kMetaTouchPro,
+              kMetaTouchProInteractionProfilePath,
+              XR_FB_TOUCH_CONTROLLER_PRO_EXTENSION_NAME),
 
           // Valve Index
           {OpenXrInteractionProfileType::kValveIndex,
            kValveIndexInteractionProfilePath,
            /*required_extension=*/"",
-           GamepadMapping::kXrStandard,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -299,7 +368,6 @@ GetOpenXrControllerInteractionProfiles() {
           {OpenXrInteractionProfileType::kHTCVive,
            kHTCViveInteractionProfilePath,
            /*required_extension=*/"",
-           GamepadMapping::kXrStandard,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -328,8 +396,8 @@ GetOpenXrControllerInteractionProfiles() {
           // HP Reverb G2
           {OpenXrInteractionProfileType::kHPReverbG2,
            kHPReverbG2InteractionProfilePath,
-           /*required_extension=*/kExtHPMixedRealityControllerExtensionName,
-           GamepadMapping::kXrStandard,
+           /*required_extension=*/
+           XR_EXT_HP_MIXED_REALITY_CONTROLLER_EXTENSION_NAME,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -378,8 +446,7 @@ GetOpenXrControllerInteractionProfiles() {
           // Microsoft Hands Profile
           {OpenXrInteractionProfileType::kHandSelectGrasp,
            kHandSelectGraspInteractionProfilePath,
-           /*required_extension=*/kMSFTHandInteractionExtensionName,
-           GamepadMapping::kXrStandard,
+           /*required_extension=*/XR_MSFT_HAND_INTERACTION_EXTENSION_NAME,
            /*common_button_maps=*/
            {
                {OpenXrButtonType::kTrigger,
@@ -395,8 +462,84 @@ GetOpenXrControllerInteractionProfiles() {
            },
            /*left_button_maps=*/{},
            /*right_button_maps=*/{},
-           /*axis_maps=*/{}}
+           /*axis_maps=*/{}},
           // Microsoft Hands Profile
+
+          // Vive Cosmos
+          {OpenXrInteractionProfileType::kViveCosmos,
+           kHTCViveCosmosInteractionProfilePath,
+           /*required_extension=*/
+           XR_HTC_VIVE_COSMOS_CONTROLLER_INTERACTION_EXTENSION_NAME,
+           /*common_button_maps=*/
+           {
+               {OpenXrButtonType::kTrigger,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/trigger/value"},
+                    {OpenXrButtonActionType::kValue, "/input/trigger/value"},
+                }},
+               {OpenXrButtonType::kSqueeze,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/squeeze/click"},
+                }},
+               {OpenXrButtonType::kThumbstick,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/thumbstick/click"},
+                    {OpenXrButtonActionType::kTouch, "/input/thumbstick/touch"},
+                }},
+               {OpenXrButtonType::kShoulder,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/shoulder/click"},
+                }},
+           },
+           /*left_button_maps=*/
+           {
+               {OpenXrButtonType::kButton1,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/x/click"},
+                }},
+               {OpenXrButtonType::kButton2,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/y/click"},
+                }},
+           },
+           /*right_button_maps=*/
+           {
+               {OpenXrButtonType::kButton1,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/a/click"},
+                }},
+               {OpenXrButtonType::kButton2,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/b/click"},
+                }},
+           },
+           /*axis_maps=*/
+           {
+               {OpenXrAxisType::kThumbstick, "/input/thumbstick"},
+           }},
+          // Vive Cosmos
+
+          // EXT Hands Profile
+          {OpenXrInteractionProfileType::kExtHand,
+           kExtHandInteractionProfilePath,
+           /*required_extension=*/XR_EXT_HAND_INTERACTION_EXTENSION_NAME,
+           /*common_button_maps=*/
+           {
+               {OpenXrButtonType::kTrigger,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/pinch_ext/value"},
+                    {OpenXrButtonActionType::kValue, "/input/pinch_ext/value"},
+                }},
+               {OpenXrButtonType::kGrasp,
+                {
+                    {OpenXrButtonActionType::kPress, "/input/grasp_ext/value"},
+                    {OpenXrButtonActionType::kValue, "/input/grasp_ext/value"},
+                }},
+           },
+           /*left_button_maps=*/{},
+           /*right_button_maps=*/{},
+           /*axis_maps=*/{}},
+          // EXT Hands Profile
       });
   return *kOpenXrControllerInteractionProfiles;
 }

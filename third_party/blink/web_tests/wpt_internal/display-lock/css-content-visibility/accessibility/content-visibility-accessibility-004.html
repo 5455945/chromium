@@ -36,15 +36,15 @@ async_test((t) => {
   // since it is interactable even though it is locked by content-visibility (see
   // https://github.com/WICG/display-locking for details). When that is done,
   // the element will become unlocked and AXNodeObjects will be replaced with
-  // AXLayoutObjects, causing <newline> to be collapsed, so we expect to see
-  // two children.
+  // AXLayoutObjects. Still, the <newline> that already existed will be around, but
+  // marked as ignored.
   axElementById("child").press();
   // Wait for the next frame for the ax object to be recreated.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       axHidden = axElementById("hidden");
-      // #hidden is now unlocked and saved as a normal AXLayoutObject with 2 child nodes:
-      // "foo" text and #child node.
+      // There are now 2 children, as the whitespace nodes are no longer included in the tree.
+      // This is the same as it would be if content-visibility had never been used.
       t.step(() => { assert_equals(axHidden.childrenCount, 2, "Children count after activation"); });
       t.done();
     });

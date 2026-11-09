@@ -1,26 +1,32 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as Host from 'devtools/core/host/host.js';
+import * as SDK from 'devtools/core/sdk/sdk.js';
+import * as Breakpoints from 'devtools/models/breakpoints/breakpoints.js';
+
 (async function() {
   TestRunner.addResult(`Verify that front-end is able to set breakpoint for node.js scripts.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadTestModule('sdk_test_runner');
   await TestRunner.showPanel('sources');
 
-  SDK.targetManager.mainTarget().markAsNodeJSForTest();
+  const target = SDK.TargetManager.TargetManager.instance().primaryPageTarget()
+  target.markAsNodeJSForTest();
   SourcesTestRunner.startDebuggerTest();
 
-  var debuggerModel = SDK.targetManager.mainTarget().model(SDK.DebuggerModel);
   var functionText = 'function foobar() { \nconsole.log(\'foobar execute!\');\n}';
-  var sourceURL = Host.isWin() ? '\n//# sourceURL=c:\\prog\\foobar.js' : '\n//# sourceURL=/usr/local/home/prog/foobar.js';
+  var fileUrl = Host.Platform.isWin() ? 'file:///c:/prog/foobar.js' : 'file:///usr/local/home/prog/foobar.js';
+  var sourceURL = `\n//# sourceURL=${fileUrl}`;
   await TestRunner.evaluateInPageAnonymously(functionText + sourceURL);
   SourcesTestRunner.showScriptSource('foobar.js', didShowScriptSource);
 
   async function didShowScriptSource(sourceFrame) {
     TestRunner.addResult('Setting breakpoint:');
     TestRunner.addSniffer(
-        Bindings.BreakpointManager.ModelBreakpoint.prototype, '_addResolvedLocation', breakpointResolved);
+        Breakpoints.BreakpointManager.ModelBreakpoint.prototype, 'addResolvedLocation', breakpointResolved);
     await SourcesTestRunner.setBreakpoint(sourceFrame, 1, '', true);
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "device/fido/fido_authenticator.h"
@@ -32,6 +31,10 @@ class ConcreteFidoDiscovery : public FidoDeviceDiscovery {
  public:
   explicit ConcreteFidoDiscovery(FidoTransportProtocol transport)
       : FidoDeviceDiscovery(transport) {}
+
+  ConcreteFidoDiscovery(const ConcreteFidoDiscovery&) = delete;
+  ConcreteFidoDiscovery& operator=(const ConcreteFidoDiscovery&) = delete;
+
   ~ConcreteFidoDiscovery() override = default;
 
   MOCK_METHOD0(StartInternal, void());
@@ -39,9 +42,6 @@ class ConcreteFidoDiscovery : public FidoDeviceDiscovery {
   using FidoDeviceDiscovery::AddDevice;
   using FidoDeviceDiscovery::NotifyDiscoveryStarted;
   using FidoDeviceDiscovery::RemoveDevice;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ConcreteFidoDiscovery);
 };
 
 }  // namespace
@@ -115,12 +115,11 @@ TEST(FidoDiscoveryTest, TestAddRemoveDevices) {
   FidoAuthenticator* authenticator0 = nullptr;
   base::RunLoop device0_done;
   EXPECT_CALL(observer, DiscoveryStarted(&discovery, true, _))
-      .WillOnce(testing::Invoke(
-          [&](auto* discovery, bool success, auto authenticators) {
-            EXPECT_EQ(1u, authenticators.size());
-            authenticator0 = authenticators[0];
-            device0_done.Quit();
-          }));
+      .WillOnce([&](auto* discovery, bool success, auto authenticators) {
+        EXPECT_EQ(1u, authenticators.size());
+        authenticator0 = authenticators[0];
+        device0_done.Quit();
+      });
   EXPECT_CALL(*device0, GetId()).WillRepeatedly(Return("device0"));
   EXPECT_TRUE(discovery.AddDevice(std::move(device0)));
   discovery.NotifyDiscoveryStarted(true);
@@ -137,8 +136,7 @@ TEST(FidoDiscoveryTest, TestAddRemoveDevices) {
   FidoAuthenticator* authenticator1 = nullptr;
   EXPECT_CALL(observer, AuthenticatorAdded(&discovery, _))
       .WillOnce(DoAll(SaveArg<1>(&authenticator1),
-                      testing::InvokeWithoutArgs(
-                          [&device1_done]() { device1_done.Quit(); })));
+                      [&device1_done]() { device1_done.Quit(); }));
   EXPECT_CALL(*device1, GetId()).WillRepeatedly(Return("device1"));
   EXPECT_TRUE(discovery.AddDevice(std::move(device1)));
   EXPECT_EQ("device1", authenticator1->GetId());

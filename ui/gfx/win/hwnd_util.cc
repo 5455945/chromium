@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,13 @@
 
 #include <windows.h>
 
+#include <dwmapi.h>  // DWMWA_CLOAKED
+
+#include <algorithm>
+#include <array>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/debug/gdi_debug_util_win.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -41,7 +48,6 @@ void AdjustWindowToFit(HWND hwnd, const RECT& bounds, bool fit_to_monitor) {
       // Else fall through.
     } else {
       NOTREACHED() << "Unable to find default monitor";
-      // Fall through.
     }
   }  // Else fall through.
 
@@ -62,6 +68,44 @@ NOINLINE void CrashAccessDenied(DWORD last_error) {
 NOINLINE void CrashOther(DWORD last_error) {
   LOG(FATAL) << last_error;
 }
+
+// Reads a window's class name at most once, into a stack buffer.
+// IsWindowVisibleAndFullyOpaque() runs for every top-level window on each
+// occlusion pass, and can need the class name for two of its checks.
+class WindowClassName {
+ public:
+  explicit WindowClassName(HWND hwnd) : hwnd_(hwnd) {}
+  WindowClassName(const WindowClassName&) = delete;
+  WindowClassName& operator=(const WindowClassName&) = delete;
+
+  // Returns an empty view if the class name cannot be read. The returned view
+  // points into this object's buffer.
+  std::wstring_view Get() LIFETIME_BOUND {
+    if (!fetched_) {
+      fetched_ = true;
+      // GetClassNameW() returns the length of the name without the terminator,
+      // or 0 on failure. It truncates a name that does not fit, and then
+      // returns `buffer_.size() - 1`, so treat that length as a failure too.
+      const int length = ::GetClassNameW(hwnd_, buffer_.data(),
+                                         static_cast<int>(buffer_.size()));
+      if (length > 0 && static_cast<size_t>(length) < buffer_.size() - 1) {
+        length_ = static_cast<size_t>(length);
+      }
+    }
+    return std::wstring_view(buffer_.data(), length_);
+  }
+
+ private:
+  // RegisterClassEx() rejects class names longer than 255 characters, or 256
+  // with the terminator. The buffer has room for one more character, so only a
+  // truncated name can fill it.
+  static constexpr size_t kMaxClassNameLength = 255;
+
+  const HWND hwnd_;
+  bool fetched_ = false;
+  size_t length_ = 0;
+  std::array<wchar_t, kMaxClassNameLength + 2> buffer_;
+};
 
 }  // namespace
 
@@ -112,6 +156,161 @@ void* GetWindowUserData(HWND hwnd) {
   if (process_id != ::GetCurrentProcessId())
     return NULL;
   return reinterpret_cast<void*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+}
+
+bool IsWindowCloaked(HWND hwnd) {
+  BOOL is_cloaked = FALSE;
+  return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &is_cloaked,
+                                         sizeof(is_cloaked))) &&
+         is_cloaked;
+}
+
+bool IsWindowLikelyTooltip(HWND hwnd, std::wstring_view classname) {
+  if (!(::GetWindowLong(hwnd, GWL_STYLE) & WS_POPUP)) {
+    return false;
+  }
+
+  return std::ranges::contains_subrange(
+      classname,
+      // NOTE: Without the explicit string construction, this would compile,
+      // but only match classnames containing the trailing '\0' as well.
+      std::wstring(L"tooltip"), base::CaseInsensitiveCompareASCII<wchar_t>());
+}
+
+bool IsWindowVisibleAndFullyOpaque(HWND hwnd, Rect* window_rect) {
+  // Filter out windows that are not "visible", IsWindowVisible().
+  if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) {
+    return false;
+  }
+
+  // Filter out minimized windows.
+  if (IsIconic(hwnd)) {
+    return false;
+  }
+
+  LONG ex_styles = ::GetWindowLong(hwnd, GWL_EXSTYLE);
+  // Filter out "transparent" windows, windows where the mouse clicks fall
+  // through them.
+  if (ex_styles & WS_EX_TRANSPARENT) {
+    return false;
+  }
+
+  WindowClassName class_name(hwnd);
+
+  // Filter out "tool windows", which are floating windows that do not appear on
+  // the taskbar or ALT-TAB. Floating windows can have larger window rectangles
+  // than what is visible to the user, so by filtering them out we will avoid
+  // incorrectly marking native windows as occluded. We do not filter out the
+  // Windows Taskbar.
+  if (ex_styles & WS_EX_TOOLWINDOW) {
+    if (class_name.Get() != L"Shell_TrayWnd") {
+      return false;
+    }
+  }
+
+  // Filter out layered windows that are not opaque or that set a transparency
+  // colorkey.
+  if (ex_styles & WS_EX_LAYERED) {
+    BYTE alpha;
+    DWORD flags;
+
+    // GetLayeredWindowAttributes only works if the application has
+    // previously called SetLayeredWindowAttributes on the window.
+    // The function will fail if the layered window was setup with
+    // UpdateLayeredWindow. Treat this failure as the window being transparent.
+    // See Remarks section of
+    // https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getlayeredwindowattributes
+    if (!GetLayeredWindowAttributes(hwnd, nullptr, &alpha, &flags)) {
+      return false;
+    }
+
+    if (flags & LWA_ALPHA && alpha < 255) {
+      return false;
+    }
+    if (flags & LWA_COLORKEY) {
+      return false;
+    }
+  }
+
+  // Filter out windows that do not have a simple rectangular region.
+  // GetWindowRgnBox() returns the same region type as GetWindowRgn(), without
+  // creating and deleting a GDI region for every window.
+  RECT region_box;
+  if (::GetWindowRgnBox(hwnd, &region_box) == COMPLEXREGION) {
+    return false;
+  }
+
+  // Windows 10 has cloaked windows, windows with WS_VISIBLE attribute but
+  // not displayed. explorer.exe, in particular has one that's the
+  // size of the desktop. It's usually behind Chrome windows in the z-order,
+  // but using a remote desktop can move it up in the z-order. So, ignore them.
+  if (IsWindowCloaked(hwnd)) {
+    return false;
+  }
+
+  RECT win_rect;
+  // Filter out windows that take up zero area. The call to GetWindowRect is one
+  // of the most expensive parts of this function, so it is last.
+  if (!GetWindowRect(hwnd, &win_rect)) {
+    return false;
+  }
+  if (IsRectEmpty(&win_rect)) {
+    return false;
+  }
+
+  // Filter out popup windows with "tooltip" in the classname, since they're
+  // likely transient.
+  if (IsWindowLikelyTooltip(hwnd, class_name.Get())) {
+    return false;
+  }
+
+  if (window_rect) {
+    *window_rect = Rect(win_rect);
+
+    // Minimized windows were filtered out above, so IsZoomed() gives the same
+    // answer as GetWindowPlacement(). IsZoomed() only reads the window's
+    // style, while GetWindowPlacement() is a syscall.
+    if (::IsZoomed(hwnd)) {
+      // If the window is maximized the window border extends beyond the visible
+      // region of the screen. Adjust the maximized window rect to fit the
+      // screen dimensions to ensure that fullscreen windows, which do not
+      // extend beyond the screen boundaries since they typically have no
+      // borders, will occlude maximized windows underneath them.
+      HMONITOR hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      if (hmon) {
+        MONITORINFO mi;
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfo(hmon, &mi)) {
+          (*window_rect).AdjustToFit(gfx::Rect(mi.rcWork));
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+std::optional<bool> IsWindowOnCurrentVirtualDesktop(
+    HWND window,
+    Microsoft::WRL::ComPtr<IVirtualDesktopManager> virtual_desktop_manager) {
+  BOOL on_current_desktop;
+  if (FAILED(virtual_desktop_manager->IsWindowOnCurrentVirtualDesktop(
+          window, &on_current_desktop))) {
+    return std::nullopt;
+  }
+  if (on_current_desktop)
+    return true;
+
+  // IsWindowOnCurrentVirtualDesktop() is flaky for newly opened windows,
+  // which causes test flakiness. Occasionally, it incorrectly says a window
+  // is not on the current virtual desktop when it is. In this situation,
+  // it also returns GUID_NULL for the desktop id.
+  GUID workspace_guid;
+  if (FAILED(virtual_desktop_manager->GetWindowDesktopId(window,
+                                                         &workspace_guid))) {
+    return std::nullopt;
+  }
+  return workspace_guid == GUID_NULL;
 }
 
 #pragma warning(pop)
@@ -186,6 +385,7 @@ void CheckWindowCreated(HWND hwnd, DWORD last_error) {
   if (!hwnd) {
     switch (last_error) {
       case ERROR_NOT_ENOUGH_MEMORY:
+      case ERROR_NO_MORE_USER_HANDLES:
         base::debug::CollectGDIUsageAndDie();
         break;
       case ERROR_ACCESS_DENIED:

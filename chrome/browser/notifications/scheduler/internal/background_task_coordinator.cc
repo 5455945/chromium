@@ -1,22 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/notifications/scheduler/internal/background_task_coordinator.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/numerics/ranges.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/clock.h"
+#include "base/time/time.h"
 #include "chrome/browser/notifications/scheduler/internal/impression_types.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/internal/scheduler_config.h"
 #include "chrome/browser/notifications/scheduler/internal/scheduler_utils.h"
 #include "chrome/browser/notifications/scheduler/public/features.h"
 #include "chrome/browser/notifications/scheduler/public/notification_background_task_scheduler.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 
 namespace notifications {
 namespace {
@@ -45,13 +46,13 @@ class BackgroundTaskCoordinatorHelper {
     BackgroundTaskCoordinator::Notifications unthrottled_notifications;
     BackgroundTaskCoordinator::Notifications throttled_notifications;
     for (auto& pair : notifications) {
-      for (auto* notification : pair.second) {
+      for (const notifications::NotificationEntry* notification : pair.second) {
         auto type = pair.first;
         if (notification->schedule_params.priority ==
             ScheduleParams::Priority::kNoThrottle) {
-          unthrottled_notifications[type].emplace_back(std::move(notification));
+          unthrottled_notifications[type].emplace_back(notification);
         } else {
-          throttled_notifications[type].emplace_back(std::move(notification));
+          throttled_notifications[type].emplace_back(notification);
         }
       }
     }
@@ -65,9 +66,10 @@ class BackgroundTaskCoordinatorHelper {
   void ProcessUnthrottledNotifications(
       BackgroundTaskCoordinator::Notifications notifications) {
     for (const auto& pair : notifications) {
-      for (const auto* entry : pair.second) {
-        DCHECK_EQ(entry->schedule_params.priority,
-                  ScheduleParams::Priority::kNoThrottle);
+      for (const notifications::NotificationEntry* entry : pair.second) {
+        CHECK_EQ(entry->schedule_params.priority,
+                 ScheduleParams::Priority::kNoThrottle,
+                 base::NotFatalUntil::M161);
         if (!entry->schedule_params.deliver_time_start.has_value()) {
           continue;
         }
@@ -84,7 +86,7 @@ class BackgroundTaskCoordinatorHelper {
     base::Time tomorrow;
     base::Time now = clock_->Now();
     bool success = ToLocalHour(0, now, 1 /*day_delta*/, &tomorrow);
-    DCHECK(success);
+    CHECK(success, base::NotFatalUntil::M161);
 
     std::map<SchedulerClientType, int> shown_per_type;
     int shown_total = 0;
@@ -104,9 +106,10 @@ class BackgroundTaskCoordinatorHelper {
           shown_total >= config_->max_daily_shown_all_type;
 
       // Find the eariliest notification to launch the background task.
-      for (const auto* entry : pair.second) {
-        DCHECK_NE(entry->schedule_params.priority,
-                  ScheduleParams::Priority::kNoThrottle);
+      for (const notifications::NotificationEntry* entry : pair.second) {
+        CHECK_NE(entry->schedule_params.priority,
+                 ScheduleParams::Priority::kNoThrottle,
+                 base::NotFatalUntil::M161);
         // Currently only support deliver time window.
         if (!entry->schedule_params.deliver_time_start.has_value()) {
           continue;
@@ -127,7 +130,8 @@ class BackgroundTaskCoordinatorHelper {
           deliver_time_start = tomorrow;
 
         // Deliver time window has passed.
-        DCHECK(entry->schedule_params.deliver_time_end.has_value());
+        CHECK(entry->schedule_params.deliver_time_end.has_value(),
+              base::NotFatalUntil::M161);
         if (!entry->schedule_params.deliver_time_end.has_value() ||
             deliver_time_start >
                 entry->schedule_params.deliver_time_end.value()) {
@@ -151,14 +155,13 @@ class BackgroundTaskCoordinatorHelper {
 
     base::TimeDelta window_start_time =
         background_task_time_.value() - clock_->Now();
-    window_start_time = base::ClampToRange(window_start_time, base::TimeDelta(),
-                                           base::TimeDelta::Max());
+    window_start_time = std::clamp(window_start_time, base::TimeDelta(),
+                                    base::TimeDelta::Max());
 
     // TODO(xingliu): Remove SchedulerTaskTime.
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(
             switches::kNotificationSchedulerImmediateBackgroundTask)) {
-      background_task_->Schedule(base::TimeDelta::FromSeconds(30),
-                                 base::TimeDelta::FromMinutes(1));
+      background_task_->Schedule(base::Seconds(30), base::Minutes(1));
       return;
     }
 
@@ -167,10 +170,10 @@ class BackgroundTaskCoordinatorHelper {
         window_start_time + config_->background_task_window_duration);
   }
 
-  NotificationBackgroundTaskScheduler* background_task_;
-  const SchedulerConfig* config_;
-  base::Clock* clock_;
-  absl::optional<base::Time> background_task_time_;
+  raw_ptr<NotificationBackgroundTaskScheduler> background_task_;
+  raw_ptr<const SchedulerConfig> config_;
+  raw_ptr<base::Clock> clock_;
+  std::optional<base::Time> background_task_time_;
 };
 
 }  // namespace
@@ -204,10 +207,10 @@ class BackgroundTaskCoordinatorImpl : public BackgroundTaskCoordinator {
   std::unique_ptr<NotificationBackgroundTaskScheduler> background_task_;
 
   // System configuration.
-  const SchedulerConfig* config_;
+  raw_ptr<const SchedulerConfig> config_;
 
   // Clock to query the current timestamp.
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 };
 
 // static

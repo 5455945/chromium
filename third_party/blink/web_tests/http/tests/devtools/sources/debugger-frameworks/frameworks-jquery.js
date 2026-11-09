@@ -1,11 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as Common from 'devtools/core/common/common.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
 
 (async function() {
   TestRunner.addResult(`Tests framework blackboxing feature on jQuery.\n`);
 
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
 
   await TestRunner.loadHTML(`
@@ -52,7 +57,7 @@
   `);
 
   var frameworkRegexString = '/jquery-1\\.11\\.1\\.min\\.js$';
-  Common.settingForTest('skipStackFramesPattern').set(frameworkRegexString);
+  Main.MainImpl.MainImpl.universeForTest.settings.settingForTest('skip-stack-frames-pattern').set(frameworkRegexString);
   SourcesTestRunner.startDebuggerTest(step1, true);
 
   function step1() {

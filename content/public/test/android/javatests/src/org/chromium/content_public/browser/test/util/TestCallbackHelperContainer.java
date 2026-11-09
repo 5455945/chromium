@@ -1,9 +1,10 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content_public.browser.test.util;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.content_public.browser.JavaScriptCallback;
 import org.chromium.content_public.browser.WebContents;
@@ -14,9 +15,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * This class is used to provide callback hooks for tests and related classes.
- */
+/** This class is used to provide callback hooks for tests and related classes. */
 public class TestCallbackHelperContainer {
     private TestWebContentsObserver mTestWebContentsObserver;
 
@@ -24,84 +23,60 @@ public class TestCallbackHelperContainer {
         // TODO(yfriedman): Change callers to be executed on the UI thread. Unfortunately this is
         // super convenient as the caller is nearly always on the test thread which is fine to block
         // and it's cumbersome to keep bouncing to the UI thread.
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mTestWebContentsObserver = new TestWebContentsObserver(webContents); });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTestWebContentsObserver = new TestWebContentsObserver(webContents);
+                });
     }
 
-    /**
-     * CallbackHelper for OnPageCommitVisible.
-     */
+    /** CallbackHelper for OnPageCommitVisible. */
     public static class OnPageCommitVisibleHelper extends CallbackHelper {
         private String mUrl;
+
         public void notifyCalled(String url) {
             mUrl = url;
             notifyCalled();
         }
+
         public String getUrl() {
             assert getCallCount() > 0;
             return mUrl;
         }
     }
 
-    /**
-     * CallbackHelper for OnPageFinished.
-     */
+    /** CallbackHelper for OnPageFinished. */
     public static class OnPageFinishedHelper extends CallbackHelper {
-        private List<String> mUrlList = Collections.synchronizedList(new ArrayList<>());
+        private final List<String> mUrlList = Collections.synchronizedList(new ArrayList<>());
         private String mUrl;
+
         public void notifyCalled(String url) {
             mUrl = url;
             mUrlList.add(url);
             notifyCalled();
         }
+
         public String getUrl() {
             assert getCallCount() > 0;
             return mUrl;
         }
+
         public List<String> getUrlList() {
             return mUrlList;
         }
     }
 
-    /**
-     * CallbackHelper for OnPageStarted.
-     */
+    /** CallbackHelper for OnPageStarted. */
     public static class OnPageStartedHelper extends CallbackHelper {
         private String mUrl;
+
         public void notifyCalled(String url) {
             mUrl = url;
             notifyCalled();
         }
+
         public String getUrl() {
             assert getCallCount() > 0;
             return mUrl;
-        }
-    }
-
-    /**
-     * CallbackHelper for OnReceivedError.
-     */
-    public static class OnReceivedErrorHelper extends CallbackHelper {
-        private int mErrorCode;
-        private String mDescription;
-        private String mFailingUrl;
-        public void notifyCalled(int errorCode, String description, String failingUrl) {
-            mErrorCode = errorCode;
-            mDescription = description;
-            mFailingUrl = failingUrl;
-            notifyCalled();
-        }
-        public int getErrorCode() {
-            assert getCallCount() > 0;
-            return mErrorCode;
-        }
-        public String getDescription() {
-            assert getCallCount() > 0;
-            return mDescription;
-        }
-        public String getFailingUrl() {
-            assert getCallCount() > 0;
-            return mFailingUrl;
         }
     }
 
@@ -114,25 +89,76 @@ public class TestCallbackHelperContainer {
         private String mJsonResult;
 
         /**
+         * Starts evaluation of a given JavaScript code on a given webContents using production
+         * logic.
+         *
+         * @param webContents A WebContents instance to be used.
+         * @param code A JavaScript code to be evaluated.
+         */
+        public void evaluateJavaScript(WebContents webContents, String code) {
+            JavaScriptCallback callback =
+                    new JavaScriptCallback() {
+                        @Override
+                        public void handleJavaScriptResult(String jsonResult) {
+                            notifyCalled(jsonResult);
+                        }
+                    };
+            mJsonResult = null;
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        if (webContents.isDestroyed()) {
+                            notifyCalled("null");
+                            return;
+                        }
+                        webContents.evaluateJavaScript(code, callback);
+                    });
+        }
+
+        /**
          * Starts evaluation of a given JavaScript code on a given webContents.
+         *
          * @param webContents A WebContents instance to be used.
          * @param code A JavaScript code to be evaluated.
          */
         public void evaluateJavaScriptForTests(WebContents webContents, String code) {
-            JavaScriptCallback callback = new JavaScriptCallback() {
-                @Override
-                public void handleJavaScriptResult(String jsonResult) {
-                    notifyCalled(jsonResult);
-                }
-            };
+            JavaScriptCallback callback =
+                    new JavaScriptCallback() {
+                        @Override
+                        public void handleJavaScriptResult(String jsonResult) {
+                            notifyCalled(jsonResult);
+                        }
+                    };
             mJsonResult = null;
-            TestThreadUtils.runOnUiThreadBlocking(
-                    () -> webContents.evaluateJavaScriptForTests(code, callback));
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        if (webContents.isDestroyed()) {
+                            notifyCalled("null");
+                            return;
+                        }
+                        webContents.evaluateJavaScriptForTests(code, callback);
+                    });
         }
 
         /**
-         * Returns true if the evaluation started by evaluateJavaScriptForTests() has completed.
+         * Starts evaluation of a given JavaScript code on a given webContents, acting as if a user
+         * gesture is present.
+         * @param webContents A WebContents instance to be used.
+         * @param code A JavaScript code to be evaluated.
          */
+        public void evaluateJavaScriptWithUserGestureForTests(
+                WebContents webContents, String code) {
+            JavaScriptCallback callback =
+                    new JavaScriptCallback() {
+                        @Override
+                        public void handleJavaScriptResult(String jsonResult) {
+                            notifyCalled(jsonResult);
+                        }
+                    };
+            mJsonResult = null;
+            WebContentsUtils.evaluateJavaScriptWithUserGesture(webContents, code, callback);
+        }
+
+        /** Returns true if a started JavaScript evaluation has completed. */
         public boolean hasValue() {
             return mJsonResult != null;
         }
@@ -178,10 +204,6 @@ public class TestCallbackHelperContainer {
 
     public OnPageFinishedHelper getOnPageFinishedHelper() {
         return mTestWebContentsObserver.getOnPageFinishedHelper();
-    }
-
-    public OnReceivedErrorHelper getOnReceivedErrorHelper() {
-        return mTestWebContentsObserver.getOnReceivedErrorHelper();
     }
 
     public CallbackHelper getOnFirstVisuallyNonEmptyPaintHelper() {

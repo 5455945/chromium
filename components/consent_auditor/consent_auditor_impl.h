@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,71 +7,60 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/clock.h"
 #include "components/consent_auditor/consent_auditor.h"
 #include "components/consent_auditor/consent_sync_bridge.h"
 
-class PrefService;
-class PrefRegistrySimple;
-
 namespace consent_auditor {
 
 class ConsentAuditorImpl : public ConsentAuditor {
  public:
-  ConsentAuditorImpl(PrefService* pref_service,
-                     std::unique_ptr<ConsentSyncBridge> consent_sync_bridge,
-                     const std::string& app_version,
+  ConsentAuditorImpl(std::unique_ptr<ConsentSyncBridge> consent_sync_bridge,
                      const std::string& app_locale,
                      base::Clock* clock);
+
+  ConsentAuditorImpl(const ConsentAuditorImpl&) = delete;
+  ConsentAuditorImpl& operator=(const ConsentAuditorImpl&) = delete;
+
   ~ConsentAuditorImpl() override;
 
   // KeyedService (through ConsentAuditor) implementation.
   void Shutdown() override;
 
-  // Registers the preferences needed by this service.
-  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
-
   void RecordArcPlayConsent(
-      const CoreAccountId& account_id,
+      const GaiaId& gaia_id,
       const sync_pb::UserConsentTypes::ArcPlayTermsOfServiceConsent& consent)
       override;
   void RecordArcGoogleLocationServiceConsent(
-      const CoreAccountId& account_id,
+      const GaiaId& gaia_id,
       const sync_pb::UserConsentTypes::ArcGoogleLocationServiceConsent& consent)
       override;
   void RecordArcBackupAndRestoreConsent(
-      const CoreAccountId& account_id,
+      const GaiaId& gaia_id,
       const sync_pb::UserConsentTypes::ArcBackupAndRestoreConsent& consent)
       override;
   void RecordSyncConsent(
-      const CoreAccountId& account_id,
+      const GaiaId& gaia_id,
       const sync_pb::UserConsentTypes::SyncConsent& consent) override;
-  void RecordAssistantActivityControlConsent(
-      const CoreAccountId& account_id,
-      const sync_pb::UserConsentTypes::AssistantActivityControlConsent& consent)
+  void RecordRecorderSpeakerLabelConsent(
+      const GaiaId& gaia_id,
+      const sync_pb::UserConsentTypes::RecorderSpeakerLabelConsent& consent)
       override;
-  void RecordAccountPasswordsConsent(
-      const CoreAccountId& account_id,
-      const sync_pb::UserConsentTypes::AccountPasswordsConsent& consent)
+  void RecordWalletPrivatePassConsent(
+      const GaiaId& gaia_id,
+      const SessionId& session_id,
+      const sync_pb::UserConsentTypes::WalletPrivatePassConsent& consent)
       override;
-  void RecordLocalConsent(const std::string& feature,
-                          const std::string& description_text,
-                          const std::string& confirmation_text) override;
-  base::WeakPtr<syncer::ModelTypeControllerDelegate> GetControllerDelegate()
+  base::WeakPtr<syncer::DataTypeControllerDelegate> GetControllerDelegate()
       override;
 
  private:
-  PrefService* pref_service_;
-  std::unique_ptr<ConsentSyncBridge> consent_sync_bridge_;
-  std::string app_version_;
-  std::string app_locale_;
-  base::Clock* clock_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConsentAuditorImpl);
+  const std::unique_ptr<ConsentSyncBridge> consent_sync_bridge_;
+  const std::string app_locale_;
+  const raw_ptr<base::Clock> clock_;
 };
 
 }  // namespace consent_auditor

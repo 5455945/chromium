@@ -1,13 +1,13 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/bluetooth/dbus/bluetooth_admin_policy_client.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -27,6 +27,8 @@ BluetoothAdminPolicyClient::Properties::Properties(
     : dbus::PropertySet(object_proxy, interface_name, callback) {
   RegisterProperty(bluetooth_admin_policy::kServiceAllowListProperty,
                    &service_allow_list);
+  RegisterProperty(bluetooth_admin_policy::kIsBlockedByPolicyProperty,
+                   &is_blocked_by_policy);
 }
 
 BluetoothAdminPolicyClient::Properties::~Properties() = default;
@@ -72,7 +74,8 @@ class BluetoothAdminPolicyClientImpl : public BluetoothAdminPolicyClient,
   // BluetoothAdminPolicyClient override.
   Properties* GetProperties(const dbus::ObjectPath& object_path) override {
     return static_cast<Properties*>(object_manager_->GetProperties(
-        object_path, bluetooth_admin_policy::kBluetoothAdminPolicyInterface));
+        object_path,
+        bluetooth_admin_policy::kBluetoothAdminPolicyStatusInterface));
   }
 
   void SetServiceAllowList(const dbus::ObjectPath& object_path,
@@ -85,7 +88,7 @@ class BluetoothAdminPolicyClientImpl : public BluetoothAdminPolicyClient,
       uuid_array.push_back(uuid.canonical_value());
 
     dbus::MethodCall method_call(
-        bluetooth_admin_policy::kBluetoothAdminPolicyInterface,
+        bluetooth_admin_policy::kBluetoothAdminPolicySetInterface,
         bluetooth_admin_policy::kSetServiceAllowList);
 
     dbus::MessageWriter writer(&method_call);
@@ -99,12 +102,10 @@ class BluetoothAdminPolicyClientImpl : public BluetoothAdminPolicyClient,
       return;
     }
 
-    object_proxy->CallMethodWithErrorCallback(
+    object_proxy->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAdminPolicyClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAdminPolicyClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAdminPolicyClientImpl::OnSetServiceAllowList,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
@@ -116,7 +117,7 @@ class BluetoothAdminPolicyClientImpl : public BluetoothAdminPolicyClient,
         dbus::ObjectPath(
             bluetooth_object_manager::kBluetoothObjectManagerServicePath));
     object_manager_->RegisterInterface(
-        bluetooth_admin_policy::kBluetoothAdminPolicyInterface, this);
+        bluetooth_admin_policy::kBluetoothAdminPolicyStatusInterface, this);
   }
 
  private:
@@ -145,29 +146,28 @@ class BluetoothAdminPolicyClientImpl : public BluetoothAdminPolicyClient,
       observer.AdminPolicyPropertyChanged(object_path, property_name);
   }
 
-  // Called when a response for successful method call is received.
-  void OnSuccess(base::OnceClosure callback, dbus::Response* response) {
-    DCHECK(response);
+  void OnSetServiceAllowList(base::OnceClosure callback,
+                             ErrorCallback error_callback,
+                             dbus::Response* response,
+                             dbus::ErrorResponse* error_response) {
+    if (!response) {
+      std::string error_name;
+      std::string error_message;
+      if (error_response) {
+        dbus::MessageReader reader(error_response);
+        error_name = error_response->GetErrorName();
+        reader.PopString(&error_message);
+      } else {
+        error_name = kNoResponseError;
+      }
+      std::move(error_callback).Run(error_name, error_message);
+      return;
+    }
+
     std::move(callback).Run();
   }
 
-  // Called when a response for a failed method call is received.
-  void OnError(ErrorCallback error_callback, dbus::ErrorResponse* response) {
-    // Error response has optional error message argument.
-    std::string error_name;
-    std::string error_message;
-    if (response) {
-      dbus::MessageReader reader(response);
-      error_name = response->GetErrorName();
-      reader.PopString(&error_message);
-    } else {
-      error_name = kNoResponseError;
-      error_message = "";
-    }
-    std::move(error_callback).Run(error_name, error_message);
-  }
-
-  dbus::ObjectManager* object_manager_ = nullptr;
+  raw_ptr<dbus::ObjectManager> object_manager_ = nullptr;
 
   // List of observers interested in event notifications from us.
   base::ObserverList<BluetoothAdminPolicyClient::Observer>::Unchecked

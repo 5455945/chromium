@@ -1,16 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/app/multitasking_test_scene_delegate.h"
 
-#include "base/notreached.h"
-#import "ios/chrome/app/application_delegate/app_state.h"
-#import "ios/chrome/app/chrome_overlay_window.h"
+#import <ostream>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/notreached.h"
+#import "ios/chrome/app/application_delegate/app_state.h"
+#import "ios/chrome/browser/shared/ui/chrome_overlay_window/chrome_overlay_window.h"
 
 namespace {
 
@@ -37,9 +35,6 @@ const CGFloat kWidthLandscapeSplitViewOnLargeIPad = 678.0;
 
 @implementation MultitaskingTestSceneDelegate
 
-// This getter is called when the SceneDelegate is created. Returning a
-// ChromeOverlayWindow allows UIKit to use that as the main window for this
-// scene.
 - (UIWindow*)window {
   UIWindow* window = [super window];
   // Adjust window size for multitasking tests.
@@ -53,7 +48,7 @@ const CGFloat kWidthLandscapeSplitViewOnLargeIPad = 678.0;
 // Returns true if test is running on 12.9 inch iPad Pro. Otherwise, it's
 // running on regular iPad.
 - (BOOL)isRunningOnLargeIPadPro {
-  CGSize size = [[UIScreen mainScreen] bounds].size;
+  CGSize size = [super window].screen.bounds.size;
   return MAX(size.height, size.width) ==
          MAX(kLargeIPadPortraitSize.width, kLargeIPadPortraitSize.height);
 }

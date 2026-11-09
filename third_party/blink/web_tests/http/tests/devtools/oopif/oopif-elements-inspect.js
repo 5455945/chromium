@@ -1,10 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
+import * as SDK from 'devtools/core/sdk/sdk.js';
+import * as UIModule from 'devtools/ui/legacy/legacy.js';
+
 (async function() {
   TestRunner.addResult(`Tests that inspect request works for nested OOPIF elements.\n`);
-  await TestRunner.loadModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.showPanel('elements');
 
   // Save time on style updates.
@@ -12,26 +17,28 @@
 
   TestRunner.navigatePromise('resources/page-inspect.html');
 
-  SDK.targetManager.observeTargets({
+  SDK.TargetManager.TargetManager.instance().observeTargets({
     targetAdded: async function(target) {
-      if (target.name() === 'Main')
+      if (target === SDK.TargetManager.TargetManager.instance().rootTarget() || target === SDK.TargetManager.TargetManager.instance().primaryPageTarget())
         return;
       let complete = false;
-      target.pageAgent().setLifecycleEventsEnabled(true);
-      target.model(SDK.ResourceTreeModel).addEventListener(SDK.ResourceTreeModel.Events.LifecycleEvent, async (event) => {
+      target.pageAgent().invoke_setLifecycleEventsEnabled({enabled: true});
+      target.model(SDK.ResourceTreeModel.ResourceTreeModel).addEventListener(SDK.ResourceTreeModel.Events.LifecycleEvent, async (event) => {
         if (event.data.name === 'load' && !complete) {
           complete = true;
 
-          target.model(SDK.RuntimeModel).defaultExecutionContext().evaluate({
+          target.model(SDK.RuntimeModel.RuntimeModel).defaultExecutionContext().evaluate({
             expression: 'inspect(document.body)',
             includeCommandLineAPI: true
           }, false, false);
 
-          UI.context.addFlavorChangeListener(SDK.DOMNode, (event) => {
-            const treeOutline = Elements.ElementsTreeOutline.forDOMModel(event.data.domModel());
-            TestRunner.addResult(`Selected node has text: ${treeOutline.selectedDOMNode().children()[0].nodeName()}`);
-            TestRunner.completeTest();
-          });
+          UIModule.Context.Context.instance().addFlavorChangeListener(
+              SDK.DOMModel.DOMNode, (event) => {
+                const selectedNode = event.data;
+                TestRunner.addResult(`Selected node has text: ${
+                    selectedNode.children()[0].nodeName()}`);
+                TestRunner.completeTest();
+              });
         }
       });
     },

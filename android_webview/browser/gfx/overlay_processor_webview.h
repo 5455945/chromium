@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define ANDROID_WEBVIEW_BROWSER_GFX_OVERLAY_PROCESSOR_WEBVIEW_H_
 
 #include "android_webview/browser/gfx/display_scheduler_webview.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_checker.h"
@@ -14,16 +15,20 @@
 #include "components/viz/service/display/display_resource_provider_skia.h"
 #include "components/viz/service/display/overlay_processor_interface.h"
 #include "components/viz/service/display/overlay_processor_surface_control.h"
+#include "components/viz/service/frame_sinks/frame_sink_observer.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "ui/gfx/android/android_surface_control_compat.h"
 
-namespace gpu {
-class DisplayCompositorMemoryAndTaskControllerOnGpu;
-}
+namespace viz {
+class FrameSinkManagerImpl;
+class ResolvedFrameData;
+}  // namespace viz
 
 namespace android_webview {
-class OverlayProcessorWebView : public viz::OverlayProcessorSurfaceControl {
+// Lifetime: WebView
+class OverlayProcessorWebView : public viz::OverlayProcessorSurfaceControl,
+                                public OverlaysInfoProvider {
  public:
   typedef ASurfaceControl* (*GetSurfaceControlFn)();
   class ScopedSurfaceControlAvailable {
@@ -33,28 +38,40 @@ class OverlayProcessorWebView : public viz::OverlayProcessorSurfaceControl {
     ~ScopedSurfaceControlAvailable();
 
    private:
-    OverlayProcessorWebView* processor_;
+    raw_ptr<OverlayProcessorWebView> processor_;
   };
 
   OverlayProcessorWebView(
-      viz::DisplayCompositorMemoryAndTaskController* display_controller);
+      viz::DisplayCompositorMemoryAndTaskController* display_controller,
+      viz::FrameSinkManagerImpl* frame_sink_manager);
   ~OverlayProcessorWebView() override;
 
+  // returns false if it failed to update overlays.
+  bool ProcessForFrameSinkId(const viz::FrameSinkId& frame_sink_id,
+                             const viz::ResolvedFrameData* frame_data);
+  void OnFrameSinkDestroyed(viz::FrameSinkId frame_sink_id);
   void SetOverlaysEnabledByHWUI(bool enabled);
   void RemoveOverlays();
-  absl::optional<gfx::SurfaceControl::Transaction> TakeSurfaceTransactionOnRT();
+  std::optional<gfx::SurfaceControl::Transaction> TakeSurfaceTransactionOnRT();
+  viz::SurfaceId GetOverlaySurfaceId(const viz::FrameSinkId& frame_sink_id);
 
   // viz::OverlayProcessorSurfaceControl overrides:
   void TakeOverlayCandidates(
       viz::OverlayCandidateList* candidate_list) override;
   void ScheduleOverlays(
       viz::DisplayResourceProvider* resource_provider) override;
-  void AdjustOutputSurfaceOverlay(absl::optional<OutputSurfaceOverlayPlane>*
-                                      output_surface_plane) override {}
-  void CheckOverlaySupport(
-      const viz::OverlayProcessorInterface::OutputSurfaceOverlayPlane*
-          primary_plane,
+  void AdjustPrimaryPlaneForDisplayTransform(
+      viz::OverlayCandidate& primary_plane) const override {}
+  void CheckOverlaySupportImpl(
+      const std::optional<viz::OverlayCandidate>& primary_plane,
       viz::OverlayCandidateList* candidates) override;
+
+  // OverlaysInfoProvider implenentation:
+  bool IsFrameSinkOverlayed(viz::FrameSinkId frame_sink_id) override;
+
+ protected:
+  // viz::OverlayProcessorUsingStrategy overrides:
+  bool ShouldCreatePrimaryPlane() const override;
 
  private:
   class Manager;
@@ -72,19 +89,20 @@ class OverlayProcessorWebView : public viz::OverlayProcessorSurfaceControl {
   };
 
   struct LockResult {
-    gpu::SyncToken sync_token;
+    std::vector<gpu::SyncToken> sync_tokens;
     base::ScopedClosureRunner unlock_cb;
     gpu::Mailbox mailbox;
   };
 
   LockResult LockResource(Overlay& overlay);
-  void ReturnResource(viz::ResourceId resource_id);
+  void ReturnResource(viz::ResourceId resource_id, viz::SurfaceId surface_id);
 
   void CreateManagerOnRT(
-      gpu::DisplayCompositorMemoryAndTaskControllerOnGpu* controller_on_gpu,
-      gpu::CommandBufferId command_buffer_id,
-      gpu::SequenceId sequence_id,
       base::WaitableEvent* event);
+
+  void UpdateOverlayResource(viz::FrameSinkId frame_sink_id,
+                             viz::ResourceId new_resource_id,
+                             const gfx::RectF& uv_rect);
 
   using OverlayResourceLock =
       viz::DisplayResourceProviderSkia::ScopedExclusiveReadLockSharedImage;
@@ -93,6 +111,12 @@ class OverlayProcessorWebView : public viz::OverlayProcessorSurfaceControl {
   uint64_t next_overlay_id_ = 1;
   std::multimap<viz::ResourceId, OverlayResourceLock> locked_resources_;
 
+  base::flat_map<viz::FrameSinkId, int> resource_lock_count_;
+
+  // Do not overlay quads from these frame sinks. Used on TVs to prevent
+  // excessive switch between states as it has visual side-effects there.
+  base::flat_set<viz::FrameSinkId> blocked_frame_sink_ids_;
+
   // Overlay candidates for the current frame.
   viz::OverlayCandidateList overlay_candidates_;
 
@@ -100,14 +124,17 @@ class OverlayProcessorWebView : public viz::OverlayProcessorSurfaceControl {
   const gpu::CommandBufferId command_buffer_id_;
   uint64_t sync_fence_release_ = 0;
 
-  gpu::GpuTaskSchedulerHelper* render_thread_sequence_;
+  const raw_ptr<gpu::GpuTaskSchedulerHelper> render_thread_sequence_;
   std::unique_ptr<gpu::SingleTaskSequence> gpu_thread_sequence_;
 
-  viz::DisplayResourceProvider* resource_provider_ = nullptr;
+  raw_ptr<viz::DisplayResourceProvider> resource_provider_ = nullptr;
+  const raw_ptr<viz::FrameSinkManagerImpl> frame_sink_manager_;
 
   scoped_refptr<Manager> manager_;
 
   bool overlays_enabled_by_hwui_ = false;
+
+  float frame_rate_ = 0.f;
 
   THREAD_CHECKER(thread_checker_);
   base::WeakPtrFactory<OverlayProcessorWebView> weak_ptr_factory_{this};

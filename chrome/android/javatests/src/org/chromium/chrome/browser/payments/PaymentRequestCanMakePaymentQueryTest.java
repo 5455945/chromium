@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,23 @@ package org.chromium.chrome.browser.payments;
 
 import androidx.test.filters.MediumTest;
 
-import org.junit.ClassRule;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
-import org.chromium.chrome.browser.payments.PaymentRequestTestRule.MainActivityStartCallback;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.ui.test.util.DisableAnimationsTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
@@ -30,32 +31,40 @@ import java.util.concurrent.TimeoutException;
  * a credit card. This user has a valid credit card without a billing address on file.
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-public class PaymentRequestCanMakePaymentQueryTest implements MainActivityStartCallback {
-    // Disable animations to reduce flakiness.
-    @ClassRule
-    public static DisableAnimationsTestRule sNoAnimationsRule = new DisableAnimationsTestRule();
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/376100658
+public class PaymentRequestCanMakePaymentQueryTest {
+    // TODO(crbug.com/40743458): Batch this test. It currently fails when batched.
+    public final FreshCtaTransitTestRule mCtaTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+
+    public final PaymentRequestTestRule mPaymentRequestTestRule =
+            new PaymentRequestTestRule(
+                    mCtaTestRule, "payment_request_can_make_payment_query_test.html");
 
     @Rule
-    public PaymentRequestTestRule mPaymentRequestTestRule =
-            new PaymentRequestTestRule("payment_request_can_make_payment_query_test.html", this);
+    public final RuleChain mRuleChain =
+            RuleChain.outerRule(mCtaTestRule).around(mPaymentRequestTestRule);
 
-    @Override
-    public void onMainActivityStarted() throws TimeoutException {
+    @Before
+    public void setUp() throws TimeoutException, InterruptedException {
+        mPaymentRequestTestRule.startOnTestPage();
         // The user has a valid credit card without a billing address on file. This is sufficient
         // for canMakePayment() to return true.
-        new AutofillTestHelper().setCreditCard(new CreditCard("", "https://example.com", true, true,
-                "Jon Doe", "4111111111111111", "1111", "12", "2050", "visa", R.drawable.visa_card,
-                "" /* billingAddressId */, "" /* serverId */));
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"Payments"})
-    public void testNoBobPayInstalled() throws TimeoutException {
-        mPaymentRequestTestRule.openPageAndClickBuyAndWait(
-                mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
-        mPaymentRequestTestRule.expectResultContains(new String[] {"true"});
+        new AutofillTestHelper()
+                .setCreditCard(
+                        new CreditCard(
+                                "",
+                                /* isUserConfirmed= */ true,
+                                true,
+                                "Jon Doe",
+                                "4111111111111111",
+                                "1111",
+                                "12",
+                                "2050",
+                                "visa",
+                                R.drawable.visa_card,
+                                /* billingAddressId= */ "",
+                                /* serverId= */ ""));
     }
 
     @Test
@@ -64,8 +73,8 @@ public class PaymentRequestCanMakePaymentQueryTest implements MainActivityStartC
     public void testNoAppsInFastBobPayFactory() throws TimeoutException {
         mPaymentRequestTestRule.addPaymentAppFactory(
                 AppPresence.NO_APPS, FactorySpeed.FAST_FACTORY);
-        mPaymentRequestTestRule.openPageAndClickBuyAndWait(
-                mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
+        mPaymentRequestTestRule.clickNodeAndWait(
+                "buy", mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
         mPaymentRequestTestRule.expectResultContains(new String[] {"true"});
     }
 
@@ -75,8 +84,8 @@ public class PaymentRequestCanMakePaymentQueryTest implements MainActivityStartC
     public void testNoAppsInSlowBobPayFactory() throws TimeoutException {
         mPaymentRequestTestRule.addPaymentAppFactory(
                 AppPresence.NO_APPS, FactorySpeed.SLOW_FACTORY);
-        mPaymentRequestTestRule.openPageAndClickBuyAndWait(
-                mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
+        mPaymentRequestTestRule.clickNodeAndWait(
+                "buy", mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
         mPaymentRequestTestRule.expectResultContains(new String[] {"true"});
     }
 
@@ -86,8 +95,8 @@ public class PaymentRequestCanMakePaymentQueryTest implements MainActivityStartC
     public void testPayWithFastBobPayFactory() throws TimeoutException {
         mPaymentRequestTestRule.addPaymentAppFactory(
                 AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
-        mPaymentRequestTestRule.openPageAndClickBuyAndWait(
-                mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
+        mPaymentRequestTestRule.clickNodeAndWait(
+                "buy", mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
         mPaymentRequestTestRule.expectResultContains(new String[] {"true"});
     }
 
@@ -97,8 +106,8 @@ public class PaymentRequestCanMakePaymentQueryTest implements MainActivityStartC
     public void testPayWithSlowBobPayFactory() throws TimeoutException {
         mPaymentRequestTestRule.addPaymentAppFactory(
                 AppPresence.HAVE_APPS, FactorySpeed.SLOW_FACTORY);
-        mPaymentRequestTestRule.openPageAndClickBuyAndWait(
-                mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
+        mPaymentRequestTestRule.clickNodeAndWait(
+                "buy", mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
         mPaymentRequestTestRule.expectResultContains(new String[] {"true"});
     }
 }

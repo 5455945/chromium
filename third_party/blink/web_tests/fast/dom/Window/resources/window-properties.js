@@ -108,7 +108,6 @@ var propertyInfo = [
     ["KeyboardEvent", "object"],
     ["MediaList", "object"],
     ["MouseEvent", "object"],
-    ["MutationEvent", "object"],
     ["NamedNodeMap", "object"],
     ["Node", "object"],
     ["NodeFilter", "object"],
@@ -182,8 +181,6 @@ var propertyInfo = [
     ["onunload", "object"],
     ["opener", "object"],
 
-    ["defaultStatus", "string"],
-    ["defaultstatus", "string"],
     ["name", "string"],
     ["status", "string"],
 

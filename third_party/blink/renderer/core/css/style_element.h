@@ -21,8 +21,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
-#include "third_party/blink/renderer/core/css/style_engine_context.h"
+#include "third_party/blink/renderer/core/css/pending_sheet_type.h"
+#include "third_party/blink/renderer/platform/loader/fetch/render_blocking_behavior.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 
 namespace blink {
@@ -30,6 +32,7 @@ namespace blink {
 class ContainerNode;
 class Document;
 class Element;
+class Node;
 
 class CORE_EXPORT StyleElement : public GarbageCollectedMixin {
  public:
@@ -37,35 +40,62 @@ class CORE_EXPORT StyleElement : public GarbageCollectedMixin {
   virtual ~StyleElement();
   void Trace(Visitor*) const override;
 
+  bool IsModule(const Document&) const;
+
  protected:
   enum ProcessingResult { kProcessingSuccessful, kProcessingFatalError };
 
   virtual const AtomicString& type() const = 0;
   virtual const AtomicString& media() const = 0;
 
+  // Returns whether |this| and |node| are the same object. Helps us verify
+  // parameter validity in certain member functions with an Element parameter
+  // which should only be called by a subclass with |this|.
+  virtual bool IsSameObject(const Node& node) const = 0;
+
   CSSStyleSheet* sheet() const { return sheet_.Get(); }
 
-  bool IsLoading() const;
+  bool IsLoading(const Document&) const;
   bool SheetLoaded(Document&);
-  void StartLoadingDynamicSheet(Document&);
+  void SetToPendingState(Document&, Element& element);
 
   void RemovedFrom(Element&, ContainerNode& insertion_point);
+  void BlockingAttributeChanged(Element&);
+  void MediaAttributeChanged(Element&, const AtomicString& new_value);
   ProcessingResult ProcessStyleSheet(Document&, Element&);
   ProcessingResult ChildrenChanged(Element&);
   ProcessingResult FinishParsingChildren(Element&);
 
   Member<CSSStyleSheet> sheet_;
 
+ protected:
+  bool CreatedByParser() const { return created_by_parser_; }
+
  private:
-  ProcessingResult CreateSheet(Element&, const String& text = String());
+  ProcessingResult CreateSheetOrModule(Element&, const String& text = String());
+  void AddImportMapEntry(Element&, const String& text);
   ProcessingResult Process(Element&);
   void ClearSheet(Element& owner_element);
 
-  bool created_by_parser_ : 1;
+  // We want CSS Modules to behave similar to the "already started" flag Import
+  // Maps, essentially making it a one-shot operation when the <style> element
+  // is first connected. This behavior is subject to change based on WHATWG
+  // feedback. Once set on a given element, these types cannot change.
+  // TODO(crbug.com/448174611): Update this behavior based on WHATWG feedback.
+  enum class StyleType {
+    kPending,  // Still unknown.
+    kClassic,  // Definitely a classic style tag.
+    kModule    // Definitely a declarative CSS module.
+  };
+
+  bool has_finished_parsing_children_ : 1;
   bool loading_ : 1;
   bool registered_as_candidate_ : 1;
+  bool created_by_parser_ : 1;
+  StyleType element_type_{StyleType::kPending};
   TextPosition start_position_;
-  StyleEngineContext style_engine_context_;
+  PendingSheetType pending_sheet_type_;
+  RenderBlockingBehavior render_blocking_behavior_;
 };
 
 }  // namespace blink

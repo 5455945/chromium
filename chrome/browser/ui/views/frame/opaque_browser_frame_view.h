@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,20 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/view_ids.h"
-#include "chrome/browser/ui/views/frame/browser_frame.h"
-#include "chrome/browser/ui/views/frame/browser_non_client_frame_view.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view.h"
+#include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
 #include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout_delegate.h"
 #include "chrome/browser/ui/views/tab_icon_view_model.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/linux_ui/linux_ui.h"
 #include "ui/views/window/caption_button_types.h"
-#include "ui/views/window/non_client_view.h"
+#include "ui/views/window/frame_view.h"
 
 class BrowserView;
+class BrowserWidget;
 class CaptionButtonPlaceholderContainer;
 class OpaqueBrowserFrameViewLayout;
 class TabIconView;
@@ -36,15 +37,17 @@ namespace views {
 class Button;
 class FrameBackground;
 class Label;
-}
+class MenuRunner;
+}  // namespace views
 
-class OpaqueBrowserFrameView : public BrowserNonClientFrameView,
+class OpaqueBrowserFrameView : public BrowserFrameView,
                                public TabIconViewModel,
                                public OpaqueBrowserFrameViewLayoutDelegate {
+  METADATA_HEADER(OpaqueBrowserFrameView, BrowserFrameView)
+
  public:
-  METADATA_HEADER(OpaqueBrowserFrameView);
-  // Constructs a non-client view for an BrowserFrame.
-  OpaqueBrowserFrameView(BrowserFrame* frame,
+  // Constructs a non-client view for an BrowserWidget.
+  OpaqueBrowserFrameView(BrowserWidget* widget,
                          BrowserView* browser_view,
                          OpaqueBrowserFrameViewLayout* layout);
   OpaqueBrowserFrameView(const OpaqueBrowserFrameView&) = delete;
@@ -56,19 +59,16 @@ class OpaqueBrowserFrameView : public BrowserNonClientFrameView,
   // constructor because it relies on virtual method calls.
   void InitViews();
 
-  // BrowserNonClientFrameView:
-  gfx::Rect GetBoundsForTabStripRegion(
-      const gfx::Size& tabstrip_minimum_size) const override;
+  // BrowserFrameView:
+  BrowserLayoutParams GetBrowserLayoutParams() const override;
   int GetTopInset(bool restored) const override;
-  int GetThemeBackgroundXInset() const override;
   void UpdateThrobber(bool running) override;
   void WindowControlsOverlayEnabledChanged() override;
   gfx::Size GetMinimumSize() const override;
   void PaintAsActiveChanged() override;
-  void UpdateFrameColor() override;
   void OnThemeChanged() override;
 
-  // views::NonClientFrameView:
+  // views::FrameView:
   gfx::Rect GetBoundsForClientView() const override;
   gfx::Rect GetWindowBoundsForClientBounds(
       const gfx::Rect& client_bounds) const override;
@@ -77,10 +77,6 @@ class OpaqueBrowserFrameView : public BrowserNonClientFrameView,
   void ResetWindowControls() override;
   void UpdateWindowIcon() override;
   void UpdateWindowTitle() override;
-  void SizeConstraintsChanged() override;
-
-  // views::View:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
   // TabIconViewModel:
   bool ShouldTabIconViewAnimate() const override;
@@ -94,22 +90,24 @@ class OpaqueBrowserFrameView : public BrowserNonClientFrameView,
   gfx::Size GetBrowserViewMinimumSize() const override;
   bool ShouldShowCaptionButtons() const override;
   bool IsRegularOrGuestSession() const override;
+  bool CanMaximize() const override;
+  bool CanMinimize() const override;
   bool IsMaximized() const override;
   bool IsMinimized() const override;
   bool IsFullscreen() const override;
   bool IsTabStripVisible() const override;
-  int GetTabStripHeight() const override;
+  bool GetUnframedModeEnabled() const override;
   bool IsToolbarVisible() const override;
-  gfx::Size GetTabstripMinimumSize() const override;
   int GetTopAreaHeight() const override;
   bool UseCustomFrame() const override;
   bool IsFrameCondensed() const override;
-  bool EverHasVisibleBackgroundTabShapes() const override;
   FrameButtonStyle GetFrameButtonStyle() const override;
-  void UpdateWindowControlsOverlay(
-      const gfx::Rect& bounding_rect) const override;
-  bool IsTranslucentWindowOpacitySupported() const override;
+  void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) override;
   bool ShouldDrawRestoredFrameShadow() const override;
+#if BUILDFLAG(IS_LINUX)
+  bool IsTiled() const override;
+#endif
+  int WebAppButtonHeight() const override;
 
  protected:
   views::Button* minimize_button() const { return minimize_button_; }
@@ -126,12 +124,18 @@ class OpaqueBrowserFrameView : public BrowserNonClientFrameView,
   // views::View:
   void OnPaint(gfx::Canvas* canvas) override;
 
+  // BrowserFrameView:
+  BoundsAndMargins GetCaptionButtonBounds() const override;
+
   // Paint various sub-components of this view.  The *FrameBorder() functions
   // also paint the background of the titlebar area, since the top frame border
   // and titlebar background are a contiguous component.
   virtual void PaintRestoredFrameBorder(gfx::Canvas* canvas) const;
   void PaintMaximizedFrameBorder(gfx::Canvas* canvas) const;
   void PaintClientEdge(gfx::Canvas* canvas) const;
+
+  // Adds the app icon bounds to `params` if the icon is present.
+  void MaybeAddAppIconToLayoutParams(BrowserLayoutParams& params) const;
 
  private:
   friend class WebAppOpaqueBrowserFrameViewTest;
@@ -198,26 +202,39 @@ class OpaqueBrowserFrameView : public BrowserNonClientFrameView,
 
   void UpdateCaptionButtonPlaceholderContainerBackground();
 
+#if BUILDFLAG(IS_WIN)
+  // Sets caption button's accessible name as its tooltip when it's in a PWA
+  // with window-controls-overlay display override and resets it otherwise. In
+  // this mode, the web contents covers the frame view and so does it's legacy
+  // hwnd which prevent tooltips being shown for the caption buttons. This hwnd
+  // only exists in windows.
+  void UpdateCaptionButtonToolTipsForWindowControlsOverlay();
+#endif
+
   // Our layout manager also calculates various bounds.
-  OpaqueBrowserFrameViewLayout* layout_;
+  raw_ptr<OpaqueBrowserFrameViewLayout> layout_;
 
   // Window controls.
-  views::Button* minimize_button_;
-  views::Button* maximize_button_;
-  views::Button* restore_button_;
-  views::Button* close_button_;
+  raw_ptr<views::Button> minimize_button_;
+  raw_ptr<views::Button> maximize_button_;
+  raw_ptr<views::Button> restore_button_;
+  raw_ptr<views::Button> close_button_;
 
   // The window icon and title.
-  TabIconView* window_icon_;
-  views::Label* window_title_;
+  raw_ptr<TabIconView> window_icon_;
+  raw_ptr<views::Label> window_title_;
 
   // Background painter for the window frame.
   std::unique_ptr<views::FrameBackground> frame_background_;
 
+#if BUILDFLAG(IS_LINUX)
+  std::unique_ptr<views::MenuRunner> menu_runner_;
+#endif
+
   // PlaceholderContainer beneath the controls button for PWAs with window
   // controls overlay display override.
-  CaptionButtonPlaceholderContainer* caption_button_placeholder_container_ =
-      nullptr;
+  raw_ptr<CaptionButtonPlaceholderContainer, DanglingUntriaged>
+      caption_button_placeholder_container_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_OPAQUE_BROWSER_FRAME_VIEW_H_

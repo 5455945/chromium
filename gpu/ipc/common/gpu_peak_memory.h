@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,27 @@ enum class GpuPeakMemoryAllocationSource {
   SHARED_CONTEXT_STATE,
   SHARED_IMAGE_STUB,
   SKIA,
-  GPU_PEAK_MEMORY_ALLOCATION_SOURCE_MAX = SKIA,
+  WEBNN,
+  GPU_PEAK_MEMORY_ALLOCATION_SOURCE_MAX = WEBNN,
 };
+
+constexpr const char* GetAllocationSourceName(
+    GpuPeakMemoryAllocationSource source) {
+  switch (source) {
+    case GpuPeakMemoryAllocationSource::UNKNOWN:
+      return "Unknown";
+    case GpuPeakMemoryAllocationSource::COMMAND_BUFFER:
+      return "CommandBuffer";
+    case GpuPeakMemoryAllocationSource::SHARED_CONTEXT_STATE:
+      return "SharedContextState";
+    case GpuPeakMemoryAllocationSource::SHARED_IMAGE_STUB:
+      return "SharedImageStub";
+    case GpuPeakMemoryAllocationSource::SKIA:
+      return "Skia";
+    case GpuPeakMemoryAllocationSource::WEBNN:
+      return "WebNN";
+  }
+}
 
 }  // namespace gpu
 

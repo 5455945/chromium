@@ -29,51 +29,53 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_AX_INLINE_TEXT_BOX_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_AX_INLINE_TEXT_BOX_H_
 
-#include "base/macros.h"
-#include "third_party/blink/renderer/core/editing/markers/document_marker.h"
-#include "third_party/blink/renderer/core/layout/line/abstract_inline_text_box.h"
+#include <optional>
+
+#include "base/notreached.h"
+#include "third_party/blink/renderer/modules/accessibility/ax_block_flow_iterator.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object.h"
 
 namespace blink {
 
-class Node;
 class AXObjectCacheImpl;
 
-// Encapsulates an AbstractInlineTextBox and adapts it for use in Blink's
+// Encapsulates an inline text box fragment and adapts it for use in Blink's
 // accessibility tree.
 class AXInlineTextBox final : public AXObject {
  public:
-  AXInlineTextBox(scoped_refptr<AbstractInlineTextBox>, AXObjectCacheImpl&);
+  AXInlineTextBox(AXBlockFlowIterator::FragmentIndex, AXObjectCacheImpl&);
+
+  AXInlineTextBox(const AXInlineTextBox&) = delete;
+  AXInlineTextBox& operator=(const AXInlineTextBox&) = delete;
 
   // AXObject overrides.
-  RGBA32 GetColor() const override { return Color::kTransparent; }
+  RGBA32 GetColor() const override { return Color::kTransparent.Rgb(); }
   String GetName(ax::mojom::blink::NameFrom&,
-                 AXObject::AXObjectVector* name_objects) const override;
+                 AXObject::AXObjectVector* name_objects,
+                 NameSources* name_sources) const override;
   void TextCharacterOffsets(Vector<int>&) const override;
   void GetWordBoundaries(Vector<int>& word_starts,
                          Vector<int>& word_ends) const override;
   int TextOffsetInFormattingContext(int offset) const override;
   int TextOffsetInContainer(int offset) const override;
   void GetRelativeBounds(AXObject** out_container,
-                         FloatRect& out_bounds_in_container,
-                         skia::Matrix44& out_container_transform,
+                         gfx::RectF& out_bounds_in_container,
+                         gfx::Transform& out_container_transform,
                          bool* clips_children = nullptr) const override;
   ax::mojom::blink::WritingDirection GetTextDirection() const override;
-  Node* GetNode() const override;
   Document* GetDocument() const override;
   AXObject* NextOnLine() const override;
   AXObject* PreviousOnLine() const override;
   void SerializeMarkerAttributes(ui::AXNodeData* node_data) const override;
   ax::mojom::blink::Role NativeRoleIgnoringAria() const override {
-    // role_ is set manually in Init(), but must implement pure virtual method.
     NOTREACHED();
-    return ax::mojom::blink::Role::kInlineTextBox;
   }
-  void ClearChildren() const override;
+  void ClearChildren() override;
+  std::optional<AXBlockFlowIterator::FragmentIndex> GetFragmentIndex()
+      const override;
 
  protected:
   void Init(AXObject* parent) override;
-  void Detach() override;
   bool IsAXInlineTextBox() const override;
   bool IsLineBreakingObject() const override;
   int TextLength() const override;
@@ -83,11 +85,15 @@ class AXInlineTextBox final : public AXObject {
   void AddChildren() override {}
 
  private:
-  bool ComputeAccessibilityIsIgnored(IgnoredReasons* = nullptr) const override;
+  enum class Direction { kNext, kPrevious };
+  AXObject* NeighboringOnLine(const Direction direction) const;
 
-  scoped_refptr<AbstractInlineTextBox> inline_text_box_;
+  // TODO(a11y): Remove default argument on virtual override.
+  // See https://google.github.io/styleguide/cppguide.html#Default_Arguments
+  bool ComputeIsIgnored(IgnoredReasons* = nullptr) const override;
+  bool IsPartOfAListItem() const;
 
-  DISALLOW_COPY_AND_ASSIGN(AXInlineTextBox);
+  AXBlockFlowIterator::FragmentIndex fragment_index_;
 };
 
 }  // namespace blink

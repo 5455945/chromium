@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,27 +9,33 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/observer_list.h"
 #include "components/signin/public/identity_manager/ios/device_accounts_provider.h"
 
 // Implementation of DeviceAccountsProvider.
 class WebViewDeviceAccountsProviderImpl : public DeviceAccountsProvider {
  public:
   WebViewDeviceAccountsProviderImpl();
+
+  WebViewDeviceAccountsProviderImpl(const WebViewDeviceAccountsProviderImpl&) =
+      delete;
+  WebViewDeviceAccountsProviderImpl& operator=(
+      const WebViewDeviceAccountsProviderImpl&) = delete;
+
   ~WebViewDeviceAccountsProviderImpl() override;
 
   // ios::DeviceAccountsProvider
-  void GetAccessToken(const std::string& gaia_id,
+  void AddObserver(Observer* observer) override;
+  void RemoveObserver(Observer* observer) override;
+  void GetAccessToken(const GaiaId& gaia_id,
                       const std::string& client_id,
                       const std::set<std::string>& scopes,
                       AccessTokenCallback callback) override;
-  std::vector<AccountInfo> GetAllAccounts() const override;
-  AuthenticationErrorCategory GetAuthenticationErrorCategory(
-      const std::string& gaia_id,
-      NSError* error) const override;
+  std::vector<DeviceAccountInfo> GetAccountsForProfile() const override;
+  std::vector<DeviceAccountInfo> GetAccountsOnDevice() const override;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(WebViewDeviceAccountsProviderImpl);
+  base::ObserverList<Observer, true> observer_list_;
 };
 
 #endif  // IOS_WEB_VIEW_INTERNAL_SIGNIN_WEB_VIEW_DEVICE_ACCOUNTS_PROVIDER_IMPL_H_

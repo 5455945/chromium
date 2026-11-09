@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
 #include "media/base/stream_parser_buffer.h"
@@ -33,12 +33,15 @@ class MEDIA_EXPORT EsParser {
   using GetDecryptConfigCB = base::RepeatingCallback<const DecryptConfig*()>;
 
   EsParser();
+
+  EsParser(const EsParser&) = delete;
+  EsParser& operator=(const EsParser&) = delete;
+
   virtual ~EsParser();
 
   // ES parsing.
   // Should use kNoTimestamp when a timestamp is not valid.
-  bool Parse(const uint8_t* buf,
-             int size,
+  bool Parse(base::span<const uint8_t> buf,
              base::TimeDelta pts,
              DecodeTimestamp dts);
 
@@ -87,8 +90,6 @@ class MEDIA_EXPORT EsParser {
   // present in the PES packet header, it shall refer to the first AVC access
   // unit that commences in this PES packet.
   std::list<std::pair<int64_t, TimingDesc>> timing_desc_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(EsParser);
 };
 
 }  // namespace mp2t

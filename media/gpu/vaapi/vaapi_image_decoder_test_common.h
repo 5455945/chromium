@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,4 +45,4 @@ class VaapiImageDecoderTestCommon
 
 }  // namespace media
 
-#endif  //  MEDIA_GPU_VAAPI_VAAPI_IMAGE_DECODER_TEST_COMMON_H_
+#endif  // MEDIA_GPU_VAAPI_VAAPI_IMAGE_DECODER_TEST_COMMON_H_

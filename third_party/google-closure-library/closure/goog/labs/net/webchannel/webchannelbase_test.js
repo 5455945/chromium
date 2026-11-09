@@ -1,16 +1,8 @@
-// Copyright 2013 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview Unit tests for WebChannelBase.@suppress {accessControls}
@@ -27,10 +19,12 @@ const PropertyReplacer = goog.require('goog.testing.PropertyReplacer');
 const Stat = goog.require('goog.labs.net.webChannel.requestStats.Stat');
 const StructsMap = goog.require('goog.structs.Map');
 const Timer = goog.require('goog.Timer');
+const Uri = goog.requireType('goog.Uri');
 const WebChannelBase = goog.require('goog.labs.net.webChannel.WebChannelBase');
 const WebChannelBaseTransport = goog.require('goog.labs.net.webChannel.WebChannelBaseTransport');
 const WebChannelDebug = goog.require('goog.labs.net.webChannel.WebChannelDebug');
 const Wire = goog.require('goog.labs.net.webChannel.Wire');
+const XhrIo = goog.requireType('goog.net.XhrIo');
 const asserts = goog.require('goog.testing.asserts');
 const dom = goog.require('goog.dom');
 const functions = goog.require('goog.functions');
@@ -45,6 +39,8 @@ const RETRY_TIME = 1000;
 
 /** A really long time - used to make sure no more timeouts will fire. */
 const ALL_DAY_MS = 1000 * 60 * 60 * 24;
+
+const DEFAULT_ERROR_HTTP_STATUS_CODE = 503;
 
 const stubs = new PropertyReplacer();
 
@@ -111,6 +107,7 @@ class MockChannelRequest {
     this.successful_ = true;
     this.lastError_ = null;
     this.lastStatusCode_ = 200;
+    this.errorResponseHeaders_ = undefined;
 
     // For debugging, keep track of whether this is a back or forward channel.
     this.isBack = !!(requestId == 'rpc');
@@ -135,7 +132,7 @@ class MockChannelRequest {
   setReadyStateChangeThrottle(throttle) {}
 
   /**
-   * @param {?goog.Uri} uri The uri of the request.
+   * @param {?Uri} uri The uri of the request.
    * @param {?string} postData The data for the post body.
    * @param {boolean} decodeChunks Whether to the result is expected to be
    *     encoded for chunking and thus requires decoding.
@@ -143,11 +140,11 @@ class MockChannelRequest {
   xmlHttpPost(uri, postData, decodeChunks) {
     this.channelDebug_.debug(`---> POST: ${uri}, ${postData}, ${decodeChunks}`);
     this.postData_ = postData;
-    this.requestStartTime_ = goog.now();
+    this.requestStartTime_ = Date.now();
   }
 
   /**
-   * @param {?goog.Uri} uri The uri of the request.
+   * @param {?Uri} uri The uri of the request.
    * @param {boolean} decodeChunks Whether to the result is expected to be
    *     encoded for chunking and thus requires decoding.
    * @param {?string} hostPrefix The host prefix, if we might be using a
@@ -157,12 +154,12 @@ class MockChannelRequest {
   xmlHttpGet(uri, decodeChunks, hostPrefix) {
     this.channelDebug_.debug(
         `<--- GET: ${uri}, ${decodeChunks}, ${hostPrefix}`);
-    this.requestStartTime_ = goog.now();
+    this.requestStartTime_ = Date.now();
   }
 
-  /** @param {?goog.Uri} uri The uri to send a request to. */
+  /** @param {?Uri} uri The uri to send a request to. */
   sendCloseRequest(uri) {
-    this.requestStartTime_ = goog.now();
+    this.requestStartTime_ = Date.now();
   }
 
   /** Cancel. */
@@ -178,6 +175,11 @@ class MockChannelRequest {
   /** @return {?ChannelRequest.Error} The last error. */
   getLastError() {
     return this.lastError_;
+  }
+
+  /** @return {!Object<string, string>|undefined} Error response headers. */
+  getErrorResponseHeaders() {
+    return this.errorResponseHeaders_;
   }
 
   /** @return {number} The status code of the last request. */
@@ -201,13 +203,13 @@ class MockChannelRequest {
   }
 
   /**
-   * @return {?number} The time the request started, as returned by goog.now().
+   * @return {?number} The time the request started, as returned by Date.now().
    */
   getRequestStartTime() {
     return this.requestStartTime_;
   }
 
-  /** @return {?goog.net.XhrIo} Any XhrIo request created for this object. */
+  /** @return {?XhrIo} Any XhrIo request created for this object. */
   getXhr() {
     return null;
   }
@@ -220,7 +222,9 @@ class MockChannelRequest {
     this.pendingMessages_ = messages;
   }
 
-  /** @return {!Array<?Wire.QueuedMap>} The pending messages for this request. */
+  /**
+   * @return {!Array<?Wire.QueuedMap>} The pending messages for this request.
+   */
   getPendingMessages() {
     return this.pendingMessages_;
   }
@@ -235,6 +239,7 @@ class MockChannelRequest {
 }
 
 function getSingleForwardRequest() {
+  /** @suppress {visibility} Accessing private properties. */
   const pool = channel.forwardChannelRequestPool_;
   if (!pool.hasPendingRequest()) {
     return null;
@@ -249,11 +254,23 @@ function formatArrayOfMaps(arrayOfMaps) {
   const result = [];
   for (let i = 0; i < arrayOfMaps.length; i++) {
     const map = arrayOfMaps[i];
-    const keys = map.map.getKeys();
-    for (let j = 0; j < keys.length; j++) {
-      const tmp = keys[j] + ':' + map.map.get(keys[j]) +
-          (map.context ? ':' + map.context : '');
-      result.push(tmp);
+
+    if (Object.getPrototypeOf(map.map) === Object.prototype) {  // Object map
+      for (const key in map.map) {
+        const tmp =
+            key + ':' + map.map[key] + (map.context ? ':' + map.context : '');
+        result.push(tmp);
+      }
+    } else if (
+        typeof map.map.keys === 'function' &&
+        typeof map.map.get === 'function') {  // MapLike
+      for (const key of map.map.keys()) {
+        const tmp = key + ':' + map.map.get(key) +
+            (map.context ? ':' + map.context : '');
+        result.push(tmp);
+      }
+    } else {
+      throw new Error('Unknown input type for map: ' + String(map));
     }
   }
   return result.join(', ');
@@ -270,9 +287,8 @@ function connectForwardChannel(
     spdyEnabled = undefined) {
   stubSpdyCheck(!!spdyEnabled);
   const uriPrefix = opt_uriPrefix || '';
-  channel.connect(`${uriPrefix}/test`, `${uriPrefix}/bind`, null);
+  channel.connect(`${uriPrefix}/bind`, null);
   mockClock.tick(0);
-  completeTestConnection();
   completeForwardChannel(serverVersion, hostPrefix);
 }
 
@@ -294,25 +310,6 @@ function disconnect() {
   mockClock.tick(0);
 }
 
-function completeTestConnection() {
-  completeForwardTestConnection();
-  completeBackTestConnection();
-  assertEquals(WebChannelBase.State.OPENING, channel.getState());
-}
-
-function completeForwardTestConnection() {
-  channel.connectionTest_.onRequestData(
-      channel.connectionTest_.request_, '["b"]');
-  channel.connectionTest_.onRequestComplete(channel.connectionTest_.request_);
-  mockClock.tick(0);
-}
-
-function completeBackTestConnection() {
-  channel.connectionTest_.onRequestData(
-      channel.connectionTest_.request_, '11111');
-  mockClock.tick(0);
-}
-
 /**
  * @param {number=} serverVersion
  * @param {string=} hostPrefix
@@ -327,6 +324,7 @@ function completeForwardChannel(
   mockClock.tick(0);
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function completeBackChannel() {
   channel.onRequestData(channel.backChannelRequest_, '[[1,["foo"]]]');
   channel.onRequestComplete(channel.backChannelRequest_);
@@ -360,6 +358,7 @@ function response(lastArrayIdSentFromServer, outstandingDataSize) {
   mockClock.tick(0);
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function receive(data) {
   channel.onRequestData(channel.backChannelRequest_, `[[1,${data}]]`);
   channel.onRequestComplete(channel.backChannelRequest_);
@@ -373,10 +372,10 @@ function responseTimeout() {
   mockClock.tick(0);
 }
 
-/** @param {number=} statusCode */
-function responseRequestFailed(statusCode = undefined) {
+/** Fails the first forward request. */
+function responseRequestFailed() {
   getSingleForwardRequest().lastError_ = ChannelRequest.Error.STATUS;
-  getSingleForwardRequest().lastStatusCode_ = statusCode || 503;
+  getSingleForwardRequest().lastStatusCode_ = DEFAULT_ERROR_HTTP_STATUS_CODE;
   getSingleForwardRequest().successful_ = false;
   channel.onRequestComplete(getSingleForwardRequest());
   mockClock.tick(0);
@@ -391,13 +390,37 @@ function responseUnknownSessionId() {
 }
 
 /**
+ * Enum for map types to test.
+ * @enum {number}
+ */
+const MapTypes = {
+  OBJECT_MAP: 0,
+  STRUCTS_MAP: 1,
+  ES6_MAP: 2,
+};
+
+/**
  * @param {string} key
  * @param {string} value
  * @param {string=} context
+ * @param {!MapTypes=} mapType
  */
-function sendMap(key, value, context = undefined) {
-  const map = new StructsMap();
-  map.set(key, value);
+function sendMap(
+    key, value, context = undefined, mapType = MapTypes.OBJECT_MAP) {
+  let map;
+  if (mapType == MapTypes.OBJECT_MAP) {
+    map = {};
+    map[key] = value;
+  } else if (mapType == MapTypes.STRUCTS_MAP) {
+    map = new StructsMap();
+    map.set(key, value);
+  } else if (mapType == MapTypes.ES6_MAP) {
+    map = new Map();
+    map.set(key, value);
+  } else {
+    throw new Error('Unsupported map type :)');
+  }
+
   channel.sendMap(map, context);
   mockClock.tick(0);
 }
@@ -406,10 +429,12 @@ function hasForwardChannel() {
   return !!getSingleForwardRequest();
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function hasBackChannel() {
   return !!channel.backChannelRequest_;
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function hasDeadBackChannelTimer() {
   return channel.deadBackChannelTimerId_ != null;
 }
@@ -422,9 +447,12 @@ function assertHasBackChannel() {
   assertTrue('Back channel missing.', hasBackChannel());
 }
 
-function sendMapOnce() {
+/**
+ * @param {!MapTypes=} mapType
+ */
+function sendMapOnce(mapType = MapTypes.OBJECT_MAP) {
   assertEquals(1, numTimingEvents);
-  sendMap('foo', 'bar');
+  sendMap('foo', 'bar', /* context= */ undefined, mapType);
   responseDone();
   assertEquals(2, numTimingEvents);
   assertEquals('foo:bar', formatArrayOfMaps(deliveredMaps));
@@ -439,6 +467,7 @@ function sendMapTwice() {
   assertEquals('foo2:bar2', formatArrayOfMaps(deliveredMaps));
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function setFailFastWhileWaitingForRetry() {
   assertEquals(1, numTimingEvents);
 
@@ -482,6 +511,7 @@ function setFailFastWhileWaitingForRetry() {
   assertEquals(1, numTimingEvents);
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function setFailFastWhileRetryXhrIsInFlight() {
   assertEquals(1, numTimingEvents);
 
@@ -553,8 +583,10 @@ function requestFailedClosesChannel() {
       'Should remain closed after the ping timeout.',
       WebChannelBase.State.CLOSED, channel.getState());
   assertEquals(1, numTimingEvents);
+  assertEquals(DEFAULT_ERROR_HTTP_STATUS_CODE, channel.getLastStatusCode());
 }
 
+/** @suppress {visibility} Accessing private properties. */
 function outgoingMapsAwaitsResponse() {
   assertEquals(0, channel.outgoingMaps_.length);
 
@@ -612,9 +644,8 @@ testSuite({
     lastPostRetryCount = null;
 
     mockClock = new MockClock(true);
+    /** @suppress {checkTypes} suppression added to enable type checking */
     channel = new WebChannelBase('1');
-    // restore channel-test for tests that rely on the channel-test state
-    channel.backgroundChannelTest_ = false;
 
     gotError = false;
 
@@ -647,6 +678,7 @@ testSuite({
     channel.setHandler(handler);
 
     // Provide a predictable retry time for testing.
+    /** @suppress {visibility} Accessing private properties. */
     channel.getRetryTime_ = (retryCount) => RETRY_TIME;
 
     const channelDebug = new WebChannelDebug();
@@ -668,12 +700,12 @@ testSuite({
   testFormatArrayOfMaps() {
     // This function is used in a non-trivial test, so let's verify that it
     // works.
-    const map1 = new StructsMap();
+    const map1 = new Map();
     map1.set('k1', 'v1');
     map1.set('k2', 'v2');
-    const map2 = new StructsMap();
+    const map2 = new Map();
     map2.set('k3', 'v3');
-    const map3 = new StructsMap();
+    const map3 = new Map();
     map3.set('k4', 'v4');
     map3.set('k5', 'v5');
     map3.set('k6', 'v6');
@@ -697,6 +729,7 @@ testSuite({
     assertEquals('k1:v1:c1, k2:v2:c1', formatArrayOfMaps(c));
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testConnect() {
     connect();
     assertEquals(WebChannelBase.State.OPENED, channel.getState());
@@ -710,23 +743,27 @@ testSuite({
     assertHasBackChannel();
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testConnect_withServerHostPrefix() {
     connect(undefined, 'serverHostPrefix');
     assertEquals('serverHostPrefix', channel.hostPrefix_);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testConnect_withClientHostPrefix() {
     handler.correctHostPrefix = (hostPrefix) => 'clientHostPrefix';
     connect();
     assertEquals('clientHostPrefix', channel.hostPrefix_);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testConnect_overrideServerHostPrefix() {
     handler.correctHostPrefix = (hostPrefix) => 'clientHostPrefix';
     connect(undefined, 'serverHostPrefix');
     assertEquals('clientHostPrefix', channel.hostPrefix_);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testConnect_withServerVersion() {
     connect(8);
     assertEquals(8, channel.channelVersion_);
@@ -734,23 +771,32 @@ testSuite({
 
   testConnect_notOkToMakeRequestForTest() {
     handler.okToMakeRequest = functions.constant(WebChannelBase.Error.NETWORK);
-    channel.connect('/test', '/bind', null);
+    channel.connect('/bind', null);
     mockClock.tick(0);
     assertEquals(WebChannelBase.State.CLOSED, channel.getState());
   },
 
   testConnect_notOkToMakeRequestForBind() {
-    channel.connect('/test', '/bind', null);
+    channel.connect('/bind', null);
     mockClock.tick(0);
-    completeTestConnection();
     handler.okToMakeRequest = functions.constant(WebChannelBase.Error.NETWORK);
     completeForwardChannel();
     assertEquals(WebChannelBase.State.CLOSED, channel.getState());
   },
 
-  testSendMap() {
+  testSendMap_withObjectMap() {
     connect();
-    sendMapOnce();
+    sendMapOnce(MapTypes.OBJECT_MAP);
+  },
+
+  testSendMap_withStructsMap() {
+    connect();
+    sendMapOnce(MapTypes.STRUCTS_MAP);
+  },
+
+  testSendMap_withEs6Map() {
+    connect();
+    sendMapOnce(MapTypes.ES6_MAP);
   },
 
   testSendMapWithSpdyEnabled() {
@@ -881,8 +927,9 @@ testSuite({
   },
 
   /**
-     Makes sure that setting fail fast while not retrying doesn't cause a
-     failure.
+   * Makes sure that setting fail fast while not retrying doesn't cause a
+   *      failure.
+   * @suppress {visibility} Accessing private properties.
    */
   testSetFailFastAtRetryCount() {
     stubNetUtils();
@@ -977,6 +1024,7 @@ testSuite({
     assertEquals(Stat.ERROR_NETWORK, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testStatEventReportedOnlyOnce_onNetworkDown() {
     stubNetUtils();
 
@@ -1044,6 +1092,10 @@ testSuite({
     disconnect();
   },
 
+  // NOTE: The current setup for ALL existing testUndeliveredMaps_* tests rely
+  // heavily on the non-HTTP2-or-SPDY behavior (i.e. one message can be sent at
+  // any given time).
+  /** @suppress {visibility} Accessing private properties. */
   testUndeliveredMaps_clearsPendingMapsAfterNotifying() {
     connect();
     sendMap('foo1', 'bar1');
@@ -1061,6 +1113,7 @@ testSuite({
     assertEquals(0, channel.outgoingMaps_.length);
   },
 
+  /** @suppress {missingProperties} suppression added to enable type checking */
   testUndeliveredMaps_notifiesWithContext() {
     connect();
 
@@ -1087,6 +1140,7 @@ testSuite({
         handler.undeliveredMapsString);
   },
 
+  /** @suppress {missingProperties} suppression added to enable type checking */
   testUndeliveredMaps_serviceUnavailable() {
     // Send a few maps, and let one fail.
     connect();
@@ -1102,6 +1156,7 @@ testSuite({
     assertEquals('', handler.undeliveredMapsString);
   },
 
+  /** @suppress {missingProperties} suppression added to enable type checking */
   testUndeliveredMaps_onPingTimeout() {
     stubNetUtils();
 
@@ -1124,6 +1179,57 @@ testSuite({
     assertEquals('', handler.undeliveredMapsString);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
+  testGetNonAckedMapsBeforeChannelClose_returnsUnionOfPendingAndUnsentMaps() {
+    connect();
+
+    // First send one message and respond with server ack.
+    sendMap('foo1', 'bar1');
+    responseDone();
+
+    // Send 3 more messages which are non-acked.
+    sendMap('foo2', 'bar2');
+    sendMap('foo3', 'bar3');
+    sendMap('foo4', 'bar4');
+
+    // Verifies that we're indeed covering the case where 1 message is pending
+    // server ack and 2 message has not been sent to the network.
+    assertEquals(
+        1, channel.forwardChannelRequestPool_.getPendingMessages().length);
+    assertEquals(2, channel.outgoingMaps_.length);
+
+    assertObjectEquals(
+        [{foo2: 'bar2'}, {foo3: 'bar3'}, {foo4: 'bar4'}],
+        channel.getNonAckedMaps().map(queuedMap => queuedMap.map));
+  },
+
+  /** @suppress {visibility} Accessing private properties. */
+  testGetNonAckedMapsAfterChannelClose_returnsUnionOfPendingAndUnsentMaps() {
+    connect();
+
+    // First send one message and respond with server ack.
+    sendMap('foo1', 'bar1');
+    responseDone();
+
+    // Send 3 more messages which are non-acked.
+    sendMap('foo2', 'bar2');
+    sendMap('foo3', 'bar3');
+    sendMap('foo4', 'bar4');
+
+    // Verifies that we're indeed covering the case where 1 message is pending
+    // server ack and 2 message has not been sent to the network.
+    assertEquals(
+        1, channel.forwardChannelRequestPool_.getPendingMessages().length);
+    assertEquals(2, channel.outgoingMaps_.length);
+
+    disconnect();
+
+    assertObjectEquals(
+        [{foo2: 'bar2'}, {foo3: 'bar3'}, {foo4: 'bar4'}],
+        channel.getNonAckedMaps().map(queuedMap => queuedMap.map));
+  },
+
+  /** @suppress {visibility} Accessing private properties. */
   testResponseNoBackchannelPostNotBeforeBackchannel() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1136,6 +1242,7 @@ testSuite({
     assertNotEquals(Stat.BACKCHANNEL_MISSING, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseNoBackchannel() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1150,27 +1257,33 @@ testSuite({
     assertEquals(Stat.BACKCHANNEL_MISSING, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseNoBackchannelWithNoBackchannel() {
     connect(8);
     sendMap('foo1', 'bar1');
     assertNull(channel.backChannelTimerId_);
     channel.backChannelRequest_.cancel();
+    /** @suppress {visibility} Accessing private properties. */
     channel.backChannelRequest_ = null;
     responseNoBackchannel();
     assertEquals(Stat.BACKCHANNEL_MISSING, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseNoBackchannelWithStartTimer() {
     connect(8);
     sendMap('foo1', 'bar1');
 
     channel.backChannelRequest_.cancel();
+    /** @suppress {visibility} Accessing private properties. */
     channel.backChannelRequest_ = null;
+    /** @suppress {visibility} Accessing private properties. */
     channel.backChannelTimerId_ = 123;
     responseNoBackchannel();
     assertNotEquals(Stat.BACKCHANNEL_MISSING, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseWithNoArraySent() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1183,6 +1296,7 @@ testSuite({
     assertEquals(-1, channel.lastPostResponseArrayId_);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseWithArraysMissing() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1197,6 +1311,7 @@ testSuite({
     assertEquals(Stat.BACKCHANNEL_DEAD, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testMultipleResponsesWithArraysMissing() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1215,6 +1330,7 @@ testSuite({
     assertEquals(Stat.BACKCHANNEL_DEAD, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testOnlyRetryOnceBasedOnResponse() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1236,6 +1352,7 @@ testSuite({
     assertFalse(hasDeadBackChannelTimer());
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseWithArraysMissingAndLiveChannel() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1254,6 +1371,7 @@ testSuite({
     assertNotEquals(Stat.BACKCHANNEL_DEAD, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseWithBigOutstandingData() {
     connect(8);
     sendMap('foo1', 'bar1');
@@ -1269,9 +1387,11 @@ testSuite({
     assertNotEquals(Stat.BACKCHANNEL_DEAD, lastStatEvent);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testResponseInBufferedMode() {
     connect(8);
-    channel.useChunked_ = false;
+    /** @suppress {visibility} Accessing private properties. */
+    channel.enableStreaming_ = false;
     sendMap('foo1', 'bar1');
     assertEquals(-1, channel.lastPostResponseArrayId_);
     response(7, 111);
@@ -1302,11 +1422,12 @@ testSuite({
     sendMap('foo1', 'bar1');
     channel.onRequestData(
         getSingleForwardRequest(),
-        'foo=<script>evil()\<\/script>&' +
-            'bar=<script>moreEvil()\<\/script>');
+        'foo=<script>evil()<\/script>&' +
+            'bar=<script>moreEvil()<\/script>');
     assertEquals(WebChannelBase.State.CLOSED, channel.getState());
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testPathAbsolute() {
     connect(8, undefined, '/talkgadget');
     assertEquals(channel.backChannelUri_.getDomain(), window.location.hostname);
@@ -1314,6 +1435,7 @@ testSuite({
         channel.forwardChannelUri_.getDomain(), window.location.hostname);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testPathRelative() {
     connect(8, undefined, 'talkgadget');
     assertEquals(channel.backChannelUri_.getDomain(), window.location.hostname);
@@ -1321,6 +1443,7 @@ testSuite({
         channel.forwardChannelUri_.getDomain(), window.location.hostname);
   },
 
+  /** @suppress {visibility} Accessing private properties. */
   testPathWithHost() {
     connect(8, undefined, 'https://example.com');
     assertEquals(channel.backChannelUri_.getScheme(), 'https');

@@ -32,6 +32,9 @@ TransformOperation::OperationType GetTypeForScale(double x,
   // Note: purely due to ordering, we will convert scale(1, 1, 1) to kScaleX.
   // This is fine; they are equivalent.
 
+  if (z != 1 & y == 1 & x == 1)
+    return TransformOperation::kScaleZ;
+
   if (z != 1)
     return TransformOperation::kScale3D;
 
@@ -46,7 +49,7 @@ TransformOperation::OperationType GetTypeForScale(double x,
 }
 }  // namespace
 
-scoped_refptr<TransformOperation> ScaleTransformOperation::Accumulate(
+TransformOperation* ScaleTransformOperation::Accumulate(
     const TransformOperation& other) {
   DCHECK(other.CanBlendWith(*this));
   const auto& other_op = To<ScaleTransformOperation>(other);
@@ -55,20 +58,33 @@ scoped_refptr<TransformOperation> ScaleTransformOperation::Accumulate(
   double new_x = x_ + other_op.x_ - 1;
   double new_y = y_ + other_op.y_ - 1;
   double new_z = z_ + other_op.z_ - 1;
-  return ScaleTransformOperation::Create(new_x, new_y, new_z,
-                                         GetTypeForScale(new_x, new_y, new_z));
+  return MakeGarbageCollected<ScaleTransformOperation>(
+      new_x, new_y, new_z, GetTypeForScale(new_x, new_y, new_z));
 }
 
-scoped_refptr<TransformOperation> ScaleTransformOperation::Blend(
+TransformOperation* ScaleTransformOperation::AccumulateN(
+    const TransformOperation& other,
+    int n) {
+  DCHECK(other.CanBlendWith(*this));
+  const auto& other_op = To<ScaleTransformOperation>(other);
+  double new_x = x_ + n * (other_op.x_ - 1);
+  double new_y = y_ + n * (other_op.y_ - 1);
+  double new_z = z_ + n * (other_op.z_ - 1);
+  return MakeGarbageCollected<ScaleTransformOperation>(
+      new_x, new_y, new_z, GetTypeForScale(new_x, new_y, new_z));
+}
+
+TransformOperation* ScaleTransformOperation::Blend(
     const TransformOperation* from,
     double progress,
     bool blend_to_identity) {
   DCHECK(!from || CanBlendWith(*from));
 
-  if (blend_to_identity)
-    return ScaleTransformOperation::Create(
+  if (blend_to_identity) {
+    return MakeGarbageCollected<ScaleTransformOperation>(
         blink::Blend(x_, 1.0, progress), blink::Blend(y_, 1.0, progress),
         blink::Blend(z_, 1.0, progress), type_);
+  }
 
   const ScaleTransformOperation* from_op =
       static_cast<const ScaleTransformOperation*>(from);
@@ -76,10 +92,31 @@ scoped_refptr<TransformOperation> ScaleTransformOperation::Blend(
   double from_y = from_op ? from_op->y_ : 1.0;
   double from_z = from_op ? from_op->z_ : 1.0;
 
-  bool is_3d = Is3DOperation() || (from && from->Is3DOperation());
-  return ScaleTransformOperation::Create(
+  TransformOperation::OperationType type;
+
+  CommonPrimitiveForInterpolation(from, type);
+
+  return MakeGarbageCollected<ScaleTransformOperation>(
       blink::Blend(from_x, x_, progress), blink::Blend(from_y, y_, progress),
-      blink::Blend(from_z, z_, progress), is_3d ? kScale3D : kScale);
+      blink::Blend(from_z, z_, progress), type);
+}
+
+void ScaleTransformOperation::CommonPrimitiveForInterpolation(
+    const TransformOperation* from,
+    TransformOperation::OperationType& common_type) const {
+  bool is_3d = Is3DOperation() || (from && from->Is3DOperation());
+  const ScaleTransformOperation* from_op =
+      static_cast<const ScaleTransformOperation*>(from);
+  TransformOperation::OperationType from_type =
+      from_op ? from_op->type_ : type_;
+
+  if (type_ == from_type) {
+    common_type = type_;
+  } else if (is_3d) {
+    common_type = kScale3D;
+  } else {
+    common_type = kScale;
+  }
 }
 
 }  // namespace blink

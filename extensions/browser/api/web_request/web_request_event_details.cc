@@ -1,32 +1,42 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/web_request/web_request_event_details.h"
 
+#include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/common/child_process_host.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/web_request/upload_data_presenter.h"
 #include "extensions/browser/api/web_request/web_request_api_constants.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
 #include "extensions/browser/api/web_request/web_request_permissions.h"
-#include "extensions/browser/api/web_request/web_request_resource_type.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "net/base/auth.h"
 #include "net/base/upload_data_stream.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extension_web_request_api_helpers::ExtraInfoSpec;
 
@@ -38,11 +48,61 @@ namespace {
 
 // Removes all headers for which predicate(header_name) returns true.
 void EraseHeadersIf(
-    base::Value* headers,
+    base::ListValue& headers,
     base::RepeatingCallback<bool(const std::string&)> predicate) {
-  headers->EraseListValueIf([&predicate](const base::Value& v) {
-    return predicate.Run(v.FindKey(keys::kHeaderNameKey)->GetString());
+  headers.EraseIf([&predicate](const base::Value& v) {
+    return predicate.Run(*v.GetDict().FindString(keys::kHeaderNameKey));
   });
+}
+
+// NOTE: Keep in sync with `filterSecurityInfo()` in
+// //extensions/renderer/resources/web_request_event.js.
+void FilterSecurityInfo(base::DictValue& result, int extra_info_spec) {
+  if (!(extra_info_spec & ExtraInfoSpec::SECURITY_INFO)) {
+    result.Remove(keys::kSecurityInfoKey);
+    return;
+  }
+  if (!(extra_info_spec & ExtraInfoSpec::SECURITY_INFO_RAW_DER)) {
+    auto* security_info = result.FindDict(keys::kSecurityInfoKey);
+    if (!security_info) {
+      return;
+    }
+    auto* certificates = security_info->FindList(keys::kCertificatesKey);
+    if (!certificates || certificates->size() <= 0) {
+      return;
+    }
+    if (certificates->front().is_dict()) {
+      certificates->front().GetDict().Remove(keys::kRawDerKey);
+    }
+  }
+}
+
+std::string StringifyCertificateFingerprintBytes(
+    base::span<uint8_t, 32> bytes) {
+  // Reserve memory for 32 bytes * 3 chars - 1 = 95.
+  std::string fingerprint_str;
+  fingerprint_str.reserve(95);
+
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    if (i > 0) {
+      fingerprint_str.push_back(':');
+    }
+    // %02X ensures uppercase hex with leading zero padding
+    base::StringAppendF(&fingerprint_str, "%02X", bytes[i]);
+  }
+
+  return fingerprint_str;
+}
+
+// The status line's reason phrase consists of arbitrary bytes sent by the
+// server, so it isn't guaranteed to be valid UTF-8. base::Value requires valid
+// UTF-8 strings, and `statusLine` is exposed to extensions as a string, so
+// replace any invalid sequences with U+FFFD.
+std::string SanitizeStatusLine(std::string status_line) {
+  if (base::IsStringUTF8AllowingNoncharacters(status_line)) {
+    return status_line;
+  }
+  return base::UTF16ToUTF8(base::UTF8ToUTF16(status_line));
 }
 
 }  // namespace
@@ -51,49 +111,72 @@ WebRequestEventDetails::WebRequestEventDetails(const WebRequestInfo& request,
                                                int extra_info_spec)
     : extra_info_spec_(extra_info_spec),
       render_process_id_(content::ChildProcessHost::kInvalidUniqueID) {
-  dict_.SetString(keys::kMethodKey, request.method);
-  dict_.SetString(keys::kRequestIdKey, base::NumberToString(request.id));
-  dict_.SetDouble(keys::kTimeStampKey, base::Time::Now().ToDoubleT() * 1000);
-  dict_.SetString(keys::kTypeKey,
-                  WebRequestResourceTypeToString(request.web_request_type));
-  dict_.SetString(keys::kUrlKey, request.url.spec());
-  dict_.SetInteger(keys::kTabIdKey, request.frame_data.tab_id);
-  dict_.SetInteger(keys::kFrameIdKey, request.frame_data.frame_id);
-  dict_.SetInteger(keys::kParentFrameIdKey, request.frame_data.parent_frame_id);
+  dict_.Set(keys::kMethodKey, request.method);
+  dict_.Set(keys::kRequestIdKey, base::NumberToString(request.id));
+  dict_.Set(keys::kTimeStampKey,
+            base::Time::Now().InMillisecondsFSinceUnixEpoch());
+  dict_.Set(keys::kTypeKey,
+            WebRequestResourceTypeToString(request.web_request_type));
+  dict_.Set(keys::kUrlKey, request.url.spec());
+  dict_.Set(keys::kTabIdKey, request.frame_data.tab_id);
+  dict_.Set(keys::kFrameIdKey, request.frame_data.frame_id);
+  dict_.Set(keys::kParentFrameIdKey, request.frame_data.parent_frame_id);
+  if (request.frame_data.document_id) {
+    dict_.Set(keys::kDocumentIdKey, request.frame_data.document_id.ToString());
+  }
+  if (request.frame_data.parent_document_id) {
+    dict_.Set(keys::kParentDocumentIdKey,
+              request.frame_data.parent_document_id.ToString());
+  }
+  if (request.frame_data.frame_id >= 0) {
+    dict_.Set(keys::kFrameTypeKey, ToString(request.frame_data.frame_type));
+    dict_.Set(keys::kDocumentLifecycleKey,
+              ToString(request.frame_data.document_lifecycle));
+  }
   initiator_ = request.initiator;
-  render_process_id_ = request.render_process_id;
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
+  render_process_id_ = request.global_id.child_id.GetUnsafeValue();
 }
 
 WebRequestEventDetails::~WebRequestEventDetails() = default;
 
 void WebRequestEventDetails::SetRequestBody(WebRequestInfo* request) {
-  if (!(extra_info_spec_ & ExtraInfoSpec::REQUEST_BODY))
+  if (!(extra_info_spec_ & ExtraInfoSpec::REQUEST_BODY)) {
     return;
-  request_body_ = std::move(request->request_body_data);
+  }
+  request_body_ = std::nullopt;
+  if (request->request_body_data) {
+    request_body_ = std::move(request->request_body_data);
+    request->request_body_data.reset();
+  }
 }
 
 void WebRequestEventDetails::SetRequestHeaders(
     const net::HttpRequestHeaders& request_headers) {
-  if (!(extra_info_spec_ & ExtraInfoSpec::REQUEST_HEADERS))
+  if (!(extra_info_spec_ & ExtraInfoSpec::REQUEST_HEADERS)) {
     return;
+  }
 
-  base::ListValue* headers = new base::ListValue();
-  for (net::HttpRequestHeaders::Iterator it(request_headers); it.GetNext();)
-    headers->Append(helpers::CreateHeaderDictionary(it.name(), it.value()));
-  request_headers_.reset(headers);
+  request_headers_ = base::ListValue();
+  for (net::HttpRequestHeaders::Iterator it(request_headers); it.GetNext();) {
+    request_headers_->Append(
+        helpers::CreateHeaderDictionary(it.name(), it.value()));
+  }
 }
 
 void WebRequestEventDetails::SetAuthInfo(
     const net::AuthChallengeInfo& auth_info) {
-  dict_.SetBoolean(keys::kIsProxyKey, auth_info.is_proxy);
-  if (!auth_info.scheme.empty())
-    dict_.SetString(keys::kSchemeKey, auth_info.scheme);
-  if (!auth_info.realm.empty())
-    dict_.SetString(keys::kRealmKey, auth_info.realm);
-  base::Value challenger(base::Value::Type::DICTIONARY);
-  challenger.SetStringKey(keys::kHostKey, auth_info.challenger.host());
-  challenger.SetIntKey(keys::kPortKey, auth_info.challenger.port());
-  dict_.SetKey(keys::kChallengerKey, std::move(challenger));
+  dict_.Set(keys::kIsProxyKey, auth_info.is_proxy);
+  if (!auth_info.scheme.empty()) {
+    dict_.Set(keys::kSchemeKey, auth_info.scheme);
+  }
+  if (!auth_info.realm.empty()) {
+    dict_.Set(keys::kRealmKey, auth_info.realm);
+  }
+  base::DictValue challenger;
+  challenger.Set(keys::kHostKey, auth_info.challenger.host());
+  challenger.Set(keys::kPortKey, auth_info.challenger.port());
+  dict_.Set(keys::kChallengerKey, std::move(challenger));
 }
 
 void WebRequestEventDetails::SetResponseHeaders(
@@ -102,15 +185,16 @@ void WebRequestEventDetails::SetResponseHeaders(
   if (!response_headers) {
     // Not all URLRequestJobs specify response headers. E.g. URLRequestFTPJob,
     // URLRequestFileJob and some redirects.
-    dict_.SetInteger(keys::kStatusCodeKey, request.response_code);
-    dict_.SetString(keys::kStatusLineKey, "");
+    dict_.Set(keys::kStatusCodeKey, request.response_code);
+    dict_.Set(keys::kStatusLineKey, "");
   } else {
-    dict_.SetInteger(keys::kStatusCodeKey, response_headers->response_code());
-    dict_.SetString(keys::kStatusLineKey, response_headers->GetStatusLine());
+    dict_.Set(keys::kStatusCodeKey, response_headers->response_code());
+    dict_.Set(keys::kStatusLineKey,
+              SanitizeStatusLine(response_headers->GetStatusLine()));
   }
 
   if (extra_info_spec_ & ExtraInfoSpec::RESPONSE_HEADERS) {
-    base::ListValue* headers = new base::ListValue();
+    response_headers_ = base::ListValue();
     if (response_headers) {
       size_t iter = 0;
       std::string name;
@@ -120,96 +204,108 @@ void WebRequestEventDetails::SetResponseHeaders(
                                                                  name)) {
           continue;
         }
-        headers->Append(helpers::CreateHeaderDictionary(name, value));
+        response_headers_->Append(helpers::CreateHeaderDictionary(name, value));
       }
     }
-    response_headers_.reset(headers);
   }
 }
 
-void WebRequestEventDetails::SetResponseSource(const WebRequestInfo& request) {
-  dict_.SetBoolean(keys::kFromCache, request.response_from_cache);
-  if (!request.response_ip.empty())
-    dict_.SetString(keys::kIpKey, request.response_ip);
+void WebRequestEventDetails::SetSecurityInfo(const WebRequestInfo& request) {
+  if (!(extra_info_spec_ & ExtraInfoSpec::SECURITY_INFO)) {
+    return;
+  }
+
+  base::DictValue security_info;
+
+  if (!request.ssl_info || !request.ssl_info->cert) {
+    security_info.Set(keys::kStateKey, "insecure");
+  } else {
+    if (net::IsCertStatusError(request.ssl_info->cert_status)) {
+      security_info.Set(keys::kStateKey, "broken");
+    } else {
+      security_info.Set(keys::kStateKey, "secure");
+    }
+
+    base::DictValue leaf_cert;
+    if (extra_info_spec_ & ExtraInfoSpec::SECURITY_INFO_RAW_DER) {
+      base::span<const uint8_t> cert_span = request.ssl_info->cert->cert_span();
+      leaf_cert.Set(keys::kRawDerKey, base::Value::BlobStorage(
+                                          cert_span.begin(), cert_span.end()));
+    }
+
+    base::DictValue fingerprint;
+    std::array<uint8_t, 32> sha256_bytes =
+        net::X509Certificate::CalculateFingerprint256(
+            request.ssl_info->cert->cert_buffer());
+    fingerprint.Set(keys::kSha256Key,
+                    StringifyCertificateFingerprintBytes(sha256_bytes));
+
+    leaf_cert.Set(keys::kFingerprintKey, std::move(fingerprint));
+
+    base::ListValue certificates;
+    certificates.Append(std::move(leaf_cert));
+
+    security_info.Set(keys::kCertificatesKey, std::move(certificates));
+  }
+
+  dict_.Set(keys::kSecurityInfoKey, std::move(security_info));
 }
 
-std::unique_ptr<base::DictionaryValue> WebRequestEventDetails::GetFilteredDict(
+void WebRequestEventDetails::SetResponseSource(const WebRequestInfo& request) {
+  dict_.Set(keys::kFromCache, request.response_from_cache);
+  if (!request.response_ip.empty()) {
+    dict_.Set(keys::kIpKey, request.response_ip);
+  }
+}
+
+// NOTE: Keep in sync with `getFilteredDetails()` in
+// //extensions/renderer/resources/web_request_event.js.
+base::DictValue WebRequestEventDetails::GetFilteredDict(
     int extra_info_spec,
     PermissionHelper* permission_helper,
     const extensions::ExtensionId& extension_id,
     bool crosses_incognito) const {
-  std::unique_ptr<base::DictionaryValue> result = dict_.CreateDeepCopy();
+  base::DictValue result = dict_.Clone();
   if ((extra_info_spec & ExtraInfoSpec::REQUEST_BODY) && request_body_) {
-    result->SetKey(keys::kRequestBodyKey, request_body_->Clone());
+    result.Set(keys::kRequestBodyKey, request_body_->Clone());
   }
   if ((extra_info_spec & ExtraInfoSpec::REQUEST_HEADERS) && request_headers_) {
     content::RenderProcessHost* process =
         content::RenderProcessHost::FromID(render_process_id_);
     content::BrowserContext* browser_context =
         process ? process->GetBrowserContext() : nullptr;
-    base::Value request_headers = request_headers_->Clone();
-    EraseHeadersIf(&request_headers,
+    base::ListValue request_headers = request_headers_->Clone();
+    EraseHeadersIf(request_headers,
                    base::BindRepeating(helpers::ShouldHideRequestHeader,
                                        browser_context, extra_info_spec));
-    result->SetKey(keys::kRequestHeadersKey, std::move(request_headers));
+    result.Set(keys::kRequestHeadersKey, std::move(request_headers));
   }
   if ((extra_info_spec & ExtraInfoSpec::RESPONSE_HEADERS) &&
       response_headers_) {
-    base::Value response_headers = response_headers_->Clone();
-    EraseHeadersIf(&response_headers,
+    base::ListValue response_headers = response_headers_->Clone();
+    EraseHeadersIf(response_headers,
                    base::BindRepeating(helpers::ShouldHideResponseHeader,
                                        extra_info_spec));
-    result->SetKey(keys::kResponseHeadersKey, std::move(response_headers));
+    result.Set(keys::kResponseHeadersKey, std::move(response_headers));
   }
+
+  FilterSecurityInfo(result, extra_info_spec);
 
   // Only listeners with a permission for the initiator should receive it.
   if (initiator_) {
-    int tab_id = -1;
-    dict_.GetInteger(keys::kTabIdKey, &tab_id);
+    int tab_id = dict_.FindInt(keys::kTabIdKey).value_or(-1);
     if (initiator_->opaque() ||
         WebRequestPermissions::CanExtensionAccessInitiator(
             permission_helper, extension_id, initiator_, tab_id,
             crosses_incognito)) {
-      result->SetString(keys::kInitiatorKey, initiator_->Serialize());
+      result.Set(keys::kInitiatorKey, initiator_->Serialize());
     }
   }
   return result;
 }
 
-std::unique_ptr<base::DictionaryValue>
-WebRequestEventDetails::GetAndClearDict() {
-  std::unique_ptr<base::DictionaryValue> result(new base::DictionaryValue);
-  dict_.Swap(result.get());
-  return result;
+base::DictValue WebRequestEventDetails::GetAndClearDict() {
+  return std::move(dict_);
 }
-
-std::unique_ptr<WebRequestEventDetails>
-WebRequestEventDetails::CreatePublicSessionCopy() {
-  std::unique_ptr<WebRequestEventDetails> copy(new WebRequestEventDetails);
-  copy->initiator_ = initiator_;
-  copy->render_process_id_ = render_process_id_;
-
-  static const char* const kSafeAttributes[] = {
-    "method", "requestId", "timeStamp", "type", "tabId", "frameId",
-    "parentFrameId", "fromCache", "error", "ip", "statusLine", "statusCode"
-  };
-
-  for (const char* safe_attr : kSafeAttributes) {
-    base::Value* val = dict_.FindKey(safe_attr);
-    if (val)
-      copy->dict_.SetKey(safe_attr, val->Clone());
-  }
-
-  // URL is stripped down to the origin.
-  std::string url;
-  dict_.GetString(keys::kUrlKey, &url);
-  GURL gurl(url);
-  copy->dict_.SetString(keys::kUrlKey, gurl.GetOrigin().spec());
-
-  return copy;
-}
-
-WebRequestEventDetails::WebRequestEventDetails()
-    : extra_info_spec_(0), render_process_id_(0) {}
 
 }  // namespace extensions

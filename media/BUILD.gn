@@ -1,51 +1,92 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//build/buildflag_header.gni")
 import("//build/config/android/config.gni")
 import("//build/config/arm.gni")
+import("//build/config/cast.gni")
 import("//build/config/features.gni")
 import("//build/config/linux/pkg_config.gni")
 import("//build/config/ui.gni")
-import("//media/cdm/library_cdm/cdm_paths.gni")
+import("//media/gpu/args.gni")
 import("//media/media_options.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
 import("//third_party/ffmpeg/ffmpeg_options.gni")
 
+if (enable_library_cdms) {
+  import("//media/cdm/library_cdm/cdm_paths.gni")
+}
+
+if (is_ios) {
+  import("//build/config/ios/bundle_data_from_filelist.gni")
+}
+
 buildflag_header("media_buildflags") {
   header = "media_buildflags.h"
 
   flags = [
+    "ENABLE_OOP_VIDEO_DECODER=$enable_oop_video_decoder",
     "ALTERNATE_CDM_STORAGE_ID_KEY=\"$alternate_cdm_storage_id_key\"",
-    "CDM_PLATFORM_SPECIFIC_PATH=\"$cdm_platform_specific_path\"",
+    "CHROME_WIDE_ECHO_CANCELLATION=$chrome_wide_echo_cancellation_supported",
+    "SYSTEM_LOOPBACK_AS_AEC_REFERENCE=$system_loopback_as_aec_reference_supported",
     "ENABLE_PLATFORM_AC3_EAC3_AUDIO=$enable_platform_ac3_eac3_audio",
-    "ENABLE_CDM_HOST_VERIFICATION=$enable_cdm_host_verification",
-    "ENABLE_CDM_STORAGE_ID=$enable_cdm_storage_id",
+    "ENABLE_PLATFORM_AC4_AUDIO=$enable_platform_ac4_audio",
     "ENABLE_DAV1D_DECODER=$enable_dav1d_decoder",
+    "ENABLE_DAV2D_DECODER=$enable_dav2d_decoder",
     "ENABLE_AV1_DECODER=$enable_av1_decoder",
     "ENABLE_PLATFORM_DOLBY_VISION=$enable_platform_dolby_vision",
+    "ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION=$enable_platform_encrypted_dolby_vision",
     "ENABLE_FFMPEG=$media_use_ffmpeg",
     "ENABLE_FFMPEG_VIDEO_DECODERS=$enable_ffmpeg_video_decoders",
     "ENABLE_PLATFORM_HEVC=$enable_platform_hevc",
-    "ENABLE_PLATFORM_ENCRYPTED_HEVC=$enable_platform_encrypted_hevc",
-    "ENABLE_HLS_SAMPLE_AES=$enable_hls_sample_aes",
-    "ENABLE_LIBGAV1_DECODER=$enable_libgav1_decoder",
+    "ENABLE_HEVC_PARSER_AND_HW_DECODER=$enable_hevc_parser_and_hw_decoder",
+    "ENABLE_HLS_DEMUXER=$enable_hls_demuxer",
+    "ENABLE_LIBAOM=$enable_libaom",
     "ENABLE_LIBRARY_CDMS=$enable_library_cdms",
     "ENABLE_LIBVPX=$media_use_libvpx",
     "ENABLE_LOGGING_OVERRIDE=$enable_logging_override",
+    "ENABLE_CDM_PROVISION_FETCHER=$enable_cdm_provision_fetcher",
     "ENABLE_MEDIA_DRM_STORAGE=$enable_media_drm_storage",
     "ENABLE_MEDIA_REMOTING=$enable_media_remoting",
     "ENABLE_MEDIA_REMOTING_RPC=$enable_media_remoting_rpc",
+    "ENABLE_MEDIA_REMOTING_REDIRECTION=$enable_media_remoting_redirection",
     "ENABLE_OPENH264=$media_use_openh264",
+    "ENABLE_RUST_OPENH264=$media_use_rust_openh264",
+    "ENABLE_PASSTHROUGH_AUDIO_CODECS=$enable_passthrough_audio_codecs",
+    "ENABLE_PLATFORM_DTS_AUDIO=$enable_platform_dts_audio",
+    "ENABLE_IAMF_TOOLS=$media_use_iamf_tools",
+    "ENABLE_PLATFORM_IAMF_AUDIO=$enable_platform_iamf_audio",
     "ENABLE_PLATFORM_MPEG_H_AUDIO=$enable_platform_mpeg_h_audio",
     "ENABLE_MSE_MPEG2TS_STREAM_PARSER=$enable_mse_mpeg2ts_stream_parser",
-    "ENABLE_CAST_STREAMING_RENDERER=$enable_cast_streaming_renderer",
-    "USE_CHROMEOS_MEDIA_ACCELERATION=$use_vaapi||$use_v4l2_codec",
+    "ENABLE_SYMPHONIA_AUDIO_DECODER=$media_use_symphonia_decoder",
+    "ENABLE_SYMPHONIA_DEMUXER=$media_use_symphonia_demuxer",
+    "ENABLE_SYMPHONIA=$media_use_symphonia_decoder",
+    "PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT=$platform_has_optional_hevc_decode_support",
+    "PLATFORM_HAS_OPTIONAL_HEVC_ENCODE_SUPPORT=$platform_has_optional_hevc_encode_support",
+    "USE_ARC_PROTECTED_MEDIA=$use_arc_protected_media",
+    "USE_CHROMEOS_PROTECTED_AV1=$use_chromeos_protected_av1",
     "USE_CHROMEOS_PROTECTED_MEDIA=$use_chromeos_protected_media",
+    "USE_CRAS=$use_cras",
     "USE_PROPRIETARY_CODECS=$proprietary_codecs",
+    "ENABLE_GPU_CHANNEL_MEDIA_CAPTURE=$enable_gpu_channel_media_capture",
+    "USE_OPENSLES=$media_use_opensles",
   ]
+
+  if (use_linux_video_acceleration) {
+    flags += [ "USE_LINUX_VIDEO_ACCELERATION=true" ]
+  } else {
+    flags += [ "USE_LINUX_VIDEO_ACCELERATION=false" ]
+  }
+
+  if (enable_library_cdms) {
+    flags += [
+      "CDM_PLATFORM_SPECIFIC_PATH=\"$cdm_platform_specific_path\"",
+      "ENABLE_CDM_HOST_VERIFICATION=$enable_cdm_host_verification",
+      "ENABLE_CDM_STORAGE_ID=$enable_cdm_storage_id",
+    ]
+  }
 }
 
 if (proprietary_codecs && media_use_ffmpeg) {
@@ -55,11 +96,11 @@ if (proprietary_codecs && media_use_ffmpeg) {
 }
 
 # Common configuration for targets in the media directory; these must not be
-# exported since things like USE_NEON and USE_CRAS have different meanings
-# elsewhere in the code base.
+# exported since things like USE_NEON have different meanings elsewhere in the
+# code base.
 config("media_config") {
   defines = []
-  if (current_cpu == "arm64" || (current_cpu == "arm" && arm_use_neon)) {
+  if (current_cpu == "arm64" || current_cpu == "arm") {
     defines += [ "USE_NEON" ]
   }
   if (use_pulseaudio) {
@@ -67,9 +108,6 @@ config("media_config") {
     if (!link_pulseaudio) {
       defines += [ "DLOPEN_PULSEAUDIO" ]
     }
-  }
-  if (use_cras) {
-    defines += [ "USE_CRAS" ]
   }
 }
 
@@ -84,14 +122,11 @@ config("media_config") {
 #
 config("subcomponent_config") {
   visibility = media_subcomponent_deps
-  if (is_mac) {
+  if (is_apple) {
     visibility += [ "//media/base/mac" ]
   }
   defines = [ "IS_MEDIA_IMPL" ]
-  configs = [
-    ":media_config",
-    "//build/config/compiler:wexit_time_destructors",
-  ]
+  configs = [ ":media_config" ]
 }
 
 component("media") {
@@ -100,16 +135,14 @@ component("media") {
   deps = [
     "//base",
     "//base:i18n",
-    "//base/third_party/dynamic_annotations",
     "//cc/paint",
-    "//crypto:platform",
     "//gpu/command_buffer/client:gles2_interface",
     "//gpu/command_buffer/common",
     "//third_party/libyuv",
     "//ui/events:events_base",
     "//ui/gfx",
     "//ui/gfx/geometry",
-    "//ui/gl:gl",
+    "//ui/gl",
     "//url",
   ]
 
@@ -117,18 +150,14 @@ component("media") {
   public_deps = media_subcomponent_deps
   public_deps += [
     ":media_buildflags",
-    ":shared_memory_support",
     "//ui/gfx:color_space",
   ]
 
   # This must be included here since it actually depends on //media/base.
-  if (is_apple) {
+  if (is_mac || (use_blink && is_ios)) {
     public_deps += [ "//media/base/mac" ]
   }
 
-  if (use_x11) {
-    deps += [ "//ui/base/x" ]
-  }
   if (use_ozone) {
     deps += [ "//ui/ozone" ]
   }
@@ -141,12 +170,25 @@ source_set("test_support") {
     ":media",
     "//media/audio:test_support",
     "//media/base:test_support",
-    "//media/base/android:test_support",
     "//media/filters:test_support",
     "//media/formats:test_support",
-    "//media/renderers:test_support",
+    "//media/gfx:test_support",
+    "//media/mojo/services:test_support",
+    "//media/parsers:test_support",
     "//media/video:test_support",
   ]
+
+  if (is_android) {
+    # TODO(crbug.com/41237623): These files should not be in //media/base.
+    public_deps += [ "//media/base/android:test_support" ]
+  }
+}
+
+if (is_ios) {
+  bundle_data_from_filelist("unit_tests_bundle_data") {
+    testonly = true
+    filelist_name = "unit_tests_bundle_data.filelist"
+  }
 }
 
 # Contains tests for all targets in the "media" folder.
@@ -154,17 +196,21 @@ source_set("test_support") {
 test("media_unittests") {
   use_xvfb = use_xvfb_in_this_config
 
+  fuzztests = [ "ContainerNamesTest.DetermineContainerDoesNotCrash" ]
+  if (use_av1_hw_decoder && media_use_ffmpeg) {
+    fuzztests += [ "AV1DecoderFuzz.DecodeDoesNotCrash" ]
+  }
+
   deps = [
     "//media/audio:unit_tests",
     "//media/base:unit_tests",
     "//media/capabilities:unit_tests",
-    "//media/cast/receiver:unit_tests",
     "//media/cdm:unit_tests",
     "//media/device_monitors:unit_tests",
     "//media/filters:unit_tests",
     "//media/formats:unit_tests",
+    "//media/gfx:unit_tests",
     "//media/gpu:unit_tests",
-    "//media/learning:unit_tests",
     "//media/mojo:unit_tests",
     "//media/muxers:unit_tests",
     "//media/parsers:unit_tests",
@@ -178,9 +224,14 @@ test("media_unittests") {
   data = [
     "test/data/",
     "formats/mp4/h264_annex_b_fuzz_corpus/",
+    "formats/mp4/h265_annex_b_fuzz_corpus/",
   ]
 
   data_deps = [ "//testing/buildbot/filters:media_unittests_filters" ]
+
+  if (is_android && enable_chrome_android_internal) {
+    data_deps += [ "//clank/build/bot/filters:media_unittests_filters" ]
+  }
 
   if (media_use_ffmpeg) {
     deps += [ "//media/ffmpeg:unit_tests" ]
@@ -199,21 +250,22 @@ test("media_unittests") {
   }
 
   if (is_fuchsia) {
-    deps += [
-      "//media/fuchsia/audio:unittests",
-      "//media/fuchsia/cdm/service:unittests",
-    ]
+    deps += [ "//media/fuchsia/video:unittests" ]
+
+    # PaintCanvasVideoRendererWithGLTest.* uses SwiftShader, which generates
+    # machine code.
+    test_runner_shard = "//build/config/fuchsia/test/elf_test_ambient_exec_runner.shard.test-cml"
 
     additional_manifest_fragments = [
-      "//build/config/fuchsia/test/audio_capabilities.test-cmx",
-
-      # TODO(crbug.com/1185811): Figure out why
-      # PaintCanvasVideoRendererWithGLTest.CopyVideoFrameYUVDataToGLTexture
-      # crashes without "deprecated-ambient-replace-as-executable".
-      "//build/config/fuchsia/test/jit_capabilities.test-cmx",
-
-      "//build/config/fuchsia/test/vulkan_capabilities.test-cmx",
+      "//build/config/fuchsia/test/audio_output.shard.test-cml",
+      "//build/config/fuchsia/test/mark_vmo_executable.shard.test-cml",
+      "//build/config/fuchsia/test/platform_video_codecs.shard.test-cml",
+      "//third_party/fuchsia-sdk/sdk/pkg/vulkan/client.shard.cml",
     ]
+
+    if (enable_library_cdms) {
+      excluded_files = [ "lib.unstripped/libclearkeycdm.so" ]
+    }
   }
 
   if (enable_media_remoting) {
@@ -222,6 +274,12 @@ test("media_unittests") {
 
   # The test needs OPUS_FIXED_POINT conditional define.
   configs += [ "//third_party/opus:opus_config" ]
+
+  if (is_ios) {
+    deps += [ ":unit_tests_bundle_data" ]
+    bundle_deps =
+        [ "//testing/buildbot/filters:media_unittests_filters_bundle_data" ]
+  }
 }
 
 test("media_perftests") {
@@ -232,6 +290,7 @@ test("media_perftests") {
     "//media/base:perftests",
     "//media/filters:perftests",
     "//media/test:pipeline_integration_perftests",
+    "//media/webrtc:perftests",
     "//testing/gmock",
     "//testing/gtest",
     "//testing/perf",
@@ -252,75 +311,11 @@ test("media_perftests") {
     # Needed for isolate script to execute.
     "//testing:run_perf_test",
   ]
-}
 
-# The audio subset of media_unittests. This target exists for running only the
-# audio tests on the GPU bots (which have audio hardware).
-test("audio_unittests") {
-  deps = [
-    ":test_support",
-    "//base/test:test_support",
-    "//media/audio:unit_tests",
-    "//media/test:run_all_unittests",
-  ]
-  if (is_android) {
-    deps += [
-      # The test needs the java dependencies to add the java classes for their
-      # native counterparts to the test apk.
-      "//media/base/android:media_java",
-      "//ui/android:ui_java",
-    ]
+  if (enable_av1_decoder &&
+      ((is_chromeos && use_linux_video_acceleration) || is_win || is_android)) {
+    data_deps += [ "//media/gpu/test/:video_encode_accelerator_tests" ]
   }
-}
-
-# Note: Most external components should just depend on //media unless they
-# specifically need this pared own target (NaCl, PPAPI, etc). Internal targets
-# should just depend on //media/base which will propagate this target to them.
-component("shared_memory_support") {
-  sources = [
-    "base/audio_bus.cc",
-    "base/audio_bus.h",
-    "base/audio_latency.cc",
-    "base/audio_latency.h",
-    "base/audio_parameters.cc",
-    "base/audio_parameters.h",
-    "base/audio_point.cc",
-    "base/audio_point.h",
-    "base/audio_sample_types.h",
-    "base/channel_layout.cc",
-    "base/channel_layout.h",
-    "base/limits.h",
-    "base/media_shmem_export.h",
-    "base/sample_format.cc",
-    "base/sample_format.h",
-    "base/vector_math.cc",
-    "base/vector_math.h",
-    "base/vector_math_testing.h",
-    "base/video_types.cc",
-    "base/video_types.h",
-  ]
-  if (is_mac) {
-    # These need to be included here because audio_latency.cc depends on them.
-    sources += [
-      "base/mac/audio_latency_mac.cc",
-      "base/mac/audio_latency_mac.h",
-    ]
-  }
-
-  # Do not use "subcomponent_config" here since these files are in their own
-  # component target and thus can't share the standard export macros.
-  configs += [ ":media_config" ]
-  defines = [ "MEDIA_SHMEM_IMPLEMENTATION" ]
-
-  if (!is_debug) {
-    configs -= [ "//build/config/compiler:default_optimization" ]
-    configs += [ "//build/config/compiler:optimize_max" ]
-  }
-  deps = [
-    "//base",
-    "//build:chromeos_buildflags",
-    "//ui/gfx/geometry",
-  ]
 }
 
 # TODO(watk): Refactor tests that could be made to run on Android. See
@@ -346,27 +341,11 @@ if (media_use_ffmpeg && !is_android) {
 if (proprietary_codecs) {
   fuzzer_test("media_cenc_utils_fuzzer") {
     sources = [ "cdm/cenc_utils_fuzzertest.cc" ]
-    deps = [ ":media" ]
+    deps = [
+      ":media",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
+    ]
   }
-}
-
-fuzzer_test("media_vp9_parser_fuzzer") {
-  sources = [ "filters/vp9_parser_fuzzertest.cc" ]
-  deps = [
-    ":test_support",
-    "//base",
-  ]
-  libfuzzer_options = [ "max_len = 400000" ]
-}
-
-fuzzer_test("media_vp9_parser_encrypted_fuzzer") {
-  sources = [ "filters/vp9_parser_encrypted_fuzzertest.cc" ]
-  deps = [
-    ":test_support",
-    "//base",
-    "//base/test:test_support",
-  ]
-  seed_corpus = "//media/test/data"
 }
 
 fuzzer_test("media_vpx_video_decoder_fuzzer") {
@@ -385,6 +364,7 @@ fuzzer_test("media_webm_muxer_fuzzer") {
   deps = [
     ":media",
     "//base",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
     "//third_party/libwebm",
   ]
 }
@@ -395,6 +375,7 @@ fuzzer_test("cbcs_decryptor_fuzzer") {
     ":media",
     "//base",
     "//crypto",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
 }
 
@@ -404,6 +385,7 @@ fuzzer_test("cenc_decryptor_fuzzer") {
     ":media",
     "//base",
     "//crypto",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
 }
 
@@ -412,6 +394,7 @@ fuzzer_test("json_web_key_fuzzer") {
   deps = [
     ":media",
     "//base",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
 }
 
@@ -421,6 +404,7 @@ if (proprietary_codecs) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 
@@ -429,6 +413,7 @@ if (proprietary_codecs) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
     libfuzzer_options = [ "max_len=500" ]
     dict = "test/mp4.dict"
@@ -441,6 +426,7 @@ if (enable_mse_mpeg2ts_stream_parser) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 
@@ -449,6 +435,7 @@ if (enable_mse_mpeg2ts_stream_parser) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 
@@ -457,6 +444,7 @@ if (enable_mse_mpeg2ts_stream_parser) {
     deps = [
       ":media",
       "//base",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 }

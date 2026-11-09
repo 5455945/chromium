@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
@@ -55,7 +59,7 @@ class PropertyTest : public testing::Test {
 
   void SetUp() override {
     // Make the main thread not to allow IO.
-    base::ThreadRestrictions::SetIOAllowed(false);
+    disallow_blocking_.emplace();
 
     // Start the D-Bus thread.
     dbus_thread_ = std::make_unique<base::Thread>("D-Bus Thread");
@@ -76,7 +80,7 @@ class PropertyTest : public testing::Test {
     bus_options.bus_type = Bus::SESSION;
     bus_options.connection_type = Bus::PRIVATE;
     bus_options.dbus_task_runner = dbus_thread_->task_runner();
-    bus_ = new Bus(bus_options);
+    bus_ = new Bus(std::move(bus_options));
     object_proxy_ = bus_->GetObjectProxy(
         test_service_->service_name(),
         ObjectPath("/org/chromium/TestObject"));
@@ -96,11 +100,9 @@ class PropertyTest : public testing::Test {
     // Shut down the service.
     test_service_->ShutdownAndBlock();
 
-    // Reset to the default.
-    base::ThreadRestrictions::SetIOAllowed(true);
-
     // Stopping a thread is considered an IO operation, so do this after
     // allowing IO.
+    disallow_blocking_.reset();
     test_service_->Stop();
   }
 
@@ -158,10 +160,11 @@ class PropertyTest : public testing::Test {
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_;
+  std::optional<base::ScopedDisallowBlocking> disallow_blocking_;
   std::unique_ptr<base::RunLoop> run_loop_;
   std::unique_ptr<base::Thread> dbus_thread_;
   scoped_refptr<Bus> bus_;
-  ObjectProxy* object_proxy_;
+  raw_ptr<ObjectProxy, AcrossTasksDanglingUntriaged> object_proxy_;
   std::unique_ptr<Properties> properties_;
   std::unique_ptr<TestService> test_service_;
   // Properties updated.
@@ -329,8 +332,8 @@ TEST(PropertyTestStatic, ReadWriteStringMap) {
 
   writer.OpenVariant("a{ss}", &variant_writer);
   variant_writer.OpenArray("{ss}", &variant_array_writer);
-  const char* items[] = {"One", "Two", "Three", "Four"};
-  for (unsigned i = 0; i < base::size(items); ++i) {
+  auto items = std::to_array<const char*>({"One", "Two", "Three", "Four"});
+  for (unsigned i = 0; i < std::size(items); ++i) {
     variant_array_writer.OpenDictEntry(&struct_entry_writer);
     struct_entry_writer.AppendString(items[i]);
     struct_entry_writer.AppendString(base::NumberToString(i + 1));
@@ -380,7 +383,7 @@ TEST(PropertyTestStatic, ReadWriteNetAddressArray) {
   for (uint16_t i = 0; i < 5; ++i) {
     variant_array_writer.OpenStruct(&struct_entry_writer);
     ip_bytes[4] = 0x30 + i;
-    struct_entry_writer.AppendArrayOfBytes(ip_bytes, base::size(ip_bytes));
+    struct_entry_writer.AppendArrayOfBytes(ip_bytes);
     struct_entry_writer.AppendUint16(i);
     variant_array_writer.CloseContainer(&struct_entry_writer);
   }
@@ -396,7 +399,7 @@ TEST(PropertyTestStatic, ReadWriteNetAddressArray) {
   for (auto& item : ip_list.value()) {
     ASSERT_EQ(5U, item.first.size());
     ip_bytes[4] = 0x30 + item_index;
-    EXPECT_EQ(0, memcmp(ip_bytes, item.first.data(), 5U));
+    EXPECT_EQ(base::span(ip_bytes), base::span(item.first));
     EXPECT_EQ(item_index, item.second);
     ++item_index;
   }
@@ -405,11 +408,11 @@ TEST(PropertyTestStatic, ReadWriteNetAddressArray) {
 TEST(PropertyTestStatic, SerializeNetAddressArray) {
   std::vector<std::pair<std::vector<uint8_t>, uint16_t>> test_list;
 
-  uint8_t ip_bytes[] = {0x54, 0x65, 0x73, 0x74, 0x30};
+  auto ip_bytes = std::to_array<uint8_t>({0x54, 0x65, 0x73, 0x74, 0x30});
   for (uint16_t i = 0; i < 5; ++i) {
     ip_bytes[4] = 0x30 + i;
-    std::vector<uint8_t> bytes(ip_bytes, ip_bytes + base::size(ip_bytes));
-    test_list.push_back(make_pair(bytes, 16));
+    std::vector<uint8_t> bytes(ip_bytes.begin(), ip_bytes.end());
+    test_list.emplace_back(std::move(bytes), 16);
   }
 
   std::unique_ptr<Response> message(Response::CreateEmpty());
@@ -433,9 +436,10 @@ TEST(PropertyTestStatic, ReadWriteStringToByteVectorMapVariantWrapped) {
   writer.OpenVariant("a{sv}", &variant_writer);
   variant_writer.OpenArray("{sv}", &dict_writer);
 
-  const char* keys[] = {"One", "Two", "Three", "Four"};
-  const std::vector<uint8_t> values[] = {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}};
-  for (unsigned i = 0; i < base::size(keys); ++i) {
+  auto keys = std::to_array<const char*>({"One", "Two", "Three", "Four"});
+  const auto values = std::to_array<std::vector<uint8_t>>(
+      {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}});
+  for (unsigned i = 0; i < std::size(keys); ++i) {
     MessageWriter entry_writer(nullptr);
     dict_writer.OpenDictEntry(&entry_writer);
 
@@ -443,7 +447,7 @@ TEST(PropertyTestStatic, ReadWriteStringToByteVectorMapVariantWrapped) {
 
     MessageWriter value_varient_writer(nullptr);
     entry_writer.OpenVariant("ay", &value_varient_writer);
-    value_varient_writer.AppendArrayOfBytes(values[i].data(), values[i].size());
+    value_varient_writer.AppendArrayOfBytes(values[i]);
     entry_writer.CloseContainer(&value_varient_writer);
 
     dict_writer.CloseContainer(&entry_writer);
@@ -456,8 +460,8 @@ TEST(PropertyTestStatic, ReadWriteStringToByteVectorMapVariantWrapped) {
   Property<std::map<std::string, std::vector<uint8_t>>> test_property;
   EXPECT_TRUE(test_property.PopValueFromReader(&reader));
 
-  ASSERT_EQ(base::size(keys), test_property.value().size());
-  for (unsigned i = 0; i < base::size(keys); ++i)
+  ASSERT_EQ(std::size(keys), test_property.value().size());
+  for (unsigned i = 0; i < std::size(keys); ++i)
     EXPECT_EQ(values[i], test_property.value().at(keys[i]));
 }
 
@@ -470,14 +474,15 @@ TEST(PropertyTestStatic, ReadWriteStringToByteVectorMap) {
   writer.OpenVariant("a{say}", &variant_writer);
   variant_writer.OpenArray("{say}", &dict_writer);
 
-  const char* keys[] = {"One", "Two", "Three", "Four"};
-  const std::vector<uint8_t> values[] = {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}};
-  for (unsigned i = 0; i < base::size(keys); ++i) {
+  auto keys = std::to_array<const char*>({"One", "Two", "Three", "Four"});
+  const auto values = std::to_array<std::vector<uint8_t>>(
+      {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}});
+  for (unsigned i = 0; i < std::size(keys); ++i) {
     MessageWriter entry_writer(nullptr);
     dict_writer.OpenDictEntry(&entry_writer);
 
     entry_writer.AppendString(keys[i]);
-    entry_writer.AppendArrayOfBytes(values[i].data(), values[i].size());
+    entry_writer.AppendArrayOfBytes(values[i]);
 
     dict_writer.CloseContainer(&entry_writer);
   }
@@ -489,8 +494,8 @@ TEST(PropertyTestStatic, ReadWriteStringToByteVectorMap) {
   Property<std::map<std::string, std::vector<uint8_t>>> test_property;
   EXPECT_TRUE(test_property.PopValueFromReader(&reader));
 
-  ASSERT_EQ(base::size(keys), test_property.value().size());
-  for (unsigned i = 0; i < base::size(keys); ++i)
+  ASSERT_EQ(std::size(keys), test_property.value().size());
+  for (unsigned i = 0; i < std::size(keys); ++i)
     EXPECT_EQ(values[i], test_property.value().at(keys[i]));
 }
 
@@ -521,9 +526,10 @@ TEST(PropertyTestStatic, ReadWriteUInt16ToByteVectorMapVariantWrapped) {
   writer.OpenVariant("a{qv}", &variant_writer);
   variant_writer.OpenArray("{qv}", &dict_writer);
 
-  const uint16_t keys[] = {11, 12, 13, 14};
-  const std::vector<uint8_t> values[] = {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}};
-  for (unsigned i = 0; i < base::size(keys); ++i) {
+  const auto keys = std::to_array<uint16_t>({11, 12, 13, 14});
+  const auto values = std::to_array<std::vector<uint8_t>>(
+      {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}});
+  for (unsigned i = 0; i < std::size(keys); ++i) {
     MessageWriter entry_writer(nullptr);
     dict_writer.OpenDictEntry(&entry_writer);
 
@@ -531,7 +537,7 @@ TEST(PropertyTestStatic, ReadWriteUInt16ToByteVectorMapVariantWrapped) {
 
     MessageWriter value_varient_writer(nullptr);
     entry_writer.OpenVariant("ay", &value_varient_writer);
-    value_varient_writer.AppendArrayOfBytes(values[i].data(), values[i].size());
+    value_varient_writer.AppendArrayOfBytes(values[i]);
     entry_writer.CloseContainer(&value_varient_writer);
 
     dict_writer.CloseContainer(&entry_writer);
@@ -544,8 +550,8 @@ TEST(PropertyTestStatic, ReadWriteUInt16ToByteVectorMapVariantWrapped) {
   Property<std::map<uint16_t, std::vector<uint8_t>>> test_property;
   EXPECT_TRUE(test_property.PopValueFromReader(&reader));
 
-  ASSERT_EQ(base::size(keys), test_property.value().size());
-  for (unsigned i = 0; i < base::size(keys); ++i)
+  ASSERT_EQ(std::size(keys), test_property.value().size());
+  for (unsigned i = 0; i < std::size(keys); ++i)
     EXPECT_EQ(values[i], test_property.value().at(keys[i]));
 }
 
@@ -558,14 +564,15 @@ TEST(PropertyTestStatic, ReadWriteUInt16ToByteVectorMap) {
   writer.OpenVariant("a{qay}", &variant_writer);
   variant_writer.OpenArray("{qay}", &dict_writer);
 
-  const uint16_t keys[] = {11, 12, 13, 14};
-  const std::vector<uint8_t> values[] = {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}};
-  for (unsigned i = 0; i < base::size(keys); ++i) {
+  const auto keys = std::to_array<uint16_t>({11, 12, 13, 14});
+  const auto values = std::to_array<std::vector<uint8_t>>(
+      {{1}, {1, 2}, {1, 2, 3}, {1, 2, 3, 4}});
+  for (unsigned i = 0; i < std::size(keys); ++i) {
     MessageWriter entry_writer(nullptr);
     dict_writer.OpenDictEntry(&entry_writer);
 
     entry_writer.AppendUint16(keys[i]);
-    entry_writer.AppendArrayOfBytes(values[i].data(), values[i].size());
+    entry_writer.AppendArrayOfBytes(values[i]);
 
     dict_writer.CloseContainer(&entry_writer);
   }
@@ -577,8 +584,8 @@ TEST(PropertyTestStatic, ReadWriteUInt16ToByteVectorMap) {
   Property<std::map<uint16_t, std::vector<uint8_t>>> test_property;
   EXPECT_TRUE(test_property.PopValueFromReader(&reader));
 
-  ASSERT_EQ(base::size(keys), test_property.value().size());
-  for (unsigned i = 0; i < base::size(keys); ++i)
+  ASSERT_EQ(std::size(keys), test_property.value().size());
+  for (unsigned i = 0; i < std::size(keys); ++i)
     EXPECT_EQ(values[i], test_property.value().at(keys[i]));
 }
 

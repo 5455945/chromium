@@ -1,12 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_V8_FEATURES_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_V8_FEATURES_H_
 
+#include "base/process/process.h"
+#include "third_party/blink/public/mojom/browser_interface_broker.mojom-shared.h"
+#include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_common.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 namespace blink {
 
@@ -19,12 +22,57 @@ namespace blink {
 //
 // See src/third_party/blink/renderer/bindings/IDLExtendedAttributes.md for more
 // information.
-class WebV8Features {
+class BLINK_EXPORT WebV8Features {
  public:
-  BLINK_EXPORT static void EnableMojoJS(v8::Local<v8::Context>, bool);
+  static void EnableMojoJS(v8::Local<v8::Context>, bool);
 
-  // Enables SharedArrayBuffer for this process.
-  BLINK_EXPORT static void EnableSharedArrayBuffer();
+  static void EnableMojoJSAndUseBroker(
+      v8::Local<v8::Context> context,
+      CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>
+          broker_remote);
+
+  static void EnableMojoJSFileSystemAccessHelper(v8::Local<v8::Context>, bool);
+
+  // Whether a context that has the Unbounded Element API enabled, or its main
+  // frame, belongs to a privileged embedder origin (such as WebUI or an
+  // authorized component extension). This determines whether showing an
+  // unbounded element requires user activation; see
+  // ContextFeatureSettings::GetUnboundedElementAuth().
+  enum class UnboundedElementPrivilege {
+    // Neither the context nor its embedder is privileged.
+    kNone,
+    // The context is an unprivileged iframe (e.g. `chrome-untrusted://`) whose
+    // privileged embedder grants it access (subject to permissions policy).
+    kIframePrivilegedByEmbedder,
+    // The context itself is privileged.
+    kPrivileged,
+  };
+
+  // Enables the Unbounded Element API on the given `context`.
+  static void EnableUnboundedElement(v8::Local<v8::Context>,
+                                     UnboundedElementPrivilege);
+
+  // A static protected memory bool is used to track if MojoJS has been properly
+  // enabled for a render frame in the current process. This method is used to
+  // update that bool, indicating that MojoJS is allowed to be enabled for any
+  // render frame in the process.
+  static void AllowMojoJSPerContextForProcess();
+
+  // Method use to validate the value of isMojoJSEnabled() for the context in
+  // tests.
+  static bool IsMojoJSEnabledForTesting(v8::Local<v8::Context>);
+
+  // Testing method that enables mojo JS on the ContextFeatureSettings while
+  // bypassing the protected memory bool check. This is used to validate later
+  // stage protected memory check code paths.
+  static void EnableMojoJSWithoutSecurityChecksForTesting(
+      v8::Local<v8::Context>);
+
+  // Send isolate priority change notification to worker thread isolates.
+  static void SetIsolatePriority(base::Process::Priority priority);
+
+  // Whether `WebV8Features` is supported for the given v8 context.
+  static bool IsSupported(v8::Local<v8::Context>);
 
  private:
   WebV8Features() = delete;

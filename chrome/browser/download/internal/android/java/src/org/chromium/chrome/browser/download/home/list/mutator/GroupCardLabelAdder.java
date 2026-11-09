@@ -1,11 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.list.mutator;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.util.Pair;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.list.ListItem;
 import org.chromium.chrome.browser.download.home.list.ListItem.CardDividerListItem;
 import org.chromium.chrome.browser.download.home.list.ListUtils;
@@ -21,11 +25,12 @@ import java.util.List;
  * Given a sorted list of offline items, generates a list of {@link ListItem} that has card header
  * and footer items for group cards.
  */
+@NullMarked
 public class GroupCardLabelAdder implements ListConsumer {
     private static final long CARD_DIVIDER_MIDDLE_HASH_CODE_OFFSET = 200000;
 
-    private ListConsumer mListConsumer;
-    private CardPaginator mCardPaginator;
+    private @Nullable ListConsumer mListConsumer;
+    private final CardPaginator mCardPaginator;
     private long mDividerIndexId;
 
     /** Constructor. */
@@ -52,14 +57,15 @@ public class GroupCardLabelAdder implements ListConsumer {
         List<ListItem> candidateCardItems = new ArrayList<>();
         ListItem previousItem = null;
         for (ListItem listItem : sortedList) {
-            if (listItem instanceof ListItem.OfflineItemListItem) {
-                ((ListItem.OfflineItemListItem) listItem).isGrouped = false;
+            if (listItem instanceof ListItem.OfflineItemListItem offlineItem) {
+                offlineItem.isGrouped = false;
             }
 
-            boolean addToExistingGroup = ListUtils.canGroup(listItem)
-                    && ListUtils.canGroup(previousItem)
-                    && getDateAndDomainForItem(listItem).equals(
-                            getDateAndDomainForItem(previousItem));
+            boolean addToExistingGroup =
+                    ListUtils.canGroup(listItem)
+                            && ListUtils.canGroup(previousItem)
+                            && getDateAndDomainForItem(listItem)
+                                    .equals(getDateAndDomainForItem(assumeNonNull(previousItem)));
             if (addToExistingGroup) {
                 candidateCardItems.add(listItem);
             } else {
@@ -102,7 +108,8 @@ public class GroupCardLabelAdder implements ListConsumer {
         }
 
         Pair<Date, String> dateAndDomain = getDateAndDomainForItem(candidateCardItems.get(0));
-        String url = ((ListItem.OfflineItemListItem) candidateCardItems.get(0)).item.url;
+        OfflineItem item = ((ListItem.OfflineItemListItem) candidateCardItems.get(0)).item;
+        String url = assumeNonNull(item.url).getSpec();
         mCardPaginator.initializeEntry(dateAndDomain);
 
         // Add the card header, and the divider above it.
@@ -132,7 +139,7 @@ public class GroupCardLabelAdder implements ListConsumer {
         outList.add(createDivider(CardDividerListItem.Position.BOTTOM));
     }
 
-    private ListItem createDivider(CardDividerListItem.Position position) {
+    private ListItem createDivider(@CardDividerListItem.Position int position) {
         return new CardDividerListItem(mDividerIndexId++, position);
     }
 

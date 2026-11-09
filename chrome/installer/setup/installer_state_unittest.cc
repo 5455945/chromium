@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,9 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -35,6 +34,7 @@
 #include "chrome/installer/util/installer_util_strings.h"
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/installer/util/work_item.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::win::RegKey;
@@ -44,15 +44,16 @@ using installer::InstallerState;
 using registry_util::RegistryOverrideManager;
 
 class InstallerStateTest : public testing::Test {
+ public:
+  InstallerStateTest(const InstallerStateTest&) = delete;
+  InstallerStateTest& operator=(const InstallerStateTest&) = delete;
+
  protected:
-  InstallerStateTest() {}
+  InstallerStateTest() = default;
 
   void SetUp() override { ASSERT_TRUE(test_dir_.CreateUniqueTempDir()); }
 
   base::ScopedTempDir test_dir_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(InstallerStateTest);
 };
 
 // An installer state on which we can access otherwise protected members.
@@ -100,8 +101,9 @@ TEST_F(InstallerStateTest, WithProduct) {
       base::Version found_version(
           installer_state.GetCurrentVersion(machine_state));
       EXPECT_TRUE(found_version.IsValid());
-      if (found_version.IsValid())
+      if (found_version.IsValid()) {
         EXPECT_EQ(current_version, found_version);
+      }
     }
   }
 }
@@ -178,8 +180,9 @@ TEST_F(InstallerStateTest, InitializeTwice) {
   EXPECT_EQ(InstallerState::USER_LEVEL, installer_state.level());
   EXPECT_EQ(InstallerState::SINGLE_INSTALL_OR_UPDATE,
             installer_state.operation());
-  EXPECT_TRUE(wcsstr(installer_state.target_path().value().c_str(),
-                     install_static::GetChromeInstallSubDirectory().c_str()));
+  EXPECT_THAT(
+      installer_state.target_path().value(),
+      testing::HasSubstr(install_static::GetChromeInstallSubDirectory()));
   EXPECT_FALSE(installer_state.verbose_logging());
   EXPECT_EQ(installer_state.state_key(),
             install_static::GetClientStateKeyPath());
@@ -196,8 +199,9 @@ TEST_F(InstallerStateTest, InitializeTwice) {
   EXPECT_EQ(InstallerState::SYSTEM_LEVEL, installer_state.level());
   EXPECT_EQ(InstallerState::SINGLE_INSTALL_OR_UPDATE,
             installer_state.operation());
-  EXPECT_TRUE(wcsstr(installer_state.target_path().value().c_str(),
-                     install_static::GetChromeInstallSubDirectory().c_str()));
+  EXPECT_THAT(
+      installer_state.target_path().value(),
+      testing::HasSubstr(install_static::GetChromeInstallSubDirectory()));
   EXPECT_TRUE(installer_state.verbose_logging());
   EXPECT_EQ(installer_state.state_key(),
             install_static::GetClientStateKeyPath());

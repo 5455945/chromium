@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -26,7 +26,7 @@ this is not the case then a warning is issued, but the script still succeeds.
 
 from __future__ import print_function
 
-import json
+import json  # noqa: F401
 import os
 import optparse
 import re
@@ -39,6 +39,7 @@ resource files, add the files that use the tags listed above to
 remoting.gyp, or annotate existing uses of those tags with the
 prefix /*i18n-content*/
 """
+
 
 def LoadTagsFromGrd(filename):
   xml = minidom.parse(filename)
@@ -62,32 +63,42 @@ def ExtractTagFromLine(file_type, line):
   """Extract a tag from a line of HTML, C++, JS or JSON."""
   if file_type == "html":
     # HTML-style (tags)
-    m = re.search('i18n-content=[\'"]([^\'"]*)[\'"]', line)
-    if m: return m.group(1)
+    m = re.search(r'i18n-content=[\'"]([^\'"]*)[\'"]', line)
+    if m:
+      return m.group(1)
     # HTML-style (titles)
-    m = re.search('i18n-title=[\'"]([^\'"]*)[\'"]', line)
-    if m: return m.group(1)
+    m = re.search(r'i18n-title=[\'"]([^\'"]*)[\'"]', line)
+    if m:
+      return m.group(1)
     # HTML-style (substitutions)
-    m = re.search('i18n-value-name-[1-9]=[\'"]([^\'"]*)[\'"]', line)
-    if m: return m.group(1)
+    m = re.search(r'i18n-value-name-[1-9]=[\'"]([^\'"]*)[\'"]', line)
+    if m:
+      return m.group(1)
   elif file_type == 'js':
     # Javascript style
-    m = re.search('/\*i18n-content\*/[\'"]([^\`"]*)[\'"]', line)
-    if m: return m.group(1)
+    m = re.search(r'/\*i18n-content\*/[\'"]([^\`"]*)[\'"]', line)
+    if m:
+      return m.group(1)
   elif file_type == 'cc' or file_type == 'mm':
     # C++ style
-    m = re.search('IDS_([A-Z0-9_]*)', line)
-    if m: return m.group(1)
-    m = re.search('/\*i18n-content\*/["]([^\`"]*)["]', line)
-    if m: return m.group(1)
+    m = re.search(r'IDS_([A-Z0-9_]*)', line)
+    if m:
+      return m.group(1)
+    m = re.search(r'/\*i18n-content\*/["]([^\`"]*)["]', line)
+    if m:
+      return m.group(1)
   elif file_type == 'json.jinja2':
     # Manifest style
-    m = re.search('__MSG_(.*)__', line)
-    if m: return m.group(1)
+    m = re.search(r'__MSG_(.*)__', line)
+    if m:
+      return m.group(1)
   elif file_type == 'jinja2':
     # Jinja2 template file
-    m = re.search('\{\%\s+trans\s+\%\}([A-Z0-9_]+)\{\%\s+endtrans\s+\%\}', line)
-    if m: return m.group(1)
+    m = re.search(
+      r'\{\%\s+trans\s+\%\}([A-Z0-9_]+)\{\%\s+endtrans\s+\%\}', line
+    )
+    if m:
+      return m.group(1)
   return None
 
 
@@ -114,24 +125,31 @@ def VerifyFile(filename, messages, used_tags):
     if tag:
       tag = tag.upper()
       used_tags.add(tag)
-      matches = True
-      if not tag in messages:
+      matches = True  # noqa: F841
+      if tag not in messages:
         result = False
-        print('%s/%s:%d: error: Undefined tag: %s' %
-            (os.getcwd(), filename, i + 1, tag))
+        print(
+          '%s/%s:%d: error: Undefined tag: %s'
+          % (os.getcwd(), filename, i + 1, tag)
+        )
   f.close()
   return result
 
 
 def main():
   parser = optparse.OptionParser(
-      usage='Usage: %prog [options...] [source_file...]')
-  parser.add_option('-t', '--touch', dest='touch',
-                    help='File to touch when finished.')
-  parser.add_option('-r', '--grd', dest='grd', action='append',
-                    help='grd file')
-  parser.add_option('--strict', dest='strict', action='store_true',
-                    help='Use strict verification checks.')
+    usage='Usage: %prog [options...] [source_file...]'
+  )
+  parser.add_option(
+    '-t', '--touch', dest='touch', help='File to touch when finished.'
+  )
+  parser.add_option('-r', '--grd', dest='grd', action='append', help='grd file')
+  parser.add_option(
+    '--strict',
+    dest='strict',
+    action='store_true',
+    help='Use strict verification checks.',
+  )
 
   options, args = parser.parse_args()
   if not options.touch:
@@ -161,8 +179,10 @@ def main():
     # For now, exclude Android strings from this check.
     for tag in non_android_resources:
       if tag not in used_tags:
-        print('%s/%s:0: warning: %s is defined but not used' %
-            (os.getcwd(), sys.argv[2], tag))
+        print(
+          '%s/%s:0: warning: %s is defined but not used'
+          % (os.getcwd(), sys.argv[2], tag)
+        )
         warnings = True
     if warnings:
       print(WARNING_MESSAGE)

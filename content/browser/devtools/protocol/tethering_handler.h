@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 #define CONTENT_BROWSER_DEVTOOLS_PROTOCOL_TETHERING_HANDLER_H_
 
 #include <stdint.h>
+
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "content/browser/devtools/protocol/tethering.h"
 
@@ -38,6 +38,10 @@ class TetheringHandler : public DevToolsDomainHandler,
   // is accepted.
   TetheringHandler(CreateServerSocketCallback socket_callback,
                    scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+
+  TetheringHandler(const TetheringHandler&) = delete;
+  TetheringHandler& operator=(const TetheringHandler&) = delete;
+
   ~TetheringHandler() override;
 
   void Wire(UberDispatcher* dispatcher) override;
@@ -58,8 +62,6 @@ class TetheringHandler : public DevToolsDomainHandler,
   base::WeakPtrFactory<TetheringHandler> weak_factory_{this};
 
   static TetheringImpl* impl_;
-
-  DISALLOW_COPY_AND_ASSIGN(TetheringHandler);
 };
 
 }  // namespace protocol

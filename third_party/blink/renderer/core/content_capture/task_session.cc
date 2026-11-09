@@ -1,10 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/content_capture/task_session.h"
 
 #include <utility>
+#include <vector>
 
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -25,8 +26,9 @@ TaskSession::DocumentSession::DocumentSession(const Document& document,
     : document_(&document), callback_(callback) {}
 
 TaskSession::DocumentSession::~DocumentSession() {
-  if (callback_.has_value())
+  if (callback_.has_value()) {
     callback_.value().Run(total_sent_nodes_);
+  }
 }
 
 bool TaskSession::DocumentSession::AddDetachedNode(const Node& node) {
@@ -42,12 +44,12 @@ bool TaskSession::DocumentSession::AddDetachedNode(const Node& node) {
   return false;
 }
 
-WebVector<int64_t> TaskSession::DocumentSession::MoveDetachedNodes() {
+std::vector<int64_t> TaskSession::DocumentSession::MoveDetachedNodes() {
   return std::move(detached_nodes_);
 }
 
 ContentHolder* TaskSession::DocumentSession::GetNextUnsentNode() {
-  while (!captured_content_.IsEmpty()) {
+  while (!captured_content_.empty()) {
     auto node = captured_content_.begin()->key;
     const gfx::Rect rect = captured_content_.Take(node);
     if (node && node->GetLayoutObject() && !sent_nodes_.Contains(node)) {
@@ -60,7 +62,7 @@ ContentHolder* TaskSession::DocumentSession::GetNextUnsentNode() {
 }
 
 ContentHolder* TaskSession::DocumentSession::GetNextChangedNode() {
-  while (!changed_content_.IsEmpty()) {
+  while (!changed_content_.empty()) {
     auto node = changed_content_.begin()->key;
     const gfx::Rect rect = changed_content_.Take(node);
     if (node.Get() && node->GetLayoutObject()) {
@@ -131,7 +133,7 @@ void TaskSession::DocumentSession::Trace(Visitor* visitor) const {
 void TaskSession::DocumentSession::Reset() {
   changed_content_.clear();
   captured_content_.clear();
-  detached_nodes_.Clear();
+  detached_nodes_.clear();
   sent_nodes_.clear();
   visible_sent_nodes_.clear();
   changed_nodes_.clear();
@@ -143,7 +145,7 @@ TaskSession::DocumentSession* TaskSession::GetNextUnsentDocumentSession() {
   for (auto& doc : to_document_session_.Values()) {
     if (!doc->HasUnsentData())
       continue;
-    return doc;
+    return doc.Get();
   }
   has_unsent_data_ = false;
   return nullptr;
@@ -152,7 +154,7 @@ TaskSession::DocumentSession* TaskSession::GetNextUnsentDocumentSession() {
 void TaskSession::SetCapturedContent(
     const Vector<cc::NodeInfo>& captured_content) {
   DCHECK(!HasUnsentData());
-  DCHECK(!captured_content.IsEmpty());
+  DCHECK(!captured_content.empty());
   GroupCapturedContentByDocument(captured_content);
   has_unsent_data_ = true;
 }
@@ -198,7 +200,7 @@ TaskSession::DocumentSession* TaskSession::GetDocumentSession(
   auto it = to_document_session_.find(&document);
   if (it == to_document_session_.end())
     return nullptr;
-  return it->value;
+  return it->value.Get();
 }
 
 void TaskSession::Trace(Visitor* visitor) const {

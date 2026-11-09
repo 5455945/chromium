@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,10 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/vr/elements/ui_element.h"
 #include "chrome/browser/vr/elements/ui_element_name.h"
-#include "chrome/browser/vr/keyboard_delegate.h"
-#include "chrome/browser/vr/sequence.h"
 #include "chrome/browser/vr/vr_ui_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -34,6 +32,10 @@ class VR_UI_EXPORT UiScene {
   typedef base::RepeatingCallback<void()> PerFrameCallback;
 
   UiScene();
+
+  UiScene(const UiScene&) = delete;
+  UiScene& operator=(const UiScene&) = delete;
+
   ~UiScene();
 
   void AddUiElement(UiElementName parent, std::unique_ptr<UiElement> element);
@@ -62,8 +64,7 @@ class VR_UI_EXPORT UiScene {
   typedef std::vector<const UiElement*> Elements;
   typedef std::vector<UiElement*> MutableElements;
 
-  std::vector<UiElement*>& GetAllElements();
-  Elements GetElementsToHitTest();
+  std::vector<raw_ptr<UiElement, VectorExperimental>>& GetAllElements();
   Elements GetElementsToDraw();
   bool HasWebXrOverlayElementsToDraw();
   Elements GetWebVrOverlayElementsToDraw();
@@ -73,15 +74,11 @@ class VR_UI_EXPORT UiScene {
 
   void set_dirty() { is_dirty_ = true; }
 
-  void OnGlInitialized(SkiaSurfaceProvider* provider);
+  void OnGlInitialized();
 
   // The callback to call on every new frame. This is used for things we want to
   // do every frame regardless of element or subtree visibility.
   void AddPerFrameCallback(PerFrameCallback callback);
-
-  void AddSequence(std::unique_ptr<Sequence> sequence);
-
-  SkiaSurfaceProvider* SurfaceProviderForTesting() { return provider_; }
 
   void RunFirstFrameForTest();
 
@@ -104,14 +101,9 @@ class VR_UI_EXPORT UiScene {
   // This is used to advance animations to completion on the first frame.
   bool first_frame_ = true;
 
-  std::vector<UiElement*> all_elements_;
+  std::vector<raw_ptr<UiElement, VectorExperimental>> all_elements_;
 
   std::vector<PerFrameCallback> per_frame_callback_;
-
-  std::vector<std::unique_ptr<Sequence>> scheduled_tasks_;
-  SkiaSurfaceProvider* provider_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(UiScene);
 };
 
 }  // namespace vr

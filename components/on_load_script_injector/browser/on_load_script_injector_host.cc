@@ -1,11 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/on_load_script_injector/browser/on_load_script_injector_host.h"
 
+#include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/logging.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/on_load_script_injector/on_load_script_injector.mojom.h"
@@ -39,7 +42,7 @@ template <typename ScriptId>
 void OnLoadScriptInjectorHost<ScriptId>::AddScript(
     ScriptId id,
     std::vector<url::Origin> origins_to_inject,
-    base::StringPiece script) {
+    std::string_view script) {
   // If there is no script with the identifier |id|, then create a place for
   // it at the end of the injection sequence.
   if (before_load_scripts_.find(id) == before_load_scripts_.end())
@@ -52,8 +55,8 @@ void OnLoadScriptInjectorHost<ScriptId>::AddScript(
           .ValueOrDie();
   base::WritableSharedMemoryRegion script_shared_memory =
       base::WritableSharedMemoryRegion::Create(script_utf16_size);
-  memcpy(script_shared_memory.Map().memory(), script_utf16.data(),
-         script_utf16_size);
+  script_shared_memory.Map().GetMemoryAsSpan<char16_t>().copy_from(
+      script_utf16);
 
   base::ReadOnlySharedMemoryRegion script_shared_memory_readonly =
       base::WritableSharedMemoryRegion::ConvertToReadOnly(
@@ -67,7 +70,7 @@ void OnLoadScriptInjectorHost<ScriptId>::AddScript(
 template <typename ScriptId>
 void OnLoadScriptInjectorHost<ScriptId>::AddScriptForAllOrigins(
     ScriptId id,
-    base::StringPiece script) {
+    std::string_view script) {
   AddScript(id, {kMatchAllOrigins}, script);
 }
 
@@ -113,14 +116,12 @@ template <typename ScriptId>
 bool OnLoadScriptInjectorHost<ScriptId>::IsUrlMatchedByOriginList(
     const GURL& url,
     const std::vector<url::Origin>& allowed_origins) {
-  url::Origin url_origin = url::Origin::Create(url);
-
   for (const url::Origin& allowed_origin : allowed_origins) {
     if (allowed_origin == kMatchAllOrigins)
       return true;
 
     DCHECK(!allowed_origin.opaque());
-    if (url_origin.IsSameOriginWith(allowed_origin))
+    if (allowed_origin.IsSameOriginWith(url))
       return true;
   }
 

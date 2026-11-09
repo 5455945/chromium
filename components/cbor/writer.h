@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <optional>
 #include <vector>
 
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "components/cbor/cbor_export.h"
 #include "components/cbor/values.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // A basic Concise Binary Object Representation (CBOR) encoder as defined by
 // https://tools.ietf.org/html/rfc7049. This is a generic encoder that supplies
@@ -30,7 +32,6 @@
 //     * 7: Simple values.
 //
 // Unsupported:
-//  * Floating-point numbers.
 //  * Indefinite-length encodings.
 //  * Parsing.
 //
@@ -53,6 +54,8 @@
 
 namespace cbor {
 
+CBOR_EXPORT BASE_DECLARE_FEATURE(kUseRustCborWriter);
+
 class CBOR_EXPORT Writer {
  public:
   // Default that should be sufficiently large for most use cases.
@@ -70,27 +73,34 @@ class CBOR_EXPORT Writer {
     // Writers with this setting will produce invalid CBOR, so it may only be
     // enabled in tests.
     bool allow_invalid_utf8_for_testing = false;
+
+    // Selects the CBOR writer to use. When unset, follows `kUseRustCborWriter`
+    // and reports metrics to UMA. Setting this to true requires
+    // BUILDFLAG(USE_CBOR_RUST).
+    std::optional<bool> use_rust;
   };
+
+  Writer(const Writer&) = delete;
+  Writer& operator=(const Writer&) = delete;
 
   ~Writer();
 
-  // Returns the CBOR byte string representation of |node|, unless its nesting
-  // depth is greater than |max_nesting_level|, in which case an empty optional
-  // value is returned.
-  static absl::optional<std::vector<uint8_t>> Write(
-      const Value& node,
+  // Returns the CBOR byte string representation of |node|, or `std::nullopt`
+  // if its nesting depth exceeds |max_nesting_level|.
+  static std::optional<std::vector<uint8_t>> Write(
+      ValueView node,
       size_t max_nesting_level = kDefaultMaxNestingDepth);
 
   // A version of |Write| above that takes a Config.
-  static absl::optional<std::vector<uint8_t>> Write(const Value& node,
-                                                    const Config& config);
+  static std::optional<std::vector<uint8_t>> Write(ValueView node,
+                                                   const Config& config);
 
  private:
   explicit Writer(std::vector<uint8_t>* cbor);
 
   // Called recursively to build the CBOR bytestring. When completed,
   // |encoded_cbor_| will contain the CBOR.
-  bool EncodeCBOR(const Value& node,
+  bool EncodeCBOR(ValueView node,
                   int max_nesting_level,
                   bool allow_invalid_utf8);
 
@@ -108,9 +118,7 @@ class CBOR_EXPORT Writer {
   size_t GetNumUintBytes(uint64_t value);
 
   // Holds the encoded CBOR data.
-  std::vector<uint8_t>* encoded_cbor_;
-
-  DISALLOW_COPY_AND_ASSIGN(Writer);
+  raw_ptr<std::vector<uint8_t>> encoded_cbor_;
 };
 
 }  // namespace cbor

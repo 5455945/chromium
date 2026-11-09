@@ -1,8 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/content_security_policy/csp_source.h"
+
+#include <string_view>
+
+#include "base/strings/strcat.h"
 #include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -12,19 +16,15 @@ namespace network {
 
 namespace {
 
-// Allow() is an abbreviation of CSPSource::Allow(). Useful for writing test
-// expectations on one line.
-bool Allow(const network::mojom::CSPSource& source,
-           const GURL& url,
-           const network::mojom::CSPSource& self_source,
-           bool is_redirect = false) {
-  return CheckCSPSource(source, url, self_source, is_redirect);
-}
+// A CSPSource used in test not interested checking the interactions with
+// 'self'. It doesn't match any URL.
+static const network::mojom::CSPSource no_self;
 
-network::mojom::CSPSourcePtr CSPSource(const std::string& raw) {
+network::mojom::CSPSourcePtr CSPSource(std::string_view raw) {
   scoped_refptr<net::HttpResponseHeaders> headers(
       new net::HttpResponseHeaders("HTTP/1.1 200 OK"));
-  headers->SetHeader("Content-Security-Policy", "script-src " + raw);
+  headers->SetHeader("Content-Security-Policy",
+                     base::StrCat({"script-src ", raw}));
   std::vector<mojom::ContentSecurityPolicyPtr> policies;
   AddContentSecurityPolicyFromHeaders(*headers, GURL("https://example.com/"),
                                       &policies);
@@ -34,99 +34,106 @@ network::mojom::CSPSourcePtr CSPSource(const std::string& raw) {
 
 }  // namespace
 
-TEST(CSPSourceTest, BasicMatching) {
+class CSPSourceTest : public testing::TestWithParam<CSPSourceContext> {
+ public:
+  bool Allow(const network::mojom::CSPSource& source,
+             const GURL& url,
+             const network::mojom::CSPSource& self_source = no_self,
+             bool is_redirect = false,
+             bool is_opaque_fenced_frame = false) {
+    return CheckCSPSource(source, url, self_source, GetParam(), is_redirect,
+                          is_opaque_fenced_frame);
+  }
+
+  bool IsPermissionsPolicyContext() {
+    return GetParam() == CSPSourceContext::PermissionsPolicy;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    CSPSourceTest,
+    ::testing::Values(CSPSourceContext::ContentSecurityPolicy,
+                      CSPSourceContext::PermissionsPolicy));
+
+TEST_P(CSPSourceTest, BasicMatching) {
   auto source = network::mojom::CSPSource::New("http", "example.com", 8000,
                                                "/foo/", false, false);
 
-  // Self doesn't match anything.
-  auto self_source = network::mojom::CSPSource::New(
-      "", "", url::PORT_UNSPECIFIED, "", false, false);
-
-  EXPECT_TRUE(
-      Allow(*source, GURL("http://example.com:8000/foo/"), *self_source));
-  EXPECT_TRUE(
-      Allow(*source, GURL("http://example.com:8000/foo/bar"), *self_source));
-  EXPECT_TRUE(
-      Allow(*source, GURL("HTTP://EXAMPLE.com:8000/foo/BAR"), *self_source));
-
-  EXPECT_FALSE(
-      Allow(*source, GURL("http://example.com:8000/bar/"), *self_source));
-  EXPECT_FALSE(
-      Allow(*source, GURL("https://example.com:8000/bar/"), *self_source));
-  EXPECT_FALSE(
-      Allow(*source, GURL("http://example.com:9000/bar/"), *self_source));
-  EXPECT_FALSE(
-      Allow(*source, GURL("HTTP://example.com:8000/FOO/bar"), *self_source));
-  EXPECT_FALSE(
-      Allow(*source, GURL("HTTP://example.com:8000/FOO/BAR"), *self_source));
+  EXPECT_TRUE(Allow(*source, GURL("http://example.com:8000/foo/")));
+  EXPECT_TRUE(Allow(*source, GURL("http://example.com:8000/foo/bar")));
+  EXPECT_TRUE(Allow(*source, GURL("HTTP://EXAMPLE.com:8000/foo/BAR")));
+  EXPECT_FALSE(Allow(*source, GURL("http://example.com:8000/bar/")));
+  EXPECT_FALSE(Allow(*source, GURL("https://example.com:8000/bar/")));
+  EXPECT_FALSE(Allow(*source, GURL("http://example.com:9000/bar/")));
+  EXPECT_FALSE(Allow(*source, GURL("HTTP://example.com:8000/FOO/bar")));
+  EXPECT_FALSE(Allow(*source, GURL("HTTP://example.com:8000/FOO/BAR")));
 }
 
-TEST(CSPSourceTest, AllowScheme) {
-  // Self doesn't match anything.
-  auto no_self_source = network::mojom::CSPSource::New(
-      "", "", url::PORT_UNSPECIFIED, "", false, false);
-
+TEST_P(CSPSourceTest, AllowScheme) {
   // http -> {http, https}.
   {
     auto source = network::mojom::CSPSource::New(
         "http", "", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_TRUE(Allow(*source, GURL("http://a.com"), *no_self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *no_self_source));
+    EXPECT_TRUE(Allow(*source, GURL("http://a.com")));
+    EXPECT_TRUE(Allow(*source, GURL("https://a.com")));
     // This passes because the source is "scheme only" so the upgrade is
     // allowed.
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com:80"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("ftp://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("ws://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("wss://a.com"), *no_self_source));
+    EXPECT_TRUE(Allow(*source, GURL("https://a.com:80")));
+    EXPECT_FALSE(Allow(*source, GURL("ftp://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("ws://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("wss://a.com")));
   }
 
   // ws -> {ws, wss}.
   {
     auto source = network::mojom::CSPSource::New(
         "ws", "", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_FALSE(Allow(*source, GURL("http://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("https://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("ftp://a.com"), *no_self_source));
-    EXPECT_TRUE(Allow(*source, GURL("ws://a.com"), *no_self_source));
-    EXPECT_TRUE(Allow(*source, GURL("wss://a.com"), *no_self_source));
+    EXPECT_FALSE(Allow(*source, GURL("http://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("https://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("ftp://a.com")));
+    EXPECT_TRUE(Allow(*source, GURL("ws://a.com")));
+    EXPECT_TRUE(Allow(*source, GURL("wss://a.com")));
   }
 
   // Exact matches required (ftp)
   {
     auto source = network::mojom::CSPSource::New(
         "ftp", "", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_TRUE(Allow(*source, GURL("ftp://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("http://a.com"), *no_self_source));
+    EXPECT_TRUE(Allow(*source, GURL("ftp://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("http://a.com")));
   }
 
   // Exact matches required (https)
   {
     auto source = network::mojom::CSPSource::New(
         "https", "", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("http://a.com"), *no_self_source));
+    EXPECT_TRUE(Allow(*source, GURL("https://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("http://a.com")));
   }
 
   // Exact matches required (wss)
   {
     auto source = network::mojom::CSPSource::New(
         "wss", "", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_TRUE(Allow(*source, GURL("wss://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("ws://a.com"), *no_self_source));
+    EXPECT_TRUE(Allow(*source, GURL("wss://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("ws://a.com")));
   }
 
   // Scheme is empty (ProtocolMatchesSelf).
   {
     auto source = network::mojom::CSPSource::New(
         "", "a.com", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_FALSE(Allow(*source, GURL("http://a.com"), *no_self_source));
+    EXPECT_FALSE(Allow(*source, GURL("http://a.com")));
 
     {
       // Self's scheme is http.
       auto self_source =
           network::mojom::CSPSource::New("http", "a.com", 80, "", false, false);
       EXPECT_TRUE(Allow(*source, GURL("http://a.com"), *self_source));
-      EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *self_source));
+      // Upgrades are disallowed for permission policies.
+      EXPECT_EQ(Allow(*source, GURL("https://a.com"), *self_source),
+                !IsPermissionsPolicyContext());
       EXPECT_FALSE(Allow(*source, GURL("ftp://a.com"), *self_source));
     }
 
@@ -158,19 +165,14 @@ TEST(CSPSourceTest, AllowScheme) {
     }
 
     // Self's scheme is unique (e.g. data-url).
-    EXPECT_FALSE(Allow(*source, GURL("http://a.com"), *no_self_source));
-    EXPECT_FALSE(Allow(*source, GURL("data:text/html,hello"), *no_self_source));
+    EXPECT_FALSE(Allow(*source, GURL("http://a.com")));
+    EXPECT_FALSE(Allow(*source, GURL("data:text/html,hello")));
   }
 }
 
-TEST(CSPSourceTest, AllowHost) {
+TEST_P(CSPSourceTest, AllowHost) {
   auto self_source = network::mojom::CSPSource::New("http", "example.com", 80,
                                                     "", false, false);
-
-  // Self doesn't match anything.
-  auto no_self_source = network::mojom::CSPSource::New(
-      "", "", url::PORT_UNSPECIFIED, "", false, false);
-
   // Host is * (source-expression = "http://*")
   {
     auto source = network::mojom::CSPSource::New(
@@ -206,7 +208,7 @@ TEST(CSPSourceTest, AllowHost) {
   }
 }
 
-TEST(CSPSourceTest, AllowPort) {
+TEST_P(CSPSourceTest, AllowPort) {
   auto self_source = network::mojom::CSPSource::New("http", "example.com", 80,
                                                     "", false, false);
 
@@ -219,11 +221,15 @@ TEST(CSPSourceTest, AllowPort) {
     EXPECT_FALSE(Allow(*source, GURL("http://a.com:443"), *self_source));
     EXPECT_FALSE(Allow(*source, GURL("https://a.com:80"), *self_source));
     EXPECT_FALSE(Allow(*source, GURL("https://a.com:8080"), *self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com:443"), *self_source));
+    // Upgrades are disallowed for permission policies.
+    EXPECT_EQ(Allow(*source, GURL("https://a.com:443"), *self_source),
+              !IsPermissionsPolicyContext());
     EXPECT_FALSE(Allow(*source, GURL("unknown://a.com:80"), *self_source));
     EXPECT_TRUE(Allow(*source, GURL("http://a.com"), *self_source));
     EXPECT_TRUE(Allow(*source, GURL("http://a.com"), *self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *self_source));
+    // Upgrades are disallowed for permission policies.
+    EXPECT_EQ(Allow(*source, GURL("https://a.com"), *self_source),
+              !IsPermissionsPolicyContext());
   }
 
   // Source's port is "*".
@@ -233,9 +239,13 @@ TEST(CSPSourceTest, AllowPort) {
     EXPECT_TRUE(Allow(*source, GURL("http://a.com"), *self_source));
     EXPECT_TRUE(Allow(*source, GURL("http://a.com:80"), *self_source));
     EXPECT_TRUE(Allow(*source, GURL("http://a.com:8080"), *self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com:8080"), *self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com:0"), *self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *self_source));
+    // Upgrades are disallowed for permission policies.
+    EXPECT_EQ(Allow(*source, GURL("https://a.com:8080"), *self_source),
+              !IsPermissionsPolicyContext());
+    EXPECT_EQ(Allow(*source, GURL("https://a.com:0"), *self_source),
+              !IsPermissionsPolicyContext());
+    EXPECT_EQ(Allow(*source, GURL("https://a.com"), *self_source),
+              !IsPermissionsPolicyContext());
   }
 
   // Source has a port.
@@ -245,14 +255,18 @@ TEST(CSPSourceTest, AllowPort) {
     EXPECT_TRUE(Allow(*source, GURL("http://a.com:80"), *self_source));
     EXPECT_TRUE(Allow(*source, GURL("http://a.com"), *self_source));
     EXPECT_FALSE(Allow(*source, GURL("http://a.com:8080"), *self_source));
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *self_source));
+    // Upgrades are disallowed for permission policies.
+    EXPECT_EQ(Allow(*source, GURL("https://a.com"), *self_source),
+              !IsPermissionsPolicyContext());
   }
 
   // Allow upgrade from :80 to :443
   {
     auto source =
         network::mojom::CSPSource::New("", "a.com", 80, "", false, false);
-    EXPECT_TRUE(Allow(*source, GURL("https://a.com:443"), *self_source));
+    // Upgrades are disallowed for permission policies.
+    EXPECT_EQ(Allow(*source, GURL("https://a.com:443"), *self_source),
+              !IsPermissionsPolicyContext());
     // Should not allow scheme upgrades unless both port and scheme are
     // upgraded.
     EXPECT_FALSE(Allow(*source, GURL("http://a.com:443"), *self_source));
@@ -267,7 +281,7 @@ TEST(CSPSourceTest, AllowPort) {
   }
 }
 
-TEST(CSPSourceTest, AllowPath) {
+TEST_P(CSPSourceTest, AllowPath) {
   auto self_source = network::mojom::CSPSource::New("http", "example.com", 80,
                                                     "", false, false);
 
@@ -343,26 +357,19 @@ TEST(CSPSourceTest, AllowPath) {
   }
 }
 
-TEST(CSPSourceTest, RedirectMatching) {
+TEST_P(CSPSourceTest, RedirectMatching) {
   auto source = network::mojom::CSPSource::New("http", "a.com", 8000, "/bar/",
                                                false, false);
 
-  // Self doesn't match anything.
-  auto self_source = network::mojom::CSPSource::New(
-      "", "", url::PORT_UNSPECIFIED, "", false, false);
-
-  EXPECT_TRUE(Allow(*source, GURL("http://a.com:8000/"), *self_source, true));
-  EXPECT_TRUE(
-      Allow(*source, GURL("http://a.com:8000/foo"), *self_source, true));
+  EXPECT_TRUE(Allow(*source, GURL("http://a.com:8000/"), no_self, true));
+  EXPECT_TRUE(Allow(*source, GURL("http://a.com:8000/foo"), no_self, true));
+  EXPECT_FALSE(Allow(*source, GURL("https://a.com:8000/foo"), no_self, true));
   EXPECT_FALSE(
-      Allow(*source, GURL("https://a.com:8000/foo"), *self_source, true));
-  EXPECT_FALSE(
-      Allow(*source, GURL("http://not-a.com:8000/foo"), *self_source, true));
-  EXPECT_FALSE(
-      Allow(*source, GURL("http://a.com:9000/foo/"), *self_source, false));
+      Allow(*source, GURL("http://not-a.com:8000/foo"), no_self, true));
+  EXPECT_FALSE(Allow(*source, GURL("http://a.com:9000/foo/"), no_self, false));
 }
 
-TEST(CSPSourceTest, Intersect) {
+TEST_P(CSPSourceTest, Intersect) {
   struct TestCase {
     const char* a;
     const char* b;
@@ -431,7 +438,7 @@ TEST(CSPSourceTest, Intersect) {
   }
 }
 
-TEST(CSPSourceTest, DoesNotSubsume) {
+TEST_P(CSPSourceTest, DoesNotSubsume) {
   struct TestCase {
     const char* a;
     const char* b;
@@ -462,7 +469,7 @@ TEST(CSPSourceTest, DoesNotSubsume) {
   }
 }
 
-TEST(CSPSourceTest, Subsumes) {
+TEST_P(CSPSourceTest, Subsumes) {
   struct TestCase {
     const char* a;
     const char* b;
@@ -525,7 +532,7 @@ TEST(CSPSourceTest, Subsumes) {
   }
 }
 
-TEST(CSPSourceTest, HostWildcardSubsumes) {
+TEST_P(CSPSourceTest, HostWildcardSubsumes) {
   const char* a = "http://*.example.org";
   const char* b = "http://www.example.org";
   const char* c = "http://example.org";
@@ -555,7 +562,7 @@ TEST(CSPSourceTest, HostWildcardSubsumes) {
       << b << " should not subsume " << d;
 }
 
-TEST(CSPSourceTest, PortWildcardSubsumes) {
+TEST_P(CSPSourceTest, PortWildcardSubsumes) {
   const char* a = "http://example.org:*";
   const char* b = "http://example.org";
   const char* c = "https://example.org:*";
@@ -576,7 +583,7 @@ TEST(CSPSourceTest, PortWildcardSubsumes) {
       << c << " should not subsume " << b;
 }
 
-TEST(CSPSourceTest, SchemesOnlySubsumes) {
+TEST_P(CSPSourceTest, SchemesOnlySubsumes) {
   struct TestCase {
     const char* a;
     const char* b;
@@ -609,7 +616,7 @@ TEST(CSPSourceTest, SchemesOnlySubsumes) {
   }
 }
 
-TEST(CSPSourceTest, ToString) {
+TEST_P(CSPSourceTest, ToString) {
   {
     auto source = network::mojom::CSPSource::New(
         "http", "", url::PORT_UNSPECIFIED, "", false, false);
@@ -652,19 +659,80 @@ TEST(CSPSourceTest, ToString) {
   }
 }
 
-TEST(CSPSourceTest, UpgradeRequests) {
+TEST_P(CSPSourceTest, UpgradeRequests) {
   auto source =
       network::mojom::CSPSource::New("http", "a.com", 80, "", false, false);
 
-  // Self doesn't match anything.
-  auto self_source = network::mojom::CSPSource::New(
-      "", "", url::PORT_UNSPECIFIED, "", false, false);
-
-  EXPECT_TRUE(Allow(*source, GURL("http://a.com:80"), *self_source, true));
-  EXPECT_FALSE(Allow(*source, GURL("https://a.com:80"), *self_source, true));
-  EXPECT_FALSE(Allow(*source, GURL("http://a.com:443"), *self_source, true));
-  EXPECT_TRUE(Allow(*source, GURL("https://a.com:443"), *self_source, true));
-  EXPECT_TRUE(Allow(*source, GURL("https://a.com"), *self_source, true));
+  EXPECT_TRUE(Allow(*source, GURL("http://a.com:80"), no_self, true));
+  EXPECT_FALSE(Allow(*source, GURL("https://a.com:80"), no_self, true));
+  EXPECT_FALSE(Allow(*source, GURL("http://a.com:443"), no_self, true));
+  // Upgrades are disallowed for permission policies.
+  EXPECT_EQ(Allow(*source, GURL("https://a.com:443"), no_self, true),
+            !IsPermissionsPolicyContext());
+  EXPECT_EQ(Allow(*source, GURL("https://a.com"), no_self, true),
+            !IsPermissionsPolicyContext());
 }
 
-}  // namespace content
+TEST_P(CSPSourceTest, CustomSchemeWithHost) {
+  std::string uri = "custom-scheme://a/b";
+  auto csp_source = CSPSource(uri);
+  auto url = GURL(uri);
+
+  EXPECT_EQ("a", csp_source->host);
+  EXPECT_FALSE(Allow(*csp_source, url));
+
+  // It is still possible for developers to use a scheme-only CSPSource.
+  // See test: CSPSourceTest.CustomScheme
+}
+
+TEST_P(CSPSourceTest, CustomScheme) {
+  auto csp_source = CSPSource("custom-scheme:");  // Scheme only CSP.
+  EXPECT_TRUE(Allow(*csp_source, GURL("custom-scheme://a/b")));
+  EXPECT_FALSE(Allow(*csp_source, GURL("other-scheme://a/b")));
+}
+
+TEST_P(CSPSourceTest, OpaqueURLMatchingAllowSchemeHttps) {
+  auto source = CSPSource("https:");
+  EXPECT_TRUE(Allow(*source, GURL("https://a.com"), no_self,
+                    /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+}
+
+TEST_P(CSPSourceTest, OpaqueURLMatchingAllowSchemeNonHttps) {
+  auto source = CSPSource("http:");
+  EXPECT_FALSE(Allow(*source, GURL("https://a.com"), no_self,
+                     /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+}
+
+TEST_P(CSPSourceTest, OpaqueURLMatchingAllowHostAndPort) {
+  {
+    auto source = CSPSource("https://*:*");
+    EXPECT_TRUE(Allow(*source, GURL("https://a.com"), no_self,
+                      /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+  }
+
+  {
+    auto source = CSPSource("https://*");
+    EXPECT_FALSE(Allow(*source, GURL("https://a.com"), no_self,
+                       /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+  }
+
+  {
+    auto source = CSPSource("https://*:443");
+    EXPECT_FALSE(Allow(*source, GURL("https://a.com"), no_self,
+                       /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+  }
+
+  {
+    auto source = CSPSource("https://a.com:*");
+    EXPECT_FALSE(Allow(*source, GURL("https://a.com"), no_self,
+                       /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+  }
+
+  {
+    auto source = CSPSource("https://a.com");
+    EXPECT_FALSE(Allow(*source, GURL("https://a.com"), no_self,
+                       /*is_redirect=*/false, /*is_opaque_fenced_frame=*/true));
+  }
+}
+
+}  // namespace network

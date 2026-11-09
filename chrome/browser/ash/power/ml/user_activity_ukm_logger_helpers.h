@@ -1,16 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_POWER_ML_USER_ACTIVITY_UKM_LOGGER_HELPERS_H_
 #define CHROME_BROWSER_ASH_POWER_ML_USER_ACTIVITY_UKM_LOGGER_HELPERS_H_
 
+#include <array>
 #include <map>
 #include <string>
 
 #include "base/check_op.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "chrome/browser/ash/power/ml/user_activity_event.pb.h"
 
 namespace ash {
@@ -18,15 +18,15 @@ namespace power {
 namespace ml {
 
 // Metrics below are bucketized.
-constexpr char kBatteryPercent[] = "BatteryPercent";
-constexpr char kEventLogDuration[] = "EventLogDuration";
-constexpr char kKeyEventsInLastHour[] = "KeyEventsInLastHour";
-constexpr char kLastActivityTime[] = "LastActivityTime";
-constexpr char kLastUserActivityTime[] = "LastUserActivityTime";
-constexpr char kMouseEventsInLastHour[] = "MouseEventsInLastHour";
-constexpr char kRecentVideoPlayingTime[] = "RecentVideoPlayingTime";
-constexpr char kTimeSinceLastVideoEnded[] = "TimeSinceLastVideoEnded";
-constexpr char kTouchEventsInLastHour[] = "TouchEventsInLastHour";
+inline constexpr char kBatteryPercent[] = "BatteryPercent";
+inline constexpr char kEventLogDuration[] = "EventLogDuration";
+inline constexpr char kKeyEventsInLastHour[] = "KeyEventsInLastHour";
+inline constexpr char kLastActivityTime[] = "LastActivityTime";
+inline constexpr char kLastUserActivityTime[] = "LastUserActivityTime";
+inline constexpr char kMouseEventsInLastHour[] = "MouseEventsInLastHour";
+inline constexpr char kRecentVideoPlayingTime[] = "RecentVideoPlayingTime";
+inline constexpr char kTimeSinceLastVideoEnded[] = "TimeSinceLastVideoEnded";
+inline constexpr char kTouchEventsInLastHour[] = "TouchEventsInLastHour";
 
 // TODO(jiameng): both Bucket and Bucketize are meant for user activity logging,
 // but it's currently used by adaptive brightness. Need to refactor by either
@@ -51,8 +51,8 @@ struct Bucket {
 // |original_value| = 299.
 template <size_t N>
 int Bucketize(int original_value, const std::array<Bucket, N>& buckets) {
-  DCHECK_GE(original_value, 0);
-  DCHECK(!buckets.empty());
+  CHECK_GE(original_value, 0, base::NotFatalUntil::M160);
+  CHECK(!buckets.empty(), base::NotFatalUntil::M160);
   for (const auto& bucket : buckets) {
     if (original_value < bucket.boundary_end) {
       return bucket.rounding * (original_value / bucket.rounding);
@@ -63,6 +63,12 @@ int Bucketize(int original_value, const std::array<Bucket, N>& buckets) {
 
 class UserActivityUkmLoggerBucketizer {
  public:
+  UserActivityUkmLoggerBucketizer() = delete;
+  UserActivityUkmLoggerBucketizer(const UserActivityUkmLoggerBucketizer&) =
+      delete;
+  UserActivityUkmLoggerBucketizer& operator=(
+      const UserActivityUkmLoggerBucketizer&) = delete;
+
   // Bucketizes features if they are present. Returns a
   // feature->bucketized_value map.
   static std::map<std::string, int> BucketizeUserActivityEventFeatures(
@@ -71,10 +77,6 @@ class UserActivityUkmLoggerBucketizer {
   // Bucketizes features and also EventLogDuration.
   static std::map<std::string, int> BucketizeUserActivityEventData(
       const UserActivityEvent& event);
-
- private:
-  UserActivityUkmLoggerBucketizer() = delete;
-  DISALLOW_COPY_AND_ASSIGN(UserActivityUkmLoggerBucketizer);
 };
 
 }  // namespace ml

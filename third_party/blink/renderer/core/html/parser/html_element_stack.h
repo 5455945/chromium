@@ -27,15 +27,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_ELEMENT_STACK_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_ELEMENT_STACK_H_
 
-#include "base/memory/scoped_refptr.h"
+#include <initializer_list>
+
 #include "third_party/blink/renderer/core/html/parser/html_stack_item.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
 class ContainerNode;
 class Element;
-class QualifiedName;
 
 // NOTE: The HTML5 spec uses a backwards (grows downward) stack.  We're using
 // more standard (grows upwards) stack terminology here.
@@ -47,34 +48,6 @@ class HTMLElementStack {
   HTMLElementStack(const HTMLElementStack&) = delete;
   HTMLElementStack& operator=(const HTMLElementStack&) = delete;
 
-  class ElementRecord final : public GarbageCollected<ElementRecord> {
-   public:
-    ElementRecord(HTMLStackItem*, ElementRecord*);
-    ElementRecord(const ElementRecord&) = delete;
-    ElementRecord& operator=(const ElementRecord&) = delete;
-
-    Element* GetElement() const { return item_->GetElement(); }
-    ContainerNode* GetNode() const { return item_->GetNode(); }
-    const AtomicString& NamespaceURI() const { return item_->NamespaceURI(); }
-    HTMLStackItem* StackItem() const { return item_; }
-    void ReplaceElement(HTMLStackItem*);
-
-    bool IsAbove(ElementRecord*) const;
-
-    ElementRecord* Next() const { return next_.Get(); }
-
-    void Trace(Visitor*) const;
-
-   private:
-    friend class HTMLElementStack;
-
-    ElementRecord* ReleaseNext() { return next_.Release(); }
-    void SetNext(ElementRecord* next) { next_ = next; }
-
-    Member<HTMLStackItem> item_;
-    Member<ElementRecord> next_;
-  };
-
   unsigned StackDepth() const { return stack_depth_; }
 
   // Inlining this function is a (small) performance win on the parsing
@@ -85,38 +58,35 @@ class HTMLElementStack {
   }
 
   ContainerNode* TopNode() const {
+    DCHECK(top_);
     DCHECK(top_->GetNode());
     return top_->GetNode();
   }
 
   HTMLStackItem* TopStackItem() const {
-    DCHECK(top_->StackItem());
-    return top_->StackItem();
+    DCHECK(top_);
+    return top_.Get();
   }
 
-  HTMLStackItem* OneBelowTop() const;
-  ElementRecord* TopRecord() const;
-  ElementRecord* Find(Element*) const;
-  ElementRecord* FurthestBlockForFormattingElement(Element*) const;
-  ElementRecord* Topmost(const AtomicString& tag_name) const;
+  HTMLStackItem* Find(Element*) const;
+  HTMLStackItem* FurthestBlockForFormattingElement(Element*) const;
+  HTMLStackItem* Topmost(html_names::HTMLTag tag) const;
 
-  void InsertAbove(HTMLStackItem*, ElementRecord*);
+  void InsertAbove(HTMLStackItem*, HTMLStackItem*);
 
   void Push(HTMLStackItem*);
   void PushRootNode(HTMLStackItem*);
   void PushHTMLHtmlElement(HTMLStackItem*);
   void PushHTMLHeadElement(HTMLStackItem*);
   void PushHTMLBodyElement(HTMLStackItem*);
+  void Replace(HTMLStackItem* old_item, HTMLStackItem* new_item);
 
   void Pop();
-  void PopUntil(const AtomicString& tag_name);
+  void PopUntil(html_names::HTMLTag tag);
   void PopUntil(Element*);
-  void PopUntilPopped(const AtomicString& tag_name);
-  void PopUntilPopped(const QualifiedName& tag_name) {
-    PopUntilPopped(tag_name.LocalName());
-  }
-
   void PopUntilPopped(Element*);
+  void PopUntilPopped(html_names::HTMLTag tag);
+
   void PopUntilNumberedHeaderElementPopped();
 
   // "clear the stack back to a table context" in the spec.
@@ -140,19 +110,13 @@ class HTMLElementStack {
   void RemoveHTMLHeadElement(Element*);
 
   bool Contains(Element*) const;
-  bool Contains(const AtomicString& tag_name) const;
 
   bool InScope(Element*) const;
-  bool InScope(const AtomicString& tag_name) const;
-  bool InScope(const QualifiedName&) const;
-  bool InListItemScope(const AtomicString& tag_name) const;
-  bool InListItemScope(const QualifiedName&) const;
-  bool InTableScope(const AtomicString& tag_name) const;
-  bool InTableScope(const QualifiedName&) const;
-  bool InButtonScope(const AtomicString& tag_name) const;
-  bool InButtonScope(const QualifiedName&) const;
-  bool InSelectScope(const AtomicString& tag_name) const;
-  bool InSelectScope(const QualifiedName&) const;
+  bool InScope(html_names::HTMLTag tag) const;
+  bool InListItemScope(html_names::HTMLTag tag) const;
+  bool InTableScope(html_names::HTMLTag tag) const;
+  bool InTableScope(std::initializer_list<html_names::HTMLTag> tags) const;
+  bool InButtonScope(html_names::HTMLTag tag) const;
 
   bool HasNumberedHeaderElementInScope() const;
 
@@ -160,7 +124,6 @@ class HTMLElementStack {
   bool SecondElementIsHTMLBodyElement() const;
   bool HasTemplateInHTMLScope() const;
   Element* HtmlElement() const;
-  Element* HeadElement() const;
   Element* BodyElement() const;
 
   ContainerNode* RootNode() const;
@@ -176,11 +139,13 @@ class HTMLElementStack {
   void PushRootNodeCommon(HTMLStackItem*);
   void PopCommon();
   void RemoveNonTopCommon(Element*);
+  void UpdatePElementInButtonScope(
+      const HeapVector<Member<HTMLStackItem>>& items_above);
 
-  Member<ElementRecord> top_;
+  Member<HTMLStackItem> top_;
 
-  // We remember the root node, <head> and <body> as they are pushed. Their
-  // ElementRecords keep them alive. The root node is never popped.
+  // We remember the root node, <head> and <body> as they are pushed. The root
+  // node is never popped.
   // FIXME: We don't currently require type-specific information about these
   // elements so we haven't yet bothered to plumb the types all the way down
   // through createElement, etc.

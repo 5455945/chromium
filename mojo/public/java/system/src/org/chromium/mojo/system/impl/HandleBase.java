@@ -1,35 +1,29 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.mojo.system.impl;
 
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.mojo.system.Core;
 import org.chromium.mojo.system.Core.HandleSignalsState;
 import org.chromium.mojo.system.Handle;
 import org.chromium.mojo.system.UntypedHandle;
 
-/**
- * Implementation of {@link Handle}.
- */
+/** Implementation of {@link Handle}. */
+@NullMarked
 abstract class HandleBase implements Handle {
     private static final String TAG = "HandleImpl";
 
-    /**
-     * The pointer to the scoped handle owned by this object.
-     */
-    private int mMojoHandle;
+    /** The pointer to the scoped handle owned by this object. */
+    private long mMojoHandle;
 
-    /**
-     * The core implementation. Will be used to delegate all behavior.
-     */
+    /** The core implementation. Will be used to delegate all behavior. */
     protected CoreImpl mCore;
 
-    /**
-     * Base constructor. Takes ownership of the passed handle.
-     */
-    HandleBase(CoreImpl core, int mojoHandle) {
+    /** Base constructor. Takes ownership of the passed handle. */
+    HandleBase(CoreImpl core, long mojoHandle) {
         mCore = core;
         mMojoHandle = mojoHandle;
     }
@@ -41,7 +35,7 @@ abstract class HandleBase implements Handle {
     protected HandleBase(HandleBase other) {
         mCore = other.mCore;
         HandleBase otherAsHandleImpl = other;
-        int mojoHandle = otherAsHandleImpl.mMojoHandle;
+        long mojoHandle = otherAsHandleImpl.mMojoHandle;
         otherAsHandleImpl.mMojoHandle = CoreImpl.INVALID_HANDLE;
         mMojoHandle = mojoHandle;
     }
@@ -53,7 +47,7 @@ abstract class HandleBase implements Handle {
     public void close() {
         if (mMojoHandle != CoreImpl.INVALID_HANDLE) {
             // After a close, the handle is invalid whether the close succeed or not.
-            int handle = mMojoHandle;
+            long handle = mMojoHandle;
             mMojoHandle = CoreImpl.INVALID_HANDLE;
             mCore.close(handle);
         }
@@ -95,8 +89,8 @@ abstract class HandleBase implements Handle {
      * @see Handle#releaseNativeHandle()
      */
     @Override
-    public int releaseNativeHandle() {
-        int result = mMojoHandle;
+    public long releaseNativeHandle() {
+        long result = mMojoHandle;
         mMojoHandle = CoreImpl.INVALID_HANDLE;
         return result;
     }
@@ -106,13 +100,11 @@ abstract class HandleBase implements Handle {
      *
      * @return the native scoped handle.
      */
-    int getMojoHandle() {
+    long getMojoHandle() {
         return mMojoHandle;
     }
 
-    /**
-     * invalidate the handle. The caller must ensures that the handle does not leak.
-     */
+    /** invalidate the handle. The caller must ensures that the handle does not leak. */
     void invalidateHandle() {
         mMojoHandle = CoreImpl.INVALID_HANDLE;
     }
@@ -124,6 +116,7 @@ abstract class HandleBase implements Handle {
      * @see java.lang.Object#finalize()
      */
     @Override
+    @SuppressWarnings("Finalize") // TODO(crbug.com/40286193): Use LifetimeAssert instead.
     protected final void finalize() throws Throwable {
         if (isValid()) {
             // This should not happen, as the user of this class should close the handle. Adding a

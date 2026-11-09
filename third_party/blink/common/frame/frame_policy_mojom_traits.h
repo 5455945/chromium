@@ -1,12 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_COMMON_FRAME_FRAME_POLICY_MOJOM_TRAITS_H_
 #define THIRD_PARTY_BLINK_COMMON_FRAME_FRAME_POLICY_MOJOM_TRAITS_H_
 
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_mojom_traits.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
-#include "third_party/blink/common/permissions_policy/permissions_policy_mojom_traits.h"
+#include "third_party/blink/common/permissions_policy/policy_value_mojom_traits.h"
 #include "third_party/blink/public/common/frame/frame_policy.h"
 #include "third_party/blink/public/mojom/frame/frame_policy.mojom-shared.h"
 
@@ -16,11 +18,7 @@ template <>
 class BLINK_COMMON_EXPORT
     StructTraits<blink::mojom::FramePolicyDataView, blink::FramePolicy> {
  public:
-  static bool is_fenced(const blink::FramePolicy& frame_policy) {
-    return frame_policy.is_fenced;
-  }
-
-  static const std::vector<blink::ParsedPermissionsPolicyDeclaration>&
+  static const std::vector<network::ParsedPermissionsPolicyDeclaration>&
   container_policy(const blink::FramePolicy& frame_policy) {
     return frame_policy.container_policy;
   }
@@ -33,6 +31,11 @@ class BLINK_COMMON_EXPORT
   static const blink::DocumentPolicyFeatureState& required_document_policy(
       const blink::FramePolicy& frame_policy) {
     return frame_policy.required_document_policy;
+  }
+
+  static const blink::mojom::DeferredFetchPolicy& deferred_fetch_policy(
+      const blink::FramePolicy& frame_policy) {
+    return frame_policy.deferred_fetch_policy;
   }
 
   static bool Read(blink::mojom::FramePolicyDataView in,

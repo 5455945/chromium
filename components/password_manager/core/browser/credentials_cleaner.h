@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,8 +49,8 @@ class CredentialsCleaner {
   // Iterates through |forms| and removes credentials whose signon_realm does
   // not correspond to a HTTP or HTTPS scheme. In particular, this filters out
   // Android and federated credentials. Returns the result.
-  static std::vector<std::unique_ptr<PasswordForm>> RemoveNonHTTPOrHTTPSForms(
-      std::vector<std::unique_ptr<PasswordForm>> forms);
+  static std::vector<PasswordForm> RemoveNonHTTPOrHTTPSForms(
+      std::vector<PasswordForm> forms);
 };
 
 }  // namespace password_manager

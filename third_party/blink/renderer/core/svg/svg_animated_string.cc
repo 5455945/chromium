@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,28 +8,37 @@
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script_url.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
+#include "third_party/blink/renderer/core/xlink_names.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
-V8UnionStringOrTrustedScriptURL* SVGAnimatedString::baseVal() {
-  return MakeGarbageCollected<V8UnionStringOrTrustedScriptURL>(
-      SVGAnimatedProperty<SVGString>::baseVal());
+String SVGAnimatedString::baseVal() {
+  return SVGAnimatedProperty<SVGString>::baseVal();
 }
 
 void SVGAnimatedString::setBaseVal(const V8UnionStringOrTrustedScriptURL* value,
                                    ExceptionState& exception_state) {
   DCHECK(value);
 
-  // https://w3c.github.io/webappsec-trusted-types/dist/spec/#integration-with-svg
+  // https://github.com/w3c/svgwg/pull/934, and formerly
+  // https://w3c.github.io/trusted-types/dist/spec/#integration-with-svg
   String string;
   switch (value->GetContentType()) {
     case V8UnionStringOrTrustedScriptURL::ContentType::kString:
       string = value->GetAsString();
       if (ContextElement()->IsScriptElement()) {
-        string = TrustedTypesCheckForScriptURL(
-            string, ContextElement()->GetExecutionContext(), exception_state);
-        if (exception_state.HadException())
+        // https://github.com/w3c/svgwg/pull/934
+        if (AttributeName() == svg_names::kHrefAttr ||
+            AttributeName() == xlink_names::kHrefAttr) {
+          string = TrustedTypesCheckForScriptURL(
+              string, ContextElement()->GetExecutionContext(),
+              trusted_types_names::kSVGScriptElement,
+              trusted_types_names::kHref, exception_state);
+        }
+        if (exception_state.HadException()) {
           return;
+        }
       }
       break;
     case V8UnionStringOrTrustedScriptURL::ContentType::kTrustedScriptURL:

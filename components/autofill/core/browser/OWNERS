@@ -1,2 +1,1 @@
-per-file *type_controller*=jkrcal@chromium.org
-per-file *type_controller*=file://components/sync/OWNERS
+per-file BUILD.gn=file://components/autofill/core/browser/payments/OWNERS

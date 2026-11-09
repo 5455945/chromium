@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,12 @@
 
 #include <memory>
 
-#include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "content/browser/speech/speech_recognizer.h"
-#include "third_party/blink/public/mojom/speech/speech_recognition_error.mojom.h"
-#include "third_party/blink/public/mojom/speech/speech_recognition_result.mojom.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/browser_thread.h"
+#include "media/mojo/mojom/speech_recognition_error.mojom.h"
+#include "media/mojo/mojom/speech_recognition_result.mojom.h"
 
 namespace content {
 
@@ -22,34 +22,24 @@ class SpeechRecognitionEventListener;
 
 class CONTENT_EXPORT SpeechRecognizerImplAndroid : public SpeechRecognizer {
  public:
+  class UiPeer;
+
   SpeechRecognizerImplAndroid(SpeechRecognitionEventListener* listener,
                               int session_id);
 
+  SpeechRecognizerImplAndroid(const SpeechRecognizerImplAndroid&) = delete;
+  SpeechRecognizerImplAndroid& operator=(const SpeechRecognizerImplAndroid&) =
+      delete;
+
   // SpeechRecognizer methods.
   void StartRecognition(const std::string& device_id) override;
+  void UpdateRecognitionContext(
+      const media::SpeechRecognitionRecognitionContext& recognition_context)
+      override;
   void AbortRecognition() override;
   void StopAudioCapture() override;
   bool IsActive() const override;
   bool IsCapturingAudio() const override;
-
-  // Called from Java methods via JNI.
-  void OnAudioStart(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj);
-  void OnSoundStart(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj);
-  void OnSoundEnd(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void OnAudioEnd(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void OnRecognitionResults(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobjectArray>& strings,
-      const base::android::JavaParamRef<jfloatArray>& floats,
-      jboolean interim);
-  void OnRecognitionError(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj,
-                          jint error);
-  void OnRecognitionEnd(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& obj);
 
  private:
   enum State {
@@ -58,18 +48,20 @@ class CONTENT_EXPORT SpeechRecognizerImplAndroid : public SpeechRecognizer {
     STATE_AWAITING_FINAL_RESULT
   };
 
-  void StartRecognitionOnUIThread(const std::string& language,
-                                  bool continuous,
-                                  bool interim_results);
+  void OnAudioStartOnIOThread();
+  void OnSoundStartOnIOThread();
+  void OnSoundEndOnIOThread();
+  void OnAudioEndOnIOThread();
   void OnRecognitionResultsOnIOThread(
-      std::vector<blink::mojom::SpeechRecognitionResultPtr> results);
+      std::vector<media::mojom::WebSpeechRecognitionResultPtr> results);
+  void OnRecognitionErrorOnIOThread(int32_t error);
+  void OnRecognitionEndOnIOThread();
 
   ~SpeechRecognizerImplAndroid() override;
 
-  base::android::ScopedJavaGlobalRef<jobject> j_recognition_;
   State state_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpeechRecognizerImplAndroid);
+  std::unique_ptr<UiPeer, BrowserThread::DeleteOnUIThread> ui_peer_;
+  base::WeakPtrFactory<SpeechRecognizerImplAndroid> io_weak_factory_{this};
 };
 
 }  // namespace content

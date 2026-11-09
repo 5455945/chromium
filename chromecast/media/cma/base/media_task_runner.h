@@ -1,13 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMECAST_MEDIA_CMA_BASE_MEDIA_TASK_RUNNER_H_
 #define CHROMECAST_MEDIA_CMA_BASE_MEDIA_TASK_RUNNER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 
@@ -18,6 +17,9 @@ class MediaTaskRunner
     : public base::RefCountedThreadSafe<MediaTaskRunner> {
  public:
   MediaTaskRunner();
+
+  MediaTaskRunner(const MediaTaskRunner&) = delete;
+  MediaTaskRunner& operator=(const MediaTaskRunner&) = delete;
 
   // Post a task with the given media |timestamp|. If |timestamp| is equal to
   // |kNoTimestamp|, the task is scheduled right away.
@@ -32,9 +34,6 @@ class MediaTaskRunner
  protected:
   virtual ~MediaTaskRunner();
   friend class base::RefCountedThreadSafe<MediaTaskRunner>;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MediaTaskRunner);
 };
 
 }  // namespace media

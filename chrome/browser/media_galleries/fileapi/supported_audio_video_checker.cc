@@ -1,27 +1,24 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media_galleries/fileapi/supported_audio_video_checker.h"
 
 #include <stddef.h>
+
 #include <set>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "chrome/services/media_gallery_util/public/cpp/safe_audio_video_checker.h"
-#include "components/download/public/common/quarantine_connection.h"
+#include "components/media_gallery_util/safe_audio_video_checker.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/mime_util.h"
@@ -45,14 +42,16 @@ class SupportedAudioVideoExtensions {
     }
   }
 
+  SupportedAudioVideoExtensions(const SupportedAudioVideoExtensions&) = delete;
+  SupportedAudioVideoExtensions& operator=(
+      const SupportedAudioVideoExtensions&) = delete;
+
   bool HasSupportedAudioVideoExtension(const base::FilePath& file) {
-    return base::Contains(audio_video_extensions_, file.Extension());
+    return audio_video_extensions_.contains(file.Extension());
   }
 
  private:
   std::set<base::FilePath::StringType> audio_video_extensions_;
-
-  DISALLOW_COPY_AND_ASSIGN(SupportedAudioVideoExtensions);
 };
 
 base::LazyInstance<SupportedAudioVideoExtensions>::DestructorAtExit
@@ -66,7 +65,7 @@ base::File OpenBlocking(const base::FilePath& path) {
 
 }  // namespace
 
-SupportedAudioVideoChecker::~SupportedAudioVideoChecker() {}
+SupportedAudioVideoChecker::~SupportedAudioVideoChecker() = default;
 
 // static
 bool SupportedAudioVideoChecker::SupportsFileType(const base::FilePath& path) {
@@ -75,8 +74,8 @@ bool SupportedAudioVideoChecker::SupportsFileType(const base::FilePath& path) {
 
 void SupportedAudioVideoChecker::StartPreWriteValidation(
     storage::CopyOrMoveFileValidator::ResultCallback result_callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(callback_.is_null());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK(callback_.is_null(), base::NotFatalUntil::M161);
   callback_ = std::move(result_callback);
 
   base::ThreadPool::PostTaskAndReplyWithResult(
@@ -87,12 +86,11 @@ void SupportedAudioVideoChecker::StartPreWriteValidation(
 }
 
 SupportedAudioVideoChecker::SupportedAudioVideoChecker(
-    const base::FilePath& path,
-    download::QuarantineConnectionCallback quarantine_connection_callback)
-    : AVScanningFileValidator(quarantine_connection_callback), path_(path) {}
+    const base::FilePath& path)
+    : path_(path) {}
 
 void SupportedAudioVideoChecker::OnFileOpen(base::File file) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   if (!file.IsValid()) {
     std::move(callback_).Run(base::File::FILE_ERROR_SECURITY);
     return;

@@ -1,24 +1,51 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_PUBLIC_CPP_TEST_FAKE_SENSOR_AND_PROVIDER_H_
 #define SERVICES_DEVICE_PUBLIC_CPP_TEST_FAKE_SENSOR_AND_PROVIDER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/read_only_shared_memory_region.h"
+#include "base/run_loop.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/system/buffer.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
 #include "services/device/public/mojom/sensor.mojom.h"
 #include "services/device/public/mojom/sensor_provider.mojom.h"
 
 namespace device {
 
+struct SensorReadingSharedBuffer;
+
+// This encapsulates the pattern of waiting for an event and returning whether
+// that event was received from `Wait`. This makes it easy to do the right thing
+// in Wait, i.e. return with `[[nodiscard]]`.
+class WaiterHelper {
+ public:
+  // Wait until OnEvent is called. Will return true if ended by OnEvent or false
+  // if ended for some other reason (e.g. timeout).
+  [[nodiscard]] bool Wait();
+  // Stops the waiting.
+  void OnEvent();
+
+ private:
+  [[nodiscard]] bool WaitInternal();
+  base::RunLoop run_loop_;
+  bool event_received_ = false;
+};
+
 class FakeSensor : public mojom::Sensor {
  public:
-  FakeSensor(mojom::SensorType sensor_type, SensorReadingSharedBuffer* buffer);
+  FakeSensor(mojom::SensorType sensor_type,
+             SensorReadingSharedBuffer* buffer,
+             mojo::PendingReceiver<mojom::SensorClientController> controller,
+             bool initially_suspended);
+
+  FakeSensor(const FakeSensor&) = delete;
+  FakeSensor& operator=(const FakeSensor&) = delete;
+
   ~FakeSensor() override;
 
   // mojom::Sensor:
@@ -41,27 +68,74 @@ class FakeSensor : public mojom::Sensor {
   uint64_t GetBufferOffset();
   void SetReading(SensorReading reading);
 
+  bool WaitForSuspend(bool suspend);
+  bool WaitForBrowserSuspend(bool suspend);
+  bool is_browser_suspended() const { return is_browser_suspended_; }
+
+  void OnBrowserSuspend();
+  void OnBrowserResume();
+
+  void SetControllerDisconnectCallback(base::OnceClosure callback);
+
  private:
+  class SensorClientControllerImpl;
+
   void SensorReadingChanged();
 
   mojom::SensorType sensor_type_;
-  SensorReadingSharedBuffer* buffer_;
+  raw_ptr<SensorReadingSharedBuffer> buffer_;
   bool reading_notification_enabled_ = true;
   mojo::Remote<mojom::SensorClient> client_;
   SensorReading reading_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeSensor);
+  WaiterHelper suspend_waiter_;
+  WaiterHelper resume_waiter_;
+  WaiterHelper browser_suspend_waiter_;
+  WaiterHelper browser_resume_waiter_;
+  bool is_browser_suspended_ = false;
+  base::OnceCallback<void()> suspend_callback_;
+  std::unique_ptr<SensorClientControllerImpl> client_controller_;
 };
 
 class FakeSensorProvider : public mojom::SensorProvider {
  public:
   FakeSensorProvider();
+
+  FakeSensorProvider(const FakeSensorProvider&) = delete;
+  FakeSensorProvider& operator=(const FakeSensorProvider&) = delete;
+
   ~FakeSensorProvider() override;
 
-  // mojom::sensorProvider:
-  void GetSensor(mojom::SensorType type, GetSensorCallback callback) override;
+  // mojom::SensorProvider:
+  void GetSensor(
+      mojom::SensorType type,
+      mojo::PendingReceiver<mojom::SensorClientController> controller,
+      bool initially_suspended,
+      GetSensorCallback callback) override;
+  void CreateVirtualSensor(
+      mojom::SensorType type,
+      mojom::VirtualSensorMetadataPtr metadata,
+      mojom::SensorProvider::CreateVirtualSensorCallback callback) override;
+  void UpdateVirtualSensor(
+      mojom::SensorType type,
+      const SensorReading& reading,
+      mojom::SensorProvider::UpdateVirtualSensorCallback callback) override;
+  void RemoveVirtualSensor(
+      mojom::SensorType type,
+      mojom::SensorProvider::RemoveVirtualSensorCallback callback) override;
+  void GetVirtualSensorInformation(
+      mojom::SensorType type,
+      mojom::SensorProvider::GetVirtualSensorInformationCallback callback)
+      override;
 
   void Bind(mojo::PendingReceiver<mojom::SensorProvider> receiver);
+  bool is_bound() const;
+
+  // Configures a callback which is invoked when GetSensor() is called, allowing
+  // tests to take an action before the response callback is invoked.
+  void set_sensor_requested_callback(
+      base::OnceCallback<void(mojom::SensorType)> callback) {
+    sensor_requested_callback_ = std::move(callback);
+  }
 
   void set_ambient_light_sensor_is_available(
       bool ambient_light_sensor_is_available) {
@@ -120,6 +194,14 @@ class FakeSensorProvider : public mojom::SensorProvider {
                                            double beta,
                                            double gamma);
 
+  bool WaitForAccelerometerSuspend(bool suspend);
+  bool WaitForAmbientLightSensorSuspend(bool suspend);
+  bool WaitForLinearAccelerationSensorSuspend(bool suspend);
+  bool WaitForGravitySensorSuspend(bool suspend);
+  bool WaitForGyroscopeSuspend(bool suspend);
+
+  FakeSensor* accelerometer() const { return accelerometer_; }
+
  private:
   bool CreateSharedBufferIfNeeded();
   SensorReadingSharedBuffer* GetSensorReadingSharedBufferForType(
@@ -127,13 +209,17 @@ class FakeSensorProvider : public mojom::SensorProvider {
 
   // The following sensor pointers are owned by the caller of
   // FakeSensorProvider::GetSensor().
-  FakeSensor* ambient_light_sensor_ = nullptr;
-  FakeSensor* accelerometer_ = nullptr;
-  FakeSensor* linear_acceleration_sensor_ = nullptr;
-  FakeSensor* gravity_sensor_ = nullptr;
-  FakeSensor* gyroscope_ = nullptr;
-  FakeSensor* relative_orientation_sensor_ = nullptr;
-  FakeSensor* absolute_orientation_sensor_ = nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged> ambient_light_sensor_ =
+      nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged> accelerometer_ = nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged>
+      linear_acceleration_sensor_ = nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged> gravity_sensor_ = nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged> gyroscope_ = nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged>
+      relative_orientation_sensor_ = nullptr;
+  raw_ptr<FakeSensor, AcrossTasksDanglingUntriaged>
+      absolute_orientation_sensor_ = nullptr;
 
   SensorReading ambient_light_sensor_reading_;
   SensorReading accelerometer_reading_;
@@ -142,6 +228,7 @@ class FakeSensorProvider : public mojom::SensorProvider {
   SensorReading gyroscope_reading_;
   SensorReading relative_orientation_sensor_reading_;
   SensorReading absolute_orientation_sensor_reading_;
+  base::OnceCallback<void(mojom::SensorType)> sensor_requested_callback_;
   bool ambient_light_sensor_is_available_ = true;
   bool accelerometer_is_available_ = true;
   bool linear_acceleration_sensor_is_available_ = true;
@@ -150,10 +237,7 @@ class FakeSensorProvider : public mojom::SensorProvider {
   bool relative_orientation_sensor_is_available_ = true;
   bool absolute_orientation_sensor_is_available_ = true;
   mojo::ReceiverSet<mojom::SensorProvider> receivers_{};
-  mojo::ScopedSharedBufferHandle shared_buffer_handle_;
-  mojo::ScopedSharedBufferMapping shared_buffer_mapping_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeSensorProvider);
+  base::MappedReadOnlyRegion mapped_region_;
 };
 
 }  // namespace device

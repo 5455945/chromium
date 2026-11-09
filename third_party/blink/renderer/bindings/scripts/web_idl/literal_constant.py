@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -49,7 +49,7 @@ class LiteralConstant(object):
         - []: list()
         - {}: dict()
         - true / false: True / False
-        - INTEGER_NUMERICS: an instance of long
+        - INTEGER_NUMERICS: an instance of int
         - FLOATING_POINTS: an instance of float
         - STRING: an instance of str
         """
@@ -77,12 +77,13 @@ class LiteralConstant(object):
         if idl_type.is_union:
             return any(
                 self.is_type_compatible_with(member_type)
-                for member_type in idl_type.flattened_member_types)
+                for member_type in idl_type.flattened_member_types
+            )
 
         if self.idl_type.is_sequence:
             return idl_type.is_sequence
         if self.idl_type.is_object:
-            return idl_type.is_dictionary
+            return idl_type.is_dictionary or idl_type.is_record
         if self.idl_type.is_boolean:
             return idl_type.is_boolean
         if self.idl_type.is_integer:

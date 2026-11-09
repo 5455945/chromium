@@ -1,15 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_COMPONENT_UPDATER_CROWD_DENY_COMPONENT_INSTALLER_H_
 #define CHROME_BROWSER_COMPONENT_UPDATER_CROWD_DENY_COMPONENT_INSTALLER_H_
 
+#include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/values.h"
 #include "components/component_updater/component_installer.h"
 
 namespace base {
@@ -23,29 +25,31 @@ class ComponentUpdateService;
 class CrowdDenyComponentInstallerPolicy : public ComponentInstallerPolicy {
  public:
   CrowdDenyComponentInstallerPolicy() = default;
-  ~CrowdDenyComponentInstallerPolicy() override = default;
+
+  CrowdDenyComponentInstallerPolicy(const CrowdDenyComponentInstallerPolicy&) =
+      delete;
+  CrowdDenyComponentInstallerPolicy& operator=(
+      const CrowdDenyComponentInstallerPolicy&) = delete;
 
  private:
   static base::FilePath GetInstalledPath(const base::FilePath& base);
 
   // ComponentInstallerPolicy:
   bool SupportsGroupPolicyEnabledComponentUpdates() const override;
-  bool VerifyInstallation(const base::DictionaryValue& manifest,
+  bool VerifyInstallation(const base::DictValue& manifest,
                           const base::FilePath& install_dir) const override;
   bool RequiresNetworkEncryption() const override;
   update_client::CrxInstaller::Result OnCustomInstall(
-      const base::DictionaryValue& manifest,
+      const base::DictValue& manifest,
       const base::FilePath& install_dir) override;
   void OnCustomUninstall() override;
   void ComponentReady(const base::Version& version,
                       const base::FilePath& install_dir,
-                      std::unique_ptr<base::DictionaryValue> manifest) override;
+                      base::DictValue manifest) override;
   base::FilePath GetRelativeInstallDir() const override;
   void GetHash(std::vector<uint8_t>* hash) const override;
   std::string GetName() const override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(CrowdDenyComponentInstallerPolicy);
 };
 
 // Call once during startup to make the component update service aware of the

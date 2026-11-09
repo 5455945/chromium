@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,9 @@
 
 namespace net {
 
-CookieCache::CookieCache() {
-}
+CookieCache::CookieCache() {}
 
-CookieCache::~CookieCache() {
-}
+CookieCache::~CookieCache() {}
 
 bool CookieCache::Update(const GURL& url,
                          const std::string& name,
@@ -37,8 +35,9 @@ bool CookieCache::Update(const GURL& url,
                       std::inserter(removed_cookies, removed_cookies.begin()),
                       CookieCache::CookieAndValueComparator());
 
-  if (added_cookies.empty() && removed_cookies.empty())
+  if (added_cookies.empty() && removed_cookies.empty()) {
     return false;
+  }
 
   cache_[key] = new_set;
   if (out_removed_cookies) {
@@ -55,26 +54,35 @@ bool CookieCache::Update(const GURL& url,
 bool CookieCache::CookieComparator::operator()(
     const net::CanonicalCookie& lhs,
     const net::CanonicalCookie& rhs) const {
-  if (lhs.Domain() != rhs.Domain())
+  if (lhs.Domain() != rhs.Domain()) {
     return lhs.Domain() < rhs.Domain();
-  if (lhs.Path() != rhs.Path())
+  }
+  if (lhs.Path() != rhs.Path()) {
     return lhs.Path() < rhs.Path();
-  if (lhs.Name() != rhs.Name())
+  }
+  if (lhs.Name() != rhs.Name()) {
     return lhs.Name() < rhs.Name();
+  }
   return false;
 }
 
 bool CookieCache::CookieAndValueComparator::operator()(
     const net::CanonicalCookie& lhs,
     const net::CanonicalCookie& rhs) const {
-  if (lhs.Domain() != rhs.Domain())
+  if (lhs.Domain() != rhs.Domain()) {
     return lhs.Domain() < rhs.Domain();
-  if (lhs.Path() != rhs.Path())
+  }
+  if (lhs.Path() != rhs.Path()) {
     return lhs.Path() < rhs.Path();
-  if (lhs.Name() != rhs.Name())
+  }
+  if (lhs.Name() != rhs.Name()) {
     return lhs.Name() < rhs.Name();
-  if (lhs.Value() != rhs.Value())
-    return lhs.Value() < rhs.Value();
+  }
+  const std::string lhs_value = lhs.Value();
+  const std::string rhs_value = rhs.Value();
+  if (lhs_value != rhs_value) {
+    return lhs_value < rhs_value;
+  }
   return false;
 }
 

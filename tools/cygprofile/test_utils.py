@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,18 +12,19 @@ import process_profiles
 _FILE_COUNTER = 0
 
 SimpleTestSymbol = collections.namedtuple(
-    'SimpleTestSymbol', ['name', 'offset', 'size'])
+  'SimpleTestSymbol', ['name', 'offset', 'size']
+)
 
 
 class TestSymbolOffsetProcessor(process_profiles.SymbolOffsetProcessor):
   def __init__(self, symbol_infos):
-    super(TestSymbolOffsetProcessor, self).__init__(None)
+    super().__init__(None)
     self._symbol_infos = symbol_infos
 
 
 class TestProfileManager(process_profiles.ProfileManager):
   def __init__(self, filecontents_mapping):
-    super(TestProfileManager, self).__init__(filecontents_mapping.keys())
+    super().__init__(filecontents_mapping.keys())
     self._filecontents_mapping = filecontents_mapping
 
   def _ReadOffsets(self, filename):
@@ -41,4 +42,5 @@ def ProfileFile(timestamp_sec, phase, process_name=None):
   else:
     name_str = ''
   return 'test-directory/profile-hitmap-{}{}-{}.txt_{}'.format(
-      name_str, _FILE_COUNTER, timestamp_sec * 1000 * 1000 * 1000, phase)
+    name_str, _FILE_COUNTER, timestamp_sec * 1000 * 1000 * 1000, phase
+  )

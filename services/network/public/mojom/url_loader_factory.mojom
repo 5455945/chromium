@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,30 +42,38 @@ const uint32 kURLLoadOptionBlockThirdPartyCookies = 64;
 const uint32 kURLLoadOptionAsCorsPreflight = 128;
 
 // Specifies that the request must not be made to a non-public IP address. This
-// option is needed even with CORS-RFC1918 because CORS-RFC1918 is not enabled
-// by default, and sometimes the client security state is not known as the time
-// of the request, which skips CORS-RFC1918.
+// option is needed even with Local Network Access (LNA) because sometimes the
+// client security state is not known as the time of the request, which skips
+// LNA checks.
 //
 // This option is supported by the network service, but might not be supported
 // by other URLLoaderFactory implementations.
 //
-// TODO(crbug.com/1115776): This option can be removed if CORS-RFC1918 ships
-// without a feature flag, and additionally it changes to block requests by
-// default if the security state is unknown.
+// TODO(crbug.com/40711533): This option can be removed if LNA ships without a
+// feature flag, and additionally it changes to block requests by default if
+// the security state is unknown.
 const uint32 kURLLoadOptionBlockLocalRequest = 256;
+
+// Read and discard the body inside the URLLoader. If the URLLoader supports
+// this flag, then no body will be passed to
+// URLLoaderClient::OnReceiveResponse(). Not every URLLoader implementation
+// supports this flag, so the caller must be prepared to discard the body
+// itself if one is supplied.
+// This is incompatible with the kURLLoadOptionSniffMimeType option; they cannot
+// be used together.
+const uint32 kURLLoadOptionReadAndDiscardBody = 512;
 
 // URLLoaderFactory is an interface for requesting URLs. It creates URLLoader
 // instances. One URLLoader instance can load one URL.
 interface URLLoaderFactory {
-  // Creates a URLLoader and starts loading with the given |request|. |client|'s
+  // Creates a URLLoader and starts loading with the given `request`. `client`'s
   // methods will be called when certain events related to that loading
   // (e.g., response arrival) happen.
   //
-  // |request_id| is an arbitrary id for the request. The (routing_id,
-  // request_id) pair must be unique over all calls to CreateLoaderAndStart()
-  // on this factory.
+  // `request_id` is an arbitrary id for the request. `request_id` should be
+  // unique over all calls to CreateLoaderAndStart() on this factory, or 0.
   //
-  // |options| is a bitfield of the options defined above.
+  // `options` is a bitfield of the options defined above.
   CreateLoaderAndStart(pending_receiver<URLLoader> loader,
                        int32 request_id,
                        uint32 options,

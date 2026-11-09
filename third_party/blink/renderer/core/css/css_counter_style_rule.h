@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,17 @@
 
 #include "third_party/blink/renderer/core/css/css_rule.h"
 #include "third_party/blink/renderer/core/css/parser/at_rule_descriptors.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
 class ExecutionContext;
 class StyleRuleCounterStyle;
+class StyleRuleCSSStyleDeclaration;
+class CSSStyleDeclaration;
 
-class CSSCounterStyleRule final : public CSSRule {
+class CORE_EXPORT CSSCounterStyleRule final : public CSSRule {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -35,6 +38,16 @@ class CSSCounterStyleRule final : public CSSRule {
   String pad() const;
   String speakAs() const;
   String fallback() const;
+
+  // This must be treated as immutable, as layout will not be invalidated
+  // if the style changes.
+  CSSStyleDeclaration* Style();
+  // The inspector will use this to set the CSS text of the rule. Because that
+  // requires invalidating the layout, this updates the version of the
+  // underlying StyleRuleCounterStyle. This pointer should not be held by the
+  // inspector; any style changes using the return value should be made
+  // immediately.
+  CSSStyleDeclaration* MutableStyleForInspector();
 
   void setName(const ExecutionContext*, const String&);
   void setSystem(const ExecutionContext*, const String&);
@@ -58,6 +71,7 @@ class CSSCounterStyleRule final : public CSSRule {
                       const String&);
 
   Member<StyleRuleCounterStyle> counter_style_rule_;
+  Member<StyleRuleCSSStyleDeclaration> counter_style_cssom_wrapper_;
 };
 
 template <>

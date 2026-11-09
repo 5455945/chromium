@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -15,12 +15,15 @@ IMAGEMAGICK_CONVERT = 'convert'
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
+
 class InvalidFile(Exception):
   """Represents an invalid ICO file."""
 
+
 def IsPng(png_data):
   """Determines whether a sequence of bytes is a PNG."""
-  return png_data.startswith('\x89PNG\r\n\x1a\n')
+  return png_data.startswith(b'\x89PNG\r\n\x1a\n')
+
 
 def OptimizePngFile(temp_dir, png_filename, optimization_level=None):
   """Optimize a PNG file.
@@ -47,6 +50,7 @@ def OptimizePngFile(temp_dir, png_filename, optimization_level=None):
   with open(png_filename, 'rb') as png_file:
     return png_file.read()
 
+
 def OptimizePng(png_data, optimization_level=None):
   """Optimize a PNG.
 
@@ -62,18 +66,21 @@ def OptimizePng(png_data, optimization_level=None):
     png_filename = os.path.join(temp_dir, 'image.png')
     with open(png_filename, 'wb') as png_file:
       png_file.write(png_data)
-    return OptimizePngFile(temp_dir, png_filename,
-                           optimization_level=optimization_level)
+    return OptimizePngFile(
+      temp_dir, png_filename, optimization_level=optimization_level
+    )
 
   finally:
     if os.path.exists(png_filename):
       os.unlink(png_filename)
     os.rmdir(temp_dir)
 
+
 def BytesPerRowBMP(width, bpp):
   """Computes the number of bytes per row in a Windows BMP image."""
   # width * bpp / 8, rounded up to the nearest multiple of 4.
   return int(math.ceil(width * bpp / 32.0)) * 4
+
 
 def ExportSingleEntry(icon_dir_entry, icon_data, outfile):
   """Export a single icon dir entry to its own ICO file.
@@ -89,12 +96,13 @@ def ExportSingleEntry(icon_dir_entry, icon_data, outfile):
 
   # Write the ICONDIRENTRY header.
   width, height, num_colors, r1, r2, r3, size, _ = icon_dir_entry
-  offset = 22;
+  offset = 22
   icon_dir_entry = width, height, num_colors, r1, r2, r3, size, offset
   outfile.write(struct.pack('<BBBBHHLL', *icon_dir_entry))
 
   # Write the image data.
   outfile.write(icon_data)
+
 
 def ConvertIcoToPng(ico_filename, png_filename):
   """Convert a single-entry ICO file to a PNG image.
@@ -109,6 +117,7 @@ def ConvertIcoToPng(ico_filename, png_filename):
   args = [IMAGEMAGICK_CONVERT, ico_filename, png_filename]
   result = subprocess.check_call(args, stdout=sys.stderr)
   logging.info('Converted BMP image to PNG format')
+
 
 def OptimizeBmp(icon_dir_entry, icon_data):
   """Convert a BMP file to PNG and optimize it.
@@ -134,9 +143,11 @@ def OptimizeBmp(icon_dir_entry, icon_data):
     except Exception as e:
       logging.warning('Could not convert BMP to PNG format: %s', e)
       if isinstance(e, OSError):
-        logging.info('This is because ImageMagick (`convert`) was not found. '
-                     'Please install it, or manually convert large BMP images '
-                     'into PNG before running this utility.')
+        logging.info(
+          'This is because ImageMagick (`convert`) was not found. '
+          'Please install it, or manually convert large BMP images '
+          'into PNG before running this utility.'
+        )
       return icon_data
 
     return OptimizePngFile(temp_dir, png_filename)
@@ -148,6 +159,7 @@ def OptimizeBmp(icon_dir_entry, icon_data):
       os.unlink(png_filename)
     os.rmdir(temp_dir)
 
+
 def ComputeANDMaskFromAlpha(image_data, width, height):
   """Compute an AND mask from 32-bit BGRA image data."""
   and_bytes = []
@@ -157,7 +169,7 @@ def ComputeANDMaskFromAlpha(image_data, width, height):
     for x in range(width):
       alpha = image_data[(y * width + x) * 4 + 3]
       current_byte <<= 1
-      if ord(alpha) == 0:
+      if alpha == 0:
         current_byte |= 1
       bit_count += 1
       if bit_count == 8:
@@ -167,14 +179,15 @@ def ComputeANDMaskFromAlpha(image_data, width, height):
 
     # At the end of a row, pad the current byte.
     if bit_count > 0:
-      current_byte <<= (8 - bit_count)
+      current_byte <<= 8 - bit_count
       and_bytes.append(current_byte)
     # And keep padding until a multiple of 4 bytes.
     while len(and_bytes) % 4 != 0:
       and_bytes.append(0)
 
-  and_bytes = ''.join(map(chr, and_bytes))
+  and_bytes = bytes(and_bytes)
   return and_bytes
+
 
 def CheckANDMaskAgainstAlpha(xor_data, and_data, width, height):
   """Checks whether an AND mask is "good" for 32-bit BGRA image data.
@@ -193,9 +206,10 @@ def CheckANDMaskAgainstAlpha(xor_data, and_data, width, height):
 
   for y in range(height):
     for x in range(width):
-      alpha = ord(xor_data[y * xor_bytes_per_row + x * 4 + 3])
-      mask = bool(ord(and_data[y * and_bytes_per_row + x // 8]) &
-                  (1 << (7 - (x % 8))))
+      alpha = xor_data[y * xor_bytes_per_row + x * 4 + 3]
+      mask = bool(
+        and_data[y * and_bytes_per_row + x // 8] & (1 << (7 - (x % 8)))
+      )
 
       if mask:
         if alpha > 0:
@@ -209,6 +223,7 @@ def CheckANDMaskAgainstAlpha(xor_data, and_data, width, height):
           return False
 
   return True
+
 
 def CheckOrRebuildANDMask(iconimage, rebuild=False):
   """Checks the AND mask in an icon image for correctness, or rebuilds it.
@@ -231,29 +246,30 @@ def CheckOrRebuildANDMask(iconimage, rebuild=False):
   """
   # Parse BITMAPINFOHEADER.
   (_, width, height, _, bpp, _, _, _, _, num_colors, _) = struct.unpack(
-      '<LLLHHLLLLLL', iconimage[:40])
+    '<LLLHHLLLLLL', iconimage[:40]
+  )
 
   if bpp != 32:
     # No alpha channel, so the mask cannot be "wrong" (it is the only source of
     # transparency information).
     return iconimage if rebuild else True
 
-  height /= 2
+  height = height // 2
   xor_size = BytesPerRowBMP(width, bpp) * height
 
   # num_colors can be 0, implying 2^bpp colors.
   xor_palette_size = (num_colors or (1 << bpp if bpp < 24 else 0)) * 4
-  xor_data = iconimage[40 + xor_palette_size :
-                       40 + xor_palette_size + xor_size]
+  xor_data = iconimage[40 + xor_palette_size : 40 + xor_palette_size + xor_size]
 
   if rebuild:
     and_data = ComputeANDMaskFromAlpha(xor_data, width, height)
 
     # Replace the AND mask in the original icon data.
-    return iconimage[:40 + xor_palette_size + xor_size] + and_data
+    return iconimage[: 40 + xor_palette_size + xor_size] + and_data
   else:
-    and_data = iconimage[40 + xor_palette_size + xor_size:]
+    and_data = iconimage[40 + xor_palette_size + xor_size :]
     return CheckANDMaskAgainstAlpha(xor_data, and_data, width, height)
+
 
 def LintIcoFile(infile):
   """Read an ICO file and check whether it is acceptable.
@@ -304,17 +320,29 @@ def LintIcoFile(infile):
       return
 
     entry_is_png = IsPng(icon_data)
-    logging.debug('%s entry #%d: %dx%d, %d bytes (%s)', filename, i + 1, width,
-                  height, size, 'PNG' if entry_is_png else 'BMP')
+    logging.debug(
+      '%s entry #%d: %dx%d, %d bytes (%s)',
+      filename,
+      i + 1,
+      width,
+      height,
+      size,
+      'PNG' if entry_is_png else 'BMP',
+    )
 
     if not entry_is_png:
       if width >= 256 or height >= 256:
-        yield ('Entry #%d is a large image in uncompressed BMP format. It '
-               'should be in PNG format.' % (i + 1))
+        yield (
+          'Entry #%d is a large image in uncompressed BMP format. It '
+          'should be in PNG format.' % (i + 1)
+        )
 
       if not CheckOrRebuildANDMask(icon_data, rebuild=False):
-        yield ('Entry #%d has a bad mask that will display incorrectly in some '
-               'places in Windows.' % (i + 1))
+        yield (
+          'Entry #%d has a bad mask that will display incorrectly in some '
+          'places in Windows.' % (i + 1)
+        )
+
 
 def OptimizeIcoFile(infile, outfile, optimization_level=None):
   """Read an ICO file, optimize its PNGs, and write the output to outfile.
@@ -351,8 +379,15 @@ def OptimizeIcoFile(infile, outfile, optimization_level=None):
       raise EOFError()
 
     entry_is_png = IsPng(icon_data)
-    logging.info('%s entry #%d: %dx%d, %d bytes (%s)', filename, i + 1, width,
-                 height, size, 'PNG' if entry_is_png else 'BMP')
+    logging.info(
+      '%s entry #%d: %dx%d, %d bytes (%s)',
+      filename,
+      i + 1,
+      width,
+      height,
+      size,
+      'PNG' if entry_is_png else 'BMP',
+    )
 
     if entry_is_png:
       # It is a PNG. Crush it.
@@ -372,8 +407,16 @@ def OptimizeIcoFile(infile, outfile, optimization_level=None):
 
     new_size = len(icon_data)
     current_offset += new_size
-    icon_dir_entries[i] = (width % 256, height % 256, num_colors, r1, r2, r3,
-                           new_size, offset)
+    icon_dir_entries[i] = (
+      width % 256,
+      height % 256,
+      num_colors,
+      r1,
+      r2,
+      r3,
+      new_size,
+      offset,
+    )
     icon_bitmap_data.append(icon_data)
 
   # Write the data back to outfile.

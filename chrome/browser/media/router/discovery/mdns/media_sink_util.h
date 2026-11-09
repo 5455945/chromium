@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,19 @@
 #include <vector>
 
 #include "components/media_router/common/discovery/media_sink_internal.h"
+#include "components/media_router/common/providers/cast/channel/cast_device_capability.h"
 
 namespace media_router {
 
 struct DnsSdService;
 
 // The DNS-SD service type for Cast devices.
-static constexpr char kCastServiceType[] = "_googlecast._tcp.local";
-
-// Default Cast control port to open Cast Socket.
-static constexpr int kCastControlPort = 8009;
+inline constexpr char kCastServiceType[] = "_googlecast._tcp.local";
 
 // Returns the icon type to use according to |capabilities|. |capabilities| is
 // a bit set of cast_channel::CastDeviceCapabilities in CastSinkExtraData.
-SinkIconType GetCastSinkIconType(uint8_t capabilities);
+SinkIconType GetCastSinkIconType(
+    cast_channel::CastDeviceCapabilitySet capabilities);
 
 enum CreateCastMediaSinkResult {
   kOk,
@@ -30,6 +29,8 @@ enum CreateCastMediaSinkResult {
   kMissingFriendlyName,
   kMissingOrInvalidIPAddress,
   kMissingOrInvalidPort,
+  kMissingDeviceCapabilities,
+  kMissingNetworkInfo
 };
 
 // Creates a MediaSinkInternal from |service| and assigns the result to
@@ -39,7 +40,7 @@ CreateCastMediaSinkResult CreateCastMediaSink(const DnsSdService& service,
 
 // Command line flag for a list of Cast device IPs to connect to at startup.
 // The value should be a comma-separated list of IP endpoints.
-static constexpr char kFixedCastDeviceIps[] = "media-router-cast-device-ips";
+inline constexpr char kFixedCastDeviceIps[] = "media-router-cast-device-ips";
 
 // Returns a list of Cast sinks whose IPs were specified in the command line
 // flag |kFixedCastDeviceIps|.

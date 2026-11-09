@@ -1,18 +1,20 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/extensions_client.h"
 
+#include <string_view>
+
 #include "base/check.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/timer/elapsed_timer.h"
-#include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extensions_api_provider.h"
 #include "extensions/common/features/feature_provider.h"
 #include "extensions/common/features/json_feature_provider_source.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest_handler.h"
+#include "extensions/common/manifest_handler_registry.h"
+#include "extensions/common/manifest_handlers/icon_variants_handler.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/permissions/permissions_info.h"
 
@@ -20,7 +22,7 @@ namespace extensions {
 
 namespace {
 
-ExtensionsClient* g_client = NULL;
+ExtensionsClient* g_client = nullptr;
 
 }  // namespace
 
@@ -30,15 +32,30 @@ ExtensionsClient* ExtensionsClient::Get() {
 }
 
 void ExtensionsClient::Set(ExtensionsClient* client) {
-  // This can happen in unit tests, where the utility thread runs in-process.
-  if (g_client)
+  if (!client) {
+    g_client = nullptr;
     return;
+  }
+  CHECK(!g_client);
   g_client = client;
   g_client->DoInitialize();
 }
 
 ExtensionsClient::ExtensionsClient() = default;
 ExtensionsClient::~ExtensionsClient() = default;
+
+const Feature::FeatureDelegatedAvailabilityCheckMap&
+ExtensionsClient::GetFeatureDelegatedAvailabilityCheckMap() const {
+  return availability_check_map_;
+}
+
+void ExtensionsClient::SetFeatureDelegatedAvailabilityCheckMap(
+    Feature::FeatureDelegatedAvailabilityCheckMap map) {
+  for (const auto& [name, handler] : map) {
+    CHECK(handler) << "Null delegated availability check handler for " << name;
+  }
+  availability_check_map_ = std::move(map);
+}
 
 std::unique_ptr<FeatureProvider> ExtensionsClient::CreateFeatureProvider(
     const std::string& name) const {
@@ -78,14 +95,13 @@ bool ExtensionsClient::IsAPISchemaGenerated(const std::string& name) const {
   return false;
 }
 
-base::StringPiece ExtensionsClient::GetAPISchema(
-    const std::string& name) const {
+std::string_view ExtensionsClient::GetAPISchema(const std::string& name) const {
   for (const auto& provider : api_providers_) {
-    base::StringPiece api = provider->GetAPISchema(name);
+    std::string_view api = provider->GetAPISchema(name);
     if (!api.empty())
       return api;
   }
-  return base::StringPiece();
+  return std::string_view();
 }
 
 void ExtensionsClient::AddAPIProvider(
@@ -99,6 +115,15 @@ std::set<base::FilePath> ExtensionsClient::GetBrowserImagePaths(
     const Extension* extension) {
   std::set<base::FilePath> paths;
   IconsInfo::GetIcons(extension).GetPaths(&paths);
+
+  if (const IconVariantsInfo* icon_variants_info =
+          IconVariantsInfo::GetIconVariants(*extension)) {
+    icon_variants_info->Get(ExtensionIconVariant::ColorScheme::kLight)
+        .GetPaths(&paths);
+    icon_variants_info->Get(ExtensionIconVariant::ColorScheme::kDark)
+        .GetPaths(&paths);
+  }
+
   return paths;
 }
 
@@ -107,8 +132,13 @@ void ExtensionsClient::AddOriginAccessPermissions(
     bool is_extension_active,
     std::vector<network::mojom::CorsOriginPatternPtr>* origin_patterns) const {}
 
-absl::optional<int> ExtensionsClient::GetExtensionExtendedErrorCode() const {
-  return absl::nullopt;
+std::optional<int> ExtensionsClient::GetExtensionExtendedErrorCode() const {
+  return std::nullopt;
+}
+
+bool ExtensionsClient::IsCapturableURL(const GURL& url,
+                                       std::string* error) const {
+  return true;
 }
 
 void ExtensionsClient::DoInitialize() {
@@ -116,19 +146,16 @@ void ExtensionsClient::DoInitialize() {
 
   DCHECK(!ManifestHandler::IsRegistrationFinalized());
   PermissionsInfo* permissions_info = PermissionsInfo::GetInstance();
-  const base::ElapsedTimer timer;
+
+  ManifestHandlerRegistry* registry = ManifestHandlerRegistry::Get();
+
   for (const auto& provider : api_providers_) {
-    provider->RegisterManifestHandlers();
+    provider->RegisterManifestHandlers(registry);
     provider->RegisterPermissions(permissions_info);
   }
   ManifestHandler::FinalizeRegistration();
 
   Initialize();
-
-  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-      "Extensions.ChromeExtensionsClientInitTime2", timer.Elapsed(),
-      base::TimeDelta::FromMicroseconds(1), base::TimeDelta::FromSeconds(10),
-      50);
 }
 
 }  // namespace extensions

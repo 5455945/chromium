@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,19 +14,19 @@ void SetPosition(wl_client* client,
                  wl_resource* resource,
                  int32_t x,
                  int32_t y) {
-  GetUserDataAs<TestSubSurface>(resource)->SetPosition(x, y);
+  GetUserDataAs<TestSubSurface>(resource)->SetPositionImpl(x, y);
 }
 
 void PlaceAbove(wl_client* client,
                 wl_resource* resource,
                 wl_resource* reference_resource) {
-  NOTIMPLEMENTED_LOG_ONCE();
+  GetUserDataAs<TestSubSurface>(resource)->PlaceAbove(reference_resource);
 }
 
 void PlaceBelow(wl_client* client,
                 wl_resource* resource,
                 wl_resource* sibling_resource) {
-  NOTIMPLEMENTED_LOG_ONCE();
+  GetUserDataAs<TestSubSurface>(resource)->PlaceBelow(sibling_resource);
 }
 
 void SetSync(wl_client* client, wl_resource* resource) {
@@ -58,8 +58,9 @@ TestSubSurface::~TestSubSurface() {
     mock_surface->set_sub_surface(nullptr);
 }
 
-void TestSubSurface::SetPosition(int x, int y) {
-  position_ = gfx::Point(x, y);
+void TestSubSurface::SetPositionImpl(float x, float y) {
+  position_ = gfx::PointF(x, y);
+  SetPosition(x, y);
 }
 
 }  // namespace wl

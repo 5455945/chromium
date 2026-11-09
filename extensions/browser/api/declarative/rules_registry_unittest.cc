@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,31 +9,31 @@
 #include <utility>
 
 #include "base/run_loop.h"
+#include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/api/declarative/rules_registry_service.h"
 #include "extensions/browser/api/declarative/test_rules_registry.h"
 #include "extensions/browser/api_test_utils.h"
+#include "extensions/browser/rules_registry_ids.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace extensions {
+
 namespace {
 const char kExtensionId[] = "foobar";
 const char kRuleId[] = "foo";
-const int key = extensions::RulesRegistryService::kDefaultRulesRegistryID;
+const int key = rules_registry_ids::kDefaultRulesRegistryID;
 }  // namespace
-
-namespace extensions {
-
-using api_test_utils::ParseDictionary;
 
 TEST(RulesRegistryTest, FillOptionalIdentifiers) {
   content::BrowserTaskEnvironment task_environment;
 
   std::string error;
   scoped_refptr<RulesRegistry> registry =
-      new TestRulesRegistry(content::BrowserThread::UI, "" /*event_name*/, key);
+      new TestRulesRegistry("" /*event_name*/, key);
 
   // Add rules and check that their identifiers are filled and unique.
 
@@ -50,13 +50,13 @@ TEST(RulesRegistryTest, FillOptionalIdentifiers) {
 
   ASSERT_EQ(2u, get_rules.size());
 
-  ASSERT_TRUE(get_rules[0]->id.get());
+  ASSERT_TRUE(get_rules[0]->id);
   // Make a copy of the id that this rule was assigned so that we can try to
   // reuse it later when the rule is gone.
   std::string id0 = *get_rules[0]->id;
   EXPECT_NE("", id0);
 
-  ASSERT_TRUE(get_rules[1]->id.get());
+  ASSERT_TRUE(get_rules[1]->id);
   EXPECT_NE("", *get_rules[1]->id);
 
   EXPECT_NE(id0, *get_rules[1]->id);
@@ -69,7 +69,7 @@ TEST(RulesRegistryTest, FillOptionalIdentifiers) {
   {
     std::vector<api::events::Rule> add_rules;
     add_rules.emplace_back();
-    add_rules[0].id = std::make_unique<std::string>(id0);
+    add_rules[0].id = id0;
     error = registry->AddRules(kExtensionId, std::move(add_rules));
     EXPECT_FALSE(error.empty());
   }
@@ -97,7 +97,7 @@ TEST(RulesRegistryTest, FillOptionalIdentifiers) {
   {
     std::vector<api::events::Rule> add_rules;
     add_rules.emplace_back();
-    add_rules[0].id = std::make_unique<std::string>(id0);
+    add_rules[0].id = id0;
     error = registry->AddRules(kExtensionId, std::move(add_rules));
     EXPECT_TRUE(error.empty()) << error;
     EXPECT_EQ(1u /*extensions*/ + 2u /*rules*/,
@@ -122,7 +122,7 @@ TEST(RulesRegistryTest, FillOptionalIdentifiers) {
   {
     std::vector<api::events::Rule> add_rules;
     add_rules.emplace_back();
-    add_rules[0].id = std::make_unique<std::string>(kRuleId);
+    add_rules[0].id = kRuleId;
     error = registry->AddRules(kExtensionId, std::move(add_rules));
     EXPECT_TRUE(error.empty()) << error;
   }
@@ -135,7 +135,7 @@ TEST(RulesRegistryTest, FillOptionalIdentifiers) {
 
   ASSERT_EQ(1u, get_rules_4b.size());
 
-  ASSERT_TRUE(get_rules_4b[0]->id.get());
+  ASSERT_TRUE(get_rules_4b[0]->id);
   EXPECT_EQ(kRuleId, *get_rules_4b[0]->id);
 
   // Create extension
@@ -155,14 +155,14 @@ TEST(RulesRegistryTest, FillOptionalPriority) {
 
   std::string error;
   scoped_refptr<RulesRegistry> registry =
-      new TestRulesRegistry(content::BrowserThread::UI, "" /*event_name*/, key);
+      new TestRulesRegistry("" /*event_name*/, key);
 
   // Add rules and check that their priorities are filled if they are empty.
 
   {
     std::vector<api::events::Rule> add_rules;
     add_rules.emplace_back();
-    add_rules[0].priority = std::make_unique<int>(2);
+    add_rules[0].priority = 2;
     add_rules.emplace_back();
     error = registry->AddRules(kExtensionId, std::move(add_rules));
     EXPECT_TRUE(error.empty()) << error;
@@ -173,8 +173,8 @@ TEST(RulesRegistryTest, FillOptionalPriority) {
 
   ASSERT_EQ(2u, get_rules.size());
 
-  ASSERT_TRUE(get_rules[0]->priority.get());
-  ASSERT_TRUE(get_rules[1]->priority.get());
+  ASSERT_TRUE(get_rules[0]->priority);
+  ASSERT_TRUE(get_rules[1]->priority);
 
   // Verify the precondition so that the following EXPECT_EQ statements work.
   EXPECT_GT(RulesRegistry::DEFAULT_PRIORITY, 2);
@@ -192,7 +192,7 @@ TEST(RulesRegistryTest, TwoRulesInManifest) {
   content::BrowserTaskEnvironment task_environment;
 
   // Create extension
-  std::unique_ptr<base::DictionaryValue> manifest = ParseDictionary(
+  base::DictValue manifest = base::test::ParseJsonDict(
       "{"
       "  \"name\": \"Test\","
       "  \"version\": \"1\","
@@ -229,8 +229,8 @@ TEST(RulesRegistryTest, TwoRulesInManifest) {
           .SetID(kExtensionId)
           .Build();
 
-  scoped_refptr<RulesRegistry> registry = new TestRulesRegistry(
-      content::BrowserThread::UI, "declarativeContent.onPageChanged", key);
+  scoped_refptr<RulesRegistry> registry =
+      new TestRulesRegistry("declarativeContent.onPageChanged", key);
   // Simulate what RulesRegistryService would do on extension load.
   registry->OnExtensionLoaded(extension.get());
 
@@ -238,7 +238,7 @@ TEST(RulesRegistryTest, TwoRulesInManifest) {
   registry->GetAllRules(kExtensionId, &get_rules);
 
   ASSERT_EQ(2u, get_rules.size());
-  std::unique_ptr<base::DictionaryValue> expected_rule_0 = ParseDictionary(
+  base::DictValue expected_rule_0 = base::test::ParseJsonDict(
       "{"
       "  \"id\": \"000\","
       "  \"priority\": 200,"
@@ -251,9 +251,9 @@ TEST(RulesRegistryTest, TwoRulesInManifest) {
       "    \"instanceType\" : \"declarativeContent.PageStateMatcher\""
       "  }]"
       "}");
-  EXPECT_TRUE(expected_rule_0->Equals(get_rules[0]->ToValue().get()));
+  EXPECT_EQ(expected_rule_0, get_rules[0]->ToValue());
 
-  std::unique_ptr<base::DictionaryValue> expected_rule_1 = ParseDictionary(
+  base::DictValue expected_rule_1 = base::test::ParseJsonDict(
       "{"
       "  \"id\": \"_0_\","
       "  \"priority\": 100,"
@@ -265,7 +265,7 @@ TEST(RulesRegistryTest, TwoRulesInManifest) {
       "    \"instanceType\" : \"declarativeContent.PageStateMatcher\""
       "  }]"
       "}");
-  EXPECT_TRUE(expected_rule_1->Equals(get_rules[1]->ToValue().get()));
+  EXPECT_EQ(expected_rule_1, get_rules[1]->ToValue());
 }
 
 // Tests verifies that rules defined in the manifest cannot be deleted but
@@ -274,7 +274,7 @@ TEST(RulesRegistryTest, DeleteRuleInManifest) {
   content::BrowserTaskEnvironment task_environment;
 
   // Create extension
-  std::unique_ptr<base::DictionaryValue> manifest = ParseDictionary(
+  base::DictValue manifest = base::test::ParseJsonDict(
       "{"
       "  \"name\": \"Test\","
       "  \"version\": \"1\","
@@ -297,8 +297,8 @@ TEST(RulesRegistryTest, DeleteRuleInManifest) {
           .SetID(kExtensionId)
           .Build();
 
-  scoped_refptr<RulesRegistry> registry = new TestRulesRegistry(
-      content::BrowserThread::UI, "declarativeContent.onPageChanged", key);
+  scoped_refptr<RulesRegistry> registry =
+      new TestRulesRegistry("declarativeContent.onPageChanged", key);
   // Simulate what RulesRegistryService would do on extension load.
   registry->OnExtensionLoaded(extension.get());
 
@@ -306,9 +306,9 @@ TEST(RulesRegistryTest, DeleteRuleInManifest) {
     // Add some extra rules outside of the manifest.
     std::vector<api::events::Rule> add_rules;
     api::events::Rule rule_1;
-    rule_1.id = std::make_unique<std::string>("rule_1");
+    rule_1.id = "rule_1";
     api::events::Rule rule_2;
-    rule_2.id = std::make_unique<std::string>("rule_2");
+    rule_2.id = "rule_2";
     add_rules.push_back(std::move(rule_1));
     add_rules.push_back(std::move(rule_2));
     registry->AddRules(kExtensionId, std::move(add_rules));
@@ -347,6 +347,58 @@ TEST(RulesRegistryTest, DeleteRuleInManifest) {
   registry->GetAllRules(kExtensionId, &get_rules);
   ASSERT_EQ(1u, get_rules.size());
   EXPECT_EQ("manifest_rule_0", *(get_rules[0]->id));
+}
+
+// Regression test for crbug.com/574640360: rule IDs containing invalid UTF-8
+// (such as lone UTF-16 surrogates encoded as WTF-8) or intra-batch duplicate
+// IDs must be rejected without leaking entries in `used_rule_identifiers_`.
+TEST(RulesRegistryTest, RejectsInvalidUtf8AndDuplicateRuleIds) {
+  content::BrowserTaskEnvironment task_environment;
+
+  scoped_refptr<RulesRegistry> registry =
+      new TestRulesRegistry(/*event_name=*/"", key);
+
+  // Distinct lone surrogates U+D800 (\xED\xA0\x80) and U+DC00 (\xED\xB0\x80)
+  // in WTF-8 would both collapse to U+FFFD x3 when persisted to JSON.
+  {
+    std::vector<api::events::Rule> add_rules(3);
+    add_rules[0].id = "valid_before_invalid";
+    add_rules[1].id = "\xED\xA0\x80";
+    add_rules[2].id = "\xED\xB0\x80";
+    std::string error = registry->AddRules(kExtensionId, std::move(add_rules));
+    EXPECT_FALSE(error.empty());
+  }
+
+  std::vector<const api::events::Rule*> get_rules;
+  registry->GetAllRules(kExtensionId, &get_rules);
+  EXPECT_TRUE(get_rules.empty());
+  EXPECT_EQ(0u, registry->GetNumberOfUsedRuleIdentifiersForTesting());
+
+  // Intra-batch duplicate explicit IDs must also fail atomically without
+  // polluting `used_rule_identifiers_`.
+  {
+    std::vector<api::events::Rule> add_rules(2);
+    add_rules[0].id = "dup_id";
+    add_rules[1].id = "dup_id";
+    std::string error = registry->AddRules(kExtensionId, std::move(add_rules));
+    EXPECT_FALSE(error.empty());
+  }
+  EXPECT_EQ(0u, registry->GetNumberOfUsedRuleIdentifiersForTesting());
+
+  // Valid non-ASCII UTF-8 IDs (including U+FFFD and Unicode noncharacters)
+  // and the rolled-back IDs above remain usable.
+  {
+    std::vector<api::events::Rule> add_rules(4);
+    add_rules[0].id = "valid_before_invalid";
+    add_rules[1].id = "dup_id";
+    add_rules[2].id = "\xEF\xBF\xBD";
+    add_rules[3].id = "\xEF\xBF\xBE";
+    std::string error = registry->AddRules(kExtensionId, std::move(add_rules));
+    EXPECT_TRUE(error.empty()) << error;
+  }
+
+  registry->GetAllRules(kExtensionId, &get_rules);
+  EXPECT_EQ(4u, get_rules.size());
 }
 
 }  // namespace extensions

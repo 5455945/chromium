@@ -1,19 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "net/base/filename_util.h"
+#include "net/base/filename_util_internal.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "net/base/escape.h"
-#include "net/base/filename_util_internal.h"
+#include "net/base/filename_util.h"
 #include "net/base/mime_util.h"
 #include "net/base/net_string_util.h"
 #include "net/http/http_content_disposition.h"
@@ -55,7 +55,7 @@ base::FilePath::StringType GetCorrectedExtensionUnsafe(
   // "foo.jpg" to "foo.jpeg".
   std::vector<base::FilePath::StringType> all_mime_extensions;
   GetExtensionsForMimeType(mime_type, &all_mime_extensions);
-  if (base::Contains(all_mime_extensions, extension))
+  if (std::ranges::contains(all_mime_extensions, extension))
     return extension;
 
   // Get the "final" extension. In most cases, this is the same as the
@@ -69,7 +69,7 @@ base::FilePath::StringType GetCorrectedExtensionUnsafe(
   // If there's a double extension, and the second extension is in the
   // list of valid extensions for the given type, keep the double extension.
   // This avoids renaming things like "foo.tar.gz" to "foo.gz".
-  if (base::Contains(all_mime_extensions, final_extension))
+  if (std::ranges::contains(all_mime_extensions, final_extension))
     return extension;
   return preferred_mime_extension;
 }
@@ -87,9 +87,9 @@ void SanitizeGeneratedFileName(base::FilePath::StringType* filename,
     size_t length = filename->size();
     size_t pos = filename->find_last_not_of(FILE_PATH_LITERAL(" ."));
     filename->resize((pos == std::string::npos) ? 0 : (pos + 1));
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     base::TrimWhitespace(*filename, base::TRIM_TRAILING, filename);
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
     base::TrimWhitespaceASCII(*filename, base::TRIM_TRAILING, filename);
 #else
 #error Unsupported platform
@@ -126,7 +126,7 @@ std::string GetFileNameFromURL(const GURL& url,
     return std::string();
 
   std::string unescaped_url_filename = base::UnescapeBinaryURLComponent(
-      url.ExtractFileName(), UnescapeRule::NORMAL);
+      url.ExtractFileName(), base::UnescapeRule::NORMAL);
 
   // The URL's path should be escaped UTF-8, but may not be.
   std::string decoded_filename = unescaped_url_filename;
@@ -155,12 +155,20 @@ std::string GetFileNameFromURL(const GURL& url,
 bool IsShellIntegratedExtension(const base::FilePath::StringType& extension) {
   base::FilePath::StringType extension_lower = base::ToLowerASCII(extension);
 
-  // .lnk files may be used to execute arbitrary code (see
-  // https://nvd.nist.gov/vuln/detail/CVE-2010-2568). .local files are used by
-  // Windows to determine which DLLs to load for an application.
+  // .lnk and .scf files may be used to execute arbitrary code (see
+  // https://nvd.nist.gov/vuln/detail/CVE-2010-2568 and
+  // https://crbug.com/1227995, respectively). .local files are used by
+  // Windows to determine which DLLs to load for an application. .url files
+  // can be used to leak credentials or read arbitrary files (see
+  // https://crbug.com/1307930).
+  // LINT.IfChange(ShellIntegratedExtensions)
   if ((extension_lower == FILE_PATH_LITERAL("local")) ||
-      (extension_lower == FILE_PATH_LITERAL("lnk")))
+      (extension_lower == FILE_PATH_LITERAL("lnk")) ||
+      (extension_lower == FILE_PATH_LITERAL("scf")) ||
+      (extension_lower == FILE_PATH_LITERAL("url"))) {
     return true;
+  }
+  // LINT.ThenChange(//content/browser/file_system_access/file_system_chooser.cc:ShellIntegratedExtensions)
 
   // Setting a file's extension to a CLSID may conceal its actual file type on
   // some Windows versions (see https://nvd.nist.gov/vuln/detail/CVE-2004-0420).
@@ -191,7 +199,7 @@ void EnsureSafeExtension(const std::string& mime_type,
   base::FilePath::StringType extension =
       GetCorrectedExtensionUnsafe(mime_type, ignore_extension, *file_name);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   const base::FilePath::CharType kDefaultExtension[] =
       FILE_PATH_LITERAL("download");
 
@@ -206,10 +214,10 @@ void EnsureSafeExtension(const std::string& mime_type,
 }
 
 bool FilePathToString16(const base::FilePath& path, std::u16string* converted) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   converted->assign(path.value().begin(), path.value().end());
   return true;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   std::string component8 = path.AsUTF8Unsafe();
   return !component8.empty() &&
          base::UTF8ToUTF16(component8.c_str(), component8.size(), converted);
@@ -257,18 +265,18 @@ std::u16string GetSuggestedFilenameImpl(
   // |default_name|.  Some schemes (e.g.: file:, about:, data:) do not have a
   // host name.
   if (filename.empty() && default_name.empty() && url.is_valid() &&
-      !url.host().empty()) {
+      !url.GetHost().empty()) {
     // TODO(jungshik) : Decode a 'punycoded' IDN hostname. (bug 1264451)
-    filename = url.host();
+    filename = url.GetHost();
   }
 
   bool replace_trailing = false;
   base::FilePath::StringType result_str, default_name_str;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   replace_trailing = true;
   result_str = base::UTF8ToWide(filename);
   default_name_str = base::UTF8ToWide(default_name);
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   result_str = filename;
   default_name_str = default_name;
 #else
@@ -318,9 +326,9 @@ base::FilePath GenerateFileNameImpl(
       default_file_name, should_replace_extension,
       replace_illegal_characters_function);
 
-#if defined(OS_WIN)
-  base::FilePath generated_name(base::AsWStringPiece(file_name));
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_WIN)
+  base::FilePath generated_name(base::AsWStringView(file_name));
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   base::FilePath generated_name(
       base::SysWideToNativeMB(base::UTF16ToWide(file_name)));
 #endif

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
+#include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/i18n/language_tag.h"
 #include "base/time/time.h"
 
 class GURL;
@@ -20,13 +21,19 @@ class GURL;
 namespace translate {
 
 struct TranslateEventDetails;
-class TranslateURLFetcher;
+class TranslateUrlFetcher;
 
 // The TranslateLanguageList class is responsible for maintaining the latest
 // supporting language list.
 class TranslateLanguageList {
  public:
+  // The empty constructor will create the default TranslateUrlFetcher.
   TranslateLanguageList();
+  explicit TranslateLanguageList(std::unique_ptr<TranslateUrlFetcher> fetcher);
+
+  TranslateLanguageList(const TranslateLanguageList&) = delete;
+  TranslateLanguageList& operator=(const TranslateLanguageList&) = delete;
+
   virtual ~TranslateLanguageList();
 
   // Returns the last-updated time when the language list is fetched from the
@@ -39,13 +46,22 @@ class TranslateLanguageList {
   void GetSupportedLanguages(bool translate_allowed,
                              std::vector<std::string>* languages);
 
+  // Fills |languages| with the alphabetically sorted list of languages that the
+  // partial translate server can translate to and from. May attempt a language
+  // list request unless |translate_allowed| is false.
+  static void GetSupportedPartialTranslateLanguages(
+      std::vector<std::string>* languages);
+
   // Returns the language code that can be used with the Translate method for a
   // specified |language|. (ex. GetLanguageCode("en-US") will return "en", and
   // GetLanguageCode("zh-CN") returns "zh-CN")
-  std::string GetLanguageCode(base::StringPiece language);
+  std::string GetLanguageCode(std::string_view language);
 
   // Returns true if |language| is supported by the translation server.
-  bool IsSupportedLanguage(base::StringPiece language);
+  bool IsSupportedLanguage(std::string_view language);
+
+  // Returns true if |language| is supported by the partial translation server.
+  static bool IsSupportedPartialTranslateLanguage(std::string_view language);
 
   // Fetches the language list from the translate server if resource requests
   // are allowed, and otherwise keeps the request as pending until allowed.
@@ -68,9 +84,6 @@ class TranslateLanguageList {
   GURL LanguageFetchURLForTesting();
   bool HasOngoingLanguageListLoadingForTesting();
 
-  // Disables the language list updater. This is used only for testing now.
-  static void DisableUpdate();
-
   // static const values shared with our browser tests.
   static const char kTargetLanguagesKey[];
 
@@ -90,7 +103,7 @@ class TranslateLanguageList {
   // Parses |language_list| containing the list of languages that the translate
   // server can translate to and from. Returns true iff the list is parsed
   // without syntax errors.
-  bool SetSupportedLanguages(base::StringPiece language_list);
+  bool SetSupportedLanguages(std::string_view language_list);
 
   // Returns the url from which to load the list of languages.
   static GURL TranslateLanguageUrl();
@@ -105,16 +118,14 @@ class TranslateLanguageList {
   bool request_pending_;
 
   // The languages supported by the translation server, sorted alphabetically.
-  std::vector<std::string> supported_languages_;
+  base::flat_set<base::i18n::LanguageTag> supported_languages_;
 
   // A LanguageListFetcher instance to fetch a server providing supported
   // language list.
-  std::unique_ptr<TranslateURLFetcher> language_list_fetcher_;
+  std::unique_ptr<TranslateUrlFetcher> language_list_fetcher_;
 
   // The last-updated time when the language list is sent.
   base::Time last_updated_;
-
-  DISALLOW_COPY_AND_ASSIGN(TranslateLanguageList);
 };
 
 }  // namespace translate

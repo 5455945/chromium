@@ -32,26 +32,32 @@
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_SHARED_WORKER_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/unguessable_token.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_features_bitset.h"
 #include "services/network/public/mojom/content_security_policy.mojom-shared.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
-#include "services/network/public/mojom/ip_address_space.mojom-shared.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom-shared.h"
+#include "third_party/blink/public/mojom/frame/policy_container.mojom-forward.h"
+#include "third_party/blink/public/mojom/frame/reporting_observer.mojom-shared.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-shared.h"
+#include "third_party/blink/public/mojom/security_context/outside_context_csp_violation_reporter.mojom-shared.h"
 #include "third_party/blink/public/mojom/worker/shared_worker_host.mojom-shared.h"
 #include "third_party/blink/public/mojom/worker/worker_content_settings_proxy.mojom-shared.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_content_security_policy_struct.h"
+#include "third_party/blink/public/platform/web_policy_container.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 
 namespace blink {
 
+class MessagePortDescriptor;
 class WebString;
 class WebSharedWorkerClient;
 class WebURL;
@@ -74,12 +80,15 @@ class BLINK_EXPORT WebSharedWorker {
       network::mojom::CredentialsMode,
       const WebString& name,
       WebSecurityOrigin constructor_origin,
+      WebSecurityOrigin origin_from_browser,
+      bool is_constructor_secure_context,
       const WebString& user_agent,
       const UserAgentMetadata& ua_metadata,
-      const WebVector<WebContentSecurityPolicy>& content_security_policies,
-      network::mojom::IPAddressSpace,
+      const std::vector<WebContentSecurityPolicy>& content_security_policies,
       const WebFetchClientSettingsObject& outside_fetch_client_settings_object,
-      const base::UnguessableToken& appcache_host_id,
+      CrossVariantMojoRemote<
+          mojom::OutsideContextCSPViolationReporterInterfaceBase>
+          outside_settings_reporter,
       const base::UnguessableToken& devtools_worker_token,
       CrossVariantMojoRemote<mojom::WorkerContentSettingsProxyInterfaceBase>
           content_settings,
@@ -88,10 +97,18 @@ class BLINK_EXPORT WebSharedWorker {
       bool pause_worker_context_on_start,
       std::unique_ptr<blink::WorkerMainScriptLoadParameters>
           worker_main_script_load_params,
+      std::unique_ptr<blink::WebPolicyContainer> policy_container,
       scoped_refptr<WebWorkerFetchContext> web_worker_fetch_context,
       CrossVariantMojoRemote<mojom::SharedWorkerHostInterfaceBase>,
       WebSharedWorkerClient*,
-      ukm::SourceId ukm_source_id);
+      ukm::SourceId ukm_source_id,
+      bool require_cross_site_request_for_cookies,
+      CrossVariantMojoReceiver<mojom::ReportingObserverInterfaceBase>
+          coep_reporting_observer,
+      CrossVariantMojoReceiver<mojom::ReportingObserverInterfaceBase>
+          dip_reporting_observer,
+      bool cross_origin_isolated,
+      const network::PermissionsPolicyFeaturesBitset& permissions_policy);
 
   // Sends a connect event to the SharedWorker context.
   virtual void Connect(int connection_request_id,
@@ -100,6 +117,14 @@ class BLINK_EXPORT WebSharedWorker {
   // Invoked to shutdown the worker when there are no more associated documents.
   // This eventually deletes this instance.
   virtual void TerminateWorkerContext() = 0;
+
+  // Freezes the WorkerThread. This is called when all connected clients are in
+  // back/forward cache.
+  virtual void Freeze() = 0;
+
+  // Resumes the WorkerThread. This is called when the frozen worker gains an
+  // active client.
+  virtual void Resume() = 0;
 };
 
 }  // namespace blink

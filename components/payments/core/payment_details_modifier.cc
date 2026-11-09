@@ -1,9 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/payments/core/payment_details_modifier.h"
 
+#include "base/memory/values_equivalent.h"
 #include "base/values.h"
 
 namespace payments {
@@ -19,7 +20,7 @@ static const char kPaymentDetailsModifierData[] = "data";
 
 }  // namespace
 
-PaymentDetailsModifier::PaymentDetailsModifier() {}
+PaymentDetailsModifier::PaymentDetailsModifier() = default;
 PaymentDetailsModifier::~PaymentDetailsModifier() = default;
 
 PaymentDetailsModifier::PaymentDetailsModifier(
@@ -44,25 +45,17 @@ PaymentDetailsModifier& PaymentDetailsModifier::operator=(
 bool PaymentDetailsModifier::operator==(
     const PaymentDetailsModifier& other) const {
   return method_data == other.method_data &&
-         ((!total && !other.total) ||
-          (total && other.total && *total == *other.total)) &&
+         base::ValuesEquivalent(total, other.total) &&
          additional_display_items == other.additional_display_items;
 }
 
-bool PaymentDetailsModifier::operator!=(
-    const PaymentDetailsModifier& other) const {
-  return !(*this == other);
-}
-
-std::unique_ptr<base::DictionaryValue>
-PaymentDetailsModifier::ToDictionaryValue() const {
-  auto result = std::make_unique<base::DictionaryValue>();
-  result->SetString(kPaymentDetailsModifierSupportedMethods,
-                    method_data.supported_method);
-  result->SetString(kPaymentDetailsModifierData, method_data.data);
+base::DictValue PaymentDetailsModifier::ToValueDict() const {
+  base::DictValue result;
+  result.Set(kPaymentDetailsModifierSupportedMethods,
+             method_data.supported_method);
+  result.Set(kPaymentDetailsModifierData, method_data.data);
   if (total) {
-    result->SetDictionary(kPaymentDetailsModifierTotal,
-                          total->ToDictionaryValue());
+    result.Set(kPaymentDetailsModifierTotal, total->ToValueDict());
   }
 
   return result;

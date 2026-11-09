@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,5 +43,14 @@ AutocompleteMatch VerbatimMatchForInput(AutocompleteProvider* provider,
                                         const AutocompleteInput& input,
                                         const GURL& destination_url,
                                         bool trim_http);
+
+// Returns a verbatim match for context-only queries. This match is similar to
+// VerbatimMatchForInput but clears display title and descriptions, since it's
+// intended to navigate to the current URL without displaying text in the
+// omnibox.
+AutocompleteMatch VerbatimMatchForContext(AutocompleteProvider* provider,
+                                          AutocompleteProviderClient* client,
+                                          const AutocompleteInput& input,
+                                          int relevance);
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_VERBATIM_MATCH_H_

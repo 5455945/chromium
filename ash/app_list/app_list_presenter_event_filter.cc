@@ -1,10 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/app_list/app_list_presenter_event_filter.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
@@ -23,7 +24,6 @@
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
 #include "base/check.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/window.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/point.h"
@@ -52,18 +52,19 @@ void AppListPresenterEventFilter::OnMouseEvent(ui::MouseEvent* event) {
   if (event->IsAnyButton())
     controller_->SetKeyboardTraversalMode(false);
 
-  if (event->type() == ui::ET_MOUSE_PRESSED)
+  if (event->type() == ui::EventType::kMousePressed) {
     ProcessLocatedEvent(event);
+  }
 }
 
 void AppListPresenterEventFilter::OnGestureEvent(ui::GestureEvent* event) {
   controller_->SetKeyboardTraversalMode(false);
 
-  // Checks tap types instead of ui::ET_TOUCH_PRESSED so that swipes on the
-  // shelf do not close the launcher. https://crbug.com/750274
-  if (event->type() == ui::ET_GESTURE_TAP ||
-      event->type() == ui::ET_GESTURE_TWO_FINGER_TAP ||
-      event->type() == ui::ET_GESTURE_LONG_PRESS) {
+  // Checks tap types instead of ui::EventType::kTouchPressed so that swipes on
+  // the shelf do not close the launcher. https://crbug.com/750274
+  if (event->type() == ui::EventType::kGestureTap ||
+      event->type() == ui::EventType::kGestureTwoFingerTap ||
+      event->type() == ui::EventType::kGestureLongPress) {
     ProcessLocatedEvent(event);
   }
 }
@@ -74,15 +75,12 @@ void AppListPresenterEventFilter::OnKeyEvent(ui::KeyEvent* event) {
     return;
 
   // If the home launcher is not shown in tablet mode, ignore events.
-  if (Shell::Get()->IsInTabletMode() && !controller_->IsVisible())
+  if (display::Screen::Get()->InTabletMode() && !controller_->IsVisible()) {
     return;
+  }
 
   // Don't absorb the first event for the search box while it is open.
   if (view_->search_box_view()->is_search_box_active())
-    return;
-
-  // Don't absorb the first event when showing Assistant.
-  if (view_->IsShowingEmbeddedAssistantUI())
     return;
 
   // Don't absorb the first event when renaming folder.
@@ -91,7 +89,7 @@ void AppListPresenterEventFilter::OnKeyEvent(ui::KeyEvent* event) {
 
   // Arrow keys or Tab will engage the traversal mode.
   if ((IsUnhandledArrowKeyEvent(*event) || event->key_code() == ui::VKEY_TAB)) {
-    // Handle the first arrow key event to just show the focus rings.
+    // Handle the first arrow key event to just show the focus rings
     event->SetHandled();
     controller_->SetKeyboardTraversalMode(true);
   }
@@ -138,32 +136,13 @@ void AppListPresenterEventFilter::ProcessLocatedEvent(ui::LocatedEvent* event) {
   if (presenter_->HandleCloseOpenFolder())
     return;
 
-  if (!Shell::Get()->IsInTabletMode()) {
-    // Do not dismiss the app list if the event is targeting shelf area
-    // containing app icons.
-    if (target == shelf->hotseat_widget()->GetNativeWindow() &&
-        shelf->hotseat_widget()->EventTargetsShelfView(*event)) {
-      return;
-    }
-
+  if (!display::Screen::Get()->InTabletMode()) {
     // Don't dismiss the auto-hide shelf if event happened in status area. Then
     // the event can still be propagated.
     const aura::Window* status_window =
         shelf->shelf_widget()->status_area_widget()->GetNativeWindow();
-    if (status_window && status_window->Contains(target)) {
-      auto shelf_visibility_lock =
-          std::make_unique<ShelfLayoutManager::ScopedVisibilityLock>(
-              shelf->shelf_layout_manager());
-
-      // Use a task runner to delete the |shelf_visibility_lock| and update the
-      // shelf visibility after the current event has been handled by the shelf.
-      // This is important for the case where dismissing the app list might hide
-      // the shelf, which would stop the shelf from handling the event.
-      // TODO(crbug.com/1186479): Investigate whether there is a better way to
-      // do this, instead of using a task runner here.
-      base::ThreadTaskRunnerHandle::Get()->DeleteSoon(
-          FROM_HERE, std::move(shelf_visibility_lock));
-    }
+    if (status_window && status_window->Contains(target))
+      return;
 
     // Record the current AppListViewState to be used later for metrics. The
     // AppListViewState will change on app launch, so this will record the

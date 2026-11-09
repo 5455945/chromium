@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 #define CHROME_BROWSER_ASH_ARC_NEARBY_SHARE_ARC_NEARBY_SHARE_BRIDGE_H_
 
 #include <stdint.h>
+
 #include <map>
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/arc/nearby_share/nearby_share_session_impl.h"
-#include "components/arc/mojom/nearby_share.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/nearby_share.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 class Profile;
@@ -46,23 +48,26 @@ class ArcNearbyShareBridge : public KeyedService,
 
   // mojom::NearbyShareHost overrides.
   void StartNearbyShare(
-      int32_t task_id,
+      uint32_t task_id,
       mojom::ShareIntentInfoPtr info,
       mojo::PendingRemote<mojom::NearbyShareSessionInstance> instance,
       StartNearbyShareCallback callback) override;
 
+  static void EnsureFactoryBuilt();
+
  private:
   // Called by NearbyShareSessionImpl when the session is finished and can be
   // cleaned up.
-  void OnNearbyShareSessionFinished(int32_t task_id);
+  void OnNearbyShareSessionFinished(uint32_t task_id);
 
-  ArcBridgeService* const arc_bridge_service_;  // Owned by ArcServiceManager.
+  const raw_ptr<ArcBridgeService>
+      arc_bridge_service_;  // Owned by ArcServiceManager.
 
   // Unowned pointer.
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   // Map that keeps track of a task_id with its NearbyShareSessionImpl instance.
-  std::map<int32_t, std::unique_ptr<NearbyShareSessionImpl>> session_map_;
+  std::map<uint32_t, std::unique_ptr<NearbyShareSessionImpl>> session_map_;
 
   base::WeakPtrFactory<ArcNearbyShareBridge> weak_ptr_factory_{this};
 };

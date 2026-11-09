@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 
 #include <memory>
 
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/bind.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
-#include "content/browser/service_worker/service_worker_context_core.h"
+#include "content/browser/service_worker/service_worker_client.h"
 #include "content/browser/service_worker/service_worker_context_core_observer.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/browser/service_worker/service_worker_test_utils.h"
 #include "content/browser/service_worker/service_worker_version.h"
+#include "content/public/common/content_client.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -30,6 +31,10 @@ class ServiceWorkerContextCoreTest : public testing::Test,
   ServiceWorkerContextCoreTest()
       : task_environment_(BrowserTaskEnvironment::IO_MAINLOOP) {}
 
+  ServiceWorkerContextCoreTest(const ServiceWorkerContextCoreTest&) = delete;
+  ServiceWorkerContextCoreTest& operator=(const ServiceWorkerContextCoreTest&) =
+      delete;
+
   void SetUp() override {
     helper_ = std::make_unique<EmbeddedWorkerTestHelper>(base::FilePath());
   }
@@ -42,6 +47,7 @@ class ServiceWorkerContextCoreTest : public testing::Test,
   }
 
   ServiceWorkerContextCore* context() { return helper_->context(); }
+  void ShutdownContext() { helper_->ShutdownContext(); }
 
   // Runs until |registration| has an active version and it is activated.
   void RunUntilActivatedVersion(ServiceWorkerRegistration* registration) {
@@ -69,7 +75,7 @@ class ServiceWorkerContextCoreTest : public testing::Test,
     blink::ServiceWorkerStatusCode status;
     int64_t registration_id;
     context()->RegisterServiceWorker(
-        script, key, options, blink::mojom::FetchClientSettingsObject::New(),
+        script, key, options, CreateFetchClientSettingsObject(),
         base::BindLambdaForTesting(
             [&](blink::ServiceWorkerStatusCode result_status,
                 const std::string& /* status_message */,
@@ -78,7 +84,8 @@ class ServiceWorkerContextCoreTest : public testing::Test,
               registration_id = result_registration_id;
               loop.Quit();
             }),
-        /*requesting_frame_id=*/GlobalRenderFrameHostId());
+        /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+        PolicyContainerPolicies());
     loop.Run();
     EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, status);
     scoped_refptr<ServiceWorkerRegistration> registration =
@@ -95,7 +102,7 @@ class ServiceWorkerContextCoreTest : public testing::Test,
       const blink::StorageKey& key) {
     base::RunLoop loop;
     blink::ServiceWorkerStatusCode status;
-    context()->registry()->FindRegistrationForScope(
+    context()->registry().FindRegistrationForScope(
         scope, key,
         base::BindLambdaForTesting(
             [&](blink::ServiceWorkerStatusCode result_status,
@@ -114,6 +121,7 @@ class ServiceWorkerContextCoreTest : public testing::Test,
     blink::ServiceWorkerStatusCode status;
     context()->UnregisterServiceWorker(
         scope, key, /*is_immediate=*/false,
+        ServiceWorkerRegistration::DeleteInitiator::kTest,
         base::BindLambdaForTesting(
             [&](blink::ServiceWorkerStatusCode result_status) {
               status = result_status;
@@ -138,19 +146,21 @@ class ServiceWorkerContextCoreTest : public testing::Test,
     return status;
   }
 
-  ServiceWorkerContainerHost* CreateControllee() {
-    remote_endpoints_.emplace_back();
-    base::WeakPtr<ServiceWorkerContainerHost> container_host =
-        CreateContainerHostForWindow(
-            /*dummy_render_process_id=*/33, /*is_parent_frame_secure=*/true,
-            helper_->context()->AsWeakPtr(), &remote_endpoints_.back());
-    return container_host.get();
+  ServiceWorkerClient* CreateControllee() {
+    ScopedServiceWorkerClient service_worker_client =
+        CreateServiceWorkerClient(helper_->context());
+    ServiceWorkerClient* service_worker_client_ptr =
+        service_worker_client.get();
+    service_worker_client_keep_alive_.push_back(
+        std::move(service_worker_client));
+    return service_worker_client_ptr;
   }
 
  protected:
   // ServiceWorkerContextCoreObserver overrides:
   void OnVersionStateChanged(int64_t version_id,
                              const GURL& scope,
+                             const blink::StorageKey& key,
                              ServiceWorkerVersion::Status status) override {
     if (status == ServiceWorkerVersion::ACTIVATED &&
         scope == scope_for_wait_for_activated_ &&
@@ -162,12 +172,10 @@ class ServiceWorkerContextCoreTest : public testing::Test,
  private:
   BrowserTaskEnvironment task_environment_;
   std::unique_ptr<EmbeddedWorkerTestHelper> helper_;
-  std::vector<ServiceWorkerRemoteContainerEndpoint> remote_endpoints_;
+  std::vector<ScopedServiceWorkerClient> service_worker_client_keep_alive_;
   GURL scope_for_wait_for_activated_;
   base::OnceClosure quit_closure_for_wait_for_activated_;
   bool is_observing_context_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerContextCoreTest);
 };
 
 TEST_F(ServiceWorkerContextCoreTest, FailureInfo) {
@@ -195,14 +203,14 @@ TEST_F(ServiceWorkerContextCoreTest, FailureInfo) {
   context()->UpdateVersionFailureCount(kVersionId,
                                        blink::ServiceWorkerStatusCode::kOk);
   EXPECT_EQ(0, context()->GetVersionFailureCount(kVersionId));
-  EXPECT_FALSE(base::Contains(context()->failure_counts_, kVersionId));
+  EXPECT_FALSE(context()->failure_counts_.contains(kVersionId));
 }
 
 TEST_F(ServiceWorkerContextCoreTest, DeleteForStorageKey) {
   const GURL script("https://www.example.com/a/sw.js");
   const GURL scope("https://www.example.com/a");
   const url::Origin origin = url::Origin::Create(scope);
-  const blink::StorageKey key(origin);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
 
   // Register a service worker.
   blink::mojom::ServiceWorkerRegistrationOptions options;
@@ -222,7 +230,7 @@ TEST_F(ServiceWorkerContextCoreTest, DeleteForStorageKeyAbortsQueuedJobs) {
   const GURL script("https://www.example.com/a/sw.js");
   const GURL scope("https://www.example.com/a");
   const url::Origin origin = url::Origin::Create(scope);
-  const blink::StorageKey key(origin);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
 
   // Register a service worker.
   blink::mojom::ServiceWorkerRegistrationOptions options;
@@ -234,7 +242,7 @@ TEST_F(ServiceWorkerContextCoreTest, DeleteForStorageKeyAbortsQueuedJobs) {
   base::RunLoop register_job_loop;
   blink::ServiceWorkerStatusCode register_job_status;
   context()->RegisterServiceWorker(
-      script, key, options, blink::mojom::FetchClientSettingsObject::New(),
+      script, key, options, CreateFetchClientSettingsObject(),
       base::BindLambdaForTesting(
           [&](blink::ServiceWorkerStatusCode result_status,
               const std::string& /* status_message */,
@@ -242,7 +250,8 @@ TEST_F(ServiceWorkerContextCoreTest, DeleteForStorageKeyAbortsQueuedJobs) {
             register_job_status = result_status;
             register_job_loop.Quit();
           }),
-      /*requesting_frame_id=*/GlobalRenderFrameHostId());
+      /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+      PolicyContainerPolicies());
 
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, DeleteForStorageKey(key));
 
@@ -256,7 +265,7 @@ TEST_F(ServiceWorkerContextCoreTest,
   const GURL script("https://www.example.com/a/sw.js");
   const GURL scope("https://www.example.com/a");
   const url::Origin origin = url::Origin::Create(scope);
-  const blink::StorageKey key(origin);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
 
   // Register a service worker.
   blink::mojom::ServiceWorkerRegistrationOptions options;
@@ -265,24 +274,25 @@ TEST_F(ServiceWorkerContextCoreTest,
   RegisterServiceWorker(scope, key, options, &registration);
 
   // Add a controlled client.
-  ServiceWorkerContainerHost* container_host = CreateControllee();
-  container_host->UpdateUrls(scope, net::SiteForCookies::FromUrl(scope),
-                             origin);
-  container_host->SetControllerRegistration(registration,
-                                            /*notify_controllerchange=*/false);
+  ServiceWorkerClient* service_worker_client = CreateControllee();
+  service_worker_client->UpdateUrls(scope, origin, key);
+  service_worker_client->SetControllerRegistration(
+      registration,
+      /*notify_controllerchange=*/false);
 
   // Unregister, which will wait to clear until the controlled client unloads.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, Unregister(scope, key));
 
   // Queue an Update job.
-  context()->UpdateServiceWorker(registration.get(),
-                                 /*force_bypass_cache=*/false);
+  context()->UpdateServiceWorkerWithoutExecutionContext(
+      registration.get(),
+      /*force_bypass_cache=*/false);
 
   // Queue a register job.
   base::RunLoop register_job_loop;
   blink::ServiceWorkerStatusCode register_job_status;
   context()->RegisterServiceWorker(
-      script, key, options, blink::mojom::FetchClientSettingsObject::New(),
+      script, key, options, CreateFetchClientSettingsObject(),
       base::BindLambdaForTesting(
           [&](blink::ServiceWorkerStatusCode result_status,
               const std::string& /* status_message */,
@@ -290,7 +300,8 @@ TEST_F(ServiceWorkerContextCoreTest,
             register_job_status = result_status;
             register_job_loop.Quit();
           }),
-      /*requesting_frame_id=*/GlobalRenderFrameHostId());
+      /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+      PolicyContainerPolicies());
 
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kOk, DeleteForStorageKey(key));
 
@@ -299,13 +310,46 @@ TEST_F(ServiceWorkerContextCoreTest,
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kErrorAbort, register_job_status);
 }
 
+// A regression test for crashes due to reentrancy of ServiceWorkerClient
+// destruction during ServiceWorkerContextCore shutdown.
+// See crbug.com/495673737.
+TEST_F(ServiceWorkerContextCoreTest,
+       ScopedClientDestructionDuringClientOwnerShutdown) {
+  auto scoped_service_worker_client1 =
+      std::make_unique<ScopedServiceWorkerClient>(
+          CreateServiceWorkerClient(context()));
+  auto scoped_service_worker_client2 =
+      std::make_unique<ScopedServiceWorkerClient>(
+          CreateServiceWorkerClient(context()));
+  base::WeakPtr<ServiceWorkerClient> service_worker_client1 =
+      scoped_service_worker_client1->AsWeakPtr();
+  base::WeakPtr<ServiceWorkerClient> service_worker_client2 =
+      scoped_service_worker_client2->AsWeakPtr();
+  ASSERT_TRUE(service_worker_client1);
+  ASSERT_TRUE(service_worker_client2);
+
+  service_worker_client1->SetDestructionCallbackForTesting(
+      base::BindLambdaForTesting(
+          [&] { scoped_service_worker_client2.reset(); }));
+  service_worker_client2->SetDestructionCallbackForTesting(
+      base::BindLambdaForTesting(
+          [&] { scoped_service_worker_client1.reset(); }));
+
+  ShutdownContext();
+
+  EXPECT_FALSE(service_worker_client1);
+  EXPECT_FALSE(service_worker_client2);
+  EXPECT_FALSE(scoped_service_worker_client1);
+  EXPECT_FALSE(scoped_service_worker_client2);
+}
+
 // Tests that DeleteForStorageKey() doesn't get stuck forever even upon an error
 // when trying to unregister.
 TEST_F(ServiceWorkerContextCoreTest, DeleteForStorageKey_UnregisterFail) {
   const GURL script("https://www.example.com/a/sw.js");
   const GURL scope("https://www.example.com/a");
   const url::Origin origin = url::Origin::Create(scope);
-  const blink::StorageKey key(origin);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
 
   // Register a service worker.
   blink::mojom::ServiceWorkerRegistrationOptions options;
@@ -324,11 +368,65 @@ TEST_F(ServiceWorkerContextCoreTest, DeleteForStorageKey_UnregisterFail) {
                }));
   // Disable storage before it finishes. This causes the Unregister job to
   // complete with an error.
-  context()->registry()->DisableStorageForTesting(base::DoNothing());
+  context()->registry().DisableStorageForTesting(base::DoNothing());
   loop.Run();
 
   // The operation should still complete.
   EXPECT_EQ(blink::ServiceWorkerStatusCode::kErrorFailed, status);
+}
+
+// Test browser client to capture the origin checked by `IsBuiltinComponent()`.
+class BuiltinComponentTestBrowserClient : public TestContentBrowserClient {
+ public:
+  bool IsBuiltinComponent(BrowserContext* browser_context,
+                          const url::Origin& origin) override {
+    last_queried_origin_ = origin;
+    return origin.scheme() == "chrome";
+  }
+
+  const std::optional<url::Origin>& last_queried_origin() const {
+    return last_queried_origin_;
+  }
+
+ private:
+  std::optional<url::Origin> last_queried_origin_;
+};
+
+// Ensures that `OnReportConsoleMessage` checks whether the service worker's
+// authenticated origin (rather than a renderer-provided `source_url` which can
+// be spoofed) is a built-in component. Regression test for crbug.com/522291712.
+TEST_F(ServiceWorkerContextCoreTest, OnReportConsoleMessageUsesVersionOrigin) {
+  BuiltinComponentTestBrowserClient test_browser_client;
+  ContentBrowserClient* old_browser_client =
+      SetBrowserClientForTesting(&test_browser_client);
+  base::ScopedClosureRunner reset_browser_client(base::BindOnce(
+      [](ContentBrowserClient* client) { SetBrowserClientForTesting(client); },
+      old_browser_client));
+
+  const GURL script("https://www.example.com/sw.js");
+  const GURL scope("https://www.example.com/");
+  const url::Origin origin = url::Origin::Create(scope);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
+
+  blink::mojom::ServiceWorkerRegistrationOptions options;
+  options.scope = scope;
+  scoped_refptr<ServiceWorkerRegistration> registration;
+  RegisterServiceWorker(script, key, options, &registration);
+  ASSERT_TRUE(registration->active_version());
+
+  // Report a console message with a spoofed source_url (e.g.
+  // chrome://settings/).
+  const GURL spoofed_source_url("chrome://settings/");
+  context()->OnReportConsoleMessage(
+      registration->active_version(),
+      blink::mojom::ConsoleMessageSource::kConsoleApi,
+      blink::mojom::ConsoleMessageLevel::kError, u"spoofed console message", 1,
+      spoofed_source_url);
+
+  // Verify that IsBuiltinComponent was called with the Service Worker's actual
+  // origin rather than the spoofed source_url origin.
+  ASSERT_TRUE(test_browser_client.last_queried_origin().has_value());
+  EXPECT_EQ(origin, test_browser_client.last_queried_origin().value());
 }
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,23 @@
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_UKM_HELPER_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_UKM_HELPER_H_
 
+#include <optional>
+
 #include "components/download/public/common/download_content.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_source.h"
 #include "components/download/public/common/download_stats.h"
 #include "components/download/public/common/resume_mode.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace download {
 
 class COMPONENTS_DOWNLOAD_EXPORT DownloadUkmHelper {
  public:
+  DownloadUkmHelper() = delete;
+  DownloadUkmHelper(const DownloadUkmHelper&) = delete;
+  DownloadUkmHelper& operator=(const DownloadUkmHelper&) = delete;
+
   // Calculate which exponential bucket the value falls in. This is used to mask
   // the actual value of the metric due to privacy concerns for certain metrics
   // that could trace back the user's exact actions.
@@ -37,7 +42,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUkmHelper {
 
   // Record when the download is interrupted.
   static void RecordDownloadInterrupted(int download_id,
-                                        absl::optional<int> change_in_file_size,
+                                        std::optional<int> change_in_file_size,
                                         DownloadInterruptReason reason,
                                         int resulting_file_size,
                                         const base::TimeDelta& time_since_start,
@@ -53,12 +58,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUkmHelper {
                                       int resulting_file_size,
                                       const base::TimeDelta& time_since_start,
                                       int64_t bytes_wasted);
-
- private:
-  DownloadUkmHelper();
-  ~DownloadUkmHelper();
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadUkmHelper);
 };
 
 }  // namespace download

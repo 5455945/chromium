@@ -35,7 +35,7 @@
 #include "third_party/blink/renderer/core/html/html_span_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -56,9 +56,14 @@ static void SwapInNodePreservingAttributesAndChildren(
   for (const auto& child : children)
     new_element->AppendChild(child);
 
-  // FIXME: Fix this to send the proper MutationRecords when MutationObservers
-  // are present.
-  new_element->CloneAttributesFrom(element_to_replace);
+  new_element->RemoveAllAttributes();
+  // Make a copy of element_to_replace's attributes since setting attributes
+  // on new_element could run script and thus modify attributes on either
+  // element.
+  AttributeVector attributes(element_to_replace.Attributes());
+  for (const Attribute& attr : attributes) {
+    new_element->SetAttributeWithoutValidation(attr.GetName(), attr.Value());
+  }
 
   parent_node->RemoveChild(&element_to_replace, ASSERT_NO_EXCEPTION);
 }
@@ -79,6 +84,10 @@ void ReplaceNodeWithSpanCommand::DoUnapply() {
     return;
   SwapInNodePreservingAttributesAndChildren(element_to_replace_.Get(),
                                             *span_element_);
+}
+
+String ReplaceNodeWithSpanCommand::ToString() const {
+  return "ReplaceNodeWithSpanCommand";
 }
 
 void ReplaceNodeWithSpanCommand::Trace(Visitor* visitor) const {

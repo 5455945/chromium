@@ -32,12 +32,13 @@
 
 #include <memory>
 
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+
 namespace blink {
 
 void StyleResolverStats::Reset() {
   matched_property_apply = 0;
   matched_property_cache_hit = 0;
-  matched_property_cache_inherited_hit = 0;
   matched_property_cache_added = 0;
   rules_fast_rejected = 0;
   rules_rejected = 0;
@@ -48,6 +49,7 @@ void StyleResolverStats::Reset() {
   elements_styled = 0;
   pseudo_elements_styled = 0;
   base_styles_used = 0;
+  svg_presentation_attribute_styles_used = 0;
   independent_inherited_styles_propagated = 0;
   custom_properties_applied = 0;
 }
@@ -57,8 +59,6 @@ std::unique_ptr<TracedValue> StyleResolverStats::ToTracedValue() const {
   traced_value->SetInteger("matchedPropertyApply", matched_property_apply);
   traced_value->SetInteger("matchedPropertyCacheHit",
                            matched_property_cache_hit);
-  traced_value->SetInteger("matchedPropertyCacheInheritedHit",
-                           matched_property_cache_inherited_hit);
   traced_value->SetInteger("matchedPropertyCacheAdded",
                            matched_property_cache_added);
   traced_value->SetInteger("rulesRejected", rules_rejected);
@@ -70,6 +70,10 @@ std::unique_ptr<TracedValue> StyleResolverStats::ToTracedValue() const {
   traced_value->SetInteger("elementsStyled", elements_styled);
   traced_value->SetInteger("pseudoElementsStyled", pseudo_elements_styled);
   traced_value->SetInteger("baseStylesUsed", base_styles_used);
+  if (RuntimeEnabledFeatures::SvgIncrementalStyleEnabled()) {
+    traced_value->SetInteger("svgPresentationAttributeStylesUsed",
+                             svg_presentation_attribute_styles_used);
+  }
   traced_value->SetInteger("independentInheritedStylesPropagated",
                            independent_inherited_styles_propagated);
   traced_value->SetInteger("customPropertiesApplied",

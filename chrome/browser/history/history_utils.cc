@@ -1,12 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/history/history_utils.h"
 
+#include "build/build_config.h"
 #include "chrome/common/url_constants.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "url/gurl.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "components/webapps/isolated_web_apps/scheme.h"
+#endif
 
 bool CanAddURLToHistory(const GURL& url) {
   if (!url.is_valid())
@@ -20,11 +25,20 @@ bool CanAddURLToHistory(const GURL& url) {
       url.SchemeIs(url::kContentScheme) ||
       url.SchemeIs(content::kChromeDevToolsScheme) ||
       url.SchemeIs(content::kChromeUIScheme) ||
+      url.SchemeIs(content::kChromeUIUntrustedScheme) ||
       url.SchemeIs(content::kViewSourceScheme) ||
       url.SchemeIs(chrome::kChromeNativeScheme) ||
       url.SchemeIs(chrome::kChromeSearchScheme) ||
       url.SchemeIs(dom_distiller::kDomDistillerScheme))
     return false;
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Isolated Web Apps are isolated applications and must not be registered in
+  // browsing history.
+  if (url.SchemeIs(webapps::kIsolatedAppScheme)) {
+    return false;
+  }
+#endif
 
   return true;
 }

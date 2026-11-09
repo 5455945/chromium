@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Unit tests for dependency_analysis.serialization."""
 
+import unittest
 import unittest.mock
 
 import class_dependency
@@ -11,12 +12,13 @@ import class_json_consts
 import graph
 import json_consts
 import package_dependency
-import package_json_consts
+import group_json_consts
 import serialization
 
 
 class TestSerialization(unittest.TestCase):
     """Unit tests for various de/serialization functions."""
+
     CLASS_1 = 'p1.c1'
     CLASS_2 = 'p1.c2'
     CLASS_3 = 'p2.c3'
@@ -33,13 +35,13 @@ class TestSerialization(unittest.TestCase):
             {
                 json_consts.NAME: CLASS_1,
                 json_consts.META: {
-                    class_json_consts.PACKAGE:
-                    'p1',
-                    class_json_consts.CLASS:
-                    'c1',
+                    class_json_consts.PACKAGE: 'p1',
+                    class_json_consts.CLASS: 'c1',
                     class_json_consts.BUILD_TARGETS: [BUILD_TARGET_1],
-                    class_json_consts.NESTED_CLASSES:
-                    [CLASS_1_NESTED_1, CLASS_1_NESTED_2],
+                    class_json_consts.NESTED_CLASSES: [
+                        CLASS_1_NESTED_1,
+                        CLASS_1_NESTED_2,
+                    ],
                 },
             },
             {
@@ -54,12 +56,12 @@ class TestSerialization(unittest.TestCase):
             {
                 json_consts.NAME: CLASS_3,
                 json_consts.META: {
-                    class_json_consts.PACKAGE:
-                    'p2',
-                    class_json_consts.CLASS:
-                    'c3',
-                    class_json_consts.BUILD_TARGETS:
-                    [BUILD_TARGET_1, BUILD_TARGET_2],
+                    class_json_consts.PACKAGE: 'p2',
+                    class_json_consts.CLASS: 'c3',
+                    class_json_consts.BUILD_TARGETS: [
+                        BUILD_TARGET_1,
+                        BUILD_TARGET_2,
+                    ],
                     class_json_consts.NESTED_CLASSES: [],
                 },
             },
@@ -85,13 +87,13 @@ class TestSerialization(unittest.TestCase):
             {
                 json_consts.NAME: 'p1',
                 json_consts.META: {
-                    package_json_consts.CLASSES: [CLASS_1, CLASS_2],
+                    group_json_consts.CLASSES: [CLASS_1, CLASS_2],
                 },
             },
             {
                 json_consts.NAME: 'p2',
                 json_consts.META: {
-                    package_json_consts.CLASSES: [CLASS_3],
+                    group_json_consts.CLASSES: [CLASS_3],
                 },
             },
         ],
@@ -100,7 +102,7 @@ class TestSerialization(unittest.TestCase):
                 json_consts.BEGIN: 'p1',
                 json_consts.END: 'p1',
                 json_consts.META: {
-                    package_json_consts.CLASS_EDGES: [
+                    group_json_consts.CLASS_EDGES: [
                         [CLASS_1, CLASS_2],
                     ],
                 },
@@ -109,7 +111,7 @@ class TestSerialization(unittest.TestCase):
                 json_consts.BEGIN: 'p1',
                 json_consts.END: 'p2',
                 json_consts.META: {
-                    package_json_consts.CLASS_EDGES: [
+                    group_json_consts.CLASS_EDGES: [
                         [CLASS_1, CLASS_3],
                         [CLASS_2, CLASS_3],
                     ],
@@ -125,17 +127,23 @@ class TestSerialization(unittest.TestCase):
         test_graph.add_edge_if_new(self.CLASS_1, self.CLASS_3)
         test_graph.add_edge_if_new(self.CLASS_2, self.CLASS_3)
         test_graph.get_node_by_key(self.CLASS_1).add_nested_class(
-            self.CLASS_1_NESTED_1)
+            self.CLASS_1_NESTED_1
+        )
         test_graph.get_node_by_key(self.CLASS_1).add_nested_class(
-            self.CLASS_1_NESTED_2)
+            self.CLASS_1_NESTED_2
+        )
         test_graph.get_node_by_key(self.CLASS_2).add_nested_class(
-            self.CLASS_2_NESTED_1)
+            self.CLASS_2_NESTED_1
+        )
         test_graph.get_node_by_key(self.CLASS_1).add_build_target(
-            self.BUILD_TARGET_1)
+            self.BUILD_TARGET_1
+        )
         test_graph.get_node_by_key(self.CLASS_3).add_build_target(
-            self.BUILD_TARGET_1)
+            self.BUILD_TARGET_1
+        )
         test_graph.get_node_by_key(self.CLASS_3).add_build_target(
-            self.BUILD_TARGET_2)
+            self.BUILD_TARGET_2
+        )
 
         test_json_obj = serialization.create_json_obj_from_graph(test_graph)
 
@@ -148,14 +156,18 @@ class TestSerialization(unittest.TestCase):
         class_graph.add_edge_if_new(self.CLASS_1, self.CLASS_3)
         class_graph.add_edge_if_new(self.CLASS_2, self.CLASS_3)
         class_graph.get_node_by_key(self.CLASS_1).add_nested_class(
-            self.CLASS_1_NESTED_1)
+            self.CLASS_1_NESTED_1
+        )
         class_graph.get_node_by_key(self.CLASS_1).add_nested_class(
-            self.CLASS_1_NESTED_2)
+            self.CLASS_1_NESTED_2
+        )
         class_graph.get_node_by_key(self.CLASS_2).add_nested_class(
-            self.CLASS_2_NESTED_1)
+            self.CLASS_2_NESTED_1
+        )
 
         package_graph = package_dependency.JavaPackageDependencyGraph(
-            class_graph)
+            class_graph
+        )
         test_json_obj = serialization.create_json_obj_from_graph(package_graph)
 
         self.assertEqual(test_json_obj, self.JSON_PACKAGE_GRAPH)
@@ -168,7 +180,8 @@ class TestSerialization(unittest.TestCase):
         deserialization of package dependency graphs as well.
         """
         test_graph = serialization.create_class_graph_from_json_obj(
-            self.JSON_CLASS_GRAPH)
+            self.JSON_CLASS_GRAPH
+        )
 
         node_1 = test_graph.get_node_by_key(self.CLASS_1)
         node_2 = test_graph.get_node_by_key(self.CLASS_2)
@@ -177,18 +190,23 @@ class TestSerialization(unittest.TestCase):
         self.assertIsNotNone(node_1)
         self.assertIsNotNone(node_2)
         self.assertIsNotNone(node_3)
-        self.assertEqual(node_1.nested_classes,
-                         {self.CLASS_1_NESTED_1, self.CLASS_1_NESTED_2})
+        self.assertEqual(
+            node_1.nested_classes,
+            {self.CLASS_1_NESTED_1, self.CLASS_1_NESTED_2},
+        )
         self.assertEqual(node_2.nested_classes, {self.CLASS_2_NESTED_1})
         self.assertEqual(node_3.nested_classes, set())
         self.assertEqual(node_1.build_targets, {self.BUILD_TARGET_1})
         self.assertEqual(node_2.build_targets, set())
-        self.assertEqual(node_3.build_targets,
-                         {self.BUILD_TARGET_1, self.BUILD_TARGET_2})
+        self.assertEqual(
+            node_3.build_targets, {self.BUILD_TARGET_1, self.BUILD_TARGET_2}
+        )
         self.assertEqual(
             graph.sorted_edges_by_name(test_graph.edges),
-            graph.sorted_edges_by_name([(node_1, node_2), (node_1, node_3),
-                                        (node_2, node_3)]))
+            graph.sorted_edges_by_name(
+                [(node_1, node_2), (node_1, node_3), (node_2, node_3)]
+            ),
+        )
 
 
 if __name__ == '__main__':

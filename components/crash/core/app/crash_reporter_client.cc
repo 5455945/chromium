@@ -1,20 +1,20 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/crash/core/app/crash_reporter_client.h"
 
+#include <stdint.h>
+
+#include "base/check.h"
+#include "base/containers/span.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 
-// On Windows don't use FilePath and logging.h.
+// On Windows don't use FilePath.
 // http://crbug.com/604923
-#if !defined(OS_WIN)
-#include "base/check.h"
+#if !BUILDFLAG(IS_WIN)
 #include "base/files/file_path.h"
-#else
-#include <assert.h>
-#define DCHECK assert
 #endif
 
 namespace crash_reporter {
@@ -38,20 +38,15 @@ CrashReporterClient* GetCrashReporterClient() {
   return g_client;
 }
 
-CrashReporterClient::CrashReporterClient() {}
-CrashReporterClient::~CrashReporterClient() {}
+CrashReporterClient::CrashReporterClient() = default;
+CrashReporterClient::~CrashReporterClient() = default;
 
-#if !defined(OS_APPLE) && !defined(OS_WIN) && !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_ANDROID)
 void CrashReporterClient::SetCrashReporterClientIdFromGUID(
     const std::string& client_guid) {}
 #endif
 
-#if defined(OS_WIN)
-bool CrashReporterClient::ShouldCreatePipeName(
-    const std::wstring& process_type) {
-  return process_type == L"browser";
-}
-
+#if BUILDFLAG(IS_WIN)
 bool CrashReporterClient::GetAlternativeCrashDumpLocation(
     std::wstring* crash_dir) {
   return false;
@@ -64,38 +59,18 @@ void CrashReporterClient::GetProductNameAndVersion(const std::wstring& exe_path,
                                                    std::wstring* channel_name) {
 }
 
-bool CrashReporterClient::ShouldShowRestartDialog(std::wstring* title,
-                                                  std::wstring* message,
-                                                  bool* is_rtl_locale) {
-  return false;
+std::wstring CrashReporterClient::GetWerRuntimeExceptionModule() {
+  return std::wstring();
 }
+#endif  // BUILDFLAG(IS_WIN)
 
-bool CrashReporterClient::AboutToRestart() {
-  return false;
-}
-
-bool CrashReporterClient::GetIsPerUserInstall() {
-  return true;
-}
-
+#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC))
 bool CrashReporterClient::GetShouldDumpLargerDumps() {
   return false;
 }
-
-int CrashReporterClient::GetResultCodeRespawnFailed() {
-  return 0;
-}
 #endif
 
-#if defined(OS_POSIX) && !defined(OS_MAC)
-void CrashReporterClient::GetProductNameAndVersion(const char** product_name,
-                                                   const char** version) {
-}
-
-void CrashReporterClient::GetProductNameAndVersion(std::string* product_name,
-                                                   std::string* version,
-                                                   std::string* channel) {}
-
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
 base::FilePath CrashReporterClient::GetReporterLogFilename() {
   return base::FilePath();
 }
@@ -106,7 +81,7 @@ bool CrashReporterClient::HandleCrashDump(const char* crashdump_filename,
 }
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 bool CrashReporterClient::GetCrashDumpLocation(std::wstring* crash_dir) {
 #else
 bool CrashReporterClient::GetCrashDumpLocation(base::FilePath* crash_dir) {
@@ -114,13 +89,15 @@ bool CrashReporterClient::GetCrashDumpLocation(base::FilePath* crash_dir) {
   return false;
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 bool CrashReporterClient::GetCrashMetricsLocation(std::wstring* crash_dir) {
 #else
 bool CrashReporterClient::GetCrashMetricsLocation(base::FilePath* crash_dir) {
 #endif
   return false;
 }
+
+void CrashReporterClient::GetProductInfo(ProductInfo* product_info) {}
 
 bool CrashReporterClient::IsRunningUnattended() {
   return true;
@@ -139,7 +116,7 @@ bool CrashReporterClient::ReportingIsEnforcedByPolicy(bool* breakpad_enabled) {
   return false;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 unsigned int CrashReporterClient::GetCrashDumpPercentage() {
   return 100;
 }
@@ -148,35 +125,13 @@ bool CrashReporterClient::GetBrowserProcessType(std::string* ptype) {
   return false;
 }
 
-int CrashReporterClient::GetAndroidMinidumpDescriptor() {
-  return 0;
-}
-
-int CrashReporterClient::GetAndroidCrashSignalFD() {
-  return -1;
-}
-
-bool CrashReporterClient::ShouldEnableBreakpadMicrodumps() {
-// Always enable microdumps on Android when stripping unwind tables. Rationale:
-// when unwind tables are stripped out (to save binary size) the stack traces
-// produced locally in the case of a crash / CHECK are meaningless. In order to
-// provide meaningful development diagnostics (and keep the binary size savings)
-// on Android we attach a secondary crash handler which serializes a reduced
-// form of logcat on the console.
-#if defined(NO_UNWIND_TABLES)
-  return true;
-#else
-  return false;
-#endif
-}
-
 bool CrashReporterClient::ShouldWriteMinidumpToLog() {
   return false;
 }
 
 #endif
 
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 void CrashReporterClient::GetSanitizationInformation(
     const char* const** allowed_annotations,
     void** target_module,
@@ -189,12 +144,23 @@ void CrashReporterClient::GetSanitizationInformation(
 
 std::string CrashReporterClient::GetUploadUrl() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && defined(OFFICIAL_BUILD)
-  // Only allow the possibility of report upload in official builds. This
-  // crash server won't have symbols for any other build types.
   return kDefaultUploadURL;
 #else
   return std::string();
 #endif
+}
+
+bool CrashReporterClient::ShouldRateLimitUploads() {
+  return true;
+}
+
+bool CrashReporterClient::ShouldCompressUploads() {
+  return true;
+}
+
+std::map<std::string, std::string>
+CrashReporterClient::GetExtraProcessAnnotations() {
+  return {};
 }
 
 bool CrashReporterClient::ShouldMonitorCrashHandlerExpensively() {
@@ -203,6 +169,16 @@ bool CrashReporterClient::ShouldMonitorCrashHandlerExpensively() {
 
 bool CrashReporterClient::EnableBreakpadForProcess(
     const std::string& process_type) {
+  return false;
+}
+
+std::vector<base::ReadOnlySharedMemoryRegion>
+CrashReporterClient::GetUserStreamSharedMemoryRegions() {
+  return {};
+}
+
+bool CrashReporterClient::WriteUserStreamData(uint32_t user_stream_type,
+                                              base::span<const uint8_t> data) {
   return false;
 }
 

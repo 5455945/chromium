@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/common/net/net_error_page_support.mojom.h"
 #include "chrome/common/network_diagnostics.mojom.h"
@@ -20,12 +20,12 @@
 #include "components/error_page/common/net_error_info.h"
 #include "components/security_interstitials/content/renderer/security_interstitial_page_controller.h"
 #include "components/security_interstitials/core/controller_client.h"
+#include "content/public/common/alternative_error_page_override_info.mojom-forward.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/public/renderer/render_frame_observer_tracker.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 class GURL;
 
@@ -36,7 +36,7 @@ class Error;
 // Listens for NetErrorInfo messages from the NetErrorTabHelper on the
 // browser side and updates the error page with more details (currently, just
 // DNS probe results) if/when available.
-// TODO(crbug.com/578770): Should this class be moved into the error_page
+// TODO(crbug.com/41235130): Should this class be moved into the error_page
 // component?
 class NetErrorHelper
     : public content::RenderFrameObserver,
@@ -52,12 +52,8 @@ class NetErrorHelper
 
   // NetErrorPageController::Delegate implementation
   void ButtonPressed(NetErrorHelperCore::Button button) override;
-  void LaunchOfflineItem(const std::string& id,
-                         const std::string& name_space) override;
-  void LaunchDownloadsPage() override;
   void SavePageForLater() override;
   void CancelSavePage() override;
-  void ListVisibilityChanged(bool is_visible) override;
   void UpdateEasterEggHighScore(int high_score) override;
   void ResetEasterEggHighScore() override;
 
@@ -72,13 +68,11 @@ class NetErrorHelper
   // loaded immediately.
   void PrepareErrorPage(const error_page::Error& error,
                         bool is_failed_post,
+                        content::mojom::AlternativeErrorPageOverrideInfoPtr
+                            alternative_error_page_info,
                         std::string* error_html);
 
  private:
-  // Returns ResourceRequest filled with |url|. It has request_initiator from
-  // the frame origin and origin header with "null" for a unique origin.
-  std::unique_ptr<network::ResourceRequest> CreatePostRequest(
-      const GURL& url) const;
   chrome::mojom::NetworkDiagnostics* GetRemoteNetworkDiagnostics();
   chrome::mojom::NetworkEasterEgg* GetRemoteNetworkEasterEgg();
   chrome::mojom::NetErrorPageSupport* GetRemoteNetErrorPageSupport();
@@ -88,7 +82,9 @@ class NetErrorHelper
       const error_page::Error& error,
       bool is_failed_post,
       bool can_use_local_diagnostics_service,
-      std::string* html) const override;
+      content::mojom::AlternativeErrorPageOverrideInfoPtr
+          alternative_error_page_info,
+      std::string* html) override;
 
   void EnablePageHelperFunctions() override;
   error_page::LocalizedError::PageState UpdateErrorPage(
@@ -99,14 +95,12 @@ class NetErrorHelper
   void RequestEasterEggHighScore() override;
   void ReloadFrame() override;
   void DiagnoseError(const GURL& page_url) override;
+  void PortalSignin() override;
   void DownloadPageLater() override;
   void SetIsShowingDownloadButton(bool show) override;
-  void OfflineContentAvailable(
-      bool list_visible_by_prefs,
-      const std::string& offline_content_json) override;
   content::RenderFrame* GetRenderFrame() override;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void SetAutoFetchState(
       chrome::mojom::OfflinePageAutoFetcherScheduleResult state) override;
 #endif
@@ -129,6 +123,8 @@ class NetErrorHelper
       remote_network_easter_egg_;
   mojo::AssociatedRemote<chrome::mojom::NetErrorPageSupport>
       remote_net_error_page_support_;
+
+  base::DictValue error_page_params_;
 
   // Weak factories for vending weak pointers to PageControllers. Weak
   // pointers are invalidated on each commit, to prevent getting messages from

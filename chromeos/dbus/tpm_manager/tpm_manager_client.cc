@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,15 @@
 
 #include <google/protobuf/message_lite.h>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
 #include "chromeos/dbus/tpm_manager/fake_tpm_manager_client.h"
@@ -29,8 +30,7 @@ namespace chromeos {
 namespace {
 
 // An arbitrary timeout for taking ownership.
-constexpr base::TimeDelta kTakeOwnershipTimeout =
-    base::TimeDelta::FromSeconds(80);
+constexpr base::TimeDelta kTakeOwnershipTimeout = base::Seconds(80);
 
 TpmManagerClient* g_instance = nullptr;
 
@@ -85,6 +85,12 @@ class TpmManagerClientImpl : public TpmManagerClient {
     CallProtoMethod(::tpm_manager::kGetVersionInfo, request,
                     std::move(callback));
   }
+  void GetSupportedFeatures(
+      const ::tpm_manager::GetSupportedFeaturesRequest& request,
+      GetSupportedFeaturesCallback callback) override {
+    CallProtoMethod(::tpm_manager::kGetSupportedFeatures, request,
+                    std::move(callback));
+  }
   void GetDictionaryAttackInfo(
       const ::tpm_manager::GetDictionaryAttackInfoRequest& request,
       GetDictionaryAttackInfoCallback callback) override {
@@ -103,6 +109,10 @@ class TpmManagerClientImpl : public TpmManagerClient {
       ClearStoredOwnerPasswordCallback callback) override {
     CallProtoMethod(::tpm_manager::kClearStoredOwnerPassword, request,
                     std::move(callback));
+  }
+  void ClearTpm(const ::tpm_manager::ClearTpmRequest& request,
+                ClearTpmCallback callback) override {
+    CallProtoMethod(::tpm_manager::kClearTpm, request, std::move(callback));
   }
 
   void AddObserver(Observer* observer) override {
@@ -137,7 +147,7 @@ class TpmManagerClientImpl : public TpmManagerClient {
     if (!writer.AppendProtoAsArrayOfBytes(request)) {
       ReplyType reply;
       reply.set_status(::tpm_manager::STATUS_DBUS_ERROR);
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(std::move(callback), reply));
       return;
     }
@@ -191,7 +201,7 @@ class TpmManagerClientImpl : public TpmManagerClient {
   }
 
   // D-Bus proxy for the TpmManager daemon, not owned.
-  dbus::ObjectProxy* proxy_ = nullptr;
+  raw_ptr<dbus::ObjectProxy, LeakedDanglingUntriaged> proxy_ = nullptr;
 
   // The observer list of ownership taken signal.
   base::ObserverList<Observer> observer_list_;

@@ -1,11 +1,15 @@
 <!doctype html>
 <meta charset=utf-8>
+<meta name="variant" content="?interop-2026">
+<meta name="variant" content="?rest">
 <title>RTCPeerConnection.prototype.setRemoteDescription rollback</title>
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
 <script src="RTCPeerConnection-helper.js"></script>
 <script>
-  'use strict';
+'use strict';
+const rest = !new URLSearchParams(location.search).has("interop-2026");
+const interop2026 = !new URLSearchParams(location.search).has("rest");
 
   // Test is based on the following editor draft:
   // https://w3c.github.io/webrtc-pc/archives/20170605/webrtc.html
@@ -50,6 +54,7 @@
       };
    */
 
+if (rest) {
   /*
     4.3.1.6.  Set the RTCSessionSessionDescription
       2.2.3.  Otherwise, if description is set as a remote description, then run one
@@ -69,7 +74,7 @@
     .then(() => {
       assert_equals(pc.signalingState, 'have-remote-offer');
       assert_not_equals(pc.remoteDescription, null);
-      assert_not_equals(pc.pendingRemoteDescription, null);
+      assert_equals(pc.pendingRemoteDescription, pc.remoteDescription);
       assert_equals(pc.currentRemoteDescription, null);
 
       return pc.setRemoteDescription({type: 'rollback'});
@@ -103,7 +108,14 @@
       pc.setRemoteDescription({type: 'rollback'}));
   }, `setRemoteDescription(rollback) from stable state should reject with InvalidStateError`);
 
-  promise_test(t => {
+  promise_test(async t => {
+    const pc = new RTCPeerConnection();
+    t.add_cleanup(() => pc.close());
+    await pc.setLocalDescription();
+    await promise_rejects_dom(t, 'InvalidStateError', pc.setRemoteDescription({ type: 'rollback' }));
+  }, `setRemoteDescription(rollback) after setting a local offer should reject with InvalidStateError`);
+
+   promise_test(t => {
     const pc = new RTCPeerConnection();
     t.add_cleanup(() => pc.close());
     return generateAudioReceiveOnlyOffer(pc)
@@ -121,10 +133,12 @@
     t.add_cleanup(() => pc2.close());
 
     // We don't use this right away
-    const offer1 = await pc1.createOffer({offerToReceiveAudio: true});
+    pc1.addTransceiver('audio', { direction: 'recvonly' });
+    const offer1 = await pc1.createOffer();
 
     // Create offer from pc2, apply and rollback on pc1
-    const offer2 = await pc2.createOffer({offerToReceiveAudio: true});
+    pc2.addTransceiver('audio', { direction: 'recvonly' });
+    const offer2 = await pc2.createOffer();
     await pc1.setRemoteDescription(offer2);
     await pc1.setRemoteDescription({type: "rollback"});
 
@@ -147,7 +161,9 @@
     const offer1 = await pc1.createOffer();
 
     // Create offer from pc2, apply and rollback on pc1
-    const offer2 = await pc2.createOffer({offerToReceiveAudio: true, offerToReceiveVideo: true});
+    pc2.addTransceiver('audio', { direction: 'recvonly' });
+    pc2.addTransceiver('video', { direction: 'recvonly' });
+    const offer2 = await pc2.createOffer();
     // pc1 now should change its mind about what level its video transceiver is
     // bound to. It was 0, now it is 1.
     await pc1.setRemoteDescription(offer2);
@@ -158,7 +174,9 @@
     // Then try applying pc1's old offer
     await pc1.setLocalDescription(offer1);
   }, "local offer created before setRemoteDescription(remote offer) with different transceiver level assignments then rollback should still be usable");
+}
 
+if (interop2026) {
   promise_test(async t => {
     const pc1 = new RTCPeerConnection();
     t.add_cleanup(() => pc1.close());
@@ -196,7 +214,9 @@
     await pc2.setRemoteDescription({type: "rollback"});
     assert_equals(pc2.getTransceivers().length, 0);
   }, "rollback of a remote offer should remove touched transceiver");
+}
 
+if (rest) {
   promise_test(async t => {
     const pc1 = new RTCPeerConnection();
     t.add_cleanup(() => pc1.close());
@@ -587,5 +607,5 @@
     await pc2.setLocalDescription(await pc2.createOffer());
     assert_equals(channel.readyState, 'connecting');
   }, 'Implicit rollback with only a datachannel works');
-
+}
 </script>

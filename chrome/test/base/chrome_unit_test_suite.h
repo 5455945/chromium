@@ -1,17 +1,20 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_BASE_CHROME_UNIT_TEST_SUITE_H_
 #define CHROME_TEST_BASE_CHROME_UNIT_TEST_SUITE_H_
 
-#include "base/compiler_specific.h"
-#include "base/test/test_discardable_memory_allocator.h"
-#include "build/build_config.h"
-#include "chrome/test/base/chrome_test_suite.h"
+#include <memory>
 
-#if defined(OS_ANDROID)
-#include "components/gcm_driver/instance_id/scoped_use_fake_instance_id_android.h"
+#include "base/test/test_discardable_memory_allocator.h"
+#include "chrome/test/base/chrome_test_suite.h"
+#include "extensions/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+namespace extensions {
+class ScopedChromeExtensionsClient;
+}
 #endif
 
 // Test suite for unit tests. Creates additional stub services that are not
@@ -21,7 +24,7 @@ class ChromeUnitTestSuite : public ChromeTestSuite {
   ChromeUnitTestSuite(int argc, char** argv);
   ChromeUnitTestSuite(const ChromeUnitTestSuite&) = delete;
   ChromeUnitTestSuite& operator=(const ChromeUnitTestSuite&) = delete;
-  ~ChromeUnitTestSuite() override = default;
+  ~ChromeUnitTestSuite() override;
 
   // base::TestSuite overrides:
   void Initialize() override;
@@ -35,13 +38,8 @@ class ChromeUnitTestSuite : public ChromeTestSuite {
 
  private:
   base::TestDiscardableMemoryAllocator discardable_memory_allocator_;
-
-#if defined(OS_ANDROID)
-  // InstanceID can make network requests which will time out and make tests
-  // slow. Insert a fake one in all tests, as the prefetch service (perhaps
-  // among others in the future) causes us to use the InstanceID in a posted
-  // task which delays test completion.
-  instance_id::ScopedUseFakeInstanceIDAndroid fake_instance_id_android_;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  std::unique_ptr<extensions::ScopedChromeExtensionsClient> extensions_client_;
 #endif
 };
 

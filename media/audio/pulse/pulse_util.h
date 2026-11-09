@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,13 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "media/audio/audio_device_name.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/channel_layout.h"
 
-namespace media {
-
-class AudioParameters;
-
-namespace pulse {
+namespace media::pulse {
 
 enum class RequestType : int8_t { INPUT, OUTPUT };
 
@@ -31,13 +27,15 @@ class AutoPulseLock {
     pa_threaded_mainloop_lock(pa_mainloop_);
   }
 
+  AutoPulseLock(const AutoPulseLock&) = delete;
+  AutoPulseLock& operator=(const AutoPulseLock&) = delete;
+
   ~AutoPulseLock() {
     pa_threaded_mainloop_unlock(pa_mainloop_);
   }
 
  private:
-  pa_threaded_mainloop* pa_mainloop_;
-  DISALLOW_COPY_AND_ASSIGN(AutoPulseLock);
+  raw_ptr<pa_threaded_mainloop> pa_mainloop_;
 };
 
 bool MEDIA_EXPORT InitPulse(pa_threaded_mainloop** mainloop,
@@ -46,7 +44,15 @@ void DestroyPulse(pa_threaded_mainloop* mainloop, pa_context* context);
 
 // Triggers pa_threaded_mainloop_signal() to avoid deadlocks.
 void StreamSuccessCallback(pa_stream* s, int error, void* mainloop);
+void ContextSuccessCallback(pa_context* context, int success, void* mainloop);
 void ContextStateCallback(pa_context* context, void* mainloop);
+
+// Mutes all audio output sinks except for a specified sink.
+void MuteAllSinksExcept(pa_threaded_mainloop* mainloop,
+                        pa_context* context,
+                        const std::string& exclude_sink_name);
+// Unmutes all audio output sinks in the system.
+void UnmuteAllSinks(pa_threaded_mainloop* mainloop, pa_context* context);
 
 pa_channel_map ChannelLayoutToPAChannelMap(ChannelLayout channel_layout);
 
@@ -68,7 +74,7 @@ constexpr SampleFormat kInputSampleFormat = kSampleFormatS16;
 // |stream|.
 bool CreateInputStream(pa_threaded_mainloop* mainloop,
                        pa_context* context,
-                       pa_stream** stream,
+                       raw_ptr<pa_stream>* stream,
                        const AudioParameters& params,
                        const std::string& device_id,
                        pa_stream_notify_cb_t stream_callback,
@@ -78,9 +84,9 @@ bool CreateInputStream(pa_threaded_mainloop* mainloop,
 // otherwise false. This function will create a new Pulse threaded mainloop,
 // and the handles of the mainloop, context and stream will be returned by
 // |mainloop|, |context| and |stream|.
-bool CreateOutputStream(pa_threaded_mainloop** mainloop,
-                        pa_context** context,
-                        pa_stream** stream,
+bool CreateOutputStream(raw_ptr<pa_threaded_mainloop>* mainloop,
+                        raw_ptr<pa_context>* context,
+                        raw_ptr<pa_stream>* stream,
                         const AudioParameters& params,
                         const std::string& device_id,
                         const std::string& app_name,
@@ -98,8 +104,11 @@ std::string GetOutputCorrespondingTo(pa_threaded_mainloop* mainloop,
 std::string GetRealDefaultDeviceId(pa_threaded_mainloop* mainloop,
                                    pa_context* context,
                                    RequestType type);
-}  // namespace pulse
 
-}  // namespace media
+// Get the name of the monitor associated with the given sink.
+std::string GetMonitorSourceNameForSink(pa_threaded_mainloop* mainloop,
+                                        pa_context* context,
+                                        const std::string& sink_name);
+}  // namespace media::pulse
 
 #endif  // MEDIA_AUDIO_PULSE_PULSE_UTIL_H_

@@ -1,12 +1,12 @@
 # Cookie Store API
 
 This module contains the implementation of the
-[Cookie Store API](https://wicg.github.io/cookie-store).
+[Cookie Store API](https://cookiestore.spec.whatwg.org/).
 
 ## Testing
 
 The Cookie Store API is primarily tested in
-[Web Platform Tests](https://source.chromium.org/chromium/chromium/src/+/master:third_party/blink/web_tests/external/wpt/cookie-store/).
+[Web Platform Tests](https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/web_tests/external/wpt/cookie-store/).
 
 ## Design Documents
 

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/canonical_cookie_test_helpers.h"
+#include "net/cookies/cookie_inclusion_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -22,10 +23,11 @@ constexpr char kURL[] = "example.test";
 
 CanonicalCookie MakeCookie(const std::string& name) {
   return *CanonicalCookie::CreateUnsafeCookieForTesting(
-      name, "value", kURL, "/" /* path */, base::Time() /* creation */,
-      base::Time() /* expiration */, base::Time() /* last_access */,
-      true /* secure */, false /* httponly */, CookieSameSite::UNSPECIFIED,
-      CookiePriority::COOKIE_PRIORITY_DEFAULT, false /* same_party */);
+      name, "value", kURL, /*path=*/"/", /*creation=*/base::Time(),
+      /*expiration=*/base::Time(), /*last_access=*/base::Time(),
+      /*last_update=*/base::Time(),
+      /*secure=*/true, /*httponly=*/false, CookieSameSite::UNSPECIFIED,
+      CookiePriority::COOKIE_PRIORITY_DEFAULT, CookieSourceType::kOther);
 }
 
 CookieAccessResult Include() {
@@ -33,23 +35,19 @@ CookieAccessResult Include() {
 }
 
 CookieAccessResult Exclude(CookieInclusionStatus::ExclusionReason reason) {
-  return CookieAccessResult(CookieInclusionStatus(reason));
+  return CookieAccessResult(CookieInclusionStatus::MakeFromReasonsForTesting(
+      /*exclusions=*/{reason}));
 }
 
 }  // namespace
 
 TEST(NetworkDelegateTest, ExcludeAllCookies) {
   CookieAccessResultList maybe_included_cookies = {
-      (CookieWithAccessResult){MakeCookie("1"), Include()},
-      (CookieWithAccessResult){MakeCookie("2"), Include()},
-  };
+      {MakeCookie("1"), Include()}, {MakeCookie("2"), Include()}};
 
   CookieAccessResultList excluded_cookies = {
-      (CookieWithAccessResult){
-          MakeCookie("3"),
-          Exclude(CookieInclusionStatus::ExclusionReason::EXCLUDE_SECURE_ONLY),
-      },
-  };
+      {MakeCookie("3"),
+       Exclude(CookieInclusionStatus::ExclusionReason::EXCLUDE_SECURE_ONLY)}};
 
   NetworkDelegate::ExcludeAllCookies(
       CookieInclusionStatus::ExclusionReason::EXCLUDE_USER_PREFERENCES,
@@ -58,51 +56,42 @@ TEST(NetworkDelegateTest, ExcludeAllCookies) {
   EXPECT_THAT(maybe_included_cookies, IsEmpty());
   EXPECT_THAT(
       excluded_cookies,
-      UnorderedElementsAre(
-          MatchesCookieWithAccessResult(
-              MatchesCookieWithName("1"),
-              MatchesCookieAccessResult(
-                  HasExactlyExclusionReasonsForTesting(
-                      std::vector<CookieInclusionStatus::ExclusionReason>{
-                          CookieInclusionStatus::ExclusionReason::
-                              EXCLUDE_USER_PREFERENCES}),
-                  _, _, _)),
-          MatchesCookieWithAccessResult(
-              MatchesCookieWithName("2"),
-              MatchesCookieAccessResult(
-                  HasExactlyExclusionReasonsForTesting(
-                      std::vector<CookieInclusionStatus::ExclusionReason>{
-                          CookieInclusionStatus::ExclusionReason::
-                              EXCLUDE_USER_PREFERENCES}),
-                  _, _, _)),
-          MatchesCookieWithAccessResult(
-              MatchesCookieWithName("3"),
-              MatchesCookieAccessResult(
-                  HasExactlyExclusionReasonsForTesting(
-                      std::vector<CookieInclusionStatus::ExclusionReason>{
-                          CookieInclusionStatus::ExclusionReason::
-                              EXCLUDE_SECURE_ONLY,
-                          CookieInclusionStatus::ExclusionReason::
-                              EXCLUDE_USER_PREFERENCES}),
-                  _, _, _))));
+      UnorderedElementsAre(MatchesCookieWithAccessResult(
+                               MatchesCookieWithName("1"),
+                               MatchesCookieAccessResult(
+                                   HasExactlyExclusionReasonsForTesting(
+                                       {CookieInclusionStatus::ExclusionReason::
+                                            EXCLUDE_USER_PREFERENCES}),
+                                   _, _, _)),
+                           MatchesCookieWithAccessResult(
+                               MatchesCookieWithName("2"),
+                               MatchesCookieAccessResult(
+                                   HasExactlyExclusionReasonsForTesting(
+                                       {CookieInclusionStatus::ExclusionReason::
+                                            EXCLUDE_USER_PREFERENCES}),
+                                   _, _, _)),
+                           MatchesCookieWithAccessResult(
+                               MatchesCookieWithName("3"),
+                               MatchesCookieAccessResult(
+                                   HasExactlyExclusionReasonsForTesting(
+                                       {CookieInclusionStatus::ExclusionReason::
+                                            EXCLUDE_SECURE_ONLY,
+                                        CookieInclusionStatus::ExclusionReason::
+                                            EXCLUDE_USER_PREFERENCES}),
+                                   _, _, _))));
 }
 
 TEST(NetworkDelegateTest, MoveExcludedCookies) {
   CookieAccessResultList maybe_included_cookies = {
-      (CookieWithAccessResult){MakeCookie("1"), Include()},
-      (CookieWithAccessResult){
-          MakeCookie("2"),
-          Exclude(CookieInclusionStatus::ExclusionReason::EXCLUDE_SECURE_ONLY),
-      },
-      (CookieWithAccessResult){MakeCookie("3"), Include()},
-  };
+      {MakeCookie("1"), Include()},
+      {MakeCookie("2"),
+       Exclude(CookieInclusionStatus::ExclusionReason::EXCLUDE_SECURE_ONLY)},
+      {MakeCookie("3"), Include()}};
 
-  CookieAccessResultList excluded_cookies = {
-      (CookieWithAccessResult){
-          MakeCookie("4"),
-          Exclude(CookieInclusionStatus::ExclusionReason::EXCLUDE_SECURE_ONLY),
-      },
-  };
+  CookieAccessResultList excluded_cookies = {{
+      MakeCookie("4"),
+      Exclude(CookieInclusionStatus::ExclusionReason::EXCLUDE_SECURE_ONLY),
+  }};
 
   NetworkDelegate::MoveExcludedCookies(maybe_included_cookies,
                                        excluded_cookies);
@@ -117,23 +106,20 @@ TEST(NetworkDelegateTest, MoveExcludedCookies) {
                       MatchesCookieAccessResult(IsInclude(), _, _, _))));
   EXPECT_THAT(
       excluded_cookies,
-      UnorderedElementsAre(
-          MatchesCookieWithAccessResult(
-              MatchesCookieWithName("2"),
-              MatchesCookieAccessResult(
-                  HasExactlyExclusionReasonsForTesting(
-                      std::vector<CookieInclusionStatus::ExclusionReason>{
-                          CookieInclusionStatus::ExclusionReason::
-                              EXCLUDE_SECURE_ONLY}),
-                  _, _, _)),
-          MatchesCookieWithAccessResult(
-              MatchesCookieWithName("4"),
-              MatchesCookieAccessResult(
-                  HasExactlyExclusionReasonsForTesting(
-                      std::vector<CookieInclusionStatus::ExclusionReason>{
-                          CookieInclusionStatus::ExclusionReason::
-                              EXCLUDE_SECURE_ONLY}),
-                  _, _, _))));
+      UnorderedElementsAre(MatchesCookieWithAccessResult(
+                               MatchesCookieWithName("2"),
+                               MatchesCookieAccessResult(
+                                   HasExactlyExclusionReasonsForTesting(
+                                       {CookieInclusionStatus::ExclusionReason::
+                                            EXCLUDE_SECURE_ONLY}),
+                                   _, _, _)),
+                           MatchesCookieWithAccessResult(
+                               MatchesCookieWithName("4"),
+                               MatchesCookieAccessResult(
+                                   HasExactlyExclusionReasonsForTesting(
+                                       {CookieInclusionStatus::ExclusionReason::
+                                            EXCLUDE_SECURE_ONLY}),
+                                   _, _, _))));
 }
 
 }  // namespace net

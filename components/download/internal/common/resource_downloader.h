@@ -1,11 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_INTERNAL_COMMON_RESOURCE_DOWNLOADER_H_
 #define COMPONENTS_DOWNLOAD_INTERNAL_COMMON_RESOURCE_DOWNLOADER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_response_handler.h"
 #include "components/download/public/common/download_utils.h"
@@ -32,7 +33,7 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       std::unique_ptr<network::ResourceRequest> request,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const URLSecurityPolicy& url_security_policy,
-      const GURL& site_url,
+      const std::string& serialized_embedder_download_data,
       const GURL& tab_url,
       const GURL& tab_referrer_url,
       bool is_new_download,
@@ -49,7 +50,7 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       std::unique_ptr<network::ResourceRequest> resource_request,
       int render_process_id,
       int render_frame_id,
-      const GURL& site_url,
+      const std::string& serialized_embedder_download_data,
       const GURL& tab_url,
       const GURL& tab_referrer_url,
       std::vector<GURL> url_chain,
@@ -60,14 +61,15 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const URLSecurityPolicy& url_security_policy,
       mojo::PendingRemote<device::mojom::WakeLockProvider> wake_lock_provider,
-      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner);
+      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
+      bool is_transient);
 
   ResourceDownloader(
       base::WeakPtr<UrlDownloadHandler::Delegate> delegate,
       std::unique_ptr<network::ResourceRequest> resource_request,
       int render_process_id,
       int render_frame_id,
-      const GURL& site_url,
+      const std::string& serialized_embedder_download_data,
       const GURL& tab_url,
       const GURL& tab_referrer_url,
       bool is_new_download,
@@ -75,6 +77,10 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const URLSecurityPolicy& url_security_policy,
       mojo::PendingRemote<device::mojom::WakeLockProvider> wake_lock_provider);
+
+  ResourceDownloader(const ResourceDownloader&) = delete;
+  ResourceDownloader& operator=(const ResourceDownloader&) = delete;
+
   ~ResourceDownloader() override;
 
   // DownloadResponseHandler::Delegate
@@ -99,7 +105,8 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
       net::CertStatus cert_status,
       network::mojom::URLResponseHeadPtr response_head,
       mojo::ScopedDataPipeConsumerHandle response_body,
-      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints);
+      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
+      bool is_transient);
 
   // Ask the |delegate_| to destroy this object.
   void Destroy();
@@ -139,8 +146,9 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
   int render_process_id_;
   int render_frame_id_;
 
-  // Site URL for the site instance that initiated the download.
-  GURL site_url_;
+  // Serialized embedder data download for the site instance that initiated the
+  // download.
+  std::string serialized_embedder_download_data_;
 
   // The URL of the tab that started us.
   GURL tab_url_;
@@ -149,7 +157,7 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
   GURL tab_referrer_url_;
 
   // URLLoader status when intercepting the navigation request.
-  absl::optional<network::URLLoaderCompletionStatus> url_loader_status_;
+  std::optional<network::URLLoaderCompletionStatus> url_loader_status_;
 
   // TaskRunner to post callbacks to the |delegate_|
   scoped_refptr<base::SingleThreadTaskRunner> delegate_task_runner_;
@@ -160,15 +168,18 @@ class COMPONENTS_DOWNLOAD_EXPORT ResourceDownloader
   // Used to check if the URL is safe to request.
   URLSecurityPolicy url_security_policy_;
 
-  // Whether download is initated by the content on the page.
+  // Whether download is initiated by the content on the page.
   bool is_content_initiated_;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Whether the original URL can be auto opened after download.
+  bool allow_auto_open_after_completion_ = false;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Used to keep the system from sleeping while a download is ongoing. If the
   // system enters power saving mode while a download is alive, it can cause
   // download to be interrupted.
   mojo::Remote<device::mojom::WakeLock> wake_lock_;
-
-  DISALLOW_COPY_AND_ASSIGN(ResourceDownloader);
 };
 
 }  // namespace download

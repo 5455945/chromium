@@ -1,17 +1,18 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/timer/lap_timer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/input/event_handling_util.h"
-#include "third_party/blink/renderer/core/layout/svg/svg_layout_support.h"
 #include "third_party/blink/renderer/core/layout/svg/transformed_hit_test_location.h"
+#include "third_party/blink/renderer/core/paint/clip_path_clipper.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -38,22 +39,22 @@ class SvgHitTestPerfTest : public RenderingTest {
     constexpr float row_stride = kSvgHeight / num_rows;
     constexpr float column_stride = kSvgWidth / num_rows;
 
-    WTF::StringBuilder html;
-    html.AppendFormat(
-        "<svg width='%.2f' height='%.2f' viewBox='0 0 %.2f %.2f' "
-        "style='cursor: auto;'>",
-        kSvgWidth, kSvgHeight, kSvgWidth, kSvgHeight);
+    StringBuilder html;
+    FormatTo(html,
+             "<svg width='{:.2f}' height='{:.2f}' viewBox='0 0 {:.2f} {:.2f}' "
+             "style='cursor: auto;'>",
+             kSvgWidth, kSvgHeight, kSvgWidth, kSvgHeight);
 
     for (size_t row = 0; row < num_rows; ++row) {
       for (size_t column = 0; column < num_columns; ++column) {
         for (size_t i = 0; i < num_group_nodes_per_leaf; ++i)
           html.Append("<g>");
 
-        html.AppendFormat(
-            "<rect id='leaf_%zu' x='%.2f' y='%.2f' width='%.2f' height='%.2f' "
-            "/>",
-            column * row, column * column_stride, row * row_stride,
-            column_stride, row_stride);
+        FormatTo(html,
+                 "<rect id='leaf_{}' x='{:.2f}' y='{:.2f}' width='{:.2f}' "
+                 "height='{:.2f}' />",
+                 column * row, column * column_stride, row * row_stride,
+                 column_stride, row_stride);
 
         for (size_t i = 0; i < num_group_nodes_per_leaf; ++i)
           html.Append("</g>");
@@ -86,19 +87,19 @@ TEST_F(SvgHitTestPerfTest, HandleMouseMoveEvent) {
   EventHandler& event_handler = GetDocument().GetFrame()->GetEventHandler();
 
   RunTest("HandleMouseMoveEvent",
-          WTF::BindRepeating(
-              [](EventHandler& event_handler) {
+          BindRepeating(
+              [](EventHandler* event_handler) {
                 WebMouseEvent mouse_move_event(
                     WebMouseEvent::Type::kMouseMove, gfx::PointF(1, 1),
                     gfx::PointF(1, 1), WebPointerProperties::Button::kNoButton,
                     0, WebInputEvent::Modifiers::kNoModifiers,
                     WebInputEvent::GetStaticTimeStampForTests());
                 mouse_move_event.SetFrameScale(1);
-                event_handler.HandleMouseMoveEvent(mouse_move_event,
-                                                   Vector<WebMouseEvent>(),
-                                                   Vector<WebMouseEvent>());
+                event_handler->HandleMouseMoveEvent(mouse_move_event,
+                                                    Vector<WebMouseEvent>(),
+                                                    Vector<WebMouseEvent>());
               },
-              std::ref(event_handler)));
+              WrapWeakPersistent(&event_handler)));
 }
 
 TEST_F(SvgHitTestPerfTest, IntersectsClipPath) {
@@ -109,24 +110,20 @@ TEST_F(SvgHitTestPerfTest, IntersectsClipPath) {
 
   PhysicalOffset document_point =
       event_handling_util::ContentPointFromRootFrame(GetDocument().GetFrame(),
-                                                     FloatPoint(1, 1));
+                                                     gfx::PointF(1, 1));
 
   TransformedHitTestLocation local_location(
       HitTestLocation(document_point), container->LocalToSVGParentTransform());
   ASSERT_TRUE(local_location);
 
-  FloatRect object_bounding_box = container->ObjectBoundingBox();
-
-  RunTest(
-      "IntersectsClipPath",
-      WTF::BindRepeating(
-          [](const LayoutObject* container, FloatRect& container_bounding_box,
-             TransformedHitTestLocation& local_location) {
-            SVGLayoutSupport::IntersectsClipPath(
-                *container, container_bounding_box, *local_location);
-          },
-          WTF::Unretained(container), std::ref(object_bounding_box),
-          std::ref(local_location)));
+  RunTest("IntersectsClipPath",
+          BindRepeating(
+              [](const LayoutObject* container,
+                 TransformedHitTestLocation& local_location) {
+                container->HasClipPath() &&
+                    ClipPathClipper::HitTest(*container, *local_location);
+              },
+              WrapPersistent(container), std::ref(local_location)));
 }
 
 }  // namespace blink

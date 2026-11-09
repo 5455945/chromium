@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/layout/layout_shift_region.h"
+
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
@@ -18,8 +20,8 @@ struct Segment {
 };
 
 // An "event" occurs when a rectangle starts intersecting the sweep line
-// (START), or when it ceases to intersect the sweep line (END).
-enum class EventType { START, END };
+// (kStart), or when it ceases to intersect the sweep line (kEnd).
+enum class EventType { kStart, kEnd };
 struct SweepEvent {
   // X-coordinate at which the event occurs.
   int x;
@@ -30,7 +32,8 @@ struct SweepEvent {
 };
 
 // The sequence of adjacent intervals on the y-axis whose endpoints are the
-// extents (IntRect::Y and IntRect::MaxY) of all the rectangles in the input.
+// extents (gfx::Rect::y and gfx::Rect::bottom) of all the rectangles in the
+// input.
 class BasicIntervals {
  public:
   // Add all the endpoints before creating the index.
@@ -46,10 +49,7 @@ class BasicIntervals {
   Vector<int> endpoints_;
   // Use int64_t which is larger than real |int| since the empty value of the
   // key is max and deleted value of the key is max - 1 in HashMap.
-  HashMap<int64_t,
-          unsigned,
-          WTF::IntHash<int64_t>,
-          WTF::UnsignedWithZeroKeyHashTraits<int64_t>>
+  HashMap<int64_t, unsigned, IntWithZeroKeyHashTraits<int64_t>>
       endpoint_to_index_;
 
 #if DCHECK_IS_ON()
@@ -105,6 +105,8 @@ inline unsigned BasicIntervals::SegmentLength(Segment segment) const {
 // An array-backed, weight-balanced binary tree whose leaves represent the basic
 // intervals.  Non-leaf nodes represent the union of their children's intervals.
 class SegmentTree {
+  STACK_ALLOCATED();
+
  public:
   SegmentTree(const BasicIntervals&);
 
@@ -239,8 +241,10 @@ void SegmentTree::Visit(unsigned node_index,
 
 // Runs the sweep line algorithm to compute the area of a set of rects.
 class Sweeper {
+  STACK_ALLOCATED();
+
  public:
-  Sweeper(const Vector<IntRect>&);
+  explicit Sweeper(const Vector<gfx::Rect>&);
 
   // Returns the area.
   uint64_t Sweep() const;
@@ -251,10 +255,10 @@ class Sweeper {
   uint64_t SweepImpl(SegmentTree&, const Vector<SweepEvent>&) const;
 
   // The input.
-  const Vector<IntRect>& rects_;
+  const Vector<gfx::Rect>& rects_;
 };
 
-Sweeper::Sweeper(const Vector<IntRect>& rects) : rects_(rects) {}
+Sweeper::Sweeper(const Vector<gfx::Rect>& rects) : rects_(rects) {}
 
 uint64_t Sweeper::Sweep() const {
   BasicIntervals y_vals;
@@ -267,9 +271,9 @@ uint64_t Sweeper::Sweep() const {
 }
 
 void Sweeper::InitIntervals(BasicIntervals& y_vals) const {
-  for (const IntRect& rect : rects_) {
-    y_vals.AddEndpoint(rect.Y());
-    y_vals.AddEndpoint(rect.MaxY());
+  for (const gfx::Rect& rect : rects_) {
+    y_vals.AddEndpoint(rect.y());
+    y_vals.AddEndpoint(rect.bottom());
   }
   y_vals.CreateIndex();
 }
@@ -277,10 +281,10 @@ void Sweeper::InitIntervals(BasicIntervals& y_vals) const {
 void Sweeper::InitEventQueue(Vector<SweepEvent>& events,
                              const BasicIntervals& y_vals) const {
   events.ReserveInitialCapacity(rects_.size() << 1);
-  for (const IntRect& rect : rects_) {
-    Segment segment = y_vals.SegmentFromEndpoints(rect.Y(), rect.MaxY());
-    events.push_back(SweepEvent{rect.X(), EventType::START, segment});
-    events.push_back(SweepEvent{rect.MaxX(), EventType::END, segment});
+  for (const gfx::Rect& rect : rects_) {
+    Segment segment = y_vals.SegmentFromEndpoints(rect.y(), rect.bottom());
+    events.push_back(SweepEvent{rect.x(), EventType::kStart, segment});
+    events.push_back(SweepEvent{rect.right(), EventType::kEnd, segment});
   }
   std::sort(events.begin(), events.end(),
             [](const SweepEvent& e1, const SweepEvent& e2) -> bool {
@@ -298,7 +302,7 @@ uint64_t Sweeper::SweepImpl(SegmentTree& tree,
       area += (uint64_t)(e.x - sweep_x) * (uint64_t)tree.ActiveLength();
       sweep_x = e.x;
     }
-    if (e.type == EventType::START)
+    if (e.type == EventType::kStart)
       tree.RefSegment(e.y_segment);
     else
       tree.DerefSegment(e.y_segment);
@@ -309,14 +313,12 @@ uint64_t Sweeper::SweepImpl(SegmentTree& tree,
 }  // namespace
 
 uint64_t LayoutShiftRegion::Area() const {
-  if (rects_.IsEmpty())
+  if (rects_.empty())
     return 0;
 
   // Optimization: for a single rect, we don't need Sweeper.
-  if (rects_.size() == 1) {
-    const IntRect& rect = rects_.front();
-    return rect.Width() * rect.Height();
-  }
+  if (rects_.size() == 1)
+    return rects_.front().size().Area64();
   return Sweeper(rects_).Sweep();
 }
 

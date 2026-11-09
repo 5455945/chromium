@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,24 @@
 
 namespace safe_browsing {
 
-MockIncidentReceiver::MockIncidentReceiver() {}
+MockIncidentReceiver::MockIncidentReceiver() = default;
 
-MockIncidentReceiver::~MockIncidentReceiver() {}
+MockIncidentReceiver::~MockIncidentReceiver() = default;
+
+void MockIncidentReceiver::AddIncidentForProfile(
+    Profile* profile,
+    std::unique_ptr<Incident> incident) {
+  DoAddIncidentForProfile(profile, &incident);
+}
+
+void MockIncidentReceiver::AddIncidentForProcess(
+    std::unique_ptr<Incident> incident) {
+  DoAddIncidentForProcess(&incident);
+}
+
+void MockIncidentReceiver::ClearIncidentForProcess(
+    std::unique_ptr<Incident> incident) {
+  DoClearIncidentForProcess(&incident);
+}
 
 }  // namespace safe_browsing

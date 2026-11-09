@@ -1,34 +1,41 @@
-/* Copyright 2020 The Chromium Authors. All rights reserved.
+/* Copyright 2020 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+
+html {
+  --google-blue-300: rgb(138, 180, 248);
+  --google-blue-700: rgb(25, 103, 210);
+  --google-gray-300: rgb(218, 220, 224);
+  --google-gray-700: rgb(95, 99, 104);
+  --google-grey-900: rgb(32, 33, 36);
+
+  /* Text/Primary in Chrome iOS Design System. */
+  --heading-color: rgb(0, 0, 0);
+  --link-color: var(--google-blue-700);
+  /* Text/Primary Low in Chrome iOS Design System. */
+  --text-color: var(--google-gray-700);
+
+  -webkit-text-size-adjust: 100%;
+
+  background: white;
+  font-family: 'Roboto-Regular', sans-serif;
+  font-size: 125%;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    --heading-color: rgb(255, 255, 255);
+    --text-color: var(--google-gray-300);
+    --link-color: var(--google-blue-300);
+
+    background: var(--google-grey-900);
+  }
+}
+
 a {
   color: var(--link-color);
   text-decoration: none;
-}
-
-body {
-  --background-color: #fff;
-  --error-code-color: var(--google-gray-700);
-  --google-blue-100: rgb(210, 227, 252);
-  --google-blue-300: rgb(138, 180, 248);
-  --google-blue-600: rgb(26, 115, 232);
-  --google-blue-700: rgb(25, 103, 210);
-  --google-gray-100: rgb(241, 243, 244);
-  --google-gray-300: rgb(218, 220, 224);
-  --google-gray-500: rgb(154, 160, 166);
-  --google-gray-50: rgb(248, 249, 250);
-  --google-gray-600: rgb(128, 134, 139);
-  --google-gray-700: rgb(95, 99, 104);
-  --google-gray-800: rgb(60, 64, 67);
-  --google-gray-900: rgb(32, 33, 36);
-  --heading-color: var(--google-gray-900);
-  --link-color: var(--google-blue-700);
-  --text-color: var(--google-gray-700);
-  color: var(--text-color);
-  font-family: 'Roboto-Regular', sans-serif;
-  font-size: 75%;
-  word-wrap: break-word;
 }
 
 .content-wrapper {
@@ -44,42 +51,93 @@ body {
   display: none;
 }
 
-html {
-  -webkit-text-size-adjust: 100%;
-  font-size: 125%;
-}
-
 #icon {
+  background-repeat: no-repeat;
+  background-size: 100%;
   height: 72px;
   margin: 0 0 40px;
   width: 72px;
-  background-repeat: no-repeat;
-  background-size: 100%;
 }
 
 #main-message,
 #unmanaged-info {
-  color: var(--heading-color);
   font-size: 1.6em;
   font-weight: normal;
   line-height: 1.25em;
   margin-bottom: 16px;
 }
 
-#secondary-message {
+.description-text {
+  color: var(--text-color);
   font-size: 1.2em;
+  line-height: 1.6em;
   font-weight: normal;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    --background-color: var(--google-gray-900);
-    --error-code-color: var(--google-gray-500);
-    --heading-color: var(--google-gray-500);
-    --link-color: var(--google-blue-300);
-    --small-link-color: var(--google-blue-300);
-    --text-color: var(--google-gray-500);
-  }
+.heading {
+  color: var(--heading-color);
+}
+
+#connectors-section-title,
+#browser-reporting-title,
+#profile-reporting-title {
+  font-size: 1.4em;
+  font-weight: normal;
+  line-height: 1.25em;
+  margin-top: 32px;
+  margin-bottom: 16px;
+}
+
+#connectors-section-description {
+  margin-bottom: 28px;
+}
+
+#threat-protection-more {
+  align-items: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: 1.3em;
+  font-weight: 590;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  margin-top: 24px;
+  padding: 0;
+  text-align: start;
+  width: 100%;
+}
+
+#threat-protection-more.hidden {
+  display: none;
+}
+
+#threat-protection-more .expand-icon {
+  background-color: var(--heading-color);
+  flex-shrink: 0;
+  height: 24px;
+  margin-inline-start: 8px;
+  mask-image: url(chrome://resources/images/icon_expand_less.svg);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  width: 24px;
+}
+
+#threat-protection-more[aria-expanded='true'] .expand-icon {
+  transform: rotate(180deg);
+}
+
+.event-section {
+  margin-bottom: 24px;
+  margin-top: 24px;
+}
+
+.event-title {
+  font-size: 1.3em;
+  font-weight: 590;
+  margin-bottom: 8px;
 }
 
 @media (max-width: 700px) {
@@ -123,14 +181,22 @@ html {
 
   #main-message,
   #unmanaged-info {
-    font-size: 1.5em;
+    font-size: 1.54em;
     margin-bottom: 8px;
   }
 
-  #secondary-message {
+  .description-text {
     font-size: .95em;
-    line-height: 1.61em;
-    margin-top: 8px;
+    line-height: 1.57em;
+  }
+
+  #connectors-section-title {
+    font-size: 1.33em;
+  }
+
+  #threat-protection-more,
+  .event-title {
+    font-size: 1em;
   }
 }
 
@@ -140,7 +206,7 @@ html {
   }
 }
 
-@media (min-height: 400px) and (orientation:portrait) {
+@media (min-height: 400px) and (orientation: portrait) {
   .content-wrapper {
     margin-bottom: 145px;
   }

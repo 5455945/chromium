@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <set>
-
-#include "base/strings/string_piece.h"
-#include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/cpp/content_security_policy/csp_context.h"
+
+#include <string_view>
+#include <utility>
+
+#include "base/containers/flat_set.h"
+#include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
@@ -23,12 +25,12 @@ class CSPContextTest : public CSPContext {
     return violations_;
   }
 
-  void AddSchemeToBypassCSP(const std::string& scheme) {
-    scheme_to_bypass_.insert(scheme);
+  void AddSchemeToBypassCSP(std::string scheme) {
+    scheme_to_bypass_.insert(std::move(scheme));
   }
 
-  bool SchemeShouldBypassCSP(const base::StringPiece& scheme) override {
-    return scheme_to_bypass_.count(std::string(scheme));
+  bool SchemeShouldBypassCSP(std::string_view scheme) override {
+    return scheme_to_bypass_.contains(scheme);
   }
 
   void ClearViolations() { violations_.clear(); }
@@ -38,14 +40,15 @@ class CSPContextTest : public CSPContext {
   }
 
   void SanitizeDataForUseInCspViolation(
-      bool is_redirect,
       CSPDirectiveName directive,
       GURL* blocked_url,
       network::mojom::SourceLocation* source_location) const override {
-    if (!sanitize_data_for_use_in_csp_violation_)
+    if (!sanitize_data_for_use_in_csp_violation_) {
       return;
-    *blocked_url = blocked_url->GetOrigin();
-    source_location->url = GURL(source_location->url).GetOrigin().spec();
+    }
+    *blocked_url = blocked_url->DeprecatedGetOriginAsURL();
+    source_location->url =
+        GURL(source_location->url).DeprecatedGetOriginAsURL().spec();
     source_location->line = 0u;
     source_location->column = 0u;
   }
@@ -56,7 +59,7 @@ class CSPContextTest : public CSPContext {
     violations_.push_back(std::move(violation));
   }
   std::vector<network::mojom::CSPViolationPtr> violations_;
-  std::set<std::string> scheme_to_bypass_;
+  base::flat_set<std::string> scheme_to_bypass_;
   bool sanitize_data_for_use_in_csp_violation_ = false;
 };
 
@@ -118,14 +121,14 @@ TEST(CSPContextTest, SchemeShouldBypassCSP) {
 
   EXPECT_FALSE(context.IsAllowedByCsp(policies, CSPDirectiveName::FrameSrc,
                                       GURL("data:text/html,<html></html>"),
-                                      GURL(), false, false, SourceLocation(),
+                                      GURL(), false, SourceLocation(),
                                       CSPContext::CHECK_ALL_CSP, false));
 
   context.AddSchemeToBypassCSP("data");
 
   EXPECT_TRUE(context.IsAllowedByCsp(policies, CSPDirectiveName::FrameSrc,
                                      GURL("data:text/html,<html></html>"),
-                                     GURL(), false, false, SourceLocation(),
+                                     GURL(), false, SourceLocation(),
                                      CSPContext::CHECK_ALL_CSP, false));
 }
 
@@ -144,20 +147,20 @@ TEST(CSPContextTest, MultiplePolicies) {
 
   EXPECT_TRUE(context.IsAllowedByCsp(policies, CSPDirectiveName::FrameSrc,
                                      GURL("http://a.com"), GURL("http://a.com"),
-                                     false, false, SourceLocation(),
+                                     false, SourceLocation(),
                                      CSPContext::CHECK_ALL_CSP, false));
   EXPECT_FALSE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("http://b.com"),
-      GURL("http://b.com"), false, false, SourceLocation(),
-      CSPContext::CHECK_ALL_CSP, false));
+      GURL("http://b.com"), false, SourceLocation(), CSPContext::CHECK_ALL_CSP,
+      false));
   EXPECT_FALSE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("http://c.com"),
-      GURL("http://c.com"), false, false, SourceLocation(),
-      CSPContext::CHECK_ALL_CSP, false));
+      GURL("http://c.com"), false, SourceLocation(), CSPContext::CHECK_ALL_CSP,
+      false));
   EXPECT_FALSE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("http://d.com"),
-      GURL("http://d.com"), false, false, SourceLocation(),
-      CSPContext::CHECK_ALL_CSP, false));
+      GURL("http://d.com"), false, SourceLocation(), CSPContext::CHECK_ALL_CSP,
+      false));
 }
 
 TEST(CSPContextTest, SanitizeDataForUseInCspViolation) {
@@ -186,7 +189,7 @@ TEST(CSPContextTest, SanitizeDataForUseInCspViolation) {
   {
     EXPECT_FALSE(context.IsAllowedByCsp(
         policies, CSPDirectiveName::FrameSrc, blocked_url, original_url, false,
-        false, source_location, CSPContext::CHECK_ALL_CSP, false));
+        source_location, CSPContext::CHECK_ALL_CSP, false));
     ASSERT_EQ(1u, context.violations().size());
     EXPECT_EQ(context.violations()[0]->blocked_url, blocked_url);
     EXPECT_EQ(context.violations()[0]->source_location->url,
@@ -194,9 +197,9 @@ TEST(CSPContextTest, SanitizeDataForUseInCspViolation) {
     EXPECT_EQ(context.violations()[0]->source_location->line, 10u);
     EXPECT_EQ(context.violations()[0]->source_location->column, 20u);
     EXPECT_EQ(context.violations()[0]->console_message,
-              "Refused to frame 'http://a.com/login?password=1234' because it "
-              "violates the following Content Security Policy directive: "
-              "\"frame-src a.com/iframe\".\n");
+              "Framing 'http://a.com/login?password=1234' violates the "
+              "following Content Security Policy directive: \"frame-src "
+              "a.com/iframe\". The request has been blocked.\n");
   }
 
   // When the |blocked_url| and |source_location| aren't sensitive information,
@@ -204,7 +207,7 @@ TEST(CSPContextTest, SanitizeDataForUseInCspViolation) {
   {
     EXPECT_FALSE(context.IsAllowedByCsp(
         policies, CSPDirectiveName::FormAction, blocked_url, original_url,
-        false, false, source_location, CSPContext::CHECK_ALL_CSP, false));
+        false, source_location, CSPContext::CHECK_ALL_CSP, false));
     ASSERT_EQ(2u, context.violations().size());
     EXPECT_EQ(context.violations()[1]->blocked_url, original_url);
     EXPECT_EQ(context.violations()[1]->source_location->url,
@@ -212,10 +215,9 @@ TEST(CSPContextTest, SanitizeDataForUseInCspViolation) {
     EXPECT_EQ(context.violations()[1]->source_location->line, 10u);
     EXPECT_EQ(context.violations()[1]->source_location->column, 20u);
     EXPECT_EQ(context.violations()[1]->console_message,
-              "Refused to send form data to 'http://b.com/login?password=1234' "
-              "because it "
+              "Sending form data to 'http://b.com/login?password=1234' "
               "violates the following Content Security Policy directive: "
-              "\"form-action a.com/form\".\n");
+              "\"form-action a.com/form\". The request has been blocked.\n");
   }
 
   context.set_sanitize_data_for_use_in_csp_violation(true);
@@ -225,16 +227,17 @@ TEST(CSPContextTest, SanitizeDataForUseInCspViolation) {
   {
     EXPECT_FALSE(context.IsAllowedByCsp(
         policies, CSPDirectiveName::FrameSrc, blocked_url, original_url, false,
-        false, source_location, CSPContext::CHECK_ALL_CSP, false));
+        source_location, CSPContext::CHECK_ALL_CSP, false));
     ASSERT_EQ(3u, context.violations().size());
-    EXPECT_EQ(context.violations()[2]->blocked_url, blocked_url.GetOrigin());
+    EXPECT_EQ(context.violations()[2]->blocked_url,
+              blocked_url.DeprecatedGetOriginAsURL());
     EXPECT_EQ(context.violations()[2]->source_location->url, "http://a.com/");
     EXPECT_EQ(context.violations()[2]->source_location->line, 0u);
     EXPECT_EQ(context.violations()[2]->source_location->column, 0u);
     EXPECT_EQ(context.violations()[2]->console_message,
-              "Refused to frame 'http://a.com/' because it violates the "
-              "following Content Security Policy directive: \"frame-src "
-              "a.com/iframe\".\n");
+              "Framing 'http://a.com/' violates the following Content Security "
+              "Policy directive: \"frame-src a.com/iframe\". The request has "
+              "been blocked.\n");
   }
 }
 
@@ -257,15 +260,15 @@ TEST(CSPContextTest, MultipleInfringement) {
 
   EXPECT_FALSE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("http://c.com"),
-      GURL("http://c.com"), false, false, SourceLocation(),
-      CSPContext::CHECK_ALL_CSP, false));
+      GURL("http://c.com"), false, SourceLocation(), CSPContext::CHECK_ALL_CSP,
+      false));
   ASSERT_EQ(2u, context.violations().size());
   const char console_message_a[] =
-      "Refused to frame 'http://c.com/' because it violates the following "
-      "Content Security Policy directive: \"frame-src a.com\".\n";
+      "Framing 'http://c.com/' violates the following Content Security Policy "
+      "directive: \"frame-src a.com\". The request has been blocked.\n";
   const char console_message_b[] =
-      "Refused to frame 'http://c.com/' because it violates the following "
-      "Content Security Policy directive: \"frame-src b.com\".\n";
+      "Framing 'http://c.com/' violates the following Content Security Policy "
+      "directive: \"frame-src b.com\". The request has been blocked.\n";
   EXPECT_EQ(console_message_a, context.violations()[0]->console_message);
   EXPECT_EQ(console_message_b, context.violations()[1]->console_message);
 }
@@ -294,17 +297,17 @@ TEST(CSPContextTest, CheckCSPDisposition) {
   // be reported.
   EXPECT_FALSE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("https://not-example.com"),
-      GURL("https://not-example.com"), false, false, SourceLocation(),
+      GURL("https://not-example.com"), false, SourceLocation(),
       CSPContext::CHECK_ALL_CSP, false));
   ASSERT_EQ(2u, context.violations().size());
   const char console_message_a[] =
-      "Refused to frame 'https://not-example.com/' because it violates the "
-      "following "
-      "Content Security Policy directive: \"frame-src example.com\".\n";
+      "Framing 'https://not-example.com/' violates the following Content "
+      "Security Policy directive: \"frame-src example.com\". The request has "
+      "been blocked.\n";
   const char console_message_b[] =
-      "[Report Only] Refused to frame 'https://not-example.com/' because it "
-      "violates the following "
-      "Content Security Policy directive: \"default-src example.com\". Note "
+      "Framing 'https://not-example.com/' violates the following report-only "
+      "Content Security Policy directive: \"default-src example.com\". The "
+      "violation has been logged, but no further action has been taken. Note "
       "that 'frame-src' was not explicitly set, so 'default-src' is used as a "
       "fallback.\n";
   // Both console messages must appear in the reported violations.
@@ -317,7 +320,7 @@ TEST(CSPContextTest, CheckCSPDisposition) {
   context.ClearViolations();
   EXPECT_TRUE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("https://not-example.com"),
-      GURL("https://not-example.com"), false, false, SourceLocation(),
+      GURL("https://not-example.com"), false, SourceLocation(),
       CSPContext::CHECK_REPORT_ONLY_CSP, false));
   ASSERT_EQ(1u, context.violations().size());
   EXPECT_EQ(console_message_b, context.violations()[0]->console_message);
@@ -327,10 +330,31 @@ TEST(CSPContextTest, CheckCSPDisposition) {
   context.ClearViolations();
   EXPECT_FALSE(context.IsAllowedByCsp(
       policies, CSPDirectiveName::FrameSrc, GURL("https://not-example.com"),
-      GURL("https://not-example.com"), false, false, SourceLocation(),
+      GURL("https://not-example.com"), false, SourceLocation(),
       CSPContext::CHECK_ENFORCED_CSP, false));
   ASSERT_EQ(1u, context.violations().size());
   EXPECT_EQ(console_message_a, context.violations()[0]->console_message);
+}
+
+TEST(CSPContextTest, BlockedDespiteWildcard) {
+  CSPContextTest context;
+  auto policies = ParseContentSecurityPolicies(
+      "frame-src *", mojom::ContentSecurityPolicyType::kEnforce,
+      mojom::ContentSecurityPolicySource::kMeta,
+      GURL("https://www.example.org"));
+
+  EXPECT_FALSE(context.IsAllowedByCsp(policies, CSPDirectiveName::FrameSrc,
+                                      GURL("data:text/html,<html></html>"),
+                                      GURL(), false, SourceLocation(),
+                                      CSPContext::CHECK_ALL_CSP, false));
+  EXPECT_EQ(context.violations().size(), 1u);
+  EXPECT_EQ(
+      context.violations()[0]->console_message,
+      "Framing 'data:text/html,<html></html>' violates the following Content "
+      "Security Policy directive: \"frame-src *\". The request has been "
+      "blocked. Note that '*' matches only URLs with network schemes ('http', "
+      "'https', 'ws', 'wss'), or URLs whose scheme matches `self`'s scheme. "
+      "The scheme 'data:' must be added explicitly.\n");
 }
 
 }  // namespace network

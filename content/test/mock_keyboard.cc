@@ -1,11 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/mock_keyboard.h"
 
 #include "base/check.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 
@@ -20,7 +20,7 @@ int MockKeyboard::GetCharacters(Layout layout,
                                 int key_code,
                                 Modifiers modifiers,
                                 std::u16string* output) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   CHECK(output);
   // Change the keyboard layout only when we have to because it takes a lot of
   // time to load a keyboard-layout driver.

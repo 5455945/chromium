@@ -1,27 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/platform_sensor_provider_chromeos.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "build/chromeos_buildflags.h"
+#include "chromeos/components/sensors/ash/sensor_hal_dispatcher.h"
 #include "chromeos/components/sensors/fake_sensor_device.h"
 #include "chromeos/components/sensors/fake_sensor_hal_server.h"
 #include "services/device/generic_sensor/sensor_impl.h"
 #include "services/device/public/cpp/generic_sensor/sensor_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/components/sensors/ash/sensor_hal_dispatcher.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 namespace device {
 
@@ -44,30 +42,39 @@ constexpr char kAccelerometerChannels[][10] = {"accel_x", "accel_y", "accel_z"};
 constexpr char kGyroscopeChannels[][10] = {"anglvel_x", "anglvel_y",
                                            "anglvel_z"};
 
+class FakeClient : public PlatformSensor::Client {
+ public:
+  explicit FakeClient(PlatformSensor* platform_sensor)
+      : platform_sensor_(platform_sensor) {}
+  ~FakeClient() override {}
+
+  void OnSensorReadingChanged(mojom::SensorType type) override {}
+  void OnSensorError() override { platform_sensor_->RemoveClient(this); }
+  bool IsSuspended() override { return false; }
+
+ private:
+  raw_ptr<PlatformSensor> platform_sensor_;
+};
+
 }  // namespace
 
 class PlatformSensorProviderChromeOSTest : public ::testing::Test {
  protected:
   void SetUp() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     chromeos::sensors::SensorHalDispatcher::Initialize();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
     sensor_hal_server_ =
         std::make_unique<chromeos::sensors::FakeSensorHalServer>();
     provider_ = std::make_unique<PlatformSensorProviderChromeOS>();
   }
 
   void TearDown() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     chromeos::sensors::SensorHalDispatcher::Shutdown();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   }
 
   void AddDevice(int32_t iio_device_id,
                  chromeos::sensors::mojom::DeviceType type,
-                 const absl::optional<std::string>& scale,
-                 const absl::optional<std::string>& location,
+                 const std::optional<std::string>& scale,
+                 const std::optional<std::string>& location,
                  std::vector<chromeos::sensors::FakeSensorDevice::ChannelData>
                      channels_data = {}) {
     AddDevice(iio_device_id,
@@ -77,8 +84,8 @@ class PlatformSensorProviderChromeOSTest : public ::testing::Test {
 
   void AddDevice(int32_t iio_device_id,
                  std::set<chromeos::sensors::mojom::DeviceType> types,
-                 const absl::optional<std::string>& scale,
-                 const absl::optional<std::string>& location,
+                 const std::optional<std::string>& scale,
+                 const std::optional<std::string>& location,
                  std::vector<chromeos::sensors::FakeSensorDevice::ChannelData>
                      channels_data = {}) {
     auto sensor_device = std::make_unique<chromeos::sensors::FakeSensorDevice>(
@@ -104,7 +111,7 @@ class PlatformSensorProviderChromeOSTest : public ::testing::Test {
     std::vector<chromeos::sensors::FakeSensorDevice::ChannelData> channels_data(
         kNumberOfAxes + 1);
     for (uint32_t i = 0; i < kNumberOfAxes; ++i) {
-      channels_data[i].id = channels[i];
+      channels_data[i].id = UNSAFE_TODO(channels[i]);
       channels_data[i].sample_data = kFakeSampleData;
     }
     channels_data.back().id = chromeos::sensors::mojom::kTimestampChannel;
@@ -132,26 +139,16 @@ class PlatformSensorProviderChromeOSTest : public ::testing::Test {
   }
 
   void RegisterSensorHalServer() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     // MojoConnectionServiceProvider::BootstrapMojoConnectionForIioService is
     // responsible for calling this outside unit tests.
     // This will eventually call PlatformSensorProviderChromeOS::SetUpChannel().
     chromeos::sensors::SensorHalDispatcher::GetInstance()->RegisterServer(
         sensor_hal_server_->PassRemote());
-#else
-    // As SensorHalDispatcher is only defined in ash, manually setting up Mojo
-    // connection between |fake_sensor_hal_server_| and |provider_|.
-    // This code is duplicating what SensorHalDispatcher::EstablishMojoChannel()
-    // does.
-    mojo::PendingRemote<chromeos::sensors::mojom::SensorService> pending_remote;
-    sensor_hal_server_->CreateChannel(
-        pending_remote.InitWithNewPipeAndPassReceiver());
-    provider_->SetUpChannel(std::move(pending_remote));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   }
 
   std::unique_ptr<chromeos::sensors::FakeSensorHalServer> sensor_hal_server_;
-  std::vector<chromeos::sensors::FakeSensorDevice*> sensor_devices_;
+  std::vector<raw_ptr<chromeos::sensors::FakeSensorDevice, VectorExperimental>>
+      sensor_devices_;
 
   std::unique_ptr<PlatformSensorProviderChromeOS> provider_;
 
@@ -198,7 +195,7 @@ TEST_F(PlatformSensorProviderChromeOSTest, CheckUnsupportedTypes) {
 
 TEST_F(PlatformSensorProviderChromeOSTest, MissingScale) {
   AddDevice(kFakeDeviceId, chromeos::sensors::mojom::DeviceType::ACCEL,
-            /*scale=*/absl::nullopt, chromeos::sensors::mojom::kLocationBase);
+            /*scale=*/std::nullopt, chromeos::sensors::mojom::kLocationBase);
 
   RegisterSensorHalServer();
 
@@ -208,7 +205,7 @@ TEST_F(PlatformSensorProviderChromeOSTest, MissingScale) {
 TEST_F(PlatformSensorProviderChromeOSTest, MissingLocation) {
   AddDevice(kFakeDeviceId, chromeos::sensors::mojom::DeviceType::ACCEL,
             base::NumberToString(kScaleValue),
-            /*location=*/absl::nullopt);
+            /*location=*/std::nullopt);
 
   RegisterSensorHalServer();
 
@@ -365,17 +362,26 @@ TEST_F(PlatformSensorProviderChromeOSTest, SensorDeviceDisconnect) {
   int fake_id = 1;
   AddDevice(fake_id++, chromeos::sensors::mojom::DeviceType::ACCEL,
             base::NumberToString(kScaleValue),
-            chromeos::sensors::mojom::kLocationLid);
+            chromeos::sensors::mojom::kLocationLid,
+            GetChannelsWithAxes(kAccelerometerChannels));
   AddDevice(fake_id++, chromeos::sensors::mojom::DeviceType::ANGLVEL,
             base::NumberToString(kScaleValue),
             chromeos::sensors::mojom::kLocationLid);
 
   RegisterSensorHalServer();
 
-  EXPECT_TRUE(CreateSensor(mojom::SensorType::ACCELEROMETER));
+  auto accel_lid = CreateSensor(mojom::SensorType::ACCELEROMETER);
+  EXPECT_TRUE(accel_lid);
+
+  // Wait until all tasks are done and no failures occur in |provider_| or
+  // |accel_lid|.
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(sensor_devices_.front()->HasReceivers());
 
   // Simulate a disconnection of an existing SensorDevice in |provider_|, which
-  // triggers PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect().
+  // triggers PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect(). The
+  // default reason is IIOSERVICE_CRASHED.
   sensor_devices_.back()->ClearReceivers();
 
   // Wait until the disconnection is done.
@@ -383,6 +389,81 @@ TEST_F(PlatformSensorProviderChromeOSTest, SensorDeviceDisconnect) {
   // PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect() resets the
   // SensorService Mojo channel.
   EXPECT_FALSE(sensor_hal_server_->GetSensorService()->HasReceivers());
+
+  // The existing PlatformSensors will also be reset.
+  EXPECT_FALSE(sensor_devices_.front()->HasReceivers());
+}
+
+TEST_F(PlatformSensorProviderChromeOSTest, SensorDeviceDisconnectWithReason) {
+  int fake_id = 1;
+  AddDevice(fake_id++, chromeos::sensors::mojom::DeviceType::ACCEL,
+            base::NumberToString(kScaleValue),
+            chromeos::sensors::mojom::kLocationLid,
+            GetChannelsWithAxes(kAccelerometerChannels));
+  AddDevice(fake_id++, chromeos::sensors::mojom::DeviceType::ANGLVEL,
+            base::NumberToString(kScaleValue),
+            chromeos::sensors::mojom::kLocationLid,
+            GetChannelsWithAxes(kGyroscopeChannels));
+  AddDevice(fake_id++, chromeos::sensors::mojom::DeviceType::ACCEL,
+            base::NumberToString(kScaleValue),
+            chromeos::sensors::mojom::kLocationBase,
+            GetChannelsWithAxes(kAccelerometerChannels));
+  AddDevice(fake_id++, chromeos::sensors::mojom::DeviceType::ANGLVEL,
+            base::NumberToString(kScaleValue),
+            chromeos::sensors::mojom::kLocationBase);
+
+  RegisterSensorHalServer();
+
+  auto accel_lid = CreateSensor(mojom::SensorType::ACCELEROMETER);
+  EXPECT_TRUE(accel_lid);
+  base::RunLoop().RunUntilIdle();
+
+  // The accelerometer created is on the lid.
+  EXPECT_TRUE(sensor_devices_[0]->HasReceivers());
+  EXPECT_FALSE(sensor_devices_[2]->HasReceivers());
+
+  auto gyro_lid = CreateSensor(mojom::SensorType::GYROSCOPE);
+  EXPECT_TRUE(gyro_lid);
+  FakeClient client(gyro_lid.get());
+  gyro_lid->AddClient(&client);
+  PlatformSensorConfiguration config;
+  config.set_frequency(100);
+  gyro_lid->StartListening(&client, config);
+
+  // Wait until all tasks are done and |gyro_lid| is reading samples.
+  base::RunLoop().RunUntilIdle();
+
+  // Simulate a disconnection of the gyro_lid in |provider_|, which triggers
+  // PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect(). As the mojo
+  // pipe is reset with reason: DEVICE_REMOVED, |provider_| will only remove the
+  // SensorDevice instead of the entire SensorService and the corresponding mojo
+  // pipes.
+  EXPECT_TRUE(sensor_devices_[1]->HasReceivers());
+  EXPECT_FALSE(sensor_devices_[3]->HasReceivers());
+  sensor_devices_[1]->ClearReceiversWithReason(
+      chromeos::sensors::mojom::SensorDeviceDisconnectReason::DEVICE_REMOVED,
+      "Device was removed");
+
+  // Wait until the disconnection is done.
+  base::RunLoop().RunUntilIdle();
+
+  // PlatformSensorProviderChromeOS::OnSensorDeviceDisconnect() doesn't reset
+  // the SensorService Mojo channel with the reason: DEVICE_REMOVED.
+  EXPECT_TRUE(sensor_hal_server_->GetSensorService()->HasReceivers());
+
+  auto accel_base = CreateSensor(mojom::SensorType::ACCELEROMETER);
+  base::RunLoop().RunUntilIdle();
+
+  // The new accelerometer created is on the base, as there are more motion
+  // sensors on the base now.
+  EXPECT_FALSE(sensor_devices_[0]->HasReceivers());
+  EXPECT_TRUE(sensor_devices_[2]->HasReceivers());
+
+  EXPECT_FALSE(provider_->sensors_.contains(2));
+  EXPECT_EQ(provider_->sensor_id_by_type_[mojom::SensorType::ACCELEROMETER],
+            3 /* accel_base's id */);
+  EXPECT_EQ(provider_->sensor_id_by_type_[mojom::SensorType::GYROSCOPE],
+            4 /* accel_base's id */);
 }
 
 TEST_F(PlatformSensorProviderChromeOSTest, ReconnectClient) {
@@ -396,11 +477,6 @@ TEST_F(PlatformSensorProviderChromeOSTest, ReconnectClient) {
 
   // Simulate a disconnection between |provider_| and SensorHalDispatcher.
   provider_->OnSensorHalClientFailure(base::TimeDelta());
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Need to manually re-connect the Mojo as SensorHalDispatcher doesn't exist
-  // in Lacros-Chrome.
-  RegisterSensorHalServer();
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
   EXPECT_TRUE(CreateSensor(mojom::SensorType::ACCELEROMETER));
 }
@@ -649,7 +725,7 @@ TEST_F(PlatformSensorProviderChromeOSTest, LatePresentLightSensors) {
   // Wait until |provider_| finishes processing the new device.
   base::RunLoop().RunUntilIdle();
 
-  // Test PlatformSensorProviderBase::NotifySensorCreated on different sensors
+  // Test PlatformSensorProvider::NotifySensorCreated on different sensors
   // of the same type.
   auto light_lid = CreateSensor(mojom::SensorType::AMBIENT_LIGHT);
   EXPECT_TRUE(light_lid);
@@ -669,7 +745,7 @@ TEST_F(PlatformSensorProviderChromeOSTest, LatePresentLightSensors) {
   SensorReading result;
   EXPECT_FALSE(light_base->GetLatestReading(&result));
 
-  // Test PlatformSensorProviderBase::RemoveSensor on different sensors of the
+  // Test PlatformSensorProvider::RemoveSensor on different sensors of the
   // same type.
   light_base.reset();
 

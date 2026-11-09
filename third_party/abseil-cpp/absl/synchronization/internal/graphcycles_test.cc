@@ -14,15 +14,23 @@
 
 #include "absl/synchronization/internal/graphcycles.h"
 
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <iterator>
 #include <map>
 #include <random>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "absl/base/internal/raw_logging.h"
+#include "absl/base/config.h"
 #include "absl/base/macros.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 
 namespace absl {
 ABSL_NAMESPACE_BEGIN
@@ -47,8 +55,8 @@ static GraphId Get(const IdMap& id, int num) {
 }
 
 // Return whether "to" is reachable from "from".
-static bool IsReachable(Edges *edges, int from, int to,
-                        std::unordered_set<int> *seen) {
+static bool IsReachable(Edges* edges, int from, int to,
+                        absl::flat_hash_set<int>* seen) {
   seen->insert(from);     // we are investigating "from"; don't do it again
   if (from == to) return true;
   for (const auto &edge : *edges) {
@@ -65,56 +73,56 @@ static bool IsReachable(Edges *edges, int from, int to,
 }
 
 static void PrintEdges(Edges *edges) {
-  ABSL_RAW_LOG(INFO, "EDGES (%zu)", edges->size());
+  LOG(INFO) << "EDGES (" << edges->size() << ")";
   for (const auto &edge : *edges) {
     int a = edge.from;
     int b = edge.to;
-    ABSL_RAW_LOG(INFO, "%d %d", a, b);
+    LOG(INFO) << a << " " << b;
   }
-  ABSL_RAW_LOG(INFO, "---");
+  LOG(INFO) << "---";
 }
 
 static void PrintGCEdges(Nodes *nodes, const IdMap &id, GraphCycles *gc) {
-  ABSL_RAW_LOG(INFO, "GC EDGES");
+  LOG(INFO) << "GC EDGES";
   for (int a : *nodes) {
     for (int b : *nodes) {
       if (gc->HasEdge(Get(id, a), Get(id, b))) {
-        ABSL_RAW_LOG(INFO, "%d %d", a, b);
+        LOG(INFO) << a << " " << b;
       }
     }
   }
-  ABSL_RAW_LOG(INFO, "---");
+  LOG(INFO) << "---";
 }
 
 static void PrintTransitiveClosure(Nodes *nodes, Edges *edges) {
-  ABSL_RAW_LOG(INFO, "Transitive closure");
+  LOG(INFO) << "Transitive closure";
   for (int a : *nodes) {
     for (int b : *nodes) {
-      std::unordered_set<int> seen;
+      absl::flat_hash_set<int> seen;
       if (IsReachable(edges, a, b, &seen)) {
-        ABSL_RAW_LOG(INFO, "%d %d", a, b);
+        LOG(INFO) << a << " " << b;
       }
     }
   }
-  ABSL_RAW_LOG(INFO, "---");
+  LOG(INFO) << "---";
 }
 
 static void PrintGCTransitiveClosure(Nodes *nodes, const IdMap &id,
                                      GraphCycles *gc) {
-  ABSL_RAW_LOG(INFO, "GC Transitive closure");
+  LOG(INFO) << "GC Transitive closure";
   for (int a : *nodes) {
     for (int b : *nodes) {
       if (gc->IsReachable(Get(id, a), Get(id, b))) {
-        ABSL_RAW_LOG(INFO, "%d %d", a, b);
+        LOG(INFO) << a << " " << b;
       }
     }
   }
-  ABSL_RAW_LOG(INFO, "---");
+  LOG(INFO) << "---";
 }
 
 static void CheckTransitiveClosure(Nodes *nodes, Edges *edges, const IdMap &id,
                                    GraphCycles *gc) {
-  std::unordered_set<int> seen;
+  absl::flat_hash_set<int> seen;
   for (const auto &a : *nodes) {
     for (const auto &b : *nodes) {
       seen.clear();
@@ -125,9 +133,8 @@ static void CheckTransitiveClosure(Nodes *nodes, Edges *edges, const IdMap &id,
         PrintGCEdges(nodes, id, gc);
         PrintTransitiveClosure(nodes, edges);
         PrintGCTransitiveClosure(nodes, id, gc);
-        ABSL_RAW_LOG(FATAL, "gc_reachable %s reachable %s a %d b %d",
-                     gc_reachable ? "true" : "false",
-                     reachable ? "true" : "false", a, b);
+        LOG(FATAL) << "gc_reachable " << gc_reachable << " reachable "
+                   << reachable << " a " << a << " b " << b;
       }
     }
   }
@@ -142,7 +149,7 @@ static void CheckEdges(Nodes *nodes, Edges *edges, const IdMap &id,
     if (!gc->HasEdge(Get(id, a), Get(id, b))) {
       PrintEdges(edges);
       PrintGCEdges(nodes, id, gc);
-      ABSL_RAW_LOG(FATAL, "!gc->HasEdge(%d, %d)", a, b);
+      LOG(FATAL) << "!gc->HasEdge(" << a << ", " << b << ")";
     }
   }
   for (const auto &a : *nodes) {
@@ -155,13 +162,12 @@ static void CheckEdges(Nodes *nodes, Edges *edges, const IdMap &id,
   if (count != edges->size()) {
     PrintEdges(edges);
     PrintGCEdges(nodes, id, gc);
-    ABSL_RAW_LOG(FATAL, "edges->size() %zu  count %d", edges->size(), count);
+    LOG(FATAL) << "edges->size() " << edges->size() << "  count " << count;
   }
 }
 
 static void CheckInvariants(const GraphCycles &gc) {
-  if (ABSL_PREDICT_FALSE(!gc.CheckInvariants()))
-    ABSL_RAW_LOG(FATAL, "CheckInvariants");
+  CHECK(gc.CheckInvariants()) << "CheckInvariants";
 }
 
 // Returns the index of a randomly chosen node in *nodes.
@@ -225,7 +231,7 @@ TEST(GraphCycles, RandomizedTest) {
       break;
 
     case 1:    // Remove a node
-      if (nodes.size() > 0) {
+      if (!nodes.empty()) {
         int node_index = RandomNode(&rng, &nodes);
         int node = nodes[node_index];
         nodes[node_index] = nodes.back();
@@ -246,7 +252,7 @@ TEST(GraphCycles, RandomizedTest) {
       break;
 
     case 2:   // Add an edge
-      if (nodes.size() > 0) {
+      if (!nodes.empty()) {
         int from = RandomNode(&rng, &nodes);
         int to = RandomNode(&rng, &nodes);
         if (EdgeIndex(&edges, nodes[from], nodes[to]) == -1) {
@@ -256,7 +262,7 @@ TEST(GraphCycles, RandomizedTest) {
             new_edge.to = nodes[to];
             edges.push_back(new_edge);
           } else {
-            std::unordered_set<int> seen;
+            absl::flat_hash_set<int> seen;
             ASSERT_TRUE(IsReachable(&edges, nodes[to], nodes[from], &seen))
                 << "Edge " << nodes[to] << "->" << nodes[from];
           }
@@ -265,7 +271,7 @@ TEST(GraphCycles, RandomizedTest) {
       break;
 
     case 3:    // Remove an edge
-      if (edges.size() > 0) {
+      if (!edges.empty()) {
         int i = RandomEdge(&rng, &edges);
         int from = edges[i].from;
         int to = edges[i].to;
@@ -278,13 +284,13 @@ TEST(GraphCycles, RandomizedTest) {
       break;
 
     case 4:   // Check a path
-      if (nodes.size() > 0) {
+      if (!nodes.empty()) {
         int from = RandomNode(&rng, &nodes);
         int to = RandomNode(&rng, &nodes);
         GraphId path[2*kMaxNodes];
         int path_len = graph_cycles.FindPath(id[nodes[from]], id[nodes[to]],
-                                             ABSL_ARRAYSIZE(path), path);
-        std::unordered_set<int> seen;
+                                             std::size(path), path);
+        absl::flat_hash_set<int> seen;
         bool reachable = IsReachable(&edges, nodes[from], nodes[to], &seen);
         bool gc_reachable =
             graph_cycles.IsReachable(Get(id, nodes[from]), Get(id, nodes[to]));
@@ -309,7 +315,7 @@ TEST(GraphCycles, RandomizedTest) {
       break;
 
     default:
-      ABSL_RAW_LOG(FATAL, "op %d", op);
+      LOG(FATAL) << "op " << op;
     }
 
     // Very rarely, test graph expansion by adding then removing many nodes.
@@ -387,10 +393,10 @@ class GraphCyclesTest : public ::testing::Test {
 
   std::string Path(int x, int y) {
     GraphId path[5];
-    int np = g_.FindPath(Get(id_, x), Get(id_, y), ABSL_ARRAYSIZE(path), path);
+    int np = g_.FindPath(Get(id_, x), Get(id_, y), std::size(path), path);
     std::string result;
     for (int i = 0; i < np; i++) {
-      if (i >= ABSL_ARRAYSIZE(path)) {
+      if (i >= int{std::size(path)}) {
         result += " ...";
         break;
       }
@@ -457,6 +463,185 @@ TEST_F(GraphCyclesTest, ManyEdges) {
   CheckInvariants(g_);
   ASSERT_FALSE(AddEdge(10, 9));
   CheckInvariants(g_);
+}
+
+TEST(GraphCycles, IntegerOverflow) {
+  GraphCycles graph_cycles;
+  uintptr_t buf = 0;
+  GraphId prev_id = graph_cycles.GetId(reinterpret_cast<void*>(buf));
+  buf += 1;
+  GraphId id = graph_cycles.GetId(reinterpret_cast<void*>(buf));
+  ASSERT_TRUE(graph_cycles.InsertEdge(prev_id, id));
+
+  // INT_MAX / 40 is enough to cause an overflow when multiplied by 41.
+  graph_cycles.TestOnlyAddNodes(INT_MAX / 40);
+
+  buf += 1;
+  GraphId newid = graph_cycles.GetId(reinterpret_cast<void*>(buf));
+  graph_cycles.HasEdge(prev_id, newid);
+
+  graph_cycles.RemoveNode(reinterpret_cast<void*>(buf));
+}
+
+// Returns ids for n new nodes. A new GraphCycles ranks nodes in creation order,
+// so InsertEdge(ids[i], ids[j]) with i > j violates the rank order and makes
+// InsertEdge reorder nodes.
+static std::vector<GraphId> NewNodes(GraphCycles* g, size_t n) {
+  std::vector<GraphId> ids(n);
+  for (size_t i = 0; i < n; ++i) {
+    ids[i] = g->GetId(reinterpret_cast<void*>(static_cast<uintptr_t>(i + 1)));
+  }
+  return ids;
+}
+
+// Each group of edges below violates the rank order in a different way. The
+// comments say how InsertEdge is expected to restore the order.
+TEST(GraphCycles, RankOrderRepairs) {
+  GraphCycles g;
+  std::vector<GraphId> n = NewNodes(&g, 16);
+
+  // x has no in-neighbors: move x below all nodes.
+  ASSERT_TRUE(g.InsertEdge(n[1], n[0]));
+
+  // x's in-neighbors rank below y: move x into the gap below y.
+  ASSERT_TRUE(g.InsertEdge(n[2], n[4]));
+  ASSERT_TRUE(g.InsertEdge(n[4], n[3]));
+
+  // y has no out-neighbors: move y above all nodes.
+  ASSERT_TRUE(g.InsertEdge(n[6], n[7]));
+  ASSERT_TRUE(g.InsertEdge(n[7], n[5]));
+
+  // y's out-neighbors rank above x: move y into the gap above x.
+  ASSERT_TRUE(g.InsertEdge(n[8], n[11]));
+  ASSERT_TRUE(g.InsertEdge(n[9], n[10]));
+  ASSERT_TRUE(g.InsertEdge(n[10], n[8]));
+
+  // Neither x nor y can move alone: Pearce-Kelly reorder.
+  ASSERT_TRUE(g.InsertEdge(n[12], n[13]));
+  ASSERT_TRUE(g.InsertEdge(n[14], n[15]));
+  ASSERT_TRUE(g.InsertEdge(n[15], n[12]));
+  CheckInvariants(g);
+
+  // Edges that would close a cycle are still rejected.
+  EXPECT_FALSE(g.InsertEdge(n[0], n[1]));
+  EXPECT_FALSE(g.InsertEdge(n[3], n[2]));
+  EXPECT_FALSE(g.InsertEdge(n[5], n[6]));
+  EXPECT_FALSE(g.InsertEdge(n[8], n[9]));
+  EXPECT_FALSE(g.InsertEdge(n[13], n[14]));
+  CheckInvariants(g);
+}
+
+// InsertEdge(x, y) does not move x if x has too many in-neighbors to check,
+// even if moving it would restore the rank order. Here y cannot move either, so
+// InsertEdge falls back to the Pearce-Kelly reorder.
+TEST(GraphCycles, TooManyNeighborsToMove) {
+  GraphCycles g;
+  std::vector<GraphId> n = NewNodes(&g, 41);
+
+  // x is 40, which has 17 in-neighbors. y is 30, which cannot move above x
+  // because of its out-neighbor 31.
+  for (size_t i = 0; i <= 16; ++i) {
+    ASSERT_TRUE(g.InsertEdge(n[i], n[40]));
+  }
+  ASSERT_TRUE(g.InsertEdge(n[30], n[31]));
+  ASSERT_TRUE(g.InsertEdge(n[40], n[30]));
+  CheckInvariants(g);
+
+  EXPECT_FALSE(g.InsertEdge(n[30], n[0]));
+  CheckInvariants(g);
+}
+
+// Each move of a node right below the same node halves the gap below it. Check
+// that InsertEdge keeps working when that gap runs out and the ranks around it
+// are respaced.
+TEST(GraphCycles, RespacesCrowdedGapBelow) {
+  GraphCycles g;
+  std::vector<GraphId> n = NewNodes(&g, 2000);
+
+  // Each n[i] has in-neighbor 50, which ranks below 51, so each n[i] -> n[51]
+  // edge below moves n[i] right below 51.
+  for (size_t i = 100; i < 2000; ++i) {
+    ASSERT_TRUE(g.InsertEdge(n[50], n[i]));
+    ASSERT_TRUE(g.InsertEdge(n[i], n[51]));
+    if (i % 100 == 0) CheckInvariants(g);
+  }
+  CheckInvariants(g);
+
+  EXPECT_FALSE(g.InsertEdge(n[51], n[50]));
+  EXPECT_FALSE(g.InsertEdge(n[51], n[100]));
+  EXPECT_FALSE(g.InsertEdge(n[1999], n[50]));
+  CheckInvariants(g);
+}
+
+// Same, for moves of a node right above the same node.
+TEST(GraphCycles, RespacesCrowdedGapAbove) {
+  GraphCycles g;
+  constexpr size_t kNumMoved = 1000;
+  std::vector<GraphId> n = NewNodes(&g, 2 * kNumMoved + 18);
+
+  // x ranks above each n[i], i < kNumMoved, and has too many in-neighbors to
+  // move. n[i] has an out-neighbor that ranks above x, so each x -> n[i] edge
+  // below moves n[i] right above x.
+  const GraphId x = n[kNumMoved + 17];
+  for (size_t j = 0; j <= 16; ++j) {
+    ASSERT_TRUE(g.InsertEdge(n[kNumMoved + j], x));
+  }
+  for (size_t i = 0; i < kNumMoved; ++i) {
+    ASSERT_TRUE(g.InsertEdge(n[i], n[kNumMoved + 18 + i]));
+    ASSERT_TRUE(g.InsertEdge(x, n[i]));
+    if (i % 100 == 0) CheckInvariants(g);
+  }
+  CheckInvariants(g);
+
+  EXPECT_FALSE(g.InsertEdge(n[0], x));
+  EXPECT_FALSE(g.InsertEdge(n[kNumMoved + 18], x));
+  EXPECT_FALSE(g.InsertEdge(n[kNumMoved - 1], n[kNumMoved]));
+  CheckInvariants(g);
+}
+
+// With a rank stride this large, the ranks beyond the lowest and highest ones
+// run out after a few new nodes, or a few moves of a node below or above all
+// other nodes, and then all ranks are respaced. Check that the rank order stays
+// valid.
+TEST(GraphCycles, RanksRunOut) {
+  GraphCycles g;
+  g.TestOnlySetRankStride(int64_t{1} << 60);
+  std::vector<GraphId> n = NewNodes(&g, 50);
+  for (size_t i = 0; i < 9; ++i) {
+    ASSERT_TRUE(g.InsertEdge(n[i], n[i + 1]));
+  }
+  CheckInvariants(g);
+  const GraphId a = n[10];
+  const GraphId b = n[11];
+
+  // a and b have no in-neighbors, so each InsertEdge call below moves one of
+  // them below all other nodes.
+  for (int i = 0; i < 1000; ++i) {
+    ASSERT_TRUE(g.InsertEdge(b, a));
+    g.RemoveEdge(b, a);
+    ASSERT_TRUE(g.InsertEdge(a, b));
+    g.RemoveEdge(a, b);
+  }
+  CheckInvariants(g);
+
+  // Now a and b have too many in-neighbors to move, so each InsertEdge call
+  // below moves the other one above all other nodes.
+  for (size_t i = 12; i < 50; ++i) {
+    ASSERT_TRUE(g.InsertEdge(n[i], i % 2 == 0 ? a : b));
+  }
+  for (int i = 0; i < 1000; ++i) {
+    ASSERT_TRUE(g.InsertEdge(b, a));
+    g.RemoveEdge(b, a);
+    ASSERT_TRUE(g.InsertEdge(a, b));
+    g.RemoveEdge(a, b);
+  }
+  CheckInvariants(g);
+
+  EXPECT_TRUE(g.IsReachable(n[0], n[9]));
+  EXPECT_FALSE(g.InsertEdge(n[9], n[0]));
+  ASSERT_TRUE(g.InsertEdge(n[9], a));
+  EXPECT_FALSE(g.InsertEdge(a, n[0]));
+  CheckInvariants(g);
 }
 
 }  // namespace synchronization_internal

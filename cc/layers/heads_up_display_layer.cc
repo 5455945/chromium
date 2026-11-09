@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "base/trace_event/trace_event.h"
 #include "cc/layers/heads_up_display_layer_impl.h"
 #include "cc/trees/layer_tree_host.h"
+#include "skia/ext/font_utils.h"
 
 namespace cc {
 
@@ -19,44 +20,63 @@ scoped_refptr<HeadsUpDisplayLayer> HeadsUpDisplayLayer::Create() {
 }
 
 HeadsUpDisplayLayer::HeadsUpDisplayLayer()
-    : typeface_(SkTypeface::MakeFromName("Arial", SkFontStyle())) {
-  if (!typeface_) {
-    typeface_ = SkTypeface::MakeFromName("monospace", SkFontStyle::Bold());
+    : typeface_(skia::MakeTypefaceFromName("Arial", SkFontStyle())) {
+  if (!typeface_.Read(*this)) {
+    typeface_.Write(*this) =
+        skia::MakeTypefaceFromName("monospace", SkFontStyle::Bold());
+    SetNeedsPushProperties();
   }
-  DCHECK(typeface_.get());
+  DCHECK(typeface_.Read(*this).get());
   SetIsDrawable(true);
-  UpdateDrawsContent(HasDrawableContent());
 }
 
 HeadsUpDisplayLayer::~HeadsUpDisplayLayer() = default;
 
+void HeadsUpDisplayLayer::SetLayerTreeHost(LayerTreeHost* host) {
+  if (host && host != layer_tree_host()) {
+    paused_debugger_message_ =
+        host->client()->GetPausedDebuggerLocalizedMessage();
+  }
+  Layer::SetLayerTreeHost(host);
+}
+
 void HeadsUpDisplayLayer::UpdateLocationAndSize(
     const gfx::Size& device_viewport,
     float device_scale_factor) {
-  gfx::Size device_viewport_in_layout_pixels =
-      gfx::Size(device_viewport.width() / device_scale_factor,
-                device_viewport.height() / device_scale_factor);
+  float multiplier = 1.f / (device_scale_factor *
+                            layer_tree_host()->painted_device_scale_factor());
+  gfx::Size device_viewport_in_dips =
+      gfx::ScaleToFlooredSize(device_viewport, multiplier);
 
-  gfx::Size bounds;
+  gfx::Size bounds_in_dips;
 
   // If the HUD is not displaying full-viewport rects (e.g., it is showing the
   // Frame Rendering Stats), use a fixed size.
   constexpr int kDefaultHUDSize = 256;
-  bounds.SetSize(kDefaultHUDSize, kDefaultHUDSize);
+  bounds_in_dips.SetSize(kDefaultHUDSize, kDefaultHUDSize);
 
-  if (layer_tree_host()->GetDebugState().ShowDebugRects()) {
-    bounds = device_viewport_in_layout_pixels;
-  } else if (layer_tree_host()->GetDebugState().show_web_vital_metrics ||
-             layer_tree_host()->GetDebugState().show_smoothness_metrics) {
-    // If the HUD is used to display performance metrics (which is on the right
-    // hand side_, make sure the bounds has the correct width, with a fixed
-    // height.
-    bounds.set_width(device_viewport_in_layout_pixels.width());
-    // Increase HUD layer height to make sure all the metrics are showing.
-    bounds.set_height(kDefaultHUDSize * 2);
+  if (layer_tree_host()->GetDebugState().ShowDebugRects() ||
+      layer_tree_host()->GetDebugState().debugger_paused) {
+    bounds_in_dips = device_viewport_in_dips;
   }
 
-  SetBounds(bounds);
+  // DIPs are layout coordinates if painted dsf is 1. If it's not 1, then layout
+  // coordinates are DIPs * painted dsf.
+  auto bounds_in_layout_space = gfx::ScaleToCeiledSize(
+      bounds_in_dips, layer_tree_host()->painted_device_scale_factor());
+
+  SetBounds(bounds_in_layout_space);
+}
+
+void HeadsUpDisplayLayer::ClearWebVitalsDebugRects() {
+  web_vitals_debug_rects_.Write(*this).clear();
+  SetNeedsPushProperties();
+}
+
+void HeadsUpDisplayLayer::AddWebVitalsDebugRect(
+    const WebVitalsDebugRect& rect) {
+  web_vitals_debug_rects_.Write(*this).push_back(rect);
+  SetNeedsPushProperties();
 }
 
 bool HeadsUpDisplayLayer::HasDrawableContent() const {
@@ -64,35 +84,25 @@ bool HeadsUpDisplayLayer::HasDrawableContent() const {
 }
 
 std::unique_ptr<LayerImpl> HeadsUpDisplayLayer::CreateLayerImpl(
-    LayerTreeImpl* tree_impl) {
-  return HeadsUpDisplayLayerImpl::Create(tree_impl, id());
+    LayerTreeImpl* tree_impl) const {
+  return HeadsUpDisplayLayerImpl::Create(tree_impl, id(),
+                                         paused_debugger_message_);
 }
 
-const std::vector<gfx::Rect>& HeadsUpDisplayLayer::LayoutShiftRects() const {
-  return layout_shift_rects_;
-}
+void HeadsUpDisplayLayer::PushDirtyPropertiesTo(LayerImpl* layer,
+                                                uint8_t dirty_flag,
+                                                CommitState& commit_state) {
+  Layer::PushDirtyPropertiesTo(layer, dirty_flag, commit_state);
 
-void HeadsUpDisplayLayer::SetLayoutShiftRects(
-    const std::vector<gfx::Rect>& rects) {
-  layout_shift_rects_ = rects;
-}
+  if (dirty_flag & kChangedGeneralProperty) {
+    TRACE_EVENT0("cc", "HeadsUpDisplayLayer::PushPropertiesTo");
+    HeadsUpDisplayLayerImpl* layer_impl =
+        static_cast<HeadsUpDisplayLayerImpl*>(layer);
 
-void HeadsUpDisplayLayer::UpdateWebVitalMetrics(
-    std::unique_ptr<WebVitalMetrics> web_vital_metrics) {
-  web_vital_metrics_ = std::move(web_vital_metrics);
-}
-
-void HeadsUpDisplayLayer::PushPropertiesTo(LayerImpl* layer) {
-  Layer::PushPropertiesTo(layer);
-  TRACE_EVENT0("cc", "HeadsUpDisplayLayer::PushPropertiesTo");
-  HeadsUpDisplayLayerImpl* layer_impl =
-      static_cast<HeadsUpDisplayLayerImpl*>(layer);
-
-  layer_impl->SetHUDTypeface(typeface_);
-  layer_impl->SetLayoutShiftRects(layout_shift_rects_);
-  layout_shift_rects_.clear();
-  if (web_vital_metrics_ && web_vital_metrics_->HasValue())
-    layer_impl->SetWebVitalMetrics(std::move(web_vital_metrics_));
+    layer_impl->SetHUDTypeface(typeface_.Write(*this));
+    layer_impl->SetWebVitalsDebugRects(web_vitals_debug_rects_.Read(*this));
+    web_vitals_debug_rects_.Write(*this).clear();
+  }
 }
 
 }  // namespace cc

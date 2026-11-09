@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "third_party/blink/renderer/bindings/core/v8/callback_promise_adapter.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
@@ -20,7 +19,9 @@
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_attribute_instance_map.h"
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_error.h"
 #include "third_party/blink/renderer/modules/bluetooth/bluetooth_remote_gatt_server.h"
+#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
@@ -32,13 +33,16 @@ const char kInvalidStateErrorMessage[] =
 
 BluetoothDevice::BluetoothDevice(ExecutionContext* context,
                                  mojom::blink::WebBluetoothDevicePtr device,
-                                 Bluetooth* bluetooth)
+                                 Bluetooth* bluetooth,
+                                 const DOMWrapperWorld* world)
     : ExecutionContextClient(context),
+      ActiveScriptWrappable<BluetoothDevice>({}),
       attribute_instance_map_(
           MakeGarbageCollected<BluetoothAttributeInstanceMap>(this)),
       device_(std::move(device)),
       gatt_(MakeGarbageCollected<BluetoothRemoteGATTServer>(context, this)),
       bluetooth_(bluetooth),
+      world_(world),
       client_receiver_(this, context) {}
 
 BluetoothRemoteGATTService* BluetoothDevice::GetOrCreateRemoteGATTService(
@@ -86,7 +90,7 @@ void BluetoothDevice::ClearAttributeInstanceMapAndFireEvent() {
       *Event::CreateBubble(event_type_names::kGattserverdisconnected));
 }
 
-const WTF::AtomicString& BluetoothDevice::InterfaceName() const {
+const AtomicString& BluetoothDevice::InterfaceName() const {
   return event_target_names::kBluetoothDevice;
 }
 
@@ -98,21 +102,23 @@ void BluetoothDevice::Trace(Visitor* visitor) const {
   visitor->Trace(attribute_instance_map_);
   visitor->Trace(gatt_);
   visitor->Trace(bluetooth_);
+  visitor->Trace(world_);
   visitor->Trace(watch_advertisements_resolver_);
   visitor->Trace(client_receiver_);
-  EventTargetWithInlineData::Trace(visitor);
+  visitor->Trace(abort_handle_map_);
+  EventTarget::Trace(visitor);
   ExecutionContextClient::Trace(visitor);
 }
 
 // https://webbluetoothcg.github.io/web-bluetooth/#dom-bluetoothdevice-watchadvertisements
-ScriptPromise BluetoothDevice::watchAdvertisements(
+ScriptPromise<IDLUndefined> BluetoothDevice::watchAdvertisements(
     ScriptState* script_state,
     const WatchAdvertisementsOptions* options,
     ExceptionState& exception_state) {
   ExecutionContext* context = GetExecutionContext();
   if (!context) {
     exception_state.ThrowTypeError(kInactiveDocumentError);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   CHECK(context->IsSecureContext());
@@ -122,17 +128,21 @@ ScriptPromise BluetoothDevice::watchAdvertisements(
     // 1.1. If options.signal’s aborted flag is set, then abort
     // watchAdvertisements with this and abort these steps.
     if (options->signal()->aborted()) {
-      AbortWatchAdvertisements();
+      AbortWatchAdvertisements(options->signal());
       exception_state.ThrowDOMException(DOMExceptionCode::kAbortError,
                                         kAbortErrorMessage);
-      return ScriptPromise();
+      return EmptyPromise();
     }
 
     // 1.2. Add the following abort steps to options.signal:
     // 1.2.1. Abort watchAdvertisements with this.
     // 1.2.2. Reject promise with AbortError.
-    options->signal()->AddAlgorithm(WTF::Bind(
-        &BluetoothDevice::AbortWatchAdvertisements, WrapPersistent(this)));
+    if (!abort_handle_map_.Contains(options->signal())) {
+      auto* handle = options->signal()->AddAlgorithm(BindOnce(
+          &BluetoothDevice::AbortWatchAdvertisements, WrapWeakPersistent(this),
+          WrapWeakPersistent(options->signal())));
+      abort_handle_map_.insert(options->signal(), handle);
+    }
   }
 
   // 2. If this.[[watchAdvertisementsState]] is 'pending-watch':
@@ -140,13 +150,13 @@ ScriptPromise BluetoothDevice::watchAdvertisements(
     // 'pending-watch' 2.1. Reject promise with InvalidStateError.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kInvalidStateErrorMessage);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   // 2. If this.[[watchAdvertisementsState]] is 'watching':
   // 'watching' 2.1. Resolve promise with undefined.
   if (client_receiver_.is_bound() && !watch_advertisements_resolver_)
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
 
   // 2. If this.[[watchAdvertisementsState]] is 'not-watching':
   DCHECK(!client_receiver_.is_bound());
@@ -154,7 +164,8 @@ ScriptPromise BluetoothDevice::watchAdvertisements(
   // 'not-watching' 2.1. Set this.[[watchAdvertisementsState]] to
   // 'pending-watch'.
   watch_advertisements_resolver_ =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+          script_state, exception_state.GetContext());
   mojo::PendingAssociatedRemote<mojom::blink::WebBluetoothAdvertisementClient>
       client;
   client_receiver_.Bind(client.InitWithNewEndpointAndPassReceiver(),
@@ -165,13 +176,13 @@ ScriptPromise BluetoothDevice::watchAdvertisements(
   // the same device.
   bluetooth_->Service()->WatchAdvertisementsForDevice(
       device_->id, std::move(client),
-      WTF::Bind(&BluetoothDevice::WatchAdvertisementsCallback,
-                WrapPersistent(this)));
+      BindOnce(&BluetoothDevice::WatchAdvertisementsCallback,
+               WrapPersistent(this)));
   return watch_advertisements_resolver_->Promise();
 }
 
 // https://webbluetoothcg.github.io/web-bluetooth/#abort-watchadvertisements
-void BluetoothDevice::AbortWatchAdvertisements() {
+void BluetoothDevice::AbortWatchAdvertisements(AbortSignal* signal) {
   // 1. Set this.[[watchAdvertisementsState]] to 'not-watching'.
   // 2. Set device.watchingAdvertisements to false.
   // 3.1. If no more BluetoothDevices in the whole UA have
@@ -190,13 +201,37 @@ void BluetoothDevice::AbortWatchAdvertisements() {
         kAbortErrorMessage));
     watch_advertisements_resolver_.Clear();
   }
+
+  DCHECK(signal);
+  abort_handle_map_.erase(signal);
+}
+
+ScriptPromise<IDLUndefined> BluetoothDevice::forget(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
+  if (!GetExecutionContext()) {
+    exception_state.ThrowTypeError(kInactiveDocumentError);
+    return EmptyPromise();
+  }
+
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  bluetooth_->Service()->ForgetDevice(
+      device_->id, BindOnce(
+                       [](ScriptPromiseResolver<IDLUndefined>* resolver) {
+                         resolver->Resolve();
+                       },
+                       WrapPersistent(resolver)));
+
+  return promise;
 }
 
 void BluetoothDevice::AdvertisingEvent(
     mojom::blink::WebBluetoothAdvertisingEventPtr advertising_event) {
   auto* event = MakeGarbageCollected<BluetoothAdvertisingEvent>(
       event_type_names::kAdvertisementreceived, this,
-      std::move(advertising_event));
+      std::move(advertising_event), world_.Get());
   DispatchEvent(*event);
 }
 
@@ -207,8 +242,7 @@ bool BluetoothDevice::HasPendingActivity() const {
 void BluetoothDevice::AddedEventListener(
     const AtomicString& event_type,
     RegisteredEventListener& registered_listener) {
-  EventTargetWithInlineData::AddedEventListener(event_type,
-                                                registered_listener);
+  EventTarget::AddedEventListener(event_type, registered_listener);
   if (event_type == event_type_names::kGattserverdisconnected) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kGATTServerDisconnectedEvent);

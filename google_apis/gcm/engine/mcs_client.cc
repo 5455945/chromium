@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -40,10 +41,6 @@ const char kIdleNotification[] = "IdleNotification";
 // const char kPowerNotification[] = "PowerNotification";
 // const char kDataActiveNotification[] = "DataActiveNotification";
 
-// Settings for MCS Login packet.
-const char kHeartbeatIntervalSettingName[] = "hbping";
-const int kNoCustomHeartbeat = 0;
-
 // The number of unacked messages to allow before sending a stream ack.
 // Applies to both incoming and outgoing messages.
 // TODO(zea): make this server configurable.
@@ -56,7 +53,7 @@ const size_t kMaxSendQueueSize = 10 * 1024;
 const int kMaxMessageBytes = 4 * 1024;  // 4KB, like the server.
 
 // Helper for converting a proto persistent id list to a vector of strings.
-bool BuildPersistentIdListFromProto(const google::protobuf::string& bytes,
+bool BuildPersistentIdListFromProto(const std::string& bytes,
                                     std::vector<std::string>* id_list) {
   mcs_proto::SelectiveAck selective_ack;
   if (!selective_ack.ParseFromString(bytes))
@@ -130,10 +127,8 @@ struct ReliablePacketInfo {
   MCSProto protobuf;
 };
 
-ReliablePacketInfo::ReliablePacketInfo()
-  : stream_id(0), tag(0) {
-}
-ReliablePacketInfo::~ReliablePacketInfo() {}
+ReliablePacketInfo::ReliablePacketInfo() : stream_id(0), tag(0) {}
+ReliablePacketInfo::~ReliablePacketInfo() = default;
 
 int MCSClient::GetSendQueueSize() const {
   return to_send_.size();
@@ -144,7 +139,7 @@ int MCSClient::GetResendQueueSize() const {
 }
 
 std::string MCSClient::GetStateString() const {
-  switch(state_) {
+  switch (state_) {
     case UNINITIALIZED:
       return "UNINITIALIZED";
     case LOADED:
@@ -155,7 +150,6 @@ std::string MCSClient::GetStateString() const {
       return "CONNECTED";
   }
   NOTREACHED();
-  return std::string();
 }
 
 MCSClient::MCSClient(const std::string& version_string,
@@ -177,24 +171,22 @@ MCSClient::MCSClient(const std::string& version_string,
       stream_id_in_(0),
       gcm_store_(gcm_store),
       io_task_runner_(io_task_runner),
-      heartbeat_manager_(std::move(base::ThreadTaskRunnerHandle::Get()),
-                         std::move(io_task_runner)),
+      heartbeat_manager_(
+          std::move(base::SingleThreadTaskRunner::GetCurrentDefault()),
+          std::move(io_task_runner)),
       recorder_(recorder) {
   DCHECK(io_task_runner_);
 }
 
-MCSClient::~MCSClient() {
-}
+MCSClient::~MCSClient() = default;
 
 void MCSClient::Initialize(
-    const ErrorCallback& error_callback,
     const OnMessageReceivedCallback& message_received_callback,
     const OnMessageSentCallback& message_sent_callback,
     std::unique_ptr<GCMStore::LoadResult> load_result) {
   DCHECK_EQ(state_, UNINITIALIZED);
 
   state_ = LOADED;
-  mcs_error_callback_ = error_callback;
   message_received_callback_ = message_received_callback;
   message_sent_callback_ = message_sent_callback;
 
@@ -237,8 +229,6 @@ void MCSClient::Initialize(
     uint64_t timestamp = 0;
     if (!base::StringToUint64(iter->first, &timestamp)) {
       LOG(ERROR) << "Invalid restored message.";
-      // TODO(fgorski): Error: data unreadable
-      mcs_error_callback_.Run();
       return;
     }
 
@@ -279,12 +269,6 @@ void MCSClient::Initialize(
         collapse_key_map_[collapse_key] = packet_info_ptr;
     }
   }
-
-  // Establish if there is any custom client interval persisted from the last
-  // run and set it on the heartbeat manager.
-  custom_heartbeat_intervals_.swap(load_result->heartbeat_intervals);
-  int min_interval_ms = GetMinHeartbeatIntervalMs();
-  heartbeat_manager_.SetClientHeartbeatIntervalMs(min_interval_ms);
 }
 
 void MCSClient::Login(uint64_t android_id, uint64_t security_token) {
@@ -332,38 +316,41 @@ void MCSClient::SendMessage(const MCSMessage& message) {
         reinterpret_cast<mcs_proto::DataMessageStanza*>(
             packet_info->protobuf.get());
     CollapseKey collapse_key(*data_message);
-    if (collapse_key.IsValid() && collapse_key_map_.count(collapse_key) > 0) {
-      ReliablePacketInfo* original_packet = collapse_key_map_[collapse_key];
-      DVLOG(1) << "Found matching collapse key, Reusing persistent id of "
-               << original_packet->persistent_id;
-      original_packet->protobuf = std::move(packet_info->protobuf);
-      SetPersistentId(original_packet->persistent_id,
-                      original_packet->protobuf.get());
-      gcm_store_->OverwriteOutgoingMessage(
-          original_packet->persistent_id, message,
-          base::BindOnce(&MCSClient::OnGCMUpdateFinished,
-                         weak_ptr_factory_.GetWeakPtr()));
+    if (collapse_key.IsValid()) {
+      if (auto it = collapse_key_map_.find(collapse_key);
+          it != collapse_key_map_.end()) {
+        ReliablePacketInfo* original_packet = it->second;
+        DVLOG(1) << "Found matching collapse key, Reusing persistent id of "
+                 << original_packet->persistent_id;
+        original_packet->protobuf = std::move(packet_info->protobuf);
+        SetPersistentId(original_packet->persistent_id,
+                        original_packet->protobuf.get());
+        gcm_store_->OverwriteOutgoingMessage(
+            original_packet->persistent_id, message,
+            base::BindOnce(&MCSClient::OnGCMUpdateFinished,
+                           weak_ptr_factory_.GetWeakPtr()));
 
-      // The message is already queued, return.
-      return;
-    } else {
-      PersistentId persistent_id = GetNextPersistentId();
-      DVLOG(1) << "Setting persistent id to " << persistent_id;
-      packet_info->persistent_id = persistent_id;
-      SetPersistentId(persistent_id, packet_info->protobuf.get());
-      if (!gcm_store_->AddOutgoingMessage(
-              persistent_id,
-              MCSMessage(message.tag(), *(packet_info->protobuf)),
-              base::BindOnce(&MCSClient::OnGCMUpdateFinished,
-                             weak_ptr_factory_.GetWeakPtr()))) {
-        NotifyMessageSendStatus(message.GetProtobuf(),
-                                APP_QUEUE_SIZE_LIMIT_REACHED);
+        // The message is already queued, return.
         return;
       }
     }
 
-    if (collapse_key.IsValid())
+    PersistentId persistent_id = GetNextPersistentId();
+    DVLOG(1) << "Setting persistent id to " << persistent_id;
+    packet_info->persistent_id = persistent_id;
+    SetPersistentId(persistent_id, packet_info->protobuf.get());
+    if (!gcm_store_->AddOutgoingMessage(
+            persistent_id, MCSMessage(message.tag(), *(packet_info->protobuf)),
+            base::BindOnce(&MCSClient::OnGCMUpdateFinished,
+                           weak_ptr_factory_.GetWeakPtr()))) {
+      NotifyMessageSendStatus(message.GetProtobuf(),
+                              APP_QUEUE_SIZE_LIMIT_REACHED);
+      return;
+    }
+
+    if (collapse_key.IsValid()) {
       collapse_key_map_[collapse_key] = packet_info.get();
+    }
   } else if (!connection_factory_->IsEndpointReachable()) {
     DVLOG(1) << "No active connection, dropping message.";
     NotifyMessageSendStatus(message.GetProtobuf(), NO_CONNECTION_ON_ZERO_TTL);
@@ -377,51 +364,6 @@ void MCSClient::SendMessage(const MCSMessage& message) {
   NotifyMessageSendStatus(message.GetProtobuf(), QUEUED);
 
   MaybeSendMessage();
-}
-
-void MCSClient::UpdateHeartbeatTimer(
-    std::unique_ptr<base::RetainingOneShotTimer> timer) {
-  heartbeat_manager_.UpdateHeartbeatTimer(std::move(timer));
-}
-
-void MCSClient::AddHeartbeatInterval(const std::string& scope,
-                                     int interval_ms) {
-  if (!heartbeat_manager_.IsValidClientHeartbeatInterval(interval_ms))
-    return;
-
-  custom_heartbeat_intervals_[scope] = interval_ms;
-  gcm_store_->AddHeartbeatInterval(
-      scope, interval_ms,
-      base::BindOnce(&MCSClient::OnGCMUpdateFinished,
-                     weak_ptr_factory_.GetWeakPtr()));
-
-  int min_interval_ms = GetMinHeartbeatIntervalMs();
-  heartbeat_manager_.SetClientHeartbeatIntervalMs(min_interval_ms);
-}
-
-void MCSClient::RemoveHeartbeatInterval(const std::string& scope) {
-  custom_heartbeat_intervals_.erase(scope);
-  gcm_store_->RemoveHeartbeatInterval(
-      scope, base::BindOnce(&MCSClient::OnGCMUpdateFinished,
-                            weak_ptr_factory_.GetWeakPtr()));
-
-  int min_interval = GetMinHeartbeatIntervalMs();
-  heartbeat_manager_.SetClientHeartbeatIntervalMs(min_interval);
-}
-
-int MCSClient::GetMinHeartbeatIntervalMs() {
-  if (custom_heartbeat_intervals_.empty())
-    return kNoCustomHeartbeat;
-
-  int min_interval = custom_heartbeat_intervals_.begin()->second;
-  for (std::map<std::string, int>::const_iterator it =
-           custom_heartbeat_intervals_.begin();
-       it != custom_heartbeat_intervals_.end();
-       ++it) {
-    if (it->second < min_interval)
-      min_interval = it->second;
-  }
-  return min_interval;
 }
 
 void MCSClient::ResetStateAndBuildLoginRequest(
@@ -455,18 +397,8 @@ void MCSClient::ResetStateAndBuildLoginRequest(
   acked_server_ids_.clear();
 
   // Then build the request, consuming all pending acknowledgments.
-  request->Swap(BuildLoginRequest(android_id_,
-                                  security_token_,
-                                  version_string_).get());
-
-  // Set custom heartbeat interval if specified.
-  if (heartbeat_manager_.HasClientHeartbeatInterval()) {
-    // Ensure that the custom heartbeat interval is communicated to the server.
-    mcs_proto::Setting* setting = request->add_setting();
-    setting->set_name(kHeartbeatIntervalSettingName);
-    setting->set_value(base::NumberToString(
-        heartbeat_manager_.GetClientHeartbeatIntervalMs()));
-  }
+  request->Swap(
+      BuildLoginRequest(android_id_, security_token_, version_string_).get());
 
   for (PersistentIdList::const_iterator iter =
            restored_unackeds_server_ids_.begin();
@@ -524,7 +456,6 @@ void MCSClient::SendHeartbeat() {
 
 void MCSClient::OnGCMUpdateFinished(bool success) {
   LOG_IF(ERROR, !success) << "GCM Update failed!";
-  UMA_HISTOGRAM_BOOLEAN("GCM.StoreUpdateSucceeded", success);
   // TODO(zea): Rebuild the store from scratch in case of persistence failure?
 }
 
@@ -571,23 +502,20 @@ void MCSClient::SendPacketToWire(ReliablePacketInfo* packet_info) {
             packet_info->protobuf.get());
     uint64_t sent = data_message->sent();
     DCHECK_GT(sent, 0U);
-    int queued = (clock_->Now().ToInternalValue() /
-        base::Time::kMicrosecondsPerSecond) - sent;
+    int queued =
+        (clock_->Now().ToInternalValue() / base::Time::kMicrosecondsPerSecond) -
+        sent;
     DVLOG(1) << "Message was queued for " << queued << " seconds.";
     data_message->set_queued(queued);
-    recorder_->RecordDataSentToWire(
-        data_message->category(),
-        data_message->to(),
-        data_message->id(),
-        queued);
+    recorder_->RecordDataSentToWire(data_message->category(),
+                                    data_message->to(), data_message->id(),
+                                    queued);
   }
 
   // Set the proper last received stream id to acknowledge received server
   // packets.
-  DVLOG(1) << "Setting last stream id received to "
-           << stream_id_in_;
-  SetLastStreamIdReceived(stream_id_in_,
-                          packet_info->protobuf.get());
+  DVLOG(1) << "Setting last stream id received to " << stream_id_in_;
+  SetLastStreamIdReceived(stream_id_in_, packet_info->protobuf.get());
   if (stream_id_in_ != last_server_to_device_stream_id_received_) {
     last_server_to_device_stream_id_received_ = stream_id_in_;
     // Mark all acknowledged server messages as such. Note: they're not dropped,
@@ -617,7 +545,7 @@ void MCSClient::HandleMCSDataMesssage(
       new mcs_proto::DataMessageStanza());
   response->set_from(kGCMFromField);
   response->set_sent(clock_->Now().ToInternalValue() /
-                         base::Time::kMicrosecondsPerSecond);
+                     base::Time::kMicrosecondsPerSecond);
   response->set_ttl(0);
   bool send = false;
   for (int i = 0; i < data_message->app_data_size(); ++i) {
@@ -661,7 +589,8 @@ void MCSClient::HandlePacketFromWire(
     for (std::map<StreamId, PersistentIdList>::iterator iter =
              acked_server_ids_.begin();
          iter != acked_server_ids_.end() &&
-             iter->first <= last_stream_id_received; ++iter) {
+         iter->first <= last_stream_id_received;
+         ++iter) {
       acked_stream_ids_to_remove.push_back(iter->first);
     }
     for (StreamIdList::iterator iter = acked_stream_ids_to_remove.begin();
@@ -680,8 +609,8 @@ void MCSClient::HandlePacketFromWire(
 
   DVLOG(1) << "Received message of type " << protobuf->GetTypeName()
            << " with persistent id "
-           << (persistent_id.empty() ? "NULL" : persistent_id)
-           << ", stream id " << stream_id_in_ << " and last stream id received "
+           << (persistent_id.empty() ? "NULL" : persistent_id) << ", stream id "
+           << stream_id_in_ << " and last stream id received "
            << last_stream_id_received;
 
   if ((unacked_server_ids_.size() > 0 &&
@@ -708,7 +637,6 @@ void MCSClient::HandlePacketFromWire(
         LOG(ERROR) << "Failed to log in to GCM, resetting connection.";
         connection_factory_->SignalConnectionReset(
             ConnectionFactory::LOGIN_FAILURE);
-        mcs_error_callback_.Run();
         return;
       }
 
@@ -743,8 +671,7 @@ void MCSClient::HandlePacketFromWire(
     case kHeartbeatPingTag:
       DCHECK_GE(stream_id_in_, 1U);
       DVLOG(1) << "Received heartbeat ping, sending ack.";
-      SendMessage(
-          MCSMessage(kHeartbeatAckTag, mcs_proto::HeartbeatAck()));
+      SendMessage(MCSMessage(kHeartbeatAckTag, mcs_proto::HeartbeatAck()));
       return;
     case kHeartbeatAckTag:
       DCHECK_GE(stream_id_in_, 1U);
@@ -765,8 +692,7 @@ void MCSClient::HandlePacketFromWire(
       switch (iq_extension.id()) {
         case kSelectiveAck: {
           PersistentIdList acked_ids;
-          if (BuildPersistentIdListFromProto(iq_extension.data(),
-                                             &acked_ids)) {
+          if (BuildPersistentIdListFromProto(iq_extension.data(), &acked_ids)) {
             HandleSelectiveAck(acked_ids);
           }
           return;
@@ -836,7 +762,7 @@ void MCSClient::HandleSelectiveAck(const PersistentIdList& id_list) {
   // First check the to_resend_ queue. Acknowledgments are always contiguous,
   // so if there's a pending message that hasn't been acked, all newer messages
   // must also be unacked.
-  while(!to_resend_.empty() && !remaining_ids.empty()) {
+  while (!to_resend_.empty() && !remaining_ids.empty()) {
     const MCSPacketInternal& outgoing_packet = to_resend_.front();
     if (remaining_ids.count(outgoing_packet->persistent_id) == 0)
       break;  // Newer message must be unacked too.
@@ -886,8 +812,8 @@ void MCSClient::HandleSelectiveAck(const PersistentIdList& id_list) {
     acked_ids = id_list;
   }
 
-  DVLOG(1) << "Server acked " << acked_ids.size()
-           << " messages, " << to_resend_.size() << " remaining unacked.";
+  DVLOG(1) << "Server acked " << acked_ids.size() << " messages, "
+           << to_resend_.size() << " remaining unacked.";
   gcm_store_->RemoveOutgoingMessages(
       acked_ids, base::BindOnce(&MCSClient::OnGCMUpdateFinished,
                                 weak_ptr_factory_.GetWeakPtr()));
@@ -908,10 +834,8 @@ void MCSClient::HandleServerConfirmedReceipt(StreamId device_stream_id) {
   PersistentIdList acked_incoming_ids;
   for (std::map<StreamId, PersistentIdList>::iterator iter =
            acked_server_ids_.begin();
-       iter != acked_server_ids_.end() &&
-           iter->first <= device_stream_id;) {
-    acked_incoming_ids.insert(acked_incoming_ids.end(),
-                              iter->second.begin(),
+       iter != acked_server_ids_.end() && iter->first <= device_stream_id;) {
+    acked_incoming_ids.insert(acked_incoming_ids.end(), iter->second.begin(),
                               iter->second.end());
     acked_server_ids_.erase(iter++);
   }
@@ -929,6 +853,7 @@ MCSClient::PersistentId MCSClient::GetNextPersistentId() {
 
 void MCSClient::OnConnectionResetByHeartbeat(
     ConnectionFactory::ConnectionResetReason reason) {
+  DVLOG(1) << "Connection reset by heartbeat with reason: " << reason;
   connection_factory_->SignalConnectionReset(reason);
 }
 
@@ -941,17 +866,11 @@ void MCSClient::NotifyMessageSendStatus(
   const mcs_proto::DataMessageStanza* data_message_stanza =
       reinterpret_cast<const mcs_proto::DataMessageStanza*>(&protobuf);
   recorder_->RecordNotifySendStatus(
-      data_message_stanza->category(),
-      data_message_stanza->to(),
-      data_message_stanza->id(),
-      status,
-      protobuf.ByteSize(),
+      data_message_stanza->category(), data_message_stanza->to(),
+      data_message_stanza->id(), status, protobuf.ByteSizeLong(),
       data_message_stanza->ttl());
-  message_sent_callback_.Run(
-      data_message_stanza->device_user_id(),
-      data_message_stanza->category(),
-      data_message_stanza->id(),
-      status);
+  message_sent_callback_.Run(data_message_stanza->category(),
+                             data_message_stanza->id(), status);
 }
 
 MCSClient::MCSPacketInternal MCSClient::PopMessageForSend() {
@@ -969,4 +888,4 @@ MCSClient::MCSPacketInternal MCSClient::PopMessageForSend() {
   return packet;
 }
 
-} // namespace gcm
+}  // namespace gcm

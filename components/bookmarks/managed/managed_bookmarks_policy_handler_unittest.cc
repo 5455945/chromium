@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -78,7 +78,8 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, ApplyPolicySettings) {
                                     "      }"
                                     "    ]"
                                     "  }"
-                                    "]"),
+                                    "]",
+                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS),
              nullptr);
   UpdateProviderPolicy(policy);
   const base::Value* pref_value = nullptr;
@@ -87,16 +88,16 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, ApplyPolicySettings) {
 
   // Make sure the kManagedBookmarksFolderName pref is set correctly.
   const base::Value* folder_value = nullptr;
-  std::string folder_name;
   EXPECT_TRUE(
       store_->GetValue(prefs::kManagedBookmarksFolderName, &folder_value));
   ASSERT_TRUE(folder_value);
-  ASSERT_TRUE(folder_value->GetAsString(&folder_name));
-  EXPECT_EQ("abc 123", folder_name);
+  ASSERT_TRUE(folder_value->is_string());
+  EXPECT_EQ("abc 123", folder_value->GetString());
 
   // Note the protocols and ending slashes added to urls, which were not in the
   // value set earlier.
-  absl::optional<base::Value> expected = base::JSONReader::Read(R"(
+  std::optional<base::Value> expected =
+      base::JSONReader::Read(R"(
     [
       {
         "name": "Google",
@@ -129,7 +130,8 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, ApplyPolicySettings) {
         ]
       }
     ]
-  )");
+  )",
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_EQ(expected, *pref_value);
 }
 
@@ -144,7 +146,8 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, ApplyPolicySettingsNoTitle) {
                                     "    \"name\": \"Google\","
                                     "    \"url\": \"google.com\""
                                     "  }"
-                                    "]"),
+                                    "]",
+                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS),
              nullptr);
   UpdateProviderPolicy(policy);
   const base::Value* pref_value = nullptr;
@@ -153,30 +156,31 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, ApplyPolicySettingsNoTitle) {
 
   // Make sure the kManagedBookmarksFolderName pref is set correctly.
   const base::Value* folder_value = nullptr;
-  std::string folder_name;
   EXPECT_TRUE(
       store_->GetValue(prefs::kManagedBookmarksFolderName, &folder_value));
   ASSERT_TRUE(folder_value);
-  ASSERT_TRUE(folder_value->GetAsString(&folder_name));
-  EXPECT_EQ("", folder_name);
+  ASSERT_TRUE(folder_value->is_string());
+  EXPECT_EQ("", folder_value->GetString());
 
   // Note the protocol and ending slash added to url, which was not in the value
   // set earlier.
-  absl::optional<base::Value> expected = base::JSONReader::Read(R"(
+  std::optional<base::Value> expected =
+      base::JSONReader::Read(R"(
     [
       {
         "name": "Google",
         "url": "http://google.com/"
       }
     ]
-  )");
+  )",
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_EQ(expected, *pref_value);
 }
 
 TEST_F(ManagedBookmarksPolicyHandlerTest, WrongPolicyType) {
   PolicyMap policy;
-  // The expected type is base::ListValue, but this policy sets it as an
-  // unparsed base::Value. Any type other than ListValue should fail.
+  // The expected type is a list base::Value, but this policy sets it as an
+  // unparsed base::Value. Any type other than list should fail.
   policy.Set(kManagedBookmarks, policy::POLICY_LEVEL_MANDATORY,
              policy::POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
              base::Value("["
@@ -200,7 +204,8 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, UnknownKeys) {
                                     "    \"unknown\": \"should be ignored\","
                                     "    \"url\": \"google.com\""
                                     "  }"
-                                    "]"),
+                                    "]",
+                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS),
              nullptr);
   UpdateProviderPolicy(policy);
   const base::Value* pref_value = nullptr;
@@ -209,14 +214,16 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, UnknownKeys) {
 
   // Note the protocol and ending slash added to url, which was not in the value
   // set earlier.
-  absl::optional<base::Value> expected = base::JSONReader::Read(R"(
+  std::optional<base::Value> expected =
+      base::JSONReader::Read(R"(
     [
       {
         "name": "Google",
         "url": "http://google.com/"
       }
     ]
-  )");
+  )",
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_EQ(expected, *pref_value);
 }
 
@@ -241,7 +248,8 @@ TEST_F(ManagedBookmarksPolicyHandlerTest, BadBookmark) {
                                     "    \"name\": \"Google\","
                                     "    \"url\": \"google.com\""
                                     "  }"
-                                    "]"),
+                                    "]",
+                                    base::JSON_PARSE_CHROMIUM_EXTENSIONS),
              nullptr);
   UpdateProviderPolicy(policy);
   const base::Value* pref_value = nullptr;

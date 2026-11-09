@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.webapps;
 
-import android.annotation.TargetApi;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.app.ActivityManager;
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -16,21 +17,23 @@ import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.Icon;
-import android.os.Build;
+
+import org.jni_zero.CalledByNative;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
-import org.chromium.base.annotations.CalledByNative;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.widget.RoundedIconGenerator;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.url.GURL;
 
 /**
- * This class contains functions related to adding shortcuts to the Android Home
- * screen.  These shortcuts are used to either open a page in the main browser
- * or open a web app.
+ * This class contains functions related to adding shortcuts to the Android Home screen. These
+ * shortcuts are used to either open a page in the main browser or open a web app.
  */
+@NullMarked
 public class WebappsIconUtils {
     private static final String TAG = "WebappsIconUtils";
 
@@ -68,16 +71,20 @@ public class WebappsIconUtils {
 
     private static final float SHORTCUT_ICON_IDEAL_SIZE_DP = 48;
 
-    @TargetApi(Build.VERSION_CODES.O)
+    @CalledByNative
     public static Bitmap generateAdaptiveIconBitmap(Bitmap bitmap) {
         Bitmap padded = createHomeScreenIconFromWebIcon(bitmap, true);
         Icon adaptiveIcon = Icon.createWithAdaptiveBitmap(padded);
         AdaptiveIconDrawable adaptiveIconDrawable =
-                (AdaptiveIconDrawable) adaptiveIcon.loadDrawable(
-                        ContextUtils.getApplicationContext());
+                (AdaptiveIconDrawable)
+                        adaptiveIcon.loadDrawable(ContextUtils.getApplicationContext());
+        assumeNonNull(adaptiveIconDrawable);
 
-        Bitmap result = Bitmap.createBitmap(adaptiveIconDrawable.getIntrinsicWidth(),
-                adaptiveIconDrawable.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+        Bitmap result =
+                Bitmap.createBitmap(
+                        adaptiveIconDrawable.getIntrinsicWidth(),
+                        adaptiveIconDrawable.getIntrinsicHeight(),
+                        Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         adaptiveIconDrawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
         adaptiveIconDrawable.draw(canvas);
@@ -93,7 +100,6 @@ public class WebappsIconUtils {
      * @param maskable Whether the icon is suitable for creating an adaptive icon.
      * @return Bitmap Either the touch-icon or the newly created favicon.
      */
-    @CalledByNative
     public static Bitmap createHomeScreenIconFromWebIcon(Bitmap webIcon, boolean maskable) {
         // getLauncherLargeIconSize() is just a guess at the launcher icon size, and is often
         // wrong -- the launcher can show icons at any size it pleases. Instead of resizing the
@@ -136,8 +142,9 @@ public class WebappsIconUtils {
     }
 
     /**
-     * Returns the ideal size for an icon representing a web app.  This size is used on app banners,
+     * Returns the ideal size for an icon representing a web app. This size is used on app banners,
      * the Android Home screen, and in Android's recent tasks list, among other places.
+     *
      * @param context Context to pull resources from.
      * @return the dimensions in pixels which the icon should have.
      */
@@ -146,8 +153,9 @@ public class WebappsIconUtils {
     }
 
     /**
-     * Returns the minimum size for an icon representing a web app.  This size is used on app
+     * Returns the minimum size for an icon representing a web app. This size is used on app
      * banners, the Android Home screen, and in Android's recent tasks list, among other places.
+     *
      * @param context Context to pull resources from.
      * @return the lower bound of the size which the icon should have in pixels.
      */
@@ -161,6 +169,7 @@ public class WebappsIconUtils {
 
     /**
      * Returns the ideal size for an image displayed on a web app's splash screen.
+     *
      * @param context Context to pull resources from.
      * @return the dimensions in pixels which the image should have.
      */
@@ -170,6 +179,7 @@ public class WebappsIconUtils {
 
     /**
      * Returns the minimum size for an image displayed on a web app's splash screen.
+     *
      * @param context Context to pull resources from.
      * @return the lower bound of the size which the image should have in pixels.
      */
@@ -179,6 +189,7 @@ public class WebappsIconUtils {
 
     /**
      * Returns the ideal size for a monochrome icon of a WebAPK.
+     *
      * @param context Context to pull resources from.
      * @return the dimensions in pixels which the monochrome icon should have.
      */
@@ -188,6 +199,7 @@ public class WebappsIconUtils {
 
     /**
      * Returns the ideal size for an adaptive launcher icon of a WebAPK.
+     *
      * @param context Context to pull resources from.
      * @return the dimensions in pixels which the adaptive launcher icon should have.
      */
@@ -196,15 +208,20 @@ public class WebappsIconUtils {
     }
 
     /**
-     * Check the running Android version supports adaptive icon (i.e. API level >= 26)
+     * Returns the ideal size for prompt UI icon corner radius.
+     *
+     * @return the dimensions in pixels which the prompt UI should use as the corner radius.
      */
-    public static boolean doesAndroidSupportMaskableIcons() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
+    @CalledByNative
+    public static int getIdealIconCornerRadiusPxForPromptUi() {
+        Context context = ContextUtils.getApplicationContext();
+        return context.getResources().getDimensionPixelSize(R.dimen.webapk_prompt_ui_icon_radius);
     }
 
     /**
      * Returns whether the given icon matches the size requirements to be used on the home screen.
-     * @param width  Icon width, in pixels.
+     *
+     * @param width Icon width, in pixels.
      * @param height Icon height, in pixels.
      * @return whether the given icon matches the size requirements to be used on the home screen.
      */
@@ -217,17 +234,17 @@ public class WebappsIconUtils {
     }
 
     /**
-     * Generates a generic icon to be used in the launcher. This is just a rounded rectangle with
-     * a letter in the middle taken from the website's domain name.
+     * Generates a generic icon to be used in the launcher. This is just a rounded rectangle with a
+     * letter in the middle taken from the website's domain name.
      *
-     * @param url   URL of the shortcut.
-     * @param red   Red component of the dominant icon color.
+     * @param url URL of the shortcut.
+     * @param red Red component of the dominant icon color.
      * @param green Green component of the dominant icon color.
-     * @param blue  Blue component of the dominant icon color.
+     * @param blue Blue component of the dominant icon color.
      * @return Bitmap Either the touch-icon or the newly created favicon.
      */
     @CalledByNative
-    public static Bitmap generateHomeScreenIcon(GURL url, int red, int green, int blue) {
+    public static @Nullable Bitmap generateHomeScreenIcon(GURL url, int red, int green, int blue) {
         Context context = ContextUtils.getApplicationContext();
         ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         final int outerSize = am.getLauncherLargeIconSize();
@@ -259,7 +276,9 @@ public class WebappsIconUtils {
         RoundedIconGenerator generator =
                 new RoundedIconGenerator(innerSize, innerSize, cornerRadius, color, fontSize);
         Bitmap icon = generator.generateIconForUrl(url);
-        if (icon == null) return null; // Bookmark URL does not have a domain.
+        if (icon == null) {
+            icon = generator.generateIconForText("");
+        }
         canvas.drawBitmap(icon, padding, padding, null);
 
         return bitmap;
@@ -273,11 +292,15 @@ public class WebappsIconUtils {
     private static int[] getIconSizes() {
         Context context = ContextUtils.getApplicationContext();
         // This ordering must be kept up to date with the C++ WebappsIconUtils.
-        return new int[] {getIdealHomescreenIconSizeInPx(context),
-                getMinimumHomescreenIconSizeInPx(context), getIdealSplashImageSizeInPx(context),
-                getMinimumSplashImageSizeInPx(context), getIdealMonochromeIconSizeInPx(context),
-                getIdealAdaptiveLauncherIconSizeInPx(context),
-                ViewUtils.dpToPx(context, SHORTCUT_ICON_IDEAL_SIZE_DP)};
+        return new int[] {
+            getIdealHomescreenIconSizeInPx(context),
+            getMinimumHomescreenIconSizeInPx(context),
+            getIdealSplashImageSizeInPx(context),
+            getMinimumSplashImageSizeInPx(context),
+            getIdealMonochromeIconSizeInPx(context),
+            getIdealAdaptiveLauncherIconSizeInPx(context),
+            ViewUtils.dpToPx(context, SHORTCUT_ICON_IDEAL_SIZE_DP)
+        };
     }
 
     /**
@@ -289,7 +312,8 @@ public class WebappsIconUtils {
         int maxX = icon.getWidth() - 1;
         int maxY = icon.getHeight() - 1;
 
-        if ((Color.alpha(icon.getPixel(0, 0)) != 0) && (Color.alpha(icon.getPixel(maxX, maxY)) != 0)
+        if ((Color.alpha(icon.getPixel(0, 0)) != 0)
+                && (Color.alpha(icon.getPixel(maxX, maxY)) != 0)
                 && (Color.alpha(icon.getPixel(0, maxY)) != 0)
                 && (Color.alpha(icon.getPixel(maxX, 0)) != 0)) {
             return true;
@@ -310,6 +334,6 @@ public class WebappsIconUtils {
             return bd.getBitmap();
         }
         assert false : "The drawable was not a bitmap drawable as expected";
-        return null;
+        return assumeNonNull(null);
     }
 }

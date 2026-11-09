@@ -1,29 +1,34 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/installer/setup/setup_util_unittest.h"
 
-#include <shlobj.h>
 #include <windows.h>
 
+#include <shlobj.h>
+
+#include <algorithm>
 #include <ios>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/process/kill.h"
 #include "base/process/launch.h"
 #include "base/process/process_handle.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/task_environment.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
@@ -87,13 +92,53 @@ TEST(SetupUtilTest, GetMaxVersionFromArchiveDirTest) {
   ASSERT_EQ(version->GetString(), "9.9.9.9");
 }
 
+TEST(SetupUtilTest, CopyInitialPreferencesToTempDirOutlivesSource) {
+  base::ScopedTempDir source_dir;
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(source_dir.CreateUniqueTempDir());
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const base::FilePath prefs_path =
+      source_dir.GetPath().AppendASCII("installerdata.tmp");
+  constexpr char kPrefs[] = R"({"distribution":{"msi":false}})";
+  ASSERT_TRUE(base::WriteFile(prefs_path, kPrefs));
+
+  const base::FilePath prefs_copy = installer::CopyInitialPreferencesToTempDir(
+      prefs_path, temp_dir.GetPath());
+  ASSERT_TRUE(base::DeleteFile(prefs_path));
+
+  EXPECT_EQ(prefs_copy, temp_dir.GetPath().Append(prefs_path.BaseName()));
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(prefs_copy, &contents));
+  EXPECT_EQ(contents, kPrefs);
+}
+
+TEST(SetupUtilTest, CopyInitialPreferencesToTempDirKeepsEmptyPath) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  EXPECT_EQ(installer::CopyInitialPreferencesToTempDir(base::FilePath(),
+                                                       temp_dir.GetPath()),
+            base::FilePath());
+}
+
+TEST(SetupUtilTest, CopyInitialPreferencesToTempDirKeepsPathOnFailure) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const base::FilePath missing_path =
+      temp_dir.GetPath().AppendASCII("missing").AppendASCII("installerdata");
+
+  EXPECT_EQ(installer::CopyInitialPreferencesToTempDir(missing_path,
+                                                       temp_dir.GetPath()),
+            missing_path);
+}
+
 TEST(SetupUtilTest, DeleteFileFromTempProcess) {
   base::ScopedTempDir test_dir;
   ASSERT_TRUE(test_dir.CreateUniqueTempDir());
   base::FilePath test_file;
   base::CreateTemporaryFileInDir(test_dir.GetPath(), &test_file);
   ASSERT_TRUE(base::PathExists(test_file));
-  base::WriteFile(test_file, "foo", 3);
+  base::WriteFile(test_file, "foo");
   EXPECT_TRUE(installer::DeleteFileFromTempProcess(test_file, 0));
   base::PlatformThread::Sleep(TestTimeouts::tiny_timeout() * 3);
   EXPECT_FALSE(base::PathExists(test_file)) << test_file.value();
@@ -134,10 +179,10 @@ TEST(SetupUtilTest, RegisterEventLogProvider) {
             key.Open(HKEY_LOCAL_MACHINE, reg_path.c_str(), KEY_READ));
 }
 
-const char kAdjustProcessPriority[] = "adjust-process-priority";
+const char kAdjustThreadPriority[] = "adjust-thread-priority";
 
-PriorityClassChangeResult DoProcessPriorityAdjustment() {
-  return installer::AdjustProcessPriority() ? PCCR_CHANGED : PCCR_UNCHANGED;
+PriorityClassChangeResult DoThreadPriorityAdjustment() {
+  return installer::AdjustThreadPriority() ? PCCR_CHANGED : PCCR_UNCHANGED;
 }
 
 namespace {
@@ -148,12 +193,15 @@ class ScopedPriorityClass {
   // Applies |priority_class|, returning an instance if a change was made.
   // Otherwise, returns an empty scoped_ptr.
   static std::unique_ptr<ScopedPriorityClass> Create(DWORD priority_class);
+
+  ScopedPriorityClass(const ScopedPriorityClass&) = delete;
+  ScopedPriorityClass& operator=(const ScopedPriorityClass&) = delete;
+
   ~ScopedPriorityClass();
 
  private:
   explicit ScopedPriorityClass(DWORD original_priority_class);
   DWORD original_priority_class_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedPriorityClass);
 };
 
 std::unique_ptr<ScopedPriorityClass> ScopedPriorityClass::Create(
@@ -181,9 +229,9 @@ ScopedPriorityClass::~ScopedPriorityClass() {
   EXPECT_NE(FALSE, result);
 }
 
-PriorityClassChangeResult RelaunchAndDoProcessPriorityAdjustment() {
+PriorityClassChangeResult RelaunchAndDoThreadPriorityAdjustment() {
   base::CommandLine cmd_line(*base::CommandLine::ForCurrentProcess());
-  cmd_line.AppendSwitch(kAdjustProcessPriority);
+  cmd_line.AppendSwitch(kAdjustThreadPriority);
   base::Process process = base::LaunchProcess(cmd_line, base::LaunchOptions());
   int exit_code = 0;
   if (!process.IsValid()) {
@@ -207,7 +255,7 @@ TEST(SetupUtilTest, AdjustFromNormalPriority) {
                  << std::hex << priority_class;
     return;
   }
-  EXPECT_EQ(PCCR_UNCHANGED, RelaunchAndDoProcessPriorityAdjustment());
+  EXPECT_EQ(PCCR_UNCHANGED, RelaunchAndDoThreadPriorityAdjustment());
 }
 
 // Launching a subprocess below normal priority class drops it to bg mode for
@@ -219,7 +267,7 @@ TEST(SetupUtilTest, AdjustFromBelowNormalPriority) {
     below_normal = ScopedPriorityClass::Create(BELOW_NORMAL_PRIORITY_CLASS);
     ASSERT_TRUE(below_normal);
   }
-  EXPECT_EQ(PCCR_CHANGED, RelaunchAndDoProcessPriorityAdjustment());
+  EXPECT_EQ(PCCR_CHANGED, RelaunchAndDoThreadPriorityAdjustment());
 }
 
 TEST(SetupUtilTest, GetInstallAge) {
@@ -241,16 +289,15 @@ TEST(SetupUtilTest, GetInstallAge) {
       FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
       OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-  ASSERT_TRUE(dir.IsValid());
+  ASSERT_TRUE(dir.is_valid());
 
   FILE_BASIC_INFO info = {};
-  ASSERT_NE(0, ::GetFileInformationByHandleEx(dir.Get(), FileBasicInfo, &info,
+  ASSERT_NE(0, ::GetFileInformationByHandleEx(dir.get(), FileBasicInfo, &info,
                                               sizeof(info)));
-  FILETIME creation_time =
-      (now - base::TimeDelta::FromDays(kAgeDays)).ToFileTime();
+  FILETIME creation_time = (now - base::Days(kAgeDays)).ToFileTime();
   info.CreationTime.u.LowPart = creation_time.dwLowDateTime;
   info.CreationTime.u.HighPart = creation_time.dwHighDateTime;
-  ASSERT_NE(0, ::SetFileInformationByHandle(dir.Get(), FileBasicInfo, &info,
+  ASSERT_NE(0, ::SetFileInformationByHandle(dir.get(), FileBasicInfo, &info,
                                             sizeof(info)));
 
   EXPECT_EQ(kAgeDays, installer::GetInstallAge(installer_state));
@@ -259,16 +306,17 @@ TEST(SetupUtilTest, GetInstallAge) {
 TEST(SetupUtilTest, RecordUnPackMetricsTest) {
   base::HistogramTester histogram_tester;
   std::string unpack_status_metrics_name =
-      std::string(installer::kUnPackStatusMetricsName) + "_SetupExePatch";
+      std::string(installer::kUnPackStatusMetricsName) +
+      "_UncompressedChromeArchive";
   histogram_tester.ExpectTotalCount(unpack_status_metrics_name, 0);
 
   RecordUnPackMetrics(UnPackStatus::UNPACK_NO_ERROR,
-                      installer::UnPackConsumer::SETUP_EXE_PATCH);
+                      installer::UnPackConsumer::UNCOMPRESSED_CHROME_ARCHIVE);
   histogram_tester.ExpectTotalCount(unpack_status_metrics_name, 1);
   histogram_tester.ExpectBucketCount(unpack_status_metrics_name, 0, 1);
 
   RecordUnPackMetrics(UnPackStatus::UNPACK_EXTRACT_ERROR,
-                      installer::UnPackConsumer::SETUP_EXE_PATCH);
+                      installer::UnPackConsumer::UNCOMPRESSED_CHROME_ARCHIVE);
   histogram_tester.ExpectTotalCount(unpack_status_metrics_name, 2);
   histogram_tester.ExpectBucketCount(unpack_status_metrics_name, 4, 1);
 }
@@ -368,181 +416,11 @@ TEST(SetupUtilTest, DeleteDowngradeVersion) {
   ASSERT_FALSE(InstallUtil::GetDowngradeVersion());
 }
 
-namespace {
-
-// A test fixture that configures an InstallationState and an InstallerState
-// with a product being updated.
-class FindArchiveToPatchTest : public testing::Test {
- protected:
-  class FakeInstallationState : public installer::InstallationState {};
-
-  class FakeProductState : public installer::ProductState {
-   public:
-    static FakeProductState* FromProductState(const ProductState* product) {
-      return static_cast<FakeProductState*>(const_cast<ProductState*>(product));
-    }
-
-    void set_version(const base::Version& version) {
-      if (version.IsValid())
-        version_ = std::make_unique<base::Version>(version);
-      else
-        version_.reset();
-    }
-
-    void set_uninstall_command(const base::CommandLine& uninstall_command) {
-      uninstall_command_ = uninstall_command;
-    }
-  };
-
-  FindArchiveToPatchTest() {}
-
-  void SetUp() override {
-    ASSERT_TRUE(test_dir_.CreateUniqueTempDir());
-    ASSERT_NO_FATAL_FAILURE(
-        registry_override_manager_.OverrideRegistry(HKEY_CURRENT_USER));
-    ASSERT_NO_FATAL_FAILURE(
-        registry_override_manager_.OverrideRegistry(HKEY_LOCAL_MACHINE));
-    product_version_ = base::Version("30.0.1559.0");
-    max_version_ = base::Version("47.0.1559.0");
-
-    // Install the product according to the version.
-    original_state_ = std::make_unique<FakeInstallationState>();
-    InstallProduct();
-
-    // Prepare to update the product in the temp dir.
-    installer_state_ = std::make_unique<installer::InstallerState>(
-        kSystemInstall_ ? installer::InstallerState::SYSTEM_LEVEL
-                        : installer::InstallerState::USER_LEVEL);
-    installer_state_->set_target_path_for_testing(test_dir_.GetPath());
-
-    // Create archives in the two version dirs.
-    ASSERT_TRUE(
-        base::CreateDirectory(GetProductVersionArchivePath().DirName()));
-    ASSERT_EQ(1, base::WriteFile(GetProductVersionArchivePath(), "a", 1));
-    ASSERT_TRUE(base::CreateDirectory(GetMaxVersionArchivePath().DirName()));
-    ASSERT_EQ(1, base::WriteFile(GetMaxVersionArchivePath(), "b", 1));
-  }
-
-  void TearDown() override { original_state_.reset(); }
-
-  base::FilePath GetArchivePath(const base::Version& version) const {
-    return test_dir_.GetPath()
-        .AppendASCII(version.GetString())
-        .Append(installer::kInstallerDir)
-        .Append(installer::kChromeArchive);
-  }
-
-  base::FilePath GetMaxVersionArchivePath() const {
-    return GetArchivePath(max_version_);
-  }
-
-  base::FilePath GetProductVersionArchivePath() const {
-    return GetArchivePath(product_version_);
-  }
-
-  void InstallProduct() {
-    FakeProductState* product = FakeProductState::FromProductState(
-        original_state_->GetNonVersionedProductState(kSystemInstall_));
-
-    product->set_version(product_version_);
-    base::CommandLine uninstall_command(
-        test_dir_.GetPath()
-            .AppendASCII(product_version_.GetString())
-            .Append(installer::kInstallerDir)
-            .Append(installer::kSetupExe));
-    uninstall_command.AppendSwitch(installer::switches::kUninstall);
-    product->set_uninstall_command(uninstall_command);
-  }
-
-  void UninstallProduct() {
-    FakeProductState::FromProductState(
-        original_state_->GetNonVersionedProductState(kSystemInstall_))
-        ->set_version(base::Version());
-  }
-
-  static const bool kSystemInstall_;
-  base::ScopedTempDir test_dir_;
-  base::Version product_version_;
-  base::Version max_version_;
-  std::unique_ptr<FakeInstallationState> original_state_;
-  std::unique_ptr<installer::InstallerState> installer_state_;
-
- private:
-  registry_util::RegistryOverrideManager registry_override_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(FindArchiveToPatchTest);
-};
-
-const bool FindArchiveToPatchTest::kSystemInstall_ = false;
-
-}  // namespace
-
-// Test that the path to the advertised product version is found.
-TEST_F(FindArchiveToPatchTest, ProductVersionFound) {
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version()));
-  EXPECT_EQ(GetProductVersionArchivePath().value(), patch_source.value());
-}
-
-// Test that the path to the max version is found if the advertised version is
-// missing.
-TEST_F(FindArchiveToPatchTest, MaxVersionFound) {
-  // The patch file is absent.
-  ASSERT_TRUE(base::DeleteFile(GetProductVersionArchivePath()));
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version()));
-  EXPECT_EQ(GetMaxVersionArchivePath().value(), patch_source.value());
-
-  // The product doesn't appear to be installed, so the max version is found.
-  UninstallProduct();
-  patch_source = installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version());
-  EXPECT_EQ(GetMaxVersionArchivePath().value(), patch_source.value());
-}
-
-// Test that an empty path is returned if no version is found.
-TEST_F(FindArchiveToPatchTest, NoVersionFound) {
-  // The product doesn't appear to be installed and no archives are present.
-  UninstallProduct();
-  ASSERT_TRUE(base::DeleteFile(GetProductVersionArchivePath()));
-  ASSERT_TRUE(base::DeleteFile(GetMaxVersionArchivePath()));
-
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version()));
-  EXPECT_EQ(base::FilePath::StringType(), patch_source.value());
-}
-
-TEST_F(FindArchiveToPatchTest, DesiredVersionFound) {
-  base::FilePath patch_source1(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, product_version_));
-  EXPECT_EQ(GetProductVersionArchivePath().value(), patch_source1.value());
-  base::FilePath patch_source2(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, max_version_));
-  EXPECT_EQ(GetMaxVersionArchivePath().value(), patch_source2.value());
-}
-
-TEST_F(FindArchiveToPatchTest, DesiredVersionNotFound) {
-  base::FilePath patch_source(installer::FindArchiveToPatch(
-      *original_state_, *installer_state_, base::Version("1.2.3.4")));
-  EXPECT_EQ(base::FilePath().value(), patch_source.value());
-}
-
 TEST(SetupUtilTest, ContainsUnsupportedSwitch) {
   EXPECT_FALSE(installer::ContainsUnsupportedSwitch(
       base::CommandLine::FromString(L"foo.exe")));
   EXPECT_TRUE(installer::ContainsUnsupportedSwitch(
       base::CommandLine::FromString(L"foo.exe --chrome-frame")));
-}
-
-TEST(SetupUtilTest, GetRegistrationDataCommandKey) {
-  const std::wstring key = installer::GetCommandKey(L"test_name");
-  EXPECT_TRUE(base::EndsWith(key, L"\\Commands\\test_name",
-                             base::CompareCase::SENSITIVE));
-}
-
-TEST(SetupUtilTest, GetConsoleSessionStartTime) {
-  base::Time start_time = installer::GetConsoleSessionStartTime();
-  EXPECT_FALSE(start_time.is_null());
 }
 
 TEST(SetupUtilTest, DecodeDMTokenSwitchValue) {
@@ -552,8 +430,7 @@ TEST(SetupUtilTest, DecodeDMTokenSwitchValue) {
   EXPECT_FALSE(installer::DecodeDMTokenSwitchValue(L"not-base64-string"));
 
   std::string token("this is a token");
-  std::string encoded;
-  base::Base64Encode(token, &encoded);
+  std::string encoded = base::Base64Encode(token);
   EXPECT_EQ(token,
             *installer::DecodeDMTokenSwitchValue(base::UTF8ToWide(encoded)));
 }
@@ -571,9 +448,7 @@ TEST(SetupUtilTest, StoreDMTokenToRegistrySuccess) {
   ASSERT_EQ(kExpectedSize, token.length());
   EXPECT_TRUE(installer::StoreDMToken(token));
 
-  base::win::RegKey key;
-  std::wstring name;
-  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+  auto [key, name] = InstallUtil::GetCloudManagementDmTokenLocation(
       InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
   ASSERT_TRUE(key.Valid());
 
@@ -584,7 +459,8 @@ TEST(SetupUtilTest, StoreDMTokenToRegistrySuccess) {
             key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
   EXPECT_EQ(REG_BINARY, dtype);
   ASSERT_EQ(kExpectedSize, size);
-  EXPECT_EQ(0, memcmp(token.data(), raw_value.data(), kExpectedSize));
+  EXPECT_EQ(std::string_view(token.data(), kExpectedSize),
+            std::string_view(raw_value.data(), kExpectedSize));
 
   std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
       InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
@@ -595,18 +471,147 @@ TEST(SetupUtilTest, StoreDMTokenToRegistrySuccess) {
             key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
   EXPECT_EQ(REG_BINARY, dtype);
   ASSERT_EQ(kExpectedSize, size);
-  EXPECT_EQ(0, memcmp(token.data(), raw_value.data(), kExpectedSize));
+  EXPECT_EQ(std::string_view(token.data(), kExpectedSize),
+            std::string_view(raw_value.data(), kExpectedSize));
 }
 
 TEST(SetupUtilTest, StoreDMTokenToRegistryShouldFailWhenDMTokenTooLarge) {
   install_static::ScopedInstallDetails scoped_install_details(true);
   registry_util::RegistryOverrideManager registry_override_manager;
-  registry_override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE);
+  ASSERT_NO_FATAL_FAILURE(
+      registry_override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE));
 
   std::string token_too_large(installer::kMaxDMTokenLength + 1, 'x');
   ASSERT_GT(token_too_large.size(), installer::kMaxDMTokenLength);
 
   EXPECT_FALSE(installer::StoreDMToken(token_too_large));
+}
+
+TEST(SetupUtilTest, DeleteDMTokenFromRegistrySuccess) {
+  install_static::ScopedInstallDetails scoped_install_details(true);
+  registry_util::RegistryOverrideManager registry_override_manager;
+  registry_override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE);
+
+  // Store the DMToken and confirm that it can be found in the registry.
+  static constexpr char kTokenData[] = "tokens are \0 binary data";
+  static constexpr DWORD kExpectedSize = sizeof(kTokenData) - 1;
+  std::string token(&kTokenData[0], kExpectedSize);
+  ASSERT_TRUE(installer::StoreDMToken(token));
+
+  auto [key, name] = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
+  ASSERT_TRUE(key.Valid());
+  ASSERT_TRUE(key.HasValue(name.c_str()));
+  DWORD size = kExpectedSize;
+  std::vector<char> raw_value(size);
+  DWORD dtype;
+  ASSERT_EQ(ERROR_SUCCESS,
+            key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
+  ASSERT_TRUE(key.Valid());
+  ASSERT_TRUE(key.HasValue(name.c_str()));
+  ASSERT_EQ(ERROR_SUCCESS,
+            key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
+
+  // Delete the DMToken from registry and confirm that the corresponding value
+  // can no longer be found. Since no other values were stored in the key, the
+  // key is also deleted.
+  ASSERT_TRUE(installer::DeleteDMToken());
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
+  ASSERT_FALSE(key.Valid());
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
+  ASSERT_FALSE(key.Valid());
+}
+
+TEST(SetupUtilTest, DeleteDMTokenFromRegistryWhenValueNotFound) {
+  install_static::ScopedInstallDetails scoped_install_details(true);
+  registry_util::RegistryOverrideManager registry_override_manager;
+  registry_override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE);
+
+  // Store an unrelated value in the registry.
+  auto [key, name] = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(false), InstallUtil::BrowserLocation(false));
+  ASSERT_TRUE(key.Valid());
+  auto result = key.WriteValue(L"unrelated_value", L"unrelated_data");
+  ASSERT_EQ(ERROR_SUCCESS, result);
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(false), InstallUtil::BrowserLocation(true));
+  ASSERT_TRUE(key.Valid());
+  result = key.WriteValue(L"unrelated_value", L"unrelated_data");
+  ASSERT_EQ(ERROR_SUCCESS, result);
+
+  // Validate that the DMToken value is not found in the registry.
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
+  ASSERT_TRUE(key.Valid());
+  ASSERT_FALSE(key.HasValue(name.c_str()));
+  DWORD size = 0;
+  std::vector<char> raw_value(size);
+  DWORD dtype;
+  ASSERT_EQ(ERROR_FILE_NOT_FOUND,
+            key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
+  ASSERT_TRUE(key.Valid());
+  ASSERT_FALSE(key.HasValue(name.c_str()));
+  ASSERT_EQ(ERROR_FILE_NOT_FOUND,
+            key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
+
+  // DMToken deletion is treated as successful if the value is not found.
+  ASSERT_TRUE(installer::DeleteDMToken());
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
+  ASSERT_TRUE(key.Valid());
+  ASSERT_FALSE(key.HasValue(name.c_str()));
+  ASSERT_EQ(ERROR_FILE_NOT_FOUND,
+            key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
+  ASSERT_TRUE(key.Valid());
+  ASSERT_FALSE(key.HasValue(name.c_str()));
+  ASSERT_EQ(ERROR_FILE_NOT_FOUND,
+            key.ReadValue(name.c_str(), raw_value.data(), &size, &dtype));
+}
+
+TEST(SetupUtilTest, DeleteDMTokenFromRegistryWhenKeyNotFound) {
+  install_static::ScopedInstallDetails scoped_install_details(true);
+  registry_util::RegistryOverrideManager registry_override_manager;
+  registry_override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE);
+
+  // Validate that the key is not found in the registry.
+  auto [key, name] = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
+  ASSERT_FALSE(key.Valid());
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
+  ASSERT_FALSE(key.Valid());
+
+  // DMToken deletion is treated as successful if the key is not found.
+  ASSERT_TRUE(installer::DeleteDMToken());
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(false));
+  ASSERT_FALSE(key.Valid());
+
+  std::tie(key, name) = InstallUtil::GetCloudManagementDmTokenLocation(
+      InstallUtil::ReadOnly(true), InstallUtil::BrowserLocation(true));
+  ASSERT_FALSE(key.Valid());
+}
+
+TEST(SetupUtilTest, WerHelperRegPath) {
+  // Must return a valid regpath, never an empty string.
+  ASSERT_FALSE(installer::GetWerHelperRegistryPath().empty());
 }
 
 namespace installer {
@@ -729,13 +734,10 @@ TEST_F(DeleteRegistryKeyPartialTest, NonEmptyKeyWithPreserve) {
   {
     base::win::RegistryKeyIterator it(root_, path_.c_str());
     ASSERT_EQ(to_preserve_.size(), it.SubkeyCount());
+    std::wstring (*to_lower)(std::wstring_view) = &base::ToLowerASCII;
     for (; it.Valid(); ++it) {
-      ASSERT_NE(to_preserve_.end(),
-                std::find_if(to_preserve_.begin(), to_preserve_.end(),
-                             [&it](const std::wstring& key_name) {
-                               return base::ToLowerASCII(it.Name()) ==
-                                      base::ToLowerASCII(key_name);
-                             }))
+      ASSERT_TRUE(std::ranges::contains(
+          to_preserve_, base::ToLowerASCII(it.Name()), to_lower))
           << it.Name();
     }
   }
@@ -748,6 +750,10 @@ TEST_F(DeleteRegistryKeyPartialTest, NonEmptyKeyWithPreserve) {
 }
 
 class LegacyCleanupsTest : public ::testing::Test {
+ public:
+  LegacyCleanupsTest(const LegacyCleanupsTest&) = delete;
+  LegacyCleanupsTest& operator=(const LegacyCleanupsTest&) = delete;
+
  protected:
   LegacyCleanupsTest() = default;
   void SetUp() override {
@@ -757,19 +763,23 @@ class LegacyCleanupsTest : public ::testing::Test {
     installer_state_ =
         std::make_unique<FakeInstallerState>(temp_dir_.GetPath());
     // Create the state to be cleared.
+    ASSERT_TRUE(
+        base::win::RegKey(HKEY_CURRENT_USER,
+                          GetAppCommandPath(L"rename-chrome-exe").c_str(),
+                          KEY_WRITE | KEY_WOW64_32KEY)
+            .Valid());
+#if !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
     ASSERT_TRUE(base::win::RegKey(HKEY_CURRENT_USER, kBinariesClientsKeyPath,
                                   KEY_WRITE | KEY_WOW64_32KEY)
                     .Valid());
-    ASSERT_TRUE(base::win::RegKey(HKEY_CURRENT_USER, kCommandExecuteImplClsid,
-                                  KEY_WRITE)
-                    .Valid());
+#endif
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
     ASSERT_TRUE(base::win::RegKey(HKEY_CURRENT_USER, kAppLauncherClientsKeyPath,
                                   KEY_WRITE | KEY_WOW64_32KEY)
                     .Valid());
     ASSERT_TRUE(
         base::win::RegKey(HKEY_CURRENT_USER,
-                          GetChromeAppCommandPath(L"install-extension").c_str(),
+                          GetAppCommandPath(L"install-extension").c_str(),
                           KEY_WRITE | KEY_WOW64_32KEY)
             .Valid());
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -777,17 +787,20 @@ class LegacyCleanupsTest : public ::testing::Test {
 
   const InstallerState& installer_state() const { return *installer_state_; }
 
+  bool HasObsoleteRenameChromeCommand() const {
+    return base::win::RegKey(HKEY_CURRENT_USER,
+                             GetAppCommandPath(L"rename-chrome-exe").c_str(),
+                             KEY_QUERY_VALUE | KEY_WOW64_32KEY)
+        .Valid();
+  }
+
+#if !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
   bool HasBinariesVersionKey() const {
     return base::win::RegKey(HKEY_CURRENT_USER, kBinariesClientsKeyPath,
                              KEY_QUERY_VALUE | KEY_WOW64_32KEY)
         .Valid();
   }
-
-  bool HasCommandExecuteImplClassKey() const {
-    return base::win::RegKey(HKEY_CURRENT_USER, kCommandExecuteImplClsid,
-                             KEY_QUERY_VALUE)
-        .Valid();
-  }
+#endif  // !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   bool HasAppLauncherVersionKey() const {
@@ -797,10 +810,9 @@ class LegacyCleanupsTest : public ::testing::Test {
   }
 
   bool HasInstallExtensionCommand() const {
-    return base::win::RegKey(
-               HKEY_CURRENT_USER,
-               GetChromeAppCommandPath(L"install-extension").c_str(),
-               KEY_QUERY_VALUE | KEY_WOW64_32KEY)
+    return base::win::RegKey(HKEY_CURRENT_USER,
+                             GetAppCommandPath(L"install-extension").c_str(),
+                             KEY_QUERY_VALUE | KEY_WOW64_32KEY)
         .Valid();
   }
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -818,17 +830,14 @@ class LegacyCleanupsTest : public ::testing::Test {
     }
   };
 
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  std::wstring GetChromeAppCommandPath(const wchar_t* command) const {
-    return std::wstring(
-               L"SOFTWARE\\Google\\Update\\Clients\\"
-               L"{8A69D345-D564-463c-AFF1-A69D9E530F96}\\Commands\\") +
-           command;
+  std::wstring GetAppCommandPath(const wchar_t* command) const {
+    return base::StrCat({install_static::GetClientsKeyPath(), L"\\",
+                         google_update::kRegCommandsKey, L"\\", command});
   }
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
+#if !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
   static const wchar_t kBinariesClientsKeyPath[];
-  static const wchar_t kCommandExecuteImplClsid[];
+#endif
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   static const wchar_t kAppLauncherClientsKeyPath[];
 #endif
@@ -836,43 +845,43 @@ class LegacyCleanupsTest : public ::testing::Test {
   base::ScopedTempDir temp_dir_;
   registry_util::RegistryOverrideManager registry_override_manager_;
   std::unique_ptr<FakeInstallerState> installer_state_;
-  DISALLOW_COPY_AND_ASSIGN(LegacyCleanupsTest);
 };
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 const wchar_t LegacyCleanupsTest::kBinariesClientsKeyPath[] =
     L"SOFTWARE\\Google\\Update\\Clients\\"
     L"{4DC8B4CA-1BDA-483e-B5FA-D3C12E15B62D}";
-const wchar_t LegacyCleanupsTest::kCommandExecuteImplClsid[] =
-    L"Software\\Classes\\CLSID\\{5C65F4B0-3651-4514-B207-D10CB699B14B}";
 const wchar_t LegacyCleanupsTest::kAppLauncherClientsKeyPath[] =
     L"SOFTWARE\\Google\\Update\\Clients\\"
     L"{FDA71E6F-AC4C-4a00-8B70-9958A68906BF}";
-#else   // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#elif BUILDFLAG(CHROMIUM_BRANDING) && \
+    !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
 const wchar_t LegacyCleanupsTest::kBinariesClientsKeyPath[] =
     L"SOFTWARE\\Chromium Binaries";
-const wchar_t LegacyCleanupsTest::kCommandExecuteImplClsid[] =
-    L"Software\\Classes\\CLSID\\{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}";
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 TEST_F(LegacyCleanupsTest, NoOpOnFailedUpdate) {
   DoLegacyCleanups(installer_state(), INSTALL_FAILED);
+  EXPECT_TRUE(HasObsoleteRenameChromeCommand());
+#if !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
   EXPECT_TRUE(HasBinariesVersionKey());
-  EXPECT_TRUE(HasCommandExecuteImplClassKey());
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_TRUE(HasAppLauncherVersionKey());
   EXPECT_TRUE(HasInstallExtensionCommand());
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
 }
 
 TEST_F(LegacyCleanupsTest, Do) {
   DoLegacyCleanups(installer_state(), NEW_VERSION_UPDATED);
+  EXPECT_FALSE(HasObsoleteRenameChromeCommand());
+#if !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
   EXPECT_FALSE(HasBinariesVersionKey());
-  EXPECT_FALSE(HasCommandExecuteImplClassKey());
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   EXPECT_FALSE(HasAppLauncherVersionKey());
   EXPECT_FALSE(HasInstallExtensionCommand());
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
 }
 
 }  // namespace installer

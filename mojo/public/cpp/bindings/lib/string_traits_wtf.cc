@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/bindings/string_traits_wtf.h"
+
+#include <string_view>
 
 #include "base/strings/string_util.h"
 #include "mojo/public/cpp/bindings/string_data_view.h"
@@ -10,37 +12,27 @@
 namespace mojo {
 
 // static
-void StringTraits<WTF::String>::SetToNull(WTF::String* output) {
-  if (output->IsNull())
+void StringTraits<blink::String>::SetToNull(blink::String* output) {
+  if (output->IsNull()) {
     return;
+  }
 
-  WTF::String result;
+  blink::String result;
   output->swap(result);
 }
 
 // static
-WTF::StringUTF8Adaptor StringTraits<WTF::String>::GetUTF8(
-    const WTF::String& input) {
-  return WTF::StringUTF8Adaptor(input);
+blink::StringUtf8Adaptor StringTraits<blink::String>::GetUTF8(
+    const blink::String& input) {
+  return blink::StringUtf8Adaptor(input);
 }
 
 // static
-bool StringTraits<WTF::String>::Read(StringDataView input,
-                                     WTF::String* output) {
-  WTF::String result = WTF::String::FromUTF8(input.storage(), input.size());
+bool StringTraits<blink::String>::Read(StringDataView input,
+                                       blink::String* output) {
+  blink::String result = blink::String::FromUtf8(input.value());
   output->swap(result);
   return true;
-}
-
-// static
-bool StringTraits<WTF::String>::IsValidUTF8(const WTF::String& value) {
-  if (value.IsNull())
-    return true;
-  if (!value.Is8Bit())
-    return false;
-  base::span<const LChar> data = value.Span8();
-  return base::IsStringUTF8(base::StringPiece(
-      reinterpret_cast<const char*>(data.data()), data.size()));
 }
 
 }  // namespace mojo

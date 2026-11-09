@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <stdint.h>
 
 #include "base/command_line.h"
-#include "base/stl_util.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_unittest.h"
@@ -33,7 +32,6 @@ class GLES2DecoderTestWithBlendEquationAdvanced : public GLES2DecoderTest {
     init.has_depth = true;
     init.request_alpha = true;
     init.request_depth = true;
-    init.bind_generates_resource = true;
     init.extensions = "GL_KHR_blend_equation_advanced";
     InitDecoder(init);
   }
@@ -41,27 +39,6 @@ class GLES2DecoderTestWithBlendEquationAdvanced : public GLES2DecoderTest {
 
 INSTANTIATE_TEST_SUITE_P(Service,
                          GLES2DecoderTestWithBlendEquationAdvanced,
-                         ::testing::Bool());
-
-class GLES2DecoderTestWithCHROMIUMFramebufferMixedSamples
-    : public GLES2DecoderTest {
- public:
-  GLES2DecoderTestWithCHROMIUMFramebufferMixedSamples() = default;
-  void SetUp() override {
-    InitState init;
-    init.gl_version = "OpenGL ES 3.1";
-    init.has_alpha = true;
-    init.has_depth = true;
-    init.request_alpha = true;
-    init.request_depth = true;
-    init.bind_generates_resource = true;
-    init.extensions = "GL_NV_framebuffer_mixed_samples ";
-    InitDecoder(init);
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(Service,
-                         GLES2DecoderTestWithCHROMIUMFramebufferMixedSamples,
                          ::testing::Bool());
 
 class GLES3DecoderTestWithEXTWindowRectangles : public GLES3DecoderTest {
@@ -75,7 +52,6 @@ class GLES3DecoderTestWithEXTWindowRectangles : public GLES3DecoderTest {
     init.has_depth = true;
     init.request_alpha = true;
     init.request_depth = true;
-    init.bind_generates_resource = true;
     init.extensions = "GL_EXT_window_rectangles";
     InitDecoder(init);
   }
@@ -97,6 +73,39 @@ TEST_P(GLES3DecoderTestWithEXTWindowRectangles,
   EXPECT_CALL(*gl_, WindowRectanglesEXT(GL_EXCLUSIVE_EXT, 0, nullptr));
   cmd.Init(GL_INCLUSIVE_EXT, 2, &temp[0]);
   EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(temp)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+}
+
+class GLES2DecoderTestWithANGLETrimMemory : public GLES2DecoderTest {
+ public:
+  GLES2DecoderTestWithANGLETrimMemory() = default;
+  void SetUp() override {
+    InitState init;
+    init.context_type = CONTEXT_TYPE_WEBGL1;
+    init.gl_version = "OpenGL ES 2.0";
+    init.has_alpha = true;
+    init.has_depth = true;
+    init.request_alpha = true;
+    init.request_depth = true;
+    init.extensions = "GL_ANGLE_trim_memory";
+    InitDecoder(init);
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(Service,
+                         GLES2DecoderTestWithANGLETrimMemory,
+                         ::testing::Bool());
+
+TEST_P(GLES2DecoderTestWithANGLETrimMemory, ContextVisibilityHintTrimsMemory) {
+  cmds::ContextVisibilityHintCHROMIUM cmd;
+
+  EXPECT_CALL(*gl_, TrimMemoryANGLE(_)).Times(0);
+  cmd.Init(GL_TRUE);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+
+  EXPECT_CALL(*gl_, TrimMemoryANGLE(GL_MEMORY_TRIM_HIGH_ANGLE)).Times(1);
+  cmd.Init(GL_FALSE);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,8 +25,7 @@ CastWebUI::CastWebUI(content::WebUI* webui,
   DCHECK(web_contents_);
   DCHECK(browser_context_);
   weak_this_ = weak_factory_.GetWeakPtr();
-  webui->SetBindings(content::BINDINGS_POLICY_MOJO_WEB_UI |
-                     content::BINDINGS_POLICY_WEB_UI);
+  webui->SetBindings(content::kWebUIBindingsPolicySet);
   auto cast_resources =
       std::make_unique<CastResourceDataSource>(host, true /* for_webui */);
   client->CreateController(host, web_ui_.BindNewPipeAndPassRemote(),
@@ -52,11 +51,11 @@ CastWebUI::CastWebUI(content::WebUI* webui,
 CastWebUI::~CastWebUI() {}
 
 void CastWebUI::InvokeCallback(const std::string& message,
-                               const base::ListValue* args) {
+                               const base::ListValue& args) {
   if (message_callbacks_.count(message) == 0) {
     return;
   }
-  message_callbacks_[message]->OnMessage(args->Clone());
+  message_callbacks_[message]->OnMessage(args.Clone());
 }
 
 void CastWebUI::RegisterMessageCallback(
@@ -69,8 +68,9 @@ void CastWebUI::RegisterMessageCallback(
 }
 
 void CastWebUI::CallJavascriptFunction(const std::string& function,
-                                       std::vector<base::Value> args) {
-  message_handler_->CallJavascriptFunction(function, std::move(args));
+                                       base::ListValue args) {
+  message_handler_->CallJavascriptFunction(
+      function, std::vector<base::ValueView>(args.begin(), args.end()));
 }
 
 }  // namespace chromecast

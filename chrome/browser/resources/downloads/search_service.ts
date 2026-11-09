@@ -1,22 +1,21 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
-import {BrowserProxy} from './browser_proxy.js';
-import {PageHandlerInterface} from './downloads.mojom-webui.js';
+import {browserProxyFactory} from './downloads.mojom-webui.js';
+import type {BrowserProxy} from './downloads.mojom-webui.js';
 
 export class SearchService {
-  private searchTerms_: Array<string> = [];
-  private mojoHandler_: PageHandlerInterface =
-      BrowserProxy.getInstance().handler;
+  private searchTerms_: string[] = [];
+  private browserProxy_: BrowserProxy = browserProxyFactory.getInstance();
 
   /**
    * @param searchText Input typed by the user into a search box.
    * @return A list of terms extracted from |searchText|.
    */
-  static splitTerms(searchText: string): Array<string> {
+  static splitTerms(searchText: string): string[] {
     // Split quoted terms (e.g., 'The "lazy" dog' => ['The', 'lazy', 'dog']).
     return searchText.split(/"([^"]*)"/).map(s => s.trim()).filter(s => !!s);
   }
@@ -24,14 +23,14 @@ export class SearchService {
   /** Instructs the browser to clear all finished downloads. */
   clearAll() {
     if (loadTimeData.getBoolean('allowDeletingHistory')) {
-      this.mojoHandler_.clearAll();
+      this.browserProxy_.handler.clearAll();
       this.search('');
     }
   }
 
   /** Loads more downloads with the current search terms. */
   loadMore() {
-    this.mojoHandler_.getDownloads(this.searchTerms_);
+    this.browserProxy_.handler.getDownloads(this.searchTerms_);
   }
 
   /**

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,16 +14,25 @@
 #include <string.h>
 #include <uuid/uuid.h>
 
+#include <string>
+
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/common/chrome_paths.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
 namespace {
+
+std::string GetRustParamName(const testing::TestParamInfo<bool>& info) {
+  return info.param ? "Rust" : "Cpp";
+}
 
 // Definitions from
 // <http://opensource.apple.com/source/xnu/xnu-2782.1.97/bsd/sys/codesign.h>.
@@ -68,7 +77,13 @@ struct CodeSigningDirectory {
   uint32_t teamOffset;
 };
 
-class MachOImageReaderTest : public testing::Test {
+class MachOImageReaderTest : public testing::TestWithParam<bool> {
+ public:
+  MachOImageReaderTest() {
+    scoped_feature_list_.InitWithFeatureState(kSafeBrowsingRustDmgParser,
+                                              GetParam());
+  }
+
  protected:
   void OpenTestFile(const char* file_name, base::MemoryMappedFile* file) {
     base::FilePath test_data;
@@ -127,13 +142,16 @@ class MachOImageReaderTest : public testing::Test {
     ASSERT_TRUE(base::HexStringToBytes(expected, &expected_hash));
     EXPECT_EQ(expected_hash, actual_hash);
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-TEST_F(MachOImageReaderTest, Executable32) {
+TEST_P(MachOImageReaderTest, Executable32) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("executable32", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_FALSE(reader.Is64Bit());
@@ -156,11 +174,11 @@ TEST_F(MachOImageReaderTest, Executable32) {
   EXPECT_EQ(0x10000u, actual->dylib.compatibility_version);
 }
 
-TEST_F(MachOImageReaderTest, Executable64) {
+TEST_P(MachOImageReaderTest, Executable64) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("executable64", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_TRUE(reader.Is64Bit());
@@ -174,11 +192,11 @@ TEST_F(MachOImageReaderTest, Executable64) {
   EXPECT_TRUE(signature.empty());
 }
 
-TEST_F(MachOImageReaderTest, ExecutableFat) {
+TEST_P(MachOImageReaderTest, ExecutableFat) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("executablefat", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_TRUE(reader.IsFat());
   auto images = reader.GetFatImages();
@@ -223,11 +241,11 @@ TEST_F(MachOImageReaderTest, ExecutableFat) {
   }
 }
 
-TEST_F(MachOImageReaderTest, ExecutablePPC) {
+TEST_P(MachOImageReaderTest, ExecutablePPC) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("executableppc", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_FALSE(reader.Is64Bit());
@@ -240,11 +258,11 @@ TEST_F(MachOImageReaderTest, ExecutablePPC) {
   EXPECT_TRUE(signature.empty());
 }
 
-TEST_F(MachOImageReaderTest, Dylib32) {
+TEST_P(MachOImageReaderTest, Dylib32) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("lib32.dylib", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_FALSE(reader.Is64Bit());
@@ -257,11 +275,11 @@ TEST_F(MachOImageReaderTest, Dylib32) {
   EXPECT_TRUE(signature.empty());
 }
 
-TEST_F(MachOImageReaderTest, Dylib64) {
+TEST_P(MachOImageReaderTest, Dylib64) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("lib64.dylib", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_TRUE(reader.Is64Bit());
@@ -288,11 +306,11 @@ TEST_F(MachOImageReaderTest, Dylib64) {
                             command.as_command<uuid_command>()->uuid));
 }
 
-TEST_F(MachOImageReaderTest, DylibFat) {
+TEST_P(MachOImageReaderTest, DylibFat) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("libfat.dylib", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_TRUE(reader.IsFat());
   auto images = reader.GetFatImages();
@@ -323,11 +341,11 @@ TEST_F(MachOImageReaderTest, DylibFat) {
   }
 }
 
-TEST_F(MachOImageReaderTest, SignedExecutable32) {
+TEST_P(MachOImageReaderTest, SignedExecutable32) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("signedexecutable32", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_FALSE(reader.Is64Bit());
@@ -347,11 +365,11 @@ TEST_F(MachOImageReaderTest, SignedExecutable32) {
                           "11fb88eb63c10dfc3d24a2545ea2a9c50c2921b5");
 }
 
-TEST_F(MachOImageReaderTest, SignedExecutableFat) {
+TEST_P(MachOImageReaderTest, SignedExecutableFat) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("signedexecutablefat", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_TRUE(reader.IsFat());
   auto images = reader.GetFatImages();
@@ -396,11 +414,11 @@ TEST_F(MachOImageReaderTest, SignedExecutableFat) {
   }
 }
 
-TEST_F(MachOImageReaderTest, SignedDylib64) {
+TEST_P(MachOImageReaderTest, SignedDylib64) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("libsigned64.dylib", &file));
   MachOImageReader reader;
-  ASSERT_TRUE(reader.Initialize(file.data(), file.length()));
+  ASSERT_TRUE(reader.Initialize(file.bytes()));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_TRUE(reader.Is64Bit());
@@ -421,14 +439,14 @@ TEST_F(MachOImageReaderTest, SignedDylib64) {
                           "8b1c79b60bb53a7f17b5618d5feb10dc8b88d806");
 }
 
-TEST_F(MachOImageReaderTest, NotMachO) {
+TEST_P(MachOImageReaderTest, NotMachO) {
   base::MemoryMappedFile file;
   ASSERT_NO_FATAL_FAILURE(OpenTestFile("src.c", &file));
   MachOImageReader reader;
-  EXPECT_FALSE(reader.Initialize(file.data(), file.length()));
+  EXPECT_FALSE(reader.Initialize(file.bytes()));
 }
 
-TEST_F(MachOImageReaderTest, IsMachOMagicValue) {
+TEST_P(MachOImageReaderTest, IsMachOMagicValue) {
   static const uint32_t kMagics[] = { MH_MAGIC, MH_MAGIC, FAT_MAGIC };
   for (uint32_t magic : kMagics) {
     SCOPED_TRACE(base::StringPrintf("0x%x", magic));
@@ -437,8 +455,8 @@ TEST_F(MachOImageReaderTest, IsMachOMagicValue) {
   }
 }
 
-// https://crbug.com/524044
-TEST_F(MachOImageReaderTest, CmdsizeSmallerThanLoadCommand) {
+// https://crbug.com/40432691
+TEST_P(MachOImageReaderTest, CmdsizeSmallerThanLoadCommand) {
 #pragma pack(push, 1)
   struct TestImage {
     mach_header_64 header;
@@ -458,7 +476,7 @@ TEST_F(MachOImageReaderTest, CmdsizeSmallerThanLoadCommand) {
 
   test_image.page_zero.cmd = LC_SEGMENT;
   test_image.page_zero.cmdsize = sizeof(test_image.page_zero);
-  strcpy(test_image.page_zero.segname, SEG_PAGEZERO);
+  UNSAFE_TODO(strcpy(test_image.page_zero.segname, SEG_PAGEZERO));
   test_image.page_zero.vmsize = PAGE_SIZE;
 
   test_image.small_sized.cmd = LC_SYMSEG;
@@ -466,11 +484,10 @@ TEST_F(MachOImageReaderTest, CmdsizeSmallerThanLoadCommand) {
 
   test_image.fake_code.cmd = LC_SEGMENT;
   test_image.fake_code.cmdsize = sizeof(test_image.fake_code);
-  strcpy(test_image.fake_code.segname, SEG_TEXT);
+  UNSAFE_TODO(strcpy(test_image.fake_code.segname, SEG_TEXT));
 
   MachOImageReader reader;
-  EXPECT_TRUE(reader.Initialize(reinterpret_cast<const uint8_t*>(&test_image),
-                                sizeof(test_image)));
+  EXPECT_TRUE(reader.Initialize(base::byte_span_from_ref(test_image)));
 
   EXPECT_FALSE(reader.IsFat());
   EXPECT_TRUE(reader.Is64Bit());
@@ -484,8 +501,8 @@ TEST_F(MachOImageReaderTest, CmdsizeSmallerThanLoadCommand) {
   EXPECT_EQ(static_cast<uint32_t>(LC_SEGMENT), load_commands[2].cmd());
 }
 
-// https://crbug.com/591194
-TEST_F(MachOImageReaderTest, RecurseFatHeader) {
+// https://crbug.com/40459221
+TEST_P(MachOImageReaderTest, RecurseFatHeader) {
 #pragma pack(push, 1)
   struct TestImage {
     fat_header header;
@@ -508,9 +525,13 @@ TEST_F(MachOImageReaderTest, RecurseFatHeader) {
   test_image.macho.magic = MH_MAGIC;
 
   MachOImageReader reader;
-  EXPECT_FALSE(reader.Initialize(reinterpret_cast<const uint8_t*>(&test_image),
-                                 sizeof(test_image)));
+  EXPECT_FALSE(reader.Initialize(base::byte_span_from_ref(test_image)));
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         MachOImageReaderTest,
+                         testing::Bool(),
+                         GetRustParamName);
 
 }  // namespace
 }  // namespace safe_browsing

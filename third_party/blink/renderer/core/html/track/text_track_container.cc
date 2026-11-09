@@ -30,6 +30,7 @@
 #include "third_party/blink/renderer/core/html/track/text_track_container.h"
 
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/track/cue_timeline.h"
 #include "third_party/blink/renderer/core/html/track/text_track.h"
@@ -102,14 +103,9 @@ void TextTrackContainer::RemovedFrom(ContainerNode& insertion_point) {
   }
 }
 
-LayoutObject* TextTrackContainer::CreateLayoutObject(const ComputedStyle&,
-                                                     LegacyLayout) {
-  // TODO(mstensho): Should use LayoutObjectFactory to create the right type of
-  // object here, to enable LayoutNG, but currently we can't, because this will
-  // typically be a child of LayoutVideo (a legacy type), and we'll typically
-  // also insert a LayoutVTTCue (a LayoutBlockFlow type) child, which also isn't
-  // implemented in NG.
-  return new LayoutBlockFlow(this);
+LayoutObject* TextTrackContainer::CreateLayoutObject(
+    const ComputedStyle& style) {
+  return MakeGarbageCollected<LayoutBlockFlow>(this);
 }
 
 void TextTrackContainer::ObserveSizeChanges(Element& element) {
@@ -121,18 +117,20 @@ void TextTrackContainer::ObserveSizeChanges(Element& element) {
 
 void TextTrackContainer::UpdateDefaultFontSize(
     LayoutObject* media_layout_object) {
-  if (!media_layout_object || !IsA<LayoutVideo>(media_layout_object))
+  const LayoutVideo* video = DynamicTo<LayoutVideo>(media_layout_object);
+  if (!video) {
     return;
+  }
   // FIXME: The video size is used to calculate the font size (a workaround
   // for lack of per-spec vh/vw support) but the whole media element is used
   // for cue rendering. This is inconsistent. See also the somewhat related
   // spec bug: https://www.w3.org/Bugs/Public/show_bug.cgi?id=28105
-  LayoutSize video_size = To<LayoutBox>(media_layout_object)->ContentSize();
-  LayoutUnit smallest_dimension =
-      std::min(video_size.Height(), video_size.Width());
+  const PhysicalSize video_size = video->PhysicalContentBoxRect().size;
+  LayoutUnit smallest_dimension = std::min(video_size.height, video_size.width);
   float font_size = smallest_dimension * 0.05f;
-  if (media_layout_object->GetFrame())
-    font_size /= media_layout_object->GetFrame()->PageZoomFactor();
+  if (const LocalFrame* frame = video->GetFrame()) {
+    font_size /= frame->LayoutZoomFactor();
+  }
 
   // Avoid excessive FP precision issue.
   // C11 5.2.4.2.2:9 requires assignment and cast to remove extra precision, but
@@ -170,20 +168,23 @@ void TextTrackContainer::UpdateDisplay(HTMLMediaElement& media_element,
 
   // Note: This is a layout algorithm, expressed terms of appending CSS block
   // boxes to output, and the "apply WebVTT cue settings" part is implemented
-  // in LayoutVTTCue. Here we merely create the DOM tree from which the layout
-  // tree is built and append it to this TextTrackContainer.
+  // in VttCueLayoutAlgorithm. Here we merely create the DOM tree from which
+  // the layout tree is built and append it to this TextTrackContainer.
 
   // 4. If the user agent is exposing a user interface for video, add to
   // output one or more completely transparent positioned CSS block boxes that
   // cover the same region as the user interface.
 
-  // Note: Overlap checking for the controls is implemented in LayoutVTTCue
-  // without a placeholder box (element or layout object).
+  // Note: Overlap checking for the controls is implemented in
+  // VttCueLayoutAlgorithm without a placeholder box (element or layout object).
 
   // 5. If the last time these rules were run, the user agent was not exposing
   // a user interface for video, but now it is, optionally let reset be true.
   // Otherwise, let reset be false.
-  bool reset = exposing_controls == kDidStartExposingControls;
+  //
+  // We also reset when controls stop being exposed (kDidStopExposingControls)
+  // so that cue positions are recalculated to use the reclaimed space.
+  bool reset = exposing_controls != kDidNotStartExposingControls;
 
   // 6. Let tracks be the subset of video's list of text tracks that have as
   // their rules for updating the text track rendering these rules for
@@ -192,7 +193,9 @@ void TextTrackContainer::UpdateDisplay(HTMLMediaElement& media_element,
   // 7. Let cues be an empty list of text track cues.
   // 8. For each track track in tracks, append to cues all the cues from
   // track's list of cues that have their text track cue active flag set.
-  const CueList& active_cues = video.GetCueTimeline().CurrentlyActiveCues();
+  // Note: Copy the list so that synchronous script (e.g. blur events on
+  // reparenting display boxes) cannot invalidate the iteration buffer.
+  const CueList active_cues = video.GetCueTimeline().CurrentlyActiveCues();
 
   // 9. If reset is false, then, for each text track cue cue in cues: if cue's
   // text track cue display state has a set of CSS boxes, then add those boxes
@@ -208,14 +211,21 @@ void TextTrackContainer::UpdateDisplay(HTMLMediaElement& media_element,
   // corresponding CSS boxes added to output, in text track cue order, run the
   // following substeps:
   double movie_time = video.currentTime();
-  for (const auto& active_cue : active_cues) {
-    TextTrackCue* cue = active_cue.Data();
-
-    DCHECK(cue->IsActive());
-    if (!cue->track() || !cue->track()->IsRendered() || !cue->IsActive())
+  for (const auto& cue : active_cues) {
+    // Cues may have been deactivated or removed if synchronous script ran
+    // during a previous iteration (e.g., via video.load() or
+    // track.removeCue()).
+    if (!cue->IsActive() || !cue->track() || !cue->track()->IsRendered()) {
       continue;
+    }
 
     cue->UpdateDisplay(*this);
+
+    // Recheck IsActive() in case UpdateDisplay() synchronously ran script
+    // that deactivated cues.
+    if (!cue->IsActive()) {
+      continue;
+    }
     cue->UpdatePastAndFutureNodes(movie_time);
   }
 

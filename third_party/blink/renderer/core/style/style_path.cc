@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,52 +9,37 @@
 #include <utility>
 
 #include "third_party/blink/renderer/core/css/css_path_value.h"
-#include "third_party/blink/renderer/core/svg/svg_path_byte_stream.h"
 #include "third_party/blink/renderer/core/svg/svg_path_utilities.h"
-#include "third_party/blink/renderer/platform/graphics/path.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/geometry/path_builder.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
-StylePath::StylePath(std::unique_ptr<SVGPathByteStream> path_byte_stream,
-                     WindRule wind_rule)
-    : byte_stream_(std::move(path_byte_stream)),
-      path_length_(std::numeric_limits<float>::quiet_NaN()),
-      wind_rule_(wind_rule) {
-  DCHECK(byte_stream_);
-}
-
-StylePath::~StylePath() = default;
-
-scoped_refptr<StylePath> StylePath::Create(
-    std::unique_ptr<SVGPathByteStream> path_byte_stream,
-    WindRule wind_rule) {
-  return base::AdoptRef(new StylePath(std::move(path_byte_stream), wind_rule));
-}
-
 const StylePath* StylePath::EmptyPath() {
-  DEFINE_STATIC_REF(StylePath, empty_path,
-                    StylePath::Create(std::make_unique<SVGPathByteStream>()));
-  return empty_path;
+  DEFINE_STATIC_LOCAL(Persistent<StylePath>, empty_path,
+                      (MakeGarbageCollected<StylePath>(SVGPathByteStream())));
+  CHECK(IsMainThread());
+  return empty_path.Get();
 }
 
-const Path& StylePath::GetPath() const {
+const Path& StylePath::GetUnzoomedPath() const {
   if (!path_) {
-    path_ = std::make_unique<Path>();
-    BuildPathFromByteStream(*byte_stream_, *path_);
+    path_ = BuildPathFromByteStream(byte_stream_, wind_rule_);
   }
   return *path_;
 }
 
 float StylePath::length() const {
-  if (std::isnan(path_length_))
-    path_length_ = GetPath().length();
+  if (std::isnan(path_length_)) {
+    path_length_ = GetUnzoomedPath().length();
+  }
   return path_length_;
 }
 
 bool StylePath::IsClosed() const {
-  return GetPath().IsClosed();
+  return GetUnzoomedPath().IsClosed();
 }
 
 CSSValue* StylePath::ComputedCSSValue() const {
@@ -62,17 +47,24 @@ CSSValue* StylePath::ComputedCSSValue() const {
       const_cast<StylePath*>(this), kTransformToAbsolute);
 }
 
-bool StylePath::operator==(const BasicShape& o) const {
-  if (!IsSameType(o))
-    return false;
+bool StylePath::IsEqualAssumingSameType(const BasicShape& o) const {
   const StylePath& other = To<StylePath>(o);
-  return wind_rule_ == other.wind_rule_ && *byte_stream_ == *other.byte_stream_;
+  return wind_rule_ == other.wind_rule_ && byte_stream_ == other.byte_stream_;
 }
 
-void StylePath::GetPath(Path& path, const FloatRect& offset_rect, float zoom) {
-  path = GetPath();
-  path.Transform(AffineTransform::Translation(offset_rect.X(), offset_rect.Y())
-                     .Scale(zoom));
+Path StylePath::GetPath(const gfx::RectF& offset_rect,
+                        float zoom,
+                        float path_scale) const {
+  const Path& path = GetUnzoomedPath();
+  // Apply `path_scale` after zoom and the offset from the reference box. The
+  // reference box is assumed to have zoom applied.
+  const AffineTransform transform =
+      AffineTransform::MakeScale(path_scale)
+          .Translate(offset_rect.x(), offset_rect.y())
+          .Scale(zoom);
+  return transform.IsIdentity()
+             ? path
+             : PathBuilder(path).Transform(transform).Finalize();
 }
 
 }  // namespace blink

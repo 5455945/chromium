@@ -1,10 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/global_media_controls/media_notification_device_monitor.h"
+
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_device_provider.h"
@@ -53,14 +53,14 @@ TEST_F(PollingDeviceMonitorImplTest, DeviceChangeNotifiesObserver) {
   provider.device_descriptions.emplace_back("1", "1", "1");
   EXPECT_CALL(observer, OnDevicesChanged).Times(1);
   monitor.StartMonitoring();
-  task_environment.FastForwardBy(base::TimeDelta::FromSeconds(
+  task_environment.FastForwardBy(base::Seconds(
       PollingDeviceMonitorImpl::get_polling_interval_for_testing()));
 
   // When the monitor polls a second time, the observer should not be notified
   // as the list of devices hasn't changed.
   testing::Mock::VerifyAndClearExpectations(&observer);
   EXPECT_CALL(observer, OnDevicesChanged).Times(0);
-  task_environment.FastForwardBy(base::TimeDelta::FromSeconds(
+  task_environment.FastForwardBy(base::Seconds(
       PollingDeviceMonitorImpl::get_polling_interval_for_testing()));
   testing::Mock::VerifyAndClearExpectations(&observer);
 }

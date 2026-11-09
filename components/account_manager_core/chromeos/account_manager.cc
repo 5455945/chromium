@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,38 +6,40 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/hash/sha1.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/account_manager_core/account.h"
 #include "components/account_manager_core/chromeos/tokens.pb.h"
-#include "components/account_manager_core/pref_names.h"
-#include "components/prefs/pref_registry_simple.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "google_apis/gaia/gaia_access_token_fetcher.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/protobuf/src/google/protobuf/message_lite.h"
 
 namespace account_manager {
@@ -80,41 +82,36 @@ void RecordInitializationTime(
 }
 
 // Returns `nullopt` if `account_type` is `ACCOUNT_TYPE_UNSPECIFIED`.
-absl::optional<::account_manager::AccountType> FromProtoAccountType(
+std::optional<::account_manager::AccountType> FromProtoAccountType(
     const internal::AccountType& account_type) {
   switch (account_type) {
     case internal::AccountType::ACCOUNT_TYPE_UNSPECIFIED:
-      return absl::nullopt;
+      return std::nullopt;
     case internal::AccountType::ACCOUNT_TYPE_GAIA:
       static_assert(
           static_cast<int>(internal::AccountType::ACCOUNT_TYPE_GAIA) ==
               static_cast<int>(::account_manager::AccountType::kGaia),
           "Underlying enum values must match");
       return ::account_manager::AccountType::kGaia;
-    case internal::AccountType::ACCOUNT_TYPE_ACTIVE_DIRECTORY:
-      static_assert(static_cast<int>(
-                        internal::AccountType::ACCOUNT_TYPE_ACTIVE_DIRECTORY) ==
-                        static_cast<int>(
-                            ::account_manager::AccountType::kActiveDirectory),
-                    "Underlying enum values must match");
-      return ::account_manager::AccountType::kActiveDirectory;
   }
 }
 
 internal::AccountType ToProtoAccountType(
     const ::account_manager::AccountType& account_type) {
-  switch (account_type) {
-    case ::account_manager::AccountType::kGaia:
-      return internal::AccountType::ACCOUNT_TYPE_GAIA;
-    case ::account_manager::AccountType::kActiveDirectory:
-      return internal::AccountType::ACCOUNT_TYPE_ACTIVE_DIRECTORY;
-  }
+  // Currently, we only support `kGaia` account type. Should a new type be added
+  // in the future, consider removing the `CHECK_EQ()` below and handling the
+  // new type accordingly.
+  CHECK_EQ(account_type, account_manager::AccountType::kGaia);
+
+  return internal::AccountType::ACCOUNT_TYPE_GAIA;
+}
+
+// Returns a Base16 encoded SHA1 digest of `data`.
+std::string Sha1Digest(const std::string& data) {
+  return base::HexEncode(base::SHA1Hash(base::as_byte_span(data)));
 }
 
 }  // namespace
-
-// static
-const char AccountManager::kActiveDirectoryDummyToken[] = "dummy_ad_token";
 
 // static
 const char* const AccountManager::kInvalidToken =
@@ -146,7 +143,7 @@ class AccountManager::GaiaTokenRevocationRequest : public GaiaAuthConsumer {
     // We cannot call |AccountManager::DeletePendingTokenRevocationRequest|
     // directly because it will immediately start deleting |this|, before the
     // method has had a chance to return.
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&AccountManager::DeletePendingTokenRevocationRequest,
                        account_manager_, this));
@@ -186,7 +183,6 @@ class AccountManager::AccessTokenFetcher : public OAuth2AccessTokenFetcher {
         consumer_(consumer) {
     DCHECK(account_manager_);
     DCHECK(consumer_);
-    DCHECK(account_key_.IsValid());
   }
   AccessTokenFetcher(const AccessTokenFetcher&) = delete;
   AccessTokenFetcher& operator=(const AccessTokenFetcher&) = delete;
@@ -199,12 +195,21 @@ class AccountManager::AccessTokenFetcher : public OAuth2AccessTokenFetcher {
   }
 
   // OAuth2AccessTokenFetcher override:
+  // Note: OAuth2AccessTokenManager relies on asynchronous completions from
+  // OAuth2AccessTokenFetcher::Start(). Firing the callback synchronously can
+  // cause re-entrancy crashes, as observed e.g. in
+  // BookmarkMessageHandlerTest.CanNotUploadInSigninPending.
   void Start(const std::string& client_id,
              const std::string& client_secret,
              const std::vector<std::string>& scopes) override {
     DCHECK(!is_request_pending_);
-    client_id_ = client_id;
-    client_secret_ = client_secret;
+    client_id_ = client_id.empty()
+                     ? GaiaUrls::GetInstance()->oauth2_chrome_client_id()
+                     : client_id;
+    client_secret_ =
+        client_secret.empty()
+            ? GaiaUrls::GetInstance()->oauth2_chrome_client_secret()
+            : client_secret;
     scopes_ = scopes;
     if (!are_token_requests_allowed_) {
       is_request_pending_ = true;
@@ -230,17 +235,25 @@ class AccountManager::AccessTokenFetcher : public OAuth2AccessTokenFetcher {
     DCHECK(are_token_requests_allowed_);
     is_request_pending_ = false;
 
-    if (account_key_.account_type != ::account_manager::AccountType::kGaia) {
-      FireOnGetTokenFailure(GoogleServiceAuthError(
-          GoogleServiceAuthError::State::USER_NOT_SIGNED_UP));
+    if (account_key_.account_type() != ::account_manager::AccountType::kGaia) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &AccountManager::AccessTokenFetcher::FireOnGetTokenFailure,
+              weak_factory_.GetWeakPtr(),
+              GoogleServiceAuthError::CreateAccountNotFound()));
       return;
     }
 
-    absl::optional<std::string> maybe_token =
+    std::optional<std::string> maybe_token =
         account_manager_->GetRefreshToken(account_key_);
     if (!maybe_token.has_value()) {
-      FireOnGetTokenFailure(GoogleServiceAuthError(
-          GoogleServiceAuthError::State::USER_NOT_SIGNED_UP));
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &AccountManager::AccessTokenFetcher::FireOnGetTokenFailure,
+              weak_factory_.GetWeakPtr(),
+              GoogleServiceAuthError::CreateAccountNotFound()));
       return;
     }
 
@@ -253,8 +266,8 @@ class AccountManager::AccessTokenFetcher : public OAuth2AccessTokenFetcher {
   }
 
   const ::account_manager::AccountKey account_key_;
-  AccountManager* const account_manager_;
-  OAuth2AccessTokenConsumer* const consumer_;
+  const raw_ptr<AccountManager, DanglingUntriaged> account_manager_;
+  const raw_ptr<OAuth2AccessTokenConsumer> consumer_;
 
   bool are_token_requests_allowed_ = false;
   bool is_request_pending_ = false;
@@ -272,29 +285,22 @@ AccountManager::Observer::~Observer() = default;
 
 AccountManager::AccountManager() = default;
 
-// static
-void AccountManager::RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(
-      ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed,
-      true /* default_value */);
-}
-
 void AccountManager::SetPrefService(PrefService* pref_service) {
   DCHECK(pref_service);
   pref_service_ = pref_service;
 }
 
 void AccountManager::InitializeInEphemeralMode(
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  InitializeInEphemeralMode(url_loader_factory,
+    URLLoaderFactoryParam url_loader_factory) {
+  InitializeInEphemeralMode(std::move(url_loader_factory),
                             /* initialization_callback= */
                             base::DoNothing());
 }
 
 void AccountManager::InitializeInEphemeralMode(
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    URLLoaderFactoryParam url_loader_factory,
     base::OnceClosure initialization_callback) {
-  Initialize(/* home_dir= */ base::FilePath(), url_loader_factory,
+  Initialize(/* home_dir= */ base::FilePath(), std::move(url_loader_factory),
              /* delay_network_call_runner= */
              base::BindRepeating(
                  [](base::OnceClosure closure) { std::move(closure).Run(); }),
@@ -303,19 +309,20 @@ void AccountManager::InitializeInEphemeralMode(
 
 void AccountManager::Initialize(
     const base::FilePath& home_dir,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    URLLoaderFactoryParam url_loader_factory,
     DelayNetworkCallRunner delay_network_call_runner) {
-  Initialize(home_dir, url_loader_factory, delay_network_call_runner,
+  Initialize(home_dir, std::move(url_loader_factory), delay_network_call_runner,
              base::DoNothing());
 }
 
 void AccountManager::Initialize(
     const base::FilePath& home_dir,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    URLLoaderFactoryParam url_loader_factory,
     DelayNetworkCallRunner delay_network_call_runner,
     base::OnceClosure initialization_callback) {
   Initialize(
-      home_dir, url_loader_factory, std::move(delay_network_call_runner),
+      home_dir, std::move(url_loader_factory),
+      std::move(delay_network_call_runner),
       base::ThreadPool::CreateSequencedTaskRunner(
           {base::TaskShutdownBehavior::BLOCK_SHUTDOWN, base::MayBlock()}),
       std::move(initialization_callback));
@@ -323,7 +330,7 @@ void AccountManager::Initialize(
 
 void AccountManager::Initialize(
     const base::FilePath& home_dir,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    URLLoaderFactoryParam url_loader_factory,
     DelayNetworkCallRunner delay_network_call_runner,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     base::OnceClosure initialization_callback) {
@@ -343,7 +350,7 @@ void AccountManager::Initialize(
 
   home_dir_ = home_dir;
   init_state_ = InitializationState::kInProgress;
-  url_loader_factory_ = url_loader_factory;
+  url_loader_factory_ = std::move(url_loader_factory);
   delay_network_call_runner_ = std::move(delay_network_call_runner);
   task_runner_ = task_runner;
 
@@ -351,15 +358,16 @@ void AccountManager::Initialize(
   if (!IsEphemeralMode()) {
     DCHECK(task_runner_);
     tokens_file_path = home_dir_.Append(kTokensFileName);
-    writer_ = std::make_unique<base::ImportantFileWriter>(tokens_file_path,
-                                                          task_runner_);
+    constexpr const char* kHistogramSuffix = "AccountManager";
+    writer_ = std::make_unique<base::ImportantFileWriter>(
+        tokens_file_path, task_runner_, kHistogramSuffix);
   }
   initialization_callbacks_.emplace_back(std::move(initialization_callback));
 
   if (!IsEphemeralMode()) {
     DCHECK(task_runner_);
-    PostTaskAndReplyWithResult(
-        task_runner_.get(), FROM_HERE,
+    task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE,
         base::BindOnce(&AccountManager::LoadAccountsFromDisk, tokens_file_path),
         base::BindOnce(
             &AccountManager::InsertAccountsAndRunInitializationCallbacks,
@@ -406,21 +414,20 @@ AccountManager::AccountMap AccountManager::LoadAccountsFromDisk(
 
   bool is_any_account_corrupt = false;
   for (const auto& account : accounts_proto.accounts()) {
-    const absl::optional<::account_manager::AccountType> account_type =
+    const std::optional<::account_manager::AccountType> account_type =
         FromProtoAccountType(account.account_type());
     if (!account_type.has_value()) {
       LOG(WARNING) << "Ignoring invalid account_type load from disk";
       is_any_account_corrupt = true;
       continue;
     }
-    ::account_manager::AccountKey account_key{account.id(),
-                                              account_type.value()};
-    if (!account_key.IsValid()) {
-      LOG(WARNING) << "Ignoring invalid account_key load from disk: "
-                   << account_key;
+    if (account.id().empty()) {
+      LOG(WARNING) << "Ignoring invalid account_key load from disk";
       is_any_account_corrupt = true;
       continue;
     }
+    ::account_manager::AccountKey account_key{account.id(),
+                                              account_type.value()};
     accounts[account_key] = AccountInfo{account.raw_email(), account.token()};
   }
   if (is_any_account_corrupt) {
@@ -474,38 +481,36 @@ void AccountManager::RunOnInitialization(base::OnceClosure closure) {
 }
 
 void AccountManager::GetAccounts(AccountListCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
 
-  base::OnceClosure closure =
-      base::BindOnce(&AccountManager::GetAccountsInternal,
-                     weak_factory_.GetWeakPtr(), std::move(callback));
-  RunOnInitialization(std::move(closure));
-}
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure =
+        base::BindOnce(&AccountManager::GetAccounts, weak_factory_.GetWeakPtr(),
+                       std::move(callback));
+    RunOnInitialization(std::move(closure));
+    return;
+  }
 
-void AccountManager::GetAccountsInternal(AccountListCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
-  std::move(callback).Run(GetAccounts());
+  std::move(callback).Run(GetAccountsView());
 }
 
 void AccountManager::GetAccountEmail(
     const ::account_manager::AccountKey& account_key,
     base::OnceCallback<void(const std::string&)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
 
-  base::OnceClosure closure = base::BindOnce(
-      &AccountManager::GetAccountEmailInternal, weak_factory_.GetWeakPtr(),
-      account_key, std::move(callback));
-  RunOnInitialization(std::move(closure));
-}
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure = base::BindOnce(
+        &AccountManager::GetAccountEmail, weak_factory_.GetWeakPtr(),
+        account_key, std::move(callback));
+    RunOnInitialization(std::move(closure));
+    return;
+  }
 
-void AccountManager::GetAccountEmailInternal(
-    const ::account_manager::AccountKey& account_key,
-    base::OnceCallback<void(const std::string&)> callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
   auto it = accounts_.find(account_key);
   if (it == accounts_.end()) {
     std::move(callback).Run(std::string());
@@ -517,19 +522,18 @@ void AccountManager::GetAccountEmailInternal(
 
 void AccountManager::RemoveAccount(
     const ::account_manager::AccountKey& account_key) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
 
-  base::OnceClosure closure =
-      base::BindOnce(&AccountManager::RemoveAccountInternal,
-                     weak_factory_.GetWeakPtr(), account_key);
-  RunOnInitialization(std::move(closure));
-}
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure =
+        base::BindOnce(&AccountManager::RemoveAccount,
+                       weak_factory_.GetWeakPtr(), account_key);
+    RunOnInitialization(std::move(closure));
+    return;
+  }
 
-void AccountManager::RemoveAccountInternal(
-    const ::account_manager::AccountKey& account_key) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
   auto it = accounts_.find(account_key);
   if (it == accounts_.end()) {
     return;
@@ -544,91 +548,43 @@ void AccountManager::RemoveAccountInternal(
   MaybeRevokeTokenOnServer(account_key, old_token);
 }
 
-void AccountManager::RemoveAccount(const std::string& email) {
-  DCHECK_NE(init_state_, InitializationState::kNotStarted);
-
-  base::OnceClosure closure =
-      base::BindOnce(&AccountManager::RemoveAccountByEmailInternal,
-                     weak_factory_.GetWeakPtr(), email);
-  RunOnInitialization(std::move(closure));
-}
-
-void AccountManager::RemoveAccountByEmailInternal(const std::string& email) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
-  for (const std::pair<::account_manager::AccountKey, AccountInfo> account :
-       accounts_) {
-    if (gaia::AreEmailsSame(account.second.raw_email, email)) {
-      RemoveAccountInternal(account.first /* account_key */);
-      return;
-    }
-  }
-}
-
 void AccountManager::UpsertAccount(
     const ::account_manager::AccountKey& account_key,
-    const std::string& raw_email,
-    const std::string& token) {
+    std::string_view raw_email,
+    std::string_view token) {
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
   DCHECK(!raw_email.empty());
 
   base::OnceClosure closure = base::BindOnce(
       &AccountManager::UpsertAccountInternal, weak_factory_.GetWeakPtr(),
-      account_key, AccountInfo{raw_email, token});
+      account_key, AccountInfo{std::string(raw_email), std::string(token)});
   RunOnInitialization(std::move(closure));
 }
 
 void AccountManager::UpdateToken(
     const ::account_manager::AccountKey& account_key,
     const std::string& token) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
 
-  if (account_key.account_type ==
-      ::account_manager::AccountType::kActiveDirectory) {
-    DCHECK_EQ(token, kActiveDirectoryDummyToken);
+  // Currently, we only support `kGaia` account type. Should a new type be added
+  // in the future, consider removing the `CHECK_EQ()` below and handling the
+  // new type accordingly.
+  CHECK_EQ(account_key.account_type(), account_manager::AccountType::kGaia);
+
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure =
+        base::BindOnce(&AccountManager::UpdateToken, weak_factory_.GetWeakPtr(),
+                       account_key, token);
+    RunOnInitialization(std::move(closure));
+    return;
   }
 
-  base::OnceClosure closure =
-      base::BindOnce(&AccountManager::UpdateTokenInternal,
-                     weak_factory_.GetWeakPtr(), account_key, token);
-  RunOnInitialization(std::move(closure));
-}
-
-void AccountManager::UpdateTokenInternal(
-    const ::account_manager::AccountKey& account_key,
-    const std::string& token) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
   auto it = accounts_.find(account_key);
-  DCHECK(it != accounts_.end())
+  CHECK(it != accounts_.end())
       << "UpdateToken cannot be used for adding accounts";
   UpsertAccountInternal(account_key, AccountInfo{it->second.raw_email, token});
-}
-
-void AccountManager::UpdateEmail(
-    const ::account_manager::AccountKey& account_key,
-    const std::string& raw_email) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_NE(init_state_, InitializationState::kNotStarted);
-
-  base::OnceClosure closure =
-      base::BindOnce(&AccountManager::UpdateEmailInternal,
-                     weak_factory_.GetWeakPtr(), account_key, raw_email);
-  RunOnInitialization(std::move(closure));
-}
-
-void AccountManager::UpdateEmailInternal(
-    const ::account_manager::AccountKey& account_key,
-    const std::string& raw_email) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
-  auto it = accounts_.find(account_key);
-  DCHECK(it != accounts_.end())
-      << "UpdateEmail cannot be used for adding accounts";
-  UpsertAccountInternal(account_key, AccountInfo{raw_email, it->second.token});
 }
 
 void AccountManager::UpsertAccountInternal(
@@ -636,9 +592,8 @@ void AccountManager::UpsertAccountInternal(
     const AccountInfo& account) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-  DCHECK(account_key.IsValid()) << "Invalid account_key: " << account_key;
 
-  if (account_key.account_type == ::account_manager::AccountType::kGaia) {
+  if (account_key.account_type() == ::account_manager::AccountType::kGaia) {
     DCHECK(!account.raw_email.empty())
         << "Email must be present for Gaia accounts";
   }
@@ -646,7 +601,6 @@ void AccountManager::UpsertAccountInternal(
   auto it = accounts_.find(account_key);
   if (it == accounts_.end()) {
     // This is a new account. Insert it.
-
     // New account insertions can only happen through a user action, which
     // implies that |Profile| must have been fully initialized at this point.
     // |ProfileImpl|'s constructor guarantees that
@@ -654,7 +608,7 @@ void AccountManager::UpsertAccountInternal(
     // turn guarantees that |pref_service_| is not null.
     DCHECK(pref_service_);
     if (!pref_service_->GetBoolean(
-            ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed)) {
+            policy::policy_prefs::kSecondaryGoogleAccountSigninAllowed)) {
       // Secondary Account additions are disabled by policy and all flows for
       // adding a Secondary Account are already blocked.
       CHECK(accounts_.empty());
@@ -686,7 +640,7 @@ void AccountManager::PersistAccountsAsync() {
 
   // Schedule (immediately) a non-blocking write.
   DCHECK(writer_);
-  writer_->WriteNow(std::make_unique<std::string>(GetSerializedAccounts()));
+  writer_->WriteNow(GetSerializedAccounts());
 }
 
 std::string AccountManager::GetSerializedAccounts() {
@@ -694,9 +648,9 @@ std::string AccountManager::GetSerializedAccounts() {
 
   for (const auto& account : accounts_) {
     internal::Account* account_proto = accounts_proto.add_accounts();
-    account_proto->set_id(account.first.id);
+    account_proto->set_id(account.first.id());
     account_proto->set_account_type(
-        ToProtoAccountType(account.first.account_type));
+        ToProtoAccountType(account.first.account_type()));
     account_proto->set_raw_email(account.second.raw_email);
     account_proto->set_token(account.second.token);
   }
@@ -704,7 +658,9 @@ std::string AccountManager::GetSerializedAccounts() {
   return accounts_proto.SerializeAsString();
 }
 
-std::vector<::account_manager::Account> AccountManager::GetAccounts() {
+std::vector<::account_manager::Account> AccountManager::GetAccountsView() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   std::vector<::account_manager::Account> accounts;
   accounts.reserve(accounts_.size());
 
@@ -745,8 +701,8 @@ void AccountManager::RemoveObserver(AccountManager::Observer* observer) {
 }
 
 void AccountManager::SetUrlLoaderFactoryForTests(
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  url_loader_factory_ = url_loader_factory;
+    URLLoaderFactoryParam url_loader_factory) {
+  url_loader_factory_ = std::move(url_loader_factory);
 }
 
 std::unique_ptr<OAuth2AccessTokenFetcher>
@@ -766,27 +722,24 @@ bool AccountManager::IsTokenAvailable(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto it = accounts_.find(account_key);
-  return it != accounts_.end() && !it->second.token.empty() &&
-         it->second.token != kActiveDirectoryDummyToken;
+  return it != accounts_.end() && !it->second.token.empty();
 }
 
 void AccountManager::HasDummyGaiaToken(
     const ::account_manager::AccountKey& account_key,
     base::OnceCallback<void(bool)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
 
-  base::OnceClosure closure = base::BindOnce(
-      &AccountManager::HasDummyGaiaTokenInternal, weak_factory_.GetWeakPtr(),
-      account_key, std::move(callback));
-  RunOnInitialization(std::move(closure));
-}
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure = base::BindOnce(
+        &AccountManager::HasDummyGaiaToken, weak_factory_.GetWeakPtr(),
+        account_key, std::move(callback));
+    RunOnInitialization(std::move(closure));
+    return;
+  }
 
-void AccountManager::HasDummyGaiaTokenInternal(
-    const ::account_manager::AccountKey& account_key,
-    base::OnceCallback<void(bool)> callback) const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
   auto it = accounts_.find(account_key);
   std::move(callback).Run(it != accounts_.end() &&
                           it->second.token == kInvalidToken);
@@ -796,21 +749,18 @@ void AccountManager::CheckDummyGaiaTokenForAllAccounts(
     base::OnceCallback<
         void(const std::vector<std::pair<::account_manager::Account, bool>>&)>
         callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
 
-  base::OnceClosure closure =
-      base::BindOnce(&AccountManager::CheckDummyGaiaTokenForAllAccountsInternal,
-                     weak_factory_.GetWeakPtr(), std::move(callback));
-  RunOnInitialization(std::move(closure));
-}
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure =
+        base::BindOnce(&AccountManager::CheckDummyGaiaTokenForAllAccounts,
+                       weak_factory_.GetWeakPtr(), std::move(callback));
+    RunOnInitialization(std::move(closure));
+    return;
+  }
 
-void AccountManager::CheckDummyGaiaTokenForAllAccountsInternal(
-    base::OnceCallback<
-        void(const std::vector<std::pair<::account_manager::Account, bool>>&)>
-        callback) const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
   std::vector<std::pair<::account_manager::Account, bool>> accounts_list;
   accounts_list.reserve(accounts_.size());
 
@@ -823,10 +773,34 @@ void AccountManager::CheckDummyGaiaTokenForAllAccountsInternal(
   std::move(callback).Run(accounts_list);
 }
 
+void AccountManager::GetTokenHash(
+    const ::account_manager::AccountKey& account_key,
+    base::OnceCallback<void(const std::string&)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK_NE(init_state_, InitializationState::kNotStarted);
+
+  if (init_state_ != InitializationState::kInitialized) {
+    base::OnceClosure closure = base::BindOnce(
+        &AccountManager::GetTokenHash, weak_factory_.GetWeakPtr(), account_key,
+        std::move(callback));
+    RunOnInitialization(std::move(closure));
+    return;
+  }
+
+  DCHECK_EQ(init_state_, InitializationState::kInitialized);
+  auto it = accounts_.find(account_key);
+  if (it == accounts_.end()) {
+    std::move(callback).Run(std::string());
+    return;
+  }
+
+  std::move(callback).Run(Sha1Digest(it->second.token));
+}
+
 void AccountManager::MaybeRevokeTokenOnServer(
     const ::account_manager::AccountKey& account_key,
     const std::string& old_token) {
-  if ((account_key.account_type == ::account_manager::AccountType::kGaia) &&
+  if ((account_key.account_type() == ::account_manager::AccountType::kGaia) &&
       !old_token.empty() && (old_token != kInvalidToken)) {
     RevokeGaiaTokenOnServer(old_token);
   }
@@ -837,7 +811,7 @@ void AccountManager::RevokeGaiaTokenOnServer(const std::string& refresh_token) {
 
   pending_token_revocation_requests_.emplace_back(
       std::make_unique<GaiaTokenRevocationRequest>(
-          url_loader_factory_, delay_network_call_runner_, refresh_token,
+          GetUrlLoaderFactory(), delay_network_call_runner_, refresh_token,
           weak_factory_.GetWeakPtr()));
 }
 
@@ -845,12 +819,9 @@ void AccountManager::DeletePendingTokenRevocationRequest(
     GaiaTokenRevocationRequest* request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  auto it = std::find_if(
-      pending_token_revocation_requests_.begin(),
-      pending_token_revocation_requests_.end(),
-      [&request](
-          const std::unique_ptr<GaiaTokenRevocationRequest>& pending_request)
-          -> bool { return pending_request.get() == request; });
+  auto it =
+      std::ranges::find(pending_token_revocation_requests_, request,
+                        &std::unique_ptr<GaiaTokenRevocationRequest>::get);
 
   if (it != pending_token_revocation_requests_.end()) {
     pending_token_revocation_requests_.erase(it);
@@ -861,20 +832,18 @@ bool AccountManager::IsEphemeralMode() const {
   return home_dir_.empty();
 }
 
-absl::optional<std::string> AccountManager::GetRefreshToken(
+std::optional<std::string> AccountManager::GetRefreshToken(
     const ::account_manager::AccountKey& account_key) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
-
-  DCHECK(account_key.IsValid());
-  DCHECK(account_key.account_type == ::account_manager::AccountType::kGaia);
+  DCHECK(account_key.account_type() == ::account_manager::AccountType::kGaia);
 
   auto it = accounts_.find(account_key);
   if (it == accounts_.end() || it->second.token.empty()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
-  return absl::make_optional<std::string>(it->second.token);
+  return std::make_optional<std::string>(it->second.token);
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -882,7 +851,26 @@ AccountManager::GetUrlLoaderFactory() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(init_state_, InitializationState::kInitialized);
 
-  return url_loader_factory_;
+  // Forces the value if it is a callback, i.e., expected to be evaluated on
+  // the timing to use, which is now.
+  // TODO(crbug.com/458695293): Get rid of this laziness by updating the
+  // initialization of AccountManager in tests.
+  if (auto* callback = std::get_if<
+          base::OnceCallback<scoped_refptr<network::SharedURLLoaderFactory>()>>(
+          &url_loader_factory_)) {
+    scoped_refptr<network::SharedURLLoaderFactory> factory =
+        std::move(*callback).Run();
+    url_loader_factory_ = std::move(factory);
+  }
+
+  auto* ptr = std::get_if<scoped_refptr<network::SharedURLLoaderFactory>>(
+      &url_loader_factory_);
+  CHECK(ptr);
+  return *ptr;
+}
+
+base::WeakPtr<AccountManager> AccountManager::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 }  // namespace account_manager

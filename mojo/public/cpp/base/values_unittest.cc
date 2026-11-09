@@ -1,14 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "base/values.h"
 
 #include <string>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
 #include "base/test/gtest_util.h"
-#include "base/values.h"
 #include "mojo/public/cpp/base/values_mojom_traits.h"
+#include "mojo/public/cpp/bindings/lib/validation_context.h"
+#include "mojo/public/cpp/bindings/lib/validation_errors.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
+#include "mojo/public/cpp/test_support/validation_errors_test_util.h"
 #include "mojo/public/mojom/base/values.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -58,9 +63,20 @@ TEST(ValuesStructTraitsTest, DoubleValue) {
   }
 }
 
+TEST(ValuesStructTraitsTest, DoubleValue_NonFinite) {
+  mojom::ValuePtr in =
+      mojom::Value::NewDoubleValue(std::numeric_limits<double>::quiet_NaN());
+  base::Value out;
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
+
+  in = mojom::Value::NewDoubleValue(std::numeric_limits<double>::infinity());
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
+}
+
 TEST(ValuesStructTraitsTest, StringValue) {
   static constexpr const char* kTestCases[] = {
-      "", "ascii",
+      "",
+      "ascii",
       // 🎆: Unicode FIREWORKS
       "\xf0\x9f\x8e\x86",
   };
@@ -84,73 +100,83 @@ TEST(ValuesStructTraitsTest, DictionaryValue) {
   // Note: here and below, it would be nice to use an initializer list, but
   // move-only types and initializer lists don't mix. Initializer lists can't be
   // modified: thus it's not possible to move.
-  std::vector<base::Value::DictStorage::value_type> storage;
-  storage.emplace_back("null", base::Value());
-  storage.emplace_back("bool", false);
-  storage.emplace_back("int", 0);
-  storage.emplace_back("double", 0.0);
-  storage.emplace_back("string", "0");
-  storage.emplace_back("binary", base::Value::BlobStorage({0}));
-  storage.emplace_back("dictionary", base::Value::DictStorage());
-  storage.emplace_back("list", base::Value::ListStorage());
+  base::DictValue dict;
+  dict.Set("null", base::Value());
+  dict.Set("bool", false);
+  dict.Set("int", 0);
+  dict.Set("double", 0.0);
+  dict.Set("string", "0");
+  dict.Set("binary", base::Value::BlobStorage({0}));
+  dict.Set("dictionary", base::DictValue());
+  dict.Set("list", base::ListValue());
 
-  base::Value in(base::Value::DictStorage(std::move(storage)));
+  base::Value in(std::move(dict));
   base::Value out;
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
   EXPECT_EQ(in, out);
 
-  ASSERT_TRUE(
-      mojo::test::SerializeAndDeserialize<mojom::DictionaryValue>(in, out));
-  EXPECT_EQ(in, out);
-}
-
-TEST(ValuesStructTraitsTest, SerializeInvalidDictionaryValue) {
-  base::Value in;
-  ASSERT_FALSE(in.is_dict());
-
-  base::Value out;
-  EXPECT_DCHECK_DEATH(
-      mojo::test::SerializeAndDeserialize<mojom::DictionaryValue>(in, out));
+  base::DictValue in_dict = in.GetDict().Clone();
+  base::DictValue out_dict;
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::DictionaryValue>(
+      in_dict, out_dict));
+  EXPECT_EQ(in_dict, out_dict);
 }
 
 TEST(ValuesStructTraitsTest, ListValue) {
-  base::Value::ListStorage storage;
-  storage.emplace_back();
-  storage.emplace_back(false);
-  storage.emplace_back(0);
-  storage.emplace_back(0.0);
-  storage.emplace_back("0");
-  storage.emplace_back(base::Value::BlobStorage({0}));
-  storage.emplace_back(base::Value::DictStorage());
-  storage.emplace_back(base::Value::ListStorage());
-  base::Value in(std::move(storage));
+  base::ListValue list;
+  list.Append(base::Value());
+  list.Append(false);
+  list.Append(0);
+  list.Append(0.0);
+  list.Append("0");
+  list.Append(base::Value::BlobStorage({0}));
+  list.Append(base::DictValue());
+  list.Append(base::ListValue());
+  base::Value in(std::move(list));
   base::Value out;
   ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
   EXPECT_EQ(in, out);
 
-  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::ListValue>(in, out));
-  EXPECT_EQ(in, out);
-}
-
-TEST(ValuesStructTraitsTest, SerializeInvalidListValue) {
-  base::Value in;
-  ASSERT_FALSE(in.is_dict());
-
-  base::Value out;
-  EXPECT_DCHECK_DEATH(
-      mojo::test::SerializeAndDeserialize<mojom::ListValue>(in, out));
+  base::ListValue in_list = in.GetList().Clone();
+  base::ListValue out_list;
+  ASSERT_TRUE(
+      mojo::test::SerializeAndDeserialize<mojom::ListValue>(in_list, out_list));
+  EXPECT_EQ(in_list, out_list);
 }
 
 // A deeply nested base::Value should trigger a deserialization error.
 TEST(ValuesStructTraitsTest, DeeplyNestedValue) {
   base::Value in;
-  for (int i = 0; i < 100; ++i) {
-    base::Value::ListStorage storage;
-    storage.emplace_back(std::move(in));
-    in = base::Value(std::move(storage));
+  for (int i = 0; i < kMaxRecursionDepth; ++i) {
+    base::ListValue list;
+    list.Append(std::move(in));
+    in = base::Value(std::move(list));
   }
-  base::Value out;
-  ASSERT_FALSE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
+
+  // It should work if the depth is less than kMaxRecursionDepth.
+  {
+    mojo::internal::ValidationErrorObserverForTesting warning_observer{
+        base::DoNothing()};
+    base::Value out;
+    ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
+    EXPECT_EQ(mojo::internal::VALIDATION_ERROR_NONE,
+              warning_observer.last_error());
+  }
+
+  // Add one more depth.
+  base::ListValue list;
+  list.Append(std::move(in));
+  in = base::Value(std::move(list));
+
+  // It gets VALIDATION_ERROR_MAX_RECURSION_DEPTH error.
+  {
+    mojo::internal::ValidationErrorObserverForTesting warning_observer{
+        base::DoNothing()};
+    base::Value out;
+    ASSERT_FALSE(mojo::test::SerializeAndDeserialize<mojom::Value>(in, out));
+    EXPECT_EQ(mojo::internal::VALIDATION_ERROR_MAX_RECURSION_DEPTH,
+              warning_observer.last_error());
+  }
 }
 
 }  // namespace mojo_base

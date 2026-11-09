@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,31 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
+#include "build/build_config.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/proxy_config/pref_proxy_config_tracker.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
 #include "net/proxy_resolution/proxy_config_service.h"
 #include "net/proxy_resolution/proxy_config_with_annotation.h"
+
+#if BUILDFLAG(ENTERPRISE_PROXY)
+#include "base/scoped_observation.h"
+#include "components/enterprise/net/core/enterprise_proxy_service.h"
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
+#include "base/scoped_observation.h"
+#include "components/policy/core/common/policy_service.h"
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) ||
+        // BUILDFLAG(IS_ANDROID)
 
 class PrefService;
 class PrefRegistrySimple;
@@ -24,17 +40,32 @@ namespace base {
 class SingleThreadTaskRunner;
 }
 
+namespace policy {
+class PolicyService;
+}
+
+// Killswitch for the rules set by the "ProxyOverrideRules" policy.
+PROXY_CONFIG_EXPORT BASE_DECLARE_FEATURE(kEnableProxyOverrideRules);
+
+// Killswitch for preserving explicit proxy rules when system proxy is unset.
+PROXY_CONFIG_EXPORT BASE_DECLARE_FEATURE(
+    kProxyOverrideRulesFixUnsetSystemProxy);
+
 // A net::ProxyConfigService implementation that applies preference proxy
 // settings (pushed from PrefProxyConfigTrackerImpl) as overrides to the proxy
 // configuration determined by a baseline delegate ProxyConfigService on
 // non-ChromeOS platforms. ChromeOS has its own implementation of overrides in
-// chromeos::ProxyConfigServiceImpl.
+// ash::ProxyConfigServiceImpl.
 class ProxyConfigServiceImpl : public net::ProxyConfigService,
                                public net::ProxyConfigService::Observer {
  public:
   ProxyConfigServiceImpl(std::unique_ptr<net::ProxyConfigService> base_service,
                          ProxyPrefs::ConfigState initial_config_state,
                          const net::ProxyConfigWithAnnotation& initial_config);
+
+  ProxyConfigServiceImpl(const ProxyConfigServiceImpl&) = delete;
+  ProxyConfigServiceImpl& operator=(const ProxyConfigServiceImpl&) = delete;
+
   ~ProxyConfigServiceImpl() override;
 
   // ProxyConfigService implementation:
@@ -43,11 +74,14 @@ class ProxyConfigServiceImpl : public net::ProxyConfigService,
   ConfigAvailability GetLatestProxyConfig(
       net::ProxyConfigWithAnnotation* config) override;
   void OnLazyPoll() override;
+  bool UsesPolling() override;
 
   // Method on IO thread that receives the preference proxy settings pushed from
   // PrefProxyConfigTrackerImpl.
   void UpdateProxyConfig(ProxyPrefs::ConfigState config_state,
                          const net::ProxyConfigWithAnnotation& config);
+
+  base::WeakPtr<ProxyConfigServiceImpl> AsWeakPtr();
 
  private:
   // ProxyConfigService::Observer implementation:
@@ -73,20 +107,48 @@ class ProxyConfigServiceImpl : public net::ProxyConfigService,
 
   base::ThreadChecker thread_checker_;
 
-  DISALLOW_COPY_AND_ASSIGN(ProxyConfigServiceImpl);
+  base::WeakPtrFactory<ProxyConfigServiceImpl> weak_ptr_factory_{this};
 };
 
 // A class that tracks proxy preferences. It translates the configuration
 // to net::ProxyConfig and pushes the result over to
 // ProxyConfigServiceImpl::UpdateProxyConfig.
 class PROXY_CONFIG_EXPORT PrefProxyConfigTrackerImpl
-    : public PrefProxyConfigTracker {
+    : public PrefProxyConfigTracker
+#if BUILDFLAG(ENTERPRISE_PROXY)
+    ,
+      public enterprise_net::EnterpriseProxyService::Observer
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
+    ,
+      public policy::PolicyService::ProviderUpdateObserver
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) ||
+        // BUILDFLAG(IS_ANDROID)
+{
  public:
   // |proxy_config_service_task_runner| is the thread the ProxyConfigService
   // will live on. Use nullptr if it lives on the current thread.
+  // |policy_service| is required to check the affiliation over the user, but
+  // can be null if its usage is not applicable to the caller.
   PrefProxyConfigTrackerImpl(PrefService* pref_service,
                              scoped_refptr<base::SingleThreadTaskRunner>
-                                 proxy_config_service_task_runner);
+                                 proxy_config_service_task_runner,
+                             policy::PolicyService* policy_service = nullptr);
+
+#if BUILDFLAG(ENTERPRISE_PROXY)
+  PrefProxyConfigTrackerImpl(
+      PrefService* pref_service,
+      scoped_refptr<base::SingleThreadTaskRunner>
+          proxy_config_service_task_runner,
+      policy::PolicyService* policy_service,
+      enterprise_net::EnterpriseProxyService* enterprise_proxy_service);
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
+
+  PrefProxyConfigTrackerImpl(const PrefProxyConfigTrackerImpl&) = delete;
+  PrefProxyConfigTrackerImpl& operator=(const PrefProxyConfigTrackerImpl&) =
+      delete;
+
   ~PrefProxyConfigTrackerImpl() override;
 
   // PrefProxyConfigTracker implementation:
@@ -130,10 +192,27 @@ class PROXY_CONFIG_EXPORT PrefProxyConfigTrackerImpl
 
   // Creates a proxy configuration from proxy-related preferences of
   // |pref_service|. Configuration is stored in |config|, return value indicates
-  // whether the configuration is valid.
+  // whether the configuration is valid. |policy_service| is required to check
+  // the affiliation over the user, but can be null if its usage is not
+  // applicable to the caller.
   static ProxyPrefs::ConfigState ReadPrefConfig(
       const PrefService* pref_service,
-      net::ProxyConfigWithAnnotation* config);
+      net::ProxyConfigWithAnnotation* config,
+      policy::PolicyService* policy_service);
+
+#if BUILDFLAG(ENTERPRISE_PROXY)
+  // enterprise_net::EnterpriseProxyService::Observer implementation:
+  void OnDynamicProxyConfigsStatusChanged() override;
+  void OnEnterpriseProxyServiceDestroyed() override;
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
+  // policy::PolicyService::ProviderUpdateObserver implementation:
+  void OnProviderUpdatePropagated(
+      policy::ConfigurationPolicyProvider* provider) override;
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) ||
+        // BUILDFLAG(IS_ANDROID)
 
  protected:
   // Get the proxy configuration currently defined by preferences.
@@ -163,8 +242,9 @@ class PROXY_CONFIG_EXPORT PrefProxyConfigTrackerImpl
   // Configuration as defined by prefs.
   net::ProxyConfigWithAnnotation pref_config_;
 
-  PrefService* pref_service_;
-  ProxyConfigServiceImpl* proxy_config_service_impl_;  // Weak ptr.
+  raw_ptr<PrefService> pref_service_;
+  raw_ptr<policy::PolicyService> policy_service_ = nullptr;
+  base::WeakPtr<ProxyConfigServiceImpl> proxy_config_service_impl_;
   PrefChangeRegistrar proxy_prefs_;
 
   // State of |active_config_|.  |active_config_| is only valid if
@@ -178,7 +258,22 @@ class PROXY_CONFIG_EXPORT PrefProxyConfigTrackerImpl
 
   base::ThreadChecker thread_checker_;
 
-  DISALLOW_COPY_AND_ASSIGN(PrefProxyConfigTrackerImpl);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
+  base::ScopedObservation<policy::PolicyService,
+                          policy::PolicyService::ProviderUpdateObserver>
+      policy_service_observation_{this};
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) ||
+        // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENTERPRISE_PROXY)
+  base::ScopedObservation<enterprise_net::EnterpriseProxyService,
+                          enterprise_net::EnterpriseProxyService::Observer>
+      enterprise_proxy_observation_{this};
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
+  // Caches the active PvD dynamic routing rules so that dynamic routing updates
+  // persist across preference changes.
+  net::ProxyConfig::DynamicRoutingConfig active_dynamic_routing_config_;
 };
 
 #endif  // COMPONENTS_PROXY_CONFIG_PREF_PROXY_CONFIG_TRACKER_IMPL_H_

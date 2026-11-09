@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -65,7 +65,7 @@ TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, Unset) {
 }
 
 TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, Empty) {
-  SetPolicyValue(base::ListValue());
+  SetPolicyValue(base::Value(base::Value::Type::LIST));
   CheckAndApplyPolicySettings();
   EXPECT_TRUE(errors().empty());
   auto* value = pref_value();
@@ -76,8 +76,8 @@ TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, Empty) {
 
 TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, Valid) {
   base::ListValue policy_value;
-  policy_value.Append(base::Value("6000"));
-  SetPolicyValue(std::move(policy_value));
+  policy_value.Append("6000");
+  SetPolicyValue(base::Value(std::move(policy_value)));
   CheckAndApplyPolicySettings();
   EXPECT_TRUE(errors().empty());
   auto* value = pref_value();
@@ -100,9 +100,9 @@ TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, NotAList) {
 // Non-string types are removed from the list, but the policy is still applied.
 TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, MixedTypes) {
   base::ListValue policy_value;
-  policy_value.Append(base::Value(79));
-  policy_value.Append(base::Value("6000"));
-  SetPolicyValue(std::move(policy_value));
+  policy_value.Append(79);
+  policy_value.Append("6000");
+  SetPolicyValue(base::Value(std::move(policy_value)));
   CheckAndApplyPolicySettings();
   EXPECT_TRUE(has_error());
   auto* value = pref_value();
@@ -131,9 +131,9 @@ TEST_F(ExplicitlyAllowedNetworkPortsPolicyHandlerTest, InvalidStrings) {
   };
   base::ListValue policy_value;
   for (const auto& value : kValues) {
-    policy_value.Append(base::Value(value));
+    policy_value.Append(value);
   }
-  SetPolicyValue(std::move(policy_value));
+  SetPolicyValue(base::Value(std::move(policy_value)));
   CheckAndApplyPolicySettings();
   EXPECT_TRUE(has_error());
   auto* value = pref_value();

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,24 +8,47 @@
 #include <list>
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/containers/mru_cache.h"
+#include "base/containers/lru_cache.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/safe_search_api/url_checker_client.h"
 #include "url/gurl.h"
-
-namespace base {
-struct Feature;
-}
 
 namespace safe_search_api {
 
 // The SafeSearch API classification of a URL.
 enum class Classification { SAFE, UNSAFE };
 
-// Visible for testing.
-extern const base::Feature kAllowAllGoogleUrls;
+// Additional details regarding how the `Classification` result was determined.
+struct ClassificationDetails {
+  enum class Reason {
+    // Chrome sent a fresh external request to the server, and received a valid
+    // response.
+    kFreshServerResponse,
+
+    // Chrome used a cached response, stored from a previous successful request
+    // to the server.
+    kCachedResponse,
+
+    // Chrome tried but failed to query the server, and defaulted to
+    // `Classification::SAFE`.
+    kFailedUseDefault,
+  };
+  Reason reason;
+};
+
+// These values are sent to Uma to understand Cache utilization. Must not be
+// renumbered.
+enum class CacheAccessStatus {
+  // Entry was found.
+  kHit = 0,
+  // Entry was not found.
+  kNotFound = 1,
+  // Entry was found but was stale.
+  kOutdated = 2,
+  kMaxValue = kOutdated,
+};
 
 // This class uses one implementation of URLCheckerClient to check the
 // classification of the content on a given URL and returns the result
@@ -35,13 +58,17 @@ extern const base::Feature kAllowAllGoogleUrls;
 class URLChecker {
  public:
   // Used to report whether |url| should be blocked. Called from CheckURL.
-  using CheckCallback = base::OnceCallback<
-      void(const GURL&, Classification classification, bool /* uncertain */)>;
+  using CheckCallback = base::OnceCallback<void(const GURL&,
+                                                Classification classification,
+                                                ClassificationDetails details)>;
 
   explicit URLChecker(std::unique_ptr<URLCheckerClient> async_checker);
 
   URLChecker(std::unique_ptr<URLCheckerClient> async_checker,
              size_t cache_size);
+
+  URLChecker(const URLChecker&) = delete;
+  URLChecker& operator=(const URLChecker&) = delete;
 
   ~URLChecker();
 
@@ -55,9 +82,9 @@ class URLChecker {
  private:
   struct Check;
   struct CheckResult {
-    CheckResult(Classification classification, bool uncertain);
+    CheckResult() = delete;
+    explicit CheckResult(Classification classification);
     Classification classification;
-    bool uncertain;
     base::TimeTicks timestamp;
   };
   using CheckList = std::list<std::unique_ptr<Check>>;
@@ -66,15 +93,17 @@ class URLChecker {
                             const GURL& url,
                             ClientClassification classification);
 
+  // Either reuses pending check for given url if it already exists (see
+  // checks_in_progress_), or schedules a new one.
+  void MaybeScheduleAsyncCheck(const GURL& url, CheckCallback callback);
+
   std::unique_ptr<URLCheckerClient> async_checker_;
   CheckList checks_in_progress_;
 
-  base::MRUCache<GURL, CheckResult> cache_;
+  base::LRUCache<GURL, CheckResult> cache_;
   base::TimeDelta cache_timeout_;
 
   base::WeakPtrFactory<URLChecker> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(URLChecker);
 };
 
 }  // namespace safe_search_api

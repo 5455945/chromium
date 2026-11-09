@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.features.dev_ui;
 
-import org.chromium.base.annotations.UsedByReflection;
+import org.chromium.build.annotations.NullMarked;
 
 /** Implementation for the DevUI DFM. */
-@UsedByReflection("DevUiModule")
+@NullMarked
 public class DevUiImpl implements DevUi {}

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,21 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/metrics/client_info.h"
@@ -22,17 +30,24 @@
 #include "components/metrics/metrics_state_manager.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/prefs/testing_pref_service.h"
+#include "extensions/browser/blocklist_extension_prefs.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_set.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/extension_install.pb.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 
-using extensions::DictionaryBuilder;
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "components/account_id/account_id.h"
+#include "components/user_manager/scoped_user_manager.h"
+#endif
+
 using extensions::Extension;
 using extensions::ExtensionBuilder;
 using extensions::Manifest;
@@ -41,12 +56,7 @@ using metrics::ExtensionInstallProto;
 
 namespace {
 
-void StoreNoClientInfoBackup(const metrics::ClientInfo& /* client_info */) {
-}
-
-std::unique_ptr<metrics::ClientInfo> ReturnNoBackup() {
-  return nullptr;
-}
+constexpr char kTestUserEmail[] = "user@example.com";
 
 class TestExtensionsMetricsProvider : public ExtensionsMetricsProvider {
  public:
@@ -60,38 +70,30 @@ class TestExtensionsMetricsProvider : public ExtensionsMetricsProvider {
  protected:
   // Override the GetInstalledExtensions method to return a set of extensions
   // for tests.
-  std::unique_ptr<extensions::ExtensionSet> GetInstalledExtensions(
+  std::optional<extensions::ExtensionSet> GetInstalledExtensions(
       Profile* profile) override {
-    std::unique_ptr<extensions::ExtensionSet> extensions(
-        new extensions::ExtensionSet());
-    scoped_refptr<const extensions::Extension> extension;
-    extension = extensions::ExtensionBuilder()
-                    .SetManifest(extensions::DictionaryBuilder()
-                                     .Set("name", "Test extension")
-                                     .Set("version", "1.0.0")
-                                     .Set("manifest_version", 2)
-                                     .Build())
-                    .SetID("ahfgeienlihckogmohjhadlkjgocpleb")
-                    .Build();
-    extensions->Insert(extension);
-    extension = extensions::ExtensionBuilder()
-                    .SetManifest(extensions::DictionaryBuilder()
-                                     .Set("name", "Test extension 2")
-                                     .Set("version", "1.0.0")
-                                     .Set("manifest_version", 2)
-                                     .Build())
-                    .SetID("pknkgggnfecklokoggaggchhaebkajji")
-                    .Build();
-    extensions->Insert(extension);
-    extension = extensions::ExtensionBuilder()
-                    .SetManifest(extensions::DictionaryBuilder()
-                                     .Set("name", "Colliding Extension")
-                                     .Set("version", "1.0.0")
-                                     .Set("manifest_version", 2)
-                                     .Build())
-                    .SetID("mdhofdjgenpkhlmddfaegdjddcecipmo")
-                    .Build();
-    extensions->Insert(extension);
+    extensions::ExtensionSet extensions;
+    extensions.Insert(extensions::ExtensionBuilder()
+                          .SetManifest(base::DictValue()
+                                           .Set("name", "Test extension")
+                                           .Set("version", "1.0.0")
+                                           .Set("manifest_version", 2))
+                          .SetID("ahfgeienlihckogmohjhadlkjgocpleb")
+                          .Build());
+    extensions.Insert(extensions::ExtensionBuilder()
+                          .SetManifest(base::DictValue()
+                                           .Set("name", "Test extension 2")
+                                           .Set("version", "1.0.0")
+                                           .Set("manifest_version", 2))
+                          .SetID("pknkgggnfecklokoggaggchhaebkajji")
+                          .Build());
+    extensions.Insert(extensions::ExtensionBuilder()
+                          .SetManifest(base::DictValue()
+                                           .Set("name", "Colliding Extension")
+                                           .Set("version", "1.0.0")
+                                           .Set("manifest_version", 2))
+                          .SetID("mdhofdjgenpkhlmddfaegdjddcecipmo")
+                          .Build());
     return extensions;
   }
 
@@ -119,41 +121,114 @@ TEST(ExtensionsMetricsProvider, HashExtension) {
                 "mdhofdjgenpkhlmddfaegdjddcecipmo", 3817));
 }
 
-// Checks that the fake set of extensions provided by
-// TestExtensionsMetricsProvider is encoded properly.
-TEST(ExtensionsMetricsProvider, SystemProtoEncoding) {
+class ExtensionsMetricsProviderTest : public testing::Test {
+ public:
+  ExtensionsMetricsProviderTest()
+      : profile_manager_(TestingBrowserProcess::GetGlobal()),
+        enabled_state_provider_(/*consent=*/true,
+                                /*enabled=*/true) {}
+
+  void SetUp() override {
+    testing::Test::SetUp();
+    EXPECT_TRUE(profile_manager_.SetUp());
+
+#if BUILDFLAG(IS_CHROMEOS)
+    auto* fake_user_manager = new ash::FakeChromeUserManager();
+    scoped_user_manager_enabler_ =
+        std::make_unique<user_manager::ScopedUserManager>(
+            base::WrapUnique(fake_user_manager));
+    const AccountId account_id(AccountId::FromUserEmail(kTestUserEmail));
+    fake_user_manager->AddUser(account_id);
+    fake_user_manager->LoginUser(account_id);
+#endif
+
+    metrics::MetricsService::RegisterPrefs(prefs_.registry());
+    metrics_state_manager_ = metrics::MetricsStateManager::Create(
+        &prefs_, &enabled_state_provider_, std::wstring(), base::FilePath());
+    metrics_state_manager_->InstantiateFieldTrialList();
+  }
+
+  void TearDown() override { profile_manager_.DeleteAllTestingProfiles(); }
+
+  Profile* CreateTestingProfile(const std::string& test_email) {
+    Profile* profile = profile_manager_.CreateTestingProfile(test_email);
+    profiles::SetLastUsedProfile(profile->GetBaseName());
+    return profile;
+  }
+
+ protected:
+  content::BrowserTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  TestingPrefServiceSimple prefs_;
+  TestingProfileManager profile_manager_;
+  base::HistogramTester histogram_tester_;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_enabler_;
+#endif
+
+  metrics::TestEnabledStateProvider enabled_state_provider_;
+  std::unique_ptr<metrics::MetricsStateManager> metrics_state_manager_;
+};
+
+TEST_F(ExtensionsMetricsProviderTest, SystemProtoEncoding) {
   metrics::SystemProfileProto system_profile;
-  base::test::TaskEnvironment task_environment;
-  TestingProfileManager testing_profile_manager(
-      TestingBrowserProcess::GetGlobal());
-  ASSERT_TRUE(testing_profile_manager.SetUp());
-  TestingPrefServiceSimple local_state;
-  metrics::TestEnabledStateProvider enabled_state_provider(true, true);
-  metrics::MetricsService::RegisterPrefs(local_state.registry());
-  std::unique_ptr<metrics::MetricsStateManager> metrics_state_manager(
-      metrics::MetricsStateManager::Create(
-          &local_state, &enabled_state_provider, std::wstring(),
-          base::BindRepeating(&StoreNoClientInfoBackup),
-          base::BindRepeating(&ReturnNoBackup)));
-  TestExtensionsMetricsProvider extension_metrics(metrics_state_manager.get());
-  extension_metrics.ProvideSystemProfileMetrics(&system_profile);
+
+  TestExtensionsMetricsProvider extension_metrics_provider(
+      metrics_state_manager_.get());
+  extension_metrics_provider.ProvideSystemProfileMetrics(&system_profile);
+
   ASSERT_EQ(2, system_profile.occupied_extension_bucket_size());
   EXPECT_EQ(10, system_profile.occupied_extension_bucket(0));
   EXPECT_EQ(1007, system_profile.occupied_extension_bucket(1));
 }
 
+TEST_F(ExtensionsMetricsProviderTest, ProvideCurrentSessionData) {
+  metrics::ChromeUserMetricsExtension uma_proto;
+  Profile* profile = CreateTestingProfile(kTestUserEmail);
+  TestExtensionsMetricsProvider extension_metrics_provider(
+      metrics_state_manager_.get());
+
+  // Set developer mode to OFF and verify false is recorded.
+  extensions::util::SetDeveloperModeForProfile(profile, false);
+  extension_metrics_provider.ProvideCurrentSessionData(&uma_proto);
+
+  histogram_tester_.ExpectBucketCount("Extensions.DeveloperModeStatusEnabled",
+                                      false, 1);
+
+  // Set developer mode to ON and verify true is recorded.
+  extensions::util::SetDeveloperModeForProfile(profile, true);
+  extension_metrics_provider.ProvideCurrentSessionData(&uma_proto);
+
+  histogram_tester_.ExpectBucketCount("Extensions.DeveloperModeStatusEnabled",
+                                      true, 1);
+  histogram_tester_.ExpectTotalCount("Extensions.DeveloperModeStatusEnabled",
+                                     2);
+}
+
 class ExtensionMetricsProviderInstallsTest
     : public extensions::ExtensionServiceTestBase {
  public:
-  ExtensionMetricsProviderInstallsTest() {}
-  ~ExtensionMetricsProviderInstallsTest() override {}
+  ExtensionMetricsProviderInstallsTest() = default;
+
+  ExtensionMetricsProviderInstallsTest(
+      const ExtensionMetricsProviderInstallsTest&) = delete;
+  ExtensionMetricsProviderInstallsTest& operator=(
+      const ExtensionMetricsProviderInstallsTest&) = delete;
+
+  ~ExtensionMetricsProviderInstallsTest() override = default;
 
   void SetUp() override {
     ExtensionServiceTestBase::SetUp();
     InitializeEmptyExtensionService();
     prefs_ = extensions::ExtensionPrefs::Get(profile());
 
-    last_sample_time_ = base::Time::Now() - base::TimeDelta::FromMinutes(30);
+    last_sample_time_ = base::Time::Now() - base::Minutes(30);
+  }
+
+  void TearDown() override {
+    prefs_ = nullptr;
+    ExtensionServiceTestBase::TearDown();
   }
 
   ExtensionInstallProto ConstructProto(const Extension& extension) {
@@ -171,17 +246,15 @@ class ExtensionMetricsProviderInstallsTest
   }
 
  private:
-  extensions::ExtensionPrefs* prefs_ = nullptr;
+  raw_ptr<extensions::ExtensionPrefs> prefs_ = nullptr;
   base::Time last_sample_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionMetricsProviderInstallsTest);
 };
 
 // Tests the various aspects of constructing a relevant proto for a given
 // extension installation.
 TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
   auto add_extension = [this](const Extension* extension) {
-    prefs()->OnExtensionInstalled(extension, Extension::ENABLED,
+    prefs()->OnExtensionInstalled(extension, /*disable_reasons=*/{},
                                   syncer::StringOrdinal(), std::string());
   };
 
@@ -201,7 +274,7 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
     EXPECT_EQ(ExtensionInstallProto::INTERNAL, install.install_location());
 
     EXPECT_TRUE(install.has_manifest_version());
-    EXPECT_EQ(2, install.manifest_version());
+    EXPECT_EQ(3, install.manifest_version());
 
     EXPECT_TRUE(install.has_action_type());
     EXPECT_EQ(ExtensionInstallProto::NO_ACTION, install.action_type());
@@ -214,9 +287,6 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
 
     EXPECT_TRUE(install.has_updates_from_store());
     EXPECT_FALSE(install.updates_from_store());
-
-    EXPECT_TRUE(install.has_is_from_bookmark());
-    EXPECT_FALSE(install.is_from_bookmark());
 
     EXPECT_TRUE(install.has_is_converted_from_user_script());
     EXPECT_FALSE(install.is_converted_from_user_script());
@@ -239,6 +309,9 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
 
     EXPECT_TRUE(install.has_installed_in_this_sample_period());
     EXPECT_TRUE(install.installed_in_this_sample_period());
+
+    EXPECT_TRUE(install.has_in_extensions_developer_mode());
+    EXPECT_FALSE(install.in_extensions_developer_mode());
   }
 
   // It's not helpful to exhaustively test each possible variation of each
@@ -274,7 +347,8 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
     scoped_refptr<const Extension> extension =
         ExtensionBuilder("browser_action")
             .SetLocation(ManifestLocation::kInternal)
-            .SetAction(ExtensionBuilder::ActionType::BROWSER_ACTION)
+            .SetManifestVersion(2)
+            .SetAction(extensions::ActionInfo::Type::kBrowser)
             .Build();
     add_extension(extension.get());
     ExtensionInstallProto install = ConstructProto(*extension);
@@ -286,11 +360,25 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
     scoped_refptr<const Extension> extension =
         ExtensionBuilder("page_action")
             .SetLocation(ManifestLocation::kInternal)
-            .SetAction(ExtensionBuilder::ActionType::PAGE_ACTION)
+            .SetManifestVersion(2)
+            .SetAction(extensions::ActionInfo::Type::kPage)
             .Build();
     add_extension(extension.get());
     ExtensionInstallProto install = ConstructProto(*extension);
     EXPECT_EQ(ExtensionInstallProto::PAGE_ACTION, install.action_type());
+  }
+
+  {
+    // Test the extension action as an MV3 action.
+    scoped_refptr<const Extension> extension =
+        ExtensionBuilder("action")
+            .SetLocation(ManifestLocation::kInternal)
+            .SetManifestVersion(3)
+            .SetAction(extensions::ActionInfo::Type::kAction)
+            .Build();
+    add_extension(extension.get());
+    ExtensionInstallProto install = ConstructProto(*extension);
+    EXPECT_EQ(ExtensionInstallProto::ACTION, install.action_type());
   }
 
   {
@@ -300,8 +388,8 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
             .SetLocation(ManifestLocation::kInternal)
             .Build();
     add_extension(extension.get());
-    prefs()->SetExtensionDisabled(
-        extension->id(), extensions::disable_reason::DISABLE_USER_ACTION);
+    prefs()->AddDisableReason(extension->id(),
+                              extensions::disable_reason::DISABLE_USER_ACTION);
     {
       ExtensionInstallProto install = ConstructProto(*extension);
       ASSERT_EQ(1, install.disable_reasons_size());
@@ -320,30 +408,16 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
       EXPECT_EQ(ExtensionInstallProto::CORRUPTED,
                 install.disable_reasons().Get(1));
     }
-    // Adding additional disable reasons should result in all reasons being
-    // reported.
-    prefs()->AddDisableReason(
-        extension->id(),
-        extensions::disable_reason::DISABLE_REMOTELY_FOR_MALWARE);
-    {
-      ExtensionInstallProto install = ConstructProto(*extension);
-      ASSERT_EQ(3, install.disable_reasons_size());
-      EXPECT_EQ(ExtensionInstallProto::DISABLE_REMOTELY_FOR_MALWARE,
-                install.disable_reasons().Get(2));
-    }
   }
 
   {
     // Test that event pages are reported correctly.
-    DictionaryBuilder background;
-    background.Set("persistent", false)
-        .Set("scripts", extensions::ListBuilder().Append("script.js").Build());
     scoped_refptr<const Extension> extension =
         ExtensionBuilder("event_page")
             .SetLocation(ManifestLocation::kInternal)
-            .MergeManifest(DictionaryBuilder()
-                               .Set("background", background.Build())
-                               .Build())
+            .SetManifestVersion(2)
+            .SetBackgroundContext(
+                ExtensionBuilder::BackgroundContext::EVENT_PAGE)
             .Build();
     add_extension(extension.get());
     ExtensionInstallProto install = ConstructProto(*extension);
@@ -353,15 +427,12 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
 
   {
     // Test that persistent background pages are reported correctly.
-    DictionaryBuilder background;
-    background.Set("persistent", true)
-        .Set("scripts", extensions::ListBuilder().Append("script.js").Build());
     scoped_refptr<const Extension> extension =
         ExtensionBuilder("persisent_background")
             .SetLocation(ManifestLocation::kInternal)
-            .MergeManifest(DictionaryBuilder()
-                               .Set("background", background.Build())
-                               .Build())
+            .SetManifestVersion(2)
+            .SetBackgroundContext(
+                ExtensionBuilder::BackgroundContext::BACKGROUND_PAGE)
             .Build();
     add_extension(extension.get());
     ExtensionInstallProto install = ConstructProto(*extension);
@@ -388,8 +459,10 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
             .SetLocation(ManifestLocation::kInternal)
             .Build();
     add_extension(extension.get());
-    prefs()->SetExtensionBlocklistState(
-        extension->id(), extensions::BLOCKLISTED_SECURITY_VULNERABILITY);
+    extensions::blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
+        extension->id(),
+        extensions::BitMapBlocklistState::BLOCKLISTED_SECURITY_VULNERABILITY,
+        prefs());
     ExtensionInstallProto install = ConstructProto(*extension);
     EXPECT_EQ(ExtensionInstallProto::BLACKLISTED_SECURITY_VULNERABILITY,
               install.blacklist_state());
@@ -403,9 +476,25 @@ TEST_F(ExtensionMetricsProviderInstallsTest, TestProtoConstruction) {
             .SetLocation(ManifestLocation::kInternal)
             .Build();
     add_extension(extension.get());
-    set_last_sample_time(base::Time::Now() + base::TimeDelta::FromMinutes(60));
+    set_last_sample_time(base::Time::Now() + base::Minutes(60));
     ExtensionInstallProto install = ConstructProto(*extension);
     EXPECT_FALSE(install.installed_in_this_sample_period());
+  }
+
+  {
+    // Test that the `in_extensions_developer_mode` boolean is correctly
+    // reported when developer mode is ON.
+    extensions::util::SetDeveloperModeForProfile(profile(), true);
+    scoped_refptr<const Extension> extension =
+        ExtensionBuilder("test")
+            .SetLocation(ManifestLocation::kInternal)
+            .Build();
+    add_extension(extension.get());
+
+    ExtensionInstallProto install = ConstructProto(*extension);
+
+    EXPECT_TRUE(install.has_in_extensions_developer_mode());
+    EXPECT_TRUE(install.in_extensions_developer_mode());
   }
 }
 
@@ -414,26 +503,21 @@ TEST_F(ExtensionMetricsProviderInstallsTest,
        TestGettingAllExtensionsInProfile) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("extension").Build();
-  service()->AddExtension(extension.get());
+  registrar()->AddExtension(extension);
   scoped_refptr<const Extension> app =
       ExtensionBuilder("app", ExtensionBuilder::Type::PLATFORM_APP).Build();
-  service()->AddExtension(app.get());
-  service()->DisableExtension(app->id(),
-                              extensions::disable_reason::DISABLE_USER_ACTION);
+  registrar()->AddExtension(app);
+  registrar()->DisableExtension(
+      app->id(), {extensions::disable_reason::DISABLE_USER_ACTION});
 
   std::vector<ExtensionInstallProto> installs = GetInstallsForProfile();
   // There should be two installs total.
   ASSERT_EQ(2u, installs.size());
   // One should be the extension, and the other should be the app. We don't
   // check the specifics of the proto, since that's tested above.
-  EXPECT_TRUE(std::any_of(installs.begin(), installs.end(),
-                          [](const ExtensionInstallProto& install) {
-                            return install.type() ==
-                                   ExtensionInstallProto::EXTENSION;
-                          }));
-  EXPECT_TRUE(std::any_of(installs.begin(), installs.end(),
-                          [](const ExtensionInstallProto& install) {
-                            return install.type() ==
-                                   ExtensionInstallProto::PLATFORM_APP;
-                          }));
+  EXPECT_TRUE(std::ranges::contains(installs, ExtensionInstallProto::EXTENSION,
+                                    &ExtensionInstallProto::type));
+  EXPECT_TRUE(std::ranges::contains(installs,
+                                    ExtensionInstallProto::PLATFORM_APP,
+                                    &ExtensionInstallProto::type));
 }

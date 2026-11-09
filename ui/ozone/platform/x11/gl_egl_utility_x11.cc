@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "ui/base/x/x11_gl_egl_utility.h"
 #include "ui/base/x/x11_util.h"
-#include "ui/gl/gl_utils.h"
 
 namespace ui {
 
@@ -24,22 +23,17 @@ void GLEGLUtilityX11::ChooseEGLAlphaAndBufferSize(EGLint* alpha_size,
   ChoosePlatformCustomAlphaAndBufferSize(alpha_size, buffer_size);
 }
 
-bool GLEGLUtilityX11::IsTransparentBackgroundSupported() const {
-  return ui::IsTransparentBackgroundSupported();
-}
-
-void GLEGLUtilityX11::CollectGpuExtraInfo(
-    bool enable_native_gpu_memory_buffers,
-    gfx::GpuExtraInfo& gpu_extra_info) const {
-  gl::CollectX11GpuExtraInfo(enable_native_gpu_memory_buffers, gpu_extra_info);
-}
-
-bool GLEGLUtilityX11::X11DoesVisualHaveAlphaForTest() const {
-  return ui::DoesVisualHaveAlphaForTest();
-}
-
 bool GLEGLUtilityX11::HasVisualManager() {
   return true;
+}
+
+std::optional<base::ScopedEnvironmentVariableOverride>
+GLEGLUtilityX11::MaybeGetScopedDisplayUnsetForVulkan() {
+  // Unset DISPLAY env, so the vulkan can be initialized successfully, if the
+  // X server doesn't support Vulkan surface.
+  if (!ui::IsVulkanSurfaceSupported())
+    return std::optional<base::ScopedEnvironmentVariableOverride>("DISPLAY");
+  return std::nullopt;
 }
 
 }  // namespace ui

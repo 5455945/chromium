@@ -1,4 +1,4 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,8 +18,6 @@ source_set("lib") {
     "media_session_service_impl.cc",
     "media_session_service_impl.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   deps = [
     "//mojo/public/cpp/bindings",
@@ -43,10 +41,17 @@ source_set("tests") {
     ":lib",
     "//base",
     "//base/test:test_support",
-    "//build:chromeos_buildflags",
     "//services/media_session/public/cpp",
     "//services/media_session/public/cpp/test:test_support",
     "//services/media_session/public/mojom",
     "//testing/gtest",
   ]
+}
+
+group("media_session_unittests") {
+  testonly = true
+  deps = [ ":tests" ]
+  if (is_android) {
+    deps += [ "//services/media_session/public/cpp/android/junit:media_session_junit_tests" ]
+  }
 }

@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_DEV_TOOLS_AGENT_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_DEV_TOOLS_AGENT_IMPL_H_
 
+#include "base/functional/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
@@ -38,7 +39,8 @@
 #include "third_party/blink/renderer/core/inspector/devtools_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_layer_tree_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_page_agent.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
@@ -46,6 +48,7 @@ namespace blink {
 
 class ClientMessageLoopAdapter;
 class GraphicsContext;
+class InputVisualizer;
 class InspectedFrames;
 class InspectorNetworkAgent;
 class InspectorOverlayAgent;
@@ -62,19 +65,20 @@ class CORE_EXPORT WebDevToolsAgentImpl final
       private Thread::TaskObserver {
  public:
   static WebDevToolsAgentImpl* CreateForFrame(WebLocalFrameImpl*);
-  static WebDevToolsAgentImpl* CreateForWorker(WebLocalFrameImpl*);
 
-  WebDevToolsAgentImpl(WebLocalFrameImpl*, bool include_view_agents);
+  WebDevToolsAgentImpl(WebLocalFrameImpl*);
   ~WebDevToolsAgentImpl() override;
-  virtual void Trace(Visitor*) const;
+  void Trace(Visitor*) const override;
   DevToolsAgent* GetDevToolsAgent() const { return agent_.Get(); }
 
   void WillBeDestroyed();
   void FlushProtocolNotifications();
 
-  bool HasOverlays() const { return !overlay_agents_.IsEmpty(); }
+  void MainThreadDebuggerPaused();
+  void MainThreadDebuggerResumed();
+
   void UpdateOverlaysPrePaint();
-  void PaintOverlays(GraphicsContext&);  // For CompositeAfterPaint.
+  void PaintOverlays(GraphicsContext&);
 
   WebInputEventResult HandleInputEvent(const WebInputEvent&);
   void DispatchBufferedTouchEvents();
@@ -85,12 +89,15 @@ class CORE_EXPORT WebDevToolsAgentImpl final
 
   // Instrumentation from web/ layer.
   void DidCommitLoadForLocalFrame(LocalFrame*);
-  bool ScreencastEnabled();
   String NavigationInitiatorInfo(LocalFrame*);
   String EvaluateInOverlayForTesting(const String& script);
   void DidShowNewWindow();
 
   void WaitForDebuggerWhenShown();
+  void ActivatePausedDebuggerWindow();
+
+  // Activate the paused debugger window if possible.
+  static void ActivatePausedDebuggerWindow(WebLocalFrameImpl* local_root);
 
  private:
   friend class ClientMessageLoopAdapter;
@@ -105,6 +112,8 @@ class CORE_EXPORT WebDevToolsAgentImpl final
   // InspectorPageAgent::Client implementation.
   void PageLayoutInvalidated(bool resized) override;
   void WaitForDebugger() override;
+  bool IsPausedForNewWindow() override;
+  void UpdateInputVisualizationState() override;
 
   // InspectorLayerTreeAgent::Client implementation.
   bool IsInspectorLayer(const cc::Layer*) override;
@@ -116,17 +125,19 @@ class CORE_EXPORT WebDevToolsAgentImpl final
   Member<DevToolsAgent> agent_;
   HeapHashMap<Member<DevToolsSession>, Member<InspectorNetworkAgent>>
       network_agents_;
-  HeapHashMap<Member<DevToolsSession>, Member<InspectorPageAgent>> page_agents_;
   HeapHashMap<Member<DevToolsSession>, Member<InspectorOverlayAgent>>
       overlay_agents_;
+  HeapHashMap<Member<DevToolsSession>, Member<InspectorPageAgent>> page_agents_;
+  Member<InputVisualizer> input_visualizer_;
   Member<WebLocalFrameImpl> web_local_frame_impl_;
   Member<CoreProbeSink> probe_sink_;
   Member<InspectorResourceContentLoader> resource_content_loader_;
   Member<InspectedFrames> inspected_frames_;
   Member<InspectorResourceContainer> resource_container_;
   Member<Node> node_to_inspect_;
-  bool include_view_agents_;
+  std::optional<base::ScopedClosureRunner> client_navigation_throttler_;
   bool wait_for_debugger_when_shown_ = false;
+  bool is_paused_for_new_window_shown_ = false;
 };
 
 }  // namespace blink

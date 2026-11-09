@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_async_delegate.h"
 #include "content/public/browser/browser_thread.h"
 #include "storage/browser/file_system/external_mount_points.h"
@@ -30,12 +29,12 @@ void MTPDeviceMapService::RegisterMTPFileSystem(
     const base::FilePath::StringType& device_location,
     const std::string& filesystem_id,
     const bool read_only) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(!device_location.empty());
-  DCHECK(!filesystem_id.empty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK(!device_location.empty(), base::NotFatalUntil::M161);
+  CHECK(!filesystem_id.empty(), base::NotFatalUntil::M161);
 
   const AsyncDelegateKey key = GetAsyncDelegateKey(device_location, read_only);
-  if (!base::Contains(mtp_device_usage_map_, key)) {
+  if (!mtp_device_usage_map_.contains(key)) {
     // Note that this initializes the delegate asynchronously, but since
     // the delegate will only be used from the IO thread, it is guaranteed
     // to be created before use of it expects it to be there.
@@ -52,8 +51,8 @@ void MTPDeviceMapService::RegisterMTPFileSystem(
 
 void MTPDeviceMapService::RevokeMTPFileSystem(
     const std::string& filesystem_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(!filesystem_id.empty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK(!filesystem_id.empty(), base::NotFatalUntil::M161);
 
   MTPDeviceFileSystemMap::iterator it = mtp_device_map_.find(filesystem_id);
   if (it != mtp_device_map_.end()) {
@@ -65,7 +64,7 @@ void MTPDeviceMapService::RevokeMTPFileSystem(
     const AsyncDelegateKey key =
         GetAsyncDelegateKey(device_location, read_only);
     MTPDeviceUsageMap::iterator delegate_it = mtp_device_usage_map_.find(key);
-    DCHECK(delegate_it != mtp_device_usage_map_.end());
+    CHECK(delegate_it != mtp_device_usage_map_.end());
 
     mtp_device_usage_map_[key]--;
     if (mtp_device_usage_map_[key] == 0) {
@@ -79,25 +78,26 @@ void MTPDeviceMapService::AddAsyncDelegate(
     const base::FilePath::StringType& device_location,
     const bool read_only,
     MTPDeviceAsyncDelegate* delegate) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(delegate);
-  DCHECK(!device_location.empty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK(delegate, base::NotFatalUntil::M161);
+  CHECK(!device_location.empty(), base::NotFatalUntil::M161);
 
   const AsyncDelegateKey key = GetAsyncDelegateKey(device_location, read_only);
-  if (base::Contains(async_delegate_map_, key))
+  if (async_delegate_map_.contains(key)) {
     return;
+  }
   async_delegate_map_[key] = delegate;
 }
 
 void MTPDeviceMapService::RemoveAsyncDelegate(
     const base::FilePath::StringType& device_location,
     const bool read_only) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(!device_location.empty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK(!device_location.empty(), base::NotFatalUntil::M161);
 
   const AsyncDelegateKey key = GetAsyncDelegateKey(device_location, read_only);
   AsyncDelegateMap::iterator it = async_delegate_map_.find(key);
-  DCHECK(it != async_delegate_map_.end());
+  CHECK(it != async_delegate_map_.end());
   it->second->CancelPendingTasksAndDeleteDelegate();
   async_delegate_map_.erase(it);
 }
@@ -106,7 +106,7 @@ void MTPDeviceMapService::RemoveAsyncDelegate(
 MTPDeviceMapService::AsyncDelegateKey MTPDeviceMapService::GetAsyncDelegateKey(
     const base::FilePath::StringType& device_location,
     const bool read_only) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   base::FilePath::StringType key;
   key.append(read_only ? FILE_PATH_LITERAL("ReadOnly")
@@ -118,8 +118,8 @@ MTPDeviceMapService::AsyncDelegateKey MTPDeviceMapService::GetAsyncDelegateKey(
 
 MTPDeviceAsyncDelegate* MTPDeviceMapService::GetMTPDeviceAsyncDelegate(
     const storage::FileSystemURL& filesystem_url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK(!filesystem_url.filesystem_id().empty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK(!filesystem_url.filesystem_id().empty(), base::NotFatalUntil::M161);
 
   const std::string& filesystem_id = filesystem_url.filesystem_id();
   // File system may be already revoked on ExternalMountPoints side, we check
@@ -127,7 +127,7 @@ MTPDeviceAsyncDelegate* MTPDeviceMapService::GetMTPDeviceAsyncDelegate(
   base::FilePath device_path;
   if (!storage::ExternalMountPoints::GetSystemInstance()->GetRegisteredPath(
           filesystem_id, &device_path)) {
-    return NULL;
+    return nullptr;
   }
 
   const base::FilePath::StringType& device_location = device_path.value();
@@ -135,9 +135,10 @@ MTPDeviceAsyncDelegate* MTPDeviceMapService::GetMTPDeviceAsyncDelegate(
   MTPDeviceFileSystemMap::const_iterator mtp_device_map_it =
       mtp_device_map_.find(filesystem_id);
   if (mtp_device_map_it == mtp_device_map_.end())
-    return NULL;
+    return nullptr;
 
-  DCHECK_EQ(device_path.value(), mtp_device_map_it->second.first);
+  CHECK_EQ(device_path.value(), mtp_device_map_it->second.first,
+           base::NotFatalUntil::M161);
   const bool read_only = mtp_device_map_it->second.second;
   const AsyncDelegateKey key = GetAsyncDelegateKey(device_location, read_only);
 
@@ -148,9 +149,8 @@ MTPDeviceAsyncDelegate* MTPDeviceMapService::GetMTPDeviceAsyncDelegate(
              : NULL;
 }
 
-MTPDeviceMapService::MTPDeviceMapService() {
-}
+MTPDeviceMapService::MTPDeviceMapService() = default;
 
 MTPDeviceMapService::~MTPDeviceMapService() {
-  DCHECK(mtp_device_usage_map_.empty());
+  CHECK(mtp_device_usage_map_.empty(), base::NotFatalUntil::M161);
 }

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,20 @@
 #define CHROME_BROWSER_UI_ANDROID_CONTEXT_MENU_HELPER_H_
 
 #include "base/android/jni_android.h"
+#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
-#include "components/optimization_guide/proto/performance_hints_metadata.pb.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "extensions/buildflags/buildflags.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+namespace extensions {
+class ExtensionMenuModel;
+}
+#endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 
 namespace content {
 class WebContents;
@@ -21,13 +28,17 @@ class WebContents;
 class ContextMenuHelper
     : public content::WebContentsUserData<ContextMenuHelper> {
  public:
+  ContextMenuHelper(const ContextMenuHelper&) = delete;
+  ContextMenuHelper& operator=(const ContextMenuHelper&) = delete;
+
   ~ContextMenuHelper() override;
 
-  void ShowContextMenu(content::RenderFrameHost* render_frame_host,
+  void ShowContextMenu(content::RenderFrameHost& render_frame_host,
                        const content::ContextMenuParams& params);
 
-  void OnContextMenuClosed(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj);
+  void DismissContextMenu();
+
+  void OnContextMenuClosed(JNIEnv* env);
 
   void SetPopulatorFactory(
       const base::android::JavaRef<jobject>& jpopulator_factory);
@@ -39,14 +50,15 @@ class ContextMenuHelper
   mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame>
   GetChromeRenderFrame() const;
 
-  base::android::ScopedJavaGlobalRef<jobject> java_obj_;
-  content::WebContents* web_contents_;
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env) const;
 
   content::ContextMenuParams context_menu_params_;
 
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  std::unique_ptr<extensions::ExtensionMenuModel> extension_menu_model_;
+#endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 
-  DISALLOW_COPY_AND_ASSIGN(ContextMenuHelper);
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_CONTEXT_MENU_HELPER_H_

@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SAFE_SEARCH_API_FAKE_URL_CHECKER_CLIENT_H_
 #define COMPONENTS_SAFE_SEARCH_API_FAKE_URL_CHECKER_CLIENT_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/safe_search_api/url_checker_client.h"
 
 namespace safe_search_api {
@@ -16,6 +16,10 @@ namespace safe_search_api {
 class FakeURLCheckerClient : public URLCheckerClient {
  public:
   FakeURLCheckerClient();
+
+  FakeURLCheckerClient(const FakeURLCheckerClient&) = delete;
+  FakeURLCheckerClient& operator=(const FakeURLCheckerClient&) = delete;
+
   ~FakeURLCheckerClient() override;
 
   // Fake override that simply holds references of |url| and |callback|.
@@ -33,8 +37,6 @@ class FakeURLCheckerClient : public URLCheckerClient {
  private:
   ClientCheckCallback callback_;
   GURL url_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeURLCheckerClient);
 };
 
 }  // namespace safe_search_api

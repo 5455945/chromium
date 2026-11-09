@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,17 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
-/**
- * Tests for LocalizationUtils class.
- */
+import java.util.Locale;
+
+/** Tests for LocalizationUtils class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class LocalizationUtilsTest {
     @Test
-    @SmallTest
     public void testGetSplitLanguageForAndroid() {
         assertEquals("en", LocalizationUtils.getSplitLanguageForAndroid("en"));
         assertEquals("es", LocalizationUtils.getSplitLanguageForAndroid("es"));
@@ -34,7 +29,6 @@ public class LocalizationUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testChromiumLocaleMatchesLanguage() {
         assertTrue(LocalizationUtils.chromiumLocaleMatchesLanguage("en-US", "en"));
         assertTrue(LocalizationUtils.chromiumLocaleMatchesLanguage("en-GB", "en"));
@@ -50,5 +44,21 @@ public class LocalizationUtilsTest {
         // reasons. The corresponding Chromium locale name is "fil".
         // Check that the method only deals with Chromium locale names.
         assertFalse(LocalizationUtils.chromiumLocaleMatchesLanguage("fil", "tl"));
+    }
+
+    @Test
+    public void testGetJavaLocaleForBcp47Tag() {
+        Locale enUs = LocalizationUtils.getJavaLocaleForBcp47Tag("en-US");
+        assertEquals("en", enUs.getLanguage());
+        assertEquals("US", enUs.getCountry());
+
+        Locale jaJp = LocalizationUtils.getJavaLocaleForBcp47Tag("ja-JP");
+        assertEquals("ja", jaJp.getLanguage());
+        assertEquals("JP", jaJp.getCountry());
+
+        Locale zhHans = LocalizationUtils.getJavaLocaleForBcp47Tag("zh-Hans-CN");
+        assertEquals("zh", zhHans.getLanguage());
+        assertEquals("CN", zhHans.getCountry());
+        assertEquals("Hans", zhHans.getScript());
     }
 }

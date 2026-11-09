@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <stddef.h>
 
 #include <string>
+#include <utility>
 #include <vector>
-
 
 namespace query_parser {
 
@@ -34,17 +34,10 @@ class Snippet {
   // column_num to match_positions. The pairs are ordered based on first,
   // with no overlapping elements.
   //
-  // NOTE: the positions returned are in terms of UTF8 encoding. To convert the
-  // offsets to UTF-16, use ConvertMatchPositionsToWide
+  // NOTE: the positions returned are in terms of UTF8 encoding.
   static void ExtractMatchPositions(const std::string& offsets_str,
                                     const std::string& column_num,
                                     MatchPositions* match_positions);
-
-  // Converts match positions as returned from ExtractMatchPositions to be in
-  // terms of a UTF-16 2-byte code unit.
-  static void ConvertMatchPositionsToWide(
-      const std::string& utf8_string,
-      Snippet::MatchPositions* match_positions);
 
   Snippet();
   Snippet(const Snippet& other);

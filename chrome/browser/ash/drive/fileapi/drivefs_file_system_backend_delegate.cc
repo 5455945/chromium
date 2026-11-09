@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/drive/fileapi/drivefs_file_system_backend_delegate.h"
 
+#include "base/notimplemented.h"
 #include "chrome/browser/ash/drive/fileapi/drivefs_async_file_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "storage/browser/file_system/async_file_util.h"
@@ -21,8 +22,8 @@ DriveFsFileSystemBackendDelegate::~DriveFsFileSystemBackendDelegate() = default;
 
 storage::AsyncFileUtil* DriveFsFileSystemBackendDelegate::GetAsyncFileUtil(
     storage::FileSystemType type) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  DCHECK_EQ(storage::kFileSystemTypeDriveFs, type);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  CHECK_EQ(storage::kFileSystemTypeDriveFs, type, base::NotFatalUntil::M161);
   return async_file_util_.get();
 }
 
@@ -50,12 +51,6 @@ storage::WatcherManager* DriveFsFileSystemBackendDelegate::GetWatcherManager(
     storage::FileSystemType type) {
   NOTIMPLEMENTED();
   return nullptr;
-}
-
-void DriveFsFileSystemBackendDelegate::GetRedirectURLForContents(
-    const storage::FileSystemURL& url,
-    storage::URLCallback callback) {
-  NOTIMPLEMENTED();
 }
 
 }  // namespace drive

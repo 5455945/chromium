@@ -1,94 +1,116 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//build/config/chrome_build.gni")
-import("//build/config/chromecast_build.gni")
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/compiler/compiler.gni")
 import("//build/config/dcheck_always_on.gni")
 import("//build/config/features.gni")
-import("//components/feed/features.gni")
+import("//components/compose/features.gni")
 import("//components/safe_browsing/buildflags.gni")
+import("//components/signin/features.gni")
+import("//components/supervised_user/buildflags.gni")
+import("//content/public/common/features.gni")
+import("//crypto/features.gni")
 import("//device/vr/buildflags/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//media/media_options.gni")
 import("//net/features.gni")
-import("//ppapi/buildflags/buildflags.gni")
+import("//pdf/features.gni")
 import("//printing/buildflags/buildflags.gni")
+import("//services/screen_ai/buildflags/features.gni")
+import("//services/webnn/public/webnn_features.gni")
+import("//third_party/blink/public/public_features.gni")
 import("//ui/base/ui_features.gni")
 import("//ui/webui/webui_features.gni")
 
-assert(!is_ios, "Chromium/iOS shouldn't use anything in //chrome")
+assert(use_blink, "Chromium without blink shouldn't use anything in //chrome")
 
+# IMPORTANT
+# We are not accepting any new build flags in //chrome. See
+# docs/chrome_browser_design_principles.md.
+#
 # Please keep features in alphabetical order.
 declare_args() {
-  # Platforms where the BuiltinCertificateVerifierEnabled enterprise policy is
-  # supported. This must must match the supported_on list of the policy in
-  # policy_templates.json and be a subset of the
-  # builtin_cert_verifier_feature_supported platforms.
-  # See crbug.com/410574.  This can be removed when the builtin verifier is
-  # unconditionally enabled on all platforms.
-  builtin_cert_verifier_policy_supported = is_mac
+  # Enables the build to have logging enabled by default.
+  # This is intended for use only in developer builds.
+  chrome_enable_logging_by_default = is_debug
+
+  # Platforms for which Chrome supports a certificate management UI that
+  # shows the Chrome Root Store. This is specific to the v2 UI that is
+  # supported on all desktop platforms, as opposed to the v1 UI which is only
+  # supported on platforms using NSS (Linux and CrOS).
+  chrome_root_store_cert_management_ui =
+      is_win || is_mac || is_linux || is_chromeos
 
   # Enables support for background apps.
-  enable_background_contents = !is_android && !is_chromecast
-  enable_background_mode = !is_android && !is_chromecast && !is_chromeos_ash
-
-  # Enable the printing system dialog for platforms that support printing
-  # and have a system dialog.
-  enable_basic_print_dialog = enable_basic_printing && !is_chromeos_ash
+  enable_background_contents = !is_android
+  enable_background_mode = !is_android && !is_chromeos
 
   # Enables usage of notifications via Chrome's MessageCenter.
   enable_chrome_notifications = is_mac || is_win || is_linux
 
-  # Enables the Click to Call feature on desktop platforms.
-  enable_click_to_call = is_mac || is_win || is_linux || is_chromeos
+  # Skips unmigrated actor files in the build on Android. This is temporary, and
+  # will eventually be removed once migration is done. Adding this flag likely
+  # means the code needs to be adapted for Android. Once adapted, the final code
+  # should use BUILDFLAG(IS_ANDROID) for Android specific implementation.
+  # TODO(debug.com/470475787): Remove this after migration.
+  skip_android_unmigrated_actor_files = is_android
 
   # Hangout services is an extension that adds extra features to Hangouts.
   # It is enableable separately to facilitate testing.
-  enable_hangout_services_extension = is_chrome_branded
+  enable_hangout_services_extension = enable_src_internal
 
-  enable_one_click_signin =
-      is_win || is_mac || ((is_linux || is_chromeos_lacros) && !is_chromecast)
-
-  enable_service_discovery = (enable_mdns && !is_android) || is_mac
+  # TODO(crbug.com/429684535): Document this argument. It's not immediately
+  # clear what it controls.
+  enable_service_discovery = enable_mdns
 
   # Enables use of the session service, which is enabled by default.
   # Android stores them separately on the Java side.
-  enable_session_service = !is_android && !is_chromecast
+  enable_session_service = !is_android
 
-  enable_supervised_users = is_chromeos_ash || is_android
-
-  # Enables usage of the system-provided notification center.
-  enable_system_notifications =
-      is_android || is_mac || is_win || (is_linux && use_dbus) || is_chromeos
-
-  # Indicates if Wayland display server support is enabled.
-  enable_wayland_server = is_chromeos_ash
+  # Enables the webui certificate viewer dialog.
+  enable_webui_certificate_viewer = toolkit_views
 
   # optimize_webui was moved to ui/base/ui_features.gni
 }
 
+# Logging must be disabled by default in all official builds (including special
+# DCHECK-enabled builds). Logging is enabled by default for debug builds, and
+# may be selectively enabled by default for release builds.
+assert(!chrome_enable_logging_by_default || !is_official_build,
+       "Logging must be disabled by default in Official builds")
+
 # Use brlapi from brltty for braille display support.
-use_brlapi = is_chromeos_ash
+use_brlapi = is_chromeos
 
 # Every grit target in //chrome should apply these defines so that the
 # proper build flags can be set.
 chrome_grit_defines = [
   "enable_arcore=$enable_arcore",
-  "enable_background_mode=$enable_background_mode",
-  "enable_background_contents=$enable_background_contents",
+  "enable_cardboard=$enable_cardboard",
+  "enable_compose=$enable_compose",
+  "enable_openxr=$enable_openxr",
+  "enable_printing=$enable_printing",
   "enable_extensions=$enable_extensions",
+  "enable_extensions_core=$enable_extensions_core",
   "enable_hangout_services_extension=$enable_hangout_services_extension",
-  "enable_plugins=$enable_plugins",
+  "enable_pdf_ink2=$enable_pdf_ink2",
+  "enable_pdf_save_to_drive=$enable_pdf_save_to_drive",
+  "enable_dice_support=$enable_dice_support",
+  "enable_pdf=$enable_pdf",
   "enable_print_preview=$enable_print_preview",
-  "enable_printing=$enable_basic_printing",
-  "enable_service_discovery=$enable_service_discovery",
+  "enable_screen_capture=$enable_screen_capture",
+  "enable_smart_card=$enable_smart_card",
   "enable_supervised_users=$enable_supervised_users",
   "enable_vr=$enable_vr",
-  "enable_webui_tab_strip=$enable_webui_tab_strip",
+  "enable_webui_certificate_viewer=$enable_webui_certificate_viewer",
+  "enable_webui_contextual_tasks_composebox=$enable_webui_contextual_tasks_composebox",
+  "enable_webui_ntp=$enable_webui_ntp",
+  "is_official_build=$is_official_build",
   "safe_browsing_mode=$safe_browsing_mode",
   "optimize_webui=$optimize_webui",
-  "enable_feed_v2=$enable_feed_v2",
+  "chrome_root_store_cert_management_ui=$chrome_root_store_cert_management_ui",
+  "use_nss_certs=$use_nss_certs",
+  "webnn_enable_graph_dump=$webnn_enable_graph_dump",
 ]

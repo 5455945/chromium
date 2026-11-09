@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,40 +8,60 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
+from filecmp import dircmp
 import os.path
+import subprocess
+import tempfile
 
-USE_PYTHON3 = True
+PRESUBMIT_VERSION = '2.0.0'
 
 
-def CheckChangeOnUpload(input_api, output_api):
-  # Additional python module paths (we're in src/mojo/); not everyone needs
-  # them, but it's easiest to add them to everyone's path.
-  # For ply and jinja2:
-  third_party_path = os.path.join(
-      input_api.PresubmitLocalPath(), "..", "third_party")
-  # For the bindings generator:
-  mojo_public_bindings_pylib_path = os.path.join(
-      input_api.PresubmitLocalPath(), "public", "tools", "bindings", "pylib")
-  # For the python bindings:
-  mojo_python_bindings_path = os.path.join(
-      input_api.PresubmitLocalPath(), "public", "python")
-  # TODO(vtl): Don't lint these files until the (many) problems are fixed
-  # (possibly by deleting/rewriting some files).
-  files_to_skip = input_api.DEFAULT_FILES_TO_SKIP + \
-      (r".*\bpublic[\\\/]tools[\\\/]bindings[\\\/]pylib[\\\/]mojom[\\\/]"
-           r"generate[\\\/].+\.py$",
-       r".*\bpublic[\\\/]tools[\\\/]bindings[\\\/]generators[\\\/].+\.py$",
-       r".*\bspy[\\\/]ui[\\\/].+\.py$",
-       r".*\btools[\\\/]pylib[\\\/]transitive_hash\.py$",
-       r".*\btools[\\\/]test_runner\.py$")
+def CheckPatchFormatted(input_api, output_api):
+  return input_api.canned_checks.CheckPatchFormatted(
+    input_api,
+    output_api,
+    result_factory=output_api.PresubmitError,
+    bypass_warnings=False,
+  )
 
-  results = []
-  pylint_extra_paths = [
-      third_party_path,
-      mojo_public_bindings_pylib_path,
-      mojo_python_bindings_path,
-  ]
-  results += input_api.canned_checks.RunPylint(
-      input_api, output_api, extra_paths_list=pylint_extra_paths,
-      files_to_skip=files_to_skip)
-  return results
+
+def CheckRuff(input_api, output_api):
+  return input_api.RunTests(
+    input_api.canned_checks.GetRuff(input_api, output_api)
+  )
+
+
+def CheckGoldenFilesUpToDate(input_api, output_api):
+  if not input_api.HasAffectedFiles(path=['golden', 'public/tools']):
+    return []
+  generate_script = os.path.join(
+    input_api.PresubmitLocalPath(), 'golden/generate.py'
+  )
+  generated_dir = os.path.join(
+    input_api.PresubmitLocalPath(), 'golden/generated'
+  )
+  with tempfile.TemporaryDirectory() as tmp_dir:
+    subprocess.run(
+      ['python3', generate_script, '--output-dir', tmp_dir], check=True
+    )
+
+    diff_files = []
+
+    def collect_diffs(dcmp):
+      for name in dcmp.diff_files + dcmp.left_only + dcmp.right_only:
+        diff_files.append(name)
+      for sub_dcmp in dcmp.subdirs.values():
+        collect_diffs(sub_dcmp)
+
+    collect_diffs(dircmp(tmp_dir, generated_dir))
+
+    if len(diff_files) == 0:
+      return []
+    return [
+      output_api.PresubmitError(
+        'Bindings generated from mojo/golden/corpus differ from '
+        'golden files in mojo/golden/generated. Please regenerate '
+        'golden files by running: mojo/golden/generate.py',
+        items=diff_files,
+      )
+    ]

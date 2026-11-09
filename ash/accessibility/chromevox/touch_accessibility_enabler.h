@@ -1,14 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCESSIBILITY_CHROMEVOX_TOUCH_ACCESSIBILITY_ENABLER_H_
 #define ASH_ACCESSIBILITY_CHROMEVOX_TOUCH_ACCESSIBILITY_ENABLER_H_
 
+#include <map>
+
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/tick_clock.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
@@ -49,6 +52,11 @@ class ASH_EXPORT TouchAccessibilityEnabler : public ui::EventHandler {
  public:
   TouchAccessibilityEnabler(aura::Window* root_window,
                             TouchAccessibilityEnablerDelegate* delegate);
+
+  TouchAccessibilityEnabler(const TouchAccessibilityEnabler&) = delete;
+  TouchAccessibilityEnabler& operator=(const TouchAccessibilityEnabler&) =
+      delete;
+
   ~TouchAccessibilityEnabler() override;
 
   bool IsInNoFingersDownForTesting() { return state_ == NO_FINGERS_DOWN; }
@@ -101,10 +109,10 @@ class ASH_EXPORT TouchAccessibilityEnabler : public ui::EventHandler {
     WAIT_FOR_NO_FINGERS
   };
 
-  aura::Window* root_window_;
+  raw_ptr<aura::Window> root_window_;
 
   // Called when we detect a long-press of two fingers. Not owned.
-  TouchAccessibilityEnablerDelegate* delegate_;
+  raw_ptr<TouchAccessibilityEnablerDelegate> delegate_;
 
   // The current state.
   State state_;
@@ -124,15 +132,13 @@ class ASH_EXPORT TouchAccessibilityEnabler : public ui::EventHandler {
 
   // When touch_accessibility_enabler gets time relative to real time during
   // testing, this clock is set to the simulated clock and used.
-  const base::TickClock* tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   // Whether or not we currently have an event handler installed. It can
   // be removed when TouchExplorationController is running.
   bool event_handler_installed_ = false;
 
   base::WeakPtrFactory<TouchAccessibilityEnabler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TouchAccessibilityEnabler);
 };
 
 }  // namespace ash

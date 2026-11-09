@@ -1,15 +1,18 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/base/list_container.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <vector>
 
-#include "base/cxx17_backports.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/gtest_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace cc {
@@ -24,7 +27,7 @@ class DerivedElement {
   bool bool_values[1];
   char char_values[1];
   int int_values[1];
-  long long_values[1];
+  int64_t long_values[1];
 };
 
 class DerivedElement1 : public DerivedElement {
@@ -32,7 +35,7 @@ class DerivedElement1 : public DerivedElement {
   bool bool_values1[1];
   char char_values1[1];
   int int_values1[1];
-  long long_values1[1];
+  int64_t long_values1[1];
 };
 
 class DerivedElement2 : public DerivedElement {
@@ -40,7 +43,7 @@ class DerivedElement2 : public DerivedElement {
   bool bool_values2[2];
   char char_values2[2];
   int int_values2[2];
-  long long_values2[2];
+  int64_t long_values2[2];
 };
 
 class DerivedElement3 : public DerivedElement {
@@ -48,7 +51,7 @@ class DerivedElement3 : public DerivedElement {
   bool bool_values3[3];
   char char_values3[3];
   int int_values3[3];
-  long long_values3[3];
+  int64_t long_values3[3];
 };
 
 const size_t kLargestDerivedElementSize = sizeof(DerivedElement3);
@@ -152,9 +155,9 @@ class MockDerivedElement : public SimpleDerivedElementConstructMagicNumberOne {
         << "element destructor called the wrong number of times";
   }
 
-  // Not using absl::optional<size_t> here in order to get a precise destructor
+  // Not using std::optional<size_t> here in order to get a precise destructor
   // behavior. The tests below need the ability to catch multiple destructor
-  // calls, and absl::optional's destructor might make has_value() return false.
+  // calls, and std::optional's destructor might make has_value() return false.
   size_t expected_destructor_calls_;
   bool has_expected_destructor_calls_ = false;
   size_t destructor_calls_ = 0;
@@ -732,7 +735,7 @@ TEST(ListContainerTest, InsertCopyBeforeBegin) {
   auto iter = list.InsertBeforeAndInvalidateAllPointers<SimpleDerivedElement>(
       list.begin(), count, insert_element);
 
-  const int expected_result[] = {100, 100, 0, 1, 2, 3};
+  const auto expected_result = std::to_array<int>({100, 100, 0, 1, 2, 3});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -758,7 +761,7 @@ TEST(ListContainerTest, InsertCopyBeforeEnd) {
   auto iter = list.InsertBeforeAndInvalidateAllPointers<SimpleDerivedElement>(
       list.end(), count, insert_element);
 
-  const int expected_result[] = {0, 1, 2, 3, 100, 100, 100};
+  const auto expected_result = std::to_array<int>({0, 1, 2, 3, 100, 100, 100});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -777,7 +780,7 @@ TEST(ListContainerTest, InsertCopyBeforeEmpty) {
   auto iter = list.InsertBeforeAndInvalidateAllPointers<SimpleDerivedElement>(
       list.end(), count, insert_element);
 
-  const int expected_result[] = {100, 100, 100};
+  const auto expected_result = std::to_array<int>({100, 100, 100});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -797,7 +800,7 @@ TEST(ListContainerTest, InsertCopyBeforeMany) {
         list.AllocateAndConstruct<SimpleDerivedElement>();
     element->set_value(initial_list_element);
   }
-  EXPECT_EQ(base::size(initial_list), list.size());
+  EXPECT_EQ(std::size(initial_list), list.size());
 
   // Insert the missing elements.
   auto iter = list.begin();
@@ -817,7 +820,8 @@ TEST(ListContainerTest, InsertCopyBeforeMany) {
       iter++;
   }
 
-  const int expected_result[] = {0, 1, 100, 100, 4, 5, 100, 7, 100, 9};
+  const auto expected_result =
+      std::to_array<int>({0, 1, 100, 100, 4, 5, 100, 7, 100, 9});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -846,7 +850,7 @@ TEST(ListContainerTest, InsertBeforeBegin) {
     ++iter;
   }
 
-  const int expected_result[] = {100, 101, 0, 1, 2, 3};
+  const auto expected_result = std::to_array<int>({100, 101, 0, 1, 2, 3});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -875,7 +879,7 @@ TEST(ListContainerTest, InsertBeforeEnd) {
     ++iter;
   }
 
-  const int expected_result[] = {0, 1, 2, 3, 100, 101, 102};
+  const auto expected_result = std::to_array<int>({0, 1, 2, 3, 100, 101, 102});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -897,7 +901,7 @@ TEST(ListContainerTest, InsertBeforeEmpty) {
     ++iter;
   }
 
-  const int expected_result[] = {100, 101, 102};
+  const auto expected_result = std::to_array<int>({100, 101, 102});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -911,12 +915,12 @@ TEST(ListContainerTest, InsertBeforeMany) {
   ListContainer<DerivedElement> list(kCurrentLargestDerivedElementAlign,
                                      kCurrentLargestDerivedElementSize, 0);
   // Create a partial list of 1,...,99.
-  int initial_list[] = {
+  auto initial_list = std::to_array<int>({
       0,  1,  4,  5,  6,  7,  8,  9,  11, 12, 17, 18, 19, 20, 21, 22,
       23, 24, 25, 26, 27, 28, 29, 30, 32, 34, 36, 37, 51, 52, 54, 56,
       60, 64, 65, 70, 75, 76, 80, 81, 83, 86, 87, 90, 93, 95, 97, 98,
-  };
-  const size_t size = base::size(initial_list);
+  });
+  const size_t size = std::size(initial_list);
   for (size_t i = 0; i < size; ++i) {
     SimpleDerivedElement* element =
         list.AllocateAndConstruct<SimpleDerivedElement>();
@@ -973,7 +977,7 @@ TEST(ListContainerTest, InsertAfterBegin) {
     ++iter;
   }
 
-  const int expected_result[] = {0, 100, 101, 1, 2, 3};
+  const auto expected_result = std::to_array<int>({0, 100, 101, 1, 2, 3});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -1002,7 +1006,7 @@ TEST(ListContainerTest, InsertAfterEnd) {
     ++iter;
   }
 
-  const int expected_result[] = {0, 1, 2, 3, 100, 101, 102};
+  const auto expected_result = std::to_array<int>({0, 1, 2, 3, 100, 101, 102});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -1024,7 +1028,7 @@ TEST(ListContainerTest, InsertAfterEmpty) {
     ++iter;
   }
 
-  const int expected_result[] = {100, 101, 102};
+  const auto expected_result = std::to_array<int>({100, 101, 102});
   int iter_index = 0;
   for (iter = list.begin(); iter != list.end(); ++iter) {
     EXPECT_EQ(expected_result[iter_index],
@@ -1038,12 +1042,12 @@ TEST(ListContainerTest, InsertAfterMany) {
   ListContainer<DerivedElement> list(kCurrentLargestDerivedElementAlign,
                                      kCurrentLargestDerivedElementSize, 0);
   // Create a partial list of 1,...,99.
-  int initial_list[] = {
+  auto initial_list = std::to_array<int>({
       0,  1,  4,  5,  6,  7,  8,  9,  11, 12, 17, 18, 19, 20, 21, 22,
       23, 24, 25, 26, 27, 28, 29, 30, 32, 34, 36, 37, 51, 52, 54, 56,
       60, 64, 65, 70, 75, 76, 80, 81, 83, 86, 87, 90, 93, 95, 97, 98,
-  };
-  const size_t size = base::size(initial_list);
+  });
+  const size_t size = std::size(initial_list);
   for (size_t i = 0; i < size; ++i) {
     SimpleDerivedElement* element =
         list.AllocateAndConstruct<SimpleDerivedElement>();
@@ -1168,7 +1172,7 @@ class InstanceCounter {
   }
 
  private:
-  int* counter_;
+  raw_ptr<int> counter_;
 };
 
 TEST(ListContainerTest, RemoveLastDestruction) {
@@ -1334,6 +1338,180 @@ TEST(ListContainerTest, GetCapacityInBytes) {
                             max_waste_factor * kLargestDerivedElementSize);
     list.RemoveLast();
   }
+}
+
+// Regression test for https://crbug.com/549161451.
+// Verifies that using offsets instead of raw pointers within CharAllocator
+// and PositionInCharAllocator correctly maintains element integrity and
+// iterator functionality across multiple buffer allocations, reallocations,
+// insertions, replacements, and deletions.
+TEST(ListContainerTest, RefactorInternalAllocatorPointersRegression) {
+  const size_t kInitialReserve = 2;
+  const size_t kElementCount = 50;
+  ListContainer<NonDerivedElement> list(
+      alignof(NonDerivedElement), sizeof(NonDerivedElement), kInitialReserve);
+
+  for (size_t i = 0; i < kElementCount; ++i) {
+    NonDerivedElement* elem = list.AllocateAndConstruct<NonDerivedElement>();
+    elem->int_values[0] = static_cast<int>(i);
+  }
+  EXPECT_EQ(kElementCount, list.size());
+
+  // Test forward iteration and operator-> / operator*.
+  {
+    int expected = 0;
+    for (auto it = list.begin(); it != list.end(); ++it, ++expected) {
+      EXPECT_EQ(expected, it->int_values[0]);
+      EXPECT_EQ(expected, (*it)->int_values[0]);
+    }
+    EXPECT_EQ(static_cast<int>(kElementCount), expected);
+  }
+
+  // Test const forward iteration.
+  {
+    const auto& const_list = list;
+    int expected = 0;
+    for (auto it = const_list.cbegin(); it != const_list.cend();
+         ++it, ++expected) {
+      EXPECT_EQ(expected, it->int_values[0]);
+      EXPECT_EQ(expected, (*it)->int_values[0]);
+    }
+    EXPECT_EQ(static_cast<int>(kElementCount), expected);
+  }
+
+  // Test reverse iteration.
+  {
+    int expected = static_cast<int>(kElementCount) - 1;
+    for (auto it = list.rbegin(); it != list.rend(); ++it, --expected) {
+      EXPECT_EQ(expected, it->int_values[0]);
+      EXPECT_EQ(expected, (*it)->int_values[0]);
+    }
+    EXPECT_EQ(-1, expected);
+  }
+
+  // Test const reverse iteration.
+  {
+    const auto& const_list = list;
+    int expected = static_cast<int>(kElementCount) - 1;
+    for (auto it = const_list.crbegin(); it != const_list.crend();
+         ++it, --expected) {
+      EXPECT_EQ(expected, it->int_values[0]);
+      EXPECT_EQ(expected, (*it)->int_values[0]);
+    }
+    EXPECT_EQ(-1, expected);
+  }
+
+  // Test ElementAt, front, and back.
+  for (size_t i = 0; i < kElementCount; ++i) {
+    EXPECT_EQ(static_cast<int>(i), list.ElementAt(i)->int_values[0]);
+  }
+  EXPECT_EQ(0, list.front()->int_values[0]);
+  EXPECT_EQ(static_cast<int>(kElementCount) - 1, list.back()->int_values[0]);
+
+  // Test ReplaceExistingElement.
+  auto replace_it = list.begin();
+  NonDerivedElement* replaced =
+      list.ReplaceExistingElement<NonDerivedElement>(replace_it);
+  replaced->int_values[0] = 777;
+  EXPECT_EQ(777, list.front()->int_values[0]);
+  EXPECT_EQ(777, (*list.begin())->int_values[0]);
+  list.front()->int_values[0] = 0;  // Restore
+
+  // Test InsertBeforeAndInvalidateAllPointers across allocation boundaries.
+  // Insert an element before index 10.
+  auto insert_it = list.begin();
+  for (size_t i = 0; i < 10; ++i) {
+    ++insert_it;
+  }
+  auto inserted_it =
+      list.InsertBeforeAndInvalidateAllPointers<NonDerivedElement>(insert_it,
+                                                                   1);
+  (*inserted_it)->int_values[0] = 999;
+  EXPECT_EQ(kElementCount + 1, list.size());
+  EXPECT_EQ(999, list.ElementAt(10)->int_values[0]);
+  EXPECT_EQ(10, list.ElementAt(11)->int_values[0]);
+
+  // Test EraseAndInvalidateAllPointers.
+  // Erase the inserted element.
+  auto erase_it = list.begin();
+  for (size_t i = 0; i < 10; ++i) {
+    ++erase_it;
+  }
+  auto next_it = list.EraseAndInvalidateAllPointers(erase_it);
+  EXPECT_EQ(kElementCount, list.size());
+  EXPECT_EQ(10, (*next_it)->int_values[0]);
+  EXPECT_EQ(10, list.ElementAt(10)->int_values[0]);
+
+  // Erase from front and back.
+  list.EraseAndInvalidateAllPointers(list.begin());
+  EXPECT_EQ(kElementCount - 1, list.size());
+  EXPECT_EQ(1, list.front()->int_values[0]);
+
+  list.RemoveLast();
+  EXPECT_EQ(kElementCount - 2, list.size());
+  EXPECT_EQ(static_cast<int>(kElementCount) - 2, list.back()->int_values[0]);
+
+  // Empty the list via RemoveLast and verify insertion still works.
+  while (!list.empty()) {
+    list.RemoveLast();
+  }
+  EXPECT_EQ(0u, list.size());
+  EXPECT_TRUE(list.empty());
+
+  NonDerivedElement* new_elem = list.AllocateAndConstruct<NonDerivedElement>();
+  new_elem->int_values[0] = 42;
+  EXPECT_EQ(1u, list.size());
+  EXPECT_EQ(42, list.front()->int_values[0]);
+  EXPECT_EQ(42, list.back()->int_values[0]);
+}
+
+// The death tests below erase the same position twice, as happens when a
+// caller commits the same QuadList iterator twice. The second erase must hit a
+// CHECK instead of underflowing the std::copy() in InnerList::Erase() into a
+// wild memmove over the heap.
+//
+// They use NonDerivedElement because EraseAndInvalidateAllPointers() runs the
+// element's destructor before erasing. For a polymorphic element, the second
+// erase would make a virtual call on an already destroyed object, which MSan
+// reports (use-after-dtor) before the CHECK is reached. They also leave spare
+// capacity in the inner list, so that dereferencing the stale iterator doesn't
+// hit the DCHECK in InnerList::ElementAtOffset() first.
+TEST(ListContainerDeathTest, EraseFromEmptyListDies) {
+  ListContainer<NonDerivedElement> list(alignof(NonDerivedElement),
+                                        sizeof(NonDerivedElement), 2);
+  list.AllocateAndConstruct<NonDerivedElement>();
+  auto it = list.begin();
+  list.EraseAndInvalidateAllPointers(it);
+  ASSERT_TRUE(list.empty());
+  EXPECT_CHECK_DEATH(list.EraseAndInvalidateAllPointers(it));
+}
+
+TEST(ListContainerDeathTest, EraseFromEmptyInnerListDies) {
+  // The first inner list holds one element, so the second element goes into a
+  // second inner list, which this test empties while the list is not empty.
+  ListContainer<NonDerivedElement> list(alignof(NonDerivedElement),
+                                        sizeof(NonDerivedElement), 1);
+  list.AllocateAndConstruct<NonDerivedElement>();
+  list.AllocateAndConstruct<NonDerivedElement>();
+  auto it = list.begin();
+  ++it;
+  list.EraseAndInvalidateAllPointers(it);
+  ASSERT_EQ(1u, list.size());
+  EXPECT_CHECK_DEATH(list.EraseAndInvalidateAllPointers(it));
+}
+
+TEST(ListContainerDeathTest, ErasePastLastElementDies) {
+  ListContainer<NonDerivedElement> list(alignof(NonDerivedElement),
+                                        sizeof(NonDerivedElement), 4);
+  list.AllocateAndConstruct<NonDerivedElement>();
+  list.AllocateAndConstruct<NonDerivedElement>();
+  list.AllocateAndConstruct<NonDerivedElement>();
+  auto it = list.begin();
+  ++it;
+  ++it;
+  list.EraseAndInvalidateAllPointers(it);
+  ASSERT_EQ(2u, list.size());
+  EXPECT_CHECK_DEATH(list.EraseAndInvalidateAllPointers(it));
 }
 
 }  // namespace

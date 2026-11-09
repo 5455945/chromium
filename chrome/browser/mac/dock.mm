@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,12 @@
 #import <Foundation/Foundation.h>
 #include <signal.h>
 
+#include "base/apple/bridging.h"
+#include "base/apple/bundle_locations.h"
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_cftyperef.h"
 #include "base/logging.h"
-#include "base/mac/bundle_locations.h"
-#include "base/mac/foundation_util.h"
 #include "base/mac/launchd.h"
-#include "base/mac/mac_logging.h"
-#include "base/mac/scoped_cftyperef.h"
-#include "base/mac/scoped_nsautorelease_pool.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/branding_buildflags.h"
 
@@ -35,7 +34,8 @@ extern "C" {
 
 CFPropertyListRef _CFURLCopyPropertyListRepresentation(CFURLRef url);
 CFURLRef _CFURLCreateFromPropertyListRepresentation(
-    CFAllocatorRef allocator, CFPropertyListRef property_list_representation);
+    CFAllocatorRef allocator,
+    CFPropertyListRef property_list_representation);
 
 }  // extern "C"
 
@@ -44,68 +44,66 @@ namespace {
 
 NSString* const kDockTileDataKey = @"tile-data";
 NSString* const kDockFileDataKey = @"file-data";
+NSString* const kDockTileTypeKey = @"tile-type";
+NSString* const kDockFileTileType = @"file-tile";
 NSString* const kDockDomain = @"com.apple.dock";
 NSString* const kDockPersistentAppsKey = @"persistent-apps";
+NSString* const kDockRecentAppsKey = @"recent-apps";
 
 // A wrapper around _CFURLCopyPropertyListRepresentation that operates on
 // Foundation data types and returns an autoreleased NSDictionary.
-NSDictionary* NSURLCopyDictionary(NSURL* url) {
-  CFURLRef url_cf = base::mac::NSToCFCast(url);
-  base::ScopedCFTypeRef<CFPropertyListRef> property_list(
-      _CFURLCopyPropertyListRepresentation(url_cf));
-  CFDictionaryRef dictionary_cf =
-      base::mac::CFCast<CFDictionaryRef>(property_list);
-  NSDictionary* dictionary = base::mac::CFToNSCast(dictionary_cf);
-
+NSDictionary* DockFileDataDictionaryForURL(NSURL* url) {
+  base::apple::ScopedCFTypeRef<CFPropertyListRef> property_list(
+      _CFURLCopyPropertyListRepresentation(base::apple::NSToCFPtrCast(url)));
+  CFDictionaryRef dictionary =
+      base::apple::CFCast<CFDictionaryRef>(property_list.get());
   if (!dictionary) {
     return nil;
   }
 
-  NSMakeCollectable(property_list.release());
-  return [dictionary autorelease];
+  return base::apple::CFToNSOwnershipCast(
+      (CFDictionaryRef)property_list.release());
 }
 
 // A wrapper around _CFURLCreateFromPropertyListRepresentation that operates
 // on Foundation data types and returns an autoreleased NSURL.
-NSURL* NSURLCreateFromDictionary(NSDictionary* dictionary) {
-  CFDictionaryRef dictionary_cf = base::mac::NSToCFCast(dictionary);
-  base::ScopedCFTypeRef<CFURLRef> url_cf(
-      _CFURLCreateFromPropertyListRepresentation(NULL, dictionary_cf));
-  NSURL* url = base::mac::CFToNSCast(url_cf);
-
+NSURL* URLFromDockFileDataDictionary(NSDictionary* dictionary) {
+  base::apple::ScopedCFTypeRef<CFURLRef> url(
+      _CFURLCreateFromPropertyListRepresentation(
+          kCFAllocatorDefault, base::apple::NSToCFPtrCast(dictionary)));
   if (!url) {
     return nil;
   }
 
-  NSMakeCollectable(url_cf.release());
-  return [url autorelease];
+  return base::apple::CFToNSOwnershipCast(url.release());
 }
 
-// Returns an array parallel to |persistent_apps| containing only the
-// pathnames of the Dock tiles contained therein. Returns nil on failure, such
-// as when the structure of |persistent_apps| is not understood.
-NSMutableArray* PersistentAppPaths(NSArray* persistent_apps) {
-  if (!persistent_apps) {
+// Returns an array parallel to `app_list` containing only the pathnames of the
+// Dock tiles contained therein. Returns nil on failure, such as when the
+// structure of `app_list` is not understood.
+NSMutableArray<NSString*>* PathsFromAppList(NSArray* app_list) {
+  if (!app_list) {
     return nil;
   }
 
-  NSMutableArray* app_paths =
-      [NSMutableArray arrayWithCapacity:[persistent_apps count]];
+  NSMutableArray* app_paths = [NSMutableArray arrayWithCapacity:app_list.count];
 
-  for (NSDictionary* app in persistent_apps) {
+  for (NSDictionary* app in app_list) {
     if (![app isKindOfClass:[NSDictionary class]]) {
       LOG(ERROR) << "app not NSDictionary";
       return nil;
     }
 
-    NSDictionary* tile_data = app[kDockTileDataKey];
-    if (![tile_data isKindOfClass:[NSDictionary class]]) {
+    NSDictionary* tile_data =
+        base::apple::ObjCCast<NSDictionary>(app[kDockTileDataKey]);
+    if (!tile_data) {
       LOG(ERROR) << "tile_data not NSDictionary";
       return nil;
     }
 
-    NSDictionary* file_data = tile_data[kDockFileDataKey];
-    if (![file_data isKindOfClass:[NSDictionary class]]) {
+    NSDictionary* file_data =
+        base::apple::ObjCCast<NSDictionary>(tile_data[kDockFileDataKey]);
+    if (!file_data) {
       // Some apps (e.g. Dashboard) have no file data, but instead have a
       // special value for the tile-type key. For these, add an empty string to
       // align indexes with the source array.
@@ -113,22 +111,36 @@ NSMutableArray* PersistentAppPaths(NSArray* persistent_apps) {
       continue;
     }
 
-    NSURL* url = NSURLCreateFromDictionary(file_data);
+    NSURL* url = URLFromDockFileDataDictionary(file_data);
     if (!url) {
       LOG(ERROR) << "no URL";
       return nil;
     }
 
-    if (![url isFileURL]) {
+    if (!url.fileURL) {
       LOG(ERROR) << "non-file URL";
       return nil;
     }
 
-    NSString* path = [url path];
-    [app_paths addObject:path];
+    [app_paths addObject:url.path];
   }
 
   return app_paths;
+}
+
+BOOL IsAppAtPathAWebBrowser(NSString* app_path) {
+  NSBundle* app_bundle = [NSBundle bundleWithPath:app_path];
+  if (!app_bundle) {
+    return NO;
+  }
+
+  NSArray* activities = base::apple::ObjCCast<NSArray>(
+      [app_bundle objectForInfoDictionaryKey:@"NSUserActivityTypes"]);
+  if (!activities) {
+    return NO;
+  }
+
+  return [activities containsObject:NSUserActivityTypeBrowsingWeb];
 }
 
 // Restart the Dock process by sending it a SIGTERM.
@@ -150,8 +162,8 @@ void Restart() {
 }
 
 NSDictionary* DockPlistFromUserDefaults() {
-  NSDictionary* dock_plist = [[NSUserDefaults standardUserDefaults]
-      persistentDomainForName:kDockDomain];
+  NSDictionary* dock_plist =
+      [NSUserDefaults.standardUserDefaults persistentDomainForName:kDockDomain];
   if (![dock_plist isKindOfClass:[NSDictionary class]]) {
     LOG(ERROR) << "dock_plist is not an NSDictionary";
     return nil;
@@ -159,65 +171,59 @@ NSDictionary* DockPlistFromUserDefaults() {
   return dock_plist;
 }
 
-NSArray* PersistentAppsFromDockPlist(NSDictionary* dock_plist) {
+NSArray* AppListFromDockPlist(NSDictionary* dock_plist, NSString* list_key) {
   if (!dock_plist) {
     return nil;
   }
-  NSArray* persistent_apps = dock_plist[kDockPersistentAppsKey];
-  if (![persistent_apps isKindOfClass:[NSArray class]]) {
-    LOG(ERROR) << "persistent_apps is not an NSArray";
+  NSArray* app_list = base::apple::ObjCCast<NSArray>(dock_plist[list_key]);
+  if (!app_list) {
+    LOG(ERROR) << base::SysNSStringToUTF8(list_key) << " is not an NSArray";
     return nil;
   }
-  return persistent_apps;
+  return app_list;
 }
 
-}  // namespace
-
-ChromeInDockStatus ChromeIsInTheDock() {
-  NSDictionary* dock_plist = DockPlistFromUserDefaults();
-  NSArray* persistent_apps = PersistentAppsFromDockPlist(dock_plist);
-
-  if (!persistent_apps) {
-    return ChromeInDockFailure;
+RewriteDockPlistResult RewriteDockPlist(NSDictionary* dock_plist,
+                                        NSString* installed_path,
+                                        NSString* dmg_app_path) {
+  NSArray* original_persistent_apps =
+      AppListFromDockPlist(dock_plist, kDockPersistentAppsKey);
+  if (!original_persistent_apps) {
+    return {.status = AddIconStatus::kFailure};
+  }
+  NSMutableArray* persistent_apps = [original_persistent_apps mutableCopy];
+  NSMutableArray<NSString*>* persistent_app_paths =
+      PathsFromAppList(persistent_apps);
+  if (!persistent_app_paths) {
+    return {.status = AddIconStatus::kFailure};
   }
 
-  NSString* launch_path = [base::mac::OuterBundle() bundlePath];
+  NSArray* original_recent_apps =
+      AppListFromDockPlist(dock_plist, kDockRecentAppsKey);
+  if (!original_recent_apps) {
+    return {.status = AddIconStatus::kFailure};
+  }
+  NSMutableArray* recent_apps = [original_recent_apps mutableCopy];
+  NSMutableArray<NSString*>* recent_app_paths = PathsFromAppList(recent_apps);
+  if (!recent_app_paths) {
+    return {.status = AddIconStatus::kFailure};
+  }
 
-  return [PersistentAppPaths(persistent_apps) containsObject:launch_path]
-             ? ChromeInDockTrue
-             : ChromeInDockFalse;
-}
+  bool made_change = false;
 
-AddIconStatus AddIcon(NSString* installed_path, NSString* dmg_app_path) {
-  // ApplicationServices.framework/Frameworks/HIServices.framework contains an
-  // undocumented function, CoreDockAddFileToDock, that is able to add items
-  // to the Dock "live" without requiring a Dock restart. Under the hood, it
-  // communicates with the Dock via Mach IPC. It is available as of Mac OS X
-  // 10.6. AddIcon could call CoreDockAddFileToDock if available, but
-  // CoreDockAddFileToDock seems to always to add the new Dock icon last,
-  // where AddIcon takes care to position the icon appropriately. Based on
-  // disassembly, the signature of the undocumented function appears to be
-  //    extern "C" OSStatus CoreDockAddFileToDock(CFURLRef url, int);
-  // The int argument doesn't appear to have any effect. It's not used as the
-  // position to place the icon as hoped.
-
-  // There's enough potential allocation in this function to justify a
-  // distinct pool.
-  base::mac::ScopedNSAutoreleasePool autorelease_pool;
-
-  NSMutableDictionary* dock_plist = [NSMutableDictionary
-      dictionaryWithDictionary:DockPlistFromUserDefaults()];
-  NSMutableArray* persistent_apps =
-      [NSMutableArray arrayWithArray:PersistentAppsFromDockPlist(dock_plist)];
-
-  NSMutableArray* persistent_app_paths = PersistentAppPaths(persistent_apps);
-  if (!persistent_app_paths) {
-    return IconAddFailure;
+  NSIndexSet* matching_recent_items =
+      [recent_app_paths indexesOfObjectsPassingTest:^BOOL(
+                            NSString* app_path, NSUInteger idx, BOOL* stop) {
+        return [app_path isEqualToString:installed_path];
+      }];
+  if (matching_recent_items.count) {
+    [recent_apps removeObjectsAtIndexes:matching_recent_items];
+    made_change = true;
   }
 
   NSUInteger already_installed_app_index = NSNotFound;
   NSUInteger app_index = NSNotFound;
-  for (NSUInteger index = 0; index < [persistent_apps count]; ++index) {
+  for (NSUInteger index = 0; index < persistent_apps.count; ++index) {
     NSString* app_path = persistent_app_paths[index];
     if ([app_path isEqualToString:installed_path]) {
       // If the Dock already contains a reference to the newly installed
@@ -236,8 +242,6 @@ AddIconStatus AddIcon(NSString* installed_path, NSString* dmg_app_path) {
     }
   }
 
-  bool made_change = false;
-
   if (app_index != NSNotFound) {
     // Remove the Dock's reference to the application on the disk image.
     [persistent_apps removeObjectAtIndex:app_index];
@@ -248,14 +252,13 @@ AddIconStatus AddIcon(NSString* installed_path, NSString* dmg_app_path) {
   if (already_installed_app_index == NSNotFound) {
     // The Dock doesn't yet have a reference to the icon at the
     // newly installed path. Figure out where to put the new icon.
-    NSString* app_name = [installed_path lastPathComponent];
+    NSString* app_name = installed_path.lastPathComponent;
 
     if (app_index == NSNotFound) {
       // If an application with this name is already in the Dock, put the new
       // one right before it.
-      for (NSUInteger index = 0; index < [persistent_apps count]; ++index) {
-        NSString* dock_app_name =
-            [persistent_app_paths[index] lastPathComponent];
+      for (NSUInteger index = 0; index < persistent_apps.count; ++index) {
+        NSString* dock_app_name = persistent_app_paths[index].lastPathComponent;
         if ([dock_app_name isEqualToString:app_name]) {
           app_index = index;
           break;
@@ -265,28 +268,33 @@ AddIconStatus AddIcon(NSString* installed_path, NSString* dmg_app_path) {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
     if (app_index == NSNotFound) {
-      // If this is an officially-branded Chrome (including Canary) and an
-      // application matching the "other" flavor is already in the Dock, put
-      // them next to each other. Google Chrome will precede Google Chrome
-      // Canary in the Dock.
-      NSString* chrome_name = @"Google Chrome.app";
-      NSString* canary_name = @"Google Chrome Canary.app";
-      for (NSUInteger index = 0; index < [persistent_apps count]; ++index) {
-        NSString* dock_app_name =
-            [[persistent_app_paths objectAtIndex:index] lastPathComponent];
-        if ([dock_app_name isEqualToString:canary_name] &&
-            [app_name isEqualToString:chrome_name]) {
-          app_index = index;
+      // If this is an officially-branded Chrome and another flavor is already
+      // in the Dock, put them next to each other. With side-by-side, there
+      // can be multiple Chromes already in the dock; pick the first one found
+      // in order, and put this Chrome next to it.
+      NSArray* app_name_order = @[
+        @"Google Chrome.app", @"Google Chrome Beta.app",
+        @"Google Chrome Dev.app", @"Google Chrome Canary.app"
+      ];
 
-          // Break: put Google Chrome.app before the first Google Chrome
-          // Canary.app.
+      NSUInteger app_name_index = [app_name_order indexOfObject:app_name];
+      if (app_name_index != NSNotFound) {
+        for (NSUInteger index = 0; index < persistent_apps.count; ++index) {
+          NSString* dock_app_name =
+              persistent_app_paths[index].lastPathComponent;
+          NSUInteger dock_app_name_index =
+              [app_name_order indexOfObject:dock_app_name];
+          if (dock_app_name_index == NSNotFound) {
+            continue;
+          }
+
+          if (app_name_index < dock_app_name_index) {
+            app_index = index;
+          } else {
+            app_index = index + 1;
+          }
+
           break;
-        } else if ([dock_app_name isEqualToString:chrome_name] &&
-                   [app_name isEqualToString:canary_name]) {
-          app_index = index + 1;
-
-          // No break: put Google Chrome Canary.app after the last Google
-          // Chrome.app.
         }
       }
     }
@@ -295,66 +303,106 @@ AddIconStatus AddIcon(NSString* installed_path, NSString* dmg_app_path) {
     if (app_index == NSNotFound) {
       // Put the new application after the last browser application already
       // present in the Dock.
-      NSArray* other_browser_app_names =
-          [NSArray arrayWithObjects:
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-                       @"Chromium.app",  // Unbranded Google Chrome
-#else
-                       @"Google Chrome.app", @"Google Chrome Canary.app",
-#endif
-                       @"Safari.app", @"Firefox.app", @"Camino.app",
-                       @"Opera.app", @"OmniWeb.app",
-                       @"WebKit.app",   // Safari nightly
-                       @"Aurora.app",   // Firefox dev
-                       @"Nightly.app",  // Firefox nightly
-                       nil];
-      for (NSUInteger index = 0; index < [persistent_apps count]; ++index) {
-        NSString* dock_app_name =
-            [persistent_app_paths[index] lastPathComponent];
-        if ([other_browser_app_names containsObject:dock_app_name]) {
-          app_index = index + 1;
-        }
+      NSUInteger last_browser = [persistent_app_paths
+          indexOfObjectWithOptions:NSEnumerationReverse
+                       passingTest:^(NSString* app_path, NSUInteger idx,
+                                     BOOL* stop) {
+                         return IsAppAtPathAWebBrowser(app_path);
+                       }];
+      if (last_browser != NSNotFound) {
+        app_index = last_browser + 1;
       }
     }
 
     if (app_index == NSNotFound) {
       // Put the new application last in the Dock.
-      app_index = [persistent_apps count];
+      app_index = persistent_apps.count;
     }
 
     // Set up the new Dock tile.
     NSURL* url = [NSURL fileURLWithPath:installed_path isDirectory:YES];
-    NSDictionary* url_dict = NSURLCopyDictionary(url);
+    NSDictionary* url_dict = DockFileDataDictionaryForURL(url);
     if (!url_dict) {
       LOG(ERROR) << "couldn't create url_dict";
-      return IconAddFailure;
+      return {.status = AddIconStatus::kFailure};
     }
 
     NSDictionary* new_tile_data = @{kDockFileDataKey : url_dict};
-    NSDictionary* new_tile = @{kDockTileDataKey : new_tile_data};
+    NSDictionary* new_tile = @{
+      kDockTileDataKey : new_tile_data,
+      kDockTileTypeKey : kDockFileTileType
+    };
 
     // Add the new tile to the Dock.
     [persistent_apps insertObject:new_tile atIndex:app_index];
-    [persistent_app_paths insertObject:installed_path atIndex:app_index];
     made_change = true;
   }
-
-  // Verify that the arrays are still parallel.
-  DCHECK_EQ([persistent_apps count], [persistent_app_paths count]);
 
   if (!made_change) {
     // If no changes were made, there's no point in rewriting the Dock's
     // plist or restarting the Dock.
-    return IconAlreadyPresent;
+    return {.status = AddIconStatus::kAlreadyPresent};
   }
 
   // Rewrite the plist.
-  dock_plist[kDockPersistentAppsKey] = persistent_apps;
-  [[NSUserDefaults standardUserDefaults] setPersistentDomain:dock_plist
-                                                     forName:kDockDomain];
+  NSMutableDictionary* new_plist =
+      [NSMutableDictionary dictionaryWithDictionary:dock_plist];
+  new_plist[kDockPersistentAppsKey] = persistent_apps;
+  new_plist[kDockRecentAppsKey] = recent_apps;
+  return {.status = AddIconStatus::kSuccess, .result_plist = new_plist};
+}
 
-  Restart();
-  return IconAddSuccess;
+}  // namespace
+
+ChromeInDockStatus ChromeIsInTheDock() {
+  NSDictionary* dock_plist = DockPlistFromUserDefaults();
+  NSArray* persistent_apps =
+      AppListFromDockPlist(dock_plist, kDockPersistentAppsKey);
+
+  if (!persistent_apps) {
+    return ChromeInDockStatus::kFailure;
+  }
+
+  NSString* launch_path = base::apple::OuterBundle().bundlePath;
+
+  return [PathsFromAppList(persistent_apps) containsObject:launch_path]
+             ? ChromeInDockStatus::kPresent
+             : ChromeInDockStatus::kNotPresent;
+}
+
+AddIconStatus AddIcon(NSString* installed_path, NSString* dmg_app_path) {
+  // ApplicationServices.framework/Frameworks/HIServices.framework contains an
+  // undocumented function, CoreDockAddFileToDock, that is able to add items
+  // to the Dock "live" without requiring a Dock restart. Under the hood, it
+  // communicates with the Dock via Mach IPC. It is available as of Mac OS X
+  // 10.6. AddIcon could call CoreDockAddFileToDock if available, but
+  // CoreDockAddFileToDock seems to always to add the new Dock icon last,
+  // where AddIcon takes care to position the icon appropriately. Based on
+  // disassembly, the signature of the undocumented function appears to be
+  //    extern "C" OSStatus CoreDockAddFileToDock(CFURLRef url, int);
+  // The int argument doesn't appear to have any effect. It's not used as the
+  // position to place the icon as hoped.
+
+  @autoreleasepool {
+    RewriteDockPlistResult result = RewriteDockPlist(
+        DockPlistFromUserDefaults(), installed_path, dmg_app_path);
+
+    if (result.status == AddIconStatus::kSuccess) {
+      CHECK(result.result_plist);
+      [NSUserDefaults.standardUserDefaults
+          setPersistentDomain:result.result_plist
+                      forName:kDockDomain];
+      Restart();
+    }
+
+    return result.status;
+  }
+}
+
+RewriteDockPlistResult RewriteDockPlistForTesting(NSDictionary* dock_plist,
+                                                  NSString* installed_path,
+                                                  NSString* dmg_app_path) {
+  return RewriteDockPlist(dock_plist, installed_path, dmg_app_path);
 }
 
 }  // namespace dock

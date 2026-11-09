@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,13 @@ struct TypeConverter<
     blink::SecurePaymentConfirmationRequest*> {
   static payments::mojom::blink::SecurePaymentConfirmationRequestPtr Convert(
       const blink::SecurePaymentConfirmationRequest* input);
+};
+
+template <>
+struct TypeConverter<payments::mojom::blink::PaymentEntityLogoPtr,
+                     blink::PaymentEntityLogo*> {
+  static payments::mojom::blink::PaymentEntityLogoPtr Convert(
+      const blink::PaymentEntityLogo* input);
 };
 
 }  // namespace mojo

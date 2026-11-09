@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 
 #include <string>
 
+#include "third_party/blink/renderer/modules/accessibility/ax_selection.h"
 #include "third_party/blink/renderer/modules/accessibility/testing/accessibility_test.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
@@ -24,6 +26,8 @@ class AccessibilitySelectionTest : public AccessibilityTest {
   AccessibilitySelectionTest(LocalFrameClient* local_frame_client = nullptr);
 
  protected:
+  void SetUp() override;
+
   // Gets a text representation of the accessibility tree that is currently
   // selected and annotates it with markers indicating the anchor and focus of
   // |selection|.
@@ -51,35 +55,22 @@ class AccessibilitySelectionTest : public AccessibilityTest {
   AXSelection SetSelectionText(const std::string& selection_text,
                                HTMLElement& element) const;
 
+  // Sets |selection_text| as inner HTML of the document body and returns the
+  // resulting vector of |AXSelection|.
+  Vector<AXSelection> SetMultipleSelectionText(
+      const std::string& selection_text) const;
+
+  // Sets |selection_text| as inner HTML of |element| and returns the resulting
+  // vector of |AXSelection|.
+  Vector<AXSelection> SetMultipleSelectionText(
+      const std::string& selection_text,
+      HTMLElement& element) const;
+
   // Compares two HTML files containing a DOM selection and the equivalent
   // accessibility selection.
   void RunSelectionTest(const std::string& test_name,
                         const std::string& suffix = std::string()) const;
-
- private:
 };
-
-class ParameterizedAccessibilitySelectionTest
-    : public testing::WithParamInterface<bool>,
-      private ScopedLayoutNGForTest,
-      public AccessibilitySelectionTest {
- public:
-  ParameterizedAccessibilitySelectionTest(
-      LocalFrameClient* local_frame_client = nullptr);
-
- protected:
-  // Compares two HTML files containing a DOM selection and the equivalent
-  // accessibility selection.
-  void RunSelectionTest(const std::string& test_name) const;
-
-  bool LayoutNGEnabled() const {
-    return RuntimeEnabledFeatures::LayoutNGEnabled();
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         ParameterizedAccessibilitySelectionTest,
-                         testing::Bool());
 
 }  // namespace blink
 

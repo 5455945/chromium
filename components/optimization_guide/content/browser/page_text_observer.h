@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 #define COMPONENTS_OPTIMIZATION_GUIDE_CONTENT_BROWSER_PAGE_TEXT_OBSERVER_H_
 
 #include <stdint.h>
-#include <set>
 
-#include "base/callback.h"
+#include <set>
+#include <vector>
+
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "components/optimization_guide/content/browser/page_text_dump_result.h"
@@ -35,12 +38,6 @@ class PageTextObserver : public content::WebContentsObserver,
                          public content::WebContentsUserData<PageTextObserver> {
  public:
   ~PageTextObserver() override;
-
-  // Retrieves the instance of PageTextObserver that was attached
-  // to the specified WebContents. If no instance was attached, creates one,
-  // and attaches it to the specified WebContents.
-  static PageTextObserver* GetOrCreateForWebContents(
-      content::WebContents* web_contents);
 
   // Contains all the information that is needed to request a text dump by a
   // consumer.
@@ -88,7 +85,6 @@ class PageTextObserver : public content::WebContentsObserver,
   size_t outstanding_requests() const { return outstanding_requests_; }
 
   // content::WebContentsObserver:
-  void DidStartNavigation(content::NavigationHandle* handle) override;
   void DidFinishNavigation(content::NavigationHandle* handle) override;
   void RenderFrameCreated(content::RenderFrameHost* rfh) override;
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
@@ -107,12 +103,12 @@ class PageTextObserver : public content::WebContentsObserver,
   friend class content::WebContentsUserData<PageTextObserver>;
 
   void OnFrameTextDumpCompleted(
-      absl::optional<FrameTextDumpResult> frame_result);
+      std::optional<FrameTextDumpResult> frame_result);
 
   void DispatchResponses();
 
   // All registered consumers.
-  std::set<Consumer*> consumers_;
+  std::set<raw_ptr<Consumer, SetExperimental>> consumers_;
 
   // A persisted set of consumer requests.
   std::vector<std::unique_ptr<ConsumerTextDumpRequest>> requests_;

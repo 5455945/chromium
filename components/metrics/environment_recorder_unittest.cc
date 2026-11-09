@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "third_party/metrics_proto/system_profile.pb.h"
 
 namespace metrics {
+namespace {
 
 class EnvironmentRecorderTest : public testing::Test {
  public:
@@ -17,13 +18,13 @@ class EnvironmentRecorderTest : public testing::Test {
     EnvironmentRecorder::RegisterPrefs(prefs_.registry());
   }
 
-  ~EnvironmentRecorderTest() override {}
+  EnvironmentRecorderTest(const EnvironmentRecorderTest&) = delete;
+  EnvironmentRecorderTest& operator=(const EnvironmentRecorderTest&) = delete;
+
+  ~EnvironmentRecorderTest() override = default;
 
  protected:
   TestingPrefServiceSimple prefs_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(EnvironmentRecorderTest);
 };
 
 TEST_F(EnvironmentRecorderTest, LoadEnvironmentFromPrefs) {
@@ -72,4 +73,5 @@ TEST_F(EnvironmentRecorderTest, LoadEnvironmentFromPrefs) {
   }
 }
 
+}   // namespace
 }  // namespace metrics

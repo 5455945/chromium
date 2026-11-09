@@ -1,19 +1,32 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/aura/window_tree_host.h"
 
+#include <optional>
+
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/metrics/field_trial_params.h"
+#include "base/no_destructor.h"
+#include "base/notimplemented.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
+#include "components/viz/host/host_frame_sink_manager.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/env.h"
+#include "ui/aura/host_frame_rate_throttler.h"
+#include "ui/aura/native_window_occlusion_tracker.h"
 #include "ui/aura/scoped_keyboard_hook.h"
 #include "ui/aura/scoped_simple_keyboard_hook.h"
 #include "ui/aura/window.h"
@@ -23,10 +36,9 @@
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/base/ime/init/input_method_factory.h"
 #include "ui/base/ime/input_method.h"
-#include "ui/base/layout.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/view_prop.h"
-#include "ui/compositor/compositor_switches.h"
+#include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -37,9 +49,12 @@
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
-#include "ui/gfx/icc_profile.h"
 #include "ui/gfx/switches.h"
 #include "ui/platform_window/platform_window_init_properties.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace aura {
 
@@ -55,16 +70,21 @@ class ScopedLocalSurfaceIdValidator {
       : window_(window),
         local_surface_id_(window ? window->GetLocalSurfaceId()
                                  : viz::LocalSurfaceId()) {}
+
+  ScopedLocalSurfaceIdValidator(const ScopedLocalSurfaceIdValidator&) = delete;
+  ScopedLocalSurfaceIdValidator& operator=(
+      const ScopedLocalSurfaceIdValidator&) = delete;
+
   ~ScopedLocalSurfaceIdValidator() {
     if (window_) {
-      DCHECK_EQ(local_surface_id_, window_->GetLocalSurfaceId());
+      CHECK_EQ(local_surface_id_, window_->GetLocalSurfaceId(),
+               base::NotFatalUntil::M163);
     }
   }
 
  private:
-  Window* const window_;
+  const raw_ptr<Window> window_;
   const viz::LocalSurfaceId local_surface_id_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedLocalSurfaceIdValidator);
 };
 #else
 class ScopedLocalSurfaceIdValidator {
@@ -76,32 +96,51 @@ class ScopedLocalSurfaceIdValidator {
 
 }  // namespace
 
+WindowTreeHost::VideoCaptureLock::~VideoCaptureLock() {
+  if (host_) {
+    if (NativeWindowOcclusionTracker::
+            IsNativeWindowOcclusionTrackingAlwaysEnabled(host_.get())) {
+      host_->DecrementVideoCaptureCountForOcclusionTracking();
+    }
+    host_->OnVideoCaptureLockDestroyed();
+  }
+}
+
+WindowTreeHost::VideoCaptureLock::VideoCaptureLock(WindowTreeHost* host)
+    : host_(host->GetWeakPtr()) {
+  host_->OnVideoCaptureLockCreated();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WindowTreeHost, public:
 
+const char WindowTreeHost::kWindowTreeHostUsesParent[] =
+    "__AURA_WINDOW_TREE_HOST_USE_PARENT_OF_ACCELERATED_WIDGET__";
+
 WindowTreeHost::~WindowTreeHost() {
-  if (display::Screen::GetScreen())
-    display::Screen::GetScreen()->RemoveObserver(this);
   DCHECK(!compositor_) << "compositor must be destroyed before root window";
-  if (owned_input_method_) {
-    delete input_method_;
-    input_method_ = nullptr;
-  }
+  CHECK(!HostFrameRateThrottler::GetInstance().hosts().contains(this),
+        base::NotFatalUntil::M163);
 }
 
 // static
 WindowTreeHost* WindowTreeHost::GetForAcceleratedWidget(
     gfx::AcceleratedWidget widget) {
+#if BUILDFLAG(IS_WIN)
+  if (ui::ViewProp::GetValue(widget, kWindowTreeHostUsesParent)) {
+    widget = ::GetParent(widget);
+  }
+#endif  // BUILDFLAG(IS_WIN)
   return reinterpret_cast<WindowTreeHost*>(
       ui::ViewProp::GetValue(widget, kWindowTreeHostForAcceleratedWidget));
 }
 
 void WindowTreeHost::InitHost() {
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window());
-  device_scale_factor_ = display.device_scale_factor();
+  device_scale_factor_ = display::Screen::Get()
+                             ->GetPreferredScaleFactorForWindow(window())
+                             .value_or(1.f);
 
-  UpdateRootWindowSizeInPixels();
+  UpdateRootWindowSize();
   InitCompositor();
   Env::GetInstance()->NotifyHostInitialized(this);
 }
@@ -131,7 +170,7 @@ gfx::Transform WindowTreeHost::GetRootTransform() const {
 
 void WindowTreeHost::SetRootTransform(const gfx::Transform& transform) {
   window()->SetTransform(transform);
-  UpdateRootWindowSizeInPixels();
+  UpdateRootWindowSize();
 }
 
 gfx::Transform WindowTreeHost::GetInverseRootTransform() const {
@@ -164,23 +203,13 @@ gfx::Transform WindowTreeHost::GetInverseRootTransformForLocalEventCoordinates()
   return invert;
 }
 
-void WindowTreeHost::UpdateRootWindowSizeInPixels() {
-  // Validate that the LocalSurfaceId does not change.
-  bool compositor_inited = !!compositor()->root_layer();
-  ScopedLocalSurfaceIdValidator lsi_validator(compositor_inited ? window()
-                                                                : nullptr);
-  gfx::Rect transformed_bounds_in_pixels =
-      GetTransformedRootWindowBoundsInPixels(GetBoundsInPixels().size());
-  window()->SetBounds(transformed_bounds_in_pixels);
-}
-
 void WindowTreeHost::UpdateCompositorScaleAndSize(
     const gfx::Size& new_size_in_pixels) {
   gfx::Rect new_bounds(new_size_in_pixels);
   if (compositor_->display_transform_hint() ==
-          gfx::OVERLAY_TRANSFORM_ROTATE_90 ||
+          gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90 ||
       compositor_->display_transform_hint() ==
-          gfx::OVERLAY_TRANSFORM_ROTATE_270) {
+          gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270) {
     new_bounds.Transpose();
   }
 
@@ -204,15 +233,23 @@ void WindowTreeHost::ConvertScreenInPixelsToDIP(gfx::Point* point) const {
 }
 
 void WindowTreeHost::ConvertDIPToPixels(gfx::Point* point) const {
-  auto point_3f = gfx::Point3F(gfx::PointF(*point));
-  GetRootTransform().TransformPoint(&point_3f);
-  *point = gfx::ToFlooredPoint(point_3f.AsPointF());
+  gfx::PointF point_f{*point};
+  ConvertDIPToPixels(&point_f);
+  *point = gfx::ToFlooredPoint(point_f);
+}
+
+void WindowTreeHost::ConvertDIPToPixels(gfx::PointF* point) const {
+  *point = GetRootTransform().MapPoint(*point);
 }
 
 void WindowTreeHost::ConvertPixelsToDIP(gfx::Point* point) const {
-  auto point_3f = gfx::Point3F(gfx::PointF(*point));
-  GetInverseRootTransform().TransformPoint(&point_3f);
-  *point = gfx::ToFlooredPoint(point_3f.AsPointF());
+  gfx::PointF point_f{*point};
+  ConvertPixelsToDIP(&point_f);
+  *point = gfx::ToFlooredPoint(point_f);
+}
+
+void WindowTreeHost::ConvertPixelsToDIP(gfx::PointF* point) const {
+  *point = GetInverseRootTransform().MapPoint(*point);
 }
 
 void WindowTreeHost::SetCursor(gfx::NativeCursor cursor) {
@@ -254,24 +291,21 @@ void WindowTreeHost::MoveCursorToLocationInPixels(
 
 ui::InputMethod* WindowTreeHost::GetInputMethod() {
   if (!input_method_) {
-    input_method_ =
-        ui::CreateInputMethod(this, GetAcceleratedWidget()).release();
-    owned_input_method_ = true;
+    input_method_owned_ = ui::CreateInputMethod(this, GetAcceleratedWidget());
+    input_method_ = input_method_owned_.get();
   }
   return input_method_;
 }
 
 void WindowTreeHost::SetSharedInputMethod(ui::InputMethod* input_method) {
-  if (input_method_ && owned_input_method_)
-    delete input_method_;
   input_method_ = input_method;
-  owned_input_method_ = false;
+  input_method_owned_.reset();
 }
 
 ui::EventDispatchDetails WindowTreeHost::DispatchKeyEventPostIME(
     ui::KeyEvent* event) {
   // If dispatch to IME is already disabled we shouldn't reach here.
-  DCHECK(!dispatcher_->should_skip_ime());
+  CHECK(!dispatcher_->should_skip_ime(), base::NotFatalUntil::M163);
   dispatcher_->set_skip_ime(true);
 
   // InputMethod::DispatchKeyEvent() is called in PRE_DISPATCH phase, so event
@@ -291,52 +325,104 @@ ui::EventSink* WindowTreeHost::GetEventSink() {
 }
 
 int64_t WindowTreeHost::GetDisplayId() {
-  return display::Screen::GetScreen()->GetDisplayNearestWindow(window()).id();
+  return display::Screen::Get()->GetDisplayNearestWindow(window()).id();
 }
 
 void WindowTreeHost::Show() {
   // Ensure that compositor has been properly initialized, see InitCompositor()
   // and InitHost().
-  DCHECK(compositor());
-  DCHECK_EQ(compositor()->root_layer(), window()->layer());
-  compositor()->SetVisible(true);
+  CHECK(compositor(), base::NotFatalUntil::M163);
+  CHECK_EQ(compositor()->root_layer(), window()->layer(),
+           base::NotFatalUntil::M163);
+  OnAcceleratedWidgetMadeVisible(true);
   ShowImpl();
   window()->Show();
 }
 
 void WindowTreeHost::Hide() {
   HideImpl();
-  if (compositor())
-    compositor()->SetVisible(false);
+  OnAcceleratedWidgetMadeVisible(false);
+}
+
+gfx::Rect WindowTreeHost::GetBoundsInDIP() const {
+  aura::Window* root_window = const_cast<aura::Window*>(window());
+  display::Screen* screen = display::Screen::Get();
+  gfx::Rect screen_bounds = GetBoundsInPixels();
+  return screen->ScreenToDIPRectInWindow(root_window, screen_bounds);
+}
+
+gfx::Rect WindowTreeHost::GetBoundsInAcceleratedWidgetPixelCoordinates() {
+  return gfx::Rect(GetBoundsInPixels().size());
 }
 
 std::unique_ptr<ScopedKeyboardHook> WindowTreeHost::CaptureSystemKeyEvents(
-    absl::optional<base::flat_set<ui::DomCode>> dom_codes) {
+    std::optional<base::flat_set<ui::DomCode>> dom_codes) {
   // TODO(joedow): Remove the simple hook class/logic once this flag is removed.
-  if (!base::FeatureList::IsEnabled(features::kSystemKeyboardLock))
-    return std::make_unique<ScopedSimpleKeyboardHook>(std::move(dom_codes));
+  if (!base::FeatureList::IsEnabled(features::kSystemKeyboardLock)) {
+    auto hook =
+        std::make_unique<ScopedSimpleKeyboardHook>(std::move(dom_codes));
+    simple_keyboard_hook_ = hook->GetWeakPtr();
+    return hook;
+  }
 
   if (CaptureSystemKeyEventsImpl(std::move(dom_codes)))
     return std::make_unique<ScopedKeyboardHook>(weak_factory_.GetWeakPtr());
   return nullptr;
 }
 
+bool WindowTreeHost::IsKeyLocked(ui::DomCode dom_code) {
+  return simple_keyboard_hook_ && simple_keyboard_hook_->IsKeyLocked(dom_code);
+}
+
 bool WindowTreeHost::ShouldSendKeyEventToIme() {
   return true;
 }
 
-bool WindowTreeHost::IsNativeWindowOcclusionEnabled() {
+bool WindowTreeHost::IsNativeWindowOcclusionEnabled() const {
   return native_window_occlusion_enabled_;
 }
 
 void WindowTreeHost::SetNativeWindowOcclusionState(
-    Window::OcclusionState state) {
-  if (occlusion_state_ != state) {
-    occlusion_state_ = state;
-    for (WindowTreeHostObserver& observer : observers_)
-      observer.OnOcclusionStateChanged(this, state);
+    Window::OcclusionState raw_occlusion_state,
+    const SkRegion& raw_occluded_region) {
+  raw_occlusion_state_ = raw_occlusion_state;
+  raw_occluded_region_ = raw_occluded_region;
+
+  auto state = video_capture_count_for_occlusion_tracking_ > 0
+                   ? Window::OcclusionState::VISIBLE
+                   : raw_occlusion_state;
+  auto occluded_region = video_capture_count_for_occlusion_tracking_ > 0
+                             ? SkRegion()
+                             : raw_occluded_region;
+
+  if (occlusion_state_ == state && occluded_region_ == occluded_region) {
+    return;
   }
+
+  occlusion_state_ = state;
+  occluded_region_ = occluded_region;
+  MaybeUpdateCompositorVisibilityForNativeOcclusion();
+
+  observers_.Notify(&WindowTreeHostObserver::OnOcclusionStateChanged, this,
+                    state, occluded_region);
 }
+
+void WindowTreeHost::UpdateRootWindowSize() {
+  // Validate that the LocalSurfaceId does not change.
+  bool compositor_inited = !!compositor()->root_layer();
+  ScopedLocalSurfaceIdValidator lsi_validator(compositor_inited ? window()
+                                                                : nullptr);
+  window()->SetBounds(CalculateRootWindowBounds());
+}
+
+gfx::Rect WindowTreeHost::CalculateRootWindowBounds() const {
+  return GetTransformedRootWindowBoundsFromPixelSize(
+      GetBoundsInPixels().size());
+}
+
+void WindowTreeHost::OnVideoCaptureLockCreated() {}
+
+void WindowTreeHost::OnVideoCaptureLockDestroyed() {}
 
 std::unique_ptr<ScopedEnableUnadjustedMouseEvents>
 WindowTreeHost::RequestUnadjustedMovement() {
@@ -344,9 +430,13 @@ WindowTreeHost::RequestUnadjustedMovement() {
   return nullptr;
 }
 
+bool WindowTreeHost::SupportsMouseLock() {
+  return false;
+}
+
 void WindowTreeHost::LockMouse(Window* window) {
   Window* root_window = window->GetRootWindow();
-  DCHECK(root_window);
+  CHECK(root_window, base::NotFatalUntil::M163);
 
   auto* cursor_client = client::GetCursorClient(root_window);
   if (cursor_client) {
@@ -357,7 +447,9 @@ void WindowTreeHost::LockMouse(Window* window) {
 
 void WindowTreeHost::UnlockMouse(Window* window) {
   Window* root_window = window->GetRootWindow();
-  DCHECK(root_window);
+  CHECK_EQ(root_window, window_);
+  CHECK(root_window, base::NotFatalUntil::M163);
+  Window::ScopedDeleteBlocker blocker(root_window);
 
   if (window->HasCapture())
     window->ReleaseCapture();
@@ -369,22 +461,31 @@ void WindowTreeHost::UnlockMouse(Window* window) {
   }
 }
 
+std::unique_ptr<WindowTreeHost::VideoCaptureLock>
+WindowTreeHost::CreateVideoCaptureLock() {
+  if (NativeWindowOcclusionTracker::
+          IsNativeWindowOcclusionTrackingAlwaysEnabled(this)) {
+    ++video_capture_count_for_occlusion_tracking_;
+    MaybeUpdateComposibleVisibilityForVideoLockCountChange();
+  }
+
+  // WrapUnique() is used as constructor is private.
+  return base::WrapUnique(new VideoCaptureLock(this));
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WindowTreeHost, protected:
 
 WindowTreeHost::WindowTreeHost(std::unique_ptr<Window> window)
-    : window_(window.release()),  // See header for details on ownership.
-      occlusion_state_(Window::OcclusionState::UNKNOWN),
-      last_cursor_(ui::mojom::CursorType::kNull),
-      input_method_(nullptr),
-      owned_input_method_(false) {
-  if (!window_)
+    : window_(window.release()) {  // See header for details on ownership.
+  if (!window_) {
     window_ = new Window(nullptr);
-  display::Screen::GetScreen()->AddObserver(this);
-  auto display = display::Screen::GetScreen()->GetDisplayNearestWindow(window_);
-  device_scale_factor_ = display.device_scale_factor();
-#if defined(OS_WIN)
-  // The feature state is neccessary but not sufficient for checking if
+  }
+  device_scale_factor_ = display::Screen::Get()
+                             ->GetPreferredScaleFactorForWindow(window_)
+                             .value_or(1.f);
+#if BUILDFLAG(IS_WIN)
+  // The feature state is necessary but not sufficient for checking if
   // occlusion is enabled. It may be disabled by other means (e.g., policy).
   native_window_occlusion_enabled_ =
       !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHeadless) &&
@@ -392,15 +493,34 @@ WindowTreeHost::WindowTreeHost(std::unique_ptr<Window> window)
 #endif
 }
 
-void WindowTreeHost::IntializeDeviceScaleFactor(float device_scale_factor) {
-  DCHECK(!compositor_->root_layer()) << "Only call this before InitHost()";
-  device_scale_factor_ = device_scale_factor;
+void WindowTreeHost::UpdateCompositorVisibility(bool visible) {
+  if (!compositor())
+    return;
+
+  if (NativeOcclusionAffectsThrottle()) {
+    // If NativeOcclusionAffectsThrottle() is true, then this function should
+    // only be called if visibility is changed externally. In this case, assume
+    // `occlusion_state_` is being ignored, and that throttling should be
+    // disabled. For the most part, if NativeOcclusionAffectsThrottle() is true,
+    // the handling of occlusion changing is done in
+    // SetNativeWindowOcclusionState().
+    HostFrameRateThrottler::GetInstance().RemoveHost(this);
+  }
+
+  compositor()->SetVisible(visible);
 }
 
 void WindowTreeHost::DestroyCompositor() {
-  if (compositor_) {
-    compositor_->RemoveObserver(this);
-    compositor_.reset();
+  if (!compositor_)
+    return;
+
+  HostFrameRateThrottler::GetInstance().RemoveHost(this);
+
+  compositor_->RemoveObserver(this);
+  compositor_.reset();
+  if (NativeWindowOcclusionTracker::
+          IsNativeWindowOcclusionTrackingAlwaysEnabled(this)) {
+    NativeWindowOcclusionTracker::DisableNativeWindowOcclusionTracking(this);
   }
 }
 
@@ -414,27 +534,39 @@ void WindowTreeHost::DestroyDispatcher() {
   // isn't called from WED, and WED isn't a subclass of Window. So it seems
   // like we could just rely on ~Window now.
   // Destroy child windows while we're still valid. This is also done by
-  // ~Window, but by that time any calls to virtual methods overriden here (such
-  // as GetRootWindow()) result in Window's implementation. By destroying here
-  // we ensure GetRootWindow() still returns this.
-  //window()->RemoveOrDestroyChildren();
+  // ~Window, but by that time any calls to virtual methods overridden here
+  // (such as GetRootWindow()) result in Window's implementation. By destroying
+  // here we ensure GetRootWindow() still returns this.
+  // window()->RemoveOrDestroyChildren();
 }
 
-void WindowTreeHost::CreateCompositor(
-    bool force_software_compositor,
-    bool use_external_begin_frame_control,
-    bool enable_compositing_based_throttling) {
+void WindowTreeHost::OnAcceleratedWidgetMadeVisible(bool value) {
+  if (accelerated_widget_made_visible_ == value)
+    return;
+
+  accelerated_widget_made_visible_ = value;
+  // Always update the compositor (ignoring occlusion-state) as it is entirely
+  // possible the occlusion-state is out of date at this point. It is expected
+  // that the proper occlusion state is provided soon after this.
+  UpdateCompositorVisibility(value);
+}
+
+void WindowTreeHost::CreateCompositor(bool use_external_begin_frame_control,
+                                      bool enable_compositing_based_throttling,
+                                      size_t memory_limit_when_visible_mb) {
   Env* env = Env::GetInstance();
   ui::ContextFactory* context_factory = env->context_factory();
-  DCHECK(context_factory);
+  CHECK(context_factory, base::NotFatalUntil::M163);
+  // Note: `ui::Compositor` retains this task runner for its entire lifetime
+  // (including after startup completes). Implementations that prioritize a
+  // startup queue should reset that queue's priority once startup finishes.
   compositor_ = std::make_unique<ui::Compositor>(
       context_factory->AllocateFrameSinkId(), context_factory,
-      base::ThreadTaskRunnerHandle::Get(), ui::IsPixelCanvasRecordingEnabled(),
-      use_external_begin_frame_control, force_software_compositor,
-      enable_compositing_based_throttling);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+      context_factory->GetCompositorTaskRunner(),
+      features::IsPixelCanvasRecordingEnabled(),
+      use_external_begin_frame_control, enable_compositing_based_throttling,
+      memory_limit_when_visible_mb);
   compositor_->AddObserver(this);
-#endif
   if (!dispatcher()) {
     window()->Init(ui::LAYER_NOT_DRAWN);
     window()->set_host(this);
@@ -444,29 +576,32 @@ void WindowTreeHost::CreateCompositor(
 }
 
 void WindowTreeHost::InitCompositor() {
-  DCHECK(!compositor_->root_layer());
+  CHECK(!compositor_->root_layer(), base::NotFatalUntil::M163);
   compositor_->SetScaleAndSize(device_scale_factor_, GetBoundsInPixels().size(),
                                window()->GetLocalSurfaceId());
   compositor_->SetRootLayer(window()->layer());
 
   display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window());
-  compositor_->SetDisplayColorSpaces(display.color_spaces());
+      display::Screen::Get()->GetDisplayNearestWindow(window());
+  compositor_->SetDisplayColorSpaces(display_color_spaces_
+                                         ? display_color_spaces_->color_spaces()
+                                         : display.GetColorSpaces());
 }
 
 void WindowTreeHost::OnAcceleratedWidgetAvailable() {
   compositor_->SetAcceleratedWidget(GetAcceleratedWidget());
   prop_ = std::make_unique<ui::ViewProp>(
       GetAcceleratedWidget(), kWindowTreeHostForAcceleratedWidget, this);
+  if (NativeWindowOcclusionTracker::
+          IsNativeWindowOcclusionTrackingAlwaysEnabled(this)) {
+    NativeWindowOcclusionTracker::EnableNativeWindowOcclusionTracking(this);
+  }
 }
 
-void WindowTreeHost::OnHostMovedInPixels(
-    const gfx::Point& new_location_in_pixels) {
-  TRACE_EVENT1("ui", "WindowTreeHost::OnHostMovedInPixels", "origin",
-               new_location_in_pixels.ToString());
+void WindowTreeHost::OnHostMovedInPixels() {
+  TRACE_EVENT0("ui", "WindowTreeHost::OnHostMovedInPixels");
 
-  for (WindowTreeHostObserver& observer : observers_)
-    observer.OnHostMovedInPixels(this, new_location_in_pixels);
+  observers_.Notify(&WindowTreeHostObserver::OnHostMovedInPixels, this);
 }
 
 void WindowTreeHost::OnHostResizedInPixels(
@@ -477,10 +612,14 @@ void WindowTreeHost::OnHostResizedInPixels(
   if (!compositor_)
     return;
 
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window());
-  device_scale_factor_ = display.device_scale_factor();
-  UpdateRootWindowSizeInPixels();
+  // If we don't have the actual preferred scale, don't overwrite the scale
+  // factor with the default value. See https://crbug.com/1285476 for details.
+  auto* screen = display::Screen::Get();
+  if (auto scale = screen->GetPreferredScaleFactorForWindow(window())) {
+    device_scale_factor_ = scale.value();
+  }
+
+  UpdateRootWindowSize();
 
   // Passing |new_size_in_pixels| to set compositor size. It could be different
   // from GetBoundsInPixels() on Windows to contain extra space for window
@@ -488,26 +627,24 @@ void WindowTreeHost::OnHostResizedInPixels(
   // GetBoundsInPixels() in such case.
   UpdateCompositorScaleAndSize(new_size_in_pixels);
 
-  for (WindowTreeHostObserver& observer : observers_)
-    observer.OnHostResized(this);
+  observers_.Notify(&WindowTreeHostObserver::OnHostResized, this);
 }
 
 void WindowTreeHost::OnHostWorkspaceChanged() {
-  for (WindowTreeHostObserver& observer : observers_)
-    observer.OnHostWorkspaceChanged(this);
+  observers_.Notify(&WindowTreeHostObserver::OnHostWorkspaceChanged, this);
 }
 
 void WindowTreeHost::OnHostDisplayChanged() {
-  if (!compositor_)
+  if (!compositor_ || display_color_spaces_) {
     return;
+  }
   display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window());
-  compositor_->SetDisplayColorSpaces(display.color_spaces());
+      display::Screen::Get()->GetDisplayNearestWindow(window());
+  compositor_->SetDisplayColorSpaces(display.GetColorSpaces());
 }
 
 void WindowTreeHost::OnHostCloseRequested() {
-  for (WindowTreeHostObserver& observer : observers_)
-    observer.OnHostCloseRequested(this);
+  observers_.Notify(&WindowTreeHostObserver::OnHostCloseRequested, this);
 }
 
 void WindowTreeHost::OnHostLostWindowCapture() {
@@ -525,35 +662,153 @@ void WindowTreeHost::OnHostLostWindowCapture() {
 void WindowTreeHost::OnDisplayMetricsChanged(const display::Display& display,
                                              uint32_t metrics) {
   if (metrics & DisplayObserver::DISPLAY_METRIC_COLOR_SPACE && compositor_ &&
-      display.id() == GetDisplayId())
-    compositor_->SetDisplayColorSpaces(display.color_spaces());
+      display.id() == GetDisplayId() && !display_color_spaces_) {
+    compositor_->SetDisplayColorSpaces(display.GetColorSpaces());
+  }
 
 // Chrome OS is handled in WindowTreeHostManager::OnDisplayMetricsChanged.
 // Chrome OS requires additional handling for the bounds that we do not need to
 // do for other OSes.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   if (metrics & DISPLAY_METRIC_DEVICE_SCALE_FACTOR &&
       display.id() == GetDisplayId())
     OnHostResizedInPixels(GetBoundsInPixels().size());
 #endif
 }
 
-gfx::Rect WindowTreeHost::GetTransformedRootWindowBoundsInPixels(
+void WindowTreeHost::OnDisplayColorSpacesChanged(
+    scoped_refptr<gfx::DisplayColorSpacesRef> color_spaces) {
+  CHECK(color_spaces, base::NotFatalUntil::M163);
+  display_color_spaces_ = color_spaces;
+  if (compositor_) {
+    compositor_->SetDisplayColorSpaces(color_spaces->color_spaces());
+  }
+}
+
+gfx::Rect WindowTreeHost::GetTransformedRootWindowBoundsFromPixelSize(
     const gfx::Size& size_in_pixels) const {
-  gfx::RectF new_bounds = gfx::RectF(gfx::Rect(size_in_pixels));
-  GetInverseRootTransform().TransformRect(&new_bounds);
-  return gfx::ToEnclosingRect(new_bounds);
+  return GetInverseRootTransform().MapRect(gfx::Rect(size_in_pixels));
 }
 
 void WindowTreeHost::SetNativeWindowOcclusionEnabled(bool enable) {
   native_window_occlusion_enabled_ = enable;
-  // TODO(crbug.com/1051306) If enabled is false, make this
+  // TODO(crbug.com/40118412) If enabled is false, make this
   // turn off native window occlusion on this window. Only Windows has
   // native window occlusion currently.
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // WindowTreeHost, private:
+
+void WindowTreeHost::DecrementVideoCaptureCountForOcclusionTracking() {
+  CHECK_GT(video_capture_count_for_occlusion_tracking_, 0,
+           base::NotFatalUntil::M163);
+  --video_capture_count_for_occlusion_tracking_;
+  MaybeUpdateComposibleVisibilityForVideoLockCountChange();
+}
+
+void WindowTreeHost::MaybeUpdateComposibleVisibilityForVideoLockCountChange() {
+  // Only need to check for changes when transitioning between lock and no lock.
+  if (video_capture_count_for_occlusion_tracking_ > 1) {
+    return;
+  }
+  // If we no longer have video capture locks, update the occlusion state to
+  // what the platform last sent us.
+  SetNativeWindowOcclusionState(raw_occlusion_state_, raw_occluded_region_);
+  MaybeUpdateCompositorVisibilityForNativeOcclusion();
+}
+
+void WindowTreeHost::MaybeUpdateCompositorVisibilityForNativeOcclusion() {
+  if (!compositor() || !accelerated_widget_made_visible_ ||
+      !NativeWindowOcclusionTracker::
+          IsNativeWindowOcclusionTrackingAlwaysEnabled(this)) {
+    return;
+  }
+  const bool visible = CalculateCompositorVisibilityFromOcclusionState();
+  if (visible != compositor()->IsVisible()) {
+    UpdateCompositorVisibility(visible);
+  }
+
+  if (NativeOcclusionAffectsThrottle()) {
+    if (ShouldThrottle()) {
+      HostFrameRateThrottler::GetInstance().AddHost(this);
+    } else {
+      HostFrameRateThrottler::GetInstance().RemoveHost(this);
+    }
+  }
+}
+
+bool WindowTreeHost::CalculateCompositorVisibilityFromOcclusionState() const {
+  // For example, visibility should not be changed if we should only change
+  // throttle status.
+  if (!NativeOcclusionAffectsVisibility()) {
+    return true;
+  }
+  switch (occlusion_state_) {
+    case Window::OcclusionState::UNKNOWN:
+      return true;
+    case Window::OcclusionState::VISIBLE:
+      return true;
+    case Window::OcclusionState::OCCLUDED: {
+      // The compositor needs to be visible when capturing video.
+      return video_capture_count_for_occlusion_tracking_ != 0;
+    }
+    case Window::OcclusionState::HIDDEN:
+      // TODO: On windows, this likely needs other changes to really work
+      // (such as when an HWND is iconified it is sized to 0x0).
+      return video_capture_count_for_occlusion_tracking_ != 0;
+  }
+}
+
+bool WindowTreeHost::NativeOcclusionAffectsThrottle() const {
+#if BUILDFLAG(IS_WIN)
+  if (!base::FeatureList::IsEnabled(
+          features::kApplyNativeOcclusionToCompositor) ||
+      !IsNativeWindowOcclusionEnabled()) {
+    return false;
+  }
+
+  const std::string type =
+      features::kApplyNativeOcclusionToCompositorType.Get();
+  return type == features::kApplyNativeOcclusionToCompositorTypeThrottle ||
+         type ==
+             features::kApplyNativeOcclusionToCompositorTypeThrottleAndRelease;
+#else
+  return false;
+#endif
+}
+
+bool WindowTreeHost::NativeOcclusionAffectsVisibility() const {
+#if BUILDFLAG(IS_WIN)
+  if (!base::FeatureList::IsEnabled(
+          features::kApplyNativeOcclusionToCompositor) ||
+      !IsNativeWindowOcclusionEnabled()) {
+    return false;
+  }
+
+  const std::string type =
+      features::kApplyNativeOcclusionToCompositorType.Get();
+  return type == features::kApplyNativeOcclusionToCompositorTypeRelease ||
+         type ==
+             features::kApplyNativeOcclusionToCompositorTypeThrottleAndRelease;
+#else
+  return false;
+#endif
+}
+
+bool WindowTreeHost::ShouldThrottle() const {
+  // Only throttle if allowed and there are no video captures and we are
+  // occluded.
+  CHECK(NativeOcclusionAffectsThrottle(), base::NotFatalUntil::M163);
+  return video_capture_count_for_occlusion_tracking_ == 0 &&
+         occlusion_state_ == Window::OcclusionState::OCCLUDED;
+}
+
+// static
+const base::flat_set<raw_ptr<WindowTreeHost, CtnExperimental>>&
+WindowTreeHost::GetThrottledHostsForTesting() {
+  return HostFrameRateThrottler::GetInstance().hosts();
+}
 
 void WindowTreeHost::MoveCursorToInternal(const gfx::Point& root_location,
                                           const gfx::Point& host_location) {
@@ -562,31 +817,55 @@ void WindowTreeHost::MoveCursorToInternal(const gfx::Point& root_location,
   client::CursorClient* cursor_client = client::GetCursorClient(window());
   if (cursor_client) {
     const display::Display& display =
-        display::Screen::GetScreen()->GetDisplayNearestWindow(window());
+        display::Screen::Get()->GetDisplayNearestWindow(window());
     cursor_client->SetDisplay(display);
   }
   dispatcher()->OnCursorMovedToRootLocation(root_location);
 }
 
-void WindowTreeHost::OnCompositingEnded(ui::Compositor* compositor) {
+void WindowTreeHost::OnCompositingAckDeprecated(ui::Compositor* compositor) {
+  // Currently, input is only throttled on ash and is not well supported on
+  // other platforms. See crbug.com/41359082.
+#if BUILDFLAG(IS_CHROMEOS)
   if (!holding_pointer_moves_)
     return;
 
   dispatcher_->ReleasePointerMoves();
   holding_pointer_moves_ = false;
+#endif
 }
 
 void WindowTreeHost::OnCompositingChildResizing(ui::Compositor* compositor) {
+  // Currently, input is only throttled on ash and is not well supported on
+  // other platforms. See crbug.com/41359082.
+#if BUILDFLAG(IS_CHROMEOS)
   if (!Env::GetInstance()->throttle_input_on_resize() || holding_pointer_moves_)
     return;
   dispatcher_->HoldPointerMoves();
   holding_pointer_moves_ = true;
+#endif
 }
 
 void WindowTreeHost::OnFrameSinksToThrottleUpdated(
     const base::flat_set<viz::FrameSinkId>& ids) {
-  for (auto& observer : observers_)
-    observer.OnCompositingFrameSinksToThrottleUpdated(this, ids);
+  observers_.Notify(
+      &WindowTreeHostObserver::OnCompositingFrameSinksToThrottleUpdated, this,
+      ids);
+}
+
+void WindowTreeHost::OnSetPreferredRefreshRate(ui::Compositor*,
+                                               float preferred_refresh_rate) {
+  observers_.Notify(&WindowTreeHostObserver::OnSetPreferredRefreshRate, this,
+                    preferred_refresh_rate);
+}
+
+void WindowTreeHost::OnFirstSurfaceActivation(
+    ui::Compositor*,
+    const viz::SurfaceInfo& surface_info) {
+  window()->UpdateLocalSurfaceIdFromEmbeddedClient(
+      surface_info.id().local_surface_id());
+  observers_.Notify(&WindowTreeHostObserver::OnLocalSurfaceIdChanged, this,
+                    window()->GetLocalSurfaceId());
 }
 
 }  // namespace aura

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@
 #define MOJO_PUBLIC_CPP_SYSTEM_HANDLE_H_
 
 #include <stdint.h>
+
 #include <limits>
 
 #include "base/check_op.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "mojo/public/c/system/functions.h"
 #include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/system/handle_signals_state.h"
@@ -77,6 +76,10 @@ class ScopedHandleBase {
 
   ScopedHandleBase() {}
   explicit ScopedHandleBase(HandleType handle) : handle_(handle) {}
+
+  ScopedHandleBase(const ScopedHandleBase&) = delete;
+  ScopedHandleBase& operator=(const ScopedHandleBase&) = delete;
+
   ~ScopedHandleBase() { CloseIfNecessary(); }
 
   template <class CompatibleHandleType>
@@ -112,7 +115,7 @@ class ScopedHandleBase {
 
   void swap(ScopedHandleBase& other) { handle_.swap(other.handle_); }
 
-  HandleType release() WARN_UNUSED_RESULT {
+  [[nodiscard]] HandleType release() {
     HandleType rv;
     rv.swap(handle_);
     return rv;
@@ -133,13 +136,12 @@ class ScopedHandleBase {
 
  private:
   void CloseIfNecessary() {
-    if (handle_.is_valid())
+    if (handle_.is_valid()) {
       handle_.Close();
+    }
   }
 
   HandleType handle_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedHandleBase);
 };
 
 template <typename HandleType>
@@ -174,14 +176,13 @@ class Handle {
 
   void Close() {
     DCHECK(is_valid());
-    MojoResult result = MojoClose(value_);
-    ALLOW_UNUSED_LOCAL(result);
+    [[maybe_unused]] MojoResult result = MojoClose(value_);
     DCHECK_EQ(MOJO_RESULT_OK, result);
   }
 
   HandleSignalsState QuerySignalsState() const {
     HandleSignalsState signals_state;
-    MojoResult result = MojoQueryHandleSignalsState(
+    [[maybe_unused]] MojoResult result = MojoQueryHandleSignalsState(
         value_, static_cast<MojoHandleSignalsState*>(&signals_state));
     DCHECK_EQ(MOJO_RESULT_OK, result);
     return signals_state;
@@ -205,8 +206,7 @@ static_assert(sizeof(ScopedHandle) == sizeof(Handle),
 // Note: There's nothing to do, since the argument will be destroyed when it
 // goes out of scope.
 template <class HandleType>
-inline void Close(ScopedHandleBase<HandleType> /*handle*/) {
-}
+inline void Close(ScopedHandleBase<HandleType> /*handle*/) {}
 
 // Most users should typically use |Close()| (above) instead.
 inline MojoResult CloseRaw(Handle handle) {

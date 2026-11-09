@@ -1,13 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_BROWSER_UI_SITE_SETTINGS_ANDROID_STORAGE_INFO_FETCHER_H_
 #define COMPONENTS_BROWSER_UI_SITE_SETTINGS_ANDROID_STORAGE_INFO_FETCHER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "storage/browser/quota/quota_callbacks.h"
-#include "third_party/blink/public/mojom/quota/quota_types.mojom-forward.h"
 
 namespace content {
 class BrowserContext;
@@ -30,12 +30,14 @@ class StorageInfoFetcher
 
   explicit StorageInfoFetcher(content::BrowserContext* context);
 
+  StorageInfoFetcher(const StorageInfoFetcher&) = delete;
+  StorageInfoFetcher& operator=(const StorageInfoFetcher&) = delete;
+
   // Asynchronously fetches the StorageInfo.
   void FetchStorageInfo(FetchCallback fetch_callback);
 
   // Asynchronously clears storage for the given host.
   void ClearStorage(const std::string& host,
-                    blink::mojom::StorageType type,
                     ClearCallback clear_callback);
 
  private:
@@ -59,21 +61,16 @@ class StorageInfoFetcher
   void OnClearCompleted(blink::mojom::QuotaStatusCode code);
 
   // The quota manager to use to calculate the storage usage.
-  storage::QuotaManager* quota_manager_;
+  raw_ptr<storage::QuotaManager> quota_manager_;
 
   // Hosts and their usage.
   storage::UsageInfoEntries entries_;
-
-  // The storage type to delete.
-  blink::mojom::StorageType type_to_delete_;
 
   // The callback to use when fetching is complete.
   FetchCallback fetch_callback_;
 
   // The callback to use when storage has been cleared.
   ClearCallback clear_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(StorageInfoFetcher);
 };
 
 }  // namespace browser_ui

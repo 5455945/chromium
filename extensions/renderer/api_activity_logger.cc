@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <stddef.h>
 
 #include <string>
+#include <utility>
 
-#include "base/bind.h"
-#include "content/public/renderer/render_thread.h"
+#include "base/functional/bind.h"
 #include "content/public/renderer/v8_value_converter.h"
-#include "extensions/common/extension_messages.h"
 #include "extensions/renderer/activity_log_converter_strategy.h"
 #include "extensions/renderer/dispatcher.h"
 #include "extensions/renderer/extensions_renderer_client.h"
@@ -19,10 +18,15 @@
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/worker_script_context_set.h"
 #include "extensions/renderer/worker_thread_util.h"
+#include "v8/include/v8-container.h"
+#include "v8/include/v8-function-callback.h"
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-primitive.h"
 
 namespace extensions {
 
 namespace {
+
 bool g_log_for_testing = false;
 
 ScriptContext* GetContextByV8Context(v8::Local<v8::Context> context) {
@@ -40,7 +44,7 @@ APIActivityLogger::APIActivityLogger(IPCMessageSender* ipc_sender,
                                      ScriptContext* context)
     : ObjectBackedNativeHandler(context), ipc_sender_(ipc_sender) {}
 
-APIActivityLogger::~APIActivityLogger() {}
+APIActivityLogger::~APIActivityLogger() = default;
 
 void APIActivityLogger::AddRoutes() {
   RouteHandlerFunction(
@@ -55,8 +59,7 @@ void APIActivityLogger::AddRoutes() {
 
 // static
 bool APIActivityLogger::IsLoggingEnabled() {
-  const Dispatcher* dispatcher =
-      ExtensionsRendererClient::Get()->GetDispatcher();
+  const Dispatcher* dispatcher = ExtensionsRendererClient::Get()->dispatcher();
   return (dispatcher &&  // dispatcher can be null in unittests.
           dispatcher->activity_logging_enabled()) ||
          g_log_for_testing;
@@ -67,7 +70,7 @@ void APIActivityLogger::LogAPICall(
     IPCMessageSender* ipc_sender,
     v8::Local<v8::Context> context,
     const std::string& call_name,
-    const std::vector<v8::Local<v8::Value>>& arguments) {
+    const v8::LocalVector<v8::Value>& arguments) {
   if (!IsLoggingEnabled())
     return;
 
@@ -81,7 +84,7 @@ void APIActivityLogger::LogAPICall(
   converter->SetFunctionAllowed(true);
   converter->SetStrategy(&strategy);
 
-  base::Value::ListStorage value_args;
+  base::ListValue value_args;
   value_args.reserve(arguments.size());
   // TODO(devlin): This doesn't protect against custom properties, so it might
   // not perfectly reflect the passed arguments.
@@ -90,26 +93,29 @@ void APIActivityLogger::LogAPICall(
         converter->FromV8Value(arg, context);
     if (!converted_arg)
       converted_arg = std::make_unique<base::Value>();
-    value_args.push_back(
+    value_args.Append(
         base::Value::FromUniquePtrValue(std::move(converted_arg)));
   }
 
-  LogInternal(ipc_sender, IPCMessageSender::ActivityLogCallType::APICALL,
-              script_context->GetExtensionID(), call_name,
-              std::make_unique<base::ListValue>(std::move(value_args)),
-              std::string());
+  ipc_sender->SendActivityLogIPC(script_context,
+                                 script_context->GetExtensionID(),
+                                 IPCMessageSender::ActivityLogCallType::APICALL,
+                                 call_name, std::move(value_args),
+                                 /*extra=*/std::string());
 }
 
 void APIActivityLogger::LogEvent(IPCMessageSender* ipc_sender,
                                  ScriptContext* script_context,
                                  const std::string& event_name,
-                                 std::unique_ptr<base::ListValue> arguments) {
+                                 base::ListValue arguments) {
   if (!IsLoggingEnabled())
     return;
 
-  LogInternal(ipc_sender, IPCMessageSender::ActivityLogCallType::EVENT,
-              script_context->GetExtensionID(), event_name,
-              std::move(arguments), std::string());
+  ipc_sender->SendActivityLogIPC(script_context,
+                                 script_context->GetExtensionID(),
+                                 IPCMessageSender::ActivityLogCallType::EVENT,
+                                 event_name, std::move(arguments),
+                                 /*extra=*/std::string());
 }
 
 void APIActivityLogger::set_log_for_testing(bool log) {
@@ -131,6 +137,11 @@ void APIActivityLogger::LogForJS(
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
+  ScriptContext* script_context = GetContextByV8Context(context);
+  if (!script_context) {
+    return;
+  }
+
   std::string extension_id = *v8::String::Utf8Value(isolate, args[0]);
   std::string call_name = *v8::String::Utf8Value(isolate, args[1]);
   std::string extra;
@@ -140,7 +151,7 @@ void APIActivityLogger::LogForJS(
   }
 
   // Get the array of call arguments.
-  base::Value::ListStorage arguments;
+  base::ListValue arguments;
   v8::Local<v8::Array> arg_array = v8::Local<v8::Array>::Cast(args[2]);
   if (arg_array->Length() > 0) {
     arguments.reserve(arg_array->Length());
@@ -150,35 +161,19 @@ void APIActivityLogger::LogForJS(
     converter->SetFunctionAllowed(true);
     converter->SetStrategy(&strategy);
     for (size_t i = 0; i < arg_array->Length(); ++i) {
-      // TODO(crbug.com/913942): Possibly replace ToLocalChecked here with
+      // TODO(crbug.com/40605992): Possibly replace ToLocalChecked here with
       // actual error handling.
       std::unique_ptr<base::Value> converted_arg = converter->FromV8Value(
           arg_array->Get(context, i).ToLocalChecked(), context);
       if (!converted_arg)
         converted_arg = std::make_unique<base::Value>();
-      arguments.push_back(
+      arguments.Append(
           base::Value::FromUniquePtrValue(std::move(converted_arg)));
     }
   }
 
-  LogInternal(ipc_sender_, call_type, extension_id, call_name,
-              std::make_unique<base::ListValue>(std::move(arguments)), extra);
-}
-
-// static
-void APIActivityLogger::LogInternal(
-    IPCMessageSender* ipc_sender,
-    const IPCMessageSender::ActivityLogCallType call_type,
-    const std::string& extension_id,
-    const std::string& call_name,
-    std::unique_ptr<base::ListValue> arguments,
-    const std::string& extra) {
-  DCHECK(IsLoggingEnabled());
-  ExtensionHostMsg_APIActionOrEvent_Params params;
-  params.api_call = call_name;
-  params.arguments.Swap(arguments.get());
-  params.extra = extra;
-  ipc_sender->SendActivityLogIPC(extension_id, call_type, params);
+  ipc_sender_->SendActivityLogIPC(script_context, extension_id, call_type,
+                                  call_name, std::move(arguments), extra);
 }
 
 }  // namespace extensions

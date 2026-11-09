@@ -1,74 +1,70 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/logging.h"
+
 #include <sstream>
 #include <string>
+#include <string_view>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/logging.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging/logging_settings.h"
 #include "base/no_destructor.h"
 #include "base/process/process.h"
 #include "base/run_loop.h"
 #include "base/sanitizer_buildflags.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_logging_settings.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
+#include <errno.h>
 #include <signal.h>
 #include <unistd.h>
-#include "base/posix/eintr_wrapper.h"
-#endif  // OS_POSIX
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#include "base/posix/eintr_wrapper.h"
+#endif  // BUILDFLAG(IS_POSIX)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include <ucontext.h>
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
-#include <excpt.h>
-#endif  // OS_WIN
 
-#if defined(OS_FUCHSIA)
-#include <fuchsia/logger/cpp/fidl.h>
-#include <lib/fidl/cpp/binding.h>
-#include <lib/sys/cpp/component_context.h>
+#include <excpt.h>
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_FUCHSIA)
 #include <lib/zx/channel.h>
 #include <lib/zx/event.h>
 #include <lib/zx/exception.h>
-#include <lib/zx/process.h>
 #include <lib/zx/thread.h>
-#include <lib/zx/time.h>
-#include <zircon/process.h>
 #include <zircon/syscalls/debug.h>
 #include <zircon/syscalls/exception.h>
 #include <zircon/types.h>
+#endif  // BUILDFLAG(IS_FUCHSIA)
 
-#include "base/fuchsia/fuchsia_logging.h"
-#include "base/fuchsia/process_context.h"
-#include "base/fuchsia/test_log_listener_safe.h"
-#endif  // OS_FUCHSIA
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
 
 namespace logging {
 
 namespace {
 
-using ::testing::Return;
 using ::testing::_;
+using ::testing::Return;
 
 class LoggingTest : public testing::Test {
  protected:
@@ -84,27 +80,46 @@ class LoggingTest : public testing::Test {
 
 class MockLogSource {
  public:
-  MOCK_METHOD0(Log, const char*());
+  MOCK_METHOD(const char*, Log, ());
 };
 
 class MockLogAssertHandler {
  public:
-  MOCK_METHOD4(
+  MOCK_METHOD(
+      void,
       HandleLogAssert,
-      void(const char*, int, const base::StringPiece, const base::StringPiece));
+      (const char*, int, const std::string_view, const std::string_view));
 };
 
 TEST_F(LoggingTest, BasicLogging) {
   MockLogSource mock_log_source;
+
+  // 4 base logs: LOG, LOG_IF, PLOG, and PLOG_IF
+  int expected_logs = 4;
+
+  // 4 verbose logs: VLOG, VLOG_IF, VPLOG, VPLOG_IF.
+  if (VLOG_IS_ON(0)) {
+    expected_logs += 4;
+  }
+
+  // 4 debug logs: DLOG, DLOG_IF, DPLOG, DPLOG_IF.
+  if (DCHECK_IS_ON()) {
+    expected_logs += 4;
+  }
+
+  // 4 verbose debug logs: DVLOG, DVLOG_IF, DVPLOG, DVPLOG_IF
+  if (VLOG_IS_ON(0) && DCHECK_IS_ON()) {
+    expected_logs += 4;
+  }
+
   EXPECT_CALL(mock_log_source, Log())
-      .Times(DCHECK_IS_ON() ? 16 : 8)
+      .Times(expected_logs)
       .WillRepeatedly(Return("log message"));
 
   SetMinLogLevel(LOGGING_INFO);
 
   EXPECT_TRUE(LOG_IS_ON(INFO));
   EXPECT_EQ(DCHECK_IS_ON(), DLOG_IS_ON(INFO));
-  EXPECT_TRUE(VLOG_IS_ON(0));
 
   LOG(INFO) << mock_log_source.Log();
   LOG_IF(INFO, true) << mock_log_source.Log();
@@ -192,8 +207,9 @@ TEST_F(LoggingTest, LoggingIsLazyByDestination) {
   EXPECT_CALL(mock_log_source, Log()).Times(0);
 
   // Severity >= ERROR is always printed to stderr.
-  EXPECT_CALL(mock_log_source_error, Log()).Times(1).
-      WillRepeatedly(Return("log message"));
+  EXPECT_CALL(mock_log_source_error, Log())
+      .Times(1)
+      .WillRepeatedly(Return("log message"));
 
   LoggingSettings settings;
   settings.logging_dest = LOG_NONE;
@@ -220,10 +236,21 @@ TEST_F(LoggingTest, LogToStdErrFlag) {
   LOG(INFO) << mock_log_source_stderr.Log();
 }
 
+TEST_F(LoggingTest, GetLoggingDestination) {
+  LoggingSettings settings;
+  settings.logging_dest = LOG_NONE;
+  InitLogging(settings);
+  EXPECT_EQ(LOG_NONE, GetLoggingDestination());
+
+  settings.logging_dest = LOG_TO_STDERR | LOG_TO_SYSTEM_DEBUG_LOG;
+  InitLogging(settings);
+  EXPECT_EQ(LOG_TO_STDERR | LOG_TO_SYSTEM_DEBUG_LOG, GetLoggingDestination());
+}
+
 // Check that messages with severity ERROR or higher are always logged to
 // stderr if no log-destinations are set, other than LOG_TO_FILE.
 // This test is currently only POSIX-compatible.
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 namespace {
 void TestForLogToStderr(int log_destinations,
                         bool* did_log_info,
@@ -272,6 +299,8 @@ TEST_F(LoggingTest, AlwaysLogErrorsToStderr) {
   bool did_log_info = false;
   bool did_log_error = false;
 
+  // Fuchsia only logs to stderr when explicitly specified.
+#if !BUILDFLAG(IS_FUCHSIA)
   // When no destinations are specified, ERRORs should still log to stderr.
   TestForLogToStderr(LOG_NONE, &did_log_info, &did_log_error);
   EXPECT_FALSE(did_log_info);
@@ -281,6 +310,7 @@ TEST_F(LoggingTest, AlwaysLogErrorsToStderr) {
   TestForLogToStderr(LOG_TO_FILE, &did_log_info, &did_log_error);
   EXPECT_FALSE(did_log_info);
   EXPECT_TRUE(did_log_error);
+#endif
 
   // ERRORs should not be logged to stderr if any destination besides FILE is
   // set.
@@ -293,9 +323,9 @@ TEST_F(LoggingTest, AlwaysLogErrorsToStderr) {
   EXPECT_TRUE(did_log_info);
   EXPECT_TRUE(did_log_error);
 }
-#endif  // defined(OS_POSIX) || defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(LoggingTest, InitWithFileDescriptor) {
   const char kErrorLogMessage[] = "something bad happened";
 
@@ -341,7 +371,7 @@ TEST_F(LoggingTest, DuplicateLogFile) {
   FILE* log_file_dup = DuplicateLogFILE();
   CHECK(log_file_dup);
   CloseLogFile();
-  fprintf(log_file_dup, "%s\n", kErrorLogMessage2);
+  UNSAFE_TODO(fprintf(log_file_dup, "%s\n", kErrorLogMessage2));
   fflush(log_file_dup);
 
   // Check the messages were written to the log file.
@@ -351,10 +381,30 @@ TEST_F(LoggingTest, DuplicateLogFile) {
   ASSERT_NE(written_logs.find(kErrorLogMessage2), std::string::npos);
   fclose(log_file_dup);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OFFICIAL_BUILD) && defined(OS_WIN)
-NOINLINE void CheckContainingFunc(int death_location) {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+TEST_F(LoggingTest, GetLogFileFullPath) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath file_log_path =
+      temp_dir.GetPath().Append(FILE_PATH_LITERAL("file.log"));
+
+  LoggingSettings settings;
+  settings.logging_dest = LOG_TO_FILE;
+  settings.log_file_path = file_log_path.value();
+  ASSERT_TRUE(InitLogging(settings));
+
+  EXPECT_EQ(file_log_path.value(), GetLogFileFullPath());
+
+  // Close the log file, so that `temp_dir` can be deleted on Windows.
+  CloseLogFile();
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+
+#if !CHECK_WILL_STREAM() && BUILDFLAG(IS_WIN)
+// Tell clang to not optimize this function or else it will remove the CHECKs.
+[[clang::optnone]] NOINLINE void CheckContainingFunc(int death_location) {
   CHECK(death_location != 1);
   CHECK(death_location != 2);
   CHECK(death_location != 3);
@@ -404,21 +454,21 @@ TEST_F(LoggingTest, CheckCausesDistinctBreakpoints) {
   EXPECT_NE(addr1, addr3);
   EXPECT_NE(addr2, addr3);
 }
-#elif defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_FUCHSIA)
 
 // CHECK causes a direct crash (without jumping to another function) only in
 // official builds. Unfortunately, continuous test coverage on official builds
 // is lower. Furthermore, since the Fuchsia implementation uses threads, it is
 // not possible to rely on an implementation of CHECK that calls abort(), which
 // takes down the whole process, preventing the thread exception handler from
-// handling the exception. DO_CHECK here falls back on IMMEDIATE_CRASH() in
+// handling the exception. DO_CHECK here falls back on base::ImmediateCrash() in
 // non-official builds, to catch regressions earlier in the CQ.
-#if defined(OFFICIAL_BUILD)
+#if !CHECK_WILL_STREAM()
 #define DO_CHECK CHECK
 #else
-#define DO_CHECK(cond) \
-  if (!(cond)) {       \
-    IMMEDIATE_CRASH(); \
+#define DO_CHECK(cond)      \
+  if (!(cond)) {            \
+    base::ImmediateCrash(); \
   }
 #endif
 
@@ -544,11 +594,16 @@ TEST_F(LoggingTest, CheckCausesDistinctBreakpoints) {
   ASSERT_NE(0u, child_crash_addr_1);
   ASSERT_NE(0u, child_crash_addr_2);
   ASSERT_NE(0u, child_crash_addr_3);
+#if defined(OFFICIAL_BUILD)
+  // In unofficial builds, we'll end up in std::abort
+  // for each crash. In official builds, we should get a different
+  // crash address for each location.
   ASSERT_NE(child_crash_addr_1, child_crash_addr_2);
   ASSERT_NE(child_crash_addr_1, child_crash_addr_3);
   ASSERT_NE(child_crash_addr_2, child_crash_addr_3);
+#endif  // defined(OFFICIAL_BUILD)
 }
-#elif defined(OS_POSIX) && !defined(OS_NACL) && !defined(OS_IOS) && \
+#elif BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS) && \
     (defined(ARCH_CPU_X86_FAMILY) || defined(ARCH_CPU_ARM_FAMILY))
 
 int g_child_crash_pipe;
@@ -559,7 +614,7 @@ void CheckCrashTestSighandler(int, siginfo_t* info, void* context_ptr) {
   // need the arch-specific boilerplate below, which is inspired by breakpad.
   // At the same time, on OSX, ucontext.h is deprecated but si_addr works fine.
   uintptr_t crash_addr = 0;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   crash_addr = reinterpret_cast<uintptr_t>(info->si_addr);
 #else  // OS_*
   ucontext_t* context = reinterpret_cast<ucontext_t*>(context_ptr);
@@ -581,12 +636,13 @@ void CheckCrashTestSighandler(int, siginfo_t* info, void* context_ptr) {
 // official builds. Unfortunately, continuous test coverage on official builds
 // is lower. DO_CHECK here falls back on a home-brewed implementation in
 // non-official builds, to catch regressions earlier in the CQ.
-#if defined(OFFICIAL_BUILD)
+#if !CHECK_WILL_STREAM()
 #define DO_CHECK CHECK
 #else
-#define DO_CHECK(cond) \
-  if (!(cond))         \
-  IMMEDIATE_CRASH()
+#define DO_CHECK(cond)      \
+  if (!(cond)) {            \
+    base::ImmediateCrash(); \
+  }
 #endif
 
 void CrashChildMain(int death_location) {
@@ -596,6 +652,7 @@ void CrashChildMain(int death_location) {
   ASSERT_EQ(0, sigaction(SIGTRAP, &act, nullptr));
   ASSERT_EQ(0, sigaction(SIGBUS, &act, nullptr));
   ASSERT_EQ(0, sigaction(SIGILL, &act, nullptr));
+  ASSERT_EQ(0, sigaction(SIGABRT, &act, nullptr));
   DO_CHECK(death_location != 1);
   DO_CHECK(death_location != 2);
   printf("\n");
@@ -638,11 +695,17 @@ TEST_F(LoggingTest, CheckCausesDistinctBreakpoints) {
   ASSERT_NE(0u, child_crash_addr_1);
   ASSERT_NE(0u, child_crash_addr_2);
   ASSERT_NE(0u, child_crash_addr_3);
+
+#if defined(OFFICIAL_BUILD)
+  // In unofficial builds, we'll end up in std::abort
+  // for each crash. In official builds, we should get a different
+  // crash address for each location.
   ASSERT_NE(child_crash_addr_1, child_crash_addr_2);
   ASSERT_NE(child_crash_addr_1, child_crash_addr_3);
   ASSERT_NE(child_crash_addr_2, child_crash_addr_3);
+#endif
 }
-#endif  // OS_POSIX
+#endif  // BUILDFLAG(IS_POSIX)
 
 TEST_F(LoggingTest, DebugLoggingReleaseBehavior) {
 #if DCHECK_IS_ON()
@@ -657,40 +720,44 @@ TEST_F(LoggingTest, DebugLoggingReleaseBehavior) {
 }
 
 TEST_F(LoggingTest, NestedLogAssertHandlers) {
+  if (LOGGING_DFATAL != LOGGING_FATAL) {
+    GTEST_SKIP() << "Test relies on DFATAL being FATAL for "
+                    "NestedLogAssertHandlers to fire.";
+  }
+
   ::testing::InSequence dummy;
   ::testing::StrictMock<MockLogAssertHandler> handler_a, handler_b;
 
   EXPECT_CALL(
       handler_a,
       HandleLogAssert(
-          _, _, base::StringPiece("First assert must be caught by handler_a"),
+          _, _, std::string_view("First assert must be caught by handler_a"),
           _));
   EXPECT_CALL(
       handler_b,
       HandleLogAssert(
-          _, _, base::StringPiece("Second assert must be caught by handler_b"),
+          _, _, std::string_view("Second assert must be caught by handler_b"),
           _));
   EXPECT_CALL(
       handler_a,
       HandleLogAssert(
           _, _,
-          base::StringPiece("Last assert must be caught by handler_a again"),
+          std::string_view("Last assert must be caught by handler_a again"),
           _));
 
   logging::ScopedLogAssertHandler scoped_handler_a(base::BindRepeating(
       &MockLogAssertHandler::HandleLogAssert, base::Unretained(&handler_a)));
 
-  // Using LOG(FATAL) rather than CHECK(false) here since log messages aren't
-  // preserved for CHECKs in official builds.
-  LOG(FATAL) << "First assert must be caught by handler_a";
+  // Using LOG(DFATAL) rather than LOG(FATAL) as the latter is not cancellable.
+  LOG(DFATAL) << "First assert must be caught by handler_a";
 
   {
     logging::ScopedLogAssertHandler scoped_handler_b(base::BindRepeating(
         &MockLogAssertHandler::HandleLogAssert, base::Unretained(&handler_b)));
-    LOG(FATAL) << "Second assert must be caught by handler_b";
+    LOG(DFATAL) << "Second assert must be caught by handler_b";
   }
 
-  LOG(FATAL) << "Last assert must be caught by handler_a again";
+  LOG(DFATAL) << "Last assert must be caught by handler_a again";
 }
 
 // Test that defining an operator<< for a type in a namespace doesn't prevent
@@ -699,77 +766,18 @@ TEST_F(LoggingTest, NestedLogAssertHandlers) {
 // found by ADL, since defining another operator<< prevents name lookup from
 // looking in the global namespace.
 namespace nested_test {
-  class Streamable {};
-  ALLOW_UNUSED_TYPE std::ostream& operator<<(std::ostream& out,
-                                             const Streamable&) {
-    return out << "Streamable";
-  }
-  TEST_F(LoggingTest, StreamingWstringFindsCorrectOperator) {
-    std::wstring wstr = L"Hello World";
-    std::ostringstream ostr;
-    ostr << wstr;
-    EXPECT_EQ("Hello World", ostr.str());
-  }
+class Streamable {};
+[[maybe_unused]] std::ostream& operator<<(std::ostream& out,
+                                          const Streamable&) {
+  return out << "Streamable";
+}
+TEST_F(LoggingTest, StreamingWstringFindsCorrectOperator) {
+  std::wstring wstr = L"Hello World";
+  std::ostringstream ostr;
+  ostr << wstr;
+  EXPECT_EQ("Hello World", ostr.view());
+}
 }  // namespace nested_test
-
-#if defined(OS_FUCHSIA)
-
-// Verifies that calling the log macro goes to the Fuchsia system logs, by
-// default.
-TEST_F(LoggingTest, FuchsiaSystemLogging) {
-  constexpr char kLogMessage[] = "system log!";
-
-  base::SimpleTestLogListener listener;
-
-  // Connect the test LogListenerSafe to the Log.
-  std::unique_ptr<fuchsia::logger::LogFilterOptions> options =
-      std::make_unique<fuchsia::logger::LogFilterOptions>();
-  options->filter_by_pid = true;
-  options->pid = base::Process::Current().Pid();
-  fuchsia::logger::LogPtr log = base::ComponentContextForProcess()
-                                    ->svc()
-                                    ->Connect<fuchsia::logger::Log>();
-  listener.ListenToLog(log.get(), std::move(options));
-
-  // Ensure that logging is directed to the system debug log.
-  CHECK(InitLogging({.logging_dest = LOG_DEFAULT}));
-
-  // Emit the test log message, and spin the loop until it is reported to the
-  // test listener.
-  LOG(ERROR) << kLogMessage;
-
-  absl::optional<fuchsia::logger::LogMessage> logged_message =
-      listener.RunUntilMessageReceived(kLogMessage);
-
-  ASSERT_TRUE(logged_message.has_value());
-  EXPECT_EQ(logged_message->severity,
-            static_cast<int32_t>(fuchsia::logger::LogLevelFilter::ERROR));
-  ASSERT_EQ(logged_message->tags.size(), 1u);
-  EXPECT_EQ(logged_message->tags[0], base::CommandLine::ForCurrentProcess()
-                                         ->GetProgram()
-                                         .BaseName()
-                                         .AsUTF8Unsafe());
-}
-
-TEST_F(LoggingTest, FuchsiaLogging) {
-  MockLogSource mock_log_source;
-  EXPECT_CALL(mock_log_source, Log())
-      .Times(DCHECK_IS_ON() ? 2 : 1)
-      .WillRepeatedly(Return("log message"));
-
-  SetMinLogLevel(LOGGING_INFO);
-
-  EXPECT_TRUE(LOG_IS_ON(INFO));
-  EXPECT_EQ(DCHECK_IS_ON(), DLOG_IS_ON(INFO));
-
-  ZX_LOG(INFO, ZX_ERR_INTERNAL) << mock_log_source.Log();
-  ZX_DLOG(INFO, ZX_ERR_INTERNAL) << mock_log_source.Log();
-
-  ZX_CHECK(true, ZX_ERR_INTERNAL);
-  ZX_DCHECK(true, ZX_ERR_INTERNAL);
-}
-
-#endif  // defined(OS_FUCHSIA)
 
 TEST_F(LoggingTest, LogPrefix) {
   // Use a static because only captureless lambdas can be converted to a
@@ -792,7 +800,7 @@ TEST_F(LoggingTest, LogPrefix) {
   EXPECT_EQ(std::string::npos, log_string->find(kPrefix));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(LoggingTest, LogCrosSyslogFormat) {
   // Set log format to syslog format.
   scoped_logging_settings().SetLogFormat(LogFormat::LOG_FORMAT_SYSLOG);
@@ -865,7 +873,7 @@ TEST_F(LoggingTest, LogCrosSyslogFormat) {
     EXPECT_THAT(*log_string, ::testing::MatchesRegex(kExpected));
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // We define a custom operator<< for std::u16string so we can use it with
 // logging. This tests that conversion.
@@ -875,7 +883,7 @@ TEST_F(LoggingTest, String16) {
     std::ostringstream stream;
     stream << "Empty '" << std::u16string() << "' standard '"
            << std::u16string(u"Hello, world") << "'";
-    EXPECT_STREQ("Empty '' standard 'Hello, world'", stream.str().c_str());
+    EXPECT_EQ("Empty '' standard 'Hello, world'", stream.view());
   }
 
   // Interesting edge cases.
@@ -901,10 +909,172 @@ TEST_F(LoggingTest, String16) {
     stream << initial_surrogate << "," << final_surrogate << ","
            << surrogate_pair << "," << unterminated_surrogate;
 
-    EXPECT_STREQ("\xef\xbf\xbd,\xef\xbf\xbd,\xf0\x90\x8c\x80z,\xef\xbf\xbds",
-                 stream.str().c_str());
+    EXPECT_EQ("\xef\xbf\xbd,\xef\xbf\xbd,\xf0\x90\x8c\x80z,\xef\xbf\xbds",
+              stream.view());
   }
 }
+
+// Tests that we don't VLOG from logging_unittest except when in the scope
+// of the ScopedVmoduleSwitches.
+TEST_F(LoggingTest, ScopedVmoduleSwitches) {
+  // Some builds don't have runtime vlogging. See base/logging.h.
+  if (!VLOG_IS_ON(0)) {
+    GTEST_SKIP();
+  }
+
+  SetMinLogLevel(LOGGING_FATAL);
+
+  {
+    MockLogSource mock_log_source;
+    EXPECT_CALL(mock_log_source, Log()).Times(0);
+
+    VLOG(1) << mock_log_source.Log();
+  }
+
+  {
+    ScopedVmoduleSwitches scoped_vmodule_switches;
+    scoped_vmodule_switches.InitWithSwitches(__FILE__ "=1");
+    MockLogSource mock_log_source;
+
+    EXPECT_CALL(mock_log_source, Log()).WillOnce(Return("log message"));
+
+    VLOG(1) << mock_log_source.Log();
+  }
+
+  {
+    MockLogSource mock_log_source;
+    EXPECT_CALL(mock_log_source, Log()).Times(0);
+
+    VLOG(1) << mock_log_source.Log();
+  }
+}
+
+TEST_F(LoggingTest, BuildCrashString) {
+  EXPECT_EQ("file.cc:42: ",
+            LogMessage("file.cc", 42, LOGGING_ERROR).BuildCrashString());
+
+  // BuildCrashString() should strip path/to/file prefix.
+  LogMessage msg(
+#if BUILDFLAG(IS_WIN)
+      "..\\foo\\bar\\file.cc",
+#else
+      "../foo/bar/file.cc",
+#endif  // BUILDFLAG(IS_WIN)
+      42, LOGGING_ERROR);
+  msg.stream() << "Hello";
+  EXPECT_EQ("file.cc:42: Hello", msg.BuildCrashString());
+}
+
+TEST_F(LoggingTest, SystemErrorNotChanged) {
+  auto set_last_error = [](logging::SystemErrorCode error) {
+#if BUILDFLAG(IS_WIN)
+    ::SetLastError(error);
+#else
+    errno = error;
+#endif
+  };
+
+  SystemErrorCode during_streaming = 0;
+  SystemErrorCode set_during_streaming = 0;
+
+  set_last_error(SystemErrorCode(123));
+  LOG(WARNING) << (during_streaming = GetLastSystemErrorCode())
+               << (set_last_error(SystemErrorCode(42)),
+                   set_during_streaming = GetLastSystemErrorCode());
+
+  // Initializing the LogMessage shouldn't change the observable error code.
+  EXPECT_EQ(SystemErrorCode(123), during_streaming);
+  // Verify that we can set and get the error code during streaming.
+  EXPECT_EQ(SystemErrorCode(42), set_during_streaming);
+  // Verify that the last set error code (during streaming) is preserved after
+  // logging as well.
+  EXPECT_EQ(SystemErrorCode(42), GetLastSystemErrorCode());
+
+  // Repeat the test above but using PLOG.
+  during_streaming = 0;
+  set_during_streaming = 0;
+  set_last_error(SystemErrorCode(123));
+  PLOG(ERROR) << (during_streaming = GetLastSystemErrorCode())
+              << (set_last_error(SystemErrorCode(42)),
+                  set_during_streaming = GetLastSystemErrorCode());
+
+  EXPECT_EQ(SystemErrorCode(123), during_streaming);
+  EXPECT_EQ(SystemErrorCode(42), set_during_streaming);
+  EXPECT_EQ(SystemErrorCode(42), GetLastSystemErrorCode());
+}
+
+TEST_F(LoggingTest, CorrectSystemErrorUsed) {
+  auto set_last_error = [](logging::SystemErrorCode error) {
+#if BUILDFLAG(IS_WIN)
+    ::SetLastError(error);
+#else
+    errno = error;
+#endif
+  };
+
+  // Use a static because only captureless lambdas can be converted to a
+  // function pointer for SetLogMessageHandler().
+  static base::NoDestructor<std::string> log_string;
+  SetLogMessageHandler([](int severity, const char* file, int line,
+                          size_t start, const std::string& str) -> bool {
+    *log_string = str;
+    return true;
+  });
+
+  const SystemErrorCode kTestError = 28;
+  const std::string kExpectedSystemErrorMsg =
+      SystemErrorCodeToString(kTestError);
+
+  set_last_error(kTestError);
+  PLOG(ERROR);
+
+  // Test that the last system error code got printed as expected.
+  EXPECT_NE(std::string::npos, log_string->find(kExpectedSystemErrorMsg));
+
+  if (DCHECK_IS_ON()) {
+    *log_string = "";
+    set_last_error(kTestError);
+    DPLOG(ERROR);
+
+    EXPECT_NE(std::string::npos, log_string->find(kExpectedSystemErrorMsg));
+  }
+}
+
+TEST_F(LoggingTest, BuildTimeVLOG) {
+  // Use a static because only captureless lambdas can be converted to a
+  // function pointer for SetLogMessageHandler().
+  static base::NoDestructor<std::string> log_string;
+  SetLogMessageHandler([](int severity, const char* file, int line,
+                          size_t start, const std::string& str) -> bool {
+    *log_string = str;
+    return true;
+  });
+
+  // No VLOG by default.
+  EXPECT_FALSE(VLOG_IS_ON(1));
+  VLOG(1) << "Expect not logged";
+  EXPECT_TRUE(log_string->empty());
+
+  // Re-define ENABLED_VLOG_LEVEL to enable VLOG(1).
+  // Note that ENABLED_VLOG_LEVEL has impact on all the code after it so please
+  // keep this test case the last one in this file.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
+
+  EXPECT_TRUE(VLOG_IS_ON(1));
+  EXPECT_FALSE(VLOG_IS_ON(2));
+
+  VLOG(1) << "Expect logged";
+  EXPECT_THAT(*log_string, ::testing::MatchesRegex(".* Expect logged\n"));
+
+  log_string->clear();
+  VLOG(2) << "Expect not logged";
+  EXPECT_TRUE(log_string->empty());
+}
+
+// NO NEW TESTS HERE
+// The test above redefines ENABLED_VLOG_LEVEL, so new tests should be added
+// before it.
 
 }  // namespace
 

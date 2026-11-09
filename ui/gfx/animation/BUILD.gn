@@ -1,8 +1,7 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/ui.gni")
 
 if (is_android) {
@@ -23,6 +22,8 @@ component("animation") {
     "animation_export.h",
     "animation_runner.cc",
     "animation_runner.h",
+    "infinite_animation.cc",
+    "infinite_animation.h",
     "linear_animation.cc",
     "linear_animation.h",
     "multi_animation.cc",
@@ -37,6 +38,10 @@ component("animation") {
     sources += [ "animation_android.cc" ]
   }
 
+  if (is_chromeos) {
+    sources += [ "animation_chromeos.cc" ]
+  }
+
   if (is_mac) {
     sources += [ "animation_mac.mm" ]
   }
@@ -45,12 +50,8 @@ component("animation") {
     sources += [ "animation_win.cc" ]
   }
 
-  if (is_linux || is_chromeos_lacros) {
-    sources += [
-      "animation_linux.cc",
-      "animation_settings_provider_linux.cc",
-      "animation_settings_provider_linux.h",
-    ]
+  if (is_linux) {
+    sources += [ "animation_linux.cc" ]
   }
 
   if (!is_android) {
@@ -70,18 +71,22 @@ component("animation") {
     ]
   }
 
+  public_deps = [ "//ui/gfx:animation_scale" ]
+
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
     "//skia",
-    "//ui/gfx:geometry_skia",
-    "//ui/gfx:gfx_export",
     "//ui/gfx:gfx_switches",
     "//ui/gfx/geometry",
+    "//ui/gfx/geometry:geometry_skia",
   ]
 
   if (is_android) {
-    deps += [ "//ui/gfx:gfx_jni_headers" ]
+    deps += [ "//ui/accessibility:ax_base_android" ]
+  }
+
+  if (is_linux) {
+    deps += [ "//ui/linux:linux_ui" ]
   }
 
   defines = [ "ANIMATION_IMPLEMENTATION" ]

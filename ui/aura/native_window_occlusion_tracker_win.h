@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,34 @@
 
 #include <shobjidl.h>
 #include <windows.h>
+
 #include <winuser.h>
 #include <wrl/client.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/callback_forward.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
+#include "third_party/skia/include/core/SkRegion.h"
 #include "ui/aura/aura_export.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/win/power_setting_change_listener.h"
 #include "ui/base/win/session_change_observer.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace base {
 class WaitableEvent;
-}
-
-namespace gfx {
-class Rect;
 }
 
 namespace aura {
@@ -46,13 +50,18 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
 
   static void DeleteInstanceForTesting();
 
-  // Enables notifying the host of |window| via SetNativeWindowOcclusionState()
+  NativeWindowOcclusionTrackerWin(const NativeWindowOcclusionTrackerWin&) =
+      delete;
+  NativeWindowOcclusionTrackerWin& operator=(
+      const NativeWindowOcclusionTrackerWin&) = delete;
+
+  // Enables notifying the host of `window` via SetNativeWindowOcclusionState()
   // when the occlusion state has been computed.
   void Enable(Window* window);
 
-  // Disables notifying the host of |window| via
+  // Disables notifying the host of `window` via
   // OnNativeWindowOcclusionStateChanged() when the occlusion state has been
-  // computed. It's not neccesary to call this when |window| is deleted because
+  // computed. It's not neccesary to call this when `window` is deleted because
   // OnWindowDestroying calls Disable.
   void Disable(Window* window);
 
@@ -64,39 +73,65 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
   friend class NativeWindowOcclusionTrackerTest;
   FRIEND_TEST_ALL_PREFIXES(NativeWindowOcclusionTrackerTest,
                            DisplayOnOffHandling);
+
+  // Tracks the occlusion state of HWNDs registered via Enable().
+  struct RootOcclusionState {
+    Window::OcclusionState occlusion_state = Window::OcclusionState::UNKNOWN;
+    std::optional<bool> on_current_workspace;
+    // If `occlusion_state` is VISIBLE, this gives the occluded region. It may
+    // be empty (which indicates the the window is entirely visible). This is
+    // relative to the origin of the HWND. In other words, it's in window
+    // coordinates (not client coordinates).
+    SkRegion occluded_region_pixels;
+  };
+
+  using HwndToRootOcclusionStateMap = base::flat_map<HWND, RootOcclusionState>;
+
   // This class computes the occlusion state of the tracked windows.
   // It runs on a separate thread, and notifies the main thread of
   // the occlusion state of the tracked windows.
-  class WindowOcclusionCalculator {
+  class AURA_EXPORT WindowOcclusionCalculator {
    public:
-    using UpdateOcclusionStateCallback = base::RepeatingCallback<void(
-        const base::flat_map<HWND, Window::OcclusionState>&,
-        bool show_all_windows)>;
-
     // Creates WindowOcclusionCalculator instance. Must be called on UI thread.
     static void CreateInstance(
         scoped_refptr<base::SequencedTaskRunner> task_runner,
         scoped_refptr<base::SequencedTaskRunner> ui_thread_task_runner,
-        UpdateOcclusionStateCallback update_occlusion_state_callback);
+        base::WeakPtr<NativeWindowOcclusionTrackerWin> tracker);
 
     // Returns existing WindowOcclusionCalculator instance.
     static WindowOcclusionCalculator* GetInstance() { return instance_; }
 
-    // Deletes |instance_| and signals |done_event|. Must be called on COMSTA
+    // Deletes `instance_` and signals `done_event`. Must be called on COMSTA
     // thread.
     static void DeleteInstanceForTesting(base::WaitableEvent* done_event);
+
+    WindowOcclusionCalculator(const WindowOcclusionCalculator&) = delete;
+    WindowOcclusionCalculator& operator=(const WindowOcclusionCalculator&) =
+        delete;
 
     void EnableOcclusionTrackingForWindow(HWND hwnd);
     void DisableOcclusionTrackingForWindow(HWND hwnd);
 
+    // Forces a recalculation of occlusion
+    void ForceRecalculation();
+
     // If a window becomes visible, makes sure event hooks are registered.
     void HandleVisibilityChanged(bool visible);
 
+    // Special handling for when the device is going to sleep or waking up.
+    void HandleResumeSuspend();
+
+    // Schedules an occlusion calculation `update_occlusion_delay_` time in the
+    // future, if one isn't already scheduled.
+    void ScheduleOcclusionCalculationIfNeeded();
+
    private:
+    friend class NativeWindowOcclusionTrackerTest;
+
     WindowOcclusionCalculator(
         scoped_refptr<base::SequencedTaskRunner> task_runner,
         scoped_refptr<base::SequencedTaskRunner> ui_thread_task_runner,
-        UpdateOcclusionStateCallback update_occlusion_state_callback);
+        base::WeakPtr<NativeWindowOcclusionTrackerWin> tracker);
     ~WindowOcclusionCalculator();
 
     // Registers event hooks, if not registered.
@@ -114,33 +149,41 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
 
     // EnumWindows callback used to iterate over all hwnds to determine
     // occlusion status of all tracked root windows.  Also builds up
-    // |current_pids_with_visible_windows_| and registers event hooks for newly
+    // `current_pids_with_visible_windows_` and registers event hooks for newly
     // discovered processes with visible hwnds.
     static BOOL CALLBACK
     ComputeNativeWindowOcclusionStatusCallback(HWND hwnd, LPARAM lParam);
 
     // EnumWindows callback used to update the list of process ids with
-    // visible hwnds, |pids_for_location_change_hook_|.
+    // visible hwnds, `pids_for_location_change_hook_`.
     static BOOL CALLBACK UpdateVisibleWindowProcessIdsCallback(HWND hwnd,
                                                                LPARAM lParam);
 
     // Determines which processes owning visible application windows to set the
     // EVENT_OBJECT_LOCATIONCHANGE event hook for and stores the pids in
-    // |pids_for_location_change_hook_|.
+    // `pids_for_location_change_hook_`.
     void UpdateVisibleWindowProcessIds();
 
     // Computes the native window occlusion status for all tracked root aura
-    // windows in |root_window_hwnds_occlusion_state_| and notifies them if
+    // windows in `root_window_hwnds_occlusion_state_` and notifies them if
     // their occlusion status has changed.
     void ComputeNativeWindowOcclusionStatus();
 
-    // Schedules an occlusion calculation |update_occlusion_delay_| time in the
-    // future, if one isn't already scheduled.
-    void ScheduleOcclusionCalculationIfNeeded();
+    // Handles EVENT_OBJECT_LOCATIONCHANGE for the top-level window `hwnd` by
+    // scheduling an occlusion calculation, unless the location change can't
+    // affect the occlusion state of the tracked root windows. That's the case
+    // if `hwnd` isn't one of them (see `root_window_hwnds_occlusion_state_`),
+    // and either it couldn't occlude other windows during the last occlusion
+    // calculation and still can't, or it could and still can, with the same
+    // bounds.
+    void HandleLocationChanged(HWND hwnd);
 
     // Registers a global event hook (not per process) for the events in the
-    // range from |event_min| to |event_max|, inclusive.
+    // range from `event_min` to `event_max`, inclusive.
     void RegisterGlobalEventHook(UINT event_min, UINT event_max);
+
+    // Returns the delay to use for scheduling the next occlusion calculation.
+    const base::TimeDelta GetUpdateOcclusionDelay();
 
     // Registers the EVENT_OBJECT_LOCATIONCHANGE event hook for the process with
     // passed id. The process has one or more visible, opaque windows.
@@ -150,12 +193,16 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
     // via calls to RegisterEventHook. These event hooks are disabled when all
     // tracked windows are minimized.
     void RegisterEventHooks();
-    void UnregisterEventHooks();
+    // `minimize_end_event_hook_` will be cleared iff `clear_minimize_end_hook`
+    // is set. When clearing event hooks due to all native windows being
+    // minimized, we still want to listen for minimize ending to see if we
+    // should re-hook.
+    void UnregisterEventHooks(bool clear_minimize_end_hook = true);
 
     // EnumWindows callback for occlusion calculation. Returns true to
     // continue enumeration, false otherwise. Currently, always returns
     // true because this function also updates
-    // |current_pids_with_visible_windows|, and needs to see all HWNDs.
+    // `current_pids_with_visible_windows`, and needs to see all HWNDs.
     bool ProcessComputeNativeWindowOcclusionStatusCallback(
         HWND hwnd,
         base::flat_set<DWORD>* current_pids_with_visible_windows);
@@ -180,39 +227,72 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
         HWND hwnd,
         gfx::Rect* window_rect);
 
-    // Returns true if |hwnd| is definitely on the current virtual desktop,
+    // Returns true if `hwnd` is definitely on the current virtual desktop,
     // false if it's definitely not on the current virtual desktop, and nullopt
     // if we we can't tell for sure.
-    absl::optional<bool> IsWindowOnCurrentVirtualDesktop(HWND hwnd);
+    std::optional<bool> IsWindowOnCurrentVirtualDesktop(HWND hwnd);
 
     static WindowOcclusionCalculator* instance_;
 
     // Task runner for our thread.
     scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
-    // Task runner for the thread that created |this|.  UpdateOcclusionState
+    // Task runner for the thread that created `this`.  UpdateOcclusionState
     // task is posted to this task runner.
     const scoped_refptr<base::SequencedTaskRunner> ui_thread_task_runner_;
 
-    // Callback used to update occlusion state on UI thread.
-    UpdateOcclusionStateCallback update_occlusion_state_callback_;
+    // Tracker object to post messages back to on UI thread.
+    base::WeakPtr<NativeWindowOcclusionTrackerWin> tracker_;
 
     // Map of root app window hwnds and their occlusion state. This contains
     // both visible and hidden windows.
-    base::flat_map<HWND, Window::OcclusionState>
-        root_window_hwnds_occlusion_state_;
+    HwndToRootOcclusionStateMap root_window_hwnds_occlusion_state_;
 
     // Values returned by SetWinEventHook are stored so that hooks can be
     // unregistered when necessary.
-    std::vector<HWINEVENTHOOK> global_event_hooks_;
+    // RAW_PTR_EXCLUSION: HWINEVENTHOOK is an opaque Win32 handle (not a real
+    // pointer, and never allocated by PartitionAlloc).
+    RAW_PTR_EXCLUSION std::vector<HWINEVENTHOOK> global_event_hooks_;
+    RAW_PTR_EXCLUSION std::optional<HWINEVENTHOOK> minimize_end_event_hook_;
 
     // Map from process id to EVENT_OBJECT_LOCATIONCHANGE event hook.
-    base::flat_map<DWORD, HWINEVENTHOOK> process_event_hooks_;
+    // RAW_PTR_EXCLUSION: HWINEVENTHOOK is an opaque Win32 handle (not a real
+    // pointer, and never allocated by PartitionAlloc).
+    RAW_PTR_EXCLUSION base::flat_map<DWORD, HWINEVENTHOOK> process_event_hooks_;
 
     // Pids of processes for which the EVENT_OBJECT_LOCATIONCHANGE event hook is
     // set. These are the processes hosting windows in
-    // |visible_and_fully_opaque_windows_|.
+    // `visible_and_fully_opaque_windows_`.
     base::flat_set<DWORD> pids_for_location_change_hook_;
+
+    // Top-level HWNDs that were determined to be visible, opaque, and on the
+    // current virtual desktop during the most recent occlusion calculation
+    // (i.e., they could occlude other windows), mapped to the bounds used for
+    // them in that calculation. Used to filter EVENT_OBJECT_DESTROY
+    // notifications: we only schedule a recalculation when one of these HWNDs
+    // is destroyed. This is important for the case where the process owning an
+    // occluding window is forcibly terminated (e.g., via TerminateProcess),
+    // which doesn't reliably fire EVENT_OBJECT_HIDE or EVENT_SYSTEM_FOREGROUND.
+    // HWND-based filtering is used (rather than querying
+    // GetWindowThreadProcessId) because Win32 calls on a destroyed HWND can
+    // return zero. Also used by HandleLocationChanged to ignore
+    // EVENT_OBJECT_LOCATIONCHANGE notifications that don't change a window's
+    // bounds, e.g., the ones layered windows raise when updating their
+    // contents. Only populated when `recalculate_on_window_destroy_` or
+    // `filter_location_changes_` is true. ProcessEventHookCallback accesses
+    // this outside of `task_runner_`'s sequence, but on the thread that runs
+    // its tasks (see the comment there), so it's never accessed concurrently.
+    base::flat_map<HWND, gfx::Rect> occluding_window_rects_;
+
+    // Cached value of the kRecalculateNativeWinOcclusionOnWindowDestroy
+    // feature, captured once at construction so that the calculator behaves
+    // consistently across its lifetime even if the feature state changes.
+    const bool recalculate_on_window_destroy_;
+
+    // Cached value of the kFilterNativeWinOcclusionLocationChanges feature,
+    // captured once at construction for the same reason as
+    // `recalculate_on_window_destroy_`.
+    const bool filter_location_changes_;
 
     // Timer to delay occlusion update.
     base::OneShotTimer occlusion_update_timer_;
@@ -224,15 +304,15 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
 
     // Used to determine if a root window is occluded. As we iterate through the
     // hwnds in z-order, we subtract each opaque window's rect from
-    // |unoccluded_desktop_region_|. When we get to a root window, we subtract
-    // it from |unoccluded_desktop_region_|, and if |unoccluded_desktop_region_|
+    // `unoccluded_desktop_region_`. When we get to a root window, we subtract
+    // it from `unoccluded_desktop_region_`, and if `unoccluded_desktop_region_`
     // doesn't change, the root window was already occluded.
     SkRegion unoccluded_desktop_region_;
 
     // Keeps track of how many root windows we need to compute the occlusion
     // state of in a call to ComputeNativeWindowOcclusionStatus. Once we've
     // determined the state of all root windows, we can stop subtracting
-    // windows from |unoccluded_desktop_region_|.
+    // windows from `unoccluded_desktop_region_`.
     int num_root_windows_with_unknown_occlusion_state_;
 
     // This is true if the task bar thumbnails or the alt tab thumbnails are
@@ -250,33 +330,34 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
     SEQUENCE_CHECKER(sequence_checker_);
 
     base::WeakPtrFactory<WindowOcclusionCalculator> weak_factory_{this};
-
-    DISALLOW_COPY_AND_ASSIGN(WindowOcclusionCalculator);
   };
 
   NativeWindowOcclusionTrackerWin();
   ~NativeWindowOcclusionTrackerWin() override;
 
-  // Returns true if we are interested in |hwnd| for purposes of occlusion
-  // calculation. We are interested in |hwnd| if it is a window that is
-  // visible, opaque, bounded, and not a popup or floating window. If we are
-  // interested in |hwnd|, stores the window rectangle in |window_rect|.
-  static bool IsWindowVisibleAndFullyOpaque(HWND hwnd, gfx::Rect* window_rect);
-
-  // Updates root windows occclusion state. If |show_all_windows| is true,
+  // Updates root windows occclusion state. If `show_all_windows` is true,
   // all non-hidden windows will be marked visible.  This is used to force
   // rendering of thumbnails.
-  void UpdateOcclusionState(const base::flat_map<HWND, Window::OcclusionState>&
-                                root_window_hwnds_occlusion_state,
-                            bool show_all_windows);
+  void UpdateOcclusionState(
+      const HwndToRootOcclusionStateMap& root_window_hwnds_occlusion_state,
+      bool show_all_windows);
 
   // This is called with session changed notifications. If the screen is locked
   // by the current session, it marks app windows as occluded.
   void OnSessionChange(WPARAM status_code, const bool* is_current_session);
 
+  // Called when minimize ends while the minimize end hook is set.
+  void OnMinimizeEnd(HWND hwnd);
+
   // This is called when the display is put to sleep. If the display is sleeping
   // it marks app windows as occluded.
   void OnDisplayStateChanged(bool display_on) override;
+
+  // Called when the device resumes from sleep.
+  void OnResume() override;
+
+  // Called before the device goes to sleep.
+  void OnSuspend() override;
 
   // Marks all root windows as either occluded, or if hwnd IsIconic, hidden.
   void MarkNonIconicWindowsOccluded();
@@ -287,11 +368,15 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
 
   // Map of HWND to root app windows. Maintained on the UI thread, and used
   // to send occlusion state notifications to Windows from
-  // |root_window_hwnds_occlusion_state_|.
-  base::flat_map<HWND, Window*> hwnd_root_window_map_;
+  // `root_window_hwnds_occlusion_state_`.
+  base::flat_map<HWND, base::flat_set<raw_ptr<Window, CtnExperimental>>>
+      hwnd_root_window_map_;
 
-  // This is set by UpdateOcclusionState. It is currently only used by tests.
-  int num_visible_root_windows_ = 0;
+  // Map of root app window to the actual root HWNDs. These may not match the
+  // keys in `hwnd_root_window_map_` if Chromium is being embedded in a window
+  // hierarchy.
+  base::flat_map<raw_ptr<Window, CtnExperimental>, HWND>
+      hwnd_widget_to_app_root_map_;
 
   // Manages observation of Windows Session Change messages.
   ui::SessionChangeObserver session_change_observer_;
@@ -306,8 +391,6 @@ class AURA_EXPORT NativeWindowOcclusionTrackerWin
   bool display_on_ = true;
 
   base::WeakPtrFactory<NativeWindowOcclusionTrackerWin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(NativeWindowOcclusionTrackerWin);
 };
 
 }  // namespace aura

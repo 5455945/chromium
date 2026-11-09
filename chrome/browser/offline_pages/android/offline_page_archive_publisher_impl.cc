@@ -1,27 +1,31 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/offline_pages/android/offline_page_archive_publisher_impl.h"
 
 #include <errno.h>
+
 #include <utility>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
 #include "base/files/file_util.h"
-#include "base/sequenced_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_runner_util.h"
-#include "chrome/android/chrome_jni_headers/OfflinePageArchivePublisherBridge_jni.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/offline_pages/android/offline_page_bridge.h"
 #include "components/offline_pages/core/archive_manager.h"
 #include "components/offline_pages/core/model/offline_page_model_utils.h"
+#include "components/offline_pages/core/offline_page_archive_publisher.h"
 #include "components/offline_pages/core/offline_store_utils.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/OfflinePageArchivePublisherBridge_jni.h"
 
 namespace offline_pages {
 
@@ -37,8 +41,8 @@ OfflinePageArchivePublisherImpl::Delegate* GetDefaultDelegate() {
 }
 
 bool ShouldUseDownloadsCollection() {
-  return base::android::BuildInfo::GetInstance()->sdk_int() >=
-         base::android::SDK_VERSION_Q;
+  return base::android::android_info::sdk_int() >=
+         base::android::android_info::SDK_VERSION_Q;
 }
 
 // Helper function to do the move and register synchronously. Make sure this is
@@ -102,7 +106,7 @@ OfflinePageArchivePublisherImpl::OfflinePageArchivePublisherImpl(
     ArchiveManager* archive_manager)
     : archive_manager_(archive_manager), delegate_(GetDefaultDelegate()) {}
 
-OfflinePageArchivePublisherImpl::~OfflinePageArchivePublisherImpl() {}
+OfflinePageArchivePublisherImpl::~OfflinePageArchivePublisherImpl() = default;
 
 void OfflinePageArchivePublisherImpl::SetDelegateForTesting(
     OfflinePageArchivePublisherImpl::Delegate* delegate) {
@@ -113,8 +117,8 @@ void OfflinePageArchivePublisherImpl::PublishArchive(
     const OfflinePageItem& offline_page,
     const scoped_refptr<base::SequencedTaskRunner>& background_task_runner,
     PublishArchiveDoneCallback publish_done_callback) const {
-  base::PostTaskAndReplyWithResult(
-      background_task_runner.get(), FROM_HERE,
+  background_task_runner->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&MoveAndRegisterArchive, offline_page,
                      archive_manager_->GetPublicArchivesDir(), delegate_),
       base::BindOnce(std::move(publish_done_callback), offline_page));
@@ -126,7 +130,7 @@ void OfflinePageArchivePublisherImpl::UnpublishArchives(
 
   for (auto& id : publish_ids) {
     if (id.download_id == kArchivePublishedWithoutDownloadId) {
-      DCHECK(id.new_file_path.IsContentUri());
+      CHECK(id.new_file_path.IsContentUri(), base::NotFatalUntil::M161);
       base::DeleteFile(id.new_file_path);
     } else if (id.download_id != kArchiveNotPublished) {
       download_manager_ids.push_back(id.download_id);
@@ -140,7 +144,7 @@ void OfflinePageArchivePublisherImpl::UnpublishArchives(
 
 bool OfflinePageArchivePublisherImpl::Delegate::IsDownloadManagerInstalled() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  jboolean is_installed =
+  bool is_installed =
       Java_OfflinePageArchivePublisherBridge_isAndroidDownloadManagerInstalled(
           env);
   return is_installed;
@@ -152,10 +156,10 @@ OfflinePageArchivePublisherImpl::Delegate::AddCompletedDownload(
   JNIEnv* env = base::android::AttachCurrentThread();
 
   if (ShouldUseDownloadsCollection()) {
-    base::FilePath new_file_path = base::FilePath(ConvertJavaStringToUTF8(
+    base::FilePath new_file_path = base::FilePath(
         Java_OfflinePageArchivePublisherBridge_publishArchiveToDownloadsCollection(
             env,
-            android::OfflinePageBridge::ConvertToJavaOfflinePage(env, page))));
+            android::OfflinePageBridge::ConvertToJavaOfflinePage(env, page)));
 
     if (new_file_path.empty())
       return PublishArchiveResult::Failure(SavePageResult::FILE_MOVE_FAILED);
@@ -167,25 +171,19 @@ OfflinePageArchivePublisherImpl::Delegate::AddCompletedDownload(
   // TODO(petewil): Handle empty page title.
   std::string page_title = base::UTF16ToUTF8(page.title);
 
-  // Convert strings to jstring references.
-  ScopedJavaLocalRef<jstring> j_title =
-      base::android::ConvertUTF8ToJavaString(env, page_title);
   // We use the title for a description, since the add to the download manager
   // fails without a description, and we don't have anything better to use.
-  ScopedJavaLocalRef<jstring> j_description =
-      base::android::ConvertUTF8ToJavaString(env, page_title);
-  ScopedJavaLocalRef<jstring> j_path = base::android::ConvertUTF8ToJavaString(
-      env, offline_pages::store_utils::ToDatabaseFilePath(page.file_path));
-  ScopedJavaLocalRef<jstring> j_uri =
-      base::android::ConvertUTF8ToJavaString(env, page.url.spec());
-  ScopedJavaLocalRef<jstring> j_referer =
-      base::android::ConvertUTF8ToJavaString(env, std::string());
+  std::string description = page_title;
+  std::string path =
+      offline_pages::store_utils::ToDatabaseFilePath(page.file_path);
+  std::string uri = page.url.spec();
 
   int64_t download_id =
       Java_OfflinePageArchivePublisherBridge_addCompletedDownload(
-          env, j_title, j_description, j_path, page.file_size, j_uri,
-          j_referer);
-  DCHECK_NE(download_id, kArchivePublishedWithoutDownloadId);
+          env, page_title, description, path, page.file_size, uri,
+          std::string());
+  CHECK_NE(download_id, kArchivePublishedWithoutDownloadId,
+           base::NotFatalUntil::M161);
   if (download_id == kArchiveNotPublished)
     return PublishArchiveResult::Failure(
         SavePageResult::ADD_TO_DOWNLOAD_MANAGER_FAILED);
@@ -203,4 +201,11 @@ int OfflinePageArchivePublisherImpl::Delegate::Remove(
   return Java_OfflinePageArchivePublisherBridge_remove(env, j_ids);
 }
 
+base::WeakPtr<OfflinePageArchivePublisher>
+OfflinePageArchivePublisherImpl::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 }  // namespace offline_pages
+
+DEFINE_JNI(OfflinePageArchivePublisherBridge)

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,42 +12,42 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/components/components_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/dev_ui_browser_resources.h"
+#include "chrome/grit/components_resources.h"
+#include "chrome/grit/components_resources_map.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/component_updater/component_updater_switches.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/webui/webui_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "components/user_manager/user_manager.h"
 #endif
 
 namespace {
 
-content::WebUIDataSource* CreateComponentsUIHTMLSource(Profile* profile) {
-  content::WebUIDataSource* source =
-      content::WebUIDataSource::Create(chrome::kChromeUIComponentsHost);
+void CreateAndAddComponentsUIHTMLSource(Profile* profile) {
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      profile, chrome::kChromeUIComponentsHost);
 
   source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::ScriptSrc,
-      "script-src chrome://resources 'self' 'unsafe-eval';");
-  source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
-      "trusted-types jstemplate parse-html-subset;");
+      "trusted-types lit-html-desktop;");
+  source->EnableReplaceI18nInJS();
 
   static constexpr webui::LocalizedString kStrings[] = {
       {"componentsTitle", IDS_COMPONENTS_TITLE},
@@ -57,22 +57,25 @@ content::WebUIDataSource* CreateComponentsUIHTMLSource(Profile* profile) {
       {"noComponents", IDS_COMPONENTS_NO_COMPONENTS},
       {"statusLabel", IDS_COMPONENTS_STATUS_LABEL},
       {"checkingLabel", IDS_COMPONENTS_CHECKING_LABEL},
+      {"uninstall", IDS_COMPONENTS_UNINSTALL},
   };
   source->AddLocalizedStrings(kStrings);
 
   source->AddBoolean(
       "isGuest",
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       user_manager::UserManager::Get()->IsLoggedInAsGuest() ||
-          user_manager::UserManager::Get()->IsLoggedInAsPublicAccount()
+          user_manager::UserManager::Get()->IsLoggedInAsManagedGuestSession()
 #else
       profile->IsOffTheRecord()
 #endif
   );
+  source->AddBoolean("showUninstallButton",
+                     base::CommandLine::ForCurrentProcess()->HasSwitch(
+                         switches::kEnableComponentUninstall));
   source->UseStringsJs();
-  source->AddResourcePath("components.js", IDR_COMPONENTS_COMPONENTS_JS);
+  source->AddResourcePaths(kComponentsResources);
   source->SetDefaultResource(IDR_COMPONENTS_COMPONENTS_HTML);
-  return source;
 }
 
 }  // namespace
@@ -88,14 +91,13 @@ ComponentsUI::ComponentsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
       g_browser_process->component_updater()));
 
   // Set up the chrome://components/ source.
-  Profile* profile = Profile::FromWebUI(web_ui);
-  content::WebUIDataSource::Add(profile, CreateComponentsUIHTMLSource(profile));
+  CreateAndAddComponentsUIHTMLSource(Profile::FromWebUI(web_ui));
 }
 
-ComponentsUI::~ComponentsUI() {}
+ComponentsUI::~ComponentsUI() = default;
 
 // static
-base::RefCountedMemory* ComponentsUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> ComponentsUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_PLUGINS_FAVICON, scale_factor);

@@ -1,7 +1,5 @@
-# https://crbug.com/1189284
--All/GLRendererCopierPixelTest.ExecutesCopyRequest/*
--GLScalerPixelTest.CopiesByDefault
--GLScalerPixelTest.ExportsTheRedColorChannel
--GLScalerPixelTest.TranslatesVerticallyFlippedSourceWithSourceOffset
--GLScalerPixelTest.TranslatesWithSourceOffset
--GLScalerPixelTest.VerticallyFlipsOutput
+# crbug/338436747
+-SkiaOutputSurfaceImplTest.CopyOutputBitmapSupportedColorSpace
+-SkiaOutputSurfaceImplTest.CopyOutputBitmapUnsupportedColorSpace
+-SkiaOutputSurfaceImplTest.EndPaint
+-SkiaOutputSurfaceImplTest.EndPaintReleaseFence

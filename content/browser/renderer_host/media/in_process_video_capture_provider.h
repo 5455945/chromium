@@ -1,49 +1,60 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_MEDIA_IN_PROCESS_VIDEO_CAPTURE_PROVIDER_H_
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_IN_PROCESS_VIDEO_CAPTURE_PROVIDER_H_
 
-#include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "content/browser/media/capture/native_screen_capture_picker.h"
 #include "content/browser/renderer_host/media/video_capture_provider.h"
-#include "media/capture/video/video_capture_system.h"
+#include "content/common/content_export.h"
 
 namespace content {
 
 class CONTENT_EXPORT InProcessVideoCaptureProvider
     : public VideoCaptureProvider {
  public:
-  InProcessVideoCaptureProvider(
-      std::unique_ptr<media::VideoCaptureSystem> video_capture_system,
-      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
-      base::RepeatingCallback<void(const std::string&)> emit_log_message_cb);
-
   ~InProcessVideoCaptureProvider() override;
 
-  static std::unique_ptr<VideoCaptureProvider>
-  CreateInstanceForNonDeviceCapture(
-      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
-      base::RepeatingCallback<void(const std::string&)> emit_log_message_cb);
-
-  static std::unique_ptr<VideoCaptureProvider> CreateInstance(
-      std::unique_ptr<media::VideoCaptureSystem> video_capture_system,
-      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
-      base::RepeatingCallback<void(const std::string&)> emit_log_message_cb);
-
-  void GetDeviceInfosAsync(GetDeviceInfosCallback result_callback) override;
+  static std::unique_ptr<VideoCaptureProvider> CreateInstanceForScreenCapture(
+      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner);
 
   std::unique_ptr<VideoCaptureDeviceLauncher> CreateDeviceLauncher() override;
+  std::unique_ptr<VideoCaptureDeviceLauncher>
+  CreateDeviceLauncherWithSharedMemoryBuffers() override;
+
+  void OpenNativeScreenCapturePicker(
+      DesktopMediaID::Type type,
+      base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
+      base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
+      base::OnceCallback<void()> cancel_callback,
+      base::OnceCallback<void()> error_callback,
+      base::OnceCallback<void(DesktopMediaID::Id)> stop_audio_callback)
+      override;
+
+  void CloseNativeScreenCapturePicker(DesktopMediaID device_id) override;
+
+#if BUILDFLAG(IS_MAC)
+  void GetApplicationAudioCaptureId(
+      DesktopMediaID::Id session_id,
+      base::OnceCallback<void(
+          const std::optional<desktop_capture::ApplicationAudioCaptureId>&)>
+          callback) override;
+#endif
 
  private:
-  // Can be nullptr.
-  std::unique_ptr<media::VideoCaptureSystem> video_capture_system_;
+  explicit InProcessVideoCaptureProvider(
+      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner);
+
+  void GetDeviceInfosAsync(
+      media::mojom::VideoCaptureDeviceEnumerationMode enumeration_mode,
+      GetDeviceInfosCallback result_callback) override;
+
+  std::unique_ptr<NativeScreenCapturePicker> native_screen_capture_picker_;
   // The message loop of media stream device thread, where VCD's live.
   const scoped_refptr<base::SingleThreadTaskRunner> device_task_runner_;
-  base::RepeatingCallback<void(const std::string&)> emit_log_message_cb_;
-
-  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace content

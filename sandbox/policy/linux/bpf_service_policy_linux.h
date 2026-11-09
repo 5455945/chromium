@@ -1,11 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SANDBOX_POLICY_LINUX_BPF_SERVICE_POLICY_LINUX_H_
 #define SANDBOX_POLICY_LINUX_BPF_SERVICE_POLICY_LINUX_H_
 
-#include "base/macros.h"
 #include "sandbox/policy/linux/bpf_base_policy_linux.h"
 
 namespace sandbox {
@@ -29,4 +28,4 @@ class ServiceProcessPolicy : public BPFBasePolicy {
 }  // namespace policy
 }  // namespace sandbox
 
-#endif  // SERVICES_SERVICE_MANAGER_SANDBOX_LINUX_BPF_SERVICE_POLICY_LINUX_H_
+#endif  // SANDBOX_POLICY_LINUX_BPF_SERVICE_POLICY_LINUX_H_

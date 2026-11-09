@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "chrome/common/importer/importer_bridge.h"
 #include "chrome/common/importer/profile_import.mojom.h"
@@ -17,12 +15,12 @@
 #include "mojo/public/cpp/bindings/shared_remote.h"
 
 class GURL;
-struct ImportedBookmarkEntry;
 
-namespace importer {
+namespace user_data_importer {
+struct ImportedBookmarkEntry;
 struct ImporterURLRow;
 struct SearchEngineInfo;
-}
+}  // namespace user_data_importer
 
 // TODO(tibell): Now that profile import is a Mojo service perhaps ImportBridge,
 // ProfileWriter or something in between should be the actual Mojo interface,
@@ -40,29 +38,36 @@ class ExternalProcessImporterBridge : public ImporterBridge {
       const base::flat_map<uint32_t, std::string>& localized_strings,
       mojo::SharedRemote<chrome::mojom::ProfileImportObserver> observer);
 
+  ExternalProcessImporterBridge(const ExternalProcessImporterBridge&) = delete;
+  ExternalProcessImporterBridge& operator=(
+      const ExternalProcessImporterBridge&) = delete;
+
   // Begin ImporterBridge implementation:
-  void AddBookmarks(const std::vector<ImportedBookmarkEntry>& bookmarks,
-                    const std::u16string& first_folder_name) override;
+  void AddBookmarks(
+      const std::vector<user_data_importer::ImportedBookmarkEntry>& bookmarks,
+      const std::u16string& first_folder_name) override;
 
   void AddHomePage(const GURL& home_page) override;
 
   void SetFavicons(const favicon_base::FaviconUsageDataList& favicons) override;
 
-  void SetHistoryItems(const std::vector<ImporterURLRow>& rows,
-                       importer::VisitSource visit_source) override;
+  void SetHistoryItems(
+      const std::vector<user_data_importer::ImporterURLRow>& rows,
+      user_data_importer::VisitSource visit_source) override;
 
   void SetKeywords(
-      const std::vector<importer::SearchEngineInfo>& search_engines,
+      const std::vector<user_data_importer::SearchEngineInfo>& search_engines,
       bool unique_on_host_and_path) override;
 
-  void SetPasswordForm(const importer::ImportedPasswordForm& form) override;
+  void SetPasswordForm(
+      const user_data_importer::ImportedPasswordForm& form) override;
 
   void SetAutofillFormData(
       const std::vector<ImporterAutofillFormDataEntry>& entries) override;
 
   void NotifyStarted() override;
-  void NotifyItemStarted(importer::ImportItem item) override;
-  void NotifyItemEnded(importer::ImportItem item) override;
+  void NotifyItemStarted(user_data_importer::ImportItem item) override;
+  void NotifyItemEnded(user_data_importer::ImportItem item) override;
   void NotifyEnded() override;
 
   std::u16string GetLocalizedString(int message_id) override;
@@ -76,8 +81,6 @@ class ExternalProcessImporterBridge : public ImporterBridge {
   base::flat_map<uint32_t, std::string> localized_strings_;
 
   mojo::SharedRemote<chrome::mojom::ProfileImportObserver> observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExternalProcessImporterBridge);
 };
 
 #endif  // CHROME_UTILITY_IMPORTER_EXTERNAL_PROCESS_IMPORTER_BRIDGE_H_

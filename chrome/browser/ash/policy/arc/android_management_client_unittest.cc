@@ -1,24 +1,26 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/ash/policy/arc/android_management_client.h"
 
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/policy/arc/android_management_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_device_management_service.h"
 #include "components/policy/proto/device_management_backend.pb.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -56,10 +58,9 @@ class AndroidManagementClientTest : public testing::Test {
         identity_test_environment_.identity_manager();
     CoreAccountId account_id = identity_manager->PickAccountIdForAccount(
         signin::GetTestGaiaIdForEmail(kAccountEmail), kAccountEmail);
-    client_ = std::make_unique<AndroidManagementClient>(
+    client_ = std::make_unique<AndroidManagementClientImpl>(
         &service_, shared_url_loader_factory_, account_id, identity_manager);
 
-    service_.ScheduleInitialization(0);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -71,7 +72,7 @@ class AndroidManagementClientTest : public testing::Test {
   FakeDeviceManagementService service_{&job_creation_handler_};
   StrictMock<base::MockCallback<AndroidManagementClient::StatusCallback>>
       callback_observer_;
-  std::unique_ptr<AndroidManagementClient> client_;
+  std::unique_ptr<AndroidManagementClientImpl> client_;
   network::TestURLLoaderFactory url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
   signin::IdentityTestEnvironment identity_test_environment_;
@@ -89,11 +90,12 @@ TEST_F(AndroidManagementClientTest, CheckAndroidManagementCall) {
       .Times(1);
 
   AccountInfo account_info =
-      identity_test_environment_.MakeAccountAvailable(kAccountEmail);
+      identity_test_environment_.MakePrimaryAccountAvailable(
+          kAccountEmail, signin::ConsentLevel::kSignin);
   client_->StartCheckAndroidManagement(callback_observer_.Get());
   identity_test_environment_
       .WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-          account_info.account_id, kOAuthToken, base::Time::Max());
+          account_info.GetAccountId(), kOAuthToken, base::Time::Max());
 
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(

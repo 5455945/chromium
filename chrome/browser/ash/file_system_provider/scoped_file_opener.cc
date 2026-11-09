@@ -1,15 +1,14 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/file_system_provider/scoped_file_opener.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/file_system_provider/abort_callback.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 using OpenFileCallback = ProvidedFileSystemInterface::OpenFileCallback;
 
@@ -52,7 +51,7 @@ class ScopedFileOpener::Runner
 
     // Otherwise nothing to abort nor to close - the opening process has
     // completed, but the file failed to open, so there is no need to close it.
-    DCHECK(open_completed_ && file_handle_ == 0);
+    CHECK(open_completed_ && file_handle_ == 0, base::NotFatalUntil::M160);
   }
 
  private:
@@ -65,10 +64,12 @@ class ScopedFileOpener::Runner
         open_completed_(false),
         file_handle_(0) {}
 
-  ~Runner() {}
+  ~Runner() = default;
 
   // Called when opening is completed with either a success or an error.
-  void OnOpenFileCompleted(int file_handle, base::File::Error result) {
+  void OnOpenFileCompleted(int file_handle,
+                           base::File::Error result,
+                           std::unique_ptr<EntryMetadata> metadata) {
     open_completed_ = true;
 
     if (result != base::File::FILE_OK) {
@@ -89,7 +90,7 @@ class ScopedFileOpener::Runner
       return;
     }
 
-    DCHECK_EQ(base::File::FILE_OK, result);
+    CHECK_EQ(base::File::FILE_OK, result, base::NotFatalUntil::M160);
     CallOpenCallbackOnce(file_handle, base::File::FILE_OK);
   }
 
@@ -104,7 +105,7 @@ class ScopedFileOpener::Runner
       // This is not good, as callers, such as file stream readers may expect
       // aborting to *always* work, and leave the file opened permanently.
       // The problem will go away once we remove the dialog to abort slow
-      // operations. See: crbug.com/475355.
+      // operations. See: crbug.com/41167314.
       CallOpenCallbackOnce(file_handle, base::File::FILE_OK);
       return;
     }
@@ -119,7 +120,8 @@ class ScopedFileOpener::Runner
     if (open_callback_.is_null())
       return;
 
-    std::move(open_callback_).Run(file_handle, result);
+    std::move(open_callback_)
+        .Run(file_handle, result, /*metadata=*/nullptr);
   }
 
   base::WeakPtr<ProvidedFileSystemInterface> file_system_;
@@ -141,5 +143,4 @@ ScopedFileOpener::~ScopedFileOpener() {
   runner_->AbortOrClose();
 }
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

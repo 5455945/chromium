@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,35 +7,29 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <string>
-#include <unordered_map>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "base/timer/timer.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/persistent_repeating_timer.h"
 
 class AccountCapabilities;
 class AccountCapabilitiesFetcher;
+class AccountFetcherFactory;
 class AccountInfoFetcher;
 class AccountTrackerService;
 class ProfileOAuth2TokenService;
 class PrefRegistrySimple;
 class SigninClient;
-
-#if defined(OS_ANDROID)
-class ChildAccountInfoFetcherAndroid;
-#endif
-
-namespace base {
-class DictionaryValue;
-}
+struct CoreAccountInfo;
 
 namespace gfx {
 class Image;
@@ -47,6 +41,10 @@ class ImageDecoder;
 class ImageFetcherImpl;
 }  // namespace image_fetcher
 
+namespace signin {
+enum class Tribool;
+}
+
 class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
  public:
   // Name of the preference that tracks the int64_t representation of the last
@@ -54,22 +52,26 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   static const char kLastUpdatePref[];
 
   AccountFetcherService();
+
+  AccountFetcherService(const AccountFetcherService&) = delete;
+  AccountFetcherService& operator=(const AccountFetcherService&) = delete;
+
   ~AccountFetcherService() override;
 
   // Registers the preferences used by AccountFetcherService.
   static void RegisterPrefs(PrefRegistrySimple* user_prefs);
 
-  void Initialize(SigninClient* signin_client,
-                  ProfileOAuth2TokenService* token_service,
-                  AccountTrackerService* account_tracker_service,
-                  std::unique_ptr<image_fetcher::ImageDecoder> image_decoder);
+  void Initialize(
+      SigninClient* signin_client,
+      ProfileOAuth2TokenService* token_service,
+      AccountTrackerService* account_tracker_service,
+      std::unique_ptr<image_fetcher::ImageDecoder> image_decoder,
+      std::unique_ptr<AccountFetcherFactory> account_fetcher_factory);
 
   // Indicates if all user information has been fetched. If the result is false,
   // there are still unfininshed fetchers.
   virtual bool IsAllUserInfoFetched() const;
   virtual bool AreAllAccountCapabilitiesFetched() const;
-
-  void ForceRefreshOfAccountInfo(const CoreAccountId& account_id);
 
   AccountTrackerService* account_tracker_service() const {
     return account_tracker_service_;
@@ -90,16 +92,22 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   // network requests.
   void EnableAccountRemovalForTest();
 
-  // Force-enables Account Capabilities fetches. For use in testing contexts.
-  // Passing the false value doesn't necessary disables fetches, it just turns
-  // force-enable off.
-  void EnableAccountCapabilitiesFetcherForTest(bool enabled);
+  // Returns the AccountFetcherFactory, for use in tests only.
+  AccountFetcherFactory* GetAccountFetcherFactoryForTest();
 
-#if defined(OS_ANDROID)
-  // Called by ChildAccountInfoFetcherAndroid.
-  void SetIsChildAccount(const CoreAccountId& account_id,
-                         bool is_child_account);
+  // Calling this method provides a hint that Account Capabilities may be
+  // fetched in the near future, and front-loads some processing to speed
+  // up future fetches. This is purely a latency optimization; calling this
+  // method is optional.
+  void PrepareForFetchingAccountCapabilities();
+
+#if BUILDFLAG(IS_ANDROID)
+  // Refresh the AccountInfo if the existing one is stale
+  void RefreshAccountInfoIfStale(const CoreAccountId& account_id);
 #endif
+
+  // Destroy any fetchers created for the specified account.
+  void DestroyFetchers(const CoreAccountId& account_id);
 
   // ProfileOAuth2TokenServiceObserver implementation.
   void OnRefreshTokenAvailable(const CoreAccountId& account_id) override;
@@ -107,16 +115,11 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   void OnRefreshTokensLoaded() override;
 
  private:
-  friend class AccountInfoFetcher;
-  friend class AccountCapabilitiesFetcher;
-
   void RefreshAllAccountInfo(bool only_fetch_if_invalid);
 
-#if defined(OS_ANDROID)
-  // Called on all account state changes. Decides whether to fetch new child
-  // status information or reset old values that aren't valid now.
-  void UpdateChildInfo();
-#endif
+  // Unconditionally fetches the Account Capabilities (but not the UserInfo) of
+  // all accounts with a refresh token.
+  void RefreshAllAccountCapabilities();
 
   void MaybeEnableNetworkFetches();
 
@@ -124,31 +127,25 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   // Further the two fetches are managed by a different refresh logic and
   // thus, can not be combined.
   void StartFetchingUserInfo(const CoreAccountId& account_id);
-#if defined(OS_ANDROID)
-  void StartFetchingChildInfo(const CoreAccountId& account_id);
 
-  // If there is more than one account in a profile, we forcibly reset the
-  // child status for an account to be false.
-  void ResetChildInfo();
-#endif
-
-  bool IsAccountCapabilitiesFetcherEnabled();
-  void StartFetchingAccountCapabilities(const CoreAccountId& account_id);
+  void StartFetchingAccountCapabilities(
+      const CoreAccountInfo& core_account_info);
 
   // Refreshes the AccountInfo associated with |account_id|.
   void RefreshAccountInfo(const CoreAccountId& account_id,
                           bool only_fetch_if_invalid);
 
-  // Called by AccountInfoFetcher.
-  void OnUserInfoFetchSuccess(const CoreAccountId& account_id,
-                              std::unique_ptr<base::DictionaryValue> user_info);
-  void OnUserInfoFetchFailure(const CoreAccountId& account_id);
+  // Called by AccountInfoFetcher callback.
+  void OnUserInfoFetchCompleted(const CoreAccountId& account_id,
+                                std::optional<AccountInfo> account_info);
 
-  // Called by AccountCapabilitiesFetcher.
-  void OnAccountCapabilitiesFetchSuccess(
+  // Called by AccountCapabilitiesFetcher on_some_capabilities_fetched_callback.
+  void OnSomeAccountCapabilitiesFetched(
       const CoreAccountId& account_id,
       const AccountCapabilities& account_capabilities);
-  void OnAccountCapabilitiesFetchFailure(const CoreAccountId& account_id);
+
+  // Called by AccountCapabilitiesFetcher on_all_fetches_complete_callback.
+  void OnAccountCapabilitiesFetchComplete(const CoreAccountId& account_id);
 
   image_fetcher::ImageFetcherImpl* GetOrCreateImageFetcher();
 
@@ -160,40 +157,42 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
                       const gfx::Image& image,
                       const image_fetcher::RequestMetadata& image_metadata);
 
-  AccountTrackerService* account_tracker_service_ = nullptr;  // Not owned.
-  ProfileOAuth2TokenService* token_service_ = nullptr;        // Not owned.
-  SigninClient* signin_client_ = nullptr;                     // Not owned.
+  raw_ptr<AccountTrackerService> account_tracker_service_ =
+      nullptr;                                                  // Not owned.
+  raw_ptr<ProfileOAuth2TokenService> token_service_ = nullptr;  // Not owned.
+  raw_ptr<SigninClient> signin_client_ = nullptr;               // Not owned.
   bool network_fetches_enabled_ = false;
   bool network_initialized_ = false;
   bool refresh_tokens_loaded_ = false;
   bool enable_account_removal_for_test_ = false;
-  bool enable_account_capabilities_fetcher_for_test_ = false;
-  std::unique_ptr<signin::PersistentRepeatingTimer> repeating_timer_;
+  std::unique_ptr<signin::PersistentRepeatingTimer> persistent_repeating_timer_;
 
-#if defined(OS_ANDROID)
-  CoreAccountId child_request_account_id_;
-  std::unique_ptr<ChildAccountInfoFetcherAndroid> child_info_request_;
-#endif
+  struct AccountFetchState {
+    AccountFetchState();
+    AccountFetchState(AccountFetchState&&);
+    AccountFetchState& operator=(AccountFetchState&&);
+    ~AccountFetchState();
 
-  // Holds references to account info fetchers keyed by account_id.
-  std::unordered_map<CoreAccountId, std::unique_ptr<AccountInfoFetcher>>
-      user_info_requests_;
+    std::unique_ptr<AccountInfoFetcher> user_info_request;
+    std::unique_ptr<AccountCapabilitiesFetcher> capabilities_request;
+    base::TimeTicks user_info_fetch_start_time;
+  };
 
-  std::map<CoreAccountId, std::unique_ptr<AccountCapabilitiesFetcher>>
-      account_capabilities_requests_;
+  std::unique_ptr<AccountFetcherFactory> account_fetcher_factory_;
 
-  // CoreAccountId and the corresponding fetch start time. These two member
-  // variables are only used to record account information fetch duration.
-  base::flat_map<CoreAccountId, base::TimeTicks> user_info_fetch_start_times_;
-  base::flat_map<CoreAccountId, base::TimeTicks> user_avatar_fetch_start_times_;
+  // Holds per-account info/capabilities fetchers and user info fetch start
+  // time keyed by account_id.
+  base::flat_map<CoreAccountId, AccountFetchState> account_fetches_;
 
   // Used for fetching the account images.
   std::unique_ptr<image_fetcher::ImageFetcherImpl> image_fetcher_;
   std::unique_ptr<image_fetcher::ImageDecoder> image_decoder_;
 
-  SEQUENCE_CHECKER(sequence_checker_);
+  base::ScopedObservation<ProfileOAuth2TokenService,
+                          ProfileOAuth2TokenServiceObserver>
+      token_service_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(AccountFetcherService);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_ACCOUNT_FETCHER_SERVICE_H_

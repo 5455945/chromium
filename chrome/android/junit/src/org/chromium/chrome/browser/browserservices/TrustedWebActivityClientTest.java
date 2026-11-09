@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,75 +7,75 @@ package org.chromium.chrome.browser.browserservices;
 import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.ComponentName;
-import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.RemoteException;
 
 import androidx.browser.trusted.Token;
-import androidx.browser.trusted.TrustedWebActivityServiceConnection;
-import androidx.browser.trusted.TrustedWebActivityServiceConnectionPool;
-
-import com.google.common.util.concurrent.SettableFuture;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.browserservices.permissiondelegation.TrustedWebActivityPermissionManager;
+import org.chromium.chrome.browser.browserservices.permissiondelegation.InstalledWebappPermissionStore;
 import org.chromium.chrome.browser.notifications.NotificationBuilderBase;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
+import org.chromium.chrome.browser.webapps.WebappRegistry;
 import org.chromium.components.browser_ui.notifications.NotificationWrapper;
+import org.chromium.components.embedder_support.util.Origin;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
-/**
- * Unit tests for {@link TrustedWebActivityClient}.
- */
+/** Unit tests for {@link TrustedWebActivityClient}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TrustedWebActivityClientTest {
     private static final int SERVICE_SMALL_ICON_ID = 1;
     private static final String CLIENT_PACKAGE_NAME = "com.example.app";
 
-    private SettableFuture<TrustedWebActivityServiceConnection> mServiceFuture =
-            SettableFuture.create();
-
-    @Mock
-    private TrustedWebActivityServiceConnectionPool mConnectionPool;
-    @Mock private TrustedWebActivityServiceConnection mService;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private TrustedWebActivityClientWrappers.ConnectionPool mConnectionPool;
+    @Mock private TrustedWebActivityClientWrappers.Connection mService;
     @Mock private NotificationBuilderBase mNotificationBuilder;
-    @Mock private TrustedWebActivityUmaRecorder mRecorder;
     @Mock private NotificationUmaTracker mNotificationUmaTracker;
 
     @Mock private Bitmap mServiceSmallIconBitmap;
-    @Mock
-    private NotificationWrapper mNotificationWrapper;
-    @Mock private TrustedWebActivityPermissionManager mDelegatesManager;
+    @Mock private NotificationWrapper mNotificationWrapper;
+    @Mock private InstalledWebappPermissionStore mPermissionStore;
 
     private TrustedWebActivityClient mClient;
 
     @Before
-    public void setUp() throws ExecutionException, InterruptedException, RemoteException {
-        MockitoAnnotations.initMocks(this);
+    public void setUp() throws RemoteException {
 
-        mServiceFuture.set(mService);
-        when(mConnectionPool.connect(any(), any(), any())).thenReturn(mServiceFuture);
+        doAnswer(
+                        invocation -> {
+                            Origin origin = invocation.getArgument(1);
+                            TrustedWebActivityClient.ExecutionCallback callback =
+                                    invocation.getArgument(3);
+
+                            callback.onConnected(origin, mService);
+
+                            return null;
+                        })
+                .when(mConnectionPool)
+                .connectAndExecute(any(), any(), any(), any());
 
         when(mService.getSmallIconId()).thenReturn(SERVICE_SMALL_ICON_ID);
         when(mService.getSmallIconBitmap()).thenReturn(mServiceSmallIconBitmap);
@@ -84,10 +84,11 @@ public class TrustedWebActivityClientTest {
         when(mNotificationBuilder.build(any())).thenReturn(mNotificationWrapper);
 
         Set<Token> delegateApps = new HashSet<>();
-        delegateApps.add(Mockito.mock(Token.class));
-        when(mDelegatesManager.getAllDelegateApps(any())).thenReturn(delegateApps);
+        delegateApps.add(createDummyToken());
+        when(mPermissionStore.getAllDelegateApps(any())).thenReturn(delegateApps);
+        WebappRegistry.getInstance().setPermissionStoreForTesting(mPermissionStore);
 
-        mClient = new TrustedWebActivityClient(mConnectionPool, mDelegatesManager, mRecorder);
+        mClient = new TrustedWebActivityClient(mConnectionPool);
     }
 
     @Test
@@ -95,17 +96,14 @@ public class TrustedWebActivityClientTest {
         setHasStatusBarBitmap(false);
         postNotification();
         verify(mNotificationBuilder)
-                .setStatusBarIconForRemoteApp(
-                        SERVICE_SMALL_ICON_ID, mServiceSmallIconBitmap, CLIENT_PACKAGE_NAME);
+                .setStatusBarIconForRemoteApp(SERVICE_SMALL_ICON_ID, mServiceSmallIconBitmap);
     }
-
 
     @Test
     public void doesntUseIconFromService_IfContentBarIconSet() {
         setHasStatusBarBitmap(true);
         postNotification();
-        verify(mNotificationBuilder, never())
-                .setStatusBarIconForRemoteApp(anyInt(), any(), anyString());
+        verify(mNotificationBuilder, never()).setStatusBarIconForRemoteApp(anyInt(), any());
     }
 
     @Test
@@ -150,13 +148,41 @@ public class TrustedWebActivityClientTest {
 
     private void postNotification() {
         Uri uri = Uri.parse("https://www.example.com");
-        mClient.notifyNotification(uri, "tag", 1, mNotificationBuilder,
-                mNotificationUmaTracker);
+        mClient.notifyNotification(uri, "tag", 1, mNotificationBuilder, mNotificationUmaTracker);
     }
 
     @Test
     public void createLaunchIntentForTwaNonHttpScheme() {
-        assertNull(TrustedWebActivityClient.createLaunchIntentForTwa(RuntimeEnvironment.application,
-                "mailto:miranda@example.com", new ArrayList<ResolveInfo>()));
+        assertNull(
+                mClient.createLaunchIntentForTwa(
+                        RuntimeEnvironment.getApplication(),
+                        "mailto:miranda@example.com",
+                        new ArrayList<>()));
+    }
+
+    private static Token createDummyToken() {
+        // This code requires understanding how Token's parse (see TokenContents.java inside
+        // androidx.browser) and is pretty ugly. The alternative is to set up the Robolectric
+        // PackageManager to provide the right data, which probably is a more robust approach.
+        // However, ideally androidx.browser will add a way to create a mock Token for testing and
+        // we can use that instead.
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputStream writer = new DataOutputStream(baos);
+
+        String packageName = "token.package.name";
+        int numFingerprints = 1;
+        byte[] fingerprint = "1234".getBytes();
+
+        try {
+            writer.writeUTF(packageName);
+            writer.writeInt(numFingerprints);
+            writer.writeInt(fingerprint.length);
+            writer.write(fingerprint);
+            writer.flush();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        return Token.deserialize(baos.toByteArray());
     }
 }

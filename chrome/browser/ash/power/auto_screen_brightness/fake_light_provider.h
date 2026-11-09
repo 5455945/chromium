@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@ class FakeLightProvider : public LightProviderInterface {
   ~FakeLightProvider() override;
 
   void set_als_init_status(AlsReader::AlsInitStatus status) {
-    DCHECK(als_reader_);
+    CHECK(als_reader_, base::NotFatalUntil::M160);
     status_ = status;
     als_reader_->SetAlsInitStatusForTesting(status_);
   }

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,32 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "components/keyed_service/core/keyed_service.h"
+#include "components/value_store/value_store.h"
+#include "components/value_store/value_store_factory_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api/extensions_api_client.h"
+#include "extensions/browser/api/storage/settings_namespace.h"
 #include "extensions/browser/api/storage/settings_test_util.h"
+#include "extensions/browser/api/storage/storage_area_namespace.h"
+#include "extensions/browser/api/storage/storage_frontend.h"
+#include "extensions/browser/event_listener_map.h"
+#include "extensions/browser/event_router.h"
+#include "extensions/browser/event_router_factory.h"
+#include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extensions_test.h"
-#include "extensions/browser/value_store/settings_namespace.h"
-#include "extensions/browser/value_store/value_store.h"
-#include "extensions/browser/value_store/value_store_factory_impl.h"
+#include "extensions/common/mojom/context_type.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using value_store::ValueStore;
 
 namespace extensions {
 
@@ -30,6 +42,11 @@ namespace {
 // To save typing ValueStore::DEFAULTS everywhere.
 const ValueStore::WriteOptions DEFAULTS = ValueStore::DEFAULTS;
 
+std::unique_ptr<KeyedService> BuildEventRouter(
+    content::BrowserContext* context) {
+  return std::make_unique<EventRouter>(context, ExtensionPrefs::Get(context));
+}
+
 }  // namespace
 
 // A better name for this would be StorageFrontendTest, but the historical name
@@ -39,8 +56,14 @@ class ExtensionSettingsFrontendTest : public ExtensionsTest {
  public:
   void SetUp() override {
     ExtensionsTest::SetUp();
+    // EventRouterFactory::ServiceIsNULLWhileTesting() returns true, so an
+    // EventRouter must be explicitly provided for tests that dispatch
+    // storage.onChanged events (e.g. via StorageFrontend::OnSettingsChanged()).
+    EventRouterFactory::GetInstance()->SetTestingFactory(
+        browser_context(), base::BindRepeating(&BuildEventRouter));
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    storage_factory_ = new ValueStoreFactoryImpl(temp_dir_.GetPath());
+    storage_factory_ =
+        new value_store::ValueStoreFactoryImpl(temp_dir_.GetPath());
     ResetFrontend();
   }
 
@@ -59,7 +82,7 @@ class ExtensionSettingsFrontendTest : public ExtensionsTest {
 
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<StorageFrontend> frontend_;
-  scoped_refptr<ValueStoreFactoryImpl> storage_factory_;
+  scoped_refptr<value_store::ValueStoreFactoryImpl> storage_factory_;
 
  private:
   ExtensionsAPIClient extensions_api_client_;
@@ -80,11 +103,104 @@ TEST_F(ExtensionSettingsFrontendTest, Basics) {
   EXPECT_FALSE(frontend_->GetValueStoreCache(settings::INVALID));
 }
 
+namespace {
+
+class EventRestrictionObserver : public EventRouter::TestObserver {
+ public:
+  struct DispatchedEvent {
+    std::string name;
+    std::optional<mojom::ContextType> restrict_to_context_type;
+  };
+
+  void OnWillDispatchEvent(const Event& event) override {
+    dispatched_events_.push_back(
+        {event.event_name, event.restrict_to_context_type});
+  }
+
+  void OnDidDispatchEventToProcess(const Event& event,
+                                   int process_id) override {}
+
+  const std::vector<DispatchedEvent>& events() const {
+    return dispatched_events_;
+  }
+
+  void Clear() { dispatched_events_.clear(); }
+
+ private:
+  std::vector<DispatchedEvent> dispatched_events_;
+};
+
+}  // namespace
+
+TEST_F(ExtensionSettingsFrontendTest, OnSettingsChanged_RestrictToContextType) {
+  EventRestrictionObserver observer;
+  EventRouter* event_router = EventRouter::Get(browser_context());
+  event_router->AddObserverForTesting(&observer);
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.session.onChanged", id, browser_context(), false, GURL(),
+      std::nullopt));
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.sync.onChanged", id, browser_context(), false, GURL(),
+      std::nullopt));
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.managed.onChanged", id, browser_context(), false, GURL(),
+      std::nullopt));
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.onChanged", id, browser_context(), false, GURL(), std::nullopt));
+
+  SettingsChangedCallback callback = frontend_->GetObserver();
+
+  // Test with session storage. Default should be restricted to privileged
+  // contexts.
+  callback.Run(id, StorageAreaNamespace::kSession, std::nullopt,
+               base::Value(true));
+
+  ASSERT_EQ(observer.events().size(), 2u);
+  EXPECT_EQ(observer.events()[0].name, "storage.session.onChanged");
+  EXPECT_EQ(observer.events()[0].restrict_to_context_type,
+            mojom::ContextType::kPrivilegedExtension);
+  EXPECT_EQ(observer.events()[1].name, "storage.onChanged");
+  EXPECT_EQ(observer.events()[1].restrict_to_context_type,
+            mojom::ContextType::kPrivilegedExtension);
+
+  observer.Clear();
+
+  // Test with sync storage. Default should NOT be restricted.
+  callback.Run(id, StorageAreaNamespace::kSync, std::nullopt,
+               base::Value(true));
+
+  ASSERT_EQ(observer.events().size(), 2u);
+  EXPECT_EQ(observer.events()[0].name, "storage.sync.onChanged");
+  EXPECT_EQ(observer.events()[0].restrict_to_context_type, std::nullopt);
+  EXPECT_EQ(observer.events()[1].name, "storage.onChanged");
+  EXPECT_EQ(observer.events()[1].restrict_to_context_type, std::nullopt);
+
+  observer.Clear();
+
+  // Test with managed storage. Default should NOT be restricted.
+  callback.Run(id, StorageAreaNamespace::kManaged, std::nullopt,
+               base::Value(true));
+
+  ASSERT_EQ(observer.events().size(), 2u);
+  EXPECT_EQ(observer.events()[0].name, "storage.managed.onChanged");
+  EXPECT_EQ(observer.events()[0].restrict_to_context_type, std::nullopt);
+  EXPECT_EQ(observer.events()[1].name, "storage.onChanged");
+  EXPECT_EQ(observer.events()[1].restrict_to_context_type, std::nullopt);
+
+  event_router->RemoveObserverForTesting(&observer);
+}
+
 TEST_F(ExtensionSettingsFrontendTest, SettingsPreservedAcrossReconstruction) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(browser_context(), id,
-                                             Manifest::TYPE_EXTENSION);
+                                             Manifest::Type::kExtension);
 
   ValueStore* storage = settings_test_util::GetStorage(
       extension, settings::LOCAL, frontend_.get());
@@ -100,7 +216,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsPreservedAcrossReconstruction) {
   {
     ValueStore::ReadResult result = storage->Get();
     ASSERT_TRUE(result.status().ok());
-    EXPECT_FALSE(result.settings().DictEmpty());
+    EXPECT_FALSE(result.settings().empty());
   }
 
   ResetFrontend();
@@ -110,7 +226,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsPreservedAcrossReconstruction) {
   {
     ValueStore::ReadResult result = storage->Get();
     ASSERT_TRUE(result.status().ok());
-    EXPECT_FALSE(result.settings().DictEmpty());
+    EXPECT_FALSE(result.settings().empty());
   }
 }
 
@@ -118,7 +234,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsClearedOnUninstall) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(
-          browser_context(), id, Manifest::TYPE_LEGACY_PACKAGED_APP);
+          browser_context(), id, Manifest::Type::kLegacyPackagedApp);
 
   ValueStore* storage = settings_test_util::GetStorage(
       extension, settings::LOCAL, frontend_.get());
@@ -130,8 +246,9 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsClearedOnUninstall) {
   }
 
   // This would be triggered by extension uninstall via a DataDeleter.
-  frontend_->DeleteStorageSoon(id);
-  content::RunAllTasksUntilIdle();
+  base::RunLoop run_loop;
+  frontend_->DeleteStorageSoon(id, run_loop.QuitClosure());
+  run_loop.Run();
 
   // The storage area may no longer be valid post-uninstall, so re-request.
   storage = settings_test_util::GetStorage(extension, settings::LOCAL,
@@ -139,7 +256,7 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsClearedOnUninstall) {
   {
     ValueStore::ReadResult result = storage->Get();
     ASSERT_TRUE(result.status().ok());
-    EXPECT_TRUE(result.settings().DictEmpty());
+    EXPECT_TRUE(result.settings().empty());
   }
 }
 
@@ -147,7 +264,7 @@ TEST_F(ExtensionSettingsFrontendTest, LeveldbDatabaseDeletedFromDiskOnClear) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(browser_context(), id,
-                                             Manifest::TYPE_EXTENSION);
+                                             Manifest::Type::kExtension);
 
   ValueStore* storage = settings_test_util::GetStorage(
       extension, settings::LOCAL, frontend_.get());
@@ -175,13 +292,13 @@ TEST_F(ExtensionSettingsFrontendTest, LeveldbDatabaseDeletedFromDiskOnClear) {
   // EXPECT_FALSE(base::PathExists(temp_dir_.GetPath()));
 }
 
-// Disabled (slow), http://crbug.com/322751 .
+// Disabled (slow), http://crbug.com/40342579 .
 TEST_F(ExtensionSettingsFrontendTest,
        DISABLED_QuotaLimitsEnforcedCorrectlyForSyncAndLocal) {
   const std::string id = "ext";
   scoped_refptr<const Extension> extension =
       settings_test_util::AddExtensionWithId(browser_context(), id,
-                                             Manifest::TYPE_EXTENSION);
+                                             Manifest::Type::kExtension);
 
   ValueStore* sync_storage = settings_test_util::GetStorage(
       extension, settings::SYNC, frontend_.get());
@@ -189,30 +306,125 @@ TEST_F(ExtensionSettingsFrontendTest,
       extension, settings::LOCAL, frontend_.get());
 
   // Sync storage should run out after ~100K.
-  std::unique_ptr<base::Value> kilobyte = settings_test_util::CreateKilobyte();
+  base::Value kilobyte = settings_test_util::CreateKilobyte();
   for (int i = 0; i < 100; ++i) {
-    sync_storage->Set(DEFAULTS, base::NumberToString(i), *kilobyte);
+    sync_storage->Set(DEFAULTS, base::NumberToString(i), kilobyte);
   }
 
   EXPECT_FALSE(
-      sync_storage->Set(DEFAULTS, "WillError", *kilobyte).status().ok());
+      sync_storage->Set(DEFAULTS, "WillError", kilobyte).status().ok());
 
   // Local storage shouldn't run out after ~100K.
   for (int i = 0; i < 100; ++i) {
-    local_storage->Set(DEFAULTS, base::NumberToString(i), *kilobyte);
+    local_storage->Set(DEFAULTS, base::NumberToString(i), kilobyte);
   }
 
   EXPECT_TRUE(
-      local_storage->Set(DEFAULTS, "WontError", *kilobyte).status().ok());
+      local_storage->Set(DEFAULTS, "WontError", kilobyte).status().ok());
 
   // Local storage should run out after ~5MB.
-  std::unique_ptr<base::Value> megabyte = settings_test_util::CreateMegabyte();
+  base::Value megabyte = settings_test_util::CreateMegabyte();
   for (int i = 0; i < 5; ++i) {
-    local_storage->Set(DEFAULTS, base::NumberToString(i), *megabyte);
+    local_storage->Set(DEFAULTS, base::NumberToString(i), megabyte);
   }
 
   EXPECT_FALSE(
-      local_storage->Set(DEFAULTS, "WillError", *megabyte).status().ok());
+      local_storage->Set(DEFAULTS, "WillError", megabyte).status().ok());
+}
+
+// Tests that a successful extension storage operation correctly emits success
+// metrics for the underlying database status.
+TEST_F(ExtensionSettingsFrontendTest, EmitUmaLevelDBMetrics) {
+  base::HistogramTester histogram_tester;
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  base::RunLoop run_loop;
+  base::DictValue values;
+  values.Set("foo", "bar");
+
+  frontend_->Set(extension, StorageAreaNamespace::kLocal, std::move(values),
+                 base::BindOnce(
+                     [](base::OnceClosure quit_closure,
+                        StorageFrontend::ResultStatus status) {
+                       EXPECT_TRUE(status.success);
+                       std::move(quit_closure).Run();
+                     },
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  // The Set operation should have succeeded and emitted LevelDB UMA.
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.Database.Local.StatusCodeByOperation.set",
+      /*sample=*/value_store::ValueStore::StatusCode::OK,
+      /*expected_bucket_count=*/1);
+}
+
+// Tests that a failed extension storage operation (e.g., due to exceeding the
+// quota limit) correctly emits an error metric for the high-level operation
+// that failed.
+TEST_F(ExtensionSettingsFrontendTest, SettingsQuotaExceededEmitsErrorMetric) {
+  base::HistogramTester histogram_tester;
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  base::RunLoop run_loop;
+  base::DictValue values;
+  // Local quota is 10MB. Setting 11MB should fail.
+  base::ListValue megabytes;
+  base::Value megabyte = settings_test_util::CreateMegabyte();
+  for (int i = 0; i < 11; ++i) {
+    megabytes.Append(megabyte.Clone());
+  }
+  values.Set("too_big", megabytes.Clone());
+
+  frontend_->Set(extension, StorageAreaNamespace::kLocal, std::move(values),
+                 base::BindOnce(
+                     [](base::OnceClosure quit_closure,
+                        StorageFrontend::ResultStatus status) {
+                       EXPECT_FALSE(status.success);
+                       std::move(quit_closure).Run();
+                     },
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  // The Set operation should have failed and emitted error metrics.
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.Database.Local.ErrorByOperation",
+      /*sample=*/StorageFrontend::ExtensionsDatabaseOperation::kSet,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.Database.Local.StatusCodeByOperation.set",
+      /*sample=*/value_store::ValueStore::StatusCode::QUOTA_EXCEEDED,
+      /*expected_bucket_count=*/1);
+}
+
+// Tests that OnSettingsChanged emits the execution time histogram.
+TEST_F(ExtensionSettingsFrontendTest,
+       OnSettingsChangedEmitsExecutionTimeHistogram) {
+  base::HistogramTester histogram_tester;
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  EventRouter* event_router = EventRouter::Get(browser_context());
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.onChanged", id, browser_context(), false, GURL(), std::nullopt));
+
+  SettingsChangedCallback callback = frontend_->GetObserver();
+  callback.Run(id, StorageAreaNamespace::kLocal, std::nullopt,
+               base::Value(true));
+
+  histogram_tester.ExpectTotalCount("Extensions.Storage.OnSettingsChangedTime",
+                                    1);
 }
 
 }  // namespace extensions

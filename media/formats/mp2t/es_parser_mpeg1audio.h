@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media_export.h"
@@ -35,6 +36,10 @@ class MEDIA_EXPORT EsParserMpeg1Audio : public EsParser {
   EsParserMpeg1Audio(const NewAudioConfigCB& new_audio_config_cb,
                      EmitBufferCB emit_buffer_cb,
                      MediaLog* media_log);
+
+  EsParserMpeg1Audio(const EsParserMpeg1Audio&) = delete;
+  EsParserMpeg1Audio& operator=(const EsParserMpeg1Audio&) = delete;
+
   ~EsParserMpeg1Audio() override;
 
   // EsParser implementation.
@@ -62,11 +67,11 @@ class MEDIA_EXPORT EsParserMpeg1Audio : public EsParser {
   // Signal any audio configuration change (if any).
   // Return false if the current audio config is not
   // a supported Mpeg1 audio config.
-  bool UpdateAudioConfiguration(const uint8_t* mpeg1audio_header);
+  bool UpdateAudioConfiguration(base::span<const uint8_t> mpeg1audio_header);
 
   void SkipMpeg1AudioFrame(const Mpeg1AudioFrame& mpeg1audio_frame);
 
-  MediaLog* media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
 
   size_t mp3_parse_error_limit_ = 0;
 
@@ -81,8 +86,6 @@ class MEDIA_EXPORT EsParserMpeg1Audio : public EsParser {
 
   // Last audio config.
   AudioDecoderConfig last_audio_decoder_config_;
-
-  DISALLOW_COPY_AND_ASSIGN(EsParserMpeg1Audio);
 };
 
 }  // namespace mp2t

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,16 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "components/feedback/feedback_report.h"
 #include "content/public/browser/browser_thread.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "chromeos/dbus/dbus_thread_manager.h"  // nogncheck
-#include "chromeos/dbus/debug_daemon/debug_daemon_client.h"
-#include "content/public/browser/browser_task_traits.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
 #include "content/public/browser/browser_thread.h"
 #endif
 
@@ -33,10 +30,10 @@ constexpr size_t kMaxCrashesCountToRetrieve = 10;
 constexpr size_t kCrashIdStringSize = 16;
 
 // For recent crashes, which is for all reports, look back one hour.
-constexpr base::TimeDelta kOneHourTimeDelta = base::TimeDelta::FromHours(1);
+constexpr base::TimeDelta kOneHourTimeDelta = base::Hours(1);
 
 // For all crashes, which is for only @google.com reports, look back 120 days.
-constexpr base::TimeDelta k120DaysTimeDelta = base::TimeDelta::FromDays(120);
+constexpr base::TimeDelta k120DaysTimeDelta = base::Days(120);
 
 }  // namespace
 
@@ -45,10 +42,10 @@ CrashIdsSource::CrashIdsSource()
       crash_upload_list_(CreateCrashUploadList()),
       pending_crash_list_loading_(false) {}
 
-CrashIdsSource::~CrashIdsSource() {}
+CrashIdsSource::~CrashIdsSource() = default;
 
 void CrashIdsSource::Fetch(SysLogsSourceCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // Unretained since we own this callback.
   pending_requests_.emplace_back(
@@ -63,13 +60,12 @@ void CrashIdsSource::Fetch(SysLogsSourceCallback callback) {
   base::OnceClosure list_available_cb = base::BindOnce(
       &CrashIdsSource::OnUploadListAvailable, weak_ptr_factory_.GetWeakPtr());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Upload recent crashes so that they're shown in the report.
   // Non-chromeOS systems upload crashes shortly after they happen. ChromeOS is
   // unique in that it has a separate process (crash_sender) that uploads
   // crashes periodically (by default every 5 minutes).
-  chromeos::DebugDaemonClient* debugd_client =
-      chromeos::DBusThreadManager::Get()->GetDebugDaemonClient();
+  ash::DebugDaemonClient* debugd_client = ash::DebugDaemonClient::Get();
   if (debugd_client) {
     debugd_client->UploadCrashes(base::BindOnce(
         [](base::OnceClosure load_crash_list_cb, bool success) {
@@ -99,8 +95,8 @@ void CrashIdsSource::OnUploadListAvailable() {
   // hour, which is included in all feedback reports. The other is all of the
   // crash IDs from the past 120 days, which is only included in feedback
   // reports sent from @google.com accounts.
-  std::vector<UploadList::UploadInfo> crashes;
-  crash_upload_list_->GetUploads(kMaxCrashesCountToRetrieve, &crashes);
+  const std::vector<const UploadList::UploadInfo*> crashes =
+      crash_upload_list_->GetUploads(kMaxCrashesCountToRetrieve);
   const base::Time now = base::Time::Now();
   crash_ids_list_.clear();
   crash_ids_list_.reserve(kMaxCrashesCountToRetrieve *
@@ -110,14 +106,14 @@ void CrashIdsSource::OnUploadListAvailable() {
                               (kCrashIdStringSize + 2));
 
   // The feedback server expects the crash IDs to be a comma-separated list.
-  for (const auto& crash_info : crashes) {
+  for (const auto* crash_info : crashes) {
     const base::Time& report_time =
-        crash_info.state == UploadList::UploadInfo::State::Uploaded
-            ? crash_info.upload_time
-            : crash_info.capture_time;
+        crash_info->state == UploadList::UploadInfo::State::Uploaded
+            ? crash_info->upload_time
+            : crash_info->capture_time;
     base::TimeDelta time_diff = now - report_time;
     if (time_diff < k120DaysTimeDelta) {
-      const std::string& crash_id = crash_info.upload_id;
+      const std::string& crash_id = crash_info->upload_id;
       all_crash_ids_list_.append(all_crash_ids_list_.empty() ? crash_id
                                                              : ", " + crash_id);
       if (time_diff < kOneHourTimeDelta) {

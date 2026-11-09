@@ -31,23 +31,27 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_SERIALIZED_SCRIPT_VALUE_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_SERIALIZED_SCRIPT_VALUE_H_
 
+#include "base/types/expected.h"
+#include "third_party/blink/public/common/messaging/cloneable_message.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_private_ptr.h"
+#include "v8/include/v8-local-handle.h"
 
 namespace v8 {
 class Isolate;
 class Value;
-template <class T>
-class Local;
 }
 
 namespace blink {
 
 class SerializedScriptValue;
-class WebString;
+
+enum class DeserializationError {
+  kDefaultFailure,
+};
 
 // FIXME: Should this class be in platform?
-class WebSerializedScriptValue {
+class BLINK_EXPORT WebSerializedScriptValue {
  public:
   ~WebSerializedScriptValue() { Reset(); }
 
@@ -58,35 +62,41 @@ class WebSerializedScriptValue {
     return *this;
   }
 
-  // Creates a serialized script value from its wire format data.
-  BLINK_EXPORT static WebSerializedScriptValue FromString(const WebString&);
-
-  BLINK_EXPORT static WebSerializedScriptValue Serialize(v8::Isolate*,
-                                                         v8::Local<v8::Value>);
+  static WebSerializedScriptValue Serialize(v8::Isolate*, v8::Local<v8::Value>);
 
   // Create a WebSerializedScriptValue that represents a serialization error.
-  BLINK_EXPORT static WebSerializedScriptValue CreateInvalid();
+  // Use `!IsValid()` to check for this state.
+  static WebSerializedScriptValue CreateInvalid();
 
-  BLINK_EXPORT void Reset();
-  BLINK_EXPORT void Assign(const WebSerializedScriptValue&);
+  // Reconstructs a `WebSerializedScriptValue` from a `CloneableMessage`.
+  static WebSerializedScriptValue CreateFromCloneableMessage(CloneableMessage);
+
+  // Returns a `CloneableMessage` containing the serialized data.
+  // `sender_agent_cluster_id` is set on the CloneableMessage.
+  CloneableMessage GetCloneableMessage(
+      base::UnguessableToken sender_agent_cluster_id) const;
+
+  void Reset();
+  void Assign(const WebSerializedScriptValue&);
 
   bool IsNull() const { return private_.IsNull(); }
 
-  // Returns a string representation of the WebSerializedScriptValue.
-  BLINK_EXPORT WebString ToString() const;
+  // Returns true if the value is valid. Valid means that a
+  // `SerializedScriptValue` has been assigned and has wire data.
+  bool IsValid() const;
 
   // Convert the serialized value to a parsed v8 value.
-  BLINK_EXPORT v8::Local<v8::Value> Deserialize(v8::Isolate*);
+  base::expected<v8::Local<v8::Value>, DeserializationError> Deserialize(
+      v8::Isolate*);
 
 #if INSIDE_BLINK
-  BLINK_EXPORT WebSerializedScriptValue(scoped_refptr<SerializedScriptValue>);
-  BLINK_EXPORT WebSerializedScriptValue& operator=(
-      scoped_refptr<SerializedScriptValue>);
-  BLINK_EXPORT operator scoped_refptr<SerializedScriptValue>() const;
+  WebSerializedScriptValue(scoped_refptr<SerializedScriptValue>);
+  WebSerializedScriptValue& operator=(scoped_refptr<SerializedScriptValue>);
+  operator scoped_refptr<SerializedScriptValue>() const;
 #endif
 
  private:
-  WebPrivatePtr<SerializedScriptValue> private_;
+  WebPrivatePtrForRefCounted<SerializedScriptValue> private_;
 };
 
 }  // namespace blink

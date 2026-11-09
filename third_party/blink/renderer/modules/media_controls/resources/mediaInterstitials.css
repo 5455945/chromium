@@ -1,6 +1,10 @@
-/* Copyright 2018 The Chromium Authors. All rights reserved.
+/* Copyright 2018 The Chromium Authors
    Use of this source code is governed by a BSD-style license that can be
    found in the LICENSE file. */
+
+/* Rules in this and other mediaControls*.css files override rules from html.css
+   and other UA sheets regardless of specificity. See comment in
+   StyleResolver::MatchUARules(). */
 
 video::-internal-media-interstitial {
     width: inherit;
@@ -38,7 +42,7 @@ video::-internal-media-interstitial-background-image {
 }
 
 video::-internal-media-remoting-cast-icon {
-    -webkit-appearance: none;
+    appearance: none;
     background-size: 100% 100%;
     background-repeat: no-repeat;
     background-position: center center;
@@ -65,7 +69,8 @@ video::-internal-picture-in-picture-interstitial-message {
     text-wrap: none;
     text-align: center;
     background-color: transparent;
-    font-family: Roboto-Regular, Sans-serif, Segoe, Serif, Helvetica;
+    /* Use a generic family consistent with other UA shadow controls. */
+    font-family: sans-serif;
     padding: 0px;
     margin: 0px;
 }
@@ -101,13 +106,14 @@ video::-internal-media-remoting-toast-message {
     text-align: center;
     background-color: rgba(40, 44, 50, 0.7);
     font-size: 90%;
-    font-family: Roboto-Regular, Sans-serif, Segoe, Serif, Helvetica;
+    /* Use a generic family consistent with other UA shadow controls. */
+    font-family: sans-serif;
     padding: 10pt 24pt 10pt 24pt;
     margin: 0px;
 }
 
 video::-internal-media-remoting-cast-icon {
-    background-image: -webkit-image-set(
+    background-image: image-set(
       url(default_100_percent/mediaremoting_cast.png) 1x,
       url(default_200_percent/mediaremoting_cast.png) 2x);
 }

@@ -1,10 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/http/http_response_info.h"
 
+#include "base/byte_size.h"
 #include "base/pickle.h"
+#include "net/base/proxy_chain.h"
 #include "net/cert/signed_certificate_timestamp.h"
 #include "net/cert/signed_certificate_timestamp_and_status.h"
 #include "net/http/http_response_headers.h"
@@ -22,15 +24,16 @@ namespace {
 class HttpResponseInfoTest : public testing::Test {
  protected:
   void SetUp() override {
-    response_info_.headers = new HttpResponseHeaders("");
+    response_info_.headers = base::MakeRefCounted<HttpResponseHeaders>("");
   }
 
   void PickleAndRestore(const HttpResponseInfo& response_info,
                         HttpResponseInfo* restored_response_info) const {
-    base::Pickle pickle;
-    response_info.Persist(&pickle, false, false);
+    std::unique_ptr<base::Pickle> pickle = response_info.MakePickle(
+        /*skip_transient_headers=*/false, /*response_truncated=*/false);
     bool truncated = false;
-    EXPECT_TRUE(restored_response_info->InitFromPickle(pickle, &truncated));
+    EXPECT_TRUE(restored_response_info->InitFromPickle(
+        base::PickleIterator(*pickle), &truncated));
   }
 
   HttpResponseInfo response_info_;
@@ -59,6 +62,36 @@ TEST_F(HttpResponseInfoTest, UnusedSincePrefetchPersistTrue) {
   EXPECT_TRUE(restored_response_info.unused_since_prefetch);
 }
 
+TEST_F(HttpResponseInfoTest, ProxyChainDefault) {
+  EXPECT_FALSE(response_info_.proxy_chain.IsValid());
+  EXPECT_FALSE(response_info_.WasFetchedViaProxy());
+}
+
+TEST_F(HttpResponseInfoTest, ProxyChainCopy) {
+  response_info_.proxy_chain =
+      ProxyChain::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTP, "foo", 80);
+  HttpResponseInfo response_info_clone(response_info_);
+  EXPECT_TRUE(response_info_clone.proxy_chain.IsValid());
+  EXPECT_TRUE(response_info_clone.WasFetchedViaProxy());
+}
+
+TEST_F(HttpResponseInfoTest, ProxyChainPersistDirect) {
+  response_info_.proxy_chain = ProxyChain::Direct();
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_TRUE(restored_response_info.proxy_chain.IsValid());
+  EXPECT_FALSE(restored_response_info.WasFetchedViaProxy());
+}
+
+TEST_F(HttpResponseInfoTest, ProxyChainPersistProxy) {
+  response_info_.proxy_chain =
+      ProxyChain::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTP, "foo", 80);
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_TRUE(restored_response_info.proxy_chain.IsValid());
+  EXPECT_TRUE(restored_response_info.WasFetchedViaProxy());
+}
+
 TEST_F(HttpResponseInfoTest, PKPBypassPersistTrue) {
   response_info_.ssl_info.pkp_bypassed = true;
   HttpResponseInfo restored_response_info;
@@ -79,20 +112,20 @@ TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedDefault) {
 
 TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedCopy) {
   response_info_.async_revalidation_requested = true;
-  net::HttpResponseInfo response_info_clone(response_info_);
+  HttpResponseInfo response_info_clone(response_info_);
   EXPECT_TRUE(response_info_clone.async_revalidation_requested);
 }
 
 TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedAssign) {
   response_info_.async_revalidation_requested = true;
-  net::HttpResponseInfo response_info_clone;
+  HttpResponseInfo response_info_clone;
   response_info_clone = response_info_;
   EXPECT_TRUE(response_info_clone.async_revalidation_requested);
 }
 
 TEST_F(HttpResponseInfoTest, AsyncRevalidationRequestedNotPersisted) {
   response_info_.async_revalidation_requested = true;
-  net::HttpResponseInfo restored_response_info;
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_FALSE(restored_response_info.async_revalidation_requested);
 }
@@ -102,14 +135,14 @@ TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutDefault) {
 }
 
 TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutCopy) {
-  base::Time test_time = base::Time::FromDoubleT(1000);
+  base::Time test_time = base::Time::FromSecondsSinceUnixEpoch(1000);
   response_info_.stale_revalidate_timeout = test_time;
   HttpResponseInfo response_info_clone(response_info_);
   EXPECT_EQ(test_time, response_info_clone.stale_revalidate_timeout);
 }
 
 TEST_F(HttpResponseInfoTest, StaleRevalidationTimeoutRestoreValue) {
-  base::Time test_time = base::Time::FromDoubleT(1000);
+  base::Time test_time = base::Time::FromSecondsSinceUnixEpoch(1000);
   response_info_.stale_revalidate_timeout = test_time;
   HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
@@ -132,8 +165,8 @@ TEST_F(HttpResponseInfoTest, KeyExchangeGroupECDHE) {
   SSLConnectionStatusSetCipherSuite(
       0xcca8 /* TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 */,
       &response_info_.ssl_info.connection_status);
-  response_info_.ssl_info.key_exchange_group = 23;  // X25519
-  net::HttpResponseInfo restored_response_info;
+  response_info_.ssl_info.key_exchange_group = 23;  // secp256r1
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_EQ(23, restored_response_info.ssl_info.key_exchange_group);
 }
@@ -146,8 +179,8 @@ TEST_F(HttpResponseInfoTest, KeyExchangeGroupTLS13) {
                                 &response_info_.ssl_info.connection_status);
   SSLConnectionStatusSetCipherSuite(0x1303 /* TLS_CHACHA20_POLY1305_SHA256 */,
                                     &response_info_.ssl_info.connection_status);
-  response_info_.ssl_info.key_exchange_group = 23;  // X25519
-  net::HttpResponseInfo restored_response_info;
+  response_info_.ssl_info.key_exchange_group = 23;  // secp256r1
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_EQ(23, restored_response_info.ssl_info.key_exchange_group);
 }
@@ -164,7 +197,7 @@ TEST_F(HttpResponseInfoTest, LegacyKeyExchangeInfoDHE) {
       0x0093 /* TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 */,
       &response_info_.ssl_info.connection_status);
   response_info_.ssl_info.key_exchange_group = 1024;
-  net::HttpResponseInfo restored_response_info;
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_EQ(0, restored_response_info.ssl_info.key_exchange_group);
 }
@@ -180,7 +213,7 @@ TEST_F(HttpResponseInfoTest, LegacyKeyExchangeInfoUnknown) {
   SSLConnectionStatusSetCipherSuite(0xffff,
                                     &response_info_.ssl_info.connection_status);
   response_info_.ssl_info.key_exchange_group = 1024;
-  net::HttpResponseInfo restored_response_info;
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_EQ(0, restored_response_info.ssl_info.key_exchange_group);
 }
@@ -191,9 +224,27 @@ TEST_F(HttpResponseInfoTest, PeerSignatureAlgorithm) {
       ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
   response_info_.ssl_info.peer_signature_algorithm =
       0x0804;  // rsa_pss_rsae_sha256
-  net::HttpResponseInfo restored_response_info;
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_EQ(0x0804, restored_response_info.ssl_info.peer_signature_algorithm);
+}
+
+// Test that encrypted_client_hello is preserved.
+TEST_F(HttpResponseInfoTest, EncryptedClientHello) {
+  response_info_.ssl_info.cert =
+      ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
+  {
+    HttpResponseInfo restored_response_info;
+    PickleAndRestore(response_info_, &restored_response_info);
+    EXPECT_FALSE(restored_response_info.ssl_info.encrypted_client_hello);
+  }
+
+  response_info_.ssl_info.encrypted_client_hello = true;
+  {
+    HttpResponseInfo restored_response_info;
+    PickleAndRestore(response_info_, &restored_response_info);
+    EXPECT_TRUE(restored_response_info.ssl_info.encrypted_client_hello);
+  }
 }
 
 // Tests that cache entries loaded over SSLv3 (no longer supported) are dropped.
@@ -205,12 +256,12 @@ TEST_F(HttpResponseInfoTest, FailsInitFromPickleWithSSLV3) {
   // Non-SSLv3 versions should succeed.
   SSLConnectionStatusSetVersion(SSL_CONNECTION_VERSION_TLS1_2,
                                 &response_info_.ssl_info.connection_status);
-  base::Pickle tls12_pickle;
-  response_info_.Persist(&tls12_pickle, false, false);
+  std::unique_ptr<base::Pickle> tls12_pickle = response_info_.MakePickle(
+      /*skip_transient_headers=*/false, /*response_truncated=*/false);
   bool truncated = false;
-  net::HttpResponseInfo restored_tls12_response_info;
-  EXPECT_TRUE(
-      restored_tls12_response_info.InitFromPickle(tls12_pickle, &truncated));
+  HttpResponseInfo restored_tls12_response_info;
+  EXPECT_TRUE(restored_tls12_response_info.InitFromPickle(
+      base::PickleIterator(*tls12_pickle), &truncated));
   EXPECT_EQ(SSL_CONNECTION_VERSION_TLS1_2,
             SSLConnectionStatusToVersion(
                 restored_tls12_response_info.ssl_info.connection_status));
@@ -219,17 +270,17 @@ TEST_F(HttpResponseInfoTest, FailsInitFromPickleWithSSLV3) {
   // SSLv3 should fail.
   SSLConnectionStatusSetVersion(SSL_CONNECTION_VERSION_SSL3,
                                 &response_info_.ssl_info.connection_status);
-  base::Pickle ssl3_pickle;
-  response_info_.Persist(&ssl3_pickle, false, false);
-  net::HttpResponseInfo restored_ssl3_response_info;
-  EXPECT_FALSE(
-      restored_ssl3_response_info.InitFromPickle(ssl3_pickle, &truncated));
+  std::unique_ptr<base::Pickle> ssl3_pickle = response_info_.MakePickle(
+      /*skip_transient_headers=*/false, /*response_truncated=*/false);
+  HttpResponseInfo restored_ssl3_response_info;
+  EXPECT_FALSE(restored_ssl3_response_info.InitFromPickle(
+      base::PickleIterator(*ssl3_pickle), &truncated));
 }
 
 // Test that `dns_aliases` is preserved.
 TEST_F(HttpResponseInfoTest, DnsAliases) {
   response_info_.dns_aliases = {"alias1", "alias2", "alias3"};
-  net::HttpResponseInfo restored_response_info;
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_THAT(restored_response_info.dns_aliases,
               testing::ElementsAre("alias1", "alias2", "alias3"));
@@ -238,9 +289,59 @@ TEST_F(HttpResponseInfoTest, DnsAliases) {
 // Test that an empty `dns_aliases` is preserved and doesn't throw an error.
 TEST_F(HttpResponseInfoTest, EmptyDnsAliases) {
   response_info_.dns_aliases = {};
-  net::HttpResponseInfo restored_response_info;
+  HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_TRUE(restored_response_info.dns_aliases.empty());
+}
+
+// Test that did_send_available_dictionary is NOT preserved .
+TEST_F(HttpResponseInfoTest, DidSendAvailableDictionary) {
+  response_info_.did_send_available_dictionary = true;
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.did_send_available_dictionary);
+}
+
+// Test that did_use_shared_dictionary is NOT preserved .
+TEST_F(HttpResponseInfoTest, DidUseSharedDictionary) {
+  response_info_.did_use_shared_dictionary = true;
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.did_use_shared_dictionary);
+}
+
+TEST_F(HttpResponseInfoTest, EncodedBodySize) {
+  response_info_.encoded_body_size = base::ByteSize(12345u);
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  ASSERT_TRUE(restored_response_info.encoded_body_size.has_value());
+  EXPECT_EQ(12345u, restored_response_info.encoded_body_size->InBytes());
+}
+
+TEST_F(HttpResponseInfoTest, EmptyEncodedBodySize) {
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.encoded_body_size.has_value());
+}
+
+TEST_F(HttpResponseInfoTest, NegativeEncodedBodySize) {
+  std::unique_ptr<base::Pickle> pickle =
+      response_info_.MakePickleWithSignedBodySizeForTesting(
+          /*skip_transient_headers=*/false, /*response_truncated=*/false, -1);
+  bool truncated = false;
+  HttpResponseInfo restored_response_info;
+  EXPECT_TRUE(restored_response_info.InitFromPickle(
+      base::PickleIterator(*pickle), &truncated));
+  EXPECT_FALSE(restored_response_info.encoded_body_size.has_value());
+}
+
+// Rollback safety: older cache entries predating bit 1<<4 must deserialize
+// as uncompressed. Persist-true is covered by
+// HttpCacheTest.ZstdDecompressHappyPath.
+TEST_F(HttpResponseInfoTest, ZstdUncompressedBodySizeDefault) {
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.zstd_uncompressed_body_size.has_value());
 }
 
 }  // namespace

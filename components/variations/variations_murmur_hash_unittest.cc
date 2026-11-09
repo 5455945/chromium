@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,10 @@
 
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/smhasher/src/MurmurHash3.h"
+#include "third_party/smhasher/src/src/MurmurHash3.h"
 
-namespace variations {
-namespace internal {
+namespace variations::internal {
+namespace {
 
 TEST(VariationsMurmurHashTest, StringToLE32) {
   EXPECT_EQ(std::vector<uint32_t>(),
@@ -78,5 +78,5 @@ TEST(VariationsMurmurHashTest, Hash16) {
 
 #endif  // defined(ARCH_CPU_LITTLE_ENDIAN)
 
-}  // namespace internal
-}  // namespace variations
+}  // namespace
+}  // namespace variations::internal

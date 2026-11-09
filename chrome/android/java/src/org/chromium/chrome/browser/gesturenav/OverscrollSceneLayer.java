@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,47 +6,58 @@ package org.chromium.chrome.browser.gesturenav;
 
 import android.view.View;
 
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.layouts.scene_layer.SceneLayer;
 import org.chromium.chrome.browser.layouts.scene_layer.SceneOverlayLayer;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.resources.ResourceManager;
 
-/**
- * {@link SceneOverlayLayer} implementation for gesture navigation overscroll effect.
- */
+/** {@link SceneOverlayLayer} implementation for gesture navigation overscroll effect. */
 @JNINamespace("android")
+@NullMarked
 class OverscrollSceneLayer extends SceneOverlayLayer {
+    @JniType("::android::OverscrollSceneLayer")
+    interface NativeOverscrollSceneLayer extends JniTypeToken {}
+
     private final View mParentView;
 
-    // NOTE: If you use SceneLayer's native pointer here, the JNI generator will try to
-    // downcast using reinterpret_cast<>. We keep a separate pointer to avoid it.
-    private long mNativePtr;
+    // Non-owning typed alias; SceneLayer owns and frees the native object.
+    private final JniRawPtr<NativeOverscrollSceneLayer> mNativePtr;
 
     private float mAccumulatedScroll;
 
     OverscrollSceneLayer(WindowAndroid window, View parentView) {
         mParentView = parentView;
-        mNativePtr = OverscrollSceneLayerJni.get().init(OverscrollSceneLayer.this, window);
-        assert mNativePtr != 0;
+        mNativePtr = OverscrollSceneLayerJni.get().init(this, window);
     }
 
-    /**
-     * Initialize a new overscroll effect.
-     */
+    /** Initialize a new overscroll effect. */
     void prepare(float startX, float startY) {
         mAccumulatedScroll = 0.f;
-        OverscrollSceneLayerJni.get().prepare(mNativePtr, OverscrollSceneLayer.this, startX, startY,
-                mParentView.getWidth(), mParentView.getHeight());
+        OverscrollSceneLayerJni.get()
+                .prepare(
+                        mNativePtr,
+                        startX,
+                        startY,
+                        mParentView.getWidth(),
+                        mParentView.getHeight());
     }
 
     /**
      * Send down the swipe offset to update animation for overscroll effect.
+     *
      * @param resourceManager An object for accessing static and dynamic resources.
      * @param offset Swipe offset from touch events.
-     * @return {@code true} if the animation is still in progress; {@code false} if the animation
-     *         is completed.
+     * @return {@code true} if the animation is still in progress; {@code false} if the animation is
+     *     completed.
      */
     boolean update(ResourceManager resourceManager, float offset) {
         float xDelta = -(offset - mAccumulatedScroll);
@@ -55,25 +66,24 @@ class OverscrollSceneLayer extends SceneOverlayLayer {
         // Do not go down with zero delta since it can make the animation jerky. But return true
         // to keep the animation going on.
         if (xDelta == 0.f) return true;
-        return OverscrollSceneLayerJni.get().update(
-                mNativePtr, OverscrollSceneLayer.this, resourceManager, mAccumulatedScroll, xDelta);
+        return OverscrollSceneLayerJni.get()
+                .update(mNativePtr, resourceManager, mAccumulatedScroll, xDelta);
     }
 
     /** Release the glow effect to recede slowly. */
     void release() {
-        OverscrollSceneLayerJni.get().update(mNativePtr, OverscrollSceneLayer.this, null, 0.f, 0.f);
+        OverscrollSceneLayerJni.get().update(mNativePtr, null, 0.f, 0.f);
         mAccumulatedScroll = 0.f;
     }
 
     /** Reset the glow effect. */
     void reset() {
-        OverscrollSceneLayerJni.get().onReset(mNativePtr, OverscrollSceneLayer.this);
+        OverscrollSceneLayerJni.get().onReset(mNativePtr);
     }
 
     @Override
     public void setContentTree(SceneLayer contentTree) {
-        OverscrollSceneLayerJni.get().setContentTree(
-                mNativePtr, OverscrollSceneLayer.this, contentTree);
+        OverscrollSceneLayerJni.get().setContentTree(mNativePtr, contentTree);
     }
 
     @Override
@@ -83,19 +93,29 @@ class OverscrollSceneLayer extends SceneOverlayLayer {
 
     @Override
     public void destroy() {
+        mNativePtr.release();
         super.destroy();
-        mNativePtr = 0;
     }
 
     @NativeMethods
     interface Natives {
-        long init(OverscrollSceneLayer caller, WindowAndroid window);
-        void prepare(long nativeOverscrollSceneLayer, OverscrollSceneLayer caller, float startX,
-                float startY, int width, int height);
-        void setContentTree(long nativeOverscrollSceneLayer, OverscrollSceneLayer caller,
-                SceneLayer contentTree);
-        boolean update(long nativeOverscrollSceneLayer, OverscrollSceneLayer caller,
-                ResourceManager resourceManager, float accumulatedScroll, float delta);
-        void onReset(long nativeOverscrollSceneLayer, OverscrollSceneLayer caller);
+        JniRawPtr<NativeOverscrollSceneLayer> init(OverscrollSceneLayer self, WindowAndroid window);
+
+        void prepare(
+                JniPtr<NativeOverscrollSceneLayer> self,
+                float startX,
+                float startY,
+                int width,
+                int height);
+
+        void setContentTree(JniPtr<NativeOverscrollSceneLayer> self, SceneLayer contentTree);
+
+        boolean update(
+                JniPtr<NativeOverscrollSceneLayer> self,
+                @Nullable ResourceManager resourceManager,
+                float accumulatedScroll,
+                float delta);
+
+        void onReset(JniPtr<NativeOverscrollSceneLayer> self);
     }
 }

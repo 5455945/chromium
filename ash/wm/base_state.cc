@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,21 @@
 #include "ash/public/cpp/window_properties.h"
 #include "ash/screen_util.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/wm/overview/overview_controller.h"
+#include "ash/wm/snap_group/snap_group.h"
+#include "ash/wm/snap_group/snap_group_controller.h"
 #include "ash/wm/splitview/split_view_controller.h"
+#include "ash/wm/splitview/split_view_types.h"
 #include "ash/wm/splitview/split_view_utils.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_positioning_utils.h"
-#include "ash/wm/wm_event.h"
+#include "ash/wm/window_util.h"
+#include "ash/wm/wm_metrics.h"
 #include "chromeos/ui/base/window_state_type.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
+#include "ui/display/screen.h"
 
 namespace ash {
 
@@ -30,13 +35,15 @@ BaseState::~BaseState() = default;
 void BaseState::OnWMEvent(WindowState* window_state, const WMEvent* event) {
   if (event->IsWorkspaceEvent()) {
     HandleWorkspaceEvents(window_state, event);
-    if (window_state->IsPip())
-      window_state->UpdatePipBounds();
+    if (window_state->IsSnapped() && !window_state->CanSnap()) {
+      window_state->Restore();
+    }
     return;
   }
-  if ((window_state->IsTrustedPinned() || window_state->IsPinned()) &&
-      (event->type() != WM_EVENT_NORMAL && event->IsTransitionEvent())) {
-    // PIN state can be exited only by normal event.
+  if (window_state->IsPinned() &&
+      (event->type() != WM_EVENT_NORMAL && event->type() != WM_EVENT_RESTORE &&
+       event->IsTransitionEvent())) {
+    // PIN state can be exited only by normal event or restore event.
     return;
   }
 
@@ -58,9 +65,12 @@ WindowStateType BaseState::GetType() const {
 }
 
 // static
-WindowStateType BaseState::GetStateForTransitionEvent(const WMEvent* event) {
+WindowStateType BaseState::GetStateForTransitionEvent(WindowState* window_state,
+                                                      const WMEvent* event) {
   switch (event->type()) {
     case WM_EVENT_NORMAL:
+      if (window_state->window()->GetProperty(aura::client::kIsRestoringKey))
+        return window_state->GetRestoreWindowState();
       return WindowStateType::kNormal;
     case WM_EVENT_MAXIMIZE:
       return WindowStateType::kMaximized;
@@ -72,12 +82,16 @@ WindowStateType BaseState::GetStateForTransitionEvent(const WMEvent* event) {
       return WindowStateType::kPrimarySnapped;
     case WM_EVENT_SNAP_SECONDARY:
       return WindowStateType::kSecondarySnapped;
+    case WM_EVENT_RESTORE:
+      return window_state->GetRestoreWindowState();
     case WM_EVENT_SHOW_INACTIVE:
       return WindowStateType::kInactive;
     case WM_EVENT_PIN:
       return WindowStateType::kPinned;
     case WM_EVENT_PIP:
       return WindowStateType::kPip;
+    case WM_EVENT_FLOAT:
+      return WindowStateType::kFloated;
     case WM_EVENT_TRUSTED_PIN:
       return WindowStateType::kTrustedPinned;
     default:
@@ -95,36 +109,10 @@ WindowStateType BaseState::GetStateForTransitionEvent(const WMEvent* event) {
 }
 
 // static
-void BaseState::CenterWindow(WindowState* window_state) {
-  if (!window_state->IsNormalOrSnapped())
-    return;
-  aura::Window* window = window_state->window();
-  if (window_state->IsSnapped()) {
-    gfx::Rect center_in_screen = display::Screen::GetScreen()
-                                     ->GetDisplayNearestWindow(window)
-                                     .work_area();
-    gfx::Size size = window_state->HasRestoreBounds()
-                         ? window_state->GetRestoreBoundsInScreen().size()
-                         : window->bounds().size();
-    center_in_screen.ClampToCenteredSize(size);
-    window_state->SetRestoreBoundsInScreen(center_in_screen);
-    window_state->Restore();
-  } else {
-    gfx::Rect center_in_parent =
-        screen_util::GetDisplayWorkAreaBoundsInParent(window);
-    center_in_parent.ClampToCenteredSize(window->bounds().size());
-    const SetBoundsWMEvent event(center_in_parent,
-                                 /*animate=*/true);
-    window_state->OnWMEvent(&event);
-  }
-  // Centering window is treated as if a user moved and resized the window.
-  window_state->set_bounds_changed_by_user(true);
-}
-
-// static
 void BaseState::CycleSnap(WindowState* window_state, WMEventType event) {
-  // For tablet mode, use |TabletModeWindowState::CycleTabletSnap|.
-  DCHECK(!Shell::Get()->tablet_mode_controller()->InTabletMode());
+  auto* shell = Shell::Get();
+  // For tablet mode, use `TabletModeWindowState::CycleTabletSnap`.
+  DCHECK(!display::Screen::Get()->InTabletMode());
 
   WindowStateType desired_snap_state = event == WM_EVENT_CYCLE_SNAP_PRIMARY
                                            ? WindowStateType::kPrimarySnapped
@@ -134,26 +122,45 @@ void BaseState::CycleSnap(WindowState* window_state, WMEventType event) {
   // then snap |window| to the side that corresponds to |desired_snap_state|.
   if (window_state->CanSnap() &&
       window_state->GetStateType() != desired_snap_state) {
-    if (Shell::Get()->overview_controller()->InOverviewSession()) {
+    const bool is_desired_primary_snapped =
+        desired_snap_state == WindowStateType::kPrimarySnapped;
+    if (shell->overview_controller()->InOverviewSession() &&
+        !window_util::IsInFasterSplitScreenSetupSession(window)) {
       // |window| must already be in split view, and so we do not need to check
       // |SplitViewController::CanSnapWindow|, although in general it is more
       // restrictive than |WindowState::CanSnap|.
       DCHECK(SplitViewController::Get(window)->IsWindowInSplitView(window));
       SplitViewController::Get(window)->SnapWindow(
-          window, desired_snap_state == WindowStateType::kPrimarySnapped
-                      ? SplitViewController::LEFT
-                      : SplitViewController::RIGHT);
+          window,
+          is_desired_primary_snapped ? SnapPosition::kPrimary
+                                     : SnapPosition::kSecondary,
+          WindowSnapActionSource::kKeyboardShortcutToSnap);
     } else {
-      const WMEvent event(desired_snap_state == WindowStateType::kPrimarySnapped
-                              ? WM_EVENT_SNAP_PRIMARY
-                              : WM_EVENT_SNAP_SECONDARY);
-      window_state->OnWMEvent(&event);
+      const WindowSnapWMEvent wm_event(
+          is_desired_primary_snapped ? WM_EVENT_SNAP_PRIMARY
+                                     : WM_EVENT_SNAP_SECONDARY,
+          WindowSnapActionSource::kKeyboardShortcutToSnap);
+      window_state->OnWMEvent(&wm_event);
     }
+    window_state->ReadOutWindowCycleSnapAction(
+        is_desired_primary_snapped ? IDS_WM_SNAP_WINDOW_TO_LEFT_ON_SHORTCUT
+                                   : IDS_WM_SNAP_WINDOW_TO_RIGHT_ON_SHORTCUT);
     return;
   }
-  // If |window| is already in |desired_snap_state|, then unsnap |window|.
+  // If |window| is in a snap group, ungroup it. If it's not in a snap group and
+  // it's already snapped, restore it.
   if (window_state->IsSnapped()) {
-    window_state->Restore();
+    auto* snap_group_controller = Shell::Get()->snap_group_controller();
+    auto* snap_group = snap_group_controller->GetSnapGroupForGivenWindow(
+        window_state->window());
+    if (snap_group) {
+      snap_group_controller->RemoveSnapGroup(
+          snap_group, SnapGroupExitPoint::kToggleSnapGroupAccelerator);
+    } else {
+      window_state->Restore();
+      window_state->ReadOutWindowCycleSnapAction(
+          IDS_WM_RESTORE_SNAPPED_WINDOW_ON_SHORTCUT);
+    }
     return;
   }
   // If |window| cannot be snapped, then do a window bounce animation.
@@ -165,20 +172,6 @@ void BaseState::UpdateMinimizedState(WindowState* window_state,
                                      WindowStateType previous_state_type) {
   aura::Window* window = window_state->window();
   if (window_state->IsMinimized()) {
-    // Save the previous show state when it is not minimized so that we can
-    // correctly restore it after exiting the minimized mode.
-    if (!IsMinimizedWindowStateType(previous_state_type)) {
-      // We must not save PIP to |kPreMinimizedShowStateKey|.
-      if (previous_state_type != WindowStateType::kPip)
-        window->SetProperty(aura::client::kPreMinimizedShowStateKey,
-                            ToWindowShowState(previous_state_type));
-      // We must not save MINIMIZED to |kPreMinimizedShowStateKey|.
-      else if (window->GetProperty(kPrePipWindowStateTypeKey) !=
-               WindowStateType::kMinimized)
-        window->SetProperty(
-            aura::client::kPreMinimizedShowStateKey,
-            ToWindowShowState(window->GetProperty(kPrePipWindowStateTypeKey)));
-    }
     // Count minimizing a PIP window as dismissing it. Android apps in PIP mode
     // don't exit when they are dismissed, they just go back to being a regular
     // app, but minimized.
@@ -205,34 +198,58 @@ void BaseState::UpdateMinimizedState(WindowState* window_state,
 
 gfx::Rect BaseState::GetSnappedWindowBoundsInParent(
     aura::Window* window,
-    const WindowStateType state_type) {
-  gfx::Rect bounds_in_parent;
-  if (ShouldAllowSplitView()) {
-    bounds_in_parent =
-        SplitViewController::Get(window)->GetSnappedWindowBoundsInParent(
-            (state_type == WindowStateType::kPrimarySnapped)
-                ? SplitViewController::LEFT
-                : SplitViewController::RIGHT,
-            window);
-  } else {
-    bounds_in_parent = (state_type == WindowStateType::kPrimarySnapped)
-                           ? GetDefaultLeftSnappedWindowBoundsInParent(window)
-                           : GetDefaultRightSnappedWindowBoundsInParent(window);
+    const WindowStateType state_type,
+    float snap_ratio) {
+  CHECK(chromeos::IsSnappedWindowStateType(state_type));
+  if (auto* snap_group_controller = SnapGroupController::Get()) {
+    if (auto* snap_group =
+            snap_group_controller->GetSnapGroupForGivenWindow(window)) {
+      // If `window` belongs to a snap group, the snap group should manage its
+      // bounds. Bounds in root are the same as in parent for snapped windows.
+      return snap_group->GetSnappedWindowBoundsInRoot(window, state_type,
+                                                      snap_ratio);
+    }
   }
-  return bounds_in_parent;
+
+  if (auto* split_view_controller = SplitViewController::Get(window);
+      split_view_controller->IsWindowInSplitView(window) ||
+      display::Screen::Get()->InTabletMode()) {
+    // In tablet mode `SplitViewController` always manages snapped windows, in
+    // clamshell state it only manages windows in split view.
+    return split_view_controller->GetSnappedWindowBoundsInParent(
+        (state_type == WindowStateType::kPrimarySnapped)
+            ? SnapPosition::kPrimary
+            : SnapPosition::kSecondary,
+        window, snap_ratio);
+  }
+
+  return ash::GetSnappedWindowBoundsInParent(
+      window,
+      state_type == WindowStateType::kPrimarySnapped ? SnapViewType::kPrimary
+                                                     : SnapViewType::kSecondary,
+      snap_ratio);
 }
 
-void BaseState::HandleWindowSnapping(WindowState* window_state,
-                                     WMEventType event_type) {
-  DCHECK(event_type == WM_EVENT_SNAP_PRIMARY ||
-         event_type == WM_EVENT_SNAP_SECONDARY);
-  DCHECK(window_state->CanSnap());
+void BaseState::HandleWindowSnapping(
+    WindowState* window_state,
+    WMEventType event_type,
+    WindowSnapActionSource snap_action_source) {
+  CHECK(event_type == WM_EVENT_SNAP_PRIMARY ||
+        event_type == WM_EVENT_SNAP_SECONDARY);
+  CHECK(window_state->CanSnap());
 
-  window_state->set_bounds_changed_by_user(true);
+  window_state->SetBoundsChangedByUser(true);
+
   aura::Window* window = window_state->window();
-  // SplitViewController will decide if the window needs to be snapped in split
-  // view.
-  SplitViewController::Get(window)->OnWindowSnapWMEvent(window, event_type);
+  WindowSnapGrouping snap_group_restore =
+      (snap_action_source == WindowSnapActionSource::kSnapByWindowStateRestore)
+          ? window_state->GetSnapGroupingForRestore()
+          : WindowSnapGrouping::kUngrouped;
+
+  // `SplitViewController` will decide if the window needs to be snapped in
+  // split view.
+  SplitViewController::Get(window)->OnSnapEvent(
+      window, event_type, snap_action_source, snap_group_restore);
 }
 
 }  // namespace ash

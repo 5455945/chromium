@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,14 @@
 
 #include <wayland-server-protocol-core.h>
 
-#include "base/bind.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
 #include "components/exo/buffer.h"
 #include "components/exo/display.h"
 #include "components/exo/shared_memory.h"
 #include "components/exo/wayland/server_util.h"
+#include "components/viz/common/resources/shared_image_format.h"
 
 namespace exo {
 namespace wayland {
@@ -29,12 +32,12 @@ void HandleBufferReleaseCallback(wl_resource* resource) {
 
 const struct shm_supported_format {
   uint32_t shm_format;
-  gfx::BufferFormat buffer_format;
+  viz::SharedImageFormat si_format;
 } shm_supported_formats[] = {
-    {WL_SHM_FORMAT_XBGR8888, gfx::BufferFormat::RGBX_8888},
-    {WL_SHM_FORMAT_ABGR8888, gfx::BufferFormat::RGBA_8888},
-    {WL_SHM_FORMAT_XRGB8888, gfx::BufferFormat::BGRX_8888},
-    {WL_SHM_FORMAT_ARGB8888, gfx::BufferFormat::BGRA_8888}};
+    {WL_SHM_FORMAT_XBGR8888, viz::SinglePlaneFormat::kRGBX_8888},
+    {WL_SHM_FORMAT_ABGR8888, viz::SinglePlaneFormat::kRGBA_8888},
+    {WL_SHM_FORMAT_XRGB8888, viz::SinglePlaneFormat::kBGRX_8888},
+    {WL_SHM_FORMAT_ARGB8888, viz::SinglePlaneFormat::kBGRA_8888}};
 
 void shm_pool_create_buffer(wl_client* client,
                             wl_resource* resource,
@@ -44,14 +47,9 @@ void shm_pool_create_buffer(wl_client* client,
                             int32_t height,
                             int32_t stride,
                             uint32_t format) {
-  const auto* supported_format =
-      std::find_if(shm_supported_formats,
-                   shm_supported_formats + base::size(shm_supported_formats),
-                   [format](const shm_supported_format& supported_format) {
-                     return supported_format.shm_format == format;
-                   });
-  if (supported_format ==
-      (shm_supported_formats + base::size(shm_supported_formats))) {
+  const auto* supported_format = std::ranges::find(
+      shm_supported_formats, format, &shm_supported_format::shm_format);
+  if (supported_format == std::end(shm_supported_formats)) {
     wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FORMAT,
                            "invalid format 0x%x", format);
     return;
@@ -65,7 +63,7 @@ void shm_pool_create_buffer(wl_client* client,
 
   std::unique_ptr<Buffer> buffer =
       GetUserDataAs<SharedMemory>(resource)->CreateBuffer(
-          gfx::Size(width, height), supported_format->buffer_format, offset,
+          gfx::Size(width, height), supported_format->si_format, offset,
           stride);
   if (!buffer) {
     wl_resource_post_no_memory(resource);

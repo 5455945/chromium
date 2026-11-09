@@ -21,14 +21,15 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_TEXT_CONTENT_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_TEXT_CONTENT_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_enumeration.h"
 #include "third_party/blink/renderer/core/svg/svg_graphics_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
+class DOMPointInit;
 class ExceptionState;
-class LineLayoutItem;
 class SVGAnimatedLength;
 class SVGPointTearOff;
 
@@ -57,11 +58,8 @@ class CORE_EXPORT SVGTextContentElement : public SVGGraphicsElement {
   SVGPointTearOff* getEndPositionOfChar(unsigned charnum, ExceptionState&);
   SVGRectTearOff* getExtentOfChar(unsigned charnum, ExceptionState&);
   float getRotationOfChar(unsigned charnum, ExceptionState&);
-  int getCharNumAtPosition(SVGPointTearOff*, ExceptionState&);
+  int getCharNumAtPosition(const DOMPointInit*);
   void selectSubString(unsigned charnum, unsigned nchars, ExceptionState&);
-
-  static SVGTextContentElement* ElementFromLineLayoutItem(
-      const LineLayoutItem&);
 
   SVGAnimatedLength* textLength() { return text_length_.Get(); }
   bool TextLengthIsSpecifiedByUser() {
@@ -77,12 +75,17 @@ class CORE_EXPORT SVGTextContentElement : public SVGGraphicsElement {
   SVGTextContentElement(const QualifiedName&, Document&);
 
   bool IsPresentationAttribute(const QualifiedName&) const final;
-  void CollectStyleForPresentationAttribute(const QualifiedName&,
-                                            const AtomicString&,
-                                            MutableCSSPropertyValueSet*) final;
+  void CollectStyleForPresentationAttribute(
+      const QualifiedName&,
+      const AtomicString&,
+      HeapVector<CSSPropertyValue, 8>&) final;
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
   bool SelfHasRelativeLengths() const override;
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
  private:
   bool IsTextContent() const final { return true; }

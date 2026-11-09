@@ -31,41 +31,66 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_PEER_CONNECTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_PEER_CONNECTION_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/gtest_prod_util.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
+#include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_typedefs.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/dom/events/event_target.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/crypto/normalize_algorithm.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream.h"
-#include "third_party/blink/renderer/modules/peerconnection/call_setup_state_tracker.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_ice_candidate.h"
-#include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection_controller.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection_handler.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_transceiver.h"
-#include "third_party/blink/renderer/modules/peerconnection/rtc_session_description_enums.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
-#include "third_party/blink/renderer/platform/mediastream/media_constraints.h"
+#include "third_party/blink/renderer/modules/peerconnection/rtp_contributing_source_cache.h"
+#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_peer_connection_handler_client.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_receiver_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_sender_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_request.h"
-#include "third_party/blink/renderer/platform/peerconnection/rtc_void_request.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/webrtc/api/data_channel_interface.h"
+#include "third_party/webrtc/api/dtls_transport_interface.h"
+#include "third_party/webrtc/api/ice_transport_interface.h"
+#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/rtc_base/rtc_certificate.h"
+#include "v8/include/cppgc/garbage-collected.h"
 
 namespace blink {
 
 class ExceptionState;
 class MediaStreamTrack;
 class RTCAnswerOptions;
+class RTCCertificate;
 class RTCConfiguration;
-class RTCDTMFSender;
 class RTCDataChannel;
+class RTCDTMFSender;
 class RTCDataChannelInit;
 class RTCDtlsTransport;
 class RTCIceCandidateInit;
@@ -78,38 +103,19 @@ class RTCRtpTransceiverInit;
 class RTCSctpTransport;
 class RTCSessionDescription;
 class RTCSessionDescriptionInit;
+class RTCStatsReport;
 class ScriptState;
+class V8RTCIceGatheringState;
+class V8RTCIceConnectionState;
+class V8RTCPeerConnectionState;
 class V8RTCPeerConnectionErrorCallback;
 class V8RTCSessionDescriptionCallback;
-class V8RTCStatsCallback;
+class V8RTCSignalingState;
 class V8UnionMediaStreamTrackOrString;
 class V8VoidFunction;
 
-extern const char kOnlySupportedInUnifiedPlanMessage[];
-
-// This enum is used to track usage of SDP during the transition of the default
-// "sdpSemantics" value from "Plan B" to "Unified Plan". Usage refers to
-// operations such as createOffer(), createAnswer(), setLocalDescription() and
-// setRemoteDescription(). "Complex" SDP refers to SDP that is not compatible
-// between SDP formats. Usage of SDP falls into two categories: "safe" and
-// "unsafe". Applications with unsafe usage are predicted to break when the
-// default changes. This includes complex SDP usage and relying on the default
-// sdpSemantics. kUnknown is used if the SDP format could not be deduced, such
-// as if SDP could not be parsed.
-enum class SdpUsageCategory {
-  kSafe = 0,
-  kUnsafe = 1,
-  kUnknown = 2,
-  kMaxValue = kUnknown,
-};
-
-MODULES_EXPORT SdpUsageCategory
-DeduceSdpUsageCategory(const ParsedSessionDescription& parsed_sdp,
-                       bool sdp_semantics_specified,
-                       webrtc::SdpSemantics sdp_semantics);
-
 class MODULES_EXPORT RTCPeerConnection final
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public RTCPeerConnectionHandlerClient,
       public ActiveScriptWrappable<RTCPeerConnection>,
       public ExecutionContextLifecycleObserver,
@@ -120,65 +126,36 @@ class MODULES_EXPORT RTCPeerConnection final
  public:
   static RTCPeerConnection* Create(ExecutionContext*,
                                    const RTCConfiguration*,
-                                   const Dictionary&,
-                                   ExceptionState&);
-  static RTCPeerConnection* Create(ExecutionContext*,
-                                   const RTCConfiguration*,
-                                   const ScriptValue&,
-                                   ExceptionState&);
-  static RTCPeerConnection* Create(ExecutionContext*,
-                                   const RTCConfiguration*,
                                    ExceptionState&);
 
   RTCPeerConnection(ExecutionContext*,
                     webrtc::PeerConnectionInterface::RTCConfiguration,
-                    bool sdp_semantics_specified,
-                    bool force_encoded_audio_insertable_streams,
-                    bool force_encoded_video_insertable_streams,
-                    MediaConstraints,
+                    bool encoded_insertable_streams,
                     ExceptionState&);
   ~RTCPeerConnection() override;
 
-  ScriptPromise createOffer(ScriptState*,
-                            const RTCOfferOptions*,
-                            ExceptionState&);
-  ScriptPromise createOffer(ScriptState*,
-                            V8RTCSessionDescriptionCallback*,
-                            V8RTCPeerConnectionErrorCallback*,
-                            const ScriptValue&,
-                            ExceptionState&);
-  ScriptPromise createOffer(ScriptState*,
-                            V8RTCSessionDescriptionCallback*,
-                            V8RTCPeerConnectionErrorCallback*,
-                            ExceptionState&);
-  ScriptPromise CreateOffer(ScriptState*,
-                            V8RTCSessionDescriptionCallback*,
-                            V8RTCPeerConnectionErrorCallback*,
-                            const Dictionary&,
-                            ExceptionState&);
+  ScriptPromise<RTCSessionDescriptionInit> createOffer(ScriptState*,
+                                                       const RTCOfferOptions*,
+                                                       ExceptionState&);
+  ScriptPromise<IDLUndefined> createOffer(ScriptState*,
+                                          V8RTCSessionDescriptionCallback*,
+                                          V8RTCPeerConnectionErrorCallback*,
+                                          const RTCOfferOptions*);
 
-  ScriptPromise createAnswer(ScriptState*,
-                             const RTCAnswerOptions*,
-                             ExceptionState&);
-  ScriptPromise createAnswer(ScriptState*,
-                             V8RTCSessionDescriptionCallback*,
-                             V8RTCPeerConnectionErrorCallback*,
-                             const ScriptValue&,
-                             ExceptionState&);
-  ScriptPromise createAnswer(ScriptState*,
-                             V8RTCSessionDescriptionCallback*,
-                             V8RTCPeerConnectionErrorCallback*,
-                             ExceptionState&);
-  ScriptPromise CreateAnswer(ScriptState*,
-                             V8RTCSessionDescriptionCallback*,
-                             V8RTCPeerConnectionErrorCallback*,
-                             const Dictionary&);
+  ScriptPromise<RTCSessionDescriptionInit> createAnswer(ScriptState*,
+                                                        const RTCAnswerOptions*,
+                                                        ExceptionState&);
+  ScriptPromise<IDLUndefined> createAnswer(ScriptState*,
+                                           V8RTCSessionDescriptionCallback*,
+                                           V8RTCPeerConnectionErrorCallback*);
 
-  ScriptPromise setLocalDescription(ScriptState*);
-  ScriptPromise setLocalDescription(ScriptState*,
-                                    const RTCSessionDescriptionInit*,
-                                    ExceptionState&);
-  ScriptPromise setLocalDescription(
+  ScriptPromise<IDLUndefined> setLocalDescription(ScriptState*,
+                                                  ExceptionState&);
+  ScriptPromise<IDLUndefined> setLocalDescription(
+      ScriptState*,
+      const RTCSessionDescriptionInit*,
+      ExceptionState&);
+  ScriptPromise<IDLUndefined> setLocalDescription(
       ScriptState*,
       const RTCSessionDescriptionInit*,
       V8VoidFunction*,
@@ -187,10 +164,11 @@ class MODULES_EXPORT RTCPeerConnection final
   RTCSessionDescription* currentLocalDescription() const;
   RTCSessionDescription* pendingLocalDescription() const;
 
-  ScriptPromise setRemoteDescription(ScriptState*,
-                                     const RTCSessionDescriptionInit*,
-                                     ExceptionState&);
-  ScriptPromise setRemoteDescription(
+  ScriptPromise<IDLUndefined> setRemoteDescription(
+      ScriptState*,
+      const RTCSessionDescriptionInit*,
+      ExceptionState&);
+  ScriptPromise<IDLUndefined> setRemoteDescription(
       ScriptState*,
       const RTCSessionDescriptionInit*,
       V8VoidFunction*,
@@ -199,34 +177,34 @@ class MODULES_EXPORT RTCPeerConnection final
   RTCSessionDescription* currentRemoteDescription() const;
   RTCSessionDescription* pendingRemoteDescription() const;
 
-  String signalingState() const;
+  V8RTCSignalingState signalingState() const;
 
   RTCConfiguration* getConfiguration(ScriptState*) const;
   void setConfiguration(ScriptState*, const RTCConfiguration*, ExceptionState&);
 
   // Certificate management
   // http://w3c.github.io/webrtc-pc/#sec.cert-mgmt
-  static ScriptPromise generateCertificate(
+  static ScriptPromise<RTCCertificate> generateCertificate(
       ScriptState* script_state,
       const V8AlgorithmIdentifier* keygen_algorithm,
       ExceptionState& exception_state);
 
-  ScriptPromise addIceCandidate(ScriptState*,
-                                const RTCIceCandidateInit*,
-                                ExceptionState&);
-  ScriptPromise addIceCandidate(ScriptState*,
-                                const RTCIceCandidateInit*,
-                                V8VoidFunction*,
-                                V8RTCPeerConnectionErrorCallback*,
-                                ExceptionState&);
+  ScriptPromise<IDLUndefined> addIceCandidate(ScriptState*,
+                                              const RTCIceCandidateInit*,
+                                              ExceptionState&);
+  ScriptPromise<IDLUndefined> addIceCandidate(ScriptState*,
+                                              const RTCIceCandidateInit*,
+                                              V8VoidFunction*,
+                                              V8RTCPeerConnectionErrorCallback*,
+                                              ExceptionState&);
 
-  String iceGatheringState() const;
+  V8RTCIceGatheringState iceGatheringState() const;
 
-  String iceConnectionState() const;
+  V8RTCIceConnectionState iceConnectionState() const;
 
-  String connectionState() const;
+  V8RTCPeerConnectionState connectionState() const;
 
-  absl::optional<bool> canTrickleIceCandidates() const;
+  std::optional<bool> canTrickleIceCandidates() const;
 
   void restartIce();
 
@@ -234,42 +212,19 @@ class MODULES_EXPORT RTCPeerConnection final
   MediaStreamVector getLocalStreams() const;
   // A remote stream is any stream associated with a receiver.
   MediaStreamVector getRemoteStreams() const;
-  MediaStream* getRemoteStreamById(const String&) const;
-  bool IsRemoteStream(MediaStream* stream) const;
 
-  void addStream(ScriptState*,
-                 MediaStream*,
-                 const ScriptValue& media_constraints,
-                 ExceptionState&);
   void addStream(ScriptState*, MediaStream*, ExceptionState&);
-  void AddStream(ScriptState*,
-                 MediaStream*,
-                 const Dictionary& media_constraints,
-                 ExceptionState&);
 
   void removeStream(MediaStream*, ExceptionState&);
 
-  // Calls LegacyCallbackBasedGetStats() or PromiseBasedGetStats() (or rejects
-  // with an exception) depending on type, see rtc_peer_connection.idl.
-  ScriptPromise getStats(ScriptState* script_state, ExceptionState&);
-  ScriptPromise getStats(ScriptState* script_state,
-                         ScriptValue callback_or_selector,
-                         ExceptionState&);
-  ScriptPromise getStats(ScriptState* script_state,
-                         ScriptValue callback_or_selector,
-                         ScriptValue legacy_selector,
-                         ExceptionState&);
-  ScriptPromise LegacyCallbackBasedGetStats(
-      ScriptState*,
-      V8RTCStatsCallback* success_callback,
-      MediaStreamTrack* selector);
-  ScriptPromise PromiseBasedGetStats(ScriptState*,
-                                     MediaStreamTrack* selector,
-                                     ExceptionState&);
+  ScriptPromise<RTCStatsReport> getStats(ScriptState* script_state,
+                                         MediaStreamTrack* selector,
+                                         ExceptionState&);
 
   const HeapVector<Member<RTCRtpTransceiver>>& getTransceivers() const;
   const HeapVector<Member<RTCRtpSender>>& getSenders() const;
   const HeapVector<Member<RTCRtpReceiver>>& getReceivers() const;
+  RtpContributingSourceCache& GetRtpContributingSourceCache();
   RTCRtpTransceiver* addTransceiver(
       const V8UnionMediaStreamTrackOrString* track_or_kind,
       const RTCRtpTransceiverInit* init,
@@ -298,7 +253,6 @@ class MODULES_EXPORT RTCPeerConnection final
   bool ShouldFireDefaultCallbacks() {
     return !closed_ && !peer_handler_unregistered_;
   }
-  bool ShouldFireGetStatsCallback() { return !peer_handler_unregistered_; }
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(negotiationneeded, kNegotiationneeded)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(icecandidate, kIcecandidate)
@@ -313,26 +267,26 @@ class MODULES_EXPORT RTCPeerConnection final
   DEFINE_ATTRIBUTE_EVENT_LISTENER(datachannel, kDatachannel)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(icecandidateerror, kIcecandidateerror)
 
-  // Utility to note result of CreateOffer / CreateAnswer
-  void NoteSdpCreated(const RTCSessionDescription&);
-  // Utility to report SDP usage of setLocalDescription / setRemoteDescription.
-  enum class SetSdpOperationType {
-    kSetLocalDescription,
-    kSetRemoteDescription,
-  };
-  void ReportSetSdpUsage(SetSdpOperationType operation_type,
-                         const ParsedSessionDescription& parsed_sdp) const;
+  // Called in response to CreateOffer / CreateAnswer to update `last_offer_` or
+  // `last_answer_`.
+  void NoteSdpCreated(const RTCSessionDescriptionInit&);
+  void NoteCreateOfferFailed();
+  void NoteCreateAnswerFailed();
 
   // MediaStreamObserver
-  void OnStreamAddTrack(MediaStream*, MediaStreamTrack*) override;
-  void OnStreamRemoveTrack(MediaStream*, MediaStreamTrack*) override;
+  void OnStreamAddTrack(MediaStream*,
+                        MediaStreamTrack*,
+                        ExceptionState& exception_state) override;
+  void OnStreamRemoveTrack(MediaStream*,
+                           MediaStreamTrack*,
+                           ExceptionState& exception_state) override;
 
   // RTCPeerConnectionHandlerClient
   void NegotiationNeeded() override;
 
   void DidGenerateICECandidate(RTCIceCandidatePlatform*) override;
   void DidFailICECandidate(const String& address,
-                           absl::optional<uint16_t> port,
+                           std::optional<uint16_t> port,
                            const String& host_candidate,
                            const String& url,
                            int error_code,
@@ -344,22 +298,15 @@ class MODULES_EXPORT RTCPeerConnection final
       RTCSessionDescriptionPlatform* current_remote_description) override;
   void DidChangeIceGatheringState(
       webrtc::PeerConnectionInterface::IceGatheringState) override;
-  void DidChangeIceConnectionState(
-      webrtc::PeerConnectionInterface::IceConnectionState) override;
   void DidChangePeerConnectionState(
       webrtc::PeerConnectionInterface::PeerConnectionState) override;
-  void DidModifyReceiversPlanB(
-      webrtc::PeerConnectionInterface::SignalingState,
-      Vector<std::unique_ptr<RTCRtpReceiverPlatform>> platform_receivers_added,
-      Vector<std::unique_ptr<RTCRtpReceiverPlatform>>
-          platform_receivers_removed) override;
   void DidModifySctpTransport(WebRTCSctpTransportSnapshot) override;
   void DidModifyTransceivers(webrtc::PeerConnectionInterface::SignalingState,
                              Vector<std::unique_ptr<RTCRtpTransceiverPlatform>>,
                              Vector<uintptr_t>,
-                             bool is_remote_description) override;
+                             bool is_remote_description_or_rollback) override;
   void DidAddRemoteDataChannel(
-      scoped_refptr<webrtc::DataChannelInterface> channel) override;
+      webrtc::scoped_refptr<webrtc::DataChannelInterface> channel) override;
   void DidNoteInterestingUsage(int usage_pattern) override;
   void UnregisterPeerConnectionHandler() override;
   void ClosePeerConnection() override;
@@ -381,50 +328,15 @@ class MODULES_EXPORT RTCPeerConnection final
   static int PeerConnectionCount();
   static int PeerConnectionCountLimit();
 
-  // SLD/SRD Helper method, public for testing.
-  // This function returns a value that indicates if complex SDP is being used
-  // and whether a format is explicitly specified. If the SDP is not complex or
-  // it could not be parsed, absl::nullopt is returned.
-  // When "Complex" SDP (i.e., SDP that has multiple tracks) is used without
-  // explicitly specifying the SDP format, there may be errors if the
-  // application assumes a format that differs from the actual default format.
-  absl::optional<ComplexSdpCategory> CheckForComplexSdp(
-      const ParsedSessionDescription&) const;
-
-  const CallSetupStateTracker& call_setup_state_tracker() const;
-  void NoteCallSetupStateEventPending(
-      RTCPeerConnection::SetSdpOperationType operation,
-      const RTCSessionDescriptionInit& description);
-  void NoteSessionDescriptionRequestCompleted(
-      RTCCreateSessionDescriptionOperation operation,
-      bool success);
-  void NoteVoidRequestCompleted(RTCSetSessionDescriptionOperation operation,
-                                bool success);
   static void GenerateCertificateCompleted(
-      ScriptPromiseResolver* resolver,
-      rtc::scoped_refptr<rtc::RTCCertificate> certificate);
-  // Checks if the document that the peer connection lives in has ever executed
-  // getUserMedia().
-  bool HasDocumentMedia() const;
+      ScriptPromiseResolver<RTCCertificate>* resolver,
+      webrtc::scoped_refptr<webrtc::RTCCertificate> certificate);
 
   // Called by RTCIceTransport::OnStateChange to update the ice connection
   // state.
   void UpdateIceConnectionState();
 
-  webrtc::SdpSemantics sdp_semantics() { return sdp_semantics_; }
-
-  bool force_encoded_audio_insertable_streams() {
-    return force_encoded_audio_insertable_streams_;
-  }
-
-  bool force_encoded_video_insertable_streams() {
-    return force_encoded_video_insertable_streams_;
-  }
-
   void Trace(Visitor*) const override;
-
-  base::TimeTicks WebRtcTimestampToBlinkTimestamp(
-      base::TimeTicks webrtc_monotonic_time) const;
 
   using RtcPeerConnectionHandlerFactoryCallback =
       base::RepeatingCallback<std::unique_ptr<RTCPeerConnectionHandler>()>;
@@ -464,12 +376,14 @@ class MODULES_EXPORT RTCPeerConnection final
   void ScheduleDispatchEvent(Event*);
   void ScheduleDispatchEvent(Event*, BoolFunction);
   void DispatchScheduledEvents();
-  MediaStreamTrack* GetTrack(MediaStreamComponent*) const;
+  MediaStreamTrack* GetTrackForTesting(MediaStreamComponent*) const;
   RTCRtpSender* FindSenderForTrackAndStream(MediaStreamTrack*, MediaStream*);
   HeapVector<Member<RTCRtpSender>>::iterator FindSender(
       const RTCRtpSenderPlatform& web_sender);
   HeapVector<Member<RTCRtpReceiver>>::iterator FindReceiver(
       const RTCRtpReceiverPlatform& platform_receiver);
+  HeapVector<Member<RTCRtpTransceiver>>::iterator FindTransceiverById(
+      uintptr_t id);
   HeapVector<Member<RTCRtpTransceiver>>::iterator FindTransceiver(
       const RTCRtpTransceiverPlatform& platform_transceiver);
 
@@ -505,13 +419,13 @@ class MODULES_EXPORT RTCPeerConnection final
   // Creates or updates the RTCDtlsTransport object corresponding to the
   // given webrtc::DtlsTransportInterface object.
   RTCDtlsTransport* CreateOrUpdateDtlsTransport(
-      rtc::scoped_refptr<webrtc::DtlsTransportInterface>,
+      webrtc::scoped_refptr<webrtc::DtlsTransportInterface>,
       const webrtc::DtlsTransportInformation& info);
 
   // Creates or updates the RTCIceTransport object corresponding to the given
   // webrtc::IceTransportInterface object.
   RTCIceTransport* CreateOrUpdateIceTransport(
-      rtc::scoped_refptr<webrtc::IceTransportInterface>);
+      webrtc::scoped_refptr<webrtc::IceTransportInterface>);
 
   // Update the |receiver->streams()| to the streams indicated by |stream_ids|,
   // adding to |remove_list| and |add_list| accordingly.
@@ -570,8 +484,6 @@ class MODULES_EXPORT RTCPeerConnection final
 
   DOMException* checkSdpForStateErrors(ExecutionContext*,
                                        const ParsedSessionDescription&);
-  void RecordSdpCategoryAndMaybeEmitWarnings(
-      const ParsedSessionDescription&) const;
 
   HeapHashSet<Member<RTCIceTransport>> ActiveIceTransports() const;
 
@@ -579,6 +491,11 @@ class MODULES_EXPORT RTCPeerConnection final
   // possible for a connection to happen, as a page with connections cannot be
   // put into the cache so far.
   void DisableBackForwardCache(ExecutionContext* context);
+
+  // Called during construction. If the document's Connection-Allowlist or
+  // Connection-Allowlist-Report-Only headers would disallow WebRTC connections,
+  // sends Reporting API and UMA pings.
+  void MaybeReportConnectionAllowlistViolation(ExecutionContext* context);
 
   Member<RTCSessionDescription> pending_local_description_;
   Member<RTCSessionDescription> current_local_description_;
@@ -588,11 +505,10 @@ class MODULES_EXPORT RTCPeerConnection final
   webrtc::PeerConnectionInterface::IceGatheringState ice_gathering_state_;
   webrtc::PeerConnectionInterface::IceConnectionState ice_connection_state_;
   webrtc::PeerConnectionInterface::PeerConnectionState peer_connection_state_;
-  // TODO(https://crbug.com/857004): The trackers' metrics are currently not
-  // uploaded; either use the metrics it produces (i.e. revert
-  // https://chromium-review.googlesource.com/c/chromium/src/+/1991421) or
-  // delete all CallSetupStateTracker code for good.
-  CallSetupStateTracker call_setup_state_tracker_;
+
+  // True once the connection has reached the connected state at least once.
+  // Used to report first-connect usage metrics exactly once per connection.
+  bool was_ever_connected_ = false;
 
   // A map containing any track that is in use by the peer connection. This
   // includes tracks of |rtp_senders_| and |rtp_receivers_|.
@@ -607,6 +523,9 @@ class MODULES_EXPORT RTCPeerConnection final
   HeapVector<Member<RTCRtpSender>> rtp_senders_;
   HeapVector<Member<RTCRtpReceiver>> rtp_receivers_;
   HeapVector<Member<RTCRtpTransceiver>> transceivers_;
+  // Always has a value if initialization was successful (the constructor did
+  // not throw an exception).
+  std::optional<RtpContributingSourceCache> rtp_contributing_source_cache_;
 
   // A map of all webrtc::DtlsTransports that have a corresponding
   // RTCDtlsTransport object. Garbage collection will remove map entries
@@ -619,7 +538,6 @@ class MODULES_EXPORT RTCPeerConnection final
   HeapHashMap<webrtc::IceTransportInterface*, WeakMember<RTCIceTransport>>
       ice_transports_by_native_transport_;
 
-  // TODO(crbug.com/787254): Use RTCPeerConnectionHandler.
   std::unique_ptr<RTCPeerConnectionHandler> peer_handler_;
 
   base::OnceClosure dispatch_events_task_created_callback_for_testing_;
@@ -660,26 +578,18 @@ class MODULES_EXPORT RTCPeerConnection final
   // Internal state [[LastOffer]] and [[LastAnswer]]
   String last_offer_;
   String last_answer_;
+  int pending_create_offer_count_ = 0;
+  int pending_create_answer_count_ = 0;
 
   Member<RTCSctpTransport> sctp_transport_;
 
-  // In Plan B, senders and receivers are added or removed independently of one
-  // another. In Unified Plan, senders and receivers are created in pairs as
-  // transceivers. Transceivers may become inactive, but are never removed.
-  // The value of this member affects the behavior of some methods and what
-  // information is surfaced from webrtc. This has the value "kPlanB" or
-  // "kUnifiedPlan", if constructed with "kDefault" it is translated to one or
-  // the other.
-  webrtc::SdpSemantics sdp_semantics_;
-  // Whether sdpSemantics was specified at construction.
-  bool sdp_semantics_specified_;
-
-  // Blink and WebRTC timestamp diff.
-  const base::TimeDelta blink_webrtc_time_diff_;
-
   // Insertable streams.
-  bool force_encoded_audio_insertable_streams_;
-  bool force_encoded_video_insertable_streams_;
+  bool encoded_insertable_streams_;
+
+  // Set in the constructor if RTC connections are disallowed by policy
+  // globally. See https://w3c.github.io/webappsec-csp/#directive-webrtc
+  // and https://w3c.github.io/webrtc-extensions/#ice-csp-modifications.
+  bool are_ice_candidates_administratively_prohibited_ = false;
 };
 
 }  // namespace blink

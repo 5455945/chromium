@@ -1,15 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_REMOTING_METRICS_H_
 #define MEDIA_REMOTING_METRICS_H_
 
-#include "base/macros.h"
+#include <optional>
+
 #include "base/time/time.h"
 #include "media/base/pipeline_metadata.h"
+#include "media/mojo/mojom/remoting_common.mojom.h"
 #include "media/remoting/triggers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
@@ -51,6 +52,10 @@ enum class PixelRateSupport {
 class SessionMetricsRecorder {
  public:
   SessionMetricsRecorder();
+
+  SessionMetricsRecorder(const SessionMetricsRecorder&) = delete;
+  SessionMetricsRecorder& operator=(const SessionMetricsRecorder&) = delete;
+
   ~SessionMetricsRecorder();
 
   // When attempting to start a remoting session, WillStartSession() is called,
@@ -59,6 +64,7 @@ class SessionMetricsRecorder {
   // session ends.
   void WillStartSession(StartTrigger trigger);
   void DidStartSession();
+  void StartSessionFailed(mojom::RemotingStartFailReason reason);
   void WillStopSession(StopTrigger trigger);
 
   // These may be called before, during, or after a remoting session.
@@ -96,7 +102,7 @@ class SessionMetricsRecorder {
   void RecordTrackConfiguration();
 
   // |start_trigger_| is set while a remoting session is active.
-  absl::optional<StartTrigger> start_trigger_;
+  std::optional<StartTrigger> start_trigger_;
 
   // When the current (or last) remoting session started.
   base::TimeTicks start_time_;
@@ -112,17 +118,19 @@ class SessionMetricsRecorder {
 
   // Last known disabled playback state. This can change before/after a remoting
   // session as well as during one.
-  bool remote_playback_is_disabled_ = false;
+  std::optional<bool> remote_playback_is_disabled_;
 
   bool did_record_pixel_rate_support_ = false;
   bool did_record_compatibility_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(SessionMetricsRecorder);
 };
 
 class RendererMetricsRecorder {
  public:
   RendererMetricsRecorder();
+
+  RendererMetricsRecorder(const RendererMetricsRecorder&) = delete;
+  RendererMetricsRecorder& operator=(const RendererMetricsRecorder&) = delete;
+
   ~RendererMetricsRecorder();
 
   // Called when an "initialize success" message is received from the remote.
@@ -140,8 +148,6 @@ class RendererMetricsRecorder {
  private:
   const base::TimeTicks start_time_;
   bool did_record_first_playout_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(RendererMetricsRecorder);
 };
 
 }  // namespace remoting

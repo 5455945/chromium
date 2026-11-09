@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,17 @@
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
+#include "components/dom_distiller/core/dom_distiller_features.h"
 #include "components/dom_distiller/core/viewer.h"
+#include "components/grit/components_resources.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/resource/scale_factor.h"
+#include "ui/base/resource/resource_scale_factor.h"
 
 namespace dom_distiller {
 namespace {
@@ -38,14 +41,16 @@ const char* kDistilledPagePath = "/distilled_page.html";
 
 void SetUpTestServerWithoutStarting(EmbeddedTestServer* server) {
   FilePath root_dir;
-  PathService::Get(base::DIR_SOURCE_ROOT, &root_dir);
+  PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &root_dir);
 
   server->ServeFilesFromDirectory(
       root_dir.AppendASCII("components/dom_distiller/core/javascript"));
   server->ServeFilesFromDirectory(
       root_dir.AppendASCII("components/test/data/dom_distiller"));
-  server->ServeFilesFromDirectory(root_dir.AppendASCII("third_party/chaijs"));
-  server->ServeFilesFromDirectory(root_dir.AppendASCII("third_party/mocha"));
+  server->ServeFilesFromDirectory(
+      root_dir.AppendASCII("third_party/node/node_modules/chai"));
+  server->ServeFilesFromDirectory(
+      root_dir.AppendASCII("third_party/node/node_modules/mocha"));
 }
 
 }  // namespace
@@ -63,7 +68,6 @@ FakeDistilledPage::FakeDistilledPage(EmbeddedTestServer* server)
   AppendScriptFile("dom_distiller_viewer.js");
 
   // Also load test helper scripts.
-  AppendScriptFile("chai.js");
   AppendScriptFile("mocha.js");
   AppendScriptFile("test_util.js");
 }
@@ -89,8 +93,32 @@ std::string FakeDistilledPage::GetPageHtmlWithScripts() {
   std::string html = GetArticleTemplateHtml(
       mojom::Theme::kLight, mojom::FontFamily::kSansSerif, std::string());
   for (const std::string& file : scripts_) {
+    if (file == "dom_distiller_viewer.js") {
+      // This file is handled separately below.
+      continue;
+    }
     StrAppend(&html, {JsReplace("<script src=$1></script>", file)});
   }
+
+  // Special handling for dom_distiller_viewer.js to allow for placeholder
+  // replacement to align pinch zoom scaling with prefs UI.
+  std::string viewer_js =
+      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+          IDR_DOM_DISTILLER_VIEWER_JS);
+
+  std::string min_scale = "0.5";
+  std::string max_scale = "2.0";
+#if BUILDFLAG(IS_ANDROID)
+  min_scale = "1.0";
+  max_scale = "2.5";
+#endif
+  base::ReplaceFirstSubstringAfterOffset(&viewer_js, 0, "$MIN_SCALE",
+                                         min_scale);
+  base::ReplaceFirstSubstringAfterOffset(&viewer_js, 0, "$MAX_SCALE",
+                                         max_scale);
+
+  StrAppend(&html, {"<script>", viewer_js, "</script>"});
+
   return html;
 }
 
@@ -113,16 +141,18 @@ std::unique_ptr<FakeDistilledPage> SetUpTestServerWithDistilledPage(
 void AddComponentsResources() {
   FilePath pak_file;
   FilePath pak_dir;
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   CHECK(PathService::Get(base::DIR_ANDROID_APP_DATA, &pak_dir));
   pak_dir = pak_dir.Append(FILE_PATH_LITERAL("paks"));
-#else
+#elif BUILDFLAG(IS_MAC)
   PathService::Get(base::DIR_MODULE, &pak_dir);
-#endif  // OS_ANDROID
+#else
+  PathService::Get(base::DIR_ASSETS, &pak_dir);
+#endif  // BUILDFLAG(IS_ANDROID)
   pak_file =
       pak_dir.Append(FILE_PATH_LITERAL("components_tests_resources.pak"));
   ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      pak_file, ui::SCALE_FACTOR_NONE);
+      pak_file, ui::kScaleFactorNone);
 }
 
 }  // namespace dom_distiller

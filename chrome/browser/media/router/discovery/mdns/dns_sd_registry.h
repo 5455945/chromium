@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/singleton.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
@@ -35,12 +34,16 @@ class DnsSdRegistry : public DnsSdDelegate {
    public:
     virtual void OnDnsSdEvent(const std::string& service_type,
                               const DnsSdServiceList& services) = 0;
+    virtual void OnDnsSdPermissionRejected() = 0;
 
    protected:
-    virtual ~DnsSdObserver() {}
+    virtual ~DnsSdObserver() = default;
   };
 
   static DnsSdRegistry* GetInstance();
+
+  DnsSdRegistry(const DnsSdRegistry&) = delete;
+  DnsSdRegistry& operator=(const DnsSdRegistry&) = delete;
 
   // Publishes the current device list for |service_type| to event listeners
   // whose event filter matches the service type.
@@ -58,12 +61,18 @@ class DnsSdRegistry : public DnsSdDelegate {
   virtual void RegisterDnsSdListener(const std::string& service_type);
   virtual void UnregisterDnsSdListener(const std::string& service_type);
 
+  void ResetForTest();
+
  protected:
   // Data class for managing all the resources and information related to a
   // particular service type.
   class ServiceTypeData {
    public:
     explicit ServiceTypeData(std::unique_ptr<DnsSdDeviceLister> lister);
+
+    ServiceTypeData(const ServiceTypeData&) = delete;
+    ServiceTypeData& operator=(const ServiceTypeData&) = delete;
+
     virtual ~ServiceTypeData();
 
     // Notify the data class of listeners so that it can be reference counted.
@@ -90,7 +99,6 @@ class DnsSdRegistry : public DnsSdDelegate {
     int ref_count;
     std::unique_ptr<DnsSdDeviceLister> lister_;
     DnsSdRegistry::DnsSdServiceList service_list_;
-    DISALLOW_COPY_AND_ASSIGN(ServiceTypeData);
   };
 
   virtual DnsSdDeviceLister* CreateDnsSdDeviceLister(
@@ -105,6 +113,7 @@ class DnsSdRegistry : public DnsSdDelegate {
   void ServiceRemoved(const std::string& service_type,
                       const std::string& service_name) override;
   void ServicesFlushed(const std::string& service_type) override;
+  void ServicesPermissionRejected() override;
 
   std::map<std::string, std::unique_ptr<ServiceTypeData>> service_data_map_;
 
@@ -124,8 +133,6 @@ class DnsSdRegistry : public DnsSdDelegate {
       service_discovery_client_;
   base::ObserverList<DnsSdObserver>::Unchecked observers_;
   base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(DnsSdRegistry);
 };
 
 }  // namespace media_router

@@ -35,22 +35,18 @@
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_frame_serializer.h"
 #include "third_party/blink/public/web/web_frame_serializer_client.h"
-#include "third_party/blink/renderer/platform/text/web_entities.h"
+#include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-
-namespace WTF {
-class TextEncoding;
-}
 
 namespace blink {
 
 class Document;
 class Element;
 class Node;
+class TextEncoding;
 class WebLocalFrame;
 class WebLocalFrameImpl;
 
@@ -91,18 +87,14 @@ class WebFrameSerializerImpl {
   // Whether frame url should be shown in MOTW in the serialized html.
   bool save_with_empty_url_;
 
-  // Web entities conversion maps.
-  WebEntities html_entities_;
-  WebEntities xml_entities_;
-
   class SerializeDomParam {
     STACK_ALLOCATED();
 
    public:
-    SerializeDomParam(const KURL&, const WTF::TextEncoding&, Document*);
+    SerializeDomParam(const KURL&, const TextEncoding&, Document*);
 
     const KURL& url;
-    const WTF::TextEncoding& text_encoding;
+    const TextEncoding& text_encoding;
     Document* document;
     bool is_html_document;  // document.isHTMLDocument()
     bool have_seen_doc_type;
@@ -120,28 +112,26 @@ class WebFrameSerializerImpl {
 
   // Before we begin serializing open tag of a element, we give the target
   // element a chance to do some work prior to add some additional data.
-  WTF::String PreActionBeforeSerializeOpenTag(const Element*,
-                                              SerializeDomParam*,
-                                              bool* need_skip);
+  String PreActionBeforeSerializeOpenTag(const Element*,
+                                         SerializeDomParam*,
+                                         bool* need_skip);
 
   // After we finish serializing open tag of a element, we give the target
   // element a chance to do some post work to add some additional data.
-  WTF::String PostActionAfterSerializeOpenTag(const Element*,
-                                              SerializeDomParam*);
+  String PostActionAfterSerializeOpenTag(const Element*, SerializeDomParam*);
 
   // Before we begin serializing end tag of a element, we give the target
   // element a chance to do some work prior to add some additional data.
-  WTF::String PreActionBeforeSerializeEndTag(const Element*,
-                                             SerializeDomParam*,
-                                             bool* need_skip);
+  String PreActionBeforeSerializeEndTag(const Element*,
+                                        SerializeDomParam*,
+                                        bool* need_skip);
 
   // After we finish serializing end tag of a element, we give the target
   // element a chance to do some post work to add some additional data.
-  WTF::String PostActionAfterSerializeEndTag(const Element*,
-                                             SerializeDomParam*);
+  String PostActionAfterSerializeEndTag(const Element*, SerializeDomParam*);
 
   // Save generated html content to data buffer.
-  void SaveHTMLContentToBuffer(const WTF::String& content, SerializeDomParam*);
+  void SaveHTMLContentToBuffer(const StringView& content, SerializeDomParam*);
 
   enum FlushOption {
     kForceFlush,
@@ -155,6 +145,9 @@ class WebFrameSerializerImpl {
                             SerializeDomParam*,
                             FlushOption);
 
+  // Serialize the open tag of a ShadowRoot as a <template>
+  void ShadowRootTagToString(ShadowRoot*, SerializeDomParam*);
+
   // Serialize open tag of an specified element.
   void OpenTagToString(Element*, SerializeDomParam*);
 
@@ -167,7 +160,7 @@ class WebFrameSerializerImpl {
   // Appends attrName="escapedAttrValue" to result.
   void AppendAttribute(StringBuilder& result,
                        bool is_html_document,
-                       const String& attr_name,
+                       const QualifiedName& attr_name,
                        const String& attr_value);
 };
 

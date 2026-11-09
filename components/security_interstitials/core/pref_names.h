@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,6 @@
 #define COMPONENTS_SECURITY_INTERSTITIALS_CORE_PREF_NAMES_H_
 
 namespace prefs {
-
-// Stores counts and timestamps of SSL certificate errors that have occurred.
-// When the same error recurs within some period of time, a message is added to
-// the SSL interstitial.
-extern const char kRecurrentSSLInterstitial[];
 
 // Boolean pref used to control whether mixed forms (forms on HTTPS sites that
 // submit over HTTPS) should trigger an on submit warning interstitial. If

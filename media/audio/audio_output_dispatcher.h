@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@
 #ifndef MEDIA_AUDIO_AUDIO_OUTPUT_DISPATCHER_H_
 #define MEDIA_AUDIO_AUDIO_OUTPUT_DISPATCHER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "media/audio/audio_io.h"
 
 namespace media {
@@ -29,6 +29,10 @@ class AudioOutputProxy;
 class MEDIA_EXPORT AudioOutputDispatcher {
  public:
   AudioOutputDispatcher(AudioManager* audio_manager);
+
+  AudioOutputDispatcher(const AudioOutputDispatcher&) = delete;
+  AudioOutputDispatcher& operator=(const AudioOutputDispatcher&) = delete;
+
   virtual ~AudioOutputDispatcher();
 
   // Creates an instance of AudioOutputProxy, which uses |this| as dispatcher.
@@ -62,15 +66,16 @@ class MEDIA_EXPORT AudioOutputDispatcher {
   // called when a stream is stopped.
   virtual void FlushStream(AudioOutputProxy* stream_proxy) = 0;
 
+  // Closes all cached idle physical output streams immediately.
+  virtual void CloseAllIdleStreams() = 0;
+
  protected:
   AudioManager* audio_manager() const { return audio_manager_; }
 
  private:
   // A no-reference-held pointer (we don't want circular references) back to the
   // AudioManager that owns this object.
-  AudioManager* const audio_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioOutputDispatcher);
+  const raw_ptr<AudioManager> audio_manager_;
 };
 
 }  // namespace media

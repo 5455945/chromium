@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,14 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace base {
 
@@ -87,7 +86,7 @@ namespace forwarder2 {
 //     DCHECK_EQ(object_, object);
 //     // Do some extra work with |object| before it gets deleted...
 //     object_.reset();
-//     ignore_result(object.release());
+//     std::ignore = object.release();
 //   }
 //
 //   base::ThreadChecker thread_checker_;
@@ -100,9 +99,12 @@ class SelfDeleterHelper {
   using DeletionCallback = base::OnceCallback<void(std::unique_ptr<T>)>;
 
   SelfDeleterHelper(T* self_deleting_object, DeletionCallback deletion_callback)
-      : construction_runner_(base::ThreadTaskRunnerHandle::Get()),
+      : construction_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
         self_deleting_object_(self_deleting_object),
         deletion_callback_(std::move(deletion_callback)) {}
+
+  SelfDeleterHelper(const SelfDeleterHelper&) = delete;
+  SelfDeleterHelper& operator=(const SelfDeleterHelper&) = delete;
 
   ~SelfDeleterHelper() {
     DCHECK(construction_runner_->RunsTasksInCurrentSequence());
@@ -130,8 +132,6 @@ class SelfDeleterHelper {
   // that any WeakPtrs to Controller are invalidated before its members
   // variable's destructors are executed, rendering them invalid.
   base::WeakPtrFactory<SelfDeleterHelper<T>> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SelfDeleterHelper);
 };
 
 }  // namespace forwarder2

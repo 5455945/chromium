@@ -1,34 +1,28 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.autofill;
 
-import android.annotation.TargetApi;
-import android.os.Build;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
-import org.chromium.base.annotations.VerifiesOnO;
 import org.chromium.content_public.browser.WebContents;
 
 /**
  * The help class for Autofill Provider test to access the native code.
+ *
+ * <p>Form parsing in the browser is asynchronous, so a form that the renderer has extracted may not
+ * be known to the browser yet. The methods below return false in that case and do nothing; callers
+ * should retry them until they return true.
  */
-@VerifiesOnO
-@TargetApi(Build.VERSION_CODES.O)
 @JNINamespace("autofill")
 public class AutofillProviderTestHelper {
     /**
-     * Disable the download server for testing to avoid the server response affect the integration
-     * tests. Must be called before WebContents is created.
-     */
-    public static void disableDownloadServerForTesting() {
-        AutofillProviderTestHelperJni.get().disableDownloadServerForTesting();
-    }
-
-    /**
-     * Simulate the primary server type only.
+     * Simulates the primary server type only.
+     *
+     * @return whether the response was simulated, i.e. whether the main frame has parsed a form
+     *     that contains a field for each of `fieldIds`.
      */
     public static boolean simulateMainFrameAutofillServerResponseForTesting(
             WebContents webContents, String[] fieldIds, int[] fieldTypes) {
@@ -38,7 +32,10 @@ public class AutofillProviderTestHelper {
     }
 
     /**
-     * Simulate the server predictions, the first prediction will be set as primary server type.
+     * Simulates the server predictions, the first prediction will be set as primary server type.
+     *
+     * @return whether the response was simulated, i.e. whether the main frame has parsed a form
+     *     that contains a field for each of `fieldIds`.
      */
     public static boolean simulateMainFramePredictionsAutofillServerResponseForTesting(
             WebContents webContents, String[] fieldIds, int[][] fieldTypes) {
@@ -47,18 +44,12 @@ public class AutofillProviderTestHelper {
                         webContents, fieldIds, fieldTypes);
     }
 
-    public static void simulateMainFrameAutofillQueryFailedForTesting(WebContents webContents) {
-        AutofillProviderTestHelperJni.get().simulateMainFrameAutofillQueryFailedForTesting(
-                webContents);
-    }
-
     @NativeMethods
     interface Natives {
-        void disableDownloadServerForTesting();
         boolean simulateMainFrameAutofillServerResponseForTesting(
                 WebContents webContents, String[] fieldIds, int[] fieldTypes);
+
         boolean simulateMainFramePredictionsAutofillServerResponseForTesting(
                 WebContents webContents, String[] fieldIds, int[][] fieldTypes);
-        void simulateMainFrameAutofillQueryFailedForTesting(WebContents webContents);
     }
 }

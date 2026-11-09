@@ -1,6 +1,8 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "ui/display/manager/display_layout_store.h"
 
 #include <stdio.h>
 
@@ -9,12 +11,13 @@
 
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "ui/display/display.h"
 #include "ui/display/display_switches.h"
-#include "ui/display/manager/display_layout_store.h"
-#include "ui/display/manager/display_manager_utilities.h"
+#include "ui/display/manager/util/display_manager_util.h"
 #include "ui/display/types/display_constants.h"
+#include "ui/display/util/display_util.h"
 
 namespace display {
 
@@ -26,7 +29,7 @@ DisplayLayoutStore::DisplayLayoutStore()
         command_line->GetSwitchValueASCII(switches::kSecondaryDisplayLayout);
     char layout;
     int offset = 0;
-    if (sscanf(value.c_str(), "%c,%d", &layout, &offset) == 2) {
+    if (UNSAFE_TODO(sscanf(value.c_str(), "%c,%d", &layout, &offset)) == 2) {
       if (layout == 't')
         default_display_placement_.position = DisplayPlacement::TOP;
       else if (layout == 'b')
@@ -78,10 +81,6 @@ void DisplayLayoutStore::RegisterLayoutForDisplayIdList(
     NOTREACHED() << "Attempting to register an invalid layout: ids="
                  << DisplayIdListToString(list)
                  << ", layout=" << layout->ToString();
-    // We never allow to register an invalid layout, instead, we revert back to
-    // a default layout.
-    CreateDefaultDisplayLayout(list);
-    return;
   }
 
   layouts_[list] = std::move(layout);
@@ -89,23 +88,21 @@ void DisplayLayoutStore::RegisterLayoutForDisplayIdList(
 
 const DisplayLayout& DisplayLayoutStore::GetRegisteredDisplayLayout(
     const DisplayIdList& list) {
-  DCHECK_GT(list.size(), 1u);
-  const auto iter = layouts_.find(list);
-  const DisplayLayout* layout = iter != layouts_.end()
-                                    ? iter->second.get()
-                                    : CreateDefaultDisplayLayout(list);
-  DCHECK(DisplayLayout::Validate(list, *layout)) << layout->ToString();
-  DCHECK_NE(layout->primary_id, kInvalidDisplayId);
-  return *layout;
+  return GetOrCreateRegisteredDisplayLayoutInternal(list, /*create=*/false);
 }
 
 void DisplayLayoutStore::UpdateDefaultUnified(const DisplayIdList& list,
                                               bool default_unified) {
-  DCHECK(layouts_.find(list) != layouts_.end());
+  CHECK(layouts_.find(list) != layouts_.end(), base::NotFatalUntil::M163);
   if (layouts_.find(list) == layouts_.end())
-    CreateDefaultDisplayLayout(list);
-
+    GetOrCreateRegisteredDisplayLayoutInternal(list,
+                                               /*create_if_not_exist=*/false);
   layouts_[list]->default_unified = default_unified;
+}
+
+const DisplayLayout& DisplayLayoutStore::GetOrCreateRegisteredDisplayLayout(
+    const DisplayIdList& list) {
+  return GetOrCreateRegisteredDisplayLayoutInternal(list, /*create=*/true);
 }
 
 DisplayLayout* DisplayLayoutStore::CreateDefaultDisplayLayout(
@@ -123,6 +120,26 @@ DisplayLayout* DisplayLayoutStore::CreateDefaultDisplayLayout(
   layouts_[list] = std::move(layout);
   auto iter = layouts_.find(list);
   return iter->second.get();
+}
+
+const DisplayLayout&
+DisplayLayoutStore::GetOrCreateRegisteredDisplayLayoutInternal(
+    const DisplayIdList& list,
+    bool create_if_not_exist) {
+  CHECK_GT(list.size(), 1u, base::NotFatalUntil::M163);
+  CHECK(IsDisplayIdListSorted(list), base::NotFatalUntil::M163);
+
+  const auto iter = layouts_.find(list);
+  CHECK(create_if_not_exist || iter != layouts_.end(),
+        base::NotFatalUntil::M163);
+
+  const DisplayLayout* layout = iter != layouts_.end()
+                                    ? iter->second.get()
+                                    : CreateDefaultDisplayLayout(list);
+
+  DCHECK(DisplayLayout::Validate(list, *layout)) << layout->ToString();
+  CHECK_NE(layout->primary_id, kInvalidDisplayId, base::NotFatalUntil::M163);
+  return *layout;
 }
 
 }  // namespace display

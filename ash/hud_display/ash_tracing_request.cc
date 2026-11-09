@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,12 @@
 #include "ash/hud_display/ash_tracing_manager.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/platform_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/posix/safe_strerror.h"
 #include "base/strings/stringprintf.h"
@@ -39,8 +39,8 @@ class DefaultAshTraceDestinationIO : public AshTraceDestinationIO {
   bool CreateDirectory(const base::FilePath& path) override {
     base::File::Error error;
     if (!base::CreateDirectoryAndGetError(path, &error)) {
-      LOG(ERROR) << "Failed to create Ash trace file directory '"
-                 << path.value() << "' : error " << error;
+      PLOG(ERROR) << "Failed to create Ash trace file directory '"
+                  << path.value() << "'";
       return false;
     }
     return true;
@@ -79,12 +79,12 @@ class DefaultAshTraceDestinationIO : public AshTraceDestinationIO {
 };
 
 std::string GenerateTraceFileName(base::Time timestamp) {
-  base::Time::Exploded time_deets;
-  timestamp.LocalExplode(&time_deets);
+  base::Time::Exploded exploded;
+  timestamp.LocalExplode(&exploded);
   return base::StringPrintf(
-      "ash-trace_%02d%02d%02d-%02d%02d%02d.%03d.dat", time_deets.year,
-      time_deets.month, time_deets.day_of_month, time_deets.hour,
-      time_deets.minute, time_deets.second, time_deets.millisecond);
+      "ash-trace_%02d%02d%02d-%02d%02d%02d.%03d.dat", exploded.year % 100,
+      exploded.month, exploded.day_of_month, exploded.hour, exploded.minute,
+      exploded.second, exploded.millisecond);
 }
 
 std::unique_ptr<AshTraceDestination> GenerateTraceDestinationFile(
@@ -96,9 +96,7 @@ std::unique_ptr<AshTraceDestination> GenerateTraceDestinationFile(
 
   base::FilePath path =
       tracng_directory_path.AppendASCII(GenerateTraceFileName(timestamp));
-  base::File file;
-  bool success;
-  std::tie(file, success) = io->CreateTracingFile(path);
+  auto [file, success] = io->CreateTracingFile(path);
   if (!success) {
     LOG(ERROR) << "Failed to create Ash trace '" << path.value() << "' : error "
                << file.error_details();
@@ -113,12 +111,9 @@ std::unique_ptr<AshTraceDestination> GenerateTraceDestinationFile(
 std::unique_ptr<AshTraceDestination> GenerateTraceDestinationMemFD(
     std::unique_ptr<AshTraceDestinationIO> io) {
   constexpr char kMemFDDebugName[] = "ash-trace-buffer.dat";
-  base::PlatformFile memfd;
-  bool success;
-  std::tie(memfd, success) = io->CreateMemFD(kMemFDDebugName, MFD_CLOEXEC);
+  auto [memfd, success] = io->CreateMemFD(kMemFDDebugName, MFD_CLOEXEC);
   if (!success) {
-    LOG(ERROR) << "Failed to create memfd for '" << kMemFDDebugName
-               << "', error:" << base::safe_strerror(errno);
+    PLOG(ERROR) << "Failed to create memfd for '" << kMemFDDebugName << "'";
     return nullptr;
   }
   return std::make_unique<AshTraceDestination>(std::move(io), base::FilePath(),

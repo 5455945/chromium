@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,7 +54,16 @@ void KeyedServiceBaseFactory::MarkContextLive(void* context) {
   dependency_manager_->MarkContextLive(context);
 }
 
+bool KeyedServiceBaseFactory::ServiceIsRequiredForContextInitialization()
+    const {
+  return false;
+}
+
 bool KeyedServiceBaseFactory::ServiceIsCreatedWithContext() const {
+  return false;
+}
+
+bool KeyedServiceBaseFactory::ServiceIsCreatedAfterStartup() const {
   return false;
 }
 
@@ -62,8 +71,22 @@ bool KeyedServiceBaseFactory::ServiceIsNULLWhileTesting() const {
   return false;
 }
 
+bool KeyedServiceBaseFactory::ServiceIsAllowedWhenServicesDisabledByDefault()
+    const {
+  return false;
+}
+
+bool KeyedServiceBaseFactory::AreContextServicesDisabledByDefault(
+    void* context) const {
+  return dependency_manager_->AreContextServicesDisabledByDefault(context);
+}
+
 void KeyedServiceBaseFactory::ContextDestroyed(void* context) {
   // While object destruction can be customized in ways where the object is
   // only dereferenced, this still must run on the UI thread.
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+void KeyedServiceBaseFactory::CreateServiceNowForTesting(void* context) {
+  CreateServiceNow(context);
 }

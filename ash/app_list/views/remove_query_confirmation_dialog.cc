@@ -1,73 +1,68 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/app_list/views/remove_query_confirmation_dialog.h"
 
-#include <memory>
 #include <utility>
 
-#include "ash/app_list/views/search_box_view.h"
-#include "base/bind.h"
+#include "ash/accessibility/accessibility_controller.h"
+#include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "base/functional/bind.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/strings/grit/ui_strings.h"
-#include "ui/views/controls/label.h"
-#include "ui/views/focus/focus_manager.h"
-#include "ui/views/layout/box_layout.h"
-#include "ui/views/layout/layout_provider.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
 
-namespace {
-
-constexpr int kDialogWidth = 320;
-
-}  // namespace
-
 RemoveQueryConfirmationDialog::RemoveQueryConfirmationDialog(
-    const std::u16string& query,
-    RemovalConfirmationCallback confirm_callback)
+    RemovalConfirmationCallback confirm_callback,
+    const std::u16string& result_title)
     : confirm_callback_(std::move(confirm_callback)) {
-  SetModalType(ui::MODAL_TYPE_WINDOW);
-  SetTitle(l10n_util::GetStringUTF16(IDS_REMOVE_ZERO_STATE_SUGGESTION_TITLE));
-  SetShowCloseButton(false);
+  SetModalType(ui::mojom::ModalType::kWindow);
+  SetTitleText(
+      l10n_util::GetStringUTF16(IDS_REMOVE_ZERO_STATE_SUGGESTION_TITLE));
+  SetDescription(l10n_util::GetStringFUTF16(
+      IDS_REMOVE_ZERO_STATE_SUGGESTION_DETAILS, result_title));
+  SetAcceptButtonText(
+      l10n_util::GetStringUTF16(IDS_REMOVE_SUGGESTION_BUTTON_LABEL));
+  SetAcceptButtonVisible(true);
 
-  SetButtonLabel(ui::DIALOG_BUTTON_OK,
-                 l10n_util::GetStringUTF16(IDS_REMOVE_SUGGESTION_BUTTON_LABEL));
-  SetButtonLabel(ui::DIALOG_BUTTON_CANCEL,
-                 l10n_util::GetStringUTF16(IDS_APP_CANCEL));
+  SetCancelButtonText(l10n_util::GetStringUTF16(IDS_APP_CANCEL));
+  SetCancelButtonVisible(true);
 
   auto run_callback = [](RemoveQueryConfirmationDialog* dialog, bool accept) {
+    if (!dialog->confirm_callback_)
+      return;
+
+    if (accept) {
+      Shell::Get()
+          ->accessibility_controller()
+          ->TriggerAccessibilityAlertWithMessage(
+              l10n_util::GetStringUTF8(IDS_REMOVE_SUGGESTION_ANNOUNCEMENT));
+    }
+
     std::move(dialog->confirm_callback_).Run(accept);
+
+    dialog->GetWidget()->CloseWithReason(
+        accept ? views::Widget::ClosedReason::kAcceptButtonClicked
+               : views::Widget::ClosedReason::kCancelButtonClicked);
   };
+
   SetAcceptCallback(base::BindOnce(run_callback, base::Unretained(this), true));
   SetCancelCallback(
       base::BindOnce(run_callback, base::Unretained(this), false));
-
-  const views::LayoutProvider* provider = views::LayoutProvider::Get();
-  SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical,
-      provider->GetDialogInsetsForContentType(views::DialogContentType::kText,
-                                              views::DialogContentType::kText),
-      provider->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_VERTICAL)));
-
-  views::Label* label = new views::Label(l10n_util::GetStringFUTF16(
-      IDS_REMOVE_ZERO_STATE_SUGGESTION_DETAILS, query));
-  label->SetMultiLine(true);
-  label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  label->SetAllowCharacterBreak(true);
-  AddChildView(label);
 }
 
 RemoveQueryConfirmationDialog::~RemoveQueryConfirmationDialog() = default;
 
-const char* RemoveQueryConfirmationDialog::GetClassName() const {
-  return "RemoveQueryConfirmationDialog";
-}
-
-gfx::Size RemoveQueryConfirmationDialog::CalculatePreferredSize() const {
-  const int default_width = kDialogWidth;
-  return gfx::Size(default_width, GetHeightForWidth(default_width));
-}
+BEGIN_METADATA(RemoveQueryConfirmationDialog)
+END_METADATA
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 #include <utility>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "content/public/browser/browser_context.h"
 #include "ui/views/examples/create_examples.h"
 #include "ui/views/examples/example_base.h"
 #include "ui/views/examples/webview_example.h"
 
-namespace views {
-namespace examples {
+namespace views::examples {
 
 void ShowExamplesWindowWithContent(base::OnceClosure on_close,
                                    content::BrowserContext* browser_context,
@@ -25,5 +25,4 @@ void ShowExamplesWindowWithContent(base::OnceClosure on_close,
                      window_context);
 }
 
-}  // namespace examples
-}  // namespace views
+}  // namespace views::examples

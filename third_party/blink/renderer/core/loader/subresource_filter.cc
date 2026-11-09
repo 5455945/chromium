@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -15,7 +15,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -43,41 +43,35 @@ SubresourceFilter::SubresourceFilter(
     : execution_context_(execution_context),
       subresource_filter_(std::move(subresource_filter)) {
   DCHECK(subresource_filter_);
-  // Report the main resource as an ad if the subresource filter is
-  // associated with an ad subframe.
-  if (auto* window = DynamicTo<LocalDOMWindow>(execution_context_.Get())) {
-    auto* frame = window->GetFrame();
-    if (frame->IsAdSubframe()) {
-      ReportAdRequestId(
-          frame->Loader().GetDocumentLoader()->GetResponse().RequestId());
-    }
-  }
 }
 
 SubresourceFilter::~SubresourceFilter() = default;
 
 bool SubresourceFilter::AllowLoad(
     const KURL& resource_url,
-    mojom::blink::RequestContextType request_context,
+    network::mojom::RequestDestination request_destination,
     ReportingDisposition reporting_disposition) {
   // TODO(csharrison): Implement a caching layer here which is a HashMap of
   // Pair<url string, context> -> LoadPolicy.
+  subresource_filter::ScopedRule rule;
   WebDocumentSubresourceFilter::LoadPolicy load_policy =
-      subresource_filter_->GetLoadPolicy(resource_url, request_context);
+      subresource_filter_->GetLoadPolicy(resource_url, request_destination,
+                                         /*out_rule=*/&rule);
 
-  if (reporting_disposition == ReportingDisposition::kReport)
+  if (reporting_disposition == ReportingDisposition::kReport) {
     ReportLoad(resource_url, load_policy);
+  }
 
   last_resource_check_result_ = std::make_pair(
-      std::make_pair(resource_url, request_context), load_policy);
+      std::make_pair(resource_url, request_destination),
+      ResourceCheckResult{.load_policy = load_policy, .rule = std::move(rule)});
 
   return load_policy != WebDocumentSubresourceFilter::kDisallow;
 }
 
-bool SubresourceFilter::AllowWebSocketConnection(const KURL& url) {
-  WebDocumentSubresourceFilter::LoadPolicy load_policy =
-      subresource_filter_->GetLoadPolicyForWebSocketConnect(url);
-
+void SubresourceFilter::ReportLoadAsync(
+    const KURL& resource_url,
+    WebDocumentSubresourceFilter::LoadPolicy load_policy) {
   // Post a task to notify this load to avoid unduly blocking the worker
   // thread. Note that this unconditionally calls reportLoad unlike allowLoad,
   // because there aren't developer-invisible connections (like speculative
@@ -86,28 +80,43 @@ bool SubresourceFilter::AllowWebSocketConnection(const KURL& url) {
       execution_context_->GetTaskRunner(TaskType::kNetworking);
   DCHECK(task_runner->RunsTasksInCurrentSequence());
   task_runner->PostTask(
-      FROM_HERE, WTF::Bind(&SubresourceFilter::ReportLoad, WrapPersistent(this),
-                           url, load_policy));
+      FROM_HERE, BindOnce(&SubresourceFilter::ReportLoad, WrapPersistent(this),
+                          resource_url, load_policy));
+}
+
+bool SubresourceFilter::AllowWebSocketConnection(const KURL& url) {
+  WebDocumentSubresourceFilter::LoadPolicy load_policy =
+      subresource_filter_->GetLoadPolicyForWebSocketConnect(url);
+
+  ReportLoadAsync(url, load_policy);
+  return load_policy != WebDocumentSubresourceFilter::kDisallow;
+}
+
+bool SubresourceFilter::AllowWebTransportConnection(const KURL& url) {
+  WebDocumentSubresourceFilter::LoadPolicy load_policy =
+      subresource_filter_->GetLoadPolicyForWebTransportConnect(url);
+
+  ReportLoadAsync(url, load_policy);
   return load_policy != WebDocumentSubresourceFilter::kDisallow;
 }
 
 bool SubresourceFilter::IsAdResource(
     const KURL& resource_url,
-    mojom::blink::RequestContextType request_context) {
+    network::mojom::RequestDestination request_destination,
+    subresource_filter::ScopedRule* out_rule) {
   WebDocumentSubresourceFilter::LoadPolicy load_policy;
   if (last_resource_check_result_.first ==
-      std::make_pair(resource_url, request_context)) {
-    load_policy = last_resource_check_result_.second;
+      std::make_pair(resource_url, request_destination)) {
+    load_policy = last_resource_check_result_.second.load_policy;
+    if (out_rule) {
+      *out_rule = last_resource_check_result_.second.rule;
+    }
   } else {
-    load_policy =
-        subresource_filter_->GetLoadPolicy(resource_url, request_context);
+    load_policy = subresource_filter_->GetLoadPolicy(
+        resource_url, request_destination, out_rule);
   }
 
   return load_policy != WebDocumentSubresourceFilter::kAllow;
-}
-
-void SubresourceFilter::ReportAdRequestId(int request_id) {
-  subresource_filter_->ReportAdRequestId(request_id);
 }
 
 void SubresourceFilter::ReportLoad(
@@ -131,7 +140,7 @@ void SubresourceFilter::ReportLoad(
                 mojom::ConsoleMessageLevel::kError,
                 GetErrorStringForDisallowedLoad(resource_url)));
       }
-      FALLTHROUGH;
+      [[fallthrough]];
     case WebDocumentSubresourceFilter::kWouldDisallow:
       // TODO(csharrison): Consider posting a task to the main thread from
       // worker thread, or adding support for DidObserveLoadingBehavior to

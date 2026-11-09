@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <string>
 
-#include "base/macros.h"
-#include "chrome/browser/ash/login/test/embedded_test_server_mixin.h"
+#include "chrome/browser/ash/login/test/embedded_test_server_setup_mixin.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 
 class AccountId;
 
-namespace chromeos {
+namespace ash {
 
 class UserContext;
 
@@ -24,6 +23,10 @@ class UserContext;
 class LoginManagerTest : public MixinBasedInProcessBrowserTest {
  public:
   LoginManagerTest();
+
+  LoginManagerTest(const LoginManagerTest&) = delete;
+  LoginManagerTest& operator=(const LoginManagerTest&) = delete;
+
   ~LoginManagerTest() override;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
@@ -35,8 +38,15 @@ class LoginManagerTest : public MixinBasedInProcessBrowserTest {
   void RegisterUser(const AccountId& account_id);
 
   static const char kPassword[];
+  static const char kLocalPassword[];
   UserContext CreateUserContext(const AccountId& account_id,
                                 const std::string& password);
+
+  UserContext CreateUserContextWithLocalPassword(const AccountId& account_id,
+                                                 const std::string& password);
+
+  UserContext CreateUserContextWithPin(const AccountId& account_id,
+                                       const std::string& pin);
 
   // Set expected credentials for next login attempt.
   void SetExpectedCredentials(const UserContext& user_context);
@@ -54,8 +64,23 @@ class LoginManagerTest : public MixinBasedInProcessBrowserTest {
   // Log in user with `user_id`. User should be registered using RegisterUser().
   void LoginUser(const AccountId& account_id);
 
+  // Log in user with local password.
+  void LoginUserWithLocalPassword(const AccountId& account_id);
+
+  // Log in user with pin.
+  void LoginUserWithPin(const AccountId& account_id);
+
   // Add user with `user_id` to session.
   void AddUser(const AccountId& user_id);
+
+  // TODO(b/260718534): Fully switch from StubAuthenticator to
+  // FakeUserDataAuthClient.
+  void LoginUserWithDbusClient(const AccountId& account_id,
+                               const std::string& password);
+  void AddUserWithDbusClient(const AccountId& account_id,
+                             const std::string& password);
+  void SetExpectedCredentialsWithDbusClient(const AccountId& account_id,
+                                            const std::string& password);
 
   void set_should_launch_browser(bool launch) {
     should_launch_browser_ = launch;
@@ -65,14 +90,8 @@ class LoginManagerTest : public MixinBasedInProcessBrowserTest {
   bool should_launch_browser_ = false;
   EmbeddedTestServerSetupMixin embedded_test_server_{&mixin_host_,
                                                      embedded_test_server()};
-  DISALLOW_COPY_AND_ASSIGN(LoginManagerTest);
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove once the migration is finished.
-namespace ash {
-using ::chromeos::LoginManagerTest;
-}
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_LOGIN_MANAGER_TEST_H_

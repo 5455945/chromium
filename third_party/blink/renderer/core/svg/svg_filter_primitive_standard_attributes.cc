@@ -21,7 +21,10 @@
 
 #include "third_party/blink/renderer/core/svg/svg_filter_primitive_standard_attributes.h"
 
+#include "third_party/blink/renderer/core/css/properties/longhand.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_filter_primitive.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_container.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_length.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
@@ -30,7 +33,7 @@
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter_effect.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -64,11 +67,6 @@ SVGFilterPrimitiveStandardAttributes::SVGFilterPrimitiveStandardAttributes(
           SVGLength::Initial::kPercent100)),
       result_(MakeGarbageCollected<SVGAnimatedString>(this,
                                                       svg_names::kResultAttr)) {
-  AddToPropertyMap(x_);
-  AddToPropertyMap(y_);
-  AddToPropertyMap(width_);
-  AddToPropertyMap(height_);
-  AddToPropertyMap(result_);
 }
 
 void SVGFilterPrimitiveStandardAttributes::Trace(Visitor* visitor) const {
@@ -86,13 +84,51 @@ bool SVGFilterPrimitiveStandardAttributes::SetFilterEffectAttribute(
   DCHECK(attr_name == svg_names::kColorInterpolationFiltersAttr);
   DCHECK(GetLayoutObject());
   EColorInterpolation color_interpolation =
-      GetLayoutObject()->StyleRef().ColorInterpolationFilters();
+      GetLayoutObject()->Style().ColorInterpolationFilters();
   InterpolationSpace resolved_interpolation_space =
       SVGFilterBuilder::ResolveInterpolationSpace(color_interpolation);
   if (resolved_interpolation_space == effect->OperatingInterpolationSpace())
     return false;
   effect->SetOperatingInterpolationSpace(resolved_interpolation_space);
   return true;
+}
+
+bool SVGFilterPrimitiveStandardAttributes::StyleColorTaintsOrigin(
+    const ComputedStyle& style,
+    const Longhand& color_property) const {
+  StyleColor color;
+  StyleColor visited_color;
+  switch (color_property.PropertyID()) {
+    case CSSPropertyID::kFloodColor:
+      color = style.FloodColor();
+      visited_color = style.InternalVisitedFloodColor();
+      break;
+    case CSSPropertyID::kLightingColor:
+      color = style.LightingColor();
+      visited_color = style.InternalVisitedLightingColor();
+      break;
+    default:
+      NOTREACHED();
+  }
+  // Inside a <canvas> subtree, StyleResolverState::InsideLink() clamps
+  // kInsideVisitedLink to kInsideUnvisitedLink so :visited colors never apply,
+  // even though InternalVisited*Color() is still populated for links.
+  return color.DependsOnCurrentColor() ||
+         (!IsInCanvasSubtree() &&
+          style.InsideLink() != EInsideLink::kNotInsideLink &&
+          color != visited_color);
+}
+
+bool SVGFilterPrimitiveStandardAttributes::StyleColorTaintsOrigin(
+    const Longhand& color_property) const {
+  const LayoutObject* layout_object = GetLayoutObject();
+  // TaintsOrigin() is only called after a successful call to Build(), so we
+  // should have a LayoutObject here.
+  DCHECK(layout_object);
+  const ComputedStyle& style = layout_object->Style();
+  DCHECK(!IsInCanvasSubtree() ||
+         style.InsideLink() != EInsideLink::kInsideVisitedLink);
+  return StyleColorTaintsOrigin(style, color_property);
 }
 
 void SVGFilterPrimitiveStandardAttributes::SvgAttributeChanged(
@@ -102,7 +138,6 @@ void SVGFilterPrimitiveStandardAttributes::SvgAttributeChanged(
       attr_name == svg_names::kWidthAttr ||
       attr_name == svg_names::kHeightAttr ||
       attr_name == svg_names::kResultAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -118,7 +153,7 @@ void SVGFilterPrimitiveStandardAttributes::ChildrenChanged(
     Invalidate();
 }
 
-static FloatRect DefaultFilterPrimitiveSubregion(FilterEffect* filter_effect) {
+static gfx::RectF DefaultFilterPrimitiveSubregion(FilterEffect* filter_effect) {
   // https://drafts.fxtf.org/filter-effects/#FilterPrimitiveSubRegion
   DCHECK(filter_effect->GetFilter());
 
@@ -132,15 +167,19 @@ static FloatRect DefaultFilterPrimitiveSubregion(FilterEffect* filter_effect) {
 
   // "x, y, width and height default to the union (i.e., tightest fitting
   // bounding box) of the subregions defined for all referenced nodes."
-  FloatRect subregion_union;
+  gfx::RectF subregion_union;
   for (const auto& input_effect : filter_effect->InputEffects()) {
     // "If ... one or more of the referenced nodes is a standard input
     // ... the default subregion is 0%, 0%, 100%, 100%, where as a
     // special-case the percentages are relative to the dimensions of the
     // filter region..."
-    if (input_effect->GetFilterEffectType() == kFilterEffectTypeSourceInput)
+    // A non-clipping input (e.g. a CSS filter function) has no real
+    // subregion either, so treat it like a standard input too.
+    if (input_effect->GetFilterEffectType() == kFilterEffectTypeSourceInput ||
+        !input_effect->ClipsToBounds()) {
       return filter_effect->GetFilter()->FilterRegion();
-    subregion_union.Unite(input_effect->FilterPrimitiveSubregion());
+    }
+    subregion_union.Union(input_effect->FilterPrimitiveSubregion());
   }
   return subregion_union;
 }
@@ -148,33 +187,34 @@ static FloatRect DefaultFilterPrimitiveSubregion(FilterEffect* filter_effect) {
 void SVGFilterPrimitiveStandardAttributes::SetStandardAttributes(
     FilterEffect* filter_effect,
     SVGUnitTypes::SVGUnitType primitive_units,
-    const FloatRect& reference_box) const {
+    const gfx::RectF& reference_box,
+    const std::optional<gfx::SizeF>& override_viewport) const {
   DCHECK(filter_effect);
 
-  FloatRect subregion = DefaultFilterPrimitiveSubregion(filter_effect);
-  FloatRect primitive_boundaries =
-      SVGLengthContext::ResolveRectangle(this, primitive_units, reference_box);
+  gfx::RectF subregion = DefaultFilterPrimitiveSubregion(filter_effect);
+  gfx::RectF primitive_boundaries =
+      LayoutSVGResourceContainer::ResolveRectangle(
+          *this, primitive_units, reference_box, override_viewport);
 
   if (x()->IsSpecified())
-    subregion.SetX(primitive_boundaries.X());
+    subregion.set_x(primitive_boundaries.x());
   if (y()->IsSpecified())
-    subregion.SetY(primitive_boundaries.Y());
+    subregion.set_y(primitive_boundaries.y());
   if (width()->IsSpecified())
-    subregion.SetWidth(primitive_boundaries.Width());
+    subregion.set_width(primitive_boundaries.width());
   if (height()->IsSpecified())
-    subregion.SetHeight(primitive_boundaries.Height());
+    subregion.set_height(primitive_boundaries.height());
 
   filter_effect->SetFilterPrimitiveSubregion(subregion);
 }
 
 LayoutObject* SVGFilterPrimitiveStandardAttributes::CreateLayoutObject(
-    const ComputedStyle&,
-    LegacyLayout) {
-  return new LayoutSVGFilterPrimitive(this);
+    const ComputedStyle&) {
+  return MakeGarbageCollected<LayoutSVGFilterPrimitive>(this);
 }
 
 bool SVGFilterPrimitiveStandardAttributes::LayoutObjectIsNeeded(
-    const ComputedStyle& style) const {
+    const DisplayStyle& style) const {
   if (IsA<SVGFilterElement>(parentNode()))
     return SVGElement::LayoutObjectIsNeeded(style);
 
@@ -198,6 +238,31 @@ void InvalidateFilterPrimitiveParent(SVGElement& element) {
   if (!svg_parent)
     return;
   svg_parent->Invalidate();
+}
+
+SVGAnimatedPropertyBase*
+SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kXAttr) {
+    return x_.Get();
+  } else if (attribute_name == svg_names::kYAttr) {
+    return y_.Get();
+  } else if (attribute_name == svg_names::kWidthAttr) {
+    return width_.Get();
+  } else if (attribute_name == svg_names::kHeightAttr) {
+    return height_.Get();
+  } else if (attribute_name == svg_names::kResultAttr) {
+    return result_.Get();
+  } else {
+    return SVGElement::PropertyFromAttribute(attribute_name);
+  }
+}
+
+void SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{x_.Get(), y_.Get(), width_.Get(),
+                                   height_.Get(), result_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGElement::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

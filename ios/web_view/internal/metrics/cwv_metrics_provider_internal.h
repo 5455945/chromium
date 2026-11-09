@@ -1,13 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef IOS_WEB_VIEW_INTERNAL_METRICS_CWV_METRICS_PROVIDER_INTERNAL_H_
 #define IOS_WEB_VIEW_INTERNAL_METRICS_CWV_METRICS_PROVIDER_INTERNAL_H_
 
-#import "ios/web_view/public/cwv_metrics_provider.h"
-
 #include <memory>
+
+#import "ios/web_view/public/cwv_metrics_provider.h"
 
 NS_ASSUME_NONNULL_BEGIN
 

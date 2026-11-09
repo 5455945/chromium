@@ -1,21 +1,27 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_INVALIDATION_PENDING_INVALIDATIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_INVALIDATION_PENDING_INVALIDATIONS_H_
 
+#include <memory>
+
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/invalidation/node_invalidation_sets.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 class ContainerNode;
-class Document;
 class Element;
 
+// HeapHashMap is not node-based and thus does not have stable iterators,
+// but we rely on pointers to stay stable even during modification of the map.
+// With Oilpan, Member<NodeInvalidationSets> provides a stable address.
 using PendingInvalidationMap =
-    HeapHashMap<Member<ContainerNode>, NodeInvalidationSets>;
+    HeapHashMap<Member<ContainerNode>, Member<NodeInvalidationSets>>;
 
 // Performs deferred style invalidation for DOM subtrees.
 //
@@ -63,7 +69,7 @@ class CORE_EXPORT PendingInvalidations {
   DISALLOW_NEW();
 
  public:
-  PendingInvalidations();
+  PendingInvalidations() = default;
   PendingInvalidations(const PendingInvalidations&) = delete;
   PendingInvalidations& operator=(const PendingInvalidations&) = delete;
   ~PendingInvalidations() {}

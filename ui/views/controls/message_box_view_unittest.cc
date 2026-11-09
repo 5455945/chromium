@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,22 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/accessibility/accessibility_paint_checks.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/test/views_test_base.h"
+#include "ui/views/widget/widget.h"
 
 namespace views {
 
@@ -40,17 +45,15 @@ class MessageBoxViewTest : public ViewsTestBase {
   void SetUp() override {
     ViewsTestBase::SetUp();
     message_box_ = std::make_unique<MessageBoxView>(kDefaultMessage);
-    provider_ = LayoutProvider::Get();
   }
 
   std::unique_ptr<MessageBoxView> message_box_;
-  const LayoutProvider* provider_;
 };
 
 TEST_F(MessageBoxViewTest, CheckMessageOnlySize) {
   message_box_->SizeToPreferredSize();
 
-  gfx::Insets box_border = provider_->GetDialogInsetsForContentType(
+  gfx::Insets box_border = LayoutProvider::Get()->GetDialogInsetsForContentType(
       views::DialogContentType::kText, views::DialogContentType::kText);
   gfx::Size scroll_size = message_box_->scroll_view_->size();
   scroll_size.Enlarge(0, box_border.top() + box_border.bottom());
@@ -61,7 +64,7 @@ TEST_F(MessageBoxViewTest, CheckWithOptionalViewsSize) {
   message_box_->SetPromptField(std::u16string());
   message_box_->SizeToPreferredSize();
 
-  gfx::Insets box_border = provider_->GetDialogInsetsForContentType(
+  gfx::Insets box_border = LayoutProvider::Get()->GetDialogInsetsForContentType(
       views::DialogContentType::kText, views::DialogContentType::kControl);
   gfx::Size scroll_size = message_box_->scroll_view_->size();
   gfx::Size prompt_size = message_box_->prompt_field_->size();
@@ -76,7 +79,7 @@ TEST_F(MessageBoxViewTest, CheckWithOptionalViewsSize) {
   message_box_->SetLink(u"Link to display", base::DoNothing());
   message_box_->SizeToPreferredSize();
 
-  box_border = provider_->GetDialogInsetsForContentType(
+  box_border = LayoutProvider::Get()->GetDialogInsetsForContentType(
       views::DialogContentType::kText, views::DialogContentType::kText);
   gfx::Size checkbox_size = message_box_->checkbox_->size();
   gfx::Size link_size = message_box_->link_->size();
@@ -106,7 +109,7 @@ TEST_F(MessageBoxViewTest, CheckInterRowHeightChange) {
 
   int scroll_height = message_box_->scroll_view_->height();
   int prompt_height = message_box_->prompt_field_->height();
-  gfx::Insets box_border = provider_->GetDialogInsetsForContentType(
+  gfx::Insets box_border = LayoutProvider::Get()->GetDialogInsetsForContentType(
       views::DialogContentType::kText, views::DialogContentType::kControl);
   int inter_row_spacing = message_box_->inter_row_vertical_spacing_;
   EXPECT_EQ(
@@ -171,6 +174,52 @@ TEST_F(MessageBoxViewTest, CheckIsCheckBoxSelected) {
   // Select the checkbox.
   message_box_->SetCheckBoxSelected(true);
   EXPECT_TRUE(message_box_->IsCheckBoxSelected());
+}
+
+TEST_F(MessageBoxViewTest, CanUpdateMessageLabel) {
+  static constexpr std::u16string_view kUpdatedMessageLabel =
+      u"This is updated text label";
+
+  ASSERT_NE(kUpdatedMessageLabel, message_box_->label_text_for_testing());
+  message_box_->SetMessageLabel(kUpdatedMessageLabel);
+
+  EXPECT_EQ(kUpdatedMessageLabel, message_box_->label_text_for_testing());
+}
+
+// The message is used as the accessible name of the prompt field.
+TEST_F(MessageBoxViewTest, PromptFieldAccessibleNameIsMessage) {
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* message_box = widget->SetContentsView(
+      std::make_unique<MessageBoxView>(kDefaultMessage));
+  message_box->SetPromptField(std::u16string());
+  widget->Show();
+
+  const ViewAccessibility& prompt_accessibility =
+      message_box->GetVisiblePromptField()->GetViewAccessibility();
+  EXPECT_EQ(kDefaultMessage, prompt_accessibility.GetCachedName());
+  EXPECT_EQ(ax::mojom::NameFrom::kAttribute,
+            prompt_accessibility.GetCachedNameFrom());
+  RunAccessibilityPaintChecks(widget.get());
+}
+
+// A prompt without a message (window.prompt() with no arguments) leaves the
+// focusable prompt field without an accessible name, which must be marked as
+// intentional for the accessibility paint checks to pass.
+TEST_F(MessageBoxViewTest, EmptyMessagePromptPassesAccessibilityPaintChecks) {
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* message_box = widget->SetContentsView(
+      std::make_unique<MessageBoxView>(std::u16string()));
+  message_box->SetPromptField(std::u16string());
+  widget->Show();
+
+  const ViewAccessibility& prompt_accessibility =
+      message_box->GetVisiblePromptField()->GetViewAccessibility();
+  EXPECT_TRUE(prompt_accessibility.GetCachedName().empty());
+  EXPECT_EQ(ax::mojom::NameFrom::kAttributeExplicitlyEmpty,
+            prompt_accessibility.GetCachedNameFrom());
+  RunAccessibilityPaintChecks(widget.get());
 }
 
 }  // namespace views

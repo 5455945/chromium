@@ -1,15 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/platform/mutex.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/dcheck_is_on.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
@@ -17,9 +16,7 @@
 #include "base/unguessable_token.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 class MutexTest : public testing::Test {
  protected:
@@ -52,7 +49,7 @@ class MutexTest : public testing::Test {
   bool HasSuccessfullyLockedWithAttemptId(
       const base::UnguessableToken& attempt_id) {
     base::AutoLock al(lock_);
-    return base::Contains(successful_mutex_attempts_, attempt_id);
+    return successful_mutex_attempts_.contains(attempt_id);
   }
 
   Mutex& mutex() { return mutex_; }
@@ -89,10 +86,10 @@ TEST_F(MutexTest,
   EXPECT_TRUE(HasSuccessfullyLockedWithAttemptId(attempt_id));
 }
 
+#if EXPENSIVE_DCHECKS_ARE_ON()
 TEST_F(MutexTest, CannotUnlockBeforeAnyLocks) {
   EXPECT_DCHECK_DEATH(mutex().Unlock());
 }
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

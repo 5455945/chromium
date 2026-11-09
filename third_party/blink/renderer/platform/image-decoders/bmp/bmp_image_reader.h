@@ -1,38 +1,18 @@
-/*
- * Copyright (c) 2008, 2009, Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2008 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_BMP_BMP_IMAGE_READER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_BMP_BMP_IMAGE_READER_H_
 
 #include <stdint.h>
+#include <string.h>
 
+#include <array>
+
+#include "base/containers/span.h"
+#include "base/containers/span_reader.h"
+#include "base/notreached.h"
 #include "third_party/blink/renderer/platform/image-decoders/fast_shared_buffer_reader.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -45,14 +25,20 @@ class PLATFORM_EXPORT BMPImageReader final {
   USING_FAST_MALLOC(BMPImageReader);
 
  public:
-  // Read a value from |buffer|, converting to an int assuming little
+  // Read a value from `buffer`, converting to an int assuming little
   // endianness
-  static inline uint16_t ReadUint16(const char* buffer) {
-    return *reinterpret_cast<const uint16_t*>(buffer);
+  static inline uint16_t ReadUint16(base::span<const uint8_t> buffer) {
+    uint16_t v;
+    base::SpanReader span_reader(buffer);
+    span_reader.ReadU16LittleEndian(v);
+    return v;
   }
 
-  static inline uint32_t ReadUint32(const char* buffer) {
-    return *reinterpret_cast<const uint32_t*>(buffer);
+  static inline uint32_t ReadUint32(base::span<const uint8_t> buffer) {
+    uint32_t v;
+    base::SpanReader span_reader(buffer);
+    span_reader.ReadU32LittleEndian(v);
+    return v;
   }
 
   // |parent| is the decoder that owns us.
@@ -60,15 +46,15 @@ class PLATFORM_EXPORT BMPImageReader final {
   // |buffer| points at an empty ImageFrame that we'll initialize and
   // fill with decoded data.
   BMPImageReader(ImageDecoder* parent,
-                 size_t decoded_and_header_offset,
-                 size_t img_data_offset,
+                 wtf_size_t decoded_and_header_offset,
+                 wtf_size_t img_data_offset,
                  bool is_in_ico);
   BMPImageReader(const BMPImageReader&) = delete;
   BMPImageReader& operator=(const BMPImageReader&) = delete;
   ~BMPImageReader();
 
   void SetBuffer(ImageFrame* buffer) { buffer_ = buffer; }
-  void SetData(SegmentReader* data);
+  void SetData(scoped_refptr<SegmentReader> data);
 
   // Does the actual decoding.  If |only_size| is true, decoding only
   // progresses as far as necessary to get the image size.  Returns
@@ -76,8 +62,6 @@ class PLATFORM_EXPORT BMPImageReader final {
   bool DecodeBMP(bool only_size);
 
  private:
-  friend class PixelChangedScoper;
-
   // The various BMP compression types.  We don't currently decode all
   // these.
   enum CompressionType {
@@ -87,8 +71,8 @@ class PLATFORM_EXPORT BMPImageReader final {
     RLE4 = 2,
     // Windows V3+ only
     BITFIELDS = 3,
-    JPEG = 4,
-    PNG = 5,
+    JPEG = 4,            // Unsupported - see https://crbug.com/456842524
+    PNG = 5,             // Unsupported - see https://crbug.com/456842524
     ALPHABITFIELDS = 6,  // Windows CE only
     // OS/2 2.x-only
     HUFFMAN1D,  // Stored in file as 3
@@ -120,20 +104,20 @@ class PLATFORM_EXPORT BMPImageReader final {
     uint8_t rgb_red;
   };
 
-  inline uint8_t ReadUint8(size_t offset) const {
+  inline uint8_t ReadUint8(wtf_size_t offset) const {
     return fast_reader_.GetOneByte(decoded_offset_ + offset);
   }
 
   inline uint16_t ReadUint16(int offset) const {
-    char buffer[2];
-    const char* data =
+    std::array<uint8_t, 2> buffer;
+    base::span<const uint8_t> data =
         fast_reader_.GetConsecutiveData(decoded_offset_ + offset, 2, buffer);
     return ReadUint16(data);
   }
 
   inline uint32_t ReadUint32(int offset) const {
-    char buffer[4];
-    const char* data =
+    std::array<uint8_t, 4> buffer;
+    base::span<const uint8_t> data =
         fast_reader_.GetConsecutiveData(decoded_offset_ + offset, 4, buffer);
     return ReadUint32(data);
   }
@@ -181,9 +165,6 @@ class PLATFORM_EXPORT BMPImageReader final {
   // Processes any embedded ICC color profile.
   bool ProcessEmbeddedColorProfile();
 
-  // Decodes the image data for compression types JPEG and PNG.
-  bool DecodeAlternateFormat();
-
   // For BI_[ALPHA]BITFIELDS images, initializes the bit_masks_[] and
   // bit_offsets_[] arrays.  ProcessInfoHeader() will initialize these for
   // other compression types where needed.
@@ -224,36 +205,32 @@ class PLATFORM_EXPORT BMPImageReader final {
   // the end of the image.  Here "plus" means "toward the end of the
   // image", so downwards for is_top_down_ images and upwards otherwise.
   inline bool PastEndOfImage(int num_rows) {
-    return is_top_down_ ? ((coord_.Y() + num_rows) >= parent_->Size().Height())
-                        : ((coord_.Y() - num_rows) < 0);
+    return is_top_down_ ? ((coord_.y() + num_rows) >= parent_->Size().height())
+                        : ((coord_.y() - num_rows) < 0);
   }
 
-  // Returns the pixel data for the current |decoded_offset_| in a uint32_t.
+  // Returns the pixel data for the current `decoded_offset_` in a uint32_t.
   // NOTE: Only as many bytes of the return value as are needed to hold
   // the pixel data will actually be set.
   inline uint32_t ReadCurrentPixel(int bytes_per_pixel) const {
     // We need at most 4 bytes, starting at decoded_offset_.
-    char buffer[4];
-    const char* encoded_pixel = fast_reader_.GetConsecutiveData(
+    std::array<uint8_t, 4> buffer;
+    base::span<const uint8_t> encoded_pixel = fast_reader_.GetConsecutiveData(
         decoded_offset_, bytes_per_pixel, buffer);
     switch (bytes_per_pixel) {
       case 2:
         return ReadUint16(encoded_pixel);
-
       case 3: {
-        // It doesn't matter that we never set the most significant byte
-        // of the return value, the caller won't read it.
-        uint32_t pixel;
-        memcpy(&pixel, encoded_pixel, 3);
+        // It doesn't matter that we set the most significant byte
+        // of the return value to 0, the caller won't read it.
+        uint32_t pixel = 0;
+        base::byte_span_from_ref(pixel).first<3u>().copy_from(encoded_pixel);
         return pixel;
       }
-
       case 4:
         return ReadUint32(encoded_pixel);
-
       default:
         NOTREACHED();
-        return 0;
     }
   }
 
@@ -262,9 +239,9 @@ class PLATFORM_EXPORT BMPImageReader final {
   inline unsigned GetComponent(uint32_t pixel, int component) const {
     uint8_t value =
         (pixel & bit_masks_[component]) >> bit_shifts_right_[component];
-    return lookup_table_addresses_[component]
-               ? lookup_table_addresses_[component][value]
-               : value;
+    return lookup_table_spans_[component].empty()
+               ? value
+               : lookup_table_spans_[component][value];
   }
 
   inline unsigned GetAlpha(uint32_t pixel) const {
@@ -286,8 +263,8 @@ class PLATFORM_EXPORT BMPImageReader final {
                       unsigned green,
                       unsigned blue,
                       unsigned alpha) {
-    buffer_->SetRGBA(coord_.X(), coord_.Y(), red, green, blue, alpha);
-    coord_.Move(1, 0);
+    buffer_->SetRGBA(coord_.x(), coord_.y(), red, green, blue, alpha);
+    coord_.Offset(1, 0);
   }
 
   // Fills pixels from the current X-coordinate up to, but not including,
@@ -299,8 +276,9 @@ class PLATFORM_EXPORT BMPImageReader final {
                        unsigned green,
                        unsigned blue,
                        unsigned alpha) {
-    while (coord_.X() < end_coord)
+    while (coord_.x() < end_coord) {
       SetRGBA(red, green, blue, alpha);
+    }
   }
 
   // Resets the relevant local variables to start drawing at the left edge of
@@ -313,32 +291,29 @@ class PLATFORM_EXPORT BMPImageReader final {
   void ColorCorrectCurrentRow();
 
   // The decoder that owns us.
-  ImageDecoder* parent_;
+  raw_ptr<ImageDecoder> parent_;
 
   // The destination for the pixel data.
-  ImageFrame* buffer_ = nullptr;
+  raw_ptr<ImageFrame> buffer_ = nullptr;
 
   // The file to decode.
   scoped_refptr<SegmentReader> data_;
   FastSharedBufferReader fast_reader_{nullptr};
 
   // An index into |data_| representing how much we've already decoded.
-  size_t decoded_offset_;
+  wtf_size_t decoded_offset_;
 
   // The file offset at which the BMP info header starts.
-  size_t header_offset_;
+  wtf_size_t header_offset_;
 
   // The file offset at which the actual image bits start.  When decoding
   // ICO files, this is set to 0, since it's not stored anywhere in a
   // header; the reader functions expect the image data to start
   // immediately after the header and (if necessary) color table.
-  size_t img_data_offset_;
+  wtf_size_t img_data_offset_;
 
   // The BMP info header.
-  BitmapInfoHeader info_header_;
-
-  // Used only for bitmaps with compression types JPEG or PNG.
-  std::unique_ptr<ImageDecoder> alternate_decoder_;
+  BitmapInfoHeader info_header_ = {};
 
   // True if this is an OS/2 1.x (aka Windows 2.x) BMP.  The struct
   // layouts for this type of BMP are slightly different from the later,
@@ -363,23 +338,23 @@ class PLATFORM_EXPORT BMPImageReader final {
   // Masks/offsets for the color values for non-palette formats. These are
   // bitwise, with array entries 0, 1, 2, 3 corresponding to R, G, B, A.
   // These are uninitialized (and ignored) for images with less than 16bpp.
-  uint32_t bit_masks_[4];
+  std::array<uint32_t, 4> bit_masks_;
 
   // Right shift values, meant to be applied after the masks. We need to shift
   // the bitfield values down from their offsets into the 32 bits of pixel
   // data, as well as truncate the least significant bits of > 8-bit fields.
-  int bit_shifts_right_[4];
+  std::array<int, 4> bit_shifts_right_;
 
   // We use a lookup table to convert < 8-bit values into 8-bit values. The
   // values in the table are "round(val * 255.0 / ((1 << n) - 1))" for an
-  // n-bit source value. These elements are set to 0 for 8-bit sources.
-  const uint8_t* lookup_table_addresses_[4];
+  // n-bit source value. These elements are empty spans for 8-bit sources.
+  std::array<base::span<const uint8_t>, 4> lookup_table_spans_;
 
   // The color palette, for paletted formats.
   Vector<RGBTriple> color_table_;
 
   // The coordinate to which we've decoded the image.
-  IntPoint coord_;
+  gfx::Point coord_;
 
   // Variables that track whether we've seen pixels with alpha values != 0
   // and == 0, respectively.  See comments in ProcessNonRLEData() on how

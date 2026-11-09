@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #define CHROME_BROWSER_HID_WEB_HID_HISTOGRAMS_H_
 
 // Reasons the chooser may be closed. These are used in histograms so do not
-// remove/reorder entries. Only add at the end and update kMaxValue. Also
-// remember to update the enum listing in tools/metrics/histograms/enums.xml.
+// remove/reorder entries. Only add at the end and update kMaxValue.
+// LINT.IfChange(WebHidChooserClosed)
 enum class WebHidChooserClosed {
   // The user cancelled the permission prompt without selecting a device.
   kCancelled = 0,
@@ -23,6 +23,7 @@ enum class WebHidChooserClosed {
   kLostFocus,
   kMaxValue = kLostFocus,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/permissions/enums.xml:WebHidChooserClosed)
 
 void RecordWebHidChooserClosure(WebHidChooserClosed disposition);
 

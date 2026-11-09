@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_rect_init.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
 
@@ -17,7 +18,8 @@ DOMRectReadOnly* DOMRectReadOnly::Create(double x,
   return MakeGarbageCollected<DOMRectReadOnly>(x, y, width, height);
 }
 
-ScriptValue DOMRectReadOnly::toJSONForBinding(ScriptState* script_state) const {
+ScriptObject DOMRectReadOnly::toJSONForBinding(
+    ScriptState* script_state) const {
   V8ObjectBuilder result(script_state);
   result.AddNumber("x", x());
   result.AddNumber("y", y());
@@ -27,17 +29,17 @@ ScriptValue DOMRectReadOnly::toJSONForBinding(ScriptState* script_state) const {
   result.AddNumber("right", right());
   result.AddNumber("bottom", bottom());
   result.AddNumber("left", left());
-  return result.GetScriptValue();
+  return result.ToScriptObject();
 }
 
-DOMRectReadOnly* DOMRectReadOnly::FromIntRect(const IntRect& rect) {
-  return MakeGarbageCollected<DOMRectReadOnly>(rect.X(), rect.Y(), rect.Width(),
-                                               rect.Height());
+DOMRectReadOnly* DOMRectReadOnly::FromRect(const gfx::Rect& rect) {
+  return MakeGarbageCollected<DOMRectReadOnly>(rect.x(), rect.y(), rect.width(),
+                                               rect.height());
 }
 
-DOMRectReadOnly* DOMRectReadOnly::FromFloatRect(const FloatRect& rect) {
-  return MakeGarbageCollected<DOMRectReadOnly>(rect.X(), rect.Y(), rect.Width(),
-                                               rect.Height());
+DOMRectReadOnly* DOMRectReadOnly::FromRectF(const gfx::RectF& rect) {
+  return MakeGarbageCollected<DOMRectReadOnly>(rect.x(), rect.y(), rect.width(),
+                                               rect.height());
 }
 
 DOMRectReadOnly* DOMRectReadOnly::fromRect(const DOMRectInit* other) {
@@ -50,5 +52,10 @@ DOMRectReadOnly::DOMRectReadOnly(double x,
                                  double width,
                                  double height)
     : x_(x), y_(y), width_(width), height_(height) {}
+
+gfx::PointF DOMRectReadOnly::Center() const {
+  return gfx::PointF(left() + std::fabs(width_) / 2.0,
+                     top() + std::fabs(height_) / 2.0);
+}
 
 }  // namespace blink

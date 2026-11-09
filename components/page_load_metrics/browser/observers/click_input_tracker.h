@@ -1,11 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_CLICK_INPUT_TRACKER_H_
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_CLICK_INPUT_TRACKER_H_
 
-#include "base/feature_list.h"
 #include "base/time/time.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -13,15 +12,16 @@
 
 namespace page_load_metrics {
 
-const base::Feature kClickInputTracker{"ClickInputTracker",
-                                       base::FEATURE_ENABLED_BY_DEFAULT};
-
 // This class considers user input clicks for a page load to determine if a
 // burst of clicks occurs at the screen position. This is a possible signal
 // that the user may be rage clicking on an unresponsive page.
 class ClickInputTracker {
  public:
   ClickInputTracker();
+
+  ClickInputTracker(const ClickInputTracker&) = delete;
+  ClickInputTracker& operator=(const ClickInputTracker&) = delete;
+
   ~ClickInputTracker();
 
   // Considers whether |event| is part of a user click burst. Must be called
@@ -66,8 +66,6 @@ class ClickInputTracker {
 
   // Position of the last click input.
   gfx::PointF last_click_position_;
-
-  DISALLOW_COPY_AND_ASSIGN(ClickInputTracker);
 };
 
 }  // namespace page_load_metrics

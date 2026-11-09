@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -15,19 +15,28 @@ import tarfile
 
 
 parser = argparse.ArgumentParser(
-    description='Package test dependencies as tar.gz files.')
-parser.add_argument('--output', required=True,
-                    help='Full path to the output file.')
-parser.add_argument('--deps_list_path', required=True,
-                    help='Full path to the json dependencies file.')
-parser.add_argument('--exclude_deps', required=False,
-                    default='',
-                    help=('Comma separated list of dependencies to exclude'
-                          ' from tar.gz file.'))
-parser.add_argument('--additional_deps', required=False,
-                    default='',
-                    help=('Comma separated list of additional deps'
-                          ' to include in tar.gz.'))
+  description='Package test dependencies as tar.gz files.'
+)
+parser.add_argument(
+  '--output', required=True, help='Full path to the output file.'
+)
+parser.add_argument(
+  '--deps_list_path',
+  required=True,
+  help='Full path to the json dependencies file.',
+)
+parser.add_argument(
+  '--exclude_deps',
+  required=False,
+  default='',
+  help=('Comma separated list of dependencies to exclude from tar.gz file.'),
+)
+parser.add_argument(
+  '--additional_deps',
+  required=False,
+  default='',
+  help=('Comma separated list of additional deps to include in tar.gz.'),
+)
 
 
 def read_dependencies(file_path):
@@ -84,11 +93,13 @@ def create_tarfile(output_path, dependencies):
   with tarfile.open(output_path, 'w:gz') as tar_file:
     for idx, dep in enumerate(dependencies):
       dep = os.path.normpath(dep)
-      archive_name = os.path.join('fuchsia/release', dep)
+      archive_name = os.path.join('tools/fuchsia/size_tests', dep)
       archive_name = os.path.normpath(archive_name)
       tar_file.add(dep, arcname=archive_name)
       if idx % step == 0 or idx == (total_deps - 1):
-        logging.info('Progress: %s percent', int(round(100.0/total_deps * idx)))
+        logging.info(
+          'Progress: %s percent', int(round(100.0 / total_deps * idx))
+        )
 
 
 def main():

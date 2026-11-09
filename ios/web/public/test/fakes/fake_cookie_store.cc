@@ -1,10 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ios/web/public/test/fakes/fake_cookie_store.h"
 
-#include "base/task/post_task.h"
+#include <optional>
+
+#include "base/notimplemented.h"
 #include "ios/web/public/thread/web_task_traits.h"
 #include "ios/web/public/thread/web_thread.h"
 
@@ -20,14 +22,21 @@ void FakeCookieStore::SetAllCookies(const net::CookieList& all_cookies) {
 
 void FakeCookieStore::GetAllCookiesAsync(GetAllCookiesCallback callback) {
   DCHECK_CURRENTLY_ON(WebThread::IO);
-  base::PostTask(FROM_HERE, {WebThread::IO},
-                 base::BindOnce(std::move(callback), all_cookies_));
+  GetIOThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), all_cookies_));
 }
 
 void FakeCookieStore::SetCanonicalCookieAsync(
     std::unique_ptr<net::CanonicalCookie> cookie,
     const GURL& source_url,
     const net::CookieOptions& options,
+    SetCookiesCallback callback,
+    std::optional<net::CookieAccessResult> cookie_access_result) {
+  NOTIMPLEMENTED() << "Implement this if necessary.";
+}
+
+void FakeCookieStore::SetUnsafeCanonicalCookieForTestAsync(
+    std::unique_ptr<net::CanonicalCookie> cookie,
     SetCookiesCallback callback) {
   NOTIMPLEMENTED() << "Implement this if necessary.";
 }
@@ -35,6 +44,7 @@ void FakeCookieStore::SetCanonicalCookieAsync(
 void FakeCookieStore::GetCookieListWithOptionsAsync(
     const GURL& url,
     const net::CookieOptions& options,
+    const net::CookiePartitionKeyCollection& cookie_partition_key_collection,
     GetCookieListCallback callback) {
   NOTIMPLEMENTED() << "Implement this if necessary.";
 }
@@ -71,7 +81,7 @@ void FakeCookieStore::FlushStore(base::OnceClosure callback) {
 }
 
 void FakeCookieStore::SetCookieableSchemes(
-    const std::vector<std::string>& schemes,
+    std::vector<std::string> schemes,
     SetCookieableSchemesCallback callback) {
   NOTIMPLEMENTED() << "Implement this if necessary.";
 }
@@ -81,9 +91,6 @@ net::CookieChangeDispatcher& FakeCookieStore::GetChangeDispatcher() {
   // SEGV in the next line anyways. Crashing here with a more friendly error
   // message is preferred.
   NOTREACHED() << "Not implemented. Implement this if necessary.";
-  // Perform a crazy thing here just to make the compiler happy. It doesn't
-  // matter because it should never reach here.
-  return *reinterpret_cast<net::CookieChangeDispatcher*>(this);
 }
 
 }  // namespace web

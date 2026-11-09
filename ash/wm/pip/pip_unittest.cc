@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/keyboard/ui/test/keyboard_test_util.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
+#include "ash/public/cpp/window_properties.h"
 #include "ash/root_window_controller.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_navigation_widget.h"
@@ -17,6 +18,7 @@
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/test/test_window_builder.h"
 #include "ash/wm/pip/pip_positioner.h"
 #include "ash/wm/pip/pip_test_utils.h"
 #include "ash/wm/window_state.h"
@@ -30,23 +32,13 @@
 
 namespace ash {
 
-namespace {
-
-std::unique_ptr<views::Widget> CreateWidget(aura::Window* context) {
-  std::unique_ptr<views::Widget> widget(new views::Widget);
-  views::Widget::InitParams params;
-  params.delegate = new views::WidgetDelegateView();
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.context = context;
-  widget->Init(std::move(params));
-  return widget;
-}
-
-}  // namespace
-
 class PipTest : public AshTestBase {
  public:
   PipTest() = default;
+
+  PipTest(const PipTest&) = delete;
+  PipTest& operator=(const PipTest&) = delete;
+
   ~PipTest() override = default;
 
   void SetUp() override {
@@ -57,8 +49,16 @@ class PipTest : public AshTestBase {
 
   void TearDown() override { AshTestBase::TearDown(); }
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(PipTest);
+  static std::unique_ptr<views::Widget> CreateWidget(aura::Window* context) {
+    std::unique_ptr<views::Widget> widget(new views::Widget);
+    views::Widget::InitParams params(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+    params.delegate = new views::WidgetDelegateView(
+        views::WidgetDelegateView::CreatePassKey());
+    params.context = context;
+    widget->Init(std::move(params));
+    return widget;
+  }
 };
 
 TEST_F(PipTest, ShowInactive) {
@@ -146,9 +146,9 @@ TEST_F(PipTest, ShortcutNavigation) {
 }
 
 TEST_F(PipTest, PipInitialPositionAvoidsObstacles) {
-  UpdateDisplay("400x400");
+  UpdateDisplay("500x400");
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(100, 300, 100, 100)));
+      CreateTestWindowInShell({.bounds = {100, 300, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -156,7 +156,7 @@ TEST_F(PipTest, PipInitialPositionAvoidsObstacles) {
 
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(/*lock=*/true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 300, 400, 100));
 
@@ -167,17 +167,17 @@ TEST_F(PipTest, PipInitialPositionAvoidsObstacles) {
 }
 
 TEST_F(PipTest, TargetBoundsAffectedByWorkAreaChange) {
-  UpdateDisplay("400x400");
+  UpdateDisplay("500x400");
 
   // Place a keyboard window at the initial position of a PIP window.
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(/*lock=*/true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 300, 400, 100));
 
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(100, 300, 100, 100)));
+      CreateTestWindowInShell({.bounds = {100, 300, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -191,9 +191,9 @@ TEST_F(PipTest, TargetBoundsAffectedByWorkAreaChange) {
 
 TEST_F(PipTest, PipRestoresToPreviousBoundsOnMovementAreaChangeIfTheyExist) {
   ForceHideShelvesForTest();
-  UpdateDisplay("400x400");
+  UpdateDisplay("500x400");
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(200, 200, 100, 100)));
+      CreateTestWindowInShell({.bounds = {200, 200, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -201,7 +201,7 @@ TEST_F(PipTest, PipRestoresToPreviousBoundsOnMovementAreaChangeIfTheyExist) {
 
   // Position the PIP window on the side of the screen where it will be next
   // to an edge and therefore in a resting position for the whole test.
-  const gfx::Rect bounds = gfx::Rect(292, 200, 100, 100);
+  const gfx::Rect bounds = gfx::Rect(392, 200, 100, 100);
   // Set restore position to where the window currently is.
   window->SetBounds(bounds);
   PipPositioner::SaveSnapFraction(window_state, window->GetBoundsInScreen());
@@ -215,21 +215,21 @@ TEST_F(PipTest, PipRestoresToPreviousBoundsOnMovementAreaChangeIfTheyExist) {
   EXPECT_EQ(gfx::Rect(292, 76, 100, 100), window->GetBoundsInScreen());
 
   // Restore the original work area.
-  UpdateDisplay("400x400");
+  UpdateDisplay("500x400");
   ForceHideShelvesForTest();
 
   // Changing the work area with the same PIP size causes snap fraction change,
   // so PIP doesn't restore to the original position. Instead ensure that the
   // fraction is calculated correctly.
-  EXPECT_EQ(gfx::Rect(292, 239, 100, 100), window->GetBoundsInScreen());
+  EXPECT_EQ(gfx::Rect(392, 239, 100, 100), window->GetBoundsInScreen());
 }
 
 TEST_F(
     PipTest,
     PipRestoresToPreviousBoundsOnMovementAreaChangeIfTheyExistOnExternalDisplay) {
-  UpdateDisplay("400x400,400x400");
+  UpdateDisplay("500x400,500x400");
   ForceHideShelvesForTest();
-  auto* root_window = Shell::GetAllRootWindows()[1];
+  auto* root_window = Shell::GetAllRootWindows()[1].get();
 
   // Position the PIP window on the side of the screen where it will be next
   // to an edge and therefore in a resting position for the whole test.
@@ -246,39 +246,41 @@ TEST_F(
   EXPECT_TRUE(PipPositioner::HasSnapFraction(window_state));
 
   // Update the work area so that the PIP window should be pushed upward.
-  UpdateDisplay("400x400,400x200");
+  UpdateDisplay("500x400,400x200");
   ForceHideShelvesForTest();
 
   // PIP should move up to accommodate the new work area.
-  EXPECT_EQ(gfx::Rect(408, 92, 100, 100), window->GetBoundsInScreen());
+  EXPECT_EQ(gfx::Rect(508, 92, 100, 100), window->GetBoundsInScreen());
 
   // Restore the original work area.
-  UpdateDisplay("400x400,400x400");
+  UpdateDisplay("500x400,500x400");
   ForceHideShelvesForTest();
 
   // Changing the work area with the same PIP size causes snap fraction change,
   // so PIP doesn't restore to the original position. Instead ensure that the
   // fraction is calculated correctly.
-  EXPECT_EQ(gfx::Rect(408, 292, 100, 100), window->GetBoundsInScreen());
+  EXPECT_EQ(gfx::Rect(508, 292, 100, 100), window->GetBoundsInScreen());
 }
 
 TEST_F(PipTest, PipRestoreOnWorkAreaChangeDoesNotChangeWindowSize) {
   ForceHideShelvesForTest();
-  UpdateDisplay("400x400");
-  std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(200, 200, 100, 100)));
-  WindowState* window_state = WindowState::Get(window.get());
-  const WMEvent enter_pip(WM_EVENT_PIP);
-  window_state->OnWMEvent(&enter_pip);
-  window->Show();
-
+  UpdateDisplay("500x400");
+  // Create a new PiP window using TestWindowBuilder().
+  // Set SetShow to false upon creation to simulate the window being created
+  // as a PiP rather than being changed to PiP.
   // Position the PIP window on the side of the screen where it will be next
   // to an edge and therefore in a resting position for the whole test.
-  const gfx::Rect bounds = gfx::Rect(292, 200, 100, 100);
-  window->SetBounds(bounds);
-  // Set the restore bounds to be a different size.
-  window_state->SetRestoreBoundsInParent(gfx::Rect(342, 250, 50, 100));
-  EXPECT_TRUE(window_state->HasRestoreBounds());
+  std::unique_ptr<aura::Window> pip_window(TestWindowBuilder()
+                                               .AllowAllWindowStates()
+                                               .SetShow(false)
+                                               .Build()
+                                               .release());
+  WindowState* window_state = WindowState::Get(pip_window.get());
+  const WMEvent enter_pip(WM_EVENT_PIP);
+  window_state->OnWMEvent(&enter_pip);
+  pip_window->SetBounds(gfx::Rect(392, 200, 100, 100));
+  EXPECT_TRUE(window_state->IsPip());
+  pip_window->Show();
 
   // Update the work area so that the PIP window should be pushed upward.
   UpdateDisplay("400x200");
@@ -286,14 +288,14 @@ TEST_F(PipTest, PipRestoreOnWorkAreaChangeDoesNotChangeWindowSize) {
 
   // The PIP snap position should be applied and the relative position
   // along the edge shouldn't change.
-  EXPECT_EQ(gfx::Rect(292, 44, 100, 100), window->GetBoundsInScreen());
+  EXPECT_EQ(gfx::Rect(292, 76, 100, 100), pip_window->GetBoundsInScreen());
 }
 
 TEST_F(PipTest, PipSnappedToEdgeWhenSavingSnapFraction) {
   ForceHideShelvesForTest();
-  UpdateDisplay("400x400");
+  UpdateDisplay("500x400");
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(200, 200, 100, 100)));
+      CreateTestWindowInShell({.bounds = {200, 200, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -303,7 +305,7 @@ TEST_F(PipTest, PipSnappedToEdgeWhenSavingSnapFraction) {
   // edges.
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboardInDisplay(window_state->GetDisplay());
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 300, 400, 100));
 

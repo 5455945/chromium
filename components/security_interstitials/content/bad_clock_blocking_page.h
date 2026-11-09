@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "components/security_interstitials/content/ssl_blocking_page_base.h"
-#include "components/security_interstitials/content/ssl_cert_reporter.h"
 #include "components/ssl_errors/error_classification.h"
 #include "content/public/browser/certificate_request_result_type.h"
+#include "net/base/net_errors.h"
 #include "net/ssl/ssl_info.h"
 
 class GURL;
@@ -38,16 +36,18 @@ class BadClockBlockingPage : public SSLBlockingPageBase {
   // shown.
   BadClockBlockingPage(
       content::WebContents* web_contents,
-      int cert_error,
+      net::Error cert_error,
       const net::SSLInfo& ssl_info,
       const GURL& request_url,
       const base::Time& time_triggered,
       bool can_show_enhanced_protection_message,
       ssl_errors::ClockState clock_state,
-      std::unique_ptr<SSLCertReporter> ssl_cert_reporter,
       std::unique_ptr<
           security_interstitials::SecurityInterstitialControllerClient>
           controller_client);
+
+  BadClockBlockingPage(const BadClockBlockingPage&) = delete;
+  BadClockBlockingPage& operator=(const BadClockBlockingPage&) = delete;
 
   ~BadClockBlockingPage() override;
 
@@ -58,14 +58,12 @@ class BadClockBlockingPage : public SSLBlockingPageBase {
  protected:
   // SecurityInterstitialPage implementation:
   void CommandReceived(const std::string& command) override;
-  void PopulateInterstitialStrings(base::Value* load_time_data) override;
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override;
 
  private:
   const net::SSLInfo ssl_info_;
 
   const std::unique_ptr<security_interstitials::BadClockUI> bad_clock_ui_;
-
-  DISALLOW_COPY_AND_ASSIGN(BadClockBlockingPage);
 };
 
 #endif  // COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_BAD_CLOCK_BLOCKING_PAGE_H_

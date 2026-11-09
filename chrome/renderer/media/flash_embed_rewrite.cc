@@ -1,10 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/renderer/media/flash_embed_rewrite.h"
 
-#include "base/metrics/histogram_macros.h"
+#include <string_view>
+
+#include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "url/gurl.h"
 
 GURL FlashEmbedRewrite::RewriteFlashEmbedURL(const GURL& url) {
@@ -25,8 +28,9 @@ GURL FlashEmbedRewrite::RewriteFlashEmbedURL(const GURL& url) {
 GURL FlashEmbedRewrite::RewriteYouTubeFlashEmbedURL(const GURL& url) {
   // YouTube URLs are of the form of youtube.com/v/VIDEO_ID. So, we check to see
   // if the given URL does follow that format.
-  if (url.path().find("/v/") != 0)
+  if (!base::StartsWith(url.GetPath(), "/v/")) {
     return GURL();
+  }
 
   std::string url_str = url.spec();
 
@@ -53,11 +57,18 @@ GURL FlashEmbedRewrite::RewriteYouTubeFlashEmbedURL(const GURL& url) {
   GURL corrected_url = GURL(url_str);
 
   // Change the path to use the YouTube HTML5 API.
-  std::string path = corrected_url.path();
-  path.replace(path.find("/v/"), 3, "/embed/");
+  std::string path = corrected_url.GetPath();
 
-  url::Replacements<char> r;
-  r.SetPath(path.c_str(), url::Component(0, path.length()));
+  // Let's check that `path` still starts with `/v/` after all the fixing
+  // we did above.
+  if (!base::StartsWith(path, "/v/")) {
+    return GURL();
+  }
+
+  path.replace(0, 3, "/embed/");
+
+  GURL::Replacements r;
+  r.SetPathStr(path);
 
   return corrected_url.ReplaceComponents(r);
 }
@@ -66,15 +77,16 @@ GURL FlashEmbedRewrite::RewriteDailymotionFlashEmbedURL(const GURL& url) {
   // Dailymotion flash embeds are of the form of either:
   //  - /swf/
   //  - /swf/video/
-  if (url.path().find("/swf/") != 0)
+  if (!base::StartsWith(url.GetPath(), "/swf/")) {
     return GURL();
+  }
 
-  std::string path = url.path();
+  std::string path = url.GetPath();
   int replace_length = path.find("/swf/video/") == 0 ? 11 : 5;
   path.replace(0, replace_length, "/embed/video/");
 
-  url::Replacements<char> r;
-  r.SetPath(path.c_str(), url::Component(0, path.length()));
+  GURL::Replacements r;
+  r.SetPathStr(path);
 
   return url.ReplaceComponents(r);
 }
@@ -82,10 +94,11 @@ GURL FlashEmbedRewrite::RewriteDailymotionFlashEmbedURL(const GURL& url) {
 GURL FlashEmbedRewrite::RewriteVimeoFlashEmbedURL(const GURL& url) {
   // Vimeo flash embeds are of the form of:
   // http://vimeo.com/moogaloop.swf?clip_id=XXX
-  if (url.path().find("/moogaloop.swf") != 0)
+  if (!base::StartsWith(url.path(), "/moogaloop.swf")) {
     return GURL();
+  }
 
-  std::string url_str = url.spec();
+  std::string_view url_str = url.spec();
   size_t clip_id_start = url_str.find("clip_id=");
   if (clip_id_start == std::string::npos)
     return GURL();
@@ -93,7 +106,8 @@ GURL FlashEmbedRewrite::RewriteVimeoFlashEmbedURL(const GURL& url) {
   clip_id_start += 8;
   size_t clip_id_end = url_str.find("&", clip_id_start);
 
-  std::string clip_id =
+  std::string_view clip_id =
       url_str.substr(clip_id_start, clip_id_end - clip_id_start);
-  return GURL(url.scheme() + "://player.vimeo.com/video/" + clip_id);
+  return GURL(
+      base::StrCat({url.scheme(), "://player.vimeo.com/video/", clip_id}));
 }

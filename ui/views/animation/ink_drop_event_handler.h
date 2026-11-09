@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 #define UI_VIEWS_ANIMATION_INK_DROP_EVENT_HANDLER_H_
 
 #include <memory>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "base/strings/string_piece.h"
 #include "ui/events/event_handler.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
@@ -42,6 +43,10 @@ class VIEWS_EXPORT InkDropEventHandler : public ui::EventHandler,
   };
 
   InkDropEventHandler(View* host_view, Delegate* delegate);
+
+  InkDropEventHandler(const InkDropEventHandler&) = delete;
+  InkDropEventHandler& operator=(const InkDropEventHandler&) = delete;
+
   ~InkDropEventHandler() override;
 
   void AnimateToState(InkDropState state, const ui::LocatedEvent* event);
@@ -51,33 +56,46 @@ class VIEWS_EXPORT InkDropEventHandler : public ui::EventHandler,
   // ui::EventHandler:
   void OnGestureEvent(ui::GestureEvent* event) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
-  base::StringPiece GetLogContext() const override;
+  std::string_view GetLogContext() const override;
 
   // ViewObserver:
   void OnViewVisibilityChanged(View* observed_view,
-                               View* starting_view) override;
+                               View* starting_view,
+                               bool visible) override;
   void OnViewHierarchyChanged(
       View* observed_view,
       const ViewHierarchyChangedDetails& details) override;
   void OnViewBoundsChanged(View* observed_view) override;
   void OnViewFocused(View* observed_view) override;
   void OnViewBlurred(View* observed_view) override;
+  void OnViewThemeChanged(View* observed_view) override;
+  void OnViewRemovedFromWidget(View* observed_view) override;
+  void OnViewHierarchyWillBeDeleted(View* observed_view) override;
+
+ private:
+  // Returns whether the ink drop may be updated. This is false once the host
+  // view's widget is closing or being destroyed: other parts of the widget
+  // (e.g. frame views) may already be gone, and ink drop updates can reach
+  // them (crbug.com/452389552). A host without a widget may be updated.
+  bool CanUpdateInkDrop() const;
+
+  // Hides the ink drop and drops its hover state. Called when the host view
+  // leaves its widget and when it is about to be deleted.
+  void CleanupInkDrop();
 
   // Allows |this| to handle all GestureEvents on |host_view_|.
   std::unique_ptr<ui::ScopedTargetHandler> target_handler_;
 
   // The host view.
-  View* const host_view_;
+  const raw_ptr<View> host_view_;
 
   // Delegate used to get the InkDrop, etc.
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 
   // The last user Event to trigger an InkDrop-ripple animation.
   std::unique_ptr<ui::LocatedEvent> last_ripple_triggering_event_;
 
-  base::ScopedObservation<View, ViewObserver> observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(InkDropEventHandler);
+  base::ScopedObservation<View, ViewObserver> view_observation_{this};
 };
 
 }  // namespace views

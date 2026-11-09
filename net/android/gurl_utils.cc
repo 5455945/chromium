@@ -1,22 +1,27 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/android/jni_string.h"
-#include "net/net_jni_headers/GURLUtils_jni.h"
 #include "url/gurl.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "net/net_jni_headers/GURLUtils_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace net {
 
-ScopedJavaLocalRef<jstring> JNI_GURLUtils_GetOrigin(
+static ScopedJavaLocalRef<jstring> JNI_GURLUtils_GetOrigin(
     JNIEnv* env,
-    const JavaParamRef<jstring>& url) {
+    const JavaRef<jstring>& url) {
   GURL host(base::android::ConvertJavaStringToUTF16(env, url));
 
-  return base::android::ConvertUTF8ToJavaString(env, host.GetOrigin().spec());
+  return base::android::ConvertUTF8ToJavaString(
+      env, host.DeprecatedGetOriginAsURL().spec());
 }
 
 }  // namespace net
+
+DEFINE_JNI(GURLUtils)

@@ -1,20 +1,18 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stdio.h>
+#include <windows.h>
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/win/scoped_handle.h"
-#include "base/win/windows_version.h"
 #include "sandbox/win/tests/common/controller.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace sandbox {
 
-SBOX_TESTS_COMMAND int HandleInheritanceTests_PrintToStdout(int argc,
-                                                            wchar_t** argv) {
+SBOX_TEST_COMMAND(HandleInheritanceTests_PrintToStdout) {
   printf("Example output to stdout\n");
   return SBOX_TEST_SUCCEEDED;
 }
@@ -33,11 +31,11 @@ TEST(HandleInheritanceTests, TestStdoutInheritance) {
       CreateFile(temp_file_name.value().c_str(), GENERIC_WRITE,
                  FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE, &attrs,
                  OPEN_EXISTING, 0, nullptr));
-  ASSERT_TRUE(tmp_handle.IsValid());
+  ASSERT_TRUE(tmp_handle.is_valid());
 
-  TestRunner runner;
-  ASSERT_EQ(SBOX_ALL_OK, runner.GetPolicy()->SetStdoutHandle(tmp_handle.Get()));
-  int result = runner.RunTest(L"HandleInheritanceTests_PrintToStdout");
+  HandleInheritanceTests_PrintToStdoutTestRunner runner;
+  ASSERT_EQ(SBOX_ALL_OK, runner.GetPolicy()->SetStdoutHandle(tmp_handle.get()));
+  int result = runner.RunTest();
   ASSERT_EQ(SBOX_TEST_SUCCEEDED, result);
 
   std::string data;

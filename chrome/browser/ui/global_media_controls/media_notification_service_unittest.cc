@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,29 +7,36 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/metrics/histogram_tester.h"
+#include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/router/chrome_media_router_factory.h"
-#include "chrome/browser/media/router/media_router_feature.h"
+#include "chrome/browser/ui/global_media_controls/cast_device_list_host.h"
 #include "chrome/browser/ui/global_media_controls/cast_media_notification_producer.h"
-#include "chrome/browser/ui/global_media_controls/media_dialog_delegate.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_service_observer.h"
-#include "chrome/browser/ui/global_media_controls/media_session_notification_producer.h"
-#include "chrome/browser/ui/global_media_controls/overlay_media_notification.h"
 #include "chrome/browser/ui/global_media_controls/test_helper.h"
+#include "chrome/browser/ui/media_router/cast_dialog_model.h"
+#include "chrome/browser/ui/media_router/media_route_starter.h"
+#include "chrome/browser/ui/media_router/query_result_manager.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
+#include "components/global_media_controls/public/media_item_manager.h"
+#include "components/global_media_controls/public/media_session_item_producer.h"
+#include "components/global_media_controls/public/media_session_notification_item.h"
+#include "components/global_media_controls/public/mojom/device_service.mojom.h"
+#include "components/global_media_controls/public/test/mock_device_service.h"
+#include "components/global_media_controls/public/test/mock_media_dialog_delegate.h"
 #include "components/media_message_center/media_notification_item.h"
 #include "components/media_message_center/media_notification_util.h"
-#include "components/media_message_center/media_session_notification_item.h"
 #include "components/media_router/browser/presentation/start_presentation_context.h"
 #include "components/media_router/browser/test/mock_media_router.h"
 #include "content/public/browser/media_session.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "media/base/media_switches.h"
 #include "services/media_session/public/mojom/audio_focus.mojom.h"
@@ -37,7 +44,15 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace mojom {
+using global_media_controls::mojom::DeviceListClient;
+using global_media_controls::mojom::DeviceListHost;
+using global_media_controls::mojom::DevicePtr;
+}  // namespace mojom
+
+using global_media_controls::test::MockDeviceListClient;
 using media_router::MediaRoute;
+using media_router::StartPresentationContext;
 using media_session::mojom::AudioFocusRequestState;
 using media_session::mojom::AudioFocusRequestStatePtr;
 using media_session::mojom::MediaSessionInfo;
@@ -48,91 +63,7 @@ using testing::Expectation;
 using testing::NiceMock;
 using testing::Return;
 
-namespace {
-
-class MockMediaNotificationServiceObserver
-    : public MediaNotificationServiceObserver {
- public:
-  MockMediaNotificationServiceObserver() = default;
-  MockMediaNotificationServiceObserver(
-      const MockMediaNotificationServiceObserver&) = delete;
-  MockMediaNotificationServiceObserver& operator=(
-      const MockMediaNotificationServiceObserver&) = delete;
-  ~MockMediaNotificationServiceObserver() override = default;
-
-  // MediaNotificationServiceObserver implementation.
-  MOCK_METHOD(void, OnNotificationListChanged, ());
-  MOCK_METHOD(void, OnMediaDialogOpened, ());
-  MOCK_METHOD(void, OnMediaDialogClosed, ());
-};
-
-class MockOverlayMediaNotification : public OverlayMediaNotification {
- public:
-  MockOverlayMediaNotification() = default;
-  MockOverlayMediaNotification(const MockOverlayMediaNotification&) = delete;
-  MockOverlayMediaNotification& operator=(const MockOverlayMediaNotification&) =
-      delete;
-  ~MockOverlayMediaNotification() override = default;
-
-  OverlayMediaNotificationsManager* manager() { return manager_; }
-
-  // MockOverlayMediaNotification implementation.
-  void SetManager(OverlayMediaNotificationsManager* manager) {
-    manager_ = manager;
-    SetManagerProxy(manager);
-  }
-  MOCK_METHOD0(ShowNotification, void());
-  MOCK_METHOD0(CloseNotification, void());
-
-  // Use a proxy so we can add expectations on it while also storing the
-  // manager for future use.
-  MOCK_METHOD1(SetManagerProxy,
-               void(OverlayMediaNotificationsManager* manager));
-
- private:
-  OverlayMediaNotificationsManager* manager_ = nullptr;
-};
-
-class MockWebContentsPresentationManager
-    : public media_router::WebContentsPresentationManager {
- public:
-  void NotifyMediaRoutesChanged(
-      const std::vector<media_router::MediaRoute>& routes) {
-    for (auto& observer : observers_) {
-      observer.OnMediaRoutesChanged(routes);
-    }
-  }
-
-  void AddObserver(media_router::WebContentsPresentationManager::Observer*
-                       observer) override {
-    observers_.AddObserver(observer);
-  }
-
-  void RemoveObserver(media_router::WebContentsPresentationManager::Observer*
-                          observer) override {
-    observers_.RemoveObserver(observer);
-  }
-
-  MOCK_CONST_METHOD0(HasDefaultPresentationRequest, bool());
-  MOCK_CONST_METHOD0(GetDefaultPresentationRequest,
-                     const content::PresentationRequest&());
-  MOCK_METHOD3(OnPresentationResponse,
-               void(const content::PresentationRequest&,
-                    media_router::mojom::RoutePresentationConnectionPtr,
-                    const media_router::RouteRequestResult&));
-  MOCK_METHOD0(GetMediaRoutes, std::vector<media_router::MediaRoute>());
-
-  base::WeakPtr<WebContentsPresentationManager> GetWeakPtr() override {
-    return weak_factory_.GetWeakPtr();
-  }
-
- private:
-  base::ObserverList<media_router::WebContentsPresentationManager::Observer>
-      observers_;
-  base::WeakPtrFactory<MockWebContentsPresentationManager> weak_factory_{this};
-};
-
-}  // anonymous namespace
+namespace {}  // namespace
 
 class MediaNotificationServiceTest : public ChromeRenderViewHostTestHarness {
  public:
@@ -147,28 +78,15 @@ class MediaNotificationServiceTest : public ChromeRenderViewHostTestHarness {
     media_router::ChromeMediaRouterFactory::GetInstance()->SetTestingFactory(
         profile(), base::BindRepeating(&media_router::MockMediaRouter::Create));
     service_ = std::make_unique<MediaNotificationService>(profile(), false);
-    service_->AddObserver(&observer_);
   }
 
   void TearDown() override {
+    SimulateCloseDialog();
     service_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
  protected:
-  void AdvanceClockMilliseconds(int milliseconds) {
-    task_environment()->FastForwardBy(
-        base::TimeDelta::FromMilliseconds(milliseconds));
-  }
-
-  void AdvanceClockMinutes(int minutes) {
-    AdvanceClockMilliseconds(1000 * 60 * minutes);
-  }
-
-  base::UnguessableToken SimulatePlayingControllableMedia() {
-    return SimulatePlayingControllableMedia(base::UnguessableToken::Create());
-  }
-
   base::UnguessableToken SimulatePlayingControllableMedia(
       base::UnguessableToken id) {
     SimulateFocusGained(id, true);
@@ -181,6 +99,7 @@ class MediaNotificationServiceTest : public ChromeRenderViewHostTestHarness {
     content::MediaSession::Get(contents);
     auto id = content::MediaSession::GetRequestIdFromWebContents(contents);
     SimulatePlayingControllableMedia(id);
+    base::RunLoop().RunUntilIdle();
     return id;
   }
 
@@ -197,15 +116,14 @@ class MediaNotificationServiceTest : public ChromeRenderViewHostTestHarness {
 
   void SimulateFocusGained(const base::UnguessableToken& id,
                            bool controllable) {
-    service_->media_session_notification_producer_->OnFocusGained(
+    service_->media_session_item_producer_->OnFocusGained(
         CreateFocusRequest(id, controllable));
   }
 
   void SimulateFocusLost(const base::UnguessableToken& id) {
     AudioFocusRequestStatePtr focus(AudioFocusRequestState::New());
     focus->request_id = id;
-    service_->media_session_notification_producer_->OnFocusLost(
-        std::move(focus));
+    service_->media_session_item_producer_->OnFocusLost(std::move(focus));
   }
 
   void SimulateNecessaryMetadata(const base::UnguessableToken& id) {
@@ -215,191 +133,48 @@ class MediaNotificationServiceTest : public ChromeRenderViewHostTestHarness {
     // service, but since the service doesn't run for this test, we'll manually
     // grab the MediaNotificationItem from the MediaNotificationService and
     // set the metadata.
-    auto item_itr = sessions().find(id.ToString());
-    ASSERT_NE(sessions().end(), item_itr);
+    auto* session_item = GetNotificationSessionItem(id);
+    ASSERT_NE(nullptr, session_item);
 
     media_session::MediaMetadata metadata;
     metadata.title = u"title";
     metadata.artist = u"artist";
-    item_itr->second.item()->MediaSessionMetadataChanged(std::move(metadata));
+    session_item->MediaSessionMetadataChanged(std::move(metadata));
   }
 
-  void SimulateHasArtwork(const base::UnguessableToken& id) {
-    auto item_itr = sessions().find(id.ToString());
-    ASSERT_NE(sessions().end(), item_itr);
-
-    SkBitmap image;
-    image.allocN32Pixels(10, 10);
-    image.eraseColor(SK_ColorMAGENTA);
-
-    item_itr->second.item()->MediaControllerImageChanged(
-        media_session::mojom::MediaSessionImageType::kArtwork, image);
+  void SimulateDialogOpened(
+      global_media_controls::test::MockMediaDialogDelegate* delegate) {
+    service_->media_item_manager()->SetDialogDelegate(delegate);
+    base::RunLoop().RunUntilIdle();
   }
 
-  void SimulateHasNoArtwork(const base::UnguessableToken& id) {
-    auto item_itr = sessions().find(id.ToString());
-    ASSERT_NE(sessions().end(), item_itr);
-
-    item_itr->second.item()->MediaControllerImageChanged(
-        media_session::mojom::MediaSessionImageType::kArtwork, SkBitmap());
-  }
-
-  void SimulateReceivedAudioFocusRequests(
-      std::vector<AudioFocusRequestStatePtr> requests) {
-    service_->media_session_notification_producer_
-        ->OnReceivedAudioFocusRequests(std::move(requests));
-  }
-
-  bool IsSessionFrozen(const base::UnguessableToken& id) const {
-    auto item_itr = sessions().find(id.ToString());
-    EXPECT_NE(sessions().end(), item_itr);
-    return item_itr->second.item()->frozen();
-  }
-
-  bool IsSessionInactive(const base::UnguessableToken& id) const {
-    return base::Contains(
-        service_->media_session_notification_producer_->inactive_session_ids_,
-        id.ToString());
-  }
-
-  bool HasActiveNotifications() const {
-    return service_->HasActiveNotifications();
-  }
-
-  bool HasFrozenNotifications() const {
-    return service_->HasFrozenNotifications();
-  }
-
-  bool HasOpenDialog() const { return service_->HasOpenDialog(); }
-
-  void SimulateDialogOpened(MockMediaDialogDelegate* delegate) {
-    delegate->Open(service_.get());
+  void SimulateCloseDialog() {
+    service_->media_item_manager()->SetDialogDelegate(nullptr);
+    base::RunLoop().RunUntilIdle();
   }
 
   void SimulateDialogOpenedForPresentationRequest(
-      MockMediaDialogDelegate* delegate,
+      global_media_controls::test::MockMediaDialogDelegate* delegate,
       content::WebContents* content) {
-    delegate->OpenForWebContents(service_.get(), content);
-  }
-
-  void SimulateTabClosed(const base::UnguessableToken& id) {
-    // When a tab is closing, audio focus will be lost before the WebContents is
-    // destroyed, so to simulate closer to reality we will also simulate audio
-    // focus lost here.
-    SimulateFocusLost(id);
-
-    // Now, close the tab. The session may have been destroyed with
-    // |SimulateFocusLost()| above.
-    service_->media_session_notification_producer_->OnRequestIdReleased(id);
-  }
-
-  void SimulatePlaybackStateChanged(const base::UnguessableToken& id,
-                                    bool playing) {
-    MediaSessionInfoPtr session_info(MediaSessionInfo::New());
-    session_info->is_controllable = true;
-    session_info->playback_state =
-        playing ? media_session::mojom::MediaPlaybackState::kPlaying
-                : media_session::mojom::MediaPlaybackState::kPaused;
-
-    auto item_itr = sessions().find(id.ToString());
-    EXPECT_NE(sessions().end(), item_itr);
-    item_itr->second.MediaSessionInfoChanged(std::move(session_info));
-  }
-
-  void SimulateMediaSeeked(const base::UnguessableToken& id) {
-    auto item_itr = sessions().find(id.ToString());
-    EXPECT_NE(sessions().end(), item_itr);
-    item_itr->second.MediaSessionPositionChanged(absl::nullopt);
-  }
-
-  void SimulateNotificationClicked(const base::UnguessableToken& id) {
-    service_->media_session_notification_producer_->OnContainerClicked(
-        id.ToString());
-  }
-
-  void SimulateDismissButtonClicked(const base::UnguessableToken& id) {
-    service_->media_session_notification_producer_->OnContainerDismissed(
-        id.ToString());
-  }
-
-  // Simulates the media notification of the given |id| being dragged out of the
-  // given dialog.
-  MockOverlayMediaNotification* SimulateNotificationDraggedOut(
-      const base::UnguessableToken& id,
-      MockMediaDialogDelegate* dialog_delegate) {
-    const gfx::Rect dragged_out_bounds(0, 1, 2, 3);
-    auto overlay_notification_unique =
-        std::make_unique<MockOverlayMediaNotification>();
-    MockOverlayMediaNotification* overlay_notification =
-        overlay_notification_unique.get();
-
-    // When the notification is dragged out, the dialog should be asked to
-    // remove the notification and return an overlay version of it.
-    EXPECT_CALL(*dialog_delegate,
-                PopOutProxy(id.ToString(), dragged_out_bounds))
-        .WillOnce(Return(overlay_notification_unique.release()));
-
-    // Then, that overlay notification should receive a manager and be shown.
-    Expectation set_manager =
-        EXPECT_CALL(*overlay_notification, SetManagerProxy(_));
-    EXPECT_CALL(*overlay_notification, ShowNotification()).After(set_manager);
-
-    // Fire the drag out.
-    service_->media_session_notification_producer_->OnContainerDraggedOut(
-        id.ToString(), dragged_out_bounds);
-    testing::Mock::VerifyAndClearExpectations(dialog_delegate);
-    testing::Mock::VerifyAndClearExpectations(overlay_notification);
-
-    return overlay_notification;
-  }
-
-  void ExpectHistogramCountRecorded(int count, int size) {
-    histogram_tester_.ExpectBucketCount(
-        media_message_center::kCountHistogramName, count, size);
-  }
-
-  void ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason reason,
-      int count) {
-    histogram_tester_.ExpectBucketCount(
-        "Media.GlobalMediaControls.DismissReason", reason, count);
-  }
-
-  void ExpectHistogramInteractionDelayAfterPause(base::TimeDelta time,
-                                                 int count) {
-    histogram_tester_.ExpectTimeBucketCount(
-        "Media.GlobalMediaControls.InteractionDelayAfterPause", time, count);
-  }
-
-  void ExpectEmptyInteractionHistogram() {
-    histogram_tester_.ExpectTotalCount(
-        "Media.GlobalMediaControls.InteractionDelayAfterPause", 0);
+    service_->SetDialogDelegateForWebContents(delegate, content);
   }
 
   void SimulateMediaRoutesUpdate(
       const std::vector<media_router::MediaRoute>& routes) {
-    service_->cast_notification_producer_->OnRoutesUpdated(routes, {});
+    service_->cast_notification_producer_->OnRoutesUpdated(routes);
   }
 
-  MediaSessionNotificationProducer::Session* GetSession(
-      const base::UnguessableToken& id) {
-    return service_->media_session_notification_producer_->GetSession(
-        id.ToString());
+  global_media_controls::MediaSessionNotificationItem*
+  GetNotificationSessionItem(const base::UnguessableToken& id) {
+    return static_cast<global_media_controls::MediaSessionNotificationItem*>(
+        service_->media_session_item_producer_->GetMediaItem(id.ToString())
+            .get());
   }
-
-  MockMediaNotificationServiceObserver& observer() { return observer_; }
 
   MediaNotificationService* service() { return service_.get(); }
 
-  std::map<std::string, MediaSessionNotificationProducer::Session>& sessions()
-      const {
-    return service_->media_session_notification_producer_->sessions_;
-  }
-
  private:
-  NiceMock<MockMediaNotificationServiceObserver> observer_;
   std::unique_ptr<MediaNotificationService> service_;
-  base::HistogramTester histogram_tester_;
 };
 
 // This class enables the features for starting/stopping cast sessions from
@@ -409,9 +184,6 @@ class MediaNotificationServiceTest : public ChromeRenderViewHostTestHarness {
 class MediaNotificationServiceCastTest : public MediaNotificationServiceTest {
  public:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(
-        media_router::kGlobalMediaControlsCastStartStop);
-
     presentation_manager_ =
         std::make_unique<NiceMock<MockWebContentsPresentationManager>>();
     media_router::WebContentsPresentationManager::SetTestInstance(
@@ -426,37 +198,53 @@ class MediaNotificationServiceCastTest : public MediaNotificationServiceTest {
 
   media_router::MediaRoute CreateMediaRoute(
       media_router::MediaRoute::Id route_id) {
-    media_router::MediaRoute media_route(route_id,
-                                         media_router::MediaSource("source_id"),
-                                         "sink_id", "description", true, true);
+    media_router::MediaRoute media_route(
+        route_id, media_router::MediaSource("cast:123456"), "sink_id",
+        "description", true);
     media_route.set_controller_type(
         media_router::RouteControllerType::kGeneric);
     return media_route;
   }
 
+  content::PresentationRequest CreatePresentationRequest() {
+    return content::PresentationRequest(main_rfh()->GetGlobalId(),
+                                        {GURL(), GURL()},
+                                        url::Origin::Create(GURL()));
+  }
+
+  bool HasPresentationContextForSession(const std::string& session_id) {
+    return service()->HasPresentationContextForSession(session_id);
+  }
+
+  std::unique_ptr<StartPresentationContext> CreateStartPresentationContext(
+      content::PresentationRequest presentation_request,
+      StartPresentationContext::PresentationConnectionCallback success_cb =
+          base::DoNothing(),
+      StartPresentationContext::PresentationConnectionErrorCallback error_cb =
+          base::DoNothing()) {
+    return std::make_unique<StartPresentationContext>(
+        presentation_request, std::move(success_cb), std::move(error_cb));
+  }
+
   // Simulate a supplementalNotification for |web_contents()|.
   std::string SimulateSupplementalNotification() {
-    auto presentation_request = content::PresentationRequest(
-        main_rfh()->GetGlobalId(),
-        {GURL("http://example.com"), GURL("http://example2.com")},
-        url::Origin::Create(GURL("http://google.com")));
+    auto presentation_request = CreatePresentationRequest();
 
-    auto start_presentation_context =
-        GetStartPresentationContext(presentation_request);
-
-    // Create a PresentationRequestNotificationItem.
+    // Create a SupplementalDevicePickerItem.
     service()->OnStartPresentationContextCreated(
-        std::move(start_presentation_context));
-    auto notification_id = GetSupplementalNotification()->id();
-    EXPECT_FALSE(notification_id.empty());
-    auto item =
+        CreateStartPresentationContext(presentation_request));
+    base::RunLoop().RunUntilIdle();
+    auto notification_id =
         service()
-            ->presentation_request_notification_producer_->GetNotificationItem(
-                notification_id);
+            ->supplemental_device_picker_producer_
+            ->GetOrCreateNotificationItem(base::UnguessableToken::Create())
+            .id();
+    EXPECT_FALSE(notification_id.empty());
+    auto item = service()
+                    ->presentation_request_notification_producer_
+                    ->GetNotificationItem();
     EXPECT_TRUE(item);
-    auto* pr_item =
-        static_cast<PresentationRequestNotificationItem*>(item.get());
-    EXPECT_EQ(pr_item->request(), presentation_request);
+    EXPECT_EQ(item->request(), presentation_request);
     return notification_id;
   }
 
@@ -472,355 +260,70 @@ class MediaNotificationServiceCastTest : public MediaNotificationServiceTest {
         ->presentation_request_notification_producer_->GetNotificationItem();
   }
 
-  MOCK_METHOD3(RequestSuccess,
-               void(const blink::mojom::PresentationInfo&,
-                    media_router::mojom::RoutePresentationConnectionPtr,
-                    const MediaRoute&));
-  MOCK_METHOD1(RequestError,
-               void(const blink::mojom::PresentationError& error));
-
- private:
-  std::unique_ptr<media_router::StartPresentationContext>
-  GetStartPresentationContext(
-      content::PresentationRequest presentation_request) {
-    return std::make_unique<media_router::StartPresentationContext>(
-        presentation_request,
-        base::BindOnce(&MediaNotificationServiceCastTest::RequestSuccess,
-                       base::Unretained(this)),
-        base::BindOnce(&MediaNotificationServiceCastTest::RequestError,
-                       base::Unretained(this)));
+  template <class T>
+  mojo::PendingRemote<T> TakeRemote(mojo::Receiver<T>& receiver,
+                                    int expected_disconnect_count) {
+    auto remote = receiver.BindNewPipeAndPassRemote();
+    receiver.set_disconnect_handler(receiver_disconnect_handler_.Get());
+    EXPECT_CALL(receiver_disconnect_handler_, Run())
+        .Times(expected_disconnect_count);
+    return remote;
   }
 
+  template <class T>
+  mojo::PendingRemote<T> TakeRemoteAndExpectDisconnect(
+      mojo::Receiver<T>& receiver) {
+    return TakeRemote(receiver, /*expected_disconnect_count=*/1);
+  }
+
+  template <class T>
+  mojo::PendingRemote<T> TakeRemoteAndExpectNoDisconnect(
+      mojo::Receiver<T>& receiver) {
+    return TakeRemote(receiver, /*expected_disconnect_count=*/0);
+  }
+
+  template <class T>
+  mojo::PendingReceiver<T> TakeReceiver(mojo::Remote<T>& remote,
+                                        int expected_disconnect_count) {
+    auto receiver = remote.BindNewPipeAndPassReceiver();
+    remote.set_disconnect_handler(remote_disconnect_handler_.Get());
+    EXPECT_CALL(remote_disconnect_handler_, Run())
+        .Times(expected_disconnect_count);
+    return receiver;
+  }
+
+  template <class T>
+  mojo::PendingReceiver<T> TakeReceiverAndExpectDisconnect(
+      mojo::Remote<T>& remote) {
+    return TakeReceiver(remote, /*expected_disconnect_count=*/1);
+  }
+
+  template <class T>
+  mojo::PendingReceiver<T> TakeReceiverAndExpectNoDisconnect(
+      mojo::Remote<T>& remote) {
+    return TakeReceiver(remote, /*expected_disconnect_count=*/0);
+  }
+
+  bool HasPresentationContext() { return service()->context_ != nullptr; }
+
+  std::unique_ptr<media_router::CastDialogController>
+  CreateCastDialogControllerForSession(const std::string& id) {
+    return service()->CreateCastDialogControllerForSession(id);
+  }
+
+ private:
   std::unique_ptr<MockWebContentsPresentationManager> presentation_manager_;
-  base::test::ScopedFeatureList feature_list_;
+  base::MockCallback<base::OnceClosure> remote_disconnect_handler_;
+  base::MockCallback<base::OnceClosure> receiver_disconnect_handler_;
 };
 
-TEST_F(MediaNotificationServiceTest, ShowControllableOnGainAndHideOnLoss) {
-  // Simulate a new active, controllable media session.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  EXPECT_FALSE(HasActiveNotifications());
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_FALSE(IsSessionFrozen(id));
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Ensure that the observer was notified of the new notification.
-  testing::Mock::VerifyAndClearExpectations(&observer());
-
-  // Simulate opening a MediaDialogView.
-  MockMediaDialogDelegate dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  EXPECT_CALL(observer(), OnMediaDialogOpened());
-  EXPECT_FALSE(HasOpenDialog());
-  SimulateDialogOpened(&dialog_delegate);
-
-  // Ensure that the session was shown.
-  ExpectHistogramCountRecorded(1, 1);
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-
-  // Ensure that the observer was notified of the dialog opening.
-  EXPECT_TRUE(HasOpenDialog());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-
-  // Simulate the active session ending.
-  EXPECT_CALL(dialog_delegate, HideMediaSession(id.ToString())).Times(0);
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  EXPECT_FALSE(HasFrozenNotifications());
-  SimulateFocusLost(id);
-
-  // Ensure that the session was frozen and not hidden.
-  EXPECT_TRUE(IsSessionFrozen(id));
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-
-  // Ensure that the observer was notification of the frozen notification.
-  EXPECT_TRUE(HasFrozenNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  service()->ShowNotification(id.ToString());
-
-  // Once the freeze timer fires, we should hide the media session.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  EXPECT_CALL(dialog_delegate, HideMediaSession(id.ToString()));
-  AdvanceClockMilliseconds(2500);
-  testing::Mock::VerifyAndClearExpectations(&observer());
-}
-
-TEST_F(MediaNotificationServiceTest, DoesNotShowUncontrollableSession) {
-  base::UnguessableToken id = base::UnguessableToken::Create();
-
-  // When focus is gained, we should not show an active session.
-  EXPECT_FALSE(HasActiveNotifications());
-  SimulateFocusGained(id, false);
-  SimulateNecessaryMetadata(id);
-  EXPECT_FALSE(HasActiveNotifications());
-
-  // When focus is lost, we should not have a frozen session.
-  SimulateFocusLost(id);
-  EXPECT_FALSE(HasFrozenNotifications());
-
-  // When focus is regained, we should still not have an active session.
-  SimulateFocusGained(id, false);
-  EXPECT_FALSE(HasActiveNotifications());
-}
-
-TEST_F(MediaNotificationServiceTest,
-       DoesNotShowControllableSessionThatBecomesUncontrollable) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Lose focus so the item freezes.
-  SimulateFocusLost(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // After 1s, the item should still be frozen.
-  AdvanceClockMilliseconds(1000);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // If the item regains focus but is not controllable, it should not become
-  // active.
-  SimulateFocusGained(id, false);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // And the frozen timer should still fire after the initial 2.5 seconds is
-  // finished.
-  AdvanceClockMilliseconds(1400);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  AdvanceClockMilliseconds(200);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_FALSE(HasFrozenNotifications());
-}
-
-TEST_F(MediaNotificationServiceTest, ShowsAllInitialControllableSessions) {
-  base::UnguessableToken controllable1_id = base::UnguessableToken::Create();
-  base::UnguessableToken uncontrollable_id = base::UnguessableToken::Create();
-  base::UnguessableToken controllable2_id = base::UnguessableToken::Create();
-
-  std::vector<AudioFocusRequestStatePtr> requests;
-  requests.push_back(CreateFocusRequest(controllable1_id, true));
-  requests.push_back(CreateFocusRequest(uncontrollable_id, false));
-  requests.push_back(CreateFocusRequest(controllable2_id, true));
-
-  EXPECT_FALSE(HasActiveNotifications());
-
-  // Having controllable sessions should count as active.
-  SimulateReceivedAudioFocusRequests(std::move(requests));
-
-  SimulateNecessaryMetadata(controllable1_id);
-  SimulateNecessaryMetadata(uncontrollable_id);
-  SimulateNecessaryMetadata(controllable2_id);
-
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // If we open a dialog, it should be told to show the controllable sessions,
-  // but not the uncontrollable one.
-  MockMediaDialogDelegate dialog_delegate;
-
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(controllable1_id.ToString(), _));
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(uncontrollable_id.ToString(), _))
-      .Times(0);
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(controllable2_id.ToString(), _));
-  SimulateDialogOpened(&dialog_delegate);
-
-  // Ensure that we properly recorded the number of active sessions shown.
-  ExpectHistogramCountRecorded(2, 1);
-}
-
-TEST_F(MediaNotificationServiceTest, HideAfterTimeoutAndActiveAgainOnPlay) {
-  // First, start an active session.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, stop playing media so the session is frozen, but not yet hidden.
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kMediaSessionStopped, 0);
-  SimulateFocusLost(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kMediaSessionStopped, 0);
-
-  // If the time hasn't elapsed yet, the session should still be frozen.
-  AdvanceClockMilliseconds(2400);
-  EXPECT_TRUE(HasFrozenNotifications());
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kMediaSessionStopped, 0);
-
-  // Once the time is elapsed, the session should be hidden.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  AdvanceClockMilliseconds(200);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_FALSE(HasFrozenNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kMediaSessionStopped, 1);
-
-  // If media starts playing again, we should show and enable the button.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-}
-
-TEST_F(MediaNotificationServiceTest,
-       BecomesActiveIfMediaStartsPlayingWithinTimeout) {
-  // First, start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, stop playing media so the session is frozen, but hasn't been hidden
-  // yet.
-  SimulateFocusLost(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // If the time hasn't elapsed yet, we should still not be hidden.
-  AdvanceClockMilliseconds(2400);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // If media starts playing again, we should become active again.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-}
-
-TEST_F(MediaNotificationServiceTest, NewMediaSessionWhileDialogOpen) {
-  // First, start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, open a dialog.
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  SimulateDialogOpened(&dialog_delegate);
-  ExpectHistogramCountRecorded(1, 1);
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-
-  // Then, have a new media session start while the dialog is opened. This
-  // should update the dialog.
-  base::UnguessableToken new_id = base::UnguessableToken::Create();
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(new_id.ToString(), _));
-  SimulateFocusGained(new_id, true);
-  SimulateNecessaryMetadata(new_id);
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-
-  // If we close this dialog and open a new one, the new one should receive both
-  // media sessions immediately.
-  dialog_delegate.Close();
-  MockMediaDialogDelegate new_dialog;
-  EXPECT_CALL(new_dialog, ShowMediaSession(id.ToString(), _));
-  EXPECT_CALL(new_dialog, ShowMediaSession(new_id.ToString(), _));
-  SimulateDialogOpened(&new_dialog);
-  ExpectHistogramCountRecorded(1, 1);
-  ExpectHistogramCountRecorded(2, 1);
-}
-
-TEST_F(MediaNotificationServiceTest,
-       SessionIsRemovedImmediatelyWhenATabCloses) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, close the tab. The session should immediately be hidden.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kTabClosed, 0);
-  SimulateTabClosed(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_FALSE(HasFrozenNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kTabClosed, 1);
-}
-
-TEST_F(MediaNotificationServiceTest, DismissesMediaSession) {
-  // First, start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, open a dialog.
-  MockMediaDialogDelegate dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  SimulateDialogOpened(&dialog_delegate);
-
-  // Then, click the dismiss button. This should stop and hide the session.
-  EXPECT_CALL(dialog_delegate, HideMediaSession(id.ToString()));
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kUserDismissedNotification, 0);
-  SimulateDismissButtonClicked(id);
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kUserDismissedNotification, 1);
-}
-
-// TODO(https://crbug.com/1034406) Flaky on Mac10.12, Linux and Win10.
-#if defined(OS_MAC) || defined(OS_LINUX) || defined(OS_CHROMEOS) || \
-    defined(OS_WIN)
-#define MAYBE_CountCastSessionsAsActive DISABLED_CountCastSessionsAsActive
-#else
-#define MAYBE_CountCastSessionsAsActive CountCastSessionsAsActive
-#endif
-TEST_F(MediaNotificationServiceCastTest, MAYBE_CountCastSessionsAsActive) {
-  auto media_route = CreateMediaRoute("id");
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  EXPECT_FALSE(HasActiveNotifications());
-  SimulateMediaRoutesUpdate({media_route});
-  EXPECT_TRUE(HasActiveNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  SimulateMediaRoutesUpdate({});
-  EXPECT_FALSE(HasActiveNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
-}
-
-TEST_F(MediaNotificationServiceCastTest,
-       HideNotification_NewCastSessionStarted) {
-  // If a new cast session starts, hide the media dialog.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  SimulateDialogOpened(&dialog_delegate);
-  EXPECT_TRUE(HasOpenDialog());
-
-  auto presentation_manager =
-      std::make_unique<MockWebContentsPresentationManager>();
-  auto media_route = CreateMediaRoute("id");
-  auto* session = GetSession(id);
-  session->SetPresentationManagerForTesting(
-      presentation_manager.get()->GetWeakPtr());
-
-  EXPECT_CALL(observer(), OnMediaDialogClosed());
-  presentation_manager->NotifyMediaRoutesChanged({media_route});
-  EXPECT_FALSE(HasOpenDialog());
-
-  task_environment()->RunUntilIdle();
-}
-
-TEST_F(MediaNotificationServiceCastTest, ShowCastSessions) {
-  // Show a cast session
-  testing::NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  const std::string route_id = "route_id";
-  SimulateMediaRoutesUpdate({CreateMediaRoute(route_id)});
-
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(route_id, _));
-  SimulateDialogOpened(&dialog_delegate);
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-}
-
+// CastMediaNotificationProducer is owned by
+// CastMediaNotificationProducerKeyedService in Ash.
+#if !BUILDFLAG(IS_CHROMEOS)
 TEST_F(MediaNotificationServiceCastTest,
        ShowCastSessionsForPresentationRequest) {
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
+  NiceMock<global_media_controls::test::MockMediaDialogDelegate>
+      dialog_delegate;
 
   std::unique_ptr<content::WebContents> web_contents_1(
       content::RenderViewHostTestHarness::CreateTestWebContents());
@@ -840,23 +343,24 @@ TEST_F(MediaNotificationServiceCastTest,
   // GetMediaRoutes() so that MediaNotificationService associates
   // |web_contents_1| with the cast notification.
   SetMediaRoutesManagedByPresentationManager({media_route});
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id_1, _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(id_1, _));
   SimulateDialogOpenedForPresentationRequest(&dialog_delegate,
                                              web_contents_1.get());
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
   // Open the dialog from |web_contents_2|, which has a media session
   // notification and no cast session notification.
   SetMediaRoutesManagedByPresentationManager({});
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id_2.ToString(), _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(id_2.ToString(), _));
   SimulateDialogOpenedForPresentationRequest(&dialog_delegate,
                                              web_contents_2.get());
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
+  SimulateCloseDialog();
 }
+#endif
 
-TEST_F(MediaNotificationServiceCastTest,
-       ShowMediaSessionsForPresentationRequest) {
+TEST_F(MediaNotificationServiceCastTest, ShowMediaItemsForPresentationRequest) {
   std::unique_ptr<content::WebContents> web_contents_1(
       content::RenderViewHostTestHarness::CreateTestWebContents());
   std::unique_ptr<content::WebContents> web_contents_2(
@@ -870,46 +374,52 @@ TEST_F(MediaNotificationServiceCastTest,
 
   // If the dialog is opened for a presentation request from |web_contents_1|,
   // only the media session with |id_1| should show up.
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id_1.ToString(), _));
+  NiceMock<global_media_controls::test::MockMediaDialogDelegate>
+      dialog_delegate;
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(id_1.ToString(), _));
   SimulateDialogOpenedForPresentationRequest(&dialog_delegate,
                                              web_contents_1.get());
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
   // If the dialog is opened for a presentation request from |web_contents_2|,
   // only the media session with |id_2| should show up.
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id_2.ToString(), _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(id_2.ToString(), _));
   SimulateDialogOpenedForPresentationRequest(&dialog_delegate,
                                              web_contents_2.get());
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
+  SimulateCloseDialog();
 }
 
+// SupplementalDevicePickerProducer is not owned by MediaNotificationService
+// on Chrome OS.
+#if !BUILDFLAG(IS_CHROMEOS)
 TEST_F(MediaNotificationServiceCastTest, ShowSupplementalNotifications) {
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
+  NiceMock<global_media_controls::test::MockMediaDialogDelegate>
+      dialog_delegate;
   // Do not show a supplemental notification if there is no start presentation
   // request context.
   EXPECT_FALSE(GetSupplementalNotification());
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(_, _)).Times(0);
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(_, _)).Times(0);
   SimulateDialogOpened(&dialog_delegate);
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
-  // Create a PresentationRequestNotificationItem.
+  // Create a SupplementalDevicePickerItem.
   auto supplemental_notification_id = SimulateSupplementalNotification();
 
   // Open the dialog and a supplemental notification should show up.
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(supplemental_notification_id, _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(supplemental_notification_id, _));
   SimulateDialogOpened(&dialog_delegate);
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(supplemental_notification_id, _));
+  // Closing the dialog has deleted the notification. Create another one.
+  supplemental_notification_id = SimulateSupplementalNotification();
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(supplemental_notification_id, _));
   SimulateDialogOpenedForPresentationRequest(&dialog_delegate, web_contents());
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
   // If there are notifications from other WebContents, still show dummy
   // notifications.
@@ -917,37 +427,35 @@ TEST_F(MediaNotificationServiceCastTest, ShowSupplementalNotifications) {
       content::RenderViewHostTestHarness::CreateTestWebContents());
   auto media_session_id =
       SimulatePlayingControllableMediaForWebContents(test_web_contents.get());
+  supplemental_notification_id = SimulateSupplementalNotification();
   // Create a cast session not associated with any WebContents.
   const std::string route_id = "route_id";
   SimulateMediaRoutesUpdate({CreateMediaRoute(route_id)});
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(route_id, _));
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(media_session_id.ToString(), _));
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(supplemental_notification_id, _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(route_id, _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(media_session_id.ToString(), _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(supplemental_notification_id, _));
   SimulateDialogOpened(&dialog_delegate);
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 }
 
 TEST_F(MediaNotificationServiceCastTest, HideSupplementalNotifications) {
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  auto supplemental_notification_id = SimulateSupplementalNotification();
+  NiceMock<global_media_controls::test::MockMediaDialogDelegate>
+      dialog_delegate;
+  SimulateSupplementalNotification();
   // If there is a media session, hide the supplemental notification.
   auto media_session_id =
       SimulatePlayingControllableMediaForWebContents(web_contents());
 
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(media_session_id.ToString(), _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(media_session_id.ToString(), _));
   SimulateDialogOpened(&dialog_delegate);
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(media_session_id.ToString(), _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(media_session_id.ToString(), _));
   SimulateDialogOpenedForPresentationRequest(&dialog_delegate, web_contents());
   testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
   SimulateFocusLost(media_session_id);
   // If there is a cast session, hide the supplemental notification.
@@ -955,375 +463,442 @@ TEST_F(MediaNotificationServiceCastTest, HideSupplementalNotifications) {
   SimulateMediaRoutesUpdate({media_route});
 
   SetMediaRoutesManagedByPresentationManager({media_route});
-  service()->OnCastNotificationsChanged();
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(media_route.media_route_id(), _));
+  service()->media_item_manager()->OnItemsChanged();
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(media_route.media_route_id(), _));
   SimulateDialogOpened(&dialog_delegate);
-  testing::Mock::VerifyAndClearExpectations(&observer());
-  dialog_delegate.Close();
+  SimulateCloseDialog();
 
-  EXPECT_CALL(dialog_delegate,
-              ShowMediaSession(media_route.media_route_id(), _));
+  EXPECT_CALL(dialog_delegate, ShowMediaItem(media_route.media_route_id(), _));
   SimulateDialogOpened(&dialog_delegate);
-  testing::Mock::VerifyAndClearExpectations(&observer());
+  SimulateCloseDialog();
 }
 
-// Regression test for https://crbug.com/1015903: we could end up in a
-// situation where the toolbar icon was disabled indefinitely.
-TEST_F(MediaNotificationServiceTest, LoseGainLoseDoesNotCauseRaceCondition) {
-  // First, start an active session and include artwork.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  SimulateHasArtwork(id);
-  EXPECT_TRUE(HasActiveNotifications());
+TEST_F(MediaNotificationServiceCastTest,
+       OnStartPresentationContextCreated_ForPresentationRequestNotifications) {
+  // If there does not exist an active notification, pass the
+  // StartPresentationContext to SupplementalDevicePickerProducer.
+  service()->OnStartPresentationContextCreated(
+      CreateStartPresentationContext(CreatePresentationRequest()));
+  auto supplemental_notification = GetSupplementalNotification();
+  EXPECT_TRUE(supplemental_notification);
+  EXPECT_FALSE(supplemental_notification->is_default_presentation_request());
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
-  // Then, stop playing media so the session is frozen, but hasn't been hidden
-  // yet.
-  SimulateFocusLost(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
+TEST_F(MediaNotificationServiceCastTest,
+       OnStartPresentationContextCreated_ForMediaSessionNotifications) {
+  SimulatePlayingControllableMediaForWebContents(web_contents());
+  base::MockCallback<content::PresentationConnectionErrorCallback>
+      mock_error_cb;
+  auto context = CreateStartPresentationContext(
+      CreatePresentationRequest(), base::DoNothing(), mock_error_cb.Get());
+  auto* context_ptr = context.get();
 
-  // Simulate no artwork, so we wait for new artwork.
-  SimulateHasNoArtwork(id);
+  // If there only exists a media session notification, pass |context| to
+  // global_media_controls::MediaSessionItemProducer.
+  EXPECT_CALL(mock_error_cb, Run).Times(0);
+  service()->OnStartPresentationContextCreated(std::move(context));
 
-  // Simulate regaining focus, but no artwork yet so we wait.
-  SimulateFocusGained(id, true);
-  SimulateNecessaryMetadata(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // Then, lose focus again before getting artwork.
-  SimulateFocusLost(id);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(HasFrozenNotifications());
-
-  // When the freeze timer fires, we should be hidden.
-  EXPECT_CALL(observer(), OnNotificationListChanged()).Times(AtLeast(1));
-  AdvanceClockMilliseconds(2600);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_FALSE(HasFrozenNotifications());
-  testing::Mock::VerifyAndClearExpectations(&observer());
+  // Invoke callback before |mock_error_cb| is deleted.
+  testing::Mock::VerifyAndClearExpectations(&mock_error_cb);
+  context_ptr->InvokeErrorCallback(blink::mojom::PresentationError(
+      blink::mojom::PresentationErrorType::PRESENTATION_REQUEST_CANCELLED, ""));
 }
 
-TEST_F(MediaNotificationServiceTest, ShowsOverlayForDraggedOutNotifications) {
-  // First, start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
+TEST_F(MediaNotificationServiceCastTest,
+       OnStartPresentationContextCreated_ForCastNotifications) {
+  auto media_route = CreateMediaRoute("route_id");
+  SetMediaRoutesManagedByPresentationManager({media_route});
 
-  // Then, open a dialog.
-  MockMediaDialogDelegate dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
+  // If there exists cast notifications, |context| will not be passed to any
+  // notification producer and its error callback should be evoked.
+  base::MockCallback<content::PresentationConnectionErrorCallback>
+      mock_error_cb;
+  EXPECT_CALL(mock_error_cb, Run);
+  service()->OnStartPresentationContextCreated(CreateStartPresentationContext(
+      CreatePresentationRequest(), base::DoNothing(), mock_error_cb.Get()));
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       OnStartPresentationContextCreated_ForRemovedWebContents) {
+  // If the StartPresentationContext is from a WebContents that has been
+  // removed, its error callback should be evoked.
+  base::MockCallback<content::PresentationConnectionErrorCallback>
+      mock_error_cb;
+  auto context = CreateStartPresentationContext(
+      CreatePresentationRequest(), base::DoNothing(), mock_error_cb.Get());
+  EXPECT_CALL(mock_error_cb, Run);
+  DeleteContents();
+  service()->OnStartPresentationContextCreated(std::move(context));
+}
+
+TEST_F(MediaNotificationServiceCastTest, GetDeviceListHostForSession) {
+  mojo::Remote<mojom::DeviceListHost> host_remote;
+  MockDeviceListClient client;
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  service()->GetDeviceListHostForSession(
+      id.ToString(), TakeReceiverAndExpectNoDisconnect(host_remote),
+      TakeRemoteAndExpectNoDisconnect(client.receiver()));
+  host_remote.FlushForTesting();
+  client.receiver().FlushForTesting();
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       DisconnectOnGetDeviceListHostForInvalidSession) {
+  mojo::Remote<mojom::DeviceListHost> host_remote;
+  MockDeviceListClient client;
+  service()->GetDeviceListHostForSession(
+      "invalid_id", TakeReceiverAndExpectDisconnect(host_remote),
+      TakeRemoteAndExpectDisconnect(client.receiver()));
+  host_remote.FlushForTesting();
+  client.receiver().FlushForTesting();
+}
+
+TEST_F(MediaNotificationServiceCastTest, GetDeviceListHostForPresentation) {
+  mojo::Remote<mojom::DeviceListHost> host_remote;
+  MockDeviceListClient client;
+  service()->OnStartPresentationContextCreated(
+      CreateStartPresentationContext(CreatePresentationRequest()));
+  service()->GetDeviceListHostForPresentation(
+      TakeReceiverAndExpectNoDisconnect(host_remote),
+      TakeRemoteAndExpectNoDisconnect(client.receiver()));
+  host_remote.FlushForTesting();
+  client.receiver().FlushForTesting();
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       DisconnectOnGetDeviceListHostForNonexistentPresentation) {
+  mojo::Remote<mojom::DeviceListHost> host_remote;
+  MockDeviceListClient client;
+  service()->GetDeviceListHostForPresentation(
+      TakeReceiverAndExpectDisconnect(host_remote),
+      TakeRemoteAndExpectDisconnect(client.receiver()));
+  host_remote.FlushForTesting();
+  client.receiver().FlushForTesting();
+}
+
+TEST_F(MediaNotificationServiceCastTest, DeleteDeviceListHostOnShutdown) {
+  mojo::Remote<mojom::DeviceListHost> host_remote;
+  MockDeviceListClient client;
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  service()->GetDeviceListHostForSession(
+      id.ToString(), TakeReceiverAndExpectDisconnect(host_remote),
+      TakeRemoteAndExpectDisconnect(client.receiver()));
+
+  // Shutdown() should cause a disconnect, fulfilling the expectations in
+  // TakeReceiver...() and TakeRemote...() above.
+  service()->Shutdown();
+  host_remote.FlushForTesting();
+  client.receiver().FlushForTesting();
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       CreateCastDialogControllerWithRemotePlayback) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(media::kMediaRemotingWithoutFullscreen);
+
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  auto* session_item = GetNotificationSessionItem(id);
+  ASSERT_NE(nullptr, session_item);
+
+  // At this point `session_item` has no RemotePlaybackMetadata and there's no
+  // default MediaSource.
+  std::unique_ptr<media_router::CastDialogController> controller_presentation =
+      CreateCastDialogControllerForSession(id.ToString());
+  std::unique_ptr<media_router::MediaRouteStarter> starter =
+      controller_presentation->TakeMediaRouteStarter();
+  const auto* query_result_manager = starter->GetQueryResultManagerForTesting();
+  EXPECT_TRUE(query_result_manager->GetSupportedCastModes().empty());
+
+  // Send MediaSessionInfo with RemotePlaybackMetadata to `session_item`.
+  auto session_info = MediaSessionInfo::New();
+  session_info->remote_playback_metadata =
+      media_session::mojom::RemotePlaybackMetadata::New("vp8", "opus", false,
+                                                        false, "", false);
+  session_info->is_controllable = true;
+  session_item->MediaSessionInfoChanged(std::move(session_info));
+
+  std::unique_ptr<media_router::CastDialogController>
+      controller_remote_playback =
+          CreateCastDialogControllerForSession(id.ToString());
+  starter = controller_remote_playback->TakeMediaRouteStarter();
+  query_result_manager = starter->GetQueryResultManagerForTesting();
+  const media_router::CastModeSet mode = {
+      media_router::MediaCastMode::REMOTE_PLAYBACK};
+  EXPECT_EQ(mode, query_result_manager->GetSupportedCastModes());
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       CreateCastDialogControllerWithMultipleSessions) {
+  // Set up the first WebContents and session.
+  std::unique_ptr<content::WebContents> first_contents(
+      content::RenderViewHostTestHarness::CreateTestWebContents());
+  auto first_id =
+      SimulatePlayingControllableMediaForWebContents(first_contents.get());
+
+  // Set up the second WebContents and session.
+  std::unique_ptr<content::WebContents> second_contents(
+      content::RenderViewHostTestHarness::CreateTestWebContents());
+  auto second_id =
+      SimulatePlayingControllableMediaForWebContents(second_contents.get());
+
+  // The second session initiates a cast request.
+  auto second_request = content::PresentationRequest(
+      second_contents->GetPrimaryMainFrame()->GetGlobalId(), {GURL(), GURL()},
+      url::Origin::Create(GURL()));
+  auto context = CreateStartPresentationContext(second_request);
+
+  // Pass the second session's context to the service.
+  service()->OnStartPresentationContextCreated(std::move(context));
+  EXPECT_TRUE(HasPresentationContext());
+
+  // Try to create a CastDialogController for the first session.
+  // It should NOT consume the context because of origin mismatch.
+  std::unique_ptr<media_router::CastDialogController> controller_first =
+      CreateCastDialogControllerForSession(first_id.ToString());
+  EXPECT_TRUE(HasPresentationContext());
+
+  // Creating it for the second session SHOULD consume the context.
+  std::unique_ptr<media_router::CastDialogController> controller_second =
+      CreateCastDialogControllerForSession(second_id.ToString());
+  EXPECT_FALSE(HasPresentationContext());
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       GetDeviceListHostForSessionWithMultipleSessions) {
+  // Set up the first WebContents and session.
+  std::unique_ptr<content::WebContents> first_contents(
+      content::RenderViewHostTestHarness::CreateTestWebContents());
+  auto first_id =
+      SimulatePlayingControllableMediaForWebContents(first_contents.get());
+
+  // Set up the second WebContents and session.
+  std::unique_ptr<content::WebContents> second_contents(
+      content::RenderViewHostTestHarness::CreateTestWebContents());
+  auto second_id =
+      SimulatePlayingControllableMediaForWebContents(second_contents.get());
+
+  // The second session initiates a cast request.
+  auto second_request = content::PresentationRequest(
+      second_contents->GetPrimaryMainFrame()->GetGlobalId(), {GURL(), GURL()},
+      url::Origin::Create(GURL()));
+  auto context = CreateStartPresentationContext(second_request);
+
+  // Pass the second session's context to the service.
+  service()->OnStartPresentationContextCreated(std::move(context));
+  EXPECT_TRUE(HasPresentationContext());
+
+  // Get DeviceListHost for the first session (mismatched presentation context).
+  // It should NOT consume the context.
+  mojo::Remote<mojom::DeviceListHost> host_remote_1;
+  MockDeviceListClient client_1;
+  service()->GetDeviceListHostForSession(
+      first_id.ToString(), TakeReceiverAndExpectNoDisconnect(host_remote_1),
+      TakeRemoteAndExpectNoDisconnect(client_1.receiver()));
+  host_remote_1.FlushForTesting();
+  client_1.receiver().FlushForTesting();
+  EXPECT_TRUE(HasPresentationContext());
+
+  // Get DeviceListHost for the second session (matched presentation context).
+  // It should consume the context.
+  mojo::Remote<mojom::DeviceListHost> host_remote_2;
+  MockDeviceListClient client_2;
+  service()->GetDeviceListHostForSession(
+      second_id.ToString(), TakeReceiverAndExpectNoDisconnect(host_remote_2),
+      TakeRemoteAndExpectNoDisconnect(client_2.receiver()));
+  host_remote_2.FlushForTesting();
+  client_2.receiver().FlushForTesting();
+  EXPECT_FALSE(HasPresentationContext());
+}
+
+TEST_F(MediaNotificationServiceCastTest,
+       OrphanedPresentationContextIsCleanedUp) {
+  std::unique_ptr<content::WebContents> contents(
+      content::RenderViewHostTestHarness::CreateTestWebContents());
+  auto id = SimulatePlayingControllableMediaForWebContents(contents.get());
+
+  auto request = content::PresentationRequest(
+      contents->GetPrimaryMainFrame()->GetGlobalId(), {GURL(), GURL()},
+      url::Origin::Create(GURL()));
+  auto context = CreateStartPresentationContext(request);
+
+  // Pass the context to the service.
+  service()->OnStartPresentationContextCreated(std::move(context));
+  EXPECT_TRUE(HasPresentationContext());
+
+  // Delete the WebContents. This destroys the RenderFrameHost as well.
+  contents.reset();
+
+  // Get DeviceListHost for the session. Since the initiator_rfh is now null
+  // (orphaned), calling GetDeviceListHostForSession should reset the context.
+  mojo::Remote<mojom::DeviceListHost> host_remote;
+  MockDeviceListClient client;
+  service()->GetDeviceListHostForSession(
+      id.ToString(), TakeReceiverAndExpectDisconnect(host_remote),
+      TakeRemoteAndExpectDisconnect(client.receiver()));
+  host_remote.FlushForTesting();
+  client.receiver().FlushForTesting();
+
+  EXPECT_FALSE(HasPresentationContext());
+}
+
+TEST_F(MediaNotificationServiceCastTest, RequestMediaRemoting) {
+  service()->OnMediaRemotingRequested("invalid_item_id");
+  auto id = base::UnguessableToken::Create();
+  SimulatePlayingControllableMedia(id);
+  // TODO(takumif): Confirm that this calls the MediaNotificationItem.
+  service()->OnMediaRemotingRequested(id.ToString());
+}
+
+TEST_F(MediaNotificationServiceCastTest, OnSinksDiscoveredForLocalMedia) {
+  // Playing the media.
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+
+  NiceMock<global_media_controls::test::MockMediaDialogDelegate>
+      dialog_delegate;
+
+  // Opening the dialog.
   SimulateDialogOpened(&dialog_delegate);
 
-  // Drag out the notification.
-  MockOverlayMediaNotification* overlay_notification =
-      SimulateNotificationDraggedOut(id, &dialog_delegate);
+  service()->OnSinksDiscovered(id.ToString());
+  EXPECT_FALSE(service()->should_show_cast_local_media_iph());
 
-  // Now, dismiss the notification. Since the notification is an overlay
-  // notification, this should just close the overlay notification.
-  EXPECT_CALL(*overlay_notification, CloseNotification());
-  SimulateDismissButtonClicked(id);
-  testing::Mock::VerifyAndClearExpectations(overlay_notification);
+  // Navigating to a page with local media.
+  NavigateAndCommit(GURL("file:///example.mp4"));
 
-  // After we close, we notify our manager, and the dialog should be informed
-  // that it can show the notification again.
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  overlay_notification->manager()->OnOverlayNotificationClosed(id.ToString());
-  testing::Mock::VerifyAndClearExpectations(&dialog_delegate);
+  service()->OnSinksDiscovered(id.ToString());
+  EXPECT_TRUE(service()->should_show_cast_local_media_iph());
 }
 
-TEST_F(MediaNotificationServiceTest, HidesInactiveNotifications) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
+TEST_F(MediaNotificationServiceCastTest, PresentationRequestOriginLifecycle) {
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  auto* item = GetNotificationSessionItem(id);
+  ASSERT_TRUE(item);
+  EXPECT_FALSE(item->optional_presentation_request_origin().has_value());
 
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
+  content::PresentationRequest presentation_request(
+      main_rfh()->GetGlobalId(),
+      {GURL("https://example.com"), GURL("https://example.com")},
+      url::Origin::Create(GURL("https://example.com")));
+  auto context = CreateStartPresentationContext(presentation_request);
+  auto origin = context->presentation_request().frame_origin;
+  service()->OnStartPresentationContextCreated(std::move(context));
 
-  // After 59 minutes, the notification should still be there.
-  AdvanceClockMinutes(59);
-  EXPECT_TRUE(HasActiveNotifications());
+  // The origin override is set and the context is alive.
+  EXPECT_EQ(item->optional_presentation_request_origin(), origin);
+  EXPECT_TRUE(HasPresentationContextForSession(id.ToString()));
 
-  // But once it's been inactive for over an hour, it should disappear.
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kInactiveTimeout, 0);
-  AdvanceClockMinutes(2);
-  EXPECT_FALSE(HasActiveNotifications());
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kInactiveTimeout, 1);
-
-  // Since the user never interacted with the media before it was paused, we
-  // should not have recorded any post-pause interactions.
-  ExpectEmptyInteractionHistogram();
-
-  // If we now close the tab, then it shouldn't record that as the dismiss
-  // reason, since we already recorded a reason.
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kTabClosed, 0);
-
-  SimulateTabClosed(id);
-
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kTabClosed, 0);
+  // Creating the cast dialog controller consumes the context, so the origin
+  // override is reset.
+  auto dialog_controller = CreateCastDialogControllerForSession(id.ToString());
+  EXPECT_FALSE(item->optional_presentation_request_origin().has_value());
 }
 
-TEST_F(MediaNotificationServiceTest, InactiveBecomesActive_PlayPause) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
+TEST_F(MediaNotificationServiceCastTest,
+       PresentationRequestOriginNotResetByNewDummyRequest) {
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  auto* item = GetNotificationSessionItem(id);
+  ASSERT_TRUE(item);
+  EXPECT_FALSE(item->optional_presentation_request_origin().has_value());
 
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
-  EXPECT_FALSE(IsSessionInactive(id));
+  content::PresentationRequest presentation_request1(
+      main_rfh()->GetGlobalId(),
+      {GURL("https://example.com"), GURL("https://example.com")},
+      url::Origin::Create(GURL("https://example.com")));
+  auto context1 = CreateStartPresentationContext(presentation_request1);
+  auto origin1 = context1->presentation_request().frame_origin;
+  service()->OnStartPresentationContextCreated(std::move(context1));
 
-  // Let the notification become inactive.
-  AdvanceClockMinutes(70);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(IsSessionInactive(id));
+  // The origin override is set and the context is alive.
+  EXPECT_EQ(item->optional_presentation_request_origin(), origin1);
+  EXPECT_TRUE(HasPresentationContextForSession(id.ToString()));
 
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(70),
-                                            0);
+  // Create a second WebContents and a second presentation request for it.
+  // There is no controllable media on this second WebContents.
+  std::unique_ptr<content::WebContents> web_contents2(CreateTestWebContents());
+  content::PresentationRequest presentation_request2(
+      web_contents2->GetPrimaryMainFrame()->GetGlobalId(),
+      {GURL("https://example2.com"), GURL("https://example2.com")},
+      url::Origin::Create(GURL("https://example2.com")));
+  auto context2 = CreateStartPresentationContext(presentation_request2);
 
-  // Then, play the media. The notification should become active.
-  SimulatePlaybackStateChanged(id, true);
+  // When we send the second request, since it doesn't have an active
+  // controllable session on web_contents2, it should go to
+  // presentation_request_notification_producer_ and we expect the previous
+  // presentation context for web_contents1 to remain intact.
+  service()->OnStartPresentationContextCreated(std::move(context2));
 
-  // We should have recorded an interaction even though the timer has
-  // finished.
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(70),
-                                            1);
-  EXPECT_TRUE(HasActiveNotifications());
-  EXPECT_FALSE(IsSessionInactive(id));
+  // The origin override on the first item should remain unchanged.
+  EXPECT_EQ(item->optional_presentation_request_origin(), origin1);
+  EXPECT_TRUE(HasPresentationContextForSession(id.ToString()));
 }
 
-TEST_F(MediaNotificationServiceTest, InactiveBecomesActive_Seeking) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
+TEST_F(MediaNotificationServiceCastTest,
+       HasPresentationContextForSessionWithInactiveFrame) {
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  auto* item = GetNotificationSessionItem(id);
+  ASSERT_TRUE(item);
+  EXPECT_FALSE(item->optional_presentation_request_origin().has_value());
 
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
-  EXPECT_FALSE(IsSessionInactive(id));
+  content::PresentationRequest presentation_request(
+      main_rfh()->GetGlobalId(),
+      {GURL("https://example.com"), GURL("https://example.com")},
+      url::Origin::Create(GURL("https://example.com")));
+  auto context = CreateStartPresentationContext(presentation_request);
+  auto origin = context->presentation_request().frame_origin;
+  service()->OnStartPresentationContextCreated(std::move(context));
 
-  // Let the notification become inactive.
-  AdvanceClockMinutes(70);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(IsSessionInactive(id));
+  // The origin override is set and the context is alive.
+  EXPECT_EQ(item->optional_presentation_request_origin(), origin);
+  EXPECT_TRUE(HasPresentationContextForSession(id.ToString()));
 
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(70),
-                                            0);
+  // Simulate the WebContents being deleted.
+  DeleteContents();
 
-  // Then, seek the media. The notification should become active.
-  SimulateMediaSeeked(id);
-
-  // We should have recorded an interaction even though the timer has
-  // finished.
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(70),
-                                            1);
-  EXPECT_TRUE(HasActiveNotifications());
-  EXPECT_FALSE(IsSessionInactive(id));
-
-  // If we don't interact again, the notification should become inactive
-  // again.
-  AdvanceClockMinutes(70);
-  EXPECT_FALSE(HasActiveNotifications());
-  EXPECT_TRUE(IsSessionInactive(id));
+  // The session no longer has a presentation context because the initiating
+  // frame is deleted.
+  EXPECT_FALSE(HasPresentationContextForSession(id.ToString()));
 }
 
-TEST_F(MediaNotificationServiceTest, DelaysHidingNotifications_PlayPause) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
+TEST_F(MediaNotificationServiceTest, SaveVideoFrameIphTimer) {
+  auto id = SimulatePlayingControllableMediaForWebContents(web_contents());
+  std::string id_str = id.ToString();
 
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
+  media_session::mojom::MediaSessionInfoPtr session_info =
+      media_session::mojom::MediaSessionInfo::New();
+  session_info->playback_state =
+      media_session::mojom::MediaPlaybackState::kPlaying;
 
-  // After 59 minutes, the notification should still be there.
-  AdvanceClockMinutes(59);
-  EXPECT_TRUE(HasActiveNotifications());
+  std::vector<media_session::mojom::MediaSessionAction> actions = {
+      media_session::mojom::MediaSessionAction::kSaveVideoFrame};
 
-  // If we start playing again, we should not hide the notification, even
-  // after an hour.
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(59),
-                                            0);
-  SimulatePlaybackStateChanged(id, true);
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(59),
-                                            1);
-  AdvanceClockMinutes(2);
-  EXPECT_TRUE(HasActiveNotifications());
+  media_session::MediaPosition position(
+      /*playback_rate=*/1.0, /*duration=*/base::Seconds(600),
+      /*position=*/base::Seconds(5), /*end_of_media=*/false);
 
-  // If we pause again, it should hide after an hour.
-  SimulatePlaybackStateChanged(id, false);
-  AdvanceClockMinutes(61);
-  EXPECT_FALSE(HasActiveNotifications());
-}
+  service()->OnMediaSessionInfoChanged(id_str, session_info->Clone());
+  service()->OnMediaSessionActionsChanged(id_str, actions);
+  service()->OnMediaSessionPositionChanged(id_str, position);
 
-TEST_F(MediaNotificationServiceTest, DelaysHidingNotifications_Interactions) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
+  // Advance time by 5 seconds (timer is 10 seconds).
+  task_environment()->FastForwardBy(base::Seconds(5));
 
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
+  // If playback pauses before 10 seconds, the timer should stop.
+  session_info->playback_state =
+      media_session::mojom::MediaPlaybackState::kPaused;
+  service()->OnMediaSessionInfoChanged(id_str, session_info->Clone());
 
-  // After 59 minutes, the notification should still be there.
-  AdvanceClockMinutes(59);
-  EXPECT_TRUE(HasActiveNotifications());
+  // Resume playback.
+  session_info->playback_state =
+      media_session::mojom::MediaPlaybackState::kPlaying;
+  service()->OnMediaSessionInfoChanged(id_str, session_info->Clone());
 
-  // If the user clicks to go back to the tab, it should reset the hide timer.
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(59),
-                                            0);
-  SimulateNotificationClicked(id);
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(59),
-                                            1);
-  AdvanceClockMinutes(50);
-  EXPECT_TRUE(HasActiveNotifications());
+  // Advance time by 10 seconds; timer completes.
+  task_environment()->FastForwardBy(base::Seconds(10));
 
-  // If the user seeks the media before an hour is up, it should reset the
-  // hide timer.
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(50),
-                                            0);
-  SimulateMediaSeeked(id);
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(50),
-                                            1);
-  AdvanceClockMinutes(59);
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // After the hour has passed, the notification should hide.
-  AdvanceClockMinutes(2);
-  EXPECT_FALSE(HasActiveNotifications());
-}
-
-TEST_F(MediaNotificationServiceTest,
-       DelaysHidingNotifications_OverlayThenPause) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, open a dialog.
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  SimulateDialogOpened(&dialog_delegate);
-
-  // Then, pull out the notification into an overlay notification.
-  MockOverlayMediaNotification* overlay_notification =
-      SimulateNotificationDraggedOut(id, &dialog_delegate);
-
-  // Then, pause the media.
-  SimulatePlaybackStateChanged(id, false);
-
-  // Since the notification is in an overlay, it should never time out as
-  // inactive.
-  AdvanceClockMinutes(61);
-  EXPECT_FALSE(IsSessionInactive(id));
-
-  // Now, close the overlay notification.
-  overlay_notification->manager()->OnOverlayNotificationClosed(id.ToString());
-
-  // The notification should become inactive now that it's not in an overlay.
-  AdvanceClockMinutes(61);
-  EXPECT_TRUE(IsSessionInactive(id));
-}
-
-TEST_F(MediaNotificationServiceTest,
-       DelaysHidingNotifications_PauseThenOverlay) {
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, pause the media.
-  SimulatePlaybackStateChanged(id, false);
-
-  // Then, open a dialog.
-  NiceMock<MockMediaDialogDelegate> dialog_delegate;
-  EXPECT_CALL(dialog_delegate, ShowMediaSession(id.ToString(), _));
-  SimulateDialogOpened(&dialog_delegate);
-
-  // Then, pull out the notification into an overlay notification.
-  MockOverlayMediaNotification* overlay_notification =
-      SimulateNotificationDraggedOut(id, &dialog_delegate);
-
-  // Since the notification is in an overlay, it should never time out as
-  // inactive.
-  AdvanceClockMinutes(61);
-  EXPECT_FALSE(IsSessionInactive(id));
-
-  // Now, close the overlay notification.
-  overlay_notification->manager()->OnOverlayNotificationClosed(id.ToString());
-
-  // The notification should become inactive now that it's not in an overlay.
-  AdvanceClockMinutes(61);
-  EXPECT_TRUE(IsSessionInactive(id));
-}
-
-TEST_F(MediaNotificationServiceTest, HidingNotification_FeatureDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      media::kGlobalMediaControlsAutoDismiss);
-
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // After 61 minutes, the notification should still be there.
-  AdvanceClockMinutes(61);
-  EXPECT_TRUE(HasActiveNotifications());
-
-  ExpectHistogramDismissReasonRecorded(
-      GlobalMediaControlsDismissReason::kInactiveTimeout, 0);
-
-  // Since the user never interacted with the media before it was paused, we
-  // should not have recorded any post-pause interactions.
-  ExpectEmptyInteractionHistogram();
-
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(61),
-                                            0);
-  SimulatePlaybackStateChanged(id, true);
-  ExpectHistogramInteractionDelayAfterPause(base::TimeDelta::FromMinutes(61),
-                                            1);
-}
-
-TEST_F(MediaNotificationServiceTest, HidingNotification_TimerParams) {
-  const int kTimerInMinutes = 6;
-  base::test::ScopedFeatureList scoped_feature_list;
-  base::FieldTrialParams params;
-  params["timer_in_minutes"] = base::NumberToString(kTimerInMinutes);
-
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      media::kGlobalMediaControlsAutoDismiss, params);
-
-  // Start playing active media.
-  base::UnguessableToken id = SimulatePlayingControllableMedia();
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // Then, pause the media. We should still have the active notification.
-  SimulatePlaybackStateChanged(id, false);
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // After (kTimerInMinutes-1) minutes, the notification should still be
-  // there.
-  AdvanceClockMinutes(kTimerInMinutes - 1);
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // If we start playing again, we should not hide the notification, even
-  // after kTimerInMinutes.
-  ExpectHistogramInteractionDelayAfterPause(
-      base::TimeDelta::FromMinutes(kTimerInMinutes - 1), 0);
-  SimulatePlaybackStateChanged(id, true);
-  ExpectHistogramInteractionDelayAfterPause(
-      base::TimeDelta::FromMinutes(kTimerInMinutes - 1), 1);
-  AdvanceClockMinutes(2);
-  EXPECT_TRUE(HasActiveNotifications());
-
-  // If we pause again, it should hide after kTimerInMinutes.
-  SimulatePlaybackStateChanged(id, false);
-  AdvanceClockMinutes(kTimerInMinutes + 1);
-  EXPECT_FALSE(HasActiveNotifications());
+  // Pausing after 10 seconds of uninterrupted playback should evaluate/show IPH
+  // without crashing.
+  session_info->playback_state =
+      media_session::mojom::MediaPlaybackState::kPaused;
+  service()->OnMediaSessionInfoChanged(id_str, session_info->Clone());
 }

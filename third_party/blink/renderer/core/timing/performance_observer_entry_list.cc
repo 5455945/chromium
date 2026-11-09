@@ -1,10 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/timing/performance_observer_entry_list.h"
 
 #include <algorithm>
+
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
@@ -19,7 +20,7 @@ PerformanceObserverEntryList::~PerformanceObserverEntryList() = default;
 PerformanceEntryVector PerformanceObserverEntryList::getEntries() const {
   PerformanceEntryVector entries;
 
-  entries.AppendVector(performance_entries_);
+  entries.append_range(performance_entries_);
 
   std::sort(entries.begin(), entries.end(),
             PerformanceEntry::StartTimeCompareLessThan);
@@ -32,8 +33,9 @@ PerformanceEntryVector PerformanceObserverEntryList::getEntriesByType(
   PerformanceEntry::EntryType type =
       PerformanceEntry::ToEntryTypeEnum(entry_type);
 
-  if (type == PerformanceEntry::kInvalid)
+  if (type == PerformanceEntry::kInvalid) {
     return entries;
+  }
 
   for (const auto& entry : performance_entries_) {
     if (entry->EntryTypeEnum() == type) {
@@ -53,8 +55,9 @@ PerformanceEntryVector PerformanceObserverEntryList::getEntriesByName(
   PerformanceEntry::EntryType type =
       PerformanceEntry::ToEntryTypeEnum(entry_type);
 
-  if (!entry_type.IsNull() && type == PerformanceEntry::kInvalid)
+  if (!entry_type.IsNull() && type == PerformanceEntry::kInvalid) {
     return entries;
+  }
 
   for (const auto& entry : performance_entries_) {
     if (entry->name() == name &&

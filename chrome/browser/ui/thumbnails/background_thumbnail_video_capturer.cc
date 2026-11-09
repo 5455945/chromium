@@ -1,13 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/thumbnails/background_thumbnail_video_capturer.h"
 
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
 #include "content/public/browser/render_frame_host.h"
@@ -16,32 +17,41 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
-#include "ui/gfx/skia_util.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 
 BackgroundThumbnailVideoCapturer::BackgroundThumbnailVideoCapturer(
     content::WebContents* contents,
     GotFrameCallback got_frame_callback)
     : contents_(contents), got_frame_callback_(std::move(got_frame_callback)) {
-  DCHECK(contents_);
-  DCHECK(got_frame_callback_);
+  CHECK(contents_, base::NotFatalUntil::M162);
+  CHECK(got_frame_callback_, base::NotFatalUntil::M162);
 }
 
 BackgroundThumbnailVideoCapturer::~BackgroundThumbnailVideoCapturer() {
-  if (video_capturer_)
+  if (video_capturer_) {
     Stop();
+  }
 }
 
 void BackgroundThumbnailVideoCapturer::Start(
     const ThumbnailCaptureInfo& capture_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (video_capturer_)
+  if (video_capturer_) {
     return;
+  }
 
   content::RenderWidgetHostView* const source_view =
-      contents_->GetMainFrame()->GetRenderViewHost()->GetWidget()->GetView();
-  if (!source_view)
+      contents_->GetPrimaryMainFrame()
+          ->GetRenderViewHost()
+          ->GetWidget()
+          ->GetView();
+  if (!source_view) {
     return;
+  }
 
   capture_info_ = capture_info;
 
@@ -51,8 +61,8 @@ void BackgroundThumbnailVideoCapturer::Start(
     // safe since this is only invoked from the UI thread.
     static uint64_t capture_num GUARDED_BY_CONTEXT(sequence_checker_) = 0;
     cur_capture_num_ = ++capture_num;
-    TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("ui", "Tab.Preview.VideoCapture",
-                                      TRACE_ID_LOCAL(cur_capture_num_));
+    TRACE_EVENT_BEGIN("ui", "Tab.Preview.VideoCapture",
+                      perfetto::Track(cur_capture_num_));
   }
 
   start_time_ = base::TimeTicks::Now();
@@ -60,36 +70,35 @@ void BackgroundThumbnailVideoCapturer::Start(
 
   constexpr int kMaxFrameRate = 2;
   video_capturer_ = source_view->CreateVideoCapturer();
+  // Mark the capture as secure because tab hover card thumbnail previews are a
+  // trusted internal browser UI feature.
+  video_capturer_->SetIsSecure(true);
   video_capturer_->SetResolutionConstraints(capture_info_.target_size,
                                             capture_info_.target_size, false);
   video_capturer_->SetAutoThrottlingEnabled(false);
   video_capturer_->SetMinSizeChangePeriod(base::TimeDelta());
-  video_capturer_->SetFormat(media::PIXEL_FORMAT_ARGB,
-                             gfx::ColorSpace::CreateREC709());
-  video_capturer_->SetMinCapturePeriod(base::TimeDelta::FromSeconds(1) /
-                                       kMaxFrameRate);
-  video_capturer_->Start(this);
+  video_capturer_->SetFormat(media::PIXEL_FORMAT_ARGB);
+  video_capturer_->SetMinCapturePeriod(base::Seconds(1) / kMaxFrameRate);
+  video_capturer_->Start(this, viz::mojom::BufferFormatPreference::kDefault);
 }
 
 void BackgroundThumbnailVideoCapturer::Stop() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!video_capturer_)
+  if (!video_capturer_) {
     return;
+  }
 
   video_capturer_->Stop();
   video_capturer_.reset();
 
-  TRACE_EVENT_NESTABLE_ASYNC_END0("ui", "Tab.Preview.VideoCapture",
-                                  TRACE_ID_LOCAL(cur_capture_num_));
-  UMA_HISTOGRAM_MEDIUM_TIMES("Tab.Preview.VideoCaptureDuration",
-                             base::TimeTicks::Now() - start_time_);
+  TRACE_EVENT_END("ui", perfetto::Track(cur_capture_num_));
   start_time_ = base::TimeTicks();
   cur_capture_num_ = 0;
 }
 
 void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
-    base::ReadOnlySharedMemoryRegion data,
+    ::media::mojom::VideoBufferHandlePtr data,
     ::media::mojom::VideoFrameInfoPtr info,
     const gfx::Rect& content_rect,
     mojo::PendingRemote<::viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
@@ -97,17 +106,23 @@ void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   CHECK(video_capturer_);
-  const base::TimeTicks time_of_call = base::TimeTicks::Now();
 
   mojo::Remote<::viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
       callbacks_remote(std::move(callbacks));
 
+  CHECK(data->is_read_only_shmem_region());
+  base::ReadOnlySharedMemoryRegion& shmem_region =
+      data->get_read_only_shmem_region();
+
+  // The |data| parameter is not nullable and mojo type mapping for
+  // `base::ReadOnlySharedMemoryRegion` defines that nullable version of it is
+  // the same type, with null check being equivalent to IsValid() check. Given
+  // the above, we should never be able to receive a read only shmem region that
+  // is not valid - mojo will enforce it for us.
+  CHECK(shmem_region.IsValid(), base::NotFatalUntil::M162);
+
   // Process captured image.
-  if (!data.IsValid()) {
-    callbacks_remote->Done();
-    return;
-  }
-  base::ReadOnlySharedMemoryMapping mapping = data.Map();
+  base::ReadOnlySharedMemoryMapping mapping = shmem_region.Map();
   if (!mapping.IsValid()) {
     DLOG(ERROR) << "Shared memory mapping failed.";
     return;
@@ -117,26 +132,18 @@ void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
     DLOG(ERROR) << "Shared memory size was less than expected.";
     return;
   }
-  if (!info->color_space) {
-    DLOG(ERROR) << "Missing mandatory color space info.";
-    return;
-  }
 
-  if (num_received_frames_ == 0)
-    UMA_HISTOGRAM_TIMES("Tab.Preview.TimeToFirstUsableFrameAfterStartCapture",
-                        time_of_call - start_time_);
-  TRACE_EVENT_INSTANT1("ui", "Tab.Preview.VideoCaptureFrameReceived",
-                       TRACE_EVENT_SCOPE_THREAD, "frame_number",
-                       num_received_frames_);
+  TRACE_EVENT_INSTANT("ui", "Tab.Preview.VideoCaptureFrameReceived",
+                      "frame_number", num_received_frames_);
   ++num_received_frames_;
 
   uint64_t frame_id = base::trace_event::GetNextGlobalTraceId();
-  TRACE_EVENT_WITH_FLOW0("ui", "Tab.Preview.ProcessVideoCaptureFrame", frame_id,
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ui", "Tab.Preview.ProcessVideoCaptureFrame",
+              perfetto::Flow::ProcessScoped(frame_id));
 
   // The SkBitmap's pixels will be marked as immutable, but the installPixels()
   // API requires a non-const pointer. So, cast away the const.
-  void* const pixels = const_cast<void*>(mapping.memory());
+  void* const pixels = const_cast<uint8_t*>(mapping.data());
 
   // Call installPixels() with a |releaseProc| that: 1) notifies the capturer
   // that this consumer has finished with the frame, and 2) releases the shared
@@ -156,21 +163,23 @@ void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
                             capture_info_.copy_rect.width();
 
   const gfx::Insets original_scroll_insets = capture_info_.scrollbar_insets;
-  const gfx::Insets scroll_insets(
+  const auto scroll_insets = gfx::Insets::TLBR(
       0, 0, std::round(original_scroll_insets.width() * scale_ratio),
       std::round(original_scroll_insets.height() * scale_ratio));
   gfx::Rect effective_content_rect = content_rect;
   effective_content_rect.Inset(scroll_insets);
 
   const gfx::Size bitmap_size(content_rect.right(), content_rect.bottom());
+  const SkImageInfo image_info = SkImageInfo::MakeN32(
+      bitmap_size.width(), bitmap_size.height(), kPremul_SkAlphaType,
+      info->color_space.ToSkColorSpace());
+  const size_t row_bytes =
+      media::VideoFrame::RowBytes(media::VideoFrame::Plane::kARGB,
+                                  info->pixel_format, info->coded_size.width());
+  CHECK_GE(mapping.size(), image_info.computeByteSize(row_bytes));
   SkBitmap frame;
   frame.installPixels(
-      SkImageInfo::MakeN32(bitmap_size.width(), bitmap_size.height(),
-                           kPremul_SkAlphaType,
-                           info->color_space->ToSkColorSpace()),
-      pixels,
-      media::VideoFrame::RowBytes(media::VideoFrame::kARGBPlane,
-                                  info->pixel_format, info->coded_size.width()),
+      image_info, pixels, row_bytes,
       [](void* addr, void* context) {
         delete static_cast<FramePinner*>(context);
       },
@@ -183,14 +192,13 @@ void BackgroundThumbnailVideoCapturer::OnFrameCaptured(
     return;
   }
 
-  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-      "Tab.Preview.TimeToStoreAfterFrameReceived",
-      base::TimeTicks::Now() - time_of_call,
-      base::TimeDelta::FromMicroseconds(10),
-      base::TimeDelta::FromMilliseconds(10), 50);
-
   got_frame_callback_.Run(cropped_frame, frame_id);
 }
+
+void BackgroundThumbnailVideoCapturer::OnNewCaptureVersion(
+    const media::CaptureVersion& capture_version) {}
+
+void BackgroundThumbnailVideoCapturer::OnFrameWithEmptyRegionCapture() {}
 
 void BackgroundThumbnailVideoCapturer::OnStopped() {}
 

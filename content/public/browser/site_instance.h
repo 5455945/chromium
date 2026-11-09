@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,28 @@
 #include <stdint.h>
 
 #include "base/memory/ref_counted.h"
+#include "base/types/id_type.h"
+#include "base/types/pass_key.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/browsing_instance_id.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/site_instance_process_assignment.h"
+#include "content/public/browser/site_instance_process_creation_client.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "url/gurl.h"
+
+namespace perfetto::protos::pbzero {
+class SiteInstance;
+}  // namespace perfetto::protos::pbzero
 
 namespace content {
 class BrowserContext;
 class RenderProcessHost;
+class SecurityPrincipal;
+class StoragePartitionConfig;
+
+using SiteInstanceId = base::IdType32<class SiteInstanceIdTag>;
+using SiteInstanceGroupId = base::IdType32<class SiteInstanceGroupIdTag>;
 
 ///////////////////////////////////////////////////////////////////////////////
 // SiteInstance interface.
@@ -38,11 +52,27 @@ class RenderProcessHost;
 // and "registrable domain" (i.e., eTLD+1), not the full origin. For example,
 // https://dev.chromium.org would have a site of https://chromium.org. This
 // preserves compatibility with document.domain modifications, which allow
-// similar origin pages to script each other. (Note that there are many
-// exceptions, and the policy for determining site URLs is complex.) Meanwhile,
-// an "instance" is represented by the BrowsingInstance class, which includes
-// all frames that can find each other based on how they were created (e.g.,
-// window.open or targeted links).
+// same-site, cross-origin pages to script each other.
+//
+// Note that there are many exceptions to this eTLD+1 rule, and the policy for
+// determining site URLs is complex. In a growing number of cases, a
+// SiteInstance is keyed to its specific origin instead of its broader site.
+// For example:
+// 1. When the `Origin-Agent-Cluster: ?1` header is in effect.
+//    Note that it does not take effect if the page that serves the header
+//    wasn't the first page from that origin in the current BrowsingInstance.
+// 2. For content embedder declared origins that require dedicated processes via
+//    ContentBrowserClient::GetOriginsRequiringDedicatedProcess().
+// 3. For privileged internal schemes like `chrome://` and
+//    `chrome-extension://`.
+//    Note that having a origin-keyed SiteInstance does not mean each origin
+//    gets its own process in full site isolation mode. For example, WebUI pages
+//    from the `*.top-chrome` domains always share a process to reduce process
+//    startup delays.
+//
+// Meanwhile, an "instance" is represented by the BrowsingInstance class, which
+// includes all frames that can find each other based on how they were created
+// (e.g., window.open or targeted links).
 //
 // In practice, a SiteInstance may contain documents from more than a single
 // site, usually for compatibility or performance reasons. For example, on
@@ -92,49 +122,52 @@ class RenderProcessHost;
 class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
  public:
   // Returns a unique ID for this SiteInstance.
-  virtual int32_t GetId() = 0;
+  virtual SiteInstanceId GetId() = 0;
 
   // Returns a unique ID for the BrowsingInstance (i.e., group of related
   // browsing contexts) to which this SiteInstance belongs. This allows callers
   // to identify which SiteInstances can asynchronously script each other.
-  virtual int32_t GetBrowsingInstanceId() = 0;
+  virtual BrowsingInstanceId GetBrowsingInstanceId() = 0;
 
   // Whether this SiteInstance has a running process associated with it.
-  // This may return true before the first call to GetProcess(), in cases where
-  // we use process-per-site and there is an existing process available.
+  // This may return true before the first call to
+  // SiteInstanceImpl::GetOrCreateProcess(), in cases where we use
+  // process-per-site and there is an existing process available.
   virtual bool HasProcess() = 0;
 
   // Returns the current RenderProcessHost being used to render pages for this
-  // SiteInstance.  If there is no RenderProcessHost (because either none has
+  // SiteInstance. If there is no RenderProcessHost (because either none has
   // yet been created or there was one but it was cleanly destroyed (e.g. when
-  // it is not actively being used), then this method will create a new
-  // RenderProcessHost (and a new ID).  Note that renderer process crashes leave
-  // the current RenderProcessHost (and ID) in place.
-  //
-  // For sites that require process-per-site mode (e.g., NTP), this will
-  // ensure only one RenderProcessHost for the site exists within the
-  // BrowserContext.
-  virtual content::RenderProcessHost* GetProcess() = 0;
+  // it is not actively being used)), this method will crash.
+  // For non-test code trying to create a renderer process, the
+  // GetOrCreateProcess() function in the content-internal class
+  // SiteInstanceImpl shall be used.
+  virtual RenderProcessHost* GetProcess() = 0;
+
+  // Returns the current RenderProcessHost being used to render pages for this
+  // SiteInstance. This method will create a renderer process if there is not
+  // one. The function is exported only for the renderer prelauncher in cast.
+  // TODO(crbug.com/424051832): Remove the function after migrating
+  // RendererPrelauncher to use the spare renderer.
+  virtual RenderProcessHost* GetOrCreateProcess(
+      base::PassKey<SiteInstanceProcessCreationClient>) = 0;
+
+  // Test-only function that returns the current RenderProcessHost for this
+  // SiteInstance and creates one if there is no RenderProcessHost.
+  virtual RenderProcessHost* GetOrCreateProcessForTesting() = 0;
+
+  // Returns the ID of the SiteInstanceGroup this SiteInstance belongs to. If
+  // the SiteInstance has no group, return 0, which is an invalid
+  // SiteInstanceGroup ID.
+  virtual SiteInstanceGroupId GetSiteInstanceGroupId() = 0;
 
   // Browser context to which this SiteInstance (and all related
   // SiteInstances) belongs.
-  virtual content::BrowserContext* GetBrowserContext() = 0;
+  virtual BrowserContext* GetBrowserContext() = 0;
 
-  // Get the web site that this SiteInstance is rendering pages for. This
-  // includes the scheme and registered domain, but not the port.
-  //
-  // NOTE: In most cases, code should be performing checks against the origin
-  // returned by |RenderFrameHost::GetLastCommittedOrigin()|. In contrast, the
-  // GURL returned by |GetSiteURL()| should not be considered authoritative
-  // because:
-  // - a SiteInstance can host pages from multiple sites if "site per process"
-  //   is not enabled and the SiteInstance isn't hosting pages that require
-  //   process isolation (e.g. WebUI or extensions)
-  // - even with site per process, the site URL is not an origin: while often
-  //   derived from the origin, it only contains the scheme and the eTLD + 1,
-  //   i.e. an origin with the host "deeply.nested.subdomain.example.com"
-  //   corresponds to a site URL with the host "example.com".
-  virtual const GURL& GetSiteURL() = 0;
+  // Returns the security principal identifying all documents and workers within
+  // this SiteInstance.
+  virtual const SecurityPrincipal& GetSecurityPrincipal() const = 0;
 
   // Gets a SiteInstance for the given URL that shares the current
   // BrowsingInstance, creating a new SiteInstance if necessary.  This ensures
@@ -149,7 +182,11 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   virtual bool IsRelatedSiteInstance(const SiteInstance* instance) = 0;
 
   // Returns the total active WebContents count for this SiteInstance and all
-  // related SiteInstances in the same BrowsingInstance.
+  // related SiteInstances that have a form of communication with each other.
+  // This include all the WebContents for documents in the same BrowsingInstance
+  // as well as all the BrowsingInstances in the same CoopRelatedGroup. The
+  // latter is useful to include because some interactions (e.g., messaging) are
+  // allowed across such BrowsingInstances.
   virtual size_t GetRelatedActiveContentsCount() = 0;
 
   // Returns true if this SiteInstance is for a site that requires a dedicated
@@ -168,17 +205,24 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // assignment.
   virtual bool IsSameSiteWithURL(const GURL& url) = 0;
 
-  // Returns true if this object is used for a <webview> guest.
-  virtual bool IsGuest() = 0;
-
   // Returns how this SiteInstance was assigned to a renderer process the most
   // recent time that such an assignment was done. This allows the content
   // embedder to collect metrics on how renderer process starting or reuse
   // affects performance.
   virtual SiteInstanceProcessAssignment GetLastProcessAssignmentOutcome() = 0;
 
+  using TraceProto = perfetto::protos::pbzero::SiteInstance;
   // Write a representation of this object into a trace.
-  virtual void WriteIntoTrace(perfetto::TracedValue context) = 0;
+  virtual void WriteIntoTrace(perfetto::TracedProto<TraceProto> context) = 0;
+
+  // Estimates the overhead in terms of process count due to OriginAgentCluster
+  // (OAC) SiteInstances in the BrowsingInstance related to this SiteInstance.
+  // The estimate is based on counting SiteInstances where OAC is on, and
+  // subtracting from it the count of SiteInstances that would exist without
+  // OAC. If we assume that we don't coalesce SiteInstances from different
+  // BrowsingInstances into a single RenderProcess, this roughly corresponds to
+  // the number of renderer processes engendered by OAC.
+  virtual int EstimateOriginAgentClusterOverheadForMetrics() = 0;
 
   // Factory method to create a new SiteInstance.  This will create a new
   // BrowsingInstance, so it should only be used when creating a new tab from
@@ -186,8 +230,7 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   //
   // The render process host factory may be nullptr.  See SiteInstance
   // constructor.
-  static scoped_refptr<SiteInstance> Create(
-      content::BrowserContext* browser_context);
+  static scoped_refptr<SiteInstance> Create(BrowserContext* browser_context);
 
   // Factory method to get the appropriate SiteInstance for the given URL, in
   // a new BrowsingInstance.  Use this instead of Create when you know the URL,
@@ -196,18 +239,31 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // default SiteInstance for sites that don't require a dedicated process on
   // Android).
   static scoped_refptr<SiteInstance> CreateForURL(
-      content::BrowserContext* browser_context,
+      BrowserContext* browser_context,
       const GURL& url);
 
   // Factory method to create a SiteInstance for a <webview> guest in a new
-  // BrowsingInstance.
-  // TODO(734722): Replace this method once SecurityPrincipal is available.
+  // BrowsingInstance. A guest requires a non-default StoragePartitionConfig
+  // which should be passed in via `partition_config`.
   static scoped_refptr<SiteInstance> CreateForGuest(
-      content::BrowserContext* browser_context,
-      const GURL& guest_site_url);
+      BrowserContext* browser_context,
+      const StoragePartitionConfig& partition_config);
+
+  // Factory method to create a SiteInstance in a new BrowsingInstance with a
+  // custom StoragePartition that is preserved across navigations.
+  // `partition_config` needs to be for a non-default StoragePartition.
+  static scoped_refptr<SiteInstance> CreateForFixedStoragePartition(
+      BrowserContext* browser_context,
+      const GURL& url,
+      const StoragePartitionConfig& partition_config);
 
   // Determine if a URL should "use up" a site.  URLs such as about:blank or
   // chrome-native:// leave the site unassigned.
+  //
+  // Note that this API shouldn't be used for cases where about:blank has an
+  // inherited origin, because that origin may influence the outcome of this
+  // call.  See the content-internal ShouldAssignSiteForUrlInfo() for more
+  // information.
   static bool ShouldAssignSiteForURL(const GURL& url);
 
   // Starts requiring a dedicated process for |url|'s site.  On platforms where

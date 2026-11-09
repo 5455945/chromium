@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,21 @@
 #include <string>
 
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "chrome/browser/first_run/first_run.h"  // nogncheck
 #include "chrome/browser/notifications/notification_display_service.h"  // nogncheck
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/public/cpp/notification.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/notifier_catalogs.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 AnnouncementNotificationDelegate::AnnouncementNotificationDelegate(
     NotificationDisplayService* display_service)
     : display_service_(display_service) {
-  DCHECK(display_service_);
+  CHECK(display_service_, base::NotFatalUntil::M162);
 }
 
 AnnouncementNotificationDelegate::~AnnouncementNotificationDelegate() = default;
@@ -33,10 +38,17 @@ void AnnouncementNotificationDelegate::ShowNotification() {
   message_center::Notification notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, kAnnouncementNotificationId,
       l10n_util::GetStringUTF16(IDS_TOS_NOTIFICATION_TITLE),
-      l10n_util::GetStringUTF16(IDS_TOS_NOTIFICATION_BODY_TEXT), gfx::Image(),
-      std::u16string(), GURL(),
+      l10n_util::GetStringUTF16(IDS_TOS_NOTIFICATION_BODY_TEXT),
+      ui::ImageModel(), std::u16string(), GURL(),
+#if BUILDFLAG(IS_CHROMEOS)
+      message_center::NotifierId(
+          message_center::NotifierType::SYSTEM_COMPONENT,
+          kAnnouncementNotificationId,
+          ash::NotificationCatalogName::kAnnouncementNotification),
+#else
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kAnnouncementNotificationId),
+#endif  // BUILDFLAG(IS_CHROMEOS)
       rich_notification_data, nullptr /*delegate*/);
 
   display_service_->Display(NotificationHandler::Type::ANNOUNCEMENT,

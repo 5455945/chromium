@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,12 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace extensions {
-namespace declarative_net_request {
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace extensions::declarative_net_request {
 namespace {
 
 const char* kFlatbufferSchemaExpected = R"(
@@ -32,6 +34,7 @@ enum ActionType : ubyte {
 table QueryKeyValue {
   key : string (required);
   value : string (required);
+  replace_only: bool = false;
 }
 table UrlTransform {
    scheme : string;
@@ -60,12 +63,20 @@ table UrlRuleMetadata {
 table EmbedderConditions {
   tab_ids_included : [int];
   tab_ids_excluded : [int];
+  top_domains_included : [string];
+  top_domains_excluded : [string];
+  response_headers: [HeaderCondition];
+  excluded_response_headers: [HeaderCondition];
+  requires_host_permissions: bool = true;
 }
 enum IndexType : ubyte {
   before_request_except_allow_all_requests = 0,
   allow_all_requests,
   modify_headers,
   count
+}
+table RegexFilterOptions {
+  match_all: bool = false;
 }
 enum HeaderOperation : ubyte {
   append,
@@ -76,6 +87,14 @@ table ModifyHeaderInfo {
   operation: HeaderOperation;
   header: string;
   value: string;
+  regex_filter: string;
+  regex_substitution: string;
+  regex_options: RegexFilterOptions;
+}
+table HeaderCondition {
+  header: string (required);
+  values: [string];
+  excluded_values: [string];
 }
 table RegexRule {
   url_rule: url_pattern_index.flat.UrlRule;
@@ -83,8 +102,10 @@ table RegexRule {
   regex_substitution: string;
 }
 table ExtensionIndexedRuleset {
-  index_list : [url_pattern_index.flat.UrlPatternIndex];
-  regex_rules: [RegexRule];
+  before_request_index_list : [url_pattern_index.flat.UrlPatternIndex];
+  headers_received_index_list : [url_pattern_index.flat.UrlPatternIndex];
+  before_request_regex_rules: [RegexRule];
+  headers_received_regex_rules: [RegexRule];
   extension_metadata : [UrlRuleMetadata];
 }
 root_type ExtensionIndexedRuleset;
@@ -105,8 +126,9 @@ std::string StripCommentsAndWhitespace(const std::string& input) {
                                       base::SPLIT_WANT_NONEMPTY)) {
     // Remove single line comments.
     size_t index = line.find(kSingleLineComment);
-    if (index != std::string::npos)
+    if (index != std::string::npos) {
       line.erase(index);
+    }
 
     // Remove any whitespace.
     std::string str;
@@ -117,13 +139,15 @@ std::string StripCommentsAndWhitespace(const std::string& input) {
   // Remove multi line comments.
   while (true) {
     size_t start = result.find(kMultiLineCommentStart);
-    if (start == std::string::npos)
+    if (start == std::string::npos) {
       break;
+    }
 
     size_t end = result.find(kMultiLineCommentEnd, start + 2);
     // No ending found for the comment.
-    if (end == std::string::npos)
+    if (end == std::string::npos) {
       break;
+    }
 
     size_t end_comment_index = end + 1;
     size_t comment_length = end_comment_index - start + 1;
@@ -139,7 +163,8 @@ using IndexedRulesetFormatVersionTest = ::testing::Test;
 // schema is modified.
 TEST_F(IndexedRulesetFormatVersionTest, CheckVersionUpdated) {
   base::FilePath source_root;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_SOURCE_ROOT, &source_root));
+  ASSERT_TRUE(
+      base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &source_root));
 
   base::FilePath flatbuffer_schema_path = source_root.AppendASCII(
       "extensions/browser/api/declarative_net_request/flat/"
@@ -153,7 +178,7 @@ TEST_F(IndexedRulesetFormatVersionTest, CheckVersionUpdated) {
   EXPECT_EQ(StripCommentsAndWhitespace(kFlatbufferSchemaExpected),
             StripCommentsAndWhitespace(flatbuffer_schema))
       << "Schema change detected; update this test and the schema version.";
-  EXPECT_EQ(22, GetIndexedRulesetFormatVersionForTesting())
+  EXPECT_EQ(37, GetIndexedRulesetFormatVersionForTesting())
       << "Update this test if you update the schema version.";
 }
 
@@ -173,5 +198,4 @@ TEST_F(IndexedRulesetFormatVersionTest, StripCommentsAndWhitespace) {
 }
 
 }  // namespace
-}  // namespace declarative_net_request
-}  // namespace extensions
+}  // namespace extensions::declarative_net_request

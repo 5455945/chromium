@@ -1,9 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.list.mutator;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.list.ListItem;
 
 import java.util.ArrayList;
@@ -13,10 +15,11 @@ import java.util.List;
  * Handles pagination for a given date ordered list. Always ensures that all the items for a given
  * date are displayed fully even if the total item count might exceed the desired limit.
  */
+@NullMarked
 public class DateListPaginator implements DateOrderedListMutator.ListPaginator {
     private static final int DEFAULT_PAGE_SIZE = 25;
 
-    private ListConsumer mListConsumer;
+    private @Nullable ListConsumer mListConsumer;
     private int mCurrentPageIndex;
 
     @Override

@@ -1,14 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/core/test/test_utils.h"
 
+#include <windows.h>
+
 #include <fcntl.h>
 #include <io.h>
 #include <stddef.h>
 #include <string.h>
-#include <windows.h>
+
+#include <ostream>
+
+#include "base/compiler_specific.h"
 
 namespace mojo {
 namespace core {
@@ -31,12 +36,15 @@ base::ScopedFILE FILEFromPlatformHandle(PlatformHandle h, const char* mode) {
   // Microsoft's documentation for |_open_osfhandle()| only discusses these
   // flags (and |_O_WTEXT|). Hmmm.
   int flags = 0;
-  if (strchr(mode, 'a'))
+  if (UNSAFE_TODO(strchr(mode, 'a'))) {
     flags |= _O_APPEND;
-  if (strchr(mode, 'r'))
+  }
+  if (UNSAFE_TODO(strchr(mode, 'r'))) {
     flags |= _O_RDONLY;
-  if (strchr(mode, 't'))
+  }
+  if (UNSAFE_TODO(strchr(mode, 't'))) {
     flags |= _O_TEXT;
+  }
   base::ScopedFILE rv(_fdopen(
       _open_osfhandle(reinterpret_cast<intptr_t>(h.ReleaseHandle()), flags),
       mode));

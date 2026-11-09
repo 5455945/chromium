@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 
-#include "base/containers/contains.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "cc/raster/raster_buffer.h"
 #include "cc/raster/synchronous_task_graph_runner.h"
 #include "cc/test/fake_raster_buffer_provider.h"
@@ -28,7 +28,7 @@ SynchronousTaskGraphRunner* GetGlobalTaskGraphRunner() {
 }
 
 FakeRasterBufferProviderImpl* GetGlobalRasterBufferProvider() {
-  static auto* buffer_provider = new FakeRasterBufferProviderImpl;
+  static auto* buffer_provider = new FakeRasterBufferProviderImpl();
   return buffer_provider;
 }
 
@@ -37,25 +37,24 @@ FakeRasterBufferProviderImpl* GetGlobalRasterBufferProvider() {
 FakeTileManager::FakeTileManager(TileManagerClient* client,
                                  ResourcePool* resource_pool)
     : TileManager(client,
-                  base::ThreadTaskRunnerHandle::Get().get(),
+                  base::SingleThreadTaskRunner::GetCurrentDefault().get(),
                   nullptr,
                   std::numeric_limits<size_t>::max(),
+                  false,
                   TileManagerSettings()),
       image_decode_cache_(
           kN32_SkColorType,
-          LayerTreeSettings().decoded_image_working_set_budget_bytes,
-          PaintImage::kDefaultGeneratorClientId) {
+          LayerTreeSettings().decoded_image_working_set_budget_bytes) {
   SetResources(resource_pool, &image_decode_cache_, GetGlobalTaskGraphRunner(),
                GetGlobalRasterBufferProvider(),
-               false /* use_gpu_rasterization */,
-               false /* use_oop_rasterization */, nullptr);
+               /*use_gpu_rasterization=*/false, nullptr);
   SetTileTaskManagerForTesting(std::make_unique<FakeTileTaskManagerImpl>());
 }
 
 FakeTileManager::~FakeTileManager() = default;
 
 bool FakeTileManager::HasBeenAssignedMemory(Tile* tile) {
-  return base::Contains(tiles_for_raster, tile);
+  return std::ranges::contains(tiles_for_raster, tile);
 }
 
 }  // namespace cc

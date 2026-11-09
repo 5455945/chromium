@@ -1,22 +1,20 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_METRICS_DRIVE_METRICS_PROVIDER_H_
 #define COMPONENTS_METRICS_DRIVE_METRICS_PROVIDER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/metrics/metrics_provider.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 
-namespace base {
-class FilePath;
-}
+class PrefRegistrySimple;
+class PrefService;
 
 namespace metrics {
 
@@ -24,34 +22,35 @@ namespace metrics {
 // checks to see if they incur a seek-time penalty (e.g. if they're SSDs).
 class DriveMetricsProvider : public metrics::MetricsProvider {
  public:
-  explicit DriveMetricsProvider(int local_state_path_key);
+  DriveMetricsProvider(int local_state_path_key, PrefService* local_state);
+
+  DriveMetricsProvider(const DriveMetricsProvider&) = delete;
+  DriveMetricsProvider& operator=(const DriveMetricsProvider&) = delete;
+
   ~DriveMetricsProvider() override;
 
-  // metrics::MetricsDataProvider:
+  // metrics::MetricsProvider:
   void AsyncInit(base::OnceClosure done_callback) override;
   void ProvideSystemProfileMetrics(
       metrics::SystemProfileProto* system_profile_proto) override;
 
- private:
-  FRIEND_TEST_ALL_PREFIXES(DriveMetricsProviderTest, HasSeekPenalty);
+  // Registers local state prefs used by this class.
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
+ private:
   // A response to querying a drive as to whether it incurs a seek penalty.
   // |has_seek_penalty| is set if |success| is true.
   struct SeekPenaltyResponse {
     SeekPenaltyResponse();
-    bool success;
-    bool has_seek_penalty;
+    std::optional<bool> has_seek_penalty;
+    std::optional<bool> is_removable;
+    std::optional<bool> is_usb;
   };
 
   struct DriveMetrics {
     SeekPenaltyResponse app_drive;
     SeekPenaltyResponse user_data_drive;
   };
-
-  // Determine whether the device that services |path| has a seek penalty.
-  // Returns false if it couldn't be determined (e.g., |path| doesn't exist).
-  static bool HasSeekPenalty(const base::FilePath& path,
-                             bool* has_seek_penalty);
 
   // Gather metrics about various drives. Should be run on a background thread.
   static DriveMetrics GetDriveMetricsOnBackgroundThread(
@@ -69,12 +68,17 @@ class DriveMetricsProvider : public metrics::MetricsProvider {
                        const DriveMetrics& metrics);
 
   // Fills |drive| with information from successful |response|s.
+  // |pref_name| is used to cache/retrieve the information in/from
+  // |local_state_|.
   void FillDriveMetrics(const SeekPenaltyResponse& response,
-                        metrics::SystemProfileProto::Hardware::Drive* drive);
+                        metrics::SystemProfileProto::Hardware::Drive* drive,
+                        const char* pref_name);
 
   // The key to give to base::PathService to obtain the path to local state
   // (supplied by the embedder).
   int local_state_path_key_;
+
+  raw_ptr<PrefService> local_state_;
 
   // Information gathered about various important drives.
   DriveMetrics metrics_;
@@ -82,7 +86,10 @@ class DriveMetricsProvider : public metrics::MetricsProvider {
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<DriveMetricsProvider> weak_ptr_factory_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(DriveMetricsProvider);
+  FRIEND_TEST_ALL_PREFIXES(DriveMetricsProviderTest,
+                           HasSeekPenalty_FallbackToLocalState);
+  FRIEND_TEST_ALL_PREFIXES(DriveMetricsProviderTest,
+                           HasSeekPenalty_WritesToLocalState);
 };
 
 }  // namespace metrics

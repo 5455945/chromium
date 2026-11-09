@@ -1,16 +1,8 @@
-// Copyright 2006 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.events.EventHandlerTest');
 goog.setTestOnly();
@@ -18,7 +10,9 @@ goog.setTestOnly();
 const EventHandler = goog.require('goog.events.EventHandler');
 const GoogEventTarget = goog.require('goog.events.EventTarget');
 const PropertyReplacer = goog.require('goog.testing.PropertyReplacer');
+const dispose = goog.require('goog.dispose');
 const events = goog.require('goog.events');
+const functions = goog.require('goog.functions');
 const recordFunction = goog.require('goog.testing.recordFunction');
 const testSuite = goog.require('goog.testing.testSuite');
 
@@ -40,7 +34,7 @@ testSuite({
   },
 
   tearDown() {
-    goog.dispose(eh);
+    dispose(eh);
     propertyReplacer.reset();
   },
 
@@ -165,6 +159,10 @@ testSuite({
         'No event should have been dispatched', 1, handler.getCallCount());
   },
 
+  /**
+     @suppress {strictMissingProperties} suppression added to enable type
+     checking
+   */
   testListenOnceArray() {
     const target = new GoogEventTarget();
 
@@ -247,10 +245,10 @@ testSuite({
     eh = new EventHandler();
     assertEquals('0 listeners registered initially', 0, eh.getListenerCount());
     const target = new GoogEventTarget();
-    eh.listen(target, 'click', goog.nullFunction, false);
-    eh.listen(target, 'click', goog.nullFunction, true);
+    eh.listen(target, 'click', functions.UNDEFINED, false);
+    eh.listen(target, 'click', functions.UNDEFINED, true);
     assertEquals('2 listeners registered', 2, eh.getListenerCount());
-    eh.unlisten(target, 'click', goog.nullFunction, true);
+    eh.unlisten(target, 'click', functions.UNDEFINED, true);
     assertEquals('1 listener removed, 1 left', 1, eh.getListenerCount());
     eh.removeAll();
     assertEquals('all listeners removed', 0, eh.getListenerCount());

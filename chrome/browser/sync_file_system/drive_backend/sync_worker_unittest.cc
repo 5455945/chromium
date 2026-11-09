@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,22 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/test_extension_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.pb.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_engine_context.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_task.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_task_manager.h"
 #include "chrome/browser/sync_file_system/sync_file_system_test_util.h"
+#include "chrome/test/base/testing_profile.h"
 #include "components/drive/drive_uploader.h"
 #include "components/drive/service/fake_drive_service.h"
 #include "content/public/test/browser_task_environment.h"
@@ -29,7 +30,6 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_set.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
 
@@ -41,7 +41,7 @@ namespace {
 const char kAppID[] = "app_id";
 
 void EmptyTask(SyncStatusCode status, SyncStatusCallback callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), status));
 }
 
@@ -52,62 +52,73 @@ class MockSyncTask : public ExclusiveTask {
   explicit MockSyncTask(bool used_network) {
     set_used_network(used_network);
   }
-  ~MockSyncTask() override {}
+
+  MockSyncTask(const MockSyncTask&) = delete;
+  MockSyncTask& operator=(const MockSyncTask&) = delete;
+
+  ~MockSyncTask() override = default;
 
   void RunExclusive(SyncStatusCallback callback) override {
     std::move(callback).Run(SYNC_STATUS_OK);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockSyncTask);
 };
 
 class MockExtensionService : public TestExtensionService {
  public:
-  MockExtensionService() : registry_(nullptr) {}
-  ~MockExtensionService() override {}
+  // The ExtensionRegistry and ExtensionRegistrar must use the same profile
+  // (as in production) because the registrar uses the profile to look up
+  // the appropriate registry.
+  explicit MockExtensionService(Profile* profile)
+      : registry_(extensions::ExtensionRegistry::Get(profile)),
+        registrar_(extensions::ExtensionRegistrar::Get(profile)) {}
 
-  void AddExtension(const extensions::Extension* extension) override {
-    registry_.AddEnabled(base::WrapRefCounted(extension));
-  }
+  MockExtensionService(const MockExtensionService&) = delete;
+  MockExtensionService& operator=(const MockExtensionService&) = delete;
 
-  bool IsExtensionEnabled(const std::string& extension_id) const override {
-    return registry_.enabled_extensions().Contains(extension_id);
+  ~MockExtensionService() override = default;
+
+  void AddExtension(const extensions::Extension* extension) {
+    registry_->AddEnabled(base::WrapRefCounted(extension));
   }
 
   void UninstallExtension(const std::string& extension_id) {
-    EXPECT_TRUE(registry_.RemoveEnabled(extension_id) ||
-                registry_.RemoveDisabled(extension_id));
+    EXPECT_TRUE(registry_->RemoveEnabled(extension_id) ||
+                registry_->RemoveDisabled(extension_id));
   }
 
   void DisableExtension(const std::string& extension_id) {
-    if (!IsExtensionEnabled(extension_id))
+    if (!registrar_->IsExtensionEnabled(extension_id)) {
       return;
+    }
     scoped_refptr<const extensions::Extension> extension =
-        registry_.GetInstalledExtension(extension_id);
-    EXPECT_TRUE(registry_.RemoveEnabled(extension_id));
-    registry_.AddDisabled(extension);
+        registry_->GetInstalledExtension(extension_id);
+    EXPECT_TRUE(registry_->RemoveEnabled(extension_id));
+    registry_->AddDisabled(extension);
   }
 
-  extensions::ExtensionRegistry& registry() { return registry_; }
+  extensions::ExtensionRegistry& registry() { return *registry_; }
+  extensions::ExtensionRegistrar& registrar() { return *registrar_; }
 
  private:
-  extensions::ExtensionRegistry registry_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockExtensionService);
+  const raw_ptr<extensions::ExtensionRegistry> registry_;
+  const raw_ptr<extensions::ExtensionRegistrar> registrar_;
 };
 
-class SyncWorkerTest : public testing::Test,
-                       public base::SupportsWeakPtr<SyncWorkerTest> {
+class SyncWorkerTest : public testing::Test {
  public:
-  SyncWorkerTest() {}
-  ~SyncWorkerTest() override {}
+  SyncWorkerTest() = default;
+
+  SyncWorkerTest(const SyncWorkerTest&) = delete;
+  SyncWorkerTest& operator=(const SyncWorkerTest&) = delete;
+
+  ~SyncWorkerTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(profile_dir_.CreateUniqueTempDir());
     in_memory_env_ = leveldb_chrome::NewMemEnv("SyncWorkerTest");
 
-    extension_service_ = std::make_unique<MockExtensionService>();
+    profile_ = std::make_unique<TestingProfile>();
+    extension_service_ = std::make_unique<MockExtensionService>(profile_.get());
     std::unique_ptr<drive::DriveServiceInterface> fake_drive_service(
         new drive::FakeDriveService);
 
@@ -115,12 +126,13 @@ class SyncWorkerTest : public testing::Test,
         new SyncEngineContext(
             std::move(fake_drive_service), nullptr /* drive_uploader */,
             nullptr /* task_logger */,
-            base::ThreadTaskRunnerHandle::Get() /* ui_task_runner */,
-            base::ThreadTaskRunnerHandle::Get() /* worker_task_runner */));
+            base::SingleThreadTaskRunner::
+                GetCurrentDefault() /* ui_task_runner */,
+            base::SingleThreadTaskRunner::
+                GetCurrentDefault() /* worker_task_runner */));
 
     sync_worker_ = std::make_unique<SyncWorker>(
-        profile_dir_.GetPath(), extension_service_->AsWeakPtr(),
-        &extension_service_->registry(), in_memory_env_.get());
+        profile_dir_.GetPath(), profile_->GetWeakPtr(), in_memory_env_.get());
     sync_worker_->Initialize(std::move(sync_engine_context));
 
     sync_worker_->SetSyncEnabled(true);
@@ -130,6 +142,7 @@ class SyncWorkerTest : public testing::Test,
   void TearDown() override {
     sync_worker_.reset();
     extension_service_.reset();
+    profile_.reset();
     base::RunLoop().RunUntilIdle();
   }
 
@@ -155,15 +168,19 @@ class SyncWorkerTest : public testing::Test,
     return sync_worker_->GetMetadataDatabase();
   }
 
+  base::WeakPtr<SyncWorkerTest> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   content::BrowserTaskEnvironment task_environment_;
   base::ScopedTempDir profile_dir_;
   std::unique_ptr<leveldb::Env> in_memory_env_;
 
+  std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<MockExtensionService> extension_service_;
   std::unique_ptr<SyncWorker> sync_worker_;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncWorkerTest);
+  base::WeakPtrFactory<SyncWorkerTest> weak_ptr_factory_{this};
 };
 
 TEST_F(SyncWorkerTest, EnableOrigin) {
@@ -203,11 +220,10 @@ TEST_F(SyncWorkerTest, UpdateRegisteredApps) {
   for (int i = 0; i < 3; i++) {
     scoped_refptr<const extensions::Extension> extension =
         extensions::ExtensionBuilder()
-            .SetManifest(extensions::DictionaryBuilder()
+            .SetManifest(base::DictValue()
                              .Set("name", "foo")
                              .Set("version", "1.0")
-                             .Set("manifest_version", 2)
-                             .Build())
+                             .Set("manifest_version", 2))
             .SetID(base::StringPrintf("app_%d", i))
             .Build();
     extension_service()->AddExtension(extension.get());
@@ -243,40 +259,6 @@ TEST_F(SyncWorkerTest, UpdateRegisteredApps) {
   EXPECT_EQ(TRACKER_KIND_DISABLED_APP_ROOT, tracker.tracker_kind());
 
   ASSERT_FALSE(metadata_database()->FindAppRootTracker("app_2", &tracker));
-}
-
-TEST_F(SyncWorkerTest, GetOriginStatusMap) {
-  FileTracker tracker;
-  SyncStatusCode sync_status = SYNC_STATUS_UNKNOWN;
-  GURL origin = extensions::Extension::GetBaseURLFromExtensionId(kAppID);
-
-  sync_worker()->RegisterOrigin(GURL("chrome-extension://app_0"),
-                                CreateResultReceiver(&sync_status));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(SYNC_STATUS_OK, sync_status);
-
-  sync_worker()->RegisterOrigin(GURL("chrome-extension://app_1"),
-                                CreateResultReceiver(&sync_status));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(SYNC_STATUS_OK, sync_status);
-
-  std::unique_ptr<RemoteFileSyncService::OriginStatusMap> status_map;
-  sync_worker()->GetOriginStatusMap(CreateResultReceiver(&status_map));
-  base::RunLoop().RunUntilIdle();
-  ASSERT_EQ(2u, status_map->size());
-  EXPECT_EQ("Enabled", (*status_map)[GURL("chrome-extension://app_0")]);
-  EXPECT_EQ("Enabled", (*status_map)[GURL("chrome-extension://app_1")]);
-
-  sync_worker()->DisableOrigin(GURL("chrome-extension://app_1"),
-                               CreateResultReceiver(&sync_status));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(SYNC_STATUS_OK, sync_status);
-
-  sync_worker()->GetOriginStatusMap(CreateResultReceiver(&status_map));
-  base::RunLoop().RunUntilIdle();
-  ASSERT_EQ(2u, status_map->size());
-  EXPECT_EQ("Enabled", (*status_map)[GURL("chrome-extension://app_0")]);
-  EXPECT_EQ("Disabled", (*status_map)[GURL("chrome-extension://app_1")]);
 }
 
 TEST_F(SyncWorkerTest, UpdateServiceState) {
@@ -342,13 +324,13 @@ TEST_F(SyncWorkerTest, UpdateServiceState) {
                      SYNC_DATABASE_ERROR_FAILED, REMOTE_SERVICE_DISABLED));
 
   GetSyncTaskManager()->ScheduleSyncTask(
-      FROM_HERE, std::unique_ptr<SyncTask>(new MockSyncTask(false)),
+      FROM_HERE, std::make_unique<MockSyncTask>(false),
       SyncTaskManager::PRIORITY_MED,
       base::BindOnce(&SyncWorkerTest::CheckServiceState, AsWeakPtr(),
                      SYNC_STATUS_OK, REMOTE_SERVICE_DISABLED));
 
   GetSyncTaskManager()->ScheduleSyncTask(
-      FROM_HERE, std::unique_ptr<SyncTask>(new MockSyncTask(true)),
+      FROM_HERE, std::make_unique<MockSyncTask>(true),
       SyncTaskManager::PRIORITY_MED,
       base::BindOnce(&SyncWorkerTest::CheckServiceState, AsWeakPtr(),
                      SYNC_STATUS_OK, REMOTE_SERVICE_OK));

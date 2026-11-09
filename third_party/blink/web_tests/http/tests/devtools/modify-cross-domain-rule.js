@@ -1,16 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {ElementsTestRunner} from 'elements_test_runner';
+
+import * as SDK from 'devtools/core/sdk/sdk.js';
 
 (async function() {
   'use strict';
   TestRunner.addResult(
       `Tests that modifying a rule in a stylesheet loaded from a different domain does not crash the renderer.\n`);
-  await TestRunner.loadModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.loadHTML(`
       <div id="inspected">Text</div>
     `);
-  await TestRunner.addStylesheetTag('http://localhost:8000/devtools/elements/styles/resources/modify-cross-domain-rule.css');
+  await TestRunner.addStylesheetTag(
+      'http://localhost:8000/devtools/resources/modify-cross-domain-rule.css');
 
   var nodeId;
   var nodeStyles;
@@ -35,9 +40,7 @@
       ElementsTestRunner.selectNodeAndWaitForStyles('inspected', selectCallback);
 
       function selectCallback() {
-        var idToDOMNode = TestRunner.domModel._idToDOMNode;
-        for (var id in idToDOMNode) {
-          const node = idToDOMNode[id];
+        for (const [id, node] of ElementsTestRunner.mappedNodes()) {
           if (node.getAttribute && node.getAttribute('id') === 'inspected') {
             nodeId = parseInt(id, 10);
             break;
@@ -49,7 +52,7 @@
           return;
         }
 
-        TestRunner.cssModel.matchedStylesPromise(nodeId, false, false).then(callback);
+        TestRunner.cssModel.getMatchedStyles(nodeId, false, false).then(callback);
       }
 
       function callback(matchedResult) {

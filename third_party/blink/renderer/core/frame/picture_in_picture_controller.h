@@ -1,10 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_PICTURE_IN_PICTURE_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_PICTURE_IN_PICTURE_CONTROLLER_H_
 
+#include "services/media_session/public/mojom/media_session.mojom-blink.h"
+#include "third_party/blink/public/mojom/picture_in_picture/picture_in_picture.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 
@@ -12,10 +15,10 @@ namespace blink {
 
 class Document;
 class Element;
-class HTMLElement;
 class HTMLVideoElement;
-class PictureInPictureOptions;
-class ScriptPromiseResolver;
+class LocalDOMWindow;
+class PictureInPictureWindow;
+class TreeScope;
 
 // PictureInPictureController allows to know if Picture-in-Picture is allowed
 // for a video element in Blink outside of modules/ module. It
@@ -38,6 +41,21 @@ class CORE_EXPORT PictureInPictureController
   // returns false if PictureInPictureController is not attached to a document.
   static bool IsElementInPictureInPicture(const Element*);
 
+  // Returns whether the given element is currently in a document
+  // Picture-in-Picture window.
+  static bool IsInDocumentPictureInPicture(const Element* element);
+
+  // Returns the document picture-in-picture window opened by the Document. It
+  // returns null if there is no open document picture-in-picture window for the
+  // Document or if PictureInPictureController is not attached to the Document.
+  static LocalDOMWindow* GetDocumentPictureInPictureWindow(const Document&);
+
+  // If the provided document is attached to a document picture-in-picture
+  // window, then this returns the LocalDOMWindow that owns and originally
+  // opened the document picture-in-picture window. Returns null if the provided
+  // document is not attached to a document picture-in-picture window.
+  static LocalDOMWindow* GetDocumentPictureInPictureOwner(const Document&);
+
   // List of Picture-in-Picture support statuses. If status is kEnabled,
   // Picture-in-Picture is enabled for a document or element, otherwise it is
   // not supported.
@@ -49,37 +67,58 @@ class CORE_EXPORT PictureInPictureController
     kDisabledBySystem,
     kDisabledByPermissionsPolicy,
     kDisabledByAttribute,
-    kInvalidWidthOrHeightOption,
+    kAutoPipAndroid,
+
+    // An active document that's already a picture-in-picture document may not
+    // re-enter picture-in-picture mode.
+    kDocumentPip,
   };
 
-  // Enter Picture-in-Picture for an element with options if any and resolve
-  // promise if any.
-  virtual void EnterPictureInPicture(HTMLElement*,
-                                     PictureInPictureOptions*,
-                                     ScriptPromiseResolver*) = 0;
+  // Enter Picture-in-Picture for a video element and resolve promise if any.
+  virtual void EnterPictureInPicture(
+      HTMLVideoElement*,
+      ScriptPromiseResolver<PictureInPictureWindow>*) = 0;
+
+  // Enters an immersive Picture-in-Picture session for the given video element.
+  virtual void EnterPictureInPictureImmersive(
+      HTMLVideoElement& video_element) = 0;
 
   // Exit Picture-in-Picture for a video element and resolve promise if any.
   virtual void ExitPictureInPicture(HTMLVideoElement*,
-                                    ScriptPromiseResolver*) = 0;
+                                    ScriptPromiseResolver<IDLUndefined>*) = 0;
 
-  // Returns whether a given element in a document associated with the
+  // Returns whether a given video element in a document associated with the
   // controller is allowed to request Picture-in-Picture.
-  virtual Status IsElementAllowed(const HTMLElement&) const = 0;
+  virtual Status IsElementAllowed(const HTMLVideoElement&,
+                                  bool report_failure = false) const = 0;
 
   // Should be called when an element has exited Picture-in-Picture.
-  virtual void OnExitedPictureInPicture(ScriptPromiseResolver*) = 0;
-
-  // Add video element to the list of video elements for the associated document
-  // that are eligible to Auto Picture-in-Picture.
-  virtual void AddToAutoPictureInPictureElementsList(HTMLVideoElement*) = 0;
-
-  // Remove video element from the list of video elements for the associated
-  // document that are eligible to Auto Picture-in-Picture.
-  virtual void RemoveFromAutoPictureInPictureElementsList(
-      HTMLVideoElement*) = 0;
+  virtual void OnExitedPictureInPicture(
+      ScriptPromiseResolver<IDLUndefined>*) = 0;
 
   // Notifies that one of the states used by Picture-in-Picture has changed.
   virtual void OnPictureInPictureStateChange() = 0;
+
+  // Notifies that the media position has changed for the player in
+  // Picture-in-Picture.
+  virtual void OnMediaPositionStateChanged(
+      const media_session::mojom::blink::MediaPositionPtr& media_position) = 0;
+
+  // Returns element currently in Picture-in-Picture if any. Null otherwise.
+  virtual Element* PictureInPictureElement() const = 0;
+  virtual Element* PictureInPictureElement(TreeScope&) const = 0;
+
+  // Returns whether system allows Picture-in-Picture feature or not for
+  // the associated document.
+  virtual bool PictureInPictureEnabled() const = 0;
+
+  // Manages a transient request token that authorizes entering
+  // Picture-in-Picture when triggered by a browser action (such as
+  // the `MediaSession` `enterpictureinpicture` action) without granting broad
+  // user activation to the frame.
+  virtual bool IsPictureInPictureRequestTokenActive() const = 0;
+  virtual void ActivatePictureInPictureRequestToken() = 0;
+  virtual bool ConsumePictureInPictureRequestToken() = 0;
 
   void Trace(Visitor*) const override;
 
@@ -90,6 +129,19 @@ class CORE_EXPORT PictureInPictureController
   // It is protected so that clients use the static method
   // IsElementInPictureInPicture() that avoids creating the controller.
   virtual bool IsPictureInPictureElement(const Element*) const = 0;
+
+  // Returns the document picture-in-picture window opened by the Document. It
+  // returns null if there is no open document picture-in-picture window for the
+  // Document or if PictureInPictureController is not attached to the Document.
+  // It is protected so that clients use the static method
+  // GetDocumentPictureInPictureWindow() that avoids creating the controller.
+  virtual LocalDOMWindow* GetDocumentPictureInPictureWindow() const = 0;
+
+  // If this is attached to a document picture-in-picture window, then this
+  // returns the LocalDOMWindow that owns and originally opened the document
+  // picture-in-picture window. Returns null if the this is not attached to a
+  // document picture-in-picture window.
+  virtual LocalDOMWindow* GetDocumentPictureInPictureOwner() const = 0;
 };
 
 }  // namespace blink

@@ -1,21 +1,21 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SECURITY_INTERSTITIALS_CORE_METRICS_HELPER_H_
 #define COMPONENTS_SECURITY_INTERSTITIALS_CORE_METRICS_HELPER_H_
 
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/time/time.h"
 #include "url/gurl.h"
 
 namespace history {
 class HistoryService;
 struct VisibleVisitCountToHostResult;
-}
+}  // namespace history
 
 namespace security_interstitials {
 
@@ -28,6 +28,9 @@ namespace security_interstitials {
 //
 // If |extra_suffix| is not empty, MetricsHelper will append ".<extra_suffix>"
 // to generate an additional 2 or 4 more metrics.
+// If |extra_extra_Suffix| is ALSO not empty, MetricsHelper will append
+// ".<extra_extra_suffix>" to generate an additional metrics beyond what
+// |extra_suffix| will produce.
 class MetricsHelper {
  public:
   // These enums are used for histograms.  Don't reorder, delete, or insert
@@ -39,6 +42,7 @@ class MetricsHelper {
     PROCEEDING_DISABLED,
     MAX_DECISION
   };
+  // LINT.IfChange(SecurityInterstitialInteraction)
   enum Interaction {
     TOTAL_VISITS,
     SHOW_ADVANCED,
@@ -54,20 +58,30 @@ class MetricsHelper {
     SHOW_WHITEPAPER,
     SHOW_ENHANCED_PROTECTION,
     OPEN_ENHANCED_PROTECTION,
+    CLOSE_INTERSTITIAL_WITHOUT_UI,
+    OPEN_ADVANCED_PROTECTION_SETTINGS,
+    VIEW_CERTIFICATE,
     MAX_INTERACTION
   };
+  // LINT.ThenChange(//tools/metrics/histograms/enums.xml:SecurityInterstitialInteraction)
 
   // metric_prefix: Histogram prefix for UMA.
   //                examples: "phishing", "ssl_overridable"
   // extra_suffix: If not-empty, will generate second set of metrics by
   //               placing at the end of the metric name.  Examples:
   //               "from_datasaver", "from_device"
+  // blocked_page_shown_timestamp: If not null, will generate a suffix
+  //               indicating whether the interstitial is triggered after the
+  //               blocked page is shown. Examples: "after_page_shown",
+  //               "before_page_shown".
   struct ReportDetails {
     ReportDetails();
     ReportDetails(const ReportDetails& other);
     ~ReportDetails();
     std::string metric_prefix;
     std::string extra_suffix;
+    std::string extra_extra_suffix;
+    std::optional<base::TimeTicks> blocked_page_shown_timestamp;
   };
 
   // Args:
@@ -80,6 +94,10 @@ class MetricsHelper {
   MetricsHelper(const GURL& url,
                 const ReportDetails settings,
                 history::HistoryService* history_service);
+
+  MetricsHelper(const MetricsHelper&) = delete;
+  MetricsHelper& operator=(const MetricsHelper&) = delete;
+
   virtual ~MetricsHelper();
 
   // Records a user decision or interaction to the appropriate UMA metrics
@@ -87,6 +105,7 @@ class MetricsHelper {
   void RecordUserDecision(Decision decision);
   void RecordUserInteraction(Interaction interaction);
   void RecordShutdownMetrics();
+  void RecordInterstitialShowDelay();
 
   // Number of times user visited this origin before. -1 means not-yet-set.
   int NumVisits();
@@ -109,8 +128,6 @@ class MetricsHelper {
   const ReportDetails settings_;
   int num_visits_;
   base::CancelableTaskTracker request_tracker_;
-
-  DISALLOW_COPY_AND_ASSIGN(MetricsHelper);
 };
 
 }  // namespace security_interstitials

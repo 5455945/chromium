@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 # based on an almost identical script by: jyrki@google.com (Jyrki Alakuijala)
@@ -29,7 +29,6 @@ INCLUDE_PATHS = [
   'skia/ext',
   'testing/gmock/include',
   'testing/gtest/include',
-  'third_party/google_toolbox_for_mac/src',
   'third_party/icu/public/common',
   'third_party/icu/public/i18n',
   'third_party/protobuf',
@@ -93,10 +92,12 @@ def Walk(include_dirs, seen, filename, parent, indent):
       if include.startswith('"'):
         include = include[1:-1]
       total_bytes += Walk(
-        include_dirs, seen, include, resolved_filename, indent + 2)
+        include_dirs, seen, include, resolved_filename, indent + 2
+      )
     elif line.startswith('import '):
       total_bytes += Walk(
-        include_dirs, seen, line.split('"')[1], resolved_filename, indent + 2)
+        include_dirs, seen, line.split('"')[1], resolved_filename, indent + 2
+      )
   return total_bytes + len("".join(lines))
 
 

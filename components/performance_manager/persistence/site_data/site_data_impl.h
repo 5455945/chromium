@@ -1,16 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_PERSISTENCE_SITE_DATA_SITE_DATA_IMPL_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_PERSISTENCE_SITE_DATA_SITE_DATA_IMPL_H_
 
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/byte_size.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -20,7 +22,6 @@
 #include "components/performance_manager/persistence/site_data/site_data_store.h"
 #include "components/performance_manager/persistence/site_data/tab_visibility.h"
 #include "components/performance_manager/public/persistence/site_data/feature_usage.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 namespace performance_manager {
@@ -63,6 +64,9 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
     // Called when this object is about to get destroyed.
     virtual void OnSiteDataImplDestroyed(SiteDataImpl* impl) = 0;
   };
+
+  SiteDataImpl(const SiteDataImpl&) = delete;
+  SiteDataImpl& operator=(const SiteDataImpl&) = delete;
 
   // Must be called when a load event is received for this site, this can be
   // invoked several times if instances of this class are shared between
@@ -115,7 +119,7 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
   void NotifyLoadTimePerformanceMeasurement(
       base::TimeDelta load_duration,
       base::TimeDelta cpu_usage_estimate,
-      uint64_t private_footprint_kb_estimate);
+      base::ByteSize private_footprint_estimate);
 
   base::TimeDelta last_loaded_time_for_testing() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -173,16 +177,15 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
   friend class performance_manager::MockDataCache;
 
   SiteDataImpl(const url::Origin& origin,
-               OnDestroyDelegate* delegate,
+               base::WeakPtr<OnDestroyDelegate> delegate,
                SiteDataStore* data_store);
 
   virtual ~SiteDataImpl();
 
   // Helper functions to convert from/to the internal representation that is
   // used to store TimeDelta values in the |SiteDataProto| protobuf.
-  static base::TimeDelta InternalRepresentationToTimeDelta(
-      ::google::protobuf::int64 value) {
-    return base::TimeDelta::FromSeconds(value);
+  static base::TimeDelta InternalRepresentationToTimeDelta(int64_t value) {
+    return base::Seconds(value);
   }
   static int64_t TimeDeltaToInternalRepresentation(base::TimeDelta delta) {
     return delta.InSeconds();
@@ -223,8 +226,7 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
 
   // Helper function to update a given |SiteDataFeatureProto| when a
   // feature gets used.
-  void NotifyFeatureUsage(SiteDataFeatureProto* feature_proto,
-                          const char* feature_name);
+  void NotifyFeatureUsage(SiteDataFeatureProto* feature_proto);
 
   bool IsLoaded() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -233,7 +235,7 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
 
   // Callback that needs to be called by the data store once it has finished
   // trying to read the protobuf.
-  void OnInitCallback(absl::optional<SiteDataProto> site_characteristic_proto);
+  void OnInitCallback(std::optional<SiteDataProto> site_characteristic_proto);
 
   // Decrement the |loaded_tabs_in_background_count_| counter and update the
   // local feature observation durations if necessary.
@@ -280,11 +282,17 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
 
   // The data store used to store the site characteristics, it should outlive
   // this object.
-  SiteDataStore* const data_store_;
+  const raw_ptr<SiteDataStore, DanglingUntriaged> data_store_;
 
   // The delegate that should get notified when this object is about to get
   // destroyed, it should outlive this object.
-  OnDestroyDelegate* const delegate_;
+  // The use of WeakPtr here is a temporary, minimally invasive fix for the UAF
+  // reported in https://crbug.com/1231933. By using a WeakPtr, the call-out
+  // is avoided in the case where the OnDestroyDelegate has been deleted before
+  // all SiteDataImpls have been released.
+  // The proper fix for this is going to be more invasive and less suitable
+  // for merging, should it come to that.
+  base::WeakPtr<OnDestroyDelegate> const delegate_;
 
   // Indicates if this object has been fully initialized, either because the
   // read operation from the database has completed or because it has been
@@ -304,8 +312,6 @@ class SiteDataImpl : public base::RefCounted<SiteDataImpl> {
 
   base::WeakPtrFactory<SiteDataImpl> weak_factory_
       GUARDED_BY_CONTEXT(sequence_checker_){this};
-
-  DISALLOW_COPY_AND_ASSIGN(SiteDataImpl);
 };
 
 }  // namespace internal

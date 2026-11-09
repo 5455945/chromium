@@ -1,31 +1,42 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/metrics_switches.h"
 
+#include "base/check.h"
+#include "base/command_line.h"
+
 namespace metrics {
-namespace switches {
 
-// Enables the recording of metrics reports but disables reporting. In contrast
-// to kForceEnableMetricsReporting, this executes all the code that a normal
-// client would use for reporting, except the report is dropped rather than sent
-// to the server. This is useful for finding issues in the metrics code during
-// UI and performance tests.
-const char kMetricsRecordingOnly[] = "metrics-recording-only";
+bool IsMetricsRecordingOnlyEnabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kMetricsRecordingOnly);
+}
 
-// Override the standard time interval between each metrics report upload for
-// UMA and UKM. It is useful to set to a short interval for debugging. Unit in
-// seconds. (The default is 1800 seconds on desktop).
-const char kMetricsUploadIntervalSec[] = "metrics-upload-interval";
+bool IsMetricsReportingForceEnabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kForceEnableMetricsReporting);
+}
 
-// Forces a reset of the one-time-randomized FieldTrials on this client, also
-// known as the Chrome Variations state.
-const char kResetVariationState[] = "reset-variation-state";
+bool IsMsbbSettingForcedOnForUkm() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kForceMsbbSettingOnForUkm);
+}
 
-// Forces metrics reporting to be enabled. Should not be used for tests as it
-// will send data to servers.
-const char kForceEnableMetricsReporting[] = "force-enable-metrics-reporting";
+void EnableMetricsRecordingOnlyForTesting(base::CommandLine* command_line) {
+  CHECK(command_line);
+  if (!command_line->HasSwitch(switches::kMetricsRecordingOnly)) {
+    command_line->AppendSwitch(switches::kMetricsRecordingOnly);
+  }
+}
 
-}  // namespace switches
+void ForceEnableMetricsReportingForTesting() {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  CHECK(command_line);
+  if (!command_line->HasSwitch(switches::kForceEnableMetricsReporting)) {
+    command_line->AppendSwitch(switches::kForceEnableMetricsReporting);
+  }
+}
+
 }  // namespace metrics

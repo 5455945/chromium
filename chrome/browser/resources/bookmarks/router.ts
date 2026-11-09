@@ -1,132 +1,135 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/polymer/v3_0/iron-location/iron-location.js';
-import 'chrome://resources/polymer/v3_0/iron-location/iron-query-params.js';
-
-import {StoreObserver} from 'chrome://resources/js/cr/ui/store.m.js';
-import {Debouncer, html, microTask, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {CrRouter} from 'chrome://resources/js/cr_router.js';
+import {EventTracker} from 'chrome://resources/js/event_tracker.js';
+import type {StoreObserver} from 'chrome://resources/js/store.js';
 
 import {selectFolder, setSearchTerm} from './actions.js';
-import {BOOKMARKS_BAR_ID} from './constants.js';
-import {BookmarksStoreClientInterface, StoreClient} from './store_client.js';
-import {BookmarksPageState} from './types.js';
-
-const BookmarksRouterElementBase =
-    mixinBehaviors(StoreClient, PolymerElement) as {
-  new (): PolymerElement & BookmarksStoreClientInterface &
-      StoreObserver<BookmarksPageState>
-}
+import {ROOT_NODE_ID} from './constants.js';
+import {Store} from './store.js';
+import type {BookmarksPageState} from './types.js';
+import {findIdByLegacyId} from './util.js';
 
 /**
  * This element is a one way bound interface that routes the page URL to
  * the searchTerm and selectedId. Clients must initialize themselves by
  * reading the router's fields after attach.
  */
-export class BookmarksRouterElement extends BookmarksRouterElementBase {
-  static get is() {
-    return 'bookmarks-router';
-  }
-
-  static get template() {
-    return html`{__html_template__}`;
-  }
-
-  static get properties() {
-    return {
-      queryParams_: Object,
-
-      query_: {
-        type: String,
-        observer: 'onQueryChanged_',
-      },
-
-      urlQuery_: {
-        type: String,
-        observer: 'onUrlQueryChanged_',
-      },
-
-      searchTerm_: {
-        type: String,
-        value: '',
-      },
-
-      selectedId_: String,
-    };
-  }
-
-  private query_: string;
-  private queryParams_: {q?: string, id?: string};
+export class BookmarksRouter implements StoreObserver<BookmarksPageState> {
   private searchTerm_: string = '';
-  private selectedId_: string;
-  private urlQuery_: string;
-  private debounceJob_: Debouncer;
+  private selectedId_: string = '';
+  // The id shown in the URL for `selectedId_`. See `getUrlId_()`.
+  private selectedUrlId_: string = '';
+  private defaultId_: string = '';
+  private updateStateTimeout_: number|null = null;
+  private tracker_: EventTracker = new EventTracker();
 
-  static get observers() {
-    return [
-      'onQueryParamsChanged_(queryParams_)',
-      'onStateChanged_(searchTerm_, selectedId_)',
-    ];
+  initialize() {
+    const store = Store.getInstance();
+    store.addObserver(this);
+    if (store.isInitialized()) {
+      this.onStateChanged(store.data);
+    }
+
+    const router = CrRouter.getInstance();
+    router.setDwellTime(200);
+    this.onQueryParamsChanged_(router.getQueryParams());
+    this.tracker_.add(
+        router, 'cr-router-query-params-changed',
+        (e: Event) => this.onQueryParamsChanged_(
+            (e as CustomEvent<URLSearchParams>).detail));
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    this.watch('selectedId_', function(state: BookmarksPageState) {
-      return state.selectedFolder;
-    });
-    this.watch('searchTerm_', function(state: BookmarksPageState) {
-      return state.search.term;
-    });
-    this.updateFromStore();
+  teardown() {
+    if (this.updateStateTimeout_) {
+      clearTimeout(this.updateStateTimeout_);
+      this.updateStateTimeout_ = null;
+    }
+    this.tracker_.removeAll();
+    Store.getInstance().removeObserver(this);
   }
 
-  private onQueryParamsChanged_() {
-    const searchTerm = this.queryParams_.q || '';
-    let selectedId = this.queryParams_.id;
+  private onQueryParamsChanged_(newParams: URLSearchParams) {
+    const searchTerm = newParams.get('q') || '';
+    let selectedId = newParams.get('id');
     if (!selectedId && !searchTerm) {
-      selectedId = BOOKMARKS_BAR_ID;
+      selectedId = this.defaultId_;
     }
 
     if (searchTerm !== this.searchTerm_) {
       this.searchTerm_ = searchTerm;
-      this.dispatch(setSearchTerm(searchTerm));
+      Store.getInstance().dispatch(setSearchTerm(searchTerm));
     }
 
-    if (selectedId && selectedId !== this.selectedId_) {
+    if (selectedId && selectedId !== this.selectedId_ &&
+        selectedId !== this.selectedUrlId_) {
       this.selectedId_ = selectedId;
+      this.selectedUrlId_ = selectedId;
       // Need to dispatch a deferred action so that during page load
-      // `this.getState()` will only evaluate after the Store is initialized.
-      this.dispatchAsync((dispatch) => {
-        dispatch(selectFolder(selectedId!, this.getState().nodes));
+      // `Store.getInstance().data` will only evaluate after the Store is
+      // initialized.
+      Store.getInstance().dispatchAsync((dispatch) => {
+        const nodes = Store.getInstance().data.nodes;
+        // The browser (e.g. the bookmark bar context menu) and older saved
+        // URLs refer to folders by their legacy numeric id. Map those to the
+        // UUID-based ids used by the store.
+        const resolvedId = nodes[selectedId] ?
+            selectedId :
+            (findIdByLegacyId(nodes, selectedId) ?? selectedId);
+        const action = selectFolder(resolvedId, nodes);
+        if (action) {
+          dispatch(action);
+        }
       });
     }
   }
 
-  private onQueryChanged_(current: (string|null), previous: (string|null)) {
-    if (previous !== undefined) {
-      this.urlQuery_ = this.query_;
+  onStateChanged(state: BookmarksPageState) {
+    this.selectedId_ = state.selectedFolder;
+    this.selectedUrlId_ = this.getUrlId_(state, state.selectedFolder);
+    this.searchTerm_ = state.search.term;
+    // Default to the first child of root, which could be
+    // ACCOUNT_HEADING_NODE_ID, the local bookmark bar, or the account bookmark
+    // bar.
+    this.defaultId_ = state.nodes[ROOT_NODE_ID]!.children![0]!;
+    if (this.updateStateTimeout_) {
+      clearTimeout(this.updateStateTimeout_);
     }
+    // Debounce to microtask timing.
+    this.updateStateTimeout_ = setTimeout(() => this.updateQueryParams_(), 0);
   }
 
-  private onUrlQueryChanged_() {
-    this.query_ = this.urlQuery_;
-  }
-
-  private onStateChanged_() {
-    this.debounceJob_ = Debouncer.debounce(
-        this.debounceJob_, microTask, () => this.updateQueryParams_());
+  /**
+   * Returns the id to show in the URL for the node with store id `id`.
+   *
+   * IMPORTANT: chrome://bookmarks/?id=<numeric id> is effectively a public
+   * API and must not change. Users bookmark and share these URLs, and
+   * automation reads the id from the URL and passes it to the
+   * chrome.bookmarks extension API, which uses the same numeric ids. The
+   * UUID-based store ids are an implementation detail and must not leak into
+   * the URL. This is covered by end-to-end browser tests.
+   *
+   * Nodes without a numeric id (e.g. the synthetic account/local headings)
+   * fall back to their store id.
+   */
+  private getUrlId_(state: BookmarksPageState, id: string): string {
+    return String(state.nodes[id]?.legacyId ?? id);
   }
 
   private updateQueryParams_() {
+    assert(this.updateStateTimeout_);
+    clearTimeout(this.updateStateTimeout_);
+    this.updateStateTimeout_ = null;
+
+    const queryParams = new URLSearchParams();
     if (this.searchTerm_) {
-      this.queryParams_ = {q: this.searchTerm_};
-    } else if (this.selectedId_ !== BOOKMARKS_BAR_ID) {
-      this.queryParams_ = {id: this.selectedId_};
-    } else {
-      this.queryParams_ = {};
+      queryParams.set('q', this.searchTerm_);
+    } else if (this.selectedId_ !== this.defaultId_) {
+      queryParams.set('id', this.selectedUrlId_);
     }
+    CrRouter.getInstance().setQueryParams(queryParams);
   }
 }
-
-customElements.define(BookmarksRouterElement.is, BookmarksRouterElement);

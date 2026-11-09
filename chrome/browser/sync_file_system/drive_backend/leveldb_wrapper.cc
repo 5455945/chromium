@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,7 @@ LevelDBWrapper::Iterator::Iterator(LevelDBWrapper* db)
       db_iterator_(db->db_->NewIterator(leveldb::ReadOptions())),
       map_iterator_(db->pending_.end()) {}
 
-LevelDBWrapper::Iterator::~Iterator() {}
+LevelDBWrapper::Iterator::~Iterator() = default;
 
 bool LevelDBWrapper::Iterator::Valid() {
   return map_iterator_ != db_->pending_.end() ||
@@ -70,7 +70,7 @@ void LevelDBWrapper::Iterator::Next() {
 }
 
 void LevelDBWrapper::Iterator::Delete() {
-  DCHECK(Valid());
+  CHECK(Valid(), base::NotFatalUntil::M162);
 
   const std::string key_str = key().ToString();
   Transaction deletion(DELETE_OPERATION, std::string());
@@ -86,7 +86,7 @@ void LevelDBWrapper::Iterator::Delete() {
 }
 
 leveldb::Slice LevelDBWrapper::Iterator::key() {
-  DCHECK(Valid());
+  CHECK(Valid(), base::NotFatalUntil::M162);
 
   if (!db_iterator_->Valid())
     return map_iterator_->first;
@@ -99,7 +99,7 @@ leveldb::Slice LevelDBWrapper::Iterator::key() {
 }
 
 leveldb::Slice LevelDBWrapper::Iterator::value() {
-  DCHECK(Valid());
+  CHECK(Valid(), base::NotFatalUntil::M162);
 
   if (!db_iterator_->Valid())
     return map_iterator_->second.second;
@@ -111,7 +111,8 @@ leveldb::Slice LevelDBWrapper::Iterator::value() {
   if (db_key.compare(map_key) < 0)
     return db_iterator_->value();
 
-  DCHECK(map_iterator_->second.first == PUT_OPERATION);
+  CHECK(map_iterator_->second.first == PUT_OPERATION,
+        base::NotFatalUntil::M162);
   return map_iterator_->second.second;
 }
 
@@ -147,10 +148,10 @@ void LevelDBWrapper::Iterator::AdvanceIterators() {
 // ---------------------------------------------------------------------------
 LevelDBWrapper::LevelDBWrapper(std::unique_ptr<leveldb::DB> db)
     : db_(std::move(db)), num_puts_(0), num_deletes_(0) {
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M162);
 }
 
-LevelDBWrapper::~LevelDBWrapper() {}
+LevelDBWrapper::~LevelDBWrapper() = default;
 
 void LevelDBWrapper::Put(const std::string& key, const std::string& value) {
   pending_[key] = Transaction(PUT_OPERATION, value);
@@ -177,7 +178,6 @@ leveldb::Status LevelDBWrapper::Get(const std::string& key,
       return leveldb::Status::NotFound(leveldb::Slice());
   }
   NOTREACHED();
-  return leveldb::Status::NotSupported("Not supported operation.");
 }
 
 std::unique_ptr<LevelDBWrapper::Iterator> LevelDBWrapper::NewIterator() {

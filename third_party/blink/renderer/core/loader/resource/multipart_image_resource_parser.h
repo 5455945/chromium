@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,8 +41,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_RESOURCE_MULTIPART_IMAGE_RESOURCE_PARSER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_RESOURCE_MULTIPART_IMAGE_RESOURCE_PARSER_H_
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -56,7 +58,7 @@ class CORE_EXPORT MultipartImageResourceParser final
    public:
     virtual ~Client() = default;
     virtual void OnePartInMultipartReceived(const ResourceResponse&) = 0;
-    virtual void MultipartDataReceived(const char* bytes, size_t) = 0;
+    virtual void MultipartDataReceived(base::span<const uint8_t> bytes) = 0;
     void Trace(Visitor* visitor) const override {}
   };
 
@@ -66,9 +68,11 @@ class CORE_EXPORT MultipartImageResourceParser final
   MultipartImageResourceParser(const MultipartImageResourceParser&) = delete;
   MultipartImageResourceParser& operator=(const MultipartImageResourceParser&) =
       delete;
-  void AppendData(const char* bytes, wtf_size_t);
+  void AppendData(base::span<const char> bytes);
   void Finish();
   void Cancel() { is_cancelled_ = true; }
+
+  wtf_size_t BufferedBytes() const { return data_.size(); }
 
   void Trace(Visitor*) const;
 

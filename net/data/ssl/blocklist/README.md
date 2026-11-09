@@ -145,6 +145,17 @@ Another incident in August 2019.
 
   * [82a4cedbc7f61ce5cb04482aa27ea3145bb0cea58ab63ba1931a1654bfbdbb4f.pem](82a4cedbc7f61ce5cb04482aa27ea3145bb0cea58ab63ba1931a1654bfbdbb4f.pem)
 
+### TrustCor
+
+To coincide with the release of M111, the Chrome Root Program announced a
+distrust of the CA Owner "TrustCor".
+
+For details, see <https://groups.google.com/a/mozilla.org/g/dev-security-policy/c/oxX69KFvsm4/m/PKpJf5W6AQAJ>
+
+  * [5a885db19c01d912c5759388938cafbbdf031ab2d48e91ee15589b42971d039c.pem](5a885db19c01d912c5759388938cafbbdf031ab2d48e91ee15589b42971d039c.pem)
+  * [0753e940378c1bd5e3836e395daea5cb839e5046f1bd0eae1951cf10fec7c965.pem](0753e940378c1bd5e3836e395daea5cb839e5046f1bd0eae1951cf10fec7c965.pem)
+  * [d40e9c86cd8fe468c1776959f49ea774fa548684b6c406f3909261f4dce2575c.pem](d40e9c86cd8fe468c1776959f49ea774fa548684b6c406f3909261f4dce2575c.pem)
+
 ### Trustwave
 
 For details, see <https://www.trustwave.com/Resources/SpiderLabs-Blog/Clarifying-The-Trustwave-CA-Policy-Update/>
@@ -168,6 +179,17 @@ have been revoked.
 
   * [372447c43185c38edd2ce0e9c853f9ac1576ddd1704c2f54d96076c089cb4227.pem](372447c43185c38edd2ce0e9c853f9ac1576ddd1704c2f54d96076c089cb4227.pem)
   * [42187727be39faf667aeb92bf0cc4e268f6e2ead2cefbec575bdc90430024f69.pem](42187727be39faf667aeb92bf0cc4e268f6e2ead2cefbec575bdc90430024f69.pem)
+
+### Uganda
+
+Google and Youtube certificates from Let's Encrypt.
+
+  * [289ed1676f42b679f2b665bb5a3f25610d9d19ac017beafa46787f1d6022986a](289ed1676f42b679f2b665bb5a3f25610d9d19ac017beafa46787f1d6022986a.pem)
+  * [3a554ead9dd3e881c0bf6b4c694755ca51acbfb5b99ded5af49da950be21f2f7](3a554ead9dd3e881c0bf6b4c694755ca51acbfb5b99ded5af49da950be21f2f7.pem)
+  * [632b75ece2b543391dc3d520c4d9944cd6b9a302a9a60401aabcaaddf6b9451d](632b75ece2b543391dc3d520c4d9944cd6b9a302a9a60401aabcaaddf6b9451d.pem)
+  * [9717b1e4242ac93e7e6cafd2123130c9b6d12931c4b7d157f328dceb489ebdab](9717b1e4242ac93e7e6cafd2123130c9b6d12931c4b7d157f328dceb489ebdab.pem)
+  * [9adb8bc0ad191ff90992722ab16f15d607b6c111e60f0aec704a09f3360a2d81](9adb8bc0ad191ff90992722ab16f15d607b6c111e60f0aec704a09f3360a2d81.pem)
+  * [e0486928e42eeebca5e9ab5ce0f2d266f2ec9314542c0ab170736147383d21b0](e0486928e42eeebca5e9ab5ce0f2d266f2ec9314542c0ab170736147383d21b0.pem)
 
 ## Private Key Leakages
 
@@ -309,10 +331,14 @@ For details, see <https://security.googleblog.com/2019/08/protecting-chrome-user
   * [0230a604d99220e5612ee7862ab9f7a6e18e4f1ac4c9e27075788cc5220169ab.pem](0230a604d99220e5612ee7862ab9f7a6e18e4f1ac4c9e27075788cc5220169ab.pem)
   * [06fd20629c143b9eab28d2799caefc5d23fde267d16c631e3f5b8b4bab3f68e6.pem](06fd20629c143b9eab28d2799caefc5d23fde267d16c631e3f5b8b4bab3f68e6.pem)
   * [0bd39de4793cdc117138f47708aa4d583acf67adb059a0d91f668d1803bf6489.pem](0bd39de4793cdc117138f47708aa4d583acf67adb059a0d91f668d1803bf6489.pem)
+  * [c95c133b68319ee516b5f41e377f589878af1556567cc2834ef03b1d10830fd3.pem](c95c133b68319ee516b5f41e377f589878af1556567cc2834ef03b1d10830fd3.pem)
+  * [c530fadc9bfa265e63b755cc6ee04c2d70d60bb916ce2f331dc7359362571b25.pem](c530fadc9bfa265e63b755cc6ee04c2d70d60bb916ce2f331dc7359362571b25.pem)
+  * [89107c8e50e029b7b5f4ff0ccd2956bcc9d0c8ba2bfb6a58374ed63a6b034a30.pem](89107c8e50e029b7b5f4ff0ccd2956bcc9d0c8ba2bfb6a58374ed63a6b034a30.pem)
+  * [3472e4f16c570e0dd388aaaa4a64a34a4b939f1ca770996b5be0037c1aded9c1.pem](3472e4f16c570e0dd388aaaa4a64a34a4b939f1ca770996b5be0037c1aded9c1.pem)
 
 ### revoked.badssl.com
 
-  * [c6910d0ba9eddf593334149fedfe87385f37b625354bb4395c0ae2c8df48e17c.pem](c6910d0ba9eddf593334149fedfe87385f37b625354bb4395c0ae2c8df48e17c.pem)
+  * [29abf614b2870ed70df11225e9ae2068e3074eb9845ae252c2064e31ce9fe8a1.pem](29abf614b2870ed70df11225e9ae2068e3074eb9845ae252c2064e31ce9fe8a1.pem)
 
 ### blocked-interception.badssl.com
 
@@ -373,3 +399,21 @@ For details, see <https://security.googleblog.com/2016/10/distrusting-wosign-and
 ### www.cloudflarechallenge.com
 
   * [e757fd60d8dd4c26f77aca6a87f63ea4d38d0b736c7f79b56cad932d4c400fb5.pem](e757fd60d8dd4c26f77aca6a87f63ea4d38d0b736c7f79b56cad932d4c400fb5.pem)
+
+
+### eMudhra
+
+For details, see
+<https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/>
+and
+<https://groups.google.com/a/mozilla.org/g/dev-security-policy/c/0R3XLJL6FuE/m/0XofdebrAAAJ>
+
+  * [0164d7ceae5bb909c272af151ff44b1177ae9b47d9424b94f1d9558c30934d19.pem](0164d7ceae5bb909c272af151ff44b1177ae9b47d9424b94f1d9558c30934d19.pem)
+  * [42c4accd12c4f59597925e1a08a7a90102608543809308d50ec427e118ba1493.pem](42c4accd12c4f59597925e1a08a7a90102608543809308d50ec427e118ba1493.pem)
+  * [432ec25f0d28de9006d97bf752f17bbb2cd41f669933fcb072d9a1148d0261f3.pem](432ec25f0d28de9006d97bf752f17bbb2cd41f669933fcb072d9a1148d0261f3.pem)
+  * [4b2460a466f95fd40113bcdcca2ceb29b3b093921de45474da7df48874c630b1.pem](4b2460a466f95fd40113bcdcca2ceb29b3b093921de45474da7df48874c630b1.pem)
+  * [98b896625c0c230adeec3eb2cf6aad5001ecf9156a68644e82374ce5833bc25b.pem](98b896625c0c230adeec3eb2cf6aad5001ecf9156a68644e82374ce5833bc25b.pem)
+  * [9e39de2881273acc225a149c72ba3e0f51424963669ab633ee1dc7df5db067b4.pem](9e39de2881273acc225a149c72ba3e0f51424963669ab633ee1dc7df5db067b4.pem)
+  * [cb6e15165ac802e9b3f993f16c25d41f4e81c21ebde71ae1b012ac00bf9c7c3f.pem](cb6e15165ac802e9b3f993f16c25d41f4e81c21ebde71ae1b012ac00bf9c7c3f.pem)
+  * [e7568fe6e12331f4fd7de61da4c7559d0f8eb192a218d4741a3ba75184333838.pem](e7568fe6e12331f4fd7de61da4c7559d0f8eb192a218d4741a3ba75184333838.pem)
+

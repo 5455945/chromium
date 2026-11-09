@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define GIN_DEBUG_IMPL_H_
 
 #include "gin/public/debug.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-callbacks.h"
 
 namespace gin {
 

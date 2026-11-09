@@ -31,7 +31,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_WEB_FONT_DECODER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_WEB_FONT_DECODER_H_
 
-#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include <memory>
+
+#include "base/types/expected.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 
@@ -39,25 +42,45 @@ class SkTypeface;
 
 namespace blink {
 
-class WebFontDecoder final {
-  STACK_ALLOCATED();
+class IftPatcher;
+class SegmentedBuffer;
 
- public:
-  WebFontDecoder() = default;
+// Represents a font that has been successfully decoded and sanitized.
+//
+// Decoding: Bytes are converted from woff/woff2 into standard SFNT format.
+// Sanitizing: Cleans font data to prevent some exploits.
+struct PLATFORM_EXPORT DecodedWebFont {
+  // Used by Skia for rasterizing fonts.
+  sk_sp<SkTypeface> sk_typeface;
 
-  sk_sp<SkTypeface> Decode(SharedBuffer*);
-  size_t DecodedSize() const { return decoded_size_; }
+  // The size of the font after decoding and sanitizing.
+  size_t decoded_size = 0;
 
-  String GetErrorString() const { return ots_error_string_; }
+  // Used to discover and apply patches to fonts. `nullptr` if the font is not
+  // IFT-encoded or if Incremental Font Transfer is disabled.
+  std::unique_ptr<IftPatcher> ift_patcher;
 
- private:
-  void SetErrorString(const String& error_string) {
-    ots_error_string_ = error_string;
-  }
-
-  String ots_error_string_;
-  size_t decoded_size_ = 0;
+  // Defined out of line so that `IftPatcher` only needs to be forward declared
+  // here.
+  DecodedWebFont();
+  DecodedWebFont(DecodedWebFont&&) noexcept;
+  DecodedWebFont& operator=(DecodedWebFont&&) noexcept;
+  DecodedWebFont(const DecodedWebFont&) = delete;
+  DecodedWebFont& operator=(const DecodedWebFont&) = delete;
+  ~DecodedWebFont();
 };
+
+// Decodes, decompresses, and sanitizes the raw font data from the provided
+// `buffer` (which typically contains WOFF, WOFF2, or TTF data).
+//
+// Returns:
+// - On success: A `DecodedWebFont` containing the successfully created
+//   font.
+// - On failure: A `String` containing a descriptive error message (e.g., if
+//   the buffer is empty, the decompressed size exceeds limits, or OTS
+//   validation fails).
+PLATFORM_EXPORT base::expected<DecodedWebFont, String> DecodeWebFont(
+    SegmentedBuffer* buffer);
 
 }  // namespace blink
 

@@ -22,19 +22,22 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_NODE_LISTS_NODE_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_NODE_LISTS_NODE_DATA_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/dom/child_node_list.h"
 #include "third_party/blink/renderer/core/dom/empty_node_list.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
 #include "third_party/blink/renderer/core/dom/tag_collection.h"
 #include "third_party/blink/renderer/core/html/collection_type.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
 
-class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData> {
+class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData>,
+                                public NodeRareDataField {
  public:
   ChildNodeList* GetChildNodeList(ContainerNode& node) {
     DCHECK(!child_node_list_ || node == child_node_list_->VirtualOwnerNode());
@@ -58,25 +61,21 @@ class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData> {
   }
 
   using NamedNodeListKey = std::pair<CollectionType, AtomicString>;
-  struct NodeListAtomicCacheMapEntryHash {
-    STATIC_ONLY(NodeListAtomicCacheMapEntryHash);
-    static unsigned GetHash(const NamedNodeListKey& entry) {
-      return DefaultHash<AtomicString>::Hash::GetHash(
-                 entry.second == CSSSelector::UniversalSelectorAtom()
-                     ? g_star_atom
-                     : entry.second) +
+  struct NodeListAtomicCacheMapEntryHashTraits
+      : HashTraits<std::pair<CollectionType, AtomicString>> {
+    static uint32_t GetHash(const NamedNodeListKey& entry) {
+      return blink::GetHash(entry.second == CSSSelector::UniversalSelectorAtom()
+                                ? g_star_atom
+                                : entry.second) +
              entry.first;
     }
-    static bool Equal(const NamedNodeListKey& a, const NamedNodeListKey& b) {
-      return a == b;
-    }
-    static const bool safe_to_compare_to_empty_or_deleted =
-        DefaultHash<AtomicString>::Hash::safe_to_compare_to_empty_or_deleted;
+    static constexpr bool kSafeToCompareToEmptyOrDeleted =
+        HashTraits<AtomicString>::kSafeToCompareToEmptyOrDeleted;
   };
 
   typedef HeapHashMap<NamedNodeListKey,
                       Member<LiveNodeListBase>,
-                      NodeListAtomicCacheMapEntryHash>
+                      NodeListAtomicCacheMapEntryHashTraits>
       NodeListAtomicNameCacheMap;
   typedef HeapHashMap<QualifiedName, Member<TagCollectionNS>>
       TagCollectionNSCache;
@@ -112,8 +111,18 @@ class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData> {
 
   template <typename T>
   T* Cached(CollectionType collection_type) {
-    return static_cast<T*>(atomic_name_caches_.at(NamedNodeListKey(
-        collection_type, CSSSelector::UniversalSelectorAtom())));
+    auto it = atomic_name_caches_.find(NamedNodeListKey(
+        collection_type, CSSSelector::UniversalSelectorAtom()));
+    return static_cast<T*>(it != atomic_name_caches_.end() ? &*it->value
+                                                           : nullptr);
+  }
+
+  template <typename T>
+  const T* Cached(CollectionType collection_type) const {
+    auto it = atomic_name_caches_.find(NamedNodeListKey(
+        collection_type, CSSSelector::UniversalSelectorAtom()));
+    return static_cast<T*>(it != atomic_name_caches_.end() ? &*it->value
+                                                           : nullptr);
   }
 
   TagCollectionNS* AddCache(ContainerNode& node,
@@ -123,7 +132,7 @@ class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData> {
     TagCollectionNSCache::AddResult result =
         tag_collection_ns_caches_.insert(name, nullptr);
     if (!result.is_new_entry)
-      return result.stored_value->value;
+      return result.stored_value->value.Get();
 
     auto* list = MakeGarbageCollected<TagCollectionNS>(
         node, kTagCollectionNSType, namespace_uri, local_name);
@@ -138,21 +147,21 @@ class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData> {
   void InvalidateCaches(const QualifiedName* attr_name = nullptr);
 
   bool IsEmpty() const {
-    return !child_node_list_ && atomic_name_caches_.IsEmpty() &&
-           tag_collection_ns_caches_.IsEmpty();
+    return !child_node_list_ && atomic_name_caches_.empty() &&
+           tag_collection_ns_caches_.empty();
   }
 
   void AdoptTreeScope() { InvalidateCaches(); }
 
   void AdoptDocument(Document& old_document, Document& new_document) {
-    DCHECK_NE(old_document, new_document);
+    DCHECK_NE(&old_document, &new_document);
 
     NodeListAtomicNameCacheMap::const_iterator atomic_name_cache_end =
         atomic_name_caches_.end();
     for (NodeListAtomicNameCacheMap::const_iterator it =
              atomic_name_caches_.begin();
          it != atomic_name_cache_end; ++it) {
-      LiveNodeListBase* list = it->value;
+      LiveNodeListBase* list = it->value.Get();
       list->DidMoveToDocument(old_document, new_document);
     }
 
@@ -161,13 +170,13 @@ class NodeListsNodeData final : public GarbageCollected<NodeListsNodeData> {
     for (TagCollectionNSCache::const_iterator it =
              tag_collection_ns_caches_.begin();
          it != tag_end; ++it) {
-      LiveNodeListBase* list = it->value;
+      LiveNodeListBase* list = it->value.Get();
       DCHECK(!list->IsRootedAtTreeScope());
       list->DidMoveToDocument(old_document, new_document);
     }
   }
 
-  void Trace(Visitor*) const;
+  void Trace(Visitor*) const override;
 
  private:
   // Can be a ChildNodeList or an EmptyNodeList.
@@ -200,6 +209,13 @@ inline Collection* ContainerNode::EnsureCachedCollection(
 template <typename Collection>
 inline Collection* ContainerNode::CachedCollection(CollectionType type) {
   NodeListsNodeData* node_lists = NodeLists();
+  return node_lists ? node_lists->Cached<Collection>(type) : nullptr;
+}
+
+template <typename Collection>
+inline const Collection* ContainerNode::CachedCollection(
+    CollectionType type) const {
+  const NodeListsNodeData* node_lists = NodeLists();
   return node_lists ? node_lists->Cached<Collection>(type) : nullptr;
 }
 

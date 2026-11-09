@@ -1,10 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/api/system_cpu/cpu_info_provider.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -42,36 +45,13 @@ class MockCpuInfoProviderImpl : public CpuInfoProvider {
   ~MockCpuInfoProviderImpl() override = default;
 };
 
-using ContextType = ExtensionBrowserTest::ContextType;
+using SystemCpuApiTest = ExtensionApiTest;
 
-class SystemCpuApiTest : public ExtensionApiTest,
-                         public testing::WithParamInterface<ContextType> {
- public:
-  SystemCpuApiTest() = default;
-  ~SystemCpuApiTest() override = default;
-  SystemCpuApiTest(const SystemCpuApiTest&) = delete;
-  SystemCpuApiTest& operator=(const SystemCpuApiTest&) = delete;
-
- protected:
-  bool RunTest(const char* name) {
-    return RunExtensionTest(
-        name, {},
-        {.load_as_service_worker = GetParam() == ContextType::kServiceWorker});
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(EventPage,
-                         SystemCpuApiTest,
-                         ::testing::Values(ContextType::kEventPage));
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         SystemCpuApiTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-
-IN_PROC_BROWSER_TEST_P(SystemCpuApiTest, Cpu) {
+IN_PROC_BROWSER_TEST_F(SystemCpuApiTest, Cpu) {
   scoped_refptr<CpuInfoProvider> provider = new MockCpuInfoProviderImpl;
   // The provider is owned by the single CpuInfoProvider instance.
   CpuInfoProvider::InitializeForTesting(provider);
-  ASSERT_TRUE(RunTest("system_cpu")) << message_;
+  ASSERT_TRUE(RunExtensionTest("system_cpu")) << message_;
 }
 
 }  // namespace extensions

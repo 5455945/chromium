@@ -1,8 +1,9 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -12,7 +13,6 @@
 #include "third_party/abseil-cpp/absl/strings/string_view.h"
 #include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/abseil-cpp/absl/types/span.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace {
 
@@ -22,18 +22,18 @@ namespace {
 
 TEST(AbslHardeningTest, Optional) {
   absl::optional<int> optional;
-  EXPECT_DEATH_IF_SUPPORTED(*optional, "");
+  EXPECT_DEATH_IF_SUPPORTED(std::ignore = *optional, "");
 }
 
 TEST(AbslHardeningTest, StringView) {
   absl::string_view view("foo");
-  EXPECT_DEATH_IF_SUPPORTED(view[4], "");
+  EXPECT_DEATH_IF_SUPPORTED(std::ignore = view[4], "");
   EXPECT_DEATH_IF_SUPPORTED(view.remove_prefix(10), "");
   EXPECT_DEATH_IF_SUPPORTED(view.remove_suffix(10), "");
 
   absl::string_view empty("");
-  EXPECT_DEATH_IF_SUPPORTED(empty.front(), "");
-  EXPECT_DEATH_IF_SUPPORTED(empty.back(), "");
+  EXPECT_DEATH_IF_SUPPORTED(std::ignore = empty.front(), "");
+  EXPECT_DEATH_IF_SUPPORTED(std::ignore = empty.back(), "");
 }
 
 TEST(AbslHardeningTest, FixedArray) {
@@ -67,14 +67,8 @@ TEST(AbslHardeningTest, Span) {
   EXPECT_DEATH_IF_SUPPORTED(span[10], "");
 
   std::vector<int> v1 = {1, 2, 3, 4};
-  EXPECT_DEATH_IF_SUPPORTED(absl::MakeSpan(&v1[2], &v[0]), "");
-  EXPECT_DEATH_IF_SUPPORTED(absl::MakeConstSpan(&v1[2], &v[0]), "");
-}
-
-TEST(AbslHardeningTest, Variant) {
-  absl::variant<int, std::string> variant = 5;
-  EXPECT_DEATH_IF_SUPPORTED(absl::get<std::string>(variant), "");
-  EXPECT_DEATH_IF_SUPPORTED(absl::get<1>(variant), "");
+  EXPECT_DEATH_IF_SUPPORTED(absl::MakeSpan(&v1[2], &v1[0]), "");
+  EXPECT_DEATH_IF_SUPPORTED(absl::MakeConstSpan(&v1[2], &v1[0]), "");
 }
 
 }  // namespace

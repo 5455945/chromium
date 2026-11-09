@@ -1,160 +1,183 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/timing/background_tracing_helper.h"
 
-#include "base/hash/md5_constexpr.h"
+#include <optional>
+#include <string_view>
+
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
 
 class BackgroundTracingHelperTest : public testing::Test {
  public:
-  using SiteMarkHashMap = BackgroundTracingHelper::SiteMarkHashMap;
-  using MarkHashSet = BackgroundTracingHelper::MarkHashSet;
+  using SiteHashSet = BackgroundTracingHelper::SiteHashSet;
 
   BackgroundTracingHelperTest() = default;
   ~BackgroundTracingHelperTest() override = default;
 
-  static uint32_t MD5Hash32(base::StringPiece string) {
+  static size_t GetIdSuffixPos(StringView string) {
+    return BackgroundTracingHelper::GetIdSuffixPos(string);
+  }
+
+  static uint32_t MD5Hash32(std::string_view string) {
     return BackgroundTracingHelper::MD5Hash32(string);
   }
 
-  static bool ParseBackgroundTracingPerformanceMarkHashes(
-      const std::string& allow_list,
-      SiteMarkHashMap& allow_listed_hashes) {
-    return BackgroundTracingHelper::ParseBackgroundTracingPerformanceMarkHashes(
-        allow_list, allow_listed_hashes);
+  static uint64_t SHA256Hash64(std::string_view string) {
+    return BackgroundTracingHelper::SHA256Hash64(string);
   }
+
+  static std::pair<StringView, std::optional<uint32_t>> SplitMarkNameAndId(
+      StringView mark_name) {
+    return BackgroundTracingHelper::SplitMarkNameAndId(mark_name);
+  }
+
+  static bool MarkNameIsTrigger(StringView mark_name) {
+    return BackgroundTracingHelper::MarkNameIsTrigger(mark_name);
+  }
+
+  static SiteHashSet ParsePerformanceMarkSiteHashes(
+      const std::string& allow_list) {
+    return BackgroundTracingHelper::ParsePerformanceMarkSiteHashes(allow_list);
+  }
+  test::TaskEnvironment task_environment_;
 };
+
+TEST_F(BackgroundTracingHelperTest, GetIdSuffixPos) {
+  static constexpr char kFailNoSuffix[] = "nosuffixatall";
+  static constexpr char kFailNoUnderscore[] = "missingunderscore123";
+  static constexpr char kFailUnderscoreOnly[] = "underscoreonly_";
+  static constexpr char kFailNoPrefix[] = "_123";
+  EXPECT_EQ(0u, GetIdSuffixPos(kFailNoSuffix));
+  EXPECT_EQ(0u, GetIdSuffixPos(kFailNoUnderscore));
+  EXPECT_EQ(0u, GetIdSuffixPos(kFailUnderscoreOnly));
+  EXPECT_EQ(0u, GetIdSuffixPos(kFailNoPrefix));
+
+  static constexpr char kSuccess0[] = "success_1";
+  static constexpr char kSuccess1[] = "thisworks_123";
+  EXPECT_EQ(7u, GetIdSuffixPos(kSuccess0));
+  EXPECT_EQ(9u, GetIdSuffixPos(kSuccess1));
+}
 
 TEST_F(BackgroundTracingHelperTest, MD5Hash32) {
   static constexpr char kFoo[] = "foo";
   static constexpr uint32_t kFooHash = 0xacbd18db;
-  static_assert(kFooHash == base::MD5Hash32Constexpr(kFoo), "unexpected hash");
   EXPECT_EQ(kFooHash, MD5Hash32(kFoo));
 
   static constexpr char kQuickFox[] =
       "the quick fox jumps over the lazy brown dog";
   static constexpr uint32_t kQuickFoxHash = 0x01275c33;
-  static_assert(kQuickFoxHash == base::MD5Hash32Constexpr(kQuickFox),
-                "unexpected hash");
   EXPECT_EQ(kQuickFoxHash, MD5Hash32(kQuickFox));
 }
 
-TEST_F(BackgroundTracingHelperTest,
-       ParseBackgroundTracingPerformanceMarkHashes) {
-  SiteMarkHashMap hashes;
-  constexpr uint32_t kSiteHash1 = 0xdeadc0de;
+TEST_F(BackgroundTracingHelperTest, SHA256Hash64) {
+  static constexpr char kFoo[] = "foo";
+  static constexpr uint64_t kFooHash = 0x2c26b46b68ffc68fULL;
+  EXPECT_EQ(kFooHash, SHA256Hash64(kFoo));
 
-  // A list with a valid site hash not followed by an '=' is invalid.
-  EXPECT_FALSE(ParseBackgroundTracingPerformanceMarkHashes("deadc0de", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+  static constexpr char kBar[] = "bar";
+  static constexpr uint64_t kBarHash = 0xfcde2b2edba56bf4ULL;
+  EXPECT_EQ(kBarHash, SHA256Hash64(kBar));
+}
 
-  // A list with invalid characters in the site hash is invalid.
-  EXPECT_FALSE(
-      ParseBackgroundTracingPerformanceMarkHashes("nothex=aabbccdd", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+TEST_F(BackgroundTracingHelperTest, MarkNameIsTrigger) {
+  EXPECT_FALSE(MarkNameIsTrigger(""));
+  EXPECT_FALSE(MarkNameIsTrigger("a"));
+  EXPECT_FALSE(MarkNameIsTrigger("foo"));
+  EXPECT_FALSE(MarkNameIsTrigger("aaaaaaaaa"));
+  EXPECT_FALSE(MarkNameIsTrigger("trigger:"));
+  EXPECT_TRUE(MarkNameIsTrigger("trigger:foo"));
+}
 
-  // A list with an.IsEmpty site hash is invalid.
-  EXPECT_FALSE(
-      ParseBackgroundTracingPerformanceMarkHashes("=aabbccdd", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+TEST_F(BackgroundTracingHelperTest, GetMarkHashAndSequenceNumber) {
+  static constexpr char kNoSuffix[] = "trigger:foo";
+  static constexpr char kInvalidSuffix0[] = "trigger:foo_";
+  static constexpr char kInvalidSuffix1[] = "trigger:foo123";
+  static constexpr char kHasSuffix[] = "trigger:foo_123";
+  static constexpr char kHasBigSuffix[] = "trigger:foo_2147483648";
 
-  // A list with an too long site hash is invalid.
-  EXPECT_FALSE(ParseBackgroundTracingPerformanceMarkHashes(
-      "00deadc0de=aabbccdd", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+  {
+    auto result = SplitMarkNameAndId(kNoSuffix);
+    EXPECT_EQ("foo", result.first);
+    EXPECT_EQ(std::nullopt, result.second);
+  }
 
-  // A list with no mark hashes is invalid.
-  EXPECT_FALSE(
-      ParseBackgroundTracingPerformanceMarkHashes("deadc0de=", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+  {
+    auto result = SplitMarkNameAndId(kInvalidSuffix0);
+    EXPECT_EQ("foo_", result.first);
+    EXPECT_EQ(std::nullopt, result.second);
+  }
 
-  // A list with an.IsEmpty mark hash is invalid.
-  EXPECT_FALSE(ParseBackgroundTracingPerformanceMarkHashes("deadc0de=,aabbccdd",
-                                                           hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+  {
+    auto result = SplitMarkNameAndId(kInvalidSuffix1);
+    EXPECT_EQ("foo123", result.first);
+    EXPECT_EQ(std::nullopt, result.second);
+  }
 
-  // A list with a too long mark hash is invalid.
-  EXPECT_FALSE(ParseBackgroundTracingPerformanceMarkHashes(
-      "deadc0de=aabbccddee", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+  {
+    auto result = SplitMarkNameAndId(kHasSuffix);
+    EXPECT_EQ("foo", result.first);
+    EXPECT_EQ(123u, result.second);
+  }
+
+  {
+    auto result = SplitMarkNameAndId(kHasBigSuffix);
+    EXPECT_EQ("foo", result.first);
+    EXPECT_EQ(0x80000000, result.second);
+  }
+}
+
+TEST_F(BackgroundTracingHelperTest, ParsePerformanceMarkSiteHashes) {
+  // A list with a hash too long (> 16 chars) is invalid.
+  EXPECT_EQ(SiteHashSet{},
+            ParsePerformanceMarkSiteHashes("000011112222333344"));
 
   // A list with a non-hex mark hash is invalid.
-  EXPECT_FALSE(
-      ParseBackgroundTracingPerformanceMarkHashes("deadc0de=nothex", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
+  EXPECT_EQ(SiteHashSet{}, ParsePerformanceMarkSiteHashes("deadc0de,nothex"));
 
-  // Parsing an empty list is valid, but the return should be empty as well.
-  EXPECT_TRUE(ParseBackgroundTracingPerformanceMarkHashes("", hashes));
-  EXPECT_TRUE(hashes.IsEmpty());
-
-  // Expect a single mark hash to be parsed.
-  EXPECT_TRUE(
-      ParseBackgroundTracingPerformanceMarkHashes("dEADc0de=aabbccdd", hashes));
-  EXPECT_EQ(1u, hashes.size());
-  EXPECT_TRUE(hashes.Contains(kSiteHash1));
   {
-    const auto& mark_hashes = hashes.find(kSiteHash1)->value;
-    EXPECT_EQ(1u, mark_hashes.size());
-    EXPECT_TRUE(mark_hashes.Contains(0xaabbccdd));
+    auto hashes = ParsePerformanceMarkSiteHashes("");
+    EXPECT_TRUE(hashes.empty());
   }
 
-  // Expect multiple mark hashes to be parsed.
-  EXPECT_TRUE(ParseBackgroundTracingPerformanceMarkHashes(
-      "dEADc0de=aabbccdd,bcd", hashes));
-  EXPECT_EQ(1u, hashes.size());
-  EXPECT_TRUE(hashes.Contains(kSiteHash1));
   {
-    const auto& mark_hashes = hashes.find(kSiteHash1)->value;
-    EXPECT_EQ(2u, mark_hashes.size());
-    EXPECT_TRUE(mark_hashes.Contains(0x00000bcd));
-    EXPECT_TRUE(mark_hashes.Contains(0xaabbccdd));
+    auto hashes = ParsePerformanceMarkSiteHashes(",abcd,");
+    EXPECT_EQ(1u, hashes.size());
+    EXPECT_TRUE(hashes.Contains(0x0000abcdULL));
   }
 
-  // Expect even more mark hashes to be parsed, and allow a trailing ';' to be
-  // ignored.
-  EXPECT_TRUE(ParseBackgroundTracingPerformanceMarkHashes(
-      "dEADc0de=aabbccdd,bcd,bbCCddee;", hashes));
-  EXPECT_EQ(1u, hashes.size());
-  EXPECT_TRUE(hashes.Contains(kSiteHash1));
   {
-    const auto& mark_hashes = hashes.find(kSiteHash1)->value;
-    EXPECT_EQ(3u, mark_hashes.size());
-    EXPECT_TRUE(mark_hashes.Contains(0x00000bcd));
-    EXPECT_TRUE(mark_hashes.Contains(0xaabbccdd));
-    EXPECT_TRUE(mark_hashes.Contains(0xbbccddee));
+    auto hashes = ParsePerformanceMarkSiteHashes("aabbccdd");
+    EXPECT_EQ(1u, hashes.size());
+    EXPECT_TRUE(hashes.Contains(0xaabbccddULL));
   }
 
-  // Expect a list with multiple sites to be parsed.
-  constexpr uint32_t kSiteHash2 = 0xa0b0c0d0;
-  constexpr uint32_t kSiteHash3 = 0xb0b0b0b0;
-  EXPECT_TRUE(ParseBackgroundTracingPerformanceMarkHashes(
-      "a0b0c0d0=aabbccdd;dEADc0de=aabbccdd,00000bcd,bbCCddee;b0b0b0b0=abc,b0e",
-      hashes));
-  EXPECT_EQ(3u, hashes.size());
-  EXPECT_TRUE(hashes.Contains(kSiteHash1));
-  EXPECT_TRUE(hashes.Contains(kSiteHash2));
-  EXPECT_TRUE(hashes.Contains(kSiteHash3));
   {
-    const auto& mark_hashes = hashes.find(kSiteHash1)->value;
-    EXPECT_EQ(3u, mark_hashes.size());
-    EXPECT_TRUE(mark_hashes.Contains(0x00000bcd));
-    EXPECT_TRUE(mark_hashes.Contains(0xaabbccdd));
-    EXPECT_TRUE(mark_hashes.Contains(0xbbccddee));
+    // 10 chars is valid now (64-bit)
+    auto hashes = ParsePerformanceMarkSiteHashes("00deadc0de");
+    EXPECT_EQ(1u, hashes.size());
+    EXPECT_TRUE(hashes.Contains(0x00deadc0deULL));
   }
+
   {
-    const auto& mark_hashes = hashes.find(kSiteHash2)->value;
-    EXPECT_EQ(1u, mark_hashes.size());
-    EXPECT_TRUE(mark_hashes.Contains(0xaabbccdd));
+    // 16 chars is valid (64-bit)
+    auto hashes = ParsePerformanceMarkSiteHashes("123456789abcdef0");
+    EXPECT_EQ(1u, hashes.size());
+    EXPECT_TRUE(hashes.Contains(0x123456789abcdef0ULL));
   }
+
   {
-    const auto& mark_hashes = hashes.find(kSiteHash3)->value;
-    EXPECT_EQ(2u, mark_hashes.size());
-    EXPECT_TRUE(mark_hashes.Contains(0x00000abc));
-    EXPECT_TRUE(mark_hashes.Contains(0x00000b0e));
+    // Mixed 32-bit and 64-bit
+    auto hashes =
+        ParsePerformanceMarkSiteHashes("bcd,aabbccdd,123456789abcdef0");
+    EXPECT_EQ(3u, hashes.size());
+    EXPECT_TRUE(hashes.Contains(0x00000bcdULL));
+    EXPECT_TRUE(hashes.Contains(0xaabbccddULL));
+    EXPECT_TRUE(hashes.Contains(0x123456789abcdef0ULL));
   }
 }
 

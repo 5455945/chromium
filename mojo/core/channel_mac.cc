@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,39 +6,84 @@
 
 #include <mach/mach.h>
 #include <string.h>
+#include <sys/fileport.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/apple/mach_logging.h"
+#include "base/apple/scoped_mach_port.h"
+#include "base/apple/scoped_mach_vm.h"
+#include "base/compiler_specific.h"
 #include "base/containers/buffer_iterator.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/mac/mach_logging.h"
 #include "base/mac/scoped_mach_msg_destroy.h"
-#include "base/mac/scoped_mach_port.h"
-#include "base/mac/scoped_mach_vm.h"
 #include "base/message_loop/message_pump_for_io.h"
+#include "base/metrics/histogram_macros.h"
+#include "base/numerics/byte_conversions.h"
+#include "base/rand_util.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/thread_annotations.h"
+#include "base/time/time.h"
 #include "base/trace_event/typed_macros.h"
+#include "build/build_config.h"
+#include "mojo/core/ipcz_driver/envelope.h"
 
-extern "C" {
-kern_return_t fileport_makeport(int fd, mach_port_t*);
-int fileport_makefd(mach_port_t);
-}  // extern "C"
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/process_requirement.h"
+#endif
 
-namespace mojo {
-namespace core {
+namespace mojo::core {
 
 namespace {
+
+// Kill switch.
+BASE_FEATURE(kUseMachVouchers, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool ShouldUseVouchers() {
+  static bool enabled = base::FeatureList::IsEnabled(kUseMachVouchers);
+  return enabled;
+}
 
 constexpr mach_msg_id_t kChannelMacHandshakeMsgId = 'mjhs';
 constexpr mach_msg_id_t kChannelMacInlineMsgId = 'MOJO';
 constexpr mach_msg_id_t kChannelMacOOLMsgId = 'MOJ+';
+
+#if BUILDFLAG(IS_MAC)
+// When a peer process requirement is set, the peer must authenticate itself
+// within this interval after the channel starts. The security decision is the
+// audit-token check itself; this is only a liveness backstop so that a peer
+// that completes the channel handshake but never sends a qualifying message
+// (for example, a process squatting the bootstrap name that stalls on purpose)
+// cannot hold this channel's outbound messages indefinitely. It is deliberately
+// generous so a slow-but-legitimate server is not disconnected.
+constexpr base::TimeDelta kPeerValidationTimeout = base::Seconds(10);
+#endif  // BUILDFLAG(IS_MAC)
+
+// Returns whether the message at the start of `buffer`, which must have been
+// received with a MACH_RCV_TRAILER_AUDIT trailer, was sent by the kernel. Only
+// messages sent by the kernel can be trusted to be genuine Mach notifications,
+// since anyone holding a send right to a port can send it a message with any
+// msgh_id. `buffer` is taken by value so that the caller's position in it is
+// not changed.
+bool IsMessageFromKernel(base::BufferIterator<char> buffer,
+                         const mach_msg_header_t& header) {
+  buffer.Seek(header.msgh_size);
+  auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
+  static const audit_token_t kernel_audit_token = KERNEL_AUDIT_TOKEN_VALUE;
+  return trailer && base::byte_span_from_ref(trailer->msgh_audit) ==
+                        base::byte_span_from_ref(kernel_audit_token);
+}
 
 class ChannelMac : public Channel,
                    public base::CurrentThread::DestructionObserver,
@@ -52,14 +97,16 @@ class ChannelMac : public Channel,
         self_(this),
         io_task_runner_(io_task_runner),
         watch_controller_(FROM_HERE) {
-    PlatformHandle channel_handle;
-    if (connection_params.server_endpoint().is_valid()) {
-      channel_handle =
-          connection_params.TakeServerEndpoint().TakePlatformHandle();
-    } else {
-      channel_handle = connection_params.TakeEndpoint().TakePlatformHandle();
-    }
+    PlatformChannelEndpoint endpoint = connection_params.TakeEndpoint();
 
+#if BUILDFLAG(IS_MAC)
+    // If the consumer attached a server process requirement, the peer
+    // (server) must satisfy it before it is trusted. Attaching a requirement
+    // is the consumer's decision; this channel honors whatever was set.
+    peer_process_requirement_ = endpoint.TakePeerProcessRequirement();
+#endif
+
+    PlatformHandle channel_handle = endpoint.TakePlatformHandle();
     if (channel_handle.is_mach_send()) {
       send_port_ = channel_handle.TakeMachSendRight();
     } else if (channel_handle.is_mach_receive()) {
@@ -68,6 +115,9 @@ class ChannelMac : public Channel,
       NOTREACHED();
     }
   }
+
+  ChannelMac(const ChannelMac&) = delete;
+  ChannelMac& operator=(const ChannelMac&) = delete;
 
   void Start() override {
     io_task_runner_->PostTask(
@@ -80,27 +130,35 @@ class ChannelMac : public Channel,
   }
 
   void Write(MessagePtr message) override {
-    base::AutoLock lock(write_lock_);
+    RecordSentMessageMetricsSubsampled(message->data_num_bytes());
 
+    base::TimeTicks creation_time;
+    if (base::ShouldRecordSubsampledMetric(
+            Channel::kMetricSubsamplingProbability)) {
+      creation_time = base::TimeTicks::Now();
+    }
+
+    base::AutoLock lock(write_lock_);
     if (reject_writes_) {
       return;
     }
 
-    // If the channel is not fully established, queue pending messages.
-    if (!handshake_done_) {
-      pending_messages_.push_back(std::move(message));
+    // Queue pending messages until the channel is fully established, or until
+    // the peer has been authenticated against `peer_process_requirement_`.
+    if (!handshake_done_ || IsAwaitingPeerValidationLocked()) {
+      pending_messages_.emplace_back(std::move(message), creation_time);
       return;
     }
 
     // If messages are being queued, enqueue |message| and try to flush
     // the queue.
     if (send_buffer_contains_message_ || !pending_messages_.empty()) {
-      pending_messages_.push_back(std::move(message));
+      pending_messages_.emplace_back(std::move(message), creation_time);
       SendPendingMessagesLocked();
       return;
     }
 
-    SendMessageLocked(std::move(message));
+    SendMessageLocked(std::move(message), creation_time);
   }
 
   void LeakHandle() override {
@@ -113,8 +171,7 @@ class ChannelMac : public Channel,
                               size_t num_handles,
                               const void* extra_header,
                               size_t extra_header_size,
-                              std::vector<PlatformHandle>* handles,
-                              bool* deferred) override {
+                              std::vector<PlatformHandle>* handles) override {
     // Validate the incoming handles. If validation fails, ensure they are
     // destroyed.
     std::vector<PlatformHandle> incoming_handles;
@@ -133,8 +190,8 @@ class ChannelMac : public Channel,
     }
 
     for (uint16_t i = 0; i < mach_ports_header->num_ports; ++i) {
-      auto type =
-          static_cast<PlatformHandle::Type>(mach_ports_header->entries[i].type);
+      auto type = static_cast<PlatformHandle::Type>(
+          UNSAFE_TODO(mach_ports_header->entries[i]).type);
       if (type == PlatformHandle::Type::kNone) {
         return false;
       } else if (type == PlatformHandle::Type::kFd &&
@@ -153,7 +210,31 @@ class ChannelMac : public Channel,
     return true;
   }
 
+  // Unlike GetReadPlatformHandles(), this does not validate the underlying
+  // PlatformHandle type here. Instead, ipcz does this in
+  // ipcz::Message::DeserializeFromTransport(), which is called by
+  // the AcceptParcel message deserializer (OnAcceptParcel).
+  bool GetReadPlatformHandlesForIpcz(
+      size_t num_handles,
+      std::vector<PlatformHandle>& handles) override {
+    if (incoming_handles_.size() != num_handles) {
+      // ChannelMac messages are transmitted all at once or not at all, so this
+      // method should always be invoked with the exact, correct number of
+      // handles already in `incoming_handles_`.
+      return false;
+    }
+
+    DCHECK(handles.empty());
+    incoming_handles_.swap(handles);
+    return true;
+  }
+
  private:
+  struct PendingMessage {
+    MessagePtr message;
+    base::TimeTicks creation_time;
+  };
+
   ~ChannelMac() override = default;
 
   void StartOnIOThread() {
@@ -163,7 +244,10 @@ class ChannelMac : public Channel,
         vm_allocate(mach_task_self(), &address, size,
                     VM_MAKE_TAG(VM_MEMORY_MACH_MSG) | VM_FLAGS_ANYWHERE);
     MACH_CHECK(kr == KERN_SUCCESS, kr) << "vm_allocate";
-    send_buffer_.reset(address, size);
+    {
+      base::AutoLock lock(write_lock_);
+      send_buffer_.reset(address, size);
+    }
 
     kr = vm_allocate(mach_task_self(), &address, size,
                      VM_MAKE_TAG(VM_MEMORY_MACH_MSG) | VM_FLAGS_ANYWHERE);
@@ -179,8 +263,8 @@ class ChannelMac : public Channel,
     // establishes the bidirectional communication channel.
     if (send_port_ != MACH_PORT_NULL) {
       DCHECK(receive_port_ == MACH_PORT_NULL);
-      CHECK(base::mac::CreateMachPort(&receive_port_, nullptr,
-                                      MACH_PORT_QLIMIT_LARGE));
+      CHECK(base::apple::CreateMachPort(&receive_port_, nullptr,
+                                        MACH_PORT_QLIMIT_LARGE));
       if (!RequestSendDeadNameNotification()) {
         OnError(Error::kConnectionFailed);
         return;
@@ -188,14 +272,35 @@ class ChannelMac : public Channel,
       SendHandshake();
     } else if (receive_port_ != MACH_PORT_NULL) {
       DCHECK(send_port_ == MACH_PORT_NULL);
-      // Wait for the received message via the MessageLoop.
+      // Wait for the handshake message via the MessageLoop, watching for peer
+      // loss meanwhile.
+      RequestNoSendersNotification();
     } else {
       NOTREACHED();
+    }
+
+    if (ShouldUseVouchers()) {
+      kr = mach_port_set_attributes(mach_task_self(), receive_port_.get(),
+                                    MACH_PORT_IMPORTANCE_RECEIVER, nullptr, 0);
+      MACH_LOG_IF(ERROR, kr != KERN_SUCCESS, kr)
+          << "mach_port_set_attributes MACH_PORT_IMPORTANCE_RECEIVER";
     }
 
     base::CurrentThread::Get()->AddDestructionObserver(this);
     base::CurrentIOThread::Get()->WatchMachReceivePort(
         receive_port_.get(), &watch_controller_, this);
+
+#if BUILDFLAG(IS_MAC)
+    // If the peer must satisfy a process requirement, it has to authenticate
+    // itself within kPeerValidationTimeout. Failing closed converts a peer that
+    // stalls without ever sending a qualifying message into a clean connection
+    // error instead of an indefinite hold on outbound messages.
+    if (peer_process_requirement_) {
+      io_task_runner_->PostDelayedTask(
+          FROM_HERE, base::BindOnce(&ChannelMac::OnPeerValidationTimeout, this),
+          kPeerValidationTimeout);
+    }
+#endif
   }
 
   void ShutDownOnIOThread() {
@@ -203,13 +308,18 @@ class ChannelMac : public Channel,
 
     watch_controller_.StopWatchingMachPort();
 
-    send_buffer_.reset();
+    {
+      base::AutoLock lock(write_lock_);
+      send_buffer_.reset();
+      send_buffer_creation_time_ = base::TimeTicks();
+      reject_writes_ = true;
+    }
     receive_buffer_.reset();
     incoming_handles_.clear();
 
     if (leak_handles_) {
-      ignore_result(receive_port_.release());
-      ignore_result(send_port_.release());
+      std::ignore = receive_port_.release();
+      std::ignore = send_port_.release();
     } else {
       receive_port_.reset();
       send_port_.reset();
@@ -223,11 +333,11 @@ class ChannelMac : public Channel,
   // connected to |send_port_| becomes a dead name. This should be called as
   // soon as the Channel establishes both the send and receive ports.
   bool RequestSendDeadNameNotification() {
-    base::mac::ScopedMachSendRight previous;
+    base::apple::ScopedMachSendRight previous;
     kern_return_t kr = mach_port_request_notification(
         mach_task_self(), send_port_.get(), MACH_NOTIFY_DEAD_NAME, 0,
         receive_port_.get(), MACH_MSG_TYPE_MAKE_SEND_ONCE,
-        base::mac::ScopedMachSendRight::Receiver(previous).get());
+        base::apple::ScopedMachSendRight::Receiver(previous).get());
     if (kr != KERN_SUCCESS) {
       // If port is already a dead name (i.e. the receiver is already gone),
       // then the channel should be shut down by the caller.
@@ -236,6 +346,52 @@ class ChannelMac : public Channel,
       return false;
     }
     return true;
+  }
+
+  // For a channel created with only a receive right, requests that the kernel
+  // notify `receive_port_` once no send rights to it exist anymore. Until the
+  // handshake provides `send_port_` for a dead-name notification, this is how
+  // the channel detects that its peer's send right was destroyed without ever
+  // sending a handshake (e.g., if a Mach message carrying the send right was
+  // destroyed undelivered, or its recipient dropped it).
+  //
+  // This relies on the following Mach semantics:
+  //  - The kernel's send-right count for a port includes send rights in transit
+  //    in queued Mach messages (including as a message destination), while
+  //    excluding send-once rights. A send right that is still queued thus does
+  //    not trigger this notification; once the count drops to zero, no peer can
+  //    ever send a handshake because this channel makes no send rights to
+  //    `receive_port_` before the handshake.
+  //  - Passing `sync = 0` fires the notification immediately if all send rights
+  //    were already gone before the channel started.
+  void RequestNoSendersNotification() {
+    DCHECK(send_port_ == MACH_PORT_NULL);
+    base::apple::ScopedMachSendRight previous;
+    kern_return_t kr = mach_port_request_notification(
+        mach_task_self(), receive_port_.get(), MACH_NOTIFY_NO_SENDERS,
+        /*sync=*/0, receive_port_.get(), MACH_MSG_TYPE_MAKE_SEND_ONCE,
+        base::apple::ScopedMachSendRight::Receiver(previous).get());
+    if (kr != KERN_SUCCESS) {
+      MACH_LOG(ERROR, kr) << "mach_port_request_notification NO_SENDERS";
+      return;
+    }
+    awaiting_no_senders_notification_ = true;
+  }
+
+  // Cancels the request made in RequestNoSendersNotification() and ignores any
+  // MACH_NOTIFY_NO_SENDERS notification already queued behind the handshake.
+  void CancelNoSendersNotification() {
+    if (!awaiting_no_senders_notification_) {
+      return;
+    }
+    awaiting_no_senders_notification_ = false;
+    base::apple::ScopedMachSendRight previous;
+    kern_return_t kr = mach_port_request_notification(
+        mach_task_self(), receive_port_.get(), MACH_NOTIFY_NO_SENDERS,
+        /*sync=*/0, MACH_PORT_NULL, MACH_MSG_TYPE_MAKE_SEND_ONCE,
+        base::apple::ScopedMachSendRight::Receiver(previous).get());
+    MACH_LOG_IF(ERROR, kr != KERN_SUCCESS, kr)
+        << "mach_port_request_notification cancel NO_SENDERS";
   }
 
   // SendHandshake() sends to the |receive_port_| a right to |send_port_|,
@@ -269,13 +425,17 @@ class ChannelMac : public Channel,
   // Acquires the peer's send right from the handshake message sent via
   // SendHandshake(). After this, bi-directional communication is established
   // and this Channel can send to its peer any pending messages.
-  bool ReceiveHandshake(base::BufferIterator<const char> buffer) {
+  bool ReceiveHandshake(base::BufferIterator<char>& buffer) {
     if (handshake_done_) {
       OnError(Error::kReceivedMalformedData);
       return false;
     }
 
     DCHECK(send_port_ == MACH_PORT_NULL);
+
+    // Once a handshake arrives, either it fails right away or the dead-name
+    // notification on `send_port_` takes over peer-death detection.
+    CancelNoSendersNotification();
 
     auto* message = buffer.Object<mach_msg_header_t>();
     if (message->msgh_id != kChannelMacHandshakeMsgId ||
@@ -284,33 +444,66 @@ class ChannelMac : public Channel,
       return false;
     }
 
-    // Record the audit token of the sender. All messages received by the
-    // channel must be from this same sender.
-    auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
-    peer_audit_token_ = std::make_unique<audit_token_t>();
-    memcpy(peer_audit_token_.get(), &trailer->msgh_audit,
-           sizeof(audit_token_t));
-
-    send_port_ = base::mac::ScopedMachSendRight(message->msgh_remote_port);
+    send_port_ = base::apple::ScopedMachSendRight(message->msgh_remote_port);
 
     if (!RequestSendDeadNameNotification()) {
+      send_port_.reset();
       OnError(Error::kConnectionFailed);
       return false;
     }
 
+    // Record the audit token of the sender. All messages received by the
+    // channel must be from this same sender.
+    auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
+    audit_token_t audit_token;
+    UNSAFE_TODO(
+        memcpy(&audit_token, &trailer->msgh_audit, sizeof(audit_token_t)));
+
+#if BUILDFLAG(IS_MAC)
+    // If a requirement was supplied, the handshake sender is the peer that must
+    // satisfy it before any of its messages are trusted.
+    if (peer_process_requirement_ &&
+        !peer_process_requirement_->ValidateProcess(audit_token)) {
+      send_port_.reset();
+      LOG(ERROR) << "Rejecting peer that does not meet the process requirement";
+      OnError(Error::kConnectionFailed);
+      return false;
+    }
+#endif
+
+    peer_audit_token_ = std::make_unique<audit_token_t>(audit_token);
+
     base::AutoLock lock(write_lock_);
+    peer_validated_ = true;
     handshake_done_ = true;
     SendPendingMessagesLocked();
 
     return true;
   }
 
-  void SendPendingMessages() {
-    base::AutoLock lock(write_lock_);
-    SendPendingMessagesLocked();
+  // Whether outbound messages must be held because the peer has not yet been
+  // authenticated against `peer_process_requirement_`.
+  bool IsAwaitingPeerValidationLocked() const
+      EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
+#if BUILDFLAG(IS_MAC)
+    return peer_process_requirement_ && !peer_validated_;
+#else
+    return false;
+#endif
   }
 
-  void SendPendingMessagesLocked() {
+  void SendPendingMessagesLocked() EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
+    if (!send_buffer_.address()) {
+      return;
+    }
+
+    // Hold all outbound messages until the peer has been authenticated against
+    // `peer_process_requirement_`. The receive path flushes them once
+    // validation succeeds.
+    if (IsAwaitingPeerValidationLocked()) {
+      return;
+    }
+
     // If a previous send failed due to the receiver's kernel message queue
     // being full, attempt to send that failed message first.
     if (send_buffer_contains_message_ && !reject_writes_) {
@@ -326,21 +519,29 @@ class ChannelMac : public Channel,
 
     // Try and send any other pending messages that were queued.
     while (!pending_messages_.empty() && !reject_writes_) {
-      bool did_send = SendMessageLocked(std::move(pending_messages_.front()));
+      PendingMessage& pending = pending_messages_.front();
+      bool did_send =
+          SendMessageLocked(std::move(pending.message), pending.creation_time);
       // If the message failed to send because the kernel message queue is
       // full, the message will have been fully serialized and
       // |send_buffer_contains_message_| will be set to true. The Mojo message
       // object can be destroyed at this point.
       pending_messages_.pop_front();
-      if (!did_send)
+      if (!did_send) {
         break;
+      }
     }
   }
 
-  bool SendMessageLocked(MessagePtr message) {
+  bool SendMessageLocked(MessagePtr message, base::TimeTicks creation_time)
+      EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
+    if (!send_buffer_.address()) {
+      return false;
+    }
+
     DCHECK(!send_buffer_contains_message_);
-    base::BufferIterator<char> buffer(
-        reinterpret_cast<char*>(send_buffer_.address()), send_buffer_.size());
+    base::BufferIterator<char> UNSAFE_TODO(buffer(
+        reinterpret_cast<char*>(send_buffer_.address()), send_buffer_.size()));
 
     auto* header = buffer.MutableObject<mach_msg_header_t>();
     *header = mach_msg_header_t{};
@@ -407,7 +608,6 @@ class ChannelMac : public Channel,
         default:
           NOTREACHED() << "Unsupported handle type "
                        << static_cast<int>(handle.type());
-          OnWriteErrorLocked(Error::kDisconnected);
       }
     }
 
@@ -421,18 +621,24 @@ class ChannelMac : public Channel,
       descriptor->type = MACH_MSG_OOL_DESCRIPTOR;
       ++body->msgh_descriptor_count;
     } else {
-      auto* data_size = buffer.MutableObject<uint64_t>();
-      *data_size = message->data_num_bytes();
+      // Mach message structs are all 4-byte aligned, but `uint64_t` is 8-byte
+      // aligned on 64-bit architectures. To avoid alignment issues, write the
+      // size as bytes.
+      buffer.MutableSpan<uint8_t, 8>()->copy_from(
+          base::U64ToNativeEndian(message->data_num_bytes()));
 
       auto data = buffer.MutableSpan<char>(message->data_num_bytes());
-      memcpy(data.data(), message->data(), message->data_num_bytes());
+      UNSAFE_TODO(
+          memcpy(data.data(), message->data(), message->data_num_bytes()));
     }
 
     header->msgh_size = round_msg(buffer.position());
+    send_buffer_creation_time_ = creation_time;
     return MachMessageSendLocked(header);
   }
 
-  bool MachMessageSendLocked(mach_msg_header_t* header) {
+  bool MachMessageSendLocked(mach_msg_header_t* header)
+      EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
     kern_return_t kr = mach_msg(header, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
                                 header->msgh_size, 0, MACH_PORT_NULL,
                                 /*timeout=*/0, MACH_PORT_NULL);
@@ -440,14 +646,22 @@ class ChannelMac : public Channel,
       if (kr == MACH_SEND_TIMED_OUT) {
         // The kernel message queue for the peer's receive port is full, so the
         // send timed out. Since the send buffer contains a fully serialized
-        // message, set a flag to indicate this condition and arrange to try
-        // sending it again.
+        // message, set a flag to indicate this condition.
         send_buffer_contains_message_ = true;
-        io_task_runner_->PostTask(
-            FROM_HERE, base::BindOnce(&ChannelMac::SendPendingMessages, this));
+        if (!is_retry_scheduled_) {
+          // Arrange to retry sending the message again. Set a flag to ensure
+          // that this does not build up a flood of tasks to retry it, which
+          // could happen if Write() is called (potentially from a different
+          // thread), and the receiver's queue is still blocked.
+          io_task_runner_->PostTask(
+              FROM_HERE,
+              base::BindOnce(&ChannelMac::RetrySendPendingMessages, this));
+          is_retry_scheduled_ = true;
+        }
       } else {
         // If the message failed to send for other reasons, destroy it.
         send_buffer_contains_message_ = false;
+        send_buffer_creation_time_ = base::TimeTicks();
         mach_msg_destroy(header);
         if (kr != MACH_SEND_INVALID_DEST) {
           // If the message failed to send because the receiver is a dead-name,
@@ -463,15 +677,49 @@ class ChannelMac : public Channel,
       return false;
     }
 
+    if (!send_buffer_creation_time_.is_null()) {
+      base::TimeDelta latency =
+          base::TimeTicks::Now() - send_buffer_creation_time_;
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES("Mojo.Channel.WriteLatencyUs",
+                                              latency, base::Microseconds(1),
+                                              base::Seconds(1), 100);
+      send_buffer_creation_time_ = base::TimeTicks();
+    }
     send_buffer_contains_message_ = false;
     return true;
   }
 
+  void RetrySendPendingMessages() {
+    base::AutoLock lock(write_lock_);
+    is_retry_scheduled_ = false;
+    SendPendingMessagesLocked();
+  }
+
+#if BUILDFLAG(IS_MAC)
+  // Called kPeerValidationTimeout after StartOnIOThread() when a peer process
+  // requirement is set. If the peer still has not been authenticated, the
+  // channel is torn down so callers observe a connection failure instead of an
+  // indefinite stall.
+  void OnPeerValidationTimeout() {
+    {
+      base::AutoLock lock(write_lock_);
+      // Already authenticated, or the channel is already shutting down.
+      if (peer_validated_ || reject_writes_) {
+        return;
+      }
+    }
+    LOG(ERROR) << "Peer did not satisfy the process requirement within the "
+                  "validation timeout";
+    OnError(Error::kConnectionFailed);
+  }
+#endif  // BUILDFLAG(IS_MAC)
+
   // base::CurrentThread::DestructionObserver:
   void WillDestroyCurrentMessageLoop() override {
     DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-    if (self_)
+    if (self_) {
       ShutDownOnIOThread();
+    }
   }
 
   // base::MessagePumpKqueue::MachPortWatcher:
@@ -480,9 +728,13 @@ class ChannelMac : public Channel,
 
     DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
 
-    base::BufferIterator<const char> buffer(
-        reinterpret_cast<const char*>(receive_buffer_.address()),
-        receive_buffer_.size());
+    if (!receive_buffer_.address()) {
+      return;
+    }
+
+    base::BufferIterator<char> UNSAFE_TODO(
+        buffer(reinterpret_cast<char*>(receive_buffer_.address()),
+               receive_buffer_.size()));
     auto* header = buffer.MutableObject<mach_msg_header_t>();
     *header = mach_msg_header_t{};
     header->msgh_size = buffer.total_size();
@@ -491,50 +743,64 @@ class ChannelMac : public Channel,
     const mach_msg_option_t rcv_options =
         MACH_RCV_MSG | MACH_RCV_TIMEOUT |
         MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
-        MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT);
+        MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT) |
+        (ShouldUseVouchers() ? MACH_RCV_VOUCHER : 0);
     kern_return_t kr =
         mach_msg(header, rcv_options, 0, header->msgh_size, receive_port_.get(),
                  /*timeout=*/0, MACH_PORT_NULL);
     if (kr != KERN_SUCCESS) {
-      if (kr == MACH_RCV_TIMED_OUT)
+      if (kr == MACH_RCV_TIMED_OUT) {
         return;
+      }
       MACH_LOG(ERROR, kr) << "mach_msg receive";
       OnError(Error::kDisconnected);
       return;
+    }
+
+    scoped_refptr<ipcz_driver::Envelope> envelope;
+    if (ShouldUseVouchers()) {
+      envelope = base::MakeRefCounted<ipcz_driver::Envelope>(
+          base::apple::ScopedMachSendRight(header->msgh_voucher_port));
+      header->msgh_voucher_port = MACH_PORT_NULL;
+      header->msgh_bits &= ~MACH_MSGH_BITS_VOUCHER_MASK;
     }
 
     base::ScopedMachMsgDestroy scoped_message(header);
 
     if (header->msgh_id == kChannelMacHandshakeMsgId) {
       buffer.Seek(0);
-      if (ReceiveHandshake(buffer))
+      if (ReceiveHandshake(buffer)) {
         scoped_message.Disarm();
+      }
       return;
     }
 
-    if (header->msgh_id == MACH_NOTIFY_DEAD_NAME) {
+    if (header->msgh_id == MACH_NOTIFY_DEAD_NAME &&
+        IsMessageFromKernel(buffer, *header)) {
       // The DEAD_NAME notification contains a port right that must be
       // explicitly destroyed, as it is not carried in a descriptor.
       buffer.Seek(0);
       auto* notification = buffer.Object<mach_dead_name_notification_t>();
-
-      // Verify that the kernel sent the notification.
-      buffer.Seek(notification->not_header.msgh_size);
-      auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
-      static const audit_token_t kernel_audit_token = KERNEL_AUDIT_TOKEN_VALUE;
-      if (memcmp(&trailer->msgh_audit, &kernel_audit_token,
-                 sizeof(audit_token_t)) == 0) {
-        DCHECK(notification->not_port == send_port_);
-        // Release the notification's send right using this scoper.
-        base::mac::ScopedMachSendRight notify_port(notification->not_port);
-      }
+      DCHECK(notification->not_port == send_port_);
+      // Release the notification's send right using this scoper.
+      base::apple::ScopedMachSendRight notify_port(notification->not_port);
       OnError(Error::kDisconnected);
+      return;
+    } else if (header->msgh_id == MACH_NOTIFY_NO_SENDERS &&
+               IsMessageFromKernel(buffer, *header)) {
+      // Ignored if `CancelNoSendersNotification()` has already been called.
+      // Non-kernel messages with this ID (or `MACH_NOTIFY_DEAD_NAME`) are not
+      // notifications and fall through to regular message handling below.
+      if (awaiting_no_senders_notification_) {
+        awaiting_no_senders_notification_ = false;
+        OnError(Error::kDisconnected);
+      }
       return;
     } else if (header->msgh_id == MACH_NOTIFY_SEND_ONCE) {
       // Notification of an extant send-once right being destroyed. This is
-      // sent for the right allocated in RequestSendDeadNameNotification(),
-      // and no action needs to be taken. Since it is ignored, the kernel
-      // audit token need not be checked.
+      // sent for the rights allocated in RequestSendDeadNameNotification()
+      // and RequestNoSendersNotification(), and no action needs to be taken.
+      // Since it is ignored, the kernel audit token need not be checked.
       return;
     }
 
@@ -543,11 +809,38 @@ class ChannelMac : public Channel,
       return;
     }
 
-    if (peer_audit_token_) {
+#if BUILDFLAG(IS_MAC)
+    // On a channel created from a bootstrap name lookup, the first message
+    // received from the peer (server) is used to authenticate it against
+    // `peer_process_requirement_`. Outbound messages are held until this
+    // succeeds (see Write() and SendPendingMessagesLocked()).
+    if (peer_process_requirement_ && !peer_audit_token_) {
       buffer.Seek(header->msgh_size);
       auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
-      if (memcmp(&trailer->msgh_audit, peer_audit_token_.get(),
-                 sizeof(audit_token_t)) != 0) {
+      audit_token_t audit_token;
+      UNSAFE_TODO(
+          memcpy(&audit_token, &trailer->msgh_audit, sizeof(audit_token_t)));
+      if (!peer_process_requirement_->ValidateProcess(audit_token)) {
+        LOG(ERROR)
+            << "Rejecting server that does not meet the process requirement";
+        OnError(Error::kConnectionFailed);
+        return;
+      }
+      peer_audit_token_ = std::make_unique<audit_token_t>(audit_token);
+      {
+        base::AutoLock lock(write_lock_);
+        peer_validated_ = true;
+        SendPendingMessagesLocked();
+      }
+      buffer.Seek(sizeof(*header));
+    } else if (peer_audit_token_) {
+#else
+    if (peer_audit_token_) {
+#endif  // BUILDFLAG(IS_MAC)
+      buffer.Seek(header->msgh_size);
+      auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
+      if (UNSAFE_TODO(memcmp(&trailer->msgh_audit, peer_audit_token_.get(),
+                             sizeof(audit_token_t))) != 0) {
         // Do not shut down the channel because this endpoint could be
         // accessible via the bootstrap server, which means anyone could send
         // messages to it.
@@ -600,12 +893,12 @@ class ChannelMac : public Channel,
       switch (descriptor.disposition) {
         case MACH_MSG_TYPE_MOVE_SEND:
           incoming_handles_.emplace_back(
-              base::mac::ScopedMachSendRight(descriptor.name));
+              base::apple::ScopedMachSendRight(descriptor.name));
           descriptor.name = MACH_PORT_NULL;
           break;
         case MACH_MSG_TYPE_MOVE_RECEIVE:
           incoming_handles_.emplace_back(
-              base::mac::ScopedMachReceiveRight(descriptor.name));
+              base::apple::ScopedMachReceiveRight(descriptor.name));
           descriptor.name = MACH_PORT_NULL;
           break;
         default:
@@ -617,7 +910,7 @@ class ChannelMac : public Channel,
     }
 
     base::span<const char> payload;
-    base::mac::ScopedMachVM ool_memory;
+    base::apple::ScopedMachVM ool_memory;
     if (transfer_message_ool) {
       auto* descriptor = buffer.Object<mach_msg_ool_descriptor_t>();
       if (descriptor->type != MACH_MSG_OOL_DESCRIPTOR) {
@@ -626,16 +919,21 @@ class ChannelMac : public Channel,
         return;
       }
 
-      payload = base::span<const char>(
-          reinterpret_cast<const char*>(descriptor->address), descriptor->size);
+      payload = UNSAFE_TODO(base::span<const char>(
+          reinterpret_cast<const char*>(descriptor->address),
+          descriptor->size));
       // The kernel page-aligns the OOL memory when performing the mach_msg on
       // the send side, but it preserves the original size in the descriptor.
       ool_memory.reset_unaligned(
           reinterpret_cast<vm_address_t>(descriptor->address),
           descriptor->size);
     } else {
-      auto* data_size_ptr = buffer.Object<uint64_t>();
-      payload = buffer.Span<const char>(*data_size_ptr);
+      // Mach message structs are all 4-byte aligned, but `uint64_t` is 8-byte
+      // aligned on 64-bit architectures. To avoid alignment issues, write the
+      // size as bytes.
+      uint64_t data_size =
+          base::U64FromNativeEndian(*buffer.Span<uint8_t, 8>());
+      payload = buffer.Span<const char>(data_size);
     }
 
     if (payload.empty()) {
@@ -646,7 +944,9 @@ class ChannelMac : public Channel,
     scoped_message.Disarm();
 
     size_t ignored;
-    DispatchResult result = TryDispatchMessage(payload, &ignored);
+    // The envelope wrapping the voucher is attached to the message.
+    DispatchResult result = TryDispatchMessage(payload, std::nullopt,
+                                               std::move(envelope), &ignored);
     if (result != DispatchResult::kOK) {
       OnError(Error::kReceivedMalformedData);
       return;
@@ -654,7 +954,7 @@ class ChannelMac : public Channel,
   }
 
   // Marks the channel as unaccepting of new messages and shuts it down.
-  void OnWriteErrorLocked(Error error) {
+  void OnWriteErrorLocked(Error error) EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
     reject_writes_ = true;
     io_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&ChannelMac::OnError, this, error));
@@ -665,8 +965,8 @@ class ChannelMac : public Channel,
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 
-  base::mac::ScopedMachReceiveRight receive_port_;
-  base::mac::ScopedMachSendRight send_port_;
+  base::apple::ScopedMachReceiveRight receive_port_;
+  base::apple::ScopedMachSendRight send_port_;
 
   // Whether to leak the above Mach ports when the channel is shut down.
   bool leak_handles_ = false;
@@ -676,14 +976,26 @@ class ChannelMac : public Channel,
   // enqueue messages on |pending_messages_|.
   bool handshake_done_ = false;
 
+  // Whether a MACH_NOTIFY_NO_SENDERS notification for `receive_port_` is
+  // active and should be reported as a disconnection if it arrives. Only
+  // accessed on `io_task_runner_`.
+  bool awaiting_no_senders_notification_ = false;
+
   // If the channel was created with a receive right, the first message it
   // receives is the internal handshake. The audit token of the sender of the
   // handshake is recorded here, and all future messages are required to be
   // from that sender.
   std::unique_ptr<audit_token_t> peer_audit_token_;
 
+#if BUILDFLAG(IS_MAC)
+  // If non-null, the requirement the peer must satisfy before this channel
+  // trusts any message from it or flushes queued messages to it. Set from the
+  // endpoint at construction (a bootstrap name lookup on the client side).
+  std::optional<base::mac::ProcessRequirement> peer_process_requirement_;
+#endif
+
   // IO buffer for receiving Mach messages. Only accessed on |io_task_runner_|.
-  base::mac::ScopedMachVM receive_buffer_;
+  base::apple::ScopedMachVM receive_buffer_;
 
   // Handles that were received with a message that are validated and returned
   // in GetReadPlatformHandles(). Only accessed on |io_task_runner_|.
@@ -695,20 +1007,31 @@ class ChannelMac : public Channel,
 
   // Lock that protects the following members.
   base::Lock write_lock_;
-  // Whether writes should be rejected due to an internal error.
-  bool reject_writes_ = false;
+  // Whether writes should be rejected due to an internal error or channel
+  // shutdown.
+  bool reject_writes_ GUARDED_BY(write_lock_) = false;
   // IO buffer for sending Mach messages.
-  base::mac::ScopedMachVM send_buffer_;
+  base::apple::ScopedMachVM send_buffer_ GUARDED_BY(write_lock_);
   // If a message timed out during send in MachMessageSendLocked(), this will
   // be true to indicate that |send_buffer_| contains a message that must
   // be sent. If this is true, then other calls to Write() queue messages onto
   // |pending_messages_|.
-  bool send_buffer_contains_message_ = false;
+  bool send_buffer_contains_message_ GUARDED_BY(write_lock_) = false;
+  // If |send_buffer_contains_message_| is true, this boolean tracks whether
+  // a task to RetrySendPendingMessages() has been posted. There should only be
+  // one retry task in-flight at once.
+  bool is_retry_scheduled_ GUARDED_BY(write_lock_) = false;
+  // Creation timestamp of the message currently serialized in `send_buffer_`,
+  // or null if not subsampled for latency metrics.
+  base::TimeTicks send_buffer_creation_time_ GUARDED_BY(write_lock_);
+  // Whether the peer has been authenticated against
+  // |peer_process_requirement_|. Until true, outbound messages are held in
+  // |pending_messages_|. Always true when no requirement was supplied.
+  bool peer_validated_ GUARDED_BY(write_lock_) = false;
   // When |handshake_done_| is false or |send_buffer_contains_message_| is true,
   // calls to Write() will enqueue messages here.
-  base::circular_deque<MessagePtr> pending_messages_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChannelMac);
+  base::circular_deque<PendingMessage> pending_messages_
+      GUARDED_BY(write_lock_);
 };
 
 }  // namespace
@@ -723,5 +1046,4 @@ scoped_refptr<Channel> Channel::Create(
                         io_task_runner);
 }
 
-}  // namespace core
-}  // namespace mojo
+}  // namespace mojo::core

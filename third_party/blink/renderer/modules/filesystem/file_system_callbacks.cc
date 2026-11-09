@@ -112,7 +112,7 @@ EntriesCallbacks::EntriesCallbacks(const SuccessCallback& success_callback,
       error_callback_(std::move(error_callback)),
       directory_reader_(directory_reader),
       base_path_(base_path),
-      entries_(MakeGarbageCollected<HeapVector<Member<Entry>>>()) {
+      entries_(MakeGarbageCollected<GCedEntryHeapVector>()) {
   DCHECK(directory_reader_);
 }
 
@@ -130,8 +130,8 @@ void EntriesCallbacks::DidReadDirectoryEntry(const String& name,
 
 void EntriesCallbacks::DidReadDirectoryEntries(bool has_more) {
   directory_reader_->SetHasMoreEntries(has_more);
-  EntryHeapVector* entries =
-      MakeGarbageCollected<EntryHeapVector>(std::move(*entries_));
+  GCedEntryHeapVector* entries =
+      MakeGarbageCollected<GCedEntryHeapVector>(std::move(*entries_));
 
   if (!success_callback_) {
     return;
@@ -290,13 +290,17 @@ SnapshotFileCallback::SnapshotFileCallback(DOMFileSystemBase* filesystem,
       success_callback_(std::move(success_callback)),
       error_callback_(std::move(error_callback)) {}
 
-void SnapshotFileCallback::DidCreateSnapshotFile(const FileMetadata& metadata) {
+void SnapshotFileCallback::DidCreateSnapshotFile(
+    const FileMetadata& metadata,
+    mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+        snapshot_permission_token) {
   if (!success_callback_)
     return;
 
   std::move(success_callback_)
-      .Run(DOMFileSystemBase::CreateFile(metadata, url_,
-                                         file_system_->GetType(), name_));
+      .Run(DOMFileSystemBase::CreateFile(execution_context_, metadata, url_,
+                                         file_system_->GetType(), name_,
+                                         std::move(snapshot_permission_token)));
 }
 
 void SnapshotFileCallback::DidFail(base::File::Error error) {

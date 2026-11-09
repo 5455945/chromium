@@ -1,41 +1,47 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/chrome_zipfile_installer.h"
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/load_error_reporter.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/browser_context.h"
+#include "extensions/browser/load_error_reporter.h"
+#include "extensions/browser/unpacked_installer.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 ZipFileInstaller::DoneCallback MakeRegisterInExtensionServiceCallback(
-    ExtensionService* service) {
+    content::BrowserContext* context) {
+  // TODO(crbug.com/41317803): Continue removing std::string error and
+  // replacing with std::u16string.
   return base::BindOnce(
-      [](base::WeakPtr<ExtensionService> extension_service_weak,
+      [](base::WeakPtr<content::BrowserContext> context_weak,
          const base::FilePath& zip_file, const base::FilePath& unzip_dir,
          const std::string& error) {
-        if (!extension_service_weak)
-          return;
-
-        if (!unzip_dir.empty()) {
-          DCHECK(error.empty());
-          UnpackedInstaller::Create(extension_service_weak.get())
-              ->Load(unzip_dir);
+        if (!context_weak) {
           return;
         }
-        DCHECK(!error.empty());
+
+        if (!unzip_dir.empty()) {
+          CHECK(error.empty(), base::NotFatalUntil::M161);
+          UnpackedInstaller::Create(context_weak.get())->Load(unzip_dir);
+          return;
+        }
+        CHECK(!error.empty(), base::NotFatalUntil::M161);
         LoadErrorReporter::GetInstance()->ReportLoadError(
-            zip_file, error, extension_service_weak->profile(),
+            zip_file, base::UTF8ToUTF16(error), context_weak.get(),
             /*noisy_on_failure=*/true);
       },
-      service->AsWeakPtr());
+      context->GetWeakPtr());
 }
 
 }  // namespace extensions

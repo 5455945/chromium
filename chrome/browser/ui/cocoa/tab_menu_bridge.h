@@ -1,15 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_COCOA_TAB_MENU_BRIDGE_H_
 #define CHROME_BROWSER_UI_COCOA_TAB_MENU_BRIDGE_H_
 
-#include "base/gtest_prod_util.h"
-#include "base/mac/scoped_nsobject.h"
-#include "base/macros.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include <map>
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "components/tabs/public/tab_interface.h"
+
+@class NSMutableArray;
 @class NSMenuItem;
 @class TabMenuListener;
 class TabStripModel;
@@ -25,23 +28,36 @@ class TabStripModel;
 //   2) The number of items not in the "dynamic" part does not change after the
 //      TabMenuBridge is constructed
 //
-// To use this class, construct an instance and call BuildMenu() on it.
+// To use this class, construct an instance and call SetTabStripModel() on it.
 class TabMenuBridge : public TabStripModelObserver {
  public:
   // The |menu_item| contains the actual menu this class manages.
-  TabMenuBridge(TabStripModel* model, NSMenuItem* menu_item);
+  explicit TabMenuBridge(NSMenuItem* menu_item);
+
+  TabMenuBridge(const TabMenuBridge&) = delete;
+  TabMenuBridge& operator=(const TabMenuBridge&) = delete;
+
   ~TabMenuBridge() override;
 
-  // It's legal to call this method more than once - it will clear all the
-  // existing dynamic items added by this instance before adding any new ones,
-  // so multiple calls are idempotent.
-  void BuildMenu();
+  // Called to update with a new tab strip model associated with the active
+  // browser. This method is idempotent. If there is a new model, it will
+  // clear all the existing dynamic items added before adding new ones for
+  // the new model if `model` isn't nullptr.
+  void SetTabStripModel(TabStripModel* model);
+
+  // Test hook to force rebuilding menu immediately on modal change instead of
+  // doing so during menu show.
+  void SetForceRebuildMenuForTesting(bool force);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(TabMenuBridgeTest, ClickingMenuActivatesTab);
+  FRIEND_TEST_ALL_PREFIXES(TabMenuBridgeTest,
+                           ClickingStaleMenuItemDoesNotCrash);
+  FRIEND_TEST_ALL_PREFIXES(TabMenuBridgeTest,
+                           ClickingMenuItemAfterReorderActivatesCorrectTab);
 
-  // These methods are used to make batch changes to the menu.
-  void RemoveAllDynamicItems();
+  // These methods are used manage the dynamic menu items.
+  NSMutableArray* DynamicMenuItems();
   void AddDynamicItemsFromModel();
 
   // This method exists to be called back into from the Cocoa part of this
@@ -53,21 +69,36 @@ class TabMenuBridge : public TabStripModelObserver {
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
-  void TabChangedAt(content::WebContents* contents,
-                    int index,
-                    TabChangeType change_type) override;
+  void OnTabChangedAt(tabs::TabInterface* tab,
+                      TabChangeType change_type) override;
+  void OnTabGroupChanged(const TabGroupChange& change) override;
+  void TabGroupedStateChanged(TabStripModel* tab_strip_model,
+                              std::optional<tab_groups::TabGroupId> old_group,
+                              std::optional<tab_groups::TabGroupId> new_group,
+                              tabs::TabInterface* tab,
+                              int index) override;
   void OnTabStripModelDestroyed(TabStripModel* model) override;
 
-  TabStripModel* model_;
-  NSMenuItem* menu_item_;  // weak
-  base::scoped_nsobject<TabMenuListener> menu_listener_;
+  raw_ptr<TabStripModel> model_ = nullptr;
+  NSMenuItem* __weak menu_item_;
+  TabMenuListener* __strong menu_listener_;
 
   // When created, this class remembers how many items were present in the
   // non-dynamic section of the menu. This offset is used to map menu items to
   // their underlying tabs.
   int dynamic_items_start_;
 
-  DISALLOW_COPY_AND_ASSIGN(TabMenuBridge);
+  // Maps each dynamic NSMenuItem to the TabInterface it was created for.
+  // This allows activating the correct tab even if the menu becomes stale
+  // (e.g., a tab is closed or reordered while the menu is open).
+  std::map<NSMenuItem*, raw_ptr<tabs::TabInterface>> menu_item_to_tab_;
+
+  // Maps each TabInterface to the NSMenuItem that was created for it.
+  std::map<raw_ptr<tabs::TabInterface>, NSMenuItem*> tab_to_menu_item_;
+
+  // Flag when set forces the menu to be immediately rebuilt on modal change
+  // instead of only doing so during menu show.
+  bool force_rebuild_menu_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_COCOA_TAB_MENU_BRIDGE_H_

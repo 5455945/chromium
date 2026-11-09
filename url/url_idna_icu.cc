@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,25 +11,30 @@
 #include <ostream>
 
 #include "base/check_op.h"
+#include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "third_party/icu/source/common/unicode/uidna.h"
 #include "third_party/icu/source/common/unicode/utypes.h"
 #include "url/url_canon_icu.h"
 #include "url/url_canon_internal.h"  // for _itoa_s
+#include "url/url_features.h"
 
 namespace url {
+
+namespace {
 
 // Use UIDNA, a C pointer to a UTS46/IDNA 2008 handling object opened with
 // uidna_openUTS46().
 //
 // We use UTS46 with BiDiCheck to migrate from IDNA 2003 (with unassigned
-// code points allowed) to IDNA 2008 with
-// the backward compatibility in mind. What it does:
+// code points allowed) to IDNA 2008 with the backward compatibility in mind.
+// What it does:
 //
 // 1. Use the up-to-date Unicode data.
 // 2. Define a case folding/mapping with the up-to-date Unicode data as
 //    in IDNA 2003.
-// 3. Use transitional mechanism for 4 deviation characters (sharp-s,
-//    final sigma, ZWJ and ZWNJ) for now.
+// 3. Use non-transitional mechanism for 4 deviation characters (sharp-s, final
+//    sigma, ZWJ and ZWNJ) per url.spec.whatwg.org.
 // 4. Continue to allow symbols and punctuations.
 // 5. Apply new BiDi check rules more permissive than the IDNA 2003 BiDI rules.
 // 6. Do not apply STD3 rules
@@ -39,24 +44,29 @@ namespace url {
 // http://goo.gl/3XBhqw ).
 // See http://http://unicode.org/reports/tr46/ and references therein
 // for more details.
+UIDNA* CreateIDNA() {
+  // Enable options matching https://url.spec.whatwg.org/#idna.
+  // Note that ContextJ checks are enabled or disabled based on
+  // IsUsingIDNAContextJRules() in IDNToASCII().
+  uint32_t options = UIDNA_CHECK_BIDI | UIDNA_NONTRANSITIONAL_TO_ASCII |
+                     UIDNA_NONTRANSITIONAL_TO_UNICODE | UIDNA_CHECK_CONTEXTJ;
+  UErrorCode err = U_ZERO_ERROR;
+  UIDNA* idna = uidna_openUTS46(options, &err);
+  if (U_FAILURE(err)) {
+    NOTREACHED() << "failed to open UTS46 data with error: " << u_errorName(err)
+                 << ". If you see this error message in a test environment "
+                 << "your test environment likely lacks the required data "
+                 << "tables for libicu. See https://crbug.com/778929.";
+  }
+  return idna;
+}
+
 UIDNA* GetUIDNA() {
-  static UIDNA* uidna = [] {
-    UErrorCode err = U_ZERO_ERROR;
-    // TODO(jungshik): Change options as different parties (browsers,
-    // registrars, search engines) converge toward a consensus.
-    UIDNA* value = uidna_openUTS46(UIDNA_CHECK_BIDI, &err);
-    if (U_FAILURE(err)) {
-      CHECK(false) << "failed to open UTS46 data with error: "
-                   << u_errorName(err)
-                   << ". If you see this error message in a test environment "
-                   << "your test environment likely lacks the required data "
-                   << "tables for libicu. See https://crbug.com/778929.";
-      value = nullptr;
-    }
-    return value;
-  }();
+  static UIDNA* uidna = CreateIDNA();
   return uidna;
 }
+
+}  // namespace
 
 // Converts the Unicode input representing a hostname to ASCII using IDN rules.
 // The output must be ASCII, but is represented as wide characters.
@@ -72,7 +82,7 @@ UIDNA* GetUIDNA() {
 // conversions in our code. In addition, consider using icu::IDNA's UTF-8/ASCII
 // version with StringByteSink. That way, we can avoid C wrappers and additional
 // string conversion.
-bool IDNToASCII(const char16_t* src, int src_len, CanonOutputW* output) {
+bool IDNToASCII(std::u16string_view src, CanonOutputW* output) {
   DCHECK(output->length() == 0);  // Output buffer is assumed empty.
 
   UIDNA* uidna = GetUIDNA();
@@ -80,8 +90,10 @@ bool IDNToASCII(const char16_t* src, int src_len, CanonOutputW* output) {
   while (true) {
     UErrorCode err = U_ZERO_ERROR;
     UIDNAInfo info = UIDNA_INFO_INITIALIZER;
-    int output_length = uidna_nameToASCII(uidna, src, src_len, output->data(),
-                                          output->capacity(), &info, &err);
+    auto output_span = output->Span();
+    int output_length = uidna_nameToASCII(
+        uidna, src.data(), base::checked_cast<int32_t>(src.size()),
+        output_span.data(), output_span.size(), &info, &err);
 
     // Ignore various errors for web compatibility. The options are specified
     // by the WHATWG URL Standard. See
@@ -92,6 +104,7 @@ bool IDNToASCII(const char16_t* src, int src_len, CanonOutputW* output) {
     // Disable the "CheckHyphens" option in UTS #46. See
     //  - https://crbug.com/804688
     //  - https://github.com/whatwg/url/issues/267
+    //  - https://github.com/whatwg/url/issues/820 (beStrict is false)
     info.errors &= ~UIDNA_ERROR_HYPHEN_3_4;
     info.errors &= ~UIDNA_ERROR_LEADING_HYPHEN;
     info.errors &= ~UIDNA_ERROR_TRAILING_HYPHEN;
@@ -100,6 +113,11 @@ bool IDNToASCII(const char16_t* src, int src_len, CanonOutputW* output) {
     info.errors &= ~UIDNA_ERROR_EMPTY_LABEL;
     info.errors &= ~UIDNA_ERROR_LABEL_TOO_LONG;
     info.errors &= ~UIDNA_ERROR_DOMAIN_NAME_TOO_LONG;
+
+    // Clear any ContextJ error if the feature isn't enabled.
+    if (!url::IsUsingIDNAContextJRules()) {
+      info.errors &= ~UIDNA_ERROR_CONTEXTJ;
+    }
 
     if (U_SUCCESS(err) && info.errors == 0) {
       // Per WHATWG URL, it is a failure if the ToASCII output is empty.

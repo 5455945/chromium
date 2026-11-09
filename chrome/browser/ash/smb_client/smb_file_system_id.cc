@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 namespace {
 
 constexpr char kDelimiter[] = "@@";
@@ -29,18 +28,18 @@ std::vector<std::string> GetComponents(const std::string& file_system_id) {
   std::vector<std::string> components = SplitStringUsingSubstr(
       file_system_id, kDelimiter, base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
-  DCHECK_GE(components.size(), 2u);
-  DCHECK_LE(components.size(), 3u);
+  CHECK_GE(components.size(), 2u, base::NotFatalUntil::M160);
+  CHECK_LE(components.size(), 3u, base::NotFatalUntil::M160);
 
   return components;
 }
 
 std::string GenerateRandomId() {
-  char rand_bytes[kRandomIdBytes];
-  base::RandBytes(rand_bytes, sizeof(rand_bytes));
+  uint8_t rand_bytes[kRandomIdBytes];
+  base::RandBytes(rand_bytes);
   // Encoding to hex ensure that there are no non-alpha characters in the id
   // (i.e. no @ delimiters).
-  return base::HexEncode(rand_bytes, sizeof(rand_bytes));
+  return base::HexEncode(rand_bytes);
 }
 
 }  // namespace.
@@ -69,7 +68,7 @@ std::string CreateFileSystemIdForUser(const base::FilePath& share_path,
 
 base::FilePath GetSharePathFromFileSystemId(const std::string& file_system_id) {
   const std::vector<std::string> components = GetComponents(file_system_id);
-  DCHECK_GE(components.size(), 1u);
+  CHECK_GE(components.size(), 1u, base::NotFatalUntil::M160);
 
   return base::FilePath(components[1]);
 }
@@ -80,16 +79,18 @@ bool IsKerberosChromadFileSystemId(const std::string& file_system_id) {
   return components.size() >= 3 && components[2] == kKerberosSymbol;
 }
 
-absl::optional<std::string> GetUserFromFileSystemId(
+std::optional<std::string> GetUserFromFileSystemId(
     const std::string& file_system_id) {
   const std::vector<std::string> components = GetComponents(file_system_id);
-  if (components.size() < 3 ||
-      !base::StartsWith(components[2], kUserPrefix,
-                        base::CompareCase::SENSITIVE)) {
-    return {};
+  if (components.size() < 3) {
+    return std::nullopt;
   }
-  return components[2].substr(strlen(kUserPrefix));
+  std::optional<std::string_view> remainder = base::RemovePrefix(
+      components[2], kUserPrefix, base::CompareCase::SENSITIVE);
+  if (!remainder) {
+    return std::nullopt;
+  }
+  return std::string(*remainder);
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

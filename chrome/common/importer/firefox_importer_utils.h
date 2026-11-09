@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,13 @@
 #include <string>
 #include <vector>
 
-#include "base/files/file_util.h"
+#include "base/files/file_path.h"
+#include "base/values.h"
 #include "build/build_config.h"
 
 class GURL;
 
-namespace base {
-class DictionaryValue;
-class FilePath;
-}
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Detects which version of Firefox is installed from registry. Returns its
 // major version, and drops the minor version. Returns 0 if failed. If there are
 // indicators of both Firefox 2 and Firefox 3 it is biased to return the biggest
@@ -28,9 +24,11 @@ int GetCurrentFirefoxMajorVersionFromRegistry();
 // Detects where Firefox lives. Returns an empty path if Firefox is not
 // installed.
 base::FilePath GetFirefoxInstallPathFromRegistry();
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
 struct FirefoxDetail {
+  friend bool operator==(const FirefoxDetail&, const FirefoxDetail&) = default;
+
   // |path| represents the Path field in Profiles.ini.
   // This path is the directory name where all the profile information
   // in stored.
@@ -38,14 +36,6 @@ struct FirefoxDetail {
   // The user specified name of the profile.
   std::u16string name;
 };
-
-inline bool operator==(const FirefoxDetail& a1, const FirefoxDetail& a2) {
-  return a1.name == a2.name && a1.path == a2.path;
-}
-
-inline bool operator!=(const FirefoxDetail& a1, const FirefoxDetail& a2) {
-  return !(a1 == a2);
-}
 
 // Returns a vector of FirefoxDetail for available profiles.
 std::vector<FirefoxDetail> GetFirefoxDetails(
@@ -56,7 +46,7 @@ std::vector<FirefoxDetail> GetFirefoxDetails(
 // with that id.
 // Exposed for testing.
 std::vector<FirefoxDetail> GetFirefoxDetailsFromDictionary(
-    const base::DictionaryValue& root,
+    const base::DictValue& root,
     const std::string& firefox_install_id);
 
 // Detects version of Firefox and installation path for the given Firefox
@@ -68,20 +58,6 @@ bool GetFirefoxVersionAndPathFromProfile(const base::FilePath& profile_path,
 // Gets the full path of the profiles.ini file. This file records the profiles
 // that can be used by Firefox. Returns an empty path if failed.
 base::FilePath GetProfilesINI();
-
-// Parses the profile.ini file, and stores its information in |root|.
-// This file is a plain-text file. Key/value pairs are stored one per line, and
-// they are separated in different sections. For example:
-//   [General]
-//   StartWithLastProfile=1
-//
-//   [Profile0]
-//   Name=default
-//   IsRelative=1
-//   Path=Profiles/abcdefeg.default
-// We set "[value]" in path "<Section>.<Key>". For example, the path
-// "Genenral.StartWithLastProfile" has the value "1".
-void ParseProfileINI(const base::FilePath& file, base::DictionaryValue* root);
 
 // Returns the home page set in Firefox in a particular profile.
 GURL GetHomepage(const base::FilePath& profile_path);

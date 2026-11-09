@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,20 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/apps/app_service/app_icon_factory.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
-#include "chrome/browser/apps/app_service/icon_key_util.h"
-#include "components/services/app_service/public/cpp/publisher_base.h"
-#include "components/services/app_service/public/mojom/app_service.mojom.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
+#include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
+#include "chrome/browser/apps/app_service/publishers/app_publisher.h"
+#include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/services/app_service/public/cpp/app_types.h"
+#include "components/services/app_service/public/cpp/launch_result.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_prefs_observer.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/bindings/remote_set.h"
 
 class Profile;
 
@@ -38,23 +36,24 @@ class ExtensionSet;
 namespace apps {
 class ExtensionAppsEnableFlow;
 
+struct AppLaunchParams;
+
 // An app base publisher (in the App Service sense) of extension-backed apps,
 // including Chrome Apps (platform apps and legacy packaged apps) and hosted
-// apps (including desktop PWAs).
-//
-// In the future, desktop PWAs will be migrated to a new system.
+// apps.
 //
 // See components/services/app_service/README.md.
-class ExtensionAppsBase : public apps::PublisherBase,
+class ExtensionAppsBase : public AppPublisher,
                           public extensions::ExtensionPrefsObserver,
                           public extensions::ExtensionRegistryObserver {
  public:
-  ExtensionAppsBase(const mojo::Remote<apps::mojom::AppService>& app_service,
-                    Profile* profile);
+  ExtensionAppsBase(AppServiceProxy* proxy, AppType app_type);
   ~ExtensionAppsBase() override;
 
   ExtensionAppsBase(const ExtensionAppsBase&) = delete;
   ExtensionAppsBase& operator=(const ExtensionAppsBase&) = delete;
+
+  virtual void Initialize();
 
   // Handles profile prefs kHideWebStoreIcon changes for ChromeOS.
   virtual void OnHideWebStoreIconPrefChanged() {}
@@ -68,31 +67,29 @@ class ExtensionAppsBase : public apps::PublisherBase,
                               const extensions::Extension* extension,
                               extensions::UninstallReason reason) override;
 
-  virtual void SetShowInFields(apps::mojom::AppPtr& app,
-                               const extensions::Extension* extension);
+  virtual void SetShowInFields(const extensions::Extension* extension,
+                               App& app);
 
-  apps::mojom::AppPtr ConvertImpl(const extensions::Extension* extension,
-                                  apps::mojom::Readiness readiness);
+  AppPtr CreateAppImpl(const extensions::Extension* extension,
+                       Readiness readiness);
 
   // Calculate the icon effects for the extension.
   IconEffects GetIconEffects(const extensions::Extension* extension);
 
-  content::WebContents* LaunchAppWithIntentImpl(
-      const std::string& app_id,
-      int32_t event_flags,
-      apps::mojom::IntentPtr intent,
-      apps::mojom::LaunchSource launch_source,
-      apps::mojom::WindowInfoPtr window_info);
+  content::WebContents* LaunchAppWithIntentImpl(const std::string& app_id,
+                                                int32_t event_flags,
+                                                IntentPtr intent,
+                                                LaunchSource launch_source,
+                                                WindowInfoPtr window_info,
+                                                LaunchCallback callback);
 
   virtual content::WebContents* LaunchImpl(AppLaunchParams&& params);
+  virtual void LaunchAppWithParamsImpl(AppLaunchParams&& params,
+                                       LaunchCallback callback);
 
   // Returns extensions::Extension* for the valid |app_id|. Otherwise, returns
   // nullptr.
   const extensions::Extension* MaybeGetExtension(const std::string& app_id);
-
-  const mojo::RemoteSet<apps::mojom::Subscriber>& subscribers() const {
-    return subscribers_;
-  }
 
   Profile* profile() const { return profile_; }
 
@@ -100,42 +97,46 @@ class ExtensionAppsBase : public apps::PublisherBase,
     return weak_factory_.GetWeakPtr();
   }
 
-  apps_util::IncrementingIconKeyFactory& icon_key_factory() {
-    return icon_key_factory_;
-  }
+  AppType app_type() { return app_type_; }
 
  private:
-  void Initialize(const mojo::Remote<apps::mojom::AppService>& app_service);
-
   // Determines whether the given extension should be treated as type app_type_,
   // and should therefore by handled by this publisher.
   virtual bool Accepts(const extensions::Extension* extension) = 0;
 
-  // apps::mojom::Publisher overrides.
-  void Connect(mojo::PendingRemote<apps::mojom::Subscriber> subscriber_remote,
-               apps::mojom::ConnectOptionsPtr opts) override;
+  // Takes and `params` and modify it based on `app_id` and `launch_source` if
+  // needed. Returns the possibly modified params.
+  virtual AppLaunchParams ModifyAppLaunchParams(const std::string& app_id,
+                                                LaunchSource launch_source,
+                                                AppLaunchParams params);
+
+  void OnExtensionsReady();
+
+  // apps::AppPublisher overrides.
   void LoadIcon(const std::string& app_id,
-                apps::mojom::IconKeyPtr icon_key,
-                apps::mojom::IconType icon_type,
+                const IconKey& icon_key,
+                IconType icon_type,
                 int32_t size_hint_in_dip,
                 bool allow_placeholder_icon,
-                LoadIconCallback callback) override;
+                apps::LoadIconCallback callback) override;
   void Launch(const std::string& app_id,
               int32_t event_flags,
-              apps::mojom::LaunchSource launch_source,
-              apps::mojom::WindowInfoPtr window_info) override;
+              LaunchSource launch_source,
+              WindowInfoPtr window_info) override;
   void LaunchAppWithFiles(const std::string& app_id,
-                          apps::mojom::LaunchContainer container,
                           int32_t event_flags,
-                          apps::mojom::LaunchSource launch_source,
-                          apps::mojom::FilePathsPtr file_paths) override;
+                          LaunchSource launch_source,
+                          std::vector<base::FilePath> file_paths) override;
   void LaunchAppWithIntent(const std::string& app_id,
                            int32_t event_flags,
-                           apps::mojom::IntentPtr intent,
-                           apps::mojom::LaunchSource launch_source,
-                           apps::mojom::WindowInfoPtr window_info) override;
+                           IntentPtr intent,
+                           LaunchSource launch_source,
+                           WindowInfoPtr window_info,
+                           LaunchCallback callback) override;
+  void LaunchAppWithParams(AppLaunchParams&& params,
+                           LaunchCallback callback) override;
   void Uninstall(const std::string& app_id,
-                 apps::mojom::UninstallSource uninstall_source,
+                 UninstallSource uninstall_source,
                  bool clear_site_data,
                  bool report_abuse) override;
   void OpenNativeSettings(const std::string& app_id) override;
@@ -163,25 +164,28 @@ class ExtensionAppsBase : public apps::PublisherBase,
   bool RunExtensionEnableFlow(const std::string& app_id,
                               base::OnceClosure callback);
 
+  // Called when the extension enable flow has finished.
+  void ExtensionEnableFlowFinished(base::OnceClosure callback,
+                                   const std::string& app_id,
+                                   bool enabled);
+
   virtual bool ShouldShownInLauncher(
       const extensions::Extension* extension) = 0;
   static bool ShouldShow(const extensions::Extension* extension,
                          Profile* profile);
 
-  void PopulateIntentFilters(const absl::optional<GURL>& app_scope,
-                             std::vector<mojom::IntentFilterPtr>* target);
-  virtual apps::mojom::AppPtr Convert(const extensions::Extension* extension,
-                                      apps::mojom::Readiness readiness) = 0;
-  void ConvertVector(const extensions::ExtensionSet& extensions,
-                     apps::mojom::Readiness readiness,
-                     std::vector<apps::mojom::AppPtr>* apps_out);
+  virtual AppPtr CreateApp(const extensions::Extension* extension,
+                           Readiness readiness) = 0;
 
- private:
-  mojo::RemoteSet<apps::mojom::Subscriber> subscribers_;
+  void CreateAppVector(const extensions::ExtensionSet& extensions,
+                       Readiness readiness,
+                       std::vector<AppPtr>* apps_out);
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
-  apps_util::IncrementingIconKeyFactory icon_key_factory_;
+  // The app type published by this publisher. Must be either kChromeApp or
+  // kExtension.
+  AppType app_type_;
 
   base::ScopedObservation<extensions::ExtensionPrefs,
                           extensions::ExtensionPrefsObserver>
@@ -192,9 +196,6 @@ class ExtensionAppsBase : public apps::PublisherBase,
 
   using EnableFlowPtr = std::unique_ptr<ExtensionAppsEnableFlow>;
   std::map<std::string, EnableFlowPtr> enable_flow_map_;
-
-  // app_service_ is owned by the object that owns this object.
-  apps::mojom::AppService* app_service_;
 
   base::WeakPtrFactory<ExtensionAppsBase> weak_factory_{this};
 };

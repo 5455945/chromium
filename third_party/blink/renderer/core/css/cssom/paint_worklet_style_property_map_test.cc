@@ -1,28 +1,28 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/cssom/paint_worklet_style_property_map.h"
 
 #include <memory>
-#include "base/single_thread_task_runner.h"
+
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
 #include "third_party/blink/renderer/core/css/cssom/css_keyword_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_paint_worklet_input.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unit_value.h"
-#include "third_party/blink/renderer/core/css/cssom/css_unparsed_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unsupported_color.h"
 #include "third_party/blink/renderer/core/css/properties/longhands/custom_property.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
@@ -30,7 +30,7 @@ class PaintWorkletStylePropertyMapTest : public PageTestBase {
  public:
   PaintWorkletStylePropertyMapTest() = default;
 
-  void SetUp() override { PageTestBase::SetUp(IntSize()); }
+  void SetUp() override { PageTestBase::SetUp(gfx::Size()); }
 
   Node* PageNode() { return GetDocument().documentElement(); }
 
@@ -66,7 +66,7 @@ class PaintWorkletStylePropertyMapTest : public PageTestBase {
     CSSStyleValue* style_value = data.at("--x")->ToCSSStyleValue();
     EXPECT_EQ(style_value->GetType(),
               CSSStyleValue::StyleValueType::kUnparsedType);
-    EXPECT_EQ(static_cast<CSSUnparsedValue*>(style_value)->ToString(), "50");
+    EXPECT_EQ(style_value->toString(), "50");
     waitable_event->Signal();
   }
 
@@ -107,19 +107,20 @@ class PaintWorkletStylePropertyMapTest : public PageTestBase {
   }
 
  protected:
-  std::unique_ptr<blink::Thread> thread_;
+  std::unique_ptr<blink::NonMainThread> thread_;
 };
 
 TEST_F(PaintWorkletStylePropertyMapTest, UnregisteredCustomProperty) {
-  CustomProperty property("--x", GetDocument());
+  AtomicString x_name("--x");
+  CustomProperty property(&x_name, GetDocument());
   Vector<CSSPropertyID> native_properties;
-  Vector<AtomicString> custom_properties({"--x"});
+  Vector<AtomicString> custom_properties({AtomicString("--x")});
 
-  GetDocument().documentElement()->setInnerHTML(
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<div id='target' style='--x:50'></div>");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* node = GetDocument().getElementById("target");
+  Element* node = GetElementById("target");
   node->GetLayoutObject()->GetMutableForPainting().EnsureId();
   CompositorPaintWorkletInput::PropertyKeys input_property_keys;
   auto data = PaintWorkletStylePropertyMap::BuildCrossThreadData(
@@ -132,11 +133,11 @@ TEST_F(PaintWorkletStylePropertyMapTest, UnregisteredCustomProperty) {
   std::vector<cc::PaintWorkletInput::PropertyKey> property_keys;
   scoped_refptr<CSSPaintWorkletInput> input =
       base::MakeRefCounted<CSSPaintWorkletInput>(
-          "test", FloatSize(100, 100), 1.0f, 1.0f, 1, std::move(data.value()),
+          "test", gfx::SizeF(100, 100), 1.0f, 1, std::move(data.value()),
           std::move(input_arguments), std::move(property_keys));
   ASSERT_TRUE(input);
 
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -152,7 +153,9 @@ TEST_F(PaintWorkletStylePropertyMapTest, UnregisteredCustomProperty) {
 
 TEST_F(PaintWorkletStylePropertyMapTest, SupportedCrossThreadData) {
   Vector<CSSPropertyID> native_properties({CSSPropertyID::kDisplay});
-  Vector<AtomicString> custom_properties({"--foo", "--bar", "--loo", "--gar"});
+  Vector<AtomicString> custom_properties(
+      {AtomicString("--foo"), AtomicString("--bar"), AtomicString("--loo"),
+       AtomicString("--gar")});
   css_test_helpers::RegisterProperty(GetDocument(), "--foo", "<length>",
                                      "134px", false);
   css_test_helpers::RegisterProperty(GetDocument(), "--bar", "<number>", "42",
@@ -162,12 +165,12 @@ TEST_F(PaintWorkletStylePropertyMapTest, SupportedCrossThreadData) {
   css_test_helpers::RegisterProperty(GetDocument(), "--gar", "<color>",
                                      "rgb(0, 255, 0)", false);
 
-  GetDocument().documentElement()->setInnerHTML(
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<div id='target' style='--foo:10px; --bar:15; --gar:rgb(255, 0, "
       "0)'></div>");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* node = GetDocument().getElementById("target");
+  Element* node = GetElementById("target");
   node->GetLayoutObject()->GetMutableForPainting().EnsureId();
   Vector<std::unique_ptr<CrossThreadStyleValue>> input_arguments;
   CompositorPaintWorkletInput::PropertyKeys input_property_keys;
@@ -180,11 +183,11 @@ TEST_F(PaintWorkletStylePropertyMapTest, SupportedCrossThreadData) {
   std::vector<cc::PaintWorkletInput::PropertyKey> property_keys;
   scoped_refptr<CSSPaintWorkletInput> input =
       base::MakeRefCounted<CSSPaintWorkletInput>(
-          "test", FloatSize(100, 100), 1.0f, 1.0f, 1, std::move(data.value()),
+          "test", gfx::SizeF(100, 100), 1.0f, 1, std::move(data.value()),
           std::move(input_arguments), std::move(property_keys));
   DCHECK(input);
 
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -200,7 +203,8 @@ TEST_F(PaintWorkletStylePropertyMapTest, SupportedCrossThreadData) {
 
 TEST_F(PaintWorkletStylePropertyMapTest, UnsupportedCrossThreadData) {
   Vector<CSSPropertyID> native_properties1;
-  Vector<AtomicString> custom_properties1({"--foo", "--bar", "--loo"});
+  Vector<AtomicString> custom_properties1(
+      {AtomicString("--foo"), AtomicString("--bar"), AtomicString("--loo")});
   css_test_helpers::RegisterProperty(GetDocument(), "--foo", "<url>",
                                      "url(https://google.com)", false);
   css_test_helpers::RegisterProperty(GetDocument(), "--bar", "<number>", "42",
@@ -208,12 +212,12 @@ TEST_F(PaintWorkletStylePropertyMapTest, UnsupportedCrossThreadData) {
   css_test_helpers::RegisterProperty(GetDocument(), "--loo", "test", "test",
                                      false);
 
-  GetDocument().documentElement()->setInnerHTML(
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
       "<div id='target' style='--foo:url(https://crbug.com/); "
       "--bar:15;'></div>");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* node = GetDocument().getElementById("target");
+  Element* node = GetElementById("target");
   node->GetLayoutObject()->GetMutableForPainting().EnsureId();
 
   Vector<std::unique_ptr<CrossThreadStyleValue>> input_arguments;

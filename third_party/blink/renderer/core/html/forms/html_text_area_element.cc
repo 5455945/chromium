@@ -26,6 +26,10 @@
 
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 
+#include <utility>
+
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_focus_options.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
@@ -33,6 +37,7 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/events/simulated_click_options.h"
+#include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -40,33 +45,55 @@
 #include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/events/before_text_inserted_event.h"
 #include "third_party/blink/renderer/core/events/drag_event.h"
+#include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/form_controller.h"
 #include "third_party/blink/renderer/core/html/forms/form_data.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_inner_elements.h"
+#include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
+#include "third_party/blink/renderer/core/layout/forms/layout_text_control_multi_line.h"
+#include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/core/layout/layout_object_factory.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
+#include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/line_ending.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
-static const unsigned kDefaultRows = 2;
-static const unsigned kDefaultCols = 20;
+using mojom::blink::FormControlType;
 
-static inline unsigned ComputeLengthForAPIValue(const String& text) {
+namespace {
+
+constexpr unsigned kDefaultRows = 2;
+constexpr unsigned kDefaultCols = 20;
+
+bool g_is_default_font_prewarmed = false;
+
+inline unsigned ComputeLengthForAPIValue(const String& text) {
   unsigned length = text.length();
   unsigned crlf_count = 0;
   for (unsigned i = 0; i < length; ++i) {
@@ -76,10 +103,43 @@ static inline unsigned ComputeLengthForAPIValue(const String& text) {
   return text.length() - crlf_count;
 }
 
-static inline void ReplaceCRWithNewLine(String& text) {
-  text.Replace("\r\n", "\n");
-  text.Replace('\r', '\n');
+struct TextInfoContext {
+  std::vector<WebFormControlElement::TypefaceRunInfo> typeface_runs
+      ALLOW_DISCOURAGED_TYPE("blink/public type");
+  size_t start_index;
+};
+
+// Callback passed into ShapeResultView::ForEachGlyph().
+void GetTextInfoForGlyphCallback(void* context,
+                                 unsigned character_index,
+                                 Glyph glyph,
+                                 gfx::Vector2dF glyph_offset,
+                                 float total_advance,
+                                 bool is_horizontal,
+                                 CanvasRotationInVertical canvas_rotation,
+                                 const SimpleFontData* font_data) {
+  std::vector<WebFormControlElement::TypefaceRunInfo>& results =
+      static_cast<TextInfoContext*>(context)->typeface_runs;
+  size_t start_index = static_cast<TextInfoContext*>(context)->start_index;
+
+  sk_sp<SkTypeface> typeface = font_data->PlatformData().TypefaceSp();
+  bool synthetic_bold = font_data->PlatformData().SyntheticBold();
+  bool synthetic_italic = font_data->PlatformData().SyntheticItalic();
+  if (results.empty() || results.back().typeface != typeface ||
+      results.back().is_synthetic_bold != synthetic_bold ||
+      results.back().is_synthetic_italic != synthetic_italic) {
+    results.emplace_back(
+        std::move(typeface), std::vector<WebFormControlElement::GlyphInfo>{},
+        /*is_horizontal=*/is_horizontal, /*is_synthetic_bold=*/synthetic_bold,
+        /*is_synthetic_italic=*/synthetic_italic);
+  }
+
+  CHECK_EQ(results.back().is_horizontal, is_horizontal);
+  results.back().glyphs.emplace_back(glyph, glyph_offset, total_advance,
+                                     character_index - start_index);
 }
+
+}  // namespace
 
 HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
     : TextControlElement(html_names::kTextareaTag, document),
@@ -89,28 +149,50 @@ HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
       is_dirty_(false),
       is_placeholder_visible_(false) {
   EnsureUserAgentShadowRoot();
+
+  if (!g_is_default_font_prewarmed) {
+    if (Settings* settings = document.GetSettings()) {
+      // Prewarm 'monospace', the default font family for `<textarea>`. The
+      // default language should be fine for this purpose because most users set
+      // the same family for all languages.
+      FontCache::PrewarmFamily(settings->GetGenericFontFamilySettings().Get(
+          GenericFontFamily::kFixed,
+          LayoutLocale::GetDefault().GetScriptForFont()));
+      g_is_default_font_prewarmed = true;
+    }
+  }
 }
 
 void HTMLTextAreaElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
-  root.AppendChild(CreateInnerEditorElement());
+  auto* inner_editor = CreateInnerEditorElement();
+  // We need a placeholder break for an empty value in order to provide one
+  // line-height and a baseline even if this element is not editable.
+  auto* placeholder_break = CreatePlaceholderBreakElement();
+  placeholder_break->setAttribute(html_names::kAriaHiddenAttr, keywords::kTrue);
+  inner_editor->AppendChild(placeholder_break);
+  root.AppendChild(inner_editor);
 }
 
-const AtomicString& HTMLTextAreaElement::FormControlType() const {
+FormControlType HTMLTextAreaElement::FormControlType() const {
+  return FormControlType::kTextArea;
+}
+
+const AtomicString& HTMLTextAreaElement::FormControlTypeAsString() const {
   DEFINE_STATIC_LOCAL(const AtomicString, textarea, ("textarea"));
   return textarea;
 }
 
 FormControlState HTMLTextAreaElement::SaveFormControlState() const {
-  return is_dirty_ ? FormControlState(value()) : FormControlState();
+  return is_dirty_ ? FormControlState(Value()) : FormControlState();
 }
 
 void HTMLTextAreaElement::RestoreFormControlState(
     const FormControlState& state) {
-  setValue(state[0]);
+  SetValue(state[0]);
 }
 
 int HTMLTextAreaElement::scrollWidth() {
-  if (SuggestedValue().IsEmpty())
+  if (SuggestedValue().empty())
     return TextControlElement::scrollWidth();
   // If in preview state, fake the scroll width to prevent that any information
   // about the suggested content can be derived from the size.
@@ -121,14 +203,13 @@ int HTMLTextAreaElement::scrollWidth() {
   auto* box = GetLayoutBox();
   if (!box || !editor_box)
     return TextControlElement::scrollWidth();
-  LayoutUnit width =
-      editor_box->ClientWidth() + box->PaddingLeft() + box->PaddingRight();
-  return AdjustForAbsoluteZoom::AdjustLayoutUnit(width, box->StyleRef())
-      .Round();
+  const LayoutUnit width = editor_box->PhysicalPaddingBoxRect().Width() +
+                           box->PaddingOutsets().HorizontalSum();
+  return AdjustForAbsoluteZoom::AdjustLayoutUnit(width, box->Style()).Round();
 }
 
 int HTMLTextAreaElement::scrollHeight() {
-  if (SuggestedValue().IsEmpty())
+  if (SuggestedValue().empty())
     return TextControlElement::scrollHeight();
   // If in preview state, fake the scroll height to prevent that any
   // information about the suggested content can be derived from the size.
@@ -139,17 +220,29 @@ int HTMLTextAreaElement::scrollHeight() {
   auto* box = GetLayoutBox();
   if (!box || !editor_box)
     return TextControlElement::scrollHeight();
-  LayoutUnit height =
-      editor_box->ClientHeight() + box->PaddingTop() + box->PaddingBottom();
-  return AdjustForAbsoluteZoom::AdjustLayoutUnit(height, box->StyleRef())
-      .Round();
+  const LayoutUnit height = editor_box->PhysicalPaddingBoxRect().Height() +
+                            box->PaddingOutsets().VerticalSum();
+  return AdjustForAbsoluteZoom::AdjustLayoutUnit(height, box->Style()).Round();
+}
+
+double HTMLTextAreaElement::scrollLeft() {
+  if (!SuggestedValue().empty()) {
+    return 0;
+  }
+  return TextControlElement::scrollLeft();
+}
+
+double HTMLTextAreaElement::scrollTop() {
+  if (!SuggestedValue().empty()) {
+    return 0;
+  }
+  return TextControlElement::scrollTop();
 }
 
 void HTMLTextAreaElement::ChildrenChanged(const ChildrenChange& change) {
   HTMLElement::ChildrenChanged(change);
-  SetLastChangeWasNotUserEdit();
   if (is_dirty_)
-    SetInnerEditorValue(value());
+    SetInnerEditorValue(Value());
   else
     SetNonDirtyValue(defaultValue(), TextControlSetValueSelection::kClamp);
 }
@@ -170,16 +263,22 @@ bool HTMLTextAreaElement::IsPresentationAttribute(
 void HTMLTextAreaElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kWrapAttr) {
     if (ShouldWrapText()) {
-      AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kWhiteSpace,
-                                              CSSValueID::kPreWrap);
+      // Longhands of `white-space: pre-wrap`.
+      AddPropertyToPresentationAttributeStyle(
+          style, CSSPropertyID::kWhiteSpaceCollapse, CSSValueID::kPreserve);
+      AddPropertyToPresentationAttributeStyle(
+          style, CSSPropertyID::kTextWrapMode, CSSValueID::kWrap);
       AddPropertyToPresentationAttributeStyle(
           style, CSSPropertyID::kOverflowWrap, CSSValueID::kBreakWord);
     } else {
-      AddPropertyToPresentationAttributeStyle(style, CSSPropertyID::kWhiteSpace,
-                                              CSSValueID::kPre);
+      // Longhands of `white-space: pre`.
+      AddPropertyToPresentationAttributeStyle(
+          style, CSSPropertyID::kWhiteSpaceCollapse, CSSValueID::kPreserve);
+      AddPropertyToPresentationAttributeStyle(
+          style, CSSPropertyID::kTextWrapMode, CSSValueID::kNowrap);
       AddPropertyToPresentationAttributeStyle(
           style, CSSPropertyID::kOverflowWrap, CSSValueID::kNormal);
     }
@@ -195,7 +294,7 @@ void HTMLTextAreaElement::ParseAttribute(
   const AtomicString& value = params.new_value;
   if (name == html_names::kRowsAttr) {
     unsigned rows = 0;
-    if (value.IsEmpty() || !ParseHTMLNonNegativeInteger(value, rows) ||
+    if (value.empty() || !ParseHTMLNonNegativeInteger(value, rows) ||
         rows <= 0 || rows > 0x7fffffffu)
       rows = kDefaultRows;
     if (rows_ != rows) {
@@ -208,7 +307,7 @@ void HTMLTextAreaElement::ParseAttribute(
     }
   } else if (name == html_names::kColsAttr) {
     unsigned cols = 0;
-    if (value.IsEmpty() || !ParseHTMLNonNegativeInteger(value, cols) ||
+    if (value.empty() || !ParseHTMLNonNegativeInteger(value, cols) ||
         cols <= 0 || cols > 0x7fffffffu)
       cols = kDefaultCols;
     if (cols_ != cols) {
@@ -224,14 +323,15 @@ void HTMLTextAreaElement::ParseAttribute(
     // deprecated.  The soft/hard /off values are a recommendation for HTML 4
     // extension by IE and NS 4.
     WrapMethod wrap;
-    if (EqualIgnoringASCIICase(value, "physical") ||
-        EqualIgnoringASCIICase(value, "hard") ||
-        EqualIgnoringASCIICase(value, "on"))
+    if (EqualIgnoringAsciiCase(value, "physical") ||
+        EqualIgnoringAsciiCase(value, "hard") ||
+        EqualIgnoringAsciiCase(value, "on")) {
       wrap = kHardWrap;
-    else if (EqualIgnoringASCIICase(value, "off"))
+    } else if (EqualIgnoringAsciiCase(value, "off")) {
       wrap = kNoWrap;
-    else
+    } else {
       wrap = kSoftWrap;
+    }
     if (wrap != wrap_) {
       wrap_ = wrap;
       if (LayoutObject* layout_object = GetLayoutObject()) {
@@ -253,27 +353,22 @@ void HTMLTextAreaElement::ParseAttribute(
   }
 }
 
-bool HTMLTextAreaElement::TypeShouldForceLegacyLayout() const {
-  if (RuntimeEnabledFeatures::LayoutNGTextControlEnabled())
-    return false;
-  UseCounter::Count(GetDocument(), WebFeature::kLegacyLayoutByTextControl);
-  return true;
-}
-
 LayoutObject* HTMLTextAreaElement::CreateLayoutObject(
-    const ComputedStyle& style,
-    LegacyLayout legacy) {
-  return LayoutObjectFactory::CreateTextControlMultiLine(*this, style, legacy);
+    const ComputedStyle& style) {
+  if (style.IsVerticalWritingMode()) {
+    UseCounter::Count(GetDocument(), WebFeature::kVerticalFormControls);
+  }
+  return MakeGarbageCollected<LayoutTextControlMultiLine>(this);
 }
 
 void HTMLTextAreaElement::AppendToFormData(FormData& form_data) {
-  if (GetName().IsEmpty())
+  if (GetName().empty())
     return;
 
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kForm);
 
   const String& text =
-      (wrap_ == kHardWrap) ? ValueWithHardLineBreaks() : value();
+      (wrap_ == kHardWrap) ? ValueWithHardLineBreaks() : Value();
   form_data.AppendFromElement(GetName(), text);
 
   const AtomicString& dirname_attr_value =
@@ -285,23 +380,25 @@ void HTMLTextAreaElement::AppendToFormData(FormData& form_data) {
 void HTMLTextAreaElement::ResetImpl() {
   SetNonDirtyValue(defaultValue(),
                    TextControlSetValueSelection::kSetSelectionToEnd);
+  HTMLFormControlElementWithState::ResetImpl();
 }
 
 bool HTMLTextAreaElement::HasCustomFocusLogic() const {
   return true;
 }
 
-bool HTMLTextAreaElement::IsKeyboardFocusable() const {
+bool HTMLTextAreaElement::IsKeyboardFocusableSlow(
+    UpdateBehavior update_behavior) const {
   // If a given text area can be focused at all, then it will always be keyboard
-  // focusable.
-  return IsBaseElementFocusable();
+  // focusable, unless it has a negative tabindex set.
+  return IsFocusable(update_behavior) && tabIndex() >= 0;
 }
 
 bool HTMLTextAreaElement::MayTriggerVirtualKeyboard() const {
   return true;
 }
 
-void HTMLTextAreaElement::UpdateFocusAppearanceWithOptions(
+void HTMLTextAreaElement::UpdateSelectionOnFocus(
     SelectionBehaviorOnFocus selection_behavior,
     const FocusOptions* options) {
   switch (selection_behavior) {
@@ -319,12 +416,26 @@ void HTMLTextAreaElement::UpdateFocusAppearanceWithOptions(
 }
 
 void HTMLTextAreaElement::DefaultEventHandler(Event& event) {
+  if (auto* keyboard_event = DynamicTo<KeyboardEvent>(event);
+      base::FeatureList::IsEnabled(
+          blink::features::kAutofillKeydownEditableElement) &&
+      keyboard_event && event.type() == event_type_names::kKeydown &&
+      IsFocused() && !IsDisabledOrReadOnly() && GetDocument().GetPage() &&
+      GetDocument()
+          .GetPage()
+          ->GetChromeClient()
+          .HandleKeyboardEventOnEditableElement(*this, *keyboard_event)) {
+    event.SetDefaultHandled();
+    return;
+  }
+
   if (GetLayoutObject() &&
       (IsA<MouseEvent>(event) || IsA<DragEvent>(event) ||
        event.HasInterface(event_interface_names::kWheelEvent) ||
        event.type() == event_type_names::kBlur)) {
     ForwardEvent(event);
-  } else if (GetLayoutObject() && event.IsBeforeTextInsertedEvent()) {
+  } else if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled() &&
+             GetLayoutObject() && event.IsBeforeTextInsertedEvent()) {
     HandleBeforeTextInsertedEvent(
         static_cast<BeforeTextInsertedEvent*>(&event));
   }
@@ -333,6 +444,8 @@ void HTMLTextAreaElement::DefaultEventHandler(Event& event) {
 }
 
 void HTMLTextAreaElement::SubtreeHasChanged() {
+  TRACE_EVENT0("blink", "HTMLTextAreaElement::SubtreeHasChanged");
+  AdjustPlaceholderBreakElement();
 #if DCHECK_IS_ON()
   // The innerEditor should have either Text nodes or a placeholder break
   // element. If we see other nodes, it's a bug in editing code and we should
@@ -342,42 +455,63 @@ void HTMLTextAreaElement::SubtreeHasChanged() {
     if (node.IsTextNode())
       continue;
     DCHECK(IsA<HTMLBRElement>(node));
-    DCHECK_EQ(&node, inner_editor->lastChild());
+    if (IsPlaceholderBreakElement(&node)) {
+      DCHECK_EQ(&node, inner_editor->lastChild());
+    }
   }
 #endif
-  AddPlaceholderBreakElementIfNecessary();
   SetValueBeforeFirstUserEditIfNotSet();
   UpdateValue();
-  CheckIfValueWasReverted(value());
+  UpdatePlaceholderBreakAriaHidden(value_);
+  CheckIfValueWasReverted(Value());
   SetNeedsValidityCheck();
   SetAutofillState(WebAutofillState::kNotFilled);
   UpdatePlaceholderVisibility();
 
+  if (HasDirectionAuto()) {
+    // When typing in a textarea, childrenChanged is not called, so we need to
+    // force the directionality check.
+    CalculateAndAdjustAutoDirectionality();
+  }
+
+  if (RuntimeEnabledFeatures::OpaqueRangeEnabled(GetExecutionContext())) {
+    CommitOpaqueRangeEdit();
+  }
+
   if (!IsFocused())
     return;
 
-  // When typing in a textarea, childrenChanged is not called, so we need to
-  // force the directionality check.
-  CalculateAndAdjustAutoDirectionality(this);
-
   DCHECK(GetDocument().IsActive());
+  if (value_.empty()) {
+    GetDocument().GetPage()->GetChromeClient().DidClearValueInTextField(*this);
+  }
   GetDocument().GetPage()->GetChromeClient().DidChangeValueInTextField(*this);
+  GetDocument().DidHaveFormEdit();
 }
 
 void HTMLTextAreaElement::HandleBeforeTextInsertedEvent(
-    BeforeTextInsertedEvent* event) const {
+    BeforeTextInsertedEvent* event) {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
   DCHECK(event);
   DCHECK(GetLayoutObject());
+  event->SetText(FilterBeforeTextInserted(event->GetText()));
+}
+
+String HTMLTextAreaElement::FilterBeforeTextInserted(const String& text) {
+  if (!GetLayoutObject()) {
+    return text;
+  }
   int signed_max_length = maxLength();
-  if (signed_max_length < 0)
-    return;
+  if (signed_max_length < 0) {
+    return text;
+  }
   unsigned unsigned_max_length = static_cast<unsigned>(signed_max_length);
 
   const String& current_value = InnerEditorValue();
   unsigned current_length = ComputeLengthForAPIValue(current_value);
-  if (current_length + ComputeLengthForAPIValue(event->GetText()) <
-      unsigned_max_length)
-    return;
+  if (current_length + ComputeLengthForAPIValue(text) < unsigned_max_length) {
+    return text;
+  }
 
   // selectionLength represents the selection length of this text field to be
   // removed by this insertion.
@@ -397,72 +531,112 @@ void HTMLTextAreaElement::HandleBeforeTextInsertedEvent(
   unsigned base_length = current_length - selection_length;
   unsigned appendable_length =
       unsigned_max_length > base_length ? unsigned_max_length - base_length : 0;
-  event->SetText(SanitizeUserInputValue(event->GetText(), appendable_length));
+  String result = SanitizeUserInputValue(text, appendable_length);
+
+  if (selection_length == current_length && selection_length != 0 &&
+      !result.empty()) {
+    GetDocument().GetPage()->GetChromeClient().DidClearValueInTextField(*this);
+  }
+  return result;
 }
 
-String HTMLTextAreaElement::SanitizeUserInputValue(const String& proposed_value,
-                                                   unsigned max_length) {
+// Computes how many leading UTF-16 code units of `characters` may be kept
+// under `max_length`, collapsing CRLF pairs into a single unit as it goes.
+template <typename CharType>
+static wtf_size_t ComputeSanitizedLength(base::span<const CharType> characters,
+                                         unsigned max_length) {
   unsigned submission_length = 0;
-  unsigned i = 0;
-  for (; i < proposed_value.length(); ++i) {
-    if (proposed_value[i] == '\r' && i + 1 < proposed_value.length() &&
-        proposed_value[i + 1] == '\n')
+  wtf_size_t i = 0;
+  for (; i < characters.size(); ++i) {
+    if (characters[i] == '\r' && i + 1 < characters.size() &&
+        characters[i + 1] == '\n') {
       continue;
+    }
     ++submission_length;
     if (submission_length == max_length) {
       ++i;
       break;
     }
-    if (submission_length > max_length)
+    if (submission_length > max_length) {
       break;
+    }
+  }
+  return i;
+}
+
+String HTMLTextAreaElement::SanitizeUserInputValue(const String& proposed_value,
+                                                   unsigned max_length) {
+  wtf_size_t i = 0;
+  if (!proposed_value.empty()) {
+    i = VisitCharacters(proposed_value, [max_length](auto chars) {
+      return ComputeSanitizedLength(chars, max_length);
+    });
   }
   if (i > 0 && U16_IS_LEAD(proposed_value[i - 1]))
     --i;
-  return proposed_value.Left(i);
+  return proposed_value.substr(0, i);
 }
 
 void HTMLTextAreaElement::UpdateValue() {
-  value_ = InnerEditorValue();
+  value_ = SerializeInnerEditorValue();
   NotifyFormStateChanged();
   is_dirty_ = true;
   UpdatePlaceholderVisibility();
 }
 
-String HTMLTextAreaElement::value() const {
+String HTMLTextAreaElement::Value() const {
   return value_;
 }
 
-void HTMLTextAreaElement::setValue(const String& value,
+void HTMLTextAreaElement::setValueForBinding(const String& value) {
+  String old_value = this->Value();
+  bool was_autofilled = IsAutofilled();
+  bool value_changed = old_value != value;
+  SetValue(value, TextFieldEventBehavior::kDispatchNoEvent,
+           TextControlSetValueSelection::kSetSelectionToEnd,
+           was_autofilled && !value_changed ? WebAutofillState::kAutofilled
+                                            : WebAutofillState::kNotFilled);
+  if (Page* page = GetDocument().GetPage(); page) {
+    page->GetChromeClient().JavaScriptSetValue(*this, old_value, was_autofilled,
+                                               value_changed);
+  }
+}
+
+void HTMLTextAreaElement::SetValue(const String& value,
                                    TextFieldEventBehavior event_behavior,
-                                   TextControlSetValueSelection selection) {
-  SetValueCommon(value, event_behavior, selection);
+                                   TextControlSetValueSelection selection,
+                                   WebAutofillState autofill_state) {
+  SetValueCommon(value, event_behavior, selection, autofill_state);
   is_dirty_ = true;
 }
 
 void HTMLTextAreaElement::SetNonDirtyValue(
     const String& value,
     TextControlSetValueSelection selection) {
-  SetValueCommon(value, TextFieldEventBehavior::kDispatchNoEvent, selection);
+  SetValueCommon(value, TextFieldEventBehavior::kDispatchNoEvent, selection,
+                 WebAutofillState::kNotFilled);
   is_dirty_ = false;
 }
 
-void HTMLTextAreaElement::SetValueCommon(
-    const String& new_value,
-    TextFieldEventBehavior event_behavior,
-    TextControlSetValueSelection selection) {
+void HTMLTextAreaElement::SetValueCommon(const String& new_value,
+                                         TextFieldEventBehavior event_behavior,
+                                         TextControlSetValueSelection selection,
+                                         WebAutofillState autofill_state) {
   // Code elsewhere normalizes line endings added by the user via the keyboard
   // or pasting.  We normalize line endings coming from JavaScript here.
-  String normalized_value = new_value;
-  ReplaceCRWithNewLine(normalized_value);
+  String normalized_value = NormalizeLineEndingsToLf(new_value);
 
   // Clear the suggested value. Use the base class version to not trigger a view
   // update.
+  SetAutofillState(autofill_state);
   TextControlElement::SetSuggestedValue(String());
 
   // Return early because we don't want to trigger other side effects when the
   // value isn't changing. This is interoperable.
-  if (normalized_value == value())
+  if (normalized_value == Value())
     return;
+
+  const String old_value = Value();
 
   // selectionStart and selectionEnd values can be changed by
   // SetInnerEditorValue(). We need to get them before SetInnerEditorValue() to
@@ -475,6 +649,17 @@ void HTMLTextAreaElement::SetValueCommon(
     SetValueBeforeFirstUserEditIfNotSet();
   value_ = normalized_value;
   SetInnerEditorValue(value_);
+
+  // Programmatic value changes trigger a full-replace update so
+  // OpaqueRange offsets are recomputed against the new text. Callers that
+  // perform a targeted update (e.g., setRangeText) set the skip flag to
+  // suppress this pass and prevent redundant notifications or offset
+  // adjustments.
+  if (RuntimeEnabledFeatures::OpaqueRangeEnabled(GetExecutionContext()) &&
+      !ShouldSkipNextSetValueAutoDiff()) {
+    CommitProgrammaticOpaqueRangeEdit(old_value, /*old_sel_start=*/0u,
+                                      /*old_sel_end=*/old_value.length());
+  }
   if (event_behavior == TextFieldEventBehavior::kDispatchNoEvent)
     SetLastChangeWasNotUserEdit();
   else
@@ -483,11 +668,19 @@ void HTMLTextAreaElement::SetValueCommon(
   SetNeedsStyleRecalc(
       kSubtreeStyleChange,
       StyleChangeReasonForTracing::Create(style_change_reason::kControlValue));
+  if (LayoutObject* layout_object = GetLayoutObject()) {
+    layout_object
+        ->SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+            layout_invalidation_reason::kTextControlChanged);
+  }
   SetNeedsValidityCheck();
   if (selection == TextControlSetValueSelection::kSetSelectionToEnd) {
     // Set the caret to the end of the text value except for initialize.
     unsigned end_of_string = value_.length();
     SetSelectionRange(end_of_string, end_of_string);
+  } else if (selection == TextControlSetValueSelection::kSetSelectionToStart) {
+    // Set the caret to the start of the text value.
+    SetSelectionRange(0, 0);
   } else if (is_clamp) {
     const unsigned end_of_string = value_.length();
     SetSelectionRange(std::min(end_of_string, selection_start),
@@ -512,6 +705,13 @@ void HTMLTextAreaElement::SetValueCommon(
     case TextFieldEventBehavior::kDispatchNoEvent:
       break;
   }
+
+  // We set the Autofilled state again because setting the autofill value
+  // triggers JavaScript events and the site may override the autofilled
+  // value, which resets the autofill state. Even if the website modifies the
+  // form control element's content during the autofill operation, we want the
+  // state to show as autofilled.
+  SetAutofillState(autofill_state);
 }
 
 String HTMLTextAreaElement::defaultValue() const {
@@ -531,10 +731,28 @@ void HTMLTextAreaElement::setDefaultValue(const String& default_value) {
 }
 
 void HTMLTextAreaElement::SetSuggestedValue(const String& value) {
-  TextControlElement::SetSuggestedValue(value);
+  String sanitized_value = value;
+  if (IsInCanvasSubtree()) {
+    // Hide suggested values when under canvas, to prevent leaking this
+    // information to javascript.
+    sanitized_value = String();
+  }
+  TextControlElement::SetSuggestedValue(sanitized_value);
+  SetAutofillState(!sanitized_value.empty() ? WebAutofillState::kPreviewed
+                                            : WebAutofillState::kNotFilled);
   SetNeedsStyleRecalc(
       kSubtreeStyleChange,
       StyleChangeReasonForTracing::Create(style_change_reason::kControlValue));
+}
+
+void HTMLTextAreaElement::DidChangeIsInCanvasSubtree(
+    CanvasSubtreePropagation propagation_behavior) {
+  TextControlElement::DidChangeIsInCanvasSubtree(propagation_behavior);
+  if (IsInCanvasSubtree()) {
+    // Hide suggested values when under canvas, to prevent leaking this
+    // information to javascript.
+    SetSuggestedValue(String());
+  }
 }
 
 String HTMLTextAreaElement::validationMessage() const {
@@ -548,12 +766,12 @@ String HTMLTextAreaElement::validationMessage() const {
     return GetLocale().QueryString(IDS_FORM_VALIDATION_VALUE_MISSING);
 
   if (TooLong()) {
-    return GetLocale().ValidationMessageTooLongText(value().length(),
+    return GetLocale().ValidationMessageTooLongText(Value().length(),
                                                     maxLength());
   }
 
   if (TooShort()) {
-    return GetLocale().ValidationMessageTooShortText(value().length(),
+    return GetLocale().ValidationMessageTooShortText(Value().length(),
                                                      minLength());
   }
 
@@ -569,7 +787,7 @@ bool HTMLTextAreaElement::ValueMissing(const String* value) const {
   // For textarea elements, the value is missing only if it is mutable.
   // https://html.spec.whatwg.org/multipage/form-elements.html#attr-textarea-required
   return IsRequiredFormControl() && !IsDisabledOrReadOnly() &&
-         (value ? *value : this->value()).IsEmpty();
+         (value ? *value : this->Value()).empty();
 }
 
 bool HTMLTextAreaElement::TooLong() const {
@@ -593,7 +811,7 @@ bool HTMLTextAreaElement::TooLong(const String* value,
   if (max < 0)
     return false;
   unsigned len =
-      value ? ComputeLengthForAPIValue(*value) : this->value().length();
+      value ? ComputeLengthForAPIValue(*value) : this->Value().length();
   return len > static_cast<unsigned>(max);
 }
 
@@ -609,7 +827,7 @@ bool HTMLTextAreaElement::TooShort(const String* value,
     return false;
   // An empty string is excluded from minlength check.
   unsigned len =
-      value ? ComputeLengthForAPIValue(*value) : this->value().length();
+      value ? ComputeLengthForAPIValue(*value) : this->Value().length();
   return len > 0 && len < static_cast<unsigned>(min);
 }
 
@@ -619,7 +837,7 @@ bool HTMLTextAreaElement::IsValidValue(const String& candidate) const {
 }
 
 void HTMLTextAreaElement::AccessKeyAction(SimulatedClickCreationScope) {
-  focus();
+  Focus(FocusParams(FocusTrigger::kUserGesture));
 }
 
 void HTMLTextAreaElement::setCols(unsigned cols) {
@@ -644,19 +862,33 @@ void HTMLTextAreaElement::SetPlaceholderVisibility(bool visible) {
   is_placeholder_visible_ = visible;
 }
 
-void HTMLTextAreaElement::UpdatePlaceholderText() {
+void HTMLTextAreaElement::CreateInnerEditorElementIfNecessary() const {
+  // HTMLTextArea immediately creates the inner-editor, so this function should
+  // never be called.
+  NOTREACHED();
+}
+
+bool HTMLTextAreaElement::IsInnerEditorValueEmpty() const {
+  return Value().empty();
+}
+
+String HTMLTextAreaElement::InnerEditorValue() const {
+  return Value();
+}
+
+HTMLElement* HTMLTextAreaElement::UpdatePlaceholderText() {
   HTMLElement* placeholder = PlaceholderElement();
   const String placeholder_text = GetPlaceholderValue();
-  const bool is_suggested_value = !SuggestedValue().IsEmpty();
-  if (placeholder_text.IsEmpty()) {
+  const bool is_suggested_value = !SuggestedValue().empty();
+  if (!is_suggested_value && !FastHasAttribute(html_names::kPlaceholderAttr)) {
     if (placeholder)
       UserAgentShadowRoot()->RemoveChild(placeholder);
-    return;
+    return nullptr;
   }
   if (!placeholder) {
     auto* new_element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
     placeholder = new_element;
-    placeholder->SetShadowPseudoId(AtomicString("-webkit-input-placeholder"));
+    UpdatePlaceholderShadowPseudoId(*placeholder);
     placeholder->setAttribute(html_names::kIdAttr,
                               shadow_element_names::kIdPlaceholder);
     placeholder->SetInlineStyleProperty(
@@ -670,14 +902,14 @@ void HTMLTextAreaElement::UpdatePlaceholderText() {
   } else {
     placeholder->RemoveInlineStyleProperty(CSSPropertyID::kUserSelect);
   }
-  String normalized_value = placeholder_text;
   // https://html.spec.whatwg.org/multipage/form-elements.html#attr-textarea-placeholder
-  ReplaceCRWithNewLine(normalized_value);
+  String normalized_value = NormalizeLineEndingsToLf(placeholder_text);
   placeholder->setTextContent(normalized_value);
+  return placeholder;
 }
 
 String HTMLTextAreaElement::GetPlaceholderValue() const {
-  return !SuggestedValue().IsEmpty()
+  return !SuggestedValue().empty()
              ? SuggestedValue()
              : FastGetAttribute(html_names::kPlaceholderAttr);
 }
@@ -686,15 +918,109 @@ bool HTMLTextAreaElement::IsInteractiveContent() const {
   return true;
 }
 
+FocusgroupFlags HTMLTextAreaElement::NativeArrowKeyAxes() const {
+  // Textareas always use arrow keys for caret navigation in both axes.
+  return FocusgroupFlags::kInline | FocusgroupFlags::kBlock;
+}
+
 void HTMLTextAreaElement::CloneNonAttributePropertiesFrom(
     const Element& source,
-    CloneChildrenFlag flag) {
+    NodeCloningData& data) {
   const auto& source_element = To<HTMLTextAreaElement>(source);
-  SetValueCommon(source_element.value(),
+  SetValueCommon(source_element.Value(),
                  TextFieldEventBehavior::kDispatchNoEvent,
-                 TextControlSetValueSelection::kSetSelectionToEnd);
+                 TextControlSetValueSelection::kSetSelectionToStart,
+                 source_element.GetAutofillState());
   is_dirty_ = source_element.is_dirty_;
-  TextControlElement::CloneNonAttributePropertiesFrom(source, flag);
+  TextControlElement::CloneNonAttributePropertiesFrom(source, data);
+}
+
+String HTMLTextAreaElement::DefaultToolTip() const {
+  if (FastHasAttribute(html_names::kNovalidateAttr))
+    return String();
+  if (Form() && Form()->NoValidate()) {
+    return String();
+  }
+  return validationMessage();
+}
+
+void HTMLTextAreaElement::SetFocused(bool is_focused,
+                                     mojom::blink::FocusType focus_type,
+                                     BlurEventBehavior blur_event_behavior) {
+  // See comment in HTMLInputElement::SetFocused.
+  if (UserHasEditedTheField()) {
+    SetUserHasEditedTheFieldAndBlurred();
+  }
+  TextControlElement::SetFocused(is_focused, focus_type, blur_event_behavior);
+}
+
+WebFormControlElement::TextInfo HTMLTextAreaElement::GetTextInfo() const {
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
+  const TextControlInnerEditorElement* inner_element = InnerEditorElement();
+  if (!inner_element) {
+    return {};
+  }
+  const auto* inner_layout =
+      To<LayoutBlockFlow>(inner_element->GetLayoutObject());
+  if (!inner_layout) {
+    return {};
+  }
+
+  WebFormControlElement::TextInfo results;
+  results.effective_zoom = inner_layout->Style().EffectiveZoom();
+  results.primary_ascent =
+      inner_layout->Style().GetFontHeight().ascent.ToFloat();
+  for (LayoutObject* child = inner_layout->FirstChild(); child;
+       child = child->NextSibling()) {
+    const auto* paragraph_block = DynamicTo<LayoutBlockFlow>(child);
+    if (!paragraph_block) {
+      continue;
+    }
+    const PhysicalOffset paragraph_offset = paragraph_block->PhysicalLocation();
+    InlineCursor line_cursor;
+    for (InlineCursor cursor(*paragraph_block); cursor; cursor.MoveToNext()) {
+      const FragmentItem* text_item = cursor.CurrentItem();
+      if (!text_item) {
+        continue;
+      }
+      if (text_item->Type() == blink::FragmentItem::kLine) {
+        line_cursor = cursor.CursorForDescendants();
+        continue;
+      }
+      if (!text_item->IsText()) {
+        continue;
+      }
+      const ShapeResultView* shape = text_item->TextShapeResult();
+      if (!shape) {
+        continue;  // Skip \n characters
+      }
+
+      // Split `text_item` into multiple TypefaceRunInfo objects if it has
+      // more than one font.
+      TextInfoContext context;
+      // Adjust the `character_index` values for the substring this TextRunInfo
+      // represents so that they are indexes into TextRunInfo::text.
+      context.start_index = shape->StartIndex();
+      shape->ForEachGlyph(
+          /*initial_advance*/ 0.0f, GetTextInfoForGlyphCallback, &context);
+      CHECK(line_cursor.HasRoot());
+      results.text_runs.emplace_back(
+          std::move(context.typeface_runs),
+          gfx::RectF(text_item->RectInContainerFragment() + paragraph_offset),
+          WebString(text_item->Text(line_cursor.Items()).ToString()));
+    }
+  }
+
+  return results;
+}
+
+bool HTMLTextAreaElement::SupportsBaseAppearanceInternal(
+    Element::BaseAppearanceValue value) const {
+  if (!RuntimeEnabledFeatures::AppearanceBaseEnabled()) {
+    return false;
+  }
+  return value == Element::BaseAppearanceValue::kBase;
 }
 
 }  // namespace blink

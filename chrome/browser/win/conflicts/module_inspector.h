@@ -1,13 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_WIN_CONFLICTS_MODULE_INSPECTOR_H_
 #define CHROME_BROWSER_WIN_CONFLICTS_MODULE_INSPECTOR_H_
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -28,9 +27,8 @@ class SequencedTaskRunner;
 // the SequencedTaskRunner where it was created.
 //
 // The inspection of all modules is quite expensive in terms of resources, so it
-// is done after startup, one by one, in a utility process. If needed, it is
-// possible to skip waiting for startup to be finished by calling
-// ForceStartInspection().
+// is done one by one, in a utility process, only if it is needed (when
+// StartInspection() is called).
 //
 // This class is not thread safe and it enforces safety via a SEQUENCE_CHECKER.
 class ModuleInspector : public ModuleDatabaseObserver {
@@ -38,7 +36,7 @@ class ModuleInspector : public ModuleDatabaseObserver {
   // The amount of time before the |inspection_results_cache_| is flushed to
   // disk while the ModuleDatabase is not idle.
   static constexpr base::TimeDelta kFlushInspectionResultsTimerTimeout =
-      base::TimeDelta::FromMinutes(5);
+      base::Minutes(5);
 
   using OnModuleInspectedCallback =
       base::RepeatingCallback<void(const ModuleInfoKey& module_key,
@@ -46,14 +44,18 @@ class ModuleInspector : public ModuleDatabaseObserver {
 
   explicit ModuleInspector(
       const OnModuleInspectedCallback& on_module_inspected_callback);
+
+  ModuleInspector(const ModuleInspector&) = delete;
+  ModuleInspector& operator=(const ModuleInspector&) = delete;
+
   ~ModuleInspector() override;
+
+  // Starts the background inspection of modules.
+  void StartInspection();
 
   // Adds the module to the queue of modules to inspect. Starts the inspection
   // process if the |queue_| is empty.
   void AddModule(const ModuleInfoKey& module_key);
-
-  // Skips waiting for startup to be finished.
-  void ForceStartInspection();
 
   // Returns true if ModuleInspector is not doing anything right now.
   bool IsIdle();
@@ -76,10 +78,6 @@ class ModuleInspector : public ModuleDatabaseObserver {
  private:
   // Ensures the |remote_util_win_| instance is bound to the UtilWin service.
   void EnsureUtilWinServiceBound();
-
-  // Invoked when Chrome has finished starting up to initiate the inspection of
-  // queued modules.
-  void OnStartupFinished();
 
   // Invoked when the InspectionResultsCache is available.
   void OnInspectionResultsCacheRead(
@@ -112,9 +110,9 @@ class ModuleInspector : public ModuleDatabaseObserver {
   // The modules are put in queue until they are sent for inspection.
   base::queue<ModuleInfoKey> queue_;
 
-  // Indicates if Chrome has finished starting up. Used to delay the background
-  // inspection tasks in order to not negatively impact startup performance.
-  bool is_after_startup_;
+  // Indicates inspection was started. Used to delay the background inspection
+  // tasks until the results have been requested (by calling StartInspection()).
+  bool is_started_;
 
   // A callback used to initialize |remote_util_win_|.
   UtilWinFactoryCallback util_win_factory_callback_;
@@ -160,8 +158,6 @@ class ModuleInspector : public ModuleDatabaseObserver {
   // Weak pointers are used to safely post the inspection result back to the
   // ModuleInspector from the task scheduler.
   base::WeakPtrFactory<ModuleInspector> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ModuleInspector);
 };
 
 #endif  // CHROME_BROWSER_WIN_CONFLICTS_MODULE_INSPECTOR_H_

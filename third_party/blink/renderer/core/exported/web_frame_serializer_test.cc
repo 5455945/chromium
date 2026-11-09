@@ -30,16 +30,19 @@
 
 #include "third_party/blink/public/web/web_frame_serializer.h"
 
+#include <vector>
+
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_frame_serializer_client.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -53,9 +56,9 @@ class SimpleWebFrameSerializerClient final : public WebFrameSerializerClient {
   String ToString() { return builder_.ToString(); }
 
  private:
-  void DidSerializeDataForFrame(const WebVector<char>& data,
+  void DidSerializeDataForFrame(const std::vector<char>& data,
                                 FrameSerializationStatus) final {
-    builder_.Append(data.Data(), data.size());
+    builder_.Append(base::as_byte_span(data));
   }
 
   StringBuilder builder_;
@@ -113,10 +116,11 @@ class WebFrameSerializerTest : public testing::Test {
 
   String SerializeFile(const String& url,
                        const String& file_name,
-                       bool save_with_empty_url) {
+                       bool save_with_empty_url,
+                       const String& mime_type = "text/html") {
     KURL parsed_url(url);
     String file_path("frameserialization/" + file_name);
-    RegisterMockedFileURLLoad(parsed_url, file_path, "text/html");
+    RegisterMockedFileURLLoad(parsed_url, file_path, mime_type);
     frame_test_helpers::LoadFrame(MainFrameImpl(), url.Utf8().c_str());
     SingleLinkRewritingDelegate delegate(parsed_url, WebString("local"));
     SimpleWebFrameSerializerClient serializer_client;
@@ -128,6 +132,7 @@ class WebFrameSerializerTest : public testing::Test {
   WebLocalFrameImpl* MainFrameImpl() { return helper_.LocalMainFrame(); }
 
  private:
+  test::TaskEnvironment task_environment_;
   frame_test_helpers::WebViewHelper helper_;
 };
 
@@ -169,7 +174,7 @@ TEST_F(WebFrameSerializerTest, FromUrlWithMinusMinus) {
   String actual_html =
       SerializeFile("http://www.test.com?--x--", "text_only_page.html", false);
   EXPECT_EQ("<!-- saved from url=(0030)http://www.test.com/?-%2Dx-%2D -->",
-            actual_html.Substring(1, 60));
+            actual_html.substr(1, 60));
 }
 
 TEST_F(WebFrameSerializerTest, WithoutFrameUrl) {
@@ -186,6 +191,69 @@ TEST_F(WebFrameSerializerTest, WithoutFrameUrl) {
   String actual_html =
       SerializeFile("http://www.test.com", "encoding_normalization.html", true);
   EXPECT_EQ(expected_html, actual_html);
+}
+
+TEST_F(WebFrameSerializerTest, ShadowDOM) {
+  const char* expected_html = R"HTML(<!DOCTYPE html>
+<!-- saved from url=(0014)about:internet -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252"></head><body>
+<div id="host1"><template shadowrootmode="open">
+    <div>hello world</div>
+  </template>
+  
+</div>
+<div id="host2"><template shadowrootmode="closed">
+    <div>hello world</div>
+  </template>
+  
+</div>
+<div id="host3"><template shadowrootmode="open" shadowrootdelegatesfocus>
+    <div>hello world</div>
+  </template>
+  
+</div>
+<div id="host4"><template shadowrootmode="open">
+    <slot></slot>
+  </template>
+  
+  <div>light dom slotted</div>
+</div>
+<div id="host5"><template shadowrootmode="open"><div>hello world</div></template>
+  <div>light dom</div>
+</div>
+<script>
+host5.attachShadow({mode: 'open'}).innerHTML = '<div>hello world</div>';
+</script>
+<div id="host6"><template shadowrootmode="open"><div>hello world</div></template></div>
+<script>
+host6.attachShadow({mode: 'open'}).innerHTML = '<div>hello world</div>';
+</script>
+<div id="host7"><template shadowrootmode="open"></template></div>
+</body></html>)HTML";
+  String actual_html =
+      SerializeFile("http://www.test.com", "shadowdom.html", true);
+  EXPECT_EQ(String(expected_html), actual_html);
+}
+
+TEST_F(WebFrameSerializerTest, EntitiesInAttributeHtml) {
+  String expected(
+      u"<body "
+      u"title=\"&quot;&amp;&lt;&gt;'\u00A9&nbsp;\t\n\r\">\n\n</body></html>");
+
+  String actual =
+      SerializeFile("http://www.test.com/2", "entities.html", false);
+  EXPECT_TRUE(actual.ends_with(expected));
+}
+
+TEST_F(WebFrameSerializerTest, EntitiesInAttributeXml) {
+  String expected(
+      u"<body "
+      u"title=\"&quot;&amp;&lt;&gt;'\u00C2\u00A9\u00C2\u00A0&#9;&#10;&#13;\" "
+      u"/>\n</html>");
+
+  String actual = SerializeFile("http://www.test.com/2", "entities.xml", false,
+                                "application/xhtml+xml");
+  EXPECT_TRUE(actual.ends_with(expected));
 }
 
 }  // namespace blink

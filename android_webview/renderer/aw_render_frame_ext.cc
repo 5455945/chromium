@@ -1,23 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/renderer/aw_render_frame_ext.h"
 
-#include <map>
 #include <memory>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include "android_webview/common/aw_features.h"
 #include "android_webview/common/mojom/frame.mojom.h"
-#include "base/no_destructor.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/content/renderer/autofill_agent.h"
 #include "components/autofill/content/renderer/password_autofill_agent.h"
+#include "components/autofill/content/renderer/password_generation_agent.h"
 #include "components/content_capture/common/content_capture_features.h"
 #include "components/content_capture/renderer/content_capture_sender.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/public/renderer/render_view.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/messaging/message_port_descriptor.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_element_collection.h"
@@ -36,14 +41,24 @@ namespace android_webview {
 
 namespace {
 
-const char kAddressPrefix[] = "geo:0,0?q=";
-const char kEmailPrefix[] = "mailto:";
-const char kPhoneNumberPrefix[] = "tel:";
+using autofill::AutofillAgent;
+using ExtractAllDatalists = autofill::AutofillAgent::ExtractAllDatalists;
+using FocusRequiresScroll = autofill::AutofillAgent::FocusRequiresScroll;
+using QueryPasswordSuggestions =
+    autofill::AutofillAgent::QueryPasswordSuggestions;
+using SecureContextRequired = autofill::AutofillAgent::SecureContextRequired;
+using UserGestureRequired = autofill::AutofillAgent::UserGestureRequired;
+using UsesKeyboardAccessoryForSuggestions =
+    autofill::AutofillAgent::UsesKeyboardAccessoryForSuggestions;
+
+constexpr char kAddressPrefix[] = "geo:0,0?q=";
+constexpr char kEmailPrefix[] = "mailto:";
+constexpr char kPhoneNumberPrefix[] = "tel:";
 
 GURL GetAbsoluteUrl(const blink::WebNode& node,
                     const std::u16string& url_fragment) {
   return GURL(node.GetDocument().CompleteURL(
-      blink::WebString::FromUTF16(url_fragment)));
+      blink::WebString::FromUtf16(url_fragment)));
 }
 
 std::u16string GetHref(const blink::WebElement& element) {
@@ -74,18 +89,14 @@ GURL GetChildImageUrlFromElement(const blink::WebElement& element) {
   return GetAbsoluteSrcUrl(child_img);
 }
 
-bool RemovePrefixAndAssignIfMatches(const base::StringPiece& prefix,
+bool RemovePrefixAndAssignIfMatches(std::string_view prefix,
                                     const GURL& url,
                                     std::string* dest) {
-  const base::StringPiece spec(url.possibly_invalid_spec());
+  const std::string_view spec(url.possibly_invalid_spec());
 
   if (base::StartsWith(spec, prefix)) {
-    url::RawCanonOutputW<1024> output;
-    url::DecodeURLEscapeSequences(
-        spec.data() + prefix.length(), spec.length() - prefix.length(),
-        url::DecodeURLMode::kUTF8OrIsomorphic, &output);
-    *dest =
-        base::UTF16ToUTF8(base::StringPiece16(output.data(), output.length()));
+    *dest = url::DecodeUrlEscapeSequences(
+        spec.substr(prefix.length()), url::DecodeUrlMode::kUtf8OrIsomorphic);
     return true;
   }
   return false;
@@ -144,61 +155,21 @@ void PopulateHitTestData(const GURL& absolute_link_url,
 
 }  // namespace
 
-// Registry for RenderFrame => AwRenderFrameExt lookups
-typedef std::map<content::RenderFrame*, AwRenderFrameExt*> FrameExtMap;
-FrameExtMap* GetFrameExtMap() {
-  static base::NoDestructor<FrameExtMap> map;
-  return map.get();
-}
-
 AwRenderFrameExt::AwRenderFrameExt(content::RenderFrame* render_frame)
     : content::RenderFrameObserver(render_frame) {
-  // TODO(sgurun) do not create a password autofill agent (change
-  // autofill agent to store a weakptr).
-  autofill::PasswordAutofillAgent* password_autofill_agent =
-      new autofill::PasswordAutofillAgent(render_frame, &registry_);
-  new autofill::AutofillAgent(render_frame, password_autofill_agent, nullptr,
-                              nullptr, &registry_);
+  new AutofillAgent(render_frame, /*password_autofill_agent=*/nullptr,
+                    /*password_generation_agent=*/nullptr, &registry_);
   if (content_capture::features::IsContentCaptureEnabled())
     new content_capture::ContentCaptureSender(render_frame, &registry_);
 
   // If we are the main frame register an additional mojo interface.
   if (render_frame->IsMainFrame()) {
-    registry_.AddInterface(base::BindRepeating(
+    registry_.AddInterface<mojom::LocalMainFrame>(base::BindRepeating(
         &AwRenderFrameExt::BindLocalMainFrame, base::Unretained(this)));
   }
-
-  // Add myself to the RenderFrame => AwRenderFrameExt register.
-  GetFrameExtMap()->emplace(render_frame, this);
 }
 
-AwRenderFrameExt::~AwRenderFrameExt() {
-  // Remove myself from the RenderFrame => AwRenderFrameExt register. Ideally,
-  // we'd just use render_frame() and erase by key. However, by this time the
-  // render_frame has already been cleared so we have to iterate over all
-  // render_frames in the map and wipe the one(s) that point to this
-  // AwRenderFrameExt
-
-  auto* map = GetFrameExtMap();
-  auto it = map->begin();
-  while (it != map->end()) {
-    if (it->second == this) {
-      it = map->erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-AwRenderFrameExt* AwRenderFrameExt::FromRenderFrame(
-    content::RenderFrame* render_frame) {
-  DCHECK(render_frame != nullptr);
-  auto iter = GetFrameExtMap()->find(render_frame);
-  DCHECK(GetFrameExtMap()->end() != iter)
-      << "Should always exist a render_frame_ext for a render_frame";
-  AwRenderFrameExt* render_frame_ext = iter->second;
-  return render_frame_ext;
-}
+AwRenderFrameExt::~AwRenderFrameExt() = default;
 
 const mojo::AssociatedRemote<mojom::FrameHost>&
 AwRenderFrameExt::GetFrameHost() {
@@ -214,6 +185,12 @@ bool AwRenderFrameExt::OnAssociatedInterfaceRequestForFrame(
     const std::string& interface_name,
     mojo::ScopedInterfaceEndpointHandle* handle) {
   return registry_.TryBindInterface(interface_name, handle);
+}
+
+void AwRenderFrameExt::DidCreateDocumentElement() {
+  render_frame()->GetWebFrame()->AddHitTestOnTouchStartCallback(
+      base::BindRepeating(&AwRenderFrameExt::HandleHitTestResult,
+                          base::Unretained(this)));
 }
 
 void AwRenderFrameExt::DidCommitProvisionalLoad(
@@ -236,7 +213,7 @@ void AwRenderFrameExt::DidCommitProvisionalLoad(
 }
 
 void AwRenderFrameExt::FocusedElementChanged(const blink::WebElement& element) {
-  if (element.IsNull() || !render_frame() || !render_frame()->GetRenderView())
+  if (element.IsNull() || !render_frame())
     return;
 
   auto data = mojom::HitTestData::New();
@@ -256,18 +233,8 @@ void AwRenderFrameExt::FocusedElementChanged(const blink::WebElement& element) {
   GetFrameHost()->UpdateHitTestData(std::move(data));
 }
 
-// Only main frame needs to *receive* the hit test request, because all we need
-// is to get the blink::webView object and invoke a the hitTestResultForTap API
-// from it.
-void AwRenderFrameExt::HitTest(const gfx::PointF& touch_center,
-                               const gfx::SizeF& touch_area) {
-  blink::WebView* webview = GetWebView();
-  if (!webview)
-    return;
-
-  const blink::WebHitTestResult result = webview->HitTestResultForTap(
-      gfx::Point(touch_center.x(), touch_center.y()),
-      gfx::Size(touch_area.width(), touch_area.height()));
+void AwRenderFrameExt::HandleHitTestResult(
+    const blink::WebHitTestResult& result) {
   auto data = mojom::HitTestData::New();
 
   GURL absolute_image_url = result.AbsoluteImageURL();
@@ -295,7 +262,7 @@ void AwRenderFrameExt::SetInitialPageScale(double page_scale_factor) {
 }
 
 void AwRenderFrameExt::SetTextZoomFactor(float zoom_factor) {
-  // TODO(crbug.com/1085428): This will need to be set on every local root
+  // TODO(crbug.com/40132194): This will need to be set on every local root
   // when site isolation is used in android webview.
   DCHECK(render_frame()->IsMainFrame());
 
@@ -312,9 +279,10 @@ void AwRenderFrameExt::SetTextZoomFactor(float zoom_factor) {
 void AwRenderFrameExt::DocumentHasImage(DocumentHasImageCallback callback) {
   blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
 
-  // DocumentHasImages Mojo message should only be sent to the main frame.
+  // DocumentHasImages Mojo message should only be sent to the outermost main
+  // frame.
   DCHECK(frame);
-  DCHECK(!frame->Parent());
+  DCHECK(frame->IsOutermostMainFrame());
 
   const blink::WebElement child_img = GetImgChild(frame->GetDocument());
   bool has_images = !child_img.IsNull();
@@ -340,9 +308,30 @@ void AwRenderFrameExt::ResetScrollAndScaleState() {
   webview->ResetScrollAndScaleState();
 }
 
+void AwRenderFrameExt::PostEmbedderMessageEvent(
+    const std::optional<url::Origin>& target_origin,
+    mojom::EmbedderTransferableMessagePtr embedder_message) {
+  if (!render_frame()) {
+    return;
+  }
+
+  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+  if (!frame) {
+    return;
+  }
+
+
+  frame->PostEmbedderMessageEvent(
+      target_origin ? blink::WebSecurityOrigin(*target_origin)
+                    : blink::WebSecurityOrigin(),
+      std::move(embedder_message->ports),
+      std::move(embedder_message->shared_array_buffer));
+}
+
 blink::WebView* AwRenderFrameExt::GetWebView() {
-  if (!render_frame())
+  if (!render_frame()) {
     return nullptr;
+  }
 
   return render_frame()->GetWebView();
 }
@@ -359,6 +348,9 @@ void AwRenderFrameExt::OnDestruct() {
 
 void AwRenderFrameExt::BindLocalMainFrame(
     mojo::PendingAssociatedReceiver<mojom::LocalMainFrame> pending_receiver) {
+  // When bfcache is enabled, this bind can occur multiple times.
+  // receiver should be reset before.
+  local_main_frame_receiver_.reset();
   local_main_frame_receiver_.Bind(std::move(pending_receiver));
 }
 

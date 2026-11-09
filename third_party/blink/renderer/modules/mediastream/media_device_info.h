@@ -29,13 +29,14 @@
 #include "third_party/blink/public/mojom/mediastream/media_devices.mojom-blink-forward.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
+class ScriptObject;
 class ScriptState;
-class ScriptValue;
+class V8MediaDeviceKind;
 
 class MODULES_EXPORT MediaDeviceInfo : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
@@ -47,13 +48,13 @@ class MODULES_EXPORT MediaDeviceInfo : public ScriptWrappable {
                   mojom::blink::MediaDeviceType);
 
   String deviceId() const;
-  String kind() const;
+  V8MediaDeviceKind kind() const;
   String label() const;
   String groupId() const;
 
   mojom::blink::MediaDeviceType DeviceType() const;
 
-  ScriptValue toJSONForBinding(ScriptState*);
+  ScriptObject toJSONForBinding(ScriptState*);
 
  private:
   String device_id_;

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/containers/flat_set.h"
 #include "base/memory/weak_ptr.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/websockets/websocket_basic_handshake_stream.h"
 #include "net/websockets/websocket_http2_handshake_stream.h"
+#include "net/websockets/websocket_http3_handshake_stream.h"
 
 namespace net {
 
@@ -40,7 +42,7 @@ WebSocketHandshakeStreamCreateHelper::CreateBasicStream(
       1, "permessage-deflate; client_max_window_bits");
   auto stream = std::make_unique<WebSocketBasicHandshakeStream>(
       std::move(connection), connect_delegate_, using_proxy,
-      requested_subprotocols_, extensions, request_,
+      requested_subprotocols_, std::move(extensions), request_,
       websocket_endpoint_lock_manager);
   request_->OnBasicHandshakeStreamCreated(stream.get());
   return stream;
@@ -49,13 +51,26 @@ WebSocketHandshakeStreamCreateHelper::CreateBasicStream(
 std::unique_ptr<WebSocketHandshakeStreamBase>
 WebSocketHandshakeStreamCreateHelper::CreateHttp2Stream(
     base::WeakPtr<SpdySession> session,
-    std::vector<std::string> dns_aliases) {
+    base::flat_set<std::string> dns_aliases) {
   std::vector<std::string> extensions(
       1, "permessage-deflate; client_max_window_bits");
   auto stream = std::make_unique<WebSocketHttp2HandshakeStream>(
-      session, connect_delegate_, requested_subprotocols_, extensions, request_,
-      std::move(dns_aliases));
+      std::move(session), connect_delegate_, requested_subprotocols_,
+      std::move(extensions), request_, std::move(dns_aliases));
   request_->OnHttp2HandshakeStreamCreated(stream.get());
+  return stream;
+}
+
+std::unique_ptr<WebSocketHandshakeStreamBase>
+WebSocketHandshakeStreamCreateHelper::CreateHttp3Stream(
+    std::unique_ptr<QuicChromiumClientSession::Handle> session,
+    base::flat_set<std::string> dns_aliases) {
+  std::vector<std::string> extensions(
+      1, "permessage-deflate; client_max_window_bits");
+  auto stream = std::make_unique<WebSocketHttp3HandshakeStream>(
+      std::move(session), connect_delegate_, requested_subprotocols_,
+      std::move(extensions), request_, std::move(dns_aliases));
+  request_->OnHttp3HandshakeStreamCreated(stream.get());
   return stream;
 }
 

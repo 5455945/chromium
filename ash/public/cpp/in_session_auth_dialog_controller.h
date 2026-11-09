@@ -1,64 +1,54 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_PUBLIC_CPP_IN_SESSION_AUTH_DIALOG_CONTROLLER_H_
 #define ASH_PUBLIC_CPP_IN_SESSION_AUTH_DIALOG_CONTROLLER_H_
 
+#include <optional>
+
 #include "ash/public/cpp/ash_public_export.h"
 #include "ash/public/cpp/in_session_auth_dialog_client.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace aura {
-class Window;
-}
+#include "ash/public/cpp/in_session_auth_token_provider.h"
+#include "ash/public/cpp/webauthn_dialog_controller.h"
+#include "chromeos/ash/components/auth_panel/public/shared_types.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
 
 namespace ash {
 
-// InSessionAuthDialogController manages the in-session auth dialog.
+// InSessionAuthDialogController manages the in session auth dialog.
 class ASH_PUBLIC_EXPORT InSessionAuthDialogController {
  public:
-  // Callback for authentication checks. |success| is nullopt if an
-  // authentication check did not run, otherwise it is true/false if auth
-  // succeeded/failed.
-  using OnAuthenticateCallback =
-      base::OnceCallback<void(absl::optional<bool> success)>;
-  // Callback for overall authentication flow result.
-  using FinishCallback = base::OnceCallback<void(bool success)>;
+  enum Reason {
+    kAccessPasswordManager,
+    kAccessAuthenticationSettings,
+    kAccessMultideviceSettings,
+    kAccessAutofillPayments,
+  };
 
-  // Return the singleton instance.
+  // Returns the singleton instance.
   static InSessionAuthDialogController* Get();
 
-  // Sets the client that will handle authentication.
-  virtual void SetClient(InSessionAuthDialogClient* client) = 0;
+  // Summons a native UI dialog that authenticates the user, providing a
+  // token, timeout and status in return.
+  // `reason`: Indicates security context.
+  virtual void ShowAuthDialog(
+      Reason reason,
+      const std::optional<std::string>& prompt,
+      auth_panel::AuthCompletionCallback on_auth_complete) = 0;
 
-  // Displays the authentication dialog for the website/app name in |app_id|.
-  virtual void ShowAuthenticationDialog(aura::Window* source_window,
-                                        const std::string& origin_name,
-                                        FinishCallback finish_callback) = 0;
+  // Summons the WebAuthn UI dialog that authenticates the user.
+  virtual void ShowLegacyWebAuthnDialog(
+      const std::string& rp_id,
+      const std::string& window_id,
+      WebAuthNDialogController::FinishCallback on_auth_complete) = 0;
 
-  // Destroys the authentication dialog.
-  virtual void DestroyAuthenticationDialog() = 0;
-
-  // Takes a PIN and sends it to InSessionAuthDialogClient to
-  // authenticate. The InSessionAuthDialogClient should already know the current
-  // session's active user, so the user account is not provided here.
-  virtual void AuthenticateUserWithPin(const std::string& pin,
-                                       OnAuthenticateCallback callback) = 0;
-
-  // Requests ChromeOS to report fingerprint scan result through |callback|.
-  virtual void AuthenticateUserWithFingerprint(
-      base::OnceCallback<void(bool, FingerprintState)> callback) = 0;
-
-  // Opens a help article in Chrome.
-  virtual void OpenInSessionAuthHelpPage() = 0;
-
-  // Cancels all operations and destroys the dialog.
-  virtual void Cancel() = 0;
-
-  // Checks whether there's at least one authentication method.
-  virtual void CheckAvailability(
-      FinishCallback on_availability_checked) const = 0;
+  // Must be called with a non null auth_token_provider prior to calling
+  // `ShowAuthDialog`.
+  // Injects a specific implementation of `InSessionAuthTokenProvider`
+  // for generating an `AuthToken` after successful authentication.
+  virtual void SetTokenProvider(
+      InSessionAuthTokenProvider* auth_token_provider) = 0;
 
  protected:
   InSessionAuthDialogController();

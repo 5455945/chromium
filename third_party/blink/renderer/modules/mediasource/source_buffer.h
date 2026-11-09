@@ -38,15 +38,19 @@
 #include "third_party/blink/public/platform/web_source_buffer_client.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_append_mode.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_typedefs.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/mediasource/media_source_attachment_supplement.h"
 #include "third_party/blink/renderer/modules/mediasource/track_default_list.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace blink {
 
@@ -58,14 +62,13 @@ class ExceptionState;
 class MediaSource;
 class MediaSourceTracer;
 class MediaSourceAttachmentSupplement;
-class ScriptPromiseResolver;
 class ScriptState;
 class SourceBufferConfig;
 class TimeRanges;
 class VideoTrackList;
 class WebSourceBuffer;
 
-class SourceBuffer final : public EventTargetWithInlineData,
+class SourceBuffer final : public EventTarget,
                            public ActiveScriptWrappable<SourceBuffer>,
                            public ExecutionContextLifecycleObserver,
                            public WebSourceBufferClient {
@@ -73,28 +76,28 @@ class SourceBuffer final : public EventTargetWithInlineData,
   USING_PRE_FINALIZER(SourceBuffer, Dispose);
 
  public:
-  static AtomicString SegmentsKeyword();
-  static AtomicString SequenceKeyword();
-
   SourceBuffer(std::unique_ptr<WebSourceBuffer>, MediaSource*, EventQueue*);
   ~SourceBuffer() override;
 
   // SourceBuffer.idl methods
-  const AtomicString& mode() const { return mode_; }
-  void setMode(const AtomicString&, ExceptionState&);
+  V8AppendMode mode() const { return V8AppendMode(mode_); }
+  void setMode(const V8AppendMode&, ExceptionState&);
   bool updating() const { return updating_; }
   TimeRanges* buffered(ExceptionState&) const;
   double timestampOffset() const;
   void setTimestampOffset(double, ExceptionState&);
   void appendBuffer(DOMArrayBuffer* data, ExceptionState&);
   void appendBuffer(NotShared<DOMArrayBufferView> data, ExceptionState&);
-  ScriptPromise appendEncodedChunks(ScriptState* script_state,
-                                    const V8EncodedChunks* chunks,
-                                    ExceptionState& exception_state);
+  ScriptPromise<IDLUndefined> appendEncodedChunks(
+      ScriptState* script_state,
+      const V8EncodedChunks* chunks,
+      ExceptionState& exception_state);
   void abort(ExceptionState&);
   void remove(double start, double end, ExceptionState&);
   void changeType(const String& type, ExceptionState&);
-  void ChangeTypeUsingConfig(const SourceBufferConfig*, ExceptionState&);
+  void ChangeTypeUsingConfig(ExecutionContext*,
+                             const SourceBufferConfig*,
+                             ExceptionState&);
   double appendWindowStart() const;
   void setAppendWindowStart(double, ExceptionState&);
   double appendWindowEnd() const;
@@ -115,12 +118,16 @@ class SourceBuffer final : public EventTargetWithInlineData,
   // may also require the same, since they can be called from within these
   // methods.
   void SetMode_Locked(
-      AtomicString,
+      V8AppendMode::Enum,
       ExceptionState*,
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */);
   void GetBuffered_Locked(
       WebTimeRanges* /* out */,
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */) const;
+  void Remove_Locked(double start,
+                     double end,
+                     ExceptionState*,
+                     MediaSourceAttachmentSupplement::ExclusiveKey pass_key);
 
   void RemovedFromMediaSource();
   double HighestPresentationTimestamp();
@@ -136,7 +143,8 @@ class SourceBuffer final : public EventTargetWithInlineData,
   const AtomicString& InterfaceName() const override;
 
   // WebSourceBufferClient interface
-  bool InitializationSegmentReceived(const WebVector<MediaTrackInfo>&) override;
+  bool InitializationSegmentReceived(
+      const std::vector<MediaTrackInfo>&) override;
   void NotifyParseWarning(const ParseWarning) override;
 
   void Trace(Visitor*) const override;
@@ -149,7 +157,7 @@ class SourceBuffer final : public EventTargetWithInlineData,
 
   bool PrepareAppend(double media_time, size_t new_data_size, ExceptionState&);
   bool EvictCodedFrames(double media_time, size_t new_data_size);
-  void AppendBufferInternal(const unsigned char*, size_t, ExceptionState&);
+  void AppendBufferInternal(base::span<const unsigned char>, ExceptionState&);
   void AppendEncodedChunksAsyncPart();
   void AppendBufferAsyncPart();
   void AppendError(MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */);
@@ -177,10 +185,6 @@ class SourceBuffer final : public EventTargetWithInlineData,
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */);
   void Abort_Locked(
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */);
-  void Remove_Locked(double start,
-                     double end,
-                     ExceptionState*,
-                     MediaSourceAttachmentSupplement::ExclusiveKey pass_key);
   void ChangeType_Locked(
       const String& type,
       ExceptionState*,
@@ -191,8 +195,7 @@ class SourceBuffer final : public EventTargetWithInlineData,
       ExceptionState* exception_state,
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */);
   void AppendBufferInternal_Locked(
-      const unsigned char*,
-      size_t,
+      base::span<const unsigned char>,
       ExceptionState*,
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */);
   void AppendEncodedChunksAsyncPart_Locked(
@@ -207,13 +210,13 @@ class SourceBuffer final : public EventTargetWithInlineData,
   double GetMediaTime();
 
   const TrackDefault* GetTrackDefault(
-      const AtomicString& track_type,
+      V8TrackDefaultType::Enum track_type,
       const AtomicString& byte_stream_track_id) const;
   AtomicString DefaultTrackLabel(
-      const AtomicString& track_type,
+      V8TrackDefaultType::Enum track_type,
       const AtomicString& byte_stream_track_id) const;
   AtomicString DefaultTrackLanguage(
-      const AtomicString& track_type,
+      V8TrackDefaultType::Enum track_type,
       const AtomicString& byte_stream_track_id) const;
 
   // TODO(https://crbug.com/878133): Remove these once worker thread track
@@ -221,7 +224,7 @@ class SourceBuffer final : public EventTargetWithInlineData,
   // now to retain stable BackgroundVideoOptimization support with experimental
   // MSE-in-Workers.
   void AddPlaceholderCrossThreadTracks(
-      const WebVector<MediaTrackInfo>& new_tracks,
+      const std::vector<MediaTrackInfo>& new_tracks,
       scoped_refptr<MediaSourceAttachmentSupplement> attachment);
   void RemovePlaceholderCrossThreadTracks(
       scoped_refptr<MediaSourceAttachmentSupplement> attachment,
@@ -240,7 +243,7 @@ class SourceBuffer final : public EventTargetWithInlineData,
   Member<TrackDefaultList> track_defaults_;
   Member<EventQueue> async_event_queue_;
 
-  AtomicString mode_;
+  V8AppendMode::Enum mode_ = V8AppendMode::Enum::kSegments;
   bool updating_;
 
   double timestamp_offset_;
@@ -255,16 +258,14 @@ class SourceBuffer final : public EventTargetWithInlineData,
   // appendEncodedChunks(), or remove(). The following three sections
   // respectively track the async state for these pending operations:
 
-  // These are valid only during the scope of synchronous and asynchronous
+  // This handle is valid only during the scope of synchronous and asynchronous
   // follow-up of appendBuffer().
-  Vector<unsigned char> pending_append_data_;
-  wtf_size_t pending_append_data_offset_;
   TaskHandle append_buffer_async_task_handle_;
 
   // This resolver is set and valid only during the scope of synchronous and
   // asynchronous follow-up of appendEncodedChunks().
   std::unique_ptr<media::StreamParser::BufferQueue> pending_chunks_to_buffer_;
-  Member<ScriptPromiseResolver> append_encoded_chunks_resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> append_encoded_chunks_resolver_;
   TaskHandle append_encoded_chunks_async_task_handle_;
 
   // These are valid only during the scope of synchronous and asynchronous
@@ -280,6 +281,8 @@ class SourceBuffer final : public EventTargetWithInlineData,
   // track creation off-the-main thread.
   Vector<String> audio_track_ids_for_crossthread_removal_;
   Vector<String> video_track_ids_for_crossthread_removal_;
+
+  const perfetto::NamedTrack trace_track_;
 };
 
 }  // namespace blink

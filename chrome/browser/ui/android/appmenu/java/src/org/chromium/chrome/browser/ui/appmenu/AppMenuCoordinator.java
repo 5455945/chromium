@@ -1,14 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.ui.appmenu;
 
+import org.chromium.base.supplier.NullableObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.ui.modelutil.PropertyModel;
+
 /** A UI coordinator the app menu. */
+@NullMarked
 public interface AppMenuCoordinator {
-    /**
-     * Called when the containing activity is being destroyed.
-     */
+    /** Called when the containing activity is being destroyed. */
     void destroy();
 
     /**
@@ -37,4 +40,12 @@ public interface AppMenuCoordinator {
      * @param blocker The {@link AppMenuBlocker} to unregister.
      */
     void unregisterAppMenuBlocker(AppMenuBlocker blocker);
+
+    /**
+     * Sets the supplier for the action model to bind the app menu button logic. This is for
+     * {link @ActionRegistry} to use.
+     *
+     * @param supplier The supplier for the action model.
+     */
+    void setActionModelSupplier(NullableObservableSupplier<PropertyModel> supplier);
 }

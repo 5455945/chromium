@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,9 @@
 
 #include <memory>
 
+#include "base/byte_size.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/load_states.h"
@@ -26,6 +27,7 @@ struct HttpRequestInfo;
 class HttpResponseInfo;
 class IOBuffer;
 struct LoadTimingInfo;
+struct LoadTimingInternalInfo;
 class NetLogWithSource;
 class X509Certificate;
 }  // namespace net
@@ -46,6 +48,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkTransaction
   explicit ThrottlingNetworkTransaction(
       std::unique_ptr<net::HttpTransaction> network_transaction);
 
+  ThrottlingNetworkTransaction(const ThrottlingNetworkTransaction&) = delete;
+  ThrottlingNetworkTransaction& operator=(const ThrottlingNetworkTransaction&) =
+      delete;
+
   ~ThrottlingNetworkTransaction() override;
 
   // HttpTransaction methods:
@@ -65,28 +71,32 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkTransaction
            int buf_len,
            net::CompletionOnceCallback callback) override;
   void StopCaching() override;
-  int64_t GetTotalReceivedBytes() const override;
-  int64_t GetTotalSentBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
+  base::ByteSize GetReceivedBodyBytes() const override;
   void DoneReading() override;
   const net::HttpResponseInfo* GetResponseInfo() const override;
   net::LoadState GetLoadState() const override;
-  void SetQuicServerInfo(net::QuicServerInfo* quic_server_info) override;
   bool GetLoadTimingInfo(net::LoadTimingInfo* load_timing_info) const override;
+  void PopulateLoadTimingInternalInfo(
+      net::LoadTimingInternalInfo* load_timing_internal_info) const override;
   bool GetRemoteEndpoint(net::IPEndPoint* endpoint) const override;
   void PopulateNetErrorDetails(net::NetErrorDetails* details) const override;
   void SetPriority(net::RequestPriority priority) override;
   void SetWebSocketHandshakeStreamCreateHelper(
       net::WebSocketHandshakeStreamBase::CreateHelper* create_helper) override;
-  void SetBeforeNetworkStartCallback(
-      BeforeNetworkStartCallback callback) override;
   void SetConnectedCallback(const ConnectedCallback& callback) override;
   void SetRequestHeadersCallback(net::RequestHeadersCallback callback) override;
   void SetResponseHeadersCallback(
       net::ResponseHeadersCallback callback) override;
   void SetEarlyResponseHeadersCallback(
       net::ResponseHeadersCallback callback) override;
-  int ResumeNetworkStart() override;
-  void GetConnectionAttempts(net::ConnectionAttempts* out) const override;
+  void SetModifyRequestHeadersCallback(
+      base::RepeatingCallback<void(net::HttpRequestHeaders*)> callback)
+      override;
+  void SetIsSharedDictionaryReadAllowedCallback(
+      base::RepeatingCallback<bool()> callback) override;
+  net::ConnectionAttempts GetConnectionAttempts() const override;
   void CloseConnectionOnDestruction() override;
 
  protected:
@@ -103,7 +113,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkTransaction
   ThrottlingNetworkInterceptor::ThrottleCallback throttle_callback_;
   int64_t throttled_byte_count_;
 
-  ThrottlingController* controller_;
+  raw_ptr<ThrottlingController> controller_;
   base::WeakPtr<ThrottlingNetworkInterceptor> interceptor_;
 
   // Modified upload data stream. Should be destructed after |custom_request_|.
@@ -118,12 +128,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ThrottlingNetworkTransaction
   // User callback.
   net::CompletionOnceCallback callback_;
 
-  const net::HttpRequestInfo* request_;
+  // True if Start was already invoked.
+  bool started_ = false;
 
   // True if Fail was already invoked.
-  bool failed_;
-
-  DISALLOW_COPY_AND_ASSIGN(ThrottlingNetworkTransaction);
+  bool failed_ = false;
 };
 
 }  // namespace network

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -10,16 +10,19 @@
 #ifndef CHROMEOS_PRINTING_PRINTER_CONFIG_CACHE_H_
 #define CHROMEOS_PRINTING_PRINTER_CONFIG_CACHE_H_
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
+#include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
-#include "chromeos/chromeos_export.h"
-#include "services/network/public/cpp/simple_url_loader.h"
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
 
 namespace chromeos {
 
@@ -31,18 +34,22 @@ namespace chromeos {
 //
 // This class must always be constructed on, used on, and destroyed from
 // a sequenced context.
-class CHROMEOS_EXPORT PrinterConfigCache {
+class COMPONENT_EXPORT(CHROMEOS_PRINTING) PrinterConfigCache {
  public:
-  // |loader_factory_dispenser| is a functor that can create fresh
-  // URLLoaderFactory instances. We use this indirection to avoid
-  // caching raw pointers to URLLoaderFactory instances, which are
-  // invalidated by network service restarts.
+  // `url_loader_factory` must be non-null. It is held for the lifetime of
+  // `this` and transparently survives network service restarts.
   //
-  // Caller must guarantee that |loader_factory_dispenser| is always
-  // safe to Run() for the lifetime of |this|.
+  // Cached entries are served for up to `max_age` after they were fetched,
+  // and are evicted once they are older than that.
+  //
+  // Setting `use_localhost_as_root` to true sets the Chrome OS Printing
+  // serving root to localhost. It allows to run integration tests without
+  // connecting to actual Chrome OS Printing serving root.
   static std::unique_ptr<PrinterConfigCache> Create(
       const base::Clock* clock,
-      base::RepeatingCallback<network::mojom::URLLoaderFactory*()>);
+      base::TimeDelta max_age,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      bool use_localhost_as_root);
   virtual ~PrinterConfigCache() = default;
 
   // Result of calling Fetch(). The |key| identifies how Fetch() was
@@ -50,11 +57,9 @@ class CHROMEOS_EXPORT PrinterConfigCache {
   // defined iff |succeeded| is true.
   struct FetchResult {
     static FetchResult Failure(const std::string& key);
-
     static FetchResult Success(const std::string& key,
                                const std::string& contents,
                                base::Time time_of_fetch);
-
     bool succeeded;
     std::string key;
     std::string contents;
@@ -65,25 +70,16 @@ class CHROMEOS_EXPORT PrinterConfigCache {
   using FetchCallback = base::OnceCallback<void(const FetchResult&)>;
 
   // Queries the Chrome OS Printing serving root for |key|. Calls |cb|
-  // with the contents. If an entry newer than |expiration| is resident,
-  // calls |cb| immediately with those contents. Caller should not pass
-  // keys with leading slashes.
-  //
-  // Using TimeDelta implies the caller is asking for "some entry not
-  // older than |expiration|," e.g. "metadata_v3/index-00.json that
-  // was fetched within the last 30 minutes."
-  //
-  // Naturally,
-  // *  passing the Max() TimeDelta means "perform this Fetch() with no
-  //    limit on staleness" and
-  // *  passing a zero TimeDelta should practically force a networked
-  //    fetch (less esoteric timing quirks etc.).
-  virtual void Fetch(const std::string& key,
-                     base::TimeDelta expiration,
-                     FetchCallback cb) = 0;
+  // with the contents. If an entry fetched within the `max_age` passed to
+  // Create() is resident, calls |cb| immediately with those contents.
+  // Caller should not pass keys with leading slashes.
+  virtual void Fetch(const std::string& key, FetchCallback cb) = 0;
 
   // Drops Entry corresponding to |key|.
   virtual void Drop(const std::string& key) = 0;
+
+  // Returns the number of cached entries for testing.
+  virtual size_t SizeForTesting() const = 0;
 };
 
 }  // namespace chromeos

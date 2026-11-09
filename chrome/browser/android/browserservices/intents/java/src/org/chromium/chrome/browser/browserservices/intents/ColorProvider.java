@@ -1,14 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.browserservices.intents;
 
-import androidx.annotation.Nullable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * Provides the set of colors used by BrowserServicesIntentDataProvider.
- */
+/** Provides the set of colors used by BrowserServicesIntentDataProvider. */
+@NullMarked
 public interface ColorProvider {
     /**
      * @return The color of the bottom bar.
@@ -23,14 +23,12 @@ public interface ColorProvider {
     /**
      * @return The navigation bar color specified in the intent, or null if not specified.
      */
-    @Nullable
-    Integer getNavigationBarColor();
+    @Nullable Integer getNavigationBarColor();
 
     /**
      * @return The navigation bar divider color specified in the intent, or null if not specified.
      */
-    @Nullable
-    Integer getNavigationBarDividerColor();
+    @Nullable Integer getNavigationBarDividerColor();
 
     /**
      * @return The color of the bottom bar.

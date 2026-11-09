@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,58 +7,220 @@
 #include <memory>
 #include <string>
 
-#include "chrome/browser/apps/platform_apps/audio_focus_web_contents_observer.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_tab_util.h"
+#include "base/functional/bind.h"
+#include "base/time/time.h"
+#include "chrome/browser/extensions/browser_window_util.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
-#include "components/javascript_dialogs/app_modal_dialog_manager.h"
-#include "extensions/browser/extension_host.h"
-#include "extensions/browser/extension_system.h"
+#include "extensions/browser/extensions_browser_client.h"
+#include "extensions/buildflags/buildflags.h"
+#include "ui/base/base_window.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
+
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
+#include "chrome/browser/apps/platform_apps/audio_focus_web_contents_observer.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
+#include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+#include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/history/history_tab_helper.h"
+#include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
+#include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
+#include "chrome/browser/subresource_filter/chrome_content_subresource_filter_web_contents_helper_factory.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
+#include "extensions/browser/view_type_utils.h"
+#include "extensions/common/mojom/view_type.mojom.h"
+#else
+#include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
+#include "chrome/browser/ui/waap/waap_utils.h"
+#endif
+
+// This file contains code shared between Android and non-Android platforms.
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
-ChromeExtensionHostDelegate::ChromeExtensionHostDelegate() {}
+ChromeExtensionHostDelegate::ChromeExtensionHostDelegate() = default;
 
-ChromeExtensionHostDelegate::~ChromeExtensionHostDelegate() {}
+ChromeExtensionHostDelegate::~ChromeExtensionHostDelegate() = default;
 
 void ChromeExtensionHostDelegate::OnExtensionHostCreated(
     content::WebContents* web_contents) {
-  ChromeExtensionWebContentsObserver::CreateForWebContents(web_contents);
   PrefsTabHelper::CreateForWebContents(web_contents);
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
   apps::AudioFocusWebContentsObserver::CreateForWebContents(web_contents);
-}
-
-void ChromeExtensionHostDelegate::OnMainFrameCreatedForBackgroundPage(
-    ExtensionHost* host) {
-  ExtensionService* service =
-      ExtensionSystem::Get(host->browser_context())->extension_service();
-  if (service)
-    service->DidCreateMainFrameForBackgroundPage(host);
-}
-
-content::JavaScriptDialogManager*
-ChromeExtensionHostDelegate::GetJavaScriptDialogManager() {
-  return javascript_dialogs::AppModalDialogManager::GetInstance();
+#endif
 }
 
 void ChromeExtensionHostDelegate::CreateTab(
     std::unique_ptr<content::WebContents> web_contents,
-    const std::string& extension_id,
-    WindowOpenDisposition disposition,
-    const gfx::Rect& initial_rect,
+    const GURL& target_url,
+    const ExtensionId& extension_id,
+    ui::mojom::WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
     bool user_gesture) {
   // Verify that the browser is not shutting down. It can be the case if the
   // call is propagated through a posted task that was already in the queue when
-  // shutdown started. See crbug.com/625646
-  if (g_browser_process->IsShuttingDown())
+  // shutdown started. See crbug.com/40475418
+  if (ExtensionsBrowserClient::Get()->IsShuttingDown()) {
     return;
+  }
 
-  ExtensionTabUtil::CreateTab(std::move(web_contents), extension_id,
-                              disposition, initial_rect, user_gesture);
+  CHECK(web_contents);
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  CHECK(profile);
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, tab creation is asynchronous, but `CreateNewWindow()`
+  // immediately starts navigation. Attach early helpers synchronously so
+  // observers like `RequestDesktopSiteWebContentsObserverAndroid` are present
+  // for the initial load. This matches
+  // `TabWebContentsDelegateAndroid::AddNewContents()`.
+  // TODO(crbug.com/499200457): Add instrumentation test.
+  CreateSubresourceFilterWebContentsHelper(web_contents.get());
+  content_settings::PageSpecificContentSettings::CreateForWebContents(
+      web_contents.get(), std::make_unique<PageSpecificContentSettingsDelegate>(
+                              web_contents.get()));
+  if (!profile->IsOffTheRecord()) {
+    HistoryTabHelper::GetOrCreateForWebContents(web_contents.get());
+  }
+  if (optimization_guide::features::IsOptimizationHintsEnabled()) {
+    OptimizationGuideWebContentsObserver::CreateForWebContents(
+        web_contents.get());
+  }
+  InitializePageLoadMetricsForWebContents(web_contents.get());
+  RequestDesktopSiteWebContentsObserverAndroid::CreateForWebContents(
+      web_contents.get());
+  if (GetViewType(web_contents.get()) == mojom::ViewType::kInvalid) {
+    SetViewType(web_contents.get(), mojom::ViewType::kTabContents);
+  }
+  TabHelper::CreateForWebContents(web_contents.get());
+#endif
+  BrowserWindowInterface* browser =
+      browser_window_util::GetLastActiveNormalBrowserWithProfile(
+          *profile, /*include_incognito_or_parent=*/false);
+
+  // If we have an existing browser, navigate it.
+  if (browser) {
+    NavigateBrowser(/*browser_created=*/false, std::move(web_contents),
+                    target_url, extension_id, disposition, window_features,
+                    user_gesture, browser);
+    return;
+  }
+
+  // Otherwise we need to create a browser.
+  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+      BrowserWindowInterface::CreationStatus::kOk) {
+    // No active browser and can't create a new one. Bail.
+    return;
+  }
+
+  BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
+                                   *profile, user_gesture);
+#if BUILDFLAG(IS_ANDROID)
+  // Android creates windows asynchronously.
+  auto callback = base::BindOnce(
+      &ChromeExtensionHostDelegate::NavigateBrowser, weak_factory_.GetWeakPtr(),
+      /*browser_created=*/true, std::move(web_contents), target_url,
+      extension_id, disposition, window_features, user_gesture);
+  CreateBrowserWindow(std::move(params), std::move(callback));
+  return;
+#else
+  // Other platforms create windows synchronously.
+  const base::TimeTicks now = base::TimeTicks::Now();
+  browser = CreateBrowserWindow(std::move(params));
+  CHECK(browser);
+  if (auto* manager = InitialWebUIWindowMetricsManager::From(browser)) {
+    manager->SetWindowCreationInfo(waap::NewWindowCreationSource::kExtension,
+                                   now);
+  }
+  NavigateBrowser(/*browser_created=*/true, std::move(web_contents), target_url,
+                  extension_id, disposition, window_features, user_gesture,
+                  browser);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void ChromeExtensionHostDelegate::NavigateBrowser(
+    bool browser_created,
+    std::unique_ptr<content::WebContents> web_contents,
+    GURL target_url,
+    ExtensionId extension_id,
+    ui::mojom::WindowOpenDisposition disposition,
+    blink::mojom::WindowFeatures window_features,
+    bool user_gesture,
+    BrowserWindowInterface* browser) {
+  CHECK(browser);
+#if BUILDFLAG(IS_ANDROID)
+  // Android does not support "navigating" to an existing web contents. Navigate
+  // by URL instead. Use transition "link" to match Win/Mac/Linux behavior.
+  // NOTE: This effectively reloads the URL, which is wrong. Unfortunately
+  // this is the best we can do until NavigateParams::contents_to_insert is
+  // supported. See browser_navigator_android.cc or http://crbug.com/441594986.
+  auto params =
+      std::make_unique<NavigateParams>(browser, /*contents_to_insert=*/nullptr);
+  if (disposition == ui::mojom::WindowOpenDisposition::kNewForegroundTab ||
+      disposition == ui::mojom::WindowOpenDisposition::kNewBackgroundTab) {
+    params->contents_to_insert = std::move(web_contents);
+  } else {
+    params->url = std::move(target_url);
+    params->transition = ui::PAGE_TRANSITION_LINK;
+  }
+#else
+  auto params =
+      std::make_unique<NavigateParams>(browser, std::move(web_contents));
+#endif
+  // The extension_app_id parameter ends up as app_name in the Browser
+  // which causes the Browser to return true for is_app().  This affects
+  // among other things, whether the location bar gets displayed.
+  // TODO(mpcomplete): This seems wrong. What if the extension content is
+  // hosted in a tab?
+  if (disposition == ui::mojom::WindowOpenDisposition::kNewPopup) {
+    params->app_id = extension_id;
+  }
+
+  params->disposition = disposition;
+  params->window_features = window_features;
+  params->window_action = NavigateParams::WindowAction::kShowWindow;
+  params->user_gesture = user_gesture;
+
+  auto raw_params = params.get();
+
+#if BUILDFLAG(IS_ANDROID)
+  // Android uses asynchronous navigate in case it creates a new window.
+  // Asynchronous is OK because neither CreateTab() nor NavigateBrowser() need
+  // to synchronously return a value.
+  Navigate(raw_params,
+           base::BindOnce(
+               [](bool browser_created,
+                  base::WeakPtr<BrowserWindowInterface> original_browser,
+                  NavigateParams* p,
+                  base::WeakPtr<content::NavigationHandle> handle) {
+                 // Close the initial browser if Navigate created a new one.
+                 if (browser_created && original_browser &&
+                     original_browser.get() != p->browser) {
+                   original_browser->GetWindow()->Close();
+                 }
+               },
+               browser_created, browser->GetWeakPtr(),
+               base::Owned(params.release())));
+#else
+  // Other platforms use synchronous navigate.
+  Navigate(raw_params);
+
+  // Close the browser if Navigate created a new one.
+  if (browser_created && browser != raw_params->browser) {
+    browser->GetWindow()->Close();
+  }
+#endif
 }
 
 void ChromeExtensionHostDelegate::ProcessMediaAccessRequest(
@@ -72,7 +234,7 @@ void ChromeExtensionHostDelegate::ProcessMediaAccessRequest(
 
 bool ChromeExtensionHostDelegate::CheckMediaAccessPermission(
     content::RenderFrameHost* render_frame_host,
-    const GURL& security_origin,
+    const url::Origin& security_origin,
     blink::mojom::MediaStreamType type,
     const Extension* extension) {
   return MediaCaptureDevicesDispatcher::GetInstance()
@@ -82,11 +244,9 @@ bool ChromeExtensionHostDelegate::CheckMediaAccessPermission(
 
 content::PictureInPictureResult
 ChromeExtensionHostDelegate::EnterPictureInPicture(
-    content::WebContents* web_contents,
-    const viz::SurfaceId& surface_id,
-    const gfx::Size& natural_size) {
-  return PictureInPictureWindowManager::GetInstance()->EnterPictureInPicture(
-      web_contents, surface_id, natural_size);
+    content::WebContents* web_contents) {
+  return PictureInPictureWindowManager::GetInstance()
+      ->EnterVideoPictureInPicture(web_contents);
 }
 
 void ChromeExtensionHostDelegate::ExitPictureInPicture() {

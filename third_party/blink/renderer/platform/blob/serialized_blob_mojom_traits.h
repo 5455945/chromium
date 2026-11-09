@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_BLOB_SERIALIZED_BLOB_MOJOM_TRAITS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_BLOB_SERIALIZED_BLOB_MOJOM_TRAITS_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/string_traits_wtf.h"
 #include "third_party/blink/public/mojom/blob/serialized_blob.mojom-shared.h"
@@ -25,13 +25,14 @@ struct PLATFORM_EXPORT StructTraits<blink::mojom::SerializedBlobDataView,
     *output = nullptr;
   }
 
-  static WTF::String uuid(const scoped_refptr<blink::BlobDataHandle>& input) {
-    return input->Uuid();
+  static blink::String uuid(const scoped_refptr<blink::BlobDataHandle>& input) {
+    blink::String uuid = input->MaybeUuid();
+    return uuid.IsNull() ? blink::g_empty_string : uuid;
   }
 
-  static WTF::String content_type(
+  static blink::String content_type(
       const scoped_refptr<blink::BlobDataHandle>& input) {
-    return input->GetType().IsNull() ? g_empty_string : input->GetType();
+    return input->GetType().IsNull() ? blink::g_empty_string : input->GetType();
   }
 
   static uint64_t size(const scoped_refptr<blink::BlobDataHandle>& input) {

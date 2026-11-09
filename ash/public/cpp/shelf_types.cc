@@ -1,9 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/shelf_types.h"
 
+#include "base/check_op.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
@@ -17,12 +18,54 @@ constexpr char kDelimiter[] = "|";
 
 }  // namespace
 
+std::ostream& operator<<(std::ostream& out, ShelfAlignment alignment) {
+  switch (alignment) {
+    case ShelfAlignment::kBottom:
+      return out << "Bottom";
+    case ShelfAlignment::kLeft:
+      return out << "Left";
+    case ShelfAlignment::kRight:
+      return out << "Right";
+    case ShelfAlignment::kBottomLocked:
+      return out << "BottomLocked";
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, ShelfAutoHideState state) {
+  switch (state) {
+    case SHELF_AUTO_HIDE_SHOWN:
+      return out << "SHOWN";
+    case SHELF_AUTO_HIDE_HIDDEN:
+      return out << "HIDDEN";
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, ShelfBackgroundType type) {
+  switch (type) {
+    case ShelfBackgroundType::kDefaultBg:
+      return out << "DefaultBg";
+    case ShelfBackgroundType::kMaximized:
+      return out << "Maximized";
+    case ShelfBackgroundType::kHomeLauncher:
+      return out << "HomeLauncher";
+    case ShelfBackgroundType::kOobe:
+      return out << "Oobe";
+    case ShelfBackgroundType::kLogin:
+      return out << "Login";
+    case ShelfBackgroundType::kLoginNonBlurredWallpaper:
+      return out << "LoginNonBlurredWallpaper";
+    case ShelfBackgroundType::kOverview:
+      return out << "Overview";
+    case ShelfBackgroundType::kInApp:
+      return out << "InApp";
+  }
+}
+
 bool IsValidShelfItemType(int64_t type) {
   switch (type) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG:
     case TYPE_UNDEFINED:
       return true;
@@ -36,13 +79,11 @@ bool IsPinnedShelfItemType(ShelfItemType type) {
     case TYPE_BROWSER_SHORTCUT:
       return true;
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG:
     case TYPE_UNDEFINED:
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 bool SamePinState(ShelfItemType a, ShelfItemType b) {
@@ -55,7 +96,7 @@ bool SamePinState(ShelfItemType a, ShelfItemType b) {
   return a_unpinned == b_unpinned;
 }
 
-ShelfID::ShelfID(const std::string& app_id, const std::string& launch_id)
+ShelfID::ShelfID(std::string_view app_id, std::string_view launch_id)
     : app_id(app_id), launch_id(launch_id) {
   DCHECK(launch_id.empty() || !app_id.empty()) << "launch ids require app ids.";
 }
@@ -86,8 +127,8 @@ bool ShelfID::IsNull() const {
 }
 
 std::string ShelfID::Serialize() const {
-  DCHECK_EQ(std::string::npos, app_id.find(kDelimiter)) << "Invalid ShelfID";
-  DCHECK_EQ(std::string::npos, launch_id.find(kDelimiter)) << "Invalid ShelfID";
+  DCHECK(!app_id.contains(kDelimiter)) << "Invalid ShelfID";
+  DCHECK(!launch_id.contains(kDelimiter)) << "Invalid ShelfID";
   return app_id + kDelimiter + launch_id;
 }
 

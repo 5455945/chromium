@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/strings/strcat.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -135,7 +134,7 @@ bool FakeServiceDiscoveryDeviceLister::discovery_started() {
 void FakeServiceDiscoveryDeviceLister::SendUpdate(
     const ServiceDescription& description) {
   bool is_new;
-  if (!base::Contains(announced_services_, description.service_name)) {
+  if (!announced_services_.contains(description.service_name)) {
     is_new = true;
     announced_services_.insert(description.service_name);
   } else {

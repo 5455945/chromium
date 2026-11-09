@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,15 @@
 #include <stddef.h>
 
 #include <iosfwd>
-#include <memory>
 #include <set>
 
-#include "base/macros.h"
+#include "base/values.h"
 #include "extensions/common/url_pattern.h"
 
 class GURL;
 
-namespace base {
-class ListValue;
-class Value;
+namespace url {
+class Origin;
 }
 
 namespace extensions {
@@ -26,8 +24,11 @@ namespace extensions {
 // Represents the set of URLs an extension uses for web content.
 class URLPatternSet {
  public:
-  typedef std::set<URLPattern>::const_iterator const_iterator;
-  typedef std::set<URLPattern>::iterator iterator;
+  using const_iterator = std::set<URLPattern>::const_iterator;
+  using iterator = std::set<URLPattern>::iterator;
+
+  // Returns the empty URL patterns.
+  static const URLPatternSet& Empty();
 
   // Returns |set1| - |set2|.
   static URLPatternSet CreateDifference(const URLPatternSet& set1,
@@ -70,7 +71,7 @@ class URLPatternSet {
   };
 
   // Returns the intersection of |set1| and |set2| according to
-  // |intersection_behavior|.
+  // `intersection_behavior`.
   static URLPatternSet CreateIntersection(
       const URLPatternSet& set1,
       const URLPatternSet& set2,
@@ -80,12 +81,13 @@ class URLPatternSet {
   static URLPatternSet CreateUnion(const URLPatternSet& set1,
                                    const URLPatternSet& set2);
 
-  // Returns the union of all sets in |sets|.
-  static URLPatternSet CreateUnion(const std::vector<URLPatternSet>& sets);
-
   URLPatternSet();
   URLPatternSet(URLPatternSet&& rhs);
   explicit URLPatternSet(const std::set<URLPattern>& patterns);
+
+  URLPatternSet(const URLPatternSet&) = delete;
+  URLPatternSet& operator=(const URLPatternSet&) = delete;
+
   ~URLPatternSet();
 
   URLPatternSet& operator=(URLPatternSet&& rhs);
@@ -106,26 +108,33 @@ class URLPatternSet {
   // false if the pattern was already in the set.
   bool AddPattern(const URLPattern& pattern);
 
-  // Adds all patterns from |set| into this.
+  // Adds all patterns from `set` into this.
   void AddPatterns(const URLPatternSet& set);
 
   void ClearPatterns();
 
-  // Adds a pattern based on |origin| to the set.
+  // Adds a pattern based on `origin` to the set.
   bool AddOrigin(int valid_schemes, const GURL& origin);
+  bool AddOrigin(int valid_schemes, const url::Origin& origin);
 
-  // Returns true if every URL that matches |set| is matched by this. In other
-  // words, if every pattern in |set| is encompassed by a pattern in this.
+  // Returns true if every URL that matches `set` is matched by this. In other
+  // words, if every pattern in `set` is encompassed by a pattern in this.
   bool Contains(const URLPatternSet& set) const;
 
-  // Returns true if any pattern in this set encompasses |pattern|.
+  // Returns true if any pattern in this set encompasses `pattern`.
   bool ContainsPattern(const URLPattern& pattern) const;
 
-  // Test if the extent contains a URL.
+  // Test if the extent contains a URL. If `case_sensitive` is false, path
+  // matching is done case-insensitively using Unicode case folding.
   bool MatchesURL(const GURL& url) const;
+  bool MatchesURL(const GURL& url, bool case_sensitive) const;
 
   // Test if the extent matches all URLs (for example, <all_urls>).
   bool MatchesAllURLs() const;
+
+  // Returns true if any pattern in this set matches the host in `test`, plus
+  // all subdomains of `test` if `require_match_subdomains` is true,
+  bool MatchesHost(const GURL& test, bool require_match_subdomains) const;
 
   bool MatchesSecurityOrigin(const GURL& origin) const;
 
@@ -133,14 +142,14 @@ class URLPatternSet {
   bool OverlapsWith(const URLPatternSet& other) const;
 
   // Converts to and from Value for serialization to preferences.
-  std::unique_ptr<base::ListValue> ToValue() const;
+  base::ListValue ToValue() const;
   bool Populate(const base::ListValue& value,
                 int valid_schemes,
                 bool allow_file_access,
                 std::string* error);
 
   // Converts to and from a vector of strings.
-  std::unique_ptr<std::vector<std::string>> ToStringVector() const;
+  std::vector<std::string> ToStringVector() const;
   bool Populate(const std::vector<std::string>& patterns,
                 int valid_schemes,
                 bool allow_file_access,
@@ -149,8 +158,6 @@ class URLPatternSet {
  private:
   // The list of URL patterns that comprise the extent.
   std::set<URLPattern> patterns_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLPatternSet);
 };
 
 std::ostream& operator<<(std::ostream& out,

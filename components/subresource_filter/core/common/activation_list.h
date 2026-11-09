@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,25 @@
 
 namespace subresource_filter {
 
-// This enum backs a histogram. Make sure all updates are reflected in
-// enums.xml.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(ActivationList)
 enum class ActivationList : int {
-  NONE,
-  SOCIAL_ENG_ADS_INTERSTITIAL,
-  PHISHING_INTERSTITIAL,
-  SUBRESOURCE_FILTER,
+  NONE = 0,
+  // SOCIAL_ENG_ADS_INTERSTITIAL = 1, (deprecated)
+  PHISHING_INTERSTITIAL = 2,
+  // SUBRESOURCE_FILTER = 3, (deprecated)
 
   // Site violates the better ads standard.
-  BETTER_ADS,
+  BETTER_ADS = 4,
 
-  ABUSIVE,
+  ABUSIVE = 5,
 
   // Make sure new elements added update the LAST value.
   LAST = ABUSIVE
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:ActivationList)
 
 // For logging use only.
 std::ostream& operator<<(std::ostream& os, const ActivationList& type);

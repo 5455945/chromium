@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/ui/media_router/presentation_receiver_window.h"
@@ -39,29 +40,29 @@ PresentationReceiverWindowController::CreateFromOriginalProfile(
     const gfx::Rect& bounds,
     base::OnceClosure termination_callback,
     TitleChangeCallback title_change_callback) {
-  DCHECK(profile);
-  DCHECK(!profile->IsOffTheRecord());
-  DCHECK(termination_callback);
+  CHECK(profile, base::NotFatalUntil::M162);
+  CHECK(!profile->IsOffTheRecord(), base::NotFatalUntil::M162);
+  CHECK(termination_callback, base::NotFatalUntil::M162);
   return base::WrapUnique(new PresentationReceiverWindowController(
       profile, bounds, std::move(termination_callback),
       std::move(title_change_callback)));
 }
 
 PresentationReceiverWindowController::~PresentationReceiverWindowController() {
-  DCHECK(!web_contents_);
-  DCHECK(!window_);
+  CHECK(!web_contents_, base::NotFatalUntil::M162);
+  CHECK(!window_, base::NotFatalUntil::M162);
 
   if (otr_profile_) {
-    otr_profile_->RemoveObserver(this);
-    ProfileDestroyer::DestroyProfileWhenAppropriate(otr_profile_);
+    otr_profile_observation_.Reset();
+    ProfileDestroyer::DestroyOTRProfileWhenAppropriate(otr_profile_);
   }
 }
 
 void PresentationReceiverWindowController::Start(
     const std::string& presentation_id,
     const GURL& start_url) {
-  DCHECK(window_);
-  DCHECK(web_contents_);
+  CHECK(window_, base::NotFatalUntil::M162);
+  CHECK(web_contents_, base::NotFatalUntil::M162);
 
   media_router::ReceiverPresentationServiceDelegateImpl::CreateForWebContents(
       web_contents_.get(), presentation_id);
@@ -120,9 +121,9 @@ PresentationReceiverWindowController::PresentationReceiverWindowController(
       window_(PresentationReceiverWindow::Create(this, bounds)),
       termination_callback_(std::move(termination_callback)),
       title_change_callback_(std::move(title_change_callback)) {
-  DCHECK(otr_profile_);
-  DCHECK(otr_profile_->IsOffTheRecord());
-  otr_profile_->AddObserver(this);
+  CHECK(otr_profile_, base::NotFatalUntil::M162);
+  CHECK(otr_profile_->IsOffTheRecord(), base::NotFatalUntil::M162);
+  otr_profile_observation_.Observe(otr_profile_.get());
   content::WebContentsObserver::Observe(web_contents_.get());
   web_contents_->SetDelegate(this);
 }
@@ -134,23 +135,36 @@ void PresentationReceiverWindowController::WindowClosed() {
 
 void PresentationReceiverWindowController::OnProfileWillBeDestroyed(
     Profile* profile) {
-  DCHECK(profile == otr_profile_);
+  CHECK(profile == otr_profile_, base::NotFatalUntil::M162);
   web_contents_.reset();
+  otr_profile_observation_.Reset();
   otr_profile_ = nullptr;
   Terminate();
 }
 
 void PresentationReceiverWindowController::DidStartNavigation(
     content::NavigationHandle* handle) {
-  if (!navigation_policy_.AllowNavigation(handle))
-    Terminate();
+  if (!navigation_policy_.AllowNavigation(handle)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&PresentationReceiverWindowController::StopAndTerminate,
+                       weak_factory_.GetWeakPtr()));
+  }
+}
+
+void PresentationReceiverWindowController::StopAndTerminate() {
+  if (web_contents_) {
+    web_contents_->Stop();
+  }
+  Terminate();
 }
 
 void PresentationReceiverWindowController::TitleWasSet(
     content::NavigationEntry* entry) {
   window_->UpdateWindowTitle();
-  if (entry)
+  if (entry) {
     title_change_callback_.Run(base::UTF16ToUTF8(entry->GetTitle()));
+  }
 }
 
 void PresentationReceiverWindowController::NavigationStateChanged(
@@ -167,16 +181,16 @@ void PresentationReceiverWindowController::CloseContents(
 
 bool PresentationReceiverWindowController::ShouldSuppressDialogs(
     content::WebContents* source) {
-  DCHECK_EQ(web_contents_.get(), source);
+  CHECK_EQ(web_contents_.get(), source, base::NotFatalUntil::M162);
   // Suppress all because there is no possible direct user interaction with
   // dialogs.
-  // TODO(https://crbug.com/734191): This does not suppress window.print().
+  // TODO(crbug.com/40526231): This does not suppress window.print().
   return true;
 }
 
 bool PresentationReceiverWindowController::ShouldFocusLocationBarByDefault(
     content::WebContents* source) {
-  DCHECK_EQ(web_contents_.get(), source);
+  CHECK_EQ(web_contents_.get(), source, base::NotFatalUntil::M162);
   // Indicate the location bar should be focused instead of the page, even
   // though there is no location bar in fullscreen (the presentation's default
   // state).  This will prevent the page from automatically receiving input
@@ -184,7 +198,8 @@ bool PresentationReceiverWindowController::ShouldFocusLocationBarByDefault(
   return true;
 }
 
-bool PresentationReceiverWindowController::ShouldFocusPageAfterCrash() {
+bool PresentationReceiverWindowController::ShouldFocusPageAfterCrash(
+    content::WebContents* source) {
   // Never focus the page after a crash.
   return false;
 }
@@ -198,6 +213,7 @@ void PresentationReceiverWindowController::CanDownload(
 }
 
 bool PresentationReceiverWindowController::IsWebContentsCreationOverridden(
+    content::RenderFrameHost* opener,
     content::SiteInstance* source_site_instance,
     content::mojom::WindowContainerType window_container_type,
     const GURL& opener_url,

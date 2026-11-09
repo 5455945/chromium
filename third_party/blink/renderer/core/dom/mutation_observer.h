@@ -35,18 +35,22 @@
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/mutation_observer_options.h"
-#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_state_observer.h"
+#include "third_party/blink/renderer/core/inspector/dom_patch_support.h"
+#include "third_party/blink/renderer/core/probe/async_task_context.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
 class Document;
 class ExceptionState;
+class ExecutionContext;
 class HTMLSlotElement;
 class MutationObserver;
 class MutationObserverInit;
@@ -86,7 +90,7 @@ class CORE_EXPORT MutationObserver final
     virtual void Deliver(const MutationRecordVector& records,
                          MutationObserver&) = 0;
     virtual void Trace(Visitor* visitor) const {}
-    const char* NameInHeapSnapshot() const override {
+    const char* GetHumanReadableName() const override {
       return "MutationObserver::Delegate";
     }
   };
@@ -98,6 +102,10 @@ class CORE_EXPORT MutationObserver final
   static void DeliverMutations();
   static void EnqueueSlotChange(HTMLSlotElement&);
   static void CleanSlotChangeList(Document&);
+  // Queues a "focusreset" check for the document in the mutation observer
+  // microtask, after slotchange events.
+  static void EnqueueFocusReset(Document&);
+  static void CleanFocusResetList(Document&);
 
   MutationObserver(ExecutionContext*, Delegate*);
   ~MutationObserver() override;
@@ -110,17 +118,16 @@ class CORE_EXPORT MutationObserver final
   void EnqueueMutationRecord(MutationRecord*);
   void SetHasTransientRegistration();
 
-  HeapHashSet<Member<Node>> GetObservedNodes() const;
-
-  bool HasPendingActivity() const override { return !records_.IsEmpty(); }
+  bool HasPendingActivity() const override { return !records_.empty(); }
 
   void ContextLifecycleStateChanged(mojom::FrameLifecycleState) final;
-  void ContextDestroyed() final {}
+  void ContextDestroyed() final;
 
   void Trace(Visitor*) const override;
 
  private:
   struct ObserverLessThan;
+  friend class MutationObserverAgentData;
 
   void Deliver();
   void CancelInspectorAsyncTasks();
@@ -129,6 +136,7 @@ class CORE_EXPORT MutationObserver final
   HeapVector<Member<MutationRecord>> records_;
   MutationObserverRegistrationSet registrations_;
   unsigned priority_;
+  probe::AsyncTaskContext async_task_context_;
 
   FRIEND_TEST_ALL_PREFIXES(MutationObserverTest, DisconnectCrash);
 };

@@ -30,20 +30,23 @@
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_void_request_impl.h"
 
-#include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "base/check.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_error_util.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_void_request.h"
+#include "third_party/webrtc/api/rtc_error.h"
 
 namespace blink {
 
 RTCVoidRequestImpl::RTCVoidRequestImpl(
     ExecutionContext* context,
-    absl::optional<RTCSetSessionDescriptionOperation> operation,
     RTCPeerConnection* requester,
     V8VoidFunction* success_callback,
     V8RTCPeerConnectionErrorCallback* error_callback)
     : ExecutionContextLifecycleObserver(context),
-      operation_(std::move(operation)),
       success_callback_(success_callback),
       error_callback_(error_callback),
       requester_(requester) {
@@ -56,8 +59,6 @@ void RTCVoidRequestImpl::RequestSucceeded() {
   bool should_fire_callback =
       requester_ && requester_->ShouldFireDefaultCallbacks();
   if (should_fire_callback && success_callback_) {
-    if (operation_)
-      requester_->NoteVoidRequestCompleted(*operation_, true);
     success_callback_->InvokeAndReportException(nullptr);
   }
 
@@ -68,8 +69,6 @@ void RTCVoidRequestImpl::RequestFailed(const webrtc::RTCError& error) {
   bool should_fire_callback =
       requester_ && requester_->ShouldFireDefaultCallbacks();
   if (should_fire_callback && error_callback_.Get()) {
-    if (operation_)
-      requester_->NoteVoidRequestCompleted(*operation_, false);
     error_callback_->InvokeAndReportException(
         nullptr, CreateDOMExceptionFromRTCError(error));
   }

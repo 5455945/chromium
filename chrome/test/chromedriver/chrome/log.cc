@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,55 +26,46 @@ void Log::AddEntry(Level level,
 }
 
 bool Log::truncate_logged_params = true;
-IsVLogOnFunc Log::is_vlog_on_func = NULL;
+IsVLogOnFunc Log::is_vlog_on_func = nullptr;
 
 namespace {
 
 void TruncateString(std::string* data) {
   const size_t kMaxLength = 200;
   if (data->length() > kMaxLength) {
-    data->resize(kMaxLength);
-    data->replace(kMaxLength - 3, 3, "...");
+    base::TruncateUTF8ToByteSize(*data, kMaxLength - 3, data);
+    data->append("...");
   }
 }
 
-std::unique_ptr<base::Value> SmartDeepCopy(const base::Value* value) {
+base::Value SmartDeepCopy(const base::Value* value) {
   const size_t kMaxChildren = 20;
-  const base::ListValue* list = NULL;
-  const base::DictionaryValue* dict = NULL;
-  std::string data;
-  if (value->GetAsDictionary(&dict)) {
-    std::unique_ptr<base::DictionaryValue> dict_copy(
-        new base::DictionaryValue());
-    for (base::DictionaryValue::Iterator it(*dict); !it.IsAtEnd();
-         it.Advance()) {
-      if (dict_copy->DictSize() >= kMaxChildren - 1) {
-        dict_copy->SetKey("~~~", base::Value("..."));
+  if (value->is_dict()) {
+    base::DictValue dict_copy;
+    for (auto [dict_key, dict_value] : value->GetDict()) {
+      if (dict_copy.size() >= kMaxChildren - 1) {
+        dict_copy.Set("~~~", "...");
         break;
       }
-      const base::Value* child = dict->FindKey(it.key());
-      dict_copy->SetKey(it.key(),
-                        base::Value::FromUniquePtrValue(SmartDeepCopy(child)));
+      dict_copy.Set(dict_key, SmartDeepCopy(&dict_value));
     }
-    return std::move(dict_copy);
-  } else if (value->GetAsList(&list)) {
-    std::unique_ptr<base::ListValue> list_copy(new base::ListValue());
-    for (size_t i = 0; i < list->GetSize(); ++i) {
-      const base::Value* child = NULL;
-      if (!list->Get(i, &child))
-        continue;
-      if (list_copy->GetSize() >= kMaxChildren - 1) {
-        list_copy->AppendString("...");
+    return base::Value(std::move(dict_copy));
+  } else if (value->is_list()) {
+    base::ListValue list_copy;
+    for (const base::Value& child : value->GetList()) {
+      if (list_copy.size() >= kMaxChildren - 1) {
+        list_copy.Append("...");
         break;
       }
-      list_copy->Append(SmartDeepCopy(child));
+      list_copy.Append(SmartDeepCopy(&child));
     }
-    return std::move(list_copy);
-  } else if (value->GetAsString(&data)) {
+    return base::Value(std::move(list_copy));
+  } else if (value->is_string()) {
+    std::string data = value->GetString();
     TruncateString(&data);
-    return std::make_unique<base::Value>(data);
+    return base::Value(std::move(data));
   }
-  return base::Value::ToUniquePtrValue(value->Clone());
+  return value->Clone();
 }
 
 }  // namespace
@@ -85,11 +76,11 @@ bool IsVLogOn(int vlog_level) {
   return Log::is_vlog_on_func(vlog_level);
 }
 
-std::string PrettyPrintValue(const base::Value& value) {
+std::string PrettyPrintValue(base::ValueView value) {
   std::string json;
   base::JSONWriter::WriteWithOptions(
       value, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::RemoveChars(json, "\r", &json);
 #endif
   // Remove the trailing newline.
@@ -99,13 +90,17 @@ std::string PrettyPrintValue(const base::Value& value) {
 }
 
 std::string FormatValueForDisplay(const base::Value& value) {
-  return PrettyPrintValue(Log::truncate_logged_params ? *SmartDeepCopy(&value)
-                                                      : value);
+  if (Log::truncate_logged_params) {
+    return PrettyPrintValue(SmartDeepCopy(&value));
+  } else {
+    return PrettyPrintValue(value);
+  }
 }
 
 std::string FormatJsonForDisplay(const std::string& json) {
-  std::unique_ptr<base::Value> value = base::JSONReader::ReadDeprecated(json);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value)
-    value = std::make_unique<base::Value>(json);
+    value.emplace(json);
   return FormatValueForDisplay(*value);
 }

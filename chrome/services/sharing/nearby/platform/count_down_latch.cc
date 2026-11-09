@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,7 @@
 
 #include "base/time/time.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 CountDownLatch::CountDownLatch(int32_t count)
     : count_(count),
@@ -30,7 +28,7 @@ ExceptionOr<bool> CountDownLatch::Await(absl::Duration timeout) {
   // Return true if |count_waitable_event_| is signaled before TimedAwait()
   // times out. Otherwise, this returns false due to timing out.
   return ExceptionOr<bool>(count_waitable_event_.TimedWait(
-      base::TimeDelta::FromMicroseconds(absl::ToInt64Microseconds(timeout))));
+      base::Microseconds(absl::ToInt64Microseconds(timeout))));
 }
 
 void CountDownLatch::CountDown() {
@@ -40,6 +38,4 @@ void CountDownLatch::CountDown() {
     count_waitable_event_.Signal();
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,37 +8,41 @@
 #include <string>
 #include <vector>
 
-#include "base/values.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_list_observer.h"
-#include "chrome/browser/ui/browser_tab_strip_tracker.h"
-#include "chrome/browser/ui/browser_tab_strip_tracker_delegate.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "components/keyed_service/core/keyed_service.h"
 #include "components/tab_groups/tab_group_id.h"
-#include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_event_histogram_value.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/event_args.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class Profile;
+
+namespace content {
+class BrowserContext;
+}  // namespace content
 
 namespace extensions {
+
+class EventRouter;
 
 // The TabGroupsEventRouter listens to group events and routes them to listeners
 // inside extension process renderers.
 // TabGroupsEventRouter will only route events from windows/tabs within a
 // profile to extension processes in the same profile.
-class TabGroupsEventRouter : public TabStripModelObserver,
-                             public BrowserTabStripTrackerDelegate,
-                             public KeyedService {
+class TabGroupsEventRouter : public KeyedService {
  public:
   explicit TabGroupsEventRouter(content::BrowserContext* context);
   TabGroupsEventRouter(const TabGroupsEventRouter&) = delete;
   TabGroupsEventRouter& operator=(const TabGroupsEventRouter&) = delete;
-  ~TabGroupsEventRouter() override = default;
-
-  // TabStripModelObserver:
-  void OnTabGroupChanged(const TabGroupChange& change) override;
-
-  // BrowserTabStripTrackerDelegate:
-  bool ShouldTrackBrowser(Browser* browser) override;
+  ~TabGroupsEventRouter() override;
 
  private:
+  // Helps observe events about tab groups in a cross-platform way.
+  class PlatformDelegate;
+
   // Methods called from OnTabGroupChanged.
   void DispatchGroupCreated(tab_groups::TabGroupId group);
   void DispatchGroupRemoved(tab_groups::TabGroupId group);
@@ -47,11 +51,11 @@ class TabGroupsEventRouter : public TabStripModelObserver,
 
   void DispatchEvent(events::HistogramValue histogram_value,
                      const std::string& event_name,
-                     std::vector<base::Value> args);
+                     scoped_refptr<const EventArgs> args);
 
-  Profile* const profile_;
-  EventRouter* const event_router_ = nullptr;
-  BrowserTabStripTracker browser_tab_strip_tracker_;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<EventRouter> event_router_;
+  std::unique_ptr<PlatformDelegate> platform_delegate_;
 };
 
 }  // namespace extensions

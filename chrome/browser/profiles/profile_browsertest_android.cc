@@ -1,27 +1,32 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "chrome/browser/profiles/profile.h"
 
 #include <stddef.h>
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/threading/thread_restrictions.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/test/base/android/android_browser_test.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -35,10 +40,10 @@ class ProfileDeleteMediaBrowserTest : public AndroidBrowserTest {
  protected:
   void SetUp() override {
     // This needs to happen before AndroidBrowserTest::SetUp(), since that
-    // invokes deletion. Luckily on Android chrome::GetUserCacheDirectory()
-    // doesn't actually look at its input. (This would be cleaner as a PRE_
-    // test, but that doesn't appear to be supported here).
-    chrome::GetUserCacheDirectory(base::FilePath(), &cache_base_);
+    // invokes deletion.
+    // On Android, the default profile's cache directory is always the base
+    // cache directory (DIR_CACHE).
+    ASSERT_TRUE(base::PathService::Get(base::DIR_CACHE, &cache_base_));
     base::FilePath media_cache_path =
         cache_base_.Append(chrome::kMediaCacheDirname);
 
@@ -67,6 +72,9 @@ class FileDestructionWatcher {
       : watched_file_path_(watched_file_path) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   }
+
+  FileDestructionWatcher(const FileDestructionWatcher&) = delete;
+  FileDestructionWatcher& operator=(const FileDestructionWatcher&) = delete;
 
   void WaitForDestruction() {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -123,8 +131,6 @@ class FileDestructionWatcher {
   // Created and destroyed off of the UI thread, on the sequence used to watch
   // for changes.
   std::unique_ptr<base::FilePathWatcher> watcher_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileDestructionWatcher);
 };
 
 }  // namespace
@@ -145,4 +151,45 @@ IN_PROC_BROWSER_TEST_F(ProfileDeleteMediaBrowserTest, DeleteMediaCache) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   FileDestructionWatcher destruction_watcher(media_cache_path);
   destruction_watcher.WaitForDestruction();
+}
+
+// Android builds the startup profile's ProfileKey, PrefService and
+// ProtoDatabaseProvider in StartupData before any Profile exists. With
+// AndroidMultiprofileStartupData enabled, a second regular profile must load
+// its own data instead of taking over (already consumed) StartupData.
+class ProfileAndroidSecondProfileBrowserTest : public AndroidBrowserTest {
+ public:
+  ProfileAndroidSecondProfileBrowserTest() {
+    feature_list_.InitAndEnableFeature(
+        features::kAndroidMultiprofileStartupData);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// TODO(crbug.com/579838538): Enable once loading a second profile on Android
+// no longer hits other single-profile assumptions: crrev.com/c/8687937,
+// crrev.com/c/8693665 and crrev.com/c/8688777.
+IN_PROC_BROWSER_TEST_F(ProfileAndroidSecondProfileBrowserTest,
+                       DISABLED_SecondProfileLoadsItsOwnData) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  Profile* startup_profile = TabModelList::models()[0]->GetProfile();
+  ASSERT_TRUE(startup_profile);
+
+  // ProfileManager::GenerateNextProfileDirectoryPath() requires
+  // profiles::IsMultipleProfilesEnabled(), which follows kAndroidMultiprofile
+  // and is not enabled in this test.
+  base::FilePath second_path =
+      profile_manager->user_data_dir().AppendASCII("Profile 1");
+  Profile& second_profile =
+      profiles::testing::CreateProfileSync(profile_manager, second_path);
+
+  ASSERT_TRUE(second_profile.GetProfileKey());
+  EXPECT_NE(startup_profile->GetProfileKey(), second_profile.GetProfileKey());
+  EXPECT_EQ(second_path, second_profile.GetProfileKey()->GetPath());
+  EXPECT_NE(startup_profile->GetProfileKey()->GetProtoDatabaseProvider(),
+            second_profile.GetProfileKey()->GetProtoDatabaseProvider());
+  ASSERT_TRUE(second_profile.GetPrefs());
+  EXPECT_NE(startup_profile->GetPrefs(), second_profile.GetPrefs());
 }

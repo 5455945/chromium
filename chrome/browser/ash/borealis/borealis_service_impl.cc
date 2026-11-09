@@ -1,8 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/borealis/borealis_service_impl.h"
+
+#include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/profiles/profile.h"
 
 namespace borealis {
 
@@ -10,10 +14,13 @@ BorealisServiceImpl::BorealisServiceImpl(Profile* profile)
     : profile_(profile),
       app_launcher_(profile_),
       app_uninstaller_(profile_),
-      context_manager_(profile),
-      disk_manager_dispatcher_(),
+      disk_cleanup_manager_(
+          ash::ProfileHelper::GetUserIdHashFromProfile(profile_),
+          profile_->GetPrefs(),
+          guest_os::GuestOsRegistryServiceFactory::GetForProfile(profile_)),
       features_(profile_),
       installer_(profile_),
+      launch_options_(profile_),
       shutdown_monitor_(profile_),
       window_manager_(profile_) {}
 
@@ -27,12 +34,8 @@ BorealisAppUninstaller& BorealisServiceImpl::AppUninstaller() {
   return app_uninstaller_;
 }
 
-BorealisContextManager& BorealisServiceImpl::ContextManager() {
-  return context_manager_;
-}
-
-BorealisDiskManagerDispatcher& BorealisServiceImpl::DiskManagerDispatcher() {
-  return disk_manager_dispatcher_;
+BorealisDiskCleanupManager& BorealisServiceImpl::DiskCleanupManager() {
+  return disk_cleanup_manager_;
 }
 
 BorealisFeatures& BorealisServiceImpl::Features() {
@@ -41,6 +44,10 @@ BorealisFeatures& BorealisServiceImpl::Features() {
 
 BorealisInstaller& BorealisServiceImpl::Installer() {
   return installer_;
+}
+
+BorealisLaunchOptions& BorealisServiceImpl::LaunchOptions() {
+  return launch_options_;
 }
 
 BorealisShutdownMonitor& BorealisServiceImpl::ShutdownMonitor() {

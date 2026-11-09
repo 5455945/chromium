@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/smb_client/smb_service.h"
 #include "chrome/browser/ash/smb_client/smb_service_factory.h"
 #include "chrome/browser/ash/smb_client/smbfs_share.h"
@@ -17,14 +19,13 @@
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/file_system/local_file_util.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 namespace {
 
 void AllowCredentialsRequestOnUIThread(Profile* profile,
                                        const base::FilePath& path) {
   SmbService* service = SmbServiceFactory::Get(profile);
-  DCHECK(service);
+  CHECK(service, base::NotFatalUntil::M160);
   SmbFsShare* share = service->GetSmbFsShareForPath(path);
   // Because the request is posted from the IO thread, there's no guarantee the
   // share still exists at this point.
@@ -52,7 +53,8 @@ class DeleteRecursivelyOperation {
         path_(path),
         callback_(std::move(callback)),
         origin_task_runner_(std::move(origin_task_runner)) {
-    DCHECK(origin_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(origin_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
   }
 
   DeleteRecursivelyOperation() = delete;
@@ -61,10 +63,10 @@ class DeleteRecursivelyOperation {
       delete;
 
   void Start() {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
     SmbService* service = SmbServiceFactory::Get(profile_);
-    DCHECK(service);
+    CHECK(service, base::NotFatalUntil::M160);
     SmbFsShare* share = service->GetSmbFsShareForPath(path_);
 
     // Because the request is posted from the IO thread, there's no guarantee
@@ -83,14 +85,14 @@ class DeleteRecursivelyOperation {
   }
 
   void OnDeleteRecursively(base::File::Error error) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
     // Make StatusCallback on the thread where the operation originated.
     origin_task_runner_->PostTask(FROM_HERE,
                                   base::BindOnce(std::move(callback_), error));
   }
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
   const base::FilePath path_;
   storage::AsyncFileUtil::StatusCallback callback_;
   scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
@@ -101,7 +103,7 @@ class DeleteRecursivelyOperation {
 SmbFsAsyncFileUtil::SmbFsAsyncFileUtil(Profile* profile)
     : AsyncFileUtilAdapter(std::make_unique<storage::LocalFileUtil>()),
       profile_(profile) {
-  DCHECK(profile_);
+  CHECK(profile_, base::NotFatalUntil::M160);
 }
 
 SmbFsAsyncFileUtil::~SmbFsAsyncFileUtil() = default;
@@ -110,7 +112,7 @@ void SmbFsAsyncFileUtil::ReadDirectory(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     ReadDirectoryCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTaskAndReply(
       FROM_HERE,
       base::BindOnce(&AllowCredentialsRequestOnUIThread, profile_, url.path()),
@@ -131,13 +133,13 @@ void SmbFsAsyncFileUtil::DeleteRecursively(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(&DeleteRecursivelyOperation::Start,
-                                base::Unretained(new DeleteRecursivelyOperation(
-                                    profile_, url.path(), std::move(callback),
-                                    base::SequencedTaskRunnerHandle::Get()))));
+      FROM_HERE,
+      base::BindOnce(&DeleteRecursivelyOperation::Start,
+                     base::Unretained(new DeleteRecursivelyOperation(
+                         profile_, url.path(), std::move(callback),
+                         base::SequencedTaskRunner::GetCurrentDefault()))));
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

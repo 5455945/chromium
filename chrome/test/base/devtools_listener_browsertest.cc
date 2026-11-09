@@ -1,6 +1,8 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/test/base/devtools_listener.h"
 
 #include <map>
 #include <memory>
@@ -10,14 +12,13 @@
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/threading/thread_restrictions.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/devtools_listener.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_observer.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -30,6 +31,10 @@ class DevToolsListenerBrowserTest : public content::DevToolsAgentHostObserver,
  public:
   DevToolsListenerBrowserTest() = default;
 
+  DevToolsListenerBrowserTest(const DevToolsListenerBrowserTest&) = delete;
+  DevToolsListenerBrowserTest& operator=(const DevToolsListenerBrowserTest&) =
+      delete;
+
   void SetUpOnMainThread() override {
     process_id_ = base::GetUniqueIdForProcess().GetUnsafeValue();
     content::DevToolsAgentHost::AddObserver(this);
@@ -38,6 +43,18 @@ class DevToolsListenerBrowserTest : public content::DevToolsAgentHostObserver,
   bool ShouldForceDevToolsAgentHostCreation() override { return true; }
 
   void DevToolsAgentHostCreated(content::DevToolsAgentHost* host) override {
+    if (host->GetURL().SchemeIs(content::kChromeUIScheme)) {
+      // Skips chrome internal UI pages.
+      return;
+    }
+    if (host->GetType() != content::DevToolsAgentHost::kTypePage &&
+        host->GetType() != content::DevToolsAgentHost::kTypeFrame) {
+      return;
+    }
+    // Skip `WebUI` hosts like for the omnibox.
+    if (host->GetWebContents()->GetWebUI()) {
+      return;
+    }
     CHECK(devtools_agent_.find(host) == devtools_agent_.end());
     devtools_agent_[host] =
         std::make_unique<DevToolsListener>(host, process_id_);
@@ -99,8 +116,6 @@ class DevToolsListenerBrowserTest : public content::DevToolsAgentHostObserver,
 
   DevToolsAgentMap devtools_agent_;
   uint32_t process_id_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsListenerBrowserTest);
 };
 
 IN_PROC_BROWSER_TEST_F(DevToolsListenerBrowserTest, CanCollectCodeCoverage) {

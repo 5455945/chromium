@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,10 @@
 
 #include "ios/web/common/user_agent.h"
 
+@protocol CRWEditMenuBuilder;
 @protocol CRWInputViewProvider;
+@protocol CRWDataControlsDelegate;
+@class CRWWebView;
 
 // This file is a collection of functions that vend web views.
 namespace web {
@@ -19,10 +22,10 @@ class BrowserState;
 // Creates a new WKWebView.
 //
 // Preconditions for creation of a WKWebView:
-// 1) |browser_state|, |configuration| are not null.
+// 1) `browser_state`, `configuration` are not null.
 // 2) web::BrowsingDataPartition is synchronized.
 // 3) The WKProcessPool of the configuration is the same as the WKProcessPool
-//    of the WKWebViewConfiguration associated with |browser_state|.
+//    of the WKWebViewConfiguration associated with `browser_state`.
 //
 WKWebView* BuildWKWebViewForQueries(WKWebViewConfiguration* configuration,
                                     BrowserState* browser_state);
@@ -30,18 +33,13 @@ WKWebView* BuildWKWebViewForQueries(WKWebViewConfiguration* configuration,
 // Creates and returns a new WKWebView for displaying regular web content.
 // The preconditions for the creation of a WKWebView are the same as the
 // previous method.
-WKWebView* BuildWKWebView(CGRect frame,
-                          WKWebViewConfiguration* configuration,
-                          BrowserState* browser_state,
-                          UserAgentType user_agent_type,
-                          id<CRWInputViewProvider> input_view_provider);
-
-// Creates and returns a new WKWebView for displaying regular web content.
-// The preconditions for the creation of a WKWebView are the same as the
-// previous method.
-WKWebView* BuildWKWebView(CGRect frame,
-                          WKWebViewConfiguration* configuration,
-                          BrowserState* browser_state);
+CRWWebView* BuildWKWebView(CGRect frame,
+                           WKWebViewConfiguration* configuration,
+                           BrowserState* browser_state,
+                           UserAgentType user_agent_type,
+                           id<CRWInputViewProvider> input_view_provider,
+                           id<CRWEditMenuBuilder> edit_menu_builder,
+                           id<CRWDataControlsDelegate> data_controls_delegate);
 
 }  // namespace web
 

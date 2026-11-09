@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,8 @@
 
 #include "base/containers/span.h"
 #include "base/files/file.h"
-#include "base/macros.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/system_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 
@@ -22,23 +20,25 @@ class MOJO_CPP_SYSTEM_EXPORT FileDataSource final
   static MojoResult ConvertFileErrorToMojoResult(base::File::Error error);
 
   FileDataSource(base::File file);
+
+  FileDataSource(const FileDataSource&) = delete;
+  FileDataSource& operator=(const FileDataSource&) = delete;
+
   ~FileDataSource() override;
 
   // |end| should be greater than or equal to |start|. Otherwise subsequent
   // Read() fails with MOJO_RESULT_INVALID_ARGUMENT. [start, end) will be read.
   void SetRange(uint64_t start, uint64_t end);
 
- private:
   // DataPipeProducer::DataSource:
   uint64_t GetLength() const override;
   ReadResult Read(uint64_t offset, base::span<char> buffer) override;
 
+ private:
   base::File file_;
   MojoResult error_;
   uint64_t start_offset_;
   uint64_t end_offset_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileDataSource);
 };
 
 }  // namespace mojo

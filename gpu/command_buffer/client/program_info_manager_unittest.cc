@@ -1,14 +1,18 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "gpu/command_buffer/client/program_info_manager.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
-#include "base/cxx17_backports.h"
-#include "gpu/command_buffer/client/program_info_manager.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -36,7 +40,7 @@ class ProgramInfoManagerTest : public testing::Test {
   struct ProgramES2Data {
     // TODO(zmo): Also add attrib data.
     ProgramInfoHeader header;
-    ProgramInput uniforms[2];
+    std::array<ProgramInput, 2> uniforms;
     int32_t uniform_loc0[1];
     int32_t uniform_loc1[2];
     char uniform_name0[4];
@@ -45,7 +49,7 @@ class ProgramInfoManagerTest : public testing::Test {
 
   struct UniformBlocksData {
     UniformBlocksHeader header;
-    UniformBlockInfo entry[2];
+    std::array<UniformBlockInfo, 2> entry;
     char name0[4];
     uint32_t indices0[2];
     char name1[8];
@@ -54,12 +58,12 @@ class ProgramInfoManagerTest : public testing::Test {
 
   struct UniformsES3Data {
     UniformsES3Header header;
-    UniformES3Info entry[2];
+    std::array<UniformES3Info, 2> entry;
   };
 
   struct TransformFeedbackVaryingsData {
     TransformFeedbackVaryingsHeader header;
-    TransformFeedbackVaryingInfo entry[2];
+    std::array<TransformFeedbackVaryingInfo, 2> entry;
     char name0[4];
     char name1[8];
   };
@@ -101,8 +105,10 @@ class ProgramInfoManagerTest : public testing::Test {
     data->uniform_loc0[0] = 1;
     data->uniform_loc1[0] = 2;
     data->uniform_loc1[1] = 3;
-    memcpy(data->uniform_name0, kName[0], base::size(data->uniform_name0));
-    memcpy(data->uniform_name1, kName[1], base::size(data->uniform_name1));
+    UNSAFE_TODO(
+        memcpy(data->uniform_name0, kName[0], std::size(data->uniform_name0)));
+    UNSAFE_TODO(
+        memcpy(data->uniform_name1, kName[1], std::size(data->uniform_name1)));
   }
 
   void SetupUniformBlocksData(UniformBlocksData* data) {
@@ -116,23 +122,23 @@ class ProgramInfoManagerTest : public testing::Test {
     data->entry[0].binding = 0;
     data->entry[0].data_size = 8;
     data->entry[0].name_offset = ComputeOffset(data, data->name0);
-    data->entry[0].name_length = base::size(data->name0);
-    data->entry[0].active_uniforms = base::size(data->indices0);
+    data->entry[0].name_length = std::size(data->name0);
+    data->entry[0].active_uniforms = std::size(data->indices0);
     data->entry[0].active_uniform_offset = ComputeOffset(data, data->indices0);
     data->entry[0].referenced_by_vertex_shader = static_cast<uint32_t>(true);
     data->entry[0].referenced_by_fragment_shader = static_cast<uint32_t>(false);
     data->entry[1].binding = 1;
     data->entry[1].data_size = 4;
     data->entry[1].name_offset = ComputeOffset(data, data->name1);
-    data->entry[1].name_length = base::size(data->name1);
-    data->entry[1].active_uniforms = base::size(data->indices1);
+    data->entry[1].name_length = std::size(data->name1);
+    data->entry[1].active_uniforms = std::size(data->indices1);
     data->entry[1].active_uniform_offset = ComputeOffset(data, data->indices1);
     data->entry[1].referenced_by_vertex_shader = static_cast<uint32_t>(false);
     data->entry[1].referenced_by_fragment_shader = static_cast<uint32_t>(true);
-    memcpy(data->name0, kName[0], base::size(data->name0));
+    UNSAFE_TODO(memcpy(data->name0, kName[0], std::size(data->name0)));
     data->indices0[0] = kIndices[0][0];
-    data->indices0[1] = kIndices[0][1];
-    memcpy(data->name1, kName[1], base::size(data->name1));
+    data->indices0[1] = UNSAFE_TODO(kIndices[0][1]);
+    UNSAFE_TODO(memcpy(data->name1, kName[1], std::size(data->name1)));
     data->indices1[0] = kIndices[1][0];
   }
 
@@ -159,26 +165,28 @@ class ProgramInfoManagerTest : public testing::Test {
     data->entry[0].size = 1;
     data->entry[0].type = GL_FLOAT_VEC2;
     data->entry[0].name_offset = ComputeOffset(data, data->name0);
-    data->entry[0].name_length = base::size(data->name0);
+    data->entry[0].name_length = std::size(data->name0);
     data->entry[1].size = 2;
     data->entry[1].type = GL_FLOAT;
     data->entry[1].name_offset = ComputeOffset(data, data->name1);
-    data->entry[1].name_length = base::size(data->name1);
-    memcpy(data->name0, kName[0], base::size(data->name0));
-    memcpy(data->name1, kName[1], base::size(data->name1));
+    data->entry[1].name_length = std::size(data->name1);
+    UNSAFE_TODO(memcpy(data->name0, kName[0], std::size(data->name0)));
+    UNSAFE_TODO(memcpy(data->name1, kName[1], std::size(data->name1)));
   }
 
   std::unique_ptr<ProgramInfoManager> program_info_manager_;
-  Program* program_;
+  raw_ptr<Program> program_;
 };
 
 TEST_F(ProgramInfoManagerTest, UpdateES2) {
   ProgramES2Data data;
   SetupProgramES2Data(&data);
-  const std::string kNames[] = { data.uniform_name0, data.uniform_name1 };
-  const int32_t* kLocs[] = { data.uniform_loc0, data.uniform_loc1 };
+  const auto kNames =
+      std::to_array<std::string>({data.uniform_name0, data.uniform_name1});
+  auto kLocs =
+      std::to_array<const int32_t*>({data.uniform_loc0, data.uniform_loc1});
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   EXPECT_FALSE(program_->IsCached(ProgramInfoManager::kES2));
   program_->UpdateES2(result);
   EXPECT_TRUE(program_->IsCached(ProgramInfoManager::kES2));
@@ -213,7 +221,7 @@ TEST_F(ProgramInfoManagerTest, UpdateES2) {
     EXPECT_EQ(data.uniforms[ii].size,
               static_cast<int32_t>(info->element_locations.size()));
     for (int32_t uu = 0; uu < data.uniforms[ii].size; ++uu) {
-      EXPECT_EQ(kLocs[ii][uu], info->element_locations[uu]);
+      UNSAFE_TODO(EXPECT_EQ(kLocs[ii][uu], info->element_locations[uu]));
     }
   }
 }
@@ -221,10 +229,11 @@ TEST_F(ProgramInfoManagerTest, UpdateES2) {
 TEST_F(ProgramInfoManagerTest, UpdateES3UniformBlocks) {
   UniformBlocksData data;
   SetupUniformBlocksData(&data);
-  const std::string kName[] = { data.name0, data.name1 };
-  const uint32_t* kIndices[] = { data.indices0, data.indices1 };
+  const auto kName = std::to_array<std::string>({data.name0, data.name1});
+  auto kIndices =
+      std::to_array<const uint32_t*>({data.indices0, data.indices1});
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   EXPECT_FALSE(program_->IsCached(ProgramInfoManager::kES3UniformBlocks));
   program_->UpdateES3UniformBlocks(result);
   EXPECT_TRUE(program_->IsCached(ProgramInfoManager::kES3UniformBlocks));
@@ -246,7 +255,8 @@ TEST_F(ProgramInfoManagerTest, UpdateES3UniformBlocks) {
     EXPECT_EQ(data.entry[ii].active_uniforms,
               info->active_uniform_indices.size());
     for (uint32_t uu = 0; uu < data.entry[ii].active_uniforms; ++uu) {
-      EXPECT_EQ(kIndices[ii][uu], info->active_uniform_indices[uu]);
+      UNSAFE_TODO(
+          EXPECT_EQ(kIndices[ii][uu], info->active_uniform_indices[uu]));
     }
     EXPECT_EQ(data.entry[ii].referenced_by_vertex_shader,
               static_cast<GLboolean>(info->referenced_by_vertex_shader));
@@ -263,9 +273,9 @@ TEST_F(ProgramInfoManagerTest, UpdateES3UniformBlocks) {
 TEST_F(ProgramInfoManagerTest, UpdateES3TransformFeedbackVaryings) {
   TransformFeedbackVaryingsData data;
   SetupTransformFeedbackVaryingsData(&data);
-  const std::string kName[] = { data.name0, data.name1 };
+  const auto kName = std::to_array<std::string>({data.name0, data.name1});
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   EXPECT_FALSE(program_->IsCached(
       ProgramInfoManager::kES3TransformFeedbackVaryings));
   program_->UpdateES3TransformFeedbackVaryings(result);
@@ -303,7 +313,7 @@ TEST_F(ProgramInfoManagerTest, GetUniformBlockIndexCached) {
   UniformBlocksData data;
   SetupUniformBlocksData(&data);
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   program_->UpdateES3UniformBlocks(result);
 
   EXPECT_EQ(0u, program_info_manager_->GetUniformBlockIndex(
@@ -318,7 +328,7 @@ TEST_F(ProgramInfoManagerTest, GetActiveUniformBlockNameCached) {
   UniformBlocksData data;
   SetupUniformBlocksData(&data);
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   program_->UpdateES3UniformBlocks(result);
 
   GLsizei buf_size = std::max(strlen(data.name0), strlen(data.name1)) + 1;
@@ -361,47 +371,51 @@ TEST_F(ProgramInfoManagerTest, GetActiveUniformBlockivCached) {
   UniformBlocksData data;
   SetupUniformBlocksData(&data);
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   program_->UpdateES3UniformBlocks(result);
-  const char* kName[] = { data.name0, data.name1 };
-  const uint32_t* kIndices[] = { data.indices0, data.indices1 };
+  auto kName = std::to_array<const char*>({data.name0, data.name1});
+  const std::array<base::span<const uint32_t>, 2> kIndices = {data.indices0,
+                                                              data.indices1};
 
   for (uint32_t ii = 0; ii < data.header.num_uniform_blocks; ++ii) {
     ASSERT_GE(2u, data.entry[ii].active_uniforms);
-    GLint params[2];
+    std::array<GLint, 2> params;
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
-        nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_BINDING, params));
+        nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_BINDING,
+        params.data()));
     EXPECT_EQ(data.entry[ii].binding, static_cast<uint32_t>(params[0]));
 
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
-        nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_DATA_SIZE, params));
+        nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_DATA_SIZE,
+        params.data()));
     EXPECT_EQ(data.entry[ii].data_size, static_cast<uint32_t>(params[0]));
 
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
-        nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_NAME_LENGTH, params));
+        nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_NAME_LENGTH,
+        params.data()));
     EXPECT_EQ(strlen(kName[ii]) + 1, static_cast<uint32_t>(params[0]));
 
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
         nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS,
-        params));
+        params.data()));
     EXPECT_EQ(data.entry[ii].active_uniforms, static_cast<uint32_t>(params[0]));
 
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
         nullptr, kClientProgramId, ii, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES,
-        params));
+        params.data()));
     for (uint32_t uu = 0; uu < data.entry[ii].active_uniforms; ++uu) {
       EXPECT_EQ(kIndices[ii][uu], static_cast<uint32_t>(params[uu]));
     }
 
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
         nullptr, kClientProgramId, ii,
-        GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER, params));
+        GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER, params.data()));
     EXPECT_EQ(data.entry[ii].referenced_by_vertex_shader,
               static_cast<uint32_t>(params[0]));
 
     EXPECT_TRUE(program_info_manager_->GetActiveUniformBlockiv(
         nullptr, kClientProgramId, ii,
-        GL_UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER, params));
+        GL_UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER, params.data()));
     EXPECT_EQ(data.entry[ii].referenced_by_fragment_shader,
               static_cast<uint32_t>(params[0]));
   }
@@ -411,9 +425,9 @@ TEST_F(ProgramInfoManagerTest, GetTransformFeedbackVaryingCached) {
   TransformFeedbackVaryingsData data;
   SetupTransformFeedbackVaryingsData(&data);
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   program_->UpdateES3TransformFeedbackVaryings(result);
-  const char* kName[] = { data.name0, data.name1 };
+  auto kName = std::to_array<const char*>({data.name0, data.name1});
   GLsizei buf_size = std::max(strlen(kName[0]), strlen(kName[1])) + 1;
   for (uint32_t ii = 0; ii < data.header.num_transform_feedback_varyings;
        ++ii) {
@@ -435,40 +449,40 @@ TEST_F(ProgramInfoManagerTest, GetUniformIndices) {
   ProgramES2Data data;
   SetupProgramES2Data(&data);
   std::vector<int8_t> result(sizeof(data));
-  memcpy(&result[0], &data, sizeof(data));
+  UNSAFE_TODO(memcpy(&result[0], &data, sizeof(data)));
   program_->UpdateES2(result);
 
   {  // Original order.
-    const char* kNames[] = { data.uniform_name0, data.uniform_name1 };
-    const GLuint kIndices[] = { 0, 1 };
+    const std::array kNames = {data.uniform_name0, data.uniform_name1};
+    const auto kIndices = std::to_array<GLuint>({0, 1});
     const GLsizei kCount = 2;
-    GLuint indices[kCount];
+    std::array<GLuint, kCount> indices;
     EXPECT_TRUE(program_info_manager_->GetUniformIndices(
-        nullptr, kClientProgramId, kCount, kNames, indices));
+        nullptr, kClientProgramId, kCount, kNames.data(), indices.data()));
     for (GLsizei ii = 0; ii < kCount; ++ii) {
       EXPECT_EQ(kIndices[ii], indices[ii]);
     }
   }
 
   {  // Switched order.
-    const char* kNames[] = { data.uniform_name1, data.uniform_name0 };
-    const GLuint kIndices[] = { 1, 0 };
+    const std::array kNames = {data.uniform_name1, data.uniform_name0};
+    const auto kIndices = std::to_array<GLuint>({1, 0});
     const GLsizei kCount = 2;
-    GLuint indices[kCount];
+    std::array<GLuint, kCount> indices;
     EXPECT_TRUE(program_info_manager_->GetUniformIndices(
-        nullptr, kClientProgramId, kCount, kNames, indices));
+        nullptr, kClientProgramId, kCount, kNames.data(), indices.data()));
     for (GLsizei ii = 0; ii < kCount; ++ii) {
       EXPECT_EQ(kIndices[ii], indices[ii]);
     }
   }
 
   {  // With bad names.
-    const char* kNames[] = { data.uniform_name1, "BadName" };
-    const GLuint kIndices[] = { 1, GL_INVALID_INDEX };
+    const std::array<const char*, 2> kNames = {data.uniform_name1, "BadName"};
+    const auto kIndices = std::to_array<GLuint>({1, GL_INVALID_INDEX});
     const GLsizei kCount = 2;
-    GLuint indices[kCount];
+    std::array<GLuint, kCount> indices;
     EXPECT_TRUE(program_info_manager_->GetUniformIndices(
-        nullptr, kClientProgramId, kCount, kNames, indices));
+        nullptr, kClientProgramId, kCount, kNames.data(), indices.data()));
     for (GLsizei ii = 0; ii < kCount; ++ii) {
       EXPECT_EQ(kIndices[ii], indices[ii]);
     }
@@ -476,12 +490,12 @@ TEST_F(ProgramInfoManagerTest, GetUniformIndices) {
 
   {  // Both "foo" and "foo[0]" are considered valid names for an array,
      // but not "foo[1]".
-    const char* kNames[] = { "bull", "bull[0]", "bull[1]" };
-    const GLuint kIndices[] = { 1, 1, GL_INVALID_INDEX };
+    const std::array kNames = {"bull", "bull[0]", "bull[1]"};
+    const auto kIndices = std::to_array<GLuint>({1, 1, GL_INVALID_INDEX});
     const GLsizei kCount = 3;
-    GLuint indices[kCount];
+    std::array<GLuint, kCount> indices;
     EXPECT_TRUE(program_info_manager_->GetUniformIndices(
-        nullptr, kClientProgramId, kCount, kNames, indices));
+        nullptr, kClientProgramId, kCount, kNames.data(), indices.data()));
     for (GLsizei ii = 0; ii < kCount; ++ii) {
       EXPECT_EQ(kIndices[ii], indices[ii]);
     }
@@ -493,7 +507,7 @@ TEST_F(ProgramInfoManagerTest, GetActiveUniformsivCached) {
   UniformsES3Data data_es3;
   SetupUniformsES3Data(&data_es3);
   std::vector<int8_t> result(sizeof(data_es3));
-  memcpy(&result[0], &data_es3, sizeof(data_es3));
+  UNSAFE_TODO(memcpy(&result[0], &data_es3, sizeof(data_es3)));
   EXPECT_FALSE(program_->IsCached(ProgramInfoManager::kES3Uniformsiv));
   program_->UpdateES3Uniformsiv(result);
   EXPECT_TRUE(program_->IsCached(ProgramInfoManager::kES3Uniformsiv));
@@ -536,7 +550,7 @@ TEST_F(ProgramInfoManagerTest, GetActiveUniformsivCached) {
   ProgramES2Data data_es2;
   SetupProgramES2Data(&data_es2);
   result.resize(sizeof(data_es2));
-  memcpy(&result[0], &data_es2, sizeof(data_es2));
+  UNSAFE_TODO(memcpy(&result[0], &data_es2, sizeof(data_es2)));
   EXPECT_FALSE(program_->IsCached(ProgramInfoManager::kES2));
   program_->UpdateES2(result);
   EXPECT_TRUE(program_->IsCached(ProgramInfoManager::kES2));

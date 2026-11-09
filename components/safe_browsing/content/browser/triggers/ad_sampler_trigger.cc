@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,26 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "components/safe_browsing/content/browser/interstitials/content_unsafe_resource_util.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_manager.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_throttler.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_util.h"
+#include "components/safe_browsing/content/browser/web_contents_key.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/common/features.h"
-#include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
+#include "components/security_interstitials/core/unsafe_resource_locator.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -88,8 +91,8 @@ AdSamplerTrigger::AdSamplerTrigger(
     : content::WebContentsObserver(web_contents),
       sampler_frequency_denominator_(GetSamplerFrequencyDenominator()),
       start_report_delay_ms_(
-          base::RandInt(kMinAdSampleCollectionStartDelayMilliseconds,
-                        kMaxAdSampleCollectionStartDelayMilliseconds)),
+          base::RandIntInclusive(kMinAdSampleCollectionStartDelayMilliseconds,
+                                 kMaxAdSampleCollectionStartDelayMilliseconds)),
       finish_report_delay_ms_(kAdSampleCollectionPeriodMilliseconds),
       trigger_manager_(trigger_manager),
       prefs_(prefs),
@@ -98,7 +101,7 @@ AdSamplerTrigger::AdSamplerTrigger(
       referrer_chain_provider_(referrer_chain_provider),
       task_runner_(content::GetUIThreadTaskRunner({})) {}
 
-AdSamplerTrigger::~AdSamplerTrigger() {}
+AdSamplerTrigger::~AdSamplerTrigger() = default;
 
 void AdSamplerTrigger::DidFinishLoad(
     content::RenderFrameHost* render_frame_host,
@@ -124,23 +127,27 @@ void AdSamplerTrigger::DidFinishLoad(
       FROM_HERE,
       base::BindOnce(&AdSamplerTrigger::CreateAdSampleReport,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(start_report_delay_ms_));
+      base::Milliseconds(start_report_delay_ms_));
 }
 
 void AdSamplerTrigger::CreateAdSampleReport() {
-  SBErrorOptions error_options =
-      TriggerManager::GetSBErrorDisplayOptions(*prefs_, web_contents());
+  TriggerManager::DataCollectionPermissions permissions =
+      TriggerManager::GetDataCollectionPermissions(*prefs_, web_contents());
 
+  auto* primary_main_frame = web_contents()->GetPrimaryMainFrame();
+  const content::GlobalRenderFrameHostId primary_main_frame_id =
+      primary_main_frame->GetGlobalId();
   security_interstitials::UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_AD_SAMPLE;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_AD_SAMPLE;
   resource.url = web_contents()->GetURL();
-  resource.web_contents_getter = security_interstitials::GetWebContentsGetter(
-      web_contents()->GetMainFrame()->GetProcess()->GetID(),
-      web_contents()->GetMainFrame()->GetRoutingID());
+  resource.rfh_locator =
+      security_interstitials::UnsafeResourceLocator::CreateForRenderFrameToken(
+          primary_main_frame_id.child_id.value(),
+          primary_main_frame->GetFrameToken().value());
 
   if (!trigger_manager_->StartCollectingThreatDetails(
           TriggerType::AD_SAMPLE, web_contents(), resource, url_loader_factory_,
-          history_service_, referrer_chain_provider_, error_options)) {
+          history_service_, referrer_chain_provider_, permissions)) {
     UMA_HISTOGRAM_ENUMERATION(kAdSamplerTriggerActionMetricName,
                               NO_SAMPLE_COULD_NOT_START_REPORT, MAX_ACTIONS);
     return;
@@ -155,12 +162,18 @@ void AdSamplerTrigger::CreateAdSampleReport() {
       base::BindOnce(
           IgnoreResult(&TriggerManager::FinishCollectingThreatDetails),
           base::Unretained(trigger_manager_), TriggerType::AD_SAMPLE,
-          base::Unretained(web_contents()), base::TimeDelta(),
-          /*did_proceed=*/false, /*num_visits=*/0, error_options),
-      base::TimeDelta::FromMilliseconds(finish_report_delay_ms_));
+          GetWebContentsKey(web_contents()), base::TimeDelta(),
+          /*did_proceed=*/false, /*num_visits=*/0, permissions,
+          /*warning_shown_ts=*/std::nullopt,
+          /*is_hats_candidate=*/false),
+      base::Milliseconds(finish_report_delay_ms_));
 
   UMA_HISTOGRAM_ENUMERATION(kAdSamplerTriggerActionMetricName, AD_SAMPLED,
                             MAX_ACTIONS);
+}
+
+size_t AdSamplerTrigger::GetSamplerFrequencyDenominatorForTest() {
+  return GetSamplerFrequencyDenominator();
 }
 
 void AdSamplerTrigger::SetSamplerFrequencyForTest(size_t denominator) {
@@ -168,10 +181,8 @@ void AdSamplerTrigger::SetSamplerFrequencyForTest(size_t denominator) {
 }
 
 void AdSamplerTrigger::SetTaskRunnerForTest(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
   task_runner_ = task_runner;
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(AdSamplerTrigger)
 
 }  // namespace safe_browsing

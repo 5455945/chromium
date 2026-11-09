@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,7 +40,7 @@ DrmDumbBuffer::~DrmDumbBuffer() {
 }
 
 bool DrmDumbBuffer::Initialize(const SkImageInfo& info) {
-  DCHECK(!handle_);
+  CHECK(!handle_, base::NotFatalUntil::M163);
 
   if (!drm_->CreateDumbBuffer(info, &handle_, &stride_)) {
     PLOG(ERROR) << "DrmDumbBuffer: CreateDumbBuffer: width " << info.width()
@@ -54,7 +54,7 @@ bool DrmDumbBuffer::Initialize(const SkImageInfo& info) {
 }
 
 bool DrmDumbBuffer::InitializeFromFramebuffer(uint32_t framebuffer_id) {
-  DCHECK(!handle_);
+  CHECK(!handle_, base::NotFatalUntil::M163);
 
   ScopedDrmFramebufferPtr framebuffer(drm_->GetFramebuffer(framebuffer_id));
   if (!framebuffer)
@@ -90,7 +90,7 @@ bool DrmDumbBuffer::MapDumbBuffer(const SkImageInfo& info) {
   }
 
   SkSurfaceProps props = skia::LegacyDisplayGlobals::GetSkSurfaceProps();
-  surface_ = SkSurface::MakeRasterDirect(info, mmap_base_, stride_, &props);
+  surface_ = SkSurfaces::WrapPixels(info, mmap_base_, stride_, &props);
   if (!surface_) {
     LOG(ERROR) << "DrmDumbBuffer: Failed to create SkSurface: handle "
                << handle_;

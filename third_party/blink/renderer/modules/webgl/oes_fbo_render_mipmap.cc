@@ -1,15 +1,20 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/webgl/oes_fbo_render_mipmap.h"
 
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
-OESFboRenderMipmap::OESFboRenderMipmap(WebGLRenderingContextBase* context)
+OESFboRenderMipmap::OESFboRenderMipmap(WebGLRenderingContextBase* context,
+                                       ExecutionContext* execution_context)
     : WebGLExtension(context) {
+  UseCounter::CountWebDXFeature(execution_context,
+                                WebDXFeature::kOesFboRenderMipmap);
   context->ExtensionsUtil()->EnsureExtensionEnabled("GL_OES_fbo_render_mipmap");
 }
 

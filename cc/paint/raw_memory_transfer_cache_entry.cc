@@ -1,11 +1,13 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/paint/raw_memory_transfer_cache_entry.h"
 
-#include <string.h>
 #include <utility>
+
+#include "base/check_op.h"
+#include "base/containers/span.h"
 
 namespace cc {
 
@@ -34,7 +36,7 @@ bool ClientRawMemoryTransferCacheEntry::Serialize(
   if (data.size() < data_.size())
     return false;
 
-  memcpy(data.data(), data_.data(), data_.size());
+  data.copy_prefix_from(data_);
   return true;
 }
 
@@ -49,6 +51,7 @@ size_t ServiceRawMemoryTransferCacheEntry::CachedSize() const {
 
 bool ServiceRawMemoryTransferCacheEntry::Deserialize(
     GrDirectContext* context,
+    skgpu::graphite::Recorder* graphite_recorder,
     base::span<const uint8_t> data) {
   data_ = std::vector<uint8_t>(data.begin(), data.end());
   return true;

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 
 #include "remoting/protocol/webrtc_frame_scheduler.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/task_environment.h"
 #include "remoting/base/session_options.h"
 #include "remoting/protocol/frame_stats.h"
-#include "remoting/protocol/webrtc_dummy_video_encoder.h"
-#include "remoting/protocol/webrtc_frame_scheduler_simple.h"
+#include "remoting/protocol/webrtc_frame_scheduler_constant_rate.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 
@@ -19,152 +18,98 @@ using webrtc::BasicDesktopFrame;
 using webrtc::DesktopRect;
 using webrtc::DesktopSize;
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 class WebrtcFrameSchedulerTest : public ::testing::Test {
  public:
-  WebrtcFrameSchedulerTest()
-      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
-        frame_(DesktopSize(1, 1)) {
-    // Default ctor starts clock with null TimeTicks, which confuses
-    // the scheduler, so use the current time as a baseline.
-    task_environment_.FastForwardBy(base::Time::NowFromSystemTime() -
-                                    base::Time());
-
-    scheduler_ = std::make_unique<WebrtcFrameSchedulerSimple>(SessionOptions());
-    scheduler_->SetTickClockForTest(task_environment_.GetMockTickClock());
-    scheduler_->Start(
-        base::BindRepeating(&WebrtcFrameSchedulerTest::CaptureCallback,
-                            base::Unretained(this)));
-    scheduler_->OnEncoderReady();
-  }
+  WebrtcFrameSchedulerTest() = default;
   ~WebrtcFrameSchedulerTest() override = default;
+
+  void InitConstantRateScheduler() {
+    scheduler_ = std::make_unique<WebrtcFrameSchedulerConstantRate>();
+    scheduler_->SetPostTaskAdjustmentForTest(base::Milliseconds(0));
+    scheduler_->Start(base::BindRepeating(
+        &WebrtcFrameSchedulerTest::CaptureCallback, base::Unretained(this)));
+  }
 
   void CaptureCallback() {
     capture_callback_count_++;
 
     if (simulate_capture_) {
-      // Simulate a completed capture and encode.
-      WebrtcVideoEncoder::FrameParams out_params;
-      scheduler_->OnFrameCaptured(&frame_, &out_params);
-      WebrtcVideoEncoder::EncodedFrame encoded;
-      encoded.key_frame = out_params.key_frame;
-      encoded.data = 'X';
-      scheduler_->OnFrameEncoded(WebrtcVideoEncoder::EncodeResult::SUCCEEDED,
-                                 &encoded);
-      scheduler_->GetSchedulerStats(frame_stats_);
+      scheduler_->OnFrameCaptured(&frame_);
     }
   }
 
  protected:
-  base::test::TaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
-  std::unique_ptr<WebrtcFrameSchedulerSimple> scheduler_;
+  std::unique_ptr<WebrtcFrameSchedulerConstantRate> scheduler_;
 
   int capture_callback_count_ = 0;
-  bool simulate_capture_ = false;
-  BasicDesktopFrame frame_;
-  HostFrameStats frame_stats_;
+  bool simulate_capture_ = true;
+  BasicDesktopFrame frame_{DesktopSize(1, 1), webrtc::FOURCC_ARGB};
 };
 
-TEST_F(WebrtcFrameSchedulerTest, UpdateBitrateWhenPending) {
-  scheduler_->OnKeyFrameRequested();
-  scheduler_->OnTargetBitrateChanged(100);
+TEST_F(WebrtcFrameSchedulerTest, NoCapturesIfZeroFps) {
+  InitConstantRateScheduler();
+  scheduler_->SetMaxFramerateFps(0);
 
-  EXPECT_FALSE(task_environment_.MainThreadIsIdle());
-  task_environment_.FastForwardUntilNoTasksRemain();
+  task_environment_.FastForwardBy(base::Seconds(1));
 
-  EXPECT_EQ(1, capture_callback_count_);
-
-  scheduler_->OnTargetBitrateChanged(1001);
-
-  // There shouldn't be any pending tasks as the scheduler should be waiting for
-  // the previous capture request to complete.
-  EXPECT_TRUE(task_environment_.MainThreadIsIdle());
+  EXPECT_EQ(capture_callback_count_, 0);
 }
 
-TEST_F(WebrtcFrameSchedulerTest, EmptyFrameUpdate_ShouldNotBeSentImmediately) {
-  // Needed to avoid DCHECK in OnFrameCaptured().
-  scheduler_->OnTargetBitrateChanged(100);
+TEST_F(WebrtcFrameSchedulerTest, CapturesAtRequestedFramerate) {
+  InitConstantRateScheduler();
+  scheduler_->SetMaxFramerateFps(60);
 
-  WebrtcVideoEncoder::FrameParams out_params;
+  task_environment_.FastForwardBy(base::Seconds(1));
 
-  // Initial capture, full frame.
-  frame_.mutable_updated_region()->SetRect(DesktopRect::MakeWH(1, 1));
-
-  // Wait long enough to schedule a capture. OnFrameCaptured() must only be
-  // called after the scheduler has requested a screen capture.
-  task_environment_.FastForwardBy(base::TimeDelta::FromMilliseconds(100));
-  ASSERT_EQ(capture_callback_count_, 1);
-  scheduler_->OnFrameCaptured(&frame_, &out_params);
-
-  // Empty frame.
-  frame_.mutable_updated_region()->Clear();
-  scheduler_->OnEncoderReady();  // Trigger scheduling another capture.
-  task_environment_.FastForwardBy(base::TimeDelta::FromMilliseconds(100));
-  ASSERT_EQ(capture_callback_count_, 2);
-  bool result = scheduler_->OnFrameCaptured(&frame_, &out_params);
-
-  // Should not be sent, because of throttling of empty frames.
-  EXPECT_FALSE(result);
+  // There should be approximately 60 captures in 1 second, making an allowance
+  // for any off-by-one artifacts in timing.
+  EXPECT_LE(59, capture_callback_count_);
+  EXPECT_LE(capture_callback_count_, 61);
 }
 
-TEST_F(WebrtcFrameSchedulerTest, EmptyFrameUpdate_ShouldBeSentAfter2000ms) {
-  // Identical to the previous test, except it waits a short amount of time
-  // before the empty frame update.
-  scheduler_->OnTargetBitrateChanged(100);
+TEST_F(WebrtcFrameSchedulerTest, PostTaskAdjustmentApplied) {
+  InitConstantRateScheduler();
+  scheduler_->SetPostTaskAdjustmentForTest(base::Milliseconds(3));
+  scheduler_->SetMaxFramerateFps(30);
 
-  WebrtcVideoEncoder::FrameParams out_params;
+  task_environment_.FastForwardBy(base::Seconds(1));
 
-  // Initial capture, full frame.
-  frame_.mutable_updated_region()->SetRect(DesktopRect::MakeWH(1, 1));
-  task_environment_.FastForwardBy(base::TimeDelta::FromMilliseconds(100));
-  ASSERT_EQ(capture_callback_count_, 1);
-  scheduler_->OnFrameCaptured(&frame_, &out_params);
-  // Empty frame.
-  frame_.mutable_updated_region()->Clear();
-  scheduler_->OnEncoderReady();
-  // Wait more than 2000ms.
-  task_environment_.FastForwardBy(base::TimeDelta::FromMilliseconds(3000));
-  ASSERT_EQ(capture_callback_count_, 2);
-  bool result = scheduler_->OnFrameCaptured(&frame_, &out_params);
-
-  // Empty frames should be sent at the throttled rate.
-  EXPECT_TRUE(result);
+  // There should be approximately ~33 captures in 1 second, making an allowance
+  // for any off-by-one artifacts in timing.
+  EXPECT_GE(capture_callback_count_, 32);
+  EXPECT_LE(capture_callback_count_, 34);
 }
 
-TEST_F(WebrtcFrameSchedulerTest, Capturer_RunsAt30Fps) {
-  simulate_capture_ = true;
+TEST_F(WebrtcFrameSchedulerTest, NoCaptureWhileCapturePending) {
+  InitConstantRateScheduler();
+  simulate_capture_ = false;
+  scheduler_->SetMaxFramerateFps(60);
 
-  scheduler_->OnTargetBitrateChanged(100);
+  task_environment_.FastForwardBy(base::Seconds(1));
 
-  // Have the capturer return non-empty frames each time.
-  frame_.mutable_updated_region()->SetRect(DesktopRect::MakeWH(1, 1));
-
-  // Ensure the encoder is ready, otherwise the scheduler will not trigger
-  // repeated captures.
-  scheduler_->OnKeyFrameRequested();
-
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(1));
-
-  // There should be approximately 30 captures in 1 second.
-  EXPECT_LE(29, capture_callback_count_);
-  EXPECT_LE(capture_callback_count_, 31);
+  // Only 1 capture callback, because the fake "capturer" never returns a
+  // captured frame. The scheduler should only do 1 capture at a time.
+  EXPECT_EQ(capture_callback_count_, 1);
 }
 
-TEST_F(WebrtcFrameSchedulerTest, RttReportedInFrameStats) {
-  simulate_capture_ = true;
-  scheduler_->OnKeyFrameRequested();
-  scheduler_->OnTargetBitrateChanged(100);
-  frame_.mutable_updated_region()->SetRect(DesktopRect::MakeWH(1, 1));
-  auto rtt = base::TimeDelta::FromMilliseconds(123);
-  scheduler_->OnRttUpdate(rtt);
+TEST_F(WebrtcFrameSchedulerTest, NoCaptureWhilePaused) {
+  InitConstantRateScheduler();
+  scheduler_->SetMaxFramerateFps(60);
+  scheduler_->Pause(true);
 
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(1));
+  task_environment_.FastForwardBy(base::Seconds(1));
 
-  EXPECT_EQ(rtt, frame_stats_.rtt_estimate);
+  EXPECT_EQ(capture_callback_count_, 0);
+
+  scheduler_->Pause(false);
+  task_environment_.FastForwardBy(base::Seconds(1));
+
+  EXPECT_LE(1, capture_callback_count_);
 }
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

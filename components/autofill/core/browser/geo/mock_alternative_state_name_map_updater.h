@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,14 @@ namespace autofill {
 
 // MockAlternativeStateNameMapUpdater for testing AlternativeStateNameMap
 class MockAlternativeStateNameMapUpdater
-    : public autofill::AlternativeStateNameMapUpdater {
+    : public AlternativeStateNameMapUpdater {
  public:
   ~MockAlternativeStateNameMapUpdater() override;
-  MockAlternativeStateNameMapUpdater(
-      base::OnceClosure callback,
-      PrefService* local_state,
-      autofill::PersonalDataManager* personal_data_manager);
+  MockAlternativeStateNameMapUpdater(base::OnceClosure callback,
+                                     AddressDataManager* address_data_manager);
 
-  // PersonalDataManagerObserver
-  void OnPersonalDataFinishedProfileTasks() override;
+  // AddressDataManager::Observer:
+  void OnAddressDataChanged() override;
 
   base::OnceClosure callback_;
 };

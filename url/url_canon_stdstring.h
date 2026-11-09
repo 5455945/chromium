@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,11 @@
 // we have segregated it here.
 
 #include <string>
+#include <string_view>
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
 #include "url/url_canon.h"
 
 namespace url {
@@ -37,72 +37,21 @@ namespace url {
 class COMPONENT_EXPORT(URL) StdStringCanonOutput : public CanonOutput {
  public:
   StdStringCanonOutput(std::string* str);
+
+  StdStringCanonOutput(const StdStringCanonOutput&) = delete;
+  StdStringCanonOutput& operator=(const StdStringCanonOutput&) = delete;
+
   ~StdStringCanonOutput() override;
 
   // Must be called after writing has completed but before the string is used.
   void Complete();
 
-  void Resize(int sz) override;
+  void Resize(size_t sz) override;
 
  protected:
-  std::string* str_;
-  DISALLOW_COPY_AND_ASSIGN(StdStringCanonOutput);
-};
-
-// An extension of the Replacements class that allows the setters to use
-// StringPieces (implicitly allowing strings or char*s).
-//
-// The contents of the StringPieces are not copied and must remain valid until
-// the StringPieceReplacements object goes out of scope.
-//
-// In order to make it harder to misuse the API the setters do not accept rvalue
-// references to std::strings.
-// Note: Extra const char* overloads are necessary to break ambiguities that
-// would otherwise exist for char literals.
-template <typename CharT>
-class StringPieceReplacements : public Replacements<CharT> {
- private:
-  using StringT = std::basic_string<CharT>;
-  using StringPieceT = base::BasicStringPiece<CharT>;
-  using ParentT = Replacements<CharT>;
-  using SetterFun = void (ParentT::*)(const CharT*, const Component&);
-
-  void SetImpl(SetterFun fun, StringPieceT str) {
-    (this->*fun)(str.data(), Component(0, static_cast<int>(str.size())));
-  }
-
- public:
-  void SetSchemeStr(const CharT* str) { SetImpl(&ParentT::SetScheme, str); }
-  void SetSchemeStr(StringPieceT str) { SetImpl(&ParentT::SetScheme, str); }
-  void SetSchemeStr(const StringT&&) = delete;
-
-  void SetUsernameStr(const CharT* str) { SetImpl(&ParentT::SetUsername, str); }
-  void SetUsernameStr(StringPieceT str) { SetImpl(&ParentT::SetUsername, str); }
-  void SetUsernameStr(const StringT&&) = delete;
-
-  void SetPasswordStr(const CharT* str) { SetImpl(&ParentT::SetPassword, str); }
-  void SetPasswordStr(StringPieceT str) { SetImpl(&ParentT::SetPassword, str); }
-  void SetPasswordStr(const StringT&&) = delete;
-
-  void SetHostStr(const CharT* str) { SetImpl(&ParentT::SetHost, str); }
-  void SetHostStr(StringPieceT str) { SetImpl(&ParentT::SetHost, str); }
-  void SetHostStr(const StringT&&) = delete;
-
-  void SetPortStr(const CharT* str) { SetImpl(&ParentT::SetPort, str); }
-  void SetPortStr(StringPieceT str) { SetImpl(&ParentT::SetPort, str); }
-  void SetPortStr(const StringT&&) = delete;
-
-  void SetPathStr(const CharT* str) { SetImpl(&ParentT::SetPath, str); }
-  void SetPathStr(StringPieceT str) { SetImpl(&ParentT::SetPath, str); }
-  void SetPathStr(const StringT&&) = delete;
-
-  void SetQueryStr(const CharT* str) { SetImpl(&ParentT::SetQuery, str); }
-  void SetQueryStr(StringPieceT str) { SetImpl(&ParentT::SetQuery, str); }
-  void SetQueryStr(const StringT&&) = delete;
-
-  void SetRefStr(const CharT* str) { SetImpl(&ParentT::SetRef, str); }
-  void SetRefStr(StringPieceT str) { SetImpl(&ParentT::SetRef, str); }
-  void SetRefStr(const StringT&&) = delete;
+  // `str_` uses UnprotectedInRelease for performance reasons (based on
+  // analysis of sampling profiler data and tab_search:top100:2020).
+  raw_ptr<std::string, UnprotectedInRelease> str_;
 };
 
 }  // namespace url

@@ -1,9 +1,7 @@
-#!/usr/bin/env python
-# Copyright 2013 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
-from __future__ import print_function
 
 import collections
 import logging
@@ -11,8 +9,7 @@ import optparse
 import os
 import sys
 
-_SRC_PATH = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '..', '..'))
+_SRC_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 sys.path.append(os.path.join(_SRC_PATH, 'third_party', 'catapult', 'devil'))
 from devil.android import device_errors
@@ -30,33 +27,41 @@ DEFAULT_BROWSER = 'chrome'
 # Action Constants
 ACTION_PACKAGE = 'org.chromium.base'
 ACTION_TRIM = {
-    'moderate' : ACTION_PACKAGE + '.ACTION_TRIM_MEMORY_MODERATE',
-    'critical' : ACTION_PACKAGE + '.ACTION_TRIM_MEMORY_RUNNING_CRITICAL',
-    'complete' : ACTION_PACKAGE + '.ACTION_TRIM_MEMORY'
+  'moderate': ACTION_PACKAGE + '.ACTION_TRIM_MEMORY_MODERATE',
+  'critical': ACTION_PACKAGE + '.ACTION_TRIM_MEMORY_RUNNING_CRITICAL',
+  'complete': ACTION_PACKAGE + '.ACTION_TRIM_MEMORY',
 }
 ACTION_LOW = ACTION_PACKAGE + '.ACTION_LOW_MEMORY'
 
 # Command Line Constants
 ENABLE_TEST_INTENTS_FLAG = '--enable-test-intents'
 
+
 def main(argv):
   option_parser = optparse.OptionParser()
-  option_parser.add_option('-l',
-                           '--low',
-                           help='Simulate Activity#onLowMemory()',
-                           action='store_true')
-  option_parser.add_option('-t',
-                           '--trim',
-                           help=('Simulate Activity#onTrimMemory(...) with ' +
-                                 ', '.join(ACTION_TRIM.keys())),
-                           type='string')
-  option_parser.add_option('-b',
-                           '--browser',
-                           default=DEFAULT_BROWSER,
-                           help=('Which browser to use. One of ' +
-                                 ', '.join(constants.PACKAGE_INFO.keys()) +
-                                 ' [default: %default]'),
-                           type='string')
+  option_parser.add_option(
+    '-l', '--low', help='Simulate Activity#onLowMemory()', action='store_true'
+  )
+  option_parser.add_option(
+    '-t',
+    '--trim',
+    help=(
+      'Simulate Activity#onTrimMemory(...) with '
+      + ', '.join(ACTION_TRIM.keys())
+    ),
+    type='string',
+  )
+  option_parser.add_option(
+    '-b',
+    '--browser',
+    default=DEFAULT_BROWSER,
+    help=(
+      'Which browser to use. One of '
+      + ', '.join(constants.PACKAGE_INFO.keys())
+      + ' [default: %default]'
+    ),
+    type='string',
+  )
 
   (options, args) = option_parser.parse_args(argv)
 
@@ -82,7 +87,7 @@ def main(argv):
     option_parser.print_help()
     sys.exit(1)
 
-  if not options.browser in constants.PACKAGE_INFO.keys():
+  if options.browser not in constants.PACKAGE_INFO.keys():
     option_parser.error('Unknown browser option ' + options.browser)
 
   devil_chromium.Initialize()
@@ -109,8 +114,10 @@ def main(argv):
   flags = flag_changer.FlagChanger(device, package_info.cmdline_file)
   flags.AddFlags([ENABLE_TEST_INTENTS_FLAG])
 
-  device.StartActivity(intent.Intent(package=package, activity=activity,
-                                     action=action))
+  device.StartActivity(
+    intent.Intent(package=package, activity=activity, action=action)
+  )
+
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv))

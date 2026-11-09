@@ -1,13 +1,17 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_WM_CORE_NATIVE_CURSOR_MANAGER_DELEGATE_H_
 #define UI_WM_CORE_NATIVE_CURSOR_MANAGER_DELEGATE_H_
 
-#include "ui/base/cursor/cursor.h"
-#include "ui/gfx/native_widget_types.h"
-#include "ui/wm/core/wm_core_export.h"
+#include "base/component_export.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/native_ui_types.h"
+
+namespace gfx {
+class Size;
+}
 
 namespace ui {
 enum class CursorSize;
@@ -18,7 +22,7 @@ namespace wm {
 // The non-public interface that CursorManager exposes to its users. This
 // gives accessors to all the current state, and mutators to all the current
 // state.
-class WM_CORE_EXPORT NativeCursorManagerDelegate {
+class COMPONENT_EXPORT(UI_WM) NativeCursorManagerDelegate {
  public:
   virtual ~NativeCursorManagerDelegate() {}
 
@@ -29,7 +33,11 @@ class WM_CORE_EXPORT NativeCursorManagerDelegate {
   virtual void CommitCursor(gfx::NativeCursor cursor) = 0;
   virtual void CommitVisibility(bool visible) = 0;
   virtual void CommitCursorSize(ui::CursorSize cursor_size) = 0;
+  virtual void CommitLargeCursorSizeInDip(int large_cursor_size_in_dip) = 0;
+  virtual void CommitCursorColor(SkColor color) = 0;
   virtual void CommitMouseEventsEnabled(bool enabled) = 0;
+  virtual void CommitSystemCursorSize(const gfx::Size& cursor_size) = 0;
+  virtual void CommitSystemCursorVisibility(bool visible) = 0;
 };
 
 }  // namespace wm

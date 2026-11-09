@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,11 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "chrome/utility/safe_browsing/mac/rust/ffi.rs.h"
 
 namespace safe_browsing {
 
@@ -55,6 +57,10 @@ class MachOImageReader {
   static bool IsMachOMagicValue(uint32_t magic);
 
   MachOImageReader();
+
+  MachOImageReader(const MachOImageReader&) = delete;
+  MachOImageReader& operator=(const MachOImageReader&) = delete;
+
   ~MachOImageReader();
 
   // Initializes the instance and verifies that the data is a valid Mach-O
@@ -62,7 +68,7 @@ class MachOImageReader {
   // remain valid for the lifetime of this object. Returns true if the
   // instance is initialized and valid, false if the file could not be parsed
   // as a Mach-O image.
-  bool Initialize(const uint8_t* image, size_t image_size);
+  bool Initialize(base::span<const uint8_t> image);
 
   // Returns whether this is a fat Mach-O image. If this returns true, it is
   // only valid to call GetFatImages() and none of the other methods.
@@ -83,22 +89,31 @@ class MachOImageReader {
   uint32_t GetFileType();
 
   // Returns an array of all the load commands in the image.
-  const std::vector<MachOImageReader::LoadCommand>& GetLoadCommands();
+  std::vector<MachOImageReader::LoadCommand> GetLoadCommands();
 
   // If the image has a LC_CODE_SIGNATURE command, this retreives the code
   // signature blob in the __LINKEDIT segment.
   bool GetCodeSignatureInfo(std::vector<uint8_t>* info);
 
  private:
-  std::unique_ptr<ByteSlice> data_;
+  // Constructs a child image reader wrapping an extracted Rust fat
+  // architecture slice.
+  explicit MachOImageReader(
+      ::rust::Box<dmg::rust_ffi::RustMachOImageReader> rust_reader);
 
-  bool is_fat_;
+  std::optional<::rust::Box<dmg::rust_ffi::RustMachOImageReader>> rust_reader_;
+
+  // Owns the child `MachOImageReader` instances returned as non-owning raw
+  // pointers by `GetFatImages()`. Used by both the C++ and Rust paths; when
+  // `rust_reader_` is active, each child `MachOImageReader` is a thin wrapper
+  // around a child `RustMachOImageReader` slice.
   std::vector<std::unique_ptr<MachOImageReader>> fat_images_;
 
-  bool is_64_bit_;
+  // Used only when `kSafeBrowsingRustDmgParser` is disabled.
+  std::unique_ptr<ByteSlice> data_;
+  bool is_fat_ = false;
+  bool is_64_bit_ = false;
   std::vector<LoadCommand> commands_;
-
-  DISALLOW_COPY_AND_ASSIGN(MachOImageReader);
 };
 
 }  // namespace safe_browsing

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 #define CHROME_BROWSER_PROFILE_RESETTER_RESET_REPORT_UPLOADER_H_
 
 #include <list>
+#include <optional>
+#include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "url/gurl.h"
 
@@ -21,11 +22,19 @@ namespace reset_report {
 class ChromeResetReport;
 }
 
+namespace net {
+class HttpResponseHeaders;
+}
+
 // Service whose job is up upload ChromeResetReports.
 class ResetReportUploader : public KeyedService {
  public:
   explicit ResetReportUploader(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
+  ResetReportUploader(const ResetReportUploader&) = delete;
+  ResetReportUploader& operator=(const ResetReportUploader&) = delete;
+
   ~ResetReportUploader() override;
 
   void DispatchReport(const reset_report::ChromeResetReport& report);
@@ -39,12 +48,10 @@ class ResetReportUploader : public KeyedService {
       std::list<std::unique_ptr<network::SimpleURLLoader>>;
 
   void OnSimpleLoaderComplete(SimpleURLLoaderList::iterator it,
-                              std::unique_ptr<std::string> response_body);
+                              scoped_refptr<net::HttpResponseHeaders> headers);
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   SimpleURLLoaderList simple_url_loaders_;
-
-  DISALLOW_COPY_AND_ASSIGN(ResetReportUploader);
 };
 
 #endif  // CHROME_BROWSER_PROFILE_RESETTER_RESET_REPORT_UPLOADER_H_

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,9 @@ class NativeEnum_Data {
 
   static bool IsKnownValue(int32_t value) { return false; }
 
-  static bool Validate(int32_t value,
-                       ValidationContext* validation_context) { return true; }
+  static bool Validate(int32_t value, ValidationContext* validation_context) {
+    return true;
+  }
 };
 
 }  // namespace internal

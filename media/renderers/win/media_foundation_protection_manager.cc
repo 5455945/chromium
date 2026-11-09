@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #include <windows.foundation.h>
 
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/scoped_hstring.h"
 #include "base/win/windows_types.h"
+#include "media/base/win/hresults.h"
 #include "media/base/win/mf_helpers.h"
 
 namespace media {
@@ -36,9 +36,6 @@ HRESULT MediaFoundationProtectionManager::RuntimeClassInitialize(
   task_runner_ = std::move(task_runner);
   waiting_cb_ = std::move(waiting_cb);
 
-  if (!base::win::ScopedHString::ResolveCoreWinRTStringDelayload())
-    return E_FAIL;
-
   // Init an empty |property_set_| as MFMediaEngine could access it via
   // |get_Properties| before we populate it within SetPMPServer.
   base::win::ScopedHString property_set_id = base::win::ScopedHString::Create(
@@ -46,6 +43,18 @@ HRESULT MediaFoundationProtectionManager::RuntimeClassInitialize(
   RETURN_IF_FAILED(
       base::win::RoActivateInstance(property_set_id.get(), &property_set_));
   return S_OK;
+}
+
+IFACEMETHODIMP_(ULONG) MediaFoundationProtectionManager::Release() {
+  ULONG ref_count = InternalRelease();
+  if (ref_count == 0) {
+    if (task_runner_ && !task_runner_->RunsTasksInCurrentSequence()) {
+      task_runner_->DeleteSoon(FROM_HERE, this);
+    } else {
+      delete this;
+    }
+  }
+  return ref_count;
 }
 
 HRESULT MediaFoundationProtectionManager::SetCdmProxy(
@@ -203,7 +212,7 @@ void MediaFoundationProtectionManager::OnBeginEnableContent() {
 
   // If EnableContent takes too long, report waiting for key status. Choose a
   // timeout of 500ms to be on the safe side, e.g. on slower machines.
-  const auto kWaitingForKeyTimeOut = base::TimeDelta::FromMilliseconds(500);
+  const auto kWaitingForKeyTimeOut = base::Milliseconds(500);
 
   waiting_for_key_time_out_cb_.Reset(
       base::BindOnce(&MediaFoundationProtectionManager::OnWaitingForKeyTimeOut,

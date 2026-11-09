@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,19 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/files/file.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/data_element.h"
-#include "services/network/public/mojom/url_loader.mojom-shared.h"
-#include "url/gurl.h"
+#include "services/network/public/mojom/chunked_data_pipe_getter.mojom-shared.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom-shared.h"
+#include "services/network/public/mojom/url_request.mojom-shared.h"
+
+namespace base {
+class Time;
+}
 
 namespace blink {
 namespace mojom {
@@ -35,12 +40,19 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequestBody
 
   ResourceRequestBody();
 
-  // Creates ResourceRequestBody that holds a copy of |bytes|.
-  static scoped_refptr<ResourceRequestBody> CreateFromBytes(const char* bytes,
-                                                            size_t length);
+  ResourceRequestBody(const ResourceRequestBody&) = delete;
+  ResourceRequestBody& operator=(const ResourceRequestBody&) = delete;
 
-  void AppendBytes(std::vector<uint8_t> bytes);
-  void AppendBytes(const char* bytes, int bytes_len);
+  // Creates ResourceRequestBody that holds a copy of |bytes|.
+  static scoped_refptr<ResourceRequestBody> CreateFromCopyOfBytes(
+      base::span<const uint8_t> bytes);
+
+  // Move version of above, that avoid a copy.
+  static scoped_refptr<ResourceRequestBody> CreateFromBytes(
+      std::vector<uint8_t>&& bytes);
+
+  void AppendBytes(std::vector<uint8_t>&& bytes);
+  void AppendCopyOfBytes(base::span<const uint8_t> bytes);
   void AppendFileRange(const base::FilePath& file_path,
                        uint64_t offset,
                        uint64_t length,
@@ -111,9 +123,7 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequestBody
 
   bool contains_sensitive_info_;
 
-  bool allow_http1_for_streaming_upload_ = true;
-
-  DISALLOW_COPY_AND_ASSIGN(ResourceRequestBody);
+  bool allow_http1_for_streaming_upload_ = false;
 };
 
 }  // namespace network

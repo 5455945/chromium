@@ -1,10 +1,14 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content_shell;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
+import android.graphics.Rect;
 import android.graphics.drawable.ClipDrawable;
 import android.text.TextUtils;
 import android.util.AttributeSet;
@@ -22,34 +26,53 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.TextView.OnEditorActionListener;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Callback;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.components.embedder_support.view.ContentViewRenderView;
+import org.chromium.content_public.browser.ActionModeCallback;
 import org.chromium.content_public.browser.ActionModeCallbackHelper;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.SelectionMenuItem;
 import org.chromium.content_public.browser.SelectionPopupController;
+import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.base.WindowAndroid;
 
-/**
- * Container for the various UI components that make up a shell window.
- */
+/** Container for the various UI components that make up a shell window. */
 @JNINamespace("content")
+@NullMarked
 public class Shell extends LinearLayout {
 
     private static final long COMPLETED_PROGRESS_TIMEOUT_MS = 200;
 
-    private final Runnable mClearProgressRunnable = new Runnable() {
-        @Override
-        public void run() {
-            mProgressDrawable.setLevel(0);
-        }
-    };
+    // Stylus handwriting: Setting this ime option instructs stylus writing service to restrict
+    // capturing writing events slightly outside the Url bar area. This is needed to prevent stylus
+    // handwriting in inputs in web content area that are very close to url bar area, from being
+    // committed to Url bar's Edit text. Ex: google.com search field.
+    private static final String IME_OPTION_RESTRICT_STYLUS_WRITING_AREA =
+            "restrictDirectWritingArea=true";
+
+    private final Runnable mClearProgressRunnable =
+            new Runnable() {
+                @Override
+                public void run() {
+                    mProgressDrawable.setLevel(0);
+                }
+            };
 
     private WebContents mWebContents;
     private NavigationController mNavigationController;
@@ -60,34 +83,34 @@ public class Shell extends LinearLayout {
 
     private ClipDrawable mProgressDrawable;
 
-    private long mNativeShell;
-    private ContentViewRenderView mContentViewRenderView;
-    private WindowAndroid mWindow;
-    private ShellViewAndroidDelegate mViewAndroidDelegate;
+    @JniType("::content::Shell")
+    interface NativeShell extends JniTypeToken {}
+
+    private @Nullable JniRawPtr<NativeShell> mNativeShell;
+    private @Nullable ContentViewRenderView mContentViewRenderView;
+    private @Nullable WindowAndroid mWindow;
+    private @Nullable ShellViewAndroidDelegate mViewAndroidDelegate;
 
     private boolean mLoading;
     private boolean mIsFullscreen;
 
-    private Callback<Boolean> mOverlayModeChangedCallbackForTesting;
+    private @Nullable Callback<Boolean> mOverlayModeChangedCallbackForTesting;
 
-    /**
-     * Constructor for inflating via XML.
-     */
+    /** Constructor for inflating via XML. */
     public Shell(Context context, AttributeSet attrs) {
         super(context, attrs);
     }
 
-    /**
-     * Set the SurfaceView being renderered to as soon as it is available.
-     */
-    public void setContentViewRenderView(ContentViewRenderView contentViewRenderView) {
+    /** Set the SurfaceView being rendered to as soon as it is available. */
+    public void setContentViewRenderView(@Nullable ContentViewRenderView contentViewRenderView) {
         FrameLayout contentViewHolder = (FrameLayout) findViewById(R.id.contentview_holder);
         if (contentViewRenderView == null) {
             if (mContentViewRenderView != null) {
                 contentViewHolder.removeView(mContentViewRenderView);
             }
         } else {
-            contentViewHolder.addView(contentViewRenderView,
+            contentViewHolder.addView(
+                    contentViewRenderView,
                     new FrameLayout.LayoutParams(
                             FrameLayout.LayoutParams.MATCH_PARENT,
                             FrameLayout.LayoutParams.MATCH_PARENT));
@@ -101,7 +124,7 @@ public class Shell extends LinearLayout {
      * @param nativeShell The pointer to the native Shell object.
      * @param window The owning window for this shell.
      */
-    public void initialize(long nativeShell, WindowAndroid window) {
+    public void initialize(JniRawPtr<NativeShell> nativeShell, WindowAndroid window) {
         mNativeShell = nativeShell;
         mWindow = window;
     }
@@ -111,14 +134,18 @@ public class Shell extends LinearLayout {
      * dependencies.
      */
     public void close() {
-        if (mNativeShell == 0) return;
+        if (mNativeShell == null) return;
         ShellJni.get().closeShell(mNativeShell);
     }
 
+    @SuppressWarnings("NullAway")
     @CalledByNative
-    private void onNativeDestroyed() {
+    void onNativeDestroyed() {
         mWindow = null;
-        mNativeShell = 0;
+        if (mNativeShell != null) {
+            mNativeShell.release();
+            mNativeShell = null;
+        }
         mWebContents = null;
     }
 
@@ -127,7 +154,7 @@ public class Shell extends LinearLayout {
      * @see #onNativeDestroyed()
      */
     public boolean isDestroyed() {
-        return mNativeShell == 0;
+        return mNativeShell == null;
     }
 
     /**
@@ -149,42 +176,47 @@ public class Shell extends LinearLayout {
 
     private void initializeUrlField() {
         mUrlTextView = (EditText) findViewById(R.id.url);
-        mUrlTextView.setOnEditorActionListener(new OnEditorActionListener() {
-            @Override
-            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                if ((actionId != EditorInfo.IME_ACTION_GO) && (event == null
-                        || event.getKeyCode() != KeyEvent.KEYCODE_ENTER
-                        || event.getAction() != KeyEvent.ACTION_DOWN)) {
-                    return false;
-                }
-                loadUrl(mUrlTextView.getText().toString());
-                setKeyboardVisibilityForUrl(false);
-                getContentView().requestFocus();
-                return true;
-            }
-        });
-        mUrlTextView.setOnFocusChangeListener(new OnFocusChangeListener() {
-            @Override
-            public void onFocusChange(View v, boolean hasFocus) {
-                setKeyboardVisibilityForUrl(hasFocus);
-                mNextButton.setVisibility(hasFocus ? GONE : VISIBLE);
-                mPrevButton.setVisibility(hasFocus ? GONE : VISIBLE);
-                mStopReloadButton.setVisibility(hasFocus ? GONE : VISIBLE);
-                if (!hasFocus) {
-                    mUrlTextView.setText(mWebContents.getVisibleUrl().getSpec());
-                }
-            }
-        });
-        mUrlTextView.setOnKeyListener(new OnKeyListener() {
-            @Override
-            public boolean onKey(View v, int keyCode, KeyEvent event) {
-                if (keyCode == KeyEvent.KEYCODE_BACK) {
-                    getContentView().requestFocus();
-                    return true;
-                }
-                return false;
-            }
-        });
+        mUrlTextView.setOnEditorActionListener(
+                new OnEditorActionListener() {
+                    @Override
+                    public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+                        if ((actionId != EditorInfo.IME_ACTION_GO)
+                                && (event == null
+                                        || event.getKeyCode() != KeyEvent.KEYCODE_ENTER
+                                        || event.getAction() != KeyEvent.ACTION_DOWN)) {
+                            return false;
+                        }
+                        loadUrl(mUrlTextView.getText().toString());
+                        setKeyboardVisibilityForUrl(false);
+                        assumeNonNull(getContentView()).requestFocus();
+                        return true;
+                    }
+                });
+        mUrlTextView.setOnFocusChangeListener(
+                new OnFocusChangeListener() {
+                    @Override
+                    public void onFocusChange(View v, boolean hasFocus) {
+                        setKeyboardVisibilityForUrl(hasFocus);
+                        mNextButton.setVisibility(hasFocus ? GONE : VISIBLE);
+                        mPrevButton.setVisibility(hasFocus ? GONE : VISIBLE);
+                        mStopReloadButton.setVisibility(hasFocus ? GONE : VISIBLE);
+                        if (!hasFocus) {
+                            mUrlTextView.setText(mWebContents.getVisibleUrl().getSpec());
+                        }
+                    }
+                });
+        mUrlTextView.setOnKeyListener(
+                new OnKeyListener() {
+                    @Override
+                    public boolean onKey(View v, int keyCode, KeyEvent event) {
+                        if (keyCode == KeyEvent.KEYCODE_BACK) {
+                            assumeNonNull(getContentView()).requestFocus();
+                            return true;
+                        }
+                        return false;
+                    }
+                });
+        mUrlTextView.setPrivateImeOptions(IME_OPTION_RESTRICT_STYLUS_WRITING_AREA);
     }
 
     /**
@@ -202,9 +234,6 @@ public class Shell extends LinearLayout {
             mNavigationController.loadUrl(new LoadUrlParams(sanitizeUrl(url)));
         }
         mUrlTextView.clearFocus();
-        // TODO(aurimas): Remove this when crbug.com/174541 is fixed.
-        getContentView().clearFocus();
-        getContentView().requestFocus();
     }
 
     /**
@@ -212,36 +241,39 @@ public class Shell extends LinearLayout {
      * @param url The url to be sanitized.
      * @return The sanitized URL.
      */
-    public static String sanitizeUrl(String url) {
-        if (url == null) return null;
+    private static String sanitizeUrl(String url) {
+        assert url != null;
         if (url.startsWith("www.") || url.indexOf(":") == -1) url = "http://" + url;
         return url;
     }
 
     private void initializeNavigationButtons() {
         mPrevButton = (ImageButton) findViewById(R.id.prev);
-        mPrevButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mNavigationController.canGoBack()) mNavigationController.goBack();
-            }
-        });
+        mPrevButton.setOnClickListener(
+                new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mNavigationController.canGoBack()) mNavigationController.goBack();
+                    }
+                });
 
         mNextButton = (ImageButton) findViewById(R.id.next);
-        mNextButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mNavigationController.canGoForward()) mNavigationController.goForward();
-            }
-        });
+        mNextButton.setOnClickListener(
+                new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mNavigationController.canGoForward()) mNavigationController.goForward();
+                    }
+                });
         mStopReloadButton = (ImageButton) findViewById(R.id.stop_reload_button);
-        mStopReloadButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mLoading) mWebContents.stop();
-                else mNavigationController.reload(true);
-            }
-        });
+        mStopReloadButton.setOnClickListener(
+                new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mLoading) mWebContents.stop();
+                        else mNavigationController.reload(true);
+                    }
+                });
     }
 
     @SuppressWarnings("unused")
@@ -275,56 +307,58 @@ public class Shell extends LinearLayout {
     private void setIsLoading(boolean loading) {
         mLoading = loading;
         if (mLoading) {
-            mStopReloadButton
-                    .setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
+            mStopReloadButton.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
         } else {
             mStopReloadButton.setImageResource(R.drawable.ic_refresh);
         }
     }
 
-    public ShellViewAndroidDelegate getViewAndroidDelegate() {
+    public @Nullable ShellViewAndroidDelegate getViewAndroidDelegate() {
         return mViewAndroidDelegate;
     }
 
     /**
      * Initializes the ContentView based on the native tab contents pointer passed in.
+     *
      * @param webContents A {@link WebContents} object.
      */
     @SuppressWarnings("unused")
+    @Initializer
     @CalledByNative
     private void initFromNativeTabContents(WebContents webContents) {
         Context context = getContext();
-        ContentView cv =
-                ContentView.createContentView(context, null /* eventOffsetHandler */, webContents);
+        ContentView cv = ContentView.createContentView(context, webContents);
         mViewAndroidDelegate = new ShellViewAndroidDelegate(cv);
         assert (mWebContents != webContents);
         if (mWebContents != null) mWebContents.clearNativeReference();
-        webContents.initialize(
+        webContents.setDelegates(
                 "", mViewAndroidDelegate, cv, mWindow, WebContents.createDefaultInternalsHolder());
         mWebContents = webContents;
         SelectionPopupController.fromWebContents(webContents)
                 .setActionModeCallback(defaultActionCallback());
-        mNavigationController = mWebContents.getNavigationController();
-        if (getParent() != null) mWebContents.onShow();
+        mNavigationController = assertNonNull(mWebContents.getNavigationController());
+        if (getParent() != null) mWebContents.updateWebContentsVisibility(Visibility.VISIBLE);
         mUrlTextView.setText(mWebContents.getVisibleUrl().getSpec());
-        ((FrameLayout) findViewById(R.id.contentview_holder)).addView(cv,
-                new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT));
+        ((FrameLayout) findViewById(R.id.contentview_holder))
+                .addView(
+                        cv,
+                        new FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                                FrameLayout.LayoutParams.MATCH_PARENT));
         cv.requestFocus();
-        mContentViewRenderView.setCurrentWebContents(mWebContents);
+        assumeNonNull(mContentViewRenderView).setCurrentWebContents(mWebContents);
     }
 
     /**
-     * {link @ActionMode.Callback} that uses the default implementation in
+     * {@link ActionModeCallback} that uses the default implementation in
      * {@link SelectionPopupController}.
      */
-    private ActionMode.Callback defaultActionCallback() {
+    private ActionModeCallback defaultActionCallback() {
         final ActionModeCallbackHelper helper =
                 SelectionPopupController.fromWebContents(mWebContents)
                         .getActionModeCallbackHelper();
 
-        return new ActionMode.Callback() {
+        return new ActionModeCallback() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                 helper.onCreateActionMode(mode, menu);
@@ -342,15 +376,25 @@ public class Shell extends LinearLayout {
             }
 
             @Override
+            public boolean onDropdownItemClicked(SelectionMenuItem item, boolean closeMenu) {
+                return helper.onDropdownItemClicked(item, closeMenu);
+            }
+
+            @Override
             public void onDestroyActionMode(ActionMode mode) {
                 helper.onDestroyActionMode();
+            }
+
+            @Override
+            public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
+                helper.onGetContentRect(mode, view, outRect);
             }
         };
     }
 
     @CalledByNative
     public void setOverlayMode(boolean useOverlayMode) {
-        mContentViewRenderView.setOverlayVideoMode(useOverlayMode);
+        assumeNonNull(mContentViewRenderView).setOverlayVideoMode(useOverlayMode);
         if (mOverlayModeChangedCallbackForTesting != null) {
             mOverlayModeChangedCallbackForTesting.onResult(useOverlayMode);
         }
@@ -358,6 +402,7 @@ public class Shell extends LinearLayout {
 
     public void setOverayModeChangedCallbackForTesting(Callback<Boolean> callback) {
         mOverlayModeChangedCallbackForTesting = callback;
+        ResettersForTesting.register(() -> mOverlayModeChangedCallbackForTesting = null);
     }
 
     /**
@@ -378,12 +423,12 @@ public class Shell extends LinearLayout {
     /**
      * @return The {@link View} currently shown by this Shell.
      */
-    public View getContentView() {
+    public @Nullable View getContentView() {
         ViewAndroidDelegate viewDelegate = mWebContents.getViewAndroidDelegate();
         return viewDelegate != null ? viewDelegate.getContainerView() : null;
     }
 
-     /**
+    /**
      * @return The {@link WebContents} currently managing the content shown by this Shell.
      */
     public WebContents getWebContents() {
@@ -391,8 +436,8 @@ public class Shell extends LinearLayout {
     }
 
     private void setKeyboardVisibilityForUrl(boolean visible) {
-        InputMethodManager imm = (InputMethodManager) getContext().getSystemService(
-                Context.INPUT_METHOD_SERVICE);
+        InputMethodManager imm =
+                (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
         if (visible) {
             imm.showSoftInput(mUrlTextView, InputMethodManager.SHOW_IMPLICIT);
         } else {
@@ -402,6 +447,6 @@ public class Shell extends LinearLayout {
 
     @NativeMethods
     interface Natives {
-        void closeShell(long shellPtr);
+        void closeShell(JniPtr<NativeShell> shellPtr);
     }
 }

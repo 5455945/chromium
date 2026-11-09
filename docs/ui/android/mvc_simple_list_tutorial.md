@@ -138,7 +138,7 @@ class SimpleMenuItemViewBinder {
 ### simple_menu_item.xml
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2019 The Chromium Authors. All rights reserved.
+<!-- Copyright 2019 The Chromium Authors
      Use of this source code is governed by a BSD-style license that can be
      found in the LICENSE file. -->
 <LinearLayout
@@ -148,7 +148,7 @@ class SimpleMenuItemViewBinder {
     android:orientation="horizontal"
     android:background="@color/modern_primary_color">
 
-    <org.chromium.ui.widget.ChromeImageView
+    <ImageView
         android:id="@+id/simple_menu_icon"
         android:layout_width="18dp"
         android:layout_height="18dp"

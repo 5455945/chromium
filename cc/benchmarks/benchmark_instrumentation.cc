@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,18 +13,9 @@ namespace benchmark_instrumentation {
 // The benchmarks search for events and their arguments by name.
 
 void IssueImplThreadRenderingStatsEvent(const RenderingStats& stats) {
-  TRACE_EVENT_INSTANT1(
-      "benchmark,rail", "BenchmarkInstrumentation::ImplThreadRenderingStats",
-      TRACE_EVENT_SCOPE_THREAD, "data", stats.AsTraceableData());
-}
-
-void IssueDisplayRenderingStatsEvent() {
-  std::unique_ptr<base::trace_event::TracedValue> record_data(
-      new base::trace_event::TracedValue());
-  record_data->SetInteger("frame_count", 1);
-  TRACE_EVENT_INSTANT1(
-      "benchmark", "BenchmarkInstrumentation::DisplayRenderingStats",
-      TRACE_EVENT_SCOPE_THREAD, "data", std::move(record_data));
+  TRACE_EVENT_INSTANT("benchmark,rail",
+                      "BenchmarkInstrumentation::ImplThreadRenderingStats",
+                      "data", stats.AsTraceableData());
 }
 
 }  // namespace benchmark_instrumentation

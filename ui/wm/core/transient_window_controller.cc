@@ -1,9 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/wm/core/transient_window_controller.h"
+#include "base/memory/raw_ptr.h"
 
+#include "base/observer_list.h"
 #include "ui/aura/client/transient_window_client_observer.h"
 #include "ui/wm/core/transient_window_manager.h"
 
@@ -13,12 +15,12 @@ namespace wm {
 TransientWindowController* TransientWindowController::instance_ = nullptr;
 
 TransientWindowController::TransientWindowController() {
-  DCHECK(!instance_);
+  CHECK(!instance_, base::NotFatalUntil::M163);
   instance_ = this;
 }
 
 TransientWindowController::~TransientWindowController() {
-  DCHECK_EQ(instance_, this);
+  CHECK_EQ(instance_, this, base::NotFatalUntil::M163);
   instance_ = nullptr;
 }
 
@@ -45,8 +47,8 @@ const aura::Window* TransientWindowController::GetTransientParent(
   return window_manager ? window_manager->transient_parent() : nullptr;
 }
 
-std::vector<aura::Window*> TransientWindowController::GetTransientChildren(
-    const aura::Window* parent) {
+std::vector<raw_ptr<aura::Window, VectorExperimental>>
+TransientWindowController::GetTransientChildren(const aura::Window* parent) {
   const TransientWindowManager* window_manager =
       TransientWindowManager::GetIfExists(parent);
   if (!window_manager)

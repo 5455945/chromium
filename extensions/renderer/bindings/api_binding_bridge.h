@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "extensions/common/extension_id.h"
 #include "gin/wrappable.h"
 #include "v8/include/v8.h"
 
@@ -19,14 +19,19 @@ class APIBindingHooks;
 // methods of the Binding prototype in binding.js.
 class APIBindingBridge final : public gin::Wrappable<APIBindingBridge> {
  public:
+  static constexpr gin::WrapperInfo kWrapperInfo = {
+      {gin::kEmbedderNativeGin}, gin::kAPIBindingBridge};
+
+  APIBindingBridge(const APIBindingBridge&) = delete;
+  APIBindingBridge& operator=(const APIBindingBridge&) = delete;
+
+  // Public for cppgc::MakeGarbageCollected.
   APIBindingBridge(APIBindingHooks* hooks,
                    v8::Local<v8::Context> context,
                    v8::Local<v8::Value> api_object,
-                   const std::string& extension_id,
+                   const ExtensionId& extension_id,
                    const std::string& context_type);
   ~APIBindingBridge() override;
-
-  static gin::WrapperInfo kWrapperInfo;
 
   // gin::Wrappable:
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
@@ -44,13 +49,13 @@ class APIBindingBridge final : public gin::Wrappable<APIBindingBridge> {
   void RegisterCustomHook(v8::Isolate* isolate,
                           v8::Local<v8::Function> function);
 
+  const gin::WrapperInfo* wrapper_info() const override;
+
   // The id of the extension that owns the context this belongs to.
-  std::string extension_id_;
+  ExtensionId extension_id_;
 
   // The type of context this belongs to.
   std::string context_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(APIBindingBridge);
 };
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #if DCHECK_IS_ON()
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/paint/object_paint_properties.h"
 #include "third_party/blink/renderer/core/paint/paint_property_tree_builder.h"
@@ -43,8 +43,7 @@ class FindPropertiesNeedingUpdateScope {
       return;
 
     // Mark the properties as needing an update to ensure they are rebuilt.
-    object.GetMutableForPainting()
-        .SetOnlyThisNeedsPaintPropertyUpdateForTesting();
+    object.GetMutableForPainting().SetOnlyThisNeedsPaintPropertyUpdate();
 
     if (const auto* properties = fragment_data_.PaintProperties()) {
       had_original_properties_ = true;
@@ -98,8 +97,8 @@ class FindPropertiesNeedingUpdateScope {
   const FragmentData& fragment_data_;
   bool needed_paint_property_update_ = false;
   bool needed_forced_subtree_update_ = false;
-  PropertyTreeStateOrAlias original_local_border_box_properties_ =
-      PropertyTreeState::Uninitialized();
+  PropertyTreeStateOrAlias original_local_border_box_properties_{
+      PropertyTreeState::kUninitialized};
   bool had_original_properties_ = false;
 };
 

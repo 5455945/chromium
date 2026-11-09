@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,7 @@ namespace multi_user_util {
 AccountId GetAccountIdFromProfile(const Profile* profile);
 
 // Get the user id from an email address.
-AccountId GetAccountIdFromEmail(const std::string& email);
+AccountId GetAccountIdFromEmail(std::string_view email);
 
 // Get a profile for a given user id.
 Profile* GetProfileFromAccountId(const AccountId& account_id);

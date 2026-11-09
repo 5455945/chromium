@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "chrome/browser/notifications/notification_handler.h"
 #include "url/gurl.h"
 
@@ -19,10 +20,11 @@ class NotificationLaunchId {
   NotificationLaunchId();
   NotificationLaunchId(const NotificationLaunchId& other);
 
-  // |notification_id| and |profile_id| must be UTF8 strings.
+  // `notification_id` and `profile_id` must be UTF8 strings.
   NotificationLaunchId(NotificationHandler::Type notification_type,
                        const std::string& notification_id,
                        const std::string& profile_id,
+                       const std::wstring& app_user_model_id,
                        bool incognito,
                        const GURL& origin_url);
 
@@ -30,7 +32,7 @@ class NotificationLaunchId {
   // Center. Callers must use is_valid() to check if decoding was successful.
   explicit NotificationLaunchId(const std::string& encoded);
 
-  ~NotificationLaunchId() = default;
+  ~NotificationLaunchId();
 
   NotificationLaunchId& operator=(const NotificationLaunchId& other) = default;
 
@@ -39,57 +41,62 @@ class NotificationLaunchId {
   std::string Serialize() const;
 
   void set_button_index(int index) {
-    DCHECK(!is_for_context_menu_);
+    CHECK(!is_for_context_menu_, base::NotFatalUntil::M161);
     button_index_ = index;
   }
 
   void set_is_for_context_menu() {
-    DCHECK_EQ(-1, button_index_);
+    CHECK_EQ(-1, button_index_, base::NotFatalUntil::M161);
     is_for_context_menu_ = true;
   }
 
   void set_is_for_dismiss_button() {
-    DCHECK_EQ(-1, button_index_);
+    CHECK_EQ(-1, button_index_, base::NotFatalUntil::M161);
     is_for_dismiss_button_ = true;
   }
 
   NotificationHandler::Type notification_type() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return notification_type_;
   }
 
   const std::string& notification_id() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return notification_id_;
   }
 
   const std::string& profile_id() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return profile_id_;
   }
 
+  const std::wstring& app_user_model_id() const {
+    CHECK(is_valid(), base::NotFatalUntil::M161);
+    return app_user_model_id_;
+  }
+
   bool incognito() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return incognito_;
   }
 
   const GURL& origin_url() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return origin_url_;
   }
 
   int button_index() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return button_index_;
   }
 
   bool is_for_context_menu() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return is_for_context_menu_;
   }
 
   bool is_for_dismiss_button() const {
-    DCHECK(is_valid());
+    CHECK(is_valid(), base::NotFatalUntil::M161);
     return is_for_dismiss_button_;
   }
 
@@ -97,8 +104,9 @@ class NotificationLaunchId {
   static std::string GetProfileIdFromLaunchId(
       const std::wstring& launch_id_str);
 
-  // Retrieves the profile ID from the notification launch command line if any
-  static std::string GetNotificationLaunchProfileId(
+  // Retrieves the profile basename from the notification launch command line,
+  // if any.
+  static base::FilePath GetNotificationLaunchProfileBaseName(
       const base::CommandLine& command_line);
 
  private:
@@ -110,6 +118,9 @@ class NotificationLaunchId {
 
   // The profile id this launch ID is associated with. The string is UTF8.
   std::string profile_id_;
+
+  // The app user model id this launch ID is associated with.
+  std::wstring app_user_model_id_;
 
   // A flag indicating if the notification associated with this launch ID is in
   // incognito mode or not.

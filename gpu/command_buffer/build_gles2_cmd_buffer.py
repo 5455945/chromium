@@ -1,21 +1,23 @@
-#!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """code generator for GLES2 command buffers."""
 
 import filecmp
 import os
-import os.path
 import sys
 from optparse import OptionParser
 
 import build_cmd_buffer_lib
 
+# Additional space required after "type" here and elsewhere because otherwise
+# pylint detects "# type:" as invalid syntax on Python 3.8, see
+# https://github.com/PyCQA/pylint/issues/3556.
 # Named type info object represents a named type that is used in OpenGL call
 # arguments.  Each named type defines a set of valid OpenGL call arguments.  The
 # named types are used in 'gles2_cmd_buffer_functions.txt'.
-# type: The actual GL type of the named type.
+# type : The actual GL type of the named type.
 # valid: The list of values that are valid for both the client and the service.
 # valid_es3: The list of values that are valid in OpenGL ES 3, but not ES 2.
 # invalid: Examples of invalid values for the type. At least these values
@@ -38,20 +40,14 @@ _NAMED_TYPE_INFO = {
       'GL_LINEAR_MIPMAP_LINEAR',
     ],
   },
-  'CoverageModulationComponents': {
-    'type': 'GLenum',
-    'valid': [
-      'GL_RGB', 'GL_RGBA', 'GL_ALPHA', 'GL_NONE'
-    ],
-  },
   'FramebufferTarget': {
     'type': 'GLenum',
     'valid': [
       'GL_FRAMEBUFFER',
     ],
     'valid_es3': [
-      'GL_DRAW_FRAMEBUFFER' ,
-      'GL_READ_FRAMEBUFFER' ,
+      'GL_DRAW_FRAMEBUFFER',
+      'GL_READ_FRAMEBUFFER',
     ],
     'invalid': [
       'GL_RENDERBUFFER',
@@ -173,10 +169,8 @@ _NAMED_TYPE_INFO = {
   },
   'CompressedTextureFormat': {
     'type': 'GLenum',
-    'valid': [
-    ],
-    'valid_es3': [
-    ],
+    'valid': [],
+    'valid_es3': [],
   },
   'GLState': {
     'type': 'GLenum',
@@ -225,9 +219,7 @@ _NAMED_TYPE_INFO = {
       'GL_STENCIL_BITS',
       'GL_TEXTURE_BINDING_2D',
       'GL_TEXTURE_BINDING_CUBE_MAP',
-      'GL_TEXTURE_FILTERING_HINT_CHROMIUM',
       'GL_UNPACK_ALIGNMENT',
-      'GL_BIND_GENERATES_RESOURCE_CHROMIUM',
       # we can add this because we emulate it if the driver does not support it.
       'GL_VERTEX_ARRAY_BINDING_OES',
       'GL_VIEWPORT',
@@ -318,9 +310,6 @@ _NAMED_TYPE_INFO = {
       # GL_VERTEX_ARRAY_BINDING is the same as GL_VERTEX_ARRAY_BINDING_OES
       # 'GL_VERTEX_ARRAY_BINDING',
     ],
-    'invalid': [
-      'GL_FOG_HINT',
-    ],
   },
   'IndexedGLState': {
     'type': 'GLenum',
@@ -339,9 +328,6 @@ _NAMED_TYPE_INFO = {
       'GL_BLEND_DST_ALPHA',
       'GL_COLOR_WRITEMASK',
     ],
-    'invalid': [
-      'GL_FOG_HINT',
-    ],
   },
   'GetTexParamTarget': {
     'type': 'GLenum',
@@ -353,9 +339,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_2D_ARRAY',
       'GL_TEXTURE_3D',
     ],
-    'invalid': [
-      'GL_PROXY_TEXTURE_CUBE_MAP',
-    ]
   },
   'ReadBuffer': {
     'type': 'GLenum',
@@ -381,7 +364,7 @@ _NAMED_TYPE_INFO = {
     ],
     'invalid': [
       'GL_RENDERBUFFER',
-    ]
+    ],
   },
   'TextureTarget': {
     'type': 'GLenum',
@@ -394,9 +377,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_CUBE_MAP_POSITIVE_Z',
       'GL_TEXTURE_CUBE_MAP_NEGATIVE_Z',
     ],
-    'invalid': [
-      'GL_PROXY_TEXTURE_CUBE_MAP',
-    ]
   },
   'TextureFboTarget': {
     'type': 'GLenum',
@@ -409,9 +389,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_CUBE_MAP_POSITIVE_Z',
       'GL_TEXTURE_CUBE_MAP_NEGATIVE_Z',
     ],
-    'invalid': [
-      'GL_PROXY_TEXTURE_CUBE_MAP',
-    ]
   },
   'Texture3DTarget': {
     'type': 'GLenum',
@@ -422,7 +399,7 @@ _NAMED_TYPE_INFO = {
     ],
     'invalid': [
       'GL_TEXTURE_2D',
-    ]
+    ],
   },
   'TextureBindTarget': {
     'type': 'GLenum',
@@ -435,7 +412,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_2D_ARRAY',
     ],
     'invalid': [
-      'GL_TEXTURE_1D',
       'GL_TEXTURE_3D',
     ],
   },
@@ -555,23 +531,21 @@ _NAMED_TYPE_INFO = {
       'GL_CONSTANT_ALPHA',
       'GL_ONE_MINUS_CONSTANT_ALPHA',
     ],
-    'valid_es3': [
-      'GL_SRC_ALPHA_SATURATE'
-    ]
+    'valid_es3': ['GL_SRC_ALPHA_SATURATE'],
   },
   'Capability': {
     'type': 'GLenum',
-    'valid': ["GL_%s" % cap['name'].upper()
-              for cap in build_cmd_buffer_lib._CAPABILITY_FLAGS
-              if ('es3' not in cap or cap['es3'] != True)
-              and 'extension_flag' not in cap],
-    'valid_es3': ["GL_%s" % cap['name'].upper()
-                  for cap in build_cmd_buffer_lib._CAPABILITY_FLAGS
-                  if ('es3' in cap and cap['es3'] == True)
-                  and 'extension_flag' not in cap],
-    'invalid': [
-      'GL_CLIP_PLANE0',
-      'GL_POINT_SPRITE',
+    'valid': [
+      "GL_%s" % cap['name'].upper()
+      for cap in build_cmd_buffer_lib._CAPABILITY_FLAGS
+      if ('es3' not in cap or cap['es3'] != True)  # noqa: E712
+      and 'extension_flag' not in cap
+    ],
+    'valid_es3': [
+      "GL_%s" % cap['name'].upper()
+      for cap in build_cmd_buffer_lib._CAPABILITY_FLAGS
+      if ('es3' in cap and cap['es3'] == True)  # noqa: E712
+      and 'extension_flag' not in cap
     ],
   },
   'DrawMode': {
@@ -709,9 +683,9 @@ _NAMED_TYPE_INFO = {
       'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER',
     ],
   },
-  'FramebufferParameter' : {
+  'FramebufferParameter': {
     'type': 'GLenum',
-    'valid' : [],
+    'valid': [],
   },
   'ProgramParameter': {
     'type': 'GLenum',
@@ -761,8 +735,6 @@ _NAMED_TYPE_INFO = {
       'GL_ANY_SAMPLES_PASSED_EXT',
       'GL_ANY_SAMPLES_PASSED_CONSERVATIVE_EXT',
       'GL_COMMANDS_ISSUED_CHROMIUM',
-      'GL_COMMANDS_ISSUED_TIMESTAMP_CHROMIUM',
-      'GL_LATENCY_QUERY_CHROMIUM',
       'GL_ASYNC_PIXEL_PACK_COMPLETED_CHROMIUM',
       'GL_COMMANDS_COMPLETED_CHROMIUM',
       'GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM',
@@ -807,9 +779,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_COMPARE_MODE',
       'GL_TEXTURE_COMPARE_FUNC',
     ],
-    'invalid': [
-      'GL_GENERATE_MIPMAP',
-    ],
   },
   'ShaderParameter': {
     'type': 'GLenum',
@@ -852,7 +821,6 @@ _NAMED_TYPE_INFO = {
       'GL_EXTENSIONS',
     ],
   },
-
   'TextureParameter': {
     'type': 'GLenum',
     'valid': [
@@ -871,9 +839,6 @@ _NAMED_TYPE_INFO = {
       'GL_TEXTURE_MAX_LOD',
       'GL_TEXTURE_MIN_LOD',
       'GL_TEXTURE_WRAP_R',
-    ],
-    'invalid': [
-      'GL_GENERATE_MIPMAP',
     ],
   },
   'TextureWrapMode': {
@@ -982,13 +947,9 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'valid': [
       'GL_GENERATE_MIPMAP_HINT',
-      'GL_TEXTURE_FILTERING_HINT_CHROMIUM',
     ],
     'valid_es3': [
       'GL_FRAGMENT_SHADER_DERIVATIVE_HINT',
-    ],
-    'invalid': [
-      'GL_PERSPECTIVE_CORRECTION_HINT',
     ],
   },
   'HintMode': {
@@ -1139,8 +1100,7 @@ _NAMED_TYPE_INFO = {
   },
   'ShaderBinaryFormat': {
     'type': 'GLenum',
-    'valid': [
-    ],
+    'valid': [],
   },
   'StencilOp': {
     'type': 'GLenum',
@@ -1338,10 +1298,6 @@ _NAMED_TYPE_INFO = {
       'GL_RGBA4',
       'GL_RGB10_A2',
       'GL_RGBA16F',
-      'GL_RGB_YCRCB_420_CHROMIUM',
-      'GL_RGB_YCBCR_422_CHROMIUM',
-      'GL_RGB_YCBCR_420V_CHROMIUM',
-      'GL_RGB_YCBCR_P010_CHROMIUM',
       'GL_R16_EXT',
     ],
   },
@@ -1426,10 +1382,6 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'valid': [
       'GL_RGB',
-      'GL_RGB_YCRCB_420_CHROMIUM',
-      'GL_RGB_YCBCR_422_CHROMIUM',
-      'GL_RGB_YCBCR_420V_CHROMIUM',
-      'GL_RGB_YCBCR_P010_CHROMIUM',
       'GL_RGBA',
     ],
   },
@@ -1531,9 +1483,9 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'is_complete': True,
     'valid': [
-      'GL_GUILTY_CONTEXT_RESET_ARB',
-      'GL_INNOCENT_CONTEXT_RESET_ARB',
-      'GL_UNKNOWN_CONTEXT_RESET_ARB',
+      'GL_GUILTY_CONTEXT_RESET',
+      'GL_INNOCENT_CONTEXT_RESET',
+      'GL_UNKNOWN_CONTEXT_RESET',
     ],
   },
   'SyncCondition': {
@@ -1579,16 +1531,6 @@ _NAMED_TYPE_INFO = {
       'GL_SYNC_FENCE',
     ],
   },
-  'ClientBufferUsage': {
-    'type': 'GLenum',
-    'is_complete': True,
-    'valid': [
-      'GL_SCANOUT_CHROMIUM',
-    ],
-    'invalid': [
-      'GL_NONE',
-    ],
-  },
   'WindowRectanglesMode': {
     'type': 'GLenum',
     'is_complete': True,
@@ -1597,21 +1539,28 @@ _NAMED_TYPE_INFO = {
       'GL_EXCLUSIVE_EXT',
     ],
   },
-  'SwapBuffersFlags': {
-    'type': 'GLbitfield',
-    'is_complete': True,
-    'valid': [
-      '0',
-      'gpu::SwapBuffersFlags::kVSyncParams',
-    ],
-  },
   'SharedImageAccessMode': {
     'type': 'GLenum',
     'is_complete': True,
     'valid': [
-      'GL_SHARED_IMAGE_ACCESS_MODE_OVERLAY_CHROMIUM',
       'GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM',
       'GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM',
+    ],
+  },
+  'FramebufferPixelLocalStorageParameter': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE',
+      'GL_MAX_COMBINED_DRAW_BUFFERS_AND_PIXEL_LOCAL_STORAGE_PLANES_ANGLE',
+      'GL_PIXEL_LOCAL_STORAGE_ACTIVE_PLANES_ANGLE',
+      'GL_PIXEL_LOCAL_INTERNAL_FORMAT_ANGLE',
+      'GL_PIXEL_LOCAL_TEXTURE_NAME_ANGLE',
+      'GL_PIXEL_LOCAL_TEXTURE_LEVEL_ANGLE',
+      'GL_PIXEL_LOCAL_TEXTURE_LAYER_ANGLE',
+      'GL_PIXEL_LOCAL_USAGE_ANGLE',
+      'GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE',
+      'GL_PIXEL_LOCAL_CLEAR_VALUE_INT_ANGLE',
+      'GL_PIXEL_LOCAL_CLEAR_VALUE_UNSIGNED_INT_ANGLE',
     ],
   },
 }
@@ -1625,7 +1574,7 @@ _NAMED_TYPE_INFO = {
 # Must match function names specified in "gles2_cmd_buffer_functions.txt".
 #
 # cmd_comment:  A comment added to the cmd format.
-# type:         defines which handler will be used to generate code.
+# type :        defines which handler will be used to generate code.
 # decoder_func: defines which function to call in the decoder to execute the
 #               corresponding GL command. If not specified the GL command will
 #               be called directly.
@@ -1676,8 +1625,6 @@ _NAMED_TYPE_INFO = {
 #               'extension': True.
 # not_shared:   For GENn types, True if objects can't be shared between contexts
 # es3:          ES3 API. True if the function requires an ES3 or WebGL2 context.
-# es31:         ES31 API. True if the function requires an WebGL2Compute
-#               context.
 
 _FUNCTION_INFO = {
   'ActiveTexture': {
@@ -1696,11 +1643,13 @@ _FUNCTION_INFO = {
     'type': 'Bind',
     'decoder_func': 'DoBindBuffer',
     'gen_func': 'GenBuffersARB',
+    'client_test': False,
   },
   'BindBufferBase': {
     'type': 'Bind',
     'decoder_func': 'DoBindBufferBase',
     'gen_func': 'GenBuffersARB',
+    'client_test': False,
     'unit_test': False,
     'es3': True,
   },
@@ -1708,11 +1657,9 @@ _FUNCTION_INFO = {
     'type': 'Bind',
     'decoder_func': 'DoBindBufferRange',
     'gen_func': 'GenBuffersARB',
+    'client_test': False,
     'unit_test': False,
-    'valid_args': {
-      '3': '4',
-      '4': '4'
-    },
+    'valid_args': {'3': '4', '4': '4'},
     'es3': True,
   },
   'BindFramebuffer': {
@@ -1720,24 +1667,20 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoBindFramebuffer',
     'gl_test_func': 'glBindFramebufferEXT',
     'gen_func': 'GenFramebuffersEXT',
+    'client_test': False,
     'trace_level': 1,
-  },
-  'BindImageTexture':{
-    'cmd_args': 'GLuint unit, GLuint texture, GLint level, GLboolean layered, '
-                'GLint layer, GLenum access, GLenum format',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
   },
   'BindRenderbuffer': {
     'type': 'Bind',
     'decoder_func': 'DoBindRenderbuffer',
     'gl_test_func': 'glBindRenderbufferEXT',
     'gen_func': 'GenRenderbuffersEXT',
+    'client_test': False,
   },
   'BindSampler': {
     'type': 'Bind',
     'decoder_func': 'DoBindSampler',
+    'client_test': False,
     'es3': True,
   },
   'BindTexture': {
@@ -1762,8 +1705,6 @@ _FUNCTION_INFO = {
     'extension_flag': 'chromium_framebuffer_multisample',
     'pepper_interface': 'FramebufferBlit',
     'pepper_name': 'BlitFramebufferEXT',
-    'defer_reads': True,
-    'defer_draws': True,
     'trace_level': 1,
   },
   'BufferData': {
@@ -1771,7 +1712,8 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'data_transfer_methods': ['shm'],
     'size_args': {
-      'data': 'size', },
+      'data': 'size',
+    },
     'client_test': False,
     'trace_level': 2,
   },
@@ -1781,7 +1723,8 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoBufferSubData',
     'data_transfer_methods': ['shm'],
     'size_args': {
-      'data': 'size', },
+      'data': 'size',
+    },
     'trace_level': 2,
   },
   'CheckFramebufferStatus': {
@@ -1793,11 +1736,8 @@ _FUNCTION_INFO = {
   },
   'Clear': {
     'decoder_func': 'DoClear',
-    'defer_draws': True,
     'trace_level': 2,
-    'valid_args': {
-      '0': 'GL_COLOR_BUFFER_BIT'
-    },
+    'valid_args': {'0': 'GL_COLOR_BUFFER_BIT'},
   },
   'ClearBufferiv': {
     'type': 'PUT',
@@ -1841,18 +1781,21 @@ _FUNCTION_INFO = {
     'state': 'ClearDepthf',
     'decoder_func': 'glClearDepth',
     'gl_test_func': 'glClearDepth',
-    'valid_args': {
-      '0': '0.5f'
-    },
+    'valid_args': {'0': '0.5f'},
   },
   'ClientWaitSync': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'cmd_args': 'GLuint sync, GLbitfieldSyncFlushFlags flags, '
-                'GLuint64 timeout, GLenum* result',
+    'GLuint64 timeout, GLenum* result',
     'es3': True,
     'result': ['GLenum'],
     'trace_level': 2,
+  },
+  'ClipControlEXT': {
+    'extension_flag': 'ext_clip_control',
+    'unit_test': False,
+    'extension': 'EXT_clip_control',
   },
   'ColorMask': {
     'type': 'StateSet',
@@ -1877,39 +1820,9 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'es3': True,
   },
-  'CoverageModulationCHROMIUM': {
-    'type': 'StateSet',
-    'state': 'CoverageModulationCHROMIUM',
-    'decoder_func': 'glCoverageModulationNV',
-    'extension': 'CHROMIUM_framebuffer_mixed_samples',
-    'extension_flag': 'chromium_framebuffer_mixed_samples',
-  },
-  'CreateAndConsumeTextureCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': "CHROMIUM_texture_mailbox",
-    'trace_level': 2,
-  },
-  'CreateAndConsumeTextureINTERNAL': {
-    'decoder_func': 'DoCreateAndConsumeTextureINTERNAL',
-    'internal': True,
-    'type': 'PUT',
-    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
-    'impl_func': False,
-    'unit_test': False,
-    'trace_level': 2,
-  },
   'ClearStencil': {
     'type': 'StateSet',
     'state': 'ClearStencil',
-  },
-  'EnableFeatureCHROMIUM': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'decoder_func': 'DoEnableFeatureCHROMIUM',
-    'cmd_args': 'GLuint bucket_id, GLint* result',
-    'result': ['GLint'],
-    'extension': 'GL_CHROMIUM_enable_feature',
-    'pepper_interface': 'ChromiumEnableFeature',
   },
   'CompileShader': {'decoder_func': 'DoCompileShader', 'unit_test': False},
   'CompressedTexImage2D': {
@@ -1925,12 +1838,10 @@ _FUNCTION_INFO = {
   'CopyTexImage2D': {
     'decoder_func': 'DoCopyTexImage2D',
     'unit_test': False,
-    'defer_reads': True,
     'trace_level': 1,
   },
   'CopyTexSubImage2D': {
     'decoder_func': 'DoCopyTexSubImage2D',
-    'defer_reads': True,
     'trace_level': 1,
   },
   'CompressedTexImage3D': {
@@ -1948,22 +1859,7 @@ _FUNCTION_INFO = {
   'CopyTexSubImage3D': {
     'decoder_func': 'DoCopyTexSubImage3D',
     'unit_test': False,
-    'defer_reads': True,
     'es3': True,
-    'trace_level': 1,
-  },
-  'CreateImageCHROMIUM': {
-    'type': 'NoCommand',
-    'cmd_args':
-        'ClientBuffer buffer, GLsizei width, GLsizei height, '
-        'GLenum internalformat',
-    'result': ['GLuint'],
-    'extension': "CHROMIUM_image",
-    'trace_level': 1,
-  },
-  'DestroyImageCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': "CHROMIUM_image",
     'trace_level': 1,
   },
   'DescheduleUntilFinishedCHROMIUM': {
@@ -1987,34 +1883,24 @@ _FUNCTION_INFO = {
   'BlendEquation': {
     'type': 'StateSetRGBAlpha',
     'state': 'BlendEquation',
-    'valid_args': {
-      '0': 'GL_FUNC_SUBTRACT'
-    },
+    'valid_args': {'0': 'GL_FUNC_SUBTRACT'},
   },
   'BlendEquationiOES': {
     'extension_flag': 'oes_draw_buffers_indexed',
     'unit_test': False,
     'extension': 'OES_draw_buffers_indexed',
-    'valid_args': {
-      '1': 'GL_FUNC_SUBTRACT',
-      '2': 'GL_FUNC_SUBTRACT'
-    },
+    'valid_args': {'1': 'GL_FUNC_SUBTRACT', '2': 'GL_FUNC_SUBTRACT'},
   },
   'BlendEquationSeparate': {
     'type': 'StateSet',
     'state': 'BlendEquation',
-    'valid_args': {
-      '0': 'GL_FUNC_SUBTRACT'
-    },
+    'valid_args': {'0': 'GL_FUNC_SUBTRACT'},
   },
   'BlendEquationSeparateiOES': {
     'extension_flag': 'oes_draw_buffers_indexed',
     'unit_test': False,
     'extension': 'OES_draw_buffers_indexed',
-    'valid_args': {
-      '1': 'GL_FUNC_SUBTRACT',
-      '2': 'GL_FUNC_SUBTRACT'
-    },
+    'valid_args': {'1': 'GL_FUNC_SUBTRACT', '2': 'GL_FUNC_SUBTRACT'},
   },
   'BlendFunc': {
     'type': 'StateSetRGBAlpha',
@@ -2052,16 +1938,12 @@ _FUNCTION_INFO = {
   'StencilOp': {
     'type': 'StateSetFrontBack',
     'state': 'StencilOp',
-    'valid_args': {
-      '1': 'GL_INCR'
-    },
+    'valid_args': {'1': 'GL_INCR'},
   },
   'StencilOpSeparate': {
     'type': 'StateSetFrontBackSeparate',
     'state': 'StencilOp',
-    'valid_args': {
-      '1': 'GL_INCR'
-    },
+    'valid_args': {'1': 'GL_INCR'},
   },
   'Hint': {
     'type': 'StateSetNamedParameter',
@@ -2074,13 +1956,21 @@ _FUNCTION_INFO = {
     'type': 'StateSet',
     'state': 'LineWidth',
     'decoder_func': 'DoLineWidth',
-    'valid_args': {
-      '0': '2.0f'
-    },
+    'valid_args': {'0': '2.0f'},
+  },
+  'PolygonModeANGLE': {
+    'extension_flag': 'angle_polygon_mode',
+    'unit_test': False,
+    'extension': 'ANGLE_polygon_mode',
   },
   'PolygonOffset': {
     'type': 'StateSet',
     'state': 'PolygonOffset',
+  },
+  'PolygonOffsetClampEXT': {
+    'extension_flag': 'ext_polygon_offset_clamp',
+    'unit_test': False,
+    'extension': 'EXT_polygon_offset_clamp',
   },
   'DeleteBuffers': {
     'type': 'DELn',
@@ -2095,7 +1985,7 @@ _FUNCTION_INFO = {
     'resource_types': 'Framebuffers',
     'trace_level': 2,
   },
-  'DeleteProgram': { 'type': 'Delete' },
+  'DeleteProgram': {'type': 'Delete'},
   'DeleteRenderbuffers': {
     'type': 'DELn',
     'gl_test_func': 'glDeleteRenderbuffersEXT',
@@ -2109,7 +1999,7 @@ _FUNCTION_INFO = {
     'resource_types': 'Samplers',
     'es3': True,
   },
-  'DeleteShader': { 'type': 'Delete' },
+  'DeleteShader': {'type': 'Delete'},
   'DeleteSync': {
     'type': 'Delete',
     'cmd_args': 'GLuint sync',
@@ -2156,51 +2046,19 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'unit_test': False,
   },
-  'DispatchCompute': {
-    'cmd_args': 'GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-  },
-  'DispatchComputeIndirect': {
-    'cmd_args': 'GLintptrNotNegative offset',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-  },
   'DrawArrays': {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count',
-    'defer_draws': True,
     'trace_level': 2,
-  },
-  'DrawArraysIndirect': {
-    'type': 'Custom',
-    'impl_func': False,
-    'cmd_args': 'GLenumDrawMode mode, GLuint offset',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-    'client_test': False,
   },
   'DrawElements': {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLsizei count, '
-                'GLenumIndexType type, GLuint index_offset',
+    'GLenumIndexType type, GLuint index_offset',
     'client_test': False,
-    'defer_draws': True,
     'trace_level': 2,
-  },
-  'DrawElementsIndirect': {
-    'type': 'Custom',
-    'impl_func': False,
-    'cmd_args': 'GLenumDrawMode mode, GLenumIndexType type, GLuint offset',
-    'trace_level': 2,
-    'es31': True,
-    'unit_test': False,
-    'client_test': False,
   },
   'DrawRangeElements': {
     'type': 'NoCommand',
@@ -2234,7 +2092,6 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'client_test': False,
     'decoder_func': 'DoFinish',
-    'defer_reads': True,
     'trace_level': 1,
   },
   'Flush': {
@@ -2292,7 +2149,8 @@ _FUNCTION_INFO = {
     'not_shared': 'True',
   },
   'GenRenderbuffers': {
-    'type': 'GENn', 'gl_test_func': 'glGenRenderbuffersEXT',
+    'type': 'GENn',
+    'gl_test_func': 'glGenRenderbuffersEXT',
     'resource_type': 'Renderbuffer',
     'resource_types': 'Renderbuffers',
   },
@@ -2320,9 +2178,8 @@ _FUNCTION_INFO = {
   'GetActiveAttrib': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
-        'void* result',
+    'cmd_args': 'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
+    'void* result',
     'result': [
       'int32_t success',
       'int32_t size',
@@ -2332,9 +2189,8 @@ _FUNCTION_INFO = {
   'GetActiveUniform': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
-        'void* result',
+    'cmd_args': 'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
+    'void* result',
     'result': [
       'int32_t success',
       'int32_t size',
@@ -2350,18 +2206,16 @@ _FUNCTION_INFO = {
   'GetActiveUniformBlockName': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
-        'void* result',
+    'cmd_args': 'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
+    'void* result',
     'result': ['int32_t'],
     'es3': True,
   },
   'GetActiveUniformsiv': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, uint32_t indices_bucket_id, GLenum pname, '
-        'GLint* params',
+    'cmd_args': 'GLidProgram program, uint32_t indices_bucket_id, GLenum pname, '
+    'GLint* params',
     'result': ['SizedResult<GLint>'],
     'es3': True,
   },
@@ -2374,16 +2228,14 @@ _FUNCTION_INFO = {
   'GetAttribLocation': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, uint32_t name_bucket_id, GLint* location',
+    'cmd_args': 'GLidProgram program, uint32_t name_bucket_id, GLint* location',
     'result': ['GLint'],
     'error_return': -1,
   },
   'GetFragDataIndexEXT': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, uint32_t name_bucket_id, GLint* index',
+    'cmd_args': 'GLidProgram program, uint32_t name_bucket_id, GLint* index',
     'result': ['GLint'],
     'error_return': -1,
     'extension': 'EXT_blend_func_extended',
@@ -2392,8 +2244,7 @@ _FUNCTION_INFO = {
   'GetFragDataLocation': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, uint32_t name_bucket_id, GLint* location',
+    'cmd_args': 'GLidProgram program, uint32_t name_bucket_id, GLint* location',
     'result': ['GLint'],
     'error_return': -1,
     'es3': True,
@@ -2403,15 +2254,6 @@ _FUNCTION_INFO = {
     'result': ['SizedResult<GLboolean>'],
     'decoder_func': 'DoGetBooleanv',
     'gl_test_func': 'glGetIntegerv',
-  },
-  'GetBooleani_v': {
-    'type': 'GETn',
-    'result': ['SizedResult<GLboolean>'],
-    'decoder_func': 'DoGetBooleani_v',
-    'shadowed': True,
-    'client_test': False,
-    'unit_test': False,
-    'es3': True
   },
   'GetBufferParameteri64v': {
     'type': 'GETn',
@@ -2427,6 +2269,15 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoGetBufferParameteriv',
     'expectation': False,
     'shadowed': True,
+  },
+  'GetBufferSubDataCHROMIUM': {
+    'type': 'Custom',
+    'data_transfer_methods': ['shm'],
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLenumBufferTarget target, GLintptr offset, GLsizeiptr size,'
+    'uint32_t data_shm_id, uint32_t data_shm_offset',
+    'trace_level': 1,
   },
   'GetError': {
     'type': 'Is',
@@ -2458,7 +2309,7 @@ _FUNCTION_INFO = {
     'client_test': False,
     'decoder_func': 'DoGetInteger64v',
     'gl_test_func': 'glGetIntegerv',
-    'es3': True
+    'es3': True,
   },
   'GetIntegerv': {
     'type': 'GETn',
@@ -2473,7 +2324,7 @@ _FUNCTION_INFO = {
     'shadowed': True,
     'client_test': False,
     'unit_test': False,
-    'es3': True
+    'es3': True,
   },
   'GetIntegeri_v': {
     'type': 'GETn',
@@ -2482,15 +2333,14 @@ _FUNCTION_INFO = {
     'shadowed': True,
     'client_test': False,
     'unit_test': False,
-    'es3': True
+    'es3': True,
   },
   'GetInternalformativ': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'result': ['SizedResult<GLint>'],
-    'cmd_args':
-        'GLenumRenderBufferTarget target, GLenumRenderBufferFormat format, '
-        'GLenumInternalFormatParameter pname, GLint* params',
+    'cmd_args': 'GLenumRenderBufferTarget target, GLenumRenderBufferFormat format, '
+    'GLenumInternalFormatParameter pname, GLint* params',
     'es3': True,
   },
   'GetMaxValueInBufferCHROMIUM': {
@@ -2524,60 +2374,6 @@ _FUNCTION_INFO = {
     'type': 'STRn',
     'expectation': False,
   },
-  'GetProgramInterfaceiv': {
-    'type': 'GETn',
-    'decoder_func': 'DoGetProgramInterfaceiv',
-    'result': ['SizedResult<GLint>'],
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceiv': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, GLuint index, '
-        'uint32_t props_bucket_id, GLint* params',
-    'result': ['SizedResult<GLint>'],
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceIndex': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, '
-        'uint32_t name_bucket_id, GLuint* index',
-    'result': ['GLuint'],
-    'error_return': 'GL_INVALID_INDEX',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceLocation': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, '
-        'uint32_t name_bucket_id, GLint* location',
-    'result': ['GLint'],
-    'error_return': -1,
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
-  'GetProgramResourceName': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLenum program_interface, GLuint index, '
-        'uint32_t name_bucket_id, void* result',
-    'result': ['int32_t'],
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True,
-  },
   'GetRenderbufferParameteriv': {
     'type': 'GETn',
     'decoder_func': 'DoGetRenderbufferParameteriv',
@@ -2610,9 +2406,8 @@ _FUNCTION_INFO = {
   'GetShaderPrecisionFormat': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-      'GLenumShaderType shadertype, GLenumShaderPrecision precisiontype, '
-      'void* result',
+    'cmd_args': 'GLenumShaderType shadertype, GLenumShaderPrecision precisiontype, '
+    'void* result',
     'result': [
       'int32_t success',
       'int32_t min_range',
@@ -2646,12 +2441,14 @@ _FUNCTION_INFO = {
   'GetTexParameterfv': {
     'type': 'GETn',
     'decoder_func': 'DoGetTexParameterfv',
-    'result': ['SizedResult<GLfloat>']
+    'result': ['SizedResult<GLfloat>'],
+    'unit_test': False,
   },
   'GetTexParameteriv': {
     'type': 'GETn',
     'decoder_func': 'DoGetTexParameteriv',
-    'result': ['SizedResult<GLint>']
+    'result': ['SizedResult<GLint>'],
+    'unit_test': False,
   },
   'GetTranslatedShaderSourceANGLE': {
     'type': 'STRn',
@@ -2663,8 +2460,7 @@ _FUNCTION_INFO = {
   'GetUniformBlockIndex': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, uint32_t name_bucket_id, GLuint* index',
+    'cmd_args': 'GLidProgram program, uint32_t name_bucket_id, GLuint* index',
     'result': ['GLuint'],
     'error_return': 'GL_INVALID_INDEX',
     'es3': True,
@@ -2690,9 +2486,8 @@ _FUNCTION_INFO = {
   'GetTransformFeedbackVarying': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
-        'void* result',
+    'cmd_args': 'GLidProgram program, GLuint index, uint32_t name_bucket_id, '
+    'void* result',
     'result': [
       'int32_t success',
       'int32_t size',
@@ -2730,16 +2525,14 @@ _FUNCTION_INFO = {
     'data_transfer_methods': ['shm'],
     'result': ['SizedResult<GLuint>'],
     'cmd_args': 'GLidProgram program, uint32_t names_bucket_id, '
-                'GLuint* indices',
+    'GLuint* indices',
     'es3': True,
   },
   'GetUniformLocation': {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
-    'cmd_args':
-        'GLidProgram program, uint32_t name_bucket_id, GLint* location',
+    'cmd_args': 'GLidProgram program, uint32_t name_bucket_id, GLint* location',
     'result': ['GLint'],
-
     # http://www.opengl.org/sdk/docs/man/xhtml/glGetUniformLocation.xml
     'error_return': -1,
   },
@@ -2871,7 +2664,7 @@ _FUNCTION_INFO = {
   },
   'LinkProgram': {
     'decoder_func': 'DoLinkProgram',
-    'impl_func':  False,
+    'impl_func': False,
     'trace_level': 1,
   },
   'MapBufferCHROMIUM': {
@@ -2895,26 +2688,12 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'cmd_args': 'GLenumBufferTarget target, GLintptrNotNegative offset, '
-                'GLsizeiptr size, GLbitfieldMapBufferAccess access, '
-                'uint32_t data_shm_id, uint32_t data_shm_offset, '
-                'uint32_t result_shm_id, uint32_t result_shm_offset',
+    'GLsizeiptr size, GLbitfieldMapBufferAccess access, '
+    'uint32_t data_shm_id, uint32_t data_shm_offset, '
+    'uint32_t result_shm_id, uint32_t result_shm_offset',
     'es3': True,
     'result': ['uint32_t'],
     'trace_level': 1,
-  },
-  # MemoryBarrierEXT is in order to avoid the conflicting MemoryBarrier macro
-  # in windows.
-  'MemoryBarrierEXT': {
-    'cmd_args': 'GLbitfield barriers',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True
-  },
-  'MemoryBarrierByRegion': {
-    'cmd_args': 'GLbitfield barriers',
-    'unit_test': False,
-    'trace_level': 2,
-    'es31': True
   },
   'MultiDrawBeginCHROMIUM': {
     'decoder_func': 'DoMultiDrawBeginCHROMIUM',
@@ -2937,16 +2716,16 @@ _FUNCTION_INFO = {
   'MultiDrawArraysCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLenumDrawMode mode, '
-                'uint32_t firsts_shm_id, uint32_t firsts_shm_offset, '
-                'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
-                'GLsizei drawcount',
+    'uint32_t firsts_shm_id, uint32_t firsts_shm_offset, '
+    'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
+    'GLsizei drawcount',
     'extension': 'WEBGL_multi_draw',
     'extension_flag': 'webgl_multi_draw',
     'data_transfer_methods': ['shm'],
     'size_args': {
       'firsts': 'drawcount * sizeof(GLint)',
-      'counts': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
+      'counts': 'drawcount * sizeof(GLsizei)',
+    },
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -2955,18 +2734,18 @@ _FUNCTION_INFO = {
   'MultiDrawArraysInstancedCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLenumDrawMode mode, '
-                'uint32_t firsts_shm_id, uint32_t firsts_shm_offset, '
-                'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
-                'uint32_t instance_counts_shm_id, '
-                'uint32_t instance_counts_shm_offset, GLsizei drawcount',
+    'uint32_t firsts_shm_id, uint32_t firsts_shm_offset, '
+    'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
+    'uint32_t instance_counts_shm_id, '
+    'uint32_t instance_counts_shm_offset, GLsizei drawcount',
     'extension': 'WEBGL_multi_draw',
     'extension_flag': 'webgl_multi_draw',
     'data_transfer_methods': ['shm'],
     'size_args': {
       'firsts': 'drawcount * sizeof(GLint)',
       'counts': 'drawcount * sizeof(GLsizei)',
-      'instance_counts': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
+      'instance_counts': 'drawcount * sizeof(GLsizei)',
+    },
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -2975,13 +2754,13 @@ _FUNCTION_INFO = {
   'MultiDrawArraysInstancedBaseInstanceCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLenumDrawMode mode, '
-                'uint32_t firsts_shm_id, uint32_t firsts_shm_offset, '
-                'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
-                'uint32_t instance_counts_shm_id, '
-                'uint32_t instance_counts_shm_offset, '
-                'uint32_t baseinstances_shm_id, '
-                'uint32_t baseinstances_shm_offset, '
-                'GLsizei drawcount',
+    'uint32_t firsts_shm_id, uint32_t firsts_shm_offset, '
+    'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
+    'uint32_t instance_counts_shm_id, '
+    'uint32_t instance_counts_shm_offset, '
+    'uint32_t baseinstances_shm_id, '
+    'uint32_t baseinstances_shm_offset, '
+    'GLsizei drawcount',
     'extension': 'WEBGL_multi_draw_instanced_base_vertex_base_instance',
     'extension_flag': 'webgl_multi_draw_instanced_base_vertex_base_instance',
     'data_transfer_methods': ['shm'],
@@ -2991,7 +2770,6 @@ _FUNCTION_INFO = {
       'instance_counts': 'drawcount * sizeof(GLsizei)',
       'baseinstances': 'drawcount * sizeof(GLuint)',
     },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3000,17 +2778,17 @@ _FUNCTION_INFO = {
   'MultiDrawElementsCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLenumDrawMode mode, '
-                'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
-                'GLenumIndexType type, '
-                'uint32_t offsets_shm_id, uint32_t offsets_shm_offset, '
-                'GLsizei drawcount',
+    'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
+    'GLenumIndexType type, '
+    'uint32_t offsets_shm_id, uint32_t offsets_shm_offset, '
+    'GLsizei drawcount',
     'extension': 'WEBGL_multi_draw',
     'extension_flag': 'webgl_multi_draw',
     'data_transfer_methods': ['shm'],
     'size_args': {
       'counts': 'drawcount * sizeof(GLsizei)',
-      'offsets': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
+      'offsets': 'drawcount * sizeof(GLsizei)',
+    },
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3019,19 +2797,19 @@ _FUNCTION_INFO = {
   'MultiDrawElementsInstancedCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLenumDrawMode mode, '
-                'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
-                'GLenumIndexType type, '
-                'uint32_t offsets_shm_id, uint32_t offsets_shm_offset, '
-                'uint32_t instance_counts_shm_id, '
-                'uint32_t instance_counts_shm_offset, GLsizei drawcount',
+    'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
+    'GLenumIndexType type, '
+    'uint32_t offsets_shm_id, uint32_t offsets_shm_offset, '
+    'uint32_t instance_counts_shm_id, '
+    'uint32_t instance_counts_shm_offset, GLsizei drawcount',
     'extension': 'WEBGL_multi_draw',
     'extension_flag': 'webgl_multi_draw',
     'data_transfer_methods': ['shm'],
     'size_args': {
       'counts': 'drawcount * sizeof(GLsizei)',
       'offsets': 'drawcount * sizeof(GLsizei)',
-      'instance_counts': 'drawcount * sizeof(GLsizei)', },
-    'defer_draws': True,
+      'instance_counts': 'drawcount * sizeof(GLsizei)',
+    },
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3040,16 +2818,16 @@ _FUNCTION_INFO = {
   'MultiDrawElementsInstancedBaseVertexBaseInstanceCHROMIUM': {
     'type': 'Custom',
     'cmd_args': 'GLenumDrawMode mode, '
-                'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
-                'GLenumIndexType type, '
-                'uint32_t offsets_shm_id, uint32_t offsets_shm_offset, '
-                'uint32_t instance_counts_shm_id, '
-                'uint32_t instance_counts_shm_offset, '
-                'uint32_t basevertices_shm_id, '
-                'uint32_t basevertices_shm_offset, '
-                'uint32_t baseinstances_shm_id, '
-                'uint32_t baseinstances_shm_offset, '
-                'GLsizei drawcount',
+    'uint32_t counts_shm_id, uint32_t counts_shm_offset, '
+    'GLenumIndexType type, '
+    'uint32_t offsets_shm_id, uint32_t offsets_shm_offset, '
+    'uint32_t instance_counts_shm_id, '
+    'uint32_t instance_counts_shm_offset, '
+    'uint32_t basevertices_shm_id, '
+    'uint32_t basevertices_shm_offset, '
+    'uint32_t baseinstances_shm_id, '
+    'uint32_t baseinstances_shm_offset, '
+    'GLsizei drawcount',
     'extension': 'WEBGL_multi_draw_instanced_base_vertex_base_instance',
     'extension_flag': 'webgl_multi_draw_instanced_base_vertex_base_instance',
     'data_transfer_methods': ['shm'],
@@ -3060,7 +2838,6 @@ _FUNCTION_INFO = {
       'basevertices': 'drawcount * sizeof(GLint)',
       'baseinstances': 'drawcount * sizeof(GLuint)',
     },
-    'defer_draws': True,
     'impl_func': False,
     'client_test': False,
     'internal': True,
@@ -3105,21 +2882,10 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'impl_func': False,
   },
-  'PostSubBufferCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
-  'ProduceTextureDirectCHROMIUM': {
-    'decoder_func': 'DoProduceTextureDirectCHROMIUM',
-    'impl_func': False,
-    'type': 'PUT',
-    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
+  'ProvokingVertexANGLE': {
+    'extension_flag': 'angle_provoking_vertex',
     'unit_test': False,
-    'client_test': False,
-    'extension': "CHROMIUM_texture_mailbox",
-    'trace_level': 1,
+    'extension': 'ANGLE_provoking_vertex',
   },
   'RenderbufferStorage': {
     'decoder_func': 'DoRenderbufferStorage',
@@ -3128,8 +2894,7 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'RenderbufferStorageMultisampleCHROMIUM': {
-    'cmd_comment':
-        '// GL_CHROMIUM_framebuffer_multisample\n',
+    'cmd_comment': '// GL_CHROMIUM_framebuffer_multisample\n',
     'decoder_func': 'DoRenderbufferStorageMultisampleCHROMIUM',
     'gl_test_func': 'glRenderbufferStorageMultisampleCHROMIUM',
     'unit_test': False,
@@ -3140,8 +2905,7 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'RenderbufferStorageMultisampleAdvancedAMD': {
-    'cmd_comment':
-        '// GL_AMD_framebuffer_multisample_advanced\n',
+    'cmd_comment': '// GL_AMD_framebuffer_multisample_advanced\n',
     'decoder_func': 'DoRenderbufferStorageMultisampleAdvancedAMD',
     'gl_test_func': 'glRenderbufferStorageMultisampleAdvancedAMD',
     'unit_test': False,
@@ -3150,8 +2914,7 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'RenderbufferStorageMultisampleEXT': {
-    'cmd_comment':
-        '// GL_EXT_multisampled_render_to_texture\n',
+    'cmd_comment': '// GL_EXT_multisampled_render_to_texture\n',
     'decoder_func': 'DoRenderbufferStorageMultisampleEXT',
     'gl_test_func': 'glRenderbufferStorageMultisampleEXT',
     'unit_test': False,
@@ -3165,27 +2928,24 @@ _FUNCTION_INFO = {
     'trace_level': 1,
   },
   'ReadPixels': {
-    'cmd_comment':
-        '// ReadPixels has the result separated from the pixel buffer so that\n'
-        '// it is easier to specify the result going to some specific place\n'
-        '// that exactly fits the rectangle of pixels.\n',
+    'cmd_comment': '// ReadPixels has the result separated from the pixel buffer so that\n'
+    '// it is easier to specify the result going to some specific place\n'
+    '// that exactly fits the rectangle of pixels.\n',
     'type': 'Custom',
     'data_transfer_methods': ['shm'],
     'impl_func': False,
     'client_test': False,
-    'cmd_args':
-        'GLint x, GLint y, GLsizei width, GLsizei height, '
-        'GLenumReadPixelFormat format, GLenumReadPixelType type, '
-        'uint32_t pixels_shm_id, uint32_t pixels_shm_offset, '
-        'uint32_t result_shm_id, uint32_t result_shm_offset, '
-        'GLboolean async',
+    'cmd_args': 'GLint x, GLint y, GLsizei width, GLsizei height, '
+    'GLenumReadPixelFormat format, GLenumReadPixelType type, '
+    'uint32_t pixels_shm_id, uint32_t pixels_shm_offset, '
+    'uint32_t result_shm_id, uint32_t result_shm_offset, '
+    'GLboolean async',
     'result': [
       'uint32_t success',
       # Below args exclude out-of-bounds area.
       'int32_t row_length',
       'int32_t num_rows',
     ],
-    'defer_reads': True,
     'trace_level': 1,
   },
   'ReleaseShaderCompiler': {
@@ -3198,9 +2958,7 @@ _FUNCTION_INFO = {
     'es3': True,
   },
   'SamplerParameterf': {
-    'valid_args': {
-      '2': 'GL_NEAREST'
-    },
+    'valid_args': {'2': 'GL_NEAREST'},
     'decoder_func': 'DoSamplerParameterf',
     'es3': True,
   },
@@ -3214,9 +2972,7 @@ _FUNCTION_INFO = {
     'es3': True,
   },
   'SamplerParameteri': {
-    'valid_args': {
-      '2': 'GL_NEAREST'
-    },
+    'valid_args': {'2': 'GL_NEAREST'},
     'decoder_func': 'DoSamplerParameteri',
     'es3': True,
   },
@@ -3238,10 +2994,8 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoShaderSource',
     'expectation': False,
     'data_transfer_methods': ['bucket'],
-    'cmd_args':
-        'GLuint shader, const char** str',
-    'pepper_args':
-        'GLuint shader, GLsizei count, const char** str, const GLint* length',
+    'cmd_args': 'GLuint shader, const char** str',
+    'pepper_args': 'GLuint shader, GLsizei count, const char** str, const GLint* length',
   },
   'StencilMask': {
     'type': 'StateSetFrontBack',
@@ -3254,24 +3008,6 @@ _FUNCTION_INFO = {
     'state': 'StencilMask',
     'no_gl': True,
     'expectation': False,
-  },
-  'SwapBuffers': {
-    'impl_func': False,
-    'decoder_func': 'DoSwapBuffers',
-    'client_test': False,
-    'expectation': False,
-    'extension': True,
-    'trace_level': 1,
-    'trace_queueing_flow': True,
-  },
-  'SwapBuffersWithBoundsCHROMIUM': {
-    'type': 'PUTn',
-    'count': 4,
-    'decoder_func': 'DoSwapBuffersWithBoundsCHROMIUM',
-    'impl_func': False,
-    'client_test': False,
-    'unit_test': False,
-    'extension': True,
   },
   'TexImage2D': {
     'type': 'Custom',
@@ -3290,15 +3026,11 @@ _FUNCTION_INFO = {
   },
   'TexParameterf': {
     'decoder_func': 'DoTexParameterf',
-    'valid_args': {
-      '2': 'GL_NEAREST'
-    },
+    'valid_args': {'2': 'GL_NEAREST'},
   },
   'TexParameteri': {
     'decoder_func': 'DoTexParameteri',
-    'valid_args': {
-      '2': 'GL_NEAREST'
-    },
+    'valid_args': {'2': 'GL_NEAREST'},
   },
   'TexParameterfv': {
     'type': 'PUT',
@@ -3329,10 +3061,10 @@ _FUNCTION_INFO = {
     'client_test': False,
     'trace_level': 2,
     'cmd_args': 'GLenumTextureTarget target, GLint level, '
-                'GLint xoffset, GLint yoffset, '
-                'GLsizei width, GLsizei height, '
-                'GLenumTextureFormat format, GLenumPixelType type, '
-                'const void* pixels, GLboolean internal'
+    'GLint xoffset, GLint yoffset, '
+    'GLsizei width, GLsizei height, '
+    'GLenumTextureFormat format, GLenumPixelType type, '
+    'const void* pixels, GLboolean internal',
   },
   'TexSubImage3D': {
     'type': 'Custom',
@@ -3341,18 +3073,17 @@ _FUNCTION_INFO = {
     'client_test': False,
     'trace_level': 2,
     'cmd_args': 'GLenumTextureTarget target, GLint level, '
-                'GLint xoffset, GLint yoffset, GLint zoffset, '
-                'GLsizei width, GLsizei height, GLsizei depth, '
-                'GLenumTextureFormat format, GLenumPixelType type, '
-                'const void* pixels, GLboolean internal',
+    'GLint xoffset, GLint yoffset, GLint zoffset, '
+    'GLsizei width, GLsizei height, GLsizei depth, '
+    'GLenumTextureFormat format, GLenumPixelType type, '
+    'const void* pixels, GLboolean internal',
     'es3': True,
   },
   'TransformFeedbackVaryings': {
     'type': 'PUTSTR',
     'data_transfer_methods': ['bucket'],
     'decoder_func': 'DoTransformFeedbackVaryings',
-    'cmd_args':
-        'GLuint program, const char** varyings, GLenum buffermode',
+    'cmd_args': 'GLuint program, const char** varyings, GLenum buffermode',
     'expectation': False,
     'es3': True,
   },
@@ -3591,8 +3322,8 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLuint indx, GLintVertexAttribSize size, '
-                'GLenumVertexAttribIType type, GLsizei stride, '
-                'GLuint offset',
+    'GLenumVertexAttribIType type, GLsizei stride, '
+    'GLuint offset',
     'client_test': False,
     'es3': True,
   },
@@ -3600,14 +3331,13 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLuint indx, GLintVertexAttribSize size, '
-                'GLenumVertexAttribType type, GLboolean normalized, '
-                'GLsizei stride, GLuint offset',
+    'GLenumVertexAttribType type, GLboolean normalized, '
+    'GLsizei stride, GLuint offset',
     'client_test': False,
   },
   'WaitSync': {
     'type': 'Custom',
-    'cmd_args': 'GLuint sync, GLbitfieldSyncFlushFlags flags, '
-                'GLuint64 timeout',
+    'cmd_args': 'GLuint sync, GLbitfieldSyncFlushFlags flags, GLuint64 timeout',
     'impl_func': False,
     'client_test': False,
     'es3': True,
@@ -3621,16 +3351,6 @@ _FUNCTION_INFO = {
   'Viewport': {
     'impl_func': False,
     'decoder_func': 'DoViewport',
-  },
-  'ResizeCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'client_test': False,
-    'cmd_args': 'GLint width, GLint height, GLfloat scale_factor, GLboolean '
-                'alpha, GLuint shm_id, GLuint shm_offset, GLsizei '
-                'color_space_size',
-    'extension': True,
-    'trace_level': 1,
   },
   'GetRequestableExtensionsCHROMIUM': {
     'type': 'Custom',
@@ -3668,19 +3388,17 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count, '
-                'GLsizei primcount',
+    'GLsizei primcount',
     'extension': 'ANGLE_instanced_arrays',
     'pepper_interface': 'InstancedArrays',
-    'defer_draws': True,
     'trace_level': 2,
   },
   'DrawArraysInstancedBaseInstanceANGLE': {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLint first, GLsizei count, '
-                'GLsizei primcount, GLuint baseinstance',
+    'GLsizei primcount, GLuint baseinstance',
     'extension': 'ANGLE_base_vertex_base_instance',
-    'defer_draws': True,
     'trace_level': 2,
   },
   'DrawBuffersEXT': {
@@ -3698,22 +3416,20 @@ _FUNCTION_INFO = {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLsizei count, '
-                'GLenumIndexType type, GLuint index_offset, GLsizei primcount',
+    'GLenumIndexType type, GLuint index_offset, GLsizei primcount',
     'extension': 'ANGLE_instanced_arrays',
     'client_test': False,
     'pepper_interface': 'InstancedArrays',
-    'defer_draws': True,
     'trace_level': 2,
   },
   'DrawElementsInstancedBaseVertexBaseInstanceANGLE': {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLenumDrawMode mode, GLsizei count, '
-                'GLenumIndexType type, GLuint index_offset, GLsizei primcount, '
-                'GLint basevertex, GLuint baseinstance',
+    'GLenumIndexType type, GLuint index_offset, GLsizei primcount, '
+    'GLint basevertex, GLuint baseinstance',
     'extension': 'ANGLE_base_vertex_base_instance',
     'client_test': False,
-    'defer_draws': True,
     'trace_level': 2,
   },
   'VertexAttribDivisorANGLE': {
@@ -3787,11 +3503,11 @@ _FUNCTION_INFO = {
     'pepper_interface': 'Query',
     'extension': "occlusion_query_EXT",
   },
-  'QueryCounterEXT' : {
+  'QueryCounterEXT': {
     'type': 'Custom',
     'impl_func': False,
     'cmd_args': 'GLidQuery id, GLenumQueryTarget target, '
-                'void* sync_data, GLuint submit_count',
+    'void* sync_data, GLuint submit_count',
     'data_transfer_methods': ['shm'],
     'gl_test_func': 'glQueryCounter',
     'extension': "disjoint_timer_query_EXT",
@@ -3866,7 +3582,6 @@ _FUNCTION_INFO = {
     'extension': 'EXT_debug_marker',
     'impl_func': False,
   },
-
   'GenVertexArraysOES': {
     'type': 'GENn',
     'extension': 'OES_vertex_array_object',
@@ -3903,25 +3618,6 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoIsVertexArrayOES',
     'unit_test': False,
     'pepper_interface': 'VertexArrayObject',
-  },
-  'BindTexImage2DCHROMIUM': {
-    'decoder_func': 'DoBindTexImage2DCHROMIUM',
-    'unit_test': False,
-    'extension': "CHROMIUM_image",
-  },
-  'BindTexImage2DWithInternalformatCHROMIUM': {
-    'decoder_func': 'DoBindTexImage2DWithInternalformatCHROMIUM',
-    'unit_test': False,
-    'extension': "CHROMIUM_image",
-  },
-  'ReleaseTexImage2DCHROMIUM': {
-    'decoder_func': 'DoReleaseTexImage2DCHROMIUM',
-    'unit_test': False,
-    'extension': "CHROMIUM_image",
-  },
-  'ShallowFinishCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': 'CHROMIUM_ordering_barrier',
   },
   'OrderingBarrierCHROMIUM': {
     'type': 'NoCommand',
@@ -3963,110 +3659,6 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'extension': 'CHROMIUM_lose_context',
     'trace_level': 1,
-  },
-  'DiscardBackbufferCHROMIUM': {
-    'type': 'Custom',
-    'extension': True,
-    'trace_level': 2,
-  },
-  'ScheduleOverlayPlaneCHROMIUM': {
-    'type': 'Custom',
-    'client_test': False,
-    'extension': 'CHROMIUM_schedule_overlay_plane',
-  },
-  'ScheduleCALayerSharedStateCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'client_test': False,
-    'cmd_args': 'GLfloat opacity, GLboolean is_clipped, '
-                'GLint sorting_context_id, '
-                'GLuint shm_id, GLuint shm_offset',
-    'extension': 'CHROMIUM_schedule_ca_layer',
-  },
-  'ScheduleCALayerCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'client_test': False,
-    'cmd_args': 'GLuint contents_texture_id, GLuint background_color, '
-                'GLuint edge_aa_mask, GLuint filter, GLuint shm_id, '
-                'GLuint shm_offset',
-    'extension': 'CHROMIUM_schedule_ca_layer',
-  },
-  'ScheduleCALayerInUseQueryCHROMIUM': {
-    'type': 'PUTn',
-    'count': 1,
-    'decoder_func': 'DoScheduleCALayerInUseQueryCHROMIUM',
-    'cmd_args': 'GLsizei count, const GLuint* textures',
-    'extension': 'CHROMIUM_schedule_ca_layer',
-    'unit_test': False,
-  },
-  'ScheduleDCLayerCHROMIUM': {
-    'cmd_args': 'GLuint texture_0, GLuint texture_1, GLint z_order, '
-                'GLint content_x, GLint content_y, GLint content_width, '
-                'GLint content_height, GLint quad_x, GLint quad_y, '
-                'GLint quad_width, GLint quad_height, '
-                'GLfloat transform_c1r1, GLfloat transform_c2r1, '
-                'GLfloat transform_c1r2, GLfloat transform_c2r2, '
-                'GLfloat transform_tx, GLfloat transform_ty, '
-                'GLboolean is_clipped, GLint clip_x, GLint clip_y, '
-                'GLint clip_width, GLint clip_height, '
-                'GLuint protected_video_type',
-    'decoder_func': 'DoScheduleDCLayerCHROMIUM',
-    'extension': 'CHROMIUM_schedule_dc_layer',
-    'unit_test': False,
-  },
-  'CommitOverlayPlanesCHROMIUM': {
-    'impl_func': False,
-    'decoder_func': 'DoCommitOverlayPlanes',
-    'unit_test': False,
-    'client_test': False,
-    'extension': 'CHROMIUM_commit_overlay_planes',
-  },
-  'SetDrawRectangleCHROMIUM': {
-    'decoder_func': 'DoSetDrawRectangleCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_set_draw_rectangle',
-  },
-  'SetEnableDCLayersCHROMIUM': {
-    'decoder_func': 'DoSetEnableDCLayersCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_dc_layers',
-  },
-  'InitializeDiscardableTextureCHROMIUM': {
-    'type': 'Custom',
-    'cmd_args': 'GLuint texture_id, uint32_t shm_id, '
-                'uint32_t shm_offset',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
-  'UnlockDiscardableTextureCHROMIUM': {
-    'type': 'Custom',
-    'cmd_args': 'GLuint texture_id',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
-  'LockDiscardableTextureCHROMIUM': {
-    'type': 'Custom',
-    'cmd_args': 'GLuint texture_id',
-    'impl_func': False,
-    'client_test': False,
-    'extension': True,
-  },
-  'TexStorage2DImageCHROMIUM': {
-    'decoder_func': 'DoTexStorage2DImageCHROMIUM',
-    'unit_test': False,
-    'extension': 'CHROMIUM_texture_storage_image',
-    'extension_flag': 'chromium_texture_storage_image',
-  },
-  'SetColorSpaceMetadataCHROMIUM': {
-    'type': 'Custom',
-    'impl_func': False,
-    'client_test': False,
-    'cmd_args': 'GLuint texture_id, GLuint shm_id, GLuint shm_offset, '
-                'GLsizei color_space_size',
-    'extension': 'CHROMIUM_color_space_metadata',
   },
   'WindowRectanglesEXT': {
     'type': 'PUTn',
@@ -4111,16 +3703,6 @@ _FUNCTION_INFO = {
     'extension': 'CHROMIUM_gpu_fence',
     'extension_flag': 'chromium_gpu_fence',
   },
-  'UnpremultiplyAndDitherCopyCHROMIUM': {
-    'decoder_func': 'DoUnpremultiplyAndDitherCopyCHROMIUM',
-    'cmd_args': 'GLuint source_id, GLuint dest_id, GLint x, GLint y, '
-                'GLsizei width, GLsizei height',
-    'client_test': False,
-    'unit_test': False,
-    'impl_func': True,
-    'extension': 'CHROMIUM_unpremultiply_and_dither_copy',
-    'extension_flag': 'unpremultiply_and_dither_copy',
-  },
   'InvalidateReadbackBufferShadowDataCHROMIUM': {
     'type': 'NoCommand',
     'impl_func': False,
@@ -4147,7 +3729,7 @@ _FUNCTION_INFO = {
     'extension': 'OVR_multiview2',
     'extension_flag': 'ovr_multiview2',
     'trace_level': 1,
-    'es3': True
+    'es3': True,
   },
   'MaxShaderCompilerThreadsKHR': {
     'cmd_args': 'GLuint count',
@@ -4157,11 +3739,6 @@ _FUNCTION_INFO = {
     'extension_flag': 'khr_parallel_shader_compile',
   },
   'CreateAndTexStorage2DSharedImageCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': "CHROMIUM_shared_image",
-    'trace_level': 2,
-  },
-  'CreateAndTexStorage2DSharedImageWithInternalFormatCHROMIUM': {
     'type': 'NoCommand',
     'extension': "CHROMIUM_shared_image",
     'trace_level': 2,
@@ -4187,17 +3764,177 @@ _FUNCTION_INFO = {
     'extension': 'CHROMIUM_shared_image',
     'unit_test': False,
   },
-  'BeginBatchReadAccessSharedImageCHROMIUM': {
-    'decoder_func': 'DoBeginBatchReadAccessSharedImageCHROMIUM',
+  # NOTE: Following functions are given an INTERNAL suffix but they're not
+  # truly 'internal'. This is because they are to be accessed as client only
+  # from RasterImplementationGLES to be used with Passthrough Command Decoder.
+  # Also, they have similar implementations to corresponding functions for
+  # Raster Decoder.
+  'CopySharedImageINTERNAL': {
+    'decoder_func': 'DoCopySharedImageINTERNAL',
     'extension': 'CHROMIUM_shared_image',
+    'internal': False,
+    'type': 'PUT',
+    'count': 32,  # GL_MAILBOX_SIZE_CHROMIUM x2
+    'impl_func': True,
     'unit_test': False,
+    'trace_level': 2,
   },
-  'EndBatchReadAccessSharedImageCHROMIUM': {
-    'decoder_func': 'DoEndBatchReadAccessSharedImageCHROMIUM',
+  'CopySharedImageToTextureINTERNAL': {
+    'decoder_func': 'DoCopySharedImageToTextureINTERNAL',
     'extension': 'CHROMIUM_shared_image',
+    'internal': False,
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
+    'impl_func': True,
     'unit_test': False,
-  }
-
+    'trace_level': 2,
+  },
+  # mailbox_offset refers to the offset in shared memory pointing to shared
+  # image mailbox.
+  'ReadbackARGBImagePixelsINTERNAL': {
+    'type': 'Custom',
+    'extension': 'CHROMIUM_shared_image',
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLint src_x, GLint src_y, GLint plane_index, GLuint dst_width, '
+    'GLuint dst_height, GLuint row_bytes, GLuint dst_sk_color_type, '
+    'GLuint dst_sk_alpha_type, GLint shm_id, GLuint shm_offset, '
+    'GLuint color_space_offset, GLuint pixels_offset, '
+    'GLuint mailbox_offset',
+    'result': ['uint32_t'],
+    'trace_level': 2,
+  },
+  # mailbox_offset refers to the offset in shared memory pointing to shared
+  # image mailbox.
+  'WritePixelsYUVINTERNAL': {
+    'type': 'Custom',
+    'extension': 'CHROMIUM_shared_image',
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLuint src_width, GLuint src_height, GLuint src_row_bytes_plane1, '
+    'GLuint src_row_bytes_plane2, GLuint src_row_bytes_plane3, '
+    'GLuint src_row_bytes_plane4, GLuint src_yuv_plane_config, '
+    'GLuint src_yuv_subsampling, GLuint src_yuv_datatype, GLint shm_id, '
+    'GLuint shm_offset, GLuint pixels_offset_plane1, '
+    'GLuint pixels_offset_plane2, GLuint pixels_offset_plane3, '
+    'GLuint pixels_offset_plane4',
+    'trace_level': 2,
+  },
+  'FramebufferMemorylessPixelLocalStorageANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferMemorylessPixelLocalStorageANGLE',
+  },
+  'FramebufferTexturePixelLocalStorageANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferTexturePixelLocalStorageANGLE',
+  },
+  'FramebufferPixelLocalClearValuefvANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'PUT',
+    'count': 4,
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferPixelLocalClearValuefvANGLE',
+  },
+  'FramebufferPixelLocalClearValueivANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'PUT',
+    'count': 4,
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferPixelLocalClearValueivANGLE',
+  },
+  'FramebufferPixelLocalClearValueuivANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'PUT',
+    'use_count_func': True,
+    'count': 4,
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferPixelLocalClearValueuivANGLE',
+  },
+  'BeginPixelLocalStorageANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'PUTn',
+    'count': 1,
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoBeginPixelLocalStorageANGLE',
+  },
+  'EndPixelLocalStorageANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'PUTn',
+    'count': 1,
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoEndPixelLocalStorageANGLE',
+  },
+  'EndPixelLocalStorageImplicitANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoEndPixelLocalStorageImplicitANGLE',
+  },
+  'PixelLocalStorageBarrierANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoPixelLocalStorageBarrierANGLE',
+  },
+  'FramebufferPixelLocalStorageInterruptANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferPixelLocalStorageInterruptANGLE',
+  },
+  'FramebufferPixelLocalStorageRestoreANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoFramebufferPixelLocalStorageRestoreANGLE',
+  },
+  'GetFramebufferPixelLocalStorageParameterfvANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'GETn',
+    'unit_test': False,
+    'es3': True,
+    'result': ['SizedResult<GLfloat>'],
+    'decoder_func': 'DoGetFramebufferPixelLocalStorageParameterfvANGLE',
+  },
+  'GetFramebufferPixelLocalStorageParameterivANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'GETn',
+    'unit_test': False,
+    'es3': True,
+    'result': ['SizedResult<GLint>'],
+    'decoder_func': 'DoGetFramebufferPixelLocalStorageParameterivANGLE',
+  },
+  'GetFramebufferPixelLocalStorageParameteruivANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'GETn',
+    'unit_test': False,
+    'es3': True,
+    'result': ['SizedResult<GLuint>'],
+    'decoder_func': 'DoGetFramebufferPixelLocalStorageParameteruivANGLE',
+  },
 }
 
 
@@ -4205,15 +3942,20 @@ def main(argv):
   """This is the main function."""
   parser = OptionParser()
   parser.add_option(
-      "--output-dir",
-      help="Output directory for generated files. Defaults to chromium root "
-      "directory.")
+    "--output-dir",
+    help="Output directory for generated files. Defaults to chromium root "
+    "directory.",
+  )
   parser.add_option(
-      "-v", "--verbose", action="store_true", help="Verbose logging output.")
+    "-v", "--verbose", action="store_true", help="Verbose logging output."
+  )
   parser.add_option(
-      "-c", "--check", action="store_true",
-      help="Check if output files match generated files in chromium root "
-      "directory.  Use this in PRESUBMIT scripts with --output-dir.")
+    "-c",
+    "--check",
+    action="store_true",
+    help="Check if output files match generated files in chromium root "
+    "directory.  Use this in PRESUBMIT scripts with --output-dir.",
+  )
 
   (options, _) = parser.parse_args(args=argv)
 
@@ -4225,7 +3967,7 @@ def main(argv):
     if 'extension_flag' in state:
       continue
     if 'enum' in state:
-      if not state['enum'] in gl_state_valid:
+      if state['enum'] not in gl_state_valid:
         gl_state_valid.append(state['enum'])
     else:
       for item in state['states']:
@@ -4233,21 +3975,26 @@ def main(argv):
           continue
         if 'es3' in item:
           assert item['es3']
-          if not item['enum'] in gl_state_valid_es3:
+          if item['enum'] not in gl_state_valid_es3:
             gl_state_valid_es3.append(item['enum'])
         else:
-          if not item['enum'] in gl_state_valid:
+          if item['enum'] not in gl_state_valid:
             gl_state_valid.append(item['enum'])
   for capability in build_cmd_buffer_lib._CAPABILITY_FLAGS:
     if 'extension_flag' in capability:
       continue
     valid_value = "GL_%s" % capability['name'].upper()
-    if not valid_value in gl_state_valid:
+    if valid_value not in gl_state_valid:
       gl_state_valid.append(valid_value)
 
   # This script lives under src/gpu/command_buffer.
   script_dir = os.path.dirname(os.path.abspath(__file__))
-  assert script_dir.endswith(os.path.normpath("src/gpu/command_buffer"))
+  assert script_dir.endswith(
+    (
+      os.path.normpath("src/gpu/command_buffer"),
+      os.path.normpath("chromium/gpu/command_buffer"),
+    )
+  )
   # os.path.join doesn't do the right thing with relative paths.
   chromium_root_dir = os.path.abspath(script_dir + "/../..")
 
@@ -4260,89 +4007,109 @@ def main(argv):
 
   build_cmd_buffer_lib.InitializePrefix("GLES2")
   gen = build_cmd_buffer_lib.GLGenerator(
-      options.verbose, "2014", _FUNCTION_INFO, _NAMED_TYPE_INFO,
-      chromium_root_dir)
+    options.verbose, "2014", _FUNCTION_INFO, _NAMED_TYPE_INFO, chromium_root_dir
+  )
   gen.ParseGLH("gpu/command_buffer/gles2_cmd_buffer_functions.txt")
 
-  gen.WritePepperGLES2Interface("ppapi/api/ppb_opengles2.idl", False)
-  gen.WritePepperGLES2Interface("ppapi/api/dev/ppb_opengles2ext_dev.idl", True)
-  gen.WriteGLES2ToPPAPIBridge("ppapi/lib/gl/gles2/gles2.c")
-  gen.WritePepperGLES2Implementation(
-      "ppapi/shared_impl/ppb_opengles2_shared.cc")
   gen.WriteCommandIds("gpu/command_buffer/common/gles2_cmd_ids_autogen.h")
   gen.WriteFormat("gpu/command_buffer/common/gles2_cmd_format_autogen.h")
   gen.WriteFormatTest(
-    "gpu/command_buffer/common/gles2_cmd_format_test_autogen.h")
+    "gpu/command_buffer/common/gles2_cmd_format_test_autogen.h"
+  )
   gen.WriteGLES2InterfaceHeader(
-    "gpu/command_buffer/client/gles2_interface_autogen.h")
+    "gpu/command_buffer/client/gles2_interface_autogen.h"
+  )
   gen.WriteGLES2InterfaceStub(
-    "gpu/command_buffer/client/gles2_interface_stub_autogen.h")
+    "gpu/command_buffer/client/gles2_interface_stub_autogen.h"
+  )
   gen.WriteGLES2InterfaceStubImpl(
-      "gpu/command_buffer/client/gles2_interface_stub_impl_autogen.h")
+    "gpu/command_buffer/client/gles2_interface_stub_impl_autogen.h"
+  )
   gen.WriteGLES2ImplementationHeader(
-    "gpu/command_buffer/client/gles2_implementation_autogen.h")
+    "gpu/command_buffer/client/gles2_implementation_autogen.h"
+  )
   gen.WriteGLES2Implementation(
-    "gpu/command_buffer/client/gles2_implementation_impl_autogen.h")
+    "gpu/command_buffer/client/gles2_implementation_impl_autogen.h"
+  )
   gen.WriteGLES2ImplementationUnitTests(
-      "gpu/command_buffer/client/gles2_implementation_unittest_autogen.h")
+    "gpu/command_buffer/client/gles2_implementation_unittest_autogen.h"
+  )
   gen.WriteGLES2TraceImplementationHeader(
-      "gpu/command_buffer/client/gles2_trace_implementation_autogen.h")
+    "gpu/command_buffer/client/gles2_trace_implementation_autogen.h"
+  )
   gen.WriteGLES2TraceImplementation(
-      "gpu/command_buffer/client/gles2_trace_implementation_impl_autogen.h")
+    "gpu/command_buffer/client/gles2_trace_implementation_impl_autogen.h"
+  )
   gen.WriteGLES2CLibImplementation(
-    "gpu/command_buffer/client/gles2_c_lib_autogen.h")
+    "gpu/command_buffer/client/gles2_c_lib_autogen.h"
+  )
   gen.WriteCmdHelperHeader(
-    "gpu/command_buffer/client/gles2_cmd_helper_autogen.h")
+    "gpu/command_buffer/client/gles2_cmd_helper_autogen.h"
+  )
   gen.WriteServiceImplementation(
-    "gpu/command_buffer/service/gles2_cmd_decoder_autogen.h")
+    "gpu/command_buffer/service/gles2_cmd_decoder_autogen.h"
+  )
   gen.WritePassthroughServiceImplementation(
-    "gpu/command_buffer/service/" +
-    "gles2_cmd_decoder_passthrough_handlers_autogen.cc")
+    "gpu/command_buffer/service/"
+    + "gles2_cmd_decoder_passthrough_handlers_autogen.cc"
+  )
   gen.WriteServiceContextStateHeader(
-    "gpu/command_buffer/service/context_state_autogen.h")
+    "gpu/command_buffer/service/context_state_autogen.h"
+  )
   gen.WriteServiceContextStateImpl(
-    "gpu/command_buffer/service/context_state_impl_autogen.h")
+    "gpu/command_buffer/service/context_state_impl_autogen.h"
+  )
   gen.WriteServiceContextStateTestHelpers(
-    "gpu/command_buffer/service/context_state_test_helpers_autogen.h")
+    "gpu/command_buffer/service/context_state_test_helpers_autogen.h"
+  )
   gen.WriteClientContextStateHeader(
-    "gpu/command_buffer/client/client_context_state_autogen.h")
+    "gpu/command_buffer/client/client_context_state_autogen.h"
+  )
   gen.WriteClientContextStateImpl(
-      "gpu/command_buffer/client/client_context_state_impl_autogen.h")
+    "gpu/command_buffer/client/client_context_state_impl_autogen.h"
+  )
   gen.WriteServiceUnitTests(
-    "gpu/command_buffer/service/gles2_cmd_decoder_unittest_%d_autogen.h")
+    "gpu/command_buffer/service/gles2_cmd_decoder_unittest_%d_autogen.h"
+  )
   gen.WriteServiceUnitTestsForExtensions(
-    "gpu/command_buffer/service/"
-    "gles2_cmd_decoder_unittest_extensions_autogen.h")
+    "gpu/command_buffer/service/gles2_cmd_decoder_unittest_extensions_autogen.h"
+  )
   gen.WriteServiceUtilsHeader(
-    "gpu/command_buffer/service/gles2_cmd_validation_autogen.h")
+    "gpu/command_buffer/service/gles2_cmd_validation_autogen.h"
+  )
   gen.WriteServiceUtilsImplementation(
-    "gpu/command_buffer/service/"
-    "gles2_cmd_validation_implementation_autogen.h")
+    "gpu/command_buffer/service/gles2_cmd_validation_implementation_autogen.h"
+  )
   gen.WriteCommonUtilsHeader(
-    "gpu/command_buffer/common/gles2_cmd_utils_autogen.h")
+    "gpu/command_buffer/common/gles2_cmd_utils_autogen.h"
+  )
   gen.WriteCommonUtilsImpl(
-    "gpu/command_buffer/common/gles2_cmd_utils_implementation_autogen.h")
+    "gpu/command_buffer/common/gles2_cmd_utils_implementation_autogen.h"
+  )
   gen.WriteGLES2Header("gpu/GLES2/gl2chromium_autogen.h")
 
-  build_cmd_buffer_lib.Format(gen.generated_cpp_filenames, output_dir,
-                              chromium_root_dir)
+  build_cmd_buffer_lib.Format(
+    gen.generated_cpp_filenames, output_dir, chromium_root_dir
+  )
 
   if gen.errors > 0:
-    print "build_gles2_cmd_buffer.py: Failed with %d errors" % gen.errors
+    print("build_gles2_cmd_buffer.py: Failed with %d errors" % gen.errors)
     return 1
 
   check_failed_filenames = []
   if options.check:
     for filename in gen.generated_cpp_filenames:
-      if not filecmp.cmp(os.path.join(output_dir, filename),
-                         os.path.join(chromium_root_dir, filename)):
+      if not filecmp.cmp(
+        os.path.join(output_dir, filename),
+        os.path.join(chromium_root_dir, filename),
+      ):
         check_failed_filenames.append(filename)
 
   if len(check_failed_filenames) > 0:
-    print 'Please run gpu/command_buffer/build_gles2_cmd_buffer.py'
-    print 'Failed check on autogenerated command buffer files:'
+    print('Please run gpu/command_buffer/build_gles2_cmd_buffer.py')
+    print('Failed check on autogenerated command buffer files:')
     for filename in check_failed_filenames:
-      print filename
+      print(filename)
     return 1
 
   return 0

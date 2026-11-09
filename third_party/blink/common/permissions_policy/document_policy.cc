@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "net/http/structured_headers.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy_enum_values.h"
 
 namespace blink {
 
@@ -36,31 +38,54 @@ std::unique_ptr<DocumentPolicy> DocumentPolicy::CopyStateFrom(
   return new_policy;
 }
 
-namespace {
-net::structured_headers::Item PolicyValueToItem(const PolicyValue& value) {
-  switch (value.Type()) {
-    case mojom::PolicyValueType::kBool:
-      return net::structured_headers::Item{value.BoolValue()};
-    case mojom::PolicyValueType::kDecDouble:
-      return net::structured_headers::Item{value.DoubleValue()};
-    default:
-      NOTREACHED();
-      return net::structured_headers::Item{
-          nullptr, net::structured_headers::Item::ItemType::kNullType};
+DocumentPolicy::ParsedDocumentPolicy DocumentPolicy::GetParsedPolicy() const {
+  DocumentPolicyFeatureState feature_state;
+  FeatureEndpointMap endpoint_map;
+  for (const auto& entry : GetDocumentPolicyFeatureInfoMap()) {
+    PolicyValue current_value =
+        internal_feature_state_[static_cast<size_t>(entry.first)];
+    if (current_value != entry.second.default_value) {
+      feature_state.emplace(entry.first, current_value);
+      auto endpoint = endpoint_map_.find(entry.first);
+      if (endpoint != endpoint_map_.end()) {
+        endpoint_map.insert(*endpoint);
+      }
+    }
   }
+  return ParsedDocumentPolicy{std::move(feature_state),
+                              std::move(endpoint_map)};
+}
+
+namespace {
+
+net::structured_headers::Item PolicyValueToItem(
+    mojom::DocumentPolicyFeature feature,
+    const PolicyValue& value) {
+  return value.Visit(absl::Overload{
+      [](bool b) { return net::structured_headers::Item{b}; },
+      [](double d) { return net::structured_headers::Item{d}; },
+      [&](int32_t i) {
+        std::optional<std::string_view> token =
+            DocumentPolicyEnumValueToToken(feature, i);
+        CHECK(token);
+        return net::structured_headers::Item(
+            net::structured_headers::Item::token, *token);
+      },
+      [](std::monostate) -> net::structured_headers::Item { NOTREACHED(); },
+  });
 }
 
 }  // namespace
 
 // static
-absl::optional<std::string> DocumentPolicy::Serialize(
+std::optional<std::string> DocumentPolicy::Serialize(
     const DocumentPolicyFeatureState& policy) {
   return DocumentPolicy::SerializeInternal(policy,
                                            GetDocumentPolicyFeatureInfoMap());
 }
 
 // static
-absl::optional<std::string> DocumentPolicy::SerializeInternal(
+std::optional<std::string> DocumentPolicy::SerializeInternal(
     const DocumentPolicyFeatureState& policy,
     const DocumentPolicyFeatureInfoMap& feature_info_map) {
   net::structured_headers::Dictionary root;
@@ -81,8 +106,16 @@ absl::optional<std::string> DocumentPolicy::SerializeInternal(
     const std::string& feature_name = feature_info_map.at(feature).feature_name;
     const PolicyValue& value = policy_entry.second;
 
+    // Skip enum features whose value has no token representation — this covers
+    // the sentinel default (value out of valid token range) meaning "not
+    // explicitly set in the header".
+    if (std::optional<int32_t> v = value.GetIfEnum();
+        v && !DocumentPolicyEnumValueToToken(feature, *v)) {
+      continue;
+    }
+
     root[feature_name] = net::structured_headers::ParameterizedMember(
-        PolicyValueToItem(value), /* parameters */ {});
+        PolicyValueToItem(feature, value), /* parameters */ {});
   }
 
   return net::structured_headers::SerializeDictionary(root);
@@ -154,13 +187,13 @@ PolicyValue DocumentPolicy::GetFeatureValue(
   return internal_feature_state_[static_cast<size_t>(feature)];
 }
 
-const absl::optional<std::string> DocumentPolicy::GetFeatureEndpoint(
+const std::optional<std::string> DocumentPolicy::GetFeatureEndpoint(
     mojom::DocumentPolicyFeature feature) const {
   auto endpoint_it = endpoint_map_.find(feature);
   if (endpoint_it != endpoint_map_.end()) {
     return endpoint_it->second;
   } else {
-    return absl::nullopt;
+    return std::nullopt;
   }
 }
 

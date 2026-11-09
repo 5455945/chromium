@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,7 +28,7 @@ void GpuFeatureCheckerImpl::CheckGpuFeatureAvailability() {
   CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   // May only call CheckGpuFeatureAvailability() once.
-  DCHECK(!checking_);
+  CHECK(!checking_, base::NotFatalUntil::M159);
   checking_ = true;
 
   AddRef();  // Matched with a Release in OnGpuInfoUpdate.

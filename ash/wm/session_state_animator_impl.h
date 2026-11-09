@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 #define ASH_WM_SESSION_STATE_ANIMATOR_IMPL_H_
 
 #include "ash/ash_export.h"
+#include "ash/public/cpp/shell_window_ids.h"
 #include "ash/wm/session_state_animator.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/window.h"
 
 namespace ui {
 class LayerAnimationObserver;
-}
+}  // namespace ui
 
 namespace ash {
 
@@ -20,29 +21,19 @@ namespace ash {
 // out, shut down).
 class ASH_EXPORT SessionStateAnimatorImpl : public SessionStateAnimator {
  public:
-  // Helper class used by tests to access internal state.
-  class ASH_EXPORT TestApi {
-   public:
-    explicit TestApi(SessionStateAnimatorImpl* animator)
-        : animator_(animator) {}
-
-    // Returns true if containers of a given |container_mask|
-    // were last animated with |type| (probably; the analysis is fairly ad-hoc).
-    // |container_mask| is a bitfield of a Container.
-    bool ContainersAreAnimated(int container_mask,
-                               SessionStateAnimator::AnimationType type) const;
-
-    // Returns true if root window was last animated with |type| (probably;
-    // the analysis is fairly ad-hoc).
-    bool RootWindowIsAnimated(SessionStateAnimator::AnimationType type) const;
-
-   private:
-    SessionStateAnimatorImpl* animator_;  // not owned
-
-    DISALLOW_COPY_AND_ASSIGN(TestApi);
+  // Child containers of `NON_LOCK_SCREEN_CONTAINERS` should be animated on
+  // session state changes.
+  static constexpr int ContainersToAnimateInNonLockScreenContainer[] = {
+      kShellWindowId_HomeScreenContainer,  kShellWindowId_AlwaysOnTopContainer,
+      kShellWindowId_FloatContainer,       kShellWindowId_PipContainer,
+      kShellWindowId_SystemModalContainer,
   };
 
   SessionStateAnimatorImpl();
+
+  SessionStateAnimatorImpl(const SessionStateAnimatorImpl&) = delete;
+  SessionStateAnimatorImpl& operator=(const SessionStateAnimatorImpl&) = delete;
+
   ~SessionStateAnimatorImpl() override;
 
   // Fills |containers| with the containers included in |container_mask|.
@@ -78,8 +69,6 @@ class ASH_EXPORT SessionStateAnimatorImpl : public SessionStateAnimator {
                              SessionStateAnimator::AnimationType type,
                              SessionStateAnimator::AnimationSpeed speed,
                              ui::LayerAnimationObserver* observer);
-
-  DISALLOW_COPY_AND_ASSIGN(SessionStateAnimatorImpl);
 };
 
 }  // namespace ash

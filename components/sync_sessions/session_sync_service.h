@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,12 @@
 #define COMPONENTS_SYNC_SESSIONS_SESSION_SYNC_SERVICE_H_
 
 #include "base/callback_list.h"
-#include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/sync/driver/data_type_controller.h"
 
 namespace syncer {
 class GlobalIdMapper;
-class ModelTypeControllerDelegate;
+class DataTypeControllerDelegate;
 }  // namespace syncer
 
 namespace sync_sessions {
@@ -27,28 +25,25 @@ class OpenTabsUIDelegate;
 class SessionSyncService : public KeyedService {
  public:
   SessionSyncService();
+
+  SessionSyncService(const SessionSyncService&) = delete;
+  SessionSyncService& operator=(const SessionSyncService&) = delete;
+
   ~SessionSyncService() override;
 
   virtual syncer::GlobalIdMapper* GetGlobalIdMapper() const = 0;
 
-  // Return the active OpenTabsUIDelegate. If open/proxy tabs is not enabled or
-  // not currently syncing, returns nullptr.
+  // Return the active OpenTabsUIDelegate. If UserSelectableType::kTabs is not
+  // enabled or not currently syncing, returns nullptr.
   virtual OpenTabsUIDelegate* GetOpenTabsUIDelegate() = 0;
 
+
   // Allows client code to be notified when foreign sessions change.
-  virtual base::CallbackListSubscription SubscribeToForeignSessionsChanged(
-      const base::RepeatingClosure& cb) WARN_UNUSED_RESULT = 0;
+  [[nodiscard]] virtual base::CallbackListSubscription
+  SubscribeToForeignSessionsChanged(const base::RepeatingClosure& cb) = 0;
 
-  virtual base::WeakPtr<syncer::ModelTypeControllerDelegate>
+  virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
   GetControllerDelegate() = 0;
-
-  // Intended to be used by ProxyDataTypeController: influences whether
-  // GetOpenTabsUIDelegate() returns null or not.
-  virtual void ProxyTabsStateChanged(
-      syncer::DataTypeController::State state) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SessionSyncService);
 };
 
 }  // namespace sync_sessions

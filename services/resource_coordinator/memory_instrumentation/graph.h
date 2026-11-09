@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,11 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/process/process_handle.h"
-#include "base/strings/string_piece.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
 
 namespace memory_instrumentation {
@@ -34,18 +33,22 @@ class GlobalDumpGraph {
   class Process {
    public:
     Process(base::ProcessId pid, GlobalDumpGraph* global_graph);
+
+    Process(const Process&) = delete;
+    Process& operator=(const Process&) = delete;
+
     ~Process();
 
     // Creates a node in the dump graph which is associated with the
     // given |guid|, |path| and |weak|ness and returns it.
     GlobalDumpGraph::Node* CreateNode(
         base::trace_event::MemoryAllocatorDumpGuid guid,
-        base::StringPiece path,
+        std::string_view path,
         bool weak);
 
     // Returns the node in the graph at the given |path| or nullptr
     // if no such node exists in the provided |graph|.
-    GlobalDumpGraph::Node* FindNode(base::StringPiece path);
+    GlobalDumpGraph::Node* FindNode(std::string_view path);
 
     base::ProcessId pid() const { return pid_; }
     GlobalDumpGraph* global_graph() const { return global_graph_; }
@@ -53,10 +56,8 @@ class GlobalDumpGraph {
 
    private:
     base::ProcessId pid_;
-    GlobalDumpGraph* global_graph_;
-    GlobalDumpGraph::Node* root_;
-
-    DISALLOW_COPY_AND_ASSIGN(Process);
+    raw_ptr<GlobalDumpGraph> global_graph_;
+    raw_ptr<GlobalDumpGraph::Node> root_;
   };
 
   // A single node in the graph of allocator dumps associated with a
@@ -93,17 +94,21 @@ class GlobalDumpGraph {
     };
 
     explicit Node(GlobalDumpGraph::Process* dump_graph, Node* parent);
+
+    Node(const Node&) = delete;
+    Node& operator=(const Node&) = delete;
+
     ~Node();
 
     // Gets the direct child of a node for the given |subpath|.
-    Node* GetChild(base::StringPiece name);
+    Node* GetChild(std::string_view name);
 
     // Inserts the given |node| as a child of the current node
     // with the given |subpath| as the key.
-    void InsertChild(base::StringPiece name, Node* node);
+    void InsertChild(std::string_view name, Node* node);
 
     // Creates a child for this node with the given |name| as the key.
-    Node* CreateChild(base::StringPiece name);
+    Node* CreateChild(std::string_view name);
 
     // Checks if the current node is a descendent (i.e. exists as a child,
     // child of a child, etc.) of the given node |possible_parent|.
@@ -159,11 +164,15 @@ class GlobalDumpGraph {
       guid_ = guid;
     }
     GlobalDumpGraph::Edge* owns_edge() const { return owns_edge_; }
-    std::map<std::string, Node*>* children() { return &children_; }
-    const std::map<std::string, Node*>& const_children() const {
+    std::map<std::string, raw_ptr<Node, CtnExperimental>>* children() {
+      return &children_;
+    }
+    const std::map<std::string, raw_ptr<Node, CtnExperimental>>&
+    const_children() const {
       return children_;
     }
-    std::vector<GlobalDumpGraph::Edge*>* owned_by_edges() {
+    std::vector<raw_ptr<GlobalDumpGraph::Edge, VectorExperimental>>*
+    owned_by_edges() {
       return &owned_by_edges_;
     }
     const Node* parent() const { return parent_; }
@@ -174,11 +183,11 @@ class GlobalDumpGraph {
     }
 
    private:
-    GlobalDumpGraph::Process* dump_graph_;
-    Node* const parent_;
+    raw_ptr<GlobalDumpGraph::Process, DanglingUntriaged> dump_graph_;
+    const raw_ptr<Node> parent_;
     base::trace_event::MemoryAllocatorDumpGuid guid_;
     std::map<std::string, Entry> entries_;
-    std::map<std::string, Node*> children_;
+    std::map<std::string, raw_ptr<Node, CtnExperimental>> children_;
     bool explicit_ = false;
     bool weak_ = false;
     uint64_t not_owning_sub_size_ = 0;
@@ -188,10 +197,9 @@ class GlobalDumpGraph {
     double cumulative_owned_coefficient_ = 1;
     double cumulative_owning_coefficient_ = 1;
 
-    GlobalDumpGraph::Edge* owns_edge_;
-    std::vector<GlobalDumpGraph::Edge*> owned_by_edges_;
-
-    DISALLOW_COPY_AND_ASSIGN(Node);
+    raw_ptr<GlobalDumpGraph::Edge, DanglingUntriaged> owns_edge_;
+    std::vector<raw_ptr<GlobalDumpGraph::Edge, VectorExperimental>>
+        owned_by_edges_;
   };
 
   // An edge in the dump graph which indicates ownership between the
@@ -207,15 +215,15 @@ class GlobalDumpGraph {
     int priority() const { return priority_; }
 
    private:
-    GlobalDumpGraph::Node* const source_;
-    GlobalDumpGraph::Node* const target_;
+    const raw_ptr<GlobalDumpGraph::Node> source_;
+    const raw_ptr<GlobalDumpGraph::Node> target_;
     const int priority_;
   };
 
   // An iterator-esque class which yields nodes in a depth-first pre order.
   class PreOrderIterator {
    public:
-    PreOrderIterator(std::vector<Node*> root_nodes);
+    PreOrderIterator(std::vector<raw_ptr<Node, VectorExperimental>> root_nodes);
     PreOrderIterator(PreOrderIterator&& other);
     ~PreOrderIterator();
 
@@ -223,14 +231,15 @@ class GlobalDumpGraph {
     Node* next();
 
    private:
-    std::vector<Node*> to_visit_;
-    std::set<const Node*> visited_;
+    std::vector<raw_ptr<Node, VectorExperimental>> to_visit_;
+    std::set<raw_ptr<const Node, SetExperimental>> visited_;
   };
 
   // An iterator-esque class which yields nodes in a depth-first post order.
   class PostOrderIterator {
    public:
-    PostOrderIterator(std::vector<Node*> root_nodes);
+    PostOrderIterator(
+        std::vector<raw_ptr<Node, VectorExperimental>> root_nodes);
     PostOrderIterator(PostOrderIterator&& other);
     ~PostOrderIterator();
 
@@ -238,17 +247,21 @@ class GlobalDumpGraph {
     Node* next();
 
    private:
-    std::vector<Node*> to_visit_;
-    std::set<Node*> visited_;
-    std::vector<Node*> path_;
+    std::vector<raw_ptr<Node, VectorExperimental>> to_visit_;
+    std::set<raw_ptr<Node, SetExperimental>> visited_;
+    std::vector<raw_ptr<Node, VectorExperimental>> path_;
   };
 
   using ProcessDumpGraphMap =
       std::map<base::ProcessId, std::unique_ptr<GlobalDumpGraph::Process>>;
-  using GuidNodeMap =
-      std::map<base::trace_event::MemoryAllocatorDumpGuid, Node*>;
+  using GuidNodeMap = std::map<base::trace_event::MemoryAllocatorDumpGuid,
+                               raw_ptr<Node, CtnExperimental>>;
 
   GlobalDumpGraph();
+
+  GlobalDumpGraph(const GlobalDumpGraph&) = delete;
+  GlobalDumpGraph& operator=(const GlobalDumpGraph&) = delete;
+
   ~GlobalDumpGraph();
 
   // Creates a container for all the dump graphs for the process given
@@ -289,8 +302,6 @@ class GlobalDumpGraph {
   GuidNodeMap nodes_by_guid_;
   std::unique_ptr<GlobalDumpGraph::Process> shared_memory_graph_;
   ProcessDumpGraphMap process_dump_graphs_;
-
-  DISALLOW_COPY_AND_ASSIGN(GlobalDumpGraph);
 };
 
 }  // namespace memory_instrumentation

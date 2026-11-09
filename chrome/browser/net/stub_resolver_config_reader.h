@@ -1,21 +1,26 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NET_STUB_RESOLVER_CONFIG_READER_H_
 #define CHROME_BROWSER_NET_STUB_RESOLVER_CONFIG_READER_H_
 
+#include <memory>
+#include <optional>
+#include <string>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
+#include "chrome/browser/net/dns_over_https_config_source.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "services/network/public/mojom/host_resolver.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-#if defined(OS_ANDROID)
-#include "base/memory/weak_ptr.h"
-#endif
+#include "net/base/ip_address.h"
+#include "net/base/ip_endpoint.h"
+#include "net/dns/public/dns_over_https_config.h"
+#include "net/dns/public/dns_protocol.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -24,8 +29,50 @@ class SecureDnsConfig;
 // Retriever for Chrome configuration for the built-in DNS stub resolver.
 class StubResolverConfigReader {
  public:
+  // Detailed descriptions of the secure DNS mode. These values are logged to
+  // UMA. Entries should not be renumbered and numeric values should never be
+  // reused.
+  //
+  // LINT.IfChange(SecureDnsModeDetailsForHistogram)
+  enum class SecureDnsModeDetailsForHistogram {
+    // The mode is controlled by the user and is set to 'off'.
+    kOffByUser = 0,
+    // The mode is controlled via enterprise policy and is set to 'off'.
+    kOffByEnterprisePolicy = 1,
+    // Chrome detected a managed environment and forced the mode to 'off'.
+    kOffByDetectedManagedEnvironment = 2,
+    // Chrome detected parental controls and forced the mode to 'off'.
+    kOffByDetectedParentalControls = 3,
+    // The mode is controlled by the user and is set to 'automatic' (the
+    // default mode).
+    kAutomaticByUser = 4,
+    // The mode is controlled via enterprise policy and is set to 'automatic'.
+    kAutomaticByEnterprisePolicy = 5,
+    // The mode is controlled by the user and is set to 'secure'.
+    kSecureByUser = 6,
+    // The mode is controlled via enterprise policy and is set to 'secure'.
+    kSecureByEnterprisePolicy = 7,
+    // The mode is controlled by the user and is set to 'automatic with
+    // fallback to well-known DoH provider'.
+    kAutomaticWithDohFallbackByUser = 8,
+
+    // Deprecated since this hasn't been implemented yet: The mode is controlled
+    // via enterprise policy and is set to 'automatic with fallback to
+    // well-known DoH provider'.
+    // kAutomaticWithDohFallbackByEnterprisePolicy = 9,
+
+    // (Obsolete) The mode was set to 'automatic with fallback to well-known DoH
+    // provider' because kAutomatic mode was in use and the UI setting for the
+    // DoH fallback upgrade functionality wasn't enabled. Used for the DoH
+    // fallback upgrade experiment.
+    // kAutomaticWithDohFallbackForExperiment = 10,
+
+    kMaxValue = kAutomaticWithDohFallbackByUser,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:SecureDnsModeDetails)
+
   static constexpr base::TimeDelta kParentalControlsCheckDelay =
-      base::TimeDelta::FromSeconds(2);
+      base::Seconds(2);
 
   // |local_state| must outlive the created reader.
   explicit StubResolverConfigReader(PrefService* local_state,
@@ -67,12 +114,43 @@ class StubResolverConfigReader {
   // Returns true if there are parental controls detected on the device.
   virtual bool ShouldDisableDohForParentalControls();
 
-#if defined(OS_ANDROID)
-  // Updates the android owned state and network service if the device/prfile is
+#if BUILDFLAG(IS_ANDROID)
+  // Updates the android owned state and network service if the device/profile is
   // owned.
-  void OnAndroidOwnedStateCheckComplete(bool has_profile_owner,
-                                        bool has_device_owner);
+  void OnAndroidOwnedStateCheckComplete(bool has_device_owner,
+                                        bool has_profile_owner);
 #endif
+
+  void OverrideParentalControlsForTesting(bool parental_controls_override) {
+    parental_controls_testing_override_ = parental_controls_override;
+  }
+
+  // Overrides the default implementation for the class which monitors
+  // DNS-over-HTTPS config changes. If `doh_source` is a null pointer, it clears
+  // the override and resets to the default behaviour.
+  void SetOverrideDnsOverHttpsConfigSource(
+      std::unique_ptr<DnsOverHttpsConfigSource> doh_source);
+
+#if BUILDFLAG(IS_WIN)
+  // Set flag for testing Zero Trust DNS scenario
+  static void SetZTDNSEnabledForTesting(bool is_ztdns_enabled_for_testing) {
+    is_ztdns_enabled_for_testing_ = is_ztdns_enabled_for_testing;
+  }
+
+  static bool IsZTDNSEnabledForTesting() {
+    return is_ztdns_enabled_for_testing_;
+  }
+#endif
+
+  // Informs StubResolverConfigReader that DNS has been overridden for testing
+  // (e.g. by a mock host resolver or test DNS configuration). When overridden,
+  // platform DNS will be avoided in favor of the built-in DNS client so that
+  // test rules can intercept queries.
+  static void SetDnsOverriddenForTesting(bool overridden) {
+    dns_overridden_for_testing_ = overridden;
+  }
+
+  static std::vector<net::IPEndPoint> GetFallbackDohNameservers();
 
  private:
   void OnParentalControlsDelayTimer();
@@ -84,7 +162,15 @@ class StubResolverConfigReader {
       bool record_metrics,
       bool update_network_service);
 
-  PrefService* const local_state_;
+  // Returns the current config source for DNS-over-HTTPS settings. If
+  // `SetOverrideDnsOverHttpsConfigSource` was called with a non-null value, it
+  // returns the override config source; otherwise it returns the default
+  // implementation.
+  const DnsOverHttpsConfigSource* GetDnsOverHttpsConfigSource() const;
+
+  bool GetHappyEyeballsV3Enabled() const;
+
+  const raw_ptr<PrefService> local_state_;
 
   // Timer for deferred running of parental controls checks. Underling API calls
   // may be slow and run off-thread. Calling for the result is delayed to avoid
@@ -94,6 +180,11 @@ class StubResolverConfigReader {
   // expiration of the delay timer or because of a forced check.
   bool parental_controls_checked_ = false;
 
+  std::optional<bool> parental_controls_testing_override_;
+
+  std::unique_ptr<DnsOverHttpsConfigSource> default_doh_source_;
+  std::unique_ptr<DnsOverHttpsConfigSource> override_doh_source_;
+
   // This object lives on the UI thread, but it's possible for it to be created
   // before BrowserMainLoop::CreateThreads() is called which would cause a
   // DCHECK for the UI thread to fail (as the UI thread hasn't been
@@ -102,12 +193,21 @@ class StubResolverConfigReader {
 
   PrefChangeRegistrar pref_change_registrar_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Whether or not an Android device or profile is owned.
   // A nullopt indicates this value has not been determined yet.
-  absl::optional<bool> android_has_owner_ = absl::nullopt;
-  base::WeakPtrFactory<StubResolverConfigReader> weak_factory_{this};
+  std::optional<bool> android_has_owner_;
 #endif
+
+#if BUILDFLAG(IS_WIN)
+  // Flag used for testing Zero Trust DNS scenario.
+  static bool is_ztdns_enabled_for_testing_;
+#endif
+
+  // Flag used to indicate DNS is overridden in tests.
+  static bool dns_overridden_for_testing_;
+
+  base::WeakPtrFactory<StubResolverConfigReader> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_NET_STUB_RESOLVER_CONFIG_READER_H_

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,12 @@
 #include <map>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/smb_client/discovery/host_locator.h"
 #include "net/base/ip_address.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 // Holds the number of in-flight requests and the callback to call once all the
 // HostLocators are finished. Also holds the hosts found from the HostLocators
@@ -26,9 +25,11 @@ struct RequestInfo {
 
   RequestInfo(uint32_t remaining_requests, FindHostsCallback callback);
   RequestInfo(RequestInfo&& other);
-  ~RequestInfo();
 
-  DISALLOW_COPY_AND_ASSIGN(RequestInfo);
+  RequestInfo(const RequestInfo&) = delete;
+  RequestInfo& operator=(const RequestInfo&) = delete;
+
+  ~RequestInfo();
 };
 
 // NetworkScanner discovers SMB hosts in the local network by querying
@@ -36,9 +37,13 @@ struct RequestInfo {
 // used to register HostLocators that are responsible for finding hosts.
 // FindHostsInNetwork is called to get a list of discoverable hosts in the
 // network. ResolveHost is used to get the IP address of a given host.
-class NetworkScanner : public base::SupportsWeakPtr<NetworkScanner> {
+class NetworkScanner {
  public:
   NetworkScanner();
+
+  NetworkScanner(const NetworkScanner&) = delete;
+  NetworkScanner& operator=(const NetworkScanner&) = delete;
+
   ~NetworkScanner();
 
   // Query the registered HostLocators and return all the hosts found.
@@ -97,10 +102,9 @@ class NetworkScanner : public base::SupportsWeakPtr<NetworkScanner> {
   // if FindHostsInNetwork() is already running.
   bool running_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(NetworkScanner);
+  base::WeakPtrFactory<NetworkScanner> weak_ptr_factory_{this};
 };
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client
 
 #endif  // CHROME_BROWSER_ASH_SMB_CLIENT_DISCOVERY_NETWORK_SCANNER_H_

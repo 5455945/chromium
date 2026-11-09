@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/thumbnails/background_thumbnail_capturer.h"
+#include "chrome/browser/ui/thumbnails/thumbnail_capture_info.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -21,10 +22,9 @@ class WebContents;
 // A thumbnail capturer using viz::ClientFrameSinkVideoCapturer. Gets a
 // sequence of frames in the same way as streaming a tab.
 class BackgroundThumbnailVideoCapturer
-    : public BackgroundThumbnailCapturer,
-      public viz::mojom::FrameSinkVideoConsumer {
+    : public viz::mojom::FrameSinkVideoConsumer {
  public:
-  // Client receives `SkBitmap` frames and `uin64_t` unique IDs for each
+  // Client receives `SkBitmap` frames and `uint64_t` unique IDs for each
   // frame. IDs are globally unique for a given browser process and are
   // used for TRACE_EVENT_FLOW_* macros
   using GotFrameCallback =
@@ -33,22 +33,33 @@ class BackgroundThumbnailVideoCapturer
                                    GotFrameCallback got_frame_callback);
   ~BackgroundThumbnailVideoCapturer() override;
 
-  // BackgroundThumbnailCapturer:
-  void Start(const ThumbnailCaptureInfo& capture_info) override;
-  void Stop() override;
+  // Begins capture. The tab's renderer must be alive. Reported frames are
+  // passed to `got_frame_callback`.
+  //
+  // This must be called from the browser UI thread.
+  void Start(const ThumbnailCaptureInfo& capture_info);
+
+  // Ends capture. After this call, the tab no longer needs to be kept
+  // alive.
+  //
+  // This must be called from the browser UI thread.
+  void Stop();
 
  private:
   // viz::mojom::FrameSinkVideoConsumer:
   void OnFrameCaptured(
-      base::ReadOnlySharedMemoryRegion data,
+      ::media::mojom::VideoBufferHandlePtr data,
       ::media::mojom::VideoFrameInfoPtr info,
       const gfx::Rect& content_rect,
       mojo::PendingRemote<::viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
           callbacks) override;
+  void OnNewCaptureVersion(
+      const media::CaptureVersion& capture_version) override;
+  void OnFrameWithEmptyRegionCapture() override;
   void OnStopped() override;
   void OnLog(const std::string& /*message*/) override;
 
-  content::WebContents* const contents_;
+  const raw_ptr<content::WebContents> contents_;
   GotFrameCallback got_frame_callback_;
 
   ThumbnailCaptureInfo capture_info_;

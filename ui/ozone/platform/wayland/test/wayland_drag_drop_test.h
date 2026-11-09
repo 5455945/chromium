@@ -1,46 +1,57 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_OZONE_PLATFORM_WAYLAND_TEST_WAYLAND_DRAG_DROP_TEST_H_
 #define UI_OZONE_PLATFORM_WAYLAND_TEST_WAYLAND_DRAG_DROP_TEST_H_
 
-#include "base/callback_forward.h"
-#include "ui/ozone/platform/wayland/test/test_data_device.h"
-#include "ui/ozone/platform/wayland/test/test_data_source.h"
+#include <cstdint>
+
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/dragdrop/os_exchange_data_provider_factory_ozone.h"
 #include "ui/ozone/platform/wayland/test/wayland_test.h"
 
 namespace gfx {
 class Point;
 }
 
-namespace wl {
-class MockSurface;
-class TestDataDeviceManager;
-}  // namespace wl
-
 namespace ui {
 
 class WaylandWindow;
 
+class TestWaylandOSExchangeDataProvideFactory
+    : public OSExchangeDataProviderFactoryOzone {
+ public:
+  TestWaylandOSExchangeDataProvideFactory();
+  ~TestWaylandOSExchangeDataProvideFactory() override;
+
+  std::unique_ptr<OSExchangeDataProvider> CreateProvider() override;
+};
+
 // Base class for Wayland drag-and-drop tests. Public methods allow test code to
 // emulate dnd-related events from the test compositor and can be used in both
 // data and window dragging test cases.
-class WaylandDragDropTest : public WaylandTest,
-                            public wl::TestDataDevice::Delegate {
+class WaylandDragDropTest : public WaylandTest {
  public:
   WaylandDragDropTest();
   WaylandDragDropTest(const WaylandDragDropTest&) = delete;
   WaylandDragDropTest& operator=(const WaylandDragDropTest&) = delete;
+  ~WaylandDragDropTest() override;
 
   // These are public for convenience, as they must be callable from lambda
   // functions, usually posted to task queue while the drag loop runs.
   void SendDndEnter(WaylandWindow* window, const gfx::Point& location);
   void SendDndLeave();
   void SendDndMotion(const gfx::Point& location);
+  void SendDndDropPerformed();
+  void SendDndFinished();
   void SendDndCancelled();
-  void ReadData(const std::string& mime_type,
-                wl::TestDataSource::ReadDataCallback callback);
+  void SendDndAction(uint32_t action);
+  void ReadAndCheckData(const std::string& mime_type,
+                        base::span<const uint8_t> expected_data);
 
   virtual void SendPointerEnter(WaylandWindow* window,
                                 MockPlatformWindowDelegate* delegate);
@@ -51,30 +62,36 @@ class WaylandDragDropTest : public WaylandTest,
                                  int button,
                                  bool pressed);
 
+  virtual void SendTouchDown(WaylandWindow* window,
+                             MockPlatformWindowDelegate* delegate,
+                             int id,
+                             const gfx::Point& location);
+  virtual void SendTouchUp(int id);
+  virtual void SendTouchMotion(WaylandWindow* window,
+                               MockPlatformWindowDelegate* delegate,
+                               int id,
+                               const gfx::Point& location);
+
  protected:
   // WaylandTest:
   void SetUp() override;
-  void TearDown() override;
 
-  // wl::TestDataDevice::Delegate:
-  void StartDrag(wl::TestDataSource* source,
-                 wl::MockSurface* origin,
-                 uint32_t serial) override;
-
-  void OfferAndEnter(wl::MockSurface* surface, const gfx::Point& location);
-  uint32_t NextSerial() const;
-  uint32_t NextTime() const;
   void ScheduleTestTask(base::OnceClosure test_task);
-  void RunTestTask(base::OnceClosure test_task);
 
   WaylandWindowManager* window_manager() const {
-    return connection_->wayland_window_manager();
+    return connection_->window_manager();
   }
 
-  // Server objects
-  wl::TestDataDeviceManager* data_device_manager_;
-  wl::TestDataSource* data_source_;
-  wl::MockPointer* pointer_;
+ private:
+  void MaybeRunScheduledTasks();
+  void RunTestTask(base::OnceClosure test_task);
+
+  TestWaylandOSExchangeDataProvideFactory os_exchange_factory_;
+
+  // This is used to ensure FIFO of tasks and that they complete to run before
+  // a next task is posted.
+  bool is_task_running_ = false;
+  std::vector<base::OnceClosure> scheduled_tasks_;
 };
 
 }  // namespace ui

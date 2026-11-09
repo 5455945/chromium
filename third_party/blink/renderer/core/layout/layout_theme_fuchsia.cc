@@ -1,7 +1,8 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/no_destructor.h"
 #include "third_party/blink/renderer/core/layout/layout_theme_default.h"
 
 namespace blink {
@@ -18,8 +19,9 @@ class LayoutThemeFuchsia : public LayoutThemeDefault {
 }  // namespace
 
 LayoutTheme& LayoutTheme::NativeTheme() {
-  DEFINE_STATIC_REF(LayoutTheme, layout_theme, (LayoutThemeFuchsia::Create()));
-  return *layout_theme;
+  static const base::NoDestructor<scoped_refptr<LayoutTheme>> layout_theme(
+      LayoutThemeFuchsia::Create());
+  return **layout_theme;
 }
 
 }  // namespace blink

@@ -1,42 +1,64 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_APP_MODE_KIOSK_CRYPTOHOME_REMOVER_H_
 #define CHROME_BROWSER_ASH_APP_MODE_KIOSK_CRYPTOHOME_REMOVER_H_
 
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
+
+namespace user_data_auth {
+class RemoveReply;
+}  // namespace user_data_auth
 
 class AccountId;
 class PrefRegistrySimple;
+class PrefService;
 
 namespace ash {
 
-// Helper functions to remove cryptohomes of no longer existing kiosk apps.
+// Removes cryptohomes of no longer existing kiosk apps.
 class KioskCryptohomeRemover {
  public:
+  explicit KioskCryptohomeRemover(PrefService* local_state);
+  KioskCryptohomeRemover(const KioskCryptohomeRemover&) = delete;
+  KioskCryptohomeRemover& operator=(const KioskCryptohomeRemover&) = delete;
+  ~KioskCryptohomeRemover();
+
   static void RegisterPrefs(PrefRegistrySimple* registry);
+
   // Removes the cryptohomes of kiosks that were removed from policy.
-  static void RemoveObsoleteCryptohomes();
+  void RemoveObsoleteCryptohomes();
+
   // Cancels the scheduled next-startup removal of the kiosk app.
-  static void CancelDelayedCryptohomeRemoval(const AccountId& id);
+  void CancelDelayedCryptohomeRemoval(const AccountId& account_id);
+
   // Tries to remove cryptohomes of the list of users. For current active user,
   // remembers to do so on next boot and then terminates the session.
-  static void RemoveCryptohomesAndExitIfNeeded(
+  void RemoveCryptohomesAndExitIfNeeded(
       const std::vector<AccountId>& account_ids);
 
  private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(KioskCryptohomeRemover);
+  void PerformDelayedCryptohomeRemovals(bool service_is_available);
+
+  void OnRemoveAppCryptohomeComplete(
+      const cryptohome::Identification& id,
+      base::OnceClosure callback,
+      std::optional<user_data_auth::RemoveReply> reply);
+
+  void ScheduleDelayedCryptohomeRemoval(const AccountId& account_id);
+
+  void UnscheduleDelayedCryptohomeRemoval(const cryptohome::Identification& id);
+
+  const raw_ref<PrefService> local_state_;
+  base::WeakPtrFactory<KioskCryptohomeRemover> weak_ptr_factory_{this};
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when the //chrome/browser/chromeos
-// migration is finished.
-namespace chromeos {
-using ::ash::KioskCryptohomeRemover;
-}
 
 #endif  // CHROME_BROWSER_ASH_APP_MODE_KIOSK_CRYPTOHOME_REMOVER_H_

@@ -1,13 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_NETWORK_NETWORK_UTILS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_NETWORK_NETWORK_UTILS_H_
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <tuple>
 
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
@@ -23,16 +26,19 @@ enum PrivateRegistryFilter {
   kExcludePrivateRegistries,
 };
 
-PLATFORM_EXPORT bool IsReservedIPAddress(const String& host);
+PLATFORM_EXPORT bool IsReservedIPAddress(const StringView& host);
 
-PLATFORM_EXPORT String GetDomainAndRegistry(const String& host,
+PLATFORM_EXPORT String GetDomainAndRegistry(const StringView& host,
                                             PrivateRegistryFilter);
 
 // Returns the decoded data url as ResourceResponse and SharedBuffer if parsing
 // was successful. The result is returned as net error code. It returns net::OK
 // if decoding succeeds, otherwise it failed.
 PLATFORM_EXPORT std::tuple<int, ResourceResponse, scoped_refptr<SharedBuffer>>
-ParseDataURL(const KURL&, const String& method);
+ParseDataURL(const KURL&,
+             const String& method,
+             ukm::SourceId source_id = ukm::kInvalidSourceId,
+             ukm::UkmRecorder* recorder = nullptr);
 
 // Returns true if the URL is a data URL and its MIME type is in the list of
 // supported/recognized MIME types.
@@ -49,6 +55,13 @@ PLATFORM_EXPORT String GenerateAcceptLanguageHeader(const String&);
 
 PLATFORM_EXPORT Vector<char> ParseMultipartBoundary(
     const AtomicString& content_type_header);
+
+// Returns the category ID parsed from the URL query parameter if the URL
+// contains a query parameter named by `category_param_name` whose value begins
+// with `category_prefix` followed by an unsigned integer ID. Returns
+// std::nullopt if the feature is disabled, the prefix is empty, or the
+// parameter does not match.
+PLATFORM_EXPORT std::optional<uint32_t> GetFetchCategoryIdFromUrl(const KURL&);
 
 }  // namespace network_utils
 

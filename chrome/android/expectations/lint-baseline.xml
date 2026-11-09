@@ -1,1368 +1,488 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<issues format="5" by="lint 4.1.0" client="cli" variant="all" version="4.1.0">
+<issues format="6" by="lint 9.1.0-alpha06" type="baseline" client="" dependencies="true" name="" variant="all" version="9.1.0-alpha06">
 
     <issue
-        id="WrongConstant"
-        message="Must be one of: ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_AUTO, ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_YES, ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_NO, ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS"
-        errorLine1="                contentsShowing ? View.IMPORTANT_FOR_ACCESSIBILITY_AUTO"
-        errorLine2="                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="DiscouragedPrivateApi"
+        message="Reflective access to violationsBeingTimed, which is not part of the public SDK and therefore likely to change in future Android releases"
+        errorLine1="        Field violationTimingField = StrictMode.class.getDeclaredField(&quot;violationsBeingTimed&quot;);"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/autofill/CardUnmaskPrompt.java"
-            line="568"
-            column="35"/>
+            file="../../components/strictmode/android/java/src/org/chromium/components/strictmode/ReflectiveThreadStrictModeInterceptor.java"
+            line="105"
+            column="38"/>
     </issue>
 
     <issue
-        id="WrongConstant"
-        message="Must be one of: ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_AUTO, ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_YES, ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_NO, ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS"
-        errorLine1="                                : View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);"
-        errorLine2="                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="InternalInsetResource"
+        message="Using internal inset dimension resource `status_bar_height` is not supported"
+        errorLine1="                resources.getIdentifier(&quot;status_bar_height&quot;, &quot;dimen&quot;, &quot;android&quot;);"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/autofill/CardUnmaskPrompt.java"
-            line="569"
-            column="35"/>
-    </issue>
-
-    <issue
-        id="WrongConstant"
-        message="Must be one of: ViewCompat.LAYOUT_DIRECTION_LTR, ViewCompat.LAYOUT_DIRECTION_RTL"
-        errorLine1="        if (ViewCompat.getLayoutDirection(this) == LAYOUT_DIRECTION_LTR) {"
-        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/ClipDrawableProgressBar.java"
-            line="137"
-            column="52"/>
-    </issue>
-
-    <issue
-        id="WrongConstant"
-        message="Must be one of: ViewCompat.ACCESSIBILITY_LIVE_REGION_NONE, ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE, ViewCompat.ACCESSIBILITY_LIVE_REGION_ASSERTIVE"
-        errorLine1="        ViewCompat.setAccessibilityLiveRegion(messageView, View.ACCESSIBILITY_LIVE_REGION_POLITE);"
-        errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/infobar/DownloadProgressInfoBar.java"
-            line="132"
-            column="60"/>
-    </issue>
-
-    <issue
-        id="WrongConstant"
-        message="Must be one of: ViewCompat.LAYOUT_DIRECTION_LTR, ViewCompat.LAYOUT_DIRECTION_RTL"
-        errorLine1="        if (ViewCompat.getLayoutDirection(this) == View.LAYOUT_DIRECTION_RTL) {"
-        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/MaterialProgressBar.java"
-            line="235"
-            column="52"/>
-    </issue>
-
-    <issue
-        id="UnsupportedChromeOsCameraSystemFeature"
-        message="You should look for any camera available on the device, not just the rear"
-        errorLine1="        boolean hasCamera = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA);"
-        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../base/android/java/src/org/chromium/base/SysUtils.java"
-            line="160"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            if (AccountUtils.GOOGLE_ACCOUNT_TYPE.equals(desc.type)) return true;"
-        errorLine2="                             ~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/signin/public/android/java/src/org/chromium/components/signin/AccountManagerFacadeImpl.java"
-            line="188"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                IconProvider.getIcon(context, R.drawable.ic_permission_location_filled),"
-        errorLine2="                             ~~~~~~~">
-        <location
-            file="../../chrome/android/features/keyboard_accessory/internal/java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/AddressAccessorySheetCoordinator.java"
-            line="39"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            if (mBypassIsReadyToPayServiceInTest) app.bypassIsReadyToPayServiceInTest();"
-        errorLine2="                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/payments/content/android/java/src/org/chromium/components/payments/AndroidPaymentAppFinder.java"
-            line="577"
-            column="55"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            mHandler.onOptionsItemSelected(menuItem);"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java"
-            line="365"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            return new EditorTextField(context,"
-        errorLine2="                   ^">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/user_data/additional_sections/AssistantTextInputSection.java"
-            line="83"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            inputView.getEditText().setOnFocusChangeListener((unusedView, hasFocus) -> {"
-        errorLine2="                      ~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/user_data/additional_sections/AssistantTextInputSection.java"
-            line="145"
-            column="23"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        View view = new EditorTextField(context,"
-        errorLine2="                    ^">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/generic_ui/AssistantViewFactory.java"
-            line="145"
-            column="21"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                    ((EditorTextField) view).getEditText(), text, delegate::onTextLinkClicked);"
-        errorLine2="                                             ~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/generic_ui/AssistantViewInteractions.java"
-            line="108"
-            column="46"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                .getAuthenticatorNavigationInterceptor();"
-        errorLine2="                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/tab/AuthenticatorNavigationInterceptorTabHelper.java"
-            line="19"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        return mAutocomplete.getCurrentNativeAutocompleteResult();"
-        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteMediator.java"
-            line="425"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                CombinedPolicyProvider.get().registerProvider(new AwPolicyProvider(appContext));"
-        errorLine2="                                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwBrowserProcess.java"
-            line="145"
-            column="63"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mViewAndroidDelegate ="
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwContents.java"
-            line="1388"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                new AwViewAndroidDelegate(mContainerView, mContentsClient, mScrollOffsetManager);"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwContents.java"
-            line="1389"
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/password_manager/AccountChooserDialog.java"
+            line="290"
             column="17"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        LoadUrlParams params = LoadUrlParams.createLoadHttpPostParams(url, postData);"
-        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="InternalInsetResource"
+        message="Using internal inset dimension resource `status_bar_height` is not supported"
+        errorLine1="                    mActivity.getResources().getIdentifier(&quot;status_bar_height&quot;, &quot;dimen&quot;, &quot;android&quot;);"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwContents.java"
-            line="1888"
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/customtabs/features/partialcustomtab/PartialCustomTabVersionCompat.java"
+            line="262"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="InternalInsetResource"
+        message="Using internal inset dimension resource `status_bar_height` is not supported"
+        errorLine1="        int statusBarId = resources.getIdentifier(&quot;status_bar_height&quot;, &quot;dimen&quot;, &quot;android&quot;);"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/tab/TabUtils.java"
+            line="91"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 30 (current min is 29): `collectAndWriteAnrs`"
+        errorLine1="            List&lt;String> anrs = AnrCollector.collectAndWriteAnrs(anrDir);"
+        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/CrashFileManager.java"
+            line="389"
             column="46"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mWebContents.evaluateJavaScriptForTests(script, jsCallback);"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NewApi"
+        message="Call requires API level 34 (current min is 29): `logGestureType`"
+        errorLine1="                StylusGestureConverter.logGestureType("
+        errorLine2="                                       ~~~~~~~~~~~~~~">
         <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwContents.java"
-            line="2885"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        return FindAddress.findAddress(addr);"
-        errorLine2="                           ~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwContentsStatics.java"
-            line="172"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        return FindAddress.findAddress(addr);"
-        errorLine2="                           ~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwContentsStatics.java"
-            line="172"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="class AwWebContentsDelegateAdapter extends AwWebContentsDelegate {"
-        errorLine2="                                           ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwWebContentsDelegateAdapter.java"
-            line="34"
-            column="44"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                if (mAwContents.getNavigationController() == null) return;"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwWebContentsDelegateAdapter.java"
-            line="186"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                        mAwContents.getNavigationController().continuePendingReload();"
-        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwWebContentsDelegateAdapter.java"
+            file="../../components/stylus_handwriting/android/java/src/org/chromium/components/stylus_handwriting/DirectWritingServiceCallback.java"
             line="190"
-            column="37"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                        mAwContents.getNavigationController().cancelPendingReload();"
-        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwWebContentsDelegateAdapter.java"
-            line="194"
-            column="37"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                            0, new VisualStateCallback() {"
-        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/AwWebContentsObserver.java"
-            line="148"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                        &amp;&amp; mOverlayPanelManager.get().getActivePanel() != null) {"
-        errorLine2="                                                      ~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ui/BottomSheetManager.java"
-            line="235"
-            column="55"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                    mOverlayPanelManager.get().getActivePanel().closePanel("
-        errorLine2="                                               ~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ui/BottomSheetManager.java"
-            line="239"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        BrowserImplJni.get().addTab(mNativeBrowser, tab.getNativeTab());"
-        errorLine2="                                                        ~~~~~~~~~~~~">
-        <location
-            file="../../weblayer/browser/java/org/chromium/weblayer_private/BrowserImpl.java"
-            line="315"
-            column="57"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        BrowserImplJni.get().setActiveTab(mNativeBrowser, tab != null ? tab.getNativeTab() : 0);"
-        errorLine2="                                                                            ~~~~~~~~~~~~">
-        <location
-            file="../../weblayer/browser/java/org/chromium/weblayer_private/BrowserImpl.java"
-            line="426"
-            column="77"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mPartnerBrowserRefreshNeeded = !PartnerBrowserCustomizations.getInstance().isInitialized();"
-        errorLine2="                                                                                   ~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java"
-            line="372"
-            column="84"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        IntentHandler.setTestIntentsEnabled("
-        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java"
-            line="762"
-            column="23"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        DownloadManagerService.getDownloadManagerService().onDownloadFailed(downloadItem, reason);"
-        errorLine2="                                                           ~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/ChromeDownloadDelegate.java"
-            line="184"
-            column="60"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mOverviewListLayout = (OverviewListLayout) mLayoutManager.getOverviewListLayout();"
-        errorLine2="                                                                  ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java"
-            line="803"
-            column="67"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                IconProvider.getIcon(context, R.drawable.infobar_autofill_cc),"
-        errorLine2="                             ~~~~~~~">
-        <location
-            file="../../chrome/android/features/keyboard_accessory/internal/java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/CreditCardAccessorySheetCoordinator.java"
-            line="37"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                    webappActivity.getIntentDataProvider();"
-        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabDelegateFactory.java"
-            line="260"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mConnection.cleanUpSession(sessionToken);"
-        errorLine2="                    ~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabsConnectionServiceImpl.java"
-            line="104"
-            column="21"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                mDownloadNotificationService.notifyDownloadPaused(entry.id, entry.fileName, true,"
-        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/DownloadBroadcastManagerImpl.java"
-            line="138"
-            column="46"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                mDownloadNotificationService.notifyDownloadCanceled(entry.id, true);"
-        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/DownloadBroadcastManagerImpl.java"
-            line="144"
-            column="46"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        Set&lt;String> entries = DownloadManagerService.getStoredDownloadInfo("
-        errorLine2="                                                     ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/DownloadSharedPreferenceHelper.java"
-            line="134"
-            column="54"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            EditorTextField inputLayout = new EditorTextField("
-        errorLine2="                                          ^">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/autofill/prefeditor/EditorDialog.java"
-            line="494"
-            column="43"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            EditText input = inputLayout.getEditText();"
-        errorLine2="                                         ~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/autofill/prefeditor/EditorDialog.java"
-            line="498"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                            ImageFetcher.resizeImage(bitmap, params.width, params.height));"
-        errorLine2="                                         ~~~~~~~~~~~">
-        <location
-            file="../../chrome/browser/image_fetcher/android/java/src/org/chromium/chrome/browser/image_fetcher/ImageFetcherBridge.java"
-            line="92"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                                IncognitoNotificationServiceImpl.getRemoveAllIncognitoTabsIntent("
-        errorLine2="                                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/incognito/IncognitoNotificationManager.java"
-            line="56"
-            column="66"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            ClickableSpan[] spans = getClickableSpans();"
-        errorLine2="                                    ~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/infobars/android/java/src/org/chromium/components/infobars/InfoBarMessageView.java"
-            line="39"
-            column="37"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                assert mExternalNavHandler.canExternalAppHandleUrl(url);"
-        errorLine2="                                           ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/external_intents/android/java/src/org/chromium/components/external_intents/InterceptNavigationDelegateImpl.java"
-            line="142"
-            column="44"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        int resId = mExternalNavHandler.canExternalAppHandleUrl(url)"
-        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/external_intents/android/java/src/org/chromium/components/external_intents/InterceptNavigationDelegateImpl.java"
-            line="286"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        } else if (animationsEnabled()) {"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java"
-            line="117"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        boolean animate = !tabRemoved &amp;&amp; animationsEnabled();"
-        errorLine2="                                         ~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java"
-            line="136"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        } else if (animationsEnabled()) {"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromePhone.java"
-            line="150"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                    ((ChromeTabbedActivity) activity).saveState();"
-        errorLine2="                                                      ~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/multiwindow/MultiInstanceManager.java"
-            line="373"
-            column="55"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                NavigationControllerImplJni.get().getNavigationController(tab.getNativeTab());"
-        errorLine2="                                                                              ~~~~~~~~~~~~">
-        <location
-            file="../../weblayer/browser/java/org/chromium/weblayer_private/NavigationControllerImpl.java"
-            line="41"
-            column="79"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                NewTabCallbackProxyJni.get().createNewTabCallbackProxy(this, tab.getNativeTab());"
-        errorLine2="                                                                                 ~~~~~~~~~~~~">
-        <location
-            file="../../weblayer/browser/java/org/chromium/weblayer_private/NewTabCallbackProxy.java"
-            line="26"
-            column="82"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                mNewTabPageLayout.getTileGroup().onSwitchToForeground(/* trackLoadTask = */ false);"
-        errorLine2="                                  ~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java"
-            line="313"
-            column="35"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        return DownloadManagerService.getStoredDownloadInfo(sharedPrefs, type);"
-        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/OMADownloadHandler.java"
-            line="902"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        return VersionNumberGetter.getInstance().getCurrentlyUsedVersion(getContext());"
-        errorLine2="                                   ~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omaha/OmahaBase.java"
-            line="321"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            String appId = getRequestGenerator().getAppId();"
-        errorLine2="                                                 ~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omaha/OmahaBase.java"
-            line="349"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                            .setAnchorView(mToolbarLayout.getOptionalButtonView())"
-        errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/OptionalBrowsingModeButtonController.java"
-            line="114"
-            column="59"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            mContent.destroy();"
-        errorLine2="                     ~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/compositor/bottombar/OverlayPanel.java"
-            line="516"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        if (!browserCustomizations.isInitialized()) {"
-        errorLine2="                                   ~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/partnerbookmarks/PartnerBookmarksReader.java"
-            line="102"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                IconProvider.getIcon(context, R.drawable.ic_vpn_key_grey),"
-        errorLine2="                             ~~~~~~~">
-        <location
-            file="../../chrome/android/features/keyboard_accessory/internal/java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PasswordAccessorySheetCoordinator.java"
-            line="43"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        getTab().setIcon(IconProvider.getIcon("
-        errorLine2="                                      ~~~~~~~">
-        <location
-            file="../../chrome/android/features/keyboard_accessory/internal/java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_tabs/PasswordAccessorySheetCoordinator.java"
-            line="66"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        String distillerUrl = DomDistillerUrlUtils.getDistillerViewUrlFromUrl("
-        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeManager.java"
-            line="471"
-            column="52"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                new SettingsSecureBasedIdentificationGenerator(getContext()), false);"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omaha/RequestGenerator.java"
-            line="43"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                new SettingsSecureBasedIdentificationGenerator(ContextUtils.getApplicationContext())"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/rlz/RlzPingHandler.java"
-            line="40"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mSearchBox.beginQuery(isVoiceSearchIntent(), getOptionalIntentQuery());"
-        errorLine2="                   ~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/searchwidget/SearchActivity.java"
-            line="341"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        Intent intent = getShareLinkIntent(params);"
-        errorLine2="                        ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/share/ShareHelper.java"
-            line="67"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            ShareHelper.setLastShareComponentName(component);"
-        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/browser/share/android/java/src/org/chromium/chrome/browser/share/share_sheet/ShareSheetPropertyModelBuilder.java"
-            line="212"
-            column="25"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within package private scope"
-        errorLine1="        SigninPreferencesManager.getInstance().setNewTabPageSigninPromoSuppressionPeriodStart("
-        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ntp/cards/SignInPromo.java"
-            line="110"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within package private scope"
-        errorLine1="                                      .getNewTabPageSigninPromoSuppressionPeriodStart();"
-        errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ntp/cards/SignInPromo.java"
-            line="124"
             column="40"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within package private scope"
-        errorLine1="        SigninPreferencesManager.getInstance().clearNewTabPageSigninPromoSuppressionPeriodStart();"
-        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NewApi"
+        message="Call requires API level 34 (current min is 29): `logGestureType`"
+        errorLine1="                StylusGestureConverter.logGestureType("
+        errorLine2="                                       ~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ntp/cards/SignInPromo.java"
-            line="131"
-            column="48"/>
+            file="../../components/stylus_handwriting/android/java/src/org/chromium/components/stylus_handwriting/DirectWritingServiceCallback.java"
+            line="194"
+            column="40"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                &amp;&amp; clickedTab.getVisiblePercentage() >= 1.f"
-        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~">
+        id="NewApi"
+        message="Call requires API level 34 (current min is 29): `logGestureType`"
+        errorLine1="                StylusGestureConverter.logGestureType("
+        errorLine2="                                       ~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/compositor/overlays/strip/StripLayoutHelper.java"
-            line="802"
-            column="31"/>
+            file="../../components/stylus_handwriting/android/java/src/org/chromium/components/stylus_handwriting/DirectWritingServiceCallback.java"
+            line="198"
+            column="40"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                requestId, new AwContents.VisualStateCallback() {"
-        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NewApi"
+        message="Call requires API level 34 (current min is 29): `logGestureType`"
+        errorLine1="                StylusGestureConverter.logGestureType("
+        errorLine2="                                       ~~~~~~~~~~~~~~">
         <location
-            file="../../android_webview/support_library/java/src/org/chromium/support_lib_glue/SupportLibWebViewChromium.java"
-            line="50"
-            column="32"/>
+            file="../../components/stylus_handwriting/android/java/src/org/chromium/components/stylus_handwriting/DirectWritingServiceCallback.java"
+            line="202"
+            column="40"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        assert AccountUtils.GOOGLE_ACCOUNT_TYPE.equals(account.type);"
-        errorLine2="                            ~~~~~~~~~~~~~~~~~~~">
+        id="NewApi"
+        message="Call requires API level 30 (current min is 29): `getExitReason`"
+        errorLine1="            int reason = ProcessExitReasonFromSystem.getExitReason(previousPid);"
+        errorLine2="                                                     ~~~~~~~~~~~~~">
         <location
-            file="../../components/signin/public/android/java/src/org/chromium/components/signin/SystemAccountManagerDelegate.java"
-            line="141"
-            column="29"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java"
+            line="158"
+            column="54"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        getDownloadNotificationService().notifyDownloadCanceled(id, false);"
-        errorLine2="                                         ~~~~~~~~~~~~~~~~~~~~~~">
+        id="NewApi"
+        message="Call requires API level 30 (current min is 29): `getExitReason`"
+        errorLine1="        recordAsEnumHistogram(umaName, getExitReason(pid));"
+        errorLine2="                                       ~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/SystemDownloadNotifier.java"
-            line="122"
-            column="42"/>
+            file="../../components/crash/android/java/src/org/chromium/components/crash/browser/ProcessExitReasonFromSystem.java"
+            line="108"
+            column="40"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                getDownloadNotificationService().notifyDownloadProgress(info.getContentId(),"
-        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: PageTransition.FIRST, PageTransition.LINK, PageTransition.TYPED, PageTransition.AUTO_BOOKMARK, PageTransition.AUTO_SUBFRAME, PageTransition.MANUAL_SUBFRAME, PageTransition.GENERATED, PageTransition.AUTO_TOPLEVEL, PageTransition.FORM_SUBMIT, PageTransition.RELOAD, PageTransition.KEYWORD, PageTransition.KEYWORD_GENERATED, PageTransition.LAST_CORE, PageTransition.CORE_MASK, PageTransition.BLOCKED, PageTransition.FORWARD_BACK, PageTransition.FROM_ADDRESS_BAR, PageTransition.HOME_PAGE, PageTransition.FROM_API, PageTransition.CHAIN_START, PageTransition.CHAIN_END, PageTransition.CLIENT_REDIRECT, PageTransition.SERVER_REDIRECT, PageTransition.IS_REDIRECT_MASK, PageTransition.QUALIFIER_MASK"
+        errorLine1="                    getTransitionType(type, intent, loadUrlParams.getTransitionType()));"
+        errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/SystemDownloadNotifier.java"
-            line="243"
-            column="50"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/tabmodel/ChromeTabCreator.java"
+            line="326"
+            column="53"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                getDownloadNotificationService().notifyDownloadPaused(info.getContentId(),"
-        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: SigninAccessPoint.RECENT_TABS, SigninAccessPoint.BOOKMARK_MANAGER, SigninAccessPoint.HISTORY_PAGE, SigninAccessPoint.NTP_FEED_TOP_PROMO, SigninAccessPoint.NTP_FEED_BOTTOM_PROMO, SigninAccessPoint.SAFETY_CHECK, SigninAccessPoint.SETTINGS, SigninAccessPoint.WEB_SIGNIN, SigninAccessPoint.NTP_SIGNED_OUT_ICON, SigninAccessPoint.NTP_FEED_CARD_MENU_PROMO, SigninAccessPoint.SEND_TAB_TO_SELF_PROMO, SigninAccessPoint.CCT_ACCOUNT_MISMATCH_NOTIFICATION, SigninAccessPoint.COLLABORATION_JOIN_TAB_GROUP, SigninAccessPoint.COLLABORATION_SHARE_TAB_GROUP, SigninAccessPoint.COLLABORATION_LEAVE_OR_DELETE_TAB_GROUP, SigninAccessPoint.HISTORY_SYNC_EDUCATIONAL_TIP, SigninAccessPoint.SET_UP_LIST"
+        errorLine1="                                mActivity, mProfile, config, signinAccessPoint);"
+        errorLine2="                                                             ~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/SystemDownloadNotifier.java"
-            line="251"
-            column="50"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/app/creator/CreatorActionDelegateImpl.java"
+            line="139"
+            column="62"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                        getDownloadNotificationService().notifyDownloadSuccessful("
-        errorLine2="                                                         ~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: SigninAccessPoint.RECENT_TABS, SigninAccessPoint.BOOKMARK_MANAGER, SigninAccessPoint.HISTORY_PAGE, SigninAccessPoint.NTP_FEED_TOP_PROMO, SigninAccessPoint.NTP_FEED_BOTTOM_PROMO, SigninAccessPoint.SAFETY_CHECK, SigninAccessPoint.SETTINGS, SigninAccessPoint.WEB_SIGNIN, SigninAccessPoint.NTP_SIGNED_OUT_ICON, SigninAccessPoint.NTP_FEED_CARD_MENU_PROMO, SigninAccessPoint.SEND_TAB_TO_SELF_PROMO, SigninAccessPoint.CCT_ACCOUNT_MISMATCH_NOTIFICATION, SigninAccessPoint.COLLABORATION_JOIN_TAB_GROUP, SigninAccessPoint.COLLABORATION_SHARE_TAB_GROUP, SigninAccessPoint.COLLABORATION_LEAVE_OR_DELETE_TAB_GROUP, SigninAccessPoint.HISTORY_SYNC_EDUCATIONAL_TIP, SigninAccessPoint.SET_UP_LIST"
+        errorLine1="                                mActivity, mProfile, config, signinAccessPoint);"
+        errorLine2="                                                             ~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/SystemDownloadNotifier.java"
-            line="258"
-            column="58"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/app/creator/CreatorActionDelegateImpl.java"
+            line="173"
+            column="62"/>
     </issue>
 
     <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                getDownloadNotificationService().notifyDownloadFailed(info.getContentId(),"
-        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: DownloadState.IN_PROGRESS, DownloadState.COMPLETE, DownloadState.CANCELLED, DownloadState.INTERRUPTED, DownloadState.MAX_DOWNLOAD_STATE"
+        errorLine1="        @DownloadState int state = assumeNonNull(downloadItem.getDownloadInfo()).state();"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/SystemDownloadNotifier.java"
-            line="273"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                getDownloadNotificationService().notifyDownloadPaused(info.getContentId(),"
-        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/SystemDownloadNotifier.java"
-            line="278"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mTileRenderer.renderTileSection(tiles, mSectionView, mTileGroup.getTileSetupDelegate());"
-        errorLine2="                                                                        ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/TileGridViewHolder.java"
-            line="34"
-            column="73"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                                != mTabSwitcherAnimationTabStackDrawable.getTabCount();"
-        errorLine2="                                                                         ~~~~~~~~~~~">
-        <location
-            file="../../chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java"
-            line="1548"
-            column="74"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        return mToolbarLayout.getLocationBar();"
-        errorLine2="                              ~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/TopToolbarCoordinator.java"
-            line="610"
-            column="31"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                        VersionNumberGetter.getInstance().getLatestKnownVersion(context);"
-        errorLine2="                                            ~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omaha/UpdateStatusProvider.java"
-            line="423"
-            column="45"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        mWebApkUpdateManager.get().updateIfNeeded(storage, mActivity.getIntentDataProvider());"
-        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/webapps/WebApkActivityCoordinator.java"
-            line="56"
-            column="70"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                requestId, callback == null ? null : new AwContents.VisualStateCallback() {"
-        errorLine2="                                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/glue/java/src/com/android/webview/chromium/WebViewChromium.java"
-            line="971"
-            column="58"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                mAwContents.getWebContents()));"
-        errorLine2="                            ~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/glue/java/src/com/android/webview/chromium/WebViewChromium.java"
-            line="1827"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="            WebappExtras webappExtras = customTabActivity.getIntentDataProvider().getWebappExtras();"
-        errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLocator.java"
-            line="44"
-            column="59"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        list.add(new StorageInfo(host, type, size));"
-        errorLine2="                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/WebsitePreferenceBridge.java"
-            line="70"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="                .put(origin, new LocalStorageInfo(origin, size, important));"
-        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/WebsitePreferenceBridge.java"
-            line="88"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="VisibleForTests"
-        message="This method should only be accessed from tests or within private scope"
-        errorLine1="        list.add(new ChosenObjectInfo("
-        errorLine2="                 ^">
-        <location
-            file="../../components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/WebsitePreferenceBridge.java"
-            line="143"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="UseAppTint"
-        message="Must use `app:tint` instead of `android:tint`"
-        errorLine1="        android:tint=&quot;@color/default_icon_color_blue&quot;"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/messages/android/java/res/layout/message_banner_view.xml"
-            line="29"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseAppTint"
-        message="Must use `app:tint` instead of `android:tint`"
-        errorLine1="            android:tint=&quot;@color/photo_picker_tile_bg_color&quot; />"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/photo_picker/android/java/res/layout/photo_picker_bitmap_view.xml"
-            line="109"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UseAppTint"
-        message="Must use `app:tint` instead of `android:tint`"
-        errorLine1="            android:tint=&quot;@color/default_icon_color&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/res/layout/search_widget_template.xml"
-            line="42"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UseAppTint"
-        message="Must use `app:tint` instead of `android:tint`"
-        errorLine1="                android:tint=&quot;@color/ungroup_bar_shadow_color&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/features/tab_ui/java/res/layout/tab_grid_dialog_layout.xml"
-            line="35"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="UseAppTint"
-        message="Must use `app:tint` instead of `android:tint`"
-        errorLine1="            android:tint=&quot;@color/default_icon_color&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/res/layout/tab_switcher_toolbar.xml"
-            line="29"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `ResourcesCompat.getDrawable()`"
-        errorLine1="                return res.getDrawable(id, null);"
-        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../base/android/java/src/org/chromium/base/ApiCompatibilityUtils.java"
-            line="364"
-            column="24"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `ResourcesCompat.getDrawable()`"
-        errorLine1="                context.getResources().getDrawable(R.drawable.autofill_assistant_actions_gradient);"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/carousel/AssistantActionsDecoration.java"
-            line="85"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `ResourcesCompat.getDrawable()`"
-        errorLine1="            mDefaultImage = (GradientDrawable) context.getResources().getDrawable("
-        errorLine2="                                               ^">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/details/AssistantDetailsViewBinder.java"
-            line="73"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `ResourcesCompat.getDrawable()`"
-        errorLine1="            cardIssuerImageView.setImageDrawable(view.getContext().getResources().getDrawable("
-        errorLine2="                                                 ^">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/src/org/chromium/chrome/browser/autofill_assistant/user_data/AssistantPaymentMethodSection.java"
-            line="103"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `ResourcesCompat.getDrawable()`"
-        errorLine1="            Drawable mInlineTitleIcon = resources.getDrawable(googlePayDrawableId);"
-        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/autofill/CardUnmaskPrompt.java"
-            line="195"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `ResourcesCompat.getDrawable()`"
-        errorLine1="        Drawable clearTextIcon = getResources().getDrawable(R.drawable.ic_clear_text);"
-        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/nonembedded/java/src/org/chromium/android_webview/devui/FlagsFragment.java"
-            line="152"
-            column="34"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `AppCompatResources.getDrawable()`"
-        errorLine1="            final Drawable statusIcon = mContext.getDrawable(R.drawable.ic_cloud_offline_24dp);"
-        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/offlinepages/indicator/OfflineIndicatorControllerV2.java"
-            line="124"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `AppCompatResources.getDrawable()`"
-        errorLine1="            final Drawable statusIcon = mContext.getDrawable(R.drawable.ic_globe_24dp);"
-        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/offlinepages/indicator/OfflineIndicatorControllerV2.java"
-            line="150"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="UseCompatLoadingForDrawables"
-        message="Use `AppCompatResources.getDrawable()`"
-        errorLine1="                view.setForeground(view.getContext().getDrawable(R.drawable.piet_clickable_ripple));"
-        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/library/piet/ViewUtils.java"
-            line="60"
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java"
+            line="1276"
             column="36"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="            android:drawableTop=&quot;@drawable/ic_action_home&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: DownloadState.IN_PROGRESS, DownloadState.COMPLETE, DownloadState.CANCELLED, DownloadState.INTERRUPTED, DownloadState.MAX_DOWNLOAD_STATE"
+        errorLine1="        return (state == DownloadState.INTERRUPTED &amp;&amp; !downloadItem.getDownloadInfo().isResumable())"
+        errorLine2="                ~~~~~">
         <location
-            file="../../android_webview/nonembedded/java/res_devui/layout/activity_main.xml"
-            line="50"
-            column="13"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java"
+            line="1277"
+            column="17"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="            android:drawableTop=&quot;@drawable/ic_alert_error&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: DownloadState.IN_PROGRESS, DownloadState.COMPLETE, DownloadState.CANCELLED, DownloadState.INTERRUPTED, DownloadState.MAX_DOWNLOAD_STATE"
+        errorLine1="                || state == DownloadState.CANCELLED;"
+        errorLine2="                   ~~~~~">
         <location
-            file="../../android_webview/nonembedded/java/res_devui/layout/activity_main.xml"
-            line="60"
-            column="13"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/download/DownloadManagerService.java"
+            line="1278"
+            column="20"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="            android:drawableTop=&quot;@drawable/ic_flag&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: SigninAccessPoint.RECENT_TABS, SigninAccessPoint.BOOKMARK_MANAGER, SigninAccessPoint.HISTORY_PAGE, SigninAccessPoint.NTP_FEED_TOP_PROMO, SigninAccessPoint.NTP_FEED_BOTTOM_PROMO, SigninAccessPoint.SAFETY_CHECK, SigninAccessPoint.SETTINGS, SigninAccessPoint.WEB_SIGNIN, SigninAccessPoint.NTP_SIGNED_OUT_ICON, SigninAccessPoint.NTP_FEED_CARD_MENU_PROMO, SigninAccessPoint.SEND_TAB_TO_SELF_PROMO, SigninAccessPoint.CCT_ACCOUNT_MISMATCH_NOTIFICATION, SigninAccessPoint.COLLABORATION_JOIN_TAB_GROUP, SigninAccessPoint.COLLABORATION_SHARE_TAB_GROUP, SigninAccessPoint.COLLABORATION_LEAVE_OR_DELETE_TAB_GROUP, SigninAccessPoint.HISTORY_SYNC_EDUCATIONAL_TIP, SigninAccessPoint.SET_UP_LIST"
+        errorLine1="                                    mActivity, mProfile, config, signinAccessPoint);"
+        errorLine2="                                                                 ~~~~~~~~~~~~~~~~~">
         <location
-            file="../../android_webview/nonembedded/java/res_devui/layout/activity_main.xml"
-            line="70"
-            column="13"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/app/feed/FeedActionDelegateImpl.java"
+            line="256"
+            column="66"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableEndCompat` instead of `android:drawableEnd`"
-        errorLine1="                android:drawableEnd=&quot;@drawable/data_reduction_breakdown_sort_arrow&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="WrongConstant"
+        message="Must be one of: SigninAccessPoint.RECENT_TABS, SigninAccessPoint.BOOKMARK_MANAGER, SigninAccessPoint.HISTORY_PAGE, SigninAccessPoint.NTP_FEED_TOP_PROMO, SigninAccessPoint.NTP_FEED_BOTTOM_PROMO, SigninAccessPoint.SAFETY_CHECK, SigninAccessPoint.SETTINGS, SigninAccessPoint.WEB_SIGNIN, SigninAccessPoint.NTP_SIGNED_OUT_ICON, SigninAccessPoint.NTP_FEED_CARD_MENU_PROMO, SigninAccessPoint.SEND_TAB_TO_SELF_PROMO, SigninAccessPoint.CCT_ACCOUNT_MISMATCH_NOTIFICATION, SigninAccessPoint.COLLABORATION_JOIN_TAB_GROUP, SigninAccessPoint.COLLABORATION_SHARE_TAB_GROUP, SigninAccessPoint.COLLABORATION_LEAVE_OR_DELETE_TAB_GROUP, SigninAccessPoint.HISTORY_SYNC_EDUCATIONAL_TIP, SigninAccessPoint.SET_UP_LIST"
+        errorLine1="                                    mActivity, mProfile, config, signinAccessPoint);"
+        errorLine2="                                                                 ~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/res/layout/data_usage_breakdown.xml"
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/app/feed/FeedActionDelegateImpl.java"
+            line="296"
+            column="66"/>
+    </issue>
+
+    <issue
+        id="UnspecifiedRegisterReceiverFlag"
+        message="`receiver` is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected broadcasts registered for an IntentFilter that cannot be inspected by lint"
+        errorLine1="            return context.registerReceiver(receiver, filter, permission, scheduler);"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../base/android/java/src/org/chromium/base/ContextUtils.java"
+            line="338"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="UnspecifiedRegisterReceiverFlag"
+        message="`receiver` is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected broadcasts registered for an IntentFilter that cannot be inspected by lint"
+        errorLine1="            return super.registerReceiver(receiver, filter, permission, handler);"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../content/public/android/java/src/org/chromium/content/browser/sms/Wrappers.java"
+            line="107"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="VectorRaster"
+        message="Limit vector icons sizes to 200×200 to keep icon drawing fast; see https://developer.android.com/studio/write/vector-asset-studio#when for more"
+        errorLine1="    android:width=&quot;360dp&quot;"
+        errorLine2="                   ~~~~~">
+        <location
+            file="../../chrome/android/java/res/drawable/adaptive_toolbar_preference_header.xml"
+            line="9"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="SupportAnnotationUsage"
+        message="Top level class can&apos;t have private or protected access level"
+        errorLine1="@VisibleForTesting"
+        errorLine2="~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../content/public/android/java/src/org/chromium/content/browser/BackgroundSyncNetworkObserver.java"
+            line="47"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnclosedTrace"
+        message="The `beginSection()` call is not always closed with a matching `endSection()` because the code in between may return early"
+        errorLine1="        Trace.beginSection(name);"
+        errorLine2="              ~~~~~~~~~~~~">
+        <location
+            file="../../base/android/java/src/org/chromium/base/metrics/ScopedSysTraceEvent.java"
             line="48"
-            column="17"/>
+            column="15"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableStartCompat` instead of `android:drawableStart`"
-        errorLine1="                android:drawableStart=&quot;@drawable/data_reduction_breakdown_sort_arrow&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="DataExtractionRules"
+        message="The attribute `android:allowBackup` is deprecated from Android 12 and higher and may be removed in future versions. Consider adding the attribute `android:dataExtractionRules` specifying an `@xml` resource which configures cloud backups and device transfers on Android 12 and higher."
+        errorLine1="    &lt;application />"
+        errorLine2="    ~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/android/java/res/layout/data_usage_breakdown.xml"
-            line="58"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableStartCompat` instead of `android:drawableStart`"
-        errorLine1="                android:drawableStart=&quot;@drawable/data_reduction_breakdown_sort_arrow&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/res/layout/data_usage_breakdown.xml"
-            line="69"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableEndCompat` instead of `android:drawableEnd`"
-        errorLine1="    android:drawableEnd=&quot;@drawable/exclamation_triangle&quot;"
-        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/res/layout/os_version_unsupported_text.xml"
-            line="15"
+            file="gen/chrome/android/chrome_public_apk__lint/android_lint_cache/aars/lottie.aar/AndroidManifest.xml"
+            line="7"
             column="5"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableStartCompat` instead of `android:drawableStart`"
-        errorLine1="        android:drawableStart=&quot;@drawable/ic_alert_error&quot;"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="                            notifyDataSetChanged();"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../android_webview/nonembedded/java/res_devui/layout/persistent_error_message.xml"
-            line="26"
+            file="../../chrome/browser/language/android/java/src/org/chromium/chrome/browser/language/settings/ContentLanguagesPreference.java"
+            line="139"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java"
+            line="589"
             column="9"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableStartCompat` instead of `android:drawableStart`"
-        errorLine1="        android:drawableStart=&quot;@drawable/ic_error&quot;"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/qrcode_camera_error_layout.xml"
-            line="27"
+            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java"
+            line="610"
             column="9"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="                    android:drawableTop=&quot;@drawable/edit_icon&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="49"
-            column="21"/>
+            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java"
+            line="652"
+            column="9"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTint` instead of `android:drawableTint`"
-        errorLine1="                    android:drawableTint=&quot;@color/default_icon_color_tint_list&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="50"
-            column="21"/>
+            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java"
+            line="693"
+            column="9"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="                    android:drawableTop=&quot;@drawable/delete_icon&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        if (notifyDataSetChanged) notifyDataSetChanged();"
+        errorLine2="                                  ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="60"
-            column="21"/>
+            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java"
+            line="707"
+            column="35"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTint` instead of `android:drawableTint`"
-        errorLine1="                    android:drawableTint=&quot;@color/default_icon_color_tint_list&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="61"
-            column="21"/>
+            file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/DateDividedAdapter.java"
+            line="838"
+            column="9"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="                    android:drawableTop=&quot;@drawable/save_icon&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="            mPagerAdapter.notifyDataSetChanged();"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="71"
-            column="21"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java"
+            line="293"
+            column="13"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTint` instead of `android:drawableTint`"
-        errorLine1="                    android:drawableTint=&quot;@color/default_icon_color_tint_list&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="72"
-            column="21"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/history/HistoryAdapter.java"
+            line="168"
+            column="9"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTopCompat` instead of `android:drawableTop`"
-        errorLine1="                    android:drawableTop=&quot;@drawable/share_icon&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="            notifyDataSetChanged();"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="82"
-            column="21"/>
+            file="../../chrome/browser/language/android/java/src/org/chromium/chrome/browser/language/settings/LanguageListBaseAdapter.java"
+            line="146"
+            column="13"/>
     </issue>
 
     <issue
-        id="UseCompatTextViewDrawableXml"
-        message="Use `app:drawableTint` instead of `android:drawableTint`"
-        errorLine1="                    android:drawableTint=&quot;@color/default_icon_color_tint_list&quot;"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/screenshot_share_sheet.xml"
-            line="83"
-            column="21"/>
+            file="../../chrome/browser/language/android/java/src/org/chromium/chrome/browser/language/settings/LanguageListBaseAdapter.java"
+            line="203"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/contacts_picker/android/java/src/org/chromium/components/browser_ui/contacts_picker/PickerAdapter.java"
+            line="176"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/contacts_picker/android/java/src/org/chromium/components/browser_ui/contacts_picker/PickerAdapter.java"
+            line="205"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/contacts_picker/android/java/src/org/chromium/components/browser_ui/contacts_picker/PickerAdapter.java"
+            line="226"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/contacts_picker/android/java/src/org/chromium/components/browser_ui/contacts_picker/PickerAdapter.java"
+            line="376"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        mPickerAdapter.notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/contacts_picker/android/java/src/org/chromium/components/browser_ui/contacts_picker/PickerCategoryView.java"
+            line="253"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="            mPickerAdapter.notifyDataSetChanged();"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/photo_picker/android/java/src/org/chromium/components/browser_ui/photo_picker/PickerCategoryView.java"
+            line="283"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="            mPickerAdapter.notifyDataSetChanged();"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/photo_picker/android/java/src/org/chromium/components/browser_ui/photo_picker/PickerCategoryView.java"
+            line="421"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        mPickerAdapter.notifyDataSetChanged();"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/photo_picker/android/java/src/org/chromium/components/browser_ui/photo_picker/PickerCategoryView.java"
+            line="484"
+            column="9"/>
     </issue>
 
     <issue
@@ -1388,47 +508,1449 @@
     </issue>
 
     <issue
-        id="UseCompoundDrawables"
-        message="This tag and its children can be replaced by one `&lt;TextView/>` and a compound drawable"
-        errorLine1="  &lt;LinearLayout"
-        errorLine2="   ~~~~~~~~~~~~">
+        id="UnusedResources"
+        message="The resource `R.xml.ad_services_config` appears to be unused"
+        errorLine1="&lt;ad-services-config>"
+        errorLine2="^">
         <location
-            file="../../chrome/browser/share/android/java/res/layout/qrcode_camera_error_layout.xml"
-            line="11"
-            column="4"/>
+            file="../../chrome/android/java/res/xml/ad_services_config.xml"
+            line="8"
+            column="1"/>
     </issue>
 
     <issue
-        id="MergeRootFrame"
-        message="This `&lt;FrameLayout>` can be replaced with a `&lt;merge>` tag"
-        errorLine1="&lt;FrameLayout"
+        id="UnusedResources"
+        message="The resource `R.string.fre_activity_label` appears to be unused"
+        errorLine1="&lt;string name=&quot;fre_activity_label&quot;>&quot;Chrome se eerste laatloopervaring&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="1154"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.bookmark_choose_folder` appears to be unused"
+        errorLine1="&lt;string name=&quot;bookmark_choose_folder&quot;>&quot;Kies vouer&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="1494"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.bookmark_widget_description` appears to be unused"
+        errorLine1="&lt;string name=&quot;bookmark_widget_description&quot;>&quot;Kry maklik toegang tot jou boekmerke&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="1511"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.content_provider_search_description` appears to be unused"
+        errorLine1="&lt;string name=&quot;content_provider_search_description&quot;>&quot;Boekmerke en webgeskiedenis&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="1609"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.webapp_activity_title` appears to be unused"
+        errorLine1="&lt;string name=&quot;webapp_activity_title&quot;>&quot;Webprogram&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="1771"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.search_widget_description` appears to be unused"
+        errorLine1="&lt;string name=&quot;search_widget_description&quot;>&quot;Begin vinnig ’n soektog in Chrome&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="2018"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.quick_action_search_widget_description` appears to be unused"
+        errorLine1="&lt;string name=&quot;quick_action_search_widget_description&quot;>&quot;Soek met behulp van sleutelbord, stem, Incognito of kamera&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="2023"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.dino_widget_description` appears to be unused"
+        errorLine1="&lt;string name=&quot;dino_widget_description&quot;>&quot;Spring in ’n lekker Dino-speletjie&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="2025"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.disabled_incognito_launcher_shortcut_message` appears to be unused"
+        errorLine1="&lt;string name=&quot;disabled_incognito_launcher_shortcut_message&quot;>&quot;Verwyder hierdie kortpad en skep dit weer&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/browser/ui/android/strings/ui_strings_grd.resources.zip/values-af/android_chrome_strings.xml"
+            line="2026"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.app_restrictions` appears to be unused"
+        errorLine1="&lt;restrictions xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
         errorLine2="^">
         <location
-            file="../../chrome/android/feed/core/java/resv1/layout/feed_more_button.xml"
+            file="gen/chrome/app/policy/android/xml-v21/app_restrictions.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.bookmark_widget_info` appears to be unused"
+        errorLine1="&lt;appwidget-provider"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res/xml/bookmark_widget_info.xml"
+            line="9"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.bookmark_widget_layout_preview` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; xmlns:aapt=&quot;http://schemas.android.com/aapt&quot;"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res/drawable/bookmark_widget_layout_preview.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.bookmark_widget_preview` appears to be unused">
+        <location
+            file="../../chrome/android/java/res/drawable-nodpi/bookmark_widget_preview.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.layout.bookmark_widget_preview_layout` appears to be unused"
+        errorLine1="&lt;FrameLayout xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res/layout/bookmark_widget_preview_layout.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.decoder_description` appears to be unused"
+        errorLine1="&lt;string name=&quot;decoder_description&quot;>&quot;Prentdekodeerder&quot;&lt;/string>"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/components/browser_ui/strings/android/browser_ui_strings_grd.resources.zip/values-af/browser_ui_strings.xml"
+            line="655"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.bookmark_widget_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;bookmark_widget_title&quot; translatable=&quot;false&quot;>Chromium bookmarks&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res_chromium_base/values/channel_constants.xml"
+            line="11"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.search_widget_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;search_widget_title&quot; translatable=&quot;false&quot;>Chromium search&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res_chromium_base/values/channel_constants.xml"
+            line="12"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.quick_action_search_widget_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;quick_action_search_widget_title&quot; translatable=&quot;false&quot;>Chromium quick action search&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res_chromium_base/values/channel_constants.xml"
+            line="13"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.color_button_background` appears to be unused"
+        errorLine1="&lt;layer-list xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="../../components/embedder_support/android/java/res/drawable/color_button_background.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_neutral_70_alpha_38` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_neutral_70_alpha_38&quot;>#61ABABAB&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="47"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_neutral_10_with_neutral_90_alpha_38` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_neutral_10_with_neutral_90_alpha_38&quot;>#696969&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="59"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_neutral_10_with_neutral_0_alpha_30` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_neutral_10_with_neutral_0_alpha_30&quot;>#161616&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="66"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_neutral_10_with_neutral_0_alpha_30_with_neutral_variant_60_alpha_15` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_neutral_10_with_neutral_0_alpha_30_with_neutral_variant_60_alpha_15&quot;>#282828&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="67"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_secondary_90_with_neutral_10_alpha_8` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_secondary_90_with_neutral_10_alpha_8&quot;>#B3D7EF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="80"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_secondary_90_with_neutral_10_alpha_24` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_secondary_90_with_neutral_10_alpha_24&quot;>#94B7CF&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="81"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_secondary_70_with_neutral_90_alpha_8` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_secondary_70_with_neutral_90_alpha_8&quot;>#53A7E1&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="84"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_secondary_70_with_neutral_90_alpha_24` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_secondary_70_with_neutral_90_alpha_24&quot;>#448FC4&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="85"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.baseline_secondary_10` appears to be unused"
+        errorLine1="    &lt;color name=&quot;baseline_secondary_10&quot;>#001D35&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/color_palette.xml"
+            line="92"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.macro.suggestion_url_color` appears to be unused"
+        errorLine1="    &lt;macro name=&quot;suggestion_url_color&quot;>@macro/default_text_color_link&lt;/macro>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/browser/ui/android/omnibox/java/res/values/colors.xml"
+            line="12"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.dark_action_bar_color` appears to be unused"
+        errorLine1="    &lt;color name=&quot;dark_action_bar_color&quot;>@color/google_blue_grey_900&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/colors.xml"
+            line="13"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.dark_status_bar_color` appears to be unused"
+        errorLine1="    &lt;color name=&quot;dark_status_bar_color&quot;>#161E21&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/colors.xml"
+            line="14"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.quick_action_search_widget_width` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;quick_action_search_widget_width&quot;>300dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/values/dimens.xml"
+            line="10"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.autofill_dropdown_icon_margin` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;autofill_dropdown_icon_margin&quot;>8dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/autofill/android/java/res/values/dimens.xml"
+            line="11"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.color_button_height` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;color_button_height&quot;>60dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/embedder_support/android/java/res/values/dimens.xml"
+            line="14"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.context_menu_list_vertical_padding` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;context_menu_list_vertical_padding&quot;>16dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/embedder_support/android/java/res/values/dimens.xml"
+            line="21"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.context_menu_small_vertical_margin` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;context_menu_small_vertical_margin&quot;>10dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/embedder_support/android/java/res/values/dimens.xml"
+            line="22"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.editor_dialog_checkbox_min_height` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;editor_dialog_checkbox_min_height&quot;>48dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/autofill/android/java/res/values/dimens.xml"
+            line="32"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.context_menu_popup_border_radius` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;context_menu_popup_border_radius&quot;>16dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/embedder_support/android/java/res/values/dimens.xml"
+            line="35"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.editable_option_section_logo_horizontal_padding` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;editable_option_section_logo_horizontal_padding&quot;>5dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/autofill/android/java/res/values/dimens.xml"
+            line="39"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.editable_option_section_logo_vertical_padding` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;editable_option_section_logo_vertical_padding&quot;>13dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/autofill/android/java/res/values/dimens.xml"
+            line="40"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.menu_footer_chip_end_padding` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;menu_footer_chip_end_padding&quot;>8dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/dimens.xml"
+            line="54"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.quick_action_search_widget_dino_min_size` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;quick_action_search_widget_dino_min_size&quot;>110dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/values/dimens.xml"
+            line="82"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.list_menu_popup_min_width` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;list_menu_popup_min_width&quot;>112dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/dimens.xml"
+            line="108"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.list_menu_popup_max_width` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;list_menu_popup_max_width&quot;>280dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/dimens.xml"
+            line="109"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.dimen.list_menu_item_min_height` appears to be unused"
+        errorLine1="    &lt;dimen name=&quot;list_menu_item_min_height&quot;>48dp&lt;/dimen>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/dimens.xml"
+            line="116"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.file_paths` appears to be unused"
+        errorLine1="&lt;paths xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/android/chrome_public_apk_template_resources.resources.zip/xml/file_paths.xml"
+            line="11"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.hairline_border` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/drawable/hairline_border.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_apps_blue_24dp` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../../ui/android/java/res/drawable/ic_apps_blue_24dp.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_launcher` appears to be unused"
+        errorLine1="&lt;adaptive-icon xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; >"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res_base/drawable/ic_launcher.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_launcher_round` appears to be unused"
+        errorLine1="&lt;adaptive-icon xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; >"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res_base/drawable/ic_launcher_round.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.launchershortcuts` appears to be unused"
+        errorLine1="&lt;shortcuts xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; >"
+        errorLine2="^">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/android/chrome_public_apk_template_resources.resources.zip/xml/launchershortcuts.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.mipmap.layered_app_icon` appears to be unused">
+        <location
+            file="../../chrome/android/java/res_chromium_base/mipmap-hdpi/layered_app_icon.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.mipmap.layered_app_icon_background` appears to be unused">
+        <location
+            file="../../chrome/android/java/res_chromium_base/mipmap-hdpi/layered_app_icon_background.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.mipmap.layered_app_icon_foreground` appears to be unused"
+        errorLine1="&lt;shape xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;>"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res_chromium_base/mipmap-nodpi/layered_app_icon_foreground.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.list_divider` appears to be unused"
+        errorLine1="&lt;shape"
+        errorLine2="^">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/drawable/list_divider.xml"
+            line="11"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.network_security_config` appears to be unused"
+        errorLine1="&lt;network-security-config>"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res_base/xml/network_security_config.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.green_50` appears to be unused"
+        errorLine1="    &lt;color name=&quot;green_50&quot;>#E6F4EA&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/one_off_colors.xml"
+            line="25"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.quick_action_search_widget_dino_info` appears to be unused"
+        errorLine1="&lt;appwidget-provider"
+        errorLine2="^">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/xml/quick_action_search_widget_dino_info.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.quick_action_search_widget_dino_preview` appears to be unused">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/drawable-nodpi/quick_action_search_widget_dino_preview.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.layout.quick_action_search_widget_dino_preview_layout` appears to be unused"
+        errorLine1="&lt;FrameLayout xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/layout/quick_action_search_widget_dino_preview_layout.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.xml.quick_action_search_widget_small_info` appears to be unused"
+        errorLine1="&lt;appwidget-provider xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/xml/quick_action_search_widget_small_info.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.quick_action_search_widget_small_preview` appears to be unused">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/drawable-nodpi/quick_action_search_widget_small_preview.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.layout.quick_action_search_widget_small_preview_layout` appears to be unused"
+        errorLine1="&lt;FrameLayout xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../../chrome/browser/ui/android/quickactionsearchwidget/java/res/layout/quick_action_search_widget_small_preview_layout.xml"
             line="7"
             column="1"/>
     </issue>
 
     <issue
-        id="MergeRootFrame"
-        message="This `&lt;FrameLayout>` can be replaced with a `&lt;merge>` tag"
-        errorLine1="&lt;FrameLayout"
+        id="UnusedResources"
+        message="The resource `R.xml.search_widget_info` appears to be unused"
+        errorLine1="&lt;appwidget-provider"
         errorLine2="^">
         <location
-            file="../../chrome/android/java/res/layout/signin_activity.xml"
-            line="5"
+            file="../../chrome/android/java/res/xml/search_widget_info.xml"
+            line="9"
             column="1"/>
     </issue>
 
     <issue
-        id="UseSparseArrays"
-        message="Use `new SparseBooleanArray(...)` instead for better performance"
-        errorLine1="        mGroupsCollapsedState = new SparseArray&lt;>();"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~">
+        id="UnusedResources"
+        message="The resource `R.xml.searchable` appears to be unused"
+        errorLine1="&lt;searchable xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
         <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omnibox/suggestions/DropdownItemViewInfoListManager.java"
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/chrome/android/chrome_public_apk_template_resources.resources.zip/xml/searchable.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_text_color_on_accent2_container_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_text_color_on_accent2_container_baseline&quot;>@color/baseline_secondary_10&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="20"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_icon_color_on_accent1_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_icon_color_on_accent1_baseline&quot;>@color/default_icon_color_on_accent1_light&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="26"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_icon_color_on_accent1_container_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_icon_color_on_accent1_container_baseline&quot;>@color/default_icon_color_on_accent1_container_light&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="27"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_icon_color_disabled_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_icon_color_disabled_baseline&quot;>@color/default_icon_color_disabled_dark&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="30"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_bg_color_elev_4_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_bg_color_elev_4_baseline&quot;>@color/default_bg_color_light_elev_4_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="44"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.legacy_bg_color_elev_4` appears to be unused"
+        errorLine1="    &lt;color name=&quot;legacy_bg_color_elev_4&quot;>@color/legacy_bg_color_light_elev_4&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="48"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.incognito_icon_filled_bg_color` appears to be unused"
+        errorLine1="    &lt;color name=&quot;incognito_icon_filled_bg_color&quot;>@color/incognito_icon_filled_bg_color_dark&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="69"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.menu_action_bar_bg_color_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;menu_action_bar_bg_color_baseline&quot;>@color/menu_action_bar_bg_color_light_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="85"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.menu_action_bar_bg_color_light_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;menu_action_bar_bg_color_light_baseline&quot;>@color/default_bg_color_light_elev_1_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="86"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.menu_action_bar_bg_color_dark_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;menu_action_bar_bg_color_dark_baseline&quot;>@color/default_bg_color_dark_elev_6_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="87"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.section_header_active_tab_bg_color_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;section_header_active_tab_bg_color_baseline&quot;>@color/default_bg_color_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="102"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.section_header_bg_color_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;section_header_bg_color_baseline&quot;>@color/default_bg_color_light_elev_2_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="103"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.section_header_bg_color_disabled_baseline` appears to be unused"
+        errorLine1="    &lt;color name=&quot;section_header_bg_color_disabled_baseline&quot;>@color/default_bg_color_elev_1_baseline&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="104"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gm3_baseline_surface` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gm3_baseline_surface&quot;>@color/gm3_baseline_surface_light&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_adaptive.xml"
+            line="111"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_icon_color_on_accent1_light` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_icon_color_on_accent1_light&quot;>@color/baseline_primary_100&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="26"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_icon_color_on_accent1_container_light` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_icon_color_on_accent1_container_light&quot;>@color/baseline_primary_30&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="29"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.default_icon_color_on_accent1_container_dark` appears to be unused"
+        errorLine1="    &lt;color name=&quot;default_icon_color_on_accent1_container_dark&quot;>@color/baseline_primary_90&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="30"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.legacy_bg_color_light_elev_4` appears to be unused"
+        errorLine1="    &lt;color name=&quot;legacy_bg_color_light_elev_4&quot;>@color/modern_white&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="76"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.legacy_bg_color_dark_elev_4` appears to be unused"
+        errorLine1="    &lt;color name=&quot;legacy_bg_color_dark_elev_4&quot;>@color/baseline_neutral_10_with_surface_tint_dark_alpha_12&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="84"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.incognito_icon_filled_bg_color_dark` appears to be unused"
+        errorLine1="    &lt;color name=&quot;incognito_icon_filled_bg_color_dark&quot;>@color/baseline_neutral_20&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="129"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.incognito_icon_filled_bg_color_light` appears to be unused"
+        errorLine1="    &lt;color name=&quot;incognito_icon_filled_bg_color_light&quot;>@color/baseline_neutral_70&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="130"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.color.gm3_baseline_outline_variant_dark` appears to be unused"
+        errorLine1="    &lt;color name=&quot;gm3_baseline_outline_variant_dark&quot;>@color/baseline_neutral_30&lt;/color>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/semantic_colors_non_adaptive.xml"
+            line="180"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.shortcut_newtab` appears to be unused">
+        <location
+            file="../../chrome/android/java/res/drawable-hdpi/shortcut_newtab.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.DropdownPopupWindow` appears to be unused"
+        errorLine1="    &lt;style name=&quot;DropdownPopupWindow&quot; parent=&quot;@android:style/Widget.ListPopupWindow&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="10"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.LauncherTheme` appears to be unused"
+        errorLine1="    &lt;style name=&quot;LauncherTheme&quot; parent=&quot;Theme.BrowserUI.NoDisplay&quot; />"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="11"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium&quot; parent=&quot;Base.Theme.Chromium&quot; />"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="31"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.PreferenceTheme` appears to be unused"
+        errorLine1="    &lt;style name=&quot;PreferenceTheme&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/values/styles.xml"
             line="35"
-            column="33"/>
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Activity` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Activity&quot; parent=&quot;Theme.Chromium.WithWindowAnimation&quot; />"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="39"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Base_Theme_Chromium_Activity_Fullscreen` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Base.Theme.Chromium.Activity.Fullscreen&quot; parent=&quot;Theme.BrowserUI.DayNight&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="42"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.SettingsFragment` appears to be unused"
+        errorLine1="    &lt;style name=&quot;SettingsFragment&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/values/styles.xml"
+            line="45"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.SettingsFragmentList` appears to be unused"
+        errorLine1="    &lt;style name=&quot;SettingsFragmentList&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/values/styles.xml"
+            line="49"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Activity_Fullscreen` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Activity.Fullscreen&quot; parent=&quot;Base.Theme.Chromium.Activity.Fullscreen&quot; />"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="49"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Activity_Fullscreen_Transparent` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Activity.Fullscreen.Transparent&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="51"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.PreferenceItem` appears to be unused"
+        errorLine1="    &lt;style name=&quot;PreferenceItem&quot; parent=&quot;Preference.Material&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/values/styles.xml"
+            line="54"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.DialogPreference` appears to be unused"
+        errorLine1="    &lt;style name=&quot;DialogPreference&quot; parent=&quot;PreferenceItem&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/values/styles.xml"
+            line="60"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Activity_FakeTranslucent` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Activity.FakeTranslucent&quot; parent=&quot;Theme.Chromium.Activity&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="60"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.CheckBoxPreference` appears to be unused"
+        errorLine1="    &lt;style name=&quot;CheckBoxPreference&quot; parent=&quot;Preference.CheckBoxPreference.Material&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/settings/android/java/res/values/styles.xml"
+            line="64"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_SearchActivity` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.SearchActivity&quot; parent=&quot;Theme.Chromium.WithWindowAnimation&quot; />"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="72"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Webapp` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Webapp&quot; parent=&quot;Theme.Chromium.WithWindowAnimation&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="75"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Webapp_Translucent` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Webapp.Translucent&quot; parent=&quot;Theme.Chromium.Webapp&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="80"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Base_Theme_Chromium_Settings` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Base.Theme.Chromium.Settings&quot; parent=&quot;Theme.Chromium&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="84"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Settings` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Settings&quot; parent=&quot;Base.Theme.Chromium.Settings&quot; />"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="102"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_TextAccentLarge` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.TextAccentLarge&quot; parent=&quot;TextAppearance.TextLarge&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="104"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_Settings_ManageSpace` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.Settings.ManageSpace&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="116"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Base_Theme_Chromium_SigninAndHistorySyncActivity` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Base.Theme.Chromium.SigninAndHistorySyncActivity&quot;"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="135"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_SigninAndHistorySyncActivity` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.SigninAndHistorySyncActivity&quot;"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="142"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.SigninAndHistorySyncActivityAnimation` appears to be unused"
+        errorLine1="    &lt;style name=&quot;SigninAndHistorySyncActivityAnimation&quot; parent=&quot;@android:style/Animation.Dialog&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="150"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_Chromium_ClearDataDialogActivity` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.Chromium.ClearDataDialogActivity&quot;"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="156"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_TextSmallThick_Secondary_Baseline_Light` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.TextSmallThick.Secondary.Baseline.Light&quot;"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="196"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.SettingsToolbarStyle` appears to be unused"
+        errorLine1="    &lt;style name=&quot;SettingsToolbarStyle&quot; parent=&quot;Widget.Material3Expressive.Toolbar&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="228"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.ManageSpaceActionBarModern` appears to be unused"
+        errorLine1="    &lt;style name=&quot;ManageSpaceActionBarModern&quot; parent=&quot;Widget.MaterialComponents.ActionBar.Primary&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="244"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_TextMediumThick_Green` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.TextMediumThick.Green&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="249"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.ManageSpaceActionBarTheme` appears to be unused"
+        errorLine1="    &lt;style name=&quot;ManageSpaceActionBarTheme&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="250"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_TextMediumThick_Green_Dark` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.TextMediumThick.Green.Dark&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="252"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.ManageSpaceToolbarStyle` appears to be unused"
+        errorLine1="    &lt;style name=&quot;ManageSpaceToolbarStyle&quot; parent=&quot;SettingsToolbarStyle&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res/values/styles.xml"
+            line="255"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_Headline2_Primary_Baseline` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.Headline2.Primary.Baseline&quot; parent=&quot;TextAppearance.Headline2&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="316"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_TextAccentLarge_Primary_Baseline` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.TextAccentLarge.Primary.Baseline&quot; parent=&quot;TextAppearance.TextAccentLarge&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="327"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_TextMedium_Error` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.TextMedium.Error&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="362"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.TextAppearance_Toast` appears to be unused"
+        errorLine1="    &lt;style name=&quot;TextAppearance.Toast&quot; parent=&quot;TextAppearance.TextSmall&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../ui/android/java/res/values/styles.xml"
+            line="369"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.themed_app_icon` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="../../chrome/android/java/res_chromium_base/drawable/themed_app_icon.xml"
+            line="8"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_BrowserUI_DayNight_AlertDialog_NoActionBar` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.BrowserUI.DayNight.AlertDialog.NoActionBar&quot; parent=&quot;Theme.BrowserUI.Dark.AlertDialog.NoActionBar&quot;/>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../components/browser_ui/theme/android/java/res/values-night/themes.xml"
+            line="11"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_BrowserUI_Light_AlertDialog_NoActionBar` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.BrowserUI.Light.AlertDialog.NoActionBar&quot; parent=&quot;Theme.Material3Expressive.Light.Dialog.Alert&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/components/browser_ui/theme/android/theme_template_resources.resources.zip/values/themes.xml"
+            line="385"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_BrowserUI_Dark_AlertDialog_NoActionBar` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.BrowserUI.Dark.AlertDialog.NoActionBar&quot; parent=&quot;Theme.Material3Expressive.Dark.Dialog.Alert&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/components/browser_ui/theme/android/theme_template_resources.resources.zip/values/themes.xml"
+            line="930"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_BrowserUI_NoDisplay` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.BrowserUI.NoDisplay&quot; parent=&quot;Theme.BrowserUI.DayNight&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/components/browser_ui/theme/android/theme_template_resources.resources.zip/values/themes.xml"
+            line="1120"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_BrowserUI_Translucent` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.BrowserUI.Translucent&quot; parent=&quot;Theme.BrowserUI.DayNight&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/components/browser_ui/theme/android/theme_template_resources.resources.zip/values/themes.xml"
+            line="1131"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.style.Theme_BrowserUI_Translucent_NoTitleBar` appears to be unused"
+        errorLine1="    &lt;style name=&quot;Theme.BrowserUI.Translucent.NoTitleBar&quot;>"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="gen/chrome/android/chrome_public_apk__lint/RESZIPS/obj/components/browser_ui/theme/android/theme_template_resources.resources.zip/values/themes.xml"
+            line="1137"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.manage_space_activity` appears to be unused"
+        errorLine1="    &lt;string translatable=&quot;false&quot; name=&quot;manage_space_activity&quot;>org.chromium.chrome.browser.site_settings.ManageSpaceActivity&lt;/string>"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="../../chrome/android/java/res_base/values/values.xml"
+            line="8"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.widget_preview` appears to be unused">
+        <location
+            file="../../chrome/android/java/res/drawable-nodpi/widget_preview.png"/>
     </issue>
 
     <issue
@@ -1438,7 +1960,7 @@
         errorLine2="                                               ~~~~~~~~~~~~~~">
         <location
             file="../../chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/DownloadDirectoryProvider.java"
-            line="152"
+            line="162"
             column="48"/>
     </issue>
 
@@ -1449,7 +1971,7 @@
         errorLine2="                                                                   ~~~~~~~~~~~~~~">
         <location
             file="../../chrome/android/java/src/org/chromium/chrome/browser/download/OMADownloadHandler.java"
-            line="317"
+            line="347"
             column="68"/>
     </issue>
 
@@ -1460,85 +1982,19 @@
         errorLine2="                                              ~~~~~~~~~~~~~~">
         <location
             file="../../chrome/android/java/src/org/chromium/chrome/browser/offlinepages/OfflinePageUtils.java"
-            line="241"
+            line="201"
             column="47"/>
     </issue>
 
     <issue
         id="UsableSpace"
         message="Consider also using `StorageManager#getAllocatableBytes` and `allocateBytes` which will consider clearable cached data"
-        errorLine1="                        defaultDownloadDir.getAbsolutePath(), defaultDownloadDir.getUsableSpace(),"
-        errorLine2="                                                                                 ~~~~~~~~~~~~~~">
+        errorLine1="                                defaultDownloadDir.getUsableSpace(),"
+        errorLine2="                                                   ~~~~~~~~~~~~~~">
         <location
             file="../../chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/storage/StorageSummaryProvider.java"
-            line="86"
-            column="82"/>
-    </issue>
-
-    <issue
-        id="Autofill"
-        message="Missing `autofillHints` attribute"
-        errorLine1="        &lt;EditText"
-        errorLine2="         ~~~~~~~~">
-        <location
-            file="../../android_webview/nonembedded/java/res_devui/layout/fragment_flags.xml"
-            line="25"
-            column="10"/>
-    </issue>
-
-    <issue
-        id="Autofill"
-        message="Missing `autofillHints` attribute"
-        errorLine1="            &lt;EditText"
-        errorLine2="             ~~~~~~~~">
-        <location
-            file="../../chrome/browser/password_check/android/java/res/layout/password_check_edit_fragment.xml"
-            line="31"
-            column="14"/>
-    </issue>
-
-    <issue
-        id="Autofill"
-        message="Missing `autofillHints` attribute"
-        errorLine1="            &lt;EditText"
-        errorLine2="             ~~~~~~~~">
-        <location
-            file="../../chrome/browser/password_check/android/java/res/layout/password_check_edit_fragment.xml"
-            line="52"
-            column="14"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view `AccessibilityTabModelListItem` overrides `onTouchEvent` but not `performClick`"
-        errorLine1="    public boolean onTouchEvent(MotionEvent e) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/accessibility_tab_switcher/AccessibilityTabModelListItem.java"
-            line="458"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="`onTouch` lambda should call `View#performClick` when a click is detected"
-        errorLine1="            row.setDragHandleOnTouchListener((v, event) -> {"
-        errorLine2="                                             ^">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkItemsAdapter.java"
-            line="216"
-            column="46"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``ImageView`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="        mDragHandle.setOnTouchListener(l);"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkRow.java"
-            line="292"
-            column="9"/>
+            line="98"
+            column="52"/>
     </issue>
 
     <issue
@@ -1548,52 +2004,30 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../components/browser_ui/bottomsheet/android/internal/java/src/org/chromium/components/browser_ui/bottomsheet/BottomSheet.java"
-            line="278"
+            line="288"
             column="20"/>
     </issue>
 
     <issue
         id="ClickableViewAccessibility"
         message="Custom view ``TextView`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="                textView.setOnTouchListener(new ChunkedTextTouchListener(spannable));"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/library/piet/ChunkedTextElementAdapter.java"
-            line="159"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="`ChunkedTextTouchListener#onTouch` should call `View#performClick` when a click is detected"
-        errorLine1="        public boolean onTouch(View widget, MotionEvent event) {"
-        errorLine2="                       ~~~~~~~">
-        <location
-            file="../../chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/library/piet/ChunkedTextElementAdapter.java"
-            line="383"
-            column="24"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``TextView`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="        textView.setOnTouchListener((View v, MotionEvent event) -> {"
+        errorLine1="        textView.setOnTouchListener("
         errorLine2="        ^">
         <location
             file="../../chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataCheckBoxPreference.java"
-            line="54"
+            line="60"
             column="9"/>
     </issue>
 
     <issue
         id="ClickableViewAccessibility"
         message="`onTouch` lambda should call `View#performClick` when a click is detected"
-        errorLine1="        textView.setOnTouchListener((View v, MotionEvent event) -> {"
-        errorLine2="                                    ^">
+        errorLine1="                (View v, MotionEvent event) -> {"
+        errorLine2="                ^">
         <location
             file="../../chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataCheckBoxPreference.java"
-            line="54"
-            column="37"/>
+            line="61"
+            column="17"/>
     </issue>
 
     <issue
@@ -1603,7 +2037,7 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java"
-            line="670"
+            line="793"
             column="20"/>
     </issue>
 
@@ -1614,107 +2048,30 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../components/embedder_support/android/java/src/org/chromium/components/embedder_support/view/ContentView.java"
-            line="333"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``ImageButton`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="        menuBtn.setOnTouchListener(menuPopupButtonHelper);"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/ui/tablet/emptybackground/EmptyBackgroundViewTablet.java"
-            line="98"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``EditText`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="            editText.setOnTouchListener((View v, MotionEvent event) -> {"
-        errorLine2="            ^">
-        <location
-            file="../../android_webview/nonembedded/java/src/org/chromium/android_webview/devui/FlagsFragment.java"
-            line="165"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="`onTouch` lambda should call `View#performClick` when a click is detected"
-        errorLine1="            editText.setOnTouchListener((View v, MotionEvent event) -> {"
-        errorLine2="                                        ^">
-        <location
-            file="../../android_webview/nonembedded/java/src/org/chromium/android_webview/devui/FlagsFragment.java"
-            line="165"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``EditText`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="            editText.setOnTouchListener(null);"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/nonembedded/java/src/org/chromium/android_webview/devui/FlagsFragment.java"
-            line="180"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view `FullScreenView` overrides `onTouchEvent` but not `performClick`"
-        errorLine1="    public boolean onTouchEvent(final MotionEvent event) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="../../android_webview/java/src/org/chromium/android_webview/FullScreenView.java"
-            line="91"
-            column="20"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view `InfoBarMessageView` overrides `onTouchEvent` but not `performClick`"
-        errorLine1="    public boolean onTouchEvent(MotionEvent event) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="../../components/infobars/android/java/src/org/chromium/components/infobars/InfoBarMessageView.java"
-            line="32"
+            line="489"
             column="20"/>
     </issue>
 
     <issue
         id="ClickableViewAccessibility"
         message="Custom view ``ImageView`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="        holder.mStartIcon.setOnTouchListener((v, event) -> {"
+        errorLine1="        holder.mStartIcon.setOnTouchListener("
         errorLine2="        ^">
         <location
             file="../../chrome/browser/language/android/java/src/org/chromium/chrome/browser/language/settings/LanguageListBaseAdapter.java"
-            line="173"
+            line="174"
             column="9"/>
     </issue>
 
     <issue
         id="ClickableViewAccessibility"
         message="`onTouch` lambda should call `View#performClick` when a click is detected"
-        errorLine1="        holder.mStartIcon.setOnTouchListener((v, event) -> {"
-        errorLine2="                                             ^">
+        errorLine1="                (v, event) -> {"
+        errorLine2="                ^">
         <location
             file="../../chrome/browser/language/android/java/src/org/chromium/chrome/browser/language/settings/LanguageListBaseAdapter.java"
-            line="173"
-            column="46"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view `LocationBarTablet` overrides `onTouchEvent` but not `performClick`"
-        errorLine1="    public boolean onTouchEvent(MotionEvent event) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/src/org/chromium/chrome/browser/omnibox/LocationBarTablet.java"
-            line="135"
-            column="20"/>
+            line="175"
+            column="17"/>
     </issue>
 
     <issue
@@ -1724,63 +2081,30 @@
         errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="../../chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/menu_button/MenuButton.java"
-            line="77"
+            line="86"
             column="9"/>
     </issue>
 
     <issue
         id="ClickableViewAccessibility"
         message="`onTouch` lambda should call `View#performClick` when a click is detected"
-        errorLine1="        View.OnTouchListener onTouchListener = (View v, MotionEvent ev) -> {"
-        errorLine2="                                               ^">
+        errorLine1="                (View v, MotionEvent ev) -> {"
+        errorLine2="                ^">
         <location
             file="../../components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java"
-            line="206"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``Button`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="        positiveButton.setOnTouchListener(onTouchListener);"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java"
-            line="236"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view ``Button`` has `setOnTouchListener` called on it but does not override `performClick`"
-        errorLine1="        negativeButton.setOnTouchListener(onTouchListener);"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/modaldialog/android/java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogView.java"
-            line="238"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="ClickableViewAccessibility"
-        message="Custom view `NoSwipeViewPager` overrides `onTouchEvent` but not `performClick`"
-        errorLine1="    public boolean onTouchEvent(MotionEvent event) {"
-        errorLine2="                   ~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/features/keyboard_accessory/internal/java/src/org/chromium/chrome/browser/keyboard_accessory/sheet_component/NoSwipeViewPager.java"
-            line="24"
-            column="20"/>
+            line="386"
+            column="17"/>
     </issue>
 
     <issue
         id="ClickableViewAccessibility"
         message="`onTouch` should call `View#performClick` when a click is detected"
-        errorLine1="            public boolean onTouch(View v, MotionEvent event) {"
-        errorLine2="                           ~~~~~~~">
+        errorLine1="                    public boolean onTouch(View v, MotionEvent event) {"
+        errorLine2="                                   ~~~~~~~">
         <location
             file="../../components/browser_ui/photo_picker/android/java/src/org/chromium/components/browser_ui/photo_picker/PickerVideoPlayer.java"
-            line="230"
-            column="28"/>
+            line="251"
+            column="36"/>
     </issue>
 
     <issue
@@ -1790,7 +2114,7 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../components/paint_preview/player/android/java/src/org/chromium/components/paintpreview/player/frame/PlayerFrameView.java"
-            line="107"
+            line="131"
             column="20"/>
     </issue>
 
@@ -1801,7 +2125,7 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/scrim/ScrimView.java"
-            line="79"
+            line="95"
             column="20"/>
     </issue>
 
@@ -1812,7 +2136,7 @@
         errorLine2="                                             ~~~~~~~~~~~~~~~~~~">
         <location
             file="../../components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/selectable_list/SelectableListLayout.java"
-            line="239"
+            line="352"
             column="46"/>
     </issue>
 
@@ -1823,7 +2147,7 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarControlContainer.java"
-            line="261"
+            line="947"
             column="20"/>
     </issue>
 
@@ -1834,7 +2158,7 @@
         errorLine2="                   ~~~~~~~~~~~~">
         <location
             file="../../chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarPhone.java"
-            line="503"
+            line="681"
             column="20"/>
     </issue>
 
@@ -1850,146 +2174,25 @@
     </issue>
 
     <issue
-        id="ClickableViewAccessibility"
-        message="`onTouch` should call `View#performClick` when a click is detected"
-        errorLine1="            public boolean onTouch(View view, MotionEvent event) {"
-        errorLine2="                           ~~~~~~~">
+        id="AccessibilityWindowStateChangedEvent"
+        message="Manually populating or sending TYPE_WINDOW_STATE_CHANGED events should be avoided. They may be ignored on certain versions of Android. Prefer setting UI metadata using `View.onInitializeAccessibilityNodeInfo`, `Activity.setTitle`, `ViewCompat.setAccessibilityPaneTitle`, etc. to inform users of crucial changes to the UI."
+        errorLine1="            mListView.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../weblayer/browser/java/org/chromium/weblayer_private/WebContentsGestureStateTracker.java"
-            line="48"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="    android:clickable=&quot;true&quot;"
-        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/features/autofill_assistant/java/res/layout/autofill_assistant_bottom_sheet_content.xml"
-            line="8"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="                android:clickable=&quot;true&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/contacts_picker/android/java/res/layout/contacts_list_item_view.xml"
-            line="49"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="                android:clickable=&quot;true&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/contacts_picker/android/java/res/layout/contacts_list_item_view.xml"
-            line="73"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="                android:clickable=&quot;true&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/contacts_picker/android/java/res/layout/contacts_list_item_view.xml"
-            line="97"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="        android:clickable=&quot;true&quot;"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/photo_picker/android/java/res/layout/photo_picker_dialog.xml"
-            line="38"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="            android:clickable=&quot;true&quot; >"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/res/layout/search_activity.xml"
-            line="28"
+            file="../../ui/android/java/src/org/chromium/ui/DropdownPopupWindowImpl.java"
+            line="167"
             column="13"/>
     </issue>
 
     <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="    android:clickable=&quot;true&quot;"
-        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="AccessibilityWindowStateChangedEvent"
+        message="Manually populating or sending TYPE_WINDOW_STATE_CHANGED events should be avoided. They may be ignored on certain versions of Android. Prefer setting UI metadata using `View.onInitializeAccessibilityNodeInfo`, `Activity.setTitle`, `ViewCompat.setAccessibilityPaneTitle`, etc. to inform users of crucial changes to the UI."
+        errorLine1="            mToolbarView.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="../../chrome/browser/ui/android/toolbar/java/res/layout/start_top_toolbar.xml"
-            line="13"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="    android:clickable=&quot;true&quot; >"
-        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../chrome/android/java/res/layout/tab_switcher_toolbar.xml"
-            line="13"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="        android:clickable=&quot;true&quot;"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/photo_picker/android/java/res/layout/video_player.xml"
-            line="37"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="                android:clickable=&quot;true&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/photo_picker/android/java/res/layout/video_player.xml"
-            line="99"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="KeyboardInaccessibleWidget"
-        message="&apos;clickable&apos; attribute found, please also add &apos;focusable&apos;"
-        errorLine1="                android:clickable=&quot;true&quot;"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="../../components/browser_ui/photo_picker/android/java/res/layout/video_player.xml"
-            line="124"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="VectorRaster"
-        message="Limit vector icons sizes to 200×200 to keep icon drawing fast; see https://developer.android.com/studio/write/vector-asset-studio#when for more"
-        errorLine1="    android:width=&quot;360dp&quot;"
-        errorLine2="                   ~~~~~">
-        <location
-            file="../../chrome/android/java/res/drawable/adaptive_toolbar_preference_header.xml"
-            line="7"
-            column="5"/>
+            file="../../chrome/android/java/src/org/chromium/chrome/browser/customtabs/features/partialcustomtab/PartialCustomTabSideSheetStrategy.java"
+            line="264"
+            column="13"/>
     </issue>
 
 </issues>

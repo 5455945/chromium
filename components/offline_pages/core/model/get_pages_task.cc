@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -34,29 +34,27 @@ using ReadResult = GetPagesTask::ReadResult;
   "file_path,title,original_url,request_origin,digest,"   \
   "snippet,attribution"
 
-ClientId OfflinePageClientId(const sql::Statement& statement) {
+ClientId OfflinePageClientId(sql::Statement& statement) {
   return ClientId(statement.ColumnString(7), statement.ColumnString(8));
 }
 
 // Create an offline page item from a SQL result.
 // Expects the order of columns as defined by OFFLINE_PAGE_PROJECTION macro.
-OfflinePageItem MakeOfflinePageItem(const sql::Statement& statement) {
+OfflinePageItem MakeOfflinePageItem(sql::Statement& statement) {
   OfflinePageItem item;
   item.offline_id = statement.ColumnInt64(0);
-  item.creation_time = store_utils::FromDatabaseTime(statement.ColumnInt64(1));
+  item.creation_time = statement.ColumnTime(1);
   item.file_size = statement.ColumnInt64(2);
-  item.last_access_time =
-      store_utils::FromDatabaseTime(statement.ColumnInt64(3));
+  item.last_access_time = statement.ColumnTime(3);
   item.access_count = statement.ColumnInt(4);
   item.system_download_id = statement.ColumnInt64(5);
-  item.file_missing_time =
-      store_utils::FromDatabaseTime(statement.ColumnInt64(6));
+  item.file_missing_time = statement.ColumnTime(6);
   item.client_id = OfflinePageClientId(statement);
-  item.url = GURL(statement.ColumnString(9));
+  item.url = GURL(statement.ColumnStringView(9));
   item.file_path = base::FilePath(
       store_utils::FromDatabaseFilePath(statement.ColumnString(10)));
   item.title = statement.ColumnString16(11);
-  item.original_url_if_different = GURL(statement.ColumnString(12));
+  item.original_url_if_different = GURL(statement.ColumnStringView(12));
   item.request_origin = statement.ColumnString(13);
   item.digest = statement.ColumnString(14);
   item.snippet = statement.ColumnString(15);

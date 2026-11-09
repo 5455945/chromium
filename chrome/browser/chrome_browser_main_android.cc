@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,37 +6,46 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/android/application_status_listener.h"
+#include "base/android/jni_android.h"
+#include "base/android/scudo_features.h"
+#include "base/android/scudo_purge_coordinator.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/task/current_thread.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
+#include "chrome/browser/android/metrics/android_atoms_logger.h"
 #include "chrome/browser/android/mojo/chrome_interface_registrar_android.h"
 #include "chrome/browser/android/preferences/clipboard_android.h"
 #include "chrome/browser/android/seccomp_support_detector.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/data_saver/data_saver.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/webauthn/android/cable_module_android.h"
 #include "components/crash/content/browser/child_exit_observer_android.h"
 #include "components/crash/content/browser/child_process_crash_observer_android.h"
 #include "components/metrics/stability_metrics_helper.h"
+#include "components/webauthn/features.h"
 #include "content/public/browser/android/compositor.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/main_function_params.h"
-#include "device/fido/features.h"
 #include "net/base/network_change_notifier.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_bundle_android.h"
 #include "ui/base/ui_base_paths.h"
 
-ChromeBrowserMainPartsAndroid::ChromeBrowserMainPartsAndroid(
-    const content::MainFunctionParams& parameters,
-    StartupData* startup_data)
-    : ChromeBrowserMainParts(parameters, startup_data) {}
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/ChromeBackupWatcher_jni.h"
 
-ChromeBrowserMainPartsAndroid::~ChromeBrowserMainPartsAndroid() {
-}
+ChromeBrowserMainPartsAndroid::ChromeBrowserMainPartsAndroid(
+    bool is_integration_test,
+    StartupData* startup_data)
+    : ChromeBrowserMainParts(is_integration_test, startup_data) {}
+
+ChromeBrowserMainPartsAndroid::~ChromeBrowserMainPartsAndroid() = default;
 
 int ChromeBrowserMainPartsAndroid::PreCreateThreads() {
   TRACE_EVENT0("startup", "ChromeBrowserMainPartsAndroid::PreCreateThreads");
@@ -45,15 +54,31 @@ int ChromeBrowserMainPartsAndroid::PreCreateThreads() {
 
   // The ChildExitObserver needs to be created before any child process is
   // created because it needs to be notified during process creation.
-  crash_reporter::ChildExitObserver::Create();
-  crash_reporter::ChildExitObserver::GetInstance()->RegisterClient(
+  child_exit_observer_ = std::make_unique<crash_reporter::ChildExitObserver>();
+  child_exit_observer_->RegisterClient(
       std::make_unique<crash_reporter::ChildProcessCrashObserver>());
 
   return result_code;
 }
 
-void ChromeBrowserMainPartsAndroid::PostProfileInit() {
-  ChromeBrowserMainParts::PostProfileInit();
+void ChromeBrowserMainPartsAndroid::PostProfileInit(Profile* profile,
+                                                    bool is_initial_profile) {
+  // Only the initial profile is loaded unless profile startup supports
+  // multiple profiles.
+  CHECK(
+      is_initial_profile || profiles::IsAndroidMultiprofileStartupDataEnabled(),
+      base::NotFatalUntil::M162);
+  ChromeBrowserMainParts::PostProfileInit(profile, is_initial_profile);
+
+  // The Android-specific work below is process-wide, or only for the initial
+  // profile, so it must run once.
+  if (!is_initial_profile) {
+    return;
+  }
+
+  // Get the OS Data Saver setting. This will be needed later on, so we want to
+  // fetch this setting as soon as possible to avoid blocking on it.
+  data_saver::FetchDataSaverOSSettingAsynchronously();
 
   // Idempotent.  Needs to be called once on startup.  If
   // InitializeClipboardAndroidFromLocalState() is called multiple times (e.g.,
@@ -63,13 +88,21 @@ void ChromeBrowserMainPartsAndroid::PostProfileInit() {
 
   // Start watching the preferences that need to be backed up backup using
   // Android backup, so that we create a new backup if they change.
-  backup_watcher_ = std::make_unique<android::ChromeBackupWatcher>(profile());
+  base::android::ScopedJavaGlobalRef<jobject> watcher;
+  watcher.Reset(android::Java_ChromeBackupWatcher_Constructor(
+      base::android::AttachCurrentThread(), profile));
+  backup_watcher_runner_.ReplaceClosure(
+      base::BindOnce(&android::Java_ChromeBackupWatcher_destroy,
+                     base::android::AttachCurrentThread(), watcher));
 
   // The GCM driver can be used at this point because the primary profile has
   // been created. Register non-profile-specific things that use GCM so that no
   // messages can be processed (and dropped) because the handler wasn't
   // installed in time.
-  webauthn::authenticator::RegisterForCloudMessages();
+  if (base::FeatureList::IsEnabled(
+          webauthn::features::kWebAuthnRegisterForCloudMessages)) {
+    webauthn::authenticator::RegisterForCloudMessages();
+  }
 }
 
 int ChromeBrowserMainPartsAndroid::PreEarlyInitialization() {
@@ -82,23 +115,60 @@ int ChromeBrowserMainPartsAndroid::PreEarlyInitialization() {
   return ChromeBrowserMainParts::PreEarlyInitialization();
 }
 
-void ChromeBrowserMainPartsAndroid::PostEarlyInitialization() {
-  profile_manager_android_ = std::make_unique<ProfileManagerAndroid>();
-  g_browser_process->profile_manager()->AddObserver(
-      profile_manager_android_.get());
-  ChromeBrowserMainParts::PostEarlyInitialization();
-}
-
 void ChromeBrowserMainPartsAndroid::PostBrowserStart() {
   ChromeBrowserMainParts::PostBrowserStart();
 
+  // Initializes the logger that forwards allowed UMA histograms to Android
+  // Statsd (Westworld) as atoms.
+  // TODO: crbug.com/512252292 - Add link to the readme doc for more background
+  // and context after it's created.
+  chrome::android::westworld::AndroidAtomsLogger::Initialize();
+
   base::ThreadPool::PostDelayedTask(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&ReportSeccompSupport), base::TimeDelta::FromMinutes(1));
+      base::BindOnce(&ReportSeccompSupport), base::Minutes(1));
 
   RegisterChromeJavaMojoInterfaces();
+
+  scudo_purge_coordinator_ =
+      base::android::ScudoPurgeCoordinator::CreateIfEnabled();
+
+  if (scudo_purge_coordinator_) {
+    scudo_purge_coordinator_->Start();
+
+    // `base::Unretained(this)` is safe because `app_status_listener_` is owned
+    // by `this` and unregisters the listener upon destruction, ensuring the
+    // callback cannot be invoked after `this` is destroyed.
+    app_status_listener_ = base::android::ApplicationStatusListener::New(
+        base::BindRepeating(
+            &ChromeBrowserMainPartsAndroid::OnApplicationStateChange,
+            base::Unretained(this)));
+
+    OnApplicationStateChange(
+        base::android::ApplicationStatusListener::GetState());
+  }
 }
 
 void ChromeBrowserMainPartsAndroid::ShowMissingLocaleMessageBox() {
   NOTREACHED();
 }
+
+void ChromeBrowserMainPartsAndroid::OnApplicationStateChange(
+    base::android::ApplicationState state) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(scudo_purge_coordinator_);
+  switch (state) {
+    case base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES:
+    case base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES:
+      scudo_purge_coordinator_->OnForegrounded();
+      break;
+    case base::android::APPLICATION_STATE_HAS_STOPPED_ACTIVITIES:
+    case base::android::APPLICATION_STATE_HAS_DESTROYED_ACTIVITIES:
+      scudo_purge_coordinator_->OnBackgrounded();
+      break;
+    case base::android::APPLICATION_STATE_UNKNOWN:
+      break;
+  }
+}
+
+DEFINE_JNI(ChromeBackupWatcher)

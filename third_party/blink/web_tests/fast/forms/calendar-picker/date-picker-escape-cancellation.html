@@ -1,19 +1,19 @@
 <!DOCTYPE html>
-<html>
-<head>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-1000">
 <script src="../../../resources/testharness.js"></script>
 <script src="../../../resources/testharnessreport.js"></script>
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src="../resources/common.js"></script>
 <script src="../resources/picker-common.js"></script>
 <script src="../calendar-picker/resources/calendar-picker-common.js"></script>
-</head>
-<body>
+
 <input type="date" id="date0" value="2019-02-14">
 
 <script>
 promise_test(() => {
   let dateElement = document.getElementById("date0");
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     eventSender.keyDown('Escape');
     assert_equals(internals.pagePopupWindow, null, "First escape should close popup if there were no changes.");
@@ -23,7 +23,7 @@ promise_test(() => {
 
 promise_test(() => {
   let dateElement = document.getElementById("date0");
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     eventSender.keyDown('ArrowRight');
     eventSender.keyDown('ArrowDown');
@@ -41,7 +41,7 @@ promise_test(() => {
 
 promise_test(() => {
   let dateElement = document.getElementById("date0");
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     eventSender.keyDown('ArrowRight');
     eventSender.keyDown('ArrowDown');
@@ -58,5 +58,3 @@ promise_test(() => {
 }, "Date picker: After modification, single escape should close popup if it was changed back to the initial value.");
 
 </script>
-</body>
-</html>

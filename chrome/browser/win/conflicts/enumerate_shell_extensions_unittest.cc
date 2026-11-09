@@ -1,16 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/win/conflicts/enumerate_shell_extensions.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
-#include "base/strings/stringprintf.h"
+#include "base/strings/strcat.h"
+#include "base/strings/strcat_win.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_reg_util_win.h"
 #include "chrome/browser/win/conflicts/module_info_util.h"
@@ -21,6 +22,11 @@ namespace {
 class EnumerateShellExtensionsTest : public testing::Test {
  public:
   EnumerateShellExtensionsTest() = default;
+
+  EnumerateShellExtensionsTest(const EnumerateShellExtensionsTest&) = delete;
+  EnumerateShellExtensionsTest& operator=(const EnumerateShellExtensionsTest&) =
+      delete;
+
   ~EnumerateShellExtensionsTest() override = default;
 
   // Override all registry hives so that real shell extensions don't mess up
@@ -40,8 +46,6 @@ class EnumerateShellExtensionsTest : public testing::Test {
   base::test::TaskEnvironment task_environment_;
 
   registry_util::RegistryOverrideManager registry_override_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(EnumerateShellExtensionsTest);
 };
 
 // Adds a fake shell extension entry to the registry that should be found by
@@ -50,9 +54,8 @@ class EnumerateShellExtensionsTest : public testing::Test {
 void RegisterFakeApprovedShellExtension(HKEY key,
                                         const wchar_t* guid,
                                         const wchar_t* path) {
-  base::win::RegKey class_id(
-      HKEY_CLASSES_ROOT,
-      base::StringPrintf(kClassIdRegistryKeyFormat, guid).c_str(), KEY_WRITE);
+  base::win::RegKey class_id(HKEY_CLASSES_ROOT, GuidToClsid(guid).c_str(),
+                             KEY_WRITE);
   ASSERT_TRUE(class_id.Valid());
 
   ASSERT_EQ(ERROR_SUCCESS, class_id.WriteValue(nullptr, path));
@@ -69,17 +72,16 @@ void RegisterFakeShellExtension(const wchar_t* guid,
                                 const wchar_t* path,
                                 const wchar_t* shell_extension_type,
                                 const wchar_t* shell_object_type) {
-  base::win::RegKey class_id(
-      HKEY_CLASSES_ROOT,
-      base::StringPrintf(kClassIdRegistryKeyFormat, guid).c_str(), KEY_WRITE);
+  base::win::RegKey class_id(HKEY_CLASSES_ROOT, GuidToClsid(guid).c_str(),
+                             KEY_WRITE);
   ASSERT_TRUE(class_id.Valid());
 
   ASSERT_EQ(ERROR_SUCCESS, class_id.WriteValue(nullptr, path));
 
   base::win::RegKey registration(
       HKEY_CLASSES_ROOT,
-      base::StringPrintf(L"%ls\\shellex\\%ls\\&ls", shell_object_type,
-                         shell_extension_type, guid)
+      base::StrCat({shell_object_type, L"\\shellex\\", shell_extension_type,
+                    L"\\", guid})
           .c_str(),
       KEY_WRITE);
   ASSERT_EQ(ERROR_SUCCESS, registration.WriteValue(nullptr, guid));
@@ -130,10 +132,10 @@ TEST_F(EnumerateShellExtensionsTest, EnumerateApprovedShellExtensionPaths) {
                           base::Unretained(&shell_extension_paths)));
 
   ASSERT_EQ(3u, shell_extension_paths.size());
-  for (size_t i = 0; i < base::size(kTestCases); i++) {
+  for (const auto& test_case : kTestCases) {
     // The inefficiency is fine as long as the number of test cases stays small.
-    EXPECT_TRUE(base::Contains(shell_extension_paths,
-                               base::FilePath(kTestCases[i].path)));
+    EXPECT_TRUE(std::ranges::contains(shell_extension_paths,
+                                      base::FilePath(test_case.path)));
   }
 }
 
@@ -189,9 +191,9 @@ TEST_F(EnumerateShellExtensionsTest, EnumerateShellExtensionPaths) {
                           base::Unretained(&shell_extension_paths)));
 
   ASSERT_EQ(5u, shell_extension_paths.size());
-  for (size_t i = 0; i < base::size(kTestCases); ++i) {
+  for (const auto& test_case : kTestCases) {
     // The inefficiency is fine as long as the number of test cases stays small.
-    EXPECT_TRUE(base::Contains(shell_extension_paths,
-                               base::FilePath(kTestCases[i].path)));
+    EXPECT_TRUE(std::ranges::contains(shell_extension_paths,
+                                      base::FilePath(test_case.path)));
   }
 }

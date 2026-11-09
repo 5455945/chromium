@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,20 @@
 
 #include <memory>
 
-#include "third_party/blink/renderer/platform/graphics/dark_mode_settings.h"
 #include "third_party/blink/renderer/platform/graphics/dark_mode_types.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 namespace blink {
 
+struct DarkModeSettings;
+
 class PLATFORM_EXPORT DarkModeColorClassifier {
  public:
   // Determine perceived brightness of a color.
   static int CalculateColorBrightness(SkColor color);
 
-  static std::unique_ptr<DarkModeColorClassifier> MakeTextColorClassifier(
+  static std::unique_ptr<DarkModeColorClassifier> MakeForegroundColorClassifier(
       const DarkModeSettings& settings);
   static std::unique_ptr<DarkModeColorClassifier> MakeBackgroundColorClassifier(
       const DarkModeSettings& settings);

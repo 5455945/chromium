@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <sstream>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/public/notification_data.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 
 namespace notifications {
 namespace test {
@@ -20,10 +19,10 @@ ImpressionTestData::ImpressionTestData(
     SchedulerClientType type,
     size_t current_max_daily_show,
     std::vector<Impression> impressions,
-    absl::optional<SuppressionInfo> suppression_info,
+    std::optional<SuppressionInfo> suppression_info,
     size_t negative_events_count,
-    absl::optional<base::Time> last_negative_event_ts,
-    absl::optional<base::Time> last_shown_ts)
+    std::optional<base::Time> last_negative_event_ts,
+    std::optional<base::Time> last_shown_ts)
     : type(type),
       current_max_daily_show(current_max_daily_show),
       impressions(std::move(impressions)),
@@ -52,10 +51,10 @@ void AddImpressionTestData(const ImpressionTestData& data,
 }
 
 void AddImpressionTestData(
-    const std::vector<ImpressionTestData>& test_data,
+    const std::vector<ImpressionTestData>& test_data_vec,
     ImpressionHistoryTracker::ClientStates* client_states) {
   DCHECK(client_states);
-  for (const auto& test_data : test_data) {
+  for (const auto& test_data : test_data_vec) {
     auto client_state = std::make_unique<ClientState>();
     AddImpressionTestData(test_data, client_state.get());
     client_states->emplace(test_data.type, std::move(client_state));
@@ -63,10 +62,10 @@ void AddImpressionTestData(
 }
 
 void AddImpressionTestData(
-    const std::vector<ImpressionTestData>& test_data,
+    const std::vector<ImpressionTestData>& test_data_vec,
     std::vector<std::unique_ptr<ClientState>>* client_states) {
   DCHECK(client_states);
-  for (const auto& test_data : test_data) {
+  for (const auto& test_data : test_data_vec) {
     auto client_state = std::make_unique<ClientState>();
     AddImpressionTestData(test_data, client_state.get());
     client_states->emplace_back(std::move(client_state));
@@ -113,12 +112,14 @@ std::string DebugString(const NotificationEntry* entry) {
            << " : " << static_cast<int>(mapping.second);
   }
 
-  if (base::Contains(entry->icons_uuid, IconType::kSmallIcon))
+  if (entry->icons_uuid.contains(IconType::kSmallIcon)) {
     stream << " \n small_icons_id:"
            << entry->icons_uuid.at(IconType::kSmallIcon);
-  if (base::Contains(entry->icons_uuid, IconType::kLargeIcon))
+  }
+  if (entry->icons_uuid.contains(IconType::kLargeIcon)) {
     stream << " \n large_icons_id:"
            << entry->icons_uuid.at(IconType::kLargeIcon);
+  }
 
   return stream.str();
 }
@@ -136,15 +137,15 @@ std::string DebugString(const ClientState* client_state) {
 
   if (client_state->last_negative_event_ts.has_value()) {
     std::ostringstream stream;
-    stream << "last negative event timestamp: ",
-        client_state->last_negative_event_ts.value();
+    stream << "last negative event timestamp: "
+           << client_state->last_negative_event_ts.value();
     log += stream.str();
   }
 
   if (client_state->last_shown_ts.has_value()) {
     std::ostringstream stream;
-    stream << "last shown notification timestamp: ",
-        client_state->last_shown_ts.value();
+    stream << "last shown notification timestamp: "
+           << client_state->last_shown_ts.value();
     log += stream.str();
   }
 

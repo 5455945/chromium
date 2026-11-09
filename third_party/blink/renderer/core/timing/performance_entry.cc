@@ -34,31 +34,41 @@
 #include "third_party/blink/public/mojom/timing/performance_mark_or_measure.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/performance_entry_names.h"
+#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
 namespace {
 static base::AtomicSequenceNumber index_seq;
-}
+}  // namespace
 
 PerformanceEntry::PerformanceEntry(const AtomicString& name,
                                    double start_time,
-                                   double finish_time)
-    : duration_(finish_time - start_time),
-      name_(name),
-      start_time_(start_time),
-      index_(index_seq.GetNext()) {}
+                                   double finish_time,
+                                   DOMWindow* source,
+                                   uint64_t navigation_id)
+    : PerformanceEntry(finish_time - start_time,
+                       name,
+                       start_time,
+                       source,
+                       navigation_id) {}
 
 PerformanceEntry::PerformanceEntry(double duration,
                                    const AtomicString& name,
-                                   double start_time)
+                                   double start_time,
+                                   DOMWindow* source,
+                                   uint64_t navigation_id)
     : duration_(duration),
       name_(name),
       start_time_(start_time),
-      index_(index_seq.GetNext()) {
-  DCHECK_GE(duration_, 0.0);
-}
+      index_(index_seq.GetNext()),
+      source_(source),
+      navigation_id_(navigation_id) {}
 
 PerformanceEntry::~PerformanceEntry() = default;
 
@@ -68,6 +78,14 @@ DOMHighResTimeStamp PerformanceEntry::startTime() const {
 
 DOMHighResTimeStamp PerformanceEntry::duration() const {
   return duration_;
+}
+
+uint64_t PerformanceEntry::navigationId() const {
+  return navigation_id_;
+}
+
+DOMWindow* PerformanceEntry::source() const {
+  return source_.Get();
 }
 
 mojom::blink::PerformanceMarkOrMeasurePtr
@@ -88,40 +106,83 @@ PerformanceEntry::ToMojoPerformanceMarkOrMeasure() {
 
 PerformanceEntry::EntryType PerformanceEntry::ToEntryTypeEnum(
     const AtomicString& entry_type) {
-  if (entry_type == performance_entry_names::kLongtask)
+  if (entry_type == performance_entry_names::kLongtask) {
     return kLongTask;
-  if (entry_type == performance_entry_names::kMark)
+  }
+  if (entry_type == performance_entry_names::kMark) {
     return kMark;
-  if (entry_type == performance_entry_names::kMeasure)
+  }
+  if (entry_type == performance_entry_names::kMeasure) {
     return kMeasure;
-  if (entry_type == performance_entry_names::kResource)
+  }
+  if (entry_type == performance_entry_names::kResource) {
     return kResource;
-  if (entry_type == performance_entry_names::kNavigation)
+  }
+  if (entry_type == performance_entry_names::kNavigation) {
     return kNavigation;
-  if (entry_type == performance_entry_names::kTaskattribution)
+  }
+  if (entry_type == performance_entry_names::kTaskattribution) {
     return kTaskAttribution;
-  if (entry_type == performance_entry_names::kPaint)
+  }
+  if (entry_type == performance_entry_names::kPaint) {
     return kPaint;
-  if (entry_type == performance_entry_names::kEvent)
+  }
+  if (entry_type == performance_entry_names::kEvent) {
     return kEvent;
-  if (entry_type == performance_entry_names::kFirstInput)
+  }
+  if (entry_type == performance_entry_names::kFirstInput) {
     return kFirstInput;
-  if (entry_type == performance_entry_names::kElement)
+  }
+  if (entry_type == performance_entry_names::kElement) {
     return kElement;
-  if (entry_type == performance_entry_names::kLayoutShift)
+  }
+  if (entry_type == performance_entry_names::kLayoutShift) {
     return kLayoutShift;
-  if (entry_type == performance_entry_names::kLargestContentfulPaint)
+  }
+  if (entry_type == performance_entry_names::kLargestContentfulPaint) {
     return kLargestContentfulPaint;
-  if (entry_type == performance_entry_names::kVisibilityState)
+  }
+  if (entry_type == performance_entry_names::kInteractionContentfulPaint) {
+    return kInteractionContentfulPaint;
+  }
+  if (entry_type == performance_entry_names::kVisibilityState) {
     return kVisibilityState;
+  }
+  if (entry_type == performance_entry_names::kBackForwardCacheRestoration) {
+    return kBackForwardCacheRestoration;
+  }
+  if (entry_type == performance_entry_names::kSoftNavigation) {
+    return kSoftNavigation;
+  }
+  if (entry_type == performance_entry_names::kLongAnimationFrame) {
+    return kLongAnimationFrame;
+  }
+  if (entry_type == performance_entry_names::kContainer) {
+    return kContainer;
+  }
+  if (entry_type == performance_entry_names::kScroll) {
+    return kScroll;
+  }
   return kInvalid;
 }
 
-ScriptValue PerformanceEntry::toJSONForBinding(
+DOMHighResTimeStamp PerformanceEntry::paintTime() const {
+  return paint_timing_info_ ? paint_timing_info_->paint_time : 0;
+}
+std::optional<DOMHighResTimeStamp> PerformanceEntry::presentationTime() const {
+  return paint_timing_info_ ? paint_timing_info_->presentation_time : 0;
+}
+
+void PerformanceEntry::Trace(Visitor* visitor) const {
+  visitor->Trace(source_);
+  ScriptWrappable::Trace(visitor);
+}
+
+ScriptObject PerformanceEntry::toJSONForBinding(
     ScriptState* script_state) const {
   V8ObjectBuilder result(script_state);
   BuildJSONValue(result);
-  return result.GetScriptValue();
+  return result.ToScriptObject();
 }
 
 void PerformanceEntry::BuildJSONValue(V8ObjectBuilder& builder) const {
@@ -129,6 +190,13 @@ void PerformanceEntry::BuildJSONValue(V8ObjectBuilder& builder) const {
   builder.AddString("entryType", entryType());
   builder.AddNumber("startTime", startTime());
   builder.AddNumber("duration", duration());
+  builder.AddNumber("navigationId", navigationId());
+
+  if (paint_timing_info_) {
+    builder.AddNumber("paintTime", paint_timing_info_->paint_time);
+    builder.AddNumber("presentationTime",
+                      paint_timing_info_->presentation_time);
+  }
 }
 
 }  // namespace blink

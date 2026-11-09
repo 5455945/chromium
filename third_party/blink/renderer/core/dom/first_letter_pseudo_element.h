@@ -25,6 +25,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_FIRST_LETTER_PSEUDO_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_FIRST_LETTER_PSEUDO_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
@@ -42,28 +43,55 @@ class CORE_EXPORT FirstLetterPseudoElement final : public PseudoElement {
   FirstLetterPseudoElement(const FirstLetterPseudoElement&) = delete;
   FirstLetterPseudoElement& operator=(const FirstLetterPseudoElement&) = delete;
   ~FirstLetterPseudoElement() override;
+  void Trace(Visitor*) const override;
 
   static LayoutText* FirstLetterTextLayoutObject(const Element&);
-  static unsigned FirstLetterLength(const String&);
+
+  enum class LeadingPunctuationState {
+    // No punctuation seen in preceding text nodes
+    kNotStarted,
+    // Punctuation and intervening spaces seen in preceding text nodes with no
+    // invalid spaces or newlines after
+    kStarted,
+    // Punctuation and intervening spaces seen in preceding text nodes, with
+    // trailing invalid spaces or newlines. For signaling that we should stop
+    // looking for first letter text.
+    kFinished,
+  };
+
+  // |punctuation_state| is used to validate combinations of
+  // ::first-letter text and punctuation that spans across text nodes.
+  // LeadingPunctuationState is initially set to
+  // LeadingPunctuationState::kNotStarted and is updated to
+  // LeadingPunctuationState::kStarted if the text ends with punctuation or
+  // intervening spaces, but did not otherwise include valid ::first-letter
+  // text. If out value of |punctuation_state| is
+  // LeadingPunctuationState::kFinished and the return value is 0, it's a
+  // signal that we should not continue to look for ::first-letter text.
+  static unsigned FirstLetterLength(const String&,
+                                    bool preserve_breaks,
+                                    LeadingPunctuationState& punctuation_state);
 
   void ClearRemainingTextLayoutObject();
   LayoutTextFragment* RemainingTextLayoutObject() const {
-    return remaining_text_layout_object_;
+    return remaining_text_layout_object_.Get();
   }
 
   void UpdateTextFragments();
 
   void AttachLayoutTree(AttachContext&) override;
   void DetachLayoutTree(bool performing_reattach) override;
-  Node* InnerNodeForHitTesting() const override;
+  Node* InnerNodeForHitTesting() override;
 
  private:
-  scoped_refptr<ComputedStyle> CustomStyleForLayoutObject(
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
+
+  const ComputedStyle* CustomStyleForLayoutObject(
       const StyleRecalcContext&) override;
 
   void AttachFirstLetterTextLayoutObjects(LayoutText* first_letter_text);
 
-  LayoutTextFragment* remaining_text_layout_object_;
+  Member<LayoutTextFragment> remaining_text_layout_object_;
 };
 
 template <>

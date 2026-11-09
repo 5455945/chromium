@@ -1,40 +1,54 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/shell/utility/shell_content_utility_client.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check_is_test.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/files/file.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/memory/writable_shared_memory_region.h"
-#include "base/no_destructor.h"
 #include "base/process/process.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/allow_check_is_test_for_testing.h"
 #include "build/build_config.h"
 #include "components/services/storage/test_api/test_api.h"
+#include "content/common/pseudonymization_salt.h"
+#include "content/common/skia_utils.h"
 #include "content/public/child/child_thread.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/pseudonymization_util.h"
 #include "content/public/test/test_service.mojom.h"
 #include "content/public/utility/utility_thread.h"
 #include "content/shell/common/power_monitor_test_impl.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/service_factory.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "sandbox/policy/sandbox.h"
 #include "services/test/echo/echo_service.h"
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "content/test/sandbox_status_service.h"
+#endif
+
+#if BUILDFLAG(IS_POSIX)
+#include "base/file_descriptor_store.h"
 #endif
 
 namespace content {
@@ -43,10 +57,14 @@ namespace {
 
 class TestUtilityServiceImpl : public mojom::TestService {
  public:
-  static void Create(mojo::PendingReceiver<mojom::TestService> receiver) {
-    mojo::MakeSelfOwnedReceiver(base::WrapUnique(new TestUtilityServiceImpl),
-                                std::move(receiver));
-  }
+  explicit TestUtilityServiceImpl(
+      mojo::PendingReceiver<mojom::TestService> receiver)
+      : receiver_(this, std::move(receiver)) {}
+
+  TestUtilityServiceImpl(const TestUtilityServiceImpl&) = delete;
+  TestUtilityServiceImpl& operator=(const TestUtilityServiceImpl&) = delete;
+
+  ~TestUtilityServiceImpl() override = default;
 
   // mojom::TestService implementation:
   void DoSomething(DoSomethingCallback callback) override {
@@ -58,7 +76,7 @@ class TestUtilityServiceImpl : public mojom::TestService {
   }
 
   void DoCrashImmediately(DoCrashImmediatelyCallback callback) override {
-    IMMEDIATE_CRASH();
+    base::ImmediateCrash();
   }
 
   void CreateFolder(CreateFolderCallback callback) override {
@@ -77,8 +95,8 @@ class TestUtilityServiceImpl : public mojom::TestService {
     base::MappedReadOnlyRegion map_and_region =
         base::ReadOnlySharedMemoryRegion::Create(message.size());
     CHECK(map_and_region.IsValid());
-    std::copy(message.begin(), message.end(),
-              map_and_region.mapping.GetMemoryAsSpan<char>().begin());
+    std::ranges::copy(message,
+                      map_and_region.mapping.GetMemoryAsSpan<char>().begin());
     std::move(callback).Run(std::move(map_and_region.region));
   }
 
@@ -89,8 +107,7 @@ class TestUtilityServiceImpl : public mojom::TestService {
     CHECK(region.IsValid());
     base::WritableSharedMemoryMapping mapping = region.Map();
     CHECK(mapping.IsValid());
-    std::copy(message.begin(), message.end(),
-              mapping.GetMemoryAsSpan<char>().begin());
+    std::ranges::copy(message, mapping.GetMemoryAsSpan<char>().begin());
     std::move(callback).Run(std::move(region));
   }
 
@@ -101,20 +118,74 @@ class TestUtilityServiceImpl : public mojom::TestService {
     CHECK(region.IsValid());
     base::WritableSharedMemoryMapping mapping = region.Map();
     CHECK(mapping.IsValid());
-    std::copy(message.begin(), message.end(),
-              mapping.GetMemoryAsSpan<char>().begin());
+    std::ranges::copy(message, mapping.GetMemoryAsSpan<char>().begin());
     std::move(callback).Run(std::move(region));
+  }
+
+  void CloneSharedMemoryContents(
+      base::ReadOnlySharedMemoryRegion region,
+      CloneSharedMemoryContentsCallback callback) override {
+    auto mapping = region.Map();
+    auto new_region = base::UnsafeSharedMemoryRegion::Create(region.GetSize());
+    auto new_mapping = new_region.Map();
+    base::span(new_mapping).copy_from(mapping);
+    std::move(callback).Run(std::move(new_region));
   }
 
   void IsProcessSandboxed(IsProcessSandboxedCallback callback) override {
     std::move(callback).Run(sandbox::policy::Sandbox::IsProcessSandboxed());
   }
 
- private:
-  TestUtilityServiceImpl() = default;
+  void PseudonymizeString(const std::string& value,
+                          PseudonymizeStringCallback callback) override {
+    std::move(callback).Run(
+        PseudonymizationUtil::PseudonymizeStringForTesting(value));
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(TestUtilityServiceImpl);
+  void GetPseudonymizationSalt(
+      GetPseudonymizationSaltCallback callback) override {
+    std::move(callback).Run(content::GetPseudonymizationSalt());
+  }
+
+  void IsPseudonymizationSaltInitialized(
+      IsPseudonymizationSaltInitializedCallback callback) override {
+    std::move(callback).Run(content::IsSaltInitialized());
+  }
+
+  void IsSkiaInitialized(IsSkiaInitializedCallback callback) override {
+    std::move(callback).Run(IsSkiaInitializedForTesting());
+  }
+
+  void PassWriteableFile(base::File file,
+                         PassWriteableFileCallback callback) override {
+    std::move(callback).Run();
+  }
+
+  void VerifyCheckIsTest(VerifyCheckIsTestCallback callback) override {
+    CHECK_IS_TEST();
+    std::move(callback).Run(true);
+  }
+
+  void WriteToPreloadedPipe() override {
+#if BUILDFLAG(IS_POSIX)
+    base::MemoryMappedFile::Region region;
+    base::ScopedFD write_pipe = base::FileDescriptorStore::GetInstance().TakeFD(
+        mojom::kTestPipeKey, &region);
+    CHECK(write_pipe.is_valid());
+    CHECK(region == base::MemoryMappedFile::Region::kWholeFile);
+    CHECK(base::WriteFileDescriptor(write_pipe.get(), "test"));
+#else
+    NOTREACHED();
+#endif
+  }
+
+ private:
+  mojo::Receiver<mojom::TestService> receiver_;
 };
+
+auto RunTestService(mojo::PendingReceiver<mojom::TestService> receiver) {
+  return std::make_unique<TestUtilityServiceImpl>(std::move(receiver));
+}
 
 auto RunEchoService(mojo::PendingReceiver<echo::mojom::EchoService> receiver) {
   return std::make_unique<echo::EchoService>(std::move(receiver));
@@ -126,7 +197,8 @@ ShellContentUtilityClient::ShellContentUtilityClient(bool is_browsertest) {
   if (is_browsertest &&
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kProcessType) == switches::kUtilityProcess) {
-    network_service_test_helper_ = std::make_unique<NetworkServiceTestHelper>();
+    base::test::AllowCheckIsTestForTesting();
+    network_service_test_helper_ = NetworkServiceTestHelper::Create();
     audio_service_test_helper_ = std::make_unique<AudioServiceTestHelper>();
     storage::InjectTestApiImplementation();
     register_sandbox_status_helper_ = true;
@@ -137,30 +209,23 @@ ShellContentUtilityClient::~ShellContentUtilityClient() = default;
 
 void ShellContentUtilityClient::ExposeInterfacesToBrowser(
     mojo::BinderMap* binders) {
-  binders->Add(base::BindRepeating(&TestUtilityServiceImpl::Create),
-               base::ThreadTaskRunnerHandle::Get());
   binders->Add<mojom::PowerMonitorTest>(
-      base::BindRepeating(&PowerMonitorTestImpl::MakeSelfOwnedReceiver),
-      base::ThreadTaskRunnerHandle::Get());
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+      &PowerMonitorTestImpl::MakeSelfOwnedReceiver,
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (register_sandbox_status_helper_) {
     binders->Add<content::mojom::SandboxStatusService>(
         base::BindRepeating(
             &content::SandboxStatusService::MakeSelfOwnedReceiver),
-        base::ThreadTaskRunnerHandle::Get());
+        base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 #endif
 }
 
 void ShellContentUtilityClient::RegisterIOThreadServices(
     mojo::ServiceFactory& services) {
+  services.Add(RunTestService);
   services.Add(RunEchoService);
-}
-
-void ShellContentUtilityClient::RegisterNetworkBinders(
-    service_manager::BinderRegistry* registry) {
-  if (network_service_test_helper_)
-    network_service_test_helper_->RegisterNetworkBinders(registry);
 }
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,18 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/values.h"
 #include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_value_store.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/preferences/public/mojom/tracked_preference_validation_delegate.mojom-forward.h"
 
 namespace base {
-class DictionaryValue;
 class FilePath;
 class SequencedTaskRunner;
 class Time;
-}
+}  // namespace base
 
 namespace policy {
 class PolicyService;
@@ -38,19 +38,21 @@ class PrefService;
 
 class PrefStore;
 class Profile;
-class SupervisedUserSettingsService;
+
+namespace supervised_user {
+class DeviceParentalControls;
+class FamilyLinkSettingsService;
+}  // namespace supervised_user
+
+namespace os_crypt_async {
+class OSCryptAsync;
+}  // namespace os_crypt_async
 
 namespace chrome_prefs {
 
-namespace internals {
-
-extern const char kSettingsEnforcementTrialName[];
-extern const char kSettingsEnforcementGroupNoEnforcement[];
-extern const char kSettingsEnforcementGroupEnforceAlways[];
-extern const char kSettingsEnforcementGroupEnforceAlwaysWithDSE[];
-extern const char kSettingsEnforcementGroupEnforceAlwaysWithExtensionsAndDSE[];
-
-}  // namespace internals
+// The prefix (without the trailing ".") with which the account preference
+// values are stored in the preference file.
+extern const char kAccountPreferencesPrefix[];
 
 // Factory methods that create and initialize a new instance of a
 // PrefService for Chrome with the applicable PrefStores. The
@@ -61,16 +63,15 @@ extern const char kSettingsEnforcementGroupEnforceAlwaysWithExtensionsAndDSE[];
 // |policy_service| is used as the source for mandatory or recommended
 // policies.
 // |pref_registry| keeps the list of registered prefs and their default values.
-// If |async| is true, asynchronous version is used.
 // Notifies using PREF_INITIALIZATION_COMPLETED in the end. Details is set to
 // the created PrefService or NULL if creation has failed. Note, it is
 // guaranteed that in asynchronous version initialization happens after this
 // function returned.
 std::unique_ptr<PrefService> CreateLocalState(
     const base::FilePath& pref_filename,
+    scoped_refptr<PersistentPrefStore> pref_store,
     policy::PolicyService* policy_service,
     scoped_refptr<PrefRegistry> pref_registry,
-    bool async,
     policy::BrowserPolicyConnector* policy_connector);
 
 std::unique_ptr<sync_preferences::PrefServiceSyncable> CreateProfilePrefs(
@@ -78,12 +79,14 @@ std::unique_ptr<sync_preferences::PrefServiceSyncable> CreateProfilePrefs(
     mojo::PendingRemote<prefs::mojom::TrackedPreferenceValidationDelegate>
         validation_delegate,
     policy::PolicyService* policy_service,
-    SupervisedUserSettingsService* supervised_user_settings,
+    supervised_user::FamilyLinkSettingsService* family_link_settings_service,
+    supervised_user::DeviceParentalControls& device_parental_controls,
     scoped_refptr<PrefStore> extension_prefs,
     scoped_refptr<user_prefs::PrefRegistrySyncable> pref_registry,
     policy::BrowserPolicyConnector* connector,
     bool async,
-    scoped_refptr<base::SequencedTaskRunner> io_task_runner);
+    scoped_refptr<base::SequencedTaskRunner> io_task_runner,
+    os_crypt_async::OSCryptAsync* os_crypt_async);
 
 // determining the active SettingsEnforcement group. For testing only.
 void DisableDomainCheckForTesting();
@@ -92,7 +95,8 @@ void DisableDomainCheckForTesting();
 // preference values in |master_prefs|. Returns true on success.
 bool InitializePrefsFromMasterPrefs(
     const base::FilePath& profile_path,
-    std::unique_ptr<base::DictionaryValue> master_prefs);
+    base::DictValue master_prefs,
+    os_crypt_async::OSCryptAsync* os_crypt_async);
 
 // Retrieves the time of the last preference reset event, if any, for the
 // provided profile. If no reset has occurred, returns a null |Time|.
@@ -101,6 +105,13 @@ base::Time GetResetTime(Profile* profile);
 // Clears the time of the last preference reset event, if any, for the provided
 // profile.
 void ClearResetTime(Profile* profile);
+
+// Returns the list of tampered pref paths. Returns an empty list if no prefs
+// are set.
+const base::ListValue& GetTamperedPrefList(Profile* profile);
+
+// Clears the list of tampered prefs.
+void ClearTamperedPrefList(Profile* profile);
 
 // Register user prefs used by chrome preference system.
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);

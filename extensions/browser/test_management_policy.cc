@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@ TestManagementPolicyProvider::TestManagementPolicyProvider()
       must_remain_enabled_(false),
       must_remain_disabled_(false),
       must_remain_installed_(false),
+      must_remain_isolated_mode_enabled_(false),
       disable_reason_(disable_reason::DISABLE_NONE) {
   error_message_ = base::UTF8ToUTF16(expected_error());
 }
@@ -31,6 +32,8 @@ void TestManagementPolicyProvider::SetProhibitedActions(
   must_remain_enabled_ = (prohibited_actions & MUST_REMAIN_ENABLED) != 0;
   must_remain_disabled_ = (prohibited_actions & MUST_REMAIN_DISABLED) != 0;
   must_remain_installed_ = (prohibited_actions & MUST_REMAIN_INSTALLED) != 0;
+  must_remain_isolated_mode_enabled_ =
+      (prohibited_actions & MUST_REMAIN_ISOLATED_MODE_ENABLED) != 0;
 }
 
 void TestManagementPolicyProvider::SetDisableReason(
@@ -44,16 +47,18 @@ std::string TestManagementPolicyProvider::GetDebugPolicyProviderName() const {
 
 bool TestManagementPolicyProvider::UserMayLoad(const Extension* extension,
                                                std::u16string* error) const {
-  if (error && !may_load_)
+  if (error && !may_load_) {
     *error = error_message_;
+  }
   return may_load_;
 }
 
 bool TestManagementPolicyProvider::UserMayModifySettings(
     const Extension* extension,
     std::u16string* error) const {
-  if (error && !may_modify_status_)
+  if (error && !may_modify_status_) {
     *error = error_message_;
+  }
   return may_modify_status_;
 }
 
@@ -61,28 +66,28 @@ bool TestManagementPolicyProvider::ExtensionMayModifySettings(
     const Extension* source_extension,
     const Extension* extension,
     std::u16string* error) const {
-  if (error && !may_modify_status_)
+  if (error && !may_modify_status_) {
     *error = error_message_;
+  }
   return may_modify_status_;
 }
 
 bool TestManagementPolicyProvider::MustRemainEnabled(
     const Extension* extension,
     std::u16string* error) const {
-  if (error && must_remain_enabled_)
+  if (error && must_remain_enabled_) {
     *error = error_message_;
+  }
   return must_remain_enabled_;
 }
 
 bool TestManagementPolicyProvider::MustRemainDisabled(
     const Extension* extension,
-    disable_reason::DisableReason* reason,
-    std::u16string* error) const {
+    disable_reason::DisableReason* reason) const {
   if (must_remain_disabled_) {
-    if (error)
-      *error = error_message_;
-    if (reason)
+    if (reason) {
       *reason = disable_reason_;
+    }
   }
   return must_remain_disabled_;
 }
@@ -90,9 +95,19 @@ bool TestManagementPolicyProvider::MustRemainDisabled(
 bool TestManagementPolicyProvider::MustRemainInstalled(
     const Extension* extension,
     std::u16string* error) const {
-  if (error && must_remain_installed_)
+  if (error && must_remain_installed_) {
     *error = error_message_;
+  }
   return must_remain_installed_;
+}
+
+bool TestManagementPolicyProvider::MustRemainIsolatedModeEnabled(
+    const Extension* extension,
+    std::u16string* error) const {
+  if (error && must_remain_isolated_mode_enabled_) {
+    *error = error_message_;
+  }
+  return must_remain_isolated_mode_enabled_;
 }
 
 }  // namespace extensions

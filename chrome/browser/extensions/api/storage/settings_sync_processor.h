@@ -1,17 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_STORAGE_SETTINGS_SYNC_PROCESSOR_H_
 #define CHROME_BROWSER_EXTENSIONS_API_STORAGE_SETTINGS_SYNC_PROCESSOR_H_
 
-#include <set>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
-#include "components/sync/base/model_type.h"
-#include "extensions/browser/value_store/value_store_change.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
+#include "components/sync/base/data_type.h"
+#include "components/value_store/value_store_change.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace syncer {
 class ModelError;
@@ -28,42 +33,44 @@ namespace extensions {
 //  - rate limiting (inherently per-extension, which is what we want).
 class SettingsSyncProcessor {
  public:
-  SettingsSyncProcessor(const std::string& extension_id,
-                        syncer::ModelType type,
+  SettingsSyncProcessor(const ExtensionId& extension_id,
+                        syncer::DataType type,
                         syncer::SyncChangeProcessor* sync_processor);
+
+  SettingsSyncProcessor(const SettingsSyncProcessor&) = delete;
+  SettingsSyncProcessor& operator=(const SettingsSyncProcessor&) = delete;
+
   ~SettingsSyncProcessor();
 
   // Initializes this with the initial state of sync.
-  void Init(const base::DictionaryValue& initial_state);
+  void Init(const base::DictValue& initial_state);
 
-  // Sends |changes| to sync.
-  absl::optional<syncer::ModelError> SendChanges(
-      const ValueStoreChangeList& changes);
+  // Sends `changes` to sync.
+  std::optional<syncer::ModelError> SendChanges(
+      const value_store::ValueStoreChangeList& changes);
 
-  // Informs this that |changes| have been receieved from sync. No action will
+  // Informs this that `changes` have been received from sync. No action will
   // be taken, but this must be notified for internal bookkeeping.
-  void NotifyChanges(const ValueStoreChangeList& changes);
+  void NotifyChanges(const value_store::ValueStoreChangeList& changes);
 
-  syncer::ModelType type() { return type_; }
+  syncer::DataType type() { return type_; }
 
  private:
   // ID of the extension the changes are for.
-  const std::string extension_id_;
+  const ExtensionId extension_id_;
 
-  // Sync model type. Either EXTENSION_SETTING or APP_SETTING.
-  const syncer::ModelType type_;
+  // Sync data type. Either EXTENSION_SETTING or APP_SETTING.
+  const syncer::DataType type_;
 
   // The sync processor used to send changes to sync.
-  syncer::SyncChangeProcessor* const sync_processor_;
+  const raw_ptr<syncer::SyncChangeProcessor, DanglingUntriaged> sync_processor_;
 
   // Whether Init() has been called.
   bool initialized_;
 
   // Keys of the settings that are currently being synced. Used to decide what
   // kind of action (ADD, UPDATE, REMOVE) to send to sync.
-  std::set<std::string> synced_keys_;
-
-  DISALLOW_COPY_AND_ASSIGN(SettingsSyncProcessor);
+  absl::flat_hash_set<std::string> synced_keys_;
 };
 
 }  // namespace extensions

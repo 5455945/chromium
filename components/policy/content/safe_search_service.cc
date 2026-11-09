@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/policy/core/browser/url_util.h"
 #include "components/safe_search_api/safe_search/safe_search_url_checker_client.h"
 #include "components/safe_search_api/url_checker.h"
+#include "components/url_matcher/url_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "net/base/net_errors.h"
@@ -22,7 +23,7 @@ namespace {
 void OnCheckURLDone(SafeSearchService::CheckSafeSearchCallback callback,
                     const GURL& /* url */,
                     safe_search_api::Classification classification,
-                    bool /* uncertain */) {
+                    safe_search_api::ClassificationDetails details) {
   std::move(callback).Run(classification ==
                           safe_search_api::Classification::SAFE);
 }
@@ -70,7 +71,7 @@ bool SafeSearchService::CheckSafeSearchURL(const GURL& url,
   }
 
   return safe_search_url_checker_->CheckURL(
-      policy::url_util::Normalize(url),
+      url_matcher::util::Normalize(url),
       base::BindOnce(&OnCheckURLDone, std::move(callback)));
 }
 
@@ -81,7 +82,8 @@ void SafeSearchService::SetSafeSearchURLCheckerForTest(
 
 // static
 SafeSearchFactory* SafeSearchFactory::GetInstance() {
-  return base::Singleton<SafeSearchFactory>::get();
+  static base::NoDestructor<SafeSearchFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -98,9 +100,10 @@ SafeSearchFactory::SafeSearchFactory()
 
 SafeSearchFactory::~SafeSearchFactory() = default;
 
-KeyedService* SafeSearchFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+SafeSearchFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new SafeSearchService(context);
+  return std::make_unique<SafeSearchService>(context);
 }
 
 content::BrowserContext* SafeSearchFactory::GetBrowserContextToUse(

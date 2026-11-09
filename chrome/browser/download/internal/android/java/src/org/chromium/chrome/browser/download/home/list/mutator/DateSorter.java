@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.list.mutator;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.JustNowProvider;
 import org.chromium.chrome.browser.download.home.filter.Filters;
 import org.chromium.chrome.browser.download.home.list.ListItem;
@@ -20,9 +20,10 @@ import java.util.List;
  * compared based on mime type. For further tie-breakers, timestamp and ID are used.
  * Note, the input list must contain only offline items.
  */
+@NullMarked
 public class DateSorter implements ListConsumer {
-    private final JustNowProvider mJustNowProvider;
-    private ListConsumer mListConsumer;
+    private final @Nullable JustNowProvider mJustNowProvider;
+    private @Nullable ListConsumer mListConsumer;
 
     public DateSorter(@Nullable JustNowProvider justNowProvider) {
         mJustNowProvider = justNowProvider;
@@ -49,17 +50,15 @@ public class DateSorter implements ListConsumer {
         OfflineItem lhs = ((ListItem.OfflineItemListItem) listItem1).item;
         OfflineItem rhs = ((ListItem.OfflineItemListItem) listItem2).item;
 
-        int comparison = ListUtils.compareItemBySchedule(lhs, rhs);
-        if (comparison != 0) return comparison;
-
-        comparison = compareItemByJustNowProvider(lhs, rhs);
+        int comparison = compareItemByJustNowProvider(lhs, rhs);
         if (comparison != 0) return comparison;
 
         comparison = ListUtils.compareItemByDate(lhs, rhs);
         if (comparison != 0) return comparison;
 
-        comparison = ListUtils.compareFilterTypesTo(
-                Filters.fromOfflineItem(lhs), Filters.fromOfflineItem(rhs));
+        comparison =
+                ListUtils.compareFilterTypesTo(
+                        Filters.fromOfflineItem(lhs), Filters.fromOfflineItem(rhs));
         if (comparison != 0) return comparison;
 
         comparison = ListUtils.compareItemByTimestamp(lhs, rhs);

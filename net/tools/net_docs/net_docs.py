@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 """Reads, parses, and (optionally) writes as HTML the contents of Markdown
 files passed as arguments. Intended for rendering network stack documentation
 stored as Markdown in the source tree to a human-readable format."""
-
 
 import argparse
 import os.path
@@ -26,7 +25,7 @@ SCRIPT_PATH = os.path.abspath(__file__)
 SRC_PATH = nth_parent_directory(SCRIPT_PATH, 4)
 THIRD_PARTY_PATH = os.path.join(SRC_PATH, 'third_party')
 sys.path.insert(0, THIRD_PARTY_PATH)
-import markdown
+import markdown  # noqa: E402
 
 
 def ReadFile(filename):
@@ -59,8 +58,9 @@ def FormatPage(markdown_html, title):
   return TEMPLATE.format(title=title, body=markdown_html)
 
 
-def ProcessDocs(input_filenames, input_pathname, output_pathname,
-                extensions=None):
+def ProcessDocs(
+  input_filenames, input_pathname, output_pathname, extensions=None
+):
   """Processes a list of Markdown documentation files.
 
   If input_pathname and output_pathname are specified, outputs HTML files
@@ -105,11 +105,18 @@ def ProcessDocs(input_filenames, input_pathname, output_pathname,
 
 def main():
   parser = argparse.ArgumentParser(
-      description='Parse and render Markdown documentation')
-  parser.add_argument('--input_path', default=None,
-      help="Input path for Markdown; required only if output_path set")
-  parser.add_argument('--output_path', default=None,
-      help="Output path for rendered HTML; if unspecified, won't output")
+    description='Parse and render Markdown documentation'
+  )
+  parser.add_argument(
+    '--input_path',
+    default=None,
+    help="Input path for Markdown; required only if output_path set",
+  )
+  parser.add_argument(
+    '--output_path',
+    default=None,
+    help="Output path for rendered HTML; if unspecified, won't output",
+  )
   parser.add_argument('filenames', nargs=argparse.REMAINDER)
   args = parser.parse_args()
 

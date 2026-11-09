@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include <string>
 
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/synchronization/lock.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -49,6 +48,9 @@ class MockLog {
   // UNDEFINED behavior).
   MockLog();
 
+  MockLog(const MockLog&) = delete;
+  MockLog& operator=(const MockLog&) = delete;
+
   // When the object is destructed, it stops intercepting logs.
   ~MockLog();
 
@@ -63,19 +65,20 @@ class MockLog {
   // destinations (if any).  The method should return true to signal that it
   // handled the message and the message should not be sent to other log
   // destinations.
-  MOCK_METHOD5(Log,
-               bool(int severity,
-                    const char* file,
-                    int line,
-                    size_t message_start,
-                    const std::string& str));
+  MOCK_METHOD(bool,
+              Log,
+              (int severity,
+               const char* file,
+               int line,
+               size_t message_start,
+               const std::string& str));
 
  private:
   // The currently active mock log.
   static MockLog* g_instance_;
 
   // Lock protecting access to g_instance_.
-  static Lock g_lock;
+  static Lock& GetLock();
 
   // Static function which is set as the logging message handler.
   // Called once for each message.
@@ -90,8 +93,6 @@ class MockLog {
 
   // The previous handler to restore when the MockLog is destroyed.
   logging::LogMessageHandlerFunction previous_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockLog);
 };
 
 }  // namespace test

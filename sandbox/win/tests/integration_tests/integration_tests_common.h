@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,7 @@ enum TestPolicy {
   TESTPOLICY_ASLR,
   TESTPOLICY_STRICTHANDLE,
   TESTPOLICY_WIN32K,
+  TESTPOLICY_WIN32K_NOFAKEGDI,
   TESTPOLICY_EXTENSIONPOINT,
   TESTPOLICY_DYNAMICCODE,
   TESTPOLICY_NONSYSFONT,
@@ -30,7 +31,13 @@ enum TestPolicy {
   TESTPOLICY_LOADPREFERSYS32,
   TESTPOLICY_RESTRICTINDIRECTBRANCHPREDICTION,
   TESTPOLICY_CETDISABLED,
+  TESTPOLICY_CETDYNAMICAPIS,
+  TESTPOLICY_CETSTRICT,
   TESTPOLICY_KTMCOMPONENTFILTER,
+  TESTPOLICY_PREANDPOSTSTARTUP,
+  TESTPOLICY_FSCTLDISABLED,
+  TESTPOLICY_RESTRICTCORESHARING,
+  TESTPOLICY_MODULETAMPERINGPROTECTION,
 };
 
 // Timeout for ::WaitForSingleObject synchronization.
@@ -43,9 +50,12 @@ public:
   explicit ScopedTestMutex(const wchar_t* name)
     : mutex_(::CreateMutexW(nullptr, false, name)) {
     EXPECT_TRUE(mutex_);
-    EXPECT_EQ(WAIT_OBJECT_0,
-      ::WaitForSingleObject(mutex_, SboxTestEventTimeout()));
+    EXPECT_EQ(DWORD{WAIT_OBJECT_0},
+              ::WaitForSingleObject(mutex_, SboxTestEventTimeout()));
   }
+
+  ScopedTestMutex(const ScopedTestMutex&) = delete;
+  ScopedTestMutex& operator=(const ScopedTestMutex&) = delete;
 
   ~ScopedTestMutex() {
     EXPECT_TRUE(::ReleaseMutex(mutex_));
@@ -53,9 +63,7 @@ public:
   }
 
 private:
-  HANDLE mutex_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedTestMutex);
+ HANDLE mutex_;
 };
 
 }  // namespace sandbox

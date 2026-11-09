@@ -31,22 +31,23 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_DUMMY_PAGE_HOLDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_DUMMY_PAGE_HOLDER_H_
 
-#include <memory>
-
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/time/default_tick_clock.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/testing/scoped_mock_overlay_scrollbars.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "ui/gfx/geometry/size.h"
+
+namespace gfx {
+class Size;
+}
 
 namespace blink {
 
 class Document;
-class IntSize;
 class LocalFrame;
 class LocalFrameView;
 class Settings;
@@ -68,13 +69,19 @@ class DummyPageHolder {
   USING_FAST_MALLOC(DummyPageHolder);
 
  public:
-  DummyPageHolder(
-      const IntSize& initial_view_size = IntSize(),
+  static std::unique_ptr<DummyPageHolder> CreateAndCommitNavigation(
+      const KURL& url,
+      const gfx::Size& initial_view_size = gfx::Size(),
       ChromeClient* = nullptr,
       LocalFrameClient* = nullptr,
       base::OnceCallback<void(Settings&)> setting_overrider =
-          base::NullCallback(),
-      const base::TickClock* clock = base::DefaultTickClock::GetInstance());
+          base::NullCallback());
+
+  explicit DummyPageHolder(const gfx::Size& initial_view_size = gfx::Size(),
+                           ChromeClient* = nullptr,
+                           LocalFrameClient* = nullptr,
+                           base::OnceCallback<void(Settings&)>
+                               setting_overrider = base::NullCallback());
   DummyPageHolder(const DummyPageHolder&) = delete;
   DummyPageHolder& operator=(const DummyPageHolder&) = delete;
   ~DummyPageHolder();
@@ -92,15 +99,9 @@ class DummyPageHolder {
   // engine.
   ScopedMockOverlayScrollbars enable_mock_scrollbars_;
 
-  // The LocalFrame is accessed from worker threads by unit tests
-  // (ThreadableLoaderTest), hence we need to allow cross-thread
-  // usage of |m_frame|.
-  //
-  // TODO: rework the tests to not require cross-thread access.
-  CrossThreadPersistent<LocalFrame> frame_;
-
+  Persistent<LocalFrame> frame_;
   Persistent<LocalFrameClient> local_frame_client_;
-  std::unique_ptr<scheduler::WebAgentGroupScheduler> agent_group_scheduler_;
+  Persistent<AgentGroupScheduler> agent_group_scheduler_;
 };
 
 }  // namespace blink

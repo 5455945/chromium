@@ -1,19 +1,21 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCESSIBILITY_ACCESSIBILITY_DELEGATE_H_
 #define ASH_ACCESSIBILITY_ACCESSIBILITY_DELEGATE_H_
 
+#include <memory>
+
 #include "ash/ash_export.h"
+
+class PrefService;
 
 namespace ash {
 
+class AccessibilityPrefsCustomAssociator;
+
 // A delegate class to control and query accessibility features.
-//
-// NOTE: Methods in this class are migrating to AccessibilityController to
-// support mash (because ash is in a separate process and cannot call back into
-// chrome). Add new methods there, not here.
 class ASH_EXPORT AccessibilityDelegate {
  public:
   virtual ~AccessibilityDelegate() {}
@@ -34,7 +36,9 @@ class ASH_EXPORT AccessibilityDelegate {
   // is not saved, return a negative value.
   virtual double GetSavedScreenMagnifierScale() = 0;
 
-  // NOTE: Prefer adding methods to AccessibilityController, see class comment.
+  // Creates the preferences custom associator instance.
+  virtual std::unique_ptr<AccessibilityPrefsCustomAssociator>
+  CreatePrefsCustomAssociator(PrefService* pref_service) = 0;
 };
 
 }  // namespace ash

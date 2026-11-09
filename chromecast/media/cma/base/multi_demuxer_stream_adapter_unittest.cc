@@ -1,18 +1,16 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/cma/base/balanced_media_task_runner_factory.h"
@@ -37,9 +35,16 @@ const int kMaxPtsDiffMs = 2000;
 class MultiDemuxerStreamAdaptersTest : public testing::Test {
  public:
   MultiDemuxerStreamAdaptersTest();
+
+  MultiDemuxerStreamAdaptersTest(const MultiDemuxerStreamAdaptersTest&) =
+      delete;
+  MultiDemuxerStreamAdaptersTest& operator=(
+      const MultiDemuxerStreamAdaptersTest&) = delete;
+
   ~MultiDemuxerStreamAdaptersTest() override;
 
   void Start();
+  void Run();
 
  protected:
   void OnTestTimeout();
@@ -69,7 +74,8 @@ class MultiDemuxerStreamAdaptersTest : public testing::Test {
   int running_stream_count_;
 
   scoped_refptr<BalancedMediaTaskRunnerFactory> media_task_runner_factory_;
-  DISALLOW_COPY_AND_ASSIGN(MultiDemuxerStreamAdaptersTest);
+
+  base::OnceClosure quit_closure_;
 };
 
 MultiDemuxerStreamAdaptersTest::MultiDemuxerStreamAdaptersTest() {
@@ -77,24 +83,28 @@ MultiDemuxerStreamAdaptersTest::MultiDemuxerStreamAdaptersTest() {
 
 MultiDemuxerStreamAdaptersTest::~MultiDemuxerStreamAdaptersTest() {
 }
-
+void MultiDemuxerStreamAdaptersTest::Run() {
+  base::RunLoop loop;
+  quit_closure_ = loop.QuitWhenIdleClosure();
+  loop.Run();
+}
 void MultiDemuxerStreamAdaptersTest::Start() {
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&MultiDemuxerStreamAdaptersTest::OnTestTimeout,
                      base::Unretained(this)),
-      base::TimeDelta::FromSeconds(5));
+      base::Seconds(5));
 
-  media_task_runner_factory_ = new BalancedMediaTaskRunnerFactory(
-      base::TimeDelta::FromMilliseconds(kMaxPtsDiffMs));
+  media_task_runner_factory_ =
+      new BalancedMediaTaskRunnerFactory(base::Milliseconds(kMaxPtsDiffMs));
 
   coded_frame_providers_.clear();
   frame_received_count_ = 0;
 
   for (const auto& stream : demuxer_streams_) {
     coded_frame_providers_.push_back(std::make_unique<DemuxerStreamAdapter>(
-        base::ThreadTaskRunnerHandle::Get(), media_task_runner_factory_,
-        stream.get()));
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        media_task_runner_factory_, stream.get()));
   }
   running_stream_count_ = coded_frame_providers_.size();
 
@@ -108,7 +118,8 @@ void MultiDemuxerStreamAdaptersTest::Start() {
         &CodedFrameProvider::Read, base::Unretained(code_frame_provider.get()),
         std::move(read_cb));
 
-    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(task));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(task));
   }
 }
 
@@ -139,7 +150,7 @@ void MultiDemuxerStreamAdaptersTest::OnEos() {
   ASSERT_GE(running_stream_count_, 0);
   if (running_stream_count_ == 0) {
     ASSERT_EQ(frame_received_count_, total_expected_frames_);
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
+    std::move(quit_closure_).Run();
   }
 }
 
@@ -160,10 +171,10 @@ TEST_F(MultiDemuxerStreamAdaptersTest, EarlyEos) {
   total_expected_frames_ = frame_count_short + frame_count_long;
 
   base::test::SingleThreadTaskEnvironment task_environment;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&MultiDemuxerStreamAdaptersTest::Start,
                                 base::Unretained(this)));
-  base::RunLoop().Run();
+  Run();
 }
 }  // namespace media
 }  // namespace chromecast

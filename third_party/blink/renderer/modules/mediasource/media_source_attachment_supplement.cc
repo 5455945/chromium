@@ -1,8 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/mediasource/media_source_attachment_supplement.h"
+
+#include "base/notimplemented.h"
 
 namespace blink {
 
@@ -48,6 +50,13 @@ void MediaSourceAttachmentSupplement::
     AssertCrossThreadMutexIsAcquiredForDebugging() {
   DCHECK(false)
       << "This should only be called on a CrossThreadMediaSourceAttachment";
+}
+
+void MediaSourceAttachmentSupplement::SendUpdatedInfoToMainThreadCache() {
+  // No-op for the default implementation that is used by same-thread
+  // attachments. Cross-thread attachments will override this. Same-thread
+  // attachments will just directly calculate buffered and seekable when the
+  // media element needs that info.
 }
 
 // protected

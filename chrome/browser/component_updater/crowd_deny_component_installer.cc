@@ -1,17 +1,20 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/component_updater/crowd_deny_component_installer.h"
 
+#include <stdint.h>
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/values.h"
@@ -44,11 +47,11 @@ namespace component_updater {
 
 bool CrowdDenyComponentInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool CrowdDenyComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // Just check that the file is there, detailed verification of the contents is
   // delegated to code in //chrome/browser/permissions.
@@ -61,7 +64,7 @@ bool CrowdDenyComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 CrowdDenyComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   // Nothing custom here.
   return update_client::CrxInstaller::Result(0);
@@ -74,15 +77,15 @@ void CrowdDenyComponentInstallerPolicy::OnCustomUninstall() {
 void CrowdDenyComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   DVLOG(1) << "Crowd Deny component ready, version " << version.GetString()
            << " in " << install_dir.value();
 
-  int format = 0;
-  if (!manifest->GetInteger(kCrowdDenyManifestPreloadDataFormatKey, &format) ||
-      format != kCrowdDenyManifestPreloadDataCurrentFormat) {
-    DVLOG(1) << "Crowd Deny component bailing out. Future data version: "
-             << format;
+  std::optional<int> format =
+      manifest.FindInt(kCrowdDenyManifestPreloadDataFormatKey);
+  if (!format || *format != kCrowdDenyManifestPreloadDataCurrentFormat) {
+    DVLOG(1) << "Crowd Deny component bailing out.";
+    DVLOG_IF(1, format) << "Future data version: " << *format;
     return;
   }
 
@@ -97,9 +100,7 @@ base::FilePath CrowdDenyComponentInstallerPolicy::GetRelativeInstallDir()
 
 void CrowdDenyComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(
-      kCrowdDenyPublicKeySHA256,
-      kCrowdDenyPublicKeySHA256 + base::size(kCrowdDenyPublicKeySHA256));
+  hash->assign_range(kCrowdDenyPublicKeySHA256);
 }
 
 std::string CrowdDenyComponentInstallerPolicy::GetName() const {

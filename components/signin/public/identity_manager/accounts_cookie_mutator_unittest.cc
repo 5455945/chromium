@@ -1,13 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/signin/public/identity_manager/accounts_cookie_mutator.h"
 
+#include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
@@ -16,6 +17,7 @@
 #include "build/build_config.h"
 #include "components/signin/public/base/list_accounts_test_utils.h"
 #include "components/signin/public/base/multilogin_parameters.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/test_signin_client.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -23,8 +25,10 @@
 #include "components/signin/public/identity_manager/set_accounts_in_cookie_result.h"
 #include "components/signin/public/identity_manager/test_identity_manager_observer.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/test/test_cookie_manager.h"
@@ -33,12 +37,11 @@
 
 namespace {
 
-const char kTestAccountEmail[] = "test_user@test.com";
-const char kTestOtherAccountEmail[] = "test_other_user@test.com";
-const char kTestAccountGaiaId[] = "gaia_id_for_test_user_test.com";
-const char kTestAccessToken[] = "access_token";
-const char kTestUberToken[] = "test_uber_token";
-const char kTestOAuthMultiLoginResponse[] = R"(
+constexpr char kTestAccountEmail[] = "test_user@test.com";
+constexpr char kTestOtherAccountEmail[] = "test_other_user@test.com";
+constexpr GaiaId::Literal kTestAccountGaiaId("gaia_id_for_test_user_test.com");
+constexpr char kTestAccessToken[] = "access_token";
+constexpr char kTestOAuthMultiLoginResponse[] = R"(
     { "status": "OK",
       "cookies":[
         {
@@ -51,7 +54,6 @@ const char kTestOAuthMultiLoginResponse[] = R"(
     })";
 
 enum class AccountsCookiesMutatorAction {
-  kAddAccountToCookie,
   kSetAccountsInCookie,
   kTriggerCookieJarUpdateNoAccounts,
   kTriggerCookieJarUpdateOneAccount,
@@ -70,51 +72,40 @@ class AccountsCookieMutatorTest
   const CoreAccountId kTestOtherUnavailableAccountId;
 
   AccountsCookieMutatorTest()
-      : kTestUnavailableAccountId("unavailable_account_id"),
-        kTestOtherUnavailableAccountId("other_unavailable_account_id"),
+      : kTestUnavailableAccountId(
+            CoreAccountId::FromGaiaId(GaiaId("unavailable_account_id"))),
+        kTestOtherUnavailableAccountId(
+            CoreAccountId::FromGaiaId(GaiaId("other_unavailable_account_id"))),
         test_signin_client_(&prefs_),
         identity_test_env_(/*test_url_loader_factory=*/nullptr,
                            &prefs_,
-                           AccountConsistencyMethod::kDisabled,
                            &test_signin_client_) {}
 
-  ~AccountsCookieMutatorTest() override {}
+  AccountsCookieMutatorTest(const AccountsCookieMutatorTest&) = delete;
+  AccountsCookieMutatorTest& operator=(const AccountsCookieMutatorTest&) =
+      delete;
+
+  ~AccountsCookieMutatorTest() override = default;
 
   // Make an account available and returns the account ID.
   CoreAccountId AddAcountWithRefreshToken(const std::string& email) {
-    return identity_test_env_.MakeAccountAvailable(email).account_id;
+    return identity_test_env_.MakeAccountAvailable(email).GetAccountId();
   }
 
   // Feed the TestURLLoaderFactory with the responses for the requests that will
-  // be created by UberTokenFetcher when mergin accounts into the cookie jar.
+  // be created by GaiaCookieManagerService for mutating the accounts in the
+  // cookie jar.
   void PrepareURLLoaderResponsesForAction(AccountsCookiesMutatorAction action) {
     switch (action) {
-      case AccountsCookiesMutatorAction::kAddAccountToCookie:
-        GetTestURLLoaderFactory()->AddResponse(
-            GaiaUrls::GetInstance()
-                ->oauth1_login_url()
-                .Resolve(base::StringPrintf("?source=%s&issueuberauth=1",
-                                            GaiaConstants::kChromeSource))
-                .spec(),
-            kTestUberToken, net::HTTP_OK);
-
+      case AccountsCookiesMutatorAction::kSetAccountsInCookie:
+        // Simulate GetCheckConnectionInfo response to avoid triggering
+        // timeouts.
         GetTestURLLoaderFactory()->AddResponse(
             GaiaUrls::GetInstance()
                 ->GetCheckConnectionInfoURLWithSource(
                     GaiaConstants::kChromeSource)
                 .spec(),
-            std::string(), net::HTTP_OK);
-
-        GetTestURLLoaderFactory()->AddResponse(
-            GaiaUrls::GetInstance()
-                ->merge_session_url()
-                .Resolve(base::StringPrintf(
-                    "?uberauth=%s&continue=http://www.google.com&source=%s",
-                    kTestUberToken, GaiaConstants::kChromeSource))
-                .spec(),
-            std::string(), net::HTTP_OK);
-        break;
-      case AccountsCookiesMutatorAction::kSetAccountsInCookie:
+            "cc_result");
         GetTestURLLoaderFactory()->AddResponse(
             GaiaUrls::GetInstance()
                 ->oauth_multilogin_url()
@@ -169,137 +160,23 @@ class AccountsCookieMutatorTest
     return &cookie_manager_for_partition_;
   }
 
+  PartitionSuffix GetPartitionSuffix() const override {
+    return PartitionSuffix::kTest;
+  }
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  network::mojom::DeviceBoundSessionManager*
+  GetDeviceBoundSessionManagerForPartition() override {
+    return nullptr;
+  }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
   base::test::TaskEnvironment task_environment_;
   sync_preferences::TestingPrefServiceSyncable prefs_;
   TestSigninClient test_signin_client_;
   IdentityTestEnvironment identity_test_env_;
   network::TestCookieManager cookie_manager_for_partition_;
-
-  DISALLOW_COPY_AND_ASSIGN(AccountsCookieMutatorTest);
 };
-
-// Test that adding a non existing account without providing an access token
-// results in an error due to such account not being available.
-TEST_F(AccountsCookieMutatorTest, AddAccountToCookie_NonExistingAccount) {
-  base::RunLoop run_loop;
-  CoreAccountId account_id_from_add_account_to_cookie_completed_callback;
-  GoogleServiceAuthError error_from_add_account_to_cookie_completed_callback;
-  auto completion_callback =
-      base::BindLambdaForTesting([&](const CoreAccountId& account_id,
-                                     const GoogleServiceAuthError& error) {
-        account_id_from_add_account_to_cookie_completed_callback = account_id;
-        error_from_add_account_to_cookie_completed_callback = error;
-        run_loop.Quit();
-      });
-
-  accounts_cookie_mutator()->AddAccountToCookie(kTestUnavailableAccountId,
-                                                gaia::GaiaSource::kChrome,
-                                                std::move(completion_callback));
-  run_loop.Run();
-
-  EXPECT_EQ(account_id_from_add_account_to_cookie_completed_callback,
-            kTestUnavailableAccountId);
-  EXPECT_EQ(error_from_add_account_to_cookie_completed_callback.state(),
-            GoogleServiceAuthError::USER_NOT_SIGNED_UP);
-}
-
-// Test that adding an already available account without providing an access
-// token results in such account being successfully merged into the cookie jar.
-TEST_F(AccountsCookieMutatorTest, AddAccountToCookie_ExistingAccount) {
-  PrepareURLLoaderResponsesForAction(
-      AccountsCookiesMutatorAction::kAddAccountToCookie);
-  // Adding an account with refresh token will trigger a cookie jar update.
-  PrepareURLLoaderResponsesForAction(
-      AccountsCookiesMutatorAction::kTriggerCookieJarUpdateNoAccounts);
-
-  CoreAccountId account_id = AddAcountWithRefreshToken(kTestAccountEmail);
-  base::RunLoop run_loop;
-  CoreAccountId account_id_from_add_account_to_cookie_completed_callback;
-  GoogleServiceAuthError error_from_add_account_to_cookie_completed_callback;
-  auto completion_callback =
-      base::BindLambdaForTesting([&](const CoreAccountId& account_id,
-                                     const GoogleServiceAuthError& error) {
-        account_id_from_add_account_to_cookie_completed_callback = account_id;
-        error_from_add_account_to_cookie_completed_callback = error;
-        run_loop.Quit();
-      });
-
-  accounts_cookie_mutator()->AddAccountToCookie(
-      account_id, gaia::GaiaSource::kChrome, std::move(completion_callback));
-
-  identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_id, kTestAccessToken,
-      base::Time::Now() + base::TimeDelta::FromHours(1));
-  run_loop.Run();
-
-  EXPECT_EQ(account_id_from_add_account_to_cookie_completed_callback,
-            account_id);
-  EXPECT_EQ(error_from_add_account_to_cookie_completed_callback.state(),
-            GoogleServiceAuthError::NONE);
-}
-
-// Test that adding a non existing account along with an access token, results
-// on such account being successfully merged into the cookie jar.
-TEST_F(AccountsCookieMutatorTest,
-       AddAccountToCookieWithAccessToken_NonExistingAccount) {
-  PrepareURLLoaderResponsesForAction(
-      AccountsCookiesMutatorAction::kAddAccountToCookie);
-
-  base::RunLoop run_loop;
-  CoreAccountId account_id_from_add_account_to_cookie_completed_callback;
-  GoogleServiceAuthError error_from_add_account_to_cookie_completed_callback;
-  auto completion_callback =
-      base::BindLambdaForTesting([&](const CoreAccountId& account_id,
-                                     const GoogleServiceAuthError& error) {
-        account_id_from_add_account_to_cookie_completed_callback = account_id;
-        error_from_add_account_to_cookie_completed_callback = error;
-        run_loop.Quit();
-      });
-
-  accounts_cookie_mutator()->AddAccountToCookieWithToken(
-      kTestUnavailableAccountId, kTestAccessToken, gaia::GaiaSource::kChrome,
-      std::move(completion_callback));
-  run_loop.Run();
-
-  EXPECT_EQ(account_id_from_add_account_to_cookie_completed_callback,
-            kTestUnavailableAccountId);
-  EXPECT_EQ(error_from_add_account_to_cookie_completed_callback.state(),
-            GoogleServiceAuthError::NONE);
-}
-
-// Test that adding an already available account along with an access token,
-// results in such account being successfully merged into the cookie jar.
-TEST_F(AccountsCookieMutatorTest,
-       AddAccountToCookieWithAccessToken_ExistingAccount) {
-  PrepareURLLoaderResponsesForAction(
-      AccountsCookiesMutatorAction::kAddAccountToCookie);
-  // Adding an account with refresh token will trigger a cookie jar update.
-  PrepareURLLoaderResponsesForAction(
-      AccountsCookiesMutatorAction::kTriggerCookieJarUpdateNoAccounts);
-
-  CoreAccountId account_id = AddAcountWithRefreshToken(kTestAccountEmail);
-  base::RunLoop run_loop;
-  CoreAccountId account_id_from_add_account_to_cookie_completed_callback;
-  GoogleServiceAuthError error_from_add_account_to_cookie_completed_callback;
-  auto completion_callback =
-      base::BindLambdaForTesting([&](const CoreAccountId& account_id,
-                                     const GoogleServiceAuthError& error) {
-        account_id_from_add_account_to_cookie_completed_callback = account_id;
-        error_from_add_account_to_cookie_completed_callback = error;
-        run_loop.Quit();
-      });
-
-  accounts_cookie_mutator()->AddAccountToCookieWithToken(
-      account_id, kTestAccessToken, gaia::GaiaSource::kChrome,
-      std::move(completion_callback));
-
-  run_loop.Run();
-
-  EXPECT_EQ(account_id_from_add_account_to_cookie_completed_callback,
-            account_id);
-  EXPECT_EQ(error_from_add_account_to_cookie_completed_callback.state(),
-            GoogleServiceAuthError::NONE);
-}
 
 // Test that trying to set a list of accounts in the cookie jar where none of
 // those accounts have refresh tokens in IdentityManager results in an error.
@@ -375,16 +252,14 @@ TEST_F(AccountsCookieMutatorTest, SetAccountsInCookie_AllExistingAccounts) {
           run_loop.QuitClosure()));
 
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_id, kTestAccessToken,
-      base::Time::Now() + base::TimeDelta::FromHours(1));
+      account_id, kTestAccessToken, base::Time::Now() + base::Hours(1));
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      other_account_id, kTestAccessToken,
-      base::Time::Now() + base::TimeDelta::FromHours(1));
+      other_account_id, kTestAccessToken, base::Time::Now() + base::Hours(1));
 
   run_loop.Run();
 }
 
-// Test that trying to set a list of accounts in a partitionned cookie jar where
+// Test that trying to set a list of accounts in a partition cookie jar where
 // all of those accounts have refresh tokens in IdentityManager results in them
 // being successfully set.
 TEST_F(AccountsCookieMutatorTest,
@@ -413,16 +288,14 @@ TEST_F(AccountsCookieMutatorTest,
               run_loop.QuitClosure()));
 
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_id, kTestAccessToken,
-      base::Time::Now() + base::TimeDelta::FromHours(1));
+      account_id, kTestAccessToken, base::Time::Now() + base::Hours(1));
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      other_account_id, kTestAccessToken,
-      base::Time::Now() + base::TimeDelta::FromHours(1));
+      other_account_id, kTestAccessToken, base::Time::Now() + base::Hours(1));
 
   run_loop.Run();
 }
 
-// Test that setting accounts in a partition can be cancelled.
+// Test that setting accounts in a partition can be canceled.
 TEST_F(AccountsCookieMutatorTest, SetAccountsInCookieForPartition_Cancel) {
   PrepareURLLoaderResponsesForAction(
       AccountsCookiesMutatorAction::kSetAccountsInCookie);
@@ -456,9 +329,10 @@ TEST_F(AccountsCookieMutatorTest, TriggerCookieJarUpdate_NoListedAccounts) {
   const AccountsInCookieJarInfo& accounts_in_jar_info =
       identity_manager_observer()
           ->AccountsInfoFromAccountsInCookieUpdatedCallback();
-  EXPECT_EQ(accounts_in_jar_info.signed_in_accounts.size(), 0U);
-  EXPECT_EQ(accounts_in_jar_info.signed_out_accounts.size(), 0U);
-  EXPECT_TRUE(accounts_in_jar_info.accounts_are_fresh);
+  EXPECT_EQ(accounts_in_jar_info.GetPotentiallyInvalidSignedInAccounts().size(),
+            0U);
+  EXPECT_EQ(accounts_in_jar_info.GetSignedOutAccounts().size(), 0U);
+  EXPECT_TRUE(accounts_in_jar_info.AreAccountsFresh());
 
   EXPECT_EQ(identity_manager_observer()
                 ->ErrorFromAccountsInCookieUpdatedCallback()
@@ -481,14 +355,17 @@ TEST_F(AccountsCookieMutatorTest, TriggerCookieJarUpdate_OneListedAccounts) {
   const AccountsInCookieJarInfo& accounts_in_jar_info =
       identity_manager_observer()
           ->AccountsInfoFromAccountsInCookieUpdatedCallback();
-  EXPECT_EQ(accounts_in_jar_info.signed_in_accounts.size(), 1U);
-  EXPECT_EQ(accounts_in_jar_info.signed_in_accounts[0].gaia_id,
-            kTestAccountGaiaId);
-  EXPECT_EQ(accounts_in_jar_info.signed_in_accounts[0].email,
-            kTestAccountEmail);
+  EXPECT_EQ(accounts_in_jar_info.GetPotentiallyInvalidSignedInAccounts().size(),
+            1U);
+  EXPECT_EQ(
+      accounts_in_jar_info.GetPotentiallyInvalidSignedInAccounts()[0].gaia_id,
+      kTestAccountGaiaId);
+  EXPECT_EQ(
+      accounts_in_jar_info.GetPotentiallyInvalidSignedInAccounts()[0].email,
+      kTestAccountEmail);
 
-  EXPECT_EQ(accounts_in_jar_info.signed_out_accounts.size(), 0U);
-  EXPECT_TRUE(accounts_in_jar_info.accounts_are_fresh);
+  EXPECT_EQ(accounts_in_jar_info.GetSignedOutAccounts().size(), 0U);
+  EXPECT_TRUE(accounts_in_jar_info.AreAccountsFresh());
 
   EXPECT_EQ(identity_manager_observer()
                 ->ErrorFromAccountsInCookieUpdatedCallback()
@@ -496,7 +373,7 @@ TEST_F(AccountsCookieMutatorTest, TriggerCookieJarUpdate_OneListedAccounts) {
             GoogleServiceAuthError::NONE);
 }
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
 TEST_F(AccountsCookieMutatorTest, ForceTriggerOnCookieChange) {
   PrepareURLLoaderResponsesForAction(
       AccountsCookiesMutatorAction::kTriggerOnCookieChangeNoAccounts);

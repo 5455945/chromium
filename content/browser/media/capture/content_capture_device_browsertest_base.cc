@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "content/browser/media/capture/frame_sink_video_capture_device.h"
@@ -21,6 +21,7 @@
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/common/shell_switches.h"
+#include "media/base/video_types.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -45,21 +46,26 @@ ContentCaptureDeviceBrowserTestBase::~ContentCaptureDeviceBrowserTestBase() =
 void ContentCaptureDeviceBrowserTestBase::ChangePageContentColor(
     SkColor color) {
   // See the HandleRequest() method for the original documents being modified
-  // here.
-  std::string script;
+  // here. Modify the target frame's background color in-place rather than
+  // navigating the cross-site iframe to a new URL on each color change; with
+  // RenderDocument enabled for subframes, navigating the iframe swaps its
+  // RenderFrameHost and child surface, which can briefly expose the main
+  // frame's white background before the new subframe surface embeds.
+  const std::string script = base::StringPrintf(
+      "document.body.style.backgroundColor = '#%02x%02x%02x';",
+      SkColorGetR(color), SkColorGetG(color), SkColorGetB(color));
+  RenderFrameHost* target_frame = nullptr;
   if (IsCrossSiteCaptureTest()) {
-    const GURL& inner_frame_url =
-        embedded_test_server()->GetURL(kInnerFrameHostname, kInnerFramePath);
-    script = base::StringPrintf(
-        "document.getElementsByTagName('iframe')[0].src = '%s?color=123456';",
-        inner_frame_url.spec().c_str());
+    target_frame =
+        ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
+    CHECK(target_frame);
+    CHECK(target_frame->IsCrossProcessSubframe());
   } else {
-    script = "document.body.style.backgroundColor = '#123456';";
+    target_frame = shell()->web_contents()->GetPrimaryMainFrame();
   }
-  script.replace(script.find("123456"), 6,
-                 base::StringPrintf("%02x%02x%02x", SkColorGetR(color),
-                                    SkColorGetG(color), SkColorGetB(color)));
-  CHECK(ExecJs(shell()->web_contents(), script));
+  CHECK(target_frame);
+
+  CHECK(ExecJs(target_frame, script));
 }
 
 gfx::Size ContentCaptureDeviceBrowserTestBase::GetExpectedSourceSize() {
@@ -94,16 +100,31 @@ ContentCaptureDeviceBrowserTestBase::SnapshotCaptureParams() {
 
   media::VideoCaptureParams params;
   params.requested_format = media::VideoCaptureFormat(
-      capture_size, kMaxFramesPerSecond, media::PIXEL_FORMAT_I420);
+      capture_size, kMaxFramesPerSecond, GetVideoPixelFormat());
   params.resolution_change_policy =
       IsFixedAspectRatioTest()
           ? media::ResolutionChangePolicy::FIXED_ASPECT_RATIO
           : media::ResolutionChangePolicy::ANY_WITHIN_LIMIT;
+  // Disable HiDPI auto-scaling so that WebContentsAutoScaler does not
+  // asynchronously change the capture scale override (e.g. from 1.0x to 1.5x)
+  // after the first 200x150 frame is captured. In cross-site iframe tests, an
+  // asynchronous scale change causes the main frame and child frame to resize
+  // in separate processes, which can briefly produce an intermediate frame
+  // where the main frame is at 1.5x (300x225) while the child frame's fallback
+  // surface is still at 1.0x (100x75).
+  // TODO(crbug.com/40944861): Add browser tests for HiDPI capture auto-scaling
+  // once scale changes can be synchronized across cross-site frames.
+  params.is_high_dpi_enabled = false;
   return params;
 }
 
+media::VideoPixelFormat
+ContentCaptureDeviceBrowserTestBase::GetVideoPixelFormat() const {
+  return media::VideoPixelFormat::PIXEL_FORMAT_I420;
+}
+
 base::TimeDelta ContentCaptureDeviceBrowserTestBase::GetMinCapturePeriod() {
-  return base::TimeDelta::FromMicroseconds(
+  return base::Microseconds(
       base::Time::kMicrosecondsPerSecond /
       device_->capture_params().requested_format.frame_rate);
 }
@@ -120,7 +141,7 @@ void ContentCaptureDeviceBrowserTestBase::NavigateToInitialDocument() {
 
     // Confirm the iframe is a cross-process child render frame.
     auto* const child_frame =
-        ChildFrameAt(shell()->web_contents()->GetMainFrame(), 0);
+        ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
     ASSERT_TRUE(child_frame);
     ASSERT_TRUE(child_frame->IsCrossProcessSubframe());
   } else {
@@ -139,11 +160,11 @@ void ContentCaptureDeviceBrowserTestBase::
   device_->AllocateAndStartWithReceiver(SnapshotCaptureParams(),
                                         capture_stack()->CreateFrameReceiver());
   RunUntilIdle();
-  EXPECT_TRUE(capture_stack()->started());
-  EXPECT_FALSE(capture_stack()->error_occurred());
+  EXPECT_FALSE(capture_stack()->ErrorOccurred());
   capture_stack()->ExpectNoLogMessages();
 
   WaitForFirstFrame();
+  EXPECT_TRUE(capture_stack()->Started());
 }
 
 void ContentCaptureDeviceBrowserTestBase::StopAndDeAllocate() {
@@ -190,11 +211,6 @@ bool ContentCaptureDeviceBrowserTestBase::IsCrossSiteCaptureTest() const {
 }
 
 void ContentCaptureDeviceBrowserTestBase::SetUp() {
-  // IMPORTANT: Do not add the switches::kUseGpuInTests command line flag: It
-  // causes the tests to take 12+ seconds just to spin up a render process on
-  // debug builds. It can also cause test failures in MSAN builds, or exacerbate
-  // OOM situations on highly-loaded machines.
-
   // Screen capture requires readback from compositor output.
   EnablePixelOutput();
 
@@ -209,8 +225,6 @@ void ContentCaptureDeviceBrowserTestBase::SetUp() {
 
 void ContentCaptureDeviceBrowserTestBase::SetUpCommandLine(
     base::CommandLine* command_line) {
-  ContentBrowserTest::SetUpCommandLine(command_line);
-
   IsolateAllSitesForTesting(command_line);
 
   // Use a small window size to reduce test running time (since screen captures
@@ -251,7 +265,7 @@ ContentCaptureDeviceBrowserTestBase::HandleRequest(const HttpRequest& request) {
   auto response = std::make_unique<BasicHttpResponse>();
   response->set_content_type("text/html");
   const GURL& url = request.GetURL();
-  if (url.path() == kOuterFramePath) {
+  if (url.GetPath() == kOuterFramePath) {
     // A page with a solid white fill color, but containing an iframe in its
     // upper-left quadrant.
     const GURL& inner_frame_url =
@@ -274,7 +288,7 @@ ContentCaptureDeviceBrowserTestBase::HandleRequest(const HttpRequest& request) {
   } else {
     // A page whose solid fill color is based on a query parameter, or
     // defaults to black.
-    const std::string& query = url.query();
+    const std::string& query = url.GetQuery();
     std::string color = "#000000";
     const auto pos = query.find("color=");
     if (pos != std::string::npos) {

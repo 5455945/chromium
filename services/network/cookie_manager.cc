@@ -1,21 +1,29 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/cookie_manager.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/dcheck_is_on.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/process/process.h"
+#include "base/threading/platform_thread.h"
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_constants.h"
+#include "net/cookies/cookie_inclusion_status.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/cookies/cookie_options.h"
+#include "net/cookies/cookie_partition_key.h"
 #include "net/cookies/cookie_store.h"
 #include "net/cookies/cookie_util.h"
 #include "net/url_request/url_request_context.h"
@@ -29,6 +37,9 @@ using CookieDeleteSessionControl = net::CookieDeletionInfo::SessionControl;
 namespace network {
 
 namespace {
+
+using CookiePartitionKeyPairCallback = base::OnceCallback<void(
+    std::pair<bool, std::optional<net::CookiePartitionKey>>)>;
 
 bool g_crash_on_get_cookie_list = false;
 
@@ -45,7 +56,6 @@ void CookieManager::ListenerRegistration::DispatchCookieStoreChange(
 
 CookieManager::CookieManager(
     net::URLRequestContext* url_request_context,
-    const FirstPartySets* first_party_sets,
     scoped_refptr<SessionCleanupCookieStore> session_cleanup_cookie_store,
     mojom::CookieManagerParamsPtr params)
     : cookie_store_(url_request_context->cookie_store()),
@@ -60,11 +70,16 @@ CookieManager::CookieManager(
                            base::DoNothing());
   }
   cookie_store_->SetCookieAccessDelegate(
-      std::make_unique<CookieAccessDelegateImpl>(
-          cookie_access_delegate_type, first_party_sets, &cookie_settings_));
+      std::make_unique<CookieAccessDelegateImpl>(cookie_access_delegate_type,
+                                                 &cookie_settings_));
 }
 
 CookieManager::~CookieManager() {
+  // The cookie manager will go away which means potentially clearing cookies if
+  // policy calls for it. This can be important for background mode for which
+  // renderers might stay active.
+  OnSettingsWillChange();
+
   if (session_cleanup_cookie_store_) {
     session_cleanup_cookie_store_->DeleteSessionCookies(
         cookie_settings_.CreateDeleteCookieOnExitPredicate());
@@ -73,6 +88,12 @@ CookieManager::~CookieManager() {
   // holds a pointer to this CookieManager's CookieSettings, which is about to
   // be destroyed.
   cookie_store_->SetCookieAccessDelegate(nullptr);
+}
+
+void CookieManager::AddSettingsWillChangeCallback(
+    SettingsChangeCallback callback) {
+  CHECK(!settings_will_change_callback_);
+  settings_will_change_callback_ = callback;
 }
 
 void CookieManager::AddReceiver(
@@ -89,15 +110,18 @@ void CookieManager::GetAllCookiesWithAccessSemantics(
   cookie_store_->GetAllCookiesWithAccessSemanticsAsync(std::move(callback));
 }
 
-void CookieManager::GetCookieList(const GURL& url,
-                                  const net::CookieOptions& cookie_options,
-                                  GetCookieListCallback callback) {
-#if !defined(OS_IOS)
+void CookieManager::GetCookieList(
+    const GURL& url,
+    const net::CookieOptions& cookie_options,
+    const net::CookiePartitionKeyCollection& cookie_partition_key_collection,
+    GetCookieListCallback callback) {
+#if !BUILDFLAG(IS_IOS)
   if (g_crash_on_get_cookie_list)
     base::Process::TerminateCurrentProcessImmediately(1);
 #endif
 
   cookie_store_->GetCookieListWithOptionsAsync(url, cookie_options,
+                                               cookie_partition_key_collection,
                                                std::move(callback));
 }
 
@@ -105,26 +129,58 @@ void CookieManager::SetCanonicalCookie(const net::CanonicalCookie& cookie,
                                        const GURL& source_url,
                                        const net::CookieOptions& cookie_options,
                                        SetCanonicalCookieCallback callback) {
-  cookie_store_->SetCanonicalCookieAsync(
-      std::make_unique<net::CanonicalCookie>(cookie), source_url,
-      cookie_options, std::move(callback));
+  const std::optional<net::CookiePartitionKey>& cookie_partition_key =
+      cookie.PartitionKey();
+
+  auto cookie_ptr = std::make_unique<net::CanonicalCookie>(cookie);
+  base::Time adjusted_expiry_date =
+      net::CanonicalCookie::ValidateAndAdjustExpiryDate(
+          cookie.ExpiryDate(), cookie.CreationDate(), cookie.SourceScheme());
+  if (adjusted_expiry_date != cookie.ExpiryDate() || !cookie_partition_key) {
+    cookie_ptr = net::CanonicalCookie::FromStorage(
+        cookie.Name(), cookie.Value(), cookie.Domain(), cookie.Path(),
+        cookie.CreationDate(), adjusted_expiry_date, cookie.LastAccessDate(),
+        cookie.LastUpdateDate(), cookie.SecureAttribute(), cookie.IsHttpOnly(),
+        cookie.SameSite(), cookie.Priority(), cookie_partition_key,
+        cookie.SourceScheme(), cookie.SourcePort(), cookie.SourceType(),
+        net::CanonicalCookieFromStorageCallSite::kCookieManager);
+    if (!cookie_ptr) {
+      net::CookieInclusionStatus cookie_inclusion_status;
+      cookie_inclusion_status.AddExclusionReason(
+          net::CookieInclusionStatus::ExclusionReason::
+              EXCLUDE_FAILURE_TO_STORE);
+      std::move(callback).Run(net::CookieAccessResult(cookie_inclusion_status));
+      return;
+    }
+  }
+  if constexpr (DCHECK_IS_ON()) {
+    net::CanonicalCookie::CanonicalizationResult result =
+        cookie_ptr->IsCanonical();
+    DCHECK(result) << result;
+  }
+  cookie_store_->SetCanonicalCookieAsync(std::move(cookie_ptr), source_url,
+                                         cookie_options, std::move(callback),
+                                         /*cookie_access_result=*/std::nullopt);
 }
 
 void CookieManager::DeleteCanonicalCookie(
     const net::CanonicalCookie& cookie,
     DeleteCanonicalCookieCallback callback) {
   cookie_store_->DeleteCanonicalCookieAsync(
-      cookie,
-      base::BindOnce(
-          [](DeleteCanonicalCookieCallback callback, uint32_t num_deleted) {
-            std::move(callback).Run(num_deleted > 0);
-          },
-          std::move(callback)));
+      cookie, base::BindOnce([](uint32_t num_deleted) {
+                return num_deleted > 0;
+              }).Then(std::move(callback)));
 }
 
 void CookieManager::SetContentSettings(
-    const ContentSettingsForOneType& settings) {
-  cookie_settings_.set_content_settings(settings);
+    ContentSettingsType content_settings_type,
+    const ContentSettingsForOneType& settings,
+    SetContentSettingsCallback callback) {
+  OnSettingsWillChange();
+  cookie_settings_.set_content_settings(content_settings_type, settings);
+  if (callback) {
+    std::move(callback).Run();
+  }
 }
 
 void CookieManager::DeleteCookies(mojom::CookieDeletionFilterPtr filter,
@@ -146,15 +202,42 @@ void CookieManager::DeleteSessionOnlyCookies(
       base::BindRepeating(
           [](const DeleteCookiePredicate& predicate,
              const net::CanonicalCookie& cookie) {
-            return predicate.Run(cookie.Domain(), cookie.IsSecure());
+            return predicate.Run(cookie.Domain(), cookie.SourceScheme());
           },
           std::move(delete_cookie_predicate)),
       std::move(callback));
 }
 
+void CookieManager::DeleteStaleSessionOnlyCookies(
+    DeleteStaleSessionOnlyCookiesCallback callback) {
+  cookie_store_->DeleteMatchingCookiesAsync(
+      base::BindRepeating([](const net::CanonicalCookie& cookie) {
+        // We do not delete persistent cookies.
+        if (cookie.IsPersistent()) {
+          return false;
+        }
+
+        // We only examine the newer date between the last read/write time.
+        const base::Time last_accessed_or_updated =
+            cookie.LastAccessDate() > cookie.LastUpdateDate()
+                ? cookie.LastAccessDate()
+                : cookie.LastUpdateDate();
+
+        // Without timing data we cannot delete the cookie.
+        if (last_accessed_or_updated.is_null()) {
+          return false;
+        }
+
+        // Delete cookies that haven't been accessed or updated in 7 days.
+        // See crbug.com/40285083 for more info.
+        return (base::Time::Now() - last_accessed_or_updated) > base::Days(7);
+      }),
+      std::move(callback));
+}
+
 void CookieManager::AddCookieChangeListener(
     const GURL& url,
-    const absl::optional<std::string>& name,
+    const std::optional<std::string>& name,
     mojo::PendingRemote<mojom::CookieChangeListener> listener) {
   auto listener_registration = std::make_unique<ListenerRegistration>();
   listener_registration->listener.Bind(std::move(listener));
@@ -167,13 +250,17 @@ void CookieManager::AddCookieChangeListener(
       base::Unretained(listener_registration.get()));
 
   if (name) {
+    // TODO(crbug.com/40188414): Include the correct cookie partition
+    // key when attaching cookie change listeners to service workers.
     listener_registration->subscription =
         cookie_store_->GetChangeDispatcher().AddCallbackForCookie(
-            url, *name, std::move(cookie_change_callback));
+            url, *name, std::nullopt, std::move(cookie_change_callback));
   } else {
+    // TODO(crbug.com/40188414): Include the correct cookie partition
+    // key when attaching cookie change listeners to service workers.
     listener_registration->subscription =
         cookie_store_->GetChangeDispatcher().AddCallbackForUrl(
-            url, std::move(cookie_change_callback));
+            url, std::nullopt, std::move(cookie_change_callback));
   }
 
   listener_registration->listener.set_disconnect_handler(
@@ -241,6 +328,12 @@ void CookieManager::CloneInterface(
   AddReceiver(std::move(new_interface));
 }
 
+void CookieManager::SetPreCommitCallbackDelayForTesting(base::TimeDelta delay) {
+  session_cleanup_cookie_store_->SetBeforeCommitCallback(base::BindRepeating(
+      [](base::TimeDelta delay) { base::PlatformThread::Sleep(delay); },
+      delay));
+}
+
 void CookieManager::FlushCookieStore(FlushCookieStoreCallback callback) {
   // Flushes the backing store (if any) to disk.
   cookie_store_->FlushStore(std::move(callback));
@@ -249,36 +342,31 @@ void CookieManager::FlushCookieStore(FlushCookieStoreCallback callback) {
 void CookieManager::AllowFileSchemeCookies(
     bool allow,
     AllowFileSchemeCookiesCallback callback) {
-  std::vector<std::string> cookieable_schemes(
-      net::CookieMonster::kDefaultCookieableSchemes,
-      net::CookieMonster::kDefaultCookieableSchemes +
-          net::CookieMonster::kDefaultCookieableSchemesCount);
+  OnSettingsWillChange();
+
+  std::vector<std::string> cookieable_schemes =
+      net::CookieMonster::GetDefaultCookieableSchemes();
   if (allow) {
-    cookieable_schemes.push_back(url::kFileScheme);
+    cookieable_schemes.emplace_back(url::kFileScheme);
   }
-  cookie_store_->SetCookieableSchemes(cookieable_schemes, std::move(callback));
+  cookie_store_->SetCookieableSchemes(std::move(cookieable_schemes),
+                                      std::move(callback));
 }
 
 void CookieManager::SetForceKeepSessionState() {
+  OnSettingsWillChange();
   cookie_store_->SetForceKeepSessionState();
 }
 
 void CookieManager::BlockThirdPartyCookies(bool block) {
+  OnSettingsWillChange();
   cookie_settings_.set_block_third_party_cookies(block);
 }
 
-void CookieManager::SetContentSettingsForLegacyCookieAccess(
-    const ContentSettingsForOneType& settings) {
-  cookie_settings_.set_content_settings_for_legacy_cookie_access(settings);
-}
-
-void CookieManager::SetStorageAccessGrantSettings(
-    const ContentSettingsForOneType& settings,
-    SetStorageAccessGrantSettingsCallback callback) {
-  cookie_settings_.set_storage_access_grants(settings);
-
-  // Signal our storage update is complete.
-  std::move(callback).Run();
+void CookieManager::OnSettingsWillChange() {
+  if (settings_will_change_callback_) {
+    settings_will_change_callback_.Run();
+  }
 }
 
 // static
@@ -286,16 +374,23 @@ void CookieManager::ConfigureCookieSettings(
     const network::mojom::CookieManagerParams& params,
     CookieSettings* out) {
   out->set_block_third_party_cookies(params.block_third_party_cookies);
-  out->set_content_settings(params.settings);
   out->set_secure_origin_cookies_allowed_schemes(
       params.secure_origin_cookies_allowed_schemes);
+  std::vector<std::pair<url::Origin, std::vector<net::SchemefulSite>>>
+      filtered_origins;
+  for (const auto& kv : params.secure_origin_cookies_allowed_origins) {
+    if (!kv.first.opaque()) {
+      filtered_origins.emplace_back(kv.first, kv.second);
+    }
+  }
+  out->set_secure_origin_cookies_allowed_origins(std::move(filtered_origins));
   out->set_matching_scheme_cookies_allowed_schemes(
       params.matching_scheme_cookies_allowed_schemes);
   out->set_third_party_cookies_allowed_schemes(
       params.third_party_cookies_allowed_schemes);
-  out->set_content_settings_for_legacy_cookie_access(
-      params.settings_for_legacy_cookie_access);
-  out->set_storage_access_grants(params.settings_for_storage_access);
+  for (const auto& [type, settings] : params.content_settings) {
+    out->set_content_settings(type, settings);
+  }
 }
 
 void CookieManager::CrashOnGetCookieList() {
@@ -331,15 +426,22 @@ CookieDeletionInfo DeletionFilterToInfo(mojom::CookieDeletionFilterPtr filter) {
   }
 
   if (filter->including_domains.has_value()) {
-    delete_info.domains_and_ips_to_delete.insert(
+    delete_info.domains_and_ips_to_delete.emplace(
         filter->including_domains.value().begin(),
         filter->including_domains.value().end());
   }
   if (filter->excluding_domains.has_value()) {
-    delete_info.domains_and_ips_to_ignore.insert(
+    delete_info.domains_and_ips_to_ignore.emplace(
         filter->excluding_domains.value().begin(),
         filter->excluding_domains.value().end());
   }
+
+  delete_info.cookie_partition_key_collection =
+      filter->cookie_partition_key_collection
+          ? *filter->cookie_partition_key_collection
+          : net::CookiePartitionKeyCollection::ContainsAll();
+
+  delete_info.partitioned_state_only = filter->partitioned_state_only;
 
   return delete_info;
 }

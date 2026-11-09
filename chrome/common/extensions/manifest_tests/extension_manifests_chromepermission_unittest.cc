@@ -1,17 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
 #include "chrome/common/url_constants.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -21,7 +26,7 @@ const char kChromeUntrustedTestURL[] = "chrome-untrusted://test/";
 
 namespace errors = manifest_errors;
 
-typedef ChromeManifestTest ChromePermissionManifestTest;
+using ChromePermissionManifestTest = ChromeManifestTest;
 
 TEST_F(ChromePermissionManifestTest, ChromeURLPermissionInvalid) {
   LoadAndExpectWarning(
@@ -39,15 +44,19 @@ TEST_F(ChromePermissionManifestTest, ChromeUntrustedURLPermissionInvalid) {
 }
 
 TEST_F(ChromePermissionManifestTest, ChromeURLPermissionAllowedWithFlag) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kDisableExtensionsOnChromeUrlsSwitch);
   // Ignore the policy delegate for this test.
-  PermissionsData::SetPolicyDelegate(NULL);
+  PermissionsData::SetPolicyDelegate(nullptr);
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kExtensionsOnChromeURLs);
   std::string error;
   scoped_refptr<Extension> extension =
-    LoadAndExpectSuccess("permission_chrome_url_invalid.json");
+      LoadAndExpectSuccess("permission_chrome_url_invalid.json");
+  ASSERT_TRUE(extension);
   EXPECT_EQ("", error);
-  const GURL newtab_url(chrome::kChromeUINewTabURL);
+  const GURL& newtab_url = chrome::ChromeUINewTabURLAsGURL();
   EXPECT_TRUE(
       extension->permissions_data()->CanAccessPage(newtab_url, 0, &error))
       << error;
@@ -57,6 +66,9 @@ TEST_F(ChromePermissionManifestTest, ChromeURLPermissionAllowedWithFlag) {
 // kExtensionsOnChromeURLs flag enabled.
 TEST_F(ChromePermissionManifestTest,
        ChromeUntrustedURLPermissionDisallowedWithFlag) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kDisableExtensionsOnChromeUrlsSwitch);
   // Ignore the policy delegate for this test.
   PermissionsData::SetPolicyDelegate(nullptr);
   base::CommandLine::ForCurrentProcess()->AppendSwitch(

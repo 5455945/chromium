@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Structure-preserving parser for resource_ids files.
@@ -7,8 +7,6 @@ Naive usage of eval() destroys resource_ids structure. This module provides a
 custom parser that annotates source byte ranges of "leaf values" (strings and
 integers).
 """
-
-from __future__ import print_function
 
 _isWhitespace = lambda ch: ch in ' \t\n'
 _isNotNewline = lambda ch: ch != '\n'
@@ -99,8 +97,9 @@ def Tokenize(data):
       _EatString()
       t = 'S'
     else:
-      raise ValueError('Unknown char %s at %s' %
-                       (repr(ch), _RenderLineCol(data, lo)))
+      raise ValueError(
+        'Unknown char %s at %s' % (repr(ch), _RenderLineCol(data, lo))
+      )
     yield (t, lo, ctx.pos)
   yield ('E', ctx.pos, ctx.pos)  # End sentinel.
 

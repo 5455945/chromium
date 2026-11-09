@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,22 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <tuple>
 
+#include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "components/variations/variations_associated_data.h"
+#include "services/device/public/cpp/device_features.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
 
 namespace {
-
-static base::LazyInstance<UsbBlocklist>::Leaky g_singleton =
-    LAZY_INSTANCE_INITIALIZER;
 
 constexpr uint16_t kMaxVersion = 0xffff;
 
 // Returns true if the passed string is exactly 4 digits long and only contains
 // valid hexadecimal characters (no leading 0x).
-bool IsHexComponent(base::StringPiece string) {
+bool IsHexComponent(std::string_view string) {
   if (string.length() != 4)
     return false;
 
@@ -57,7 +56,7 @@ bool EntryMatches(Iterator begin,
 }
 
 // This list must be sorted according to CompareEntry.
-const UsbBlocklist::Entry kStaticEntries[] = {
+constexpr UsbBlocklist::Entry kStaticEntries[] = {
     {0x096e, 0x0850, kMaxVersion},  // KEY-ID
     {0x096e, 0x0852, kMaxVersion},  // Feitian
     {0x096e, 0x0853, kMaxVersion},  // Feitian
@@ -70,7 +69,7 @@ const UsbBlocklist::Entry kStaticEntries[] = {
 
     {0x09c3, 0x0023, kMaxVersion},  // HID Global BlueTrust Token
 
-    // Yubikey devices. https://crbug.com/818807
+    // Yubikey devices. https://crbug.com/40090685
     {0x1050, 0x0010, kMaxVersion},
     {0x1050, 0x0018, kMaxVersion},
     {0x1050, 0x0030, kMaxVersion},
@@ -96,6 +95,7 @@ const UsbBlocklist::Entry kStaticEntries[] = {
     {0x10c4, 0x8acf, kMaxVersion},  // U2F Zero
     {0x18d1, 0x5026, kMaxVersion},  // Titan
     {0x1a44, 0x00bb, kMaxVersion},  // VASCO
+    {0x1d50, 0x60fc, kMaxVersion},  // OnlyKey
     {0x1e0d, 0xf1ae, kMaxVersion},  // Keydo AES
     {0x1e0d, 0xf1d0, kMaxVersion},  // Neowave Keydo
     {0x1ea8, 0xf025, kMaxVersion},  // Thetis
@@ -108,16 +108,12 @@ const UsbBlocklist::Entry kStaticEntries[] = {
 
 }  // namespace
 
-UsbBlocklist::Entry::Entry(uint16_t vendor_id,
-                           uint16_t product_id,
-                           uint16_t max_version)
-    : vendor_id(vendor_id), product_id(product_id), max_version(max_version) {}
-
-UsbBlocklist::~UsbBlocklist() {}
+UsbBlocklist::~UsbBlocklist() = default;
 
 // static
 UsbBlocklist& UsbBlocklist::Get() {
-  return g_singleton.Get();
+  static base::NoDestructor<UsbBlocklist> singleton;
+  return *singleton;
 }
 
 bool UsbBlocklist::IsExcluded(const Entry& entry) const {
@@ -132,7 +128,7 @@ bool UsbBlocklist::IsExcluded(
                             device_info.device_version_minor << 4 |
                             device_info.device_version_subminor;
   return IsExcluded(
-      Entry(device_info.vendor_id, device_info.product_id, device_version));
+      Entry{device_info.vendor_id, device_info.product_id, device_version});
 }
 
 void UsbBlocklist::ResetToDefaultValuesForTest() {
@@ -141,19 +137,22 @@ void UsbBlocklist::ResetToDefaultValuesForTest() {
 }
 
 UsbBlocklist::UsbBlocklist() {
-  DCHECK(std::is_sorted(std::begin(kStaticEntries), std::end(kStaticEntries),
-                        CompareEntry));
+  CHECK(std::is_sorted(std::begin(kStaticEntries), std::end(kStaticEntries),
+                       CompareEntry),
+        base::NotFatalUntil::M163);
   PopulateWithServerProvidedValues();
 }
 
 void UsbBlocklist::PopulateWithServerProvidedValues() {
-  std::string blocklist_string = variations::GetVariationParamValue(
-      "WebUSBBlocklist", "blocklist_additions");
+  std::string blocklist_string = base::GetFieldTrialParamByFeatureAsString(
+      /*feature=*/features::kWebUsbBlocklist,
+      /*param_name=*/"blocklist_additions",
+      /*default_value=*/"");
 
   for (const auto& entry :
        base::SplitStringPiece(blocklist_string, ",", base::TRIM_WHITESPACE,
                               base::SPLIT_WANT_NONEMPTY)) {
-    std::vector<base::StringPiece> components = base::SplitStringPiece(
+    std::vector<std::string_view> components = base::SplitStringPiece(
         entry, ":", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
     if (components.size() != 3 || !IsHexComponent(components[0]) ||
         !IsHexComponent(components[1]) || !IsHexComponent(components[2])) {

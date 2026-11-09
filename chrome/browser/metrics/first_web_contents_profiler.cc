@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,223 +7,187 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/memory/memory_pressure_listener.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
-#include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/after_startup_task_utils.h"
+#include "chrome/browser/metrics/first_web_contents_profiler_base.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/waap/initial_web_ui_manager.h"
+#include "chrome/common/chrome_features.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "pdf/buildflags.h"
 
+namespace metrics {
 namespace {
 
-// Reasons for which profiling is deemed complete. Logged in UMA (do not re-
-// order or re-assign).
-enum class FinishReason {
-  // All metrics were successfully gathered.
-  kDone = 0,
-  // Abandon if blocking UI was shown during startup.
-  kAbandonBlockingUI = 1,
-  // Abandon if the WebContents is hidden (lowers scheduling priority).
-  kAbandonContentHidden = 2,
-  // Abandon if the WebContents is destroyed.
-  kAbandonContentDestroyed = 3,
-  // Abandon if the WebContents navigates away from its initial page, as it:
-  //   (1) is no longer a fair timing; and
-  //   (2) can cause http://crbug.com/525209 where the first paint didn't fire
-  //       for the initial content but fires after a lot of idle time when the
-  //       user finally navigates to another page that does trigger it.
-  kAbandonNewNavigation = 4,
-  // Abandon if the WebContents fails to load (e.g. network error, etc.).
-  kAbandonNavigationError = 5,
-  // Abandon if no WebContents was visible at the beginning of startup
-  kAbandonNoInitiallyVisibleContent = 6,
-  kMaxValue = kAbandonNoInitiallyVisibleContent
-};
-
-void RecordFinishReason(FinishReason finish_reason) {
+void RecordFirstWebContentsFinishReason(
+    StartupProfilingFinishReason finish_reason) {
   base::UmaHistogramEnumeration("Startup.FirstWebContents.FinishReason",
                                 finish_reason);
 }
 
-// Note: Instances of this class self destroy when the first non-empty paint
-// happens, or when an event prevents it from being recorded.
-class FirstWebContentsProfiler : public content::WebContentsObserver {
+class FirstWebContentsProfiler : public FirstWebContentsProfilerBase {
  public:
   explicit FirstWebContentsProfiler(content::WebContents* web_contents);
+
+  FirstWebContentsProfiler(const FirstWebContentsProfiler&) = delete;
+  FirstWebContentsProfiler& operator=(const FirstWebContentsProfiler&) = delete;
+
+ protected:
+  // FirstWebContentsProfilerBase:
+  void RecordFinishReason(StartupProfilingFinishReason finish_reason) override;
+  void RecordNavigationFinished(base::TimeTicks navigation_start) override;
+  void RecordFirstNonEmptyPaint() override;
+  void RecordFirstNonEmptyPaintForOsLaunch() override;
+  void RecordFirstContentfulPaint(base::TimeTicks fcp_ticks) override;
+  void RecordLargestContentfulPaint(base::TimeTicks lcp_ticks) override;
+#if BUILDFLAG(ENABLE_PDF)
+  void RecordPdfFirstContentPaint(base::TimeTicks pdf_paint_ticks) override;
+#endif  // BUILDFLAG(ENABLE_PDF)
+  bool WasStartupInterrupted() override;
+  bool ShouldObservePaintTimingMetrics() override;
 
  private:
   ~FirstWebContentsProfiler() override = default;
 
-  // content::WebContentsObserver:
-  void DidStartNavigation(
-      content::NavigationHandle* navigation_handle) override;
-  void DidFinishNavigation(
-      content::NavigationHandle* navigation_handle) override;
-  void DidFirstVisuallyNonEmptyPaint() override;
-  void OnVisibilityChanged(content::Visibility visibility) override;
-  void WebContentsDestroyed() override;
-
-  // Logs |finish_reason| to UMA and deletes this FirstWebContentsProfiler.
-  void FinishedCollectingMetrics(FinishReason finish_reason);
-
-  // Whether a main frame navigation finished since this was created.
-  bool did_finish_first_navigation_ = false;
-
-  // Memory pressure listener that will be used to check if memory pressure has
-  // an impact on startup.
-  base::MemoryPressureListener memory_pressure_listener_;
-
-  DISALLOW_COPY_AND_ASSIGN(FirstWebContentsProfiler);
+  std::unique_ptr<AfterStartupTaskUtils::StartupInProgressRef>
+      startup_in_progress_ref_;
 };
 
+// FirstWebContentsProfiler is created before the main MessageLoop starts
+// running. It is generally expected that any visible WebContents at this
+// time will have a pending NavigationEntry, i.e. should have dispatched
+// DidStartNavigation() but notDidFinishNavigation().
+//
+// This assumption does not hold true on ChromeOS during a session restore,
+// where the profiler is created before the navigation starts. The base
+// class (`FirstWebContentsProfilerBase`) contains the logic to handle this
+// specific case.
+//
+// This seemingly empty constructor is necessary. It serves as a public
+// entry point to call the protected constructor of the base class, which is
+// required because this class is instantiated by the free function
+// `BeginFirstWebContentsProfiling`.
 FirstWebContentsProfiler::FirstWebContentsProfiler(
     content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents),
-      memory_pressure_listener_(
-          FROM_HERE,
-          base::BindRepeating(&startup_metric_utils::
-                                  OnMemoryPressureBeforeFirstNonEmptyPaint)) {
-  // FirstWebContentsProfiler is created before the main MessageLoop starts
-  // running. At that time, any visible WebContents should have a pending
-  // NavigationEntry, i.e. should have dispatched DidStartNavigation() but not
-  // DidFinishNavigation().
-  DCHECK(web_contents->GetController().GetPendingEntry());
+    : FirstWebContentsProfilerBase(web_contents) {
+  if (base::FeatureList::IsEnabled(features::kImprovedStartupBestEffortDelay)) {
+    startup_in_progress_ref_ =
+        AfterStartupTaskUtils::RegisterStartupInProgressRef(
+            StartupIsCompleteReason::kFirstWebContentsProfiler);
+  }
 }
 
-void FirstWebContentsProfiler::DidStartNavigation(
-    content::NavigationHandle* navigation_handle) {
-  // Ignore subframe navigations and same-document navigations.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (!navigation_handle->IsInPrimaryMainFrame() ||
-      navigation_handle->IsSameDocument()) {
-    return;
-  }
-
-  // FirstWebContentsProfiler is created after DidStartNavigation() has been
-  // dispatched for the first top-level navigation. If another
-  // DidStartNavigation() is received, it means that a new navigation was
-  // initiated.
-  FinishedCollectingMetrics(FinishReason::kAbandonNewNavigation);
+void FirstWebContentsProfiler::RecordFinishReason(
+    StartupProfilingFinishReason finish_reason) {
+  RecordFirstWebContentsFinishReason(finish_reason);
+  // Release the startup-in-progress reference now that first-web-contents
+  // profiling has reached its terminal decision (first paint recorded or
+  // abandoned). This profiler may keep observing for FCP/LCP after a successful
+  // paint, but browser startup completion (and thus BEST_EFFORT task
+  // scheduling) must not be blocked on that extended observation.
+  startup_in_progress_ref_.reset();
 }
 
-void FirstWebContentsProfiler::DidFinishNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (startup_metric_utils::WasMainWindowStartupInterrupted()) {
-    FinishedCollectingMetrics(FinishReason::kAbandonBlockingUI);
-    return;
-  }
-
-  // Ignore subframe navigations and same-document navigations.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (!navigation_handle->IsInPrimaryMainFrame() ||
-      navigation_handle->IsSameDocument()) {
-    return;
-  }
-
-  if (!navigation_handle->HasCommitted() ||
-      navigation_handle->IsErrorPage()) {
-    FinishedCollectingMetrics(FinishReason::kAbandonNavigationError);
-    return;
-  }
-
-  // It is not possible to get a second top-level DidFinishNavigation() without
-  // first having a DidStartNavigation(), which would have deleted |this|.
-  DCHECK(!did_finish_first_navigation_);
-
-  did_finish_first_navigation_ = true;
-
-  startup_metric_utils::RecordFirstWebContentsMainNavigationStart(
-      navigation_handle->NavigationStart());
-  startup_metric_utils::RecordFirstWebContentsMainNavigationFinished(
-      base::TimeTicks::Now());
+void FirstWebContentsProfiler::RecordNavigationFinished(
+    base::TimeTicks navigation_start) {
+  startup_metric_utils::GetBrowser().RecordFirstWebContentsMainNavigationStart(
+      navigation_start);
+  startup_metric_utils::GetBrowser()
+      .RecordFirstWebContentsMainNavigationFinished(base::TimeTicks::Now());
 }
 
-void FirstWebContentsProfiler::DidFirstVisuallyNonEmptyPaint() {
-  DCHECK(did_finish_first_navigation_);
-
-  if (startup_metric_utils::WasMainWindowStartupInterrupted()) {
-    FinishedCollectingMetrics(FinishReason::kAbandonBlockingUI);
-    return;
-  }
-
-  startup_metric_utils::RecordFirstWebContentsNonEmptyPaint(
+void FirstWebContentsProfiler::RecordFirstNonEmptyPaint() {
+  startup_metric_utils::GetBrowser().RecordFirstWebContentsNonEmptyPaint(
       base::TimeTicks::Now(),
-      web_contents()->GetMainFrame()->GetProcess()->GetLastInitTime());
-
-  FinishedCollectingMetrics(FinishReason::kDone);
+      web_contents()->GetPrimaryMainFrame()->GetProcess()->GetLastInitTime());
 }
 
-void FirstWebContentsProfiler::OnVisibilityChanged(
-    content::Visibility visibility) {
-  if (visibility != content::Visibility::VISIBLE) {
-    // Stop profiling if the content gets hidden as its load may be
-    // deprioritized and timing it becomes meaningless.
-    FinishedCollectingMetrics(FinishReason::kAbandonContentHidden);
-  }
+void FirstWebContentsProfiler::RecordFirstNonEmptyPaintForOsLaunch() {
+  startup_metric_utils::GetBrowser()
+      .RecordFirstWebContentsNonEmptyPaintForOsLaunch(base::TimeTicks::Now());
 }
 
-void FirstWebContentsProfiler::WebContentsDestroyed() {
-  FinishedCollectingMetrics(FinishReason::kAbandonContentDestroyed);
+void FirstWebContentsProfiler::RecordFirstContentfulPaint(
+    base::TimeTicks fcp_ticks) {
+  startup_metric_utils::GetBrowser().RecordFirstWebContentsFirstContentfulPaint(
+      fcp_ticks);
 }
 
-void FirstWebContentsProfiler::FinishedCollectingMetrics(
-    FinishReason finish_reason) {
-  RecordFinishReason(finish_reason);
-  delete this;
+void FirstWebContentsProfiler::RecordLargestContentfulPaint(
+    base::TimeTicks lcp_ticks) {
+  startup_metric_utils::GetBrowser()
+      .RecordFirstWebContentsLargestContentfulPaint(lcp_ticks);
+}
+
+#if BUILDFLAG(ENABLE_PDF)
+void FirstWebContentsProfiler::RecordPdfFirstContentPaint(
+    base::TimeTicks pdf_paint_ticks) {
+  startup_metric_utils::GetBrowser().RecordFirstWebContentsPdfFirstContentPaint(
+      pdf_paint_ticks);
+}
+#endif  // BUILDFLAG(ENABLE_PDF)
+
+bool FirstWebContentsProfiler::WasStartupInterrupted() {
+  return startup_metric_utils::GetBrowser().WasMainWindowStartupInterrupted();
+}
+
+bool FirstWebContentsProfiler::ShouldObservePaintTimingMetrics() {
+  return true;
 }
 
 }  // namespace
 
-namespace metrics {
-
-void BeginFirstWebContentsProfiling() {
-  const BrowserList* browser_list = BrowserList::GetInstance();
-
-  content::WebContents* visible_contents = nullptr;
-  for (Browser* browser : *browser_list) {
-    if (!browser->window()->IsVisible())
-      continue;
-
-    // The active WebContents may be hidden when the window height is small.
-    content::WebContents* contents =
-        browser->tab_strip_model()->GetActiveWebContents();
-
-#if defined(OS_MAC)
-    // TODO(https://crbug.com/1032348): It is incorrect to have a visible
-    // browser window with no active WebContents, but reports on Mac show that
-    // it happens.
-    if (!contents)
-      continue;
-#endif  // defined(OS_MAC)
-
-    if (contents->GetVisibility() != content::Visibility::VISIBLE)
-      continue;
-
-    visible_contents = contents;
-    break;
+// Determines the WebContents to profile for startup metrics.
+// This is typically the currently visible WebContents. However, if window
+// visibility is deferred, e.g., waiting for the WebUI toolbar to finish
+// loading, it instead returns the active WebContents without relying on a
+// strict visibility check.
+content::WebContents* GetWebContentsToProfile(
+    BrowserWindowInterface* browser_interface) {
+  content::WebContents* visible_contents =
+      FirstWebContentsProfilerBase::GetVisibleContents(browser_interface);
+  if (visible_contents) {
+    return visible_contents;
   }
 
+  const auto* manager = InitialWebUIManager::From(browser_interface);
+  if (manager && manager->IsShowPending()) {
+    return browser_interface->GetTabStripModel()->GetActiveWebContents();
+  }
+
+  return nullptr;
+}
+
+void BeginFirstWebContentsProfiling() {
+  content::WebContents* visible_contents = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        if (features::kWebUIReloadButtonDeferBrowserViewShow.Get()) {
+          visible_contents = GetWebContentsToProfile(browser);
+        } else {
+          visible_contents =
+              FirstWebContentsProfilerBase::GetVisibleContents(browser);
+        }
+        if (visible_contents) {
+          return false;  // stop iterating
+        }
+        return true;  // continue iterating
+      });
+
   if (!visible_contents) {
-    RecordFinishReason(FinishReason::kAbandonNoInitiallyVisibleContent);
+    RecordFirstWebContentsFinishReason(
+        StartupProfilingFinishReason::kAbandonNoInitiallyVisibleContent);
     return;
   }
 

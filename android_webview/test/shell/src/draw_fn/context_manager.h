@@ -1,15 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_TEST_SHELL_SRC_DRAW_FN_CONTEXT_MANAGER_H_
 #define ANDROID_WEBVIEW_TEST_SHELL_SRC_DRAW_FN_CONTEXT_MANAGER_H_
 
-#include <android/native_window.h>
 #include <jni.h>
 
 #include "android_webview/test/shell/src/draw_fn/overlays_manager.h"
 #include "base/android/scoped_java_ref.h"
+#include "ui/gl/android/scoped_a_native_window.h"
+#include "ui/gl/android/scoped_java_surface.h"
 
 namespace draw_fn {
 
@@ -32,7 +33,7 @@ class ContextManager {
       int height,
       int scroll_x,
       int scroll_y,
-      jboolean readback_quadrants) = 0;
+      bool readback_quadrants) = 0;
 
  protected:
   void CreateContext(JNIEnv* env,
@@ -43,8 +44,8 @@ class ContextManager {
   virtual void DestroyContext() = 0;
   virtual void CurrentFunctorChanged() = 0;
 
-  base::android::ScopedJavaGlobalRef<jobject> java_surface_;
-  ANativeWindow* native_window_ = nullptr;
+  gl::ScopedJavaSurface java_surface_;
+  gl::ScopedANativeWindow native_window_;
 
   int current_functor_ = 0;
 

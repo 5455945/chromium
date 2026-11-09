@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <string>
 
-#include "ui/accessibility/ax_export.h"
+#include "base/component_export.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -15,24 +16,42 @@ namespace ui {
 // built by a pre-defined tree type like Chromium to indicate that Chromium
 // browser tree should be traversed and/or by a string pattern which matches
 // an accessible name of a root of some accessible subtree.
-struct AX_EXPORT AXTreeSelector {
+struct COMPONENT_EXPORT(AX_PLATFORM) AXTreeSelector {
   enum Type {
     None = 0,
-    ActiveTab = 1 << 0,
-    Chrome = 1 << 1,
-    Chromium = 1 << 2,
-    Edge = 1 << 3,
-    Firefox = 1 << 4,
-    Safari = 1 << 5,
+
+    // Browsers
+    Chrome = 1 << 0,
+    Chromium = 1 << 1,
+    Edge = 1 << 2,
+    Firefox = 1 << 3,
+    Safari = 1 << 4,
+
+    // Tree selectors
+    ActiveTab = 1 << 5,
+    IDOrClass = 1 << 6,
   };
   int types{None};
   std::string pattern;
+  gfx::AcceleratedWidget widget{0};
 
   AXTreeSelector() = default;
+  explicit AXTreeSelector(gfx::AcceleratedWidget widget) : widget(widget) {}
+  AXTreeSelector(gfx::AcceleratedWidget widget, int filter)
+      : types(filter), widget(widget) {}
   AXTreeSelector(int types, const std::string& pattern)
       : types(types), pattern(pattern) {}
+  AXTreeSelector(int types,
+                 const std::string& pattern,
+                 gfx::AcceleratedWidget widget)
+      : types(types), pattern(pattern), widget(widget) {}
 
-  bool empty() const { return types == None && pattern.empty(); }
+  AXTreeSelector(const AXTreeSelector&) = default;
+  AXTreeSelector& operator=(const AXTreeSelector&) = default;
+
+  bool empty() const {
+    return (types & ~(ActiveTab)) == None && widget == 0 && pattern.empty();
+  }
 
   // Returns an application name for a type if the type specifies an
   // application.
@@ -53,7 +72,7 @@ struct AX_EXPORT AXTreeSelector {
 // will query a AXDOMClassList attribute on accessible objects placed at 1st
 // and 3rd lines in the output accessible tree.
 // Also see AXInspectScenario::From() for more information.
-struct AX_EXPORT AXPropertyFilter {
+struct COMPONENT_EXPORT(AX_PLATFORM) AXPropertyFilter {
   enum Type { ALLOW, ALLOW_EMPTY, DENY, SCRIPT };
 
   std::string match_str;
@@ -63,6 +82,7 @@ struct AX_EXPORT AXPropertyFilter {
 
   AXPropertyFilter(const std::string& str, Type type);
   AXPropertyFilter(const AXPropertyFilter&);
+  AXPropertyFilter& operator=(const AXPropertyFilter&);
 };
 
 // A single node filter specification  which will exclude any node where the
@@ -72,7 +92,7 @@ struct AX_EXPORT AXPropertyFilter {
 // example to exclude all inlineTextBox nodes under blink we would use a
 // NodeFilter of the form:
 //   {property='internalRole', pattern='inlineTextBox'};
-struct AX_EXPORT AXNodeFilter {
+struct COMPONENT_EXPORT(AX_PLATFORM) AXNodeFilter {
   std::string property;
   std::string pattern;
 

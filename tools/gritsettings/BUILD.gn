@@ -1,11 +1,12 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//build/config/compute_inputs_for_analyze.gni")
+import("//build/config/python.gni")
 import("//tools/grit/grit_rule.gni")
 
-action("default_resource_ids") {
+action_with_pydeps("default_resource_ids") {
   script = "//tools/grit/grit.py"
   inputs = [ "resource_ids.spec" ]
   outputs = [ grit_resource_id_file ]
@@ -19,6 +20,7 @@ action("default_resource_ids") {
     "--add-header",
     "--depfile",
     rebase_path(depfile, root_build_dir),
+    "--input",
     _rebased_input,
   ]
 
@@ -27,6 +29,7 @@ action("default_resource_ids") {
                                   [
                                     "update_resource_ids",
                                     "--analyze-inputs",
+                                    "--input",
                                     _rebased_input,
                                   ],
                                   "list lines")

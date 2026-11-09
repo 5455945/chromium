@@ -1,45 +1,56 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_UPDATE_CLIENT_UTILS_H_
 #define COMPONENTS_UPDATE_CLIENT_UTILS_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/files/file_path.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/function_ref.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "components/update_client/update_client.h"
 
 class GURL;
 
-namespace base {
-class FilePath;
-class Value;
-}
-
 namespace update_client {
 
-class Component;
 struct CrxComponent;
+
+inline constexpr char kArchAmd64[] = "x86_64";
+inline constexpr char kArchIntel[] = "x86";
+inline constexpr char kArchArm64[] = "arm64";
 
 // Defines a name-value pair that represents an installer attribute.
 // Installer attributes are component-specific metadata, which may be serialized
 // in an update check request.
 using InstallerAttribute = std::pair<std::string, std::string>;
 
-// Returns true if the |component| contains a valid differential update url.
-bool HasDiffUpdate(const Component& component);
-
 // Returns true if the |status_code| represents a server error 5xx.
 bool IsHttpServerError(int status_code);
 
 // Deletes the file and its directory, if the directory is empty. If the
 // parent directory is not empty, the function ignores deleting the directory.
-// Returns true if the file and the empty directory are deleted.
+// Returns true if the file and the empty directory are deleted,
+// or if the file was deleted and the directory was not empty.
 bool DeleteFileAndEmptyParentDirectory(const base::FilePath& filepath);
+
+// Deletes the given directory, if the directory is empty. If the
+// directory is not empty, the function ignores deleting the directory.
+// Returns true if the directory is not empty or if the directory was empty
+// and successfully deleted.
+bool DeleteEmptyDirectory(const base::FilePath& filepath);
 
 // Returns the component id of the |component|. The component id is either the
 // app_id, if the member is set, or a string value derived from the public
@@ -47,10 +58,10 @@ bool DeleteFileAndEmptyParentDirectory(const base::FilePath& filepath);
 std::string GetCrxComponentID(const CrxComponent& component);
 
 // Returns a CRX id from a public key hash.
-std::string GetCrxIdFromPublicKeyHash(const std::vector<uint8_t>& pk_hash);
+std::string GetCrxIdFromPublicKeyHash(base::span<const uint8_t> pk_hash);
 
 // Returns true if the actual SHA-256 hash of the |filepath| matches the
-// |expected_hash|.
+// |expected_hash|. Does not follow symbolic links.
 bool VerifyFileHash256(const base::FilePath& filepath,
                        const std::string& expected_hash);
 
@@ -71,21 +82,58 @@ CrxInstaller::Result InstallFunctionWrapper(
     base::OnceCallback<bool()> callback);
 
 // Deserializes the CRX manifest. The top level must be a dictionary.
-// Returns a base::Value object of type dictionary on success, or another type
+// Returns a base::DictValue object of type dictionary on success, or nullopt
 // on failure.
-base::Value ReadManifest(const base::FilePath& unpack_path);
+std::optional<base::DictValue> ReadManifest(const base::FilePath& unpack_path);
 
-// Converts a custom, specific installer error (and optionally extended error)
-// to an installer result.
-template <typename T>
-CrxInstaller::Result ToInstallerResult(const T& error, int extended_error = 0) {
-  static_assert(std::is_enum<T>::value,
-                "Use an enum class to define custom installer errors");
-  return CrxInstaller::Result(
-      static_cast<int>(update_client::InstallError::CUSTOM_ERROR_BASE) +
-          static_cast<int>(error),
-      extended_error);
+// Returns a string representation of the processor architecture. Uses
+// `base::win::OSInfo::IsWowX86OnARM64` and
+// `base::win::OSInfo::IsWowAMD64OnARM64` if available on Windows (more
+// accurate).
+// If not, or not Windows, falls back to
+// `base::SysInfo().OperatingSystemArchitecture`.
+std::string GetArchitecture();
+
+// Retries the given `file_operation` on the given path `tries` times, sleeping
+// for `time_between_tries` between successive tries. Returns true if
+// successful, false otherwise. This function is used with file delete
+// operations when there is a likelihood that the file(s) in `path` can be
+// locked temporarily, such as by antivirus software.
+bool RetryFileOperation(
+    base::FunctionRef<bool(const base::FilePath&)> file_operation,
+    const base::FilePath& path,
+    size_t tries = 5,
+    base::TimeDelta time_between_tries = base::Seconds(1));
+
+// Creates a temporary directory, with platform specific overrides
+// for ChromeOS where `/tmp` can have insufficient space.
+bool CreateTempDirectory(const base::FilePath::StringType& prefix,
+                         base::FilePath* new_temp_path);
+
+// Creates a temporary directory with a ScopedTempDir, with platform specific
+// overrides for ChromeOS where `/tmp` can have insufficient space.
+bool CreateScopedTempDirectory(base::ScopedTempDir& dir);
+
+// UTF8 conversions between `std::string` and the `StringType` type found in
+// the `base::FilePath` and `base::CommandLine` classes.
+#if BUILDFLAG(IS_WIN)
+base::FilePath::StringType UTF8ToStringType(const std::string& utf8);
+std::string StringTypeToUTF8(const base::FilePath::StringType& stringtype);
+#else   // BUILDFLAG(IS_WIN)
+constexpr base::FilePath::StringType UTF8ToStringType(const std::string& utf8) {
+  return utf8;
 }
+constexpr std::string StringTypeToUTF8(
+    const base::FilePath::StringType& stringtype) {
+  return stringtype;
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+// Perform a best-effort cleanup up of directories under `dir` that match
+// `matcher` and are `older_than`.
+void CleanupDirectoriesOlderThan(const base::FilePath& dir,
+                                 const base::FilePath::StringType& matcher,
+                                 base::TimeDelta older_than);
 
 }  // namespace update_client
 

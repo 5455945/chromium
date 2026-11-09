@@ -1,25 +1,96 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/reporting/client/report_queue_provider.h"
 
-#include "base/callback.h"
+#include <memory>
+#include <string>
+
+#include "base/check_is_test.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/types/expected.h"
+#include "base/types/expected_macros.h"
 #include "components/reporting/client/report_queue.h"
 #include "components/reporting/client/report_queue_configuration.h"
-#include "components/reporting/proto/record_constants.pb.h"
+#include "components/reporting/client/report_queue_impl.h"
+#include "components/reporting/proto/synced/record_constants.pb.h"
 #include "components/reporting/storage/storage_module_interface.h"
-#include "components/reporting/util/shared_queue.h"
+#include "components/reporting/util/reporting_errors.h"
 #include "components/reporting/util/status.h"
+#include "components/reporting/util/status_macros.h"
 #include "components/reporting/util/statusor.h"
-#include "third_party/protobuf/src/google/protobuf/message_lite.h"
 
 namespace reporting {
+
+using InitCompleteCallback = base::OnceCallback<void(Status)>;
+
+ReportQueueProvider* g_report_queue_provider_instance = nullptr;
+
+// Report queue creation request. Recorded in the `create_request_queue_` when
+// provider cannot create queues yet.
+class ReportQueueProvider::CreateReportQueueRequest {
+ public:
+  static void New(std::unique_ptr<ReportQueueConfiguration> config,
+                  CreateReportQueueCallback create_cb) {
+    auto* const provider = GetInstance();
+    CHECK(provider) << "Provider must exist, otherwise it is an internal error";
+    auto request = base::WrapUnique(
+        new CreateReportQueueRequest(std::move(config), std::move(create_cb)));
+    provider->sequenced_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<ReportQueueProvider> provider,
+               std::unique_ptr<CreateReportQueueRequest> request) {
+              if (!provider) {
+                std::move(request->release_create_cb())
+                    .Run(base::unexpected(Status(
+                        error::UNAVAILABLE, "Provider has been shut down")));
+                return;
+              }
+              DCHECK_CALLED_ON_VALID_SEQUENCE(provider->sequence_checker_);
+              provider->create_request_queue_.push(std::move(request));
+              provider->CheckInitializationState();
+            },
+            provider->GetWeakPtr(), std::move(request)));
+  }
+
+  CreateReportQueueRequest(const CreateReportQueueRequest& other) = delete;
+  CreateReportQueueRequest& operator=(const CreateReportQueueRequest& other) =
+      delete;
+  ~CreateReportQueueRequest() = default;
+
+  std::unique_ptr<ReportQueueConfiguration> release_config() {
+    CHECK(config_) << "Can only be released once";
+    return std::move(config_);
+  }
+
+  ReportQueueProvider::CreateReportQueueCallback release_create_cb() {
+    CHECK(create_cb_) << "Can only be released once";
+    return std::move(create_cb_);
+  }
+
+ private:
+  // Constructor is only called by `New` factory method above.
+  CreateReportQueueRequest(std::unique_ptr<ReportQueueConfiguration> config,
+                           CreateReportQueueCallback create_cb)
+      : config_(std::move(config)), create_cb_(std::move(create_cb)) {}
+
+  std::unique_ptr<ReportQueueConfiguration> config_;
+  CreateReportQueueCallback create_cb_;
+};
 
 // ReportQueueProvider core implementation.
 
@@ -29,16 +100,105 @@ bool ReportQueueProvider::IsEncryptedReportingPipelineEnabled() {
 }
 
 // static
-const base::Feature ReportQueueProvider::kEncryptedReportingPipeline{
-    "EncryptedReportingPipeline", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kEncryptedReportingPipeline,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-ReportQueueProvider::ReportQueueProvider()
-    : create_request_queue_(SharedQueue<CreateReportQueueRequest>::Create()),
-      init_state_tracker_(
-          ReportQueueProvider::InitializationStateTracker::Create()) {}
+ReportQueueProvider::ReportQueueProvider(
+    StorageModuleCreateCallback storage_create_cb,
+    scoped_refptr<base::SequencedTaskRunner> seq_task_runner)
+    : storage_create_cb_(storage_create_cb),
+      sequenced_task_runner_(seq_task_runner) {
+  if (g_report_queue_provider_instance) {
+    CHECK_IS_TEST();  // Duplicate is allowed in tests only.
+  }
+  g_report_queue_provider_instance = this;
+}
 
-ReportQueueProvider::~ReportQueueProvider() = default;
+ReportQueueProvider::~ReportQueueProvider() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Kill all remaining requests.
+  while (!create_request_queue_.empty()) {
+    auto& report_queue_request = create_request_queue_.front();
+    std::move(report_queue_request->release_create_cb())
+        .Run(base::unexpected(
+            Status(error::UNAVAILABLE, "ReportQueueProvider shut down")));
+    create_request_queue_.pop();
+  }
+  g_report_queue_provider_instance = nullptr;
+}
 
+base::WeakPtr<ReportQueueProvider> ReportQueueProvider::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+scoped_refptr<StorageModuleInterface> ReportQueueProvider::storage() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return storage_;
+}
+
+scoped_refptr<base::SequencedTaskRunner>
+ReportQueueProvider::sequenced_task_runner() const {
+  return sequenced_task_runner_;
+}
+
+void ReportQueueProvider::CreateNewQueue(
+    std::unique_ptr<ReportQueueConfiguration> config,
+    CreateReportQueueCallback cb) {
+  sequenced_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<ReportQueueProvider> provider,
+             std::unique_ptr<ReportQueueConfiguration> config,
+             CreateReportQueueCallback cb) {
+            if (!provider) {
+              std::move(cb).Run(base::unexpected(
+                  Status(error::UNAVAILABLE, "Provider has been shut down")));
+              base::UmaHistogramEnumeration(
+                  reporting::kUmaUnavailableErrorReason,
+                  UnavailableErrorReason::REPORT_QUEUE_PROVIDER_DESTRUCTED,
+                  UnavailableErrorReason::MAX_VALUE);
+              return;
+            }
+            // Configure report queue config with an appropriate DM token and
+            // proceed to create the queue if configuration was successful.
+            DCHECK_CALLED_ON_VALID_SEQUENCE(provider->sequence_checker_);
+            auto report_queue_configured_cb = base::BindOnce(
+                [](scoped_refptr<StorageModuleInterface> storage,
+                   CreateReportQueueCallback cb,
+                   StatusOr<std::unique_ptr<ReportQueueConfiguration>>
+                       config_result) {
+                  // If configuration hit an error, we abort and
+                  // report this through the callback
+                  if (!config_result.has_value()) {
+                    std::move(cb).Run(
+                        base::unexpected(std::move(config_result).error()));
+                    return;
+                  }
+
+                  // Proceed to create the queue on arbitrary thread.
+                  base::ThreadPool::PostTask(
+                      FROM_HERE,
+                      base::BindOnce(&ReportQueueImpl::Create,
+                                     std::move(config_result.value()), storage,
+                                     std::move(cb)));
+                },
+                provider->storage_, std::move(cb));
+
+            provider->ConfigureReportQueue(
+                std::move(config), std::move(report_queue_configured_cb));
+          },
+          GetWeakPtr(), std::move(config), std::move(cb)));
+}
+
+StatusOr<std::unique_ptr<ReportQueue, base::OnTaskRunnerDeleter>>
+ReportQueueProvider::CreateNewSpeculativeQueue(
+    const ReportQueue::SpeculativeConfigSettings& config_settings) {
+  return SpeculativeReportQueueImpl::Create(config_settings);
+}
+
+void ReportQueueProvider::OnInitCompleted() {}
+
+// static
 void ReportQueueProvider::CreateQueue(
     std::unique_ptr<ReportQueueConfiguration> config,
     CreateReportQueueCallback create_cb) {
@@ -48,270 +208,108 @@ void ReportQueueProvider::CreateQueue(
         "The Encrypted Reporting Pipeline is not enabled. Please enable it on "
         "the command line using --enable-features=EncryptedReportingPipeline");
     VLOG(1) << not_enabled;
-    std::move(create_cb).Run(not_enabled);
+    std::move(create_cb).Run(base::unexpected(not_enabled));
     return;
   }
-  auto* instance = GetInstance();
-  instance->create_request_queue_->Push(
-      CreateReportQueueRequest(std::move(config), std::move(create_cb)),
-      base::BindOnce(&ReportQueueProvider::OnPushComplete,
-                     base::Unretained(instance)));
+  CreateReportQueueRequest::New(std::move(config), std::move(create_cb));
 }
-
-void ReportQueueProvider::OnPushComplete() {
-  init_state_tracker_->GetInitState(base::BindOnce(
-      &ReportQueueProvider::OnInitState, base::Unretained(this)));
-}
-
-void ReportQueueProvider::OnInitState(bool provider_configured) {
-  if (!provider_configured) {
-    // Schedule an InitializingContext to take care of initialization.
-    InitializingContext* const context = InstantiateInitializingContext(
-        base::BindOnce(&ReportQueueProvider::OnInitializationComplete,
-                       base::Unretained(this)),
-        init_state_tracker_);
-    base::ThreadPool::PostTask(
-        FROM_HERE,
-        base::BindOnce(&InitializingContext::Start, base::Unretained(context)));
-    return;
-  }
-
-  // Client was configured, build the queue!
-  create_request_queue_->Pop(base::BindOnce(
-      &ReportQueueProvider::BuildRequestQueue, base::Unretained(this)));
-}
-
-void ReportQueueProvider::OnInitializationComplete(Status init_status) {
-  if (init_status.error_code() == error::RESOURCE_EXHAUSTED) {
-    // This happens when a new request comes in while the ReportQueueProvider is
-    // undergoing initialization. The leader will either clear or build the
-    // queue when it completes.
-    return;
-  }
-
-  // Configuration failed. Clear out all the requests that came in while we were
-  // attempting to configure.
-  if (!init_status.ok()) {
-    create_request_queue_->Swap(
-        base::queue<CreateReportQueueRequest>(),
-        base::BindOnce(&ReportQueueProvider::ClearRequestQueue,
-                       base::Unretained(this)));
-    return;
-  }
-  create_request_queue_->Pop(base::BindOnce(
-      &ReportQueueProvider::BuildRequestQueue, base::Unretained(this)));
-}
-
-void ReportQueueProvider::ClearRequestQueue(
-    base::queue<CreateReportQueueRequest> failed_requests) {
-  while (!failed_requests.empty()) {
-    // Post to general thread.
-    base::ThreadPool::PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](CreateReportQueueRequest queue_request) {
-                         std::move(queue_request.create_cb())
-                             .Run(Status(error::UNAVAILABLE,
-                                         "Unable to build a ReportQueue"));
-                       },
-                       std::move(failed_requests.front())));
-    failed_requests.pop();
-  }
-}
-
-void ReportQueueProvider::BuildRequestQueue(
-    StatusOr<CreateReportQueueRequest> pop_result) {
-  // Queue is clear - nothing more to do.
-  if (!pop_result.ok()) {
-    return;
-  }
-
-  // We don't want to block either the ReportQueueProvider
-  // sequenced_task_runner_ or the create_request_queue_.sequenced_task_runner_,
-  // so we post the task to a general thread.
-  base::ThreadPool::PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](ReportQueueProvider* provider,
-             CreateReportQueueRequest report_queue_request) {
-            std::move(report_queue_request.create_cb())
-                .Run(provider->CreateNewQueue(report_queue_request.config()));
-          },
-          base::Unretained(this), std::move(pop_result.ValueOrDie())));
-
-  // Build the next item asynchronously
-  create_request_queue_->Pop(base::BindOnce(
-      &ReportQueueProvider::BuildRequestQueue, base::Unretained(this)));
-}
-
-// CreateReportQueueRequest implementation.
-
-ReportQueueProvider::CreateReportQueueRequest::CreateReportQueueRequest(
-    std::unique_ptr<ReportQueueConfiguration> config,
-    CreateReportQueueCallback create_cb)
-    : config_(std::move(config)), create_cb_(std::move(create_cb)) {}
-
-ReportQueueProvider::CreateReportQueueRequest::~CreateReportQueueRequest() =
-    default;
-
-ReportQueueProvider::CreateReportQueueRequest::CreateReportQueueRequest(
-    ReportQueueProvider::CreateReportQueueRequest&& other)
-    : config_(other.config()), create_cb_(other.create_cb()) {}
-
-std::unique_ptr<ReportQueueConfiguration>
-ReportQueueProvider::CreateReportQueueRequest::config() {
-  return std::move(config_);
-}
-
-ReportQueueProvider::CreateReportQueueCallback
-ReportQueueProvider::CreateReportQueueRequest::create_cb() {
-  return std::move(create_cb_);
-}
-
-// InitializingContext implementation.
-
-ReportQueueProvider::InitializingContext::InitializingContext(
-    InitCompleteCallback init_complete_cb,
-    scoped_refptr<ReportQueueProvider::InitializationStateTracker>
-        init_state_tracker)
-    : init_state_tracker_(init_state_tracker),
-      init_complete_cb_(std::move(init_complete_cb)) {}
-
-ReportQueueProvider::InitializingContext::~InitializingContext() = default;
-
-void ReportQueueProvider::InitializingContext::Start() {
-  init_state_tracker_->RequestLeaderPromotion(base::BindOnce(
-      &InitializingContext::OnLeaderPromotionResult, base::Unretained(this)));
-}
-
-void ReportQueueProvider::InitializingContext::OnLeaderPromotionResult(
-    StatusOr<
-        ReportQueueProvider::InitializationStateTracker::ReleaseLeaderCallback>
-        promo_result) {
-  if (!promo_result.ok()) {
-    Complete(promo_result.status());
-    return;
-  }
-
-  release_leader_cb_ = std::move(promo_result.ValueOrDie());
-
-  // Proceed with configuration asynchronously.
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&ReportQueueProvider::InitializingContext::OnStart,
-                     base::Unretained(this)));
-}
-
-void ReportQueueProvider::InitializingContext::Complete(Status status) {
-  if (status.error_code() == error::RESOURCE_EXHAUSTED) {
-    // There is already a leader initializing the ReportQueueProvider.
-    std::move(init_complete_cb_).Run(status);
-    delete this;
-    return;
-  }
-
-  if (status.ok()) {
-    // Export the results to the provider.
-    OnCompleted();
-  } else if (status.error_code() == error::ALREADY_EXISTS) {
-    // Between building this InitializingContext and attempting to promote to
-    // leader, the |ReportQueueProvider| was configured. Respond Ok but do not
-    // update the provider.
-    status = Status::StatusOK();
-  }
-
-  std::move(release_leader_cb_).Run(/*initialization_successful=*/status.ok());
-  std::move(init_complete_cb_).Run(status);
-  delete this;
-}
-
-// InitializationStateTracker implementation.
-
-ReportQueueProvider::InitializationStateTracker::InitializationStateTracker()
-    : sequenced_task_runner_(base::ThreadPool::CreateSequencedTaskRunner({})) {
-  DETACH_FROM_SEQUENCE(sequence_checker_);
-}
-
-ReportQueueProvider::InitializationStateTracker::~InitializationStateTracker() =
-    default;
 
 // static
-scoped_refptr<ReportQueueProvider::InitializationStateTracker>
-ReportQueueProvider::InitializationStateTracker::Create() {
-  return base::WrapRefCounted(
-      new ReportQueueProvider::InitializationStateTracker());
+StatusOr<std::unique_ptr<ReportQueue, base::OnTaskRunnerDeleter>>
+ReportQueueProvider::CreateSpeculativeQueue(
+    std::unique_ptr<ReportQueueConfiguration> config) {
+  if (!IsEncryptedReportingPipelineEnabled()) {
+    Status not_enabled = Status(
+        error::FAILED_PRECONDITION,
+        "The Encrypted Reporting Pipeline is not enabled. Please enable it on "
+        "the command line using --enable-features=EncryptedReportingPipeline");
+    VLOG(1) << not_enabled;
+    return base::unexpected(std::move(not_enabled));
+  }
+  // Instantiate speculative queue, bail out in case of an error.
+  CHECK(config);
+  ASSIGN_OR_RETURN(auto speculative_queue,
+                   GetInstance()->CreateNewSpeculativeQueue(
+                       {.destination = config->destination()}));
+  // Initiate underlying queue creation.
+  CreateReportQueueRequest::New(
+      std::move(config), speculative_queue->PrepareToAttachActualQueue());
+  return speculative_queue;
 }
 
-void ReportQueueProvider::InitializationStateTracker::GetInitState(
-    GetInitStateCallback get_init_state_cb) {
-  sequenced_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&ReportQueueProvider::InitializationStateTracker::
-                         OnIsInitializedRequest,
-                     this, std::move(get_init_state_cb)));
-}
-
-void ReportQueueProvider::InitializationStateTracker::RequestLeaderPromotion(
-    LeaderPromotionRequestCallback promo_request_cb) {
-  sequenced_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&ReportQueueProvider::InitializationStateTracker::
-                         OnLeaderPromotionRequest,
-                     this, std::move(promo_request_cb)));
-}
-
-void ReportQueueProvider::InitializationStateTracker::OnIsInitializedRequest(
-    GetInitStateCallback get_init_state_cb) {
+void ReportQueueProvider::CheckInitializationState() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](GetInitStateCallback get_init_state_cb, bool is_initialized) {
-            std::move(get_init_state_cb).Run(is_initialized);
-          },
-          std::move(get_init_state_cb), is_initialized_));
-}
-
-void ReportQueueProvider::InitializationStateTracker::OnLeaderPromotionRequest(
-    LeaderPromotionRequestCallback promo_request_cb) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  StatusOr<ReleaseLeaderCallback> result;
-  if (is_initialized_) {
-    result =
-        Status(error::ALREADY_EXISTS, "ReportClient is already configured");
-  } else if (has_promoted_initializing_context_) {
-    result = Status(error::RESOURCE_EXHAUSTED,
-                    "ReportClient already has a lead initializing context.");
-  } else {
-    has_promoted_initializing_context_ = true;
-    result = base::BindOnce(
-        &ReportQueueProvider::InitializationStateTracker::ReleaseLeader, this);
+  if (!storage_) {
+    // Provider not ready.
+    CHECK(!create_request_queue_.empty()) << "Request queue cannot be empty";
+    if (create_request_queue_.size() > 1) {
+      // More than one request in the queue - it means Storage creation has
+      // already been started.
+      return;
+    }
+    // Start Storage creation on an arbitrary thread. Upon completion resume on
+    // sequenced task runner.
+    base::ThreadPool::PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](StorageModuleCreateCallback storage_create_cb,
+               OnStorageModuleCreatedCallback on_storage_created_cb) {
+              storage_create_cb.Run(std::move(on_storage_created_cb));
+            },
+            storage_create_cb_,
+            base::BindPostTask(
+                sequenced_task_runner_,
+                base::BindOnce(&ReportQueueProvider::OnStorageModuleConfigured,
+                               GetWeakPtr()))));
+    return;
   }
 
-  base::ThreadPool::PostTask(
-      FROM_HERE, base::BindOnce(
-                     [](LeaderPromotionRequestCallback promo_request_cb,
-                        StatusOr<ReleaseLeaderCallback> result) {
-                       std::move(promo_request_cb).Run(std::move(result));
-                     },
-                     std::move(promo_request_cb), std::move(result)));
-}
-
-void ReportQueueProvider::InitializationStateTracker::ReleaseLeader(
-    bool initialization_successful) {
-  sequenced_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          &ReportQueueProvider::InitializationStateTracker::OnLeaderRelease,
-          this, initialization_successful));
-}
-
-void ReportQueueProvider::InitializationStateTracker::OnLeaderRelease(
-    bool initialization_successful) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (initialization_successful) {
-    is_initialized_ = true;
+  // Storage ready, create all report queues that were submitted.
+  // Note that `CreateNewQueue` call offsets heavy work to arbitrary threads.
+  while (!create_request_queue_.empty()) {
+    auto& report_queue_request = create_request_queue_.front();
+    CreateNewQueue(report_queue_request->release_config(),
+                   report_queue_request->release_create_cb());
+    create_request_queue_.pop();
   }
-  has_promoted_initializing_context_ = false;
 }
 
+void ReportQueueProvider::OnStorageModuleConfigured(
+    StatusOr<scoped_refptr<StorageModuleInterface>> storage_result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!storage_result.has_value()) {
+    // Storage creation failed, kill all requests.
+    while (!create_request_queue_.empty()) {
+      auto& report_queue_request = create_request_queue_.front();
+      std::move(report_queue_request->release_create_cb())
+          .Run(base::unexpected(
+              Status(error::UNAVAILABLE, "Unable to build a ReportQueue")));
+      base::UmaHistogramEnumeration(
+          reporting::kUmaUnavailableErrorReason,
+          UnavailableErrorReason::UNABLE_TO_BUILD_REPORT_QUEUE,
+          UnavailableErrorReason::MAX_VALUE);
+      create_request_queue_.pop();
+    }
+    return;
+  }
+
+  // Storage ready, create all report queues that were submitted.
+  // Note that `CreateNewQueue` call offsets heavy work to arbitrary threads.
+  CHECK(!storage_) << "Storage module already recorded";
+  OnInitCompleted();
+  storage_ = storage_result.value();
+  while (!create_request_queue_.empty()) {
+    auto& report_queue_request = create_request_queue_.front();
+    CreateNewQueue(report_queue_request->release_config(),
+                   report_queue_request->release_create_cb());
+    create_request_queue_.pop();
+  }
+}
+
+// static
+ReportQueueProvider* ReportQueueProvider::GetInstance() {
+  CHECK(g_report_queue_provider_instance)
+      << "Report queue provider not set yet";
+  return g_report_queue_provider_instance;
+}
 }  // namespace reporting

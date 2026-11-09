@@ -1,35 +1,37 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "services/network/public/cpp/network_quality_tracker.h"
+
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/deferred_sequenced_task_runner.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/deferred_sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
+#include "content/public/browser/network_service_util.h"
 #include "content/public/browser/storage_partition.h"
-#include "content/public/common/network_service_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "net/nqe/effective_connection_type.h"
 #include "net/nqe/network_quality_estimator.h"
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/features.h"
-#include "services/network/public/cpp/network_quality_tracker.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
 
 namespace network {
@@ -59,6 +61,10 @@ class TestNetworkQualityObserver
         effective_connection_type_(net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN) {
     tracker_->AddEffectiveConnectionTypeObserver(this);
   }
+
+  TestNetworkQualityObserver(const TestNetworkQualityObserver&) = delete;
+  TestNetworkQualityObserver& operator=(const TestNetworkQualityObserver&) =
+      delete;
 
   ~TestNetworkQualityObserver() override {
     tracker_->RemoveEffectiveConnectionTypeObserver(this);
@@ -106,18 +112,16 @@ class TestNetworkQualityObserver
   size_t num_notifications_;
   net::EffectiveConnectionType run_loop_wait_effective_connection_type_;
   std::unique_ptr<base::RunLoop> run_loop_;
-  NetworkQualityTracker* tracker_;
+  raw_ptr<NetworkQualityTracker> tracker_;
   net::EffectiveConnectionType effective_connection_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestNetworkQualityObserver);
 };
 
 }  // namespace
 
 class NetworkQualityTrackerBrowserTest : public InProcessBrowserTest {
  public:
-  NetworkQualityTrackerBrowserTest() {}
-  ~NetworkQualityTrackerBrowserTest() override {}
+  NetworkQualityTrackerBrowserTest() = default;
+  ~NetworkQualityTrackerBrowserTest() override = default;
 
   // Simulates a network quality change.
   void SimulateNetworkQualityChange(net::EffectiveConnectionType type) {
@@ -134,12 +138,12 @@ class NetworkQualityTrackerBrowserTest : public InProcessBrowserTest {
 
     mojo::ScopedAllowSyncCallForTesting allow_sync_call;
     content::StoragePartition* partition =
-        browser()->profile()->GetDefaultStoragePartition();
+        browser()->GetProfile()->GetDefaultStoragePartition();
     DCHECK(partition->GetNetworkContext());
     DCHECK(content::GetNetworkService());
 
     mojo::Remote<network::mojom::NetworkServiceTest> network_service_test;
-    content::GetNetworkService()->BindTestInterface(
+    content::GetNetworkService()->BindTestInterfaceForTesting(
         network_service_test.BindNewPipeAndPassReceiver());
     base::RunLoop run_loop;
     network_service_test->SimulateNetworkQualityChange(
@@ -187,10 +191,8 @@ IN_PROC_BROWSER_TEST_F(NetworkQualityTrackerBrowserTest,
 
   // Typical RTT and downlink values when effective connection type is 3G. Taken
   // from net::NetworkQualityEstimatorParams.
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(450),
-            network_quality_observer.http_rtt());
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(400),
-            network_quality_observer.transport_rtt());
+  EXPECT_EQ(base::Milliseconds(450), network_quality_observer.http_rtt());
+  EXPECT_EQ(base::Milliseconds(400), network_quality_observer.transport_rtt());
   EXPECT_EQ(400, network_quality_observer.downlink_bandwidth_kbps());
 }
 
@@ -213,10 +215,8 @@ IN_PROC_BROWSER_TEST_F(NetworkQualityTrackerBrowserTest,
             network_quality_observer.effective_connection_type());
   // Typical RTT and downlink values when effective connection type is 2G. Taken
   // from net::NetworkQualityEstimatorParams.
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(1800),
-            network_quality_observer.http_rtt());
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(1500),
-            network_quality_observer.transport_rtt());
+  EXPECT_EQ(base::Milliseconds(1800), network_quality_observer.http_rtt());
+  EXPECT_EQ(base::Milliseconds(1500), network_quality_observer.transport_rtt());
   EXPECT_EQ(75, network_quality_observer.downlink_bandwidth_kbps());
 }
 
@@ -250,16 +250,14 @@ IN_PROC_BROWSER_TEST_F(NetworkQualityTrackerBrowserTest,
   EXPECT_EQ(1u, network_quality_observer.num_notifications());
   // Typical RTT and downlink values when effective connection type is 3G. Taken
   // from net::NetworkQualityEstimatorParams.
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(450),
-            network_quality_observer.http_rtt());
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(400),
-            network_quality_observer.transport_rtt());
+  EXPECT_EQ(base::Milliseconds(450), network_quality_observer.http_rtt());
+  EXPECT_EQ(base::Milliseconds(400), network_quality_observer.transport_rtt());
   EXPECT_EQ(400, network_quality_observer.downlink_bandwidth_kbps());
 
   SimulateNetworkServiceCrash();
   // Flush the network interface to make sure it notices the crash.
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -269,10 +267,8 @@ IN_PROC_BROWSER_TEST_F(NetworkQualityTrackerBrowserTest,
   network_quality_observer.WaitForNotification(
       net::EFFECTIVE_CONNECTION_TYPE_2G);
   EXPECT_LE(2u, network_quality_observer.num_notifications());
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(1800),
-            network_quality_observer.http_rtt());
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(1500),
-            network_quality_observer.transport_rtt());
+  EXPECT_EQ(base::Milliseconds(1800), network_quality_observer.http_rtt());
+  EXPECT_EQ(base::Milliseconds(1500), network_quality_observer.transport_rtt());
   EXPECT_EQ(75, network_quality_observer.downlink_bandwidth_kbps());
 }
 

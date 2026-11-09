@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,9 @@
 using content::WebContents;
 
 ExternalProtocolObserver::ExternalProtocolObserver(WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
-}
+    : content::WebContentsObserver(web_contents) {}
 
-ExternalProtocolObserver::~ExternalProtocolObserver() {
-}
+ExternalProtocolObserver::~ExternalProtocolObserver() = default;
 
 void ExternalProtocolObserver::DidGetUserInteraction(
     const blink::WebInputEvent& event) {
@@ -21,5 +19,3 @@ void ExternalProtocolObserver::DidGetUserInteraction(
   if (event.GetType() != blink::WebInputEvent::Type::kGestureScrollBegin)
     ExternalProtocolHandler::PermitLaunchUrl();
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(ExternalProtocolObserver)

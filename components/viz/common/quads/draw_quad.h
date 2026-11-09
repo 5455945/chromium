@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,10 @@
 
 #include <stddef.h>
 
-#include "base/callback.h"
+#include <unordered_map>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "components/viz/common/quads/shared_quad_state.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/viz_common_export.h"
@@ -34,20 +37,21 @@ namespace viz {
 class VIZ_COMMON_EXPORT DrawQuad {
  public:
   enum class Material {
-    kInvalid,
-    kDebugBorder,
-    kPictureContent,
+    kInvalid = 0,
+    kDebugBorder = 1,
+    kPictureContent = 2,
     // This is the compositor, pre-aggregation, draw quad.
-    kCompositorRenderPass,
+    kCompositorRenderPass = 3,
     // This is the viz, post-aggregation, draw quad.
-    kAggregatedRenderPass,
-    kSolidColor,
-    kStreamVideoContent,
-    kSurfaceContent,
-    kTextureContent,
-    kTiledContent,
-    kYuvVideoContent,
-    kVideoHole,
+    kAggregatedRenderPass = 4,
+    kSolidColor = 5,
+    kSharedElement = 6,
+    // kStreamVideoContent = 7,  // Removed. Replaced with kTextureContent.
+    kSurfaceContent = 8,
+    kTextureContent = 9,
+    kTiledContent = 10,
+    // kYuvVideoContent = 11,  // Removed. kTextureContent used instead.
+    kVideoHole = 12,
     kMaxValue = kVideoHole
   };
 
@@ -72,7 +76,11 @@ class VIZ_COMMON_EXPORT DrawQuad {
   // Stores state common to a large bundle of quads; kept separate for memory
   // efficiency. There is special treatment to reconstruct these pointers
   // during serialization.
-  const SharedQuadState* shared_quad_state;
+  raw_ptr<const SharedQuadState> shared_quad_state;
+
+  // A resource defined by `TransferableResource` with the same `ResourceId`. If
+  // set to `kInvalidResourceId` then the quad is resourceless.
+  ResourceId resource_id = kInvalidResourceId;
 
   bool IsDebugQuad() const { return material == Material::kDebugBorder; }
 
@@ -116,39 +124,32 @@ class VIZ_COMMON_EXPORT DrawQuad {
     return IsLeftEdge() || IsTopEdge() || IsRightEdge() || IsBottomEdge();
   }
 
-  void AsValueInto(base::trace_event::TracedValue* value) const;
+  void AsValueInto(base::trace_event::TracedValue* value,
+                   const std::unordered_map<const SharedQuadState*, size_t>&
+                       sqs_pointer_to_index_map,
+                   const std::unordered_map<ResourceId, size_t>&
+                       resource_id_to_index_map) const;
 
-  struct VIZ_COMMON_EXPORT Resources {
-    enum : size_t { kMaxResourceIdCount = 4 };
-    Resources();
-
-    ResourceId* begin() { return ids; }
-    ResourceId* end() {
-      DCHECK_LE(count, kMaxResourceIdCount);
-      return ids + count;
-    }
-
-    const ResourceId* begin() const { return ids; }
-    const ResourceId* end() const {
-      DCHECK_LE(count, kMaxResourceIdCount);
-      return ids + count;
-    }
-
-    uint32_t count;
-    ResourceId ids[kMaxResourceIdCount];
-  };
-
-  Resources resources;
+  template <typename T>
+  const T* DynamicCast() const {
+    return this->material == T::kMaterial ? static_cast<const T*>(this)
+                                          : nullptr;
+  }
 
  protected:
   DrawQuad();
 
-  void SetAll(const SharedQuadState* shared_quad_state,
-              Material material,
-              const gfx::Rect& rect,
-              const gfx::Rect& visible_rect,
-              bool needs_blending);
+  void SetAll(const SharedQuadState* quad_state,
+              Material m,
+              const gfx::Rect& r,
+              const gfx::Rect& visible_r,
+              bool blending);
   virtual void ExtendValue(base::trace_event::TracedValue* value) const = 0;
+
+ private:
+  int ResourceIdIndex(
+      const std::unordered_map<ResourceId, size_t>& resource_id_to_index_map,
+      ResourceId id) const;
 };
 
 }  // namespace viz

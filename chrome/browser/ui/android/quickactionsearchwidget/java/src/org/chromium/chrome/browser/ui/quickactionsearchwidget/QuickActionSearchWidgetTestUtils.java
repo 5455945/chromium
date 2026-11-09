@@ -1,61 +1,79 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.ui.quickactionsearchwidget;
 
+import static org.junit.Assert.assertTrue;
+
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
+
 import android.app.Activity;
-import android.support.test.InstrumentationRegistry;
 import android.view.View;
 
-import org.junit.Assert;
+import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.test.runner.lifecycle.Stage;
 
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.BaseActivityTestRule;
+import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Matchers;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.searchwidget.SearchActivity;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.test.util.ActivityTestUtils;
+import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
-/**
- * Util class for testing the Quick Action Search Widget.
- */
+/** Util class for testing the Quick Action Search Widget. */
 class QuickActionSearchWidgetTestUtils {
     /**
-     * Asserts that {@link SearchActivity} is launched after a given {@link Runnable} is ran.
+     * Asserts that {@link SearchActivity} is launched in the correct mode after a given {@link
+     * Runnable} is ran.
      *
-     * @param action the runnable such that after running {@link SearchActivity} is expected to be
-     *         launched.
+     * @param testRule BaseActivityTestRule used to start an action and monitor for changes.
+     * @param action The runnable such that after it is ran, {@link SearchActivity} is expected to
+     *     be launched.
+     * @param shouldActivityLaunchVoiceMode Whether the search activity is expected to launched in
+     *     voice mode or not.
      */
-    static void assertSearchActivityLaunchedAfterAction(Runnable action) {
-        Activity activity = ActivityTestUtils.waitForActivity(
-                InstrumentationRegistry.getInstrumentation(), SearchActivity.class, action);
-        Assert.assertNotNull(activity);
+    static void assertSearchActivityLaunchedAfterAction(
+            BaseActivityTestRule<Activity> testRule,
+            final Runnable action,
+            final boolean shouldActivityLaunchVoiceMode) {
+        testRule.setActivity(
+                ApplicationTestUtils.waitForActivityWithClass(
+                        SearchActivity.class, Stage.CREATED, action));
     }
 
     /**
      * Asserts that {@link ChromeTabbedActivity} is launched with the URL chrome://dino after a
      * given {@link Runnable} is ran.
      *
+     * @param testRule BaseActivityTestRule used to start an action and monitor for changes.
      * @param action the runnable such that after running {@link ChromeTabbedActivity} is expected
-     *         to be launched.
+     *     to be launched.
      */
-    static void assertDinoGameLaunchedAfterAction(Runnable action) {
-        final ChromeTabbedActivity activity = ActivityTestUtils.waitForActivity(
-                InstrumentationRegistry.getInstrumentation(), ChromeTabbedActivity.class, action);
+    static void assertDinoGameLaunchedAfterAction(
+            BaseActivityTestRule<Activity> testRule, Runnable action) {
+        ChromeTabbedActivity activity =
+                ApplicationTestUtils.waitForActivityWithClass(
+                        ChromeTabbedActivity.class, Stage.CREATED, action);
+        testRule.setActivity(activity);
+        ApplicationTestUtils.waitForActivityState(activity, Stage.RESUMED);
+        ChromeActivityTestRule.waitForActivityNativeInitializationComplete(activity);
 
-        Assert.assertNotNull(activity);
-
-        CriteriaHelper.pollUiThread(() -> {
-            Tab activityTab = activity.getActivityTab();
-            Criteria.checkThat(activityTab, Matchers.notNullValue());
-            Criteria.checkThat(activityTab.getUrl(), Matchers.notNullValue());
-            Criteria.checkThat(activityTab.getUrl().getSpec(),
-                    Matchers.startsWith(UrlConstants.CHROME_DINO_URL));
-        });
+        CriteriaHelper.pollUiThreadLongTimeout(
+                "Dino tab not launched",
+                () -> {
+                    Tab activityTab = activity.getActivityTab();
+                    Criteria.checkThat(activityTab, Matchers.notNullValue());
+                    Criteria.checkThat(activityTab.getUrl(), Matchers.notNullValue());
+                    Criteria.checkThat(
+                            activityTab.getUrl().getSpec(),
+                            Matchers.equalTo(UrlConstants.CHROME_DINO_URL));
+                });
     }
 
     /**
@@ -65,7 +83,36 @@ class QuickActionSearchWidgetTestUtils {
      * @param clickTarget the id of the view to click on.
      */
     static void clickOnView(final View view, final int clickTarget) {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { view.findViewById(clickTarget).performClick(); });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    view.findViewById(clickTarget).performClick();
+                });
+    }
+
+    /**
+     * Asserts that {@link ChromeTabbedActivity} is launched in an incognito mode after a given
+     * {@link Runnable} is ran.
+     *
+     * @param testRule BaseActivityTestRule used to start an action and monitor for changes.
+     * @param action the runnable such that after running {@link ChromeTabbedActivity} is expected
+     *     to be launched.
+     */
+    public static void assertIncognitoModeLaunchedAfterAction(
+            BaseActivityTestRule<Activity> testRule, Runnable action) {
+        ChromeTabbedActivity activity =
+                ApplicationTestUtils.waitForActivityWithClass(
+                        ChromeTabbedActivity.class, Stage.CREATED, action);
+        testRule.setActivity(activity);
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Tab activityTab = activity.getActivityTab();
+                    assertTrue(activity.getTabModelSelector().isIncognitoSelected());
+                    Criteria.checkThat(activityTab, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            activityTab.getUrl().getSpec(),
+                            Matchers.startsWith(getOriginalNativeNtpUrl()));
+                });
     }
 }

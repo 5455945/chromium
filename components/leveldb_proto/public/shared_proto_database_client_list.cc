@@ -1,6 +1,7 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "components/leveldb_proto/public/shared_proto_database_client_list.h"
 
@@ -15,12 +16,9 @@
 
 namespace leveldb_proto {
 
-
 // static
 std::string SharedProtoDatabaseClientList::ProtoDbTypeToString(
     ProtoDbType db_type) {
-  // Please update the suffix LevelDBClients in histograms.xml to match the
-  // strings returned here.
   switch (db_type) {
     case ProtoDbType::TEST_DATABASE0:
       return "TestDatabase0";
@@ -102,9 +100,38 @@ std::string SharedProtoDatabaseClientList::ProtoDbTypeToString(
       return "SignalDatabase";
     case ProtoDbType::SIGNAL_STORAGE_CONFIG_DATABASE:
       return "SignalStorageConfigDatabase";
+    case ProtoDbType::VIDEO_TUTORIALS_V2_DATABASE:
+      return "VideoTutorialsV2Database";
+    case ProtoDbType::COUPON_DATABASE:
+      return "CouponDatabase";
+    case ProtoDbType::PAGE_ENTITY_METADATA_STORE:
+      return "PageEntityMetadataDatabase";
+    case ProtoDbType::WEBRTC_VIDEO_STATS_DB:
+      return "WebrtcVideoStatsDB";
+    case ProtoDbType::PERSISTENT_ORIGIN_TRIALS:
+      return "PersistentOriginTrials";
+    case ProtoDbType::NEARBY_PRESENCE_LOCAL_PUBLIC_CREDENTIAL_DATABASE:
+      return "NearbyPresenceLocalPublicCredentialDatabase";
+    case ProtoDbType::NEARBY_PRESENCE_PRIVATE_CREDENTIAL_DATABASE:
+      return "NearbyPresencePrivateCredentialDatabase";
+    case ProtoDbType::NEARBY_PRESENCE_REMOTE_PUBLIC_CREDENTIAL_DATABASE:
+      return "NearbyPresenceRemotePublicCredentialDatabase";
+    case ProtoDbType::DISCOUNTS_DATABASE:
+      return "DiscountsDatabase";
+    case ProtoDbType::COMMERCE_PARCEL_TRACKING_DATABASE:
+      return "CommerceParcelTrackingDatabase";
+    case ProtoDbType::CLIENT_CERTIFICATES_DATABASE:
+      return "ClientCertificatesDatabase";
+    case ProtoDbType::AUTOFILL_AI_MODEL_CACHE:
+      return "AutofillAiModelCache";
+    case ProtoDbType::DISCOUNT_INFOS_DATABASE:
+      return "DiscountInfosDatabase";
+    case ProtoDbType::NOTIFICATION_TELEMETRY_STORE:
+      return "NotificationTelemetryStore";
+    case ProtoDbType::RECORD_REPLAY_STORE:
+      return "RecordReplay";
     case ProtoDbType::LAST:
       NOTREACHED();
-      return std::string();
   }
 }
 

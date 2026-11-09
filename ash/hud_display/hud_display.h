@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,23 @@
 #define ASH_HUD_DISPLAY_HUD_DISPLAY_H_
 
 #include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "ui/views/view.h"
 
 namespace ash {
 namespace hud_display {
 
-enum class DisplayMode;
+enum class HUDDisplayMode;
 class GraphsContainerView;
 class HUDHeaderView;
 class HUDSettingsView;
 
 // HUDDisplayView class can be used to display a system monitoring overview.
 class HUDDisplayView : public views::View {
- public:
-  METADATA_HEADER(HUDDisplayView);
+  METADATA_HEADER(HUDDisplayView, views::View)
 
+ public:
   HUDDisplayView();
   HUDDisplayView(const HUDDisplayView&) = delete;
   HUDDisplayView& operator=(const HUDDisplayView&) = delete;
@@ -42,7 +43,7 @@ class HUDDisplayView : public views::View {
   int NonClientHitTest(const gfx::Point& point);
 
   // Changes UI display mode.
-  void SetDisplayMode(const DisplayMode display_mode);
+  void SetDisplayMode(const HUDDisplayMode display_mode);
 
   // Callback from SettingsButton.
   void OnSettingsToggle();
@@ -58,9 +59,9 @@ class HUDDisplayView : public views::View {
   ASH_EXPORT void ToggleSettingsForTesting();
 
  private:
-  HUDHeaderView* header_view_ = nullptr;             // not owned
-  GraphsContainerView* graphs_container_ = nullptr;  // not owned
-  HUDSettingsView* settings_view_ = nullptr;         // not owned
+  raw_ptr<HUDHeaderView> header_view_ = nullptr;             // not owned
+  raw_ptr<GraphsContainerView> graphs_container_ = nullptr;  // not owned
+  raw_ptr<HUDSettingsView> settings_view_ = nullptr;         // not owned
 
   SEQUENCE_CHECKER(ui_sequence_checker_);
 };

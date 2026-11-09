@@ -1,20 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/accessibility/accessibility_browsertest.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
-#include "content/browser/accessibility/browser_accessibility.h"
+
+#include "base/check.h"
+#include "base/functional/callback_helpers.h"
+#include "base/strings/escape.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/accessibility_notification_waiter.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
-#include "net/base/escape.h"
+#include "ui/accessibility/ax_mode.h"
+#include "ui/accessibility/platform/browser_accessibility.h"
 
 namespace content {
 
@@ -30,21 +33,37 @@ gfx::NativeViewAccessible AccessibilityBrowserTest::GetRendererAccessible() {
   return web_contents->GetRenderWidgetHostView()->GetNativeViewAccessible();
 }
 
+AccessibilityBrowserTest::AccessibilityBrowserTest() = default;
+
+AccessibilityBrowserTest::~AccessibilityBrowserTest() = default;
+
+void AccessibilityBrowserTest::SetInitialAccessibilityMode(
+    ui::AXMode accessibility_mode) {
+  CHECK(!accessibility_mode_.has_value())
+      << "Initial mode may only be set once, and only before any loads.";
+  accessibility_mode_.emplace(accessibility_mode);
+}
+
+void AccessibilityBrowserTest::TearDownOnMainThread() {
+  accessibility_mode_.reset();
+}
+
 void AccessibilityBrowserTest::ExecuteScript(const std::u16string& script) {
-  shell()->web_contents()->GetMainFrame()->ExecuteJavaScriptForTests(
-      script, base::NullCallback());
+  shell()->web_contents()->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
+      script, base::NullCallback(), ISOLATED_WORLD_ID_GLOBAL);
 }
 
 void AccessibilityBrowserTest::LoadInitialAccessibilityTreeFromHtml(
-    const std::string& html,
-    ui::AXMode accessibility_mode) {
+    const std::string& html) {
+  if (!accessibility_mode_) {
+    accessibility_mode_.emplace(ui::kAXModeDefaultForTests);
+  }
   AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                         accessibility_mode,
                                          ax::mojom::Event::kLoadComplete);
   GURL html_data_url("data:text/html," +
-                     net::EscapeQueryParamValue(html, false));
+                     base::EscapeQueryParamValue(html, false));
   EXPECT_TRUE(NavigateToURL(shell(), html_data_url));
-  waiter.WaitForNotification();
+  ASSERT_TRUE(waiter.WaitForNotification());
 }
 
 void AccessibilityBrowserTest::LoadInputField() {
@@ -55,9 +74,22 @@ void AccessibilityBrowserTest::LoadInputField() {
             <form>
               <label for="textField">Browser name:</label>
               <input type="text" id="textField" name="name" value=")HTML") +
-                                       net::EscapeForHTML(kInputContents) +
+                                       base::EscapeForHTML(kInputContents) +
                                        std::string(R"HTML(">
             </form>
+          </body>
+          </html>)HTML"));
+}
+
+void AccessibilityBrowserTest::LoadScrollableInputField(std::string type) {
+  LoadInitialAccessibilityTreeFromHtml(
+      std::string(
+          R"HTML(<!DOCTYPE html>
+          <html>
+          <body>
+            <input type=")HTML") +
+      type + std::string(R"HTML(" style="width: 150px;" value=")HTML") +
+      base::EscapeForHTML(kInputContents) + std::string(R"HTML(">
           </body>
           </html>)HTML"));
 }
@@ -67,14 +99,13 @@ void AccessibilityBrowserTest::LoadTextareaField() {
       <html>
       <body>
                     <textarea rows="3" cols="60">)HTML") +
-                                       net::EscapeForHTML(kTextareaContents) +
+                                       base::EscapeForHTML(kTextareaContents) +
                                        std::string(R"HTML(</textarea>
           </body>
           </html>)HTML"));
 }
 
-void AccessibilityBrowserTest::LoadSampleParagraph(
-    ui::AXMode accessibility_mode) {
+void AccessibilityBrowserTest::LoadSampleParagraph() {
   LoadInitialAccessibilityTreeFromHtml(
       R"HTML(<!DOCTYPE html>
       <html>
@@ -85,8 +116,7 @@ void AccessibilityBrowserTest::LoadSampleParagraph(
               decision-makers."
           </p>
       </body>
-      </html>)HTML",
-      accessibility_mode);
+      </html>)HTML");
 }
 
 // Loads a page with a content editable whose text overflows its height.
@@ -100,8 +130,8 @@ void AccessibilityBrowserTest::LoadSampleParagraphInScrollableEditable() {
       </p>)HTML");
 
   AccessibilityNotificationWaiter selection_waiter(
-      shell()->web_contents(), ui::kAXModeComplete,
-      ax::mojom::Event::kTextSelectionChanged);
+      shell()->web_contents(),
+      ui::AXEventGenerator::Event::TEXT_SELECTION_CHANGED);
   ExecuteScript(
       u"let selection=document.getSelection();"
       u"let range=document.createRange();"
@@ -111,13 +141,12 @@ void AccessibilityBrowserTest::LoadSampleParagraphInScrollableEditable() {
       u"range.setEnd(editable.lastChild, 0);"
       u"selection.removeAllRanges();"
       u"selection.addRange(range);");
-  selection_waiter.WaitForNotification();
+  ASSERT_TRUE(selection_waiter.WaitForNotification());
 }
 
 // Loads a page with a paragraph of sample text which is below the
 // bottom of the screen.
-void AccessibilityBrowserTest::LoadSampleParagraphInScrollableDocument(
-    ui::AXMode accessibility_mode) {
+void AccessibilityBrowserTest::LoadSampleParagraphInScrollableDocument() {
   LoadInitialAccessibilityTreeFromHtml(
       R"HTML(<!DOCTYPE html>
       <html>
@@ -129,8 +158,7 @@ void AccessibilityBrowserTest::LoadSampleParagraphInScrollableDocument(
             decision-makers."
         </p>
       </body>
-      </html>)HTML",
-      accessibility_mode);
+      </html>)HTML");
 }
 
 // static

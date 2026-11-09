@@ -1,12 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/paint/paint_cache.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
-#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/synchronization/lock.h"
 
@@ -16,7 +16,7 @@ namespace {
 template <typename T>
 void EraseFromMap(T* map, size_t n, const volatile PaintCacheId* ids) {
   for (size_t i = 0; i < n; ++i) {
-    auto id = ids[i];
+    auto id = UNSAFE_TODO(ids[i]);
     map->erase(id);
   }
 }
@@ -39,9 +39,9 @@ void ClientPaintCache::Put(PaintCacheDataType type,
   if (max_budget_ == kNoCachingBudget)
     return;
   auto key = std::make_pair(type, id);
-  DCHECK(cache_map_.Peek(key) == cache_map_.end());
+  CHECK(cache_map_.Peek(key) == cache_map_.end());
 
-  pending_entries_->push_back(key);
+  pending_entries_.push_back(key);
   cache_map_.Put(key, size);
   bytes_used_ += size;
 }
@@ -54,20 +54,20 @@ void ClientPaintCache::EraseFromMap(Iterator it) {
 }
 
 void ClientPaintCache::FinalizePendingEntries() {
-  pending_entries_->clear();
+  pending_entries_.clear();
 }
 
 void ClientPaintCache::AbortPendingEntries() {
   for (const auto& entry : pending_entries_) {
     auto it = cache_map_.Peek(entry);
-    DCHECK(it != cache_map_.end());
+    CHECK(it != cache_map_.end());
     EraseFromMap(it);
   }
-  pending_entries_->clear();
+  pending_entries_.clear();
 }
 
 void ClientPaintCache::Purge(PurgedData* purged_data) {
-  DCHECK(pending_entries_->empty());
+  DCHECK(pending_entries_.empty());
 
   while (bytes_used_ > max_budget_) {
     auto it = cache_map_.rbegin();
@@ -80,7 +80,7 @@ void ClientPaintCache::Purge(PurgedData* purged_data) {
 }
 
 bool ClientPaintCache::PurgeAll() {
-  DCHECK(pending_entries_->empty());
+  DCHECK(pending_entries_.empty());
 
   bool has_data = !cache_map_.empty();
   cache_map_.Clear();
@@ -91,17 +91,13 @@ bool ClientPaintCache::PurgeAll() {
 ServicePaintCache::ServicePaintCache() = default;
 ServicePaintCache::~ServicePaintCache() = default;
 
-void ServicePaintCache::PutTextBlob(PaintCacheId id, sk_sp<SkTextBlob> blob) {
-  cached_blobs_.emplace(id, std::move(blob));
-}
-
-sk_sp<SkTextBlob> ServicePaintCache::GetTextBlob(PaintCacheId id) const {
-  auto it = cached_blobs_.find(id);
-  return it == cached_blobs_.end() ? nullptr : it->second;
-}
-
 void ServicePaintCache::PutPath(PaintCacheId id, SkPath path) {
   cached_paths_.emplace(id, std::move(path));
+}
+
+void ServicePaintCache::PutEffect(PaintCacheId id,
+                                  sk_sp<SkRuntimeEffect> effect) {
+  cached_effects_.emplace(id, std::move(effect));
 }
 
 bool ServicePaintCache::GetPath(PaintCacheId id, SkPath* path) const {
@@ -112,15 +108,25 @@ bool ServicePaintCache::GetPath(PaintCacheId id, SkPath* path) const {
   return true;
 }
 
+bool ServicePaintCache::GetEffect(PaintCacheId id,
+                                  sk_sp<SkRuntimeEffect>* effect) const {
+  auto it = cached_effects_.find(id);
+  if (it == cached_effects_.end()) {
+    return false;
+  }
+  *effect = it->second;
+  return true;
+}
+
 void ServicePaintCache::Purge(PaintCacheDataType type,
                               size_t n,
                               const volatile PaintCacheId* ids) {
   switch (type) {
-    case PaintCacheDataType::kTextBlob:
-      EraseFromMap(&cached_blobs_, n, ids);
-      return;
     case PaintCacheDataType::kPath:
       EraseFromMap(&cached_paths_, n, ids);
+      return;
+    case PaintCacheDataType::kSkRuntimeEffect:
+      EraseFromMap(&cached_effects_, n, ids);
       return;
   }
 
@@ -128,8 +134,12 @@ void ServicePaintCache::Purge(PaintCacheDataType type,
 }
 
 void ServicePaintCache::PurgeAll() {
-  cached_blobs_.clear();
   cached_paths_.clear();
+  cached_effects_.clear();
+}
+
+bool ServicePaintCache::IsEmpty() const {
+  return cached_paths_.empty() && cached_effects_.empty();
 }
 
 }  // namespace cc

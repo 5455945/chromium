@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,27 +12,35 @@
 
 namespace base {
 
-SingleThreadTaskExecutor::SingleThreadTaskExecutor(MessagePumpType type)
-    : SingleThreadTaskExecutor(type, MessagePump::Create(type)) {
+SingleThreadTaskExecutor::SingleThreadTaskExecutor(MessagePumpType type,
+                                                   bool is_main_thread)
+    : SingleThreadTaskExecutor(type,
+                               MessagePump::Create(type),
+                               is_main_thread) {
   DCHECK_NE(type, MessagePumpType::CUSTOM);
 }
 
 SingleThreadTaskExecutor::SingleThreadTaskExecutor(
-    std::unique_ptr<MessagePump> pump)
-    : SingleThreadTaskExecutor(MessagePumpType::CUSTOM, std::move(pump)) {}
+    std::unique_ptr<MessagePump> pump,
+    bool is_main_thread)
+    : SingleThreadTaskExecutor(MessagePumpType::CUSTOM,
+                               std::move(pump),
+                               is_main_thread) {}
 
 SingleThreadTaskExecutor::SingleThreadTaskExecutor(
     MessagePumpType type,
-    std::unique_ptr<MessagePump> pump)
+    std::unique_ptr<MessagePump> pump,
+    bool is_main_thread)
     : sequence_manager_(sequence_manager::CreateUnboundSequenceManager(
           sequence_manager::SequenceManager::Settings::Builder()
               .SetMessagePumpType(type)
+              .SetIsMainThread(is_main_thread)
               .Build())),
-      default_task_queue_(sequence_manager_->CreateTaskQueue(
-          sequence_manager::TaskQueue::Spec("default_tq"))),
-      type_(type),
-      simple_task_executor_(task_runner()) {
-  sequence_manager_->SetDefaultTaskRunner(default_task_queue_->task_runner());
+      default_task_queue_(
+          sequence_manager_->CreateTaskQueue(sequence_manager::TaskQueue::Spec(
+              sequence_manager::QueueName::DEFAULT_TQ))),
+      type_(type) {
+  sequence_manager_->SetDefaultTaskQueue(default_task_queue_.get());
   sequence_manager_->BindToMessagePump(std::move(pump));
 }
 
@@ -43,7 +51,7 @@ SingleThreadTaskExecutor::task_runner() const {
   return default_task_queue_->task_runner();
 }
 
-void SingleThreadTaskExecutor::SetWorkBatchSize(size_t work_batch_size) {
+void SingleThreadTaskExecutor::SetWorkBatchSize(int work_batch_size) {
   sequence_manager_->SetWorkBatchSize(work_batch_size);
 }
 

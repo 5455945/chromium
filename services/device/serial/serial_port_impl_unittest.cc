@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -67,11 +67,11 @@ class FakeSerialIoHandler : public SerialIoHandler {
   void WriteImpl() override {}
 
   void CancelReadImpl() override {
-    QueueReadCompleted(/*bytes_read=*/0, mojom::SerialReceiveError::NONE);
+    ReadCompleted(/*bytes_read=*/0, mojom::SerialReceiveError::NONE);
   }
 
   void CancelWriteImpl() override {
-    QueueWriteCompleted(/*bytes_written=*/0, mojom::SerialSendError::NONE);
+    WriteCompleted(/*bytes_written=*/0, mojom::SerialSendError::NONE);
   }
 
   bool ConfigurePortImpl() override {
@@ -108,7 +108,7 @@ class SerialPortImplTest : public DeviceServiceTestBase {
         std::make_unique<mojom::SerialPortConnectionWatcher>(),
         watcher_remote.InitWithNewPipeAndPassReceiver());
     base::RunLoop loop;
-    SerialPortImpl::OpenForTesting(
+    SerialPortImpl::Open(
         io_handler, mojom::SerialConnectionOptions::New(), mojo::NullRemote(),
         std::move(watcher_remote),
         base::BindLambdaForTesting(
@@ -227,7 +227,7 @@ TEST_F(SerialPortImplTest, OpenFailure) {
       std::make_unique<mojom::SerialPortConnectionWatcher>(),
       watcher_remote.InitWithNewPipeAndPassReceiver());
   base::RunLoop loop;
-  SerialPortImpl::OpenForTesting(
+  SerialPortImpl::Open(
       io_handler, mojom::SerialConnectionOptions::New(), mojo::NullRemote(),
       std::move(watcher_remote),
       base::BindLambdaForTesting(
@@ -322,7 +322,7 @@ TEST_F(SerialPortImplTest, Close) {
   CreatePort(&serial_port, &watcher);
 
   base::RunLoop loop;
-  serial_port->Close(loop.QuitClosure());
+  serial_port->Close(/*flush=*/true, loop.QuitClosure());
   loop.Run();
 }
 

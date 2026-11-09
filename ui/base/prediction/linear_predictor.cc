@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -109,7 +109,8 @@ gfx::PointF LinearPredictor::GeneratePredictionFirstOrder(float pred_dt) const {
 
 gfx::PointF LinearPredictor::GeneratePredictionSecondOrder(
     float pred_dt) const {
-  DCHECK(equation_order_ == EquationOrder::kSecondOrder);
+  CHECK(equation_order_ == EquationOrder::kSecondOrder,
+        base::NotFatalUntil::M163);
 
   gfx::Vector2dF acceleration =
       ScaleVector2d(cur_velocity_ - last_velocity_, 1.0 / events_dt_);

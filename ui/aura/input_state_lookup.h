@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,9 @@ class AURA_EXPORT InputStateLookup {
 
   // Returns true if any mouse button is down.
   virtual bool IsMouseButtonDown() const = 0;
+
+  // Returns true if the left mouse button is down.
+  virtual bool IsLeftMouseButtonDown() const = 0;
 };
 
 }  // namespace aura

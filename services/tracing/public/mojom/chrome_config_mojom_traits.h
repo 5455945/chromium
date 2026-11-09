@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 
 #include <string>
 
+#include "base/notreached.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom-shared.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/chrome_config.h"
@@ -31,19 +32,9 @@ class StructTraits<tracing::mojom::ChromeConfigDataView,
     return src.convert_to_legacy_json();
   }
 
-  static tracing::mojom::TracingClientPriority client_priority(
+  static bool event_package_name_filter_enabled(
       const perfetto::ChromeConfig& src) {
-    switch (src.client_priority()) {
-      case perfetto::protos::gen::ChromeConfig::BACKGROUND:
-        return tracing::mojom::TracingClientPriority::kBackground;
-      case perfetto::protos::gen::ChromeConfig::USER_INITIATED:
-        return tracing::mojom::TracingClientPriority::kUserInitiated;
-      case perfetto::protos::gen::ChromeConfig::UNKNOWN:
-        return tracing::mojom::TracingClientPriority::kUnknown;
-      default:
-        NOTREACHED();
-        return tracing::mojom::TracingClientPriority::kUnknown;
-    }
+    return src.event_package_name_filter_enabled();
   }
 
   static bool Read(tracing::mojom::ChromeConfigDataView data,

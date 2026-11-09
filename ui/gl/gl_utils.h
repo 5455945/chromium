@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,67 +7,100 @@
 #ifndef UI_GL_GL_UTILS_H_
 #define UI_GL_GL_UTILS_H_
 
+#include <string_view>
+
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "ui/gl/gl_export.h"
+#include "ui/gl/gpu_preference.h"
 
-#if defined(USE_OZONE)
-#include "ui/ozone/buildflags.h"
-#if BUILDFLAG(OZONE_PLATFORM_X11)
-#define USE_OZONE_PLATFORM_X11
-#endif
-#endif
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <dxgi1_6.h>
 #endif
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/files/scoped_file.h"
-#endif
-
-#if defined(USE_X11) || defined(USE_OZONE_PLATFORM_X11)
-#include "ui/gfx/gpu_extra_info.h"  // nogncheck
 #endif
 
 namespace gl {
 class GLApi;
+class GLDisplayEGL;
+class GLDisplay;
 
 GL_EXPORT void Crash();
 GL_EXPORT void Hang();
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 GL_EXPORT base::ScopedFD MergeFDs(base::ScopedFD a, base::ScopedFD b);
+
+// Disable ANGLE and force to use native or other GL implementation.
+GL_EXPORT void DisableANGLE();
 #endif
 
 GL_EXPORT bool UsePassthroughCommandDecoder(
     const base::CommandLine* command_line);
 
-GL_EXPORT bool PassthroughCommandDecoderSupported();
+// Defines a set of workarounds that can be passed to ui/gl using the
+// SetGlWorkarounds function below.
+struct GlWorkarounds {
+  bool disable_d3d11 = false;
+  bool disable_direct_composition_video_overlays = false;
+  bool disable_vp_auto_hdr = false;
+};
 
-#if defined(OS_WIN)
-GL_EXPORT bool AreOverlaysSupportedWin();
+// Obtains the global GlWorkarounds. For use by ui/gl code to determine which
+// workarounds have been set by a call to SetGlWorkarounds.
+GL_EXPORT const GlWorkarounds& GetGlWorkarounds();
 
-// Calculates present during in 100 ns from number of frames per second.
-GL_EXPORT unsigned int FrameRateToPresentDuration(float frame_rate);
+// Sets the GlWorkarounds. This should be called from the code hosting ui/gl.
+GL_EXPORT void SetGlWorkarounds(const GlWorkarounds& workarounds);
 
-GL_EXPORT UINT GetOverlaySupportFlags(DXGI_FORMAT format);
+#if BUILDFLAG(IS_WIN)
+// Labels swapchain with the name_prefix and its buffers with the string
+// name_prefix + _Buffer_ + <buffer_number>.
+GL_EXPORT void LabelSwapChainAndBuffers(IDXGISwapChain3* swap_chain,
+                                        const char* name_prefix);
 
-// BufferCount for the root surface swap chain.
-GL_EXPORT unsigned int DirectCompositionRootSurfaceBufferCount();
-
-// Whether to use full damage when direct compostion root surface presents.
-// This function is thread safe.
-GL_EXPORT bool ShouldForceDirectCompositionRootSurfaceFullDamage();
+// Same as LabelSwapChainAndBuffers, but only does the buffers. Used for resize
+// operations.
+GL_EXPORT void LabelSwapChainBuffers(IDXGISwapChain3* swap_chain,
+                                     const char* name_prefix);
 #endif
 
-#if defined(USE_X11) || defined(USE_OZONE_PLATFORM_X11)
-// Collects the GPU extra info on X11 platforms.
-// |enable_native_gpu_memory_buffers| should be taken from GpuPreferences.
-// TODO(crbug/1096425) remove this once Ozone is default on Linux.
-GL_EXPORT void CollectX11GpuExtraInfo(bool enable_native_gpu_memory_buffer,
-                                      gfx::GpuExtraInfo& info);
-#endif
+// The following functions expose functionalities from GLDisplayManagerEGL
+// and GLDisplayManagerX11 for access outside the ui/gl module. This is because
+// the two GLDisplayManager classes are singletons and in component build,
+// calling GetInstance() directly returns different instances in different
+// components.
+// Add an entry <preference, system_device_id> to GLDisplayManagerEGL.
+GL_EXPORT void SetGpuPreferenceEGL(GpuPreference preference,
+                                   uint64_t system_device_id);
+
+// Return the value for the entry at <preference> from GLDisplayManagerEGL.
+GL_EXPORT uint64_t GetSystemDeviceIdEGLForTesting(GpuPreference preference);
+
+// Remove the entry at <preference> from GLDisplayManagerEGL.
+GL_EXPORT void RemoveGpuPreferenceEGL(GpuPreference preference);
+
+// Query the default GLDisplay. May return either a GLDisplayEGL or
+// GLDisplayX11.
+GL_EXPORT GLDisplay* GetDefaultDisplay();
+
+// Query the GLDisplay by |gpu_preference|. May return either a GLDisplayEGL or
+// GLDisplayX11.
+GL_EXPORT GLDisplay* GetDisplay(GpuPreference gpu_preference);
+
+// Query the GLDisplay by |gpu_preference| and |display_key|. May return either
+// a GLDisplayEGL or GLDisplayX11.
+GL_EXPORT GLDisplay* GetDisplay(GpuPreference gpu_preference,
+                                gl::DisplayKey display_key);
+
+// Query the default GLDisplayEGL.
+GL_EXPORT GLDisplayEGL* GetDefaultDisplayEGL();
+
+// Query the GLDisplayEGL by |gpu_preference|.
+GL_EXPORT GLDisplayEGL* GetDisplayEGL(GpuPreference gpu_preference);
 
 // Temporarily allows compilation of shaders that use the
 // ARB_texture_rectangle/ANGLE_texture_rectangle extension. We don't want to
@@ -82,7 +115,7 @@ class GL_EXPORT ScopedEnableTextureRectangleInShaderCompiler {
       const ScopedEnableTextureRectangleInShaderCompiler&) = delete;
 
   // This class is a no-op except on macOS.
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
   explicit ScopedEnableTextureRectangleInShaderCompiler(gl::GLApi* gl_api) {}
 
 #else
@@ -90,7 +123,7 @@ class GL_EXPORT ScopedEnableTextureRectangleInShaderCompiler {
   ~ScopedEnableTextureRectangleInShaderCompiler();
 
  private:
-  gl::GLApi* gl_api_;
+  raw_ptr<gl::GLApi> gl_api_;
 #endif
 };
 
@@ -107,6 +140,9 @@ class GL_EXPORT ScopedPixelStore {
   const int value_;
 };
 
+GL_EXPORT std::string_view GetDebugSourceString(unsigned int source);
+GL_EXPORT std::string_view GetDebugTypeString(unsigned int type);
+GL_EXPORT std::string_view GetDebugSeverityString(unsigned int severity);
 }  // namespace gl
 
 #endif  // UI_GL_GL_UTILS_H_

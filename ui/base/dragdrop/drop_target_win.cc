@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,10 +17,10 @@ DropTargetWin::DropTargetWin() : hwnd_(nullptr), ref_count_(0) {}
 DropTargetWin::~DropTargetWin() = default;
 
 void DropTargetWin::Init(HWND hwnd) {
-  DCHECK(!hwnd_);
-  DCHECK(hwnd);
+  CHECK(!hwnd_, base::NotFatalUntil::M163);
+  CHECK(hwnd, base::NotFatalUntil::M163);
   HRESULT result = RegisterDragDrop(hwnd, this);
-  DCHECK(SUCCEEDED(result));
+  CHECK(SUCCEEDED(result), base::NotFatalUntil::M163);
 }
 
 

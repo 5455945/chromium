@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,17 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
-#include "base/single_thread_task_runner.h"
-#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
@@ -27,10 +28,11 @@
 #include "net/base/request_priority.h"
 #include "net/base/transport_info.h"
 #include "net/cert/cert_verifier.h"
-#include "net/cert/ct_policy_enforcer.h"
+#include "net/cookies/cookie_inclusion_status.h"
 #include "net/cookies/cookie_monster.h"
+#include "net/cookies/cookie_setting_override.h"
+#include "net/cookies/cookie_util.h"
 #include "net/disk_cache/disk_cache.h"
-#include "net/ftp/ftp_network_layer.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_layer.h"
@@ -44,81 +46,20 @@
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
-#include "net/url_request/url_request_context_storage.h"
 #include "net/url_request/url_request_interceptor.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/url_util.h"
 
 namespace net {
 
-//-----------------------------------------------------------------------------
-
-class TestURLRequestContext : public URLRequestContext {
- public:
-  TestURLRequestContext();
-  // Default constructor like TestURLRequestContext() but does not call
-  // Init() in case |delay_initialization| is true. This allows modifying the
-  // URLRequestContext before it is constructed completely. If
-  // |delay_initialization| is true, Init() needs be be called manually.
-  explicit TestURLRequestContext(bool delay_initialization);
-  ~TestURLRequestContext() override;
-
-  void Init();
-
-  ClientSocketFactory* client_socket_factory() {
-    return client_socket_factory_;
-  }
-  void set_client_socket_factory(ClientSocketFactory* factory) {
-    client_socket_factory_ = factory;
-  }
-
-  void set_http_network_session_params(
-      std::unique_ptr<HttpNetworkSession::Params> session_params) {
-    http_network_session_params_ = std::move(session_params);
-  }
-
-  void set_http_network_session_context(
-      std::unique_ptr<HttpNetworkSession::Context> session_context) {
-    http_network_session_context_ = std::move(session_context);
-  }
-
-  void SetCTPolicyEnforcer(
-      std::unique_ptr<CTPolicyEnforcer> ct_policy_enforcer) {
-    context_storage_.set_ct_policy_enforcer(std::move(ct_policy_enforcer));
-  }
-
-  void set_create_default_http_user_agent_settings(bool value) {
-    create_default_http_user_agent_settings_ = value;
-  }
-
-  // Like CreateRequest, but also updates |site_for_cookies| to give the request
-  // a 1st-party context.
-  std::unique_ptr<URLRequest> CreateFirstPartyRequest(
-      const GURL& url,
-      RequestPriority priority,
-      URLRequest::Delegate* delegate,
-      NetworkTrafficAnnotationTag traffic_annotation) const;
-
- private:
-  bool initialized_ = false;
-
-  // Optional parameters to override default values.  Note that values in the
-  // HttpNetworkSession::Context that point to other objects the
-  // TestURLRequestContext creates will be overwritten.
-  std::unique_ptr<HttpNetworkSession::Params> http_network_session_params_;
-  std::unique_ptr<HttpNetworkSession::Context> http_network_session_context_;
-
-  // Not owned:
-  ClientSocketFactory* client_socket_factory_ = nullptr;
-
-  bool create_default_http_user_agent_settings_ = true;
-
- protected:
-  URLRequestContextStorage context_storage_;
-};
+class URLRequestContextBuilder;
 
 //-----------------------------------------------------------------------------
 
+// Creates a URLRequestContextBuilder with some members configured for the
+// testing purpose.
+std::unique_ptr<URLRequestContextBuilder> CreateTestURLRequestContextBuilder();
+
+//-----------------------------------------------------------------------------
 // Used to return a dummy context, which lives on the message loop
 // given in the constructor.
 class TestURLRequestContextGetter : public URLRequestContextGetter {
@@ -130,10 +71,10 @@ class TestURLRequestContextGetter : public URLRequestContextGetter {
   // Use to pass a pre-initialized |context|.
   TestURLRequestContextGetter(
       const scoped_refptr<base::SingleThreadTaskRunner>& network_task_runner,
-      std::unique_ptr<TestURLRequestContext> context);
+      std::unique_ptr<URLRequestContext> context);
 
   // URLRequestContextGetter implementation.
-  TestURLRequestContext* GetURLRequestContext() override;
+  URLRequestContext* GetURLRequestContext() override;
   scoped_refptr<base::SingleThreadTaskRunner> GetNetworkTaskRunner()
       const override;
 
@@ -145,7 +86,7 @@ class TestURLRequestContextGetter : public URLRequestContextGetter {
 
  private:
   const scoped_refptr<base::SingleThreadTaskRunner> network_task_runner_;
-  std::unique_ptr<TestURLRequestContext> context_;
+  std::unique_ptr<URLRequestContext> context_;
   bool is_shut_down_ = false;
 };
 
@@ -153,6 +94,12 @@ class TestURLRequestContextGetter : public URLRequestContextGetter {
 
 class TestDelegate : public URLRequest::Delegate {
  public:
+  enum class PlatformNetworkAccessBehavior {
+    kDefault,
+    kGrant,
+    kDeny,
+  };
+
   TestDelegate();
   ~TestDelegate() override;
 
@@ -166,7 +113,6 @@ class TestDelegate : public URLRequest::Delegate {
   // Sets the closure to be run on completion, for tests which need more fine-
   // grained control than RunUntilComplete().
   void set_on_complete(base::OnceClosure on_complete) {
-    use_legacy_on_complete_ = false;
     on_complete_ = std::move(on_complete);
   }
 
@@ -185,6 +131,13 @@ class TestDelegate : public URLRequest::Delegate {
   }
   void set_credentials(const AuthCredentials& credentials) {
     credentials_ = credentials;
+  }
+  void set_platform_network_access_behavior(
+      PlatformNetworkAccessBehavior behavior) {
+    platform_network_access_behavior_ = behavior;
+  }
+  void set_async_platform_local_network_access_decision(bool val) {
+    async_platform_local_network_access_decision_ = val;
   }
 
   // If true, the delegate will asynchronously run the callback passed in from
@@ -216,6 +169,7 @@ class TestDelegate : public URLRequest::Delegate {
   bool auth_required_called() const { return auth_required_; }
   bool response_completed() const { return response_completed_; }
   int request_status() const { return request_status_; }
+  std::optional<int> response_code() const { return response_code_; }
 
   // URLRequest::Delegate:
   int OnConnected(URLRequest* request,
@@ -233,6 +187,8 @@ class TestDelegate : public URLRequest::Delegate {
                              int net_error,
                              const SSLInfo& ssl_info,
                              bool fatal) override;
+  void OnPlatformLocalNetworkAccessPermissionRequired(
+      URLRequest* request) override;
   void OnResponseStarted(URLRequest* request, int net_error) override;
   void OnReadCompleted(URLRequest* request, int bytes_read) override;
 
@@ -249,10 +205,9 @@ class TestDelegate : public URLRequest::Delegate {
   bool cancel_in_rd_pending_ = false;
   bool allow_certificate_errors_ = false;
   AuthCredentials credentials_;
-
-  // True if legacy on-complete behaviour, using QuitCurrent*Deprecated(), is
-  // enabled. This is cleared if any of the Until*() APIs are used.
-  bool use_legacy_on_complete_ = true;
+  PlatformNetworkAccessBehavior platform_network_access_behavior_ =
+      PlatformNetworkAccessBehavior::kDefault;
+  bool async_platform_local_network_access_decision_ = false;
 
   // Used to register RunLoop quit closures, to implement the Until*() closures.
   base::OnceClosure on_complete_;
@@ -275,6 +230,9 @@ class TestDelegate : public URLRequest::Delegate {
 
   // tracks status of request
   int request_status_ = ERR_IO_PENDING;
+
+  // tracks status of response
+  std::optional<int> response_code_;
 
   // our read buffer
   scoped_refptr<IOBuffer> buf_;
@@ -314,7 +272,7 @@ class TestNetworkDelegate : public NetworkDelegateImpl {
   }
 
   void set_preserve_fragment_on_redirect_url(
-      const absl::optional<GURL>& preserve_fragment_on_redirect_url) {
+      const std::optional<GURL>& preserve_fragment_on_redirect_url) {
     preserve_fragment_on_redirect_url_ = preserve_fragment_on_redirect_url;
   }
 
@@ -346,43 +304,56 @@ class TestNetworkDelegate : public NetworkDelegateImpl {
     before_start_transaction_fails_ = true;
   }
 
+  const std::vector<CookieSettingOverrides>& cookie_setting_overrides_records()
+      const {
+    return cookie_setting_overrides_records_;
+  }
+
+  void set_storage_access_status(
+      std::optional<cookie_util::StorageAccessStatus> status) {
+    storage_access_status_ = status;
+  }
+
  protected:
   // NetworkDelegate:
   int OnBeforeURLRequest(URLRequest* request,
                          CompletionOnceCallback callback,
                          GURL* new_url) override;
-  int OnBeforeStartTransaction(URLRequest* request,
-                               CompletionOnceCallback callback,
-                               HttpRequestHeaders* headers) override;
+  int OnBeforeStartTransaction(
+      URLRequest* request,
+      const HttpRequestHeaders& headers,
+      OnBeforeStartTransactionCallback callback) override;
   int OnHeadersReceived(
       URLRequest* request,
       CompletionOnceCallback callback,
       const HttpResponseHeaders* original_response_headers,
       scoped_refptr<HttpResponseHeaders>* override_response_headers,
       const IPEndPoint& endpoint,
-      absl::optional<GURL>* preserve_fragment_on_redirect_url) override;
+      std::optional<GURL>* preserve_fragment_on_redirect_url,
+      const std::optional<net::SSLInfo>& ssl_info) override;
   void OnBeforeRedirect(URLRequest* request, const GURL& new_location) override;
+  void OnBeforeRetry(URLRequest* request) override;
   void OnResponseStarted(URLRequest* request, int net_error) override;
   void OnCompleted(URLRequest* request, bool started, int net_error) override;
   void OnURLRequestDestroyed(URLRequest* request) override;
   bool OnAnnotateAndMoveUserBlockedCookies(
       const URLRequest& request,
       net::CookieAccessResultList& maybe_included_cookies,
-      net::CookieAccessResultList& excluded_cookies,
-      bool allowed_from_caller) override;
-  bool OnForcePrivacyMode(const GURL& url,
-                          const SiteForCookies& site_for_cookies,
-                          const absl::optional<url::Origin>& top_frame_origin,
-                          CookieOptions::SamePartyCookieContextType
-                              same_party_cookie_context_type) const override;
-  bool OnCanSetCookie(const URLRequest& request,
-                      const net::CanonicalCookie& cookie,
-                      CookieOptions* options,
-                      bool allowed_from_caller) override;
+      net::CookieAccessResultList& excluded_cookies) override;
+  NetworkDelegate::PrivacySetting OnForcePrivacyMode(
+      const URLRequest& request) const override;
+  bool OnCanSetCookie(
+      const URLRequest& request,
+      const net::CanonicalCookie& cookie,
+      CookieOptions* options,
+      CookieInclusionStatus* inclusion_status) override;
   bool OnCancelURLRequestWithPolicyViolatingReferrerHeader(
       const URLRequest& request,
       const GURL& target_url,
       const GURL& referrer_url) const override;
+  std::optional<cookie_util::StorageAccessStatus> OnGetStorageAccessStatus(
+      const URLRequest& request,
+      base::optional_ref<const RedirectInfo> redirect_info) const override;
 
   void InitRequestStatesIfNew(int request_id);
 
@@ -390,23 +361,27 @@ class TestNetworkDelegate : public NetworkDelegateImpl {
   // if not.
   int GetRequestId(URLRequest* request);
 
+  void RecordCookieSettingOverrides(CookieSettingOverrides overrides) const {
+    cookie_setting_overrides_records_.push_back(overrides);
+  }
+
   GURL redirect_on_headers_received_url_;
   // URL to mark as retaining its fragment if redirected to at the
   // OnHeadersReceived() stage.
-  absl::optional<GURL> preserve_fragment_on_redirect_url_;
+  std::optional<GURL> preserve_fragment_on_redirect_url_;
 
-  int last_error_;
-  int error_count_;
-  int created_requests_;
-  int destroyed_requests_;
-  int completed_requests_;
-  int canceled_requests_;
-  int cookie_options_bit_mask_;
-  int blocked_annotate_cookies_count_;
-  int blocked_set_cookie_count_;
-  int set_cookie_count_;
-  int before_start_transaction_count_;
-  int headers_received_count_;
+  int last_error_ = 0;
+  int error_count_ = 0;
+  int created_requests_ = 0;
+  int destroyed_requests_ = 0;
+  int completed_requests_ = 0;
+  int canceled_requests_ = 0;
+  int cookie_options_bit_mask_ = 0;
+  int blocked_annotate_cookies_count_ = 0;
+  int blocked_set_cookie_count_ = 0;
+  int set_cookie_count_ = 0;
+  int before_start_transaction_count_ = 0;
+  int headers_received_count_ = 0;
 
   // NetworkDelegate callbacks happen in a particular order (e.g.
   // OnBeforeURLRequest is always called before OnBeforeStartTransaction).
@@ -419,12 +394,18 @@ class TestNetworkDelegate : public NetworkDelegateImpl {
   std::map<int, std::string> event_order_;
 
   LoadTimingInfo load_timing_info_before_redirect_;
-  bool has_load_timing_info_before_redirect_;
+  bool has_load_timing_info_before_redirect_ = false;
 
-  bool cancel_request_with_policy_violating_referrer_;  // false by default
-  bool before_start_transaction_fails_;
-  bool add_header_to_first_response_;
-  int next_request_id_;
+  bool cancel_request_with_policy_violating_referrer_ =
+      false;  // false by default
+  bool before_start_transaction_fails_ = false;
+  bool add_header_to_first_response_ = false;
+  int next_request_id_ = 0;
+
+  mutable std::vector<CookieSettingOverrides> cookie_setting_overrides_records_;
+
+  std::optional<cookie_util::StorageAccessStatus> storage_access_status_ =
+      std::nullopt;
 };
 
 // ----------------------------------------------------------------------------
@@ -434,10 +415,11 @@ class FilteringTestNetworkDelegate : public TestNetworkDelegate {
   FilteringTestNetworkDelegate();
   ~FilteringTestNetworkDelegate() override;
 
-  bool OnCanSetCookie(const URLRequest& request,
-                      const net::CanonicalCookie& cookie,
-                      CookieOptions* options,
-                      bool allowed_from_caller) override;
+  bool OnCanSetCookie(
+      const URLRequest& request,
+      const net::CanonicalCookie& cookie,
+      CookieOptions* options,
+      CookieInclusionStatus* inclusion_status) override;
 
   void SetCookieFilter(std::string filter) {
     cookie_name_filter_ = std::move(filter);
@@ -454,14 +436,10 @@ class FilteringTestNetworkDelegate : public TestNetworkDelegate {
   bool OnAnnotateAndMoveUserBlockedCookies(
       const URLRequest& request,
       net::CookieAccessResultList& maybe_included_cookies,
-      net::CookieAccessResultList& excluded_cookies,
-      bool allowed_from_caller) override;
+      net::CookieAccessResultList& excluded_cookies) override;
 
-  bool OnForcePrivacyMode(const GURL& url,
-                          const SiteForCookies& site_for_cookies,
-                          const absl::optional<url::Origin>& top_frame_origin,
-                          CookieOptions::SamePartyCookieContextType
-                              same_party_cookie_context_type) const override;
+  NetworkDelegate::PrivacySetting OnForcePrivacyMode(
+      const URLRequest& request) const override;
 
   void set_block_annotate_cookies() { block_annotate_cookies_ = true; }
 
@@ -487,6 +465,10 @@ class FilteringTestNetworkDelegate : public TestNetworkDelegate {
 
   void set_force_privacy_mode(bool enabled) { force_privacy_mode_ = enabled; }
 
+  void set_partitioned_state_allowed(bool allowed) {
+    partitioned_state_allowed_ = allowed;
+  }
+
  private:
   std::string cookie_name_filter_ = "";
   int set_cookie_called_count_ = 0;
@@ -498,6 +480,7 @@ class FilteringTestNetworkDelegate : public TestNetworkDelegate {
   bool block_get_cookies_by_name_ = false;
 
   bool force_privacy_mode_ = false;
+  bool partitioned_state_allowed_ = false;
 };
 
 // ----------------------------------------------------------------------------
@@ -531,7 +514,7 @@ class TestScopedURLInterceptor {
   GURL url_;
 
   // This is owned by the URLFilter.
-  TestRequestInterceptor* interceptor_ = nullptr;
+  raw_ptr<TestRequestInterceptor> interceptor_ = nullptr;
 };
 
 }  // namespace net

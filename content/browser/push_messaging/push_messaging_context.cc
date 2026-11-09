@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,28 +17,29 @@ PushMessagingContext::PushMessagingContext(
     const scoped_refptr<ServiceWorkerContextWrapper>& service_worker_context)
     : browser_context_(browser_context),
       service_worker_context_(service_worker_context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   service_worker_context_->AddObserver(this);
 }
 
 PushMessagingContext::~PushMessagingContext() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   service_worker_context_->RemoveObserver(this);
 }
 
 void PushMessagingContext::OnRegistrationDeleted(int64_t registration_id,
-                                                 const GURL& pattern) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+                                                 const GURL& pattern,
+                                                 const blink::StorageKey& key) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   PushMessagingService* push_service =
       browser_context_->GetPushMessagingService();
   if (push_service) {
-    push_service->DidDeleteServiceWorkerRegistration(pattern.GetOrigin(),
-                                                     registration_id);
+    push_service->DidDeleteServiceWorkerRegistration(
+        pattern.DeprecatedGetOriginAsURL(), registration_id);
   }
 }
 
 void PushMessagingContext::OnStorageWiped() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   PushMessagingService* push_service =
       browser_context_->GetPushMessagingService();
   if (push_service)

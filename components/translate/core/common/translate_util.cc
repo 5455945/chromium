@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,27 @@
 
 #include "base/command_line.h"
 #include "base/metrics/field_trial_params.h"
+#include "build/build_config.h"
 #include "components/translate/core/common/translate_switches.h"
+
+namespace {
+// The default number of times user should consecutively translate for "Always
+// Translate" to automatically trigger.
+constexpr int kAutoAlwaysThreshold = 5;
+// The default number of times user should consecutively dismiss the translate
+// infobar for "Never Translate" to automatically trigger.
+constexpr int kAutoNeverThreshold = 20;
+// The default maximum number of times "Always Translate" is automatically
+// triggered.
+constexpr int kMaxNumberOfAutoAlways = 2;
+// The default maximum number of times "Never Translate" is automatically
+// triggered.
+constexpr int kMaxNumberOfAutoNever = 2;
+}  // namespace
 
 namespace translate {
 
-namespace {
-
-// Parameter for TranslateSubFrames feature to determine whether language
-// detection should include the sub frames (or just the main frame).
-const char kDetectLanguageInSubFrames[] = "detect_language_in_sub_frames";
-
-}  // namespace
-
 const char kSecurityOrigin[] = "https://translate.googleapis.com/";
-
-const base::Feature kTranslateSubFrames{"TranslateSubFrames",
-                                        base::FEATURE_DISABLED_BY_DEFAULT};
-
-const base::Feature kTFLiteLanguageDetectionEnabled{
-    "TFLiteLanguageDetectionEnabled", base::FEATURE_DISABLED_BY_DEFAULT};
 
 GURL GetTranslateSecurityOrigin() {
   std::string security_origin(kSecurityOrigin);
@@ -38,23 +40,31 @@ GURL GetTranslateSecurityOrigin() {
   return GURL(security_origin);
 }
 
-bool IsSubFrameTranslationEnabled() {
-  return base::FeatureList::IsEnabled(kTranslateSubFrames);
-}
-
-bool IsSubFrameLanguageDetectionEnabled() {
-  return base::FeatureList::IsEnabled(kTranslateSubFrames) &&
-         base::GetFieldTrialParamByFeatureAsBool(
-             kTranslateSubFrames, kDetectLanguageInSubFrames, true);
-}
-
 bool IsTFLiteLanguageDetectionEnabled() {
-  return base::FeatureList::IsEnabled(kTFLiteLanguageDetectionEnabled);
+// The feature is explicitly disabled on WebView.
+// TODO(crbug.com/40819484): Enable the feature on WebView.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  return true;
+#else
+  return false;
+#endif
 }
 
-float GetTFLiteLanguageDetectionThreshold() {
-  return base::GetFieldTrialParamByFeatureAsDouble(
-      kTFLiteLanguageDetectionEnabled, "reliability_threshold", .7);
+int GetAutoAlwaysThreshold() {
+  return kAutoAlwaysThreshold;
+}
+
+int GetAutoNeverThreshold() {
+  return kAutoNeverThreshold;
+}
+
+int GetMaximumNumberOfAutoAlways() {
+  return kMaxNumberOfAutoAlways;
+}
+
+int GetMaximumNumberOfAutoNever() {
+  return kMaxNumberOfAutoNever;
 }
 
 }  // namespace translate

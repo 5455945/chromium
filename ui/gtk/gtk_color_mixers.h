@@ -1,11 +1,15 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GTK_GTK_COLOR_MIXERS_H_
 #define UI_GTK_GTK_COLOR_MIXERS_H_
 
-#include "ui/color/color_provider_manager.h"
+#include <optional>
+
+#include "base/component_export.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/color/color_provider_key.h"
 
 namespace ui {
 class ColorProvider;
@@ -13,10 +17,10 @@ class ColorProvider;
 
 namespace gtk {
 
-void AddGtkNativeCoreColorMixer(
-    ui::ColorProvider* provider,
-    ui::ColorProviderManager::ColorMode color_mode,
-    ui::ColorProviderManager::ContrastMode contrast_mode);
+COMPONENT_EXPORT(GTK)
+void AddGtkNativeColorMixer(ui::ColorProvider* provider,
+                            const ui::ColorProviderKey& key,
+                            std::optional<SkColor> accent_color);
 
 }  // namespace gtk
 

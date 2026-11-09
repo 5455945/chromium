@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,14 @@
 #include <stddef.h>
 
 #include <memory>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
+#include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "components/omnibox/browser/autocomplete_match.h"
-
-class Profile;
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 
 namespace content {
 class WebContents;
@@ -23,8 +23,12 @@ class WebContents;
 
 // This class creates an alternate nav infobar and delegate and adds the infobar
 // to the infobar manager for |web_contents|.
-class AlternateNavInfoBarDelegate : public infobars::InfoBarDelegate {
+class AlternateNavInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
+  AlternateNavInfoBarDelegate(const AlternateNavInfoBarDelegate&) = delete;
+  AlternateNavInfoBarDelegate& operator=(const AlternateNavInfoBarDelegate&) =
+      delete;
+
   ~AlternateNavInfoBarDelegate() override;
 
   // Creates the delegate for omnibox navigations that have suggested URLs.
@@ -42,11 +46,20 @@ class AlternateNavInfoBarDelegate : public infobars::InfoBarDelegate {
   const gfx::VectorIcon& GetVectorIcon() const override;
   std::u16string GetLinkText() const override;
   GURL GetLinkURL() const override;
-  bool LinkClicked(WindowOpenDisposition disposition) override;
+  bool LinkClicked(ui::mojom::WindowOpenDisposition disposition) override;
+
+  // ConfirmInfoBarDelegate:
+  std::u16string GetMessageText() const override;
+  std::u16string GetMessageTextTemplate() const override;
+  base::span<const MessageSubstitution> GetMessageSubstitutions()
+      const override;
+  bool InlineSubstitutionLinkClicked(
+      size_t index,
+      ui::mojom::WindowOpenDisposition disposition) override;
+  int GetButtons() const override;
 
  private:
-  AlternateNavInfoBarDelegate(Profile* profile,
-                              const std::u16string& text,
+  AlternateNavInfoBarDelegate(const std::u16string& text,
                               std::unique_ptr<AutocompleteMatch> match,
                               const GURL& destination_url,
                               const GURL& original_url);
@@ -55,7 +68,6 @@ class AlternateNavInfoBarDelegate : public infobars::InfoBarDelegate {
   static std::unique_ptr<infobars::InfoBar> CreateInfoBar(
       std::unique_ptr<AlternateNavInfoBarDelegate> delegate);
 
-  Profile* profile_;
   const std::u16string text_;
 
   // The autocomplete match to be used when deleting the corresponding shortcut.
@@ -71,7 +83,7 @@ class AlternateNavInfoBarDelegate : public infobars::InfoBarDelegate {
   // For search navigations this is the search URL.
   const GURL original_url_;
 
-  DISALLOW_COPY_AND_ASSIGN(AlternateNavInfoBarDelegate);
+  std::vector<MessageSubstitution> substitutions_;
 };
 
 #endif  // CHROME_BROWSER_UI_OMNIBOX_ALTERNATE_NAV_INFOBAR_DELEGATE_H_

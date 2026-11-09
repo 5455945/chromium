@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "media/base/media_export.h"
 
 namespace media {
@@ -59,10 +60,8 @@ typedef std::pair<std::string, std::string> KeyIdAndKeyPair;
 typedef std::vector<KeyIdAndKeyPair> KeyIdAndKeyPairs;
 
 // Converts a single |key|, |key_id| pair to a JSON Web Key Set.
-MEDIA_EXPORT std::string GenerateJWKSet(const uint8_t* key,
-                                        int key_length,
-                                        const uint8_t* key_id,
-                                        int key_id_length);
+MEDIA_EXPORT std::string GenerateJWKSet(base::span<const uint8_t> key,
+                                        base::span<const uint8_t> key_id);
 
 // Converts a set of |key|, |key_id| pairs to a JSON Web Key Set.
 MEDIA_EXPORT std::string GenerateJWKSet(const KeyIdAndKeyPairs& keys,

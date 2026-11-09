@@ -1,48 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/style/list_style_type_data.h"
 
+#include "base/memory/values_equivalent.h"
 #include "third_party/blink/renderer/core/css/counter_style.h"
+#include "third_party/blink/renderer/core/css/css_symbols_value.h"
 #include "third_party/blink/renderer/core/css/css_value_id_mappings.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/tree_scope.h"
-#include "third_party/blink/renderer/core/style/content_data.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
-
-namespace {
-
-using PredefinedCounterStyleNameMap = HashMap<AtomicString, EListStyleType>;
-
-PredefinedCounterStyleNameMap BuildPredefinedCounterStyleNameMap() {
-  PredefinedCounterStyleNameMap map;
-  for (unsigned i = 0; i < static_cast<unsigned>(EListStyleType::kString);
-       ++i) {
-    EListStyleType list_style_type = static_cast<EListStyleType>(i);
-    CSSValueID css_value_id = PlatformEnumToCSSValueID(list_style_type);
-    AtomicString value_name(getValueName(css_value_id));
-    map.Set(value_name, list_style_type);
-  }
-  return map;
-}
-
-EListStyleType CounterStyleNameToDeprecatedEnum(const AtomicString& name) {
-  DEFINE_STATIC_LOCAL(PredefinedCounterStyleNameMap,
-                      predefined_counter_style_name_map,
-                      (BuildPredefinedCounterStyleNameMap()));
-  auto iterator = predefined_counter_style_name_map.find(name);
-  if (iterator != predefined_counter_style_name_map.end())
-    return iterator->value;
-  return EListStyleType::kDecimal;
-}
-
-}  // namespace
 
 void ListStyleTypeData::Trace(Visitor* visitor) const {
   visitor->Trace(tree_scope_);
@@ -62,28 +34,42 @@ ListStyleTypeData* ListStyleTypeData::CreateCounterStyle(
                                                  tree_scope);
 }
 
-EListStyleType ListStyleTypeData::ToDeprecatedListStyleTypeEnum() const {
-  if (IsString())
-    return EListStyleType::kString;
-  return CounterStyleNameToDeprecatedEnum(GetCounterStyleName());
+// static
+ListStyleTypeData* ListStyleTypeData::CreateSymbolsFunction(
+    const cssvalue::CSSSymbolsValue& symbols_function_value) {
+  return MakeGarbageCollected<ListStyleTypeData>(
+      Type::kCounterStyle, /*name_or_string_value=*/g_empty_atom,
+      /*tree_scope=*/nullptr,
+      CounterStyle::CreateAnonymousCounterStyle(symbols_function_value));
 }
 
-// TODO(crbug.com/687225): We temporarily put this function here to share the
-// common logic. Clean it up when @counter-style is shipped.
-EListStyleType CounterContentData::ToDeprecatedListStyleTypeEnum() const {
-  if (ListStyle() == "none")
-    return EListStyleType::kNone;
-  return CounterStyleNameToDeprecatedEnum(ListStyle());
+bool ListStyleTypeData::operator==(const ListStyleTypeData& other) const {
+  // `counter_style_` is only compared for a symbols() function, where it is
+  // built eagerly and is the value itself. For a named <counter-style> it is a
+  // lazily populated cache of the style that `name_or_string_value_` and
+  // `tree_scope_` already identify, so comparing it would report two equal
+  // values as different when only one of them has resolved its name.
+  return type_ == other.type_ &&
+         name_or_string_value_ == other.name_or_string_value_ &&
+         tree_scope_ == other.tree_scope_ &&
+         (!IsSymbolsFunction() ||
+          base::ValuesEquivalent(counter_style_.Get(),
+                                 other.counter_style_.Get()));
 }
 
 bool ListStyleTypeData::IsCounterStyleReferenceValid(Document& document) const {
   if (!IsCounterStyle()) {
-    DCHECK(!counter_style_);
+    CHECK(!counter_style_);
     return true;
   }
 
-  if (!counter_style_ || counter_style_->IsDirty())
+  if (IsSymbolsFunction()) {
+    return true;
+  }
+
+  if (!counter_style_ || counter_style_->IsDirty()) {
     return false;
+  }
 
   // Even if the referenced counter style is clean, it may still be stale if new
   // counter styles have been inserted, in which case the same (scope, name) now
@@ -95,9 +81,16 @@ bool ListStyleTypeData::IsCounterStyleReferenceValid(Document& document) const {
 
 const CounterStyle& ListStyleTypeData::GetCounterStyle(
     Document& document) const {
-  DCHECK(IsCounterStyle());
+  CHECK(IsCounterStyle());
+
+  // A symbols() function defines its counter style inline and it is built
+  // eagerly, so no lookup is needed.
+  if (IsSymbolsFunction()) {
+    return GetSymbolsCounterStyle();
+  }
+
   if (!IsCounterStyleReferenceValid(document)) {
-    counter_style_ = document.GetStyleEngine().FindCounterStyleAcrossScopes(
+    counter_style_ = &document.GetStyleEngine().FindCounterStyleAcrossScopes(
         GetCounterStyleName(), GetTreeScope());
   }
   return *counter_style_;

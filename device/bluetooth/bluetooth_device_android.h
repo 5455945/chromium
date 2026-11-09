@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,18 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "device/bluetooth/bluetooth_adapter_android.h"
+#include "device/bluetooth/bluetooth_common.h"
 #include "device/bluetooth/bluetooth_device.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
+class BluetoothSocketThread;
 class BluetoothUUID;
 
 // BluetoothDeviceAndroid along with its owned Java class
@@ -35,7 +36,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
   static std::unique_ptr<BluetoothDeviceAndroid> Create(
       BluetoothAdapterAndroid* adapter,
       const base::android::JavaRef<jobject>&
-          bluetooth_device_wrapper);  // Java Type: bluetoothDeviceWrapper
+          bluetooth_device_wrapper,  // Java Type: BluetoothDeviceWrapper
+      scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
+      scoped_refptr<BluetoothSocketThread> socket_thread);
+
+  BluetoothDeviceAndroid(const BluetoothDeviceAndroid&) = delete;
+  BluetoothDeviceAndroid& operator=(const BluetoothDeviceAndroid&) = delete;
 
   ~BluetoothDeviceAndroid() override;
 
@@ -49,6 +55,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
 
   // BluetoothDevice:
   uint32_t GetBluetoothClass() const override;
+  BluetoothTransport GetType() const override;
   std::string GetAddress() const override;
   AddressType GetAddressType() const override;
   VendorIDSource GetVendorIDSource() const override;
@@ -56,12 +63,13 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
   uint16_t GetProductID() const override;
   uint16_t GetDeviceID() const override;
   uint16_t GetAppearance() const override;
-  absl::optional<std::string> GetName() const override;
+  std::optional<std::string> GetName() const override;
   bool IsPaired() const override;
   bool IsConnected() const override;
   bool IsGattConnected() const override;
   bool IsConnectable() const override;
   bool IsConnecting() const override;
+  UUIDSet GetUUIDs() const override;
   bool ExpectingPinCode() const override;
   bool ExpectingPasskey() const override;
   bool ExpectingConfirmation() const override;
@@ -90,41 +98,55 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDeviceAndroid final
 
   // Callback indicating when GATT client has connected/disconnected.
   // See android.bluetooth.BluetoothGattCallback.onConnectionStateChange.
-  void OnConnectionStateChange(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller,
-      int32_t status,
-      bool connected);
+  void OnConnectionStateChange(JNIEnv* env, int32_t status, bool connected);
 
   // Callback indicating when all services of the device have been
   // discovered.
-  void OnGattServicesDiscovered(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller);
+  void OnGattServicesDiscovered(JNIEnv* env);
 
   // Creates Bluetooth GATT service objects and adds them to
   // BluetoothDevice::gatt_services_ if they are not already there.
   void CreateGattRemoteService(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller,
-      const base::android::JavaParamRef<jstring>& instance_id,
-      const base::android::JavaParamRef<jobject>&
+      const base::android::JavaRef<jstring>& instance_id,
+      const base::android::JavaRef<jobject>&
           bluetooth_gatt_service_wrapper);  // BluetoothGattServiceWrapper
 
- protected:
-  BluetoothDeviceAndroid(BluetoothAdapterAndroid* adapter);
+  // Update the connected state of |transport| to |connected|.
+  void UpdateAclConnectState(uint8_t transport, bool connected);
+  bool is_acl_connected() { return connected_transport_; }
+
+ private:
+  BluetoothDeviceAndroid(
+      BluetoothAdapterAndroid* adapter,
+      scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
+      scoped_refptr<BluetoothSocketThread> socket_thread);
 
   // BluetoothDevice:
   void CreateGattConnectionImpl(
-      absl::optional<device::BluetoothUUID> service_uuid) override;
+      std::optional<device::BluetoothUUID> service_uuid) override;
   void DisconnectGatt() override;
+
+  void LoadInitialCachedMetadata();
 
   // Java object org.chromium.device.bluetooth.ChromeBluetoothDevice.
   base::android::ScopedJavaGlobalRef<jobject> j_device_;
 
+  scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
+  scoped_refptr<BluetoothSocketThread> socket_thread_;
+
   bool gatt_connected_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(BluetoothDeviceAndroid);
+  // A bit-wise flag indicating connected states of Bluetooth transports.
+  uint8_t connected_transport_ = 0;
+
+  // Cached values to serve when the Bluetooth adapter is off and the Android
+  // system doesn't serve them.
+  mutable std::optional<std::string> cached_name_;
+  mutable uint32_t cached_class_;
+  mutable BluetoothTransport cached_type_;
+  mutable bool cached_paired_;
+  mutable UUIDSet cached_sdp_uuids_;
 };
 
 }  // namespace device

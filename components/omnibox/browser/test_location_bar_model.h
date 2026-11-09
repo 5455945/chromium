@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "components/omnibox/browser/location_bar_model.h"
 
 namespace gfx {
@@ -22,15 +23,20 @@ struct VectorIcon;
 class TestLocationBarModel : public LocationBarModel {
  public:
   TestLocationBarModel();
+  explicit TestLocationBarModel(ui::UnownedUserDataHost& host);
   ~TestLocationBarModel() override;
   TestLocationBarModel(const TestLocationBarModel&) = delete;
   TestLocationBarModel& operator=(const TestLocationBarModel&) = delete;
   std::u16string GetFormattedFullURL() const override;
   std::u16string GetURLForDisplay() const override;
   GURL GetURL() const override;
+  bool IsContextualTasksPage() const override;
+  GURL GetContextualTasksInnerFrameURL() const override;
   security_state::SecurityLevel GetSecurityLevel() const override;
+  net::CertStatus GetCertStatus() const override;
   metrics::OmniboxEventProto::PageClassification GetPageClassification(
-      OmniboxFocusSource focus_source) override;
+      bool is_prefetch = false) const override;
+  metrics::OmniboxEventProto::PageClassification GetOmniboxComposeboxPageClassification() const override;
   const gfx::VectorIcon& GetVectorIcon() const override;
   std::u16string GetSecureDisplayText() const override;
   std::u16string GetSecureAccessibilityText() const override;
@@ -48,6 +54,9 @@ class TestLocationBarModel : public LocationBarModel {
   void set_security_level(security_state::SecurityLevel security_level) {
     security_level_ = security_level;
   }
+  void set_cert_status(net::CertStatus cert_status) {
+    cert_status_ = cert_status;
+  }
   void set_icon(const gfx::VectorIcon& icon) { icon_ = &icon; }
   void set_should_display_url(bool should_display_url) {
     should_display_url_ = should_display_url;
@@ -56,8 +65,18 @@ class TestLocationBarModel : public LocationBarModel {
   void set_secure_display_text(std::u16string secure_display_text) {
     secure_display_text_ = secure_display_text;
   }
+  void set_secure_accessibility_text(std::u16string secure_accessibility_text) {
+    secure_accessibility_text_ = secure_accessibility_text;
+  }
   void set_should_prevent_elision(bool should_prevent_elision) {
     should_prevent_elision_ = should_prevent_elision;
+  }
+  void set_page_classification(
+      metrics::OmniboxEventProto::PageClassification page_classification) {
+    page_classification_ = page_classification;
+  }
+  void set_is_contextual_tasks_page(bool is_contextual_tasks_page) {
+    is_contextual_tasks_page_ = is_contextual_tasks_page;
   }
 
  private:
@@ -68,11 +87,16 @@ class TestLocationBarModel : public LocationBarModel {
 
   GURL url_;
   security_state::SecurityLevel security_level_ = security_state::NONE;
-  const gfx::VectorIcon* icon_ = nullptr;
-  bool should_display_url_ = false;
+  net::CertStatus cert_status_ = 0;
+  raw_ptr<const gfx::VectorIcon> icon_ = nullptr;
+  bool should_display_url_ = true;
   bool offline_page_ = false;
-  std::u16string secure_display_text_ = std::u16string();
+  std::u16string secure_display_text_;
+  std::u16string secure_accessibility_text_;
   bool should_prevent_elision_ = false;
+  metrics::OmniboxEventProto::PageClassification page_classification_ =
+      metrics::OmniboxEventProto::OTHER;
+  bool is_contextual_tasks_page_ = false;
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_TEST_LOCATION_BAR_MODEL_H_

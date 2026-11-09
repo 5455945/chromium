@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,9 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "crypto/nss_crypto_module_delegate.h"
@@ -56,6 +57,10 @@ class SSLPlatformKeyNSS : public ThreadedSSLPrivateKey::Delegate {
         password_delegate_(std::move(password_delegate)),
         key_(std::move(key)),
         supports_pss_(PK11_DoesMechanism(key_->pkcs11Slot, CKM_RSA_PKCS_PSS)) {}
+
+  SSLPlatformKeyNSS(const SSLPlatformKeyNSS&) = delete;
+  SSLPlatformKeyNSS& operator=(const SSLPlatformKeyNSS&) = delete;
+
   ~SSLPlatformKeyNSS() override = default;
 
   std::string GetProviderName() override {
@@ -74,15 +79,25 @@ class SSLPlatformKeyNSS : public ThreadedSSLPrivateKey::Delegate {
              base::span<const uint8_t> input,
              std::vector<uint8_t>* signature) override {
     const EVP_MD* md = SSL_get_signature_algorithm_digest(algorithm);
-    uint8_t digest[EVP_MAX_MD_SIZE];
-    unsigned digest_len;
-    if (!md || !EVP_Digest(input.data(), input.size(), digest, &digest_len, md,
-                           nullptr)) {
-      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+    uint8_t digest_buf[EVP_MAX_MD_SIZE];
+    base::span<const uint8_t> digest;
+    if (type_ == EVP_PKEY_ML_DSA_44 || type_ == EVP_PKEY_ML_DSA_65 ||
+        type_ == EVP_PKEY_ML_DSA_87) {
+      // Although `PK11_SignWithMechanism` normally takes a hash, the ML-DSA
+      // PKCS#11 mechanisms takes the unhashed input in the same parameter.
+      digest = input;
+    } else {
+      unsigned digest_len;
+      if (!md || !EVP_Digest(input.data(), input.size(), digest_buf,
+                             &digest_len, md, nullptr)) {
+        return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+      }
+      digest = base::span(digest_buf).first(digest_len);
     }
+
     SECItem digest_item;
-    digest_item.data = digest;
-    digest_item.len = digest_len;
+    digest_item.data = const_cast<uint8_t*>(digest.data());
+    digest_item.len = base::checked_cast<unsigned>(digest.size());
 
     CK_MECHANISM_TYPE mechanism = PK11_MapSignKeyType(key_->keyType);
     SECItem param = {siBuffer, nullptr, 0};
@@ -127,23 +142,25 @@ class SSLPlatformKeyNSS : public ThreadedSSLPrivateKey::Delegate {
         free_digest_info.reset(digest_item.data);
     }
 
-    int len = PK11_SignatureLen(key_.get());
-    if (len <= 0) {
-      LogPRError("PK11_SignatureLen failed");
-      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
-    }
-    signature->resize(len);
-    SECItem signature_item;
-    signature_item.data = signature->data();
-    signature_item.len = signature->size();
+    {
+      const int len = PK11_SignatureLen(key_.get());
+      if (len <= 0) {
+        LogPRError("PK11_SignatureLen failed");
+        return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+      }
+      signature->resize(len);
+      SECItem signature_item;
+      signature_item.data = signature->data();
+      signature_item.len = signature->size();
 
-    SECStatus rv = PK11_SignWithMechanism(key_.get(), mechanism, &param,
-                                          &signature_item, &digest_item);
-    if (rv != SECSuccess) {
-      LogPRError("PK11_SignWithMechanism failed");
-      return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+      SECStatus rv = PK11_SignWithMechanism(key_.get(), mechanism, &param,
+                                            &signature_item, &digest_item);
+      if (rv != SECSuccess) {
+        LogPRError("PK11_SignWithMechanism failed");
+        return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+      }
+      signature->resize(signature_item.len);
     }
-    signature->resize(signature_item.len);
 
     // NSS emits raw ECDSA signatures, but BoringSSL expects a DER-encoded
     // ECDSA-Sig-Value.
@@ -157,19 +174,25 @@ class SSLPlatformKeyNSS : public ThreadedSSLPrivateKey::Delegate {
       // Convert the RAW ECDSA signature to a DER-encoded ECDSA-Sig-Value.
       bssl::UniquePtr<ECDSA_SIG> sig(ECDSA_SIG_new());
       if (!sig || !BN_bin2bn(signature->data(), order_len, sig->r) ||
-          !BN_bin2bn(signature->data() + order_len, order_len, sig->s)) {
+          !BN_bin2bn(UNSAFE_TODO(signature->data() + order_len), order_len,
+                     sig->s)) {
         return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
       }
 
-      int len = i2d_ECDSA_SIG(sig.get(), nullptr);
-      if (len <= 0)
-        return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
-      signature->resize(len);
-      uint8_t* ptr = signature->data();
-      len = i2d_ECDSA_SIG(sig.get(), &ptr);
-      if (len <= 0)
-        return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
-      signature->resize(len);
+      {
+        const int len = i2d_ECDSA_SIG(sig.get(), nullptr);
+        if (len <= 0)
+          return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+        signature->resize(len);
+      }
+
+      {
+        uint8_t* ptr = signature->data();
+        const int len = i2d_ECDSA_SIG(sig.get(), &ptr);
+        if (len <= 0)
+          return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
+        signature->resize(len);
+      }
     }
 
     return OK;
@@ -183,8 +206,6 @@ class SSLPlatformKeyNSS : public ThreadedSSLPrivateKey::Delegate {
       password_delegate_;
   crypto::ScopedSECKEYPrivateKey key_;
   bool supports_pss_;
-
-  DISALLOW_COPY_AND_ASSIGN(SSLPlatformKeyNSS);
 };
 
 }  // namespace
@@ -204,13 +225,21 @@ scoped_refptr<SSLPrivateKey> FetchClientCertPrivateKey(
   void* wincx = password_delegate ? password_delegate->wincx() : nullptr;
   crypto::ScopedSECKEYPrivateKey key(
       PK11_FindKeyByAnyCert(cert_certificate, wincx));
-  if (!key)
+  if (!key) {
     return nullptr;
+  }
 
-  int type;
-  size_t max_length;
-  if (!GetClientCertInfo(certificate, &type, &max_length))
+  bssl::UniquePtr<EVP_PKEY> pubkey = GetClientCertPublicKey(certificate);
+  if (!pubkey) {
     return nullptr;
+  }
+
+  int type = EVP_PKEY_id(pubkey.get());
+  if (type != EVP_PKEY_RSA && type != EVP_PKEY_EC &&
+      type != EVP_PKEY_ML_DSA_44 && type != EVP_PKEY_ML_DSA_65 &&
+      type != EVP_PKEY_ML_DSA_87) {
+    return nullptr;
+  }
 
   // Note that key contains a reference to password_delegate->wincx() and may
   // use it in PK11_Sign. Thus password_delegate must outlive key. We pass it

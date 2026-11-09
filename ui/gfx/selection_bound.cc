@@ -1,10 +1,9 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <algorithm>
 
-#include "base/macros.h"
 #include "base/strings/stringprintf.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect.h"
@@ -65,10 +64,6 @@ bool operator==(const SelectionBound& lhs, const SelectionBound& rhs) {
          lhs.edge_end() == rhs.edge_end() &&
          lhs.visible_edge_start() == rhs.visible_edge_start() &&
          lhs.visible_edge_end() == rhs.visible_edge_end();
-}
-
-bool operator!=(const SelectionBound& lhs, const SelectionBound& rhs) {
-  return !(lhs == rhs);
 }
 
 gfx::Rect RectBetweenSelectionBounds(const SelectionBound& b1,

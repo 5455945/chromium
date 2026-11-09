@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/test/task_environment.h"
 #include "device/bluetooth/bluetooth_adapter.h"
@@ -25,7 +26,6 @@
 #include "device/bluetooth/bluetooth_remote_gatt_descriptor.h"
 #include "device/bluetooth/bluetooth_remote_gatt_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
@@ -70,19 +70,21 @@ class BluetoothTestBase : public testing::Test {
   struct LowEnergyDeviceData {
     LowEnergyDeviceData();
     LowEnergyDeviceData(LowEnergyDeviceData&& data);
+
+    LowEnergyDeviceData(const LowEnergyDeviceData&) = delete;
+    LowEnergyDeviceData& operator=(const LowEnergyDeviceData&) = delete;
+
     ~LowEnergyDeviceData();
 
-    absl::optional<std::string> name;
+    std::optional<std::string> name;
     std::string address;
     int8_t rssi = 0;
-    absl::optional<uint8_t> flags;
+    std::optional<uint8_t> flags;
     BluetoothDevice::UUIDList advertised_uuids;
-    absl::optional<int8_t> tx_power;
+    std::optional<int8_t> tx_power;
     BluetoothDevice::ServiceDataMap service_data;
     BluetoothDevice::ManufacturerDataMap manufacturer_data;
     BluetoothTransport transport = BLUETOOTH_TRANSPORT_LE;
-
-    DISALLOW_COPY_AND_ASSIGN(LowEnergyDeviceData);
   };
 
   static const char kTestAdapterName[];
@@ -119,6 +121,7 @@ class BluetoothTestBase : public testing::Test {
   static const char kTestUUIDLinkLoss[];
   static const char kTestUUIDHeartRate[];
   static const char kTestUUIDU2f[];
+  static const char kTestUUIDSerial[];
   // Characteristics
   // The following three characteristics are for kTestUUIDGenericAccess.
   static const char kTestUUIDDeviceName[];
@@ -140,7 +143,9 @@ class BluetoothTestBase : public testing::Test {
   static const uint8_t kTestCableEid[];
   static const char kTestUuidFormattedClientEid[];
 
-  BluetoothTestBase();
+  explicit BluetoothTestBase(
+      base::test::TaskEnvironment::TimeSource time_source =
+          base::test::TaskEnvironment::TimeSource::DEFAULT);
   ~BluetoothTestBase() override;
 
   // Checks that no unexpected calls have been made to callbacks.
@@ -156,9 +161,6 @@ class BluetoothTestBase : public testing::Test {
   // and this fixture's callbacks expecting error.
   // Then RunLoop().RunUntilIdle().
   void StartLowEnergyDiscoverySessionExpectedToFail();
-
-  // Check if Low Energy is available.
-  virtual bool PlatformSupportsLowEnergy() = 0;
 
   // Initializes the BluetoothAdapter |adapter_| with the system adapter.
   virtual void InitWithDefaultAdapter() {}
@@ -323,15 +325,15 @@ class BluetoothTestBase : public testing::Test {
   // there. The callback is called to complete the GATT connection. If not
   // given, |SimulateGattConnection| is called but the callback argument lets
   // one override that.
-  bool ConnectGatt(BluetoothDevice* device,
-                   absl::optional<BluetoothUUID> service_uuid = absl::nullopt,
-                   absl::optional<base::OnceCallback<void(BluetoothDevice*)>> =
-                       absl::nullopt);
+  bool ConnectGatt(
+      BluetoothDevice* device,
+      std::optional<BluetoothUUID> service_uuid = std::nullopt,
+      std::optional<base::OnceCallback<void(BluetoothDevice*)>> = std::nullopt);
 
   // GetTargetGattService returns the specific GATT service, if any, that was
   // targeted for discovery, i.e. via the |service_uuid| argument to
   // |CreateGattConnection|.
-  virtual absl::optional<BluetoothUUID> GetTargetGattService(
+  virtual std::optional<BluetoothUUID> GetTargetGattService(
       BluetoothDevice* device);
 
   // Simulates success of implementation details of CreateGattConnection.
@@ -607,11 +609,10 @@ class BluetoothTestBase : public testing::Test {
                                    scoped_refptr<BluetoothAdvertisement>);
   void DiscoverySessionCallback(Call expected,
                                 std::unique_ptr<BluetoothDiscoverySession>);
-  void GattConnectionCallback(
-      Call expected,
-      Result expected_result,
-      std::unique_ptr<BluetoothGattConnection>,
-      absl::optional<BluetoothDevice::ConnectErrorCode>);
+  void GattConnectionCallback(Call expected,
+                              Result expected_result,
+                              std::unique_ptr<BluetoothGattConnection>,
+                              std::optional<BluetoothDevice::ConnectErrorCode>);
   void NotifyCallback(Call expected,
                       std::unique_ptr<BluetoothGattNotifySession>);
   void NotifyCheckForPrecedingCalls(
@@ -622,14 +623,14 @@ class BluetoothTestBase : public testing::Test {
   void ReadValueCallback(
       Call expected,
       Result expected_result,
-      absl::optional<BluetoothGattService::GattErrorCode> error_code,
+      std::optional<BluetoothGattService::GattErrorCode> error_code,
       const std::vector<uint8_t>& value);
   void ErrorCallback(Call expected);
   void AdvertisementErrorCallback(Call expected,
                                   BluetoothAdvertisement::ErrorCode error_code);
   void OnConnectCallback(Call expected,
                          Result expected_result,
-                         absl::optional<BluetoothDevice::ConnectErrorCode>);
+                         std::optional<BluetoothDevice::ConnectErrorCode>);
   void GattErrorCallback(Call expected, BluetoothGattService::GattErrorCode);
   void ReentrantStartNotifySessionSuccessCallback(
       Call expected,
@@ -663,8 +664,6 @@ class BluetoothTestBase : public testing::Test {
   BluetoothAdapter::ErrorCallback GetErrorCallback(Call expected);
   BluetoothAdapter::AdvertisementErrorCallback GetAdvertisementErrorCallback(
       Call expected);
-  BluetoothDevice::ConnectCallback GetConnectCallback(Call expected,
-                                                      Result expected_result);
   base::OnceCallback<void(BluetoothGattService::GattErrorCode)>
   GetGattErrorCallback(Call expected);
   BluetoothRemoteGattCharacteristic::NotifySessionCallback
@@ -716,7 +715,7 @@ class BluetoothTestBase : public testing::Test {
   std::vector<uint8_t> last_read_value_;
   std::vector<uint8_t> last_write_value_;
   BluetoothGattService::GattErrorCode last_gatt_error_code_ =
-      BluetoothGattService::GATT_ERROR_UNKNOWN;
+      BluetoothGattService::GattErrorCode::kUnknown;
 
   int callback_count_ = 0;
   int error_callback_count_ = 0;

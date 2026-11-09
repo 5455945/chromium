@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,26 @@
 
 #include "base/location.h"
 #include "build/build_config.h"
+#include "remoting/proto/coordinates.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace remoting {
 
+// Depending on the platform the origin of the desktop is calculated relative to
+// the primary display, or relative to the upper-left of the entire desktop
+// region. See comment at DesktopDisplayInfo::CalcDisplayOffset() for more
+// information.
+#define OS_USES_PRIMARY_DISPLAY_AS_ORIGIN \
+  BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_CHROMEOS)
+
 class DesktopDisplayInfoTest : public testing::Test {
  public:
-  void AddDisplay(int x, int y, int width, int height) {
-    auto* display = new DisplayGeometry();
-    display->x = x;
-    display->y = y;
-    display->width = width;
-    display->height = height;
-    display->dpi = 96;
-    display->bpp = 24;
-    display->is_default = false;
-    info_.AddDisplay(std::unique_ptr<DisplayGeometry>(display));
+  void AddDisplay(int x, int y, uint32_t width, uint32_t height) {
+    info_.AddDisplay({/* id */ info_.NumDisplays(), x, y, width, height,
+                      /* dpi */ 96,
+                      /* bpp */ 24,
+                      /* is_default */ false,
+                      /* display_name */ "test display"});
   }
 
   void VerifyDisplayOffset(const base::Location& from_here,
@@ -83,13 +87,13 @@ TEST_F(DesktopDisplayInfoTest, DualDisplayLeft) {
   AddDisplay(0, 0, 500, 400);
   AddDisplay(-300, 0, 300, 200);
 
-#if defined(OS_APPLE)
+#if OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
   VerifyDisplayOffset(FROM_HERE, 0, 0, 0);
   VerifyDisplayOffset(FROM_HERE, 1, -300, 0);
 #else
   VerifyDisplayOffset(FROM_HERE, 0, 300, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 0, 0);
-#endif  // defined(OS_APPLE)
+#endif  // OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
 }
 
 // +---------o------------+
@@ -101,13 +105,13 @@ TEST_F(DesktopDisplayInfoTest, DualDisplayLeft_ReverseOrder) {
   AddDisplay(-300, 0, 300, 200);
   AddDisplay(0, 0, 500, 400);
 
-#if defined(OS_APPLE)
+#if OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
   VerifyDisplayOffset(FROM_HERE, 0, -300, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 0, 0);
 #else
   VerifyDisplayOffset(FROM_HERE, 0, 0, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 300, 0);
-#endif  // defined(OS_APPLE)
+#endif  // OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
 }
 
 // +---------o------------+
@@ -120,7 +124,7 @@ TEST_F(DesktopDisplayInfoTest, TripleDisplayMiddle) {
   AddDisplay(0, 0, 500, 400);  // Default display.
   AddDisplay(500, 50, 400, 350);
 
-#if defined(OS_APPLE)
+#if OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
   VerifyDisplayOffset(FROM_HERE, 0, -300, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 0, 0);
   VerifyDisplayOffset(FROM_HERE, 2, 500, 50);
@@ -128,7 +132,7 @@ TEST_F(DesktopDisplayInfoTest, TripleDisplayMiddle) {
   VerifyDisplayOffset(FROM_HERE, 0, 0, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 300, 0);
   VerifyDisplayOffset(FROM_HERE, 2, 800, 50);
-#endif  // defined(OS_APPLE)
+#endif  // OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
 }
 
 //  x         o-----------+            - 0
@@ -145,7 +149,7 @@ TEST_F(DesktopDisplayInfoTest, Multimon3) {
   AddDisplay(300, 400, 600, 450);
   AddDisplay(-300, 350, 300, 200);
 
-#if defined(OS_APPLE)
+#if OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
   VerifyDisplayOffset(FROM_HERE, 0, 0, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 300, 400);
   VerifyDisplayOffset(FROM_HERE, 2, -300, 350);
@@ -153,7 +157,7 @@ TEST_F(DesktopDisplayInfoTest, Multimon3) {
   VerifyDisplayOffset(FROM_HERE, 0, 300, 0);
   VerifyDisplayOffset(FROM_HERE, 1, 600, 400);
   VerifyDisplayOffset(FROM_HERE, 2, 0, 350);
-#endif  // defined(OS_APPLE)
+#endif  // OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
 }
 
 //  x                     +-------+               -- -50
@@ -182,7 +186,7 @@ TEST_F(DesktopDisplayInfoTest, Multimon7) {
   AddDisplay(70, 100, 65, 20);
   AddDisplay(0, 0, 80, 55);  // Default display.
 
-#if defined(OS_APPLE)
+#if OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
   // Relative to display 6.
   VerifyDisplayOffset(FROM_HERE, 0, 80, -10);
   VerifyDisplayOffset(FROM_HERE, 1, 60, -50);
@@ -199,7 +203,76 @@ TEST_F(DesktopDisplayInfoTest, Multimon7) {
   VerifyDisplayOffset(FROM_HERE, 4, 30, 30);
   VerifyDisplayOffset(FROM_HERE, 5, 140, 150);
   VerifyDisplayOffset(FROM_HERE, 6, 70, 50);
-#endif  // defined(OS_APPLE)
+#endif  // OS_USES_PRIMARY_DISPLAY_AS_ORIGIN
+}
+
+TEST_F(DesktopDisplayInfoTest, ToFractionalCoordinate_SingleDisplay) {
+  constexpr int kWidth = 300;
+  constexpr int kHeight = 200;
+  AddDisplay(0, 0, kWidth, kHeight);
+
+  // Top-left.
+  auto fractional = info_.ToFractionalCoordinate(webrtc::DesktopVector(0, 0));
+  ASSERT_TRUE(fractional.has_value());
+  ASSERT_EQ(fractional->screen_id(), 0);
+  ASSERT_FLOAT_EQ(fractional->x(), 0.0f);
+  ASSERT_FLOAT_EQ(fractional->y(), 0.0f);
+
+  // Bottom-right.
+  fractional = info_.ToFractionalCoordinate(
+      webrtc::DesktopVector(kWidth - 1, kHeight - 1));
+  ASSERT_TRUE(fractional.has_value());
+  ASSERT_EQ(fractional->screen_id(), 0);
+  ASSERT_FLOAT_EQ(fractional->x(), 1.f);
+  ASSERT_FLOAT_EQ(fractional->y(), 1.f);
+
+  // Outside.
+  fractional =
+      info_.ToFractionalCoordinate(webrtc::DesktopVector(kWidth, kHeight));
+  ASSERT_FALSE(fractional.has_value());
+
+  fractional = info_.ToFractionalCoordinate(webrtc::DesktopVector(-1, -1));
+  ASSERT_FALSE(fractional.has_value());
+}
+
+TEST_F(DesktopDisplayInfoTest, ToFractionalCoordinate_MultiDisplay) {
+  // +---------o------------+
+  // | 0       | 1          |
+  // | 300x200 | 500x400    |
+  // +---------+            |
+  //           +------------+
+
+  constexpr int kWidth1 = 300;
+  constexpr int kHeight1 = 200;
+  AddDisplay(0, 0, kWidth1, kHeight1);
+
+  constexpr int kWidth2 = 500;
+  constexpr int kHeight2 = 400;
+  AddDisplay(kWidth1, 0, kWidth2, kHeight2);
+
+  // Bottom-right pixel in the first display.
+  auto fractional = info_.ToFractionalCoordinate(
+      webrtc::DesktopVector(kWidth1 - 1, kHeight1 - 1));
+  ASSERT_TRUE(fractional.has_value());
+  ASSERT_EQ(fractional->screen_id(), 0);
+  ASSERT_FLOAT_EQ(fractional->x(), 1.f);
+  ASSERT_FLOAT_EQ(fractional->y(), 1.f);
+
+  // Bottom-right pixel in the second display.
+  fractional = info_.ToFractionalCoordinate(
+      webrtc::DesktopVector(kWidth1 + kWidth2 - 1, kHeight2 - 1));
+  ASSERT_TRUE(fractional.has_value());
+  ASSERT_EQ(fractional->screen_id(), 1);
+  ASSERT_FLOAT_EQ(fractional->x(), 1.f);
+  ASSERT_FLOAT_EQ(fractional->y(), 1.f);
+
+  // Point outside of any display.
+  fractional = info_.ToFractionalCoordinate(webrtc::DesktopVector(-1, -1));
+  ASSERT_FALSE(fractional.has_value());
+
+  fractional =
+      info_.ToFractionalCoordinate(webrtc::DesktopVector(kWidth1 + kWidth2, 0));
+  ASSERT_FALSE(fractional.has_value());
 }
 
 }  // namespace remoting

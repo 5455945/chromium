@@ -1,11 +1,20 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/ozone.gni")
+import("//build/config/ui.gni")
+
+assert(toolkit_views)
+
 component("webview") {
   sources = [
+    "simple_web_view.h",
+    "simple_web_view_dialog_delegate.h",
     "unhandled_keyboard_event_handler.cc",
     "unhandled_keyboard_event_handler.h",
+    "web_contents_delegate_views.cc",
+    "web_contents_delegate_views.h",
     "web_contents_set_background_color.cc",
     "web_contents_set_background_color.h",
     "web_dialog_view.cc",
@@ -31,14 +40,15 @@ component("webview") {
 
   deps = [
     "//base:i18n",
-    "//base/third_party/dynamic_annotations",
+    "//components/input",
     "//ipc",
     "//skia",
     "//ui/accessibility",
-    "//ui/base",
+    "//ui/base/interaction",
     "//ui/content_accelerators",
     "//ui/events",
     "//ui/events:events_base",
+    "//ui/gfx:native_ui_types",
     "//ui/web_dialogs",
     "//url",
   ]
@@ -46,36 +56,38 @@ component("webview") {
   public_deps = [
     "//base",
     "//content/public/browser",
+    "//ui/base/mojom",
     "//ui/gfx",
     "//ui/gfx/geometry",
     "//ui/views",
   ]
 
-  if (is_linux || is_chromeos || is_android || is_fuchsia) {
-    sources += [ "unhandled_keyboard_event_handler_default.cc" ]
+  if (is_linux || is_chromeos || is_fuchsia) {
+    if (use_ozone) {
+      sources += [ "unhandled_keyboard_event_handler_ozone.cc" ]
+      deps += [ "//ui/ozone" ]
+    } else {
+      sources += [ "unhandled_keyboard_event_handler_default.cc" ]
+    }
   }
 }
 
-static_library("test_support") {
+source_set("unit_tests") {
   testonly = true
   sources = [
-    "../../test/webview_test_helper.cc",
-    "../../test/webview_test_helper.h",
+    "unhandled_keyboard_event_handler_unittest.cc",
+    "web_dialog_view_unittest.cc",
+    "webview_unittest.cc",
   ]
-
-  public_deps = [ ":webview" ]
   deps = [
+    ":webview",
     "//base",
-    "//content",
+    "//base/test:test_support",
+    "//components/input",
     "//content/test:test_support",
-    "//ipc:test_support",
-    "//skia",
     "//testing/gtest",
-    "//ui/base",
-    "//ui/events",
-    "//ui/gfx",
-    "//ui/gfx/geometry",
-    "//ui/views",
+    "//ui/base:test_support",
     "//ui/views:test_support",
+    "//ui/web_dialogs:test_support",
   ]
 }

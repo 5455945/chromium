@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,17 @@
 #define UI_EVENTS_OZONE_LAYOUT_KEYBOARD_LAYOUT_ENGINE_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 namespace ui {
 
-enum class DomCode;
+enum class DomCode : uint32_t;
 
 // A KeyboardLayoutEngine provides a platform-independent interface to
 // key mapping. Key mapping provides a meaning (DomKey and character,
@@ -29,19 +31,23 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) KeyboardLayoutEngine {
   KeyboardLayoutEngine() {}
   virtual ~KeyboardLayoutEngine() {}
 
+  // Returns the current layout name.
+  virtual std::string_view GetLayoutName() const = 0;
+
   // Returns true if it is possible to change the current layout.
   virtual bool CanSetCurrentLayout() const = 0;
 
   // Sets the current layout; returns true on success.
   // Drop-in replacement for ImeKeyboard::SetCurrentKeyboardLayoutByName();
   // the argument string is defined by that interface (crbug.com/362698).
-  virtual bool SetCurrentLayoutByName(const std::string& layout_name) = 0;
+  // Calls the callback once the layout is initialized after being set.
+  virtual void SetCurrentLayoutByName(
+      const std::string& layout_name,
+      base::OnceCallback<void(bool success)> callback) = 0;
 
-  // Sets the current layout given a memory location and the buffer size in
-  // bytes, that represent keyboard mapping description; returns true on
-  // success.
-  virtual bool SetCurrentLayoutFromBuffer(const char* keymap_string,
-                                          size_t size) = 0;
+  // Sets the current layout given a buffer that represents a keyboard mapping
+  // description; returns true on success.
+  virtual bool SetCurrentLayoutFromBuffer(std::string_view keymap_string) = 0;
 
   // Returns true if the current layout makes use of the ISO Level 5 Shift key.
   // Drop-in replacement for ImeKeyboard::IsISOLevel5ShiftAvailable().

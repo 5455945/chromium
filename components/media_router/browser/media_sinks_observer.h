@@ -1,16 +1,16 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_MEDIA_ROUTER_BROWSER_MEDIA_SINKS_OBSERVER_H_
 #define COMPONENTS_MEDIA_ROUTER_BROWSER_MEDIA_SINKS_OBSERVER_H_
 
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/media_router/common/media_sink.h"
 #include "components/media_router/common/media_source.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 namespace media_router {
@@ -33,8 +33,12 @@ class MediaSinksObserver {
   // Constructs an observer for all sinks known to |router|.
   // NOTE: Not all Media Route Providers support sink queries with an empty
   // source, so the returned sink list may be incomplete.
-  // TODO(crbug.com/929937): Fix this.
+  // TODO(crbug.com/40613044): Fix this.
   explicit MediaSinksObserver(MediaRouter* router);
+
+  MediaSinksObserver(const MediaSinksObserver&) = delete;
+  MediaSinksObserver& operator=(const MediaSinksObserver&) = delete;
+
   virtual ~MediaSinksObserver();
 
   // Registers with MediaRouter to start observing. Must be called before the
@@ -52,7 +56,8 @@ class MediaSinksObserver {
   virtual void OnSinksUpdated(const std::vector<MediaSink>& sinks,
                               const std::vector<url::Origin>& origins);
 
-  const absl::optional<const MediaSource>& source() const { return source_; }
+  const std::optional<const MediaSource>& source() const { return source_; }
+  const url::Origin& origin() const { return origin_; }
 
  protected:
   // This function is invoked from |OnSinksUpdated(sinks, origins)|.
@@ -62,16 +67,14 @@ class MediaSinksObserver {
   virtual void OnSinksReceived(const std::vector<MediaSink>& sinks) = 0;
 
  private:
-  const absl::optional<const MediaSource> source_;
+  const std::optional<const MediaSource> source_;
   const url::Origin origin_;
-  MediaRouter* const router_;
+  const raw_ptr<MediaRouter> router_;
   bool initialized_;
 
 #if DCHECK_IS_ON()
   bool in_on_sinks_updated_ = false;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(MediaSinksObserver);
 };
 
 }  // namespace media_router

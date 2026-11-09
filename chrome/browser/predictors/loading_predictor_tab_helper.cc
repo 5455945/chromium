@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,42 @@
 #include <set>
 #include <string>
 
+#include "base/check_is_test.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/timer/elapsed_timer.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+#include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_util.h"
 #include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
 #include "chrome/browser/predictors/predictors_enums.h"
 #include "chrome/browser/predictors/predictors_features.h"
 #include "chrome/browser/predictors/predictors_switches.h"
-#include "chrome/browser/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_features.h"
 #include "components/google/core/common/google_util.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
-#include "components/optimization_guide/content/browser/optimization_guide_decider.h"
+#include "components/optimization_guide/core/hints/optimization_guide_decider.h"
 #include "components/optimization_guide/proto/hints.pb.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "net/base/network_anonymization_key.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/connection_allowlist.h"
+#include "services/network/public/cpp/constants.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/loader/lcp_critical_path_predictor_util.h"
+#include "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
 
 using content::BrowserThread;
@@ -39,15 +55,69 @@ namespace {
 constexpr char kLoadingPredictorOptimizationHintsReceiveStatusHistogram[] =
     "LoadingPredictor.OptimizationHintsReceiveStatus";
 
+// TODO(537801204): It's possible that the navigation initiator's frame is gone
+// by now, meaning that its IDs cannot be fetched and its connection allowlist
+// cannot be enforced. Once PolicyContainer data is plumbed through
+// InitiatorNavigationState, we should remove this function and fetch the
+// connection allowlist from there instead.
+void GetInitiatorIds(content::NavigationHandle* navigation_handle,
+                     base::UnguessableToken& network_restrictions_id,
+                     content::GlobalRenderFrameHostId& frame_id) {
+  network_restrictions_id = network::GetNoOpNetworkRestrictionsId();
+  frame_id = content::GlobalRenderFrameHostId();
+  if (navigation_handle->GetInitiatorFrameToken().has_value()) {
+    if (auto* initiator_rfh = content::RenderFrameHost::FromFrameToken(
+            content::GlobalRenderFrameHostToken(
+                navigation_handle->GetInitiatorProcessId(),
+                *navigation_handle->GetInitiatorFrameToken()))) {
+      network_restrictions_id = initiator_rfh->GetNetworkRestrictionsID();
+      frame_id = initiator_rfh->GetGlobalId();
+    }
+  }
+}
+
+// Returns true if `navigation_handle` is a session history navigation whose
+// initiator has an enforced or report-only Connection-Allowlist. The URL of a
+// history navigation comes from the session history entry rather than from the
+// initiator, so speculative requests made on its behalf must not be checked
+// against (and reported to) the initiator's Connection-Allowlist, as that would
+// disclose the history entry's URL and its predicted subresources to the
+// initiator's reporting endpoint.
+bool IsHistoryNavigationFromConnectionAllowlistInitiator(
+    content::NavigationHandle* navigation_handle) {
+  if (!base::FeatureList::IsEnabled(network::features::kConnectionAllowlists) ||
+      !navigation_handle->IsHistory() ||
+      !navigation_handle->GetInitiatorFrameToken().has_value()) {
+    return false;
+  }
+  content::RenderFrameHost* initiator_rfh =
+      content::RenderFrameHost::FromFrameToken(
+          content::GlobalRenderFrameHostToken(
+              navigation_handle->GetInitiatorProcessId(),
+              *navigation_handle->GetInitiatorFrameToken()));
+  if (!initiator_rfh || !initiator_rfh->HasPolicyContainerHost()) {
+    return false;
+  }
+  const network::ConnectionAllowlists& allowlists =
+      initiator_rfh->GetConnectionAllowlists();
+  return allowlists.enforced.has_value() || allowlists.report_only.has_value();
+}
+
 // Called only for subresources.
+// platform/loader/fetch/README.md in blink contains more details on
+// prioritization as well as links to all of the relevant places in the code
+// where priority is determined. If the priority logic is updated here, be sure
+// to update the other code as needed.
 net::RequestPriority GetRequestPriority(
     network::mojom::RequestDestination request_destination) {
   switch (request_destination) {
     case network::mojom::RequestDestination::kStyle:
-    case network::mojom::RequestDestination::kFont:
       return net::HIGHEST;
 
+    case network::mojom::RequestDestination::kFont:
+    case network::mojom::RequestDestination::kJson:
     case network::mojom::RequestDestination::kScript:
+    case network::mojom::RequestDestination::kText:
       return net::MEDIUM;
 
     case network::mojom::RequestDestination::kEmpty:
@@ -69,6 +139,11 @@ net::RequestPriority GetRequestPriority(
     case network::mojom::RequestDestination::kWebBundle:
     case network::mojom::RequestDestination::kWorker:
     case network::mojom::RequestDestination::kXslt:
+    case network::mojom::RequestDestination::kFencedframe:
+    case network::mojom::RequestDestination::kWebIdentity:
+    case network::mojom::RequestDestination::kEmailVerification:
+    case network::mojom::RequestDestination::kCompressionDictionary:
+    case network::mojom::RequestDestination::kSpeculationRules:
       return net::LOWEST;
   }
 }
@@ -80,12 +155,13 @@ bool IsHandledNavigation(content::NavigationHandle* navigation_handle) {
       prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
           web_contents->GetBrowserContext());
   if (no_state_prefetch_manager &&
-      no_state_prefetch_manager->IsWebContentsPrerendering(web_contents)) {
+      no_state_prefetch_manager->IsWebContentsPrefetching(web_contents)) {
     return false;
   }
 
-  return navigation_handle->IsInMainFrame() &&
+  return navigation_handle->IsInPrimaryMainFrame() &&
          !navigation_handle->IsSameDocument() &&
+         !navigation_handle->IsPageActivation() &&
          navigation_handle->GetURL().SchemeIsHTTPOrHTTPS();
 }
 
@@ -112,7 +188,6 @@ bool ShouldPrefetchDestination(network::mojom::RequestDestination destination) {
              destination == network::mojom::RequestDestination::kStyle;
   }
   NOTREACHED();
-  return false;
 }
 
 // Util class for recording the status for when we received optimization hints
@@ -122,7 +197,8 @@ class ScopedOptimizationHintsReceiveStatusRecorder {
   ScopedOptimizationHintsReceiveStatusRecorder()
       : status_(OptimizationHintsReceiveStatus::kUnknown) {}
   ~ScopedOptimizationHintsReceiveStatusRecorder() {
-    DCHECK_NE(status_, OptimizationHintsReceiveStatus::kUnknown);
+    CHECK_NE(status_, OptimizationHintsReceiveStatus::kUnknown,
+             base::NotFatalUntil::M162);
     UMA_HISTOGRAM_ENUMERATION(
         kLoadingPredictorOptimizationHintsReceiveStatusHistogram, status_);
   }
@@ -140,6 +216,68 @@ bool ShouldConsultOptimizationGuide(const GURL& current_main_frame_url,
   // Consult the Optimization Guide on all cross-origin page loads.
   return url::Origin::Create(current_main_frame_url) !=
          url::Origin::Create(previous_main_frame_url);
+}
+
+std::optional<blink::mojom::LCPCriticalPathPredictorNavigationTimeHint>
+GetLCPPHint(content::NavigationHandle& navigation_handle,
+            LoadingPredictor& predictor) {
+  std::optional<LcppStat> lcpp_stat =
+      predictor.resource_prefetch_predictor()->GetLcppStat(
+          navigation_handle.GetInitiatorOrigin(), navigation_handle.GetURL());
+  if (!lcpp_stat || !IsValidLcppStat(*lcpp_stat)) {
+    return std::nullopt;
+  }
+
+  return ConvertLcppStatToLCPCriticalPathPredictorNavigationTimeHint(
+      *lcpp_stat);
+}
+// Attach LCP Critical Path Predictor hint to NavigationHandle, so that it
+// would be sent to the renderer process upon navigation commit.
+void MaybeSetLCPPNavigationHint(content::NavigationHandle& navigation_handle,
+                                LoadingPredictor& predictor) {
+  TRACE_EVENT("navigation", "MaybeSetLCPPNavigationHint");
+  base::ElapsedTimer timer;
+  if (!blink::LcppEnabled() || !navigation_handle.IsInOutermostMainFrame() ||
+      navigation_handle.IsSameDocument()) {
+    return;
+  }
+  const GURL& navigation_url = navigation_handle.GetURL();
+  if (!navigation_url.is_valid() ||
+      !navigation_url.SchemeIs(url::kHttpsScheme)) {
+    return;
+  }
+
+  std::optional<blink::mojom::LCPCriticalPathPredictorNavigationTimeHint> hint =
+      GetLCPPHint(navigation_handle, predictor);
+  if (predictor.IsLCPPTestingEnabled()) {
+    CHECK_IS_TEST();
+    if (!hint) {
+      hint = blink::mojom::LCPCriticalPathPredictorNavigationTimeHint(
+          {}, {}, {}, {}, {}, {}, /*for_testing=*/false);
+    }
+    hint->for_testing = true;
+  }
+  if (hint) {
+    navigation_handle.SetLCPPNavigationHint(hint->Clone());
+    base::UmaHistogramTimes("LoadingPredictor.SetLCPPNavigationHint.Time",
+                            timer.Elapsed());
+  }
+}
+
+void MaybePrewarmMainResourceAndSubresourcesOnNavigation(
+    content::NavigationHandle& navigation_handle,
+    LoadingPredictor& predictor) {
+  TRACE_EVENT("navigation",
+              "MaybePrewarmMainResourceAndSubresourcesOnNavigation");
+  static const bool enabled =
+      base::FeatureList::IsEnabled(blink::features::kHttpDiskCachePrewarming) &&
+      blink::features::kHttpDiskCachePrewarmingTriggerOnNavigation.Get();
+  if (!enabled || !navigation_handle.IsInOutermostMainFrame() ||
+      navigation_handle.IsSameDocument()) {
+    return;
+  }
+  predictor.MaybePrewarmResources(navigation_handle.GetInitiatorOrigin(),
+                                  navigation_handle.GetURL());
 }
 
 NavigationId GetNextId() {
@@ -191,7 +329,7 @@ void LoadingPredictorTabHelper::PageData::
         content::RenderFrameHost& render_frame_host) {
   auto* navigation_holder =
       NavigationPageDataHolder::GetForNavigationHandle(navigation_handle);
-  DCHECK(navigation_holder);
+  CHECK(navigation_holder, base::NotFatalUntil::M162);
 
   auto* document_holder =
       DocumentPageDataHolder::GetOrCreateForCurrentDocument(&render_frame_host);
@@ -203,21 +341,33 @@ void LoadingPredictorTabHelper::PageData::
 }
 
 LoadingPredictorTabHelper::DocumentPageDataHolder::DocumentPageDataHolder(
-    content::RenderFrameHost* render_frame_host)
-    : page_data_(base::MakeRefCounted<PageData>()),
-      render_frame_host_(render_frame_host) {}
-LoadingPredictorTabHelper::DocumentPageDataHolder::~DocumentPageDataHolder() =
-    default;
+    content::RenderFrameHost* rfh)
+    : content::DocumentUserData<DocumentPageDataHolder>(rfh),
+      page_data_(base::MakeRefCounted<PageData>()) {}
+
+LoadingPredictorTabHelper::DocumentPageDataHolder::~DocumentPageDataHolder() {
+  if (page_data_->predictor_) {
+    page_data_->predictor_->loading_data_collector()->RecordPageDestroyed(
+        page_data_->navigation_id_,
+        page_data_->last_optimization_guide_prediction_);
+  }
+  page_data_->last_optimization_guide_prediction_ = std::nullopt;
+}
+
 LoadingPredictorTabHelper::NavigationPageDataHolder::NavigationPageDataHolder(
     content::NavigationHandle& navigation_handle)
     : page_data_(base::MakeRefCounted<PageData>()),
-      navigation_handle_(navigation_handle) {}
+      navigation_handle_(navigation_handle.GetSafeRef()) {}
 LoadingPredictorTabHelper::NavigationPageDataHolder::
     ~NavigationPageDataHolder() = default;
 
+DEFINE_USER_DATA(LoadingPredictorTabHelper);
+
 LoadingPredictorTabHelper::LoadingPredictorTabHelper(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
+    : content::WebContentsObserver(web_contents),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   auto* predictor = LoadingPredictorFactory::GetForProfile(profile);
@@ -236,58 +386,147 @@ LoadingPredictorTabHelper::LoadingPredictorTabHelper(
 
 LoadingPredictorTabHelper::~LoadingPredictorTabHelper() = default;
 
+// static
+LoadingPredictorTabHelper* LoadingPredictorTabHelper::From(
+    tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+LoadingPredictorTabHelper* LoadingPredictorTabHelper::FromWebContents(
+    content::WebContents* web_contents) {
+  return web_contents
+             ? From(tabs::TabInterface::MaybeGetFromContents(web_contents))
+             : nullptr;
+}
+
 void LoadingPredictorTabHelper::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  TRACE_EVENT("navigation", "LoadingPredictorTabHelper::DidStartNavigation");
 
-  if (!predictor_)
+  if (!predictor_ || predictor_->WasShutdown()) {
     return;
+  }
 
-  if (!IsHandledNavigation(navigation_handle))
+  // If the navigation is blocked by the initiator's Connection-Allowlist, it
+  // will not commit. Skip all of this tab helper's work for it -- speculative
+  // network activity (preconnect, preresolve, resource prewarming) as well as
+  // predictor bookkeeping -- since the navigation won't load. Otherwise the
+  // destination host would leak (e.g. via its DNS resolution) even though the
+  // navigation is blocked. See https://github.com/WICG/connection-allowlists.
+  if (navigation_handle->IsBlockedByConnectionAllowlist()) {
     return;
+  }
+
+  // Likewise skip history navigations initiated by a document with a
+  // Connection-Allowlist, so that the speculative requests made for them don't
+  // queue reports to the initiator that reveal the session history entry.
+  if (IsHistoryNavigationFromConnectionAllowlistInitiator(navigation_handle)) {
+    return;
+  }
+
+  MaybeSetLCPPNavigationHint(*navigation_handle, *predictor_);
+
+  MaybePrewarmMainResourceAndSubresourcesOnNavigation(*navigation_handle,
+                                                      *predictor_);
+
+  if (!IsHandledNavigation(navigation_handle)) {
+    return;
+  }
+
+  const bool should_consult_optimization_guide = ShouldConsultOptimizationGuide(
+      navigation_handle->GetURL(), web_contents());
 
   PageData& page_data = PageData::CreateForNavigationHandle(*navigation_handle);
+  page_data.predictor_ = predictor_;
 
-  page_data.has_local_preconnect_predictions_for_current_navigation_ =
-      predictor_->OnNavigationStarted(
-          page_data.navigation_id_,
-          ukm::ConvertToSourceId(navigation_handle->GetNavigationId(),
-                                 ukm::SourceIdType::NAVIGATION_ID),
-          navigation_handle->GetURL(), navigation_handle->NavigationStart());
-  if (page_data.has_local_preconnect_predictions_for_current_navigation_ &&
-      !features::ShouldAlwaysRetrieveOptimizationGuidePredictions()) {
+  predictor_->OnNavigationStarted(
+      page_data.navigation_id_,
+      ukm::ConvertToSourceId(navigation_handle->GetNavigationId(),
+                             ukm::SourceIdType::NAVIGATION_ID),
+      navigation_handle->GetURL(), navigation_handle->NavigationStart());
+
+  base::UnguessableToken initiator_network_restrictions_id;
+  content::GlobalRenderFrameHostId initiator_frame_id;
+  GetInitiatorIds(navigation_handle, initiator_network_restrictions_id,
+                  initiator_frame_id);
+
+  if (base::FeatureList::IsEnabled(
+          blink::features::kLCPPPrefetchSubresourceAsync)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &LoadingPredictorTabHelper::PrepareForPageLoad,
+            weak_ptr_factory_.GetWeakPtr(), base::WrapRefCounted(&page_data),
+            navigation_handle->GetInitiatorOrigin(),
+            navigation_handle->GetURL(), initiator_network_restrictions_id,
+            initiator_frame_id, should_consult_optimization_guide));
+  } else {
+    PrepareForPageLoad(base::WrapRefCounted(&page_data),
+                       navigation_handle->GetInitiatorOrigin(),
+                       navigation_handle->GetURL(),
+                       initiator_network_restrictions_id, initiator_frame_id,
+                       should_consult_optimization_guide);
+  }
+}
+
+void LoadingPredictorTabHelper::PrepareForPageLoad(
+    scoped_refptr<PageData> page_data,
+    const std::optional<url::Origin> initiator_origin,
+    const GURL main_frame_url,
+    base::UnguessableToken initiator_network_restrictions_id,
+    content::GlobalRenderFrameHostId initiator_frame_id,
+    bool should_consult_optimization_guide) {
+  TRACE_EVENT("navigation", "LoadingPredictorTabHelper::PrepareForPageLoad.");
+  is_prepare_for_pageload_called_for_testing_ = true;
+  if (!predictor_ || predictor_->WasShutdown()) {
+    return;
+  }
+  page_data->has_local_preconnect_predictions_for_current_navigation_ =
+      predictor_->PrepareForPageLoad(
+          initiator_origin, main_frame_url, HintOrigin::NAVIGATION,
+          initiator_network_restrictions_id, /*preconnectable=*/false,
+          /*preconnect_prediction=*/std::nullopt, initiator_frame_id);
+
+  if ((page_data->has_local_preconnect_predictions_for_current_navigation_ &&
+       !features::ShouldAlwaysRetrieveOptimizationGuidePredictions()) ||
+      !optimization_guide_decider_ || !should_consult_optimization_guide) {
     return;
   }
 
-  if (!optimization_guide_decider_)
-    return;
-
-  if (!ShouldConsultOptimizationGuide(navigation_handle->GetURL(),
-                                      web_contents())) {
-    return;
-  }
-
-  page_data.last_optimization_guide_prediction_ = OptimizationGuidePrediction();
-  page_data.last_optimization_guide_prediction_->decision =
+  TRACE_EVENT("navigation",
+              "LoadingPredictorTabHelper::PrepareForPageLoad."
+              "OptimizationGuidePrediction");
+  page_data->last_optimization_guide_prediction_ =
+      OptimizationGuidePrediction();
+  page_data->last_optimization_guide_prediction_->decision =
       optimization_guide::OptimizationGuideDecision::kUnknown;
 
-  optimization_guide_decider_->CanApplyOptimizationAsync(
-      navigation_handle, optimization_guide::proto::LOADING_PREDICTOR,
-      base::BindOnce(
-          &LoadingPredictorTabHelper::OnOptimizationGuideDecision,
-          weak_ptr_factory_.GetWeakPtr(), base::WrapRefCounted(&page_data),
-          navigation_handle->GetURL(),
-          !page_data.has_local_preconnect_predictions_for_current_navigation_));
+  bool should_add_preconnects =
+      !page_data->has_local_preconnect_predictions_for_current_navigation_;
+  optimization_guide_decider_->CanApplyOptimization(
+      main_frame_url, optimization_guide::proto::LOADING_PREDICTOR,
+      base::BindOnce(&LoadingPredictorTabHelper::OnOptimizationGuideDecision,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(page_data),
+                     initiator_origin, main_frame_url, should_add_preconnects,
+                     initiator_network_restrictions_id, initiator_frame_id));
 }
 
 void LoadingPredictorTabHelper::DidRedirectNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!predictor_)
     return;
 
-  if (!IsHandledNavigation(navigation_handle))
+  MaybeSetLCPPNavigationHint(*navigation_handle, *predictor_);
+
+  MaybePrewarmMainResourceAndSubresourcesOnNavigation(*navigation_handle,
+                                                      *predictor_);
+
+  if (!IsHandledNavigation(navigation_handle)) {
     return;
+  }
 
   auto* page_data = PageData::GetForNavigationHandle(*navigation_handle);
   // PageData may not be created in DidStartNavigation if IsHandledNavigation()
@@ -308,21 +547,27 @@ void LoadingPredictorTabHelper::DidRedirectNavigation(
       !page_data->last_optimization_guide_prediction_)
     return;
 
+  base::UnguessableToken initiator_network_restrictions_id;
+  content::GlobalRenderFrameHostId initiator_frame_id;
+  GetInitiatorIds(navigation_handle, initiator_network_restrictions_id,
+                  initiator_frame_id);
+
   // Get an updated prediction for the navigation.
-  optimization_guide_decider_->CanApplyOptimizationAsync(
-      navigation_handle, optimization_guide::proto::LOADING_PREDICTOR,
+  optimization_guide_decider_->CanApplyOptimization(
+      navigation_handle->GetURL(), optimization_guide::proto::LOADING_PREDICTOR,
       base::BindOnce(
           &LoadingPredictorTabHelper::OnOptimizationGuideDecision,
           weak_ptr_factory_.GetWeakPtr(), base::WrapRefCounted(page_data),
-          navigation_handle->GetURL(),
+          navigation_handle->GetInitiatorOrigin(), navigation_handle->GetURL(),
           !(page_data
                 ->has_local_preconnect_predictions_for_current_navigation_ &&
-            is_same_origin_redirect)));
+            is_same_origin_redirect),
+          initiator_network_restrictions_id, initiator_frame_id));
 }
 
 void LoadingPredictorTabHelper::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!predictor_)
     return;
 
@@ -351,8 +596,9 @@ void LoadingPredictorTabHelper::DidFinishNavigation(
 void LoadingPredictorTabHelper::ResourceLoadComplete(
     content::RenderFrameHost* render_frame_host,
     const content::GlobalRequestID& request_id,
+    const GURL& original_url,
     const blink::mojom::ResourceLoadInfo& resource_load_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!predictor_)
     return;
 
@@ -365,7 +611,7 @@ void LoadingPredictorTabHelper::ResourceLoadComplete(
     return;
 
   predictor_->loading_data_collector()->RecordResourceLoadComplete(
-      page_data->navigation_id_, resource_load_info);
+      page_data->navigation_id_, original_url, resource_load_info);
 }
 
 void LoadingPredictorTabHelper::DidLoadResourceFromMemoryCache(
@@ -373,7 +619,7 @@ void LoadingPredictorTabHelper::DidLoadResourceFromMemoryCache(
     const GURL& url,
     const std::string& mime_type,
     network::mojom::RequestDestination request_destination) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!predictor_)
     return;
 
@@ -390,51 +636,35 @@ void LoadingPredictorTabHelper::DidLoadResourceFromMemoryCache(
   resource_load_info.request_priority =
       GetRequestPriority(resource_load_info.request_destination);
   resource_load_info.network_info =
-      blink::mojom::CommonNetworkInfo::New(false, false, absl::nullopt);
+      blink::mojom::CommonNetworkInfo::New(false, false, std::nullopt);
   predictor_->loading_data_collector()->RecordResourceLoadComplete(
-      page_data->navigation_id_, resource_load_info);
+      page_data->navigation_id_, url, resource_load_info);
 }
 
-void LoadingPredictorTabHelper::DocumentOnLoadCompletedInMainFrame(
-    content::RenderFrameHost* render_frame_host) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void LoadingPredictorTabHelper::DocumentOnLoadCompletedInPrimaryMainFrame() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!predictor_)
     return;
 
-  auto* page_data = PageData::GetForDocument(*render_frame_host);
+  auto* page_data =
+      PageData::GetForDocument(*web_contents()->GetPrimaryMainFrame());
   if (!page_data)
     return;
 
   predictor_->loading_data_collector()->RecordMainFrameLoadComplete(
-      page_data->navigation_id_,
-      page_data->last_optimization_guide_prediction_);
-
-  // Clear out Optimization Guide Prediction, as it is no longer needed.
-  page_data->last_optimization_guide_prediction_ = absl::nullopt;
-}
-
-void LoadingPredictorTabHelper::RecordFirstContentfulPaint(
-    content::RenderFrameHost* render_frame_host,
-    base::TimeTicks first_contentful_paint) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!predictor_)
-    return;
-
-  auto* page_data = PageData::GetForDocument(*render_frame_host);
-  if (!page_data)
-    return;
-
-  predictor_->loading_data_collector()->RecordFirstContentfulPaint(
-      page_data->navigation_id_, first_contentful_paint);
+      page_data->navigation_id_);
 }
 
 void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
     scoped_refptr<PageData> page_data,
+    const std::optional<url::Origin>& initiator_origin,
     const GURL& main_frame_url,
     bool should_add_preconnects_to_prediction,
+    base::UnguessableToken network_restrictions_id,
+    content::GlobalRenderFrameHostId initiator_frame_id,
     optimization_guide::OptimizationGuideDecision decision,
     const optimization_guide::OptimizationMetadata& metadata) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (!predictor_)
     return;
@@ -443,7 +673,7 @@ void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
 
   if (!page_data->has_committed_) {
     if (!page_data->navigation_page_data_holder_ ||
-        page_data->navigation_page_data_holder_->navigation_handle_.GetURL() !=
+        page_data->navigation_page_data_holder_->navigation_handle_->GetURL() !=
             main_frame_url) {
       // The current navigation has either redirected or a new one has started,
       // so return.
@@ -491,8 +721,10 @@ void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
 
   PreconnectPrediction prediction;
   url::Origin main_frame_origin = url::Origin::Create(main_frame_url);
-  net::NetworkIsolationKey network_isolation_key(main_frame_origin,
-                                                 main_frame_origin);
+  net::SchemefulSite main_frame_site = net::SchemefulSite(main_frame_url);
+  auto network_anonymization_key =
+      net::NetworkAnonymizationKey::CreateSameSite(std::move(main_frame_site));
+
   std::set<url::Origin> predicted_origins;
   std::vector<GURL> predicted_subresources;
   const auto lp_metadata = metadata.loading_predictor_metadata();
@@ -507,8 +739,7 @@ void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
           GetDestination(subresource.resource_type());
       if (ShouldPrefetchDestination(destination)) {
         // TODO(falken): Detect duplicates.
-        prediction.prefetch_requests.emplace_back(
-            subresource_url, network_isolation_key, destination);
+        prediction.prefetch_requests.emplace_back(subresource_url, destination);
       }
     } else if (should_add_preconnects_to_prediction) {
       url::Origin subresource_origin = url::Origin::Create(subresource_url);
@@ -521,7 +752,7 @@ void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
         continue;
       predicted_origins.insert(subresource_origin);
       prediction.requests.emplace_back(subresource_origin, 1,
-                                       network_isolation_key);
+                                       network_anonymization_key);
     }
   }
 
@@ -534,16 +765,15 @@ void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
   // use the predictions to pre* subresources.
   if (!page_data->document_page_data_holder_ &&
       features::ShouldUseOptimizationGuidePredictions()) {
-    predictor_->PrepareForPageLoad(main_frame_url,
-                                   HintOrigin::OPTIMIZATION_GUIDE,
-                                   /*preconnectable=*/false, prediction);
+    predictor_->PrepareForPageLoad(
+        initiator_origin, main_frame_url, HintOrigin::OPTIMIZATION_GUIDE,
+        network_restrictions_id,
+        /*preconnectable=*/false, prediction, initiator_frame_id);
   }
 }
 
 NAVIGATION_HANDLE_USER_DATA_KEY_IMPL(
-    LoadingPredictorTabHelper::NavigationPageDataHolder)
-RENDER_DOCUMENT_HOST_USER_DATA_KEY_IMPL(
-    LoadingPredictorTabHelper::DocumentPageDataHolder)
-WEB_CONTENTS_USER_DATA_KEY_IMPL(LoadingPredictorTabHelper)
+    LoadingPredictorTabHelper::NavigationPageDataHolder);
+DOCUMENT_USER_DATA_KEY_IMPL(LoadingPredictorTabHelper::DocumentPageDataHolder);
 
 }  // namespace predictors

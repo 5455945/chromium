@@ -1,5 +1,10 @@
 Tests name sources in details and summary.
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 37
+    }
     domNode : summary#summary2
     ignored : false
     name : {
@@ -17,6 +22,10 @@ Tests name sources in details and summary.
             }
             [3] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : summary2-title
+                }
                 type : attribute
                 value : {
                     type : computedString
@@ -28,6 +37,7 @@ Tests name sources in details and summary.
         value : summary2-title
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : focusable
@@ -50,6 +60,11 @@ Tests name sources in details and summary.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 37
+    }
     description : {
         type : computedString
         value : summary3-title
@@ -75,6 +90,10 @@ Tests name sources in details and summary.
             }
             [3] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : summary3-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -87,6 +106,7 @@ Tests name sources in details and summary.
         value : summary3-contents
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : focusable
@@ -109,6 +129,11 @@ Tests name sources in details and summary.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 37
+    }
     description : {
         type : computedString
         value : summary4-contents
@@ -143,6 +168,10 @@ Tests name sources in details and summary.
             }
             [3] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : summary4-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -155,6 +184,7 @@ Tests name sources in details and summary.
         value : summary4-aria-label
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : focusable
@@ -177,6 +207,11 @@ Tests name sources in details and summary.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 37
+    }
     description : {
         type : computedString
         value : summary5-contents
@@ -227,6 +262,10 @@ Tests name sources in details and summary.
             }
             [3] : {
                 attribute : title
+                attributeValue : {
+                    type : string
+                    value : summary5-title
+                }
                 superseded : true
                 type : attribute
                 value : {
@@ -239,6 +278,7 @@ Tests name sources in details and summary.
         value : summary5-aria-labelledby
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : focusable

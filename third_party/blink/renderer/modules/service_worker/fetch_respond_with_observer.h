@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_SERVICE_WORKER_FETCH_RESPOND_WITH_OBSERVER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_SERVICE_WORKER_FETCH_RESPOND_WITH_OBSERVER_H_
 
+#include "base/task/single_thread_task_runner.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_fetch_response_callback.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/service_worker/respond_with_observer.h"
@@ -19,7 +21,7 @@ class CrossOriginResourcePolicyChecker;
 class ExecutionContext;
 class FetchEvent;
 class ReadableStream;
-class ScriptValue;
+class Response;
 class WaitUntilObserver;
 
 namespace mojom {
@@ -40,17 +42,27 @@ class MODULES_EXPORT FetchRespondWithObserver : public RespondWithObserver {
       WaitUntilObserver*);
   ~FetchRespondWithObserver() override = default;
 
+  void OnResponseFulfilled(ScriptState*, Response*);
   void OnResponseRejected(mojom::ServiceWorkerResponseError) override;
-  void OnResponseFulfilled(ScriptState*,
-                           const ScriptValue&,
-                           ExceptionState::ContextType context_type,
-                           const char* interface_name,
-                           const char* property_name) override;
-  void OnNoResponse() override;
+  void OnNoResponse(ScriptState*) override;
 
   void SetEvent(FetchEvent* event);
 
   void Trace(Visitor*) const override;
+
+  const KURL& request_url() const { return request_url_; }
+  const std::optional<base::UnguessableToken>& race_network_request_token()
+      const {
+    return race_network_request_token_;
+  }
+  void OnRaceFetchError(int net_error_code) {
+    race_fetch_net_error_code_ = net_error_code;
+  }
+  void OnRegularFetchError(int net_error_code) {
+    regular_fetch_net_error_code_ = net_error_code;
+  }
+  mojom::blink::ServiceWorkerFetchHandlerErrorsPtr CreateFetchHandlerErrors()
+      const;
 
  private:
   const KURL request_url_;
@@ -59,9 +71,13 @@ class MODULES_EXPORT FetchRespondWithObserver : public RespondWithObserver {
   const mojom::RequestContextFrameType frame_type_;
   const network::mojom::RequestDestination request_destination_;
   Member<FetchEvent> event_;
-  Member<ReadableStream> request_body_stream_;
+  Member<ReadableStream> original_request_body_stream_;
   // https://fetch.spec.whatwg.org/#concept-body-source
   const bool request_body_has_source_;
+  const bool range_request_;
+  const std::optional<base::UnguessableToken> race_network_request_token_;
+  std::optional<int> race_fetch_net_error_code_;
+  std::optional<int> regular_fetch_net_error_code_;
   base::WeakPtr<CrossOriginResourcePolicyChecker> corp_checker_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 };

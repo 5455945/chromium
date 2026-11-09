@@ -10,7 +10,7 @@ click of a button you can understand where memory is being used in your system.
 ## Taking a memory-infra trace
 
  1. [Record a trace as usual][record-trace]: open [chrome://tracing][tracing]
-    on Desktop Chrome or [chrome://inspect][inspect-tracing] to trace
+    on Desktop Chrome or [chrome://inspect/?tracing#devices][inspect-tracing] to trace
     Chrome for Android.
 
  2. Make sure to enable the **memory-infra** category on the right.
@@ -20,7 +20,7 @@ click of a button you can understand where memory is being used in your system.
 
 [record-trace]:     https://sites.google.com/a/chromium.org/dev/developers/how-tos/trace-event-profiling-tool/recording-tracing-runs
 [tracing]:          chrome://tracing
-[inspect-tracing]:  chrome://inspect
+[inspect-tracing]:  chrome://inspect/?tracing#devices
 [memory-infra-box]: https://storage.googleapis.com/chromium-docs.appspot.com/1c6d1886584e7cc6ffed0d377f32023f8da53e02
 
 ## Navigating a memory-infra trace
@@ -91,7 +91,7 @@ and it is discounted from malloc and the blue columns.
 
 <!-- TODO(primiano): Improve this. https://crbug.com/??? -->
 
-[oilpan]:     /third_party/blink/renderer/platform/heap/BlinkGCDesign.md
+[oilpan]:     /third_party/blink/renderer/platform/heap/BlinkGCAPIReference.md
 [discardable]:base/memory/discardable_memory.h
 [cc-memory]:  probe-cc.md
 [gpu-memory]: probe-gpu.md
@@ -115,6 +115,7 @@ amount of memory used.
  * [Adding MemoryInfra Tracing to a Component](adding_memory_infra_tracing.md)
  * [GPU Memory Tracing](probe-gpu.md)
  * [Heap Profiling with MemoryInfra](heap_profiler.md)
+ * [Heap Profiling with External Tools](../memory/heap_profiling_external.md)
  * [Startup Tracing with MemoryInfra](memory_infra_startup_tracing.md)
 
 ## Rationale
@@ -169,15 +170,15 @@ or take a look at one of the existing examples such as
 
 Architectural:
 
-<iframe width="100%" height="300px" src="https://docs.google.com/a/google.com/embeddedfolderview?id=0B3KuDeqD-lVJfmp0cW1VcE5XVWNxZndxelV5T19kT2NFSndYZlNFbkFpc3pSa2VDN0hlMm8">
+<iframe width="100%" height="300px" src="https://docs.google.com/a/google.com/embeddedfolderview?id=0B3KuDeqD-lVJfmp0cW1VcE5XVWNxZndxelV5T19kT2NFSndYZlNFbkFpc3pSa2VDN0hlMm8&resourcekey=0-ROo3GFIuBBIGakbTlSKZuw">
 </iframe>
 
 Chrome-side design docs:
 
-<iframe width="100%" height="300px" src="https://docs.google.com/a/google.com/embeddedfolderview?id=0B3KuDeqD-lVJfndSa2dleUQtMnZDeWpPZk1JV0QtbVM5STkwWms4YThzQ0pGTmU1QU9kNVk">
+<iframe width="100%" height="300px" src="https://docs.google.com/a/google.com/embeddedfolderview?id=0B3KuDeqD-lVJfndSa2dleUQtMnZDeWpPZk1JV0QtbVM5STkwWms4YThzQ0pGTmU1QU9kNVk&resourcekey=0-_pVIubJkVbp5xAPQ0WKsvA">
 </iframe>
 
 Catapult-side design docs:
 
-<iframe width="100%" height="300px" src="https://docs.google.com/a/google.com/embeddedfolderview?id=0B3KuDeqD-lVJfm10bXd5YmRNWUpKOElOWS0xdU1tMmV1S3F4aHo0ZDJLTmtGRy1qVnQtVWM">
+<iframe width="100%" height="300px" src="https://docs.google.com/a/google.com/embeddedfolderview?id=0B3KuDeqD-lVJfm10bXd5YmRNWUpKOElOWS0xdU1tMmV1S3F4aHo0ZDJLTmtGRy1qVnQtVWM&resourcekey=0-GvJpfCIKyDiXaERBTvoKhg">
 </iframe>

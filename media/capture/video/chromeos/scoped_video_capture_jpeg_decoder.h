@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <memory>
 
-#include "base/sequenced_task_runner.h"
+#include "base/containers/span.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/capture/capture_export.h"
 #include "media/capture/video/chromeos/video_capture_jpeg_decoder.h"
 
@@ -28,8 +29,7 @@ class CAPTURE_EXPORT ScopedVideoCaptureJpegDecoder
   void Initialize() override;
   STATUS GetStatus() const override;
   void DecodeCapturedData(
-      const uint8_t* data,
-      size_t in_buffer_size,
+      base::span<const uint8_t> data,
       const media::VideoCaptureFormat& frame_format,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,

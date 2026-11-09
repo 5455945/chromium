@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/common/mojom/host_id.mojom-forward.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
@@ -22,11 +23,17 @@
 #include "extensions/renderer/script_injection.h"
 #include "extensions/renderer/user_script_set_manager.h"
 
+namespace blink {
+class WebLocalFrame;
+}
+
 namespace content {
 class RenderFrame;
 }
 
 namespace extensions {
+
+class ExtensionFrameHelper;
 
 // The ScriptInjectionManager manages extensions injecting scripts into frames
 // via both content/user scripts and tabs.executeScript(). It is responsible for
@@ -36,13 +43,17 @@ class ScriptInjectionManager : public UserScriptSetManager::Observer {
  public:
   explicit ScriptInjectionManager(
       UserScriptSetManager* user_script_set_manager);
+
+  ScriptInjectionManager(const ScriptInjectionManager&) = delete;
+  ScriptInjectionManager& operator=(const ScriptInjectionManager&) = delete;
+
   virtual ~ScriptInjectionManager();
 
   // Notifies that a new render view has been created.
   void OnRenderFrameCreated(content::RenderFrame* render_frame);
 
   // Removes pending injections of the unloaded extension.
-  void OnExtensionUnloaded(const std::string& extension_id);
+  void OnExtensionUnloaded(const ExtensionId& extension_id);
 
   // Handle the ExecuteCode extension message.
   void HandleExecuteCode(mojom::ExecuteCodeParamsPtr params,
@@ -54,6 +65,12 @@ class ScriptInjectionManager : public UserScriptSetManager::Observer {
                                 const ExtensionId& extension_id,
                                 const std::string& script_id,
                                 const GURL& url);
+
+  // Starts streaming JS sources for injected scripts at document start
+  // to V8, so they can be compiled in the background while the document loads.
+  void StartStreamingJSSources(blink::WebLocalFrame* web_frame,
+                               const GURL& document_url,
+                               ExtensionFrameHelper* frame_helper);
 
   void set_activity_logging_enabled(bool enabled) {
     activity_logging_enabled_ = enabled;
@@ -86,14 +103,14 @@ class ScriptInjectionManager : public UserScriptSetManager::Observer {
   // Notifies that an RFOHelper should be removed.
   void RemoveObserver(RFOHelper* helper);
 
-  // Invalidate any pending tasks associated with |frame|.
+  // Invalidate any pending tasks associated with `frame`.
   void InvalidateForFrame(content::RenderFrame* frame);
 
-  // Starts the process to inject appropriate scripts into |frame|.
+  // Starts the process to inject appropriate scripts into `frame`.
   void StartInjectScripts(content::RenderFrame* frame,
                           mojom::RunLocation run_location);
 
-  // Actually injects the scripts into |frame|.
+  // Actually injects the scripts into `frame`.
   void InjectScripts(content::RenderFrame* frame,
                      mojom::RunLocation run_location);
 
@@ -107,13 +124,14 @@ class ScriptInjectionManager : public UserScriptSetManager::Observer {
   FrameStatusMap frame_statuses_;
 
   // The frames currently being injected into, so long as that frame is valid.
-  std::set<content::RenderFrame*> active_injection_frames_;
+  std::set<raw_ptr<content::RenderFrame, SetExperimental>>
+      active_injection_frames_;
 
   // The collection of RFOHelpers.
   std::vector<std::unique_ptr<RFOHelper>> rfo_helpers_;
 
   // The set of UserScripts associated with extensions. Owned by the Dispatcher.
-  UserScriptSetManager* user_script_set_manager_;
+  raw_ptr<UserScriptSetManager> user_script_set_manager_;
 
   // Pending injections which are waiting for either the proper run location or
   // user consent.
@@ -127,8 +145,6 @@ class ScriptInjectionManager : public UserScriptSetManager::Observer {
 
   base::ScopedObservation<UserScriptSetManager, UserScriptSetManager::Observer>
       user_script_set_manager_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ScriptInjectionManager);
 };
 
 }  // namespace extensions

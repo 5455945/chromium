@@ -1,9 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
@@ -12,7 +12,7 @@
 #include "chrome/chrome_elf/third_party_dlls/public_api.h"
 #include "chrome/common/chrome_switches.h"
 
-// This function is a temporary workaround for https://crbug.com/655788. We
+// This function is a temporary workaround for https://crbug.com/41280821. We
 // need to come up with a better way to initialize crash reporting that can
 // happen inside DllMain().
 void SignalInitializeCrashReporting() {}
@@ -22,7 +22,8 @@ void SignalChromeElf() {}
 bool GetUserDataDirectoryThunk(wchar_t* user_data_dir,
                                size_t user_data_dir_length,
                                wchar_t* invalid_user_data_dir,
-                               size_t invalid_user_data_dir_length) {
+                               size_t invalid_user_data_dir_length,
+                               bool* policy_set) {
   // In tests, just respect the user-data-dir switch if given.
   base::FilePath user_data_dir_path =
       base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
@@ -30,12 +31,19 @@ bool GetUserDataDirectoryThunk(wchar_t* user_data_dir,
   if (!user_data_dir_path.empty() && user_data_dir_path.EndsWithSeparator())
     user_data_dir_path = user_data_dir_path.StripTrailingSeparators();
 
-  wcsncpy_s(user_data_dir, user_data_dir_length,
-            user_data_dir_path.value().c_str(), _TRUNCATE);
-  wcsncpy_s(invalid_user_data_dir, invalid_user_data_dir_length, L"",
-            _TRUNCATE);
+  UNSAFE_TODO(wcsncpy_s(user_data_dir, user_data_dir_length,
+                        user_data_dir_path.value().c_str(), _TRUNCATE));
+  UNSAFE_TODO(wcsncpy_s(invalid_user_data_dir, invalid_user_data_dir_length,
+                        L"", _TRUNCATE));
+  if (policy_set) {
+    *policy_set = false;
+  }
 
   return !user_data_dir_path.empty();
+}
+
+bool IsTemporaryUserDataDirectoryCreatedForHeadless() {
+  return false;
 }
 
 void SetMetricsClientId(const char* client_id) {}
@@ -69,18 +77,19 @@ uint32_t DrainLog(uint8_t* buffer,
 
   // Each entry shares the module path for convenience.
   static constexpr char kModulePath[] = "C:\\foo\\bar\\module.dll";
-  static constexpr uint32_t kModulePathLength = base::size(kModulePath) - 1;
+  static constexpr uint32_t kModulePathLength = std::size(kModulePath) - 1;
 
   if (log_remaining) {
     *log_remaining = third_party_dlls::GetLogEntrySize(kModulePathLength) *
-                     base::size(kTestLogEntries);
+                     std::size(kTestLogEntries);
   }
 
   uint8_t* tracker = buffer;
   for (const auto& test_entry : kTestLogEntries) {
     uint32_t entry_size = third_party_dlls::GetLogEntrySize(kModulePathLength);
-    if (tracker + entry_size > buffer + buffer_size)
+    if (UNSAFE_TODO(tracker + entry_size) > UNSAFE_TODO(buffer + buffer_size)) {
       break;
+    }
 
     third_party_dlls::LogEntry* log_entry =
         reinterpret_cast<third_party_dlls::LogEntry*>(tracker);
@@ -89,12 +98,13 @@ uint32_t DrainLog(uint8_t* buffer,
     log_entry->module_size = test_entry.module_size;
     log_entry->time_date_stamp = test_entry.time_date_stamp;
     log_entry->path_len = kModulePathLength;
-    ::memcpy(log_entry->path, kModulePath, log_entry->path_len + 1);
+    UNSAFE_TODO(
+        ::memcpy(log_entry->path, kModulePath, log_entry->path_len + 1));
 
-    tracker += entry_size;
+    UNSAFE_TODO(tracker += entry_size);
   }
 
-  return base::checked_cast<uint32_t>(tracker - buffer);
+  return base::checked_cast<uint32_t>(UNSAFE_TODO(tracker - buffer));
 }
 
 bool RegisterLogNotification(HANDLE event_handle) {
@@ -113,4 +123,8 @@ void DisableHook() {}
 
 int32_t GetApplyHookResult() {
   return 0;
+}
+
+bool IsExtensionPointDisableSet() {
+  return false;
 }

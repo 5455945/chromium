@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,8 +20,8 @@ struct DISPLAY_EXPORT ScreenInfos {
   ScreenInfos(const ScreenInfos& other);
   ~ScreenInfos();
   ScreenInfos& operator=(const ScreenInfos& other);
-  bool operator==(const ScreenInfos& other) const;
-  bool operator!=(const ScreenInfos& other) const;
+
+  friend bool operator==(const ScreenInfos&, const ScreenInfos&) = default;
 
   // Helpers to access the current ScreenInfo element.
   ScreenInfo& mutable_current();
@@ -29,7 +29,10 @@ struct DISPLAY_EXPORT ScreenInfos {
 
   std::vector<ScreenInfo> screen_infos;
   // The display_id of the current ScreenInfo in `screen_infos`.
-  int64_t current_display_id = ScreenInfo::kInvalidDisplayId;
+  int64_t current_display_id = kInvalidDisplayId;
+  // Cursor size in DIP, obtained from the OS. This value is general
+  // to all displays. This value is only set on Windows.
+  gfx::Size system_cursor_size;
 };
 
 }  // namespace display

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 #include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
-#include "third_party/blink/renderer/bindings/core/v8/source_location.h"
+#include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -34,7 +34,7 @@ class RejectedPromises final : public RefCounted<RejectedPromises> {
   void RejectedWithNoHandler(ScriptState*,
                              v8::PromiseRejectMessage,
                              const String& error_message,
-                             std::unique_ptr<SourceLocation>,
+                             SourceLocation*,
                              SanitizeScriptErrors);
   void HandlerAdded(v8::PromiseRejectMessage);
 

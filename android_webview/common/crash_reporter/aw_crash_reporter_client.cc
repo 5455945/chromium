@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,21 @@
 
 #include <stdint.h>
 
+#include <map>
+#include <string>
+
 #include "android_webview/common/aw_descriptors.h"
 #include "android_webview/common/aw_paths.h"
 #include "android_webview/common/aw_switches.h"
 #include "android_webview/common/crash_reporter/crash_keys.h"
-#include "android_webview/common_jni_headers/AwCrashReporterClient_jni.h"
-#include "base/android/build_info.h"
 #include "base/android/java_exception_reporter.h"
 #include "base/android/jni_android.h"
+#include "base/android/jni_string.h"
 #include "base/base_paths_android.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
@@ -25,9 +28,12 @@
 #include "build/build_config.h"
 #include "components/crash/core/app/crash_reporter_client.h"
 #include "components/crash/core/app/crashpad.h"
+#include "components/crash/core/common/crash_key.h"
 #include "components/version_info/android/channel_getter.h"
 #include "components/version_info/version_info.h"
-#include "components/version_info/version_info_values.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/crash_client_jni/AwCrashReporterClient_jni.h"
 
 using base::android::AttachCurrentThread;
 
@@ -38,6 +44,9 @@ namespace {
 class AwCrashReporterClient : public crash_reporter::CrashReporterClient {
  public:
   AwCrashReporterClient() = default;
+
+  AwCrashReporterClient(const AwCrashReporterClient&) = delete;
+  AwCrashReporterClient& operator=(const AwCrashReporterClient&) = delete;
 
   // crash_reporter::CrashReporterClient implementation.
   bool IsRunningUnattended() override { return false; }
@@ -51,17 +60,22 @@ class AwCrashReporterClient : public crash_reporter::CrashReporterClient {
     return false;
   }
 
-  void GetProductNameAndVersion(std::string* product_name,
-                                std::string* version,
-                                std::string* channel) override {
-    *product_name = "AndroidWebView";
-    *version = PRODUCT_VERSION;
-    *channel =
-        version_info::GetChannelString(version_info::android::GetChannel());
+  void GetProductInfo(ProductInfo* product_info) override {
+    *product_info = ProductInfo(
+        "AndroidWebView", version_info::GetVersionNumber(),
+        version_info::GetChannelString(version_info::android::GetChannel()));
   }
 
   bool GetCrashDumpLocation(base::FilePath* crash_dir) override {
     return base::PathService::Get(android_webview::DIR_CRASH_DUMPS, crash_dir);
+  }
+
+  bool GetCrashMetricsLocation(base::FilePath* metrics_dir) override {
+    // WebView doesn't currently create/upload metrics from Crashpad. Returning
+    // false is already the default behavior, but we override it here to be
+    // explicit.
+    // TODO(crbug.com/440359722): decide if we want these metrics or not.
+    return false;
   }
 
   void GetSanitizationInformation(const char* const** crash_key_allowlist,
@@ -94,6 +108,26 @@ class AwCrashReporterClient : public crash_reporter::CrashReporterClient {
 
   bool ShouldWriteMinidumpToLog() override { return true; }
 
+  std::map<std::string, std::string> GetExtraProcessAnnotations() override {
+    // This method is only called in the browser process but annotations are
+    // used to set crash keys for the browser process and for child processes
+    // (such as the renderer). Therefore, ARCH_CPU_64_BITS can be used to
+    // correctly identify whether the browser is 64 bit.
+    std::map<std::string, std::string> annotations;
+    annotations[crash_keys::kBrowserProcessBitness] =
+#if defined(ARCH_CPU_64_BITS)
+        "64 bit";
+#else
+        "32 bit";
+#endif
+    annotations[crash_keys::kPrimaryCpuAbiBitness] = primary_cpu_abi_bitness_;
+    return annotations;
+  }
+
+  void set_primary_cpu_abi_bitness(std::string bitness) {
+    primary_cpu_abi_bitness_ = std::move(bitness);
+  }
+
   bool JavaExceptionFilter(
       const base::android::JavaRef<jthrowable>& java_exception) {
     return Java_AwCrashReporterClient_stackTraceContainsWebViewCode(
@@ -106,93 +140,35 @@ class AwCrashReporterClient : public crash_reporter::CrashReporterClient {
   }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(AwCrashReporterClient);
+  std::string primary_cpu_abi_bitness_ = "Unknown";
 };
-
-#if defined(ARCH_CPU_X86_FAMILY)
-bool SafeToUseSignalHandler() {
-  // N+ shared library namespacing means that we are unable to dlopen
-  // libnativebridge (because it isn't in the NDK). However we know
-  // that, were we able to, the tests below would pass, so just return
-  // true here.
-  if (base::android::BuildInfo::GetInstance()->sdk_int() >=
-      base::android::SDK_VERSION_NOUGAT) {
-    return true;
-  }
-  // On X86/64 there are binary translators that handle SIGSEGV in userspace and
-  // may get chained after our handler - see http://crbug.com/477444
-  // We attempt to detect this to work out when it's safe to install breakpad.
-  // If anything doesn't seem right we assume it's not safe.
-
-  // type and mangled name of android::NativeBridgeInitialized
-  typedef bool (*InitializedFunc)();
-  const char kInitializedSymbol[] = "_ZN7android23NativeBridgeInitializedEv";
-  // type and mangled name of android::NativeBridgeGetVersion
-  typedef uint32_t (*VersionFunc)();
-  const char kVersionSymbol[] = "_ZN7android22NativeBridgeGetVersionEv";
-
-  base::ScopedNativeLibrary lib_native_bridge(
-      base::FilePath("libnativebridge.so"));
-  if (!lib_native_bridge.is_valid()) {
-    DLOG(WARNING) << "Couldn't load libnativebridge";
-    return false;
-  }
-
-  InitializedFunc NativeBridgeInitialized = reinterpret_cast<InitializedFunc>(
-      lib_native_bridge.GetFunctionPointer(kInitializedSymbol));
-  if (NativeBridgeInitialized == nullptr) {
-    DLOG(WARNING) << "Couldn't tell if native bridge initialized";
-    return false;
-  }
-  if (!NativeBridgeInitialized()) {
-    // Native process, safe to use breakpad.
-    return true;
-  }
-
-  VersionFunc NativeBridgeGetVersion = reinterpret_cast<VersionFunc>(
-      lib_native_bridge.GetFunctionPointer(kVersionSymbol));
-  if (NativeBridgeGetVersion == nullptr) {
-    DLOG(WARNING) << "Couldn't get native bridge version";
-    return false;
-  }
-  uint32_t version = NativeBridgeGetVersion();
-  if (version >= 2) {
-    // Native bridge at least version 2, safe to use breakpad.
-    return true;
-  } else {
-    DLOG(WARNING) << "Native bridge ver=" << version << "; too low";
-    return false;
-  }
-}
-#endif
 
 bool g_enabled;
 
 }  // namespace
 
+void SetPrimaryCpuAbiBitness(std::string bitness) {
+  AwCrashReporterClient::Get()->set_primary_cpu_abi_bitness(std::move(bitness));
+}
+
 void EnableCrashReporter(const std::string& process_type) {
   if (g_enabled) {
     NOTREACHED() << "EnableCrashReporter called more than once";
-    return;
   }
-
-#if defined(ARCH_CPU_X86_FAMILY)
-  if (!SafeToUseSignalHandler()) {
-    LOG(WARNING) << "Can't use breakpad to handle WebView crashes";
-    return;
-  }
-#endif
 
   AwCrashReporterClient* client = AwCrashReporterClient::Get();
   crash_reporter::SetCrashReporterClient(client);
   crash_reporter::InitializeCrashpad(process_type.empty(), process_type);
   if (process_type.empty()) {
     base::android::InitJavaExceptionReporter();
+    // Only use the Java exception filter for the main process; in the child,
+    // we assume all exceptions are interesting as there is no app code in the
+    // process to generate irrelevant exceptions.
+    base::android::SetJavaExceptionFilter(base::BindRepeating(
+        &AwCrashReporterClient::JavaExceptionFilter, base::Unretained(client)));
   } else {
     base::android::InitJavaExceptionReporterForChildProcess();
   }
-  base::android::SetJavaExceptionFilter(base::BindRepeating(
-      &AwCrashReporterClient::JavaExceptionFilter, base::Unretained(client)));
   g_enabled = true;
 }
 
@@ -200,4 +176,22 @@ bool CrashReporterEnabled() {
   return g_enabled;
 }
 
+static void JNI_AwCrashReporterClient_SetProcessNameCrashKey(
+    JNIEnv* env,
+    const std::string& process_name) {
+  static ::crash_reporter::CrashKeyString<64> crash_key(
+      crash_keys::kAppProcessName);
+  crash_key.Set(process_name);
+}
+
+static void JNI_AwCrashReporterClient_SetSkippedDataDirLockCrashKey(
+    JNIEnv* env,
+    bool skipped) {
+  static ::crash_reporter::CrashKeyString<2> crash_key(
+      crash_keys::kSkippedDataDirLock);
+  crash_key.Set(skipped ? "1" : "0");
+}
+
 }  // namespace android_webview
+
+DEFINE_JNI(AwCrashReporterClient)

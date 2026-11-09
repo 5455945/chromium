@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <memory>
 
 #include "base/sequence_checker.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/ui/webui/discards/site_data.mojom.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 
 namespace performance_manager {
 class Graph;
@@ -21,9 +20,9 @@ class SiteDataReader;
 }  // namespace performance_manager
 
 class SiteDataProviderImpl : public discards::mojom::SiteDataProvider,
-                             public performance_manager::GraphOwned {
+                             public performance_manager::GraphOwnedDefaultImpl {
  public:
-  explicit SiteDataProviderImpl(const std::string& profile_id);
+  explicit SiteDataProviderImpl(const base::UnguessableToken& profile_id);
   ~SiteDataProviderImpl() override;
   SiteDataProviderImpl(const SiteDataProviderImpl& other) = delete;
   SiteDataProviderImpl& operator=(const SiteDataProviderImpl&) = delete;
@@ -32,7 +31,7 @@ class SiteDataProviderImpl : public discards::mojom::SiteDataProvider,
   // ownership to |graph|.
   static void CreateAndBind(
       mojo::PendingReceiver<discards::mojom::SiteDataProvider> receiver,
-      const std::string& profile_id_,
+      const base::UnguessableToken& profile_id_,
       performance_manager::Graph* graph);
 
   void GetSiteDataArray(
@@ -48,10 +47,6 @@ class SiteDataProviderImpl : public discards::mojom::SiteDataProvider,
 
   static void OnConnectionError(SiteDataProviderImpl* impl);
 
-  // GraphOwned implementation.
-  void OnPassedToGraph(performance_manager::Graph* graph) override;
-  void OnTakenFromGraph(performance_manager::Graph* graph) override;
-
   // Binds |receiver_| by consuming |receiver|, which must be valid.
   void Bind(mojo::PendingReceiver<discards::mojom::SiteDataProvider> receiver);
 
@@ -60,9 +55,7 @@ class SiteDataProviderImpl : public discards::mojom::SiteDataProvider,
   // to go through and populate the requested entries.
   OriginToReaderMap requested_origins_;
 
-  std::string profile_id_;
-
-  performance_manager::Graph* graph_ = nullptr;
+  base::UnguessableToken profile_id_;
 
   mojo::Receiver<discards::mojom::SiteDataProvider> receiver_{this};
 };

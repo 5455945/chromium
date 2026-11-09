@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@ namespace blink {
 
 class CSSImageListInterpolationType : public CSSInterpolationType {
  public:
-  CSSImageListInterpolationType(PropertyHandle property)
+  explicit CSSImageListInterpolationType(PropertyHandle property)
       : CSSInterpolationType(property) {}
 
   InterpolationValue MaybeConvertStandardPropertyUnderlyingValue(
@@ -35,7 +35,7 @@ class CSSImageListInterpolationType : public CSSInterpolationType {
   InterpolationValue MaybeConvertInherit(const StyleResolverState&,
                                          ConversionCheckers&) const final;
   InterpolationValue MaybeConvertValue(const CSSValue&,
-                                       const StyleResolverState*,
+                                       const StyleResolverState&,
                                        ConversionCheckers&) const final;
 
   PairwiseInterpolationValue MaybeMergeSingles(

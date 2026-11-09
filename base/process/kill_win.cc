@@ -1,19 +1,22 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/process/kill.h"
 
-#include <algorithm>
-
 #include <windows.h>
+
 #include <io.h>
 #include <stdint.h>
 
+#include <algorithm>
+
+#include "base/features.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/process/memory.h"
 #include "base/process/process_iterator.h"
+#include "partition_alloc/page_allocator.h"
 
 namespace base {
 
@@ -43,23 +46,23 @@ TerminationStatus GetTerminationStatus(ProcessHandle handle, int* exit_code) {
   if (tmp_exit_code == STILL_ACTIVE) {
     DWORD wait_result = WaitForSingleObject(handle, 0);
     if (wait_result == WAIT_TIMEOUT) {
-      *exit_code = wait_result;
+      *exit_code = static_cast<int>(wait_result);
       return TERMINATION_STATUS_STILL_RUNNING;
     }
 
     if (wait_result == WAIT_FAILED) {
       DPLOG(ERROR) << "WaitForSingleObject() failed";
+      *exit_code = static_cast<int>(wait_result);
     } else {
       DCHECK_EQ(WAIT_OBJECT_0, wait_result);
-
-      // Strange, the process used 0x103 (STILL_ACTIVE) as exit code.
-      NOTREACHED();
+      DLOG(ERROR) << "The process used 0x103 (STILL_ACTIVE) as exit code.";
+      *exit_code = static_cast<int>(tmp_exit_code);
     }
 
     return TERMINATION_STATUS_ABNORMAL_TERMINATION;
   }
 
-  *exit_code = tmp_exit_code;
+  *exit_code = static_cast<int>(tmp_exit_code);
 
   // clang-format off
   switch (tmp_exit_code) {
@@ -75,6 +78,15 @@ TerminationStatus GetTerminationStatus(ProcessHandle handle, int* exit_code) {
                                             // object memory limits.
     case win::kOomExceptionCode:            // Ran out of memory.
       return TERMINATION_STATUS_OOM;
+    // This exit code is used when a process is terminated by another process
+    // due to a commit failure. See
+    // `CHROME_RESULT_CODE_TERMINATED_BY_OTHER_PROCESS_ON_COMMIT_FAILURE`
+    // in `chrome/common/chrome_result_codes.h`.
+    case partition_alloc::kTerminateOnCommitFailureExitCode:
+      return FeatureList::IsEnabled(
+                 features::kUseTerminationStatusMemoryExhaustion)
+                 ? TERMINATION_STATUS_EVICTED_FOR_MEMORY
+                 : TERMINATION_STATUS_OOM;
     // This exit code means the process failed an OS integrity check.
     // This is tested in ProcessMitigationsTest.* in sandbox.
     case win::kStatusInvalidImageHashExitCode:
@@ -98,9 +110,7 @@ bool WaitForProcessesToExit(const FilePath::StringType& executable_name,
     DWORD remaining_wait = static_cast<DWORD>(
         std::max(static_cast<int64_t>(0),
                  wait.InMilliseconds() - (GetTickCount() - start_time)));
-    HANDLE process = OpenProcess(SYNCHRONIZE,
-                                 FALSE,
-                                 entry->th32ProcessID);
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, entry->th32ProcessID);
     DWORD wait_result = WaitForSingleObject(process, remaining_wait);
     CloseHandle(process);
     result &= (wait_result == WAIT_OBJECT_0);
@@ -113,8 +123,9 @@ bool CleanupProcesses(const FilePath::StringType& executable_name,
                       TimeDelta wait,
                       int exit_code,
                       const ProcessFilter* filter) {
-  if (WaitForProcessesToExit(executable_name, wait, filter))
+  if (WaitForProcessesToExit(executable_name, wait, filter)) {
     return true;
+  }
   KillProcesses(executable_name, exit_code, filter);
   return false;
 }

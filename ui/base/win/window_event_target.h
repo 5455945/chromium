@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -96,9 +96,6 @@ class COMPONENT_EXPORT(UI_BASE) WindowEventTarget {
                                          WPARAM w_param,
                                          LPARAM l_param,
                                          bool* handled) = 0;
-
-  // Notification from the forwarder window that its parent changed.
-  virtual void HandleParentChanged() = 0;
 
   // Apply the transform from Direct Manipulation API.
 

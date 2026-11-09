@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,11 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/containers/stack.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "media/cdm/api/content_decryption_module.h"
 
 namespace media {
@@ -68,6 +69,10 @@ class FileIOTest : public cdm::FileIOClient {
 
   FileIOTest(const CreateFileIOCB& create_file_io_cb,
              const std::string& test_name);
+
+  FileIOTest(const FileIOTest&) = delete;
+  FileIOTest& operator=(const FileIOTest&) = delete;
+
   ~FileIOTest() override;
 
   // Adds a test step in this test. |this| object doesn't take the ownership of
@@ -89,9 +94,11 @@ class FileIOTest : public cdm::FileIOClient {
   void Run(CompletionCB completion_cb);
 
  private:
+  // SAFETY:
   struct TestStep {
-    // |this| object doesn't take the ownership of |data| or |data2|, which
-    // should be valid throughout the lifetime of |this| object.
+    // SAFETY: |data| must be of size |data_size|. Similarly, |data2| must be of
+    // size |data2_size|. |this| object doesn't take the ownership of |data| or
+    // |data2|, which should be valid throughout the lifetime of |this| object.
     TestStep(StepType type,
              Status status,
              const uint8_t* data = nullptr,
@@ -100,10 +107,8 @@ class FileIOTest : public cdm::FileIOClient {
              uint32_t data2_size = 0)
         : type(type),
           status(status),
-          data(data),
-          data_size(data_size),
-          data2(data2),
-          data2_size(data2_size) {}
+          UNSAFE_BUFFERS(data(data, data_size)),
+          UNSAFE_BUFFERS(data2(data2, data2_size)) {}
 
     StepType type;
 
@@ -111,12 +116,10 @@ class FileIOTest : public cdm::FileIOClient {
     Status status;
 
     // Data to write in ACTION_WRITE, or read data in RESULT_READ.
-    const uint8_t* data;
-    uint32_t data_size;
+    base::raw_span<const uint8_t> data;
 
     // Alternate read data in RESULT_READ, if |data2| != nullptr.
-    const uint8_t* data2;
-    uint32_t data2_size;
+    base::raw_span<const uint8_t> data2;
   };
 
   // Returns whether |test_step| is a RESULT_* step.
@@ -153,15 +156,17 @@ class FileIOTest : public cdm::FileIOClient {
   // so that we can test multiple cdm::FileIO objects accessing the same file.
   // In the current implementation, all ACTION_* are performed on the latest
   // opened cdm::FileIO object, hence the stack.
-  base::stack<cdm::FileIO*> file_io_stack_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileIOTest);
+  base::stack<raw_ptr<cdm::FileIO, CtnExperimental>> file_io_stack_;
 };
 
 // Tests cdm::FileIO implementation.
 class FileIOTestRunner {
  public:
   explicit FileIOTestRunner(const CreateFileIOCB& create_file_io_cb);
+
+  FileIOTestRunner(const FileIOTestRunner&) = delete;
+  FileIOTestRunner& operator=(const FileIOTestRunner&) = delete;
+
   ~FileIOTestRunner();
 
   void AddTests();
@@ -180,8 +185,6 @@ class FileIOTestRunner {
   std::vector<uint8_t> large_data_;
   size_t total_num_tests_ = 0;   // Total number of tests.
   size_t num_passed_tests_ = 0;  // Number of passed tests.
-
-  DISALLOW_COPY_AND_ASSIGN(FileIOTestRunner);
 };
 
 }  // namespace media

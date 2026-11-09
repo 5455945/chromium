@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "components/domain_reliability/domain_reliability_export.h"
 #include "components/domain_reliability/uploader.h"
-#include "net/http/http_response_info.h"
+#include "net/http/http_connection_info.h"
 
 namespace base {
 class Location;
@@ -36,7 +35,7 @@ bool GetDomainReliabilityBeaconStatus(
     std::string* beacon_status_out);
 
 std::string GetDomainReliabilityProtocol(
-    net::HttpResponseInfo::ConnectionInfo connection_info,
+    net::HttpConnectionInfo connection_info,
     bool ssl_info_populated);
 
 // Based on the network error code, HTTP response code, and Retry-After value,
@@ -71,6 +70,9 @@ class DOMAIN_RELIABILITY_EXPORT MockableTime {
     Timer();
   };
 
+  MockableTime(const MockableTime&) = delete;
+  MockableTime& operator=(const MockableTime&) = delete;
+
   virtual ~MockableTime();
 
   virtual base::Time Now() const = 0;
@@ -83,9 +85,6 @@ class DOMAIN_RELIABILITY_EXPORT MockableTime {
 
  protected:
   MockableTime();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockableTime);
 };
 
 // Implementation of MockableTime that passes through to

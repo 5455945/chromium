@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,18 @@
 #include <memory>
 
 #include "base/files/file.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/pass_key.h"
 #include "base/values.h"
 #include "net/log/net_log.h"
+#include "services/network/network_service.h"
 #include "services/network/public/mojom/net_log.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
 namespace net {
 class FileNetLogObserver;
+enum class NetLogFileFormat;
 }  // namespace net
 
 namespace network {
@@ -24,21 +27,29 @@ namespace network {
 class NetworkContext;
 
 // API implementation for exporting ongoing netlogs.
-class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
-    : public mojom::NetLogExporter,
-      public base::SupportsWeakPtr<NetLogExporter> {
+class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter final
+    : public mojom::NetLogExporter {
  public:
   // This expects to live on the same thread as NetworkContext, e.g.
   // IO thread or NetworkService main thread.
   explicit NetLogExporter(NetworkContext* network_context);
+
+  NetLogExporter(const NetLogExporter&) = delete;
+  NetLogExporter& operator=(const NetLogExporter&) = delete;
+
   ~NetLogExporter() override;
 
   void Start(base::File destination,
-             base::Value extra_constants,
+             base::DictValue extra_constants,
              net::NetLogCaptureMode capture_mode,
+             net::NetLogFileFormat file_format,
              uint64_t max_file_size,
              StartCallback callback) override;
-  void Stop(base::Value polled_data, StopCallback callback) override;
+  void Stop(base::DictValue polled_data, StopCallback callback) override;
+
+  // Run off-thread by task scheduler, as does disk I/O.
+  static base::FilePath CreateScratchDirForNetworkService(
+      base::PassKey<NetworkService>);
 
   // Sets a callback that will be used to create a scratch directory instead
   // of the normal codepath. For test use only.
@@ -55,21 +66,23 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
 
   static void StartWithScratchDirOrCleanup(
       base::WeakPtr<NetLogExporter> object,
-      base::Value extra_constants,
+      base::DictValue extra_constants,
       net::NetLogCaptureMode capture_mode,
+      net::NetLogFileFormat file_format,
       uint64_t max_file_size,
       StartCallback callback,
       const base::FilePath& scratch_dir_path);
 
-  void StartWithScratchDir(base::Value extra_constants,
+  void StartWithScratchDir(base::DictValue extra_constants,
                            net::NetLogCaptureMode capture_mode,
+                           net::NetLogFileFormat file_format,
                            uint64_t max_file_size,
                            StartCallback callback,
                            const base::FilePath& scratch_dir_path);
 
   // NetworkContext owns |this| via UniqueReceiverSet, so this object can't
   // outlive it.
-  NetworkContext* network_context_;
+  raw_ptr<NetworkContext> network_context_;
   enum State { STATE_IDLE, STATE_WAITING_DIR, STATE_RUNNING } state_;
 
   std::unique_ptr<net::FileNetLogObserver> file_net_observer_;
@@ -81,7 +94,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
 
   THREAD_CHECKER(thread_checker_);
 
-  DISALLOW_COPY_AND_ASSIGN(NetLogExporter);
+  base::WeakPtrFactory<NetLogExporter> weak_ptr_factory_{this};
 };
 
 }  // namespace network

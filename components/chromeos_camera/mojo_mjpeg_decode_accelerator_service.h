@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,15 @@
 
 #include <map>
 #include <memory>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
 #include "base/threading/thread_checker.h"
 #include "components/chromeos_camera/common/mjpeg_decode_accelerator.mojom.h"
 #include "components/chromeos_camera/gpu_mjpeg_decode_accelerator_factory.h"
 #include "components/chromeos_camera/mjpeg_decode_accelerator.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/platform/platform_handle.h"
 
 namespace chromeos_camera {
 
@@ -27,9 +27,16 @@ class MojoMjpegDecodeAcceleratorService
     : public chromeos_camera::mojom::MjpegDecodeAccelerator,
       public MjpegDecodeAccelerator::Client {
  public:
+  using MjpegDecodeOnBeginFrameCB = std::optional<base::RepeatingClosure>;
   static void Create(
       mojo::PendingReceiver<chromeos_camera::mojom::MjpegDecodeAccelerator>
-          receiver);
+          receiver,
+      base::RepeatingCallback<void(MjpegDecodeOnBeginFrameCB)> cb);
+
+  MojoMjpegDecodeAcceleratorService(const MojoMjpegDecodeAcceleratorService&) =
+      delete;
+  MojoMjpegDecodeAcceleratorService& operator=(
+      const MojoMjpegDecodeAcceleratorService&) = delete;
 
   ~MojoMjpegDecodeAcceleratorService() override;
 
@@ -45,6 +52,9 @@ class MojoMjpegDecodeAcceleratorService
       ::chromeos_camera::MjpegDecodeAccelerator::Error)>;
   using MojoCallbackMap = std::map<int32_t, MojoCallback>;
 
+  // Holds the tasks coming from the client to be decoded.
+  struct DecodeTask;
+
   // This constructor internally calls
   // GpuMjpegDecodeAcceleratorFactory::GetAcceleratorFactories() to
   // fill |accelerator_factory_functions_|.
@@ -58,7 +68,7 @@ class MojoMjpegDecodeAcceleratorService
               uint32_t output_buffer_size,
               DecodeCallback callback) override;
   void DecodeWithDmaBuf(int32_t task_id,
-                        mojo::ScopedHandle src_dmabuf_fd,
+                        mojo::PlatformHandle src_handle,
                         uint32_t src_size,
                         uint32_t src_offset,
                         mojom::DmaBufVideoFramePtr dst_frame,
@@ -80,18 +90,20 @@ class MojoMjpegDecodeAcceleratorService
       int32_t bitstream_buffer_id,
       ::chromeos_camera::MjpegDecodeAccelerator::Error error);
 
+  void DecodeWithDmaBufOnBeginFrame();
+
   // A map from |task_id| to MojoCallback.
   MojoCallbackMap mojo_cb_map_;
 
   bool accelerator_initialized_;
 
   std::unique_ptr<::chromeos_camera::MjpegDecodeAccelerator> accelerator_;
-
+  base::RepeatingCallback<void(MjpegDecodeOnBeginFrameCB)> set_begin_frame_cb_;
+  bool vsync_driven_decoding_ = false;
+  std::vector<DecodeTask> input_queue_;
   THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<MojoMjpegDecodeAcceleratorService> weak_this_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoMjpegDecodeAcceleratorService);
 };
 
 }  // namespace chromeos_camera

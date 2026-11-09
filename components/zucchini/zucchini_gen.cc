@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,9 +24,9 @@
 #include "components/zucchini/image_index.h"
 #include "components/zucchini/imposed_ensemble_matcher.h"
 #include "components/zucchini/patch_writer.h"
-#include "components/zucchini/reference_bytes_mixer.h"
 #include "components/zucchini/suffix_array.h"
 #include "components/zucchini/targets_affinity.h"
+#include "components/zucchini/zucchini.h"
 
 namespace zucchini {
 
@@ -119,12 +119,13 @@ bool GenerateEquivalencesAndExtraData(ConstBufferView new_image,
   return true;
 }
 
-bool GenerateRawDelta(ConstBufferView old_image,
-                      ConstBufferView new_image,
-                      const EquivalenceMap& equivalence_map,
-                      const ImageIndex& new_image_index,
-                      ReferenceBytesMixer* reference_bytes_mixer,
-                      PatchElementWriter* patch_writer) {
+bool GenerateRawDelta(
+    ConstBufferView old_image,
+    ConstBufferView new_image,
+    const EquivalenceMap& equivalence_map,
+    const ImageIndex& new_image_index,
+    const std::map<TypeTag, std::unique_ptr<ReferenceMixer>>& reference_mixers,
+    PatchElementWriter* patch_writer) {
   RawDeltaSink raw_delta_sink;
 
   // Visit |equivalence_map| blocks in |new_image| order. Find and emit all
@@ -139,24 +140,24 @@ bool GenerateRawDelta(ConstBufferView old_image,
         DCHECK(new_image_index.IsToken(equivalence.dst_offset + i));
         TypeTag type_tag =
             new_image_index.LookupType(equivalence.dst_offset + i);
+        ReferenceMixer* mixer = reference_mixers.at(type_tag).get();
+        offset_t width = new_image_index.refs(type_tag).width();
 
         // Reference delta has its own flow. On some architectures (e.g., x86)
         // this does not involve raw delta, so we skip. On other architectures
         // (e.g., ARM) references are mixed with other bits that may change, so
         // we need to "mix" data and store some changed bits into raw delta.
-        int num_bytes = reference_bytes_mixer->NumBytes(type_tag.value());
-        if (num_bytes) {
-          ConstBufferView mixed_ref_bytes = reference_bytes_mixer->Mix(
-              type_tag.value(), old_image, equivalence.src_offset + i,
-              new_image, equivalence.dst_offset + i);
-          for (int j = 0; j < num_bytes; ++j) {
+        if (mixer) {
+          ConstBufferView mixed_reference = mixer->Mix(
+              equivalence.src_offset + i, equivalence.dst_offset + i);
+          for (offset_t j = 0; j < width; ++j) {
             int8_t diff =
-                mixed_ref_bytes[j] - old_image[equivalence.src_offset + i + j];
-            if (diff)
+                mixed_reference[j] - old_image[equivalence.src_offset + i + j];
+            if (diff != 0)
               raw_delta_sink.PutNext({base_copy_offset + i + j, diff});
           }
         }
-        i += new_image_index.refs(type_tag).width();
+        i += width;
         DCHECK_LE(i, equivalence.length);
       } else {
         int8_t diff = new_image[equivalence.dst_offset + i] -
@@ -252,11 +253,11 @@ bool GenerateRawElement(const std::vector<offset_t>& old_sa,
 
   patch_writer->SetReferenceDeltaSink({});
 
-  ReferenceBytesMixer no_op_bytes_mixer;
+  std::map<TypeTag, std::unique_ptr<ReferenceMixer>> reference_mixers;
   return GenerateEquivalencesAndExtraData(new_image, equivalences,
                                           patch_writer) &&
          GenerateRawDelta(old_image, new_image, equivalences, new_image_index,
-                          &no_op_bytes_mixer, patch_writer);
+                          reference_mixers, patch_writer);
 }
 
 bool GenerateExecutableElement(ExecutableType exe_type,
@@ -311,13 +312,20 @@ bool GenerateExecutableElement(ExecutableType exe_type,
       }
     }
   }
+  std::map<TypeTag, std::unique_ptr<ReferenceMixer>> reference_mixers;
+  std::vector<ReferenceGroup> ref_groups = old_disasm->MakeReferenceGroups();
+  for (const auto& group : ref_groups) {
+    auto result = reference_mixers.emplace(
+        group.type_tag(),
+        group.GetMixer(old_image, new_image, old_disasm.get()));
+    DCHECK(result.second);
+  }
+
   patch_writer->SetReferenceDeltaSink(std::move(reference_delta_sink));
-  std::unique_ptr<ReferenceBytesMixer> reference_bytes_mixer =
-      ReferenceBytesMixer::Create(*old_disasm, *new_disasm);
   return GenerateEquivalencesAndExtraData(new_image, equivalences,
                                           patch_writer) &&
          GenerateRawDelta(old_image, new_image, equivalences, new_image_index,
-                          reference_bytes_mixer.get(), patch_writer);
+                          reference_mixers, patch_writer);
 }
 
 status::Code GenerateBufferCommon(ConstBufferView old_image,
@@ -424,38 +432,63 @@ status::Code GenerateBufferCommon(ConstBufferView old_image,
 
 status::Code GenerateBuffer(ConstBufferView old_image,
                             ConstBufferView new_image,
+                            const GenerateOptions& options,
                             EnsemblePatchWriter* patch_writer) {
-  return GenerateBufferCommon(
-      old_image, new_image, std::make_unique<HeuristicEnsembleMatcher>(nullptr),
-      patch_writer);
+  if (!options.imposed_matches.empty()) {
+    if (options.start_scan_at) {
+      LOG(WARNING) << "-start-scan-at option is meaningless under -imposed.";
+    }
+    return GenerateBufferCommon(
+        old_image, new_image,
+        std::make_unique<ImposedEnsembleMatcher>(options.imposed_matches),
+        patch_writer);
+
+  } else if (options.is_raw) {
+    if (options.start_scan_at) {
+      LOG(WARNING) << "-start-scan-at option is meaningless under -raw.";
+    }
+
+    ImageIndex old_image_index(old_image);
+    EncodedView old_view(old_image_index);
+    std::vector<offset_t> old_sa =
+        MakeSuffixArray<InducedSuffixSort>(old_view, old_view.Cardinality());
+
+    PatchElementWriter patch_element(
+        {Element(old_image.local_region()), Element(new_image.local_region())});
+    if (!GenerateRawElement(old_sa, old_image, new_image, &patch_element)) {
+      return status::kStatusFatal;
+    }
+
+    patch_writer->AddElement(std::move(patch_element));
+    return status::kStatusSuccess;
+  }
+
+  return GenerateBufferCommon(old_image, new_image,
+                              std::make_unique<HeuristicEnsembleMatcher>(
+                                  options.start_scan_at, nullptr),
+                              patch_writer);
+}
+
+status::Code GenerateBuffer(ConstBufferView old_image,
+                            ConstBufferView new_image,
+                            EnsemblePatchWriter* patch_writer) {
+  GenerateOptions options;
+  return GenerateBuffer(old_image, new_image, options, patch_writer);
 }
 
 status::Code GenerateBufferImposed(ConstBufferView old_image,
                                    ConstBufferView new_image,
                                    std::string imposed_matches,
                                    EnsemblePatchWriter* patch_writer) {
-  if (imposed_matches.empty())
-    return GenerateBuffer(old_image, new_image, patch_writer);
-
-  return GenerateBufferCommon(
-      old_image, new_image,
-      std::make_unique<ImposedEnsembleMatcher>(imposed_matches), patch_writer);
+  GenerateOptions options{.imposed_matches = imposed_matches};
+  return GenerateBuffer(old_image, new_image, options, patch_writer);
 }
 
 status::Code GenerateBufferRaw(ConstBufferView old_image,
                                ConstBufferView new_image,
                                EnsemblePatchWriter* patch_writer) {
-  ImageIndex old_image_index(old_image);
-  EncodedView old_view(old_image_index);
-  std::vector<offset_t> old_sa =
-      MakeSuffixArray<InducedSuffixSort>(old_view, old_view.Cardinality());
-
-  PatchElementWriter patch_element(
-      {Element(old_image.local_region()), Element(new_image.local_region())});
-  if (!GenerateRawElement(old_sa, old_image, new_image, &patch_element))
-    return status::kStatusFatal;
-  patch_writer->AddElement(std::move(patch_element));
-  return status::kStatusSuccess;
+  GenerateOptions options{.is_raw = true};
+  return GenerateBuffer(old_image, new_image, options, patch_writer);
 }
 
 }  // namespace zucchini

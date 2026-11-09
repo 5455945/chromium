@@ -34,11 +34,10 @@
 #include <memory>
 
 #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
-#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
-#include "third_party/blink/public/common/loader/previews_state.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom-shared.h"
+#include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_archive_info.h"
 #include "third_party/blink/public/platform/web_common.h"
-#include "third_party/blink/public/platform/web_source_location.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
 
 namespace blink {
@@ -60,12 +59,10 @@ class BLINK_EXPORT WebDocumentLoader {
   class ExtraData {
    public:
     virtual ~ExtraData() = default;
+    virtual std::unique_ptr<ExtraData> Clone() = 0;
   };
 
   static bool WillLoadUrlAsEmpty(const WebURL&);
-
-  // Returns the url of original request which initited this load.
-  virtual WebURL OriginalUrl() const = 0;
 
   // Returns the http referrer of original request which initited this load.
   virtual WebString OriginalReferrer() const = 0;
@@ -80,16 +77,13 @@ class BLINK_EXPORT WebDocumentLoader {
   // Returns the http referrer of the request corresponding to this load.
   virtual WebString Referrer() const = 0;
 
-  // Returns the referrer policy of the request corresponding to this load.
-  virtual network::mojom::ReferrerPolicy GetReferrerPolicy() const = 0;
-
   // Returns the response associated with this datasource.
-  virtual const WebURLResponse& GetResponse() const = 0;
+  virtual const WebURLResponse& GetWebResponse() const = 0;
 
   // When this datasource was created as a result of WebFrame::loadData,
   // there may be an associated unreachableURL.
   virtual bool HasUnreachableURL() const = 0;
-  virtual WebURL UnreachableURL() const = 0;
+  virtual WebURL UnreachableWebURL() const = 0;
 
   // Returns whether the navigation associated with this datasource is a
   // client redirect.
@@ -105,7 +99,7 @@ class BLINK_EXPORT WebDocumentLoader {
   // Extra data associated with this DocumentLoader.
   // Setting extra data will cause any existing extra data to be deleted.
   virtual ExtraData* GetExtraData() const = 0;
-  virtual std::unique_ptr<ExtraData> TakeExtraData() = 0;
+  virtual std::unique_ptr<ExtraData> CloneExtraData() = 0;
   virtual void SetExtraData(std::unique_ptr<ExtraData>) = 0;
 
   // Allows the embedder to inject a filter that will be consulted for each
@@ -133,9 +127,6 @@ class BLINK_EXPORT WebDocumentLoader {
   // can return true even if archive loading ended up failing.
   virtual bool HasBeenLoadedAsWebArchive() const = 0;
 
-  // Returns the previews state for the document.
-  virtual PreviewsState GetPreviewsState() const = 0;
-
   // Returns archive info for the archive.
   virtual WebArchiveInfo GetArchiveInfo() const = 0;
 
@@ -143,8 +134,20 @@ class BLINK_EXPORT WebDocumentLoader {
   // committed in this WebDocumentLoader had transient activation.
   virtual bool LastNavigationHadTransientUserActivation() const = 0;
 
-  // Returns true when the document is a FTP directory.
-  virtual bool IsListingFtpDirectory() const = 0;
+  // Sets the CodeCacheHosts for this loader.
+  virtual void SetCodeCacheHost(
+      CrossVariantMojoRemote<mojom::CodeCacheHostInterfaceBase> code_cache_host,
+      CrossVariantMojoRemote<mojom::CodeCacheHostInterfaceBase>
+          code_cache_host_for_background) = 0;
+
+  // Whether the frame holding this document has loaded a document that is not
+  // an initial empty document.
+  virtual bool HasLoadedNonInitialEmptyDocument() const = 0;
+
+  // Returns whether the navigation associated with this datasource is for a
+  // frame discard operation, performed with the intention to clear away
+  // associated resources.
+  virtual bool IsForDiscard() const = 0;
 
  protected:
   ~WebDocumentLoader() = default;

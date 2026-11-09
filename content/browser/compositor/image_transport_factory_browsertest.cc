@@ -1,19 +1,25 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/compositor/image_transport_factory.h"
 
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/viz/common/gpu/context_lost_observer.h"
-#include "components/viz/common/gpu/context_provider.h"
+#include "components/viz/common/gpu/raster_context_provider.h"
+#include "content/browser/gpu/browser_gpu_channel_host_factory.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
+#include "content/common/features.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "gpu/GLES2/gl2extchromium.h"
-#include "gpu/command_buffer/client/gles2_interface.h"
+#include "gpu/command_buffer/client/raster_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/compositor/compositor.h"
 
@@ -27,8 +33,9 @@ class MockContextLostObserver : public viz::ContextLostObserver {
   MOCK_METHOD0(OnContextLost, void());
 };
 
-// Flaky on ChromeOS: crbug.com/394083
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// TODO(crbug.com/394083, crbug.com/1305007, crbug.com/1302879): Flaky on
+// ChromeOS, Linux, and Windows.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_TestLostContext DISABLED_TestLostContext
 #else
 #define MAYBE_TestLostContext TestLostContext
@@ -42,8 +49,8 @@ IN_PROC_BROWSER_TEST_F(ImageTransportFactoryBrowserTest,
   if (GpuDataManagerImpl::GetInstance()->IsGpuCompositingDisabled())
     return;
 
-  scoped_refptr<viz::ContextProvider> context_provider =
-      factory->GetContextFactory()->SharedMainThreadContextProvider();
+  scoped_refptr<viz::RasterContextProvider> context_provider =
+      factory->GetContextFactory()->SharedMainThreadRasterContextProvider();
 
   MockContextLostObserver observer;
   context_provider->AddObserver(&observer);
@@ -52,17 +59,65 @@ IN_PROC_BROWSER_TEST_F(ImageTransportFactoryBrowserTest,
   EXPECT_CALL(observer, OnContextLost())
       .WillOnce(testing::Invoke(&run_loop, &base::RunLoop::Quit));
 
-  gpu::gles2::GLES2Interface* gl = context_provider->ContextGL();
-  gl->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET_ARB,
+  gpu::raster::RasterInterface* ri = context_provider->RasterInterface();
+  ri->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET_ARB,
                           GL_INNOCENT_CONTEXT_RESET_ARB);
 
   // We have to flush to make sure that the client side gets a chance to notice
   // the context is gone.
-  gl->Flush();
+  ri->Flush();
 
   run_loop.Run();
 
   context_provider->RemoveObserver(&observer);
+
+  // Close the channel to the GPU process. This is needed because the GPU
+  // channel is down by the time that the network service is flushed, but
+  // flushing the network service tries to bring it back up again and there are
+  // pending requests causing a DCHECK to hit.
+  BrowserGpuChannelHostFactory::instance()->CloseChannel();
+}
+
+class StartupStateContentBrowserClient
+    : public ContentBrowserTestContentBrowserClient {
+ public:
+  bool IsBrowserStartupComplete() override { return startup_complete_; }
+  void set_startup_complete(bool complete) { startup_complete_ = complete; }
+
+ private:
+  bool startup_complete_ = false;
+};
+
+class CompositorTaskRunnerStartupBrowserTest : public ContentBrowserTest {
+ public:
+  CompositorTaskRunnerStartupBrowserTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kPrioritizeResizeTaskRunnerOnStartup,
+         features::kPrioritizeCompositorTaskRunnerOnStartup},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(CompositorTaskRunnerStartupBrowserTest,
+                       UsesStartupTaskRunnerOnlyUntilStartupCompletes) {
+  StartupStateContentBrowserClient test_client;
+
+  ui::ContextFactory* context_factory =
+      ImageTransportFactory::GetInstance()->GetContextFactory();
+  scoped_refptr<base::SingleThreadTaskRunner> startup_task_runner =
+      GetUIThreadTaskRunner({BrowserTaskType::kStartup});
+  scoped_refptr<base::SingleThreadTaskRunner> default_task_runner =
+      base::SingleThreadTaskRunner::GetCurrentDefault();
+  ASSERT_NE(startup_task_runner, default_task_runner);
+
+  test_client.set_startup_complete(false);
+  EXPECT_EQ(startup_task_runner, context_factory->GetCompositorTaskRunner());
+
+  test_client.set_startup_complete(true);
+  EXPECT_EQ(default_task_runner, context_factory->GetCompositorTaskRunner());
 }
 
 }  // anonymous namespace

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,6 +27,8 @@ class CustomElementReactionFactory {
       CustomElementDefinition& definition);
   static CustomElementReaction& CreateDisconnected(
       CustomElementDefinition& definition);
+  static CustomElementReaction& CreateConnectedMove(
+      CustomElementDefinition& definition);
   static CustomElementReaction& CreateAdopted(
       CustomElementDefinition& definition,
       Document& old_owner,
@@ -48,6 +50,9 @@ class CustomElementReactionFactory {
       CustomElementDefinition& definition,
       const V8ControlValue* value,
       const String& mode);
+  static CustomElementReaction& CreateToolFillCallback(
+      CustomElementDefinition& definition,
+      const String& value);
 };
 
 }  // namespace blink

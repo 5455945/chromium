@@ -1,13 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef DEVICE_GAMEPAD_GAMEPAD_HAPTICS_MANAGER_H_
 #define DEVICE_GAMEPAD_GAMEPAD_HAPTICS_MANAGER_H_
 
-#include "base/macros.h"
 #include "device/gamepad/gamepad_export.h"
 #include "device/gamepad/public/mojom/gamepad.mojom.h"
+
+namespace content {
+class RenderFrameHost;
+}  // namespace content
 
 namespace device {
 
@@ -15,9 +18,14 @@ class DEVICE_GAMEPAD_EXPORT GamepadHapticsManager
     : public mojom::GamepadHapticsManager {
  public:
   GamepadHapticsManager();
+
+  GamepadHapticsManager(const GamepadHapticsManager&) = delete;
+  GamepadHapticsManager& operator=(const GamepadHapticsManager&) = delete;
+
   ~GamepadHapticsManager() override;
 
   static void Create(
+      content::RenderFrameHost* host,
       mojo::PendingReceiver<mojom::GamepadHapticsManager> receiver);
 
   // mojom::GamepadHapticsManager implementation.
@@ -27,9 +35,6 @@ class DEVICE_GAMEPAD_EXPORT GamepadHapticsManager
                                PlayVibrationEffectOnceCallback) override;
   void ResetVibrationActuator(uint32_t pad_index,
                               ResetVibrationActuatorCallback) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(GamepadHapticsManager);
 };
 
 }  // namespace device

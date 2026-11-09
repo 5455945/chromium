@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "third_party/blink/public/mojom/handwriting/handwriting.mojom.h"
 
 namespace content {
@@ -41,10 +40,11 @@ class CONTENT_EXPORT HandwritingRecognitionServiceImpl
   void CreateHandwritingRecognizer(
       handwriting::mojom::HandwritingModelConstraintPtr model_constraint,
       CreateHandwritingRecognizerCallback callback) override;
-  // Always returns `kNotSupported`.
-  void QueryHandwritingRecognizerSupport(
-      handwriting::mojom::HandwritingFeatureQueryPtr query,
-      QueryHandwritingRecognizerSupportCallback callback) override;
+
+  // Always return `nullptr`.
+  void QueryHandwritingRecognizer(
+      handwriting::mojom::HandwritingModelConstraintPtr model_constraint,
+      QueryHandwritingRecognizerCallback callback) override;
 };
 
 }  // namespace content

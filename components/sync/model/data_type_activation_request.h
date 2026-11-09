@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,11 @@
 #include "base/time/time.h"
 #include "components/sync/base/sync_mode.h"
 #include "components/sync/model/model_error.h"
-#include "google_apis/gaia/core_account_id.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace syncer {
 
-// The state passed from ModelTypeController to the delegate during DataType
+// The state passed from DataTypeController to the delegate during DataType
 // activation.
 struct DataTypeActivationRequest {
   DataTypeActivationRequest();
@@ -29,7 +29,7 @@ struct DataTypeActivationRequest {
   bool IsValid() const;
 
   ModelErrorHandler error_handler;
-  CoreAccountId authenticated_account_id;
+  GaiaId authenticated_gaia_id;
   std::string cache_guid;
   SyncMode sync_mode = SyncMode::kFull;
 

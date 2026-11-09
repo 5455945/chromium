@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,7 +29,6 @@ struct ASH_PUBLIC_EXPORT CastSink {
 
   std::string id;
   std::string name;
-  std::string domain;
 
   // Icon which describes the type of sink media is being routed to.
   SinkIconType sink_icon_type = SinkIconType::kGeneric;
@@ -39,6 +38,11 @@ enum class ContentSource {
   kUnknown,
   kTab,
   kDesktop,
+};
+
+struct FreezeInfo {
+  bool can_freeze = false;
+  bool is_frozen = false;
 };
 
 struct ASH_PUBLIC_EXPORT CastRoute {
@@ -51,6 +55,10 @@ struct ASH_PUBLIC_EXPORT CastRoute {
   // What is source of the content? For example, we could be DIAL casting a
   // tab or mirroring the entire desktop.
   ContentSource content_source = ContentSource::kUnknown;
+
+  // The state of freeze for the route. Is the route able to be frozen, and
+  // is it currently frozen?
+  FreezeInfo freeze_info;
 };
 
 struct ASH_PUBLIC_EXPORT SinkAndRoute {
@@ -81,6 +89,10 @@ class ASH_PUBLIC_EXPORT CastConfigController {
   virtual void AddObserver(Observer* observer) = 0;
   virtual void RemoveObserver(Observer* observer) = 0;
 
+  // Returns true if the C++ MediaRouter service exists for the primary profile
+  // and is not disabled by policy.
+  virtual bool HasMediaRouterForPrimaryProfile() const = 0;
+
   // Return true if there are available cast devices.
   virtual bool HasSinksAndRoutes() const = 0;
 
@@ -89,6 +101,11 @@ class ASH_PUBLIC_EXPORT CastConfigController {
   // server. In that case, this device is not actively transmitting information
   // to the cast sink.
   virtual bool HasActiveRoute() const = 0;
+
+  // Returns true if access code casting is enabled for this user. This is
+  // important because if it is enabled, the cast icon may need to be shown even
+  // if there are no currently available sinks.
+  virtual bool AccessCodeCastingEnabled() const = 0;
 
   // Request fresh data from the backend. When the data is available, all
   // registered observers will get called.
@@ -101,6 +118,11 @@ class ASH_PUBLIC_EXPORT CastConfigController {
 
   // A user-initiated request to stop the given cast session.
   virtual void StopCasting(const std::string& route_id) = 0;
+
+  // Freezes and Unfreezes a cast mirroring route (Displayed to users as
+  // pause/resume).
+  virtual void FreezeRoute(const std::string& route_id) = 0;
+  virtual void UnfreezeRoute(const std::string& route_id) = 0;
 
  protected:
   CastConfigController();

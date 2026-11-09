@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/policy/android/cloud_management_android_connection.h"
 #include "chrome/browser/policy/android/cloud_management_shared_preferences.h"
-#include "chrome/browser/policy/android/jni_headers/CloudManagementAndroidConnection_jni.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_service.h"
@@ -27,30 +27,41 @@ bool StoreDmTokenInSharedPreferences(const std::string& dm_token) {
   return true;
 }
 
+bool DeleteDmTokenFromSharedPreferences() {
+  android::DeleteDmTokenFromSharedPreferences();
+  return true;
+}
+
 }  // namespace
 
 BrowserDMTokenStorageAndroid::BrowserDMTokenStorageAndroid()
     : task_runner_(base::ThreadPool::CreateTaskRunner({base::MayBlock()})) {}
 
-BrowserDMTokenStorageAndroid::~BrowserDMTokenStorageAndroid() {}
+BrowserDMTokenStorageAndroid::~BrowserDMTokenStorageAndroid() = default;
 
 std::string BrowserDMTokenStorageAndroid::InitClientId() {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  return base::android::ConvertJavaStringToUTF8(
-      env, Java_CloudManagementAndroidConnection_getClientId(
-               env, Java_CloudManagementAndroidConnection_getInstance(env)));
+  return android::GetClientId();
 }
 
 std::string BrowserDMTokenStorageAndroid::InitEnrollmentToken() {
-  PolicyService* policy_service =
-      g_browser_process->browser_policy_connector()->GetPolicyService();
-  DCHECK(policy_service);
+  // When a DMToken is available or main profile is managed, it's possible that
+  // this method was called very early in the initialization process, even
+  // before `g_browser_process` be initialized.
+  // However, if DM token is available we don't need enrollment token. And main
+  // profile only requires the device identity to calculate the profile id.
+  // Neither of them actually need enrollment token so it's safe to return an
+  // empty string for now.
+  if (!CanInitEnrollmentToken()) {
+    return std::string();
+  }
 
   const base::Value* value =
-      policy_service
+      g_browser_process->browser_policy_connector()
+          ->GetPolicyService()
           ->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
-          .GetValue(key::kCloudManagementEnrollmentToken);
-  return value && value->is_string() ? value->GetString() : std::string();
+          .GetValue(key::kCloudManagementEnrollmentToken,
+                    base::Value::Type::STRING);
+  return value ? value->GetString() : std::string();
 }
 
 std::string BrowserDMTokenStorageAndroid::InitDMToken() {
@@ -61,10 +72,20 @@ bool BrowserDMTokenStorageAndroid::InitEnrollmentErrorOption() {
   return false;
 }
 
+bool BrowserDMTokenStorageAndroid::CanInitEnrollmentToken() const {
+  return g_browser_process && g_browser_process->browser_policy_connector() &&
+         g_browser_process->browser_policy_connector()->HasPolicyService();
+}
+
 BrowserDMTokenStorage::StoreTask BrowserDMTokenStorageAndroid::SaveDMTokenTask(
     const std::string& token,
     const std::string& client_id) {
   return base::BindOnce(&StoreDmTokenInSharedPreferences, token);
+}
+
+BrowserDMTokenStorage::StoreTask
+BrowserDMTokenStorageAndroid::DeleteDMTokenTask(const std::string& client_id) {
+  return base::BindOnce(&DeleteDmTokenFromSharedPreferences);
 }
 
 scoped_refptr<base::TaskRunner>

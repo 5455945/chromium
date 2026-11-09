@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/i18n/language_tag.h"
 #include "base/location.h"
-#include "base/sequenced_task_runner.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
+#include "components/prefs/pref_member_language_tag.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -62,7 +64,7 @@ class GetPrefValueHelper
 
  private:
   friend class base::RefCountedThreadSafe<GetPrefValueHelper>;
-  ~GetPrefValueHelper() {}
+  ~GetPrefValueHelper() = default;
 
   void GetPrefValue(base::WaitableEvent* event) {
     value_ = pref_.GetValue();
@@ -97,7 +99,7 @@ class PrefMemberTestClass {
   int observe_cnt_;
 
  private:
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
 };
 
 }  // anonymous namespace
@@ -207,13 +209,13 @@ TEST_F(PrefMemberTest, BasicGetAndSet) {
   EXPECT_FALSE(string.IsDefaultValue());
 
   // Test string list
-  base::Value expected_list(base::Value::Type::LIST);
+  base::ListValue expected_list;
   std::vector<std::string> expected_vector;
   StringListPrefMember string_list;
   string_list.Init(kStringListPref, &prefs);
 
   // Check the defaults
-  EXPECT_TRUE(expected_list.Equals(prefs.GetList(kStringListPref)));
+  EXPECT_EQ(expected_list, prefs.GetList(kStringListPref));
   EXPECT_EQ(expected_vector, string_list.GetValue());
   EXPECT_EQ(expected_vector, *string_list);
   EXPECT_TRUE(string_list.IsDefaultValue());
@@ -223,7 +225,7 @@ TEST_F(PrefMemberTest, BasicGetAndSet) {
   expected_vector.push_back("foo");
   string_list.SetValue(expected_vector);
 
-  EXPECT_TRUE(expected_list.Equals(prefs.GetList(kStringListPref)));
+  EXPECT_EQ(expected_list, prefs.GetList(kStringListPref));
   EXPECT_EQ(expected_vector, string_list.GetValue());
   EXPECT_EQ(expected_vector, *string_list);
   EXPECT_FALSE(string_list.IsDefaultValue());
@@ -231,19 +233,19 @@ TEST_F(PrefMemberTest, BasicGetAndSet) {
   // Try adding through the pref.
   expected_list.Append("bar");
   expected_vector.push_back("bar");
-  prefs.Set(kStringListPref, expected_list);
+  prefs.SetList(kStringListPref, expected_list.Clone());
 
-  EXPECT_TRUE(expected_list.Equals(prefs.GetList(kStringListPref)));
+  EXPECT_EQ(expected_list, prefs.GetList(kStringListPref));
   EXPECT_EQ(expected_vector, string_list.GetValue());
   EXPECT_EQ(expected_vector, *string_list);
   EXPECT_FALSE(string_list.IsDefaultValue());
 
   // Try removing through the pref.
-  EXPECT_TRUE(expected_list.EraseListIter(expected_list.GetList().begin()));
+  expected_list.erase(expected_list.begin());
   expected_vector.erase(expected_vector.begin());
-  prefs.Set(kStringListPref, expected_list);
+  prefs.SetList(kStringListPref, expected_list.Clone());
 
-  EXPECT_TRUE(expected_list.Equals(prefs.GetList(kStringListPref)));
+  EXPECT_EQ(expected_list, prefs.GetList(kStringListPref));
   EXPECT_EQ(expected_vector, string_list.GetValue());
   EXPECT_EQ(expected_vector, *string_list);
   EXPECT_FALSE(string_list.IsDefaultValue());
@@ -256,13 +258,13 @@ TEST_F(PrefMemberTest, InvalidList) {
 
   // Try to add a valid list first.
   base::Value list(base::Value::Type::LIST);
-  list.Append("foo");
+  list.GetList().Append("foo");
   std::vector<std::string> vector;
   EXPECT_TRUE(subtle::PrefMemberVectorStringUpdate(list, &vector));
   EXPECT_EQ(expected_vector, vector);
 
   // Now try to add an invalid list.  |vector| should not be changed.
-  list.Append(0);
+  list.GetList().Append(0);
   EXPECT_FALSE(subtle::PrefMemberVectorStringUpdate(list, &vector));
   EXPECT_EQ(expected_vector, vector);
 }
@@ -347,4 +349,25 @@ TEST_F(PrefMemberTest, MoveToSequence) {
 
   helper->FetchValue();
   EXPECT_TRUE(helper->value());
+}
+
+TEST_F(PrefMemberTest, InitGetAndSetLanguageTagPrefMember) {
+  TestingPrefServiceSimple prefs;
+  constexpr char kLanguageTagPref[] = "language_tag";
+  constexpr base::i18n::LanguageTag default_tag =
+      base::i18n::GetKnownLanguageTag("en");
+  constexpr base::i18n::LanguageTag new_tag =
+      base::i18n::GetKnownLanguageTag("es");
+
+  prefs.registry()->RegisterLanguageTagPref(kLanguageTagPref, default_tag);
+
+  LanguageTagPrefMember member;
+  member.Init(kLanguageTagPref, &prefs);
+  EXPECT_EQ(default_tag, member.GetValue());
+
+  prefs.SetLanguageTag(kLanguageTagPref, new_tag);
+  EXPECT_EQ(new_tag, member.GetValue());
+
+  member.SetValue(default_tag);
+  EXPECT_EQ(default_tag, prefs.GetLanguageTag(kLanguageTagPref));
 }

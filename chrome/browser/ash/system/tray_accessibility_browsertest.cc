@@ -1,23 +1,24 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/accessibility/accessibility_controller.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/public/cpp/ash_pref_names.h"
 #include "ash/public/cpp/ash_view_ids.h"
 #include "ash/public/cpp/system_tray_test_api.h"
-#include "base/callback.h"
+#include "ash/system/accessibility/accessibility_detailed_view.h"
+#include "ash/system/tray/tray_detailed_view.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
+#include "build/build_config.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/browser/ash/login/helper.h"
+#include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/startup_utils.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/session_controller_client_impl.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -32,13 +33,13 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/widget/widget.h"
 
-using testing::Return;
 using testing::_;
+using testing::Return;
 using testing::WithParamInterface;
 
 namespace ash {
@@ -75,10 +76,7 @@ void EnableSelectToSpeak(bool enabled) {
 }
 
 void EnableDictation(bool enabled) {
-  bool already_enabled = AccessibilityManager::Get()->IsDictationEnabled();
-  if (enabled == already_enabled)
-    return;
-  AccessibilityManager::Get()->ToggleDictation();
+  AccessibilityManager::Get()->SetDictationEnabled(enabled);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -104,6 +102,11 @@ void EnableVirtualKeyboard(bool enabled) {
 
 void EnableLargeCursor(bool enabled) {
   AccessibilityManager::Get()->EnableLargeCursor(enabled);
+  base::RunLoop().RunUntilIdle();
+}
+
+void EnableLiveCaption(bool enabled) {
+  AccessibilityManager::Get()->EnableLiveCaption(enabled);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -136,13 +139,12 @@ void EnableStickyKeys(bool enabled) {
 
 // Uses InProcessBrowserTest instead of OobeBaseTest because most of the tests
 // don't need to test the login screen.
-class TrayAccessibilityTest
-    : public InProcessBrowserTest,
-      public WithParamInterface<PrefSettingMechanism> {
+class TrayAccessibilityTest : public InProcessBrowserTest,
+                              public WithParamInterface<PrefSettingMechanism> {
  public:
   TrayAccessibilityTest()
       : disable_animations_(
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION) {}
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION) {}
   ~TrayAccessibilityTest() override = default;
 
   // The profile which should be used by these tests.
@@ -152,13 +154,15 @@ class TrayAccessibilityTest
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
     tray_test_api_ = ash::SystemTrayTestApi::Create();
+    ash::AccessibilityController::Get()
+        ->DisableSwitchAccessDisableConfirmationDialogTesting();
   }
 
   void SetUpInProcessBrowserTestFixture() override {
     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
-    ON_CALL(provider_, IsInitializationComplete(_)).WillByDefault(Return(true));
-    ON_CALL(provider_, IsFirstPolicyLoadComplete(_))
-        .WillByDefault(Return(true));
+    provider_.SetDefaultReturns(
+        /*is_initialization_complete_return=*/true,
+        /*is_first_policy_load_complete_return=*/true);
     policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
   }
 
@@ -182,7 +186,7 @@ class TrayAccessibilityTest
 
   bool IsMenuButtonVisible() {
     bool visible = tray_test_api_->IsBubbleViewVisible(
-        ash::VIEW_ID_ACCESSIBILITY_TRAY_ITEM, true /* open_tray */);
+        ash::VIEW_ID_FEATURE_TILE_ACCESSIBILITY, true /* open_tray */);
     tray_test_api_->CloseBubble();
     return visible;
   }
@@ -192,30 +196,28 @@ class TrayAccessibilityTest
   bool IsBubbleOpen() { return tray_test_api_->IsTrayBubbleOpen(); }
 
   void ClickVirtualKeyboardOnDetailMenu() {
+    // Scroll the detailed view to show the virtual keyboard option.
+    tray_test_api_->ScrollToShowView(
+        tray_test_api_->GetAccessibilityDetailedView()
+            ->scroll_view_for_testing(),
+        ash::VIEW_ID_ACCESSIBILITY_VIRTUAL_KEYBOARD);
     tray_test_api_->ClickBubbleView(
         ash::VIEW_ID_ACCESSIBILITY_VIRTUAL_KEYBOARD);
   }
 
   bool IsVirtualKeyboardEnabledOnDetailMenu() const {
-    return tray_test_api_->IsBubbleViewVisible(
-        ash::VIEW_ID_ACCESSIBILITY_VIRTUAL_KEYBOARD_ENABLED,
-        false /* open_tray */);
+    return tray_test_api_->IsToggleOn(
+        ash::VIEW_ID_ACCESSIBILITY_VIRTUAL_KEYBOARD_ENABLED);
   }
 
   // Disable animations so that tray icons hide immediately.
-  ui::ScopedAnimationDurationScaleMode disable_animations_;
+  gfx::ScopedAnimationDurationScaleMode disable_animations_;
 
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
   std::unique_ptr<ash::SystemTrayTestApi> tray_test_api_;
 };
 
-// Fails on linux-chromeos-dbg see crbug/1027919.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-#define MAYBE_ShowMenu DISABLED_ShowMenu
-#else
-#define MAYBE_ShowMenu ShowMenu
-#endif
-IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenu) {
+IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, ShowMenu) {
   SetShowAccessibilityOptionsInSystemTrayMenu(false);
 
   // Confirms that the menu is hidden.
@@ -261,6 +263,12 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenu) {
   EnableLargeCursor(true);
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(false);
+  EXPECT_FALSE(IsMenuButtonVisible());
+
+  // Toggling Live Caption changes the visibility of the menu.
+  EnableLiveCaption(true);
+  EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(false);
   EXPECT_FALSE(IsMenuButtonVisible());
 
   // Toggling mono audio changes the visibility of the menu.
@@ -332,6 +340,8 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenu) {
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(true);
   EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(true);
+  EXPECT_TRUE(IsMenuButtonVisible());
   EnableMonoAudio(true);
   EXPECT_TRUE(IsMenuButtonVisible());
   SetCaretHighlightEnabled(true);
@@ -362,6 +372,8 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenu) {
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(false);
   EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(false);
+  EXPECT_TRUE(IsMenuButtonVisible());
   EnableMonoAudio(false);
   EXPECT_TRUE(IsMenuButtonVisible());
   SetCaretHighlightEnabled(false);
@@ -374,13 +386,7 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenu) {
   EXPECT_FALSE(IsMenuButtonVisible());
 }
 
-// Fails on linux-chromeos-dbg see crbug/1027919.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-#define MAYBE_ShowMenuWithShowMenuOption DISABLED_ShowMenuWithShowMenuOption
-#else
-#define MAYBE_ShowMenuWithShowMenuOption ShowMenuWithShowMenuOption
-#endif
-IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenuWithShowMenuOption) {
+IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, ShowMenuWithShowMenuOption) {
   SetShowAccessibilityOptionsInSystemTrayMenu(true);
 
   // Confirms that the menu is visible.
@@ -426,6 +432,12 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenuWithShowMenuOption) 
   EnableLargeCursor(true);
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(false);
+  EXPECT_TRUE(IsMenuButtonVisible());
+
+  // The menu remains visible regardless of toggling Live Caption.
+  EnableLiveCaption(true);
+  EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(false);
   EXPECT_TRUE(IsMenuButtonVisible());
 
   // The menu remains visible regardless of toggling mono audio.
@@ -497,6 +509,8 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenuWithShowMenuOption) 
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(true);
   EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(true);
+  EXPECT_TRUE(IsMenuButtonVisible());
   EnableMonoAudio(true);
   EXPECT_TRUE(IsMenuButtonVisible());
   SetCaretHighlightEnabled(true);
@@ -527,6 +541,8 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, MAYBE_ShowMenuWithShowMenuOption) 
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(false);
   EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(false);
+  EXPECT_TRUE(IsMenuButtonVisible());
   EnableMonoAudio(false);
   EXPECT_TRUE(IsMenuButtonVisible());
   SetCaretHighlightEnabled(false);
@@ -550,7 +566,7 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, KeepMenuVisibilityOnLockScreen) {
   EXPECT_TRUE(IsMenuButtonVisible());
 
   // Locks the screen.
-  SessionControllerClientImpl::Get()->RequestLockScreen();
+  ScreenLockerTester().Lock();
 
   // Resets the test API because UnifiedSystemTray is recreated.
   tray_test_api_ = ash::SystemTrayTestApi::Create();
@@ -590,6 +606,11 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityTest, DetailMenuRemainsOpen) {
 class TrayAccessibilityLoginTest : public TrayAccessibilityTest {
  public:
   TrayAccessibilityLoginTest() = default;
+
+  TrayAccessibilityLoginTest(const TrayAccessibilityLoginTest&) = delete;
+  TrayAccessibilityLoginTest& operator=(const TrayAccessibilityLoginTest&) =
+      delete;
+
   ~TrayAccessibilityLoginTest() = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -597,9 +618,6 @@ class TrayAccessibilityLoginTest : public TrayAccessibilityTest {
     command_line->AppendSwitch(switches::kLoginManager);
     command_line->AppendSwitch(switches::kForceLoginManagerInTests);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TrayAccessibilityLoginTest);
 };
 
 IN_PROC_BROWSER_TEST_P(TrayAccessibilityLoginTest,
@@ -663,6 +681,12 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityLoginTest,
   EnableLargeCursor(false);
   EXPECT_TRUE(IsMenuButtonVisible());
 
+  // The menu remains visible regardless of toggling Live Caption.
+  EnableLiveCaption(true);
+  EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(false);
+  EXPECT_TRUE(IsMenuButtonVisible());
+
   // The menu remains visible regardless of toggling mono audio.
   EnableMonoAudio(true);
   EXPECT_TRUE(IsMenuButtonVisible());
@@ -712,6 +736,8 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityLoginTest,
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(true);
   EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(true);
+  EXPECT_TRUE(IsMenuButtonVisible());
   EnableMonoAudio(true);
   EXPECT_TRUE(IsMenuButtonVisible());
   SetCaretHighlightEnabled(true);
@@ -737,6 +763,8 @@ IN_PROC_BROWSER_TEST_P(TrayAccessibilityLoginTest,
   SetScreenMagnifierEnabled(false);
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableLargeCursor(false);
+  EXPECT_TRUE(IsMenuButtonVisible());
+  EnableLiveCaption(false);
   EXPECT_TRUE(IsMenuButtonVisible());
   EnableMonoAudio(false);
   EXPECT_TRUE(IsMenuButtonVisible());

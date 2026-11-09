@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 #include "base/atomic_sequence_num.h"
 #include "base/check_op.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 AtomicSequenceNumber g_sequence_local_storage_slot_generator;
@@ -22,6 +21,4 @@ int GetNextSequenceLocalStorageSlotNumber() {
   return slot_id;
 }
 
-}  // namespace internal
-
-}  // namespace base
+}  // namespace base::internal

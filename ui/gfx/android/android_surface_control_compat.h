@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,19 @@
 #include <android/native_window.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/android/scoped_java_ref.h"
+#include "base/component_export.h"
 #include "base/files/scoped_file.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "ui/gfx/android/surface_control_frame_rate.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/gfx_export.h"
+#include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/overlay_transform.h"
 
 extern "C" {
@@ -26,7 +32,7 @@ typedef struct ASurfaceTransaction ASurfaceTransaction;
 namespace gfx {
 class ColorSpace;
 
-class GFX_EXPORT SurfaceControl {
+class COMPONENT_EXPORT(GFX) SurfaceControl {
  public:
   // Check if the platform is capable of supporting the low-level SurfaceControl
   // API. See also gpu/config/gpu_util's GetAndroidSurfaceControlFeatureStatus
@@ -36,6 +42,14 @@ class GFX_EXPORT SurfaceControl {
 
   // Returns true if overlays with |color_space| are supported by the platform.
   static bool SupportsColorSpace(const gfx::ColorSpace& color_space);
+
+  // Translate `color_space` and `desired_brightness_ratio` to an ADataSpace and
+  // extended range brightness ratio.
+  static bool ColorSpaceToADataSpace(
+      const gfx::ColorSpace& color_space,
+      float desired_brightness_ratio,
+      ADataSpace& out_dataspace,
+      float& out_extended_range_brightness_ratio);
 
   // Returns the usage flags required for using an AHardwareBuffer with the
   // SurfaceControl API, if it is supported.
@@ -51,12 +65,26 @@ class GFX_EXPORT SurfaceControl {
   // Returns true if OnCommit callback is supported.
   static bool SupportsOnCommit();
 
+  // kAtLeast will be treated as kFixedSource when not supported.
+  static bool SupportsFrameRateCompatAtLeast();
+
+  // Returns true if tagging a transaction with vsync id is supported.
+  static COMPONENT_EXPORT(GFX) bool SupportsSetFrameTimeline();
+
+  // Returns true if APIs to convert Java SurfaceControl to ASurfaceControl.
+  static COMPONENT_EXPORT(GFX) bool SupportsSurfacelessControl();
+
+  // Returns true if API to enable back pressure is supported.
+  static COMPONENT_EXPORT(GFX) bool SupportsSetEnableBackPressure();
+
   // Applies transaction. Used to emulate webview functor interface, where we
   // pass raw ASurfaceTransaction object. For use inside Chromium use
   // Transaction class below instead.
   static void ApplyTransaction(ASurfaceTransaction* transaction);
 
-  class GFX_EXPORT Surface : public base::RefCounted<Surface> {
+  static void SetStubImplementationForTesting();
+
+  class COMPONENT_EXPORT(GFX) Surface : public base::RefCounted<Surface> {
    public:
     // Wraps ASurfaceControl, but doesn't transfer ownership. Will not release
     // in dtor.
@@ -65,6 +93,11 @@ class GFX_EXPORT SurfaceControl {
     Surface();
     Surface(const Surface& parent, const char* name);
     Surface(ANativeWindow* parent, const char* name);
+    Surface(JNIEnv* env,
+            const base::android::JavaRef<jobject>& j_surface_control);
+
+    Surface(const Surface&) = delete;
+    Surface& operator=(const Surface&) = delete;
 
     ASurfaceControl* surface() const { return surface_; }
 
@@ -72,29 +105,31 @@ class GFX_EXPORT SurfaceControl {
     friend class base::RefCounted<Surface>;
     ~Surface();
 
-    ASurfaceControl* surface_ = nullptr;
-    ASurfaceControl* owned_surface_ = nullptr;
-
-    DISALLOW_COPY_AND_ASSIGN(Surface);
+    raw_ptr<ASurfaceControl> surface_ = nullptr;
+    raw_ptr<ASurfaceControl> owned_surface_ = nullptr;
   };
 
-  struct GFX_EXPORT SurfaceStats {
+  struct COMPONENT_EXPORT(GFX) SurfaceStats {
     SurfaceStats();
     ~SurfaceStats();
 
     SurfaceStats(SurfaceStats&& other);
     SurfaceStats& operator=(SurfaceStats&& other);
 
-    ASurfaceControl* surface = nullptr;
+    raw_ptr<ASurfaceControl> surface = nullptr;
 
     // The fence which is signaled when the reads for the previous buffer for
     // the given |surface| are finished.
     base::ScopedFD fence;
   };
 
-  struct GFX_EXPORT TransactionStats {
+  struct COMPONENT_EXPORT(GFX) TransactionStats {
    public:
     TransactionStats();
+
+    TransactionStats(const TransactionStats&) = delete;
+    TransactionStats& operator=(const TransactionStats&) = delete;
+
     ~TransactionStats();
 
     TransactionStats(TransactionStats&& other);
@@ -105,14 +140,15 @@ class GFX_EXPORT SurfaceControl {
     base::ScopedFD present_fence;
     std::vector<SurfaceStats> surface_stats;
     base::TimeTicks latch_time;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(TransactionStats);
   };
 
-  class GFX_EXPORT Transaction {
+  class COMPONENT_EXPORT(GFX) Transaction {
    public:
     Transaction();
+
+    Transaction(const Transaction&) = delete;
+    Transaction& operator=(const Transaction&) = delete;
+
     ~Transaction();
 
     Transaction(Transaction&& other);
@@ -129,10 +165,22 @@ class GFX_EXPORT SurfaceControl {
                      gfx::OverlayTransform transform);
     void SetOpaque(const Surface& surface, bool opaque);
     void SetDamageRect(const Surface& surface, const gfx::Rect& rect);
+    // Sets the data space and HDR metadata for `surface`. If supported,
+    // `desired_brightness_ratio` is passed as the `desiredRatio` argument to
+    // ASurfaceTransaction_setExtendedRangeBrightness, and a value greater
+    // than 1 will also select an extended range data space.
     void SetColorSpace(const Surface& surface,
-                       const gfx::ColorSpace& color_space);
-    void SetFrameRate(const Surface& surface, float frame_rate);
+                       const ColorSpace& color_space,
+                       const HDRMetadata& metadata,
+                       float desired_brightness_ratio);
+    void SetFrameRate(const Surface& surface,
+                      SurfaceControlFrameRate frame_rate);
     void SetParent(const Surface& surface, Surface* new_parent);
+    void SetPosition(const Surface& surface, const gfx::Point& position);
+    void SetScale(const Surface& surface, float sx, float sy);
+    void SetCrop(const Surface& surface, const gfx::Rect& rect);
+    void SetFrameTimelineId(int64_t vsync_id);
+    void SetEnableBackPressure(const Surface& surface, bool enable);
 
     // Sets the callback which will be dispatched when the transaction is acked
     // by the framework.
@@ -148,15 +196,19 @@ class GFX_EXPORT SurfaceControl {
                        scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
     void Apply();
-    ASurfaceTransaction* transaction() { return transaction_; }
+    // Caller(e.g.,WebView) must call ASurfaceTransaction_apply(), otherwise
+    // SurfaceControl leaks.
+    ASurfaceTransaction* GetTransaction();
 
    private:
+    void PrepareCallbacks();
+    void DestroyIfNeeded();
+
     int id_;
-    ASurfaceTransaction* transaction_;
+    raw_ptr<ASurfaceTransaction> transaction_;
     OnCommitCb on_commit_cb_;
     OnCompleteCb on_complete_cb_;
-
-    DISALLOW_COPY_AND_ASSIGN(Transaction);
+    bool need_to_apply_ = false;
   };
 };
 }  // namespace gfx

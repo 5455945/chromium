@@ -35,19 +35,22 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/forms/chooser_resource_loader.h"
 #include "third_party/blink/renderer/core/html/forms/date_time_chooser_client.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_popup.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/language.h"
 #include "third_party/blink/renderer/platform/text/date_components.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/strings/grit/ax_strings.h"
 
 namespace blink {
 
@@ -55,87 +58,106 @@ DateTimeChooserImpl::DateTimeChooserImpl(
     LocalFrame* frame,
     DateTimeChooserClient* client,
     const DateTimeChooserParameters& parameters)
-    : frame_(frame),
+    : chrome_client_(&frame->GetPage()->GetChromeClient()),
       client_(client),
       popup_(nullptr),
       parameters_(&parameters),
       locale_(Locale::Create(parameters.locale)) {
   DCHECK(RuntimeEnabledFeatures::InputMultipleFieldsUIEnabled());
-  DCHECK(frame_);
   DCHECK(client_);
-  popup_ = frame_->View()->GetChromeClient()->OpenPagePopup(this);
+  popup_ = chrome_client_->OpenPagePopup(this);
+  if (popup_) {
+    To<HTMLFormControlElement>(OwnerElement()).SetFreezeHoverForOpenPopup(true);
+  }
   parameters_ = nullptr;
 }
 
 DateTimeChooserImpl::~DateTimeChooserImpl() = default;
 
 void DateTimeChooserImpl::Trace(Visitor* visitor) const {
-  visitor->Trace(frame_);
+  visitor->Trace(chrome_client_);
   visitor->Trace(client_);
   DateTimeChooser::Trace(visitor);
+  PagePopupClient::Trace(visitor);
 }
 
 void DateTimeChooserImpl::EndChooser() {
   if (!popup_)
     return;
-  frame_->View()->GetChromeClient()->ClosePagePopup(popup_);
+  if (chrome_client_) {
+    chrome_client_->ClosePagePopup(popup_);
+  }
 }
 
-AXObject* DateTimeChooserImpl::RootAXObject() {
-  return popup_ ? popup_->RootAXObject() : nullptr;
+AXObject* DateTimeChooserImpl::RootAXObject(Element* popup_owner) {
+  return popup_ ? popup_->RootAXObject(popup_owner) : nullptr;
 }
 
-static String ValueToDateTimeString(double value, AtomicString type) {
+bool DateTimeChooserImpl::IsPickerVisible() const {
+  return popup_;
+}
+
+static String ValueToDateTimeString(double value, InputType::Type type) {
   DateComponents components;
-  if (type == input_type_names::kDate)
-    components.SetMillisecondsSinceEpochForDate(value);
-  else if (type == input_type_names::kDatetimeLocal)
-    components.SetMillisecondsSinceEpochForDateTimeLocal(value);
-  else if (type == input_type_names::kMonth)
-    components.SetMonthsSinceEpoch(value);
-  else if (type == input_type_names::kTime)
-    components.SetMillisecondsSinceMidnight(value);
-  else if (type == input_type_names::kWeek)
-    components.SetMillisecondsSinceEpochForWeek(value);
-  else
-    NOTREACHED();
+  switch (type) {
+    case InputType::Type::kDate:
+      components.SetMillisecondsSinceEpochForDate(value);
+      break;
+    case InputType::Type::kDateTimeLocal:
+      components.SetMillisecondsSinceEpochForDateTimeLocal(value);
+      break;
+    case InputType::Type::kMonth:
+      components.SetMonthsSinceEpoch(value);
+      break;
+    case InputType::Type::kTime:
+      components.SetMillisecondsSinceMidnight(value);
+      break;
+    case InputType::Type::kWeek:
+      components.SetMillisecondsSinceEpochForWeek(value);
+      break;
+    default:
+      NOTREACHED();
+  }
   return components.GetType() == DateComponents::kInvalid
              ? String()
              : components.ToString();
 }
 
-void DateTimeChooserImpl::WriteDocument(SharedBuffer* data) {
+void DateTimeChooserImpl::WriteDocument(SegmentedBuffer& data) {
   String step_string = String::Number(parameters_->step);
   String step_base_string = String::Number(parameters_->step_base, 11);
   String today_label_string;
   String other_date_label_string;
-  if (parameters_->type == input_type_names::kMonth) {
-    today_label_string = GetLocale().QueryString(IDS_FORM_THIS_MONTH_LABEL);
-    other_date_label_string =
-        GetLocale().QueryString(IDS_FORM_OTHER_MONTH_LABEL);
-  } else if (parameters_->type == input_type_names::kWeek) {
-    today_label_string = GetLocale().QueryString(IDS_FORM_THIS_WEEK_LABEL);
-    other_date_label_string =
-        GetLocale().QueryString(IDS_FORM_OTHER_WEEK_LABEL);
-  } else {
-    today_label_string = GetLocale().QueryString(IDS_FORM_CALENDAR_TODAY);
-    other_date_label_string =
-        GetLocale().QueryString(IDS_FORM_OTHER_DATE_LABEL);
+  switch (parameters_->type) {
+    case InputType::Type::kMonth:
+      today_label_string = GetLocale().QueryString(IDS_FORM_THIS_MONTH_LABEL);
+      other_date_label_string =
+          GetLocale().QueryString(IDS_FORM_OTHER_MONTH_LABEL);
+      break;
+    case InputType::Type::kWeek:
+      today_label_string = GetLocale().QueryString(IDS_FORM_THIS_WEEK_LABEL);
+      other_date_label_string =
+          GetLocale().QueryString(IDS_FORM_OTHER_WEEK_LABEL);
+      break;
+    default:
+      today_label_string = GetLocale().QueryString(IDS_FORM_CALENDAR_TODAY);
+      other_date_label_string =
+          GetLocale().QueryString(IDS_FORM_OTHER_DATE_LABEL);
   }
 
-  AddString(
+  AddLiteral(
       "<!DOCTYPE html><head><meta charset='UTF-8'><meta name='color-scheme' "
       "content='light dark'><style>\n",
       data);
 
-  data->Append(ChooserResourceLoader::GetPickerCommonStyleSheet());
-  data->Append(ChooserResourceLoader::GetSuggestionPickerStyleSheet());
-  data->Append(ChooserResourceLoader::GetCalendarPickerStyleSheet());
-  if (parameters_->type == input_type_names::kTime ||
-      parameters_->type == input_type_names::kDatetimeLocal) {
-    data->Append(ChooserResourceLoader::GetTimePickerStyleSheet());
+  data.Append(ChooserResourceLoader::GetPickerCommonStyleSheet());
+  data.Append(ChooserResourceLoader::GetSuggestionPickerStyleSheet());
+  data.Append(ChooserResourceLoader::GetCalendarPickerStyleSheet());
+  if (parameters_->type == InputType::Type::kTime ||
+      parameters_->type == InputType::Type::kDateTimeLocal) {
+    data.Append(ChooserResourceLoader::GetTimePickerStyleSheet());
   }
-  AddString(
+  AddLiteral(
       "</style></head><body><div id=main>Loading...</div><script>\n"
       "window.dialogArguments = {\n",
       data);
@@ -174,17 +196,20 @@ void DateTimeChooserImpl::WriteDocument(SharedBuffer* data) {
   AddProperty("weekStartDay", locale_->FirstDayOfWeek(), data);
   AddProperty("shortMonthLabels", locale_->ShortMonthLabels(), data);
   AddProperty("dayLabels", locale_->WeekDayShortLabels(), data);
-  AddProperty("ampmLabels", locale_->TimeAMPMLabels(), data);
-  AddProperty("isLocaleRTL", locale_->IsRTL(), data);
+  AddProperty("ampmLabels", locale_->TimeAmPmLabels(), data);
+  AddProperty("isLocaleRTL", locale_->IsRtl(), data);
   AddProperty("isRTL", parameters_->is_anchor_element_rtl, data);
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   AddProperty("isBorderTransparent", true, data);
 #endif
-  AddProperty("mode", parameters_->type.GetString(), data);
+  AddProperty("mode", InputType::TypeToString(parameters_->type).GetString(),
+              data);
   AddProperty("isAMPMFirst", parameters_->is_ampm_first, data);
   AddProperty("hasAMPM", parameters_->has_ampm, data);
   AddProperty("hasSecond", parameters_->has_second, data);
   AddProperty("hasMillisecond", parameters_->has_millisecond, data);
+  AddProperty("timePickerHonorsStep",
+              RuntimeEnabledFeatures::TimePickerHonorsStepEnabled(), data);
   if (parameters_->suggestions.size()) {
     Vector<String> suggestion_values;
     Vector<String> localized_suggestion_values;
@@ -201,7 +226,7 @@ void DateTimeChooserImpl::WriteDocument(SharedBuffer* data) {
     AddProperty("suggestionLabels", suggestion_labels, data);
     AddProperty(
         "inputWidth",
-        static_cast<unsigned>(parameters_->anchor_rect_in_screen.Width()),
+        static_cast<unsigned>(parameters_->anchor_rect_in_screen.width()),
         data);
     AddProperty(
         "showOtherDateEntry",
@@ -216,27 +241,27 @@ void DateTimeChooserImpl::WriteDocument(SharedBuffer* data) {
     AddProperty("suggestionHighlightColor",
                 LayoutTheme::GetTheme()
                     .ActiveListBoxSelectionBackgroundColor(color_scheme)
-                    .Serialized(),
+                    .SerializeAsCSSColor(),
                 data);
     AddProperty("suggestionHighlightTextColor",
                 LayoutTheme::GetTheme()
                     .ActiveListBoxSelectionForegroundColor(color_scheme)
-                    .Serialized(),
+                    .SerializeAsCSSColor(),
                 data);
   }
-  AddString("}\n", data);
+  AddLiteral("}\n", data);
 
-  data->Append(ChooserResourceLoader::GetPickerCommonJS());
-  data->Append(ChooserResourceLoader::GetSuggestionPickerJS());
-  data->Append(ChooserResourceLoader::GetMonthPickerJS());
-  if (parameters_->type == input_type_names::kTime) {
-    data->Append(ChooserResourceLoader::GetTimePickerJS());
-  } else if (parameters_->type == input_type_names::kDatetimeLocal) {
-    data->Append(ChooserResourceLoader::GetTimePickerJS());
-    data->Append(ChooserResourceLoader::GetDateTimeLocalPickerJS());
+  data.Append(ChooserResourceLoader::GetPickerCommonJS());
+  data.Append(ChooserResourceLoader::GetSuggestionPickerJS());
+  data.Append(ChooserResourceLoader::GetMonthPickerJS());
+  if (parameters_->type == InputType::Type::kTime) {
+    data.Append(ChooserResourceLoader::GetTimePickerJS());
+  } else if (parameters_->type == InputType::Type::kDateTimeLocal) {
+    data.Append(ChooserResourceLoader::GetTimePickerJS());
+    data.Append(ChooserResourceLoader::GetDateTimeLocalPickerJS());
   }
-  data->Append(ChooserResourceLoader::GetCalendarPickerJS());
-  AddString("</script></body>\n", data);
+  data.Append(ChooserResourceLoader::GetCalendarPickerJS());
+  AddLiteral("</script></body>\n", data);
 }
 
 Element& DateTimeChooserImpl::OwnerElement() {
@@ -244,7 +269,7 @@ Element& DateTimeChooserImpl::OwnerElement() {
 }
 
 ChromeClient& DateTimeChooserImpl::GetChromeClient() {
-  return *frame_->View()->GetChromeClient();
+  return *chrome_client_;
 }
 
 Locale& DateTimeChooserImpl::GetLocale() {
@@ -252,7 +277,8 @@ Locale& DateTimeChooserImpl::GetLocale() {
 }
 
 void DateTimeChooserImpl::SetValueAndClosePopup(int num_value,
-                                                const String& string_value) {
+                                                const String& string_value,
+                                                bool is_keyboard_event) {
   if (num_value >= 0)
     SetValue(string_value);
   EndChooser();
@@ -267,9 +293,14 @@ void DateTimeChooserImpl::CancelPopup() {
 }
 
 void DateTimeChooserImpl::DidClosePopup() {
+  To<HTMLFormControlElement>(OwnerElement()).SetFreezeHoverForOpenPopup(false);
   DCHECK(client_);
   popup_ = nullptr;
   client_->DidEndChooser();
+}
+
+void DateTimeChooserImpl::AdjustSettings(Settings& popup_settings) {
+  AdjustSettingsFromOwnerColorScheme(popup_settings);
 }
 
 }  // namespace blink

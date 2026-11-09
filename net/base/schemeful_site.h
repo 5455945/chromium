@@ -1,30 +1,36 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_SCHEMEFUL_SITE_H_
 #define NET_BASE_SCHEMEFUL_SITE_H_
 
+#include <compare>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 
 #include "base/gtest_prod_util.h"
+#include "base/types/pass_key.h"
 #include "net/base/net_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 class GURL;
+
+namespace blink {
+class BlinkSchemefulSite;
+class StorageKey;
+}  // namespace blink
 
 namespace IPC {
 template <class P>
 struct ParamTraits;
 }  // namespace IPC
 
-namespace network {
-namespace mojom {
+namespace network::mojom {
 class SchemefulSiteDataView;
-}  // namespace mojom
-}  // namespace network
+}  // namespace network::mojom
 
 namespace mojo {
 template <typename DataViewType, typename T>
@@ -33,6 +39,7 @@ struct StructTraits;
 
 namespace net {
 
+class NetworkAnonymizationKey;
 class SiteForCookies;
 
 // Class which represents a scheme and etld+1 for an origin, as specified by
@@ -47,6 +54,9 @@ class SiteForCookies;
 //    SchemefulSite iff they share a scheme and host.
 // 4. Origins which differ only by port have the same SchemefulSite.
 // 5. Websocket origins cannot have a SchemefulSite (they trigger a DCHECK).
+//
+// Note that blink::BlinkSchemefulSite mirrors this class and needs to be kept
+// in sync with any data member changes.
 class NET_EXPORT SchemefulSite {
  public:
   SchemefulSite() = default;
@@ -62,10 +72,19 @@ class NET_EXPORT SchemefulSite {
   explicit SchemefulSite(const GURL& url);
 
   SchemefulSite(const SchemefulSite& other);
-  SchemefulSite(SchemefulSite&& other);
+  SchemefulSite(SchemefulSite&& other) noexcept;
 
   SchemefulSite& operator=(const SchemefulSite& other);
-  SchemefulSite& operator=(SchemefulSite&& other);
+  SchemefulSite& operator=(SchemefulSite&& other) noexcept;
+
+  // These methods match the spec algorithm
+  // https://html.spec.whatwg.org/multipage/browsers.html#concept-site-same-site
+  // in an efficient way without allocating the SchemefulSite directly.
+  // They exactly match the semantics of SchemefulSite(a) == SchemefulSite(b).
+  static bool IsSameSite(const url::Origin& a, const url::Origin& b);
+  bool IsSameSiteWith(const url::Origin& other) const;
+  static bool IsSameSite(const GURL& a, const GURL& b);
+  bool IsSameSiteWith(const GURL& other) const;
 
   // Tries to construct an instance from a (potentially untrusted) value of the
   // internal `site_as_origin_` that got received over an RPC.
@@ -76,7 +95,7 @@ class NET_EXPORT SchemefulSite {
   static bool FromWire(const url::Origin& site_as_origin, SchemefulSite* out);
 
   // Creates a SchemefulSite iff the passed-in origin has a registerable domain.
-  static absl::optional<SchemefulSite> CreateIfHasRegisterableDomain(
+  static std::optional<SchemefulSite> CreateIfHasRegisterableDomain(
       const url::Origin&);
 
   // If the scheme is ws or wss, it is converted to http or https, respectively.
@@ -88,18 +107,36 @@ class NET_EXPORT SchemefulSite {
 
   // Deserializes a string obtained from `Serialize()` to a `SchemefulSite`.
   // Returns an opaque `SchemefulSite` if the value was invalid in any way.
-  static SchemefulSite Deserialize(const std::string& value);
+  static SchemefulSite Deserialize(std::string_view value);
 
   // Returns a serialized version of `site_as_origin_`. If the underlying origin
   // is invalid, returns an empty string. If serialization of opaque origins
   // with their associated nonce is necessary, see `SerializeWithNonce()`.
   std::string Serialize() const;
 
+  // Serializes `site_as_origin_` in cases when it has a 'file' scheme but
+  // we want to preserve the Origin's host.
+  // This was added to serialize cookie partition keys, which may contain
+  // file origins with a host.
+  std::string SerializeFileSiteWithHost() const;
+
   std::string GetDebugString() const;
 
   // Gets the underlying site as a GURL. If the internal Origin is opaque,
   // returns an empty GURL.
   GURL GetURL() const;
+
+  // Deserializes a string obtained from `SerializeWithNonce()` to a
+  // `SchemefulSite`. Returns nullopt if the value was invalid in any way.
+  static std::optional<SchemefulSite> DeserializeWithNonce(
+      base::PassKey<NetworkAnonymizationKey>,
+      std::string_view value);
+
+  // Returns a serialized version of `site_as_origin_`. For an opaque
+  // `site_as_origin_`, this serializes with the nonce.  See
+  // `url::origin::SerializeWithNonce()` for usage information.
+  std::optional<std::string> SerializeWithNonce(
+      base::PassKey<NetworkAnonymizationKey>);
 
   bool opaque() const { return site_as_origin_.opaque(); }
 
@@ -117,11 +154,18 @@ class NET_EXPORT SchemefulSite {
     return registrable_domain_or_host();
   }
 
-  bool operator==(const SchemefulSite& other) const;
+  // Estimates dynamic memory usage.
+  // See base/trace_event/memory_usage_estimator.h for more info.
+  size_t EstimateMemoryUsage() const;
 
-  bool operator!=(const SchemefulSite& other) const;
-
-  bool operator<(const SchemefulSite& other) const;
+  friend bool operator==(const SchemefulSite& left,
+                         const SchemefulSite& right) = default;
+  friend auto operator<=>(const SchemefulSite& left,
+                          const SchemefulSite& right) = default;
+  template <typename H>
+  friend H AbslHashValue(H h, const SchemefulSite& site) {
+    return H::combine(std::move(h), site.site_as_origin_);
+  }
 
  private:
   // IPC serialization code needs to access internal origin.
@@ -129,42 +173,41 @@ class NET_EXPORT SchemefulSite {
                                    SchemefulSite>;
   friend struct IPC::ParamTraits<net::SchemefulSite>;
 
+  friend class blink::BlinkSchemefulSite;
+
   // Create SiteForCookies from SchemefulSite needs to access internal origin,
   // and SiteForCookies needs to access private method SchemelesslyEqual.
   friend class SiteForCookies;
 
-  // Needed to serialize opaque and non-transient NetworkIsolationKeys, which
-  // use opaque origins.
-  friend class NetworkIsolationKey;
-
   // Needed to create a bogus origin from a site.
-  // TODO(https://crbug.com/1148927): Give IsolationInfos empty origins instead,
+  // TODO(crbug.com/40157262): Give IsolationInfos empty origins instead,
   // in this case, and unfriend IsolationInfo.
   friend class IsolationInfo;
 
-  // Needed because cookies do not account for scheme.
-  friend class CookieMonster;
+  // Needed to create a bogus origin from a site.
+  friend class URLRequest;
+
+  // Needed for access to nonce for serialization.
+  friend class blink::StorageKey;
 
   FRIEND_TEST_ALL_PREFIXES(SchemefulSiteTest, OpaqueSerialization);
+  FRIEND_TEST_ALL_PREFIXES(SchemefulSiteTest, InternalValue);
 
-  struct ObtainASiteResult {
-    url::Origin origin;
-    bool used_registerable_domain;
-  };
+  struct ObtainASiteResult;
 
   static ObtainASiteResult ObtainASite(const url::Origin&);
 
-  explicit SchemefulSite(ObtainASiteResult);
+  explicit SchemefulSite(ObtainASiteResult, const url::Origin&);
 
   // Deserializes a string obtained from `SerializeWithNonce()` to a
   // `SchemefulSite`. Returns nullopt if the value was invalid in any way.
-  static absl::optional<SchemefulSite> DeserializeWithNonce(
-      const std::string& value);
+  static std::optional<SchemefulSite> DeserializeWithNonce(
+      std::string_view value);
 
   // Returns a serialized version of `site_as_origin_`. For an opaque
   // `site_as_origin_`, this serializes with the nonce.  See
   // `url::origin::SerializeWithNonce()` for usage information.
-  absl::optional<std::string> SerializeWithNonce();
+  std::optional<std::string> SerializeWithNonce();
 
   // Returns whether `this` and `other` share a host or registrable domain.
   // Should NOT be used to check equality or equivalence. This is only used
@@ -175,11 +218,14 @@ class NET_EXPORT SchemefulSite {
   // Returns the host of the underlying `origin`, which will usually be the
   // registrable domain. This is private because if it were public, it would
   // trivially allow circumvention of the "Schemeful"-ness of this class.
-  // However, the CookieMonster currently needs access to this, since it ignores
-  // the schemes of domains.
-  std::string registrable_domain_or_host() const {
+  const std::string& registrable_domain_or_host() const {
     return site_as_origin_.host();
   }
+
+  // This should not be used casually, it's an opaque Origin or an scheme+eTLD+1
+  // packed into an Origin. If you extract this value SchemefulSite is not
+  // responsible for any unexpected friction you might encounter.
+  const url::Origin& internal_value() const { return site_as_origin_; }
 
   // Origin which stores the result of running the steps documented at
   // https://html.spec.whatwg.org/multipage/origin.html#obtain-a-site.
@@ -199,9 +245,9 @@ class NET_EXPORT SchemefulSite {
 
 // Provided to allow gtest to create more helpful error messages, instead of
 // printing hex.
-inline void PrintTo(const SchemefulSite& ss, std::ostream* os) {
-  *os << ss.Serialize();
-}
+//
+// Also used so that SchemefulSites can be the arguments of DCHECK_EQ.
+NET_EXPORT std::ostream& operator<<(std::ostream& os, const SchemefulSite& ss);
 
 }  // namespace net
 

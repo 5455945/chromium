@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,7 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/memory/ref_counted.h"
-#include "base/supports_user_data.h"
+#include "base/memory/scoped_refptr.h"
 #include "storage/browser/blob/blob_data_item.h"
 
 namespace storage {
@@ -25,19 +24,15 @@ class BlobDataBuilder;
 // guarantees that the resources stay alive, but it does not guarentee that
 // the blob stays alive.  Use the BlobDataHandle to keep a blob alive.
 // This class must be deleted on the IO thread.
-class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataSnapshot
-    : public base::SupportsUserData::Data {
+class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataSnapshot {
  public:
   BlobDataSnapshot(const BlobDataSnapshot& other);
-  ~BlobDataSnapshot() override;
+  ~BlobDataSnapshot();
 
   const std::vector<scoped_refptr<BlobDataItem>>& items() const {
     return items_;
   }
   const std::string& content_type() const { return content_type_; }
-  const std::string& content_disposition() const {
-    return content_disposition_;
-  }
   size_t GetMemoryUsage() const;
 
   const std::string& uuid() const { return uuid_; }
@@ -48,17 +43,13 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataSnapshot
   friend COMPONENT_EXPORT(STORAGE_BROWSER) void PrintTo(
       const BlobDataSnapshot& x,
       ::std::ostream* os);
+  BlobDataSnapshot(const std::string& uuid, const std::string& content_type);
   BlobDataSnapshot(const std::string& uuid,
                    const std::string& content_type,
-                   const std::string& content_disposition);
-  BlobDataSnapshot(const std::string& uuid,
-                   const std::string& content_type,
-                   const std::string& content_disposition,
                    const std::vector<scoped_refptr<BlobDataItem>>& items);
 
   const std::string uuid_;
   const std::string content_type_;
-  const std::string content_disposition_;
 
   // Non-const for constrution in BlobStorageContext
   std::vector<scoped_refptr<BlobDataItem>> items_;
@@ -68,9 +59,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataSnapshot
 
 inline bool operator==(const BlobDataSnapshot& a, const BlobDataSnapshot& b) {
   if (a.content_type() != b.content_type()) {
-    return false;
-  }
-  if (a.content_disposition() != b.content_disposition()) {
     return false;
   }
   if (a.items().size() != b.items().size()) {

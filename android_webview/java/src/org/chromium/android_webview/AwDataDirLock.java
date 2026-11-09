@@ -1,32 +1,39 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview;
 
 import android.content.Context;
-import android.os.Build;
 import android.os.Process;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
 
+import androidx.annotation.IntDef;
+import androidx.annotation.Nullable;
+
+import org.chromium.android_webview.common.AwFeatures;
+import org.chromium.android_webview.common.WebViewCachedFlags;
+import org.chromium.android_webview.common.crash.AwCrashReporterClient;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.PathUtils;
 import org.chromium.base.StrictModeContext;
-import org.chromium.base.metrics.ScopedSysTraceEvent;
+import org.chromium.base.metrics.RecordHistogram;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.channels.FileLock;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
- * Handles locking the WebView's data directory, to prevent concurrent use from
- * more than one process.
+ * Handles locking the WebView's data directory, to prevent concurrent use from more than one
+ * process.
  */
-abstract class AwDataDirLock {
+public abstract class AwDataDirLock {
     private static final String TAG = "AwDataDirLock";
 
     private static final String EXCLUSIVE_LOCK_FILE = "webview_data.lock";
@@ -35,20 +42,103 @@ abstract class AwDataDirLock {
     private static final int LOCK_RETRIES = 16;
     private static final int LOCK_SLEEP_MS = 100;
 
-    private static RandomAccessFile sLockFile;
-    private static FileLock sExclusiveFileLock;
+    private static @Nullable RandomAccessFile sLockFile;
+    private static @Nullable FileLock sExclusiveFileLock;
 
-    static void lock(final Context appContext) {
-        try (ScopedSysTraceEvent e1 = ScopedSysTraceEvent.scoped("AwDataDirLock.lock");
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    // LINT.IfChange(WebViewLockOutcome)
+    @IntDef({
+        ProcessStatus.PROBE_FAILURE,
+        ProcessStatus.STATUS_FAILURE,
+        ProcessStatus.NONEXISTENT,
+        ProcessStatus.INACCESSIBLE,
+        ProcessStatus.UNINTERRUPTIBLE,
+        ProcessStatus.ZOMBIE,
+        ProcessStatus.ALIVE,
+    })
+    private @interface ProcessStatus {
+        // Calling Os.kill(pid, 0) failed in an unexpected way.
+        int PROBE_FAILURE = 0;
+        // Reading and parsing /proc/<pid>/stat failed.
+        int STATUS_FAILURE = 1;
+        // The process doesn't appear to exist (but may just be hidden from us).
+        int NONEXISTENT = 2;
+        // The process appears to exist but is inaccessible to us.
+        int INACCESSIBLE = 3;
+        // The process's main thread is in uninterruptible sleep (D state).
+        int UNINTERRUPTIBLE = 4;
+        // The process's main thread has exited (Z state).
+        int ZOMBIE = 5;
+        // The process is alive (any other state).
+        int ALIVE = 6;
+    }
+
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    @IntDef({
+        LockOutcome.PROBE_FAILURE,
+        LockOutcome.STATUS_FAILURE,
+        LockOutcome.NONEXISTENT,
+        LockOutcome.INACCESSIBLE,
+        LockOutcome.UNINTERRUPTIBLE,
+        LockOutcome.ZOMBIE,
+        LockOutcome.ALIVE,
+        LockOutcome.SUCCESS,
+        LockOutcome.ALREADY_HELD,
+        LockOutcome.CREATION_FAILED,
+        LockOutcome.EXCEPTION_IN_TRYLOCK,
+        LockOutcome.FAILED_TO_READ_HOLDER,
+        LockOutcome.HOLDER_IS_US,
+        LockOutcome.HELD_BY_OTHER_PROCESS,
+        LockOutcome.CONTINUED_WITH_STUCK_HOLDER,
+    })
+    private @interface LockOutcome {
+        // Include all the values from ProcessStatus above. These all indicate that we failed to
+        // acquire the lock after exhausting our retries, with the state of the lock holder.
+        int PROBE_FAILURE = 0;
+        int STATUS_FAILURE = 1;
+        int NONEXISTENT = 2;
+        int INACCESSIBLE = 3;
+        int UNINTERRUPTIBLE = 4;
+        int ZOMBIE = 5;
+        int ALIVE = 6;
+
+        // Successfully acquired the lock.
+        int SUCCESS = 7;
+        // The lock was already held on entry (this is also a success).
+        int ALREADY_HELD = 8;
+        // Failed to create the lock file.
+        int CREATION_FAILED = 9;
+        // Exception thrown in tryLock().
+        int EXCEPTION_IN_TRYLOCK = 10;
+        // Failed to read lock holder info.
+        int FAILED_TO_READ_HOLDER = 11;
+        // Lock holder info has our own pid.
+        int HOLDER_IS_US = 12;
+        // Lock holder has a different process name (this is the case that *should* fail).
+        int HELD_BY_OTHER_PROCESS = 13;
+        // Lock holder is likely stuck and we continued without the lock (this is also a "success").
+        int CONTINUED_WITH_STUCK_HOLDER = 14;
+        int COUNT = 15;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:WebViewLockOutcome)
+
+    private static void record(@LockOutcome int outcome) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.WebView.DataDirLock.Outcome", outcome, LockOutcome.COUNT);
+    }
+
+    public static void lock(final Context appContext) {
+        try (DualTraceEvent e1 = DualTraceEvent.scoped("AwDataDirLock.lock");
                 StrictModeContext ignored = StrictModeContext.allowDiskWrites()) {
             if (sExclusiveFileLock != null) {
                 // We have already called lock() and successfully acquired the lock in this process.
-                // This shouldn't happen, but is likely to be the result of an app catching an
-                // exception thrown during initialization and discarding it, causing us to later
-                // attempt to initialize WebView again. There's no real advantage to failing the
-                // locking code when this happens; we may as well count this as the lock being
-                // acquired and let init continue (though the app may experience other problems
-                // later).
+                // This can happen if our own code calls lock() multiple times or it could be the
+                // result of an app catching an exception thrown during initialization and
+                // discarding it, causing us to later attempt to initialize WebView again.
+                record(LockOutcome.ALREADY_HELD);
                 return;
             }
 
@@ -66,25 +156,68 @@ abstract class AwDataDirLock {
                     // Failing to create the lock file is always fatal; even if multiple processes
                     // are using the same data directory we should always be able to access the file
                     // itself.
+                    record(LockOutcome.CREATION_FAILED);
                     throw new RuntimeException("Failed to create lock file " + lockFile, e);
                 }
             }
 
-            // Android versions before 11 have edge cases where a new instance of an app process can
-            // be started while an existing one is still in the process of being killed. This can
-            // still happen on Android 11+ because the platform has a timeout for waiting, but it's
-            // much less likely. Retry the lock a few times to give the old process time to fully go
-            // away.
+            // Android doesn't guarantee that there aren't two copies of the same app process alive
+            // at the same time - it doesn't ever do this intentionally, but the request to kill the
+            // old process doesn't happen instantaneously, so it can *think* it's killed the old
+            // process while actually it still exists as far as the kernel is concerned, and since
+            // file locks are process-level the old process can still be holding the lock. The app
+            // isn't doing anything wrong in this case - they only have to ensure that *different*
+            // processes they create use distinct data directories.
+            //
+            // On older Android versions this edge case just isn't handled at all. On Android 11+
+            // the system does have logic to wait for the confirmation that the old process has
+            // actually exited before launching another one, but the wait has a timeout, so it can
+            // still happen.
+            //
+            // We retry the lock a few times here in the hope that the old process will actually
+            // exit and the lock will be released, but it seems like in the vast majority of cases
+            // the old process will *never* exit and will hang around until the device is actually
+            // fully rebooted. This can happen if one of the process's threads is in uninterruptible
+            // sleep in the kernel ("D state"): the kill is deferred until the thread wakes up from
+            // sleep, but there's a long history of bugs in the kernel code (generally a device
+            // driver or filesystem rather than the "core" kernel logic) that can result in wakeups
+            // being lost and the thread being stuck forever.
             for (int attempts = 1; attempts <= LOCK_RETRIES; ++attempts) {
                 try {
                     sExclusiveFileLock = sLockFile.getChannel().tryLock();
                 } catch (IOException e) {
                     // Older versions of Android incorrectly throw IOException when the flock()
-                    // call fails with EAGAIN, instead of returning null. Just ignore it.
+                    // call fails with EAGAIN, instead of returning null. Just ignore the exception
+                    // and continue as if it did return null.
+                } catch (Exception e) {
+                    // This is primarily intended to catch OverlappingFileLockException as described
+                    // below, but it seems reasonable to apply the same treatment to any exception.
+                    //
+                    // The Java standard library maintains its own internal file lock table in
+                    // addition to using the actual flock() system call, because it wants to have
+                    // portable/consistent behavior in the case where two different threads in the
+                    // same process both try to lock the same file concurrently.
+                    //
+                    // This shouldn't ever happen because this code is always called on the UI
+                    // thread, but unfortunately there is at least one library that opens our
+                    // lockfile and tries to lock it itself as part of an ill-advised workaround for
+                    // data directory locking issues, and this can race with init on another thread.
+                    //
+                    // Rather than just letting this crash, we treat it the same way as a normal
+                    // failure to acquire the lock - we expect the other code to release the lock
+                    // quickly, so retrying will probably resolve the situation. If we're on our
+                    // last retry, though, we rethrow the exception so that we still see the real
+                    // cause in crash data instead of just a generic failure to acquire the lock.
+                    if (attempts == LOCK_RETRIES) {
+                        record(LockOutcome.EXCEPTION_IN_TRYLOCK);
+                        throw e;
+                    }
                 }
                 if (sExclusiveFileLock != null) {
                     // We got the lock; write out info for debugging.
-                    writeCurrentProcessInfo(sLockFile);
+                    ProcessInfo.current().writeToFile(sLockFile);
+                    record(LockOutcome.SUCCESS);
+                    AwCrashReporterClient.setSkippedDataDirLockCrashKey(false);
                     return;
                 }
 
@@ -96,70 +229,176 @@ abstract class AwDataDirLock {
                 }
             }
 
-            // We failed to get the lock even after retrying.
-            // Many existing apps rely on this even though it's known to be unsafe.
-            // Make it fatal when on P for apps that target P or higher
-            String error = getLockFailureReason(sLockFile);
-            boolean dieOnFailure = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-                    && appContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.P;
-            if (dieOnFailure) {
-                throw new RuntimeException(error);
+            // We failed to get the lock even after retrying; attempt to debug why.
+            @Nullable ProcessInfo holder = ProcessInfo.readFromFile(sLockFile);
+            ProcessInfo current = ProcessInfo.current();
+
+            if (holder == null) {
+                // We couldn't figure out who holds the lock.
+                record(LockOutcome.FAILED_TO_READ_HOLDER);
+            } else if (current.pid == holder.pid) {
+                // We allegedly hold the lock - something weird is going on.
+                record(LockOutcome.HOLDER_IS_US);
+            } else if (!current.processName.equals(holder.processName)) {
+                // A process with a different name allegedly holds the lock.
+                // The app is misusing WebView in the way the lock exists to prevent.
+                record(LockOutcome.HELD_BY_OTHER_PROCESS);
             } else {
-                Log.w(TAG, error);
-            }
-        }
-    }
-
-    private static void writeCurrentProcessInfo(final RandomAccessFile file) {
-        try {
-            // Truncate the file first to get rid of old data.
-            file.setLength(0);
-            file.writeInt(Process.myPid());
-            file.writeUTF(ContextUtils.getProcessName());
-        } catch (IOException e) {
-            // Don't crash just because something failed here, as it's only for debugging.
-            Log.w(TAG, "Failed to write info to lock file", e);
-        }
-    }
-
-    private static String getLockFailureReason(final RandomAccessFile file) {
-        final StringBuilder error = new StringBuilder("Using WebView from more than one process at "
-                + "once with the same data directory is not supported. https://crbug.com/558377 "
-                + ": Current process ");
-        error.append(ContextUtils.getProcessName());
-        error.append(" (pid ").append(Process.myPid()).append("), lock owner ");
-        try {
-            int pid = file.readInt();
-            String processName = file.readUTF();
-            error.append(processName).append(" (pid ").append(pid).append(")");
-
-            // Check the status of the pid holding the lock by sending it a null signal.
-            // This doesn't actually send a signal, just runs the kernel access checks.
-            try {
-                Os.kill(pid, 0);
-
-                // No exception means the process exists and has the same uid as us, so is
-                // probably an instance of the same app. Leave the message alone.
-            } catch (ErrnoException e) {
-                if (e.errno == OsConstants.ESRCH) {
-                    // pid did not exist - the lock should have been released by the kernel,
-                    // so this process info is probably wrong.
-                    error.append(" doesn't exist!");
-                } else if (e.errno == OsConstants.EPERM) {
-                    // pid existed but didn't have the same uid as us.
-                    // Most likely the pid has just been recycled for a new process
-                    error.append(" pid has been reused!");
+                // A process with the same name but a different pid allegedly holds the lock.
+                boolean likelyStuck =
+                        holder.processStatus == ProcessStatus.ZOMBIE
+                                || holder.processStatus == ProcessStatus.UNINTERRUPTIBLE;
+                if (likelyStuck
+                        && WebViewCachedFlags.get()
+                                .isCachedFeatureEnabled(
+                                        AwFeatures.WEBVIEW_RELAX_DATA_DIR_LOCKING)) {
+                    // If the other process is actually stuck in D state forever then it's not going
+                    // to run our code any more and can't actually cause any real data corruption
+                    // issues. But, this is somewhat risky: various parts of Chromium *also* use
+                    // file locks on individual files within the data directory (e.g. sqlite) so
+                    // this may lead to a similar lock failure later for another file, which may
+                    // block forever, or crash in native code in a way that's harder to identify and
+                    // debug.
+                    //
+                    // This is really annoying for apps since it's not their fault, and we don't
+                    // want apps to catch WebView startup exceptions. So, when the experiment is
+                    // enabled, we continue here and accept the risk.
+                    Log.w(
+                            TAG,
+                            "ignoring data directory lock held by likely-stuck process: "
+                                    + ProcessInfo.formatWithStatus(holder));
+                    record(LockOutcome.CONTINUED_WITH_STUCK_HOLDER);
+                    AwCrashReporterClient.setSkippedDataDirLockCrashKey(true);
+                    return;
                 } else {
-                    // EINVAL is the only other documented return value for kill(2) and should never
-                    // happen for signal 0, so just complain generally.
-                    error.append(" status unknown!");
+                    record(holder.processStatus);
                 }
             }
-        } catch (IOException e) {
-            // We'll get IOException if we failed to read the pid and process name; e.g. if the
-            // lockfile is from an old version of WebView or an IO error occurred somewhere.
-            error.append(" unknown");
+
+            String error = getLockFailureReason(holder);
+            if (CompatQuirks.isEnabled(CompatQuirks.Quirk.DATA_DIRECTORY_LOCK_WARN_ONLY)) {
+                Log.w(TAG, error);
+            } else {
+                throw new RuntimeException(error);
+            }
         }
+    }
+
+    private static class ProcessInfo {
+        public final int pid;
+        public final String processName;
+        public final @ProcessStatus int processStatus;
+
+        private ProcessInfo(int pid, String processName, @ProcessStatus int processStatus) {
+            this.pid = pid;
+            this.processName = processName;
+            this.processStatus = processStatus;
+        }
+
+        @Override
+        public String toString() {
+            return processName + " (pid " + pid + ")";
+        }
+
+        static ProcessInfo current() {
+            return new ProcessInfo(
+                    Process.myPid(), ContextUtils.getProcessName(), ProcessStatus.ALIVE);
+        }
+
+        static @Nullable ProcessInfo readFromFile(RandomAccessFile file) {
+            try {
+                int pid = file.readInt();
+                String processName = file.readUTF();
+                return new ProcessInfo(pid, processName, getProcessStatus(pid));
+            } catch (Exception e) {
+                // Failed to read the debugging info.
+                return null;
+            }
+        }
+
+        void writeToFile(RandomAccessFile file) {
+            try {
+                // Truncate the file first to get rid of old data.
+                file.setLength(0);
+                file.writeInt(pid);
+                file.writeUTF(processName);
+            } catch (Exception e) {
+                // Don't crash just because something failed here, as it's only for debugging.
+                Log.w(TAG, "Failed to write info to lock file", e);
+            }
+        }
+
+        static String formatWithStatus(@Nullable ProcessInfo info) {
+            if (info == null) {
+                return "unknown";
+            }
+
+            return info.toString()
+                    + switch (info.processStatus) {
+                        case ProcessStatus.PROBE_FAILURE -> " probe failed!";
+                        case ProcessStatus.STATUS_FAILURE -> " status read failed!";
+                        case ProcessStatus.NONEXISTENT -> " doesn't exist!";
+                        case ProcessStatus.INACCESSIBLE -> " pid has been reused!";
+                        case ProcessStatus.UNINTERRUPTIBLE -> " is uninterruptible";
+                        case ProcessStatus.ZOMBIE -> " is a zombie";
+                        case ProcessStatus.ALIVE -> " is alive";
+                        default -> " status unknown!";
+                    };
+        }
+
+        private static @ProcessStatus int getProcessStatus(int pid) {
+            try {
+                // Check the status of the pid holding the lock by sending it a null signal.
+                // This doesn't actually send a signal, just runs the kernel access checks.
+                Os.kill(pid, 0);
+            } catch (ErrnoException e) {
+                if (e.errno == OsConstants.ESRCH) {
+                    return ProcessStatus.NONEXISTENT;
+                } else if (e.errno == OsConstants.EPERM) {
+                    return ProcessStatus.INACCESSIBLE;
+                } else {
+                    return ProcessStatus.PROBE_FAILURE;
+                }
+            } catch (Exception e) {
+                return ProcessStatus.PROBE_FAILURE;
+            }
+
+            // No exception means the process exists and has the same uid as us, so is
+            // probably an instance of the same app. We should be able to access its
+            // status in /proc to determine a more specific state.
+            try {
+                Path statPath = new File("/proc/" + pid + "/stat").toPath();
+                byte[] stat = Files.readAllBytes(statPath);
+                // Stick with bytes - there are no guarantees about string encoding here.
+                // The last ASCII ')' in stat is the end of the process name field, followed
+                // by a space and then an ASCII letter for the process status.
+                for (int i = stat.length - 1; i >= 0; i--) {
+                    if (stat[i] == (byte) ')') {
+                        if (i + 2 < stat.length) {
+                            return switch ((char) stat[i + 2]) {
+                                case 'D' -> ProcessStatus.UNINTERRUPTIBLE;
+                                case 'Z' -> ProcessStatus.ZOMBIE;
+                                default -> ProcessStatus.ALIVE;
+                            };
+                        }
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+            }
+            return ProcessStatus.STATUS_FAILURE;
+        }
+    }
+
+    private static String getLockFailureReason(@Nullable ProcessInfo holder) {
+        final StringBuilder error =
+                new StringBuilder(
+                        "Using WebView from more than one process at once with the same data"
+                                + " directory is not supported. https://crbug.com/558377 : Current"
+                                + " process ");
+        error.append(ProcessInfo.current().toString());
+        error.append(", lock owner ");
+        error.append(ProcessInfo.formatWithStatus(holder));
         return error.toString();
     }
 }

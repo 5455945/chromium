@@ -1,39 +1,56 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
+import("//build/config/chrome_build.gni")
+import("//build/config/chromebox_for_meetings/buildflags.gni")
 import("//build/config/locales.gni")
+import("//build/config/ozone.gni")
 import("//build/config/ui.gni")
 import("//chrome/common/features.gni")
-import("//components/gwp_asan/buildflags/buildflags.gni")
-import("//components/nacl/features.gni")
-import("//ppapi/buildflags/buildflags.gni")
+import("//crypto/features.gni")
 import("//tools/grit/grit_rule.gni")
-import("//tools/ipc_fuzzer/ipc_fuzzer.gni")
+import("//ui/webui/webui_features.gni")
+
+assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
 
 if (is_android) {
   import("//build/config/android/rules.gni")
 }
 
+if (is_posix) {
+  # Header-only target so non-:browser targets can include this header
+  # without depending on the target that compiles it (//chrome/browser:browser
+  # on non-Mac, //chrome:chrome_dll on Mac).
+  source_set("chrome_crash_reporter_client") {
+    public = [ "chrome_crash_reporter_client.h" ]
+    public_deps = [
+      ":chrome_crash_user_streams",
+      "//base",
+      "//build:buildflag_header_h",
+      "//components/crash/core/app",
+    ]
+  }
+}
+
+source_set("chrome_crash_user_streams") {
+  public = [ "chrome_crash_user_streams.h" ]
+  sources = [ "chrome_crash_user_streams.cc" ]
+  public_deps = [
+    "//base",
+    "//components/crash/core/common:shared_memory_user_stream",
+  ]
+  deps = [ "//components/metrics:system_profile_user_stream" ]
+}
+
 # This target is for dependency tracking for the command ID header.
 source_set("command_ids") {
   sources = [ "chrome_command_ids.h" ]
-  deps = [
+  public_deps = [
     "//build:branding_buildflags",
-    "//build:chromeos_buildflags",
+    "//services/screen_ai/buildflags",
   ]
-}
-
-# TODO: put back in chrome/browser if necessary. http://crbug.com/771801.
-source_set("shutdown_signal_handlers") {
-  if (is_posix || is_fuchsia) {
-    sources = [
-      "shutdown_signal_handlers_posix.cc",
-      "shutdown_signal_handlers_posix.h",
-    ]
-  }
-  deps = [ "//base" ]
+  deps = [ "//ui/base:constants" ]
 }
 
 # On Windows, links chrome_dll.rc. On other platforms, does nothing so you can
@@ -62,141 +79,250 @@ if (is_win) {
   source_set("chrome_exe_main_exports") {
     sources = [ "chrome_exe_main_win.h" ]
   }
+
+  source_set("exit_code_watcher") {
+    sources = [
+      "exit_code_watcher_win.cc",
+      "exit_code_watcher_win.h",
+    ]
+    public_deps = [ "//base" ]
+  }
+
+  source_set("win_unit_tests") {
+    testonly = true
+    sources = [
+      "chrome_crash_reporter_client_win_unittest.cc",
+      "chrome_main_delegate_win_unittest.cc",
+      "exit_code_watcher_win_unittest.cc",
+    ]
+    deps = [
+      ":exit_code_watcher",
+      ":test_support",
+      "//base",
+      "//base/test:test_support",
+      "//chrome/chrome_elf:crash",
+      "//chrome/common:non_code_constants",
+      "//components/version_info",
+      "//testing/gmock",
+      "//testing/gtest",
+    ]
+  }
 }
 
-if (is_android) {
-  android_generated_java_resources =
-      [ "java/res/values/generated_resources.xml" ] +
-      process_file_template(
-          android_bundle_locales_as_resources,
-          [ "java/res/values-{{source_name_part}}/generated_resources.xml" ])
-}
-
-grit("generated_resources") {
+grit_strings("generated_resources") {
   source = "generated_resources.grd"
-  defines = chrome_grit_defines
+  gritdeps = "generated_resources.grd.gritdeps"
+  defines = chrome_grit_defines + [
+              "is_cfm=${is_cfm}",
+              "enable_webui_ntp=$enable_webui_ntp",
+            ]
   output_dir = "$root_gen_dir/chrome"
-  outputs =
-      [ "grit/generated_resources.h" ] +
-      process_file_template(locales_with_pseudolocales,
-                            [ "generated_resources_{{source_name_part}}.pak" ])
+  outputs = [ "grit/generated_resources.h" ]
+
   if (is_android) {
-    outputs += android_generated_java_resources
+    create_android_resources = true
   }
 }
 
 if (is_android) {
-  java_strings_grd_prebuilt("java_strings_grd") {
-    grit_output_dir = "$root_gen_dir/chrome/java/res"
-    generated_files =
-        rebase_path(android_generated_java_resources, "java/res", ".")
-    deps = [ ":generated_resources" ]
+  java_strings_grd_prebuilt("branded_resources_grd") {
+    generating_target = ":branded_strings"
+  }
+
+  java_strings_grd_prebuilt("generated_resources_grd") {
+    generating_target = ":generated_resources"
+  }
+
+  java_group("java_strings_grd") {
+    public_deps = [
+      ":branded_resources_grd",
+      ":generated_resources_grd",
+    ]
   }
 }
 
-grit("google_chrome_strings") {
-  source = "google_chrome_strings.grd"
+grit_strings("branded_strings") {
+  source = "${branding_path_product}_strings.grd"
   defines = chrome_grit_defines
   output_dir = "$root_gen_dir/chrome"
-  outputs = [ "grit/google_chrome_strings.h" ] +
-            process_file_template(
-                locales_with_pseudolocales,
-                [ "google_chrome_strings_{{source_name_part}}.pak" ])
-}
+  outputs = [ "grit/branded_strings.h" ]
 
-grit("chromium_strings") {
-  source = "chromium_strings.grd"
-  defines = chrome_grit_defines
-  output_dir = "$root_gen_dir/chrome"
-  outputs =
-      [ "grit/chromium_strings.h" ] +
-      process_file_template(locales_with_pseudolocales,
-                            [ "chromium_strings_{{source_name_part}}.pak" ])
+  if (is_android) {
+    create_android_resources = true
+  }
 }
 
 static_library("test_support") {
   testonly = true
-  visibility = [ "//chrome/test:test_support" ]
+  visibility = [
+    ":win_unit_tests",
+    "//chrome/test:test_support",
+    "//chrome/test/base:chrome_test_suite",
+    "//chrome/test/base/chromeos/crosier:test_support",
+  ]
 
   sources = [
     "chrome_main_delegate.cc",
     "chrome_main_delegate.h",
+    "startup_timestamps.h",
   ]
 
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
-    "//chrome/app:shutdown_signal_handlers",
     "//chrome/browser",
+    "//chrome/browser:buildflags",
+    "//chrome/browser:chrome_content_browser_client",
+    "//chrome/browser:defaults",
+    "//chrome/browser:process_singleton",
+    "//chrome/browser:shell_integration",
+    "//chrome/browser:startup_data",
+    "//chrome/browser/diagnostics",
+    "//chrome/browser/lifetime",
     "//chrome/browser/policy:path_parser",
     "//chrome/child",
     "//chrome/common",
+    "//chrome/common:version_header",
     "//chrome/gpu",
     "//chrome/renderer",
     "//chrome/utility",
-    "//components/gwp_asan/buildflags",
-    "//components/heap_profiling/in_process",
-    "//components/nacl/common:buildflags",
-    "//components/power_scheduler",
-    "//components/startup_metric_utils/browser",
+    "//components/crash/core/app",
+    "//components/crash/core/app:test_support",
+    "//components/devtools/devtools_pipe",
+    "//components/memory_system",
+    "//components/startup_metric_utils",
+    "//components/variations/service",
+    "//components/webui/about",
     "//content/public/app",
     "//content/public/common",
-    "//pdf:pdf_ppapi",
-    "//ppapi/buildflags",
+    "//extensions/buildflags",
     "//printing/buildflags",
     "//services/tracing/public/cpp",
     "//ui/base",
     "//v8:v8_headers",
   ]
+  public_deps = [ "//ui/lottie" ]
 
-  if (!is_fuchsia) {
-    # TODO(crbug.com/753619): Enable crash reporting on Fuchsia.
+  if (is_mac || is_win || is_linux || is_chromeos) {
+    deps += [ "//components/webapps/isolated_web_apps:scheme" ]
+  }
+
+  if (is_android) {
     deps += [
-      "//components/crash/core/app",
-      "//components/crash/core/app:test_support",
+      "//chrome/browser/android",
+      "//chrome/browser/flags:flags_android",
+      "//components/crash/android:crash_android",
     ]
   }
 
   if (is_mac) {
-    sources += [ "chrome_main_mac.mm" ]
+    sources += [
+      "chrome_crash_reporter_client.cc",
+      "chrome_crash_reporter_client_mac.mm",
+      "chrome_main_mac.h",
+      "chrome_main_mac.mm",
+    ]
 
-    deps += [ "//chrome:chrome_framework" ]
+    deps += [
+      "//build:branding_buildflags",
+      "//chrome/browser:chrome_browser_application_mac",
+      "//chrome/browser/mac",
+      "//chrome/common:non_code_constants",
+      "//chrome/installer/util:with_no_strings",
+      "//components/crash/core/common",
+      "//components/metrics:client_info",
+      "//components/policy:generated",
+      "//components/version_info",
+    ]
+
+    data_deps = [ "//chrome:chrome_framework" ]
   }
 
   if (is_win) {
+    sources += [
+      "chrome_crash_reporter_client_win.cc",
+      "chrome_crash_reporter_client_win.h",
+    ]
     deps += [
+      ":chrome_crash_user_streams",
+      "//chrome/browser/win/isolated_browser:isolated_browser_support",
+      "//chrome/chrome_elf:constants",
       "//chrome/chrome_elf:test_stubs",
       "//chrome/install_static:install_static_util",
-      "//components/browser_watcher:stability_client",
+      "//components/crash/core/common",
+      "//components/metrics:client_info",
+      "//components/version_info",
       "//sandbox/win:sandbox",
     ]
   }
 
-  if (is_chromeos_ash) {
+  if (is_chromeos) {
     deps += [
       "//ash/constants",
-      "//chrome/browser/chromeos",
-      "//chromeos",
+      "//chrome/browser/ash/boot_times_recorder",
+      "//chrome/browser/ash/dbus",
+      "//chrome/browser/ash/locale",
+      "//chrome/browser/ash/schedqos",
+      "//chromeos/ash/components/memory",
+      "//chromeos/ash/experiences/arc:arc_base_utils",
       "//chromeos/dbus/constants",
-      "//chromeos/memory:memory",
     ]
   }
 
-  if (is_chromeos_lacros) {
-    deps += [
-      "//chromeos/crosapi/mojom",
-      "//chromeos/lacros",
-    ]
+  if (is_posix) {
+    deps += [ ":chrome_crash_reporter_client" ]
   }
 
-  if (enable_plugins && enable_nacl) {
-    deps += [
-      "//components/nacl/browser",
-      "//components/nacl/renderer/plugin:nacl_trusted_plugin",
-    ]
+  if (!is_android) {
+    deps += [ "//chrome/browser:chrome_process_singleton" ]
   }
 
-  if (enable_gwp_asan) {
-    deps += [ "//components/gwp_asan/client" ]
+  if (use_ozone) {
+    deps += [ "//ui/ozone" ]
+    if (is_linux) {
+      deps += [ "//ui/linux:display_server_utils" ]
+    }
   }
+
+  if (is_chrome_for_testing) {
+    deps += [ "//chrome/browser/chrome_for_testing:browser" ]
+  }
+}
+
+if (!is_android) {
+  source_set("browser_tests") {
+    testonly = true
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+    sources = [ "chrome_main_delegate_browsertest.cc" ]
+    deps = [
+      "//base",
+      "//base/test:test_support",
+      "//chrome/test:test_support",
+      "//components/metrics:content",
+      "//content/test:test_support",
+      "//testing/gtest",
+      "//third_party/abseil-cpp:absl",
+    ]
+  }
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  # llvm_profile_util.cc is otherwise only compiled directly into the chrome
+  # executable targets in //chrome/BUILD.gn, so compile it here too.
+  sources = [
+    "chrome_crash_user_streams_unittest.cc",
+    "llvm_profile_util.cc",
+    "llvm_profile_util.h",
+    "llvm_profile_util_unittest.cc",
+  ]
+  deps = [
+    ":chrome_crash_user_streams",
+    "//base",
+    "//base/test:test_support",
+    "//build/config/compiler:compiler_buildflags",
+    "//components/crash/core/common:shared_memory_user_stream",
+    "//components/metrics:system_profile_user_stream",
+    "//testing/gtest",
+  ]
 }

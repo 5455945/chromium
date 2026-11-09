@@ -21,7 +21,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_FOREIGN_OBJECT_ELEMENT_H_
 
 #include "third_party/blink/renderer/core/svg/svg_graphics_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -32,6 +32,9 @@ class SVGForeignObjectElement final : public SVGGraphicsElement {
 
  public:
   explicit SVGForeignObjectElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGForeignObjectElement;
+  }
 
   SVGAnimatedLength* x() const { return x_.Get(); }
   SVGAnimatedLength* y() const { return y_.Get(); }
@@ -41,21 +44,16 @@ class SVGForeignObjectElement final : public SVGGraphicsElement {
   void Trace(Visitor*) const override;
 
  private:
-  void CollectStyleForPresentationAttribute(
-      const QualifiedName&,
-      const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
-  // As long as the foreignObject element itself creates a legacy layout object,
-  // we need to use legacy layout for the entire block formatting context
-  // established by the foreignObject. For simplicity, just force legacy for the
-  // entire subtree.
-  bool TypeShouldForceLegacyLayout() const override { return true; }
-
-  bool SelfHasRelativeLengths() const override;
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
+  void CollectExtraStyleForPresentationAttribute(
+      HeapVector<CSSPropertyValue, 8>& style) override;
 
   Member<SVGAnimatedLength> x_;
   Member<SVGAnimatedLength> y_;

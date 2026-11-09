@@ -1,29 +1,26 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromeos/services/chromebox_for_meetings/public/cpp/service_connection.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
-#include "chromeos/dbus/chromebox_for_meetings/cfm_hotline_client.h"
 #include "chromeos/services/chromebox_for_meetings/public/cpp/fake_service_connection.h"
 #include "chromeos/services/chromebox_for_meetings/public/mojom/cfm_service_manager.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::StrictMock;
 using ::testing::WithArgs;
 
@@ -38,12 +35,9 @@ class CfmServiceConnectionTest : public testing::Test {
   CfmServiceConnectionTest& operator=(const CfmServiceConnectionTest&) = delete;
 
   void SetUp() override {
-    CfmHotlineClient::InitializeFake();
     ServiceConnection::UseFakeServiceConnectionForTesting(
         &fake_service_connection_);
   }
-
-  void TearDown() override { CfmHotlineClient::Shutdown(); }
 
   void SetBootstrapCallback(
       FakeServiceConnectionImpl::FakeBootstrapCallback callback) {

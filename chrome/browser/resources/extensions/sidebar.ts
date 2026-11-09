@@ -1,54 +1,147 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-import 'chrome://resources/cr_elements/cr_icons_css.m.js';
-import 'chrome://resources/polymer/v3_0/iron-selector/iron-selector.js';
-import 'chrome://resources/polymer/v3_0/paper-ripple/paper-ripple.js';
-import 'chrome://resources/polymer/v3_0/paper-styles/color.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
+import 'chrome://resources/cr_elements/cr_ripple/cr_ripple.js';
+import './icons.html.js';
 
-import {assert} from 'chrome://resources/js/assert.m.js';
-import {IronSelectorElement} from 'chrome://resources/polymer/v3_0/iron-selector/iron-selector.js';
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {CrMenuSelectorElement} from 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
+import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {navigation, Page} from './navigation_helper.js';
+import {getCss} from './sidebar.css.js';
+import {getHtml} from './sidebar.html.js';
 
-interface ExtensionsSidebarElement {
+export interface ExtensionsSidebarElement {
   $: {
-    sectionMenu: IronSelectorElement,
+    sectionMenu: CrMenuSelectorElement,
+    sectionsExtensions: HTMLElement,
+    sectionsShortcuts: HTMLElement,
+    sectionsSitePermissions: HTMLElement,
+    moreExtensions: HTMLElement,
   };
 }
 
-class ExtensionsSidebarElement extends PolymerElement {
+const ExtensionsSidebarElementBase = I18nMixinLit(CrLitElement);
+
+export class ExtensionsSidebarElement extends ExtensionsSidebarElementBase {
   static get is() {
     return 'extensions-sidebar';
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  static override get styles() {
+    return getCss();
   }
 
-  ready() {
-    super.ready();
-    this.setAttribute('role', 'navigation');
+  override render() {
+    return getHtml.bind(this)();
   }
 
-  connectedCallback() {
+  static override get properties() {
+    return {
+      enableEnhancedSiteControls: {type: Boolean},
+      inDevMode: {type: Boolean},
+
+      /**
+       * The data path/page that identifies the entry to be selected in the
+       * sidebar. Note that this may not match the page that's actually
+       * displayed.
+       */
+      selectedPath_: {type: String},
+      webuiRoundedIconsEnabled_: {type: Boolean},
+    };
+  }
+
+  accessor enableEnhancedSiteControls: boolean = false;
+  protected accessor selectedPath_: Page = Page.LIST;
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
+  accessor inDevMode: boolean = false;
+
+  /**
+   * The ID of the listener on |navigation|. Stored so that the
+   * listener can be removed when this element is detached (happens in tests).
+   */
+  private navigationListener_: number|null = null;
+
+  override connectedCallback() {
     super.connectedCallback();
-
-    this.$.sectionMenu.select(
-        navigation.getCurrentPage().page === Page.SHORTCUTS ? 1 : 0);
+    this.navigationListener_ = navigation.addListener(newPage => {
+      this.computeSelectedPath_(newPage.page);
+    });
   }
 
-  private onLinkTap_(e: Event) {
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    assert(this.navigationListener_);
+    assert(navigation.removeListener(this.navigationListener_));
+    this.navigationListener_ = null;
+  }
+
+  override firstUpdated(changedProperties: PropertyValues<this>) {
+    super.firstUpdated(changedProperties);
+
+    this.setAttribute('role', 'navigation');
+    this.computeSelectedPath_(navigation.getCurrentPage().page);
+  }
+
+  private computeSelectedPath_(page: Page) {
+    switch (page) {
+      case Page.SITE_PERMISSIONS:
+      case Page.SITE_PERMISSIONS_ALL_SITES:
+        this.selectedPath_ = Page.SITE_PERMISSIONS;
+        break;
+      case Page.SHORTCUTS:
+        this.selectedPath_ = Page.SHORTCUTS;
+        break;
+      default:
+        this.selectedPath_ = Page.LIST;
+    }
+  }
+
+  protected onLinkClick_(e: Event) {
     e.preventDefault();
     navigation.navigateTo(
-        {page: ((e.target as HTMLElement).dataset['path'] as Page)});
-    this.dispatchEvent(
-        new CustomEvent('close-drawer', {bubbles: true, composed: true}));
+        {page: ((e.currentTarget as HTMLElement).dataset['path'] as Page)});
+    this.fire('close-drawer');
   }
 
-  private onMoreExtensionsTap_() {
-    chrome.metricsPrivate.recordUserAction('Options_GetMoreExtensions');
+  protected onMoreExtensionsClick_(e: Event) {
+    if ((e.target as HTMLElement).tagName === 'A') {
+      chrome.metricsPrivate.recordUserAction('Options_GetMoreExtensions');
+    }
+  }
+
+  protected computeDiscoverMoreText_(): TrustedHTML {
+    return this.i18nAdvanced('sidebarDiscoverMore', {
+      tags: ['a'],
+      attrs: ['target'],
+      substitutions: [loadTimeData.getString('getMoreExtensionsUrl')],
+    });
+  }
+
+  protected showDeveloperPromo_(): boolean {
+    return this.inDevMode &&
+        loadTimeData.getString('sidebarDeveloperPromo') !== '';
+  }
+
+  protected computeDeveloperPromoText_(): TrustedHTML {
+    return this.i18nAdvanced('sidebarDeveloperPromo', {
+      tags: ['a'],
+      attrs: ['target'],
+      substitutions: [loadTimeData.getString('sidebarDeveloperPromoUrl')],
+    });
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'extensions-sidebar': ExtensionsSidebarElement;
   }
 }
 

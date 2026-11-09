@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,14 @@
 #define EXTENSIONS_BROWSER_API_DNS_DNS_API_H_
 
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/address_list.h"
+#include "net/dns/public/host_resolver_results.h"
 #include "services/network/public/cpp/resolve_host_client_base.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -31,9 +35,10 @@ class DnsResolveFunction : public ExtensionFunction,
   void OnComplete(
       int result,
       const net::ResolveErrorInfo& resolve_error_info,
-      const absl::optional<net::AddressList>& resolved_addresses) override;
+      const net::AddressList& resolved_addresses,
+      const net::HostResolverEndpointResults& alternative_endpoints) override;
 
-  // A reference to |this| must be taken while the request is being made on this
+  // A reference to `this` must be taken while the request is being made on this
   // receiver so the object is alive when the request completes.
   mojo::Receiver<network::mojom::ResolveHostClient> receiver_{this};
 };

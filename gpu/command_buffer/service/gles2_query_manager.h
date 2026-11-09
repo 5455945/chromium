@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/service/query_manager.h"
 #include "gpu/gpu_gles2_export.h"
@@ -53,10 +54,14 @@ class GPU_GLES2_EXPORT GLES2QueryManager : public QueryManager {
 
    private:
     // |this| is owned by |gles2_query_manager_|.
-    GLES2QueryManager* gles2_query_manager_;
+    raw_ptr<GLES2QueryManager> gles2_query_manager_;
   };
 
   GLES2QueryManager(GLES2Decoder* decoder, FeatureInfo* feature_info);
+
+  GLES2QueryManager(const GLES2QueryManager&) = delete;
+  GLES2QueryManager& operator=(const GLES2QueryManager&) = delete;
+
   ~GLES2QueryManager() override;
 
   // Creates a Query for the given query.
@@ -64,6 +69,11 @@ class GPU_GLES2_EXPORT GLES2QueryManager : public QueryManager {
                      GLuint client_id,
                      scoped_refptr<gpu::Buffer> buffer,
                      QuerySync* sync) override;
+
+  // Flushes this decoder's query job chain when its virtual context is
+  // switched out, if the flush_queries_before_deleting_or_unbinding_fbo
+  // driver-bug workaround is active (see implementation).
+  void PauseQueries() override;
 
   // Do any updates we need to do when the frame has begun.
   void ProcessFrameBeginUpdates();
@@ -77,18 +87,15 @@ class GPU_GLES2_EXPORT GLES2QueryManager : public QueryManager {
   GLES2Decoder* decoder() const { return decoder_; }
 
  private:
-  GLenum AdjustTargetForEmulation(GLenum target) override;
-
   // Checks and notifies if a disjoint occurred.
   void UpdateDisjointValue();
 
   // Safely resets the disjoint value if no queries are active.
   void SafelyResetDisjointValue();
 
-  GLES2Decoder* decoder_;
+  raw_ptr<GLES2Decoder> decoder_;
 
-  bool use_arb_occlusion_query2_for_occlusion_query_boolean_;
-  bool use_arb_occlusion_query_for_occlusion_query_boolean_;
+  const bool flush_queries_before_deleting_or_unbinding_fbo_;
 
   // Whether we are tracking disjoint values every frame.
   bool update_disjoints_continually_;
@@ -101,8 +108,6 @@ class GPU_GLES2_EXPORT GLES2QueryManager : public QueryManager {
   uint32_t disjoints_notified_;
 
   scoped_refptr<gl::GPUTimingClient> gpu_timing_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(GLES2QueryManager);
 };
 
 }  // namespace gles2

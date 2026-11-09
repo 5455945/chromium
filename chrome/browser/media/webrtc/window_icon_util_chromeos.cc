@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 #include "ui/aura/window.h"
 
 gfx::ImageSkia GetWindowIcon(content::DesktopMediaID id) {
-  DCHECK_EQ(content::DesktopMediaID::TYPE_WINDOW, id.type);
+  CHECK_EQ(content::DesktopMediaID::TYPE_WINDOW, id.type,
+           base::NotFatalUntil::M161);
   aura::Window* window = content::DesktopMediaID::GetNativeWindowById(id);
   if (!window)
     return gfx::ImageSkia();

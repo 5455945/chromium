@@ -1,10 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/strings/string_util.h"
 #include "net/http/http_auth_filter.h"
+
+#include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "url/gurl.h"
+#include "url/scheme_host_port.h"
 
 namespace net {
 
@@ -32,24 +35,26 @@ bool HttpAuthFilterAllowlist::AddFilter(const std::string& filter,
   return true;
 }
 
-bool HttpAuthFilterAllowlist::IsValid(const GURL& url,
-                                      HttpAuth::Target target) const {
+bool HttpAuthFilterAllowlist::IsValid(
+    const url::SchemeHostPort& scheme_host_port,
+    HttpAuth::Target target) const {
   if ((target != HttpAuth::AUTH_SERVER) && (target != HttpAuth::AUTH_PROXY))
     return false;
   // All proxies pass
   if (target == HttpAuth::AUTH_PROXY)
     return true;
-  return rules_.Matches(url);
+  return rules_.Matches(scheme_host_port.GetURL());
 }
 
 void HttpAuthFilterAllowlist::SetAllowlist(
     const std::string& server_allowlist) {
   // TODO(eroman): Is this necessary? The issue is that
-  // HttpAuthFilterAllowlist is trying to use ProxyBypassRules as a generic
-  // URL filter. However internally it has some implicit rules for localhost
-  // and linklocal addresses.
-  rules_.ParseFromString(ProxyBypassRules::GetRulesToSubtractImplicit() + ";" +
-                         server_allowlist);
+  // HttpAuthFilterAllowlist is trying to use ProxyHostMatchingRules as a
+  // generic URL filter. However internally it has some implicit rules for
+  // localhost and linklocal addresses.
+  rules_.ParseFromString(
+      base::StrCat({ProxyHostMatchingRules::GetRulesToSubtractImplicit(), ";",
+                    server_allowlist}));
 }
 
 }  // namespace net

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,35 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "ui/aura/client/drag_drop_delegate.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/cursor/cursor.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/events/event_constants.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/native_widget_private.h"
+#include "ui/wm/core/transient_window_observer.h"
 #include "ui/wm/public/activation_change_observer.h"
 #include "ui/wm/public/activation_delegate.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #error "This file must not be included on macOS; Chromium Mac doesn't use Aura."
 #endif
 
 namespace aura {
 class Window;
+}
+
+namespace wm {
+class TransientWindowManager;
 }
 
 namespace views {
@@ -37,15 +46,26 @@ class FocusManagerEventHandler;
 class TooltipManagerAura;
 class WindowReorderer;
 
+// NativeWidgetAura is a NativeWidgetPrivate implementation that does not own
+// a platform-specific window (x11::Window, HWND, etc).
+// Such a widget is called a non-desktop widget, as in contrast to a desktop
+// widget that uses DesktopNativeWidgetAura.
+// On non-CrOS platforms, a non-desktop widget must be a descendant of a
+// desktop widget and is clipped to that desktop widget's bounds.
+// On CrOS, everything is a non-desktop widget.
 class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
                                       public aura::WindowDelegate,
                                       public aura::WindowObserver,
                                       public wm::ActivationDelegate,
                                       public wm::ActivationChangeObserver,
+                                      public wm::TransientWindowObserver,
                                       public aura::client::FocusChangeObserver,
                                       public aura::client::DragDropDelegate {
  public:
   explicit NativeWidgetAura(internal::NativeWidgetDelegate* delegate);
+
+  NativeWidgetAura(const NativeWidgetAura&) = delete;
+  NativeWidgetAura& operator=(const NativeWidgetAura&) = delete;
 
   // Called internally by NativeWidgetAura and DesktopNativeWidgetAura to
   // associate |native_widget| with |window|.
@@ -71,7 +91,8 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   // internal::NativeWidgetPrivate:
   void InitNativeWidget(Widget::InitParams params) override;
   void OnWidgetInitDone() override;
-  std::unique_ptr<NonClientFrameView> CreateNonClientFrameView() override;
+  void ReparentNativeViewImpl(gfx::NativeView new_parent) override;
+  std::unique_ptr<FrameView> CreateFrameView() override;
   bool ShouldUseNativeFrame() const override;
   bool ShouldWindowContentsBeTransparent() const override;
   void FrameTypeChanged() override;
@@ -93,13 +114,12 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   ui::InputMethod* GetInputMethod() override;
   void CenterWindow(const gfx::Size& size) override;
   void GetWindowPlacement(gfx::Rect* bounds,
-                          ui::WindowShowState* maximized) const override;
+                          ui::mojom::WindowShowState* maximized) const override;
   bool SetWindowTitle(const std::u16string& title) override;
   void SetWindowIcons(const gfx::ImageSkia& window_icon,
                       const gfx::ImageSkia& app_icon) override;
-  const gfx::ImageSkia* GetWindowIcon() override;
-  const gfx::ImageSkia* GetWindowAppIcon() override;
-  void InitModalType(ui::ModalType modal_type) override;
+  void InitModalType(ui::mojom::ModalType modal_type) override;
+  void SetBackgroundColor(SkColor background_color) override;
   gfx::Rect GetWindowBoundsInScreen() const override;
   gfx::Rect GetClientAreaBoundsInScreen() const override;
   gfx::Rect GetRestoredBounds() const override;
@@ -109,13 +129,15 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   void SetSize(const gfx::Size& size) override;
   void StackAbove(gfx::NativeView native_view) override;
   void StackAtTop() override;
+  bool IsStackedAbove(gfx::NativeView widget) override;
   void SetShape(std::unique_ptr<Widget::ShapeRects> shape) override;
   void Close() override;
   void CloseNow() override;
-  void Show(ui::WindowShowState show_state,
+  void Show(ui::mojom::WindowShowState show_state,
             const gfx::Rect& restore_bounds) override;
   void Hide() override;
   bool IsVisible() const override;
+  bool IsVisibleOnScreen() const override;
   void Activate() override;
   void Deactivate() override;
   bool IsActive() const override;
@@ -128,25 +150,28 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   bool IsMaximized() const override;
   bool IsMinimized() const override;
   void Restore() override;
-  void SetFullscreen(bool fullscreen, bool delay) override;
+  void SetFullscreen(bool fullscreen, int64_t target_display_id) override;
   bool IsFullscreen() const override;
   void SetCanAppearInExistingFullscreenSpaces(
       bool can_appear_in_existing_fullscreen_spaces) override;
   void SetOpacity(float opacity) override;
-  void SetAspectRatio(const gfx::SizeF& aspect_ratio) override;
+  void SetAspectRatio(const gfx::SizeF& aspect_ratio,
+                      const gfx::Size& excluded_margin) override;
   void FlashFrame(bool flash_frame) override;
-  void RunShellDrag(View* view,
-                    std::unique_ptr<ui::OSExchangeData> data,
-                    const gfx::Point& location,
-                    int operation,
-                    ui::mojom::DragEventSource source) override;
+  void RunDragDropLoop(std::unique_ptr<ui::OSExchangeData> data,
+                       const gfx::Point& location,
+                       int operation,
+                       ui::mojom::DragEventSource source) override;
+  void CancelDragDropLoop(View* view) override;
   void SchedulePaintInRect(const gfx::Rect& rect) override;
   void ScheduleLayout() override;
-  void SetCursor(gfx::NativeCursor cursor) override;
+  void SetCursor(const ui::Cursor& cursor) override;
   bool IsMouseEventsEnabled() const override;
   bool IsMouseButtonDown() const override;
   void ClearNativeFocus() override;
   gfx::Rect GetWorkAreaBoundsInScreen() const override;
+  void PrepareForMoveLoop(Widget::MoveLoopSource source) override;
+  void SetBypassWindowManager(bool bypass) override;
   Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,
@@ -156,17 +181,23 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   void SetVisibilityAnimationDuration(const base::TimeDelta& duration) override;
   void SetVisibilityAnimationTransition(
       Widget::VisibilityTransition transition) override;
-  bool IsTranslucentWindowOpacitySupported() const override;
   ui::GestureRecognizer* GetGestureRecognizer() override;
   ui::GestureConsumer* GetGestureConsumer() override;
   void OnSizeConstraintsChanged() override;
   void OnNativeViewHierarchyWillChange() override;
   void OnNativeViewHierarchyChanged() override;
+#if BUILDFLAG(IS_WIN)
+  void SetExcludeFromScreenCapture(bool exclude) override;
+#endif
+  bool SetAllowScreenshots(bool allow) override;
+  bool AreScreenshotsAllowed() override;
+  bool IsDesktopNativeWidget() const override;
   std::string GetName() const override;
+  base::WeakPtr<internal::NativeWidgetPrivate> GetWeakPtr() override;
 
   // aura::WindowDelegate:
   gfx::Size GetMinimumSize() const override;
-  gfx::Size GetMaximumSize() const override;
+  std::optional<gfx::Size> GetMaximumSize() const override;
   void OnBoundsChanged(const gfx::Rect& old_bounds,
                        const gfx::Rect& new_bounds) override;
   gfx::NativeCursor GetCursor(const gfx::Point& point) override;
@@ -192,6 +223,11 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
                                intptr_t old) override;
   void OnResizeLoopStarted(aura::Window* window) override;
   void OnResizeLoopEnded(aura::Window* window) override;
+  void OnMoveLoopStarted(aura::Window* window) override;
+  void OnMoveLoopEnded(aura::Window* window) override;
+  void OnWindowAddedToRootWindow(aura::Window* window) override;
+  void OnWindowRemovingFromRootWindow(aura::Window* window,
+                                      aura::Window* new_root) override;
 
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override;
@@ -216,34 +252,40 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   aura::client::DragUpdateInfo OnDragUpdated(
       const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
-  ui::mojom::DragOperation OnPerformDrop(
-      const ui::DropTargetEvent& event,
-      std::unique_ptr<ui::OSExchangeData> data) override;
   aura::client::DragDropDelegate::DropCallback GetDropCallback(
       const ui::DropTargetEvent& event) override;
+
+  // aura::TransientWindowObserver:
+  void OnTransientParentChanged(aura::Window* new_parent) override;
 
  protected:
   ~NativeWidgetAura() override;
 
-  internal::NativeWidgetDelegate* delegate() { return delegate_; }
+  internal::NativeWidgetDelegate* delegate() { return delegate_.get(); }
 
  private:
-  void SetInitialFocus(ui::WindowShowState show_state);
+  void SetInitialFocus(ui::mojom::WindowShowState show_state);
 
-  internal::NativeWidgetDelegate* delegate_;
+  // Set the bounds with target 'display_id'. This will place the widget in that
+  // 'display' even if the more than half of bounds are outside of the display.
+  // If the 'display_id' is nullopt or the display does not exist, it will use
+  // the display that matches 'bounds'.
+  void SetBoundsInternal(const gfx::Rect& bounds,
+                         std::optional<int64_t> display_id);
+
+  base::WeakPtr<internal::NativeWidgetDelegate> delegate_;
+  std::unique_ptr<internal::NativeWidgetDelegate> owned_delegate_;
 
   // WARNING: set to NULL when destroyed. As the Widget is not necessarily
   // destroyed along with |window_| all usage of |window_| should first verify
   // non-NULL.
-  aura::Window* window_;
+  raw_ptr<aura::Window> window_;
 
   // See class documentation for Widget in widget.h for a note about ownership.
-  Widget::InitParams::Ownership ownership_;
+  Widget::InitParams::Ownership ownership_ =
+      Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET;
 
-  // Are we in the destructor?
-  bool destroying_;
-
-  gfx::NativeCursor cursor_;
+  ui::Cursor cursor_;
 
   std::unique_ptr<TooltipManagerAura> tooltip_manager_;
 
@@ -257,11 +299,30 @@ class VIEWS_EXPORT NativeWidgetAura : public internal::NativeWidgetPrivate,
   // Native widget's handler to receive events before the event target.
   std::unique_ptr<FocusManagerEventHandler> focus_manager_event_handler_;
 
-  // The following factory is used for calls to close the NativeWidgetAura
-  // instance.
-  base::WeakPtrFactory<NativeWidgetAura> close_widget_factory_{this};
+  // Observes `window_`. Reset() in OnWindowDestroying() so the observation is
+  // dropped while the window is still alive.
+  base::ScopedObservation<aura::Window, aura::WindowObserver>
+      window_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(NativeWidgetAura);
+  // Observes the TransientWindowManager owned by `window_` as a window
+  // property. That manager is destroyed by Window::ClearProperties(), so this
+  // must also be Reset() in OnWindowDestroying().
+  base::ScopedObservation<wm::TransientWindowManager,
+                          wm::TransientWindowObserver>
+      transient_window_observation_{this};
+
+  // The following factory is used to provide references to the NativeWidgetAura
+  // instance. We need a separate factory from the |close_widget_factory_|
+  // because the close widget factory is currently used to ensure that the
+  // CloseNow task is only posted once. We check whether there are any weak
+  // pointers from close_widget_factory_| before posting
+  // the CloseNow task, so we can't have any other weak pointers for this to
+  // work properly. CloseNow can destroy the aura::Window
+  // which will not destroy the NativeWidget if WIDGET_OWNS_NATIVE_WIDGET, and
+  // we need to make sure we do not attempt to destroy the aura::Window twice.
+  // TODO(crbug.com/40232479): The two factories can be combined if the
+  // WIDGET_OWNS_NATIVE_WIDGET is removed.
+  base::WeakPtrFactory<NativeWidgetAura> weak_factory{this};
 };
 
 }  // namespace views

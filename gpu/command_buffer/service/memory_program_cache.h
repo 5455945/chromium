@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,38 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
 
-#include "base/containers/mru_cache.h"
-#include "base/macros.h"
+#include "base/containers/lru_cache.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory_coordinator/async_memory_consumer_registration.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "gpu/command_buffer/service/decoder_client.h"
 #include "gpu/command_buffer/service/program_cache.h"
 #include "gpu/command_buffer/service/shader_translator.h"
 
 namespace gpu {
 
-class GpuProcessActivityFlags;
+class GpuProcessShmCount;
 
 namespace gles2 {
 
 // Program cache that stores binaries completely in-memory
-class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
+class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache,
+                                            public base::MemoryConsumer {
  public:
   MemoryProgramCache(size_t max_cache_size_bytes,
                      bool disable_gpu_shader_disk_cache,
                      bool disable_program_caching_for_transform_feedback,
-                     GpuProcessActivityFlags* activity_flags);
+                     GpuProcessShmCount* use_shader_cache_shm_count);
+
+  MemoryProgramCache(const MemoryProgramCache&) = delete;
+  MemoryProgramCache& operator=(const MemoryProgramCache&) = delete;
+
   ~MemoryProgramCache() override;
 
   ProgramLoadResult LoadLinkedProgram(
@@ -54,8 +62,16 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
 
   size_t Trim(size_t limit) override;
 
+  // base::MemoryConsumer:
+  void OnUpdateMemoryLimit() override;
+  void OnReleaseMemory() override;
+
  private:
   void ClearBackend() override;
+
+  // Return the current max_size_bytes(), which changes depending on the memory
+  // pressure level.
+  size_t GetCurrentMaxSizeBytes() const;
 
   class ProgramCacheValue : public base::RefCounted<ProgramCacheValue> {
    public:
@@ -63,20 +79,23 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
                       std::vector<uint8_t> data,
                       bool is_compressed,
                       GLsizei decompressed_length,
-                      const std::string& program_hash,
-                      const char* shader_0_hash,
+                      HashView program_hash,
+                      HashView shader_0_hash,
                       const AttributeMap& attrib_map_0,
                       const UniformMap& uniform_map_0,
                       const VaryingMap& varying_map_0,
                       const OutputVariableList& output_variable_list_0,
                       const InterfaceBlockMap& interface_block_map_0,
-                      const char* shader_1_hash,
+                      HashView shader_1_hash,
                       const AttributeMap& attrib_map_1,
                       const UniformMap& uniform_map_1,
                       const VaryingMap& varying_map_1,
                       const OutputVariableList& output_variable_list_1,
                       const InterfaceBlockMap& interface_block_map_1,
                       MemoryProgramCache* program_cache);
+
+    ProgramCacheValue(const ProgramCacheValue&) = delete;
+    ProgramCacheValue& operator=(const ProgramCacheValue&) = delete;
 
     GLenum format() const {
       return format_;
@@ -88,9 +107,7 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
 
     GLsizei decompressed_length() const { return decompressed_length_; }
 
-    const std::string& shader_0_hash() const {
-      return shader_0_hash_;
-    }
+    const Hash& shader_0_hash() const { return shader_0_hash_; }
 
     const AttributeMap& attrib_map_0() const {
       return attrib_map_0_;
@@ -112,9 +129,7 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
       return interface_block_map_0_;
     }
 
-    const std::string& shader_1_hash() const {
-      return shader_1_hash_;
-    }
+    const Hash& shader_1_hash() const { return shader_1_hash_; }
 
     const AttributeMap& attrib_map_1() const {
       return attrib_map_1_;
@@ -145,37 +160,36 @@ class GPU_GLES2_EXPORT MemoryProgramCache : public ProgramCache {
     const std::vector<uint8_t> data_;
     const bool is_compressed_;
     const GLsizei decompressed_length_;
-    const std::string program_hash_;
-    const std::string shader_0_hash_;
+    const Hash program_hash_;
+    const Hash shader_0_hash_;
     const AttributeMap attrib_map_0_;
     const UniformMap uniform_map_0_;
     const VaryingMap varying_map_0_;
     const OutputVariableList output_variable_list_0_;
     const InterfaceBlockMap interface_block_map_0_;
-    const std::string shader_1_hash_;
+    const Hash shader_1_hash_;
     const AttributeMap attrib_map_1_;
     const UniformMap uniform_map_1_;
     const VaryingMap varying_map_1_;
     const OutputVariableList output_variable_list_1_;
     const InterfaceBlockMap interface_block_map_1_;
-    MemoryProgramCache* const program_cache_;
-
-    DISALLOW_COPY_AND_ASSIGN(ProgramCacheValue);
+    const raw_ptr<MemoryProgramCache> program_cache_;
   };
 
   friend class ProgramCacheValue;
 
-  typedef base::MRUCache<std::string,
-                         scoped_refptr<ProgramCacheValue> > ProgramMRUCache;
+  using ProgramLRUCache =
+      base::LRUCache<Hash, scoped_refptr<ProgramCacheValue>>;
 
   const bool disable_gpu_shader_disk_cache_;
   const bool disable_program_caching_for_transform_feedback_;
   const bool compress_program_binaries_;
   size_t curr_size_bytes_;
-  ProgramMRUCache store_;
-  GpuProcessActivityFlags* activity_flags_;
+  ProgramLRUCache store_;
+  raw_ptr<GpuProcessShmCount> use_shader_cache_shm_count_;
 
-  DISALLOW_COPY_AND_ASSIGN(MemoryProgramCache);
+  base::AsyncMemoryConsumerRegistration memory_consumer_registration_;
+  size_t current_max_size_bytes_;
 };
 
 }  // namespace gles2

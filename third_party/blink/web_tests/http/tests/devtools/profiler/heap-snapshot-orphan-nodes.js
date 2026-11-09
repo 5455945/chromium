@@ -1,12 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {HeapProfilerTestRunner} from 'heap_profiler_test_runner';
+
+import * as ProfilerModule from 'devtools/panels/profiler/profiler.js';
 
 (async function() {
   TestRunner.addResult(
       `Tests that weak references are ignored when dominators are calculated and that weak references won't affect object's retained size.\n`);
-  await TestRunner.loadTestModule('heap_profiler_test_runner');
-  await TestRunner.showPanel('heap_profiler');
+  await TestRunner.showPanel('heap-profiler');
   await TestRunner.loadHTML(`
       <pre></pre>
     `);
@@ -46,13 +50,13 @@
       return builder.generateSnapshot();
     }
 
-    TestRunner.addSniffer(Profiler.HeapSnapshotView.prototype, '_retrieveStatistics', checkStatistics);
+    TestRunner.addSniffer(ProfilerModule.HeapSnapshotView.HeapSnapshotView.prototype, 'retrieveStatistics', checkStatistics);
     HeapProfilerTestRunner.takeAndOpenSnapshot(createHeapSnapshot, step1);
 
     async function checkStatistics(arg, result) {
       var statistics = await result;
       TestRunner.assertEquals(4610, statistics.total);
-      TestRunner.assertEquals(4610, statistics.v8heap);
+      TestRunner.assertEquals(4610, statistics.v8heap.total);
       TestRunner.addResult('SUCCESS: total size is correct.');
     }
 
@@ -63,29 +67,29 @@
     function step2() {
       var row = HeapProfilerTestRunner.findRow('A');
       TestRunner.assertEquals(true, !!row, '"A" row');
-      TestRunner.assertEquals(1, row._count);
-      TestRunner.assertEquals(300, row._retainedSize);
-      TestRunner.assertEquals(300, row._shallowSize);
+      TestRunner.assertEquals(1, row.count);
+      TestRunner.assertEquals(300, row.retainedSize);
+      TestRunner.assertEquals(300, row.shallowSize);
 
 
       row = HeapProfilerTestRunner.findRow('B');
       TestRunner.assertEquals(true, !!row, '"B" row');
-      TestRunner.assertEquals(1, row._count);
-      TestRunner.assertEquals(300, row._retainedSize);
-      TestRunner.assertEquals(300, row._shallowSize);
+      TestRunner.assertEquals(1, row.count);
+      TestRunner.assertEquals(300, row.retainedSize);
+      TestRunner.assertEquals(300, row.shallowSize);
 
       row = HeapProfilerTestRunner.findRow('Orphan');
       TestRunner.assertEquals(true, !!row, '"Orphan" row');
-      TestRunner.assertEquals(1, row._count);
-      TestRunner.assertEquals(4000, row._retainedSize);
-      TestRunner.assertEquals(2000, row._shallowSize);
+      TestRunner.assertEquals(1, row.count);
+      TestRunner.assertEquals(4000, row.retainedSize);
+      TestRunner.assertEquals(2000, row.shallowSize);
 
 
       row = HeapProfilerTestRunner.findRow('OrphanChild');
       TestRunner.assertEquals(true, !!row, '"OrphanChild" row');
-      TestRunner.assertEquals(1, row._count);
-      TestRunner.assertEquals(2000, row._retainedSize);
-      TestRunner.assertEquals(2000, row._shallowSize);
+      TestRunner.assertEquals(1, row.count);
+      TestRunner.assertEquals(2000, row.retainedSize);
+      TestRunner.assertEquals(2000, row.shallowSize);
 
       TestRunner.addResult('SUCCESS: all nodes have expected retained sizes.');
       setTimeout(next, 0);

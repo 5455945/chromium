@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@ chrome.storage.local.get('sentinel', (val) => {
     // Note: We don't expect the event page to be invoked a second time,
     // because it doesn't register for any relevant events. If it were, it would
     // re-set the action properties, which would invalidate the text.
-    chrome.test.notifyFail('Unexpected Sentinel Value: ' + val.sentinel);
+    chrome.test.notifyFail(`Unexpected Sentinel Value: ${val.sentinel}`);
     chrome.action.setTitle({title: 'FAILED'});
     return;
   }

@@ -1,13 +1,12 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/capture/views_widget_video_capture_device_mac.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/remote_cocoa/browser/scoped_cg_window_id.h"
 #include "content/browser/media/capture/mouse_cursor_overlay_controller.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -16,14 +15,15 @@
 
 namespace content {
 
-class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate
+class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate final
     : public remote_cocoa::ScopedCGWindowID::Observer {
  public:
-  UIThreadDelegate(uint32_t cg_window_id,
-                   const base::WeakPtr<FrameSinkVideoCaptureDevice> device,
-                   MouseCursorOverlayController* cursor_controller)
+  UIThreadDelegate(
+      uint32_t cg_window_id,
+      const base::WeakPtr<FrameSinkVideoCaptureDevice> device,
+      const base::WeakPtr<MouseCursorOverlayController> cursor_controller)
       : cg_window_id_(cg_window_id),
-        device_task_runner_(base::ThreadTaskRunnerHandle::Get()),
+        device_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
         device_(device),
         cursor_controller_(cursor_controller) {
     // Note that the use of base::Unretained below is safe, because
@@ -34,10 +34,10 @@ class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate
                        base::Unretained(this)));
   }
 
-  ~UIThreadDelegate() final {
+  ~UIThreadDelegate() override {
     // This is called by a task posted by ViewsWidgetVideoCaptureDeviceMac's
     // destructor.
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
     if (scoped_cg_window_id_) {
       scoped_cg_window_id_->RemoveObserver(this);
       scoped_cg_window_id_ = nullptr;
@@ -45,17 +45,18 @@ class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate
   }
 
   void ResolveFrameSinkIdOnUIThread() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    DCHECK(!scoped_cg_window_id_);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+    CHECK(!scoped_cg_window_id_, base::NotFatalUntil::M160);
 
     scoped_cg_window_id_ = remote_cocoa::ScopedCGWindowID::Get(cg_window_id_);
     if (scoped_cg_window_id_) {
       scoped_cg_window_id_->AddObserver(this);
       device_task_runner_->PostTask(
           FROM_HERE,
-          base::BindOnce(&FrameSinkVideoCaptureDevice::OnTargetChanged, device_,
-                         FrameSinkVideoCaptureDevice::VideoCaptureTarget{
-                             scoped_cg_window_id_->GetFrameSinkId()}));
+          base::BindOnce(
+              &FrameSinkVideoCaptureDevice::OnTargetChanged, device_,
+              viz::VideoCaptureTarget(scoped_cg_window_id_->GetFrameSinkId()),
+              /*sub_capture_target_version=*/0));
     } else {
       // It is entirely possible (although unlikely) that the window
       // corresponding to |cg_window_id| be destroyed between when the capture
@@ -71,10 +72,10 @@ class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate
  private:
   // remote_cocoa::ScopedCGWindowID::Observer:
   void OnScopedCGWindowIDDestroyed(uint32_t cg_window_id) override {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
     // |scoped_cg_window_id_| promises to invalidate its weak pointers before
     // this method is called.
-    DCHECK(!scoped_cg_window_id_);
+    CHECK(!scoped_cg_window_id_, base::NotFatalUntil::M160);
     device_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&FrameSinkVideoCaptureDevice::OnTargetPermanentlyLost,
@@ -83,8 +84,11 @@ class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate
   void OnScopedCGWindowIDMouseMoved(uint32_t cg_window_id,
                                     const gfx::PointF& location_in_window,
                                     const gfx::Size& window_size) override {
-    cursor_controller_->SetTargetSize(window_size);
-    cursor_controller_->OnMouseMoved(location_in_window);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+    if (cursor_controller_) {
+      cursor_controller_->SetTargetSize(window_size);
+      cursor_controller_->OnMouseMoved(location_in_window);
+    }
   }
 
   const uint32_t cg_window_id_;
@@ -96,20 +100,21 @@ class ViewsWidgetVideoCaptureDeviceMac::UIThreadDelegate
 
   // |device_| may only be dereferenced by tasks posted to
   // |device_task_runner_|.
-  base::WeakPtr<FrameSinkVideoCaptureDevice> device_;
+  const base::WeakPtr<FrameSinkVideoCaptureDevice> device_;
 
-  // Owned by FrameSinkVideoCaptureDevice. This will be valid for the life of
-  // UIThreadDelegate because the UIThreadDelegate deleter task will be posted
-  // to the UI thread before the MouseCursorOverlayController deleter task.
-  // See similar behavior in WebContentsVideoCaptureDevice::FrameTracker.
-  MouseCursorOverlayController* const cursor_controller_;
+  // Owned by FrameSinkVideoCaptureDevice.  This may only be accessed on the
+  // UI thread. This is not guaranteed to be valid and must be checked before
+  // use.
+  // https://crbug.com/1252562
+  const base::WeakPtr<MouseCursorOverlayController> cursor_controller_;
 };
 
 ViewsWidgetVideoCaptureDeviceMac::ViewsWidgetVideoCaptureDeviceMac(
     const DesktopMediaID& source_id)
     : weak_factory_(this) {
   ui_thread_delegate_ = std::make_unique<UIThreadDelegate>(
-      source_id.id, weak_factory_.GetWeakPtr(), cursor_controller());
+      source_id.id, weak_factory_.GetWeakPtr(),
+      cursor_controller()->GetWeakPtr());
 }
 
 ViewsWidgetVideoCaptureDeviceMac::~ViewsWidgetVideoCaptureDeviceMac() {

@@ -1,10 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_ASPECT_RATIO_INTERPOLATION_TYPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_ASPECT_RATIO_INTERPOLATION_TYPE_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/animation/css_interpolation_type.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 
@@ -33,7 +34,7 @@ class CSSAspectRatioInterpolationType : public CSSInterpolationType {
                  const InterpolationValue&,
                  double interpolation_fraction) const final;
 
-  static std::unique_ptr<InterpolableValue> CreateInterpolableAspectRatio(
+  static InterpolableValue* CreateInterpolableAspectRatio(
       const StyleAspectRatio&);
 
  private:
@@ -44,7 +45,7 @@ class CSSAspectRatioInterpolationType : public CSSInterpolationType {
   InterpolationValue MaybeConvertInherit(const StyleResolverState&,
                                          ConversionCheckers&) const final;
   InterpolationValue MaybeConvertValue(const CSSValue&,
-                                       const StyleResolverState*,
+                                       const StyleResolverState&,
                                        ConversionCheckers&) const final;
 };
 

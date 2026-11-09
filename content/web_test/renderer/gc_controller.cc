@@ -1,24 +1,27 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/web_test/renderer/gc_controller.h"
 
-#include "base/bind.h"
+#include <tuple>
+
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "content/public/renderer/render_frame.h"
 #include "gin/arguments.h"
-#include "gin/handle.h"
 #include "gin/object_template_builder.h"
-#include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8.h"
 
 namespace content {
 
-gin::WrapperInfo GCController::kWrapperInfo = {gin::kEmbedderNativeGin};
-
 // static
 void GCController::Install(blink::WebLocalFrame* frame) {
-  v8::Isolate* isolate = blink::MainThreadIsolate();
+  v8::Isolate* isolate = frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = frame->MainWorldScriptContext();
   if (context.IsEmpty())
@@ -26,28 +29,38 @@ void GCController::Install(blink::WebLocalFrame* frame) {
 
   v8::Context::Scope context_scope(context);
 
-  gin::Handle<GCController> controller =
-      gin::CreateHandle(isolate, new GCController(frame));
-  if (controller.IsEmpty())
+  auto* controller = cppgc::MakeGarbageCollected<GCController>(
+      isolate->GetCppHeap()->GetAllocationHandle(), frame);
+  v8::Local<v8::Object> wrapper;
+  if (!controller->GetWrapper(isolate).ToLocal(&wrapper)) {
     return;
+  }
   v8::Local<v8::Object> global = context->Global();
-  global
-      ->Set(context, gin::StringToV8(isolate, "GCController"),
-            controller.ToV8())
+  global->Set(context, gin::StringToV8(isolate, "GCController"), wrapper)
       .Check();
 }
 
-GCController::GCController(blink::WebLocalFrame* frame) : frame_(frame) {}
+GCController::GCController(blink::WebLocalFrame* frame)
+    : RenderFrameObserver(RenderFrame::FromWebFrame(frame)) {}
 
 GCController::~GCController() = default;
+
+void GCController::Dispose() {
+  RenderFrameObserver::Dispose();
+  weak_ptr_factory_.InvalidateWeakPtrsAndDoom();
+}
+
+const gin::WrapperInfo* GCController::wrapper_info() const {
+  return &kWrapperInfo;
+}
 
 gin::ObjectTemplateBuilder GCController::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
   return gin::Wrappable<GCController>::GetObjectTemplateBuilder(isolate)
-      .SetMethod("collect", &GCController::Collect)
-      .SetMethod("collectAll", &GCController::CollectAll)
-      .SetMethod("minorCollect", &GCController::MinorCollect)
-      .SetMethod("asyncCollectAll", &GCController::AsyncCollectAll);
+      .SetMethod<&GCController::Collect>("collect")
+      .SetMethod<&GCController::CollectAll>("collectAll")
+      .SetMethod<&GCController::MinorCollect>("minorCollect")
+      .SetMethod<&GCController::AsyncCollectAll>("asyncCollectAll");
 }
 
 void GCController::Collect(const gin::Arguments& args) {
@@ -71,6 +84,13 @@ void GCController::AsyncCollectAll(const gin::Arguments& args) {
         "v8::Function.");
     return;
   }
+
+  // Noop if the frame is gone, e.g. when called through a removed iframe's
+  // `GCController`.
+  if (!render_frame()) {
+    return;
+  }
+
   v8::UniquePersistent<v8::Function> js_callback(
       args.isolate(), v8::Local<v8::Function>::Cast(args.PeekNext()));
 
@@ -79,29 +99,39 @@ void GCController::AsyncCollectAll(const gin::Arguments& args) {
   base::OnceClosure run_async =
       base::BindOnce(&GCController::AsyncCollectAllWithEmptyStack,
                      weak_ptr_factory_.GetWeakPtr(), std::move(js_callback));
-  frame_->GetTaskRunner(blink::TaskType::kInternalTest)
+  render_frame()
+      ->GetTaskRunner(blink::TaskType::kInternalTest)
       ->PostTask(FROM_HERE, std::move(run_async));
 }
 
 void GCController::AsyncCollectAllWithEmptyStack(
     v8::UniquePersistent<v8::Function> callback) {
-  v8::Isolate* const isolate = blink::MainThreadIsolate();
+  // The frame may be detached while this task is pending, e.g. when navigating
+  // to about:blank after a web test. Detached frames still run pending tasks.
+  if (!render_frame()) {
+    return;
+  }
+
+  v8::Isolate* const isolate =
+      render_frame()->GetAgentGroupScheduler().Isolate();
 
   for (int i = 0; i < kNumberOfGCsForFullCollection; i++) {
-    isolate->GetEmbedderHeapTracer()->GarbageCollectionForTesting(
-        v8::EmbedderHeapTracer::EmbedderStackState::kNoHeapPointers);
+    isolate->RequestGarbageCollectionForTesting(
+        v8::Isolate::kFullGarbageCollection,
+        cppgc::EmbedderStackState::kNoHeapPointers);
   }
 
   v8::HandleScope scope(isolate);
   v8::Local<v8::Function> func = callback.Get(isolate);
-  v8::Local<v8::Context> context = func->CreationContext();
+  v8::Local<v8::Context> context = func->GetCreationContextChecked(isolate);
   v8::Context::Scope context_scope(context);
   v8::TryCatch try_catch(isolate);
   v8::MicrotasksScope microtasks_scope(
-      isolate, v8::MicrotasksScope::kDoNotRunMicrotasks);
+      isolate, context->GetMicrotaskQueue(),
+      v8::MicrotasksScope::kDoNotRunMicrotasks);
   auto result = func->Call(context, context->Global(), 0, nullptr);
   // Swallow potential exception.
-  ignore_result(result);
+  std::ignore = result;
 }
 
 void GCController::MinorCollect(const gin::Arguments& args) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,14 @@
 #include <stdint.h>
 
 #include <string>
+#include <vector>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "media/base/android/media_codec_bridge.h"
 #include "media/base/android/media_codec_direction.h"
+#include "media/base/android/media_format_color_space.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media_export.h"
 #include "media/base/video_decoder_config.h"
@@ -24,15 +25,17 @@
 
 namespace media {
 
-class VideoColorSpace;
-
 // Configuration info for MediaCodec.
 class MEDIA_EXPORT VideoCodecConfig {
  public:
   VideoCodecConfig();
+
+  VideoCodecConfig(const VideoCodecConfig&) = delete;
+  VideoCodecConfig& operator=(const VideoCodecConfig&) = delete;
+
   ~VideoCodecConfig();
 
-  VideoCodec codec = kUnknownVideoCodec;
+  VideoCodec codec = VideoCodec::kUnknown;
 
   CodecType codec_type = CodecType::kAny;
 
@@ -50,21 +53,29 @@ class MEDIA_EXPORT VideoCodecConfig {
   std::vector<uint8_t> csd0;
   std::vector<uint8_t> csd1;
 
-  VideoColorSpace container_color_space;
+  MediaFormatColorSpace container_color_space;
 
   // VP9 HDR metadata is only embedded in the container. HDR10 metadata is
   // embedded in the video stream.
-  absl::optional<gfx::HDRMetadata> hdr_metadata;
+  gfx::HDRMetadata hdr_metadata;
 
   // Enables the async MediaCodec.Callback API. |on_buffers_available_cb|
   // will be called when input or output buffers are available. This will be
-  // called on an arbitrary thread, so use BindToCurrentLoop if needed.
-  //
-  // May only be used on API level 23 and higher.
+  // called on an arbitrary thread, so use base::BindPostTaskToCurrentDefault if
+  // needed.
   base::RepeatingClosure on_buffers_available_cb;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(VideoCodecConfig);
+  // The name of decoder/encoder. It's used to create the MediaCodec instance.
+  std::string name;
+
+  // Enables Block Model (LinearBlock).
+  bool use_block_model = false;
+
+  // Sets the low latency mode flag on the codec.
+  bool use_low_latency_mode = false;
+
+  // The profile of decoder.
+  VideoCodecProfile profile;
 };
 
 // A bridge to a Java MediaCodec.
@@ -75,16 +86,6 @@ class MEDIA_EXPORT MediaCodecBridgeImpl : public MediaCodecBridge {
   static std::unique_ptr<MediaCodecBridge> CreateVideoDecoder(
       const VideoCodecConfig& config);
 
-  // Creates and starts a new MediaCodec configured for encoding. Returns
-  // nullptr on failure.
-  static std::unique_ptr<MediaCodecBridge> CreateVideoEncoder(
-      VideoCodec codec,       // e.g. media::kCodecVP8
-      const gfx::Size& size,  // input frame size
-      int bit_rate,           // bits/second
-      int frame_rate,         // frames/second
-      int i_frame_interval,   // count
-      int color_format);      // MediaCodecInfo.CodecCapabilities.
-
   // Creates and starts a new MediaCodec configured for decoding. Returns
   // nullptr on failure.
   static std::unique_ptr<MediaCodecBridge> CreateAudioDecoder(
@@ -92,7 +93,8 @@ class MEDIA_EXPORT MediaCodecBridgeImpl : public MediaCodecBridge {
       const base::android::JavaRef<jobject>& media_crypto,
       // Enables the async MediaCodec.Callback API. |on_buffers_available_cb|
       // will be called when input or output buffers are available. This will be
-      // called on an arbitrary thread, so use BindToCurrentLoop if needed.
+      // called on an arbitrary thread, so use
+      // base::BindPostTaskToCurrentDefault if needed.
       //
       // May only be used on API level 23 and higher.
       base::RepeatingClosure on_buffers_available_cb =
@@ -102,32 +104,36 @@ class MEDIA_EXPORT MediaCodecBridgeImpl : public MediaCodecBridge {
   // creating a MediaCodec. Does nothing unless on API level 23+.
   static void SetupCallbackHandlerForTesting();
 
+  MediaCodecBridgeImpl(const MediaCodecBridgeImpl&) = delete;
+  MediaCodecBridgeImpl& operator=(const MediaCodecBridgeImpl&) = delete;
+
   ~MediaCodecBridgeImpl() override;
 
   // MediaCodecBridge implementation.
   void Stop() override;
-  MediaCodecStatus Flush() override;
-  MediaCodecStatus GetOutputSize(gfx::Size* size) override;
-  MediaCodecStatus GetOutputSamplingRate(int* sampling_rate) override;
-  MediaCodecStatus GetOutputChannelCount(int* channel_count) override;
-  MediaCodecStatus QueueInputBuffer(int index,
-                                    const uint8_t* data,
-                                    size_t data_size,
+  MediaCodecResult Flush() override;
+  MediaCodecResult GetOutputSizeAndCropRect(gfx::Size& size,
+                                            gfx::Rect& crop_rect) override;
+  MediaCodecResult GetOutputSamplingRate(int* sampling_rate) override;
+  MediaCodecResult GetOutputChannelCount(int* channel_count) override;
+  MediaCodecResult GetOutputColorSpace(
+      MediaFormatColorSpace* color_space) override;
+  MediaCodecResult QueueInputBuffer(int index,
+                                    base::span<const uint8_t> data,
                                     base::TimeDelta presentation_time) override;
-  MediaCodecStatus QueueSecureInputBuffer(
+  MediaCodecResult QueueFilledInputBuffer(
       int index,
-      const uint8_t* data,
       size_t data_size,
-      const std::string& key_id,
-      const std::string& iv,
-      const std::vector<SubsampleEntry>& subsamples,
-      EncryptionScheme encryption_scheme,
-      absl::optional<EncryptionPattern> encryption_pattern,
       base::TimeDelta presentation_time) override;
-  void QueueEOS(int input_buffer_index) override;
-  MediaCodecStatus DequeueInputBuffer(base::TimeDelta timeout,
+  MediaCodecResult QueueSecureInputBuffer(
+      int index,
+      base::span<const uint8_t> data,
+      base::TimeDelta presentation_time,
+      const DecryptConfig& decrypt_config) override;
+  MediaCodecResult QueueEOS(int input_buffer_index) override;
+  MediaCodecResult DequeueInputBuffer(base::TimeDelta timeout,
                                       int* index) override;
-  MediaCodecStatus DequeueOutputBuffer(base::TimeDelta timeout,
+  MediaCodecResult DequeueOutputBuffer(base::TimeDelta timeout,
                                        int* index,
                                        size_t* offset,
                                        size_t* size,
@@ -136,53 +142,59 @@ class MEDIA_EXPORT MediaCodecBridgeImpl : public MediaCodecBridge {
                                        bool* key_frame) override;
 
   void ReleaseOutputBuffer(int index, bool render) override;
-  MediaCodecStatus GetInputBuffer(int input_buffer_index,
-                                  uint8_t** data,
-                                  size_t* capacity) override;
-  MediaCodecStatus CopyFromOutputBuffer(int index,
+  base::span<uint8_t> GetInputBuffer(int input_buffer_index) override;
+  MediaCodecResult CopyFromOutputBuffer(int index,
                                         size_t offset,
-                                        void* dst,
-                                        size_t num) override;
+                                        base::span<uint8_t> dst) override;
   std::string GetName() override;
+  bool IsSoftwareCodec() override;
   bool SetSurface(const base::android::JavaRef<jobject>& surface) override;
-  void SetVideoBitrate(int bps, int frame_rate) override;
-  void RequestKeyFrameSoon() override;
   CodecType GetCodecType() const override;
   size_t GetMaxInputSize() override;
 
+  // When the MediaCodec has been configured in async mode, this is called when
+  // input or output buffers are available.
+  void OnBuffersAvailable(JNIEnv* /* env */);
+
  private:
+  friend class MediaCodecBridgeTest;
+
   MediaCodecBridgeImpl(CodecType codec_type,
+                       std::optional<VideoCodec> video_decoder_codec,
                        base::android::ScopedJavaGlobalRef<jobject> j_bridge,
+                       bool use_block_model = false,
                        base::RepeatingClosure on_buffers_available_cb =
                            base::RepeatingClosure());
 
+  static bool GetCodecSpecificDataForAudio(const AudioDecoderConfig& config,
+                                           std::vector<uint8_t>* output_csd0,
+                                           std::vector<uint8_t>* output_csd1,
+                                           std::vector<uint8_t>* output_csd2,
+                                           bool* output_frame_has_adts_header);
+
   // Fills the given input buffer. Returns false if |data_size| exceeds the
   // input buffer's capacity (and doesn't touch the input buffer in that case).
-  bool FillInputBuffer(int index,
-                       const uint8_t* data,
-                       size_t data_size) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool FillInputBuffer(int index, base::span<const uint8_t> data);
 
-  // Gets the address of the data in the given output buffer given by |index|
-  // and |offset|. The number of bytes available to read is written to
-  // |*capacity| and the address is written to |*addr|. Returns
-  // MEDIA_CODEC_ERROR if an error occurs, or MEDIA_CODEC_OK otherwise.
-  MediaCodecStatus GetOutputBufferAddress(int index,
-                                          size_t offset,
-                                          const uint8_t** addr,
-                                          size_t* capacity);
+  // Used by QueueInputBuffer() when `use_block_model_` is true. Parameters
+  // match those given to QueueInputBuffer().
+  MediaCodecResult QueueInputBlock(int index,
+                                   base::span<const uint8_t> data,
+                                   base::TimeDelta presentation_time);
 
-  void OnBuffersAvailable(
-      JNIEnv* /* env */,
-      const base::android::JavaParamRef<jobject>& /* obj */) override;
+  void ReportAnyErrorToUMA(MediaCodecStatus status);
+
+  const bool use_block_model_;
 
   const CodecType codec_type_;
+
+  // Keep track of the codec used for decoding.
+  const std::optional<VideoCodec> video_decoder_codec_;
 
   base::RepeatingClosure on_buffers_available_cb_;
 
   // The Java MediaCodecBridge instance.
   base::android::ScopedJavaGlobalRef<jobject> j_bridge_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaCodecBridgeImpl);
 };
 
 }  // namespace media

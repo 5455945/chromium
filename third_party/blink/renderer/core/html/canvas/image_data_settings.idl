@@ -1,20 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-enum PredefinedColorSpace {
-    "srgb", // default
-    "rec2020",
-    "display-p3",
-};
 
-enum ImageDataStorageFormat {
-  "uint8", // default
-  "uint16",
-  "float32",
+enum ImageDataPixelFormat {
+  "rgba-unorm8", // default
+  "rgba-float16",
+  "rgba-float32",
 };
 
 dictionary ImageDataSettings {
   PredefinedColorSpace colorSpace;
-  [RuntimeEnabled=CanvasColorManagementV2] ImageDataStorageFormat storageFormat = "uint8";
+  [RuntimeEnabled=ImageDataPixelFormat] ImageDataPixelFormat pixelFormat = "rgba-unorm8";
 };

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,13 @@
 #include <algorithm>
 #include <utility>
 
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/accessibility/magnifier/magnifier_utils.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/display/cursor_window_controller.h"
+#include "ash/display/window_tree_host_manager.h"
 #include "ash/host/ash_window_tree_host.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller_impl.h"
@@ -18,18 +21,17 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/work_area_insets.h"
-#include "base/bind.h"
-#include "base/numerics/ranges.h"
+#include "base/functional/bind.h"
+#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/drag_drop_client.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/base/ime/chromeos/ime_bridge.h"
-#include "ui/base/ime/input_method.h"
-#include "ui/base/ime/text_input_client.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -38,9 +40,16 @@ namespace ash {
 
 namespace {
 
+// Default, minimum, and maximum magnifier scale values (magnification levels).
 constexpr float kDefaultMagnifierScale = 4.0f;
 constexpr float kMinMagnifierScale = 1.0f;
 constexpr float kMaxMagnifierScale = 20.0f;
+
+// Minimum and maximum screen height divisors. These correspond to the tallest
+// and shortest allowed docked magnifier viewport heights, as
+// viewport_height = root_bounds.height() / screen_height_divisor.
+constexpr float kMinScreenHeightDivisor = 5.0f / 4.0f;
+constexpr float kMaxScreenHeightDivisor = 8.0f;
 
 // The factor by which the offset of scroll events are scaled.
 constexpr float kScrollScaleFactor = 0.0125f;
@@ -48,16 +57,9 @@ constexpr float kScrollScaleFactor = 0.0125f;
 constexpr char kDockedMagnifierViewportWindowName[] =
     "DockedMagnifierViewportWindow";
 
-// The duration of time to wait before moving the viewport to the caret.
-// Allows magnifier.js to preempt the viewport moving to the caret with
-// moveMagnifierToRect.
-// TODO(accessibility): Remove once caret updates handled in magnifier.js.
-constexpr base::TimeDelta kMoveMagnifierCaretDelay =
-    base::TimeDelta::FromMilliseconds(5);
-
 // Returns the current cursor location in screen coordinates.
 inline gfx::Point GetCursorScreenPoint() {
-  return display::Screen::GetScreen()->GetCursorScreenPoint();
+  return display::Screen::Get()->GetCursorScreenPoint();
 }
 
 // Updates the workarea of the display associated with |window| such that the
@@ -66,19 +68,6 @@ void SetViewportHeightInWorkArea(aura::Window* window, int height) {
   DCHECK(window);
   WorkAreaInsets::ForWindow(window->GetRootWindow())
       ->SetDockedMagnifierHeight(height);
-}
-
-// Gets the bounds of the Docked Magnifier viewport widget when placed in the
-// display whose root window is |root|. The bounds returned correspond to the
-// top quarter portion of the screen.
-gfx::Rect GetViewportWidgetBoundsInRoot(aura::Window* root) {
-  DCHECK(root);
-  DCHECK(root->IsRootWindow());
-
-  auto root_bounds = root->GetBoundsInRootWindow();
-  root_bounds.set_height(root_bounds.height() /
-                         DockedMagnifierController::kScreenHeightDivisor);
-  return root_bounds;
 }
 
 // Returns the separator layer bounds from the given |viewport_bounds|. The
@@ -91,9 +80,15 @@ inline gfx::Rect SeparatorBoundsFromViewportBounds(
 }
 
 // Returns the child container in |root| that should be used as the parent of
-// viewport widget and the separator layer.
+// viewport widget.
 aura::Window* GetViewportParentContainerForRoot(aura::Window* root) {
   return root->GetChildById(kShellWindowId_DockedMagnifierContainer);
+}
+
+// Returns the child container in |root| that should be used as the parent of
+// the separator layer.
+aura::Window* GetViewportParentContainerForDivider(aura::Window* root) {
+  return root->GetChildById(kShellWindowId_OverlayContainer);
 }
 
 }  // namespace
@@ -101,22 +96,14 @@ aura::Window* GetViewportParentContainerForRoot(aura::Window* root) {
 // static
 DockedMagnifierController::DockedMagnifierController() {
   Shell::Get()->session_controller()->AddObserver(this);
-  if (ui::IMEBridge::Get())
-    ui::IMEBridge::Get()->AddObserver(this);
 }
 
 DockedMagnifierController::~DockedMagnifierController() {
-  if (input_method_)
-    input_method_->RemoveObserver(this);
-  input_method_ = nullptr;
-  if (ui::IMEBridge::Get())
-    ui::IMEBridge::Get()->RemoveObserver(this);
-
   Shell* shell = Shell::Get();
   shell->session_controller()->RemoveObserver(this);
 
   if (GetEnabled()) {
-    shell->window_tree_host_manager()->RemoveObserver(this);
+    shell->display_manager()->RemoveDisplayManagerObserver(this);
     shell->RemovePreTargetHandler(this);
   }
   CHECK(!views::WidgetObserver::IsInObserverList());
@@ -125,9 +112,20 @@ DockedMagnifierController::~DockedMagnifierController() {
 // static
 void DockedMagnifierController::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kDockedMagnifierEnabled, false);
+  const uint32_t registration_flags_batch3 =
+      base::FeatureList::IsEnabled(features::kOsSyncAccessibilitySettingsBatch3)
+          ? user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF
+          : 0;
+  registry->RegisterBooleanPref(prefs::kDockedMagnifierEnabled, false,
+                                registration_flags_batch3);
   registry->RegisterDoublePref(prefs::kDockedMagnifierScale,
-                               kDefaultMagnifierScale);
+                               kDefaultMagnifierScale,
+                               registration_flags_batch3);
+  // Screen height divisor is not synced as it may result in undesired behavior
+  // when synced across devices with screens that have different physical
+  // dimensions.
+  registry->RegisterDoublePref(prefs::kDockedMagnifierScreenHeightDivisor,
+                               kDefaultScreenHeightDivisor);
 }
 
 bool DockedMagnifierController::GetEnabled() const {
@@ -142,6 +140,15 @@ float DockedMagnifierController::GetScale() const {
   return kDefaultMagnifierScale;
 }
 
+float DockedMagnifierController::GetScreenHeightDivisor() const {
+  if (active_user_pref_service_) {
+    return active_user_pref_service_->GetDouble(
+        prefs::kDockedMagnifierScreenHeightDivisor);
+  }
+
+  return kDefaultScreenHeightDivisor;
+}
+
 void DockedMagnifierController::SetEnabled(bool enabled) {
   if (active_user_pref_service_) {
     active_user_pref_service_->SetBoolean(prefs::kDockedMagnifierEnabled,
@@ -153,7 +160,17 @@ void DockedMagnifierController::SetScale(float scale) {
   if (active_user_pref_service_) {
     active_user_pref_service_->SetDouble(
         prefs::kDockedMagnifierScale,
-        base::ClampToRange(scale, kMinMagnifierScale, kMaxMagnifierScale));
+        std::clamp(scale, kMinMagnifierScale, kMaxMagnifierScale));
+  }
+}
+
+void DockedMagnifierController::SetScreenHeightDivisor(
+    float screen_height_divisor) {
+  if (active_user_pref_service_) {
+    active_user_pref_service_->SetDouble(
+        prefs::kDockedMagnifierScreenHeightDivisor,
+        std::clamp(screen_height_divisor, kMinScreenHeightDivisor,
+                   kMaxScreenHeightDivisor));
   }
 }
 
@@ -165,8 +182,6 @@ void DockedMagnifierController::StepToNextScaleValue(int delta_index) {
 void DockedMagnifierController::MoveMagnifierToRect(
     const gfx::Rect& rect_in_screen) {
   DCHECK(GetEnabled());
-  last_move_magnifier_to_rect_ = base::TimeTicks::Now();
-
   gfx::Point point_in_screen = rect_in_screen.CenterPoint();
 
   // If rect is too wide to fit in viewport, include as much as we can, starting
@@ -188,7 +203,7 @@ void DockedMagnifierController::CenterOnPoint(
   if (!GetEnabled())
     return;
 
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   auto* window = screen->GetWindowAtScreenPoint(point_in_screen);
   if (!window) {
     // In tests and sometimes initially on signin screen, |point_in_screen|
@@ -232,7 +247,9 @@ void DockedMagnifierController::CenterOnPoint(
   // 2- Translate the point of interest to the center point of the viewport
   //    widget.
   const gfx::Point viewport_center_point =
-      GetViewportWidgetBoundsInRoot(current_source_root_window_).CenterPoint();
+      magnifier_utils::GetViewportWidgetBoundsInRoot(
+          current_source_root_window_, GetScreenHeightDivisor())
+          .CenterPoint();
   gfx::Transform transform;
   transform.Translate(viewport_center_point.x() - point_in_pixels.x(),
                       viewport_center_point.y() - point_in_pixels.y());
@@ -244,7 +261,7 @@ void DockedMagnifierController::CenterOnPoint(
   // point of interest due to input caret bounds changes ... etc.).
   ui::ScopedLayerAnimationSettings settings(
       viewport_magnifier_layer_->GetAnimator());
-  settings.SetTransitionDuration(base::TimeDelta::FromMilliseconds(0));
+  settings.SetTransitionDuration(base::Milliseconds(0));
   settings.SetTweenType(gfx::Tween::ZERO);
   settings.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_SET_NEW_TARGET);
   viewport_magnifier_layer_->SetTransform(transform);
@@ -267,6 +284,7 @@ void DockedMagnifierController::OnSigninScreenPrefServiceInitialized(
 
 void DockedMagnifierController::OnMouseEvent(ui::MouseEvent* event) {
   DCHECK(GetEnabled());
+  MaybePerformViewportResizing(event);
   CenterOnPoint(GetCursorScreenPoint());
 }
 
@@ -275,13 +293,13 @@ void DockedMagnifierController::OnScrollEvent(ui::ScrollEvent* event) {
   if (!event->IsAltDown() || !event->IsControlDown())
     return;
 
-  if (event->type() == ui::ET_SCROLL_FLING_START ||
-      event->type() == ui::ET_SCROLL_FLING_CANCEL) {
+  if (event->type() == ui::EventType::kScrollFlingStart ||
+      event->type() == ui::EventType::kScrollFlingCancel) {
     event->StopPropagation();
     return;
   }
 
-  if (event->type() == ui::ET_SCROLL) {
+  if (event->type() == ui::EventType::kScroll) {
     // Notes: - Clamping of the new scale value happens inside SetScale().
     //        - Refreshing the viewport happens in the handler of the scale pref
     //          changes.
@@ -299,66 +317,16 @@ void DockedMagnifierController::OnTouchEvent(ui::TouchEvent* event) {
   aura::Window* event_root = target->GetRootWindow();
   gfx::Point event_screen_point = event->root_location();
   ::wm::ConvertPointToScreen(event_root, &event_screen_point);
+
+  // Ignore touch events on virtual Keyboard, to stabilize docked magnifier.
+  if (keyboard::KeyboardUIController::Get()->IsEnabled() &&
+      keyboard::KeyboardUIController::Get()
+          ->GetKeyboardWindow()
+          ->GetBoundsInScreen()
+          .Contains(event_screen_point))
+    return;
+
   CenterOnPoint(event_screen_point);
-}
-
-void DockedMagnifierController::OnInputContextHandlerChanged() {
-  if (!GetEnabled())
-    return;
-
-  auto* new_input_method =
-      magnifier_utils::GetInputMethod(current_source_root_window_);
-  if (new_input_method == input_method_)
-    return;
-
-  if (input_method_)
-    input_method_->RemoveObserver(this);
-  input_method_ = new_input_method;
-  if (input_method_)
-    input_method_->AddObserver(this);
-}
-
-void DockedMagnifierController::OnInputMethodDestroyed(
-    const ui::InputMethod* input_method) {
-  DCHECK_EQ(input_method, input_method_);
-  input_method_->RemoveObserver(this);
-  input_method_ = nullptr;
-}
-
-void DockedMagnifierController::OnCaretBoundsChanged(
-    const ui::TextInputClient* client) {
-  if (!GetEnabled()) {
-    // There is a small window between the time the "enabled" pref is updated to
-    // false, and the time we're notified with this change, upon which we remove
-    // the magnifier's viewport widget and stop observing the input method.
-    // During this short interval, if focus is in an editable element, the input
-    // method can notify us here. In this case, we should just return.
-    return;
-  }
-
-  aura::client::DragDropClient* drag_drop_client =
-      aura::client::GetDragDropClient(current_source_root_window_);
-  if (drag_drop_client && drag_drop_client->IsDragDropInProgress()) {
-    // Ignore caret bounds change events when they result from changes in window
-    // bounds due to dragging. This is to leave the viewport centered around the
-    // cursor.
-    return;
-  }
-
-  const gfx::Rect caret_screen_bounds = client->GetCaretBounds();
-  // In many cases, espcially text input events coming from webpages, the caret
-  // screen width is 0. Hence we can't check IsEmpty() since it returns true if
-  // either of the width or height is 0. We want to abort if only both are 0s.
-  if (!caret_screen_bounds.width() && !caret_screen_bounds.height())
-    return;
-
-  // Wait a few milliseconds to see if any move magnifier to rect activity is
-  // occurring.
-  // TODO(accessibility): Remove once we move caret following to magnifier.js.
-  last_caret_screen_point_ = caret_screen_bounds.CenterPoint();
-  move_magnifier_timer_.Start(
-      FROM_HERE, kMoveMagnifierCaretDelay, this,
-      &DockedMagnifierController::OnMoveMagnifierTimer);
 }
 
 void DockedMagnifierController::OnWidgetDestroying(views::Widget* widget) {
@@ -368,7 +336,7 @@ void DockedMagnifierController::OnWidgetDestroying(views::Widget* widget) {
                                         false /* update_old_root_workarea */);
 }
 
-void DockedMagnifierController::OnDisplayConfigurationChanged() {
+void DockedMagnifierController::OnDidApplyDisplayChanges() {
   DCHECK(GetEnabled());
 
   // The viewport might have been on a display that just got removed, and hence
@@ -376,8 +344,8 @@ void DockedMagnifierController::OnDisplayConfigurationChanged() {
   // that case we also cleared the |current_source_root_window_|.
   if (current_source_root_window_) {
     // Resolution may have changed. Update all bounds.
-    const auto viewport_bounds =
-        GetViewportWidgetBoundsInRoot(current_source_root_window_);
+    const auto viewport_bounds = magnifier_utils::GetViewportWidgetBoundsInRoot(
+        current_source_root_window_, GetScreenHeightDivisor());
     viewport_widget_->SetBounds(viewport_bounds);
     viewport_background_layer_->SetBounds(viewport_bounds);
     separator_layer_->SetBounds(
@@ -387,8 +355,10 @@ void DockedMagnifierController::OnDisplayConfigurationChanged() {
 
     // Resolution changes, screen rotation, etc. can reset the host to confine
     // the mouse cursor inside the root window. We want to make sure the cursor
-    // is confined properly outside the viewport.
-    ConfineMouseCursorOutsideViewport();
+    // is confined properly outside the viewport. But don't confine mouse if
+    // resizing.
+    if (!is_resizing_)
+      ConfineMouseCursorOutsideViewport();
   }
 
   // A change in display configuration, such as resolution, rotation, ... etc.
@@ -405,8 +375,7 @@ bool DockedMagnifierController::GetFullscreenMagnifierEnabled() const {
              prefs::kAccessibilityScreenMagnifierEnabled);
 }
 
-void DockedMagnifierController::SetFullscreenMagnifierEnabled(
-    bool enabled) {
+void DockedMagnifierController::SetFullscreenMagnifierEnabled(bool enabled) {
   if (active_user_pref_service_) {
     active_user_pref_service_->SetBoolean(
         prefs::kAccessibilityScreenMagnifierEnabled, enabled);
@@ -420,8 +389,24 @@ int DockedMagnifierController::GetTotalMagnifierHeight() const {
   return 0;
 }
 
-const views::Widget*
-DockedMagnifierController::GetViewportWidgetForTesting() const {
+gfx::Rect DockedMagnifierController::GetTotalMagnifierBoundsForRoot(
+    aura::Window* root) const {
+  DCHECK(root);
+  DCHECK(root->IsRootWindow());
+
+  if (viewport_widget_ && current_source_root_window_ == root) {
+    gfx::Rect bounds =
+        viewport_widget_->GetNativeWindow()->GetActualBoundsInRootWindow();
+    DCHECK(separator_layer_);
+    bounds.set_height(separator_layer_->bounds().bottom());
+    return bounds;
+  }
+
+  return gfx::Rect();
+}
+
+const views::Widget* DockedMagnifierController::GetViewportWidgetForTesting()
+    const {
   return viewport_widget_;
 }
 
@@ -435,9 +420,89 @@ float DockedMagnifierController::GetMinimumPointOfInterestHeightForTesting()
   return minimum_point_of_interest_height_;
 }
 
-gfx::Point DockedMagnifierController::GetLastCaretScreenPointForTesting()
-    const {
-  return last_caret_screen_point_;
+void DockedMagnifierController::MaybeSetCursorSize(ui::CursorSize cursor_size) {
+  if (Shell::Get()->accessibility_controller()->large_cursor().enabled())
+    return;
+  Shell::Get()->cursor_manager()->SetCursorSize(cursor_size);
+}
+
+void DockedMagnifierController::MaybePerformViewportResizing(
+    ui::MouseEvent* event) {
+  DCHECK(current_source_root_window_);
+  gfx::Rect root_bounds = current_source_root_window_->GetBoundsInRootWindow();
+  float magnifier_height = root_bounds.height() / GetScreenHeightDivisor();
+  float root_y = event->root_location_f().y();
+  const int separator_top = separator_layer_->bounds().y();
+  const int separator_bottom = separator_layer_->bounds().bottom();
+  bool cursor_is_over_resizer =
+      root_y >= separator_top - 1 && root_y <= separator_bottom;
+  ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+  CursorWindowController* cursor_window_controller =
+      Shell::Get()->window_tree_host_manager()->cursor_window_controller();
+
+  // If cursor is over separator, change to north/south resize, move on top.
+  // Reset once the cursor is not over separator, and user isn't resizing.
+  if (cursor_is_over_resizer && !is_cursor_locked_) {
+    MaybeSetCursorSize(ui::CursorSize::kLarge);
+    cursor_manager->SetCursor(ui::mojom::CursorType::kNorthSouthResize);
+    cursor_manager->LockCursor();
+    cursor_window_controller->OnDockedMagnifierResizingStateChanged(true);
+    is_cursor_locked_ = true;
+  } else if (!cursor_is_over_resizer && !is_resizing_) {
+    MaybeResetResizingCursor();
+  }
+
+  // If user releases left mouse button, or any other mouse button is pressed,
+  // ignore and stop resizing.
+  if (!event->IsOnlyLeftMouseButton() ||
+      event->type() == ui::EventType::kMouseReleased) {
+    if (is_resizing_) {
+      is_resizing_ = false;
+      ConfineMouseCursorOutsideViewport();
+    }
+    return;
+  }
+  float new_screen_height_divisor =
+      root_bounds.height() / std::max(1.0f, root_y + resize_offset_);
+
+  switch (event->type()) {
+    case ui::EventType::kMousePressed:
+      // User clicks within separator to start resizing Docked Magnifier.
+      // Subtracting one is needed to capture when mouse is at the very top.
+      if (!is_resizing_ && cursor_is_over_resizer) {
+        resize_offset_ = magnifier_height - root_y;
+        is_resizing_ = true;
+        RootWindowController::ForWindow(current_source_root_window_)
+            ->ash_host()
+            ->ConfineCursorToRootWindow();
+      }
+      break;
+    case ui::EventType::kMouseDragged:
+      // User continues holding and drags separator to resize Docked Magnifier.
+      if (is_resizing_) {
+        SetScreenHeightDivisor(std::clamp(new_screen_height_divisor,
+                                          kMinScreenHeightDivisor,
+                                          kMaxScreenHeightDivisor));
+        OnDidApplyDisplayChanges();
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+void DockedMagnifierController::MaybeResetResizingCursor() {
+  if (!is_cursor_locked_) {
+    return;
+  }
+
+  MaybeSetCursorSize(ui::CursorSize::kNormal);
+  Shell::Get()->cursor_manager()->UnlockCursor();
+  Shell::Get()
+      ->window_tree_host_manager()
+      ->cursor_window_controller()
+      ->OnDockedMagnifierResizingStateChanged(false);
+  is_cursor_locked_ = false;
 }
 
 void DockedMagnifierController::SwitchCurrentSourceRootWindowIfNeeded(
@@ -454,14 +519,6 @@ void DockedMagnifierController::SwitchCurrentSourceRootWindowIfNeeded(
   is_minimum_point_of_interest_height_valid_ = false;
 
   if (old_root_window) {
-    // Order here matters. We should stop observing caret bounds changes before
-    // updating the work area bounds of the old root window. Otherwise, work
-    // area bounds changes will lead to caret bounds changes that recurses back
-    // here unnecessarily. https://crbug.com/1000903.
-    if (input_method_)
-      input_method_->RemoveObserver(this);
-    input_method_ = nullptr;
-
     if (update_old_root_workarea)
       SetViewportHeightInWorkArea(old_root_window, 0);
 
@@ -489,10 +546,6 @@ void DockedMagnifierController::SwitchCurrentSourceRootWindowIfNeeded(
 
   CreateMagnifierViewport();
 
-  input_method_ = magnifier_utils::GetInputMethod(current_source_root_window_);
-  if (input_method_)
-    input_method_->AddObserver(this);
-
   auto* magnified_container = current_source_root_window_->GetChildById(
       kShellWindowId_MagnifiedContainer);
   viewport_magnifier_layer_->SetShowReflectedLayerSubtree(
@@ -514,9 +567,9 @@ void DockedMagnifierController::InitFromUserPrefs() {
                           base::Unretained(this)));
   pref_change_registrar_->Add(
       prefs::kAccessibilityScreenMagnifierEnabled,
-      base::BindRepeating(&DockedMagnifierController::
-                              OnFullscreenMagnifierEnabledPrefChanged,
-                          base::Unretained(this)));
+      base::BindRepeating(
+          &DockedMagnifierController::OnFullscreenMagnifierEnabledPrefChanged,
+          base::Unretained(this)));
 
   OnEnabledPrefChanged();
 }
@@ -562,11 +615,13 @@ void DockedMagnifierController::OnEnabledPrefChanged() {
     Refresh();
     // Make sure we are in front of the fullscreen magnifier which also handles
     // scroll events.
-    shell->AddPreTargetHandler(this, ui::EventTarget::Priority::kSystem);
-    shell->window_tree_host_manager()->AddObserver(this);
+    shell->AddAccessibilityEventHandler(
+        this, AccessibilityEventHandlerManager::HandlerType::kDockedMagnifier);
+    shell->display_manager()->AddDisplayManagerObserver(this);
   } else {
-    shell->window_tree_host_manager()->RemoveObserver(this);
-    shell->RemovePreTargetHandler(this);
+    shell->display_manager()->RemoveDisplayManagerObserver(this);
+    shell->RemoveAccessibilityEventHandler(this);
+    MaybeResetResizingCursor();
 
     // Setting the current root window to |nullptr| will remove the viewport and
     // all its associated layers.
@@ -607,36 +662,40 @@ void DockedMagnifierController::CreateMagnifierViewport() {
   DCHECK(GetEnabled());
   DCHECK(current_source_root_window_);
 
-  const auto viewport_bounds =
-      GetViewportWidgetBoundsInRoot(current_source_root_window_);
+  const auto viewport_bounds = magnifier_utils::GetViewportWidgetBoundsInRoot(
+      current_source_root_window_, GetScreenHeightDivisor());
 
   // 1- Create the viewport widget.
   viewport_widget_ = new views::Widget;
   views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.accept_events = false;
   params.bounds = viewport_bounds;
   params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
-  aura::Window* const parent =
+  aura::Window* const viewport_parent =
       GetViewportParentContainerForRoot(current_source_root_window_);
-  params.parent = parent;
+  params.parent = viewport_parent;
   params.name = kDockedMagnifierViewportWindowName;
   viewport_widget_->Init(std::move(params));
 
   // 2- Create the separator layer right below the viwport widget, parented to
   //    the layer of the root window.
-  separator_layer_ = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-  separator_layer_->SetColor(SK_ColorBLACK);
+  separator_layer_ = std::make_unique<ui::LayerSolidColor>();
+  separator_layer_->SetName("DockedMagnifier:Separator");
+  separator_layer_->SetColor(SkColors::kBlack);
   separator_layer_->SetBounds(
       SeparatorBoundsFromViewportBounds(viewport_bounds));
-  parent->layer()->Add(separator_layer_.get());
+  aura::Window* const separator_parent =
+      GetViewportParentContainerForDivider(current_source_root_window_);
+  separator_parent->layer()->Add(separator_layer_.get());
 
   // 3- Create a background layer that will show a dark gray color behind the
   //    magnifier layer. It has the same bounds as the viewport.
-  viewport_background_layer_ =
-      std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-  viewport_background_layer_->SetColor(SK_ColorDKGRAY);
+  viewport_background_layer_ = std::make_unique<ui::LayerSolidColor>();
+  viewport_background_layer_->SetName("DockedMagnifier:Background");
+  viewport_background_layer_->SetColor(SkColors::kDkGray);
   viewport_background_layer_->SetBounds(viewport_bounds);
   aura::Window* viewport_window = viewport_widget_->GetNativeView();
   ui::Layer* viewport_layer = viewport_window->layer();
@@ -644,8 +703,8 @@ void DockedMagnifierController::CreateMagnifierViewport() {
 
   // 4- Create the layer in which the contents of the screen will be mirrored
   //    and magnified.
-  viewport_magnifier_layer_ =
-      std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+  viewport_magnifier_layer_ = std::make_unique<ui::LayerSolidColor>();
+  viewport_magnifier_layer_->SetName("DockedMagnifier:Viewport");
   // There are situations that the content rect for the magnified container gets
   // larger than its bounds (e.g. shelf stretches beyond the screen to allow it
   // being dragged up, or contents of mouse pointer might go beyond screen when
@@ -725,7 +784,8 @@ void DockedMagnifierController::MaybeCachePointOfInterestMinimumHeight(
   //    the point of interest may not go.
 
   const gfx::Rect viewport_bounds =
-      GetViewportWidgetBoundsInRoot(current_source_root_window_);
+      magnifier_utils::GetViewportWidgetBoundsInRoot(
+          current_source_root_window_, GetScreenHeightDivisor());
 
   // 1- Point (A)'s height.
   // Note we use a Vector3dF to actually represent a 2D point. The reason is
@@ -761,22 +821,14 @@ void DockedMagnifierController::ConfineMouseCursorOutsideViewport() {
 
   gfx::Rect confine_bounds =
       current_source_root_window_->GetBoundsInRootWindow();
-  const int docked_height = separator_layer_->bounds().bottom();
+  const auto viewport_bounds = magnifier_utils::GetViewportWidgetBoundsInRoot(
+      current_source_root_window_, GetScreenHeightDivisor());
+  const int docked_height = viewport_bounds.height();
   confine_bounds.Offset(0, docked_height);
   confine_bounds.set_height(confine_bounds.height() - docked_height);
   RootWindowController::ForWindow(current_source_root_window_)
       ->ash_host()
       ->ConfineCursorToBoundsInRoot(confine_bounds);
-}
-
-void DockedMagnifierController::OnMoveMagnifierTimer() {
-  // Ignore caret changes while move magnifier to rect activity is occurring.
-  if (base::TimeTicks::Now() - last_move_magnifier_to_rect_ <
-      magnifier_utils::kPauseCaretUpdateDuration) {
-    return;
-  }
-
-  CenterOnPoint(last_caret_screen_point_);
 }
 
 }  // namespace ash

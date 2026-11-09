@@ -21,8 +21,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_STATIC_CONSTRUCTORS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_STATIC_CONSTRUCTORS_H_
 
+#include <new>
+#include <type_traits>
+
 // We need to avoid having static constructors. This is accomplished by defining
-// a static array of the appropriate size and alignment, and defining a const
+// a buffer of the appropriate size and alignment, and defining a const
 // reference that points to the buffer. During initialization, the object will
 // be constructed with placement new into the buffer. This works with MSVC, GCC,
 // and Clang without producing dynamic initialization code even at -O0. The only
@@ -30,10 +33,8 @@
 // load, while a real global could be referenced directly by absolute or
 // relative addressing.
 
-// Use an array of pointers instead of an array of char in case there is some
-// alignment issue.
-#define DEFINE_GLOBAL(type, name)                                          \
-  void* name##Storage[(sizeof(type) + sizeof(void*) - 1) / sizeof(void*)]; \
-  const type& name = *reinterpret_cast<type*>(&name##Storage)
+#define DEFINE_GLOBAL(export_decl, type, name)                \
+  alignas(type) export_decl char name##Storage[sizeof(type)]; \
+  const type& name = *std::launder(reinterpret_cast<type*>(name##Storage))
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_STATIC_CONSTRUCTORS_H_

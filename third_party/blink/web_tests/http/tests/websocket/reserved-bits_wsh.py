@@ -1,21 +1,23 @@
 import re
-from mod_pywebsocket import common
-from mod_pywebsocket import stream
-from mod_pywebsocket import msgutil
+from pywebsocket3 import common
+from pywebsocket3 import stream
+from pywebsocket3 import msgutil
 
 bit = 0
 
 
 def web_socket_do_extra_handshake(request):
-    match = re.search(r'\?compressed=(true|false)&bitNumber=(\d)$',
-                      request.ws_resource)
+    match = re.search(
+        r'\?compressed=(true|false)&bitNumber=(\d)$', request.ws_resource
+    )
     if match is None:
-        msgutil.send_message(request,
-                             'FAIL: Query value is incorrect or missing')
+        msgutil.send_message(
+            request, 'FAIL: Query value is incorrect or missing'
+        )
         return
 
     global bit
-    compressed = match.group(1)
+    compressed = match.group(1)  # noqa: F841
     bit = int(match.group(2))
     request.ws_extension_processors = []  # using no extension response
 

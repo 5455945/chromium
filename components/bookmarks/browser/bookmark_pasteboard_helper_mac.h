@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,7 +19,8 @@ namespace bookmarks {
 void WriteBookmarksToPasteboard(
     NSPasteboard* pb,
     const std::vector<BookmarkNodeData::Element>& elements,
-    const base::FilePath& profile_path);
+    const base::FilePath& profile_path,
+    bool is_off_the_record);
 
 // Reads a set of bookmark elements from the specified pasteboard.
 bool ReadBookmarksFromPasteboard(
@@ -30,10 +31,6 @@ bool ReadBookmarksFromPasteboard(
 // Returns true if the specified pasteboard contains any sort of bookmark
 // elements. It currently does not consider a plaintext url a valid bookmark.
 bool PasteboardContainsBookmarks(NSPasteboard* pb);
-
-// UTI for dictionary containing bookmark structure consisting of individual
-// bookmark nodes and/or bookmark folders.
-extern NSString* const kUTTypeChromiumBookmarkDictionaryList;
 
 }  // namespace bookmarks
 

@@ -29,11 +29,12 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_vertex_array_object_oes.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
-OESVertexArrayObject::OESVertexArrayObject(WebGLRenderingContextBase* context)
+OESVertexArrayObject::OESVertexArrayObject(WebGLRenderingContextBase* context,
+                                           ExecutionContext*)
     : WebGLExtension(context) {
   context->ExtensionsUtil()->EnsureExtensionEnabled(
       "GL_OES_vertex_array_object");
@@ -45,17 +46,34 @@ WebGLExtensionName OESVertexArrayObject::GetName() const {
 
 WebGLVertexArrayObjectOES* OESVertexArrayObject::createVertexArrayOES() {
   WebGLExtensionScopedContext scoped(this);
-  if (scoped.IsLost())
-    return nullptr;
+
+  // Object creation must be infallible even if the context is lost.
+  if (scoped.IsLost()) {
+    return MakeGarbageCollected<WebGLVertexArrayObjectOES>(
+        scoped.Context(), WebGLVertexArrayObjectOES::kVaoTypeUser, 0);
+  }
 
   return MakeGarbageCollected<WebGLVertexArrayObjectOES>(
-      scoped.Context(), WebGLVertexArrayObjectOES::kVaoTypeUser);
+      scoped.Context(), WebGLVertexArrayObjectOES::kVaoTypeUser,
+      scoped.Context()->MaxVertexAttribs());
 }
 
 void OESVertexArrayObject::deleteVertexArrayOES(
     WebGLVertexArrayObjectOES* array_object) {
   WebGLExtensionScopedContext scoped(this);
-  if (!array_object || scoped.IsLost())
+  if (scoped.IsLost() || !array_object)
+    return;
+
+  // ValidateWebGLObject generates an error if the object has already been
+  // deleted, so we must replicate most of its checks here.
+  if (!array_object->Validate(scoped.Context())) {
+    scoped.Context()->SynthesizeGLError(
+        GL_INVALID_OPERATION, "deleteVertexArrayOES",
+        "object does not belong to this context");
+    return;
+  }
+
+  if (array_object->MarkedForDeletion())
     return;
 
   if (!array_object->IsDefaultObject() &&
@@ -65,16 +83,18 @@ void OESVertexArrayObject::deleteVertexArrayOES(
   array_object->DeleteObject(scoped.Context()->ContextGL());
 }
 
-GLboolean OESVertexArrayObject::isVertexArrayOES(
+bool OESVertexArrayObject::isVertexArrayOES(
     WebGLVertexArrayObjectOES* array_object) {
   WebGLExtensionScopedContext scoped(this);
-  if (!array_object || scoped.IsLost())
-    return 0;
+  if (scoped.IsLost() || !array_object ||
+      !array_object->Validate(scoped.Context())) {
+    return false;
+  }
 
   if (!array_object->HasEverBeenBound())
-    return 0;
+    return false;
   if (array_object->MarkedForDeletion())
-    return 0;
+    return false;
 
   return scoped.Context()->ContextGL()->IsVertexArrayOES(
       array_object->Object());

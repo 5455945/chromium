@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/strings/string_view_util.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_pending_task.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/cloud/external_policy_data_fetcher.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -35,12 +37,16 @@ namespace policy {
 
 namespace {
 
-const char* kExternalPolicyDataKeys[] = {"external_policy_data_1",
-                                         "external_policy_data_2",
-                                         "external_policy_data_3"};
-const char* kExternalPolicyDataURLs[] = {"http://example.com/data_1",
-                                         "http://example.com/data_2",
-                                         "http://example.com/data_3"};
+constexpr auto kExternalPolicyDataKeys = std::to_array<const char*>({
+    "external_policy_data_1",
+    "external_policy_data_2",
+    "external_policy_data_3",
+});
+constexpr auto kExternalPolicyDataURLs = std::to_array<const char*>({
+    "http://example.com/data_1",
+    "http://example.com/data_2",
+    "http://example.com/data_3",
+});
 
 const int64_t kExternalPolicyDataMaxSize = 20;
 
@@ -125,7 +131,8 @@ ExternalPolicyDataUpdater::Request
     ExternalPolicyDataUpdaterTest::CreateRequest(const std::string& url) const {
   return ExternalPolicyDataUpdater::Request(
       url,
-      crypto::SHA256HashString(kExternalPolicyDataPayload),
+      std::string(base::as_string_view(
+          crypto::hash::Sha256(kExternalPolicyDataPayload))),
       kExternalPolicyDataMaxSize);
 }
 
@@ -302,8 +309,8 @@ TEST_F(ExternalPolicyDataUpdaterTest, RetryWithBackoff) {
   // Make a fetch request.
   RequestExternalDataFetchAndWait(0);
 
-  base::TimeDelta expected_delay = base::TimeDelta::FromSeconds(15);
-  const base::TimeDelta delay_cap = base::TimeDelta::FromHours(12);
+  base::TimeDelta expected_delay = base::Seconds(15);
+  const base::TimeDelta delay_cap = base::Hours(12);
 
   // The backoff delay is capped at 12 hours, which is reached after 12 retries:
   // 15 * 2^12 == 61440 > 43200 == 12 * 60 * 60
@@ -330,8 +337,7 @@ TEST_F(ExternalPolicyDataUpdaterTest, RetryWithBackoff) {
     // to 100%.
     base::TimeDelta delay = backend_task_runner_->NextPendingTaskDelay();
     EXPECT_GT(delay,
-              base::TimeDelta::FromMilliseconds(
-                  0.799 * expected_delay.InMilliseconds()));
+              base::Milliseconds(0.799 * expected_delay.InMilliseconds()));
     EXPECT_LE(delay, expected_delay);
 
     if (i < 12) {

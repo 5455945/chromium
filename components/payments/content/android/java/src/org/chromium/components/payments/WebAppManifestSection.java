@@ -1,10 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.payments;
 
-/** Java equivalent of components/payments/content/web_app_manifest.h:WebAppManifestSection */
+import org.chromium.build.annotations.NullMarked;
+
+/** Java equivalent of components/payments/core/web_app_manifest_section.h:WebAppManifestSection */
+@NullMarked
 public final class WebAppManifestSection {
     /**
      * Constructor that does not set the fingerprints. They have to be set after the object is

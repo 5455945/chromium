@@ -1,10 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SYNC_ENGINE_CANCELATION_SIGNAL_H_
 #define COMPONENTS_SYNC_ENGINE_CANCELATION_SIGNAL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 
 namespace syncer {
@@ -61,7 +62,7 @@ class CancelationSignal {
 
   // Sets the stop_requested_ flag and calls the OnCancelationSignalReceived()
   // method of the registered handler, if there is one registered at the time.
-  // SignalReceived() will be called with the |signal_lock_| held.
+  // SignalReceived() will be called with the `signal_lock_` held.
   void Signal();
 
  private:
@@ -72,7 +73,7 @@ class CancelationSignal {
   bool signalled_ = false;
 
   // The registered abort handler.  May be null.
-  Observer* handler_ = nullptr;
+  raw_ptr<Observer> handler_ = nullptr;
 };
 
 }  // namespace syncer

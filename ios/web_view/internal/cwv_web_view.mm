@@ -1,86 +1,145 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/web_view/internal/cwv_web_view_internal.h"
-
-#include <memory>
-#include <unordered_map>
-#include <utility>
-
 #import <WebKit/WebKit.h>
 
-#include "base/bind.h"
-#include "base/json/json_writer.h"
-#include "base/mac/foundation_util.h"
-#include "base/strings/sys_string_conversions.h"
+#import <memory>
+#import <unordered_map>
+#import <utility>
+
+#import "base/apple/foundation_util.h"
+#import "base/check.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
+#import "base/json/json_writer.h"
+#import "base/notreached.h"
+#import "base/strings/sys_string_conversions.h"
 #import "components/autofill/ios/browser/autofill_agent.h"
-#include "components/autofill/ios/form_util/unique_id_data_tab_helper.h"
-#include "components/language/ios/browser/ios_language_detection_tab_helper.h"
-#include "components/password_manager/core/browser/password_manager.h"
+#import "components/password_manager/core/browser/password_manager.h"
+#import "components/password_manager/ios/password_controller_driver_helper.h"
 #import "components/password_manager/ios/shared_password_controller.h"
-#include "components/url_formatter/elide_url.h"
-#include "google_apis/google_api_keys.h"
-#import "ios/web/public/deprecated/crw_js_injection_receiver.h"
-#include "ios/web/public/favicon/favicon_url.h"
-#include "ios/web/public/js_messaging/web_frame.h"
+#import "components/safe_browsing/ios/browser/safe_browsing_url_allow_list.h"
+#import "components/url_formatter/elide_url.h"
+#import "ios/components/security_interstitials/lookalikes/lookalike_url_container.h"
+#import "ios/components/security_interstitials/lookalikes/lookalike_url_tab_allow_list.h"
+#import "ios/components/security_interstitials/lookalikes/lookalike_url_tab_helper.h"
+#import "ios/components/security_interstitials/safe_browsing/safe_browsing_client.h"
+#import "ios/components/security_interstitials/safe_browsing/safe_browsing_query_manager.h"
+#import "ios/components/security_interstitials/safe_browsing/safe_browsing_tab_helper.h"
+#import "ios/components/security_interstitials/safe_browsing/safe_browsing_unsafe_resource_container.h"
+#import "ios/web/navigation/nscoder_util.h"
+#import "ios/web/public/favicon/favicon_url.h"
+#import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
 #import "ios/web/public/navigation/navigation_context.h"
 #import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/navigation/navigation_manager.h"
-#include "ios/web/public/navigation/referrer.h"
-#include "ios/web/public/navigation/reload_type.h"
+#import "ios/web/public/navigation/referrer.h"
+#import "ios/web/public/navigation/reload_type.h"
+#import "ios/web/public/session/proto/metadata.pb.h"
+#import "ios/web/public/session/proto/storage.pb.h"
 #import "ios/web/public/ui/context_menu_params.h"
 #import "ios/web/public/ui/crw_web_view_proxy.h"
 #import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_view_only/wk_web_view_configuration_util.h"
-#include "ios/web_view/internal/app/application_context.h"
+#import "ios/web_view/internal/app/application_context.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_controller_internal.h"
 #import "ios/web_view/internal/autofill/web_view_autofill_client_ios.h"
 #import "ios/web_view/internal/cwv_back_forward_list_internal.h"
 #import "ios/web_view/internal/cwv_favicon_internal.h"
+#import "ios/web_view/internal/cwv_find_in_page_controller_internal.h"
+#import "ios/web_view/internal/cwv_global_state_internal.h"
 #import "ios/web_view/internal/cwv_html_element_internal.h"
 #import "ios/web_view/internal/cwv_navigation_action_internal.h"
-#import "ios/web_view/internal/cwv_script_command_internal.h"
 #import "ios/web_view/internal/cwv_ssl_status_internal.h"
 #import "ios/web_view/internal/cwv_web_view_configuration_internal.h"
+#import "ios/web_view/internal/cwv_web_view_internal.h"
 #import "ios/web_view/internal/language/web_view_url_language_histogram_factory.h"
 #import "ios/web_view/internal/passwords/web_view_password_manager_client.h"
-#import "ios/web_view/internal/passwords/web_view_password_manager_driver.h"
+#import "ios/web_view/internal/safe_browsing/web_view_safe_browsing_client_factory.h"
 #import "ios/web_view/internal/translate/cwv_translation_controller_internal.h"
 #import "ios/web_view/internal/translate/web_view_translate_client.h"
-#include "ios/web_view/internal/web_view_browser_state.h"
-#include "ios/web_view/internal/web_view_global_state_util.h"
+#import "ios/web_view/internal/web_view_browser_state.h"
 #import "ios/web_view/internal/web_view_java_script_dialog_presenter.h"
+#import "ios/web_view/internal/web_view_message_handler_java_script_feature.h"
 #import "ios/web_view/internal/web_view_web_state_policy_decider.h"
 #import "ios/web_view/public/cwv_navigation_delegate.h"
+#import "ios/web_view/public/cwv_preferences.h"
 #import "ios/web_view/public/cwv_preview_element_info.h"
 #import "ios/web_view/public/cwv_ui_delegate.h"
 #import "ios/web_view/public/cwv_web_view_configuration.h"
-#import "net/base/mac/url_conversions.h"
-#include "ui/base/page_transition_types.h"
-#include "url/gurl.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "net/base/apple/url_conversions.h"
+#import "ui/base/page_transition_types.h"
+#import "url/gurl.h"
 
 namespace {
-// A key used in NSCoder to store the session storage object.
-NSString* const kSessionStorageKey = @"sessionStorage";
 
-// Converts base::Value expected to be a dictionary to NSDictionary.
-NSDictionary* NSDictionaryFromDictionaryValue(const base::Value& value) {
-  DCHECK(value.is_dict()) << "Incorrect value type: " << value.type();
+BOOL gChromeContextMenuEnabled = NO;
+BOOL gWebInspectorEnabled = NO;
+BOOL gSkipAccountStorageCheckEnabled = NO;
 
+// Keys used to store CWVWebViewProtobufStorage and its properties.
+NSString* const kProtobufStorageKey = @"protobufStorage";
+NSString* const kStorageKey = @"storage";
+NSString* const kSessionKey = @"session";
+
+// Policy to use when realizing the deserialized WebState.
+constexpr web::WebState::RealizationPolicy kRealizationPolicy =
+    web::WebState::RealizationPolicy::kEnforceNoAttachedData;
+
+// Converts base::Value expected to be a dictionary or list to NSDictionary or
+// NSArray, respectively.
+id NSObjectFromCollectionValue(const base::Value* value) {
+  DCHECK(value->is_dict() || value->is_list())
+      << "Incorrect value type: " << value->type();
+
+  std::string json;
+  const bool success = base::JSONWriter::Write(*value, &json);
+  DCHECK(success) << "Failed to convert base::Value to JSON";
+
+  NSData* json_data = [NSData dataWithBytes:json.c_str() length:json.length()];
+  id ns_object = [NSJSONSerialization JSONObjectWithData:json_data
+                                                 options:kNilOptions
+                                                   error:nil];
+  DCHECK(ns_object) << "Failed to convert JSON to Collection";
+  return ns_object;
+}
+
+// Converts base::Value to an appropriate Obj-C object.
+// |value| must not be null.
+id NSObjectFromValue(const base::Value* value) {
+  switch (value->type()) {
+    case base::Value::Type::NONE:
+      return nil;
+    case base::Value::Type::BOOLEAN:
+      return @(value->GetBool());
+    case base::Value::Type::INTEGER:
+      return @(value->GetInt());
+    case base::Value::Type::DOUBLE:
+      return @(value->GetDouble());
+    case base::Value::Type::STRING:
+      return base::SysUTF8ToNSString(value->GetString());
+    case base::Value::Type::BINARY:
+      // Unsupported.
+      return nil;
+    case base::Value::Type::DICT:
+    case base::Value::Type::LIST:
+      return NSObjectFromCollectionValue(value);
+  }
+  return nil;
+}
+
+// Converts base::DictValue to NSDictionary.
+NSDictionary* NSDictionaryFromDictValue(const base::DictValue& value) {
   std::string json;
   const bool success = base::JSONWriter::Write(value, &json);
   DCHECK(success) << "Failed to convert base::Value to JSON";
 
   NSData* json_data = [NSData dataWithBytes:json.c_str() length:json.length()];
-  NSDictionary* ns_dictionary = base::mac::ObjCCastStrict<NSDictionary>(
+  NSDictionary* ns_dictionary = base::apple::ObjCCastStrict<NSDictionary>(
       [NSJSONSerialization JSONObjectWithData:json_data
                                       options:kNilOptions
                                         error:nil]);
@@ -99,11 +158,182 @@ class WebViewHolder : public web::WebStateUserData<WebViewHolder> {
   friend class web::WebStateUserData<WebViewHolder>;
 
   __weak CWVWebView* web_view_ = nil;
-  WEB_STATE_USER_DATA_KEY_DECL();
 };
 
-WEB_STATE_USER_DATA_KEY_IMPL(WebViewHolder)
 }  // namespace
+
+// Used to serialize the protobuf message and the WebStateID.
+@interface CWVWebViewProtobufStorage : NSObject <NSSecureCoding>
+
+- (instancetype)initWithProto:(web::proto::WebStateStorage)storage
+                   webStateID:(web::WebStateID)webStateID
+    NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)initWithCoder:(NSCoder*)coder;
+
+- (instancetype)init NS_UNAVAILABLE;
+
+// Creates a new WebState with `browserState`.
+- (std::unique_ptr<web::WebState>)createWebState:
+    (web::BrowserState*)browserState;
+
+@end
+
+@implementation CWVWebViewProtobufStorage {
+  web::proto::WebStateStorage _storage;
+  web::WebStateID _webStateID;
+}
+
+- (instancetype)initWithProto:(web::proto::WebStateStorage)storage
+                   webStateID:(web::WebStateID)webStateID {
+  if ((self = [super init])) {
+    _storage = std::move(storage);
+    _webStateID = webStateID;
+  }
+  return self;
+}
+
+- (instancetype)initWithCoder:(NSCoder*)coder {
+  if (![coder containsValueForKey:kStorageKey]) {
+    return nil;
+  }
+
+  if (![coder containsValueForKey:kSessionKey]) {
+    return nil;
+  }
+
+  const std::string buffer =
+      web::nscoder_util::DecodeString(coder, kStorageKey);
+
+  web::proto::WebStateStorage storage;
+  if (!storage.ParseFromString(buffer)) {
+    return nil;
+  }
+
+  web::WebStateID webStateID = web::WebStateID::FromSerializedValue(
+      [coder decodeInt32ForKey:kSessionKey]);
+  if (!webStateID.valid()) {
+    return nil;
+  }
+
+  return [self initWithProto:std::move(storage) webStateID:webStateID];
+}
+
+- (void)encodeWithCoder:(NSCoder*)coder {
+  std::string buffer;
+  _storage.SerializeToString(&buffer);
+
+  web::nscoder_util::EncodeString(coder, kStorageKey, buffer);
+  [coder encodeInt32:_webStateID.identifier() forKey:kSessionKey];
+}
+
+- (std::unique_ptr<web::WebState>)createWebState:
+    (web::BrowserState*)browserState {
+  auto webState = web::WebState::CreateWithStorage(
+      browserState, _webStateID, _storage.metadata(),
+      base::ReturnValueOnce(std::make_optional(std::move(_storage))),
+      base::ReturnValueOnce<NSData*>(nil));
+  webState->ForceRealizedWithPolicy(kRealizationPolicy);
+  return webState;
+}
+
+- (const web::proto::WebStateStorage&)storage {
+  return _storage;
+}
+
++ (BOOL)supportsSecureCoding {
+  return YES;
+}
+
+@end
+
+// Helper used to manage the serialization of CWVWebView's WebState.
+@interface CWVWebViewSerializationHelper : NSObject
+
+// Designated initializer.
+- (instancetype)initWithConfiguration:(CWVWebViewConfiguration*)configuration
+    NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)init NS_UNAVAILABLE;
+
+// Creates a new WebState from `coder`.
+- (std::unique_ptr<web::WebState>)createWebStateWithCoder:(NSCoder*)coder;
+
+// Serializes `webState` to `coder`. If `webState` is null, then the cached
+// state is serialized instead (captured by `-updateStateFromWebState:`).
+- (void)encodeWebState:(web::WebState*)webState toCoder:(NSCoder*)coder;
+
+// Updates the cached serialization state from `webState`.
+- (void)updateStateFromWebState:(web::WebState*)webState;
+
+// Clears the cached serialized state for `webState` if it is possible to
+// reconstruct it at a later point (avoid keeping a copy of the state in
+// memory when not necessary after serialization).
+- (void)clearStateForWebStateIfPossible:(web::WebState*)webState;
+
+@end
+
+@implementation CWVWebViewSerializationHelper {
+  web::BrowserState* _browserState;
+
+  // Cached protobuf message.
+  CWVWebViewProtobufStorage* _cachedProtobufStorage;
+}
+
+- (instancetype)initWithConfiguration:(CWVWebViewConfiguration*)configuration {
+  if ((self = [super init])) {
+    DCHECK(configuration.browserState);
+    _browserState = configuration.browserState;
+    if (configuration.preferences.isTriggerNonFatalCheckEnabled) {
+      // TODO(crbug.com/503005390): Remove after release integration testing.
+      CHECK(false, base::NotFatalUntil::M235);
+    }
+  }
+  return self;
+}
+
+- (std::unique_ptr<web::WebState>)createWebStateWithCoder:(NSCoder*)coder {
+  _cachedProtobufStorage =
+      base::apple::ObjCCastStrict<CWVWebViewProtobufStorage>([coder
+          decodeObjectOfClass:[CWVWebViewProtobufStorage class]
+                       forKey:kProtobufStorageKey]);
+
+  // If data can't be loaded, return a brand new WebState. Since sending
+  // a message to nil is well-defined in Objective-C, this also cover
+  // the case when `coder` is nil.
+  if (!_cachedProtobufStorage) {
+    const web::WebState::CreateParams createParams(_browserState);
+    return web::WebState::Create(createParams);
+  }
+
+  return [_cachedProtobufStorage createWebState:_browserState];
+}
+
+- (void)encodeWebState:(web::WebState*)webState toCoder:(NSCoder*)coder {
+  if (webState && webState->IsRealized()) {
+    [self updateStateFromWebState:webState];
+  }
+
+  [coder encodeObject:_cachedProtobufStorage forKey:kProtobufStorageKey];
+  [self clearStateForWebStateIfPossible:webState];
+}
+
+- (void)updateStateFromWebState:(web::WebState*)webState {
+  DCHECK(webState->IsRealized());
+  web::proto::WebStateStorage storage;
+  webState->SerializeToProto(storage);
+  _cachedProtobufStorage = [[CWVWebViewProtobufStorage alloc]
+      initWithProto:storage
+         webStateID:webState->GetUniqueIdentifier()];
+}
+
+- (void)clearStateForWebStateIfPossible:(web::WebState*)webState {
+  if (webState && webState->IsRealized()) {
+    _cachedProtobufStorage = nil;
+  }
+}
+
+@end
 
 @interface CWVWebView () {
   CWVWebViewConfiguration* _configuration;
@@ -116,16 +346,9 @@ WEB_STATE_USER_DATA_KEY_IMPL(WebViewHolder)
   // Handles presentation of JavaScript dialogs.
   std::unique_ptr<ios_web_view::WebViewJavaScriptDialogPresenter>
       _javaScriptDialogPresenter;
-  // Stores the script command callbacks with subscriptions.
-  std::unordered_map<std::string,
-                     std::pair<web::WebState::ScriptCommandCallback,
-                               base::CallbackListSubscription>>
-      _scriptCommandCallbacks;
-  CRWSessionStorage* _cachedSessionStorage;
 
-  // Stores the last NavigationContext::IsSameDocument() value from
-  // |webState:didFinishNavigation:|.
-  BOOL _lastDidFinishNavigationContextIsSameDocument;
+  // Handle the serialization and deserialization.
+  CWVWebViewSerializationHelper* _serializationHelper;
 }
 
 // Redefine these properties as readwrite to define setters, which send KVO
@@ -156,12 +379,6 @@ WEB_STATE_USER_DATA_KEY_IMPL(WebViewHolder)
 
 @end
 
-namespace {
-NSString* gCustomUserAgent = nil;
-NSString* gUserAgentProduct = nil;
-BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
-}  // namespace
-
 @implementation CWVWebView
 
 @synthesize autofillController = _autofillController;
@@ -170,6 +387,7 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 @synthesize canGoForward = _canGoForward;
 @synthesize configuration = _configuration;
 @synthesize estimatedProgress = _estimatedProgress;
+@synthesize findInPageController = _findInPageController;
 @synthesize lastCommittedURL = _lastCommittedURL;
 @synthesize loading = _loading;
 @synthesize navigationDelegate = _navigationDelegate;
@@ -184,46 +402,40 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
     return;
   }
 
-  ios_web_view::InitializeGlobalState();
+  DCHECK([[CWVGlobalState sharedInstance] isStarted]);
+  [[CWVGlobalState sharedInstance] start];
 }
 
-+ (BOOL)chromeLongPressAndForceTouchHandlingEnabled {
-  return gChromeLongPressAndForceTouchHandlingEnabled;
++ (BOOL)chromeContextMenuEnabled {
+  return gChromeContextMenuEnabled;
 }
 
-+ (void)setChromeLongPressAndForceTouchHandlingEnabled:(BOOL)newValue {
-  gChromeLongPressAndForceTouchHandlingEnabled = newValue;
++ (void)setChromeContextMenuEnabled:(BOOL)newValue {
+  gChromeContextMenuEnabled = newValue;
 }
 
-+ (NSString*)customUserAgent {
-  return gCustomUserAgent;
++ (BOOL)useOptimizedSessionStorage {
+  return YES;
 }
 
-+ (void)setCustomUserAgent:(NSString*)customUserAgent {
-  gCustomUserAgent = [customUserAgent copy];
++ (void)setUseOptimizedSessionStorage:(BOOL)newValue {
+  // Ignored.
 }
 
-+ (NSString*)userAgentProduct {
-  return gUserAgentProduct;
++ (BOOL)webInspectorEnabled {
+  return gWebInspectorEnabled;
 }
 
-+ (void)setUserAgentProduct:(NSString*)product {
-  gUserAgentProduct = [product copy];
++ (void)setWebInspectorEnabled:(BOOL)newValue {
+  gWebInspectorEnabled = newValue;
 }
 
-+ (void)setGoogleAPIKey:(NSString*)googleAPIKey
-               clientID:(NSString*)clientID
-           clientSecret:(NSString*)clientSecret {
-  google_apis::SetAPIKey(base::SysNSStringToUTF8(googleAPIKey));
++ (BOOL)skipAccountStorageCheckEnabled {
+  return gSkipAccountStorageCheckEnabled;
+}
 
-  std::string clientIDString = base::SysNSStringToUTF8(clientID);
-  std::string clientSecretString = base::SysNSStringToUTF8(clientSecret);
-  for (size_t i = 0; i < google_apis::CLIENT_NUM_ITEMS; ++i) {
-    google_apis::OAuth2Client client =
-        static_cast<google_apis::OAuth2Client>(i);
-    google_apis::SetOAuth2ClientID(client, clientIDString);
-    google_apis::SetOAuth2ClientSecret(client, clientSecretString);
-  }
++ (void)setSkipAccountStorageCheckEnabled:(BOOL)newValue {
+  gSkipAccountStorageCheckEnabled = newValue;
 }
 
 + (CWVWebView*)webViewForWebState:(web::WebState*)webState {
@@ -250,48 +462,95 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
     _configuration = configuration;
     [_configuration registerWebView:self];
 
-    [self resetWebStateWithSessionStorage:nil
-                          WKConfiguration:wkConfiguration
-                         createdWKWebView:createdWebView];
+    _serializationHelper = [[CWVWebViewSerializationHelper alloc]
+        initWithConfiguration:configuration];
+
+    [self resetWebStateWithCoder:nil
+                 WKConfiguration:wkConfiguration
+                  createdWebView:createdWebView];
   }
   return self;
 }
 
 - (UIScrollView*)scrollView {
+  if (![self isWebStateSafeToUse]) {
+    return nil;
+  }
   return [_webState->GetWebViewProxy().scrollViewProxy asUIScrollView];
 }
 
 - (BOOL)allowsBackForwardNavigationGestures {
+  if (![self isWebStateSafeToUse]) {
+    return NO;
+  }
+
   return _webState->GetWebViewProxy().allowsBackForwardNavigationGestures;
 }
 
 - (void)setAllowsBackForwardNavigationGestures:
     (BOOL)allowsBackForwardNavigationGestures {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   _webState->GetWebViewProxy().allowsBackForwardNavigationGestures =
       allowsBackForwardNavigationGestures;
 }
 
-- (void)dealloc {
-  if (_webState) {
-    if (_webStateObserver) {
-      _webState->RemoveObserver(_webStateObserver.get());
-      _webStateObserver.reset();
+- (BOOL)allowsLinkPreview {
+  if (![self isWebStateSafeToUse]) {
+    return NO;
+  }
+
+  return _webState->GetWebViewProxy().allowsLinkPreview;
+}
+
+- (void)setAllowsLinkPreview:(BOOL)allowsLinkPreview {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
+  _webState->GetWebViewProxy().allowsLinkPreview = allowsLinkPreview;
+}
+
+- (UIEdgeInsets)obscuredContentInsets {
+  if (@available(iOS 26.0, *)) {
+    if ([self isWebStateSafeToUse]) {
+      return _webState->GetWebViewProxy().obscuredContentInsets;
     }
-    WebViewHolder::RemoveFromWebState(_webState.get());
+  }
+  return UIEdgeInsetsZero;
+}
+
+- (void)setObscuredContentInsets:(UIEdgeInsets)insets {
+  if (@available(iOS 26.0, *)) {
+    if (![self isWebStateSafeToUse]) {
+      return;
+    }
+    _webState->GetWebViewProxy().obscuredContentInsets = insets;
   }
 }
 
 - (void)goBack {
-  if (_webState->GetNavigationManager())
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
+  if (_webState->GetNavigationManager()) {
     _webState->GetNavigationManager()->GoBack();
+  }
 }
 
 - (void)goForward {
-  if (_webState->GetNavigationManager())
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
+  if (_webState->GetNavigationManager()) {
     _webState->GetNavigationManager()->GoForward();
+  }
 }
 
 - (BOOL)goToBackForwardListItem:(CWVBackForwardListItem*)item {
+  if (![self isWebStateSafeToUse]) {
+    return NO;
+  }
   if (!_backForwardList) {
     return NO;  // Do nothing if |_backForwardList| is not generated yet.
   }
@@ -312,6 +571,9 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (void)reload {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   // |check_for_repost| is false because CWVWebView does not support repost form
   // dialogs.
   _webState->GetNavigationManager()->Reload(web::ReloadType::NORMAL,
@@ -319,10 +581,16 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (void)stopLoading {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   _webState->Stop();
 }
 
 - (void)loadRequest:(NSURLRequest*)request {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   DCHECK_EQ(nil, request.HTTPBodyStream)
       << "request.HTTPBodyStream is not supported.";
 
@@ -335,9 +603,41 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (void)evaluateJavaScript:(NSString*)javaScriptString
-         completionHandler:(void (^)(id, NSError*))completionHandler {
-  [_webState->GetJSInjectionReceiver() executeJavaScript:javaScriptString
-                                       completionHandler:completionHandler];
+         completionHandler:(void (^)(id result, NSError* error))completion {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
+
+  web::WebFrame* mainFrame =
+      _webState->GetPageWorldWebFramesManager()->GetMainWebFrame();
+  if (!mainFrame) {
+    if (completion) {
+      completion(nil, [NSError errorWithDomain:@"org.chromium.chromewebview"
+                                          code:0
+                                      userInfo:nil]);
+    }
+    return;
+  }
+
+  if (!completion) {
+    mainFrame->ExecuteJavaScript(base::SysNSStringToUTF16(javaScriptString));
+    return;
+  }
+
+  mainFrame->ExecuteJavaScript(
+      base::SysNSStringToUTF16(javaScriptString),
+      base::BindOnce(^(const base::Value* result, NSError* error) {
+        id jsResult = nil;
+        if (!error && result) {
+          jsResult = NSObjectFromValue(result);
+        }
+        completion(jsResult, error);
+      }));
+}
+
+- (void)evaluateJavaScript:(NSString*)javaScriptString
+                completion:(void (^)(id, NSError*))completion {
+  [self evaluateJavaScript:javaScriptString completionHandler:completion];
 }
 
 - (void)setUIDelegate:(id<CWVUIDelegate>)UIDelegate {
@@ -346,10 +646,16 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   _javaScriptDialogPresenter->SetUIDelegate(_UIDelegate);
 }
 
+- (void)setNavigationDelegate:(id<CWVNavigationDelegate>)navigationDelegate {
+  _navigationDelegate = navigationDelegate;
+
+  [self attachSecurityInterstitialHelpersToWebStateIfNecessary];
+}
+
 #pragma mark - UIResponder
 
 - (BOOL)becomeFirstResponder {
-  if (_webState) {
+  if ([self isWebStateSafeToUse]) {
     return [_webState->GetWebViewProxy() becomeFirstResponder];
   } else {
     return [super becomeFirstResponder];
@@ -392,12 +698,8 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   [self updateNavigationAvailability];
   [self updateCurrentURLs];
 
-  // TODO(crbug.com/898357): Remove this once crbug.com/898357 is fixed.
+  // TODO(crbug.com/41422373): Remove this once crbug.com/898357 is fixed.
   [self updateVisibleSSLStatus];
-
-  // Store NavigationContext::IsSameDocument() for later use in
-  // |webState:didLoadPageWithSuccess:|.
-  _lastDidFinishNavigationContextIsSameDocument = navigation->IsSameDocument();
 
   if (navigation->HasCommitted() && !navigation->IsSameDocument() &&
       [_navigationDelegate
@@ -419,18 +721,11 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
     return;
   }
 
-  // We do not want to call -[CWVNavigationDelegate webViewDidFinishNavigation:]
-  // for same document navigations because we also exclude them for others like
-  // -[CWVNavigationDelegate webViewDidStartNavigation:] and
-  // -[CWVNavigationDelegate webViewDidCommitNavigation:].
-  // It is guaranteed that |webState:didLoadPageWithSuccess:| is only called
-  // after |webState:didFinishNavigation:|, so we will always have an up to date
-  // value to use here.
-  // TODO(crbug.com/1196799): Remove this work around once a NavigationContext
-  // is passed in to this method.
+  // TODO(crbug.com/40872106): Fragment navigations currently skip calling
+  // `webViewDidStartNavigation:` and `webViewDidCommitNavigation:`, and instead
+  // only calls `webViewDidFinishNavigation:` below. Fix this inconsistency.
   SEL selector = @selector(webViewDidFinishNavigation:);
-  if (!_lastDidFinishNavigationContextIsSameDocument &&
-      [_navigationDelegate respondsToSelector:selector]) {
+  if ([_navigationDelegate respondsToSelector:selector]) {
     [_navigationDelegate webViewDidFinishNavigation:self];
   }
 }
@@ -467,52 +762,41 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   }
 }
 
-- (void)webState:(web::WebState*)webState
-    handleContextMenu:(const web::ContextMenuParams&)params {
-  SEL selector = @selector(webView:
-           runContextMenuWithTitle:forHTMLElement:inView:userGestureLocation:);
-  if (![_UIDelegate respondsToSelector:selector]) {
-    return;
-  }
-  NSURL* hyperlink = net::NSURLWithGURL(params.link_url);
-  NSURL* mediaSource = net::NSURLWithGURL(params.src_url);
-  CWVHTMLElement* HTMLElement =
-      [[CWVHTMLElement alloc] initWithHyperlink:hyperlink
-                                    mediaSource:mediaSource
-                                           text:params.link_text];
-  [_UIDelegate webView:self
-      runContextMenuWithTitle:params.menu_title
-               forHTMLElement:HTMLElement
-                       inView:params.view
-          userGestureLocation:params.location];
-}
-
 #pragma mark - CRWWebStateDelegate
 
 - (web::WebState*)webState:(web::WebState*)webState
     createNewWebStateForURL:(const GURL&)URL
                   openerURL:(const GURL&)openerURL
             initiatedByUser:(BOOL)initiatedByUser {
-  SEL selector =
-      @selector(webView:createWebViewWithConfiguration:forNavigationAction:);
+  SEL selector = @selector(webView:
+      createWebViewWithConfiguration:forNavigationAction:);
   if (![_UIDelegate respondsToSelector:selector]) {
     return nullptr;
   }
 
   NSURLRequest* request =
       [[NSURLRequest alloc] initWithURL:net::NSURLWithGURL(URL)];
+
+  // The current implemention can't get the real navigation type for the
+  // navigation action which causes a new web view be created. So uses
+  // `CWVNavigationTypeNewWindow` before the real navigation type can be gotten
+  // here.
   CWVNavigationAction* navigationAction =
       [[CWVNavigationAction alloc] initWithRequest:request
-                                     userInitiated:initiatedByUser];
+                                     userInitiated:initiatedByUser
+                                    navigationType:CWVNavigationTypeNewWindow];
   CWVWebView* webView = [_UIDelegate webView:self
               createWebViewWithConfiguration:_configuration
                          forNavigationAction:navigationAction];
-  if (!webView) {
-    return nullptr;
+  if (webView) {
+    web::WebState* webViewWebState = webView->_webState.get();
+    if (webViewWebState) {
+      webViewWebState->SetHasOpener(true);
+      return webViewWebState;
+    }
   }
-  web::WebState* webViewWebState = webView->_webState.get();
-  webViewWebState->SetHasOpener(true);
-  return webViewWebState;
+
+  return nullptr;
 }
 
 - (void)closeWebState:(web::WebState*)webState {
@@ -522,93 +806,96 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   }
 }
 
+- (web::WebState*)webState:(web::WebState*)webState
+         openURLWithParams:(const web::WebState::OpenURLParams&)params {
+  web::NavigationManager::WebLoadParams load_params(params.url);
+  load_params.referrer = params.referrer;
+  load_params.transition_type = params.transition;
+  load_params.is_renderer_initiated = params.is_renderer_initiated;
+  load_params.virtual_url = params.virtual_url;
+  _webState->GetNavigationManager()->LoadURLWithParams(load_params);
+  [self updateCurrentURLs];
+  return _webState.get();
+}
+
 - (web::JavaScriptDialogPresenter*)javaScriptDialogPresenterForWebState:
     (web::WebState*)webState {
   return _javaScriptDialogPresenter.get();
 }
 
-- (BOOL)webState:(web::WebState*)webState
-    shouldPreviewLinkWithURL:(const GURL&)linkURL {
-  SEL selector = @selector(webView:shouldPreviewElement:);
-  if ([_UIDelegate respondsToSelector:selector]) {
-    CWVPreviewElementInfo* elementInfo = [[CWVPreviewElementInfo alloc]
-        initWithLinkURL:net::NSURLWithGURL(linkURL)];
-    return [_UIDelegate webView:self shouldPreviewElement:elementInfo];
-  }
-  return NO;
-}
-
-- (UIViewController*)webState:(web::WebState*)webState
-    previewingViewControllerForLinkWithURL:(const GURL&)linkURL {
-  SEL selector = @selector(webView:previewingViewControllerForElement:);
-  if ([_UIDelegate respondsToSelector:selector]) {
-    CWVPreviewElementInfo* elementInfo = [[CWVPreviewElementInfo alloc]
-        initWithLinkURL:net::NSURLWithGURL(linkURL)];
-    return [_UIDelegate webView:self
-        previewingViewControllerForElement:elementInfo];
-  }
-  return nil;
-}
-
 - (void)webState:(web::WebState*)webState
-    commitPreviewingViewController:(UIViewController*)previewingViewController {
-  SEL selector = @selector(webView:commitPreviewingViewController:);
+    handlePermissions:(NSArray<NSNumber*>*)permissions
+      decisionHandler:(web::WebStatePermissionDecisionHandler)decisionHandler {
+  DCHECK(decisionHandler);
+  CWVMediaCaptureType mediaCaptureType;
+  BOOL cameraPermissionRequested =
+      [permissions containsObject:@(web::PermissionCamera)];
+  BOOL micPermissionRequested =
+      [permissions containsObject:@(web::PermissionMicrophone)];
+  if (cameraPermissionRequested && micPermissionRequested) {
+    mediaCaptureType = CWVMediaCaptureTypeCameraAndMicrophone;
+  } else if (cameraPermissionRequested) {
+    mediaCaptureType = CWVMediaCaptureTypeCamera;
+  } else if (micPermissionRequested) {
+    mediaCaptureType = CWVMediaCaptureTypeMicrophone;
+  } else {
+    NOTREACHED() << "Unknown media permissions";
+  }
+
+  SEL selector = @selector(webView:
+      requestMediaCapturePermissionForType:decisionHandler:);
   if ([_UIDelegate respondsToSelector:selector]) {
     [_UIDelegate webView:self
-        commitPreviewingViewController:previewingViewController];
+        requestMediaCapturePermissionForType:mediaCaptureType
+                             decisionHandler:^(CWVPermissionDecision decision) {
+                               switch (decision) {
+                                 case CWVPermissionDecisionPrompt:
+                                   decisionHandler(
+                                       web::
+                                           PermissionDecisionShowDefaultPrompt);
+                                   break;
+                                 case CWVPermissionDecisionGrant:
+                                   decisionHandler(
+                                       web::PermissionDecisionGrant);
+                                   break;
+                                 case CWVPermissionDecisionDeny:
+                                   decisionHandler(web::PermissionDecisionDeny);
+                                   break;
+                               }
+                             }];
+  } else {
+    decisionHandler(web::PermissionDecisionShowDefaultPrompt);
   }
 }
 
 - (void)webState:(web::WebState*)webState
     contextMenuConfigurationForParams:(const web::ContextMenuParams&)params
-                      previewProvider:
-                          (UIContextMenuContentPreviewProvider)previewProvider
-                    completionHandler:
-                        (void (^)(UIContextMenuConfiguration*))completionHandler
-    API_AVAILABLE(ios(13.0)) {
+                    completionHandler:(void (^)(UIContextMenuConfiguration*))
+                                          completionHandler {
   SEL selector = @selector(webView:
-      contextMenuConfigurationForLinkWithURL:completionHandler:);
+      contextMenuConfigurationForElement:completionHandler:);
   if ([_UIDelegate respondsToSelector:selector]) {
+    NSURL* hyperlink = net::NSURLWithGURL(params.link_url);
+    NSURL* mediaSource = net::NSURLWithGURL(params.src_url);
+    CWVHTMLElement* HTMLElement =
+        [[CWVHTMLElement alloc] initWithHyperlink:hyperlink
+                                      mediaSource:mediaSource
+                                             text:params.text];
+
     [_UIDelegate webView:self
-        contextMenuConfigurationForLinkWithURL:net::NSURLWithGURL(
-                                                   params.link_url)
-                             completionHandler:completionHandler];
+        contextMenuConfigurationForElement:HTMLElement
+                         completionHandler:completionHandler];
   } else {
     completionHandler(nil);
   }
 }
 
 - (void)webState:(web::WebState*)webState
-    contextMenuWillPresentForLinkWithURL:(const GURL&)linkURL
-    API_AVAILABLE(ios(13.0)) {
-  SEL selector = @selector(webView:contextMenuWillPresentForLinkWithURL:);
+    contextMenuWillCommitWithAnimator:
+        (id<UIContextMenuInteractionCommitAnimating>)animator {
+  SEL selector = @selector(webView:contextMenuWillCommitWithAnimator:);
   if ([_UIDelegate respondsToSelector:selector]) {
-    [_UIDelegate webView:self
-        contextMenuWillPresentForLinkWithURL:net::NSURLWithGURL(linkURL)];
-  }
-}
-
-- (void)webState:(web::WebState*)webState
-    contextMenuForLinkWithURL:(const GURL&)linkURL
-       willCommitWithAnimator:
-           (id<UIContextMenuInteractionCommitAnimating>)animator
-    API_AVAILABLE(ios(13.0)) {
-  SEL selector = @selector(webView:
-         contextMenuForLinkWithURL:willCommitWithAnimator:);
-  if ([_UIDelegate respondsToSelector:selector]) {
-    [_UIDelegate webView:self
-        contextMenuForLinkWithURL:net::NSURLWithGURL(linkURL)
-           willCommitWithAnimator:animator];
-  }
-}
-
-- (void)webState:(web::WebState*)webState
-    contextMenuDidEndForLinkWithURL:(const GURL&)linkURL
-    API_AVAILABLE(ios(13.0)) {
-  SEL selector = @selector(webView:contextMenuDidEndForLinkWithURL:);
-  if ([_UIDelegate respondsToSelector:selector]) {
-    [_UIDelegate webView:self
-        contextMenuDidEndForLinkWithURL:net::NSURLWithGURL(linkURL)];
+    [_UIDelegate webView:self contextMenuWillCommitWithAnimator:animator];
   }
 }
 
@@ -630,32 +917,20 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   }
 }
 
-- (void)addScriptCommandHandler:(id<CWVScriptCommandHandler>)handler
-                  commandPrefix:(NSString*)commandPrefix {
-  CWVWebView* __weak weakSelf = self;
-  const web::WebState::ScriptCommandCallback callback = base::BindRepeating(
-      ^(const base::Value& content, const GURL& mainDocumentURL,
-        bool userInteracting, web::WebFrame* senderFrame) {
-        NSDictionary* nsContent = NSDictionaryFromDictionaryValue(content);
-        CWVScriptCommand* command = [[CWVScriptCommand alloc]
-            initWithContent:nsContent
-            mainDocumentURL:net::NSURLWithGURL(mainDocumentURL)
-            userInteracting:userInteracting];
-        [handler webView:weakSelf
-            handleScriptCommand:command
-                  fromMainFrame:senderFrame->IsMainFrame()];
-      });
-
-  std::string stdCommandPrefix = base::SysNSStringToUTF8(commandPrefix);
-  auto subscription =
-      _webState->AddScriptCommandCallback(callback, stdCommandPrefix);
-  _scriptCommandCallbacks[stdCommandPrefix] = {callback,
-                                               std::move(subscription)};
+- (void)addMessageHandler:(void (^)(NSDictionary* payload))handler
+               forCommand:(NSString*)nsCommand {
+  DCHECK(handler);
+  std::string command = base::SysNSStringToUTF8(nsCommand);
+  WebViewMessageHandlerJavaScriptFeature::GetInstance()->RegisterHandler(
+      command, base::BindRepeating(^(const base::DictValue& payload) {
+        handler(NSDictionaryFromDictValue(payload));
+      }));
 }
 
-- (void)removeScriptCommandHandlerForCommandPrefix:(NSString*)commandPrefix {
-  std::string stdCommandPrefix = base::SysNSStringToUTF8(commandPrefix);
-  _scriptCommandCallbacks.erase(stdCommandPrefix);
+- (void)removeMessageHandlerForCommand:(NSString*)nsCommand {
+  std::string command = base::SysNSStringToUTF8(nsCommand);
+  WebViewMessageHandlerJavaScriptFeature::GetInstance()->UnregisterHandler(
+      command);
 }
 
 #pragma mark - Translation
@@ -671,10 +946,6 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   ios_web_view::WebViewBrowserState* browserState =
       ios_web_view::WebViewBrowserState::FromBrowserState(
           _webState->GetBrowserState());
-  language::IOSLanguageDetectionTabHelper::CreateForWebState(
-      _webState.get(),
-      ios_web_view::WebViewUrlLanguageHistogramFactory::GetForBrowserState(
-          browserState));
   auto translateClient = ios_web_view::WebViewTranslateClient::Create(
       browserState, _webState.get());
   return [[CWVTranslationController alloc]
@@ -692,10 +963,6 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (CWVAutofillController*)newAutofillController {
-  UniqueIDDataTabHelper::CreateForWebState(_webState.get());
-
-  auto autofillClient = autofill::WebViewAutofillClientIOS::Create(
-      _webState.get(), _configuration.browserState);
   AutofillAgent* autofillAgent = [[AutofillAgent alloc]
       initWithPrefService:_configuration.browserState->GetPrefs()
                  webState:_webState.get()];
@@ -705,63 +972,55 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
           _webState.get(), _configuration.browserState);
   auto passwordManager = std::make_unique<password_manager::PasswordManager>(
       passwordManagerClient.get());
-  auto passwordManagerDriver =
-      std::make_unique<ios_web_view::WebViewPasswordManagerDriver>(
-          passwordManager.get());
 
   PasswordFormHelper* formHelper =
       [[PasswordFormHelper alloc] initWithWebState:_webState.get()];
   PasswordSuggestionHelper* suggestionHelper =
-      [[PasswordSuggestionHelper alloc] init];
+      [[PasswordSuggestionHelper alloc] initWithWebState:_webState.get()
+                                         passwordManager:passwordManager.get()];
+  PasswordControllerDriverHelper* driverHelper =
+      [[PasswordControllerDriverHelper alloc] initWithWebState:_webState.get()];
   SharedPasswordController* passwordController =
       [[SharedPasswordController alloc] initWithWebState:_webState.get()
                                                  manager:passwordManager.get()
                                               formHelper:formHelper
-                                        suggestionHelper:suggestionHelper];
+                                        suggestionHelper:suggestionHelper
+                                            driverHelper:driverHelper];
 
   return [[CWVAutofillController alloc]
            initWithWebState:_webState.get()
-             autofillClient:std::move(autofillClient)
               autofillAgent:autofillAgent
             passwordManager:std::move(passwordManager)
       passwordManagerClient:std::move(passwordManagerClient)
-      passwordManagerDriver:std::move(passwordManagerDriver)
-         passwordController:passwordController
-          applicationLocale:ios_web_view::ApplicationContext::GetInstance()
-                                ->GetApplicationLocale()];
+         passwordController:passwordController];
+}
+
+#pragma mark - Find In Page
+
+- (CWVFindInPageController*)findInPageController {
+  if (!_findInPageController) {
+    _findInPageController =
+        [[CWVFindInPageController alloc] initWithWebState:_webState.get()];
+  }
+  return _findInPageController;
 }
 
 #pragma mark - Preserving and Restoring State
 
 - (void)encodeRestorableStateWithCoder:(NSCoder*)coder {
   [super encodeRestorableStateWithCoder:coder];
-
-  // It is possible for this instance to be encoded when the |_webState| is a
-  // nullptr, i.e. when this method is called after |shutDown| has occurred.
-  CRWSessionStorage* sessionStorage;
-  if (_webState) {
-    sessionStorage = _webState->BuildSessionStorage();
-  } else if (_cachedSessionStorage) {
-    sessionStorage = _cachedSessionStorage;
-  } else {
-    return;
-  }
-  [coder encodeObject:sessionStorage forKey:kSessionStorageKey];
+  [_serializationHelper encodeWebState:_webState.get() toCoder:coder];
 }
 
 - (void)decodeRestorableStateWithCoder:(NSCoder*)coder {
   [super decodeRestorableStateWithCoder:coder];
-  CRWSessionStorage* sessionStorage =
-      [coder decodeObjectForKey:kSessionStorageKey];
-  [self resetWebStateWithSessionStorage:sessionStorage
-                        WKConfiguration:nil
-                       createdWKWebView:nil];
+  [self resetWebStateWithCoder:coder WKConfiguration:nil createdWebView:nil];
 }
 
 #pragma mark - Private methods
 
 - (void)updateWebStateVisibility {
-  if (_webState == nullptr) {
+  if (![self isWebStateSafeToUse]) {
     return;
   }
   if (self.superview) {
@@ -772,17 +1031,16 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 // Creates a WebState instance and assigns it to |_webState|.
-// It replaces the old |_webState| if any.
-// The WebState is restored from |sessionStorage| if provided.
+// The WebState is restored from |coder| if available.
 //
 // If |wkConfiguration| is provided, the underlying WKWebView is
 // initialized with |wkConfiguration|, and assigned to
 // |*createdWKWebView| if |createdWKWebView| is not nil.
 // |*createdWKWebView| will be provided only if |wkConfiguration| is provided,
 // otherwise it will always be reset to nil.
-- (void)resetWebStateWithSessionStorage:(CRWSessionStorage*)sessionStorage
-                        WKConfiguration:(WKWebViewConfiguration*)wkConfiguration
-                       createdWKWebView:(WKWebView**)createdWebView {
+- (void)resetWebStateWithCoder:(NSCoder*)coder
+               WKConfiguration:(WKWebViewConfiguration*)wkConfiguration
+                createdWebView:(WKWebView**)createdWebView {
   if (_webState) {
     if (_webStateObserver) {
       _webState->RemoveObserver(_webStateObserver.get());
@@ -797,16 +1055,16 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   }
 
   BOOL allowsBackForwardNavigationGestures =
-      _webState &&
-      _webState->GetWebViewProxy().allowsBackForwardNavigationGestures;
+      self.allowsBackForwardNavigationGestures;
+  BOOL allowsLinkPreview = self.allowsLinkPreview;
 
-  web::WebState::CreateParams webStateCreateParams(_configuration.browserState);
-  if (sessionStorage) {
-    _webState = web::WebState::CreateWithStorageSession(webStateCreateParams,
-                                                        sessionStorage);
-  } else {
-    _webState = web::WebState::Create(webStateCreateParams);
-  }
+  // CWVWebView does not support unrealized WebState, so ignore the
+  // over-realization check (this simply reset the recent realization
+  // counter, so do it each time a WebState is created).
+  web::IgnoreOverRealizationCheck();
+
+  _webState = [_serializationHelper createWebStateWithCoder:coder];
+  DCHECK(_webState);
 
   // WARNING: NOTHING should be here between |web::WebState::Create()| and
   // |web::EnsureWebViewCreatedWithConfiguration()|, as this is the requirement
@@ -832,6 +1090,7 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
     *createdWebView = webView;
   }
 
+  [self attachSecurityInterstitialHelpersToWebStateIfNecessary];
   WebViewHolder::CreateForWebState(_webState.get());
   WebViewHolder::FromWebState(_webState.get())->set_web_view(self);
 
@@ -856,13 +1115,9 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
       std::make_unique<ios_web_view::WebViewJavaScriptDialogPresenter>(self,
                                                                        nullptr);
 
-  for (auto& pair : _scriptCommandCallbacks) {
-    pair.second.second =
-        _webState->AddScriptCommandCallback(pair.second.first, pair.first);
-  }
-
   _webState->GetWebViewProxy().allowsBackForwardNavigationGestures =
       allowsBackForwardNavigationGestures;
+  _webState->GetWebViewProxy().allowsLinkPreview = allowsLinkPreview;
 
   if (_translationController) {
     id<CWVTranslationControllerDelegate> delegate =
@@ -887,15 +1142,18 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   self.loading = NO;
   self.estimatedProgress = 0.0;
 
-  // TODO(crbug.com/873729): The session will not be restored until
+  // TODO(crbug.com/41407753): The session will not be restored until
   // LoadIfNecessary call. Fix the bug and remove extra call.
-  if (sessionStorage) {
+  if (coder) {
     _webState->GetNavigationManager()->LoadIfNecessary();
   }
 }
 
 // Adds the web view provided by |_webState| as a subview unless it has already.
 - (void)addInternalWebViewAsSubview {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   UIView* subview = _webState->GetView();
   if (subview.superview == self) {
     return;
@@ -907,6 +1165,9 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (CWVBackForwardList*)backForwardList {
+  if (![self isWebStateSafeToUse]) {
+    return nil;
+  }
   if (!_backForwardList) {
     _backForwardList = [[CWVBackForwardList alloc]
         initWithNavigationManager:_webState->GetNavigationManager()];
@@ -915,14 +1176,20 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (void)updateNavigationAvailability {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
+  self.backForwardList.navigationManager = _webState->GetNavigationManager();
+
   self.canGoBack = _webState && _webState->GetNavigationManager()->CanGoBack();
   self.canGoForward =
       _webState && _webState->GetNavigationManager()->CanGoForward();
-
-  self.backForwardList.navigationManager = _webState->GetNavigationManager();
 }
 
 - (void)updateCurrentURLs {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   self.lastCommittedURL = net::NSURLWithGURL(_webState->GetLastCommittedURL());
   self.visibleURL = net::NSURLWithGURL(_webState->GetVisibleURL());
   self.visibleLocationString = base::SysUTF16ToNSString(
@@ -930,10 +1197,16 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }
 
 - (void)updateTitle {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   self.title = base::SysUTF16ToNSString(_webState->GetTitle());
 }
 
 - (void)updateVisibleSSLStatus {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
   web::NavigationItem* visibleItem =
       _webState->GetNavigationManager()->GetVisibleItem();
   if (visibleItem) {
@@ -944,21 +1217,75 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   }
 }
 
+- (void)attachSecurityInterstitialHelpersToWebStateIfNecessary {
+  if (![self isWebStateSafeToUse]) {
+    return;
+  }
+
+  // Lookalike URLs should only be intercepted if handled by the delegate.
+  if ([_navigationDelegate respondsToSelector:@selector
+                           (webView:handleLookalikeURLWithHandler:)]) {
+    LookalikeUrlTabHelper::CreateForWebState(_webState.get());
+    LookalikeUrlTabAllowList::CreateForWebState(_webState.get());
+    LookalikeUrlContainer::CreateForWebState(_webState.get());
+  } else {
+    LookalikeUrlTabHelper::RemoveFromWebState(_webState.get());
+    LookalikeUrlTabAllowList::RemoveFromWebState(_webState.get());
+    LookalikeUrlContainer::RemoveFromWebState(_webState.get());
+  }
+
+  // Unsafe URLs should only be intercepted if handled by the delegate.
+  if ([_navigationDelegate
+          respondsToSelector:@selector(webView:handleUnsafeURLWithHandler:)]) {
+    SafeBrowsingClient* client =
+        ios_web_view::WebViewSafeBrowsingClientFactory::GetForBrowserState(
+            ios_web_view::WebViewBrowserState::FromBrowserState(
+                _webState->GetBrowserState()));
+    SafeBrowsingQueryManager::CreateForWebState(_webState.get(), client);
+    SafeBrowsingTabHelper::CreateForWebState(_webState.get(), client);
+    SafeBrowsingUrlAllowList::CreateForWebState(_webState.get());
+    SafeBrowsingUnsafeResourceContainer::CreateForWebState(_webState.get());
+  } else {
+    SafeBrowsingQueryManager::RemoveFromWebState(_webState.get());
+    SafeBrowsingTabHelper::RemoveFromWebState(_webState.get());
+    SafeBrowsingUrlAllowList::RemoveFromWebState(_webState.get());
+    SafeBrowsingUnsafeResourceContainer::RemoveFromWebState(_webState.get());
+  }
+}
+
 #pragma mark - Internal Methods
+
+- (BOOL)isWebStateSafeToUse {
+  return _webState != nil && !_webState->IsBeingDestroyed();
+}
 
 - (void)shutDown {
   if (_webState) {
     // To handle the case where -[CWVWebView encodeRestorableStateWithCoder:] is
     // called after this method, precompute the session storage so it may be
     // used during encoding later.
-    _cachedSessionStorage = _webState->BuildSessionStorage();
-    if (_webStateObserver) {
-      _webState->RemoveObserver(_webStateObserver.get());
-      _webStateObserver.reset();
-    }
-    WebViewHolder::RemoveFromWebState(_webState.get());
+    [_serializationHelper updateStateFromWebState:_webState.get()];
+
+    [self cleanupWebStateReference];
     _webState.reset();
   }
+}
+
+- (void)dealloc {
+  if (_webState) {
+    [self cleanupWebStateReference];
+  }
+}
+
+- (void)cleanupWebStateReference {
+  // CWVBackForwardList is unsafe to use after shutting down.
+  _backForwardList.navigationManager = nil;
+
+  if (_webStateObserver) {
+    _webState->RemoveObserver(_webStateObserver.get());
+    _webStateObserver.reset();
+  }
+  WebViewHolder::RemoveFromWebState(_webState.get());
 }
 
 @end

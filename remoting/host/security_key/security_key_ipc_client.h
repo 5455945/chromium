@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,35 +8,33 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
-#include "ipc/ipc_listener.h"
-#include "mojo/public/cpp/platform/named_platform_channel.h"
-#include "mojo/public/cpp/platform/platform_channel_endpoint.h"
-#include "mojo/public/cpp/system/isolated_connection.h"
-
-namespace IPC {
-class Channel;
-class Message;
-}  // IPC
+#include "mojo/public/cpp/bindings/remote.h"
+#include "remoting/host/chromoting_host_services_provider.h"
+#include "remoting/host/mojom/remote_security_key.mojom.h"
 
 namespace remoting {
 
 // Responsible for handing the client end of the IPC channel between the
 // the network process (server) and remote_security_key process (client).
 // The public methods are virtual to allow for using fake objects for testing.
-class SecurityKeyIpcClient : public IPC::Listener {
+class SecurityKeyIpcClient {
  public:
   SecurityKeyIpcClient();
-  ~SecurityKeyIpcClient() override;
+
+  SecurityKeyIpcClient(const SecurityKeyIpcClient&) = delete;
+  SecurityKeyIpcClient& operator=(const SecurityKeyIpcClient&) = delete;
+
+  virtual ~SecurityKeyIpcClient();
 
   // Used to send security key extension messages to the client.
-  typedef base::RepeatingCallback<void(const std::string& response_data)>
-      ResponseCallback;
+  using ResponseCallback =
+      base::RepeatingCallback<void(const std::string& response_data)>;
 
-  // Used to indicate whether the channel can be used for request forwarding.
-  typedef base::OnceCallback<void(bool connection_usable)> ConnectedCallback;
+  // Used to indicate when the channel can be used for request forwarding.
+  using ConnectedCallback = base::OnceCallback<void()>;
 
   // Returns true if there is an active remoting session which supports
   // security key request forwarding.
@@ -44,8 +42,7 @@ class SecurityKeyIpcClient : public IPC::Listener {
 
   // Begins the process of connecting to the IPC channel which will be used for
   // exchanging security key messages.
-  // |connected_callback| is called when a channel has been established and
-  // indicates whether security key requests can be sent using it.
+  // |connected_callback| is called when a channel has been established.
   // |connection_error_callback| is stored and will be called back for any
   // unexpected errors that occur while establishing, or during, the session.
   virtual void EstablishIpcConnection(
@@ -60,40 +57,21 @@ class SecurityKeyIpcClient : public IPC::Listener {
   // Closes the IPC channel if connected.
   virtual void CloseIpcConnection();
 
-  // Allows tests to override the IPC channel.
-  void SetIpcChannelHandleForTest(
-      const mojo::NamedPlatformChannel::ServerName& server_name);
+ protected:
+  friend class SecurityKeyIpcClientTest;
 
-  // Allows tests to override the expected session ID.
-  void SetExpectedIpcServerSessionIdForTest(uint32_t expected_session_id);
+  explicit SecurityKeyIpcClient(
+      std::unique_ptr<ChromotingHostServicesProvider> service_provider);
 
  private:
-  // IPC::Listener implementation.
-  bool OnMessageReceived(const IPC::Message& message) override;
-  void OnChannelConnected(int32_t peer_pid) override;
-  void OnChannelError() override;
-
-  // Handles the ConnectionReady IPC message.
-  void OnConnectionReady();
-
-  // Handles the InvalidSession IPC message.
-  void OnInvalidSession();
+  void OnQueryVersionResult(uint32_t unused_version);
+  void OnChannelError();
 
   // Handles security key response IPC messages.
   void OnSecurityKeyResponse(const std::string& request_data);
 
   // Establishes a connection to the specified IPC Server channel.
   void ConnectToIpcChannel();
-
-  // Used to validate the IPC Server process is running in the correct session.
-  // '0' (default) corresponds to the session the network process runs in.
-  uint32_t expected_ipc_server_session_id_ = 0;
-
-  // Name of the initial IPC channel used to retrieve connection info.
-  mojo::NamedPlatformChannel::ServerName named_channel_handle_;
-
-  // A handle for the IPC channel used for exchanging security key messages.
-  mojo::PlatformChannelEndpoint channel_handle_;
 
   // Signaled when the IPC connection is ready for security key requests.
   ConnectedCallback connected_callback_;
@@ -104,15 +82,14 @@ class SecurityKeyIpcClient : public IPC::Listener {
   // Signaled when a security key response has been received.
   ResponseCallback response_callback_;
 
-  // Used for sending/receiving security key messages between processes.
-  mojo::IsolatedConnection mojo_connection_;
-  std::unique_ptr<IPC::Channel> ipc_channel_;
+  std::unique_ptr<ChromotingHostServicesProvider> service_provider_;
+
+  // Used for forwarding security key requests to the remote client.
+  mojo::Remote<mojom::SecurityKeyForwarder> security_key_forwarder_;
 
   base::ThreadChecker thread_checker_;
 
   base::WeakPtrFactory<SecurityKeyIpcClient> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SecurityKeyIpcClient);
 };
 
 }  // namespace remoting

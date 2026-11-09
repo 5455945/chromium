@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,11 @@
 
 #include <map>
 
-#include "base/macros.h"
-#include "chrome/browser/extensions/extension_assets_manager.h"
-
-namespace base {
-template <typename T> struct DefaultSingletonTraits;
-}
+#include "base/values.h"
+#include "extensions/browser/extension_assets_manager.h"
 
 class PrefRegistrySimple;
-
-namespace base {
-class DictionaryValue;
-}
+class Profile;
 
 namespace extensions {
 
@@ -26,7 +19,12 @@ namespace extensions {
 // between all users on the machine.
 class ExtensionAssetsManagerChromeOS : public ExtensionAssetsManager {
  public:
-  static ExtensionAssetsManagerChromeOS* GetInstance();
+  ExtensionAssetsManagerChromeOS();
+  ~ExtensionAssetsManagerChromeOS() override;
+  ExtensionAssetsManagerChromeOS(const ExtensionAssetsManagerChromeOS&) =
+      delete;
+  ExtensionAssetsManagerChromeOS& operator=(
+      const ExtensionAssetsManagerChromeOS&) = delete;
 
   // A dictionary that maps shared extension IDs to version/paths/users.
   static const char kSharedExtensions[];
@@ -45,42 +43,38 @@ class ExtensionAssetsManagerChromeOS : public ExtensionAssetsManager {
       const Extension* extension,
       const base::FilePath& unpacked_extension_root,
       const base::FilePath& local_install_dir,
-      Profile* profile,
+      content::BrowserContext* browser_context,
       InstallExtensionCallback callback,
       bool updates_from_webstore_or_empty_update_url) override;
   void UninstallExtension(const std::string& id,
-                          Profile* profile,
-                          const base::FilePath& local_install_dir,
-                          const base::FilePath& extension_root) override;
+                          const std::string& profile_user_name,
+                          const base::FilePath& extensions_install_dir,
+                          const base::FilePath& extension_dir_to_delete,
+                          const base::FilePath& profile_dir) override;
 
   // Return shared install dir.
   static base::FilePath GetSharedInstallDir();
 
-  // Return true if |extension| was installed to shared location.
+  // Return true if `extension` was installed to shared location.
   static bool IsSharedInstall(const Extension* extension);
 
   // Cleans up shared extensions list in preferences and returns list of
-  // extension IDs and version paths that are in use in |live_extension_paths|.
+  // extension IDs and version paths that are in use in `live_extension_paths`.
   // Files on disk are not removed. Must be called on UI thread.
-  // Returns |false| in case of errors.
+  // Returns `false` in case of errors.
   static bool CleanUpSharedExtensions(
       std::multimap<std::string, base::FilePath>* live_extension_paths);
 
   static void SetSharedInstallDirForTesting(const base::FilePath& install_dir);
 
  private:
-  friend struct base::DefaultSingletonTraits<ExtensionAssetsManagerChromeOS>;
-
-  ExtensionAssetsManagerChromeOS();
-  ~ExtensionAssetsManagerChromeOS() override;
-
-  // Return |true| if |extension| can be installed in a shared place for all
+  // Return `true` if `extension` can be installed in a shared place for all
   // users on the device.
   static bool CanShareAssets(const Extension* extension,
                              const base::FilePath& unpacked_extension_root,
                              bool updates_from_webstore_or_empty_update_url);
 
-  // Called on the UI thread to check if a given version of the |extension|
+  // Called on the UI thread to check if a given version of the `extension`
   // already exists at the shared location.
   static void CheckSharedExtension(
       const std::string& id,
@@ -113,18 +107,16 @@ class ExtensionAssetsManagerChromeOS : public ExtensionAssetsManager {
 
   // Called on UI thread to mark that shared version is not used.
   static void MarkSharedExtensionUnused(const std::string& id,
-                                        Profile* profile);
+                                        const std::string& profile_user_name);
 
   // Called on task runner thread to remove shared version.
   static void DeleteSharedVersion(const base::FilePath& shared_version_dir);
 
-  // Clean shared extension with given |id|.
+  // Clean shared extension with given `id`.
   static bool CleanUpExtension(
       const std::string& id,
-      base::DictionaryValue* extension_info,
+      base::DictValue& extension_info,
       std::multimap<std::string, base::FilePath>* live_extension_paths);
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionAssetsManagerChromeOS);
 };
 
 }  // namespace extensions

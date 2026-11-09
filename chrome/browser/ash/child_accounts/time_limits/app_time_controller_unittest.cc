@@ -1,75 +1,77 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_controller.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <optional>
+
+#include "ash/constants/ash_pref_names.h"
+#include "ash/public/cpp/notification_utils.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_test.h"
+#include "chrome/browser/ash/child_accounts/apps/app_test_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_activity_registry.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limit_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limits_policy_builder.h"
-#include "chrome/browser/ash/child_accounts/time_limits/app_time_test_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_test.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
-#include "chromeos/dbus/system_clock/system_clock_client.h"
-#include "chromeos/settings/timezone_settings.h"
-#include "components/arc/mojom/app.mojom.h"
-#include "components/arc/test/fake_app_instance.h"
+#include "chromeos/ash/components/dbus/system_clock/system_clock_client.h"
+#include "chromeos/ash/components/settings/timezone_settings.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/icon_loader.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/image/image_skia_rep_default.h"
-#include "ui/message_center/public/cpp/notification.h"
+#include "ui/gfx/image/image_skia_rep.h"
+#include "ui/message_center/message_center.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 namespace {
 
 constexpr char kStartTime[] = "1 Jan 2020 00:00:00 GMT";
-constexpr base::TimeDelta kDay = base::TimeDelta::FromHours(24);
-constexpr base::TimeDelta kSixHours = base::TimeDelta::FromHours(6);
-constexpr base::TimeDelta kOneHour = base::TimeDelta::FromHours(1);
-constexpr base::TimeDelta kZeroTime = base::TimeDelta::FromSeconds(0);
+constexpr base::TimeDelta kDay = base::Hours(24);
+constexpr base::TimeDelta kSixHours = base::Hours(6);
+constexpr base::TimeDelta kOneHour = base::Hours(1);
+constexpr base::TimeDelta kZeroTime = base::Seconds(0);
 constexpr char kApp1Name[] = "App1";
 constexpr char kApp2Name[] = "App2";
-const AppId kApp1(apps::mojom::AppType::kArc, "1");
-const AppId kApp2(apps::mojom::AppType::kArc, "2");
 
 // Calculate the previous reset time.
 base::Time GetLastResetTime(base::Time timestamp) {
   base::Time nearest_midnight = timestamp.LocalMidnight();
   base::Time prev_midnight;
-  if (timestamp > nearest_midnight)
+  if (timestamp > nearest_midnight) {
     prev_midnight = nearest_midnight;
-  else
-    prev_midnight = nearest_midnight - base::TimeDelta::FromHours(24);
+  } else {
+    prev_midnight = nearest_midnight - base::Hours(24);
+  }
 
   // Reset time is at 6 am for the tests.
-  base::Time reset_time = prev_midnight + base::TimeDelta::FromHours(6);
-  if (reset_time <= timestamp)
+  base::Time reset_time = prev_midnight + base::Hours(6);
+  if (reset_time <= timestamp) {
     return reset_time;
-  else
-    return reset_time - base::TimeDelta::FromHours(24);
+  } else {
+    return reset_time - base::Hours(24);
+  }
 }
 
 }  // namespace
@@ -83,24 +85,16 @@ class AppTimeControllerTest : public testing::Test {
     FakeIconLoader& operator=(const FakeIconLoader&) = delete;
     ~FakeIconLoader() override = default;
 
-    apps::mojom::IconKeyPtr GetIconKey(const std::string& app_id) override {
-      return apps::mojom::IconKey::New(0, 0, 0);
-    }
-
     std::unique_ptr<apps::IconLoader::Releaser> LoadIconFromIconKey(
-        apps::mojom::AppType app_type,
-        const std::string& app_id,
-        apps::mojom::IconKeyPtr icon_key,
-        apps::mojom::IconType icon_type,
+        const std::string& id,
+        const apps::IconKey& icon_key,
+        apps::IconType icon_type,
         int32_t size_hint_in_dip,
         bool allow_placeholder_icon,
-        apps::mojom::Publisher::LoadIconCallback callback) override {
-      auto expected_icon_type =
-          (base::FeatureList::IsEnabled(features::kAppServiceAdaptiveIcon))
-              ? apps::mojom::IconType::kStandard
-              : apps::mojom::IconType::kUncompressed;
+        apps::LoadIconCallback callback) override {
+      auto expected_icon_type = apps::IconType::kStandard;
       EXPECT_EQ(icon_type, expected_icon_type);
-      auto iv = apps::mojom::IconValue::New();
+      auto iv = std::make_unique<apps::IconValue>();
       iv->icon_type = icon_type;
       iv->uncompressed =
           gfx::ImageSkia(gfx::ImageSkiaRep(gfx::Size(1, 1), 1.0f));
@@ -118,8 +112,6 @@ class AppTimeControllerTest : public testing::Test {
 
   void SetUp() override;
   void TearDown() override;
-
-  void DisableWebTimeLimit();
 
   void CreateActivityForApp(const AppId& app_id,
                             base::TimeDelta active_time,
@@ -145,31 +137,28 @@ class AppTimeControllerTest : public testing::Test {
     return SystemClockClient::Get()->GetTestInterface();
   }
 
-  NotificationDisplayServiceTester& notification_tester() {
-    return notification_tester_;
-  }
-
   apps::AppServiceTest& app_service_test() { return app_service_test_; }
 
-  Profile& profile() { return profile_; }
+  Profile& profile() { return *profile_.get(); }
+
+  const AppId app1_{apps::AppType::kArc, "1"};
+  const AppId app2_{apps::AppType::kArc, "2"};
 
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  TestingProfile profile_;
-  NotificationDisplayServiceTester notification_tester_{&profile_};
+  std::unique_ptr<TestingProfile> profile_;
+  std::string user_hash_;
   FakeIconLoader icon_loader_;
   apps::AppServiceTest app_service_test_;
-  ArcAppTest arc_test_;
+  ArcAppTest arc_app_test_;
 
   std::unique_ptr<AppTimeController> controller_;
   std::unique_ptr<AppTimeController::TestApi> test_api_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 void AppTimeControllerTest::SetUp() {
   SystemClockClient::InitializeFake();
-  testing::Test::SetUp();
 
   // The tests are going to start at local midnight on January 1.
   base::Time time;
@@ -178,36 +167,36 @@ void AppTimeControllerTest::SetUp() {
   base::TimeDelta forward_by = local_midnight - base::Time::Now();
   task_environment_.FastForwardBy(forward_by);
 
-  app_service_test_.SetUp(&profile_);
-  apps::AppServiceProxyFactory::GetForProfile(&profile_)
+  message_center::MessageCenter::Initialize();
+
+  arc_app_test_.PreProfileSetUp();
+  profile_ = std::make_unique<TestingProfile>();
+
+  app_service_test_.SetUp(profile_.get());
+  apps::AppServiceProxyFactory::GetForProfile(profile_.get())
       ->OverrideInnerIconLoaderForTesting(&icon_loader_);
 
-  arc_test_.SetUp(&profile_);
-  arc_test_.app_instance()->set_icon_response_type(
+  arc_app_test_.PostProfileSetUp(profile_.get());
+  const user_manager::User* user = arc_app_test_.user();
+  ASSERT_TRUE(user);
+  user_hash_ = user->username_hash();
+  arc_app_test_.app_instance()->set_icon_response_type(
       arc::FakeAppInstance::IconResponseType::ICON_RESPONSE_SKIP);
   task_environment_.RunUntilIdle();
 
   InstantiateController();
-  SimulateInstallArcApp(kApp1, kApp1Name);
-  SimulateInstallArcApp(kApp2, kApp2Name);
+  SimulateInstallArcApp(app1_, kApp1Name);
+  SimulateInstallArcApp(app2_, kApp2Name);
 }
 
 void AppTimeControllerTest::TearDown() {
   test_api_.reset();
   controller_.reset();
-  arc_test_.TearDown();
+  arc_app_test_.PreProfileTearDown();
+  profile_.reset();
+  arc_app_test_.PostProfileTearDown();
+  message_center::MessageCenter::Shutdown();
   SystemClockClient::Shutdown();
-  testing::Test::TearDown();
-}
-
-void AppTimeControllerTest::DisableWebTimeLimit() {
-  scoped_feature_list_.InitWithFeatures(
-      /* enabled_features */ {},
-      /* disabled_features */ {{features::kWebTimeLimits}});
-
-  // Recreate app time controller.
-  DeleteController();
-  InstantiateController();
 }
 
 void AppTimeControllerTest::CreateActivityForApp(const AppId& app_id,
@@ -219,22 +208,23 @@ void AppTimeControllerTest::CreateActivityForApp(const AppId& app_id,
   registry->SetAppLimit(app_id, limit);
   task_environment_.RunUntilIdle();
 
-  // AppActivityRegistry uses |window| to uniquely identify between different
-  // instances of the same active application. Since this test is just trying to
-  // mock one instance of an application, using nullptr is good enough.
-  registry->OnAppActive(app_id, /* window */ nullptr, base::Time::Now());
+  // AppActivityRegistry uses `instance_id` to uniquely identify between
+  // different instances of the same active application.
+  auto instance_id = base::UnguessableToken::Create();
+  registry->OnAppActive(app_id, instance_id, base::Time::Now());
   task_environment_.FastForwardBy(time_active);
   if (time_active < time_limit) {
-    registry->OnAppInactive(app_id, /* window */ nullptr, base::Time::Now());
+    registry->OnAppInactive(app_id, instance_id, base::Time::Now());
   }
 }
 
 void AppTimeControllerTest::SimulateInstallArcApp(const AppId& app_id,
                                                   const std::string& app_name) {
   std::string package_name = app_id.app_id();
-  arc_test_.AddPackage(CreateArcAppPackage(package_name)->Clone());
-  const arc::mojom::AppInfo app = CreateArcAppInfo(package_name, app_name);
-  arc_test_.app_instance()->SendPackageAppListRefreshed(package_name, {app});
+  arc_app_test_.AddPackage(CreateArcAppPackage(package_name)->Clone());
+  std::vector<arc::mojom::AppInfoPtr> apps;
+  apps.emplace_back(CreateArcAppInfo(package_name, app_name));
+  arc_app_test_.app_instance()->SendPackageAppListRefreshed(package_name, apps);
   task_environment_.RunUntilIdle();
   return;
 }
@@ -253,25 +243,21 @@ bool AppTimeControllerTest::HasNotificationFor(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   notification_id = base::StrCat({notification_id, app_name});
 
-  absl::optional<message_center::Notification> message_center_notification =
-      notification_tester_.GetNotification(notification_id);
-  return message_center_notification.has_value();
+  return message_center::MessageCenter::Get()->FindNotificationById(
+      CreateUserScopedNotificationId(notification_id, user_hash_));
 }
 
 size_t AppTimeControllerTest::GetNotificationsCount() {
-  return notification_tester_
-      .GetDisplayedNotificationsForType(NotificationHandler::Type::TRANSIENT)
-      .size();
+  return message_center::MessageCenter::Get()->NotificationCount();
 }
 
 void AppTimeControllerTest::DismissNotifications() {
-  notification_tester_.RemoveAllNotifications(
-      NotificationHandler::Type::TRANSIENT, true /* by_user */);
+  message_center::MessageCenter::Get()->RemoveAllNotifications(
+      /*by_user=*/true, message_center::MessageCenter::RemoveType::ALL);
 }
 
 void AppTimeControllerTest::DeleteController() {
@@ -280,8 +266,9 @@ void AppTimeControllerTest::DeleteController() {
 }
 
 void AppTimeControllerTest::InstantiateController() {
-  controller_ = std::make_unique<AppTimeController>(
-      &profile_, base::DoNothing::Repeatedly());
+  controller_ =
+      std::make_unique<AppTimeController>(profile_.get(), base::DoNothing());
+  controller_->Init();
   test_api_ = std::make_unique<AppTimeController::TestApi>(controller_.get());
 }
 
@@ -303,34 +290,34 @@ TEST_F(AppTimeControllerTest, ResetTimeReached) {
   ASSERT_EQ(start_time, start_time.LocalMidnight());
 
   // This App will not reach its time limit. Advances time by 1 hour.
-  CreateActivityForApp(kApp1, kOneHour, kOneHour * 2);
+  CreateActivityForApp(app1_, kOneHour, kOneHour * 2);
 
   // This app will reach its time limit. Advances time by 1 hour.
-  CreateActivityForApp(kApp2, kOneHour, kOneHour / 2);
+  CreateActivityForApp(app2_, kOneHour, kOneHour / 2);
 
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kOneHour);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kOneHour / 2);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kOneHour);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kOneHour / 2);
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kLimitReached);
 
   // The default reset time is 6 hours after local midnight. Fast forward by 4
   // hours to reach it. FastForwardBy triggers the reset timer.
-  task_environment().FastForwardBy(base::TimeDelta::FromHours(4));
+  task_environment().FastForwardBy(base::Hours(4));
 
   // Make sure that there is no activity
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kAvailable);
 }
 
 TEST_F(AppTimeControllerTest, SystemTimeChangedFastForwardByTwoDays) {
-  CreateActivityForApp(kApp1, kOneHour, kOneHour * 2);
-  CreateActivityForApp(kApp2, kOneHour, kOneHour / 2);
+  CreateActivityForApp(app1_, kOneHour, kOneHour * 2);
+  CreateActivityForApp(app2_, kOneHour, kOneHour / 2);
 
   // Advance system time with two days. TaskEnvironment::AdvanceClock doesn't
   // run the tasks that have been posted. This allows us to simulate the system
@@ -339,34 +326,34 @@ TEST_F(AppTimeControllerTest, SystemTimeChangedFastForwardByTwoDays) {
 
   // Since the reset timer has not been triggered the application activities are
   // instact.
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kOneHour);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kOneHour / 2);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kOneHour);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kOneHour / 2);
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kLimitReached);
 
   // Notify AppTimeController that system time has changed. This triggers reset.
   system_clock_client_test()->NotifyObserversSystemClockUpdated();
 
   // Make sure that there is no activity
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kAvailable);
 }
 
 TEST_F(AppTimeControllerTest, SystemTimeChangedGoingBackwards) {
-  CreateActivityForApp(kApp1, kOneHour, kOneHour * 2);
-  CreateActivityForApp(kApp2, kOneHour, kOneHour / 2);
+  CreateActivityForApp(app1_, kOneHour, kOneHour * 2);
+  CreateActivityForApp(app2_, kOneHour, kOneHour / 2);
 
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kOneHour);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kOneHour / 2);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kOneHour);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kOneHour / 2);
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kLimitReached);
 
   // Simulate time has gone back by setting the last reset time to be in the
@@ -376,41 +363,42 @@ TEST_F(AppTimeControllerTest, SystemTimeChangedGoingBackwards) {
   system_clock_client_test()->NotifyObserversSystemClockUpdated();
 
   // Make sure that there is no activity
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kAvailable);
 }
 
 TEST_F(AppTimeControllerTest, TimeLimitNotification) {
   AppActivityRegistry* registry = controller()->app_registry();
 
-  const AppLimit limit1(AppRestriction::kTimeLimit,
-                        base::TimeDelta::FromMinutes(35), base::Time::Now());
-  const AppLimit limit2(AppRestriction::kTimeLimit,
-                        base::TimeDelta::FromMinutes(30), base::Time::Now());
-  const std::map<AppId, AppLimit> limits{{kApp1, limit1}, {kApp2, limit2}};
+  const AppLimit limit1(AppRestriction::kTimeLimit, base::Minutes(35),
+                        base::Time::Now());
+  const AppLimit limit2(AppRestriction::kTimeLimit, base::Minutes(30),
+                        base::Time::Now());
+  const std::map<AppId, AppLimit> limits{{app1_, limit1}, {app2_, limit2}};
   registry->UpdateAppLimits(limits);
   task_environment().RunUntilIdle();
 
-  registry->OnAppActive(kApp1, /* window */ nullptr, base::Time::Now());
-  registry->OnAppActive(kApp2, /* window */ nullptr, base::Time::Now());
+  auto instance_id = base::UnguessableToken::Create();
+  registry->OnAppActive(app1_, instance_id, base::Time::Now());
+  registry->OnAppActive(app2_, instance_id, base::Time::Now());
 
-  task_environment().FastForwardBy(base::TimeDelta::FromMinutes(25));
+  task_environment().FastForwardBy(base::Minutes(25));
 
-  // Expect that there is a 5 minute notification for kApp2.
+  // Expect that there is a 5 minute notification for app2_.
   EXPECT_TRUE(HasNotificationFor(kApp2Name, AppNotification::kFiveMinutes));
 
   // One minute left notification will be shown and then the app will reach its
   // time limit.
-  task_environment().FastForwardBy(base::TimeDelta::FromMinutes(5));
+  task_environment().FastForwardBy(base::Minutes(5));
 
   EXPECT_TRUE(HasNotificationFor(kApp2Name, AppNotification::kOneMinute));
   EXPECT_TRUE(HasNotificationFor(kApp1Name, AppNotification::kFiveMinutes));
 
-  task_environment().FastForwardBy(base::TimeDelta::FromMinutes(5));
+  task_environment().FastForwardBy(base::Minutes(5));
 
   EXPECT_TRUE(HasNotificationFor(kApp1Name, AppNotification::kOneMinute));
 }
@@ -419,11 +407,11 @@ TEST_F(AppTimeControllerTest, TimeLimitUpdatedNotification) {
   AppActivityRegistry* registry = controller()->app_registry();
 
   // Set new time limits.
-  const AppLimit limit1(AppRestriction::kTimeLimit,
-                        base::TimeDelta::FromMinutes(35), base::Time::Now());
-  const AppLimit limit2(AppRestriction::kTimeLimit,
-                        base::TimeDelta::FromMinutes(30), base::Time::Now());
-  registry->UpdateAppLimits({{kApp1, limit1}, {kApp2, limit2}});
+  const AppLimit limit1(AppRestriction::kTimeLimit, base::Minutes(35),
+                        base::Time::Now());
+  const AppLimit limit2(AppRestriction::kTimeLimit, base::Minutes(30),
+                        base::Time::Now());
+  registry->UpdateAppLimits({{app1_, limit1}, {app2_, limit2}});
   task_environment().RunUntilIdle();
 
   // Expect time limit changed notification for both apps.
@@ -436,11 +424,10 @@ TEST_F(AppTimeControllerTest, TimeLimitUpdatedNotification) {
   DismissNotifications();
 
   // Only update one time limit.
-  const base::TimeDelta delta = base::TimeDelta::FromMinutes(1);
-  const AppLimit limit3(AppRestriction::kTimeLimit,
-                        base::TimeDelta::FromMinutes(10),
+  const base::TimeDelta delta = base::Minutes(1);
+  const AppLimit limit3(AppRestriction::kTimeLimit, base::Minutes(10),
                         base::Time::Now() + delta);
-  registry->UpdateAppLimits({{kApp1, limit1}, {kApp2, limit3}});
+  registry->UpdateAppLimits({{app1_, limit1}, {app2_, limit3}});
   task_environment().RunUntilIdle();
   EXPECT_EQ(1u, GetNotificationsCount());
   EXPECT_TRUE(
@@ -449,7 +436,7 @@ TEST_F(AppTimeControllerTest, TimeLimitUpdatedNotification) {
   DismissNotifications();
 
   // Remove one time limit.
-  registry->UpdateAppLimits({{kApp2, limit3}});
+  registry->UpdateAppLimits({{app2_, limit3}});
   task_environment().RunUntilIdle();
   EXPECT_EQ(1u, GetNotificationsCount());
   EXPECT_TRUE(
@@ -461,15 +448,13 @@ TEST_F(AppTimeControllerTest, TimeLimitUpdatedNotification) {
 TEST_F(AppTimeControllerTest, RestoreLastResetTime) {
   {
     AppTimeLimitsPolicyBuilder builder;
-    builder.AddAppLimit(kApp1, AppLimit(AppRestriction::kTimeLimit,
+    builder.AddAppLimit(app1_, AppLimit(AppRestriction::kTimeLimit,
                                         kOneHour * 2, base::Time::Now()));
-    builder.AddAppLimit(kApp2, AppLimit(AppRestriction::kTimeLimit,
+    builder.AddAppLimit(app2_, AppLimit(AppRestriction::kTimeLimit,
                                         kOneHour / 2, base::Time::Now()));
     builder.SetResetTime(6, 0);
-    DictionaryPrefUpdate update(profile().GetPrefs(),
-                                prefs::kPerAppTimeLimitsPolicy);
-    base::Value* value = update.Get();
-    *value = builder.value().Clone();
+    profile().GetPrefs()->SetDict(ash::prefs::kPerAppTimeLimitsPolicy,
+                                  builder.value().Clone());
   }
 
   // If there was no valid last reset time stored in user pref,
@@ -478,15 +463,18 @@ TEST_F(AppTimeControllerTest, RestoreLastResetTime) {
   base::Time last_reset_time = GetLastResetTime(base::Time::Now());
   EXPECT_EQ(test_api()->GetLastResetTime(), last_reset_time);
 
-  controller()->app_registry()->OnAppActive(kApp1, nullptr, last_reset_time);
-  controller()->app_registry()->OnAppActive(kApp2, nullptr, last_reset_time);
+  auto instance_id = base::UnguessableToken::Create();
+  controller()->app_registry()->OnAppActive(app1_, instance_id,
+                                            last_reset_time);
+  controller()->app_registry()->OnAppActive(app2_, instance_id,
+                                            last_reset_time);
   task_environment().FastForwardBy(kOneHour);
 
-  controller()->app_registry()->OnAppInactive(kApp1, nullptr,
+  controller()->app_registry()->OnAppInactive(app1_, instance_id,
                                               base::Time::Now());
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kLimitReached);
 
   AppActivityRegistry::TestApi(controller()->app_registry()).SaveAppActivity();
@@ -501,12 +489,12 @@ TEST_F(AppTimeControllerTest, RestoreLastResetTime) {
   // its last reset time.
   EXPECT_EQ(test_api()->GetLastResetTime(), last_reset_time);
 
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kLimitReached);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kOneHour);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kOneHour / 2);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kOneHour);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kOneHour / 2);
 
   DeleteController();
 
@@ -514,7 +502,7 @@ TEST_F(AppTimeControllerTest, RestoreLastResetTime) {
   // |last_reset_time|.
   last_reset_time = last_reset_time - kDay;
   profile().GetPrefs()->SetInt64(
-      prefs::kPerAppTimeLimitsLastResetTime,
+      ash::prefs::kPerAppTimeLimitsLastResetTime,
       last_reset_time.ToDeltaSinceWindowsEpoch().InMicroseconds());
 
   InstantiateController();
@@ -524,12 +512,12 @@ TEST_F(AppTimeControllerTest, RestoreLastResetTime) {
   EXPECT_EQ(test_api()->GetLastResetTime(),
             GetLastResetTime(base::Time::Now()));
 
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp1),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app1_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetAppState(kApp2),
+  EXPECT_EQ(controller()->app_registry()->GetAppState(app2_),
             AppState::kAvailable);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp1), kZeroTime);
-  EXPECT_EQ(controller()->app_registry()->GetActiveTime(kApp2), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app1_), kZeroTime);
+  EXPECT_EQ(controller()->app_registry()->GetActiveTime(app2_), kZeroTime);
 }
 
 TEST_F(AppTimeControllerTest, MetricsTest) {
@@ -539,18 +527,16 @@ TEST_F(AppTimeControllerTest, MetricsTest) {
 
   {
     AppTimeLimitsPolicyBuilder builder;
-    AppId absent_app(apps::mojom::AppType::kArc, "absent_app");
+    AppId absent_app(apps::AppType::kArc, "absent_app");
     AppLimit app_limit(AppRestriction::kTimeLimit, kOneHour, base::Time::Now());
-    AppLimit blocked_app(AppRestriction::kBlocked, absl::nullopt,
+    AppLimit blocked_app(AppRestriction::kBlocked, std::nullopt,
                          base::Time::Now());
-    builder.AddAppLimit(kApp1, app_limit);
+    builder.AddAppLimit(app1_, app_limit);
     builder.AddAppLimit(absent_app, app_limit);
-    builder.AddAppLimit(kApp2, blocked_app);
+    builder.AddAppLimit(app2_, blocked_app);
     builder.SetResetTime(6, 0);
-    DictionaryPrefUpdate update(profile().GetPrefs(),
-                                prefs::kPerAppTimeLimitsPolicy);
-    base::Value* value = update.Get();
-    *value = builder.value().Clone();
+    profile().GetPrefs()->SetDict(ash::prefs::kPerAppTimeLimitsPolicy,
+                                  builder.value().Clone());
   }
 
   // Enagagement is recorded at the beginning of the session when
@@ -590,10 +576,11 @@ TEST_F(AppTimeControllerTest, SetLastResetTimeTest) {
   base::Time now = base::Time::Now();
   base::Time nearest_midnight = now.LocalMidnight();
   base::Time prev_midnight;
-  if (now > nearest_midnight)
+  if (now > nearest_midnight) {
     prev_midnight = nearest_midnight;
-  else
+  } else {
     prev_midnight = nearest_midnight - kDay;
+  }
 
   base::Time reset_time = prev_midnight + kSixHours;
 
@@ -613,5 +600,4 @@ TEST_F(AppTimeControllerTest, SetLastResetTimeTest) {
   EXPECT_EQ(test_api()->GetLastResetTime(), reset_time);
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

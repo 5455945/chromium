@@ -15,10 +15,12 @@
 |         this.value=""
 |         <shadow:root>
 |           <div>
+|             <br>
+|               aria-hidden="true"
+|               id="textarea-placeholder-break"
 |       "
 "
 |       <shadow:root>
 |         <slot>
-|           name="user-agent-default-slot"
 |     "
 "

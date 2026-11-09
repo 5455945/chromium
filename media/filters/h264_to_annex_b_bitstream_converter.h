@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/containers/span_writer.h"
 #include "media/base/media_export.h"
 
 namespace media {
@@ -24,6 +25,12 @@ struct AVCDecoderConfigurationRecord;
 class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
  public:
   H264ToAnnexBBitstreamConverter();
+
+  H264ToAnnexBBitstreamConverter(const H264ToAnnexBBitstreamConverter&) =
+      delete;
+  H264ToAnnexBBitstreamConverter& operator=(
+      const H264ToAnnexBBitstreamConverter&) = delete;
+
   ~H264ToAnnexBBitstreamConverter();
 
   // Parses the global AVCDecoderConfigurationRecord from the file format's
@@ -33,8 +40,6 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   // Parameters
   //   configuration_record
   //     Pointer to buffer containing AVCDecoderConfigurationRecord.
-  //   configuration_record_size
-  //     Size of the buffer in bytes.
   //   avc_config
   //     Pointer to place the parsed AVCDecoderConfigurationRecord data into.
   //
@@ -42,8 +47,7 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   //   Returns true if |configuration_record| was successfully parsed. False
   //   is returned if a parsing error occurred.
   //   |avc_config| only contains valid data when true is returned.
-  bool ParseConfiguration(const uint8_t* configuration_record,
-                          int configuration_record_size,
+  bool ParseConfiguration(base::span<const uint8_t> configuration_record,
                           mp4::AVCDecoderConfigurationRecord* avc_config);
 
   // Returns the buffer size needed to store the parameter sets in |avc_config|
@@ -57,8 +61,6 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   // Parameters
   //   input
   //     Pointer to buffer containing NAL units in MP4 format.
-  //   input_size
-  //     Size of the buffer in bytes.
   //   avc_config
   //     The AVCDecoderConfigurationRecord that contains the parameter sets that
   //     will be inserted into the output. NULL if no parameter sets need to be
@@ -69,8 +71,7 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   //   to bytestream format, or 0 if could not determine the size of
   //   the output buffer from the data in |input| and |avc_config|.
   uint32_t CalculateNeededOutputBufferSize(
-      const uint8_t* input,
-      uint32_t input_size,
+      base::span<const uint8_t> input,
       const mp4::AVCDecoderConfigurationRecord* avc_config) const;
 
   // ConvertAVCDecoderConfigToByteStream converts the
@@ -95,7 +96,7 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   //          of converted data)
   bool ConvertAVCDecoderConfigToByteStream(
       const mp4::AVCDecoderConfigurationRecord& avc_config,
-      uint8_t* output,
+      base::span<uint8_t> output,
       uint32_t* output_size);
 
   // ConvertNalUnitStreamToByteStream converts the NAL unit from MP4 format
@@ -106,8 +107,6 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   // Parameters
   //   input
   //     Pointer to buffer containing NAL units in MP4 format.
-  //   input_size
-  //     Size of the buffer in bytes.
   //   avc_config
   //     The AVCDecoderConfigurationRecord that contains the parameter sets to
   //     insert into the output. NULL if no parameter sets need to be inserted.
@@ -122,23 +121,20 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   //    false if conversion not successful (output_size will hold the amount
   //          of converted data)
   bool ConvertNalUnitStreamToByteStream(
-      const uint8_t* input,
-      uint32_t input_size,
+      base::span<const uint8_t> input,
       const mp4::AVCDecoderConfigurationRecord* avc_config,
-      uint8_t* output,
+      base::span<uint8_t> output,
       uint32_t* output_size);
 
  private:
-  // Writes Annex B start code and |param_set| to |*out|.
-  //  |*out| - Is the memory location to write the parameter set.
-  //  |*out_size| - Number of bytes available for the parameter set.
+  // Use |writer| to write the Annex B start code and |param_set| to the buffer.
+  //  |writer| - Is the writer of the buffer.
   // Returns true if the start code and param set were successfully
-  // written. On a successful write, |*out| is updated to point to the first
-  // byte after the data that was written. |*out_size| is updated to reflect
-  // the new number of bytes left in |*out|.
+  // written. On a successful write, |writer| will update the write position
+  // of the buffer and the number of bytes written and the number of bytes
+  // remaining.
   bool WriteParamSet(const std::vector<uint8_t>& param_set,
-                     uint8_t** out,
-                     uint32_t* out_size) const;
+                     base::SpanWriter<uint8_t>& writer) const;
 
   // Flag for indicating whether global parameter sets have been processed.
   bool configuration_processed_;
@@ -146,8 +142,6 @@ class MEDIA_EXPORT H264ToAnnexBBitstreamConverter {
   bool first_nal_unit_in_access_unit_;
   // Variable to hold interleaving field's length in bytes.
   uint8_t nal_unit_length_field_width_;
-
-  DISALLOW_COPY_AND_ASSIGN(H264ToAnnexBBitstreamConverter);
 };
 
 }  // namespace media

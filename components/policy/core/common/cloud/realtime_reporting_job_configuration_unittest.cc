@@ -1,31 +1,45 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
 
+#include <cstddef>
+#include <optional>
 #include <set>
 #include <vector>
 
+#include "base/check_deref.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/enterprise/common/proto/synced/browser_events.pb.h"
+#include "components/enterprise/common/proto/synced_from_google3/chrome_reporting_entity.pb.h"
+#include "components/enterprise/common/proto/upload_request_response.pb.h"
+#include "components/enterprise/connectors/core/reporting_constants.h"
+#include "components/enterprise/connectors/core/reporting_event_mappings.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "components/policy/core/common/cloud/mock_device_management_service.h"
+#include "components/policy/core/common/features.h"
 #include "components/version_info/version_info.h"
+#include "net/base/net_errors.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/system/fake_statistics_provider.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_version.h"
 #endif
 
 namespace em = enterprise_management;
@@ -35,38 +49,31 @@ using testing::StrictMock;
 
 namespace policy {
 
-std::vector<std::string> ids = {"id1", "id2", "id3"};
-
-constexpr char kAppPackage[] = "appPackage";
-constexpr char kEventType[] = "eventType";
-constexpr char kAppInstallEvent[] = "androidAppInstallEvent";
 constexpr char kEventId[] = "eventId";
 constexpr char kStatusCode[] = "status";
 
 constexpr char kDummyToken[] = "dm_token";
-constexpr char kPackage[] = "unitTestPackage";
-
-const base::Value empty_response;
+constexpr char kExtensionId[] = "unitTestExtensionId";
+constexpr char kExtensionName[] = "unitTestExtensionName";
 
 class MockCallbackObserver {
  public:
   MockCallbackObserver() = default;
 
-  MOCK_METHOD4(OnURLLoadComplete,
-               void(DeviceManagementService::Job* job,
-                    DeviceManagementStatus code,
-                    int net_error,
-                    const base::Value&));
+  MOCK_METHOD(
+      void,
+      OnURLLoadComplete,
+      (DeviceManagementService::Job * job,
+       DeviceManagementStatus code,
+       int response_code,
+       std::optional<base::DictValue> response,
+       const ::chrome::cros::reporting::proto::UploadEventsRequest& request));
 };
-
-MATCHER_P(MatchDict, expected, "matches DictionaryValue") {
-  return arg == expected;
-}
 
 class RealtimeReportingJobConfigurationTest : public testing::Test {
  public:
   RealtimeReportingJobConfigurationTest()
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       : client_(&service_),
         fake_serial_number_(&fake_statistics_provider_)
 #else
@@ -77,78 +84,88 @@ class RealtimeReportingJobConfigurationTest : public testing::Test {
 
   void SetUp() override {
     client_.SetDMToken(kDummyToken);
+    feature_list_.InitWithFeatures(
+        {policy::features::kEnhancedSecurityEventFields}, {});
+
     configuration_ = std::make_unique<RealtimeReportingJobConfiguration>(
         &client_, service_.configuration()->GetRealtimeReportingServerUrl(),
-        /*include_device_info=*/true, /*add_connector_url_params=*/false,
+        /*include_device_info=*/true,
         base::BindOnce(&MockCallbackObserver::OnURLLoadComplete,
                        base::Unretained(&callback_observer_)));
-    base::Value context(base::Value::Type::DICTIONARY);
-    context.SetStringPath("browser.userAgent", "dummyAgent");
-    base::Value events(base::Value::Type::LIST);
-    for (size_t i = 0; i < ids.size(); ++i) {
-      base::Value event = CreateEvent(ids[i], i);
-      events.Append(std::move(event));
+    ::chrome::cros::reporting::proto::UploadEventsRequest request;
+    request.mutable_browser()->set_user_agent("dummyAgent");
+    for (size_t i = 0; i < kIds.size(); ++i) {
+      request.add_events()->MergeFrom(CreateEventProto(kIds[i], i));
     }
-
-    base::Value report = RealtimeReportingJobConfiguration::BuildReport(
-        std::move(events), std::move(context));
-    configuration_->AddReport(std::move(report));
+    configuration_->AddRequest(std::move(request));
   }
 
  protected:
-  static base::Value CreateEvent(std::string& event_id, int type) {
-    base::Value event(base::Value::Type::DICTIONARY);
-    event.SetStringKey(kAppPackage, kPackage);
-    event.SetIntKey(kEventType, type);
-    base::Value wrapper(base::Value::Type::DICTIONARY);
-    wrapper.SetKey(kAppInstallEvent, std::move(event));
-    wrapper.SetStringKey(kEventId, event_id);
-    return wrapper;
+  const std::vector<std::string> kIds = {"id1", "id2", "id3"};
+  base::HistogramTester histogram_;
+
+  static ::chrome::cros::reporting::proto::Event CreateEventProto(
+      const std::string& event_id,
+      int extension_action_type) {
+    ::chrome::cros::reporting::proto::Event event;
+    event.set_event_id(event_id);
+    event.mutable_browser_extension_install_event()->set_name(kExtensionName);
+    event.mutable_browser_extension_install_event()->set_id(kExtensionId);
+    event.mutable_browser_extension_install_event()->set_extension_action_type(
+        static_cast<::chrome::cros::reporting::proto::
+                        BrowserExtensionInstallEvent::ExtensionAction>(
+            extension_action_type));
+    return event;
   }
 
-  static base::Value CreateResponse(
+  static base::DictValue CreateResponse(
       const std::set<std::string>& success_ids,
       const std::set<std::string>& failed_ids,
       const std::set<std::string>& permanent_failed_ids) {
-    base::Value response(base::Value::Type::DICTIONARY);
-    if (success_ids.size()) {
-      base::Value* list =
-          response.SetKey(RealtimeReportingJobConfiguration::kUploadedEventsKey,
-                          base::Value(base::Value::Type::LIST));
+    base::DictValue response;
+    if (!success_ids.empty()) {
+      base::ListValue& list =
+          response
+              .Set(RealtimeReportingJobConfiguration::kUploadedEventsKey,
+                   base::Value(base::Value::Type::LIST))
+              ->GetList();
       for (const auto& id : success_ids) {
-        list->Append(id);
+        list.Append(id);
       }
     }
-    if (failed_ids.size()) {
-      base::Value* list =
-          response.SetKey(RealtimeReportingJobConfiguration::kFailedUploadsKey,
-                          base::Value(base::Value::Type::LIST));
+    if (!failed_ids.empty()) {
+      base::ListValue& list =
+          response
+              .Set(RealtimeReportingJobConfiguration::kFailedUploadsKey,
+                   base::Value(base::Value::Type::LIST))
+              ->GetList();
       for (const auto& id : failed_ids) {
-        base::Value failure(base::Value::Type::DICTIONARY);
-        failure.SetStringKey(kEventId, id);
-        failure.SetIntKey(kStatusCode, 8 /* RESOURCE_EXHAUSTED */);
-        list->Append(std::move(failure));
+        base::DictValue failure;
+        failure.Set(kEventId, id);
+        failure.Set(kStatusCode, 8 /* RESOURCE_EXHAUSTED */);
+        list.Append(std::move(failure));
       }
     }
-    if (permanent_failed_ids.size()) {
-      base::Value* list = response.SetKey(
-          RealtimeReportingJobConfiguration::kPermanentFailedUploadsKey,
-          base::Value(base::Value::Type::LIST));
+    if (!permanent_failed_ids.empty()) {
+      base::ListValue& list =
+          response
+              .Set(
+                  RealtimeReportingJobConfiguration::kPermanentFailedUploadsKey,
+                  base::Value(base::Value::Type::LIST))
+              ->GetList();
       for (const auto& id : permanent_failed_ids) {
-        base::Value failure(base::Value::Type::DICTIONARY);
-        failure.SetStringKey(kEventId, id);
-        failure.SetIntKey(kStatusCode, 9 /* FAILED_PRECONDITION */);
-        list->Append(std::move(failure));
+        base::DictValue failure;
+        failure.Set(kEventId, id);
+        failure.Set(kStatusCode, 9 /* FAILED_PRECONDITION */);
+        list.Append(std::move(failure));
       }
     }
 
     return response;
   }
 
-  static std::string CreateResponseString(const base::Value& response) {
-    std::string response_string;
-    base::JSONWriter::Write(response, &response_string);
-    return response_string;
+  static std::string CreateResponseString(const base::DictValue& response) {
+    return base::WriteJson(response).value_or("");
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_;
@@ -157,91 +174,90 @@ class RealtimeReportingJobConfigurationTest : public testing::Test {
   MockCloudPolicyClient client_;
   StrictMock<MockCallbackObserver> callback_observer_;
   DeviceManagementService::Job job_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  chromeos::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
   class ScopedFakeSerialNumber {
    public:
     explicit ScopedFakeSerialNumber(
-        chromeos::system::ScopedFakeStatisticsProvider*
-            fake_statistics_provider) {
+        ash::system::ScopedFakeStatisticsProvider* fake_statistics_provider) {
       // The fake serial number must be set before |configuration_| is
       // constructed below.
       fake_statistics_provider->SetMachineStatistic(
-          chromeos::system::kSerialNumberKeyForTest, "fake_serial_number");
+          ash::system::kSerialNumberKey, "fake_serial_number");
+      fake_statistics_provider->SetLoadingState(
+          ash::system::StatisticsProvider::LoadingState::kFinished);
     }
   };
   ScopedFakeSerialNumber fake_serial_number_;
 #endif
   std::unique_ptr<RealtimeReportingJobConfiguration> configuration_;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 TEST_F(RealtimeReportingJobConfigurationTest, ValidatePayload) {
-  absl::optional<base::Value> payload =
-      base::JSONReader::Read(configuration_->GetPayload());
-  EXPECT_TRUE(payload.has_value());
-  EXPECT_EQ(kDummyToken, *payload->FindStringPath(
-                             ReportingJobConfigurationBase::
-                                 DeviceDictionaryBuilder::GetDMTokenPath()));
-  EXPECT_EQ(
-      client_.client_id(),
-      *payload->FindStringPath(ReportingJobConfigurationBase::
-                                   DeviceDictionaryBuilder::GetClientIdPath()));
-  EXPECT_EQ(GetOSUsername(),
-            *payload->FindStringPath(
-                ReportingJobConfigurationBase::BrowserDictionaryBuilder::
-                    GetMachineUserPath()));
+  // If using the proto format, validate the request.
+  ::chrome::cros::reporting::proto::UploadEventsRequest request;
+  request.ParseFromString(configuration_->GetPayload());
+  EXPECT_EQ(kDummyToken, request.device().dm_token());
+  EXPECT_EQ(client_.client_id(), request.device().client_id());
+  EXPECT_EQ(GetOSUsername(), request.browser().machine_user());
   EXPECT_EQ(version_info::GetVersionNumber(),
-            *payload->FindStringPath(
-                ReportingJobConfigurationBase::BrowserDictionaryBuilder::
-                    GetChromeVersionPath()));
-  EXPECT_EQ(GetOSPlatform(),
-            *payload->FindStringPath(
-                ReportingJobConfigurationBase::DeviceDictionaryBuilder::
-                    GetOSPlatformPath()));
-  EXPECT_EQ(GetOSVersion(),
-            *payload->FindStringPath(
-                ReportingJobConfigurationBase::DeviceDictionaryBuilder::
-                    GetOSVersionPath()));
+            request.browser().chrome_version());
+  EXPECT_EQ(GetOSPlatform(), request.device().os_platform());
+  EXPECT_EQ(GetOSVersion(), request.device().os_version());
   EXPECT_FALSE(GetDeviceName().empty());
-  EXPECT_EQ(GetDeviceName(), *payload->FindStringPath(
-                                 ReportingJobConfigurationBase::
-                                     DeviceDictionaryBuilder::GetNamePath()));
+  EXPECT_EQ(GetDeviceName(), request.device().name());
+  if (policy::features::IsEnhancedSecurityEventFieldsEnabled()) {
+    EXPECT_FALSE(GetDeviceFqdn().empty());
+    EXPECT_EQ(GetDeviceFqdn(), request.device().device_fqdn());
+    EXPECT_EQ(GetNetworkName(), request.device().network_name());
+  } else {
+    EXPECT_TRUE(request.device().device_fqdn().empty());
+    EXPECT_TRUE(request.device().network_name().empty());
+  }
 
-  base::Value* events =
-      payload->FindListKey(RealtimeReportingJobConfiguration::kEventListKey);
-  EXPECT_EQ(ids.size(), events->GetList().size());
+  EXPECT_EQ(kIds.size(), base::checked_cast<size_t>(request.events_size()));
   int i = -1;
-  for (const auto& event : events->GetList()) {
-    auto* id = event.FindStringKey(kEventId);
-    EXPECT_EQ(ids[++i], *id);
-    auto type = event.FindKey(kAppInstallEvent)->FindIntKey(kEventType);
-    EXPECT_EQ(i, *type);
+  for (const auto& event : request.events()) {
+    EXPECT_EQ(kIds[++i], event.event_id());
+    auto extension_event = event.browser_extension_install_event();
+    EXPECT_EQ(kExtensionName, extension_event.name());
+    EXPECT_EQ(kExtensionId, extension_event.id());
+    EXPECT_EQ(static_cast<::chrome::cros::reporting::proto::
+                              BrowserExtensionInstallEvent::ExtensionAction>(i),
+              extension_event.extension_action_type());
   }
 }
 
 TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_Success) {
-  base::Value response = CreateResponse({ids[0], ids[1], ids[2]}, {}, {});
+  base::DictValue response =
+      CreateResponse(/*success_ids=*/{kIds[0], kIds[1], kIds[2]},
+                     /*failed_ids=*/{}, /*permanent_failed_ids=*/{});
   EXPECT_CALL(callback_observer_,
-              OnURLLoadComplete(&job_, DM_STATUS_SUCCESS, net::OK,
-                                testing::Eq(testing::ByRef(response))));
+              OnURLLoadComplete(&job_, DM_STATUS_SUCCESS,
+                                DeviceManagementService::kSuccess,
+                                testing::Eq(testing::ByRef(response)), _));
   configuration_->OnURLLoadComplete(&job_, net::OK,
                                     DeviceManagementService::kSuccess,
                                     CreateResponseString(response));
 }
 
 TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_NetError) {
-  int net_error = net::ERR_CONNECTION_RESET;
   EXPECT_CALL(callback_observer_,
-              OnURLLoadComplete(&job_, DM_STATUS_REQUEST_FAILED, net_error,
-                                testing::Eq(testing::ByRef(empty_response))));
-  configuration_->OnURLLoadComplete(&job_, net_error, 0, "");
+              OnURLLoadComplete(&job_, DM_STATUS_REQUEST_FAILED, _,
+                                testing::Eq(std::nullopt), _));
+  configuration_->OnURLLoadComplete(&job_, net::ERR_CONNECTION_RESET,
+                                    0 /* ignored */, "");
 }
 
 TEST_F(RealtimeReportingJobConfigurationTest,
        OnURLLoadComplete_InvalidRequest) {
   EXPECT_CALL(callback_observer_,
-              OnURLLoadComplete(&job_, DM_STATUS_REQUEST_INVALID, net::OK,
-                                testing::Eq(testing::ByRef(empty_response))));
+              OnURLLoadComplete(&job_, DM_STATUS_REQUEST_INVALID,
+                                DeviceManagementService::kInvalidArgument,
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kInvalidArgument, "");
 }
@@ -251,7 +267,8 @@ TEST_F(RealtimeReportingJobConfigurationTest,
   EXPECT_CALL(
       callback_observer_,
       OnURLLoadComplete(&job_, DM_STATUS_SERVICE_MANAGEMENT_TOKEN_INVALID,
-                        net::OK, testing::Eq(testing::ByRef(empty_response))));
+                        DeviceManagementService::kInvalidAuthCookieOrDMToken,
+                        testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kInvalidAuthCookieOrDMToken, "");
 }
@@ -260,30 +277,33 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_NotSupported) {
   EXPECT_CALL(
       callback_observer_,
       OnURLLoadComplete(&job_, DM_STATUS_SERVICE_MANAGEMENT_NOT_SUPPORTED,
-                        net::OK, testing::Eq(testing::ByRef(empty_response))));
+                        DeviceManagementService::kDeviceManagementNotAllowed,
+                        testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kDeviceManagementNotAllowed, "");
 }
 
 TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_TempError) {
   EXPECT_CALL(callback_observer_,
-              OnURLLoadComplete(&job_, DM_STATUS_TEMPORARY_UNAVAILABLE, net::OK,
-                                testing::Eq(testing::ByRef(empty_response))));
+              OnURLLoadComplete(&job_, DM_STATUS_TEMPORARY_UNAVAILABLE,
+                                DeviceManagementService::kServiceUnavailable,
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kServiceUnavailable, "");
 }
 
 TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_UnknownError) {
   EXPECT_CALL(callback_observer_,
-              OnURLLoadComplete(&job_, DM_STATUS_HTTP_STATUS_ERROR, net::OK,
-                                testing::Eq(testing::ByRef(empty_response))));
+              OnURLLoadComplete(&job_, DM_STATUS_HTTP_STATUS_ERROR,
+                                DeviceManagementService::kInvalidURL,
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(&job_, net::OK,
                                     DeviceManagementService::kInvalidURL, "");
 }
 
 TEST_F(RealtimeReportingJobConfigurationTest, ShouldRetry_Success) {
   auto response_string =
-      CreateResponseString(CreateResponse({ids[0], ids[1], ids[2]}, {}, {}));
+      CreateResponseString(CreateResponse({kIds[0], kIds[1], kIds[2]}, {}, {}));
   auto should_retry = configuration_->ShouldRetry(
       DeviceManagementService::kSuccess, response_string);
   EXPECT_EQ(DeviceManagementService::Job::NO_RETRY, should_retry);
@@ -292,7 +312,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, ShouldRetry_Success) {
 TEST_F(RealtimeReportingJobConfigurationTest, ShouldRetry_PartialFalure) {
   // Batch failures are retried
   auto response_string =
-      CreateResponseString(CreateResponse({ids[0], ids[1]}, {ids[2]}, {}));
+      CreateResponseString(CreateResponse({kIds[0], kIds[1]}, {kIds[2]}, {}));
   auto should_retry = configuration_->ShouldRetry(
       DeviceManagementService::kSuccess, response_string);
   EXPECT_EQ(DeviceManagementService::Job::RETRY_WITH_DELAY, should_retry);
@@ -301,9 +321,15 @@ TEST_F(RealtimeReportingJobConfigurationTest, ShouldRetry_PartialFalure) {
 TEST_F(RealtimeReportingJobConfigurationTest, ShouldRetry_PermanentFailure) {
   // Permanent failures are not retried.
   auto response_string =
-      CreateResponseString(CreateResponse({ids[0], ids[1]}, {}, {ids[2]}));
+      CreateResponseString(CreateResponse({kIds[0], kIds[1]}, {}, {kIds[2]}));
   auto should_retry = configuration_->ShouldRetry(
       DeviceManagementService::kSuccess, response_string);
+  EXPECT_EQ(DeviceManagementService::Job::NO_RETRY, should_retry);
+}
+
+TEST_F(RealtimeReportingJobConfigurationTest, ShouldRetry_InvalidResponse) {
+  auto should_retry = configuration_->ShouldRetry(
+      DeviceManagementService::kSuccess, "some error");
   EXPECT_EQ(DeviceManagementService::Job::NO_RETRY, should_retry);
 }
 
@@ -315,20 +341,60 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnBeforeRetry_HttpFailure) {
   EXPECT_EQ(original_payload, configuration_->GetPayload());
 }
 
+TEST_F(RealtimeReportingJobConfigurationTest, GetPayloadRecordsUmaMetrics) {
+  // GetPayload should record the payload size as an UMA metric.
+  std::string payload = configuration_->GetPayload();
+  histogram_.ExpectUniqueSample(
+      enterprise_connectors::kAllUploadSizeUmaMetricName, payload.size(), 1);
+
+  histogram_.ExpectUniqueSample(
+      enterprise_connectors::GetPayloadSizeUmaMetricName(
+          enterprise_connectors::EventCase::kBrowserExtensionInstallEvent),
+      payload.size(), 1);
+}
+
 TEST_F(RealtimeReportingJobConfigurationTest, OnBeforeRetry_PartialBatch) {
   // Only those events whose ids are in failed_uploads should be in the payload
   // after the OnBeforeRetry call.
   auto response_string =
-      CreateResponseString(CreateResponse({ids[0]}, {ids[1]}, {ids[2]}));
+      CreateResponseString(CreateResponse(/*success_ids=*/{kIds[0]},
+                                          /*failed_ids=*/{kIds[1]},
+                                          /*permanent_failed_ids=*/{kIds[2]}));
   configuration_->OnBeforeRetry(DeviceManagementService::kSuccess,
                                 response_string);
-  absl::optional<base::Value> payload =
-      base::JSONReader::Read(configuration_->GetPayload());
-  base::Value* events =
-      payload->FindListKey(RealtimeReportingJobConfiguration::kEventListKey);
-  EXPECT_EQ(1u, events->GetList().size());
-  auto& event = events->GetList()[0];
-  EXPECT_EQ(ids[1], *event.FindStringKey(kEventId));
+  // If using the proto format, validate the request.
+  ::chrome::cros::reporting::proto::UploadEventsRequest request;
+  request.ParseFromString(configuration_->GetPayload());
+  EXPECT_EQ(1, request.events_size());
+  EXPECT_EQ(kIds[1], request.events(0).event_id());
+}
+
+TEST_F(RealtimeReportingJobConfigurationTest, OnBeforeRetry_InvalidResponse) {
+  // No change should be made to the payload in this case.
+  auto original_payload = configuration_->GetPayload();
+  configuration_->OnBeforeRetry(DeviceManagementService::kSuccess, "error");
+  EXPECT_EQ(original_payload, configuration_->GetPayload());
+}
+
+TEST_F(RealtimeReportingJobConfigurationTest, EnhancedFieldsDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      policy::features::kEnhancedSecurityEventFields);
+
+  auto configuration = std::make_unique<RealtimeReportingJobConfiguration>(
+      &client_, service_.configuration()->GetRealtimeReportingServerUrl(),
+      /*include_device_info=*/true,
+      base::BindOnce(&MockCallbackObserver::OnURLLoadComplete,
+                     base::Unretained(&callback_observer_)));
+  ::chrome::cros::reporting::proto::UploadEventsRequest request;
+  request.mutable_browser()->set_user_agent("dummyAgent");
+  request.add_events()->MergeFrom(CreateEventProto(kIds[0], 0));
+  configuration->AddRequest(std::move(request));
+
+  ::chrome::cros::reporting::proto::UploadEventsRequest parsed_request;
+  parsed_request.ParseFromString(configuration->GetPayload());
+  EXPECT_TRUE(parsed_request.device().device_fqdn().empty());
+  EXPECT_TRUE(parsed_request.device().network_name().empty());
 }
 
 }  // namespace policy

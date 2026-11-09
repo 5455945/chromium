@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """The primary module for the suite of mini_installer integration tests.
@@ -9,7 +9,6 @@ JSON configuration file. The module is intended to be loaded by a test process
 driven by typ.
 """
 
-import argparse
 import contextlib
 import json
 import logging
@@ -19,10 +18,9 @@ import subprocess
 import sys
 import tempfile
 import traceback
-import typ
 import unittest
 import win32api
-from win32com.shell import shell, shellcon
+from win32comext.shell import shell, shellcon
 
 from argument_parser import ArgumentParser
 import property_walker
@@ -31,8 +29,10 @@ from variable_expander import VariableExpander
 CUR_DIR = os.path.dirname(os.path.realpath(__file__))
 
 # Auto-detect if the tests are not being run on the bots.
-RUNNING_LOCALLY = (os.getenv('SWARMING_HEADLESS') != '1'
-                   and os.getenv('CHROME_HEADLESS') != '1')
+RUNNING_LOCALLY = (
+    os.getenv('SWARMING_HEADLESS') != '1'
+    and os.getenv('CHROME_HEADLESS') != '1'
+)
 
 # The logger configured in this module and used by its dependents.
 LOGGER = logging.getLogger('installer_test')
@@ -40,7 +40,7 @@ LOGGER = logging.getLogger('installer_test')
 _force_clean = not RUNNING_LOCALLY
 
 
-class Config(object):
+class Config:
     """Describes the machine states, actions, and test cases.
 
     Attributes:
@@ -73,7 +73,7 @@ class InstallerTest(unittest.TestCase):
             method_name: The name of this test.
         """
         assert InstallerTest._config, 'module _initialize() not yet called'
-        super(InstallerTest, self).__init__(method_name)
+        super().__init__(method_name)
         self._name = method_name[5:]
         self._test = InstallerTest._config.traversals[self._name]
         self._clean_on_teardown = True
@@ -102,9 +102,9 @@ class InstallerTest(unittest.TestCase):
         # |test| is an array of alternating state names and action names,
         # starting and ending with state names. Therefore, its length must be
         # odd.
-        self.assertEqual(1,
-                         len(self._test) % 2,
-                         'The length of test array must be odd')
+        self.assertEqual(
+            1, len(self._test) % 2, 'The length of test array must be odd'
+        )
 
         state = self._test[0]
         self._VerifyState(state)
@@ -113,8 +113,10 @@ class InstallerTest(unittest.TestCase):
         for i in range(1, len(self._test), 2):
             action = self._test[i]
             LOGGER.info('Beginning action %s' % action)
-            RunCommand(InstallerTest._config.actions[action],
-                       InstallerTest._variable_expander)
+            RunCommand(
+                InstallerTest._config.actions[action],
+                InstallerTest._variable_expander,
+            )
             LOGGER.info('Finished action %s' % action)
 
             state = self._test[i + 1]
@@ -130,13 +132,16 @@ class InstallerTest(unittest.TestCase):
             # The last state in the test's traversal is its "clean" state, so
             # use it to drive the cleanup operation.
             clean_state_name = self._test[len(self._test) - 1]
-            RunCleanCommand(True,
-                            InstallerTest._config.states[clean_state_name],
-                            InstallerTest._variable_expander)
+            RunCleanCommand(
+                True,
+                InstallerTest._config.states[clean_state_name],
+                InstallerTest._variable_expander,
+            )
             # Either copy the log to isolated outdir or dump it to console.
             if InstallerTest._output_dir:
-                target = os.path.join(InstallerTest._output_dir,
-                                      os.path.basename(self._log_path))
+                target = os.path.join(
+                    InstallerTest._output_dir, os.path.basename(self._log_path)
+                )
                 shutil.copyfile(self._log_path, target)
                 LOGGER.error('Saved installer log to %s', target)
             else:
@@ -161,12 +166,14 @@ class InstallerTest(unittest.TestCase):
         """
         LOGGER.info('Verifying state %s' % state)
         try:
-            property_walker.Verify(InstallerTest._config.states[state],
-                                   InstallerTest._variable_expander)
+            property_walker.Verify(
+                InstallerTest._config.states[state],
+                InstallerTest._variable_expander,
+            )
         except AssertionError as e:
             # If an AssertionError occurs, we intercept it and add the state
             # name to the error message so that we know where the test fails.
-            raise AssertionError("In state '%s', %s" % (state, e))
+            raise AssertionError("In state '%s', %s" % (state, str(e))) from e
 
 
 def RunCommand(command, variable_expander):
@@ -188,15 +195,19 @@ def RunCommand(command, variable_expander):
     # user input. This needs to happen even if the quiet arg is passed to
     # prevent a deadlock
     if 'uninstall_chrome.py' in expanded_command:
-        returncode = subprocess.call(expanded_command,
-                                     shell=True,
-                                     cwd=script_dir)
+        returncode = subprocess.call(
+            expanded_command, shell=True, cwd=script_dir
+        )
     else:
-        proc = subprocess.Popen(expanded_command,
-                                shell=True,
-                                cwd=script_dir,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE)
+        proc = subprocess.Popen(
+            expanded_command,
+            shell=True,
+            cwd=script_dir,
+            text=True,
+            encoding='utf-8',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         stdout, stderr = proc.communicate()
         returncode = proc.returncode
 
@@ -205,8 +216,10 @@ def RunCommand(command, variable_expander):
     if stderr:
         LOGGER.error('stdout:\n%s', stderr.replace('\r', '').rstrip('\n'))
     if returncode != 0:
-        raise Exception('Command %s returned non-zero exit status %s' %
-                        (expanded_command, returncode))
+        raise Exception(
+            'Command %s returned non-zero exit status %s'
+            % (expanded_command, returncode)
+        )
 
 
 def RunCleanCommand(force_clean, clean_state, variable_expander):
@@ -221,27 +234,33 @@ def RunCleanCommand(force_clean, clean_state, variable_expander):
     """
     # A list of (product_name, product_switch) tuples for the possible installed
     # products.
-    data = [
-        ('$CHROME_LONG_NAME', ''),
-        ('$CHROME_LONG_NAME', '--system-level'),
-    ]
+    data = [('$CHROME_LONG_NAME', '')]
+    # Chrome for Testing does not support system-level installs.
+    if variable_expander.Expand('$BRAND') != 'Google Chrome for Testing':
+        data.extend([('$CHROME_LONG_NAME', '--system-level')])
     if variable_expander.Expand('$BRAND') == 'Google Chrome':
-        data.extend([('$CHROME_LONG_NAME_BETA', ''),
-                     ('$CHROME_LONG_NAME_BETA', '--system-level'),
-                     ('$CHROME_LONG_NAME_DEV', ''),
-                     ('$CHROME_LONG_NAME_DEV', '--system-level'),
-                     ('$CHROME_LONG_NAME_SXS', '')])
+        data.extend(
+            [
+                ('$CHROME_LONG_NAME_BETA', ''),
+                ('$CHROME_LONG_NAME_BETA', '--system-level'),
+                ('$CHROME_LONG_NAME_DEV', ''),
+                ('$CHROME_LONG_NAME_DEV', '--system-level'),
+                ('$CHROME_LONG_NAME_SXS', ''),
+            ]
+        )
 
     # Attempt to run each installed product's uninstaller.
     interactive_option = '--interactive' if not force_clean else ''
     for product_name, product_switch in data:
-        command = ('python uninstall_chrome.py '
-                   '--chrome-long-name="%s" '
-                   '--no-error-if-absent %s %s' %
-                   (product_name, product_switch, interactive_option))
+        command = (
+            '%s uninstall_chrome.py '
+            '--chrome-long-name="%s" '
+            '--no-error-if-absent %s %s'
+            % (sys.executable, product_name, product_switch, interactive_option)
+        )
         try:
             RunCommand(command, variable_expander)
-        except:  # pylint: disable=bare-except
+        except:  # noqa: E722
             message = traceback.format_exception(*sys.exc_info())
             message.insert(0, 'Error cleaning up an old install with:\n')
             LOGGER.info(''.join(message))
@@ -266,16 +285,16 @@ def MergePropertyDictionaries(current_property, new_property):
         current_property: The property dictionary to be modified.
         new_property: The new property dictionary.
     """
-    for key, value in new_property.iteritems():
+    for key, value in new_property.items():
         if key not in current_property:
             current_property[key] = value
         else:
-            assert (isinstance(current_property[key], dict)
-                    and isinstance(value, dict))
+            assert isinstance(current_property[key], dict) and isinstance(
+                value, dict
+            )
             # This merges two dictionaries together. In case there are keys with
             # the same name, the latter will override the former.
-            current_property[key] = dict(current_property[key].items() +
-                                         value.items())
+            current_property[key].update(value)
 
 
 def FilterConditionalElem(elem, condition_name, variable_expander):
@@ -312,8 +331,9 @@ def ParsePropertyFiles(directory, filenames, variable_expander):
     for filename in filenames:
         path = os.path.join(directory, filename)
         new_property = json.load(open(path))
-        if not FilterConditionalElem(new_property, 'Condition',
-                                     variable_expander):
+        if not FilterConditionalElem(
+            new_property, 'Condition', variable_expander
+        ):
             continue
         # Remove any Condition from the property dict before merging since it
         # serves no purpose from here on out.
@@ -340,12 +360,16 @@ def ParseConfigFile(filename, variable_expander):
     config.tests = config_data['tests']
     # Drop conditional tests that should not be run in the current
     # configuration.
-    config.tests = filter(
-        lambda t: FilterConditionalElem(t, 'condition', variable_expander),
-        config.tests)
+    config.tests = list(
+        filter(
+            lambda t: FilterConditionalElem(t, 'condition', variable_expander),
+            config.tests,
+        )
+    )
     for state_name, state_property_filenames in config_data['states']:
         config.states[state_name] = ParsePropertyFiles(
-            directory, state_property_filenames, variable_expander)
+            directory, state_property_filenames, variable_expander
+        )
     for action_name, action_command in config_data['actions']:
         config.actions[action_name] = action_command
     for test in config.tests:
@@ -386,7 +410,8 @@ def ConfigureTempOnDrive(drive):
                 tmp_created = temp
             elif not os.path.isdir(temp):
                 raise Exception(
-                    'Cannot create %s without clobbering something' % temp)
+                    'Cannot create %s without clobbering something' % temp
+                )
             old_tmp = os.getenv('TMP')
             os.environ['TMP'] = temp
             tmp_set = True
@@ -401,8 +426,9 @@ def ConfigureTempOnDrive(drive):
         if tmp_created:
             shutil.rmtree(tmp_created, True)
             if os.path.isdir(tmp_created):
-                raise Exception('Failed to entirely delete directory %s' %
-                                tmp_created)
+                raise Exception(
+                    'Failed to entirely delete directory %s' % tmp_created
+                )
 
 
 def GetAbsoluteExecutablePath(path):
@@ -453,24 +479,16 @@ def GetAbsoluteConfigPath(path):
     return os.path.abspath(path)
 
 
-# Until we're using Python 3.8 or newer, we must use tearDownModule to restore
-# the tmp dir. It would be cleaner to remove _temp_dir_manager and instead do
-# something along the lines of this after __enter__():
-# unittest.addModuleCleanup(_temp_dir_manager.__exit__, None, None, None)
-_temp_dir_manager = None
-
-
 def setUpModule():
     # Make sure that TMP and Chrome's installation directory are on the same
-    # drive to work around https://crbug.com/700809. (CSIDL_PROGRAM_FILESX86 is
+    # drive to work around https://crbug.com/41306957. (CSIDL_PROGRAM_FILESX86 is
     # valid for both 32 and 64-bit apps running on 32 or 64-bit Windows.)
     drive = os.path.splitdrive(
-        shell.SHGetFolderPath(0, shellcon.CSIDL_PROGRAM_FILESX86, None, 0))[0]
-    global _temp_dir_manager
+        shell.SHGetFolderPath(0, shellcon.CSIDL_PROGRAM_FILESX86, None, 0)
+    )[0]
     _temp_dir_manager = ConfigureTempOnDrive(drive)
     _temp_dir_manager.__enter__()
-    # Switch to this once we're using Python 3.8 or newer:
-    # unittest.addModuleCleanup(_temp_dir_manager.__exit__, None, None, None)
+    unittest.addModuleCleanup(_temp_dir_manager.__exit__, None, None, None)
 
     # The last state in any test's traversal is the "clean" state, so use it to
     # drive the initial cleanup operation.
@@ -478,19 +496,13 @@ def setUpModule():
     clean_state_name = a_test[len(a_test) - 1]
     clean_state = InstallerTest._config.states[clean_state_name]
     try:
-        RunCleanCommand(_force_clean, clean_state,
-                        InstallerTest._variable_expander)
+        RunCleanCommand(
+            _force_clean, clean_state, InstallerTest._variable_expander
+        )
     except:
         _temp_dir_manager.__exit__(None, None, None)
         _temp_dir_manager = None
         raise
-
-
-def tearDownModule():
-    global _temp_dir_manager
-    if _temp_dir_manager:
-        _temp_dir_manager.__exit__(None, None, None)
-        _temp_dir_manager = None
 
 
 def _initialize():
@@ -501,14 +513,21 @@ def _initialize():
     """
     args = ArgumentParser().parse_args()
 
-    log_level = (logging.ERROR if args.quiet else
-                 logging.DEBUG if args.verbose else logging.INFO)
+    log_level = (
+        logging.ERROR
+        if args.quiet
+        else logging.DEBUG
+        if args.verbose
+        else logging.INFO
+    )
     LOGGER.setLevel(log_level)
     handler = logging.StreamHandler()
     handler.setFormatter(
         logging.Formatter(
             fmt='[%(asctime)s:%(filename)s(%(lineno)d)] %(message)s',
-            datefmt='%m%d/%H%M%S'))
+            datefmt='%m%d/%H%M%S',
+        )
+    )
     LOGGER.addHandler(handler)
 
     # Pull args from the parent proc out of the environment block.
@@ -517,20 +536,31 @@ def _initialize():
         _force_clean = True
     InstallerTest._output_dir = os.environ.get('CMI_OUTPUT_DIR')
     installer_path = GetAbsoluteExecutablePath(
-        os.environ.get('CMI_INSTALLER_PATH', 'mini_installer.exe'))
+        os.environ.get('CMI_INSTALLER_PATH', 'mini_installer.exe')
+    )
     previous_version_installer_path = GetAbsoluteExecutablePath(
-        os.environ.get('CMI_PREVIOUS_VERSION_INSTALLER_PATH',
-                       'previous_version_mini_installer.exe'))
+        os.environ.get(
+            'CMI_PREVIOUS_VERSION_INSTALLER_PATH',
+            'previous_version_mini_installer.exe',
+        )
+    )
     chromedriver_path = GetAbsoluteExecutablePath(
-        os.environ.get('CMI_CHROMEDRIVER_PATH', 'chromedriver.exe'))
+        os.environ.get('CMI_CHROMEDRIVER_PATH', 'chromedriver.exe')
+    )
     config_path = GetAbsoluteConfigPath(
-        os.environ.get('CMI_CONFIG', 'config.config'))
+        os.environ.get('CMI_CONFIG', 'config.config')
+    )
 
     InstallerTest._variable_expander = VariableExpander(
-        installer_path, previous_version_installer_path, chromedriver_path,
-        args.quiet, InstallerTest._output_dir)
-    InstallerTest._config = ParseConfigFile(config_path,
-                                            InstallerTest._variable_expander)
+        installer_path,
+        previous_version_installer_path,
+        chromedriver_path,
+        args.quiet,
+        InstallerTest._output_dir,
+    )
+    InstallerTest._config = ParseConfigFile(
+        config_path, InstallerTest._variable_expander
+    )
 
     # Add a test_Foo function to the InstallerTest class for each test in
     # the config file.

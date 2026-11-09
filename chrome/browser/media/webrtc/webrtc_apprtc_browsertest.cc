@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,9 @@
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/infobars/infobar_responder.h"
+#include "chrome/browser/infobars/test_support/infobar_responder.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
@@ -34,7 +33,7 @@ const char kIsApprtcCallUpJavascript[] =
     "var remoteVideoActive ="
     "    remoteVideo != null &&"
     "    remoteVideo.classList.contains('active');"
-    "window.domAutomationController.send(remoteVideoActive.toString());";
+    "remoteVideoActive.toString();";
 
 // WebRTC-AppRTC integration test. Requires a real webcam and microphone
 // on the running system. This test is not meant to run in the main browser
@@ -42,21 +41,20 @@ const char kIsApprtcCallUpJavascript[] =
 //
 // This test will bring up a AppRTC instance on localhost and verify that the
 // call gets up when connecting to the same room from two tabs in a browser.
+//
+// TODO(b/246519185) - Py3 incompatible, decide if to keep test.
 class WebRtcApprtcBrowserTest : public WebRtcTestBase {
  public:
-  WebRtcApprtcBrowserTest() {}
+  WebRtcApprtcBrowserTest() = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     EXPECT_FALSE(command_line->HasSwitch(switches::kUseFakeUIForMediaStream));
 
     // The video playback will not work without a GPU, so force its use here.
     command_line->AppendSwitch(switches::kUseGpuInTests);
-    // This test fails on some Mac bots if no default devices are specified on
-    // the command line.
     command_line->RemoveSwitch(switches::kUseFakeDeviceForMediaStream);
-    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kUseFakeDeviceForMediaStream,
-        "audio-input-default-id=default,video-input-default-id=default");
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
+        switches::kUseFakeDeviceForMediaStream);
   }
 
   void TearDown() override {
@@ -98,7 +96,7 @@ class WebRtcApprtcBrowserTest : public WebRtcTestBase {
     }
 
     base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
-    EXPECT_TRUE(GetPythonCommand(&command_line));
+    EXPECT_TRUE(GetPython3Command(&command_line));
 
     command_line.AppendArgPath(appengine_dev_appserver);
     command_line.AppendArgPath(apprtc_dir);
@@ -116,7 +114,7 @@ class WebRtcApprtcBrowserTest : public WebRtcTestBase {
                                  const std::string& collider_port) {
     // The go workspace should be created, and collidermain built, at the
     // runhooks stage when webrtc.DEPS/build_apprtc_collider.py runs.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     base::FilePath collider_server = GetSourceDir().Append(
         FILE_PATH_LITERAL("third_party/webrtc/rtc_tools/testing/"
                           "browsertest/collider/collidermain.exe"));
@@ -144,17 +142,13 @@ class WebRtcApprtcBrowserTest : public WebRtcTestBase {
 
   bool LocalApprtcInstanceIsUp() {
     // Load the admin page and see if we manage to load it right.
-    ui_test_utils::NavigateToURL(browser(), GURL("http://localhost:9998"));
+    EXPECT_TRUE(
+        ui_test_utils::NavigateToURL(browser(), GURL("http://localhost:9998")));
     content::WebContents* tab_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    std::string javascript =
-        "window.domAutomationController.send(document.title)";
-    std::string result;
-    if (!content::ExecuteScriptAndExtractString(tab_contents, javascript,
-                                                &result))
-      return false;
-
-    return result == kTitlePageOfAppEngineAdminPage;
+    std::string javascript = "document.title";
+    return content::EvalJs(tab_contents, javascript) ==
+           kTitlePageOfAppEngineAdminPage;
   }
 
   bool WaitForCallToComeUp(content::WebContents* tab_contents) {
@@ -170,7 +164,7 @@ class WebRtcApprtcBrowserTest : public WebRtcTestBase {
       return false;
     }
 
-    if (!content::ExecuteScript(tab_contents, javascript)) {
+    if (!content::ExecJs(tab_contents, javascript)) {
       LOG(ERROR) << "Failed to execute the following javascript: " <<
           javascript;
       return false;
@@ -193,9 +187,12 @@ class WebRtcApprtcBrowserTest : public WebRtcTestBase {
     if (!EvalInJavascriptFile(tab_contents, GetSourceDir().Append(
         FILE_PATH_LITERAL("chrome/test/data/webrtc/test_functions.js"))))
       return false;
-    if (!EvalInJavascriptFile(tab_contents, GetSourceDir().Append(
-        FILE_PATH_LITERAL("chrome/test/data/webrtc/video_detector.js"))))
+    if (!EvalInJavascriptFile(
+            tab_contents,
+            GetSourceDir().Append(FILE_PATH_LITERAL(
+                "chrome/test/data/webrtc/video_frame_detector.js")))) {
       return false;
+    }
 
     StartDetectingVideo(tab_contents, video_tag);
     WaitForVideoToPlay(tab_contents);
@@ -204,7 +201,7 @@ class WebRtcApprtcBrowserTest : public WebRtcTestBase {
 
   base::FilePath GetSourceDir() {
     base::FilePath source_dir;
-    base::PathService::Get(base::DIR_SOURCE_ROOT, &source_dir);
+    base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &source_dir);
     return source_dir;
   }
 
@@ -234,7 +231,7 @@ IN_PROC_BROWSER_TEST_F(WebRtcApprtcBrowserTest, MANUAL_WorksOnApprtc) {
   InfoBarResponder left_infobar_responder(
       infobars::ContentInfoBarManager::FromWebContents(left_tab),
       InfoBarResponder::ACCEPT);
-  ui_test_utils::NavigateToURL(browser(), room_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), room_url));
 
   // Wait for the local video to start playing. This is needed, because opening
   // a new tab too quickly, by sending the current tab to the background, can
@@ -253,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(WebRtcApprtcBrowserTest, MANUAL_WorksOnApprtc) {
   InfoBarResponder right_infobar_responder(
       infobars::ContentInfoBarManager::FromWebContents(right_tab),
       InfoBarResponder::ACCEPT);
-  ui_test_utils::NavigateToURL(browser(), room_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), room_url));
 
   ASSERT_TRUE(WaitForCallToComeUp(left_tab));
   ASSERT_TRUE(WaitForCallToComeUp(right_tab));

@@ -16,16 +16,14 @@
 #define ABSL_RANDOM_LOG_UNIFORM_INT_DISTRIBUTION_H_
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
+#include <ios>
 #include <istream>
 #include <limits>
 #include <ostream>
-#include <type_traits>
 
-#include "absl/numeric/bits.h"
-#include "absl/random/internal/fastmath.h"
-#include "absl/random/internal/generate_real.h"
+#include "absl/base/config.h"
+#include "absl/base/macros.h"
 #include "absl/random/internal/iostream_state_saver.h"
 #include "absl/random/internal/traits.h"
 #include "absl/random/uniform_int_distribution.h"
@@ -63,17 +61,18 @@ class log_uniform_int_distribution {
           range_(static_cast<unsigned_type>(max_) -
                  static_cast<unsigned_type>(min_)),
           log_range_(0) {
-      assert(max_ >= min_);
-      assert(base_ > 1);
+      ABSL_HARDENING_ASSERT(max_ >= min_);
+      ABSL_HARDENING_ASSERT(base_ > 1);
 
       if (base_ == 2) {
         // Determine where the first set bit is on range(), giving a log2(range)
         // value which can be used to construct bounds.
-        log_range_ =
-            (std::min)(bit_width(range()),
-                       static_cast<unsigned_type>(
-                           std::numeric_limits<unsigned_type>::digits));
-      } else {
+        log_range_ = (std::min)(random_internal::BitWidth(range()),
+                                std::numeric_limits<unsigned_type>::digits);
+      } else if (base_ > 2) {
+        // An out-of-contract base_ (<= 1) skips this branch entirely so that
+        // no floating-point undefined behavior is reached.
+        //
         // NOTE: Computing the logN(x) introduces error from 2 sources:
         // 1. Conversion of int to double loses precision for values >=
         // 2^53, which may cause some log() computations to operate on
@@ -83,7 +82,7 @@ class log_uniform_int_distribution {
         //
         // Thus a result which should equal K may equal K +/- epsilon,
         // which can eliminate some values depending on where the bounds fall.
-        const double inv_log_base = 1.0 / std::log(base_);
+        const double inv_log_base = 1.0 / std::log(static_cast<double>(base_));
         const double log_range = std::log(static_cast<double>(range()) + 0.5);
         log_range_ = static_cast<int>(std::ceil(inv_log_base * log_range));
       }
@@ -113,7 +112,7 @@ class log_uniform_int_distribution {
     unsigned_type range_;  // max - min
     int log_range_;        // ceil(logN(range_))
 
-    static_assert(std::is_integral<IntType>::value,
+    static_assert(random_internal::IsIntegral<IntType>::value,
                   "Class-template absl::log_uniform_int_distribution<> must be "
                   "parameterized using an integral type.");
   };
@@ -139,7 +138,7 @@ class log_uniform_int_distribution {
   template <typename URBG>
   result_type operator()(URBG& g,  // NOLINT(runtime/references)
                          const param_type& p) {
-    return (p.min)() + Generate(g, p);
+    return static_cast<result_type>((p.min)() + Generate(g, p));
   }
 
   result_type(min)() const { return (param_.min)(); }
@@ -193,8 +192,8 @@ log_uniform_int_distribution<IntType>::Generate(
                 ? (std::numeric_limits<unsigned_type>::max)()
                 : (static_cast<unsigned_type>(1) << e) - 1;
   } else {
-    const double r = std::pow(p.base(), d);
-    const double s = (r * p.base()) - 1.0;
+    const double r = std::pow(static_cast<double>(p.base()), d);
+    const double s = (r * static_cast<double>(p.base())) - 1.0;
 
     base_e =
         (r > static_cast<double>((std::numeric_limits<unsigned_type>::max)()))
@@ -211,7 +210,8 @@ log_uniform_int_distribution<IntType>::Generate(
   const unsigned_type hi = (top_e >= p.range()) ? p.range() : top_e;
 
   // choose uniformly over [lo, hi]
-  return absl::uniform_int_distribution<result_type>(lo, hi)(g);
+  return absl::uniform_int_distribution<result_type>(
+      static_cast<result_type>(lo), static_cast<result_type>(hi))(g);
 }
 
 template <typename CharT, typename Traits, typename IntType>
@@ -244,9 +244,16 @@ std::basic_istream<CharT, Traits>& operator>>(
   auto saver = random_internal::make_istream_state_saver(is);
   is >> min >> max >> base;
   if (!is.fail()) {
-    x.param(param_type(static_cast<result_type>(min),
-                       static_cast<result_type>(max),
-                       static_cast<result_type>(base)));
+    const result_type min_val = static_cast<result_type>(min);
+    const result_type max_val = static_cast<result_type>(max);
+    const result_type base_val = static_cast<result_type>(base);
+    if (max_val < min_val || base_val <= 1) {
+      // The input violates the param_type preconditions; signal failure by
+      // setting the failbit instead of constructing an invalid param_type.
+      is.setstate(is.rdstate() | std::ios_base::failbit);
+    } else {
+      x.param(param_type(min_val, max_val, base_val));
+    }
   }
   return is;
 }

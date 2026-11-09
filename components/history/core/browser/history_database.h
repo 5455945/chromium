@@ -1,32 +1,39 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_DATABASE_H_
 #define COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_DATABASE_H_
 
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/history/core/browser/download_database.h"
 #include "components/history/core/browser/history_types.h"
-#include "components/history/core/browser/sync/typed_url_sync_metadata_database.h"
+#include "components/history/core/browser/journeys/journeys_database.h"
+#include "components/history/core/browser/journeys/journeys_sync_metadata_database.h"
+#include "components/history/core/browser/sync/history_sync_metadata_database.h"
 #include "components/history/core/browser/url_database.h"
 #include "components/history/core/browser/visit_annotations_database.h"
 #include "components/history/core/browser/visit_database.h"
+#include "components/history/core/browser/visited_link_database.h"
 #include "components/history/core/browser/visitsegment_database.h"
 #include "sql/database.h"
 #include "sql/init_status.h"
 #include "sql/meta_table.h"
-
-#if defined(OS_ANDROID)
-#include "components/history/core/browser/android/android_cache_database.h"
-#include "components/history/core/browser/android/android_urls_database.h"
-#endif
+#include "sql/statement.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace base {
 class FilePath;
+}
+
+namespace sql {
+class Transaction;
 }
 
 class InMemoryURLIndexTest;
@@ -41,27 +48,26 @@ namespace history {
 // as the storage interface. Logic for manipulating this storage layer should
 // be in HistoryBackend.cc.
 class HistoryDatabase : public DownloadDatabase,
-#if defined(OS_ANDROID)
-                        public AndroidURLsDatabase,
-                        public AndroidCacheDatabase,
-#endif
-                        public TypedURLSyncMetadataDatabase,
                         public URLDatabase,
                         public VisitDatabase,
                         public VisitAnnotationsDatabase,
-                        public VisitSegmentDatabase {
+                        public VisitedLinkDatabase,
+                        public VisitSegmentDatabase,
+                        public journeys::JourneysDatabase {
  public:
-  // A simple class for scoping a history database transaction. This does not
-  // support rollback since the history database doesn't, either.
-  class TransactionScoper {
-   public:
-    explicit TransactionScoper(HistoryDatabase* db) : db_(db) {
-      db_->BeginTransaction();
-    }
-    ~TransactionScoper() { db_->CommitTransaction(); }
-
-   private:
-    HistoryDatabase* db_;
+  // Reasons for initialization to fail. These are logged to UMA. It corresponds
+  // to the HistoryInitStep enum in enums.xml.
+  //
+  // DO NOT CHANGE THE VALUES. Leave holes if anything is removed and add only
+  // to the end.
+  enum class InitStep {
+    OPEN = 0,
+    TRANSACTION_BEGIN = 1,
+    META_TABLE_INIT = 2,
+    CREATE_TABLES = 3,
+    VERSION = 4,
+    COMMIT = 5,
+    RAZE_OLD_DB = 6,
   };
 
   // Must call Init() to complete construction. Although it can be created on
@@ -70,6 +76,9 @@ class HistoryDatabase : public DownloadDatabase,
   HistoryDatabase(DownloadInterruptReason download_interrupt_reason_none,
                   DownloadInterruptReason download_interrupt_reason_crash);
 
+  HistoryDatabase(const HistoryDatabase&) = delete;
+  HistoryDatabase& operator=(const HistoryDatabase&) = delete;
+
   ~HistoryDatabase() override;
 
   // Call before Init() to set the error callback to be used for the
@@ -77,46 +86,52 @@ class HistoryDatabase : public DownloadDatabase,
   void set_error_callback(const sql::Database::ErrorCallback& error_callback) {
     db_.set_error_callback(error_callback);
   }
+  void reset_error_callback() { db_.reset_error_callback(); }
 
   // Must call this function to complete initialization. Will return
-  // sql::INIT_OK on success. Otherwise, no other function should be called. You
-  // may want to call BeginExclusiveMode after this when you are ready.
+  // sql::INIT_OK on success. Otherwise, no other function should be called.
   sql::InitStatus Init(const base::FilePath& history_name);
 
   // Computes and records various metrics for the database. Should only be
   // called once and only upon successful Init.
   void ComputeDatabaseMetrics(const base::FilePath& filename);
 
-  // Counts the number of unique Hosts visited in the last month.
-  int CountUniqueHostsVisitedLastMonth();
+  // Gets unique domains (eTLD+1) visited within the time range
+  // [`begin_time`, `end_time`) for local and synced visits sorted in
+  // reverse-chronological order. Whether visits with an HTTP response code of
+  // 404 count is determined by `policy_for_404_visits`.
+  DomainsVisitedResult GetUniqueDomainsVisited(
+      base::Time begin_time,
+      base::Time end_time,
+      VisitQuery404sPolicy policy_for_404_visits);
 
-  // Counts the number of unique domains (eLTD+1) visited within
-  // [`begin_time`, `end_time`).
-  int CountUniqueDomainsVisited(base::Time begin_time, base::Time end_time);
-
-  // Call to set the mode on the database to exclusive. The default locking mode
-  // is "normal" but we want to run in exclusive mode for slightly better
-  // performance since we know nobody else is using the database. This is
-  // separate from Init() since the in-memory database attaches to slurp the
-  // data out, and this can't happen in exclusive mode.
-  void BeginExclusiveMode();
+  // Counts the number of unique domains (eTLD+1) visited within
+  // [`begin_time`, `end_time`). Whether visits with an HTTP response code of
+  // 404 count is determined by `policy_for_404_visits`.  Includes only domains
+  // visited on this device; does not include foreign/synced visits.
+  int CountUniqueDomainsVisited(base::Time begin_time,
+                                base::Time end_time,
+                                VisitQuery404sPolicy policy_for_404_visits);
 
   // Returns the current version that we will generate history databases with.
   static int GetCurrentVersion();
 
-  // Transactions on the history database. Use the Transaction object above
-  // for most work instead of these directly. We support nested transactions
-  // and only commit when the outermost transaction is committed. This means
-  // that it is impossible to rollback a specific transaction. We could roll
-  // back the outermost transaction if any inner one is rolled back, but it
-  // turns out we don't really need this type of integrity for the history
-  // database, so we just don't support it.
-  void BeginTransaction();
-  void CommitTransaction();
-  int transaction_nesting() const {  // for debugging and assertion purposes
-    return db_.transaction_nesting();
-  }
-  void RollbackTransaction();
+  // Returns the version number stored in the database's meta table.
+  // Must be called after Init().
+  int GetDatabaseVersionForTesting();
+
+  // Creates a new inactive transaction for the history database. Caller is
+  // responsible for calling `sql::Transaction::Begin()` and checking the return
+  // value. Only call this after `Init()`.
+  //
+  // There should only ever be one instance of these alive, as transaction
+  // nesting doesn't exist. The caller is responsible for ensuring this, and
+  // therefore, ONLY the owner of this instance (`HistoryBackend`) should call
+  // this, NOT any `HistoryDBTask`, which has a non-owning pointer to this.
+  std::unique_ptr<sql::Transaction> CreateTransaction();
+
+  // Returns true if at least one `Transaction` is active on the database.
+  bool HasActiveTransactions() const { return db_.HasActiveTransactions(); }
 
   // Drops all tables except the URL, and download tables, and recreates them
   // from scratch. This is done to rapidly clean up stuff when deleting all
@@ -141,13 +156,14 @@ class HistoryDatabase : public DownloadDatabase,
   // unused space in the file. It can be VERY SLOW.
   void Vacuum();
 
-  // Release all non-essential memory associated with this database connection.
-  void TrimMemory();
-
   // Razes the database. Returns true if successful.
   bool Raze();
 
-  std::string GetDiagnosticInfo(int extended_error, sql::Statement* statement);
+  // A simple passthrough to `sql::Database::GetDiagnosticInfo()`.
+  std::string GetDiagnosticInfo(
+      int extended_error,
+      sql::Statement* statement,
+      sql::DatabaseDiagnostics* diagnostics = nullptr);
 
   // Visit table functions ----------------------------------------------------
 
@@ -164,22 +180,96 @@ class HistoryDatabase : public DownloadDatabase,
   virtual base::Time GetEarlyExpirationThreshold();
   virtual void UpdateEarlyExpirationThreshold(base::Time threshold);
 
+  // Retrieves/updates the bit that indicates whether the DB may contain any
+  // foreign visits, i.e. visits coming from other syncing devices.
+  // Note that this only counts visits *not* pending deletion (see below) - as
+  // soon as a deletion operation is started, this will get set to false.
+  bool MayContainForeignVisits();
+  void SetMayContainForeignVisits(bool may_contain_foreign_visits);
+
+  // Retrieves/updates the max-foreign-visit-to-delete threshold. If this is
+  // not kInvalidVisitID, then all foreign visits with an ID <= this value
+  // should be deleted from the DB.
+  VisitID GetDeleteForeignVisitsUntilId();
+  void SetDeleteForeignVisitsUntilId(VisitID visit_id);
+
+  // Retrieves/updates the bit that indicates whether the DB may contain any
+  // visits known to sync.
+  bool KnownToSyncVisitsExist();
+  void SetKnownToSyncVisitsExist(bool exist);
+
+  // Visited link with URL enumeration -----------------------------------------
+
+  // Enumerator that returns visited link rows joined with their link URL from
+  // the urls table, avoiding N+1 queries during startup iteration.
+  class VisitedLinkWithUrlEnumerator {
+   public:
+    VisitedLinkWithUrlEnumerator();
+
+    VisitedLinkWithUrlEnumerator(const VisitedLinkWithUrlEnumerator&) = delete;
+    VisitedLinkWithUrlEnumerator& operator=(
+        const VisitedLinkWithUrlEnumerator&) = delete;
+
+    ~VisitedLinkWithUrlEnumerator();
+
+    // Retrieves the next visited link and its associated link URL. Returns
+    // false if no more rows are available.
+    bool GetNextVisitedLink(VisitedLinkRow& row, GURL& link_url);
+
+   private:
+    friend class HistoryDatabase;
+
+    bool initialized_ = false;
+    sql::Statement statement_;
+  };
+
+  // Initializes the given enumerator to enumerate all visited links joined with
+  // their URLs from the urls table. This is more efficient than separately
+  // querying the urls table for each visited link row.
+  bool InitVisitedLinkWithUrlEnumeratorForEverything(
+      VisitedLinkWithUrlEnumerator& enumerator);
+
+  // Batch recent visits -------------------------------------------------------
+
+  // A map from URLID to a vector of (visit_time, transition) pairs, sorted by
+  // visit_time descending. Used to batch-fetch recent visits for multiple URLs
+  // in a single query during startup rebuild, instead of issuing N separate
+  // GetMostRecentVisitsForURL queries.
+  using RecentVisitsMap = absl::flat_hash_map<
+      URLID,
+      std::vector<std::pair<base::Time, ui::PageTransition>>>;
+
+  // Fetches the most recent visits (up to |max_visits_per_url|) for all URLs
+  // that match the "significant" criteria. Returns a map from URLID to visit
+  // info. This replaces the per-URL GetMostRecentVisitsForURL pattern during
+  // RebuildFromHistory, converting N+1 SQL queries into a single query.
+  RecentVisitsMap GetBatchRecentVisitsForSignificantURLs(
+      int max_visits_per_url);
+
+  // Sync metadata storage ----------------------------------------------------
+
+  // Returns the sub-database used for storing Sync metadata for History.
+  HistorySyncMetadataDatabase* GetHistoryMetadataDB();
+
+  // Returns the sub-database used for storing Sync metadata for Journeys.
+  journeys::JourneysSyncMetadataDatabase* GetJourneysMetadataDB();
+
+  sql::Database& GetDBForTesting();
+
  private:
-#if defined(OS_ANDROID)
-  // AndroidProviderBackend uses the `db_`.
-  friend class AndroidProviderBackend;
-  FRIEND_TEST_ALL_PREFIXES(AndroidURLsMigrationTest, MigrateToVersion22);
-#endif
   friend class ::InMemoryURLIndexTest;
 
   // Overridden from URLDatabase, DownloadDatabase, VisitDatabase,
-  // VisitSegmentDatabase and TypedURLSyncMetadataDatabase.
+  // VisitAnnotationsDatabase, VisitedLinkDatabase, VisitSegmentDatabase, and
+  // JourneysDatabase.
   sql::Database& GetDB() override;
 
-  // Overridden from TypedURLSyncMetadataDatabase.
-  sql::MetaTable& GetMetaTable() override;
-
   // Migration -----------------------------------------------------------------
+
+  // Razes the database if it's so old that we no longer have to code to migrate
+  // it to the current version. Returns `false` if the database was too old and
+  // could not be razed.
+  bool RazeDbIfTooOld();
 
   // Makes sure the version is up to date, updating if necessary. If the
   // database is too old to migrate, the user will be notified. Returns
@@ -189,20 +279,34 @@ class HistoryDatabase : public DownloadDatabase,
   // may commit the transaction and start a new one if migration requires it.
   sql::InitStatus EnsureCurrentVersion();
 
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
   // Converts the time epoch in the database from being 1970-based to being
   // 1601-based which corresponds to the change in Time.internal_value_.
   void MigrateTimeEpoch();
 #endif
 
-  // ---------------------------------------------------------------------------
+  bool MigrateRemoveTypedUrlMetadata();
+
+#if BUILDFLAG(IS_ANDROID)
+  // The android_urls table ceased usage in 91.0.4438.0. This method drops the
+  // table if it exists.
+  bool DropAndroidUrlsTable();
+#endif
+
+  // Reports metrics related to clusters.
+  void ReportClusterDatabaseMetrics();
 
   sql::Database db_;
   sql::MetaTable meta_table_;
 
-  base::Time cached_early_expiration_threshold_;
+  // Most of the sub-DBs (URLDatabase etc.) are integrated into HistoryDatabase
+  // via inheritance. However, that can lead to "diamond inheritance" issues
+  // when multiple of these base classes define the same methods. Therefore the
+  // Sync metadata DBs are integrated via composition instead.
+  HistorySyncMetadataDatabase history_metadata_db_;
+  journeys::JourneysSyncMetadataDatabase journeys_metadata_db_;
 
-  DISALLOW_COPY_AND_ASSIGN(HistoryDatabase);
+  base::Time cached_early_expiration_threshold_;
 };
 
 }  // namespace history

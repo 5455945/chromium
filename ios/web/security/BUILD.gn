@@ -1,12 +1,10 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//ios/build/config.gni")
 
 source_set("security") {
-  configs += [ "//build/config/compiler:enable_arc" ]
-
   deps = [
     "//base",
     "//ios/web/common",
@@ -25,8 +23,10 @@ source_set("security") {
     "cert_host_pair.cc",
     "cert_host_pair.h",
     "cert_policy.cc",
+    "cert_policy.h",
     "cert_verification_error.h",
-    "certificate_policy_cache.cc",
+    "certificate_policy_cache_impl.cc",
+    "certificate_policy_cache_impl.h",
     "crw_cert_verification_controller.h",
     "crw_cert_verification_controller.mm",
     "crw_ssl_status_updater.h",
@@ -38,7 +38,6 @@ source_set("security") {
 }
 
 source_set("unittests") {
-  configs += [ "//build/config/compiler:enable_arc" ]
   testonly = true
   deps = [
     ":security",
@@ -48,10 +47,14 @@ source_set("unittests") {
     "//ios/testing:ocmock_support",
     "//ios/web",
     "//ios/web/navigation",
+    "//ios/web/navigation:core",
     "//ios/web/public",
     "//ios/web/public/security",
+    "//ios/web/public/session",
     "//ios/web/public/test",
+    "//ios/web/public/test:test_fixture",
     "//ios/web/public/test/fakes",
+    "//ios/web/test:cert_test_util",
     "//ios/web/test/fakes",
     "//ios/web/web_state:web_state_impl_header",
     "//net",
@@ -63,6 +66,7 @@ source_set("unittests") {
   sources = [
     "cert_host_pair_unittest.cc",
     "cert_policy_unittest.cc",
+    "certificate_policy_cache_unittest.cc",
     "crw_cert_verification_controller_unittest.mm",
     "crw_ssl_status_updater_unittest.mm",
     "ssl_status_unittest.cc",

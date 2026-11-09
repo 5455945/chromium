@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,13 +12,13 @@
 #include "components/keyed_service/core/simple_dependency_manager.h"
 #include "components/keyed_service/core/simple_factory_key.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "chrome/browser/paint_preview/android/jni_headers/PaintPreviewTabServiceFactory_jni.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace paint_preview {
 
@@ -30,7 +30,8 @@ constexpr char kFeatureDirname[] = "tab_service";
 
 // static
 PaintPreviewTabServiceFactory* PaintPreviewTabServiceFactory::GetInstance() {
-  return base::Singleton<PaintPreviewTabServiceFactory>::get();
+  static base::NoDestructor<PaintPreviewTabServiceFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -53,7 +54,6 @@ PaintPreviewTabServiceFactory::BuildServiceInstanceFor(
   if (key->IsOffTheRecord())
     return nullptr;
 
-  // TODO(crbug/1060556): Inject a useful policy.
   return std::make_unique<paint_preview::PaintPreviewTabService>(
       std::make_unique<PaintPreviewTabServiceFileMixin>(key->GetPath(),
                                                         kFeatureDirname),
@@ -65,8 +65,8 @@ SimpleFactoryKey* PaintPreviewTabServiceFactory::GetKeyToUse(
   return key;
 }
 
-#if defined(OS_ANDROID)
-base::android::ScopedJavaLocalRef<jobject>
+#if BUILDFLAG(IS_ANDROID)
+static base::android::ScopedJavaLocalRef<jobject>
 JNI_PaintPreviewTabServiceFactory_GetServiceInstanceForCurrentProfile(
     JNIEnv* env) {
   ProfileKey* profile_key =
@@ -76,6 +76,10 @@ JNI_PaintPreviewTabServiceFactory_GetServiceInstanceForCurrentProfile(
           ->GetJavaRef();
   return base::android::ScopedJavaLocalRef<jobject>(java_ref);
 }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace paint_preview
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(PaintPreviewTabServiceFactory)
+#endif

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 #include <iterator>
 #include <ostream>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/stl_util.h"
-#include "base/values.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/url_pattern.h"
 #include "url/gurl.h"
@@ -24,6 +23,12 @@ namespace {
 const char kInvalidURLPatternError[] = "Invalid url pattern '*'";
 
 }  // namespace
+
+// static
+const URLPatternSet& URLPatternSet::Empty() {
+  static base::NoDestructor<URLPatternSet> empty_url_pattern;
+  return *empty_url_pattern.get();
+}
 
 // static
 URLPatternSet URLPatternSet::CreateDifference(const URLPatternSet& set1,
@@ -58,22 +63,25 @@ URLPatternSet URLPatternSet::CreateIntersection(
   // const, this should be safe.
   std::vector<const URLPattern*> unique_set1;
   for (const URLPattern& pattern : set1) {
-    if (set2.ContainsPattern(pattern))
+    if (set2.ContainsPattern(pattern)) {
       result.patterns_.insert(pattern);
-    else
+    } else {
       unique_set1.push_back(&pattern);
+    }
   }
   std::vector<const URLPattern*> unique_set2;
   for (const URLPattern& pattern : set2) {
-    if (set1.ContainsPattern(pattern))
+    if (set1.ContainsPattern(pattern)) {
       result.patterns_.insert(pattern);
-    else
+    } else {
       unique_set2.push_back(&pattern);
+    }
   }
 
   // If we're just looking for patterns contained by both, we're done.
-  if (intersection_behavior == IntersectionBehavior::kPatternsContainedByBoth)
+  if (intersection_behavior == IntersectionBehavior::kPatternsContainedByBoth) {
     return result;
+  }
 
   DCHECK_EQ(IntersectionBehavior::kDetailed, intersection_behavior);
 
@@ -81,10 +89,11 @@ URLPatternSet URLPatternSet::CreateIntersection(
   // they have with the other patterns.
   for (const auto* pattern : unique_set1) {
     for (const auto* pattern2 : unique_set2) {
-      absl::optional<URLPattern> intersection =
+      std::optional<URLPattern> intersection =
           pattern->CreateIntersection(*pattern2);
-      if (intersection)
+      if (intersection) {
         result.patterns_.insert(std::move(*intersection));
+      }
     }
   }
 
@@ -96,38 +105,6 @@ URLPatternSet URLPatternSet::CreateUnion(const URLPatternSet& set1,
                                          const URLPatternSet& set2) {
   return URLPatternSet(
       base::STLSetUnion<std::set<URLPattern>>(set1.patterns_, set2.patterns_));
-}
-
-// static
-URLPatternSet URLPatternSet::CreateUnion(
-    const std::vector<URLPatternSet>& sets) {
-  URLPatternSet result;
-  if (sets.empty())
-    return result;
-
-  // N-way union algorithm is basic O(nlog(n)) merge algorithm.
-  //
-  // Do the first merge step into a working set so that we don't mutate any of
-  // the input.
-  // TODO(devlin): Looks like this creates a bunch of copies; we can probably
-  // clean that up.
-  std::vector<URLPatternSet> working;
-  for (size_t i = 0; i < sets.size(); i += 2) {
-    if (i + 1 < sets.size())
-      working.push_back(CreateUnion(sets[i], sets[i + 1]));
-    else
-      working.push_back(sets[i].Clone());
-  }
-
-  for (size_t skip = 1; skip < working.size(); skip *= 2) {
-    for (size_t i = 0; i < (working.size() - skip); i += skip) {
-      URLPatternSet u = CreateUnion(working[i], working[i + skip]);
-      working[i].patterns_.swap(u.patterns_);
-    }
-  }
-
-  result.patterns_.swap(working[0].patterns_);
-  return result;
 }
 
 URLPatternSet::URLPatternSet() = default;
@@ -155,11 +132,13 @@ std::ostream& operator<<(std::ostream& out,
     ++iter;
   }
 
-  for (;iter != url_pattern_set.patterns().end(); ++iter)
+  for (; iter != url_pattern_set.patterns().end(); ++iter) {
     out << ", " << *iter;
+  }
 
-  if (!url_pattern_set.patterns().empty())
+  if (!url_pattern_set.patterns().empty()) {
     out << " ";
+  }
 
   out << "}";
   return out;
@@ -191,10 +170,16 @@ void URLPatternSet::ClearPatterns() {
 }
 
 bool URLPatternSet::AddOrigin(int valid_schemes, const GURL& origin) {
-  if (origin.is_empty())
+  if (origin.is_empty()) {
     return false;
+  }
   const url::Origin real_origin = url::Origin::Create(origin);
-  DCHECK(real_origin.IsSameOriginWith(url::Origin::Create(origin.GetOrigin())));
+  DCHECK(real_origin.IsSameOriginWith(
+      url::Origin::Create(origin.DeprecatedGetOriginAsURL())));
+  // TODO(devlin): Implement this in terms of the `AddOrigin()` call that takes
+  // an url::Origin? It's interesting because this doesn't currently supply an
+  // extra path, so if the GURL has not path ("https://example.com"), it would
+  // fail to add - which is probably a bug.
   URLPattern origin_pattern(valid_schemes);
   // Origin adding could fail if |origin| does not match |valid_schemes|.
   if (origin_pattern.Parse(origin.spec()) !=
@@ -205,47 +190,80 @@ bool URLPatternSet::AddOrigin(int valid_schemes, const GURL& origin) {
   return AddPattern(origin_pattern);
 }
 
+bool URLPatternSet::AddOrigin(int valid_schemes, const url::Origin& origin) {
+  DCHECK(!origin.opaque());
+  URLPattern origin_pattern(valid_schemes);
+  // Origin adding could fail if |origin| does not match |valid_schemes|.
+  std::string string_pattern = origin.Serialize() + "/*";
+  if (origin_pattern.Parse(string_pattern) !=
+      URLPattern::ParseResult::kSuccess) {
+    return false;
+  }
+  return AddPattern(origin_pattern);
+}
+
 bool URLPatternSet::Contains(const URLPatternSet& other) const {
-  for (auto it = other.begin(); it != other.end(); ++it) {
-    if (!ContainsPattern(*it))
+  for (const auto& it : other) {
+    if (!ContainsPattern(it)) {
       return false;
+    }
   }
 
   return true;
 }
 
 bool URLPatternSet::ContainsPattern(const URLPattern& pattern) const {
-  for (auto it = begin(); it != end(); ++it) {
-    if (it->Contains(pattern))
+  for (const auto& it : *this) {
+    if (it.Contains(pattern)) {
       return true;
+    }
   }
   return false;
 }
 
 bool URLPatternSet::MatchesURL(const GURL& url) const {
-  for (auto pattern = patterns_.cbegin(); pattern != patterns_.cend();
-       ++pattern) {
-    if (pattern->MatchesURL(url))
+  return MatchesURL(url, /*case_sensitive=*/true);
+}
+
+bool URLPatternSet::MatchesURL(const GURL& url, bool case_sensitive) const {
+  for (const auto& pattern : patterns_) {
+    if (pattern.MatchesURL(url, case_sensitive)) {
       return true;
+    }
   }
 
   return false;
 }
 
 bool URLPatternSet::MatchesAllURLs() const {
-  for (auto host = begin(); host != end(); ++host) {
-    if (host->match_all_urls() ||
-        (host->match_subdomains() && host->host().empty()))
+  for (const auto& host : *this) {
+    if (host.match_all_urls() ||
+        (host.match_subdomains() && host.host().empty())) {
       return true;
+    }
   }
   return false;
 }
 
+bool URLPatternSet::MatchesHost(const GURL& test,
+                                bool require_match_subdomains) const {
+  if (!test.is_valid()) {
+    return false;
+  }
+
+  return std::any_of(
+      patterns_.begin(), patterns_.end(),
+      [&test, require_match_subdomains](const URLPattern& pattern) {
+        return pattern.MatchesHost(test) &&
+               (!require_match_subdomains || pattern.match_subdomains());
+      });
+}
+
 bool URLPatternSet::MatchesSecurityOrigin(const GURL& origin) const {
-  for (auto pattern = patterns_.begin(); pattern != patterns_.end();
-       ++pattern) {
-    if (pattern->MatchesSecurityOrigin(origin))
+  for (const auto& pattern : patterns_) {
+    if (pattern.MatchesSecurityOrigin(origin)) {
       return true;
+    }
   }
 
   return false;
@@ -254,25 +272,26 @@ bool URLPatternSet::MatchesSecurityOrigin(const GURL& origin) const {
 bool URLPatternSet::OverlapsWith(const URLPatternSet& other) const {
   // Two extension extents overlap if there is any one URL that would match at
   // least one pattern in each of the extents.
-  for (auto i = patterns_.cbegin(); i != patterns_.cend(); ++i) {
-    for (auto j = other.patterns().cbegin(); j != other.patterns().cend();
-         ++j) {
-      if (i->OverlapsWith(*j))
+  for (const auto& pattern : patterns_) {
+    for (const auto& j : other.patterns()) {
+      if (pattern.OverlapsWith(j)) {
         return true;
+      }
     }
   }
 
   return false;
 }
 
-std::unique_ptr<base::ListValue> URLPatternSet::ToValue() const {
-  std::unique_ptr<base::ListValue> value(new base::ListValue);
-  for (auto i = patterns_.cbegin(); i != patterns_.cend(); ++i) {
-    base::Value pattern_str_value(i->GetAsString());
-    if (!base::Contains(value->GetList(), pattern_str_value))
-      value->Append(std::move(pattern_str_value));
+base::ListValue URLPatternSet::ToValue() const {
+  base::ListValue result;
+  for (const auto& pattern : patterns_) {
+    std::string pattern_str_value(pattern.GetAsString());
+    if (!result.contains(pattern_str_value)) {
+      result.Append(pattern_str_value);
+    }
   }
-  return value;
+  return result;
 }
 
 bool URLPatternSet::Populate(const std::vector<std::string>& patterns,
@@ -280,14 +299,13 @@ bool URLPatternSet::Populate(const std::vector<std::string>& patterns,
                              bool allow_file_access,
                              std::string* error) {
   ClearPatterns();
-  for (size_t i = 0; i < patterns.size(); ++i) {
+  for (const auto& i : patterns) {
     URLPattern pattern(valid_schemes);
-    if (pattern.Parse(patterns[i]) != URLPattern::ParseResult::kSuccess) {
+    if (pattern.Parse(i) != URLPattern::ParseResult::kSuccess) {
       if (error) {
-        *error = ErrorUtils::FormatErrorMessage(kInvalidURLPatternError,
-                                                patterns[i]);
+        *error = ErrorUtils::FormatErrorMessage(kInvalidURLPatternError, i);
       } else {
-        LOG(ERROR) << "Invalid url pattern: " << patterns[i];
+        LOG(ERROR) << "Invalid url pattern: " << i;
       }
       return false;
     }
@@ -300,13 +318,12 @@ bool URLPatternSet::Populate(const std::vector<std::string>& patterns,
   return true;
 }
 
-std::unique_ptr<std::vector<std::string>> URLPatternSet::ToStringVector()
-    const {
-  std::unique_ptr<std::vector<std::string>> value(new std::vector<std::string>);
-  for (auto i = patterns_.cbegin(); i != patterns_.cend(); ++i) {
-    value->push_back(i->GetAsString());
+std::vector<std::string> URLPatternSet::ToStringVector() const {
+  std::vector<std::string> result;
+  for (const auto& pattern : patterns_) {
+    result.push_back(pattern.GetAsString());
   }
-  return value;
+  return result;
 }
 
 bool URLPatternSet::Populate(const base::ListValue& value,
@@ -314,11 +331,12 @@ bool URLPatternSet::Populate(const base::ListValue& value,
                              bool allow_file_access,
                              std::string* error) {
   std::vector<std::string> patterns;
-  for (size_t i = 0; i < value.GetSize(); ++i) {
-    std::string item;
-    if (!value.GetString(i, &item))
+  for (const base::Value& pattern : value) {
+    const std::string* item = pattern.GetIfString();
+    if (!item) {
       return false;
-    patterns.push_back(item);
+    }
+    patterns.push_back(*item);
   }
   return Populate(patterns, valid_schemes, allow_file_access, error);
 }

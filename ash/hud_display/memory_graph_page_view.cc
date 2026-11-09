@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include <numeric>
 #include <string>
 
-#include "ash/hud_display/grid.h"
 #include "ash/hud_display/hud_constants.h"
-#include "base/bind.h"
+#include "ash/hud_display/reference_lines.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -23,66 +23,66 @@ namespace hud_display {
 ////////////////////////////////////////////////////////////////////////////////
 // MemoryGraphPageView, public:
 
-BEGIN_METADATA(MemoryGraphPageView, GraphPageViewBase)
+BEGIN_METADATA(MemoryGraphPageView)
 END_METADATA
 
 MemoryGraphPageView::MemoryGraphPageView(const base::TimeDelta refresh_interval)
-    : graph_chrome_rss_private_(kDefaultGraphWidth,
-                                Graph::Baseline::BASELINE_BOTTOM,
-                                Graph::Fill::SOLID,
-                                Graph::Style::LINES,
+    : graph_chrome_rss_private_(kHUDGraphWidth,
+                                Graph::Baseline::kBaselineBottom,
+                                Graph::Fill::kSolid,
+                                Graph::Style::kLines,
                                 SkColorSetA(SK_ColorRED, kHUDAlpha)),
-      graph_mem_free_(kDefaultGraphWidth,
-                      Graph::Baseline::BASELINE_BOTTOM,
-                      Graph::Fill::NONE,
-                      Graph::Style::LINES,
+      graph_mem_free_(kHUDGraphWidth,
+                      Graph::Baseline::kBaselineBottom,
+                      Graph::Fill::kNone,
+                      Graph::Style::kLines,
                       SkColorSetA(SK_ColorDKGRAY, kHUDAlpha)),
-      graph_mem_used_unknown_(kDefaultGraphWidth,
-                              Graph::Baseline::BASELINE_BOTTOM,
-                              Graph::Fill::SOLID,
-                              Graph::Style::LINES,
+      graph_mem_used_unknown_(kHUDGraphWidth,
+                              Graph::Baseline::kBaselineBottom,
+                              Graph::Fill::kSolid,
+                              Graph::Style::kLines,
                               SkColorSetA(SK_ColorLTGRAY, kHUDAlpha)),
-      graph_renderers_rss_private_(kDefaultGraphWidth,
-                                   Graph::Baseline::BASELINE_BOTTOM,
-                                   Graph::Fill::SOLID,
-                                   Graph::Style::LINES,
+      graph_renderers_rss_private_(kHUDGraphWidth,
+                                   Graph::Baseline::kBaselineBottom,
+                                   Graph::Fill::kSolid,
+                                   Graph::Style::kLines,
                                    SkColorSetA(SK_ColorCYAN, kHUDAlpha)),
-      graph_arc_rss_private_(kDefaultGraphWidth,
-                             Graph::Baseline::BASELINE_BOTTOM,
-                             Graph::Fill::SOLID,
-                             Graph::Style::LINES,
+      graph_arc_rss_private_(kHUDGraphWidth,
+                             Graph::Baseline::kBaselineBottom,
+                             Graph::Fill::kSolid,
+                             Graph::Style::kLines,
                              SkColorSetA(SK_ColorMAGENTA, kHUDAlpha)),
-      graph_gpu_rss_private_(kDefaultGraphWidth,
-                             Graph::Baseline::BASELINE_BOTTOM,
-                             Graph::Fill::SOLID,
-                             Graph::Style::LINES,
+      graph_gpu_rss_private_(kHUDGraphWidth,
+                             Graph::Baseline::kBaselineBottom,
+                             Graph::Fill::kSolid,
+                             Graph::Style::kLines,
                              SkColorSetA(SK_ColorRED, kHUDAlpha)),
-      graph_gpu_kernel_(kDefaultGraphWidth,
-                        Graph::Baseline::BASELINE_BOTTOM,
-                        Graph::Fill::SOLID,
-                        Graph::Style::LINES,
+      graph_gpu_kernel_(kHUDGraphWidth,
+                        Graph::Baseline::kBaselineBottom,
+                        Graph::Fill::kSolid,
+                        Graph::Style::kLines,
                         SkColorSetA(SK_ColorYELLOW, kHUDAlpha)),
-      graph_chrome_rss_shared_(kDefaultGraphWidth,
-                               Graph::Baseline::BASELINE_BOTTOM,
-                               Graph::Fill::NONE,
-                               Graph::Style::LINES,
+      graph_chrome_rss_shared_(kHUDGraphWidth,
+                               Graph::Baseline::kBaselineBottom,
+                               Graph::Fill::kNone,
+                               Graph::Style::kLines,
                                SkColorSetA(SK_ColorBLUE, kHUDAlpha)) {
   const int data_width = graph_arc_rss_private_.max_data_points();
   // Verical ticks are drawn every 10% (10/100 interval).
   constexpr float vertical_ticks_interval = 10 / 100.0;
   // -XX seconds on the left, 0Gb top (will be updated later), 0 seconds on the
   // right, 0 Gb on the bottom. Seconds and Gigabytes are dimensions. Number of
-  // data points is data_width. horizontal grid ticks are drawn every 10
+  // data points is data_width. horizontal tick marks are drawn every 10
   // seconds.
-  grid_ = CreateGrid(
+  reference_lines_ = CreateReferenceLines(
       static_cast<int>(/*left=*/-data_width * refresh_interval.InSecondsF()),
       /*top=*/0, /*right=*/0, /*bottom=*/0, /*x_unit=*/u"s",
       /*y_unit=*/u"Gb",
       /*horizontal_points_number=*/data_width,
       /*horizontal_ticks_interval=*/10 / refresh_interval.InSecondsF(),
       vertical_ticks_interval);
-  // Hide grid until we know total memory size.
-  grid_->SetVisible(false);
+  // Hide reference lines until we know total memory size.
+  reference_lines_->SetVisible(false);
 
   Legend::Formatter formatter = base::BindRepeating([](float value) {
     return base::ASCIIToUTF16(
@@ -121,8 +121,8 @@ void MemoryGraphPageView::OnPaint(gfx::Canvas* canvas) {
 
   // Layout graphs.
   gfx::Rect rect = GetContentsBounds();
-  // Adjust to grid width.
-  rect.Inset(kGridLineWidth, kGridLineWidth);
+  // Adjust bounds to not overlap with bordering reference lines.
+  rect.Inset(kHUDGraphReferenceLineWidth);
   graph_chrome_rss_private_.Layout(rect, /*base=*/nullptr);
   graph_mem_free_.Layout(rect, &graph_chrome_rss_private_);
   graph_mem_used_unknown_.Layout(rect, &graph_mem_free_);
@@ -156,8 +156,8 @@ void MemoryGraphPageView::UpdateData(const DataSource::Snapshot& snapshot) {
 
   if (total_ram_ != total) {
     total_ram_ = total;
-    grid_->SetTopLabel(total / one_gigabyte);  // In Gigabytes.
-    grid_->SetVisible(true);
+    reference_lines_->SetTopLabel(total / one_gigabyte);  // In Gigabytes.
+    reference_lines_->SetVisible(true);
   }
 
   const float chrome_rss_private_unscaled =
@@ -191,7 +191,7 @@ void MemoryGraphPageView::UpdateData(const DataSource::Snapshot& snapshot) {
   used_buckets.push_back(gpu_kernel);
 
   const float mem_used_unknown =
-      1 - std::accumulate(used_buckets.begin(), used_buckets.end(), 0.0f);
+      1 - std::reduce(used_buckets.begin(), used_buckets.end(), 0.0f);
   const float mem_used_unknown_unscaled = mem_used_unknown * total;
 
   if (mem_used_unknown < 0)

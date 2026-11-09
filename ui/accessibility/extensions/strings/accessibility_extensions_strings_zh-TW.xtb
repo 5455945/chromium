@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">停用所有圖片動畫。</translation>
 <translation id="1703735871906654364">鍵盤瀏覽</translation>
 <translation id="1791496371305830581">允許所有動畫圖片。</translation>
+<translation id="1974060860693918893">進階</translation>
 <translation id="1996252509865389616">啟用？</translation>
 <translation id="2079545284768500474">復原</translation>
 <translation id="2179565792157161713">在新分頁中開啟詳細說明</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">圖片 Alt 文字檢視器</translation>
 <translation id="381767806621926835">對任何含有「longdesc」或「aria-describedat」屬性的元素按一下滑鼠右鍵，即可查看其完整說明。</translation>
 <translation id="4023902424053835668">使用方向鍵瀏覽網頁文字。</translation>
+<translation id="4384008284958619421">新版螢幕閱讀器和 Google Chrome，現在都已原生支援無障礙元素說明和 ARIA 標準。</translation>
 <translation id="4388820049312272371">使用快閃指示標明游標位置。</translation>
 <translation id="4394049700291259645">停用</translation>
 <translation id="4769065380738716500">圖片已被 alt 文字取代。</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Color Enhancer</translation>
 <translation id="633394792577263429">按住 &lt;span class='key'&gt;Control&lt;/span&gt; 鍵可逐字移動。</translation>
 <translation id="6550675742724504774">選項</translation>
+<translation id="6699630355767768222">步驟 3：覆寫色彩軸以進行校正。</translation>
 <translation id="6838518108677880446">設定：</translation>
 <translation id="690628312087070417">當插入點跳躍距離極大時：</translation>
 <translation id="6965382102122355670">確定</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">取消</translation>
 <translation id="786423340267544509">為含有 aria-describedat 或 longdesc 屬性的元素加上框線。</translation>
 <translation id="7942349550061667556">紅色</translation>
+<translation id="8081200409424070383">「詳細說明」將於 2026 年 11 月 20 日淘汰。</translation>
 <translation id="8260673944985561857">鍵盤瀏覽選項</translation>
 <translation id="8321034316479930120">動畫政策</translation>
 <translation id="8480209185614411573">高對比</translation>
 <translation id="8609925175482059018">按下 &lt;span class='key'&gt;F7&lt;/span&gt; 鍵可開啟鍵盤瀏覽功能，再按一下則可關閉。</translation>
+<translation id="8798099450830957504">預設</translation>
 <translation id="894241283505723656">內容選單中的詳細說明</translation>
 </translationbundle>

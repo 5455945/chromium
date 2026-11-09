@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 The Chromium Authors. All rights reserved.
+ * Copyright 2019 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -7,17 +7,15 @@
 /**
  * Launch PaymentRequest with a show promise that resolves with an empty
  * dictionary.
- * @param {boolean} useUrlPaymentMethod - Whether URL payment method should be
- * used. Useful for payment handlers, which cannot use basic-card payment
- * method. By default, basic-card payment method is used.
+ * @param {string} supportedMethods - The payment method identifier.
  */
-function buy(useUrlPaymentMethod) { // eslint-disable-line no-unused-vars
+function buy(supportedMethods) {
+  if (!supportedMethods) {
+    print('supportedMethods required');
+    return;
+  }
   try {
-    let supportedMethods = 'basic-card';
-    if (useUrlPaymentMethod) {
-      supportedMethods = window.location.href;
-    }
-    var request = new PaymentRequest(
+    const request = new PaymentRequest(
         [{supportedMethods}], {
           total: {
             label: 'Total',

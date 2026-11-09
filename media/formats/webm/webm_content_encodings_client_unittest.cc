@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "media/base/mock_media_log.h"
 #include "media/formats/webm/webm_constants.h"
@@ -22,30 +23,29 @@ namespace media {
 
 // Matchers for verifying common media log entry strings.
 MATCHER(MissingContentEncoding, "") {
-  return CONTAINS_STRING(arg, "Missing ContentEncoding.");
+  return arg.contains("Missing ContentEncoding.");
 }
 
 MATCHER(UnexpectedContentEncodingOrder, "") {
-  return CONTAINS_STRING(arg, "Unexpected ContentEncodingOrder.");
+  return arg.contains("Unexpected ContentEncodingOrder.");
 }
 
 MATCHER(UnexpectedContentEncodingScope, "") {
-  return CONTAINS_STRING(arg, "Unexpected ContentEncodingScope.");
+  return arg.contains("Unexpected ContentEncodingScope.");
 }
 
 MATCHER(ContentCompressionNotSupported, "") {
-  return CONTAINS_STRING(arg, "ContentCompression not supported.");
+  return arg.contains("ContentCompression not supported.");
 }
 
 MATCHER(MissingContentEncryption, "") {
-  return CONTAINS_STRING(
-      arg,
+  return arg.contains(
       "ContentEncodingType is encryption but ContentEncryption is missing.");
 }
 
 MATCHER_P(UnexpectedContentEncAlgo, algo, "") {
-  return CONTAINS_STRING(
-      arg, "Unexpected ContentEncAlgo " + base::NumberToString(algo) + ".");
+  return arg.contains("Unexpected ContentEncAlgo " +
+                      base::NumberToString(algo) + ".");
 }
 
 class WebMContentEncodingsClientTest : public testing::Test {
@@ -53,8 +53,8 @@ class WebMContentEncodingsClientTest : public testing::Test {
   WebMContentEncodingsClientTest()
       : client_(&media_log_), parser_(kWebMIdContentEncodings, &client_) {}
 
-  void ParseAndExpectToFail(const uint8_t* buf, int size) {
-    int result = parser_.Parse(buf, size);
+  void ParseAndExpectToFail(base::span<const uint8_t> buf) {
+    int result = parser_.Parse(buf);
     EXPECT_EQ(-1, result);
   }
 
@@ -68,9 +68,8 @@ TEST_F(WebMContentEncodingsClientTest, EmptyContentEncodings) {
   const uint8_t kContentEncodings[] = {
       0x6D, 0x80, 0x80,  // ContentEncodings (size = 0)
   };
-  int size = sizeof(kContentEncodings);
   EXPECT_MEDIA_LOG(MissingContentEncoding());
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 TEST_F(WebMContentEncodingsClientTest, EmptyContentEncoding) {
@@ -78,8 +77,7 @@ TEST_F(WebMContentEncodingsClientTest, EmptyContentEncoding) {
       0x6D, 0x80, 0x83,  // ContentEncodings (size = 3)
       0x63, 0x40, 0x80,  //   ContentEncoding (size = 0)
   };
-  int size = sizeof(kContentEncodings);
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 TEST_F(WebMContentEncodingsClientTest, SingleContentEncoding) {
@@ -96,7 +94,7 @@ TEST_F(WebMContentEncodingsClientTest, SingleContentEncoding) {
   };
   int size = sizeof(kContentEncodings);
 
-  int result = parser_.Parse(kContentEncodings, size);
+  int result = parser_.Parse(kContentEncodings);
   ASSERT_EQ(size, result);
   const ContentEncodings& content_encodings = client_.content_encodings();
 
@@ -133,7 +131,7 @@ TEST_F(WebMContentEncodingsClientTest, MultipleContentEncoding) {
   };
   int size = sizeof(kContentEncodings);
 
-  int result = parser_.Parse(kContentEncodings, size);
+  int result = parser_.Parse(kContentEncodings);
   ASSERT_EQ(size, result);
   const ContentEncodings& content_encodings = client_.content_encodings();
   ASSERT_EQ(2u, content_encodings.size());
@@ -163,7 +161,7 @@ TEST_F(WebMContentEncodingsClientTest, DefaultValues) {
   };
   int size = sizeof(kContentEncodings);
 
-  int result = parser_.Parse(kContentEncodings, size);
+  int result = parser_.Parse(kContentEncodings);
   ASSERT_EQ(size, result);
   const ContentEncodings& content_encodings = client_.content_encodings();
 
@@ -193,12 +191,12 @@ TEST_F(WebMContentEncodingsClientTest, ContentEncodingsClientReuse) {
   int size = sizeof(kContentEncodings);
 
   // Parse for the first time.
-  int result = parser_.Parse(kContentEncodings, size);
+  int result = parser_.Parse(kContentEncodings);
   ASSERT_EQ(size, result);
 
   // Parse again.
   parser_.Reset();
-  result = parser_.Parse(kContentEncodings, size);
+  result = parser_.Parse(kContentEncodings);
   ASSERT_EQ(size, result);
   const ContentEncodings& content_encodings = client_.content_encodings();
 
@@ -221,9 +219,8 @@ TEST_F(WebMContentEncodingsClientTest, InvalidContentEncodingOrder) {
       0x50, 0x33, 0x81, 0x01,  //     ContentEncodingType (size = 1)
       0x50, 0x35, 0x80,        //     ContentEncryption (size = 0)
   };
-  int size = sizeof(kContentEncodings);
   EXPECT_MEDIA_LOG(UnexpectedContentEncodingOrder());
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 TEST_F(WebMContentEncodingsClientTest, InvalidContentEncodingScope) {
@@ -234,9 +231,8 @@ TEST_F(WebMContentEncodingsClientTest, InvalidContentEncodingScope) {
       0x50, 0x33, 0x81, 0x01,  //     ContentEncodingType (size = 1)
       0x50, 0x35, 0x80,        //     ContentEncryption (size = 0)
   };
-  int size = sizeof(kContentEncodings);
   EXPECT_MEDIA_LOG(UnexpectedContentEncodingScope());
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 TEST_F(WebMContentEncodingsClientTest, InvalidContentEncodingType) {
@@ -246,9 +242,8 @@ TEST_F(WebMContentEncodingsClientTest, InvalidContentEncodingType) {
       0x50, 0x33, 0x81, 0x00,  //     ContentEncodingType (size = 1), invalid
       0x50, 0x35, 0x80,        //     ContentEncryption (size = 0)
   };
-  int size = sizeof(kContentEncodings);
   EXPECT_MEDIA_LOG(ContentCompressionNotSupported());
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 // ContentEncodingType is encryption but no ContentEncryption present.
@@ -259,9 +254,8 @@ TEST_F(WebMContentEncodingsClientTest, MissingContentEncryption) {
       0x50, 0x33, 0x81, 0x01,  //     ContentEncodingType (size = 1)
                                //     ContentEncryption missing
   };
-  int size = sizeof(kContentEncodings);
   EXPECT_MEDIA_LOG(MissingContentEncryption());
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 TEST_F(WebMContentEncodingsClientTest, InvalidContentEncAlgo) {
@@ -274,9 +268,8 @@ TEST_F(WebMContentEncodingsClientTest, InvalidContentEncAlgo) {
       0x47, 0xE2, 0x88,        //       ContentEncKeyID (size = 8)
       0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
   };
-  int size = sizeof(kContentEncodings);
   EXPECT_MEDIA_LOG(UnexpectedContentEncAlgo(0xEE));
-  ParseAndExpectToFail(kContentEncodings, size);
+  ParseAndExpectToFail(kContentEncodings);
 }
 
 }  // namespace media

@@ -1,26 +1,31 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/browsing_data/browsing_data_history_observer_service.h"
 
-#include "base/callback_helpers.h"
+#include <tuple>
+
+#include "base/functional/callback_helpers.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/browser/browsing_data/navigation_entry_remover.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/common/buildflags.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/safe_browsing/core/browser/suspicious_site_warning_allowlist.h"
 #include "components/search_engines/template_url_service.h"
-#include "content/public/browser/browsing_data_filter_builder.h"
-#include "content/public/browser/storage_partition.h"
-#include "storage/browser/quota/special_storage_policy.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/commerce/merchant_viewer/merchant_viewer_data_manager.h"
 #include "chrome/browser/commerce/merchant_viewer/merchant_viewer_data_manager_factory.h"
+#include "chrome/browser/commerce/shopping_service_factory.h"
+#include "components/commerce/core/feature_utils.h"
+#include "components/commerce/core/shopping_service.h"
 #endif
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
@@ -54,14 +59,16 @@ base::flat_set<GURL> GetDeletedOrigins(
 
 bool Contains(const base::flat_set<GURL>& deleted_origins,
               const GURL& template_gurl) {
-  return deleted_origins.contains(template_gurl.GetOrigin());
+  return deleted_origins.contains(template_gurl.DeprecatedGetOriginAsURL());
 }
 
 void DeleteTemplateUrlsForTimeRange(TemplateURLService* keywords_model,
                                     base::Time delete_begin,
                                     base::Time delete_end) {
   if (!keywords_model->loaded()) {
-    keywords_model->RegisterOnLoadedCallback(
+    // TODO(crbug.com/40211652): Ignoring the return value here is
+    // probably a bug.
+    std::ignore = keywords_model->RegisterOnLoadedCallback(
         base::BindOnce(&DeleteTemplateUrlsForTimeRange, keywords_model,
                        delete_begin, delete_end));
     keywords_model->Load();
@@ -74,7 +81,9 @@ void DeleteTemplateUrlsForTimeRange(TemplateURLService* keywords_model,
 void DeleteTemplateUrlsForDeletedOrigins(TemplateURLService* keywords_model,
                                          base::flat_set<GURL> deleted_origins) {
   if (!keywords_model->loaded()) {
-    keywords_model->RegisterOnLoadedCallback(
+    // TODO(crbug.com/40211652): Ignoring the return value here is
+    // probably a bug.
+    std::ignore = keywords_model->RegisterOnLoadedCallback(
         base::BindOnce(&DeleteTemplateUrlsForDeletedOrigins, keywords_model,
                        std::move(deleted_origins)));
     keywords_model->Load();
@@ -86,7 +95,7 @@ void DeleteTemplateUrlsForDeletedOrigins(TemplateURLService* keywords_model,
       base::Time::Min(), base::Time::Max());
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void ClearCommerceData(Profile* profile,
                        const history::DeletionInfo& deletion_info) {
   MerchantViewerDataManager* merchant_viewer_data_manager =
@@ -106,73 +115,6 @@ void ClearCommerceData(Profile* profile,
 }
 #endif
 
-bool DoesOriginMatchPredicate(
-    base::OnceCallback<bool(const url::Origin&)> predicate,
-    const url::Origin& origin,
-    storage::SpecialStoragePolicy* policy) {
-  if (!std::move(predicate).Run(origin))
-    return false;
-
-  if (policy && policy->IsStorageProtected(origin.GetURL()))
-    return false;
-
-  return true;
-}
-
-void DeleteStoragePartitionDataWithFilter(
-    content::StoragePartition* storage_partition,
-    std::unique_ptr<content::BrowsingDataFilterBuilder> filter_builder,
-    base::Time delete_begin,
-    base::Time delete_end) {
-  content::StoragePartition::OriginMatcherFunction matcher_function =
-      filter_builder ? base::BindRepeating(&DoesOriginMatchPredicate,
-                                           filter_builder->BuildOriginFilter())
-                     : base::NullCallback();
-
-  const uint32_t removal_mask =
-      content::StoragePartition::REMOVE_DATA_MASK_CONVERSIONS;
-  const uint32_t quota_removal_mask = 0;
-  storage_partition->ClearData(
-      removal_mask, quota_removal_mask, std::move(matcher_function),
-      nullptr /* cookie_deletion_filter */, false /* perform_storage_cleanup */,
-      delete_begin, delete_end, base::DoNothing());
-}
-
-void DeleteStoragePartitionDataForTimeRange(
-    content::StoragePartition* storage_partition,
-    base::Time delete_begin,
-    base::Time delete_end,
-    const absl::optional<std::set<GURL>>& urls) {
-  std::unique_ptr<content::BrowsingDataFilterBuilder> filter_builder;
-  if (urls) {
-    filter_builder = content::BrowsingDataFilterBuilder::Create(
-        content::BrowsingDataFilterBuilder::Mode::kDelete);
-    for (const auto& url : *urls) {
-      url::Origin origin = url::Origin::Create(url);
-      if (!origin.opaque())
-        filter_builder->AddOrigin(std::move(origin));
-    }
-  }
-
-  DeleteStoragePartitionDataWithFilter(
-      storage_partition, std::move(filter_builder), delete_begin, delete_end);
-}
-
-void DeleteStoragePartitionDataForDeletedOrigins(
-    content::StoragePartition* storage_partition,
-    const base::flat_set<GURL>& deleted_origins) {
-  auto filter_builder = content::BrowsingDataFilterBuilder::Create(
-      content::BrowsingDataFilterBuilder::Mode::kDelete);
-  for (const auto& url : deleted_origins) {
-    url::Origin origin = url::Origin::Create(url);
-    if (!origin.opaque())
-      filter_builder->AddOrigin(std::move(origin));
-  }
-  DeleteStoragePartitionDataWithFilter(storage_partition,
-                                       std::move(filter_builder), base::Time(),
-                                       base::Time::Max());
-}
-
 }  // namespace
 
 BrowsingDataHistoryObserverService::BrowsingDataHistoryObserverService(
@@ -184,9 +126,14 @@ BrowsingDataHistoryObserverService::BrowsingDataHistoryObserverService(
     history_observation_.Observe(history_service);
 }
 
-BrowsingDataHistoryObserverService::~BrowsingDataHistoryObserverService() {}
+BrowsingDataHistoryObserverService::~BrowsingDataHistoryObserverService() =
+    default;
 
-void BrowsingDataHistoryObserverService::OnURLsDeleted(
+void BrowsingDataHistoryObserverService::Shutdown() {
+  history_observation_.Reset();
+}
+
+void BrowsingDataHistoryObserverService::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
   if (!deletion_info.is_from_expiration())
@@ -196,33 +143,17 @@ void BrowsingDataHistoryObserverService::OnURLsDeleted(
   TemplateURLService* keywords_model =
       TemplateURLServiceFactory::GetForProfile(profile_);
 
-  content::StoragePartition* storage_partition =
-      storage_partition_for_testing_ ? storage_partition_for_testing_
-                                     : profile_->GetDefaultStoragePartition();
-
   if (deletion_info.time_range().IsValid()) {
     if (keywords_model) {
       DeleteTemplateUrlsForTimeRange(keywords_model,
                                      deletion_info.time_range().begin(),
                                      deletion_info.time_range().end());
     }
-
-    if (storage_partition) {
-      DeleteStoragePartitionDataForTimeRange(
-          storage_partition, deletion_info.time_range().begin(),
-          deletion_info.time_range().end(), deletion_info.restrict_urls());
-    }
-
   } else {
     // If the history deletion did not have a time range, delete data by
     // origin.
     auto deleted_origins =
         GetDeletedOrigins(deletion_info.deleted_urls_origin_map());
-
-    if (storage_partition) {
-      DeleteStoragePartitionDataForDeletedOrigins(storage_partition,
-                                                  deleted_origins);
-    }
 
     // Move the deleted origins to avoid an expensive copy.
     if (keywords_model) {
@@ -231,44 +162,59 @@ void BrowsingDataHistoryObserverService::OnURLsDeleted(
     }
   }
 
-#if defined(OS_ANDROID)
-  ClearCommerceData(profile_, deletion_info);
-#endif
-}
+  HostContentSettingsMap* host_content_settings_map =
+      HostContentSettingsMapFactory::GetForProfile(profile_);
+  if (host_content_settings_map) {
+    safe_browsing::SuspiciousSiteWarningAllowlist allowlist(
+        host_content_settings_map);
+    allowlist.OnHistoryDeletions(deletion_info);
+  }
 
-void BrowsingDataHistoryObserverService::OverrideStoragePartitionForTesting(
-    content::StoragePartition* partition) {
-  storage_partition_for_testing_ = partition;
+#if BUILDFLAG(IS_ANDROID)
+  commerce::ShoppingService* shopping_service =
+      commerce::ShoppingServiceFactory::GetForBrowserContext(profile_);
+  if (shopping_service && commerce::IsMerchantViewerEnabled(
+                              shopping_service->GetAccountChecker())) {
+    ClearCommerceData(profile_, deletion_info);
+  }
+#endif
 }
 
 // static
 BrowsingDataHistoryObserverService::Factory*
 BrowsingDataHistoryObserverService::Factory::GetInstance() {
-  return base::Singleton<BrowsingDataHistoryObserverService::Factory>::get();
+  static base::NoDestructor<BrowsingDataHistoryObserverService::Factory>
+      instance;
+  return instance.get();
 }
 
 BrowsingDataHistoryObserverService::Factory::Factory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "BrowsingDataHistoryObserverService",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithGuest(ProfileSelection::kNone)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .Build()) {
   DependsOn(HistoryServiceFactory::GetInstance());
+  DependsOn(HostContentSettingsMapFactory::GetInstance());
   DependsOn(TabRestoreServiceFactory::GetInstance());
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
   DependsOn(SessionServiceFactory::GetInstance());
 #endif
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   DependsOn(MerchantViewerDataManagerFactory::GetInstance());
+  DependsOn(commerce::ShoppingServiceFactory::GetInstance());
 #endif
 }
 
-KeyedService*
-BrowsingDataHistoryObserverService::Factory::BuildServiceInstanceFor(
-    content::BrowserContext* context) const {
+std::unique_ptr<KeyedService> BrowsingDataHistoryObserverService::Factory::
+    BuildServiceInstanceForBrowserContext(
+        content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
-  if (profile->IsOffTheRecord() || profile->IsGuestSession())
-    return nullptr;
-  return new BrowsingDataHistoryObserverService(profile);
+  return std::make_unique<BrowsingDataHistoryObserverService>(profile);
 }
 
 bool BrowsingDataHistoryObserverService::Factory::

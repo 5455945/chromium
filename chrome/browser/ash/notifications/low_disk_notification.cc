@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,25 @@
 
 #include <stdint.h>
 
+#include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
-#include "base/macros.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/browser/ui/webui/settings/chromeos/constants/routes.mojom.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/settings/cros_settings_names.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
-#include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -36,8 +35,7 @@ const char kLowDiskId[] = "low_disk";
 const char kNotifierLowDisk[] = "ash.disk";
 const uint64_t kNotificationThreshold = 1 << 30;          // 1GB
 const uint64_t kNotificationSevereThreshold = 512 << 20;  // 512MB
-constexpr base::TimeDelta kNotificationInterval =
-    base::TimeDelta::FromMinutes(2);
+constexpr base::TimeDelta kNotificationInterval = base::Minutes(2);
 
 }  // namespace
 
@@ -45,23 +43,28 @@ namespace ash {
 
 LowDiskNotification::LowDiskNotification()
     : notification_interval_(kNotificationInterval) {
-  DCHECK(chromeos::UserDataAuthClient::Get());
-  chromeos::UserDataAuthClient::Get()->AddObserver(this);
+  CHECK(UserDataAuthClient::Get(), base::NotFatalUntil::M160);
+  UserDataAuthClient::Get()->AddObserver(this);
 }
 
 LowDiskNotification::~LowDiskNotification() {
-  DCHECK(chromeos::UserDataAuthClient::Get());
-  chromeos::UserDataAuthClient::Get()->RemoveObserver(this);
+  CHECK(UserDataAuthClient::Get(), base::NotFatalUntil::M160);
+  if (auto* message_center = message_center::MessageCenter::Get()) {
+    message_center->RemoveNotification(kLowDiskId, /*by_user=*/false);
+  } else {
+    // TODO(crbug.com/454766826): Fix shutdown order so this isn't needed.
+    CHECK_IS_TEST();
+  }
+  UserDataAuthClient::Get()->RemoveObserver(this);
 }
 
 void LowDiskNotification::LowDiskSpace(
     const ::user_data_auth::LowDiskSpace& status) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   bool show_low_disk_space_notification = true;
-  if (!CrosSettings::Get()->GetBoolean(
-          chromeos::kDeviceShowLowDiskSpaceNotification,
-          &show_low_disk_space_notification)) {
+  if (!CrosSettings::Get()->GetBoolean(kDeviceShowLowDiskSpaceNotification,
+                                       &show_low_disk_space_notification)) {
     DVLOG(1) << "DeviceShowLowDiskSpaceNotification not set, "
                 "defaulting to showing the notification.";
   }
@@ -69,18 +72,25 @@ void LowDiskNotification::LowDiskSpace(
   // We suppress the low-space notifications when there are multiple users on an
   // enterprise managed device based on policy configuration.
   if (!show_low_disk_space_notification &&
-      user_manager::UserManager::Get()->GetUsers().size() > 1) {
+      user_manager::UserManager::Get()->GetPersistedUsers().size() > 1) {
     LOG(WARNING) << "Device is low on disk space, but the notification was "
                  << "suppressed on a managed device.";
     return;
   }
+
+  if (demo_mode::IsDeviceInDemoMode()) {
+    LOG(WARNING) << "Device is low on disk space, but the notification was "
+                 << "suppressed on a demo mode device.";
+    return;
+  }
+
   Severity severity = GetSeverity(status.disk_free_bytes());
   base::Time now = base::Time::Now();
   if (severity != last_notification_severity_ ||
       (severity == HIGH &&
        now - last_notification_time_ > notification_interval_)) {
-    SystemNotificationHelper::GetInstance()->Display(
-        *CreateNotification(severity));
+    message_center::MessageCenter::Get()->AddNotification(
+        CreateNotification(severity));
     last_notification_time_ = now;
     last_notification_severity_ = severity;
   }
@@ -110,22 +120,29 @@ LowDiskNotification::CreateNotification(Severity severity) {
   optional_fields.buttons.push_back(storage_settings);
 
   message_center::NotifierId notifier_id(
-      message_center::NotifierType::SYSTEM_COMPONENT, kNotifierLowDisk);
+      message_center::NotifierType::SYSTEM_COMPONENT, kNotifierLowDisk,
+      NotificationCatalogName::kLowDisk);
 
-  auto on_click = base::BindRepeating([](absl::optional<int> button_index) {
+  auto on_click = base::BindRepeating([](std::optional<int> button_index) {
     if (button_index) {
-      DCHECK_EQ(0, *button_index);
-      chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-          ProfileManager::GetActiveUserProfile(),
-          chromeos::settings::mojom::kStorageSubpagePath);
+      CHECK_EQ(0, *button_index, base::NotFatalUntil::M160);
+      if (auto* session =
+              session_manager::SessionManager::Get()->GetActiveSession()) {
+        // TODO(crbug.com/447287122): Revisit here to check if there's a case
+        // where there's no active session.
+        ash::SettingsAppManager::Get()->Open(
+            CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                session->account_id())),
+            {.sub_page = chromeos::settings::mojom::kStorageSubpagePath});
+      }
     }
   });
   std::unique_ptr<message_center::Notification> notification =
-      ash::CreateSystemNotification(
+      ash::CreateSystemNotificationPtr(
           message_center::NOTIFICATION_TYPE_SIMPLE, kLowDiskId, title, message,
-          std::u16string(), GURL(), notifier_id, optional_fields,
+          std::u16string(), notifier_id, optional_fields,
           new message_center::HandleNotificationClickDelegate(on_click),
-          kNotificationStorageFullIcon, warning_level);
+          ash::kNotificationStorageFullIcon, warning_level);
 
   return notification;
 }

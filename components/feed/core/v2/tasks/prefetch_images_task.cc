@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "components/feed/core/proto/v2/wire/stream_structure.pb.h"
 #include "components/feed/core/v2/config.h"
@@ -40,19 +40,20 @@ PrefetchImagesTask::PrefetchImagesTask(FeedStream* stream) : stream_(*stream) {
 PrefetchImagesTask::~PrefetchImagesTask() = default;
 
 void PrefetchImagesTask::Run() {
-  if (stream_.ClearAllInProgress()) {
+  if (stream_->ClearAllInProgress()) {
     // Abort if ClearAll is in progress.
     TaskComplete();
     return;
   }
-  if (stream_.GetModel(kForYouStream)) {
-    PrefetchImagesFromModel(*stream_.GetModel(kForYouStream));
+  StreamType for_you_stream = StreamType(StreamKind::kForYou);
+  if (stream_->GetModel(for_you_stream)) {
+    PrefetchImagesFromModel(*stream_->GetModel(for_you_stream));
     return;
   }
 
   load_from_store_task_ = std::make_unique<LoadStreamFromStoreTask>(
-      LoadStreamFromStoreTask::LoadType::kFullLoad, &stream_, kForYouStream,
-      &stream_.GetStore(),
+      LoadStreamFromStoreTask::LoadType::kFullLoad, &*stream_, for_you_stream,
+      &stream_->GetStore(),
       /*missed_last_refresh=*/false,
       base::BindOnce(&PrefetchImagesTask::LoadStreamComplete,
                      base::Unretained(this)));
@@ -71,7 +72,8 @@ void PrefetchImagesTask::LoadStreamComplete(
   // LoadStreamTask flow has various considerations for metrics and signalling
   // surfaces to update. For this reason, we're not going to retain the loaded
   // model for use outside of this task.
-  StreamModel model;
+  StreamModel::Context model_context;
+  StreamModel model(&model_context, LoggingParameters{});
   model.Update(std::move(result.update_request));
   PrefetchImagesFromModel(model);
 }
@@ -102,7 +104,7 @@ void PrefetchImagesTask::MaybePrefetchImage(const GURL& gurl) {
       previously_fetched_.size() >= max_images_per_refresh_)
     return;
   previously_fetched_.insert(gurl.spec());
-  stream_.PrefetchImage(gurl);
+  stream_->PrefetchImage(gurl);
 }
 
 }  // namespace feed

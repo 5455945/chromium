@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/proxy_resolution/mock_proxy_resolver.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -49,12 +50,12 @@ MockAsyncProxyResolver::~MockAsyncProxyResolver() = default;
 
 int MockAsyncProxyResolver::GetProxyForURL(
     const GURL& url,
-    const NetworkIsolationKey& network_isolation_key,
+    const NetworkAnonymizationKey& network_anonymization_key,
     ProxyInfo* results,
     CompletionOnceCallback callback,
     std::unique_ptr<Request>* request,
     const NetLogWithSource& /*net_log*/) {
-  std::unique_ptr<Job> job(new Job(this, url, results, std::move(callback)));
+  auto job = std::make_unique<Job>(this, url, results, std::move(callback));
 
   pending_jobs_.push_back(job.get());
   *request = std::make_unique<RequestImpl>(std::move(job));
@@ -64,7 +65,7 @@ int MockAsyncProxyResolver::GetProxyForURL(
 }
 
 void MockAsyncProxyResolver::AddCancelledJob(std::unique_ptr<Job> job) {
-  auto it = std::find(pending_jobs_.begin(), pending_jobs_.end(), job.get());
+  auto it = std::ranges::find(pending_jobs_, job.get());
   // Because this is called always when RequestImpl is destructed,
   // we need to check if it is still in pending jobs.
   if (it != pending_jobs_.end()) {
@@ -75,8 +76,8 @@ void MockAsyncProxyResolver::AddCancelledJob(std::unique_ptr<Job> job) {
 
 void MockAsyncProxyResolver::RemovePendingJob(Job* job) {
   DCHECK(job);
-  auto it = std::find(pending_jobs_.begin(), pending_jobs_.end(), job);
-  DCHECK(it != pending_jobs_.end());
+  auto it = std::ranges::find(pending_jobs_, job);
+  CHECK(it != pending_jobs_.end());
   pending_jobs_.erase(it);
 }
 
@@ -144,8 +145,8 @@ int MockAsyncProxyResolverFactory::CreateProxyResolver(
     std::unique_ptr<ProxyResolver>* resolver,
     CompletionOnceCallback callback,
     std::unique_ptr<ProxyResolverFactory::Request>* request_handle) {
-  scoped_refptr<Request> request =
-      new Request(this, pac_script, resolver, std::move(callback));
+  auto request = base::MakeRefCounted<Request>(this, pac_script, resolver,
+                                               std::move(callback));
   pending_requests_.push_back(request);
 
   *request_handle = std::make_unique<Job>(request);
@@ -155,9 +156,8 @@ int MockAsyncProxyResolverFactory::CreateProxyResolver(
 }
 
 void MockAsyncProxyResolverFactory::RemovePendingRequest(Request* request) {
-  auto it =
-      std::find(pending_requests_.begin(), pending_requests_.end(), request);
-  DCHECK(it != pending_requests_.end());
+  auto it = std::ranges::find(pending_requests_, request);
+  CHECK(it != pending_requests_.end());
   pending_requests_.erase(it);
 }
 
@@ -173,12 +173,12 @@ ForwardingProxyResolver::ForwardingProxyResolver(ProxyResolver* impl)
 
 int ForwardingProxyResolver::GetProxyForURL(
     const GURL& query_url,
-    const NetworkIsolationKey& network_isolation_key,
+    const NetworkAnonymizationKey& network_anonymization_key,
     ProxyInfo* results,
     CompletionOnceCallback callback,
     std::unique_ptr<Request>* request,
     const NetLogWithSource& net_log) {
-  return impl_->GetProxyForURL(query_url, network_isolation_key, results,
+  return impl_->GetProxyForURL(query_url, network_anonymization_key, results,
                                std::move(callback), request, net_log);
 }
 

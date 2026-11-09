@@ -1,33 +1,37 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
+#include "chrome/browser/ash/child_accounts/screen_time_controller.h"
 
+#include <memory>
+#include <optional>
+
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/ash/child_accounts/screen_time_controller.h"
+#include "build/build_config.h"
 #include "chrome/browser/ash/child_accounts/screen_time_controller_factory.h"
 #include "chrome/browser/ash/child_accounts/time_limit_override.h"
 #include "chrome/browser/ash/child_accounts/time_limit_test_utils.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/policy/core/user_policy_test_helper.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
-#include "content/public/browser/notification_service.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
@@ -35,12 +39,17 @@ namespace ash {
 namespace {
 
 // Time delta representing the usage time limit warning time.
-constexpr base::TimeDelta kUsageTimeLimitWarningTime =
-    base::TimeDelta::FromMinutes(15);
+constexpr base::TimeDelta kUsageTimeLimitWarningTime = base::Minutes(15);
 
 class TestScreenTimeControllerObserver : public ScreenTimeController::Observer {
  public:
   TestScreenTimeControllerObserver() = default;
+
+  TestScreenTimeControllerObserver(const TestScreenTimeControllerObserver&) =
+      delete;
+  TestScreenTimeControllerObserver& operator=(
+      const TestScreenTimeControllerObserver&) = delete;
+
   ~TestScreenTimeControllerObserver() override = default;
 
   int usage_time_limit_warnings() const { return usage_time_limit_warnings_; }
@@ -49,8 +58,6 @@ class TestScreenTimeControllerObserver : public ScreenTimeController::Observer {
   void UsageTimeLimitWarning() override { usage_time_limit_warnings_++; }
 
   int usage_time_limit_warnings_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(TestScreenTimeControllerObserver);
 };
 
 }  // namespace
@@ -61,13 +68,16 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
  public:
   ScreenTimeControllerTest() = default;
 
+  ScreenTimeControllerTest(const ScreenTimeControllerTest&) = delete;
+  ScreenTimeControllerTest& operator=(const ScreenTimeControllerTest&) = delete;
+
   ~ScreenTimeControllerTest() override = default;
 
   // MixinBasedInProcessBrowserTest:
   void SetUpInProcessBrowserTestFixture() override {
     MixinBasedInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
     // A basic starting policy.
-    base::Value policy_content =
+    base::DictValue policy_content =
         utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
     logged_in_user_mixin_.GetUserPolicyMixin()
         ->RequestPolicyUpdate()
@@ -76,25 +86,37 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
         ->set_value(utils::PolicyToString(policy_content));
   }
 
+  void SetUpOnMainThread() override {
+    MixinBasedInProcessBrowserTest::SetUpOnMainThread();
+    scoped_request_lock_screen_override_.emplace();
+  }
+
+  void TearDownOnMainThread() override {
+    child_profile_ = nullptr;
+    scoped_request_lock_screen_override_.reset();
+    MixinBasedInProcessBrowserTest::TearDownOnMainThread();
+  }
+
  protected:
   void LogInChildAndSetupClockWithTime(const char* time) {
     SetupTaskRunnerWithTime(utils::TimeFromString(time));
     logged_in_user_mixin_.LogInUser();
-    MockClockForActiveUser();
+    MockClockForChildUser();
   }
 
   void SetupTaskRunnerWithTime(base::Time start_time) {
     task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>(
-        start_time, base::TimeTicks::UnixEpoch());
+        start_time, base::TimeTicks());
   }
 
-  void MockClockForActiveUser() {
-    const user_manager::UserManager* const user_manager =
-        user_manager::UserManager::Get();
-    EXPECT_EQ(user_manager->GetActiveUser()->GetType(),
-              user_manager::USER_TYPE_CHILD);
-    child_profile_ =
-        ProfileHelper::Get()->GetProfileByUser(user_manager->GetActiveUser());
+  void MockClockForChildUser() {
+    const user_manager::User* const user =
+        user_manager::UserManager::Get()->FindUser(GetAccountId());
+    CHECK(user);
+    EXPECT_EQ(user->GetType(), user_manager::UserType::kChild);
+    child_profile_ = Profile::FromBrowserContext(
+        BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+            GetAccountId()));
 
     // Mock time for ScreenTimeController.
     ScreenTimeControllerFactory::GetForBrowserContext(child_profile_)
@@ -103,7 +125,8 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   }
 
   bool IsAuthEnabled() {
-    return !ScreenLocker::default_screen_locker()
+    return !ScreenLockerController::Get()
+                .screen_locker()
                 ->IsAuthTemporarilyDisabledForUser(
                     logged_in_user_mixin_.GetAccountId());
   }
@@ -113,16 +136,15 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   }
 
   void MockChildScreenTime(base::TimeDelta used_time) {
-    child_profile_->GetPrefs()->SetInteger(prefs::kChildScreenTimeMilliseconds,
-                                           used_time.InMilliseconds());
+    child_profile_->GetPrefs()->SetInteger(
+        ash::prefs::kChildScreenTimeMilliseconds, used_time.InMilliseconds());
   }
 
   bool IsLocked() {
-    base::RunLoop().RunUntilIdle();
     return session_manager::SessionManager::Get()->IsScreenLocked();
   }
 
-  void SetUsageTimeLimitPolicy(const base::Value& policy_content) {
+  void SetUsageTimeLimitPolicy(const base::DictValue& policy_content) {
     logged_in_user_mixin_.GetUserPolicyMixin()
         ->RequestPolicyUpdate()
         ->policy_payload()
@@ -134,18 +156,15 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
 
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
 
-  Profile* child_profile_ = nullptr;
+  raw_ptr<Profile> child_profile_ = nullptr;
 
  private:
-  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_,
-                                          LoggedInUserMixin::LogInType::kChild,
-                                          embedded_test_server(),
-                                          this,
-                                          true /*should_launch_browser*/,
-                                          absl::nullopt /*account_id*/,
-                                          false /*include_initial_user*/};
+  std::optional<ash::ScreenLockerTester::ScopedRequestLockScreenOverride>
+      scoped_request_lock_screen_override_;
 
-  DISALLOW_COPY_AND_ASSIGN(ScreenTimeControllerTest);
+  LoggedInUserMixin logged_in_user_mixin_{
+      &mixin_host_, /*test_base=*/this, embedded_test_server(),
+      LoggedInUserMixin::LogInType::kChild, /*include_initial_user=*/false};
 };
 
 // Tests a simple lock override.
@@ -157,11 +176,11 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, LockOverride) {
   EXPECT_TRUE(IsAuthEnabled());
 
   // Wait one hour.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Set new policy.
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddOverride(&policy_content,
                      usage_time_limit::TimeLimitOverride::Action::kLock,
@@ -180,7 +199,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockBedtime) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 BRT");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kFriday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -203,11 +222,11 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockBedtime) {
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 6 AM and check that auth is still enabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(8));
+  task_runner_->FastForwardBy(base::Hours(8));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 9 PM and check that auth is disabled because bedtime started.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(15));
+  task_runner_->FastForwardBy(base::Hours(15));
   EXPECT_FALSE(IsAuthEnabled());
 }
 
@@ -220,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, OverrideBedtimeWithDuration) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kFriday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -236,35 +255,35 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, OverrideBedtimeWithDuration) {
   // Create unlock override with a duration of 2 hours and update the policy.
   utils::AddOverrideWithDuration(
       &policy_content, usage_time_limit::TimeLimitOverride::Action::kUnlock,
-      task_runner_->Now(), base::TimeDelta::FromHours(2));
+      task_runner_->Now(), base::Hours(2));
   SetUsageTimeLimitPolicy(policy_content);
 
   // Check that the unlock worked and auth is enabled.
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 10:15 PM and check that auth is still enabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(90));
+  task_runner_->FastForwardBy(base::Minutes(90));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 10:45 PM and check that auth is disabled because the duration is
   // over.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(30));
+  task_runner_->FastForwardBy(base::Minutes(30));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 11 PM and check that auth is still disabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(15));
+  task_runner_->FastForwardBy(base::Minutes(15));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 6 AM and check that auth is still disabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(7));
+  task_runner_->FastForwardBy(base::Hours(7));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 7 AM and check that auth is enable because bedtime is finished.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 9 PM and check that auth is disabled because bedtime started.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(14));
+  task_runner_->FastForwardBy(base::Hours(14));
   EXPECT_FALSE(IsAuthEnabled());
 }
 
@@ -278,24 +297,24 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 BRT");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
-  utils::AddTimeUsageLimit(&policy_content, utils::kMonday,
-                           base::TimeDelta::FromHours(2), last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(2),
+                           last_updated);
   SetUsageTimeLimitPolicy(policy_content);
 
   // Check that auth is enabled at 10 AM with 0 usage time.
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 12 PM with 1:50 hours of usage time.
-  MockChildScreenTime(base::TimeDelta::FromMinutes(110));
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(2));
+  MockChildScreenTime(base::Minutes(110));
+  task_runner_->FastForwardBy(base::Hours(2));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Create unlock override with a duration of 1 hour and update the policy.
   utils::AddOverrideWithDuration(
       &policy_content, usage_time_limit::TimeLimitOverride::Action::kUnlock,
-      task_runner_->Now(), base::TimeDelta::FromHours(1));
+      task_runner_->Now(), base::Hours(1));
   SetUsageTimeLimitPolicy(policy_content);
 
   // Check that the unlock worked and auth is enabled.
@@ -303,21 +322,21 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 
   // Forward to 12:30 PM with 2:20 hours of usage time and check that auth is
   // still enabled.
-  MockChildScreenTime(base::TimeDelta::FromMinutes(140));
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(30));
+  MockChildScreenTime(base::Minutes(140));
+  task_runner_->FastForwardBy(base::Minutes(30));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 1 PM and check that auth is disabled because the duration is
   // over.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(30));
+  task_runner_->FastForwardBy(base::Minutes(30));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 5 AM and check that auth is still disabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(16));
+  task_runner_->FastForwardBy(base::Hours(16));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 6 AM and check that auth is enabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_TRUE(IsAuthEnabled());
 }
 
@@ -330,7 +349,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockBedtimeWithDuration) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kFriday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -346,32 +365,32 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockBedtimeWithDuration) {
   // Create unlock override with a duration of 2 hours and update the policy.
   utils::AddOverrideWithDuration(
       &policy_content, usage_time_limit::TimeLimitOverride::Action::kUnlock,
-      task_runner_->Now(), base::TimeDelta::FromHours(2));
+      task_runner_->Now(), base::Hours(2));
   SetUsageTimeLimitPolicy(policy_content);
 
   // Check that the unlock worked and auth is enabled.
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 11:30 PM and check that auth is still enabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(90));
+  task_runner_->FastForwardBy(base::Minutes(90));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 12 AM and check that auth is disabled because the duration is
   // over.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(30));
+  task_runner_->FastForwardBy(base::Minutes(30));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 6 AM and check that auth is still disabled because bedtime ends
   // at 7 AM.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(6));
+  task_runner_->FastForwardBy(base::Hours(6));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 7 AM and check that auth is enable because bedtime is finished.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 9 PM and check that auth is disabled because bedtime started.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(14));
+  task_runner_->FastForwardBy(base::Hours(14));
   EXPECT_FALSE(IsAuthEnabled());
 }
 
@@ -384,24 +403,24 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockDailyLimitWithDuration) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
-  utils::AddTimeUsageLimit(&policy_content, utils::kMonday,
-                           base::TimeDelta::FromHours(2), last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(2),
+                           last_updated);
   SetUsageTimeLimitPolicy(policy_content);
 
   // Check that auth is enabled at 10 AM with 0 usage time.
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 12 PM with 2 hours of usage time and check if auth is disabled.
-  MockChildScreenTime(base::TimeDelta::FromHours(2));
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(2));
+  MockChildScreenTime(base::Hours(2));
+  task_runner_->FastForwardBy(base::Hours(2));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Create unlock override with a duration of 1 hour and update the policy.
   utils::AddOverrideWithDuration(
       &policy_content, usage_time_limit::TimeLimitOverride::Action::kUnlock,
-      task_runner_->Now(), base::TimeDelta::FromHours(1));
+      task_runner_->Now(), base::Hours(1));
   SetUsageTimeLimitPolicy(policy_content);
 
   // Check that the unlock worked and auth is enabled.
@@ -409,26 +428,27 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, UnlockDailyLimitWithDuration) {
 
   // Forward to 12:30 PM with 2:30 hours of usage time and check that auth is
   // still enabled.
-  MockChildScreenTime(base::TimeDelta::FromMinutes(150));
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(30));
+  MockChildScreenTime(base::Minutes(150));
+  task_runner_->FastForwardBy(base::Minutes(30));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Forward to 1 PM and check that auth is disabled because the duration is
   // over.
-  task_runner_->FastForwardBy(base::TimeDelta::FromMinutes(30));
+  task_runner_->FastForwardBy(base::Minutes(30));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 5 AM and check that auth is still disabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(16));
+  task_runner_->FastForwardBy(base::Hours(16));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Forward to 6 AM and check that auth is enabled.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_TRUE(IsAuthEnabled());
 }
 
 // Tests the default time window limit.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DefaultBedtime) {
+// TODO(crbug.com/1358216): Flaky
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultBedtime) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 GMT");
   ScreenLockerTester().Lock();
 
@@ -436,7 +456,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DefaultBedtime) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kMonday,
                             utils::CreateTime(21, 0), utils::CreateTime(7, 0),
@@ -467,25 +487,26 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DefaultBedtime) {
     EXPECT_TRUE(IsAuthEnabled());
 
     // Verify that auth is enabled at 8 PM.
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(10));
+    task_runner_->FastForwardBy(base::Hours(10));
     EXPECT_TRUE(IsAuthEnabled());
 
     // Verify that the auth was disabled at 9 PM (start of bedtime).
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+    task_runner_->FastForwardBy(base::Hours(1));
     EXPECT_FALSE(IsAuthEnabled());
 
     // Forward to 7 AM and check that auth was re-enabled (end of bedtime).
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(10));
+    task_runner_->FastForwardBy(base::Hours(10));
     EXPECT_TRUE(IsAuthEnabled());
 
     // Forward to 10 AM.
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(3));
+    task_runner_->FastForwardBy(base::Hours(3));
   }
 }
 
-// Disabled because of flakiness crbug.com/1021505
+// TODO(crbug.com/550179314): Re-enable this test.
 // Tests the default time window limit.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultDailyLimit) {
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
+                       DISABLED_DefaultDailyLimit) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 GMT");
   ScreenLockerTester().Lock();
 
@@ -493,22 +514,22 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultDailyLimit) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
-  utils::AddTimeUsageLimit(&policy_content, utils::kMonday,
-                           base::TimeDelta::FromHours(3), last_updated);
-  utils::AddTimeUsageLimit(&policy_content, utils::kTuesday,
-                           base::TimeDelta::FromHours(3), last_updated);
-  utils::AddTimeUsageLimit(&policy_content, utils::kWednesday,
-                           base::TimeDelta::FromHours(3), last_updated);
-  utils::AddTimeUsageLimit(&policy_content, utils::kThursday,
-                           base::TimeDelta::FromHours(3), last_updated);
-  utils::AddTimeUsageLimit(&policy_content, utils::kFriday,
-                           base::TimeDelta::FromHours(3), last_updated);
-  utils::AddTimeUsageLimit(&policy_content, utils::kSaturday,
-                           base::TimeDelta::FromHours(3), last_updated);
-  utils::AddTimeUsageLimit(&policy_content, utils::kSunday,
-                           base::TimeDelta::FromHours(3), last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(3),
+                           last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kTuesday, base::Hours(3),
+                           last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kWednesday, base::Hours(3),
+                           last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kThursday, base::Hours(3),
+                           last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kFriday, base::Hours(3),
+                           last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kSaturday, base::Hours(3),
+                           last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kSunday, base::Hours(3),
+                           last_updated);
   SetUsageTimeLimitPolicy(policy_content);
 
   // Iterate over a week checking that the device is locked properly
@@ -519,41 +540,39 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultDailyLimit) {
 
     // Check that auth is enabled after forwarding to 1 PM and using the device
     // for 2 hours.
-    MockChildScreenTime(base::TimeDelta::FromHours(2));
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(3));
+    MockChildScreenTime(base::Hours(2));
+    task_runner_->FastForwardBy(base::Hours(3));
     EXPECT_TRUE(IsAuthEnabled());
 
     // Check that auth is enabled after forwarding to 2 PM with no extra usage.
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+    task_runner_->FastForwardBy(base::Hours(1));
     EXPECT_TRUE(IsAuthEnabled());
 
     // Check that auth is disabled after forwarding to 3 PM and using the device
     // for 3 hours.
-    MockChildScreenTime(base::TimeDelta::FromHours(3));
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+    MockChildScreenTime(base::Hours(3));
+    task_runner_->FastForwardBy(base::Hours(1));
     EXPECT_FALSE(IsAuthEnabled());
 
     // Forward to 6 AM, reset the usage time and check that auth was re-enabled.
-    MockChildScreenTime(base::TimeDelta::FromHours(0));
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(15));
+    MockChildScreenTime(base::Hours(0));
+    task_runner_->FastForwardBy(base::Hours(15));
     EXPECT_TRUE(IsAuthEnabled());
 
     // Forward to 10 AM.
-    task_runner_->FastForwardBy(base::TimeDelta::FromHours(4));
+    task_runner_->FastForwardBy(base::Hours(4));
   }
 }
 
-// Disabled because of flakiness crbug.com/1021505
 // Tests that the bedtime locks an active session when it is reached.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
-                       DISABLED_ActiveSessionBedtime) {
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, ActiveSessionBedtime) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 PST");
 
   system::TimezoneSettings::GetInstance()->SetTimezoneFromID(u"PST");
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kMonday,
                             utils::CreateTime(23, 0), utils::CreateTime(8, 0),
@@ -564,32 +583,31 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
   EXPECT_FALSE(IsLocked());
 
   // Verify that device is still unlocked at 10 PM.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(12));
+  task_runner_->FastForwardBy(base::Hours(12));
   EXPECT_FALSE(IsLocked());
 
   // Verify that device is locked at 11 PM (start of bedtime).
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
+  ScreenLockerTester().WaitForLock();
   EXPECT_TRUE(IsLocked());
 
   // Forward to 8 AM and check that auth was re-enabled (end of bedtime).
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(9));
+  task_runner_->FastForwardBy(base::Hours(9));
   EXPECT_TRUE(IsAuthEnabled());
 }
 
-// Disabled because of flakiness crbug.com/1021505
 // Tests that the daily limit locks the device when it is reached.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
-                       DISABLED_ActiveSessionDailyLimit) {
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, ActiveSessionDailyLimit) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 PST");
 
   system::TimezoneSettings::GetInstance()->SetTimezoneFromID(u"PST");
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
-  utils::AddTimeUsageLimit(&policy_content, utils::kMonday,
-                           base::TimeDelta::FromHours(1), last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(1),
+                           last_updated);
   SetUsageTimeLimitPolicy(policy_content);
 
   // Verify that device is unlocked at 10 AM.
@@ -597,13 +615,14 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 
   // Forward 1 hour to 11 AM and add 1 hour of usage and verify that device is
   // locked (start of daily limit).
-  MockChildScreenTime(base::TimeDelta::FromHours(1));
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  MockChildScreenTime(base::Hours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
+  ScreenLockerTester().WaitForLock();
   EXPECT_TRUE(IsLocked());
 
   // Forward to 6 AM, reset the usage time and check that auth was re-enabled.
-  MockChildScreenTime(base::TimeDelta::FromHours(0));
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(19));
+  MockChildScreenTime(base::Hours(0));
+  task_runner_->FastForwardBy(base::Hours(19));
   EXPECT_TRUE(IsAuthEnabled());
 }
 
@@ -616,7 +635,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeOnTimezoneChange) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("3 Jan 2018 0:00 GMT-0600");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kWednesday,
                             utils::CreateTime(19, 0), utils::CreateTime(7, 0),
@@ -627,11 +646,11 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeOnTimezoneChange) {
   EXPECT_TRUE(IsAuthEnabled());
 
   // Verify that auth is enabled at 6 PM.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(8));
+  task_runner_->FastForwardBy(base::Hours(8));
   EXPECT_TRUE(IsAuthEnabled());
 
   // Verify that the auth is disabled at 7 PM (start of bedtime).
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Change timezone, so that local time goes back to 6 PM and check that auth
@@ -640,7 +659,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeOnTimezoneChange) {
   EXPECT_TRUE(IsAuthEnabled());
 
   // Verify that auth is disabled at 7 PM (start of bedtime).
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_FALSE(IsAuthEnabled());
 
   // Change timezone, so that local time goes forward to 7 AM and check that
@@ -653,7 +672,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeLockScreen24HourClock) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 22:00:00 GMT");
 
   // Set preference of using 24 hour clock to be true.
-  child_profile_->GetPrefs()->SetBoolean(prefs::kUse24HourClock, true);
+  child_profile_->GetPrefs()->SetBoolean(ash::prefs::kUse24HourClock, true);
 
   ScreenLockerTester().Lock();
 
@@ -661,7 +680,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeLockScreen24HourClock) {
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 GMT");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kMonday,
                             utils::CreateTime(21, 0), utils::CreateTime(17, 0),
@@ -672,7 +691,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeLockScreen24HourClock) {
   EXPECT_FALSE(IsAuthEnabled());
 
   EXPECT_EQ(u"Come back at 17:00.",
-            ash::LoginScreenTestApi::GetDisabledAuthMessage(GetAccountId()));
+            LoginScreenTestApi::GetDisabledAuthMessage(GetAccountId()));
 }
 
 // Tests bedtime during timezone changes that make the clock go back in time.
@@ -685,7 +704,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
 
   // Set new policy.
   base::Time last_updated = utils::TimeFromString("3 Jan 2018 0:00 GMT+1300");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
   utils::AddTimeWindowLimit(&policy_content, utils::kTuesday,
                             utils::CreateTime(20, 0), utils::CreateTime(7, 0),
@@ -707,12 +726,12 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
   EXPECT_TRUE(IsAuthEnabled());
 
   // Verify that auth is disabled at 8 PM (start of bedtime).
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(1));
+  task_runner_->FastForwardBy(base::Hours(1));
   EXPECT_FALSE(IsAuthEnabled());
 }
 
-// Disabled because of flakiness crbug.com/1021505
 // Tests if call the observers for usage time limit warning.
+// TODO(crbug.com/334160972): Flaky on CrOS.
 IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 PST");
 
@@ -720,10 +739,10 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
 
   // Set new policy with 3 hours of time usage limit.
   base::Time last_updated = utils::TimeFromString("1 Jan 2018 0:00 PST");
-  base::Value policy_content =
+  base::DictValue policy_content =
       utils::CreateTimeLimitPolicy(utils::CreateTime(6, 0));
-  utils::AddTimeUsageLimit(&policy_content, utils::kMonday,
-                           base::TimeDelta::FromHours(3), last_updated);
+  utils::AddTimeUsageLimit(&policy_content, utils::kMonday, base::Hours(3),
+                           last_updated);
   SetUsageTimeLimitPolicy(policy_content);
 
   TestScreenTimeControllerObserver observer;
@@ -739,7 +758,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   // Check that observer was not called after child used device for 2 hours and
   // forward to 12 AM.
   last_screen_time = base::TimeDelta();
-  current_screen_time = base::TimeDelta::FromHours(2);
+  current_screen_time = base::Hours(2);
   MockChildScreenTime(current_screen_time);
   task_runner_->FastForwardBy(current_screen_time - last_screen_time);
   EXPECT_EQ(0, observer.usage_time_limit_warnings());
@@ -748,9 +767,8 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   // 3 hours - |kUsageTimeLimitWarningTime| - 1 second. Forward to
   // 1 PM - |kUsageTimeLimitWarningTime| - 1 second.
   last_screen_time = current_screen_time;
-  current_screen_time = base::TimeDelta::FromHours(3) -
-                        kUsageTimeLimitWarningTime -
-                        base::TimeDelta::FromSeconds(1);
+  current_screen_time =
+      base::Hours(3) - kUsageTimeLimitWarningTime - base::Seconds(1);
   MockChildScreenTime(current_screen_time);
   task_runner_->FastForwardBy(current_screen_time - last_screen_time);
   EXPECT_EQ(0, observer.usage_time_limit_warnings());
@@ -759,9 +777,8 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   // 3 hours - |kUsageTimeLimitWarningTime| + 1 second. Forward to
   // 1 PM - |kUsageTimeLimitWarningTime| + 1 second.
   last_screen_time = current_screen_time;
-  current_screen_time = base::TimeDelta::FromHours(3) -
-                        kUsageTimeLimitWarningTime +
-                        base::TimeDelta::FromSeconds(1);
+  current_screen_time =
+      base::Hours(3) - kUsageTimeLimitWarningTime + base::Seconds(1);
   MockChildScreenTime(current_screen_time);
   task_runner_->FastForwardBy(current_screen_time - last_screen_time);
   EXPECT_EQ(1, observer.usage_time_limit_warnings());
@@ -769,17 +786,17 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_CallObservers) {
   // Check that observer was not called after using the device for 3 hours.
   // Forward to 1 PM.
   last_screen_time = current_screen_time;
-  current_screen_time = base::TimeDelta::FromHours(3);
+  current_screen_time = base::Hours(3);
   MockChildScreenTime(current_screen_time);
   task_runner_->FastForwardBy(current_screen_time - last_screen_time);
   EXPECT_EQ(1, observer.usage_time_limit_warnings());
 
   // Forward to 6 AM, reset the usage time.
-  MockChildScreenTime(base::TimeDelta::FromHours(0));
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(17));
+  MockChildScreenTime(base::Hours(0));
+  task_runner_->FastForwardBy(base::Hours(17));
 
   // Forward to 10 AM.
-  task_runner_->FastForwardBy(base::TimeDelta::FromHours(4));
+  task_runner_->FastForwardBy(base::Hours(4));
   EXPECT_EQ(1, observer.usage_time_limit_warnings());
 
   ScreenTimeControllerFactory::GetForBrowserContext(child_profile_)

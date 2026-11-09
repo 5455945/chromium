@@ -1,39 +1,39 @@
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
-      "backgroundColor": "#FFFFFF",
-      "invalidations": [
-        [172, 172, 75, 75]
-      ]
+      "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV class='scroll'",
-      "bounds": [130, 130],
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [10, 10],
+      "bounds": [95, 95],
+      "drawsContent": false,
       "transform": 1
     },
     {
-      "name": "ContentsLayer for Horizontal Scrollbar Layer",
+      "name": "HorizontalScrollbar",
       "position": [10, 105],
       "bounds": [95, 15],
+      "contentsOpaque": true,
       "transform": 1
     },
     {
-      "name": "ContentsLayer for Vertical Scrollbar Layer",
+      "name": "VerticalScrollbar",
       "position": [105, 10],
       "bounds": [15, 95],
+      "contentsOpaque": true,
       "transform": 1
     },
     {
-      "name": "Scroll Corner Layer",
-      "position": [105, 105],
-      "bounds": [15, 15],
-      "transform": 1
+      "name": "Scroll corner of LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [113, 8],
+      "bounds": [293, 130]
     },
     {
-      "name": "Scrolling Contents Layer",
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
       "position": [10, 10],
       "bounds": [150, 150],
       "invalidations": [
@@ -42,30 +42,29 @@
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV class='scroll'",
-      "bounds": [130, 130],
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [10, 10],
+      "bounds": [95, 95],
+      "drawsContent": false,
       "transform": 2
     },
     {
-      "name": "ContentsLayer for Horizontal Scrollbar Layer",
-      "position": [10, 105],
-      "bounds": [95, 15],
-      "transform": 2
+      "name": "HorizontalScrollbar",
+      "position": [142, 113],
+      "bounds": [130, 159],
+      "invalidations": [
+        [30, 59, 75, 75]
+      ]
     },
     {
-      "name": "ContentsLayer for Vertical Scrollbar Layer",
+      "name": "VerticalScrollbar",
       "position": [105, 10],
       "bounds": [15, 95],
+      "contentsOpaque": true,
       "transform": 2
     },
     {
-      "name": "Scroll Corner Layer",
-      "position": [105, 105],
-      "bounds": [15, 15],
-      "transform": 2
-    },
-    {
-      "name": "Scrolling Contents Layer",
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
       "position": [10, 10],
       "bounds": [95, 150],
       "invalidations": [
@@ -74,30 +73,33 @@
       "transform": 2
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV class='scroll'",
-      "bounds": [130, 130],
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [10, 10],
+      "bounds": [95, 95],
+      "drawsContent": false,
       "transform": 3
     },
     {
-      "name": "ContentsLayer for Horizontal Scrollbar Layer",
+      "name": "HorizontalScrollbar",
       "position": [10, 105],
       "bounds": [95, 15],
+      "contentsOpaque": true,
       "transform": 3
     },
     {
-      "name": "ContentsLayer for Vertical Scrollbar Layer",
+      "name": "VerticalScrollbar",
       "position": [105, 10],
       "bounds": [15, 95],
+      "contentsOpaque": true,
       "transform": 3
     },
     {
-      "name": "Scroll Corner Layer",
-      "position": [105, 105],
-      "bounds": [15, 15],
-      "transform": 3
+      "name": "Scroll corner of LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [276, 113],
+      "bounds": [130, 159]
     },
     {
-      "name": "Scrolling Contents Layer",
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
       "position": [10, 10],
       "bounds": [150, 150],
       "invalidations": [
@@ -106,30 +108,26 @@
       "transform": 3
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV class='scroll'",
-      "bounds": [130, 130],
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [25, 10],
+      "bounds": [95, 95],
+      "drawsContent": false,
       "transform": 4
     },
     {
-      "name": "ContentsLayer for Horizontal Scrollbar Layer",
-      "position": [25, 105],
-      "bounds": [95, 15],
-      "transform": 4
+      "name": "HorizontalScrollbar",
+      "position": [18, 247],
+      "bounds": [244, 15]
     },
     {
-      "name": "ContentsLayer for Vertical Scrollbar Layer",
+      "name": "VerticalScrollbar",
       "position": [10, 10],
       "bounds": [15, 95],
+      "contentsOpaque": true,
       "transform": 4
     },
     {
-      "name": "Scroll Corner Layer",
-      "position": [10, 105],
-      "bounds": [15, 15],
-      "transform": 4
-    },
-    {
-      "name": "Scrolling Contents Layer",
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
       "position": [25, 10],
       "bounds": [95, 150],
       "invalidations": [
@@ -138,30 +136,27 @@
       "transform": 4
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV class='scroll'",
-      "bounds": [130, 130],
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
+      "position": [10, 10],
+      "bounds": [95, 95],
+      "drawsContent": false,
       "transform": 5
     },
     {
-      "name": "ContentsLayer for Horizontal Scrollbar Layer",
+      "name": "HorizontalScrollbar",
       "position": [10, 105],
       "bounds": [95, 15],
+      "contentsOpaque": true,
       "transform": 5
     },
     {
-      "name": "ContentsLayer for Vertical Scrollbar Layer",
+      "name": "VerticalScrollbar",
       "position": [105, 10],
-      "bounds": [15, 95],
+      "bounds": [15, 110],
       "transform": 5
     },
     {
-      "name": "Scroll Corner Layer",
-      "position": [105, 105],
-      "bounds": [15, 15],
-      "transform": 5
-    },
-    {
-      "name": "Scrolling Contents Layer",
+      "name": "LayoutBlockFlow (relative positioned, inline, relayout-boundary) DIV class='scroll'",
       "position": [10, 10],
       "bounds": [150, 95],
       "invalidations": [

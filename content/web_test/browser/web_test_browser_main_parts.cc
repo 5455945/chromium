@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,15 @@
 #include <memory>
 
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/buildflags.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 #include "content/public/common/url_constants.h"
@@ -25,9 +26,8 @@
 #include "content/web_test/browser/web_test_browser_context.h"
 #include "content/web_test/browser/web_test_shell_platform_delegate.h"
 #include "net/base/filename_util.h"
-#include "net/base/net_module.h"
+#include "net/base/module/net_module.h"
 #include "net/grit/net_resources.h"
-#include "ppapi/buildflags/buildflags.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "url/gurl.h"
 
@@ -36,20 +36,15 @@
 #include "content/shell/browser/shell_plugin_service_filter.h"
 #endif
 
-#if defined(USE_AURA) && defined(USE_X11)
-#include "ui/events/devices/x11/touch_factory_x11.h"  // nogncheck
-#endif
-#if defined(USE_AURA) && (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+#if BUILDFLAG(IS_LINUX) && defined(USE_AURA)
 #include "ui/base/ime/init/input_method_initializer.h"
 #endif
 
 namespace content {
 
-WebTestBrowserMainParts::WebTestBrowserMainParts(
-    const MainFunctionParams& parameters)
-    : ShellBrowserMainParts(parameters) {}
+WebTestBrowserMainParts::WebTestBrowserMainParts() = default;
 
-WebTestBrowserMainParts::~WebTestBrowserMainParts() {}
+WebTestBrowserMainParts::~WebTestBrowserMainParts() = default;
 
 void WebTestBrowserMainParts::InitializeBrowserContexts() {
   set_browser_context(new WebTestBrowserContext(false));

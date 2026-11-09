@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,16 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/search_engines/keyword_table.h"
 #include "components/search_engines/keyword_web_data_service.h"
 #include "components/search_engines/template_url_data.h"
+#include "components/sync/base/features.h"
 #include "components/webdata/common/web_data_results.h"
 #include "components/webdata/common/web_data_service_consumer.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,6 +38,11 @@ class KeywordsConsumer : public WebDataServiceConsumer {
 };
 
 class WebDataServiceWrapperTest : public testing::Test {
+ public:
+  WebDataServiceWrapperTest()
+      : os_crypt_(os_crypt_async::GetTestOSCryptAsyncForTesting(
+            /*is_sync_for_unittests=*/true)) {}
+
  protected:
   void SetUp() override { ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir()); }
 
@@ -42,11 +50,13 @@ class WebDataServiceWrapperTest : public testing::Test {
   std::unique_ptr<WebDataServiceWrapper> CreateWebDataServiceWrapper() {
     return std::make_unique<WebDataServiceWrapper>(
         scoped_temp_dir_.GetPath(), "en_US",
-        task_environment_.GetMainThreadTaskRunner(), base::DoNothing());
+        task_environment_.GetMainThreadTaskRunner(), base::DoNothing(),
+        os_crypt_.get());
   }
 
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::UI};
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
   base::ScopedTempDir scoped_temp_dir_;
 };
 
@@ -61,7 +71,7 @@ TEST_F(WebDataServiceWrapperTest, ShutdownKeywordWebDataService) {
   test_keyword.SetShortName(u"Foo Bar");
   test_keyword.SetKeyword(u"foo");
   test_keyword.SetURL("http://foo.bar");
-  test_keyword.id = 1234;
+  test_keyword.id = TemplateURLID(1234);
 
   // Create WebDataServiceWrapper. Add a test keyword and perform shutdown.
   auto web_data_service_wrapper = CreateWebDataServiceWrapper();
@@ -87,3 +97,34 @@ TEST_F(WebDataServiceWrapperTest, ShutdownKeywordWebDataService) {
   EXPECT_EQ(test_keyword.short_name(), keyword_result.keywords[0].short_name());
   web_data_service_wrapper->Shutdown();
 }
+
+class WebDataServiceWrapperFeatureTest
+    : public WebDataServiceWrapperTest,
+      public testing::WithParamInterface<bool> {};
+
+// Verifies that CreateWebDataServiceWrapper works with kSyncAutofillValuable
+// enabled and disabled.
+#if BUILDFLAG(IS_IOS)
+TEST_P(WebDataServiceWrapperFeatureTest, SyncAutofillValuable) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureState(syncer::kSyncAutofillValuable, GetParam());
+  auto web_data_service_wrapper = CreateWebDataServiceWrapper();
+  web_data_service_wrapper->Shutdown();
+  task_environment_.RunUntilIdle();
+}
+#endif
+
+// Verifies that CreateWebDataServiceWrapper works with
+// kSyncAutofillValuableMetadata enabled and disabled.
+TEST_P(WebDataServiceWrapperFeatureTest, SyncAutofillValuableMetadata) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureState(syncer::kSyncAutofillValuableMetadata,
+                                    GetParam());
+  auto web_data_service_wrapper = CreateWebDataServiceWrapper();
+  web_data_service_wrapper->Shutdown();
+  task_environment_.RunUntilIdle();
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         WebDataServiceWrapperFeatureTest,
+                         testing::Bool());

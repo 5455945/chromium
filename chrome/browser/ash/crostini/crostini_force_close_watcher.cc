@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/crostini/crostini_util.h"
+#include "chrome/browser/ui/views/crostini/crostini_force_close_view.h"
 #include "components/exo/shell_surface_base.h"
 #include "ui/views/widget/widget.h"
 
@@ -18,9 +18,7 @@ namespace crostini {
 
 namespace {
 
-constexpr base::TimeDelta kDefaultForceCloseDelay =
-    base::TimeDelta::FromSeconds(5);
-
+constexpr base::TimeDelta kDefaultForceCloseDelay = base::Seconds(5);
 }
 
 ForceCloseWatcher::Delegate::~Delegate() = default;
@@ -41,8 +39,9 @@ void ForceCloseWatcher::OnCloseRequested() {
     return;
   }
 
-  if (show_dialog_timer_->Elapsed() < force_close_delay_)
+  if (show_dialog_timer_->Elapsed() < force_close_delay_) {
     return;
+  }
 
   delegate_->Prompt();
 }
@@ -73,8 +72,8 @@ void ShellSurfaceForceCloseDelegate::ForceClose() {
   // Post a task because the dialog needs to finish running its accept button
   // handling code. If we CloseNow() here it will destroy the dialog's parent
   // widget, destroying the dialog and causing a use-after-free.
-  // https://crbug.com/1215247
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  // https://crbug.com/40769813
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&ShellSurfaceForceCloseDelegate::ForceCloseNow,
                                 weak_ptr_factory_.GetWeakPtr()));
 }
@@ -92,7 +91,7 @@ ShellSurfaceForceCloseDelegate::~ShellSurfaceForceCloseDelegate() {
 }
 
 views::Widget* ShellSurfaceForceCloseDelegate::GetClosableWidget() {
-  DCHECK(shell_surface_->GetWidget());
+  CHECK(shell_surface_->GetWidget(), base::NotFatalUntil::M160);
   return shell_surface_->GetWidget();
 }
 
@@ -106,10 +105,11 @@ void ShellSurfaceForceCloseDelegate::Watched(ForceCloseWatcher* watcher) {
 }
 
 void ShellSurfaceForceCloseDelegate::Prompt() {
-  if (current_dialog_)
+  if (current_dialog_) {
     Hide();
+  }
 
-  DCHECK(!current_dialog_);
+  CHECK(!current_dialog_, base::NotFatalUntil::M160);
   current_dialog_ = ShowCrostiniForceCloseDialog(
       app_name_, GetClosableWidget(),
       base::BindOnce(&ShellSurfaceForceCloseDelegate::ForceClose,

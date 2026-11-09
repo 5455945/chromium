@@ -1,31 +1,33 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/input_injector.h"
 
-#include <stdint.h>
 #include <windows.h>
 
+#include <stdint.h>
+
+#include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/numerics/ranges.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/win/windows_version.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/base/util.h"
 #include "remoting/host/clipboard.h"
 #include "remoting/host/touch_injector_win.h"
+#include "remoting/host/win/input_extra_info.h"
 #include "remoting/proto/event.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 
 namespace remoting {
@@ -34,8 +36,8 @@ namespace {
 
 using protocol::ClipboardEvent;
 using protocol::KeyEvent;
-using protocol::TextEvent;
 using protocol::MouseEvent;
+using protocol::TextEvent;
 using protocol::TouchEvent;
 
 // Helper used to call SendInput() API.
@@ -43,13 +45,13 @@ void SendKeyboardInput(uint32_t flags,
                        uint16_t scancode,
                        uint16_t virtual_key) {
   // Populate a Windows INPUT structure for the event.
-  INPUT input;
-  memset(&input, 0, sizeof(input));
+  INPUT input = {};
   input.type = INPUT_KEYBOARD;
   input.ki.time = 0;
   input.ki.dwFlags = flags;
   input.ki.wScan = scancode;
   input.ki.wVk = virtual_key;
+  input.ki.dwExtraInfo = kCrdInputExtraInfo;
 
   if ((flags & KEYEVENTF_UNICODE) == 0) {
     // Windows scancodes are only 8-bit, so store the low-order byte into the
@@ -58,12 +60,14 @@ void SendKeyboardInput(uint32_t flags,
     // usually distinguishes keys with the same meaning, e.g. left & right
     // shift.
     input.ki.wScan &= 0xFF;
-    if ((scancode & 0xFF00) != 0x0000)
+    if ((scancode & 0xFF00) != 0x0000) {
       input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    }
   }
 
-  if (SendInput(1, &input, sizeof(INPUT)) == 0)
+  if (SendInput(1, &input, sizeof(INPUT)) == 0) {
     PLOG(ERROR) << "Failed to inject a key event";
+  }
 }
 
 // Parse move related operations from the input MouseEvent, and insert the
@@ -80,8 +84,8 @@ void ParseMouseMoveEvent(const MouseEvent& event, std::vector<INPUT>* output) {
     int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     if (width > 1 && height > 1) {
-      int x = base::ClampToRange(event.x(), 0, width);
-      int y = base::ClampToRange(event.y(), 0, height);
+      int x = std::clamp(event.x(), 0, width);
+      int y = std::clamp(event.y(), 0, height);
       input.mi.dx = static_cast<int>((x * 65535) / (width - 1));
       input.mi.dy = static_cast<int>((y * 65535) / (height - 1));
       input.mi.dwFlags =
@@ -167,8 +171,8 @@ bool IsLockKey(int scancode) {
 }
 
 // Sets the keyboard lock states to those provided.
-void SetLockStates(absl::optional<bool> caps_lock,
-                   absl::optional<bool> num_lock) {
+void SetLockStates(std::optional<bool> caps_lock,
+                   std::optional<bool> num_lock) {
   if (caps_lock) {
     bool client_capslock_state = *caps_lock;
     bool host_capslock_state = (GetKeyState(VK_CAPITAL) & 1) != 0;
@@ -194,6 +198,10 @@ class InputInjectorWin : public InputInjector {
  public:
   InputInjectorWin(scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
                    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+
+  InputInjectorWin(const InputInjectorWin&) = delete;
+  InputInjectorWin& operator=(const InputInjectorWin&) = delete;
+
   ~InputInjectorWin() override;
 
   // ClipboardStub interface.
@@ -215,6 +223,9 @@ class InputInjectorWin : public InputInjector {
    public:
     Core(scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
          scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+
+    Core(const Core&) = delete;
+    Core& operator=(const Core&) = delete;
 
     // Mirrors the ClipboardStub interface.
     void InjectClipboardEvent(const ClipboardEvent& event);
@@ -239,17 +250,17 @@ class InputInjectorWin : public InputInjector {
     void HandleMouse(const MouseEvent& event);
     void HandleTouch(const TouchEvent& event);
 
+    void StartTouchInjector();
+    void StopTouchInjector();
+
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
     std::unique_ptr<Clipboard> clipboard_;
-    std::unique_ptr<TouchInjectorWin> touch_injector_;
-
-    DISALLOW_COPY_AND_ASSIGN(Core);
+    std::unique_ptr<TouchInjectorWin, base::OnTaskRunnerDeleter>
+        touch_injector_;
   };
 
   scoped_refptr<Core> core_;
-
-  DISALLOW_COPY_AND_ASSIGN(InputInjectorWin);
 };
 
 InputInjectorWin::InputInjectorWin(
@@ -293,7 +304,7 @@ InputInjectorWin::Core::Core(
     : main_task_runner_(main_task_runner),
       ui_task_runner_(ui_task_runner),
       clipboard_(Clipboard::Create()),
-      touch_injector_(new TouchInjectorWin()) {}
+      touch_injector_(nullptr, base::OnTaskRunnerDeleter(main_task_runner)) {}
 
 void InputInjectorWin::Core::InjectClipboardEvent(const ClipboardEvent& event) {
   if (!ui_task_runner_->BelongsToCurrentThread()) {
@@ -356,7 +367,8 @@ void InputInjectorWin::Core::Start(
   }
 
   clipboard_->Start(std::move(client_clipboard));
-  touch_injector_->Init();
+  main_task_runner_->PostTask(FROM_HERE,
+                              base::BindOnce(&Core::StartTouchInjector, this));
 }
 
 void InputInjectorWin::Core::Stop() {
@@ -366,8 +378,22 @@ void InputInjectorWin::Core::Stop() {
   }
 
   clipboard_.reset();
+  main_task_runner_->PostTask(FROM_HERE,
+                              base::BindOnce(&Core::StopTouchInjector, this));
+}
+
+void InputInjectorWin::Core::StartTouchInjector() {
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  DCHECK(!touch_injector_);
+  touch_injector_.reset(new TouchInjectorWin());
+  touch_injector_->Init();
+}
+
+void InputInjectorWin::Core::StopTouchInjector() {
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
   if (touch_injector_) {
     touch_injector_->Deinitialize();
+    touch_injector_.reset();
   }
 }
 
@@ -382,16 +408,15 @@ void InputInjectorWin::Core::HandleKey(const KeyEvent& event) {
 
   int scancode =
       ui::KeycodeConverter::UsbKeycodeToNativeKeycode(event.usb_keycode());
-  VLOG(3) << "Converting USB keycode: " << std::hex << event.usb_keycode()
-          << " to scancode: " << scancode << std::dec;
 
   // Ignore events which can't be mapped.
-  if (scancode == ui::KeycodeConverter::InvalidNativeKeycode())
+  if (scancode == ui::KeycodeConverter::InvalidNativeKeycode()) {
     return;
+  }
 
   if (event.pressed() && !IsLockKey(scancode)) {
-    absl::optional<bool> caps_lock;
-    absl::optional<bool> num_lock;
+    std::optional<bool> caps_lock;
+    std::optional<bool> num_lock;
 
     // For caps lock, check both the new caps_lock field and the old lock_states
     // field.
@@ -413,6 +438,7 @@ void InputInjectorWin::Core::HandleKey(const KeyEvent& event) {
   }
 
   uint32_t flags = KEYEVENTF_SCANCODE | (event.pressed() ? 0 : KEYEVENTF_KEYUP);
+  VLOG(3) << "Injecting key " << (event.pressed() ? "down" : "up") << " event.";
   SendKeyboardInput(flags, scancode, 0);
 }
 
@@ -444,15 +470,22 @@ void InputInjectorWin::Core::HandleMouse(const MouseEvent& event) {
   ParseMouseClickEvent(event, &inputs);
   ParseMouseWheelEvent(event, &inputs);
 
+  for (auto& input : inputs) {
+    input.mi.dwExtraInfo = kCrdInputExtraInfo;
+  }
+
   if (!inputs.empty()) {
-    if (SendInput(inputs.size(), inputs.data(), sizeof(INPUT)) != inputs.size())
+    if (SendInput(inputs.size(), inputs.data(), sizeof(INPUT)) !=
+        inputs.size()) {
       PLOG(ERROR) << "Failed to inject a mouse event";
+    }
   }
 }
 
 void InputInjectorWin::Core::HandleTouch(const TouchEvent& event) {
-  DCHECK(touch_injector_);
-  touch_injector_->InjectTouchEvent(event);
+  if (touch_injector_) {
+    touch_injector_->InjectTouchEvent(event);
+  }
 }
 
 }  // namespace
@@ -467,7 +500,7 @@ std::unique_ptr<InputInjector> InputInjector::Create(
 
 // static
 bool InputInjector::SupportsTouchEvents() {
-  return base::win::GetVersion() >= base::win::Version::WIN8;
+  return true;
 }
 
 }  // namespace remoting

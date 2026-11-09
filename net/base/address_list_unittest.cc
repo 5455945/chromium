@@ -1,10 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/address_list.h"
 
-#include "base/cxx17_backports.h"
+#include <stdint.h>
+
+#include <array>
+#include <ranges>
+#include <vector>
+
+#include "base/containers/span.h"
 #include "base/strings/string_util.h"
 #include "base/sys_byteorder.h"
 #include "net/base/ip_address.h"
@@ -14,6 +20,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::ElementsAre;
+using ::testing::UnorderedElementsAre;
 
 namespace net {
 namespace {
@@ -22,14 +29,12 @@ const char kCanonicalHostname[] = "canonical.bar.com";
 
 TEST(AddressListTest, Canonical) {
   // Create an addrinfo with a canonical name.
-  struct sockaddr_in address;
-  // The contents of address do not matter for this test,
-  // so just zero-ing them out for consistency.
-  memset(&address, 0x0, sizeof(address));
+  // The contents of address do not matter for this test.
+  // Zero them out for consistency.
+  struct sockaddr_in address = {};
   // But we need to set the family.
   address.sin_family = AF_INET;
-  struct addrinfo ai;
-  memset(&ai, 0x0, sizeof(ai));
+  struct addrinfo ai = {};
   ai.ai_family = AF_INET;
   ai.ai_socktype = SOCK_STREAM;
   ai.ai_addrlen = sizeof(address);
@@ -39,32 +44,34 @@ TEST(AddressListTest, Canonical) {
   // Copy the addrinfo struct into an AddressList object and
   // make sure it seems correct.
   AddressList addrlist1 = AddressList::CreateFromAddrinfo(&ai);
-  EXPECT_EQ("canonical.bar.com", addrlist1.GetCanonicalName());
+  EXPECT_THAT(addrlist1.dns_aliases(),
+              UnorderedElementsAre("canonical.bar.com"));
 
   // Copy the AddressList to another one.
   AddressList addrlist2 = addrlist1;
-  EXPECT_EQ("canonical.bar.com", addrlist2.GetCanonicalName());
+  EXPECT_THAT(addrlist2.dns_aliases(),
+              UnorderedElementsAre("canonical.bar.com"));
 }
 
 TEST(AddressListTest, CreateFromAddrinfo) {
   // Create an 4-element addrinfo.
   const unsigned kNumElements = 4;
-  SockaddrStorage storage[kNumElements];
-  struct addrinfo ai[kNumElements];
+  std::array<SockaddrStorage, kNumElements> storage;
+  std::array<addrinfo, kNumElements> ai;
   for (unsigned i = 0; i < kNumElements; ++i) {
     struct sockaddr_in* addr =
-        reinterpret_cast<struct sockaddr_in*>(storage[i].addr);
+        reinterpret_cast<struct sockaddr_in*>(storage[i].addr());
     storage[i].addr_len = sizeof(struct sockaddr_in);
     // Populating the address with { i, i, i, i }.
-    memset(&addr->sin_addr, i, IPAddress::kIPv4AddressSize);
+    std::ranges::fill(base::byte_span_from_ref(addr->sin_addr), i);
     addr->sin_family = AF_INET;
     // Set port to i << 2;
     addr->sin_port = base::HostToNet16(static_cast<uint16_t>(i << 2));
-    memset(&ai[i], 0x0, sizeof(ai[i]));
+    ai[i] = {};
     ai[i].ai_family = addr->sin_family;
     ai[i].ai_socktype = SOCK_STREAM;
     ai[i].ai_addrlen = storage[i].addr_len;
-    ai[i].ai_addr = storage[i].addr;
+    ai[i].ai_addr = storage[i].addr();
     if (i + 1 < kNumElements)
       ai[i].ai_next = &ai[i + 1];
   }
@@ -137,9 +144,8 @@ TEST(AddressListTest, CreateFromIPAddressList) {
 
   AddressList test_list =
       AddressList::CreateFromIPAddressList(ip_list, std::move(aliases));
-  std::string canonical_name;
-  EXPECT_EQ(kCanonicalName, test_list.GetCanonicalName());
-  EXPECT_EQ(base::size(tests), test_list.size());
+  EXPECT_THAT(test_list.dns_aliases(), UnorderedElementsAre(kCanonicalName));
+  EXPECT_EQ(std::size(tests), test_list.size());
 }
 
 TEST(AddressListTest, GetCanonicalNameWhenUnset) {
@@ -148,7 +154,6 @@ TEST(AddressListTest, GetCanonicalNameWhenUnset) {
   AddressList addrlist(kEndpoint);
 
   EXPECT_TRUE(addrlist.dns_aliases().empty());
-  EXPECT_EQ(addrlist.GetCanonicalName(), "");
 }
 
 TEST(AddressListTest, SetDefaultCanonicalNameThenSetDnsAliases) {
@@ -158,17 +163,15 @@ TEST(AddressListTest, SetDefaultCanonicalNameThenSetDnsAliases) {
 
   addrlist.SetDefaultCanonicalName();
 
-  EXPECT_EQ(addrlist.GetCanonicalName(), "1.2.3.4");
-  EXPECT_THAT(addrlist.dns_aliases(), ElementsAre("1.2.3.4"));
+  EXPECT_THAT(addrlist.dns_aliases(), UnorderedElementsAre("1.2.3.4"));
 
   std::vector<std::string> aliases({"alias1", "alias2", "alias3"});
   addrlist.SetDnsAliases(std::move(aliases));
 
   // Setting the aliases after setting the default canonical name
   // replaces the default canonical name.
-  EXPECT_EQ(addrlist.GetCanonicalName(), "alias1");
   EXPECT_THAT(addrlist.dns_aliases(),
-              ElementsAre("alias1", "alias2", "alias3"));
+              UnorderedElementsAre("alias1", "alias2", "alias3"));
 }
 
 TEST(AddressListTest, SetDefaultCanonicalNameThenAppendDnsAliases) {
@@ -178,17 +181,15 @@ TEST(AddressListTest, SetDefaultCanonicalNameThenAppendDnsAliases) {
 
   addrlist.SetDefaultCanonicalName();
 
-  EXPECT_EQ(addrlist.GetCanonicalName(), "1.2.3.4");
-  EXPECT_THAT(addrlist.dns_aliases(), ElementsAre("1.2.3.4"));
+  EXPECT_THAT(addrlist.dns_aliases(), UnorderedElementsAre("1.2.3.4"));
 
   std::vector<std::string> aliases({"alias1", "alias2", "alias3"});
   addrlist.AppendDnsAliases(std::move(aliases));
 
   // Appending the aliases after setting the default canonical name
   // does not replace the default canonical name.
-  EXPECT_EQ(addrlist.GetCanonicalName(), "1.2.3.4");
   EXPECT_THAT(addrlist.dns_aliases(),
-              ElementsAre("1.2.3.4", "alias1", "alias2", "alias3"));
+              UnorderedElementsAre("1.2.3.4", "alias1", "alias2", "alias3"));
 }
 
 TEST(AddressListTest, DnsAliases) {
@@ -197,24 +198,21 @@ TEST(AddressListTest, DnsAliases) {
   std::vector<std::string> aliases({"alias1", "alias2", "alias3"});
   AddressList addrlist(kEndpoint, std::move(aliases));
 
-  EXPECT_EQ(addrlist.GetCanonicalName(), "alias1");
   EXPECT_THAT(addrlist.dns_aliases(),
-              ElementsAre("alias1", "alias2", "alias3"));
+              UnorderedElementsAre("alias1", "alias2", "alias3"));
 
   std::vector<std::string> more_aliases({"alias4", "alias5", "alias6"});
   addrlist.AppendDnsAliases(std::move(more_aliases));
 
-  EXPECT_EQ(addrlist.GetCanonicalName(), "alias1");
-  EXPECT_THAT(
-      addrlist.dns_aliases(),
-      ElementsAre("alias1", "alias2", "alias3", "alias4", "alias5", "alias6"));
+  EXPECT_THAT(addrlist.dns_aliases(),
+              UnorderedElementsAre("alias1", "alias2", "alias3", "alias4",
+                                   "alias5", "alias6"));
 
   std::vector<std::string> new_aliases({"alias7", "alias8", "alias9"});
   addrlist.SetDnsAliases(std::move(new_aliases));
 
-  EXPECT_EQ(addrlist.GetCanonicalName(), "alias7");
   EXPECT_THAT(addrlist.dns_aliases(),
-              ElementsAre("alias7", "alias8", "alias9"));
+              UnorderedElementsAre("alias7", "alias8", "alias9"));
 }
 
 TEST(AddressListTest, DeduplicatesEmptyAddressList) {
@@ -249,6 +247,44 @@ TEST(AddressListTest, DeduplicatesLongerAddressList) {
               ElementsAre(IPEndPoint(IPAddress(0, 0, 0, 1), 0),
                           IPEndPoint(IPAddress(0, 0, 0, 2), 0),
                           IPEndPoint(IPAddress(0, 0, 0, 3), 0)));
+}
+
+// Test that, for every permutation of a list of endpoints, deduplication
+// produces the same results as a naive reference implementation.
+TEST(AddressListTest, DeduplicatePreservesOrder) {
+  std::vector<IPEndPoint> permutation = {IPEndPoint(IPAddress(0, 0, 0, 1), 0),
+                                         IPEndPoint(IPAddress(0, 0, 0, 1), 0),
+                                         IPEndPoint(IPAddress(0, 0, 0, 2), 0),
+                                         IPEndPoint(IPAddress(0, 0, 0, 2), 0),
+                                         IPEndPoint(IPAddress(0, 0, 0, 3), 0)};
+  ASSERT_TRUE(std::is_sorted(permutation.begin(), permutation.end()));
+
+  do {
+    std::vector<IPEndPoint> expected;
+    std::set<IPEndPoint> set;
+    for (const IPEndPoint& endpoint : permutation) {
+      if (set.insert(endpoint).second)
+        expected.push_back(endpoint);
+    }
+    EXPECT_EQ(expected.size(), 3u);
+
+    AddressList address_list;
+    address_list.endpoints() = permutation;
+    address_list.Deduplicate();
+    EXPECT_EQ(address_list.endpoints(), expected);
+  } while (std::next_permutation(permutation.begin(), permutation.end()));
+}
+
+TEST(AddressListTest, CopyWithPortPreservesScopeId) {
+  IPEndPoint endpoint(
+      IPAddress(0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1), 0,
+      /*scope_id=*/10);
+  AddressList list(endpoint);
+
+  AddressList copied = AddressList::CopyWithPort(list, 443);
+  ASSERT_EQ(1u, copied.size());
+  EXPECT_EQ(443, copied[0].port());
+  EXPECT_EQ(std::optional<uint32_t>(10), copied[0].scope_id());
 }
 
 }  // namespace

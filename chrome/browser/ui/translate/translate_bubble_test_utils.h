@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 
 #include <string>
 
-
 class TranslateBubbleModel;
-class Browser;
+class BrowserWindowInterface;
 
 namespace translate {
 
@@ -17,18 +16,20 @@ namespace translate {
 // bubble has been migrated over to the new Bubble system.
 namespace test_utils {
 
-// Obtain the TranslateModel associated with the current bubble.
-const TranslateBubbleModel* GetCurrentModel(Browser* browser);
+// Obtain the TranslateBubbleModel associated with the current bubble.
+const TranslateBubbleModel* GetCurrentModel(BrowserWindowInterface* browser);
 
-// Presses 'Translate' on the currently open translate bubble.
-void PressTranslate(Browser* browser);
+void CloseCurrentBubble(BrowserWindowInterface* browser);
 
-// Presses 'Revert' on the currently opened translate bubble.
-void PressRevert(Browser* browser);
+// Presses 'Translate' on the currently open Full Page Translate bubble.
+void PressTranslate(BrowserWindowInterface* browser);
+
+// Presses 'Revert' on the currently opened Full Page Translate bubble.
+void PressRevert(BrowserWindowInterface* browser);
 
 // Selects the target language with the given display name on the opened
-// translate bubble.
-void SelectTargetLanguageByDisplayName(Browser* browser,
+// Full Page Translate bubble.
+void SelectTargetLanguageByDisplayName(BrowserWindowInterface* browser,
                                        const std::u16string& display_name);
 
 }  // namespace test_utils

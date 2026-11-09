@@ -1,21 +1,23 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
 // A complete set of unit tests for GaiaOAuthClient.
 
+#include "google_apis/gaia/gaia_oauth_client.h"
+
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "base/time/tick_clock.h"
 #include "base/values.h"
-#include "google_apis/gaia/gaia_oauth_client.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
@@ -49,6 +51,9 @@ class ResponseInjector {
         base::BindRepeating(&ResponseInjector::AdjustResponseBasedOnSettings,
                             base::Unretained(this)));
   }
+
+  ResponseInjector(const ResponseInjector&) = delete;
+  ResponseInjector& operator=(const ResponseInjector&) = delete;
 
   ~ResponseInjector() {
     url_loader_factory_->SetInterceptor(
@@ -118,7 +123,7 @@ class ResponseInjector {
     complete_immediately_ = complete_immediately;
   }
  private:
-  network::TestURLLoaderFactory* url_loader_factory_;
+  raw_ptr<network::TestURLLoaderFactory> url_loader_factory_;
   GURL pending_url_;
 
   net::HttpStatusCode response_code_;
@@ -126,7 +131,6 @@ class ResponseInjector {
   int current_failure_count_;
   int max_failure_count_;
   std::string results_;
-  DISALLOW_COPY_AND_ASSIGN(ResponseInjector);
 };
 
 const std::string kTestAccessToken = "1/fFAGRNJru1FTz70BzhT3Zg";
@@ -200,12 +204,10 @@ class MockGaiaOAuthClientDelegate : public gaia::GaiaOAuthClient::Delegate {
                void(const std::string& access_token, int expires_in_seconds));
   MOCK_METHOD1(OnGetUserEmailResponse, void(const std::string& user_email));
   MOCK_METHOD1(OnGetUserIdResponse, void(const std::string& user_id));
-  MOCK_METHOD1(OnGetUserInfoResponse,
-               void(std::unique_ptr<base::DictionaryValue> user_info));
-  MOCK_METHOD1(OnGetTokenInfoResponse,
-               void(std::unique_ptr<base::DictionaryValue> token_info));
+  MOCK_METHOD1(OnGetUserInfoResponse, void(const base::DictValue& user_info));
+  MOCK_METHOD1(OnGetTokenInfoResponse, void(const base::DictValue& token_info));
   MOCK_METHOD1(OnGetAccountCapabilitiesResponse,
-               void(std::unique_ptr<base::Value> account_capabilities));
+               void(const base::DictValue& account_capabilities));
   MOCK_METHOD0(OnOAuthError, void());
   MOCK_METHOD1(OnNetworkError, void(int response_code));
 };
@@ -234,9 +236,17 @@ class GaiaOAuthClientTest : public testing::Test {
     task_environment_.FastForwardUntilNoTasksRemain();
   }
 
+  base::test::TaskEnvironment task_environment_;
+  network::TestURLLoaderFactory url_loader_factory_;
+
+  OAuthClientInfo client_info_;
+};
+
+class GaiaOAuthClientGetAccountCapabilitiesTest
+    : public GaiaOAuthClientTest {
  protected:
   void TestAccountCapabilitiesUploadData(
-      const std::vector<std::string>& capabilities_names,
+      base::span<const std::string_view> capabilities_names,
       const std::string& expected_body) {
     ResponseInjector injector(&url_loader_factory_);
     injector.set_complete_immediately(false);
@@ -247,11 +257,6 @@ class GaiaOAuthClientTest : public testing::Test {
 
     EXPECT_EQ(injector.GetUploadData(), expected_body);
   }
-
-  base::test::TaskEnvironment task_environment_;
-  network::TestURLLoaderFactory url_loader_factory_;
-
-  OAuthClientInfo client_info_;
 };
 
 TEST_F(GaiaOAuthClientTest, NetworkFailure) {
@@ -316,7 +321,7 @@ TEST_F(GaiaOAuthClientTest, NetworkFailureRecoverBackoff) {
   //
   // ... so the whole thing should take at least 307s
   EXPECT_GE(task_environment_.GetMockTickClock()->NowTicks() - start,
-            base::TimeDelta::FromSeconds(307));
+            base::Seconds(307));
 }
 
 TEST_F(GaiaOAuthClientTest, OAuthFailure) {
@@ -430,12 +435,12 @@ TEST_F(GaiaOAuthClientTest, GetUserId) {
 }
 
 TEST_F(GaiaOAuthClientTest, GetUserInfo) {
-  std::unique_ptr<base::DictionaryValue> captured_result;
+  base::DictValue captured_result;
 
   MockGaiaOAuthClientDelegate delegate;
   EXPECT_CALL(delegate, OnGetUserInfoResponse(_))
-      .WillOnce([&](std::unique_ptr<base::DictionaryValue> result) {
-        captured_result = std::move(result);
+      .WillOnce([&](const base::DictValue& result) {
+        captured_result = result.Clone();
       });
 
   ResponseInjector injector(&url_loader_factory_);
@@ -445,23 +450,20 @@ TEST_F(GaiaOAuthClientTest, GetUserInfo) {
   auth.GetUserInfo("access_token", 1, &delegate);
   FlushNetwork();
 
-  std::unique_ptr<base::Value> value =
-      base::JSONReader::ReadDeprecated(kDummyFullUserInfoResult);
-  DCHECK(value);
-  ASSERT_TRUE(value->is_dict());
-  base::DictionaryValue* expected_result;
-  value->GetAsDictionary(&expected_result);
-
-  ASSERT_TRUE(expected_result->Equals(captured_result.get()));
+  std::optional<base::Value> expected_value = base::JSONReader::Read(
+      kDummyFullUserInfoResult, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  DCHECK(expected_value);
+  ASSERT_TRUE(expected_value->is_dict());
+  EXPECT_EQ(expected_value->GetDict(), captured_result);
 }
 
 TEST_F(GaiaOAuthClientTest, GetTokenInfo) {
-  std::unique_ptr<base::DictionaryValue> captured_result;
+  base::DictValue captured_result;
 
   MockGaiaOAuthClientDelegate delegate;
   EXPECT_CALL(delegate, OnGetTokenInfoResponse(_))
-      .WillOnce([&](std::unique_ptr<base::DictionaryValue> result) {
-        captured_result = std::move(result);
+      .WillOnce([&](const base::DictValue& result) {
+        captured_result = result.Clone();
       });
 
   ResponseInjector injector(&url_loader_factory_);
@@ -471,18 +473,18 @@ TEST_F(GaiaOAuthClientTest, GetTokenInfo) {
   auth.GetTokenInfo("some_token", 1, &delegate);
   FlushNetwork();
 
-  std::string issued_to;
-  ASSERT_TRUE(captured_result->GetString("issued_to", &issued_to));
-  ASSERT_EQ("1234567890.apps.googleusercontent.com", issued_to);
+  std::string* issued_to = captured_result.FindString("issued_to");
+  ASSERT_NE(issued_to, nullptr);
+  ASSERT_EQ("1234567890.apps.googleusercontent.com", *issued_to);
 }
 
 TEST_F(GaiaOAuthClientTest, GetTokenHandleInfo) {
-  std::unique_ptr<base::DictionaryValue> captured_result;
+  base::DictValue captured_result;
 
   MockGaiaOAuthClientDelegate delegate;
   EXPECT_CALL(delegate, OnGetTokenInfoResponse(_))
-      .WillOnce([&](std::unique_ptr<base::DictionaryValue> result) {
-        captured_result = std::move(result);
+      .WillOnce([&](const base::DictValue& result) {
+        captured_result = result.Clone();
       });
 
   ResponseInjector injector(&url_loader_factory_);
@@ -492,18 +494,18 @@ TEST_F(GaiaOAuthClientTest, GetTokenHandleInfo) {
   auth.GetTokenHandleInfo("some_handle", 1, &delegate);
   FlushNetwork();
 
-  std::string audience;
-  ASSERT_TRUE(captured_result->GetString("audience", &audience));
-  ASSERT_EQ("1234567890.apps.googleusercontent.com", audience);
+  std::string* audience = captured_result.FindString("audience");
+  ASSERT_NE(audience, nullptr);
+  ASSERT_EQ("1234567890.apps.googleusercontent.com", *audience);
 }
 
-TEST_F(GaiaOAuthClientTest, GetAccountCapabilities) {
-  std::unique_ptr<base::Value> captured_result;
+TEST_F(GaiaOAuthClientGetAccountCapabilitiesTest, GetAccountCapabilities) {
+  base::DictValue captured_result;
 
   MockGaiaOAuthClientDelegate delegate;
   EXPECT_CALL(delegate, OnGetAccountCapabilitiesResponse(_))
-      .WillOnce([&](std::unique_ptr<base::Value> result) {
-        captured_result = std::move(result);
+      .WillOnce([&](const base::DictValue& result) {
+        captured_result = result.Clone();
       });
 
   ResponseInjector injector(&url_loader_factory_);
@@ -515,40 +517,40 @@ TEST_F(GaiaOAuthClientTest, GetAccountCapabilities) {
                               {"capability1", "capability2", "capability3"}, 1,
                               &delegate);
 
-  std::string actual_authorization_header;
-  EXPECT_TRUE(injector.GetRequestHeaders().GetHeader(
-      "Authorization", &actual_authorization_header));
-  EXPECT_EQ(actual_authorization_header, "Bearer some_token");
-  std::string actual_method_override_header;
-  EXPECT_TRUE(injector.GetRequestHeaders().GetHeader(
-      "X-HTTP-Method-Override", &actual_method_override_header));
-  EXPECT_EQ(actual_method_override_header, "GET");
+  EXPECT_EQ(url_loader_factory_.pending_requests()->front().request.url,
+            GaiaUrls::GetInstance()->account_capabilities_batch_get_url());
+
+  EXPECT_THAT(injector.GetRequestHeaders().GetHeader("Authorization"),
+              testing::Optional(std::string("Bearer some_token")));
+  EXPECT_THAT(
+      injector.GetRequestHeaders().GetHeader("X-HTTP-Method-Override"),
+      testing::Optional(std::string("GET")));
   EXPECT_EQ(injector.GetUploadData(),
             "names=capability1&names=capability2&names=capability3");
 
   injector.Finish();
   FlushNetwork();
 
-  auto capabilities =
-      captured_result->FindListKey("accountCapabilities")->GetList();
+  const base::ListValue& capabilities =
+      *captured_result.FindList("accountCapabilities");
   ASSERT_EQ(capabilities.size(), 2U);
-  EXPECT_EQ(*capabilities[0].FindStringKey("name"), "accountcapabilities/111");
-  EXPECT_FALSE(*capabilities[0].FindBoolKey("booleanValue"));
-  EXPECT_EQ(*capabilities[1].FindStringKey("name"), "accountcapabilities/222");
-  EXPECT_TRUE(*capabilities[1].FindBoolKey("booleanValue"));
+  EXPECT_EQ(*capabilities[0].GetDict().FindString("name"),
+            "accountcapabilities/111");
+  EXPECT_FALSE(*capabilities[0].GetDict().FindBool("booleanValue"));
+  EXPECT_EQ(*capabilities[1].GetDict().FindString("name"),
+            "accountcapabilities/222");
+  EXPECT_TRUE(*capabilities[1].GetDict().FindBool("booleanValue"));
 }
 
-TEST_F(GaiaOAuthClientTest,
+TEST_F(GaiaOAuthClientGetAccountCapabilitiesTest,
        GetAccountCapabilities_UploadData_OneCapabilityName) {
-  TestAccountCapabilitiesUploadData({"capability"},
-                                    /*expected_body=*/"names=capability");
+  TestAccountCapabilitiesUploadData({"capability"}, "names=capability");
 }
 
-TEST_F(GaiaOAuthClientTest,
+TEST_F(GaiaOAuthClientGetAccountCapabilitiesTest,
        GetAccountCapabilities_UploadData_MultipleCapabilityNames) {
   TestAccountCapabilitiesUploadData(
       {"capability1", "capability2", "capability3"},
-      /*expected_body=*/
       "names=capability1&names=capability2&names=capability3");
 }
 

@@ -1,19 +1,22 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_META_ELEMENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_META_ELEMENT_H_
 
+#include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/web/web_element.h"
 
 namespace blink {
 
 class HTMLMetaElement;
 
-class WebMetaElement final : public WebElement {
+class BLINK_EXPORT WebMetaElement final : public WebElement {
  public:
-  WebMetaElement() : WebElement() {}
+  explicit WebMetaElement(
+      cppgc::SourceLocation loc = BLINK_WEB_NODE_LOCATION_FROM_HERE)
+      : WebElement(loc) {}
   WebMetaElement(const WebMetaElement& element) = default;
 
   WebMetaElement& operator=(const WebMetaElement& element) {
@@ -22,7 +25,7 @@ class WebMetaElement final : public WebElement {
   }
   void Assign(const WebMetaElement& element) { WebElement::Assign(element); }
 
-  BLINK_EXPORT WebString ComputeEncoding() const;
+  WebString ComputeEncoding() const;
 
 #if INSIDE_BLINK
   WebMetaElement(HTMLMetaElement*);

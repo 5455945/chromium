@@ -1,11 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_TEST_COMBOBOX_TEST_API_H_
 #define UI_VIEWS_TEST_COMBOBOX_TEST_API_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 namespace gfx {
 class Size;
@@ -25,6 +25,9 @@ class ComboboxTestApi {
  public:
   explicit ComboboxTestApi(Combobox* combobox) : combobox_(combobox) {}
 
+  ComboboxTestApi(const ComboboxTestApi&) = delete;
+  ComboboxTestApi& operator=(const ComboboxTestApi&) = delete;
+
   // Activates the Combobox menu item at |index|, as if selected by the user.
   void PerformActionAt(int index);
 
@@ -36,11 +39,11 @@ class ComboboxTestApi {
   // Accessors for private data members of Combobox.
   gfx::Size content_size();
   ui::MenuModel* menu_model();
+  // Closes the menu of the combobox by calling private data members.
+  void CloseMenu();
 
  private:
-  Combobox* combobox_;
-
-  DISALLOW_COPY_AND_ASSIGN(ComboboxTestApi);
+  const raw_ptr<Combobox> combobox_;
 };
 
 }  // namespace test

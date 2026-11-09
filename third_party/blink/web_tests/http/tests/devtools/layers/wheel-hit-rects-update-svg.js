@@ -1,10 +1,12 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {LayersTestRunner} from 'layers_test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests correctness of wheel scroll regions produced by SVG elements after parent update\n`);
-  await TestRunner.loadModule('panels/layers'); await TestRunner.loadTestModule('layers_test_runner');
   await TestRunner.loadHTML(`
     <div id="svg-root">
       <div>
@@ -42,8 +44,8 @@
 
   TestRunner.addResult('Scroll rectangles');
   LayersTestRunner.layerTreeModel().layerTree().forEachLayer(layer => {
-    if (layer._scrollRects.length > 0)
-      TestRunner.addObject(layer._scrollRects);
+    if (layer.scrollRectsInternal.length > 0)
+      TestRunner.addObject(layer.scrollRectsInternal);
   });
   TestRunner.completeTest();
 })();

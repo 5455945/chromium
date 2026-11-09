@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,11 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/values.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
 #include "extensions/renderer/bindings/api_binding_types.h"
 #include "extensions/renderer/bindings/api_request_handler.h"
 #include "v8/include/v8.h"
-
-namespace base {
-class DictionaryValue;
-}
 
 namespace extensions {
 class APIBindingsSystem;
@@ -25,6 +21,10 @@ class APIBindingsSystem;
 // The base class to test the APIBindingsSystem. This allows subclasses to
 // retrieve API schemas differently.
 class APIBindingsSystemTest : public APIBindingTest {
+ public:
+  APIBindingsSystemTest(const APIBindingsSystemTest&) = delete;
+  APIBindingsSystemTest& operator=(const APIBindingsSystemTest&) = delete;
+
  protected:
   // A struct representing a "fake" API, including the name and specification.
   // The specification is expected to be a JSON-serializable string that
@@ -47,39 +47,39 @@ class APIBindingsSystemTest : public APIBindingTest {
 
   // Returns the object to be used as the parent for the `lastError`, and,
   // optionally, the secondary parent. The default returns an empty JS object
-  // and does not populate |secondary_parent| (assumes no last errors will be
+  // and does not populate `secondary_parent` (assumes no last errors will be
   // set).
   virtual v8::Local<v8::Object> GetLastErrorParent(
       v8::Local<v8::Context> context,
       v8::Local<v8::Object>* secondary_parent);
 
   // Simulates logging an error to the console.
-  virtual void AddConsoleError(v8::Local<v8::Context> context,
-                               const std::string& error) {}
+  void AddConsoleError(v8::Local<v8::Context> context,
+                       const std::string& error);
 
-  // Returns the DictionaryValue representing the schema with the given API
+  // Returns the base::DictValue representing the schema with the given API
   // name.
-  const base::DictionaryValue& GetAPISchema(const std::string& api_name);
+  const base::DictValue& GetAPISchema(const std::string& api_name);
 
   // Callback for event listeners changing.
   void OnEventListenersChanged(const std::string& event_name,
                                binding::EventListenersChanged changed,
-                               const base::DictionaryValue* filter,
+                               const base::DictValue* filter,
                                bool was_manual,
                                v8::Local<v8::Context> context);
 
   // Callback for an API request being made. Stores the request in
-  // |last_request_|.
+  // `last_request_`.
   void OnAPIRequest(std::unique_ptr<APIRequestHandler::Request> request,
                     v8::Local<v8::Context> context);
 
-  // Checks that |last_request_| exists and was provided with the
-  // |expected_name| and |expected_arguments|.
+  // Checks that `last_request_` exists and was provided with the
+  // `expected_name` and `expected_arguments`.
   void ValidateLastRequest(const std::string& expected_name,
                            const std::string& expected_arguments);
 
   // Wraps the given |script source| in (function(obj) { ... }) and executes
-  // the result function, passing in |object| for an argument. Returns the
+  // the result function, passing in `object` for an argument. Returns the
   // result of calling the function.
   v8::Local<v8::Value> CallFunctionOnObject(v8::Local<v8::Context> context,
                                             v8::Local<v8::Object> object,
@@ -90,10 +90,13 @@ class APIBindingsSystemTest : public APIBindingTest {
   }
   void reset_last_request() { last_request_.reset(); }
   APIBindingsSystem* bindings_system() { return bindings_system_.get(); }
+  const std::vector<std::string>& console_errors() const {
+    return console_errors_;
+  }
 
  private:
   // The API schemas for the fake APIs.
-  std::map<std::string, std::unique_ptr<base::DictionaryValue>> api_schemas_;
+  std::map<std::string, base::DictValue> api_schemas_;
 
   // The APIBindingsSystem associated with the test. Safe to use across multiple
   // contexts.
@@ -103,7 +106,8 @@ class APIBindingsSystemTest : public APIBindingTest {
   // there is none.
   std::unique_ptr<APIRequestHandler::Request> last_request_;
 
-  DISALLOW_COPY_AND_ASSIGN(APIBindingsSystemTest);
+  // A list for keeping track of simulated console errors.
+  std::vector<std::string> console_errors_;
 };
 
 }  // namespace extensions

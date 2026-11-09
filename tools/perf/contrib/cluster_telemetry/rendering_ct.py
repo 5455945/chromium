@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,6 +10,7 @@ from telemetry.web_perf import timeline_based_measurement
 from core import perf_benchmark
 
 import benchmarks.rendering as rendering
+
 
 def ScrollToEndOfPage(action_runner):
   action_runner.Wait(1)
@@ -36,13 +37,22 @@ class RenderingCT(perf_benchmark.PerfBenchmark):
 
   def CreateStorySet(self, options):
     return page_set.CTPageSet(
-        options.urls_list, options.user_agent, options.archive_data_file,
-        run_page_interaction_callback=ScrollToEndOfPage)
+      options.urls_list,
+      options.user_agent,
+      options.archive_data_file,
+      run_page_interaction_callback=ScrollToEndOfPage,
+    )
 
   def CreateCoreTimelineBasedMeasurementOptions(self):
     category_filter = chrome_trace_category_filter.CreateLowOverheadFilter()
+    category_filter.AddDisabledByDefault(
+      'disabled-by-default-histogram_samples'
+    )
     options = timeline_based_measurement.Options(category_filter)
     options.config.chrome_trace_config.EnableUMAHistograms(
-        *rendering.RENDERING_BENCHMARK_UMA)
-    options.SetTimelineBasedMetrics(['renderingMetric', 'umaMetric'])
+      *rendering.RENDERING_BENCHMARK_UMA
+    )
+    options.SetTimelineBasedMetrics(
+      ['renderingMetric', 'umaMetric', 'tbmv3:uma_metrics']
+    )
     return options

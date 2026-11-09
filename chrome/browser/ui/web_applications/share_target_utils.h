@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "components/services/app_service/public/cpp/intent.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace apps {
 struct ShareTarget;
@@ -20,21 +20,21 @@ struct ShareTarget;
 namespace web_app {
 
 struct SharedField {
+  friend bool operator==(const SharedField&, const SharedField&) = default;
+
   std::string name;
   std::string value;
-
-  bool operator==(const SharedField& other) const;
-  bool operator!=(const SharedField& other) const { return !(*this == other); }
 };
 
 std::vector<SharedField> ExtractSharedFields(
     const apps::ShareTarget& share_target,
-    const apps::mojom::Intent& intent);
+    const apps::Intent& intent);
 
 NavigateParams NavigateParamsForShareTarget(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const apps::ShareTarget& share_target,
-    const apps::mojom::Intent& intent);
+    const apps::Intent& intent,
+    const std::vector<base::FilePath>& launch_files);
 
 }  // namespace web_app
 

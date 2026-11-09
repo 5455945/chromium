@@ -1,15 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/task_environment.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
@@ -25,9 +26,8 @@ namespace {
 class SyncWebSocketImplTest : public testing::Test {
  protected:
   SyncWebSocketImplTest()
-      : client_thread_("ClientThread"),
-        long_timeout_(base::TimeDelta::FromMinutes(1)) {}
-  ~SyncWebSocketImplTest() override {}
+      : client_thread_("ClientThread"), long_timeout_(base::Minutes(1)) {}
+  ~SyncWebSocketImplTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(client_thread_.StartWithOptions(
@@ -40,6 +40,7 @@ class SyncWebSocketImplTest : public testing::Test {
 
   Timeout long_timeout() const { return Timeout(long_timeout_); }
 
+  base::test::SingleThreadTaskEnvironment task_environment;
   base::Thread client_thread_;
   TestHttpServer server_;
   scoped_refptr<URLRequestContextGetter> context_getter_;
@@ -52,7 +53,7 @@ TEST_F(SyncWebSocketImplTest, CreateDestroy) {
   SyncWebSocketImpl sock(context_getter_.get());
 }
 
-// TODO(crbug.com/1177142) Re-enable test
+// TODO(crbug.com/40168673) Re-enable test
 TEST_F(SyncWebSocketImplTest, DISABLED_Connect) {
   SyncWebSocketImpl sock(context_getter_.get());
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
@@ -68,9 +69,8 @@ TEST_F(SyncWebSocketImplTest, SendReceive) {
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
   ASSERT_TRUE(sock.Send("hi"));
   std::string message;
-  ASSERT_EQ(
-      SyncWebSocket::kOk,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_STREQ("hi", message.c_str());
 }
 
@@ -88,19 +88,18 @@ TEST_F(SyncWebSocketImplTest, DetermineRecipient) {
   sock.Send(message_not_for_chromedriver);
   sock.Send(message_for_chromedriver);
   std::string message;
-  ASSERT_EQ(SyncWebSocket::kOk,
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
             sock.ReceiveNextMessage(&message, long_timeout()));
 
   // Getting message id and method
-  base::DictionaryValue* message_dict;
-  absl::optional<base::Value> message_value = base::JSONReader::Read(message);
+  std::optional<base::Value> message_value =
+      base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(message_value.has_value());
-  ASSERT_TRUE(message_value->GetAsDictionary(&message_dict));
-  std::string method;
-  ASSERT_TRUE(message_dict->GetString("method", &method));
-  int id;
-  ASSERT_TRUE(message_dict->GetInteger("id", &id));
-  ASSERT_EQ(method, "Page.enable");
+  base::DictValue* message_dict = message_value->GetIfDict();
+  ASSERT_TRUE(message_dict);
+  const std::string* method = message_dict->FindString("method");
+  ASSERT_EQ(*method, "Page.enable");
+  int id = message_dict->FindInt("id").value_or(-1);
   ASSERT_EQ(id, 1);
 }
 
@@ -112,21 +111,18 @@ TEST_F(SyncWebSocketImplTest, SendReceiveTimeout) {
   base::WaitableEvent server_reply_allowed(
       base::WaitableEvent::ResetPolicy::AUTOMATIC,
       base::WaitableEvent::InitialState::NOT_SIGNALED);
-  server_.SetMessageCallback(base::BindOnce(
-      &base::WaitableEvent::Wait, base::Unretained(&server_reply_allowed)));
+  server_.SetMessageCallback(server_reply_allowed.GetWaitCallbackForTesting());
 
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
   ASSERT_TRUE(sock.Send("hi"));
   std::string message;
-  ASSERT_EQ(
-      SyncWebSocket::kTimeout,
-      sock.ReceiveNextMessage(
-          &message, Timeout(base::TimeDelta())));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kTimeout,
+            sock.ReceiveNextMessage(&message, Timeout(base::TimeDelta())));
 
   server_reply_allowed.Signal();
   // Receive the response to avoid possible deletion of the event while the
   // server thread has not yet returned from the call to Wait.
-  EXPECT_EQ(SyncWebSocket::kOk,
+  EXPECT_EQ(SyncWebSocket::StatusCode::kOk,
             sock.ReceiveNextMessage(&message, long_timeout()));
 }
 
@@ -136,9 +132,8 @@ TEST_F(SyncWebSocketImplTest, SendReceiveLarge) {
   std::string wrote_message(10 << 20, 'a');
   ASSERT_TRUE(sock.Send(wrote_message));
   std::string message;
-  ASSERT_EQ(
-      SyncWebSocket::kOk,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_EQ(wrote_message.length(), message.length());
   ASSERT_EQ(wrote_message, message);
 }
@@ -149,18 +144,15 @@ TEST_F(SyncWebSocketImplTest, SendReceiveMany) {
   ASSERT_TRUE(sock.Send("1"));
   ASSERT_TRUE(sock.Send("2"));
   std::string message;
-  ASSERT_EQ(
-      SyncWebSocket::kOk,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_STREQ("1", message.c_str());
   ASSERT_TRUE(sock.Send("3"));
-  ASSERT_EQ(
-      SyncWebSocket::kOk,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_STREQ("2", message.c_str());
-  ASSERT_EQ(
-      SyncWebSocket::kOk,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_STREQ("3", message.c_str());
 }
 
@@ -170,9 +162,8 @@ TEST_F(SyncWebSocketImplTest, CloseOnReceive) {
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
   ASSERT_TRUE(sock.Send("1"));
   std::string message;
-  ASSERT_EQ(
-      SyncWebSocket::kDisconnected,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kDisconnected,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_STREQ("", message.c_str());
 }
 
@@ -188,10 +179,10 @@ TEST_F(SyncWebSocketImplTest, Reconnect) {
   ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
   ASSERT_TRUE(sock.Send("1"));
   // Wait for SyncWebSocket to receive the response from the server.
-  Timeout response_timeout(base::TimeDelta::FromSeconds(20));
+  Timeout response_timeout(base::Seconds(20));
   while (!response_timeout.IsExpired()) {
     if (sock.IsConnected() && !sock.HasNextMessage())
-      base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(10));
+      base::PlatformThread::Sleep(base::Milliseconds(10));
     else
       break;
   }
@@ -204,9 +195,36 @@ TEST_F(SyncWebSocketImplTest, Reconnect) {
   ASSERT_FALSE(sock.HasNextMessage());
   ASSERT_TRUE(sock.Send("3"));
   std::string message;
-  ASSERT_EQ(
-      SyncWebSocket::kOk,
-      sock.ReceiveNextMessage(&message, long_timeout()));
+  ASSERT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
   ASSERT_STREQ("3", message.c_str());
   ASSERT_FALSE(sock.HasNextMessage());
+}
+
+TEST_F(SyncWebSocketImplTest, NotificationArrives) {
+  base::RunLoop run_loop;
+  SyncWebSocketImpl sock(context_getter_.get());
+  bool notified = false;
+
+  sock.SetNotificationCallback(base::BindRepeating(
+      [](bool& flag, base::RepeatingClosure callback) {
+        flag = true;
+        callback.Run();
+      },
+      std::ref(notified), run_loop.QuitClosure()));
+
+  ASSERT_TRUE(sock.Connect(server_.web_socket_url()));
+  ASSERT_TRUE(sock.Send("there"));
+  std::string message;
+
+  EXPECT_EQ(SyncWebSocket::StatusCode::kOk,
+            sock.ReceiveNextMessage(&message, long_timeout()));
+
+  // Notification must arrive via the message queue.
+  // If it arrives earlier then we have a threading problem.
+  EXPECT_FALSE(notified);
+
+  run_loop.Run();
+
+  EXPECT_TRUE(notified);
 }

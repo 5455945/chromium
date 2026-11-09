@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,48 +9,67 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ash/arc/auth/arc_active_directory_enrollment_token_fetcher.h"
+#include "chrome/browser/ash/account_manager/account_apps_availability.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
-#include "components/arc/mojom/auth.mojom.h"
-#include "components/arc/session/connection_observer.h"
+#include "chromeos/ash/experiences/arc/mojom/auth.mojom.h"
+#include "chromeos/ash/experiences/arc/session/connection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
+class PrefService;
 class Profile;
 
 namespace content {
 class BrowserContext;
 }  // namespace content
 
-namespace signin {
-class IdentityManager;
-}  // namespace signin
-
 namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
+namespace signin {
+class IdentityManager;
+}  // namespace signin
 
 namespace arc {
 
 class ArcAuthCodeFetcher;
 class ArcBackgroundAuthCodeFetcher;
 class ArcBridgeService;
-class ArcFetcherBase;
+
+inline constexpr char kArcAuthRequestAccountInfoResultPrimaryHistogramName[] =
+    "Arc.Auth.RequestAccountInfoResult.Primary";
+inline constexpr char kArcAuthRequestAccountInfoResultSecondaryHistogramName[] =
+    "Arc.Auth.RequestAccountInfoResult.Secondary";
 
 // Implementation of ARC authorization.
 class ArcAuthService : public KeyedService,
                        public mojom::AuthHost,
                        public ConnectionObserver<mojom::AuthInstance>,
                        public signin::IdentityManager::Observer,
+                       public ash::AccountAppsAvailability::Observer,
                        public ArcSessionManagerObserver {
  public:
   using GetGoogleAccountsInArcCallback =
       base::OnceCallback<void(std::vector<mojom::ArcAccountInfoPtr>)>;
+
+  class Delegate {
+   public:
+    virtual ~Delegate() = default;
+
+    // Opens the settings app for Arc auth.
+    virtual void OpenSettingsAppWithPeopleSection() = 0;
+  };
 
   // Returns singleton instance for the given BrowserContext,
   // or nullptr if the browser |context| is not allowed to use ARC.
@@ -58,6 +77,10 @@ class ArcAuthService : public KeyedService,
 
   ArcAuthService(content::BrowserContext* profile,
                  ArcBridgeService* bridge_service);
+
+  ArcAuthService(const ArcAuthService&) = delete;
+  ArcAuthService& operator=(const ArcAuthService&) = delete;
+
   ~ArcAuthService() override;
 
   // Gets the list of Google accounts currently stored in ARC. This is used by
@@ -79,6 +102,7 @@ class ArcAuthService : public KeyedService,
                              mojom::ArcSignInAccountPtr account) override;
   void ReportMetrics(mojom::MetricsType metrics_type, int32_t value) override;
   void ReportAccountCheckStatus(mojom::AccountCheckStatus status) override;
+  void ReportAccountReauthReason(mojom::ReauthReason reason) override;
   void ReportManagementChangeStatus(
       mojom::ManagementChangeStatus status) override;
   void RequestPrimaryAccountInfo(
@@ -91,6 +115,14 @@ class ArcAuthService : public KeyedService,
   void HandleRemoveAccountRequest(const std::string& email) override;
   void HandleUpdateCredentialsRequest(const std::string& email) override;
 
+  static void EnsureFactoryBuilt();
+
+  // Overrides the Delegate behavior for testing.
+  void SetDelegateForTesting(std::unique_ptr<Delegate> delegate);
+
+ private:
+  friend class ArcAuthServiceTest;
+
   void SetURLLoaderFactoryForTesting(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
@@ -99,22 +131,26 @@ class ArcAuthService : public KeyedService,
       const CoreAccountInfo& account_info) override;
   void OnExtendedAccountInfoRemoved(const AccountInfo& account_info) override;
 
+  // ash::AccountAppsAvailability::Observer:
+  void OnAccountAvailableInArc(
+      const account_manager::Account& account) override;
+  void OnAccountUnavailableInArc(
+      const account_manager::Account& account) override;
+
   // ArcSessionManagerObserver:
   void OnArcInitialStart() override;
 
   // KeyedService:
   void Shutdown() override;
 
- private:
-  // Callback when Active Directory Enrollment Token is fetched.
-  // |callback| is completed with |ArcAuthCodeStatus| and |AccountInfo|
-  // depending on the success / failure of the operation.
-  void OnActiveDirectoryEnrollmentTokenFetched(
-      ArcActiveDirectoryEnrollmentTokenFetcher* fetcher,
-      RequestPrimaryAccountInfoCallback callback,
-      ArcActiveDirectoryEnrollmentTokenFetcher::Status status,
-      const std::string& enrollment_token,
-      const std::string& user_id);
+  // Calls `mojom::OnAccountUpdated` with update type
+  // `mojom::AccountUpdateType::UPSERT` if the account with provided
+  // `account_info` doesn't have refresh token in persistent error state.
+  void UpsertAccountToArc(const CoreAccountInfo& account_info);
+
+  // Calls `mojom::OnAccountUpdated` with update type
+  // `mojom::AccountUpdateType::REMOVAL` for the provided email.
+  void RemoveAccountFromArc(const std::string& email);
 
   // Issues a request for fetching AccountInfo for the Device Account.
   // |initial_signin| denotes whether this is the initial ARC provisioning flow
@@ -170,12 +206,20 @@ class ArcAuthService : public KeyedService,
 
   // Deletes a completed enrollment token / auth code fetch request from
   // |pending_token_requests_|.
-  void DeletePendingTokenRequest(ArcFetcherBase* fetcher);
+  void DeletePendingTokenRequest(ArcAuthCodeFetcher* fetcher);
 
   // Triggers an async push of the accounts in IdentityManager to ARC.
   // If |filter_primary_account| is set to |true|, the Primary Account in Chrome
   // OS Account Manager will not be pushed to ARC as part of this call.
   void TriggerAccountsPushToArc(bool filter_primary_account);
+
+  // Pushes accounts in the `accounts` set to ARC. `accounts` set must contain
+  // only Gaia accounts. If `filter_primary_account` is set to `true`, the
+  // Primary Account in Chrome OS Account Manager will not be pushed to ARC as
+  // part of this call.
+  void CompleteAccountsPushToArc(
+      bool filter_primary_account,
+      const base::flat_set<account_manager::Account>& accounts);
 
   // Issues a request to ARC, which will complete callback with the list of
   // Google accounts in ARC.
@@ -184,24 +228,31 @@ class ArcAuthService : public KeyedService,
   // Response for |mojom::GetMainAccountResolutionStatus|.
   void OnMainAccountResolutionStatus(mojom::MainAccountResolutionStatus status);
 
+  const raw_ref<PrefService> local_state_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      system_url_loader_factory_;
+  const raw_ptr<policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+
+  std::unique_ptr<Delegate> delegate_;
+
   // Non-owning pointers.
-  Profile* const profile_;
-  signin::IdentityManager* const identity_manager_;
-  ArcBridgeService* const arc_bridge_service_;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<signin::IdentityManager> identity_manager_;
+  const raw_ptr<ArcBridgeService> arc_bridge_service_;
+  raw_ptr<ash::AccountAppsAvailability> account_apps_availability_ = nullptr;
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   bool url_loader_factory_for_testing_set_ = false;
 
   // A list of pending enrollment token / auth code requests.
-  std::vector<std::unique_ptr<ArcFetcherBase>> pending_token_requests_;
+  std::vector<std::unique_ptr<ArcAuthCodeFetcher>> pending_token_requests_;
 
   // Pending callback for |GetGoogleAccountsInArc| if ARC bridge is not yet
   // ready.
   GetGoogleAccountsInArcCallback pending_get_arc_accounts_callback_;
 
   base::WeakPtrFactory<ArcAuthService> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ArcAuthService);
 };
 
 }  // namespace arc

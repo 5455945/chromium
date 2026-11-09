@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/media/router/providers/wired_display/wired_display_presentation_receiver.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/media_router/presentation_receiver_window_delegate.h"
 #include "components/media_router/browser/presentation/presentation_navigation_policy.h"
@@ -19,7 +21,6 @@
 
 class GURL;
 class PresentationReceiverWindow;
-class Profile;
 
 namespace content {
 class WebContents;
@@ -48,6 +49,11 @@ class PresentationReceiverWindowController final
                             const gfx::Rect& bounds,
                             base::OnceClosure termination_callback,
                             TitleChangeCallback title_change_callback);
+
+  PresentationReceiverWindowController(
+      const PresentationReceiverWindowController&) = delete;
+  PresentationReceiverWindowController& operator=(
+      const PresentationReceiverWindowController&) = delete;
 
   ~PresentationReceiverWindowController() final;
 
@@ -81,6 +87,8 @@ class PresentationReceiverWindowController final
   // PresentationReceiverWindowDelegate overrides.
   void WindowClosed() final;
 
+  void StopAndTerminate();
+
   // content::WebContentsObserver overrides.
   void DidStartNavigation(content::NavigationHandle* handle) final;
   void TitleWasSet(content::NavigationEntry* entry) final;
@@ -91,11 +99,12 @@ class PresentationReceiverWindowController final
   void CloseContents(content::WebContents* source) final;
   bool ShouldSuppressDialogs(content::WebContents* source) final;
   bool ShouldFocusLocationBarByDefault(content::WebContents* source) final;
-  bool ShouldFocusPageAfterCrash() final;
+  bool ShouldFocusPageAfterCrash(content::WebContents* source) final;
   void CanDownload(const GURL& url,
                    const std::string& request_method,
                    base::OnceCallback<void(bool)> callback) final;
   bool IsWebContentsCreationOverridden(
+      content::RenderFrameHost* opener,
       content::SiteInstance* source_site_instance,
       content::mojom::WindowContainerType window_container_type,
       const GURL& opener_url,
@@ -103,13 +112,15 @@ class PresentationReceiverWindowController final
       const GURL& target_url) override;
 
   // The profile used for the presentation.
-  Profile* otr_profile_;
+  raw_ptr<Profile, DanglingUntriaged> otr_profile_;
+  base::ScopedObservation<Profile, ProfileObserver> otr_profile_observation_{
+      this};
 
   // WebContents for rendering the receiver page.
   std::unique_ptr<content::WebContents> web_contents_;
 
   // The actual UI window for displaying the receiver page.
-  PresentationReceiverWindow* window_;
+  raw_ptr<PresentationReceiverWindow, DanglingUntriaged> window_;
 
   base::OnceClosure termination_callback_;
 
@@ -118,7 +129,8 @@ class PresentationReceiverWindowController final
 
   media_router::PresentationNavigationPolicy navigation_policy_;
 
-  DISALLOW_COPY_AND_ASSIGN(PresentationReceiverWindowController);
+  base::WeakPtrFactory<PresentationReceiverWindowController> weak_factory_{
+      this};
 };
 
 #endif  // CHROME_BROWSER_UI_MEDIA_ROUTER_PRESENTATION_RECEIVER_WINDOW_CONTROLLER_H_

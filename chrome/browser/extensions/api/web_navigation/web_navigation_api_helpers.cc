@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api_constants.h"
+#include "chrome/browser/extensions/api/web_navigation/web_navigation_tab_observer.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/web_navigation.h"
@@ -26,7 +27,7 @@
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
-#include "extensions/common/event_filtering_info.h"
+#include "extensions/common/mojom/event_dispatcher.mojom.h"
 #include "net/base/net_errors.h"
 #include "ui/base/page_transition_types.h"
 
@@ -38,23 +39,18 @@ namespace web_navigation_api_helpers {
 
 namespace {
 
-// Returns |time| as milliseconds since the epoch.
-double MilliSecondsFromTime(const base::Time& time) {
-  return 1000 * time.ToDoubleT();
-}
-
 // Dispatches events to the extension message service.
 void DispatchEvent(content::BrowserContext* browser_context,
                    std::unique_ptr<Event> event,
                    const GURL& url) {
-  EventFilteringInfo info;
-  info.url = url;
-
   Profile* profile = Profile::FromBrowserContext(browser_context);
   EventRouter* event_router = EventRouter::Get(profile);
   if (profile && event_router) {
-    DCHECK_EQ(profile, event->restrict_to_browser_context);
-    event->filter_info = info;
+    mojom::EventFilteringInfoPtr info = mojom::EventFilteringInfo::New();
+    info->url = url;
+    CHECK_EQ(profile, event->restrict_to_browser_context,
+             base::NotFatalUntil::M161);
+    event->filter_info = std::move(info);
     event_router->BroadcastEvent(std::move(event));
   }
 }
@@ -71,20 +67,33 @@ std::unique_ptr<Event> CreateOnBeforeNavigateEvent(
       ExtensionTabUtil::GetTabId(navigation_handle->GetWebContents());
   details.url = url.spec();
   details.process_id = -1;
+  // There is no documentId for this event because the document has not
+  // been created yet. It will first appear in the OnCommitted event. The
+  // frameId can be used to associate OnBeforeNavigate and OnCommitted together.
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(navigation_handle);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(navigation_handle);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  // Only set the parentDocumentId value if we have a parent.
+  if (content::RenderFrameHost* parent_frame_host =
+          navigation_handle->GetParentFrameOrOuterDocument()) {
+    details.parent_document_id =
+        ExtensionApiFrameIdMap::GetDocumentId(parent_frame_host).ToString();
+  }
+  details.frame_type = ExtensionApiFrameIdMap::GetFrameType(navigation_handle);
+  details.document_lifecycle =
+      ExtensionApiFrameIdMap::GetDocumentLifecycle(navigation_handle);
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnBeforeNavigate::Create(details));
   auto event = std::make_unique<Event>(
       events::WEB_NAVIGATION_ON_BEFORE_NAVIGATE,
-      web_navigation::OnBeforeNavigate::kEventName,
-      web_navigation::OnBeforeNavigate::Create(details),
+      web_navigation::OnBeforeNavigate::kEventName, std::move(event_args),
       navigation_handle->GetWebContents()->GetBrowserContext());
 
-  EventFilteringInfo info;
-  info.url = navigation_handle->GetURL();
-  event->filter_info = info;
+  mojom::EventFilteringInfoPtr info = mojom::EventFilteringInfo::New();
+  info->url = navigation_handle->GetURL();
+  event->filter_info = std::move(info);
 
   return event;
 }
@@ -100,17 +109,30 @@ void DispatchOnCommitted(events::HistogramValue histogram_value,
       navigation_handle->GetRenderFrameHost();
   ui::PageTransition transition_type = navigation_handle->GetPageTransition();
 
-  std::unique_ptr<base::ListValue> args(new base::ListValue());
-  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
-  dict->SetInteger(web_navigation_api_constants::kTabIdKey,
-                   ExtensionTabUtil::GetTabId(web_contents));
-  dict->SetString(web_navigation_api_constants::kUrlKey, url.spec());
-  dict->SetInteger(web_navigation_api_constants::kProcessIdKey,
-                   frame_host->GetProcess()->GetID());
-  dict->SetInteger(web_navigation_api_constants::kFrameIdKey,
-                   ExtensionApiFrameIdMap::GetFrameId(frame_host));
-  dict->SetInteger(web_navigation_api_constants::kParentFrameIdKey,
-                   ExtensionApiFrameIdMap::GetParentFrameId(frame_host));
+  auto args = base::MakeRefCounted<EventArgs>();
+  base::DictValue dict;
+  dict.Set(web_navigation_api_constants::kTabIdKey,
+           ExtensionTabUtil::GetTabId(web_contents));
+  dict.Set(web_navigation_api_constants::kUrlKey, url.spec());
+  dict.Set(web_navigation_api_constants::kProcessIdKey,
+           frame_host->GetProcess()->GetDeprecatedID());
+  dict.Set(web_navigation_api_constants::kFrameIdKey,
+           ExtensionApiFrameIdMap::GetFrameId(frame_host));
+  dict.Set(web_navigation_api_constants::kParentFrameIdKey,
+           ExtensionApiFrameIdMap::GetParentFrameId(frame_host));
+  dict.Set(web_navigation_api_constants::kDocumentIdKey,
+           ExtensionApiFrameIdMap::GetDocumentId(frame_host).ToString());
+  // Only set the parentDocumentId value if we have a parent.
+  if (content::RenderFrameHost* parent_frame_host =
+          frame_host->GetParentOrOuterDocument()) {
+    dict.Set(
+        web_navigation_api_constants::kParentDocumentIdKey,
+        ExtensionApiFrameIdMap::GetDocumentId(parent_frame_host).ToString());
+  }
+  dict.Set(web_navigation_api_constants::kFrameTypeKey,
+           ToString(ExtensionApiFrameIdMap::GetFrameType(frame_host)));
+  dict.Set(web_navigation_api_constants::kDocumentLifecycleKey,
+           ToString(ExtensionApiFrameIdMap::GetDocumentLifecycle(frame_host)));
 
   if (navigation_handle->WasServerRedirect()) {
     transition_type = ui::PageTransitionFromInt(
@@ -124,28 +146,31 @@ void DispatchOnCommitted(events::HistogramValue histogram_value,
   if (ui::PageTransitionCoreTypeIs(transition_type,
                                    ui::PAGE_TRANSITION_AUTO_TOPLEVEL))
     transition_type_string = "start_page";
-  dict->SetString(web_navigation_api_constants::kTransitionTypeKey,
-                  transition_type_string);
-  base::Value qualifiers(base::Value::Type::LIST);
-  if (transition_type & ui::PAGE_TRANSITION_CLIENT_REDIRECT)
+  dict.Set(web_navigation_api_constants::kTransitionTypeKey,
+           transition_type_string);
+  base::ListValue qualifiers;
+  if (transition_type & ui::PAGE_TRANSITION_CLIENT_REDIRECT) {
     qualifiers.Append("client_redirect");
-  if (transition_type & ui::PAGE_TRANSITION_SERVER_REDIRECT)
+  }
+  if (transition_type & ui::PAGE_TRANSITION_SERVER_REDIRECT) {
     qualifiers.Append("server_redirect");
-  if (transition_type & ui::PAGE_TRANSITION_FORWARD_BACK)
+  }
+  if (transition_type & ui::PAGE_TRANSITION_FORWARD_BACK) {
     qualifiers.Append("forward_back");
-  if (transition_type & ui::PAGE_TRANSITION_FROM_ADDRESS_BAR)
+  }
+  if (transition_type & ui::PAGE_TRANSITION_FROM_ADDRESS_BAR) {
     qualifiers.Append("from_address_bar");
-  dict->SetKey(web_navigation_api_constants::kTransitionQualifiersKey,
-               std::move(qualifiers));
-  dict->SetDouble(web_navigation_api_constants::kTimeStampKey,
-                  MilliSecondsFromTime(base::Time::Now()));
-  args->Append(std::move(dict));
+  }
+  dict.Set(web_navigation_api_constants::kTransitionQualifiersKey,
+           std::move(qualifiers));
+  dict.Set(web_navigation_api_constants::kTimeStampKey,
+           base::Time::Now().InMillisecondsFSinceUnixEpoch());
+  args->data.Append(std::move(dict));
 
   content::BrowserContext* browser_context =
       navigation_handle->GetWebContents()->GetBrowserContext();
-  auto event =
-      std::make_unique<Event>(histogram_value, event_name,
-                              std::move(*args).TakeList(), browser_context);
+  auto event = std::make_unique<Event>(histogram_value, event_name,
+                                       std::move(args), browser_context);
   DispatchEvent(browser_context, std::move(event), url);
 }
 
@@ -156,17 +181,30 @@ void DispatchOnDOMContentLoaded(content::WebContents* web_contents,
   web_navigation::OnDOMContentLoaded::Details details;
   details.tab_id = ExtensionTabUtil::GetTabId(web_contents);
   details.url = url.spec();
-  details.process_id = frame_host->GetProcess()->GetID();
+  details.process_id = frame_host->GetProcess()->GetDeprecatedID();
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(frame_host);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(frame_host);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  details.document_id =
+      ExtensionApiFrameIdMap::GetDocumentId(frame_host).ToString();
+  // Only set the parentDocumentId value if we have a parent.
+  if (content::RenderFrameHost* parent_frame_host =
+          frame_host->GetParentOrOuterDocument()) {
+    details.parent_document_id =
+        ExtensionApiFrameIdMap::GetDocumentId(parent_frame_host).ToString();
+  }
+  details.frame_type = ExtensionApiFrameIdMap::GetFrameType(frame_host);
+  details.document_lifecycle =
+      ExtensionApiFrameIdMap::GetDocumentLifecycle(frame_host);
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  auto event = std::make_unique<Event>(
-      events::WEB_NAVIGATION_ON_DOM_CONTENT_LOADED,
-      web_navigation::OnDOMContentLoaded::kEventName,
-      web_navigation::OnDOMContentLoaded::Create(details), browser_context);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnDOMContentLoaded::Create(details));
+  auto event =
+      std::make_unique<Event>(events::WEB_NAVIGATION_ON_DOM_CONTENT_LOADED,
+                              web_navigation::OnDOMContentLoaded::kEventName,
+                              std::move(event_args), browser_context);
   DispatchEvent(browser_context, std::move(event), url);
 }
 
@@ -177,17 +215,29 @@ void DispatchOnCompleted(content::WebContents* web_contents,
   web_navigation::OnCompleted::Details details;
   details.tab_id = ExtensionTabUtil::GetTabId(web_contents);
   details.url = url.spec();
-  details.process_id = frame_host->GetProcess()->GetID();
+  details.process_id = frame_host->GetProcess()->GetDeprecatedID();
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(frame_host);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(frame_host);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  details.document_id =
+      ExtensionApiFrameIdMap::GetDocumentId(frame_host).ToString();
+  // Only set the parentDocumentId value if we have a parent.
+  if (content::RenderFrameHost* parent_frame_host =
+          frame_host->GetParentOrOuterDocument()) {
+    details.parent_document_id =
+        ExtensionApiFrameIdMap::GetDocumentId(parent_frame_host).ToString();
+  }
+  details.frame_type = ExtensionApiFrameIdMap::GetFrameType(frame_host);
+  details.document_lifecycle =
+      ExtensionApiFrameIdMap::GetDocumentLifecycle(frame_host);
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  auto event = std::make_unique<Event>(
-      events::WEB_NAVIGATION_ON_COMPLETED,
-      web_navigation::OnCompleted::kEventName,
-      web_navigation::OnCompleted::Create(details), browser_context);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnCompleted::Create(details));
+  auto event = std::make_unique<Event>(events::WEB_NAVIGATION_ON_COMPLETED,
+                                       web_navigation::OnCompleted::kEventName,
+                                       std::move(event_args), browser_context);
   DispatchEvent(browser_context, std::move(event), url);
 }
 
@@ -201,6 +251,8 @@ void DispatchOnCreatedNavigationTarget(
     const GURL& target_url) {
   // Check that the tab is already inserted into a tab strip model. This code
   // path is exercised by ExtensionApiTest.WebNavigationRequestOpenTab.
+  // TODO(crbug.com/575114966): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(ExtensionTabUtil::GetTabById(
       ExtensionTabUtil::GetTabId(target_web_contents),
       Profile::FromBrowserContext(target_web_contents->GetBrowserContext()),
@@ -212,13 +264,14 @@ void DispatchOnCreatedNavigationTarget(
   details.source_frame_id = source_extension_frame_id;
   details.url = target_url.possibly_invalid_spec();
   details.tab_id = ExtensionTabUtil::GetTabId(target_web_contents);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnCreatedNavigationTarget::Create(details));
   auto event = std::make_unique<Event>(
       events::WEB_NAVIGATION_ON_CREATED_NAVIGATION_TARGET,
       web_navigation::OnCreatedNavigationTarget::kEventName,
-      web_navigation::OnCreatedNavigationTarget::Create(details),
-      browser_context);
+      std::move(event_args), browser_context);
   DispatchEvent(browser_context, std::move(event), target_url);
 
   // If the target WebContents already received the onBeforeNavigate event,
@@ -236,19 +289,31 @@ void DispatchOnErrorOccurred(content::WebContents* web_contents,
   web_navigation::OnErrorOccurred::Details details;
   details.tab_id = ExtensionTabUtil::GetTabId(web_contents);
   details.url = url.spec();
-  details.process_id = frame_host->GetProcess()->GetID();
+  details.process_id = frame_host->GetProcess()->GetDeprecatedID();
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(frame_host);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(frame_host);
   details.error = net::ErrorToString(error_code);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  details.document_id =
+      ExtensionApiFrameIdMap::GetDocumentId(frame_host).ToString();
+  // Only set the parentDocumentId value if we have a parent.
+  if (content::RenderFrameHost* parent_frame_host =
+          frame_host->GetParentOrOuterDocument()) {
+    details.parent_document_id =
+        ExtensionApiFrameIdMap::GetDocumentId(parent_frame_host).ToString();
+  }
+  details.frame_type = ExtensionApiFrameIdMap::GetFrameType(frame_host);
+  details.document_lifecycle =
+      ExtensionApiFrameIdMap::GetDocumentLifecycle(frame_host);
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  auto event =
-      std::make_unique<Event>(events::WEB_NAVIGATION_ON_ERROR_OCCURRED,
-                              web_navigation::OnErrorOccurred::kEventName,
-                              web_navigation::OnErrorOccurred::Create(details),
-                              web_contents->GetBrowserContext());
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnErrorOccurred::Create(details));
+  auto event = std::make_unique<Event>(
+      events::WEB_NAVIGATION_ON_ERROR_OCCURRED,
+      web_navigation::OnErrorOccurred::kEventName, std::move(event_args),
+      web_contents->GetBrowserContext());
   DispatchEvent(browser_context, std::move(event), url);
 }
 
@@ -264,14 +329,27 @@ void DispatchOnErrorOccurred(content::NavigationHandle* navigation_handle) {
   details.error = (navigation_handle->GetNetErrorCode() != net::OK)
                       ? net::ErrorToString(navigation_handle->GetNetErrorCode())
                       : net::ErrorToString(net::ERR_ABORTED);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  details.document_id =
+      ExtensionApiFrameIdMap::GetDocumentId(navigation_handle).ToString();
+  // Only set the parentDocumentId value if we have a parent.
+  if (content::RenderFrameHost* parent_frame_host =
+          navigation_handle->GetParentFrameOrOuterDocument()) {
+    details.parent_document_id =
+        ExtensionApiFrameIdMap::GetDocumentId(parent_frame_host).ToString();
+  }
+  details.frame_type = ExtensionApiFrameIdMap::GetFrameType(navigation_handle);
+  details.document_lifecycle =
+      ExtensionApiFrameIdMap::GetDocumentLifecycle(navigation_handle);
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
   content::BrowserContext* browser_context =
       navigation_handle->GetWebContents()->GetBrowserContext();
-  auto event = std::make_unique<Event>(
-      events::WEB_NAVIGATION_ON_ERROR_OCCURRED,
-      web_navigation::OnErrorOccurred::kEventName,
-      web_navigation::OnErrorOccurred::Create(details), browser_context);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnErrorOccurred::Create(details));
+  auto event =
+      std::make_unique<Event>(events::WEB_NAVIGATION_ON_ERROR_OCCURRED,
+                              web_navigation::OnErrorOccurred::kEventName,
+                              std::move(event_args), browser_context);
   DispatchEvent(browser_context, std::move(event), navigation_handle->GetURL());
 }
 
@@ -283,12 +361,14 @@ void DispatchOnTabReplaced(
   web_navigation::OnTabReplaced::Details details;
   details.replaced_tab_id = ExtensionTabUtil::GetTabId(old_web_contents);
   details.tab_id = ExtensionTabUtil::GetTabId(new_web_contents);
-  details.time_stamp = MilliSecondsFromTime(base::Time::Now());
+  details.time_stamp = base::Time::Now().InMillisecondsFSinceUnixEpoch();
 
-  auto event = std::make_unique<Event>(
-      events::WEB_NAVIGATION_ON_TAB_REPLACED,
-      web_navigation::OnTabReplaced::kEventName,
-      web_navigation::OnTabReplaced::Create(details), browser_context);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      web_navigation::OnTabReplaced::Create(details));
+  auto event =
+      std::make_unique<Event>(events::WEB_NAVIGATION_ON_TAB_REPLACED,
+                              web_navigation::OnTabReplaced::kEventName,
+                              std::move(event_args), browser_context);
   DispatchEvent(browser_context, std::move(event), GURL());
 }
 

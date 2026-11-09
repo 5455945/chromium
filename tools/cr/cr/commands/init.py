@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,13 +12,13 @@ import cr
 
 # The set of variables to store in the per output configuration.
 OUT_CONFIG_VARS = [
-    'CR_VERSION',
-    cr.Platform.SELECTOR,
-    cr.BuildType.SELECTOR,
-    cr.Arch.SELECTOR,
-    cr.PrepareOut.SELECTOR,
-    'CR_OUT_BASE',
-    'CR_OUT_FULL',
+  'CR_VERSION',
+  cr.Platform.SELECTOR,
+  cr.BuildType.SELECTOR,
+  cr.Arch.SELECTOR,
+  cr.PrepareOut.SELECTOR,
+  'CR_OUT_BASE',
+  'CR_OUT_FULL',
 ]
 
 
@@ -34,12 +34,12 @@ class InitCommand(cr.Command):
     super(InitCommand, self).__init__()
     self.requires_build_dir = False
     self.help = 'Create and configure an output directory'
-    self.description = ("""
+    self.description = """
         If the .cr directory is not present, build it and add
         the specified configuration.
         If the file already exists, update the configuration with any
         additional settings.
-        """)
+        """
     self._settings = []
 
   def AddArguments(self, subparsers):
@@ -51,9 +51,12 @@ class InitCommand(cr.Command):
     cr.SelectCommand.AddPrepareArguments(parser)
     cr.PrepareOut.AddArguments(parser)
     parser.add_argument(
-        '-s', '--set', dest='_settings', metavar='settings',
-        action='append',
-        help='Configuration overrides.'
+      '-s',
+      '--set',
+      dest='_settings',
+      metavar='settings',
+      action='append',
+      help='Configuration overrides.',
     )
     return parser
 
@@ -70,16 +73,6 @@ class InitCommand(cr.Command):
       base, buildtype = os.path.split(out)
       if not (base and buildtype):
         print('Specified output directory must be two levels')
-        exit(1)
-      if not cr.BuildType.FindPlugin(buildtype):
-        print('Specified build type', buildtype, 'is not valid')
-        print('Must be one of',
-              ','.join(p.name for p in cr.BuildType.Plugins()))
-        exit(1)
-      if (cr.context.args.CR_BUILDTYPE and
-          cr.context.args.CR_BUILDTYPE != buildtype):
-        print('If --type and --out are both specified, they must match')
-        print('Got', cr.context.args.CR_BUILDTYPE, 'and', buildtype)
         exit(1)
       platform = cr.context.args.CR_PLATFORM
       if not platform:
@@ -100,17 +93,17 @@ class InitCommand(cr.Command):
       if not generator:
         generator = 'gn'
       cr.context.derived.Set(
-          CR_OUT_FULL=out,
-          CR_OUT_BASE=base,
-          CR_PLATFORM=platform,
-          CR_BUILDTYPE=buildtype,
-          CR_GENERATOR=generator
+        CR_OUT_FULL=out,
+        CR_OUT_BASE=base,
+        CR_PLATFORM=platform,
+        CR_GENERATOR=generator,
       )
-    if not 'CR_OUT_BASE' in cr.context:
+    if 'CR_OUT_BASE' not in cr.context:
       cr.context.derived['CR_OUT_BASE'] = 'out_{CR_PLATFORM}'
-    if not 'CR_OUT_FULL' in cr.context:
+    if 'CR_OUT_FULL' not in cr.context:
       cr.context.derived['CR_OUT_FULL'] = os.path.join(
-          '{CR_OUT_BASE}', '{CR_BUILDTYPE}')
+        '{CR_OUT_BASE}', '{CR_BUILDTYPE}'
+      )
 
   def Run(self):
     """Overridden from cr.Command."""
@@ -168,7 +161,8 @@ class InitCommand(cr.Command):
 
     # Write out the new configuration, and select it as the default
     cr.base.client.WriteConfig(
-        use_build_dir=True, data=build_package.config.OVERRIDES.exported)
+      use_build_dir=True, data=build_package.config.OVERRIDES.exported
+    )
     # Prepare the platform in here, using the updated config
     cr.Platform.Prepare()
     cr.SelectCommand.Select()

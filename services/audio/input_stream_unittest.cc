@@ -1,20 +1,23 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/audio/input_stream.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/memory/read_only_shared_memory_region.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/run_until.h"
 #include "base/test/task_environment.h"
 #include "media/audio/audio_io.h"
 #include "media/audio/mock_audio_manager.h"
 #include "media/audio/test_audio_thread.h"
+#include "media/mojo/mojom/audio_processing.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -25,28 +28,36 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+#include "media/webrtc/ml_model_handle.h"  // nogncheck
+#include "services/audio/test/mock_ml_model_manager.h"
+#endif
+
+using testing::_;
 using testing::NiceMock;
 using testing::NotNull;
 using testing::Return;
 using testing::StrictMock;
-using testing::_;
 
 namespace audio {
 
 namespace {
 
-const uint32_t kDefaultSharedMemoryCount = 10;
-const bool kDoEnableAGC = true;
-const bool kDoNotEnableAGC = false;
-const bool kValidStream = true;
-const bool kInvalidStream = false;
-const bool kMuted = true;
-const bool kNotMuted = false;
-const char* kDefaultDeviceId = "default";
+constexpr uint32_t kDefaultSharedMemoryCount = 10;
+constexpr bool kDoEnableAGC = true;
+constexpr bool kDoNotEnableAGC = false;
+constexpr bool kValidStream = true;
+constexpr bool kInvalidStream = false;
+constexpr bool kMuted = true;
+constexpr bool kNotMuted = false;
+constexpr char kDefaultDeviceId[] = "default";
 
 class MockStreamClient : public media::mojom::AudioInputStreamClient {
  public:
   MockStreamClient() = default;
+
+  MockStreamClient(const MockStreamClient&) = delete;
+  MockStreamClient& operator=(const MockStreamClient&) = delete;
 
   mojo::PendingRemote<media::mojom::AudioInputStreamClient> MakeRemote() {
     DCHECK(!receiver_.is_bound());
@@ -65,13 +76,14 @@ class MockStreamClient : public media::mojom::AudioInputStreamClient {
 
  private:
   mojo::Receiver<media::mojom::AudioInputStreamClient> receiver_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MockStreamClient);
 };
 
 class MockStreamObserver : public media::mojom::AudioInputStreamObserver {
  public:
   MockStreamObserver() = default;
+
+  MockStreamObserver(const MockStreamObserver&) = delete;
+  MockStreamObserver& operator=(const MockStreamObserver&) = delete;
 
   mojo::PendingRemote<media::mojom::AudioInputStreamObserver> MakeRemote() {
     DCHECK(!receiver_.is_bound());
@@ -90,13 +102,14 @@ class MockStreamObserver : public media::mojom::AudioInputStreamObserver {
 
  private:
   mojo::Receiver<media::mojom::AudioInputStreamObserver> receiver_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MockStreamObserver);
 };
 
 class MockStream : public media::AudioInputStream {
  public:
   MockStream() {}
+
+  MockStream(const MockStream&) = delete;
+  MockStream& operator=(const MockStream&) = delete;
 
   double GetMaxVolume() override { return 1; }
 
@@ -110,9 +123,6 @@ class MockStream : public media::AudioInputStream {
   MOCK_METHOD0(GetAutomaticGainControl, bool());
   MOCK_METHOD0(IsMuted, bool());
   MOCK_METHOD1(SetOutputDeviceForAec, void(const std::string&));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockStream);
 };
 
 }  // namespace
@@ -121,10 +131,29 @@ class AudioServiceInputStreamTest : public testing::Test {
  public:
   AudioServiceInputStreamTest()
       : audio_manager_(std::make_unique<media::TestAudioThread>(false)),
-        stream_factory_(&audio_manager_),
+        stream_factory_(&audio_manager_,
+                        /*aecdump_recording_manager=*/nullptr,
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+                        &mock_ml_model_manager_),
+#else
+                        /*ml_model_manager=*/nullptr),
+#endif
         stream_factory_receiver_(
             &stream_factory_,
-            remote_stream_factory_.BindNewPipeAndPassReceiver()) {}
+            remote_stream_factory_.BindNewPipeAndPassReceiver()) {
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+    ON_CALL(mock_ml_model_manager_,
+            GetModel(mojom::MlModelType::kResidualEchoEstimation))
+        .WillByDefault([this]() {
+          residual_echo_model_requested_ = true;
+          return nullptr;
+        });
+#endif
+  }
+
+  AudioServiceInputStreamTest(const AudioServiceInputStreamTest&) = delete;
+  AudioServiceInputStreamTest& operator=(const AudioServiceInputStreamTest&) =
+      delete;
 
   ~AudioServiceInputStreamTest() override { audio_manager_.Shutdown(); }
 
@@ -145,8 +174,8 @@ class AudioServiceInputStreamTest : public testing::Test {
         remote_stream.InitWithNewPipeAndPassReceiver(), client_.MakeRemote(),
         observer_.MakeRemote(), log_.MakeRemote(), kDefaultDeviceId,
         media::AudioParameters::UnavailableDeviceParams(),
-        kDefaultSharedMemoryCount, enable_agc,
-        base::ReadOnlySharedMemoryRegion(),
+        base::UnguessableToken::Create(), kDefaultSharedMemoryCount, enable_agc,
+        std::move(processing_config_),
         base::BindOnce(&AudioServiceInputStreamTest::OnCreated,
                        base::Unretained(this)));
     return remote_stream;
@@ -159,7 +188,8 @@ class AudioServiceInputStreamTest : public testing::Test {
         remote_stream.InitWithNewPipeAndPassReceiver(), client_.MakeRemote(),
         observer_.MakeRemote(), mojo::NullRemote(), kDefaultDeviceId,
         media::AudioParameters::UnavailableDeviceParams(),
-        kDefaultSharedMemoryCount, false, base::ReadOnlySharedMemoryRegion(),
+        base::UnguessableToken::Create(), kDefaultSharedMemoryCount, false,
+        std::move(processing_config_),
         base::BindOnce(&AudioServiceInputStreamTest::OnCreated,
                        base::Unretained(this)));
     return remote_stream;
@@ -172,7 +202,8 @@ class AudioServiceInputStreamTest : public testing::Test {
         remote_stream.InitWithNewPipeAndPassReceiver(), client_.MakeRemote(),
         mojo::NullRemote(), log_.MakeRemote(), kDefaultDeviceId,
         media::AudioParameters::UnavailableDeviceParams(),
-        kDefaultSharedMemoryCount, false, base::ReadOnlySharedMemoryRegion(),
+        base::UnguessableToken::Create(), kDefaultSharedMemoryCount, false,
+        std::move(processing_config_),
         base::BindOnce(&AudioServiceInputStreamTest::OnCreated,
                        base::Unretained(this)));
     return remote_stream;
@@ -186,9 +217,9 @@ class AudioServiceInputStreamTest : public testing::Test {
 
   MockLog& log() { return log_; }
 
-  void OnCreated(media::mojom::ReadOnlyAudioDataPipePtr ptr,
+  void OnCreated(media::mojom::ReadWriteAudioDataPipePtr ptr,
                  bool initially_muted,
-                 const absl::optional<base::UnguessableToken>& stream_id) {
+                 const std::optional<base::UnguessableToken>& stream_id) {
     EXPECT_EQ(stream_id.has_value(), !!ptr);
     CreatedCallback(!!ptr, initially_muted);
   }
@@ -196,17 +227,20 @@ class AudioServiceInputStreamTest : public testing::Test {
   MOCK_METHOD2(CreatedCallback, void(bool /*valid*/, bool /*initially_muted*/));
   MOCK_METHOD1(BadMessageCallback, void(const std::string&));
 
- private:
+ protected:
   base::test::TaskEnvironment scoped_task_env_;
   media::MockAudioManager audio_manager_;
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  std::atomic<bool> residual_echo_model_requested_{false};
+  NiceMock<MockMlModelManager> mock_ml_model_manager_;
+#endif
+  media::mojom::AudioProcessingConfigPtr processing_config_ = nullptr;
   StreamFactory stream_factory_;
   mojo::Remote<media::mojom::AudioStreamFactory> remote_stream_factory_;
   mojo::Receiver<media::mojom::AudioStreamFactory> stream_factory_receiver_;
   StrictMock<MockStreamClient> client_;
   StrictMock<MockStreamObserver> observer_;
   NiceMock<MockLog> log_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioServiceInputStreamTest);
 };
 
 TEST_F(AudioServiceInputStreamTest, ConstructDestruct) {
@@ -527,5 +561,56 @@ TEST_F(AudioServiceInputStreamTest,
   EXPECT_CALL(observer(), BindingConnectionError());
   base::RunLoop().RunUntilIdle();
 }
+
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+TEST_F(AudioServiceInputStreamTest, ResidualEchoEstimationModelRequested) {
+  media::AudioProcessingSettings settings;
+  settings.echo_cancellation = true;  // Enable some processing
+  auto processing_config = media::mojom::AudioProcessingConfig::New();
+  processing_config->settings = settings;
+  mojo::Remote<media::mojom::AudioProcessorControls> controls_remote;
+  processing_config->controls_receiver =
+      controls_remote.BindNewPipeAndPassReceiver();
+
+  // We don't strictly need to check the CreatedCallback for this test's purpose
+  // but it avoids the print of a warning.
+  EXPECT_CALL(*this, CreatedCallback(kValidStream, kNotMuted));
+
+  // Setup MockAudioManager expectations
+  NiceMock<MockStream> mock_stream;
+  media::AudioParameters expected_params(
+      media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
+      media::ChannelLayoutConfig::Stereo(), 48000, 480);
+
+  audio_manager().SetInputStreamParameters(expected_params);
+
+  audio_manager().SetMakeInputStreamCB(base::BindRepeating(
+      [](media::AudioInputStream* stream, const media::AudioParameters& params,
+         const std::string& device_id) { return stream; },
+      &mock_stream));
+
+  EXPECT_CALL(mock_stream, Open())
+      .WillOnce(Return(MockStream::OpenOutcome::kSuccess));
+  EXPECT_CALL(mock_stream, IsMuted()).WillOnce(Return(kNotMuted));
+  EXPECT_CALL(log(), OnCreated(_, _));
+
+  // Call CreateInputStream directly
+  mojo::PendingRemote<media::mojom::AudioInputStream> remote_stream;
+  remote_stream_factory_->CreateInputStream(
+      remote_stream.InitWithNewPipeAndPassReceiver(), client_.MakeRemote(),
+      observer_.MakeRemote(), log_.MakeRemote(), kDefaultDeviceId,
+      expected_params, base::UnguessableToken::Create(),
+      kDefaultSharedMemoryCount, /*enable_agc=*/false,
+      std::move(processing_config),
+      base::BindOnce(&AudioServiceInputStreamTest::OnCreated,
+                     base::Unretained(this)));
+
+  EXPECT_CALL(client(), BindingConnectionError());
+  EXPECT_CALL(observer(), BindingConnectionError());
+  remote_stream.reset();
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return residual_echo_model_requested_.load(); }));
+}
+#endif
 
 }  // namespace audio

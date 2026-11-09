@@ -1,36 +1,46 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <iostream>
 #include <memory>
-#include <unordered_map>
+#include <string_view>
+#include <vector>
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/format_macros.h"
-#include "base/hash/md5.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/pickle.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
+#include "crypto/obsolete/md5.h"
 #include "net/base/io_buffer.h"
 #include "net/base/test_completion_callback.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/disk_cache_test_util.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_response_headers.h"
+#include "net/http/http_response_info.h"
 #include "net/http/http_util.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 using disk_cache::Backend;
+using disk_cache::BackendResult;
 using disk_cache::Entry;
 using disk_cache::EntryResult;
+
+namespace cachetool {
+crypto::obsolete::Md5 MakeMd5HasherForCachetools() {
+  return {};
+}
+}  // namespace cachetool
 
 namespace {
 
@@ -43,10 +53,9 @@ struct EntryData {
 constexpr int kResponseInfoIndex = 0;
 constexpr int kResponseContentIndex = 1;
 
-const char* const kCommandNames[] = {
-    "stop",          "get_size",   "list_keys",          "get_stream",
-    "delete_stream", "delete_key", "update_raw_headers", "list_dups",
-    "set_header"};
+constexpr auto kCommandNames = std::to_array(
+    {"stop", "get_size", "list_keys", "get_stream", "delete_stream",
+     "delete_key", "update_raw_headers", "list_dups", "set_header"});
 
 // Prints the command line help.
 void PrintHelp() {
@@ -85,7 +94,7 @@ void PrintHelp() {
 class CommandMarshal {
  public:
   explicit CommandMarshal(Backend* cache_backend)
-      : command_failed_(false), cache_backend_(cache_backend) {}
+      : cache_backend_(cache_backend) {}
   virtual ~CommandMarshal() = default;
 
   // Reads the next command's name to execute.
@@ -137,7 +146,7 @@ class CommandMarshal {
   Backend* cache_backend() { return cache_backend_; }
 
  protected:
-  bool command_failed_;
+  bool command_failed_ = false;
   Backend* const cache_backend_;
 };
 
@@ -146,7 +155,7 @@ class ProgramArgumentCommandMarshal final : public CommandMarshal {
  public:
   ProgramArgumentCommandMarshal(Backend* cache_backend,
                                 base::CommandLine::StringVector args)
-      : CommandMarshal(cache_backend), command_line_args_(args), args_id_(0) {}
+      : CommandMarshal(cache_backend), command_line_args_(args) {}
 
   // Implements CommandMarshal.
   std::string ReadCommandName() override {
@@ -208,7 +217,8 @@ class ProgramArgumentCommandMarshal final : public CommandMarshal {
   // Implements CommandMarshal.
   void ReturnBuffer(net::GrowableIOBuffer* buffer) override {
     DCHECK(!has_failed());
-    std::cout.write(buffer->StartOfBuffer(), buffer->offset());
+    auto span = base::as_chars(buffer->span_before_offset());
+    std::cout.write(span.data(), span.size());
   }
 
   // Implements CommandMarshal.
@@ -220,7 +230,7 @@ class ProgramArgumentCommandMarshal final : public CommandMarshal {
 
  private:
   const base::CommandLine::StringVector command_line_args_;
-  size_t args_id_;
+  size_t args_id_ = 0;
 };
 
 // Online command input/output that receives pickled commands from stdin and
@@ -237,7 +247,8 @@ class StreamCommandMarshal final : public CommandMarshal {
       return "";
     std::cout.flush();
     size_t command_id = static_cast<size_t>(std::cin.get());
-    if (command_id >= base::size(kCommandNames)) {
+
+    if (command_id >= kCommandNames.size()) {
       ReturnFailure("Unknown command.");
       return "";
     }
@@ -293,7 +304,8 @@ class StreamCommandMarshal final : public CommandMarshal {
   // Implements CommandMarshal.
   void ReturnBuffer(net::GrowableIOBuffer* buffer) override {
     ReturnInt(buffer->offset());
-    std::cout.write(buffer->StartOfBuffer(), buffer->offset());
+    auto span = base::as_chars(buffer->span_before_offset());
+    std::cout.write(span.data(), span.size());
   }
 
   // Implements CommandMarshal.
@@ -357,8 +369,8 @@ bool GetResponseInfoForEntry(disk_cache::Entry* entry,
 
     if (rv == 0) {
       bool truncated_response_info = false;
-      if (!net::HttpCache::ParseResponseInfo(
-              buffer->data(), size, response_info, &truncated_response_info)) {
+      if (!net::HttpCache::ParseResponseInfo(buffer->span(), response_info,
+                                             &truncated_response_info)) {
         return false;
       }
       return !truncated_response_info;
@@ -368,7 +380,6 @@ bool GetResponseInfoForEntry(disk_cache::Entry* entry,
   }
 
   NOTREACHED();
-  return false;
 }
 
 std::string GetMD5ForResponseBody(disk_cache::Entry* entry) {
@@ -380,8 +391,7 @@ std::string GetMD5ForResponseBody(disk_cache::Entry* entry) {
       base::MakeRefCounted<net::IOBufferWithSize>(kInitBufferSize);
   net::TestCompletionCallback cb;
 
-  base::MD5Context ctx;
-  base::MD5Init(&ctx);
+  crypto::obsolete::Md5 hasher = cachetool::MakeMd5HasherForCachetools();
 
   int bytes_read = 0;
   while (true) {
@@ -394,26 +404,22 @@ std::string GetMD5ForResponseBody(disk_cache::Entry* entry) {
     }
 
     if (rv == 0) {
-      base::MD5Digest digest;
-      base::MD5Final(&digest, &ctx);
-      return base::MD5DigestToBase16(digest);
+      return base::HexEncodeLower(hasher.Finish());
     }
 
     bytes_read += rv;
-    MD5Update(&ctx, base::StringPiece(buffer->data(), rv));
+    hasher.Update(buffer->span());
   }
 
   NOTREACHED();
-  return "";
 }
 
 void PersistResponseInfo(CommandMarshal* command_marshal,
                          const std::string& key,
                          const net::HttpResponseInfo& response_info) {
   scoped_refptr<net::PickledIOBuffer> data =
-      base::MakeRefCounted<net::PickledIOBuffer>();
-  response_info.Persist(data->pickle(), false, false);
-  data->Done();
+      base::MakeRefCounted<net::PickledIOBuffer>(response_info.MakePickle(
+          /*skip_transient_headers=*/false, /*response_truncated=*/false));
 
   TestEntryResultCompletionCallback cb_open;
   EntryResult result = command_marshal->cache_backend()->OpenEntry(
@@ -422,7 +428,7 @@ void PersistResponseInfo(CommandMarshal* command_marshal,
   CHECK_EQ(result.net_error(), net::OK);
   Entry* cache_entry = result.ReleaseEntry();
 
-  int data_len = data->pickle()->size();
+  int data_len = data->size();
   net::TestCompletionCallback cb;
   int rv = cache_entry->WriteData(kResponseInfoIndex, 0, data.get(), data_len,
                                   cb.callback(), true);
@@ -439,7 +445,7 @@ void ListDups(CommandMarshal* command_marshal) {
   disk_cache::EntryResult result = entry_iterator->OpenNextEntry(cb.callback());
   command_marshal->ReturnSuccess();
 
-  std::unordered_map<std::string, std::vector<EntryData>> md5_entries;
+  absl::flat_hash_map<std::string, std::vector<EntryData>> md5_entries;
 
   int total_entries = 0;
 
@@ -470,12 +476,7 @@ void ListDups(CommandMarshal* command_marshal) {
     if (response_info.headers)
       response_info.headers->GetMimeType(&entry_data.mime_type);
 
-    auto iter = md5_entries.find(hash);
-    if (iter == md5_entries.end())
-      md5_entries.insert(
-          std::make_pair(hash, std::vector<EntryData>{entry_data}));
-    else
-      iter->second.push_back(entry_data);
+    md5_entries[hash].push_back(entry_data);
 
     entry->Close();
     entry = nullptr;
@@ -566,8 +567,8 @@ void GetStreamForKey(CommandMarshal* command_marshal) {
   if (index == kResponseInfoIndex) {
     net::HttpResponseInfo response_info;
     bool truncated_response_info = false;
-    if (!net::HttpCache::ParseResponseInfo(buffer->StartOfBuffer(),
-                                           buffer->offset(), &response_info,
+    if (!net::HttpCache::ParseResponseInfo(buffer->span_before_offset(),
+                                           &response_info,
                                            &truncated_response_info)) {
       // This can happen when reading data stored by content::CacheStorage.
       std::cerr << "WARNING: Returning empty response info for key: " << key
@@ -599,12 +600,13 @@ void UpdateRawResponseHeaders(CommandMarshal* command_marshal) {
     return;
   net::HttpResponseInfo response_info;
   bool truncated_response_info = false;
-  net::HttpCache::ParseResponseInfo(buffer->StartOfBuffer(), buffer->offset(),
+  net::HttpCache::ParseResponseInfo(buffer->span_before_offset(),
                                     &response_info, &truncated_response_info);
   if (truncated_response_info)
     std::cerr << "WARNING: Truncated HTTP response." << std::endl;
 
-  response_info.headers = new net::HttpResponseHeaders(raw_headers);
+  response_info.headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>(raw_headers);
   PersistResponseInfo(command_marshal, key, response_info);
 }
 
@@ -625,8 +627,8 @@ void SetHeader(CommandMarshal* command_marshal) {
   // Read the entry into |response_info|.
   net::HttpResponseInfo response_info;
   bool truncated_response_info = false;
-  if (!net::HttpCache::ParseResponseInfo(buffer->StartOfBuffer(),
-                                         buffer->offset(), &response_info,
+  if (!net::HttpCache::ParseResponseInfo(buffer->span_before_offset(),
+                                         &response_info,
                                          &truncated_response_info)) {
     command_marshal->ReturnFailure("Couldn't read response info");
     return;
@@ -750,16 +752,17 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::unique_ptr<Backend> cache_backend;
-  net::TestCompletionCallback cb;
-  int rv = disk_cache::CreateCacheBackend(
-      net::DISK_CACHE, backend_type, cache_path, INT_MAX,
-      disk_cache::ResetHandling::kNeverReset, nullptr, &cache_backend,
-      cb.callback());
-  if (cb.GetResult(rv) != net::OK) {
+  TestBackendResultCompletionCallback cb;
+  BackendResult result = disk_cache::CreateCacheBackend(
+      net::DISK_CACHE, backend_type, /*file_operations=*/nullptr, cache_path,
+      INT_MAX, disk_cache::ResetHandling::kNeverReset, /*net_log=*/nullptr,
+      /*cache_encryption_delegate=*/nullptr, cb.callback());
+  result = cb.GetResult(std::move(result));
+  if (result.net_error != net::OK) {
     std::cerr << "Invalid cache." << std::endl;
     return 1;
   }
+  std::unique_ptr<Backend> cache_backend = std::move(result.backend);
 
   ProgramArgumentCommandMarshal program_argument_marshal(
       cache_backend.get(),

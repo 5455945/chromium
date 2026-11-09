@@ -1,40 +1,53 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/vr/openxr/openxr_api_wrapper.h"
 
-#include <dxgi1_2.h>
 #include <stdint.h>
+
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <type_traits>
 
-#include "base/callback_helpers.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
+#include "base/numerics/angle_conversions.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/trace_event.h"
+#include "base/trace_event/typed_macros.h"
 #include "components/viz/common/gpu/context_provider.h"
-#include "device/base/features.h"
+#include "device/vr/openxr/openxr_extension_helper.h"
+#include "device/vr/openxr/openxr_graphics_binding.h"
 #include "device/vr/openxr/openxr_input_helper.h"
+#include "device/vr/openxr/openxr_layers.h"
+#include "device/vr/openxr/openxr_stage_bounds_provider.h"
 #include "device/vr/openxr/openxr_util.h"
-#include "device/vr/test/test_hook.h"
+#include "device/vr/openxr/openxr_view_configuration.h"
+#include "device/vr/public/cpp/features.h"
+#include "device/vr/public/mojom/xr_session.mojom.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
-#include "gpu/ipc/common/gpu_memory_buffer_impl_dxgi.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/blink/public/common/features_generated.h"
+#include "third_party/openxr/src/include/openxr/openxr.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/gfx/geometry/point3_f.h"
 #include "ui/gfx/geometry/quaternion.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/transform.h"
-#include "ui/gfx/transform_util.h"
+#include "ui/gfx/geometry/transform.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <dxgi1_2.h>
+#endif
 
 namespace device {
 
 namespace {
-constexpr XrSystemId kInvalidSystem = -1;
-// Only supported view configuration:
-constexpr XrViewConfigurationType kSupportedViewConfiguration =
-    XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
 
 // We can get into a state where frames are not requested, such as when the
 // visibility state is hidden. Since OpenXR events are polled at the beginning
@@ -42,27 +55,84 @@ constexpr XrViewConfigurationType kSupportedViewConfiguration =
 // occasionally polled, a timer loop run every kTimeBetweenPollingEvents to poll
 // events if significant time has elapsed since the last time events were
 // polled.
-constexpr base::TimeDelta kTimeBetweenPollingEvents =
-    base::TimeDelta::FromSecondsD(1);
+constexpr base::TimeDelta kTimeBetweenPollingEvents = base::Seconds(1);
+
+const char* GetXrSessionStateName(XrSessionState state) {
+  switch (state) {
+    case XR_SESSION_STATE_UNKNOWN:
+      return "Unknown";
+    case XR_SESSION_STATE_IDLE:
+      return "Idle";
+    case XR_SESSION_STATE_READY:
+      return "Ready";
+    case XR_SESSION_STATE_SYNCHRONIZED:
+      return "Synchronized";
+    case XR_SESSION_STATE_VISIBLE:
+      return "Visible";
+    case XR_SESSION_STATE_FOCUSED:
+      return "Focused";
+    case XR_SESSION_STATE_STOPPING:
+      return "Stopping";
+    case XR_SESSION_STATE_LOSS_PENDING:
+      return "Loss_Pending";
+    case XR_SESSION_STATE_EXITING:
+      return "Exiting";
+    case XR_SESSION_STATE_MAX_ENUM:
+      return "Max_Enum";
+  }
+
+  NOTREACHED();
+}
+
+// The default height to use in meters, based off the average standing height
+// of an adult. Used as a fallback, in the event the floor cannot be located.
+constexpr float kDefaultHeightEstimate = -1.6;
 
 }  // namespace
 
 std::unique_ptr<OpenXrApiWrapper> OpenXrApiWrapper::Create(
-    XrInstance instance) {
+    XrInstance instance,
+    OpenXrGraphicsBinding* graphics_binding) {
   std::unique_ptr<OpenXrApiWrapper> openxr =
       std::make_unique<OpenXrApiWrapper>();
 
-  if (!openxr->Initialize(instance)) {
+  if (!openxr->Initialize(instance, graphics_binding)) {
     return nullptr;
   }
 
   return openxr;
 }
 
-OpenXrApiWrapper::SwapChainInfo::SwapChainInfo(ID3D11Texture2D* d3d11_texture)
-    : d3d11_texture(d3d11_texture) {}
-OpenXrApiWrapper::SwapChainInfo::~SwapChainInfo() = default;
-OpenXrApiWrapper::SwapChainInfo::SwapChainInfo(SwapChainInfo&&) = default;
+// static
+XrResult OpenXrApiWrapper::GetSystem(XrInstance instance, XrSystemId* system) {
+  XrSystemGetInfo system_info = {XR_TYPE_SYSTEM_GET_INFO};
+  system_info.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+  return xrGetSystem(instance, &system_info, system);
+}
+
+// static
+std::vector<XrEnvironmentBlendMode> OpenXrApiWrapper::GetSupportedBlendModes(
+    XrInstance instance,
+    XrSystemId system) {
+  // Query the list of supported environment blend modes for the current system.
+  uint32_t blend_mode_count;
+  const XrViewConfigurationType kSupportedViewConfiguration =
+      XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+  if (XR_FAILED(xrEnumerateEnvironmentBlendModes(instance, system,
+                                                 kSupportedViewConfiguration, 0,
+                                                 &blend_mode_count, nullptr))) {
+    return {};  // empty vector
+  }
+
+  std::vector<XrEnvironmentBlendMode> environment_blend_modes(blend_mode_count);
+  if (XR_FAILED(xrEnumerateEnvironmentBlendModes(
+          instance, system, kSupportedViewConfiguration, blend_mode_count,
+          &blend_mode_count, environment_blend_modes.data()))) {
+    return {};  // empty vector
+  }
+
+  return environment_blend_modes;
+}
 
 OpenXrApiWrapper::OpenXrApiWrapper() = default;
 
@@ -71,33 +141,50 @@ OpenXrApiWrapper::~OpenXrApiWrapper() {
 }
 
 void OpenXrApiWrapper::Reset() {
-  anchor_manager_.reset();
+  SetXrSessionState(XR_SESSION_STATE_UNKNOWN);
+  depth_sensor_.reset();
+  light_estimator_.reset();
+  scene_understanding_manager_.reset();
+  unbounded_space_provider_.reset();
+  visibility_mask_handler_.reset();
   unbounded_space_ = XR_NULL_HANDLE;
   local_space_ = XR_NULL_HANDLE;
   stage_space_ = XR_NULL_HANDLE;
   view_space_ = XR_NULL_HANDLE;
-  color_swapchain_ = XR_NULL_HANDLE;
   session_ = XR_NULL_HANDLE;
   blend_mode_ = XR_ENVIRONMENT_BLEND_MODE_MAX_ENUM;
   stage_bounds_ = {};
-  system_ = kInvalidSystem;
+  bounds_provider_.reset();
+  system_ = XR_NULL_SYSTEM_ID;
   instance_ = XR_NULL_HANDLE;
+  enabled_features_.clear();
+  graphics_binding_ = nullptr;
 
-  view_configs_.clear();
-  swapchain_size_ = gfx::Size(0, 0);
-  color_swapchain_images_.clear();
+  primary_view_config_ = OpenXrViewConfiguration();
+  secondary_view_configs_.clear();
+
   frame_state_ = {};
-  origin_from_eye_views_.clear();
-  head_from_eye_views_.clear();
-  layer_projection_views_.clear();
   input_helper_.reset();
+
+  session_options_.reset();
+  on_session_started_callback_.Reset();
+  on_session_resumed_callback_.Reset();
+  on_session_ended_callback_.Reset();
+  visibility_changed_callback_.Reset();
 }
 
-bool OpenXrApiWrapper::Initialize(XrInstance instance) {
+bool OpenXrApiWrapper::Initialize(XrInstance instance,
+                                  OpenXrGraphicsBinding* graphics_binding) {
   Reset();
 
+  if (!graphics_binding) {
+    return false;
+  }
+
+  graphics_binding_ = graphics_binding;
   session_running_ = false;
   pending_frame_ = false;
+  stop_pending_ = false;
 
   DCHECK(instance != XR_NULL_HANDLE);
   instance_ = instance;
@@ -105,24 +192,10 @@ bool OpenXrApiWrapper::Initialize(XrInstance instance) {
   DCHECK(HasInstance());
 
   if (XR_FAILED(InitializeSystem())) {
-    // When initialization fails, the caller should release this object, so we
-    // don't need to destroy the instance created above as it is destroyed in
-    // the destructor.
-    DCHECK(!IsInitialized());
     return false;
   }
 
   DCHECK(IsInitialized());
-
-  if (test_hook_) {
-    // Allow our mock implementation of OpenXr to be controlled by tests.
-    // The mock implementation of xrCreateInstance returns a pointer to the
-    // service test hook (g_test_helper) as the instance.
-    service_test_hook_ = reinterpret_cast<ServiceTestHook*>(instance_);
-    service_test_hook_->SetTestHook(test_hook_);
-
-    test_hook_->AttachCurrentThread();
-  }
 
   return true;
 }
@@ -131,22 +204,57 @@ bool OpenXrApiWrapper::IsInitialized() const {
   return HasInstance() && HasSystem();
 }
 
+XrResult OpenXrApiWrapper::ShutdownSession() {
+  if (!HasSession()) {
+    return XR_SUCCESS;
+  }
+
+  XrResult result = xrEndSession(session_);
+  Uninitialize();
+  return result;
+}
+
 void OpenXrApiWrapper::Uninitialize() {
   // The instance is owned by the OpenXRDevice, so don't destroy it here.
+
+  // Child handles are implicitly destroyed with their parent XrSession, and
+  // destroying them afterwards is undefined behavior (runtimes may return
+  // XR_ERROR_HANDLE_INVALID or fault). Tear down everything that owns a
+  // session-parented handle here, while the session is still valid, instead
+  // of letting these destructors run after xrDestroySession(). Reset() below
+  // re-clears them as a no-op.
+  input_helper_.reset();
+  depth_sensor_.reset();
+  light_estimator_.reset();
+  scene_understanding_manager_.reset();
+  mesh_manager_.reset();
 
   // Destroying an session in OpenXr also destroys all child objects of that
   // instance (including the swapchain, and spaces objects),
   // so they don't need to be manually destroyed.
   if (HasSession()) {
+    graphics_binding_->OnSessionDestroyed(
+        context_provider_ ? context_provider_->SharedImageInterface()
+                          : nullptr);
     xrDestroySession(session_);
   }
 
-  if (test_hook_)
-    test_hook_->DetachCurrentThread();
+  if (on_session_ended_callback_) {
+    on_session_ended_callback_.Run(ExitXrPresentReason::kOpenXrUninitialize);
+  }
+
+  // If we haven't reported that the session started yet, we need to report
+  // that it failed, so that the browser doesn't think there's still a pending
+  // session request, and can try again (though it may not recover).
+  if (on_session_started_callback_) {
+    std::move(on_session_started_callback_)
+        .Run(std::move(session_options_), XR_ERROR_INITIALIZATION_FAILED);
+  }
 
   Reset();
   session_running_ = false;
   pending_frame_ = false;
+  stop_pending_ = false;
 }
 
 bool OpenXrApiWrapper::HasInstance() const {
@@ -154,7 +262,7 @@ bool OpenXrApiWrapper::HasInstance() const {
 }
 
 bool OpenXrApiWrapper::HasSystem() const {
-  return system_ != kInvalidSystem && view_configs_.size() == kNumViews;
+  return system_ != XR_NULL_SYSTEM_ID && primary_view_config_.Initialized();
 }
 
 bool OpenXrApiWrapper::HasBlendMode() const {
@@ -165,12 +273,12 @@ bool OpenXrApiWrapper::HasSession() const {
   return session_ != XR_NULL_HANDLE;
 }
 
-bool OpenXrApiWrapper::HasColorSwapChain() const {
-  return color_swapchain_ != XR_NULL_HANDLE &&
-         color_swapchain_images_.size() > 0;
-}
-
 bool OpenXrApiWrapper::HasSpace(XrReferenceSpaceType type) const {
+  if (unbounded_space_provider_ &&
+      unbounded_space_provider_->GetType() == type) {
+    return unbounded_space_ != XR_NULL_HANDLE;
+  }
+
   switch (type) {
     case XR_REFERENCE_SPACE_TYPE_LOCAL:
       return local_space_ != XR_NULL_HANDLE;
@@ -178,11 +286,10 @@ bool OpenXrApiWrapper::HasSpace(XrReferenceSpaceType type) const {
       return view_space_ != XR_NULL_HANDLE;
     case XR_REFERENCE_SPACE_TYPE_STAGE:
       return stage_space_ != XR_NULL_HANDLE;
-    case XR_REFERENCE_SPACE_TYPE_UNBOUNDED_MSFT:
-      return unbounded_space_ != XR_NULL_HANDLE;
+    case XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT:
+      return local_floor_space_ != XR_NULL_HANDLE;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -190,40 +297,73 @@ bool OpenXrApiWrapper::HasFrameState() const {
   return frame_state_.type == XR_TYPE_FRAME_STATE;
 }
 
+bool OpenXrApiWrapper::IsFeatureEnabled(
+    device::mojom::XRSessionFeature feature) const {
+  return enabled_features_.contains(feature);
+}
+
+XrResult OpenXrApiWrapper::InitializeViewConfig(
+    XrViewConfigurationType type,
+    OpenXrViewConfiguration& view_config) {
+  std::vector<XrViewConfigurationView> view_properties;
+  RETURN_IF_XR_FAILED(GetPropertiesForViewConfig(type, view_properties));
+  view_config.Initialize(type, std::move(view_properties),
+                         graphics_binding_->GetMaxTextureSize());
+
+  return XR_SUCCESS;
+}
+
+XrResult OpenXrApiWrapper::GetPropertiesForViewConfig(
+    XrViewConfigurationType type,
+    std::vector<XrViewConfigurationView>& view_properties) const {
+  uint32_t view_count;
+  RETURN_IF_XR_FAILED(xrEnumerateViewConfigurationViews(
+      instance_, system_, type, 0, &view_count, nullptr));
+
+  view_properties.resize(view_count, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
+  RETURN_IF_XR_FAILED(
+      xrEnumerateViewConfigurationViews(instance_, system_, type, view_count,
+                                        &view_count, view_properties.data()));
+
+  return XR_SUCCESS;
+}
+
 XrResult OpenXrApiWrapper::InitializeSystem() {
   DCHECK(HasInstance());
   DCHECK(!HasSystem());
 
-  XrSystemId system;
-  RETURN_IF_XR_FAILED(GetSystem(instance_, &system));
+  RETURN_IF_XR_FAILED(GetSystem(instance_, &system_));
 
-  uint32_t view_count;
-  RETURN_IF_XR_FAILED(xrEnumerateViewConfigurationViews(
-      instance_, system, kSupportedViewConfiguration, 0, &view_count, nullptr));
-
-  // It would be an error for an OpenXr runtime to return anything other than 2
-  // views to an app that only requested
-  // XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO.
-  DCHECK(view_count == kNumViews);
-
-  std::vector<XrViewConfigurationView> view_configs(
-      view_count, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
-  RETURN_IF_XR_FAILED(xrEnumerateViewConfigurationViews(
-      instance_, system, kSupportedViewConfiguration, view_count, &view_count,
-      view_configs.data()));
-
-  // Only assign the member variables on success. If any of the above XR calls
-  // fail, the vector cleans up view_configs if necessary. system does not need
-  // to be cleaned up because it is not allocated.
-  system_ = system;
-  view_configs_ = std::move(view_configs);
-  uint32_t width = 0;
-  uint32_t height = 0;
-  for (auto& view_config : view_configs_) {
-    width += view_config.recommendedImageRectWidth;
-    height = std::max(height, view_config.recommendedImageRectHeight);
+  // The view configurations are clamped to the binding's max texture size,
+  // which a binding may only know once it is initialized.
+  if (!graphics_binding_->Initialize(instance_, system_)) {
+    return XR_ERROR_INITIALIZATION_FAILED;
   }
-  swapchain_size_ = gfx::Size(width, height);
+
+  RETURN_IF_XR_FAILED(
+      InitializeViewConfig(kPrimaryViewConfiguration, primary_view_config_));
+  DCHECK_EQ(primary_view_config_.Properties().size(), kNumPrimaryViews);
+  // The primary view configuration is the only one initially active
+  primary_view_config_.SetActive(true);
+
+  // Get the list of secondary view configurations that both we and the OpenXR
+  // runtime support.
+  uint32_t view_config_count;
+  RETURN_IF_XR_FAILED(xrEnumerateViewConfigurations(
+      instance_, system_, 0, &view_config_count, nullptr));
+
+  std::vector<XrViewConfigurationType> view_config_types(view_config_count);
+  RETURN_IF_XR_FAILED(xrEnumerateViewConfigurations(
+      instance_, system_, view_config_count, &view_config_count,
+      view_config_types.data()));
+
+  for (const auto& view_config_type : kSecondaryViewConfigurations) {
+    if (std::ranges::contains(view_config_types, view_config_type)) {
+      OpenXrViewConfiguration view_config;
+      RETURN_IF_XR_FAILED(InitializeViewConfig(view_config_type, view_config));
+      secondary_view_configs_.emplace(view_config_type, std::move(view_config));
+    }
+  }
 
   return XR_SUCCESS;
 }
@@ -256,19 +396,19 @@ OpenXrApiWrapper::PickEnvironmentBlendModeForSession(
 
   switch (session_mode) {
     case device::mojom::XRSessionMode::kImmersiveVr:
-      if (base::Contains(supported_blend_modes,
-                         XR_ENVIRONMENT_BLEND_MODE_OPAQUE))
+      if (std::ranges::contains(supported_blend_modes,
+                                XR_ENVIRONMENT_BLEND_MODE_OPAQUE))
         blend_mode_ = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
       break;
     case device::mojom::XRSessionMode::kImmersiveAr:
       // Prefer Alpha Blend when both Alpha Blend and Additive modes are
       // supported. This only concerns video see through devices with an
       // Additive compatibility mode
-      if (base::Contains(supported_blend_modes,
-                         XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)) {
+      if (std::ranges::contains(supported_blend_modes,
+                                XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)) {
         blend_mode_ = XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
-      } else if (base::Contains(supported_blend_modes,
-                                XR_ENVIRONMENT_BLEND_MODE_ADDITIVE)) {
+      } else if (std::ranges::contains(supported_blend_modes,
+                                       XR_ENVIRONMENT_BLEND_MODE_ADDITIVE)) {
         blend_mode_ = XR_ENVIRONMENT_BLEND_MODE_ADDITIVE;
       }
       break;
@@ -279,16 +419,224 @@ OpenXrApiWrapper::PickEnvironmentBlendModeForSession(
   return GetMojoBlendMode(blend_mode_);
 }
 
-OpenXrAnchorManager* OpenXrApiWrapper::GetOrCreateAnchorManager(
+OpenXrPlaneManager* OpenXrApiWrapper::GetPlaneManager() {
+  return scene_understanding_manager_ &&
+                 (IsFeatureEnabled(mojom::XRSessionFeature::PLANE_DETECTION))
+             ? scene_understanding_manager_->GetPlaneManager()
+             : nullptr;
+}
+
+OpenXrMeshManager* OpenXrApiWrapper::GetMeshManager() {
+  return mesh_manager_.get();
+}
+
+OpenXrAnchorManager* OpenXrApiWrapper::GetAnchorManager() {
+  return scene_understanding_manager_
+             ? scene_understanding_manager_->GetAnchorManager()
+             : nullptr;
+}
+
+OpenXrHitTestManager* OpenXrApiWrapper::GetHitTestManager() {
+  return scene_understanding_manager_
+             ? scene_understanding_manager_->GetHitTestManager()
+             : nullptr;
+}
+
+OpenXrLightEstimator* OpenXrApiWrapper::GetLightEstimator() {
+  return light_estimator_.get();
+}
+
+OpenXrDepthSensor* OpenXrApiWrapper::GetDepthSensor() {
+  return depth_sensor_.get();
+}
+
+XrResult OpenXrApiWrapper::EnableSupportedFeatures(
     const OpenXrExtensionHelper& extension_helper) {
-  if (session_ && !anchor_manager_) {
-    anchor_manager_ = std::make_unique<OpenXrAnchorManager>(
-        extension_helper, session_, local_space_);
+  CHECK(session_options_);
+  enabled_features_.clear();
+
+  // First do some preliminary filtering to build a list of features we can
+  // theoretically support based on the requested mode and enabled extensions.
+  // This prevents building objects that just need to be torn down because e.g.
+  // we were missing any extensions that we can use to support a required
+  // feature.
+  auto mode = session_options_->mode;
+  auto enable_function = [&extension_helper,
+                          mode](device::mojom::XRSessionFeature feature) {
+    return IsFeatureSupportedForMode(feature, mode) &&
+           extension_helper.IsFeatureSupported(feature);
+  };
+
+  if (!std::ranges::all_of(session_options_->required_features,
+                           enable_function)) {
+    DVLOG(1) << __func__ << ": Not all required features could be supported.";
+    for (const auto& feature : session_options_->required_features) {
+      if (!enable_function(feature)) {
+        DVLOG(1) << __func__ << ": " << feature << " Could not be supported";
+      }
+    }
+    return XR_ERROR_INITIALIZATION_FAILED;
   }
-  return anchor_manager_.get();
+
+  std::unordered_set<mojom::XRSessionFeature> requested_features;
+  requested_features.insert(session_options_->required_features.begin(),
+                            session_options_->required_features.end());
+  std::ranges::copy_if(
+      session_options_->optional_features,
+      std::inserter(requested_features, requested_features.begin()),
+      enable_function);
+
+  for (const auto& feature : requested_features) {
+    bool is_enabled = false;
+    bool is_required =
+        std::ranges::contains(session_options_->required_features, feature);
+
+    switch (feature) {
+      case mojom::XRSessionFeature::REF_SPACE_LOCAL_FLOOR:
+        // Nothing else should be creating the local floor space, but if it does
+        // already exist, we can use it as-is. Some errors were seen during
+        // development where this was true.
+        if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT)) {
+          CreateSpace(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT,
+                      &local_floor_space_);
+        } else {
+          DLOG(ERROR) << __func__ << ": Already had local floor space";
+        }
+        is_enabled = HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT);
+        break;
+
+      case mojom::XRSessionFeature::REF_SPACE_BOUNDED_FLOOR:
+        // Stage space may have already been created by other features.
+        if (!HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE)) {
+          CreateSpace(XR_REFERENCE_SPACE_TYPE_STAGE, &stage_space_);
+        }
+        bounds_provider_ = extension_helper.CreateStageBoundsProvider(session_);
+        UpdateStageBounds();
+        is_enabled =
+            HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE) && bounds_provider_;
+        break;
+
+      case mojom::XRSessionFeature::REF_SPACE_UNBOUNDED:
+        unbounded_space_provider_ =
+            extension_helper.CreateUnboundedSpaceProvider();
+        if (unbounded_space_provider_) {
+          if (XR_FAILED(unbounded_space_provider_->CreateSpace(
+                  session_, &unbounded_space_))) {
+            unbounded_space_provider_ = nullptr;
+          }
+        }
+        is_enabled = unbounded_space_ != XR_NULL_HANDLE;
+        break;
+
+      case mojom::XRSessionFeature::PLANE_DETECTION:
+        if (scene_understanding_manager_ == nullptr) {
+          scene_understanding_manager_ =
+              extension_helper.CreateSceneUnderstandingManager(
+                  this, local_space_, session_options_->required_features,
+                  session_options_->optional_features);
+        }
+        is_enabled = scene_understanding_manager_ != nullptr &&
+                     scene_understanding_manager_->GetPlaneManager() != nullptr;
+        break;
+
+      case mojom::XRSessionFeature::HIT_TEST:
+        if (scene_understanding_manager_ == nullptr) {
+          scene_understanding_manager_ =
+              extension_helper.CreateSceneUnderstandingManager(
+                  this, local_space_, session_options_->required_features,
+                  session_options_->optional_features);
+        }
+        is_enabled =
+            scene_understanding_manager_ != nullptr &&
+            scene_understanding_manager_->GetHitTestManager() != nullptr;
+        break;
+
+      case mojom::XRSessionFeature::LIGHT_ESTIMATION:
+        light_estimator_ =
+            extension_helper.CreateLightEstimator(session_, local_space_);
+        is_enabled = light_estimator_ != nullptr;
+        break;
+
+      case mojom::XRSessionFeature::ANCHORS:
+        // Anchors are managed by the scene understanding manager.
+        if (scene_understanding_manager_ == nullptr) {
+          scene_understanding_manager_ =
+              extension_helper.CreateSceneUnderstandingManager(
+                  this, local_space_, session_options_->required_features,
+                  session_options_->optional_features);
+        }
+        is_enabled =
+            scene_understanding_manager_ != nullptr &&
+            scene_understanding_manager_->GetAnchorManager() != nullptr;
+        break;
+
+      case mojom::XRSessionFeature::DEPTH:
+        if (session_options_->depth_options) {
+          depth_sensor_ = extension_helper.CreateDepthSensor(
+              session_, local_space_, *session_options_->depth_options);
+        }
+        is_enabled = depth_sensor_ != nullptr;
+        break;
+
+      case mojom::XRSessionFeature::HAND_INPUT:
+        is_enabled = input_helper_ && input_helper_->IsHandTrackingEnabled();
+        break;
+
+      case mojom::XRSessionFeature::SECONDARY_VIEWS:
+      case mojom::XRSessionFeature::WEBGPU:
+        // SECONDARY_VIEWS and WEBGPU support can't be checked beyond just the
+        // mode/extension check. If we passed that, then it's enabled.
+        is_enabled = true;
+        break;
+
+      case mojom::XRSessionFeature::REF_SPACE_VIEWER:
+      case mojom::XRSessionFeature::REF_SPACE_LOCAL:
+        // Supported by the core spec with no special additional features
+        is_enabled = true;
+        break;
+
+      case mojom::XRSessionFeature::LAYERS:
+        // Enabled if the extension check is good and the graphics binding
+        // also supports it.
+        is_enabled = graphics_binding_->SupportsLayers();
+        break;
+
+      case mojom::XRSessionFeature::MESH_DETECTION:
+        if (!mesh_manager_) {
+          mesh_manager_ = extension_helper.CreateMeshManager(
+              session_, local_space_);
+        }
+        is_enabled = mesh_manager_ != nullptr;
+        break;
+
+      case mojom::XRSessionFeature::FRONT_FACING:
+      case mojom::XRSessionFeature::IMAGE_TRACKING:
+      case mojom::XRSessionFeature::CAMERA_ACCESS:
+      case mojom::XRSessionFeature::DOM_OVERLAY:
+        // Not supported by OpenXR at all, shouldn't have even been asked for.
+        DLOG(ERROR) << __func__
+                    << " Received request for unsupported feature: " << feature;
+        break;
+    }
+
+    DVLOG(1) << __func__ << " feature=" << feature
+             << " is_enabled=" << is_enabled << " is_required=" << is_required;
+    if (is_enabled) {
+      enabled_features_.insert(feature);
+    } else if (is_required) {  // Not enabled but required
+      return XR_ERROR_INITIALIZATION_FAILED;
+    }
+  }
+
+  return XR_SUCCESS;
 }
 
 bool OpenXrApiWrapper::UpdateAndGetSessionEnded() {
+  // Early return if we already know that the session doesn't exist.
+  if (!IsInitialized()) {
+    return true;
+  }
+
   // Ensure we have the latest state from the OpenXR runtime.
   if (XR_FAILED(ProcessEvents())) {
     DCHECK(!session_running_);
@@ -300,83 +648,100 @@ bool OpenXrApiWrapper::UpdateAndGetSessionEnded() {
   return !IsInitialized();
 }
 
-OpenXRSceneUnderstandingManager*
-OpenXrApiWrapper::GetOrCreateSceneUnderstandingManager(
-    const OpenXrExtensionHelper& extension_helper) {
-  if (session_ && !scene_understanding_manager_) {
-    scene_understanding_manager_ =
-        std::make_unique<OpenXRSceneUnderstandingManager>(
-            extension_helper, session_, local_space_);
-  }
-  return scene_understanding_manager_.get();
-}
-
 // Callers of this function must check the XrResult return value and destroy
 // this OpenXrApiWrapper object on failure to clean up any intermediate
 // objects that may have been created before the failure.
 XrResult OpenXrApiWrapper::InitSession(
-    const Microsoft::WRL::ComPtr<ID3D11Device>& d3d_device,
+    mojom::XRRuntimeSessionOptionsPtr options,
     const OpenXrExtensionHelper& extension_helper,
-    const SessionEndedCallback& on_session_ended_callback,
-    const VisibilityChangedCallback& visibility_changed_callback) {
-  DCHECK(d3d_device.Get());
+    SessionStartedCallback on_session_started_callback,
+    SessionEndedCallback on_session_ended_callback,
+    VisibilityChangedCallback visibility_changed_callback) {
   DCHECK(IsInitialized());
+  DCHECK(options);
 
+  extension_helper_ = &extension_helper;
+
+  session_options_ = std::move(options);
+  on_session_started_callback_ = std::move(on_session_started_callback);
   on_session_ended_callback_ = std::move(on_session_ended_callback);
   visibility_changed_callback_ = std::move(visibility_changed_callback);
 
-  RETURN_IF_XR_FAILED(CreateSession(d3d_device));
-  RETURN_IF_XR_FAILED(CreateSwapchain());
+  // The input system uses the system name to help disambiguate certain sets of
+  // controllers, but we also log the system name/vendor id on debug builds.
+  XrSystemProperties system_properties = {XR_TYPE_SYSTEM_PROPERTIES};
+  RETURN_IF_XR_FAILED(
+      xrGetSystemProperties(instance_, system_, &system_properties));
+  DVLOG(1) << __func__ << " : Vendor Id: " << system_properties.vendorId
+           << " : System Name: " << system_properties.systemName;
+
+  max_layer_count_ = system_properties.graphicsProperties.maxLayerCount;
+
+  RETURN_IF_XR_FAILED(CreateSession());
   RETURN_IF_XR_FAILED(
       CreateSpace(XR_REFERENCE_SPACE_TYPE_LOCAL, &local_space_));
   RETURN_IF_XR_FAILED(CreateSpace(XR_REFERENCE_SPACE_TYPE_VIEW, &view_space_));
 
-  // It's ok if stage_space_ fails since not all OpenXR devices are required to
-  // support this reference space.
-  CreateSpace(XR_REFERENCE_SPACE_TYPE_STAGE, &stage_space_);
-  UpdateStageBounds();
+  // We need to mark whether or not the graphics binding is backing a WebGPU
+  // session prior to any swap chain images being activated because the
+  // associated shared images need to be created with WebGPU-specific flags.
+  const bool webgpu_session =
+      std::ranges::contains(session_options_->required_features,
+                            device::mojom::XRSessionFeature::WEBGPU) ||
+      std::ranges::contains(session_options_->optional_features,
+                            device::mojom::XRSessionFeature::WEBGPU);
+  graphics_binding_->OnSessionCreated(local_space_, webgpu_session);
 
-  if (extension_helper.ExtensionEnumeration()->ExtensionSupported(
-          XR_MSFT_UNBOUNDED_REFERENCE_SPACE_EXTENSION_NAME)) {
-    RETURN_IF_XR_FAILED(
-        CreateSpace(XR_REFERENCE_SPACE_TYPE_UNBOUNDED_MSFT, &unbounded_space_));
-  }
+  // Now the primary layer should be available.
+  bool swapchain_size_updated = RecomputeSwapchainSizeAndViewports();
+  DCHECK(swapchain_size_updated);
+
+  // Swapchain must be created after size is updated.
+  RETURN_IF_XR_FAILED(CreateSwapchain());
+
+  bool enable_hand_tracking =
+      std::ranges::contains(session_options_->required_features,
+                            device::mojom::XRSessionFeature::HAND_INPUT) ||
+      std::ranges::contains(session_options_->optional_features,
+                            device::mojom::XRSessionFeature::HAND_INPUT);
 
   RETURN_IF_XR_FAILED(OpenXRInputHelper::CreateOpenXRInputHelper(
-      instance_, system_, extension_helper, session_, local_space_,
-      &input_helper_));
-
-  // Since the objects in these arrays are used on every frame,
-  // we don't want to create and destroy these objects every frame,
-  // so create the number of objects we need and reuse them.
-  origin_from_eye_views_.resize(kNumViews);
-  head_from_eye_views_.resize(kNumViews);
-  layer_projection_views_.resize(kNumViews);
+      instance_, system_properties.systemName, extension_helper, session_,
+      local_space_, enable_hand_tracking, &input_helper_));
 
   // Make sure all of the objects we initialized are there.
   DCHECK(HasSession());
-  DCHECK(HasColorSwapChain());
+  DCHECK(graphics_binding_->HasBaseLayerColorSwapchain());
   DCHECK(HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL));
   DCHECK(HasSpace(XR_REFERENCE_SPACE_TYPE_VIEW));
   DCHECK(input_helper_);
+
+  XrResult result = EnableSupportedFeatures(extension_helper);
+
+  if (XR_FAILED(result)) {
+    std::move(on_session_started_callback_)
+        .Run(std::move(session_options_), result);
+    return result;
+  }
+
+  if (OpenXrVisibilityMaskHandler::IsSupported(
+          *extension_helper.ExtensionEnumeration()) &&
+      base::FeatureList::IsEnabled(blink::features::kWebXRVisibilityMask)) {
+    visibility_mask_handler_ = std::make_unique<OpenXrVisibilityMaskHandler>(
+        extension_helper, session_);
+  }
 
   EnsureEventPolling();
 
   return XR_SUCCESS;
 }
 
-XrResult OpenXrApiWrapper::CreateSession(
-    const Microsoft::WRL::ComPtr<ID3D11Device>& d3d_device) {
-  DCHECK(d3d_device.Get());
+XrResult OpenXrApiWrapper::CreateSession() {
   DCHECK(!HasSession());
   DCHECK(IsInitialized());
 
-  XrGraphicsBindingD3D11KHR d3d11_binding = {
-      XR_TYPE_GRAPHICS_BINDING_D3D11_KHR};
-  d3d11_binding.device = d3d_device.Get();
-
   XrSessionCreateInfo session_create_info = {XR_TYPE_SESSION_CREATE_INFO};
-  session_create_info.next = &d3d11_binding;
+  session_create_info.next = graphics_binding_->GetSessionCreateInfo();
   session_create_info.systemId = system_;
 
   return xrCreateSession(instance_, &session_create_info, &session_);
@@ -385,52 +750,61 @@ XrResult OpenXrApiWrapper::CreateSession(
 XrResult OpenXrApiWrapper::CreateSwapchain() {
   DCHECK(IsInitialized());
   DCHECK(HasSession());
-  DCHECK(!HasColorSwapChain());
 
-  XrSwapchainCreateInfo swapchain_create_info = {XR_TYPE_SWAPCHAIN_CREATE_INFO};
-  swapchain_create_info.arraySize = 1;
-  // OpenXR's swapchain format expects to describe the texture content.
-  // The result of a swapchain image created from OpenXR API always contains a
-  // typeless texture. On the other hand, WebGL API uses CSS color convention
-  // that's sRGB. The RGBA typelss texture from OpenXR swapchain image leads to
-  // a linear format render target view (reference to function
-  // D3D11TextureHelper::EnsureRenderTargetView in d3d11_texture_helper.cc).
-  // Therefore, the content in this openxr swapchain image is in sRGB format.
-  swapchain_create_info.format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+  RETURN_IF_XR_FAILED(graphics_binding_->CreateBaseLayerSwapchain(
+      session_, GetRecommendedSwapchainSampleCount()));
 
-  swapchain_create_info.width = swapchain_size_.width();
-  swapchain_create_info.height = swapchain_size_.height();
-  swapchain_create_info.mipCount = 1;
-  swapchain_create_info.faceCount = 1;
-  swapchain_create_info.sampleCount = GetRecommendedSwapchainSampleCount();
-  swapchain_create_info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-  XrSwapchain color_swapchain;
-  RETURN_IF_XR_FAILED(
-      xrCreateSwapchain(session_, &swapchain_create_info, &color_swapchain));
-
-  uint32_t chain_length;
-  RETURN_IF_XR_FAILED(
-      xrEnumerateSwapchainImages(color_swapchain, 0, &chain_length, nullptr));
-
-  std::vector<XrSwapchainImageD3D11KHR> color_swapchain_images(chain_length);
-  for (XrSwapchainImageD3D11KHR& image : color_swapchain_images) {
-    image.type = XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR;
-  }
-
-  RETURN_IF_XR_FAILED(xrEnumerateSwapchainImages(
-      color_swapchain, color_swapchain_images.size(), &chain_length,
-      reinterpret_cast<XrSwapchainImageBaseHeader*>(
-          color_swapchain_images.data())));
-
-  color_swapchain_ = color_swapchain;
-
-  color_swapchain_images_.reserve(color_swapchain_images.size());
-  for (unsigned i = 0; i < color_swapchain_images.size(); i++) {
-    color_swapchain_images_.emplace_back(
-        SwapChainInfo{color_swapchain_images[i].texture});
-  }
+  CreateSharedMailboxes();
 
   return XR_SUCCESS;
+}
+
+// Recomputes the size of the swapchain - the swapchain includes the primary
+// views (left and right), as well as any active secondary views. Secondary
+// views are only included when the OpenXR runtime reports that they're active.
+// It's valid for a secondary view configuration to be enabled but not active.
+// The viewports of all active views are also computed. The primary views are
+// always at the beginning of the texture, followed by active secondary views.
+// Unlike OpenXR which has separate swapchains for each view configuration,
+// WebXR exposes a single framebuffer for all views, so we need to keep track of
+// the viewports ourselves.
+// Returns whether the swapchain size has changed.
+bool OpenXrApiWrapper::RecomputeSwapchainSizeAndViewports() {
+  uint32_t total_width = 0;
+  uint32_t total_height = 0;
+  for (const auto& view_properties : primary_view_config_.Properties()) {
+    total_width += view_properties.Width();
+    total_height = std::max(total_height, view_properties.Height());
+  }
+  primary_view_config_.SetViewport(0, 0, total_width, total_height);
+
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    for (auto& secondary_view_config : secondary_view_configs_) {
+      OpenXrViewConfiguration& view_config = secondary_view_config.second;
+      if (view_config.Active()) {
+        uint32_t view_width = 0;
+        uint32_t view_height = 0;
+        for (const auto& view_properties : view_config.Properties()) {
+          view_width += view_properties.Width();
+          view_height = std::max(view_height, view_properties.Height());
+        }
+        view_config.SetViewport(total_width, 0, view_width, view_height);
+        total_width += view_width;
+        total_height = std::max(total_height, view_height);
+      }
+    }
+  }
+
+  auto swapchain_image_size =
+      graphics_binding_->GetProjectionLayerSwapchainImageSize();
+  if (swapchain_image_size.width() != static_cast<int>(total_width) ||
+      swapchain_image_size.height() != static_cast<int>(total_height)) {
+    graphics_binding_->SetProjectionLayerSwapchainImageSize(
+        gfx::Size(total_width, total_height));
+    return true;
+  }
+
+  return false;
 }
 
 XrSpace OpenXrApiWrapper::GetReferenceSpace(
@@ -444,128 +818,123 @@ XrSpace OpenXrApiWrapper::GetReferenceSpace(
       return stage_space_;
     case device::mojom::XRReferenceSpaceType::kUnbounded:
       return unbounded_space_;
-      // Ignore local-floor as that has no direct space
     case device::mojom::XRReferenceSpaceType::kLocalFloor:
-      return XR_NULL_HANDLE;
+      return local_floor_space_;
+  }
+
+  NOTREACHED();
+}
+
+std::optional<XrLocation>
+OpenXrApiWrapper::GetXrLocationFromNativeOriginInformation(
+    const mojom::XRNativeOriginInformation& native_origin,
+    const gfx::Transform& native_origin_from_object) {
+  switch (native_origin.which()) {
+    case mojom::XRNativeOriginInformation::Tag::kReferenceSpaceType:
+      return XrLocation{
+          GfxTransformToXrPose(native_origin_from_object),
+          GetReferenceSpace(native_origin.get_reference_space_type())};
+    case mojom::XRNativeOriginInformation::Tag::kAnchorId:
+      if (auto* anchor_manager = GetAnchorManager(); anchor_manager) {
+        return anchor_manager->GetXrLocationFromAnchor(
+            native_origin.get_anchor_id(), native_origin_from_object);
+      }
+      return std::nullopt;
+    case mojom::XRNativeOriginInformation::Tag::kPlaneId:
+      if (auto* plane_manager = GetPlaneManager(); plane_manager) {
+        return plane_manager->GetXrLocationFromPlane(
+            native_origin.get_plane_id(), native_origin_from_object);
+      }
+      return std::nullopt;
+    case mojom::XRNativeOriginInformation::Tag::kHandJointSpaceInfo:
+      if (session_state_ != XR_SESSION_STATE_FOCUSED) {
+        return std::nullopt;
+      }
+      return input_helper_->GetXrLocationFromHandJoint(
+          local_space_, *native_origin.get_hand_joint_space_info(),
+          native_origin_from_object);
+    case mojom::XRNativeOriginInformation::Tag::kInputSourceSpaceInfo:
+      if (session_state_ != XR_SESSION_STATE_FOCUSED) {
+        return std::nullopt;
+      }
+      return input_helper_->GetXrLocationFromInputSource(
+          *native_origin.get_input_source_space_info(),
+          native_origin_from_object);
+    case mojom::XRNativeOriginInformation::Tag::kImageIndex:
+      NOTREACHED();
+    case mojom::XRNativeOriginInformation::Tag::kMeshId:
+      if (auto* mesh_manager = GetMeshManager(); mesh_manager) {
+        return mesh_manager->GetXrLocationFromMesh(native_origin.get_mesh_id(),
+                                                   native_origin_from_object);
+      }
+      return std::nullopt;
   }
 }
 
 // Based on the capabilities of the system and runtime, determine whether
 // to use shared images to draw into OpenXR swap chain buffers.
 bool OpenXrApiWrapper::ShouldCreateSharedImages() const {
-  // ANGLE's render_to_texture extension on Windows fails to render correctly
-  // for EGL images. Until that is fixed, we need to disable shared images if
-  // CanEnableAntiAliasing is true.
-  if (CanEnableAntiAliasing()) {
+  if (!HasSession()) {
     return false;
   }
 
-  // Since WebGL renders upside down, sharing images means the XR runtime
-  // needs to be able to consume upside down images and flip them internally.
-  // If it is unable to (fovMutable == XR_FALSE), we must gracefully fallback
-  // to copying textures.
-  XrViewConfigurationProperties view_configuration_props = {
-      XR_TYPE_VIEW_CONFIGURATION_PROPERTIES};
-  if (XR_FAILED(xrGetViewConfigurationProperties(instance_, system_,
-                                                 kSupportedViewConfiguration,
-                                                 &view_configuration_props)) ||
-      (view_configuration_props.fovMutable == XR_FALSE)) {
-    return false;
-  }
+  // TODO(crbug.com/40917171): Investigate moving the remaining Windows-
+  // only checks out of this class and into the GraphicsBinding.
+#if BUILDFLAG(IS_WIN)
+  if (!graphics_binding_->IsWebGPUSession()) {
+    // ANGLE's render_to_texture extension on Windows fails to render correctly
+    // for EGL images. Until that is fixed, we need to disable shared images if
+    // CanEnableAntiAliasing is true. This can be ignored for WebGPU sessions,
+    // which rely on different antialiasing mechanisms.
+    if (CanEnableAntiAliasing()) {
+      return false;
+    }
 
-  // Put shared image feature behind a flag until remaining issues with overlays
-  // are resolved.
-  if (!base::FeatureList::IsEnabled(device::features::kOpenXRSharedImages)) {
-    return false;
+    // Since WebGL renders upside down, sharing images means the XR runtime
+    // needs to be able to consume upside down images and flip them internally.
+    // If it is unable to (fovMutable == XR_FALSE), we must gracefully fallback
+    // to copying textures. This can be ignored for WebGPU sessions, which
+    // render right-side-up.
+    XrViewConfigurationProperties view_configuration_props = {
+        XR_TYPE_VIEW_CONFIGURATION_PROPERTIES};
+    if (XR_FAILED(xrGetViewConfigurationProperties(
+            instance_, system_, primary_view_config_.Type(),
+            &view_configuration_props)) ||
+        (view_configuration_props.fovMutable == XR_FALSE)) {
+      return false;
+    }
   }
+#endif
 
-  return true;
+  return graphics_binding_->CanUseSharedImages();
 }
 
-void OpenXrApiWrapper::CreateSharedMailboxes(
-    viz::ContextProvider* context_provider) {
-  if (!ShouldCreateSharedImages()) {
+void OpenXrApiWrapper::OnContextProviderCreated(
+    scoped_refptr<viz::ContextProvider> context_provider) {
+  // TODO(crbug.com/40917165): Move `context_provider_` to
+  // `OpenXrGraphicsBinding`.
+  // We need to store the context provider because the shared mailboxes are
+  // re-created when secondary view configurations become active or non active.
+  context_provider_ = std::move(context_provider);
+
+  // Recreate shared mailboxes for the swapchain if necessary.
+  CreateSharedMailboxes();
+}
+
+void OpenXrApiWrapper::OnContextProviderLost() {
+  graphics_binding_->OnContextProviderLost();
+  context_provider_ = nullptr;
+}
+
+void OpenXrApiWrapper::CreateSharedMailboxes() {
+  if (!context_provider_ || !ShouldCreateSharedImages()) {
     return;
   }
 
   gpu::SharedImageInterface* shared_image_interface =
-      context_provider->SharedImageInterface();
-
-  // Create the MailboxHolders for each texture in the swap chain
-  for (size_t i = 0; i < color_swapchain_images_.size(); i++) {
-    Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_resource;
-    SwapChainInfo& swap_chain_info = color_swapchain_images_[i];
-    HRESULT hr = swap_chain_info.d3d11_texture->QueryInterface(
-        IID_PPV_ARGS(&dxgi_resource));
-    if (FAILED(hr)) {
-      DLOG(ERROR) << "QueryInterface for IDXGIResource failed with error "
-                  << std::hex << hr;
-      return;
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d11_texture;
-    hr = dxgi_resource.As(&d3d11_texture);
-    if (FAILED(hr)) {
-      DLOG(ERROR) << "QueryInterface for ID3D11Texture2D failed with error "
-                  << std::hex << hr;
-      return;
-    }
-
-    D3D11_TEXTURE2D_DESC texture2d_desc;
-    d3d11_texture->GetDesc(&texture2d_desc);
-
-    // Shared handle creation can fail on platforms where the texture, for
-    // whatever reason, cannot be shared. We need to fallback gracefully to
-    // texture copies.
-    HANDLE shared_handle;
-    hr = dxgi_resource->CreateSharedHandle(
-        nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-        nullptr, &shared_handle);
-    if (FAILED(hr)) {
-      DLOG(ERROR) << "Unable to create shared handle for DXGIResource "
-                  << std::hex << hr;
-      return;
-    }
-
-    gfx::GpuMemoryBufferHandle gpu_memory_buffer_handle;
-    gpu_memory_buffer_handle.dxgi_handle.Set(shared_handle);
-    gpu_memory_buffer_handle.type = gfx::DXGI_SHARED_HANDLE;
-
-    std::unique_ptr<gpu::GpuMemoryBufferImplDXGI> gpu_memory_buffer =
-        gpu::GpuMemoryBufferImplDXGI::CreateFromHandle(
-            std::move(gpu_memory_buffer_handle),
-            gfx::Size(texture2d_desc.Width, texture2d_desc.Height),
-            gfx::BufferFormat::RGBA_8888, gfx::BufferUsage::GPU_READ,
-            base::DoNothing(), nullptr, nullptr);
-
-    const uint32_t shared_image_usage = gpu::SHARED_IMAGE_USAGE_SCANOUT |
-                                        gpu::SHARED_IMAGE_USAGE_DISPLAY |
-                                        gpu::SHARED_IMAGE_USAGE_GLES2;
-
-    gpu::MailboxHolder& mailbox_holder = swap_chain_info.mailbox_holder;
-    mailbox_holder.mailbox = shared_image_interface->CreateSharedImage(
-        gpu_memory_buffer.get(), nullptr,
-        gfx::ColorSpace(gfx::ColorSpace::PrimaryID::BT709,
-                        gfx::ColorSpace::TransferID::LINEAR),
-        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, shared_image_usage);
-    mailbox_holder.sync_token = shared_image_interface->GenVerifiedSyncToken();
-    mailbox_holder.texture_target = GL_TEXTURE_2D;
-  }
-}
-
-bool OpenXrApiWrapper::IsUsingSharedImages() const {
-  return ((color_swapchain_images_.size() > 1) &&
-          !color_swapchain_images_[0].mailbox_holder.mailbox.IsZero());
-}
-
-void OpenXrApiWrapper::StoreFence(
-    Microsoft::WRL::ComPtr<ID3D11Fence> d3d11_fence,
-    int16_t frame_index) {
-  const size_t swapchain_images_size = color_swapchain_images_.size();
-  if (swapchain_images_size > 0) {
-    color_swapchain_images_[frame_index % swapchain_images_size].d3d11_fence =
-        std::move(d3d11_fence);
-  }
+      context_provider_->SharedImageInterface();
+  // Create the SharedImages for each texture in the swap chain
+  graphics_binding_->CreateBaseLayerSharedImages(shared_image_interface);
 }
 
 XrResult OpenXrApiWrapper::CreateSpace(XrReferenceSpaceType type,
@@ -578,56 +947,253 @@ XrResult OpenXrApiWrapper::CreateSpace(XrReferenceSpaceType type,
   space_create_info.referenceSpaceType = type;
   space_create_info.poseInReferenceSpace = PoseIdentity();
 
-  return xrCreateReferenceSpace(session_, &space_create_info, space);
+  XrResult result = xrCreateReferenceSpace(session_, &space_create_info, space);
+
+  // Prior to OpenXR 1.1, local floor space could fail if we hadn't enabled it
+  // or the platform didn't support it, so we have to emulate it.
+  if (XR_FAILED(result) && type == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT) {
+    if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL)) {
+      return result;
+    }
+
+    result = CreateEmulatedLocalFloorSpace(space);
+  }
+
+  return result;
+}
+
+XrResult OpenXrApiWrapper::CreateEmulatedLocalFloorSpace(XrSpace* space) {
+  CHECK(HasSession());
+  CHECK(HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL));
+
+  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE)) {
+    // We can estimate if we don't have a stage space, but it's better if we do.
+    CreateSpace(XR_REFERENCE_SPACE_TYPE_STAGE, &stage_space_);
+  }
+
+  std::optional<gfx::Transform> maybe_local_from_stage = GetLocalFromStage();
+
+  if (!maybe_local_from_stage) {
+    DVLOG(3) << __func__ << ": GetLocalFromStage failed, estimating height";
+    maybe_local_from_stage =
+        gfx::Transform::MakeTranslation(0.0, kDefaultHeightEstimate);
+
+    // Generally, we expect creating the stage to succeed. If we have one, and
+    // we failed to get a transform, it's likely that we just need to wait until
+    // the first frame so that we can locate the transform between local and
+    // stage space. If we *don't* have one, but later get one, we'd expect to
+    // get an event that would prompt us to re-create the space as well.
+    try_recreate_local_floor_ = HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE);
+  }
+
+  XrReferenceSpaceCreateInfo space_create_info = {
+      XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+  space_create_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+  space_create_info.poseInReferenceSpace =
+      GfxTransformToXrPose(*maybe_local_from_stage);
+  RETURN_IF_XR_FAILED(
+      xrCreateReferenceSpace(session_, &space_create_info, space));
+  emulated_local_floor_ = true;
+
+  return XR_SUCCESS;
+}
+
+XrResult OpenXrApiWrapper::UpdateLocalFloorSpace() {
+  DVLOG(3) << __func__;
+  // Local floor space only needs to be updated if it's emulated or specifically
+  // flagged as needing an update.
+  if (!emulated_local_floor_ && !try_recreate_local_floor_) {
+    return XR_SUCCESS;
+  }
+
+  if (HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT)) {
+    RETURN_IF_XR_FAILED(xrDestroySpace(local_floor_space_));
+    local_floor_space_ = XR_NULL_HANDLE;
+    emulated_local_floor_ = false;
+  }
+
+  try_recreate_local_floor_ = false;
+  return CreateSpace(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT,
+                     &local_floor_space_);
 }
 
 XrResult OpenXrApiWrapper::BeginSession() {
   DCHECK(HasSession());
 
   XrSessionBeginInfo session_begin_info = {XR_TYPE_SESSION_BEGIN_INFO};
-  session_begin_info.primaryViewConfigurationType = kSupportedViewConfiguration;
+  session_begin_info.primaryViewConfigurationType = primary_view_config_.Type();
+
+  XrSecondaryViewConfigurationSessionBeginInfoMSFT secondary_view_config_info =
+      {XR_TYPE_SECONDARY_VIEW_CONFIGURATION_SESSION_BEGIN_INFO_MSFT};
+  std::vector<XrViewConfigurationType> secondary_view_config_types;
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    secondary_view_config_types.reserve(secondary_view_configs_.size());
+    for (const auto& secondary_view_config : secondary_view_configs_) {
+      secondary_view_config_types.emplace_back(secondary_view_config.first);
+    }
+    secondary_view_config_info.viewConfigurationCount =
+        secondary_view_config_types.size();
+    secondary_view_config_info.enabledViewConfigurationTypes =
+        secondary_view_config_types.data();
+    session_begin_info.next = &secondary_view_config_info;
+  }
 
   XrResult xr_result = xrBeginSession(session_, &session_begin_info);
   if (XR_SUCCEEDED(xr_result))
     session_running_ = true;
 
+  // Only the first xrBeginSession() starts the WebXR session. Later ones
+  // resume it after the runtime stopped it.
+  if (on_session_started_callback_) {
+    std::move(on_session_started_callback_)
+        .Run(std::move(session_options_), xr_result);
+  } else if (XR_SUCCEEDED(xr_result)) {
+    on_session_resumed_callback_.Run();
+  }
+
   return xr_result;
 }
 
-XrResult OpenXrApiWrapper::BeginFrame(
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>* texture,
-    gpu::MailboxHolder* mailbox_holder) {
+XrResult OpenXrApiWrapper::StopSession() {
+  stop_pending_ = false;
+  session_running_ = false;
+  return xrEndSession(session_);
+}
+
+XrResult OpenXrApiWrapper::BeginFrame() {
+  TRACE_EVENT0("xr", "BeginFrame");
   DCHECK(HasSession());
-  DCHECK(HasColorSwapChain());
+  DCHECK(graphics_binding_->HasBaseLayerColorSwapchain());
 
   if (!session_running_)
     return XR_ERROR_SESSION_NOT_RUNNING;
 
   XrFrameWaitInfo wait_frame_info = {XR_TYPE_FRAME_WAIT_INFO};
   XrFrameState frame_state = {XR_TYPE_FRAME_STATE};
-  RETURN_IF_XR_FAILED(xrWaitFrame(session_, &wait_frame_info, &frame_state));
+
+  XrSecondaryViewConfigurationFrameStateMSFT secondary_view_frame_states = {
+      XR_TYPE_SECONDARY_VIEW_CONFIGURATION_FRAME_STATE_MSFT};
+  std::vector<XrSecondaryViewConfigurationStateMSFT>
+      secondary_view_config_states;
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    secondary_view_config_states.resize(
+        secondary_view_configs_.size(),
+        {XR_TYPE_SECONDARY_VIEW_CONFIGURATION_STATE_MSFT});
+    secondary_view_frame_states.viewConfigurationCount =
+        secondary_view_config_states.size();
+    secondary_view_frame_states.viewConfigurationStates =
+        secondary_view_config_states.data();
+    frame_state.next = &secondary_view_frame_states;
+  }
+
+  {
+    TRACE_EVENT("xr", "xrWaitFrame");
+    RETURN_IF_XR_FAILED(xrWaitFrame(session_, &wait_frame_info, &frame_state));
+  }
+
   frame_state_ = frame_state;
+
+  if (try_recreate_local_floor_) {
+    UpdateLocalFloorSpace();
+  }
+
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    RETURN_IF_XR_FAILED(
+        UpdateSecondaryViewConfigStates(secondary_view_config_states));
+  }
 
   XrFrameBeginInfo begin_frame_info = {XR_TYPE_FRAME_BEGIN_INFO};
   RETURN_IF_XR_FAILED(xrBeginFrame(session_, &begin_frame_info));
   pending_frame_ = true;
 
-  XrSwapchainImageAcquireInfo acquire_info = {
-      XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-  uint32_t color_swapchain_image_index;
-  RETURN_IF_XR_FAILED(xrAcquireSwapchainImage(color_swapchain_, &acquire_info,
-                                              &color_swapchain_image_index));
+  // On context loss a binding that requires shared images (the Linux Vulkan
+  // path) has none until the replacement context provider arrives; skip the
+  // acquisition in that window rather than dereference a null pointer.
+  const bool acquire_swapchain_images =
+      !graphics_binding_->RequiresSharedImages() || !!context_provider_;
 
-  XrSwapchainImageWaitInfo wait_info = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-  wait_info.timeout = XR_INFINITE_DURATION;
+  if (acquire_swapchain_images) {
+    RETURN_IF_XR_FAILED(graphics_binding_->AcquireSwapchainImages(
+        context_provider_->SharedImageInterface()));
 
-  RETURN_IF_XR_FAILED(xrWaitSwapchainImage(color_swapchain_, &wait_info));
-  RETURN_IF_XR_FAILED(UpdateProjectionLayers());
+    XrResult wait_result = XR_TIMEOUT_EXPIRED;
+    while (wait_result == XR_TIMEOUT_EXPIRED) {
+      wait_result = graphics_binding_->WaitSwapchainImages(
+          context_provider_->SharedImageInterface());
+      if (wait_result == XR_TIMEOUT_EXPIRED) {
+        if (UpdateAndGetSessionEnded()) {
+          return XR_ERROR_SESSION_LOST;
+        }
+      }
+    }
 
-  const SwapChainInfo& swap_chain_info =
-      color_swapchain_images_[color_swapchain_image_index];
-  *texture = swap_chain_info.d3d11_texture;
-  *mailbox_holder = swap_chain_info.mailbox_holder;
+    RETURN_IF_XR_FAILED(wait_result);
+  }
+
+  RETURN_IF_XR_FAILED(UpdateViewConfigurations());
+
+  return XR_SUCCESS;
+}
+
+XrResult OpenXrApiWrapper::UpdateViewConfigurations() {
+  // While secondary views are only active when reported by the OpenXR runtime,
+  // the primary view configuration must always be active.
+  DCHECK(primary_view_config_.Active());
+  DCHECK(!primary_view_config_.Viewport().IsEmpty());
+
+  RETURN_IF_XR_FAILED(
+      LocateViews(XR_REFERENCE_SPACE_TYPE_LOCAL, primary_view_config_));
+
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    for (auto& view_config : secondary_view_configs_) {
+      OpenXrViewConfiguration& config = view_config.second;
+      if (config.Active()) {
+        RETURN_IF_XR_FAILED(LocateViews(XR_REFERENCE_SPACE_TYPE_LOCAL, config));
+      }
+    }
+  }
+
+  return XR_SUCCESS;
+}
+
+// Updates the states of secondary views, which can become active or inactive on
+// each frame. If the state of any secondary views have changed, the size of the
+// swapchain has also likely changed, so re-create the swapchain.
+XrResult OpenXrApiWrapper::UpdateSecondaryViewConfigStates(
+    const std::vector<XrSecondaryViewConfigurationStateMSFT>& states) {
+  DCHECK(IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS));
+
+  bool state_changed = false;
+  for (const XrSecondaryViewConfigurationStateMSFT& state : states) {
+    DCHECK(secondary_view_configs_.contains(state.viewConfigurationType));
+    OpenXrViewConfiguration& view_config =
+        secondary_view_configs_.at(state.viewConfigurationType);
+
+    if (view_config.Active() != state.active) {
+      state_changed = true;
+      view_config.SetActive(state.active);
+      if (view_config.Active()) {
+        // When a secondary view configuration is activated, its properties
+        // (such as recommended width/height) may have changed, so re-query the
+        // properties.
+        std::vector<XrViewConfigurationView> view_properties;
+        RETURN_IF_XR_FAILED(GetPropertiesForViewConfig(
+            state.viewConfigurationType, view_properties));
+        view_config.SetProperties(std::move(view_properties),
+                                  graphics_binding_->GetMaxTextureSize());
+      }
+    }
+  }
+
+  // If the state of any secondary views have changed, the size of the swapchain
+  // has likely changed. If the swapchain size has changed, we need to re-create
+  // the swapchain.
+  if (state_changed && RecomputeSwapchainSizeAndViewports()) {
+    graphics_binding_->DestroyBaseLayerSwapchain(
+        context_provider_ ? context_provider_->SharedImageInterface()
+                          : nullptr);
+    RETURN_IF_XR_FAILED(CreateSwapchain());
+  }
 
   return XR_SUCCESS;
 }
@@ -636,37 +1202,61 @@ XrResult OpenXrApiWrapper::EndFrame() {
   DCHECK(pending_frame_);
   DCHECK(HasBlendMode());
   DCHECK(HasSession());
-  DCHECK(HasColorSwapChain());
+  DCHECK(graphics_binding_->HasBaseLayerColorSwapchain());
   DCHECK(HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL));
   DCHECK(HasFrameState());
 
-  XrSwapchainImageReleaseInfo release_info = {
-      XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-  RETURN_IF_XR_FAILED(xrReleaseSwapchainImage(color_swapchain_, &release_info));
+  // Get all the XrCompositionLayer* from the base layer or the
+  // layers created by clients. All the projection layers will use
+  // the same view configuration defined by primary_view_config_.
+  std::unique_ptr<OpenXrLayers> layers =
+      graphics_binding_->GetLayersForViewConfig(this, primary_view_config_);
 
-  XrCompositionLayerProjection multi_projection_layer = {
-      XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-  XrCompositionLayerProjection* multi_projection_layer_ptr =
-      &multi_projection_layer;
-  multi_projection_layer.space = local_space_;
-  multi_projection_layer.viewCount = origin_from_eye_views_.size();
-  multi_projection_layer.views = layer_projection_views_.data();
-
-  XrFrameEndInfo end_frame_info = {XR_TYPE_FRAME_END_INFO};
-  end_frame_info.environmentBlendMode = blend_mode_;
-  if (blend_mode_ == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) {
-    multi_projection_layer.layerFlags |=
-        XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+  // Gather all the layers for active secondary views.
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    for (const auto& secondary_view_config : secondary_view_configs_) {
+      const OpenXrViewConfiguration& view_config = secondary_view_config.second;
+      if (view_config.Active()) {
+        layers->AddSecondaryLayerForType(
+            local_space_, view_config.Type(), blend_mode_,
+            graphics_binding_->GetBaseLayerProjectionViews(view_config),
+            graphics_binding_->GetFlipLayerLayout());
+      }
+    }
   }
 
-  end_frame_info.layerCount = 1;
-  end_frame_info.layers =
-      reinterpret_cast<const XrCompositionLayerBaseHeader* const*>(
-          &multi_projection_layer_ptr);
-  end_frame_info.displayTime = frame_state_.predictedDisplayTime;
+  CHECK_LE(layers->PrimaryLayerCount(), max_layer_count_);
 
-  RETURN_IF_XR_FAILED(xrEndFrame(session_, &end_frame_info));
+  XrFrameEndInfo end_frame_info = {XR_TYPE_FRAME_END_INFO};
+  end_frame_info.layerCount = layers->PrimaryLayerCount();
+  end_frame_info.layers = layers->PrimaryLayerData();
+  end_frame_info.displayTime = frame_state_.predictedDisplayTime;
+  end_frame_info.environmentBlendMode = blend_mode_;
+
+  TRACE_COUNTER1("xr", "ActiveLayers", end_frame_info.layerCount);
+
+  XrSecondaryViewConfigurationFrameEndInfoMSFT secondary_view_end_frame_info = {
+      XR_TYPE_SECONDARY_VIEW_CONFIGURATION_FRAME_END_INFO_MSFT};
+  if (layers->SecondaryConfigCount() > 0) {
+    secondary_view_end_frame_info.viewConfigurationCount =
+        layers->SecondaryConfigCount();
+    secondary_view_end_frame_info.viewConfigurationLayersInfo =
+        layers->SecondaryConfigData();
+
+    end_frame_info.next = &secondary_view_end_frame_info;
+  }
+
+  RETURN_IF_XR_FAILED(graphics_binding_->ReleaseActiveSwapchainImages());
+
+  {
+    TRACE_EVENT("xr", "xrEndFrame");
+    RETURN_IF_XR_FAILED(xrEndFrame(session_, &end_frame_info));
+  }
   pending_frame_ = false;
+
+  if (stop_pending_) {
+    return StopSession();
+  }
 
   return XR_SUCCESS;
 }
@@ -675,62 +1265,16 @@ bool OpenXrApiWrapper::HasPendingFrame() const {
   return pending_frame_;
 }
 
-XrResult OpenXrApiWrapper::UpdateProjectionLayers() {
-  RETURN_IF_XR_FAILED(
-      LocateViews(XR_REFERENCE_SPACE_TYPE_LOCAL, &origin_from_eye_views_));
-  RETURN_IF_XR_FAILED(
-      LocateViews(XR_REFERENCE_SPACE_TYPE_VIEW, &head_from_eye_views_));
-
-  uint32_t x_offset = 0;
-  for (uint32_t view_index = 0; view_index < origin_from_eye_views_.size();
-       view_index++) {
-    const XrView& view = origin_from_eye_views_[view_index];
-
-    XrCompositionLayerProjectionView& layer_projection_view =
-        layer_projection_views_[view_index];
-
-    layer_projection_view.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
-    layer_projection_view.pose = view.pose;
-    layer_projection_view.fov.angleLeft = view.fov.angleLeft;
-    layer_projection_view.fov.angleRight = view.fov.angleRight;
-    layer_projection_view.subImage.swapchain = color_swapchain_;
-    // Since we're in double wide mode, the texture
-    // array only has one texture and is always index 0.
-    layer_projection_view.subImage.imageArrayIndex = 0;
-    layer_projection_view.subImage.imageRect.extent.width =
-        view_configs_[view_index].recommendedImageRectWidth;
-    layer_projection_view.subImage.imageRect.extent.height =
-        view_configs_[view_index].recommendedImageRectHeight;
-    layer_projection_view.subImage.imageRect.offset.x = x_offset;
-    x_offset += view_configs_[view_index].recommendedImageRectWidth;
-    layer_projection_view.subImage.imageRect.offset.y = 0;
-
-    if (IsUsingSharedImages()) {
-      // WebGL layers always give us flipped content. We need to instruct OpenXR
-      // to flip the content before showing it to the user. Some XR runtimes
-      // are able to efficiently do this as part of existing post processing
-      // steps.
-      layer_projection_view.fov.angleUp = view.fov.angleDown;
-      layer_projection_view.fov.angleDown = view.fov.angleUp;
-    } else {
-      layer_projection_view.fov.angleUp = view.fov.angleUp;
-      layer_projection_view.fov.angleDown = view.fov.angleDown;
-    }
-  }
-
-  return XR_SUCCESS;
-}
-
-XrResult OpenXrApiWrapper::LocateViews(XrReferenceSpaceType type,
-                                       std::vector<XrView>* views) const {
+XrResult OpenXrApiWrapper::LocateViews(XrReferenceSpaceType space_type,
+                                       OpenXrViewConfiguration& view_config) {
   DCHECK(HasSession());
 
   XrViewState view_state = {XR_TYPE_VIEW_STATE};
   XrViewLocateInfo view_locate_info = {XR_TYPE_VIEW_LOCATE_INFO};
-  view_locate_info.viewConfigurationType = kSupportedViewConfiguration;
+  view_locate_info.viewConfigurationType = view_config.Type();
   view_locate_info.displayTime = frame_state_.predictedDisplayTime;
 
-  switch (type) {
+  switch (space_type) {
     case XR_REFERENCE_SPACE_TYPE_LOCAL:
       view_locate_info.space = local_space_;
       break;
@@ -741,23 +1285,42 @@ XrResult OpenXrApiWrapper::LocateViews(XrReferenceSpaceType type,
     case XR_REFERENCE_SPACE_TYPE_UNBOUNDED_MSFT:
     case XR_REFERENCE_SPACE_TYPE_COMBINED_EYE_VARJO:
     case XR_REFERENCE_SPACE_TYPE_MAX_ENUM:
+    case XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT:
+    case XR_REFERENCE_SPACE_TYPE_LOCALIZATION_MAP_ML:
       NOTREACHED();
   }
 
   // Initialize the XrView objects' type field to XR_TYPE_VIEW. xrLocateViews
   // fails validation if this isn't set.
-  std::vector<XrView> new_views(kNumViews, {XR_TYPE_VIEW});
+  std::vector<XrView> new_views(view_config.Views().size(), {XR_TYPE_VIEW});
   uint32_t view_count;
   RETURN_IF_XR_FAILED(xrLocateViews(session_, &view_locate_info, &view_state,
                                     new_views.size(), &view_count,
                                     new_views.data()));
-  DCHECK(view_count == kNumViews);
+  DCHECK_EQ(view_count, view_config.Views().size());
 
   // If the position or orientation is not valid, don't update the views so that
   // the previous valid views are used instead.
   if ((view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
       (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
-    *views = std::move(new_views);
+    view_config.SetViews(std::move(new_views));
+    received_initial_valid_primary_views_ = true;
+  } else {
+    DVLOG(3) << __func__ << " Could not locate views";
+    // Highest available framerate as of this writing appears to be 144 fps,
+    // this is thus 2 seconds that the views have not been locatable on that
+    // device (and longer on most other devices). If we've gone that long
+    // without being able to locate our views, then something is likely pretty
+    // wrong, and we should end the session to make it obvious something is
+    // wrong.
+    constexpr uint64_t kMaxInvalidViewFrames = 288;
+    if (!received_initial_valid_primary_views_ &&
+        frames_before_initial_valid_primary_views_++ >= kMaxInvalidViewFrames) {
+      LOG(ERROR) << "No valid views have been received in "
+                 << kMaxInvalidViewFrames << " frames";
+      ShutdownSession();
+      return XR_ERROR_RUNTIME_FAILURE;
+    }
   }
 
   return XR_SUCCESS;
@@ -771,83 +1334,202 @@ XrTime OpenXrApiWrapper::GetPredictedDisplayTime() const {
   return frame_state_.predictedDisplayTime;
 }
 
-XrResult OpenXrApiWrapper::GetHeadPose(
-    absl::optional<gfx::Quaternion>* orientation,
-    absl::optional<gfx::Point3F>* position,
-    bool* emulated_position) const {
-  DCHECK(HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL));
-  DCHECK(HasSpace(XR_REFERENCE_SPACE_TYPE_VIEW));
+mojom::XRViewPtr OpenXrApiWrapper::CreateView(
+    const OpenXrViewConfiguration& view_config,
+    uint32_t view_index,
+    mojom::XREye eye,
+    uint32_t x_offset) const {
+  const XrView& xr_view = view_config.Views()[view_index];
 
-  XrSpaceLocation view_from_local = {XR_TYPE_SPACE_LOCATION};
-  RETURN_IF_XR_FAILED(xrLocateSpace(view_space_, local_space_,
-                                    frame_state_.predictedDisplayTime,
-                                    &view_from_local));
+  mojom::XRViewPtr view = mojom::XRView::New();
+  view->eye = eye;
+
+  view->geometry = mojom::XRViewGeometry::New();
+  view->geometry->mojo_from_view = XrPoseToGfxTransform(xr_view.pose);
+
+  view->geometry->field_of_view = XrFovToMojomFov(xr_view.fov);
+
+  view->viewport =
+      gfx::Rect(x_offset, 0, view_config.Properties()[view_index].Width(),
+                view_config.Properties()[view_index].Height());
+
+  view->is_first_person_observer =
+      view_config.Type() ==
+      XR_VIEW_CONFIGURATION_TYPE_SECONDARY_MONO_FIRST_PERSON_OBSERVER_MSFT;
+
+  if (visibility_mask_handler_) {
+    visibility_mask_handler_->UpdateVisibilityMaskData(view_config.Type(),
+                                                       view_index, view);
+  }
+
+  return view;
+}
+
+const std::unordered_set<mojom::XRSessionFeature>&
+OpenXrApiWrapper::GetEnabledFeatures() const {
+  return enabled_features_;
+}
+
+std::vector<mojom::XRViewPtr> OpenXrApiWrapper::GetViews() const {
+  // Since WebXR expects all views to be defined in a single swapchain texture,
+  // we need to compute where in the texture each view begins. Each view is
+  // located horizontally one after another, starting with the primary views,
+  // followed by the secondary views. x_offset keeps track of where the next
+  // view begins.
+  uint32_t x_offset = primary_view_config_.Viewport().x();
+
+  std::vector<mojom::XRViewPtr> views;
+  for (size_t i = 0; i < primary_view_config_.Views().size(); i++) {
+    views.emplace_back(
+        CreateView(primary_view_config_, i, GetEyeFromIndex(i), x_offset));
+    x_offset += primary_view_config_.Properties()[i].Width();
+  }
+
+  if (IsFeatureEnabled(mojom::XRSessionFeature::SECONDARY_VIEWS)) {
+    for (const auto& secondary_view_config : secondary_view_configs_) {
+      const OpenXrViewConfiguration& view_config = secondary_view_config.second;
+      if (view_config.Active()) {
+        x_offset = view_config.Viewport().x();
+        for (size_t i = 0; i < view_config.Views().size(); i++) {
+          views.emplace_back(
+              CreateView(view_config, i, mojom::XREye::kNone, x_offset));
+          x_offset += view_config.Properties()[i].Width();
+        }
+      }
+    }
+  }
+
+  return views;
+}
+
+std::vector<mojom::XRViewPtr> OpenXrApiWrapper::GetDefaultViews() const {
+  DCHECK(IsInitialized());
+
+  const std::vector<OpenXrViewProperties>& view_properties =
+      primary_view_config_.Properties();
+  CHECK_EQ(view_properties.size(), kNumPrimaryViews);
+
+  std::vector<mojom::XRViewPtr> views(view_properties.size());
+  uint32_t x_offset = 0;
+
+  for (uint32_t i = 0; i < views.size(); i++) {
+    views[i] = mojom::XRView::New();
+    mojom::XRView* view = views[i].get();
+
+    view->eye = GetEyeFromIndex(i);
+    view->viewport = gfx::Rect(x_offset, 0, view_properties[i].Width(),
+                               view_properties[i].Height());
+    view->geometry = mojom::XRViewGeometry::New();
+    view->geometry->field_of_view =
+        mojom::VRFieldOfView::New(45.0f, 45.0f, 45.0f, 45.0f);
+
+    x_offset += view_properties[i].Width();
+  }
+
+  return views;
+}
+
+float OpenXrApiWrapper::RecommendedViewportScale() const {
+  float recommended_scale = 1.0f;
+  for (const auto& property : primary_view_config_.Properties()) {
+    recommended_scale =
+        std::min(recommended_scale, property.RecommendedViewportScale());
+  }
+  return recommended_scale;
+}
+
+mojom::VRPosePtr OpenXrApiWrapper::GetViewerPose() const {
+  TRACE_EVENT0("xr", "GetViewerPose");
+  XrSpaceLocation local_from_viewer = {XR_TYPE_SPACE_LOCATION};
+  if (XR_FAILED(xrLocateSpace(view_space_, local_space_,
+                              frame_state_.predictedDisplayTime,
+                              &local_from_viewer))) {
+    // We failed to locate the space, so just return nullptr to indicate that
+    // we don't have tracking.
+    return nullptr;
+  }
+
+  const auto& pose_state = local_from_viewer.locationFlags;
+  const bool orientation_valid =
+      pose_state & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+  const bool orientation_tracked =
+      pose_state & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+  const bool position_valid = pose_state & XR_SPACE_LOCATION_POSITION_VALID_BIT;
+  const bool position_tracked =
+      pose_state & XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
 
   // emulated_position indicates when there is a fallback from a fully-tracked
   // (i.e. 6DOF) type case to some form of orientation-only type tracking
   // (i.e. 3DOF/IMU type sensors)
-  // Thus we have to make sure orientation is tracked.
-  // Valid Bit only indicates it's either tracked or emulated, we have to check
-  // for XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT to make sure orientation is
-  // tracked.
-  if (view_from_local.locationFlags &
-      XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) {
-    *orientation = gfx::Quaternion(
-        view_from_local.pose.orientation.x, view_from_local.pose.orientation.y,
-        view_from_local.pose.orientation.z, view_from_local.pose.orientation.w);
-  } else {
-    *orientation = absl::nullopt;
+  // Thus we have to make sure orientation is tracked to send up a valid pose;
+  // but we can send up a non tracked position, we just have to indicate that it
+  // is emulated.
+  const bool can_send_orientation = orientation_valid && orientation_tracked;
+  const bool can_send_position = position_valid;
+
+  // If we'd end up leaving both pose and orientation unset just return nullptr.
+  if (!can_send_orientation && !can_send_position) {
+    return nullptr;
   }
 
-  if (view_from_local.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) {
-    *position = gfx::Point3F(view_from_local.pose.position.x,
-                             view_from_local.pose.position.y,
-                             view_from_local.pose.position.z);
-  } else {
-    *position = absl::nullopt;
+  mojom::VRPosePtr pose = mojom::VRPose::New();
+  if (can_send_orientation) {
+    pose->orientation = gfx::Quaternion(local_from_viewer.pose.orientation.x,
+                                        local_from_viewer.pose.orientation.y,
+                                        local_from_viewer.pose.orientation.z,
+                                        local_from_viewer.pose.orientation.w);
   }
 
-  *emulated_position = true;
-  if (view_from_local.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) {
-    *emulated_position = false;
+  if (can_send_position) {
+    pose->position = gfx::Point3F(local_from_viewer.pose.position.x,
+                                  local_from_viewer.pose.position.y,
+                                  local_from_viewer.pose.position.z);
   }
 
-  return XR_SUCCESS;
+  // Position is emulated if it isn't tracked.
+  pose->emulated_position = !position_tracked;
+
+  return pose;
 }
 
-void OpenXrApiWrapper::GetHeadFromEyes(XrView* left, XrView* right) const {
-  DCHECK(HasSession());
-  DCHECK_EQ(head_from_eye_views_.size(), kNumViews);
-
-  *left = head_from_eye_views_[kLeftView];
-  *right = head_from_eye_views_[kRightView];
+std::vector<mojom::XRInputSourceStatePtr> OpenXrApiWrapper::GetInputState() {
+  return input_helper_->GetInputState(GetPredictedDisplayTime());
 }
 
-std::vector<mojom::XRInputSourceStatePtr> OpenXrApiWrapper::GetInputState(
-    bool hand_input_enabled) {
-  return input_helper_->GetInputState(hand_input_enabled,
-                                      GetPredictedDisplayTime());
+void OpenXrApiWrapper::OnHideInputSources() {
+  input_helper_->OnHideInputSources();
 }
 
-XrResult OpenXrApiWrapper::GetLuid(
-    LUID* luid,
-    const OpenXrExtensionHelper& extension_helper) const {
-  DCHECK(IsInitialized());
+void OpenXrApiWrapper::PollFuture(
+    XrFutureEXT future,
+    base::OnceCallback<void(XrFutureEXT)> on_ready_callback) {
+  pending_futures_.emplace(future, std::move(on_ready_callback));
+}
 
-  if (extension_helper.ExtensionMethods().xrGetD3D11GraphicsRequirementsKHR ==
-      nullptr)
-    return XR_ERROR_FUNCTION_UNSUPPORTED;
+void OpenXrApiWrapper::ProcessPendingFutures() {
+  if (pending_futures_.empty()) {
+    return;
+  }
 
-  XrGraphicsRequirementsD3D11KHR graphics_requirements = {
-      XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR};
-  RETURN_IF_XR_FAILED(
-      extension_helper.ExtensionMethods().xrGetD3D11GraphicsRequirementsKHR(
-          instance_, system_, &graphics_requirements));
+  auto it = pending_futures_.begin();
+  while (it != pending_futures_.end()) {
+    XrFuturePollInfoEXT poll_info = {XR_TYPE_FUTURE_POLL_INFO_EXT};
+    poll_info.future = it->first;
+    XrFuturePollResultEXT poll_result = {XR_TYPE_FUTURE_POLL_RESULT_EXT};
+    XrResult result = extension_helper_->ExtensionMethods().xrPollFutureEXT(
+        instance_, &poll_info, &poll_result);
 
-  luid->LowPart = graphics_requirements.adapterLuid.LowPart;
-  luid->HighPart = graphics_requirements.adapterLuid.HighPart;
-
-  return XR_SUCCESS;
+    if (result == XR_SUCCESS &&
+        poll_result.state == XR_FUTURE_STATE_READY_EXT) {
+      std::move(it->second).Run(it->first);
+      pending_futures_.erase(it++);
+    } else if (XR_FAILED(result)) {
+      std::move(it->second).Run(XR_NULL_FUTURE_EXT);
+      pending_futures_.erase(it++);
+    } else {
+      it++;
+    }
+  }
 }
 
 void OpenXrApiWrapper::EnsureEventPolling() {
@@ -861,7 +1543,7 @@ void OpenXrApiWrapper::EnsureEventPolling() {
 
     // Verify that OpenXR is still active after processing events.
     if (IsInitialized()) {
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
           FROM_HERE,
           base::BindOnce(&OpenXrApiWrapper::EnsureEventPolling,
                          weak_ptr_factory_.GetWeakPtr()),
@@ -871,6 +1553,20 @@ void OpenXrApiWrapper::EnsureEventPolling() {
 }
 
 XrResult OpenXrApiWrapper::ProcessEvents() {
+  // If we have no instance, we cannot process events. In this case the session
+  // has likely already been ended.
+  if (!HasInstance()) {
+    return XR_ERROR_INSTANCE_LOST;
+  }
+
+  ProcessPendingFutures();
+
+  // If we've received an exit gesture from any of the input sources, end the
+  // session.
+  if (input_helper_ && input_helper_->ReceivedExitGesture()) {
+    return ShutdownSession();
+  }
+
   XrEventDataBuffer event_data{XR_TYPE_EVENT_DATA_BUFFER};
   XrResult xr_result = xrPollEvent(instance_, &event_data);
 
@@ -881,16 +1577,21 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
       // We only have will only have one session and we should make sure the
       // session that is having state_changed event is ours.
       DCHECK(session_state_changed->session == session_);
+      SetXrSessionState(session_state_changed->state);
       switch (session_state_changed->state) {
         case XR_SESSION_STATE_READY:
           xr_result = BeginSession();
           break;
         case XR_SESSION_STATE_STOPPING:
-          session_running_ = false;
-          xr_result = xrEndSession(session_);
-          Uninitialize();
-          on_session_ended_callback_.Run();
-          return xr_result;
+          // The runtime may make the session READY again later, e.g. when the
+          // app becomes visible again, so only end the OpenXR session here.
+          // The WebXR session ends if the runtime moves on to EXITING.
+          if (pending_frame_) {
+            stop_pending_ = true;
+          } else {
+            xr_result = StopSession();
+          }
+          break;
         case XR_SESSION_STATE_SYNCHRONIZED:
           visibility_changed_callback_.Run(
               device::mojom::XRVisibilityState::HIDDEN);
@@ -903,11 +1604,17 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
           visibility_changed_callback_.Run(
               device::mojom::XRVisibilityState::VISIBLE);
           break;
+        case XR_SESSION_STATE_EXITING:
+          Uninitialize();
+          return xr_result;
         default:
           break;
       }
     } else if (event_data.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
       DCHECK(session_ != XR_NULL_HANDLE);
+      // TODO(https://crbug.com/1335240): Properly handle Instance Loss Pending.
+      LOG(ERROR) << "Received Instance Loss Event";
+      TRACE_EVENT_INSTANT("xr", "InstanceLossPendingEvent");
       Uninitialize();
       return XR_ERROR_INSTANCE_LOST;
     } else if (event_data.type ==
@@ -916,12 +1623,27 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
           reinterpret_cast<XrEventDataReferenceSpaceChangePending*>(
               &event_data);
       DCHECK(reference_space_change_pending->session == session_);
-      // TODO(crbug.com/1015049)
+      // TODO(crbug.com/40653515)
       // Currently WMR only throw reference space change event for stage.
       // Other runtimes may decide to do it differently.
       if (reference_space_change_pending->referenceSpaceType ==
           XR_REFERENCE_SPACE_TYPE_STAGE) {
         UpdateStageBounds();
+        UpdateLocalFloorSpace();
+      } else if (reference_space_change_pending->referenceSpaceType ==
+                     XR_REFERENCE_SPACE_TYPE_LOCAL ||
+                 reference_space_change_pending->referenceSpaceType ==
+                     XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT) {
+        UpdateLocalFloorSpace();
+      } else if (unbounded_space_provider_ &&
+                 reference_space_change_pending->referenceSpaceType ==
+                     unbounded_space_provider_->GetType()) {
+        // TODO(crbug.com/40653515): Properly handle unbounded reference
+        // space change events.
+      }
+
+      if (mesh_manager_) {
+        mesh_manager_->OnReferenceSpaceChanged();
       }
     } else if (event_data.type ==
                XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
@@ -929,9 +1651,31 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
           reinterpret_cast<XrEventDataInteractionProfileChanged*>(&event_data);
       DCHECK_EQ(interaction_profile_changed->session, session_);
       xr_result = input_helper_->OnInteractionProfileChanged();
+    } else if (event_data.type ==
+               XR_TYPE_EVENT_DATA_SPATIAL_DISCOVERY_RECOMMENDED_EXT) {
+      if (scene_understanding_manager_) {
+        scene_understanding_manager_->OnDiscoveryRecommended(
+            reinterpret_cast<const XrEventDataSpatialDiscoveryRecommendedEXT*>(
+                &event_data));
+      }
+    } else if (event_data.type ==
+               XR_TYPE_EVENT_DATA_VISIBILITY_MASK_CHANGED_KHR) {
+      auto* mask_changed_event =
+          reinterpret_cast<XrEventDataVisibilityMaskChangedKHR*>(&event_data);
+      if (mask_changed_event->session != session_) {
+        continue;
+      }
+      if (visibility_mask_handler_) {
+        visibility_mask_handler_->OnVisibilityMaskChanged(*mask_changed_event);
+      }
+    } else {
+      DVLOG(1) << __func__ << " Unhandled event type: " << event_data.type;
+      TRACE_EVENT_INSTANT("xr", "UnandledXrEvent", "type", event_data.type);
     }
 
     if (XR_FAILED(xr_result)) {
+      TRACE_EVENT_INSTANT("xr", "EventProcessingFailed", "type",
+                          event_data.type, "xr_result", xr_result);
       Uninitialize();
       return xr_result;
     }
@@ -940,124 +1684,165 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
     xr_result = xrPollEvent(instance_, &event_data);
   }
 
-  if (XR_FAILED(xr_result))
+  // This catches the error where we failed to poll events only.
+  if (XR_FAILED(xr_result)) {
+    TRACE_EVENT_INSTANT("xr", "EventPollingFailed", "xr_result", xr_result);
     Uninitialize();
+  }
   return xr_result;
-}
-
-const std::vector<XrViewConfigurationView>& OpenXrApiWrapper::GetViewConfigs()
-    const {
-  DCHECK(IsInitialized());
-  CHECK(view_configs_.size() == kNumViews);
-
-  return view_configs_;
-}
-
-gfx::Size OpenXrApiWrapper::GetSwapchainSize() const {
-  return swapchain_size_;
 }
 
 uint32_t OpenXrApiWrapper::GetRecommendedSwapchainSampleCount() const {
   DCHECK(IsInitialized());
 
-  auto start = view_configs_.begin();
-  auto end = view_configs_.end();
-
-  auto compareSwapchainCounts = [](const XrViewConfigurationView& i,
-                                   const XrViewConfigurationView& j) {
-    return i.recommendedSwapchainSampleCount <
-           j.recommendedSwapchainSampleCount;
-  };
-
-  return std::min_element(start, end, compareSwapchainCounts)
-      ->recommendedSwapchainSampleCount;
+  return std::ranges::min_element(
+             primary_view_config_.Properties(), {},
+             [](const OpenXrViewProperties& view) {
+               return view.RecommendedSwapchainSampleCount();
+             })
+      ->RecommendedSwapchainSampleCount();
 }
 
-// From the OpenXR Spec:
-// maxSwapchainSampleCount is the maximum number of sub-data element samples
-// supported for swapchain images that will be rendered into for this view.
-//
-// To ease the workload on low end devices, we disable anti-aliasing when the
-// max sample count is 1.
+uint16_t OpenXrApiWrapper::GetMaxRenderLayers() const {
+  if (max_layer_count_ == 0) {
+    return 0;
+  }
+  // Stereo layers, except for the projection layer, need 2 XrCompositionLayer
+  // objects (one per eye). We also reserve one layer for our own use.
+  return static_cast<uint16_t>((max_layer_count_ - 1) / 2);
+}
+
 bool OpenXrApiWrapper::CanEnableAntiAliasing() const {
-  DCHECK(IsInitialized());
-
-  const auto compareMaxSwapchainSampleCounts =
-      [](const XrViewConfigurationView& i, const XrViewConfigurationView& j) {
-        return (i.maxSwapchainSampleCount < j.maxSwapchainSampleCount);
-      };
-
-  const auto it_min_element =
-      std::min_element(view_configs_.begin(), view_configs_.end(),
-                       compareMaxSwapchainSampleCounts);
-  return (it_min_element->maxSwapchainSampleCount > 1);
+  return primary_view_config_.CanEnableAntiAliasing();
 }
 
 // stage bounds is fixed unless we received event
 // XrEventDataReferenceSpaceChangePending
-XrResult OpenXrApiWrapper::UpdateStageBounds() {
+void OpenXrApiWrapper::UpdateStageBounds() {
   DCHECK(HasSession());
-  XrResult xr_result = xrGetReferenceSpaceBoundsRect(
-      session_, XR_REFERENCE_SPACE_TYPE_STAGE, &stage_bounds_);
-  if (XR_FAILED(xr_result)) {
-    stage_bounds_.height = 0;
-    stage_bounds_.width = 0;
-  }
 
-  return xr_result;
+  // We don't check for any feature enablement here because we'll have only
+  // created the bounds_provider_ if the relevant features were enabled.
+  if (bounds_provider_) {
+    stage_bounds_ = bounds_provider_->GetStageBounds();
+  }
 }
 
-bool OpenXrApiWrapper::GetStageParameters(XrExtent2Df* stage_bounds,
-                                          gfx::Transform* local_from_stage) {
-  DCHECK(stage_bounds);
-  DCHECK(local_from_stage);
+bool OpenXrApiWrapper::GetStageParameters(
+    std::vector<gfx::Point3F>& stage_bounds,
+    gfx::Transform& local_from_stage) {
   DCHECK(HasSession());
 
-  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL))
+  // We should only supply stage parameters if we are supposed to provide
+  // information about the bounded reference spaces.
+  if (!IsFeatureEnabled(mojom::XRSessionFeature::REF_SPACE_BOUNDED_FLOOR)) {
     return false;
+  }
 
-  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE))
+  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL) ||
+      !HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE)) {
     return false;
+  }
 
-  *stage_bounds = stage_bounds_;
+  std::optional<gfx::Transform> maybe_local_from_stage = GetLocalFromStage();
+  if (!maybe_local_from_stage) {
+    return false;
+  }
 
-  XrSpaceLocation local_from_stage_location = {XR_TYPE_SPACE_LOCATION};
-  if (XR_FAILED(xrLocateSpace(stage_space_, local_space_,
+  stage_bounds = stage_bounds_;
+  local_from_stage = maybe_local_from_stage.value();
+
+  return true;
+}
+
+std::optional<gfx::Transform> OpenXrApiWrapper::GetLocalFromFloor() {
+  if (!IsFeatureEnabled(
+          device::mojom::XRSessionFeature::REF_SPACE_LOCAL_FLOOR)) {
+    return std::nullopt;
+  }
+
+  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL)) {
+    return std::nullopt;
+  }
+
+  // Even if we're emulating the local floor space, it should exist.
+  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT)) {
+    return std::nullopt;
+  }
+
+  return GetBaseSpaceFromSpace(mojom::XRReferenceSpaceType::kLocal,
+                               mojom::XRReferenceSpaceType::kLocalFloor);
+}
+
+std::optional<gfx::Transform> OpenXrApiWrapper::GetLocalFromStage() {
+  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL)) {
+    return std::nullopt;
+  }
+
+  if (!HasSpace(XR_REFERENCE_SPACE_TYPE_STAGE)) {
+    return std::nullopt;
+  }
+
+  return GetBaseSpaceFromSpace(mojom::XRReferenceSpaceType::kLocal,
+                               mojom::XRReferenceSpaceType::kBoundedFloor);
+}
+
+std::optional<gfx::Transform> OpenXrApiWrapper::GetBaseSpaceFromSpace(
+    mojom::XRReferenceSpaceType base_space_type,
+    mojom::XRReferenceSpaceType space_type) {
+  TRACE_EVENT2("xr", "GetBaseSpaceFromSpace", "base_space", base_space_type,
+               "space", space_type);
+  auto base_space = GetReferenceSpace(base_space_type);
+  auto space = GetReferenceSpace(space_type);
+  XrSpaceLocation base_space_from_space_location = {XR_TYPE_SPACE_LOCATION};
+  if (XR_FAILED(xrLocateSpace(space, base_space,
                               frame_state_.predictedDisplayTime,
-                              &local_from_stage_location)) ||
-      !IsPoseValid(local_from_stage_location.locationFlags)) {
-    return false;
+                              &base_space_from_space_location)) ||
+      !IsPoseValid(base_space_from_space_location.locationFlags)) {
+    return std::nullopt;
   }
 
   // Convert the orientation and translation given by runtime into a
   // transformation matrix.
-  gfx::DecomposedTransform local_from_stage_decomp;
-  local_from_stage_decomp.quaternion =
-      gfx::Quaternion(local_from_stage_location.pose.orientation.x,
-                      local_from_stage_location.pose.orientation.y,
-                      local_from_stage_location.pose.orientation.z,
-                      local_from_stage_location.pose.orientation.w);
-  local_from_stage_decomp.translate[0] =
-      local_from_stage_location.pose.position.x;
-  local_from_stage_decomp.translate[1] =
-      local_from_stage_location.pose.position.y;
-  local_from_stage_decomp.translate[2] =
-      local_from_stage_location.pose.position.z;
+  gfx::DecomposedTransform base_space_from_space_decomp;
+  base_space_from_space_decomp.quaternion =
+      gfx::Quaternion(base_space_from_space_location.pose.orientation.x,
+                      base_space_from_space_location.pose.orientation.y,
+                      base_space_from_space_location.pose.orientation.z,
+                      base_space_from_space_location.pose.orientation.w);
+  base_space_from_space_decomp.translate[0] =
+      base_space_from_space_location.pose.position.x;
+  base_space_from_space_decomp.translate[1] =
+      base_space_from_space_location.pose.position.y;
+  base_space_from_space_decomp.translate[2] =
+      base_space_from_space_location.pose.position.z;
 
-  *local_from_stage = gfx::ComposeTransform(local_from_stage_decomp);
-  return true;
+  gfx::Transform base_space_from_space =
+      gfx::Transform::Compose(base_space_from_space_decomp);
+
+  return base_space_from_space;
 }
 
-VRTestHook* OpenXrApiWrapper::test_hook_ = nullptr;
-ServiceTestHook* OpenXrApiWrapper::service_test_hook_ = nullptr;
-void OpenXrApiWrapper::SetTestHook(VRTestHook* hook) {
-  // This may be called from any thread - tests are responsible for
-  // maintaining thread safety, typically by not changing the test hook
-  // while presenting.
-  test_hook_ = hook;
-  if (service_test_hook_) {
-    service_test_hook_->SetTestHook(test_hook_);
+void OpenXrApiWrapper::SetXrSessionState(XrSessionState new_state) {
+  if (session_state_ == new_state)
+    return;
+
+  const char* old_state_name = GetXrSessionStateName(session_state_);
+  const char* new_state_name = GetXrSessionStateName(new_state);
+  DVLOG(1) << __func__ << " Transitioning from: " << old_state_name
+           << " to: " << new_state_name;
+
+  auto track = perfetto::NamedTrack::FromPointer("XRSessionState", this);
+  if (session_state_ != XR_SESSION_STATE_UNKNOWN) {
+    TRACE_EVENT_END("xr", /*"XRSessionState"*/
+                    track, "state", old_state_name);
   }
+
+  if (new_state != XR_SESSION_STATE_UNKNOWN) {
+    TRACE_EVENT_BEGIN("xr", "XRSessionState", track, "state", new_state_name);
+  }
+
+  session_state_ = new_state;
 }
 
 }  // namespace device

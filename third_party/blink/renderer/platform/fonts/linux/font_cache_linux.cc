@@ -27,8 +27,11 @@
 #include "build/build_config.h"
 #include "third_party/blink/public/platform/linux/web_sandbox_support.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/platform/fonts/font_fallback_priority.h"
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
 #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/text/character.h"
 #include "ui/gfx/font_fallback_linux.h"
 
 namespace blink {
@@ -45,7 +48,7 @@ const AtomicString& FontCache::SystemFontFamily() {
 
 // static
 void FontCache::SetSystemFontFamily(const AtomicString& family_name) {
-  DCHECK(!family_name.IsEmpty());
+  DCHECK(!family_name.empty());
   MutableSystemFontFamily() = family_name;
 }
 
@@ -62,54 +65,55 @@ bool FontCache::GetFontForCharacter(UChar32 c,
   }
 }
 
-scoped_refptr<SimpleFontData> FontCache::PlatformFallbackFontForCharacter(
+const SimpleFontData* FontCache::PlatformFallbackFontForCharacter(
     const FontDescription& font_description,
     UChar32 c,
     const SimpleFontData*,
     FontFallbackPriority fallback_priority) {
-  // The m_fontManager is set only if it was provided by the embedder with
-  // WebFontRendering::setSkiaFontManager. This is used to emulate android fonts
-  // on linux so we always request the family from the font manager and if none
-  // is found, we return the LastResort fallback font and avoid using
-  // FontCache::GetFontForCharacter which would use sandbox support to query the
-  // underlying system for the font family.
-  if (font_manager_) {
-    AtomicString family_name = GetFamilyNameForCharacter(
-        font_manager_.get(), c, font_description, fallback_priority);
-    if (family_name.IsEmpty())
-      return GetLastResortFallbackFont(font_description, kDoNotRetain);
-    return FontDataFromFontPlatformData(
-        GetFontPlatformData(font_description,
-                            FontFaceCreationParams(family_name)),
-        kDoNotRetain);
-  }
-
-  if (fallback_priority == FontFallbackPriority::kEmojiEmoji) {
+  if (IsEmojiPresentationEmoji(fallback_priority)) {
     // FIXME crbug.com/591346: We're overriding the fallback character here
     // with the FAMILY emoji in the hope to find a suitable emoji font.
     // This should be improved by supporting fallback for character
     // sequences like DIGIT ONE + COMBINING keycap etc.
-    c = kFamilyCharacter;
+    c = uchar::kFamily;
   }
 
   // First try the specified font with standard style & weight.
-  if (fallback_priority != FontFallbackPriority::kEmojiEmoji &&
-      (font_description.Style() == ItalicSlopeValue() ||
-       font_description.Weight() >= BoldThreshold())) {
-    scoped_refptr<SimpleFontData> font_data =
+  if (!IsEmojiPresentationEmoji(fallback_priority) &&
+      (font_description.Style() == kItalicSlopeValue ||
+       font_description.Weight() >= kBoldThreshold)) {
+    const SimpleFontData* font_data =
         FallbackOnStandardFontStyle(font_description, c);
     if (font_data)
       return font_data;
   }
 
+  // Many Linux distributions' fontconfig rules (e.g., 65-nonlatin.conf) only
+  // list legacy fonts for Urdu ("ur") and do not yet include "Noto Nastaliq
+  // Urdu". Prefer "Noto Nastaliq Urdu" when the locale script is
+  // USCRIPT_ARABIC_NASTALIQ and the character is in the Arabic script.
+  if (font_description.GetScriptForFont() == USCRIPT_ARABIC_NASTALIQ &&
+      unicode::GetScriptBasedOnUnicodeBlock(c) == USCRIPT_ARABIC &&
+      RuntimeEnabledFeatures::NastaliqScriptEnabled()) [[unlikely]] {
+    DEFINE_THREAD_SAFE_STATIC_LOCAL(const AtomicString, kNotoNastaliqUrdu,
+                                    ("Noto Nastaliq Urdu"));
+    if (const SimpleFontData* nastaliq =
+            GetFontData(font_description, kNotoNastaliqUrdu)) {
+      if (nastaliq->GlyphForCharacter(c)) {
+        return nastaliq;
+      }
+    }
+  }
+
   gfx::FallbackFontData fallback_font;
   if (!FontCache::GetFontForCharacter(
           c,
-          fallback_priority == FontFallbackPriority::kEmojiEmoji
+          IsEmojiPresentationEmoji(fallback_priority)
               ? kColorEmojiLocale
               : font_description.LocaleOrDefault().Ascii().c_str(),
-          &fallback_font))
+          &fallback_font)) {
     return nullptr;
+  }
 
   FontFaceCreationParams creation_params;
   creation_params = FontFaceCreationParams(
@@ -122,29 +126,33 @@ scoped_refptr<SimpleFontData> FontCache::PlatformFallbackFontForCharacter(
   bool should_set_synthetic_bold = false;
   bool should_set_synthetic_italic = false;
   FontDescription description(font_description);
-  if (fallback_font.is_bold && description.Weight() < BoldThreshold())
-    description.SetWeight(BoldWeightValue());
-  if (!fallback_font.is_bold && description.Weight() >= BoldThreshold()) {
-    should_set_synthetic_bold = true;
-    description.SetWeight(NormalWeightValue());
+  if (fallback_font.is_bold && description.Weight() < kBoldThreshold) {
+    description.SetWeight(kBoldWeightValue);
   }
-  if (fallback_font.is_italic && description.Style() == NormalSlopeValue())
-    description.SetStyle(ItalicSlopeValue());
-  if (!fallback_font.is_italic && (description.Style() == ItalicSlopeValue())) {
+  if (!fallback_font.is_bold && description.Weight() >= kBoldThreshold &&
+      font_description.SyntheticBoldAllowed()) {
+    should_set_synthetic_bold = true;
+    description.SetWeight(kNormalWeightValue);
+  }
+  if (fallback_font.is_italic && description.Style() == kNormalSlopeValue) {
+    description.SetStyle(kItalicSlopeValue);
+  }
+  if (!fallback_font.is_italic && (description.Style() == kItalicSlopeValue) &&
+      font_description.SyntheticItalicAllowed()) {
     should_set_synthetic_italic = true;
-    description.SetStyle(NormalSlopeValue());
+    description.SetStyle(kNormalSlopeValue);
   }
 
-  FontPlatformData* substitute_platform_data =
+  const FontPlatformData* substitute_platform_data =
       GetFontPlatformData(description, creation_params);
   if (!substitute_platform_data)
     return nullptr;
 
-  std::unique_ptr<FontPlatformData> platform_data(
-      new FontPlatformData(*substitute_platform_data));
+  FontPlatformData* platform_data =
+      MakeGarbageCollected<FontPlatformData>(*substitute_platform_data);
   platform_data->SetSyntheticBold(should_set_synthetic_bold);
   platform_data->SetSyntheticItalic(should_set_synthetic_italic);
-  return FontDataFromFontPlatformData(platform_data.get(), kDoNotRetain);
+  return FontDataFromFontPlatformData(platform_data);
 }
 
 }  // namespace blink

@@ -1,11 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_SCHEDULER_INTERNAL_NOTIFICATION_STORE_H_
 #define CHROME_BROWSER_NOTIFICATIONS_SCHEDULER_INTERNAL_NOTIFICATION_STORE_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -14,7 +13,7 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/notifications/proto/notification_entry.pb.h"
 #include "chrome/browser/notifications/scheduler/internal/collection_store.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 #include "components/leveldb_proto/public/proto_database.h"
 
 // Forward declaration for proto conversion.

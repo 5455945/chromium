@@ -1,12 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/power/power_button_menu_item_view.h"
 
-#include "ash/style/ash_color_provider.h"
-#include "ash/style/scoped_light_mode_as_default.h"
+#include "ash/style/ash_color_id.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -43,9 +46,12 @@ PowerButtonMenuItemView::PowerButtonMenuItemView(
     const std::u16string& title_text)
     : views::ImageButton(std::move(callback)), icon_(icon) {
   SetFocusBehavior(FocusBehavior::ALWAYS);
+  set_suppress_default_focus_handling();
   SetFocusPainter(nullptr);
 
   icon_view_ = AddChildView(std::make_unique<views::ImageView>());
+  icon_view_->SetImage(
+      ui::ImageModel::FromVectorIcon(*icon_, kColorAshIconColorPrimary));
   title_ = AddChildView(std::make_unique<views::Label>());
   title_->SetBackgroundColor(SK_ColorTRANSPARENT);
   title_->SetText(title_text);
@@ -53,21 +59,19 @@ PowerButtonMenuItemView::PowerButtonMenuItemView(
   title_->SetLineHeight(kLineHeight);
   title_->SetMultiLine(true);
   title_->SetMaxLines(2);
-  GetViewAccessibility().OverrideRole(ax::mojom::Role::kMenuItem);
-  GetViewAccessibility().OverrideName(title_->GetText());
+  title_->SetEnabledColor(cros_tokens::kTextColorPrimary);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kMenuItem);
+  GetViewAccessibility().SetName(std::u16string(title_->GetText()),
+                                 ax::mojom::NameFrom::kAttribute);
 
-  SetBorder(views::CreateEmptyBorder(kItemBorderThickness, kItemBorderThickness,
-                                     kItemBorderThickness,
-                                     kItemBorderThickness));
+  SetBorder(views::CreateEmptyBorder(
+      gfx::Insets::TLBR(kItemBorderThickness, kItemBorderThickness,
+                        kItemBorderThickness, kItemBorderThickness)));
 }
 
 PowerButtonMenuItemView::~PowerButtonMenuItemView() = default;
 
-const char* PowerButtonMenuItemView::GetClassName() const {
-  return "PowerButtonMenuItemView";
-}
-
-void PowerButtonMenuItemView::Layout() {
+void PowerButtonMenuItemView::Layout(PassKey) {
   const gfx::Rect rect(GetContentsBounds());
 
   gfx::Rect icon_rect(rect);
@@ -81,30 +85,20 @@ void PowerButtonMenuItemView::Layout() {
                                   kMenuItemHeight - kTitleTopPadding));
 }
 
-gfx::Size PowerButtonMenuItemView::CalculatePreferredSize() const {
+gfx::Size PowerButtonMenuItemView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kMenuItemWidth + 2 * kItemBorderThickness,
                    kMenuItemHeight + 2 * kItemBorderThickness);
 }
 
 void PowerButtonMenuItemView::OnFocus() {
   parent()->SetFocusBehavior(FocusBehavior::NEVER);
-  NotifyAccessibilityEvent(ax::mojom::Event::kSelection, true);
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kSelection, true);
   SchedulePaint();
 }
 
 void PowerButtonMenuItemView::OnBlur() {
   SchedulePaint();
-}
-
-void PowerButtonMenuItemView::OnThemeChanged() {
-  views::ImageButton::OnThemeChanged();
-  ScopedLightModeAsDefault scoped_light_mode_as_default;
-  const auto* color_provider = AshColorProvider::Get();
-  icon_view_->SetImage(gfx::CreateVectorIcon(
-      icon_, color_provider->GetContentLayerColor(
-                 AshColorProvider::ContentLayerType::kIconColorPrimary)));
-  title_->SetEnabledColor(color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary));
 }
 
 void PowerButtonMenuItemView::PaintButtonContents(gfx::Canvas* canvas) {
@@ -123,12 +117,13 @@ void PowerButtonMenuItemView::PaintButtonContents(gfx::Canvas* canvas) {
   gfx::Rect bounds = GetLocalBounds();
   bounds.Inset(gfx::Insets(kItemBorderThickness));
   // Stroke.
-  ScopedLightModeAsDefault scoped_light_mode_as_default;
-  flags.setColor(AshColorProvider::Get()->GetControlsLayerColor(
-      AshColorProvider::ControlsLayerType::kFocusRingColor));
+  flags.setColor(GetColorProvider()->GetColor(ui::kColorAshFocusRing));
   flags.setStrokeWidth(kItemBorderThickness);
   flags.setStyle(cc::PaintFlags::Style::kStroke_Style);
   canvas->DrawRoundRect(bounds, kFocusedItemRoundRectRadiusDp, flags);
 }
+
+BEGIN_METADATA(PowerButtonMenuItemView)
+END_METADATA
 
 }  // namespace ash

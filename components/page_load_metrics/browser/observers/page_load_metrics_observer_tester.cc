@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,13 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_embedder_interface.h"
+#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
+#include "components/page_load_metrics/common/page_load_timing.h"
 #include "content/public/browser/cookie_access_details.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -23,7 +26,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
-#include "third_party/blink/public/mojom/mobile_metrics/mobile_friendliness.mojom.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -31,8 +33,6 @@ class BrowserContext;
 }  // namespace content
 
 namespace page_load_metrics {
-
-class PageLoadMetricsMemoryTracker;
 
 namespace {
 
@@ -43,11 +43,18 @@ class TestPageLoadMetricsEmbedderInterface
       PageLoadMetricsObserverTester* test)
       : test_(test) {}
 
+  TestPageLoadMetricsEmbedderInterface(
+      const TestPageLoadMetricsEmbedderInterface&) = delete;
+  TestPageLoadMetricsEmbedderInterface& operator=(
+      const TestPageLoadMetricsEmbedderInterface&) = delete;
+
   bool IsNewTabPageUrl(const GURL& url) override { return false; }
 
   // Forward the registration logic to the test class so that derived classes
   // can override the logic there without depending on the embedder interface.
-  void RegisterObservers(PageLoadTracker* tracker) override {
+  void RegisterObservers(
+      PageLoadTracker* tracker,
+      content::NavigationHandle* navigation_handle) override {
     test_->RegisterObservers(tracker);
   }
 
@@ -57,22 +64,29 @@ class TestPageLoadMetricsEmbedderInterface
     return std::move(timer);
   }
 
+  bool HasWebUIConfig(const GURL& url) override { return false; }
+
   bool IsNoStatePrefetch(content::WebContents* web_contents) override {
     return false;
   }
 
   bool IsExtensionUrl(const GURL& url) override { return false; }
 
-  page_load_metrics::PageLoadMetricsMemoryTracker*
-  GetMemoryTrackerForBrowserContext(
-      content::BrowserContext* browser_context) override {
-    return nullptr;
+  bool IsNonTabWebUI(const GURL& url) override {
+    return test_->is_non_tab_webui();
+  }
+
+  bool IsInternalWebUI(const GURL& url) override { return true; }
+
+  bool ShouldObserveScheme(std::string_view scheme) override { return false; }
+
+  NavigationScenario GetNavigationScenario(
+      content::NavigationHandle* navigation_handle) const override {
+    return test_->GetNavigationScenario(navigation_handle);
   }
 
  private:
-  PageLoadMetricsObserverTester* test_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestPageLoadMetricsEmbedderInterface);
+  raw_ptr<PageLoadMetricsObserverTester> test_;
 };
 
 }  // namespace
@@ -80,16 +94,18 @@ class TestPageLoadMetricsEmbedderInterface
 PageLoadMetricsObserverTester::PageLoadMetricsObserverTester(
     content::WebContents* web_contents,
     content::RenderViewHostTestHarness* rfh_test_harness,
-    const RegisterObserversCallback& callback)
+    const RegisterObserversCallback& callback,
+    bool is_non_tab_webui)
     : register_callback_(callback),
       web_contents_(web_contents),
       rfh_test_harness_(rfh_test_harness),
       metrics_web_contents_observer_(
           MetricsWebContentsObserver::CreateForWebContents(
               web_contents,
-              std::make_unique<TestPageLoadMetricsEmbedderInterface>(this))) {}
+              std::make_unique<TestPageLoadMetricsEmbedderInterface>(this))),
+      is_non_tab_webui_(is_non_tab_webui) {}
 
-PageLoadMetricsObserverTester::~PageLoadMetricsObserverTester() {}
+PageLoadMetricsObserverTester::~PageLoadMetricsObserverTester() = default;
 
 void PageLoadMetricsObserverTester::StartNavigation(const GURL& gurl) {
   std::unique_ptr<content::NavigationSimulator> navigation =
@@ -116,7 +132,7 @@ void PageLoadMetricsObserverTester::NavigateToUntrackedUrl() {
 
 void PageLoadMetricsObserverTester::SimulateTimingUpdate(
     const mojom::PageLoadTiming& timing) {
-  SimulateTimingUpdate(timing, web_contents()->GetMainFrame());
+  SimulateTimingUpdate(timing, web_contents()->GetPrimaryMainFrame());
 }
 
 void PageLoadMetricsObserverTester::SimulateTimingUpdate(
@@ -125,54 +141,45 @@ void PageLoadMetricsObserverTester::SimulateTimingUpdate(
   SimulatePageLoadTimingUpdate(
       timing, mojom::FrameMetadata(), /* new_features= */ {},
       mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
-      mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      blink::MobileFriendliness(), rfh);
+      std::vector<mojom::EventTimingPtr>(), std::nullopt, rfh,
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulateCpuTimingUpdate(
     const mojom::CpuTiming& cpu_timing) {
-  SimulateCpuTimingUpdate(cpu_timing, web_contents()->GetMainFrame());
+  SimulateCpuTimingUpdate(cpu_timing, web_contents()->GetPrimaryMainFrame());
 }
 
 void PageLoadMetricsObserverTester::SimulateCpuTimingUpdate(
     const mojom::CpuTiming& cpu_timing,
     content::RenderFrameHost* rfh) {
-  auto timing = page_load_metrics::mojom::PageLoadTimingPtr(base::in_place);
+  auto timing = page_load_metrics::mojom::PageLoadTimingPtr(std::in_place);
+  page_load_metrics::InitPageLoadTimingForTest(timing.get());
+  SimulatePageLoadTimingUpdate(
+      *timing, mojom::FrameMetadata(),
+      /* new_features= */ {}, mojom::FrameRenderDataUpdate(), cpu_timing,
+      std::vector<mojom::EventTimingPtr>(), std::nullopt, rfh,
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
+}
+
+void PageLoadMetricsObserverTester::SimulateEventTimingUpdate(
+    const std::vector<mojom::EventTimingPtr>& event_timings) {
+  SimulateEventTimingUpdate(event_timings,
+                            web_contents()->GetPrimaryMainFrame());
+}
+
+void PageLoadMetricsObserverTester::SimulateEventTimingUpdate(
+    const std::vector<mojom::EventTimingPtr>& event_timings,
+    content::RenderFrameHost* rfh) {
+  auto timing = page_load_metrics::mojom::PageLoadTimingPtr(std::in_place);
   page_load_metrics::InitPageLoadTimingForTest(timing.get());
   SimulatePageLoadTimingUpdate(
       *timing, mojom::FrameMetadata(), /* new_features= */ {},
-      mojom::FrameRenderDataUpdate(), cpu_timing,
-      mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      blink::MobileFriendliness(), rfh);
-}
-
-void PageLoadMetricsObserverTester::SimulateInputTimingUpdate(
-    const mojom::InputTiming& input_timing) {
-  SimulateInputTimingUpdate(input_timing, web_contents()->GetMainFrame());
-}
-
-void PageLoadMetricsObserverTester::SimulateMobileFriendlinessUpdate(
-    const blink::MobileFriendliness& mobile_friendliness,
-    content::RenderFrameHost* rfh) {
-  mojom::PageLoadTiming timing;
-  page_load_metrics::InitPageLoadTimingForTest(&timing);
-  SimulatePageLoadTimingUpdate(
-      timing, mojom::FrameMetadata(),
-      /* new_features= */ {}, mojom::FrameRenderDataUpdate(),
-      mojom::CpuTiming(), mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      mobile_friendliness, rfh);
-}
-
-void PageLoadMetricsObserverTester::SimulateInputTimingUpdate(
-    const mojom::InputTiming& input_timing,
-    content::RenderFrameHost* rfh) {
-  auto timing = page_load_metrics::mojom::PageLoadTimingPtr(base::in_place);
-  page_load_metrics::InitPageLoadTimingForTest(timing.get());
-  SimulatePageLoadTimingUpdate(
-      *timing, mojom::FrameMetadata(), /* new_features= */ {},
-      mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
-      mojom::DeferredResourceCounts(), input_timing,
-      blink::MobileFriendliness(), rfh);
+      mojom::FrameRenderDataUpdate(), mojom::CpuTiming(), event_timings,
+      std::nullopt, rfh, std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulateTimingAndMetadataUpdate(
@@ -180,8 +187,42 @@ void PageLoadMetricsObserverTester::SimulateTimingAndMetadataUpdate(
     const mojom::FrameMetadata& metadata) {
   SimulatePageLoadTimingUpdate(
       timing, metadata, /* new_features= */ {}, mojom::FrameRenderDataUpdate(),
-      mojom::CpuTiming(), mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      blink::MobileFriendliness(), web_contents()->GetMainFrame());
+      mojom::CpuTiming(), std::vector<mojom::EventTimingPtr>(), std::nullopt,
+      web_contents()->GetPrimaryMainFrame(),
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
+}
+
+void PageLoadMetricsObserverTester::SimulateTimingAndFontLoadingMetricsUpdate(
+    const mojom::PageLoadTiming& timing,
+    mojom::FontLoadingMetricsPtr font_loading_metrics) {
+  SimulatePageLoadTimingUpdate(
+      timing, mojom::FrameMetadata(), /* new_features= */ {},
+      mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
+      std::vector<mojom::EventTimingPtr>(), std::nullopt,
+      web_contents()->GetPrimaryMainFrame(),
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>(),
+      std::move(font_loading_metrics));
+}
+
+void PageLoadMetricsObserverTester::SimulateSubresourceLoadMetricsUpdate(
+    const blink::SubresourceLoadMetrics& subresource_load_metrics) {
+  SimulateSubresourceLoadMetricsUpdate(subresource_load_metrics,
+                                       web_contents()->GetPrimaryMainFrame());
+}
+
+void PageLoadMetricsObserverTester::SimulateSubresourceLoadMetricsUpdate(
+    const blink::SubresourceLoadMetrics& subresource_load_metrics,
+    content::RenderFrameHost* rfh) {
+  mojom::PageLoadTiming timing;
+  InitPageLoadTimingForTest(&timing);
+  SimulatePageLoadTimingUpdate(
+      timing, mojom::FrameMetadata(), /* new_features= */ {},
+      mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
+      std::vector<mojom::EventTimingPtr>(), subresource_load_metrics, rfh,
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulateMetadataUpdate(
@@ -191,8 +232,9 @@ void PageLoadMetricsObserverTester::SimulateMetadataUpdate(
   InitPageLoadTimingForTest(&timing);
   SimulatePageLoadTimingUpdate(
       timing, metadata, /* new_features= */ {}, mojom::FrameRenderDataUpdate(),
-      mojom::CpuTiming(), mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      blink::MobileFriendliness(), rfh);
+      mojom::CpuTiming(), std::vector<mojom::EventTimingPtr>(), std::nullopt,
+      rfh, std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulateFeaturesUpdate(
@@ -200,13 +242,15 @@ void PageLoadMetricsObserverTester::SimulateFeaturesUpdate(
   SimulatePageLoadTimingUpdate(
       mojom::PageLoadTiming(), mojom::FrameMetadata(), new_features,
       mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
-      mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      blink::MobileFriendliness(), web_contents()->GetMainFrame());
+      std::vector<mojom::EventTimingPtr>(), std::nullopt,
+      web_contents()->GetPrimaryMainFrame(),
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulateRenderDataUpdate(
     const mojom::FrameRenderDataUpdate& render_data) {
-  SimulateRenderDataUpdate(render_data, web_contents()->GetMainFrame());
+  SimulateRenderDataUpdate(render_data, web_contents()->GetPrimaryMainFrame());
 }
 
 void PageLoadMetricsObserverTester::SimulateRenderDataUpdate(
@@ -215,9 +259,33 @@ void PageLoadMetricsObserverTester::SimulateRenderDataUpdate(
   mojom::PageLoadTiming timing;
   InitPageLoadTimingForTest(&timing);
   SimulatePageLoadTimingUpdate(
-      timing, mojom::FrameMetadata(), /* new_features= */ {}, render_data,
-      mojom::CpuTiming(), mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      blink::MobileFriendliness(), rfh);
+      timing, mojom::FrameMetadata(),
+      /* new_features= */ {}, render_data, mojom::CpuTiming(),
+      std::vector<mojom::EventTimingPtr>(), std::nullopt, rfh,
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
+}
+
+void PageLoadMetricsObserverTester::SimulateSoftNavigation(
+    content::NavigationHandle* navigation_handle) {
+  SimulateDidFinishNavigation(navigation_handle);
+}
+
+void PageLoadMetricsObserverTester::SimulateDidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  metrics_web_contents_observer_->DidFinishNavigation(navigation_handle);
+}
+
+void PageLoadMetricsObserverTester::SimulateSoftNavigationCountUpdate(
+    const mojom::SoftNavigationMetrics& soft_navigation_metrics) {
+  std::vector<mojom::SoftNavigationMetricsPtr> cloned;
+  cloned.emplace_back(soft_navigation_metrics.Clone());
+  SimulatePageLoadTimingUpdate(
+      mojom::PageLoadTiming(), mojom::FrameMetadata(),
+      /* new_features= */ {}, mojom::FrameRenderDataUpdate(),
+      mojom::CpuTiming(), std::vector<mojom::EventTimingPtr>(), std::nullopt,
+      web_contents()->GetPrimaryMainFrame(), std::move(cloned),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulatePageLoadTimingUpdate(
@@ -226,15 +294,26 @@ void PageLoadMetricsObserverTester::SimulatePageLoadTimingUpdate(
     const std::vector<blink::UseCounterFeature>& new_features,
     const mojom::FrameRenderDataUpdate& render_data,
     const mojom::CpuTiming& cpu_timing,
-    const mojom::DeferredResourceCounts& new_deferred_resource_data,
-    const mojom::InputTiming& input_timing,
-    const blink::MobileFriendliness& mobile_friendliness,
-    content::RenderFrameHost* rfh) {
+    const std::vector<mojom::EventTimingPtr>& event_timings,
+    const std::optional<blink::SubresourceLoadMetrics>&
+        subresource_load_metrics,
+    content::RenderFrameHost* rfh,
+    const std::vector<mojom::SoftNavigationMetricsPtr>& soft_navigation_metrics,
+    const std::vector<mojom::LargestContentfulPaintTimingPtr>&
+        soft_largest_contentful_paint,
+    mojom::FontLoadingMetricsPtr font_loading_metrics) {
+  std::vector<mojom::EventTimingPtr> event_timings_clone;
+  for (const auto& entry : event_timings) {
+    event_timings_clone.push_back(entry.Clone());
+  }
   metrics_web_contents_observer_->OnTimingUpdated(
       rfh, timing.Clone(), metadata.Clone(), new_features,
       std::vector<mojom::ResourceDataUpdatePtr>(), render_data.Clone(),
-      cpu_timing.Clone(), new_deferred_resource_data.Clone(),
-      input_timing.Clone(), mobile_friendliness);
+      cpu_timing.Clone(), std::move(event_timings_clone),
+      subresource_load_metrics, mojo::Clone(soft_navigation_metrics),
+      mojo::Clone(soft_largest_contentful_paint),
+      std::vector<mojom::CustomUserTimingMarkPtr>(),
+      std::move(font_loading_metrics));
   // If sending the timing update caused the PageLoadMetricsUpdateDispatcher to
   // schedule a buffering timer, then fire it now so metrics are dispatched to
   // observers.
@@ -245,22 +324,25 @@ void PageLoadMetricsObserverTester::SimulatePageLoadTimingUpdate(
 
 void PageLoadMetricsObserverTester::SimulateResourceDataUseUpdate(
     const std::vector<mojom::ResourceDataUpdatePtr>& resources) {
-  SimulateResourceDataUseUpdate(resources, web_contents()->GetMainFrame());
+  SimulateResourceDataUseUpdate(resources,
+                                web_contents()->GetPrimaryMainFrame());
 }
 
 void PageLoadMetricsObserverTester::SimulateResourceDataUseUpdate(
     const std::vector<mojom::ResourceDataUpdatePtr>& resources,
     content::RenderFrameHost* render_frame_host) {
-  auto timing = mojom::PageLoadTimingPtr(base::in_place);
+  auto timing = mojom::PageLoadTimingPtr(std::in_place);
   InitPageLoadTimingForTest(timing.get());
   metrics_web_contents_observer_->OnTimingUpdated(
       render_frame_host, std::move(timing),
-      mojom::FrameMetadataPtr(base::in_place),
+      mojom::FrameMetadataPtr(std::in_place),
       std::vector<blink::UseCounterFeature>(), resources,
-      mojom::FrameRenderDataUpdatePtr(base::in_place),
-      mojom::CpuTimingPtr(base::in_place),
-      mojom::DeferredResourceCountsPtr(base::in_place),
-      mojom::InputTimingPtr(base::in_place), blink::MobileFriendliness());
+      mojom::FrameRenderDataUpdatePtr(std::in_place),
+      mojom::CpuTimingPtr(std::in_place), std::vector<mojom::EventTimingPtr>(),
+      std::nullopt, std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>(),
+      std::vector<mojom::CustomUserTimingMarkPtr>(),
+      mojom::FontLoadingMetricsPtr());
 }
 
 void PageLoadMetricsObserverTester::SimulateLoadedResource(
@@ -278,7 +360,7 @@ void PageLoadMetricsObserverTester::SimulateLoadedResource(
   }
 
   blink::mojom::ResourceLoadInfo resource_load_info;
-  resource_load_info.final_url = info.origin_of_final_url.GetURL();
+  resource_load_info.final_url = info.final_url.GetURL();
   resource_load_info.was_cached = info.was_cached;
   resource_load_info.raw_body_bytes = info.raw_body_bytes;
   resource_load_info.total_received_bytes =
@@ -293,7 +375,8 @@ void PageLoadMetricsObserverTester::SimulateLoadedResource(
     resource_load_info.load_timing_info.request_start = base::TimeTicks::Now();
 
   metrics_web_contents_observer_->ResourceLoadComplete(
-      web_contents()->GetMainFrame(), request_id, resource_load_info);
+      web_contents()->GetPrimaryMainFrame(), request_id,
+      resource_load_info.original_url, resource_load_info);
 }
 
 void PageLoadMetricsObserverTester::SimulateFrameReceivedUserActivation(
@@ -304,7 +387,9 @@ void PageLoadMetricsObserverTester::SimulateFrameReceivedUserActivation(
 
 void PageLoadMetricsObserverTester::SimulateInputEvent(
     const blink::WebInputEvent& event) {
-  metrics_web_contents_observer_->OnInputEvent(event);
+  metrics_web_contents_observer_->OnInputEvent(
+      *web_contents()->GetPrimaryMainFrame()->GetRenderWidgetHost(), event,
+      input::InputEventSource::kBrowser);
 }
 
 void PageLoadMetricsObserverTester::SimulateAppEnterBackground() {
@@ -312,17 +397,22 @@ void PageLoadMetricsObserverTester::SimulateAppEnterBackground() {
 }
 
 void PageLoadMetricsObserverTester::SimulateMediaPlayed() {
+  SimulateMediaPlayed(web_contents()->GetPrimaryMainFrame());
+}
+
+void PageLoadMetricsObserverTester::SimulateMediaPlayed(
+    content::RenderFrameHost* rfh) {
   content::WebContentsObserver::MediaPlayerInfo video_type(
-      true /* has_video*/, true /* has_audio */);
-  content::RenderFrameHost* render_frame_host = web_contents()->GetMainFrame();
+      /*has_video=*/true, /*has_audio=*/true);
   metrics_web_contents_observer_->MediaStartedPlaying(
-      video_type, content::MediaPlayerId(render_frame_host->GetGlobalId(), 0));
+      video_type, content::MediaPlayerId(rfh->GetGlobalId(), 0));
 }
 
 void PageLoadMetricsObserverTester::SimulateCookieAccess(
     const content::CookieAccessDetails& details) {
   metrics_web_contents_observer_->OnCookiesAccessed(
-      metrics_web_contents_observer_->web_contents()->GetMainFrame(), details);
+      metrics_web_contents_observer_->web_contents()->GetPrimaryMainFrame(),
+      details);
 }
 
 void PageLoadMetricsObserverTester::SimulateStorageAccess(
@@ -331,16 +421,14 @@ void PageLoadMetricsObserverTester::SimulateStorageAccess(
     bool blocked_by_policy,
     StorageType storage_type) {
   metrics_web_contents_observer_->OnStorageAccessed(
+      metrics_web_contents_observer_->web_contents()->GetPrimaryMainFrame(),
       url, first_party_url, blocked_by_policy, storage_type);
 }
 
-void PageLoadMetricsObserverTester::SimulateMobileFriendlinessUpdate(
-    blink::MobileFriendliness& mobile_friendliness) {
-  SimulatePageLoadTimingUpdate(
-      mojom::PageLoadTiming(), mojom::FrameMetadata(), /* new_features= */ {},
-      mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
-      mojom::DeferredResourceCounts(), mojom::InputTiming(),
-      mobile_friendliness, web_contents()->GetMainFrame());
+void PageLoadMetricsObserverTester::SimulateCustomUserTimingUpdate(
+    mojom::CustomUserTimingMarkPtr custom_timing) {
+  metrics_web_contents_observer_->OnCustomUserTimingUpdated(
+      web_contents()->GetPrimaryMainFrame(), std::move(custom_timing));
 }
 
 const PageLoadMetricsObserverDelegate&
@@ -352,17 +440,6 @@ void PageLoadMetricsObserverTester::RegisterObservers(
     PageLoadTracker* tracker) {
   if (!register_callback_.is_null())
     register_callback_.Run(tracker);
-}
-
-void PageLoadMetricsObserverTester::SimulateMemoryUpdate(
-    content::RenderFrameHost* render_frame_host,
-    int64_t delta_bytes) {
-  DCHECK(render_frame_host);
-  if (delta_bytes != 0) {
-    std::vector<MemoryUpdate> update(
-        {MemoryUpdate(render_frame_host->GetGlobalId(), delta_bytes)});
-    metrics_web_contents_observer_->OnV8MemoryChanged(update);
-  }
 }
 
 }  // namespace page_load_metrics

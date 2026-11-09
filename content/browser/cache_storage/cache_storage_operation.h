@@ -1,32 +1,32 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_CACHE_STORAGE_CACHE_STORAGE_OPERATION_H_
 #define CONTENT_BROWSER_CACHE_STORAGE_CACHE_STORAGE_OPERATION_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "content/browser/cache_storage/cache_storage_scheduler_types.h"
-#include "content/common/content_export.h"
 
 namespace content {
 
 // An operation to run in the CacheStorageScheduler. It's mostly just a closure
 // to run plus a bunch of metrics data.
-class CONTENT_EXPORT CacheStorageOperation {
+class CacheStorageOperation {
  public:
   CacheStorageOperation(base::OnceClosure closure,
                         CacheStorageSchedulerId id,
                         CacheStorageSchedulerClient client_type,
                         CacheStorageSchedulerMode mode,
                         CacheStorageSchedulerOp op_type,
-                        CacheStorageSchedulerPriority priority,
-                        scoped_refptr<base::SequencedTaskRunner> task_runner);
+                        CacheStorageSchedulerPriority priority);
+
+  CacheStorageOperation(const CacheStorageOperation&) = delete;
+  CacheStorageOperation& operator=(const CacheStorageOperation&) = delete;
 
   ~CacheStorageOperation();
 
@@ -57,10 +57,7 @@ class CONTENT_EXPORT CacheStorageOperation {
   const CacheStorageSchedulerMode mode_;
   const CacheStorageSchedulerOp op_type_;
   const CacheStorageSchedulerPriority priority_;
-  scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::WeakPtrFactory<CacheStorageOperation> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CacheStorageOperation);
 };
 
 }  // namespace content

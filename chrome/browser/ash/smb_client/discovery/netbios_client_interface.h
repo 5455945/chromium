@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,23 @@
 
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 
 namespace net {
 class IPAddress;
 class IPEndPoint;
 }  // namespace net
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 using NetBiosResponseCallback = base::RepeatingCallback<
     void(const std::vector<uint8_t>&, uint16_t, const net::IPEndPoint&)>;
 
 class NetBiosClientInterface {
  public:
+  NetBiosClientInterface(const NetBiosClientInterface&) = delete;
+  NetBiosClientInterface& operator=(const NetBiosClientInterface&) = delete;
+
   virtual ~NetBiosClientInterface() = default;
 
   // Starts the Name Query Request process. Any response packets that match
@@ -33,11 +34,8 @@ class NetBiosClientInterface {
 
  protected:
   NetBiosClientInterface() = default;
-
-  DISALLOW_COPY_AND_ASSIGN(NetBiosClientInterface);
 };
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client
 
 #endif  // CHROME_BROWSER_ASH_SMB_CLIENT_DISCOVERY_NETBIOS_CLIENT_INTERFACE_H_

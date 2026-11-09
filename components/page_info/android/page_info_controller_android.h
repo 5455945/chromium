@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,13 @@
 #include <jni.h>
 
 #include <memory>
+#include <optional>
 
+#include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/page_info/page_info_ui.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class WebContents;
@@ -21,19 +23,25 @@ class WebContents;
 // Android implementation of the page info UI.
 class PageInfoControllerAndroid : public PageInfoUI {
  public:
-  PageInfoControllerAndroid(JNIEnv* env,
-                            jobject java_page_info,
-                            content::WebContents* web_contents);
+  PageInfoControllerAndroid(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& java_page_info,
+      content::WebContents* web_contents);
+
+  PageInfoControllerAndroid(const PageInfoControllerAndroid&) = delete;
+  PageInfoControllerAndroid& operator=(const PageInfoControllerAndroid&) =
+      delete;
+
   ~PageInfoControllerAndroid() override;
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void RecordPageInfoAction(JNIEnv* env,
-                            const base::android::JavaParamRef<jobject>& obj,
-                            jint action);
-  void UpdatePermissions(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj);
+  void RecordPageInfoAction(JNIEnv* env, int32_t action);
+  void UpdatePermissions(JNIEnv* env);
+
+  void OnSuspiciousSiteBackToSafety(JNIEnv* env);
+  void OnSuspiciousSiteMarkAsSafe(JNIEnv* env);
+  void OpenSafeBrowsingHelpCenter(JNIEnv* env);
+  void SetIsSuspiciousSite(JNIEnv* env, bool is_suspicious_site);
 
   // PageInfoUI implementations.
-  void SetCookieInfo(const CookieInfoList& cookie_info_list) override;
   void SetPermissionInfo(const PermissionInfoList& permission_info_list,
                          ChosenObjectInfoList chosen_object_info_list) override;
   void SetIdentityInfo(const IdentityInfo& identity_info) override;
@@ -44,7 +52,7 @@ class PageInfoControllerAndroid : public PageInfoUI {
   // displayed in Page Info. Most permissions will only be displayed if they are
   // set to some non-default value, but there are some permissions which require
   // customized behavior.
-  absl::optional<ContentSetting> GetSettingToDisplay(
+  std::optional<PermissionSetting> GetSettingToDisplay(
       const PageInfo::PermissionInfo& permission);
 
   // The presenter that controlls the Page Info UI.
@@ -55,9 +63,9 @@ class PageInfoControllerAndroid : public PageInfoUI {
 
   GURL url_;
 
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents> web_contents_;
 
-  DISALLOW_COPY_AND_ASSIGN(PageInfoControllerAndroid);
+  bool is_suspicious_site_ = false;
 };
 
 #endif  // COMPONENTS_PAGE_INFO_ANDROID_PAGE_INFO_CONTROLLER_ANDROID_H_

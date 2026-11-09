@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/stl_util.h"
 #include "base/timer/timer.h"
 
 namespace base {
@@ -70,6 +68,10 @@ class ArcSystemStatCollector {
   };
 
   ArcSystemStatCollector();
+
+  ArcSystemStatCollector(const ArcSystemStatCollector&) = delete;
+  ArcSystemStatCollector& operator=(const ArcSystemStatCollector&) = delete;
+
   ~ArcSystemStatCollector();
 
   // Starts sample collection, |max_interval| defines the maximum interval and
@@ -104,12 +106,12 @@ class ArcSystemStatCollector {
 
     base::TimeTicks timestamp;
     // read, written sectors and total time in milliseconds.
-    int64_t zram_stat[base::size(kZramStatColumns) - 1] = {0};
+    int64_t zram_stat[std::size(kZramStatColumns) - 1] = {};
     // total, available.
-    int64_t mem_info[base::size(kMemInfoColumns) - 1] = {0};
+    int64_t mem_info[std::size(kMemInfoColumns) - 1] = {};
     // objects, used bytes.
-    int64_t gem_info[base::size(kGemInfoColumns) - 1] = {0};
-    // Temperature of CPU, Core 0.
+    int64_t gem_info[std::size(kGemInfoColumns) - 1] = {};
+    // Temperature of CPU, either the package or Core 0.
     int64_t cpu_temperature = std::numeric_limits<int>::min();
     // CPU Frequency.
     int64_t cpu_frequency = 0;
@@ -163,8 +165,6 @@ class ArcSystemStatCollector {
   std::unique_ptr<SystemReadersContext> context_;
 
   base::WeakPtrFactory<ArcSystemStatCollector> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ArcSystemStatCollector);
 };
 
 // Helper that reads and parses stat file containing decimal number separated by

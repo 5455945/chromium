@@ -1,18 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/arc_ui_availability_reporter.h"
 
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/arc/arc_optin_uma.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 
 namespace arc {
 
 class ArcUiAvailabilityReporter::ConnectionNotifierBase {
  public:
+  ConnectionNotifierBase(const ConnectionNotifierBase&) = delete;
+  ConnectionNotifierBase& operator=(const ConnectionNotifierBase&) = delete;
+
   virtual ~ConnectionNotifierBase() = default;
 
   // Returns true if connection is ready.
@@ -25,9 +29,7 @@ class ArcUiAvailabilityReporter::ConnectionNotifierBase {
   ArcUiAvailabilityReporter* owner() { return owner_; }
 
  private:
-  ArcUiAvailabilityReporter* const owner_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConnectionNotifierBase);
+  const raw_ptr<ArcUiAvailabilityReporter> owner_;
 };
 
 namespace {
@@ -46,9 +48,12 @@ class ConnectionNotifier
                      ConnectionHolder<InstanceType, HostType>* holder)
       : ArcUiAvailabilityReporter::ConnectionNotifierBase(owner),
         holder_(holder) {
-    DCHECK(!holder_->IsConnected());
+    CHECK(!holder_->IsConnected(), base::NotFatalUntil::M160);
     holder_->AddObserver(this);
   }
+
+  ConnectionNotifier(const ConnectionNotifier&) = delete;
+  ConnectionNotifier& operator=(const ConnectionNotifier&) = delete;
 
   ~ConnectionNotifier() override { holder_->RemoveObserver(this); }
 
@@ -59,9 +64,7 @@ class ConnectionNotifier
   void OnConnectionReady() override { owner()->MaybeReport(); }
 
  private:
-  ConnectionHolder<InstanceType, HostType>* const holder_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConnectionNotifier);
+  const raw_ptr<ConnectionHolder<InstanceType, HostType>> holder_;
 };
 
 }  // namespace
@@ -69,7 +72,7 @@ class ConnectionNotifier
 ArcUiAvailabilityReporter::ArcUiAvailabilityReporter(Profile* profile,
                                                      Mode mode)
     : profile_(profile), mode_(mode), start_ticks_(base::TimeTicks::Now()) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M160);
   // Some unit tests may not have |ArcServiceManager| set.
   ArcServiceManager* const service_manager = ArcServiceManager::Get();
   if (!service_manager)
@@ -109,7 +112,7 @@ std::string ArcUiAvailabilityReporter::GetHistogramNameForMode(Mode mode) {
 }
 
 void ArcUiAvailabilityReporter::MaybeReport() {
-  DCHECK(!connection_notifiers_.empty());
+  CHECK(!connection_notifiers_.empty(), base::NotFatalUntil::M160);
 
   // Check that all tracked instance are connected.
   for (const auto& connection_notifier : connection_notifiers_) {

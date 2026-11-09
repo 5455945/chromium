@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,8 @@
 
 #include <utility>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/component_export.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gfx_export.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_source.h"
 
@@ -22,7 +20,7 @@ class Insets;
 // CanvasImageSource is useful if you need to generate an image for a scale
 // factor using Canvas. It creates a new Canvas with target scale factor and
 // generates ImageSkiaRep when drawing is completed.
-class GFX_EXPORT CanvasImageSource : public ImageSkiaSource {
+class COMPONENT_EXPORT(GFX) CanvasImageSource : public ImageSkiaSource {
  public:
   // Factory function to create an ImageSkia from a CanvasImageSource. Example:
   //   ImageSkia my_image =
@@ -39,6 +37,10 @@ class GFX_EXPORT CanvasImageSource : public ImageSkiaSource {
   static ImageSkia CreatePadded(const ImageSkia& image, const Insets& insets);
 
   explicit CanvasImageSource(const Size& size);
+
+  CanvasImageSource(const CanvasImageSource&) = delete;
+  CanvasImageSource& operator=(const CanvasImageSource&) = delete;
+
   ~CanvasImageSource() override {}
 
   // Called when a new image needs to be drawn for a scale factor.
@@ -52,7 +54,6 @@ class GFX_EXPORT CanvasImageSource : public ImageSkiaSource {
 
  protected:
   const Size size_;
-  DISALLOW_COPY_AND_ASSIGN(CanvasImageSource);
 };
 
 }  // namespace gfx

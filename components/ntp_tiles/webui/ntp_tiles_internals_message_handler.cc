@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,17 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/i18n/time_formatting.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/task_runner_util.h"
 #include "base/values.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/ntp_tiles/constants.h"
 #include "components/ntp_tiles/most_visited_sites.h"
-#include "components/ntp_tiles/pref_names.h"
+#include "components/ntp_tiles/popular_sites_pref_names.h"
 #include "components/ntp_tiles/webui/ntp_tiles_internals_message_handler_client.h"
 #include "components/prefs/pref_service.h"
 #include "components/url_formatter/url_fixer.h"
@@ -45,7 +44,7 @@ constexpr std::array<IconTypeAndName, 4> kIconTypesAndNames{{
     {favicon_base::IconType::kWebManifestIcon, "kWebManifestIcon"},
 }};
 
-std::string FormatJson(const base::Value& value) {
+std::string FormatJson(const base::ListValue& value) {
   std::string pretty_printed;
   bool ok = base::JSONWriter::WriteWithOptions(
       value, base::JSONWriter::OPTIONS_PRETTY_PRINT, &pretty_printed);
@@ -86,20 +85,20 @@ void NTPTilesInternalsMessageHandler::RegisterMessages(
 }
 
 void NTPTilesInternalsMessageHandler::HandleRegisterForEvents(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   if (!client_->SupportsNTPTiles()) {
-    base::Value disabled(base::Value::Type::DICTIONARY);
-    disabled.SetBoolKey("topSites", false);
-    disabled.SetBoolKey("popular", false);
-    disabled.SetBoolKey("customLinks", false);
-    disabled.SetBoolKey("allowlist", false);
+    base::DictValue disabled;
+    disabled.Set("topSites", false);
+    disabled.Set("popular", false);
+    disabled.Set("customLinks", false);
+    disabled.Set("enterpriseShortcuts", false);
     client_->CallJavascriptFunction("cr.webUIListenerCallback",
                                     base::Value("receive-source-info"),
-                                    disabled);
+                                    base::Value(std::move(disabled)));
     SendTiles(NTPTilesVector(), FaviconResultMap());
     return;
   }
-  DCHECK_EQ(0u, args->GetSize());
+  DCHECK_EQ(0u, args.size());
 
   popular_sites_json_.clear();
   most_visited_sites_ = client_->MakeMostVisitedSites();
@@ -108,31 +107,32 @@ void NTPTilesInternalsMessageHandler::HandleRegisterForEvents(
 }
 
 void NTPTilesInternalsMessageHandler::HandleUpdate(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   if (!client_->SupportsNTPTiles()) {
     return;
   }
 
-  const base::Value* dict = nullptr;
-  DCHECK_EQ(1u, args->GetSize());
-  args->Get(0, &dict);
-  DCHECK(dict && dict->is_dict());
+  DCHECK_EQ(1u, args.size());
+  const base::Value& value = args[0];
+  DCHECK(value.is_dict());
+  const base::DictValue& dict = value.GetDict();
 
   PrefService* prefs = client_->GetPrefs();
 
-  if (most_visited_sites_->DoesSourceExist(ntp_tiles::TileSource::POPULAR)) {
+  if (most_visited_sites_ &&
+      most_visited_sites_->DoesSourceExist(ntp_tiles::TileSource::POPULAR)) {
     popular_sites_json_.clear();
 
-    const std::string* url = dict->FindStringPath("popular.overrideURL");
+    const std::string* url = dict.FindStringByDottedPath("popular.overrideURL");
     if (url->empty()) {
       prefs->ClearPref(ntp_tiles::prefs::kPopularSitesOverrideURL);
     } else {
       prefs->SetString(ntp_tiles::prefs::kPopularSitesOverrideURL,
-                       url_formatter::FixupURL(*url, std::string()).spec());
+                       url_formatter::FixupURL(*url).spec());
     }
 
     const std::string* directory =
-        dict->FindStringPath("popular.overrideDirectory");
+        dict.FindStringByDottedPath("popular.overrideDirectory");
     if (directory->empty()) {
       prefs->ClearPref(ntp_tiles::prefs::kPopularSitesOverrideDirectory);
     } else {
@@ -141,7 +141,7 @@ void NTPTilesInternalsMessageHandler::HandleUpdate(
     }
 
     const std::string* country =
-        dict->FindStringPath("popular.overrideCountry");
+        dict.FindStringByDottedPath("popular.overrideCountry");
     if (country->empty()) {
       prefs->ClearPref(ntp_tiles::prefs::kPopularSitesOverrideCountry);
     } else {
@@ -150,7 +150,7 @@ void NTPTilesInternalsMessageHandler::HandleUpdate(
     }
 
     const std::string* version =
-        dict->FindStringPath("popular.overrideVersion");
+        dict.FindStringByDottedPath("popular.overrideVersion");
     if (version->empty()) {
       prefs->ClearPref(ntp_tiles::prefs::kPopularSitesOverrideVersion);
     } else {
@@ -168,105 +168,112 @@ void NTPTilesInternalsMessageHandler::HandleUpdate(
 }
 
 void NTPTilesInternalsMessageHandler::HandleViewPopularSitesJson(
-    const base::ListValue* args) {
-  DCHECK_EQ(0u, args->GetSize());
-  if (!most_visited_sites_->DoesSourceExist(ntp_tiles::TileSource::POPULAR)) {
+    const base::ListValue& args) {
+  DCHECK_EQ(0u, args.size());
+  if (!most_visited_sites_ ||
+      !most_visited_sites_->DoesSourceExist(ntp_tiles::TileSource::POPULAR)) {
     return;
   }
 
   popular_sites_json_ =
-      FormatJson(*most_visited_sites_->popular_sites()->GetCachedJson());
+      FormatJson(most_visited_sites_->popular_sites()->GetCachedJson());
   SendSourceInfo();
 }
 
 void NTPTilesInternalsMessageHandler::SendSourceInfo() {
   PrefService* prefs = client_->GetPrefs();
-  base::Value value(base::Value::Type::DICTIONARY);
+  base::DictValue value;
 
-  value.SetBoolKey("topSites",
-                   most_visited_sites_->DoesSourceExist(TileSource::TOP_SITES));
-  value.SetBoolKey("customLinks", most_visited_sites_->DoesSourceExist(
-                                      TileSource::CUSTOM_LINKS));
-  value.SetBoolKey("allowlist",
-                   most_visited_sites_->DoesSourceExist(TileSource::ALLOWLIST));
+  value.Set("topSites",
+            most_visited_sites_->DoesSourceExist(TileSource::TOP_SITES));
+  value.Set("customLinks",
+            most_visited_sites_->DoesSourceExist(TileSource::CUSTOM_LINKS));
+  value.Set("enterpriseShortcuts", most_visited_sites_->DoesSourceExist(
+                                       TileSource::ENTERPRISE_SHORTCUTS));
 
   if (most_visited_sites_->DoesSourceExist(TileSource::POPULAR)) {
     auto* popular_sites = most_visited_sites_->popular_sites();
-    value.SetStringKey("popular.url", popular_sites->GetURLToFetch().spec());
-    value.SetStringKey("popular.directory",
-                       popular_sites->GetDirectoryToFetch());
-    value.SetStringKey("popular.country", popular_sites->GetCountryToFetch());
-    value.SetStringKey("popular.version", popular_sites->GetVersionToFetch());
+    value.SetByDottedPath("popular.url", popular_sites->GetURLToFetch().spec());
+    value.SetByDottedPath("popular.directory",
+                          popular_sites->GetDirectoryToFetch());
+    value.SetByDottedPath("popular.country",
+                          popular_sites->GetCountryToFetch());
+    value.SetByDottedPath("popular.version",
+                          popular_sites->GetVersionToFetch());
 
-    value.SetStringKey(
+    value.SetByDottedPath(
         "popular.overrideURL",
         prefs->GetString(ntp_tiles::prefs::kPopularSitesOverrideURL));
-    value.SetStringKey(
+    value.SetByDottedPath(
         "popular.overrideDirectory",
         prefs->GetString(ntp_tiles::prefs::kPopularSitesOverrideDirectory));
-    value.SetStringKey(
+    value.SetByDottedPath(
         "popular.overrideCountry",
         prefs->GetString(ntp_tiles::prefs::kPopularSitesOverrideCountry));
-    value.SetStringKey(
+    value.SetByDottedPath(
         "popular.overrideVersion",
         prefs->GetString(ntp_tiles::prefs::kPopularSitesOverrideVersion));
 
-    value.SetStringKey("popular.json", popular_sites_json_);
+    value.SetByDottedPath("popular.json", popular_sites_json_);
   } else {
-    value.SetBoolKey("popular", false);
+    value.Set("popular", false);
   }
 
   client_->CallJavascriptFunction("cr.webUIListenerCallback",
-                                  base::Value("receive-source-info"), value);
+                                  base::Value("receive-source-info"),
+                                  base::Value(std::move(value)));
 }
 
 void NTPTilesInternalsMessageHandler::SendTiles(
     const NTPTilesVector& tiles,
     const FaviconResultMap& result_map) {
-  base::Value sites_list(base::Value::Type::LIST);
+  base::ListValue sites_list;
   for (const NTPTile& tile : tiles) {
-    base::Value entry(base::Value::Type::DICTIONARY);
-    entry.SetStringKey("title", tile.title);
-    entry.SetStringKey("url", tile.url.spec());
-    entry.SetIntKey("source", static_cast<int>(tile.source));
-    entry.SetStringKey("allowlistIconPath",
-                       tile.allowlist_icon_path.LossyDisplayName());
+    base::DictValue entry;
+    entry.Set("title", tile.title);
+    entry.Set("url", tile.url.spec());
+    entry.Set("source", static_cast<int>(tile.source));
+    entry.Set("visitCount", tile.visit_count);
+    entry.Set("lastVisitTime", base::TimeFormatHTTP(tile.last_visit_time));
+    entry.Set("score", tile.score);
     if (tile.source == TileSource::CUSTOM_LINKS) {
-      entry.SetBoolKey("fromMostVisited", tile.from_most_visited);
+      entry.Set("fromMostVisited", tile.from_most_visited);
     }
 
-    base::Value icon_list(base::Value::Type::LIST);
-    for (const auto& entry : kIconTypesAndNames) {
+    base::ListValue icon_list;
+    for (const auto& type_and_name : kIconTypesAndNames) {
       auto it = result_map.find(
-          FaviconResultMap::key_type(tile.url, entry.type_enum));
+          FaviconResultMap::key_type(tile.url, type_and_name.type_enum));
 
       if (it != result_map.end()) {
         const favicon_base::FaviconRawBitmapResult& result = it->second;
-        base::Value icon(base::Value::Type::DICTIONARY);
-        icon.SetStringKey("url", result.icon_url.spec());
-        icon.SetStringKey("type", entry.type_name);
-        icon.SetBoolKey("onDemand", !result.fetched_because_of_page_visit);
-        icon.SetIntKey("width", result.pixel_size.width());
-        icon.SetIntKey("height", result.pixel_size.height());
+        base::DictValue icon;
+        icon.Set("url", result.icon_url.spec());
+        icon.Set("type", type_and_name.type_name);
+        icon.Set("onDemand", !result.fetched_because_of_page_visit);
+        icon.Set("width", result.pixel_size.width());
+        icon.Set("height", result.pixel_size.height());
         icon_list.Append(std::move(icon));
       }
     }
-    entry.SetKey("icons", std::move(icon_list));
+    entry.Set("icons", std::move(icon_list));
 
     sites_list.Append(std::move(entry));
   }
 
-  base::Value result(base::Value::Type::DICTIONARY);
-  result.SetKey("sites", std::move(sites_list));
+  base::DictValue result;
+  result.Set("sites", std::move(sites_list));
   client_->CallJavascriptFunction("cr.webUIListenerCallback",
-                                  base::Value("receive-sites"), result);
+                                  base::Value("receive-sites"),
+                                  base::Value(std::move(result)));
 }
 
 void NTPTilesInternalsMessageHandler::OnURLsAvailable(
+    bool is_user_triggered,
     const std::map<SectionType, NTPTilesVector>& sections) {
   cancelable_task_tracker_.TryCancelAll();
 
-  // TODO(fhorschig): Handle non-personalized tiles - https://crbug.com/753852.
+  // Non-personalized tiles have never been relevant.
   const NTPTilesVector& tiles = sections.at(SectionType::PERSONALIZED);
   if (tiles.empty()) {
     SendTiles(tiles, FaviconResultMap());
@@ -282,7 +289,7 @@ void NTPTilesInternalsMessageHandler::OnURLsAvailable(
   for (const NTPTile& tile : tiles) {
     for (const auto& entry : kIconTypesAndNames) {
       favicon_service_->GetLargestRawFaviconForPageURL(
-          tile.url, std::vector<favicon_base::IconTypeSet>({{entry.type_enum}}),
+          tile.url, {{entry.type_enum}},
           /*minimum_size_in_pixels=*/0,
           base::BindOnce(on_lookup_done, tile.url), &cancelable_task_tracker_);
     }
@@ -305,8 +312,9 @@ void NTPTilesInternalsMessageHandler::OnFaviconLookupDone(
       result);
 
   --*num_pending_lookups;
-  if (*num_pending_lookups == 0)
+  if (*num_pending_lookups == 0) {
     SendTiles(tiles, *result_map);
+  }
 }
 
 }  // namespace ntp_tiles

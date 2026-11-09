@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,24 +17,27 @@ class GURL;
 @property(nonatomic, strong, readonly) NSURL* failedNavigationURL;
 // The error page file to be loaded as a new page.
 @property(nonatomic, strong, readonly) NSURL* errorPageFileURL;
+// The error page file URL without the 'dontLoad' query parameter, used as the
+// baseURL when presenting an error page via `loadHTMLString:baseURL:`.
+@property(nonatomic, strong, readonly) NSURL* errorPageFileURLWithoutDontLoad;
 
 - (instancetype)initWithError:(NSError*)error NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;
 
-// Returns the failed URL if |URL| is an error page URL, otherwise empty URL.
+// Returns the failed URL if `URL` is an error page URL, otherwise empty URL.
 + (GURL)failedNavigationURLFromErrorPageFileURL:(const GURL&)URL;
 
-// Returns whether |URL| is an error page URL.
+// Returns whether `URL` is an error page URL.
 + (BOOL)isErrorPageFileURL:(const GURL&)URL;
 
 // Returns a JavaScript script that can be injected to replace the content of
-// the page with |HTML|. It can also contains a script to automatically reload
-// the page when it is shown if |addAutomaticReload| is true.
+// the page with `HTML`. It can also contains a script to automatically reload
+// the page when it is shown if `addAutomaticReload` is true.
 - (NSString*)scriptForInjectingHTML:(NSString*)HTML
                  addAutomaticReload:(BOOL)addAutomaticReload;
 
-// Returns YES if |URL| is a file URL for this error page.
+// Returns YES if `URL` is a file URL for this error page.
 - (BOOL)isErrorPageFileURLForFailedNavigationURL:(NSURL*)URL;
 
 @end

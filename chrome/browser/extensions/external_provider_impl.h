@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,24 @@
 #define CHROME_BROWSER_EXTENSIONS_EXTERNAL_PROVIDER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/external_loader.h"
 #include "extensions/browser/external_provider_interface.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
 namespace base {
-class DictionaryValue;
 class Version;
 }
 
@@ -31,11 +35,11 @@ namespace extensions {
 // their entire life on the UI thread.
 class ExternalProviderImpl : public ExternalProviderInterface {
  public:
-  // The constructed provider will provide the extensions loaded from |loader|
-  // to |service|, that will deal with the installation. The location
+  // The constructed provider will provide the extensions loaded from `loader`
+  // to `service`, that will deal with the installation. The location
   // attributes of the provided extensions are also specified here:
-  // |crx_location|: extensions originating from crx files
-  // |download_location|: extensions originating from update URLs
+  // `crx_location`: extensions originating from crx files
+  // `download_location`: extensions originating from update URLs
   // If either of the origins is not supported by this provider, then it should
   // be initialized as mojom::ManifestLocation::kInvalidLocation.
   ExternalProviderImpl(VisitorInterface* service,
@@ -45,6 +49,9 @@ class ExternalProviderImpl : public ExternalProviderInterface {
                        mojom::ManifestLocation download_location,
                        int creation_flags);
 
+  ExternalProviderImpl(const ExternalProviderImpl&) = delete;
+  ExternalProviderImpl& operator=(const ExternalProviderImpl&) = delete;
+
   ~ExternalProviderImpl() override;
 
   // Populates a list with providers for all known sources.
@@ -53,24 +60,22 @@ class ExternalProviderImpl : public ExternalProviderInterface {
       Profile* profile,
       ProviderCollection* provider_list);
 
-  // Sets underlying prefs and notifies provider. Only to be called by the
-  // owned ExternalLoader instance.
-  virtual void SetPrefs(std::unique_ptr<base::DictionaryValue> prefs);
-
-  // Updates the underlying prefs and notifies provider.
-  // Only to be called by the owned ExternalLoader instance.
-  void UpdatePrefs(std::unique_ptr<base::DictionaryValue> prefs);
-
   // ExternalProvider implementation:
   void ServiceShutdown() override;
   void VisitRegisteredExtension() override;
   bool HasExtension(const std::string& id) const override;
+  bool HasExtensionWithLocation(
+      const std::string& id,
+      mojom::ManifestLocation location) const override;
   bool GetExtensionDetails(
       const std::string& id,
       mojom::ManifestLocation* location,
       std::unique_ptr<base::Version>* version) const override;
 
   bool IsReady() const override;
+  void TriggerOnExternalExtensionFound() override;
+  void SetPrefs(base::DictValue prefs) override;
+  void UpdatePrefs(base::DictValue prefs) override;
 
   static const char kExternalCrx[];
   static const char kExternalVersion[];
@@ -96,13 +101,15 @@ class ExternalProviderImpl : public ExternalProviderInterface {
 
   void set_allow_updates(bool allow_updates) { allow_updates_ = allow_updates; }
 
+  const std::optional<base::DictValue>& prefs_for_test() { return prefs_; }
+
  private:
-  bool HandleMinProfileVersion(const base::DictionaryValue* extension,
+  bool HandleMinProfileVersion(const base::DictValue& extension,
                                const std::string& extension_id,
                                std::set<std::string>* unsupported_extensions);
 
   bool HandleDoNotInstallForEnterprise(
-      const base::DictionaryValue* extension,
+      const base::DictValue& extension,
       const std::string& extension_id,
       std::set<std::string>* unsupported_extensions);
 
@@ -110,6 +117,10 @@ class ExternalProviderImpl : public ExternalProviderInterface {
   void RetrieveExtensionsFromPrefs(
       std::vector<ExternalInstallInfoUpdateUrl>* external_update_url_extensions,
       std::vector<ExternalInstallInfoFile>* external_file_extensions);
+
+  // Retrieves the extensions from prefs and notifies the extension service for
+  // each extension file/update URL found.
+  void NotifyServiceOnExternalExtensionsFound();
 
   // Location for external extensions that are provided by this provider from
   // local crx files.
@@ -121,21 +132,21 @@ class ExternalProviderImpl : public ExternalProviderInterface {
 
   // Weak pointer to the object that consumes the external extensions.
   // This is zeroed out by: ServiceShutdown()
-  VisitorInterface* service_;  // weak
+  raw_ptr<VisitorInterface> service_;  // weak
 
-  // Dictionary of the external extensions that are provided by this provider.
-  std::unique_ptr<base::DictionaryValue> prefs_;
+  // Dict of the external extensions that are provided by this provider.
+  std::optional<base::DictValue> prefs_;
 
   // Indicates that the extensions provided by this provider are loaded
   // entirely.
   bool ready_ = false;
 
   // The loader that loads the list of external extensions and reports them
-  // via |SetPrefs|.
+  // via `SetPrefs`.
   scoped_refptr<ExternalLoader> loader_;
 
   // The profile that will be used to install external extensions.
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   // Creation flags to use for the extension.  These flags will be used
   // when calling Extension::Create() by the crx installer.
@@ -151,8 +162,6 @@ class ExternalProviderImpl : public ExternalProviderInterface {
   // Whether the provider should be allowed to update the set of external
   // extensions it provides.
   bool allow_updates_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ExternalProviderImpl);
 };
 
 }  // namespace extensions

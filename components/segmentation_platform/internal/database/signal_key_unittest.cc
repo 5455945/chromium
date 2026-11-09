@@ -1,11 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/segmentation_platform/internal/database/signal_key.h"
 
 #include <cmath>
-#include <cstring>
 
 #include "base/logging.h"
 #include "base/test/simple_test_clock.h"
@@ -20,7 +19,7 @@ int CompareBinaryKeys(const SignalKey& a, const SignalKey& b) {
   std::string a_key = a.ToBinary();
   std::string b_key = b.ToBinary();
   CHECK_EQ(a_key.size(), b_key.size());
-  return std::memcmp(a_key.data(), b_key.data(), a_key.size());
+  return a_key.compare(b_key);
 }
 
 bool Equal(const SignalKey& k1, const SignalKey& k2) {
@@ -40,33 +39,32 @@ class SignalKeyTest : public testing::Test {
   void VerifyConversion(const SignalKey& key) {
     std::string binary_key = key.ToBinary();
     SignalKey result;
-    SignalKey::FromBinary(binary_key, &result);
+    EXPECT_TRUE(SignalKey::FromBinary(binary_key, &result));
     EXPECT_TRUE(Equal(key, result));
   }
 
  protected:
   void SetUp() override {
-    test_clock_.SetNow(base::Time::UnixEpoch() + base::TimeDelta::FromHours(8));
+    test_clock_.SetNow(base::Time::UnixEpoch() + base::Hours(8));
   }
 
   base::SimpleTestClock test_clock_;
 };
 
 TEST_F(SignalKeyTest, TestConvertToAndFromBinary) {
-  VerifyConversion(
-      SignalKey(SignalKey::Kind::USER_ACTION, 1, test_clock_.Now(),
-                test_clock_.Now() + base::TimeDelta::FromSeconds(10)));
-  VerifyConversion(
-      SignalKey(SignalKey::Kind::HISTOGRAM_VALUE, 2, base::Time::Now(),
-                test_clock_.Now() + base::TimeDelta::FromSeconds(20)));
-  VerifyConversion(
-      SignalKey(SignalKey::Kind::HISTOGRAM_ENUM, 3, base::Time::Now(),
-                test_clock_.Now() + base::TimeDelta::FromSeconds(30)));
+  VerifyConversion(SignalKey(SignalKey::Kind::USER_ACTION, 1, test_clock_.Now(),
+                             test_clock_.Now() + base::Seconds(10)));
+  VerifyConversion(SignalKey(SignalKey::Kind::HISTOGRAM_VALUE, 2,
+                             base::Time::Now(),
+                             test_clock_.Now() + base::Seconds(20)));
+  VerifyConversion(SignalKey(SignalKey::Kind::HISTOGRAM_ENUM, 3,
+                             base::Time::Now(),
+                             test_clock_.Now() + base::Seconds(30)));
 }
 
 TEST_F(SignalKeyTest, TestValidity) {
   SignalKey valid_key(SignalKey::Kind::USER_ACTION, 42, test_clock_.Now(),
-                      test_clock_.Now() + base::TimeDelta::FromSeconds(10));
+                      test_clock_.Now() + base::Seconds(10));
   EXPECT_TRUE(valid_key.IsValid());
 
   // A default constructed key should not be valid.
@@ -95,11 +93,11 @@ TEST_F(SignalKeyTest, TestUsesSafeBinaryFormat) {
   // By testing that the underlying format is the binary version of
   // SignalKeyInternal, we can ensure API guarantees based on SignalKeyInternal.
   SignalKey key(SignalKey::Kind::USER_ACTION, 42, test_clock_.Now(),
-                test_clock_.Now() + base::TimeDelta::FromSeconds(10));
+                test_clock_.Now() + base::Seconds(10));
 
   std::string binary_key = key.ToBinary();
   SignalKeyInternal internal_key;
-  SignalKeyInternalFromBinary(binary_key, &internal_key);
+  EXPECT_TRUE(SignalKeyInternalFromBinary(binary_key, &internal_key));
   EXPECT_EQ('u', internal_key.prefix.kind);
   EXPECT_EQ(42UL, internal_key.prefix.name_hash);
   EXPECT_EQ(11644502400, internal_key.time_range_start_sec);
@@ -108,11 +106,11 @@ TEST_F(SignalKeyTest, TestUsesSafeBinaryFormat) {
 
 TEST_F(SignalKeyTest, TestGetPrefixInBinary) {
   SignalKey key(SignalKey::Kind::USER_ACTION, 42, test_clock_.Now(),
-                test_clock_.Now() + base::TimeDelta::FromSeconds(10));
+                test_clock_.Now() + base::Seconds(10));
 
   std::string binary_prefix = key.GetPrefixInBinary();
   SignalKeyInternal::Prefix prefix;
-  SignalKeyInternalPrefixFromBinary(binary_prefix, &prefix);
+  EXPECT_TRUE(SignalKeyInternalPrefixFromBinary(binary_prefix, &prefix));
   EXPECT_EQ('u', prefix.kind);
   EXPECT_EQ(42UL, prefix.name_hash);
 }
@@ -122,7 +120,7 @@ TEST_F(SignalKeyTest, EarliestEndTimeComesFirst) {
                   test_clock_.Now());
 
   SignalKey late(SignalKey::Kind::USER_ACTION, 42, test_clock_.Now(),
-                 test_clock_.Now() + base::TimeDelta::FromSeconds(20));
+                 test_clock_.Now() + base::Seconds(20));
 
   EXPECT_LT(CompareBinaryKeys(early, late), 0);
 }
@@ -138,21 +136,21 @@ TEST_F(SignalKeyTest, EqualKeysHaveEqualBinaryKeys) {
 
 TEST_F(SignalKeyTest, EndTimeMoreSignificantThanStartTime) {
   SignalKey early_end(SignalKey::Kind::USER_ACTION, 42,
-                      test_clock_.Now() + base::TimeDelta::FromSeconds(20),
-                      test_clock_.Now() + base::TimeDelta::FromSeconds(20));
+                      test_clock_.Now() + base::Seconds(20),
+                      test_clock_.Now() + base::Seconds(20));
   SignalKey early_start(SignalKey::Kind::USER_ACTION, 42,
-                        test_clock_.Now() + base::TimeDelta::FromSeconds(10),
-                        test_clock_.Now() + base::TimeDelta::FromSeconds(30));
+                        test_clock_.Now() + base::Seconds(10),
+                        test_clock_.Now() + base::Seconds(30));
 
   EXPECT_LT(CompareBinaryKeys(early_end, early_start), 0);
 }
 
 TEST_F(SignalKeyTest, OrderByStartTimeIfEverythingElseIsEqual) {
   SignalKey early_start(SignalKey::Kind::USER_ACTION, 42,
-                        test_clock_.Now() + base::TimeDelta::FromSeconds(10),
+                        test_clock_.Now() + base::Seconds(10),
                         test_clock_.Now());
   SignalKey late_start(SignalKey::Kind::USER_ACTION, 42,
-                       test_clock_.Now() + base::TimeDelta::FromSeconds(20),
+                       test_clock_.Now() + base::Seconds(20),
                        test_clock_.Now());
 
   EXPECT_LT(CompareBinaryKeys(early_start, late_start), 0);
@@ -178,17 +176,17 @@ TEST_F(SignalKeyTest, DifferentKindGivesDifferentKey) {
 
 TEST_F(SignalKeyTest, TestKeyDebugStringRepresentation) {
   SignalKey key(SignalKey::Kind::USER_ACTION, 42, test_clock_.Now(),
-                test_clock_.Now() + base::TimeDelta::FromSeconds(10));
+                test_clock_.Now() + base::Seconds(10));
 
   EXPECT_EQ(
-      "{kind=1, name_hash=42, range_start=1970-01-01 08:00:00.000 UTC, "
-      "range_end=1970-01-01 08:00:10.000 UTC}",
+      "{kind=1, name_hash=42, range_start=1970-01-01 08:00:00.000000 UTC, "
+      "range_end=1970-01-01 08:00:10.000000 UTC}",
       key.ToDebugString());
   std::stringstream key_buffer;
   key_buffer << key;
   EXPECT_EQ(
-      "{kind=1, name_hash=42, range_start=1970-01-01 08:00:00.000 UTC, "
-      "range_end=1970-01-01 08:00:10.000 UTC}",
+      "{kind=1, name_hash=42, range_start=1970-01-01 08:00:00.000000 UTC, "
+      "range_end=1970-01-01 08:00:10.000000 UTC}",
       key_buffer.str());
 }
 

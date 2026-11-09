@@ -1,31 +1,41 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 
-/**
- * For native to pass the information of a WebMessageListener related info to Java.
- */
+import org.chromium.android_webview.common.Lifetime;
+
+/** For native to pass the information of a WebMessageListener related info to Java. */
+@Lifetime.Temporary
 @JNINamespace("android_webview")
 public class WebMessageListenerInfo {
     public String mObjectName;
     public String[] mAllowedOriginRules;
     public WebMessageListenerHolder mHolder;
+    public int mWorldId;
 
     private WebMessageListenerInfo(
-            String objectName, String[] allowedOriginRules, WebMessageListenerHolder holder) {
+            String objectName,
+            String[] allowedOriginRules,
+            int worldId,
+            WebMessageListenerHolder holder) {
         mObjectName = objectName;
         mAllowedOriginRules = allowedOriginRules;
         mHolder = holder;
+        mWorldId = worldId;
     }
 
     @CalledByNative
     public static WebMessageListenerInfo create(
-            String objectName, String[] allowedOriginRules, WebMessageListenerHolder holder) {
-        return new WebMessageListenerInfo(objectName, allowedOriginRules, holder);
+            @JniType("std::u16string") String objectName,
+            @JniType("std::vector<std::string>") String[] allowedOriginRules,
+            int worldId,
+            WebMessageListenerHolder holder) {
+        return new WebMessageListenerInfo(objectName, allowedOriginRules, worldId, holder);
     }
 }

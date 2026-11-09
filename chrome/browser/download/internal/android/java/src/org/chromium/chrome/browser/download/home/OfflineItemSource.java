@@ -1,14 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home;
 
-import org.chromium.base.CollectionUtil;
 import org.chromium.base.ObserverList;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.filter.OfflineItemFilterObserver;
 import org.chromium.chrome.browser.download.home.filter.OfflineItemFilterSource;
-import org.chromium.chrome.browser.download.home.glue.OfflineContentProviderGlue;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.offline_items_collection.OfflineContentProvider;
 import org.chromium.components.offline_items_collection.OfflineItem;
@@ -24,12 +24,11 @@ import java.util.Set;
 
 /**
  * The source of {@link OfflineItem} for the rest of the download home UI.  This will pull items
- * from a {@link OfflineContentProvider} as well as the downloads backend and unify them to a single
- * list for the rest of the UI to filter and act on.
+ * from a {@link OfflineContentProvider} for the rest of the UI to filter and act on.
  */
+@NullMarked
 public class OfflineItemSource implements OfflineItemFilterSource, OfflineContentProvider.Observer {
-    // TODO(dtrainor): Move this to OfflineContentProvider once downloads are ported.
-    private final OfflineContentProviderGlue mProvider;
+    private final OfflineContentProvider mProvider;
 
     private final Map<ContentId, OfflineItem> mItems = new HashMap<>();
     private final ObserverList<OfflineItemFilterObserver> mObservers = new ObserverList<>();
@@ -46,19 +45,22 @@ public class OfflineItemSource implements OfflineItemFilterSource, OfflineConten
     /**
      * Creates an instance of {@link OfflineItemSource} and hooks up to {@code provider}.  This will
      * automatically try to pull all existing items from {@code provider}.
-     * @param provider The {@link OfflineContentProviderGlue} to reflect in this source.
+     * @param provider The {@link OfflineContentProvider} to reflect in this source.
      */
-    public OfflineItemSource(OfflineContentProviderGlue provider) {
+    public OfflineItemSource(OfflineContentProvider provider) {
         mProvider = provider;
         mProvider.addObserver(this);
 
-        mProvider.getAllItems(items -> {
-            if (mDestroyed) return;
+        mProvider.getAllItems(
+                items -> {
+                    if (mDestroyed) return;
 
-            mItemsAvailable = true;
-            for (OfflineItemFilterObserver observer : mObservers) observer.onItemsAvailable();
-            onItemsAdded(items);
-        });
+                    mItemsAvailable = true;
+                    for (OfflineItemFilterObserver observer : mObservers) {
+                        observer.onItemsAvailable();
+                    }
+                    onItemsAdded(items);
+                });
     }
 
     /**
@@ -96,7 +98,7 @@ public class OfflineItemSource implements OfflineItemFilterSource, OfflineConten
     // OfflineContentProvider.Observer implementation.
     @Override
     public void onItemsAdded(List<OfflineItem> items) {
-        Set<OfflineItem> addedItems = new HashSet<OfflineItem>();
+        Set<OfflineItem> addedItems = new HashSet<>();
         for (OfflineItem item : items) {
             if (mItems.containsKey(item.id)) {
                 onItemUpdated(item, null);
@@ -116,12 +118,12 @@ public class OfflineItemSource implements OfflineItemFilterSource, OfflineConten
         OfflineItem item = mItems.remove(id);
         if (item == null) return;
 
-        Set<OfflineItem> removedSet = CollectionUtil.newHashSet(item);
+        Set<OfflineItem> removedSet = Set.of(item);
         for (OfflineItemFilterObserver observer : mObservers) observer.onItemsRemoved(removedSet);
     }
 
     @Override
-    public void onItemUpdated(OfflineItem item, UpdateDelta updateDelta) {
+    public void onItemUpdated(OfflineItem item, @Nullable UpdateDelta updateDelta) {
         OfflineItem oldItem = mItems.get(item.id);
         if (oldItem == null) {
             onItemsAdded(Collections.singletonList(item));

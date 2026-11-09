@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,14 +17,18 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
+#include "content/test/content_browser_test_utils_internal.h"
 #include "net/dns/mock_host_resolver.h"
+#include "third_party/blink/public/mojom/devtools/inspector_issue.mojom.h"
 
 namespace content {
 
@@ -41,7 +45,14 @@ class DevToolsIssueStorageBrowserTest : public DevToolsProtocolTest {
   }
 
   RenderFrameHostImpl* main_frame_host() {
-    return web_contents()->GetFrameTree()->GetMainFrame();
+    return web_contents()->GetPrimaryFrameTree().GetMainFrame();
+  }
+
+  void WaitForDummyIssueNotification() {
+    base::DictValue notification =
+        WaitForNotification("Audits.issueAdded", true);
+    EXPECT_EQ(*notification.FindStringByDottedPath("issue.code"),
+              protocol::Audits::InspectorIssueCodeEnum::CookieIssue);
   }
 };
 
@@ -51,54 +62,68 @@ void ReportDummyIssue(RenderFrameHostImpl* rfh) {
   auto issueDetails = protocol::Audits::InspectorIssueDetails::Create();
   auto inspector_issue =
       protocol::Audits::InspectorIssue::Create()
-          .SetCode(
-              protocol::Audits::InspectorIssueCodeEnum::SameSiteCookieIssue)
+          .SetCode(protocol::Audits::InspectorIssueCodeEnum::CookieIssue)
           .SetDetails(issueDetails.Build())
           .Build();
-  devtools_instrumentation::ReportBrowserInitiatedIssue(rfh,
-                                                        inspector_issue.get());
+  devtools_instrumentation::ReportBrowserInitiatedIssue(
+      rfh, std::move(inspector_issue));
+}
+
+void ReportWebInstallIssue(RenderFrameHostImpl* rfh,
+                           const GURL& manifest_url,
+                           blink::mojom::WebInstallIssueReason reason) {
+  auto details = blink::mojom::InspectorIssueDetails::New();
+  details->web_install_issue_details =
+      blink::mojom::WebInstallIssueDetails::New(manifest_url, reason);
+  auto issue_info = blink::mojom::InspectorIssueInfo::New(
+      blink::mojom::InspectorIssueCode::kWebInstallIssue, std::move(details));
+  rfh->ReportInspectorIssue(std::move(issue_info));
 }
 
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
                        DevToolsReceivesBrowserIssues) {
-  // 1) Navigate to about:blank.
   EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
-
-  // 2) Report an empty SameSite cookie issue.
+  // Report an empty SameSite cookie issue.
   ReportDummyIssue(main_frame_host());
-
-  // 3) Open DevTools.
   Attach();
-
-  // 4) Verify we haven't received any Issues yet.
-  ASSERT_TRUE(notifications_.empty());
-
-  // 5) Enable audits domain.
-  SendCommand("Audits.enable", std::make_unique<base::DictionaryValue>());
-
-  // 6) Verify we have received the SameSite issue.
-  WaitForNotification("Audits.issueAdded", true);
+  SendCommandSync("Audits.enable");
+  // Verify we have received the SameSite issue.
+  WaitForDummyIssueNotification();
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
                        DevToolsReceivesBrowserIssuesWhileAttached) {
-  // 1) Navigate to about:blank.
   EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
-
-  // 2) Open DevTools and enable Audits domain.
   Attach();
-  SendCommand("Audits.enable", std::make_unique<base::DictionaryValue>());
-
-  // 3) Verify we haven't received any Issues yet.
-  ASSERT_TRUE(notifications_.empty());
-
-  // 4) Report an empty SameSite cookie issue.
+  SendCommandSync("Audits.enable");
+  // Report an empty SameSite cookie issue.
   ReportDummyIssue(main_frame_host());
+  // Verify we have received the SameSite issue.
+  WaitForDummyIssueNotification();
+}
 
-  // 5) Verify we have received the SameSite issue.
-  WaitForNotification("Audits.issueAdded", true);
+IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
+                       DevToolsReceivesWebInstallIssueDetails) {
+  EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
+  Attach();
+  SendCommandSync("Audits.enable");
+
+  const GURL manifest_url("https://example.com/manifest.json");
+  ReportWebInstallIssue(
+      main_frame_host(), manifest_url,
+      blink::mojom::WebInstallIssueReason::kManifestMissingId);
+
+  base::DictValue notification = WaitForNotification("Audits.issueAdded", true);
+  EXPECT_EQ(*notification.FindStringByDottedPath("issue.code"),
+            protocol::Audits::InspectorIssueCodeEnum::WebInstallIssue);
+  EXPECT_EQ(*notification.FindStringByDottedPath(
+                "issue.details.webInstallIssueDetails.manifestUrl"),
+            manifest_url.spec());
+  EXPECT_EQ(*notification.FindStringByDottedPath(
+                "issue.details.webInstallIssueDetails.reason"),
+            protocol::Audits::WebInstallIssueReasonEnum::ManifestMissingId);
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
@@ -124,10 +149,10 @@ IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
 
   // 4) Open DevTools and enable Audits domain.
   Attach();
-  SendCommand("Audits.enable", std::make_unique<base::DictionaryValue>());
+  SendCommandSync("Audits.enable");
 
   // 5) Verify we have received the SameSite issue on the main target.
-  WaitForNotification("Audits.issueAdded", true);
+  WaitForDummyIssueNotification();
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
@@ -145,27 +170,102 @@ IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
 
   // 4) Open DevTools and enable Audits domain.
   Attach();
-  SendCommand("Audits.enable", std::make_unique<base::DictionaryValue>());
+  SendCommandSync("Audits.enable");
 
   // 5) Verify that we haven't received any notifications.
-  ASSERT_TRUE(notifications_.empty());
+  ASSERT_FALSE(HasExistingNotification());
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
+                       IssueForSkippableNavigationEntry_MainFrame) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL non_skippable_url(
+      embedded_test_server()->GetURL("a.com", "/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), non_skippable_url));
+
+  GURL skippable_url(embedded_test_server()->GetURL("b.com", "/title2.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), skippable_url));
+
+  // Navigate to a new document from the renderer without a user gesture.
+  GURL redirected_url(embedded_test_server()->GetURL("c.com", "/title3.html"));
+  EXPECT_TRUE(
+      NavigateToURLFromRendererWithoutUserGesture(shell(), redirected_url));
+
+  // Open DevTools and enable Audits domain.
+  Attach();
+  SendCommandSync("Audits.enable");
+
+  // Verify that we have received the notification for issue.
+  base::DictValue notification = WaitForNotification("Audits.issueAdded", true);
+
+  EXPECT_EQ(*notification.FindStringByDottedPath("issue.code"),
+            protocol::Audits::InspectorIssueCodeEnum::GenericIssue);
+
+  EXPECT_EQ(*notification.FindStringByDottedPath(
+                "issue.details.genericIssueDetails.errorType"),
+            protocol::Audits::GenericIssueErrorTypeEnum::
+                NavigationEntryMarkedSkippable);
+
+  EXPECT_THAT(*notification.FindStringByDottedPath(
+                  "issue.details.genericIssueDetails.request.url"),
+              testing::HasSubstr("/title2.html"));
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageBrowserTest,
+                       IssueForSkippableNavigationEntry_SubFrame) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL page_with_iframe_url =
+      embedded_test_server()->GetURL("/devtools/page-with-oopif.html");
+  EXPECT_TRUE(NavigateToURL(shell(), page_with_iframe_url));
+
+  RenderFrameHostImpl* main_frame = main_frame_host();
+
+  // This navigation is renderer-initiated, so the previous entry
+  // ('/devtools/page-with-oopif.html' which has 'title1.html' in iframe) should
+  // be marked skippable. An issue should be reported for this.
+  GURL next_url(embedded_test_server()->GetURL("bar.com", "/title2.html"));
+
+  EXPECT_TRUE(NavigateToURLFromRendererWithoutUserGesture(
+      main_frame->child_at(0)->current_frame_host(), next_url));
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+
+  RenderFrameHost* child_frame = main_frame->child_at(0)->current_frame_host();
+  EXPECT_TRUE(child_frame);
+
+  // Verify that both main and child frame point to their designated url
+  EXPECT_EQ(child_frame->GetLastCommittedURL(), next_url);
+  EXPECT_EQ(main_frame->GetLastCommittedURL(), page_with_iframe_url);
+
+  // Open DevTools in the child frame and enable Audits domain.
+  AttachToFrameTreeHost(child_frame);
+  SendCommandSync("Audits.enable");
+
+  // Verify that we have received the notification for the issue.
+  // The issue should be about the navigation to 'title1.html' in the iframe
+  // being skippable.
+  base::DictValue notification = WaitForNotification("Audits.issueAdded", true);
+
+  EXPECT_EQ(*notification.FindStringByDottedPath("issue.code"),
+            protocol::Audits::InspectorIssueCodeEnum::GenericIssue);
+
+  EXPECT_EQ(*notification.FindStringByDottedPath(
+                "issue.details.genericIssueDetails.errorType"),
+            protocol::Audits::GenericIssueErrorTypeEnum::
+                NavigationEntryMarkedSkippable);
+
+  EXPECT_THAT(*notification.FindStringByDottedPath(
+                  "issue.details.genericIssueDetails.request.url"),
+              testing::HasSubstr("/title1.html"));
 }
 
 class DevToolsIssueStorageWithBackForwardCacheBrowserTest
     : public DevToolsIssueStorageBrowserTest {
  public:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    std::vector<base::test::ScopedFeatureList::FeatureAndParams>
-        enabled_features;
-
     // Enable BackForwardCache, omitting this feature results in a crash.
-    std::map<std::string, std::string> params = {
-        {"TimeToLiveInBackForwardCacheInSeconds", "3600"}};
-    enabled_features.emplace_back(features::kBackForwardCache, params);
     feature_list_.InitWithFeaturesAndParameters(
-        enabled_features,
-        // Allow BackForwardCache for all devices regardless of their memory.
-        {features::kBackForwardCacheMemoryControls});
+        GetDefaultEnabledBackForwardCacheFeaturesForTesting(),
+        GetDefaultDisabledBackForwardCacheFeaturesForTesting());
   }
 
  protected:
@@ -200,10 +300,61 @@ IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageWithBackForwardCacheBrowserTest,
 
   // 5) Open DevTools and enable Audits domain.
   Attach();
-  SendCommand("Audits.enable", std::make_unique<base::DictionaryValue>());
+  SendCommandSync("Audits.enable");
 
   // 6) Verify we have received the SameSite issue on the main target.
-  WaitForNotification("Audits.issueAdded", true);
+  WaitForDummyIssueNotification();
+}
+
+class DevToolsIssueStorageWithPrerenderBrowserTest
+    : public DevToolsIssueStorageBrowserTest {
+ public:
+  DevToolsIssueStorageWithPrerenderBrowserTest()
+      : prerender_test_helper_(base::BindRepeating(
+            &DevToolsIssueStorageWithPrerenderBrowserTest::GetWebContents,
+            base::Unretained(this))) {}
+
+  void SetUp() override {
+    prerender_test_helper().RegisterServerRequestMonitor(
+        embedded_test_server());
+    DevToolsIssueStorageBrowserTest::SetUp();
+  }
+
+  test::PrerenderTestHelper& prerender_test_helper() {
+    return prerender_test_helper_;
+  }
+
+ private:
+  WebContents* GetWebContents() { return web_contents(); }
+  test::PrerenderTestHelper prerender_test_helper_;
+};
+
+IN_PROC_BROWSER_TEST_F(DevToolsIssueStorageWithPrerenderBrowserTest,
+                       IssueWhilePrerendering) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL main_url(embedded_test_server()->GetURL("/empty.html"));
+  GURL prerender_url(embedded_test_server()->GetURL("/title1.html"));
+
+  // 1) Navigate to |main_url|.
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  // 2) Prerender |prerender_url|.
+  PrerenderHostId host_id = prerender_test_helper().AddPrerender(prerender_url);
+  RenderFrameHostImpl* prerender_rfh = static_cast<RenderFrameHostImpl*>(
+      prerender_test_helper().GetPrerenderedMainFrameHost(host_id));
+
+  // 3) Report an empty SameSite cookie issue in prerendering page.
+  ReportDummyIssue(prerender_rfh);
+
+  // 4) Activate prerendering page.
+  prerender_test_helper().NavigatePrimaryPage(prerender_url);
+
+  // 5) Open DevTools and enable Audits domain.
+  Attach();
+  SendCommandSync("Audits.enable");
+
+  // 6) Verify we have received the SameSite issue on the main target.
+  WaitForDummyIssueNotification();
 }
 
 }  // namespace content

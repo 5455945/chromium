@@ -1,23 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/task_manager/providers/worker_task_provider.h"
 
 #include <memory>
 #include <vector>
 
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/task_manager/providers/task_provider_observer.h"
-#include "chrome/browser/task_manager/providers/worker_task_provider.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -31,9 +34,11 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/origin.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
 #endif
 
@@ -41,23 +46,16 @@ namespace task_manager {
 
 namespace {
 
-void OnUnblockOnProfileCreation(base::RunLoop* run_loop,
-                                Profile* profile,
-                                Profile::CreateStatus status) {
-  if (status == Profile::CREATE_STATUS_INITIALIZED)
-    run_loop->Quit();
-}
-
 std::u16string ExpectedTaskTitle(const std::string& title) {
   return l10n_util::GetStringFUTF16(IDS_TASK_MANAGER_SERVICE_WORKER_PREFIX,
                                     base::UTF8ToUTF16(title));
 }
 
 // Get the process id of the active WebContents for the passed |browser|.
-int GetChildProcessID(Browser* browser) {
-  return browser->tab_strip_model()
+content::ChildProcessId GetChildProcessID(BrowserWindowInterface* browser) {
+  return browser->GetTabStripModel()
       ->GetActiveWebContents()
-      ->GetMainFrame()
+      ->GetPrimaryMainFrame()
       ->GetProcess()
       ->GetID();
 }
@@ -86,32 +84,29 @@ class WorkerTaskProviderBrowserTest : public InProcessBrowserTest,
     task_provider_.reset();
   }
 
-  Browser* CreateNewProfileAndSwitch() {
+  BrowserWindowInterface* CreateNewProfileAndSwitch() {
     ProfileManager* profile_manager = g_browser_process->profile_manager();
-
-    // Create an additional profile.
     base::FilePath new_path =
         profile_manager->GenerateNextProfileDirectoryPath();
-    base::RunLoop run_loop;
-    profile_manager->CreateProfileAsync(
-        new_path, base::BindRepeating(&OnUnblockOnProfileCreation, &run_loop));
-    run_loop.Run();
+    // Create an additional profile.
+    profiles::testing::CreateProfileSync(profile_manager, new_path);
 
     profiles::SwitchToProfile(new_path, /* always_create = */ false,
                               base::DoNothing());
-    BrowserList* browser_list = BrowserList::GetInstance();
-    return *browser_list->begin_last_active();
+    return GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   }
 
-  content::ServiceWorkerContext* GetServiceWorkerContext(Browser* browser) {
-    return browser->profile()
+  content::ServiceWorkerContext* GetServiceWorkerContext(
+      BrowserWindowInterface* browser) {
+    return browser->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetServiceWorkerContext();
   }
 
   void WaitUntilTaskCount(uint64_t count) {
-    if (tasks_.size() == count)
+    if (tasks_.size() == count) {
       return;
+    }
 
     expected_task_count_ = count;
     base::RunLoop loop;
@@ -124,39 +119,44 @@ class WorkerTaskProviderBrowserTest : public InProcessBrowserTest,
     DCHECK(task);
     tasks_.push_back(task);
 
-    if (expected_task_count_ == tasks_.size())
+    if (expected_task_count_ == tasks_.size()) {
       StopWaiting();
+    }
   }
 
   void TaskRemoved(Task* task) override {
     DCHECK(task);
-    base::Erase(tasks_, task);
+    std::erase(tasks_, task);
 
-    if (expected_task_count_ == tasks_.size())
+    if (expected_task_count_ == tasks_.size()) {
       StopWaiting();
+    }
   }
 
-  const std::vector<Task*>& tasks() const { return tasks_; }
+  const std::vector<raw_ptr<Task, VectorExperimental>>& tasks() const {
+    return tasks_;
+  }
   TaskProvider* task_provider() const { return task_provider_.get(); }
 
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     command_line->AppendSwitch(
-        chromeos::switches::kIgnoreUserProfileMappingForTests);
+        ash::switches::kIgnoreUserProfileMappingForTests);
 #endif
   }
 
   void StopWaiting() {
-    if (quit_closure_for_waiting_)
+    if (quit_closure_for_waiting_) {
       std::move(quit_closure_for_waiting_).Run();
+    }
   }
 
  private:
   std::unique_ptr<WorkerTaskProvider> task_provider_;
 
   // Tasks created by |task_provider_|.
-  std::vector<Task*> tasks_;
+  std::vector<raw_ptr<Task, VectorExperimental>> tasks_;
 
   base::OnceClosure quit_closure_for_waiting_;
 
@@ -171,9 +171,9 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
   StartUpdating();
 
   EXPECT_TRUE(tasks().empty());
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL(
-                     "/service_worker/create_service_worker.html"));
+                     "/service_worker/create_service_worker.html")));
   EXPECT_EQ("DONE", EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
                            "register('respond_with_fetch_worker.js');"));
   WaitUntilTaskCount(1);
@@ -189,8 +189,9 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
               .spec()),
       base::CompareCase::INSENSITIVE_ASCII));
 
-  GetServiceWorkerContext(browser())->StopAllServiceWorkersForOrigin(
-      url::Origin::Create(embedded_test_server()->base_url()));
+  GetServiceWorkerContext(browser())->StopAllServiceWorkersForStorageKey(
+      blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(embedded_test_server()->base_url())));
   WaitUntilTaskCount(0);
 
   StopUpdating();
@@ -203,16 +204,17 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
   StartUpdating();
 
   EXPECT_TRUE(tasks().empty());
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
 
   // Close the default browser.
   CloseBrowserSynchronously(browser());
 
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       incognito, embedded_test_server()->GetURL(
-                     "/service_worker/create_service_worker.html"));
-  EXPECT_EQ("DONE", EvalJs(incognito->tab_strip_model()->GetActiveWebContents(),
-                           "register('respond_with_fetch_worker.js');"));
+                     "/service_worker/create_service_worker.html")));
+  EXPECT_EQ("DONE",
+            EvalJs(incognito->GetTabStripModel()->GetActiveWebContents(),
+                   "register('respond_with_fetch_worker.js');"));
   WaitUntilTaskCount(1);
 
   const Task* task = tasks()[0];
@@ -226,8 +228,9 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
               .spec()),
       base::CompareCase::INSENSITIVE_ASCII));
 
-  GetServiceWorkerContext(incognito)->StopAllServiceWorkersForOrigin(
-      url::Origin::Create(embedded_test_server()->base_url()));
+  GetServiceWorkerContext(incognito)->StopAllServiceWorkersForStorageKey(
+      blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(embedded_test_server()->base_url())));
   WaitUntilTaskCount(0);
 
   StopUpdating();
@@ -236,56 +239,60 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
 
 // If the profile are created dynamically and there is more than one profile
 // simultaneously, the WorkerTaskProvider can still works.
+// Flaky on all platforms. https://crrev.com/1244009.
 IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
-                       CreateTasksForMultiProfiles) {
+                       DISABLED_CreateTasksForMultiProfiles) {
   StartUpdating();
 
   EXPECT_TRUE(tasks().empty());
-  Browser* browser_1 = CreateNewProfileAndSwitch();
-  ui_test_utils::NavigateToURL(
-      browser_1, embedded_test_server()->GetURL(
-                     "/service_worker/create_service_worker.html"));
-  EXPECT_EQ("DONE", EvalJs(browser_1->tab_strip_model()->GetActiveWebContents(),
+
+  const GURL kCreateServiceWorkerURL = embedded_test_server()->GetURL(
+      "/service_worker/create_service_worker.html");
+
+  BrowserWindowInterface* browser_1 = CreateNewProfileAndSwitch();
+  content::RenderFrameHost* render_frame_host_1 =
+      ui_test_utils::NavigateToURL(browser_1, kCreateServiceWorkerURL);
+  ASSERT_EQ(render_frame_host_1->GetLastCommittedURL(),
+            kCreateServiceWorkerURL);
+  EXPECT_EQ("DONE", EvalJs(render_frame_host_1,
                            "register('respond_with_fetch_worker.js');"));
   WaitUntilTaskCount(1);
 
-  Browser* browser_2 = CreateNewProfileAndSwitch();
-  ui_test_utils::NavigateToURL(
-      browser_2, embedded_test_server()->GetURL(
-                     "/service_worker/create_service_worker.html"));
-  EXPECT_EQ("DONE", EvalJs(browser_2->tab_strip_model()->GetActiveWebContents(),
+  BrowserWindowInterface* browser_2 = CreateNewProfileAndSwitch();
+  content::RenderFrameHost* render_frame_host_2 =
+      ui_test_utils::NavigateToURL(browser_2, kCreateServiceWorkerURL);
+  ASSERT_EQ(render_frame_host_2->GetLastCommittedURL(),
+            kCreateServiceWorkerURL);
+  EXPECT_EQ("DONE", EvalJs(render_frame_host_2,
                            "register('respond_with_fetch_worker.js');"));
   WaitUntilTaskCount(2);
+
+  const GURL kServiceWorkerURL = embedded_test_server()->GetURL(
+      "/service_worker/respond_with_fetch_worker.js");
 
   const Task* task_1 = tasks()[0];
   EXPECT_EQ(task_1->GetChildProcessUniqueID(), GetChildProcessID(browser_1));
   EXPECT_EQ(Task::SERVICE_WORKER, task_1->GetType());
-  EXPECT_TRUE(base::StartsWith(
-      task_1->title(),
-      ExpectedTaskTitle(
-          embedded_test_server()
-              ->GetURL("/service_worker/respond_with_fetch_worker.js")
-              .spec()),
-      base::CompareCase::INSENSITIVE_ASCII));
+  EXPECT_TRUE(base::StartsWith(task_1->title(),
+                               ExpectedTaskTitle(kServiceWorkerURL.spec()),
+                               base::CompareCase::INSENSITIVE_ASCII));
 
   const Task* task_2 = tasks()[1];
   EXPECT_EQ(task_2->GetChildProcessUniqueID(), GetChildProcessID(browser_2));
   EXPECT_EQ(Task::SERVICE_WORKER, task_2->GetType());
-  EXPECT_TRUE(base::StartsWith(
-      task_2->title(),
-      ExpectedTaskTitle(
-          embedded_test_server()
-              ->GetURL("/service_worker/respond_with_fetch_worker.js")
-              .spec()),
-      base::CompareCase::INSENSITIVE_ASCII));
+  EXPECT_TRUE(base::StartsWith(task_2->title(),
+                               ExpectedTaskTitle(kServiceWorkerURL.spec()),
+                               base::CompareCase::INSENSITIVE_ASCII));
 
-  GetServiceWorkerContext(browser_1)->StopAllServiceWorkersForOrigin(
-      url::Origin::Create(embedded_test_server()->base_url()));
+  GetServiceWorkerContext(browser_1)->StopAllServiceWorkersForStorageKey(
+      blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(embedded_test_server()->base_url())));
   WaitUntilTaskCount(1);
   EXPECT_EQ(task_2, tasks()[0]);
 
-  GetServiceWorkerContext(browser_2)->StopAllServiceWorkersForOrigin(
-      url::Origin::Create(embedded_test_server()->base_url()));
+  GetServiceWorkerContext(browser_2)->StopAllServiceWorkersForStorageKey(
+      blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(embedded_test_server()->base_url())));
   WaitUntilTaskCount(0);
 
   StopUpdating();
@@ -295,9 +302,9 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest, CreateExistingTasks) {
   EXPECT_TRUE(tasks().empty());
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL(
-                     "/service_worker/create_service_worker.html"));
+                     "/service_worker/create_service_worker.html")));
   EXPECT_EQ("DONE", EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
                            "register('respond_with_fetch_worker.js');"));
 
@@ -318,8 +325,9 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest, CreateExistingTasks) {
               .spec()),
       base::CompareCase::INSENSITIVE_ASCII));
 
-  GetServiceWorkerContext(browser())->StopAllServiceWorkersForOrigin(
-      url::Origin::Create(embedded_test_server()->base_url()));
+  GetServiceWorkerContext(browser())->StopAllServiceWorkersForStorageKey(
+      blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(embedded_test_server()->base_url())));
   WaitUntilTaskCount(0);
 
   StopUpdating();
@@ -327,19 +335,20 @@ IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest, CreateExistingTasks) {
 
 // Tests that destroying a profile while updating will correctly remove the
 // existing tasks. An incognito browser is used because a regular profile is
-// never truly destroyed until browser shutdown (See https://crbug.com/88586).
-// TODO(crbug.com/1168407): Fix the flakiness and re-enable this.
+// never truly destroyed until browser shutdown (See
+// https://crbug.com/40594327).
+// TODO(crbug.com/40743320): Fix the flakiness and re-enable this.
 IN_PROC_BROWSER_TEST_F(WorkerTaskProviderBrowserTest,
                        DISABLED_DestroyedProfile) {
   StartUpdating();
 
   EXPECT_TRUE(tasks().empty());
-  Browser* browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* browser = CreateIncognitoBrowser();
 
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser, embedded_test_server()->GetURL(
-                   "/service_worker/create_service_worker.html"));
-  EXPECT_EQ("DONE", EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+                   "/service_worker/create_service_worker.html")));
+  EXPECT_EQ("DONE", EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                            "register('respond_with_fetch_worker.js');"));
   WaitUntilTaskCount(1);
 

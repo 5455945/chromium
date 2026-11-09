@@ -1,39 +1,39 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/chrome/common/string_util.h"
+#import "ios/chrome/common/string_util.h"
 
 #import <UIKit/UIKit.h>
 
-#include "base/ios/ns_range.h"
-#include "base/test/gtest_util.h"
+#import "base/ios/ns_range.h"
+#import "base/test/gtest_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "testing/gtest_mac.h"
-#include "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/common/ui/util/text_view_util.h"
+#import "testing/gtest/include/gtest/gtest.h"
+#import "testing/gtest_mac.h"
+#import "testing/platform_test.h"
 
 namespace {
 
 using StringUtilTest = PlatformTest;
 
+// Tests that AttributedStringFromStringWithLink correctly parses a string with
+// a single link and applies the expected attributes to the text and link
+// ranges.
 TEST_F(StringUtilTest, AttributedStringFromStringWithLink) {
   struct TestCase {
     NSString* input;
-    NSDictionary* textAttributes;
-    NSDictionary* linkAttributes;
-    NSString* expectedString;
-    NSRange expectedTextRange;
-    NSRange expectedLinkRange;
+    NSDictionary* text_attributes;
+    NSDictionary* link_attributes;
+    NSString* expected_string;
+    NSRange expected_text_range;
+    NSRange expected_link_range;
   };
 
   const TestCase kAllTestCases[] = {
       TestCase{@"Text with valid BEGIN_LINK link END_LINK and spaces.", @{},
-               @{NSLinkAttributeName : @"google.com"},
+               @{NSLinkAttributeName : @"chromium.org"},
                @"Text with valid link and spaces.", NSRange{0, 16},
                NSRange{16, 4}},
       TestCase{
@@ -44,7 +44,7 @@ TEST_F(StringUtilTest, AttributedStringFromStringWithLink) {
       TestCase{
           @"Text with valid BEGIN_LINK link END_LINK and spaces.",
           @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-          @{NSLinkAttributeName : @"google.com"},
+          @{NSLinkAttributeName : @"chromium.org"},
           @"Text with valid link and spaces.",
           NSRange{0, 16},
           NSRange{16, 4},
@@ -52,7 +52,7 @@ TEST_F(StringUtilTest, AttributedStringFromStringWithLink) {
       TestCase{
           @"Text with valid BEGIN_LINKlinkEND_LINK and no spaces.",
           @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-          @{NSLinkAttributeName : @"google.com"},
+          @{NSLinkAttributeName : @"chromium.org"},
           @"Text with valid link and no spaces.",
           NSRange{0, 16},
           NSRange{16, 4},
@@ -61,157 +61,136 @@ TEST_F(StringUtilTest, AttributedStringFromStringWithLink) {
 
   for (const TestCase& test_case : kAllTestCases) {
     const NSAttributedString* result = AttributedStringFromStringWithLink(
-        test_case.input, test_case.textAttributes, test_case.linkAttributes);
-    EXPECT_NSEQ(result.string, test_case.expectedString);
+        test_case.input, test_case.text_attributes, test_case.link_attributes);
+    EXPECT_NSEQ(result.string, test_case.expected_string);
 
     // Text at index 0 has text attributes applied until the link location.
-    NSRange textRange;
-    NSDictionary* resultTextAttributes = [result attributesAtIndex:0
-                                                    effectiveRange:&textRange];
-    EXPECT_TRUE(NSEqualRanges(test_case.expectedTextRange, textRange));
-    EXPECT_NSEQ(test_case.textAttributes, resultTextAttributes);
+    NSRange text_range;
+    NSDictionary* result_text_attributes =
+        [result attributesAtIndex:0 effectiveRange:&text_range];
+    EXPECT_TRUE(NSEqualRanges(test_case.expected_text_range, text_range));
+    EXPECT_NSEQ(test_case.text_attributes, result_text_attributes);
 
-    // Text at index |expectedRange.location| has link attributes applied.
-    NSRange linkRange;
-    NSDictionary* resultLinkAttributes =
-        [result attributesAtIndex:test_case.expectedLinkRange.location
-                   effectiveRange:&linkRange];
-    EXPECT_TRUE(NSEqualRanges(test_case.expectedLinkRange, linkRange));
+    // Text at index `expected_link_range.location` has link attributes applied.
+    NSRange link_range;
+    NSDictionary* result_link_attributes =
+        [result attributesAtIndex:test_case.expected_link_range.location
+                   effectiveRange:&link_range];
+    EXPECT_TRUE(NSEqualRanges(test_case.expected_link_range, link_range));
 
-    NSMutableDictionary* combinedAttributes =
+    NSMutableDictionary* combined_attributes =
         [[NSMutableDictionary alloc] init];
-    [combinedAttributes addEntriesFromDictionary:test_case.textAttributes];
-    [combinedAttributes addEntriesFromDictionary:test_case.linkAttributes];
-    EXPECT_NSEQ(combinedAttributes, resultLinkAttributes);
+    [combined_attributes addEntriesFromDictionary:test_case.text_attributes];
+    [combined_attributes addEntriesFromDictionary:test_case.link_attributes];
+    EXPECT_NSEQ(combined_attributes, result_link_attributes);
   }
 }
 
-TEST_F(StringUtilTest, AttributedStringFromStringWithLinkFailures) {
+// Tests that AttributedStringFromStringWithLinks correctly parses a string with
+// multiple links and applies separate link attributes to each respective link.
+TEST_F(StringUtilTest, AttributedStringFromStringWithLinks) {
   struct TestCase {
     NSString* input;
-    NSDictionary* textAttributes;
-    NSDictionary* linkAttributes;
+    NSDictionary* text_attributes;
+    NSArray<NSDictionary*>* links_attributes;
+    NSString* expected_string;
+    std::vector<NSRange> expected_link_ranges;
   };
 
   const TestCase kAllTestCases[] = {
       TestCase{
-          @"Text without link.",
-          @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-          @{NSLinkAttributeName : @"google.com"},
-      },
+          @"Text with BEGIN_LINKlink1END_LINK and BEGIN_LINKlink2END_LINK.",
+          @{},
+          @[
+            @{NSLinkAttributeName : @"chromium.org"},
+            @{NSLinkAttributeName : @"example.com"}
+          ],
+          @"Text with link1 and link2.",
+          {NSRange{10, 5}, NSRange{20, 5}}},
       TestCase{
-          @"Text with BEGIN_LINK and no end link.",
+          @"Text with BEGIN_LINKlink1END_LINK and BEGIN_LINKlink2END_LINK.",
           @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-          @{NSLinkAttributeName : @"google.com"},
-      },
-      TestCase{
-          @"Text with no begin link and END_LINK.",
-          @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-          @{NSLinkAttributeName : @"google.com"},
-      },
-      TestCase{
-          @"Text with END_LINK before BEGIN_LINK.",
-          @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-          @{NSLinkAttributeName : @"google.com"},
-      },
-
+          @[
+            @{NSLinkAttributeName : @"chromium.org"},
+            @{NSLinkAttributeName : @"example.com"}
+          ],
+          @"Text with link1 and link2.",
+          {NSRange{10, 5}, NSRange{20, 5}}},
   };
 
   for (const TestCase& test_case : kAllTestCases) {
-    EXPECT_CHECK_DEATH(AttributedStringFromStringWithLink(
-        test_case.input, test_case.textAttributes, test_case.linkAttributes));
+    const NSAttributedString* result = AttributedStringFromStringWithLinks(
+        test_case.input, test_case.text_attributes, test_case.links_attributes);
+    EXPECT_NSEQ(result.string, test_case.expected_string);
+
+    // Verify that the non-link text has only the expected base attributes (or
+    // none).
+    NSRange text_range;
+    NSDictionary* result_text_attributes =
+        [result attributesAtIndex:0 effectiveRange:&text_range];
+    EXPECT_NSEQ(test_case.text_attributes, result_text_attributes);
+
+    for (size_t i = 0; i < test_case.expected_link_ranges.size(); ++i) {
+      NSRange link_range;
+      NSDictionary* result_link_attributes =
+          [result attributesAtIndex:test_case.expected_link_ranges[i].location
+                     effectiveRange:&link_range];
+      EXPECT_TRUE(NSEqualRanges(test_case.expected_link_ranges[i], link_range));
+
+      NSMutableDictionary* combined_attributes =
+          [[NSMutableDictionary alloc] init];
+      [combined_attributes addEntriesFromDictionary:test_case.text_attributes];
+      [combined_attributes
+          addEntriesFromDictionary:test_case.links_attributes[i]];
+      EXPECT_NSEQ(combined_attributes, result_link_attributes);
+    }
   }
+
+  // Test case with no links and nil link attributes
+  const NSAttributedString* result =
+      AttributedStringFromStringWithLinks(@"Text without links.", @{}, nil);
+  EXPECT_NSEQ(result.string, @"Text without links.");
+
+  NSRange text_range;
+  NSDictionary* result_attributes = [result attributesAtIndex:0
+                                               effectiveRange:&text_range];
+  EXPECT_NSEQ(@{}, result_attributes);
+  // Verifies that the "no attributes" state applies to the entire string.
+  EXPECT_EQ(0U, text_range.location);
+  EXPECT_EQ(result.length, text_range.length);
 }
 
+// Tests that AttributedStringFromStringWithLink handles an empty link segment
+// gracefully and returns a string with text attributes applied.
 TEST_F(StringUtilTest, AttributedStringFromStringWithLinkWithEmptyLink) {
   struct TestCase {
     NSString* input;
-    NSDictionary* textAttributes;
-    NSDictionary* linkAttributes;
-    NSString* expectedString;
+    NSDictionary* text_attributes;
+    NSDictionary* link_attributes;
+    NSString* expected_string;
   };
   const TestCase test_case = TestCase {
     @"Text with empty link BEGIN_LINK END_LINK.",
         @{NSForegroundColorAttributeName : [UIColor colorNamed:kBlueColor]},
-        @{NSLinkAttributeName : @"google.com"}, @"Text with empty link .",
+        @{NSLinkAttributeName : @"chromium.org"}, @"Text with empty link .",
   };
 
   const NSAttributedString* result = AttributedStringFromStringWithLink(
-      test_case.input, test_case.textAttributes, test_case.linkAttributes);
-  EXPECT_NSEQ(result.string, test_case.expectedString);
+      test_case.input, test_case.text_attributes, test_case.link_attributes);
+  EXPECT_NSEQ(result.string, test_case.expected_string);
 
   // Text attributes apply to the full range of the result string.
-  NSRange textRange;
-  NSDictionary* resultTextAttributes = [result attributesAtIndex:0
-                                                  effectiveRange:&textRange];
-  EXPECT_TRUE(NSEqualRanges(NSMakeRange(0, test_case.expectedString.length),
-                            textRange));
-  EXPECT_NSEQ(test_case.textAttributes, resultTextAttributes);
+  NSRange text_range;
+  NSDictionary* result_text_attributes = [result attributesAtIndex:0
+                                                    effectiveRange:&text_range];
+  EXPECT_TRUE(NSEqualRanges(NSMakeRange(0, test_case.expected_string.length),
+                            text_range));
+  EXPECT_NSEQ(test_case.text_attributes, result_text_attributes);
 }
 
-TEST_F(StringUtilTest, ParseStringWithLink) {
-  struct TestCase {
-    NSString* input;
-    StringWithTag expected;
-  };
-
-  const TestCase kAllTestCases[] = {
-      TestCase{
-          @"Text without link.",
-          StringWithTag{
-              @"Text without link.",
-              NSRange{NSNotFound, 0},
-          },
-      },
-      TestCase{
-          @"Text with empty link BEGIN_LINK END_LINK.",
-          StringWithTag{
-              @"Text with empty link .",
-              NSRange{21, 0},
-          },
-      },
-      TestCase{
-          @"Text with BEGIN_LINK and no end link.",
-          StringWithTag{
-              @"Text with BEGIN_LINK and no end link.",
-              NSRange{NSNotFound, 0},
-          },
-      },
-      TestCase{
-          @"Text with no begin link and END_LINK.",
-          StringWithTag{
-              @"Text with no begin link and END_LINK.",
-              NSRange{NSNotFound, 0},
-          },
-      },
-      TestCase{@"Text with END_LINK before BEGIN_LINK.",
-               StringWithTag{
-                   @"Text with END_LINK before BEGIN_LINK.",
-                   NSRange{NSNotFound, 0},
-               }},
-      TestCase{
-          @"Text with valid BEGIN_LINK link END_LINK and spaces.",
-          StringWithTag{
-              @"Text with valid link and spaces.",
-              NSRange{16, 4},
-          },
-      },
-      TestCase{
-          @"Text with valid BEGIN_LINKlinkEND_LINK and no spaces.",
-          StringWithTag{
-              @"Text with valid link and no spaces.",
-              NSRange{16, 4},
-          },
-      },
-  };
-
-  for (const TestCase& test_case : kAllTestCases) {
-    const StringWithTag result = ParseStringWithLink(test_case.input);
-    EXPECT_NSEQ(result.string, test_case.expected.string);
-    EXPECT_EQ(result.range, test_case.expected.range);
-  }
-}
-
+// Tests that ParseStringWithLinks correctly extracts link ranges and strips out
+// the link tags (BEGIN_LINK and END_LINK) from various valid and invalid input
+// strings.
 TEST_F(StringUtilTest, ParseStringWithLinks) {
   struct TestCase {
     NSString* input;
@@ -286,6 +265,8 @@ TEST_F(StringUtilTest, ParseStringWithLinks) {
   }
 }
 
+// Tests that ParseStringWithTag correctly parses a single pair of custom tags,
+// returning the cleaned string and the range of the tagged content.
 TEST_F(StringUtilTest, ParseStringWithTag) {
   struct TestCase {
     NSString* input;
@@ -350,6 +331,9 @@ TEST_F(StringUtilTest, ParseStringWithTag) {
   }
 }
 
+// Tests that ParseStringWithTags correctly parses multiple occurrences of
+// custom tags, returning the cleaned string and all ranges of the tagged
+// contents.
 TEST_F(StringUtilTest, ParseStringWithTags) {
   struct TestCase {
     NSString* input;
@@ -425,72 +409,54 @@ TEST_F(StringUtilTest, ParseStringWithTags) {
   }
 }
 
-TEST_F(StringUtilTest, CleanNSStringForDisplay) {
-  NSArray* const all_test_data = @[
-    @{
-      @"input" : @"Clean String",
-      @"remove_graphic_chars" : @NO,
-      @"expected" : @"Clean String"
-    },
-    @{
-      @"input" : @"  \t String with leading and trailing  whitespaces   ",
-      @"remove_graphic_chars" : @NO,
-      @"expected" : @"String with leading and trailing whitespaces"
-    },
-    @{
-      @"input" : @"  \n\n\r String with \n\n\r\n\r newline characters \n\n\r",
-      @"remove_graphic_chars" : @NO,
-      @"expected" : @"String with newline characters"
-    },
-    @{
-      @"input" : @"String with an   arrow ⟰ that remains intact",
-      @"remove_graphic_chars" : @NO,
-      @"expected" : @"String with an arrow ⟰ that remains intact"
-    },
-    @{
-      @"input" : @"String with an   arrow ⟰ that gets cleaned up",
-      @"remove_graphic_chars" : @YES,
-      @"expected" : @"String with an arrow that gets cleaned up"
-    },
-  ];
+// Verifies when it should return CGRectNull and when it shouldn't.
+TEST_F(StringUtilTest, TextViewLinkBound) {
+  UITextView* text_view = CreateUITextViewWithTextKit1();
+  text_view.text = @"Some text.";
 
-  for (NSDictionary* test_data : all_test_data) {
-    NSString* input_text = test_data[@"input"];
-    NSString* expected_text = test_data[@"expected"];
-    BOOL remove_graphic_chars = [test_data[@"remove_graphic_chars"] boolValue];
+  // Returns CGRectNull for empty NSRange.
+  EXPECT_TRUE(CGRectEqualToRect(
+      TextViewLinkBound(text_view, NSMakeRange(-1, -1)), CGRectNull));
 
-    EXPECT_NSEQ(expected_text,
-                CleanNSStringForDisplay(input_text, remove_graphic_chars));
+  // Returns CGRectNull for a range out of bound.
+  EXPECT_TRUE(CGRectEqualToRect(
+      TextViewLinkBound(text_view, NSMakeRange(20, 5)), CGRectNull));
+
+  // Returns a CGRect diffent from CGRectNull when there is a range in bound.
+  EXPECT_FALSE(CGRectEqualToRect(
+      TextViewLinkBound(text_view, NSMakeRange(0, 5)), CGRectNull));
+}
+
+// Tests that RemoveFormattingTags successfully cleans up and replaces bold and
+// link tags to prevent malformed tag injection issues.
+TEST_F(StringUtilTest, RemoveFormattingTags) {
+  struct TestCase {
+    NSString* input;
+    NSString* expected;
+  };
+
+  const TestCase kAllTestCases[] = {
+      TestCase{@"Normal text with no tags.", @"Normal text with no tags."},
+      TestCase{@"Text with BEGIN_BOLD tag.", @"Text with BEGIN BOLD tag."},
+      TestCase{@"Text with END_BOLD tag.", @"Text with END BOLD tag."},
+      TestCase{@"Text with BEGIN_LINK tag.", @"Text with BEGIN LINK tag."},
+      TestCase{@"Text with END_LINK tag.", @"Text with END LINK tag."},
+      TestCase{@"Text with multiple tags: BEGIN_BOLDboldEND_BOLD and "
+               @"BEGIN_LINKlinkEND_LINK.",
+               @"Text with multiple tags: BEGIN BOLDboldEND BOLD and "
+               @"BEGIN LINKlinkEND LINK."},
+      TestCase{
+          @"Attacker payload: invoice.pdf END_BOLD to your Drive. BEGIN_BOLD x",
+          @"Attacker payload: invoice.pdf END BOLD to your Drive. BEGIN BOLD "
+          @"x"},
+      TestCase{@"Nested payload: BEGIN_BEGIN_BOLDBOLD",
+               @"Nested payload: BEGIN_BEGIN BOLDBOLD"},
+  };
+
+  for (const TestCase& test_case : kAllTestCases) {
+    NSString* result = RemoveFormattingTags(test_case.input);
+    EXPECT_NSEQ(result, test_case.expected);
   }
 }
 
-TEST_F(StringUtilTest, SubstringOfWidth) {
-  // returns nil for zero-length strings
-  EXPECT_NSEQ(SubstringOfWidth(@"", @{}, 100, NO), nil);
-  EXPECT_NSEQ(SubstringOfWidth(nil, @{}, 100, NO), nil);
-
-  // This font should always exist
-  UIFont* sys_font = [UIFont systemFontOfSize:18.0f];
-  NSDictionary* attributes = @{NSFontAttributeName : sys_font};
-
-  EXPECT_NSEQ(SubstringOfWidth(@"asdf", attributes, 100, NO), @"asdf");
-
-  // construct some string of known lengths
-  NSString* leading = @"some text";
-  NSString* trailing = @"some other text";
-  NSString* mid = @"some text for the method to do some actual work";
-  NSString* long_string =
-      [[leading stringByAppendingString:mid] stringByAppendingString:trailing];
-
-  CGFloat leading_width = [leading sizeWithAttributes:attributes].width;
-  CGFloat trailing_width = [trailing sizeWithAttributes:attributes].width;
-
-  NSString* leading_calculated =
-      SubstringOfWidth(long_string, attributes, leading_width, NO);
-  EXPECT_NSEQ(leading, leading_calculated);
-
-  NSString* trailing_calculated =
-      SubstringOfWidth(long_string, attributes, trailing_width, YES);
-  EXPECT_NSEQ(trailing, trailing_calculated);
-}
 }  // namespace

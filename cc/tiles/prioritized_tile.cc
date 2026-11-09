@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,7 +30,8 @@ PrioritizedTile::~PrioritizedTile() = default;
 void PrioritizedTile::AsValueInto(base::trace_event::TracedValue* value) const {
   tile_->AsValueInto(value);
 
-  viz::TracedValue::SetIDRef(raster_source().get(), value, "picture_pile");
+  viz::TracedValue::SetIDRef(viz::TracedValue::Id(raster_source().get()), value,
+                             "picture_pile");
 
   value->BeginDictionary("combined_priority");
   priority().AsValueInto(value);

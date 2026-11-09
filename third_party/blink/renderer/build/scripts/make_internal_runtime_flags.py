@@ -27,25 +27,23 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import os.path
-import sys
-
 import json5_generator
 import make_runtime_features
-import name_utilities
 import template_expander
 
 
 # We want exactly the same parsing as RuntimeFeatureWriter
 # but generate different files.
 class InternalRuntimeFlagsWriter(
-        make_runtime_features.BaseRuntimeFeatureWriter):
+    make_runtime_features.BaseRuntimeFeatureWriter
+):
     class_name = 'InternalRuntimeFlags'
     file_basename = 'internal_runtime_flags'
 
     def __init__(self, json5_file_path, output_dir):
         super(InternalRuntimeFlagsWriter, self).__init__(
-            json5_file_path, output_dir)
+            json5_file_path, output_dir
+        )
         self._outputs = {
             'internal_runtime_flags.idl': self.generate_idl,
             'internal_runtime_flags.h': self.generate_header,

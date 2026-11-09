@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@
 #include "base/containers/circular_deque.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -26,11 +26,11 @@
 #include "content/browser/download/save_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/download_manager_delegate.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/save_page_type.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/referrer.h"
+#include "net/base/isolation_info.h"
 #include "net/base/net_errors.h"
-#include "services/data_decoder/public/mojom/web_bundler.mojom.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-forward.h"
 #include "url/gurl.h"
@@ -43,12 +43,12 @@ class DownloadItemImpl;
 
 namespace content {
 class DownloadManagerImpl;
+class PageImpl;
 class FrameTreeNode;
 class RenderFrameHostImpl;
 class SaveFileManager;
 class SaveItem;
 class SavePackage;
-class WebContents;
 
 // SavePackage manages the process of saving a page as only-HTML, complete-HTML
 // or MHTML and provides status information about the job.
@@ -64,10 +64,8 @@ class WebContents;
 // saved. Each file is represented by a SaveItem, and all SaveItems are owned
 // by the SavePackage. SaveItems are created when a user initiates a page
 // saving job, and exist for the duration of one contents's life time.
-class CONTENT_EXPORT SavePackage
-    : public base::RefCountedThreadSafe<SavePackage>,
-      public WebContentsObserver,
-      public base::SupportsWeakPtr<SavePackage> {
+class CONTENT_EXPORT SavePackage final
+    : public base::RefCountedThreadSafe<SavePackage> {
  public:
   enum WaitState {
     // State when created but not initialized.
@@ -91,7 +89,10 @@ class CONTENT_EXPORT SavePackage
   // Constructor for user initiated page saving. This constructor results in a
   // SavePackage that will generate and sanitize a suggested name for the user
   // in the "Save As" dialog box.
-  explicit SavePackage(WebContents* web_contents);
+  explicit SavePackage(PageImpl& page);
+
+  SavePackage(const SavePackage&) = delete;
+  SavePackage& operator=(const SavePackage&) = delete;
 
   // Initialize the SavePackage. Returns true if it initializes properly.  Need
   // to make sure that this method must be called in the UI thread because using
@@ -146,47 +147,64 @@ class CONTENT_EXPORT SavePackage
   friend class WebContentsImpl;
   FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestSuggestedSaveNames);
   FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestLongSafePureFilename);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageTest,
+                           TestComputeMaxPathLengthForDirectory);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestTruncateBaseNameEdgeCases);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestUTF8FilenameTruncation);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestDirectoryWithTrailingSeparator);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestEmptyExtension);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageTest, TestVeryLongDirectory);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageFencedFrameTest,
+                           DontRequestSavableResourcesFromFencedFrames);
   FRIEND_TEST_ALL_PREFIXES(SavePackageBrowserTest, ImplicitCancel);
   FRIEND_TEST_ALL_PREFIXES(SavePackageBrowserTest, ExplicitCancel);
+  FRIEND_TEST_ALL_PREFIXES(SavePackageBrowserTest, Reload);
   FRIEND_TEST_ALL_PREFIXES(SavePackageBrowserTest, DownloadItemDestroyed);
 
   // Map from SaveItem::id() (aka save_item_id) into a SaveItem.
-  using SaveItemIdMap = std::
-      unordered_map<SaveItemId, std::unique_ptr<SaveItem>, SaveItemId::Hasher>;
+  using SaveItemIdMap =
+      std::unordered_map<SaveItemId, std::unique_ptr<SaveItem>>;
 
   using FileNameSet = std::set<base::FilePath::StringType,
-                               bool (*)(base::FilePath::StringPieceType,
-                                        base::FilePath::StringPieceType)>;
+                               bool (*)(base::FilePath::StringViewType,
+                                        base::FilePath::StringViewType)>;
 
   using FileNameCountMap =
       std::unordered_map<base::FilePath::StringType, uint32_t>;
 
   // Used only for testing. Bypasses the file and directory name generation /
   // sanitization by providing well known paths better suited for tests.
-  SavePackage(WebContents* web_contents,
+  SavePackage(PageImpl& page,
               SavePageType save_type,
               const base::FilePath& file_full_path,
               const base::FilePath& directory_full_path);
 
-  ~SavePackage() override;
+  ~SavePackage();
 
   void InitWithDownloadItem(
       SavePackageDownloadCreatedCallback download_created_callback,
       download::DownloadItemImpl* item);
 
-  // Callback for WebContents::GenerateMHTML() and
-  // WebContents::GenerateWebBundle().
-  void OnMHTMLOrWebBundleGenerated(int64_t size);
-
-  // Callback for WebContents::GenerateWebBundle().
-  void OnWebBundleGenerated(uint64_t size,
-                            data_decoder::mojom::WebBundlerError error);
+  // Callback for WebContents::GenerateMHTML().
+  void OnMHTMLGenerated(int64_t size);
 
   // Notes from Init() above applies here as well.
   void InternalInit();
 
   void Stop(bool cancel_download_item);
   void CheckFinish();
+
+  // Callback used to check if renaming is allowed once paths to saved filed
+  // have been obtained from `file_manager`.
+  void CheckRenameAllowedForPaths(
+      base::flat_map<base::FilePath, base::FilePath> tmp_paths_to_final_paths);
+
+  // Called by CheckRenameAllowedForPaths after checking if the final renaming
+  // step should happen or not.
+  void RenameIfAllowed(bool allowed);
+
+  // Clears the associated page.
+  void ClearPage();
 
   // Initiate a saving job of a specific URL. We send the request to
   // SaveFileManager, which will dispatch it to different approach according to
@@ -200,28 +218,18 @@ class CONTENT_EXPORT SavePackage
   // Update the download history of this item upon completion.
   void FinalizeDownloadEntry();
 
-  // Return max length of a path for a specific base directory.
-  // This is needed on POSIX, which restrict the length of file names in
-  // addition to the restriction on the length of path names.
-  // |base_dir| is assumed to be a directory name with no trailing slash.
-  static uint32_t GetMaxPathLengthForDirectory(const base::FilePath& base_dir);
+  // Queries runtime filesystem constraints for maximum path length.
+  // Performs blocking I/O - only call on file threads during path selection.
+  static uint32_t ComputeMaxPathLengthForDirectory(
+      const base::FilePath& base_dir);
 
-  // Truncates a filename to fit length constraints.
-  //
-  // |directory|    : Directory containing target file.
-  // |extension|    : Extension.
-  // |max_path_len| : Maximum size allowed for |len(directory + base_name +
-  //                  extension|.
-  // |base_name|    : Variable portion. The length of this component will be
-  //                  adjusted to fit the length constraints described at
-  //                  |max_path_len| above.
-  //
-  // Returns true if |base_name| could be successfully adjusted to fit the
-  // aforementioned constraints, or false otherwise.
-  // TODO(asanka): This function is wrong. |base_name| cannot be truncated
-  //   without knowing its encoding and truncation has to be performed on
-  //   character boundaries. Also the implementation doesn't look up the actual
-  //   path constraints and instead uses hard coded constants. crbug.com/618737
+  // Returns conservative maximum path length using platform defaults.
+  // Non-blocking - safe to call during save operations.
+  uint32_t GetMaxPathLengthForDirectory() const;
+
+  // Truncates |base_name| to fit within |max_path_len| for the full path.
+  // Respects UTF-8 character boundaries on POSIX systems.
+  // Returns true if truncation succeeded, false if no valid name possible.
   static bool TruncateBaseNameToFitPathConstraints(
       const base::FilePath& directory,
       const base::FilePath::StringType& extension,
@@ -245,11 +253,12 @@ class CONTENT_EXPORT SavePackage
   // with the help of CreatePendingSaveItem, EnqueueSavableResource,
   // EnqueueFrame.
   void GetSavableResourceLinks();
+  void GetSavableResourceLinksForRenderFrameHost(RenderFrameHostImpl* rfh);
 
   // Helper for finding or creating a SaveItem with the given parameters.
   SaveItem* CreatePendingSaveItem(
-      int container_frame_tree_node_id,
-      int save_item_frame_tree_node_id,
+      FrameTreeNodeId container_frame_tree_node_id,
+      FrameTreeNodeId save_item_frame_tree_node_id,
       const GURL& url,
       const Referrer& referrer,
       SaveFileCreateInfo::SaveFileSource save_source);
@@ -257,19 +266,19 @@ class CONTENT_EXPORT SavePackage
   // Helper for finding a SaveItem with the given url, or falling back to
   // creating a SaveItem with the given parameters.
   void CreatePendingSaveItemDeduplicatingByUrl(
-      int container_frame_tree_node_id,
-      int save_item_frame_tree_node_id,
+      FrameTreeNodeId container_frame_tree_node_id,
+      FrameTreeNodeId save_item_frame_tree_node_id,
       const GURL& url,
       const Referrer& referrer,
       SaveFileCreateInfo::SaveFileSource save_source);
 
   // Helper to enqueue a savable resource reported by GetSavableResourceLinks.
-  void EnqueueSavableResource(int container_frame_tree_node_id,
+  void EnqueueSavableResource(FrameTreeNodeId container_frame_tree_node_id,
                               const GURL& url,
                               const Referrer& referrer);
   // Helper to enqueue a subframe reported by GetSavableResourceLinks.
-  void EnqueueFrame(int container_frame_tree_node_id,
-                    int frame_tree_node_id,
+  void EnqueueFrame(FrameTreeNodeId container_frame_tree_node_id,
+                    FrameTreeNodeId frame_tree_node_id,
                     const GURL& frame_original_url);
 
   // Helper tracking how many |number_of_frames_pending_response_| we have
@@ -309,8 +318,8 @@ class CONTENT_EXPORT SavePackage
   // Remove SaveItem from in progress map and put it to saved map.
   void PutInProgressItemToSavedMap(SaveItem* save_item);
 
-  // Retrieves the URL to be saved from the WebContents.
-  static GURL GetUrlToBeSaved(WebContents* web_contents);
+  // Retrieves the URL to be saved from the main frame.
+  static GURL GetUrlToBeSaved(RenderFrameHost* main_frame);
 
   static base::FilePath CreateDirectoryOnFileThread(
       const std::u16string& title,
@@ -321,8 +330,7 @@ class CONTENT_EXPORT SavePackage
       const base::FilePath& download_save_dir);
   void ContinueGetSaveInfo(bool can_save_as_complete,
                            const base::FilePath& suggested_path);
-  void OnPathPicked(const base::FilePath& final_name,
-                    SavePageType type,
+  void OnPathPicked(SavePackagePathPickedParams params,
                     SavePackageDownloadCreatedCallback cb);
 
   // The number of in process SaveItems.
@@ -344,6 +352,10 @@ class CONTENT_EXPORT SavePackage
   // files is presented as the total and received bytes.
   int64_t CurrentSpeed() const;
 
+  // The current page, may be null if the primary page has been navigated away
+  // or destroyed.
+  base::WeakPtr<PageImpl> page_;
+
   // A queue for items we are about to start saving.
   base::circular_deque<std::unique_ptr<SaveItem>> waiting_item_queue_;
 
@@ -357,20 +369,22 @@ class CONTENT_EXPORT SavePackage
   // and also to find SaveItems to associate with a containing frame.
   // Note that |url_to_save_item_| does NOT own SaveItems - they
   // remain owned by waiting_item_queue_, in_progress_items_, etc.
-  std::map<GURL, SaveItem*> url_to_save_item_;
+  std::map<GURL, raw_ptr<SaveItem, CtnExperimental>> url_to_save_item_;
 
   // Map used to route responses from a given a subframe (i.e.
   // GetSerializedHtmlWithLocalLinksResponse) to the right SaveItem.
   // Note that |frame_tree_node_id_to_save_item_| does NOT own SaveItems - they
   // remain owned by waiting_item_queue_, in_progress_items_, etc.
-  std::unordered_map<int, SaveItem*> frame_tree_node_id_to_save_item_;
+  std::unordered_map<FrameTreeNodeId, raw_ptr<SaveItem, CtnExperimental>>
+      frame_tree_node_id_to_save_item_;
 
   // Used to limit which local paths get exposed to which frames
   // (i.e. to prevent information disclosure to oop frames).
   // Note that |frame_tree_node_id_to_contained_save_items_| does NOT own
   // SaveItems - they remain owned by waiting_item_queue_, in_progress_items_,
   // etc.
-  std::unordered_map<int, std::vector<SaveItem*>>
+  std::unordered_map<FrameTreeNodeId,
+                     std::vector<raw_ptr<SaveItem, VectorExperimental>>>
       frame_tree_node_id_to_contained_save_items_;
 
   // Number of frames that we still need to get a response from.
@@ -380,16 +394,28 @@ class CONTENT_EXPORT SavePackage
   SaveItemIdMap saved_success_items_;
 
   // Non-owning pointer for handling file writing on the download sequence.
-  SaveFileManager* file_manager_ = nullptr;
+  // This dangling raw_ptr occurred in:
+  // content_browsertests: SavePackageBrowserTest.Reload
+  // https://ci.chromium.org/ui/p/chromium/builders/try/linux-rel/1378285/test-results?q=ExactID%3Aninja%3A%2F%2Fcontent%2Ftest%3Acontent_browsertests%2FSavePackageBrowserTest.Reload+VHash%3Ad83661216aa0a42d
+  raw_ptr<SaveFileManager, FlakyDanglingUntriaged> file_manager_ = nullptr;
 
   // DownloadManager owns the download::DownloadItem and handles history and UI.
-  DownloadManagerImpl* download_manager_ = nullptr;
-  download::DownloadItemImpl* download_ = nullptr;
+  // These dangling raw_ptrs occurred in:
+  // content_browsertests: SavePackageBrowserTest.Reload
+  // chttps://ci.chromium.org/ui/p/chromium/builders/try/linux-rel/1430369/test-results?q=ExactID%3Aninja%3A%2F%2Fcontent%2Ftest%3Acontent_browsertests%2FSavePackageBrowserTest.Reload+VHash%3Ad83661216aa0a42d
+  raw_ptr<DownloadManagerImpl, FlakyDanglingUntriaged> download_manager_ =
+      nullptr;
+  raw_ptr<download::DownloadItemImpl, FlakyDanglingUntriaged> download_ =
+      nullptr;
 
   // The URL of the page the user wants to save.
   const GURL page_url_;
   base::FilePath saved_main_file_path_;
   base::FilePath saved_main_directory_path_;
+
+  // Isolation info for network state partitioning.
+  const net::IsolationInfo page_isolation_info_;
+  bool page_is_outermost_main_frame_;
 
   // The title of the page the user wants to save.
   const std::u16string title_;
@@ -414,6 +440,12 @@ class CONTENT_EXPORT SavePackage
   // Type about saving page as only-html or complete-html.
   SavePageType save_type_ = SAVE_PAGE_TYPE_UNKNOWN;
 
+#if BUILDFLAG(IS_MAC)
+  // A list of tags specified by the user to be set on the file upon the
+  // completion of it being written to disk.
+  std::vector<std::string> file_tags_;
+#endif
+
   // Number of all need to be saved resources.
   size_t all_save_items_count_ = 0;
 
@@ -434,7 +466,11 @@ class CONTENT_EXPORT SavePackage
   ukm::SourceId ukm_source_id_;
   uint64_t ukm_download_id_;
 
-  DISALLOW_COPY_AND_ASSIGN(SavePackage);
+  // Display name of the main file. If this is empty, the name will be
+  // inferred from `saved_main_file_path_`.
+  base::FilePath saved_main_file_display_name_;
+
+  base::WeakPtrFactory<SavePackage> weak_ptr_factory_{this};
 };
 
 }  // namespace content

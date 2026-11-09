@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
@@ -19,13 +20,13 @@ using webrtc::VideoFrame;
 namespace {
 
 std::unique_ptr<DesktopFrame> MakeDesktopFrame(int width, int height) {
-  return std::make_unique<BasicDesktopFrame>(DesktopSize(width, height));
+  return std::make_unique<BasicDesktopFrame>(DesktopSize(width, height),
+                                             webrtc::FOURCC_ARGB);
 }
 
 }  // namespace
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 TEST(WebrtcVideoFrameAdapter, CreateVideoFrameWrapsDesktopFrame) {
   auto desktop_frame = MakeDesktopFrame(100, 200);
@@ -44,12 +45,12 @@ TEST(WebrtcVideoFrameAdapter, CreateVideoFrameWrapsDesktopFrame) {
 TEST(WebrtcVideoFrameAdapter, AdapterHasCorrectSize) {
   auto desktop_frame = MakeDesktopFrame(100, 200);
   auto frame_stats = std::make_unique<WebrtcVideoEncoder::FrameStats>();
-  rtc::scoped_refptr<WebrtcVideoFrameAdapter> adapter =
-      new rtc::RefCountedObject<WebrtcVideoFrameAdapter>(
-          std::move(desktop_frame), std::move(frame_stats));
+  webrtc::scoped_refptr<WebrtcVideoFrameAdapter> adapter(
+      new webrtc::RefCountedObject<WebrtcVideoFrameAdapter>(
+          std::move(desktop_frame), std::move(frame_stats)));
 
-  EXPECT_EQ(100, adapter->width());
-  EXPECT_EQ(200, adapter->height());
+  EXPECT_EQ(adapter->width(), 100);
+  EXPECT_EQ(adapter->height(), 200);
 }
 
 TEST(WebrtcVideoFrameAdapter, EmptyUpdateRegionGivesFrameWithEmptyUpdateRect) {
@@ -78,5 +79,4 @@ TEST(WebrtcVideoFrameAdapter, VideoUpdateRectSpansDesktopUpdateRegion) {
                 .offset_x = 10, .offset_y = 20, .width = 60, .height = 60}));
 }
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

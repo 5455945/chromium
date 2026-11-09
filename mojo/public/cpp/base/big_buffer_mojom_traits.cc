@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,15 +41,14 @@ UnionTraits<mojo_base::mojom::BigBufferDataView, mojo_base::BigBuffer>::GetTag(
     const mojo_base::BigBuffer& buffer) {
   switch (buffer.storage_type()) {
     case mojo_base::BigBuffer::StorageType::kBytes:
-      return mojo_base::mojom::BigBufferDataView::Tag::BYTES;
+      return mojo_base::mojom::BigBufferDataView::Tag::kBytes;
     case mojo_base::BigBuffer::StorageType::kSharedMemory:
-      return mojo_base::mojom::BigBufferDataView::Tag::SHARED_MEMORY;
+      return mojo_base::mojom::BigBufferDataView::Tag::kSharedMemory;
     case mojo_base::BigBuffer::StorageType::kInvalidBuffer:
-      return mojo_base::mojom::BigBufferDataView::Tag::INVALID_BUFFER;
+      return mojo_base::mojom::BigBufferDataView::Tag::kInvalidBuffer;
   }
 
   NOTREACHED();
-  return mojo_base::mojom::BigBufferDataView::Tag::BYTES;
 }
 
 // static
@@ -77,22 +76,30 @@ bool UnionTraits<mojo_base::mojom::BigBufferDataView,
 bool UnionTraits<mojo_base::mojom::BigBufferDataView, mojo_base::BigBuffer>::
     Read(mojo_base::mojom::BigBufferDataView data, mojo_base::BigBuffer* out) {
   switch (data.tag()) {
-    case mojo_base::mojom::BigBufferDataView::Tag::BYTES: {
+    case mojo_base::mojom::BigBufferDataView::Tag::kBytes: {
       mojo::ArrayDataView<uint8_t> bytes_view;
       data.GetBytesDataView(&bytes_view);
-      *out = mojo_base::BigBuffer(bytes_view);
+      // The normal `BigBuffer` constructor might try to create shared memory,
+      // i.e. if the data is large but previous shmem allocation failed. No
+      // point in doing that now that IPC is already done, so make sure the
+      // bytes stay inlined.
+      mojo_base::BigBufferView view;
+      view.SetBytes(bytes_view);
+      *out = mojo_base::BigBufferView::ToBigBuffer(std::move(view));
+      CHECK_EQ(out->storage_type(), mojo_base::BigBuffer::StorageType::kBytes);
       return true;
     }
 
-    case mojo_base::mojom::BigBufferDataView::Tag::SHARED_MEMORY: {
+    case mojo_base::mojom::BigBufferDataView::Tag::kSharedMemory: {
       mojo_base::internal::BigBufferSharedMemoryRegion shared_memory;
-      if (!data.ReadSharedMemory(&shared_memory))
+      if (!data.ReadSharedMemory(&shared_memory)) {
         return false;
+      }
       *out = mojo_base::BigBuffer(std::move(shared_memory));
       return true;
     }
 
-    case mojo_base::mojom::BigBufferDataView::Tag::INVALID_BUFFER:
+    case mojo_base::mojom::BigBufferDataView::Tag::kInvalidBuffer:
       // Always reject an invalid buffer in deserialization.
       return false;
   }
@@ -106,15 +113,14 @@ mojo_base::mojom::BigBufferDataView::Tag UnionTraits<
     mojo_base::BigBufferView>::GetTag(const mojo_base::BigBufferView& view) {
   switch (view.storage_type()) {
     case mojo_base::BigBuffer::StorageType::kBytes:
-      return mojo_base::mojom::BigBufferDataView::Tag::BYTES;
+      return mojo_base::mojom::BigBufferDataView::Tag::kBytes;
     case mojo_base::BigBuffer::StorageType::kSharedMemory:
-      return mojo_base::mojom::BigBufferDataView::Tag::SHARED_MEMORY;
+      return mojo_base::mojom::BigBufferDataView::Tag::kSharedMemory;
     case mojo_base::BigBuffer::StorageType::kInvalidBuffer:
-      return mojo_base::mojom::BigBufferDataView::Tag::INVALID_BUFFER;
+      return mojo_base::mojom::BigBufferDataView::Tag::kInvalidBuffer;
   }
 
   NOTREACHED();
-  return mojo_base::mojom::BigBufferDataView::Tag::BYTES;
 }
 
 // static
@@ -144,22 +150,23 @@ bool UnionTraits<
     mojo_base::BigBufferView>::Read(mojo_base::mojom::BigBufferDataView data,
                                     mojo_base::BigBufferView* out) {
   switch (data.tag()) {
-    case mojo_base::mojom::BigBufferDataView::Tag::BYTES: {
+    case mojo_base::mojom::BigBufferDataView::Tag::kBytes: {
       mojo::ArrayDataView<uint8_t> bytes_view;
       data.GetBytesDataView(&bytes_view);
       out->SetBytes(bytes_view);
       return true;
     }
 
-    case mojo_base::mojom::BigBufferDataView::Tag::SHARED_MEMORY: {
+    case mojo_base::mojom::BigBufferDataView::Tag::kSharedMemory: {
       mojo_base::internal::BigBufferSharedMemoryRegion shared_memory;
-      if (!data.ReadSharedMemory(&shared_memory))
+      if (!data.ReadSharedMemory(&shared_memory)) {
         return false;
+      }
       out->SetSharedMemory(std::move(shared_memory));
       return true;
     }
 
-    case mojo_base::mojom::BigBufferDataView::Tag::INVALID_BUFFER:
+    case mojo_base::mojom::BigBufferDataView::Tag::kInvalidBuffer:
       // Always reject an invalid buffer in deserialization.
       return false;
   }

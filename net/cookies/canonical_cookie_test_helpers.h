@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,31 @@
 #define NET_COOKIES_CANONICAL_COOKIE_TEST_HELPERS_H_
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "base/strings/string_split.h"
 #include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_inclusion_status.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace net {
+
+namespace internal {
+MATCHER_P(HasExactlyExclusionReasonsForTesting, reasons, "") {
+  const CookieInclusionStatus status = arg;
+  return testing::ExplainMatchResult(
+      true, status.HasExactlyExclusionReasonsForTesting(reasons),
+      result_listener);
+}
+MATCHER_P(HasExactlyWarningReasonsForTesting, reasons, "") {
+  const CookieInclusionStatus status = arg;
+  return testing::ExplainMatchResult(
+      true, status.HasExactlyWarningReasonsForTesting(reasons),
+      result_listener);
+}
+}  // namespace internal
 
 MATCHER_P(MatchesCookieLine, cookie_line, "") {
   std::string argument_line = CanonicalCookie::BuildCookieLine(arg);
@@ -34,6 +52,12 @@ MATCHER_P2(MatchesCookieNameValue, name, value, "") {
          testing::ExplainMatchResult(value, cookie.Value(), result_listener);
 }
 
+MATCHER_P2(MatchesCookieWithNameSourceType, name, source_type, "") {
+  return testing::ExplainMatchResult(name, arg.Name(), result_listener) &&
+         testing::ExplainMatchResult(source_type, arg.SourceType(),
+                                     result_listener);
+}
+
 MATCHER_P(MatchesCookieAccessWithName, name, "") {
   return testing::ExplainMatchResult(MatchesCookieWithName(name), arg.cookie,
                                      result_listener);
@@ -43,14 +67,25 @@ MATCHER_P(MatchesCookieAccessWithName, name, "") {
 // the result.
 MATCHER_P3(WhenKVSplit, pair_delim, kv_delim, inner_matcher, "") {
   std::vector<std::pair<std::string, std::string>> pairs;
-  // Ignore the return value of SplitStringIntoKeyValuePairs, to allow pairs
-  // with no associated value.
-  base::SplitStringIntoKeyValuePairs(arg, kv_delim, pair_delim, &pairs);
-  return testing::ExplainMatchResult(inner_matcher, pairs, result_listener);
+  // Return an empty vector when a cookie string (such as "None") cannot be
+  // split into 'name=value' pairs.
+  bool successful_split =
+      base::SplitStringIntoKeyValuePairs(arg, kv_delim, pair_delim, &pairs);
+  if (successful_split) {
+    return testing::ExplainMatchResult(inner_matcher, pairs, result_listener);
+  } else {
+    std::vector<std::pair<std::string, std::string>> empty_pairs;
+    return testing::ExplainMatchResult(inner_matcher, empty_pairs,
+                                       result_listener);
+  }
 }
 
-// Splits a ';'-delimited string of Cookie 'name=value' or 'name' pairs, and
-// executes the provided matcher on the result.
+// Executes the inner_matcher on the Cookie string arg after it's transformed
+// into a vector.
+// If the arg is a ';'-delimited string of Cookie 'name=value' or 'name' pairs,
+// then the matcher will execute on a vector of <name, value> pairs.
+// If the arg can't be split into these pairs then the inner_matcher will
+// execute on an empty vector.
 MATCHER_P(CookieStringIs, inner_matcher, "") {
   return testing::ExplainMatchResult(WhenKVSplit(';', '=', inner_matcher), arg,
                                      result_listener);
@@ -69,13 +104,6 @@ MATCHER(IsInclude, "") {
   return testing::ExplainMatchResult(true, status.IsInclude(), result_listener);
 }
 
-// Helper for checking that status.HasDowngradeWarning() == true.
-MATCHER(HasDowngradeWarning, "") {
-  CookieInclusionStatus status = arg;
-  return testing::ExplainMatchResult(true, status.HasDowngradeWarning(),
-                                     result_listener);
-}
-
 // Helper for checking that status.HasWarningReason(reason) == true.
 MATCHER_P(HasWarningReason, reason, "") {
   CookieInclusionStatus status = arg;
@@ -90,14 +118,24 @@ MATCHER_P(HasExclusionReason, reason, "") {
                                      result_listener);
 }
 
+// Helper for checking that status.exemption_reason() == reason.
+MATCHER_P(HasExactlyExemptionReason, reason, "") {
+  CookieInclusionStatus status = arg;
+  return testing::ExplainMatchResult(true, status.exemption_reason() == reason,
+                                     result_listener);
+}
+
 // Helper for checking that status.HasExactlyExclusionReasonsForTesting(reasons)
 // == true.
-MATCHER_P(HasExactlyExclusionReasonsForTesting, reasons, "") {
-  const CookieInclusionStatus status = arg;
-  return testing::ExplainMatchResult(
-      true, status.HasExactlyExclusionReasonsForTesting(reasons),
-      result_listener);
-}
+inline constexpr auto& HasExactlyExclusionReasonsForTesting =
+    internal::HasExactlyExclusionReasonsForTesting<
+        CookieInclusionStatus::ExclusionReasonBitset>;
+
+// Helper for checking that status.HasExactlyWarningReasonsForTesting(reasons)
+// == true.
+inline constexpr auto& HasExactlyWarningReasonsForTesting =
+    internal::HasExactlyWarningReasonsForTesting<
+        CookieInclusionStatus::WarningReasonBitset>;
 
 MATCHER(ShouldWarn, "") {
   net::CookieInclusionStatus status = arg;
@@ -139,6 +177,20 @@ MATCHER_P3(MatchesCookieAndLineWithAccessResult,
          testing::ExplainMatchResult(
              access_result, cookie_and_line_with_access_result.access_result,
              result_listener);
+}
+
+MATCHER(NameIs, "") {
+  const std::pair<std::string, std::string>& actual = testing::get<0>(arg);
+  const std::string& expected_name = testing::get<1>(arg);
+  return testing::ExplainMatchResult(actual.first, expected_name,
+                                     result_listener);
+}
+
+MATCHER(CanonicalCookieNameIs, "") {
+  const net::CanonicalCookie& actual = testing::get<0>(arg);
+  const std::string& expected_name = testing::get<1>(arg);
+  return testing::ExplainMatchResult(actual.Name(), expected_name,
+                                     result_listener);
 }
 
 }  // namespace net

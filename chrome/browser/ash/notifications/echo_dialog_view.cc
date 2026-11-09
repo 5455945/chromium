@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,36 @@
 
 #include <stddef.h>
 
+#include "ash/strings/grit/ash_strings.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/notifications/echo_dialog_listener.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/font.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
+
+namespace {
+
+EchoDialogView::ShowCallback& GetShowCallbackForTesting() {
+  static base::NoDestructor<EchoDialogView::ShowCallback> show_callback;
+  return *show_callback;
+}
+
+}  // namespace
 
 EchoDialogView::EchoDialogView(EchoDialogListener* listener,
                                const EchoDialogView::Params& params) {
@@ -29,25 +43,28 @@ EchoDialogView::EchoDialogView(EchoDialogListener* listener,
       views::CreateVectorImageButtonWithNativeTheme(
           base::BindRepeating(&EchoDialogListener::OnMoreInfoLinkClicked,
                               base::Unretained(listener)),
-          vector_icons::kHelpOutlineIcon));
-  learn_more_button->SetAccessibleName(
+          ::features::IsRoundedIconsEnabled()
+              ? vector_icons::kHelpIcon
+              : vector_icons::kHelpOutlineOldIcon));
+  learn_more_button->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_CHROMEOS_ACC_LEARN_MORE));
-  chrome::RecordDialogCreation(chrome::DialogIdentifier::ECHO);
 
   if (params.echo_enabled) {
-    DialogDelegate::SetButtons(ui::DIALOG_BUTTON_OK |
-                                ui::DIALOG_BUTTON_CANCEL);
+    DialogDelegate::SetButtons(
+        static_cast<int>(ui::mojom::DialogButton::kOk) |
+        static_cast<int>(ui::mojom::DialogButton::kCancel));
     DialogDelegate::SetButtonLabel(
-        ui::DIALOG_BUTTON_OK,
+        ui::mojom::DialogButton::kOk,
         l10n_util::GetStringUTF16(IDS_OFFERS_CONSENT_INFOBAR_ENABLE_BUTTON));
     DialogDelegate::SetButtonLabel(
-        ui::DIALOG_BUTTON_CANCEL,
+        ui::mojom::DialogButton::kCancel,
         l10n_util::GetStringUTF16(IDS_OFFERS_CONSENT_INFOBAR_DISABLE_BUTTON));
     InitForEnabledEcho(params.service_name, params.origin);
   } else {
-    DialogDelegate::SetButtons(ui::DIALOG_BUTTON_CANCEL);
+    DialogDelegate::SetButtons(
+        static_cast<int>(ui::mojom::DialogButton::kCancel));
     DialogDelegate::SetButtonLabel(
-        ui::DIALOG_BUTTON_CANCEL,
+        ui::mojom::DialogButton::kCancel,
         l10n_util::GetStringUTF16(IDS_ECHO_CONSENT_DISMISS_BUTTON));
     InitForDisabledEcho();
   }
@@ -60,7 +77,7 @@ EchoDialogView::EchoDialogView(EchoDialogListener* listener,
   DialogDelegate::SetShowTitle(false);
   DialogDelegate::SetShowCloseButton(false);
 
-  DialogDelegate::SetModalType(ui::MODAL_TYPE_WINDOW);
+  DialogDelegate::SetModalType(ui::mojom::ModalType::kWindow);
   DialogDelegate::set_fixed_width(
       views::LayoutProvider::Get()->GetDistanceMetric(
           views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH));
@@ -72,6 +89,14 @@ void EchoDialogView::Show(gfx::NativeWindow parent) {
   views::DialogDelegate::CreateDialogWidget(this, parent, parent);
   GetWidget()->SetSize(GetWidget()->GetRootView()->GetPreferredSize());
   GetWidget()->Show();
+
+  if (GetShowCallbackForTesting()) {
+    std::move(GetShowCallbackForTesting()).Run(this);
+  }
+}
+
+void EchoDialogView::AddShowCallbackForTesting(ShowCallback callback) {
+  GetShowCallbackForTesting() = std::move(callback);
 }
 
 void EchoDialogView::InitForEnabledEcho(const std::u16string& service_name,
@@ -118,13 +143,13 @@ void EchoDialogView::SetBorderAndLabel(std::unique_ptr<views::View> label,
   gfx::Insets insets =
       views::LayoutProvider::Get()->GetDialogInsetsForContentType(
           views::DialogContentType::kText, views::DialogContentType::kText);
-  insets += gfx::Insets(top_inset_padding, 0, 0, 0);
+  insets += gfx::Insets::TLBR(top_inset_padding, 0, 0, 0);
   SetBorder(views::CreateEmptyBorder(insets));
 
   AddChildView(std::move(label));
 }
 
-BEGIN_METADATA(EchoDialogView, views::DialogDelegateView)
+BEGIN_METADATA(EchoDialogView)
 END_METADATA
 
 }  // namespace ash

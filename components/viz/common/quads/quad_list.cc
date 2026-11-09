@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,13 @@
 #include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/quads/largest_draw_quad.h"
 #include "components/viz/common/quads/picture_draw_quad.h"
+#include "components/viz/common/quads/shared_element_draw_quad.h"
 #include "components/viz/common/quads/shared_quad_state.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
-#include "components/viz/common/quads/stream_video_draw_quad.h"
 #include "components/viz/common/quads/surface_draw_quad.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
 #include "components/viz/common/quads/tile_draw_quad.h"
 #include "components/viz/common/quads/video_hole_draw_quad.h"
-#include "components/viz/common/quads/yuv_video_draw_quad.h"
 
 namespace {
 // This rounding is required because 'LargestDrawQuadSize' and
@@ -74,11 +73,6 @@ QuadList::Iterator QuadList::InsertCopyBeforeDrawQuad(Iterator at,
       return InsertBeforeAndInvalidateAllPointers<TileDrawQuad>(at, count,
                                                                 copy);
     }
-    case DrawQuad::Material::kStreamVideoContent: {
-      const auto copy = *StreamVideoDrawQuad::MaterialCast(*at);
-      return InsertBeforeAndInvalidateAllPointers<StreamVideoDrawQuad>(
-          at, count, copy);
-    }
     case DrawQuad::Material::kSurfaceContent: {
       const auto copy = *SurfaceDrawQuad::MaterialCast(*at);
       return InsertBeforeAndInvalidateAllPointers<SurfaceDrawQuad>(at, count,
@@ -89,17 +83,16 @@ QuadList::Iterator QuadList::InsertCopyBeforeDrawQuad(Iterator at,
       return InsertBeforeAndInvalidateAllPointers<VideoHoleDrawQuad>(at, count,
                                                                      copy);
     }
-    case DrawQuad::Material::kYuvVideoContent: {
-      const auto copy = *YUVVideoDrawQuad::MaterialCast(*at);
-      return InsertBeforeAndInvalidateAllPointers<YUVVideoDrawQuad>(at, count,
-                                                                    copy);
+    case DrawQuad::Material::kSharedElement: {
+      const auto copy = *SharedElementDrawQuad::MaterialCast(*at);
+      return InsertBeforeAndInvalidateAllPointers<SharedElementDrawQuad>(
+          at, count, copy);
     }
     // RenderPass quads should not be copied.
     case DrawQuad::Material::kAggregatedRenderPass:
     case DrawQuad::Material::kCompositorRenderPass:
     case DrawQuad::Material::kInvalid:
       NOTREACHED();  // Invalid DrawQuad material.
-      return at;
   }
 }
 

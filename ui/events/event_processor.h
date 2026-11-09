@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,10 @@ class EVENTS_EXPORT EventProcessor : public EventDispatcherDelegate,
                                      public EventSink {
  public:
   EventProcessor();
+
+  EventProcessor(const EventProcessor&) = delete;
+  EventProcessor& operator=(const EventProcessor&) = delete;
+
   ~EventProcessor() override;
 
   // EventSink overrides:
@@ -42,6 +46,10 @@ class EVENTS_EXPORT EventProcessor : public EventDispatcherDelegate,
   // members in the event processor as necessary.
   virtual void OnEventProcessingStarted(Event* event);
 
+  // Invoked when no target was found for |event|, so it is not dispatched to
+  // any target. |event| is the event that would have been dispatched.
+  virtual void OnEventTargetNotFound(Event* event);
+
   // Invoked when the processing of |event| has finished (i.e., when no further
   // dispatching of |event| will be performed by this EventProcessor). Note
   // that the last target to which |event| was dispatched may have been
@@ -50,7 +58,6 @@ class EVENTS_EXPORT EventProcessor : public EventDispatcherDelegate,
 
  private:
   base::WeakPtrFactory<EventProcessor> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(EventProcessor);
 };
 
 }  // namespace ui

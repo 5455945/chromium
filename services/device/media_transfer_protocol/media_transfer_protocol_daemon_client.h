@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,12 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "services/device/public/mojom/mtp_file_entry.mojom.h"
 #include "services/device/public/mojom/mtp_storage_info.mojom.h"
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 #error "Only used on ChromeOS"
 #endif
 
@@ -91,6 +89,11 @@ class MediaTransferProtocolDaemonClient {
   using MTPStorageEventHandler =
       base::RepeatingCallback<void(bool is_attach,
                                    const std::string& storage_name)>;
+
+  MediaTransferProtocolDaemonClient(const MediaTransferProtocolDaemonClient&) =
+      delete;
+  MediaTransferProtocolDaemonClient& operator=(
+      const MediaTransferProtocolDaemonClient&) = delete;
 
   virtual ~MediaTransferProtocolDaemonClient();
 
@@ -174,17 +177,18 @@ class MediaTransferProtocolDaemonClient {
                             RenameObjectCallback callback,
                             ErrorCallback error_callback) = 0;
 
-  // Calls CopyFileFromLocal method. |callback| is called after the method call
-  // succeeds, otherwise, |error_callback| is called.
+  // Calls RequestCopyFileFromLocal method which schedules a file copying in
+  // the daemon. |callback| is called after the copy succeeds. Otherwise,
+  // |error_callback| is called.
   // |source_file_descriptor| is a file descriptor of source file.
   // |parent_id| is a object id of a target directory.
   // |file_name| is a file name of a target file.
-  virtual void CopyFileFromLocal(const std::string& handle,
-                                 const int source_file_descriptor,
-                                 const uint32_t parent_id,
-                                 const std::string& file_name,
-                                 CopyFileFromLocalCallback callback,
-                                 ErrorCallback error_callback) = 0;
+  virtual void RequestCopyFileFromLocal(const std::string& handle,
+                                        const int source_file_descriptor,
+                                        const uint32_t parent_id,
+                                        const std::string& file_name,
+                                        CopyFileFromLocalCallback callback,
+                                        ErrorCallback error_callback) = 0;
 
   // Calls DeleteObject method. |callback| is called after the method call
   // succeeds, otherwise, |error_callback| is called.
@@ -206,9 +210,6 @@ class MediaTransferProtocolDaemonClient {
  protected:
   // Create() should be used instead.
   MediaTransferProtocolDaemonClient();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MediaTransferProtocolDaemonClient);
 };
 
 }  // namespace device

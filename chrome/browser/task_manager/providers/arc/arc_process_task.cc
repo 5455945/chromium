@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,19 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/arc_util.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
-#include "components/arc/mojom/process.mojom.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/mojom/process.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/child_process_host.h"
+#include "content/public/browser/child_process_host.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image.h"
 
@@ -76,12 +76,12 @@ ArcProcessTask::ArcProcessTask(arc::ArcProcess arc_process)
            nullptr /* icon */,
            arc_process.pid()),
       arc_process_(std::move(arc_process)) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   StartIconLoading();
 }
 
 void ArcProcessTask::StartIconLoading() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // TaskManager is not tied to BrowserContext. Thus, we just use the
   // BrowserContext which is tied to ARC.
@@ -120,9 +120,9 @@ Task::Type ArcProcessTask::GetType() const {
   return Task::ARC;
 }
 
-int ArcProcessTask::GetChildProcessUniqueID() const {
+content::ChildProcessId ArcProcessTask::GetChildProcessUniqueID() const {
   // ARC process is not a child process of the browser.
-  return content::ChildProcessHost::kInvalidUniqueID;
+  return content::ChildProcessId();
 }
 
 bool ArcProcessTask::IsKillable() {
@@ -134,18 +134,19 @@ bool ArcProcessTask::IsRunningInVM() const {
   return arc::IsArcVmEnabled();
 }
 
-void ArcProcessTask::Kill() {
+bool ArcProcessTask::Kill() {
   auto* process_instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc::ArcServiceManager::Get()->arc_bridge_service()->process(),
       KillProcess);
   if (!process_instance)
-    return;
+    return false;
   process_instance->KillProcess(arc_process_.nspid(),
                                 "Killed manually from Task Manager");
+  return true;
 }
 
 void ArcProcessTask::OnConnectionReady() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   VLOG(2) << "intent_helper instance is ready. Fetching the icon for "
           << FirstPackage(arc_process_.packages());
@@ -168,7 +169,7 @@ void ArcProcessTask::SetProcessState(arc::mojom::ProcessState process_state) {
 
 void ArcProcessTask::OnIconLoaded(
     std::unique_ptr<arc::ArcIntentHelperBridge::ActivityToIconsMap> icons) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   for (const auto& kv : *icons) {
     const gfx::Image& icon = kv.second.icon16;
     if (icon.IsEmpty())

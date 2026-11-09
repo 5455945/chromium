@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,23 @@
 #include <limits>
 #include <memory>
 
-#include "base/macros.h"
+#include "base/byte_size.h"
 #include "base/memory/ref_counted.h"
+#include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/test/task_environment.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/io_buffer.h"
 #include "net/base/test_completion_callback.h"
+#include "net/test/gtest_util.h"
 #include "services/network/public/mojom/data_pipe_getter.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // Most tests of this class are at the URLLoader layer. These tests focus on
@@ -33,6 +38,10 @@ namespace {
 class PassThroughDataPipeGetter : public mojom::DataPipeGetter {
  public:
   explicit PassThroughDataPipeGetter() = default;
+
+  PassThroughDataPipeGetter(const PassThroughDataPipeGetter&) = delete;
+  PassThroughDataPipeGetter& operator=(const PassThroughDataPipeGetter&) =
+      delete;
 
   mojo::PendingRemote<network::mojom::DataPipeGetter>
   GetDataPipeGetterRemote() {
@@ -81,8 +90,6 @@ class PassThroughDataPipeGetter : public mojom::DataPipeGetter {
   mojo::Receiver<network::mojom::DataPipeGetter> receiver_{this};
   mojo::ScopedDataPipeProducerHandle write_pipe_;
   ReadCallback read_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(PassThroughDataPipeGetter);
 };
 
 class DataPipeElementReaderTest : public testing::Test {
@@ -96,6 +103,78 @@ class DataPipeElementReaderTest : public testing::Test {
   PassThroughDataPipeGetter data_pipe_getter_;
   DataPipeElementReader element_reader_;
 };
+
+// Test that if a bad status code is passed to the ReadCallback, initialization
+// fails.
+TEST_F(DataPipeElementReaderTest, BadStatusCode) {
+  // Returned as final net error codes, but these are invalid completion codes.
+  const int test_cases[] = {net::ERR_IO_PENDING, 1};
+
+  for (int test_case : test_cases) {
+    SCOPED_TRACE(test_case);
+
+    net::TestCompletionCallback init_callback;
+    ASSERT_THAT(element_reader_.Init(init_callback.callback()),
+                net::test::IsError(net::ERR_IO_PENDING));
+
+    // Wait for DataPipeGetter::Read() to be called.
+    mojo::ScopedDataPipeProducerHandle write_pipe;
+    network::mojom::DataPipeGetter::ReadCallback read_pipe_callback;
+    data_pipe_getter_.WaitForRead(&write_pipe, &read_pipe_callback);
+
+    std::move(read_pipe_callback).Run(base::unexpected(test_case));
+
+    EXPECT_THAT(init_callback.WaitForResult(),
+                net::test::IsError(net::ERR_INVALID_ARGUMENT));
+  }
+}
+
+// Test the case where a caller tries to write more data than is requested. The
+// extra bytes should be ignored.
+TEST_F(DataPipeElementReaderTest, TooMuchWritten) {
+  // Body that's written over the pipe.
+  std::string body = "body+";
+  // Advertised size of the body.
+  size_t advertised_size = body.size() - 1;
+
+  // The network stack calls Init.
+  net::TestCompletionCallback init_callback;
+  ASSERT_THAT(element_reader_.Init(init_callback.callback()),
+              net::test::IsError(net::ERR_IO_PENDING));
+
+  // Wait for DataPipeGetter::Read() to be called.
+  mojo::ScopedDataPipeProducerHandle write_pipe;
+  network::mojom::DataPipeGetter::ReadCallback read_pipe_callback;
+  data_pipe_getter_.WaitForRead(&write_pipe, &read_pipe_callback);
+  std::move(read_pipe_callback).Run(base::ByteSize(advertised_size));
+
+  ASSERT_THAT(init_callback.WaitForResult(), net::test::IsOk());
+  ASSERT_EQ(element_reader_.GetContentLength(), advertised_size);
+
+  // Write the full body. Even though we aren't reading anything yet, the body
+  // is short enough that it should be buffered.
+  mojo::BlockingCopyFromString(body, write_pipe);
+
+  // Try to read from the body. It should typically be consumed in a single
+  // read, with the next read returning net::OK / 0, but handle multiple reads
+  // as well.
+  std::string read_data;
+  while (true) {
+    EXPECT_EQ(element_reader_.BytesRemaining(),
+              advertised_size - read_data.size());
+    auto io_buffer = base::MakeRefCounted<net::IOBufferWithSize>(10);
+    net::TestCompletionCallback read_callback;
+    int bytes_read = read_callback.GetResult(element_reader_.Read(
+        io_buffer.get(), io_buffer->size(), read_callback.callback()));
+    if (bytes_read == net::OK) {
+      break;
+    }
+    ASSERT_GT(bytes_read, 0);
+    read_data.append(base::as_string_view(io_buffer->first(bytes_read)));
+  }
+  EXPECT_EQ(read_data, body.substr(0, advertised_size));
+  EXPECT_EQ(element_reader_.BytesRemaining(), 0u);
+}
 
 // Test the case where a second Init() call occurs when there's a pending Init()
 // call in progress. The first call should be dropped, in favor of the second
@@ -126,8 +205,7 @@ TEST_F(DataPipeElementReaderTest, InitInterruptsInit) {
   data_pipe_getter_.WaitForRead(&second_write_pipe, &second_read_pipe_callback);
 
   // Sending data on the first read pipe should do nothing.
-  std::move(first_read_pipe_callback)
-      .Run(net::ERR_FAILED, kResponseBodySize - 1);
+  std::move(first_read_pipe_callback).Run(base::unexpected(net::ERR_FAILED));
   // Run any pending tasks, to make sure nothing unexpected is queued.
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(first_init_callback.have_result());
@@ -135,7 +213,7 @@ TEST_F(DataPipeElementReaderTest, InitInterruptsInit) {
 
   // Sending data on the second pipe should result in the second init callback
   // being invoked.
-  std::move(second_read_pipe_callback).Run(net::OK, kResponseBodySize);
+  std::move(second_read_pipe_callback).Run(base::ByteSize(kResponseBodySize));
   EXPECT_EQ(net::OK, second_init_callback.WaitForResult());
   EXPECT_FALSE(first_init_callback.have_result());
 
@@ -174,7 +252,7 @@ TEST_F(DataPipeElementReaderTest, InitInterruptsRead) {
   mojo::ScopedDataPipeProducerHandle first_write_pipe;
   network::mojom::DataPipeGetter::ReadCallback first_read_pipe_callback;
   data_pipe_getter_.WaitForRead(&first_write_pipe, &first_read_pipe_callback);
-  std::move(first_read_pipe_callback).Run(net::OK, kResponseBodySize);
+  std::move(first_read_pipe_callback).Run(base::ByteSize(kResponseBodySize));
 
   ASSERT_EQ(net::OK, first_init_callback.WaitForResult());
 
@@ -201,7 +279,7 @@ TEST_F(DataPipeElementReaderTest, InitInterruptsRead) {
 
   // Sending data on the second pipe should result in the second init callback
   // being invoked.
-  std::move(second_read_pipe_callback).Run(net::OK, kResponseBodySize);
+  std::move(second_read_pipe_callback).Run(base::ByteSize(kResponseBodySize));
   EXPECT_EQ(net::OK, second_init_callback.WaitForResult());
 
   EXPECT_EQ(kResponseBodySize, element_reader_.GetContentLength());

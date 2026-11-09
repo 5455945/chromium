@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,11 @@ enum class SettingsAccessPoint : int {
   kSurfaceExplorerPromoSlinger = 3,
   // From security interstitial.
   kSecurityInterstitial = 4,
-  kMaxValue = kSurfaceExplorerPromoSlinger
+  // From UX shown due to the Tailored Security setting changing.
+  kTailoredSecurity = 5,
+  // From Tips Notifications bottom sheet promo.
+  kTipsNotificationsPromo = 6,
+  kMaxValue = kTipsNotificationsPromo
 };
 
 // Enum representing actions taken by users visiting the
@@ -32,6 +36,7 @@ enum class SettingsAccessPoint : int {
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: (
 //   org.chromium.chrome.browser.safe_browsing.metrics)
+// LINT.IfChange(UserAction)
 enum class UserAction : int {
   // The page is shown to the user.
   kShowed = 0,
@@ -61,6 +66,11 @@ enum class UserAction : int {
   kDisableSafeBrowsingDialogDenied = 7,
   kMaxValue = kDisableSafeBrowsingDialogDenied
 };
+// LINT.ThenChange(//chrome/browser/resources/settings/metrics_browser_proxy.ts:SafeBrowsingInteractions)
+
+// Records the user action when the user navigates to the Enhanced Protection
+// page.
+void LogShowEnhancedProtectionAction();
 
 }  // namespace safe_browsing
 

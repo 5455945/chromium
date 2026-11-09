@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
+#include "base/task/sequenced_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/quic/quic_chromium_client_session.h"
@@ -66,39 +69,53 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
           "QuicChromiumClientStream classes for references."
     )");
 
+EcnCodePoint QuicheEcnToChromiumEcn(const quic::QuicEcnCodepoint codepoint) {
+  switch (codepoint) {
+    case quic::ECN_NOT_ECT:
+      return ECN_NOT_ECT;
+    case quic::ECN_ECT1:
+      return ECN_ECT1;
+    case quic::ECN_ECT0:
+      return ECN_ECT0;
+    case quic::ECN_CE:
+      return ECN_CE;
+    default:
+      break;
+  }
+  NOTREACHED();
+}
+
 }  // namespace
 
 QuicChromiumPacketWriter::ReusableIOBuffer::ReusableIOBuffer(size_t capacity)
-    : IOBuffer(capacity), capacity_(capacity), size_(0) {}
+    : IOBufferWithSize(capacity), capacity_(capacity) {}
 
-QuicChromiumPacketWriter::ReusableIOBuffer::~ReusableIOBuffer() {}
+QuicChromiumPacketWriter::ReusableIOBuffer::~ReusableIOBuffer() = default;
 
-void QuicChromiumPacketWriter::ReusableIOBuffer::Set(const char* buffer,
-                                                     size_t buf_len) {
-  CHECK_LE(buf_len, capacity_);
+void QuicChromiumPacketWriter::ReusableIOBuffer::Set(
+    base::span<const uint8_t> buffer) {
+  CHECK_LE(buffer.size(), capacity_);
   CHECK(HasOneRef());
-  size_ = buf_len;
-  std::memcpy(data(), buffer, buf_len);
+  size_ = buffer.size();
+  span().copy_prefix_from(buffer);
 }
-
-QuicChromiumPacketWriter::QuicChromiumPacketWriter() {}
 
 QuicChromiumPacketWriter::QuicChromiumPacketWriter(
     DatagramClientSocket* socket,
     base::SequencedTaskRunner* task_runner)
     : socket_(socket),
-      delegate_(nullptr),
-      packet_(
-          base::MakeRefCounted<ReusableIOBuffer>(quic::kMaxOutgoingPacketSize)),
-      write_in_progress_(false),
-      force_write_blocked_(false),
-      retry_count_(0) {
+      packet_(base::MakeRefCounted<ReusableIOBuffer>(
+          quic::kMaxOutgoingPacketSize)) {
   retry_timer_.SetTaskRunner(task_runner);
   write_callback_ = base::BindRepeating(
       &QuicChromiumPacketWriter::OnWriteComplete, weak_factory_.GetWeakPtr());
 }
 
-QuicChromiumPacketWriter::~QuicChromiumPacketWriter() {}
+QuicChromiumPacketWriter::~QuicChromiumPacketWriter() {
+  UMA_HISTOGRAM_ENUMERATION(
+      "Net.QuicSession.OutgoingEcn",
+      static_cast<EcnPermutations>(outgoing_ecn_history_));
+}
 
 void QuicChromiumPacketWriter::set_force_write_blocked(
     bool force_write_blocked) {
@@ -107,38 +124,48 @@ void QuicChromiumPacketWriter::set_force_write_blocked(
     delegate_->OnWriteUnblocked();
 }
 
-void QuicChromiumPacketWriter::SetPacket(const char* buffer, size_t buf_len) {
-  if (UNLIKELY(!packet_)) {
-    packet_ = base::MakeRefCounted<ReusableIOBuffer>(
-        std::max(buf_len, static_cast<size_t>(quic::kMaxOutgoingPacketSize)));
+void QuicChromiumPacketWriter::SetPacket(base::span<const uint8_t> buffer) {
+  if (!packet_) [[unlikely]] {
+    packet_ = base::MakeRefCounted<ReusableIOBuffer>(std::max(
+        buffer.size(), static_cast<size_t>(quic::kMaxOutgoingPacketSize)));
     RecordNotReusableReason(NOT_REUSABLE_NULLPTR);
   }
-  if (UNLIKELY(packet_->capacity() < buf_len)) {
-    packet_ = base::MakeRefCounted<ReusableIOBuffer>(buf_len);
+  if (packet_->capacity() < buffer.size()) [[unlikely]] {
+    packet_ = base::MakeRefCounted<ReusableIOBuffer>(buffer.size());
     RecordNotReusableReason(NOT_REUSABLE_TOO_SMALL);
   }
-  if (UNLIKELY(!packet_->HasOneRef())) {
-    packet_ = base::MakeRefCounted<ReusableIOBuffer>(
-        std::max(buf_len, static_cast<size_t>(quic::kMaxOutgoingPacketSize)));
+  if (!packet_->HasOneRef()) [[unlikely]] {
+    packet_ = base::MakeRefCounted<ReusableIOBuffer>(std::max(
+        buffer.size(), static_cast<size_t>(quic::kMaxOutgoingPacketSize)));
     RecordNotReusableReason(NOT_REUSABLE_REF_COUNT);
   }
-  packet_->Set(buffer, buf_len);
+  packet_->Set(buffer);
 }
 
 quic::WriteResult QuicChromiumPacketWriter::WritePacket(
     const char* buffer,
     size_t buf_len,
-    const quic::QuicIpAddress& self_address,
+    const quiche::QuicheIpAddress& self_address,
     const quic::QuicSocketAddress& peer_address,
-    quic::PerPacketOptions* /*options*/) {
-  DCHECK(!IsWriteBlocked());
-  SetPacket(buffer, buf_len);
+    quic::PerPacketOptions* /*options*/,
+    const quic::QuicPacketWriterParams& params) {
+  CHECK(!IsWriteBlocked());
+  // SAFETY: This method implements the quic::QuicPacketWriter::WritePacket()
+  // interface from QUICHE, which guarantees |buffer| holds |buf_len| bytes.
+  SetPacket(base::as_bytes(UNSAFE_BUFFERS(base::span(buffer, buf_len))));
+  EcnCodePoint new_ecn = QuicheEcnToChromiumEcn(params.ecn_codepoint);
+  outgoing_ecn_history_ |= (1 << static_cast<uint8_t>(new_ecn));
+  if (new_ecn != outgoing_ecn_) {
+    socket_->SetTos(DSCP_NO_CHANGE, new_ecn);
+    outgoing_ecn_ = new_ecn;
+  }
   return WritePacketToSocketImpl();
 }
 
 void QuicChromiumPacketWriter::WritePacketToSocket(
     scoped_refptr<ReusableIOBuffer> packet) {
-  DCHECK(!force_write_blocked_);
+  CHECK(!force_write_blocked_);
+  CHECK(!IsWriteBlocked());
   packet_ = std::move(packet);
   quic::WriteResult result = WritePacketToSocketImpl();
   if (result.error_code != ERR_IO_PENDING)
@@ -148,6 +175,9 @@ void QuicChromiumPacketWriter::WritePacketToSocket(
 quic::WriteResult QuicChromiumPacketWriter::WritePacketToSocketImpl() {
   base::TimeTicks now = base::TimeTicks::Now();
 
+  // When the connection is closed, the socket is cleaned up. If socket is
+  // invalidated, packets should not be written to the socket.
+  CHECK(socket_);
   int rv = socket_->Write(packet_.get(), packet_->size(), write_callback_,
                           kTrafficAnnotation);
 
@@ -185,9 +215,12 @@ quic::WriteResult QuicChromiumPacketWriter::WritePacketToSocketImpl() {
 
 void QuicChromiumPacketWriter::RetryPacketAfterNoBuffers() {
   DCHECK_GT(retry_count_, 0);
-  quic::WriteResult result = WritePacketToSocketImpl();
-  if (result.error_code != ERR_IO_PENDING)
-    OnWriteComplete(result.error_code);
+  if (socket_) {
+    quic::WriteResult result = WritePacketToSocketImpl();
+    if (result.error_code != ERR_IO_PENDING) {
+      OnWriteComplete(result.error_code);
+    }
+  }
 }
 
 bool QuicChromiumPacketWriter::IsWriteBlocked() const {
@@ -196,6 +229,10 @@ bool QuicChromiumPacketWriter::IsWriteBlocked() const {
 
 void QuicChromiumPacketWriter::SetWritable() {
   write_in_progress_ = false;
+}
+
+std::optional<int> QuicChromiumPacketWriter::MessageTooBigErrorCode() const {
+  return ERR_MSG_TOO_BIG;
 }
 
 void QuicChromiumPacketWriter::OnWriteComplete(int rv) {
@@ -242,7 +279,7 @@ bool QuicChromiumPacketWriter::MaybeRetryAfterWriteError(int rv) {
   }
 
   retry_timer_.Start(
-      FROM_HERE, base::TimeDelta::FromMilliseconds(UINT64_C(1) << retry_count_),
+      FROM_HERE, base::Milliseconds(UINT64_C(1) << retry_count_),
       base::BindOnce(&QuicChromiumPacketWriter::RetryPacketAfterNoBuffers,
                      weak_factory_.GetWeakPtr()));
   retry_count_++;
@@ -263,14 +300,39 @@ bool QuicChromiumPacketWriter::IsBatchMode() const {
   return false;
 }
 
+bool QuicChromiumPacketWriter::SupportsEcn() const {
+  return true;
+}
+
 quic::QuicPacketBuffer QuicChromiumPacketWriter::GetNextWriteLocation(
-    const quic::QuicIpAddress& self_address,
+    const quiche::QuicheIpAddress& self_address,
     const quic::QuicSocketAddress& peer_address) {
   return {nullptr, nullptr};
 }
 
 quic::WriteResult QuicChromiumPacketWriter::Flush() {
   return quic::WriteResult(quic::WRITE_STATUS_OK, 0);
+}
+
+bool QuicChromiumPacketWriter::OnSocketClosed(DatagramClientSocket* socket) {
+  if (socket_ == socket) {
+    socket_ = nullptr;
+    return true;
+  }
+  return false;
+}
+
+void QuicChromiumPacketWriter::RegisterQuicConnectionClosePayload(
+    base::span<uint8_t> payload) {
+  if (socket_) {
+    socket_->RegisterQuicConnectionClosePayload(payload);
+  }
+}
+
+void QuicChromiumPacketWriter::UnregisterQuicConnectionClosePayload() {
+  if (socket_) {
+    socket_->UnregisterQuicConnectionClosePayload();
+  }
 }
 
 }  // namespace net

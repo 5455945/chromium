@@ -1,26 +1,32 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+
+#include "media/base/android/media_codec_bridge_impl.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/files/file_util.h"
+#include "base/containers/extend.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/to_vector.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "media/base/android/media_codec_bridge_impl.h"
+#include "base/time/time.h"
 #include "media/base/android/media_codec_util.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/media_util.h"
 #include "media/base/test_data_util.h"
 #include "media/base/video_frame.h"
-#include "media/video/h264_parser.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/libyuv/include/libyuv/convert_from.h"
 
+using testing::ElementsAre;
 using testing::IsNull;
 using testing::NotNull;
 
@@ -28,7 +34,7 @@ namespace {
 
 // The first frame of
 // http://www.html5rocks.com/en/tutorials/audio/quick/test.mp3
-unsigned char test_mp3[] = {
+constexpr uint8_t kTestMp3[] = {
     0xff, 0xfb, 0xd2, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x69, 0x05, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x0d, 0x20, 0x00, 0x00, 0x00, 0x2a, 0x7e, 0x40,
     0xc0, 0x19, 0x4a, 0x80, 0x0d, 0x60, 0x48, 0x1b, 0x40, 0xf7, 0xbd, 0xb9,
@@ -99,19 +105,12 @@ unsigned char test_mp3[] = {
     0x8a, 0xb3, 0x52, 0xd1, 0x3d, 0x79, 0x81, 0x4d, 0x31, 0x24, 0xf9, 0x38,
     0x96, 0xbc, 0xf4, 0x8c, 0x25, 0xe9, 0xf2, 0x73, 0x94, 0x85, 0xc2, 0x61,
     0x6a, 0x34, 0x68, 0x65, 0x78, 0x87, 0xa6, 0x4f};
-static const size_t kDecodedAudioLengthInBytes = 9216u;
+
+constexpr size_t kDecodedAudioLengthInBytes = 9216u;
 
 }  // namespace
 
 namespace media {
-
-#define SKIP_TEST_IF_MEDIA_CODEC_IS_NOT_AVAILABLE()               \
-  do {                                                            \
-    if (!MediaCodecUtil::IsMediaCodecAvailable()) {               \
-      VLOG(0) << "Could not run test - not supported on device."; \
-      return;                                                     \
-    }                                                             \
-  } while (0)
 
 #define SKIP_TEST_IF_HW_H264_IS_NOT_AVAILABLE()                        \
   do {                                                                 \
@@ -127,16 +126,15 @@ enum PixelFormat {
   COLOR_FORMAT_YUV420_SEMIPLANAR = 21,
 };
 
-static const int kPresentationTimeBase = 100;
-static const int kMaxInputPts = kPresentationTimeBase + 2;
+static constexpr int kPresentationTimeBase = 100;
+static constexpr int kMaxInputPts = kPresentationTimeBase + 2;
 
 static inline const base::TimeDelta InfiniteTimeOut() {
-  return base::TimeDelta::FromMicroseconds(-1);
+  return base::Microseconds(-1);
 }
 
 void DecodeMediaFrame(MediaCodecBridge* media_codec,
-                      const uint8_t* data,
-                      size_t data_size,
+                      base::span<const uint8_t> data,
                       const base::TimeDelta input_presentation_timestamp,
                       const base::TimeDelta initial_timestamp_lower_bound) {
   base::TimeDelta input_pts = input_presentation_timestamp;
@@ -144,134 +142,29 @@ void DecodeMediaFrame(MediaCodecBridge* media_codec,
   base::TimeDelta new_timestamp;
   for (int i = 0; i < 10; ++i) {
     int input_buf_index = -1;
-    MediaCodecStatus status =
+    MediaCodecResult result =
         media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
-    ASSERT_EQ(MEDIA_CODEC_OK, status);
+    ASSERT_TRUE(result.is_ok());
 
-    media_codec->QueueInputBuffer(input_buf_index, data, data_size,
+    media_codec->QueueInputBuffer(input_buf_index, data,
                                   input_presentation_timestamp);
 
     size_t unused_offset = 0;
     size_t size = 0;
     bool eos = false;
     int output_buf_index = -1;
-    status = media_codec->DequeueOutputBuffer(
+    result = media_codec->DequeueOutputBuffer(
         InfiniteTimeOut(), &output_buf_index, &unused_offset, &size,
         &new_timestamp, &eos, nullptr);
 
-    if (status == MEDIA_CODEC_OK && output_buf_index > 0) {
+    if (result.is_ok() && output_buf_index > 0) {
       media_codec->ReleaseOutputBuffer(output_buf_index, false);
     }
     // Output time stamp should not be smaller than old timestamp.
     ASSERT_TRUE(new_timestamp >= timestamp);
-    input_pts += base::TimeDelta::FromMicroseconds(33000);
+    input_pts += base::Microseconds(33000);
     timestamp = new_timestamp;
   }
-}
-
-// Performs basic, codec-specific sanity checks on the encoded H264 frame:
-// - as to key frames, correct sequences of H.264 NALUs (SPS before PPS and
-//   before slices).
-// - as to non key frames, contain no SPS/PPS infront.
-void H264Validate(const uint8_t* frame, size_t size) {
-  H264Parser h264_parser;
-  h264_parser.SetStream(frame, static_cast<off_t>(size));
-  bool seen_sps = false;
-  bool seen_pps = false;
-
-  while (1) {
-    H264NALU nalu;
-    H264Parser::Result result;
-
-    result = h264_parser.AdvanceToNextNALU(&nalu);
-    if (result == H264Parser::kEOStream)
-      break;
-    ASSERT_THAT(result, H264Parser::kOk);
-
-    switch (nalu.nal_unit_type) {
-      case H264NALU::kIDRSlice: {
-        ASSERT_TRUE(seen_sps);
-        ASSERT_TRUE(seen_pps);
-        break;
-      }
-
-      case H264NALU::kNonIDRSlice: {
-        ASSERT_FALSE(seen_sps);
-        ASSERT_FALSE(seen_pps);
-        break;
-      }
-
-      case H264NALU::kSPS: {
-        int sps_id;
-        ASSERT_EQ(H264Parser::kOk, h264_parser.ParseSPS(&sps_id));
-        seen_sps = true;
-        break;
-      }
-
-      case H264NALU::kPPS: {
-        ASSERT_TRUE(seen_sps);
-        int pps_id;
-        ASSERT_EQ(H264Parser::kOk, h264_parser.ParsePPS(&pps_id));
-        seen_pps = true;
-        break;
-      }
-
-      default:
-        break;
-    }
-  }
-}
-
-void EncodeMediaFrame(MediaCodecBridge* media_codec,
-                      const uint8_t* src_data,
-                      const size_t src_size,
-                      const int width,
-                      const int height,
-                      const base::TimeDelta input_timestamp) {
-  int input_buf_index = -1;
-  MediaCodecStatus status =
-      media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
-  ASSERT_EQ(MEDIA_CODEC_OK, status);
-
-  uint8_t* buffer = nullptr;
-  size_t capacity = 0;
-  status = media_codec->GetInputBuffer(input_buf_index, &buffer, &capacity);
-  ASSERT_EQ(MEDIA_CODEC_OK, status);
-
-  // Convert to NV12 because H264 encoder is created with color format
-  // COLOR_FormatYUV420SemiPlanar, both in main code path and unittest here.
-  bool converted =
-      !libyuv::I420ToNV12(src_data, width, src_data + width * height, width / 2,
-                          src_data + width * height * 5 / 4, width / 2, buffer,
-                          width, buffer + width * height, width, width, height);
-  ASSERT_TRUE(converted == true);
-
-  status = media_codec->QueueInputBuffer(input_buf_index, nullptr, src_size,
-                                         input_timestamp);
-  ASSERT_EQ(MEDIA_CODEC_OK, status);
-
-  int32_t buf_index = -1;
-  size_t offset = 0;
-  size_t output_size;
-  bool key_frame = false;
-
-  do {
-    status = media_codec->DequeueOutputBuffer(InfiniteTimeOut(), &buf_index,
-                                              &offset, &output_size, nullptr,
-                                              nullptr, &key_frame);
-    EXPECT_NE(status, MEDIA_CODEC_ERROR);
-  } while (buf_index < 0);
-  ASSERT_TRUE(status == MEDIA_CODEC_OK && buf_index >= 0);
-
-  std::unique_ptr<uint8_t[]> output_data =
-      std::make_unique<uint8_t[]>(output_size);
-  status = media_codec->CopyFromOutputBuffer(buf_index, offset,
-                                             output_data.get(), output_size);
-  ASSERT_EQ(MEDIA_CODEC_OK, status);
-
-  H264Validate(output_data.get(), output_size);
-
-  media_codec->ReleaseOutputBuffer(buf_index, false);
 }
 
 AudioDecoderConfig NewAudioConfig(
@@ -280,46 +173,55 @@ AudioDecoderConfig NewAudioConfig(
     base::TimeDelta seek_preroll = base::TimeDelta(),
     int64_t codec_delay = 0) {
   AudioDecoderConfig config;
-  config.Initialize(codec, kSampleFormatPlanarF32, CHANNEL_LAYOUT_STEREO, 44100,
-                    extra_data, EncryptionScheme::kUnencrypted, seek_preroll,
-                    codec_delay);
+  config.Initialize(codec, kSampleFormatPlanarF32,
+                    ChannelLayoutConfig::Stereo(), 44100, extra_data,
+                    EncryptionScheme::kUnencrypted, seek_preroll, codec_delay);
   return config;
 }
 
-TEST(MediaCodecBridgeTest, CreateH264Decoder) {
-  SKIP_TEST_IF_MEDIA_CODEC_IS_NOT_AVAILABLE();
+class MediaCodecBridgeTest : public testing::Test {
+ protected:
+  bool GetCodecSpecificDataForAudio(const AudioDecoderConfig& config,
+                                    std::vector<uint8_t>* output_csd0,
+                                    std::vector<uint8_t>* output_csd1,
+                                    std::vector<uint8_t>* output_csd2,
+                                    bool* output_frame_has_adts_header) {
+    return MediaCodecBridgeImpl::GetCodecSpecificDataForAudio(
+        config, output_csd0, output_csd1, output_csd2,
+        output_frame_has_adts_header);
+  }
+};
 
+TEST_F(MediaCodecBridgeTest, CreateH264Decoder) {
   VideoCodecConfig config;
-  config.codec = kCodecH264;
+  config.codec = VideoCodec::kH264;
   config.codec_type = CodecType::kAny;
   config.initial_expected_coded_size = gfx::Size(640, 480);
 
   MediaCodecBridgeImpl::CreateVideoDecoder(config);
 }
 
-TEST(MediaCodecBridgeTest, DoNormal) {
-  SKIP_TEST_IF_MEDIA_CODEC_IS_NOT_AVAILABLE();
-
+TEST_F(MediaCodecBridgeTest, DoNormal) {
   std::unique_ptr<media::MediaCodecBridge> media_codec =
-      MediaCodecBridgeImpl::CreateAudioDecoder(NewAudioConfig(kCodecMP3),
+      MediaCodecBridgeImpl::CreateAudioDecoder(NewAudioConfig(AudioCodec::kMP3),
                                                nullptr);
   ASSERT_THAT(media_codec, NotNull());
 
   int input_buf_index = -1;
-  MediaCodecStatus status =
+  MediaCodecResult result =
       media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
-  ASSERT_EQ(MEDIA_CODEC_OK, status);
+  ASSERT_TRUE(result.is_ok());
   ASSERT_GE(input_buf_index, 0);
 
   int64_t input_pts = kPresentationTimeBase;
-  media_codec->QueueInputBuffer(input_buf_index, test_mp3, sizeof(test_mp3),
-                                base::TimeDelta::FromMicroseconds(++input_pts));
+  media_codec->QueueInputBuffer(input_buf_index, kTestMp3,
+                                base::Microseconds(++input_pts));
 
-  status = media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
-  media_codec->QueueInputBuffer(input_buf_index, test_mp3, sizeof(test_mp3),
-                                base::TimeDelta::FromMicroseconds(++input_pts));
+  result = media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
+  media_codec->QueueInputBuffer(input_buf_index, kTestMp3,
+                                base::Microseconds(++input_pts));
 
-  status = media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
+  result = media_codec->DequeueInputBuffer(InfiniteTimeOut(), &input_buf_index);
   media_codec->QueueEOS(input_buf_index);
 
   input_pts = kPresentationTimeBase;
@@ -330,18 +232,17 @@ TEST(MediaCodecBridgeTest, DoNormal) {
     size_t size = 0;
     base::TimeDelta timestamp;
     int output_buf_index = -1;
-    status = media_codec->DequeueOutputBuffer(InfiniteTimeOut(),
+    result = media_codec->DequeueOutputBuffer(InfiniteTimeOut(),
                                               &output_buf_index, &unused_offset,
                                               &size, &timestamp, &eos, nullptr);
-    switch (status) {
-      case MEDIA_CODEC_TRY_AGAIN_LATER:
+    switch (result.code()) {
+      case MediaCodecResult::Codes::kTryAgainLater:
         FAIL();
-        return;
 
-      case MEDIA_CODEC_OUTPUT_FORMAT_CHANGED:
+      case MediaCodecResult::Codes::kOutputFormatChanged:
         continue;
 
-      case MEDIA_CODEC_OUTPUT_BUFFERS_CHANGED:
+      case MediaCodecResult::Codes::kOutputBuffersChanged:
         continue;
 
       default:
@@ -355,14 +256,13 @@ TEST(MediaCodecBridgeTest, DoNormal) {
   ASSERT_LE(input_pts, kMaxInputPts);
 }
 
-TEST(MediaCodecBridgeTest, InvalidVorbisHeader) {
-  SKIP_TEST_IF_MEDIA_CODEC_IS_NOT_AVAILABLE();
-
+TEST_F(MediaCodecBridgeTest, InvalidVorbisHeader) {
   // The first byte of the header is not 0x02.
   std::vector<uint8_t> invalid_first_byte = {{0x00, 0xff, 0xff, 0xff, 0xff}};
-  ASSERT_THAT(MediaCodecBridgeImpl::CreateAudioDecoder(
-                  NewAudioConfig(kCodecVorbis, invalid_first_byte), nullptr),
-              IsNull());
+  ASSERT_THAT(
+      MediaCodecBridgeImpl::CreateAudioDecoder(
+          NewAudioConfig(AudioCodec::kVorbis, invalid_first_byte), nullptr),
+      IsNull());
 
   // Size of the header is too large.
   size_t large_size = 8 * 1024 * 1024 + 2;
@@ -370,144 +270,128 @@ TEST(MediaCodecBridgeTest, InvalidVorbisHeader) {
   large_header.front() = 0x02;
   large_header.back() = 0xfe;
   ASSERT_THAT(MediaCodecBridgeImpl::CreateAudioDecoder(
-                  NewAudioConfig(kCodecVorbis, large_header), nullptr),
+                  NewAudioConfig(AudioCodec::kVorbis, large_header), nullptr),
               IsNull());
 }
 
-TEST(MediaCodecBridgeTest, InvalidOpusHeader) {
-  SKIP_TEST_IF_MEDIA_CODEC_IS_NOT_AVAILABLE();
-
+TEST_F(MediaCodecBridgeTest, InvalidOpusHeader) {
   std::vector<uint8_t> dummy_extra_data = {{0, 0}};
 
   // Codec Delay is < 0.
-  ASSERT_THAT(
-      MediaCodecBridgeImpl::CreateAudioDecoder(
-          NewAudioConfig(kCodecOpus, dummy_extra_data, base::TimeDelta(), -1),
-          nullptr),
-      IsNull());
+  ASSERT_THAT(MediaCodecBridgeImpl::CreateAudioDecoder(
+                  NewAudioConfig(AudioCodec::kOpus, dummy_extra_data,
+                                 base::TimeDelta(), -1),
+                  nullptr),
+              IsNull());
 
   // Seek Preroll is < 0.
   ASSERT_THAT(MediaCodecBridgeImpl::CreateAudioDecoder(
-                  NewAudioConfig(kCodecOpus, dummy_extra_data,
-                                 base::TimeDelta::FromMicroseconds(-1)),
+                  NewAudioConfig(AudioCodec::kOpus, dummy_extra_data,
+                                 base::Microseconds(-1)),
                   nullptr),
               IsNull());
 }
 
-TEST(MediaCodecBridgeTest, PresentationTimestampsDoNotDecrease) {
+TEST_F(MediaCodecBridgeTest, VorbisCodecSpecificData) {
+  const std::vector<uint8_t> extra_data = {0x02, 0x03, 0x02, 0x10, 0x11, 0x12,
+                                           0x20, 0x21, 0x30, 0x31, 0x32, 0x33};
+  std::vector<uint8_t> csd0;
+  std::vector<uint8_t> csd1;
+  std::vector<uint8_t> csd2;
+  bool has_adts = true;
+
+  ASSERT_TRUE(GetCodecSpecificDataForAudio(
+      NewAudioConfig(AudioCodec::kVorbis, extra_data), &csd0, &csd1, &csd2,
+      &has_adts));
+  EXPECT_THAT(csd0, ElementsAre(0x10, 0x11, 0x12));
+  EXPECT_THAT(csd1, ElementsAre(0x30, 0x31, 0x32, 0x33));
+  EXPECT_TRUE(csd2.empty());
+  EXPECT_FALSE(has_adts);
+}
+
+TEST_F(MediaCodecBridgeTest, OpusCodecSpecificData) {
+  const std::vector<uint8_t> extra_data = {0x4f, 0x70, 0x75, 0x73};
+  std::vector<uint8_t> csd0;
+  std::vector<uint8_t> csd1;
+  std::vector<uint8_t> csd2;
+  bool has_adts = true;
+
+  ASSERT_TRUE(GetCodecSpecificDataForAudio(
+      NewAudioConfig(AudioCodec::kOpus, extra_data, base::Microseconds(80000),
+                     441),
+      &csd0, &csd1, &csd2, &has_adts));
+  constexpr int64_t kExpectedDelayNs = 10000000;
+  constexpr int64_t kExpectedPrerollNs = 80000000;
+  EXPECT_EQ(csd0, extra_data);
+  EXPECT_EQ(csd1, base::ToVector(base::byte_span_from_ref(kExpectedDelayNs)));
+  EXPECT_EQ(csd2, base::ToVector(base::byte_span_from_ref(kExpectedPrerollNs)));
+  EXPECT_FALSE(has_adts);
+}
+
+TEST_F(MediaCodecBridgeTest, VorbisCodecSpecificDataMultiByteLength) {
+  const std::vector<uint8_t> expected_csd0(260, 0x10);
+  const std::vector<uint8_t> comment_header = {0x20, 0x21};
+  const std::vector<uint8_t> expected_csd1 = {0x30, 0x31, 0x32, 0x33};
+
+  std::vector<uint8_t> extra_data = {0x02, 0xff, 0x05, 0x02};
+  base::Extend(extra_data, expected_csd0);
+  base::Extend(extra_data, comment_header);
+  base::Extend(extra_data, expected_csd1);
+
+  std::vector<uint8_t> csd0;
+  std::vector<uint8_t> csd1;
+  std::vector<uint8_t> csd2;
+  bool has_adts = true;
+
+  ASSERT_TRUE(GetCodecSpecificDataForAudio(
+      NewAudioConfig(AudioCodec::kVorbis, extra_data), &csd0, &csd1, &csd2,
+      &has_adts));
+  EXPECT_EQ(csd0, expected_csd0);
+  EXPECT_EQ(csd1, expected_csd1);
+  EXPECT_TRUE(csd2.empty());
+  EXPECT_FALSE(has_adts);
+}
+
+TEST_F(MediaCodecBridgeTest, PresentationTimestampsDoNotDecrease) {
   if (!MediaCodecUtil::IsVp8DecoderAvailable()) {
     VLOG(0) << "Could not run test - VP8 not supported on device.";
     return;
   }
 
   VideoCodecConfig config;
-  config.codec = kCodecVP8;
+  config.codec = VideoCodec::kVP8;
   config.codec_type = CodecType::kAny;
   config.initial_expected_coded_size = gfx::Size(320, 240);
 
   auto media_codec = MediaCodecBridgeImpl::CreateVideoDecoder(config);
   ASSERT_THAT(media_codec, NotNull());
   scoped_refptr<DecoderBuffer> buffer = ReadTestDataFile("vp8-I-frame-320x240");
-  DecodeMediaFrame(media_codec.get(), buffer->data(), buffer->data_size(),
-                   base::TimeDelta(), base::TimeDelta());
+  DecodeMediaFrame(media_codec.get(), *buffer, base::TimeDelta(),
+                   base::TimeDelta());
 
   // Simulate a seek to 10 seconds, and each chunk has 2 I-frames.
-  std::vector<uint8_t> chunk(buffer->data(),
-                             buffer->data() + buffer->data_size());
-  chunk.insert(chunk.end(), buffer->data(),
-               buffer->data() + buffer->data_size());
+  std::vector<uint8_t> chunk = base::ToVector(base::span(*buffer));
+  base::Extend(chunk, base::span(*buffer));
   media_codec->Flush();
-  DecodeMediaFrame(media_codec.get(), &chunk[0], chunk.size(),
-                   base::TimeDelta::FromMicroseconds(10000000),
-                   base::TimeDelta::FromMicroseconds(9900000));
+  DecodeMediaFrame(media_codec.get(), chunk, base::Microseconds(10000000),
+                   base::Microseconds(9900000));
 
   // Simulate a seek to 5 seconds.
   media_codec->Flush();
-  DecodeMediaFrame(media_codec.get(), &chunk[0], chunk.size(),
-                   base::TimeDelta::FromMicroseconds(5000000),
-                   base::TimeDelta::FromMicroseconds(4900000));
+  DecodeMediaFrame(media_codec.get(), chunk, base::Microseconds(5000000),
+                   base::Microseconds(4900000));
 }
 
-TEST(MediaCodecBridgeTest, CreateUnsupportedCodec) {
+TEST_F(MediaCodecBridgeTest, CreateUnsupportedCodec) {
   EXPECT_THAT(MediaCodecBridgeImpl::CreateAudioDecoder(
-                  NewAudioConfig(kUnknownAudioCodec), nullptr),
+                  NewAudioConfig(AudioCodec::kUnknown), nullptr),
               IsNull());
 
   VideoCodecConfig config;
-  config.codec = kUnknownVideoCodec;
+  config.codec = VideoCodec::kUnknown;
   config.codec_type = CodecType::kAny;
   config.initial_expected_coded_size = gfx::Size(320, 240);
   EXPECT_THAT(MediaCodecBridgeImpl::CreateVideoDecoder(config), IsNull());
-}
-
-// Test MediaCodec HW H264 encoding and validate the format of encoded frames.
-TEST(MediaCodecBridgeTest, H264VideoEncodeAndValidate) {
-  SKIP_TEST_IF_HW_H264_IS_NOT_AVAILABLE();
-
-  const int width = 640;
-  const int height = 360;
-  const int bit_rate = 300000;
-  const int frame_rate = 30;
-  const int i_frame_interval = 20;
-  const std::set<int> supported_color_formats =
-      MediaCodecUtil::GetEncoderColorFormats("video/avc");
-
-  int color_format;
-  if (supported_color_formats.count(COLOR_FORMAT_YUV420_SEMIPLANAR) > 0) {
-    color_format = COLOR_FORMAT_YUV420_SEMIPLANAR;
-  } else if (supported_color_formats.count(COLOR_FORMAT_YUV420_PLANAR) > 0) {
-    color_format = COLOR_FORMAT_YUV420_PLANAR;
-  } else {
-    VLOG(0) << "Could not run test - YUV420_PLANAR and YUV420_SEMIPLANAR "
-               "unavailable for h264 encode.";
-    return;
-  }
-
-  std::unique_ptr<MediaCodecBridge> media_codec(
-      MediaCodecBridgeImpl::CreateVideoEncoder(
-          kCodecH264, gfx::Size(width, height), bit_rate, frame_rate,
-          i_frame_interval, color_format));
-  ASSERT_THAT(media_codec, NotNull());
-
-  const char kSrcFileName[] = "bali_640x360_P420.yuv";
-  base::FilePath src_file = GetTestDataFilePath(kSrcFileName);
-  int64_t src_file_size = 0;
-  ASSERT_TRUE(base::GetFileSize(src_file, &src_file_size));
-
-  const VideoPixelFormat kInputFormat = PIXEL_FORMAT_I420;
-  const int frame_size = static_cast<int>(
-      VideoFrame::AllocationSize(kInputFormat, gfx::Size(width, height)));
-  ASSERT_TRUE(frame_size > 0);
-  ASSERT_TRUE(src_file_size % frame_size == 0U);
-
-  const int num_frames = src_file_size / frame_size;
-  base::File src(src_file, base::File::FLAG_OPEN | base::File::FLAG_READ);
-  std::unique_ptr<uint8_t[]> frame_data =
-      std::make_unique<uint8_t[]>(frame_size);
-  ASSERT_THAT(
-      src.Read(0, reinterpret_cast<char*>(frame_data.get()), frame_size),
-      frame_size);
-
-  // A monotonically-growing value.
-  base::TimeDelta input_timestamp;
-
-  // Src_file contains 1 frames. Encode it 3 times.
-  for (int frame = 0; frame < num_frames && frame < 3; frame++) {
-    input_timestamp += base::TimeDelta::FromMicroseconds(
-        base::Time::kMicrosecondsPerSecond / frame_rate);
-    EncodeMediaFrame(media_codec.get(), frame_data.get(), frame_size, width,
-                     height, input_timestamp);
-  }
-
-  // Reuest key frame and encode 3 more frames. The second key frame should
-  // also contain SPS/PPS NALUs.
-  media_codec->RequestKeyFrameSoon();
-  for (int frame = 0; frame < num_frames && frame < 3; frame++) {
-    input_timestamp += base::TimeDelta::FromMicroseconds(
-        base::Time::kMicrosecondsPerSecond / frame_rate);
-    EncodeMediaFrame(media_codec.get(), frame_data.get(), frame_size, width,
-                     height, input_timestamp);
-  }
 }
 
 }  // namespace media

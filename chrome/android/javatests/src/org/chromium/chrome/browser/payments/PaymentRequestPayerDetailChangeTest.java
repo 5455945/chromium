@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,25 @@ package org.chromium.chrome.browser.payments;
 
 import androidx.test.filters.MediumTest;
 
-import org.junit.ClassRule;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
-import org.chromium.chrome.browser.autofill.PersonalDataManager.AutofillProfile;
-import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
-import org.chromium.chrome.browser.payments.PaymentRequestTestRule.MainActivityStartCallback;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.ui.modaldialog.ModalDialogProperties;
-import org.chromium.ui.test.util.DisableAnimationsTestRule;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.components.autofill.AutofillProfile;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
@@ -31,48 +32,55 @@ import java.util.concurrent.TimeoutException;
  * A payment integration test for a merchant that retries payment request with payment validation.
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-        PaymentRequestTestRule.ENABLE_EXPERIMENTAL_WEB_PLATFORM_FEATURES})
-public class PaymentRequestPayerDetailChangeTest implements MainActivityStartCallback {
-    // Disable animations to reduce flakiness.
-    @ClassRule
-    public static DisableAnimationsTestRule sNoAnimationsRule = new DisableAnimationsTestRule();
+@Batch(Batch.PER_CLASS)
+@CommandLineFlags.Add(PaymentRequestTestRule.ENABLE_EXPERIMENTAL_WEB_PLATFORM_FEATURES)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/376100658
+public class PaymentRequestPayerDetailChangeTest {
+    public final AutoResetCtaTransitTestRule mCtaTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
+
+    public final PaymentRequestTestRule mPaymentRequestTestRule =
+            new PaymentRequestTestRule(mCtaTestRule, "payment_request_onpayerdetailchange.html");
 
     @Rule
-    public PaymentRequestTestRule mPaymentRequestTestRule =
-            new PaymentRequestTestRule("payment_request_onpayerdetailchange.html", this);
+    public final RuleChain mRuleChain =
+            RuleChain.outerRule(mCtaTestRule).around(mPaymentRequestTestRule);
 
-    @Override
-    public void onMainActivityStarted() throws TimeoutException {
+    @Before
+    public void setUp() throws TimeoutException, InterruptedException {
+        mPaymentRequestTestRule.startOnTestPage();
         AutofillTestHelper helper = new AutofillTestHelper();
 
-        String billing_address_id = helper.setProfile(
-                new AutofillProfile("", "https://example.com", true, "" /* honorific prefix */,
-                        "Jon Doe", "Google", "340 Main St", "CA", "Los Angeles", "", "90291", "",
-                        "US", "333-333-3333", "jon.doe@gmail.com", "en-US"));
-        helper.setCreditCard(new CreditCard("", "https://example.com", true /* isLocal */,
-                true /* isCached */, "Jon Doe", "5555555555554444", "" /* obfuscatedNumber */, "12",
-                "2050", "mastercard", R.drawable.mc_card, billing_address_id, "" /* serverId */));
-
-        mPaymentRequestTestRule.addPaymentAppFactory(
-                AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
+        String billingAddressId =
+                helper.setProfile(
+                        AutofillProfile.builder()
+                                .setFullName("Jon Doe")
+                                .setCompanyName("Google")
+                                .setStreetAddress("340 Main St")
+                                .setRegion("CA")
+                                .setLocality("Los Angeles")
+                                .setPostalCode("90291")
+                                .setCountryCode("US")
+                                .setPhoneNumber("333-333-3333")
+                                .setEmailAddress("jon.doe@gmail.com")
+                                .setLanguageCode("en-US")
+                                .build());
     }
 
-    /**
-     * Test for onpayerdetailchange event.
-     */
+    /** Test for onpayerdetailchange event. */
     @Test
     @MediumTest
     @Feature({"Payments"})
     public void testPayerDetailChangeEvent() throws TimeoutException {
-        mPaymentRequestTestRule.triggerUIAndWait(mPaymentRequestTestRule.getReadyToPay());
+        // Install a fake payment app. We only need one as we won't skip the PaymentRequest sheet
+        // due to requesting contact info as well.
+        mPaymentRequestTestRule.addPaymentAppFactory(
+                "https://bobpay.test", AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
+
+        mPaymentRequestTestRule.triggerUiAndWait("buy", mPaymentRequestTestRule.getReadyToPay());
+
         mPaymentRequestTestRule.clickAndWait(
-                R.id.button_primary, mPaymentRequestTestRule.getReadyForUnmaskInput());
-        mPaymentRequestTestRule.setTextInCardUnmaskDialogAndWait(
-                R.id.card_unmask_input, "123", mPaymentRequestTestRule.getReadyToUnmask());
-        mPaymentRequestTestRule.clickCardUnmaskButtonAndWait(
-                ModalDialogProperties.ButtonType.POSITIVE,
-                mPaymentRequestTestRule.getPaymentResponseReady());
+                R.id.button_primary, mPaymentRequestTestRule.getPaymentResponseReady());
 
         mPaymentRequestTestRule.retryPaymentRequest("{}", mPaymentRequestTestRule.getReadyToPay());
 
@@ -87,11 +95,7 @@ public class PaymentRequestPayerDetailChangeTest implements MainActivityStartCal
                 R.id.editor_dialog_done_button, mPaymentRequestTestRule.getReadyToPay());
 
         mPaymentRequestTestRule.clickAndWait(
-                R.id.button_primary, mPaymentRequestTestRule.getReadyForUnmaskInput());
-        mPaymentRequestTestRule.setTextInCardUnmaskDialogAndWait(
-                R.id.card_unmask_input, "123", mPaymentRequestTestRule.getReadyToUnmask());
-        mPaymentRequestTestRule.clickCardUnmaskButtonAndWait(
-                ModalDialogProperties.ButtonType.POSITIVE, mPaymentRequestTestRule.getDismissed());
+                R.id.button_primary, mPaymentRequestTestRule.getDismissed());
 
         mPaymentRequestTestRule.expectResultContains(
                 new String[] {"Jane Doe", "6502530000", "jane.doe@gmail.com"});

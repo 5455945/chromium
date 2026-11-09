@@ -1,21 +1,21 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_POLICY_CORE_COMMON_CONFIGURATION_POLICY_PROVIDER_H_
 #define COMPONENTS_POLICY_CORE_COMMON_CONFIGURATION_POLICY_PROVIDER_H_
 
-#include <memory>
-
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "build/build_config.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/schema_registry.h"
 #include "components/policy/policy_export.h"
 
 namespace policy {
+
+enum class PolicyFetchReason;
 
 // A mostly-abstract super class for platform-specific policy providers.
 // Platform-specific policy providers (Windows Group Policy, gconf,
@@ -30,6 +30,9 @@ class POLICY_EXPORT ConfigurationPolicyProvider
   };
 
   ConfigurationPolicyProvider();
+  ConfigurationPolicyProvider(const ConfigurationPolicyProvider&) = delete;
+  ConfigurationPolicyProvider& operator=(const ConfigurationPolicyProvider&) =
+      delete;
 
   // Policy providers can be deleted quite late during shutdown of the browser,
   // and it's not guaranteed that the message loops will still be running when
@@ -71,7 +74,10 @@ class POLICY_EXPORT ConfigurationPolicyProvider
   // which are guaranteed to happen even if the refresh fails.
   // It is possible that Shutdown() is called first though, and
   // OnUpdatePolicy won't be called if that happens.
-  virtual void RefreshPolicies() = 0;
+  //
+  // The |reason| parameter can be used to tag the request to DMServer.
+  // Providers that do not communicate with DMServer may ignore the parameter.
+  virtual void RefreshPolicies(PolicyFetchReason reason) = 0;
 
   // Observers must detach themselves before the provider is deleted.
   virtual void AddObserver(Observer* observer);
@@ -81,11 +87,19 @@ class POLICY_EXPORT ConfigurationPolicyProvider
   void OnSchemaRegistryUpdated(bool has_new_schemas) override;
   void OnSchemaRegistryReady() override;
 
+#if BUILDFLAG(IS_ANDROID)
+  void ShutdownForTesting();
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  bool is_active() const { return is_active_; }
+
+  void set_active(bool active) { is_active_ = active; }
+
  protected:
   // Subclasses must invoke this to update the policies currently served by
   // this provider. UpdatePolicy() takes ownership of |policies|.
   // The observers are notified after the policies are updated.
-  void UpdatePolicy(std::unique_ptr<PolicyBundle> bundle);
+  void UpdatePolicy(PolicyBundle bundle);
 
   SchemaRegistry* schema_registry() const;
 
@@ -99,11 +113,11 @@ class POLICY_EXPORT ConfigurationPolicyProvider
   // Init() and cleared by Shutdown() and needs to be false in the destructor.
   bool initialized_;
 
-  SchemaRegistry* schema_registry_;
+  raw_ptr<SchemaRegistry> schema_registry_;
+
+  bool is_active_ = true;
 
   base::ObserverList<Observer, true>::Unchecked observer_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConfigurationPolicyProvider);
 };
 
 }  // namespace policy

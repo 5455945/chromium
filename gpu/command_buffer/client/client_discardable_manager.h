@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,22 @@
 #include <set>
 
 #include "base/containers/queue.h"
+#include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "gpu/command_buffer/common/discardable_handle.h"
-#include "gpu/gpu_export.h"
 
 namespace gpu {
 
-// ClientDiscardableManager is a helper class used by the
-// ClientDiscardableTextureManager. It allows for the creation and management
-// of ClientDiscardableHandles.
-class GPU_EXPORT ClientDiscardableManager {
+// ClientDiscardableManager is a helper class used by the client side of the
+// transfer cache. It allows for the creation and management of
+// ClientDiscardableHandles.
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT ClientDiscardableManager {
  public:
   ClientDiscardableManager();
+
+  ClientDiscardableManager(const ClientDiscardableManager&) = delete;
+  ClientDiscardableManager& operator=(const ClientDiscardableManager&) = delete;
+
   ~ClientDiscardableManager();
 
   // Note that the handles bound to an id are not guaranteed to outlive the
@@ -32,9 +36,6 @@ class GPU_EXPORT ClientDiscardableManager {
   bool HandleIsValid(ClientDiscardableHandle::Id handle_id) const;
   ClientDiscardableHandle GetHandle(ClientDiscardableHandle::Id handle_id);
   bool HandleIsDeleted(ClientDiscardableHandle::Id handle_id);
-
-  // For diagnostic tracing only.
-  bool HandleIsDeletedForTracing(ClientDiscardableHandle::Id handle_id) const;
 
   // Test only functions.
   void CheckPendingForTesting(CommandBuffer* command_buffer) {
@@ -62,9 +63,9 @@ class GPU_EXPORT ClientDiscardableManager {
   bool CreateNewAllocation(CommandBuffer* command_buffer);
 
  private:
-  uint32_t allocation_size_;
+  size_t allocation_size_;
   size_t element_size_ = sizeof(base::subtle::Atomic32);
-  uint32_t elements_per_allocation_ = allocation_size_ / element_size_;
+  size_t elements_per_allocation_ = allocation_size_ / element_size_;
 
   struct Allocation;
   std::vector<std::unique_ptr<Allocation>> allocations_;
@@ -73,8 +74,6 @@ class GPU_EXPORT ClientDiscardableManager {
   // Handles that are pending service deletion, and can be re-used once
   // ClientDiscardableHandle::CanBeReUsed returns true.
   base::queue<ClientDiscardableHandle> pending_handles_;
-
-  DISALLOW_COPY_AND_ASSIGN(ClientDiscardableManager);
 };
 
 }  // namespace gpu

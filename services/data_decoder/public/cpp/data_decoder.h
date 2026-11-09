@@ -1,20 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DATA_DECODER_PUBLIC_CPP_DATA_DECODER_H_
 #define SERVICES_DATA_DECODER_PUBLIC_CPP_DATA_DECODER_H_
 
+#include <optional>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/ref_counted.h"
+#include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/values.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "net/http/structured_headers.h"
 #include "services/data_decoder/public/cpp/service_provider.h"
 #include "services/data_decoder/public/mojom/data_decoder_service.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/data_decoder/public/mojom/xml_parser.mojom.h"
 
 namespace mojo_base {
 class BigBuffer;
@@ -22,6 +25,11 @@ class BigBuffer;
 
 namespace data_decoder {
 
+// IMPORTANT: Before adding something, please consider if there is a viable
+// memory-safe implementation; the data decoder is already a grab bag of random
+// stuff and process startup time can be a major performance tax, especially on
+// mobile.
+//
 // Encapsulates an exclusive connection to an isolated instance of the Data
 // Decoder service, allowing an owner to perform a series of related decoding
 // operations using the same isolated instance. The application must provide
@@ -31,10 +39,6 @@ namespace data_decoder {
 // In general, instance reuse should only be considered after weighing the cost
 // of new service processes vs the security and privacy value of increased
 // isolation.
-//
-// Note that on some platforms, some operations (like JSON parsing on Android)
-// use a safe in-process mechanism in lieu of delegating to the Data Decoder
-// service. This detail is intentionally hidden behind the DataDecoder API.
 //
 // Finally, there is no guarantee that a single DataDecoder instance will
 // perform all out-of-process operations within the same service process; if
@@ -50,39 +54,25 @@ class DataDecoder {
   DataDecoder();
   // Creates a DataDecoder with the specified timeout.
   explicit DataDecoder(base::TimeDelta idle_timeout);
+
+  DataDecoder(const DataDecoder&) = delete;
+  DataDecoder& operator=(const DataDecoder&) = delete;
+
   ~DataDecoder();
 
-  // The result of a service call that can return either a value of type T or an
-  // error string. Exactly one of either |value| or |error| will have a value
-  // when returned by either operation.
+  using ValueOrError = base::expected<base::Value, std::string>;
   template <typename T>
-  struct ResultOrError {
-    ResultOrError() = default;
-    ResultOrError(ResultOrError&&) = default;
-    ~ResultOrError() = default;
-
-    static ResultOrError Value(T value) {
-      ResultOrError<T> result;
-      result.value = std::move(value);
-      return result;
-    }
-    static ResultOrError Error(const std::string& error) {
-      ResultOrError<T> result;
-      result.error = error;
-      return result;
-    }
-
-    absl::optional<T> value;
-    absl::optional<std::string> error;
-  };
-
-  using ValueOrError = ResultOrError<base::Value>;
-
-  template <typename T>
-  using ResultCallback = base::OnceCallback<void(ResultOrError<T>)>;
-  using ValueParseCallback = base::OnceCallback<void(ValueOrError)>;
-  using GzipperCallback =
-      base::OnceCallback<void(ResultOrError<mojo_base::BigBuffer>)>;
+  using ResultCallback =
+      base::OnceCallback<void(base::expected<T, std::string>)>;
+  using StructuredHeaderParseItemCallback =
+      ResultCallback<net::structured_headers::ParameterizedItem>;
+  using StructuredHeaderParseListCallback =
+      ResultCallback<net::structured_headers::List>;
+  using StructuredHeaderParseDictionaryCallback =
+      ResultCallback<net::structured_headers::Dictionary>;
+  using ValueParseCallback = ResultCallback<base::Value>;
+  using GzipperCallback = ResultCallback<mojo_base::BigBuffer>;
+  using CancellationFlag = base::RefCountedData<bool>;
 
   // Returns a raw interface to the service instance. This launches an instance
   // of the service process if possible on the current platform, or returns a
@@ -90,19 +80,54 @@ class DataDecoder {
   // InProcessDataDecoderService.
   mojom::DataDecoderService* GetService();
 
-  // Parses the potentially unsafe JSON string in |json| using this
-  // DataDecoder's service instance or some other platform-specific decoding
-  // facility.
+  // Parses the potentially unsafe string in |header| as a structured header
+  // item using this DataDecoder's service instance or some other
+  // platform-specific decoding facility.
   //
   // Note that |callback| will only be called if the parsing operation succeeds
   // or fails before this DataDecoder is destroyed.
-  void ParseJson(const std::string& json, ValueParseCallback callback);
+  void ParseStructuredHeaderItem(const std::string& header,
+                                 StructuredHeaderParseItemCallback callback);
 
-  // Parses the potentially unsafe JSON string in |json|. This static helper
-  // uses a dedicated instance of the Data Decoder service on applicable
-  // platforms.
-  static void ParseJsonIsolated(const std::string& json,
-                                ValueParseCallback callback);
+  // Parses the potentially unsafe string in |header| as a structured header
+  // item. This static helper uses a dedicated instance of the Data Decoder
+  // service on applicable platforms.
+  static void ParseStructuredHeaderItemIsolated(
+      const std::string& header,
+      StructuredHeaderParseItemCallback callback);
+
+  // Parses the potentially unsafe string in |header| as a structured header
+  // list using this DataDecoder's service instance or some other
+  // platform-specific decoding facility.
+  //
+  // Note that |callback| will only be called if the parsing operation succeeds
+  // or fails before this DataDecoder is destroyed.
+  void ParseStructuredHeaderList(const std::string& header,
+                                 StructuredHeaderParseListCallback callback);
+
+  // Parses the potentially unsafe string in |header| as a structured header
+  // list. This static helper uses a dedicated instance of the Data Decoder
+  // service on applicable platforms.
+  static void ParseStructuredHeaderListIsolated(
+      const std::string& header,
+      StructuredHeaderParseListCallback callback);
+
+  // Parses the potentially unsafe string in `header` as a structured header
+  // dictionary using this DataDecoder's service instance or some other
+  // platform-specific decoding facility.
+  //
+  // Note that `callback` will only be called if the parsing operation succeeds
+  // or fails before this DataDecoder is destroyed.
+  void ParseStructuredHeaderDictionary(
+      const std::string& header,
+      StructuredHeaderParseDictionaryCallback callback);
+
+  // Parses the potentially unsafe string in `header` as a structured header
+  // dictionary. This static helper uses a dedicated instance of the Data
+  // Decoder service on applicable platforms.
+  static void ParseStructuredHeaderDictionaryIsolated(
+      const std::string& header,
+      StructuredHeaderParseDictionaryCallback callback);
 
   // Parses the potentially unsafe XML string in |xml| using this
   // DataDecoder's service instance. The Value provided to the callback
@@ -112,13 +137,34 @@ class DataDecoder {
   //
   // Note that |callback| will only be called if the parsing operation succeeds
   // or fails before this DataDecoder is destroyed.
-  void ParseXml(const std::string& xml, ValueParseCallback callback);
+  void ParseXml(const std::string& xml,
+                mojom::XmlParser::WhitespaceBehavior whitespace_behavior,
+                ValueParseCallback callback);
 
   // Parses the potentially unsafe XML string in |xml|. This static helper
   // uses a dedicated instance of the Data Decoder service on applicable
   // platforms.
-  static void ParseXmlIsolated(const std::string& xml,
-                               ValueParseCallback callback);
+  static void ParseXmlIsolated(
+      const std::string& xml,
+      mojom::XmlParser::WhitespaceBehavior whitespace_behavior,
+      ValueParseCallback callback);
+
+  // Deflates potentially unsafe |data| using this DataDecoder's service
+  // instance. This will use raw DEFLATE, i.e. no headers are outputted.
+  //
+  // Note that |callback| will only be called if the parsing operation succeeds
+  // or fails before this DataDecoder is destroyed.
+  void Deflate(base::span<const uint8_t> data, GzipperCallback callback);
+
+  // Inflates potentially unsafe |data| using this DataDecoder's service
+  // instance. |data| must have been deflated raw, i.e. with no headers. If the
+  // uncompressed data exceeds |max_uncompressed_size|, returns empty.
+  //
+  // Note that |callback| will only be called if the parsing operation succeeds
+  // or fails before this DataDecoder is destroyed.
+  void Inflate(base::span<const uint8_t> data,
+               uint64_t max_uncompressed_size,
+               GzipperCallback callback);
 
   // Compresses potentially unsafe |data| using this DataDecoder's service
   // instance.
@@ -146,7 +192,12 @@ class DataDecoder {
   // established and may be reset after long periods of idle time.
   mojo::Remote<mojom::DataDecoderService> service_;
 
-  DISALLOW_COPY_AND_ASSIGN(DataDecoder);
+  // Cancellation flag for any outstanding requests. When a request is
+  // started, it takes a reference to this flag. Upon the destruction of this
+  // instance, the flag is set to `true`. Any outstanding requests should check
+  // this flag, and if it is `true`, they should not run the callback, per
+  // the API guarantees above.
+  scoped_refptr<CancellationFlag> cancel_requests_;
 };
 
 }  // namespace data_decoder

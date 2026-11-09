@@ -1,9 +1,8 @@
 #! /usr/bin/env vpython3
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# pylint: disable=protected-access
 
 import unittest
 
@@ -13,15 +12,16 @@ from pylib.output import noop_output_manager
 
 
 class NoopOutputManagerTest(output_manager_test_case.OutputManagerTestCase):
+    def setUp(self):
+        self._output_manager = noop_output_manager.NoopOutputManager()
 
-  def setUp(self):
-    self._output_manager = noop_output_manager.NoopOutputManager()
-
-  def testUsableTempFile(self):
-    self.assertUsableTempFile(
-        self._output_manager._CreateArchivedFile(
-            'test_file', 'test_subdir', output_manager.Datatype.TEXT))
+    def testUsableTempFile(self):
+        self.assertUsableTempFile(
+            self._output_manager._CreateArchivedFile(
+                'test_file', 'test_subdir', output_manager.Datatype.TEXT, None
+            )
+        )
 
 
 if __name__ == '__main__':
-  unittest.main()
+    unittest.main()

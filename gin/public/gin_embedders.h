@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,52 @@ enum GinEmbedder : uint16_t {
   kEmbedderBlink,
   kEmbedderPDFium,
   kEmbedderFuchsia,
+};
+
+enum EmbedderDataTag : uint16_t {
+  // kDefaultTag can be used by embedders that don't use V8 type tagging, e.g.
+  // because they have their own type tagging system, like PDFium.
+  kDefaultEmbedderDataTag,
+  kBlinkScriptState,
+};
+
+enum ExternalPointerTypeTag : uint16_t {
+  kExternalPointerTypeTagDefaultTag = 0,
+  kAppHooksDelegateTag,
+  kAuctionConfigLazyFillerTag,
+  kAuctionV8LoggerTest_TestLazyFillerTag,
+  kBiddingBrowserSignalsLazyFillerTag,
+  kDeprecatedUrlLazyFillerTag,
+  kForDebuggingOnlyBindingsTag,
+  kInterestGroupLazyFillerTag,
+  kPrivateAggregationBindingsTag,
+  kPrivateModelTrainingBindingsTag,
+  kRealTimeReportingBindingsTag,
+  kRegisterAdBeaconBindingsTag,
+  kRegisterAdMacroBindingsTag,
+  kReportBindingsTag,
+  kReportWinBrowserSignalsLazyFillerTag,
+  kSellerBrowserSignalsLazyFillerTag,
+  kSetBidBindingsTag,
+  kSetPriorityBindingsTag,
+  kSetPrioritySignalsOverrideBindingsTag,
+  kWebIDLCompatTestTag,
+  kDeclarativeContentHooksDelegateHandlerCallbackTag,
+  kAPIBindingHandlerCallbackTag,
+  kAPIBindingEventDataTag,
+  kAPIBindingCustomPropertyDataTag,
+  kAPIBindingJSUtilUnittestErrorInfoTag,
+  kEventEmitterUnittestListenerClosureDataTag,
+  kModuleSystemTag,
+  kProxyResolverV8ContextTag,
+  kThreadDebuggerCommonImplTag,
+  kViewTransitionTestDataTag,
+  kViewTransitionTestDocumentTag,
+  kViewTransitionTestBoolTag,
+  kFXJSEFunctionDescriptorTag,
+  kFXJSEClassDescriptorTag,
+  kV8IsolateTag,
+  kLastExternalPointerTypeTag = kV8IsolateTag,
 };
 
 }  // namespace gin

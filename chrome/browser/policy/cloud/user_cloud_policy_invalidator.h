@@ -1,27 +1,32 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_POLICY_CLOUD_USER_CLOUD_POLICY_INVALIDATOR_H_
 #define CHROME_BROWSER_POLICY_CLOUD_USER_CLOUD_POLICY_INVALIDATOR_H_
 
-#include "base/macros.h"
-#include "chrome/browser/policy/cloud/cloud_policy_invalidator.h"
+#include <memory>
+
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "extensions/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/policy/cloud/extension_install_policy_invalidator.h"
+#endif
 
 class Profile;
 
 namespace policy {
 
+class CloudPolicyInvalidator;
 class CloudPolicyManager;
 
 // Provides invalidations to user policy. Implemented as a
 // KeyedService to allow profile-based lifetime management.
-class UserCloudPolicyInvalidator : public CloudPolicyInvalidator,
-                                   public KeyedService,
-                                   public content::NotificationObserver {
+class UserCloudPolicyInvalidator : public KeyedService, public ProfileObserver {
  public:
   // |profile| is profile associated with the invalidator. It is used to get
   // a reference to the profile's invalidation service. Both the profile and
@@ -30,23 +35,28 @@ class UserCloudPolicyInvalidator : public CloudPolicyInvalidator,
   // valid until Shutdown is called.
   UserCloudPolicyInvalidator(Profile* profile,
                              CloudPolicyManager* policy_manager);
+  ~UserCloudPolicyInvalidator() override;
+  UserCloudPolicyInvalidator(const UserCloudPolicyInvalidator&) = delete;
+  UserCloudPolicyInvalidator& operator=(const UserCloudPolicyInvalidator&) =
+      delete;
+
+  void StartExtensionInstallInvalidator();
 
   // KeyedService:
   void Shutdown() override;
 
-  // content::NotificationObserver implementation:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // ProfileObserver implementation:
+  void OnProfileInitializationComplete(Profile* profile) override;
 
  private:
-  // The profile associated with the invalidator.
-  Profile* profile_;
-
-  // Used to register for notification that profile creation is complete.
-  content::NotificationRegistrar registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyInvalidator);
+  raw_ptr<Profile> profile_;
+  base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
+  raw_ptr<CloudPolicyManager> policy_manager_;
+  std::unique_ptr<CloudPolicyInvalidator> invalidator_;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  std::unique_ptr<ExtensionInstallPolicyInvalidator>
+      extension_install_invalidator_;
+#endif
 };
 
 }  // namespace policy

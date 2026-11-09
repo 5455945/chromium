@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,17 @@
 
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/dm_token.h"
 #include "components/policy/core/common/cloud/user_cloud_policy_store.h"
+#include "components/policy/core/common/policy_logger.h"
+#include "components/policy/proto/cloud_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
 namespace em = enterprise_management;
@@ -20,13 +24,21 @@ namespace em = enterprise_management;
 namespace policy {
 namespace {
 
+BASE_FEATURE(kAlwaysVerifyPolicyKey, base::FEATURE_ENABLED_BY_DEFAULT);
+
 const base::FilePath::CharType kPolicyCache[] =
     FILE_PATH_LITERAL("Machine Level User Cloud Policy");
 const base::FilePath::CharType kKeyCache[] =
     FILE_PATH_LITERAL("Machine Level User Cloud Policy Signing Key");
-constexpr base::FilePath::StringPieceType kExternalPolicyCache =
+
+const base::FilePath::CharType kExtensionInstallPolicyCacheFile[] =
+    FILE_PATH_LITERAL("Machine Level Extension Install Policy");
+const base::FilePath::CharType kExtensionInstallKeyCacheFile[] =
+    FILE_PATH_LITERAL("Machine Level Extension Install Policy Signing Key");
+
+constexpr base::FilePath::StringViewType kExternalPolicyCache =
     FILE_PATH_LITERAL("PolicyFetchResponse");
-constexpr base::FilePath::StringPieceType kExternalPolicyInfo =
+constexpr base::FilePath::StringViewType kExternalPolicyInfo =
     FILE_PATH_LITERAL("CachedPolicyInfo");
 }  // namespace
 
@@ -37,23 +49,24 @@ MachineLevelUserCloudPolicyStore::MachineLevelUserCloudPolicyStore(
     const base::FilePath& external_policy_info_path,
     const base::FilePath& policy_path,
     const base::FilePath& key_path,
-    bool cloud_policy_has_priority,
+    const std::string& policy_type,
     scoped_refptr<base::SequencedTaskRunner> background_task_runner)
     : DesktopCloudPolicyStore(
           policy_path,
           key_path,
+          policy_type,
           base::BindRepeating(
               &MachineLevelUserCloudPolicyStore::MaybeUseExternalCachedPolicies,
               external_policy_path,
               external_policy_info_path),
           background_task_runner,
-          PolicyScope::POLICY_SCOPE_MACHINE,
-          cloud_policy_has_priority ? PolicySource::POLICY_SOURCE_PRIORITY_CLOUD
-                                    : PolicySource::POLICY_SOURCE_CLOUD),
+          PolicyScope::POLICY_SCOPE_MACHINE),
       machine_dm_token_(machine_dm_token),
-      machine_client_id_(machine_client_id) {}
+      machine_client_id_(machine_client_id) {
+  CHECK(IsMachineLevelPolicyType(policy_type));
+}
 
-MachineLevelUserCloudPolicyStore::~MachineLevelUserCloudPolicyStore() {}
+MachineLevelUserCloudPolicyStore::~MachineLevelUserCloudPolicyStore() = default;
 
 // static
 std::unique_ptr<MachineLevelUserCloudPolicyStore>
@@ -62,7 +75,6 @@ MachineLevelUserCloudPolicyStore::Create(
     const std::string& machine_client_id,
     const base::FilePath& external_policy_dir,
     const base::FilePath& policy_dir,
-    bool cloud_policy_has_priority,
     scoped_refptr<base::SequencedTaskRunner> background_task_runner) {
   base::FilePath policy_cache_file = policy_dir.Append(kPolicyCache);
   base::FilePath key_cache_file = policy_dir.Append(kKeyCache);
@@ -79,7 +91,28 @@ MachineLevelUserCloudPolicyStore::Create(
   return std::make_unique<MachineLevelUserCloudPolicyStore>(
       machine_dm_token, machine_client_id, external_policy_path,
       external_policy_info_path, policy_cache_file, key_cache_file,
-      cloud_policy_has_priority, background_task_runner);
+      dm_protocol::kChromeMachineLevelUserCloudPolicyType,
+      background_task_runner);
+}
+
+// static
+std::unique_ptr<MachineLevelUserCloudPolicyStore>
+MachineLevelUserCloudPolicyStore::CreateForExtensionInstall(
+    const DMToken& machine_dm_token,
+    const std::string& machine_client_id,
+    const base::FilePath& policy_dir,
+    scoped_refptr<base::SequencedTaskRunner> background_task_runner) {
+  base::FilePath policy_cache_file =
+      policy_dir.Append(kExtensionInstallPolicyCacheFile);
+  base::FilePath key_cache_file =
+      policy_dir.Append(kExtensionInstallKeyCacheFile);
+  return std::make_unique<MachineLevelUserCloudPolicyStore>(
+      machine_dm_token, machine_client_id,
+      /*external_policy_path=*/base::FilePath(),
+      /*external_policy_info_path=*/base::FilePath(), policy_cache_file,
+      key_cache_file,
+      dm_protocol::kChromeExtensionInstallMachineLevelCloudPolicyType,
+      background_task_runner);
 }
 
 bool IsResultKeyEqual(const PolicyLoadResult& default_result,
@@ -97,8 +130,10 @@ void MachineLevelUserCloudPolicyStore::LoadImmediately() {
   // avoid an unnecessary disk access. Policies will be fetched after enrollment
   // succeeded.
   if (!machine_dm_token_.is_valid()) {
-    VLOG(1) << "LoadImmediately ignored, no DM token present.";
-#if defined(OS_ANDROID)
+    VLOG_POLICY(1, POLICY_FETCHING)
+        << PolicyTypeLogPrefix(policy_type(), std::string())
+        << "LoadImmediately ignored, no DM token present.";
+#if BUILDFLAG(IS_ANDROID)
     // On Android, some dependencies (e.g. FirstRunActivity) are blocked until
     // the PolicyService is initialized, which waits on all policy providers to
     // indicate that policies are available.
@@ -114,10 +149,12 @@ void MachineLevelUserCloudPolicyStore::LoadImmediately() {
     PolicyLoadResult result;
     result.status = policy::LOAD_RESULT_NO_POLICY_FILE;
     PolicyLoaded(/*validate_in_background=*/false, result);
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
     return;
   }
-  VLOG(1) << "Load policy cache Immediately.";
+  VLOG_POLICY(1, POLICY_FETCHING)
+      << PolicyTypeLogPrefix(policy_type(), std::string())
+      << "Load policy cache Immediately.";
   DesktopCloudPolicyStore::LoadImmediately();
 }
 
@@ -125,10 +162,13 @@ void MachineLevelUserCloudPolicyStore::Load() {
   // There is no global dm token, stop loading the policy cache. The policy will
   // be fetched in the end of enrollment process.
   if (!machine_dm_token_.is_valid()) {
-    VLOG(1) << "Load ignored, no DM token present.";
+    VLOG_POLICY(1, POLICY_FETCHING)
+        << PolicyTypeLogPrefix(policy_type(), std::string())
+        << "Load ignored, no DM token present.";
     return;
   }
-  VLOG(1) << "Load policy cache.";
+  VLOG_POLICY(1, POLICY_FETCHING)
+      << PolicyTypeLogPrefix(policy_type(), std::string()) << "Load policy cache.";
   DesktopCloudPolicyStore::Load();
 }
 
@@ -140,8 +180,9 @@ MachineLevelUserCloudPolicyStore::MaybeUseExternalCachedPolicies(
     PolicyLoadResult default_cached_policy_load_result) {
   PolicyLoadResult external_policy_cache_load_result =
       LoadExternalCachedPolicies(policy_cache_path, policy_info_path);
-  if (external_policy_cache_load_result.status != policy::LOAD_RESULT_SUCCESS)
+  if (external_policy_cache_load_result.status != policy::LOAD_RESULT_SUCCESS) {
     return default_cached_policy_load_result;
+  }
 
   // If default key is missing or not matches the external one, enable key
   // rotation mode to re-fetch public key again.
@@ -150,18 +191,25 @@ MachineLevelUserCloudPolicyStore::MaybeUseExternalCachedPolicies(
     external_policy_cache_load_result.doing_key_rotation = true;
   }
 
-  if (default_cached_policy_load_result.status != policy::LOAD_RESULT_SUCCESS)
+  if (default_cached_policy_load_result.status != policy::LOAD_RESULT_SUCCESS) {
     return external_policy_cache_load_result;
+  }
 
-  enterprise_management::PolicyData default_data;
-  enterprise_management::PolicyData external_data;
+  em::PolicyData default_data;
+  em::PolicyData external_data;
   if (default_data.ParseFromString(
           default_cached_policy_load_result.policy.policy_data()) &&
       external_data.ParseFromString(
           external_policy_cache_load_result.policy.policy_data()) &&
       external_data.timestamp() > default_data.timestamp()) {
+    external_policy_cache_load_result.fallback =
+        std::make_unique<PolicyLoadResult>(
+            std::move(default_cached_policy_load_result));
     return external_policy_cache_load_result;
   }
+  default_cached_policy_load_result.fallback =
+      std::make_unique<PolicyLoadResult>(
+          std::move(external_policy_cache_load_result));
   return default_cached_policy_load_result;
 }
 
@@ -171,11 +219,11 @@ PolicyLoadResult MachineLevelUserCloudPolicyStore::LoadExternalCachedPolicies(
     const base::FilePath& policy_info_path) {
   // Loads cached cloud policies by an external provider.
   PolicyLoadResult policy_cache_load_result =
-      DesktopCloudPolicyStore::LoadPolicyFromDisk(policy_cache_path,
-                                                  base::FilePath());
+      DesktopCloudPolicyStore::LoadPolicyFromDisk(
+          policy_cache_path, base::FilePath(), POLICY_SCOPE_MACHINE);
   PolicyLoadResult policy_info_load_result =
-      DesktopCloudPolicyStore::LoadPolicyFromDisk(policy_info_path,
-                                                  base::FilePath());
+      DesktopCloudPolicyStore::LoadPolicyFromDisk(
+          policy_info_path, base::FilePath(), std::nullopt);
 
   // External policy source doesn't provide full components policies data hence
   // browser will rely on the local cache which requires public key to verify
@@ -183,9 +231,12 @@ PolicyLoadResult MachineLevelUserCloudPolicyStore::LoadExternalCachedPolicies(
   // Load the key and signature of the key from Extennal policy info file and
   // use it to verify all Chrome and components policies. The browser will
   // redownload the policeis in case of validation failure.
-  VLOG(1) << (policy_info_load_result.policy.has_new_public_key()
-                  ? "External policy has public key."
-                  : "External policy doesn't have public key.");
+  VLOG_POLICY(1, POLICY_PROCESSING)
+      << "LoadExternalCachedPolicies: " << policy_cache_path << " "
+      << policy_info_path << " "
+      << (policy_info_load_result.policy.has_new_public_key()
+              ? "External policy has public key."
+              : "External policy doesn't have public key.");
   policy_cache_load_result.key.set_signing_key(
       policy_info_load_result.policy.new_public_key());
   policy_cache_load_result.key.set_signing_key_signature(
@@ -196,21 +247,30 @@ PolicyLoadResult MachineLevelUserCloudPolicyStore::LoadExternalCachedPolicies(
   return policy_cache_load_result;
 }
 
-std::unique_ptr<UserCloudPolicyValidator>
+std::unique_ptr<CloudPolicyValidatorBase>
 MachineLevelUserCloudPolicyStore::CreateValidator(
-    std::unique_ptr<enterprise_management::PolicyFetchResponse> policy,
+    std::unique_ptr<em::PolicyFetchResponse> policy_fetch_response,
     CloudPolicyValidatorBase::ValidateTimestampOption option) {
-  auto validator = std::make_unique<UserCloudPolicyValidator>(
-      std::move(policy), background_task_runner());
-  validator->ValidatePolicyType(
-      GetMachineLevelUserCloudPolicyTypeForCurrentOS());
+  std::unique_ptr<CloudPolicyValidatorBase> validator;
+  if (policy_type() == dm_protocol::kChromeMachineLevelUserCloudPolicyType) {
+    validator = std::make_unique<CloudPolicyValidator<em::CloudPolicySettings>>(
+        std::move(policy_fetch_response), background_task_runner());
+  } else if (IsExtensionInstallPolicyType(policy_type())) {
+    validator =
+        std::make_unique<CloudPolicyValidator<em::ExtensionInstallPolicies>>(
+            std::move(policy_fetch_response), background_task_runner());
+  } else {
+    NOTREACHED();
+  }
+  validator->ValidatePolicyType(policy_type());
   validator->ValidateDMToken(machine_dm_token_.value(),
                              CloudPolicyValidatorBase::DM_TOKEN_REQUIRED);
   validator->ValidateDeviceId(machine_client_id_,
                               CloudPolicyValidatorBase::DEVICE_ID_REQUIRED);
-  if (policy_) {
-    validator->ValidateTimestamp(base::Time::FromJavaTime(policy_->timestamp()),
-                                 option);
+  if (has_policy()) {
+    validator->ValidateTimestamp(
+        base::Time::FromMillisecondsSinceUnixEpoch(policy()->timestamp()),
+        option);
   }
   validator->ValidatePayload();
   return validator;
@@ -228,20 +288,21 @@ void MachineLevelUserCloudPolicyStore::InitWithoutToken() {
 }
 
 void MachineLevelUserCloudPolicyStore::Validate(
-    std::unique_ptr<enterprise_management::PolicyFetchResponse> policy,
-    std::unique_ptr<enterprise_management::PolicySigningKey> key,
+    std::unique_ptr<em::PolicyFetchResponse> policy,
+    std::unique_ptr<em::PolicySigningKey> key,
     bool validate_in_background,
-    UserCloudPolicyValidator::CompletionCallback callback) {
-  std::unique_ptr<UserCloudPolicyValidator> validator = CreateValidator(
+    CloudPolicyValidatorBase::CompletionCallback callback) {
+  std::unique_ptr<CloudPolicyValidatorBase> validator = CreateValidator(
       std::move(policy), CloudPolicyValidatorBase::TIMESTAMP_VALIDATED);
 
   // Policies cached by the external provider do not require key and signature
   // validation since they are stored in a secure location.
-  if (key)
+  if (key || base::FeatureList::IsEnabled(kAlwaysVerifyPolicyKey)) {
     ValidateKeyAndSignature(validator.get(), key.get(), std::string());
+  }
 
   if (validate_in_background) {
-    UserCloudPolicyValidator::StartValidation(std::move(validator),
+    CloudPolicyValidatorBase::StartValidation(std::move(validator),
                                               std::move(callback));
   } else {
     validator->RunValidation();

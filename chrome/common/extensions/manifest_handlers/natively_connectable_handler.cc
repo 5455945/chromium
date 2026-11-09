@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,14 +14,9 @@
 
 namespace extensions {
 
-namespace {
-
-const NativelyConnectableHosts* GetHosts(const Extension& extension) {
-  return static_cast<const NativelyConnectableHosts*>(
-      extension.GetManifestData(manifest_keys::kNativelyConnectable));
-}
-
-}  // namespace
+// static
+const char* NativelyConnectableHosts::kManifestDataKey =
+    manifest_keys::kNativelyConnectable;
 
 NativelyConnectableHosts::NativelyConnectableHosts() = default;
 NativelyConnectableHosts::~NativelyConnectableHosts() = default;
@@ -30,7 +25,7 @@ NativelyConnectableHosts::~NativelyConnectableHosts() = default;
 const std::set<std::string>*
 NativelyConnectableHosts::GetConnectableNativeMessageHosts(
     const Extension& extension) {
-  const auto* hosts = GetHosts(extension);
+  const auto* hosts = extension.GetManifestData<NativelyConnectableHosts>();
   if (!hosts) {
     return nullptr;
   }
@@ -45,22 +40,20 @@ bool NativelyConnectableHandler::Parse(Extension* extension,
   const base::Value* natively_connectable_hosts = nullptr;
   if (!extension->manifest()->GetList(manifest_keys::kNativelyConnectable,
                                       &natively_connectable_hosts)) {
-    *error = base::ASCIIToUTF16(manifest_errors::kInvalidNativelyConnectable);
+    *error = manifest_errors::kInvalidNativelyConnectable;
     return false;
   }
 
   auto hosts = std::make_unique<NativelyConnectableHosts>();
   for (const auto& host : natively_connectable_hosts->GetList()) {
     if (!host.is_string() || host.GetString().empty()) {
-      *error =
-          base::ASCIIToUTF16(manifest_errors::kInvalidNativelyConnectableValue);
+      *error = manifest_errors::kInvalidNativelyConnectableValue16;
       return false;
     }
     hosts->hosts.insert(host.GetString());
   }
 
-  extension->SetManifestData(manifest_keys::kNativelyConnectable,
-                             std::move(hosts));
+  extension->SetManifestData(std::move(hosts));
   return true;
 }
 

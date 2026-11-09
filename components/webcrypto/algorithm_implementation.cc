@@ -1,11 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/webcrypto/algorithm_implementation.h"
 
+#include "base/notreached.h"
+#include "components/webcrypto/algorithms/asymmetric_key_util.h"
 #include "components/webcrypto/blink_key_handle.h"
 #include "components/webcrypto/status.h"
+#include "crypto/evp.h"
 
 namespace webcrypto {
 
@@ -15,7 +18,7 @@ AlgorithmImplementation::~AlgorithmImplementation() {
 Status AlgorithmImplementation::Encrypt(
     const blink::WebCryptoAlgorithm& algorithm,
     const blink::WebCryptoKey& key,
-    const CryptoData& data,
+    base::span<const uint8_t> data,
     std::vector<uint8_t>* buffer) const {
   return Status::ErrorUnsupported();
 }
@@ -23,14 +26,14 @@ Status AlgorithmImplementation::Encrypt(
 Status AlgorithmImplementation::Decrypt(
     const blink::WebCryptoAlgorithm& algorithm,
     const blink::WebCryptoKey& key,
-    const CryptoData& data,
+    base::span<const uint8_t> data,
     std::vector<uint8_t>* buffer) const {
   return Status::ErrorUnsupported();
 }
 
 Status AlgorithmImplementation::Sign(const blink::WebCryptoAlgorithm& algorithm,
                                      const blink::WebCryptoKey& key,
-                                     const CryptoData& data,
+                                     base::span<const uint8_t> data,
                                      std::vector<uint8_t>* buffer) const {
   return Status::ErrorUnsupported();
 }
@@ -38,15 +41,15 @@ Status AlgorithmImplementation::Sign(const blink::WebCryptoAlgorithm& algorithm,
 Status AlgorithmImplementation::Verify(
     const blink::WebCryptoAlgorithm& algorithm,
     const blink::WebCryptoKey& key,
-    const CryptoData& signature,
-    const CryptoData& data,
+    base::span<const uint8_t> signature,
+    base::span<const uint8_t> data,
     bool* signature_match) const {
   return Status::ErrorUnsupported();
 }
 
 Status AlgorithmImplementation::Digest(
     const blink::WebCryptoAlgorithm& algorithm,
-    const CryptoData& data,
+    base::span<const uint8_t> data,
     std::vector<uint8_t>* buffer) const {
   return Status::ErrorUnsupported();
 }
@@ -62,22 +65,20 @@ Status AlgorithmImplementation::GenerateKey(
 Status AlgorithmImplementation::DeriveBits(
     const blink::WebCryptoAlgorithm& algorithm,
     const blink::WebCryptoKey& base_key,
-    bool has_optional_length_bits,
-    unsigned int optional_length_bits,
+    std::optional<unsigned int> length_bits,
     std::vector<uint8_t>* derived_bytes) const {
   return Status::ErrorUnsupported();
 }
 
 Status AlgorithmImplementation::GetKeyLength(
     const blink::WebCryptoAlgorithm& key_length_algorithm,
-    bool* has_length_bits,
-    unsigned int* length_bits) const {
+    std::optional<unsigned int>* length_bits) const {
   return Status::ErrorUnsupported();
 }
 
 Status AlgorithmImplementation::ImportKey(
     blink::WebCryptoKeyFormat format,
-    const CryptoData& key_data,
+    base::span<const uint8_t> key_data,
     const blink::WebCryptoAlgorithm& algorithm,
     bool extractable,
     blink::WebCryptoKeyUsageMask usages,
@@ -91,11 +92,55 @@ Status AlgorithmImplementation::ExportKey(blink::WebCryptoKeyFormat format,
   return Status::ErrorUnsupported();
 }
 
+Status AlgorithmImplementation::Encapsulate(
+    const blink::WebCryptoAlgorithm& algorithm,
+    const blink::WebCryptoKey& encapsulation_key,
+    std::vector<uint8_t>* out_shared_secret,
+    std::vector<uint8_t>* out_ciphertext) const {
+  return Status::ErrorUnsupported();
+}
+
+Status AlgorithmImplementation::Decapsulate(
+    const blink::WebCryptoAlgorithm& algorithm,
+    const blink::WebCryptoKey& decapsulation_key,
+    base::span<const uint8_t> ciphertext,
+    std::vector<uint8_t>* out_shared_secret) const {
+  return Status::ErrorUnsupported();
+}
+
+Status AlgorithmImplementation::GetPublicKey(
+    const blink::WebCryptoKey& key,
+    blink::WebCryptoKeyUsageMask usages,
+    blink::WebCryptoKey* public_key) const {
+  return Status::ErrorUnsupported();
+}
+
+bool AlgorithmImplementation::Supports(
+    blink::WebCryptoOperation op,
+    const blink::WebCryptoAlgorithm& algorithm,
+    std::optional<unsigned int> length_bits) const {
+  return false;
+}
+
 Status AlgorithmImplementation::SerializeKeyForClone(
     const blink::WebCryptoKey& key,
-    blink::WebVector<uint8_t>* key_data) const {
-  *key_data = GetSerializedKeyData(key);
-  return Status::Success();
+    std::vector<uint8_t>* key_data) const {
+  switch (key.GetType()) {
+    case blink::kWebCryptoKeyTypeSecret:
+      *key_data = GetSymmetricKeyData(key);
+      return Status::Success();
+
+    case blink::kWebCryptoKeyTypePublic: {
+      *key_data = crypto::evp::PublicKeyToBytes(GetEVP_PKEY(key));
+      return Status::Success();
+    }
+
+    case blink::kWebCryptoKeyTypePrivate: {
+      *key_data = crypto::evp::PrivateKeyToBytes(GetEVP_PKEY(key));
+      return Status::Success();
+    }
+  }
+  NOTREACHED();
 }
 
 Status AlgorithmImplementation::DeserializeKeyForClone(
@@ -103,7 +148,7 @@ Status AlgorithmImplementation::DeserializeKeyForClone(
     blink::WebCryptoKeyType type,
     bool extractable,
     blink::WebCryptoKeyUsageMask usages,
-    const CryptoData& key_data,
+    base::span<const uint8_t> key_data,
     blink::WebCryptoKey* key) const {
   return Status::ErrorUnsupported();
 }

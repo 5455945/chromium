@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ std::string GenerateBoundaryString() {
     static constexpr char kCharacters[] =
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     int random_value =
-        base::RandInt(0, static_cast<int>(strlen(kCharacters)) - 1);
+        base::RandIntInclusive(0, static_cast<int>(strlen(kCharacters)) - 1);
     boundary_string += kCharacters[random_value];
   }
   boundary_string += "---";

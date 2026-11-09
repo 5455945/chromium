@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "net/base/ip_endpoint.h"
 #include "net/log/net_log_with_source.h"
 #include "net/socket/stream_socket.h"
@@ -23,6 +23,10 @@ class FakeStreamSocket : public net::StreamSocket {
  public:
   FakeStreamSocket();
   explicit FakeStreamSocket(const net::IPEndPoint& local_address);
+
+  FakeStreamSocket(const FakeStreamSocket&) = delete;
+  FakeStreamSocket& operator=(const FakeStreamSocket&) = delete;
+
   ~FakeStreamSocket() override;
 
   // Sets the peer for this socket.
@@ -51,12 +55,8 @@ class FakeStreamSocket : public net::StreamSocket {
   int GetLocalAddress(net::IPEndPoint* address) const override;
   const net::NetLogWithSource& NetLog() const override;
   bool WasEverUsed() const override;
-  bool WasAlpnNegotiated() const override;
   net::NextProto GetNegotiatedProtocol() const override;
   bool GetSSLInfo(net::SSLInfo* ssl_info) override;
-  void GetConnectionAttempts(net::ConnectionAttempts* out) const override;
-  void ClearConnectionAttempts() override;
-  void AddConnectionAttempts(const net::ConnectionAttempts& attempts) override;
   int64_t GetTotalReceivedBytes() const override;
   void ApplySocketTag(const net::SocketTag& tag) override;
 
@@ -65,11 +65,9 @@ class FakeStreamSocket : public net::StreamSocket {
 
   const net::IPEndPoint local_address_;
   const std::unique_ptr<SocketBuffer> buffer_;
-  FakeStreamSocket* peer_;
+  raw_ptr<FakeStreamSocket> peer_;
   net::NetLogWithSource net_log_;
   bool bad_sender_mode_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeStreamSocket);
 };
 
 }  // namespace chromecast

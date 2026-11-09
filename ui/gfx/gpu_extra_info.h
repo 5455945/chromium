@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,24 +8,15 @@
 #include <string>
 #include <vector>
 
+#include "base/component_export.h"
+#include "build/build_config.h"
+#include "ui/base/ozone_buildflags.h"
 #include "ui/gfx/buffer_types.h"
-#include "ui/gfx/gfx_export.h"
-
-#if defined(USE_OZONE)
-#include "ui/ozone/buildflags.h"
-#if BUILDFLAG(OZONE_PLATFORM_X11)
-#define USE_OZONE_PLATFORM_X11
-#endif
-#endif
-
-#if defined(USE_X11) || defined(USE_OZONE_PLATFORM_X11)
-#include "ui/gfx/x/xproto.h"
-#endif
 
 namespace gfx {
 
 // Specification of a feature that can be enabled/disable in ANGLE
-struct GFX_EXPORT ANGLEFeature {
+struct COMPONENT_EXPORT(GFX) ANGLEFeature {
   ANGLEFeature();
   ANGLEFeature(const ANGLEFeature& other);
   ANGLEFeature(ANGLEFeature&& other);
@@ -39,21 +30,12 @@ struct GFX_EXPORT ANGLEFeature {
   // Name of the category that the feature belongs to.
   std::string category;
 
-  // One sentence description of the feature, why it's available.
-  std::string description;
-
-  // Full link to cr/angle bug if applicable.
-  std::string bug;
-
   // Status, can be "enabled" or "disabled".
   std::string status;
-
-  // Condition, contains the condition that set 'status'.
-  std::string condition;
 };
 using ANGLEFeatures = std::vector<ANGLEFeature>;
 
-struct GFX_EXPORT GpuExtraInfo {
+struct COMPONENT_EXPORT(GFX) GpuExtraInfo {
   GpuExtraInfo();
   GpuExtraInfo(const GpuExtraInfo&);
   GpuExtraInfo(GpuExtraInfo&&);
@@ -65,8 +47,8 @@ struct GFX_EXPORT GpuExtraInfo {
   // applicable.
   ANGLEFeatures angle_features;
 
-#if defined(USE_X11) || defined(USE_OZONE_PLATFORM_X11)
-  std::vector<gfx::BufferUsageAndFormat> gpu_memory_buffer_support_x11;
+#if BUILDFLAG(IS_LINUX)
+  bool is_gmb_nv12_supported = false;
 #endif
 };
 

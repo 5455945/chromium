@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,15 @@
 
 #include <stdint.h>
 
+#include <map>
+#include <memory>
+#include <optional>
 #include <set>
 
 #include "base/cancelable_callback.h"
 #include "base/containers/queue.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/supports_user_data.h"
@@ -21,6 +24,8 @@
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/storage_partition_config.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/origin.h"
 
 namespace content {
@@ -34,10 +39,23 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
       public base::SupportsUserData::Data {
  public:
   explicit BrowsingDataRemoverImpl(BrowserContext* browser_context);
+
+  BrowsingDataRemoverImpl(const BrowsingDataRemoverImpl&) = delete;
+  BrowsingDataRemoverImpl& operator=(const BrowsingDataRemoverImpl&) = delete;
+
   ~BrowsingDataRemoverImpl() override;
 
   // Is the BrowsingDataRemoverImpl currently in the process of removing data?
   bool IsRemovingForTesting() { return is_removing_; }
+
+  // Removes storage buckets of a storage key.
+  // If |storage_partition_config| is null, the operation will take place
+  // on the profile's default storage partition.
+  void RemoveStorageBucketsAndReply(
+      const std::optional<StoragePartitionConfig> storage_partition_config,
+      const blink::StorageKey& storage_key,
+      const std::set<std::string>& storage_buckets,
+      base::OnceClosure callback);
 
   // BrowsingDataRemover implementation:
   void SetEmbedderDelegate(
@@ -50,6 +68,12 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
               const base::Time& delete_end,
               uint64_t remove_mask,
               uint64_t origin_type_mask) override;
+  void RemoveWithFilter(
+      const base::Time& delete_begin,
+      const base::Time& delete_end,
+      uint64_t remove_mask,
+      uint64_t origin_type_mask,
+      std::unique_ptr<BrowsingDataFilterBuilder> filter_builder) override;
   void RemoveAndReply(const base::Time& delete_begin,
                       const base::Time& delete_end,
                       uint64_t remove_mask,
@@ -73,9 +97,17 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   const base::Time& GetLastUsedBeginTimeForTesting() override;
   uint64_t GetLastUsedRemovalMaskForTesting() override;
   uint64_t GetLastUsedOriginTypeMaskForTesting() override;
+  std::optional<StoragePartitionConfig>
+  GetLastUsedStoragePartitionConfigForTesting() override;
+  uint64_t GetPendingTaskCountForTesting() override;
+
+  void ClearClientHintCacheAndReply(const url::Origin& origin,
+                                    base::OnceClosure callback);
 
   // Used for testing.
-  void OverrideStoragePartitionForTesting(StoragePartition* storage_partition);
+  void OverrideStoragePartitionForTesting(
+      const StoragePartitionConfig& storage_partition_config,
+      StoragePartition* storage_partition);
 
  protected:
   // A common reduction of all public Remove[WithFilter][AndReply] methods.
@@ -94,7 +126,7 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
 
   // For debugging purposes. Please add new deletion tasks at the end.
   // This enum is recorded in a histogram, so don't change or reuse ids.
-  // Entries must also be added to BrowsingDataRemoverTasks in enums.xml.
+  // LINT.IfChange(TracingDataType)
   enum class TracingDataType {
     kSynchronous = 1,
     kEmbedderData = 2,
@@ -108,10 +140,21 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
     kCodeCaches = 10,
     kNetworkErrorLogging = 11,
     kTrustTokens = 12,
-    kConversions = 13,
-    kDeferredCookies = 14,
-    kMaxValue = kDeferredCookies,
+    // Deprecated: kConversions = 13,
+    // Deprecated: kDeferredCookies = 14,
+    // Deprecated: kSharedStorage = 15,
+    kPreflightCache = 16,
+    kSharedDictionary = 17,
+    kPrefetchCache = 18,
+    kPrerenderCache = 19,
+    kDownloads = 20,
+    kMaxValue = kDownloads,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/history/enums.xml:BrowsingDataRemoverTasks)
+
+  // Returns the suffix for the History.ClearBrowsingData.Duration.Task.{Task}
+  // histogram
+  const char* GetHistogramSuffix(TracingDataType task);
 
   // Represents a single removal task. Contains all parameters needed to execute
   // it and a pointer to the observer that added it. CONTENT_EXPORTed to be
@@ -135,7 +178,7 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
     uint64_t remove_mask;
     uint64_t origin_type_mask;
     std::unique_ptr<BrowsingDataFilterBuilder> filter_builder;
-    std::vector<Observer*> observers;
+    std::vector<raw_ptr<Observer, VectorExperimental>> observers;
     base::TimeTicks task_started;
   };
 
@@ -154,7 +197,7 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   // should be removed (protected, unprotected, or both).
   // TODO(ttr314): Remove "(where implemented yet)" constraint above once
   // crbug.com/113621 is done.
-  // TODO(crbug.com/589586): Support all backends w/ origin filter.
+  // TODO(crbug.com/40458377): Support all backends w/ origin filter.
   void RemoveImpl(const base::Time& delete_begin,
                   const base::Time& delete_end,
                   uint64_t remove_mask,
@@ -169,7 +212,10 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
 
   // Called by the closures returned by CreateTaskCompletionClosure().
   // Checks if all tasks have completed, and if so, calls Notify().
-  void OnTaskComplete(TracingDataType data_type);
+  void OnTaskComplete(TracingDataType data_type, base::TimeTicks started);
+
+  // Called when the storage buckets data has been removed.
+  void DidRemoveStorageBuckets(base::OnceClosure callback);
 
   // Increments the number of pending tasks by one, and returns a OnceClosure
   // that calls OnTaskComplete(). The Remover is complete once all the closures
@@ -185,17 +231,23 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   // Records unfinished tasks from |pending_sub_tasks_| after a delay.
   void RecordUnfinishedSubTasks();
 
-  StoragePartition* GetStoragePartition();
+  StoragePartition* GetStoragePartition(
+      std::optional<StoragePartitionConfig> storage_partition_config);
+
+  // This does the actual clearing of the client hint cache for the provided
+  // origin. It should be invoked only via ClearClientHintCacheAndReply.
+  void ClearClientHintCacheAndReplyImpl(const url::Origin& origin,
+                                        base::OnceClosure callback);
 
   // Like GetWeakPtr(), but returns a weak pointer to BrowsingDataRemoverImpl
   // for internal purposes.
   base::WeakPtr<BrowsingDataRemoverImpl> GetWeakPtr();
 
   // The browser context we're to remove from.
-  BrowserContext* browser_context_;
+  raw_ptr<BrowserContext> browser_context_;
 
   // A delegate to delete the embedder-specific data. Owned by the embedder.
-  BrowsingDataRemoverDelegate* embedder_delegate_;
+  raw_ptr<BrowsingDataRemoverDelegate, DanglingUntriaged> embedder_delegate_;
 
   // Start time to delete from.
   base::Time delete_begin_;
@@ -209,7 +261,10 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   // From which types of origins should we remove data?
   uint64_t origin_type_mask_ = 0;
 
-  std::vector<std::string> domains_for_deferred_cookie_deletion_;
+  // The StoragePartition from which data should be removed, or the default
+  // if absent.
+  std::optional<StoragePartitionConfig> storage_partition_config_ =
+      std::nullopt;
 
   // True if Remove has been invoked.
   bool is_removing_;
@@ -235,12 +290,11 @@ class CONTENT_EXPORT BrowsingDataRemoverImpl
   // Observers of the global state and individual tasks.
   base::ObserverList<Observer, true>::Unchecked observer_list_;
 
-  // We do not own this.
-  StoragePartition* storage_partition_for_testing_;
+  // We do not own the StoragePartitions.
+  std::map<StoragePartitionConfig, raw_ptr<StoragePartition>>
+      storage_partitions_for_testing_;
 
   base::WeakPtrFactory<BrowsingDataRemoverImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BrowsingDataRemoverImpl);
 };
 
 }  // namespace content

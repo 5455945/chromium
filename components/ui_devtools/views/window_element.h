@@ -1,16 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_UI_DEVTOOLS_VIEWS_WINDOW_ELEMENT_H_
 #define COMPONENTS_UI_DEVTOOLS_VIEWS_WINDOW_ELEMENT_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/ui_devtools/views/ui_element_with_metadata.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui_devtools {
 
@@ -44,6 +44,8 @@ class WindowElement : public aura::WindowObserver,
   std::vector<std::string> GetAttributes() const override;
   std::pair<gfx::NativeWindow, gfx::Rect> GetNodeWindowAndScreenBounds()
       const override;
+  gfx::Rect GetNodeBoundsInScreen() const override;
+  double GetDeviceScaleFactor() const override;
   bool DispatchKeyEvent(protocol::DOM::KeyEvent* event) override;
 
   static aura::Window* From(const UIElement* element);
@@ -55,7 +57,7 @@ class WindowElement : public aura::WindowObserver,
   ui::Layer* GetLayer() const override;
 
  private:
-  aura::Window* window_;
+  raw_ptr<aura::Window> window_;
 };
 
 }  // namespace ui_devtools

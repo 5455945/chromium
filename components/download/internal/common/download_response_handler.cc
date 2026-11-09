@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,14 @@
 
 #include <memory>
 
+#include "base/byte_size.h"
 #include "base/metrics/histogram_functions.h"
 #include "components/download/public/common/download_stats.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "components/download/public/common/download_utils.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 
 namespace download {
@@ -40,10 +43,19 @@ mojom::NetworkRequestStatus ConvertInterruptReasonToMojoNetworkRequestStatus(
       return mojom::NetworkRequestStatus::USER_CANCELED;
     case DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED:
       return mojom::NetworkRequestStatus::NETWORK_FAILED;
+    case DOWNLOAD_INTERRUPT_REASON_FILE_TRANSIENT_ERROR:
+      return mojom::NetworkRequestStatus::NETWORK_FAILED;
     default:
       NOTREACHED();
-      return mojom::NetworkRequestStatus::NETWORK_FAILED;
   }
+}
+
+base::ByteSize ComputeUrlChainByteSize(const std::vector<GURL>& url_chain) {
+  base::ByteSize size;
+  for (const GURL& url : url_chain) {
+    size += base::ByteSize(url.EstimateMemoryUsage());
+  }
+  return size;
 }
 
 }  // namespace
@@ -59,10 +71,13 @@ DownloadResponseHandler::DownloadResponseHandler(
     const DownloadUrlParameters::RequestHeadersType& request_headers,
     const std::string& request_origin,
     DownloadSource download_source,
+    bool require_safety_checks,
     std::vector<GURL> url_chain,
-    bool is_background_mode)
+    bool is_background_mode,
+    ::network::mojom::RequestMode fetch_request_mode)
     : delegate_(delegate),
       started_(false),
+      first_origin_(url::Origin::Create(resource_request->url)),
       save_info_(std::move(save_info)),
       url_chain_(std::move(url_chain)),
       method_(resource_request->method),
@@ -71,13 +86,15 @@ DownloadResponseHandler::DownloadResponseHandler(
       is_transient_(is_transient),
       fetch_error_body_(fetch_error_body),
       cross_origin_redirects_(cross_origin_redirects),
-      first_origin_(url::Origin::Create(resource_request->url)),
       request_headers_(request_headers),
       request_origin_(request_origin),
       download_source_(download_source),
       has_strong_validators_(false),
+      credentials_mode_(resource_request->credentials_mode),
+      fetch_request_mode_(fetch_request_mode),
       is_partial_request_(save_info_->offset > 0),
       completed_(false),
+      require_safety_checks_(require_safety_checks),
       abort_reason_(DOWNLOAD_INTERRUPT_REASON_NONE),
       is_background_mode_(is_background_mode) {
   if (!is_parallel_request) {
@@ -85,6 +102,16 @@ DownloadResponseHandler::DownloadResponseHandler(
   }
   if (resource_request->request_initiator.has_value())
     request_initiator_ = resource_request->request_initiator;
+
+  if (resource_request->trusted_params)
+    isolation_info_ = resource_request->trusted_params->isolation_info;
+
+  base::UmaHistogramCounts1000(
+      "Download.Memory.UrlChainLength.CreateResponseHandler",
+      url_chain_.size());
+  base::UmaHistogramMemoryKB(
+      "Download.Memory.UrlChainSizeKb.CreateResponseHandler",
+      ComputeUrlChainByteSize(url_chain_));
 }
 
 DownloadResponseHandler::~DownloadResponseHandler() = default;
@@ -93,9 +120,12 @@ void DownloadResponseHandler::OnReceiveEarlyHints(
     network::mojom::EarlyHintsPtr early_hints) {}
 
 void DownloadResponseHandler::OnReceiveResponse(
-    network::mojom::URLResponseHeadPtr head) {
+    network::mojom::URLResponseHeadPtr head,
+    mojo::ScopedDataPipeConsumerHandle body,
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   create_info_ = CreateDownloadCreateInfo(*head);
   cert_status_ = head->cert_status;
+  fetched_via_service_worker_ = head->was_fetched_via_service_worker;
 
   // TODO(xingliu): Do not use http cache.
   if (head->headers) {
@@ -108,22 +138,36 @@ void DownloadResponseHandler::OnReceiveResponse(
   // suggested name for the security origin of the downlaod URL. However, this
   // assumption doesn't hold if there were cross origin redirects. Therefore,
   // clear the suggested_name for such requests.
-  if (request_initiator_.has_value() &&
+  if (create_info_->request_initiator.has_value() &&
       !create_info_->url_chain.back().SchemeIsBlob() &&
       !create_info_->url_chain.back().SchemeIs(url::kAboutScheme) &&
       !create_info_->url_chain.back().SchemeIs(url::kDataScheme) &&
-      request_initiator_.value() !=
+      create_info_->request_initiator.value() !=
           url::Origin::Create(create_info_->url_chain.back())) {
     create_info_->save_info->suggested_name.clear();
   }
 
   if (create_info_->result != DOWNLOAD_INTERRUPT_REASON_NONE)
     OnResponseStarted(mojom::DownloadStreamHandlePtr());
+
+  if (started_)
+    return;
+
+  mojom::DownloadStreamHandlePtr stream_handle =
+      mojom::DownloadStreamHandle::New();
+  stream_handle->stream = std::move(body);
+  stream_handle->client_receiver = client_remote_.BindNewPipeAndPassReceiver();
+  OnResponseStarted(std::move(stream_handle));
 }
 
 std::unique_ptr<DownloadCreateInfo>
 DownloadResponseHandler::CreateDownloadCreateInfo(
     const network::mojom::URLResponseHead& head) {
+  // This method consumes `save_info_` and other members. Check that it isn't
+  // called more than once.
+  CHECK(save_info_);
+  CHECK(!create_info_);
+
   auto create_info = std::make_unique<DownloadCreateInfo>(
       base::Time::Now(), std::move(save_info_));
 
@@ -133,24 +177,36 @@ DownloadResponseHandler::CreateDownloadCreateInfo(
                 *head.headers, create_info->save_info.get(), fetch_error_body_)
           : DOWNLOAD_INTERRUPT_REASON_NONE;
 
+  base::UmaHistogramCounts1000(
+      "Download.Memory.UrlChainLength.CreateDownloadCreateInfo",
+      url_chain_.size());
+  base::UmaHistogramMemoryKB(
+      "Download.Memory.UrlChainSizeKb.CreateDownloadCreateInfo",
+      ComputeUrlChainByteSize(url_chain_));
+
   create_info->total_bytes = head.content_length > 0 ? head.content_length : 0;
   create_info->result = result;
   if (result == DOWNLOAD_INTERRUPT_REASON_NONE)
     create_info->remote_address = head.remote_endpoint.ToStringWithoutPort();
-  create_info->method = method_;
+  create_info->method = std::move(method_);
   create_info->connection_info = head.connection_info;
-  create_info->url_chain = url_chain_;
-  create_info->referrer_url = referrer_;
+  create_info->url_chain = std::move(url_chain_);
+  create_info->referrer_url = std::move(referrer_);
   create_info->referrer_policy = referrer_policy_;
   create_info->transient = is_transient_;
   create_info->response_headers = head.headers;
   create_info->offset = create_info->save_info->offset;
   create_info->mime_type = head.mime_type;
   create_info->fetch_error_body = fetch_error_body_;
-  create_info->request_headers = request_headers_;
-  create_info->request_origin = request_origin_;
+  create_info->request_headers = std::move(request_headers_);
+  create_info->request_origin = std::move(request_origin_);
   create_info->download_source = download_source_;
-  create_info->request_initiator = request_initiator_;
+  create_info->request_initiator = std::move(request_initiator_);
+  create_info->credentials_mode = credentials_mode_;
+  create_info->fetch_request_mode = fetch_request_mode_;
+  create_info->isolation_info = std::move(isolation_info_);
+  create_info->require_safety_checks = require_safety_checks_;
+  create_info->fetched_via_service_worker = head.was_fetched_via_service_worker;
 
   HandleResponseHeaders(head.headers.get(), create_info.get());
   return create_info;
@@ -159,6 +215,16 @@ DownloadResponseHandler::CreateDownloadCreateInfo(
 void DownloadResponseHandler::OnReceiveRedirect(
     const net::RedirectInfo& redirect_info,
     network::mojom::URLResponseHeadPtr head) {
+  // Only responses to HTTP(S) requests can produce redirects. Loaders for
+  // local schemes such as blob: and data: never issue them, so treat a
+  // redirect while the current request URL is not HTTP(S) as invalid rather
+  // than appending the target URL to the download's URL chain.
+  if (url_chain_.empty() || !url_chain_.back().SchemeIsHTTPOrHTTPS()) {
+    abort_reason_ = DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST;
+    OnComplete(network::URLLoaderCompletionStatus(net::OK));
+    return;
+  }
+
   // Check if redirect URL is web safe.
   if (delegate_ && !delegate_->CanRequestURL(redirect_info.new_url)) {
     abort_reason_ = DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST;
@@ -166,8 +232,7 @@ void DownloadResponseHandler::OnReceiveRedirect(
     return;
   }
 
-  if (!first_origin_.IsSameOriginWith(
-          url::Origin::Create(redirect_info.new_url))) {
+  if (!first_origin_.IsSameOriginWith(redirect_info.new_url)) {
     // Cross-origin redirect.
     switch (cross_origin_redirects_) {
       case network::mojom::RedirectMode::kFollow:
@@ -212,22 +277,10 @@ void DownloadResponseHandler::OnUploadProgress(
   std::move(callback).Run();
 }
 
-void DownloadResponseHandler::OnReceiveCachedMetadata(
-    mojo_base::BigBuffer data) {}
-
 void DownloadResponseHandler::OnTransferSizeUpdated(
-    int32_t transfer_size_diff) {}
-
-void DownloadResponseHandler::OnStartLoadingResponseBody(
-    mojo::ScopedDataPipeConsumerHandle body) {
-  if (started_)
-    return;
-
-  mojom::DownloadStreamHandlePtr stream_handle =
-      mojom::DownloadStreamHandle::New();
-  stream_handle->stream = std::move(body);
-  stream_handle->client_receiver = client_remote_.BindNewPipeAndPassReceiver();
-  OnResponseStarted(std::move(stream_handle));
+    int32_t transfer_size_diff) {
+  network::RecordOnTransferSizeUpdatedUMA(
+      network::OnTransferSizeUpdatedFrom::kDownloadResponseHandler);
 }
 
 void DownloadResponseHandler::OnComplete(
@@ -238,7 +291,8 @@ void DownloadResponseHandler::OnComplete(
   completed_ = true;
   DownloadInterruptReason reason = HandleRequestCompletionStatus(
       static_cast<net::Error>(status.error_code), has_strong_validators_,
-      cert_status_, is_partial_request_, abort_reason_);
+      cert_status_, is_partial_request_, abort_reason_,
+      fetched_via_service_worker_);
 
   if (client_remote_) {
     client_remote_->OnStreamCompleted(

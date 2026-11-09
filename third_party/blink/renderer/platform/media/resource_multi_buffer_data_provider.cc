@@ -1,41 +1,65 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/media/resource_multi_buffer_data_provider.h"
 
 #include <stddef.h>
+
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/bits.h"
-#include "base/callback_helpers.h"
+#include "base/feature_list.h"
 #include "base/location.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/notimplemented.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "media/base/media_switches.h"
+#include "net/base/net_errors.h"
 #include "net/http/http_byte_range.h"
 #include "net/http/http_request_headers.h"
 #include "services/network/public/cpp/cors/cors.h"
-#include "third_party/blink/public/common/loader/previews_state.h"
-#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
-#include "third_party/blink/public/platform/media/resource_fetch_context.h"
-#include "third_party/blink/public/platform/media/url_index.h"
+#include "services/network/public/mojom/cors.mojom-blink.h"
+#include "services/network/public/mojom/fetch_api.mojom-blink.h"
+#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/web_network_state_notifier.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_error.h"
 #include "third_party/blink/public/platform/web_url_response.h"
 #include "third_party/blink/public/web/web_associated_url_loader.h"
 #include "third_party/blink/renderer/platform/media/cache_util.h"
+#include "third_party/blink/renderer/platform/media/resource_fetch_context.h"
+#include "third_party/blink/renderer/platform/media/url_index.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
-using blink::WebAssociatedURLLoader;
-using blink::WebString;
-using blink::WebURLError;
-using blink::WebURLRequest;
-using blink::WebURLResponse;
+namespace blink {
 
-namespace media {
+namespace {
+
+ResourceMultiBufferDataProvider::RedirectState GetInitialRedirectState(
+    const UrlData& url_data) {
+  return {
+      .max_origin_relation =
+          net::GetOriginRelation(GURL(url_data.request_url()),
+                                 url_data.security_origin()->ToUrlOrigin()),
+      .service_worker_mode = url_data.service_worker_mode(),
+  };
+}
+
+}  // namespace
+
+// Defers Accept-Encoding injection to the network layer for media range
+// requests so service workers run before the user-agent header is added.
+// TODO(crbug.com/510987448): Remove this kill switch after the new behavior has
+// shipped to stable without regressions.
+BASE_FEATURE(kDeferMediaAcceptEncodingInjection,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // The number of milliseconds to wait before retrying a failed load.
 const int kLoaderFailedRetryDelayMs = 250;
@@ -63,77 +87,91 @@ ResourceMultiBufferDataProvider::ResourceMultiBufferDataProvider(
       url_data_(url_data),
       retries_(0),
       cors_mode_(url_data->cors_mode()),
-      origin_(url_data->url().GetOrigin()),
+      redirect_state_(GetInitialRedirectState(*url_data)),
       is_client_audio_element_(is_client_audio_element),
       task_runner_(std::move(task_runner)) {
   DCHECK(url_data_) << " pos = " << pos;
   DCHECK_GE(pos, 0);
 }
 
-ResourceMultiBufferDataProvider::~ResourceMultiBufferDataProvider() = default;
+ResourceMultiBufferDataProvider::~ResourceMultiBufferDataProvider() {
+  base::UmaHistogramCustomCounts(
+      "Media.Network.TotalBytesReceived.SRC",
+      base::saturated_cast<int>(total_bytes_received_), 1024, 1073741824, 100);
+}
 
 void ResourceMultiBufferDataProvider::Start() {
   DVLOG(1) << __func__ << " @ " << byte_pos();
+  redirect_state_ = GetInitialRedirectState(*url_data_);
+
   if (url_data_->length() > 0 && byte_pos() >= url_data_->length()) {
     task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&ResourceMultiBufferDataProvider::Terminate,
-                                  weak_factory_.GetWeakPtr()));
+        FROM_HERE, blink::BindOnce(&ResourceMultiBufferDataProvider::Terminate,
+                                   weak_factory_.GetWeakPtr()));
     return;
   }
 
   // Prepare the request.
-  WebURLRequest request(url_data_->url());
-  request.SetRequestContext(is_client_audio_element_
-                                ? blink::mojom::RequestContextType::AUDIO
-                                : blink::mojom::RequestContextType::VIDEO);
-  request.SetRequestDestination(
-      is_client_audio_element_ ? network::mojom::RequestDestination::kAudio
-                               : network::mojom::RequestDestination::kVideo);
-  request.SetHttpHeaderField(
-      WebString::FromUTF8(net::HttpRequestHeaders::kRange),
-      WebString::FromUTF8(
-          net::HttpByteRange::RightUnbounded(byte_pos()).GetHeaderValue()));
-
-  if (url_data_->length() == kPositionNotSpecified &&
-      url_data_->CachedSize() == 0 && url_data_->BytesReadFromCache() == 0 &&
-      blink::WebNetworkStateNotifier::SaveDataEnabled() &&
-      (url_data_->url().SchemeIs(url::kHttpScheme) ||
-       url_data_->url().SchemeIs(url::kHttpsScheme))) {
-    // This lets the data reduction proxy know that we don't have any previously
-    // cached data for this resource. We can only send it if this is the first
-    // request for this resource.
-    request.SetPreviewsState(request.GetPreviewsState() |
-                             blink::PreviewsTypes::kSrcVideoRedirectOn);
+  WebURLRequest request(url_data_->request_url());
+  if (url_data_->service_worker_mode() == UrlData::ServiceWorkerMode::kSkip) {
+    request.SetSkipServiceWorker(true);
   }
+  request.SetRequestContext(is_client_audio_element_
+                                ? mojom::blink::RequestContextType::AUDIO
+                                : mojom::blink::RequestContextType::VIDEO);
+  request.SetRequestDestination(
+      is_client_audio_element_
+          ? network::mojom::blink::RequestDestination::kAudio
+          : network::mojom::blink::RequestDestination::kVideo);
+
+  request.SetHttpHeaderField(
+      WebString::FromUtf8(net::HttpRequestHeaders::kRange),
+      WebString::FromUtf8(
+          net::HttpByteRange::RightUnbounded(byte_pos()).GetHeaderValue()));
 
   // We would like to send an if-match header with the request to
   // tell the remote server that we really can't handle files other
   // than the one we already started playing. Unfortunately, doing
   // so will disable the http cache, and possibly other proxies
-  // along the way. See crbug/504194 and crbug/689989 for more information.
+  // along the way. See crbug.com/41185060 and crbug.com/41300485 for more
+  // information.
 
-  // Disable compression, compression for audio/video doesn't make sense...
-  request.SetHttpHeaderField(
-      WebString::FromUTF8(net::HttpRequestHeaders::kAcceptEncoding),
-      WebString::FromUTF8("identity;q=1, *;q=0"));
+  if (url_data_->encoding_mode() ==
+      media::DataSource::EncodingMode::kAllowGzip) {
+    // Override range requests' default identity encoding for manifests or
+    // when explicitly requested.
+    request.SetHttpHeaderField(
+        WebString::FromUtf8(net::HttpRequestHeaders::kAcceptEncoding),
+        WebString("gzip, identity;q=1, *;q=0"));
+  } else if (!base::FeatureList::IsEnabled(
+                 kDeferMediaAcceptEncodingInjection)) {
+    request.SetHttpHeaderField(
+        WebString::FromUtf8(net::HttpRequestHeaders::kAcceptEncoding),
+        WebString("identity;q=1, *;q=0"));
+  }
 
   // Start resource loading.
-  blink::WebAssociatedURLLoaderOptions options;
+  WebAssociatedURLLoaderOptions options;
   if (url_data_->cors_mode() != UrlData::CORS_UNSPECIFIED) {
     options.expose_all_response_headers = true;
     // The author header set is empty, no preflight should go ahead.
     options.preflight_policy =
-        network::mojom::CorsPreflightPolicy::kPreventPreflight;
+        network::mojom::blink::CorsPreflightPolicy::kPreventPreflight;
 
-    request.SetMode(network::mojom::RequestMode::kCors);
+    request.SetMode(network::mojom::blink::RequestMode::kCors);
     if (url_data_->cors_mode() != UrlData::CORS_USE_CREDENTIALS) {
-      request.SetCredentialsMode(network::mojom::CredentialsMode::kSameOrigin);
+      request.SetCredentialsMode(
+          network::mojom::blink::CredentialsMode::kSameOrigin);
     }
   }
 
-  active_loader_ =
-      url_data_->url_index()->fetch_context()->CreateUrlLoader(options);
-  active_loader_->LoadAsynchronously(request, this);
+  if (auto url_index = url_data_->url_index()) {
+    active_loader_ = url_index->fetch_context()->CreateUrlLoader(options);
+    active_loader_->LoadAsynchronously(request, this);
+  } else {
+    task_runner_->PostTask(FROM_HERE,
+                           blink::BindOnce(&UrlData::Fail, url_data_));
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -147,8 +185,9 @@ bool ResourceMultiBufferDataProvider::Available() const {
     return false;
   if (fifo_.back()->end_of_stream())
     return true;
-  if (fifo_.front()->data_size() == block_size())
+  if (fifo_.front()->size() == static_cast<size_t>(block_size())) {
     return true;
+  }
   return false;
 }
 
@@ -157,49 +196,71 @@ int64_t ResourceMultiBufferDataProvider::AvailableBytes() const {
   for (const auto& i : fifo_) {
     if (i->end_of_stream())
       break;
-    bytes += i->data_size();
+    bytes += i->size();
   }
   return bytes;
 }
 
-scoped_refptr<DataBuffer> ResourceMultiBufferDataProvider::Read() {
+scoped_refptr<media::DataBuffer> ResourceMultiBufferDataProvider::Read() {
   DCHECK(Available());
-  scoped_refptr<DataBuffer> ret = fifo_.front();
+  scoped_refptr<media::DataBuffer> ret = fifo_.front();
   fifo_.pop_front();
   ++pos_;
   return ret;
 }
 
 void ResourceMultiBufferDataProvider::SetDeferred(bool deferred) {
-  if (active_loader_)
+  if (active_loader_) {
     active_loader_->SetDefersLoading(deferred);
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////
 // WebAssociatedURLLoaderClient implementation.
 
 bool ResourceMultiBufferDataProvider::WillFollowRedirect(
-    const blink::WebURL& new_url,
+    const WebURL& new_url,
     const WebURLResponse& redirect_response) {
   DVLOG(1) << "willFollowRedirect";
-  redirects_to_ = new_url;
-  url_data_->set_valid_until(base::Time::Now() +
-                             GetCacheValidUntil(redirect_response));
-
-  // This test is vital for security!
-  if (cors_mode_ == UrlData::CORS_UNSPECIFIED) {
-    // We allow the redirect if the origin is the same.
-    if (origin_ != redirects_to_.GetOrigin()) {
-      // We also allow the redirect if we don't have any data in the
-      // cache, as that means that no dangerous data mixing can occur.
-      if (url_data_->multibuffer()->map().empty() && fifo_.empty())
-        return true;
-
+  const KURL& previous_url = redirect_state_.redirects_to.IsEmpty()
+                                 ? url_data_->request_url()
+                                 : redirect_state_.redirects_to;
+  if (!SecurityOrigin::AreSameOrigin(previous_url, new_url)) {
+    // This test is vital for security! In no-cors mode, if `url_data_` did not
+    // follow a cross-origin redirect on its initial response and already has a
+    // pinned `data_origin()` or buffered data, reject any subsequent
+    // cross-origin redirect immediately before following it or updating
+    // `valid_until_`.
+    const bool has_buffered_data =
+        !url_data_->multibuffer()->map().empty() || !fifo_.empty();
+    if (cors_mode_ == UrlData::CORS_UNSPECIFIED &&
+        !url_data_->has_cross_origin_redirect() &&
+        (url_data_->data_origin().has_value() || has_buffered_data)) {
       active_loader_.reset();
       url_data_->Fail();
       return false;  // "this" may be deleted now.
     }
+    redirect_state_.has_cross_origin_redirect = true;
   }
+
+  redirect_state_.redirects_to = new_url;
+  redirect_state_.max_origin_relation = std::max(
+      redirect_state_.max_origin_relation,
+      net::GetOriginRelation(GURL(redirect_state_.redirects_to),
+                             url_data_->security_origin()->ToUrlOrigin()));
+  // Matching `ResourceLoader::WillFollowRedirect`, bypass Service Workers on
+  // retargeted follow-up range requests once any redirect hop was not
+  // generated by a Service Worker, while still allowing Service Workers to
+  // intercept synthetic offline redirects (`Response.redirect(...)`). Gated on
+  // `kDisallowMixedOpaqueMediaResponses` so Finch can roll back Service Worker
+  // range-request changes together if needed.
+  if (!redirect_response.WasFetchedViaServiceWorker() &&
+      base::FeatureList::IsEnabled(media::kDisallowMixedOpaqueMediaResponses)) {
+    redirect_state_.service_worker_mode = UrlData::ServiceWorkerMode::kSkip;
+  }
+
+  url_data_->set_valid_until(base::Time::Now() +
+                             GetCacheValidUntil(redirect_response));
   return true;
 }
 
@@ -235,13 +296,102 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
 #endif
   DCHECK(active_loader_);
 
-  scoped_refptr<UrlData> destination_url_data(url_data_);
-
-  if (!redirects_to_.is_empty()) {
-    destination_url_data = url_data_->url_index()->GetByUrl(
-        redirects_to_, cors_mode_, UrlIndex::kNormal);
-    redirects_to_ = GURL();
+  if (!url_data_->url_index()) {
+    url_data_->Fail();
+    return;  // "this" may be deleted now.
   }
+
+  // Keep a reference to `url_data_` across `GetByUrl()` and `TryInsert()`. If
+  // `UrlIndex` holds the sole reference to `url_data_` and `TryInsert()`
+  // replaces it with a new `UrlData` for the same key, `url_data_` (which owns
+  // `this` via `multibuffer()`) would otherwise be destroyed before ownership
+  // of `this` is transferred below.
+  scoped_refptr<UrlData> old_url_data(url_data_.get());
+  scoped_refptr<UrlData> destination_url_data(url_data_.get());
+
+  if (!redirect_state_.redirects_to.IsEmpty()) {
+    const KURL redirects_to = std::move(redirect_state_.redirects_to);
+    redirect_state_.redirects_to = KURL();
+    const net::OriginRelation final_relation = net::GetOriginRelation(
+        GURL(redirects_to), url_data_->security_origin()->ToUrlOrigin());
+    // Matching `services/network/sec_header_helpers.cc`,
+    // `net/cookies/cookie_util.cc`, and
+    // `CorsURLLoader::CalculateResponseTainting`, a redirect chain that bounces
+    // back closer to `security_origin()`
+    // (`final_relation < max_origin_relation`, e.g. `cross-site ->
+    // same-origin`, `cross-site -> same-site`, or `same-site -> same-origin`),
+    // or a no-cors cross-origin redirect to a target where `security_origin()`
+    // has direct read access (e.g. `GrantUniversalAccess()` or extension host
+    // permissions, where `CorsURLLoader` marks the redirected response
+    // `kOpaque` via `tainted_origin` while a direct follow-up request would be
+    // `kBasic`), would lose its chain relation or tainting on direct follow-up
+    // range requests. Keep such loads unindexed and replay
+    // `old_url_data->request_url()` on follow-up range requests, while
+    // retargeting all normal forward redirects onto `UrlIndex`.
+    const bool must_use_original_url =
+        final_relation < redirect_state_.max_origin_relation ||
+        old_url_data->has_original_request_url() ||
+        (cors_mode_ == UrlData::CORS_UNSPECIFIED &&
+         redirect_state_.has_cross_origin_redirect &&
+         url_data_->security_origin()->CanReadContent(redirects_to));
+    if (must_use_original_url) {
+      if (!old_url_data->has_original_request_url() ||
+          redirects_to != old_url_data->url()) {
+        destination_url_data = url_data_->url_index()->NewUnindexedUrlData(
+            redirects_to, cors_mode_, url_data_->cache_lookup_mode(),
+            url_data_->security_origin(), url_data_->encoding_mode(),
+            old_url_data->service_worker_mode(), old_url_data->request_url());
+      }
+    } else {
+      destination_url_data = url_data_->url_index()->GetByUrl(
+          redirects_to, cors_mode_, url_data_->cache_lookup_mode(),
+          url_data_->security_origin(), url_data_->encoding_mode(),
+          redirect_state_.service_worker_mode);
+    }
+  }
+
+  // Get the response URL since it can differ from the request URL when a
+  // service worker provided the response. Normally we would just use
+  // ResponseUrl(), but ResourceMultiBufferDataProvider disallows mixing
+  // constructed responses (new Response()) and native server responses, even if
+  // they have the same response URL.
+  KURL response_url;
+  if (response.WasFetchedViaServiceWorker()) {
+    was_fetched_via_service_worker_ = true;
+    if (response.HasUrlListViaServiceWorker()) {
+      response_url = response.ResponseUrl();
+    }
+  } else {
+    response_url = response.ResponseUrl();
+  }
+
+  // This test is vital for security! Ensure that both the original UrlData and
+  // any redirect destination UrlData are compatible with the response's origin,
+  // opacity, and redirect state before mutating metadata on
+  // `destination_url_data`, inserting into `UrlIndex`, or merging data across
+  // a redirect. Mid-stream cross-origin redirects on `old_url_data` are
+  // rejected earlier in `WillFollowRedirect()`. We get the response type here
+  // because aborting the loader may change it.
+  const bool destination_has_cross_origin_redirect =
+      destination_url_data->has_original_request_url()
+          ? redirect_state_.has_cross_origin_redirect
+          : false;
+  const bool is_cors_cross_origin =
+      network::cors::IsCorsCrossOriginResponseType(response.GetType()) ||
+      (cors_mode_ == UrlData::CORS_UNSPECIFIED &&
+       destination_has_cross_origin_redirect);
+  if (!old_url_data->CanAcceptDataFrom(
+          response_url, is_cors_cross_origin,
+          redirect_state_.has_cross_origin_redirect) ||
+      !destination_url_data->CanAcceptDataFrom(
+          response_url, is_cors_cross_origin,
+          destination_has_cross_origin_redirect)) {
+    active_loader_.reset();
+    url_data_->Fail();
+    return;  // "this" may be deleted now.
+  }
+  destination_url_data->SetDataOrigin(response_url, is_cors_cross_origin,
+                                      destination_has_cross_origin_redirect);
 
   base::Time last_modified;
   if (base::Time::FromString(
@@ -256,31 +406,30 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
   destination_url_data->set_valid_until(base::Time::Now() +
                                         GetCacheValidUntil(response));
 
-  destination_url_data->set_cacheable(GetReasonsForUncacheability(response) ==
-                                      0);
+  bool cacheable = GetReasonsForUncacheability(response) == 0;
+  destination_url_data->set_cacheable(cacheable);
 
   // Expected content length can be |kPositionNotSpecified|, in that case
   // |content_length_| is not specified and this is a streaming response.
   int64_t content_length = response.ExpectedContentLength();
   bool end_of_file = false;
   bool do_fail = false;
-  // We get the response type here because aborting the loader may change it.
-  const auto response_type = response.GetType();
   bytes_to_discard_ = 0;
 
   // We make a strong assumption that when we reach here we have either
   // received a response from HTTP/HTTPS protocol or the request was
   // successful (in particular range request). So we only verify the partial
   // response for HTTP and HTTPS protocol.
-  if (destination_url_data->url().SchemeIsHTTPOrHTTPS()) {
+  if (destination_url_data->url().ProtocolIsInHttpFamily()) {
     bool partial_response = (response.HttpStatusCode() == kHttpPartialContent);
     bool ok_response = (response.HttpStatusCode() == kHttpOK);
 
     // Check to see whether the server supports byte ranges.
     std::string accept_ranges =
         response.HttpHeaderField("Accept-Ranges").Utf8();
-    if (accept_ranges.find("bytes") != std::string::npos)
+    if (accept_ranges.contains("bytes")) {
       destination_url_data->set_range_supported();
+    }
 
     // If we have verified the partial response and it is correct.
     // It's also possible for a server to support range requests
@@ -288,16 +437,19 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
     if (partial_response &&
         VerifyPartialResponse(response, destination_url_data)) {
       destination_url_data->set_range_supported();
-    } else if (ok_response) {
+    } else if (ok_response &&
+               TrySetLength(destination_url_data, content_length)) {
       // We accept a 200 response for a Range:0- request, trusting the
       // Accept-Ranges header, because Apache thinks that's a reasonable thing
       // to return.
-      destination_url_data->set_length(content_length);
       bytes_to_discard_ = byte_pos();
-    } else if (response.HttpStatusCode() == kHttpRangeNotSatisfiable) {
+    } else if (response.HttpStatusCode() == kHttpRangeNotSatisfiable &&
+               !is_cors_cross_origin) {
       // Unsatisfiable range
       // Really, we should never request a range that doesn't exist, but
-      // if we do, let's handle it in a sane way.
+      // if we do, let's handle it in a sane way. Opaque responses are
+      // excluded so a service-worker-replayed 416 takes the same failure
+      // path as a 206 with a mismatched Content-Range.
       // Note, we can't just call OnDataProviderEvent() here, because
       // url_data_ hasn't been updated to the final destination yet.
       end_of_file = true;
@@ -308,20 +460,20 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
       do_fail = true;
     }
   } else {
-    destination_url_data->set_range_supported();
     if (content_length != kPositionNotSpecified) {
       destination_url_data->set_length(content_length + byte_pos());
     }
   }
 
   if (!do_fail) {
+    destination_url_data->set_passed_timing_allow_origin_check(
+        response.TimingAllowPassed());
     destination_url_data =
         url_data_->url_index()->TryInsert(destination_url_data);
+    CHECK(destination_url_data->CanAcceptDataFrom(
+        response_url, is_cors_cross_origin,
+        destination_has_cross_origin_redirect));
   }
-
-  // This is vital for security!
-  destination_url_data->set_is_cors_cross_origin(
-      network::cors::IsCorsCrossOriginResponseType(response_type));
 
   // Only used for metrics.
   {
@@ -333,14 +485,13 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
       // probably accurate enough for metrics.
       destination_url_data->set_has_access_control();
     }
+
+    destination_url_data->set_mime_type(response.MimeType().Utf8());
   }
 
-  if (destination_url_data != url_data_) {
+  if (destination_url_data != url_data_.get()) {
     // At this point, we've encountered a redirect, or found a better url data
     // instance for the data that we're about to download.
-
-    // First, let's take a ref on the current url data.
-    scoped_refptr<UrlData> old_url_data(url_data_);
     destination_url_data->Use();
 
     // Take ownership of ourselves. (From the multibuffer)
@@ -353,7 +504,14 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
     // Call callback to let upstream users know about the transfer.
     // This will merge the data from the two multibuffers and
     // cause clients to start using the new UrlData.
+    auto weak_this = weak_factory_.GetWeakPtr();
     old_url_data->RedirectTo(destination_url_data);
+    if (!weak_this) {
+      return;  // "this" may be deleted now.
+    }
+    CHECK(destination_url_data->CanAcceptDataFrom(
+        response_url, is_cors_cross_origin,
+        destination_has_cross_origin_redirect));
   }
 
   if (do_fail) {
@@ -361,61 +519,48 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
     return;  // "this" may be deleted now.
   }
 
-  // Get the response URL since it can differ from the request URL when a
-  // service worker provided the response. Normally we would just use
-  // ResponseUrl(), but ResourceMultiBufferDataProvider disallows mixing
-  // constructed responses (new Response()) and native server responses, even if
-  // they have the same response URL.
-  GURL response_url;
-  if (!response.WasFetchedViaServiceWorker() ||
-      response.HasUrlListViaServiceWorker()) {
-    response_url = response.ResponseUrl();
-  }
-
-  // This test is vital for security!
-  if (!url_data_->ValidateDataOrigin(response_url.GetOrigin())) {
-    active_loader_.reset();
-    url_data_->Fail();
-    return;  // "this" may be deleted now.
-  }
-
   if (end_of_file) {
-    fifo_.push_back(DataBuffer::CreateEOSBuffer());
+    fifo_.push_back(media::DataBuffer::CreateEOSBuffer());
     url_data_->multibuffer()->OnDataProviderEvent(this);
   }
 }
 
-void ResourceMultiBufferDataProvider::DidReceiveData(const char* data,
-                                                     int data_length) {
-  DVLOG(1) << "didReceiveData: " << data_length << " bytes";
+void ResourceMultiBufferDataProvider::DidReceiveData(
+    base::span<const char> data) {
+  DVLOG(1) << "didReceiveData: " << data.size() << " bytes";
   DCHECK(!Available());
   DCHECK(active_loader_);
-  DCHECK_GT(data_length, 0);
+  DCHECK_GT(data.size(), 0u);
 
+  total_bytes_received_ += data.size();
+
+  auto bytes_data = base::as_bytes(data);
   if (bytes_to_discard_) {
-    uint64_t tmp = std::min<uint64_t>(bytes_to_discard_, data_length);
-    data_length -= tmp;
-    data += tmp;
-    bytes_to_discard_ -= tmp;
-    if (data_length == 0)
+    const auto discard_length = std::min<size_t>(
+        base::checked_cast<size_t>(bytes_to_discard_), bytes_data.size());
+    bytes_data = bytes_data.subspan(discard_length);
+    bytes_to_discard_ -= discard_length;
+    if (bytes_data.empty()) {
       return;
+    }
   }
 
   // When we receive data, we allow more retries.
   retries_ = 0;
 
-  while (data_length) {
-    if (fifo_.empty() || fifo_.back()->data_size() == block_size()) {
-      fifo_.push_back(new DataBuffer(block_size()));
-      fifo_.back()->set_data_size(0);
+  while (!bytes_data.empty()) {
+    const size_t buffer_size = static_cast<size_t>(block_size());
+    if (fifo_.empty() || fifo_.back()->size() == buffer_size) {
+      fifo_.push_back(base::MakeRefCounted<media::DataBuffer>(buffer_size));
     }
-    int last_block_size = fifo_.back()->data_size();
-    int to_append = std::min<int>(data_length, block_size() - last_block_size);
-    DCHECK_GT(to_append, 0);
-    memcpy(fifo_.back()->writable_data() + last_block_size, data, to_append);
-    data += to_append;
-    fifo_.back()->set_data_size(last_block_size + to_append);
-    data_length -= to_append;
+    const size_t last_block_size = fifo_.back()->size();
+    CHECK_GE(buffer_size, last_block_size);
+    const size_t to_append =
+        std::min(bytes_data.size(), buffer_size - last_block_size);
+    CHECK_GT(to_append, 0u);
+
+    fifo_.back()->Append(bytes_data.first(to_append));
+    bytes_data = bytes_data.subspan(to_append);
   }
 
   url_data_->multibuffer()->OnDataProviderEvent(this);
@@ -423,7 +568,7 @@ void ResourceMultiBufferDataProvider::DidReceiveData(const char* data,
   // Beware, this object might be deleted here.
 }
 
-void ResourceMultiBufferDataProvider::DidDownloadData(uint64_t dataLength) {
+void ResourceMultiBufferDataProvider::DidDownloadData(uint64_t data_length) {
   NOTIMPLEMENTED();
 }
 
@@ -431,6 +576,11 @@ void ResourceMultiBufferDataProvider::DidFinishLoading() {
   DVLOG(1) << "didFinishLoading";
   DCHECK(active_loader_.get());
   DCHECK(!Available());
+
+  if (!url_data_->url_index()) {
+    url_data_->Fail();
+    return;  // "this" may be deleted now.
+  }
 
   // We're done with the loader.
   active_loader_.reset();
@@ -447,9 +597,9 @@ void ResourceMultiBufferDataProvider::DidFinishLoading() {
       retries_++;
       task_runner_->PostDelayedTask(
           FROM_HERE,
-          base::BindOnce(&ResourceMultiBufferDataProvider::Start,
-                         weak_factory_.GetWeakPtr()),
-          base::TimeDelta::FromMilliseconds(kLoaderPartialRetryDelayMs));
+          blink::BindOnce(&ResourceMultiBufferDataProvider::Start,
+                          weak_factory_.GetWeakPtr()),
+          base::Milliseconds(kLoaderPartialRetryDelayMs));
       return;
     } else {
       url_data_->Fail();
@@ -458,11 +608,8 @@ void ResourceMultiBufferDataProvider::DidFinishLoading() {
   }
 
   url_data_->set_length(size);
-  fifo_.push_back(DataBuffer::CreateEOSBuffer());
-
-  if (url_data_->url_index()) {
-    url_data_->url_index()->TryInsert(url_data_);
-  }
+  fifo_.push_back(media::DataBuffer::CreateEOSBuffer());
+  url_data_->url_index()->TryInsert(url_data_.get());
 
   DCHECK(Available());
   url_data_->multibuffer()->OnDataProviderEvent(this);
@@ -475,14 +622,41 @@ void ResourceMultiBufferDataProvider::DidFail(const WebURLError& error) {
   DCHECK(active_loader_.get());
   active_loader_.reset();
 
-  if (retries_ < kMaxRetries && pos_ != 0) {
+  // ORB, Cross-Origin-Resource-Policy / COEP / DIP enforcement
+  // (ERR_BLOCKED_BY_RESPONSE), and web security violations (CORS, LNA, CSP,
+  // etc.) block cross-origin responses. Record this so that the failure is not
+  // distinguishable from other opaque failures (e.g. via error messages exposed
+  // by the media element). These blocks (as well as request-blocked and
+  // certificate errors) are deterministic for a given request, so fail
+  // immediately rather than retrying: a retry can never succeed, and the retry
+  // cadence is observable (e.g. by a service worker counting fetch events),
+  // which would leak whether the cross-origin server answered 206 or 416.
+  if (error.reason() == net::ERR_BLOCKED_BY_ORB ||
+      error.reason() == net::ERR_BLOCKED_BY_RESPONSE ||
+      error.is_web_security_violation()) {
+    url_data_->CrossOriginFail();
+    return;  // "this" may be deleted now.
+  }
+
+  // Service worker responses are not retried on failure, as they are
+  // synthesized or proxied by script and retrying exposes internal buffer
+  // positions via follow-up Range headers.
+  if (was_fetched_via_service_worker_ ||
+      net::IsRequestBlockedError(error.reason()) ||
+      net::IsCertificateError(error.reason()) ||
+      net::IsClientCertificateError(error.reason())) {
+    url_data_->Fail();
+    return;  // "this" may be deleted now.
+  }
+
+  if (url_data_->url_index() && retries_ < kMaxRetries && pos_ != 0) {
     retries_++;
     task_runner_->PostDelayedTask(
         FROM_HERE,
-        base::BindOnce(&ResourceMultiBufferDataProvider::Start,
-                       weak_factory_.GetWeakPtr()),
-        base::TimeDelta::FromMilliseconds(
-            kLoaderFailedRetryDelayMs + kAdditionalDelayPerRetryMs * retries_));
+        blink::BindOnce(&ResourceMultiBufferDataProvider::Start,
+                        weak_factory_.GetWeakPtr()),
+        base::Milliseconds(kLoaderFailedRetryDelayMs +
+                           kAdditionalDelayPerRetryMs * retries_));
   } else {
     // We don't need to continue loading after failure.
     // Note that calling Fail() will most likely delete this object.
@@ -496,8 +670,7 @@ bool ResourceMultiBufferDataProvider::ParseContentRange(
     int64_t* last_byte_position,
     int64_t* instance_size) {
   const char kUpThroughBytesUnit[] = "bytes ";
-  if (!base::StartsWith(content_range_str, kUpThroughBytesUnit,
-                        base::CompareCase::SENSITIVE)) {
+  if (!content_range_str.starts_with(kUpThroughBytesUnit)) {
     return false;
   }
   std::string range_spec =
@@ -535,7 +708,7 @@ bool ResourceMultiBufferDataProvider::ParseContentRange(
 }
 
 void ResourceMultiBufferDataProvider::Terminate() {
-  fifo_.push_back(DataBuffer::CreateEOSBuffer());
+  fifo_.push_back(media::DataBuffer::CreateEOSBuffer());
   url_data_->multibuffer()->OnDataProviderEvent(this);
 }
 
@@ -544,7 +717,7 @@ int64_t ResourceMultiBufferDataProvider::byte_pos() const {
   ret += fifo_.size();
   ret = ret << url_data_->multibuffer()->block_size_shift();
   if (!fifo_.empty()) {
-    ret += fifo_.back()->data_size() - block_size();
+    ret += fifo_.back()->size() - block_size();
   }
   return ret;
 }
@@ -564,8 +737,8 @@ bool ResourceMultiBufferDataProvider::VerifyPartialResponse(
     return false;
   }
 
-  if (url_data->length() == kPositionNotSpecified) {
-    url_data->set_length(instance_size);
+  if (!TrySetLength(url_data, instance_size)) {
+    return false;
   }
 
   if (first_byte_position > byte_pos()) {
@@ -579,4 +752,21 @@ bool ResourceMultiBufferDataProvider::VerifyPartialResponse(
   return true;
 }
 
-}  // namespace media
+bool ResourceMultiBufferDataProvider::TrySetLength(
+    const scoped_refptr<UrlData>& destination_url_data,
+    int64_t length) {
+  // If a previous response already established the resource length on either
+  // the original or destination UrlData, subsequent responses must report the
+  // same total length. Otherwise a service worker could splice a smaller
+  // cross-origin response onto a UrlData whose length was pinned by a larger
+  // resource, causing DidFinishLoading() to retry at the smaller response's
+  // EOF and disclose its size via the follow-up Range header.
+  if (!url_data_->HasCompatibleLength(length) ||
+      !destination_url_data->HasCompatibleLength(length)) {
+    return false;
+  }
+  destination_url_data->set_length(length);
+  return true;
+}
+
+}  // namespace blink

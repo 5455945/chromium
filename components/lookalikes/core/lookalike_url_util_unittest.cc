@@ -1,15 +1,48 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/lookalikes/core/lookalike_url_util.h"
 
-#include "base/bind.h"
+#include <array>
+#include <string_view>
+
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/lookalikes/core/features.h"
-#include "components/reputation/core/safety_tip_test_utils.h"
-#include "components/reputation/core/safety_tips_config.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "components/lookalikes/core/safety_tip_test_utils.h"
+#include "components/lookalikes/core/safety_tips_config.h"
+#include "components/url_formatter/spoof_checks/common_words/common_words_test-inc.cc"
+#include "components/url_formatter/spoof_checks/common_words/common_words_util.h"
+#include "components/url_formatter/spoof_checks/idn_spoof_checker.h"
+#include "components/url_formatter/spoof_checks/top_domains/test_domains_trie.h"
+#include "components/url_formatter/spoof_checks/top_domains/test_top_bucket_domains.h"
+#include "components/version_info/channel.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using lookalikes::ComboSquattingParams;
+using lookalikes::ComboSquattingType;
+using lookalikes::DomainInfo;
+using lookalikes::GetDomainInfo;
+using lookalikes::IsHeuristicEnabledForHostname;
+using lookalikes::LookalikeUrlMatchType;
+using lookalikes::TargetEmbeddingType;
+using version_info::Channel;
+
+namespace {
+// Tests lists for Combo Squatting. Some of these entries are intended to test
+// for various edge cases and aren't realistic for production.
+constexpr std::array<std::string_view, 2> kBrandNames[] = {
+    {"google", "google"},
+    {"youtube", "youtube"},
+    {"sample", "sarnple"},
+    {"example", "exarnple"},
+    {"vices", "vices"}};
+constexpr std::string_view kPopularKeywords[] = {
+    "online", "login", "account", "arnple", "services", "test", "security"};
+const ComboSquattingParams kComboSquattingParams{kBrandNames, kPopularKeywords};
+
+}  // namespace
 
 std::string TargetEmbeddingTypeToString(TargetEmbeddingType type) {
   switch (type) {
@@ -23,7 +56,37 @@ std::string TargetEmbeddingTypeToString(TargetEmbeddingType type) {
   NOTREACHED();
 }
 
-TEST(LookalikeUrlUtilTest, IsEditDistanceAtMostOne) {
+// These tests do not use the production top domain list. This is to avoid
+// having to adjust the tests when the top domain list is updated. Instead,
+// these tests use the data in `test_domains.list` and `common_words_test.gpref`
+// files.
+class LookalikeUrlUtilTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    // Use test top domain lists instead of the actual list.
+    url_formatter::IDNSpoofChecker::HuffmanTrieParams trie_params{
+        url_formatter::kTestTopDomainsHuffmanTree,
+        url_formatter::kTestTopDomainsTrie,
+        url_formatter::kTestTopDomainsTrieBits,
+        url_formatter::kTestTopDomainsRootPosition};
+    url_formatter::IDNSpoofChecker::SetTrieParamsForTesting(trie_params);
+
+    // Use test top bucket domain skeletons instead of the actual list.
+    lookalikes::TopBucketDomainsParams top_bucket_params{
+        test_top_bucket_domains::kTopBucketEditDistanceSkeletons};
+    lookalikes::SetTopBucketDomainsParamsForTesting(top_bucket_params);
+
+    url_formatter::common_words::SetCommonWordDAFSAForTesting(test::kDafsa);
+  }
+
+  void TearDown() override {
+    url_formatter::common_words::ResetCommonWordDAFSAForTesting();
+    lookalikes::ResetTopBucketDomainsParamsForTesting();
+    url_formatter::IDNSpoofChecker::RestoreTrieParamsForTesting();
+  }
+};
+
+TEST_F(LookalikeUrlUtilTest, IsEditDistanceAtMostOne) {
   const struct TestCase {
     const wchar_t* domain;
     const wchar_t* top_domain;
@@ -75,16 +138,16 @@ TEST(LookalikeUrlUtilTest, IsEditDistanceAtMostOne) {
       {L"google.com", L"goooglé.com", false},
   };
   for (const TestCase& test_case : kTestCases) {
-    bool result =
-        IsEditDistanceAtMostOne(base::WideToUTF16(test_case.domain),
-                                base::WideToUTF16(test_case.top_domain));
+    bool result = lookalikes::IsEditDistanceAtMostOne(
+        base::WideToUTF16(test_case.domain),
+        base::WideToUTF16(test_case.top_domain));
     EXPECT_EQ(test_case.expected, result)
         << "when comparing " << test_case.domain << " with "
         << test_case.top_domain;
   }
 }
 
-TEST(LookalikeUrlUtilTest, EditDistanceExcludesCommonFalsePositives) {
+TEST_F(LookalikeUrlUtilTest, EditDistanceExcludesCommonFalsePositives) {
   const struct TestCase {
     const char* domain;
     const char* top_domain;
@@ -142,6 +205,30 @@ TEST(LookalikeUrlUtilTest, EditDistanceExcludesCommonFalsePositives) {
   }
 }
 
+TEST_F(LookalikeUrlUtilTest, CharacterSwapExcludesCommonFalsePositives) {
+  const struct TestCase {
+    const char* domain;
+    const char* top_domain;
+    bool is_likely_false_positive;
+  } kTestCases[] = {
+      {"abcde.com", "abced.com", false},
+      // Only differs by registry:
+      {"abcde.sr", "abcde.rs", true},
+  };
+  for (const TestCase& test_case : kTestCases) {
+    auto navigated =
+        GetDomainInfo(GURL(std::string(url::kHttpsScheme) +
+                           url::kStandardSchemeSeparator + test_case.domain));
+    auto matched = GetDomainInfo(GURL(std::string(url::kHttpsScheme) +
+                                      url::kStandardSchemeSeparator +
+                                      test_case.top_domain));
+    bool result = IsLikelyCharacterSwapFalsePositive(navigated, matched);
+    EXPECT_EQ(test_case.is_likely_false_positive, result)
+        << "when comparing " << test_case.domain << " with "
+        << test_case.top_domain;
+  }
+}
+
 bool IsGoogleScholar(const std::string& hostname) {
   return hostname == "scholar.google.com";
 }
@@ -153,7 +240,39 @@ struct TargetEmbeddingHeuristicTestCase {
   const TargetEmbeddingType expected_type;
 };
 
-TEST(LookalikeUrlUtilTest, TargetEmbedding) {
+TEST_F(LookalikeUrlUtilTest, ShouldBlockBySpoofCheckResult) {
+  EXPECT_FALSE(ShouldBlockBySpoofCheckResult(
+      GetDomainInfo(GURL("https://example.com"))));
+  // ASCII short eTLD+1:
+  EXPECT_FALSE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://e.com"))));
+  EXPECT_FALSE(ShouldBlockBySpoofCheckResult(
+      GetDomainInfo(GURL("https://subdomain.e.com"))));
+  // Unicode single character e2LD:
+  EXPECT_FALSE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://τ.com"))));
+  EXPECT_FALSE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://test.τ.com"))));
+  // Unicode single character e2LD with a unicode registry.
+  EXPECT_FALSE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://τ.рф"))));
+  EXPECT_FALSE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://test.τ.рф"))));
+  // Non-unique hostname:
+  EXPECT_FALSE(ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://τ"))));
+
+  // Multi character e2LD with disallowed characters:
+  EXPECT_TRUE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://ττ.com"))));
+  EXPECT_TRUE(ShouldBlockBySpoofCheckResult(
+      GetDomainInfo(GURL("https://test.ττ.com"))));
+  EXPECT_TRUE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://ττ.рф"))));
+  EXPECT_TRUE(
+      ShouldBlockBySpoofCheckResult(GetDomainInfo(GURL("https://test.ττ.рф"))));
+}
+
+TEST_F(LookalikeUrlUtilTest, TargetEmbeddingTest) {
   const std::vector<DomainInfo> kEngagedSites = {
       GetDomainInfo(GURL("https://highengagement.com")),
       GetDomainInfo(GURL("https://highengagement.inthesubdomain.com")),
@@ -260,6 +379,11 @@ TEST(LookalikeUrlUtilTest, TargetEmbedding) {
       {"foo.highengagement-co-uk.foo.com", "highengagement.co.uk",
        TargetEmbeddingType::kInterstitial},
 
+      // Cross-TLD matches should not trigger, even when they're embedding
+      // another domain, even when using a de-facto public eTLD.
+      {"google.com.mx", "", TargetEmbeddingType::kNone},  // public
+      {"google.com.de", "", TargetEmbeddingType::kNone},  // de-facto public
+
       // Engaged sites should trigger as specifically as possible, and should
       // trigger preferentially to top sites when possible.
       {"foo.highengagement.com.foo.com", "highengagement.com",
@@ -320,8 +444,8 @@ TEST(LookalikeUrlUtilTest, TargetEmbedding) {
       {"example-google.com", "google.com", TargetEmbeddingType::kSafetyTip},
   };
 
-  reputation::InitializeBlankLookalikeAllowlistForTesting();
-  auto* config_proto = reputation::GetSafetyTipsRemoteConfigProto();
+  lookalikes::InitializeBlankLookalikeAllowlistForTesting();
+  auto* config_proto = lookalikes::GetSafetyTipsRemoteConfigProto();
 
   for (auto& test_case : kTestCases) {
     std::string safe_hostname;
@@ -348,14 +472,14 @@ TEST(LookalikeUrlUtilTest, TargetEmbedding) {
   }
 }
 
-TEST(LookalikeUrlUtilTest, TargetEmbeddingIgnoresComponentWordlist) {
+TEST_F(LookalikeUrlUtilTest, TargetEmbeddingIgnoresComponentWordlist) {
   const std::vector<DomainInfo> kEngagedSites = {
       GetDomainInfo(GURL("https://commonword.com")),
       GetDomainInfo(GURL("https://uncommonword.com")),
   };
 
-  reputation::SetSafetyTipAllowlistPatterns({}, {}, {"commonword"});
-  auto* config_proto = reputation::GetSafetyTipsRemoteConfigProto();
+  lookalikes::SetSafetyTipAllowlistPatterns({}, {}, {"commonword"});
+  auto* config_proto = lookalikes::GetSafetyTipsRemoteConfigProto();
   TargetEmbeddingType embedding_type;
   std::string safe_hostname;
 
@@ -372,13 +496,11 @@ TEST(LookalikeUrlUtilTest, TargetEmbeddingIgnoresComponentWordlist) {
   EXPECT_EQ(embedding_type, TargetEmbeddingType::kNone);
 }
 
-struct GetETLDPlusOneTestCase {
-  const std::string hostname;
-  const std::string expected_etldp1;
-};
-
-TEST(LookalikeUrlUtilTest, GetETLDPlusOneHandlesSpecialRegistries) {
-  const std::vector<GetETLDPlusOneTestCase> kTestCases = {
+TEST_F(LookalikeUrlUtilTest, GetETLDPlusOneHandlesSpecialRegistries) {
+  const struct GetETLDPlusOneTestCase {
+    const std::string hostname;
+    const std::string expected_etldp1;
+  } kTestCases[] = {
       // Trivial test cases for public registries.
       {"google.com", "google.com"},
       {"www.google.com", "google.com"},
@@ -386,12 +508,357 @@ TEST(LookalikeUrlUtilTest, GetETLDPlusOneHandlesSpecialRegistries) {
 
       // .com.de is a de-facto public registry.
       {"www.google.com.de", "google.com.de"},
+      // Regression test for crbug.com/351775838:
+      {"com.de", ""},
 
       // .cloud.goog is a private registry.
       {"www.example.cloud.goog", "cloud.goog"},
+      {"cloud.goog", "cloud.goog"},
   };
 
   for (auto& test_case : kTestCases) {
-    EXPECT_EQ(GetETLDPlusOne(test_case.hostname), test_case.expected_etldp1);
+    EXPECT_EQ(lookalikes::GetETLDPlusOne(test_case.hostname),
+              test_case.expected_etldp1);
   }
+}
+
+// Tests for the character swap heuristic.
+TEST_F(LookalikeUrlUtilTest, HasOneCharacterSwap) {
+  const struct TestCase {
+    const wchar_t* str1;
+    const wchar_t* str2;
+    bool expected;
+  } kTestCases[] = {{L"", L"", false},
+                    {L"", L"a", false},
+                    {L"", L"ab", false},
+                    {L"a", L"ab", false},
+                    {L"a", L"ba", false},
+                    {L"abc.com", L"abc.com", false},
+                    {L"abc.com", L"abcd.com", false},
+                    {L"domain.com", L"nomaid.com", false},
+                    // Two swaps (ab to ba, ba to ab):
+                    {L"abba", L"baab", false},
+
+                    {L"ab", L"ba", true},
+                    {L"abba", L"baba", true},
+
+                    {L"abaaa", L"baaaa", true},
+                    {L"abcaa", L"bacaa", true},
+
+                    {L"aaaab", L"aaaba", true},
+                    {L"aacab", L"aacba", true},
+
+                    {L"aabaa", L"abaaa", true},
+                    {L"aabcc", L"abacc", true},
+
+                    {L"aabaa", L"aaaba", true},
+                    {L"ccbaa", L"ccaba", true},
+
+                    {L"domain.com", L"doamin.com", true},
+                    {L"gmail.com", L"gmailc.om", true},
+                    {L"gmailc.om", L"gmail.com", true}};
+  for (const TestCase& test_case : kTestCases) {
+    bool result = lookalikes::HasOneCharacterSwap(
+        base::WideToUTF16(test_case.str1), base::WideToUTF16(test_case.str2));
+    EXPECT_EQ(test_case.expected, result)
+        << "when comparing " << test_case.str1 << " with " << test_case.str2;
+  }
+}
+
+TEST_F(LookalikeUrlUtilTest, GetSuggestedURL) {
+  const struct TestCase {
+    const LookalikeUrlMatchType match_type;
+    const GURL navigated_url;
+    const std::string matched_hostname;
+    const GURL expected_suggested_url;
+  } kTestCases[] = {
+      // Certain heuristics such as top domain matches should use https for
+      // the suggested URL.
+      {LookalikeUrlMatchType::kSkeletonMatchTop500,
+       GURL("http://docs.googlé.com"), "google.com",
+       GURL("https://google.com")},
+      // But not for non-default ports:
+      {LookalikeUrlMatchType::kSkeletonMatchTop500,
+       GURL("http://docs.googlé.com:8080"), "google.com",
+       GURL("http://google.com:8080")},
+      // Site engagement should use http for the suggested URL.
+      {LookalikeUrlMatchType::kSkeletonMatchSiteEngagement,
+       GURL("http://docs.googlé.com"), "google.com", GURL("http://google.com")},
+
+      // Same tests with the matched hostname having a subdomain.
+      {LookalikeUrlMatchType::kSkeletonMatchTop500,
+       GURL("http://docs.googlé.com"), "docs.google.com",
+       GURL("https://google.com")},
+      {LookalikeUrlMatchType::kSkeletonMatchTop500,
+       GURL("http://docs.googlé.com:8080"), "docs.google.com",
+       GURL("http://google.com:8080")},
+      {LookalikeUrlMatchType::kSkeletonMatchSiteEngagement,
+       GURL("http://docs.googlé.com"), "docs.google.com",
+       GURL("http://google.com")},
+
+      // Same tests with neither the matched hostname or navigated domain having
+      // a subdomain.
+      {LookalikeUrlMatchType::kSkeletonMatchTop500, GURL("http://googlé.com"),
+       "docs.google.com", GURL("https://google.com")},
+      {LookalikeUrlMatchType::kSkeletonMatchTop500,
+       GURL("http://googlé.com:8080"), "docs.google.com",
+       GURL("http://google.com:8080")},
+      {LookalikeUrlMatchType::kSkeletonMatchSiteEngagement,
+       GURL("http://googlé.com"), "docs.google.com", GURL("http://google.com")},
+  };
+
+  for (const TestCase& test_case : kTestCases) {
+    GURL suggested_url =
+        GetSuggestedURL(test_case.match_type, test_case.navigated_url,
+                        test_case.matched_hostname);
+    EXPECT_EQ(test_case.expected_suggested_url, suggested_url);
+  }
+}
+
+TEST_F(LookalikeUrlUtilTest, IsHeuristicEnabledForHostname) {
+  reputation::SafetyTipsConfig proto;
+  reputation::HeuristicLaunchConfig* config = proto.add_launch_config();
+  config->set_heuristic(reputation::HeuristicLaunchConfig::
+                            HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES);
+
+  // Minimum rollout percentages to enable a heuristic on each site on Stable
+  // channel:
+  // example1.com: 79%
+  // example2.com: 16%
+  // example3.com: 36%
+
+  // Slowly ramp up the launch and cover more sites on Stable channel.
+  config->set_launch_percentage(0);
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example1.com", Channel::STABLE));
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example2.com", Channel::STABLE));
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example3.com", Channel::STABLE));
+
+  config->set_launch_percentage(25);
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example1.com", Channel::STABLE));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example2.com", Channel::STABLE));
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example3.com", Channel::STABLE));
+
+  config->set_launch_percentage(50);
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example1.com", Channel::STABLE));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example2.com", Channel::STABLE));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example3.com", Channel::STABLE));
+
+  config->set_launch_percentage(100);
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example1.com", Channel::STABLE));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example2.com", Channel::STABLE));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example3.com", Channel::STABLE));
+
+  // On Beta, launch is always at 50%.
+  config->set_launch_percentage(0);
+  EXPECT_FALSE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example1.com", Channel::BETA));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example2.com", Channel::BETA));
+  EXPECT_TRUE(IsHeuristicEnabledForHostname(
+      &proto,
+      reputation::HeuristicLaunchConfig::HEURISTIC_CHARACTER_SWAP_ENGAGED_SITES,
+      "example3.com", Channel::BETA));
+}
+
+class ComboSquattingTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    lookalikes::SetComboSquattingParamsForTesting(kComboSquattingParams);
+  }
+  void TearDown() override {
+    lookalikes::ResetComboSquattingParamsForTesting();
+  }
+};
+
+// Test for Combo Squatting check of domains.
+TEST_F(ComboSquattingTest, IsComboSquatting) {
+  const std::vector<DomainInfo> kEngagedSites = {
+      // An engaged site which is not in the hard coded brand names.
+      GetDomainInfo(GURL("https://engagedsite.com")),
+      // An engaged site which is duplicate with a hard coded brand name.
+      GetDomainInfo(GURL("https://subdomain.google.com")),
+      // An engaged site with length less than threshold (4) for
+      // consideration.
+      GetDomainInfo(GURL("https://len.com")),
+      // An engaged site with a registry other than com.
+      GetDomainInfo(GURL("https://testcombo.org")),
+      // Test case for overlapping brand name and keyword (highs +
+      // security = highsecurity). Single letter overlap.
+      GetDomainInfo(GURL("https://highs.com")),
+  };
+  const struct TestCase {
+    const char* domain;
+    const char* expected_suggested_domain;
+    const ComboSquattingType expected_type;
+  } kTestCases[] = {
+      // Not Combo Squatting (CSQ).
+      {"google.com", "", ComboSquattingType::kNone},
+      {"youtube.ca", "", ComboSquattingType::kNone},
+
+      // Not CSQ, contains subdomains.
+      {"login.google.com", "", ComboSquattingType::kNone},
+
+      // Not CSQ, non registrable domains.
+      {"google-login.test", "", ComboSquattingType::kNone},
+
+      // CSQ with "-".
+      {"google-online.com", "google.com", ComboSquattingType::kHardCoded},
+
+      // CSQ with more than one keyword (login, online) with "-".
+      {"google-login-online.com", "google.com", ComboSquattingType::kHardCoded},
+
+      // CSQ with one keyword (online) and one random word (one) with "-".
+      {"one-sample-online.com", "sample.com", ComboSquattingType::kHardCoded},
+
+      // Not CSQ, with a keyword (test) as TLD.
+      {"www.example.test", "", ComboSquattingType::kNone},
+
+      // CSQ with more than one brand (google, youtube) with "-".
+      {"google-youtube-account.com", "google.com",
+       ComboSquattingType::kHardCoded},
+
+      // CSQ without separator.
+      {"loginsample.com", "sample.com", ComboSquattingType::kHardCoded},
+
+      // Not CSQ with a keyword (ample) inside brand name (sample).
+      {"sample.com", "", ComboSquattingType::kNone},
+
+      // Current version of the heuristic cannot flag this kind of CSQ
+      // with a keyword (ample) inside brand name (sample) and as an added
+      // keyword to the domain.
+      {"sample-ample.com", "", ComboSquattingType::kNone},
+
+      // CSQ with more than one keyword (account, online) without separator.
+      {"accountexampleonline.com", "example.com",
+       ComboSquattingType::kHardCoded},
+
+      // CSQ with one keyword (login) and one random word (one) without "-".
+      {"oneyoutubelogin.com", "youtube.com", ComboSquattingType::kHardCoded},
+
+      // Not CSQ, google is a public TLD.
+      {"online.google", "", ComboSquattingType::kNone},
+
+      // Not CSQ, brand name (vice) is part of keyword (service).
+      {"keyservices.com", "", ComboSquattingType::kNone},
+
+      // CSQ, brand name (engagedsite) is from engaged sites list.
+      {"engagedsite-login.com", "engagedsite.com",
+       ComboSquattingType::kSiteEngagement},
+
+      // Not CSQ, brand name (len) is from engaged sites list but it is short.
+      {"len-online.com", "", ComboSquattingType::kNone},
+
+      // CSQ, brand name (googlé) is one of the hard coded brand names and has
+      // IDN spoofing as well.
+      {"googlé-login.com", "google.com", ComboSquattingType::kHardCoded},
+
+      // CSQ, brand name (engagedsité) is one of the brand names from engaged
+      // sites and has IDN spoofing as well.
+      {"engagedsité-online.com", "engagedsite.com",
+       ComboSquattingType::kSiteEngagement},
+
+      // CSQ, keyword (lógin) has IDN spoofing.
+      {"google-lógin.com", "google.com", ComboSquattingType::kHardCoded},
+
+      // CSQ, CSQ with more than one brand (googlé, youtubé) with "-" and IDN
+      // spoofing.
+      {"googlé-youtubé-account.com", "google.com",
+       ComboSquattingType::kHardCoded},
+
+      // Not CSQ.
+      {"ónline.googlé", "", ComboSquattingType::kNone},
+
+      // Not CSQ, it has IDN spoofing but brand name (vicé) is part of keyword
+      // (servicé).
+      {"keyservicés.com", "", ComboSquattingType::kNone},
+
+      // CSQ without separator and with IDN spoofing in the keyword.
+      {"lóginsample.com", "sample.com", ComboSquattingType::kHardCoded},
+
+      // CSQ without separator and with IDN spoofing in the brand name.
+      {"loginsamplé.com", "sample.com", ComboSquattingType::kHardCoded},
+
+      // Not CSQ, skeleton of brand name (lén) is from engaged sites list but it
+      // is short.
+      {"lén-online.com", "", ComboSquattingType::kNone},
+
+      // CSQ when domain and registry are in top domains.
+      {"google-login.co.kr", "google.co.kr", ComboSquattingType::kHardCoded},
+
+      // CSQ when brand name is in hard coded brand names, but domain and
+      // registry are not in top domains.
+      {"google-login.co.ir", "google.com", ComboSquattingType::kHardCoded},
+
+      // CSQ when domain and registry are in engaged sites, with registry other
+      // than com.
+      {"testcomboonline.org", "testcombo.org",
+       ComboSquattingType::kSiteEngagement},
+
+      // If the brand name (highsec) and keyword (security) overlap, ignore.
+      {"highsecurity.com", "", ComboSquattingType::kNone},
+  };
+  for (const TestCase& test_case : kTestCases) {
+    auto navigated =
+        GetDomainInfo(GURL(std::string(url::kHttpsScheme) +
+                           url::kStandardSchemeSeparator + test_case.domain));
+    std::string matched_domain;
+    ComboSquattingType type =
+        GetComboSquattingType(navigated, kEngagedSites, &matched_domain);
+    EXPECT_EQ(std::string(test_case.expected_suggested_domain), matched_domain);
+    EXPECT_EQ(test_case.expected_type, type);
+  }
+}
+
+TEST_F(LookalikeUrlUtilTest, RecordUMAFromMatchTypeIsolated) {
+  base::HistogramTester histograms;
+  lookalikes::RecordUMAFromMatchType(
+      LookalikeUrlMatchType::kSkeletonMatchTop500,
+      /*is_incognito=*/false,
+      /*is_isolated=*/true);
+  histograms.ExpectUniqueSample(
+      lookalikes::kIsolatedInterstitialHistogramName,
+      lookalikes::NavigationSuggestionEvent::kMatchSkeletonTop500, 1);
+  histograms.ExpectTotalCount(lookalikes::kInterstitialHistogramName, 0);
+  histograms.ExpectTotalCount(lookalikes::kIncognitoInterstitialHistogramName,
+                              0);
 }

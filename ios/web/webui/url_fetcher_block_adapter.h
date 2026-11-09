@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #import <Foundation/Foundation.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "base/memory/scoped_refptr.h"
 #include "url/gurl.h"
@@ -22,15 +24,16 @@ namespace web {
 // Class for use of URLLoader from Objective-C with a completion handler block.
 class URLFetcherBlockAdapter;
 // Block type for URLFetcherBlockAdapter callbacks.
-typedef void (^URLFetcherBlockAdapterCompletion)(NSData*,
+typedef void (^URLFetcherBlockAdapterCompletion)(NSData* data,
+                                                 NSDictionary* headers,
                                                  URLFetcherBlockAdapter*);
 
 // Class to manage retrieval of WebUI resources.
 class URLFetcherBlockAdapter {
  public:
-  // Creates URLFetcherBlockAdapter for resource at |url| with
-  // |request_context|.
-  // |completion_handler| is called with results of the fetch.
+  // Creates URLFetcherBlockAdapter for resource at `url` with
+  // `request_context`.
+  // `completion_handler` is called with results of the fetch.
   URLFetcherBlockAdapter(
       const GURL& url,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
@@ -42,7 +45,7 @@ class URLFetcherBlockAdapter {
   GURL getUrl() { return url_; }
 
  protected:
-  void OnURLLoadComplete(std::unique_ptr<std::string> response_body);
+  void OnURLLoadComplete(std::optional<std::string> response_body);
 
  private:
   // The URL to fetch.

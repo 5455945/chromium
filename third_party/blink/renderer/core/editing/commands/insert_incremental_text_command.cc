@@ -1,9 +1,10 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/commands/insert_incremental_text_command.h"
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -16,20 +17,25 @@
 #include "third_party/blink/renderer/core/editing/state_machines/forward_code_point_state_machine.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 namespace {
 
-wtf_size_t ComputeCommonPrefixLength(const String& str1, const String& str2) {
+wtf_size_t ComputeCommonPrefixLength(const StringView& str1,
+                                     const StringView& str2) {
   const wtf_size_t max_common_prefix_length =
       std::min(str1.length(), str2.length());
   ForwardCodePointStateMachine code_point_state_machine;
   wtf_size_t result = 0;
   for (wtf_size_t index = 0; index < max_common_prefix_length; ++index) {
-    if (str1[index] != str2[index])
+    // SAFETY: indices less than max_common_prefix_length are valid for
+    // either string based upon min() expression above.
+    if (UNSAFE_BUFFERS(str1[index]) != UNSAFE_BUFFERS(str2[index])) {
       return result;
-    code_point_state_machine.FeedFollowingCodeUnit(str1[index]);
+    }
+    code_point_state_machine.FeedFollowingCodeUnit(UNSAFE_BUFFERS(str1[index]));
     if (!code_point_state_machine.AtCodePointBoundary())
       continue;
     result = index;
@@ -37,21 +43,27 @@ wtf_size_t ComputeCommonPrefixLength(const String& str1, const String& str2) {
   return max_common_prefix_length;
 }
 
-wtf_size_t ComputeCommonSuffixLength(const String& str1, const String& str2) {
+wtf_size_t ComputeCommonSuffixLength(const StringView& str1,
+                                     const StringView& str2) {
   const wtf_size_t length1 = str1.length();
   const wtf_size_t length2 = str2.length();
   const wtf_size_t max_common_suffix_length = std::min(length1, length2);
   for (wtf_size_t index = 0; index < max_common_suffix_length; ++index) {
-    if (str1[length1 - index - 1] != str2[length2 - index - 1])
+    // SAFETY: max_common_suffix_length is a bound on either string, so when
+    // non-zero, an expression based on this for the "last character" is
+    // valid for either string.
+    if (UNSAFE_BUFFERS(str1[length1 - index - 1]) !=
+        UNSAFE_BUFFERS(str2[length2 - index - 1])) {
       return index;
+    }
   }
   return max_common_suffix_length;
 }
 
 wtf_size_t ComputeCommonGraphemeClusterPrefixLength(
     const Position& selection_start,
-    const String& old_text,
-    const String& new_text) {
+    const StringView& old_text,
+    const StringView& new_text) {
   const wtf_size_t common_prefix_length =
       ComputeCommonPrefixLength(old_text, new_text);
   const int selection_offset = selection_start.ComputeOffsetInContainerNode();
@@ -65,8 +77,25 @@ wtf_size_t ComputeCommonGraphemeClusterPrefixLength(
       TextIteratorBehavior::EmitsObjectReplacementCharacterBehavior());
   const Position selection_start_container_node_start(
       selection_start.ComputeContainerNode(), 0);
+  const bool skip_runs_in_other_containers =
+      RuntimeEnabledFeatures::FastCommonGraphemeClusterPrefixLengthEnabled();
   int offset = 0;
   while (!forward_iterator.AtEnd()) {
+    // The start position of a character is in the container of its text
+    // iterator run, so it can't be the position we're looking for in a run in
+    // another container. Skip the rest of such a run without computing the
+    // positions of its characters, as that can be slow. For example, the
+    // position of the newline emitted for a <br> is the <br>'s index in its
+    // parent, found by counting its previous siblings, so computing it for
+    // every <br> before the selection is quadratic in the number of <br>s.
+    if (skip_runs_in_other_containers &&
+        &forward_iterator.CurrentContainer() !=
+            selection_start_container_node_start.AnchorNode()) {
+      const wtf_size_t run_length = forward_iterator.length();
+      forward_iterator.Advance(run_length);
+      offset += static_cast<int>(run_length);
+      continue;
+    }
     const Position& current_position = forward_iterator.StartPosition();
     if (current_position == selection_start_container_node_start)
       break;
@@ -88,8 +117,8 @@ wtf_size_t ComputeCommonGraphemeClusterPrefixLength(
 
 wtf_size_t ComputeCommonGraphemeClusterSuffixLength(
     const Position& selection_start,
-    const String& old_text,
-    const String& new_text) {
+    const StringView& old_text,
+    const StringView& new_text) {
   const wtf_size_t common_suffix_length =
       ComputeCommonSuffixLength(old_text, new_text);
   const int selection_offset = selection_start.ComputeOffsetInContainerNode();
@@ -113,12 +142,12 @@ wtf_size_t ComputeCommonGraphemeClusterSuffixLength(
 const String ComputeTextForInsertion(const String& new_text,
                                      const wtf_size_t common_prefix_length,
                                      const wtf_size_t common_suffix_length) {
-  return new_text.Substring(
+  return new_text.substr(
       common_prefix_length,
       new_text.length() - common_prefix_length - common_suffix_length);
 }
 
-SelectionInDOMTree ComputeSelectionForInsertion(
+SelectionInDomTree ComputeSelectionForInsertion(
     const EphemeralRange& selection_range,
     const int offset,
     const int length) {
@@ -127,7 +156,7 @@ SelectionInDOMTree ComputeSelectionForInsertion(
       TextIteratorBehavior::EmitsObjectReplacementCharacterBehavior());
   const EphemeralRange& range_for_insertion =
       char_it.CalculateCharacterSubrange(offset, length);
-  return SelectionInDOMTree::Builder()
+  return SelectionInDomTree::Builder()
       .SetBaseAndExtent(range_for_insertion)
       .Build();
 }
@@ -137,12 +166,16 @@ SelectionInDOMTree ComputeSelectionForInsertion(
 InsertIncrementalTextCommand::InsertIncrementalTextCommand(
     Document& document,
     const String& text,
+    PasswordEchoBehavior password_echo_behavior,
     RebalanceType rebalance_type)
-    : InsertTextCommand(document, text, rebalance_type) {}
+    : InsertTextCommand(document,
+                        text,
+                        password_echo_behavior,
+                        rebalance_type) {}
 
 void InsertIncrementalTextCommand::DoApply(EditingState* editing_state) {
   DCHECK(!GetDocument().NeedsLayoutTreeUpdate());
-  const Element* element = RootEditableElementOf(EndingSelection().Base());
+  const Element* element = RootEditableElementOf(EndingSelection().Anchor());
   DCHECK(element);
 
   const VisibleSelection& visible_selection = EndingVisibleSelection();
@@ -154,24 +187,21 @@ void InsertIncrementalTextCommand::DoApply(EditingState* editing_state) {
   const String& new_text = text_;
 
   const Position& selection_start = visible_selection.Start();
-  const wtf_size_t new_text_length = new_text.length();
-  const wtf_size_t old_text_length = old_text.length();
   const wtf_size_t common_prefix_length =
       ComputeCommonGraphemeClusterPrefixLength(selection_start, old_text,
                                                new_text);
   // We should ignore common prefix when finding common suffix.
   const wtf_size_t common_suffix_length =
       ComputeCommonGraphemeClusterSuffixLength(
-          selection_start,
-          old_text.Right(old_text_length - common_prefix_length),
-          new_text.Right(new_text_length - common_prefix_length));
-  DCHECK_GE(old_text_length, common_prefix_length + common_suffix_length);
+          selection_start, old_text.subview(common_prefix_length),
+          new_text.subview(common_prefix_length));
+  DCHECK_GE(old_text.length(), common_prefix_length + common_suffix_length);
 
   text_ = ComputeTextForInsertion(text_, common_prefix_length,
                                   common_suffix_length);
 
   const int offset = static_cast<int>(common_prefix_length);
-  const int length = static_cast<int>(old_text_length - common_prefix_length -
+  const int length = static_cast<int>(old_text.length() - common_prefix_length -
                                       common_suffix_length);
   const VisibleSelection& selection_for_insertion = CreateVisibleSelection(
       ComputeSelectionForInsertion(selection_range, offset, length));

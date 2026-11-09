@@ -1,10 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/ime/ime_text_span.h"
 
 #include <algorithm>
+
+#include "base/numerics/safe_conversions.h"
 #include "ui/base/ime/ime_text_span.h"
 #include "ui/base/ime/mojom/ime_types.mojom-blink.h"
 
@@ -25,12 +27,11 @@ ImeTextSpan::Type ConvertUiTypeToType(ui::ImeTextSpan::Type type) {
   }
 
   NOTREACHED();
-  return ImeTextSpan::Type::kComposition;
 }
 
 ImeTextSpan::ImeTextSpan(Type type,
-                         unsigned start_offset,
-                         unsigned end_offset,
+                         wtf_size_t start_offset,
+                         wtf_size_t end_offset,
                          const Color& underline_color,
                          ui::mojom::ImeTextSpanThickness thickness,
                          ui::mojom::ImeTextSpanUnderlineStyle underline_style,
@@ -39,7 +40,8 @@ ImeTextSpan::ImeTextSpan(Type type,
                          const Color& suggestion_highlight_color,
                          bool remove_on_finish_composing,
                          bool interim_char_selection,
-                         const Vector<String>& suggestions)
+                         const Vector<String>& suggestions,
+                         bool should_hide_suggestion_menu)
     : type_(type),
       underline_color_(underline_color),
       thickness_(thickness),
@@ -49,12 +51,13 @@ ImeTextSpan::ImeTextSpan(Type type,
       suggestion_highlight_color_(suggestion_highlight_color),
       remove_on_finish_composing_(remove_on_finish_composing),
       interim_char_selection_(interim_char_selection),
-      suggestions_(suggestions) {
+      suggestions_(suggestions),
+      should_hide_suggestion_menu_(should_hide_suggestion_menu) {
   // Sanitize offsets by ensuring a valid range corresponding to the last
   // possible position.
   // TODO(wkorman): Consider replacing with DCHECK_LT(startOffset, endOffset).
   start_offset_ =
-      std::min(start_offset, std::numeric_limits<unsigned>::max() - 1u);
+      std::min(start_offset, std::numeric_limits<wtf_size_t>::max() - 1u);
   end_offset_ = std::max(start_offset_ + 1u, end_offset);
 }
 
@@ -63,9 +66,9 @@ namespace {
 Vector<String> ConvertStdVectorOfStdStringsToVectorOfStrings(
     const std::vector<std::string>& input) {
   Vector<String> output;
-  output.ReserveInitialCapacity(input.size());
+  output.ReserveInitialCapacity(base::checked_cast<wtf_size_t>(input.size()));
   for (const std::string& val : input) {
-    output.UncheckedAppend(String::FromUTF8(val));
+    output.UncheckedAppend(String::FromUtf8(val));
   }
   return output;
 }
@@ -92,7 +95,6 @@ ui::mojom::ImeTextSpanThickness ConvertUiThicknessToThickness(
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanThickness::kNone;
 }
 
 ui::mojom::ImeTextSpanUnderlineStyle ConvertUiUnderlineToUnderline(
@@ -111,7 +113,6 @@ ui::mojom::ImeTextSpanUnderlineStyle ConvertUiUnderlineToUnderline(
   }
 
   NOTREACHED();
-  return ui::mojom::ImeTextSpanUnderlineStyle::kNone;
 }
 
 ui::ImeTextSpan::Type ConvertImeTextSpanTypeToUiType(ImeTextSpan::Type type) {
@@ -126,6 +127,8 @@ ui::ImeTextSpan::Type ConvertImeTextSpanTypeToUiType(ImeTextSpan::Type type) {
       return ui::ImeTextSpan::Type::kMisspellingSuggestion;
     case ImeTextSpan::Type::kSuggestion:
       return ui::ImeTextSpan::Type::kSuggestion;
+    case ImeTextSpan::Type::kPreviewStylusGesture:
+      NOTREACHED();  // This should never be used outside of blink.
   }
 }
 
@@ -133,24 +136,26 @@ ui::ImeTextSpan::Type ConvertImeTextSpanTypeToUiType(ImeTextSpan::Type type) {
 
 ImeTextSpan::ImeTextSpan(const ui::ImeTextSpan& ime_text_span)
     : ImeTextSpan(ConvertUiTypeToType(ime_text_span.type),
-                  ime_text_span.start_offset,
-                  ime_text_span.end_offset,
-                  Color(ime_text_span.underline_color),
+                  base::checked_cast<wtf_size_t>(ime_text_span.start_offset),
+                  base::checked_cast<wtf_size_t>(ime_text_span.end_offset),
+                  Color::FromSkColor(ime_text_span.underline_color),
                   ConvertUiThicknessToThickness(ime_text_span.thickness),
                   ConvertUiUnderlineToUnderline(ime_text_span.underline_style),
-                  Color(ime_text_span.text_color),
-                  Color(ime_text_span.background_color),
-                  Color(ime_text_span.suggestion_highlight_color),
+                  Color::FromSkColor(ime_text_span.text_color),
+                  Color::FromSkColor(ime_text_span.background_color),
+                  Color::FromSkColor(ime_text_span.suggestion_highlight_color),
                   ime_text_span.remove_on_finish_composing,
                   ime_text_span.interim_char_selection,
                   ConvertStdVectorOfStdStringsToVectorOfStrings(
-                      ime_text_span.suggestions)) {}
+                      ime_text_span.suggestions),
+                  ime_text_span.should_hide_suggestion_menu) {}
 
 ui::ImeTextSpan ImeTextSpan::ToUiImeTextSpan() {
   auto span = ui::ImeTextSpan(ConvertImeTextSpanTypeToUiType(GetType()),
                               StartOffset(), EndOffset());
   span.suggestions =
       ConvertVectorOfStringsToStdVectorOfStdStrings(Suggestions());
+  span.should_hide_suggestion_menu = should_hide_suggestion_menu_;
   return span;
 }
 

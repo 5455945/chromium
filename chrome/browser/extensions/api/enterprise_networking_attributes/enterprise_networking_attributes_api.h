@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,4 +27,5 @@ class EnterpriseNetworkingAttributesGetNetworkDetailsFunction
 };
 
 }  //  namespace extensions
+
 #endif  // CHROME_BROWSER_EXTENSIONS_API_ENTERPRISE_NETWORKING_ATTRIBUTES_ENTERPRISE_NETWORKING_ATTRIBUTES_API_H_

@@ -9,7 +9,7 @@
 #ifndef __XSLT_LIBEXSLT_H__
 #define __XSLT_LIBEXSLT_H__
 
-#if defined(_WIN32) && !defined (__CYGWIN__) && !defined (__MINGW32__)
+#if defined(_WIN32) && !defined (__MINGW32__)
 #include <win32config.h>
 #else
 #include "config.h"
@@ -24,6 +24,12 @@
 #else
 #define LIBEXSLT_PUBLIC
 #endif
+#endif
+
+#ifdef __GNUC__
+#define ATTRIBUTE_UNUSED __attribute__((unused))
+#else
+#define ATTRIBUTE_UNUSED
 #endif
 
 #endif /* ! __XSLT_LIBEXSLT_H__ */

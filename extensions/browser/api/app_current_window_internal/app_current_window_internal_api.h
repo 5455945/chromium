@@ -1,10 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_APP_CURRENT_WINDOW_INTERNAL_APP_CURRENT_WINDOW_INTERNAL_API_H_
 #define EXTENSIONS_BROWSER_API_APP_CURRENT_WINDOW_INTERNAL_APP_CURRENT_WINDOW_INTERNAL_API_H_
 
+#include "base/memory/raw_ptr.h"
 #include "extensions/browser/extension_function.h"
 
 namespace extensions {
@@ -13,7 +14,7 @@ class AppWindow;
 
 class AppCurrentWindowInternalExtensionFunction : public ExtensionFunction {
  protected:
-  ~AppCurrentWindowInternalExtensionFunction() override {}
+  ~AppCurrentWindowInternalExtensionFunction() override = default;
 
   AppWindow* window() { return window_; }
 
@@ -22,7 +23,7 @@ class AppCurrentWindowInternalExtensionFunction : public ExtensionFunction {
   bool PreRunValidation(std::string* error) override;
 
   // The current AppWindow.
-  AppWindow* window_ = nullptr;
+  raw_ptr<AppWindow> window_ = nullptr;
 };
 
 class AppCurrentWindowInternalFocusFunction
@@ -32,7 +33,7 @@ class AppCurrentWindowInternalFocusFunction
                              APP_CURRENTWINDOWINTERNAL_FOCUS)
 
  protected:
-  ~AppCurrentWindowInternalFocusFunction() override {}
+  ~AppCurrentWindowInternalFocusFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -43,7 +44,7 @@ class AppCurrentWindowInternalFullscreenFunction
                              APP_CURRENTWINDOWINTERNAL_FULLSCREEN)
 
  protected:
-  ~AppCurrentWindowInternalFullscreenFunction() override {}
+  ~AppCurrentWindowInternalFullscreenFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -54,7 +55,7 @@ class AppCurrentWindowInternalMaximizeFunction
                              APP_CURRENTWINDOWINTERNAL_MAXIMIZE)
 
  protected:
-  ~AppCurrentWindowInternalMaximizeFunction() override {}
+  ~AppCurrentWindowInternalMaximizeFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -65,7 +66,7 @@ class AppCurrentWindowInternalMinimizeFunction
                              APP_CURRENTWINDOWINTERNAL_MINIMIZE)
 
  protected:
-  ~AppCurrentWindowInternalMinimizeFunction() override {}
+  ~AppCurrentWindowInternalMinimizeFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -76,7 +77,7 @@ class AppCurrentWindowInternalRestoreFunction
                              APP_CURRENTWINDOWINTERNAL_RESTORE)
 
  protected:
-  ~AppCurrentWindowInternalRestoreFunction() override {}
+  ~AppCurrentWindowInternalRestoreFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -87,7 +88,7 @@ class AppCurrentWindowInternalDrawAttentionFunction
                              APP_CURRENTWINDOWINTERNAL_DRAWATTENTION)
 
  protected:
-  ~AppCurrentWindowInternalDrawAttentionFunction() override {}
+  ~AppCurrentWindowInternalDrawAttentionFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -98,7 +99,7 @@ class AppCurrentWindowInternalClearAttentionFunction
                              APP_CURRENTWINDOWINTERNAL_CLEARATTENTION)
 
  protected:
-  ~AppCurrentWindowInternalClearAttentionFunction() override {}
+  ~AppCurrentWindowInternalClearAttentionFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -109,7 +110,7 @@ class AppCurrentWindowInternalShowFunction
                              APP_CURRENTWINDOWINTERNAL_SHOW)
 
  protected:
-  ~AppCurrentWindowInternalShowFunction() override {}
+  ~AppCurrentWindowInternalShowFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -120,7 +121,7 @@ class AppCurrentWindowInternalHideFunction
                              APP_CURRENTWINDOWINTERNAL_HIDE)
 
  protected:
-  ~AppCurrentWindowInternalHideFunction() override {}
+  ~AppCurrentWindowInternalHideFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -130,7 +131,7 @@ class AppCurrentWindowInternalSetBoundsFunction
   DECLARE_EXTENSION_FUNCTION("app.currentWindowInternal.setBounds",
                              APP_CURRENTWINDOWINTERNAL_SETBOUNDS)
  protected:
-  ~AppCurrentWindowInternalSetBoundsFunction() override {}
+  ~AppCurrentWindowInternalSetBoundsFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -140,7 +141,7 @@ class AppCurrentWindowInternalSetSizeConstraintsFunction
   DECLARE_EXTENSION_FUNCTION("app.currentWindowInternal.setSizeConstraints",
                              APP_CURRENTWINDOWINTERNAL_SETSIZECONSTRAINTS)
  protected:
-  ~AppCurrentWindowInternalSetSizeConstraintsFunction() override {}
+  ~AppCurrentWindowInternalSetSizeConstraintsFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -151,7 +152,7 @@ class AppCurrentWindowInternalSetIconFunction
                              APP_CURRENTWINDOWINTERNAL_SETICON)
 
  protected:
-  ~AppCurrentWindowInternalSetIconFunction() override {}
+  ~AppCurrentWindowInternalSetIconFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -162,7 +163,7 @@ class AppCurrentWindowInternalSetShapeFunction
                              APP_CURRENTWINDOWINTERNAL_SETSHAPE)
 
  protected:
-  ~AppCurrentWindowInternalSetShapeFunction() override {}
+  ~AppCurrentWindowInternalSetShapeFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -173,7 +174,7 @@ class AppCurrentWindowInternalSetAlwaysOnTopFunction
                              APP_CURRENTWINDOWINTERNAL_SETALWAYSONTOP)
 
  protected:
-  ~AppCurrentWindowInternalSetAlwaysOnTopFunction() override {}
+  ~AppCurrentWindowInternalSetAlwaysOnTopFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -185,7 +186,8 @@ class AppCurrentWindowInternalSetVisibleOnAllWorkspacesFunction
       APP_CURRENTWINDOWINTERNAL_SETVISIBLEONALLWORKSPACES)
 
  protected:
-  ~AppCurrentWindowInternalSetVisibleOnAllWorkspacesFunction() override {}
+  ~AppCurrentWindowInternalSetVisibleOnAllWorkspacesFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
@@ -196,7 +198,7 @@ class AppCurrentWindowInternalSetActivateOnPointerFunction
                              APP_CURRENTWINDOWINTERNAL_SETACTIVATEONPOINTER)
 
  protected:
-  ~AppCurrentWindowInternalSetActivateOnPointerFunction() override {}
+  ~AppCurrentWindowInternalSetActivateOnPointerFunction() override = default;
   ResponseAction Run() override;
 };
 

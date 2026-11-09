@@ -31,23 +31,46 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_DOCUMENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_DOCUMENT_H_
 
+#include <optional>
+#include <vector>
+
+#include "base/types/expected.h"
+#include "base/unguessable_token.h"
 #include "net/cookies/site_for_cookies.h"
+#include "net/storage_access_api/status.h"
+#include "net/url_request/referrer_policy.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
+#include "services/network/public/mojom/restricted_cookie_manager.mojom-shared.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/platform/cross_variant_mojo_util.h"
+#include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
-#include "third_party/blink/public/platform/web_vector.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/web/web_css_origin.h"
 #include "third_party/blink/public/web/web_draggable_region.h"
-#include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_node.h"
+#include "third_party/blink/public/web/web_script_tool_types.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/accessibility/ax_error_types.h"
+
+namespace base {
+class UnguessableToken;
+}
+
+namespace ui {
+struct AXTreeUpdate;
+class AXMode;
+}  // namespace ui
 
 namespace blink {
 
 class Document;
 class WebElement;
 class WebFormElement;
+class WebFormControlElement;
 class WebElementCollection;
-class WebString;
+class WebLocalFrame;
 class WebURL;
 struct WebDistillabilityFeatures;
 
@@ -61,11 +84,11 @@ using WebStyleSheetKey = WebString;
 enum class BackForwardCacheAware { kAllow, kPossiblyDisallow };
 
 // Provides readonly access to some properties of a DOM document.
-class WebDocument : public WebNode {
+class BLINK_EXPORT WebDocument : public WebNode {
  public:
-  enum CSSOrigin { kAuthorOrigin, kUserOrigin };
-
-  WebDocument() = default;
+  explicit WebDocument(
+      cppgc::SourceLocation loc = BLINK_WEB_NODE_LOCATION_FROM_HERE)
+      : WebNode(loc) {}
   WebDocument(const WebDocument& e) = default;
 
   WebDocument& operator=(const WebDocument& e) {
@@ -74,86 +97,169 @@ class WebDocument : public WebNode {
   }
   void Assign(const WebDocument& e) { WebNode::Assign(e); }
 
-  BLINK_EXPORT WebURL Url() const;
-  // Note: Security checks should use the getSecurityOrigin(), not url().
-  BLINK_EXPORT WebSecurityOrigin GetSecurityOrigin() const;
-  BLINK_EXPORT bool IsSecureContext() const;
+  const DocumentToken& Token() const;
+  WebURL Url() const;
 
-  BLINK_EXPORT WebString Encoding() const;
-  BLINK_EXPORT WebString ContentLanguage() const;
-  BLINK_EXPORT WebString GetReferrer() const;
-  BLINK_EXPORT absl::optional<SkColor> ThemeColor();
+  // Note: Security checks should use the getSecurityOrigin(), not url().
+  WebSecurityOrigin GetSecurityOrigin() const;
+  bool IsSecureContext() const;
+
+  WebString Encoding() const;
+  WebString ContentLanguage() const;
+  WebString GetReferrer() const;
+  std::optional<SkColor> ThemeColor();
   // The url of the OpenSearch Description Document (if any).
-  BLINK_EXPORT WebURL OpenSearchDescriptionURL() const;
+  WebURL OpenSearchDescriptionURL() const;
 
   // Returns the frame the document belongs to or 0 if the document is
   // frameless.
-  BLINK_EXPORT WebLocalFrame* GetFrame() const;
-  BLINK_EXPORT bool IsHTMLDocument() const;
-  BLINK_EXPORT bool IsXHTMLDocument() const;
-  BLINK_EXPORT bool IsPluginDocument() const;
-  BLINK_EXPORT WebURL BaseURL() const;
-  BLINK_EXPORT ukm::SourceId GetUkmSourceId() const;
+  WebLocalFrame* GetFrame() const;
+  bool IsHTMLDocument() const;
+  bool IsXHTMLDocument() const;
+  bool IsPluginDocument() const;
+  bool IsActive() const;
+  WebURL BaseURL() const;
+  ukm::SourceId GetUkmSourceId() const;
 
   // The SiteForCookies is used to compute whether this document
   // appears in a "third-party" context for the purpose of third-party
   // cookie blocking.
-  BLINK_EXPORT net::SiteForCookies SiteForCookies() const;
+  net::SiteForCookies SiteForCookies() const;
 
-  BLINK_EXPORT WebSecurityOrigin TopFrameOrigin() const;
-  BLINK_EXPORT WebElement DocumentElement() const;
-  BLINK_EXPORT WebElement Body() const;
-  BLINK_EXPORT WebElement Head();
-  BLINK_EXPORT WebString Title() const;
-  BLINK_EXPORT WebString ContentAsTextForTesting() const;
-  BLINK_EXPORT WebElementCollection All();
-  BLINK_EXPORT WebVector<WebFormElement> Forms() const;
-  BLINK_EXPORT WebURL CompleteURL(const WebString&) const;
-  BLINK_EXPORT WebElement GetElementById(const WebString&) const;
-  BLINK_EXPORT WebElement FocusedElement() const;
+  WebSecurityOrigin TopFrameOrigin() const;
+  WebElement DocumentElement() const;
+  WebElement Body() const;
+  WebElement Head();
+  WebString Title() const;
+  WebString ContentAsTextForTesting() const;
+  WebElementCollection All() const;
+  std::vector<WebFormElement> Forms() const;
+  WebElement ScrollingElement();
+
+  // Returns all form elements that have no shadow-including ancestor that is
+  // also a form element. This includes form elements inside shadow trees.
+  std::vector<WebFormElement> GetOutermostForms() const;
+
+  WebURL CompleteURL(const WebString&) const;
+  WebElement GetElementById(const WebString&) const;
+  WebElement FocusedElement() const;
+
+  // The unassociated form controls are form control elements that are not
+  // associated to a <form> element.
+  std::vector<WebFormControlElement> UnassociatedFormControls() const;
 
   // Inserts the given CSS source code as a style sheet in the document.
-  BLINK_EXPORT WebStyleSheetKey
-  InsertStyleSheet(const WebString& source_code,
-                   const WebStyleSheetKey* = nullptr,
-                   CSSOrigin = kAuthorOrigin,
-                   BackForwardCacheAware = BackForwardCacheAware::kAllow);
+  WebStyleSheetKey InsertStyleSheet(
+      const WebString& source_code,
+      const WebStyleSheetKey* = nullptr,
+      WebCssOrigin = WebCssOrigin::kAuthor,
+      BackForwardCacheAware = BackForwardCacheAware::kAllow);
 
   // Removes the CSS which was previously inserted by a call to
   // InsertStyleSheet().
-  BLINK_EXPORT void RemoveInsertedStyleSheet(const WebStyleSheetKey&,
-                                             CSSOrigin = kAuthorOrigin);
+  void RemoveInsertedStyleSheet(const WebStyleSheetKey&,
+                                WebCssOrigin = WebCssOrigin::kAuthor);
 
   // Arranges to call WebLocalFrameClient::didMatchCSS(frame(), ...) when one of
   // the selectors matches or stops matching an element in this document.
   // Each call to this method overrides any previous calls.
-  BLINK_EXPORT void WatchCSSSelectors(const WebVector<WebString>& selectors);
+  void WatchCSSSelectors(const std::vector<WebString>& selectors);
 
-  BLINK_EXPORT WebVector<WebDraggableRegion> DraggableRegions() const;
+  std::vector<WebDraggableRegion> DraggableRegions() const;
 
-  BLINK_EXPORT WebURL CanonicalUrlForSharing() const;
+  WebDistillabilityFeatures DistillabilityFeatures();
 
-  BLINK_EXPORT WebDistillabilityFeatures DistillabilityFeatures();
+  void SetShowBeforeUnloadDialog(bool show_dialog);
 
-  BLINK_EXPORT void SetShowBeforeUnloadDialog(bool show_dialog);
+  cc::ElementId GetVisualViewportScrollingElementIdForTesting();
 
-  // See cc/paint/element_id.h for the definition of these id.
-  BLINK_EXPORT uint64_t GetVisualViewportScrollingElementIdForTesting();
-
-  BLINK_EXPORT bool IsLoaded();
+  bool IsLoaded();
 
   // Returns true if the document is in prerendering.
-  BLINK_EXPORT bool IsPrerendering();
+  bool IsPrerendering();
+
+  // Returns true if the document has a Document Picture-in-Picture window.
+  bool HasDocumentPictureInPictureWindow() const;
 
   // Adds `callback` to the post-prerendering activation steps.
-  // https://jeremyroman.github.io/alternate-loading-modes/#document-post-prerendering-activation-steps-list
-  BLINK_EXPORT void AddPostPrerenderingActivationStep(
-      base::OnceClosure callback);
+  // https://wicg.github.io/nav-speculation/prerendering.html#document-post-prerendering-activation-steps-list
+  void AddPostPrerenderingActivationStep(base::OnceClosure callback);
+
+  // Sets a cookie manager which can be used for this document.
+  void SetCookieManager(
+      CrossVariantMojoRemote<
+          network::mojom::RestrictedCookieManagerInterfaceBase> cookie_manager);
+
+  // Returns the referrer policy for this document's referrer.
+  net::ReferrerPolicy GetReferrerPolicy() const;
+
+  // Returns the referrer for this document.
+  WebString OutgoingReferrer() const;
+
+  void SnapshotAccessibilityTree(
+      size_t max_nodes,
+      base::TimeDelta timeout,
+      ui::AXTreeUpdate* response,
+      ui::AXMode mode,
+      std::set<ui::AXSerializationErrorFlag>* out_error);
+
+  // Returns the number of active resource requests that are being loaded by the
+  // document's ResourceFetcher.
+  size_t ActiveResourceRequestCount() const;
+
+  // Returns the number of times the document's cookies have been modified.
+  uint64_t CookieModificationCount() const;
+
+  // Executes exactly the script tool with the internal ID `tool_id`, with the
+  // given `input_arguments`. If that tool is no longer registered, this fails,
+  // even if a different tool has since been registered under the same name.
+  //
+  // The associated callback is invoked once the async execution of the tool is
+  // finished along with the result of the execution and the tool declaration.
+  // Returns true for success.
+  bool ExecuteScriptTool(const ToolInvocationToken& invocation_id,
+                         const ScriptToolToken& tool_id,
+                         const WebString& input_arguments,
+                         WebScriptToolResultCallback tool_result_cb);
+
+  // Like `ExecuteScriptTool()`, but executes whichever tool is registered under
+  // `name` at the time of the call. Only for callers that don't have a tool ID:
+  // if the tool the caller saw has been replaced by another tool with the same
+  // name, this executes the new tool.
+  bool ExecuteScriptToolByName(const ToolInvocationToken& invocation_id,
+                               const WebString& name,
+                               const WebString& input_arguments,
+                               WebScriptToolResultCallback tool_result_cb);
+
+  // Provides the result of a script tool execution initiated on an old
+  // Document.
+  using CrossDocumentScriptToolResultCallback =
+      base::OnceCallback<void(WebString)>;
+  void GetCrossDocumentScriptToolResult(
+      const ToolInvocationToken& invocation_id,
+      CrossDocumentScriptToolResultCallback result_callback);
+
+  // Cancels a script tool with the given execution ID.
+  void CancelScriptTool(const ToolInvocationToken& invocation_id);
+
+  // Returns whether the AutofillEvent runtime feature is enabled for this
+  // document's execution context (including origin trial tokens).
+  bool IsAutofillEventEnabled() const;
+
+  // Dispatches an autofill event on the document with the given field data.
+  // This is called by the autofill agent before filling form fields.
+  // The `fill_id` is passed so that refill requests can be associated with
+  // the original fill operation. If `supports_refill` is false, the event's
+  // refill() method will be null.
+  void DispatchAutofillEvent(
+      std::vector<std::pair<WebFormControlElement, WebString>> autofill_values,
+      const base::UnguessableToken& fill_id,
+      bool supports_refill);
 
 #if INSIDE_BLINK
-  BLINK_EXPORT WebDocument(Document*);
-  BLINK_EXPORT WebDocument& operator=(Document*);
-  BLINK_EXPORT operator Document*() const;
+  WebDocument(Document*);
+  WebDocument& operator=(Document*);
+  operator Document*() const;
 #endif
 };
 

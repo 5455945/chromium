@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,11 +23,14 @@ void EventTarget::ConvertEventToTarget(const EventTarget* target,
 gfx::PointF EventTarget::GetScreenLocationF(
     const ui::LocatedEvent& event) const {
   NOTREACHED();
-  return event.root_location_f();
 }
 
 gfx::Point EventTarget::GetScreenLocation(const ui::LocatedEvent& event) const {
   return gfx::ToFlooredPoint(GetScreenLocationF(event));
+}
+
+void EventTarget::AddPreTargetHandler(EventHandler* handler) {
+  AddPreTargetHandler(handler, Priority::kDefault);
 }
 
 void EventTarget::AddPreTargetHandler(EventHandler* handler,
@@ -55,13 +58,12 @@ void EventTarget::RemovePreTargetHandler(EventHandler* handler) {
 }
 
 void EventTarget::AddPostTargetHandler(EventHandler* handler) {
-  DCHECK(handler);
+  CHECK(handler, base::NotFatalUntil::M163);
   post_target_list_.push_back(handler);
 }
 
 void EventTarget::RemovePostTargetHandler(EventHandler* handler) {
-  auto find =
-      std::find(post_target_list_.begin(), post_target_list_.end(), handler);
+  auto find = std::ranges::find(post_target_list_, handler);
   if (find != post_target_list_.end())
     post_target_list_.erase(find);
 }
@@ -92,8 +94,9 @@ void EventTarget::GetPreTargetHandlers(EventHandlerList* list) {
   std::stable_sort(temp.begin(), temp.end());
 
   // Add the sorted handlers to the result list, in order.
-  for (size_t i = 0; i < temp.size(); ++i)
-    list->insert(list->end(), temp[i].handler);
+  for (auto& t : temp) {
+    list->insert(list->end(), t.handler.get());
+  }
 }
 
 void EventTarget::GetPostTargetHandlers(EventHandlerList* list) {

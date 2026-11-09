@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,17 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
+#include "base/containers/span.h"
 #include "net/base/net_export.h"
 #include "net/disk_cache/simple/simple_file_tracker.h"
 
 namespace base {
 class FilePath;
-class Time;
 }
 
-namespace disk_cache {
-
-namespace simple_util {
+namespace disk_cache::simple_util {
 
 NET_EXPORT_PRIVATE std::string ConvertEntryHashKeyToHexString(
     uint64_t hash_key);
@@ -36,9 +34,8 @@ NET_EXPORT_PRIVATE uint64_t GetEntryHashKey(const std::string& key);
 
 // Parses the |hash_key| string into a uint64_t buffer.
 // |hash_key| string must be of the form: FFFFFFFFFFFFFFFF .
-NET_EXPORT_PRIVATE bool GetEntryHashKeyFromHexString(
-    const base::StringPiece& hash_key,
-    uint64_t* hash_key_out);
+NET_EXPORT_PRIVATE bool GetEntryHashKeyFromHexString(std::string_view hash_key,
+                                                     uint64_t* hash_key_out);
 
 // Given a |key| for a (potential) entry in the simple backend and the |index|
 // of a stream on that entry, returns the filename in which that stream would be
@@ -62,35 +59,29 @@ size_t GetHeaderSize(size_t key_length);
 
 // Given the size of a file holding a stream in the simple backend and the key
 // to an entry, returns the number of bytes in the stream.
-NET_EXPORT_PRIVATE int32_t GetDataSizeFromFileSize(size_t key_length,
+NET_EXPORT_PRIVATE int64_t GetDataSizeFromFileSize(size_t key_length,
                                                    int64_t file_size);
 
 // Given the size of a stream in the simple backend and the key to an entry,
 // returns the number of bytes in the file.
 NET_EXPORT_PRIVATE int64_t GetFileSizeFromDataSize(size_t key_length,
-                                                   int32_t data_size);
+                                                   int64_t data_size);
 
 // Given the stream index, returns the number of the file the stream is stored
 // in.
 NET_EXPORT_PRIVATE int GetFileIndexFromStreamIndex(int stream_index);
 
-// Fills |out_time| with the time the file last modified time. Unlike the
-// functions in file.h, the time resolution is milliseconds.
-NET_EXPORT_PRIVATE bool GetMTime(const base::FilePath& path,
-                                 base::Time* out_mtime);
-
 // Deletes a file, insuring POSIX semantics. Provided that all open handles to
-// this file were opened with File::FLAG_SHARE_DELETE, it is possible to delete
-// an open file and continue to use that file. After deleting an open file, it
-// is possible to immediately create a new file with the same name.
+// this file were opened with File::FLAG_WIN_SHARE_DELETE, it is possible to
+// delete an open file and continue to use that file. After deleting an open
+// file, it is possible to immediately create a new file with the same name.
 NET_EXPORT_PRIVATE bool SimpleCacheDeleteFile(const base::FilePath& path);
 
-uint32_t Crc32(const char* data, int length);
+NET_EXPORT_PRIVATE uint32_t Crc32(base::span<const uint8_t> data);
 
-uint32_t IncrementalCrc32(uint32_t previous_crc, const char* data, int length);
+NET_EXPORT_PRIVATE uint32_t IncrementalCrc32(uint32_t previous_crc,
+                                             base::span<const uint8_t> data);
 
-}  // namespace simple_util
-
-}  // namespace disk_cache
+}  // namespace disk_cache::simple_util
 
 #endif  // NET_DISK_CACHE_SIMPLE_SIMPLE_UTIL_H_

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,49 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
-#include "base/bind_post_task.h"
+#include <optional>
+#include <string_view>
+#include <tuple>
+#include <vector>
+
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/cxx17_backports.h"
+#include "base/debug/alias.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/common/task_annotator.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/threading/thread_local.h"
+#include "base/trace_event/interned_args_helper.h"
+#include "base/trace_event/typed_macros.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/bindings/associated_group.h"
 #include "mojo/public/cpp/bindings/associated_group_controller.h"
+#include "mojo/public/cpp/bindings/connection_group.h"
+#include "mojo/public/cpp/bindings/connection_group_ref.h"
 #include "mojo/public/cpp/bindings/interface_endpoint_controller.h"
+#include "mojo/public/cpp/bindings/lib/responder_thunk.h"
 #include "mojo/public/cpp/bindings/lib/task_runner_helper.h"
 #include "mojo/public/cpp/bindings/lib/validation_util.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "mojo/public/cpp/bindings/sync_event_watcher.h"
 #include "mojo/public/cpp/bindings/thread_safe_proxy.h"
+#include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_mojo_event_info.pbzero.h"
 
 namespace mojo {
 
 // ----------------------------------------------------------------------------
 
 namespace {
+
+constinit thread_local base::HistogramBase* g_end_to_end_metric = nullptr;
 
 // A helper to expose a subset of an InterfaceEndpointClient's functionality
 // through a thread-safe interface. Used by SharedRemote.
@@ -44,11 +61,13 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
       base::WeakPtr<InterfaceEndpointClient> endpoint,
       scoped_refptr<ThreadSafeProxy::Target> target,
       const AssociatedGroup& associated_group,
-      scoped_refptr<base::SequencedTaskRunner> task_runner)
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
+      const base::Location& location)
       : endpoint_(std::move(endpoint)),
         target_(std::move(target)),
         associated_group_(associated_group),
-        task_runner_(std::move(task_runner)) {}
+        task_runner_(std::move(task_runner)),
+        location_(location) {}
 
   ThreadSafeInterfaceEndpointClientProxy(
       const ThreadSafeInterfaceEndpointClientProxy&) = delete;
@@ -72,8 +91,10 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
   ~ThreadSafeInterfaceEndpointClientProxy() override {
     // If there are ongoing sync calls signal their completion now.
     base::AutoLock l(sync_calls_->lock);
-    for (auto* pending_response : sync_calls_->pending_responses)
+    for (ThreadSafeInterfaceEndpointClientProxy::SyncResponseInfo*
+             pending_response : sync_calls_->pending_responses) {
       pending_response->event.Signal();
+    }
   }
 
   // Data that we need to share between the sequences involved in a sync call.
@@ -102,8 +123,9 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
     ~SyncResponseSignaler() override {
       // If Accept() was not called we must still notify the waiter that the
       // sync call is finished.
-      if (response_)
+      if (response_) {
         response_->event.Signal();
+      }
     }
 
     bool Accept(Message* message) override {
@@ -126,7 +148,8 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
 
     // |lock| protects access to |pending_responses|.
     base::Lock lock;
-    std::vector<SyncResponseInfo*> pending_responses GUARDED_BY(lock);
+    std::vector<raw_ptr<SyncResponseInfo, VectorExperimental>> pending_responses
+        GUARDED_BY(lock);
 
    private:
     friend class base::RefCountedThreadSafe<InProgressSyncCalls>;
@@ -136,12 +159,14 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
 
   class ForwardToCallingThread : public MessageReceiver {
    public:
-    explicit ForwardToCallingThread(std::unique_ptr<MessageReceiver> responder)
+    explicit ForwardToCallingThread(std::unique_ptr<MessageReceiver> responder,
+                                    const base::Location& location)
         : responder_(std::move(responder)),
-          caller_task_runner_(base::SequencedTaskRunnerHandle::Get()) {}
+          caller_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
+          location_(location) {}
 
     ~ForwardToCallingThread() override {
-      caller_task_runner_->DeleteSoon(FROM_HERE, std::move(responder_));
+      caller_task_runner_->DeleteSoon(location_, std::move(responder_));
     }
 
    private:
@@ -149,7 +174,7 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
       // `this` will be deleted immediately after this method returns. We must
       // relinquish ownership of `responder_` so it doesn't get deleted.
       caller_task_runner_->PostTask(
-          FROM_HERE,
+          location_,
           base::BindOnce(&ForwardToCallingThread::CallAcceptAndDeleteResponder,
                          std::move(responder_), std::move(*message)));
       return true;
@@ -158,11 +183,12 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
     static void CallAcceptAndDeleteResponder(
         std::unique_ptr<MessageReceiver> responder,
         Message message) {
-      ignore_result(responder->Accept(&message));
+      std::ignore = responder->Accept(&message);
     }
 
     std::unique_ptr<MessageReceiver> responder_;
     scoped_refptr<base::SequencedTaskRunner> caller_task_runner_;
+    const base::Location location_;
   };
 
   class ForwardSameThreadResponder : public MessageReceiver {
@@ -177,8 +203,9 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
    private:
     bool Accept(Message* message) override {
       // If we're the only remaining ref, don't bother accepting the reply.
-      if (proxy_->HasOneRef())
+      if (proxy_->HasOneRef()) {
         return false;
+      }
 
       return responder_->Accept(message);
     }
@@ -189,8 +216,9 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
 
   void ForwardMessage(Message message) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
-    if (!endpoint_)
+    if (!endpoint_) {
       return;
+    }
 
     endpoint_->SendMessage(&message, /*is_control_message=*/false);
   }
@@ -200,8 +228,9 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
       InterfaceEndpointClient::SyncSendMode sync_send_mode,
       std::unique_ptr<MessageReceiver> responder) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
-    if (!endpoint_)
+    if (!endpoint_) {
       return;
+    }
 
     endpoint_->SendMessageWithResponder(&message, /*is_control_message=*/false,
                                         sync_send_mode, std::move(responder));
@@ -213,105 +242,34 @@ class ThreadSafeInterfaceEndpointClientProxy : public ThreadSafeProxy {
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
   const scoped_refptr<InProgressSyncCalls> sync_calls_{
       base::MakeRefCounted<InProgressSyncCalls>()};
-};
-
-void DetermineIfEndpointIsConnected(
-    const base::WeakPtr<InterfaceEndpointClient>& client,
-    base::OnceCallback<void(bool)> callback) {
-  std::move(callback).Run(client && !client->encountered_error());
-}
-
-// When receiving an incoming message which expects a repsonse,
-// InterfaceEndpointClient creates a ResponderThunk object and passes it to the
-// incoming message receiver. When the receiver finishes processing the message,
-// it can provide a response using this object.
-class ResponderThunk : public MessageReceiverWithStatus {
- public:
-  explicit ResponderThunk(
-      const base::WeakPtr<InterfaceEndpointClient>& endpoint_client,
-      scoped_refptr<base::SequencedTaskRunner> runner)
-      : endpoint_client_(endpoint_client),
-        accept_was_invoked_(false),
-        task_runner_(std::move(runner)) {}
-  ~ResponderThunk() override {
-    if (!accept_was_invoked_) {
-      // The Service handled a message that was expecting a response
-      // but did not send a response.
-      // We raise an error to signal the calling application that an error
-      // condition occurred. Without this the calling application would have no
-      // way of knowing it should stop waiting for a response.
-      if (task_runner_->RunsTasksInCurrentSequence()) {
-        // Please note that even if this code is run from a different task
-        // runner on the same thread as |task_runner_|, it is okay to directly
-        // call InterfaceEndpointClient::RaiseError(), because it will raise
-        // error from the correct task runner asynchronously.
-        if (endpoint_client_) {
-          endpoint_client_->RaiseError();
-        }
-      } else {
-        task_runner_->PostTask(
-            FROM_HERE, base::BindOnce(&InterfaceEndpointClient::RaiseError,
-                                      endpoint_client_));
-      }
-    }
-  }
-
-  // Allows this thunk to be attached to a ConnectionGroup as a means of keeping
-  // the group from idling while the response is pending.
-  void set_connection_group(ConnectionGroup::Ref connection_group) {
-    connection_group_ = std::move(connection_group);
-  }
-
-  // MessageReceiver implementation:
-  bool PrefersSerializedMessages() override {
-    return endpoint_client_ && endpoint_client_->PrefersSerializedMessages();
-  }
-
-  bool Accept(Message* message) override {
-    DCHECK(task_runner_->RunsTasksInCurrentSequence());
-    accept_was_invoked_ = true;
-    DCHECK(message->has_flag(Message::kFlagIsResponse));
-
-    bool result = false;
-
-    if (endpoint_client_)
-      result = endpoint_client_->Accept(message);
-
-    return result;
-  }
-
-  // MessageReceiverWithStatus implementation:
-  bool IsConnected() override {
-    DCHECK(task_runner_->RunsTasksInCurrentSequence());
-    return endpoint_client_ && !endpoint_client_->encountered_error();
-  }
-
-  void IsConnectedAsync(base::OnceCallback<void(bool)> callback) override {
-    if (task_runner_->RunsTasksInCurrentSequence()) {
-      DetermineIfEndpointIsConnected(endpoint_client_, std::move(callback));
-    } else {
-      task_runner_->PostTask(
-          FROM_HERE, base::BindOnce(&DetermineIfEndpointIsConnected,
-                                    endpoint_client_, std::move(callback)));
-    }
-  }
-
- private:
-  base::WeakPtr<InterfaceEndpointClient> endpoint_client_;
-  bool accept_was_invoked_;
-  scoped_refptr<base::SequencedTaskRunner> task_runner_;
-  ConnectionGroup::Ref connection_group_;
-
-  DISALLOW_COPY_AND_ASSIGN(ResponderThunk);
+  const base::Location location_;
 };
 
 }  // namespace
 
 // ----------------------------------------------------------------------------
 
+InterfaceEndpointClient::PendingAsyncResponse::PendingAsyncResponse(
+    uint32_t request_message_name,
+    std::unique_ptr<MessageReceiver> responder)
+    : request_message_name(request_message_name),
+      responder(std::move(responder)) {}
+
+InterfaceEndpointClient::PendingAsyncResponse::PendingAsyncResponse(
+    PendingAsyncResponse&&) = default;
+
+InterfaceEndpointClient::PendingAsyncResponse&
+InterfaceEndpointClient::PendingAsyncResponse::operator=(
+    PendingAsyncResponse&&) = default;
+
+InterfaceEndpointClient::PendingAsyncResponse::~PendingAsyncResponse() =
+    default;
+
 InterfaceEndpointClient::SyncResponseInfo::SyncResponseInfo(
+    uint32_t request_message_name,
     bool* in_response_received)
-    : response_received(in_response_received) {}
+    : request_message_name(request_message_name),
+      response_received(in_response_received) {}
 
 InterfaceEndpointClient::SyncResponseInfo::~SyncResponseInfo() {}
 
@@ -339,8 +297,8 @@ void ThreadSafeInterfaceEndpointClientProxy::SendMessageWithResponder(
   // Async messages are always posted (even if `task_runner_` runs tasks on
   // this sequence) to guarantee that two async calls can't be reordered.
   if (!message.has_flag(Message::kFlagIsSync)) {
-    auto reply_forwarder =
-        std::make_unique<ForwardToCallingThread>(std::move(responder));
+    auto reply_forwarder = std::make_unique<ForwardToCallingThread>(
+        std::move(responder), location_);
     task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&ThreadSafeInterfaceEndpointClientProxy ::
@@ -363,7 +321,9 @@ void ThreadSafeInterfaceEndpointClientProxy::SendMessageWithResponder(
   }
 
   // If the Remote is bound on another sequence, post the call.
-  const bool allow_interrupt = !message.has_flag(Message::kFlagNoInterrupt);
+  const bool allow_interrupt =
+      SyncCallRestrictions::AreSyncCallInterruptsEnabled() &&
+      !message.has_flag(Message::kFlagNoInterrupt);
   auto response = base::MakeRefCounted<SyncResponseInfo>();
   auto response_signaler = std::make_unique<SyncResponseSignaler>(response);
   task_runner_->PostTask(
@@ -393,7 +353,7 @@ void ThreadSafeInterfaceEndpointClientProxy::SendMessageWithResponder(
     SyncEventWatcher watcher(&response->event,
                              base::BindRepeating(set_flag, &signaled));
     const bool* stop_flags[] = {&signaled};
-    watcher.SyncWatch(stop_flags, base::size(stop_flags));
+    watcher.SyncWatch(stop_flags);
   } else {
     // Else we can wait on the event directly. It will only signal after our
     // reply has been processed or cancelled.
@@ -402,35 +362,42 @@ void ThreadSafeInterfaceEndpointClientProxy::SendMessageWithResponder(
 
   {
     base::AutoLock l(sync_calls->lock);
-    base::Erase(sync_calls->pending_responses, response.get());
+    std::erase(sync_calls->pending_responses, response.get());
   }
 
-  if (response->received)
-    ignore_result(responder->Accept(&response->message));
+  if (response->received) {
+    std::ignore = responder->Accept(&response->message);
+  }
 }
 
 InterfaceEndpointClient::InterfaceEndpointClient(
     ScopedInterfaceEndpointHandle handle,
     MessageReceiverWithResponderStatus* receiver,
-    std::unique_ptr<MessageReceiver> payload_validator,
-    bool expect_sync_requests,
+    MessageValidatorFunc payload_validator,
+    base::span<const uint32_t> sync_method_ordinals,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     uint32_t interface_version,
-    const char* interface_name)
-    : expect_sync_requests_(expect_sync_requests),
+    const char* interface_name,
+    MessageToMethodInfoCallback method_info_callback,
+    MessageToMethodNameCallback method_name_callback)
+    : sync_method_ordinals_(sync_method_ordinals),
       handle_(std::move(handle)),
       incoming_receiver_(receiver),
       dispatcher_(&thunk_),
       task_runner_(std::move(task_runner)),
       control_message_handler_(this, interface_version),
-      interface_name_(interface_name) {
+      interface_name_(interface_name),
+      method_info_callback_(method_info_callback),
+      method_name_callback_(method_name_callback) {
+  DCHECK(interface_name_);
   DCHECK(handle_.is_valid());
-  DETACH_FROM_SEQUENCE(sequence_checker_);
+  sequence_checker_.DetachFromSequence();
 
   // TODO(yzshen): the way to use validator (or message filter in general)
   // directly is a little awkward.
-  if (payload_validator)
-    dispatcher_.SetValidator(std::move(payload_validator));
+  if (payload_validator) {
+    dispatcher_.SetValidator(payload_validator);
+  }
 
   if (handle_.pending_association()) {
     if (task_runner_->RunsTasksInCurrentSequence()) {
@@ -449,30 +416,34 @@ InterfaceEndpointClient::InterfaceEndpointClient(
 }
 
 InterfaceEndpointClient::~InterfaceEndpointClient() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (controller_)
+  CHECK(sequence_checker_.CalledOnValidSequence());
+  if (controller_) {
     handle_.group_controller()->DetachEndpointClient(handle_);
+  }
 }
 
 AssociatedGroup* InterfaceEndpointClient::associated_group() {
-  if (!associated_group_)
+  if (!associated_group_) {
     associated_group_ = std::make_unique<AssociatedGroup>(handle_);
+  }
   return associated_group_.get();
 }
 
 scoped_refptr<ThreadSafeProxy> InterfaceEndpointClient::CreateThreadSafeProxy(
-    scoped_refptr<ThreadSafeProxy::Target> target) {
+    scoped_refptr<ThreadSafeProxy::Target> target,
+    const base::Location& location) {
   return base::MakeRefCounted<ThreadSafeInterfaceEndpointClientProxy>(
       weak_ptr_factory_.GetWeakPtr(), std::move(target), *associated_group_,
-      task_runner_);
+      task_runner_, location);
 }
 
 ScopedInterfaceEndpointHandle InterfaceEndpointClient::PassHandle() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(sequence_checker_.CalledOnValidSequence());
   DCHECK(!has_pending_responders());
 
-  if (!handle_.is_valid())
+  if (!handle_.is_valid()) {
     return ScopedInterfaceEndpointHandle();
+  }
 
   handle_.SetAssociationEventHandler(
       ScopedInterfaceEndpointHandle::AssociationEventCallback());
@@ -490,23 +461,19 @@ void InterfaceEndpointClient::SetFilter(std::unique_ptr<MessageFilter> filter) {
 }
 
 void InterfaceEndpointClient::RaiseError() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(sequence_checker_.CalledOnValidSequence());
 
-  if (!handle_.pending_association())
+  if (!handle_.pending_association()) {
     handle_.group_controller()->RaiseError();
+  }
 }
 
 void InterfaceEndpointClient::CloseWithReason(uint32_t custom_reason,
-                                              const std::string& description) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+                                              std::string_view description) {
+  CHECK(sequence_checker_.CalledOnValidSequence());
 
   auto handle = PassHandle();
   handle.ResetWithReason(custom_reason, description);
-}
-
-bool InterfaceEndpointClient::PrefersSerializedMessages() {
-  auto* controller = handle_.group_controller();
-  return controller && controller->PrefersSerializedMessages();
 }
 
 void InterfaceEndpointClient::SendControlMessage(Message* message) {
@@ -534,9 +501,16 @@ bool InterfaceEndpointClient::AcceptWithResponder(
 
 bool InterfaceEndpointClient::SendMessage(Message* message,
                                           bool is_control_message) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(sequence_checker_.CalledOnValidSequence());
   DCHECK(!message->has_flag(Message::kFlagExpectsResponse));
-  DCHECK(!handle_.pending_association());
+
+  CHECK(!handle_.pending_association())
+      << "Cannot send a message when the endpoint hasn't been associated with "
+         "a message pipe. This failure typically happens when attempting to "
+         "make a call with an AssociatedRemote before one of the endpoints "
+         "(either the AssociatedRemote itself or its entangled "
+         "AssociatedReceiver) is sent over a Remote/Receiver pair or an "
+         "already-established AssociatedRemote/AssociatedReceiver pair.";
 
   // This has to been done even if connection error has occurred. For example,
   // the message contains a pending associated request. The user may try to use
@@ -545,22 +519,27 @@ bool InterfaceEndpointClient::SendMessage(Message* message,
   // to work properly.
   message->SerializeHandles(handle_.group_controller());
 
-  if (encountered_error_)
+  if (encountered_error_) {
+    message->NotifyPeerClosureForSerializedHandles(handle_.group_controller());
     return false;
+  }
 
   InitControllerIfNecessary();
 
 #if DCHECK_IS_ON()
-  // TODO(https://crbug.com/695289): Send |next_call_location_| in a control
+  // TODO(crbug.com/40507817): Send |next_call_location_| in a control
   // message before calling |SendMessage()| below.
 #endif
 
   message->set_heap_profiler_tag(interface_name_);
-  if (!controller_->SendMessage(message))
+  if (!controller_->SendMessage(message)) {
+    message->NotifyPeerClosureForSerializedHandles(handle_.group_controller());
     return false;
+  }
 
-  if (!is_control_message && idle_handler_)
+  if (!is_control_message && idle_handler_) {
     ++num_unacked_messages_;
+  }
 
   return true;
 }
@@ -570,38 +549,47 @@ bool InterfaceEndpointClient::SendMessageWithResponder(
     bool is_control_message,
     SyncSendMode sync_send_mode,
     std::unique_ptr<MessageReceiver> responder) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(sequence_checker_.CalledOnValidSequence());
   DCHECK(message->has_flag(Message::kFlagExpectsResponse));
   DCHECK(!handle_.pending_association());
 
   // Please see comments in Accept().
   message->SerializeHandles(handle_.group_controller());
 
-  if (encountered_error_)
+  if (encountered_error_) {
+    message->NotifyPeerClosureForSerializedHandles(handle_.group_controller());
     return false;
+  }
 
   InitControllerIfNecessary();
 
   // Reserve 0 in case we want it to convey special meaning in the future.
   uint64_t request_id = next_request_id_++;
-  if (request_id == 0)
+  if (request_id == 0) {
     request_id = next_request_id_++;
+  }
 
   message->set_request_id(request_id);
   message->set_heap_profiler_tag(interface_name_);
 
 #if DCHECK_IS_ON()
-  // TODO(https://crbug.com/695289): Send |next_call_location_| in a control
+  // TODO(crbug.com/40507817): Send |next_call_location_| in a control
   // message before calling |SendMessage()| below.
 #endif
 
+  const uint32_t message_name = message->name();
   const bool is_sync = message->has_flag(Message::kFlagIsSync);
-  const bool exclusive_wait = message->has_flag(Message::kFlagNoInterrupt);
-  if (!controller_->SendMessage(message))
+  const bool exclusive_wait =
+      message->has_flag(Message::kFlagNoInterrupt) ||
+      !SyncCallRestrictions::AreSyncCallInterruptsEnabled();
+  if (!controller_->SendMessage(message)) {
+    message->NotifyPeerClosureForSerializedHandles(handle_.group_controller());
     return false;
+  }
 
-  if (!is_control_message && idle_handler_)
+  if (!is_control_message && idle_handler_) {
     ++num_unacked_messages_;
+  }
 
   if (!is_sync || sync_send_mode == SyncSendMode::kForceAsync) {
     if (is_sync) {
@@ -611,7 +599,8 @@ bool InterfaceEndpointClient::SendMessageWithResponder(
       controller_->RegisterExternalSyncWaiter(request_id);
     }
     base::AutoLock lock(async_responders_lock_);
-    async_responders_[request_id] = std::move(responder);
+    async_responders_.emplace(
+        request_id, PendingAsyncResponse{message_name, std::move(responder)});
     return true;
   }
 
@@ -619,21 +608,23 @@ bool InterfaceEndpointClient::SendMessageWithResponder(
 
   bool response_received = false;
   sync_responses_.insert(std::make_pair(
-      request_id, std::make_unique<SyncResponseInfo>(&response_received)));
+      request_id,
+      std::make_unique<SyncResponseInfo>(message_name, &response_received)));
 
   base::WeakPtr<InterfaceEndpointClient> weak_self =
       weak_ptr_factory_.GetWeakPtr();
-  if (exclusive_wait)
+  if (exclusive_wait) {
     controller_->SyncWatchExclusive(request_id);
-  else
+  } else {
     controller_->SyncWatch(response_received);
+  }
   // Make sure that this instance hasn't been destroyed.
   if (weak_self) {
-    DCHECK(base::Contains(sync_responses_, request_id));
+    DCHECK(sync_responses_.contains(request_id));
     auto iter = sync_responses_.find(request_id);
     DCHECK_EQ(&response_received, iter->second->response_received);
     if (response_received) {
-      ignore_result(responder->Accept(&iter->second->response));
+      std::ignore = responder->Accept(&iter->second->response);
     } else {
       DVLOG(1) << "Mojo sync call returns without receiving a response. "
                << "Typcially it is because the interface has been "
@@ -646,21 +637,37 @@ bool InterfaceEndpointClient::SendMessageWithResponder(
 }
 
 bool InterfaceEndpointClient::HandleIncomingMessage(Message* message) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-   if (!dispatcher_.Accept(message)) {
-      LOG(ERROR) << "Message " << message->name() << " rejected by interface " << interface_name_;
-      return false;
-    }
-    return true;
+  CHECK(sequence_checker_.CalledOnValidSequence());
+
+  // Accept() may invalidate `this` and `message` so we need to copy the
+  // members we need for logging in case of an error.
+  const char* interface_name = interface_name_;
+  uint32_t name = message->name();
+  if (!dispatcher_.Accept(message)) {
+    LOG(ERROR) << "Message " << name << " rejected by interface "
+               << interface_name;
+    return false;
+  }
+
+  return true;
 }
 
 void InterfaceEndpointClient::NotifyError(
-    const absl::optional<DisconnectReason>& reason) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    const std::optional<DisconnectReason>& reason) {
+  TRACE_EVENT("toplevel", "Closed mojo endpoint",
+              [&](perfetto::EventContext& ctx) {
+                auto* info = ctx.event()->set_chrome_mojo_event_info();
+                info->set_mojo_interface_tag(interface_name_);
+              });
 
-  if (encountered_error_)
+  CHECK(sequence_checker_.CalledOnValidSequence());
+
+  if (encountered_error_) {
     return;
+  }
   encountered_error_ = true;
+
+  DEBUG_ALIAS_FOR_CSTR(interface_name, interface_name_, 256);
 
   // Response callbacks may hold on to resource, and there's no need to keep
   // them alive any longer. Note that it's allowed that a pending response
@@ -733,20 +740,23 @@ bool InterfaceEndpointClient::AcceptEnableIdleTracking(
 }
 
 bool InterfaceEndpointClient::AcceptMessageAck() {
-  if (!idle_handler_ || num_unacked_messages_ == 0)
+  if (!idle_handler_ || num_unacked_messages_ == 0) {
     return false;
+  }
 
   --num_unacked_messages_;
   return true;
 }
 
 bool InterfaceEndpointClient::AcceptNotifyIdle() {
-  if (!idle_handler_)
+  if (!idle_handler_) {
     return false;
+  }
 
   // We have outstanding unacked messages, so quietly ignore this NotifyIdle.
-  if (num_unacked_messages_ > 0)
+  if (num_unacked_messages_ > 0) {
     return true;
+  }
 
   // With no outstanding unacked messages, a NotifyIdle received implies that
   // the peer really is idle. We can invoke our idle handler.
@@ -779,7 +789,7 @@ void InterfaceEndpointClient::MaybeSendNotifyIdle() {
 }
 
 void InterfaceEndpointClient::ResetFromAnotherSequenceUnsafe() {
-  DETACH_FROM_SEQUENCE(sequence_checker_);
+  sequence_checker_.DetachFromSequence();
 
   if (controller_) {
     controller_ = nullptr;
@@ -790,25 +800,29 @@ void InterfaceEndpointClient::ResetFromAnotherSequenceUnsafe() {
 }
 
 void InterfaceEndpointClient::ForgetAsyncRequest(uint64_t request_id) {
-  std::unique_ptr<MessageReceiver> responder;
+  std::optional<PendingAsyncResponse> response;
   {
     base::AutoLock lock(async_responders_lock_);
     auto it = async_responders_.find(request_id);
-    if (it == async_responders_.end())
+    if (it == async_responders_.end()) {
       return;
-    responder = std::move(it->second);
+    }
+    response = std::move(it->second);
     async_responders_.erase(it);
   }
 }
 
 void InterfaceEndpointClient::InitControllerIfNecessary() {
-  if (controller_ || handle_.pending_association())
+  if (controller_ || handle_.pending_association()) {
     return;
+  }
 
   controller_ = handle_.group_controller()->AttachEndpointClient(handle_, this,
                                                                  task_runner_);
-  if (expect_sync_requests_ && task_runner_->RunsTasksInCurrentSequence())
+  if (!sync_method_ordinals_.empty() &&
+      task_runner_->RunsTasksInCurrentSequence()) {
     controller_->AllowWokenUpBySyncWatchOnSameThread();
+  }
 }
 
 void InterfaceEndpointClient::OnAssociationEvent(
@@ -825,7 +839,78 @@ void InterfaceEndpointClient::OnAssociationEvent(
 }
 
 bool InterfaceEndpointClient::HandleValidatedMessage(Message* message) {
+  TRACE_EVENT(
+      "toplevel,mojom", perfetto::StaticString{method_name_callback_(*message)},
+      [&](perfetto::EventContext& ctx) {
+        auto* info = ctx.event()->set_chrome_mojo_event_info();
+#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
+        // ARM64 Android - set the interface tag unconditionally.
+        // TODO(kraskevich): Remove this special case once we're
+        // fully confident in crrev.com/c/3763052.
+        info->set_mojo_interface_tag(interface_name_);
+#else
+        // Generate mojo interface tag only for local traces.
+        //
+        // This saves trace buffer space for field traces. The
+        // interface tag can be extracted from the interface method
+        // after symbolization.
+        //
+        // For local traces, this produces a raw string so that the
+        // trace doesn't require symbolization to be useful.
+        if (!ctx.ShouldFilterDebugAnnotations()) {
+          info->set_mojo_interface_tag(interface_name_);
+        }
+#endif  // BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
+        const auto method_info = method_info_callback_(*message);
+        if (method_info) {
+          info->set_ipc_hash((*method_info)());
+          // Interning unsymbolized source locations incurs ModuleCache lookup
+          // overhead which can skew toplevel traces during process startup
+          // (crbug.com/561471278). Only emit when "mojom" is explicitly
+          // enabled.
+          if (TRACE_EVENT_CATEGORY_ENABLED("mojom")) {
+            const auto method_address =
+                reinterpret_cast<uintptr_t>(method_info);
+            const std::optional<size_t> location_iid =
+                base::trace_event::InternedUnsymbolizedSourceLocation::Get(
+                    &ctx, method_address);
+            if (location_iid) {
+              info->set_mojo_interface_method_iid(*location_iid);
+            }
+          }
+        }
+
+        info->set_payload_size(message->payload_num_bytes());
+        info->set_data_num_bytes(message->data_num_bytes());
+
+        if (!TRACE_EVENT_CATEGORY_ENABLED("toplevel.flow,mojom.flow"))
+          return;
+
+        perfetto::Flow::Global(message->GetTraceId())(ctx);
+      });
+
   DCHECK_EQ(handle_.id(), message->interface_id());
+
+  int64_t creation_timeticks_us = message->creation_timeticks_us();
+  if (creation_timeticks_us > 0) {
+    if (!g_end_to_end_metric) {
+      SetThreadNameSuffixForMetrics("Default");
+    }
+    base::TimeTicks creation_timeticks =
+        base::TimeTicks() + base::Microseconds(creation_timeticks_us);
+    base::TimeDelta end_to_end_duration =
+        base::TimeTicks::Now() - creation_timeticks;
+    g_end_to_end_metric->AddTimeMicrosecondsGranularity(end_to_end_duration);
+  }
+
+  // Sync messages can be sent and received at arbitrary points in time and we
+  // should not associate them with the top-level scheduler task.
+  if (!message->has_flag(Message::kFlagIsSync)) {
+    const auto method_info = method_info_callback_(*message);
+    base::TaskAnnotator::OnIPCReceived(
+        interface_name_, method_info,
+        message->has_flag(Message::kFlagIsResponse));
+  }
 
   if (encountered_error_) {
     // This message is received after error has been encountered. For associated
@@ -842,14 +927,15 @@ bool InterfaceEndpointClient::HandleValidatedMessage(Message* message) {
   bool has_response = false;
   if (message->has_flag(Message::kFlagExpectsResponse)) {
     has_response = true;
-    auto responder = std::make_unique<ResponderThunk>(
+    auto responder = std::make_unique<internal::ResponderThunk>(
         weak_ptr_factory_.GetWeakPtr(), task_runner_);
     if (mojo::internal::ControlMessageHandler::IsControlMessage(message)) {
       return control_message_handler_.AcceptWithResponder(message,
                                                           std::move(responder));
     } else {
-      if (idle_tracking_connection_group_)
+      if (idle_tracking_connection_group_) {
         responder->set_connection_group(idle_tracking_connection_group_);
+      }
       accepted_interface_message = incoming_receiver_->AcceptWithResponder(
           message, std::move(responder));
     }
@@ -858,10 +944,15 @@ bool InterfaceEndpointClient::HandleValidatedMessage(Message* message) {
 
     if (message->has_flag(Message::kFlagIsSync)) {
       auto it = sync_responses_.find(request_id);
-      if (it == sync_responses_.end())
+      if (it == sync_responses_.end()) {
         return false;
+      }
 
       if (it->second) {
+        if (message->name() != it->second->request_message_name) {
+          return false;
+        }
+
         it->second->response = std::move(*message);
         *it->second->response_received = true;
         return true;
@@ -872,21 +963,27 @@ bool InterfaceEndpointClient::HandleValidatedMessage(Message* message) {
       sync_responses_.erase(it);
     }
 
-    std::unique_ptr<MessageReceiver> responder;
+    std::optional<PendingAsyncResponse> pending_response;
     {
       base::AutoLock lock(async_responders_lock_);
       auto it = async_responders_.find(request_id);
-      if (it == async_responders_.end())
+      if (it == async_responders_.end()) {
         return false;
-      responder = std::move(it->second);
+      }
+      pending_response = std::move(it->second);
       async_responders_.erase(it);
     }
 
+    if (message->name() != pending_response->request_message_name) {
+      return false;
+    }
+
     internal::MessageDispatchContext dispatch_context(message);
-    return responder->Accept(message);
+    return pending_response->responder->Accept(message);
   } else {
-    if (mojo::internal::ControlMessageHandler::IsControlMessage(message))
+    if (mojo::internal::ControlMessageHandler::IsControlMessage(message)) {
       return control_message_handler_.Accept(message);
+    }
 
     accepted_interface_message = incoming_receiver_->Accept(message);
   }
@@ -894,11 +991,20 @@ bool InterfaceEndpointClient::HandleValidatedMessage(Message* message) {
   if (weak_self && accepted_interface_message &&
       idle_tracking_connection_group_) {
     control_message_proxy_.SendMessageAck();
-    if (!has_response)
+    if (!has_response) {
       MaybeStartIdleTimer();
+    }
   }
 
   return accepted_interface_message;
+}
+
+// static
+void InterfaceEndpointClient::SetThreadNameSuffixForMetrics(
+    std::string thread_name) {
+  g_end_to_end_metric = base::Histogram::FactoryMicrosecondsTimeGet(
+      "Mojo.EndToEndLatencyUs." + thread_name, base::Microseconds(1),
+      base::Seconds(1), 100, base::HistogramBase::kUmaTargetedHistogramFlag);
 }
 
 }  // namespace mojo

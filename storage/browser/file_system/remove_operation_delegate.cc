@@ -1,10 +1,10 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "storage/browser/file_system/remove_operation_delegate.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
 
@@ -56,6 +56,10 @@ void RemoveOperationDelegate::PostProcessDirectory(const FileSystemURL& url,
   operation_runner()->RemoveDirectory(url, std::move(callback));
 }
 
+base::WeakPtr<RecursiveOperationDelegate> RemoveOperationDelegate::AsWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
 void RemoveOperationDelegate::DidTryRemoveFile(base::File::Error error) {
   if (error != base::File::FILE_ERROR_NOT_A_FILE &&
       error != base::File::FILE_ERROR_SECURITY) {
@@ -78,10 +82,6 @@ void RemoveOperationDelegate::DidTryRemoveDirectory(
 
 void RemoveOperationDelegate::DidRemoveFile(StatusCallback callback,
                                             base::File::Error error) {
-  if (error == base::File::FILE_ERROR_NOT_FOUND) {
-    std::move(callback).Run(base::File::FILE_OK);
-    return;
-  }
   std::move(callback).Run(error);
 }
 

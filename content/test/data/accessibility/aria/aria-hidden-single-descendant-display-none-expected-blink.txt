@@ -1,5 +1,4 @@
 rootWebArea
 ++genericContainer ignored
 ++++genericContainer ignored
-++++++genericContainer invisible
 ++++++group name='Done'

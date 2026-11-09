@@ -1,5 +1,12 @@
-donnd@chromium.org
-twellington@chromium.org
+jennserrano@google.com
+sophiechang@chromium.org
+tiborg@chromium.org
 
-per-file *.mojom=set noparent
-per-file *.mojom=file://ipc/SECURITY_OWNERS
+file://components/lens/OWNERS
+
+per-file input_state_model*=ananyaseelam@google.com
+per-file input_state_model*=kiehl@google.com
+
+# Android only OWNERS.
+per-file android/...=file://components/omnibox/browser/android/OWNERS
+per-file BUILD.gn=file://components/omnibox/browser/android/OWNERS

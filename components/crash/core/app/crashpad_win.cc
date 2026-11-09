@@ -1,13 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/crash/core/app/crashpad.h"
+#include "components/crash/core/app/shared_memory_user_stream_args.h"
 
+#include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
+#include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/debug/crash_logging.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
@@ -16,8 +20,10 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/win/windows_version.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "components/app_launch_prefetch/app_launch_prefetch.h"
 #include "components/crash/core/app/crash_export_thunks.h"
 #include "components/crash/core/app/crash_reporter_client.h"
 #include "components/crash/core/app/crash_switches.h"
@@ -32,7 +38,7 @@ void GetPlatformCrashpadAnnotations(
     std::map<std::string, std::string>* annotations) {
   CrashReporterClient* crash_reporter_client = GetCrashReporterClient();
   wchar_t exe_file[MAX_PATH] = {};
-  CHECK(::GetModuleFileName(nullptr, exe_file, base::size(exe_file)));
+  CHECK(::GetModuleFileName(nullptr, exe_file, std::size(exe_file)));
   std::wstring product_name, version, special_build, channel_name;
   crash_reporter_client->GetProductNameAndVersion(
       exe_file, &product_name, &version, &special_build, &channel_name);
@@ -60,14 +66,15 @@ void GetPlatformCrashpadAnnotations(
 #endif
 }
 
-base::FilePath PlatformCrashpadInitialization(
+bool PlatformCrashpadInitialization(
     bool initial_client,
     bool browser_process,
     bool embedded_handler,
     const std::string& user_data_dir,
     const base::FilePath& exe_path,
-    const std::vector<std::string>& initial_arguments) {
-  base::FilePath database_path;  // Only valid in the browser process.
+    const std::vector<std::string>& initial_arguments,
+    const std::vector<base::FilePath>& attachments,
+    base::FilePath* database_path) {
   base::FilePath metrics_path;  // Only valid in the browser process.
 
   const char kPipeNameVar[] = "CHROME_CRASHPAD_PIPE_NAME";
@@ -76,10 +83,12 @@ base::FilePath PlatformCrashpadInitialization(
 
   CrashReporterClient* crash_reporter_client = GetCrashReporterClient();
 
+  bool initialized = false;
+
   if (initial_client) {
     std::wstring database_path_str;
     if (crash_reporter_client->GetCrashDumpLocation(&database_path_str))
-      database_path = base::FilePath(database_path_str);
+      *database_path = base::FilePath(database_path_str);
 
     std::wstring metrics_path_str;
     if (crash_reporter_client->GetCrashMetricsLocation(&metrics_path_str)) {
@@ -89,18 +98,25 @@ base::FilePath PlatformCrashpadInitialization(
 
     std::map<std::string, std::string> process_annotations;
     GetPlatformCrashpadAnnotations(&process_annotations);
+    for (auto& [key, value] :
+         crash_reporter_client->GetExtraProcessAnnotations()) {
+      process_annotations.insert_or_assign(key, std::move(value));
+    }
 
     std::string url = crash_reporter_client->GetUploadUrl();
 
     // Allow the crash server to be overridden for testing. If the variable
     // isn't present in the environment then the default URL will remain.
-    env->GetVar(kServerUrlVar, &url);
+    std::optional<std::string> server_url = env->GetVar(kServerUrlVar);
+    if (server_url.has_value()) {
+      url = server_url.value();
+    }
 
     base::FilePath exe_file(exe_path);
     if (exe_file.empty()) {
       wchar_t exe_file_path[MAX_PATH] = {};
       CHECK(::GetModuleFileName(nullptr, exe_file_path,
-                                base::size(exe_file_path)));
+                                std::size(exe_file_path)));
 
       exe_file = base::FilePath(exe_file_path);
     }
@@ -116,10 +132,9 @@ base::FilePath PlatformCrashpadInitialization(
         start_arguments.push_back(std::string("--user-data-dir=") +
                                   user_data_dir);
       }
-      // The prefetch argument added here has to be documented in
-      // chrome_switches.cc, below the kPrefetchArgument* constants. A constant
-      // can't be used here because crashpad can't depend on Chrome.
-      start_arguments.push_back("/prefetch:7");
+      start_arguments.push_back(
+          base::WideToUTF8(app_launch_prefetch::GetPrefetchSwitch(
+              app_launch_prefetch::SubprocessType::kCrashpad)));
     } else {
       base::FilePath exe_dir = exe_file.DirName();
       exe_file = exe_dir.Append(FILE_PATH_LITERAL("crashpad_handler.exe"));
@@ -134,6 +149,12 @@ base::FilePath PlatformCrashpadInitialization(
                             start_argument);
       }
     }
+    if (!crash_reporter_client->ShouldRateLimitUploads()) {
+      arguments.push_back("--no-rate-limit");
+    }
+    if (!crash_reporter_client->ShouldCompressUploads()) {
+      arguments.push_back("--no-upload-gzip");
+    }
 
     // Set up --monitor-self-annotation even in the absence of --monitor-self so
     // that minidumps produced by Crashpad's generate_dump tool will contain
@@ -141,30 +162,55 @@ base::FilePath PlatformCrashpadInitialization(
     arguments.push_back(std::string("--monitor-self-annotation=ptype=") +
                         switches::kCrashpadHandler);
 
-    GetCrashpadClient().StartHandler(exe_file, database_path, metrics_path, url,
-                                     process_annotations, arguments, false,
-                                     false);
+    std::vector<base::ReadOnlySharedMemoryRegion> user_streams =
+        crash_reporter_client->GetUserStreamSharedMemoryRegions();
+    std::set<crashpad::FileHandle> preserve_handles;
+    internal::AppendSharedMemoryUserStreamArgs(user_streams, &arguments,
+                                               &preserve_handles);
 
-    // If we're the browser, push the pipe name into the environment so child
-    // processes can connect to it. If we inherited another crashpad_handler's
-    // pipe name, we'll overwrite it here.
-    env->SetVar(kPipeNameVar,
-                base::WideToUTF8(GetCrashpadClient().GetHandlerIPCPipe()));
+    initialized = GetCrashpadClient().StartHandler(
+        exe_file, *database_path, metrics_path, url, process_annotations,
+        arguments, /*restartable=*/false, /*asynchronous_start=*/false,
+        attachments, preserve_handles);
+
+    if (initialized) {
+      // If we're the browser, push the pipe name into the environment so child
+      // processes can connect to it. If we inherited another crashpad_handler's
+      // pipe name, we'll overwrite it here.
+      env->SetVar(kPipeNameVar,
+                  base::WideToUTF8(GetCrashpadClient().GetHandlerIPCPipe()));
+    }
   } else {
-    std::string pipe_name_utf8;
-    if (env->GetVar(kPipeNameVar, &pipe_name_utf8)) {
-      GetCrashpadClient().SetHandlerIPCPipe(base::UTF8ToWide(pipe_name_utf8));
+    std::optional<std::string> pipe_name_utf8 = env->GetVar(kPipeNameVar);
+    if (pipe_name_utf8.has_value()) {
+      initialized = GetCrashpadClient().SetHandlerIPCPipe(
+          base::UTF8ToWide(pipe_name_utf8.value()));
     }
   }
 
-  if (crash_reporter_client->GetShouldDumpLargerDumps()) {
-    const uint32_t kIndirectMemoryLimit = 4 * 1024 * 1024;
-    crashpad::CrashpadInfo::GetCrashpadInfo()
-        ->set_gather_indirectly_referenced_memory(crashpad::TriState::kEnabled,
-                                                  kIndirectMemoryLimit);
+  if (!initialized)
+    return false;
+
+  // Regester WER helper only if it will produce useful information - prior to
+  // 20H1 the crashes it can help with did not make their way to the helper.
+  if (base::win::GetVersion() >= base::win::Version::WIN10_20H1) {
+    auto path = crash_reporter_client->GetWerRuntimeExceptionModule();
+    if (!path.empty())
+      GetCrashpadClient().RegisterWerModule(path);
   }
 
-  return database_path;
+  // In the not-large-dumps case record enough extra memory to be able to save
+  // dereferenced memory from all registers on the crashing thread. crashpad may
+  // save 512-bytes per register, and the largest register set (not including
+  // stack pointers) is ARM64 with 32 registers. Hence, 16 KiB.
+  const uint32_t kIndirectMemoryLimit =
+      crash_reporter_client->GetShouldDumpLargerDumps() ? 4 * 1024 * 1024
+                                                        : 16 * 1024;
+  crashpad::CrashpadInfo::GetCrashpadInfo()
+      ->set_gather_indirectly_referenced_memory(crashpad::TriState::kEnabled,
+                                                kIndirectMemoryLimit);
+
+  return true;
 }
 
 // We need to prevent ICF from folding DumpProcessForHungInputThread(),

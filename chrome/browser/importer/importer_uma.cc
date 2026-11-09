@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,19 +11,19 @@ namespace {
 
 // The enum used to register importer use.
 enum ImporterTypeMetrics {
-  IMPORTER_METRICS_UNKNOWN         = 0,
-#if defined(OS_WIN)
-  IMPORTER_METRICS_IE              = 1,
+  IMPORTER_METRICS_UNKNOWN = 0,
+#if BUILDFLAG(IS_WIN)
+  IMPORTER_METRICS_IE = 1,
 #endif
-  IMPORTER_METRICS_FIREFOX2        = 2,  // obsolete
-  IMPORTER_METRICS_FIREFOX3        = 3,
-#if defined(OS_MAC)
-  IMPORTER_METRICS_SAFARI          = 4,
+  IMPORTER_METRICS_FIREFOX2 = 2,  // obsolete
+  IMPORTER_METRICS_FIREFOX3 = 3,
+#if BUILDFLAG(IS_MAC)
+  IMPORTER_METRICS_SAFARI = 4,
 #endif
   IMPORTER_METRICS_GOOGLE_TOOLBAR5 = 5,  // obsolete
-  IMPORTER_METRICS_BOOKMARKS_FILE  = 6,
-#if defined(OS_WIN)
-  IMPORTER_METRICS_EDGE            = 7,
+  IMPORTER_METRICS_BOOKMARKS_FILE = 6,
+#if BUILDFLAG(IS_WIN)
+  IMPORTER_METRICS_EDGE = 7,
 #endif
 
   // Insert new values here. Never remove any existing values, as this enum is
@@ -34,29 +34,29 @@ enum ImporterTypeMetrics {
 }  // namespace
 
 void LogImporterUseToMetrics(const std::string& metric_postfix,
-                             ImporterType type) {
+                             user_data_importer::ImporterType type) {
   ImporterTypeMetrics metrics_type = IMPORTER_METRICS_UNKNOWN;
   switch (type) {
-    case TYPE_UNKNOWN:
+    case user_data_importer::TYPE_UNKNOWN:
       metrics_type = IMPORTER_METRICS_UNKNOWN;
       break;
-#if defined(OS_WIN)
-    case TYPE_IE:
+#if BUILDFLAG(IS_WIN)
+    case user_data_importer::TYPE_IE:
       metrics_type = IMPORTER_METRICS_IE;
       break;
-    case TYPE_EDGE:
+    case user_data_importer::TYPE_EDGE:
       metrics_type = IMPORTER_METRICS_EDGE;
       break;
 #endif
-    case TYPE_FIREFOX:
+    case user_data_importer::TYPE_FIREFOX:
       metrics_type = IMPORTER_METRICS_FIREFOX3;
       break;
-#if defined(OS_MAC)
-    case TYPE_SAFARI:
+#if BUILDFLAG(IS_MAC)
+    case user_data_importer::TYPE_SAFARI:
       metrics_type = IMPORTER_METRICS_SAFARI;
       break;
 #endif
-    case TYPE_BOOKMARKS_FILE:
+    case user_data_importer::TYPE_BOOKMARKS_FILE:
       metrics_type = IMPORTER_METRICS_BOOKMARKS_FILE;
       break;
   }

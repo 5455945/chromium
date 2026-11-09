@@ -1,22 +1,24 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/customization/customization_wallpaper_downloader.h"
 
 #include <math.h>
+
 #include <algorithm>
 #include <utility>
 
+#include "base/check_is_test.h"
 #include "base/files/file_util.h"
-#include "base/task/post_task.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/net/system_network_context_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 
 namespace ash {
@@ -31,11 +33,39 @@ const unsigned kRetrySleepSeconds = 10;
 // longer than maximum (kMaxRetrySleepSeconds) it is set to the maximum.
 const double kMaxRetrySleepSeconds = 6 * 3600;  // 6 hours
 
+constexpr net::NetworkTrafficAnnotationTag
+    kCustomizationWallPaperDownloaderNetworkTag =
+        net::DefineNetworkTrafficAnnotation(
+            "customization_wallpaper_downloader",
+            R"(
+        semantics {
+          sender: "Customization wallpaper"
+          description:
+            "Download wallpaper from OEM custom url to the wallpaper directory "
+            "during OOBE. Admin/user can override the OEM wallpaper to have a "
+            "custom wallpaper. If the admin/user set a custom wallpaper, after "
+            "user sign in, the user will see their preferred wallpaper."
+          trigger:
+            "Triggered to get the OEM's custom wallpaper on device bootup."
+            "The downloaded custom wallpaper is stored until powerwash."
+          data: "None."
+          destination: WEBSITE
+        }
+        policy {
+         cookies_allowed: NO
+         setting:
+           "This feature is set by OEMs and can be overridden by users "
+           "after sign in."
+         policy_exception_justification:
+           "This request is made based on OEM customization and does not "
+           "send/store any sensitive data."
+        })");
+
 void CreateWallpaperDirectory(const base::FilePath& wallpaper_dir,
                               bool* success) {
-  DCHECK(success);
+  CHECK(success, base::NotFatalUntil::M160);
 
-  *success = CreateDirectoryAndGetError(wallpaper_dir, NULL);
+  *success = CreateDirectoryAndGetError(wallpaper_dir, nullptr);
   if (!*success) {
     NOTREACHED() << "Failed to create directory '" << wallpaper_dir.value()
                  << "'";
@@ -45,7 +75,7 @@ void CreateWallpaperDirectory(const base::FilePath& wallpaper_dir,
 void RenameTemporaryFile(const base::FilePath& from,
                          const base::FilePath& to,
                          bool* success) {
-  DCHECK(success);
+  CHECK(success, base::NotFatalUntil::M160);
 
   base::File::Error error;
   if (base::ReplaceFile(from, to, &error)) {
@@ -61,63 +91,62 @@ void RenameTemporaryFile(const base::FilePath& from,
 }  // namespace
 
 CustomizationWallpaperDownloader::CustomizationWallpaperDownloader(
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     const GURL& wallpaper_url,
     const base::FilePath& wallpaper_dir,
     const base::FilePath& wallpaper_downloaded_file,
     base::OnceCallback<void(bool success, const GURL&)>
         on_wallpaper_fetch_completed)
-    : wallpaper_url_(wallpaper_url),
+    : shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      wallpaper_url_(wallpaper_url),
       wallpaper_dir_(wallpaper_dir),
       wallpaper_downloaded_file_(wallpaper_downloaded_file),
       wallpaper_temporary_file_(wallpaper_downloaded_file.value() +
                                 kTemporarySuffix),
       retries_(0),
-      retry_delay_(base::TimeDelta::FromSeconds(kRetrySleepSeconds)),
+      retry_delay_(base::Seconds(kRetrySleepSeconds)),
       on_wallpaper_fetch_completed_(std::move(on_wallpaper_fetch_completed)) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 CustomizationWallpaperDownloader::~CustomizationWallpaperDownloader() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 void CustomizationWallpaperDownloader::StartRequest() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(wallpaper_url_.is_valid());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(wallpaper_url_.is_valid(), base::NotFatalUntil::M160);
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = wallpaper_url_;
   resource_request->load_flags =
       net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-  // TODO(crbug.com/833390): Add a real traffic annotation here.
-  simple_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
-                                                    MISSING_TRAFFIC_ANNOTATION);
+  simple_loader_ = network::SimpleURLLoader::Create(
+      std::move(resource_request), kCustomizationWallPaperDownloaderNetworkTag);
 
-  SystemNetworkContextManager* system_network_context_manager =
-      g_browser_process->system_network_context_manager();
-  // In unit tests, the browser process can return a null context manager
-  if (!system_network_context_manager)
+  // In unit tests, the browser process can return a null
+  // SharedURLLoaderFactory.
+  if (!shared_url_loader_factory_) {
+    CHECK_IS_TEST();
     return;
-
-  network::mojom::URLLoaderFactory* loader_factory =
-      system_network_context_manager->GetURLLoaderFactory();
+  }
 
   simple_loader_->DownloadToFile(
-      loader_factory,
+      shared_url_loader_factory_.get(),
       base::BindOnce(&CustomizationWallpaperDownloader::OnSimpleLoaderComplete,
                      base::Unretained(this)),
       wallpaper_temporary_file_);
 }
 
 void CustomizationWallpaperDownloader::Retry() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   ++retries_;
 
   const double delay_seconds = std::min(
       kMaxRetrySleepSeconds,
       static_cast<double>(retries_) * retries_ * retry_delay_.InSecondsF());
-  const base::TimeDelta delay = base::TimeDelta::FromSecondsD(delay_seconds);
+  const base::TimeDelta delay = base::Seconds(delay_seconds);
 
   VLOG(1) << "Schedule Customized Wallpaper download in " << delay.InSecondsF()
           << " seconds (retry = " << retries_ << ").";
@@ -127,7 +156,7 @@ void CustomizationWallpaperDownloader::Retry() {
 }
 
 void CustomizationWallpaperDownloader::Start() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   std::unique_ptr<bool> success(new bool(false));
 
   base::OnceClosure mkdir_closure =
@@ -143,14 +172,14 @@ void CustomizationWallpaperDownloader::Start() {
 
 void CustomizationWallpaperDownloader::OnWallpaperDirectoryCreated(
     std::unique_ptr<bool> success) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (*success)
     StartRequest();
 }
 
 void CustomizationWallpaperDownloader::OnSimpleLoaderComplete(
     base::FilePath response_path) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   const bool error = response_path.empty();
 
@@ -179,7 +208,7 @@ void CustomizationWallpaperDownloader::OnSimpleLoaderComplete(
 
 void CustomizationWallpaperDownloader::OnTemporaryFileRenamed(
     std::unique_ptr<bool> success) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   std::move(on_wallpaper_fetch_completed_).Run(*success, wallpaper_url_);
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,24 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/deferred_sequenced_task_runner.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "base/process/process_handle.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/deferred_sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chromecast/browser/cast_content_browser_client.h"
 #include "chromecast/browser/service_manager_connection.h"
@@ -34,7 +35,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
-#include "sandbox/policy/sandbox_type.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "services/service_manager/public/cpp/constants.h"
 #include "services/service_manager/public/cpp/manifest.h"
@@ -44,7 +45,6 @@
 #include "services/service_manager/service_manager.h"
 #include "services/service_manager/service_process_host.h"
 #include "services/service_manager/service_process_launcher.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/ui_base_features.h"
 
@@ -69,13 +69,15 @@ const service_manager::Manifest& GetBrowserManifest() {
                            .Build())
           .RequireCapability("*", "app")
           .RequireCapability("*", "multizone")
+          .RequireCapability("*", "reconnect")
+          .RequireCapability("*", "renderer")
           .Build()};
   return *manifest;
 }
 
 service_manager::Manifest GetSystemManifest(
     shell::CastContentBrowserClient* cast_content_browser_client) {
-  // TODO(https://crbug.com/961869): This is a bit of a temporary hack so that
+  // TODO(crbug.com/40626947): This is a bit of a temporary hack so that
   // we can make the global service instance a singleton. For now we just mirror
   // the per-BrowserContext manifest (formerly also used for the global
   // singleton instance), sans packaged services, since those are only meant to
@@ -97,35 +99,6 @@ void DestroyConnectorOnIOThread() {
   g_io_thread_connector.Get().reset();
 }
 
-// A ServiceProcessHost implementation which delegates to Content-managed
-// processes, either via a new UtilityProcessHost to launch new service
-// processes, or the existing GpuProcessHost to run service instances in the GPU
-// process.
-class ContentChildServiceProcessHost
-    : public service_manager::ServiceProcessHost {
- public:
-  ContentChildServiceProcessHost() = default;
-  ~ContentChildServiceProcessHost() override = default;
-
-  // service_manager::ServiceProcessHost:
-  mojo::PendingRemote<service_manager::mojom::Service> Launch(
-      const service_manager::Identity& identity,
-      sandbox::policy::SandboxType sandbox_type,
-      const std::u16string& display_name,
-      LaunchCallback callback) override {
-    // Start a new process for this service.
-    mojo::PendingRemote<service_manager::mojom::Service> remote;
-    content::LaunchUtilityProcessServiceDeprecated(
-        identity.name(), display_name, sandbox_type,
-        remote.InitWithNewPipeAndPassReceiver().PassPipe(),
-        std::move(callback));
-    return remote;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ContentChildServiceProcessHost);
-};
-
 // A ServiceProcessHost implementation which uses the Service Manager's builtin
 // service executable launcher. Not yet intended for use in production Chrome,
 // hence availability is gated behind a flag.
@@ -134,28 +107,27 @@ class ServiceExecutableProcessHost
  public:
   explicit ServiceExecutableProcessHost(const base::FilePath& executable_path)
       : launcher_(nullptr, executable_path) {}
+
+  ServiceExecutableProcessHost(const ServiceExecutableProcessHost&) = delete;
+  ServiceExecutableProcessHost& operator=(const ServiceExecutableProcessHost&) =
+      delete;
+
   ~ServiceExecutableProcessHost() override = default;
 
   // service_manager::ServiceProcessHost:
   mojo::PendingRemote<service_manager::mojom::Service> Launch(
       const service_manager::Identity& identity,
-      sandbox::policy::SandboxType sandbox_type,
+      sandbox::mojom::Sandbox sandbox_type,
       const std::u16string& display_name,
       LaunchCallback callback) override {
-    // TODO(https://crbug.com/781334): Support sandboxing.
-    return launcher_.Start(identity, sandbox::policy::SandboxType::kNoSandbox,
+    // TODO(crbug.com/41353434): Support sandboxing.
+    return launcher_.Start(identity, sandbox::mojom::Sandbox::kNoSandbox,
                            std::move(callback));
   }
 
  private:
   service_manager::ServiceProcessLauncher launcher_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceExecutableProcessHost);
 };
-
-using ServiceRequestHandler = base::RepeatingCallback<void(
-    const service_manager::Identity& identity,
-    mojo::PendingReceiver<service_manager::mojom::Service> receiver)>;
 
 // Implements in- and out-of-process service instance launching for services
 // built into the Content embedder's binary.
@@ -165,11 +137,12 @@ using ServiceRequestHandler = base::RepeatingCallback<void(
 class BrowserServiceManagerDelegate
     : public service_manager::ServiceManager::Delegate {
  public:
-  BrowserServiceManagerDelegate(
-      const scoped_refptr<base::SequencedTaskRunner>& main_thread_task_runner,
-      ServiceRequestHandler main_thread_request_handler)
-      : main_thread_task_runner_(main_thread_task_runner),
-        main_thread_request_handler_(std::move(main_thread_request_handler)) {}
+  BrowserServiceManagerDelegate() = default;
+
+  BrowserServiceManagerDelegate(const BrowserServiceManagerDelegate&) = delete;
+  BrowserServiceManagerDelegate& operator=(
+      const BrowserServiceManagerDelegate&) = delete;
+
   ~BrowserServiceManagerDelegate() override = default;
 
   // service_manager::ServiceManager::Delegate:
@@ -177,16 +150,15 @@ class BrowserServiceManagerDelegate
       const service_manager::Identity& identity,
       mojo::PendingReceiver<service_manager::mojom::Service> receiver)
       override {
-    main_thread_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(main_thread_request_handler_, identity,
-                                  std::move(receiver)));
-    return true;
+    return false;
   }
 
   std::unique_ptr<service_manager::ServiceProcessHost>
   CreateProcessHostForBuiltinServiceInstance(
       const service_manager::Identity& identity) override {
-    return std::make_unique<ContentChildServiceProcessHost>();
+    // Cast only uses the default kInProcessBuiltin mode. This function should
+    // only be called for kOutOfProcessBuiltin mode.
+    NOTREACHED();
   }
 
   std::unique_ptr<service_manager::ServiceProcessHost>
@@ -199,12 +171,6 @@ class BrowserServiceManagerDelegate
 
     return std::make_unique<ServiceExecutableProcessHost>(executable_path);
   }
-
- private:
-  const scoped_refptr<base::SequencedTaskRunner> main_thread_task_runner_;
-  const ServiceRequestHandler main_thread_request_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserServiceManagerDelegate);
 };
 
 }  // namespace
@@ -220,15 +186,21 @@ class ServiceManagerContext::InProcessServiceManagerContext
       : service_manager_thread_task_runner_(
             service_manager_thread_task_runner) {}
 
-  void Start(std::vector<service_manager::Manifest> manifests,
-             mojo::PendingRemote<service_manager::mojom::Service> system_remote,
-             ServiceRequestHandler request_handler) {
+  InProcessServiceManagerContext(const InProcessServiceManagerContext&) =
+      delete;
+  InProcessServiceManagerContext& operator=(
+      const InProcessServiceManagerContext&) = delete;
+
+  void Start(
+      std::vector<service_manager::Manifest> manifests,
+      mojo::PendingRemote<service_manager::mojom::Service> system_remote) {
     service_manager_thread_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(
             &InProcessServiceManagerContext::StartOnServiceManagerThread, this,
-            std::move(manifests), base::ThreadTaskRunnerHandle::Get(),
-            std::move(system_remote), std::move(request_handler)));
+            std::move(manifests),
+            base::SingleThreadTaskRunner::GetCurrentDefault(),
+            std::move(system_remote)));
   }
 
   void ShutDown() {
@@ -254,12 +226,10 @@ class ServiceManagerContext::InProcessServiceManagerContext
   void StartOnServiceManagerThread(
       std::vector<service_manager::Manifest> manifests,
       scoped_refptr<base::SequencedTaskRunner> ui_thread_task_runner,
-      mojo::PendingRemote<service_manager::mojom::Service> system_remote,
-      ServiceRequestHandler request_handler) {
+      mojo::PendingRemote<service_manager::mojom::Service> system_remote) {
     service_manager_ = std::make_unique<service_manager::ServiceManager>(
         std::move(manifests),
-        std::make_unique<BrowserServiceManagerDelegate>(
-            ui_thread_task_runner, std::move(request_handler)));
+        std::make_unique<BrowserServiceManagerDelegate>());
 
     mojo::Remote<service_manager::mojom::ProcessMetadata> metadata;
     service_manager_->RegisterService(
@@ -284,8 +254,6 @@ class ServiceManagerContext::InProcessServiceManagerContext
   const scoped_refptr<base::SingleThreadTaskRunner>
       service_manager_thread_task_runner_;
   std::unique_ptr<service_manager::ServiceManager> service_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(InProcessServiceManagerContext);
 };
 
 ServiceManagerContext::ServiceManagerContext(
@@ -302,16 +270,13 @@ ServiceManagerContext::ServiceManagerContext(
   manifests.push_back(GetBrowserManifest());
   manifests.push_back(GetSystemManifest(cast_content_browser_client_));
   for (auto& manifest : manifests) {
-    absl::optional<service_manager::Manifest> overlay =
+    std::optional<service_manager::Manifest> overlay =
         cast_content_browser_client_->GetServiceManifestOverlay(
             manifest.service_name);
     if (overlay)
       manifest.Amend(*overlay);
   }
-  for (auto& extra_manifest :
-       cast_content_browser_client_->GetExtraServiceManifests()) {
-    manifests.emplace_back(std::move(extra_manifest));
-  }
+
   in_process_context_ =
       new InProcessServiceManagerContext(service_manager_thread_task_runner_);
 
@@ -327,12 +292,7 @@ ServiceManagerContext::ServiceManagerContext(
   // GetConnectorForIOThread().
   g_io_thread_connector.Get() = system_connection->GetConnector()->Clone();
 
-  in_process_context_->Start(
-      manifests, std::move(system_remote),
-      base::BindRepeating(&ServiceManagerContext::RunServiceInstance,
-                          weak_ptr_factory_.GetWeakPtr()));
-  in_process_context_->StartServices(
-      cast_content_browser_client_->GetStartupServices());
+  in_process_context_->Start(manifests, std::move(system_remote));
 }
 
 ServiceManagerContext::~ServiceManagerContext() {
@@ -356,14 +316,6 @@ void ServiceManagerContext::ShutDown() {
 service_manager::Connector* ServiceManagerContext::GetConnectorForIOThread() {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::IO));
   return g_io_thread_connector.Get().get();
-}
-
-void ServiceManagerContext::RunServiceInstance(
-    const service_manager::Identity& identity,
-    mojo::PendingReceiver<service_manager::mojom::Service> receiver) {
-  cast_content_browser_client_->RunServiceInstance(identity, &receiver);
-  DLOG_IF(ERROR, receiver) << "Unhandled service request for \""
-                           << identity.name() << "\"";
 }
 
 }  // namespace chromecast

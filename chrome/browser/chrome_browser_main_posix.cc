@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,15 +13,18 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/allocator/partition_alloc_support.h"
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/app/shutdown_signal_handlers_posix.h"
+#include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/sessions/session_restore.h"
+#include "chrome/browser/shutdown_signal_handlers_posix.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/result_codes.h"
@@ -40,6 +43,9 @@ void SIGCHLDHandler(int signal) {
 // way through startup which causes all sorts of problems.
 class ExitHandler {
  public:
+  ExitHandler(const ExitHandler&) = delete;
+  ExitHandler& operator=(const ExitHandler&) = delete;
+
   // Invokes exit when appropriate.
   static void ExitWhenPossibleOnUIThread(int signal);
 
@@ -48,7 +54,7 @@ class ExitHandler {
   ~ExitHandler();
 
   // Called when a session restore has finished.
-  void OnSessionRestoreDone(int num_tabs_restored);
+  void OnSessionRestoreDone(Profile* profile, int num_tabs_restored);
 
   // Does the appropriate call to Exit.
   static void Exit();
@@ -59,20 +65,33 @@ class ExitHandler {
   // SessionRestore, so that the callback list does not contain any obsolete
   // callbacks.
   base::CallbackListSubscription on_session_restored_callback_subscription_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExitHandler);
 };
 
 // static
 void ExitHandler::ExitWhenPossibleOnUIThread(int signal) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  browser_shutdown::SetShutdownTrigger(
+      browser_shutdown::ShutdownTrigger::kSigterm);
+
+  // On ChromeOS, many shut down hangs have been seen in certain PartitionAlloc
+  // features. Make Free a Noop to prevent that. This was originally done for
+  // normal shutdowns and Googlers can read the report at
+  // go/cros-no-op-free-2024, however this was added after it was discovered
+  // signal handlers don't hit that path. See crbug.com/561483162.
+  base::allocator::MakeFreeNoOp();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // DevTools delegate's browser keeplive may prevent browser from closing so
+  // remove it before proceeding because we have an explicit shutdown request.
+  ChromeDevToolsManagerDelegate::AllowBrowserToClose();
+
   if (SessionRestore::IsRestoringSynchronously()) {
     // ExitHandler takes care of deleting itself.
     new ExitHandler();
   } else {
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
     switch (signal) {
       case SIGINT:
       case SIGHUP:
@@ -85,11 +104,15 @@ void ExitHandler::ExitWhenPossibleOnUIThread(int signal) {
       case SIGTERM:
         // SIGTERM is usually sent instead of SIGKILL to gracefully shutdown
         // processes.  But most systems use it as a shutdown warning, so
-        // conservatively assume that the session is ending.  If the process
-        // still doesn't quit within a bounded time, most systems will finally
-        // send SIGKILL, which we're unable to install a signal handler for.
-        // TODO(thomasanderson): Try to distinguish if the session is really
-        // ending or not.  Maybe there's a systemd or DBus API to query.
+        // conservatively assume that the session is ending. On macOS, launchd
+        // delivers SIGTERM at logout, shutdown, reboot, or update. If the
+        // process still doesn't quit within a bounded time, most systems will
+        // finally send SIGKILL, which can't be handled.
+        //
+        // Treating every SIGTERM as a session end is intentional. A plain
+        // `kill` can't be reliably told apart from a logout or shutdown, and
+        // a graceful Exit() during a real session end risks losing data when
+        // SIGKILL follows. SessionEnding() saves state promptly in both cases.
         chrome::SessionEnding();
         break;
       default:
@@ -107,10 +130,9 @@ ExitHandler::ExitHandler() {
           &ExitHandler::OnSessionRestoreDone, base::Unretained(this)));
 }
 
-ExitHandler::~ExitHandler() {
-}
+ExitHandler::~ExitHandler() = default;
 
-void ExitHandler::OnSessionRestoreDone(int /* num_tabs */) {
+void ExitHandler::OnSessionRestoreDone(Profile* profile, int /* num_tabs */) {
   if (!SessionRestore::IsRestoringSynchronously()) {
     // At this point the message loop may not be running (meaning we haven't
     // gotten through browser startup, but are close). Post the task to at which
@@ -123,7 +145,7 @@ void ExitHandler::OnSessionRestoreDone(int /* num_tabs */) {
 
 // static
 void ExitHandler::Exit() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // On ChromeOS, exiting on signal should be always clean.
   chrome::ExitIgnoreUnloadHandlers();
 #else
@@ -136,9 +158,9 @@ void ExitHandler::Exit() {
 // ChromeBrowserMainPartsPosix -------------------------------------------------
 
 ChromeBrowserMainPartsPosix::ChromeBrowserMainPartsPosix(
-    const content::MainFunctionParams& parameters,
+    bool is_integration_test,
     StartupData* startup_data)
-    : ChromeBrowserMainParts(parameters, startup_data) {}
+    : ChromeBrowserMainParts(is_integration_test, startup_data) {}
 
 int ChromeBrowserMainPartsPosix::PreEarlyInitialization() {
   const int result = ChromeBrowserMainParts::PreEarlyInitialization();
@@ -147,10 +169,9 @@ int ChromeBrowserMainPartsPosix::PreEarlyInitialization() {
 
   // We need to accept SIGCHLD, even though our handler is a no-op because
   // otherwise we cannot wait on children. (According to POSIX 2001.)
-  struct sigaction action;
-  memset(&action, 0, sizeof(action));
+  struct sigaction action = {};
   action.sa_handler = SIGCHLDHandler;
-  CHECK_EQ(0, sigaction(SIGCHLD, &action, NULL));
+  CHECK_EQ(0, sigaction(SIGCHLD, &action, nullptr));
 
   return content::RESULT_CODE_NORMAL_EXIT;
 }
@@ -165,9 +186,9 @@ void ChromeBrowserMainPartsPosix::PostCreateMainMessageLoop() {
 }
 
 void ChromeBrowserMainPartsPosix::ShowMissingLocaleMessageBox() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   NOTREACHED();  // Should not ever happen on ChromeOS.
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
   // Not called on Mac because we load the locale files differently.
   NOTREACHED();
 #elif defined(USE_AURA)

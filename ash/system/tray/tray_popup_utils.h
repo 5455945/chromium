@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "ash/ash_export.h"
 #include "ash/login_status.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_ink_drop_style.h"
@@ -17,21 +18,22 @@
 namespace views {
 class Button;
 class ImageView;
-class InkDrop;
-class InkDropRipple;
-class InkDropHighlight;
 class Label;
 class LabelButton;
 class Painter;
 class Separator;
 }  // namespace views
 
+namespace ui {
+class ImageModel;
+}  // namespace ui
+
 namespace ash {
 class HoverHighlightView;
 class UnfocusableLabel;
 
 // Factory/utility functions used by the system menu.
-class TrayPopupUtils {
+class ASH_EXPORT TrayPopupUtils {
  public:
   enum class FontStyle {
     // Topmost header rows for default view and detailed view.
@@ -49,6 +51,10 @@ class TrayPopupUtils {
     kSystemInfo,
   };
 
+  TrayPopupUtils() = delete;
+  TrayPopupUtils(const TrayPopupUtils&) = delete;
+  TrayPopupUtils& operator=(const TrayPopupUtils&) = delete;
+
   // Creates a default container view to be used by system menu rows that are
   // either a single targetable area or not targetable at all. The caller takes
   // over ownership of the created view.
@@ -61,7 +67,9 @@ class TrayPopupUtils {
   // the CENTER container if space is required and available.
   //
   // The CENTER container has a flexible width.
-  static TriView* CreateDefaultRowView();
+  //
+  // `use_wide_layout` uses a wider layout.
+  static TriView* CreateDefaultRowView(bool use_wide_layout);
 
   // Creates a container view to be used by system menu sub-section header rows.
   // The caller takes over ownership of the created view.
@@ -97,7 +105,9 @@ class TrayPopupUtils {
   //
   // Clients can use ConfigureContainer() to configure their own container views
   // before adding them to the returned TriView.
-  static TriView* CreateMultiTargetRowView();
+  //
+  // `use_wide_layout` uses a wider layout.
+  static TriView* CreateMultiTargetRowView(bool use_wide_layout);
 
   // Returns a label that has been configured for system menu layout. This
   // should be used by all rows that require a label, i.e. both default and
@@ -115,26 +125,18 @@ class TrayPopupUtils {
   // default and detailed rows should use this.
   //
   // TODO(bruthig): Update all system menu rows to use this.
-  static views::ImageView* CreateMainImageView();
+  //
+  // `use_wide_layout` uses a wider layout.
+  static views::ImageView* CreateMainImageView(bool use_wide_layout);
 
   // Creates a default focus painter used for most things in tray popups.
   static std::unique_ptr<views::Painter> CreateFocusPainter();
 
-  // Common setup for various buttons in the system menu.
-  static void ConfigureTrayPopupButton(
-      views::Button* button,
-      TrayPopupInkDropStyle ink_drop_style = TrayPopupInkDropStyle::FILL_BOUNDS,
-      bool highlight_on_hover = false,
-      bool highlight_on_focus = false);
+  // Sets up `view` with the tray detail scroll view header specs.
+  static void ConfigureHeader(views::View* view);
 
-  // Sets up |view| to be a sticky header in a tray detail scroll view.
-  static void ConfigureAsStickyHeader(views::View* view);
-
-  // Configures |container_view| just like CreateDefaultRowView() would
-  // configure |container| on its returned TriView. To be used when mutliple
-  // targetable areas are required within a single row.
-  static void ConfigureContainer(TriView::Container container,
-                                 views::View* container_view);
+  // Sets up `ink_drop` according to jelly ux requirements for row buttons.
+  static void ConfigureRowButtonInkdrop(views::InkDropHost* ink_drop);
 
   // Creates a button for use in the system menu. For MD, this is a prominent
   // text
@@ -148,32 +150,6 @@ class TrayPopupUtils {
   // material design system menu row. The caller assumes ownership of the
   // returned separator.
   static views::Separator* CreateVerticalSeparator();
-
-  // Creates in InkDrop instance for |host|.
-  // All styles are configured to show the highlight when the ripple is visible.
-  //
-  // All targetable views in the system menu should delegate
-  // InkDropHost::CreateInkDrop() calls here.
-  static std::unique_ptr<views::InkDrop> CreateInkDrop(
-      views::Button* host,
-      bool highlight_on_hover = false,
-      bool highlight_on_focus = false);
-
-  // Creates an InkDropRipple instance for |host| according to the
-  // |ink_drop_style|. The ripple will be centered on |center_point|.
-  //
-  // All targetable views in the system menu should delegate
-  // InkDropHost::CreateInkDropRipple() calls here.
-  static std::unique_ptr<views::InkDropRipple> CreateInkDropRipple(
-      TrayPopupInkDropStyle ink_drop_style,
-      const views::Button* host);
-
-  // Creates in InkDropHighlight instance for |host|.
-  //
-  // All targetable views in the system menu should delegate
-  // InkDropHost::CreateInkDropHighlight() calls here.
-  static std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight(
-      const views::View* host);
 
   // Installs a HighlightPathGenerator matching the TrayPopupInkDropStyle.
   static void InstallHighlightPathGenerator(
@@ -191,6 +167,11 @@ class TrayPopupUtils {
   // user, and not in the supervised user creation flow.
   static bool CanOpenWebUISettings();
 
+  // Returns true if it is possible to show the night light feature tile, i.e.
+  // the `session_manager::SessionState` is ACTIVE, LOGGED_IN_NOT_ACTIVE, or
+  // LOCKED.
+  static bool CanShowNightLightFeatureTile();
+
   // Initializes a row in the system menu as checkable and update the check mark
   // status of this row. If |enterprise_managed| is true, adds an enterprise
   // managed icon to the row.
@@ -201,11 +182,12 @@ class TrayPopupUtils {
   static void UpdateCheckMarkVisibility(HoverHighlightView* container,
                                         bool visible);
 
-  // Sets the font list for |label| based on |style|.
-  static void SetLabelFontList(views::Label* label, FontStyle style);
+  // Updates the color of the checkable row |container|.
+  static void UpdateCheckMarkColor(HoverHighlightView* container,
+                                   ui::ColorId color_id);
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(TrayPopupUtils);
+  // Creates the check mark.
+  static ui::ImageModel CreateCheckMark(ui::ColorId color_id);
 };
 
 }  // namespace ash

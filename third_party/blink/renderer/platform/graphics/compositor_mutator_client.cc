@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,12 +37,13 @@ bool CompositorMutatorClient::Mutate(
 void CompositorMutatorClient::SetMutationUpdate(
     std::unique_ptr<cc::MutatorOutputState> output_state) {
   TRACE_EVENT0("cc", "CompositorMutatorClient::SetMutationUpdate");
-  client_->SetMutationUpdate(std::move(output_state));
+  delegate_->SetMutationUpdate(std::move(output_state));
 }
 
-void CompositorMutatorClient::SetClient(cc::LayerTreeMutatorClient* client) {
-  TRACE_EVENT0("cc", "CompositorMutatorClient::SetClient");
-  client_ = client;
+void CompositorMutatorClient::SetDelegate(
+    cc::LayerTreeMutatorDelegate* delegate) {
+  TRACE_EVENT0("cc", "CompositorMutatorClient::SetDelegate");
+  delegate_ = delegate;
 }
 
 bool CompositorMutatorClient::HasMutators() {

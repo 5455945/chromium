@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,30 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/metrics/histogram_macros.h"
-#include "components/prefs/pref_service.h"
-#import "ios/chrome/app/application_delegate/app_state.h"
+#import "base/metrics/histogram_macros.h"
+#import "components/prefs/pref_service.h"
 #import "ios/chrome/app/application_delegate/startup_information.h"
 #import "ios/chrome/app/application_delegate/tab_opening.h"
 #import "ios/chrome/app/application_delegate/url_opener_params.h"
-#include "ios/chrome/app/startup/chrome_app_startup_parameters.h"
-#import "ios/chrome/browser/chrome_url_util.h"
-#import "ios/chrome/browser/policy/policy_util.h"
-#import "ios/chrome/browser/ui/main/connection_information.h"
-#import "ios/chrome/browser/url_loading/url_loading_params.h"
-#include "url/gurl.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/app/startup/chrome_app_startup_parameters.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/policy/model/policy_util.h"
+#import "ios/chrome/browser/shared/coordinator/scene/connection_information.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/model/url/url_util.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
+#import "ios/components/webui/web_ui_url_constants.h"
+#import "url/gurl.h"
 
 namespace {
 // Key of the UMA Startup.MobileSessionStartFromApps histogram.
 const char* const kUMAMobileSessionStartFromAppsHistogram =
     "Startup.MobileSessionStartFromApps";
+// Key of the UMA Startup.ShowDefaultPromoFromApps histogram.
+const char* const kUMAShowDefaultPromoFromAppsHistogram =
+    "Startup.ShowDefaultPromoFromApps";
 }  // namespace
 
 @implementation URLOpener
@@ -39,26 +42,47 @@ const char* const kUMAMobileSessionStartFromAppsHistogram =
     connectionInformation:(id<ConnectionInformation>)connectionInformation
        startupInformation:(id<StartupInformation>)startupInformation
               prefService:(PrefService*)prefService
-                initStage:(InitStage)initStage {
+                initStage:(ProfileInitStage)initStage {
   NSURL* URL = options.URL;
   NSString* sourceApplication = options.sourceApplication;
-
-  ChromeAppStartupParameters* params = [ChromeAppStartupParameters
-      newChromeAppStartupParametersWithURL:URL
-                     fromSourceApplication:sourceApplication];
+  ChromeAppStartupParameters* params;
 
   if (IsIncognitoModeDisabled(prefService)) {
-    params.launchInIncognito = NO;
+    params = [ChromeAppStartupParameters
+        startupParametersWithURL:URL
+               sourceApplication:sourceApplication
+                 applicationMode:ApplicationModeForTabOpening::NORMAL
+            forceApplicationMode:YES];
+
   } else if (IsIncognitoModeForced(prefService)) {
-    params.launchInIncognito = YES;
+    params = [ChromeAppStartupParameters
+        startupParametersWithURL:URL
+               sourceApplication:sourceApplication
+                 applicationMode:ApplicationModeForTabOpening::INCOGNITO
+            forceApplicationMode:YES];
+  } else {
+    params = [ChromeAppStartupParameters
+        startupParametersWithURL:URL
+               sourceApplication:sourceApplication
+                 applicationMode:ApplicationModeForTabOpening::UNDETERMINED
+            forceApplicationMode:NO];
   }
 
   MobileSessionCallerApp callerApp = [params callerApp];
 
+  if (prefService && params.postOpeningAction == TRIGGER_GEMINI_PROMO) {
+    prefService->SetBoolean(prefs::kAppStoreGeminiPromoTriggered, YES);
+  }
+
   UMA_HISTOGRAM_ENUMERATION(kUMAMobileSessionStartFromAppsHistogram, callerApp,
                             MOBILE_SESSION_CALLER_APP_COUNT);
 
-  if (initStage == InitStageFirstRun) {
+  if (params.postOpeningAction == SHOW_DEFAULT_BROWSER_SETTINGS) {
+    UMA_HISTOGRAM_ENUMERATION(kUMAShowDefaultPromoFromAppsHistogram, callerApp,
+                              MOBILE_SESSION_CALLER_APP_COUNT);
+  }
+
+  if (initStage == ProfileInitStage::kFirstRun) {
     UMA_HISTOGRAM_ENUMERATION("FirstRun.LaunchSource", [params launchSource],
                               first_run::LAUNCH_SIZE);
   } else if (applicationActive) {
@@ -69,46 +93,48 @@ const char* const kUMAMobileSessionStartFromAppsHistogram =
       // As applicationDidBecomeActive: will not be called again,
       // _startupParameters will not include the command from openURL.
       // Pass the startup parameters from here.
-      DCHECK(!connectionInformation.startupParameters);
+
+      // TODO(crbug.com/40938699): Investigate why
+      // connectionInformation.startupParamters can be not nil and what to do in
+      // that case.
       [connectionInformation setStartupParameters:params];
+      if (params.openedViaShareExtensionScheme &&
+          (params.textQuery || params.imageSearchData)) {
+        return YES;
+      }
+
       ProceduralBlock tabOpenedCompletion = ^{
         [connectionInformation setStartupParameters:nil];
       };
 
-      // TODO(crbug.com/935019): Exacly the same copy of this code is present in
-      // +[UserAcrtivityHandler
-      // handleStartupParametersWithTabOpener:startupInformation:browserState:]
+      // TODO(crbug.com/41443029): Exacly the same copy of this code is present
+      // in UserActivityBrowserAgent::RouteToCorrectTab()
 
-      GURL URL;
+      GURL gurl;
       GURL virtualURL;
       if ([params completeURL].SchemeIsFile()) {
-        // External URL will be loaded by WebState, which expects |completeURL|.
-        // Omnibox however suppose to display |externalURL|, which is used as
+        // External URL will be loaded by WebState, which expects `completeURL`.
+        // Omnibox however suppose to display `externalURL`, which is used as
         // virtual URL.
-        URL = [params completeURL];
+        gurl = [params completeURL];
         virtualURL = [params externalURL];
       } else {
-        URL = [params externalURL];
+        gurl = [params externalURL];
       }
-      UrlLoadParams urlLoadParams = UrlLoadParams::InNewTab(URL, virtualURL);
+      UrlLoadParams urlLoadParams = UrlLoadParams::InNewTab(gurl, virtualURL);
+      urlLoadParams.from_widget_or_siri =
+          params.openedViaWidgetScheme || params.openedViaSiriShortcut;
 
-      ApplicationModeForTabOpening targetMode = params.applicationMode;
-      // If the call is coming from the app, it should be opened in the current
-      // mode to avoid changing mode.
-      if (callerApp == CALLER_APP_GOOGLE_CHROME)
-        targetMode = ApplicationModeForTabOpening::CURRENT;
-
-      if (![params launchInIncognito] &&
-          [tabOpener URLIsOpenedInRegularMode:urlLoadParams.web_params.url]) {
-        // Record metric.
-      }
-
-      [tabOpener
-          dismissModalsAndOpenSelectedTabInMode:targetMode
-                              withUrlLoadParams:urlLoadParams
-                                 dismissOmnibox:[params postOpeningAction] !=
-                                                FOCUS_OMNIBOX
-                                     completion:tabOpenedCompletion];
+      BOOL dismissOmnibox = [params postOpeningAction] != FOCUS_OMNIBOX;
+      [params fetchAppSwitcherParamsWithBlock:^(
+                  ApplicationModeForTabOpening applicationMode) {
+        [URLOpener handleUrlLoadParams:urlLoadParams
+                             tabOpener:tabOpener
+                             callerApp:callerApp
+                               appMode:applicationMode
+                        dismissOmnibox:dismissOmnibox
+                            completion:tabOpenedCompletion];
+      }];
       return YES;
     }
     return NO;
@@ -125,21 +151,40 @@ const char* const kUMAMobileSessionStartFromAppsHistogram =
                   tabOpener:(id<TabOpening>)tabOpener
       connectionInformation:(id<ConnectionInformation>)connectionInformation
          startupInformation:(id<StartupInformation>)startupInformation
-                   appState:(AppState*)appState
-                prefService:(PrefService*)prefService {
+                prefService:(PrefService*)prefService
+                  initStage:(ProfileInitStage)initStage {
   if (options.URL) {
     // This method is always called when the SceneState transitions to
     // SceneActivationLevelForegroundActive, and before the handling of
     // startupInformation is done.
-    // Pass |NO| as active to avoid double processing.
+    // Pass `NO` as active to avoid double processing.
     [URLOpener openURL:options
             applicationActive:NO
                     tabOpener:tabOpener
         connectionInformation:connectionInformation
            startupInformation:startupInformation
                   prefService:prefService
-                    initStage:appState.initStage];
+                    initStage:initStage];
   }
+}
+
++ (void)handleUrlLoadParams:(UrlLoadParams)urlLoadParams
+                  tabOpener:(id<TabOpening>)tabOpener
+                  callerApp:(MobileSessionCallerApp)callerApp
+                    appMode:(ApplicationModeForTabOpening)appMode
+             dismissOmnibox:(BOOL)dismissOmnibox
+                 completion:(ProceduralBlock)tabOpenedCompletion {
+  ApplicationModeForTabOpening targetMode = appMode;
+  // If the call is coming from the app, it should be opened in the current
+  // mode to avoid changing mode.
+  if (callerApp == CALLER_APP_GOOGLE_CHROME) {
+    targetMode = ApplicationModeForTabOpening::CURRENT;
+  }
+
+  [tabOpener dismissModalsAndMaybeOpenSelectedTabInMode:targetMode
+                                      withUrlLoadParams:urlLoadParams
+                                         dismissOmnibox:dismissOmnibox
+                                             completion:tabOpenedCompletion];
 }
 
 @end

@@ -1,26 +1,27 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/platform/bluetooth_classic_medium.h"
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "chrome/services/sharing/nearby/platform/bluetooth_server_socket.h"
 #include "chrome/services/sharing/nearby/platform/bluetooth_socket.h"
+#include "components/cross_device/nearby/nearby_features.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
 
+// Client name for logging in BLE scanning.
+constexpr char kScanClientName[] = "Nearby Connections";
+
 // Duration of time after which inactive Bluetooth devices may be removed from
 // the discovered devices map.
-const base::TimeDelta kStaleBluetoothDeviceTimeout =
-    base::TimeDelta::FromSeconds(20);
+const base::TimeDelta kStaleBluetoothDeviceTimeout = base::Seconds(20);
 
 void LogStartDiscoveryResult(bool success) {
   base::UmaHistogramBoolean(
@@ -70,6 +71,12 @@ BluetoothClassicMedium::~BluetoothClassicMedium() = default;
 
 bool BluetoothClassicMedium::StartDiscovery(
     DiscoveryCallback discovery_callback) {
+  if (!features::IsNearbyBluetoothClassicScanningEnabled()) {
+    VLOG(1) << ": Classic scanning disabled, failing to StartDiscovery for BT "
+               "Classic";
+    return false;
+  }
+
   if (adapter_observer_.is_bound() && discovery_callback_ &&
       discovery_session_.is_bound()) {
     LogStartDiscoveryResult(true);
@@ -88,7 +95,8 @@ bool BluetoothClassicMedium::StartDiscovery(
   }
 
   mojo::PendingRemote<bluetooth::mojom::DiscoverySession> discovery_session;
-  success = adapter_->StartDiscoverySession(&discovery_session);
+  success =
+      adapter_->StartDiscoverySession(kScanClientName, &discovery_session);
 
   if (!success || !discovery_session.is_valid()) {
     adapter_observer_.reset();
@@ -131,12 +139,17 @@ std::unique_ptr<api::BluetoothSocket> BluetoothClassicMedium::ConnectToService(
     api::BluetoothDevice& remote_device,
     const std::string& service_uuid,
     CancellationFlag* cancellation_flag) {
+  if (cancellation_flag && cancellation_flag->Cancelled()) {
+    return nullptr;
+  }
+
   const std::string& address = remote_device.GetMacAddress();
 
   auto start_time = base::TimeTicks::Now();
   bluetooth::mojom::ConnectToServiceResultPtr result;
   bool success = adapter_->ConnectToServiceInsecurely(
-      address, device::BluetoothUUID(service_uuid), &result);
+      address, device::BluetoothUUID(service_uuid),
+      /*should_unbond_on_error=*/true, &result);
 
   if (success && result) {
     LogConnectToServiceDuration(base::TimeTicks::Now() - start_time);
@@ -167,6 +180,13 @@ BluetoothClassicMedium::ListenForService(const std::string& service_name,
   return nullptr;
 }
 
+std::unique_ptr<api::BluetoothPairing>
+BluetoothClassicMedium::CreatePairing(api::BluetoothDevice& remote_device) {
+  // TODO(b/280656073): Add Chromium implementation for BluetoothPairing.
+  NOTIMPLEMENTED();
+  return nullptr;
+}
+
 BluetoothDevice* BluetoothClassicMedium::GetRemoteDevice(
     const std::string& mac_address) {
   auto it = discovered_bluetooth_devices_map_.find(mac_address);
@@ -185,9 +205,6 @@ BluetoothDevice* BluetoothClassicMedium::GetRemoteDevice(
 }
 
 void BluetoothClassicMedium::PresentChanged(bool present) {
-  // TODO(crbug.com/1191815): Remove this ASAP.
-  VLOG(1) << __func__ << ": " << present;
-
   // TODO(hansberry): It is unclear to me how the API implementation can signal
   // to Core that |present| has become unexpectedly false. Need to ask
   // Nearby team.
@@ -196,9 +213,6 @@ void BluetoothClassicMedium::PresentChanged(bool present) {
 }
 
 void BluetoothClassicMedium::PoweredChanged(bool powered) {
-  // TODO(crbug.com/1191815): Remove this ASAP.
-  VLOG(1) << __func__ << ": " << powered;
-
   // TODO(hansberry): It is unclear to me how the API implementation can signal
   // to Core that |powered| has become unexpectedly false. Need to ask
   // Nearby team.
@@ -207,17 +221,12 @@ void BluetoothClassicMedium::PoweredChanged(bool powered) {
 }
 
 void BluetoothClassicMedium::DiscoverableChanged(bool discoverable) {
-  // TODO(crbug.com/1191815): Remove this ASAP.
-  VLOG(1) << __func__ << ": " << discoverable;
-
   // Do nothing. BluetoothClassicMedium is not responsible for managing
   // discoverable state.
+  NOTIMPLEMENTED();
 }
 
 void BluetoothClassicMedium::DiscoveringChanged(bool discovering) {
-  // TODO(crbug.com/1191815): Remove this ASAP.
-  VLOG(1) << __func__ << ": " << discovering;
-
   // TODO(hansberry): It is unclear to me how the API implementation can signal
   // to Core that |discovering| has become unexpectedly false. Need to ask
   // Nearby team.
@@ -233,22 +242,17 @@ void BluetoothClassicMedium::DeviceAdded(
     return;
   }
 
-  // TODO(crbug.com/1191815): Remove these logs. They are temporary logs used
-  // to debug this issue.
-  VLOG(1) << "Device added or changed. Address: " << device->address
-          << ", Name: '" << (device->name ? device->name_for_display : "<None>")
-          << "'";
-
   // Best-effort attempt to filter out BLE advertisements. BLE advertisements
   // represented as "devices" may have their |name| set if the system has
   // created a GATT connection to the advertiser, but all BT Classic devices
   // that we are interested in must have their |name| set. See BleMedium
   // for separate discovery of BLE advertisements (BlePeripherals).
-  if (!device->name)
+  if (!device->name) {
     return;
+  }
 
   const std::string& address = device->address;
-  if (base::Contains(discovered_bluetooth_devices_map_, address)) {
+  if (discovered_bluetooth_devices_map_.contains(address)) {
     auto& bluetooth_device = discovered_bluetooth_devices_map_.at(address);
     bool name_changed = device->name.has_value() &&
                         device->name.value() != bluetooth_device.GetName();
@@ -278,8 +282,9 @@ void BluetoothClassicMedium::DeviceRemoved(
   }
 
   const std::string& address = device->address;
-  if (!base::Contains(discovered_bluetooth_devices_map_, address))
+  if (!discovered_bluetooth_devices_map_.contains(address)) {
     return;
+  }
 
   discovery_callback_->device_lost_cb(
       discovered_bluetooth_devices_map_.at(address));
@@ -304,6 +309,4 @@ void BluetoothClassicMedium::RemoveStaleBluetoothDevices() {
   }
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

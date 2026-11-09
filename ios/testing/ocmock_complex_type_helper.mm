@@ -1,15 +1,13 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/testing/ocmock_complex_type_helper.h"
 
-#include "base/check.h"
-#import "base/strings/sys_string_conversions.h"
+#import <ostream>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/check.h"
+#import "base/strings/sys_string_conversions.h"
 
 @implementation OCMockComplexTypeHelper {
   // The represented object.
@@ -71,8 +69,9 @@
 
 - (void)forwardInvocation:(NSInvocation*)invocation {
   SEL selector = [invocation selector];
-  if ([_object respondsToSelector:selector])
+  if ([_object respondsToSelector:selector]) {
     [invocation invokeWithTarget:_object];
+  }
 }
 
 - (NSMethodSignature*)methodSignatureForSelector:(SEL)selector {
@@ -85,8 +84,9 @@
 
 - (BOOL)respondsToSelector:(SEL)selector {
   DCHECK(![_blocks objectForKey:NSStringFromSelector(selector)]);
-  if (selector == @selector(initWithRepresentedObject:))
+  if (selector == @selector(initWithRepresentedObject:)) {
     return YES;
+  }
 
   return [_object respondsToSelector:selector];
 }

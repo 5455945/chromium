@@ -1,15 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/linux/sensor_device_manager.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "services/device/generic_sensor/linux/sensor_data_linux.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
 
@@ -25,7 +23,7 @@ std::string StringOrEmptyIfNull(const char* value) {
 
 SensorDeviceManager::SensorDeviceManager(base::WeakPtr<Delegate> delegate)
     : delegate_(std::move(delegate)),
-      delegate_task_runner_(base::SequencedTaskRunnerHandle::Get()) {
+      delegate_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
@@ -33,22 +31,21 @@ SensorDeviceManager::~SensorDeviceManager() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-void SensorDeviceManager::Start() {
+void SensorDeviceManager::MaybeStartEnumeration() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!udev_watcher_);
+
+  if (udev_watcher_) {
+    return;
+  }
 
   udev_watcher_ = UdevWatcher::StartWatching(this);
-  if (!udev_watcher_)
+  if (!udev_watcher_) {
     return;
+  }
 
-  // OnDeviceAdded() will be called synchronously for every device found in the
-  // enumeration.
+  // OnDeviceAdded() will be called synchronously for every device found in
+  // the enumeration.
   udev_watcher_->EnumerateExistingDevices();
-
-  delegate_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&SensorDeviceManager::Delegate::OnSensorNodesEnumerated,
-                     delegate_));
 }
 
 std::string SensorDeviceManager::GetUdevDeviceGetSubsystem(udev_device* dev) {
@@ -134,11 +131,18 @@ void SensorDeviceManager::OnDeviceAdded(ScopedUdevDevicePtr dev) {
     mojom::ReportingMode reporting_mode = mojom::ReportingMode::ON_CHANGE;
     if (!frequency_value.empty()) {
       base::StringToDouble(frequency_value, &sensor_frequency_value);
+      // A device can expose the attribute while reporting a rate of 0, for
+      // example while it is powered down. PlatformSensorConfiguration requires
+      // a positive frequency, so there is no usable configuration to hand to
+      // PlatformSensorLinux for this sensor type.
+      if (sensor_frequency_value <= 0.0) {
+        continue;
+      }
       reporting_mode = mojom::ReportingMode::CONTINUOUS;
     }
 
     // Update own cache of known sensor devices.
-    if (!base::Contains(sensors_by_node_, device_node))
+    if (!sensors_by_node_.contains(device_node))
       sensors_by_node_[device_node] = data.type;
 
     std::unique_ptr<SensorInfoLinux> device(new SensorInfoLinux(

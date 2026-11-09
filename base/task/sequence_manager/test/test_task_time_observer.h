@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,9 @@ namespace sequence_manager {
 class TestTaskTimeObserver : public TaskTimeObserver {
  public:
   void WillProcessTask(TimeTicks start_time) override {}
-  void DidProcessTask(TimeTicks start_time, TimeTicks end_time) override {}
+  void DidProcessTask(TimeTicks start_time,
+                      TimeTicks end_time,
+                      TimeTicks desired_execution_time) override {}
 };
 
 }  // namespace sequence_manager

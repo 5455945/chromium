@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,12 @@
 #include "gpu/config/gpu_feature_type.h"
 #include "gpu/ipc/common/gpu_feature_info.mojom.h"
 #include "gpu/ipc/common/gpu_feature_info_mojom_traits.h"
-#include "gpu/ipc/common/traits_test_service.mojom.h"
+#include "gpu/ipc/common/shared_image_metadata.mojom.h"
+#include "gpu/ipc/common/shared_image_metadata_mojom_traits.h"
+#include "gpu/ipc/common/traits_test_service.test-mojom.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace gpu {
@@ -23,6 +26,9 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
  public:
   StructTraitsTest() = default;
 
+  StructTraitsTest(const StructTraitsTest&) = delete;
+  StructTraitsTest& operator=(const StructTraitsTest&) = delete;
+
  protected:
   mojo::Remote<mojom::TraitsTestService> GetTraitsTestRemote() {
     mojo::Remote<mojom::TraitsTestService> remote;
@@ -32,11 +38,6 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 
  private:
   // TraitsTestService:
-  void EchoDxDiagNode(const DxDiagNode& d,
-                      EchoDxDiagNodeCallback callback) override {
-    std::move(callback).Run(d);
-  }
-
   void EchoGpuDevice(const GPUInfo::GPUDevice& g,
                      EchoGpuDeviceCallback callback) override {
     std::move(callback).Run(g);
@@ -48,11 +49,6 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 
   void EchoMailbox(const Mailbox& m, EchoMailboxCallback callback) override {
     std::move(callback).Run(m);
-  }
-
-  void EchoMailboxHolder(const MailboxHolder& r,
-                         EchoMailboxHolderCallback callback) override {
-    std::move(callback).Run(r);
   }
 
   void EchoSyncToken(const SyncToken& s,
@@ -85,42 +81,28 @@ class StructTraitsTest : public testing::Test, public mojom::TraitsTestService {
 
   base::test::TaskEnvironment task_environment_;
   mojo::ReceiverSet<TraitsTestService> traits_test_receivers_;
-
-  DISALLOW_COPY_AND_ASSIGN(StructTraitsTest);
 };
 
 }  // namespace
-
-TEST_F(StructTraitsTest, DxDiagNode) {
-  gpu::DxDiagNode input;
-  input.values["abc"] = "123";
-  mojo::Remote<mojom::TraitsTestService> remote = GetTraitsTestRemote();
-  gpu::DxDiagNode output;
-  remote->EchoDxDiagNode(input, &output);
-
-  gpu::DxDiagNode test_dx_diag_node;
-  test_dx_diag_node.values["abc"] = "123";
-  EXPECT_EQ(test_dx_diag_node.values, output.values);
-}
 
 TEST_F(StructTraitsTest, GPUDevice) {
   gpu::GPUInfo::GPUDevice input;
   // Using the values from gpu/config/gpu_info_collector_unittest.cc::nvidia_gpu
   const uint32_t vendor_id = 0x10de;
   const uint32_t device_id = 0x0df8;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   const uint32_t sub_sys_id = 0xc0d8144d;
   const uint32_t revision = 4u;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
   const std::string vendor_string = "vendor_string";
   const std::string device_string = "device_string";
 
   input.vendor_id = vendor_id;
   input.device_id = device_id;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   input.sub_sys_id = sub_sys_id;
   input.revision = revision;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
   input.vendor_string = vendor_string;
   input.device_string = device_string;
   input.active = false;
@@ -130,10 +112,10 @@ TEST_F(StructTraitsTest, GPUDevice) {
 
   EXPECT_EQ(vendor_id, output.vendor_id);
   EXPECT_EQ(device_id, output.device_id);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   EXPECT_EQ(sub_sys_id, output.sub_sys_id);
   EXPECT_EQ(revision, output.revision);
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
   EXPECT_FALSE(output.active);
   EXPECT_TRUE(vendor_string.compare(output.vendor_string) == 0);
   EXPECT_TRUE(device_string.compare(output.device_string) == 0);
@@ -147,10 +129,8 @@ TEST_F(StructTraitsTest, GpuInfo) {
   const std::vector<gpu::GPUInfo::GPUDevice> secondary_gpus;
   const std::string driver_vendor = "driver_vendor";
   const std::string driver_version = "driver_version";
-  const std::string driver_date = "driver_date";
   const std::string pixel_shader_version = "pixel_shader_version";
   const std::string vertex_shader_version = "vertex_shader_version";
-  const std::string max_msaa_samples = "max_msaa_samples";
   const std::string machine_model_name = "machine_model_name";
   const std::string machine_model_version = "machine_model_version";
   const std::string gl_version = "gl_version";
@@ -161,21 +141,24 @@ TEST_F(StructTraitsTest, GpuInfo) {
   const std::string gl_ws_version = "gl_ws_version";
   const std::string gl_ws_extensions = "gl_ws_extensions";
   const uint32_t gl_reset_notification_strategy = 0xbeef;
-  const bool software_rendering = true;
+  const gl::GLImplementationParts gl_implementation_parts(
+      gl::ANGLEImplementation::kSwiftShader);
   const std::string direct_rendering_version = "DRI1";
   const bool sandboxed = true;
   const bool in_process_gpu = true;
   const bool passthrough_cmd_decoder = true;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   const bool direct_composition = true;
   const bool supports_overlays = true;
   const OverlaySupport yuy2_overlay_support = OverlaySupport::kScaling;
   const OverlaySupport nv12_overlay_support = OverlaySupport::kNone;
-  const DxDiagNode dx_diagnostics;
+  const OverlaySupport bgra8_overlay_support = OverlaySupport::kDirect;
+  const OverlaySupport rgb10a2_overlay_support = OverlaySupport::kScaling;
+  const OverlaySupport p010_overlay_support = OverlaySupport::kScaling;
 #endif
-  const gpu::VideoDecodeAcceleratorCapabilities
-      video_decode_accelerator_capabilities;
-  const std::vector<gpu::VideoEncodeAcceleratorSupportedProfile>
+  const VideoDecodeAcceleratorSupportedProfiles
+      video_decode_accelerator_supported_profiles;
+  const VideoEncodeAcceleratorSupportedProfiles
       video_encode_accelerator_supported_profiles;
   const bool jpeg_decode_accelerator_supported = true;
 
@@ -189,7 +172,6 @@ TEST_F(StructTraitsTest, GpuInfo) {
   input.gpu.driver_version = driver_version;
   input.pixel_shader_version = pixel_shader_version;
   input.vertex_shader_version = vertex_shader_version;
-  input.max_msaa_samples = max_msaa_samples;
   input.machine_model_name = machine_model_name;
   input.machine_model_version = machine_model_version;
   input.gl_version = gl_version;
@@ -200,20 +182,22 @@ TEST_F(StructTraitsTest, GpuInfo) {
   input.gl_ws_version = gl_ws_version;
   input.gl_ws_extensions = gl_ws_extensions;
   input.gl_reset_notification_strategy = gl_reset_notification_strategy;
-  input.software_rendering = software_rendering;
+  input.gl_implementation_parts = gl_implementation_parts;
   input.direct_rendering_version = direct_rendering_version;
   input.sandboxed = sandboxed;
   input.in_process_gpu = in_process_gpu;
   input.passthrough_cmd_decoder = passthrough_cmd_decoder;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   input.overlay_info.direct_composition = direct_composition;
   input.overlay_info.supports_overlays = supports_overlays;
   input.overlay_info.yuy2_overlay_support = yuy2_overlay_support;
   input.overlay_info.nv12_overlay_support = nv12_overlay_support;
-  input.dx_diagnostics = dx_diagnostics;
+  input.overlay_info.bgra8_overlay_support = bgra8_overlay_support;
+  input.overlay_info.rgb10a2_overlay_support = rgb10a2_overlay_support;
+  input.overlay_info.p010_overlay_support = p010_overlay_support;
 #endif
-  input.video_decode_accelerator_capabilities =
-      video_decode_accelerator_capabilities;
+  input.video_decode_accelerator_supported_profiles =
+      video_decode_accelerator_supported_profiles;
   input.video_encode_accelerator_supported_profiles =
       video_encode_accelerator_supported_profiles;
   input.jpeg_decode_accelerator_supported = jpeg_decode_accelerator_supported;
@@ -226,10 +210,10 @@ TEST_F(StructTraitsTest, GpuInfo) {
   EXPECT_EQ(amd_switchable, output.amd_switchable);
   EXPECT_EQ(gpu.vendor_id, output.gpu.vendor_id);
   EXPECT_EQ(gpu.device_id, output.gpu.device_id);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   EXPECT_EQ(gpu.sub_sys_id, output.gpu.sub_sys_id);
   EXPECT_EQ(gpu.revision, output.gpu.revision);
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
   EXPECT_EQ(gpu.active, output.gpu.active);
   EXPECT_EQ(gpu.vendor_string, output.gpu.vendor_string);
   EXPECT_EQ(gpu.device_string, output.gpu.device_string);
@@ -239,10 +223,10 @@ TEST_F(StructTraitsTest, GpuInfo) {
     const gpu::GPUInfo::GPUDevice& actual_gpu = output.secondary_gpus[i];
     EXPECT_EQ(expected_gpu.vendor_id, actual_gpu.vendor_id);
     EXPECT_EQ(expected_gpu.device_id, actual_gpu.device_id);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     EXPECT_EQ(expected_gpu.sub_sys_id, actual_gpu.sub_sys_id);
     EXPECT_EQ(expected_gpu.revision, actual_gpu.revision);
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
     EXPECT_EQ(expected_gpu.active, actual_gpu.active);
     EXPECT_EQ(expected_gpu.vendor_string, actual_gpu.vendor_string);
     EXPECT_EQ(expected_gpu.device_string, actual_gpu.device_string);
@@ -251,7 +235,6 @@ TEST_F(StructTraitsTest, GpuInfo) {
   EXPECT_EQ(driver_version, output.gpu.driver_version);
   EXPECT_EQ(pixel_shader_version, output.pixel_shader_version);
   EXPECT_EQ(vertex_shader_version, output.vertex_shader_version);
-  EXPECT_EQ(max_msaa_samples, output.max_msaa_samples);
   EXPECT_EQ(machine_model_name, output.machine_model_name);
   EXPECT_EQ(machine_model_version, output.machine_model_version);
   EXPECT_EQ(gl_version, output.gl_version);
@@ -263,35 +246,31 @@ TEST_F(StructTraitsTest, GpuInfo) {
   EXPECT_EQ(gl_ws_extensions, output.gl_ws_extensions);
   EXPECT_EQ(gl_reset_notification_strategy,
             output.gl_reset_notification_strategy);
-  EXPECT_EQ(software_rendering, output.software_rendering);
+  EXPECT_EQ(gl_implementation_parts, output.gl_implementation_parts);
   EXPECT_EQ(direct_rendering_version, output.direct_rendering_version);
   EXPECT_EQ(sandboxed, output.sandboxed);
   EXPECT_EQ(in_process_gpu, output.in_process_gpu);
   EXPECT_EQ(passthrough_cmd_decoder, output.passthrough_cmd_decoder);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   EXPECT_EQ(direct_composition, output.overlay_info.direct_composition);
   EXPECT_EQ(supports_overlays, output.overlay_info.supports_overlays);
   EXPECT_EQ(yuy2_overlay_support, output.overlay_info.yuy2_overlay_support);
   EXPECT_EQ(nv12_overlay_support, output.overlay_info.nv12_overlay_support);
-  EXPECT_EQ(dx_diagnostics.values, output.dx_diagnostics.values);
+  EXPECT_EQ(bgra8_overlay_support, output.overlay_info.bgra8_overlay_support);
+  EXPECT_EQ(rgb10a2_overlay_support,
+            output.overlay_info.rgb10a2_overlay_support);
+  EXPECT_EQ(p010_overlay_support, output.overlay_info.p010_overlay_support);
 #endif
-  EXPECT_EQ(output.video_decode_accelerator_capabilities.flags,
-            video_decode_accelerator_capabilities.flags);
-  EXPECT_EQ(
-      video_decode_accelerator_capabilities.supported_profiles.size(),
-      output.video_decode_accelerator_capabilities.supported_profiles.size());
-  for (size_t i = 0;
-       i < video_decode_accelerator_capabilities.supported_profiles.size();
-       ++i) {
+  for (size_t i = 0; i < video_decode_accelerator_supported_profiles.size();
+       i++) {
     const gpu::VideoDecodeAcceleratorSupportedProfile& expected =
-        video_decode_accelerator_capabilities.supported_profiles[i];
+        video_decode_accelerator_supported_profiles[i];
     const gpu::VideoDecodeAcceleratorSupportedProfile& actual =
-        output.video_decode_accelerator_capabilities.supported_profiles[i];
+        output.video_decode_accelerator_supported_profiles[i];
     EXPECT_EQ(expected.encrypted_only, actual.encrypted_only);
   }
-  EXPECT_EQ(
-      output.video_decode_accelerator_capabilities.supported_profiles.size(),
-      video_decode_accelerator_capabilities.supported_profiles.size());
+  EXPECT_EQ(output.video_decode_accelerator_supported_profiles.size(),
+            video_decode_accelerator_supported_profiles.size());
   EXPECT_EQ(output.video_encode_accelerator_supported_profiles.size(),
             video_encode_accelerator_supported_profiles.size());
 }
@@ -314,35 +293,6 @@ TEST_F(StructTraitsTest, Mailbox) {
   gpu::Mailbox test_mailbox;
   test_mailbox.SetName(mailbox_name);
   EXPECT_EQ(test_mailbox, output);
-}
-
-TEST_F(StructTraitsTest, MailboxHolder) {
-  gpu::MailboxHolder input;
-
-  const int8_t mailbox_name[GL_MAILBOX_SIZE_CHROMIUM] = {
-      0, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9, 7, 5, 3, 1, 2};
-  gpu::Mailbox mailbox;
-  mailbox.SetName(mailbox_name);
-
-  const gpu::CommandBufferNamespace namespace_id = gpu::IN_PROCESS;
-  const gpu::CommandBufferId command_buffer_id(
-      gpu::CommandBufferId::FromUnsafeValue(0xdeadbeef));
-  const uint64_t release_count = 0xdeadbeefdeadL;
-  gpu::SyncToken sync_token(namespace_id, command_buffer_id, release_count);
-  sync_token.SetVerifyFlush();
-
-  const uint32_t texture_target = 1337;
-
-  input.mailbox = mailbox;
-  input.sync_token = sync_token;
-  input.texture_target = texture_target;
-
-  mojo::Remote<mojom::TraitsTestService> remote = GetTraitsTestRemote();
-  gpu::MailboxHolder output;
-  remote->EchoMailboxHolder(input, &output);
-  EXPECT_EQ(mailbox, output.mailbox);
-  EXPECT_EQ(sync_token, output.sync_token);
-  EXPECT_EQ(texture_target, output.texture_target);
 }
 
 TEST_F(StructTraitsTest, SyncToken) {
@@ -447,17 +397,36 @@ TEST_F(StructTraitsTest, GpuFeatureInfo) {
       gpu::kGpuFeatureStatusBlocklisted;
   input.status_values[GPU_FEATURE_TYPE_ACCELERATED_WEBGL] =
       gpu::kGpuFeatureStatusUndefined;
-  input.status_values[GPU_FEATURE_TYPE_GPU_RASTERIZATION] =
-      gpu::kGpuFeatureStatusDisabled;
-  input.status_values[GPU_FEATURE_TYPE_OOP_RASTERIZATION] =
+  input.status_values[GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION] =
       gpu::kGpuFeatureStatusDisabled;
 
   GpuFeatureInfo output;
   ASSERT_TRUE(mojom::GpuFeatureInfo::Deserialize(
       mojom::GpuFeatureInfo::Serialize(&input), &output));
-  EXPECT_TRUE(std::equal(input.status_values,
-                         input.status_values + NUMBER_OF_GPU_FEATURE_TYPES,
-                         output.status_values));
+  EXPECT_EQ(input.status_values, output.status_values);
+}
+
+TEST_F(StructTraitsTest, ValidateSIMetadataMultiplaneFormatWithPremulAlpha) {
+  auto valid_input = mojom::SharedImageMetadata::New(
+      viz::MultiPlaneFormat::kNV12, gfx::Size(100, 100), gfx::ColorSpace(),
+      kTopLeft_GrSurfaceOrigin, kUnpremul_SkAlphaType,
+      static_cast<uint32_t>(SHARED_IMAGE_USAGE_DISPLAY_READ),
+      /*array_layers=*/1);
+  SharedImageMetadata output;
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::SharedImageMetadata>(
+      valid_input, output));
+  EXPECT_EQ(output.format, viz::MultiPlaneFormat::kNV12);
+  EXPECT_EQ(output.alpha_type, kUnpremul_SkAlphaType);
+
+  // Premultiplied alpha with a multiplanar format without external sampler
+  // should fail deserialization.
+  auto invalid_premul_input = mojom::SharedImageMetadata::New(
+      viz::MultiPlaneFormat::kNV12, gfx::Size(100, 100), gfx::ColorSpace(),
+      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
+      static_cast<uint32_t>(SHARED_IMAGE_USAGE_DISPLAY_READ),
+      /*array_layers=*/1);
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<mojom::SharedImageMetadata>(
+      invalid_premul_input, output));
 }
 
 }  // namespace gpu

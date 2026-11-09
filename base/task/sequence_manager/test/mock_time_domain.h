@@ -1,12 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TASK_SEQUENCE_MANAGER_TEST_MOCK_TIME_DOMAIN_H_
 #define BASE_TASK_SEQUENCE_MANAGER_TEST_MOCK_TIME_DOMAIN_H_
 
+#include <optional>
+
 #include "base/task/sequence_manager/time_domain.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/time/tick_clock.h"
 
 namespace base {
 namespace sequence_manager {
@@ -22,12 +24,12 @@ class MockTimeDomain : public TimeDomain {
 
   void SetNowTicks(TimeTicks now_ticks);
 
+  // TickClock implementation:
+  TimeTicks NowTicks() const override;
+
   // TimeDomain implementation:
-  LazyNow CreateLazyNow() const override;
-  TimeTicks Now() const override;
-  absl::optional<TimeDelta> DelayTillNextTask(LazyNow* lazy_now) override;
-  void SetNextDelayedDoWork(LazyNow* lazy_now, TimeTicks run_time) override;
-  bool MaybeFastForwardToNextTask(bool quit_when_idle_requested) override;
+  bool MaybeFastForwardToWakeUp(std::optional<WakeUp> next_wake_up,
+                                bool quit_when_idle_requested) override;
   const char* GetName() const override;
 
  private:

@@ -1,14 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_CHILD_ACCOUNTS_EVENT_BASED_STATUS_REPORTING_SERVICE_H_
 #define CHROME_BROWSER_ASH_CHILD_ACCOUNTS_EVENT_BASED_STATUS_REPORTING_SERVICE_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/child_accounts/screen_time_controller.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/session_manager/core/session_manager_observer.h"
@@ -34,7 +34,7 @@ class EventBasedStatusReportingService
       public ArcAppListPrefs::Observer,
       public session_manager::SessionManagerObserver,
       public network::NetworkConnectionTracker::NetworkConnectionObserver,
-      public PowerManagerClient::Observer,
+      public chromeos::PowerManagerClient::Observer,
       public ScreenTimeController::Observer {
  public:
   // These values are persisted to logs. Entries should not be renumbered and
@@ -55,6 +55,12 @@ class EventBasedStatusReportingService
       "Supervision.StatusReport.Event";
 
   explicit EventBasedStatusReportingService(content::BrowserContext* context);
+
+  EventBasedStatusReportingService(const EventBasedStatusReportingService&) =
+      delete;
+  EventBasedStatusReportingService& operator=(
+      const EventBasedStatusReportingService&) = delete;
+
   ~EventBasedStatusReportingService() override;
 
   // ArcAppListPrefs::Observer:
@@ -67,7 +73,8 @@ class EventBasedStatusReportingService
   void OnSessionStateChanged() override;
 
   // network::NetworkConnectionTracker::NetworkConnectionObserver:
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
   // PowerManagerClient::Observer:
   void SuspendDone(base::TimeDelta duration) override;
@@ -85,10 +92,8 @@ class EventBasedStatusReportingService
   // KeyedService:
   void Shutdown() override;
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext, DanglingUntriaged> context_;
   bool session_just_started_ = true;
-
-  DISALLOW_COPY_AND_ASSIGN(EventBasedStatusReportingService);
 };
 
 }  // namespace ash

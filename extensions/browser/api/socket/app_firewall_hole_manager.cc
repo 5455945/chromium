@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/app_window/app_window.h"
+#include "extensions/browser/extensions_browser_client.h"
+#include "extensions/common/extension_id.h"
 
-using chromeos::FirewallHole;
 using content::BrowserContext;
 
 namespace extensions {
@@ -27,7 +29,8 @@ class AppFirewallHoleManagerFactory : public BrowserContextKeyedServiceFactory {
   }
 
   static AppFirewallHoleManagerFactory* GetInstance() {
-    return base::Singleton<AppFirewallHoleManagerFactory>::get();
+    static base::NoDestructor<AppFirewallHoleManagerFactory> instance;
+    return instance.get();
   }
 
   AppFirewallHoleManagerFactory()
@@ -37,23 +40,25 @@ class AppFirewallHoleManagerFactory : public BrowserContextKeyedServiceFactory {
     DependsOn(AppWindowRegistry::Factory::GetInstance());
   }
 
-  ~AppFirewallHoleManagerFactory() override {}
+  ~AppFirewallHoleManagerFactory() override = default;
 
  private:
-  // BrowserContextKeyedServiceFactory
-  KeyedService* BuildServiceInstanceFor(
+  friend base::NoDestructor<AppFirewallHoleManagerFactory>;
+
+  // BrowserContextKeyedServiceFactory:
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       BrowserContext* context) const override {
-    return new AppFirewallHoleManager(context);
+    return std::make_unique<AppFirewallHoleManager>(context);
   }
 
   BrowserContext* GetBrowserContextToUse(
       BrowserContext* context) const override {
-    return context;
+    return ExtensionsBrowserClient::Get()->GetContextOwnInstance(context);
   }
 };
 
 bool HasVisibleAppWindows(BrowserContext* context,
-                          const std::string& extension_id) {
+                          const ExtensionId& extension_id) {
   AppWindowRegistry* registry = AppWindowRegistry::Get(context);
 
   for (const AppWindow* window : registry->GetAppWindowsForApp(extension_id)) {
@@ -68,15 +73,16 @@ bool HasVisibleAppWindows(BrowserContext* context,
 }  // namespace
 
 AppFirewallHole::~AppFirewallHole() {
-  if (manager_)
+  if (manager_) {
     manager_->Close(this);
+  }
 }
 
 AppFirewallHole::AppFirewallHole(
     const base::WeakPtr<AppFirewallHoleManager>& manager,
-    PortType type,
+    chromeos::FirewallHole::PortType type,
     uint16_t port,
-    const std::string& extension_id)
+    const ExtensionId& extension_id)
     : type_(type),
       port_(port),
       extension_id_(extension_id),
@@ -84,19 +90,18 @@ AppFirewallHole::AppFirewallHole(
 
 void AppFirewallHole::SetVisible(bool app_visible) {
   app_visible_ = app_visible;
-  if (app_visible_) {
-    if (!firewall_hole_) {
-      FirewallHole::Open(type_, port_, "" /* all interfaces */,
-                         base::BindOnce(&AppFirewallHole::OnFirewallHoleOpened,
-                                        weak_factory_.GetWeakPtr()));
-    }
-  } else {
-    firewall_hole_.reset(nullptr);
+  if (!app_visible_) {
+    firewall_hole_.reset();
+  } else if (!firewall_hole_) {
+    chromeos::FirewallHole::Open(
+        type_, port_, /*all interfaces=*/"",
+        base::BindOnce(&AppFirewallHole::OnFirewallHoleOpened,
+                       weak_factory_.GetWeakPtr()));
   }
 }
 
 void AppFirewallHole::OnFirewallHoleOpened(
-    std::unique_ptr<FirewallHole> firewall_hole) {
+    std::unique_ptr<chromeos::FirewallHole> firewall_hole) {
   if (app_visible_) {
     DCHECK(!firewall_hole_);
     firewall_hole_ = std::move(firewall_hole);
@@ -108,19 +113,19 @@ AppFirewallHoleManager::AppFirewallHoleManager(BrowserContext* context)
   observation_.Observe(AppWindowRegistry::Get(context));
 }
 
-AppFirewallHoleManager::~AppFirewallHoleManager() {}
+AppFirewallHoleManager::~AppFirewallHoleManager() = default;
 
 AppFirewallHoleManager* AppFirewallHoleManager::Get(BrowserContext* context) {
   return AppFirewallHoleManagerFactory::GetForBrowserContext(context, true);
 }
 
 std::unique_ptr<AppFirewallHole> AppFirewallHoleManager::Open(
-    AppFirewallHole::PortType type,
+    chromeos::FirewallHole::PortType type,
     uint16_t port,
-    const std::string& extension_id) {
-  std::unique_ptr<AppFirewallHole> hole(new AppFirewallHole(
-      weak_factory_.GetWeakPtr(), type, port, extension_id));
-  tracked_holes_.insert(std::make_pair(extension_id, hole.get()));
+    const ExtensionId& extension_id) {
+  auto hole = base::WrapUnique(new AppFirewallHole(weak_factory_.GetWeakPtr(),
+                                                   type, port, extension_id));
+  tracked_holes_.emplace(extension_id, hole.get());
   if (HasVisibleAppWindows(context_, extension_id)) {
     hole->SetVisible(true);
   }
@@ -158,6 +163,11 @@ void AppFirewallHoleManager::OnAppWindowShown(AppWindow* app_window,
   for (auto iter = range.first; iter != range.second; ++iter) {
     iter->second->SetVisible(true);
   }
+}
+
+// static
+void AppFirewallHoleManager::EnsureFactoryBuilt() {
+  AppFirewallHoleManagerFactory::GetInstance();
 }
 
 }  // namespace extensions

@@ -1,15 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_TEST_OOBE_SCREEN_WAITER_H_
 #define CHROME_BROWSER_ASH_LOGIN_TEST_OOBE_SCREEN_WAITER_H_
 
-#include "base/macros.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/test/test_condition_waiter.h"
-#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 
@@ -17,7 +16,7 @@ namespace base {
 class RunLoop;
 }
 
-namespace chromeos {
+namespace ash {
 
 // A waiter that blocks until the target oobe screen is reached.
 class OobeScreenWaiter : public OobeUI::Observer,
@@ -25,6 +24,10 @@ class OobeScreenWaiter : public OobeUI::Observer,
                          public aura::WindowObserver {
  public:
   explicit OobeScreenWaiter(OobeScreenId target_screen);
+
+  OobeScreenWaiter(const OobeScreenWaiter&) = delete;
+  OobeScreenWaiter& operator=(const OobeScreenWaiter&) = delete;
+
   ~OobeScreenWaiter() override;
 
   void set_no_assert_last_screen() { assert_last_screen_ = false; }
@@ -48,6 +51,7 @@ class OobeScreenWaiter : public OobeUI::Observer,
   enum class State { IDLE, WAITING_FOR_SCREEN, DONE };
 
   OobeUI* GetOobeUI();
+  bool CheckIfDone();
   void EndWait();
 
   // Returns true if the target screen is reached.
@@ -81,15 +85,8 @@ class OobeScreenWaiter : public OobeUI::Observer,
       native_window_observation_{this};
 
   std::unique_ptr<base::RunLoop> run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(OobeScreenWaiter);
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove when moved to ash.
-namespace ash {
-using ::chromeos::OobeScreenWaiter;
-}
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_TEST_OOBE_SCREEN_WAITER_H_

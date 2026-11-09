@@ -1,12 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "base/types/expected.h"
+#include "mojo/public/cpp/bindings/connector.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -15,15 +20,19 @@
 #include "mojo/public/cpp/bindings/tests/struct_with_traits_impl.h"
 #include "mojo/public/cpp/bindings/tests/struct_with_traits_impl_traits.h"
 #include "mojo/public/cpp/bindings/tests/variant_test_util.h"
+#include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/wait.h"
-#include "mojo/public/interfaces/bindings/tests/struct_with_traits.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom-blink.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/struct_with_traits.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom-blink.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
 namespace test {
 namespace {
+
+using ::testing::HasSubstr;
 
 template <typename T>
 void DoExpectResult(const T& expected,
@@ -64,8 +73,9 @@ class ChromiumRectServiceImpl : public RectService {
 
   // mojo::test::RectService:
   void AddRect(const RectChromium& r) override {
-    if (r.GetArea() > largest_rect_.GetArea())
+    if (r.GetArea() > largest_rect_.GetArea()) {
       largest_rect_ = r;
+    }
   }
 
   void GetLargestRect(GetLargestRectCallback callback) override {
@@ -110,8 +120,7 @@ class BlinkRectServiceImpl : public blink::RectService {
 };
 
 // A test which runs both Chromium and Blink implementations of a RectService.
-class StructTraitsTest : public testing::Test,
-                         public TraitsTestService {
+class StructTraitsTest : public testing::Test, public TraitsTestService {
  public:
   StructTraitsTest() = default;
 
@@ -160,7 +169,7 @@ class StructTraitsTest : public testing::Test,
   }
 
   void EchoNullableMoveOnlyStructWithTraits(
-      absl::optional<MoveOnlyStructWithTraitsImpl> s,
+      std::optional<MoveOnlyStructWithTraitsImpl> s,
       EchoNullableMoveOnlyStructWithTraitsCallback callback) override {
     std::move(callback).Run(std::move(s));
   }
@@ -362,8 +371,8 @@ TEST_F(StructTraitsTest, EchoTrivialStructWithTraits) {
 void CaptureMessagePipe(ScopedMessagePipeHandle* storage,
                         base::OnceClosure closure,
                         MoveOnlyStructWithTraitsImpl passed) {
-  storage->reset(MessagePipeHandle(
-      passed.get_mutable_handle().release().value()));
+  storage->reset(
+      MessagePipeHandle(passed.get_mutable_handle().release().value()));
   std::move(closure).Run();
 }
 
@@ -401,9 +410,9 @@ TEST_F(StructTraitsTest, EchoMoveOnlyStructWithTraits) {
 }
 
 void CaptureNullableMoveOnlyStructWithTraitsImpl(
-    absl::optional<MoveOnlyStructWithTraitsImpl>* storage,
+    std::optional<MoveOnlyStructWithTraitsImpl>* storage,
     base::OnceClosure closure,
-    absl::optional<MoveOnlyStructWithTraitsImpl> passed) {
+    std::optional<MoveOnlyStructWithTraitsImpl> passed) {
   *storage = std::move(passed);
   std::move(closure).Run();
 }
@@ -412,11 +421,10 @@ TEST_F(StructTraitsTest, EchoNullableMoveOnlyStructWithTraits) {
   base::RunLoop loop;
   Remote<TraitsTestService> proxy = GetTraitsTestProxy();
 
-  absl::optional<MoveOnlyStructWithTraitsImpl> received;
+  std::optional<MoveOnlyStructWithTraitsImpl> received;
   proxy->EchoNullableMoveOnlyStructWithTraits(
-      absl::nullopt,
-      base::BindOnce(&CaptureNullableMoveOnlyStructWithTraitsImpl, &received,
-                     loop.QuitClosure()));
+      std::nullopt, base::BindOnce(&CaptureNullableMoveOnlyStructWithTraitsImpl,
+                                   &received, loop.QuitClosure()));
   loop.Run();
 
   EXPECT_FALSE(received);
@@ -447,7 +455,7 @@ TEST_F(StructTraitsTest, SerializeStructWithTraits) {
   input.set_uint32(7);
   input.set_uint64(42);
   input.set_string("hello world!");
-  input.get_mutable_string_array().assign({ "hello", "world!" });
+  input.get_mutable_string_array().assign({"hello", "world!"});
   input.get_mutable_string_set().insert("hello");
   input.get_mutable_string_set().insert("world!");
   input.get_mutable_struct().value = 42;
@@ -477,8 +485,9 @@ void ExpectUniquePtr(std::unique_ptr<int> expected,
                      base::OnceClosure closure,
                      std::unique_ptr<int> value) {
   ASSERT_EQ(!expected, !value);
-  if (expected)
+  if (expected) {
     EXPECT_EQ(*expected, *value);
+  }
   std::move(closure).Run();
 }
 
@@ -548,6 +557,294 @@ TEST_F(StructTraitsTest, EchoUnionWithTraits) {
 TEST_F(StructTraitsTest, DefaultValueOfEnumWithTraits) {
   auto container = EnumWithTraitsContainer::New();
   EXPECT_EQ(EnumWithTraitsImpl::CUSTOM_VALUE_1, container->f_field);
+}
+
+struct ExpectedTestType {
+  int value = 0;
+};
+
+}  // namespace test
+
+template <>
+struct StructTraits<test::TrivialStructWithTraitsDataView,
+                    test::ExpectedTestType> {
+  static int32_t value(const test::ExpectedTestType& input) {
+    return input.value;
+  }
+
+  static base::expected<void, DeserializationError> Read(
+      test::TrivialStructWithTraitsDataView data,
+      test::ExpectedTestType* out) {
+    if (data.value() == 0) {
+      return base::unexpected(DeserializationError());
+    }
+    if (data.value() < 0) {
+      return base::unexpected(DeserializationError::CustomCode(data.value()));
+    }
+    out->value = data.value();
+    return base::ok();
+  }
+};
+
+namespace test {
+
+TEST_F(StructTraitsTest, ReadReturnsExpected) {
+  {
+    Message message;
+    mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+    TrivialStructWithTraitsImpl input;
+    input.value = 10;
+    Message serialized = TrivialStructWithTraits::SerializeAsMessage(&input);
+    ExpectedTestType out;
+    EXPECT_TRUE(TrivialStructWithTraits::DeserializeFromMessage(
+        std::move(serialized), &out));
+    EXPECT_EQ(10, out.value);
+    EXPECT_TRUE(dispatch_context.error_trace().empty());
+  }
+
+  {
+    Message message;
+    mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+    TrivialStructWithTraitsImpl input;
+    input.value = 0;
+    Message serialized = TrivialStructWithTraits::SerializeAsMessage(&input);
+    ExpectedTestType out;
+    EXPECT_FALSE(TrivialStructWithTraits::DeserializeFromMessage(
+        std::move(serialized), &out));
+    ASSERT_EQ(1u, dispatch_context.error_trace().size());
+    EXPECT_FALSE(dispatch_context.error_trace()[0].custom_code().has_value());
+    EXPECT_THAT(dispatch_context.error_trace()[0].ToString(),
+                HasSubstr("struct_traits_unittest.cc"));
+  }
+
+  {
+    Message message;
+    mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+    TrivialStructWithTraitsImpl input;
+    input.value = -42;
+    Message serialized = TrivialStructWithTraits::SerializeAsMessage(&input);
+    ExpectedTestType out;
+    EXPECT_FALSE(TrivialStructWithTraits::DeserializeFromMessage(
+        std::move(serialized), &out));
+    ASSERT_EQ(1u, dispatch_context.error_trace().size());
+    EXPECT_EQ(-42, dispatch_context.error_trace()[0].custom_code());
+    EXPECT_THAT(dispatch_context.error_trace()[0].ToString(),
+                HasSubstr("struct_traits_unittest.cc"));
+    EXPECT_THAT(dispatch_context.error_trace()[0].ToString(), HasSubstr("-42"));
+  }
+}
+
+TEST_F(StructTraitsTest, DeserializationErrorTraceLimit) {
+  Message message;
+  mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+  for (int i = 0; i < 5; ++i) {
+    dispatch_context.AddError(DeserializationError::CustomCode(i));
+  }
+
+  // Adding an error past the first four should be ignored.
+  EXPECT_EQ(4u, dispatch_context.error_trace().size());
+
+  EXPECT_EQ(0u, dispatch_context.error_trace()[0].custom_code());
+  EXPECT_EQ(1u, dispatch_context.error_trace()[1].custom_code());
+  EXPECT_EQ(2u, dispatch_context.error_trace()[2].custom_code());
+  EXPECT_EQ(3u, dispatch_context.error_trace()[3].custom_code());
+
+  for (const auto& error : dispatch_context.error_trace()) {
+    EXPECT_THAT(error.ToString(), HasSubstr("struct_traits_unittest.cc"));
+  }
+}
+
+struct ExpectedUnionTestType {
+  int32_t value = 0;
+};
+
+}  // namespace test
+
+template <>
+struct UnionTraits<test::UnionWithTraitsDataView, test::ExpectedUnionTestType> {
+  static test::UnionWithTraitsDataView::Tag GetTag(
+      const test::ExpectedUnionTestType& input) {
+    return test::UnionWithTraitsDataView::Tag::kFInt32;
+  }
+
+  static int32_t f_int32(const test::ExpectedUnionTestType& input) {
+    return input.value;
+  }
+
+  static const test::NestedStructWithTraitsImpl& f_struct(
+      const test::ExpectedUnionTestType& input) {
+    NOTREACHED();
+  }
+
+  static base::expected<void, DeserializationError> Read(
+      test::UnionWithTraitsDataView data,
+      test::ExpectedUnionTestType* out) {
+    if (data.tag() != test::UnionWithTraitsDataView::Tag::kFInt32) {
+      return base::unexpected(DeserializationError());
+    }
+    if (data.f_int32() < 0) {
+      return base::unexpected(DeserializationError::CustomCode(data.f_int32()));
+    }
+    out->value = data.f_int32();
+    return base::ok();
+  }
+};
+
+namespace test {
+
+TEST_F(StructTraitsTest, UnionReadReturnsExpected) {
+  {
+    Message message;
+    mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+    std::unique_ptr<UnionWithTraitsBase> input =
+        std::make_unique<UnionWithTraitsInt32>(10);
+    Message serialized = UnionWithTraits::SerializeAsMessage(&input);
+    ExpectedUnionTestType out;
+    EXPECT_TRUE(
+        UnionWithTraits::DeserializeFromMessage(std::move(serialized), &out));
+    EXPECT_EQ(10, out.value);
+    EXPECT_TRUE(dispatch_context.error_trace().empty());
+  }
+
+  {
+    Message message;
+    mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+    std::unique_ptr<UnionWithTraitsBase> input =
+        std::make_unique<UnionWithTraitsStruct>(123);
+    Message serialized = UnionWithTraits::SerializeAsMessage(&input);
+    ExpectedUnionTestType out;
+    EXPECT_FALSE(
+        UnionWithTraits::DeserializeFromMessage(std::move(serialized), &out));
+    ASSERT_EQ(1u, dispatch_context.error_trace().size());
+    EXPECT_FALSE(dispatch_context.error_trace()[0].custom_code().has_value());
+    EXPECT_THAT(dispatch_context.error_trace()[0].ToString(),
+                HasSubstr("struct_traits_unittest.cc"));
+  }
+
+  {
+    Message message;
+    mojo::internal::MessageDispatchContext dispatch_context(&message);
+
+    std::unique_ptr<UnionWithTraitsBase> input =
+        std::make_unique<UnionWithTraitsInt32>(-42);
+    Message serialized = UnionWithTraits::SerializeAsMessage(&input);
+    ExpectedUnionTestType out;
+    EXPECT_FALSE(
+        UnionWithTraits::DeserializeFromMessage(std::move(serialized), &out));
+    ASSERT_EQ(1u, dispatch_context.error_trace().size());
+    EXPECT_EQ(-42, dispatch_context.error_trace()[0].custom_code());
+    EXPECT_THAT(dispatch_context.error_trace()[0].ToString(),
+                HasSubstr("struct_traits_unittest.cc"));
+    EXPECT_THAT(dispatch_context.error_trace()[0].ToString(), HasSubstr("-42"));
+  }
+}
+
+namespace {
+
+class MessageCapturingReceiver : public MessageReceiver {
+ public:
+  explicit MessageCapturingReceiver(base::OnceClosure quit_closure)
+      : quit_closure_(std::move(quit_closure)) {}
+
+  // MessageReceiver:
+  bool Accept(Message* message) override {
+    message_ = std::move(*message);
+    std::move(quit_closure_).Run();
+    return true;
+  }
+
+  Message TakeMessage() { return std::move(message_); }
+
+ private:
+  base::OnceClosure quit_closure_;
+  Message message_;
+};
+
+}  // namespace
+
+TEST_F(StructTraitsTest, WrapAsMessageOverConnector) {
+  MessagePipe pipe;
+  Connector sender(std::move(pipe.handle0), Connector::SINGLE_THREADED_SEND,
+                   base::SingleThreadTaskRunner::GetCurrentDefault());
+  Connector receiver(std::move(pipe.handle1), Connector::SINGLE_THREADED_SEND,
+                     base::SingleThreadTaskRunner::GetCurrentDefault());
+
+  // 1. In-process transfer of a WrapAsMessage() message without serialization.
+  // StructWithUnreachableTraits has NOTREACHED() in its StructTraits, proving
+  // that serialization is never invoked.
+  {
+    base::RunLoop loop;
+    MessageCapturingReceiver capturing_receiver(loop.QuitClosure());
+    receiver.set_incoming_receiver(&capturing_receiver);
+
+    StructWithUnreachableTraitsImpl input;
+    input.magic_number = 42;
+    Message message = StructWithUnreachableTraits::WrapAsMessage(input);
+    EXPECT_FALSE(message.is_serialized());
+    EXPECT_TRUE(sender.Accept(&message));
+    loop.Run();
+
+    Message received = capturing_receiver.TakeMessage();
+    EXPECT_FALSE(received.is_serialized());
+    StructWithUnreachableTraitsImpl output;
+    EXPECT_TRUE(StructWithUnreachableTraits::DeserializeFromMessage(
+        std::move(received), &output));
+    EXPECT_EQ(42, output.magic_number);
+  }
+
+  // 2. Forced serialization via SerializeIfNecessary() before sending over
+  // Connector.
+  {
+    base::RunLoop loop;
+    MessageCapturingReceiver capturing_receiver(loop.QuitClosure());
+    receiver.set_incoming_receiver(&capturing_receiver);
+
+    TrivialStructWithTraitsImpl input{123};
+    Message message = TrivialStructWithTraits::WrapAsMessage(input);
+    EXPECT_FALSE(message.is_serialized());
+    message.SerializeIfNecessary();
+    EXPECT_TRUE(message.is_serialized());
+    EXPECT_TRUE(sender.Accept(&message));
+    loop.Run();
+
+    Message received = capturing_receiver.TakeMessage();
+    EXPECT_TRUE(received.is_serialized());
+    TrivialStructWithTraitsImpl output{0};
+    EXPECT_TRUE(TrivialStructWithTraits::DeserializeFromMessage(
+        std::move(received), &output));
+    EXPECT_EQ(123, output.value);
+  }
+
+  // 3. Forced serialization via SerializeIfNecessary() after receiving over
+  // Connector.
+  {
+    base::RunLoop loop;
+    MessageCapturingReceiver capturing_receiver(loop.QuitClosure());
+    receiver.set_incoming_receiver(&capturing_receiver);
+
+    TrivialStructWithTraitsImpl input{456};
+    Message message = TrivialStructWithTraits::WrapAsMessage(input);
+    EXPECT_FALSE(message.is_serialized());
+    EXPECT_TRUE(sender.Accept(&message));
+    loop.Run();
+
+    Message received = capturing_receiver.TakeMessage();
+    EXPECT_FALSE(received.is_serialized());
+    received.SerializeIfNecessary();
+    EXPECT_TRUE(received.is_serialized());
+    TrivialStructWithTraitsImpl output{0};
+    EXPECT_TRUE(TrivialStructWithTraits::DeserializeFromMessage(
+        std::move(received), &output));
+    EXPECT_EQ(456, output.value);
+  }
+
+  receiver.set_incoming_receiver(nullptr);
 }
 
 }  // namespace test

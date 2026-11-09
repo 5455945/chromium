@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "net/base/net_export.h"
 
@@ -30,17 +30,21 @@ class NET_EXPORT_PRIVATE WebSocketDeflater {
   };
 
   explicit WebSocketDeflater(ContextTakeOverMode mode);
+
+  WebSocketDeflater(const WebSocketDeflater&) = delete;
+  WebSocketDeflater& operator=(const WebSocketDeflater&) = delete;
+
   ~WebSocketDeflater();
 
   // Returns true if there is no error and false otherwise.
   // This function must be called exactly once before calling any of
   // following methods.
-  // |window_bits| must be between 8 and 15 (both inclusive).
+  // `window_bits` must be between 8 and 15 (both inclusive).
   bool Initialize(int window_bits);
 
-  // Adds bytes to |stream_|.
+  // Adds bytes to `stream_`.
   // Returns true if there is no error and false otherwise.
-  bool AddBytes(const char* data, size_t size);
+  bool AddBytes(base::span<const uint8_t> data);
 
   // Flushes the current processing data.
   // Returns true if there is no error and false otherwise.
@@ -50,8 +54,8 @@ class NET_EXPORT_PRIVATE WebSocketDeflater {
   void PushSyncMark();
 
   // Returns the current deflated output.
-  // If the current output is larger than |size| bytes,
-  // returns the first |size| bytes of the current output.
+  // If the current output is larger than `size` bytes,
+  // returns the first `size` bytes of the current output.
   // The returned bytes will be dropped from the current output and never be
   // returned thereafter.
   scoped_refptr<IOBufferWithSize> GetOutput(size_t size);
@@ -65,12 +69,10 @@ class NET_EXPORT_PRIVATE WebSocketDeflater {
 
   std::unique_ptr<z_stream_s> stream_;
   ContextTakeOverMode mode_;
-  base::circular_deque<char> buffer_;
-  std::vector<char> fixed_buffer_;
+  base::circular_deque<uint8_t> buffer_;
+  std::vector<uint8_t> fixed_buffer_;
   // true if bytes were added after last Finish().
-  bool are_bytes_added_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebSocketDeflater);
+  bool are_bytes_added_ = false;
 };
 
 }  // namespace net

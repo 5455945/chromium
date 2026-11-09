@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Unit tests for grit.format.rc'''
 
-from __future__ import print_function
-
+import io
 import os
 import re
 import sys
-if __name__ == '__main__':
-  sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-
 import tempfile
 import unittest
 
-from six import StringIO
+if __name__ == '__main__':
+  sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 from grit import grd_reader
 from grit import util
@@ -34,8 +31,8 @@ _PREAMBLE = '''\
 '''
 
 
-class DummyOutput(object):
-  def __init__(self, type, language, file = 'hello.gif'):
+class DummyOutput:
+  def __init__(self, type, language, file='hello.gif'):
     self.type = type
     self.language = language
     self.file = file
@@ -49,8 +46,15 @@ class DummyOutput(object):
   def GetOutputFilename(self):
     return self.file
 
+  def GetGender(self):
+    return None
+
 
 class FormatRcUnittest(unittest.TestCase):
+  @classmethod
+  def setUpClass(cls):
+    os.environ["root_gen_dir"] = "gen"
+
   def testMessages(self):
     root = util.ParseGrdForUnittest("""
       <messages>
@@ -69,17 +73,21 @@ Sting sting
       </messages>
       """)
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en'), buf)
     output = util.StripBlankLinesAndComments(buf.getvalue())
-    self.assertEqual(_PREAMBLE + u'''\
+    self.assertEqual(
+      _PREAMBLE
+      + '''\
 STRINGTABLE
 BEGIN
   IDS_BTN_GO      "Go!"
   IDS_GREETING    "Hello %s, how are you doing today?"
   BONGO           "Howdie ""Mr. Elephant"", how are you doing?   "
   IDS_WITH_LINEBREAKS "Good day sir,\\nI am a bee\\nSting sting"
-END''', output)
+END''',
+      output,
+    )
 
   def testRcSection(self):
     root = util.ParseGrdForUnittest(r'''
@@ -91,10 +99,12 @@ END''', output)
     root.SetOutputLanguage('en')
     root.RunGatherers()
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en'), buf)
     output = util.StripBlankLinesAndComments(buf.getvalue())
-    expected = _PREAMBLE + u'''\
+    expected = (
+      _PREAMBLE
+      + '''\
 IDC_KLONKMENU MENU
 BEGIN
     POPUP "&File"
@@ -157,44 +167,54 @@ BEGIN
         VALUE "Translation", 0x409, 1200
     END
 END'''.strip()
+    )
     for expected_line, output_line in zip(expected.split(), output.split()):
       self.assertEqual(expected_line, output_line)
 
   def testRcIncludeStructure(self):
-    root = util.ParseGrdForUnittest('''
+    root = util.ParseGrdForUnittest(
+      '''
       <structures>
         <structure type="tr_html" name="IDR_HTML" file="bingo.html"/>
         <structure type="tr_html" name="IDR_HTML2" file="bingo2.html"/>
-      </structures>''', base_dir = '/temp')
+      </structures>''',
+      base_dir='/temp',
+    )
     # We do not run gatherers as it is not needed and wouldn't find the file
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en'), buf)
     output = util.StripBlankLinesAndComments(buf.getvalue())
-    expected = (_PREAMBLE +
-                u'IDR_HTML           HTML               "%s"\n'
-                u'IDR_HTML2          HTML               "%s"'
-                % (util.normpath('/temp/bingo.html').replace('\\', '\\\\'),
-                   util.normpath('/temp/bingo2.html').replace('\\', '\\\\')))
+    expected = (
+      _PREAMBLE + 'IDR_HTML           HTML               "%s"\n'
+      'IDR_HTML2          HTML               "%s"'
+      % (
+        util.normpath('/temp/bingo.html').replace('\\', '\\\\'),
+        util.normpath('/temp/bingo2.html').replace('\\', '\\\\'),
+      )
+    )
     # hackety hack to work on win32&lin
     output = re.sub(r'"[c-zC-Z]:', '"', output)
     self.assertEqual(expected, output)
 
   def testRcIncludeFile(self):
-    root = util.ParseGrdForUnittest('''
+    root = util.ParseGrdForUnittest(
+      '''
       <includes>
         <include type="TXT" name="TEXT_ONE" file="bingo.txt"/>
         <include type="TXT" name="TEXT_TWO" file="bingo2.txt"  filenameonly="true" />
-      </includes>''', base_dir = '/temp')
+      </includes>''',
+      base_dir='/temp',
+    )
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en'), buf)
     output = util.StripBlankLinesAndComments(buf.getvalue())
-    expected = (_PREAMBLE +
-                u'TEXT_ONE           TXT                "%s"\n'
-                u'TEXT_TWO           TXT                "%s"'
-                % (util.normpath('/temp/bingo.txt').replace('\\', '\\\\'),
-                   'bingo2.txt'))
+    expected = (
+      _PREAMBLE + 'TEXT_ONE           TXT                "%s"\n'
+      'TEXT_TWO           TXT                "%s"'
+      % (util.normpath('/temp/bingo.txt').replace('\\', '\\\\'), 'bingo2.txt')
+    )
     # hackety hack to work on win32&lin
     output = re.sub(r'"[c-zC-Z]:', '"', output)
     self.assertEqual(expected, output)
@@ -202,18 +222,24 @@ END'''.strip()
   def testRcIncludeFlattenedHtmlFile(self):
     input_file = util.PathFromRoot('grit/testdata/include_test.html')
     output_file = '%s/HTML_FILE1_include_test.html' % tempfile.gettempdir()
-    root = util.ParseGrdForUnittest('''
+    root = util.ParseGrdForUnittest(
+      '''
       <includes>
         <include name="HTML_FILE1" flattenhtml="true" file="%s" type="BINDATA" />
-      </includes>''' % input_file)
+      </includes>'''
+      % input_file
+    )
 
-    buf = StringIO()
-    build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en', output_file),
-                                buf)
+    buf = io.StringIO()
+    build.RcBuilder.ProcessNode(
+      root, DummyOutput('rc_all', 'en', output_file), buf
+    )
     output = util.StripBlankLinesAndComments(buf.getvalue())
 
-    expected = (_PREAMBLE +
-        u'HTML_FILE1         BINDATA            "HTML_FILE1_include_test.html"')
+    expected = (
+      _PREAMBLE
+      + 'HTML_FILE1         BINDATA            "HTML_FILE1_include_test.html"'
+    )
     # hackety hack to work on win32&lin
     output = re.sub(r'"[c-zC-Z]:', '"', output)
     self.assertEqual(expected, output)
@@ -221,28 +247,31 @@ END'''.strip()
     file_contents = util.ReadFile(output_file, 'utf-8')
 
     # Check for the content added by the <include> tag.
-    self.failUnless(file_contents.find('Hello Include!') != -1)
+    self.assertTrue(file_contents.find('Hello Include!') != -1)
     # Check for the content that was removed by if tag.
-    self.failUnless(file_contents.find('should be removed') == -1)
+    self.assertTrue(file_contents.find('should be removed') == -1)
     # Check for the content that was kept in place by if.
-    self.failUnless(file_contents.find('should be kept') != -1)
-    self.failUnless(file_contents.find('in the middle...') != -1)
-    self.failUnless(file_contents.find('at the end...') != -1)
+    self.assertTrue(file_contents.find('should be kept') != -1)
+    self.assertTrue(file_contents.find('in the middle...') != -1)
+    self.assertTrue(file_contents.find('at the end...') != -1)
     # Check for nested content that was kept
-    self.failUnless(file_contents.find('nested true should be kept') != -1)
-    self.failUnless(file_contents.find('silbing true should be kept') != -1)
+    self.assertTrue(file_contents.find('nested true should be kept') != -1)
+    self.assertTrue(file_contents.find('silbing true should be kept') != -1)
     # Check for removed "<if>" and "</if>" tags.
-    self.failUnless(file_contents.find('<if expr=') == -1)
-    self.failUnless(file_contents.find('</if>') == -1)
+    self.assertTrue(file_contents.find('<if expr=') == -1)
+    self.assertTrue(file_contents.find('</if>') == -1)
     os.remove(output_file)
 
   def testStructureNodeOutputfile(self):
     input_file = util.PathFromRoot('grit/testdata/simple.html')
-    root = util.ParseGrdForUnittest('''
+    root = util.ParseGrdForUnittest(
+      '''
         <structures>
           <structure type="tr_html" name="IDR_HTML" file="%s" />
-        </structures>''' % input_file)
-    struct, = root.GetChildrenOfType(structure.StructureNode)
+        </structures>'''
+      % input_file
+    )
+    (struct,) = root.GetChildrenOfType(structure.StructureNode)
     # We must run the gatherer since we'll be wanting the translation of the
     # file.  The file exists in the location pointed to.
     root.SetOutputLanguage('en')
@@ -250,36 +279,42 @@ END'''.strip()
 
     output_dir = tempfile.gettempdir()
     en_file = struct.FileForLanguage('en', output_dir)
-    self.failUnless(en_file == input_file)
+    self.assertTrue(en_file == input_file)
     fr_file = struct.FileForLanguage('fr', output_dir)
-    self.failUnless(fr_file == os.path.join(output_dir, 'fr_simple.html'))
+    self.assertTrue(fr_file == os.path.join(output_dir, 'fr_simple.html'))
 
     contents = util.ReadFile(fr_file, 'utf-8')
 
-    self.failUnless(contents.find('<p>') != -1)  # should contain the markup
-    self.failUnless(contents.find('Hello!') == -1)  # should be translated
+    self.assertTrue(contents.find('<p>') != -1)  # should contain the markup
+    self.assertTrue(contents.find('Hello!') == -1)  # should be translated
     os.remove(fr_file)
 
   def testChromeHtmlNodeOutputfile(self):
     input_file = util.PathFromRoot('grit/testdata/chrome_html.html')
     output_file = '%s/HTML_FILE1_chrome_html.html' % tempfile.gettempdir()
-    root = util.ParseGrdForUnittest('''
+    root = util.ParseGrdForUnittest(
+      '''
         <structures>
           <structure type="chrome_html" name="HTML_FILE1" file="%s" flattenhtml="true" />
-        </structures>''' % input_file)
-    struct, = root.GetChildrenOfType(structure.StructureNode)
+        </structures>'''
+      % input_file
+    )
+    (struct,) = root.GetChildrenOfType(structure.StructureNode)
     struct.gatherer.SetDefines({'scale_factors': '2x'})
     # We must run the gatherers since we'll be wanting the chrome_html output.
     # The file exists in the location pointed to.
     root.SetOutputLanguage('en')
     root.RunGatherers()
 
-    buf = StringIO()
-    build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en', output_file),
-                                buf)
+    buf = io.StringIO()
+    build.RcBuilder.ProcessNode(
+      root, DummyOutput('rc_all', 'en', output_file), buf
+    )
     output = util.StripBlankLinesAndComments(buf.getvalue())
-    expected = (_PREAMBLE +
-        u'HTML_FILE1         BINDATA            "HTML_FILE1_chrome_html.html"')
+    expected = (
+      _PREAMBLE
+      + 'HTML_FILE1         BINDATA            "HTML_FILE1_chrome_html.html"'
+    )
     # hackety hack to work on win32&lin
     output = re.sub(r'"[c-zC-Z]:', '"', output)
     self.assertEqual(expected, output)
@@ -287,14 +322,16 @@ END'''.strip()
     file_contents = util.ReadFile(output_file, 'utf-8')
 
     # Check for the content added by the <include> tag.
-    self.failUnless(file_contents.find('Hello Include!') != -1)
-    # Check for inserted -webkit-image-set.
-    self.failUnless(file_contents.find('content: -webkit-image-set') != -1)
+    self.assertTrue(file_contents.find('Hello Include!') != -1)
+    # Check for inserted image-set.
+    self.assertTrue(file_contents.find('content: image-set') != -1)
     os.remove(output_file)
 
   def testSubstitutionHtml(self):
     input_file = util.PathFromRoot('grit/testdata/toolbar_about.html')
-    root = grd_reader.Parse(StringIO('''<?xml version="1.0" encoding="UTF-8"?>
+    root = grd_reader.Parse(
+      io.StringIO(
+        '''<?xml version="1.0" encoding="UTF-8"?>
       <grit latest_public_release="2" source_lang_id="en-US" current_release="3" base_dir=".">
         <release seq="1" allow_pseudo="False">
           <structures fallback_to_english="True">
@@ -302,36 +339,47 @@ END'''.strip()
           </structures>
         </release>
       </grit>
-      ''' % input_file), util.PathFromRoot('.'))
+      '''
+        % input_file
+      ),
+      util.PathFromRoot('.'),
+    )
     root.SetOutputLanguage('ar')
     # We must run the gatherers since we'll be wanting the translation of the
     # file.  The file exists in the location pointed to.
     root.RunGatherers()
 
     output_dir = tempfile.gettempdir()
-    struct, = root.GetChildrenOfType(structure.StructureNode)
+    (struct,) = root.GetChildrenOfType(structure.StructureNode)
     ar_file = struct.FileForLanguage('ar', output_dir)
-    self.failUnless(ar_file == os.path.join(output_dir,
-                                            'ar_toolbar_about.html'))
+    self.assertTrue(
+      ar_file == os.path.join(output_dir, 'ar_toolbar_about.html')
+    )
 
     contents = util.ReadFile(ar_file, 'utf-8')
 
-    self.failUnless(contents.find('dir="RTL"') != -1)
+    self.assertTrue(contents.find('dir="RTL"') != -1)
     os.remove(ar_file)
 
   def testFallbackToEnglish(self):
-    root = util.ParseGrdForUnittest(r'''
+    root = util.ParseGrdForUnittest(
+      r'''
         <structures fallback_to_english="True">
           <structure type="dialog" name="IDD_ABOUTBOX" file="grit\testdata\klonk.rc" encoding="utf-16" />
-        </structures>''', base_dir=util.PathFromRoot('.'))
+        </structures>''',
+      base_dir=util.PathFromRoot('.'),
+    )
     root.SetOutputLanguage('en')
     root.RunGatherers()
 
-    buf = StringIO()
+    buf = io.StringIO()
     formatter = build.RcBuilder.ProcessNode(
-        root, DummyOutput('rc_all', 'bingobongo'), buf)
+      root, DummyOutput('rc_all', 'bingobongo'), buf
+    )
     output = util.StripBlankLinesAndComments(buf.getvalue())
-    self.assertEqual(_PREAMBLE + '''\
+    self.assertEqual(
+      _PREAMBLE
+      + '''\
 IDD_ABOUTBOX DIALOGEX 22, 17, 230, 75
 STYLE DS_SETFONT | DS_MODALFRAME | WS_CAPTION | WS_SYSMENU
 CAPTION "About"
@@ -344,11 +392,13 @@ BEGIN
     DEFPUSHBUTTON   "OK",IDOK,195,6,30,11,WS_GROUP
     CONTROL         "Jack ""Black"" Daniels",IDC_RADIO1,"Button",
                     BS_AUTORADIOBUTTON,46,51,84,10
-END''', output)
-
+END''',
+      output,
+    )
 
   def testSubstitutionRc(self):
-    root = grd_reader.Parse(StringIO(r'''<?xml version="1.0" encoding="UTF-8"?>
+    root = grd_reader.Parse(
+      io.StringIO(r'''<?xml version="1.0" encoding="UTF-8"?>
     <grit latest_public_release="2" source_lang_id="en-US" current_release="3"
           base_dir=".">
       <outputs>
@@ -367,14 +417,17 @@ END''', output)
         </messages>
       </release>
     </grit>
-    '''), util.PathFromRoot('.'))
+    '''),
+      util.PathFromRoot('.'),
+    )
     root.SetOutputLanguage('en')
     root.RunGatherers()
 
-    buf = StringIO()
+    buf = io.StringIO()
     build.RcBuilder.ProcessNode(root, DummyOutput('rc_all', 'en'), buf)
     output = buf.getvalue()
-    self.assertEqual('''
+    self.assertEqual(
+      '''
 // This file is automatically generated by GRIT.  Do not edit.
 
 #include "resource.h"
@@ -408,7 +461,9 @@ STRINGTABLE
 BEGIN
   good            "excellent"
 END
-'''.strip(), output.strip())
+'''.strip(),
+      output.strip(),
+    )
 
 
 if __name__ == '__main__':

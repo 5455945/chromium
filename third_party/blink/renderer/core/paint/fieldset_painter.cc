@@ -1,126 +1,153 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/paint/fieldset_painter.h"
 
-#include "third_party/blink/renderer/core/layout/layout_fieldset.h"
-#include "third_party/blink/renderer/core/paint/background_image_geometry.h"
+#include "third_party/blink/renderer/core/layout/layout_box.h"
+#include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
+#include "third_party/blink/renderer/core/paint/border_shape_utils.h"
+#include "third_party/blink/renderer/core/paint/box_background_paint_context.h"
 #include "third_party/blink/renderer/core/paint/box_decoration_data.h"
-#include "third_party/blink/renderer/core/paint/box_model_object_painter.h"
-#include "third_party/blink/renderer/core/paint/box_painter.h"
+#include "third_party/blink/renderer/core/paint/box_fragment_painter.h"
+#include "third_party/blink/renderer/core/paint/contoured_border_geometry.h"
 #include "third_party/blink/renderer/core/paint/fieldset_paint_info.h"
+#include "third_party/blink/renderer/core/paint/object_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
+#include "third_party/blink/renderer/platform/geometry/contoured_rect.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 
 namespace blink {
 
-namespace {
+FieldsetPaintInfo FieldsetPainter::CreateFieldsetPaintInfo() const {
+  const PhysicalFragmentLink* legend = nullptr;
+  if (!fieldset_.Children().empty()) {
+    const auto& first_child = fieldset_.Children().front();
+    if (first_child->IsRenderedLegend()) {
+      legend = &first_child;
+    }
+  }
 
-FieldsetPaintInfo CreateFieldsetPaintInfo(const LayoutBox& fieldset,
-                                          const LayoutBox& legend) {
-  LayoutRectOutsets fieldset_borders(
-      fieldset.BorderTop(), fieldset.BorderRight(),
-      LayoutUnit(),  // bottom border will always be left alone.
-      fieldset.BorderLeft());
-  // Using legend.FrameRect() is incorrect in vertical-rl mode, but we probably
-  // won't fix this here which is for legacy layout.
-  return FieldsetPaintInfo(fieldset.StyleRef(),
-                           PhysicalSizeToBeNoop(fieldset.Size()),
-                           fieldset_borders, PhysicalRect(legend.FrameRect()));
+  const WritingDirectionMode writing_direction =
+      fieldset_.Style().GetWritingDirection();
+
+  PhysicalRect legend_border_box;
+  if (legend) {
+    // Remove the position:relative offset of the legend. See:
+    // https://html.spec.whatwg.org/C/#the-fieldset-and-legend-elements
+    //
+    // We can't use the used position-insets directly, we need to select the
+    // dominant side first.
+    const LogicalOffset relative_offset =
+        To<PhysicalBoxFragment>(**legend)
+            .UsedPositionInsets()
+            .ConvertToLogical(writing_direction)
+            .StartOffset();
+    const PhysicalBoxStrut relative_insets =
+        BoxStrut(relative_offset.inline_offset, -relative_offset.inline_offset,
+                 relative_offset.block_offset, -relative_offset.block_offset)
+            .ConvertToPhysical(writing_direction);
+    legend_border_box = PhysicalRect(
+        legend->Offset() - relative_insets.Offset(), (*legend)->Size());
+  }
+  return FieldsetPaintInfo(fieldset_.Size(), fieldset_.Borders(),
+                           legend_border_box, writing_direction);
 }
 
-}  // anonymous namespace
-
+// Paint the fieldset (background, other decorations, and) border, with the
+// cutout hole for the legend.
 void FieldsetPainter::PaintBoxDecorationBackground(
     const PaintInfo& paint_info,
-    const PhysicalOffset& paint_offset) {
-  if (layout_fieldset_.StyleRef().Visibility() != EVisibility::kVisible)
-    return;
+    const PhysicalRect& paint_rect,
+    const BoxDecorationData& box_decoration_data) {
+  DCHECK(box_decoration_data.ShouldPaint());
 
-  PhysicalRect paint_rect(paint_offset, layout_fieldset_.Size());
-  LayoutBox* legend = layout_fieldset_.FindInFlowLegend();
-  if (!legend || paint_info.DescendantPaintingBlocked()) {
-    return BoxPainter(layout_fieldset_)
-        .PaintBoxDecorationBackground(paint_info, paint_offset);
+  const ComputedStyle& style = fieldset_.Style();
+  FieldsetPaintInfo fieldset_paint_info = CreateFieldsetPaintInfo();
+  PhysicalRect contracted_rect(paint_rect);
+  contracted_rect.Contract(fieldset_paint_info.border_outsets);
+
+  BoxFragmentPainter fragment_painter(fieldset_);
+  if (box_decoration_data.ShouldPaintShadow()) {
+    std::optional<BorderShapeReferenceRects> border_shape_rects =
+        ComputeBorderShapeReferenceRects(contracted_rect, fieldset_.Style(),
+                                         *fieldset_.GetLayoutObject());
+    fragment_painter.PaintNormalBoxShadow(paint_info, contracted_rect, style,
+                                          border_shape_rects);
   }
 
-  BoxDecorationData box_decoration_data(paint_info, layout_fieldset_);
-  // TODO(crbug.com/786475): Fieldset should not scroll.
-  DCHECK(!box_decoration_data.IsPaintingScrollingBackground());
-  if (box_decoration_data.ShouldPaint() &&
-      !DrawingRecorder::UseCachedDrawingIfPossible(
-          paint_info.context, layout_fieldset_, paint_info.phase)) {
-    FieldsetPaintInfo fieldset_paint_info =
-        CreateFieldsetPaintInfo(layout_fieldset_, *legend);
-    paint_rect.Contract(fieldset_paint_info.border_outsets);
+  GraphicsContext& graphics_context = paint_info.context;
+  GraphicsContextStateSaver state_saver(graphics_context, false);
+  bool needs_end_layer = false;
+  if (BleedAvoidanceIsClipping(
+          box_decoration_data.GetBackgroundBleedAvoidance())) {
+    state_saver.Save();
 
-    BoxDrawingRecorder recorder(paint_info.context, layout_fieldset_,
-                                paint_info.phase, paint_offset);
+    ContouredRect border = ContouredBorderGeometry::PixelSnappedContouredBorder(
+        style, contracted_rect, fieldset_.SidesToInclude());
+    graphics_context.ClipContouredRect(border);
 
-    if (box_decoration_data.ShouldPaintShadow()) {
-      BoxPainterBase::PaintNormalBoxShadow(paint_info, paint_rect,
-                                           layout_fieldset_.StyleRef());
-    }
-    if (box_decoration_data.ShouldPaintBackground()) {
-      BackgroundImageGeometry geometry(layout_fieldset_);
-      BoxModelObjectPainter(layout_fieldset_)
-          .PaintFillLayers(paint_info, box_decoration_data.BackgroundColor(),
-                           layout_fieldset_.StyleRef().BackgroundLayers(),
-                           paint_rect, geometry);
-    }
-    if (box_decoration_data.ShouldPaintShadow()) {
-      BoxPainterBase::PaintInsetBoxShadowWithBorderRect(
-          paint_info, paint_rect, layout_fieldset_.StyleRef());
-    }
-
-    if (box_decoration_data.ShouldPaintBorder()) {
-      // Create a clipping region around the legend and paint the border as
-      // normal
-      GraphicsContext& graphics_context = paint_info.context;
-      GraphicsContextStateSaver state_saver(graphics_context);
-
-      PhysicalRect legend_cutout_rect = fieldset_paint_info.legend_cutout_rect;
-      legend_cutout_rect.Move(paint_offset);
-      graphics_context.ClipOut(PixelSnappedIntRect(legend_cutout_rect));
-
-      Node* node = nullptr;
-      const LayoutObject* layout_object = &layout_fieldset_;
-      for (; layout_object && !node; layout_object = layout_object->Parent())
-        node = layout_object->GeneratingNode();
-      BoxPainterBase::PaintBorder(
-          layout_fieldset_, layout_fieldset_.GetDocument(), node, paint_info,
-          paint_rect, layout_fieldset_.StyleRef());
+    if (box_decoration_data.GetBackgroundBleedAvoidance() ==
+        kBackgroundBleedClipLayer) {
+      graphics_context.BeginLayer();
+      needs_end_layer = true;
     }
   }
 
-  BoxPainter(layout_fieldset_)
-      .RecordHitTestData(paint_info, paint_rect, layout_fieldset_);
+  if (box_decoration_data.ShouldPaintBackground()) {
+    // TODO(eae): Switch to LayoutNG version of BoxBackgroundPaintContext.
+    BoxBackgroundPaintContext bg_paint_context(
+        *static_cast<const LayoutBoxModelObject*>(fieldset_.GetLayoutObject()));
+    fragment_painter.PaintFillLayers(
+        paint_info, box_decoration_data.BackgroundColor(),
+        style.BackgroundLayers(), contracted_rect, bg_paint_context);
+  }
+  if (box_decoration_data.ShouldPaintShadow()) {
+    const LayoutObject* layout_object = fieldset_.GetLayoutObject();
+    std::optional<BorderShapeReferenceRects> border_shape_rects =
+        ComputeBorderShapeReferenceRects(contracted_rect, fieldset_.Style(),
+                                         *layout_object);
+    fragment_painter.PaintInsetBoxShadowWithBorderRect(
+        paint_info, contracted_rect, fieldset_.Style(), border_shape_rects);
+  }
+  if (box_decoration_data.ShouldPaintBorder()) {
+    // Create a clipping region around the legend and paint the border as
+    // normal.
+    PhysicalRect legend_cutout_rect = fieldset_paint_info.legend_cutout_rect;
+    legend_cutout_rect.Move(paint_rect.offset);
+    graphics_context.ClipOut(ToPixelSnappedRect(legend_cutout_rect));
+
+    const LayoutObject* layout_object = fieldset_.GetLayoutObject();
+    Node* node = layout_object->GeneratingNode();
+    std::optional<BorderShapeReferenceRects> border_shape_rects =
+        ComputeBorderShapeReferenceRects(contracted_rect, fieldset_.Style(),
+                                         *layout_object);
+    fragment_painter.PaintBorder(
+        *fieldset_.GetLayoutObject(), layout_object->GetDocument(), node,
+        paint_info, contracted_rect, fieldset_.Style(),
+        box_decoration_data.GetBackgroundBleedAvoidance(),
+        fieldset_.SidesToInclude(),
+        border_shape_rects ? &*border_shape_rects : nullptr);
+  }
+
+  if (needs_end_layer)
+    graphics_context.EndLayer();
 }
 
 void FieldsetPainter::PaintMask(const PaintInfo& paint_info,
                                 const PhysicalOffset& paint_offset) {
-  if (layout_fieldset_.StyleRef().Visibility() != EVisibility::kVisible ||
-      paint_info.phase != PaintPhase::kMask)
-    return;
-
-  PhysicalRect paint_rect(paint_offset, layout_fieldset_.Size());
-  LayoutBox* legend = layout_fieldset_.FindInFlowLegend();
-  if (!legend || paint_info.DescendantPaintingBlocked())
-    return BoxPainter(layout_fieldset_).PaintMask(paint_info, paint_offset);
-
-  if (DrawingRecorder::UseCachedDrawingIfPossible(
-          paint_info.context, layout_fieldset_, paint_info.phase))
-    return;
-
-  FieldsetPaintInfo fieldset_paint_info =
-      CreateFieldsetPaintInfo(layout_fieldset_, *legend);
-  paint_rect.Contract(fieldset_paint_info.border_outsets);
-
-  BoxDrawingRecorder recorder(paint_info.context, layout_fieldset_,
-                              paint_info.phase, paint_offset);
-  BoxPainter(layout_fieldset_).PaintMaskImages(paint_info, paint_rect);
+  const LayoutObject& layout_object = *fieldset_.GetLayoutObject();
+  BoxFragmentPainter ng_box_painter(fieldset_);
+  DrawingRecorder recorder(paint_info.context, layout_object, paint_info.phase,
+                           ng_box_painter.VisualRect(paint_offset));
+  PhysicalRect paint_rect(paint_offset, fieldset_.Size());
+  paint_rect.Contract(CreateFieldsetPaintInfo().border_outsets);
+  // TODO(eae): Switch to LayoutNG version of BoxBackgroundPaintContext.
+  BoxBackgroundPaintContext bg_paint_context(
+      static_cast<const LayoutBoxModelObject&>(layout_object));
+  ng_box_painter.PaintMaskImages(paint_info, paint_rect, layout_object,
+                                 bg_paint_context, fieldset_.SidesToInclude());
 }
 
 }  // namespace blink

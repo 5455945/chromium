@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,18 +22,22 @@ class TranslateService
   static void Initialize();
 
   // Must be called to shut down the Translate feature.
-  static void Shutdown(bool cleanup_pending_fetcher);
+  static void Shutdown();
 
   // Initializes the TranslateService in a way that it can be initialized
   // multiple times in a unit test suite (once for each test). Should be paired
   // with ShutdownForTesting at the end of the test.
-  static void InitializeForTesting(network::mojom::ConnectionType type);
+  // If `wait_for_eula` is false, EULA acceptance state is ignored for resource
+  // requests.
+  static void InitializeForTesting(
+      net::NetworkChangeNotifier::ConnectionType type,
+      bool wait_for_eula = true);
 
   // Shuts down the TranslateService at the end of a test in a way that the next
   // test can initialize and use the service.
   static void ShutdownForTesting();
 
-  // Returns true if the new translate bubble is enabled.
+  // Returns true if the Full Page Translate bubble is enabled.
   static bool IsTranslateBubbleEnabled();
 
   // Returns the language to translate to. For more details, see

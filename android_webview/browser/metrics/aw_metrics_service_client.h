@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,31 +7,39 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "android_webview/browser/lifecycle/webview_app_state_observer.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/no_destructor.h"
+#include "base/scoped_multi_source_observation.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
-#include "components/embedder_support/android/metrics/android_metrics_service_client.h"
+#include "base/time/time.h"
 #include "components/metrics/enabled_state_provider.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_service_client.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "components/metrics/persistent_synthetic_trial_observer.h"
+#include "components/variations/synthetic_trial_registry.h"
+#include "components/version_info/android/channel_getter.h"
+#include "content/public/browser/render_process_host_creation_observer.h"
+#include "content/public/browser/render_process_host_observer.h"
+#include "content/public/browser/web_contents.h"
+
+class PrefRegistrySimple;
+class PrefService;
+
+namespace metrics {
+class MetricsStateManager;
+}  // namespace metrics
 
 namespace android_webview {
 
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// TODO(https://crbug.com/1012025): remove this when the kInstallDate pref has
-// been persisted for one or two milestones. Visible for testing.
-enum class BackfillInstallDate {
-  kValidInstallDatePref = 0,
-  kCouldNotGetPackageManagerInstallDate = 1,
-  kPersistedPackageManagerInstallDate = 2,
-  kMaxValue = kPersistedPackageManagerInstallDate,
-};
+extern const char kCrashpadHistogramAllocatorName[];
 
 // AwMetricsServiceClient is a singleton which manages WebView metrics
 // collection.
@@ -48,24 +56,27 @@ enum class BackfillInstallDate {
 // different such directory for each user, for each app, on each device. So the
 // ID should be unique per (device, app, user) tuple.
 //
-// To avoid the appearance that we're doing anything sneaky, the client ID
-// should only be created and retained when neither the user nor the app have
-// opted out. Otherwise, the presence of the ID could give the impression that
-// metrics were being collected.
+// In order to be transparent about not associating an ID with an opted out user
+// or app, the client ID should only be created and retained when neither the
+// user nor the app have opted out. Otherwise, the presence of the ID could give
+// the impression that metrics were being collected.
 //
 // WebView metrics set up happens like so:
 //
 //   startup
 //      │
-//      ├────────────┐
-//      │            ▼
-//      │         query GMS for consent
-//      ▼            │
-//   Initialize()    │
-//      │            ▼
-//      │         SetHaveMetricsConsent()
-//      │            │
-//      │ ┌──────────┘
+//      ├─────────────────────┐
+//      │                     ▼
+//      │                  query GMS for consent
+//      ▼                     │
+//   Initialize()             │
+//      │                     │
+//      ▼                     │
+//   PostFeatureListSetup()   │
+//      │                     ▼
+//      │                  SetHaveMetricsConsent()
+//      │                     │
+//      │ ┌───────────────────┘
 //      ▼ ▼
 //   MaybeStartMetrics()
 //      │
@@ -77,29 +88,31 @@ enum class BackfillInstallDate {
 // SetHaveMetricsConsent(). Querying GMS is slow, so SetHaveMetricsConsent()
 // typically happens after Initialize(), but it may happen before.
 //
-// Each path sets a flag, |init_finished_| or |set_consent_finished_|, to show
-// that path has finished, and then calls MaybeStartMetrics(). When
-// MaybeStartMetrics() is called the first time, it sees only one flag is true,
-// and does nothing. When MaybeStartMetrics() is called the second time, it
-// decides whether to start metrics.
+// Initialize() is called before variations are set up, so any base::Feature
+// state it reads only reflects defaults; it creates what variations setup
+// itself needs (e.g. the MetricsStateManager and the FieldTrialList).
+// PostFeatureListSetup() is called once the base::FeatureList has been set up;
+// it creates the MetricsService, which snapshots feature-dependent
+// configuration such as GetStorageLimits(), and sets up the metrics directory,
+// which also checks base::Feature flags.
+//
+// Each path records its progress: |metrics_service_| is only set by
+// PostFeatureListSetup() (which also requires Initialize() to have run and sets
+// up |metrics_dir_|), and |set_consent_finished_| is set by the consent path.
+// PostFeatureListSetup() and SetHaveMetricsConsent() both end by calling
+// MaybeStartMetrics(), which does nothing unless both paths have finished.
 //
 // If consent was granted, MaybeStartMetrics() determines sampling by hashing
 // the client ID (generating a new ID if there was none). If this client is in
 // the sample, it then calls MetricsService::Start(). If consent was not
 // granted, MaybeStartMetrics() instead clears the client ID, if any.
-//
-// Similarly, when
-// `android_webview::features::kWebViewAppsPackageNamesAllowlist` is enabled,
-// WebView will try to lookup the embedding app's package name in a list of apps
-// whose package names are allowed to be recorded. This operation takes place on
-// a background thread. The result of the lookup is then posted back on the UI
-// thread and SetShouldRecordPackageName() will be called. Unlike user's
-// consent, the metrics service doesn't currently block on the allowlist lookup
-// result. If the result isn't present at the moment of creating a metrics log,
-// it assumes that the app package name isn't allowed to be logged.
 
-class AwMetricsServiceClient : public ::metrics::AndroidMetricsServiceClient,
-                               public WebViewAppStateObserver {
+class AwMetricsServiceClient
+    : public metrics::MetricsServiceClient,
+      public metrics::EnabledStateProvider,
+      public content::RenderProcessHostCreationObserver,
+      public content::RenderProcessHostObserver,
+      public WebViewAppStateObserver {
   friend class base::NoDestructor<AwMetricsServiceClient>;
 
  public:
@@ -126,46 +139,212 @@ class AwMetricsServiceClient : public ::metrics::AndroidMetricsServiceClient,
   static AwMetricsServiceClient* GetInstance();
   static void SetInstance(
       std::unique_ptr<AwMetricsServiceClient> aw_metrics_service_client);
+  static void ClearInstanceForTesting();
 
-  AwMetricsServiceClient(std::unique_ptr<Delegate> delegate);
+  static void RegisterMetricsPrefs(PrefRegistrySimple* registry);
+  static base::FilePath GetNoBackupFilesDir();
+
+  explicit AwMetricsServiceClient(std::unique_ptr<Delegate> delegate);
+
+  AwMetricsServiceClient(const AwMetricsServiceClient&) = delete;
+  AwMetricsServiceClient& operator=(const AwMetricsServiceClient&) = delete;
+
   ~AwMetricsServiceClient() override;
 
-  // metrics::MetricsServiceClient
+  // Performs the part of initialization that must happen before the
+  // base::FeatureList is set up, so it must not depend on base::Feature state.
+  // See the documentation at the top of the file for more details.
+  void Initialize(PrefService* pref_service);
+  // Completes initialization once the base::FeatureList is available: creates
+  // (but does not necessarily start) the MetricsService and sets up the metrics
+  // directory. Must be called exactly once, after Initialize().
+  void PostFeatureListSetup();
+  void SetHaveMetricsConsent(bool user_consent, bool app_consent);
+  void SetFastStartupForTesting(bool fast_startup_for_testing);
+  void SetUploadIntervalForTesting(const base::TimeDelta& upload_interval);
+
+  // Returns true if SetHaveMetricsConsent() has been called.
+  bool IsConsentDetermined() const;
+
+  // Registers a synthetic field trial with the MetricsService.
+  void RegisterSyntheticFieldTrial(
+      std::string_view trial_name,
+      std::string_view group_name,
+      variations::SyntheticTrialAnnotationMode annotation_mode);
+
+  // Flushes any synthetic field trials that were queued in Java before native
+  // metrics initialization.
+  void FlushPendingSyntheticTrialsFromJava();
+
+  // EnabledStateProvider:
+  bool IsConsentGiven() const override;
+  bool IsReportingEnabled() const override;
+
+  // Returns the MetricService only if it has been started (which means consent
+  // was given).
+  metrics::MetricsService* GetMetricsServiceIfStarted();
+
+  // This should only be called after Initialize().
+  PrefService* GetLocalState() const;
+  // MetricsServiceClient:
+  variations::SyntheticTrialRegistry* GetSyntheticTrialRegistry() override;
+  metrics::MetricsService* GetMetricsService() override;
+  void SetMetricsClientId(const std::string& client_id) override;
   int32_t GetProduct() override;
+  std::string GetApplicationLocale() override;
+  const network_time::NetworkTimeTracker* GetNetworkTimeTracker() override;
+  bool GetBrand(std::string* brand_code) override;
+  metrics::SystemProfileProto::Channel GetChannel() override;
+  bool IsExtendedStableChannel() override;
+  std::string GetVersionString() override;
+  void MergeSubprocessHistograms() override;
+  void CollectFinalMetricsForLog(
+      const base::OnceClosure done_callback) override;
+  std::unique_ptr<metrics::MetricsLogUploader> CreateUploader(
+      const GURL& server_url,
+      const GURL& insecure_server_url,
+      std::string_view mime_type,
+      metrics::MetricsLogUploader::MetricServiceType service_type,
+      const metrics::MetricsLogUploader::UploadCallback& on_upload_complete)
+      override;
+  bool IsJobSchedulerSupported() const override;
+  base::TimeDelta GetStandardUploadInterval() override;
+  bool ShouldStartUpFast() const override;
+  metrics::MetricsLogStore::StorageLimits GetStorageLimits() const override;
+
+  // Gets the embedding app's package name if it's OK to log. Otherwise, this
+  // returns the empty string.
+  std::string GetAppPackageNameIfLoggable() override;
+
+  void OnWebContentsCreated(content::WebContents* web_contents);
+
+  // content::RenderProcessHostCreationObserver:
+  void OnRenderProcessHostCreated(content::RenderProcessHost* host) override;
+
+  // RenderProcessHostObserver:
+  void RenderProcessExited(
+      content::RenderProcessHost* host,
+      const content::ChildProcessTerminationInfo& info) override;
+
+  // Runs |closure| when CollectFinalMetricsForLog() is called, when we begin
+  // collecting final metrics.
+  void SetCollectFinalMetricsForLogClosureForTesting(base::OnceClosure closure);
+
+  // Runs |listener| after all final metrics have been collected.
+  void SetOnFinalMetricsCollectedListenerForTesting(
+      base::RepeatingClosure listener);
+
+  metrics::MetricsStateManager* metrics_state_manager() const {
+    return metrics_state_manager_.get();
+  }
+
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.android_webview.metrics
+  enum class InstallerPackageType {
+    // App has been initially preinstalled in the system image.
+    SYSTEM_APP,
+    // App has been installed/updated by Google Play Store. Doesn't apply for
+    // apps whose most recent updates are sideloaded, even if the app was
+    // installed via Google Play Store.
+    GOOGLE_PLAY_STORE,
+    // App has been Sideloaded or installed/updated through a 3rd party app
+    // store.
+    OTHER,
+  };
+
+  // Returns the embedding application's package name (unconditionally). The
+  // value returned by this method shouldn't be logged/stored anywhere, callers
+  // should use `GetAppPackageNameIfLoggable`.
+  std::string GetAppPackageName();
+
+  // Returns the installer type of the app. Virtual for testing.
+  virtual InstallerPackageType GetInstallerPackageType();
+
+  // Path where files related to metrics are stored.
+  base::FilePath GetMetricsDir();
 
   // WebViewAppStateObserver
   void OnAppStateChanged(WebViewAppStateObserver::State state) override;
 
-  // metrics::AndroidMetricsServiceClient:
-  void OnMetricsStart() override;
-  void OnMetricsNotStarted() override;
-  int GetSampleRatePerMille() const override;
-  int GetPackageNameLimitRatePerMille() override;
-  void RegisterAdditionalMetricsProviders(
-      metrics::MetricsService* service) override;
+  // Determines if the client should have metrics filtering applied, or if they
+  // are in the sample of clients which upload unfiltered metrics.
+  virtual bool ShouldApplyMetricsFiltering() const;
 
-  // If `android_webview::features::kWebViewAppsPackageNamesAllowlist` is
-  // enabled:
-  // - It returns `true` if the app is in the list of allowed apps.
-  // - It returns `false` if the app isn't in the allowlist or if the lookup
-  //   operation fails or hasn't finished yet.
-  //
-  // If the feature isn't enabled, the default sampling behaviour in
-  // `::metrics::AndroidMetricsServiceClient::ShouldRecordPackageName` is used.
-  bool ShouldRecordPackageName() override;
+ protected:
+  // Returns the unfiltered metrics sampling rate, to be used by
+  // ShouldApplyMetricsFiltering(). This is a per mille value, so this integer
+  // must always be in the inclusive range [0, 1000]. A value of 0 will always
+  // be out-of-sample, and a value of 1000 is  always in-sample.
+  virtual int GetUnfilteredSampleRatePerMille() const;
 
-  // Sets whether the embedding app's package name is allowed to be recorded in
-  // UMA logs or not. This is determened by looking up the app package name in a
-  // dynamically downloaded allowlist of apps see
-  // `AwAppsPackageNamesAllowlistComponentLoaderPolicy`.
-  void SetShouldRecordPackageName(bool should_record_package_name);
+  // Returns a value in the inclusive range [0, 999], to be compared against a
+  // per mille sample rate. This value will be based on a persisted value, so it
+  // should be consistent across restarts. This value should also be mostly
+  // consistent across upgrades, to avoid significantly impacting IsInSample().
+  // Virtual for testing.
+  virtual int GetSampleBucketValue() const;
+
+  // Determines if the embedder app is the type of app for which we may log the
+  // package name. If this returns false, GetAppPackageNameIfLoggable() must
+  // return empty string. Virtual for testing.
+  virtual bool CanRecordPackageNameForAppType();
 
  private:
-  bool app_in_foreground_ = false;
-  bool should_record_package_name_ = false;
-  std::unique_ptr<Delegate> delegate_;
+  bool IsReadyToStart() const;
+  void MaybeStartMetrics();
+  void RegisterForNotifications();
 
-  DISALLOW_COPY_AND_ASSIGN(AwMetricsServiceClient);
+  // Sets up the path used to store metrics. Called from
+  // PostFeatureListSetup() since it checks feature flags, which aren't
+  // initialized yet when `Initialize` runs.
+  void SetUpMetricsDir();
+
+  void RegisterMetricsProvidersAndInitState();
+
+  void OnApplicationNotIdle();
+  void OnDidStartLoading();
+
+  std::unique_ptr<metrics::MetricsStateManager> metrics_state_manager_;
+  std::unique_ptr<variations::SyntheticTrialRegistry> synthetic_trial_registry_;
+  // Metrics service observer for synthetic trials.
+  metrics::PersistentSyntheticTrialObserver synthetic_trial_observer_;
+  base::ScopedObservation<variations::SyntheticTrialRegistry,
+                          variations::SyntheticTrialObserver>
+      synthetic_trial_observation_{&synthetic_trial_observer_};
+  std::unique_ptr<metrics::MetricsService> metrics_service_;
+  base::ScopedMultiSourceObservation<content::RenderProcessHost,
+                                     content::RenderProcessHostObserver>
+      host_observation_{this};
+  raw_ptr<PrefService> local_state_ = nullptr;
+  bool init_finished_ = false;
+  bool set_consent_finished_ = false;
+  bool user_consent_ = false;
+  bool app_consent_ = false;
+  bool is_client_id_forced_ = false;
+  bool fast_startup_for_testing_ = false;
+  bool did_start_metrics_ = false;
+
+  // When non-zero, this overrides the default value in
+  // GetStandardUploadInterval().
+  base::TimeDelta overridden_upload_interval_;
+
+  base::OnceClosure collect_final_metrics_for_log_closure_;
+  base::RepeatingClosure on_final_metrics_collected_listener_;
+
+#if DCHECK_IS_ON()
+  bool did_start_metrics_with_consent_ = false;
+#endif
+
+  // MetricsServiceClient may be created before the UI thread is promoted to
+  // BrowserThread::UI. Use |sequence_checker_| to enforce that the
+  // MetricsServiceClient is used on a single thread.
+  SEQUENCE_CHECKER(sequence_checker_);
+
+  bool app_in_foreground_ = false;
+  base::Time time_created_;
+  std::unique_ptr<Delegate> delegate_;
+  base::FilePath metrics_dir_;
+
+  base::WeakPtrFactory<AwMetricsServiceClient> weak_ptr_factory_{this};
 };
 
 }  // namespace android_webview

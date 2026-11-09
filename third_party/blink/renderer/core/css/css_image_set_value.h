@@ -27,57 +27,80 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_IMAGE_SET_VALUE_H_
 
 #include "third_party/blink/renderer/core/css/css_value_list.h"
-#include "third_party/blink/renderer/platform/loader/fetch/cross_origin_attribute_value.h"
-#include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
-class Document;
+class CSSImageSetOptionValue;
+class CSSLengthResolver;
+class ResourceFetcher;
 class StyleImage;
+class StyleResolverState;
 
-class CSSImageSetValue : public CSSValueList {
+class CORE_EXPORT CSSImageSetValue : public CSSValueList {
  public:
   explicit CSSImageSetValue();
   ~CSSImageSetValue();
 
-  bool IsCachePending(float device_scale_factor) const;
-  StyleImage* CachedImage(float device_scale_factor) const;
-  StyleImage* CacheImage(
-      const Document&,
-      float device_scale_factor,
-      FetchParameters::ImageRequestBehavior,
-      CrossOriginAttributeValue = kCrossOriginAttributeNotSet);
+  CSSImageSetValue(StyleImage* cached_image,
+                   float device_scale_factor,
+                   HeapVector<Member<const CSSImageSetOptionValue>>&& options)
+      : CSSValueList(kImageSetClass, kCommaSeparator),
+        cached_image_(cached_image),
+        cached_device_scale_factor_(device_scale_factor),
+        options_(std::move(options)) {}
+
+  bool IsCachePending(ResourceFetcher* fetcher,
+                      const float device_scale_factor) const;
+  StyleImage* CachedImage(ResourceFetcher* fetcher,
+                          const float device_scale_factor) const;
+  StyleImage* CacheImage(ResourceFetcher* fetcher,
+                         StyleImage*,
+                         const float device_scale_factor);
+
+  const CSSImageSetOptionValue* GetBestOption(const CSSLengthResolver&,
+                                              const float device_scale_factor);
 
   String CustomCSSText() const;
 
-  CSSImageSetValue* ValueWithURLsMadeAbsolute();
+  bool HasFailedOrCanceledSubresources(ResourceFetcher*) const;
 
-  bool HasFailedOrCanceledSubresources() const;
+  const CSSImageSetValue& ResolveValuesIfNeeded(
+      const StyleResolverState&) const;
+  CSSImageSetValue& ResolveValuesIfNeeded(const StyleResolverState&);
+
+  bool HasRandomFunctions() const;
 
   void TraceAfterDispatch(blink::Visitor*) const;
 
- protected:
-  struct ImageWithScale {
-    DISALLOW_NEW();
-    wtf_size_t index;
-    float scale_factor;
+ private:
+  CSSImageSetValue* ResolveValuesAndCreateCopyIfNeeded(
+      const StyleResolverState&) const;
+
+  // Storage class so that we can keep multiple values, including a Member, in
+  // a HeapHashMap keyed by a WeakMember.
+  class CachedImageAndScale final
+      : public GarbageCollected<CachedImageAndScale> {
+   public:
+    CachedImageAndScale(StyleImage* image, float device_scale_factor)
+        : image(image), device_scale_factor(device_scale_factor) {}
+
+    void Trace(Visitor* visitor) const { visitor->Trace(image); }
+
+    Member<StyleImage> image;
+    float device_scale_factor = 1.0f;
   };
 
-  ImageWithScale BestImageForScaleFactor(float scale_factor);
-
- private:
-  void FillImageSet();
-  static inline bool CompareByScaleFactor(ImageWithScale first,
-                                          ImageWithScale second) {
-    return first.scale_factor < second.scale_factor;
-  }
-
   Member<StyleImage> cached_image_;
-  float cached_scale_factor_;
+  float cached_device_scale_factor_{1.0f};
+  HeapHashMap<WeakMember<ResourceFetcher>, Member<CachedImageAndScale>>
+      cached_images_;
 
-  Vector<ImageWithScale> images_in_set_;
+  HeapVector<Member<const CSSImageSetOptionValue>> options_;
 };
 
 template <>

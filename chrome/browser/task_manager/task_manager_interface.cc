@@ -1,10 +1,13 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/task_manager/task_manager_interface.h"
 
-#include "base/bind.h"
+#include "base/byte_size.h"
+#include "base/functional/bind.h"
+#include "base/observer_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/task_manager/sampling/task_manager_impl.h"
 #include "chrome/common/chrome_switches.h"
@@ -12,24 +15,18 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/child_process_host.h"
+#include "content/public/browser/child_process_host.h"
 
-#if defined(OS_MAC)
-#include "chrome/browser/ui/browser_dialogs.h"
-#endif  // defined(OS_MAC)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/crosapi/browser_util.h"
-#include "chrome/browser/ash/crosapi/crosapi_ash.h"
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
-#include "chrome/browser/ash/crosapi/task_manager_ash.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"  // nogncheck
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace task_manager {
 
 // static
 void TaskManagerInterface::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kTaskManagerWindowPlacement);
+  registry->RegisterIntegerPref(prefs::kTaskManagerCategory, 1);
   registry->RegisterDictionaryPref(prefs::kTaskManagerColumnVisibility);
   registry->RegisterBooleanPref(prefs::kTaskManagerEndProcessEnabled, true);
 }
@@ -42,21 +39,20 @@ bool TaskManagerInterface::IsEndProcessEnabled() {
 
 // static
 TaskManagerInterface* TaskManagerInterface::GetTaskManager() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   return TaskManagerImpl::GetInstance();
 }
 
 // static
 void TaskManagerInterface::UpdateAccumulatedStatsNetworkForRoute(
-    int process_id,
-    int route_id,
-    int64_t recv_bytes,
-    int64_t sent_bytes) {
+    content::GlobalRenderFrameHostId render_frame_host_id,
+    base::ByteSize recv_bytes,
+    base::ByteSize sent_bytes) {
   // Don't create a task manager if it hasn't already been created.
   if (TaskManagerImpl::IsCreated()) {
     TaskManagerImpl::GetInstance()->UpdateAccumulatedStatsNetworkForRoute(
-        process_id, route_id, recv_bytes, sent_bytes);
+        render_frame_host_id, recv_bytes, sent_bytes);
   }
 }
 
@@ -72,6 +68,10 @@ void TaskManagerInterface::AddObserver(TaskManagerObserver* observer) {
     StartUpdating();
   }
 
+  // Observer was removed as part of StartUpdating.
+  if (!observers_.HasObserver(observer)) {
+    return;
+  }
   if (observer->desired_refresh_time() > current_refresh_time)
     return;
 
@@ -89,11 +89,11 @@ void TaskManagerInterface::RemoveObserver(TaskManagerObserver* observer) {
   // Recalculate the minimum refresh rate and the enabled resource flags.
   int64_t flags = 0;
   base::TimeDelta min_time = base::TimeDelta::Max();
-  for (auto& observer : observers_) {
-    if (observer.desired_refresh_time() < min_time)
-      min_time = observer.desired_refresh_time();
+  for (auto& obs : observers_) {
+    if (obs.desired_refresh_time() < min_time)
+      min_time = obs.desired_refresh_time();
 
-    flags |= observer.desired_resources_flags();
+    flags |= obs.desired_resources_flags();
   }
 
   if (min_time == base::TimeDelta::Max()) {
@@ -113,6 +113,10 @@ void TaskManagerInterface::RecalculateRefreshFlags() {
     flags |= observer.desired_resources_flags();
 
   SetEnabledResourceFlags(flags);
+}
+
+bool TaskManagerInterface::IsTaskValid(TaskId task_id) const {
+  return true;
 }
 
 bool TaskManagerInterface::IsResourceRefreshEnabled(RefreshType type) const {
@@ -162,17 +166,6 @@ void TaskManagerInterface::ResourceFlagsAdded(int64_t flags) {
 
 void TaskManagerInterface::SetEnabledResourceFlags(int64_t flags) {
   enabled_resources_flags_ = flags;
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Set refresh flags of the remote task manager if lacros is enabled.
-  if (crosapi::browser_util::IsLacrosEnabled() &&
-      crosapi::CrosapiManager::IsInitialized()) {
-    crosapi::CrosapiManager::Get()
-        ->crosapi_ash()
-        ->task_manager_ash()
-        ->SetRefreshFlags(enabled_resources_flags_);
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 void TaskManagerInterface::ScheduleRefresh(base::TimeDelta refresh_time) {

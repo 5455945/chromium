@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,61 +7,43 @@
 #include <memory>
 #include <utility>
 
-#include "base/debug/stack_trace.h"
-#include "base/strings/utf_string_conversions.h"
-#include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/media/router/media_router_feature.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/media_router/ui_media_sink.h"
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_helper.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/media_router/common/issue.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/ui_base_types.h"
-#include "ui/gfx/color_palette.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_impl.h"
-#include "ui/views/controls/color_tracking_icon_view.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/styled_label.h"
-#include "ui/views/controls/throbber.h"
-#include "ui/views/layout/box_layout.h"
 #include "ui/views/vector_icons.h"
-
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-#include "chrome/browser/ui/media_router/internal/vector_icons/vector_icons.h"
-#endif
+#include "ui/views/widget/widget.h"
 
 namespace media_router {
 
 namespace {
 
-gfx::ImageSkia CreateSinkIcon(SinkIconType icon_type, bool enabled = true) {
-  SkColor icon_color = enabled ? gfx::kChromeIconGrey : gfx::kGoogleGrey500;
-  return gfx::CreateVectorIcon(*CastDialogSinkButton::GetVectorIcon(icon_type),
-                               kPrimaryIconSize, icon_color);
+ui::ImageModel CreateSinkIcon(SinkIconType icon_type, bool enabled = true) {
+  ui::ColorId icon_color = enabled ? ui::kColorIcon : ui::kColorIconDisabled;
+  return ui::ImageModel::FromVectorIcon(
+      *CastDialogSinkButton::GetVectorIcon(icon_type), icon_color,
+      kPrimaryIconSize);
 }
 
-gfx::ImageSkia CreateDisabledSinkIcon(SinkIconType icon_type) {
+ui::ImageModel CreateDisabledSinkIcon(SinkIconType icon_type) {
   return CreateSinkIcon(icon_type, false);
 }
 
 std::unique_ptr<views::ImageView> CreatePrimaryIconView(
-    const gfx::ImageSkia& image) {
+    const ui::ImageModel& image) {
   auto icon_view = std::make_unique<views::ImageView>();
   icon_view->SetImage(image);
   icon_view->SetBorder(views::CreateEmptyBorder(kPrimaryIconBorder));
@@ -71,11 +53,16 @@ std::unique_ptr<views::ImageView> CreatePrimaryIconView(
 std::unique_ptr<views::View> CreatePrimaryIconForSink(const UIMediaSink& sink) {
   // The stop button has the highest priority, and the issue icon comes second.
   if (sink.state == UIMediaSinkState::CONNECTED) {
-    return CreatePrimaryIconView(gfx::CreateVectorIcon(
-        kGenericStopIcon, kPrimaryIconSize, gfx::kGoogleBlue500));
+    return CreatePrimaryIconView(ui::ImageModel::FromVectorIcon(
+        features::IsRoundedIconsEnabled() ? kStopCircleIcon
+                                          : kGenericStopOldIcon,
+        ui::kColorAccent, kPrimaryIconSize));
   } else if (sink.issue) {
-    auto icon = std::make_unique<views::ColorTrackingIconView>(
-        ::vector_icons::kInfoOutlineIcon, kPrimaryIconSize);
+    auto icon = std::make_unique<views::ImageView>(
+        ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kInfoIcon
+                                           : vector_icons::kInfoOutlineOldIcon,
+                                       ui::kColorIcon, kPrimaryIconSize));
     icon->SetBorder(views::CreateEmptyBorder(kPrimaryIconBorder));
     return icon;
   } else if (sink.state == UIMediaSinkState::CONNECTING ||
@@ -86,26 +73,8 @@ std::unique_ptr<views::View> CreatePrimaryIconForSink(const UIMediaSink& sink) {
 }
 
 bool IsIncompatibleDialSink(const UIMediaSink& sink) {
-  return sink.provider == MediaRouteProviderId::DIAL && sink.cast_modes.empty();
-}
-
-std::u16string GetStatusTextForSink(const UIMediaSink& sink) {
-  if (sink.issue)
-    return base::UTF8ToUTF16(sink.issue->info().title);
-  // If the sink is disconnecting, say so instead of using the source info
-  // stored in |sink.status_text|.
-  if (sink.state == UIMediaSinkState::DISCONNECTING)
-    return l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_SINK_DISCONNECTING);
-  if (!sink.status_text.empty())
-    return sink.status_text;
-  switch (sink.state) {
-    case UIMediaSinkState::AVAILABLE:
-      return l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_SINK_AVAILABLE);
-    case UIMediaSinkState::CONNECTING:
-      return l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_SINK_CONNECTING);
-    default:
-      return std::u16string();
-  }
+  return sink.provider == mojom::MediaRouteProviderId::DIAL &&
+         sink.cast_modes.empty();
 }
 
 }  // namespace
@@ -115,7 +84,7 @@ CastDialogSinkButton::CastDialogSinkButton(PressedCallback callback,
     : HoverButton(std::move(callback),
                   CreatePrimaryIconForSink(sink),
                   sink.friendly_name,
-                  GetStatusTextForSink(sink),
+                  sink.GetStatusTextForDisplay(),
                   /** secondary_icon_view */ nullptr),
       sink_(sink) {
   SetEnabled(sink.state == UIMediaSinkState::AVAILABLE ||
@@ -126,83 +95,92 @@ CastDialogSinkButton::~CastDialogSinkButton() = default;
 
 void CastDialogSinkButton::OverrideStatusText(
     const std::u16string& status_text) {
-  if (subtitle()) {
-    if (!saved_status_text_)
-      saved_status_text_ = subtitle()->GetText();
-    subtitle()->SetText(status_text);
+  if (!subtitle()) {
+    return;
   }
+
+  if (!saved_status_text_) {
+    saved_status_text_ = subtitle()->GetText();
+  }
+
+  subtitle()->SetText(status_text);
 }
 
 void CastDialogSinkButton::RestoreStatusText() {
-  if (saved_status_text_) {
-    if (subtitle())
-      subtitle()->SetText(*saved_status_text_);
-    saved_status_text_.reset();
+  if (!saved_status_text_) {
+    return;
   }
+
+  if (subtitle()) {
+    subtitle()->SetText(*saved_status_text_);
+  }
+  saved_status_text_.reset();
 }
 
 bool CastDialogSinkButton::OnMousePressed(const ui::MouseEvent& event) {
-  if (event.IsRightMouseButton())
+  if (event.IsRightMouseButton()) {
     return true;
+  }
   return HoverButton::OnMousePressed(event);
 }
 
 void CastDialogSinkButton::OnMouseReleased(const ui::MouseEvent& event) {
-  if (event.IsRightMouseButton())
+  if (event.IsRightMouseButton()) {
     return;
+  }
   HoverButton::OnMouseReleased(event);
 }
 
 void CastDialogSinkButton::OnEnabledChanged() {
-  // Prevent a DCHECK failure seen at https://crbug.com/912687 by not having an
-  // InkDrop if the button is disabled.
+  HoverButton::OnEnabledChanged();
+  // Prevent a DCHECK failure seen at https://crbug.com/40605457 by not having
+  // an InkDrop if the button is disabled.
   views::InkDrop::Get(this)->SetMode(
       GetEnabled() ? views::InkDropHost::InkDropMode::ON
                    : views::InkDropHost::InkDropMode::OFF);
   // If the button has a state other than AVAILABLE (e.g. CONNECTED), there is
   // no need to change the status or the icon.
-  if (sink_.state != UIMediaSinkState::AVAILABLE)
+  if (sink_.state != UIMediaSinkState::AVAILABLE) {
     return;
-
-  if (GetEnabled()) {
-    if (saved_status_text_)
-      RestoreStatusText();
-    static_cast<views::ImageView*>(icon_view())
-        ->SetImage(CreateSinkIcon(sink_.icon_type));
-  } else {
-    if (IsIncompatibleDialSink(sink_)) {
-      OverrideStatusText(
-          l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_AVAILABLE_SPECIFIC_SITES));
-    } else {
-      OverrideStatusText(
-          l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_SOURCE_NOT_SUPPORTED));
-    }
-    static_cast<views::ImageView*>(icon_view())
-        ->SetImage(CreateDisabledSinkIcon(sink_.icon_type));
   }
 
-  if (GetWidget())
+  ui::ImageModel icon;
+  if (GetEnabled()) {
+    if (saved_status_text_) {
+      RestoreStatusText();
+    }
+    icon = CreateSinkIcon(sink_.icon_type);
+  } else {
+    int status_text = IsIncompatibleDialSink(sink_)
+                          ? IDS_MEDIA_ROUTER_AVAILABLE_SPECIFIC_SITES
+                          : IDS_MEDIA_ROUTER_SOURCE_NOT_SUPPORTED;
+    OverrideStatusText(l10n_util::GetStringUTF16(status_text));
+    icon = CreateDisabledSinkIcon(sink_.icon_type);
+  }
+  static_cast<views::ImageView*>(icon_view())->SetImage(icon);
+
+  if (GetWidget()) {
     UpdateTitleTextStyle();
+  }
 }
 
 void CastDialogSinkButton::UpdateTitleTextStyle() {
-  SkColor background_color = GetNativeTheme()->GetSystemColor(
-      ui::NativeTheme::kColorId_DialogBackground);
+  SkColor background_color =
+      GetColorProvider()->GetColor(ui::kColorDialogBackground);
   SetTitleTextStyle(
       GetEnabled() ? views::style::STYLE_PRIMARY : views::style::STYLE_DISABLED,
-      background_color);
+      background_color, /*color_id=*/std::nullopt);
 }
 
 void CastDialogSinkButton::RequestFocus() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  static bool requesting_focus = false;
-  if (requesting_focus) {
-    // TODO(jrw): Figure out why this happens.
-    DLOG(ERROR) << "Recursive call to RequestFocus\n"
-                << base::debug::StackTrace();
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+
+  // Prevent recursive calls to RequestFocus() while the widget is being
+  // shown and is not yet active. See crbug.com/155642655.
+  if (GetWidget() && !GetWidget()->IsActive()) {
     return;
   }
-  requesting_focus = true;
+
   if (GetEnabled()) {
     HoverButton::RequestFocus();
   } else {
@@ -210,20 +188,22 @@ void CastDialogSinkButton::RequestFocus() {
     // want focus.
     icon_view()->RequestFocus();
   }
-  requesting_focus = false;
 }
 
 void CastDialogSinkButton::OnFocus() {
-  HoverButton::OnFocus();
+  // Update the status text before calling |OnFocus()| so that the screen reader
+  // can use the updated text.
   if (sink_.state == UIMediaSinkState::CONNECTED) {
     OverrideStatusText(
         l10n_util::GetStringUTF16(IDS_MEDIA_ROUTER_STOP_CASTING));
   }
+  HoverButton::OnFocus();
 }
 
 void CastDialogSinkButton::OnBlur() {
-  if (sink_.state == UIMediaSinkState::CONNECTED)
+  if (sink_.state == UIMediaSinkState::CONNECTED) {
     RestoreStatusText();
+  }
 }
 
 void CastDialogSinkButton::OnThemeChanged() {
@@ -237,18 +217,21 @@ const gfx::VectorIcon* CastDialogSinkButton::GetVectorIcon(
   const gfx::VectorIcon* vector_icon;
   switch (icon_type) {
     case SinkIconType::CAST_AUDIO_GROUP:
-      vector_icon = &kSpeakerGroupIcon;
+      vector_icon = &(features::IsRoundedIconsEnabled() ? kSpeakerGroupIcon
+                                                        : kSpeakerGroupOldIcon);
       break;
     case SinkIconType::CAST_AUDIO:
-      vector_icon = &kSpeakerIcon;
+      vector_icon =
+          &(features::IsRoundedIconsEnabled() ? kSpeakerIcon : kSpeakerOldIcon);
       break;
     case SinkIconType::WIRED_DISPLAY:
-      vector_icon = &kInputIcon;
+      vector_icon =
+          &(features::IsRoundedIconsEnabled() ? kInputIcon : kInputOldIcon);
       break;
     case SinkIconType::CAST:
     case SinkIconType::GENERIC:
     default:
-      vector_icon = &kTvIcon;
+      vector_icon = &(features::IsRoundedIconsEnabled() ? kTvIcon : kTvOldIcon);
       break;
   }
   return vector_icon;
@@ -256,11 +239,13 @@ const gfx::VectorIcon* CastDialogSinkButton::GetVectorIcon(
 
 // static
 const gfx::VectorIcon* CastDialogSinkButton::GetVectorIcon(UIMediaSink sink) {
-  return sink.issue ? &::vector_icons::kInfoOutlineIcon
+  return sink.issue ? &(::features::IsRoundedIconsEnabled()
+                            ? vector_icons::kInfoIcon
+                            : vector_icons::kInfoOutlineOldIcon)
                     : GetVectorIcon(sink.icon_type);
 }
 
-BEGIN_METADATA(CastDialogSinkButton, HoverButton)
+BEGIN_METADATA(CastDialogSinkButton)
 END_METADATA
 
 }  // namespace media_router

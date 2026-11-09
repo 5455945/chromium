@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "content/browser/hid/hid_test_utils.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/hid_chooser.h"
@@ -16,12 +18,14 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "services/device/public/cpp/hid/fake_hid_manager.h"
+#include "services/device/public/cpp/test/fake_hid_manager.h"
 #include "services/device/public/mojom/hid.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/hid/hid.mojom.h"
 
 using testing::ByMove;
@@ -48,36 +52,42 @@ device::mojom::HidDeviceInfoPtr CreateTestDeviceWithInputAndOutputReports() {
   return device;
 }
 
+class HidBrowserTestContentBrowserClient
+    : public ContentBrowserTestContentBrowserClient {
+ public:
+  MockHidDelegate& delegate() { return delegate_; }
+
+  // ContentBrowserClient:
+  HidDelegate* GetHidDelegate() override { return &delegate_; }
+
+ private:
+  MockHidDelegate delegate_;
+};
+
 class HidTest : public ContentBrowserTest {
  public:
-  HidTest() {
-    ON_CALL(delegate(), GetHidManager).WillByDefault(Return(&hid_manager_));
-  }
-
-  ~HidTest() override = default;
+  HidTest() { feature_list_.InitAndEnableFeature(blink::features::kWebHID); }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(
         switches::kEnableExperimentalWebPlatformFeatures);
+    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures, "WebHID");
   }
 
   void SetUpOnMainThread() override {
-    original_client_ = SetBrowserClientForTesting(&test_client_);
+    test_client_ = std::make_unique<HidBrowserTestContentBrowserClient>();
+    ON_CALL(delegate(), GetHidManager).WillByDefault(Return(&hid_manager_));
   }
 
-  void TearDownOnMainThread() override {
-    if (original_client_)
-      SetBrowserClientForTesting(original_client_);
-  }
+  void TearDownOnMainThread() override { test_client_.reset(); }
 
-  MockHidDelegate& delegate() { return test_client_.delegate(); }
+  MockHidDelegate& delegate() { return test_client_->delegate(); }
   device::FakeHidManager* hid_manager() { return &hid_manager_; }
 
  private:
-  HidTestContentBrowserClient test_client_;
-  ContentBrowserClient* original_client_ = nullptr;
+  std::unique_ptr<HidBrowserTestContentBrowserClient> test_client_;
   device::FakeHidManager hid_manager_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 }  // namespace
@@ -133,6 +143,43 @@ IN_PROC_BROWSER_TEST_F(HidTest, DisallowRequestDevice) {
                let devices = await navigator.hid.requestDevice({filters:[]});
                return devices.length;
              })())"));
+}
+
+IN_PROC_BROWSER_TEST_F(HidTest, FrameDetachDuringRunChooser) {
+  EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl(nullptr, "simple_page.html")));
+
+  EXPECT_CALL(delegate(), CanRequestDevicePermission).WillOnce(Return(true));
+
+  // Add an iframe and wait for it to load.
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    new Promise(resolve => {
+      let iframe = document.createElement('iframe');
+      iframe.src = 'simple_page.html';
+      iframe.onload = resolve;
+      document.body.appendChild(iframe);
+    });
+  )"));
+
+  RenderFrameHost* child_rfh =
+      ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(child_rfh);
+
+  EXPECT_CALL(delegate(), RunChooserInternal).WillOnce([&]() {
+    // Synchronously detach the iframe during RunChooser.
+    EXPECT_TRUE(ExecJs(shell(), "document.querySelector('iframe').remove();"));
+    return std::vector<device::mojom::HidDeviceInfoPtr>();
+  });
+
+  auto result = EvalJs(child_rfh, R"((async () => {
+    try {
+      await navigator.hid.requestDevice({filters:[]});
+      return true;
+    } catch (e) {
+      return false;
+    }
+  })())");
+  EXPECT_THAT(result,
+              EvalJsResult::ErrorIs(testing::HasSubstr("RenderFrame deleted")));
 }
 
 IN_PROC_BROWSER_TEST_F(HidTest, ProtectedReportsAreFiltered) {

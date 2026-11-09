@@ -1,24 +1,57 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/containers/flat_set.h"
 
+#include <concepts>
+#include <deque>
+#include <functional>
+#include <list>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/move_only_int.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/hash/hash_testing.h"
 
 // A flat_set is basically a interface to flat_tree. So several basic
 // operations are tested to make sure things are set up properly, but the bulk
-// of the tests are in flat_tree_unittests.cc.
+// of the tests are in flat_tree_unittest.cc.
 
 using ::testing::ElementsAre;
 
 namespace base {
+
+namespace {
+
+class ImplicitInt {
+ public:
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  ImplicitInt(int data) : data_(data) {}
+
+ private:
+  friend bool operator<(const ImplicitInt& lhs, const ImplicitInt& rhs) {
+    return lhs.data_ < rhs.data_;
+  }
+
+  int data_;
+};
+
+// Whether `flat_set(c)` and `flat_set(sorted_unique, c)` deduce a `flat_set`
+// for a `Container`.
+template <typename Container>
+concept CanDeduceFlatSet = requires(Container c) { flat_set(c); };
+template <typename Container>
+concept CanDeduceSortedFlatSet =
+    requires(Container c) { flat_set(sorted_unique, c); };
+
+}  // namespace
 
 TEST(FlatSet, IncompleteType) {
   struct A {
@@ -34,18 +67,123 @@ TEST(FlatSet, IncompleteType) {
   A a;
 }
 
-TEST(FlatSet, RangeConstructor) {
-  flat_set<int>::value_type input_vals[] = {1, 1, 1, 2, 2, 2, 3, 3, 3};
+TEST(FlatSet, IteratorConstructor) {
+  int input_vals[] = {1, 1, 1, 2, 2, 2, 3, 3, 3};
 
+  // Copy-from iterators.
   flat_set<int> cont(std::begin(input_vals), std::end(input_vals));
   EXPECT_THAT(cont, ElementsAre(1, 2, 3));
+
+  std::list<MoveOnlyInt> input_list;
+  input_list.emplace_back(1);
+  input_list.emplace_back(1);  // Duplicate.
+  input_list.emplace_back(2);
+  input_list.emplace_back(3);
+  input_list.emplace_back(3);  // Duplicate.
+  input_list.emplace_back(4);
+
+  // Move-from iterators.
+  flat_set<MoveOnlyInt> orig(std::make_move_iterator(input_list.begin()),
+                             std::make_move_iterator(input_list.end()));
+
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(1)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(2)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(3)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(4)));
+
+  // List contains original number of moved-from elements.
+  EXPECT_THAT(input_list, ElementsAre(0, 0, 0, 0, 0, 0));
+}
+
+TEST(FlatSet, RangesToConstruction) {
+  int input_vals[] = {1, 1, 1, 2, 2, 2, 3, 3, 3};
+
+  // Copy from range.
+  EXPECT_THAT(std::ranges::to<flat_set<int>>(input_vals), ElementsAre(1, 2, 3));
+
+  std::list<MoveOnlyInt> input_list;
+  input_list.emplace_back(1);
+  input_list.emplace_back(1);  // Duplicate.
+  input_list.emplace_back(2);
+  input_list.emplace_back(3);
+  input_list.emplace_back(3);  // Duplicate.
+  input_list.emplace_back(4);
+
+  // Move from range.
+  auto orig =
+      std::ranges::to<flat_set<MoveOnlyInt>>(std::views::as_rvalue(input_list));
+
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(1)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(2)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(3)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(4)));
+
+  // List contains original number of moved-from elements.
+  EXPECT_THAT(input_list, ElementsAre(0, 0, 0, 0, 0, 0));
+}
+
+TEST(FlatSet, RangeConstructor) {
+  std::array<int, 9> input_vals = {1, 1, 1, 2, 2, 2, 3, 3, 3};
+
+  // Copy-from range.
+  flat_set<int> cont(std::from_range, input_vals);
+  EXPECT_THAT(cont, ElementsAre(1, 2, 3));
+
+  std::list<MoveOnlyInt> input_list;
+  input_list.emplace_back(1);
+  input_list.emplace_back(1);  // Duplicate.
+  input_list.emplace_back(2);
+  input_list.emplace_back(3);
+  input_list.emplace_back(3);  // Duplicate.
+  input_list.emplace_back(4);
+
+  // Move-from range
+  flat_set<MoveOnlyInt> orig(std::from_range,
+                             std::views::as_rvalue(input_list));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(1)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(2)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(3)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(4)));
+
+  // List contains original number of moved-from elements.
+  EXPECT_THAT(input_list, ElementsAre(0, 0, 0, 0, 0, 0));
+}
+
+TEST(FlatSet, SortedUninqueRangeConstructor) {
+  std::array<int, 3> input_vals = {1, 2, 3};
+
+  // Copy-from range.
+  flat_set<int> cont(std::from_range, base::sorted_unique, input_vals);
+  EXPECT_THAT(cont, ElementsAre(1, 2, 3));
+
+  std::list<MoveOnlyInt> input_list;
+  input_list.emplace_back(1);
+  input_list.emplace_back(2);
+  input_list.emplace_back(3);
+  input_list.emplace_back(4);
+
+  // Move-from list
+  flat_set<MoveOnlyInt> orig(std::from_range, base::sorted_unique,
+                             std::views::as_rvalue(input_list));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(1)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(2)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(3)));
+  EXPECT_EQ(1U, orig.count(MoveOnlyInt(4)));
+
+  // List contains original number of moved-from elements.
+  EXPECT_THAT(input_list, ElementsAre(0, 0, 0, 0));
 }
 
 TEST(FlatSet, MoveConstructor) {
-  int input_range[] = {1, 2, 3, 4};
+  std::vector<MoveOnlyInt> input_vec;
+  input_vec.emplace_back(1);
+  input_vec.emplace_back(1);  // Duplicate.
+  input_vec.emplace_back(2);
+  input_vec.emplace_back(3);
+  input_vec.emplace_back(3);  // Duplicate.
+  input_vec.emplace_back(4);
 
-  flat_set<MoveOnlyInt> original(std::begin(input_range),
-                                 std::end(input_range));
+  flat_set<MoveOnlyInt> original(std::move(input_vec));
   flat_set<MoveOnlyInt> moved(std::move(original));
 
   EXPECT_EQ(1U, moved.count(MoveOnlyInt(1)));
@@ -101,6 +239,8 @@ TEST(FlatSet, UsingTransparentCompare) {
   s1.count(x);
   s.find(x);
   s1.find(x);
+  s.contains(x);
+  s1.contains(x);
   s.equal_range(x);
   s1.equal_range(x);
   s.lower_bound(x);
@@ -114,6 +254,187 @@ TEST(FlatSet, UsingTransparentCompare) {
   s.emplace(1);
   s.erase(s.begin());
   s.erase(s.cbegin());
+}
+
+TEST(FlatSet, UsingInitializerList) {
+  base::flat_set<ImplicitInt> s;
+  const auto& s1 = s;
+
+  // Check if the calls can be resolved. Correctness is checked in flat_tree
+  // tests.
+  s.count({1});
+  s1.count({2});
+  s.find({3});
+  s1.find({4});
+  s.contains({5});
+  s1.contains({6});
+  s.equal_range({7});
+  s1.equal_range({8});
+  s.lower_bound({9});
+  s1.lower_bound({10});
+  s.upper_bound({11});
+  s1.upper_bound({12});
+  s.erase({13});
+}
+
+TEST(FlatSet, DeductionGuides) {
+  using IntSet = flat_set<int>;
+  std::vector<int> v = {3, 1, 2, 1};
+  const std::vector<int> cv = v;
+  std::list<int> l(std::from_range, v);
+  int a[] = {3, 1, 2, 1};
+
+  // Container.
+  {
+    flat_set s(v);
+    static_assert(std::same_as<decltype(s), IntSet>);
+    EXPECT_THAT(s, ElementsAre(1, 2, 3));
+  }
+  {
+    flat_set s(cv);
+    static_assert(std::same_as<decltype(s), IntSet>);
+  }
+  {
+    std::vector<int> moved = v;
+    const flat_set s(std::move(moved));
+    static_assert(std::same_as<decltype(s), const IntSet>);
+    EXPECT_THAT(s, ElementsAre(1, 2, 3));
+  }
+  {
+    flat_set s(l);
+    static_assert(
+        std::same_as<decltype(s), flat_set<int, std::less<>, std::list<int>>>);
+  }
+  {
+    flat_set s(v, std::greater<>());
+    static_assert(std::same_as<decltype(s), flat_set<int, std::greater<>>>);
+    EXPECT_THAT(s, ElementsAre(3, 2, 1));
+  }
+  {
+    std::vector<MoveOnlyInt> mv;
+    mv.emplace_back(2);
+    mv.emplace_back(1);
+    flat_set s(std::move(mv));
+    static_assert(std::same_as<decltype(s), flat_set<MoveOnlyInt>>);
+    EXPECT_THAT(s, ElementsAre(1, 2));
+  }
+
+  // Sorted container.
+  {
+    flat_set s(sorted_unique, std::vector<int>{1, 2, 3});
+    static_assert(std::same_as<decltype(s), IntSet>);
+    EXPECT_THAT(s, ElementsAre(1, 2, 3));
+  }
+  {
+    flat_set s(sorted_unique, std::vector<int>{3, 2, 1}, std::greater<>());
+    static_assert(std::same_as<decltype(s), flat_set<int, std::greater<>>>);
+  }
+  {
+    flat_set s(sorted_unique, std::deque<int>{3, 2, 1}, std::greater<>());
+    static_assert(std::same_as<decltype(s),
+                               flat_set<int, std::greater<>, std::deque<int>>>);
+    EXPECT_THAT(s, ElementsAre(3, 2, 1));
+  }
+
+  // Views are rejected, since the deduced set wouldn't own its elements.
+  static_assert(CanDeduceFlatSet<std::vector<int>>);
+  static_assert(!CanDeduceFlatSet<span<const int>>);
+  static_assert(!CanDeduceFlatSet<std::string_view>);
+  static_assert(CanDeduceSortedFlatSet<std::vector<int>>);
+  static_assert(!CanDeduceSortedFlatSet<span<const int>>);
+  static_assert(!CanDeduceSortedFlatSet<std::string_view>);
+  // So are non-ranges, even if they have a `value_type`.
+  static_assert(!CanDeduceFlatSet<std::vector<int>::iterator>);
+  static_assert(!CanDeduceSortedFlatSet<std::vector<int>::iterator>);
+
+  // Iterator pair.
+  {
+    flat_set s(v.begin(), v.end());
+    static_assert(std::same_as<decltype(s), IntSet>);
+    EXPECT_THAT(s, ElementsAre(1, 2, 3));
+  }
+  {
+    flat_set s(l.begin(), l.end());
+    static_assert(std::same_as<decltype(s), IntSet>);
+  }
+  {
+    flat_set s(std::begin(a), std::end(a));
+    static_assert(std::same_as<decltype(s), IntSet>);
+  }
+  {
+    flat_set s(v.begin(), v.end(), std::greater<>());
+    static_assert(std::same_as<decltype(s), flat_set<int, std::greater<>>>);
+  }
+  {
+    std::vector<int> sorted = {1, 2, 3};
+    flat_set s(sorted_unique, sorted.begin(), sorted.end());
+    static_assert(std::same_as<decltype(s), IntSet>);
+  }
+
+  // Range.
+  {
+    flat_set s(std::from_range, l);
+    static_assert(std::same_as<decltype(s), IntSet>);
+    EXPECT_THAT(s, ElementsAre(1, 2, 3));
+  }
+  {
+    flat_set s(std::from_range, std::views::as_rvalue(std::list<int>{0, 1, 2}),
+               std::greater<>());
+    static_assert(std::same_as<decltype(s), flat_set<int, std::greater<>>>);
+    EXPECT_THAT(s, ElementsAre(2, 1, 0));
+  }
+  {
+    flat_set s(std::from_range, sorted_unique,
+               std::views::as_rvalue(std::list<int>{0, 1, 2}));
+    static_assert(std::same_as<decltype(s), IntSet>);
+  }
+
+  // Initializer list.
+  {
+    flat_set s = {3, 1, 2, 1};
+    static_assert(std::same_as<decltype(s), IntSet>);
+    EXPECT_THAT(s, ElementsAre(1, 2, 3));
+  }
+  {
+    flat_set s({3, 1, 2}, std::greater<>());
+    static_assert(std::same_as<decltype(s), flat_set<int, std::greater<>>>);
+  }
+  {
+    flat_set s(sorted_unique, {1, 2, 3});
+    static_assert(std::same_as<decltype(s), IntSet>);
+  }
+
+  // Like `std::flat_set` and `std::set`, list-initialization from a single
+  // container prefers the initializer list guide and yields a set of
+  // containers...
+  {
+    flat_set s{v};
+    static_assert(std::same_as<decltype(s), flat_set<std::vector<int>>>);
+  }
+  // ...while copying a `flat_set` deduces the same type, with or without
+  // braces.
+  {
+    flat_set<int, std::greater<>> source = {1, 2};
+    flat_set s1(source);
+    flat_set s2{source};
+    static_assert(std::same_as<decltype(s1), decltype(source)>);
+    static_assert(std::same_as<decltype(s2), decltype(source)>);
+  }
+}
+
+TEST(FlatSet, AbslHashValue) {
+  using Set = flat_set<std::string>;
+  EXPECT_TRUE(absl::VerifyTypeImplementsAbslHashCorrectly({
+      // These two are identical.
+      Set({"a", "b", "c"}),
+      Set({"a", "b", "c"}),
+      // `flat_set` is ordered, so this is also identical.
+      Set({"c", "b", "a"}),
+      // Different content.
+      Set({"a", "b"}),
+      Set({}),
+      Set({"z"}),
+  }));
 }
 
 }  // namespace base

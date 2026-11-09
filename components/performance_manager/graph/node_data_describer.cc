@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,29 @@
 
 namespace performance_manager {
 
-base::Value NodeDataDescriberDefaultImpl::DescribeFrameNodeData(
+base::DictValue NodeDataDescriberDefaultImpl::DescribeFrameNodeData(
     const FrameNode* node) const {
-  return base::Value();
+  return base::DictValue();
 }
 
-base::Value NodeDataDescriberDefaultImpl::DescribePageNodeData(
+base::DictValue NodeDataDescriberDefaultImpl::DescribePageNodeData(
     const PageNode* node) const {
-  return base::Value();
+  return base::DictValue();
 }
 
-base::Value NodeDataDescriberDefaultImpl::DescribeProcessNodeData(
+base::DictValue NodeDataDescriberDefaultImpl::DescribeProcessNodeData(
     const ProcessNode* node) const {
-  return base::Value();
+  return base::DictValue();
 }
 
-base::Value NodeDataDescriberDefaultImpl::DescribeSystemNodeData(
+base::DictValue NodeDataDescriberDefaultImpl::DescribeSystemNodeData(
     const SystemNode* node) const {
-  return base::Value();
+  return base::DictValue();
 }
 
-base::Value NodeDataDescriberDefaultImpl::DescribeWorkerNodeData(
+base::DictValue NodeDataDescriberDefaultImpl::DescribeWorkerNodeData(
     const WorkerNode* node) const {
-  return base::Value();
+  return base::DictValue();
 }
 
 }  // namespace performance_manager

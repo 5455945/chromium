@@ -1,11 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_EMPTY_WEB_MEDIA_PLAYER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_EMPTY_WEB_MEDIA_PLAYER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
+#include "media/base/picture_in_picture_events_info.h"
 #include "third_party/blink/public/platform/web_media_player.h"
 
 namespace cc {
@@ -26,26 +28,27 @@ class EmptyWebMediaPlayer : public WebMediaPlayer {
                   const WebMediaPlayerSource&,
                   CorsMode,
                   bool is_cache_disabled) override;
+  void Shutdown() override { weak_ptr_factory_.InvalidateWeakPtrsAndDoom(); }
   void Play() override {}
-  void Pause() override {}
+  void Pause(PauseReason pause_reason) override {}
   void Seek(double seconds) override {}
   void SetRate(double) override {}
   void SetVolume(double) override {}
   void SetLatencyHint(double) override {}
   void SetPreservesPitch(bool) override {}
-  void SetAutoplayInitiated(bool) override {}
+  void SetWasPlayedWithUserActivationAndHighMediaEngagement(bool) override {}
+  void SetShouldPauseWhenFrameIsHidden(bool) override {}
   void OnRequestPictureInPicture() override {}
-  SurfaceLayerMode GetVideoSurfaceLayerMode() const override {
-    return SurfaceLayerMode::kNever;
-  }
   WebTimeRanges Buffered() const override;
   WebTimeRanges Seekable() const override;
+  void OnFrozen() override {}
   bool SetSinkId(const WebString& sink_id,
                  WebSetSinkIdCompleteCallback) override {
     return false;
   }
   bool HasVideo() const override { return false; }
   bool HasAudio() const override { return false; }
+  bool IsVideoBeingCaptured() const override { return false; }
   gfx::Size NaturalSize() const override;
   gfx::Size VisibleSize() const override;
   bool Paused() const override { return false; }
@@ -68,10 +71,25 @@ class EmptyWebMediaPlayer : public WebMediaPlayer {
   void SetVolumeMultiplier(double multiplier) override {}
   void SetPowerExperimentState(bool enabled) override {}
   void SuspendForFrameClosed() override {}
-  void Paint(cc::PaintCanvas*, const gfx::Rect&, cc::PaintFlags&) override {}
-  scoped_refptr<media::VideoFrame> GetCurrentFrame() override;
+  void RecordAutoPictureInPictureInfo(
+      const media::PictureInPictureEventsInfo::AutoPipInfo&
+          auto_picture_in_picture_info) override {}
+  void Paint(cc::PaintCanvas*,
+             const gfx::Rect&,
+             const cc::PaintFlags&,
+             bool force_pixel_readback) override {}
+  scoped_refptr<media::VideoFrame> GetCurrentFrameThenUpdate() override;
+  std::optional<media::VideoFrame::ID> CurrentFrameId() const override;
   bool HasAvailableVideoFrame() const override { return false; }
-  base::WeakPtr<WebMediaPlayer> AsWeakPtr() override { return nullptr; }
+  bool HasReadableVideoFrame() const override { return false; }
+  base::WeakPtr<WebMediaPlayer> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+  void RegisterFrameSinkHierarchy() override {}
+  void UnregisterFrameSinkHierarchy() override {}
+
+ private:
+  base::WeakPtrFactory<EmptyWebMediaPlayer> weak_ptr_factory_{this};
 };
 
 }  // namespace blink

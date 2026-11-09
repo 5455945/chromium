@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,19 @@
 
 namespace gpu {
 
-GpuBlocklist::GpuBlocklist(const GpuControlListData& data)
+GpuBlocklist::GpuBlocklist(base::span<const GpuControlList::Entry> data)
     : GpuControlList(data) {}
 
 GpuBlocklist::~GpuBlocklist() = default;
 
 // static
 std::unique_ptr<GpuBlocklist> GpuBlocklist::Create() {
-  GpuControlListData data(kSoftwareRenderingListEntryCount,
-                          kSoftwareRenderingListEntries);
-  return Create(data);
+  return Create(GetSoftwareRenderingListEntries());
 }
 
 // static
 std::unique_ptr<GpuBlocklist> GpuBlocklist::Create(
-    const GpuControlListData& data) {
+    base::span<const GpuControlList::Entry> data) {
   std::unique_ptr<GpuBlocklist> list(new GpuBlocklist(data));
   list->AddSupportedFeature("accelerated_2d_canvas",
                             GPU_FEATURE_TYPE_ACCELERATED_2D_CANVAS);
@@ -31,25 +29,31 @@ std::unique_ptr<GpuBlocklist> GpuBlocklist::Create(
                             GPU_FEATURE_TYPE_ACCELERATED_WEBGL);
   list->AddSupportedFeature("accelerated_video_decode",
                             GPU_FEATURE_TYPE_ACCELERATED_VIDEO_DECODE);
-  list->AddSupportedFeature("gpu_rasterization",
-                            GPU_FEATURE_TYPE_GPU_RASTERIZATION);
+  list->AddSupportedFeature("accelerated_video_encode",
+                            GPU_FEATURE_TYPE_ACCELERATED_VIDEO_ENCODE);
+  list->AddSupportedFeature("gpu_tile_rasterization",
+                            GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION);
   list->AddSupportedFeature("accelerated_webgl2",
                             GPU_FEATURE_TYPE_ACCELERATED_WEBGL2);
-  list->AddSupportedFeature("oop_rasterization",
-                            GPU_FEATURE_TYPE_OOP_RASTERIZATION);
-  list->AddSupportedFeature("android_surface_control",
-                            GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL);
   list->AddSupportedFeature("accelerated_gl", GPU_FEATURE_TYPE_ACCELERATED_GL);
-  list->AddSupportedFeature("metal", GPU_FEATURE_TYPE_METAL);
   list->AddSupportedFeature("vulkan", GPU_FEATURE_TYPE_VULKAN);
+  list->AddSupportedFeature("accelerated_webgpu",
+                            GPU_FEATURE_TYPE_ACCELERATED_WEBGPU);
+  list->AddSupportedFeature("skia_graphite", GPU_FEATURE_TYPE_SKIA_GRAPHITE);
+  list->AddSupportedFeature("webnn", GPU_FEATURE_TYPE_WEBNN);
+  list->AddSupportedFeature(
+      "direct_rendering_display_compositor",
+      GPU_FEATURE_TYPE_DIRECT_RENDERING_DISPLAY_COMPOSITOR);
+  list->AddSupportedFeature("webgpu_on_vk_via_gl_interop",
+                            GPU_FEATURE_TYPE_WEBGPU_ON_VK_VIA_GL_INTEROP);
   return list;
 }
 
 // static
 bool GpuBlocklist::AreEntryIndicesValid(
     const std::vector<uint32_t>& entry_indices) {
-  return GpuControlList::AreEntryIndicesValid(entry_indices,
-                                              kSoftwareRenderingListEntryCount);
+  return GpuControlList::AreEntryIndicesValid(
+      entry_indices, GetSoftwareRenderingListEntries().size());
 }
 
 }  // namespace gpu

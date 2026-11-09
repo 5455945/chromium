@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,50 +7,76 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
+#include "base/functional/callback.h"
 #include "base/time/time.h"
-#include "components/sync/base/model_type.h"
-#include "components/sync/engine/entity_data.h"
+#include "components/sync/base/client_tag_hash.h"
+#include "components/sync/base/deletion_origin.h"
+#include "components/sync/model/processor_entity_metadata.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
+
+class GURL;
+
+namespace base {
+class FilePath;
+}  // namespace base
+
+namespace sync_pb {
+class EntitySpecifics;
+class UniquePosition;
+}  // namespace sync_pb
 
 namespace syncer {
 
 class ClientTagHash;
+struct EntityData;
 struct CommitRequestData;
 struct CommitResponseData;
 struct UpdateResponseData;
 
-// This class is used by the ClientTagBasedModelTypeProcessor to track the state
+// This class is used by the ClientTagBasedDataTypeProcessor to track the state
 // of each entity with its type. It can be considered a helper class internal to
 // the processor. It manages the metadata for its entity and caches entity data
 // upon a local change until commit confirmation is received.
 class ProcessorEntity {
  public:
-  // Construct an instance representing a new locally-created item.
+  // Construct an instance representing either a new locally-created item, or a
+  // newly-received remote item.
   static std::unique_ptr<ProcessorEntity> CreateNew(
       const std::string& storage_key,
       const ClientTagHash& client_tag_hash,
-      const std::string& id,
+      const std::string& server_id,
       base::Time creation_time);
 
-  // Construct an instance representing an item loaded from storage on init.
+  // Construct an instance representing an item loaded from storage on init. May
+  // return nullptr if the passed-in `metadata` is invalid.
   static std::unique_ptr<ProcessorEntity> CreateFromMetadata(
       const std::string& storage_key,
       sync_pb::EntityMetadata metadata);
 
+  // Schedules asynchronous deletion of the attachment staging file at
+  // `file_path` on a background thread.
+  static void DeleteAttachmentFileAsync(const base::FilePath& file_path);
+
   ~ProcessorEntity();
 
   const std::string& storage_key() const { return storage_key_; }
-  const sync_pb::EntityMetadata& metadata() const { return metadata_; }
-  const EntityData& commit_data() { return *commit_data_; }
+  const sync_pb::EntityMetadata& metadata() const { return metadata_.proto(); }
+
+  ClientTagHash GetClientTagHash() const;
 
   // Returns true if this data is out of sync with the server.
   // A commit may or may not be in progress at this time.
   bool IsUnsynced() const;
+
+  // Returns true if this entity was created locally and not yet committed to
+  // the server (including while the commit is in flight, until a response is
+  // received from the server).
+  bool IsUnsyncedLocalCreation() const;
 
   // Returns true if this data is out of sync with the sync thread.
   //
@@ -64,34 +90,50 @@ class ProcessorEntity {
   bool RequiresCommitData() const;
 
   // Whether it's safe to clear the metadata for this entity. This means that
-  // the entity is deleted and either knowledge of this entity has never left
-  // this client or it is up to date with the server.
+  // the entity is deleted and it is up to date with the server (i.e. is *not*
+  // unsynced).
   bool CanClearMetadata() const;
 
-  // Returns true if the specified update version does not contain new data.
-  bool UpdateIsReflection(int64_t update_version) const;
-
-  void RecordEntityUpdateLatency(int64_t update_version, ModelType type);
+  // Returns true if the specified `update_version` is already known, i.e. is
+  // smaller or equal to the last known server version.
+  // This is the case for reflections, but can also be true in some other edge
+  // cases (e.g. updates were received out of order).
+  bool IsVersionAlreadyKnown(int64_t update_version) const;
 
   // Records that an update from the server was received but ignores its data.
-  void RecordIgnoredUpdate(const UpdateResponseData& response_data);
+  void RecordIgnoredRemoteUpdate(const UpdateResponseData& response_data);
 
   // Records an update from the server assuming its data is the new data for
   // this entity.
-  void RecordAcceptedUpdate(const UpdateResponseData& response_data);
+  void RecordAcceptedRemoteUpdate(
+      const UpdateResponseData& response_data,
+      sync_pb::EntitySpecifics trimmed_specifics,
+      std::optional<sync_pb::UniquePosition> unique_position);
 
   // Squashes a pending commit with an update from the server.
-  void RecordForcedUpdate(const UpdateResponseData& response_data);
+  // There was a conflict and the server just won it.
+  void RecordForcedRemoteUpdate(
+      const UpdateResponseData& response_data,
+      sync_pb::EntitySpecifics trimmed_specifics,
+      std::optional<sync_pb::UniquePosition> unique_position);
+
+  // Overrides the server ID and version. Crucial for handling server-initiated
+  // metadata resets (migration) where we want to force apply updates.
+  void OverrideServerMetadata(const std::string& server_id,
+                              int64_t server_version);
 
   // Applies a local change to this item.
-  void MakeLocalChange(std::unique_ptr<EntityData> data);
+  void RecordLocalUpdate(
+      std::unique_ptr<EntityData> data,
+      sync_pb::EntitySpecifics trimmed_specifics,
+      std::optional<sync_pb::UniquePosition> unique_position);
 
   // Applies a local deletion to this item. Returns true if entity was
   // previously committed to server and tombstone should be sent.
-  bool Delete();
+  bool RecordLocalDeletion(const DeletionOrigin& origin);
 
   // Initializes a message representing this item's uncommitted state
-  // and assumes that it is forwarded to the sync engine for commiting.
+  // and assumes that it is forwarded to the sync engine for committing.
   void InitializeCommitRequestData(CommitRequestData* request);
 
   // Receives a successful commit response.
@@ -107,9 +149,10 @@ class ProcessorEntity {
   // Clears any in-memory sync state associated with outstanding commits.
   void ClearTransientSyncState();
 
-  // Update storage_key_. Allows setting storage key for datatypes that don't
-  // generate storage key from syncer::EntityData. Should only be called for
-  // an entity initialized with empty storage key.
+  // Updates `storage_key_`. Allows setting storage key for datatypes that don't
+  // generate storage keys from syncer::EntityData. Should only be called for
+  // an entity initialized with empty storage key, or for which the storage key
+  // was explicitly cleared.
   void SetStorageKey(const std::string& storage_key);
 
   // Undoes SetStorageKey(), which is needed in certain conflict resolution
@@ -120,46 +163,119 @@ class ProcessorEntity {
   // and caches it in the instance.
   void SetCommitData(std::unique_ptr<EntityData> data);
 
-  void CacheCommitData(std::unique_ptr<EntityData> data);
-
   // Check if the instance has cached commit data.
   bool HasCommitData() const;
 
-  // Check whether |data| matches the stored specifics hash.
+  // Check whether `data` matches the stored specifics hash.
   bool MatchesData(const EntityData& data) const;
 
   // Check whether the current metadata of an unsynced entity matches the stored
   // base specifics hash.
   bool MatchesOwnBaseData() const;
 
-  // Check whether |data| matches the stored base specifics hash.
+  // Check whether `data` matches the stored base specifics hash.
   bool MatchesBaseData(const EntityData& data) const;
 
   // Increment sequence number in the metadata. This will also update the
   // base_specifics_hash if the entity was not already unsynced.
   void IncrementSequenceNumber(base::Time modification_time);
 
+  // Outgoing attachment upload states:
+  // - Queued-but-not-started (`RecordAttachmentUploadQueued()`): Tracks the
+  //   staging file on disk and holds the entity back from Sync commits before
+  //   the network upload starts.
+  // - Started-but-not-resumable (`RecordAttachmentUploadStarted()`): The
+  //   network upload is in flight (with a registered cancellation callback),
+  //   but the resumable session `upload_url` has not been determined yet.
+  // - Started-and-resumable (`RecordAttachmentUploadResumeUrlReceived()`, or
+  //   `RecordAttachmentUploadStarted()` when resuming): The network upload is
+  //   in flight and the resumable session `upload_url` is persisted in
+  //   metadata.
+  // - Queued-but-not-resumed (`CreateFromMetadata()` on browser startup):
+  //   `pending_upload` (with or without `upload_url`) is loaded from persisted
+  //   metadata, awaiting `RecordAttachmentUploadStarted()`.
+  // - Completed (`RecordAttachmentUploadCompleted()`): Stores the uploaded
+  //   `temporary_blob_id`, deletes the staging file, and unblocks the entity
+  //   for commit.
+  // - Paused (`PauseAttachmentUpload()`): Aborts the in-flight network request
+  //   while retaining `pending_upload` and the staging file so the upload can
+  //   be resumed later.
+  // - Failed / Cleared (`RecordAttachmentUploadFailed()` /
+  //   `ClearPendingAttachmentUpload()`): Clears `pending_upload` from metadata,
+  //   deletes the staging file, and unblocks the entity for commit without the
+  //   attachment (`ClearPendingAttachmentUpload()` also aborts any in-flight
+  //   network request).
+  //
+  // Returns true if an outgoing attachment upload is queued or in progress for
+  // this entity and has not yet produced a `temporary_blob_id`.
+  bool HasPendingAttachmentUpload() const;
+
+  // Returns true if a network attachment upload is currently in flight for this
+  // entity (i.e. an abort callback is registered).
+  bool HasAttachmentUploadInProgress() const;
+
+  // Marks that a local attachment upload for `file_path` is queued for this
+  // entity before the asynchronous upload handshake completes, holding back the
+  // entity from commit until `RecordAttachmentUploadCompleted()` is called.
+  // Must be called on an unsynced entity after `RecordLocalUpdate()` (which
+  // already increments the sequence number for the local change, avoiding
+  // double-incrementing). `ProcessorEntity` takes ownership of the staging file
+  // at `file_path` (which must be a unique path) and asynchronously deletes it
+  // once the upload completes or is cleared. Any existing pending attachment
+  // upload is cleared and its file is deleted.
+  void RecordAttachmentUploadQueued(const base::FilePath& file_path);
+
+  // Records that the network attachment upload has started (or resumed) and
+  // registers `abort_attachment_upload_callback` to abort the active network
+  // upload if the upload is paused, cleared, or replaced.
+  void RecordAttachmentUploadStarted(
+      base::OnceClosure abort_attachment_upload_callback);
+
+  // Records that the in-flight network attachment upload failed, clearing the
+  // registered abort callback, clearing `pending_upload` from metadata,
+  // scheduling deletion of the staging file on disk, and unblocking the entity
+  // for commit without the attachment.
+  void RecordAttachmentUploadFailed();
+
+  // Records that the asynchronous upload handshake completed and returned the
+  // resumable session `upload_url`.
+  void RecordAttachmentUploadResumeUrlReceived(const GURL& upload_url);
+
+  // Records that the outgoing attachment upload finished and returned
+  // `temporary_blob_id`, clearing `pending_upload` from metadata, scheduling
+  // deletion of the staging file on disk, and unblocking the entity for commit.
+  void RecordAttachmentUploadCompleted(const std::string& temporary_blob_id);
+
+  // Clears any pending attachment upload for this entity, aborting any active
+  // network upload, clearing `pending_upload` from metadata, and scheduling
+  // deletion of the staging file on disk. Also called automatically on local
+  // deletion, forced remote update, and when a new attachment upload replaces
+  // an existing pending upload.
+  void ClearPendingAttachmentUpload();
+
+  // Pauses any active network attachment upload by running the registered abort
+  // callback while keeping `pending_upload` and the staging file intact so the
+  // upload can be resumed later.
+  void PauseAttachmentUpload();
+
   // Returns the estimate of dynamically allocated memory in bytes.
   size_t EstimateMemoryUsage() const;
 
+  const EntityData& GetCommitDataForTesting() const { return *commit_data_; }
+
  private:
-  friend class ProcessorEntityTest;
-
-  // The constructor swaps the data from the passed metadata.
   ProcessorEntity(const std::string& storage_key,
-                  sync_pb::EntityMetadata metadata);
+                  ProcessorEntityMetadata metadata);
 
-  // Check whether |specifics| matches the stored specifics_hash.
-  bool MatchesSpecificsHash(const sync_pb::EntitySpecifics& specifics) const;
+  // Updates in-memory commit data and sequence number after a remote update is
+  // recorded in metadata.
+  void UpdateCommitDataAndSequenceAfterRemoteUpdate();
 
-  // Update hash string for EntitySpecifics in the metadata.
-  void UpdateSpecificsHash(const sync_pb::EntitySpecifics& specifics);
-
-  // Storage key. Should always be available.
+  // Storage key.
   std::string storage_key_;
 
   // Serializable Sync metadata.
-  sync_pb::EntityMetadata metadata_;
+  ProcessorEntityMetadata metadata_;
 
   // Sync data that exists for items being committed only. The data is moved
   // away when sending the commit request.
@@ -168,11 +284,8 @@ class ProcessorEntity {
   // The sequence number of the last item sent to the sync thread.
   int64_t commit_requested_sequence_number_;
 
-  // The time when this entity transition from being synced to being unsynced
-  // (i.e. a local change happened).
-  base::Time unsynced_time_;
-
-  std::map<int64_t, base::Time> unsynced_time_per_committed_server_version_;
+  // Optional callback to abort an in-flight network attachment upload.
+  base::OnceClosure abort_attachment_upload_callback_;
 };
 
 }  // namespace syncer

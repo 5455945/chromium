@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,36 +6,53 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace signin {
 
 PrimaryAccountAccessTokenFetcher::PrimaryAccountAccessTokenFetcher(
-    const std::string& oauth_consumer_name,
+    OAuthConsumerId oauth_consumer_id,
     IdentityManager* identity_manager,
-    const ScopeSet& scopes,
+    Mode mode,
+    ConsentLevel consent)
+    : oauth_consumer_id_(oauth_consumer_id),
+      identity_manager_(identity_manager),
+      mode_(mode),
+      consent_(consent) {
+  identity_manager_observation_.Observe(identity_manager_.get());
+}
+
+PrimaryAccountAccessTokenFetcher::PrimaryAccountAccessTokenFetcher(
+    OAuthConsumerId oauth_consumer_id,
+    IdentityManager* identity_manager,
     AccessTokenFetcher::TokenCallback callback,
     Mode mode,
     ConsentLevel consent)
-    : oauth_consumer_name_(oauth_consumer_name),
-      identity_manager_(identity_manager),
-      scopes_(scopes),
-      callback_(std::move(callback)),
-      mode_(mode),
-      consent_(consent) {
-  identity_manager_observation_.Observe(identity_manager_);
+    : PrimaryAccountAccessTokenFetcher(oauth_consumer_id,
+                                       identity_manager,
+                                       mode,
+                                       consent) {
+  Start(std::move(callback));
+}
+
+PrimaryAccountAccessTokenFetcher::~PrimaryAccountAccessTokenFetcher() = default;
+
+void PrimaryAccountAccessTokenFetcher::Start(
+    AccessTokenFetcher::TokenCallback callback) {
+  DCHECK(callback);
+  DCHECK(!callback_);
+  callback_ = std::move(callback);
   if (mode_ == Mode::kImmediate || AreCredentialsAvailable()) {
     StartAccessTokenRequest();
     return;
   }
   waiting_for_account_available_ = true;
 }
-
-PrimaryAccountAccessTokenFetcher::~PrimaryAccountAccessTokenFetcher() = default;
 
 CoreAccountId PrimaryAccountAccessTokenFetcher::GetAccountId() const {
   return identity_manager_->GetPrimaryAccountId(consent_);
@@ -66,7 +83,7 @@ void PrimaryAccountAccessTokenFetcher::StartAccessTokenRequest() {
   // token available. AccessTokenFetcher used in
   // |kWaitUntilRefreshTokenAvailable| mode would guarantee only the latter.
   access_token_fetcher_ = identity_manager_->CreateAccessTokenFetcherForAccount(
-      GetAccountId(), oauth_consumer_name_, scopes_,
+      GetAccountId(), oauth_consumer_id_,
       base::BindOnce(
           &PrimaryAccountAccessTokenFetcher::OnAccessTokenFetchComplete,
           base::Unretained(this)),
@@ -95,19 +112,20 @@ void PrimaryAccountAccessTokenFetcher::OnIdentityManagerShutdown(
   identity_manager_observation_.Reset();
   access_token_fetcher_.reset();
   if (callback_) {
-    std::move(callback_).Run(
-        GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED),
-        AccessTokenInfo());
+    std::move(callback_).Run(GoogleServiceAuthError::CreateRequestCanceled(),
+                             AccessTokenInfo());
   }
 }
 
 void PrimaryAccountAccessTokenFetcher::ProcessSigninStateChange() {
-  if (!waiting_for_account_available_)
+  if (!waiting_for_account_available_) {
     return;
+  }
 
   DCHECK_EQ(Mode::kWaitUntilAvailable, mode_);
-  if (!AreCredentialsAvailable())
+  if (!AreCredentialsAvailable()) {
     return;
+  }
 
   waiting_for_account_available_ = false;
   StartAccessTokenRequest();
@@ -124,9 +142,6 @@ void PrimaryAccountAccessTokenFetcher::OnAccessTokenFetchComplete(
   // Moreover, OnRefreshTokenAvailable might happen after startup when the
   // credentials are changed/updated.
   // To handle these cases, we retry a canceled request once.
-  // However, a request may also get cancelled for legitimate reasons, e.g.
-  // because the user signed out. In those cases, there's no point in retrying,
-  // so only retry if there (still) is a valid refresh token.
   // NOTE: Maybe we should retry for all transient errors here, so that clients
   // don't have to.
   if (mode_ == Mode::kWaitUntilAvailable && !access_token_retried_ &&

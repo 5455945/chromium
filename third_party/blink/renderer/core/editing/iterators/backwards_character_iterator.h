@@ -26,9 +26,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_ITERATORS_BACKWARDS_CHARACTER_ITERATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_ITERATORS_BACKWARDS_CHARACTER_ITERATOR_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/editing/iterators/simplified_backwards_text_iterator.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -41,16 +42,20 @@ class BackwardsCharacterIteratorAlgorithm {
       const EphemeralRangeTemplate<Strategy>&,
       const TextIteratorBehavior& = TextIteratorBehavior());
 
-  void Advance(int);
+  void Advance(wtf_size_t);
 
   bool AtEnd() const { return text_iterator_.AtEnd(); }
+
+  wtf_size_t length() const { return text_iterator_.length() - run_offset_; }
+  UChar CharacterAt(wtf_size_t index) const {
+    return text_iterator_.CharacterAt(run_offset_ + index);
+  }
 
   PositionTemplate<Strategy> EndPosition() const;
 
  private:
-  int offset_;
-  int run_offset_;
-  bool at_break_;
+  wtf_size_t offset_ = 0;
+  wtf_size_t run_offset_ = 0;
 
   SimplifiedBackwardsTextIteratorAlgorithm<Strategy> text_iterator_;
 };
@@ -62,6 +67,9 @@ extern template class CORE_EXTERN_TEMPLATE_EXPORT
 
 using BackwardsCharacterIterator =
     BackwardsCharacterIteratorAlgorithm<EditingStrategy>;
+
+using BackwardsCharacterIteratorInFlatTree =
+    BackwardsCharacterIteratorAlgorithm<EditingInFlatTreeStrategy>;
 
 }  // namespace blink
 

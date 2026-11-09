@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,14 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "services/network/conditional_cache_deletion_helper.h"
+#include "services/network/public/mojom/clear_data_filter.mojom-forward.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "url/gurl.h"
 
@@ -21,6 +23,7 @@ class Backend;
 }
 
 namespace net {
+class HttpCache;
 class URLRequestContext;
 }
 
@@ -45,6 +48,20 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) HttpCacheDataRemover {
       base::Time delete_end,
       HttpCacheDataRemoverCallback done_callback);
 
+  // As above, but operates directly on `http_cache` (which may be null, in
+  // which case the remover completes immediately). Used for caches that are
+  // not reachable through a URLRequestContext, e.g. the isolated in-memory
+  // caches backing socket-layer network throttling sessions.
+  static std::unique_ptr<HttpCacheDataRemover> CreateAndStart(
+      net::HttpCache* http_cache,
+      mojom::ClearDataFilterPtr url_filter,
+      base::Time delete_begin,
+      base::Time delete_end,
+      HttpCacheDataRemoverCallback done_callback);
+
+  HttpCacheDataRemover(const HttpCacheDataRemover&) = delete;
+  HttpCacheDataRemover& operator=(const HttpCacheDataRemover&) = delete;
+
   ~HttpCacheDataRemover();
 
  private:
@@ -53,7 +70,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) HttpCacheDataRemover {
                        base::Time delete_end,
                        HttpCacheDataRemoverCallback done_callback);
 
-  void CacheRetrieved(int rv);
+  void CacheRetrieved(std::pair<int, raw_ptr<disk_cache::Backend>>);
   void ClearHttpCacheDone(int rv);
 
   base::RepeatingCallback<bool(const GURL&)> url_matcher_;
@@ -62,13 +79,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) HttpCacheDataRemover {
 
   HttpCacheDataRemoverCallback done_callback_;
 
-  disk_cache::Backend* backend_;
+  raw_ptr<disk_cache::Backend> backend_;
 
   std::unique_ptr<ConditionalCacheDeletionHelper> deletion_helper_;
 
   base::WeakPtrFactory<HttpCacheDataRemover> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(HttpCacheDataRemover);
 };
 
 }  // namespace network

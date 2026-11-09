@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #import <Foundation/Foundation.h>
 
-#import "base/mac/scoped_nsobject.h"
-#include "base/macros.h"
+#include <memory>
+
 #include "chrome/browser/ui/views/apps/chrome_native_app_window_views.h"
 
 @class ResizeNotificationObserver;
@@ -17,6 +17,11 @@
 class ChromeNativeAppWindowViewsMac : public ChromeNativeAppWindowViews {
  public:
   ChromeNativeAppWindowViewsMac();
+
+  ChromeNativeAppWindowViewsMac(const ChromeNativeAppWindowViewsMac&) = delete;
+  ChromeNativeAppWindowViewsMac& operator=(
+      const ChromeNativeAppWindowViewsMac&) = delete;
+
   ~ChromeNativeAppWindowViewsMac() override;
 
   // Called by |nswindow_observer_| for window resize events.
@@ -30,10 +35,8 @@ class ChromeNativeAppWindowViewsMac : public ChromeNativeAppWindowViews {
       const extensions::AppWindow::CreateParams& create_params,
       views::Widget::InitParams* init_params,
       views::Widget* widget) override;
-  std::unique_ptr<views::NonClientFrameView> CreateStandardDesktopAppFrame()
-      override;
-  std::unique_ptr<views::NonClientFrameView> CreateNonStandardAppFrame()
-      override;
+  std::unique_ptr<views::FrameView> CreateStandardDesktopAppFrame() override;
+  std::unique_ptr<views::FrameView> CreateNonStandardAppFrame() override;
 
   // ui::BaseWindow implementation.
   bool IsMaximized() const override;
@@ -46,8 +49,11 @@ class ChromeNativeAppWindowViewsMac : public ChromeNativeAppWindowViews {
   void OnWidgetCreated(views::Widget* widget) override;
 
  private:
+  // Helper to create a frame view and its client.
+  std::unique_ptr<views::FrameView> CreateFrameViewImpl();
+
   // Used to notify us about certain NSWindow events.
-  base::scoped_nsobject<ResizeNotificationObserver> nswindow_observer_;
+  ResizeNotificationObserver* __strong nswindow_observer_;
 
   // The bounds of the window just before it was last maximized.
   NSRect bounds_before_maximize_;
@@ -55,8 +61,6 @@ class ChromeNativeAppWindowViewsMac : public ChromeNativeAppWindowViews {
   // Set true during an exit fullscreen transition, so that the live resize
   // event AppKit sends can be distinguished from a zoom-triggered live resize.
   bool in_fullscreen_transition_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeNativeAppWindowViewsMac);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_APPS_CHROME_NATIVE_APP_WINDOW_VIEWS_MAC_H_

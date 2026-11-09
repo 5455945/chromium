@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include "ui/aura/env.h"
 #include "ui/views/widget/widget.h"
 
-namespace chromeos {
+namespace ash {
 
 DialogWindowWaiter::DialogWindowWaiter(const std::u16string& dialog_title)
     : dialog_title_(dialog_title) {
@@ -18,7 +18,7 @@ DialogWindowWaiter::~DialogWindowWaiter() {
   aura::Env::GetInstance()->RemoveObserver(this);
   window_observations_.RemoveAllObservations();
   // Explicitly close any help app dialogs still open to prevent flaky errors in
-  // browser tests. Remove when crbug.com/951828 is fixed.
+  // browser tests. Remove when crbug.com/40622717 is fixed.
   for (aura::Window* dialog_window : dialog_windows_)
     views::Widget::GetWidgetForNativeView(dialog_window)->CloseNow();
 }
@@ -28,7 +28,8 @@ void DialogWindowWaiter::Wait() {
 }
 
 void DialogWindowWaiter::OnWindowInitialized(aura::Window* window) {
-  DCHECK(!window_observations_.IsObservingSource(window));
+  CHECK(!window_observations_.IsObservingSource(window),
+        base::NotFatalUntil::M161);
   window_observations_.AddObservation(window);
 }
 
@@ -49,4 +50,4 @@ void DialogWindowWaiter::OnWindowVisibilityChanged(aura::Window* window,
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

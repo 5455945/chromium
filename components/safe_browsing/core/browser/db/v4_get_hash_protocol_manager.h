@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,20 +15,22 @@
 // Design doc: go/design-doc-v4-full-hash-manager
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/safe_browsing/core/browser/db/safebrowsing.pb.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_config.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/db/util.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "components/safe_browsing/core/common/proto/webui.pb.h"
 
 class GURL;
@@ -42,18 +44,13 @@ namespace safe_browsing {
 
 class V4GetHashProtocolManagerFuzzer;
 
-// The matching hash prefixes and corresponding stores, for each full hash
-// generated for a given URL.
-typedef std::unordered_map<FullHash, StoreAndHashPrefixes>
-    FullHashToStoreAndHashPrefixesMap;
-
 // ----------------------------------------------------------------
 
 // All information about a particular full hash i.e. negative TTL, store for
 // which it is valid, and metadata associated with that store.
 struct FullHashInfo {
  public:
-  FullHash full_hash;
+  FullHashStr full_hash;
 
   // The list for which this full hash is applicable.
   ListIdentifier list_id;
@@ -64,14 +61,17 @@ struct FullHashInfo {
   // Any metadata for this full hash for a particular store.
   ThreatMetadata metadata;
 
-  FullHashInfo(const FullHash& full_hash,
+  // Set to true if the threat type is API_ABUSE and the metadata contains
+  // "NOTIFICATIONS".
+  bool is_notification_abusive = false;
+
+  FullHashInfo(const FullHashStr& full_hash,
                const ListIdentifier& list_id,
                const base::Time& positive_expiry);
   FullHashInfo(const FullHashInfo& other);
   ~FullHashInfo();
 
-  bool operator==(const FullHashInfo& other) const;
-  bool operator!=(const FullHashInfo& other) const;
+  friend bool operator==(const FullHashInfo&, const FullHashInfo&) = default;
 
  private:
   FullHashInfo();
@@ -95,7 +95,7 @@ struct CachedHashPrefixInfo {
 
 // Cached full hashes received from the server for the corresponding hash
 // prefixes.
-typedef std::unordered_map<HashPrefix, CachedHashPrefixInfo> FullHashCache;
+typedef std::unordered_map<HashPrefixStr, CachedHashPrefixInfo> FullHashCache;
 
 // FullHashCallback is invoked when GetFullHashes completes. The parameter is
 // the vector of full hash results. If empty, indicates that there were no
@@ -108,7 +108,7 @@ using FullHashCallback =
 struct FullHashCallbackInfo {
   FullHashCallbackInfo();
   FullHashCallbackInfo(const std::vector<FullHashInfo>& cached_full_hash_infos,
-                       const std::vector<HashPrefix>& prefixes_requested,
+                       const std::vector<HashPrefixStr>& prefixes_requested,
                        std::unique_ptr<network::SimpleURLLoader> loader,
                        const FullHashToStoreAndHashPrefixesMap&
                            full_hash_to_store_and_hash_prefixes,
@@ -137,7 +137,7 @@ struct FullHashCallbackInfo {
   base::Time network_start_time;
 
   // The prefixes that were requested from the server.
-  std::vector<HashPrefix> prefixes_requested;
+  std::vector<HashPrefixStr> prefixes_requested;
 };
 
 // ----------------------------------------------------------------
@@ -146,11 +146,13 @@ class V4GetHashProtocolManagerFactory;
 
 class V4GetHashProtocolManager {
  public:
-  // Invoked when GetFullHashesWithApis completes.
+  // Invoked when GetFullHashesForNotificationAbuse completes.
   // Parameters:
-  //   - The API threat metadata for the given URL.
-  using ThreatMetadataForApiCallback =
-      base::OnceCallback<void(const ThreatMetadata& md)>;
+  //   - Whether the URL is abusive for notifications.
+  using NotificationAbuseCallback = base::OnceCallback<void(bool is_abusive)>;
+
+  V4GetHashProtocolManager(const V4GetHashProtocolManager&) = delete;
+  V4GetHashProtocolManager& operator=(const V4GetHashProtocolManager&) = delete;
 
   virtual ~V4GetHashProtocolManager();
 
@@ -158,15 +160,12 @@ class V4GetHashProtocolManager {
   static std::unique_ptr<V4GetHashProtocolManager> Create(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const StoresToCheck& stores_to_check,
-      const V4ProtocolConfig& config);
+      const SBProtocolConfig& config);
 
   // Makes the passed |factory| the factory used to instantiate
   // a V4GetHashProtocolManager. Useful for tests.
   static void RegisterFactory(
       std::unique_ptr<V4GetHashProtocolManagerFactory> factory);
-
-  // Empties the cache.
-  void ClearCache();
 
   // Retrieve the full hash for a set of prefixes, and invoke the callback
   // argument when the results are retrieved. The callback may be invoked
@@ -181,33 +180,33 @@ class V4GetHashProtocolManager {
   // Retrieve the full hash and API metadata for the origin of |url|, and invoke
   // the callback argument when the results are retrieved. The callback may be
   // invoked synchronously.
-  virtual void GetFullHashesWithApis(
+  virtual void GetFullHashesForNotificationAbuse(
       const GURL& url,
       const std::vector<std::string>& list_client_states,
-      ThreatMetadataForApiCallback api_callback);
+      NotificationAbuseCallback callback);
 
   // Callback when the request completes
   void OnURLLoaderComplete(network::SimpleURLLoader* url_loader,
-                           std::unique_ptr<std::string> response_body);
+                           std::optional<std::string> response_body);
 
   // Populates the protobuf with the FullHashCache data.
   void CollectFullHashCacheInfo(FullHashCacheInfo* full_hash_cache_info);
 
  protected:
+  friend class GetHashProtocolManagerFactoryWithTestUrlLoader;
+
   // Constructs a V4GetHashProtocolManager that issues network requests using
   // |url_loader_factory|.
   V4GetHashProtocolManager(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const StoresToCheck& stores_to_check,
-      const V4ProtocolConfig& config);
+      const SBProtocolConfig& config);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest, TestGetHashRequest);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest, TestParseHashResponse);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
                            TestParseHashResponseWrongThreatEntryType);
-  FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
-                           TestParseHashThreatPatternType);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
                            TestParseSubresourceFilterMetadata);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
@@ -216,6 +215,7 @@ class V4GetHashProtocolManager {
                            TestParseHashResponseInconsistentThreatTypes);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
                            TestGetHashErrorHandlingOK);
+  FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest, TestGetHashCachedOK);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
                            TestResultsNotCachedForNegativeCacheDuration);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
@@ -226,6 +226,8 @@ class V4GetHashProtocolManager {
                            TestGetHashErrorHandlingParallelRequests);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest, GetCachedResults);
   FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest, TestUpdatesAreMerged);
+  FRIEND_TEST_ALL_PREFIXES(V4GetHashProtocolManagerTest,
+                           TestBackoffErrorHistogramCount);
   friend class V4GetHashProtocolManagerTest;
   friend class V4GetHashProtocolManagerFuzzer;
   friend class V4GetHashProtocolManagerFactoryImpl;
@@ -247,7 +249,7 @@ class V4GetHashProtocolManager {
       const FullHashToStoreAndHashPrefixesMap&
           full_hash_to_store_and_hash_prefixes,
       const base::Time& now,
-      std::vector<HashPrefix>* prefixes_to_request,
+      std::vector<HashPrefixStr>* prefixes_to_request,
       std::vector<FullHashInfo>* cached_full_hash_infos);
 
   // Fills a FindFullHashesRequest protocol buffer for a request.
@@ -255,7 +257,7 @@ class V4GetHashProtocolManager {
   // |prefixes_to_request| is the list of hash prefixes to get full hashes for.
   // |list_client_states| is the client_state of each of the lists being synced.
   std::string GetHashRequest(
-      const std::vector<HashPrefix>& prefixes_to_request,
+      const std::vector<HashPrefixStr>& prefixes_to_request,
       const std::vector<std::string>& list_client_states);
 
   void GetHashUrlAndHeaders(const std::string& request_base64,
@@ -275,12 +277,13 @@ class V4GetHashProtocolManager {
                     const std::vector<FullHashInfo>& full_hash_infos,
                     std::vector<FullHashInfo>* merged_full_hash_infos);
 
-  // Calls |api_callback| with an object of ThreatMetadata that contains
-  // permission API metadata for full hashes in those |full_hash_infos| that
-  // have a full hash in |full_hashes|.
-  void OnFullHashForApi(ThreatMetadataForApiCallback api_callback,
-                        const std::vector<FullHash>& full_hashes,
-                        const std::vector<FullHashInfo>& full_hash_infos);
+  // Calls |callback| with a boolean indicating whether any of the
+  // |full_hash_infos| that have a full hash in |full_hashes| are abusive
+  // for notifications.
+  void OnFullHashForNotificationAbuse(
+      NotificationAbuseCallback callback,
+      const std::vector<FullHashStr>& full_hashes,
+      const std::vector<FullHashInfo>& full_hash_infos);
 
   // Parses a FindFullHashesResponse protocol buffer and fills the results in
   // |full_hash_infos| and |negative_cache_expire|. |response_data| is a
@@ -291,10 +294,12 @@ class V4GetHashProtocolManager {
                          std::vector<FullHashInfo>* full_hash_infos,
                          base::Time* negative_cache_expire);
 
-  // Parses the store specific |metadata| information from |match|. Logs errors
-  // to UMA if the metadata information was not parsed correctly or was
-  // inconsistent with what's expected from that corresponding store.
-  static void ParseMetadata(const ThreatMatch& match, ThreatMetadata* metadata);
+  // Parses the store specific metadata information from |match| and stores it
+  // in |full_hash_info|. Logs errors to UMA if the metadata information was
+  // not parsed correctly or was inconsistent with what's expected from that
+  // corresponding store.
+  static void ParseMetadata(const ThreatMatch& match,
+                            FullHashInfo* full_hash_info);
 
   // Resets the gethash error counter and multiplier.
   void ResetGetHashErrors();
@@ -304,7 +309,7 @@ class V4GetHashProtocolManager {
 
   // Updates the state of the full hash cache upon receiving a valid response
   // from the server.
-  void UpdateCache(const std::vector<HashPrefix>& prefixes_requested,
+  void UpdateCache(const std::vector<HashPrefixStr>& prefixes_requested,
                    const std::vector<FullHashInfo>& full_hash_infos,
                    const base::Time& negative_cache_expire);
 
@@ -326,6 +331,9 @@ class V4GetHashProtocolManager {
   // response, used for request backoff timing.
   size_t gethash_error_count_;
 
+  // The number of backoff errors since the last successful HTTP response.
+  size_t backoff_error_count_ = 0;
+
   // Multiplier for the backoff error after the second.
   size_t gethash_back_off_mult_;
 
@@ -337,7 +345,7 @@ class V4GetHashProtocolManager {
   base::Time next_gethash_time_;
 
   // The config of the client making Pver4 requests.
-  const V4ProtocolConfig config_;
+  const SBProtocolConfig config_;
 
   // The URLLoaderFactory we use to issue network requests.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
@@ -346,7 +354,7 @@ class V4GetHashProtocolManager {
   int number_of_hits_ = 0;
 
   // The clock used to vend times.
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 
   // The following sets represent the combination of lists that we would always
   // request from the server, irrespective of which list we found the hash
@@ -356,22 +364,23 @@ class V4GetHashProtocolManager {
   std::vector<ThreatType> threat_types_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(V4GetHashProtocolManager);
 };
 
 // Interface of a factory to create V4GetHashProtocolManager.  Useful for tests.
 class V4GetHashProtocolManagerFactory {
  public:
-  V4GetHashProtocolManagerFactory() {}
-  virtual ~V4GetHashProtocolManagerFactory() {}
+  V4GetHashProtocolManagerFactory() = default;
+
+  V4GetHashProtocolManagerFactory(const V4GetHashProtocolManagerFactory&) =
+      delete;
+  V4GetHashProtocolManagerFactory& operator=(
+      const V4GetHashProtocolManagerFactory&) = delete;
+
+  virtual ~V4GetHashProtocolManagerFactory() = default;
   virtual std::unique_ptr<V4GetHashProtocolManager> CreateProtocolManager(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const StoresToCheck& stores_to_check,
-      const V4ProtocolConfig& config) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(V4GetHashProtocolManagerFactory);
+      const SBProtocolConfig& config) = 0;
 };
 
 #ifndef NDEBUG

@@ -1,4 +1,5 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -15,16 +16,19 @@ switches define the current experiments and variations Chrome runs with.
 
 Sample use:
 
-python bisect_variations.py --input-file="variations_cmd.txt"
+vpython3 bisect_variations.py --input-file="variations_cmd.txt"
     --output-dir=".\out" --browser=canary --url="https://www.youtube.com/"
 
 "variations_cmd.txt" is the command line switches data saved from
 chrome://version/?show-variations-cmd.
 
+Sample use for Android:
+vpython3 bisect_variations.py --input-file="variations_cmd.txt"
+    --output-dir=".\bisect-out" --url="https://www.youtube.com/"
+    --browser-path="out/Android/bin/chrome_apk"
+
 Run with --help to get a complete list of options this script runs with.
 """
-
-from __future__ import print_function
 
 import logging
 import optparse
@@ -37,38 +41,50 @@ import tempfile
 import split_variations_cmd
 
 _CHROME_PATH_WIN = {
-    # The following three paths are relative to %ProgramFiles(x86)%
-    "stable": r"Google\Chrome\Application\chrome.exe",
-    "beta": r"Google\Chrome Beta\Application\chrome.exe",
-    "dev": r"Google\Chrome Dev\Application\chrome.exe",
-    # The following two paths are relative to %LOCALAPPDATA%
-    "canary": r"Google\Chrome SxS\Application\chrome.exe",
-    "chromium": r"Chromium\Application\chrome.exe",
+  # The following three paths are relative to %ProgramFiles%
+  "stable": r"Google\Chrome\Application\chrome.exe",
+  "beta": r"Google\Chrome Beta\Application\chrome.exe",
+  "dev": r"Google\Chrome Dev\Application\chrome.exe",
+  # The following two paths are relative to %LOCALAPPDATA%
+  "canary": r"Google\Chrome SxS\Application\chrome.exe",
+  "chromium": r"Chromium\Application\chrome.exe",
 }
 
 _CHROME_PATH_MAC = {
   "stable": r"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "beta": r"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "dev": r"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "canary": (r"/Applications/Google Chrome Canary.app/Contents/MacOS/"
-             r"Google Chrome Canary"),
+  "beta": (
+      r"/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"
+  ),
+  "dev": (
+      r"/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev"
+  ),
+  "canary": (
+    r"/Applications/Google Chrome Canary.app/Contents/MacOS/"
+    r"Google Chrome Canary"
+  ),
 }
 
 _CHROME_PATH_LINUX = {
   "stable": r"/usr/bin/google-chrome",
   "beta": r"/usr/bin/google-chrome-beta",
   "dev": r"/usr/bin/google-chrome-unstable",
+  "canary": r"/usr/bin/google-chrome-canary",
   "chromium": r"/usr/bin/chromium",
 }
+
+# Maximum command length is 32767. Constant below is reduced to leave space
+# for executable and chrome arguments.
+_MAX_ARGS_LENGTH_WIN = 32000
+
 
 def _GetSupportedBrowserTypes():
   """Returns the supported browser types on this platform."""
   if sys.platform.startswith('win'):
     return _CHROME_PATH_WIN.keys()
   if sys.platform == 'darwin':
-    return _CHROME_PATH_MAC.keys();
+    return _CHROME_PATH_MAC.keys()
   if sys.platform.startswith('linux'):
-    return _CHROME_PATH_LINUX.keys();
+    return _CHROME_PATH_LINUX.keys()
   raise NotImplementedError('Unsupported platform')
 
 
@@ -82,12 +98,14 @@ def _LocateBrowser_Win(browser_type):
       Browser executable path.
   """
   if browser_type in ['stable', 'beta', 'dev']:
-    return os.path.join(os.getenv('ProgramFiles(x86)'),
-                        _CHROME_PATH_WIN[browser_type])
+    return os.path.join(
+      os.getenv('ProgramFiles'), _CHROME_PATH_WIN[browser_type]
+    )
   else:
     assert browser_type in ['canary', 'chromium']
-    return os.path.join(os.getenv('LOCALAPPDATA'),
-                        _CHROME_PATH_WIN[browser_type])
+    return os.path.join(
+      os.getenv('LOCALAPPDATA'), _CHROME_PATH_WIN[browser_type]
+    )
 
 
 def _LocateBrowser_Mac(browser_type):
@@ -125,8 +143,10 @@ def _LocateBrowser(browser_type):
   """
   supported_browser_types = _GetSupportedBrowserTypes()
   if browser_type not in supported_browser_types:
-    raise ValueError('Invalid browser type. Supported values are: %s.' %
-                         ', '.join(supported_browser_types))
+    raise ValueError(
+      'Invalid browser type. Supported values are: %s.'
+      % ', '.join(supported_browser_types)
+    )
   if sys.platform.startswith('win'):
     return _LocateBrowser_Win(browser_type)
   elif sys.platform == 'darwin':
@@ -149,11 +169,15 @@ def _LoadVariations(filename):
   with open(filename, 'r') as f:
     data = f.read().replace('\n', ' ')
   switches = split_variations_cmd.ParseCommandLineSwitchesString(data)
-  return ['--%s=%s' % (switch_name, switch_value) for
-          switch_name, switch_value in switches.items()]
+  return [
+    '--%s=%s' % (switch_name, switch_value)
+    for switch_name, switch_value in switches.items()
+  ]
 
 
-def _BuildBrowserArgs(user_data_dir, extra_browser_args, variations_args):
+def _BuildBrowserArgs(
+  user_data_dir, extra_browser_args, variations_args, is_apk
+):
   """Builds commandline switches browser runs with.
 
   Args:
@@ -162,6 +186,7 @@ def _BuildBrowserArgs(user_data_dir, extra_browser_args, variations_args):
           with.
       variations_args: A list of commandline switches that defines the
           variations cmd browser runs with.
+      is_apk: Whether we're running an APK.
 
   Returns:
       A list of commandline switches.
@@ -171,13 +196,20 @@ def _BuildBrowserArgs(user_data_dir, extra_browser_args, variations_args):
     '--no-first-run',
     '--no-default-browser-check',
     '--user-data-dir=%s' % user_data_dir,
+    '--disable-field-trial-config',
   ]
   browser_args.extend(extra_browser_args)
   browser_args.extend(variations_args)
+
+  if is_apk:
+    return ["--args={}".format(" ".join(browser_args))]
+
   return browser_args
 
 
-def _RunVariations(browser_path, url, extra_browser_args, variations_args):
+def _RunVariations(
+  browser_path, url, extra_browser_args, variations_args, is_apk
+):
   """Launches browser with given variations.
 
   Args:
@@ -187,23 +219,40 @@ def _RunVariations(browser_path, url, extra_browser_args, variations_args):
           with.
       variations_args: A list of commandline switches that defines the
           variations cmd browser runs with.
+      is_apk: Whether we're running an APK.
 
   Returns:
       A set of (returncode, stdout, stderr) from browser subprocess.
   """
   command = [os.path.abspath(browser_path)]
+  if is_apk:
+    command.append("run")
   if url:
     command.append(url)
   tempdir = tempfile.mkdtemp(prefix='bisect_variations_tmp')
-  command.extend(_BuildBrowserArgs(user_data_dir=tempdir,
-                                   extra_browser_args=extra_browser_args,
-                                   variations_args=variations_args))
+  command.extend(
+    _BuildBrowserArgs(
+      user_data_dir=tempdir,
+      extra_browser_args=extra_browser_args,
+      variations_args=variations_args,
+      is_apk=is_apk,
+    )
+  )
   logging.debug(' '.join(command))
 
   subproc = subprocess.Popen(
-      command, bufsize=-1, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  stdout, stderr = subproc.communicate()
-  shutil.rmtree(tempdir, True)
+    command, bufsize=-1, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+  )
+  try:
+    stdout, stderr = subproc.communicate(timeout=None if not is_apk else 15)
+  except subprocess.TimeoutExpired:
+    # APK wrapper scripts do not exit (even if the browser's closed on-device),
+    # so hold on for a bit before prompting. After the prompt is dismissed,
+    # the next iteration of the APK run script will close the browser and
+    # reopen it with new command line args.
+    return 0, "", ""
+  if not is_apk:
+    shutil.rmtree(tempdir, True)
   return (subproc.returncode, stdout, stderr)
 
 
@@ -223,8 +272,10 @@ def _AskCanReproduce(exit_status, stdout, stderr):
   """
   # Loop until we get a response that we can parse.
   while True:
-    response = raw_input('Can we reproduce with given variations file '
-                         '[(y)es/(n)o/(r)etry/(s)tdout/(q)uit]: ').lower()
+    response = input(
+      'Can we reproduce with given variations file '
+      '[(y)es/(n)o/(r)etry/(s)tdout/(q)uit]: '
+    ).lower()
     if response in ('y', 'n', 'r'):
       return response
     if response == 'q':
@@ -234,28 +285,74 @@ def _AskCanReproduce(exit_status, stdout, stderr):
       logging.info(stderr)
 
 
-def Bisect(browser_type, url, extra_browser_args, variations_file, output_dir):
+def Bisect(
+  browser_type,
+  url,
+  browser_path,
+  extra_browser_args,
+  variations_file,
+  output_dir,
+):
   """Bisect variations interactively.
 
   Args:
       browser_type: One of the supported browser type on this platform. See
           --help for the list.
       url: The webpage URL browser launches with.
+      browser_path: Location of the compiled output browser.
       extra_browser_args: A list of commandline switches browser runs with.
       variations_file: A file contains variations commandline switches that
           need to be bisected.
       output_dir: A folder where intermediate bisecting data are stored.
   """
-  browser_path = _LocateBrowser(browser_type)
-  runs = [variations_file]
+  if not browser_path:
+    browser_path = _LocateBrowser(browser_type)
+  if sys.platform.startswith('win'):
+    runs = _EnsureCommandLineLength(variations_file, output_dir)
+  else:
+    runs = [variations_file]
+
+  # All Android wrapper scripts end with _apk
+  is_apk = browser_path.endswith("_apk")
+
+  # Verify that the issue not be reproduced without variations.
+  while True:
+    exit_status, stdout, stderr = _RunVariations(
+      browser_path=browser_path,
+      url=url,
+      extra_browser_args=extra_browser_args,
+      variations_args=[],
+      is_apk=is_apk,
+    )
+    answer = _AskCanReproduce(exit_status, stdout, stderr)
+    if answer == 'y':
+      raise Exception(
+        'The issue was reproduced without any variation flags set. Consider'
+        ' using tools/bisect-builds.py instead.\n'
+        'You might want to try the following command (substitute M100 for a'
+        ' good revision):\n'
+        'python3 tools/bisect-builds.py -g M100 --verify-range --'
+        ' --disable-field-trial-config\n'
+        'See https://www.chromium.org/developers/bisect-builds-py/ for more'
+        ' details.'
+      )
+    elif answer == 'n':
+      # We are expected to not reproduce the issue without variation flags.
+      break
+    else:
+      assert answer == 'r'
+
   while runs:
     run = runs[0]
     print('Run Chrome with variations file', run)
     variations_args = _LoadVariations(run)
     exit_status, stdout, stderr = _RunVariations(
-        browser_path=browser_path, url=url,
-        extra_browser_args=extra_browser_args,
-        variations_args=variations_args)
+      browser_path=browser_path,
+      url=url,
+      extra_browser_args=extra_browser_args,
+      variations_args=variations_args,
+      is_apk=is_apk,
+    )
 
     answer = _AskCanReproduce(exit_status, stdout, stderr)
     if answer == 'y':
@@ -266,33 +363,84 @@ def Bisect(browser_type, url, extra_browser_args, variations_file, output_dir):
         return
     elif answer == 'n':
       if len(runs) == 1:
-        raise Exception('Bisecting failed: should reproduce but did not: %s' %
-                        ' '.join(variations_args))
+        raise ValueError(
+          'Bisecting failed: should reproduce but did not: %s'
+          % ' '.join(variations_args)
+        )
       runs = runs[1:]
     else:
       assert answer == 'r'
 
 
+def _EnsureCommandLineLength(filename, output_dir):
+  """Splits command-line to ensure it isn't too long for Windows.
+
+  Args:
+      filename: A file that contains variations commandline switches.
+      output_dir: A folder where intermediate bisecting data are stored.
+  Returns:
+       List of files containing variations from the input file, split
+       such that no file has a command line too long for Windows.
+  """
+  files_to_process = [filename]
+
+  result = []
+  while len(files_to_process) > 0:
+    new_files = []
+    for f in files_to_process:
+      variations_args = ' '.join(_LoadVariations(f))
+      if len(variations_args) <= _MAX_ARGS_LENGTH_WIN:
+        result.append(f)
+      else:
+        split = split_variations_cmd.SplitVariationsCmdFromFile(f, output_dir)
+        if len(split) == 1:
+          raise ValueError(
+            'Can not split long argument list %s' % variations_args
+          )
+        new_files.extend(split)
+    files_to_process = new_files
+  return result
+
+
 def main():
   parser = optparse.OptionParser()
-  parser.add_option("--browser",
-                    help="select which browser to run. Options include: %s."
-                    " By default, stable is selected." %
-                        ", ".join(_GetSupportedBrowserTypes()))
-  parser.add_option("-v", "--verbose", action="store_true", default=False,
-                    help="print out debug information.")
-  parser.add_option("--extra-browser-args",
-                    help="specify extra command line switches for the browser "
-                    "that are separated by spaces (quoted).")
-  parser.add_option("--url",
-                    help="specify the webpage URL the browser launches with. "
-                    "This is optional.")
-  parser.add_option("--input-file",
-                    help="specify the filename that contains variations cmd "
-                    "to bisect. This has to be specified.")
-  parser.add_option("--output-dir",
-                    help="specify a folder where output files are saved. "
-                    "If not specified, it is the folder of the input file.")
+  parser.add_option(
+    "--browser",
+    help="select which browser to run. Options include: %s."
+    " By default, stable is selected." % ", ".join(_GetSupportedBrowserTypes()),
+  )
+  parser.add_option(
+    "-v",
+    "--verbose",
+    action="store_true",
+    default=False,
+    help="print out debug information.",
+  )
+  parser.add_option(
+    "--extra-browser-args",
+    help="specify extra command line switches for the browser "
+    "that are separated by spaces (quoted).",
+  )
+  parser.add_option(
+    "--url",
+    help="specify the webpage URL the browser launches with. This is optional.",
+  )
+  parser.add_option(
+    "--input-file",
+    help="specify the filename that contains variations cmd "
+    "to bisect. This has to be specified.",
+  )
+  parser.add_option(
+    "--output-dir",
+    help="specify a folder where output files are saved. "
+    "If not specified, it is the folder of the input file.",
+  )
+  parser.add_option(
+    "--browser-path",
+    help="specify location of the browser "
+    "executable or run script. Overrides the default location "
+    "from --browser",
+  )
   options, _ = parser.parse_args()
   if options.verbose:
     logging.basicConfig(level=logging.DEBUG)
@@ -309,9 +457,14 @@ def main():
   extra_browser_args = []
   if options.extra_browser_args is not None:
     extra_browser_args = options.extra_browser_args.split()
-  Bisect(browser_type=browser_type, url=options.url,
-         extra_browser_args=extra_browser_args,
-         variations_file=options.input_file, output_dir=output_dir)
+  Bisect(
+    browser_type=browser_type,
+    url=options.url,
+    browser_path=options.browser_path,
+    extra_browser_args=extra_browser_args,
+    variations_file=options.input_file,
+    output_dir=output_dir,
+  )
   return 0
 
 

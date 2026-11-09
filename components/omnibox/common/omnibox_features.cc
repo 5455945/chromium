@@ -1,315 +1,386 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/common/omnibox_features.h"
 
+#include "base/feature_list.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/feature_map.h"
+#include "base/no_destructor.h"
+#include "components/omnibox/common/jni_headers/OmniboxFeatureMap_jni.h"
+#endif
+
 namespace omnibox {
+namespace {
+constexpr bool IS_ANDROID = !!BUILDFLAG(IS_ANDROID);
+constexpr bool IS_CHROMEOS = !!BUILDFLAG(IS_CHROMEOS);
+constexpr bool IS_IOS = !!BUILDFLAG(IS_IOS);
 
-const auto enabled_by_default_desktop_only =
-#if defined(OS_ANDROID) || defined(OS_IOS)
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#else
-    base::FEATURE_ENABLED_BY_DEFAULT;
-#endif
+constexpr base::FeatureState DISABLED = base::FEATURE_DISABLED_BY_DEFAULT;
+constexpr base::FeatureState ENABLED = base::FEATURE_ENABLED_BY_DEFAULT;
 
-const auto enabled_by_default_android_only =
-#if defined(OS_ANDROID)
-    base::FEATURE_ENABLED_BY_DEFAULT;
-#else
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#endif
-
-const auto enabled_by_default_desktop_android =
-#if defined(OS_IOS)
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#else
-    base::FEATURE_ENABLED_BY_DEFAULT;
-#endif
-
-const auto enabled_by_default_desktop_ios =
-#if defined(OS_ANDROID)
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#else
-    base::FEATURE_ENABLED_BY_DEFAULT;
-#endif
-
-// Comment out this macro since it is currently not being used in this file.
-// const auto enabled_by_default_android_ios =
-// #if defined(OS_ANDROID) || defined(OS_IOS)
-//     base::FEATURE_ENABLED_BY_DEFAULT;
-// #else
-//     base::FEATURE_DISABLED_BY_DEFAULT;
-// #endif
-
-// Allows Omnibox to dynamically adjust number of offered suggestions to fill in
-// the space between Omnibox an the soft keyboard. The number of suggestions
-// shown will be no less than minimum for the platform (eg. 5 for Android).
-const base::Feature kAdaptiveSuggestionsCount{
-    "OmniboxAdaptiveSuggestionsCount", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Feature that enables the tab-switch suggestions corresponding to an open
-// tab, for a button or dedicated suggestion. Enabled by default on Desktop
-// and iOS.
-const base::Feature kOmniboxTabSwitchSuggestions{
-    "OmniboxTabSwitchSuggestions", enabled_by_default_desktop_ios};
-
-// Feature used to enable various experiments on keyword mode, UI and
-// suggestions.
-const base::Feature kExperimentalKeywordMode{"OmniboxExperimentalKeywordMode",
-                                             base::FEATURE_DISABLED_BY_DEFAULT};
+constexpr base::FeatureState enable_if(bool condition) {
+  return condition ? ENABLED : DISABLED;
+}
+}  // namespace
 
 // Feature to enable showing thumbnail in front of the Omnibox clipboard image
 // search suggestion.
-const base::Feature kImageSearchSuggestionThumbnail{
-    "ImageSearchSuggestionThumbnail", enabled_by_default_android_only};
-
-// Feature to enable the search provider to send a request to the suggest
-// server on focus.  This allows the suggest server to warm up, by, for
-// example, loading per-user models into memory.  Having a per-user model
-// in memory allows the suggest server to respond more quickly with
-// personalized suggestions as the user types.
-const base::Feature kSearchProviderWarmUpOnFocus{
-    "OmniboxWarmUpSearchProviderOnFocus", enabled_by_default_desktop_android};
-
-// Feature used to display the title of the current URL match.
-const base::Feature kDisplayTitleForCurrentUrl{
-    "OmniboxDisplayTitleForCurrentUrl", base::FEATURE_ENABLED_BY_DEFAULT};
-
-// Feature used to fetch document suggestions.
-const base::Feature kDocumentProvider{"OmniboxDocumentProvider",
-                                      base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kImageSearchSuggestionThumbnail, enable_if(IS_ANDROID));
 
 // Feature used to allow users to remove suggestions from clipboard.
-const base::Feature kOmniboxRemoveSuggestionsFromClipboard{
-    "OmniboxRemoveSuggestionsFromClipboard", enabled_by_default_android_only};
+BASE_FEATURE(kOmniboxRemoveSuggestionsFromClipboard, enable_if(IS_ANDROID));
 
-// Feature to debounce drive requests from the document provider.
-const base::Feature kDebounceDocumentProvider{
-    "OmniboxDebounceDocumentProvider", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Demotes the relevance scores when comparing suggestions based on the
-// suggestion's |AutocompleteMatchType| and the user's |PageClassification|.
-// This feature's main job is to contain the DemoteByType parameter.
-const base::Feature kOmniboxDemoteByType{"OmniboxDemoteByType",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Feature used to cap max zero suggestions shown according to the param
-// OmniboxMaxZeroSuggestMatches. If omitted,
-// OmniboxUIExperimentMaxAutocompleteMatches will be used instead. If present,
-// OmniboxMaxZeroSuggestMatches will override
-// OmniboxUIExperimentMaxAutocompleteMatches when |from_omnibox_focus| is true.
-const base::Feature kMaxZeroSuggestMatches{"OmniboxMaxZeroSuggestMatches",
-                                           base::FEATURE_DISABLED_BY_DEFAULT};
+// When enabled, uses the grouping framework with prefixed suggestions (i.e.
+// autocomplete_grouper_sections.h) to limit and group (but not sort) matches.
+BASE_FEATURE(kGroupingFrameworkForNonZPS,
+             "OmniboxGroupingFrameworkForNonZPS",
+             enable_if(IS_ANDROID));
 
 // Feature used to cap max suggestions shown according to the params
 // UIMaxAutocompleteMatches and UIMaxAutocompleteMatchesByProvider.
-const base::Feature kUIExperimentMaxAutocompleteMatches{
-    "OmniboxUIExperimentMaxAutocompleteMatches",
-    base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Feature used to cap the number of URL-type matches shown within the
-// Omnibox. If enabled, the number of URL-type matches is limited (unless
-// there are no more non-URL matches available.) If enabled, there is a
-// companion parameter - OmniboxMaxURLMatches - which specifies the maximum
-// desired number of URL-type matches.
-const bool kOmniboxMaxURLMatchesEnabledByDefault =
-#if defined(OS_IOS) || defined(OS_ANDROID)
-    false;
-#else
-    true;
-#endif
-const base::Feature kOmniboxMaxURLMatches{
-    "OmniboxMaxURLMatches", kOmniboxMaxURLMatchesEnabledByDefault
-                                ? base::FEATURE_ENABLED_BY_DEFAULT
-                                : base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kUIExperimentMaxAutocompleteMatches,
+             "OmniboxUIExperimentMaxAutocompleteMatches",
+             DISABLED);
 
 // Feature used to cap max suggestions to a dynamic limit based on how many URLs
 // would be shown. E.g., show up to 10 suggestions if doing so would display no
 // URLs; else show up to 8 suggestions if doing so would include 1 or more URLs.
-const base::Feature kDynamicMaxAutocomplete{"OmniboxDynamicMaxAutocomplete",
-                                            enabled_by_default_desktop_only};
+BASE_FEATURE(kDynamicMaxAutocomplete,
+             "OmniboxDynamicMaxAutocomplete",
+             enable_if(!IS_IOS));
 
-// If enabled, when the user clears the whole omnibox text (i.e. via Backspace),
-// Chrome will request remote ZeroSuggest suggestions for the OTHER page
-// classification (contextual web).
-const base::Feature kClobberTriggersContextualWebZeroSuggest{
-    "OmniboxClobberTriggersContextualWebZeroSuggest",
-    enabled_by_default_desktop_only};
+// Enables omnibox focus as a trigger for zero-prefix suggestions on web and
+// SRP, subject to the same requirements and conditions as on-clobber
+// suggestions.
+BASE_FEATURE(kFocusTriggersWebAndSRPZeroSuggest,
+             "OmniboxFocusTriggersWebAndSRPZeroSuggest",
+             ENABLED);
 
-// Used to adjust the age threshold since the last visit in order to consider a
-// normalized keyword search term as a zero-prefix suggestion. If disabled, the
-// default value of 7 days is used. If enabled, the age threshold is determined
-// by this feature's companion parameter,
-// OmniboxFieldTrial::kOmniboxLocalZeroSuggestAgeThresholdParam.
-const base::Feature kOmniboxLocalZeroSuggestAgeThreshold{
-    "OmniboxLocalZeroSuggestAgeThreshold", base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables on-clobber suggestions on iOS.
+BASE_FEATURE(kOnClobberSuggestIOS, ENABLED);
 
-// Used to force enable/disable trending zero-prefix suggestions on the NTP
-// (Omnibox and NTP realbox). This feature triggers a server-side behavior only
-// and has no direct impact on the client behavior.
-const base::Feature kOmniboxTrendingZeroPrefixSuggestionsOnNTP{
-    "OmniboxTrendingZeroPrefixSuggestionsOnNTP",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// If enabled, contextual suggestion group headers in the Omnibox popup will
+// be hidden (e.g. in order to minimize visual clutter in the zero-prefix
+// state).
+BASE_FEATURE(kHideContextualGroupHeaders, DISABLED);
 
-// Enables on-focus suggestions on the Open Web, that are contextual to the
-// current URL. Will only work if user is signed-in and syncing, or is
-// otherwise eligible to send the current page URL to the suggest server.
-//
-// There's multiple flags here for multiple backend configurations:
-//  - Default (search queries)
-//  - On-Content Suggestions
-const base::Feature kOnFocusSuggestionsContextualWeb{
-    "OmniboxOnFocusSuggestionsContextualWeb",
-    base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kOnFocusSuggestionsContextualWebOnContent{
-    "OmniboxOnFocusSuggestionsContextualWebOnContent",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// If enabled, suggestion group headers in the Omnibox popup will be hidden
+// (e.g. in order to minimize visual clutter in the zero-prefix state).
+BASE_FEATURE(kHideSuggestionGroupHeaders,
+             "OmniboxHideSuggestionGroupHeaders",
+             ENABLED);
 
-// Allows the LocalHistoryZeroSuggestProvider to use local search history.
-const base::Feature kLocalHistoryZeroSuggest{
-    "LocalHistoryZeroSuggest", enabled_by_default_desktop_android};
+// Enables local history zero-prefix suggestions in every context in which the
+// remote zero-prefix suggestions are enabled.
+// On SRPs and web pages, the corresponding zero-suggest prefetching feature
+// must also be enabled.
+BASE_FEATURE(kLocalHistoryZeroSuggestBeyondNTP, DISABLED);
 
-// Features to provide non personalized head search suggestion from a compact
-// on device model. More specifically, feature name with suffix Incognito /
-// NonIncognito will only controls behaviors under incognito / non-incognito
-// mode respectively.
-const base::Feature kOnDeviceHeadProviderIncognito{
-    "OmniboxOnDeviceHeadProviderIncognito", base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kOnDeviceHeadProviderNonIncognito{
-    "OmniboxOnDeviceHeadProviderNonIncognito",
-    base::FEATURE_ENABLED_BY_DEFAULT};
+// Enables showing tabs from other devices in zero-prefix suggest.
+BASE_FEATURE(kOmniboxCrossDeviceTabZeroSuggest, DISABLED);
+BASE_FEATURE_PARAM(int,
+                   kOmniboxCrossDeviceTabZeroSuggestMaxAgeMinutes,
+                   &kOmniboxCrossDeviceTabZeroSuggest,
+                   5);
+BASE_FEATURE_PARAM(
+    int,
+    kOmniboxCrossDeviceTabZeroSuggestDelayedContinuationMaxAgeMinutes,
+    &kOmniboxCrossDeviceTabZeroSuggest,
+    720);
+BASE_FEATURE_PARAM(
+    int,
+    kOmniboxCrossDeviceTabZeroSuggestMaxDelayedContinuationUptimeMinutes,
+    &kOmniboxCrossDeviceTabZeroSuggest,
+    5);
 
-// If enabled, changes the way Google-provided search suggestions are scored by
-// the backend. Note that this Feature is only used for triggering a server-
-// side experiment config that will send experiment IDs to the backend. It is
-// not referred to in any of the Chromium code.
-const base::Feature kOmniboxExperimentalSuggestScoring{
-    "OmniboxExperimentalSuggestScoring", base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the use of a request debouncer to throttle the number of ZPS prefetch
+// requests initiated over a given period of time (to help minimize the
+// performance impact of ZPS prefetching on the remote Suggest service).
+BASE_FEATURE(kZeroSuggestPrefetchDebouncing, DISABLED);
 
-// If enabled, the HistoryQuickProvider's InMemoryURLIndex service never
-// persists its index to a cache file on shutdown, and instead always rebuilds
-// it from the HistoryService on startup. Persisting the index to disk causes
-// over 10% of all shutdown hangs.
-const base::Feature kHistoryQuickProviderAblateInMemoryURLIndexCacheFile{
-    "OmniboxHistoryQuickProviderAblateInMemoryURLIndexCacheFile",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables prefetching of the zero prefix suggestions for composebox contexts.
+BASE_FEATURE(kZeroSuggestPrefetchingForComposebox, DISABLED);
 
-// If enabled, suggestions from a cgi param name match are scored to 0.
-const base::Feature kDisableCGIParamMatching{"OmniboxDisableCGIParamMatching",
-                                             base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables prefetching of the zero prefix suggestions for eligible users on SRP.
+BASE_FEATURE(kZeroSuggestPrefetchingOnSRP, enable_if(!IS_ANDROID));
 
-// Features used to enable matching short inputs to bookmarks for suggestions.
-// By default, if both of the following are disabled, input words shorter than 3
-//   characters won't prefix match bookmarks. E.g., the inputs 'abc x' or 'x'
-//   won't match bookmark text 'abc xyz'.
-// If |kShortBookmarkSuggestions()| is enabled, this limitation is lifted and
-//   both inputs 'abc x' and 'x' can match bookmark text 'abc xyz'.
-// If |kShortBookmarkSuggestionsByTotalInputLength()| is enabled, matching is
-//   limited by input length rather than input word length. Input 'abc x' can
-//   but input 'x' can't match bookmark text 'abc xyz'.
-const base::Feature kShortBookmarkSuggestions{
-    "OmniboxShortBookmarkSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kShortBookmarkSuggestionsByTotalInputLength{
-    "OmniboxShortBookmarkSuggestionsByTotalInputLength",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables prefetching of the zero prefix suggestions for eligible users on the
+// Web (i.e. non-NTP and non-SRP URLs).
+BASE_FEATURE(kZeroSuggestPrefetchingOnWeb, DISABLED);
 
-// If enabled, inputs may match bookmark paths. These path matches won't
-// contribute to scoring. E.g. 'planets jupiter' can suggest a bookmark titled
-// 'Jupiter' with URL 'en.wikipedia.org/wiki/Jupiter' located in a path
-// containing 'planet.'
-const base::Feature kBookmarkPaths{"OmniboxBookmarkPaths",
-                                   base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables triggering zero-suggest prefetch when a page finishes loading on
+// Android, aligning with Desktop's page-load and tab-switch behavior.
+BASE_FEATURE(kZeroSuggestPrefetchOnPageLoadAndTabSwitch, DISABLED);
 
-// If enabled, clipboard suggestion will not show the clipboard content until
-// the user clicks the reveal button.
-const base::Feature kClipboardSuggestionContentHidden = {
-    "ClipboardSuggestionContentHidden", enabled_by_default_android_only};
+// Features to provide head and tail non personalized search suggestion from
+// compact on device models. More specifically, feature name with suffix
+// Incognito / NonIncognito  will only controls behaviors under incognito /
+// non-incognito mode respectively.
+BASE_FEATURE(kOnDeviceHeadProviderIncognito,
+             "OmniboxOnDeviceHeadProviderIncognito",
+             ENABLED);
+BASE_FEATURE(kOnDeviceHeadProviderNonIncognito,
+             "OmniboxOnDeviceHeadProviderNonIncognito",
+             ENABLED);
+BASE_FEATURE(kOnDeviceTailModel,
+             "OmniboxOnDeviceTailModel",
+             enable_if(IS_ANDROID || IS_IOS));
+BASE_FEATURE(kOnDeviceTailEnableEnglishModel,
+             "OmniboxOnDeviceTailEnableEnglishModel",
+             ENABLED);
 
-// If enabled, shows slightly more compact suggestions, allowing the
-// kAdaptiveSuggestionsCount feature to fit more suggestions on screen.
-const base::Feature kCompactSuggestions{"OmniboxCompactSuggestions",
-                                        base::FEATURE_DISABLED_BY_DEFAULT};
+// Feature used to fetch document suggestions.
+BASE_FEATURE(kDocumentProvider, "OmniboxDocumentProvider", enable_if(!IS_IOS));
 
-// If enabled, frequently visited sites are presented in form of a single row
-// with a carousel of tiles, instead of one URL per row.
-extern const base::Feature kMostVisitedTiles{"OmniboxMostVisitedTiles",
-                                             base::FEATURE_DISABLED_BY_DEFAULT};
+// If enabled, the authentication requirement for Drive suggestions is based on
+// whether the primary account is available, i.e., the user is signed into
+// Chrome, rarther than checking if any signed in account is available in the
+// cookie jar.
+BASE_FEATURE(kDocumentProviderPrimaryAccountRequirement,
+             "OmniboxDocumentProviderPrimaryAccountRequirement",
+             ENABLED);
+
+// If enabled, the primary account must be subject to enterprise policies in
+// order to receive Drive suggestions.
+BASE_FEATURE(kDocumentProviderEnterpriseEligibility,
+             "OmniboxDocumentProviderEnterpriseEligibility",
+             ENABLED);
+
+// If enabled, the enterprise eligibility requirement for Drive suggestions
+// is considered met even when the account capability is unknown. Has no effect
+// if kDocumentProviderEnterpriseEligibility is disabled.
+BASE_FEATURE(kDocumentProviderEnterpriseEligibilityWhenUnknown,
+             "OmniboxDocumentProviderEnterpriseEligibilityWhenUnknown",
+             DISABLED);
+
+// If enabled, the omnibox popup is not presented until the mouse button is
+// released.
+BASE_FEATURE(kShowPopupOnMouseReleased,
+             "OmniboxShowPopupOnMouseReleased",
+             ENABLED);
+
+// If enabled, makes Most Visited Tiles a Horizontal render group.
+// Horizontal render group decomposes aggregate suggestions (such as old Most
+// Visited Tiles), expecting individual AutocompleteMatch entry for every
+// element in the carousel.
+BASE_FEATURE(kMostVisitedTilesHorizontalRenderGroup,
+             "OmniboxMostVisitedTilesHorizontalRenderGroup",
+             enable_if(IS_ANDROID));
 
 // If enabled, expands autocompletion to possibly (depending on params) include
 // suggestion titles and non-prefixes as opposed to be restricted to URL
 // prefixes. Will also adjust the location bar UI and omnibox text selection to
 // accommodate the autocompletions.
-const base::Feature kRichAutocompletion{"OmniboxRichAutocompletion",
-                                        base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kRichAutocompletion, "OmniboxRichAutocompletion", ENABLED);
 
-// Feature used to enable the second batch of Pedals (Safety Check, etc.).
-const base::Feature kOmniboxPedalsBatch2{"OmniboxPedalsBatch2",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the AIM eligibility diagnostic component extension.
+BASE_FEATURE(kAimEligibilityComponentExtension, DISABLED);
+const base::FeatureParam<bool> kAimEligibilityUseComponentUpdater{
+    &kAimEligibilityComponentExtension, "use_component_updater", true};
 
-// Feature used to enable the second batch of Pedals (Safety Check, etc.)
-// for non-English locales (English locales are 'en' and 'en-GB').
-// This feature is only meaningful if `OmniboxPedalsBatch2` is enabled.
-const base::Feature kOmniboxPedalsBatch2NonEnglish{
-    "OmniboxPedalsBatch2NonEnglish", base::FEATURE_DISABLED_BY_DEFAULT};
+// Whether the aim button should dynamically change to portray the submission
+// type.
+BASE_FEATURE(kDynamicAimSubmit, DISABLED);
 
-// Feature used to enable the third batch of Pedals.
-const base::Feature kOmniboxPedalsBatch3{"OmniboxPedalsBatch3",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
+const base::FeatureParam<bool> kShowRhsAimHint{&kDynamicAimSubmit,
+                                               "Omnibox_ShowRhsAimHint", false};
 
-// Feature that enables use of the colored version of the default Pedal icon.
-const base::Feature kOmniboxPedalsDefaultIconColored{
-    "OmniboxPedalsDefaultIconColored", base::FEATURE_DISABLED_BY_DEFAULT};
+// When enabled, the multimodal input button is shown in the Omnibox.
+BASE_FEATURE(kOmniboxMultimodalInput, ENABLED);
 
-// Feature that enables loading synonyms from the translation console.
-const base::Feature kOmniboxPedalsTranslationConsole{
-    "OmniboxPedalsTranslationConsole", base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables popup variations (e.g. accordion menu) for mobile Fusebox.
+BASE_FEATURE(kOmniboxFuseboxPopupVariations, DISABLED);
 
-// Feature used to enable the keyword search button.
-const base::Feature kOmniboxKeywordSearchButton{
-    "OmniboxKeywordSearchButton", enabled_by_default_desktop_only};
+// Enables model subtext and popup subtext in the Fusebox popup.
+BASE_FEATURE(kOmniboxFuseboxUserEdModelSubtitles, DISABLED);
 
-// Enables new UI changes indicating focus and hover states.
-const base::Feature kOmniboxRefinedFocusState{"OmniboxRefinedFocusState",
-                                              enabled_by_default_desktop_only};
+// Enables the (+) attachment button IPH in the Omnibox.
+BASE_FEATURE(kOmniboxFuseboxUserEdPlusButtonIph, DISABLED);
 
-// If enabled, uses WebUI to render the omnibox suggestions popup, similar to
-// how the NTP "realbox" is implemented.
-const base::Feature kWebUIOmniboxPopup{"WebUIOmniboxPopup",
-                                       base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the first-time tab selection IPH in the Tab Picker.
+BASE_FEATURE(kOmniboxFuseboxUserEdTabPickerIph, DISABLED);
 
-// Enables rollout of changing the default behavior for DNS interception checks
-// and did-you-mean infobar.
-// Users who are in the enabled group for this feature will have interception
-// checks and did-you-mean turned off. Enterprise Policy takes precedence over
-// this setting, and policy is checked before the feature group is checked and
-// marked.
-const base::Feature kIntranetRedirectBehaviorPolicyRollout{
-    "OmniboxDNSInterceptionChecksPolicyRollout",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the cold-start hint animation in the NTP search box.
+BASE_FEATURE(kOmniboxFuseboxUserEdFakeboxAnimation, DISABLED);
 
-// When enabled, use Assistant for omnibox voice query recognition instead of
-// Android's built-in voice recognition service. Only works on Android.
-const base::Feature kOmniboxAssistantVoiceSearch{
-    "OmniboxAssistantVoiceSearch", base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the Fusebox guided tour and NTP promo card.
+BASE_FEATURE(kOmniboxFuseboxUserEdGuidedTour, DISABLED);
 
-// When enabled, a setting is added to chrome://settings/searchEngines to
-// control whether <space> can be used to trigger keyword mode.
-const base::Feature kKeywordSpaceTriggeringSetting{
-    "OmniboxKeywordSpaceTriggeringSetting", enabled_by_default_desktop_only};
+// Disables tab attachments for Canvas requests and disables Canvas if tabs are
+// attached.
+BASE_FEATURE(kOmniboxDisableTabsForCanvas, ENABLED);
 
-// When enabled, add an Active Search Engines category to
-// chrome://settings/searchEngines. This section contains any search engines
-// that have been used or manually added/modified by the user.
-const base::Feature kActiveSearchEngines{"OmniboxActiveSearchEngines",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
+// When enabled, AIM queries submitted from the Omnibox while on a web page open
+// in a new tab instead of navigating away from the current page.
+BASE_FEATURE(kOmniboxAimOpenInNewTab, DISABLED);
 
-// Experiment to introduce new security indicators for HTTPS.
-const base::Feature kUpdatedConnectionSecurityIndicators{
-    "OmniboxUpdatedConnectionSecurityIndicators",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the AIM entrypoint for third party search engines.
+BASE_FEATURE(kAim3pEntrypoint, ENABLED);
+const base::FeatureParam<bool> kAim3pEntrypointDebug{
+    &kAim3pEntrypoint, "Aim3pEntrypointDebug", false};
+
+// When enabled, AI mode will remove verbatim suggestions from the suggestions
+// list.
+BASE_FEATURE(kAIMSuppressVerbatimMatch, ENABLED);
+
+// When enabled, the AIM WebUI popup will defer showing until the WebUI has
+// painted a clean frame, avoiding the issue of the popup being shown with a
+// stale frame.
+BASE_FEATURE(kOmniboxAimDeferShowUntilVisualStateReady, ENABLED);
+// Consulted instead of `kOmniboxAimDeferShowUntilVisualStateReady` when the
+// full WebUI omnibox is enabled, where the deferred show is not needed and only
+// adds latency. See `omnibox::ShouldDeferAimShowUntilVisualStateReady()`.
+BASE_FEATURE(kOmniboxAimDeferShowUntilVisualStateReadyWithFullWebUI, DISABLED);
+// When enabled, the AIM WebUI popup does not create its WebUI content (and so
+// its WebContents and renderer) while the browser window is built. It creates
+// it after the browser window's first presentation, or earlier if the popup is
+// shown or another caller needs the AIM WebContents. See
+// `OmniboxPopupAimPresenter` and `kOmniboxAimPopupCreateOnFirstPresentation`.
+// Enabled on ChromeOS, where session restore at login creates every restored
+// window at once.
+BASE_FEATURE(kOmniboxAimPopupDeferCreation, enable_if(IS_CHROMEOS));
+// When enabled, the WebUI omnibox popup that shows suggestions does not create
+// its WebUI content (and so its WebContents and renderer) while the browser
+// window is built. It creates it after the browser window's first
+// presentation, or earlier if the popup is shown. See `OmniboxPopupPresenter`
+// and `kOmniboxWebUIPopupCreateOnFocus`.
+// Enabled on ChromeOS, like `kOmniboxAimPopupDeferCreation`.
+BASE_FEATURE(kOmniboxWebUIPopupDeferCreation, enable_if(IS_CHROMEOS));
+// When enabled, the Omnibox WebUI popup will defer showing until the WebUI has
+// painted a clean frame, avoiding the issue of the popup being shown with a
+// stale frame.
+BASE_FEATURE(kOmniboxWebUIDeferShowUntilVisualStateReady, DISABLED);
+// When enabled, the Omnibox Full WebUI popup will defer showing until the
+// WebUI has painted a clean frame, avoiding the issue of the popup being shown
+// with a stale frame.
+// TODO(b/549125538): Figure out why timeout is consistently being hit.
+BASE_FEATURE(kOmniboxFullWebUIDeferShowUntilVisualStateReady, DISABLED);
+// When enabled, the Omnibox WebUI popup will debounce auto-resize events.
+BASE_FEATURE(kOmniboxWebUIDebounceResize, ENABLED);
+// When enabled, the AIM WebUI popup will debounce auto-resize events.
+BASE_FEATURE(kOmniboxAimDebounceResize, DISABLED);
+// When enabled, the Omnibox Full WebUI popup will debounce auto-resize events.
+BASE_FEATURE(kOmniboxFullWebUIDebounceResize, DISABLED);
+// When enabled, height workarounds are applied for the Omnibox WebUI popup.
+BASE_FEATURE(kOmniboxWebUIHeightWorkarounds, ENABLED);
+// When enabled, height workarounds are applied for the AIM WebUI popup.
+BASE_FEATURE(kOmniboxAimHeightWorkarounds, ENABLED);
+// Consulted instead of `kOmniboxAimHeightWorkarounds` when the full WebUI
+// omnibox is enabled, where the workarounds are not needed and cause visible
+// resize jank. See `omnibox::ShouldApplyAimHeightWorkarounds()`.
+BASE_FEATURE(kOmniboxAimHeightWorkaroundsWithFullWebUI, DISABLED);
+// When enabled, height workarounds are applied for the Omnibox Full WebUI popup.
+BASE_FEATURE(kOmniboxFullWebUIHeightWorkarounds, DISABLED);
+// If enabled, stabilizes the popup showing behavior on startup by forcing
+// layout with a 1px height and hiding it initially to avoid visual artifacts.
+BASE_FEATURE(kOmniboxWebUIPopupStabilizeStartupShow, ENABLED);
+// When enabled, the AIM WebUI popup will detach its web contents when hidden.
+BASE_FEATURE(kOmniboxAimDetachWebContentsOnHide, ENABLED);
+// When enabled, the Omnibox WebUI popup will detach its web contents when
+// hidden.
+BASE_FEATURE(kOmniboxWebUIDetachWebContentsOnHide, ENABLED);
+// When enabled, the Omnibox Full WebUI popup will detach its web contents
+// when hidden.
+BASE_FEATURE(kOmniboxFullWebUIDetachWebContentsOnHide, ENABLED);
+
+// When enabled, the Omnibox WebUI popup will mark its web contents as hidden
+// when hidden, to unlock frames from compositor cache.
+BASE_FEATURE(kOmniboxWebUIPopupMarkAsHidden, ENABLED);
+
+// When enabled, the Omnibox WebUI popup will evict its saved compositor frame
+// when hidden.
+BASE_FEATURE(kOmniboxWebUIEvictOnHide, DISABLED);
+
+// When enabled, the AIM WebUI popup will evict its saved compositor frame
+// when hidden.
+BASE_FEATURE(kOmniboxAimEvictOnHide, DISABLED);
+
+// Consulted instead of `kOmniboxAimEvictOnHide` when the full WebUI omnibox is
+// enabled, where evicting the stale frame is needed to avoid showing it on the
+// next show. See `omnibox::ShouldAimEvictOnHide()`.
+BASE_FEATURE(kOmniboxAimEvictOnHideWithFullWebUI, ENABLED);
+
+// When enabled, the Omnibox Full WebUI popup will evict its saved compositor
+// frame when hidden.
+BASE_FEATURE(kOmniboxFullWebUIEvictOnHide, ENABLED);
+
+// When enabled, the AIM WebUI popup's drop shadow is painted by the page
+// rather than by the Views frame. Only takes effect when both the AIM
+// popup and the full WebUI popup are enabled.
+BASE_FEATURE(kOmniboxAimWebUIShadow, ENABLED);
+
+// Same as `kOmniboxAimWebUIShadow`, but for the full WebUI popup.
+BASE_FEATURE(kOmniboxFullWebUIShadow, ENABLED);
+
+// When enabled, sizes the AIM popup child WebView bounds directly to its
+// preferred height in RoundedOmniboxResultsFrame and eliminates transient
+// height resets on hide.
+BASE_FEATURE(kOmniboxAimSizeWebViewToPreferredHeight, DISABLED);
+
+// When enabled, sizes the Classic WebUI popup child WebView bounds directly to
+// its preferred height in RoundedOmniboxResultsFrame and eliminates transient
+// height resets on hide.
+BASE_FEATURE(kOmniboxWebUISizeWebViewToPreferredHeight, DISABLED);
+
+// When enabled, sizes the Full WebUI popup child WebView bounds directly to its
+// preferred height in RoundedOmniboxResultsFrame and eliminates transient
+// height resets on hide/tab switch.
+BASE_FEATURE(kOmniboxFullWebUISizeWebViewToPreferredHeight, DISABLED);
+
+// When enabled, the Omnibox WebUI popup presenter will explicitly hide the
+// widget upon creation, preventing pre-warmed child widgets from inheriting
+// parent window visibility and locking compositor frames.
+BASE_FEATURE(kOmniboxWebUIPopupHideOnCreation, DISABLED);
+
+// When enabled, a WebUI omnibox popup presenter creates its native widget on
+// the first `Show()` instead of when the popup is created with the browser
+// window. The WebContents is still created and loaded up front. Kill switch.
+BASE_FEATURE(kOmniboxWebUIPopupCreateWidgetOnShow, ENABLED);
+
+// When enabled, a WebUI omnibox popup destroys its widget when it is hidden
+// and builds a fresh one on the next show, so the new native window has no
+// previous compositor content to present. This is applied to every WebUI popup
+// presenter, including the AI Mode popup, but only takes effect when the full
+// WebUI omnibox is enabled. The WebUI container (and its WebContents) is
+// preserved across the swap, so this does not discard the pre-warmed renderer.
+BASE_FEATURE(kOmniboxFullWebUIDestroyWidgetOnHide, ENABLED);
+// Per-popup counterparts of `kOmniboxFullWebUIDestroyWidgetOnHide` that
+// take effect regardless of whether the full WebUI omnibox is enabled.
+BASE_FEATURE(kOmniboxAimDestroyWidgetOnHide, ENABLED);
+BASE_FEATURE(kOmniboxWebUIDestroyWidgetOnHide, DISABLED);
+
+// When enabled, the browser windows of a profile share their classic and AI
+// Mode WebUI popups. A window that needs a popup takes an idle one of the same
+// kind from another window instead of loading a new WebContents, and skips
+// prewarming one if another window already has one.
+BASE_FEATURE(kOmniboxWebUIPopupShareAcrossWindows, DISABLED);
+
+// When enabled, a location bar creates its AI Mode popup (and the WebContents
+// behind it) only once the profile is eligible for it, instead of at window
+// creation. Ineligible profiles never show the popup, so this saves one
+// WebUI document per window. Kill switch.
+BASE_FEATURE(kOmniboxAimPopupRequireEligibility, ENABLED);
+
+// When enabled, the WebUI searchbox will bypass OmniboxController and
+// OmniboxEditModel.
+BASE_FEATURE(kWebUISearchboxWithoutModelController, DISABLED);
+
+// If enabled, debounces soft keyboard show/hide transitions in the Omnibox and
+// suppresses the legacy NTP fakebox accessibility focus reset that hides the
+// keyboard right after showing it. See crbug.com/534375541.
+// Enabled by default; retained as a kill switch.
+BASE_FEATURE(kOmniboxDebounceKeyboardVisibility, ENABLED);
+
+// When enabled, skips redundant pre-tab omnibox/location-bar updates during
+// `LocationBarView::Init()`, coalesces redundant `LocationBarView::OnChanged()`
+// and `LocationIconView::Update()` calls during `LocationBarView::Update()`,
+// and avoids the duplicate `TextChanged()` call in `OmniboxView::RevertAll()`.
+BASE_FEATURE(kOmniboxSkipRedundantLocationBarUpdates, ENABLED);
 
 // Feature used to default typed navigations to use HTTPS instead of HTTP.
 // This only applies to navigations that don't have a scheme such as
@@ -317,8 +388,16 @@ const base::Feature kUpdatedConnectionSecurityIndicators{
 // loads http://example.com. When this feature is enabled, it should load
 // https://example.com instead, with fallback to http://example.com if
 // necessary.
-const base::Feature kDefaultTypedNavigationsToHttps{
-    "OmniboxDefaultTypedNavigationsToHttps", base::FEATURE_ENABLED_BY_DEFAULT};
+// TODO(crbug.com/375004882): On non-iOS platforms, this feature is now
+// superseded by HTTPS-Upgrades and will be removed in the near future.
+BASE_FEATURE(kDefaultTypedNavigationsToHttps,
+             "OmniboxDefaultTypedNavigationsToHttps",
+             enable_if(IS_IOS));
+
+// Override the delay to create a spare renderer when the omnibox is focused
+// on Android.
+BASE_FEATURE(kOverrideAndroidOmniboxSpareRendererDelay, DISABLED);
+
 // Parameter name used to look up the delay before falling back to the HTTP URL
 // while trying an HTTPS URL. The parameter is treated as a TimeDelta, so the
 // unit must be included in the value as well (e.g. 3s for 3 seconds).
@@ -327,7 +406,475 @@ const base::Feature kDefaultTypedNavigationsToHttps{
 // - Otherwise, a new navigation to the the fallback HTTP URL is started.
 const char kDefaultTypedNavigationsToHttpsTimeoutParam[] = "timeout";
 
-// Spare renderer warmup for faster website loading.
-const base::Feature kOmniboxSpareRenderer{"OmniboxSpareRenderer",
-                                          base::FEATURE_ENABLED_BY_DEFAULT};
+// If enabled, logs Omnibox URL scoring signals to OmniboxEventProto for
+// training the ML scoring models.
+BASE_FEATURE(kLogUrlScoringSignals, DISABLED);
+
+// If true, enables history scoring signal annotator for populating history
+// scoring signals associated with Search suggestions. These signals will be
+// empty for Search suggestions otherwise.
+BASE_FEATURE(kEnableHistoryScoringSignalsAnnotatorForSearches, DISABLED);
+
+// If enabled, (floating-point) ML model scores are mapped to (integral)
+// relevance scores by means of a piecewise function. This allows for the
+// integration of URL model scores with search traditional scores.
+BASE_FEATURE(kMlUrlPiecewiseMappedSearchBlending, DISABLED);
+
+// If enabled, the ML scoring service will make use of an in-memory ML score
+// cache in order to speed up the overall scoring process.
+BASE_FEATURE(kMlUrlScoreCaching, enable_if(!IS_ANDROID));
+
+// If enabled, runs the ML scoring model to assign new relevance scores to the
+// URL suggestions and reranks them.
+BASE_FEATURE(kMlUrlScoring, enable_if(!IS_ANDROID));
+
+// If enabled, specifies how URL model scores integrate with search traditional
+// scores.
+BASE_FEATURE(kMlUrlSearchBlending, DISABLED);
+
+// If enabled, creates Omnibox autocomplete URL scoring model. Prerequisite for
+// `kMlUrlScoring` & `kMlUrlSearchBlending`.
+BASE_FEATURE(kUrlScoringModel, enable_if(!IS_ANDROID));
+
+// If enabled, sends a signal when a user touches down on a search suggestion to
+// |SearchPrefetchService|. |SearchPrefetchService| will then prefetch
+// suggestion iff the SearchNavigationPrefetch feature and "touch_down" param
+// are enabled.
+BASE_FEATURE(kOmniboxTouchDownTriggerForPrefetch, enable_if(IS_ANDROID));
+
+// If enabled, sets up an off-main-thread (OMT) input receiver on Android to
+// trigger prefetch requests immediately on touch down.
+BASE_FEATURE(kOmniboxPrefetchSelectedSuggestionsOmtAndroid, DISABLED);
+
+// Enables simultaneous prefetch and navigation on Enter KeyDown in Omnibox.
+BASE_FEATURE(kOmniboxSearchPrefetchOnEnterKeyDown, DISABLED);
+
+// If enabled, surfaces recent tabs, including tabs from other devices, as
+// suggestions in the Android Tab Search overlay.
+BASE_FEATURE(kAndroidTabSearchRecentTabs, DISABLED);
+
+// If enabled, shows a close button on open tab suggestions in the Android Tab
+// Search overlay, allowing users to close tabs directly from the suggestions
+// list.
+BASE_FEATURE(kAndroidTabSearchCloseTabButton, DISABLED);
+
+// Enables keyword-based site search functionality on Android devices.
+BASE_FEATURE(kOmniboxSiteSearch, DISABLED);
+
+// Enables additional site search providers for the Site search Starter Pack.
+BASE_FEATURE(kStarterPackExpansion, enable_if(!IS_IOS));
+
+// Enables an informational IPH message at the bottom of the Omnibox directing
+// users to certain starter pack engines.
+BASE_FEATURE(kStarterPackIPH, DISABLED);
+
+// Enables an '@aimode' starter pack keyword for eligible users only.
+BASE_FEATURE(kAiModeStartPack, DISABLED);
+
+// If enabled, |SearchProvider| will not function in Zero Suggest.
+BASE_FEATURE(kAblateSearchProviderWarmup, DISABLED);
+
+// If enabled, hl= is reported in search requests (applicable to iOS only).
+BASE_FEATURE(kReportApplicationLanguageInSearchRequest, ENABLED);
+
+// When enabled, appends the invocation source parameter to search URLs.
+BASE_FEATURE(kOmniboxAppendInvocationSource, DISABLED);
+
+// When enabled, truncates the length of the value attached to the "oq" URL
+// parameter of search URLs.
+BASE_FEATURE(kTruncateSearchUrlOq, DISABLED);
+
+// When enabled, truncates the length of the value attached to the "q" URL
+// parameter of search URLs.
+BASE_FEATURE(kTruncateSearchUrlQ, DISABLED);
+
+// Enable asynchronous Fusebox view inflation.
+BASE_FEATURE(kOmniboxFuseboxAsyncInflation, DISABLED);
+
+// When enabled, the Android omnibox suggestions container starts inflating on a
+// background thread as soon as AutocompleteCoordinator is created (rather than
+// on native initialization), and is never inflated synchronously as a fallback.
+BASE_FEATURE(kOmniboxEarlyInflation, DISABLED);
+
+// When enabled, AIM image attachments will be downscaled on load before
+// reaching the C++ side.
+BASE_FEATURE(kOmniboxAimImageDownscaling, ENABLED);
+
+// Updates various NTP/Omnibox assets and descriptions for visual alignment on
+// iOS.
+BASE_FEATURE(kOmniboxMobileParityUpdate, ENABLED);
+
+// Updates various NTP/Omnibox assets and descriptions for visual alignment on
+// Android and iOS, V2.
+BASE_FEATURE(kOmniboxMobileParityUpdateV2, ENABLED);
+
+// Kill switch. If enabled, the Android X-Geo header is dropped when the device
+// hands back a precise fix for a site that only holds approximate location
+// permission, rather than sending the precise coordinates tagged as coarse.
+BASE_FEATURE(kOmniboxXGeoFailClosedOnPreciseLeak, ENABLED);
+
+// When the first suggestion is a url, the favicon is shown in the status view.
+BASE_FEATURE(kExactMatchFavicons, ENABLED);
+
+// The features below allow tuning number of suggestions offered to users in
+// specific contexts. These features are default enabled and are used to control
+// related fieldtrial parameters.
+BASE_FEATURE(kNumNtpZpsRecentSearches,
+             "OmniboxNumNtpZpsRecentSearches",
+             ENABLED);
+BASE_FEATURE(kNumNtpZpsTrendingSearches,
+             "OmniboxNumNtpZpsTrendingSearches",
+             ENABLED);
+BASE_FEATURE(kNumWebZpsRecentSearches,
+             "OmniboxNumWebZpsRecentSearches",
+             ENABLED);
+BASE_FEATURE(kNumWebZpsRelatedSearches,
+             "OmniboxNumWebZpsRelatedSearches",
+             ENABLED);
+BASE_FEATURE(kNumWebZpsMostVisitedUrls,
+             "OmniboxNumWebZpsMostVisitedUrls",
+             ENABLED);
+BASE_FEATURE(kNumSrpZpsRecentSearches,
+             "OmniboxNumSrpZpsRecentSearches",
+             ENABLED);
+BASE_FEATURE(kNumSrpZpsRelatedSearches,
+             "OmniboxNumSrpZpsRelatedSearches",
+             ENABLED);
+
+// If enabled, search aggregators defined by the
+// EnterpriseSearchAggregatorSettings policy are saved into prefs and available
+// in the TemplateURLService, so that they can be accessed from the Omnibox and
+// the Settings page.
+BASE_FEATURE(kEnableSearchAggregatorPolicy, ENABLED);
+
+BASE_FEATURE(kUseAgentspace25Logo, ENABLED);
+
+// Enables preconnecting to omnibox suggestions that are not only Search types.
+BASE_FEATURE(kPreconnectNonSearchOmniboxSuggestions, ENABLED);
+
+// Controls whether the composebox
+BASE_FEATURE(kComposeboxUsesChromeComposeClient, ENABLED);
+
+// Controls whether or not contextual composebox should display suggestions.
+BASE_FEATURE(kComposeboxAttachmentsTypedState, DISABLED);
+
+// Whether to enable Google Drive context menu option in the composebox.
+BASE_FEATURE(kComposeboxDriveContextMenuOption, DISABLED);
+const base::FeatureParam<bool> kComposeboxDriveIdentityFallback{
+    &kComposeboxDriveContextMenuOption, "enable_identity_fallback", true};
+
+// Whether to enable Google Drive context menu option's disclaimer flow in the
+// composebox.
+BASE_FEATURE(kComposeboxDriveContextMenuOptionDisclaimer, DISABLED);
+
+// For Workspace AIM, the Flow ID is the ConsentKit frontend identifier
+// (CHOICEFLOW_PCONTEXT_WORKSPACE_AIM = 76).
+const base::FeatureParam<int> kComposeboxDriveConsentFlowId{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "flow_id", 76};
+
+#if BUILDFLAG(IS_IOS)
+// For Chrome on iOS:
+// - Product ID: Chrome iOS (71720513)
+// - Product Surface: SEARCH_AIM (29)
+const base::FeatureParam<int> kComposeboxDriveConsentProductId{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "product_id", 71720513};
+const base::FeatureParam<int> kComposeboxDriveConsentProductSurface{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "product_surface", 29};
+#elif BUILDFLAG(IS_ANDROID)
+// For Chrome on Android:
+// - Product ID: Chrome Android (111611457)
+// - Product Surface: SEARCH_AIM (29)
+const base::FeatureParam<int> kComposeboxDriveConsentProductId{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "product_id", 111611457};
+const base::FeatureParam<int> kComposeboxDriveConsentProductSurface{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "product_surface", 29};
+#else
+// For Chrome on Desktop:
+// - Product ID: Chrome Desktop (67911908)
+// - Product Surface: CHROME_DESKTOP_NEW_TAB_PAGE (76)
+const base::FeatureParam<int> kComposeboxDriveConsentProductId{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "product_id", 67911908};
+const base::FeatureParam<int> kComposeboxDriveConsentProductSurface{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "product_surface", 76};
+#endif
+const base::FeatureParam<std::string> kComposeboxDriveConsentEntrypointId{
+    &kComposeboxDriveContextMenuOptionDisclaimer, "entrypoint_id", "aim-drive"};
+
+// Whether to enable the signin promo for the Google Drive context menu option.
+BASE_FEATURE(kComposeboxDriveContextMenuOptionSigninPromo, DISABLED);
+
+// Whether to force the Google Drive disclaimer to be accepted. This flag is
+// only used for testing purposes since dasher accounts are not allowed to
+// consent via pContext.
+BASE_FEATURE(kForceDriveDisclaimerAccepted,
+             DISABLED);
+
+// Whether the composebox should show a verbatim match for context in
+// zero-suggest.
+BASE_FEATURE(kComposeboxVerbatimMatchZeroSuggest, ENABLED);
+
+// Whether to disable warmup requests for the composebox.
+BASE_FEATURE(kDisableComposeboxWarmupRequests, DISABLED);
+
+// Enables passthrough params to be sent to the AIM eligibility service.
+BASE_FEATURE(kAimUrlInterceptPassthrough, DISABLED);
+
+BASE_FEATURE(kOmniboxDebugLogs, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Kill switch - Enables voice search coherence across composeboxes in NTP,
+// cobrowsing, omnibox by default, unless feature param overrides.
+//  - Submit and stop buttons in voice search mode.
+//  - New voice recording animation.
+//  - New metrics for voice search across composeboxes.
+//  - No live transcription below the new recording animation.
+BASE_FEATURE(kVoiceSearchCoherenceComposeboxes,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDrivePickerV2Scope, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Enables voice search coherence (as described above) only for cobrowsing.
+// Overrides the default (default was all surfaces enabled).
+const base::FeatureParam<bool> kVoiceSearchCoherenceComposeboxCobrowsingOnly{
+    &kVoiceSearchCoherenceComposeboxes,
+    "VoiceSearchCoherenceComposeboxCobrowsingOnly", false};
+
+// Enables voice search live experiment for NTP searchbox, (arm 1):
+//  - Submit and stop buttons in voice search mode.
+//  - New voice recording animation.
+//  - New metrics for voice search across searchbox.
+//  - NO live transcription below the new recording animation.
+BASE_FEATURE(kVoiceSearchCoherenceSearchbox, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables voice search live experiment for NTP searchbox, (arm 2):
+//  - Submit and stop buttons in voice search mode.
+//  - New voice recording animation.
+//  - New metrics for voice search for NTP searchbox.
+//  - DIFF: adds live transcription below the new recording animation.
+const base::FeatureParam<bool>
+    kVoiceSearchCoherenceSearchboxWithLiveTranscription{
+        &kVoiceSearchCoherenceSearchbox,
+        "VoiceSearchCoherenceSearchboxWithLiveTranscription", false};
+
+// Enables 3-second auto-endpointing for NTP Realbox voice search.
+// When enabled, voice search automatically submits after 3 seconds of trailing
+// silence.
+const base::FeatureParam<bool> kVoiceSearchCoherenceRealboxAutoEndpoint{
+    &kVoiceSearchCoherenceSearchbox, "VoiceSearchCoherenceRealboxAutoEndpoint",
+    false};
+
+// Enables helper text (e.g. "Listening...") in NTP Realbox voice search.
+const base::FeatureParam<bool> kVoiceSearchCoherenceRealboxHelperText{
+    &kVoiceSearchCoherenceSearchbox, "VoiceSearchCoherenceRealboxHelperText",
+    false};
+
+// Keeps the legacy NTP Realbox voice search UI, the one users get with
+// kVoiceSearchCoherenceSearchbox disabled. Voice search requests still carry
+// the NTP routing params, so only the speech service's recognizer changes.
+const base::FeatureParam<bool> kVoiceSearchCoherenceRealboxKeepLegacyUi{
+    &kVoiceSearchCoherenceSearchbox, "VoiceSearchCoherenceRealboxKeepLegacyUi",
+    false};
+
+#if BUILDFLAG(IS_ANDROID)
+// Prevents intermediate AutocompleteResult updates from being sent to Java on
+// low-end devices. This aims at eliminating time spent on constructing,
+// measuring, and laying out views that are about to be discarded, and reducing
+// the volume of JNI jumps.
+BASE_FEATURE(kSuppressIntermediateACUpdatesOnLowEndDevices, DISABLED);
+
+// When enabled, delay focusTab to prioritize navigation
+// (https://crbug.com/374852568).
+BASE_FEATURE(kPostDelayedTaskFocusTab, ENABLED);
+
+// Controls various Omnibox Diagnostics features.
+BASE_FEATURE(kDiagnostics, "OmniboxDiagnostics", DISABLED);
+
+// Force the realbox on Android regardless of platform/configuration checks.
+BASE_FEATURE(kForceAndroidRealbox, DISABLED);
+
+// If enabled, disables ligatures in the URL bar on Android.
+BASE_FEATURE(kUrlBarWithoutLigatures, ENABLED);
+
+// Kill switch: when enabled, the URL bar's stylus handwriting bounds do not
+// extend above the URL bar. The Android platform default extends the
+// handwriting-initiation area 40dp above an editable TextView, which overlaps
+// the tablet tab strip and causes stylus drags on tabs to start handwriting in
+// the omnibox instead (b/514550853).
+BASE_FEATURE(kUrlBarNoHandwritingBoundsAbove, ENABLED);
+
+// If enabled, Java-cached ZPS will be served.
+// The cached ZPS made sense on sub-4GB Android Go devices
+BASE_FEATURE(kServeJavaCachedZeroSuggest, ENABLED);
+
+// If enabled, OmniboxSuggestionsDropdown will force reset the scroll position
+// of the Omnibox suggestion list to the top during any re-layout.
+BASE_FEATURE(kResetSuggestionsScroll, DISABLED);
+
+// If enabled, the typed-text autocomplete request is started right after the
+// next frame is drawn (i.e. once the location bar has repainted with the new
+// character), rather than after a fixed 30ms delay. The fixed delay is the
+// single largest component of keystroke-to-suggestions latency
+// (b/578525544).
+BASE_FEATURE(kOmniboxPostFrameAutocompleteStart, DISABLED);
+
+// Kill switch for special handling for session-less voice search queries
+// (e.g. from NTP fakebox). This special case was added to address b/541295247.
+BASE_FEATURE(kOmniboxSessionlessVoiceSearch, ENABLED);
+
+// Kill switch for suppressing status icon during HTTP/HTTPS navigation.
+BASE_FEATURE(kSuppressStatusIconDuringHttpNavigation, ENABLED);
+
+// Enables computing and probing alternative navigation matches for intranet
+// redirects on Android.
+BASE_FEATURE(kOmniboxAndroidIntranetRedirect, DISABLED);
+
+// If enabled, the Omnibox, New Tab Page and toolbar mic buttons delegate voice
+// capture and transcription to the Android Google App Voice Plate (via an
+// explicit activity intent), and navigate directly upon receiving the
+// transcription.
+BASE_FEATURE(kOmniboxVoicePlateIntent, DISABLED);
+
+// If enabled, Omnibox suggestion icons are rasterized from the native
+// gfx::VectorIcon definitions (shared with desktop) instead of being sourced
+// from Android XML drawables.
+BASE_FEATURE(kOmniboxNativeVectorIcons, DISABLED);
+
+namespace android {
+static int64_t JNI_OmniboxFeatureMap_GetNativeMap(JNIEnv* env) {
+  static const base::Feature* const kFeaturesExposedToJava[] = {
+      &kDiagnostics,
+      &kForceAndroidRealbox,
+      &kOmniboxTouchDownTriggerForPrefetch,
+      &kOmniboxPrefetchSelectedSuggestionsOmtAndroid,
+      &kOmniboxFuseboxAsyncInflation,
+      &kOmniboxEarlyInflation,
+      &kRichAutocompletion,
+      &kUrlBarWithoutLigatures,
+      &kUrlBarNoHandwritingBoundsAbove,
+      &kPostDelayedTaskFocusTab,
+      &kOmniboxMobileParityUpdateV2,
+      &kOmniboxXGeoFailClosedOnPreciseLeak,
+      &kPlatformAgnosticXGeo,
+      &kInlineLocationSignaling,
+      &kOmniboxSiteSearch,
+      &kOmniboxMultimodalInput,
+      &kOmniboxFuseboxPopupVariations,
+      &kOmniboxFuseboxUserEdModelSubtitles,
+      &kOmniboxFuseboxUserEdPlusButtonIph,
+      &kOmniboxFuseboxUserEdTabPickerIph,
+      &kOmniboxFuseboxUserEdFakeboxAnimation,
+      &kOmniboxFuseboxUserEdGuidedTour,
+      &kServeJavaCachedZeroSuggest,
+      &kAIMSuppressVerbatimMatch,
+      &kAim3pEntrypoint,
+      &kResetSuggestionsScroll,
+      &kOmniboxPostFrameAutocompleteStart,
+      &kExactMatchFavicons,
+      &kStarterPackExpansion,
+      &kOmniboxSearchPrefetchOnEnterKeyDown,
+      &kOmniboxAimImageDownscaling,
+      &kOmniboxDebounceKeyboardVisibility,
+      &kOmniboxDisableTabsForCanvas,
+      &kOmniboxAimOpenInNewTab,
+      &kOmniboxSessionlessVoiceSearch,
+      &kSuppressStatusIconDuringHttpNavigation,
+      &kZeroSuggestPrefetchOnPageLoadAndTabSwitch,
+      &kAndroidTabSearchCloseTabButton,
+      &kOmniboxVoicePlateIntent,
+      &kOmniboxNativeVectorIcons};
+  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
+      kFeaturesExposedToJava);
+  return reinterpret_cast<int64_t>(kFeatureMap.get());
+}
+}  // namespace android
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// If enabled, X-Geo headers are sent using the platform-agnostic C++
+// implementation. On Android, enabling this flag will disable the legacy Java
+// implementation.
+BASE_FEATURE(kPlatformAgnosticXGeo, ENABLED);
+
+// If enabled, URL-what-you-typed matches are made the default match instead of
+// matches for the same URL with different casing, so verbatim input casing is
+// preserved for URL paths, which may be case sensitive.
+BASE_FEATURE(kOmniboxPreserveVerbatimUrlCase, ENABLED);
+
+// If enabled, Inline Location Signaling is enabled gating all development
+// and experimentation for the feature.
+BASE_FEATURE(kInlineLocationSignaling, DISABLED);
+
+constexpr base::FeatureParam<InlineLocationSignalingDisplayOrder>::Option
+    kInlineLocationSignalingDisplayOrderOptions[] = {
+        {InlineLocationSignalingDisplayOrder::kDisplayBelow, "DisplayBelow"},
+        {InlineLocationSignalingDisplayOrder::kDisplayAbove, "DisplayAbove"},
+};
+
+const base::FeatureParam<InlineLocationSignalingDisplayOrder>
+    kInlineLocationSignalingDisplayOrder{
+        &kInlineLocationSignaling, "display_order",
+        InlineLocationSignalingDisplayOrder::kDisplayBelow,
+        &kInlineLocationSignalingDisplayOrderOptions};
+
+constexpr base::FeatureParam<InlineLocationSignalingWording>::Option
+    kInlineLocationSignalingWordingOptions[] = {
+        {InlineLocationSignalingWording::kUseApproximateLocation,
+         "UseApproximateLocation"},
+        {InlineLocationSignalingWording::kUseLocation, "UseLocation"},
+};
+
+const base::FeatureParam<InlineLocationSignalingWording>
+    kInlineLocationSignalingWording{
+        &kInlineLocationSignaling, "wording",
+        InlineLocationSignalingWording::kUseApproximateLocation,
+        &kInlineLocationSignalingWordingOptions};
+
+// If enabled, the "Ask Google about this page" action will route to cobrowse.
+BASE_FEATURE(kWebUIOmniboxAskGAboutThisPage, DISABLED);
+
+const base::FeatureParam<bool> kAskGCoBrowse{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGCoBrowse", false};
+const base::FeatureParam<bool> kAskGCoBrowseWithVisualSelection{
+    &kWebUIOmniboxAskGAboutThisPage,
+    "Omnibox_AskGCoBrowseWithVisualSelection", false};
+const base::FeatureParam<bool> kAskGComposeBox{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGComposeBox", false};
+const base::FeatureParam<bool> kAskGLensChipRoute{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGLensChipRoute", false};
+const base::FeatureParam<bool> kAskGSwapIcon{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGSwapIcon", false};
+const base::FeatureParam<bool> kAskGSwapSuggestionIcon{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGSwapSuggestionIcon", false};
+const base::FeatureParam<bool> kAskGCurrentTabChip{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGCurrentTabChip", false};
+const base::FeatureParam<bool> kAskGLensIcon{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGLensIcon", false};
+const base::FeatureParam<bool> kAskGLensSearchHintText{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGLensSearchHintText", false};
+const base::FeatureParam<bool> kAskGShowFirstDescription{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGShowFirstDescription", false};
+const base::FeatureParam<bool> kAskGComposeboxLensChip{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGComposeboxLensChip", false};
+const base::FeatureParam<bool> kAskGComposeboxPlaceholder{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGComposeboxPlaceholder", false};
+const base::FeatureParam<bool> kAskGBypassPrivacyNotice{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGBypassPrivacyNotice", false};
+const base::FeatureParam<bool> kAskGShowChip{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGShowChip", false};
+const base::FeatureParam<bool> kAskGSuggestionSidePanelDescription{
+    &kWebUIOmniboxAskGAboutThisPage,
+    "Omnibox_AskGSuggestionSidePanelDescription", false};
+const base::FeatureParam<bool> kAskGLensIconIph{
+    &kWebUIOmniboxAskGAboutThisPage, "Omnibox_AskGLensIconIph", false};
+
+// Note: no new flags beyond this point.
+
+namespace flag_descriptions {
+const char kOmniboxDebugLogsName[] = "Omnibox debug logs";
+const char kOmniboxDebugLogsDescription[] =
+    "Enables logging that can be read from an internals page.";
+}  // namespace flag_descriptions
+
 }  // namespace omnibox
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(OmniboxFeatureMap)
+#endif

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define CHROME_BROWSER_DIAGNOSTICS_DIAGNOSTICS_WRITER_H_
 
 #include <memory>
+#include <string>
+#include <string_view>
 
-#include "base/macros.h"
 #include "chrome/browser/diagnostics/diagnostics_model.h"
 
 namespace diagnostics {
@@ -25,6 +26,10 @@ class DiagnosticsWriter : public DiagnosticsModel::Observer {
   };
 
   explicit DiagnosticsWriter(FormatType format);
+
+  DiagnosticsWriter(const DiagnosticsWriter&) = delete;
+  DiagnosticsWriter& operator=(const DiagnosticsWriter&) = delete;
+
   ~DiagnosticsWriter() override;
 
   // How many tests reported failure.
@@ -50,8 +55,8 @@ class DiagnosticsWriter : public DiagnosticsModel::Observer {
   // followed by the exact error code and the id. Name and extra strings must be
   // UTF8 encoded, as they are user-facing strings.
   bool WriteResult(bool success,
-                   const std::string& id,
-                   const std::string& name,
+                   std::string_view id,
+                   std::string_view name,
                    int outcome_code,
                    const std::string& extra);
 
@@ -60,8 +65,6 @@ class DiagnosticsWriter : public DiagnosticsModel::Observer {
   // Keeps track of how many tests reported failure.
   int failures_;
   FormatType format_;
-
-  DISALLOW_COPY_AND_ASSIGN(DiagnosticsWriter);
 };
 
 }  // namespace diagnostics

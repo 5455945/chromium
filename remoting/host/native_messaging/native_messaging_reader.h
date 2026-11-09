@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,14 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/files/file.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread.h"
+#include "base/values.h"
 
 namespace base {
 class SequencedTaskRunner;
-class Value;
 }  // namespace base
 
 namespace remoting {
@@ -24,10 +23,13 @@ namespace remoting {
 // webapp.
 class NativeMessagingReader {
  public:
-  typedef base::RepeatingCallback<void(std::unique_ptr<base::Value>)>
-      MessageCallback;
+  typedef base::RepeatingCallback<void(base::Value)> MessageCallback;
 
   explicit NativeMessagingReader(base::File file);
+
+  NativeMessagingReader(const NativeMessagingReader&) = delete;
+  NativeMessagingReader& operator=(const NativeMessagingReader&) = delete;
+
   ~NativeMessagingReader();
 
   // Begin reading messages from the Native Messaging client webapp, calling
@@ -45,7 +47,7 @@ class NativeMessagingReader {
   // Wrappers posted to by the read thread to trigger the message and EOF
   // callbacks on the caller thread, and have them safely dropped if the reader
   // has been deleted before they are processed.
-  void InvokeMessageCallback(std::unique_ptr<base::Value> message);
+  void InvokeMessageCallback(base::Value message);
   void InvokeEofCallback();
 
   // Holds the information that the read thread needs to access, such as the
@@ -66,8 +68,6 @@ class NativeMessagingReader {
   // Allows the reader to be deleted safely even when tasks may be pending on
   // it.
   base::WeakPtrFactory<NativeMessagingReader> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(NativeMessagingReader);
 };
 
 }  // namespace remoting

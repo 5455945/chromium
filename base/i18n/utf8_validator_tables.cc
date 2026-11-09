@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 // DO NOT EDIT.
 
 #include "base/i18n/utf8_validator_tables.h"
-#include "base/cxx17_backports.h"
 
-namespace base {
-namespace internal {
+#include <array>
 
-const uint8_t kUtf8ValidatorTables[] = {
+namespace base::internal {
+
+// clang-format off
+const std::array<uint8_t, 168> kUtf8ValidatorTables = {
     // State 0, offset 0x00
     0x00, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81,  // 0x08
     0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81,  // 0x10
@@ -49,8 +50,6 @@ const uint8_t kUtf8ValidatorTables[] = {
     0x04, 0x8b, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81,  // 0xa7
     0x81,                                            // 0xa8
 };
+// clang-format on
 
-const size_t kUtf8ValidatorTablesSize = base::size(kUtf8ValidatorTables);
-
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,21 @@
 
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "content/browser/presentation/presentation_test_utils.h"
 #include "content/public/browser/presentation_request.h"
 #include "content/public/browser/presentation_service_delegate.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/mock_navigation_handle.h"
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_render_view_host.h"
@@ -30,7 +33,9 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+using blink::mojom::PresentationConnectionResult;
+using blink::mojom::PresentationInfo;
 
 namespace content {
 
@@ -57,7 +62,7 @@ class PresentationServiceImplTest : public RenderViewHostImplTestHarness {
     NavigateAndCommit(GURL("about:blank"));
 
     EXPECT_CALL(mock_delegate_, AddObserver(_, _, _)).Times(1);
-    TestRenderFrameHost* render_frame_host = contents()->GetMainFrame();
+    TestRenderFrameHost* render_frame_host = contents()->GetPrimaryMainFrame();
     render_frame_host->InitializeRenderFrameIfNeeded();
     service_impl_.reset(new PresentationServiceImpl(
         render_frame_host, contents(), &mock_delegate_, nullptr));
@@ -155,7 +160,7 @@ class PresentationServiceImplTest : public RenderViewHostImplTestHarness {
   std::unique_ptr<PresentationServiceImpl> service_impl_;
 
   MockPresentationController mock_controller_;
-  absl::optional<mojo::Receiver<PresentationController>> controller_receiver_;
+  std::optional<mojo::Receiver<PresentationController>> controller_receiver_;
 
   GURL presentation_url1_;
   GURL presentation_url2_;
@@ -251,10 +256,9 @@ TEST_F(PresentationServiceImplTest, SetDefaultPresentationUrls) {
 
   mojo::PendingRemote<PresentationConnection> presentation_connection_remote;
   mojo::Remote<PresentationConnection> controller_remote;
-  ignore_result(
-      presentation_connection_remote.InitWithNewPipeAndPassReceiver());
+  std::ignore = presentation_connection_remote.InitWithNewPipeAndPassReceiver();
   std::move(callback).Run(PresentationConnectionResult::New(
-      blink::mojom::PresentationInfo::New(presentation_url2_, kPresentationId),
+      PresentationInfo::New(presentation_url2_, kPresentationId),
       std::move(presentation_connection_remote),
       controller_remote.BindNewPipeAndPassReceiver()));
   base::RunLoop().RunUntilIdle();
@@ -328,6 +332,7 @@ TEST_F(PresentationServiceImplTest, SetSameDefaultPresentationUrls) {
 }
 
 TEST_F(PresentationServiceImplTest, StartPresentationSuccess) {
+  contents()->GetPrimaryMainFrame()->SimulateUserActivation();
   PresentationConnectionCallback saved_success_cb;
   EXPECT_CALL(mock_delegate_, StartPresentation(_, _, _))
       .WillOnce([&saved_success_cb](const auto& request, auto success_cb,
@@ -341,13 +346,43 @@ TEST_F(PresentationServiceImplTest, StartPresentationSuccess) {
       .Times(1);
   std::move(saved_success_cb)
       .Run(PresentationConnectionResult::New(
-          blink::mojom::PresentationInfo::New(presentation_url1_,
-                                              kPresentationId),
+          PresentationInfo::New(presentation_url1_, kPresentationId),
+          mojo::NullRemote(), mojo::NullReceiver()));
+  ExpectPresentationCallbackWasRun();
+}
+
+TEST_F(PresentationServiceImplTest, StartPresentationWithoutUserActivation) {
+  EXPECT_CALL(mock_delegate_, StartPresentation(_, _, _)).Times(0);
+  service_impl_->StartPresentation(presentation_urls_,
+                                   std::move(expect_presentation_error_cb_));
+  ExpectPresentationCallbackWasRun();
+}
+
+TEST_F(PresentationServiceImplTest,
+       StartPresentationDisabledGestureRequirement) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kDisableGestureRequirementForPresentation);
+
+  PresentationConnectionCallback saved_success_cb;
+  EXPECT_CALL(mock_delegate_, StartPresentation(_, _, _))
+      .WillOnce([&saved_success_cb](const auto& request, auto success_cb,
+                                    auto error_cb) {
+        saved_success_cb = std::move(success_cb);
+      });
+  service_impl_->StartPresentation(presentation_urls_,
+                                   std::move(expect_presentation_success_cb_));
+  EXPECT_FALSE(saved_success_cb.is_null());
+  EXPECT_CALL(mock_delegate_, ListenForConnectionStateChange(_, _, _, _))
+      .Times(1);
+  std::move(saved_success_cb)
+      .Run(PresentationConnectionResult::New(
+          PresentationInfo::New(presentation_url1_, kPresentationId),
           mojo::NullRemote(), mojo::NullReceiver()));
   ExpectPresentationCallbackWasRun();
 }
 
 TEST_F(PresentationServiceImplTest, StartPresentationError) {
+  contents()->GetPrimaryMainFrame()->SimulateUserActivation();
   base::OnceCallback<void(const PresentationError&)> saved_error_cb;
   EXPECT_CALL(mock_delegate_, StartPresentation(_, _, _))
       .WillOnce([&](const auto& request, auto success_cb, auto error_cb) {
@@ -363,6 +398,7 @@ TEST_F(PresentationServiceImplTest, StartPresentationError) {
 
 TEST_F(PresentationServiceImplTest, StartPresentationInProgress) {
   EXPECT_CALL(mock_delegate_, StartPresentation(_, _, _)).Times(1);
+  contents()->GetPrimaryMainFrame()->SimulateUserActivation();
   // Uninvoked callbacks must outlive |service_impl_| since they get invoked
   // at |service_impl_|'s destruction.
   service_impl_->StartPresentation(presentation_urls_, base::DoNothing());
@@ -389,8 +425,7 @@ TEST_F(PresentationServiceImplTest, ReconnectPresentationSuccess) {
       .Times(1);
   std::move(saved_success_cb)
       .Run(PresentationConnectionResult::New(
-          blink::mojom::PresentationInfo::New(presentation_url1_,
-                                              kPresentationId),
+          PresentationInfo::New(presentation_url1_, kPresentationId),
           mojo::NullRemote(), mojo::NullReceiver()));
   ExpectPresentationCallbackWasRun();
 }
@@ -410,24 +445,27 @@ TEST_F(PresentationServiceImplTest, ReconnectPresentationError) {
 }
 
 TEST_F(PresentationServiceImplTest, MaxPendingReconnectPresentationRequests) {
-  const char* presentation_url = "http://fooUrl%d";
-  const char* presentation_id = "presentationId%d";
+  static constexpr char kPresentationUrlTemplate[] = "http://fooUrl%d";
+  static constexpr char kPresentationIdTemplate[] = "presentationId%d";
   int num_requests = PresentationServiceImpl::kMaxQueuedRequests;
   int i = 0;
   EXPECT_CALL(mock_delegate_, ReconnectPresentation(_, _, _, _))
       .Times(num_requests);
   for (; i < num_requests; ++i) {
-    std::vector<GURL> urls = {GURL(base::StringPrintf(presentation_url, i))};
+    std::vector<GURL> urls = {
+        GURL(base::StringPrintf(kPresentationUrlTemplate, i))};
     // Uninvoked callbacks must outlive |service_impl_| since they get invoked
     // at |service_impl_|'s destruction.
     service_impl_->ReconnectPresentation(
-        urls, base::StringPrintf(presentation_id, i), base::DoNothing());
+        urls, base::StringPrintf(kPresentationIdTemplate, i),
+        base::DoNothing());
   }
 
-  std::vector<GURL> urls = {GURL(base::StringPrintf(presentation_url, i))};
+  std::vector<GURL> urls = {
+      GURL(base::StringPrintf(kPresentationUrlTemplate, i))};
   // Exceeded maximum queue size, should invoke mojo callback with error.
   service_impl_->ReconnectPresentation(
-      urls, base::StringPrintf(presentation_id, i),
+      urls, base::StringPrintf(kPresentationIdTemplate, i),
       std::move(expect_presentation_error_cb_));
   ExpectPresentationCallbackWasRun();
 }
@@ -470,12 +508,10 @@ TEST_F(PresentationServiceImplTest, ReceiverPresentationServiceDelegate) {
       controller_connection.InitWithNewPipeAndPassReceiver());
   mojo::Remote<PresentationConnection> receiver_connection;
 
-  EXPECT_CALL(mock_receiver,
-              OnReceiverConnectionAvailable(InfoPtrEquals(expected), _, _))
-      .Times(1);
-  callback.Run(PresentationInfo::New(expected),
-               std::move(controller_connection),
-               receiver_connection.BindNewPipeAndPassReceiver());
+  EXPECT_CALL(mock_receiver, OnReceiverConnectionAvailable(_)).Times(1);
+  callback.Run(PresentationConnectionResult::New(
+      PresentationInfo::New(expected), std::move(controller_connection),
+      receiver_connection.BindNewPipeAndPassReceiver()));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_CALL(mock_receiver_delegate_, RemoveObserver(_, _)).Times(1);
@@ -486,7 +522,7 @@ TEST_F(PresentationServiceImplTest, ReceiverDelegateOnSubFrame) {
 
   PresentationServiceImpl service_impl(main_rfh(), contents(), nullptr,
                                        &mock_receiver_delegate_);
-  service_impl.is_main_frame_ = false;
+  service_impl.is_outermost_document_ = false;
 
   ReceiverConnectionAvailableCallback callback;
   EXPECT_CALL(mock_receiver_delegate_,

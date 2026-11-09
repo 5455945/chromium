@@ -31,7 +31,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_WORKER_OR_WORKLET_SCRIPT_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_WORKER_OR_WORKLET_SCRIPT_CONTROLLER_H_
 
-#include "base/macros.h"
 #include "third_party/blink/renderer/bindings/core/v8/rejected_promises.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -40,13 +39,22 @@
 
 namespace blink {
 
+class KURL;
 class WorkerOrWorkletGlobalScope;
 
 class CORE_EXPORT WorkerOrWorkletScriptController final
     : public GarbageCollected<WorkerOrWorkletScriptController> {
  public:
-  WorkerOrWorkletScriptController(WorkerOrWorkletGlobalScope*, v8::Isolate*);
-  virtual ~WorkerOrWorkletScriptController();
+  WorkerOrWorkletScriptController(WorkerOrWorkletGlobalScope*,
+                                  v8::Isolate*,
+                                  bool is_default_world_of_isolate);
+
+  WorkerOrWorkletScriptController(const WorkerOrWorkletScriptController&) =
+      delete;
+  WorkerOrWorkletScriptController& operator=(
+      const WorkerOrWorkletScriptController&) = delete;
+
+  ~WorkerOrWorkletScriptController();
   void Dispose();
 
   bool IsExecutionForbidden() const;
@@ -69,7 +77,10 @@ class CORE_EXPORT WorkerOrWorkletScriptController final
   // Disables `eval()` on JavaScript. This must be called before Evaluate().
   void DisableEval(const String&);
 
-  ScriptState* GetScriptState() { return script_state_; }
+  // Disables wasm code generation. This must be called before Evaluate().
+  void SetWasmEvalErrorMessage(const String&);
+
+  ScriptState* GetScriptState() { return script_state_.Get(); }
 
   // Used by V8 bindings:
   v8::Local<v8::Context> GetContext() {
@@ -91,6 +102,8 @@ class CORE_EXPORT WorkerOrWorkletScriptController final
  private:
   void DisableEvalInternal(const String& error_message);
 
+  void SetWasmEvalErrorMessageInternal(const String& error_message);
+
   void DisposeContextIfNeeded();
 
   Member<WorkerOrWorkletGlobalScope> global_scope_;
@@ -101,17 +114,16 @@ class CORE_EXPORT WorkerOrWorkletScriptController final
   v8::Isolate* isolate_;
 
   Member<ScriptState> script_state_;
-  scoped_refptr<DOMWrapperWorld> world_;
+  Member<DOMWrapperWorld> world_;
 
   // Keeps the error message for `eval()` on JavaScript until Initialize().
   String disable_eval_pending_;
+  String disable_wasm_eval_pending_;
 
   bool is_ready_to_evaluate_ = false;
   bool execution_forbidden_ = false;
 
   scoped_refptr<RejectedPromises> rejected_promises_;
-
-  DISALLOW_COPY_AND_ASSIGN(WorkerOrWorkletScriptController);
 };
 
 }  // namespace blink

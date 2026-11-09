@@ -26,69 +26,107 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_CANVAS_RENDERING_CONTEXT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_CANVAS_RENDERING_CONTEXT_H_
 
-#include "third_party/blink/public/common/privacy_budget/identifiable_token.h"
+#include "base/byte_size.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
+#include "base/time/time.h"
+#include "cc/paint/paint_flags.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_context_creation_attributes_core.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_performance_monitor.h"
-#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
-#include "third_party/blink/renderer/core/layout/hit_test_canvas_result.h"
-#include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_color_params.h"
-#include "third_party/blink/renderer/platform/graphics/color_behavior.h"
+#include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context_host.h"
+#include "third_party/blink/renderer/platform/graphics/exported_canvas_resource.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_types_3d.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
-#include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
+#include "third_party/skia/include/core/SkRect.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
+
+namespace base {
+struct PendingTask;
+}  // namespace base
+
+namespace cc {
+class Layer;
+}  // namespace cc
+
+namespace gfx {
+class ColorSpace;
+}  // namespace gfx
+
+namespace media {
+class VideoFrame;
+}  // namespace media
 
 namespace blink {
 
-class CanvasImageSource;
-class HTMLCanvasElement;
+class ComputedStyle;
+class Document;
+class Element;
+class ExceptionState;
+class ExecutionContext;
 class ImageBitmap;
-class
-    V8UnionCanvasRenderingContext2DOrGPUCanvasContextOrImageBitmapRenderingContextOrWebGL2RenderingContextOrWebGLRenderingContext;
-class
-    V8UnionGPUCanvasContextOrImageBitmapRenderingContextOrOffscreenCanvasRenderingContext2DOrWebGL2RenderingContextOrWebGLRenderingContext;
+class ScriptState;
+class StaticBitmapImage;
+class V8RenderingContext;
+class V8UnionElementOrElementImage;
+class V8OffscreenRenderingContext;
+class WebGraphicsContext3DVideoFramePool;
 
 class CORE_EXPORT CanvasRenderingContext
-    : public ScriptWrappable,
-      public ActiveScriptWrappable<CanvasRenderingContext>,
+    : public ActiveScriptWrappable<CanvasRenderingContext>,
       public Thread::TaskObserver {
   USING_PRE_FINALIZER(CanvasRenderingContext, Dispose);
 
  public:
+  class RestoreGuard {
+    STACK_ALLOCATED();
+
+   public:
+    explicit RestoreGuard(CanvasRenderingContext& this_ptr) : this_(this_ptr) {
+      this_.is_context_being_restored_ = true;
+    }
+    ~RestoreGuard() { this_.is_context_being_restored_ = false; }
+
+   private:
+    CanvasRenderingContext& this_;
+  };
+
+  // Delay for recording UKM metrics to allow text and attributes to settle.
+  // This value is chosen arbitrarily and can be subject to optimization.
+  static constexpr base::TimeDelta kAccessibilityUkmRecordingDelay =
+      base::Seconds(5);
+
   CanvasRenderingContext(const CanvasRenderingContext&) = delete;
   CanvasRenderingContext& operator=(const CanvasRenderingContext&) = delete;
   ~CanvasRenderingContext() override = default;
 
-  // A Canvas can either be "2D" or "webgl" but never both. Requesting a context
-  // with a type different from an existing will destroy the latter.
-  enum ContextType {
-    // These values are mirrored in tools/metrics/histograms/enums.xml. Do
-    // not change assigned numbers of existing items and add new features to the
-    // end of the list.
-    kContext2D = 0,
-    kContextExperimentalWebgl = 2,
-    kContextWebgl = 3,
-    kContextWebgl2 = 4,
-    kContextImageBitmap = 5,
-    kContextXRPresent = 6,
-    // WebGL2Compute used to be 7.
-    kContextGPUPresent = 8,  // WebGPU
-    kContextTypeUnknown = 9,
-    kMaxValue = kContextTypeUnknown,
-  };
-
-  // Correspond to CanvasRenderingAPI defined in
-  // tools/metrics/histograms/enums.xml
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused. CanvasRenderingAPI in
+  // tools/metrics/histograms/enums.xml must be updated when making a change to
+  // this enum.
   enum class CanvasRenderingAPI {
+    kUnknown = -1,  // Not used by histogram.
     k2D = 0,
     kWebgl = 1,
     kWebgl2 = 2,
     kBitmaprenderer = 3,
     kWebgpu = 4,
+
+    kMaxValue = kWebgpu,
   };
+
+  CanvasRenderingAPI GetRenderingAPI() const { return canvas_rendering_type_; }
 
   bool IsRenderingContext2D() const {
     return canvas_rendering_type_ == CanvasRenderingAPI::k2D;
@@ -99,9 +137,6 @@ class CORE_EXPORT CanvasRenderingContext
   bool IsWebGL() const {
     return canvas_rendering_type_ == CanvasRenderingAPI::kWebgl ||
            canvas_rendering_type_ == CanvasRenderingAPI::kWebgl2;
-  }
-  bool IsWebGL2() const {
-    return canvas_rendering_type_ == CanvasRenderingAPI::kWebgl2;
   }
   bool IsWebGPU() const {
     return canvas_rendering_type_ == CanvasRenderingAPI::kWebgpu;
@@ -114,78 +149,81 @@ class CORE_EXPORT CanvasRenderingContext
   // offscreencanvas use case.
   bool HasPendingActivity() const override { return false; }
   ExecutionContext* GetExecutionContext() const {
-    if (!Host())
+    const CanvasRenderingContextHost* host = Host();
+    if (host == nullptr) [[unlikely]] {
       return nullptr;
-    return Host()->GetTopExecutionContext();
+    }
+    return host->GetTopExecutionContext();
   }
 
+  void MaybeRecordUKMCanvasAccessibility();
   void RecordUKMCanvasRenderingAPI();
+  void RecordUMACanvasRenderingAPI();
 
   // This is only used in WebGL
   void RecordUKMCanvasDrawnToRenderingAPI();
 
-  static ContextType ContextTypeFromId(
-      const String& id,
-      const ExecutionContext* execution_context);
-  static ContextType ResolveContextTypeAliases(ContextType);
+  static CanvasRenderingContext* GetEnclosingContextForDrawElement(
+      Element* element,
+      const String& func_name,
+      ExceptionState& exception_state);
 
-  CanvasRenderingContextHost* Host() const { return host_; }
+  static CanvasRenderingAPI RenderingAPIFromId(const String& id);
 
-  // TODO(https://crbug.com/1208480): This function applies only to 2D rendering
-  // contexts, and should be removed.
-  virtual CanvasColorParams CanvasRenderingContextColorParams() const {
-    return CanvasColorParams();
-  }
+  CanvasRenderingContextHost* Host() const { return host_.Get(); }
+
+  virtual bool IsOpaque() const = 0;
 
   virtual scoped_refptr<StaticBitmapImage> GetImage() = 0;
-  virtual ContextType GetContextType() const = 0;
   virtual bool IsComposited() const = 0;
-  virtual bool IsAccelerated() const = 0;
-  virtual bool IsOriginTopLeft() const {
-    // Canvas contexts have the origin of coordinates on the top left corner.
-    // Accelerated resources (e.g. GPU textures) have their origin of
-    // coordinates in the upper left corner.
-    return !IsAccelerated();
-  }
-  virtual bool ShouldAntialias() const { return false; }
-  // Indicates whether the entire tab is backgrounded. Passing false
-  // to this method may cause some canvas context implementations to
-  // aggressively discard resources, which is not desired for canvases
+
+  // Called when the entire tab is backgrounded or unbackgrounded.
+  // The page's visibility status can be queried at any time via
+  // Host()->IsPageVisible().
+  // Some canvas context implementations may aggressively discard
+  // when the page is not visible, which is not desired for canvases
   // which are being rendered to, just not being displayed in the
   // page.
-  virtual void SetIsInHiddenPage(bool) = 0;
-  // Indicates whether the canvas is being displayed in the page;
-  // i.e., doesn't have display:none, and is visible. The initial
-  // value for all context types is assumed to be false; this will be
-  // called when the context is first displayed.
-  virtual void SetIsBeingDisplayed(bool) = 0;
+  virtual void PageVisibilityChanged() = 0;
   virtual bool isContextLost() const { return true; }
+  bool IsContextBeingRestored() const { return is_context_being_restored_; }
   // TODO(fserb): remove AsV8RenderingContext and AsV8OffscreenRenderingContext.
-  virtual V8UnionCanvasRenderingContext2DOrGPUCanvasContextOrImageBitmapRenderingContextOrWebGL2RenderingContextOrWebGLRenderingContext*
-  AsV8RenderingContext() {
+  virtual V8RenderingContext* AsV8RenderingContext() { NOTREACHED(); }
+  virtual V8OffscreenRenderingContext* AsV8OffscreenRenderingContext() {
     NOTREACHED();
-    return nullptr;
-  }
-  virtual V8UnionGPUCanvasContextOrImageBitmapRenderingContextOrOffscreenCanvasRenderingContext2DOrWebGL2RenderingContextOrWebGLRenderingContext*
-  AsV8OffscreenRenderingContext() {
-    NOTREACHED();
-    return nullptr;
   }
   virtual bool IsPaintable() const = 0;
   void DidDraw(CanvasPerformanceMonitor::DrawType draw_type) {
-    return DidDraw(Host() ? SkIRect::MakeWH(Host()->width(), Host()->height())
-                          : SkIRect::MakeEmpty(),
-                   draw_type);
+    const CanvasRenderingContextHost* const host = Host();
+    return DidDraw(host ? gfx::Rect(host->Size()) : gfx::Rect(), draw_type);
   }
-  void DidDraw(const SkIRect& dirty_rect, CanvasPerformanceMonitor::DrawType);
+  void DidDraw(const gfx::Rect& dirty_rect, CanvasPerformanceMonitor::DrawType);
 
-  // Return true if the content is updated.
-  virtual bool PaintRenderingResultsToCanvas(SourceDrawingBuffer) {
-    return false;
+  // Returns a StaticBitmapImage containing the current content, or nullptr if
+  // it was not possible to obtain that content.
+  virtual scoped_refptr<StaticBitmapImage> PaintRenderingResultsToSnapshot(
+      SourceDrawingBuffer source_buffer) = 0;
+
+  // WebGL-specific methods
+  virtual void ClearMarkedCanvasDirty() {}
+  virtual scoped_refptr<ExportedCanvasResource> PaintRenderingResultsToResource(
+      SourceDrawingBuffer source_buffer,
+      FlushReason reason) {
+    NOTREACHED();
   }
 
-  virtual bool CopyRenderingResultsFromDrawingBuffer(CanvasResourceProvider*,
-                                                     SourceDrawingBuffer) {
+  // Copy the contents of the rendering context to a media::VideoFrame created
+  // using `frame_pool`, with color space specified by `dst_color_space`. If
+  // successful, take (using std::move) `callback` and issue it with the
+  // resulting frame, once the copy is completed. On failure, do not take
+  // `callback`.
+  using VideoFrameCopyCompletedCallback =
+      base::OnceCallback<void(scoped_refptr<media::VideoFrame>)>;
+  virtual bool CopyRenderingResultsToVideoFrame(
+      WebGraphicsContext3DVideoFramePool* frame_pool,
+      SourceDrawingBuffer,
+      const gfx::ColorSpace& dst_color_space,
+      VideoFrameCopyCompletedCallback callback) {
     return false;
   }
 
@@ -202,60 +240,86 @@ class CORE_EXPORT CanvasRenderingContext
 
     // Lost context occurred due to internal implementation reasons.
     kSyntheticLostContext,
+
+    // Lost because an invalid canvas size was used.
+    kInvalidCanvasSize,
+
+    // Lost because the canvas is being disposed.
+    kCanvasDisposed,
   };
   virtual void LoseContext(LostContextMode) {}
+  virtual void SendContextLostEventIfNeeded() {}
 
-  // This method gets called at the end of script tasks that modified
-  // the contents of the canvas (called didDraw). It marks the completion
+  // These methods get called at the end of script tasks that modified
+  // the contents of the canvas (called didDraw). They mark the completion
   // of a presentable frame.
-  virtual void FinalizeFrame() {}
+  virtual void FinalizeFrame(FlushReason) {}
+  void FinalizeFrame() { return FinalizeFrame(FlushReason::kOther); }
 
   // Thread::TaskObserver implementation
   void DidProcessTask(const base::PendingTask&) override;
   void WillProcessTask(const base::PendingTask&, bool) final {}
 
   // Canvas2D-specific interface
-  virtual void RestoreCanvasMatrixClipStack(cc::PaintCanvas*) const {}
-  virtual void Reset() {}
-  virtual void ClearRect(double x, double y, double width, double height) {}
-  virtual void DidSetSurfaceSize() {}
-  virtual void SetShouldAntialias(bool) {}
-  virtual unsigned HitRegionsCount() const { return 0; }
-  virtual void setFont(const String&) {}
+  virtual std::optional<cc::PaintRecord> FlushCanvas(FlushReason) {
+    NOTREACHED();
+  }
+  virtual void RestoreFromInvalidSizeIfNeeded() {}
   virtual void StyleDidChange(const ComputedStyle* old_style,
                               const ComputedStyle& new_style) {}
-  virtual HitTestCanvasResult* GetControlAndIdIfHitRegionExists(
-      const PhysicalOffset& location) {
-    NOTREACHED();
-    return MakeGarbageCollected<HitTestCanvasResult>(String(), nullptr);
+  virtual void LangAttributeChanged() {}
+  virtual int LayerCount() const { return 0; }
+  virtual void DisableAccelerationForCanvas2D() { NOTREACHED(); }
+
+  virtual const std::optional<cc::PaintRecord>& GetLastRecording() {
+    return empty_recording_;
   }
-  virtual String GetIdFromControl(const Element* element) { return String(); }
-  virtual void ResetUsageTracking() {}
+  virtual bool Is2DCanvasAccelerated() const { NOTREACHED(); }
+
+  virtual void setFontForTesting(const String&) { NOTREACHED(); }
+  void RecordUKMCanvasAccessibilityForTesting() {
+    RecordUKMCanvasAccessibility();
+  }
+
+  scoped_refptr<StaticBitmapImage> GetElementImage(
+      const V8UnionElementOrElementImage* element,
+      std::optional<float> sx,
+      std::optional<float> sy,
+      std::optional<float> swidth,
+      std::optional<float> sheight,
+      std::optional<uint32_t> width,
+      std::optional<uint32_t> height,
+      gpu::SharedImageUsageSet usage,
+      const String& func_name,
+      ExceptionState& exception_state);
 
   // WebGL-specific interface
-  virtual bool UsingSwapChain() const { return false; }
-  virtual void SetFilterQuality(SkFilterQuality) { NOTREACHED(); }
-  virtual void Reshape(int width, int height) {}
   virtual void MarkLayerComposited() { NOTREACHED(); }
-  virtual sk_sp<SkData> PaintRenderingResultsToDataArray(SourceDrawingBuffer) {
+  virtual scoped_refptr<StaticBitmapImage>
+  GetRGBAUnacceleratedStaticBitmapImage(SourceDrawingBuffer source_buffer) {
     NOTREACHED();
-    return nullptr;
   }
-  virtual int ExternallyAllocatedBufferCountPerPixel() {
-    NOTREACHED();
-    return 0;
-  }
-  virtual IntSize DrawingBufferSize() const {
-    NOTREACHED();
-    return IntSize(0, 0);
-  }
+
+  // WebGL & WebGPU-specific interface
+  virtual void SetHdrMetadata(const gfx::HDRMetadata& hdr_metadata) {}
+  virtual void Reshape(gfx::Size old_size, gfx::Size new_size) {}
+
+  virtual base::ByteSize AllocatedBufferSize() const = 0;
 
   // OffscreenCanvas-specific methods.
-  virtual bool PushFrame() { return false; }
-  virtual ImageBitmap* TransferToImageBitmap(ScriptState*) { return nullptr; }
+  virtual scoped_refptr<ExportedCanvasResource> GetResourceForPushFrame(
+      bool& should_call_push_frame) {
+    should_call_push_frame = false;
+    return nullptr;
+  }
+  virtual ImageBitmap* TransferToImageBitmap(ScriptState* script_state,
+                                             ExceptionState& exception_state) {
+    return nullptr;
+  }
 
+  // Notification the color scheme of the HTMLCanvasElement may have changed.
+  virtual void ColorSchemeMayHaveChanged() {}
 
-  bool WouldTaintOrigin(CanvasImageSource*);
   void DidMoveToNewDocument(Document*);
 
   void DetachHost() { host_ = nullptr; }
@@ -264,37 +328,85 @@ class CORE_EXPORT CanvasRenderingContext
     return creation_attributes_;
   }
 
+  // Adjusts a rect for negative width or height to give the bounding rect.
+  template <typename T>
+  static void AdjustRectForCanvas(T& x, T& y, T& width, T& height);
+
+  // Returns false if any rect parameter is NaN or infiinite; otherwise true.
+  template <typename T>
+  static bool ValidateRectForCanvas(T x, T y, T width, T height);
+
   void Trace(Visitor*) const override;
   virtual void Stop() = 0;
-
-  virtual IdentifiableToken IdentifiableTextToken() const {
-    // Token representing no bytes.
-    return IdentifiableToken(base::span<const uint8_t>());
-  }
-
-  virtual bool IdentifiabilityEncounteredSkippedOps() const { return false; }
-
-  virtual bool IdentifiabilityEncounteredSensitiveOps() const { return false; }
+  virtual void Dispose();
 
   static CanvasPerformanceMonitor& GetCanvasPerformanceMonitor();
+
+  bool did_print_in_current_task() const { return did_print_in_current_task_; }
+  bool did_draw_text_for_testing() const { return did_draw_text_; }
+  void DisposeForTesting() { Dispose(); }
 
  protected:
   CanvasRenderingContext(CanvasRenderingContextHost*,
                          const CanvasContextCreationAttributesCore&,
                          CanvasRenderingAPI);
 
- private:
-  void Dispose();
+  bool IsDrawElementImageEligible(Element* element,
+                                  const String& func_name,
+                                  ExceptionState& exception_state);
 
+  bool IsDrawElementImageEligible(const V8UnionElementOrElementImage* element,
+                                  const String& func_name,
+                                  ExceptionState& exception_state);
+
+  std::optional<CanvasDrawablePaintRecord> GetDrawablePaintRecord(
+      Element* element);
+
+  std::optional<cc::PaintRecord> empty_recording_;
+
+ private:
   Member<CanvasRenderingContextHost> host_;
-  CanvasColorParams color_params_;
   CanvasContextCreationAttributesCore creation_attributes_;
 
   void RenderTaskEnded();
   bool did_draw_in_current_task_ = false;
+  bool did_print_in_current_task_ = false;
+  bool should_record_accessibility_ukm_ = true;
+  bool did_schedule_accessibility_ukm_recording_ = false;
+  bool did_process_task_ = false;
+  bool did_draw_text_ = false;
 
   const CanvasRenderingAPI canvas_rendering_type_;
+
+  bool is_context_being_restored_ = false;
+
+  void RecordUKMCanvasAccessibility();
 };
+
+template <typename T>
+void CanvasRenderingContext::AdjustRectForCanvas(T& x,
+                                                 T& y,
+                                                 T& width,
+                                                 T& height) {
+  if (width < 0) {
+    width = -width;
+    x -= width;
+  }
+
+  if (height < 0) {
+    height = -height;
+    y -= height;
+  }
+}
+
+template <typename T>
+bool CanvasRenderingContext::ValidateRectForCanvas(T x,
+                                                   T y,
+                                                   T width,
+                                                   T height) {
+  return (std::isfinite(x) && std::isfinite(y) && std::isfinite(width) &&
+          std::isfinite(height) && (width || height));
+}
 
 }  // namespace blink
 

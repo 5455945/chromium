@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,15 @@
 #include <vector>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "media/base/media_export.h"
 #include "media/base/media_resource.h"
 #include "media/base/win/media_foundation_cdm_proxy.h"
 #include "media/renderers/win/media_foundation_stream_wrapper.h"
 
 namespace media {
+
+class MediaLog;
 
 // IMFMediaSource implementation
 // (https://docs.microsoft.com/en-us/windows/win32/api/mfidl/nn-mfidl-imfmediasource)
@@ -29,7 +32,7 @@ namespace media {
 // Note: The methods in this class can be called on two different threads -
 //       Chromium thread and MF threadpool thread.
 //
-class MediaFoundationSourceWrapper
+class MEDIA_EXPORT MediaFoundationSourceWrapper
     : public Microsoft::WRL::RuntimeClass<
           Microsoft::WRL::RuntimeClassFlags<
               Microsoft::WRL::RuntimeClassType::ClassicCom>,
@@ -42,12 +45,16 @@ class MediaFoundationSourceWrapper
   MediaFoundationSourceWrapper();
   ~MediaFoundationSourceWrapper() override;
 
+  IFACEMETHODIMP_(ULONG) Release() override;
+
   // This is only called on |task_runner|.
   void DetachResource();
 
   HRESULT RuntimeClassInitialize(
       MediaResource* media_resource,
-      scoped_refptr<base::SequencedTaskRunner> task_runner);
+      MediaLog* media_log,
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
+      bool has_cdm = false);
 
   // Note: All COM interface (IMFXxx) methods are called on the MF threadpool
   //       threads and the calls are serialized
@@ -118,6 +125,8 @@ class MediaFoundationSourceWrapper
   // Flused the queued buffers from each stream of |media_streams_|.
   void FlushStreams();
 
+  bool HasCdm() const { return has_cdm_; }
+
  private:
   // Select first audio stream and first video stream.
   HRESULT SelectDefaultStreams(
@@ -137,6 +146,7 @@ class MediaFoundationSourceWrapper
   bool video_stream_enabled_ = true;
   float current_rate_ = 0.0f;
   bool presentation_ended_ = false;
+  bool has_cdm_ = false;
 
   enum class State {
     kInitialized,

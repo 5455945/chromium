@@ -1,11 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/bindings/lib/binding_state.h"
 
 #include <memory>
+#include <utility>
 
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 #include "mojo/public/cpp/bindings/lib/task_runner_helper.h"
 #include "mojo/public/cpp/bindings/mojo_buildflags.h"
 
@@ -26,7 +30,7 @@ void BindingStateBase::SetFilter(std::unique_ptr<MessageFilter> filter) {
 }
 
 bool BindingStateBase::HasAssociatedInterfaces() const {
-  return router_ ? router_->HasAssociatedEndpoints() : false;
+  return router_ && router_->HasAssociatedEndpoints();
 }
 
 void BindingStateBase::PauseIncomingMethodCallProcessing() {
@@ -54,8 +58,9 @@ void BindingStateBase::FlushAsync(AsyncFlusher flusher) {
 }
 
 void BindingStateBase::Close() {
-  if (!router_)
+  if (!router_) {
     return;
+  }
 
   weak_ptr_factory_.InvalidateWeakPtrs();
 
@@ -65,20 +70,39 @@ void BindingStateBase::Close() {
 }
 
 void BindingStateBase::CloseWithReason(uint32_t custom_reason,
-                                       const std::string& description) {
-  if (endpoint_client_)
+                                       std::string_view description) {
+  if (endpoint_client_) {
     endpoint_client_->CloseWithReason(custom_reason, description);
+  }
 
   Close();
+}
+
+void BindingStateBase::RaiseError() {
+  endpoint_client_->RaiseError();
+}
+
+void BindingStateBase::set_connection_error_handler(
+    base::OnceClosure error_handler) {
+  DCHECK(is_bound());
+  endpoint_client_->set_connection_error_handler(std::move(error_handler));
+}
+
+void BindingStateBase::set_connection_error_with_reason_handler(
+    ConnectionErrorWithReasonCallback error_handler) {
+  DCHECK(is_bound());
+  endpoint_client_->set_connection_error_with_reason_handler(
+      std::move(error_handler));
 }
 
 ReportBadMessageCallback BindingStateBase::GetBadMessageCallback() {
   return base::BindOnce(
       [](ReportBadMessageCallback inner_callback,
-         base::WeakPtr<BindingStateBase> binding, const std::string& error) {
+         base::WeakPtr<BindingStateBase> binding, std::string_view error) {
         std::move(inner_callback).Run(error);
-        if (binding)
+        if (binding) {
           binding->Close();
+        }
       },
       mojo::GetBadMessageCallback(), weak_ptr_factory_.GetWeakPtr());
 }
@@ -101,15 +125,16 @@ scoped_refptr<internal::MultiplexRouter> BindingStateBase::RouterForTesting() {
   return router_;
 }
 
-void BindingStateBase::BindInternal(
-    PendingReceiverState* receiver_state,
-    scoped_refptr<base::SequencedTaskRunner> runner,
-    const char* interface_name,
-    std::unique_ptr<MessageReceiver> request_validator,
-    bool passes_associated_kinds,
-    bool has_sync_methods,
-    MessageReceiverWithResponderStatus* stub,
-    uint32_t interface_version) {
+void BindingStateBase::Bind(PendingReceiverState* receiver_state,
+                            scoped_refptr<base::SequencedTaskRunner>&& runner,
+                            const char* interface_name,
+                            MessageValidatorFunc request_validator,
+                            bool passes_associated_kinds,
+                            base::span<const uint32_t> sync_method_ordinals,
+                            MessageReceiverWithResponderStatus* stub,
+                            uint32_t interface_version,
+                            MessageToMethodInfoCallback method_info_callback,
+                            MessageToMethodNameCallback method_name_callback) {
   DCHECK(!is_bound()) << "Attempting to bind interface that is already bound: "
                       << interface_name;
 
@@ -119,7 +144,7 @@ void BindingStateBase::BindInternal(
   MultiplexRouter::Config config =
       passes_associated_kinds
           ? MultiplexRouter::MULTI_INTERFACE
-          : (has_sync_methods
+          : (!sync_method_ordinals.empty()
                  ? MultiplexRouter::SINGLE_INTERFACE_WITH_SYNC_METHODS
                  : MultiplexRouter::SINGLE_INTERFACE);
   router_ = MultiplexRouter::CreateAndStartReceiving(
@@ -129,15 +154,22 @@ void BindingStateBase::BindInternal(
 
   endpoint_client_ = std::make_unique<InterfaceEndpointClient>(
       router_->CreateLocalEndpointHandle(kPrimaryInterfaceId), stub,
-      std::move(request_validator), has_sync_methods,
-      std::move(sequenced_runner), interface_version, interface_name);
+      request_validator, sync_method_ordinals, std::move(sequenced_runner),
+      interface_version, interface_name, method_info_callback,
+      method_name_callback);
   endpoint_client_->SetIdleTrackingEnabledCallback(
       base::BindOnce(&MultiplexRouter::SetConnectionGroup, router_));
 
 #if BUILDFLAG(MOJO_RANDOM_DELAYS_ENABLED)
-  MakeBindingRandomlyPaused(base::SequencedTaskRunnerHandle::Get(),
+  MakeBindingRandomlyPaused(base::SequencedTaskRunner::GetCurrentDefault(),
                             weak_ptr_factory_.GetWeakPtr());
 #endif
+}
+
+ScopedMessagePipeHandle BindingStateBase::Unbind() {
+  weak_ptr_factory_.InvalidateWeakPtrs();
+  endpoint_client_.reset();
+  return std::exchange(router_, nullptr)->PassMessagePipe();
 }
 
 }  // namespace internal

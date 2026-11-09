@@ -1,50 +1,50 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import 'chrome://resources/cr_components/managed_footnote/managed_footnote.js';
-import 'chrome://resources/cr_elements/shared_vars_css.m.js';
-import 'chrome://resources/cr_elements/cr_button/cr_button.m.js';
-import 'chrome://resources/cr_elements/cr_toast/cr_toast_manager.m.js';
+import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/cr_elements/cr_toast/cr_toast_manager.js';
 import 'chrome://resources/cr_elements/cr_splitter/cr_splitter.js';
 import './folder_node.js';
 import './list.js';
-import './router.js';
-import './shared_vars.js';
-import './strings.m.js';
+import '/strings.m.js';
 import './command_manager.js';
 import './toolbar.js';
 
-import {CrSplitterElement} from 'chrome://resources/cr_elements/cr_splitter/cr_splitter.js';
-import {EventTracker} from 'chrome://resources/js/event_tracker.m.js';
-import {FindShortcutBehavior} from 'chrome://resources/cr_elements/find_shortcut_behavior.js';
-import {StoreObserver} from 'chrome://resources/js/cr/ui/store.m.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-import {html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
+import type {CrSplitterElement} from 'chrome://resources/cr_elements/cr_splitter/cr_splitter.js';
+import {FindShortcutMixinLit} from 'chrome://resources/cr_elements/find_shortcut_mixin_lit.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {EventTracker} from 'chrome://resources/js/event_tracker.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {setSearchResults} from './actions.js';
 import {destroy as destroyApiListener, init as initApiListener} from './api_listener.js';
-import {LOCAL_STORAGE_FOLDER_STATE_KEY, LOCAL_STORAGE_TREE_WIDTH_KEY, ROOT_NODE_ID} from './constants.js';
-import {DNDManager} from './dnd_manager.js';
-import {MouseFocusMixin} from './mouse_focus_behavior.js';
+import {getCss} from './app.css.js';
+import {getHtml} from './app.html.js';
+import {BookmarksApiProxyImpl} from './bookmarks_api_proxy.js';
+import {LOCAL_STORAGE_FOLDER_STATE_KEY, LOCAL_STORAGE_TREE_WIDTH_KEY} from './constants.js';
+import {DndManager} from './dnd_manager.js';
+import {BookmarksRouter} from './router.js';
 import {Store} from './store.js';
-import {BookmarksStoreClientInterface, StoreClient} from './store_client.js';
-import {BookmarksToolbarElement} from './toolbar.js';
-import {BookmarksPageState, FolderOpenState} from './types.js';
-import {createEmptyState, normalizeNodes} from './util.js';
+import {StoreClientMixinLit} from './store_client_mixin_lit.js';
+import type {BookmarksPageState, FolderOpenState} from './types.js';
+import {createEmptyState, getDefaultSelectedFolder, searchBookmarks} from './util.js';
+
+export const HIDE_FOCUS_RING_ATTRIBUTE = 'hide-focus-ring';
 
 const BookmarksAppElementBase =
-    mixinBehaviors([StoreClient, FindShortcutBehavior],
-                   MouseFocusMixin(PolymerElement)) as {
-  new (): PolymerElement & BookmarksStoreClientInterface &
-      StoreObserver<BookmarksPageState> & FindShortcutBehavior
-}
+    StoreClientMixinLit(FindShortcutMixinLit(CrLitElement));
 
 export interface BookmarksAppElement {
   $: {
     splitter: CrSplitterElement,
-    sidebar: HTMLDivElement,
-  }
+    sidebar: HTMLElement,
+  };
 }
 
 export class BookmarksAppElement extends BookmarksAppElementBase {
@@ -52,27 +52,34 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
     return 'bookmarks-app';
   }
 
-  static get properties() {
+  static override get styles() {
+    return getCss();
+  }
+
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      searchTerm_: {
-        type: String,
-        observer: 'searchTermChanged_',
-      },
+      searchTerm_: {type: String},
+      folderOpenState_: {type: Object},
+      sidebarWidth_: {type: String},
 
-      folderOpenState_: {
-        type: Object,
-        observer: 'folderOpenStateChanged_',
+      toolbarShadow_: {
+        type: Boolean,
+        reflect: true,
       },
-
-      sidebarWidth_: String,
     };
   }
 
+  private accessor folderOpenState_: FolderOpenState|undefined;
+  private accessor searchTerm_: string|undefined;
+  protected accessor sidebarWidth_: string = '';
+  protected accessor toolbarShadow_: boolean = false;
   private eventTracker_: EventTracker = new EventTracker();
-  private dndManager_: DNDManager|null = null;
-  private folderOpenState_: FolderOpenState;
-  private searchTerm_: string;
-  private sidebarWidth_: string;
+  private dndManager_: DndManager|null = null;
+  private router_: BookmarksRouter = new BookmarksRouter();
 
   constructor() {
     super();
@@ -86,24 +93,37 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
     }
   }
 
-  connectedCallback() {
+  override connectedCallback() {
     super.connectedCallback();
 
+    const enableWebuiRefresh2026 =
+        loadTimeData.getString('webuiRefresh2026') !== '';
+    if (enableWebuiRefresh2026) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
     document.documentElement.classList.remove('loading');
 
-    this.watch('searchTerm_', function(state: BookmarksPageState) {
-      return state.search.term;
-    });
+    // These events are added to the document because capture doesn't work
+    // properly when listeners are added to a Polymer element, because the
+    // event is considered AT_TARGET for the element, and is evaluated
+    // after inner captures.
+    this.eventTracker_.add(
+        document, 'mousedown', () => this.onMousedown_(), true);
+    this.eventTracker_.add(
+        document, 'keydown', (e: Event) => this.onKeydown_(e as KeyboardEvent),
+        true);
 
-    this.watch('folderOpenState_', function(state: BookmarksPageState) {
-      return state.folderOpenState;
-    });
+    this.router_.initialize();
 
-    chrome.bookmarks.getTree((results) => {
-      const nodeMap = normalizeNodes(results[0]!);
+    this.updateFromStore();
+
+    BookmarksApiProxyImpl.getInstance().getTree().then((nodeMap) => {
       const initialState = createEmptyState();
       initialState.nodes = nodeMap;
-      initialState.selectedFolder = nodeMap[ROOT_NODE_ID]!.children![0]!;
+
+      initialState.selectedFolder = getDefaultSelectedFolder(nodeMap);
+
       const folderStateString =
           window.localStorage[LOCAL_STORAGE_FOLDER_STATE_KEY];
       initialState.folderOpenState = folderStateString ?
@@ -122,16 +142,48 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
 
     this.initializeSplitter_();
 
-    this.dndManager_ = new DNDManager();
+    this.dndManager_ = new DndManager();
     this.dndManager_.init();
   }
 
-  disconnectedCallback() {
+  override disconnectedCallback() {
     super.disconnectedCallback();
 
+    this.router_.teardown();
+    this.eventTracker_.remove(document, 'mousedown');
+    this.eventTracker_.remove(document, 'keydown');
     this.eventTracker_.remove(window, 'resize');
-    this.dndManager_!.destroy();
+    assert(this.dndManager_);
+    this.dndManager_.destroy();
+    this.dndManager_ = null;
     destroyApiListener();
+  }
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('searchTerm_')) {
+      this.searchTermChanged_(
+          this.searchTerm_,
+          (changedPrivateProperties.get('searchTerm_') as string | undefined));
+    }
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('folderOpenState_')) {
+      this.folderOpenStateChanged_();
+    }
+  }
+
+  override onStateChanged(state: BookmarksPageState) {
+    this.searchTerm_ = state.search.term;
+    this.folderOpenState_ = state.folderOpenState;
   }
 
   private initializeSplitter_(): void {
@@ -145,7 +197,7 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
     }
     this.sidebarWidth_ = getComputedStyle(splitterTarget).width;
 
-    splitter.addEventListener('resize', (e) => {
+    splitter.addEventListener('resize', (_e: Event) => {
       window.localStorage[LOCAL_STORAGE_TREE_WIDTH_KEY] =
           splitterTarget.style.width;
       this.updateSidebarWidth_();
@@ -160,64 +212,80 @@ export class BookmarksAppElement extends BookmarksAppElementBase {
     this.sidebarWidth_ = getComputedStyle(this.$.sidebar).width;
   }
 
-  private searchTermChanged_(newValue: string, oldValue?: string) {
+  private onMousedown_() {
+    this.toggleAttribute(HIDE_FOCUS_RING_ATTRIBUTE, true);
+  }
+
+  private onKeydown_(e: KeyboardEvent) {
+    if (!['Shift', 'Alt', 'Control', 'Meta'].includes(e.key)) {
+      this.toggleAttribute(HIDE_FOCUS_RING_ATTRIBUTE, false);
+    }
+  }
+
+  private searchTermChanged_(newValue?: string, oldValue?: string) {
     if (oldValue !== undefined && !newValue) {
-      this.dispatchEvent(new CustomEvent('iron-announce', {
-        bubbles: true,
-        composed: true,
-        detail: {text: loadTimeData.getString('searchCleared')}
-      }));
+      getAnnouncerInstance().announce(loadTimeData.getString('searchCleared'));
     }
 
     if (!this.searchTerm_) {
       return;
     }
 
-    chrome.bookmarks.search(this.searchTerm_, (results) => {
-      const ids = results.map(function(node) {
-        return node.id;
-      });
-      this.dispatch(setSearchResults(ids));
-      this.dispatchEvent(new CustomEvent('iron-announce', {
-        bubbles: true,
-        composed: true,
-        detail: {
-          text: ids.length > 0 ?
-              loadTimeData.getStringF('searchResults', this.searchTerm_) :
-              loadTimeData.getString('noSearchResults')
-        }
-      }));
-    });
+    const searchTerm = this.searchTerm_;
+    const results = searchBookmarks(this.getState().nodes, searchTerm);
+    const ids = results.map(node => node.id);
+    this.dispatch(setSearchResults(ids));
+    getAnnouncerInstance().announce(
+        ids.length > 0 ? loadTimeData.getStringF('searchResults', searchTerm) :
+                         loadTimeData.getString('noSearchResults'));
   }
 
   private folderOpenStateChanged_(): void {
+    assert(this.folderOpenState_);
     window.localStorage[LOCAL_STORAGE_FOLDER_STATE_KEY] =
         JSON.stringify(Array.from(this.folderOpenState_));
   }
 
-  // Override FindShortcutBehavior methods.
-  handleFindShortcut(modalContextOpen: boolean): boolean {
+  // Override FindShortcutMixinLit methods.
+  override handleFindShortcut(modalContextOpen: boolean): boolean {
     if (modalContextOpen) {
       return false;
     }
-    this.shadowRoot!.querySelector<BookmarksToolbarElement>(
-        'bookmarks-toolbar')!.searchField.showAndFocus();
+    this.shadowRoot.querySelector(
+                       'bookmarks-toolbar')!.searchField.showAndFocus();
     return true;
   }
 
-  // Override FindShortcutBehavior methods.
-  searchInputHasFocus(): boolean {
-    return this.shadowRoot!.querySelector<BookmarksToolbarElement>(
-        'bookmarks-toolbar')!.searchField.isSearchFocused();
+  // Override FindShortcutMixinLit methods.
+  override searchInputHasFocus(): boolean {
+    return this.shadowRoot.querySelector('bookmarks-toolbar')!.searchField
+        .isSearchFocused();
   }
 
-  private onUndoClick_(): void {
-    this.dispatchEvent(
-        new CustomEvent('command-undo', {bubbles: true, composed: true}));
+  protected onUndoClick_(): void {
+    this.fire('command-undo');
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  protected onListScroll_(e: Event) {
+    this.toolbarShadow_ = (e.target as HTMLElement).scrollTop !== 0;
+  }
+
+  getDndManagerForTesting(): DndManager|null {
+    return this.dndManager_;
+  }
+
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'bookmarks-app': BookmarksAppElement;
   }
 }
 

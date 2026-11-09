@@ -33,9 +33,9 @@
 
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/math_extras.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "v8/include/v8-exception.h"
 
 namespace blink {
 
@@ -50,11 +50,15 @@ class PLATFORM_EXPORT ExceptionMessages {
     kExclusiveBound,
   };
 
+  static String AddContextToMessage(v8::ExceptionContext type,
+                                    const char* class_name,
+                                    const String& property_name,
+                                    const String& message);
+
   static String ArgumentNullOrIncorrectType(int argument_index,
                                             const String& expected_type);
   static String ArgumentNotOfType(int argument_index,
                                   const char* expected_type);
-  static String ConstructorNotCallableAsFunction(const char* type);
   static String ConstructorCalledAsFunction();
 
   static String FailedToConvertJSValue(const char* type);
@@ -63,65 +67,59 @@ class PLATFORM_EXPORT ExceptionMessages {
   static String FailedToEnumerate(const char* type, const String& detail);
   static String FailedToExecute(const char* method,
                                 const char* type,
+                                const String& detail) {
+    return FailedToExecute(String(method), type, detail);
+  }
+  static String FailedToExecute(const String& method,
+                                const char* type,
                                 const String& detail);
-  static String FailedToGet(const char* property,
+  static String FailedToGet(const String& property,
                             const char* type,
                             const String& detail);
-  static String FailedToSet(const char* property,
+  static String FailedToSet(const String& property,
                             const char* type,
                             const String& detail);
-  static String FailedToDelete(const char* property,
+  static String FailedToDelete(const String& property,
                                const char* type,
                                const String& detail);
-  static String FailedToGetIndexed(const char* type, const String& detail);
-  static String FailedToSetIndexed(const char* type, const String& detail);
-  static String FailedToDeleteIndexed(const char* type, const String& detail);
-  static String FailedToGetNamed(const char* type, const String& detail);
-  static String FailedToSetNamed(const char* type, const String& detail);
-  static String FailedToDeleteNamed(const char* type, const String& detail);
+  static String FailedToGetIndexed(const String& property,
+                                   const char* type,
+                                   const String& detail);
+  static String FailedToSetIndexed(const String& property,
+                                   const char* type,
+                                   const String& detail);
+  static String FailedToDeleteIndexed(const String& property,
+                                      const char* type,
+                                      const String& detail);
+  static String FailedToGetNamed(const String& property,
+                                 const char* type,
+                                 const String& detail);
+  static String FailedToSetNamed(const String& property,
+                                 const char* type,
+                                 const String& detail);
+  static String FailedToDeleteNamed(const String& property,
+                                    const char* type,
+                                    const String& detail);
 
   template <typename NumType>
   static String FormatNumber(NumType number) {
     return FormatFiniteNumber(number);
   }
 
-  static String IncorrectPropertyType(const String& property,
-                                      const String& detail);
-
   template <typename NumberType>
   static String IndexExceedsMaximumBound(const char* name,
                                          NumberType given,
                                          NumberType bound) {
-    bool eq = given == bound;
-    StringBuilder result;
-    result.Append("The ");
-    result.Append(name);
-    result.Append(" provided (");
-    result.Append(FormatNumber(given));
-    result.Append(") is greater than ");
-    result.Append(eq ? "or equal to " : "");
-    result.Append("the maximum bound (");
-    result.Append(FormatNumber(bound));
-    result.Append(").");
-    return result.ToString();
+    return IndexExceedsMaximumBound(name, given == bound, FormatNumber(given),
+                                    FormatNumber(bound));
   }
 
   template <typename NumberType>
   static String IndexExceedsMinimumBound(const char* name,
                                          NumberType given,
                                          NumberType bound) {
-    bool eq = given == bound;
-    StringBuilder result;
-    result.Append("The ");
-    result.Append(name);
-    result.Append(" provided (");
-    result.Append(FormatNumber(given));
-    result.Append(") is less than ");
-    result.Append(eq ? "or equal to " : "");
-    result.Append("the minimum bound (");
-    result.Append(FormatNumber(bound));
-    result.Append(").");
-    return result.ToString();
+    return IndexExceedsMinimumBound(name, given == bound, FormatNumber(given),
+                                    FormatNumber(bound));
   }
 
   template <typename NumberType>
@@ -131,24 +129,11 @@ class PLATFORM_EXPORT ExceptionMessages {
                                   BoundType lower_type,
                                   NumberType upper_bound,
                                   BoundType upper_type) {
-    StringBuilder result;
-    result.Append("The ");
-    result.Append(name);
-    result.Append(" provided (");
-    result.Append(FormatNumber(given));
-    result.Append(") is outside the range ");
-    result.Append(lower_type == kExclusiveBound ? '(' : '[');
-    result.Append(FormatNumber(lower_bound));
-    result.Append(", ");
-    result.Append(FormatNumber(upper_bound));
-    result.Append(upper_type == kExclusiveBound ? ')' : ']');
-    result.Append('.');
-    return result.ToString();
+    return IndexOutsideRange(name, FormatNumber(given),
+                             FormatNumber(lower_bound), lower_type,
+                             FormatNumber(upper_bound), upper_type);
   }
 
-  static String InvalidArity(const char* expected, unsigned provided);
-
-  static String NotASequenceTypeProperty(const String& property_name);
   static String NotAFiniteNumber(double value,
                                  const char* name = "value provided");
   static String NotAFiniteNumber(const Decimal& value,
@@ -160,13 +145,15 @@ class PLATFORM_EXPORT ExceptionMessages {
 
   static String SharedArrayBufferNotAllowed(const char* expected_type);
 
+  static String ResizableArrayBufferNotAllowed(const char* expected_type);
+
   static String ValueNotOfType(const char* expected_type);
 
  private:
   template <typename NumType>
   static String FormatFiniteNumber(NumType number) {
     if (number > 1e20 || number < -1e20)
-      return String::Format("%e", 1.0 * number);
+      return Format("{:e}", 1.0 * number);
     return String::Number(number);
   }
 
@@ -177,11 +164,28 @@ class PLATFORM_EXPORT ExceptionMessages {
     if (std::isinf(number))
       return number > 0 ? "Infinity" : "-Infinity";
     if (number > 1e20 || number < -1e20)
-      return String::Format("%e", number);
+      return Format("{:e}", number);
     return String::Number(number);
   }
 
   static String OrdinalNumber(int number);
+
+  static String IndexExceedsMaximumBound(const char* name,
+                                         bool eq,
+                                         const String& given,
+                                         const String& bound);
+
+  static String IndexExceedsMinimumBound(const char* name,
+                                         bool eq,
+                                         const String& given,
+                                         const String& bound);
+
+  static String IndexOutsideRange(const char* name,
+                                  const String& given,
+                                  const String& lower_bound,
+                                  BoundType lower_type,
+                                  const String& upper_bound,
+                                  BoundType upper_type);
 };
 
 template <>

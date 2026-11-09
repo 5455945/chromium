@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -74,6 +74,9 @@ struct ASH_PUBLIC_EXPORT HotseatInfo {
 
   // The current hotseat state.
   HotseatState hotseat_state = HotseatState::kHidden;
+
+  // Indicates whether the hotseat is being autohidden.
+  bool is_auto_hidden = false;
 };
 
 }  // namespace ash

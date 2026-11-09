@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,19 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/storage_pressure_bubble.h"
 #endif
 
 namespace {
 
 // Minimum interval between consecutive storage pressure notifications.
-const base::TimeDelta kDiskPressureNotificationInterval =
-    base::TimeDelta::FromDays(1);
+const base::TimeDelta kDiskPressureNotificationInterval = base::Days(1);
 
 const base::TimeDelta GetThrottlingInterval() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -28,7 +29,7 @@ const base::TimeDelta GetThrottlingInterval() {
     const std::string string_value = command_line->GetSwitchValueASCII(
         switches::kStoragePressureNotificationInterval);
     if (base::StringToInt(string_value, &int_value) && int_value >= 0) {
-      return base::TimeDelta::FromMinutes(int_value);
+      return base::Minutes(int_value);
     }
   }
   return kDiskPressureNotificationInterval;
@@ -36,15 +37,35 @@ const base::TimeDelta GetThrottlingInterval() {
 
 }  // namespace
 
+StoragePressureNotificationCallback
+StorageNotificationServiceImpl::CreateThreadSafePressureNotificationCallback() {
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
+  auto thread_unsafe_callback = base::BindRepeating(
+      &StorageNotificationServiceImpl::MaybeShowStoragePressureNotification,
+      weak_ptr_factory_.GetWeakPtr());
+  return base::BindRepeating(
+      [](StoragePressureNotificationCallback cb, const blink::StorageKey& key) {
+        content::GetUIThreadTaskRunner({})->PostTask(
+            FROM_HERE,
+            base::BindOnce([](StoragePressureNotificationCallback callback,
+                              blink::StorageKey key) { callback.Run(key); },
+                           std::move(cb), key));
+      },
+      std::move(thread_unsafe_callback));
+}
+
 void StorageNotificationServiceImpl::MaybeShowStoragePressureNotification(
-    const url::Origin origin) {
+    const blink::StorageKey& storage_key) {
   if (!disk_pressure_notification_last_sent_at_.is_null() &&
       base::TimeTicks::Now() - disk_pressure_notification_last_sent_at_ <
           GetThrottlingInterval()) {
     return;
   }
 
-  chrome::ShowStoragePressureBubble(origin);
+#if !BUILDFLAG(IS_ANDROID)
+  ShowStoragePressureBubble(storage_key.origin());
+#endif
   disk_pressure_notification_last_sent_at_ = base::TimeTicks::Now();
 }
 

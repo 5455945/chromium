@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/completion_once_callback.h"
 #include "storage/browser/file_system/file_stream_reader.h"
@@ -19,8 +18,7 @@ namespace net {
 class IOBuffer;
 }  // namespace net
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // Wraps the file stream reader implementation with a prefetching buffer.
 // Reads data from the internal file stream reader in chunks of size at least
@@ -37,13 +35,17 @@ class BufferingFileStreamReader : public storage::FileStreamReader {
       int preloading_buffer_length,
       int64_t max_bytes_to_read);
 
+  BufferingFileStreamReader(const BufferingFileStreamReader&) = delete;
+  BufferingFileStreamReader& operator=(const BufferingFileStreamReader&) =
+      delete;
+
   ~BufferingFileStreamReader() override;
 
   // storage::FileStreamReader overrides.
-  int Read(net::IOBuffer* buf,
+  int Read(scoped_refptr<net::IOBuffer> buf,
            int buf_len,
            net::CompletionOnceCallback callback) override;
-  int64_t GetLength(net::Int64CompletionOnceCallback callback) override;
+  int64_t GetLength(GetLengthCallback callback) override;
 
  private:
   // Copies data from the preloading buffer and updates the internal iterator.
@@ -68,14 +70,12 @@ class BufferingFileStreamReader : public storage::FileStreamReader {
   int64_t max_bytes_to_read_;
   int64_t bytes_read_;
   scoped_refptr<net::IOBuffer> preloading_buffer_;
-  int preloading_buffer_offset_;
-  int preloaded_bytes_;
+  size_t preloading_buffer_offset_ = 0;
+  size_t preloaded_bytes_ = 0;
 
   base::WeakPtrFactory<BufferingFileStreamReader> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(BufferingFileStreamReader);
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_FILEAPI_BUFFERING_FILE_STREAM_READER_H_

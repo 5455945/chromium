@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/protocol/channel_dispatcher_base.h"
 #include "remoting/protocol/clipboard_filter.h"
 #include "remoting/protocol/connection_to_host.h"
@@ -18,12 +18,10 @@
 #include "remoting/protocol/session.h"
 #include "remoting/protocol/webrtc_transport.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 class ClientControlDispatcher;
 class ClientEventDispatcher;
-class SessionConfig;
 class WebrtcVideoRendererAdapter;
 class WebrtcAudioSinkAdapter;
 
@@ -33,6 +31,10 @@ class WebrtcConnectionToHost : public ConnectionToHost,
                                public ChannelDispatcherBase::EventHandler {
  public:
   WebrtcConnectionToHost();
+
+  WebrtcConnectionToHost(const WebrtcConnectionToHost&) = delete;
+  WebrtcConnectionToHost& operator=(const WebrtcConnectionToHost&) = delete;
+
   ~WebrtcConnectionToHost() override;
 
   // ConnectionToHost interface.
@@ -46,7 +48,7 @@ class WebrtcConnectionToHost : public ConnectionToHost,
                scoped_refptr<TransportContext> transport_context,
                HostEventCallback* event_callback) override;
   void Disconnect(ErrorCode error) override;
-  const SessionConfig& config() override;
+  void ApplyNetworkSettings(const NetworkSettings& settings) override;
   ClipboardStub* clipboard_forwarder() override;
   HostStub* host_stub() override;
   InputStub* input_stub() override;
@@ -59,15 +61,17 @@ class WebrtcConnectionToHost : public ConnectionToHost,
   // WebrtcTransport::EventHandler interface.
   void OnWebrtcTransportConnecting() override;
   void OnWebrtcTransportConnected() override;
-  void OnWebrtcTransportError(ErrorCode error) override;
+  void OnWebrtcTransportError(ErrorCode error,
+                              std::string_view error_details,
+                              const base::Location& error_location) override;
   void OnWebrtcTransportProtocolChanged() override;
   void OnWebrtcTransportIncomingDataChannel(
       const std::string& name,
       std::unique_ptr<MessagePipe> pipe) override;
   void OnWebrtcTransportMediaStreamAdded(
-      scoped_refptr<webrtc::MediaStreamInterface> stream) override;
+      webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override;
   void OnWebrtcTransportMediaStreamRemoved(
-      scoped_refptr<webrtc::MediaStreamInterface> stream) override;
+      webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) override;
   void OnWebrtcTransportRouteChanged(const TransportRoute& route) override;
 
   // ChannelDispatcherBase::EventHandler interface.
@@ -86,18 +90,20 @@ class WebrtcConnectionToHost : public ConnectionToHost,
 
   void SetState(State state, ErrorCode error);
 
-  HostEventCallback* event_callback_ = nullptr;
+  raw_ptr<HostEventCallback> event_callback_ = nullptr;
 
   scoped_refptr<base::SingleThreadTaskRunner> audio_decode_task_runner_;
 
   // Stub for incoming messages.
-  ClientStub* client_stub_ = nullptr;
-  VideoRenderer* video_renderer_ = nullptr;
+  raw_ptr<ClientStub> client_stub_ = nullptr;
+  raw_ptr<VideoRenderer> video_renderer_ = nullptr;
   base::WeakPtr<AudioStub> audio_consumer_;
-  ClipboardStub* clipboard_stub_ = nullptr;
+  raw_ptr<ClipboardStub> clipboard_stub_ = nullptr;
 
-  std::unique_ptr<Session> session_;
+  // `session_` holds a raw ptr to `transport_` so it should come after it to be
+  // destroyed first.
   std::unique_ptr<WebrtcTransport> transport_;
+  std::unique_ptr<Session> session_;
 
   std::unique_ptr<ClientControlDispatcher> control_dispatcher_;
   std::unique_ptr<ClientEventDispatcher> event_dispatcher_;
@@ -109,12 +115,9 @@ class WebrtcConnectionToHost : public ConnectionToHost,
 
   // Internal state of the connection.
   State state_ = INITIALIZING;
-  ErrorCode error_ = OK;
-
-  DISALLOW_COPY_AND_ASSIGN(WebrtcConnectionToHost);
+  ErrorCode error_ = ErrorCode::OK;
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_WEBRTC_CONNECTION_TO_HOST_H_

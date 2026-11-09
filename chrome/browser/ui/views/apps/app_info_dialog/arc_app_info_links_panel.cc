@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 
 #include <memory>
 
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
-#include "components/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/display/display.h"
@@ -38,34 +39,38 @@ ArcAppInfoLinksPanel::ArcAppInfoLinksPanel(Profile* profile,
   manage_link_ = AddChildView(std::move(manage_link));
 
   ArcAppListPrefs* const arc_prefs = ArcAppListPrefs::Get(profile_);
-  DCHECK(arc_prefs);
+  CHECK(arc_prefs, base::NotFatalUntil::M162);
   app_list_observation_.Observe(arc_prefs);
 
   std::unique_ptr<ArcAppListPrefs::AppInfo> app_info =
       ArcAppListPrefs::Get(profile)->GetApp(arc::kSettingsAppId);
-  if (app_info)
+  if (app_info) {
     UpdateLink(app_info->ready);
+  }
 }
 
-ArcAppInfoLinksPanel::~ArcAppInfoLinksPanel() {}
+ArcAppInfoLinksPanel::~ArcAppInfoLinksPanel() = default;
 
 void ArcAppInfoLinksPanel::OnAppRegistered(
     const std::string& app_id,
     const ArcAppListPrefs::AppInfo& app_info) {
-  if (app_id == arc::kSettingsAppId)
+  if (app_id == arc::kSettingsAppId) {
     UpdateLink(app_info.ready);
+  }
 }
 
 void ArcAppInfoLinksPanel::OnAppStatesChanged(
     const std::string& app_id,
     const ArcAppListPrefs::AppInfo& app_info) {
-  if (app_id == arc::kSettingsAppId)
+  if (app_id == arc::kSettingsAppId) {
     UpdateLink(app_info.ready);
+  }
 }
 
 void ArcAppInfoLinksPanel::OnAppRemoved(const std::string& app_id) {
-  if (app_id == arc::kSettingsAppId)
+  if (app_id == arc::kSettingsAppId) {
     UpdateLink(false);
+  }
 }
 
 void ArcAppInfoLinksPanel::UpdateLink(bool enabled) {
@@ -75,13 +80,13 @@ void ArcAppInfoLinksPanel::UpdateLink(bool enabled) {
 void ArcAppInfoLinksPanel::LinkClicked() {
   gfx::NativeView native_view = GetWidget()->GetNativeView();
   const int64_t display_id =
-      display::Screen::GetScreen()->GetDisplayNearestView(native_view).id();
-  if (arc::ShowPackageInfo(
-          arc::ArcIntentHelperBridge::kArcIntentHelperPackageName,
-          arc::mojom::ShowPackageInfoPage::MANAGE_LINKS, display_id)) {
+      display::Screen::Get()->GetDisplayNearestView(native_view).id();
+  if (arc::ShowPackageInfo(arc::kArcIntentHelperPackageName,
+                           arc::mojom::ShowPackageInfoPage::MANAGE_LINKS,
+                           display_id)) {
     Close();
   }
 }
 
-BEGIN_METADATA(ArcAppInfoLinksPanel, AppInfoPanel)
+BEGIN_METADATA(ArcAppInfoLinksPanel)
 END_METADATA

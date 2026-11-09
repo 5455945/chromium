@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "ui/events/event_switches.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/ozone/evdev/touch_filter/edge_touch_filter.h"

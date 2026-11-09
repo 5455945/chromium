@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
 #include "ui/compositor/layer_delegate.h"
 #include "ui/display/display.h"
 #include "ui/display/display_observer.h"
@@ -16,8 +15,8 @@
 #include "ui/gfx/geometry/rect.h"
 
 namespace ui {
-class Layer;
-}
+class LayerTextured;
+}  // namespace ui
 
 namespace ash {
 
@@ -28,6 +27,10 @@ class ASH_EXPORT OverscanCalibrator : public ui::LayerDelegate,
  public:
   OverscanCalibrator(const display::Display& target_display,
                      const gfx::Insets& initial_insets);
+
+  OverscanCalibrator(const OverscanCalibrator&) = delete;
+  OverscanCalibrator& operator=(const OverscanCalibrator&) = delete;
+
   ~OverscanCalibrator() override;
 
   // Commits the current insets data to the system.
@@ -53,6 +56,7 @@ class ASH_EXPORT OverscanCalibrator : public ui::LayerDelegate,
                                uint32_t changed_metrics) override;
 
  private:
+  gfx::Insets ClampInsets(const gfx::Insets& insets) const;
   void UpdateUILayer();
 
   // The target display.
@@ -68,12 +72,10 @@ class ASH_EXPORT OverscanCalibrator : public ui::LayerDelegate,
   bool committed_;
 
   // The visualization layer for the current calibration region.
-  std::unique_ptr<ui::Layer> calibration_layer_;
+  std::unique_ptr<ui::LayerTextured> calibration_layer_;
 
   // Register for DisplayObserver callbacks.
   display::ScopedDisplayObserver display_observer_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(OverscanCalibrator);
 };
 
 }  // namespace ash

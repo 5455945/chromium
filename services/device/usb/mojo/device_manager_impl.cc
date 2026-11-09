@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/files/file_util.h"
-#include "base/memory/ptr_util.h"
-#include "build/chromeos_buildflags.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "services/device/public/cpp/usb/usb_utils.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
@@ -25,13 +23,12 @@
 #include "services/device/usb/usb_device.h"
 #include "services/device/usb/usb_service.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/dbus/permission_broker/permission_broker_client.h"  // nogncheck
 #include "services/device/usb/usb_device_linux.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-namespace device {
-namespace usb {
+namespace device::usb {
 
 DeviceManagerImpl::DeviceManagerImpl()
     : DeviceManagerImpl(UsbService::Create()) {}
@@ -72,7 +69,19 @@ void DeviceManagerImpl::GetDevice(
     mojo::PendingRemote<mojom::UsbDeviceClient> device_client) {
   return GetDeviceInternal(guid, std::move(device_receiver),
                            std::move(device_client), blocked_interface_classes,
-                           /*allow_security_key_requests=*/false);
+                           /*allow_security_key_requests=*/false,
+                           /*allow_unrestricted_access=*/false);
+}
+
+void DeviceManagerImpl::GetUnrestrictedDevice(
+    const std::string& guid,
+    const std::vector<uint8_t>& blocked_interface_classes,
+    mojo::PendingReceiver<mojom::UsbDevice> device_receiver,
+    mojo::PendingRemote<mojom::UsbDeviceClient> device_client) {
+  return GetDeviceInternal(guid, std::move(device_receiver),
+                           std::move(device_client), blocked_interface_classes,
+                           /*allow_security_key_requests=*/false,
+                           /*allow_unrestricted_access=*/true);
 }
 
 void DeviceManagerImpl::GetSecurityKeyDevice(
@@ -82,10 +91,11 @@ void DeviceManagerImpl::GetSecurityKeyDevice(
   return GetDeviceInternal(guid, std::move(device_receiver),
                            std::move(device_client),
                            /*blocked_interface_classes=*/{},
-                           /*allow_security_key_requests=*/true);
+                           /*allow_security_key_requests=*/true,
+                           /*allow_unrestricted_access=*/false);
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void DeviceManagerImpl::RefreshDeviceInfo(const std::string& guid,
                                           RefreshDeviceInfoCallback callback) {
   scoped_refptr<UsbDevice> device = usb_service_->GetDevice(guid);
@@ -116,10 +126,9 @@ void DeviceManagerImpl::OnPermissionGrantedToRefresh(
 
   std::move(callback).Run(device->device_info().Clone());
 }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
-// TODO(huangs): Enable for IS_CHROMEOS_LACROS for crbug.com/1195247.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void DeviceManagerImpl::CheckAccess(const std::string& guid,
                                     CheckAccessCallback callback) {
   scoped_refptr<UsbDevice> device = usb_service_->GetDevice(guid);
@@ -173,7 +182,7 @@ void DeviceManagerImpl::OnOpenFileDescriptorError(
              << message;
   std::move(callback).Run(base::File());
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void DeviceManagerImpl::SetClient(
     mojo::PendingAssociatedRemote<mojom::UsbDeviceManagerClient> client) {
@@ -227,15 +236,15 @@ void DeviceManagerImpl::GetDeviceInternal(
     mojo::PendingReceiver<mojom::UsbDevice> device_receiver,
     mojo::PendingRemote<mojom::UsbDeviceClient> device_client,
     base::span<const uint8_t> blocked_interface_classes,
-    bool allow_security_key_requests) {
+    bool allow_security_key_requests,
+    bool allow_unrestricted_access) {
   scoped_refptr<UsbDevice> device = usb_service_->GetDevice(guid);
   if (!device)
     return;
 
   DeviceImpl::Create(std::move(device), std::move(device_receiver),
                      std::move(device_client), blocked_interface_classes,
-                     allow_security_key_requests);
+                     allow_security_key_requests, allow_unrestricted_access);
 }
 
-}  // namespace usb
-}  // namespace device
+}  // namespace device::usb

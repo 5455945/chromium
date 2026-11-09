@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,22 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
 #include "base/process/process.h"
-#include "base/tracing/perfetto_task_runner.h"
 #include "build/build_config.h"
 #include "services/tracing/perfetto/perfetto_service.h"
-#include "services/tracing/public/cpp/perfetto/producer_client.h"
 #include "services/tracing/public/cpp/perfetto/shared_memory.h"
-#include "services/tracing/public/cpp/tracing_features.h"
+#include "third_party/perfetto/include/perfetto/ext/tracing/core/client_identity.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/commit_data_request.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/data_source_descriptor.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"
 
 namespace tracing {
 
-ProducerHost::ProducerHost(base::tracing::PerfettoTaskRunner* task_runner)
-    : task_runner_(task_runner) {}
+ProducerHost::ProducerHost() = default;
 
 ProducerHost::~ProducerHost() {
   // Manually reset to prevent any callbacks from the ProducerEndpoint
@@ -33,25 +33,29 @@ ProducerHost::InitializationResult ProducerHost::Initialize(
     mojo::PendingRemote<mojom::ProducerClient> producer_client,
     perfetto::TracingService* service,
     const std::string& name,
-    mojo::ScopedSharedBufferHandle shared_memory,
+    base::UnsafeSharedMemoryRegion shared_memory,
     uint64_t shared_memory_buffer_page_size_bytes) {
   DCHECK(service);
   DCHECK(!producer_endpoint_);
 
   producer_client_.Bind(std::move(producer_client));
 
-  auto shm = std::make_unique<MojoSharedMemory>(std::move(shared_memory));
+  auto shm = std::make_unique<ChromeBaseSharedMemory>(std::move(shared_memory));
   // We may fail to map the buffer provided by the ProducerClient.
   if (!shm->start()) {
     return InitializationResult::kSmbMappingFailed;
   }
 
   size_t shm_size = shm->size();
-  MojoSharedMemory* shm_raw = shm.get();
+  ChromeBaseSharedMemory* shm_raw = shm.get();
 
   // TODO(oysteine): Figure out a uid once we need it.
   producer_endpoint_ = service->ConnectProducer(
-      this, 0 /* uid */, name, shm_size, /*in_process=*/false,
+      this,
+      perfetto::ClientIdentity(/*uid=*/0,
+                               /*pid=*/perfetto::base::kInvalidPid),
+      name, shm_size,
+      /*in_process=*/false,
       perfetto::TracingService::ProducerSMBScrapingMode::kDefault,
       shared_memory_buffer_page_size_bytes, std::move(shm));
 
@@ -67,24 +71,7 @@ ProducerHost::InitializationResult ProducerHost::Initialize(
     return InitializationResult::kSmbNotAdopted;
   }
 
-  // When we are in-process, we don't use the in-process arbiter perfetto would
-  // provide (thus pass |in_process = false| to ConnectProducer), but rather
-  // bind the ProducerClient's arbiter to the service's endpoint and task runner
-  // directly. This allows us to use startup tracing via an unbound SMA, while
-  // avoiding some cross-sequence PostTasks when committing chunks (since we
-  // bypass mojo).
-  base::ProcessId pid;
-  if (PerfettoService::ParsePidFromProducerName(name, &pid)) {
-    bool in_process = (pid == base::Process::Current().Pid());
-    // TODO(skyostil): Implement arbiter binding for the client API.
-    if (in_process && !base::FeatureList::IsEnabled(
-                          features::kEnablePerfettoClientApiProducer)) {
-      PerfettoTracedProcess::Get()
-          ->producer_client()
-          ->BindInProcessSharedMemoryArbiter(producer_endpoint_.get(),
-                                             task_runner_);
-    }
-  }
+  // TODO(skyostil): Implement arbiter binding for the client API.
 
   return InitializationResult::kSuccess;
 }
@@ -101,17 +88,17 @@ void ProducerHost::OnTracingSetup() {
   producer_client_->OnTracingStart();
 }
 
-void ProducerHost::SetupDataSource(perfetto::DataSourceInstanceID,
-                                   const perfetto::DataSourceConfig&) {
-  // TODO(primiano): plumb call through mojo.
+void ProducerHost::SetupDataSource(perfetto::DataSourceInstanceID id,
+                                   const perfetto::DataSourceConfig& config) {
+  if (producer_client_) {
+    producer_client_->SetupDataSource(id, config);
+  }
 }
 
 void ProducerHost::StartDataSource(perfetto::DataSourceInstanceID id,
                                    const perfetto::DataSourceConfig& config) {
-  // The type traits will send the base fields in the DataSourceConfig and also
-  // the ChromeConfig other configs are dropped.
   producer_client_->StartDataSource(
-      id, config,
+      id,
       base::BindOnce(
           [](ProducerHost* producer_host, perfetto::DataSourceInstanceID id) {
             producer_host->producer_endpoint_->NotifyDataSourceStarted(id);
@@ -134,10 +121,15 @@ void ProducerHost::StopDataSource(perfetto::DataSourceInstanceID id) {
 void ProducerHost::Flush(
     perfetto::FlushRequestID id,
     const perfetto::DataSourceInstanceID* raw_data_source_ids,
-    size_t num_data_sources) {
+    size_t num_data_sources,
+    perfetto::FlushFlags /*ignored*/) {
   DCHECK(producer_client_);
-  std::vector<uint64_t> data_source_ids(raw_data_source_ids,
-                                        raw_data_source_ids + num_data_sources);
+  // SAFETY: `perfetto::Producer::Flush()` is a C-style interface that passes
+  // the data source IDs as a pointer + size pair. The tracing service
+  // guarantees `raw_data_source_ids` points to `num_data_sources` elements
+  // (it passes `std::vector::data()` and `std::vector::size()`).
+  std::vector<uint64_t> data_source_ids = base::ToVector(
+      UNSAFE_BUFFERS(base::span(raw_data_source_ids, num_data_sources)));
   DCHECK_EQ(data_source_ids.size(), num_data_sources);
   producer_client_->Flush(id, data_source_ids);
 }
@@ -167,6 +159,11 @@ void ProducerHost::CommitData(const perfetto::CommitDataRequest& data_request,
 void ProducerHost::RegisterDataSource(
     const perfetto::DataSourceDescriptor& registration_info) {
   producer_endpoint_->RegisterDataSource(registration_info);
+}
+
+void ProducerHost::UpdateDataSource(
+    const perfetto::DataSourceDescriptor& registration_info) {
+  producer_endpoint_->UpdateDataSource(registration_info);
 }
 
 void ProducerHost::RegisterTraceWriter(uint32_t writer_id,

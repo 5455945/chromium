@@ -1,63 +1,118 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/navigation/navigation_manager_impl.h"
 
 #import <Foundation/Foundation.h>
-#include <algorithm>
-#include <memory>
-#include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/ios/ios_util.h"
-#include "base/logging.h"
-#include "base/mac/bundle_locations.h"
-#include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/numerics/checked_math.h"
-#include "base/strings/string_util.h"
-#include "base/strings/sys_string_conversions.h"
-#include "base/timer/elapsed_timer.h"
-#include "ios/web/common/features.h"
+#import <algorithm>
+#import <memory>
+#import <utility>
+
+#import "base/auto_reset.h"
+#import "base/containers/span.h"
+#import "base/feature_list.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback.h"
+#import "base/ios/ios_util.h"
+#import "base/logging.h"
+#import "base/memory/ptr_util.h"
+#import "base/metrics/histogram_functions.h"
+#import "base/metrics/histogram_macros.h"
+#import "base/numerics/checked_math.h"
+#import "base/numerics/safe_conversions.h"
+#import "base/strings/string_util.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/timer/elapsed_timer.h"
+#import "ios/public/provider/web/navigation_api.h"
+#import "ios/web/common/features.h"
+#import "ios/web/navigation/back_forward_navigation_type.h"
 #import "ios/web/navigation/crw_navigation_item_holder.h"
-#include "ios/web/navigation/navigation_item_impl_list.h"
 #import "ios/web/navigation/navigation_manager_delegate.h"
+#import "ios/web/navigation/wk_back_forward_list_item_holder.h"
 #import "ios/web/navigation/wk_navigation_util.h"
+#import "ios/web/public/browser_state.h"
+#import "ios/web/public/navigation/navigation_item.h"
+#import "ios/web/public/session/proto/navigation.pb.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/web_state/ui/crw_web_view_navigation_proxy.h"
-#import "net/base/mac/url_conversions.h"
-#include "ui/base/page_transition_types.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "net/base/apple/url_conversions.h"
+#import "ui/base/page_transition_types.h"
+#import "url/origin.h"
 
 namespace {
 
 void SetNavigationItemInWKItem(WKBackForwardListItem* wk_item,
                                std::unique_ptr<web::NavigationItemImpl> item) {
   DCHECK(wk_item);
+  if (item) {
+    item->SetWasCreatedAutomatically(
+        web::provider::WasCreatedAutomatically(wk_item));
+    web::WKBackForwardListItemHolder::FromNavigationItem(item.get())
+        ->set_back_forward_list_item(wk_item);
+  }
   [[CRWNavigationItemHolder holderForBackForwardListItem:wk_item]
       setNavigationItem:std::move(item)];
 }
 
 web::NavigationItemImpl* GetNavigationItemFromWKItem(
     WKBackForwardListItem* wk_item) {
-  if (!wk_item)
+  if (!wk_item) {
     return nullptr;
+  }
 
   return [[CRWNavigationItemHolder holderForBackForwardListItem:wk_item]
       navigationItem];
 }
 
-// Returns true if |url1| is the same as |url2| or is a placeholder of |url2|.
-bool IsSameOrPlaceholderOf(const GURL& url1, const GURL& url2) {
-  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
-  return url1 == url2 ||
-         url1 == web::wk_navigation_util::CreatePlaceholderUrlForUrl(url2);
+void RecordSessionRestorationHasFetchers(bool has_fetchers) {
+  base::UmaHistogramBoolean("Session.WebStates.NativeRestoreHasFetchers",
+                            has_fetchers);
+}
+
+// Records metrics about session restoration `success` from `source`.
+void RecordSessionRestorationResultForSource(
+    bool success,
+    web::NavigationManagerImpl::SessionDataBlobSource source) {
+  switch (source) {
+    case web::NavigationManagerImpl::SessionDataBlobSource::kSessionCache:
+      base::UmaHistogramBoolean(
+          "Session.WebStates.NativeRestoreSessionFromCache", success);
+      break;
+
+    case web::NavigationManagerImpl::SessionDataBlobSource::kSynthesized:
+      base::UmaHistogramBoolean("Session.WebStates.NativeRestoreSession",
+                                success);
+      break;
+  }
+}
+
+void RecordSessionRestorationFetcherHasDataForSource(
+    web::NavigationManagerImpl::SessionDataBlobSource source,
+    bool fetcher_has_data) {
+  switch (source) {
+    case web::NavigationManagerImpl::SessionDataBlobSource::kSessionCache:
+      base::UmaHistogramBoolean(
+          "Session.WebStates.NativeRestoreSessionFromCacheHasData",
+          fetcher_has_data);
+      break;
+
+    case web::NavigationManagerImpl::SessionDataBlobSource::kSynthesized:
+      base::UmaHistogramBoolean("Session.WebStates.NativeRestoreSessionHasData",
+                                fetcher_has_data);
+      break;
+  }
+}
+
+// Clamps `last_committed_item_index` so that it is in range [0; count-1] or
+// -1 if count is zero.
+int ClampLastCommittedItemIndex(int last_committed_item_index, int count) {
+  const int val = std::min(std::max(last_committed_item_index, 0), count - 1);
+  CHECK_GE(val, -1);
+  CHECK_LT(val, count);
+  return val;
 }
 
 }  // namespace
@@ -65,119 +120,215 @@ bool IsSameOrPlaceholderOf(const GURL& url1, const GURL& url2) {
 namespace web {
 
 const char kRestoreNavigationItemCount[] = "IOS.RestoreNavigationItemCount";
-const char kRestoreNavigationTime[] = "IOS.RestoreNavigationTime";
 
-NavigationManager::WebLoadParams::WebLoadParams(const GURL& url)
-    : url(url),
-      transition_type(ui::PAGE_TRANSITION_LINK),
-      is_renderer_initiated(false),
-      post_data(nil),
-      is_using_https_as_default_scheme(false) {}
+BASE_FEATURE(kSkipAutomaticNavigationInBackForwardListKillSwitch,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-NavigationManager::WebLoadParams::~WebLoadParams() {}
-
-NavigationManager::WebLoadParams::WebLoadParams(const WebLoadParams& other)
-    : url(other.url),
-      virtual_url(other.virtual_url),
-      referrer(other.referrer),
-      transition_type(other.transition_type),
-      is_renderer_initiated(other.is_renderer_initiated),
-      extra_headers([other.extra_headers copy]),
-      post_data([other.post_data copy]),
-      is_using_https_as_default_scheme(other.is_using_https_as_default_scheme) {
+bool SkipAutomaticNavigationInBackForwardList() {
+  return !base::FeatureList::IsEnabled(
+      kSkipAutomaticNavigationInBackForwardListKillSwitch);
 }
+
+class NavigationManagerImpl::GoToParams {
+ public:
+  constexpr GoToParams(GoToParams&&) = default;
+  constexpr GoToParams(const GoToParams&) = default;
+
+  GoToParams& operator=(GoToParams&&) = delete;
+  GoToParams& operator=(const GoToParams&) = delete;
+
+  constexpr ~GoToParams() = default;
+
+  constexpr static GoToParams GoBackward() {
+    return GoToParams(BackForwardNavigationType::kBackward, -1);
+  }
+
+  constexpr static GoToParams GoForward() {
+    return GoToParams(BackForwardNavigationType::kForward, -1);
+  }
+
+  constexpr static GoToParams GoToIndex(int index) {
+    return GoToParams(BackForwardNavigationType::kToEntry, index);
+  }
+
+  GoToParams& SetInitiationType(NavigationInitiationType value) {
+    initiation_type_ = value;
+    return *this;
+  }
+
+  GoToParams& SetHasUserGesture(bool value) {
+    has_user_gesture_ = value;
+    return *this;
+  }
+
+  constexpr BackForwardNavigationType navigation_type() const {
+    return navigation_type_;
+  }
+
+  constexpr NavigationInitiationType initiation_type() const {
+    return initiation_type_;
+  }
+
+  constexpr bool has_user_gesture() const { return has_user_gesture_; }
+
+  constexpr int index() const {
+    CHECK_EQ(navigation_type_, BackForwardNavigationType::kToEntry);
+    return index_;
+  }
+
+ private:
+  constexpr GoToParams(BackForwardNavigationType navigation_type, int index)
+      : navigation_type_(navigation_type), index_(index) {}
+
+  const BackForwardNavigationType navigation_type_;
+  const int index_;
+
+  NavigationInitiationType initiation_type_ = NavigationInitiationType::NONE;
+  bool has_user_gesture_ = false;
+};
+
+NavigationManager::WebLoadParams::WebLoadParams(const GURL& url) : url(url) {}
+
+NavigationManager::WebLoadParams::~WebLoadParams() = default;
+
+NavigationManager::WebLoadParams::WebLoadParams(const WebLoadParams& other) =
+    default;
 
 NavigationManager::WebLoadParams& NavigationManager::WebLoadParams::operator=(
-    const WebLoadParams& other) {
-  url = other.url;
-  virtual_url = other.virtual_url;
-  referrer = other.referrer;
-  is_renderer_initiated = other.is_renderer_initiated;
-  transition_type = other.transition_type;
-  extra_headers = [other.extra_headers copy];
-  post_data = [other.post_data copy];
-  is_using_https_as_default_scheme = other.is_using_https_as_default_scheme;
+    const WebLoadParams& other) = default;
 
-  return *this;
+NavigationManagerImpl::NavigationManagerImpl(
+    BrowserState* browser_state,
+    NavigationManagerDelegate* delegate)
+    : delegate_(delegate), browser_state_(browser_state) {
+  CHECK(browser_state_);
+  CHECK(delegate_);
 }
-
-NavigationManagerImpl::NavigationManagerImpl()
-    : delegate_(nullptr),
-      browser_state_(nullptr),
-      pending_item_index_(-1),
-      last_committed_item_index_(-1),
-      web_view_cache_(this) {}
 
 NavigationManagerImpl::~NavigationManagerImpl() = default;
 
-void NavigationManagerImpl::SetDelegate(NavigationManagerDelegate* delegate) {
-  delegate_ = delegate;
+void NavigationManagerImpl::RestoreFromProto(
+    const proto::NavigationStorage& storage) {
+  std::vector<std::unique_ptr<NavigationItemImpl>> items;
+  items.reserve(storage.items_size());
+
+  for (const auto& item_storage : storage.items()) {
+    auto item = std::make_unique<NavigationItemImpl>(item_storage);
+    RewriteItemURLIfNecessary(item.get());
+    items.push_back(std::move(item));
+  }
+
+  RestoreImpl(storage.last_committed_item_index(), std::move(items));
 }
 
-void NavigationManagerImpl::SetBrowserState(BrowserState* browser_state) {
-  browser_state_ = browser_state;
+void NavigationManagerImpl::SerializeToProto(
+    proto::NavigationStorage& storage) const {
+  const int count = GetItemCount();
+
+  // The last committed item index may be equal to -1 if a session is saved
+  // during restoration. In that case use GetItemCount() - 1.
+  int last_committed_item_index = GetLastCommittedItemIndex();
+  if (last_committed_item_index == -1) {
+    last_committed_item_index = count - 1;
+  }
+
+  // Ensure that `last_committed_item_index` is in range [0; count-1] to
+  // avoid crashing when the data is loaded from disk. The index should
+  // be in that range, but as https://crbug.com/372914303 show, this
+  // invariant has sometimes been broken in the past leading to startup
+  // crashes as https://crbug.com/372926054 show. Avoid writing data that
+  // would be considered invalid on load.
+  last_committed_item_index =
+      ClampLastCommittedItemIndex(last_committed_item_index, count);
+
+  // As some items may be skipped during serialization (e.g. because their
+  // URL is too large, or they were marked "to skip during serialisation")
+  // collect the items that will be serialized in a first pass.
+  std::vector<const NavigationItemImpl*> items;
+  items.reserve(static_cast<size_t>(count));
+
+  const int original_last_committed_item_index = last_committed_item_index;
+  for (int index = 0; index < count; ++index) {
+    const NavigationItemImpl* item =
+        GetNavigationItemImplAtIndex(static_cast<size_t>(index));
+
+    if (item->ShouldSkipSerialization()) {
+      // Update the index of the last committed item if necessary when
+      // skipping an item.
+      if (index <= original_last_committed_item_index) {
+        --last_committed_item_index;
+      }
+      continue;
+    }
+
+    items.push_back(item);
+  }
+
+  // Ensure that the last committed item index is still in range.
+  const int items_size = static_cast<int>(items.size());
+  DCHECK_LE(items_size, count);
+  DCHECK_LT(last_committed_item_index, items_size);
+
+  // Limit the number of navigation item that are serialised to prevent
+  // the storage required to grow indefinitely.
+  int offset_int = 0;
+  int length_int = 0;
+  last_committed_item_index = wk_navigation_util::GetSafeItemRange(
+      last_committed_item_index, items_size, &offset_int, &length_int);
+
+  DCHECK_GE(offset_int, 0);
+  DCHECK_GE(length_int, 0);
+  DCHECK_LT(last_committed_item_index, length_int);
+
+  const size_t offset = static_cast<size_t>(offset_int);
+  const size_t length = static_cast<size_t>(length_int);
+
+  DCHECK_LE(offset, items.size());
+  DCHECK_LE(length + offset, items.size());
+
+  storage.set_last_committed_item_index(last_committed_item_index);
+  for (const auto* item : base::span(items).subspan(offset, length)) {
+    item->SerializeToProto(*storage.add_items());
+  }
+
+  // If the navigation history is empty but there is a pending navigation item,
+  // serialize the pending item as the initial committed item.
+  if (storage.items_size() == 0) {
+    const NavigationItemImpl* pending_item = GetPendingItemImpl();
+    if (pending_item) {
+      pending_item->SerializeToProto(*storage.add_items());
+      storage.set_last_committed_item_index(0);
+    }
+  }
+}
+
+void NavigationManagerImpl::SetNativeSessionFetcher(
+    SessionDataBlobFetcher native_session_fetcher) {
+  CHECK(session_data_blob_fetchers_.empty());
+  if (base::FeatureList::IsEnabled(features::kForceSynthesizedRestoreSession)) {
+    // If the use of synthesized native WKWebView session is force, then drop
+    // the `native_session_fetcher`. This simulate a missing native session
+    // and force the synthese of a native WKWebView session.
+    return;
+  }
+
+  AppendSessionDataBlobFetcher(std::move(native_session_fetcher),
+                               SessionDataBlobSource::kSessionCache);
 }
 
 void NavigationManagerImpl::OnNavigationItemCommitted() {
-  NavigationItem* item = GetLastCommittedItemInCurrentOrRestoredSession();
+  NavigationItem* item = GetLastCommittedItem();
   DCHECK(item);
   delegate_->OnNavigationItemCommitted(item);
 
-  if (!wk_navigation_util::IsRestoreSessionUrl(item->GetURL())) {
-    restored_visible_item_.reset();
-    if (is_restore_session_in_progress_) {
-      // There are crashes because restored_visible_item_ is nil and
-      // is_restore_session_in_progress_ is true. This is a speculative fix,
-      // based on the idea that a navigation item could be committed before
-      // OnNavigationStarted is called. See crbug.com/1127434.
-      FinalizeSessionRestore();
-    }
+  if (native_restore_in_progress_) {
+    native_restore_in_progress_ = false;
   }
-}
-
-void NavigationManagerImpl::OnNavigationStarted(const GURL& url) {
-  if (!is_restore_session_in_progress_)
-    return;
-
-  GURL target_url;
-  if (wk_navigation_util::IsRestoreSessionUrl(url) &&
-      !web::wk_navigation_util::ExtractTargetURL(url, &target_url)) {
-    restoration_timer_ = std::make_unique<base::ElapsedTimer>();
-  } else if (!wk_navigation_util::IsRestoreSessionUrl(url)) {
-    // It's possible for there to be pending navigations for a session that is
-    // going to be restored (such as for the -ForwardHistoryClobber workaround).
-    // In this case, the pending navigation will start while the navigation
-    // manager is in restore mode.  There are other edges cases where a restore
-    // session finishes without trigger it's start, such as when restoring some
-    // with some app specific or blocked URLs, or when WKWebView's
-    // backForwardList state is out of sync. See crbug.com/1008026 for more
-    // details.
-    if (restoration_timer_) {
-      UMA_HISTOGRAM_TIMES(kRestoreNavigationTime,
-                          restoration_timer_->Elapsed());
-      restoration_timer_.reset();
-    }
-
-    // Get the last committed item directly because the restoration is in
-    // progress so the item returned by the last committed item is the
-    // last_committed_web_view_item_ as the origins mistmatch.
-    int index = GetLastCommittedItemIndexInCurrentOrRestoredSession();
-    DCHECK(index != -1 || 0 == GetItemCount());
-    if (index != -1 && restored_visible_item_ &&
-        restored_visible_item_->GetUserAgentType() != UserAgentType::NONE) {
-      NavigationItemImpl* last_committed_item =
-          GetNavigationItemImplAtIndex(static_cast<size_t>(index));
-      last_committed_item->SetUserAgentType(
-          restored_visible_item_->GetUserAgentType());
-    }
-
-    FinalizeSessionRestore();
-  }
+  restored_visible_item_.reset();
 }
 
 void NavigationManagerImpl::DetachFromWebView() {
   web_view_cache_.DetachFromWebView();
-  is_restore_session_in_progress_ = false;
 }
 
 void NavigationManagerImpl::AddPendingItem(
@@ -186,33 +337,40 @@ void NavigationManagerImpl::AddPendingItem(
     ui::PageTransition navigation_type,
     NavigationInitiationType initiation_type,
     bool is_post_navigation,
-    bool is_using_https_as_default_scheme) {
+    bool is_error_navigation,
+    HttpsUpgradeType https_upgrade_type) {
   DiscardNonCommittedItems();
 
   pending_item_index_ = -1;
-  NavigationItem* last_committed_item =
-      GetLastCommittedItemInCurrentOrRestoredSession();
+  NavigationItem* last_committed_item = GetLastCommittedItem();
   pending_item_ = CreateNavigationItemWithRewriters(
-      url, referrer, navigation_type, initiation_type,
-      is_using_https_as_default_scheme,
-      last_committed_item ? last_committed_item->GetURL() : GURL::EmptyGURL(),
+      url, referrer, navigation_type, initiation_type, https_upgrade_type,
+      last_committed_item ? last_committed_item->GetURL() : GURL(),
       &transient_url_rewriters_);
   RemoveTransientURLRewriters();
+
+  if (ui::PageTransitionCoreTypeIs(navigation_type,
+                                   ui::PAGE_TRANSITION_RELOAD) &&
+      last_committed_item && last_committed_item->GetURL() == url) {
+    pending_item_->SetInternalScrollToTextFragment(
+        last_committed_item->GetInternalScrollToTextFragment());
+  }
 
   if (!next_pending_url_should_skip_serialization_.is_empty() &&
       url == next_pending_url_should_skip_serialization_) {
     pending_item_->SetShouldSkipSerialization(true);
   }
-  next_pending_url_should_skip_serialization_ = GURL::EmptyGURL();
+  next_pending_url_should_skip_serialization_ = GURL();
 
   // No need to detect renderer-initiated back/forward navigation in detached
   // mode because there is no renderer.
-  if (!web_view_cache_.IsAttachedToWebView())
+  if (!web_view_cache_.IsAttachedToWebView()) {
     return;
+  }
 
-  // AddPendingItem is called no later than |didCommitNavigation|. The only time
+  // AddPendingItem is called no later than `didCommitNavigation`. The only time
   // when all three of WKWebView's URL, the pending URL and WKBackForwardList's
-  // current item URL are identical before |didCommitNavigation| is when the
+  // current item URL are identical before `didCommitNavigation` is when the
   // in-progress navigation is a back-forward navigation. In this case, current
   // item has already been updated to point to the new location in back-forward
   // history, so pending item index should be set to the current item index.
@@ -226,51 +384,27 @@ void NavigationManagerImpl::AddPendingItem(
   WKBackForwardListItem* current_wk_item = proxy.backForwardList.currentItem;
   GURL current_item_url = net::GURLWithNSURL(current_wk_item.URL);
 
-  // When reloading an target url redirect page, re-use the target url as the
-  // current item url.
-  GURL target_url;
-  if (navigation_type & ui::PAGE_TRANSITION_RELOAD &&
-      !(navigation_type & ui::PAGE_TRANSITION_FORWARD_BACK) &&
-      initiation_type == NavigationInitiationType::BROWSER_INITIATED &&
-      web::wk_navigation_util::IsRestoreSessionUrl(current_item_url) &&
-      web::wk_navigation_util::ExtractTargetURL(current_item_url,
-                                                &target_url)) {
-    current_item_url = target_url;
-  }
-
-  // Restore the UserAgent when navigating forward to a Session restoration URL.
-  if (navigation_type & ui::PAGE_TRANSITION_RELOAD &&
-      !(navigation_type & ui::PAGE_TRANSITION_FORWARD_BACK) &&
-      web::wk_navigation_util::IsRestoreSessionUrl(current_item_url) &&
-      GetNavigationItemFromWKItem(current_wk_item) &&
-      GetNavigationItemFromWKItem(current_wk_item)->GetUserAgentType() !=
-          UserAgentType::NONE &&
-      wk_navigation_util::URLNeedsUserAgentType(pending_item_->GetURL())) {
-    pending_item_->SetUserAgentType(
-        GetNavigationItemFromWKItem(current_wk_item)->GetUserAgentType());
-  }
-
-  BOOL isCurrentURLSameAsPending = NO;
-  if (base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage)) {
-    isCurrentURLSameAsPending =
-        current_item_url == pending_item_->GetURL() &&
-        current_item_url == net::GURLWithNSURL(proxy.URL);
-  } else {
-    isCurrentURLSameAsPending =
-        IsSameOrPlaceholderOf(current_item_url, pending_item_->GetURL()) &&
-        IsSameOrPlaceholderOf(current_item_url, net::GURLWithNSURL(proxy.URL));
-  }
+  BOOL isCurrentURLSameAsPending =
+      current_item_url == pending_item_->GetURL() &&
+      current_item_url == net::GURLWithNSURL(proxy.URL);
 
   bool is_form_post =
-      base::FeatureList::IsEnabled(
-          web::features::kCreatePendingItemForPostFormSubmission) &&
       is_post_navigation &&
-      (navigation_type & ui::PageTransition::PAGE_TRANSITION_FORM_SUBMIT);
+      ui::PageTransitionCoreTypeIs(
+          navigation_type, ui::PageTransition::PAGE_TRANSITION_FORM_SUBMIT);
   if (proxy.backForwardList.currentItem && isCurrentURLSameAsPending &&
-      !is_form_post) {
+      !is_form_post && !is_error_navigation) {
     pending_item_index_ = web_view_cache_.GetCurrentItemIndex();
+    // For non-back/forward navigations (e.g. reloads or loading the current
+    // URL), `currentItem` has not moved to a different history entry and is
+    // still the last committed item.
+    if ((last_committed_item_index_ == -1 ||
+         !(navigation_type & ui::PAGE_TRANSITION_FORWARD_BACK)) &&
+        !empty_window_open_item_) {
+      last_committed_item_index_ = pending_item_index_;
+    }
 
-    // If |currentItem| is not already associated with a NavigationItemImpl,
+    // If `currentItem` is not already associated with a NavigationItemImpl,
     // associate the newly created item with it. Otherwise, discard the new item
     // since it will be a duplicate.
     NavigationItemImpl* current_item =
@@ -280,13 +414,10 @@ void NavigationManagerImpl::AddPendingItem(
       current_item = pending_item_.get();
       SetNavigationItemInWKItem(current_wk_item, std::move(pending_item_));
     }
-    if (base::FeatureList::IsEnabled(
-            web::features::kCreatePendingItemForPostFormSubmission)) {
-      // Updating the transition type of the item is needed, for example when
-      // doing a FormSubmit with a GET method on the same URL. See
-      // crbug.com/1211879.
-      current_item->SetTransitionType(transition);
-    }
+    // Updating the transition type of the item is needed, for example when
+    // doing a FormSubmit with a GET method on the same URL. See
+    // crbug.com/1211879.
+    current_item->SetTransitionType(transition);
 
     pending_item_.reset();
   }
@@ -313,13 +444,13 @@ void NavigationManagerImpl::CommitPendingItem() {
     id<CRWWebViewNavigationProxy> proxy =
         delegate_->GetWebViewNavigationProxy();
 
-    // If WKBackForwardList exists but |currentItem| is nil at this point, it is
+    // If WKBackForwardList exists but `currentItem` is nil at this point, it is
     // because the current navigation is an empty window open navigation.
-    // If |currentItem| is not nil, it is the last committed item in the
+    // If `currentItem` is not nil, it is the last committed item in the
     // WKWebView.
     if (proxy.backForwardList && !proxy.backForwardList.currentItem) {
       // WKWebView's URL should be about:blank for empty window open item.
-      // TODO(crbug.com/885249): Use GURL::IsAboutBlank() instead.
+      // TODO(crbug.com/41414501): Use GURL::IsAboutBlank() instead.
       DCHECK(base::StartsWith(net::GURLWithNSURL(proxy.URL).spec(),
                               url::kAboutBlankURL,
                               base::CompareCase::SENSITIVE));
@@ -355,26 +486,20 @@ void NavigationManagerImpl::CommitPendingItem(
 
   // CommitPendingItem may be called multiple times. Do nothing if there is no
   // pending item.
-  if (!item)
+  if (!item) {
     return;
+  }
 
   item->ResetForCommit();
   item->SetTimestamp(time_smoother_.GetSmoothedTime(base::Time::Now()));
 
   id<CRWWebViewNavigationProxy> proxy = delegate_->GetWebViewNavigationProxy();
 
-  // If WKBackForwardList exists but |currentItem| is nil at this point, it is
+  // If WKBackForwardList exists but `currentItem` is nil at this point, it is
   // because the current navigation is an empty window open navigation.
-  // If |currentItem| is not nil, it is the last committed item in the
+  // If `currentItem` is not nil, it is the last committed item in the
   // WKWebView.
   if (proxy.backForwardList && !proxy.backForwardList.currentItem) {
-    if (!base::ios::IsRunningOnIOS13OrLater()) {
-      // Prior to iOS 13 WKWebView's URL should be about:blank for empty window
-      // open item. TODO(crbug.com/885249): Use GURL::IsAboutBlank() instead.
-      DCHECK(base::StartsWith(net::GURLWithNSURL(proxy.URL).spec(),
-                              url::kAboutBlankURL,
-                              base::CompareCase::SENSITIVE));
-    }
     // There should be no back-forward history for empty window open item.
     DCHECK_EQ(0UL, proxy.backForwardList.backList.count);
     DCHECK_EQ(0UL, proxy.backForwardList.forwardList.count);
@@ -388,7 +513,7 @@ void NavigationManagerImpl::CommitPendingItem(
     if (item_url == net::GURLWithNSURL(back_forward_list.currentItem.URL)) {
       SetNavigationItemInWKItem(back_forward_list.currentItem, std::move(item));
     } else {
-      // Sometimes |currentItem.URL| is not updated correctly while the webView
+      // Sometimes `currentItem.URL` is not updated correctly while the webView
       // URL is correctly updated. This is a bug in WKWebView. Check to see if
       // the next or previous item matches, and update that item instead. If
       // nothing matches, still update the the currentItem.
@@ -402,7 +527,7 @@ void NavigationManagerImpl::CommitPendingItem(
                                   std::move(item));
       } else {
         // Otherwise default here. This can happen when restoring an NTP, since
-        // |back_forward_list.currentItem.URL| doesn't get updated when going
+        // `back_forward_list.currentItem.URL` doesn't get updated when going
         // from a file:// scheme to about:// scheme.
         SetNavigationItemInWKItem(back_forward_list.currentItem,
                                   std::move(item));
@@ -447,66 +572,49 @@ void NavigationManagerImpl::SetPendingItemIndex(int index) {
   pending_item_index_ = index;
 }
 
-void NavigationManagerImpl::ApplyWKWebViewForwardHistoryClobberWorkaround() {
-  DCHECK(web_view_cache_.IsAttachedToWebView());
-
-  int current_item_index = web_view_cache_.GetCurrentItemIndex();
-  DCHECK_GE(current_item_index, 0);
-
-  int item_count = GetItemCount();
-  DCHECK_LT(current_item_index, item_count);
-
-  std::vector<std::unique_ptr<NavigationItem>> forward_items(
-      item_count - current_item_index);
-
-  for (size_t i = 0; i < forward_items.size(); i++) {
-    const NavigationItemImpl* item =
-        GetNavigationItemImplAtIndex(i + current_item_index);
-    forward_items[i] = std::make_unique<web::NavigationItemImpl>(*item);
-  }
-
-  DiscardNonCommittedItems();
-
-  // Replace forward history in WKWebView with |forward_items|.
-  // |last_committed_item_index| is set to 0 so that when this partial session
-  // restoration finishes, the current item is the first item in
-  // |forward_itmes|, which is also the current item before the session
-  // restoration, but because of crbug.com/887497 is expected to be clobbered
-  // with the wrong web content. The partial restore effectively forces a fresh
-  // load of this item while maintaining forward history.
-  UnsafeRestore(/*last_committed_item_index_=*/0, std::move(forward_items));
-}
-
 void NavigationManagerImpl::SetWKWebViewNextPendingUrlNotSerializable(
     const GURL& url) {
   next_pending_url_should_skip_serialization_ = url;
 }
 
-bool NavigationManagerImpl::RestoreSessionFromCache(const GURL& url) {
-  DCHECK(is_restore_session_in_progress_);
+void NavigationManagerImpl::RestoreNativeSession() {
+  RecordSessionRestorationHasFetchers(!session_data_blob_fetchers_.empty());
 
-  GURL targetURL;
-  if (!web::wk_navigation_util::IsRestoreSessionUrl(url) ||
-      web::wk_navigation_util::ExtractTargetURL(url, &targetURL)) {
-    return false;
+  // Try to load session data blob from each registered source in order,
+  // stopping at the first that is successfully loaded.
+  bool success = false;
+  for (auto& [fetcher, source] : session_data_blob_fetchers_) {
+    NSData* data = std::move(fetcher).Run();
+
+    bool fetcher_has_data = data.length != 0;
+    RecordSessionRestorationFetcherHasDataForSource(source, fetcher_has_data);
+    if (fetcher_has_data) {
+      success = GetWebState()->SetSessionStateData(data);
+      RecordSessionRestorationResultForSource(success, source);
+      if (success) {
+        break;
+      }
+    }
   }
 
-  if (!web::GetWebClient()->RestoreSessionFromCache(GetWebState()))
-    return false;
+  if (!success) {
+    return;
+  }
 
   // Native restore worked, abort unsafe restore.
   DiscardNonCommittedItems();
   last_committed_item_index_ = web_view_cache_.GetCurrentItemIndex();
-  if (restored_visible_item_ &&
-      restored_visible_item_->GetUserAgentType() != UserAgentType::NONE) {
-    NavigationItem* last_committed_item =
-        GetLastCommittedItemInCurrentOrRestoredSession();
-    last_committed_item->SetUserAgentType(
-        restored_visible_item_->GetUserAgentType());
+  if (restored_visible_item_) {
+    // Restore the state of the `restored_visible_item_` that were
+    // not overwritten by the session data restoration, including the
+    // user agent and virtual URL.
+    NavigationItemImpl* last_committed_item = GetLastCommittedItemImpl();
+    if (last_committed_item) {
+      last_committed_item->RestoreStateFromItem(restored_visible_item_.get());
+    }
   }
   restored_visible_item_.reset();
   FinalizeSessionRestore();
-  return true;
 }
 
 void NavigationManagerImpl::RemoveTransientURLRewriters() {
@@ -516,9 +624,10 @@ void NavigationManagerImpl::RemoveTransientURLRewriters() {
 void NavigationManagerImpl::UpdatePendingItemUrl(const GURL& url) const {
   // If there is no pending item, navigation is probably happening within the
   // back forward history. Don't modify the item list.
-  NavigationItemImpl* pending_item = GetPendingItemInCurrentOrRestoredSession();
-  if (!pending_item || url == pending_item->GetURL())
+  NavigationItemImpl* pending_item = GetPendingItemImpl();
+  if (!pending_item || url == pending_item->GetURL()) {
     return;
+  }
 
   // UpdatePendingItemUrl is used to handle redirects after loading starts for
   // the currenting pending item.
@@ -531,30 +640,12 @@ void NavigationManagerImpl::UpdatePendingItemUrl(const GURL& url) const {
 }
 
 NavigationItemImpl* NavigationManagerImpl::GetCurrentItemImpl() const {
-  NavigationItemImpl* pending_item = GetPendingItemInCurrentOrRestoredSession();
-  if (pending_item)
+  NavigationItemImpl* pending_item = GetPendingItemImpl();
+  if (pending_item) {
     return pending_item;
-
-  return GetLastCommittedItemInCurrentOrRestoredSession();
-}
-
-NavigationItemImpl* NavigationManagerImpl::GetLastCommittedItemImpl() const {
-  // GetLastCommittedItemImpl() should return null while session restoration is
-  // in progress and real item after the first post-restore navigation is
-  // finished. IsRestoreSessionInProgress(), will return true until the first
-  // post-restore is started.
-  if (IsRestoreSessionInProgress())
-    return nullptr;
-
-  NavigationItemImpl* result = GetLastCommittedItemInCurrentOrRestoredSession();
-  if (!result || wk_navigation_util::IsRestoreSessionUrl(result->GetURL())) {
-    // Session restoration has completed, but the first post-restore navigation
-    // has not finished yet, so there is no committed URLs in the navigation
-    // stack.
-    return nullptr;
   }
 
-  return result;
+  return GetLastCommittedItemImpl();
 }
 
 void NavigationManagerImpl::UpdateCurrentItemForReplaceState(
@@ -566,11 +657,12 @@ void NavigationManagerImpl::UpdateCurrentItemForReplaceState(
   current_item->SetPostData(nil);
 }
 
-void NavigationManagerImpl::GoToIndex(int index,
-                                      NavigationInitiationType initiation_type,
-                                      bool has_user_gesture) {
+void NavigationManagerImpl::GoTo(GoToParams params) {
+  const int index = IndexForParams(params);
   if (index < 0 || index >= GetItemCount()) {
-    NOTREACHED();
+    // Button actions are executed asynchronously, so it is possible for the
+    // client to call this with an invalid index if the user quickly taps the
+    // back or foward button mulitple times. See crbug.com/1407244.
     return;
   }
 
@@ -578,10 +670,9 @@ void NavigationManagerImpl::GoToIndex(int index,
   delegate_->ClearDialogs();
 
   if (!web_view_cache_.IsAttachedToWebView()) {
-    // GoToIndex from detached mode is equivalent to restoring history with
-    // |last_committed_item_index| updated to |index|.
-    Restore(index, web_view_cache_.ReleaseCachedItems());
-    DCHECK(web_view_cache_.IsAttachedToWebView());
+    // GoTo(...) from detached mode is equivalent to restoring history with
+    // `last_committed_item_index` updated to `index`.
+    RestoreImpl(index, web_view_cache_.ReleaseCachedItems());
     return;
   }
 
@@ -591,10 +682,20 @@ void NavigationManagerImpl::GoToIndex(int index,
       item->GetTransitionType() | ui::PAGE_TRANSITION_FORWARD_BACK));
   WKBackForwardListItem* wk_item = web_view_cache_.GetWKItemAtIndex(index);
   if (wk_item) {
-    going_to_back_forward_list_item_ = true;
-    delegate_->GoToBackForwardListItem(wk_item, item, initiation_type,
-                                       has_user_gesture);
-    going_to_back_forward_list_item_ = false;
+    base::AutoReset<bool> auto_reset(&going_to_back_forward_list_item_, true);
+
+    // When determining the target of the back/forward navigation using the
+    // heuristic in NavigationManagerImpl, use kToEntry as the navigation
+    // type to avoid using both //ios/web and WebKit heuristics.
+
+    const BackForwardNavigationType navigation_type =
+        SkipAutomaticNavigationInBackForwardList()
+            ? BackForwardNavigationType::kToEntry
+            : params.navigation_type();
+
+    delegate_->GoToBackForwardListItem(wk_item, item, navigation_type,
+                                       params.initiation_type(),
+                                       params.has_user_gesture());
   } else {
     DCHECK(index == 0 && empty_window_open_item_)
         << " wk_item should not be nullptr. index: " << index
@@ -603,16 +704,120 @@ void NavigationManagerImpl::GoToIndex(int index,
   }
 }
 
-void NavigationManagerImpl::GoToIndex(int index) {
-  // Silently return if still on a restore URL.  This state should only last a
-  // few moments, but may be triggered when a user mashes the back or forward
-  // button quickly.
-  NavigationItemImpl* item = GetLastCommittedItemInCurrentOrRestoredSession();
-  if (item && wk_navigation_util::IsRestoreSessionUrl(item->GetURL())) {
-    return;
+int NavigationManagerImpl::IndexForParams(GoToParams params) {
+  const BackForwardNavigationType type = params.navigation_type();
+  if (type == BackForwardNavigationType::kToEntry) {
+    // For kToEntry, the index is stored in params.
+    return params.index();
   }
-  GoToIndex(index, NavigationInitiationType::BROWSER_INITIATED,
-            /*has_user_gesture=*/true);
+
+  if (!SkipAutomaticNavigationInBackForwardList()) {
+    // If the feature is disabled, then use GetIndexForOffset(+/-1) to
+    // compute the target index.
+    return GetIndexForOffset(type == BackForwardNavigationType::kForward ? +1
+                                                                         : -1);
+  }
+
+  // If the feature is enabled, we need to check whether there is automatic
+  // items (i.e. items inserted by "pushState(...)" or "replaceState(...)"
+  // calls in JavaScript).
+
+  // Say we have the following navigations, where #foo, ... are inserted by
+  // the page using "pushState(...)" when the document is loaded without any
+  // user interaction (i.e. automatic items). From the user perspective, those
+  // navigations are unexpected, and moving back/forward should skip over them.
+  //
+  //  a.com/a -> b.com/b -> b.com/b#foo -> b.com/b#bar -> c.com/c
+
+  int index = -1;
+  NavigationItemImpl* item = nullptr;
+  const int current_index = GetIndexForOffset(0);
+
+  switch (type) {
+    case BackForwardNavigationType::kToEntry:
+      NOTREACHED();
+
+    case BackForwardNavigationType::kBackward: {
+      // When navigating back, if the current item is not an automatic item
+      // (e.g. c.com/c), then the navigation is relative to `current_index`.
+      item = GetNavigationItemImplAtIndex(current_index);
+      if (!item || !item->WasCreatedAutomatically()) {
+        return current_index - 1;
+      }
+
+      // Otherwise, the current item is part of a chain of automatic items,
+      // skip over all those items to determine the item that corresponded
+      // to an user initiated navigation.
+      //
+      // In the exemple above, this would correspond to a back initiated
+      // from either "b.com/b#foo" or "b.com/b#bar" which should both be
+      // interpreted as relative to "b.com" instead.
+      index = current_index - 1;
+      item = GetNavigationItemImplAtIndex(index);
+      while (item && item->WasCreatedAutomatically()) {
+        index -= 1;
+        item = GetNavigationItemImplAtIndex(index);
+      }
+
+      if (!item) {
+        // The navigation history is incomplete, and all items up to the
+        // current item are automatic. Fall back to navigating relative
+        // to `current_index`.
+        return current_index - 1;
+      }
+
+      index -= 1;
+      item = GetNavigationItemImplAtIndex(index);
+      if (!item) {
+        // The navigation history is incomplete, and all items up to the
+        // current item are automatic. Fall back to navigating relative
+        // to `current_index`.
+        return current_index - 1;
+      }
+
+      return index;
+    }
+
+    case BackForwardNavigationType::kForward: {
+      // Starting from current_index + 1, skip over any automatic item
+      // (this corresponding navigating forward from "b.com/b" where we
+      // should skip over "b.com/b#foo" and "b.com/b#bar").
+      index = current_index + 1;
+      item = GetNavigationItemImplAtIndex(index);
+      while (item && item->WasCreatedAutomatically()) {
+        index += 1;
+        item = GetNavigationItemImplAtIndex(index);
+      }
+
+      if (!item) {
+        // The navigation history is incomplete, and all items up to the
+        // current item are automatic. Fall back to navigating relative
+        // to `current_index`.
+        return current_index + 1;
+      }
+
+      // After determining the potential target, check whether it is
+      // followed by any automatic navigations, and in that case, move
+      // to the back of the chain (this correspond to navigating forward
+      // from "a.com/a" where the previous iteration would have picked
+      // the index of "b.com/b" but we should navigate to "b.com/b#bar").
+      item = GetNavigationItemImplAtIndex(index + 1);
+      while (item && item->WasCreatedAutomatically()) {
+        index += 1;
+        item = GetNavigationItemImplAtIndex(index + 1);
+      }
+
+      return index;
+    }
+  }
+
+  NOTREACHED();
+}
+
+void NavigationManagerImpl::GoToIndex(int index) {
+  GoTo(GoToParams::GoToIndex(index)
+           .SetInitiationType(NavigationInitiationType::BROWSER_INITIATED)
+           .SetHasUserGesture(true));
 }
 
 BrowserState* NavigationManagerImpl::GetBrowserState() const {
@@ -624,18 +829,22 @@ WebState* NavigationManagerImpl::GetWebState() const {
 }
 
 NavigationItem* NavigationManagerImpl::GetVisibleItem() const {
-  if (is_restore_session_in_progress_ || restored_visible_item_)
+  if (restored_visible_item_) {
     return restored_visible_item_.get();
+  }
 
   // Only return pending_item_ for new (non-history), user-initiated
-  // navigations in order to prevent URL spoof attacks.
-  NavigationItemImpl* pending_item = GetPendingItemInCurrentOrRestoredSession();
+  // navigations in order to prevent URL spoof attacks. The pending item is
+  // also ignored while the last committed item is the empty window open item,
+  // because the initial empty document remains the current document and can
+  // still be scripted by its opener until the pending navigation commits.
+  NavigationItemImpl* pending_item = GetPendingItemImpl();
   if (pending_item) {
     bool is_user_initiated = pending_item->NavigationInitiationType() ==
                              NavigationInitiationType::BROWSER_INITIATED;
-    bool safe_to_show_pending = is_user_initiated &&
-                                pending_item_index_ == -1 &&
-                                GetWebState()->IsLoading();
+    bool safe_to_show_pending =
+        is_user_initiated && pending_item_index_ == -1 &&
+        GetWebState()->IsLoading() && !empty_window_open_item_;
     if (safe_to_show_pending) {
       return pending_item;
     }
@@ -646,13 +855,6 @@ NavigationItem* NavigationManagerImpl::GetVisibleItem() const {
     return last_committed_item;
   }
 
-  // While an -IsRestoreSessionUrl URL can not be a committed page, it is
-  // OK to display it as a visible URL.  This prevents seeing about:blank while
-  // navigating to a restore URL.
-  NavigationItem* result = GetLastCommittedItemInCurrentOrRestoredSession();
-  if (result && wk_navigation_util::IsRestoreSessionUrl(result->GetURL())) {
-    return result;
-  }
   return nullptr;
 }
 
@@ -660,29 +862,72 @@ NavigationItem* NavigationManagerImpl::GetLastCommittedItem() const {
   return GetLastCommittedItemImpl();
 }
 
-int NavigationManagerImpl::GetLastCommittedItemIndex() const {
-  // GetLastCommittedItemIndex() should return -1 while session restoration is
-  // in progress and real item after the first post-restore navigation is
-  // finished. IsRestoreSessionInProgress(), will return true until the first
-  // post-restore is started.
-  if (IsRestoreSessionInProgress())
-    return -1;
+bool NavigationManagerImpl::IsRestoreSessionInProgress() const {
+  return native_restore_in_progress_;
+}
 
-  NavigationItem* item = GetLastCommittedItemInCurrentOrRestoredSession();
-  if (!item || wk_navigation_util::IsRestoreSessionUrl(item->GetURL())) {
-    // Session restoration has completed, but the first post-restore
-    // navigation has not finished yet, so there is no committed URLs in the
-    // navigation stack.
-    return -1;
+NavigationItemImpl* NavigationManagerImpl::GetLastCommittedItemImpl() const {
+  if (empty_window_open_item_) {
+    return empty_window_open_item_.get();
   }
 
-  return GetLastCommittedItemIndexInCurrentOrRestoredSession();
+  int index = GetLastCommittedItemIndex();
+  if (index == -1) {
+    DCHECK_EQ(0, GetItemCount());
+    return nullptr;
+  }
+
+  NavigationItemImpl* last_committed_item =
+      GetNavigationItemImplAtIndex(static_cast<size_t>(index));
+  if (last_committed_item && GetWebState() &&
+      !CanTrustLastCommittedItem(last_committed_item)) {
+    // Don't check trust level here, as at this point it's expected
+    // the _documentURL and the last_commited_item URL have an origin
+    // mismatch.
+    GURL document_url = delegate_->GetCurrentURL();
+    if (!last_committed_web_view_item_) {
+      last_committed_web_view_item_ = CreateNavigationItemWithRewriters(
+          /*url=*/GURL(), Referrer(), ui::PageTransition::PAGE_TRANSITION_LINK,
+          NavigationInitiationType::RENDERER_INITIATED, HttpsUpgradeType::kNone,
+          /*previous_url=*/GURL(), nullptr /* use default rewriters only */);
+      last_committed_web_view_item_->SetUntrusted();
+    }
+    last_committed_web_view_item_->SetURL(document_url);
+    last_committed_web_view_item_->SetVirtualURL(document_url);
+    last_committed_web_view_item_->SetTimestamp(
+        time_smoother_.GetSmoothedTime(base::Time::Now()));
+    return last_committed_web_view_item_.get();
+  }
+  return last_committed_item;
+}
+
+int NavigationManagerImpl::GetLastCommittedItemIndex() const {
+  // WKBackForwardList's `currentItem` is usually the last committed item,
+  // except two cases:
+  // 1) when the pending navigation is a back-forward navigation, in which
+  //    case it is actually the pending item. As a workaround, fall back to
+  //    last_committed_item_index_. This is not 100% correct (since
+  //    last_committed_item_index_ is only updated for main frame navigations),
+  //    but is the best possible answer.
+  // 2) when the last committed item is an empty window open item.
+  if (pending_item_index_ >= 0 || empty_window_open_item_) {
+    return last_committed_item_index_;
+  }
+  return web_view_cache_.GetCurrentItemIndex();
 }
 
 NavigationItem* NavigationManagerImpl::GetPendingItem() const {
-  if (IsRestoreSessionInProgress())
-    return nullptr;
-  return GetPendingItemInCurrentOrRestoredSession();
+  return GetPendingItemImpl();
+}
+
+NavigationItemImpl* NavigationManagerImpl::GetPendingItemImpl() const {
+  if (pending_item_index_ == -1) {
+    if (!pending_item_) {
+      return delegate_->GetPendingItem();
+    }
+    return pending_item_.get();
+  }
+  return GetNavigationItemImplAtIndex(pending_item_index_);
 }
 
 void NavigationManagerImpl::DiscardNonCommittedItems() {
@@ -692,14 +937,6 @@ void NavigationManagerImpl::DiscardNonCommittedItems() {
 
 void NavigationManagerImpl::LoadURLWithParams(
     const NavigationManager::WebLoadParams& params) {
-  if (IsRestoreSessionInProgress() &&
-      !wk_navigation_util::IsRestoreSessionUrl(params.url)) {
-    AddRestoreCompletionCallback(
-        base::BindOnce(&NavigationManagerImpl::LoadURLWithParams,
-                       base::Unretained(this), params));
-    return;
-  }
-
   DCHECK(!(params.transition_type & ui::PAGE_TRANSITION_FORWARD_BACK));
   delegate_->ClearDialogs();
   delegate_->RecordPageStateInNavigationItem();
@@ -710,47 +947,46 @@ void NavigationManagerImpl::LoadURLWithParams(
           : NavigationInitiationType::BROWSER_INITIATED;
   AddPendingItem(params.url, params.referrer, params.transition_type,
                  initiation_type, /*is_post_navigation=*/false,
-                 params.is_using_https_as_default_scheme);
+                 /*is_error_navigation=*/false, params.https_upgrade_type);
 
-  // Mark pending item as created from hash change if necessary. This is needed
-  // because window.hashchange message may not arrive on time.
-  NavigationItemImpl* pending_item = GetPendingItemInCurrentOrRestoredSession();
+  // Mark pending item as created from hash change if necessary, or reset the
+  // flag when reloading an existing item. This is needed because
+  // `window.hashchange` message may not arrive on time.
+  NavigationItemImpl* pending_item = GetPendingItemImpl();
   if (pending_item) {
-    NavigationItem* last_committed_item =
-        GetLastCommittedItemInCurrentOrRestoredSession();
-    GURL last_committed_url = last_committed_item
-                                  ? last_committed_item->GetVirtualURL()
-                                  : GURL::EmptyGURL();
+    NavigationItem* last_committed_item = GetLastCommittedItem();
+    GURL last_committed_url =
+        last_committed_item ? last_committed_item->GetVirtualURL() : GURL();
     GURL pending_url = pending_item->GetURL();
-    if (last_committed_url != pending_url &&
-        last_committed_url.EqualsIgnoringRef(pending_url)) {
-      pending_item->SetIsCreatedFromHashChange(true);
+    pending_item->SetIsCreatedFromHashChange(
+        last_committed_url != pending_url &&
+        last_committed_url.EqualsIgnoringRef(pending_url));
+
+    if (params.virtual_url.is_valid()) {
+      pending_item->SetVirtualURL(params.virtual_url);
     }
 
-    if (params.virtual_url.is_valid())
-      pending_item->SetVirtualURL(params.virtual_url);
-
-    if (params.is_using_https_as_default_scheme)
-      pending_item->SetUpgradedToHttps();
+    pending_item->SetHttpsUpgradeType(params.https_upgrade_type);
   }
 
   // Add additional headers to the NavigationItem before loading it in the web
   // view.
   NavigationItemImpl* added_item =
-      pending_item ? pending_item
-                   : GetLastCommittedItemInCurrentOrRestoredSession();
+      pending_item ? pending_item : GetLastCommittedItemImpl();
   DCHECK(added_item);
-  if (params.extra_headers)
+  if (params.extra_headers) {
     added_item->AddHttpRequestHeaders(params.extra_headers);
+  }
 
-  if (params.is_using_https_as_default_scheme)
-    added_item->SetUpgradedToHttps();
+  added_item->SetInternalScrollToTextFragment(
+      params.internal_scroll_to_text_fragment);
+
+  added_item->SetHttpsUpgradeType(params.https_upgrade_type);
 
   if (params.post_data) {
     DCHECK([added_item->GetHttpRequestHeaders() objectForKey:@"Content-Type"])
         << "Post data should have an associated content type";
     added_item->SetPostData(params.post_data);
-    added_item->SetShouldSkipRepostFormConfirmation(true);
   }
 
   if (!web_view_cache_.IsAttachedToWebView()) {
@@ -759,14 +995,13 @@ void NavigationManagerImpl::LoadURLWithParams(
       // Loading a pending item from detached state is equivalent to replacing
       // all forward history after the cached current item with the new pending
       // item.
-      std::vector<std::unique_ptr<NavigationItem>> cached_items =
+      std::vector<std::unique_ptr<NavigationItemImpl>> cached_items =
           web_view_cache_.ReleaseCachedItems();
       int next_item_index = web_view_cache_.GetCurrentItemIndex() + 1;
       DCHECK_GT(next_item_index, 0);
       cached_items.resize(next_item_index + 1);
       cached_items[next_item_index] = std::move(pending_item_);
-      Restore(next_item_index, std::move(cached_items));
-      DCHECK(web_view_cache_.IsAttachedToWebView());
+      RestoreImpl(next_item_index, std::move(cached_items));
       return;
     }
     web_view_cache_.ResetToAttached();
@@ -779,10 +1014,9 @@ void NavigationManagerImpl::LoadIfNecessary() {
   if (!web_view_cache_.IsAttachedToWebView()) {
     // Loading from detached mode is equivalent to restoring cached history.
     // This can happen after clearing browsing data by removing the web view.
-    Restore(web_view_cache_.GetCurrentItemIndex(),
-            web_view_cache_.ReleaseCachedItems());
-    DCHECK(web_view_cache_.IsAttachedToWebView());
-  } else {
+    RestoreImpl(web_view_cache_.GetCurrentItemIndex(),
+                web_view_cache_.ReleaseCachedItems());
+  } else if (!native_restore_in_progress_) {
     delegate_->LoadIfNecessary();
   }
 }
@@ -806,21 +1040,21 @@ NavigationItem* NavigationManagerImpl::GetItemAtIndex(size_t index) const {
 }
 
 int NavigationManagerImpl::GetIndexOfItem(const NavigationItem* item) const {
-  if (item == empty_window_open_item_.get())
+  if (item == empty_window_open_item_.get()) {
     return 0;
+  }
 
   for (size_t index = 0; index < web_view_cache_.GetBackForwardListItemCount();
        index++) {
     if (web_view_cache_.GetNavigationItemImplAtIndex(
-            index, false /* create_if_missing */) == item)
+            index, false /* create_if_missing */) == item) {
       return index;
+    }
   }
   return -1;
 }
 
 int NavigationManagerImpl::GetPendingItemIndex() const {
-  if (is_restore_session_in_progress_)
-    return -1;
   return pending_item_index_;
 }
 
@@ -833,9 +1067,6 @@ bool NavigationManagerImpl::CanGoForward() const {
 }
 
 bool NavigationManagerImpl::CanGoToOffset(int offset) const {
-  if (is_restore_session_in_progress_)
-    return false;
-
   // If the last committed item is the empty window.open item, no back-forward
   // navigation is allowed.
   if (empty_window_open_item_) {
@@ -846,27 +1077,22 @@ bool NavigationManagerImpl::CanGoToOffset(int offset) const {
 }
 
 void NavigationManagerImpl::GoBack() {
-  GoToIndex(GetIndexForOffset(-1));
+  GoTo(GoToParams::GoBackward()
+           .SetInitiationType(NavigationInitiationType::BROWSER_INITIATED)
+           .SetHasUserGesture(true));
 }
 
 void NavigationManagerImpl::GoForward() {
-  GoToIndex(GetIndexForOffset(1));
+  GoTo(GoToParams::GoForward()
+           .SetInitiationType(NavigationInitiationType::BROWSER_INITIATED)
+           .SetHasUserGesture(true));
 }
 
 void NavigationManagerImpl::Reload(ReloadType reload_type,
                                    bool check_for_reposts) {
-  if (IsRestoreSessionInProgress()) {
-    // Do not interrupt session restoration process. Last committed item will
-    // eventually reload once the session is restored.
+  if (!GetPendingItem() && !GetLastCommittedItem()) {
     return;
   }
-
-  // Use GetLastCommittedItemInCurrentOrRestoredSession() instead of
-  // GetLastCommittedItem() so restore session URL's aren't suppressed.
-  // Otherwise a cancelled/stopped navigation during the first post-restore
-  // navigation will always return early from Reload.
-  if (!GetPendingItem() && !GetLastCommittedItemInCurrentOrRestoredSession())
-    return;
 
   delegate_->ClearDialogs();
 
@@ -879,10 +1105,11 @@ void NavigationManagerImpl::Reload(ReloadType reload_type,
   // visit www.chromium.org instead of m.chromium.org.
   if (reload_type == web::ReloadType::ORIGINAL_REQUEST_URL) {
     NavigationItem* reload_item = nullptr;
-    if (GetPendingItem())
+    if (GetPendingItem()) {
       reload_item = GetPendingItem();
-    else
-      reload_item = GetLastCommittedItemInCurrentOrRestoredSession();
+    } else {
+      reload_item = GetLastCommittedItem();
+    }
     DCHECK(reload_item);
 
     reload_item->SetURL(reload_item->GetOriginalRequestURL());
@@ -890,9 +1117,8 @@ void NavigationManagerImpl::Reload(ReloadType reload_type,
 
   if (!web_view_cache_.IsAttachedToWebView()) {
     // Reload from detached mode is equivalent to restoring history unchanged.
-    Restore(web_view_cache_.GetCurrentItemIndex(),
-            web_view_cache_.ReleaseCachedItems());
-    DCHECK(web_view_cache_.IsAttachedToWebView());
+    RestoreImpl(web_view_cache_.GetCurrentItemIndex(),
+                web_view_cache_.ReleaseCachedItems());
     return;
   }
 
@@ -911,18 +1137,22 @@ void NavigationManagerImpl::ReloadWithUserAgentType(
     }
   }
 
-  if (!item_to_reload)
+  if (!item_to_reload) {
     return;
+  }
 
-  // |reloadURL| will be empty if a page was open by DOM.
+  // `reloadURL` will be empty if a page was open by DOM.
   GURL reload_url(item_to_reload->GetOriginalRequestURL());
   if (reload_url.is_empty()) {
     reload_url = item_to_reload->GetVirtualURL();
   }
 
   WebLoadParams params(reload_url);
-  if (item_to_reload->GetVirtualURL() != reload_url)
+  if (item_to_reload->GetVirtualURL() != reload_url) {
     params.virtual_url = item_to_reload->GetVirtualURL();
+  }
+  params.internal_scroll_to_text_fragment =
+      item_to_reload->GetInternalScrollToTextFragment();
   params.referrer = item_to_reload->GetReferrer();
   params.transition_type = ui::PAGE_TRANSITION_RELOAD;
 
@@ -932,29 +1162,39 @@ void NavigationManagerImpl::ReloadWithUserAgentType(
   LoadURLWithParams(params);
 }
 
-NavigationItemList NavigationManagerImpl::GetBackwardItems() const {
-  NavigationItemList items;
-
-  if (is_restore_session_in_progress_)
+std::vector<NavigationItem*> NavigationManagerImpl::GetBackwardItems() const {
+  std::vector<NavigationItem*> items;
+  // Consistent with `CanGoToOffset()` for the empty window open item.
+  if (empty_window_open_item_) {
     return items;
-
-  int current_back_forward_item_index = web_view_cache_.GetCurrentItemIndex();
-  for (int index = current_back_forward_item_index - 1; index >= 0; index--) {
-    items.push_back(GetItemAtIndex(index));
   }
 
+  for (int index = web_view_cache_.GetCurrentItemIndex() - 1; index >= 0;
+       index--) {
+    NavigationItem* item = GetItemAtIndex(index);
+    if (!item) {
+      break;
+    }
+    items.push_back(item);
+  }
   return items;
 }
 
-NavigationItemList NavigationManagerImpl::GetForwardItems() const {
-  NavigationItemList items;
-
-  if (is_restore_session_in_progress_)
+std::vector<NavigationItem*> NavigationManagerImpl::GetForwardItems() const {
+  std::vector<NavigationItem*> items;
+  // Consistent with `CanGoToOffset()` for the empty window open item.
+  if (empty_window_open_item_) {
     return items;
+  }
 
+  const int item_count = GetItemCount();
   for (int index = web_view_cache_.GetCurrentItemIndex() + 1;
-       index < GetItemCount(); index++) {
-    items.push_back(GetItemAtIndex(index));
+       index < item_count; index++) {
+    NavigationItem* item = GetItemAtIndex(index);
+    if (!item) {
+      break;
+    }
+    items.push_back(item);
   }
   return items;
 }
@@ -962,118 +1202,102 @@ NavigationItemList NavigationManagerImpl::GetForwardItems() const {
 void NavigationManagerImpl::Restore(
     int last_committed_item_index,
     std::vector<std::unique_ptr<NavigationItem>> items) {
-  DCHECK(!is_restore_session_in_progress_);
+  std::vector<std::unique_ptr<NavigationItemImpl>> impl_items;
+  impl_items.reserve(items.size());
+
+  for (std::unique_ptr<NavigationItem>& item : items) {
+    // SAFETY: NavigationItemImpl is the only sub-class of NavigationItem,
+    // so the down-cast of the pointer is valid.
+    impl_items.emplace_back(static_cast<NavigationItemImpl*>(item.release()));
+  }
+
+  RestoreImpl(last_committed_item_index, std::move(impl_items));
+}
+
+void NavigationManagerImpl::RestoreImpl(
+    int last_committed_item_index,
+    std::vector<std::unique_ptr<NavigationItemImpl>> items) {
+  if (!web_view_cache_.IsAttachedToWebView() &&
+      !delegate_->GetWebState()->IsWebUsageEnabled()) {
+    // If web usage is disabled, it is not possible to create the
+    // web view. However the embedder will call LoadIfNecessary()
+    // after re-enabling the web usage, which will call Restore().
+    // So saving the items in the WKWebViewCache is equivalent to
+    // scheduling the Restore(...) on the next load.
+    //
+    // This is a fix for https://crbug.com/532898037 (which is a
+    // crash in CRWWebController when attempting to create the
+    // web view while web usage is disabled).
+    web_view_cache_.SetCachedItems(last_committed_item_index, std::move(items));
+    return;
+  }
+
   WillRestore(items.size());
 
-  DCHECK_LT(last_committed_item_index, static_cast<int>(items.size()));
-  DCHECK(items.empty() || last_committed_item_index >= 0);
-  if (items.empty())
-    return;
+  // Ensure that last_committed_item_index is in range [0; items.size()-1]
+  // to avoid crashing if the data loaded from disk in invalid. This could
+  // happen if the data is corrupt, tampered with or if it was written by a
+  // version of the application with a bug e.g. https://crbug.com/372914303.
+  // See https://crbug.com/372926054 for a crash caused by the invariant
+  // not being respected.
+  last_committed_item_index = ClampLastCommittedItemIndex(
+      last_committed_item_index, base::saturated_cast<int>(items.size()));
 
-  if (!web_view_cache_.IsAttachedToWebView())
+  if (!web_view_cache_.IsAttachedToWebView()) {
     web_view_cache_.ResetToAttached();
+  }
+
+  if (items.empty()) {
+    return;
+  }
 
   DiscardNonCommittedItems();
   if (GetItemCount() > 0) {
     delegate_->RemoveWebView();
   }
-  DCHECK_EQ(0, GetItemCount());
-  DCHECK_EQ(-1, pending_item_index_);
-  last_committed_item_index_ = -1;
 
-  UnsafeRestore(last_committed_item_index, std::move(items));
-}
-
-bool NavigationManagerImpl::IsRestoreSessionInProgress() const {
-  return is_restore_session_in_progress_;
-}
-
-void NavigationManagerImpl::AddRestoreCompletionCallback(
-    base::OnceClosure callback) {
-  if (!is_restore_session_in_progress_) {
-    std::move(callback).Run();
-    return;
-  }
-  restore_session_completion_callbacks_.push_back(std::move(callback));
-}
-
-NavigationItemImpl*
-NavigationManagerImpl::GetPendingItemInCurrentOrRestoredSession() const {
-  if (pending_item_index_ == -1) {
-    if (!pending_item_) {
-      return delegate_->GetPendingItem();
-    }
-    return pending_item_.get();
-  }
-  return GetNavigationItemImplAtIndex(pending_item_index_);
-}
-
-NavigationItemImpl*
-NavigationManagerImpl::GetLastCommittedItemInCurrentOrRestoredSession() const {
-  if (empty_window_open_item_) {
-    return empty_window_open_item_.get();
+  if (!web_view_cache_.IsAttachedToWebView()) {
+    web_view_cache_.ResetToAttached();
   }
 
-  int index = GetLastCommittedItemIndexInCurrentOrRestoredSession();
-  if (index == -1) {
-    DCHECK_EQ(0, GetItemCount());
-    return nullptr;
+  for (size_t index = 0; index < items.size(); ++index) {
+    RewriteItemURLIfNecessary(items[index].get());
   }
 
-  NavigationItemImpl* last_committed_item =
-      GetNavigationItemImplAtIndex(static_cast<size_t>(index));
-  if (last_committed_item && GetWebState() &&
-      !CanTrustLastCommittedItem(last_committed_item)) {
-    // Don't check trust level here, as at this point it's expected
-    // the _documentURL and the last_commited_item URL have an origin
-    // mismatch.
-    GURL document_url = GetWebState()->GetCurrentURL(/*trust_level=*/nullptr);
-    if (!last_committed_web_view_item_) {
-      last_committed_web_view_item_ = CreateNavigationItemWithRewriters(
-          /*url=*/GURL::EmptyGURL(), Referrer(),
-          ui::PageTransition::PAGE_TRANSITION_LINK,
-          NavigationInitiationType::RENDERER_INITIATED,
-          /*is_using_https_as_default_scheme=*/false,
-          /*previous_url=*/GURL::EmptyGURL(),
-          nullptr /* use default rewriters only */);
-      last_committed_web_view_item_->SetUntrusted();
-    }
-    last_committed_web_view_item_->SetURL(document_url);
-    // Don't expose internal restore session URL's.
-    GURL virtual_url;
-    if (wk_navigation_util::IsRestoreSessionUrl(document_url) &&
-        wk_navigation_util::ExtractTargetURL(document_url, &virtual_url)) {
-      if (!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
-          wk_navigation_util::IsPlaceholderUrl(virtual_url)) {
-        last_committed_web_view_item_->SetVirtualURL(
-            wk_navigation_util::ExtractUrlFromPlaceholderUrl(virtual_url));
-      } else {
-        last_committed_web_view_item_->SetVirtualURL(virtual_url);
-      }
-    } else {
-      last_committed_web_view_item_->SetVirtualURL(document_url);
-    }
-    last_committed_web_view_item_->SetTimestamp(
-        time_smoother_.GetSmoothedTime(base::Time::Now()));
-    return last_committed_web_view_item_.get();
+  NSData* synthesized_data = SynthesizedSessionRestore(
+      last_committed_item_index, items, browser_state_->IsOffTheRecord());
+  if (synthesized_data != nil) {
+    AppendSessionDataBlobFetcher(
+        base::BindOnce([](NSData* data) { return data; }, synthesized_data),
+        SessionDataBlobSource::kSynthesized);
   }
-  return last_committed_item;
-}
 
-int NavigationManagerImpl::GetLastCommittedItemIndexInCurrentOrRestoredSession()
-    const {
-  // WKBackForwardList's |currentItem| is usually the last committed item,
-  // except two cases:
-  // 1) when the pending navigation is a back-forward navigation, in which
-  //    case it is actually the pending item. As a workaround, fall back to
-  //    last_committed_item_index_. This is not 100% correct (since
-  //    last_committed_item_index_ is only updated for main frame navigations),
-  //    but is the best possible answer.
-  // 2) when the last committed item is an empty window open item.
-  if (pending_item_index_ >= 0 || empty_window_open_item_) {
-    return last_committed_item_index_;
+  native_restore_in_progress_ = true;
+
+  // Ordering is important. Cache the visible item of the restored session
+  // before starting the new navigation, which may trigger client lookup of
+  // visible item. The visible item of the restored session is the last
+  // committed item, because a restored session has no pending item.
+  if (last_committed_item_index > -1) {
+    restored_visible_item_ = std::move(items[last_committed_item_index]);
   }
-  return web_view_cache_.GetCurrentItemIndex();
+
+  std::vector<std::unique_ptr<NavigationItemImpl>> back_items;
+  for (int index = 0; index < last_committed_item_index; index++) {
+    back_items.push_back(std::move(items[index]));
+  }
+
+  std::vector<std::unique_ptr<NavigationItemImpl>> forward_items;
+  for (size_t index = last_committed_item_index + 1; index < items.size();
+       index++) {
+    forward_items.push_back(std::move(items[index]));
+  }
+
+  RestoreNativeSession();
+
+  RestoreItemsState(RestoreItemListType::kBackList, std::move(back_items));
+  RestoreItemsState(RestoreItemListType::kForwardList,
+                    std::move(forward_items));
 }
 
 NavigationItemImpl* NavigationManagerImpl::GetNavigationItemImplAtIndex(
@@ -1082,7 +1306,7 @@ NavigationItemImpl* NavigationManagerImpl::GetNavigationItemImplAtIndex(
     // Return nullptr for index != 0 instead of letting the code fall through
     // (which in most cases will return null anyways because wk_item should be
     // nil) for the slim chance that WKBackForwardList has been updated for a
-    // new navigation but WKWebView has not triggered the |didCommitNavigation:|
+    // new navigation but WKWebView has not triggered the `didCommitNavigation:`
     // callback. NavigationItem for the new wk_item should not be returned until
     // after DidCommitPendingItem() is called.
     return index == 0 ? empty_window_open_item_.get() : nullptr;
@@ -1092,9 +1316,16 @@ NavigationItemImpl* NavigationManagerImpl::GetNavigationItemImplAtIndex(
       index, true /* create_if_missing */);
 }
 
+void NavigationManagerImpl::AppendSessionDataBlobFetcher(
+    SessionDataBlobFetcher fetcher,
+    SessionDataBlobSource source) {
+  session_data_blob_fetchers_.push_back(
+      std::make_pair(std::move(fetcher), source));
+}
+
 void NavigationManagerImpl::RestoreItemsState(
     RestoreItemListType list_type,
-    std::vector<std::unique_ptr<NavigationItem>> items_restored) {
+    std::vector<std::unique_ptr<NavigationItemImpl>> items_restored) {
   bool back_list = list_type == RestoreItemListType::kBackList;
   size_t current_item_index = web_view_cache_.GetCurrentItemIndex();
   size_t cache_offset = back_list ? 0 : current_item_index + 1;
@@ -1104,15 +1335,16 @@ void NavigationManagerImpl::RestoreItemsState(
 
   for (size_t index = 0; index < items_restored.size(); index++) {
     size_t cache_index = index + cache_offset;
-    if (cache_index >= cache_limit)
+    if (cache_index >= cache_limit) {
       break;
+    }
 
     NavigationItemImpl* cached_item =
         web_view_cache_.GetNavigationItemImplAtIndex(
             cache_index, true /* create_if_missing */);
     NavigationItem* restore_item = items_restored[index].get();
 
-    // |cached_item| appears to be nil sometimes, perhaps due to a mismatch in
+    // `cached_item` appears to be nil sometimes, perhaps due to a mismatch in
     // WKWebView's backForwardList.  Returning early here may break some restore
     // state features, but should not put the user in a broken state.
     if (!cached_item || !restore_item) {
@@ -1120,87 +1352,9 @@ void NavigationManagerImpl::RestoreItemsState(
     }
 
     bool is_same_url = cached_item->GetURL() == restore_item->GetURL();
-    if (wk_navigation_util::IsRestoreSessionUrl(cached_item->GetURL())) {
-      GURL target_url;
-      if (wk_navigation_util::ExtractTargetURL(cached_item->GetURL(),
-                                               &target_url))
-        is_same_url = target_url == restore_item->GetURL();
-    }
-
     if (is_same_url) {
       cached_item->RestoreStateFromItem(restore_item);
     }
-  }
-}
-
-void NavigationManagerImpl::UnsafeRestore(
-    int last_committed_item_index,
-    std::vector<std::unique_ptr<NavigationItem>> items) {
-  // This function restores session history by loading a magic local file
-  // (restore_session.html) into the web view. The session history is encoded
-  // in the query parameter. When loaded, restore_session.html parses the
-  // session history and replays them into the web view using History API.
-  for (size_t index = 0; index < items.size(); ++index) {
-    RewriteItemURLIfNecessary(items[index].get());
-  }
-
-  // TODO(crbug.com/771200): Retain these original NavigationItems restored from
-  // storage and associate them with new WKBackForwardListItems created after
-  // history restore so information such as scroll position is restored.
-  int first_index = -1;
-  GURL url;
-  wk_navigation_util::CreateRestoreSessionUrl(last_committed_item_index, items,
-                                              &url, &first_index);
-  DCHECK_GE(first_index, 0);
-  DCHECK_LT(base::checked_cast<NSUInteger>(first_index), items.size());
-  DCHECK(url.is_valid());
-
-  WebLoadParams params(url);
-  // It's not clear how this transition type will be used and what's the impact.
-  // For now, use RELOAD because restoring history is kind of like a reload of
-  // the current page.
-  params.transition_type = ui::PAGE_TRANSITION_RELOAD;
-
-  // This pending item will become the first item in the restored history.
-  params.virtual_url = items[first_index]->GetVirtualURL();
-
-  // Grab the title of the first item before |restored_visible_item_| (which may
-  // or may not be the first index) is moved out of |items| below.
-  const std::u16string& firstTitle = items[first_index]->GetTitle();
-
-  // Ordering is important. Cache the visible item of the restored session
-  // before starting the new navigation, which may trigger client lookup of
-  // visible item. The visible item of the restored session is the last
-  // committed item, because a restored session has no pending item.
-  is_restore_session_in_progress_ = true;
-  if (last_committed_item_index > -1)
-    restored_visible_item_ = std::move(items[last_committed_item_index]);
-
-  std::vector<std::unique_ptr<NavigationItem>> back_items;
-  for (int index = 0; index < last_committed_item_index; index++) {
-    back_items.push_back(std::move(items[index]));
-  }
-
-  std::vector<std::unique_ptr<NavigationItem>> forward_items;
-  for (size_t index = last_committed_item_index + 1; index < items.size();
-       index++) {
-    forward_items.push_back(std::move(items[index]));
-  }
-
-  AddRestoreCompletionCallback(base::BindOnce(
-      &NavigationManagerImpl::RestoreItemsState, base::Unretained(this),
-      RestoreItemListType::kBackList, std::move(back_items)));
-  AddRestoreCompletionCallback(base::BindOnce(
-      &NavigationManagerImpl::RestoreItemsState, base::Unretained(this),
-      RestoreItemListType::kForwardList, std::move(forward_items)));
-
-  LoadURLWithParams(params);
-
-  // On restore prime the first navigation item with the title.  The remaining
-  // navItem titles will be set from the WKBackForwardListItem title value.
-  NavigationItemImpl* pendingItem = GetPendingItemInCurrentOrRestoredSession();
-  if (pendingItem) {
-    pendingItem->SetTitle(firstTitle);
   }
 }
 
@@ -1215,7 +1369,7 @@ void NavigationManagerImpl::RewriteItemURLIfNecessary(
   GURL url = item->GetURL();
   if (web::BrowserURLRewriter::GetInstance()->RewriteURLIfNecessary(
           &url, browser_state_)) {
-    // |url| must be set first for -SetVirtualURL to not no-op.
+    // `url` must be set first for -SetVirtualURL to not no-op.
     GURL virtual_url = item->GetURL();
     item->SetURL(url);
     item->SetVirtualURL(virtual_url);
@@ -1228,27 +1382,24 @@ NavigationManagerImpl::CreateNavigationItemWithRewriters(
     const Referrer& referrer,
     ui::PageTransition transition,
     NavigationInitiationType initiation_type,
-    bool is_using_https_as_default_scheme,
+    HttpsUpgradeType https_upgrade_type,
     const GURL& previous_url,
     const std::vector<BrowserURLRewriter::URLRewriter>* additional_rewriters)
     const {
   GURL loaded_url(url);
 
-  // Do not rewrite placeholder URL. Navigation code relies on this special URL
-  // to implement native view and WebUI, and rewriter code should not be exposed
-  // to this special type of about:blank URL.
-  if (base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) ||
-      !IsPlaceholderUrl(url)) {
-    bool url_was_rewritten = false;
-    if (additional_rewriters && !additional_rewriters->empty()) {
-      url_was_rewritten = web::BrowserURLRewriter::RewriteURLWithWriters(
-          &loaded_url, browser_state_, *additional_rewriters);
-    }
+  // Navigation code relies on this special URL to implement native view and
+  // WebUI, and rewriter code should not be exposed to this special type of
+  // about:blank URL.
+  bool url_was_rewritten = false;
+  if (additional_rewriters && !additional_rewriters->empty()) {
+    url_was_rewritten = web::BrowserURLRewriter::RewriteURLWithWriters(
+        &loaded_url, browser_state_, *additional_rewriters);
+  }
 
-    if (!url_was_rewritten) {
-      web::BrowserURLRewriter::GetInstance()->RewriteURLIfNecessary(
-          &loaded_url, browser_state_);
-    }
+  if (!url_was_rewritten) {
+    web::BrowserURLRewriter::GetInstance()->RewriteURLIfNecessary(
+        &loaded_url, browser_state_);
   }
 
   // The URL should not be changed to app-specific URL if the load is
@@ -1273,58 +1424,55 @@ NavigationManagerImpl::CreateNavigationItemWithRewriters(
   item->SetReferrer(referrer);
   item->SetTransitionType(transition);
   item->SetNavigationInitiationType(initiation_type);
-  if (is_using_https_as_default_scheme)
-    item->SetUpgradedToHttps();
+  item->SetHttpsUpgradeType(https_upgrade_type);
 
   return item;
-}
-
-NavigationItem* NavigationManagerImpl::GetLastCommittedItemWithUserAgentType()
-    const {
-  for (int index = GetLastCommittedItemIndexInCurrentOrRestoredSession();
-       index >= 0; index--) {
-    NavigationItem* item = GetItemAtIndex(index);
-    if (wk_navigation_util::URLNeedsUserAgentType(item->GetURL())) {
-      DCHECK_NE(item->GetUserAgentType(), UserAgentType::NONE);
-      return item;
-    }
-  }
-  return nullptr;
 }
 
 bool NavigationManagerImpl::CanTrustLastCommittedItem(
     const NavigationItem* last_committed_item) const {
   DCHECK(last_committed_item);
-  if (!web_view_cache_.IsAttachedToWebView())
+  if (!web_view_cache_.IsAttachedToWebView()) {
     return true;
-
-  // Only compare origins, as any mismatch between |web_view_url| and
-  // |last_committed_url| with the same origin are safe to return as
-  // visible.
-  GURL web_view_url = web_view_cache_.GetVisibleWebViewURL();
-  GURL last_committed_url = last_committed_item->GetURL();
-  if (web_view_url.GetOrigin() == last_committed_url.GetOrigin())
-    return true;
+  }
 
   // Fast back-forward navigations can be performed synchronously, with the
   // WKWebView.URL updated before enough callbacks occur to update the
   // last committed item.  As a result, any calls to
   // -CanTrustLastCommittedItem during a call to WKWebView
   // -goToBackForwardListItem are wrapped in the
-  // |going_to_back_forward_list_item_| flag. This flag is set and immediately
+  // `going_to_back_forward_list_item_` flag. This flag is set and immediately
   // unset because the the mismatch between URL and last_committed_item is
   // expected.
-  if (going_to_back_forward_list_item_)
+  if (going_to_back_forward_list_item_) {
     return true;
+  }
+
+  const GURL& last_committed_url = last_committed_item->GetURL();
+  // WKWebView.URL will update immediately when navigating to and from
+  // about, file or chrome scheme URLs.
+  // Checks `last_committed_url` in advance to reduce the calling to
+  // `web_view_cache_.GetVisibleWebViewOriginURL()` for better performance.
+  if (last_committed_url.SchemeIs(url::kAboutScheme) ||
+      last_committed_url.SchemeIs(url::kFileScheme) ||
+      web::GetWebClient()->IsAppSpecificURL(last_committed_url)) {
+    return true;
+  }
+
+  // Only compare origins, as any mismatch between `web_view_url` and
+  // `last_committed_url` with the same origin are safe to return as
+  // visible.
+  const GURL& web_view_origin_url =
+      web_view_cache_.GetVisibleWebViewOriginURL();
+  if (url::IsSameOriginWith(web_view_origin_url, last_committed_url)) {
+    return true;
+  }
 
   // WKWebView.URL will update immediately when navigating to and from
   // about, file or chrome scheme URLs.
-  if (web_view_url.SchemeIs(url::kAboutScheme) ||
-      last_committed_url.SchemeIs(url::kAboutScheme) ||
-      web_view_url.SchemeIs(url::kFileScheme) ||
-      last_committed_url.SchemeIs(url::kFileScheme) ||
-      web::GetWebClient()->IsAppSpecificURL(web_view_url) ||
-      web::GetWebClient()->IsAppSpecificURL(last_committed_url)) {
+  if (web_view_origin_url.SchemeIs(url::kAboutScheme) ||
+      web_view_origin_url.SchemeIs(url::kFileScheme) ||
+      web::GetWebClient()->IsAppSpecificURL(web_view_origin_url)) {
     return true;
   }
 
@@ -1332,17 +1480,8 @@ bool NavigationManagerImpl::CanTrustLastCommittedItem(
 }
 
 void NavigationManagerImpl::FinalizeSessionRestore() {
-  is_restore_session_in_progress_ = false;
-  for (base::OnceClosure& callback : restore_session_completion_callbacks_) {
-    std::move(callback).Run();
-  }
-  restore_session_completion_callbacks_.clear();
+  session_data_blob_fetchers_.clear();
   LoadIfNecessary();
-}
-
-bool NavigationManagerImpl::IsPlaceholderUrl(const GURL& url) const {
-  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
-  return wk_navigation_util::IsPlaceholderUrl(url);
 }
 
 NavigationManagerImpl::WKWebViewCache::WKWebViewCache(
@@ -1358,17 +1497,12 @@ bool NavigationManagerImpl::WKWebViewCache::IsAttachedToWebView() const {
 void NavigationManagerImpl::WKWebViewCache::DetachFromWebView() {
   if (IsAttachedToWebView()) {
     cached_current_item_index_ = GetCurrentItemIndex();
-    cached_items_.resize(GetBackForwardListItemCount());
+    cached_items_.reserve(GetBackForwardListItemCount());
     for (size_t index = 0; index < GetBackForwardListItemCount(); index++) {
-      cached_items_[index].reset(new NavigationItemImpl(
-          *GetNavigationItemImplAtIndex(index, true /* create_if_missing */)));
-      // Don't put restore URL's into |cached_items|, extract them first.
-      GURL url = cached_items_[index]->GetURL();
-      if (wk_navigation_util::IsRestoreSessionUrl(url)) {
-        GURL extracted_url;
-        if (wk_navigation_util::ExtractTargetURL(url, &extracted_url))
-          cached_items_[index]->SetURL(extracted_url);
-      }
+      std::unique_ptr<NavigationItemImpl> clone =
+          GetNavigationItemImplAtIndex(index, /* create_if_missing = */ true)
+              ->Clone();
+      cached_items_.push_back(std::move(clone));
     }
   }
   attached_to_web_view_ = false;
@@ -1380,21 +1514,27 @@ void NavigationManagerImpl::WKWebViewCache::ResetToAttached() {
   attached_to_web_view_ = true;
 }
 
-std::vector<std::unique_ptr<NavigationItem>>
+void NavigationManagerImpl::WKWebViewCache::SetCachedItems(
+    int current_item_index,
+    std::vector<std::unique_ptr<NavigationItemImpl>> cached_items) {
+  DCHECK(!IsAttachedToWebView());
+  CHECK_GE(current_item_index, 0);
+  CHECK_LT(current_item_index, static_cast<int>(cached_items.size()));
+  cached_current_item_index_ = current_item_index;
+  cached_items_ = std::move(cached_items);
+}
+
+std::vector<std::unique_ptr<NavigationItemImpl>>
 NavigationManagerImpl::WKWebViewCache::ReleaseCachedItems() {
   DCHECK(!IsAttachedToWebView());
-  std::vector<std::unique_ptr<NavigationItem>> result(cached_items_.size());
-  for (size_t index = 0; index < cached_items_.size(); index++) {
-    result[index] = std::move(cached_items_[index]);
-  }
-  cached_items_.clear();
-  return result;
+  return std::exchange(cached_items_, {});
 }
 
 size_t NavigationManagerImpl::WKWebViewCache::GetBackForwardListItemCount()
     const {
-  if (!IsAttachedToWebView())
+  if (!IsAttachedToWebView()) {
     return cached_items_.size();
+  }
 
   id<CRWWebViewNavigationProxy> proxy =
       navigation_manager_->delegate_->GetWebViewNavigationProxy();
@@ -1408,20 +1548,36 @@ size_t NavigationManagerImpl::WKWebViewCache::GetBackForwardListItemCount()
   return 0;
 }
 
-GURL NavigationManagerImpl::WKWebViewCache::GetVisibleWebViewURL() const {
-  if (!IsAttachedToWebView())
-    return GURL();
+const GURL& NavigationManagerImpl::WKWebViewCache::GetVisibleWebViewOriginURL()
+    const {
+  if (!IsAttachedToWebView()) {
+    return GURL::EmptyGURL();
+  }
 
   id<CRWWebViewNavigationProxy> proxy =
       navigation_manager_->delegate_->GetWebViewNavigationProxy();
-  if (proxy)
-    return net::GURLWithNSURL(proxy.URL);
-  return GURL();
+  if (proxy) {
+    // Retain the url to reduce the number of calls to `proxy.URL` which may be
+    // very expensive after being called hundreds of time for one navigation.
+    NSURL* url = proxy.URL;
+    if (![cached_visible_port_nsnumber_ isEqual:url.port] ||
+        ![cached_visible_host_nsstring_ isEqualToString:url.host] ||
+        ![cached_visible_scheme_nsstring_ isEqualToString:url.scheme]) {
+      cached_visible_origin_url_ =
+          url::Origin::Create(net::GURLWithNSURL(url)).GetURL();
+      cached_visible_host_nsstring_ = url.host;
+      cached_visible_scheme_nsstring_ = url.scheme;
+      cached_visible_port_nsnumber_ = url.port;
+    }
+    return cached_visible_origin_url_;
+  }
+  return GURL::EmptyGURL();
 }
 
 int NavigationManagerImpl::WKWebViewCache::GetCurrentItemIndex() const {
-  if (!IsAttachedToWebView())
+  if (!IsAttachedToWebView()) {
     return cached_current_item_index_;
+  }
 
   id<CRWWebViewNavigationProxy> proxy =
       navigation_manager_->delegate_->GetWebViewNavigationProxy();
@@ -1435,11 +1591,13 @@ NavigationItemImpl*
 NavigationManagerImpl::WKWebViewCache::GetNavigationItemImplAtIndex(
     size_t index,
     bool create_if_missing) const {
-  if (index >= GetBackForwardListItemCount())
+  if (index >= GetBackForwardListItemCount()) {
     return nullptr;
+  }
 
-  if (!IsAttachedToWebView())
+  if (!IsAttachedToWebView()) {
     return cached_items_[index].get();
+  }
 
   WKBackForwardListItem* wk_item = GetWKItemAtIndex(index);
   NavigationItemImpl* item = GetNavigationItemFromWKItem(wk_item);
@@ -1453,12 +1611,12 @@ NavigationManagerImpl::WKWebViewCache::GetNavigationItemImplAtIndex(
   std::unique_ptr<web::NavigationItemImpl> new_item =
       navigation_manager_->CreateNavigationItemWithRewriters(
           net::GURLWithNSURL(wk_item.URL),
-          (prev_wk_item ? web::Referrer(net::GURLWithNSURL(prev_wk_item.URL),
-                                        web::ReferrerPolicyAlways)
-                        : web::Referrer()),
+          (prev_wk_item
+               ? web::Referrer(net::GURLWithNSURL(prev_wk_item.URL),
+                               web::ReferrerPolicyStrictOriginWhenCrossOrigin)
+               : web::Referrer()),
           ui::PageTransition::PAGE_TRANSITION_LINK,
-          NavigationInitiationType::RENDERER_INITIATED,
-          /*is_using_https_as_default_scheme=*/false,
+          NavigationInitiationType::RENDERER_INITIATED, HttpsUpgradeType::kNone,
           // Not using GetLastCommittedItem()->GetURL() in case the last
           // committed item in the WKWebView hasn't been linked to a
           // NavigationItem and this method is called in that code path to avoid
@@ -1468,38 +1626,38 @@ NavigationManagerImpl::WKWebViewCache::GetNavigationItemImplAtIndex(
   new_item->SetTimestamp(
       navigation_manager_->time_smoother_.GetSmoothedTime(base::Time::Now()));
   new_item->SetTitle(base::SysNSStringToUTF16(wk_item.title));
-  const GURL& url = new_item->GetURL();
-  // If this navigation item has a restore_session.html URL, then it was created
-  // to restore session history and will redirect to the target URL encoded in
-  // the query parameter automatically. Set virtual URL to the target URL so the
-  // internal restore_session.html is not exposed in the UI and to URL-sensing
-  // components outside of //ios/web layer.
-  if (wk_navigation_util::IsRestoreSessionUrl(url)) {
-    GURL virtual_url;
-    if (wk_navigation_util::ExtractTargetURL(url, &virtual_url)) {
-      if (!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
-          wk_navigation_util::IsPlaceholderUrl(virtual_url)) {
-        new_item->SetVirtualURL(
-            wk_navigation_util::ExtractUrlFromPlaceholderUrl(virtual_url));
-      } else {
-        new_item->SetVirtualURL(virtual_url);
-      }
+  if (new_item->GetTitle().empty() &&
+      GetCurrentItemIndex() == static_cast<int>(index)) {
+    // Normally, The WKBackforwardList.title equals to the document.title when
+    // the page loads. But it's not always accurate. For WKWebView, The
+    // WKBackforwardList.title is empty when the new page is opened via
+    // history.pushState(). But the document.title (WKWebView.title) doesn't
+    // have to be empty or changed. So when opening a new page via
+    // history.pushState(), its title should be the current document.title.
+    // Here, When the WKBackforwardList.title is empty for current navigation,
+    // the document.title is read as the title of the new item to solve this
+    // problem.
+    new_item->SetTitle(GetWKWebViewTitle());
+  }
+  SetNavigationItemInWKItem(wk_item, std::move(new_item));
+  NavigationItemImpl* created_item = GetNavigationItemFromWKItem(wk_item);
+  if (base::FeatureList::IsEnabled(
+          features::kUpdateSSLStatusOnNavigationItemLazyCreation)) {
+    // Do the SSLStatus update if the nav item is the current item in the nav
+    // stack and its url corresponds to the one in the WebView. Do the update at
+    // the very end to make sure that the item is cached and won't be
+    // re-created indefinitely on re-entry if GetNavigationItemImplAtIndex() is
+    // recursively called when handling
+    // UpdateSSLStatusForCurrentNavigationItem().
+    NavigationManagerDelegate* delegate = navigation_manager_->delegate_;
+    if (delegate &&
+        wk_item ==
+            delegate->GetWebViewNavigationProxy().backForwardList.currentItem &&
+        net::GURLWithNSURL(wk_item.URL) == delegate->GetCurrentURL()) {
+      delegate->UpdateSSLStatusForCurrentNavigationItem();
     }
   }
-
-  // TODO(crbug.com/1003680) This seems to happen if a restored navigation fails
-  // provisionally before the NavigationContext associates with the original
-  // navigation. Rather than expose the internal placeholder to the UI and to
-  // URL-sensing components outside of //ios/web layer, set virtual URL to the
-  // placeholder original URL here.
-  if (!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
-      wk_navigation_util::IsPlaceholderUrl(url)) {
-    new_item->SetVirtualURL(
-        wk_navigation_util::ExtractUrlFromPlaceholderUrl(url));
-  }
-
-  SetNavigationItemInWKItem(wk_item, std::move(new_item));
-  return GetNavigationItemFromWKItem(wk_item);
+  return created_item;
 }
 
 WKBackForwardListItem* NavigationManagerImpl::WKWebViewCache::GetWKItemAtIndex(
@@ -1516,6 +1674,19 @@ WKBackForwardListItem* NavigationManagerImpl::WKWebViewCache::GetWKItemAtIndex(
   id<CRWWebViewNavigationProxy> proxy =
       navigation_manager_->delegate_->GetWebViewNavigationProxy();
   return [proxy.backForwardList itemAtIndex:offset];
+}
+
+const std::u16string NavigationManagerImpl::WKWebViewCache::GetWKWebViewTitle()
+    const {
+  DCHECK(IsAttachedToWebView());
+
+  id<CRWWebViewNavigationProxy> proxy =
+      navigation_manager_->delegate_->GetWebViewNavigationProxy();
+  NSString* title = proxy.title;
+  if (!title) {
+    return std::u16string();
+  }
+  return base::SysNSStringToUTF16(title);
 }
 
 }  // namespace web

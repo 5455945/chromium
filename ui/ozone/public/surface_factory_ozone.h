@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,23 @@
 #define UI_OZONE_PUBLIC_SURFACE_FACTORY_OZONE_H_
 
 #include <stdint.h>
+
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/native_library.h"
 #include "gpu/vulkan/buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_pixmap.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/overlay_transform.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/ozone/public/drm_modifiers_filter.h"
 #include "ui/ozone/public/gl_ozone.h"
 
 #if BUILDFLAG(ENABLE_VULKAN)
@@ -30,6 +31,10 @@
 
 namespace gfx {
 class NativePixmap;
+}
+
+namespace gpu {
+class VulkanDeviceQueue;
 }
 
 namespace ui {
@@ -68,13 +73,20 @@ class PlatformWindowSurface;
 // modes (See comments below for descriptions).
 class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
  public:
+  SurfaceFactoryOzone(const SurfaceFactoryOzone&) = delete;
+  SurfaceFactoryOzone& operator=(const SurfaceFactoryOzone&) = delete;
+
   // Returns a list of allowed GL implementations. The default implementation
   // will be the first item.
-  virtual std::vector<gl::GLImplementation> GetAllowedGLImplementations();
+  virtual std::vector<gl::GLImplementationParts> GetAllowedGLImplementations();
 
   // Returns the GLOzone to use for the specified GL implementation, or null if
   // GL implementation doesn't exist.
   virtual GLOzone* GetGLOzone(const gl::GLImplementationParts& implementation);
+
+  // Returns the current GLOzone based on the OzonePlatform and
+  // GLImplementationParts currently in use.
+  GLOzone* GetCurrentGLOzone();
 
 #if BUILDFLAG(ENABLE_VULKAN)
   // Creates the vulkan implementation. This object should be capable of
@@ -87,13 +99,12 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
       bool use_swiftshader,
       bool allow_protected_memory);
 
-  // Creates a scanout NativePixmap that can be rendered using Vulkan.
+  // Creates a BGRA_8888 scanout NativePixmap that can be rendered using Vulkan.
   // TODO(spang): Remove this once VK_EXT_image_drm_format_modifier is
   // available.
   virtual scoped_refptr<gfx::NativePixmap> CreateNativePixmapForVulkan(
       gfx::AcceleratedWidget widget,
       gfx::Size size,
-      gfx::BufferFormat format,
       gfx::BufferUsage usage,
       VkDevice vk_device,
       VkDeviceMemory* vk_device_memory,
@@ -134,28 +145,20 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
   // This method can be called on any thread.
   virtual scoped_refptr<gfx::NativePixmap> CreateNativePixmap(
       gfx::AcceleratedWidget widget,
-      VkDevice vk_device,
+      gpu::VulkanDeviceQueue* device_queue,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage,
-      absl::optional<gfx::Size> framebuffer_size = absl::nullopt);
+      std::optional<gfx::Size> framebuffer_size = std::nullopt);
 
-  // Similar to CreateNativePixmap, but returns the result asynchronously.
-  using NativePixmapCallback =
-      base::OnceCallback<void(scoped_refptr<gfx::NativePixmap>)>;
-  virtual void CreateNativePixmapAsync(gfx::AcceleratedWidget widget,
-                                       VkDevice vk_device,
-                                       gfx::Size size,
-                                       gfx::BufferFormat format,
-                                       gfx::BufferUsage usage,
-                                       NativePixmapCallback callback);
+  virtual bool CanCreateNativePixmapForFormat(viz::SharedImageFormat format);
 
   // Create a single native buffer from an existing handle. Takes ownership of
   // |handle| and can be called on any thread.
   virtual scoped_refptr<gfx::NativePixmap> CreateNativePixmapFromHandle(
       gfx::AcceleratedWidget widget,
       gfx::Size size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle);
 
   // A temporary solution that allows protected NativePixmap management to be
@@ -167,7 +170,7 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
   virtual scoped_refptr<gfx::NativePixmap>
   CreateNativePixmapForProtectedBufferHandle(gfx::AcceleratedWidget widget,
                                              gfx::Size size,
-                                             gfx::BufferFormat format,
+                                             viz::SharedImageFormat format,
                                              gfx::NativePixmapHandle handle);
 
   // This callback can be used by implementations of this interface to query
@@ -189,19 +192,23 @@ class COMPONENT_EXPORT(OZONE_BASE) SurfaceFactoryOzone {
       const GetProtectedNativePixmapCallback&
           get_protected_native_pixmap_callback);
 
-  // Enumerates the BufferFormats that the platform can allocate (and use for
-  // texturing) via CreateNativePixmap(), or returns empty if those could not be
-  // retrieved or the platform doesn't know in advance.
-  // Enumeration should not be assumed to take a trivial amount of time.
-  virtual std::vector<gfx::BufferFormat> GetSupportedFormatsForTexturing()
-      const;
+  // Returns whether the platform supports an external filter on DRM modifiers.
+  virtual bool SupportsDrmModifiersFilter() const;
+
+  // Sets the filter that can remove modifiers incompatible with usage elsewhere
+  // in Chrome.
+  virtual void SetDrmModifiersFilter(
+      std::unique_ptr<DrmModifiersFilter> filter);
+
+  // Checks if the platform can allocate (and use for texturing) via
+  // CreateNativePixmap() the provided `format`. Checks should not be assumed to
+  // take a trivial amount of time.
+  virtual bool IsFormatSupportedForTexturing(
+      viz::SharedImageFormat format) const;
 
  protected:
   SurfaceFactoryOzone();
   virtual ~SurfaceFactoryOzone();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SurfaceFactoryOzone);
 };
 
 }  // namespace ui

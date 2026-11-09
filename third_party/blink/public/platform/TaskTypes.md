@@ -14,6 +14,7 @@ pausable. Some internal task queues are not.
 | Networking                        | No          | No                      |  Yes       | Yes       | Yes      | No           |
 | NetworkingWithURLLoaderAnnotation | No          | No                      |  Yes       | Yes       | Yes      | No           |
 | NetworkingControl                 | No          | No                      |  Yes       | Yes       | Yes      | No           |
+| LowPriorityScriptExecution        | No          | No                      |  Yes       | Yes       | Yes      | No           |
 | HistoryTraversal                  | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | Embed                             | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | MediaElementEvent                 | No          | No                      |  No        | Yes       | Yes      | Yes          |
@@ -25,6 +26,7 @@ pausable. Some internal task queues are not.
 | RemoteEvent                       | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | WebSocket                         | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | PostedMessage                     | No          | No                      |  No        | Yes       | Yes      | Yes          |
+| BackForwardCachePostedMessage     | No          | No                      |  No        | Yes [^3]  | Yes      | Yes          |
 | UnshippedPortMessage              | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | FileReading                       | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | DatabaseAccess                    | No          | No                      |  No        | Yes       | Yes      | Yes          |
@@ -43,6 +45,9 @@ pausable. Some internal task queues are not.
 | ServiceWorkerClientMessage        | No          | No                      |  No        | Yes       | Yes      | Yes          |
 | WebLocks                          | No          | No                      |  No        | No        | No       | Yes          |
 | WakeLock                          | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
+| Storage                           | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
+| MachineLearning                   | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
+| WebSchedulingPostedTask           | Yes [^4]    | Yes [^4]                |  Yes       | Yes       | Yes      | Yes          |
 | InternalDefault                   | No          | No                      |  Yes       | Yes       | Yes      | Yes          |
 | InternalLoading                   | No          | No                      |  Yes       | Yes       | Yes      | No           |
 | InternalTest                      | No          | No                      |  No        | No        | No       | Yes          |
@@ -58,6 +63,7 @@ pausable. Some internal task queues are not.
 | InternalNavigationAssociated      | No          | No                      |  No        | No        | No       | No           |
 | InternalFreezableIPC              | No          | No                      |  No        | Yes       | No       | No           |
 | InternalContinueScriptLoading     | No          | No                      |  No        | Yes       | Yes      | Yes          |
+| InternalPostMessageForwarding     | No          | No                      |  No        | No        | Yes      | Yes          |
 
 Internal Translation queue supports concept of it running only in the foreground. It is disabled if the page that owns it goes in background.
 
@@ -69,3 +75,7 @@ has been backgrounded for 5 minutes. See
 "can_intensively_throttle_low_nesting_level" param is "true".
 
 [^2] "No" if the "IntensiveWakeUpThrottling" feature is disabled.
+
+[^3] "No" if the page is in BFCache.
+
+[^4] "Yes" only for `scheduler.postTask()` tasks where delay > 0.

@@ -1,13 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import {FakeObservables} from 'chrome://resources/ash/common/fake_observables.js';
-import {PromiseResolver} from 'chrome://resources/js/promise_resolver.m.js';
+import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
+import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 
-import {assertEquals} from '../../chai_assert.js';
-
-export function fakeObservablesTestSuite() {
+suite('fakeObservablesTestSuite', () => {
   let observables = null;
 
   setup(() => {
@@ -24,7 +23,7 @@ export function fakeObservablesTestSuite() {
     const expected = ['bar'];
     observables.setObservableData('ObserveFoo_OnFooUpdated', expected);
 
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     observables.observe('ObserveFoo_OnFooUpdated', (foo) => {
       assertEquals(expected[0], foo);
       resolver.resolve();
@@ -41,7 +40,7 @@ export function fakeObservablesTestSuite() {
     observables.setObservableData('ObserveFoo_OnFooUpdated', expected);
 
     // The first call will get 'bar1', and the second 'bar2'.
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     const expectedCallCount = 2;
     let callCount = 0;
     observables.observe('ObserveFoo_OnFooUpdated', (foo) => {
@@ -66,7 +65,7 @@ export function fakeObservablesTestSuite() {
 
     // With 3 calls and 2 observable values the response should cycle
     // 'bar1', 'bar2', 'bar1'
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     const expectedCallCount = 3;
     let callCount = 0;
     observables.observe('ObserveFoo_OnFooUpdated', (foo) => {
@@ -91,7 +90,7 @@ export function fakeObservablesTestSuite() {
     observables.setObservableDataForArg(
         'ObserveFoo_OnFooUpdated', 'foo', expected);
 
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     observables.observeWithArg('ObserveFoo_OnFooUpdated', 'foo', (foo) => {
       assertEquals(expected[0], foo);
       resolver.resolve();
@@ -112,7 +111,7 @@ export function fakeObservablesTestSuite() {
 
     // With 3 calls and 2 observable values the response should cycle
     // 'bar1', 'bar2', 'bar1'
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     const expectedCallCount = 3;
     let callCount = 0;
     observables.observeWithArg('ObserveFoo_OnFooUpdated', 'bar', (foo) => {
@@ -139,7 +138,7 @@ export function fakeObservablesTestSuite() {
 
     // With 4 calls and 4 observable values the response should cycle
     // 'bar1', 'bar2', 'bar3', 'bar4'
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     const expectedCallCount = 4;
     let callCount = 0;
     observables.observeWithArg('ObserveFoo_OnFooUpdated', 'bar', (foo) => {
@@ -172,7 +171,7 @@ export function fakeObservablesTestSuite() {
     observables.setObservableDataForArg(
         'ObserveFoo_OnFooUpdated', 'foo', expected);
 
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     observables.observeWithArg('ObserveFoo_OnFooUpdated', 'foo', (foo, bar) => {
       assertEquals(expected[0][0], foo);
       assertEquals(expected[0][1], bar);
@@ -182,4 +181,37 @@ export function fakeObservablesTestSuite() {
     observables.triggerWithArg('ObserveFoo_OnFooUpdated', 'foo');
     return resolver.promise;
   });
-}
+
+  test('ObservableTriggeredOnInterval', () => {
+    observables.register('ObserveFoo_OnFooUpdated');
+    /** @type !Array<string> */
+    const expected = ['bar'];
+    observables.setObservableData('ObserveFoo_OnFooUpdated', expected);
+
+    const resolver = new PromiseResolver();
+    observables.observe('ObserveFoo_OnFooUpdated', (foo) => {
+      assertEquals(expected[0], foo);
+      resolver.resolve();
+    });
+    observables.startTriggerOnInterval('ObserveFoo_OnFooUpdated', 0);
+
+    return resolver.promise;
+  });
+
+  test('ObservableTriggeredOnIntervalWithArg', () => {
+    observables.registerObservableWithArg('ObserveFoo_OnFooUpdated');
+    /** @type !Array<string> */
+    const expected = ['bar'];
+    observables.setObservableDataForArg(
+        'ObserveFoo_OnFooUpdated', 'foo', expected);
+
+    const resolver = new PromiseResolver();
+    observables.observeWithArg('ObserveFoo_OnFooUpdated', 'foo', (foo) => {
+      assertEquals(expected[0], foo);
+      resolver.resolve();
+    });
+    observables.startTriggerOnIntervalWithArg(
+        'ObserveFoo_OnFooUpdated', 'foo', 0);
+    return resolver.promise;
+  });
+});

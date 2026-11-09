@@ -1,48 +1,61 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_DEVICE_DISABLED_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_DEVICE_DISABLED_SCREEN_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/system/device_disabling_manager.h"
-// TODO(https://crbug.com/1164001): move to forward declaration.
-#include "chrome/browser/ui/webui/chromeos/login/device_disabled_screen_handler.h"
+#include "chromeos/ash/components/policy/restriction_schedule/device_restriction_schedule_controller.h"
 
 namespace ash {
 
-// Screen informing the user that the device has been disabled by its owner.
-class DeviceDisabledScreen : public BaseScreen,
-                             public system::DeviceDisablingManager::Observer {
- public:
-  explicit DeviceDisabledScreen(DeviceDisabledScreenView* view);
-  ~DeviceDisabledScreen() override;
+class DeviceDisabledScreenView;
 
-  // Called when the view is being destroyed. Note that if the Delegate is
-  // destroyed first, it must call SetDelegate(nullptr).
-  void OnViewDestroyed(DeviceDisabledScreenView* view);
+// Screen informing the user that the device has been disabled by its owner.
+class DeviceDisabledScreen
+    : public BaseScreen,
+      public system::DeviceDisablingManager::Observer,
+      public policy::DeviceRestrictionScheduleController::Observer {
+ public:
+  // `device_restriction_schedule_controller` must be non-null and must outlive
+  // `this`.
+  DeviceDisabledScreen(policy::DeviceRestrictionScheduleController*
+                           device_restriction_schedule_controller,
+                       base::WeakPtr<DeviceDisabledScreenView> view);
+
+  DeviceDisabledScreen(const DeviceDisabledScreen&) = delete;
+  DeviceDisabledScreen& operator=(const DeviceDisabledScreen&) = delete;
+
+  ~DeviceDisabledScreen() override;
 
   // system::DeviceDisablingManager::Observer:
   void OnDisabledMessageChanged(const std::string& disabled_message) override;
+  void OnLocationTrackingEnabledChanged(
+      bool location_tracking_enabled) override;
+
+  // policy::DeviceRestrictionScheduleController::Observer:
+  void OnRestrictionScheduleMessageChanged() override;
 
  private:
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
 
-  DeviceDisabledScreenView* view_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceDisabledScreen);
+  const raw_ref<policy::DeviceRestrictionScheduleController>
+      device_restriction_schedule_controller_;
+  base::WeakPtr<DeviceDisabledScreenView> view_;
+  base::ScopedObservation<system::DeviceDisablingManager, DeviceDisabledScreen>
+      device_disabling_manager_observation_{this};
+  base::ScopedObservation<policy::DeviceRestrictionScheduleController,
+                          policy::DeviceRestrictionScheduleController::Observer>
+      restriction_schedule_observation_{this};
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::DeviceDisabledScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_DEVICE_DISABLED_SCREEN_H_

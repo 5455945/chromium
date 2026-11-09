@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
@@ -26,7 +27,7 @@ class InputEventPredictionTest : public testing::Test {
   InputEventPredictionTest(const InputEventPredictionTest&) = delete;
   InputEventPredictionTest& operator=(const InputEventPredictionTest&) = delete;
 
-  int GetPredictorMapSize() const {
+  size_t GetPredictorMapSize() const {
     return event_predictor_->pointer_id_predictor_map_.size();
   }
 
@@ -121,7 +122,7 @@ TEST_F(InputEventPredictionTest, MouseEvent) {
   EXPECT_FALSE(GetPrediction(mouse_move));
 
   HandleEvents(mouse_move);
-  EXPECT_EQ(GetPredictorMapSize(), 0);
+  EXPECT_EQ(GetPredictorMapSize(), 0u);
   auto predicted_point = GetPrediction(mouse_move);
   EXPECT_TRUE(predicted_point);
   EXPECT_EQ(predicted_point->pos.x(), 10);
@@ -146,7 +147,7 @@ TEST_F(InputEventPredictionTest, SingleTouchPoint) {
 
   touch_event.MovePoint(0, 11, 12);
   HandleEvents(touch_event);
-  EXPECT_EQ(GetPredictorMapSize(), 1);
+  EXPECT_EQ(GetPredictorMapSize(), 1u);
   auto predicted_point = GetPrediction(touch_event.touches[0]);
   EXPECT_TRUE(predicted_point);
   EXPECT_EQ(predicted_point->pos.x(), 11);
@@ -164,7 +165,7 @@ TEST_F(InputEventPredictionTest, MouseEventTypePen) {
 
   EXPECT_FALSE(GetPrediction(pen_move));
   HandleEvents(pen_move);
-  EXPECT_EQ(GetPredictorMapSize(), 1);
+  EXPECT_EQ(GetPredictorMapSize(), 1u);
   auto predicted_point = GetPrediction(pen_move);
   EXPECT_TRUE(predicted_point);
   EXPECT_EQ(predicted_point->pos.x(), 10);
@@ -175,7 +176,7 @@ TEST_F(InputEventPredictionTest, MouseEventTypePen) {
       WebPointerProperties::PointerType::kPen);
 
   HandleEvents(pen_leave);
-  EXPECT_EQ(GetPredictorMapSize(), 0);
+  EXPECT_EQ(GetPredictorMapSize(), 0u);
   EXPECT_FALSE(GetPrediction(pen_leave));
 }
 
@@ -194,12 +195,12 @@ TEST_F(InputEventPredictionTest, MultipleTouchPoint) {
   touch_event.PressPoint(20, 30);
   touch_event.touches[1].pointer_type = WebPointerProperties::PointerType::kPen;
   HandleEvents(touch_event);
-  EXPECT_EQ(GetPredictorMapSize(), 1);
+  EXPECT_EQ(GetPredictorMapSize(), 1u);
 
   // Move 2nd touch point
   touch_event.MovePoint(1, 25, 25);
   HandleEvents(touch_event);
-  EXPECT_EQ(GetPredictorMapSize(), 2);
+  EXPECT_EQ(GetPredictorMapSize(), 2u);
 
   auto predicted_point = GetPrediction(touch_event.touches[0]);
   EXPECT_TRUE(predicted_point);
@@ -213,7 +214,7 @@ TEST_F(InputEventPredictionTest, MultipleTouchPoint) {
 
   touch_event.ReleasePoint(0);
   HandleEvents(touch_event);
-  EXPECT_EQ(GetPredictorMapSize(), 1);
+  EXPECT_EQ(GetPredictorMapSize(), 1u);
 }
 
 TEST_F(InputEventPredictionTest, TouchAndStylusResetMousePredictor) {
@@ -268,11 +269,11 @@ TEST_F(InputEventPredictionTest, TouchScrollStartedRemoveAllTouchPoints) {
   touch_event.MovePoint(0, 15, 18);
   touch_event.MovePoint(1, 25, 27);
   HandleEvents(touch_event);
-  EXPECT_EQ(GetPredictorMapSize(), 2);
+  EXPECT_EQ(GetPredictorMapSize(), 2u);
 
   touch_event.SetType(WebInputEvent::Type::kTouchScrollStarted);
   HandleEvents(touch_event);
-  EXPECT_EQ(GetPredictorMapSize(), 0);
+  EXPECT_EQ(GetPredictorMapSize(), 0u);
 }
 
 TEST_F(InputEventPredictionTest, ResamplingDisabled) {
@@ -328,11 +329,11 @@ TEST_F(InputEventPredictionTest, NoResampleWhenExceedMaxResampleTime) {
   HandleEvents(mouse_move);
   mouse_move = SyntheticWebMouseEventBuilder::Build(
       WebInputEvent::Type::kMouseMove, 11, 9, 0);
-  mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(8));
+  mouse_move.SetTimeStamp(event_time += base::Milliseconds(8));
   HandleEvents(mouse_move);
   mouse_move = SyntheticWebMouseEventBuilder::Build(
       WebInputEvent::Type::kMouseMove, 12, 8, 0);
-  mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(8));
+  mouse_move.SetTimeStamp(event_time += base::Milliseconds(8));
   HandleEvents(mouse_move);
 
   {
@@ -340,7 +341,7 @@ TEST_F(InputEventPredictionTest, NoResampleWhenExceedMaxResampleTime) {
     // and 3 predicted events.
     mouse_move = SyntheticWebMouseEventBuilder::Build(
         WebInputEvent::Type::kMouseMove, 13, 7, 0);
-    mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(8));
+    mouse_move.SetTimeStamp(event_time += base::Milliseconds(8));
     blink::WebCoalescedInputEvent coalesced_event(mouse_move,
                                                   ui::LatencyInfo());
     base::TimeTicks frame_time =
@@ -356,7 +357,7 @@ TEST_F(InputEventPredictionTest, NoResampleWhenExceedMaxResampleTime) {
     EXPECT_EQ(coalesced_event.PredictedEventSize(), 3u);
     // First predicted event time stamp is 8ms from original event timestamp.
     EXPECT_EQ(coalesced_event.PredictedEvent(0).TimeStamp(),
-              event_time + base::TimeDelta::FromMilliseconds(8));
+              event_time + base::Milliseconds(8));
   }
 
   {
@@ -365,12 +366,12 @@ TEST_F(InputEventPredictionTest, NoResampleWhenExceedMaxResampleTime) {
     // off to the maximum allowed by the predictor
     mouse_move = SyntheticWebMouseEventBuilder::Build(
         WebInputEvent::Type::kMouseMove, 14, 6, 0);
-    mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(8));
+    mouse_move.SetTimeStamp(event_time += base::Milliseconds(8));
     blink::WebCoalescedInputEvent coalesced_event(mouse_move,
                                                   ui::LatencyInfo());
     base::TimeTicks frame_time =
         event_time + predictor_max_resample_time +
-        base::TimeDelta::FromMilliseconds(10);  // overpredict on purpose
+        base::Milliseconds(10);  // overpredict on purpose
     event_predictor_->HandleEvents(coalesced_event, frame_time);
 
     // We expect the prediction to be cut off to the max resampling time of
@@ -384,7 +385,7 @@ TEST_F(InputEventPredictionTest, NoResampleWhenExceedMaxResampleTime) {
     EXPECT_EQ(coalesced_event.PredictedEventSize(), 3u);
     // First predicted event time stamp is 8ms from original event timestamp.
     EXPECT_EQ(coalesced_event.PredictedEvent(0).TimeStamp(),
-              event_time + base::TimeDelta::FromMilliseconds(8));
+              event_time + base::Milliseconds(8));
   }
 }
 
@@ -401,17 +402,17 @@ TEST_F(InputEventPredictionTest, PredictedEventsTimeIntervalEqualRealEvents) {
   HandleEvents(mouse_move);
   mouse_move = SyntheticWebMouseEventBuilder::Build(
       WebInputEvent::Type::kMouseMove, 11, 9, 0);
-  mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(6));
+  mouse_move.SetTimeStamp(event_time += base::Milliseconds(6));
   HandleEvents(mouse_move);
   mouse_move = SyntheticWebMouseEventBuilder::Build(
       WebInputEvent::Type::kMouseMove, 12, 8, 0);
-  mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(6));
+  mouse_move.SetTimeStamp(event_time += base::Milliseconds(6));
   HandleEvents(mouse_move);
 
   {
     mouse_move = SyntheticWebMouseEventBuilder::Build(
         WebInputEvent::Type::kMouseMove, 13, 7, 0);
-    mouse_move.SetTimeStamp(event_time += base::TimeDelta::FromMilliseconds(6));
+    mouse_move.SetTimeStamp(event_time += base::Milliseconds(6));
     blink::WebCoalescedInputEvent coalesced_event(mouse_move,
                                                   ui::LatencyInfo());
     event_predictor_->HandleEvents(coalesced_event, event_time);
@@ -419,7 +420,7 @@ TEST_F(InputEventPredictionTest, PredictedEventsTimeIntervalEqualRealEvents) {
     EXPECT_EQ(coalesced_event.PredictedEventSize(), 4u);
     // First predicted event time stamp is 6ms from original event timestamp.
     EXPECT_EQ(coalesced_event.PredictedEvent(0).TimeStamp(),
-              event_time + base::TimeDelta::FromMilliseconds(6));
+              event_time + base::Milliseconds(6));
   }
 }
 
@@ -436,7 +437,7 @@ TEST_F(InputEventPredictionTest, TouchPointStates) {
 
   for (size_t state =
            static_cast<size_t>(blink::WebTouchPoint::State::kStateUndefined);
-       state <= static_cast<size_t>(blink::WebTouchPoint::State::kStateMax);
+       state <= static_cast<size_t>(blink::WebTouchPoint::State::kMaxValue);
        state++) {
     touch_event.touches[0].state =
         static_cast<blink::WebTouchPoint::State>(state);

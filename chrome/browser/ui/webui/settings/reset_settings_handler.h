@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,16 @@
 #include <memory>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profile_resetter/profile_reset_report.pb.h"
+#include "chrome/browser/profile_resetter/profile_resetter.h"
+#include "chrome/browser/profile_resetter/resettable_settings_snapshot.h"
 #include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
+#include "components/prefs/pref_registry_simple.h"
 
-namespace base {
-class ListValue;
-}  // namespace base
-
-class BrandcodeConfigFetcher;
 class Profile;
-class ProfileResetter;
 class ResettableSettingsSnapshot;
 
 namespace settings {
@@ -32,13 +27,21 @@ namespace settings {
 //  2) 'Powerwash' dialog (ChromeOS only)
 class ResetSettingsHandler : public SettingsPageUIHandler {
  public:
+#if BUILDFLAG(IS_CHROMEOS)
   // Hash used by the Chrome Cleanup Tool when launching chrome with the reset
   // profile settings URL.
   static const char kCctResetSettingsHash[];
 
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
   static bool ShouldShowResetProfileBanner(Profile* profile);
 
   explicit ResetSettingsHandler(Profile* profile);
+
+  ResetSettingsHandler(const ResetSettingsHandler&) = delete;
+  ResetSettingsHandler& operator=(const ResetSettingsHandler&) = delete;
+
   ~ResetSettingsHandler() override;
 
   // WebUIMessageHandler implementation.
@@ -46,37 +49,44 @@ class ResetSettingsHandler : public SettingsPageUIHandler {
   void OnJavascriptAllowed() override {}
   void OnJavascriptDisallowed() override;
 
+  // Retrieves the paths of tampered preferences.
+  void HandleGetTamperedPreferencePaths(const base::ListValue& args);
+
  protected:
-  // Overriden in tests to substitute with a test version of ProfileResetter.
+  // Overridden in tests to substitute with a test version of ProfileResetter.
   virtual ProfileResetter* GetResetter();
 
   // Javascript callback to start clearing data.
-  void HandleResetProfileSettings(const base::ListValue* args);
+  void HandleResetProfileSettings(const base::ListValue& args);
 
  private:
   // Retrieves the settings that will be reported, called from Javascript.
-  void HandleGetReportedSettings(const base::ListValue* args);
+  void HandleGetReportedSettings(const base::ListValue& args);
 
   // Called once the settings that will be reported have been retrieved.
   void OnGetReportedSettingsDone(std::string callback_id);
 
   // Called when the reset profile dialog is shown.
-  void OnShowResetProfileDialog(const base::ListValue* args);
+  void OnShowResetProfileDialog(const base::ListValue& args);
 
   // Called when the reset profile dialog is hidden.
-  void OnHideResetProfileDialog(const base::ListValue* args);
+  void OnHideResetProfileDialog(const base::ListValue& args);
 
   // Called when the reset profile banner is shown.
-  void OnHideResetProfileBanner(const base::ListValue* args);
+  void OnHideResetProfileBanner(const base::ListValue& args);
 
   // Retrieve the triggered reset tool name, called from Javascript.
-  void HandleGetTriggeredResetToolName(const base::ListValue* args);
+  void HandleGetTriggeredResetToolName(const base::ListValue& args);
 
-  // Called when BrandcodeConfigFetcher completed fetching settings.
-  void OnSettingsFetched();
+  // Resets the settings that are marked in the resettable flags to the default
+  // value, callback will be called once the reset is complete. The difference
+  // between this function and |ResetProfile| function is that individual
+  // settings could be reset with this function.
+  void ResetSettings(ProfileResetter::ResettableFlags resettable_flags,
+                     base::OnceClosure callback);
 
-  // Resets profile settings to default values. |send_settings| is true if user
-  // gave their consent to upload broken settings to Google for analysis.
+  // Resets all profile settings to default values. |send_settings| is true if
+  // user gave their consent to upload broken settings to Google for analysis.
   void ResetProfile(
       const std::string& callback_id,
       bool send_settings,
@@ -88,27 +98,19 @@ class ResetSettingsHandler : public SettingsPageUIHandler {
       bool send_feedback,
       reset_report::ChromeResetReport::ResetRequestOrigin request_origin);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Will be called when powerwash dialog is shown.
-  void OnShowPowerwashDialog(const base::ListValue* args);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  void OnShowSanitizeDialog(const base::ListValue& args);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   std::unique_ptr<ProfileResetter> resetter_;
-
-  std::unique_ptr<BrandcodeConfigFetcher> config_fetcher_;
 
   // Snapshot of settings before profile was reseted.
   std::unique_ptr<ResettableSettingsSnapshot> setting_snapshot_;
 
-  // Contains Chrome brand code; empty for organic Chrome.
-  std::string brandcode_;
-
   // Used to cancel callbacks when JavaScript becomes disallowed.
   base::WeakPtrFactory<ResetSettingsHandler> callback_weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ResetSettingsHandler);
 };
 
 }  // namespace settings

@@ -1,25 +1,22 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -30,7 +27,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "net/test/spawned_test_server/spawned_test_server.h"
 #include "services/network/public/cpp/features.h"
 #include "url/gurl.h"
 
@@ -45,8 +41,8 @@ namespace {
 // These are milliseconds after fetch start, or -1 if not
 // present
 struct TimingDeltas {
-  int dns_start;
-  int dns_end;
+  int domain_lookup_start;
+  int domain_lookup_end;
   int connect_start;
   int ssl_start;
   int connect_end;
@@ -65,8 +61,9 @@ class LoadTimingBrowserTest : public InProcessBrowserTest {
   // Navigation Timing API, so those are all left as null.
   void GetResultDeltas(TimingDeltas* navigation_deltas) {
     *navigation_deltas = TimingDeltas();
-    navigation_deltas->dns_start = GetResultDelta("domainLookupStart");
-    navigation_deltas->dns_end = GetResultDelta("domainLookupEnd");
+    navigation_deltas->domain_lookup_start =
+        GetResultDelta("domainLookupStart");
+    navigation_deltas->domain_lookup_end = GetResultDelta("domainLookupEnd");
     navigation_deltas->connect_start = GetResultDelta("connectStart");
     navigation_deltas->connect_end = GetResultDelta("connectEnd");
     navigation_deltas->send_start = GetResultDelta("requestStart");
@@ -89,7 +86,7 @@ class LoadTimingBrowserTest : public InProcessBrowserTest {
     int fetch_start = GetResultDelta("fetchStart");
     // While the input dns_start is sometimes null, when read from the
     // NavigationTiming API, it's always non-null.
-    EXPECT_LE(fetch_start, navigation_deltas->dns_start);
+    EXPECT_LE(fetch_start, navigation_deltas->domain_lookup_start);
 
     int load_event_end = GetResultDelta("loadEventEnd");
     EXPECT_LE(navigation_deltas->receive_headers_end, load_event_end);
@@ -114,13 +111,15 @@ class LoadTimingBrowserTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, HTTP) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url = embedded_test_server()->GetURL("/chunked?waitBeforeHeaders=100");
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   TimingDeltas navigation_deltas;
   GetResultDeltas(&navigation_deltas);
 
-  EXPECT_LE(navigation_deltas.dns_start, navigation_deltas.dns_end);
-  EXPECT_LE(navigation_deltas.dns_end, navigation_deltas.connect_start);
+  EXPECT_LE(navigation_deltas.domain_lookup_start,
+            navigation_deltas.domain_lookup_end);
+  EXPECT_LE(navigation_deltas.domain_lookup_end,
+            navigation_deltas.connect_start);
   EXPECT_LE(navigation_deltas.connect_start, navigation_deltas.connect_end);
   EXPECT_LE(navigation_deltas.connect_end, navigation_deltas.send_start);
   EXPECT_LT(navigation_deltas.send_start,
@@ -129,19 +128,21 @@ IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, HTTP) {
   EXPECT_EQ(navigation_deltas.ssl_start, -1);
 }
 
-// TODO(crbug.com/1128033): Flaky on all platforms
+// TODO(crbug.com/40719387): Flaky on all platforms
 IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, DISABLED_HTTPS) {
   net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
   https_server.AddDefaultHandlers();
   ASSERT_TRUE(https_server.Start());
   GURL url = https_server.GetURL("/chunked?waitBeforeHeaders=100");
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   TimingDeltas navigation_deltas;
   GetResultDeltas(&navigation_deltas);
 
-  EXPECT_LE(navigation_deltas.dns_start, navigation_deltas.dns_end);
-  EXPECT_LE(navigation_deltas.dns_end, navigation_deltas.connect_start);
+  EXPECT_LE(navigation_deltas.domain_lookup_start,
+            navigation_deltas.domain_lookup_end);
+  EXPECT_LE(navigation_deltas.domain_lookup_end,
+            navigation_deltas.connect_start);
   EXPECT_LE(navigation_deltas.connect_start, navigation_deltas.ssl_start);
   EXPECT_LE(navigation_deltas.ssl_start, navigation_deltas.connect_end);
   EXPECT_LE(navigation_deltas.connect_end, navigation_deltas.send_start);
@@ -152,59 +153,29 @@ IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, DISABLED_HTTPS) {
 IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTest, Proxy) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  browser()->profile()->GetPrefs()->Set(
+  browser()->GetProfile()->GetPrefs()->SetDict(
       proxy_config::prefs::kProxy,
       ProxyConfigDictionary::CreateFixedServers(
           embedded_test_server()->host_port_pair().ToString(), std::string()));
-  ProfileNetworkContextServiceFactory::GetForContext(browser()->profile())
+  ProfileNetworkContextServiceFactory::GetForContext(browser()->GetProfile())
       ->FlushProxyConfigMonitorForTesting();
 
   // This request will fail if it doesn't go through proxy.
   GURL url("http://does.not.resolve.test/chunked?waitBeforeHeaders=100");
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   TimingDeltas navigation_deltas;
   GetResultDeltas(&navigation_deltas);
 
-  EXPECT_LE(navigation_deltas.dns_start, navigation_deltas.dns_end);
-  EXPECT_LE(navigation_deltas.dns_end, navigation_deltas.connect_start);
+  EXPECT_LE(navigation_deltas.domain_lookup_start,
+            navigation_deltas.domain_lookup_end);
+  EXPECT_LE(navigation_deltas.domain_lookup_end,
+            navigation_deltas.connect_start);
   EXPECT_LE(navigation_deltas.connect_start, navigation_deltas.connect_end);
   EXPECT_LE(navigation_deltas.connect_end, navigation_deltas.send_start);
   EXPECT_LT(navigation_deltas.send_start,
             navigation_deltas.receive_headers_end);
 
-  EXPECT_EQ(navigation_deltas.ssl_start, -1);
-}
-
-// Test fixture for tests that depend on FTP support. Moved out to a separate
-// fixture since remaining functionality should be tested without FTP support.
-//
-// TODO(https://crbug.com/333943): Remove FTP specific tests and test fixtures.
-class LoadTimingBrowserTestWithFtp : public LoadTimingBrowserTest {
- public:
-  LoadTimingBrowserTestWithFtp() {
-    scoped_feature_list_.InitAndEnableFeature(network::features::kFtpProtocol);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(LoadTimingBrowserTestWithFtp, FTP) {
-  net::SpawnedTestServer ftp_server(net::SpawnedTestServer::TYPE_FTP,
-                                    base::FilePath());
-  ASSERT_TRUE(ftp_server.Start());
-  GURL url = ftp_server.GetURL("/");
-  ui_test_utils::NavigateToURL(browser(), url);
-
-  TimingDeltas navigation_deltas;
-  GetResultDeltas(&navigation_deltas);
-
-  EXPECT_EQ(navigation_deltas.dns_start, 0);
-  EXPECT_EQ(navigation_deltas.dns_end, 0);
-  EXPECT_EQ(navigation_deltas.connect_start, 0);
-  EXPECT_EQ(navigation_deltas.connect_end, 0);
-  EXPECT_EQ(navigation_deltas.receive_headers_end, 0);
   EXPECT_EQ(navigation_deltas.ssl_start, -1);
 }
 

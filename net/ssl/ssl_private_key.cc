@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,10 +40,19 @@ std::vector<uint16_t> SSLPrivateKey::DefaultAlgorithmPreferences(
           SSL_SIGN_ECDSA_SECP256R1_SHA256, SSL_SIGN_ECDSA_SECP384R1_SHA384,
           SSL_SIGN_ECDSA_SECP521R1_SHA512, SSL_SIGN_ECDSA_SHA1,
       };
+    case EVP_PKEY_ED25519:
+      return {SSL_SIGN_ED25519};
+    case EVP_PKEY_ML_DSA_44:
+      return {SSL_SIGN_ML_DSA_44};
+    case EVP_PKEY_ML_DSA_65:
+      return {SSL_SIGN_ML_DSA_65};
+    case EVP_PKEY_ML_DSA_87:
+      return {SSL_SIGN_ML_DSA_87};
     default:
-      NOTIMPLEMENTED();
-      return {};
-  };
+      // Callers should not pass `type` values they cannot support, so this
+      // should never happen.
+      NOTREACHED();
+  }
 }
 
 }  // namespace net

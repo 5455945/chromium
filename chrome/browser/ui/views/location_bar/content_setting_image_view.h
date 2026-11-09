@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,23 @@
 #define CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_CONTENT_SETTING_IMAGE_VIEW_H_
 
 #include <memory>
+#include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model.h"
+#include "chrome/browser/ui/content_settings/content_setting_image_model_states.h"
+#include "chrome/browser/ui/content_settings/content_setting_image_view_delegate.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
-#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/user_education/common/help_bubble/help_bubble.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/animation/animation_delegate.h"
-#include "ui/gfx/animation/slide_animation.h"
-#include "ui/views/painter.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
+class BrowserWindowInterface;
 class ContentSettingImageModel;
 
 namespace content {
@@ -32,39 +37,18 @@ namespace views {
 class BubbleDialogDelegateView;
 }
 
-namespace base {
-class Token;
-}
-
 // The ContentSettingImageView displays an icon and optional text label for
 // various content settings affordances in the location bar (i.e. plugin
 // blocking, geolocation).
 class ContentSettingImageView : public IconLabelBubbleView,
                                 public views::WidgetObserver {
+  METADATA_HEADER(ContentSettingImageView, IconLabelBubbleView)
+
  public:
-  METADATA_HEADER(ContentSettingImageView);
-
-  class Delegate {
-   public:
-    // Delegate should return true if the content setting icon should be hidden.
-    virtual bool ShouldHideContentSettingImage() = 0;
-
-    // Gets the web contents the ContentSettingImageView is for.
-    virtual content::WebContents* GetContentSettingWebContents() = 0;
-
-    // Gets the ContentSettingBubbleModelDelegate for this
-    // ContentSettingImageView.
-    virtual ContentSettingBubbleModelDelegate*
-    GetContentSettingBubbleModelDelegate() = 0;
-
-    // Invoked when a bubble is shown.
-    virtual void OnContentSettingImageBubbleShown(
-        ContentSettingImageModel::ImageType type) const {}
-  };
-
   ContentSettingImageView(std::unique_ptr<ContentSettingImageModel> image_model,
                           IconLabelBubbleView::Delegate* parent_delegate,
-                          Delegate* delegate,
+                          ContentSettingImageViewDelegate* delegate,
+                          BrowserWindowInterface* browser,
                           const gfx::FontList& font_list);
   ContentSettingImageView(const ContentSettingImageView&) = delete;
   ContentSettingImageView& operator=(const ContentSettingImageView&) = delete;
@@ -74,8 +58,8 @@ class ContentSettingImageView : public IconLabelBubbleView,
   void Update();
 
   // Set the color of the button icon. Based on the text color by default.
-  void SetIconColor(absl::optional<SkColor> color);
-  absl::optional<SkColor> GetIconColor() const;
+  void SetIconColor(std::optional<ui::ColorVariant> color);
+  std::optional<ui::ColorVariant> GetIconColor() const;
 
   void disable_animation() { can_animate_ = false; }
 
@@ -90,36 +74,83 @@ class ContentSettingImageView : public IconLabelBubbleView,
   bool IsBubbleShowing() const override;
   void AnimationEnded(const gfx::Animation* animation) override;
 
-  ContentSettingImageModel::ImageType GetTypeForTesting() const;
+  // Returns a type that current ContentSettingImageView represents.
+  ContentSettingImageModel::ImageType GetType() const;
+
+  views::Widget* GetBubbleWidget() const;
+
+  views::BubbleDialogDelegateView* GetBubbleViewForTesting() const;
+
+  ContentSettingImageModel* content_setting_image_model() const {
+    return content_setting_image_model_.get();
+  }
+
+  ContentSettingImageViewDelegate* delegate() const { return delegate_; }
 
   void reset_animation_for_testing() {
     IconLabelBubbleView::ResetSlideAnimation(true);
   }
-  absl::optional<base::Token> get_critical_promo_id_for_testing() {
-    return current_iph_id_for_testing_;
+
+  const gfx::VectorIcon* get_icon_for_testing() const {
+    return content_setting_image_model_->icon();
   }
 
+  const gfx::VectorIcon* get_icon_badge_for_testing() const {
+    return content_setting_image_model_->get_icon_badge();
+  }
+
+  const std::u16string& get_tooltip_text_for_testing() const {
+    return content_setting_image_model_->get_tooltip();
+  }
+
+  bool is_label_kept_expanded_for_testing() const {
+    return keep_label_expanded_;
+  }
+
+  gfx::SlideAnimation& slide_animation_for_testing() {
+    return slide_animation_;
+  }
+
+ protected:
+  // IconLabelBubbleView:
+  bool ShouldShowLabelAfterAnimation() const override;
+
  private:
+  // Avoid confusing between IconLabelBubbleView::Delegate and now globalized
+  // ContentSettingImageViewDelegate.
+  using IconLabelBubbleView::Delegate;
+
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
 
   // Updates the image and tooltip to match the current model state.
   void UpdateImage();
 
-  Delegate* delegate_;  // Weak.
+  void UpdateElementIdentifier();
+
+  // Shows the in-product help promo associated with this icon, if any.
+  void MaybeShowPromo(content::WebContents* web_contents);
+
+  // Stops keeping the label expanded and collapses it, optionally animated.
+  void CollapseKeptExpandedLabel(bool animate);
+
+  raw_ptr<ContentSettingImageViewDelegate> delegate_ = nullptr;  // Weak.
   std::unique_ptr<ContentSettingImageModel> content_setting_image_model_;
-  views::BubbleDialogDelegateView* bubble_view_;
-  absl::optional<SkColor> icon_color_;
+  raw_ptr<views::BubbleDialogDelegateView> bubble_view_ = nullptr;
+  std::optional<ui::ColorVariant> icon_color_;
+  raw_ptr<BrowserWindowInterface> browser_;
 
   // Observes destruction of bubble's Widgets spawned by this ImageView.
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
       this};
   bool can_animate_ = true;
 
-  // Has a value that is not is_zero() if a promo is showing, or has an
-  // is_zero() value if the promo was considered but it was decided not to show
-  // it.
-  absl::optional<base::Token> current_iph_id_for_testing_;
+  // True while the explanatory label should stay expanded until the user has
+  // opened and closed the bubble, rather than animating back out on its own.
+  // See ContentSettingImageModel::should_keep_label_expanded.
+  bool keep_label_expanded_ = false;
+  // The WebContents for which the label is kept expanded.
+  base::WeakPtr<content::WebContents> label_expanded_web_contents_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_CONTENT_SETTING_IMAGE_VIEW_H_

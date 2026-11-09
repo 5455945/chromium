@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,8 @@ using ImeUtilChromeosTest = aura::test::AuraTestBase;
 TEST_F(ImeUtilChromeosTest, RestoreWindowBounds) {
   const gfx::Rect bounds(10, 20, 100, 200);
   aura::Window* window =
-      aura::test::CreateTestWindowWithBounds(bounds, root_window());
+      aura::test::CreateTestWindow({.parent = root_window(), .bounds = bounds})
+          .release();
 
   EXPECT_EQ(nullptr, window->GetProperty(kVirtualKeyboardRestoreBoundsKey));
   EXPECT_EQ(bounds, window->bounds());
@@ -38,7 +39,8 @@ TEST_F(ImeUtilChromeosTest, RestoreWindowBounds) {
 TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_NotCovered) {
   const gfx::Rect bounds(0, 0, 100, 200);
   aura::Window* window =
-      aura::test::CreateTestWindowWithBounds(bounds, root_window());
+      aura::test::CreateTestWindow({.parent = root_window(), .bounds = bounds})
+          .release();
   EXPECT_EQ(bounds, window->bounds());
   EXPECT_EQ(bounds, window->GetBoundsInScreen());
 
@@ -54,7 +56,9 @@ TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_NotCovered) {
 TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_MoveUp) {
   const gfx::Rect original_bounds(10, 100, 100, 10);
   aura::Window* window =
-      aura::test::CreateTestWindowWithBounds(original_bounds, root_window());
+      aura::test::CreateTestWindow(
+          {.parent = root_window(), .bounds = original_bounds})
+          .release();
   EXPECT_EQ(original_bounds, window->bounds());
   EXPECT_EQ(original_bounds, window->GetBoundsInScreen());
 
@@ -71,7 +75,9 @@ TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_MoveUp) {
 TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_MoveToTop) {
   const gfx::Rect original_bounds(10, 10, 100, 100);
   aura::Window* window =
-      aura::test::CreateTestWindowWithBounds(original_bounds, root_window());
+      aura::test::CreateTestWindow(
+          {.parent = root_window(), .bounds = original_bounds})
+          .release();
   EXPECT_EQ(original_bounds, window->bounds());
   EXPECT_EQ(original_bounds, window->GetBoundsInScreen());
 
@@ -91,7 +97,8 @@ TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_MoveToTop) {
   constexpr int kOccupiedTopHeight = 5;
   ASSERT_GE(original_bounds.y(), kOccupiedTopHeight);
 
-  test_screen()->SetWorkAreaInsets(gfx::Insets(kOccupiedTopHeight, 0, 0, 0));
+  test_screen()->SetWorkAreaInsets(
+      gfx::Insets::TLBR(kOccupiedTopHeight, 0, 0, 0));
   EnsureWindowNotInRect(window, rect);
   EXPECT_EQ(gfx::Rect(10, kOccupiedTopHeight, 100, 100), window->bounds());
 }
@@ -99,7 +106,9 @@ TEST_F(ImeUtilChromeosTest, EnsureWindowNotInRect_MoveToTop) {
 TEST_F(ImeUtilChromeosTest, MoveUpThenRestore) {
   const gfx::Rect original_bounds(50, 50, 100, 100);
   aura::Window* window =
-      aura::test::CreateTestWindowWithBounds(original_bounds, root_window());
+      aura::test::CreateTestWindow(
+          {.parent = root_window(), .bounds = original_bounds})
+          .release();
   EXPECT_EQ(original_bounds, window->bounds());
   EXPECT_EQ(original_bounds, window->GetBoundsInScreen());
 

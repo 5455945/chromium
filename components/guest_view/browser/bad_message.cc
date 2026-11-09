@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/render_process_host.h"
 
 namespace guest_view {
@@ -28,7 +27,8 @@ void ReceivedBadMessage(content::RenderProcessHost* host,
       content::RenderProcessHost::CrashReportMode::GENERATE_CRASH_DUMP);
 }
 
-void ReceivedBadMessage(int render_process_id, BadMessageReason reason) {
+void ReceivedBadMessage(content::ChildProcessId render_process_id,
+                        BadMessageReason reason) {
   content::RenderProcessHost* rph =
       content::RenderProcessHost::FromID(render_process_id);
   if (!rph)
@@ -36,12 +36,5 @@ void ReceivedBadMessage(int render_process_id, BadMessageReason reason) {
 
   ReceivedBadMessage(rph, reason);
 }
-
-void ReceivedBadMessage(content::BrowserMessageFilter* filter,
-                        BadMessageReason reason) {
-  LogBadMessage(reason);
-  filter->ShutdownForBadMessage();
-}
-
 }  // namespace bad_message
 }  // namespace guest_view

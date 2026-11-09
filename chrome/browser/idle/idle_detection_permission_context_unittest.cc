@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,19 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
+#include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_request_id.h"
+#include "components/permissions/request_type.h"
+#include "components/permissions/resolvers/content_setting_permission_resolver.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
 
 namespace {
 
@@ -18,46 +28,41 @@ class TestIdleDetectionPermissionContext
     : public IdleDetectionPermissionContext {
  public:
   explicit TestIdleDetectionPermissionContext(Profile* profile)
-      : IdleDetectionPermissionContext(profile),
-        permission_set_count_(0),
-        last_permission_set_persisted_(false),
-        last_permission_set_setting_(CONTENT_SETTING_DEFAULT) {}
+      : IdleDetectionPermissionContext(profile) {}
 
   int permission_set_count() const { return permission_set_count_; }
   bool last_permission_set_persisted() const {
     return last_permission_set_persisted_;
   }
-  ContentSetting last_permission_set_setting() const {
-    return last_permission_set_setting_;
-  }
+  PermissionDecision last_set_decision() const { return last_set_decision_; }
 
   ContentSetting GetContentSettingFromMap(const GURL& url_a,
                                           const GURL& url_b) {
     return HostContentSettingsMapFactory::GetForProfile(browser_context())
-        ->GetContentSetting(url_a.GetOrigin(), url_b.GetOrigin(),
+        ->GetContentSetting(url_a.DeprecatedGetOriginAsURL(),
+                            url_b.DeprecatedGetOriginAsURL(),
                             content_settings_type());
   }
 
  private:
   // IdleDetectionPermissionContext:
-  void NotifyPermissionSet(const permissions::PermissionRequestID& id,
-                           const GURL& requesting_origin,
-                           const GURL& embedder_origin,
-                           permissions::BrowserPermissionCallback callback,
-                           bool persist,
-                           ContentSetting content_setting,
-                           bool is_one_time) override {
+  void NotifyPermissionSet(
+      const permissions::PermissionRequestData& request_data,
+      permissions::BrowserPermissionCallback callback,
+      bool persist,
+      const content::PermissionResult* permission_result,
+      const permissions::PermissionPromptDecision& decision) override {
     permission_set_count_++;
     last_permission_set_persisted_ = persist;
-    last_permission_set_setting_ = content_setting;
+    last_set_decision_ = decision.overall_decision;
     IdleDetectionPermissionContext::NotifyPermissionSet(
-        id, requesting_origin, embedder_origin, std::move(callback), persist,
-        content_setting, is_one_time);
+        request_data, std::move(callback), persist, permission_result,
+        decision);
   }
 
-  int permission_set_count_;
-  bool last_permission_set_persisted_;
-  ContentSetting last_permission_set_setting_;
+  int permission_set_count_ = 0;
+  bool last_permission_set_persisted_ = false;
+  PermissionDecision last_set_decision_ = PermissionDecision::kNone;
 };
 
 }  // namespace
@@ -72,29 +77,40 @@ class IdleDetectionPermissionContextTest
 
 // Tests auto-denial after a time delay in incognito.
 TEST_F(IdleDetectionPermissionContextTest, TestDenyInIncognitoAfterDelay) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
   TestIdleDetectionPermissionContext permission_context(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
   GURL url("https://www.example.com");
   NavigateAndCommit(url);
 
   const permissions::PermissionRequestID id(
-      web_contents()->GetMainFrame()->GetProcess()->GetID(),
-      web_contents()->GetMainFrame()->GetRoutingID(),
+      web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
       permissions::PermissionRequestID::RequestLocalId());
 
   ASSERT_EQ(0, permission_context.permission_set_count());
   ASSERT_FALSE(permission_context.last_permission_set_persisted());
-  ASSERT_EQ(CONTENT_SETTING_DEFAULT,
-            permission_context.last_permission_set_setting());
+  ASSERT_EQ(PermissionDecision::kNone, permission_context.last_set_decision());
 
   permission_context.RequestPermission(
-      web_contents(), id, url, true /* user_gesture */, base::DoNothing());
+      std::make_unique<permissions::PermissionRequestData>(
+          blink::mojom::PermissionDescriptor::New(
+              blink::mojom::PermissionName::IDLE_DETECTION,
+              /*extension=*/nullptr),
+          id,
+          /*user_gesture=*/true, url),
+      base::DoNothing());
 
   // Should be blocked after 1-2 seconds, but the timer is reset whenever the
   // tab is not visible, so these 500ms never add up to >= 1 second.
   for (int n = 0; n < 10; n++) {
     web_contents()->WasShown();
-    task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(500));
+    task_environment()->FastForwardBy(base::Milliseconds(500));
     web_contents()->WasHidden();
   }
 
@@ -105,11 +121,12 @@ TEST_F(IdleDetectionPermissionContextTest, TestDenyInIncognitoAfterDelay) {
   // Time elapsed whilst hidden is not counted.
   // n.b. This line also clears out any old scheduled timer tasks. This is
   // important, because otherwise Timer::Reset (triggered by
-  // VisibilityTimerTabHelper::WasShown) may choose to re-use an existing
-  // scheduled task, and when it fires Timer::RunScheduledTask will call
-  // TimeTicks::Now() (which unlike task_environment()->NowTicks(), we can't
-  // fake), and miscalculate the remaining delay at which to fire the timer.
-  task_environment()->FastForwardBy(base::TimeDelta::FromDays(1));
+  // visibility_timer::VisibilityTimerTabHelper::WasShown) may choose to re-use
+  // an existing scheduled task, and when it fires Timer::RunScheduledTask will
+  // call TimeTicks::Now() (which unlike task_environment()->NowTicks(), we
+  // can't fake), and miscalculate the remaining delay at which to fire the
+  // timer.
+  task_environment()->FastForwardBy(base::Days(1));
 
   EXPECT_EQ(0, permission_context.permission_set_count());
   EXPECT_EQ(CONTENT_SETTING_ASK,
@@ -117,20 +134,20 @@ TEST_F(IdleDetectionPermissionContextTest, TestDenyInIncognitoAfterDelay) {
 
   // Should be blocked after 1-2 seconds. So 500ms is not enough.
   web_contents()->WasShown();
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(500));
+  task_environment()->FastForwardBy(base::Milliseconds(500));
 
   EXPECT_EQ(0, permission_context.permission_set_count());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             permission_context.GetContentSettingFromMap(url, url));
 
   // But 5*500ms > 2 seconds, so it should now be blocked.
-  for (int n = 0; n < 4; n++)
-    task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(500));
+  for (int n = 0; n < 4; n++) {
+    task_environment()->FastForwardBy(base::Milliseconds(500));
+  }
 
   EXPECT_EQ(1, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            permission_context.last_permission_set_setting());
+  EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             permission_context.GetContentSettingFromMap(url, url));
 }
@@ -144,23 +161,30 @@ TEST_F(IdleDetectionPermissionContextTest, TestParallelDenyInIncognito) {
   web_contents()->WasShown();
 
   const permissions::PermissionRequestID id1(
-      web_contents()->GetMainFrame()->GetProcess()->GetID(),
-      web_contents()->GetMainFrame()->GetRoutingID(),
+      web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
       permissions::PermissionRequestID::RequestLocalId(1));
   const permissions::PermissionRequestID id2(
-      web_contents()->GetMainFrame()->GetProcess()->GetID(),
-      web_contents()->GetMainFrame()->GetRoutingID(),
+      web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
       permissions::PermissionRequestID::RequestLocalId(2));
 
   ASSERT_EQ(0, permission_context.permission_set_count());
   ASSERT_FALSE(permission_context.last_permission_set_persisted());
-  ASSERT_EQ(CONTENT_SETTING_DEFAULT,
-            permission_context.last_permission_set_setting());
+  ASSERT_EQ(PermissionDecision::kNone, permission_context.last_set_decision());
 
   permission_context.RequestPermission(
-      web_contents(), id1, url, /*user_gesture=*/true, base::DoNothing());
+      std::make_unique<permissions::PermissionRequestData>(
+          blink::mojom::PermissionDescriptor::New(
+              blink::mojom::PermissionName::IDLE_DETECTION,
+              /*extension=*/nullptr),
+          id1, /*user_gesture=*/true, url),
+      base::DoNothing());
   permission_context.RequestPermission(
-      web_contents(), id2, url, /*user_gesture=*/true, base::DoNothing());
+      std::make_unique<permissions::PermissionRequestData>(
+          blink::mojom::PermissionDescriptor::New(
+              blink::mojom::PermissionName::IDLE_DETECTION,
+              /*extension=*/nullptr),
+          id2, /*user_gesture=*/true, url),
+      base::DoNothing());
 
   EXPECT_EQ(0, permission_context.permission_set_count());
   EXPECT_EQ(CONTENT_SETTING_ASK,
@@ -169,26 +193,25 @@ TEST_F(IdleDetectionPermissionContextTest, TestParallelDenyInIncognito) {
   // Fast forward up to 2.5 seconds. Stop as soon as the first permission
   // request is auto-denied.
   for (int n = 0; n < 5; n++) {
-    task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(500));
-    if (permission_context.permission_set_count())
+    task_environment()->FastForwardBy(base::Milliseconds(500));
+    if (permission_context.permission_set_count()) {
       break;
+    }
   }
 
-  // Only the first permission request receives a response (crbug.com/577336).
+  // Only the first permission request receives a response (crbug.com/40452210).
   EXPECT_EQ(1, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            permission_context.last_permission_set_setting());
+  EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             permission_context.GetContentSettingFromMap(url, url));
 
   // After another 2.5 seconds, the second permission request should also have
   // received a response.
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(2500));
+  task_environment()->FastForwardBy(base::Milliseconds(2500));
   EXPECT_EQ(2, permission_context.permission_set_count());
   EXPECT_TRUE(permission_context.last_permission_set_persisted());
-  EXPECT_EQ(CONTENT_SETTING_BLOCK,
-            permission_context.last_permission_set_setting());
+  EXPECT_EQ(PermissionDecision::kDeny, permission_context.last_set_decision());
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
             permission_context.GetContentSettingFromMap(url, url));
 }

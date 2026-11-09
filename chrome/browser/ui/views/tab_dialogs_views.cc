@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,39 +8,33 @@
 #include <utility>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/ui/views/collected_cookies_views.h"
 #include "chrome/browser/ui/views/hung_renderer_view.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
-#include "chrome/browser/ui/sync/profile_signin_confirmation_helper.h"
 #include "content/public/browser/web_contents.h"
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ui/views/sync/profile_signin_confirmation_dialog_views.h"
+#if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/views/web_apps/deprecated_apps_dialog_view.h"
+#include "chrome/browser/ui/views/web_apps/force_installed_deprecated_apps_dialog_view.h"
+#include "chrome/browser/ui/views/web_apps/force_installed_preinstalled_deprecated_app_dialog_view.h"
 #endif
 
 // static
-void TabDialogs::CreateForWebContents(content::WebContents* contents) {
-  DCHECK(contents);
-  if (!FromWebContents(contents)) {
-    contents->SetUserData(UserDataKey(),
-                          std::make_unique<TabDialogsViews>(contents));
-  }
+std::unique_ptr<TabDialogs> TabDialogs::Create(tabs::TabInterface& tab,
+                                               content::WebContents* contents) {
+  CHECK(contents, base::NotFatalUntil::M162);
+  return std::make_unique<TabDialogsViews>(tab, contents);
 }
 
-TabDialogsViews::TabDialogsViews(content::WebContents* contents)
-    : web_contents_(contents) {
-  DCHECK(contents);
+TabDialogsViews::TabDialogsViews(tabs::TabInterface& tab,
+                                 content::WebContents* contents)
+    : TabDialogs(tab), web_contents_(contents) {
+  CHECK(contents, base::NotFatalUntil::M162);
 }
 
 TabDialogsViews::~TabDialogsViews() = default;
 
 gfx::NativeView TabDialogsViews::GetDialogParentView() const {
   return web_contents_->GetNativeView();
-}
-
-void TabDialogsViews::ShowCollectedCookies() {
-  CollectedCookiesViews::CreateAndShowForWebContents(web_contents_);
 }
 
 void TabDialogsViews::ShowHungRendererDialog(
@@ -59,19 +53,6 @@ bool TabDialogsViews::IsShowingHungRendererDialog() {
   return HungRendererDialogView::IsShowingForWebContents(web_contents_);
 }
 
-void TabDialogsViews::ShowProfileSigninConfirmation(
-    Browser* browser,
-    const std::string& username,
-    bool prompt_for_new_profile,
-    std::unique_ptr<ui::ProfileSigninConfirmationDelegate> delegate) {
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  ProfileSigninConfirmationDialogViews::Show(
-      browser, username, std::move(delegate), prompt_for_new_profile);
-#else
-  NOTREACHED();
-#endif
-}
-
 void TabDialogsViews::ShowManagePasswordsBubble(bool user_action) {
   if (PasswordBubbleViewBase::manage_password_bubble()) {
     // The bubble is currently shown for some other tab. We should close it now
@@ -86,8 +67,38 @@ void TabDialogsViews::ShowManagePasswordsBubble(bool user_action) {
 void TabDialogsViews::HideManagePasswordsBubble() {
   PasswordBubbleViewBase* bubble =
       PasswordBubbleViewBase::manage_password_bubble();
-  if (!bubble)
+  if (!bubble) {
     return;
-  if (bubble->GetWebContents() == web_contents_)
+  }
+  if (bubble->GetWebContents() == web_contents_) {
     PasswordBubbleViewBase::CloseCurrentBubble();
+  }
+}
+
+void TabDialogsViews::ShowDeprecatedAppsDialog(
+    const extensions::ExtensionId& optional_launched_extension_id,
+    const std::set<extensions::ExtensionId>& deprecated_app_ids,
+    content::WebContents* web_contents) {
+#if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_CHROMEOS)
+  DeprecatedAppsDialogView::CreateAndShowDialog(
+      optional_launched_extension_id, deprecated_app_ids, web_contents);
+#endif
+}
+
+void TabDialogsViews::ShowForceInstalledDeprecatedAppsDialog(
+    const extensions::ExtensionId& app_id,
+    content::WebContents* web_contents) {
+#if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_CHROMEOS)
+  ForceInstalledDeprecatedAppsDialogView::CreateAndShowDialog(app_id,
+                                                              web_contents);
+#endif
+}
+
+void TabDialogsViews::ShowForceInstalledPreinstalledDeprecatedAppDialog(
+    const extensions::ExtensionId& extension_id,
+    content::WebContents* web_contents) {
+#if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_CHROMEOS)
+  ForceInstalledPreinstalledDeprecatedAppDialogView::CreateAndShowDialog(
+      extension_id, web_contents);
+#endif
 }

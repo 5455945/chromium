@@ -1,15 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_INSTALL_STATIC_INSTALL_DETAILS_H_
 #define CHROME_INSTALL_STATIC_INSTALL_DETAILS_H_
 
-#include <windows.h>
-
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/containers/span.h"
+#include "base/win/windows_types.h"
 #include "chrome/install_static/install_constants.h"
 #include "chrome/install_static/install_modes.h"
 #include "chrome/install_static/install_util.h"
@@ -22,7 +23,6 @@ class ScopedInstallDetails;
 // The origin of the active channel.
 enum class ChannelOrigin {
   kInstallMode,           // The channel dictated by the install mode.
-  kAdditionalParameters,  // The legacy "ap" value.
   kPolicy,                // The updater's "TargetChannel" policy.
 };
 
@@ -59,11 +59,10 @@ class InstallDetails {
     // The string length of |channel| (not including the string terminator).
     size_t channel_length;
 
-    // The origin of the |channel| value. Install modes that use the
-    // ADDITIONAL_PARAMETERS channel strategy may determine the channel by
-    // either the "ap" value (kAdditionalParameters) or by an administrative
-    // policy override (kPolicy). For all other install modes, the channel is
-    // dictated by the mode itself (kInstallMode).
+    // The origin of the |channel| value. Install modes that use the FLOATING
+    // channel strategy may determine the channel by an administrative policy
+    // override (kPolicy). For all other install modes, the channel is dictated
+    // by the mode itself (kInstallMode).
     ChannelOrigin channel_origin;
 
     // The value that was used to select |channel| if |channel_origin| is
@@ -142,6 +141,27 @@ class InstallDetails {
   // elevation functionality.
   const IID& elevator_iid() const { return payload_->mode->elevator_iid; }
 
+  // Previous IIDs of the IElevator interface.
+  base::span<const IID> old_elevator_iids() const {
+    return payload_->mode->old_elevator_iids;
+  }
+
+  // The CLSID of the COM server that provides ETW tracing functionality.
+  const CLSID& tracing_service_clsid() const {
+    return payload_->mode->tracing_service_clsid;
+  }
+
+  // The IID and the TypeLib of the ISystemTraceSession interface that provides
+  // ETW tracing functionality.
+  const IID& tracing_service_iid() const {
+    return payload_->mode->tracing_service_iid;
+  }
+
+  // Previous IIDs of the ISystemTraceSession interface.
+  base::span<const IID> old_tracing_service_iids() const {
+    return payload_->mode->old_tracing_service_iids;
+  }
+
   // Returns the unsuffixed portion of the AppUserModelId. The AppUserModelId is
   // used to group an app's windows together on the Windows taskbar along with
   // its corresponding shortcuts; see
@@ -167,8 +187,8 @@ class InstallDetails {
     return std::wstring(payload_->channel, payload_->channel_length);
   }
 
-  // The origin of a ChannelStrategy::ADDITIONAL_PARAMETERS install mode's
-  // channel, or kInstallMode.
+  // The origin of a ChannelStrategy::FLOATING install mode's channel, or
+  // kInstallMode.
   ChannelOrigin channel_origin() const { return payload_->channel_origin; }
 
   // Returns the value that was used to select the channel if |channel_origin()|
@@ -213,8 +233,11 @@ class InstallDetails {
   std::wstring GetClientStateMediumKeyPath() const;
 
   // Returns true if there is an indication of a mismatch between the primary
-  // module and this module.
-  bool VersionMismatch() const;
+  // module and this module. If `expected_version` is non-empty, verifies that
+  // this module's version matches `expected_version` instead of the primary
+  // module's product version (used when loading a dynamically patched module
+  // whose version intentionally differs from the primary module).
+  bool VersionMismatch(std::string_view expected_version = {}) const;
 
   // Sets the instance for the process. This must be called only once per
   // process during startup.

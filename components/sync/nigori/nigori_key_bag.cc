@@ -1,48 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/sync/nigori/nigori_key_bag.h"
 
 #include <utility>
+#include <vector>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/logging.h"
-#include "base/notreached.h"
-#include "components/sync/nigori/nigori.h"
+#include "components/sync/model/crypto/nigori.h"
+#include "components/sync/protocol/nigori_local_data.pb.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
 
 namespace syncer {
 namespace {
 
-std::string ComputeNigoriName(const Nigori& nigori) {
-  std::string key_name;
-  nigori.Permute(Nigori::Password, kNigoriKeyName, &key_name);
-  return key_name;
-}
-
-// Note that |key_name| is redundant but computing the name from |nigori| can be
-// expensive.
-sync_pb::NigoriKey NigoriToProto(const Nigori& nigori,
-                                 const std::string& key_name) {
-  DCHECK_EQ(key_name, ComputeNigoriName(nigori));
-
+sync_pb::NigoriKey NigoriToProto(const Nigori& nigori) {
   sync_pb::NigoriKey proto;
-  proto.set_deprecated_name(key_name);
-  nigori.ExportKeys(proto.mutable_deprecated_user_key(),
-                    proto.mutable_encryption_key(), proto.mutable_mac_key());
+  nigori.ExportKeys(proto.mutable_encryption_key(), proto.mutable_mac_key());
   return proto;
-}
-
-std::unique_ptr<Nigori> CloneNigori(const Nigori& nigori) {
-  std::string user_key;
-  std::string encryption_key;
-  std::string mac_key;
-  nigori.ExportKeys(&user_key, &encryption_key, &mac_key);
-
-  std::unique_ptr<Nigori> nigori_copy =
-      Nigori::CreateByImport(user_key, encryption_key, mac_key);
-  DCHECK(nigori_copy);
-  return nigori_copy;
 }
 
 }  // namespace
@@ -53,12 +31,13 @@ NigoriKeyBag NigoriKeyBag::CreateEmpty() {
 }
 
 // static
-NigoriKeyBag NigoriKeyBag::CreateFromProto(const sync_pb::NigoriKeyBag& proto) {
+NigoriKeyBag NigoriKeyBag::CreateFromProto(
+    const sync_pb::LocalNigoriKeyBag& proto) {
   NigoriKeyBag output;
   for (const sync_pb::NigoriKey& key : proto.key()) {
     if (output.AddKeyFromProto(key).empty()) {
-      // TODO(crbug.com/922900): Consider propagating this error to callers such
-      // that they can do smarter handling.
+      // TODO(crbug.com/40868132): Consider propagating this error to callers
+      // such that they can do smarter handling.
       DLOG(ERROR) << "Invalid NigoriKey protocol buffer message.";
     }
   }
@@ -69,17 +48,14 @@ NigoriKeyBag::NigoriKeyBag(NigoriKeyBag&& other) = default;
 
 NigoriKeyBag::~NigoriKeyBag() = default;
 
-void NigoriKeyBag::CopyFrom(const NigoriKeyBag& other) {
-  nigori_map_.clear();
-  AddAllUnknownKeysFrom(other);
-}
+NigoriKeyBag& NigoriKeyBag::operator=(NigoriKeyBag&&) = default;
 
-sync_pb::NigoriKeyBag NigoriKeyBag::ToProto() const {
-  sync_pb::NigoriKeyBag output;
-  for (const auto& key_name_and_nigori : nigori_map_) {
-    *output.add_key() =
-        NigoriToProto(*key_name_and_nigori.second, key_name_and_nigori.first);
+sync_pb::LocalNigoriKeyBag NigoriKeyBag::ToProto() const {
+  sync_pb::LocalNigoriKeyBag output;
+  for (const auto& [key_name, nigori] : nigori_map_) {
+    *output.add_key() = NigoriToProto(*nigori);
   }
+
   return output;
 }
 
@@ -99,66 +75,60 @@ bool NigoriKeyBag::HasKey(const std::string& key_name) const {
 
 sync_pb::NigoriKey NigoriKeyBag::ExportKey(const std::string& key_name) const {
   DCHECK(HasKey(key_name));
-  sync_pb::NigoriKey key =
-      NigoriToProto(*nigori_map_.find(key_name)->second, key_name);
-  // For exported keys, clients never consumed the key name, so it's safe to
-  // clear the deprecated field.
-  key.clear_deprecated_name();
-  return key;
+  return NigoriToProto(*nigori_map_.find(key_name)->second);
+}
+
+std::string NigoriKeyBag::AddKey(
+    const KeyDerivationParams& key_derivation_params,
+    const std::string& password) {
+  return AddKey(Nigori::CreateByDerivation(NigoriPassKey(),
+                                           key_derivation_params, password));
 }
 
 std::string NigoriKeyBag::AddKey(std::unique_ptr<Nigori> nigori) {
-  DCHECK(nigori);
-  const std::string key_name = ComputeNigoriName(*nigori);
-  if (key_name.empty()) {
-    NOTREACHED();
-    return key_name;
+  if (!nigori) {
+    return std::string();
   }
+  const std::string key_name = nigori->GetKeyName();
+  CHECK(!key_name.empty());
   nigori_map_.emplace(key_name, std::move(nigori));
   return key_name;
 }
 
 std::string NigoriKeyBag::AddKeyFromProto(const sync_pb::NigoriKey& key) {
-  std::unique_ptr<Nigori> nigori = Nigori::CreateByImport(
-      key.deprecated_user_key(), key.encryption_key(), key.mac_key());
-  if (!nigori) {
-    return std::string();
-  }
-
-  const std::string key_name = ComputeNigoriName(*nigori);
-  if (key_name.empty()) {
-    return std::string();
-  }
-
-  nigori_map_[key_name] = std::move(nigori);
-  return key_name;
+  return AddKey(Nigori::CreateByImport(NigoriPassKey(), key.encryption_key(),
+                                       key.mac_key()));
 }
 
 void NigoriKeyBag::AddAllUnknownKeysFrom(const NigoriKeyBag& other) {
-  for (const auto& key_name_and_nigori : other.nigori_map_) {
+  for (const auto& [key_name, nigori] : other.nigori_map_) {
     // Only use this key if we don't already know about it.
-    nigori_map_.emplace(key_name_and_nigori.first,
-                        CloneNigori(*key_name_and_nigori.second));
+    nigori_map_.emplace(key_name, CloneNigori(*nigori));
   }
 }
 
-bool NigoriKeyBag::EncryptWithKey(
+// static
+std::unique_ptr<Nigori> NigoriKeyBag::CloneNigori(const Nigori& nigori) {
+  std::string encryption_key;
+  std::string mac_key;
+  nigori.ExportKeys(&encryption_key, &mac_key);
+
+  std::unique_ptr<Nigori> nigori_copy =
+      Nigori::CreateByImport(NigoriPassKey(), encryption_key, mac_key);
+  DCHECK(nigori_copy);
+  return nigori_copy;
+}
+
+sync_pb::EncryptedData NigoriKeyBag::EncryptWithKey(
     const std::string& key_name,
-    const std::string& input,
-    sync_pb::EncryptedData* encrypted_output) const {
-  DCHECK(encrypted_output);
-  DCHECK(HasKey(key_name));
+    const std::string& input) const {
+  CHECK(HasKey(key_name));
 
-  encrypted_output->Clear();
+  sync_pb::EncryptedData result;
+  result.set_blob(nigori_map_.find(key_name)->second->Encrypt(input));
+  result.set_key_name(key_name);
 
-  if (!nigori_map_.find(key_name)->second->Encrypt(
-          input, encrypted_output->mutable_blob())) {
-    DLOG(ERROR) << "Failed to encrypt data.";
-    return false;
-  }
-
-  encrypted_output->set_key_name(key_name);
-  return true;
+  return result;
 }
 
 bool NigoriKeyBag::CanDecrypt(

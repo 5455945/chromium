@@ -20,7 +20,7 @@ span {
 "use strict";
 
 var editor = document.querySelector("div[contenteditable]");
-var span1, span2;
+var span1, span2, link;
 var selection = getSelection();
 
 function preventDefault(event) {
@@ -30,9 +30,10 @@ editor.addEventListener("paste", preventDefault, {capture: true});
 
 function resetEditor() {
   editor.innerHTML =
-    '<span id="span1">first span.</span><br><span id="span2">second span.</span>';
+    '<span id="span1">first span.</span><br><span id="span2">second span.</span><br><a id="link" href="#top">link.</a>';
   span1 = document.getElementById("span1");
   span2 = document.getElementById("span2");
+  link = document.getElementById("link");
 }
 
 promise_test(async () => {
@@ -140,36 +141,56 @@ promise_test(async () => {
   resetEditor();
   editor.focus();
   selection.collapse(span1.firstChild, 2);
-  editor.addEventListener("pointerdown", () => {
+  let actions = new test_driver.Actions();
+  await actions
+    .pointerMove(0, 0)
+    .pointerMove(0, 0, {origin: link})
+    .keyDown("\uE008")
+    .pointerDown({button: actions.ButtonType.MIDDLE})
+    .pointerUp({button: actions.ButtonType.MIDDLE})
+    .keyUp("\uE008")
+    .send();
+
+  assert_equals(selection.focusNode, link.firstChild,
+    "Selection#focusNode should be in the <a href> element which was clicked by primary button");
+  assert_true(selection.isCollapsed,
+    "Selection#isCollapsed should be true");
+}, "Shift + Primary click in a link shouldn't extend the selection");
+
+promise_test(async (t) => {
+  resetEditor();
+  editor.focus();
+  selection.collapse(span1.firstChild, 2);
+  editor.addEventListener("pointerdown", t.step_func(() => {
     assert_true(selection.isCollapsed,
       "Selection shouldn't be modified before pointerdown event");
     assert_equals(selection.focusNode, span1.firstChild,
       "Selection should stay in the first <span> element when pointerdown event is fired (focusNode)");
     assert_equals(selection.focusOffset, 2,
       "Selection should stay in the first <span> element when pointerdown event is fired (focusOffset)");
-  }, {once: true});
-  editor.addEventListener("mousedown", () => {
+  }), {once: true});
+  editor.addEventListener("mousedown", t.step_func(() => {
     assert_true(selection.isCollapsed,
       "Selection shouldn't be modified before mousedown event");
     assert_equals(selection.focusNode, span1.firstChild,
       "Selection should stay in the first <span> element when mousedown event is fired (focusNode)");
     assert_equals(selection.focusOffset, 2,
       "Selection should stay in the first <span> element when mousedown event is fired (focusOffset)");
-  }, {once: true});
-  editor.addEventListener("pointerup", () => {
+  }), {once: true});
+  editor.addEventListener("pointerup", t.step_func(() => {
     assert_true(!selection.isCollapsed,
       "Selection should be modified before pointerup event");
     assert_equals(selection.focusNode, span1.firstChild,
       "Selection should be modified to extend the range before pointerup event ");
-  }, {once: true});
+  }), {once: true});
   let anchorOffsetAtMouseUp;
-  editor.addEventListener("mouseup", () => {
+  editor.addEventListener("mouseup", t.step_func(() => {
     assert_true(!selection.isCollapsed,
       "Selection should be modified before mouseup event");
     assert_equals(selection.focusNode, span1.firstChild,
       "Selection should be modified to extend the range before mouseup event ");
     anchorOffsetAtMouseUp = selection.anchorOffset;
-  }, {once: true});
+  }), {once: true});
   let actions = new test_driver.Actions();
   await actions
     .pointerMove(0, 0)

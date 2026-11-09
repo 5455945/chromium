@@ -1,8 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/test/cert_test_util.h"
+
+#include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -11,19 +13,20 @@
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
 #include "net/test/test_data_directory.h"
+#include "third_party/boringssl/src/include/openssl/bytestring.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
 
 namespace net {
 
-CertificateList CreateCertificateListFromFile(
-    const base::FilePath& certs_dir,
-    const std::string& cert_file,
-    int format) {
+CertificateList CreateCertificateListFromFile(const base::FilePath& certs_dir,
+                                              std::string_view cert_file,
+                                              int format) {
   base::FilePath cert_path = certs_dir.AppendASCII(cert_file);
   std::string cert_data;
   if (!base::ReadFileToString(cert_path, &cert_data))
     return CertificateList();
   return X509Certificate::CreateCertificateListFromBytes(
-      base::as_bytes(base::make_span(cert_data)), format);
+      base::as_byte_span(cert_data), format);
 }
 
 ::testing::AssertionResult LoadCertificateFiles(
@@ -45,7 +48,7 @@ CertificateList CreateCertificateListFromFile(
 
 scoped_refptr<X509Certificate> CreateCertificateChainFromFile(
     const base::FilePath& certs_dir,
-    const std::string& cert_file,
+    std::string_view cert_file,
     int format) {
   CertificateList certs = CreateCertificateListFromFile(
       certs_dir, cert_file, format);
@@ -62,21 +65,24 @@ scoped_refptr<X509Certificate> CreateCertificateChainFromFile(
 }
 
 scoped_refptr<X509Certificate> ImportCertFromFile(
-    const base::FilePath& certs_dir,
-    const std::string& cert_file) {
+    const base::FilePath& cert_path) {
   base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePath cert_path = certs_dir.AppendASCII(cert_file);
   std::string cert_data;
   if (!base::ReadFileToString(cert_path, &cert_data))
     return nullptr;
 
   CertificateList certs_in_file =
       X509Certificate::CreateCertificateListFromBytes(
-          base::as_bytes(base::make_span(cert_data)),
-          X509Certificate::FORMAT_AUTO);
+          base::as_byte_span(cert_data), X509Certificate::FORMAT_AUTO);
   if (certs_in_file.empty())
     return nullptr;
   return certs_in_file[0];
+}
+
+scoped_refptr<X509Certificate> ImportCertFromFile(
+    const base::FilePath& certs_dir,
+    std::string_view cert_file) {
+  return ImportCertFromFile(certs_dir.AppendASCII(cert_file));
 }
 
 ScopedTestEVPolicy::ScopedTestEVPolicy(EVRootCAMetadata* ev_root_ca_metadata,

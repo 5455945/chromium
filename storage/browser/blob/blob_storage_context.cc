@@ -1,30 +1,33 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "storage/browser/blob/blob_storage_context.h"
 
 #include <inttypes.h>
+
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/time/time.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -48,7 +51,8 @@ BlobStorageContext::BlobStorageContext()
     : profile_directory_(base::FilePath()),
       memory_controller_(base::FilePath(), scoped_refptr<base::TaskRunner>()) {
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
-      this, "BlobStorageContext", base::ThreadTaskRunnerHandle::Get());
+      this, "BlobStorageContext",
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
 BlobStorageContext::BlobStorageContext(
@@ -58,7 +62,8 @@ BlobStorageContext::BlobStorageContext(
     : profile_directory_(profile_directory),
       memory_controller_(storage_directory, std::move(file_runner)) {
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
-      this, "BlobStorageContext", base::ThreadTaskRunnerHandle::Get());
+      this, "BlobStorageContext",
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
 BlobStorageContext::~BlobStorageContext() {
@@ -68,10 +73,10 @@ BlobStorageContext::~BlobStorageContext() {
 
 std::unique_ptr<BlobDataHandle> BlobStorageContext::GetBlobDataFromUUID(
     const std::string& uuid) {
-  BlobEntry* entry = registry_.GetEntry(uuid);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   if (!entry)
     return nullptr;
-  return CreateHandle(uuid, entry);
+  return CreateHandle(uuid, std::move(entry));
 }
 
 void BlobStorageContext::GetBlobDataFromBlobRemote(
@@ -105,15 +110,10 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFinishedBlob(
 std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFinishedBlob(
     const std::string& uuid,
     const std::string& content_type,
-    const std::string& content_disposition,
     std::vector<scoped_refptr<ShareableBlobDataItem>> items) {
   TRACE_EVENT0("Blob", "Context::AddFinishedBlobFromItems");
-  BlobEntry* entry =
-      registry_.CreateEntry(uuid, content_type, content_disposition);
-  uint64_t total_memory_size = 0;
+  scoped_refptr<BlobEntry> entry = registry_.CreateEntry(uuid, content_type);
   for (const auto& item : items) {
-    if (item->item()->type() == BlobDataItem::Type::kBytes)
-      total_memory_size += item->item()->length();
     DCHECK_EQ(item->state(), ShareableBlobDataItem::POPULATED_WITH_QUOTA);
     DCHECK_NE(BlobDataItem::Type::kBytesDescription, item->item()->type());
     DCHECK(!item->item()->IsFutureFileItem());
@@ -121,7 +121,6 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFinishedBlob(
 
   entry->SetSharedBlobItems(std::move(items));
   std::unique_ptr<BlobDataHandle> handle = CreateHandle(uuid, entry);
-  UMA_HISTOGRAM_COUNTS_1M("Storage.Blob.TotalSize", total_memory_size / 1024);
   entry->set_status(BlobStatus::DONE);
   memory_controller_.NotifyMemoryItemsUsed(entry->items());
   return handle;
@@ -130,44 +129,39 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFinishedBlob(
 std::unique_ptr<BlobDataHandle> BlobStorageContext::AddBrokenBlob(
     const std::string& uuid,
     const std::string& content_type,
-    const std::string& content_disposition,
     BlobStatus reason) {
   DCHECK(!registry_.HasEntry(uuid));
   DCHECK(BlobStatusIsError(reason));
-  BlobEntry* entry =
-      registry_.CreateEntry(uuid, content_type, content_disposition);
+  scoped_refptr<BlobEntry> entry = registry_.CreateEntry(uuid, content_type);
   entry->set_status(reason);
   FinishBuilding(entry);
-  return CreateHandle(uuid, entry);
+  return CreateHandle(uuid, std::move(entry));
 }
 
 std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFutureBlob(
     const std::string& uuid,
     const std::string& content_type,
-    const std::string& content_disposition,
     BuildAbortedCallback build_aborted_callback) {
   DCHECK(!registry_.HasEntry(uuid));
 
-  BlobEntry* entry =
-      registry_.CreateEntry(uuid, content_type, content_disposition);
+  scoped_refptr<BlobEntry> entry = registry_.CreateEntry(uuid, content_type);
   entry->set_size(blink::BlobUtils::kUnknownSize);
   entry->set_status(BlobStatus::PENDING_CONSTRUCTION);
   entry->set_building_state(std::make_unique<BlobEntry::BuildingState>(
       false, TransportAllowedCallback(), 0));
   entry->building_state_->build_aborted_callback =
       std::move(build_aborted_callback);
-  return CreateHandle(uuid, entry);
+  return CreateHandle(uuid, std::move(entry));
 }
 
 std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildPreregisteredBlob(
     std::unique_ptr<BlobDataBuilder> content,
     TransportAllowedCallback transport_allowed_callback) {
-  BlobEntry* entry = registry_.GetEntry(content->uuid());
-  DCHECK(entry);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(content->uuid());
   DCHECK_EQ(BlobStatus::PENDING_CONSTRUCTION, entry->status());
   entry->set_size(0);
 
-  return BuildBlobInternal(entry, std::move(content),
+  return BuildBlobInternal(std::move(entry), std::move(content),
                            std::move(transport_allowed_callback));
 }
 
@@ -176,15 +170,15 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlob(
     TransportAllowedCallback transport_allowed_callback) {
   DCHECK(!registry_.HasEntry(content->uuid_));
 
-  BlobEntry* entry = registry_.CreateEntry(
-      content->uuid(), content->content_type_, content->content_disposition_);
+  scoped_refptr<BlobEntry> entry =
+      registry_.CreateEntry(content->uuid(), content->content_type_);
 
-  return BuildBlobInternal(entry, std::move(content),
+  return BuildBlobInternal(std::move(entry), std::move(content),
                            std::move(transport_allowed_callback));
 }
 
 std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
-    BlobEntry* entry,
+    scoped_refptr<BlobEntry> entry,
     std::unique_ptr<BlobDataBuilder> content,
     TransportAllowedCallback transport_allowed_callback) {
 #if DCHECK_IS_ON()
@@ -216,20 +210,9 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
 
   std::unique_ptr<BlobDataHandle> handle = CreateHandle(content->uuid_, entry);
 
-  UMA_HISTOGRAM_COUNTS_1M("Storage.Blob.TotalSize",
-                          content->total_memory_size() / 1024);
-
   TransportQuotaType transport_quota_type = content->found_memory_transport()
                                                 ? TransportQuotaType::MEMORY
                                                 : TransportQuotaType::FILE;
-
-  uint64_t total_memory_needed =
-      content->copy_quota_needed() +
-      (transport_quota_type == TransportQuotaType::MEMORY
-           ? content->transport_quota_needed()
-           : 0);
-  UMA_HISTOGRAM_COUNTS_1M("Storage.Blob.TotalUnsharedSize",
-                          total_memory_needed / 1024);
 
   std::vector<scoped_refptr<BlobDataItem>> items_needing_timestamp;
   std::vector<base::FilePath> file_paths_needing_timestamp;
@@ -276,8 +259,8 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
   // data item, and we need to account for that. So we prevent that case by
   // holding onto all blobs.
   for (const std::string& dependent_blob_uuid : content->dependent_blobs()) {
-    BlobEntry* blob_entry = registry_.GetEntry(dependent_blob_uuid);
-    DCHECK(blob_entry);
+    scoped_refptr<BlobEntry> blob_entry =
+        registry_.GetEntry(dependent_blob_uuid);
     if (BlobStatusIsError(blob_entry->status())) {
       entry->set_status(BlobStatus::ERR_REFERENCED_BLOB_BROKEN);
       break;
@@ -291,7 +274,7 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
     }
   }
 
-  std::vector<ShareableBlobDataItem*> transport_items;
+  std::vector<raw_ptr<ShareableBlobDataItem>> transport_items;
   transport_items.reserve(content->pending_transport_items().size());
   for (const auto& item : content->pending_transport_items())
     transport_items.emplace_back(item.get());
@@ -319,7 +302,7 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
               previous_building_state->build_completion_callbacks);
     building_state->build_aborted_callback =
         std::move(previous_building_state->build_aborted_callback);
-    auto runner = base::ThreadTaskRunnerHandle::Get();
+    auto runner = base::SingleThreadTaskRunner::GetCurrentDefault();
     for (auto& callback : previous_building_state->build_started_callbacks)
       runner->PostTask(FROM_HERE,
                        base::BindOnce(std::move(callback), entry->status()));
@@ -392,10 +375,10 @@ void BlobStorageContext::CancelBuildingBlob(const std::string& uuid,
 }
 
 void BlobStorageContext::NotifyTransportComplete(const std::string& uuid) {
-  BlobEntry* entry = registry_.GetEntry(uuid);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   CHECK(entry) << "There is no blob entry with uuid " << uuid;
   DCHECK(BlobStatusIsPending(entry->status()));
-  NotifyTransportCompleteInternal(entry);
+  NotifyTransportCompleteInternal(std::move(entry));
 }
 
 void BlobStorageContext::Bind(
@@ -403,34 +386,30 @@ void BlobStorageContext::Bind(
   receivers_.Add(this, std::move(receiver));
 }
 
-void BlobStorageContext::IncrementBlobRefCount(const std::string& uuid) {
-  BlobEntry* entry = registry_.GetEntry(uuid);
-  DCHECK(entry);
-  entry->IncrementRefCount();
+void BlobStorageContext::IncrementBlobHandleCount(const std::string& uuid) {
+  registry_.GetEntry(uuid)->IncrementHandleCount();
 }
 
-void BlobStorageContext::DecrementBlobRefCount(const std::string& uuid) {
-  BlobEntry* entry = registry_.GetEntry(uuid);
-  DCHECK(entry);
-  DCHECK_GT(entry->refcount(), 0u);
-  entry->DecrementRefCount();
-  if (entry->refcount() == 0) {
-    DVLOG(1) << "BlobStorageContext::DecrementBlobRefCount(" << uuid
+void BlobStorageContext::DecrementBlobHandleCount(const std::string& uuid) {
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
+  CHECK_GT(entry->handle_count(), 0u);
+  entry->DecrementHandleCount();
+  if (entry->handle_count() == 0) {
+    DVLOG(1) << "BlobStorageContext::DecrementBlobHandleCount(" << uuid
              << "): Deleting blob.";
-    ClearAndFreeMemory(entry);
-    registry_.DeleteEntry(uuid);
+    registry_.ReleaseEntry(uuid);
   }
 }
 
 std::unique_ptr<BlobDataSnapshot> BlobStorageContext::CreateSnapshot(
     const std::string& uuid) {
   std::unique_ptr<BlobDataSnapshot> result;
-  BlobEntry* entry = registry_.GetEntry(uuid);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   if (entry->status() != BlobStatus::DONE)
     return result;
 
-  std::unique_ptr<BlobDataSnapshot> snapshot(new BlobDataSnapshot(
-      uuid, entry->content_type(), entry->content_disposition()));
+  std::unique_ptr<BlobDataSnapshot> snapshot(
+      new BlobDataSnapshot(uuid, entry->content_type()));
   snapshot->items_.reserve(entry->items().size());
   for (const auto& shareable_item : entry->items()) {
     snapshot->items_.push_back(shareable_item->item());
@@ -440,7 +419,7 @@ std::unique_ptr<BlobDataSnapshot> BlobStorageContext::CreateSnapshot(
 }
 
 BlobStatus BlobStorageContext::GetBlobStatus(const std::string& uuid) const {
-  const BlobEntry* entry = registry_.GetEntry(uuid);
+  scoped_refptr<const BlobEntry> entry = registry_.GetEntry(uuid);
   if (!entry)
     return BlobStatus::ERR_INVALID_CONSTRUCTION_ARGUMENTS;
   return entry->status();
@@ -448,8 +427,7 @@ BlobStatus BlobStorageContext::GetBlobStatus(const std::string& uuid) const {
 
 void BlobStorageContext::RunOnConstructionComplete(const std::string& uuid,
                                                    BlobStatusCallback done) {
-  BlobEntry* entry = registry_.GetEntry(uuid);
-  DCHECK(entry);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   if (BlobStatusIsPending(entry->status())) {
     entry->building_state_->build_completion_callbacks.push_back(
         std::move(done));
@@ -460,8 +438,7 @@ void BlobStorageContext::RunOnConstructionComplete(const std::string& uuid,
 
 void BlobStorageContext::RunOnConstructionBegin(const std::string& uuid,
                                                 BlobStatusCallback done) {
-  BlobEntry* entry = registry_.GetEntry(uuid);
-  DCHECK(entry);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   if (entry->status() == BlobStatus::PENDING_CONSTRUCTION) {
     entry->building_state_->build_started_callbacks.push_back(std::move(done));
     return;
@@ -471,14 +448,14 @@ void BlobStorageContext::RunOnConstructionBegin(const std::string& uuid,
 
 std::unique_ptr<BlobDataHandle> BlobStorageContext::CreateHandle(
     const std::string& uuid,
-    BlobEntry* entry) {
+    scoped_refptr<BlobEntry> entry) {
   return base::WrapUnique(new BlobDataHandle(
-      uuid, entry->content_type_, entry->content_disposition_, entry->size_,
-      this, base::ThreadTaskRunnerHandle::Get().get()));
+      uuid, entry->content_type_, entry->size_, this,
+      base::SingleThreadTaskRunner::GetCurrentDefault().get()));
 }
 
-void BlobStorageContext::NotifyTransportCompleteInternal(BlobEntry* entry) {
-  DCHECK(entry);
+void BlobStorageContext::NotifyTransportCompleteInternal(
+    scoped_refptr<BlobEntry> entry) {
   for (ShareableBlobDataItem* shareable_item :
        entry->building_state_->transport_items) {
     DCHECK(shareable_item->state() == ShareableBlobDataItem::QUOTA_GRANTED);
@@ -486,46 +463,20 @@ void BlobStorageContext::NotifyTransportCompleteInternal(BlobEntry* entry) {
   }
   entry->set_status(BlobStatus::PENDING_REFERENCED_BLOBS);
   if (entry->CanFinishBuilding())
-    FinishBuilding(entry);
+    FinishBuilding(std::move(entry));
 }
 
-void BlobStorageContext::CancelBuildingBlobInternal(BlobEntry* entry,
-                                                    BlobStatus reason) {
-  DCHECK(entry);
-  DCHECK(BlobStatusIsError(reason));
-  TransportAllowedCallback transport_allowed_callback;
-  if (entry->building_state_ &&
-      entry->building_state_->transport_allowed_callback) {
-    transport_allowed_callback =
-        std::move(entry->building_state_->transport_allowed_callback);
-  }
-  if (entry->building_state_ &&
-      entry->status() == BlobStatus::PENDING_CONSTRUCTION) {
-    auto runner = base::ThreadTaskRunnerHandle::Get();
-    for (auto& callback : entry->building_state_->build_started_callbacks)
-      runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback), reason));
-  }
-  ClearAndFreeMemory(entry);
-  entry->set_status(reason);
-  if (transport_allowed_callback) {
-    std::move(transport_allowed_callback)
-        .Run(reason, std::vector<BlobMemoryController::FileCreationInfo>());
-  }
-  FinishBuilding(entry);
+void BlobStorageContext::CancelBuildingBlobInternal(
+    scoped_refptr<BlobEntry> entry,
+    BlobStatus reason) {
+  CHECK(BlobStatusIsError(reason));
+  entry->OnCancelBuilding(reason);
+  FinishBuilding(std::move(entry));
 }
 
-void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
-  DCHECK(entry);
+void BlobStorageContext::FinishBuilding(scoped_refptr<BlobEntry> entry) {
   BlobStatus status = entry->status_;
   DCHECK_NE(BlobStatus::DONE, status);
-
-  bool error = BlobStatusIsError(status);
-  UMA_HISTOGRAM_BOOLEAN("Storage.Blob.Broken", error);
-  if (error) {
-    UMA_HISTOGRAM_ENUMERATION("Storage.Blob.BrokenReason",
-                              static_cast<int>(status),
-                              (static_cast<int>(BlobStatus::LAST_ERROR) + 1));
-  }
 
   if (BlobStatusIsPending(entry->status_)) {
     for (const ItemCopyEntry& copy : entry->building_state_->copies) {
@@ -552,8 +503,8 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
           scoped_refptr<BlobDataItem> new_item = BlobDataItem::CreateFile(
               source_item->path(),
               source_item->offset() + copy.source_item_offset, dest_size,
-              source_item->expected_modification_time(),
-              source_item->file_ref_);
+              source_item->expected_modification_time(), source_item->file_ref_,
+              source_item->file_access_);
           copy.dest_item->set_item(std::move(new_item));
           break;
         }
@@ -561,12 +512,12 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
         case BlobDataItem::Type::kFileFilesystem:
         case BlobDataItem::Type::kReadableDataHandle:
           NOTREACHED();
-          break;
       }
       copy.dest_item->set_state(ShareableBlobDataItem::POPULATED_WITH_QUOTA);
     }
 
     entry->set_status(BlobStatus::DONE);
+    entry->building_state_->build_aborted_callback.Reset();
   }
 
   std::vector<BlobStatusCallback> callbacks;
@@ -577,7 +528,7 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
 
   memory_controller_.NotifyMemoryItemsUsed(entry->items());
 
-  auto runner = base::ThreadTaskRunnerHandle::Get();
+  auto runner = base::SingleThreadTaskRunner::GetCurrentDefault();
   for (auto& callback : callbacks)
     runner->PostTask(FROM_HERE,
                      base::BindOnce(std::move(callback), entry->status()));
@@ -590,7 +541,7 @@ void BlobStorageContext::FinishBuilding(BlobEntry* entry) {
 }
 
 void BlobStorageContext::RequestTransport(
-    BlobEntry* entry,
+    scoped_refptr<BlobEntry> entry,
     std::vector<BlobMemoryController::FileCreationInfo> files) {
   BlobEntry::BuildingState* building_state = entry->building_state_.get();
   if (building_state->transport_allowed_callback) {
@@ -599,7 +550,7 @@ void BlobStorageContext::RequestTransport(
     return;
   }
   DCHECK(files.empty());
-  NotifyTransportCompleteInternal(entry);
+  NotifyTransportCompleteInternal(std::move(entry));
 }
 
 void BlobStorageContext::OnEnoughSpaceForTransport(
@@ -610,7 +561,7 @@ void BlobStorageContext::OnEnoughSpaceForTransport(
     CancelBuildingBlob(uuid, BlobStatus::ERR_OUT_OF_MEMORY);
     return;
   }
-  BlobEntry* entry = registry_.GetEntry(uuid);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   if (!entry || !entry->building_state_.get())
     return;
   BlobEntry::BuildingState& building_state = *entry->building_state_;
@@ -621,7 +572,7 @@ void BlobStorageContext::OnEnoughSpaceForTransport(
   RequestTransport(entry, std::move(files));
 
   if (entry->CanFinishBuilding())
-    FinishBuilding(entry);
+    FinishBuilding(std::move(entry));
 }
 
 void BlobStorageContext::OnEnoughSpaceForCopies(const std::string& uuid,
@@ -630,18 +581,18 @@ void BlobStorageContext::OnEnoughSpaceForCopies(const std::string& uuid,
     CancelBuildingBlob(uuid, BlobStatus::ERR_OUT_OF_MEMORY);
     return;
   }
-  BlobEntry* entry = registry_.GetEntry(uuid);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(uuid);
   if (!entry)
     return;
 
   if (entry->CanFinishBuilding())
-    FinishBuilding(entry);
+    FinishBuilding(std::move(entry));
 }
 
 void BlobStorageContext::OnDependentBlobFinished(
     const std::string& owning_blob_uuid,
     BlobStatus status) {
-  BlobEntry* entry = registry_.GetEntry(owning_blob_uuid);
+  scoped_refptr<BlobEntry> entry = registry_.GetEntry(owning_blob_uuid);
   if (!entry || !entry->building_state_)
     return;
 
@@ -649,22 +600,15 @@ void BlobStorageContext::OnDependentBlobFinished(
     DCHECK_NE(BlobStatus::ERR_BLOB_DEREFERENCED_WHILE_BUILDING, status)
         << "Referenced blob should never be dereferenced while we "
         << "are depending on it, as our system holds a handle.";
-    CancelBuildingBlobInternal(entry, BlobStatus::ERR_REFERENCED_BLOB_BROKEN);
+    CancelBuildingBlobInternal(std::move(entry),
+                               BlobStatus::ERR_REFERENCED_BLOB_BROKEN);
     return;
   }
   DCHECK_GT(entry->building_state_->num_building_dependent_blobs, 0u);
   --entry->building_state_->num_building_dependent_blobs;
 
   if (entry->CanFinishBuilding())
-    FinishBuilding(entry);
-}
-
-void BlobStorageContext::ClearAndFreeMemory(BlobEntry* entry) {
-  if (entry->building_state_)
-    entry->building_state_->CancelRequestsAndAbort();
-  entry->ClearItems();
-  entry->ClearOffsets();
-  entry->set_size(0);
+    FinishBuilding(std::move(entry));
 }
 
 bool BlobStorageContext::OnMemoryDump(
@@ -686,6 +630,20 @@ bool BlobStorageContext::OnMemoryDump(
   mad->AddScalar("blob_count",
                  base::trace_event::MemoryAllocatorDump::kUnitsObjects,
                  blob_count());
+  // Emit per-creator memory usage as scalar attributes. Perfetto's
+  // GraphProcessor::AggregateNumericsRecursively automatically aggregates these
+  // scalar entries into the parent "site_storage/blob_storage" dump node.
+  for (const auto& [creator_identity, bytes] :
+       memory_controller().memory_usage_by_creator_identity()) {
+    CHECK(bytes.is_positive());
+    std::string_view creator_label =
+        (!creator_identity || creator_identity->as_string().empty())
+            ? "Unknown Creator"
+            : std::string_view(creator_identity->as_string());
+    mad->AddScalar(base::StrCat({"creator_identity:", creator_label}).c_str(),
+                   base::trace_event::MemoryAllocatorDump::kUnitsBytes,
+                   bytes.InBytes());
+  }
   if (system_allocator_name)
     pmd->AddSuballocation(mad->guid(), system_allocator_name);
   return true;
@@ -708,27 +666,12 @@ void BlobStorageContext::RegisterFromDataItem(
   BlobImpl::Create(std::move(handle), std::move(blob));
 }
 
-void BlobStorageContext::RegisterFromMemory(
-    mojo::PendingReceiver<::blink::mojom::Blob> blob,
-    const std::string& uuid,
-    mojo_base::BigBuffer data) {
-  if (registry_.HasEntry(uuid)) {
-    receivers_.ReportBadMessage("duplicate uuid");
-    return;
-  }
-
-  std::unique_ptr<BlobDataBuilder> builder =
-      std::make_unique<BlobDataBuilder>(uuid);
-  builder->AppendData(data.byte_span());
-  std::unique_ptr<BlobDataHandle> handle = AddFinishedBlob(std::move(builder));
-  BlobImpl::Create(std::move(handle), std::move(blob));
-}
-
 void BlobStorageContext::WriteBlobToFile(
     mojo::PendingRemote<::blink::mojom::Blob> pending_blob,
     const base::FilePath& file_path,
     bool flush_on_write,
-    absl::optional<base::Time> last_modified,
+    std::optional<base::Time> last_modified,
+    uint64_t expected_size,
     BlobStorageContext::WriteBlobToFileCallback callback) {
   DCHECK(!last_modified || !last_modified.value().is_null());
   if (profile_directory_.empty()) {
@@ -749,7 +692,7 @@ void BlobStorageContext::WriteBlobToFile(
       base::BindOnce(
           [](base::WeakPtr<BlobStorageContext> blob_context,
              const base::FilePath& file_path, bool flush_on_write,
-             absl::optional<base::Time> last_modified,
+             std::optional<base::Time> last_modified, uint64_t expected_size,
              BlobStorageContext::WriteBlobToFileCallback callback,
              std::unique_ptr<BlobDataHandle> handle) {
             if (!handle || !blob_context) {
@@ -759,10 +702,15 @@ void BlobStorageContext::WriteBlobToFile(
             }
             storage::WriteBlobToFile(std::move(handle), file_path,
                                      flush_on_write, last_modified,
-                                     std::move(callback));
+                                     expected_size, std::move(callback));
           },
-          AsWeakPtr(), file_path, flush_on_write, last_modified,
+          AsWeakPtr(), file_path, flush_on_write, last_modified, expected_size,
           std::move(callback)));
+}
+
+void BlobStorageContext::Clone(
+    mojo::PendingReceiver<mojom::BlobStorageContext> receiver) {
+  Bind(std::move(receiver));
 }
 
 }  // namespace storage

@@ -1,13 +1,15 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/devtools/devtools_io_context.h"
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
-#include "base/sequenced_task_runner.h"
+#include <array>
+
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/devtools/devtools_stream_blob.h"
 #include "content/browser/devtools/devtools_stream_file.h"
@@ -44,7 +46,7 @@ DevToolsIOContext::~DevToolsIOContext() = default;
 void DevToolsIOContext::RegisterStream(scoped_refptr<Stream> stream,
                                        const std::string& id) {
   bool inserted = streams_.emplace(id, std::move(stream)).second;
-  DCHECK(inserted);
+  CHECK(inserted, base::NotFatalUntil::M159);
 }
 
 scoped_refptr<DevToolsIOContext::Stream> DevToolsIOContext::GetByHandle(
@@ -64,10 +66,13 @@ void DevToolsIOContext::DiscardAllStreams() {
 
 // static
 bool DevToolsIOContext::IsTextMimeType(const std::string& mime_type) {
-  static const char* kTextMIMETypePrefixes[] = {
-      "text/", "application/x-javascript", "application/json",
-      "application/xml"};
-  for (size_t i = 0; i < base::size(kTextMIMETypePrefixes); ++i) {
+  static const auto kTextMIMETypePrefixes = std::to_array({
+      "text/",
+      "application/x-javascript",
+      "application/json",
+      "application/xml",
+  });
+  for (size_t i = 0; i < std::size(kTextMIMETypePrefixes); ++i) {
     if (base::StartsWith(mime_type, kTextMIMETypePrefixes[i],
                          base::CompareCase::INSENSITIVE_ASCII))
       return true;

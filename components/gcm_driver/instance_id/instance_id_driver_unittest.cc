@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,11 @@
 #include <cmath>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "components/gcm_driver/gcm_buildflags.h"
 #include "components/gcm_driver/instance_id/fake_gcm_driver_for_instance_id.h"
 #include "components/gcm_driver/instance_id/instance_id.h"
@@ -55,6 +55,10 @@ bool VerifyInstanceID(const std::string& str) {
 class InstanceIDDriverTest : public testing::Test {
  public:
   InstanceIDDriverTest();
+
+  InstanceIDDriverTest(const InstanceIDDriverTest&) = delete;
+  InstanceIDDriverTest& operator=(const InstanceIDDriverTest&) = delete;
+
   ~InstanceIDDriverTest() override;
 
   // testing::Test:
@@ -103,8 +107,6 @@ class InstanceIDDriverTest : public testing::Test {
 
   bool async_operation_completed_;
   base::OnceClosure async_operation_completed_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(InstanceIDDriverTest);
 };
 
 InstanceIDDriverTest::InstanceIDDriverTest()

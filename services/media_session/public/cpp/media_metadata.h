@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,15 @@
 
 #include "base/component_export.h"
 #include "build/build_config.h"
-#include "url/gurl.h"
+#include "services/media_session/public/cpp/chapter_information.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
 
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace media_session {
 
@@ -30,10 +30,9 @@ struct COMPONENT_EXPORT(MEDIA_SESSION_BASE_CPP) MediaMetadata {
 
   MediaMetadata(const MediaMetadata& other);
 
-  bool operator==(const MediaMetadata& other) const;
-  bool operator!=(const MediaMetadata& other) const;
+  friend bool operator==(const MediaMetadata&, const MediaMetadata&) = default;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Creates a Java MediaMetadata instance and returns the JNI ref.
   base::android::ScopedJavaLocalRef<jobject> CreateJavaObject(
       JNIEnv* env) const;
@@ -52,6 +51,9 @@ struct COMPONENT_EXPORT(MEDIA_SESSION_BASE_CPP) MediaMetadata {
   // session. This could be the name of the app or the name of the site playing
   // media.
   std::u16string source_title;
+
+  // The chapters associated to the MediaSession.
+  std::vector<ChapterInformation> chapters;
 
   // Returns whether |this| contains no metadata.
   bool IsEmpty() const;

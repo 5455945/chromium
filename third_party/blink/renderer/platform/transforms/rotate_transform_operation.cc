@@ -22,13 +22,14 @@
 #include "third_party/blink/renderer/platform/transforms/rotate_transform_operation.h"
 
 #include "third_party/blink/renderer/platform/geometry/blend.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 namespace {
 TransformOperation::OperationType GetTypeForRotation(const Rotation& rotation) {
-  float x = rotation.axis.X();
-  float y = rotation.axis.Y();
-  float z = rotation.axis.Z();
+  float x = rotation.axis.x();
+  float y = rotation.axis.y();
+  float z = rotation.axis.z();
   if (x && !y && !z)
     return TransformOperation::kRotateX;
   if (y && !x && !z)
@@ -39,10 +40,8 @@ TransformOperation::OperationType GetTypeForRotation(const Rotation& rotation) {
 }
 }  // namespace
 
-bool RotateTransformOperation::operator==(
+bool RotateTransformOperation::IsEqualAssumingSameType(
     const TransformOperation& other) const {
-  if (!IsSameType(other))
-    return false;
   const auto& other_rotation = To<RotateTransformOperation>(other).rotation_;
   return rotation_.axis == other_rotation.axis &&
          rotation_.angle == other_rotation.angle;
@@ -50,7 +49,7 @@ bool RotateTransformOperation::operator==(
 
 bool RotateTransformOperation::GetCommonAxis(const RotateTransformOperation* a,
                                              const RotateTransformOperation* b,
-                                             FloatPoint3D& result_axis,
+                                             gfx::Vector3dF& result_axis,
                                              double& result_angle_a,
                                              double& result_angle_b) {
   return Rotation::GetCommonAxis(a ? a->rotation_ : Rotation(),
@@ -58,28 +57,38 @@ bool RotateTransformOperation::GetCommonAxis(const RotateTransformOperation* a,
                                  result_angle_a, result_angle_b);
 }
 
-scoped_refptr<TransformOperation> RotateTransformOperation::Accumulate(
+TransformOperation* RotateTransformOperation::Accumulate(
     const TransformOperation& other) {
   DCHECK(IsMatchingOperationType(other.GetType()));
   Rotation new_rotation =
       Rotation::Add(rotation_, To<RotateTransformOperation>(other).rotation_);
-  return RotateTransformOperation::Create(new_rotation,
-                                          GetTypeForRotation(new_rotation));
+  return MakeGarbageCollected<RotateTransformOperation>(
+      new_rotation, GetTypeForRotation(new_rotation));
 }
 
-scoped_refptr<TransformOperation> RotateTransformOperation::Blend(
+TransformOperation* RotateTransformOperation::AccumulateN(
+    const TransformOperation& other,
+    int n) {
+  DCHECK(IsMatchingOperationType(other.GetType()));
+  Rotation new_rotation = Rotation::AddN(
+      rotation_, To<RotateTransformOperation>(other).rotation_, n);
+  return MakeGarbageCollected<RotateTransformOperation>(
+      new_rotation, GetTypeForRotation(new_rotation));
+}
+
+TransformOperation* RotateTransformOperation::Blend(
     const TransformOperation* from,
     double progress,
     bool blend_to_identity) {
   DCHECK(!from || CanBlendWith(*from));
 
   if (blend_to_identity)
-    return RotateTransformOperation::Create(
+    return MakeGarbageCollected<RotateTransformOperation>(
         Rotation(Axis(), Angle() * (1 - progress)), type_);
 
   // Optimize for single axis rotation
   if (!from)
-    return RotateTransformOperation::Create(
+    return MakeGarbageCollected<RotateTransformOperation>(
         Rotation(Axis(), Angle() * progress), type_);
 
   // Apply spherical linear interpolation. Rotate around a common axis if
@@ -91,7 +100,7 @@ scoped_refptr<TransformOperation> RotateTransformOperation::Blend(
   OperationType type =
       from->IsSameType(*this) ? type_ : OperationType::kRotate3D;
   const auto& from_rotate = To<RotateTransformOperation>(*from);
-  return RotateTransformOperation::Create(
+  return MakeGarbageCollected<RotateTransformOperation>(
       Rotation::Slerp(from_rotate.rotation_, rotation_, progress), type);
 }
 
@@ -99,23 +108,21 @@ RotateAroundOriginTransformOperation::RotateAroundOriginTransformOperation(
     double angle,
     double origin_x,
     double origin_y)
-    : RotateTransformOperation(Rotation(FloatPoint3D(0, 0, 1), angle),
+    : RotateTransformOperation(Rotation(gfx::Vector3dF(0, 0, 1), angle),
                                kRotateAroundOrigin),
       origin_x_(origin_x),
       origin_y_(origin_y) {}
 
 void RotateAroundOriginTransformOperation::Apply(
-    TransformationMatrix& transform,
-    const FloatSize& box_size) const {
+    gfx::Transform& transform,
+    const gfx::SizeF& box_size) const {
   transform.Translate(origin_x_, origin_y_);
   RotateTransformOperation::Apply(transform, box_size);
   transform.Translate(-origin_x_, -origin_y_);
 }
 
-bool RotateAroundOriginTransformOperation::operator==(
+bool RotateAroundOriginTransformOperation::IsEqualAssumingSameType(
     const TransformOperation& other) const {
-  if (!IsSameType(other))
-    return false;
   const auto& other_rotate = To<RotateAroundOriginTransformOperation>(other);
   const Rotation& other_rotation = other_rotate.rotation_;
   return rotation_.axis == other_rotation.axis &&
@@ -124,30 +131,44 @@ bool RotateAroundOriginTransformOperation::operator==(
          origin_y_ == other_rotate.origin_y_;
 }
 
-scoped_refptr<TransformOperation> RotateAroundOriginTransformOperation::Blend(
+TransformOperation* RotateAroundOriginTransformOperation::Blend(
     const TransformOperation* from,
     double progress,
     bool blend_to_identity) {
   DCHECK(!from || CanBlendWith(*from));
 
   if (blend_to_identity) {
-    return RotateAroundOriginTransformOperation::Create(
+    return MakeGarbageCollected<RotateAroundOriginTransformOperation>(
         Angle() * (1 - progress), origin_x_, origin_y_);
   }
   if (!from) {
-    return RotateAroundOriginTransformOperation::Create(Angle() * progress,
-                                                        origin_x_, origin_y_);
+    return MakeGarbageCollected<RotateAroundOriginTransformOperation>(
+        Angle() * progress, origin_x_, origin_y_);
   }
   const auto& from_rotate = To<RotateAroundOriginTransformOperation>(*from);
-  return RotateAroundOriginTransformOperation::Create(
+  return MakeGarbageCollected<RotateAroundOriginTransformOperation>(
       blink::Blend(from_rotate.Angle(), Angle(), progress),
       blink::Blend(from_rotate.origin_x_, origin_x_, progress),
       blink::Blend(from_rotate.origin_y_, origin_y_, progress));
 }
 
-scoped_refptr<TransformOperation> RotateAroundOriginTransformOperation::Zoom(
-    double factor) {
-  return Create(Angle(), origin_x_ * factor, origin_y_ * factor);
+TransformOperation* RotateAroundOriginTransformOperation::Zoom(double factor) {
+  return MakeGarbageCollected<RotateAroundOriginTransformOperation>(
+      Angle(), origin_x_ * factor, origin_y_ * factor);
+}
+
+String RotateTransformOperation::DebugString() const {
+  StringBuilder sb;
+  sb.Append("rotate((");
+  sb.AppendNumber(rotation_.axis.x());
+  sb.Append(", ");
+  sb.AppendNumber(rotation_.axis.y());
+  sb.Append(", ");
+  sb.AppendNumber(rotation_.axis.z());
+  sb.Append("), ");
+  sb.AppendNumber(rotation_.angle);
+  sb.Append("deg)");
+  return sb.ReleaseString();
 }
 
 }  // namespace blink

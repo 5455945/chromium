@@ -1,14 +1,23 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_PUBLIC_CPP_HID_HID_BLOCKLIST_H_
 #define SERVICES_DEVICE_PUBLIC_CPP_HID_HID_BLOCKLIST_H_
 
+#include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/no_destructor.h"
-#include "services/device/public/mojom/hid.mojom.h"
+#include "services/device/public/mojom/hid.mojom-forward.h"
 
 namespace device {
+
+// Feature used to configure entries in the HID blocklist which can be deployed
+// using a server configuration.
+BASE_DECLARE_FEATURE(kWebHidBlocklist);
+
+// Dynamic additions to the HID blocklist.
+extern const base::FeatureParam<std::string> kWebHidBlocklistAdditions;
 
 class HidBlocklist final {
  public:
@@ -45,9 +54,13 @@ class HidBlocklist final {
   // Returns a singleton instance of the blocklist.
   static HidBlocklist& Get();
 
-  // Returns true if a device is excluded from access. A device is excluded if
-  // all of its reports are blocked.
-  static bool IsDeviceExcluded(const device::mojom::HidDeviceInfo& device_info);
+  // Returns true if a device is blocked given the |vendor_id| and |product_id|.
+  bool IsVendorProductBlocked(uint16_t vendor_id, uint16_t product_id);
+
+  // Returns true if |vendor_id| and |product_id| are blocked by an |entry|.
+  static bool IsVendorProductBlockedByEntry(const HidBlocklist::Entry& entry,
+                                            uint16_t vendor_id,
+                                            uint16_t product_id);
 
   // Given the |vendor_id|, |product_id|, and |collections| for a HID device,
   // returns a vector of protected report IDs for reports of type |report_type|.
@@ -56,6 +69,21 @@ class HidBlocklist final {
       uint16_t vendor_id,
       uint16_t product_id,
       const std::vector<mojom::HidCollectionInfoPtr>& collections);
+
+  // Returns true if |vendor_id| and |product_id| identify a known FIDO HID
+  // security key. Used when deciding device access for extensions allowed to
+  // bypass the blocklist to access FIDO HID capabilities.
+  static bool IsKnownSecurityKey(uint16_t vendor_id, uint16_t product_id);
+
+  struct VendorProduct {
+    uint16_t vendor_id;
+    uint16_t product_id;
+
+    friend bool operator==(const VendorProduct&,
+                           const VendorProduct&) = default;
+  };
+
+  static base::span<const VendorProduct> GetKnownSecurityKeysForTesting();
 
   // Returns the number of dynamic blocklist entries.
   size_t GetDynamicEntryCountForTest() const { return dynamic_entries_.size(); }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,72 +14,34 @@ using content::BrowserThread;
 namespace chrome {
 namespace android {
 
-WebContentsDestroyedObserver::WebContentsDestroyedObserver(
-    BackgroundTabManager* owner,
-    content::WebContents* watched_contents)
-    : content::WebContentsObserver(watched_contents), owner_(owner) {}
-
-WebContentsDestroyedObserver::~WebContentsDestroyedObserver() {}
-
-void WebContentsDestroyedObserver::WebContentsDestroyed() {
-  DCHECK(owner_->IsBackgroundTab(web_contents()));
-  owner_->UnregisterBackgroundTab();
-}
-
-BackgroundTabManager::BackgroundTabManager() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  web_contents_ = nullptr;
-  profile_ = nullptr;
-}
-
-BackgroundTabManager::~BackgroundTabManager() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  web_contents_ = nullptr;
-  profile_ = nullptr;
-}
-
-bool BackgroundTabManager::IsBackgroundTab(
-    content::WebContents* web_contents) const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!web_contents)
-    return false;
-  return web_contents_ == web_contents;
-}
-
-void BackgroundTabManager::RegisterBackgroundTab(
-    content::WebContents* web_contents,
-    Profile* profile) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!web_contents_);
-  web_contents_ = web_contents;
+BackgroundTabManager::BackgroundTabManager(content::WebContents* web_contents,
+                                           Profile* profile)
+    : content::WebContentsUserData<BackgroundTabManager>(*web_contents) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   profile_ = profile;
-  web_contents_observer_ =
-      std::make_unique<WebContentsDestroyedObserver>(this, web_contents);
 }
+
+BackgroundTabManager::~BackgroundTabManager() = default;
 
 void BackgroundTabManager::UnregisterBackgroundTab() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(web_contents_);
-  web_contents_ = nullptr;
-  profile_ = nullptr;
-  cached_history_.clear();
-  web_contents_observer_.reset();
+  GetWebContents().RemoveUserData(UserDataKey());
+  // NOTE: |this| is deleted at this point, do not add logic here.
 }
 
 Profile* BackgroundTabManager::GetProfile() const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   return profile_;
 }
 
 void BackgroundTabManager::CacheHistory(
     const history::HistoryAddPageArgs& history_item) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   cached_history_.push_back(history_item);
 }
 
 void BackgroundTabManager::CommitHistory(
     history::HistoryService* history_service) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   // History service can be null in non exceptional conditions, e.g. incognito
   // mode. We clear the cached history in any case.
   if (history_service) {
@@ -90,9 +52,7 @@ void BackgroundTabManager::CommitHistory(
   cached_history_.clear();
 }
 
-BackgroundTabManager* BackgroundTabManager::GetInstance() {
-  return base::Singleton<BackgroundTabManager>::get();
-}
+WEB_CONTENTS_USER_DATA_KEY_IMPL(BackgroundTabManager);
 
 }  // namespace android
 }  // namespace chrome

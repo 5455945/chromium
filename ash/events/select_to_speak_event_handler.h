@@ -1,14 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_EVENTS_SELECT_TO_SPEAK_EVENT_HANDLER_H_
 #define ASH_EVENTS_SELECT_TO_SPEAK_EVENT_HANDLER_H_
 
+#include <set>
+
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
 
 namespace ash {
 
@@ -20,6 +23,11 @@ class ASH_EXPORT SelectToSpeakEventHandler : public ui::EventHandler {
  public:
   explicit SelectToSpeakEventHandler(
       SelectToSpeakEventHandlerDelegate* delegate);
+
+  SelectToSpeakEventHandler(const SelectToSpeakEventHandler&) = delete;
+  SelectToSpeakEventHandler& operator=(const SelectToSpeakEventHandler&) =
+      delete;
+
   ~SelectToSpeakEventHandler() override;
 
   // Called when the Select-to-Speak extension changes state. |is_selecting| is
@@ -28,11 +36,14 @@ class ASH_EXPORT SelectToSpeakEventHandler : public ui::EventHandler {
   // in an inactive state.
   void SetSelectToSpeakStateSelecting(bool is_selecting);
 
+  bool IsKeyDownForTesting(ui::KeyboardCode code) const;
+
  private:
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
   void OnTouchEvent(ui::TouchEvent* event) override;
+  std::string_view GetLogContext() const override;
 
   // Returns true if Select to Speak is enabled.
   bool IsSelectToSpeakEnabled();
@@ -101,10 +112,10 @@ class ASH_EXPORT SelectToSpeakEventHandler : public ui::EventHandler {
 
   ui::EventPointerType touch_type_ = ui::EventPointerType::kUnknown;
 
-  // The delegate used to send key events to the Select-to-Speak extension.
-  SelectToSpeakEventHandlerDelegate* delegate_;
+  std::set<ui::KeyboardCode> keys_currently_down_;
 
-  DISALLOW_COPY_AND_ASSIGN(SelectToSpeakEventHandler);
+  // The delegate used to send key events to the Select-to-Speak extension.
+  raw_ptr<SelectToSpeakEventHandlerDelegate> delegate_;
 };
 
 }  // namespace ash

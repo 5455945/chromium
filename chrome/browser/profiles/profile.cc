@@ -1,83 +1,98 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/profiles/profile.h"
 
+#include <sstream>
 #include <string>
 
-#include "base/bind.h"
+#include "base/check_deref.h"
+#include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "base/path_service.h"
+#include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/task_traits.h"
 #include "base/time/time.h"
-#include "base/trace_event/trace_event.h"
+#include "base/trace_event/typed_macros.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/profiles/profile_observer.h"
+#include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
-#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_prefs.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/live_caption/pref_names.h"
-#include "components/media_router/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "components/profile_metrics/browser_profile_type.h"
-#include "components/sync/driver/sync_driver_switches.h"
 #include "components/variations/variations.mojom.h"
 #include "components/variations/variations_client.h"
 #include "components/variations/variations_ids_provider.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_context.h"
+#include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "chromeos/constants/pref_names.h"
 #endif
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_string.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/profiles/android/jni_headers/OTRProfileID_jni.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/profiles/android/jni_headers/OtrProfileId_jni.h"
 #endif
 
-#if !defined(OS_ANDROID)
-#include "content/public/browser/host_zoom_map.h"
-#endif
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/browser/extension_pref_store.h"
-#include "extensions/browser/extension_pref_value_map_factory.h"
-#include "extensions/browser/pref_names.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_chrome_service_impl.h"
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/browser/extension_pref_store.h"              // nogncheck
+#include "extensions/browser/extension_pref_value_map_factory.h"  // nogncheck
+#include "extensions/browser/pref_names.h"                        // nogncheck
 #endif
 
 #if DCHECK_IS_ON()
 
 #include <set>
+
 #include "base/check_op.h"
-#include "base/lazy_instance.h"
+#include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
 
 namespace {
 
-base::LazyInstance<base::Lock>::Leaky g_profile_instances_lock =
-    LAZY_INSTANCE_INITIALIZER;
-base::LazyInstance<std::set<content::BrowserContext*>>::Leaky
-    g_profile_instances = LAZY_INSTANCE_INITIALIZER;
+base::Lock& GetProfileInstancesLock() {
+  static base::NoDestructor<base::Lock> profile_instances_lock;
+  return *profile_instances_lock;
+}
+
+std::set<content::BrowserContext*>& GetProfileInstances() {
+  static base::NoDestructor<std::set<content::BrowserContext*>>
+      profile_instances;
+  return *profile_instances;
+}
 
 }  // namespace
 
@@ -85,9 +100,23 @@ base::LazyInstance<std::set<content::BrowserContext*>>::Leaky
 
 namespace {
 
-const char kDevToolsOTRProfileIDPrefix[] = "Devtools::BrowserContext";
-const char kMediaRouterOTRProfileIDPrefix[] = "MediaRouter::Presentation";
-const char kTestOTRProfileIDPrefix[] = "Test::OTR";
+// The primary Profile ID used by Incognito and Guest profiles.
+constexpr char kPrimaryOTRProfileID[] = "profile::primary_otr";
+
+// WARNING: Adding new Profile ID prefixes is strongly discouraged.
+// Please avoid adding new prefixes and associated custom logic for Profile
+// differentiated by such prefixes. Consult with the profile owners before
+// proceeding if you believe a new prefix is strictly necessary.
+// See `chrome/browser/PRESUBMIT.py` which enforces this via a warning.
+constexpr char kDevToolsOTRProfileIDPrefix[] = "Devtools::BrowserContext";
+constexpr char kMediaRouterOTRProfileIDPrefix[] = "MediaRouter::Presentation";
+constexpr char kTestOTRProfileIDPrefix[] = "Test::OTR";
+
+#if BUILDFLAG(IS_CHROMEOS)
+constexpr char kCaptivePortalOTRProfileIDPrefix[] = "CaptivePortal::Signin";
+#endif
+
+using perfetto::protos::pbzero::ChromeTrackEvent;
 
 }  // namespace
 
@@ -96,20 +125,39 @@ Profile::OTRProfileID::OTRProfileID(const std::string& profile_id)
 
 bool Profile::OTRProfileID::AllowsBrowserWindows() const {
   // Non-Primary OTR profiles are not supposed to create Browser windows.
-  // DevTools::BrowserContext and MediaRouter::Presentation are an
-  // exception to this ban.
-  return *this == PrimaryID() ||
-         base::StartsWith(profile_id_, kDevToolsOTRProfileIDPrefix,
-                          base::CompareCase::SENSITIVE) ||
-         base::StartsWith(profile_id_, kMediaRouterOTRProfileIDPrefix,
+  // DevTools::BrowserContext, MediaRouter::Presentation, and
+  // CaptivePortal::Signin are exceptions to this ban.
+  if (*this == PrimaryID() || IsDevTools() ||
+      base::StartsWith(profile_id_, kMediaRouterOTRProfileIDPrefix,
+                       base::CompareCase::SENSITIVE)) {
+    return true;
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::StartsWith(profile_id_, kCaptivePortalOTRProfileIDPrefix,
+                       base::CompareCase::SENSITIVE)) {
+    return true;
+  }
+#endif
+  return false;
+}
+
+bool Profile::OTRProfileID::IsDevTools() const {
+  return base::StartsWith(profile_id_, kDevToolsOTRProfileIDPrefix,
                           base::CompareCase::SENSITIVE);
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+bool Profile::OTRProfileID::IsCaptivePortal() const {
+  return base::StartsWith(profile_id_, kCaptivePortalOTRProfileIDPrefix,
+                          base::CompareCase::SENSITIVE);
+}
+#endif
 
 // static
 const Profile::OTRProfileID Profile::OTRProfileID::PrimaryID() {
   // OTRProfileID value should be same as
-  // |OTRProfileID.java#sPrimaryOTRProfileID| variable.
-  return OTRProfileID("profile::primary_otr");
+  // |OtrProfileId.java#sPrimaryOtrProfileId| variable.
+  return OTRProfileID(kPrimaryOTRProfileID);
 }
 
 // static
@@ -117,7 +165,7 @@ Profile::OTRProfileID Profile::OTRProfileID::CreateUnique(
     const std::string& profile_id_prefix) {
   return OTRProfileID(base::StringPrintf(
       "%s-%s", profile_id_prefix.c_str(),
-      base::GUID::GenerateRandomV4().AsLowercaseString().c_str()));
+      base::Uuid::GenerateRandomV4().AsLowercaseString().c_str()));
 }
 
 // static
@@ -129,6 +177,13 @@ Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForDevTools() {
 Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForMediaRouter() {
   return CreateUnique(kMediaRouterOTRProfileIDPrefix);
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+// static
+Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForCaptivePortal() {
+  return CreateUnique(kCaptivePortalOTRProfileIDPrefix);
+}
+#endif
 
 // static
 Profile::OTRProfileID Profile::OTRProfileID::CreateUniqueForTesting() {
@@ -145,33 +200,31 @@ std::ostream& operator<<(std::ostream& out,
   return out;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 base::android::ScopedJavaLocalRef<jobject>
 Profile::OTRProfileID::ConvertToJavaOTRProfileID(JNIEnv* env) const {
-  return Java_OTRProfileID_Constructor(
-      env, base::android::ConvertUTF8ToJavaString(env, profile_id_));
+  return Java_OtrProfileId_Constructor(env, profile_id_);
 }
 
 // static
 Profile::OTRProfileID Profile::OTRProfileID::ConvertFromJavaOTRProfileID(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& j_otr_profile_id) {
-  return OTRProfileID(base::android::ConvertJavaStringToUTF8(
-      env, Java_OTRProfileID_getProfileID(env, j_otr_profile_id)));
+  return OTRProfileID(Java_OtrProfileId_getProfileId(env, j_otr_profile_id));
 }
 
 // static
-base::android::ScopedJavaLocalRef<jobject>
-JNI_OTRProfileID_CreateUniqueOTRProfileID(
+static base::android::ScopedJavaLocalRef<jobject>
+JNI_OtrProfileId_CreateUniqueOtrProfileId(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& j_profile_id_prefix) {
-  Profile::OTRProfileID profile_id = Profile::OTRProfileID::CreateUnique(
-      base::android::ConvertJavaStringToUTF8(env, j_profile_id_prefix));
+    const std::string& profile_id_prefix) {
+  Profile::OTRProfileID profile_id =
+      Profile::OTRProfileID::CreateUnique(profile_id_prefix);
   return profile_id.ConvertToJavaOTRProfileID(env);
 }
 
 // static
-base::android::ScopedJavaLocalRef<jobject> JNI_OTRProfileID_GetPrimaryID(
+static base::android::ScopedJavaLocalRef<jobject> JNI_OtrProfileId_GetPrimaryId(
     JNIEnv* env) {
   return Profile::OTRProfileID::PrimaryID().ConvertToJavaOTRProfileID(env);
 }
@@ -180,38 +233,40 @@ base::android::ScopedJavaLocalRef<jobject> JNI_OTRProfileID_GetPrimaryID(
 Profile::OTRProfileID Profile::OTRProfileID::Deserialize(
     const std::string& value) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jstring> j_value =
-      base::android::ConvertUTF8ToJavaString(env, value);
   base::android::ScopedJavaLocalRef<jobject> j_otr_profile_id =
-      Java_OTRProfileID_deserializeWithoutVerify(env, j_value);
+      Java_OtrProfileId_deserializeWithoutVerify(env, value);
   return ConvertFromJavaOTRProfileID(env, j_otr_profile_id);
 }
 
 std::string Profile::OTRProfileID::Serialize() const {
   JNIEnv* env = base::android::AttachCurrentThread();
-  return base::android::ConvertJavaStringToUTF8(
-      env, Java_OTRProfileID_serialize(env, ConvertToJavaOTRProfileID(env)));
+  return Java_OtrProfileId_serialize(env, ConvertToJavaOTRProfileID(env));
 }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
-Profile::Profile()
-    : resource_context_(std::make_unique<content::ResourceContext>()) {
+Profile::Profile(const OTRProfileID* otr_profile_id)
+    : otr_profile_id_(otr_profile_id ? std::make_optional(*otr_profile_id)
+                                     : std::nullopt) {
 #if DCHECK_IS_ON()
-  base::AutoLock lock(g_profile_instances_lock.Get());
-  g_profile_instances.Get().insert(this);
+  base::AutoLock lock(GetProfileInstancesLock());
+  GetProfileInstances().insert(this);
 #endif  // DCHECK_IS_ON()
 
   BrowserContextDependencyManager::GetInstance()->MarkBrowserContextLive(this);
+
+#if BUILDFLAG(IS_ANDROID)
+  InitJavaObject();
+#endif
 }
 
 Profile::~Profile() {
-  if (content::BrowserThread::IsThreadInitialized(content::BrowserThread::IO)) {
-    content::GetIOThreadTaskRunner({})->DeleteSoon(
-        FROM_HERE, std::move(resource_context_));
-  }
+#if BUILDFLAG(IS_ANDROID)
+  DestroyJavaObject();
+#endif
+
 #if DCHECK_IS_ON()
-  base::AutoLock lock(g_profile_instances_lock.Get());
-  g_profile_instances.Get().erase(this);
+  base::AutoLock lock(GetProfileInstancesLock());
+  GetProfileInstances().erase(this);
 #endif  // DCHECK_IS_ON()
 }
 
@@ -223,10 +278,10 @@ Profile* Profile::FromBrowserContext(content::BrowserContext* browser_context) {
   // For code running in a chrome/ environment, it is safe to cast to Profile*
   // because Profile is the only implementation of BrowserContext used. In
   // testing, however, there are several BrowserContext subclasses that are not
-  // Profile subclasses, and we can catch them. http://crbug.com/725276
+  // Profile subclasses, and we can catch them. http://crbug.com/40522064
 #if DCHECK_IS_ON()
-  base::AutoLock lock(g_profile_instances_lock.Get());
-  if (!g_profile_instances.Get().count(browser_context)) {
+  base::AutoLock lock(GetProfileInstancesLock());
+  if (!GetProfileInstances().count(browser_context)) {
     DCHECK(false)
         << "Non-Profile BrowserContext passed to Profile::FromBrowserContext! "
            "If you have a test linked in chrome/ you need a chrome/ based test "
@@ -264,14 +319,11 @@ TestingProfile* Profile::AsTestingProfile() {
   return nullptr;
 }
 
-#if !defined(OS_ANDROID)
 ChromeZoomLevelPrefs* Profile::GetZoomLevelPrefs() {
   return nullptr;
 }
-#endif  // !defined(OS_ANDROID)
 
-Profile::Delegate::~Delegate() {
-}
+Profile::Delegate::~Delegate() = default;
 
 // static
 const char Profile::kProfileKey[] = "__PROFILE__";
@@ -282,15 +334,19 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
       prefs::kSearchSuggestEnabled,
       true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   registry->RegisterStringPref(
       prefs::kContextualSearchEnabled,
       std::string(),
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-#endif  // defined(OS_ANDROID)
+  registry->RegisterBooleanPref(
+      prefs::kContextualSearchWasFullyPrivacyEnabled, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterIntegerPref(prefs::kContextualSearchPromoCardShownCount, 0);
+#endif  // BUILDFLAG(IS_ANDROID)
   registry->RegisterStringPref(prefs::kSessionExitType, std::string());
   registry->RegisterBooleanPref(prefs::kDisableExtensions, false);
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   registry->RegisterBooleanPref(extensions::pref_names::kAlertsInitialized,
                                 false);
 #endif
@@ -298,29 +354,37 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   base::PathService::Get(base::DIR_HOME, &home);
   registry->RegisterStringPref(prefs::kSelectFileLastDirectory,
                                home.MaybeAsASCII());
+#if BUILDFLAG(IS_CHROMEOS)
+  const uint32_t caption_registration_flags =
+      base::FeatureList::IsEnabled(
+          ash::features::kOsSyncAccessibilitySettingsBatch2)
+          ? user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF
+          : 0;
+#else
+  constexpr uint32_t caption_registration_flags = 0;
+#endif
   registry->RegisterStringPref(prefs::kAccessibilityCaptionsTextSize,
-                               std::string());
+                               std::string(), caption_registration_flags);
   registry->RegisterStringPref(prefs::kAccessibilityCaptionsTextFont,
-                               std::string());
+                               std::string(), caption_registration_flags);
   registry->RegisterStringPref(prefs::kAccessibilityCaptionsTextColor,
-                               std::string());
-  registry->RegisterIntegerPref(prefs::kAccessibilityCaptionsTextOpacity, 100);
+                               std::string(), caption_registration_flags);
+  registry->RegisterIntegerPref(prefs::kAccessibilityCaptionsTextOpacity, 100,
+                                caption_registration_flags);
   registry->RegisterIntegerPref(prefs::kAccessibilityCaptionsBackgroundOpacity,
-                                100);
+                                100, caption_registration_flags);
   registry->RegisterStringPref(prefs::kAccessibilityCaptionsBackgroundColor,
-                               std::string());
+                               std::string(), caption_registration_flags);
   registry->RegisterStringPref(prefs::kAccessibilityCaptionsTextShadow,
-                               std::string());
-#if !defined(OS_ANDROID)
+                               std::string(), caption_registration_flags);
   registry->RegisterDictionaryPref(prefs::kPartitionDefaultZoomLevel);
   registry->RegisterDictionaryPref(prefs::kPartitionPerHostZoomLevels);
-#endif  // !defined(OS_ANDROID)
-  registry->RegisterStringPref(prefs::kPreinstalledApps, "install");
-  registry->RegisterBooleanPref(prefs::kSpeechRecognitionFilterProfanities,
-                                true);
+  registry->RegisterStringPref(prefs::kPreinstalledExtensions, "install");
   registry->RegisterIntegerPref(prefs::kProfileIconVersion, 0);
+  registry->RegisterBooleanPref(prefs::kProfileIconWin11Format, false);
   registry->RegisterBooleanPref(prefs::kAllowDinosaurEasterEgg, true);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  registry->RegisterBooleanPref(chromeos::prefs::kCaptivePortalSignin, false);
   // TODO(dilmah): For OS_CHROMEOS we maintain kApplicationLocale in both
   // local state and user's profile.  For other platforms we maintain
   // kApplicationLocale only in local state.
@@ -329,35 +393,17 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterStringPref(
       language::prefs::kApplicationLocale, std::string(),
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PRIORITY_PREF);
-  registry->RegisterStringPref(prefs::kApplicationLocaleBackup, std::string());
-  registry->RegisterStringPref(prefs::kApplicationLocaleAccepted,
+  registry->RegisterStringPref(ash::prefs::kApplicationLocaleBackup,
+                               std::string());
+  registry->RegisterStringPref(ash::prefs::kApplicationLocaleAccepted,
                                std::string());
 #endif
 
-  data_reduction_proxy::RegisterSyncableProfilePrefs(registry);
-
-#if !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
-  // Preferences related to the avatar bubble and user manager tutorials.
-  registry->RegisterIntegerPref(prefs::kProfileAvatarTutorialShown, 0);
-#endif
-
-#if defined(OS_ANDROID)
-  registry->RegisterBooleanPref(prefs::kClickedUpdateMenuItem, false);
+#if BUILDFLAG(IS_ANDROID)
   registry->RegisterStringPref(prefs::kLatestVersionWhenClickedUpdateMenuItem,
                                std::string());
-#endif
-
-#if !defined(OS_ANDROID)
-  registry->RegisterBooleanPref(
-      media_router::prefs::kMediaRouterCloudServicesPrefSet, false,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterBooleanPref(
-      media_router::prefs::kMediaRouterEnableCloudServices, false,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterBooleanPref(
-      media_router::prefs::kMediaRouterMediaRemotingEnabled, true);
-  registry->RegisterListPref(
-      media_router::prefs::kMediaRouterTabMirroringSources);
+  registry->RegisterStringPref(prefs::kCommerceMerchantViewerMessagesShownTime,
+                               std::string());
 #endif
 
   registry->RegisterDictionaryPref(prefs::kWebShareVisitedTargets);
@@ -381,51 +427,52 @@ bool Profile::IsIncognitoProfile() const {
          profile_metrics::BrowserProfileType::kIncognito;
 }
 
-// static
-bool Profile::IsEphemeralGuestProfileEnabled() {
-  return false;
+bool Profile::IsEnterpriseIsolatedModeProfile() const {
+  return profile_metrics::GetBrowserProfileType(this) ==
+         profile_metrics::BrowserProfileType::kEnterpriseIsolated;
+}
+
+bool Profile::IsPrimaryOTRProfileWithRegularParent() const {
+  return IsIncognitoProfile() || IsEnterpriseIsolatedModeProfile();
 }
 
 bool Profile::IsGuestSession() const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  static bool is_guest_session =
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          chromeos::switches::kGuestSession);
-  return is_guest_session;
-#else
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  DCHECK(chromeos::LacrosChromeServiceImpl::Get());
-  if (chromeos::LacrosChromeServiceImpl::Get()->init_params()->session_type ==
-      crosapi::mojom::SessionType::kGuestSession) {
-    return true;
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
   return profile_metrics::GetBrowserProfileType(this) ==
          profile_metrics::BrowserProfileType::kGuest;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 PrefService* Profile::GetReadOnlyOffTheRecordPrefs() {
   return nullptr;
 }
 
-bool Profile::IsEphemeralGuestProfile() const {
-  CHECK_NE(profile_metrics::GetBrowserProfileType(this),
-           profile_metrics::BrowserProfileType::kEphemeralGuest);
-  return false;
-}
-
 bool Profile::IsSystemProfile() const {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+  CHECK_NE(profile_metrics::GetBrowserProfileType(this),
+           profile_metrics::BrowserProfileType::kSystem,
+           base::NotFatalUntil::M162);
+  return false;
+#else  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   return profile_metrics::GetBrowserProfileType(this) ==
          profile_metrics::BrowserProfileType::kSystem;
+#endif
+}
+
+bool Profile::IsTopChromeWebUIProfile() const {
+  return profile_metrics::GetBrowserProfileType(this) ==
+         profile_metrics::BrowserProfileType::kTopChromeWebUIProfile;
 }
 
 bool Profile::IsPrimaryOTRProfile() const {
-  return IsOffTheRecord() && GetOTRProfileID() == OTRProfileID::PrimaryID();
+  return otr_profile_id_.has_value() &&
+         otr_profile_id_.value() == OTRProfileID::PrimaryID();
+}
+
+bool Profile::IsDevToolsOTRProfile() const {
+  return otr_profile_id_.has_value() && otr_profile_id_->IsDevTools();
 }
 
 bool Profile::CanUseDiskWhenOffTheRecord() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Guest mode on ChromeOS uses an in-memory file system to store the profile
   // in, so despite this being an off the record profile, it is still okay to
   // store data on disk.
@@ -435,7 +482,7 @@ bool Profile::CanUseDiskWhenOffTheRecord() {
 #endif
 }
 
-bool Profile::ShouldRestoreOldSessionCookies() const {
+bool Profile::ShouldRestoreOldSessionCookies() {
   return false;
 }
 
@@ -444,43 +491,48 @@ bool Profile::ShouldPersistSessionCookies() const {
 }
 
 void Profile::MaybeSendDestroyedNotification() {
-  TRACE_EVENT1("shutdown", "Profile::MaybeSendDestroyedNotification", "profile",
-               this);
+  TRACE_EVENT("shutdown", "Profile::MaybeSendDestroyedNotification",
+               ChromeTrackEvent::kChromeBrowserContext, this);
 
-  if (!sent_destroyed_notification_) {
-    sent_destroyed_notification_ = true;
+  if (sent_destroyed_notification_)
+    return;
+  sent_destroyed_notification_ = true;
 
-    NotifyWillBeDestroyed();
+  NotifyWillBeDestroyed();
 
-    for (auto& observer : observers_)
-      observer.OnProfileWillBeDestroyed(this);
+#if BUILDFLAG(IS_ANDROID)
+  NotifyJavaOnProfileWillBeDestroyed();
+#endif
+
+  for (auto& observer : observers_) {
+    observer.OnProfileWillBeDestroyed(this);
   }
 }
 
 // static
-PrefStore* Profile::CreateExtensionPrefStore(Profile* profile,
-                                             bool incognito_pref_store) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  return new ExtensionPrefStore(
-      ExtensionPrefValueMapFactory::GetForBrowserContext(profile),
-      incognito_pref_store);
-#else
-  return nullptr;
+scoped_refptr<PrefStore> Profile::CreateExtensionPrefStore(
+    Profile* profile,
+    bool incognito_pref_store) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (ExtensionPrefValueMap* pref_value_map =
+          ExtensionPrefValueMapFactory::GetForBrowserContext(profile)) {
+    return base::MakeRefCounted<ExtensionPrefStore>(pref_value_map,
+                                                    incognito_pref_store);
+  }
 #endif
+  return nullptr;
 }
 
 bool ProfileCompare::operator()(Profile* a, Profile* b) const {
-  DCHECK(a && b);
+  CHECK(a && b, base::NotFatalUntil::M162);
   if (a->IsSameOrParent(b))
     return false;
   return a->GetOriginalProfile() < b->GetOriginalProfile();
 }
 
-#if !defined(OS_ANDROID)
 double Profile::GetDefaultZoomLevelForProfile() {
   return GetDefaultStoragePartition()->GetHostZoomMap()->GetDefaultZoomLevel();
 }
-#endif  // !defined(OS_ANDROID)
 
 void Profile::Wipe() {
   GetBrowsingDataRemover()->Remove(
@@ -490,18 +542,71 @@ void Profile::Wipe() {
 }
 
 void Profile::NotifyOffTheRecordProfileCreated(Profile* off_the_record) {
-  DCHECK_EQ(off_the_record->GetOriginalProfile(), this);
-  DCHECK(off_the_record->IsOffTheRecord());
+  CHECK_EQ(off_the_record->GetOriginalProfile(), this,
+           base::NotFatalUntil::M162);
+  CHECK(off_the_record->IsOffTheRecord(), base::NotFatalUntil::M162);
   for (auto& observer : observers_)
     observer.OnOffTheRecordProfileCreated(off_the_record);
+}
+
+void Profile::NotifyProfileInitializationComplete() {
+  CHECK(!IsOffTheRecord(), base::NotFatalUntil::M162);
+  for (auto& observer : observers_) {
+    observer.OnProfileInitializationComplete(this);
+  }
+}
+
+void Profile::ScheduleCreateServicesAfterStartup() {
+  AfterStartupTaskUtils::PostTask(
+      FROM_HERE,
+      content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT}),
+      base::BindOnce(
+          [](base::WeakPtr<Profile> profile) {
+            if (!profile || profile->ShutdownStarted()) {
+              return;
+            }
+            BrowserContextDependencyManager::GetInstance()
+                ->CreateBrowserContextServicesAfterStartup(profile.get());
+          },
+          GetWeakPtr()));
 }
 
 Profile* Profile::GetPrimaryOTRProfile(bool create_if_needed) {
   return GetOffTheRecordProfile(OTRProfileID::PrimaryID(), create_if_needed);
 }
 
+const Profile::OTRProfileID& Profile::GetOTRProfileID() const {
+  CHECK(IsOffTheRecord(), base::NotFatalUntil::M162);
+  return otr_profile_id_.value();
+}
+
 bool Profile::HasPrimaryOTRProfile() {
   return HasOffTheRecordProfile(OTRProfileID::PrimaryID());
+}
+
+bool Profile::AllowsBrowserWindows() const {
+  if (allows_browser_windows_for_testing_.has_value()) {
+    CHECK_IS_TEST();
+    return allows_browser_windows_for_testing_.value();
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Do not allow Browsers on non-user profiles.
+  if (!ash::IsUserBrowserContext(GetOriginalProfile())) {
+    return false;
+  }
+#endif
+  // Only OTR Browsers may be opened in guest mode.
+  if (IsGuestSession() && !IsOffTheRecord()) {
+    return false;
+  }
+
+  // Some OTR profiles are not allowed to open Browsers.
+  if (otr_profile_id_.has_value() && !otr_profile_id_->AllowsBrowserWindows()) {
+    return false;
+  }
+
+  return !IsSystemProfile();
 }
 
 class Profile::ChromeVariationsClient : public variations::VariationsClient {
@@ -519,8 +624,12 @@ class Profile::ChromeVariationsClient : public variations::VariationsClient {
   }
 
  private:
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 };
+
+bool Profile::IsOffTheRecord() {
+  return otr_profile_id_.has_value();
+}
 
 variations::VariationsClient* Profile::GetVariationsClient() {
   if (!chrome_variations_client_)
@@ -528,6 +637,47 @@ variations::VariationsClient* Profile::GetVariationsClient() {
   return chrome_variations_client_.get();
 }
 
-content::ResourceContext* Profile::GetResourceContext() {
-  return resource_context_.get();
+base::WeakPtr<Profile> Profile::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
+
+uint64_t Profile::GetLomProfileId() {
+  PrefService* prefs = GetPrefs();
+  CHECK(prefs);
+  uint64_t id = prefs->GetUint64(prefs::kLomProfileId);
+  if (id == 0u) {
+    while (id == 0u) {
+      id = base::RandUint64();
+    }
+    prefs->SetUint64(prefs::kLomProfileId, id);
+  }
+  return id;
+}
+
+std::string Profile::ToDebugString() const {
+  std::ostringstream out;
+  out << "(" << this << "):" << (IsRegularProfile() ? " regular" : "")
+      << (IsIncognitoProfile() ? " incognito" : "")
+      << (IsGuestSession() ? " guest" : "")
+      << (IsSystemProfile() ? " system" : "");
+  if (IsOffTheRecord()) {
+    out << ", otr";
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  if (ash::IsSigninBrowserContext(this)) {
+    out << ", signin";
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  if (GetOriginalProfile() == this) {
+    out << ", is-original";
+  } else {
+    out << ", original=[" << GetOriginalProfile()->ToDebugString() << "]";
+  }
+
+  return out.str();
+}
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(OtrProfileId)
+#endif

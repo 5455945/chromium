@@ -1,24 +1,31 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
 
 #include <algorithm>
-#include <cctype>
+#include <functional>
 #include <numeric>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/memory_usage_estimator.h"
+#include "build/build_config.h"
 #include "components/omnibox/browser/buildflags.h"
 #include "components/omnibox/browser/omnibox_client.h"
-#include "components/omnibox/browser/omnibox_edit_controller.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/omnibox/resources/grit/omnibox_pedal_synonyms.h"
+#include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 
-#if (!defined(OS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !defined(OS_IOS)
+#if defined(SUPPORT_PEDALS_VECTOR_ICONS)
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_android.h"
+#include "components/omnibox/browser/actions/omnibox_action_factory_android.h"
 #endif
 
 OmniboxPedal::TokenSequence::TokenSequence(size_t reserve_size) {
@@ -34,6 +41,8 @@ OmniboxPedal::TokenSequence::TokenSequence(std::vector<int> token_ids) {
 
 OmniboxPedal::TokenSequence::TokenSequence(OmniboxPedal::TokenSequence&&) =
     default;
+OmniboxPedal::TokenSequence& OmniboxPedal::TokenSequence::operator=(
+    OmniboxPedal::TokenSequence&&) = default;
 OmniboxPedal::TokenSequence::~TokenSequence() = default;
 
 bool OmniboxPedal::TokenSequence::IsFullyConsumed() {
@@ -177,7 +186,7 @@ bool OmniboxPedal::SynonymGroup::EraseMatchesIn(
   auto eraser = fully_erase ? &TokenSequence::Erase : &TokenSequence::Consume;
   bool changed = false;
   for (const auto& synonym : synonyms_) {
-    if (base::invoke(eraser, remaining, synonym, match_once_)) {
+    if (std::invoke(eraser, remaining, synonym, match_once_)) {
       changed = true;
       if (match_once_) {
         break;
@@ -189,12 +198,14 @@ bool OmniboxPedal::SynonymGroup::EraseMatchesIn(
 
 void OmniboxPedal::SynonymGroup::AddSynonym(
     OmniboxPedal::TokenSequence synonym) {
-#if DCHECK_IS_ON()
-  if (synonyms_.size() > size_t{0}) {
-    DCHECK_GE(synonyms_.back().Size(), synonym.Size());
-  }
-#endif
   synonyms_.push_back(std::move(synonym));
+}
+
+void OmniboxPedal::SynonymGroup::SortSynonyms() {
+  std::sort(synonyms_.begin(), synonyms_.end(),
+            [](const TokenSequence& a, const TokenSequence& b) {
+              return a.Size() > b.Size();
+            });
 }
 
 size_t OmniboxPedal::SynonymGroup::EstimateMemoryUsage() const {
@@ -210,42 +221,41 @@ void OmniboxPedal::SynonymGroup::EraseIgnoreGroup(
 }
 
 bool OmniboxPedal::SynonymGroup::IsValid() const {
-  return std::all_of(synonyms_.begin(), synonyms_.end(),
-                     [](const auto& synonym) { return synonym.Size() > 0; });
+  return std::ranges::all_of(
+      synonyms_, [](const auto& synonym) { return synonym.Size() > 0; });
 }
 
 // =============================================================================
 
 OmniboxPedal::OmniboxPedal(OmniboxPedalId id, LabelStrings strings, GURL url)
-    : OmniboxAction(strings, url), id_(id) {}
+    : OmniboxAction(strings, url),
+      id_(id),
+      verbatim_synonym_group_(false, true, 0) {}
+
+/* static */ const OmniboxPedal* OmniboxPedal::FromAction(
+    const OmniboxAction* action) {
+  if (action && action->ActionId() == OmniboxActionId::PEDAL) {
+    return static_cast<const OmniboxPedal*>(action);
+  }
+  return nullptr;
+}
 
 OmniboxPedal::~OmniboxPedal() = default;
 
-void OmniboxPedal::SetLabelStrings(const base::Value& ui_strings) {
-  DCHECK(ui_strings.is_dict());
-  // The pedal_processor tool ensures that this dictionary is either omitted,
-  //  or else included with all these keys populated.
-  ui_strings.FindKey("button_text")->GetAsString(&strings_.hint);
-  ui_strings.FindKey("description_text")
-      ->GetAsString(&strings_.suggestion_contents);
-  ui_strings.FindKey("spoken_button_focus_announcement")
-      ->GetAsString(&strings_.accessibility_hint);
-  ui_strings.FindKey("spoken_suggestion_description_suffix")
-      ->GetAsString(&strings_.accessibility_suffix);
+void OmniboxPedal::OnLoaded() {
+  // Default implementation makes no change so the pedal works as declared.
 }
 
 void OmniboxPedal::SetNavigationUrl(const GURL& url) {
   url_ = url;
 }
 
-#if (!defined(OS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !defined(OS_IOS)
+#if defined(SUPPORT_PEDALS_VECTOR_ICONS)
 // static
 const gfx::VectorIcon& OmniboxPedal::GetDefaultVectorIcon() {
-  if (OmniboxFieldTrial::IsPedalsDefaultIconColored()) {
-    return omnibox::kPedalIcon;
-  } else {
-    return omnibox::kProductIcon;
-  }
+  return features::IsRoundedIconsEnabled()
+             ? omnibox::kChromeProductIcon
+             : omnibox::kProductChromeRefreshOldIcon;
 }
 
 const gfx::VectorIcon& OmniboxPedal::GetVectorIcon() const {
@@ -253,40 +263,112 @@ const gfx::VectorIcon& OmniboxPedal::GetVectorIcon() const {
 }
 #endif
 
+void OmniboxPedal::AddVerbatimSequence(TokenSequence sequence) {
+  sequence.ResetLinks();
+  verbatim_synonym_group_.AddSynonym(std::move(sequence));
+}
+
 void OmniboxPedal::AddSynonymGroup(SynonymGroup&& group) {
   synonym_groups_.push_back(std::move(group));
 }
 
-std::vector<OmniboxPedal::SynonymGroupSpec> OmniboxPedal::SpecifySynonymGroups()
-    const {
+std::vector<OmniboxPedal::SynonymGroupSpec> OmniboxPedal::SpecifySynonymGroups(
+    bool locale_is_english) const {
   return {};
 }
 
-void OmniboxPedal::RecordActionShown() const {
-  base::UmaHistogramEnumeration("Omnibox.PedalShown", id(),
-                                OmniboxPedalId::TOTAL_COUNT);
+OmniboxPedalId OmniboxPedal::GetMetricsId() const {
+  return PedalId();
 }
 
-void OmniboxPedal::RecordActionExecuted() const {
-  base::UmaHistogramEnumeration("Omnibox.SuggestionUsed.Pedal", id(),
+bool OmniboxPedal::IsConceptMatch(TokenSequence& match_sequence) const {
+  verbatim_synonym_group_.EraseMatchesIn(match_sequence, false);
+  if (match_sequence.IsFullyConsumed()) {
+    return true;
+  }
+  match_sequence.ResetLinks();
+
+  for (const auto& group : synonym_groups_) {
+    if (!group.EraseMatchesIn(match_sequence, false))
+      return false;
+  }
+  return match_sequence.IsFullyConsumed();
+}
+
+void OmniboxPedal::RecordActionShown(size_t /*position*/, bool executed) const {
+  // Action metrics are recorded in the UI layer on iOS.
+#if !BUILDFLAG(IS_IOS)
+  base::UmaHistogramEnumeration("Omnibox.PedalShown", GetMetricsId(),
                                 OmniboxPedalId::TOTAL_COUNT);
+  if (executed) {
+    base::UmaHistogramEnumeration("Omnibox.SuggestionUsed.Pedal",
+                                  GetMetricsId(), OmniboxPedalId::TOTAL_COUNT);
+  }
+#endif  // BUILDFLAG(IS_IOS)
 }
 
 size_t OmniboxPedal::EstimateMemoryUsage() const {
   size_t total = 0;
   total += OmniboxAction::EstimateMemoryUsage();
   total += base::trace_event::EstimateMemoryUsage(synonym_groups_);
+  total += base::trace_event::EstimateMemoryUsage(verbatim_synonym_group_);
   return total;
 }
 
-int32_t OmniboxPedal::GetID() const {
-  return static_cast<int32_t>(id());
+OmniboxActionId OmniboxPedal::ActionId() const {
+  return OmniboxActionId::PEDAL;
 }
 
-bool OmniboxPedal::IsConceptMatch(TokenSequence& match_sequence) const {
-  for (const auto& group : synonym_groups_) {
-    if (!group.EraseMatchesIn(match_sequence, false))
-      return false;
+#if BUILDFLAG(IS_ANDROID)
+base::android::ScopedJavaLocalRef<jobject> OmniboxPedal::GetOrCreateJavaObject(
+    JNIEnv* env) const {
+  if (!j_omnibox_action_) {
+    j_omnibox_action_.Reset(
+        BuildOmniboxPedal(env, reinterpret_cast<intptr_t>(this), strings_.hint,
+                          strings_.accessibility_hint, PedalId()));
   }
-  return match_sequence.IsFullyConsumed();
+  return base::android::ScopedJavaLocalRef<jobject>(j_omnibox_action_);
+}
+#endif
+
+TestOmniboxPedalClearBrowsingData::TestOmniboxPedalClearBrowsingData()
+    : OmniboxPedal(
+          OmniboxPedalId::CLEAR_BROWSING_DATA,
+          LabelStrings(
+              IDS_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_HINT,
+              IDS_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_SUGGESTION_CONTENTS,
+              IDS_ACC_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_SUFFIX,
+              IDS_ACC_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA),
+          GURL("chrome://settings/clearBrowserData")) {}
+
+std::vector<OmniboxPedal::SynonymGroupSpec>
+TestOmniboxPedalClearBrowsingData::SpecifySynonymGroups(
+    bool locale_is_english) const {
+  if (locale_is_english) {
+    return {
+        {
+            false,
+            true,
+            IDS_OMNIBOX_PEDAL_SYNONYMS_CLEAR_BROWSING_DATA_ONE_OPTIONAL_GOOGLE_CHROME,
+        },
+        {
+            true,
+            true,
+            IDS_OMNIBOX_PEDAL_SYNONYMS_CLEAR_BROWSING_DATA_ONE_REQUIRED_DELETE,
+        },
+        {
+            true,
+            true,
+            IDS_OMNIBOX_PEDAL_SYNONYMS_CLEAR_BROWSING_DATA_ONE_REQUIRED_INFORMATION,
+        },
+    };
+  } else {
+    return {
+        {
+            true,
+            true,
+            IDS_OMNIBOX_PEDAL_SYNONYMS_CLEAR_BROWSING_DATA_ONE_REQUIRED_CLEAR_BROWSER_CACHE,
+        },
+    };
+  }
 }

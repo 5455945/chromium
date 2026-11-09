@@ -1,57 +1,48 @@
-# Copyright 2020 The Chromium Authors.All rights reserved.
-# Use of this source code is governed by a BSD - style license that can be
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-source_set("updates") {
-  sources = [
-    "update_notification_config.cc",
-    "update_notification_config.h",
-    "update_notification_info.cc",
-    "update_notification_info.h",
-    "update_notification_service.h",
-    "update_notification_service_bridge.h",
-  ]
+source_set("update_metrics") {
+  assert(is_linux || is_win || is_mac)
 
-  deps = [
-    ":factory",
-    "//base",
-    "//components/keyed_service/core",
-  ]
+  public = [ "update_metrics_provider.h" ]
+
+  public_deps = [ "//components/metrics" ]
 }
 
-source_set("factory") {
-  sources = [
-    "update_notification_service_factory.cc",
-    "update_notification_service_factory.h",
-  ]
+source_set("impl") {
+  assert(is_linux || is_win || is_mac)
+
+  sources = [ "update_metrics_provider.cc" ]
+
+  public_deps = [ ":update_metrics" ]
 
   deps = [
     "//base",
-    "//chrome/browser/notifications/proto",
-    "//chrome/browser/notifications/scheduler/public",
-    "//chrome/browser/updates/internal:lib",
-    "//components/keyed_service/core",
-    "//components/leveldb_proto",
-    "//skia",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/upgrade_detector",
+    "//chrome/common",
+    "//components/keep_alive_registry",
+    "//content/public/browser",
+    "//url",
   ]
 }
 
-source_set("unit_tests") {
+source_set("browser_tests") {
   testonly = true
-  sources = [
-    "internal/update_notification_service_impl_unittest.cc",
-    "test/mock_update_notification_service_bridge.cc",
-    "test/mock_update_notification_service_bridge.h",
-    "update_notification_config_unittest.cc",
-  ]
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [ "update_metrics_provider_browsertest.cc" ]
+
   deps = [
-    ":updates",
-    "//chrome/browser/notifications/scheduler/public",
-    "//chrome/browser/notifications/scheduler/test:test_support",
-    "//chrome/browser/updates/internal:lib",
+    ":update_metrics",
+    "//chrome/browser/profiles/keep_alive",
+    "//chrome/browser/ui:browser_commands",
+    "//chrome/browser/upgrade_detector",
+    "//chrome/common",
     "//chrome/test:test_support",
-    "//skia",
-    "//testing/gmock",
+    "//components/keep_alive_registry",
+    "//content/test:test_support",
     "//testing/gtest",
+    "//url",
   ]
 }

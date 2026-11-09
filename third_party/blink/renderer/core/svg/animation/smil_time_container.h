@@ -26,15 +26,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_ANIMATION_SMIL_TIME_CONTAINER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_ANIMATION_SMIL_TIME_CONTAINER_H_
 
-#include "base/dcheck_is_on.h"
 #include "base/time/time.h"
-#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
+#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/svg/animation/priority_queue.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_time.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_counted_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
 namespace blink {
 
@@ -80,6 +79,8 @@ class CORE_EXPORT SMILTimeContainer final
 
   void Trace(Visitor*) const;
 
+  void DidAttachLayoutObject();
+
  private:
   enum FrameSchedulingState {
     // No frame scheduled.
@@ -92,9 +93,11 @@ class CORE_EXPORT SMILTimeContainer final
     kAnimationFrame
   };
 
+  void WillScheduleFirstTimedElement();
   bool IsTimelineRunning() const;
   void SynchronizeToDocumentTimeline();
-  void ScheduleAnimationFrame(base::TimeDelta delay_time);
+  void ScheduleAnimationFrame(base::TimeDelta delay_time,
+                              bool disable_throttling);
   void CancelAnimationFrame();
   void WakeupTimerFired(TimerBase*);
   mojom::blink::ImageAnimationPolicy AnimationPolicy() const;
@@ -105,8 +108,9 @@ class CORE_EXPORT SMILTimeContainer final
   void ResetIntervals();
   void UpdateIntervals(TimingUpdate&);
   void UpdateTimedElements(TimingUpdate&);
-  void ApplyTimedEffects(SMILTime elapsed);
-  SMILTime NextProgressTime(SMILTime presentation_time) const;
+  bool ApplyTimedEffects(SMILTime elapsed);
+  SMILTime NextProgressTime(SMILTime presentation_time,
+                            bool disable_throttling) const;
   void ServiceOnNextFrame();
   void ScheduleWakeUp(base::TimeDelta delay_time, FrameSchedulingState);
   bool HasPendingSynchronization() const;
@@ -146,19 +150,13 @@ class CORE_EXPORT SMILTimeContainer final
 
   Member<SVGSVGElement> owner_svg_element_;
 
-#if DCHECK_IS_ON()
   friend class AnimationTargetsMutationsForbidden;
-  // This boolean will catch any attempts to mutate (schedule/unschedule)
-  // |scheduled_animations_| when it is set to true.
-  bool prevent_animation_targets_changes_ = false;
-#endif
+  // Set while |animated_targets_| and |priority_queue_| are being
+  // iterated; (un)scheduling timed elements is forbidden while set.
+  bool animation_targets_mutations_forbidden_ = false;
 
   bool AnimationTargetsMutationsAllowed() const {
-#if DCHECK_IS_ON()
-    return !prevent_animation_targets_changes_;
-#else
-    return true;
-#endif
+    return !animation_targets_mutations_forbidden_;
   }
 };
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,18 @@
 
 #include "base/i18n/time_formatting.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "components/feature_engagement/public/feature_list.h"
 #include "components/google/core/common/google_util.h"
 #include "components/grit/components_resources.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/security_interstitials/core/common_string_util.h"
 #include "components/security_interstitials/core/controller_client.h"
 #include "components/security_interstitials/core/metrics_helper.h"
 #include "components/strings/grit/components_strings.h"
-#include "net/base/escape.h"
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -40,7 +42,6 @@ void RecordExtendedReportingPrefChanged(bool report) {
 
 SafeBrowsingLoudErrorUI::SafeBrowsingLoudErrorUI(
     const GURL& request_url,
-    const GURL& main_frame_url,
     SBInterstitialReason reason,
     const SBErrorDisplayOptions& display_options,
     const std::string& app_locale,
@@ -48,13 +49,15 @@ SafeBrowsingLoudErrorUI::SafeBrowsingLoudErrorUI(
     ControllerClient* controller,
     bool created_prior_to_navigation)
     : BaseSafeBrowsingErrorUI(request_url,
-                              main_frame_url,
                               reason,
                               display_options,
                               app_locale,
                               time_triggered,
                               controller),
       created_prior_to_navigation_(created_prior_to_navigation) {
+  user_made_decision_ = false;
+  interstitial_interaction_data_ =
+      std::make_unique<InterstitialInteractionMap>();
   controller->metrics_helper()->RecordUserDecision(MetricsHelper::SHOW);
   controller->metrics_helper()->RecordUserInteraction(
       MetricsHelper::TOTAL_VISITS);
@@ -69,41 +72,39 @@ SafeBrowsingLoudErrorUI::~SafeBrowsingLoudErrorUI() {
 }
 
 void SafeBrowsingLoudErrorUI::PopulateStringsForHtml(
-    base::Value* load_time_data) {
-  DCHECK(load_time_data);
-
-  load_time_data->SetStringKey("type", "SAFEBROWSING");
-  load_time_data->SetStringKey(
-      "tabTitle", l10n_util::GetStringUTF16(IDS_SAFEBROWSING_V3_TITLE));
-  load_time_data->SetStringKey(
+    base::DictValue& load_time_data) {
+  load_time_data.Set("type", "SAFEBROWSING");
+  load_time_data.Set("tabTitle",
+                     l10n_util::GetStringUTF16(IDS_SAFEBROWSING_V3_TITLE));
+  load_time_data.Set(
       "openDetails",
       l10n_util::GetStringUTF16(IDS_SAFEBROWSING_V3_OPEN_DETAILS_BUTTON));
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       "closeDetails",
       l10n_util::GetStringUTF16(IDS_SAFEBROWSING_V3_CLOSE_DETAILS_BUTTON));
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       "primaryButtonText",
       l10n_util::GetStringUTF16(IDS_SAFEBROWSING_OVERRIDABLE_SAFETY_BUTTON));
-  load_time_data->SetBoolKey("overridable", !is_proceed_anyway_disabled());
-  load_time_data->SetStringKey(
+  load_time_data.Set("overridable", !is_proceed_anyway_disabled());
+  load_time_data.Set("disableKeyboardOverride", is_proceed_anyway_disabled());
+  load_time_data.Set(
       security_interstitials::kOptInLink,
       l10n_util::GetStringUTF16(IDS_SAFE_BROWSING_SCOUT_REPORTING_AGREE));
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       security_interstitials::kEnhancedProtectionMessage,
       l10n_util::GetStringUTF16(IDS_SAFE_BROWSING_ENHANCED_PROTECTION_MESSAGE));
 
   if (always_show_back_to_safety()) {
-    load_time_data->SetBoolKey("hide_primary_button", false);
+    load_time_data.Set("hide_primary_button", false);
   } else {
-    load_time_data->SetBoolKey("hide_primary_button",
-                               created_prior_to_navigation_
-                                   ? !controller()->CanGoBackBeforeNavigation()
-                                   : !controller()->CanGoBack());
+    load_time_data.Set("hide_primary_button",
+                       created_prior_to_navigation_
+                           ? !controller()->CanGoBackBeforeNavigation()
+                           : !controller()->CanGoBack());
   }
 
-  load_time_data->SetBoolKey(
-      "billing",
-      interstitial_reason() == BaseSafeBrowsingErrorUI::SB_REASON_BILLING);
+  load_time_data.Set("billing", interstitial_reason() ==
+                                    BaseSafeBrowsingErrorUI::SB_REASON_BILLING);
 
   switch (interstitial_reason()) {
     case BaseSafeBrowsingErrorUI::SB_REASON_MALWARE:
@@ -120,34 +121,38 @@ void SafeBrowsingLoudErrorUI::PopulateStringsForHtml(
       break;
   }
 
-  // Not used by this interstitial.
-  load_time_data->SetStringKey("recurrentErrorParagraph", "");
-  load_time_data->SetBoolKey("show_recurrent_error_paragraph", false);
-
   PopulateExtendedReportingOption(load_time_data);
   PopulateEnhancedProtectionMessage(load_time_data);
 }
 
 void SafeBrowsingLoudErrorUI::HandleCommand(
     SecurityInterstitialCommand command) {
+  UpdateInterstitialInteractionData(command);
+
   switch (command) {
     case CMD_PROCEED: {
       // User pressed on the button to proceed.
       if (!is_proceed_anyway_disabled()) {
+        user_made_decision_ = true;
         controller()->metrics_helper()->RecordUserDecision(
             MetricsHelper::PROCEED);
         controller()->Proceed();
         break;
       }
       // If the user can't proceed, fall through to CMD_DONT_PROCEED.
-      FALLTHROUGH;
+      [[fallthrough]];
     }
     case CMD_DONT_PROCEED: {
       // User pressed on the button to return to safety.
+      // Only record a user decision if the command was actually
+      // CMD_DONT_PROCEED (not a fallthrough from a policy-blocked CMD_PROCEED).
+      if (command == CMD_DONT_PROCEED) {
+        user_made_decision_ = true;
+      }
       // Don't record the user action here because there are other ways of
       // triggering DontProceed, like clicking the back button.
-      if (is_main_frame_load_blocked()) {
-        // If the load is blocked, we want to close the interstitial and discard
+      if (is_main_frame_load_pending()) {
+        // If the load is pending, we want to close the interstitial and discard
         // the pending entry.
         controller()->GoBack();
       } else {
@@ -178,16 +183,7 @@ void SafeBrowsingLoudErrorUI::HandleCommand(
       break;
     }
     case CMD_OPEN_HELP_CENTER: {
-      // User pressed "Learn more".
-      controller()->metrics_helper()->RecordUserInteraction(
-          security_interstitials::MetricsHelper::SHOW_LEARN_MORE);
-
-      GURL learn_more_url = controller()->GetBaseHelpCenterUrl();
-      learn_more_url = net::AppendQueryParameter(
-          learn_more_url, "p", get_help_center_article_link());
-      learn_more_url =
-          google_util::AppendGoogleLocaleParam(learn_more_url, app_locale());
-      controller()->OpenURL(should_open_links_in_new_tab(), learn_more_url);
+      OpenHelpCenter(false);
       break;
     }
     case CMD_RELOAD: {
@@ -208,27 +204,11 @@ void SafeBrowsingLoudErrorUI::HandleCommand(
       break;
     }
     case CMD_OPEN_DIAGNOSTIC: {
-      controller()->metrics_helper()->RecordUserInteraction(
-          security_interstitials::MetricsHelper::SHOW_DIAGNOSTIC);
-      std::string diagnostic = base::StringPrintf(
-          kSbDiagnosticUrl,
-          net::EscapeQueryParamValue(request_url().spec(), true).c_str());
-      GURL diagnostic_url(diagnostic);
-      diagnostic_url =
-          google_util::AppendGoogleLocaleParam(diagnostic_url, app_locale());
-      controller()->OpenURL(should_open_links_in_new_tab(), diagnostic_url);
+      OpenDiagnostic(false);
       break;
     }
     case CMD_REPORT_PHISHING_ERROR: {
-      controller()->metrics_helper()->RecordUserInteraction(
-          security_interstitials::MetricsHelper::REPORT_PHISHING_ERROR);
-      std::string phishing_error = base::StringPrintf(
-          kReportPhishingErrorUrl,
-          net::EscapeQueryParamValue(request_url().spec(), true).c_str());
-      GURL phishing_error_url(phishing_error);
-      phishing_error_url = google_util::AppendGoogleLocaleParam(
-          phishing_error_url, app_locale());
-      controller()->OpenURL(should_open_links_in_new_tab(), phishing_error_url);
+      ReportPhishingError(false);
       break;
     }
     case CMD_OPEN_ENHANCED_PROTECTION_SETTINGS: {
@@ -237,136 +217,203 @@ void SafeBrowsingLoudErrorUI::HandleCommand(
       controller()->OpenEnhancedProtectionSettings();
       break;
     }
+    case CMD_OPEN_HELP_CENTER_IN_NEW_TAB: {
+      OpenHelpCenter(true);
+      break;
+    }
+    case CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB: {
+      OpenDiagnostic(true);
+      break;
+    }
+    case CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB: {
+      controller()->OpenExtendedReportingPrivacyPolicy(true);
+      break;
+    }
+    case CMD_OPEN_WHITEPAPER_IN_NEW_TAB: {
+      controller()->OpenExtendedReportingWhitepaper(true);
+      break;
+    }
+    case CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB: {
+      ReportPhishingError(true);
+      break;
+    }
     case CMD_OPEN_DATE_SETTINGS:
     case CMD_OPEN_LOGIN:
     case CMD_ERROR:
     case CMD_TEXT_FOUND:
     case CMD_TEXT_NOT_FOUND:
+    case CMD_CLOSE_INTERSTITIAL_WITHOUT_UI:
+    case CMD_REQUEST_SITE_ACCESS_PERMISSION:
+    case CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS:
+    case CMD_SHOW_CERTIFICATE_VIEWER:
       break;
   }
 }
 
 void SafeBrowsingLoudErrorUI::PopulateMalwareLoadTimeData(
-    base::Value* load_time_data) {
-  load_time_data->SetBoolKey("phishing", false);
-  load_time_data->SetStringKey(
-      "heading", l10n_util::GetStringUTF16(IDS_MALWARE_V3_HEADING));
-  load_time_data->SetStringKey(
-      "primaryParagraph",
-      l10n_util::GetStringFUTF16(
-          IDS_MALWARE_V3_PRIMARY_PARAGRAPH,
-          common_string_util::GetFormattedHostName(request_url())));
-  load_time_data->SetStringKey(
+    base::DictValue& load_time_data) {
+  load_time_data.Set("phishing", false);
+  load_time_data.Set("heading",
+                     l10n_util::GetStringUTF16(IDS_SAFEBROWSING_HEADING));
+  load_time_data.Set("primaryParagraph", l10n_util::GetStringUTF16(
+                                             IDS_MALWARE_V3_PRIMARY_PARAGRAPH));
+  load_time_data.Set(
       "explanationParagraph",
-      is_main_frame_load_blocked()
-          ? l10n_util::GetStringFUTF16(
-                IDS_MALWARE_V3_EXPLANATION_PARAGRAPH,
-                common_string_util::GetFormattedHostName(request_url()))
-          : l10n_util::GetStringFUTF16(
-                IDS_MALWARE_V3_EXPLANATION_PARAGRAPH_SUBRESOURCE,
-                base::UTF8ToUTF16(main_frame_url().host()),
-                common_string_util::GetFormattedHostName(request_url())));
-  load_time_data->SetStringKey(
-      "finalParagraph",
-      l10n_util::GetStringUTF16(IDS_MALWARE_V3_PROCEED_PARAGRAPH));
+      l10n_util::GetStringUTF16(IDS_MALWARE_V3_EXPLANATION_PARAGRAPH));
+  load_time_data.Set("finalParagraph", l10n_util::GetStringUTF16(
+                                           IDS_MALWARE_V3_PROCEED_PARAGRAPH));
 }
 
 void SafeBrowsingLoudErrorUI::PopulateHarmfulLoadTimeData(
-    base::Value* load_time_data) {
-  load_time_data->SetBoolKey("phishing", false);
-  load_time_data->SetStringKey(
-      "heading", l10n_util::GetStringUTF16(IDS_HARMFUL_V3_HEADING));
-  load_time_data->SetStringKey(
-      "primaryParagraph",
-      l10n_util::GetStringFUTF16(
-          IDS_HARMFUL_V3_PRIMARY_PARAGRAPH,
-          common_string_util::GetFormattedHostName(request_url())));
-  load_time_data->SetStringKey(
+    base::DictValue& load_time_data) {
+  load_time_data.Set("phishing", false);
+  load_time_data.Set("heading",
+                     l10n_util::GetStringUTF16(IDS_SAFEBROWSING_HEADING));
+  load_time_data.Set("primaryParagraph", l10n_util::GetStringUTF16(
+                                             IDS_HARMFUL_V3_PRIMARY_PARAGRAPH));
+  load_time_data.Set(
       "explanationParagraph",
-      l10n_util::GetStringFUTF16(
-          IDS_HARMFUL_V3_EXPLANATION_PARAGRAPH,
-          common_string_util::GetFormattedHostName(request_url())));
-  load_time_data->SetStringKey(
-      "finalParagraph",
-      l10n_util::GetStringUTF16(IDS_HARMFUL_V3_PROCEED_PARAGRAPH));
+      l10n_util::GetStringUTF16(IDS_HARMFUL_V3_EXPLANATION_PARAGRAPH));
+  load_time_data.Set("finalParagraph", l10n_util::GetStringUTF16(
+                                           IDS_HARMFUL_V3_PROCEED_PARAGRAPH));
 }
 
 void SafeBrowsingLoudErrorUI::PopulatePhishingLoadTimeData(
-    base::Value* load_time_data) {
-  load_time_data->SetBoolKey("phishing", true);
-  load_time_data->SetStringKey(
-      "heading", l10n_util::GetStringUTF16(IDS_PHISHING_V4_HEADING));
-  load_time_data->SetStringKey(
+    base::DictValue& load_time_data) {
+  load_time_data.Set("phishing", true);
+  load_time_data.Set("heading",
+                     l10n_util::GetStringUTF16(IDS_SAFEBROWSING_HEADING));
+  load_time_data.Set(
       "primaryParagraph",
-      l10n_util::GetStringFUTF16(
-          IDS_PHISHING_V4_PRIMARY_PARAGRAPH,
-          common_string_util::GetFormattedHostName(request_url())));
-  load_time_data->SetStringKey(
+      l10n_util::GetStringUTF16(IDS_PHISHING_V4_PRIMARY_PARAGRAPH));
+  load_time_data.Set(
       "explanationParagraph",
-      l10n_util::GetStringFUTF16(
-          IDS_PHISHING_V4_EXPLANATION_PARAGRAPH,
-          common_string_util::GetFormattedHostName(request_url())));
-  load_time_data->SetStringKey(
-      "finalParagraph",
-      l10n_util::GetStringUTF16(IDS_PHISHING_V4_PROCEED_AND_REPORT_PARAGRAPH));
+      l10n_util::GetStringUTF16(IDS_PHISHING_V4_EXPLANATION_PARAGRAPH));
+  load_time_data.Set("finalParagraph", l10n_util::GetStringUTF16(
+                                           IDS_PHISHING_V4_PROCEED_PARAGRAPH));
 }
 
 void SafeBrowsingLoudErrorUI::PopulateExtendedReportingOption(
-    base::Value* load_time_data) {
+    base::DictValue& load_time_data) {
   bool can_show_extended_reporting_option = CanShowExtendedReportingOption();
   bool can_show_enhanced_protection_message =
       CanShowEnhancedProtectionMessage();
-  load_time_data->SetBoolKey(security_interstitials::kDisplayCheckBox,
-                             can_show_extended_reporting_option &&
-                                 !can_show_enhanced_protection_message);
+  load_time_data.Set(security_interstitials::kDisplayCheckBox,
+                     can_show_extended_reporting_option &&
+                         !can_show_enhanced_protection_message);
   if (!can_show_extended_reporting_option) {
     return;
   }
 
-  load_time_data->SetBoolKey(security_interstitials::kBoxChecked,
-                             is_extended_reporting_enabled());
+  load_time_data.Set(security_interstitials::kBoxChecked,
+                     is_extended_reporting_enabled());
 }
 
 void SafeBrowsingLoudErrorUI::PopulateEnhancedProtectionMessage(
-    base::Value* load_time_data) {
+    base::DictValue& load_time_data) {
   bool can_show_enhanced_protection_message =
       CanShowEnhancedProtectionMessage();
   if (can_show_enhanced_protection_message) {
     controller()->metrics_helper()->RecordUserInteraction(
         security_interstitials::MetricsHelper::SHOW_ENHANCED_PROTECTION);
   }
-  load_time_data->SetBoolKey(
-      security_interstitials::kDisplayEnhancedProtectionMessage,
-      can_show_enhanced_protection_message);
+  load_time_data.Set(security_interstitials::kDisplayEnhancedProtectionMessage,
+                     can_show_enhanced_protection_message);
 }
 
 void SafeBrowsingLoudErrorUI::PopulateBillingLoadTimeData(
-    base::Value* load_time_data) {
-  load_time_data->SetBoolKey("phishing", false);
-  load_time_data->SetBoolKey("overridable", true);
+    base::DictValue& load_time_data) {
+  load_time_data.Set("phishing", false);
+  load_time_data.Set("overridable", true);
 
-  load_time_data->SetStringKey("tabTitle",
-                               l10n_util::GetStringUTF16(IDS_BILLING_TITLE));
-  load_time_data->SetStringKey("heading",
-                               l10n_util::GetStringUTF16(IDS_BILLING_HEADING));
-  load_time_data->SetStringKey(
-      "primaryParagraph",
-      l10n_util::GetStringUTF16(IDS_BILLING_PRIMARY_PARAGRAPH));
+  load_time_data.Set("tabTitle", l10n_util::GetStringUTF16(IDS_BILLING_TITLE));
+  load_time_data.Set("heading", l10n_util::GetStringUTF16(IDS_BILLING_HEADING));
+  load_time_data.Set("primaryParagraph",
+                     l10n_util::GetStringUTF16(IDS_BILLING_PRIMARY_PARAGRAPH));
 
-  load_time_data->SetStringKey(
-      "primaryButtonText",
-      l10n_util::GetStringUTF16(IDS_BILLING_PRIMARY_BUTTON));
-  load_time_data->SetStringKey(
-      "proceedButtonText",
-      l10n_util::GetStringUTF16(IDS_BILLING_PROCEED_BUTTON));
+  load_time_data.Set("primaryButtonText",
+                     l10n_util::GetStringUTF16(IDS_BILLING_PRIMARY_BUTTON));
+  load_time_data.Set("proceedButtonText",
+                     l10n_util::GetStringUTF16(IDS_BILLING_PROCEED_BUTTON));
 
-  load_time_data->SetStringKey("openDetails", "");
-  load_time_data->SetStringKey("closeDetails", "");
-  load_time_data->SetStringKey("explanationParagraph", "");
-  load_time_data->SetStringKey("finalParagraph", "");
+  load_time_data.Set("openDetails", "");
+  load_time_data.Set("closeDetails", "");
+  load_time_data.Set("explanationParagraph", "");
+  load_time_data.Set("finalParagraph", "");
+}
+
+void SafeBrowsingLoudErrorUI::UpdateInterstitialInteractionData(
+    SecurityInterstitialCommand command) {
+  int new_occurrence_count = 1;
+  int64_t new_first_timestamp =
+      base::Time::Now().InMillisecondsSinceUnixEpoch();
+  int64_t new_last_timestamp = base::Time::Now().InMillisecondsSinceUnixEpoch();
+  // If this is not the first occurrence, use data in the map for correct
+  // occurrence and first timestamp values.
+  if (auto interaction_data = interstitial_interaction_data_->find(command);
+      interaction_data != interstitial_interaction_data_->end()) {
+    new_occurrence_count += interaction_data->second.occurrence_count;
+    new_first_timestamp = interaction_data->second.first_timestamp;
+  }
+  interstitial_interaction_data_->insert_or_assign(
+      command,
+      InterstitialInteractionDetails(new_occurrence_count, new_first_timestamp,
+                                     new_last_timestamp));
+}
+
+void SafeBrowsingLoudErrorUI::OpenHelpCenter(bool always_open_in_new_tab) {
+  // User pressed "Learn more".
+  controller()->metrics_helper()->RecordUserInteraction(
+      security_interstitials::MetricsHelper::SHOW_LEARN_MORE);
+
+  GURL learn_more_url = controller()->GetBaseHelpCenterUrl();
+  learn_more_url = net::AppendQueryParameter(learn_more_url, "p",
+                                             get_help_center_article_link());
+  learn_more_url =
+      google_util::AppendGoogleLocaleParam(learn_more_url, app_locale());
+  if (always_open_in_new_tab) {
+    controller()->OpenUrlInNewForegroundTab(learn_more_url);
+  } else {
+    controller()->OpenURL(should_open_links_in_new_tab(), learn_more_url);
+  }
+}
+
+void SafeBrowsingLoudErrorUI::OpenDiagnostic(bool always_open_in_new_tab) {
+  controller()->metrics_helper()->RecordUserInteraction(
+      security_interstitials::MetricsHelper::SHOW_DIAGNOSTIC);
+  std::string diagnostic = base::StringPrintf(
+      kSbDiagnosticUrl,
+      base::EscapeQueryParamValue(request_url().spec(), true).c_str());
+  GURL diagnostic_url(diagnostic);
+  diagnostic_url =
+      google_util::AppendGoogleLocaleParam(diagnostic_url, app_locale());
+  if (always_open_in_new_tab) {
+    controller()->OpenUrlInNewForegroundTab(diagnostic_url);
+  } else {
+    controller()->OpenURL(should_open_links_in_new_tab(), diagnostic_url);
+  }
+}
+
+void SafeBrowsingLoudErrorUI::ReportPhishingError(bool always_open_in_new_tab) {
+  controller()->metrics_helper()->RecordUserInteraction(
+      security_interstitials::MetricsHelper::REPORT_PHISHING_ERROR);
+  std::string phishing_error = base::StringPrintf(
+      kReportPhishingErrorUrl,
+      base::EscapeQueryParamValue(request_url().spec(), true).c_str());
+  GURL phishing_error_url(phishing_error);
+  phishing_error_url =
+      google_util::AppendGoogleLocaleParam(phishing_error_url, app_locale());
+  if (always_open_in_new_tab) {
+    controller()->OpenUrlInNewForegroundTab(phishing_error_url);
+  } else {
+    controller()->OpenURL(should_open_links_in_new_tab(), phishing_error_url);
+  }
 }
 
 int SafeBrowsingLoudErrorUI::GetHTMLTemplateId() const {
+  if (base::FeatureList::IsEnabled(safe_browsing::kEnhancedSafeBrowsingPromo)) {
+    return IDR_SECURITY_INTERSTITIAL_WITHOUT_PROMO_HTML;
+  }
   return IDR_SECURITY_INTERSTITIAL_HTML;
 }
 

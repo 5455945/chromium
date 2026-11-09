@@ -1,20 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/perf/profile_provider_chromeos.h"
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/feature_list.h"
-#include "base/metrics/field_trial_params.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/power_monitor/power_monitor.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/perf/metric_provider.h"
 #include "chrome/browser/metrics/perf/perf_events_collector.h"
 #include "chrome/browser/metrics/perf/windowed_incognito_observer.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "components/services/heap_profiling/public/cpp/settings.h"
+#include "chrome/browser/sessions/session_restore.h"
+#include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "content/public/common/content_switches.h"
 #include "third_party/metrics_proto/sampled_profile.pb.h"
 
@@ -22,20 +21,12 @@ namespace metrics {
 
 namespace {
 
-const base::Feature kBrowserJankinessProfiling{
-    "BrowserJankinessProfiling", base::FEATURE_DISABLED_BY_DEFAULT};
-
 const char kJankinessTriggerStatusHistogram[] =
     "ChromeOS.CWP.JankinessTriggerStatus";
 
 // The default value of minimum interval between jankiness collections is 30
 // minutes.
 const int kDefaultJankinessCollectionMinIntervalSec = 30 * 60;
-
-// Feature parameters that control the behavior of the jankiness trigger.
-constexpr base::FeatureParam<int> kJankinessCollectionMinIntervalSec{
-    &kBrowserJankinessProfiling, "JankinessCollectionMinIntervalSec",
-    kDefaultJankinessCollectionMinIntervalSec};
 
 enum class JankinessTriggerStatus {
   // Attempt to collect a profile triggered by browser jankiness.
@@ -48,14 +39,14 @@ enum class JankinessTriggerStatus {
 // Returns true if a normal user is logged in. Returns false otherwise (e.g. if
 // logged in as a guest or as a kiosk app).
 bool IsNormalUserLoggedIn() {
-  return chromeos::LoginState::Get()->IsUserAuthenticated();
+  return ash::LoginState::Get()->IsUserAuthenticated();
 }
 
 }  // namespace
 
 ProfileProvider::ProfileProvider()
-    : jankiness_collection_min_interval_(base::TimeDelta::FromSeconds(
-          kJankinessCollectionMinIntervalSec.Get())) {
+    : jankiness_collection_min_interval_(
+          base::Seconds(kDefaultJankinessCollectionMinIntervalSec)) {
   // Initialize the WindowedIncognitoMonitor on the UI thread.
   WindowedIncognitoMonitor::Init();
   // Register a perf events collector.
@@ -64,8 +55,7 @@ ProfileProvider::ProfileProvider()
 }
 
 ProfileProvider::~ProfileProvider() {
-  chromeos::LoginState::Get()->RemoveObserver(this);
-  chromeos::PowerManagerClient::Get()->RemoveObserver(this);
+  base::PowerMonitor::GetInstance()->RemovePowerThermalObserver(this);
   if (jank_monitor_) {
     jank_monitor_->RemoveObserver(this);
     jank_monitor_->Destroy();
@@ -78,15 +68,21 @@ void ProfileProvider::Init() {
   }
 
   // Register as an observer of login state changes.
-  chromeos::LoginState::Get()->AddObserver(this);
+  login_state_observer_.Observe(ash::LoginState::Get());
 
   // Register as an observer of power manager events.
-  chromeos::PowerManagerClient::Get()->AddObserver(this);
+  power_manager_client_observer_.Observe(chromeos::PowerManagerClient::Get());
 
   // Register as an observer of session restore.
   on_session_restored_callback_subscription_ =
       SessionRestore::RegisterOnSessionRestoredCallback(base::BindRepeating(
           &ProfileProvider::OnSessionRestoreDone, weak_factory_.GetWeakPtr()));
+
+  // Register as an observer of thermal state changes.
+  base::PowerThermalObserver::DeviceThermalState thermal_state =
+      base::PowerMonitor::GetInstance()
+          ->AddPowerStateObserverAndReturnPowerThermalState(this);
+  OnThermalStateChange(thermal_state);
 
   // Check the login state. At the time of writing, this class is instantiated
   // before login. A subsequent login would activate the profiling. However,
@@ -95,12 +91,10 @@ void ProfileProvider::Init() {
   // ProfileProvider will recognize that the system is already logged in.
   LoggedInStateChanged();
 
-  if (base::FeatureList::IsEnabled(kBrowserJankinessProfiling)) {
-    // Set up the JankMonitor for watching browser jankiness.
-    jank_monitor_ = content::JankMonitor::Create();
-    jank_monitor_->SetUp();
-    jank_monitor_->AddObserver(this);
-  }
+  // Set up the JankMonitor for watching browser jankiness.
+  jank_monitor_ = content::JankMonitor::Create();
+  jank_monitor_->SetUp();
+  jank_monitor_->AddObserver(this);
 }
 
 bool ProfileProvider::GetSampledProfiles(
@@ -155,7 +149,8 @@ void ProfileProvider::SuspendDone(base::TimeDelta sleep_duration) {
   }
 }
 
-void ProfileProvider::OnSessionRestoreDone(int num_tabs_restored) {
+void ProfileProvider::OnSessionRestoreDone(Profile* profile,
+                                           int num_tabs_restored) {
   // Do not collect a profile unless logged in as a normal user.
   if (!IsNormalUserLoggedIn())
     return;
@@ -198,6 +193,21 @@ void ProfileProvider::OnJankStopped() {
   // Inform each collector that a jank has stopped.
   for (auto& collector : collectors_) {
     collector->OnJankStopped();
+  }
+}
+
+void ProfileProvider::OnThermalStateChange(
+    base::PowerThermalObserver::DeviceThermalState new_state) {
+  // Pass the new thermal state to each collector.
+  for (auto& collector : collectors_) {
+    collector->SetThermalState(new_state);
+  }
+}
+
+void ProfileProvider::OnSpeedLimitChange(int new_limit) {
+  // Pass the new speed limit to each collector.
+  for (auto& collector : collectors_) {
+    collector->SetSpeedLimit(new_limit);
   }
 }
 

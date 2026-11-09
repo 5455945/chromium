@@ -1,11 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // A named function that throws the error, used to verify that the error message
 // has a stack trace that contains the relevant stack frames.
 function throwNewError(message) {
-  throw new Error(message)
+  throw new Error(message);
 }
 
 chrome.test.runTests([
@@ -21,7 +21,7 @@ chrome.test.runTests([
   },
 
   function tabsOnCreatedThrowsError() {
-    var listener = function() {
+    const listener = function() {
       throwNewError('hi');
     };
     chrome.test.setExceptionHandler(function(message, exception) {
@@ -44,5 +44,5 @@ chrome.test.runTests([
     chrome.permissions.getAll(function() {
       throwNewError('boom');
     });
-  }
+  },
 ]);

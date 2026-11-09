@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/permissions/socket_permission_data.h"
 
 #include <cstdlib>
-#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -78,17 +77,9 @@ const char* TypeToString(SocketPermissionRequest::OperationType type) {
 
 namespace extensions {
 
-SocketPermissionData::SocketPermissionData() {}
+SocketPermissionData::SocketPermissionData() = default;
 
-SocketPermissionData::~SocketPermissionData() {}
-
-bool SocketPermissionData::operator<(const SocketPermissionData& rhs) const {
-  return entry_ < rhs.entry_;
-}
-
-bool SocketPermissionData::operator==(const SocketPermissionData& rhs) const {
-  return entry_ == rhs.entry_;
-}
+SocketPermissionData::~SocketPermissionData() = default;
 
 bool SocketPermissionData::Check(const APIPermission::CheckParam* param) const {
   if (!param)
@@ -100,16 +91,16 @@ bool SocketPermissionData::Check(const APIPermission::CheckParam* param) const {
   return entry_.Check(request);
 }
 
-std::unique_ptr<base::Value> SocketPermissionData::ToValue() const {
-  return std::make_unique<base::Value>(GetAsString());
+base::Value SocketPermissionData::ToValue() const {
+  return base::Value(GetAsString());
 }
 
-bool SocketPermissionData::FromValue(const base::Value* value) {
-  std::string spec;
-  if (!value->GetAsString(&spec))
+bool SocketPermissionData::FromValue(const base::Value& value) {
+  if (!value.is_string()) {
     return false;
+  }
 
-  return Parse(spec);
+  return Parse(value.GetString());
 }
 
 SocketPermissionEntry& SocketPermissionData::entry() {

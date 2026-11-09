@@ -1,31 +1,38 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_GEOMETRY_LOGICAL_OFFSET_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_GEOMETRY_LOGICAL_OFFSET_H_
 
+#include <tuple>
+
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
+#include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/text/writing_direction_mode.h"
 
 namespace blink {
 
-struct LogicalDelta;
-struct PhysicalOffset;
 struct PhysicalSize;
 
 // LogicalOffset is the position of a rect (typically a fragment) relative to
 // its parent rect in the logical coordinate system.
 // For more information about physical and logical coordinate systems, see:
-// https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/core/layout/README.md#coordinate-spaces
+// https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/layout/README.md#coordinate-spaces
 struct CORE_EXPORT LogicalOffset {
   constexpr LogicalOffset() = default;
   constexpr LogicalOffset(LayoutUnit inline_offset, LayoutUnit block_offset)
       : inline_offset(inline_offset), block_offset(block_offset) {}
 
+  // This is deleted to avoid unwanted lossy conversion from float or double to
+  // LayoutUnit or int. Use explicit LayoutUnit constructor for each parameter
+  // instead.
+  LogicalOffset(double, double) = delete;
+
   // For testing only. It's defined in core/testing/core_unit_test_helper.h.
-  inline LogicalOffset(int inline_offset, int block_offset);
+  // 'constexpr' is to let compiler detect incorrect usages in production code.
+  constexpr LogicalOffset(int inline_offset, int block_offset);
 
   LayoutUnit inline_offset;
   LayoutUnit block_offset;
@@ -41,13 +48,7 @@ struct CORE_EXPORT LogicalOffset {
                                    PhysicalSize outer_size,
                                    PhysicalSize inner_size) const;
 
-  constexpr bool operator==(const LogicalOffset& other) const {
-    return std::tie(other.inline_offset, other.block_offset) ==
-           std::tie(inline_offset, block_offset);
-  }
-  constexpr bool operator!=(const LogicalOffset& other) const {
-    return !operator==(other);
-  }
+  constexpr bool operator==(const LogicalOffset& other) const = default;
 
   LogicalOffset operator+(const LogicalOffset& other) const {
     return {inline_offset + other.inline_offset,

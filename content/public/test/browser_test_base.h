@@ -1,36 +1,63 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// If you are looking to write a new browser test, you are probably looking for
+// one of the already-implemented subclasses, e.g. `content::ContentBrowserTest`
+// for tests that can run directly on top of content_shell,
+// `InProcessBrowserTest` for tests that require `//chrome`-layer functionality,
+// et cetera. See `//content/public/test/browser_test.h` for more information.
+//
+// `content::BrowserTestBase` is a base class that provides shared functionality
+// across various types of browser tests. It is not intended for direct use in
+// tests, as it does not actually define how to launch a browser, nor how to run
+// a test in said browser.
 
 #ifndef CONTENT_PUBLIC_TEST_BROWSER_TEST_BASE_H_
 #define CONTENT_PUBLIC_TEST_BROWSER_TEST_BASE_H_
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
+#include "base/command_line.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
+#include "base/test/scoped_path_override.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/public/test/test_host_resolver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "net/dns/public/dns_over_https_config.h"
+#include "net/dns/public/secure_dns_mode.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "services/network/public/mojom/network_service_test.mojom.h"
 #include "storage/browser/quota/quota_settings.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/animation/animation_test_api.h"
+#include "ui/native_theme/os_settings_provider.h"
 
 namespace base {
-class CommandLine;
 class FilePath;
-class TimeDelta;
-}
+}  // namespace base
 
-namespace chromeos {
-class ScopedDisableCrosapiForTesting;
+#if BUILDFLAG(IS_ANDROID)
+namespace discardable_memory {
+class DiscardableSharedMemoryManager;
+}
+#endif
+
+namespace gfx {
+class ScopedAnimationDurationScaleMode;
 }
 
 namespace content {
 class BrowserMainParts;
+class ContentMainDelegate;
+class NoRendererCrashesAssertion;
 class WebContents;
 
 class BrowserTestBase : public ::testing::Test {
@@ -66,16 +93,32 @@ class BrowserTestBase : public ::testing::Test {
   // this if they want to use the production path.
   virtual bool UseProductionQuotaSettings();
 
+  // This is invoked if the test receives SIGTERM or SIGSEGV.
+  virtual void SignalRunTestOnMainThread(int signal) {}
+
   // Crash the Network Service process. Should only be called when
   // out-of-process Network Service is enabled. Re-applies any added host
   // resolver rules, though network tasks started before the call returns may
   // racily start before the rules have been re-applied.
   void SimulateNetworkServiceCrash();
 
+  // Ignores all future NetworkService crashes that would be otherwise detected
+  // and flagged by the AssertThatNetworkServiceDidNotCrash method.
+  //
+  // The IgnoreNetworkServiceCrashes method is useful in a test that plans to
+  // trigger crashes. Note that calling IgnoreNetworkServiceCrashes is *not*
+  // needed when triggering the crash via SimulateNetworkServiceCrash method.
+  void IgnoreNetworkServiceCrashes();
+
   // Returns the host resolver being used for the tests. Subclasses might want
   // to configure it inside tests.
   net::RuleBasedHostResolverProc* host_resolver() {
     return test_host_resolver_ ? test_host_resolver_->host_resolver() : nullptr;
+  }
+
+  // Returns the NetworkServiceTest remote endpoint in this test fixture.
+  mojo::Remote<network::mojom::NetworkServiceTest>& network_service_test() {
+    return network_service_test_;
   }
 
  protected:
@@ -95,9 +138,28 @@ class BrowserTestBase : public ::testing::Test {
   // PreEarlyInitialization() has been called.
   virtual void CreatedBrowserMainParts(BrowserMainParts* browser_main_parts) {}
 
+  // Returns a custom ContentMainDelegate to use for the test, or nullptr to use
+  // the standard delegate. The returned object must live at least until
+  // TearDownInProcessBrowserTextFixture is called.
+  virtual ContentMainDelegate* GetOptionalContentMainDelegateOverride();
+
+  // GTest assertions that the connection to `network_service_test_` did not get
+  // dropped unexpectedly.
+  void AssertThatNetworkServiceDidNotCrash();
+
   // Sets flag to allow host resolutions to reach the network. Must be called
   // before Setup() to take effect.
   void SetAllowNetworkAccessToHostResolutions();
+
+  // Sets flag that will cause the network service's system DNS configuration to
+  // be replaced with a basic, single-server configuration. This should improve
+  // test reproducibility and consistency across platforms, at the cost of
+  // disabling the platform-specific logic that handles system config changes.
+  void SetReplaceSystemDnsConfig();
+
+  // Sets DoH configuration for use during tests.
+  void SetTestDohConfig(net::SecureDnsMode secure_dns_mode,
+                        net::DnsOverHttpsConfig config);
 
   // This is invoked from main after browser_init/browser_main have completed.
   // This prepares for the test by creating a new browser and doing any other
@@ -117,7 +179,7 @@ class BrowserTestBase : public ::testing::Test {
   // Sets expected browser exit code, in case it's different than 0 (success).
   void set_expected_exit_code(int code) { expected_exit_code_ = code; }
 
-  // Returns the embedded test server. Guaranteed to be non-NULL.
+  // Returns the HTTP embedded test server. Guaranteed to be non-NULL.
   const net::EmbeddedTestServer* embedded_test_server() const {
     return embedded_test_server_.get();
   }
@@ -125,9 +187,66 @@ class BrowserTestBase : public ::testing::Test {
     return embedded_test_server_.get();
   }
 
-  bool set_up_called() { return set_up_called_; }
+  // Initializes the HTTPS embedded test server. The HTTPS test server must be
+  // setup after any modifications done to the macOS `bundled` state as done
+  // with `SetOverrideAmIBundled`, since different browser test suites have
+  // different bundle behavior on macOS, and the HTTPS test server constructor
+  // reads in the local test root cert. In any case that the HTTPS test server
+  // is needed by tests under a child class of BrowserTestBase, the HTTPS test
+  // server must be initialized by calling this method during the test setup.
+  void InitializeHTTPSTestServer();
 
-#if defined(OS_POSIX)
+  // Returns the HTTPS embedded test server.
+  // By default, the HTTPS test server is configured to have a valid
+  // certificate for the set of hostnames:
+  //   - [*.]example.com
+  //   - [*.]foo.com
+  //   - [*.]bar.com
+  //   - [*.]a.com
+  //   - [*.]b.com
+  //   - [*.]c.com
+  //
+  // After starting the server, you can get a working HTTPS URL for any of
+  // those hostnames. For example:
+  //
+  // ```
+  //   void SetUpOnMainThread() override {
+  //     host_resolver()->AddRule("*", "127.0.0.1");
+  //     ASSERT_TRUE(embedded_https_test_server().Start());
+  //     InProcessBrowserTest::SetUpOnMainThread();
+  //   }
+  //   ...
+  //   (later in the test logic):
+  //   embedded_https_test_server().GetURL("foo.com", "/simple.html");
+  // ```
+  //
+  // Tests can override the set of valid hostnames by calling
+  // `net::EmbeddedTestServer::SetCertHostnames()` before starting the test
+  // server, and a valid test certificate will be automatically generated for
+  // the hostnames passed in. For example:
+  //
+  //   ```
+  //   embedded_https_test_server().SetCertHostnames(
+  //       {"example.com", "example.org"});
+  //   ASSERT_TRUE(embedded_https_test_server().Start());
+  //   embedded_https_test_server().GetURL("example.org", "/simple.html");
+  //   ```
+  const net::EmbeddedTestServer& embedded_https_test_server() const {
+    CHECK(embedded_https_test_server_)
+        << "embedded_https_test_server() cannot be called before it was "
+           "initialized by calling InitializeHTTPSTestServer.";
+    return *embedded_https_test_server_;
+  }
+  net::EmbeddedTestServer& embedded_https_test_server() {
+    CHECK(embedded_https_test_server_)
+        << "embedded_https_test_server() cannot be called before it was "
+           "initialized by calling InitializeHTTPSTestServer.";
+    return *embedded_https_test_server_;
+  }
+
+  bool set_up_called() const { return set_up_called_; }
+
+#if BUILDFLAG(IS_POSIX)
   // This is only needed by a test that raises SIGTERM to ensure that a specific
   // codepath is taken.
   void DisableSIGTERMHandling() {
@@ -154,6 +273,10 @@ class BrowserTestBase : public ::testing::Test {
   // display densities.
   void EnablePixelOutput(float force_device_scale_factor = 1.f);
 
+  // Call this before SetUp() to specify whether fake media stream devices
+  // should be used. True by default.
+  void SetUseFakeMediaStreamDevices(bool use_fake_media_stream_devices);
+
   // Call this before SetUp() to not use GL, but use software compositing
   // instead.
   void UseSoftwareCompositing();
@@ -164,15 +287,18 @@ class BrowserTestBase : public ::testing::Test {
   // code necessary.
   void SetInitialWebContents(WebContents* web_contents);
 
+  // Sets the flag to allow --enable-features and --disable-features to be
+  // present on the command line. Must be called before `SetUp`.
+  void SetAllowFeaturesSwitches(bool allow);
+
  private:
-#if defined(OS_ANDROID)
-  // Android browser tests need to wait for async initialization in Java code.
-  // This waits for those to complete before we can continue with the test.
-  void WaitUntilJavaIsReady(base::OnceClosure quit_closure,
-                            const base::TimeDelta& wait_retry_left);
-#endif
   // Performs a bunch of setup, and then runs the browser test body.
   void ProxyRunTestOnMainThreadLoop();
+
+  // Sets `initialized_network_process_` to false and calls
+  // InitializeNetworkProcess(). Used when restarting the network service
+  // process.
+  void ForceInitializeNetworkProcess();
 
   // When using the network process, update the host resolver rules that were
   // added in SetUpOnMainThread.
@@ -182,11 +308,27 @@ class BrowserTestBase : public ::testing::Test {
   // CreatedBrowserMainParts().
   void CreatedBrowserMainPartsImpl(BrowserMainParts* browser_main_parts);
 
-  // Embedded test server, cheap to create, started on demand.
+#if BUILDFLAG(IS_WIN)
+  std::optional<base::ScopedPathOverride> system_temp_override_;
+#endif
+
+  // Embedded HTTP test server, cheap to create, started on demand.
   std::unique_ptr<net::EmbeddedTestServer> embedded_test_server_;
+
+  // Embedded HTTPS test server, cheap to create, started on demand.
+  std::unique_ptr<net::EmbeddedTestServer> embedded_https_test_server_;
 
   // Host resolver used during tests.
   std::unique_ptr<TestHostResolver> test_host_resolver_;
+
+  // When true, `InitializeNetworkProcess` will tell the network service to use
+  // a dummy system DNS configuration.
+  bool replace_system_dns_config_ = false;
+
+  // DoH configuration used during tests. When it contains a value,
+  // `InitializeNetworkProcess` will pass it to the network service.
+  std::optional<std::pair<net::SecureDnsMode, net::DnsOverHttpsConfig>>
+      test_doh_config_;
 
   // A field trial list that's used to support field trials activated prior to
   // browser start.
@@ -195,6 +337,23 @@ class BrowserTestBase : public ::testing::Test {
   // Expected exit code.
   int expected_exit_code_ = 0;
 
+  // On ChromeOS, many tests expect the `ash::DarkLightModeController` to
+  // control the `ui::NativeTheme`. Since this is plumbed through
+  // `ui::OsSettingsProviderAsh`, the following instantiation breaks these
+  // tests.
+  // TODO(pkasting): Consider an alternate solution, e.g. changing tests to use
+  // a `ui::MockOsSettingsProvider` instead of the
+  // `ash::DarkLightModeController` and removing the `#if` guards here.
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Browser tests should not use the current machine settings for theming, but
+  // should default to a consistent baseline. Instantiating
+  // `ui::OsSettingsProvider` will both provide sane default behavior and
+  // prevent `ui::OsSettingsProvider::Get()` from instantiating a
+  // platform-specific subclass.
+  ui::OsSettingsProvider os_settings_provider_{
+      ui::OsSettingsProvider::PriorityLevel::kTesting};
+#endif
+
   // When true, the compositor will produce pixel output that can be read back
   // for pixel tests.
   bool enable_pixel_output_ = false;
@@ -202,36 +361,60 @@ class BrowserTestBase : public ::testing::Test {
   // When using EnablePixelOutput, the device scale factor is forced to an
   // explicit value to ensure consistent results. This value will be passed to
   // the --force-device-scale-factor flag in SetUp.
-  float force_device_scale_factor_ = 0.f;
+  float force_device_scale_factor_ = 0;
+
+  // When true, fake media stream devices will be used instead of real ones.
+  // Real devices may depend on OS-specific implementations and may not work on
+  // bots.
+  bool use_fake_media_stream_devices_ = true;
+
+  // When verifying pixel output, animations are disabled to reduce flakiness.
+  std::unique_ptr<gfx::ScopedAnimationDurationScaleMode>
+      disable_layer_animations_;
+  gfx::AnimationTestApi::RenderModeResetter disable_rich_animations_;
 
   // When true, do compositing with the software backend instead of using GL.
   bool use_software_compositing_ = false;
 
   // Initial WebContents to watch for navigations during SetUpOnMainThread.
-  WebContents* initial_web_contents_ = nullptr;
+  base::WeakPtr<WebContents> initial_web_contents_;
 
   // Whether SetUp was called. This value is checked in the destructor of this
   // class to ensure that SetUp was called. If it's not called, the test will
   // not run and report a false positive result.
   bool set_up_called_ = false;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::unique_ptr<chromeos::ScopedDisableCrosapiForTesting> disable_crosapi_;
-#endif
-
   std::unique_ptr<storage::QuotaSettings> quota_settings_;
 
   std::unique_ptr<NoRendererCrashesAssertion> no_renderer_crashes_assertion_;
+
+  mojo::Remote<network::mojom::NetworkServiceTest> network_service_test_;
 
   bool initialized_network_process_ = false;
 
   bool allow_network_access_to_host_resolutions_ = false;
 
-  BrowserMainParts* browser_main_parts_ = nullptr;
+  raw_ptr<BrowserMainParts, AcrossTasksDanglingUntriaged> browser_main_parts_ =
+      nullptr;
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
   bool handle_sigterm_;
 #endif
+
+#if BUILDFLAG(IS_ANDROID)
+  // Mimic the destruction order of ContentMain:
+  // - ContentMainRunnerImpl::Shutdown() resets ipc support and shuts down the
+  //   BrowserTaskExecutor.
+  // - ContentMainRunnerImpl::~ContentMainRunnerImpl().
+  // - DiscardableSharedMemoryManager, owned by ContentMainRunnerImpl, is reset.
+  std::unique_ptr<discardable_memory::DiscardableSharedMemoryManager>
+      discardable_shared_memory_manager_;
+#endif
+
+  // Whether allow tests to provide --enable-features and --disable-features
+  // switches. Tests such as `GuestLoginTest` passes feature switches from PRE_
+  // to real tests.
+  bool allow_features_switches_ = false;
 };
 
 }  // namespace content

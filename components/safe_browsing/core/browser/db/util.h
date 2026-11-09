@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -15,27 +15,48 @@
 #include <string>
 
 #include "base/containers/flat_map.h"
-#include "base/strings/string_piece.h"
 #include "base/trace_event/traced_value.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
 namespace safe_browsing {
 
-// Metadata that indicates what kind of URL match this is.
-enum class ThreatPatternType : int {
-  NONE = 0,                        // Pattern type didn't appear in the metadata
-  MALWARE_LANDING = 1,             // The match is a malware landing page
-  MALWARE_DISTRIBUTION = 2,        // The match is a malware distribution page
-  SOCIAL_ENGINEERING_ADS = 3,      // The match is a social engineering ads page
-  SOCIAL_ENGINEERING_LANDING = 4,  // The match is a social engineering landing
-                                   // page
-  PHISHING = 5,                    // The match is a phishing page
-  THREAT_PATTERN_TYPE_MAX_VALUE
+enum class ClientCallbackType : int {
+  // This represents the case when we're trying to determine if a URL is
+  // unsafe from the following perspectives: Malware, Phishing, UwS.
+  CHECK_BROWSE_URL,
+
+  // This represents the case when we're trying to determine if any of the
+  // URLs in a vector of URLs is unsafe for downloading binaries.
+  CHECK_DOWNLOAD_URLS,
+
+  // This represents the case when we're trying to determine if a Chrome
+  // extension is unsafe.
+  CHECK_EXTENSION_IDS,
+
+  // This represents the case when we're trying to determine if a URL belongs
+  // to the list where subresource filter should be active.
+  CHECK_URL_FOR_SUBRESOURCE_FILTER,
+
+  // This represents the case when we're trying to determine if a URL is
+  // part of the CSD allowlist.
+  CHECK_CSD_ALLOWLIST,
+
+  // This represents the case when we're trying to determine if a URL has
+  // abusive notification permissions.
+  CHECK_NOTIFICATION_ABUSE,
+
+  // This represents the other cases when a check is being performed
+  // synchronously so a client callback isn't required. For instance, when
+  // trying to determine if an IP address is unsafe due to hosting Malware.
+  CHECK_OTHER,
 };
 
 enum class SubresourceFilterType : int { ABUSIVE = 0, BETTER_ADS = 1 };
 
+// Levels of enforcement for subresource filtering. These values must remain
+// ordered by increasing severity (e.g. ENFORCE is more severe than WARN)
+// because comparisons rely on this ordering.
 enum class SubresourceFilterLevel : int { WARN = 0, ENFORCE = 1 };
 
 using SubresourceFilterMatch =
@@ -44,35 +65,24 @@ using SubresourceFilterMatch =
 // Metadata that was returned by a GetFullHash call. This is the parsed version
 // of the PB (from Pver3, or Pver4 local) or JSON (from Pver4 via GMSCore).
 // Some fields are only applicable to certain lists.
-//
-// When adding elements to this struct, make sure you update operator== and
-// ToTracedValue.
+// When adding elements to this struct, make sure you update ToTracedValue.
 struct ThreatMetadata {
   ThreatMetadata();
   ThreatMetadata(const ThreatMetadata& other);
+  ThreatMetadata(ThreatMetadata&& other);
+  ThreatMetadata& operator=(const ThreatMetadata& other);
+  ThreatMetadata& operator=(ThreatMetadata&& other);
   ~ThreatMetadata();
 
-  bool operator==(const ThreatMetadata& other) const;
-  bool operator!=(const ThreatMetadata& other) const;
+  friend bool operator==(const ThreatMetadata&,
+                         const ThreatMetadata&) = default;
 
   // Returns the metadata in a format tracing can support.
   std::unique_ptr<base::trace_event::TracedValue> ToTracedValue() const;
 
-  // Type of blocklisted page. Used on malware and UwS lists.
-  // This will be NONE if it wasn't present in the reponse.
-  ThreatPatternType threat_pattern_type;
-
-  // Set of permissions blocked. Used with threat_type API_ABUSE.
-  // This will be empty if it wasn't present in the response.
-  std::set<std::string> api_permissions;
 
   // Map of list sub-types related to the SUBRESOURCE_FILTER threat type.
-  // Used instead of ThreatPatternType to allow multiple types at the same time.
   SubresourceFilterMatch subresource_filter_match;
-
-  // Opaque base64 string used for user-population experiments in pver4.
-  // This will be empty if it wasn't present in the response.
-  std::string population_id;
 };
 
 }  // namespace safe_browsing

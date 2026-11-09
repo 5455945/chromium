@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 
 #include <memory>
 
+#include "base/memory/singleton.h"
+
 namespace extensions {
 namespace api {
 namespace braille_display_private {
 
-StubBrailleController::StubBrailleController() {
-}
+StubBrailleController::StubBrailleController() = default;
 
 std::unique_ptr<DisplayState> StubBrailleController::GetDisplayState() {
   return std::make_unique<DisplayState>();

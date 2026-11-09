@@ -1,10 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -29,6 +29,9 @@ class Parent : public service_manager::Service,
     registry_.AddInterface<service_manager::test::mojom::Parent>(
         base::BindRepeating(&Parent::Create, base::Unretained(this)));
   }
+
+  Parent(const Parent&) = delete;
+  Parent& operator=(const Parent&) = delete;
 
   ~Parent() override = default;
 
@@ -63,8 +66,6 @@ class Parent : public service_manager::Service,
   service_manager::ServiceReceiver service_receiver_;
   service_manager::BinderRegistry registry_;
   mojo::ReceiverSet<service_manager::test::mojom::Parent> parent_receivers_;
-
-  DISALLOW_COPY_AND_ASSIGN(Parent);
 };
 
 }  // namespace

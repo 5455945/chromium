@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <memory>
 #include <tuple>
 
+#include "base/containers/span.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_bindings.h"
 
@@ -29,37 +30,38 @@ class MultiDrawManagerTest : public testing::TestWithParam<Param> {
   bool DoMultiDraw(uint32_t count,
                    GLenum mode = GL_TRIANGLES,
                    GLenum type = GL_UNSIGNED_INT) {
-    std::vector<GLsizei> data(count);
+    std::vector<GLint> firsts(count);
+    std::vector<GLsizei> counts(count);
+    std::vector<GLsizei> instance_counts(count);
+    std::vector<GLsizei> offsets(count);
     std::vector<GLint> basevertices(count);
     std::vector<GLuint> baseinstances(count);
     switch (std::get<1>(GetParam())) {
       case MultiDrawManager::DrawFunction::DrawArrays:
-        return multi_draw_manager_->MultiDrawArrays(mode, data.data(),
-                                                    data.data(), count);
+        return multi_draw_manager_->MultiDrawArrays(mode, firsts, counts);
 
       case MultiDrawManager::DrawFunction::DrawArraysInstanced:
         return multi_draw_manager_->MultiDrawArraysInstanced(
-            mode, data.data(), data.data(), data.data(), count);
+            mode, firsts, counts, instance_counts);
 
       case MultiDrawManager::DrawFunction::DrawArraysInstancedBaseInstance:
         return multi_draw_manager_->MultiDrawArraysInstancedBaseInstance(
-            mode, data.data(), data.data(), data.data(), baseinstances.data(),
-            count);
+            mode, firsts, counts, instance_counts, baseinstances);
 
       case MultiDrawManager::DrawFunction::DrawElements:
-        return multi_draw_manager_->MultiDrawElements(mode, data.data(), type,
-                                                      data.data(), count);
+        return multi_draw_manager_->MultiDrawElements(mode, counts, type,
+                                                      offsets);
 
       case MultiDrawManager::DrawFunction::DrawElementsInstanced:
         return multi_draw_manager_->MultiDrawElementsInstanced(
-            mode, data.data(), type, data.data(), data.data(), count);
+            mode, counts, type, offsets, instance_counts);
 
       case MultiDrawManager::DrawFunction::
           DrawElementsInstancedBaseVertexBaseInstance:
         return multi_draw_manager_
             ->MultiDrawElementsInstancedBaseVertexBaseInstance(
-                mode, data.data(), type, data.data(), data.data(),
-                basevertices.data(), baseinstances.data(), count);
+                mode, counts, type, offsets, instance_counts, basevertices,
+                baseinstances);
     }
   }
 
@@ -71,10 +73,10 @@ class MultiDrawManagerTest : public testing::TestWithParam<Param> {
     switch (draw_function) {
       case MultiDrawManager::DrawFunction::DrawArraysInstancedBaseInstance:
         EXPECT_TRUE(result.baseinstances.size() == count);
-        FALLTHROUGH;
+        [[fallthrough]];
       case MultiDrawManager::DrawFunction::DrawArraysInstanced:
         EXPECT_TRUE(result.instance_counts.size() == count);
-        FALLTHROUGH;
+        [[fallthrough]];
       case MultiDrawManager::DrawFunction::DrawArrays:
         EXPECT_TRUE(result.firsts.size() == count);
         EXPECT_TRUE(result.counts.size() == count);
@@ -83,10 +85,10 @@ class MultiDrawManagerTest : public testing::TestWithParam<Param> {
           DrawElementsInstancedBaseVertexBaseInstance:
         EXPECT_TRUE(result.basevertices.size() == count);
         EXPECT_TRUE(result.baseinstances.size() == count);
-        FALLTHROUGH;
+        [[fallthrough]];
       case MultiDrawManager::DrawFunction::DrawElementsInstanced:
         EXPECT_TRUE(result.instance_counts.size() == count);
-        FALLTHROUGH;
+        [[fallthrough]];
       case MultiDrawManager::DrawFunction::DrawElements:
         EXPECT_TRUE(result.counts.size() == count);
         switch (std::get<0>(GetParam())) {

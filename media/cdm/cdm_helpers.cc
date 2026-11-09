@@ -1,6 +1,7 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "media/cdm/cdm_helpers.h"
 
@@ -34,7 +35,7 @@ DecryptedBlockImpl::DecryptedBlockImpl() : buffer_(nullptr), timestamp_(0) {}
 
 DecryptedBlockImpl::~DecryptedBlockImpl() {
   if (buffer_)
-    buffer_->Destroy();
+    buffer_.ExtractAsDangling()->Destroy();
 }
 
 void DecryptedBlockImpl::SetDecryptedBuffer(cdm::Buffer* buffer) {
@@ -66,7 +67,7 @@ VideoFrameImpl::VideoFrameImpl()
 
 VideoFrameImpl::~VideoFrameImpl() {
   if (frame_buffer_)
-    frame_buffer_->Destroy();
+    frame_buffer_.ExtractAsDangling()->Destroy();
 }
 
 void VideoFrameImpl::SetFormat(cdm::VideoFormat format) {
@@ -94,22 +95,22 @@ cdm::Buffer* VideoFrameImpl::FrameBuffer() {
 }
 
 void VideoFrameImpl::SetPlaneOffset(cdm::VideoPlane plane, uint32_t offset) {
-  DCHECK(plane < cdm::kMaxPlanes);
+  CHECK(plane < cdm::kMaxPlanes);
   plane_offsets_[plane] = offset;
 }
 
 uint32_t VideoFrameImpl::PlaneOffset(cdm::VideoPlane plane) {
-  DCHECK(plane < cdm::kMaxPlanes);
+  CHECK(plane < cdm::kMaxPlanes);
   return plane_offsets_[plane];
 }
 
 void VideoFrameImpl::SetStride(cdm::VideoPlane plane, uint32_t stride) {
-  DCHECK(plane < cdm::kMaxPlanes);
+  CHECK(plane < cdm::kMaxPlanes);
   strides_[plane] = stride;
 }
 
 uint32_t VideoFrameImpl::Stride(cdm::VideoPlane plane) {
-  DCHECK(plane < cdm::kMaxPlanes);
+  CHECK(plane < cdm::kMaxPlanes);
   return strides_[plane];
 }
 
@@ -136,7 +137,7 @@ AudioFramesImpl::AudioFramesImpl()
 
 AudioFramesImpl::~AudioFramesImpl() {
   if (buffer_)
-    buffer_->Destroy();
+    buffer_.ExtractAsDangling()->Destroy();
 }
 
 void AudioFramesImpl::SetFrameBuffer(cdm::Buffer* buffer) {

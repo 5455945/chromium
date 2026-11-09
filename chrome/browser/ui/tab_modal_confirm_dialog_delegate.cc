@@ -1,27 +1,23 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
 
-#include "chrome/browser/chrome_notification_types.h"
 #include "components/strings/grit/components_strings.h"
-#include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/ui_base_types.h"
 
-using content::NavigationController;
 using content::WebContents;
 
 TabModalConfirmDialogDelegate::TabModalConfirmDialogDelegate(
     WebContents* web_contents)
-    : close_delegate_(nullptr), closing_(false) {
-  NavigationController* controller = &web_contents->GetController();
-  registrar_.Add(this, content::NOTIFICATION_LOAD_START,
-                 content::Source<NavigationController>(controller));
-}
+    : content::WebContentsObserver(web_contents),
+      close_delegate_(nullptr),
+      closing_(false) {}
 
 TabModalConfirmDialogDelegate::~TabModalConfirmDialogDelegate() {
   // If we end up here, the window has been closed, so make sure we don't close
@@ -32,8 +28,9 @@ TabModalConfirmDialogDelegate::~TabModalConfirmDialogDelegate() {
 }
 
 void TabModalConfirmDialogDelegate::Cancel() {
-  if (closing_)
+  if (closing_) {
     return;
+  }
   // Make sure we won't do anything when another action occurs.
   closing_ = true;
   OnCanceled();
@@ -41,28 +38,19 @@ void TabModalConfirmDialogDelegate::Cancel() {
 }
 
 void TabModalConfirmDialogDelegate::Accept() {
-  if (closing_)
+  if (closing_) {
     return;
+  }
   // Make sure we won't do anything when another action occurs.
   closing_ = true;
   OnAccepted();
   CloseDialog();
 }
 
-void TabModalConfirmDialogDelegate::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  DCHECK_EQ(content::NOTIFICATION_LOAD_START, type);
-
-  // Close the dialog if we load a page (because the action might not apply to
-  // the same page anymore).
-  Close();
-}
-
 void TabModalConfirmDialogDelegate::Close() {
-  if (closing_)
+  if (closing_) {
     return;
+  }
   // Make sure we won't do anything when another action occurs.
   closing_ = true;
   OnClosed();
@@ -70,9 +58,10 @@ void TabModalConfirmDialogDelegate::Close() {
 }
 
 void TabModalConfirmDialogDelegate::LinkClicked(
-    WindowOpenDisposition disposition) {
-  if (closing_)
+    ui::mojom::WindowOpenDisposition disposition) {
+  if (closing_) {
     return;
+  }
   OnLinkClicked(disposition);
 }
 
@@ -81,7 +70,8 @@ gfx::Image* TabModalConfirmDialogDelegate::GetIcon() {
 }
 
 int TabModalConfirmDialogDelegate::GetDialogButtons() const {
-  return ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL;
+  return static_cast<int>(ui::mojom::DialogButton::kOk) |
+         static_cast<int>(ui::mojom::DialogButton::kCancel);
 }
 
 std::u16string TabModalConfirmDialogDelegate::GetAcceptButtonTitle() {
@@ -109,21 +99,28 @@ void TabModalConfirmDialogDelegate::OnAccepted() {}
 void TabModalConfirmDialogDelegate::OnCanceled() {}
 
 void TabModalConfirmDialogDelegate::OnLinkClicked(
-    WindowOpenDisposition disposition) {}
+    ui::mojom::WindowOpenDisposition disposition) {}
 
 void TabModalConfirmDialogDelegate::OnClosed() {}
 
 void TabModalConfirmDialogDelegate::CloseDialog() {
-  if (close_delegate_)
+  if (close_delegate_) {
     close_delegate_->CloseDialog();
+  }
 }
 
-absl::optional<int> TabModalConfirmDialogDelegate::GetDefaultDialogButton() {
+std::optional<int> TabModalConfirmDialogDelegate::GetDefaultDialogButton() {
   // Use the default, don't override.
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-absl::optional<int> TabModalConfirmDialogDelegate::GetInitiallyFocusedButton() {
+std::optional<int> TabModalConfirmDialogDelegate::GetInitiallyFocusedButton() {
   // Use the default, don't override.
-  return absl::nullopt;
+  return std::nullopt;
+}
+
+void TabModalConfirmDialogDelegate::DidStartLoading() {
+  // Close the dialog if we load a page (because the action might not apply to
+  // the same page anymore).
+  Close();
 }

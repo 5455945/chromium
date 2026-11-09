@@ -1,4 +1,4 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -16,7 +16,16 @@ process_version_rc_template("version") {
   output = "$root_out_dir/gcp_setup_version.rc"
 }
 
+config("common_config") {
+  visibility = [ ":*" ]
+  defines = [
+    # Make single parameter CString constructors explicit.
+    "_ATL_CSTRING_EXPLICIT_CONSTRUCTORS",
+  ]
+}
+
 source_set("common") {
+  public_configs = [ ":common_config" ]
   sources = [
     "gcpw_files.cc",
     "gcpw_files.h",
@@ -34,6 +43,10 @@ source_set("common") {
     "//chrome/credential_provider/gaiacp:string_resources",
     "//chrome/installer/util:with_no_strings",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 grit("setup_resources") {
@@ -52,9 +65,14 @@ executable("gcp_sfx") {
   deps = [
     ":setup_resources",
     ":version",
-    "//third_party/lzma_sdk/Util/SfxSetup:7zS2_source",
+    "//third_party/lzma_sdk:7zS2_source",
   ]
-  configs += [ "//build/config/win:windowed" ]
+  configs += [
+    "//build/config/win:windowed",
+    "//build/config/win:delayloads",
+    "//build/config/win:delayloads_not_for_child_dll",
+  ]
+  ldflags = [ "/DEPENDENTLOADFLAG:0x800" ]
 }
 
 executable("gcp_setup") {
@@ -73,11 +91,19 @@ executable("gcp_setup") {
     "../gaiacp:util",
     "//build:branding_buildflags",
     "//chrome/common:version_header",
-    "//components/crash/core/app:app",
+    "//components/crash/core/app",
     "//components/crash/core/app:crash_export_thunks",
     "//components/crash/core/app:run_as_crashpad_handler",
     "//components/crash/core/common",
     "//content/public/common:static_switches",
   ]
-  configs += [ "//build/config/win:windowed" ]
+  configs += [
+    "//build/config/win:windowed",
+    "//build/config/win:delayloads",
+    "//build/config/win:delayloads_not_for_child_dll",
+  ]
+  ldflags = [
+    "/DELAYLOAD:version.dll",
+    "/DEPENDENTLOADFLAG:0x800",
+  ]
 }

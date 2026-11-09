@@ -1,17 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.signin;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * AccessTokenData encapsulates result of getToken method call from GoogleAuthUtil. It is a
  * holder that contains the access token and its expiration time.
  */
+@NullMarked
 public class AccessTokenData {
-    /**
-     * The expiration time value when there's no known expiration time for the token.
-     */
+    /** The expiration time value when there's no known expiration time for the token. */
     public static final long NO_KNOWN_EXPIRATION_TIME = 0;
 
     private final String mToken;
@@ -37,9 +38,7 @@ public class AccessTokenData {
         this(token, NO_KNOWN_EXPIRATION_TIME);
     }
 
-    /**
-     * Returns the value of the access token.
-     */
+    /** Returns the value of the access token. */
     public String getToken() {
         return this.mToken;
     }

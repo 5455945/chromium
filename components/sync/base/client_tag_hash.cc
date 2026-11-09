@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,24 +9,22 @@
 #include "base/base64.h"
 #include "base/hash/sha1.h"
 #include "base/trace_event/memory_usage_estimator.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/protocol/entity_specifics.pb.h"
 
 namespace syncer {
 
 // static
-ClientTagHash ClientTagHash::FromUnhashed(ModelType model_type,
-                                          const std::string& client_tag) {
+ClientTagHash ClientTagHash::FromUnhashed(DataType data_type,
+                                          std::string_view client_tag) {
   // Blank PB with just the field in it has termination symbol,
   // handy for delimiter.
   sync_pb::EntitySpecifics serialized_type;
-  AddDefaultFieldValue(model_type, &serialized_type);
-  std::string hash_input;
-  serialized_type.AppendToString(&hash_input);
-  hash_input.append(client_tag);
+  AddDefaultFieldValue(data_type, &serialized_type);
+  const std::string hash_input =
+      serialized_type.SerializeAsString() + std::string(client_tag);
 
-  std::string encode_output;
-  base::Base64Encode(base::SHA1HashString(hash_input), &encode_output);
-  return FromHashed(encode_output);
+  return FromHashed(
+      base::Base64Encode(base::SHA1Hash(base::as_byte_span(hash_input))));
 }
 
 // static
@@ -40,28 +38,16 @@ ClientTagHash::ClientTagHash(std::string value) : value_(std::move(value)) {}
 
 ClientTagHash::ClientTagHash(const ClientTagHash& other) = default;
 
-ClientTagHash::ClientTagHash(ClientTagHash&& other) = default;
-
-ClientTagHash::~ClientTagHash() = default;
-
 ClientTagHash& ClientTagHash::operator=(const ClientTagHash& other) = default;
+
+ClientTagHash::ClientTagHash(ClientTagHash&& other) = default;
 
 ClientTagHash& ClientTagHash::operator=(ClientTagHash&& other) = default;
 
+ClientTagHash::~ClientTagHash() = default;
+
 size_t ClientTagHash::EstimateMemoryUsage() const {
   return base::trace_event::EstimateMemoryUsage(value_);
-}
-
-bool operator<(const ClientTagHash& lhs, const ClientTagHash& rhs) {
-  return lhs.value() < rhs.value();
-}
-
-bool operator==(const ClientTagHash& lhs, const ClientTagHash& rhs) {
-  return lhs.value() == rhs.value();
-}
-
-bool operator!=(const ClientTagHash& lhs, const ClientTagHash& rhs) {
-  return lhs.value() != rhs.value();
 }
 
 std::ostream& operator<<(std::ostream& os,

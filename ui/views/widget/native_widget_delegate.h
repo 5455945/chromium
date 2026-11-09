@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_WIDGET_NATIVE_WIDGET_DELEGATE_H_
 #define UI_VIEWS_WIDGET_NATIVE_WIDGET_DELEGATE_H_
 
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/events/event_constants.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/views_export.h"
 
 class SkPath;
@@ -49,25 +50,27 @@ class VIEWS_EXPORT NativeWidgetDelegate {
   // Returns true if the window can be activated.
   virtual bool CanActivate() const = 0;
 
-  // Returns true if the window should paint as active.
-  virtual bool ShouldPaintAsActive() const = 0;
-
   // Returns true if the native widget has been initialized.
   virtual bool IsNativeWidgetInitialized() const = 0;
 
   // Called when the activation state of a window has changed.
-  // Returns true if this event should be handled.
+  // Returns true if this event was handled.
   virtual bool OnNativeWidgetActivationChanged(bool active) = 0;
+
+  // Returns true if the window's activation change event should be handled.
+  virtual bool ShouldHandleNativeWidgetActivationChanged(bool active) = 0;
 
   // Called when native focus moves from one native view to another.
   virtual void OnNativeFocus() = 0;
   virtual void OnNativeBlur() = 0;
 
-  // Called when the window is about to be shown/hidden.
-  virtual void OnNativeWidgetVisibilityChanging(bool visible) = 0;
-
-  // Called when the window is shown/hidden.
+  // Called when the window is shown/hidden. A visible widget might be
+  // physically invisible on screen, for example, if it is shown on an hidden
+  // virtual desktop.
   virtual void OnNativeWidgetVisibilityChanged(bool visible) = 0;
+
+  // Called when the window's visibility on screen changes.
+  virtual void OnNativeWidgetVisibilityOnScreenChanged(bool visible) = 0;
 
   // Called when the native widget is created.
   virtual void OnNativeWidgetCreated() = 0;
@@ -78,6 +81,9 @@ class VIEWS_EXPORT NativeWidgetDelegate {
 
   // Called just after the native widget is destroyed.
   virtual void OnNativeWidgetDestroyed() = 0;
+
+  // Called after the native widget's parent has changed.
+  virtual void OnNativeWidgetParentChanged(gfx::NativeView parent) = 0;
 
   // Returns the smallest size the window can be resized to by the user.
   virtual gfx::Size GetMinimumSize() const = 0;
@@ -93,6 +99,14 @@ class VIEWS_EXPORT NativeWidgetDelegate {
   // e.g. maximize.
   virtual void OnNativeWidgetSizeChanged(const gfx::Size& new_size) = 0;
 
+  // Called when the user begins/ends to resizing the window.
+  virtual void OnNativeWidgetUserResizeStarted() = 0;
+  virtual void OnNativeWidgetUserResizeEnded() = 0;
+
+  // Called when the user begins/ends to dragging the window.
+  virtual void OnNativeWidgetUserDragStarted() = 0;
+  virtual void OnNativeWidgetUserDragEnded() = 0;
+
   // Called when NativeWidget changed workspaces or its visible on all
   // workspaces state changes.
   virtual void OnNativeWidgetWorkspaceChanged() = 0;
@@ -105,6 +119,12 @@ class VIEWS_EXPORT NativeWidgetDelegate {
   // Called when the user begins/ends to change the bounds of the window.
   virtual void OnNativeWidgetBeginUserBoundsChange() = 0;
   virtual void OnNativeWidgetEndUserBoundsChange() = 0;
+
+  // Called when the NativeWidget is added and/or being removed from a
+  // Compositor. On some platforms the Compositor never changes, and these
+  // functions are never called.
+  virtual void OnNativeWidgetAddedToCompositor() = 0;
+  virtual void OnNativeWidgetRemovingFromCompositor() = 0;
 
   // Returns true if the delegate has a FocusManager.
   virtual bool HasFocusManager() const = 0;
@@ -142,7 +162,7 @@ class VIEWS_EXPORT NativeWidgetDelegate {
   // later.  Returns true if the initial focus has been set or the window should
   // not set the initial focus, or false if the caller should set the initial
   // focus (if any).
-  virtual bool SetInitialFocus(ui::WindowShowState show_state) = 0;
+  virtual bool SetInitialFocus(ui::mojom::WindowShowState show_state) = 0;
 
   // Returns true if event handling should descend into |child|. |root_layer| is
   // the layer associated with the root Window and |child_layer| the layer

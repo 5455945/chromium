@@ -68,25 +68,40 @@ arguments passed to `ninja`).
 Some additional options you may wish to set by passing in `--args` to `gn gen`
 or running `gn args out/Default`:
 
-    use_goma = true            # Googlers: Use build farm, compiles faster.
+    # Remote execution is only available to Googlers and contributors who have
+    # access to RBE.
+    use_remoteexec = true
+
     is_component_build = true  # Links faster.
     is_debug = false           # Release build, runs faster.
     dcheck_always_on = true    # Enables DCHECK despite release build.
-    enable_nacl = false        # Skips native client build, compiles faster.
 
-    # Set the following true to create a Chrome (instead of Chromium) build.
-    # This requires a src-internal checkout.
-    is_chrome_branded = false  # Adds internal features and branded art assets.
-    is_official_build = false  # Turns on many optimizations, slower build.
+    # Builds Chrome instead of Chromium. This requires a src-internal
+    # checkout. Adds internal features and branded art assets.
+    is_chrome_branded = true
 
-NOTE: You may wish to replace 'Default' with something like 'Cros' if
-you switch back and forth between Linux and Chromium OS builds, or 'Debug'
-if you want to differentiate between Debug and Release builds (see below).
+    # Enables many optimizations, leading to much slower compiles, links,
+    # and no runtime stack traces.
+    #
+    # Note: not compatible with `is_component_build = true`.
+    is_official_build = true
 
-See [GN Build Configuration](https://www.chromium.org/developers/gn-build-configuration)
-for more information about configuring your build.
+NOTE:
+ - You may wish to replace 'Default' with something like 'Cros' if you switch
+   back and forth between Linux and Chromium OS builds, or 'Debug' if you want
+   to differentiate between Debug and Release builds (see below).
 
-You can also build and run test targets like `unit_tests`, `browser_tests`, etc.
+ - See [GN Build
+   Configuration](https://www.chromium.org/developers/gn-build-configuration)
+   for more information about configuring your build.
+
+ - You can also build and run test targets like `unit_tests`, `browser_tests`,
+   etc.
+
+ - For contributors (Not a Googler) with access to RBE, please follow the
+   corresponding [Linux build
+   instructions](linux/build_instructions.md#use-remote-execution) to configure
+   remote execution.
 
 ### Flags
 
@@ -135,7 +150,7 @@ testing it through Chromium Remote Desktop you might face drawing
 problems (e.g. Aura window not painting anything). Possible remedies:
 
 *   `--ui-enable-software-compositing --ui-disable-threaded-compositing`
-*   `--use-gl=swiftshader`, but it's slow.
+*   `--use-gl=angle --use-angle=swiftshader`, but it's slow.
 
 To more closely match the UI used on devices, you can install fonts used
 by Chrome OS, such as Roboto, on your Linux distro.

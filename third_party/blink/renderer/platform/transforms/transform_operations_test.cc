@@ -24,10 +24,10 @@
 
 #include "third_party/blink/renderer/platform/transforms/transform_operations.h"
 
-#include "base/cxx17_backports.h"
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/geometry/float_box.h"
-#include "third_party/blink/renderer/platform/geometry/float_box_test_helpers.h"
 #include "third_party/blink/renderer/platform/transforms/interpolated_transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/matrix_3d_transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/matrix_transform_operation.h"
@@ -35,8 +35,9 @@
 #include "third_party/blink/renderer/platform/transforms/rotate_transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/scale_transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/skew_transform_operation.h"
-#include "third_party/blink/renderer/platform/transforms/transformation_matrix_test_helpers.h"
 #include "third_party/blink/renderer/platform/transforms/translate_transform_operation.h"
+#include "ui/gfx/geometry/box_f.h"
+#include "ui/gfx/geometry/test/geometry_util.h"
 
 namespace blink {
 
@@ -46,92 +47,98 @@ static void EmpiricallyTestBounds(const TransformOperations& from,
                                   const TransformOperations& to,
                                   const double& min_progress,
                                   const double& max_progress) {
-  FloatBox box(200, 500, 100, 100, 300, 200);
-  FloatBox bounds;
+  gfx::BoxF box(200, 500, 100, 100, 300, 200);
+  gfx::BoxF bounds;
 
   EXPECT_TRUE(
       to.BlendedBoundsForBox(box, from, min_progress, max_progress, &bounds));
   bool first_time = true;
 
-  FloatBox empirical_bounds;
+  gfx::BoxF empirical_bounds;
   static const size_t kNumSteps = 10;
   for (size_t step = 0; step < kNumSteps; ++step) {
     float t = step / (kNumSteps - 1);
     t = min_progress + (max_progress - min_progress) * t;
     TransformOperations operations = from.Blend(to, t);
-    TransformationMatrix matrix;
-    operations.Apply(FloatSize(0, 0), matrix);
-    FloatBox transformed = box;
-    matrix.TransformBox(transformed);
+    gfx::Transform matrix;
+    operations.Apply(gfx::SizeF(0, 0), matrix);
+    gfx::BoxF transformed = matrix.MapBox(box);
 
     if (first_time)
       empirical_bounds = transformed;
     else
-      empirical_bounds.UnionBounds(transformed);
+      empirical_bounds.Union(transformed);
     first_time = false;
   }
 
-  ASSERT_PRED_FORMAT2(float_box_test::AssertContains, bounds, empirical_bounds);
+  // Check whether |bounds| contains |empirical_bounds|.
+  gfx::BoxF expanded_bounds = bounds;
+  float tolerance =
+      std::max({bounds.width(), bounds.height(), bounds.depth()}) * 1e-6f;
+  expanded_bounds.ExpandTo(empirical_bounds);
+  EXPECT_BOXF_NEAR(bounds, expanded_bounds, tolerance)
+      << " Expected to contain: " << empirical_bounds.ToString();
 }
 
 TEST(TransformOperationsTest, AbsoluteAnimatedTranslatedBoundsTest) {
   TransformOperations from_ops;
   TransformOperations to_ops;
-  from_ops.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Fixed(-30), Length::Fixed(20), 15,
-      TransformOperation::kTranslate3D));
-  to_ops.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Fixed(10), Length::Fixed(10), 200,
-      TransformOperation::kTranslate3D));
-  FloatBox box(0, 0, 0, 10, 10, 10);
-  FloatBox bounds;
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(-30), Length::Fixed(20), 15,
+          TransformOperation::kTranslate3D));
+  to_ops.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(10), Length::Fixed(10), 200,
+          TransformOperation::kTranslate3D));
+  gfx::BoxF box(0, 0, 0, 10, 10, 10);
+  gfx::BoxF bounds;
 
   EXPECT_TRUE(
       to_ops.BlendedBoundsForBox(box, kIdentityOperations, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, 0, 0, 20, 20, 210), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, 0, 0, 20, 20, 210), bounds);
 
   EXPECT_TRUE(
       kIdentityOperations.BlendedBoundsForBox(box, to_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, 0, 0, 20, 20, 210), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, 0, 0, 20, 20, 210), bounds);
 
   EXPECT_TRUE(
       kIdentityOperations.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-30, 0, 0, 40, 30, 25), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-30, 0, 0, 40, 30, 25), bounds);
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-30, 10, 15, 50, 20, 195), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-30, 10, 15, 50, 20, 195), bounds);
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, -0.5, 1.25, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-50, 7.5, -77.5, 80, 27.5, 333.75), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-50, 7.5, -77.5, 80, 27.5, 333.75), bounds);
 }
 
 TEST(TransformOperationsTest, EmpiricalAnimatedTranslatedBoundsTest) {
-  float test_transforms[][2][3] = {{{0, 0, 0}, {10, 10, 0}},
-                                   {{-100, 202.5, -32.6}, {43.2, 56.1, 89.75}},
-                                   {{43.2, 56.1, 89.75}, {-100, 202.5, -32.6}}};
+  std::array<std::array<std::array<float, 3>, 2>, 3> test_transforms = {{
+      {{{0, 0, 0}, {10, 10, 0}}},
+      {{{-100, 202.5, -32.6}, {43.2, 56.1, 89.75}}},
+      {{{43.2, 56.1, 89.75}, {-100, 202.5, -32.6}}},
+  }};
 
   // All progressions for animations start and end at 0, 1 respectively,
   // we can go outside of these bounds, but will always at least contain
   // [0,1].
-  float progress[][2] = {{0, 1}, {-.25, 1.25}};
+  auto progress = std::to_array<std::array<float, 2>>({{0, 1}, {-.25, 1.25}});
 
-  for (size_t i = 0; i < base::size(test_transforms); ++i) {
-    for (size_t j = 0; j < base::size(progress); ++j) {
+  for (size_t i = 0; i < std::size(test_transforms); ++i) {
+    for (size_t j = 0; j < std::size(progress); ++j) {
       TransformOperations from_ops;
       TransformOperations to_ops;
-      from_ops.Operations().push_back(TranslateTransformOperation::Create(
-          Length::Fixed(test_transforms[i][0][0]),
-          Length::Fixed(test_transforms[i][0][1]), test_transforms[i][0][2],
-          TransformOperation::kTranslate3D));
-      to_ops.Operations().push_back(TranslateTransformOperation::Create(
-          Length::Fixed(test_transforms[i][1][0]),
-          Length::Fixed(test_transforms[i][1][1]), test_transforms[i][1][2],
-          TransformOperation::kTranslate3D));
+      from_ops.Operations().push_back(
+          MakeGarbageCollected<TranslateTransformOperation>(
+              Length::Fixed(test_transforms[i][0][0]),
+              Length::Fixed(test_transforms[i][0][1]), test_transforms[i][0][2],
+              TransformOperation::kTranslate3D));
+      to_ops.Operations().push_back(
+          MakeGarbageCollected<TranslateTransformOperation>(
+              Length::Fixed(test_transforms[i][1][0]),
+              Length::Fixed(test_transforms[i][1][1]), test_transforms[i][1][2],
+              TransformOperation::kTranslate3D));
       EmpiricallyTestBounds(from_ops, to_ops, progress[j][0], progress[j][1]);
     }
   }
@@ -140,61 +147,60 @@ TEST(TransformOperationsTest, EmpiricalAnimatedTranslatedBoundsTest) {
 TEST(TransformOperationsTest, AbsoluteAnimatedScaleBoundsTest) {
   TransformOperations from_ops;
   TransformOperations to_ops;
-  from_ops.Operations().push_back(
-      ScaleTransformOperation::Create(4, -3, TransformOperation::kScale));
-  to_ops.Operations().push_back(
-      ScaleTransformOperation::Create(5, 2, TransformOperation::kScale));
+  from_ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      4, -3, TransformOperation::kScale));
+  to_ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      5, 2, TransformOperation::kScale));
 
-  FloatBox box(0, 0, 0, 10, 10, 10);
-  FloatBox bounds;
+  gfx::BoxF box(0, 0, 0, 10, 10, 10);
+  gfx::BoxF bounds;
 
   EXPECT_TRUE(
       to_ops.BlendedBoundsForBox(box, kIdentityOperations, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, 0, 0, 50, 20, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, 0, 0, 50, 20, 10), bounds);
 
   EXPECT_TRUE(
       kIdentityOperations.BlendedBoundsForBox(box, to_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, 0, 0, 50, 20, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, 0, 0, 50, 20, 10), bounds);
 
   EXPECT_TRUE(
       kIdentityOperations.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, -30, 0, 40, 40, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, -30, 0, 40, 40, 10), bounds);
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, -30, 0, 50, 50, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, -30, 0, 50, 50, 10), bounds);
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, -0.5, 1.25, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, -55, 0, 52.5, 87.5, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, -55, 0, 52.5, 87.5, 10), bounds);
 }
 
 TEST(TransformOperationsTest, EmpiricalAnimatedScaleBoundsTest) {
-  float test_transforms[][2][3] = {{{1, 1, 1}, {10, 10, -32}},
-                                   {{1, 2, 5}, {-1, -2, -4}},
-                                   {{0, 0, 0}, {1, 2, 3}},
-                                   {{0, 0, 0}, {0, 0, 0}}};
+  std::array<std::array<std::array<float, 3>, 2>, 4> test_transforms = {{
+      {{{1, 1, 1}, {10, 10, -32}}},
+      {{{1, 2, 5}, {-1, -2, -4}}},
+      {{{0, 0, 0}, {1, 2, 3}}},
+      {{{0, 0, 0}, {0, 0, 0}}},
+  }};
 
   // All progressions for animations start and end at 0, 1 respectively,
   // we can go outside of these bounds, but will always at least contain
   // [0,1].
-  float progress[][2] = {{0, 1}, {-.25f, 1.25f}};
+  auto progress = std::to_array<std::array<float, 2>>({{0, 1}, {-.25f, 1.25f}});
 
-  for (size_t i = 0; i < base::size(test_transforms); ++i) {
-    for (size_t j = 0; j < base::size(progress); ++j) {
+  for (size_t i = 0; i < std::size(test_transforms); ++i) {
+    for (size_t j = 0; j < std::size(progress); ++j) {
       TransformOperations from_ops;
       TransformOperations to_ops;
-      from_ops.Operations().push_back(TranslateTransformOperation::Create(
-          Length::Fixed(test_transforms[i][0][0]),
-          Length::Fixed(test_transforms[i][0][1]), test_transforms[i][0][2],
-          TransformOperation::kTranslate3D));
-      to_ops.Operations().push_back(TranslateTransformOperation::Create(
-          Length::Fixed(test_transforms[i][1][0]),
-          Length::Fixed(test_transforms[i][1][1]), test_transforms[i][1][2],
-          TransformOperation::kTranslate3D));
+      from_ops.Operations().push_back(
+          MakeGarbageCollected<TranslateTransformOperation>(
+              Length::Fixed(test_transforms[i][0][0]),
+              Length::Fixed(test_transforms[i][0][1]), test_transforms[i][0][2],
+              TransformOperation::kTranslate3D));
+      to_ops.Operations().push_back(
+          MakeGarbageCollected<TranslateTransformOperation>(
+              Length::Fixed(test_transforms[i][1][0]),
+              Length::Fixed(test_transforms[i][1][1]), test_transforms[i][1][2],
+              TransformOperation::kTranslate3D));
       EmpiricallyTestBounds(from_ops, to_ops, progress[j][0], progress[j][1]);
     }
   }
@@ -204,23 +210,23 @@ TEST(TransformOperationsTest, AbsoluteAnimatedRotationBounds) {
   TransformOperations from_ops;
   TransformOperations to_ops;
   from_ops.Operations().push_back(
-      RotateTransformOperation::Create(0, TransformOperation::kRotate));
-  to_ops.Operations().push_back(
-      RotateTransformOperation::Create(360, TransformOperation::kRotate));
+      MakeGarbageCollected<RotateTransformOperation>(
+          0, TransformOperation::kRotate));
+  to_ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      360, TransformOperation::kRotate));
   float sqrt2 = sqrt(2.0f);
-  FloatBox box(-sqrt2, -sqrt2, 0, sqrt2, sqrt2, 0);
-  FloatBox bounds;
+  gfx::BoxF box(-sqrt2, -sqrt2, 0, sqrt2, sqrt2, 0);
+  gfx::BoxF bounds;
 
   // Since we're rotating 360 degrees, any box with dimensions between 0 and
   // 2 * sqrt(2) should give the same result.
   float sizes[] = {0, 0.1f, sqrt2, 2 * sqrt2};
   to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds);
-  for (size_t i = 0; i < base::size(sizes); ++i) {
-    box.SetSize(FloatPoint3D(sizes[i], sizes[i], 0));
+  for (float size : sizes) {
+    box.set_size(size, size, 0);
 
     EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-    EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                        FloatBox(-2, -2, 0, 4, 4, 0), bounds);
+    EXPECT_BOXF_EQ(gfx::BoxF(-2, -2, 0, 4, 4, 0), bounds);
   }
 }
 
@@ -230,19 +236,19 @@ TEST(TransformOperationsTest, AbsoluteAnimatedExtremeRotationBounds) {
   // catching all 6.
   TransformOperations from_ops;
   TransformOperations to_ops;
-  from_ops.Operations().push_back(RotateTransformOperation::Create(
-      1, 1, 1, 30, TransformOperation::kRotate3D));
-  to_ops.Operations().push_back(RotateTransformOperation::Create(
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          1, 1, 1, 30, TransformOperation::kRotate3D));
+  to_ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
       1, 1, 1, 390, TransformOperation::kRotate3D));
 
-  FloatBox box(1, 0, 0, 0, 0, 0);
-  FloatBox bounds;
+  gfx::BoxF box(1, 0, 0, 0, 0, 0);
+  gfx::BoxF bounds;
   float min = -1 / 3.0f;
   float max = 1;
   float size = max - min;
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(min, min, min, size, size, size), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(min, min, min, size, size, size), bounds);
 }
 
 TEST(TransformOperationsTest, AbsoluteAnimatedAxisRotationBounds) {
@@ -253,17 +259,20 @@ TEST(TransformOperationsTest, AbsoluteAnimatedAxisRotationBounds) {
   TransformOperations to_same;
   TransformOperations to_opposite;
   TransformOperations to_different;
-  from_ops.Operations().push_back(RotateTransformOperation::Create(
-      1, 1, 1, 30, TransformOperation::kRotate3D));
-  to_same.Operations().push_back(RotateTransformOperation::Create(
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          1, 1, 1, 30, TransformOperation::kRotate3D));
+  to_same.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
       1, 1, 1, 390, TransformOperation::kRotate3D));
-  to_opposite.Operations().push_back(RotateTransformOperation::Create(
-      -1, -1, -1, 390, TransformOperation::kRotate3D));
-  to_different.Operations().push_back(RotateTransformOperation::Create(
-      1, 3, 1, 390, TransformOperation::kRotate3D));
+  to_opposite.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          -1, -1, -1, 390, TransformOperation::kRotate3D));
+  to_different.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          1, 3, 1, 390, TransformOperation::kRotate3D));
 
-  FloatBox box(1, 0, 0, 0, 0, 0);
-  FloatBox bounds;
+  gfx::BoxF box(1, 0, 0, 0, 0, 0);
+  gfx::BoxF bounds;
   EXPECT_TRUE(to_same.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
   EXPECT_FALSE(to_opposite.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
   EXPECT_FALSE(to_different.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
@@ -274,27 +283,28 @@ TEST(TransformOperationsTest, AbsoluteAnimatedOnAxisRotationBounds) {
   // change at all.
   TransformOperations from_ops;
   TransformOperations to_ops;
-  from_ops.Operations().push_back(RotateTransformOperation::Create(
-      1, 1, 1, 30, TransformOperation::kRotate3D));
-  to_ops.Operations().push_back(RotateTransformOperation::Create(
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          1, 1, 1, 30, TransformOperation::kRotate3D));
+  to_ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
       1, 1, 1, 390, TransformOperation::kRotate3D));
 
-  FloatBox box(1, 1, 1, 0, 0, 0);
-  FloatBox bounds;
+  gfx::BoxF box(1, 1, 1, 0, 0, 0);
+  gfx::BoxF bounds;
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual, box, bounds);
+  EXPECT_BOXF_EQ(box, bounds);
 }
 
-// This would have been best as anonymous structs, but |base::size|
+// This would have been best as anonymous structs, but |std::size|
 // does not get along with anonymous structs once we support C++11
-// base::size will automatically support anonymous structs.
+// std::size will automatically support anonymous structs.
 
 struct ProblematicAxisTest {
   double x;
   double y;
   double z;
-  FloatBox expected;
+  gfx::BoxF expected;
 };
 
 TEST(TransformOperationsTest, AbsoluteAnimatedProblematicAxisRotationBounds) {
@@ -307,50 +317,76 @@ TEST(TransformOperationsTest, AbsoluteAnimatedProblematicAxisRotationBounds) {
   float dim2 = sqrt(2.0f);
   float dim3 = 2 * dim2;
 
-  ProblematicAxisTest tests[] = {
-      {0, 0, 0, FloatBox(1, 1, 1, 0, 0, 0)},
-      {1, 0, 0, FloatBox(1, -dim2, -dim2, 0, dim3, dim3)},
-      {0, 1, 0, FloatBox(-dim2, 1, -dim2, dim3, 0, dim3)},
-      {0, 0, 1, FloatBox(-dim2, -dim2, 1, dim3, dim3, 0)},
-      {1, 1, 0, FloatBox(dim1, dim1, -1, dim2, dim2, 2)},
-      {0, 1, 1, FloatBox(-1, dim1, dim1, 2, dim2, dim2)},
-      {1, 0, 1, FloatBox(dim1, -1, dim1, dim2, 2, dim2)}};
+  auto tests = std::to_array<ProblematicAxisTest>({
+      {0, 0, 0, gfx::BoxF(1, 1, 1, 0, 0, 0)},
+      {1, 0, 0, gfx::BoxF(1, -dim2, -dim2, 0, dim3, dim3)},
+      {0, 1, 0, gfx::BoxF(-dim2, 1, -dim2, dim3, 0, dim3)},
+      {0, 0, 1, gfx::BoxF(-dim2, -dim2, 1, dim3, dim3, 0)},
+      {1, 1, 0, gfx::BoxF(dim1, dim1, -1, dim2, dim2, 2)},
+      {0, 1, 1, gfx::BoxF(-1, dim1, dim1, 2, dim2, dim2)},
+      {1, 0, 1, gfx::BoxF(dim1, -1, dim1, dim2, 2, dim2)},
+  });
 
-  for (size_t i = 0; i < base::size(tests); ++i) {
+  for (size_t i = 0; i < std::size(tests); ++i) {
     float x = tests[i].x;
     float y = tests[i].y;
     float z = tests[i].z;
     TransformOperations from_ops;
-    from_ops.Operations().push_back(RotateTransformOperation::Create(
-        x, y, z, 0, TransformOperation::kRotate3D));
+    from_ops.Operations().push_back(
+        MakeGarbageCollected<RotateTransformOperation>(
+            x, y, z, 0, TransformOperation::kRotate3D));
     TransformOperations to_ops;
-    to_ops.Operations().push_back(RotateTransformOperation::Create(
-        x, y, z, 360, TransformOperation::kRotate3D));
-    FloatBox box(1, 1, 1, 0, 0, 0);
-    FloatBox bounds;
+    to_ops.Operations().push_back(
+        MakeGarbageCollected<RotateTransformOperation>(
+            x, y, z, 360, TransformOperation::kRotate3D));
+    gfx::BoxF box(1, 1, 1, 0, 0, 0);
+    gfx::BoxF bounds;
 
     EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-    EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual, tests[i].expected,
-                        bounds);
+    EXPECT_BOXF_NEAR(tests[i].expected, bounds, 1e-6f);
   }
 }
 
 TEST(TransformOperationsTest, BlendedBoundsForRotationEmpiricalTests) {
-  float axes[][3] = {{1, 1, 1},  {-1, -1, -1}, {-1, 2, 3},  {1, -2, 3},
-                     {0, 0, 0},  {1, 0, 0},    {0, 1, 0},   {0, 0, 1},
-                     {1, 1, 0},  {0, 1, 1},    {1, 0, 1},   {-1, 0, 0},
-                     {0, -1, 0}, {0, 0, -1},   {-1, -1, 0}, {0, -1, -1},
-                     {-1, 0, -1}};
+  auto axes = std::to_array<std::array<float, 3>>({
+      {1, 1, 1},
+      {-1, -1, -1},
+      {-1, 2, 3},
+      {1, -2, 3},
+      {0, 0, 0},
+      {1, 0, 0},
+      {0, 1, 0},
+      {0, 0, 1},
+      {1, 1, 0},
+      {0, 1, 1},
+      {1, 0, 1},
+      {-1, 0, 0},
+      {0, -1, 0},
+      {0, 0, -1},
+      {-1, -1, 0},
+      {0, -1, -1},
+      {-1, 0, -1},
+  });
 
-  float angles[][2] = {{5, 100},     {10, 5},       {0, 360},   {20, 180},
-                       {-20, -180},  {180, -220},   {220, 320}, {1020, 1120},
-                       {-3200, 120}, {-9000, -9050}};
+  auto angles = std::to_array<std::array<float, 2>>({
+      {5, 100},
+      {10, 5},
+      {0, 360},
+      {20, 180},
+      {-20, -180},
+      {180, -220},
+      {220, 320},
+      {1020, 1120},
+      {-3200, 120},
+      {-9000, -9050},
+  });
 
-  float progress[][2] = {{0, 1}, {-0.25f, 1.25f}};
+  auto progress =
+      std::to_array<std::array<float, 2>>({{0, 1}, {-0.25f, 1.25f}});
 
-  for (size_t i = 0; i < base::size(axes); ++i) {
-    for (size_t j = 0; j < base::size(angles); ++j) {
-      for (size_t k = 0; k < base::size(progress); ++k) {
+  for (size_t i = 0; i < std::size(axes); ++i) {
+    for (size_t j = 0; j < std::size(angles); ++j) {
+      for (size_t k = 0; k < std::size(progress); ++k) {
         float x = axes[i][0];
         float y = axes[i][1];
         float z = axes[i][2];
@@ -358,10 +394,12 @@ TEST(TransformOperationsTest, BlendedBoundsForRotationEmpiricalTests) {
         TransformOperations from_ops;
         TransformOperations to_ops;
 
-        from_ops.Operations().push_back(RotateTransformOperation::Create(
-            x, y, z, angles[j][0], TransformOperation::kRotate3D));
-        to_ops.Operations().push_back(RotateTransformOperation::Create(
-            x, y, z, angles[j][1], TransformOperation::kRotate3D));
+        from_ops.Operations().push_back(
+            MakeGarbageCollected<RotateTransformOperation>(
+                x, y, z, angles[j][0], TransformOperation::kRotate3D));
+        to_ops.Operations().push_back(
+            MakeGarbageCollected<RotateTransformOperation>(
+                x, y, z, angles[j][1], TransformOperation::kRotate3D));
         EmpiricallyTestBounds(from_ops, to_ops, progress[k][0], progress[k][1]);
       }
     }
@@ -371,40 +409,43 @@ TEST(TransformOperationsTest, BlendedBoundsForRotationEmpiricalTests) {
 TEST(TransformOperationsTest, AbsoluteAnimatedPerspectiveBoundsTest) {
   TransformOperations from_ops;
   TransformOperations to_ops;
-  from_ops.Operations().push_back(PerspectiveTransformOperation::Create(20));
-  to_ops.Operations().push_back(PerspectiveTransformOperation::Create(40));
-  FloatBox box(0, 0, 0, 10, 10, 10);
-  FloatBox bounds;
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(20));
+  to_ops.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(40));
+  gfx::BoxF box(0, 0, 0, 10, 10, 10);
+  gfx::BoxF bounds;
   to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds);
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, 0, 0, 20, 20, 20), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, 0, 0, 20, 20, 20), bounds);
 
   from_ops.BlendedBoundsForBox(box, to_ops, -0.25, 1.25, &bounds);
   // The perspective range was [20, 40] and blending will extrapolate that to
   // [17.777..., 53.333...].  The cube has w/h/d of 10 and the observer is at
   // 17.777..., so the face closest the observer is 17.777...-10=7.777...
-  double projected_size = 10.0 / 7.7778 * 17.7778;
-  EXPECT_PRED_FORMAT2(
-      float_box_test::AssertAlmostEqual,
-      FloatBox(0, 0, 0, projected_size, projected_size, projected_size),
+  double projected_size = 10.0 / 7.7777778 * 17.7777778;
+  EXPECT_BOXF_EQ(
+      gfx::BoxF(0, 0, 0, projected_size, projected_size, projected_size),
       bounds);
 }
 
 TEST(TransformOperationsTest, EmpiricalAnimatedPerspectiveBoundsTest) {
-  float depths[][2] = {
-      {600, 400}, {800, 1000}, {800, std::numeric_limits<float>::infinity()}};
+  auto depths = std::to_array<std::array<float, 2>>({
+      {600, 400},
+      {800, 1000},
+      {800, std::numeric_limits<float>::infinity()},
+  });
 
-  float progress[][2] = {{0, 1}, {-0.1f, 1.1f}};
+  auto progress = std::to_array<std::array<float, 2>>({{0, 1}, {-0.1f, 1.1f}});
 
-  for (size_t i = 0; i < base::size(depths); ++i) {
-    for (size_t j = 0; j < base::size(progress); ++j) {
+  for (size_t i = 0; i < std::size(depths); ++i) {
+    for (size_t j = 0; j < std::size(progress); ++j) {
       TransformOperations from_ops;
       TransformOperations to_ops;
 
       from_ops.Operations().push_back(
-          PerspectiveTransformOperation::Create(depths[i][0]));
+          MakeGarbageCollected<PerspectiveTransformOperation>(depths[i][0]));
       to_ops.Operations().push_back(
-          PerspectiveTransformOperation::Create(depths[i][1]));
+          MakeGarbageCollected<PerspectiveTransformOperation>(depths[i][1]));
 
       EmpiricallyTestBounds(from_ops, to_ops, progress[j][0], progress[j][1]);
     }
@@ -414,44 +455,42 @@ TEST(TransformOperationsTest, EmpiricalAnimatedPerspectiveBoundsTest) {
 TEST(TransformOperationsTest, AnimatedSkewBoundsTest) {
   TransformOperations from_ops;
   TransformOperations to_ops;
-  from_ops.Operations().push_back(
-      SkewTransformOperation::Create(-45, 0, TransformOperation::kSkew));
-  to_ops.Operations().push_back(
-      SkewTransformOperation::Create(0, 45, TransformOperation::kSkew));
-  FloatBox box(0, 0, 0, 10, 10, 10);
-  FloatBox bounds;
+  from_ops.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      -45, 0, TransformOperation::kSkew));
+  to_ops.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      0, 45, TransformOperation::kSkew));
+  gfx::BoxF box(0, 0, 0, 10, 10, 10);
+  gfx::BoxF bounds;
 
   to_ops.BlendedBoundsForBox(box, kIdentityOperations, 0, 1, &bounds);
-  ASSERT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(0, 0, 0, 10, 20, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(0, 0, 0, 10, 20, 10), bounds);
 
   kIdentityOperations.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds);
-  ASSERT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-10, 0, 0, 20, 10, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-10, 0, 0, 20, 10, 10), bounds);
 
   to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds);
-  ASSERT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-10, 0, 0, 20, 20, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-10, 0, 0, 20, 20, 10), bounds);
 
   from_ops.BlendedBoundsForBox(box, to_ops, 0, 1, &bounds);
-  ASSERT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-10, 0, 0, 20, 20, 10), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-10, 0, 0, 20, 20, 10), bounds);
 }
 
 TEST(TransformOperationsTest, NonCommutativeRotations) {
   TransformOperations from_ops;
-  from_ops.Operations().push_back(RotateTransformOperation::Create(
-      1, 0, 0, 0, TransformOperation::kRotate3D));
-  from_ops.Operations().push_back(RotateTransformOperation::Create(
-      0, 1, 0, 0, TransformOperation::kRotate3D));
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          1, 0, 0, 0, TransformOperation::kRotate3D));
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<RotateTransformOperation>(
+          0, 1, 0, 0, TransformOperation::kRotate3D));
   TransformOperations to_ops;
-  to_ops.Operations().push_back(RotateTransformOperation::Create(
+  to_ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
       1, 0, 0, 45, TransformOperation::kRotate3D));
-  to_ops.Operations().push_back(RotateTransformOperation::Create(
+  to_ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
       0, 1, 0, 135, TransformOperation::kRotate3D));
 
-  FloatBox box(0, 0, 0, 1, 1, 1);
-  FloatBox bounds;
+  gfx::BoxF box(0, 0, 0, 1, 1, 1);
+  gfx::BoxF bounds;
 
   double min_progress = 0;
   double max_progress = 1;
@@ -459,16 +498,30 @@ TEST(TransformOperationsTest, NonCommutativeRotations) {
                                          max_progress, &bounds));
 
   TransformOperations operations = to_ops.Blend(from_ops, max_progress);
-  TransformationMatrix blended_transform;
-  operations.Apply(FloatSize(0, 0), blended_transform);
+  gfx::Transform blended_transform;
+  operations.Apply(gfx::SizeF(0, 0), blended_transform);
 
-  FloatPoint3D blended_point(0.9f, 0.9f, 0);
+  gfx::Point3F blended_point(0.9f, 0.9f, 0);
   blended_point = blended_transform.MapPoint(blended_point);
-  FloatBox expanded_bounds = bounds;
+  gfx::BoxF expanded_bounds = bounds;
   expanded_bounds.ExpandTo(blended_point);
 
-  ASSERT_PRED_FORMAT2(float_box_test::AssertAlmostEqual, bounds,
-                      expanded_bounds);
+  EXPECT_BOXF_EQ(bounds, expanded_bounds);
+}
+
+TEST(TransformOperationsTest, NonInvertibleBlendTest) {
+  TransformOperations from_ops;
+  TransformOperations to_ops;
+
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(5), Length::Fixed(-5), TransformOperation::kTranslate));
+  to_ops.Operations().push_back(
+      MakeGarbageCollected<MatrixTransformOperation>(0, 0, 0, 0, 0, 0));
+
+  EXPECT_EQ(from_ops, to_ops.Blend(from_ops, 0.25));
+  EXPECT_EQ(to_ops, to_ops.Blend(from_ops, 0.5));
+  EXPECT_EQ(to_ops, to_ops.Blend(from_ops, 0.75));
 }
 
 TEST(TransformOperationsTest, AbsoluteSequenceBoundsTest) {
@@ -476,75 +529,76 @@ TEST(TransformOperationsTest, AbsoluteSequenceBoundsTest) {
   TransformOperations to_ops;
 
   from_ops.Operations().push_back(
-      TranslateTransformOperation::Create(Length::Fixed(1), Length::Fixed(-5),
-                                          1, TransformOperation::kTranslate3D));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(1), Length::Fixed(-5), 1,
+          TransformOperation::kTranslate3D));
+  from_ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      -1, 2, 3, TransformOperation::kScale3D));
   from_ops.Operations().push_back(
-      ScaleTransformOperation::Create(-1, 2, 3, TransformOperation::kScale3D));
-  from_ops.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Fixed(2), Length::Fixed(4), -1,
-      TransformOperation::kTranslate3D));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(2), Length::Fixed(4), -1,
+          TransformOperation::kTranslate3D));
 
   to_ops.Operations().push_back(
-      TranslateTransformOperation::Create(Length::Fixed(13), Length::Fixed(-1),
-                                          5, TransformOperation::kTranslate3D));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(13), Length::Fixed(-1), 5,
+          TransformOperation::kTranslate3D));
+  to_ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      -3, -2, 5, TransformOperation::kScale3D));
   to_ops.Operations().push_back(
-      ScaleTransformOperation::Create(-3, -2, 5, TransformOperation::kScale3D));
-  to_ops.Operations().push_back(
-      TranslateTransformOperation::Create(Length::Fixed(6), Length::Fixed(-2),
-                                          3, TransformOperation::kTranslate3D));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(6), Length::Fixed(-2), 3,
+          TransformOperation::kTranslate3D));
 
-  FloatBox box(1, 2, 3, 4, 4, 4);
-  FloatBox bounds;
+  gfx::BoxF box(1, 2, 3, 4, 4, 4);
+  gfx::BoxF bounds;
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, -0.5, 1.5, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-57, -59, -1, 76, 112, 80), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-57, -59, -1, 76, 112, 80), bounds);
 
   EXPECT_TRUE(to_ops.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-32, -25, 7, 42, 44, 48), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-32, -25, 7, 42, 44, 48), bounds);
 
   EXPECT_TRUE(
       to_ops.BlendedBoundsForBox(box, kIdentityOperations, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-33, -13, 3, 57, 19, 52), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-33, -13, 3, 57, 19, 52), bounds);
 
   EXPECT_TRUE(
       kIdentityOperations.BlendedBoundsForBox(box, from_ops, 0, 1, &bounds));
-  EXPECT_PRED_FORMAT2(float_box_test::AssertAlmostEqual,
-                      FloatBox(-7, -3, 2, 15, 23, 20), bounds);
+  EXPECT_BOXF_EQ(gfx::BoxF(-7, -3, 2, 15, 23, 20), bounds);
 }
 
 TEST(TransformOperationsTest, ZoomTest) {
   double zoom_factor = 1.25;
 
-  FloatPoint3D original_point(2, 3, 4);
+  gfx::Point3F original_point(2, 3, 4);
 
   TransformOperations ops;
-  ops.Operations().push_back(TranslateTransformOperation::Create(
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
       Length::Fixed(1), Length::Fixed(2), 3, TransformOperation::kTranslate3D));
-  ops.Operations().push_back(PerspectiveTransformOperation::Create(1234));
   ops.Operations().push_back(
-      Matrix3DTransformOperation::Create(TransformationMatrix(
+      MakeGarbageCollected<PerspectiveTransformOperation>(1234));
+  ops.Operations().push_back(
+      MakeGarbageCollected<Matrix3DTransformOperation>(gfx::Transform::ColMajor(
           1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)));
 
   // Apply unzoomed ops to unzoomed units, then zoom in
-  FloatPoint3D unzoomed_point = original_point;
+  gfx::Point3F unzoomed_point = original_point;
   TransformOperations unzoomed_ops = ops;
-  TransformationMatrix unzoomed_matrix;
-  ops.Apply(FloatSize(0, 0), unzoomed_matrix);
-  FloatPoint3D result1 = unzoomed_matrix.MapPoint(unzoomed_point);
+  gfx::Transform unzoomed_matrix;
+  ops.Apply(gfx::SizeF(0, 0), unzoomed_matrix);
+  gfx::Point3F result1 = unzoomed_matrix.MapPoint(unzoomed_point);
   result1.Scale(zoom_factor, zoom_factor, zoom_factor);
 
   // Apply zoomed ops to zoomed units
-  FloatPoint3D zoomed_point = original_point;
+  gfx::Point3F zoomed_point = original_point;
   zoomed_point.Scale(zoom_factor, zoom_factor, zoom_factor);
   TransformOperations zoomed_ops = ops.Zoom(zoom_factor);
-  TransformationMatrix zoomed_matrix;
-  zoomed_ops.Apply(FloatSize(0, 0), zoomed_matrix);
-  FloatPoint3D result2 = zoomed_matrix.MapPoint(zoomed_point);
+  gfx::Transform zoomed_matrix;
+  zoomed_ops.Apply(gfx::SizeF(0, 0), zoomed_matrix);
+  gfx::Point3F result2 = zoomed_matrix.MapPoint(zoomed_point);
 
-  EXPECT_EQ(result1, result2);
+  EXPECT_POINT3F_EQ(result1, result2);
 }
 
 TEST(TransformOperationsTest, PerspectiveOpsTest) {
@@ -553,18 +607,19 @@ TEST(TransformOperationsTest, PerspectiveOpsTest) {
   EXPECT_FALSE(ops.HasNonPerspective3DOperation());
   EXPECT_FALSE(ops.HasNonTrivial3DComponent());
 
-  ops.Operations().push_back(TranslateTransformOperation::Create(
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
       Length::Fixed(1), Length::Fixed(2), TransformOperation::kTranslate));
   EXPECT_FALSE(ops.HasPerspective());
   EXPECT_FALSE(ops.HasNonPerspective3DOperation());
   EXPECT_FALSE(ops.HasNonTrivial3DComponent());
 
-  ops.Operations().push_back(PerspectiveTransformOperation::Create(1234));
+  ops.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(1234));
   EXPECT_TRUE(ops.HasPerspective());
   EXPECT_FALSE(ops.HasNonPerspective3DOperation());
   EXPECT_FALSE(ops.HasNonTrivial3DComponent());
 
-  ops.Operations().push_back(TranslateTransformOperation::Create(
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
       Length::Fixed(1), Length::Fixed(2), 3, TransformOperation::kTranslate3D));
   EXPECT_TRUE(ops.HasPerspective());
   EXPECT_TRUE(ops.HasNonPerspective3DOperation());
@@ -573,14 +628,14 @@ TEST(TransformOperationsTest, PerspectiveOpsTest) {
 
 TEST(TransformOperationsTest, CanBlendWithSkewTest) {
   TransformOperations ops_x, ops_y, ops_skew, ops_skew2;
-  ops_x.Operations().push_back(
-      SkewTransformOperation::Create(45, 0, TransformOperation::kSkewX));
-  ops_y.Operations().push_back(
-      SkewTransformOperation::Create(0, 45, TransformOperation::kSkewY));
-  ops_skew.Operations().push_back(
-      SkewTransformOperation::Create(45, 0, TransformOperation::kSkew));
-  ops_skew2.Operations().push_back(
-      SkewTransformOperation::Create(0, 45, TransformOperation::kSkew));
+  ops_x.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      45, 0, TransformOperation::kSkewX));
+  ops_y.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      0, 45, TransformOperation::kSkewY));
+  ops_skew.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      45, 0, TransformOperation::kSkew));
+  ops_skew2.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      0, 45, TransformOperation::kSkew));
 
   EXPECT_TRUE(ops_x.Operations()[0]->CanBlendWith(*ops_x.Operations()[0]));
   EXPECT_TRUE(ops_y.Operations()[0]->CanBlendWith(*ops_y.Operations()[0]));
@@ -601,13 +656,13 @@ TEST(TransformOperationsTest, CanBlendWithSkewTest) {
 TEST(TransformOperationsTest, CanBlendWithMatrixTest) {
   TransformOperations ops_a, ops_b;
   ops_a.Operations().push_back(
-      MatrixTransformOperation::Create(1, 0, 0, 1, 0, 0));
-  ops_a.Operations().push_back(
-      RotateTransformOperation::Create(0, TransformOperation::kRotate));
+      MakeGarbageCollected<MatrixTransformOperation>(1, 0, 0, 1, 0, 0));
+  ops_a.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      0, TransformOperation::kRotate));
   ops_b.Operations().push_back(
-      MatrixTransformOperation::Create(2, 0, 0, 2, 0, 0));
-  ops_b.Operations().push_back(
-      RotateTransformOperation::Create(360, TransformOperation::kRotate));
+      MakeGarbageCollected<MatrixTransformOperation>(2, 0, 0, 2, 0, 0));
+  ops_b.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      360, TransformOperation::kRotate));
 
   EXPECT_TRUE(ops_a.Operations()[0]->CanBlendWith(*ops_b.Operations()[0]));
 
@@ -621,14 +676,14 @@ TEST(TransformOperationsTest, CanBlendWithMatrixTest) {
 
 TEST(TransformOperationsTest, CanBlendWithMatrix3DTest) {
   TransformOperations ops_a, ops_b;
-  ops_a.Operations().push_back(Matrix3DTransformOperation::Create(
-      TransformationMatrix(1, 0, 0, 1, 0, 0)));
-  ops_a.Operations().push_back(
-      RotateTransformOperation::Create(0, TransformOperation::kRotate));
-  ops_b.Operations().push_back(Matrix3DTransformOperation::Create(
-      TransformationMatrix(2, 0, 0, 2, 0, 0)));
-  ops_b.Operations().push_back(
-      RotateTransformOperation::Create(360, TransformOperation::kRotate));
+  ops_a.Operations().push_back(MakeGarbageCollected<Matrix3DTransformOperation>(
+      gfx::Transform::Affine(1, 0, 0, 1, 0, 0)));
+  ops_a.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      0, TransformOperation::kRotate));
+  ops_b.Operations().push_back(MakeGarbageCollected<Matrix3DTransformOperation>(
+      gfx::Transform::Affine(2, 0, 0, 2, 0, 0)));
+  ops_b.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      360, TransformOperation::kRotate));
 
   EXPECT_TRUE(ops_a.Operations()[0]->CanBlendWith(*ops_b.Operations()[0]));
 
@@ -650,10 +705,12 @@ TEST(TransformOperationsTest, InterpolatedTransformBlendIdentityTest) {
   // box-size-dependent matrix interpolation and an empty transform list in
   // both directions.
   TransformOperations ops_a, ops_b, ops_empty;
-  ops_a.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Percent(100), Length::Fixed(0), TransformOperation::kTranslate));
-  ops_b.Operations().push_back(
-      RotateTransformOperation::Create(90, TransformOperation::kRotate));
+  ops_a.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Percent(100), Length::Fixed(0),
+          TransformOperation::kTranslate));
+  ops_b.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      90, TransformOperation::kRotate));
 
   // Equivalent to translateX(50%) rotate(45deg) but a deferred interpolation
   TransformOperations ops_c = ops_a.Blend(ops_b, 0.5);
@@ -666,33 +723,39 @@ TEST(TransformOperationsTest, InterpolatedTransformBlendIdentityTest) {
   TransformOperations ops_d2 = ops_empty.Blend(ops_c, 0.75);
 
   TransformOperations ops_d3;
-  ops_d3.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Percent(12.5), Length::Fixed(0), TransformOperation::kTranslate));
   ops_d3.Operations().push_back(
-      RotateTransformOperation::Create(11.25, TransformOperation::kRotate));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Percent(12.5), Length::Fixed(0),
+          TransformOperation::kTranslate));
+  ops_d3.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      11.25, TransformOperation::kRotate));
 
-  const FloatSize box_size(100, 100);
-  TransformationMatrix mat_d1, mat_d2, mat_d3;
+  const gfx::SizeF box_size(100, 100);
+  gfx::Transform mat_d1, mat_d2, mat_d3;
   ops_d1.Apply(box_size, mat_d1);
   ops_d2.Apply(box_size, mat_d2);
   ops_d3.Apply(box_size, mat_d3);
 
-  EXPECT_TRANSFORMATION_MATRIX(mat_d1, mat_d2);
-  EXPECT_TRANSFORMATION_MATRIX(mat_d1, mat_d3);
-  EXPECT_TRANSFORMATION_MATRIX(mat_d2, mat_d3);
+  EXPECT_TRANSFORM_EQ(mat_d1, mat_d2);
+  EXPECT_TRANSFORM_EQ(mat_d1, mat_d3);
+  EXPECT_TRANSFORM_EQ(mat_d2, mat_d3);
 }
 
 TEST(TransformOperationsTest, BlendPercentPrefixTest) {
   TransformOperations ops_a, ops_b;
-  ops_a.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Percent(100), Length::Fixed(0), TransformOperation::kTranslate));
   ops_a.Operations().push_back(
-      RotateTransformOperation::Create(180, TransformOperation::kRotate));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Percent(100), Length::Fixed(0),
+          TransformOperation::kTranslate));
+  ops_a.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      180, TransformOperation::kRotate));
 
-  ops_b.Operations().push_back(TranslateTransformOperation::Create(
-      Length::Fixed(0), Length::Percent(50), TransformOperation::kTranslate));
   ops_b.Operations().push_back(
-      ScaleTransformOperation::Create(2, 2, TransformOperation::kScale));
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(0), Length::Percent(50),
+          TransformOperation::kTranslate));
+  ops_b.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      2, 2, TransformOperation::kScale));
 
   EXPECT_EQ(ops_a.BoxSizeDependencies(), TransformOperation::kDependsWidth);
   EXPECT_EQ(ops_a.BoxSizeDependencies(1), TransformOperation::kDependsNone);
@@ -708,28 +771,28 @@ TEST(TransformOperationsTest, BlendPercentPrefixTest) {
   // part does not, so it should interpolate to a matrix and not defer to an
   // InterpolatedTransformOperation.
   ASSERT_TRUE(IsA<Matrix3DTransformOperation>(*ops_c.Operations()[1]));
-  TransformationMatrix mat_c =
+  gfx::Transform mat_c =
       To<Matrix3DTransformOperation>(*ops_c.Operations()[1]).Matrix();
 
-  auto translate_ref = TranslateTransformOperation::Create(
+  auto* translate_ref = MakeGarbageCollected<TranslateTransformOperation>(
       Length::Percent(50), Length::Percent(25), TransformOperation::kTranslate);
   // scale(1.5) rotate(90deg)
-  TransformationMatrix matrix_ref(0, 1.5, -1.5, 0, 0, 0);
+  auto matrix_ref = gfx::Transform::Affine(0, 1.5, -1.5, 0, 0, 0);
   EXPECT_EQ(*ops_c.Operations()[0], *translate_ref);
-  EXPECT_TRANSFORMATION_MATRIX(mat_c, matrix_ref);
+  EXPECT_TRANSFORM_NEAR(mat_c, matrix_ref, 1e-15);
 }
 
 TEST(TransformOperationsTest, SizeDependenciesCombineTest) {
   TransformOperations ops;
-  ops.Operations().push_back(
-      RotateTransformOperation::Create(90, TransformOperation::kRotate));
+  ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      90, TransformOperation::kRotate));
   EXPECT_EQ(ops.BoxSizeDependencies(), TransformOperation::kDependsNone);
 
-  ops.Operations().push_back(TranslateTransformOperation::Create(
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
       Length::Fixed(0), Length::Percent(50), TransformOperation::kTranslate));
   EXPECT_EQ(ops.BoxSizeDependencies(), TransformOperation::kDependsHeight);
 
-  ops.Operations().push_back(TranslateTransformOperation::Create(
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
       Length::Percent(100), Length::Fixed(0), TransformOperation::kTranslate));
   EXPECT_EQ(ops.Operations()[2]->BoxSizeDependencies(),
             TransformOperation::kDependsWidth);
@@ -739,30 +802,409 @@ TEST(TransformOperationsTest, SizeDependenciesCombineTest) {
 // https://crbug.com/1155018
 TEST(TransformOperationsTest, OutOfRangePercentage) {
   TransformOperations ops;
-  ops.Operations().push_back(TranslateTransformOperation::Create(
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
       Length::Percent(std::numeric_limits<float>::max()), Length::Percent(50),
       TransformOperation::kTranslate));
 
-  TransformationMatrix mat;
-  ops.Apply(FloatSize(800, 600), mat);
+  gfx::Transform mat;
+  ops.Apply(gfx::SizeF(800, 600), mat);
 
   // There should not be inf or nan in the transformation result.
-  EXPECT_TRUE(isfinite(mat.M11()));
-  EXPECT_TRUE(isfinite(mat.M12()));
-  EXPECT_TRUE(isfinite(mat.M13()));
-  EXPECT_TRUE(isfinite(mat.M14()));
-  EXPECT_TRUE(isfinite(mat.M21()));
-  EXPECT_TRUE(isfinite(mat.M22()));
-  EXPECT_TRUE(isfinite(mat.M23()));
-  EXPECT_TRUE(isfinite(mat.M24()));
-  EXPECT_TRUE(isfinite(mat.M31()));
-  EXPECT_TRUE(isfinite(mat.M32()));
-  EXPECT_TRUE(isfinite(mat.M33()));
-  EXPECT_TRUE(isfinite(mat.M34()));
-  EXPECT_TRUE(isfinite(mat.M41()));
-  EXPECT_TRUE(isfinite(mat.M42()));
-  EXPECT_TRUE(isfinite(mat.M43()));
-  EXPECT_TRUE(isfinite(mat.M44()));
+  for (int i = 0; i < 16; i++)
+    EXPECT_TRUE(std::isfinite(mat.ColMajorData(i)));
+}
+
+TEST(TranformOperationsTest, DisallowBlockSizeDependent_Disallowed) {
+  TransformOperations from_ops;
+  TransformOperations to_ops;
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Percent(50), Length::Fixed(20),
+          TransformOperation::kTranslate));
+  to_ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      2, 2, TransformOperation::kScale));
+
+  const wtf_size_t matching_prefix_length = 0;
+  const double progress = 0.8;
+
+  TransformOperations blended_ops = to_ops.Blend(
+      from_ops, progress,
+      TransformOperations::BoxSizeDependentMatrixBlending::kDisallow);
+  EXPECT_EQ(blended_ops, to_ops);
+
+  TransformOperation* blended_op =
+      to_ops.BlendRemainingByUsingMatrixInterpolation(
+          from_ops, matching_prefix_length, progress,
+          TransformOperations::BoxSizeDependentMatrixBlending::kDisallow);
+  EXPECT_EQ(blended_op, nullptr);
+}
+
+// Helper: apply Accumulate(delta) n times sequentially on |base|.
+static TransformOperations AccumulateSequential(
+    const TransformOperations& base,
+    const TransformOperations& delta,
+    int n) {
+  TransformOperations result = base;
+  for (int i = 0; i < n; i++) {
+    result = result.Accumulate(delta);
+  }
+  return result;
+}
+
+// Helper: compare two TransformOperations by applying them and checking the
+// resulting matrices are approximately equal.
+static void ExpectTransformOperationsNear(const TransformOperations& a,
+                                          const TransformOperations& b,
+                                          float tolerance = 1e-5f) {
+  gfx::Transform matrix_a;
+  a.Apply(gfx::SizeF(100, 100), matrix_a);
+  gfx::Transform matrix_b;
+  b.Apply(gfx::SizeF(100, 100), matrix_b);
+  EXPECT_TRANSFORM_NEAR(matrix_a, matrix_b, tolerance);
+}
+
+TEST(TransformOperationsTest, AccumulateNZero) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 0, TransformOperation::kTranslate));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(5), Length::Fixed(3), 0,
+          TransformOperation::kTranslate));
+
+  TransformOperations result = ops.AccumulateN(delta, 0);
+  ExpectTransformOperationsNear(result, ops);
+}
+
+TEST(TransformOperationsTest, AccumulateNOne) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 0, TransformOperation::kTranslate));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(5), Length::Fixed(3), 0,
+          TransformOperation::kTranslate));
+
+  TransformOperations result_n = ops.AccumulateN(delta, 1);
+  TransformOperations result_seq = ops.Accumulate(delta);
+  ExpectTransformOperationsNear(result_n, result_seq);
+}
+
+TEST(TransformOperationsTest, AccumulateNBothEmpty) {
+  TransformOperations ops;
+  TransformOperations delta;
+  TransformOperations result = ops.AccumulateN(delta, 5);
+  EXPECT_EQ(result.size(), 0u);
+}
+
+TEST(TransformOperationsTest, AccumulateNShorterBase) {
+  // Base=[translate], delta=[translate, scale].
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 0, TransformOperation::kTranslate));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(5), Length::Fixed(3), 0,
+          TransformOperation::kTranslate));
+  delta.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      2, 3, 1, TransformOperation::kScale3D));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNShorterDelta) {
+  // Base=[translate, scale], delta=[translate].
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 0, TransformOperation::kTranslate));
+  ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      2, 3, 1, TransformOperation::kScale3D));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(5), Length::Fixed(3), 0,
+          TransformOperation::kTranslate));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNMismatchedTypes) {
+  // Base=[translate], delta=[rotate]. Types don't match, so both are collapsed
+  // to Matrix3D before accumulating.
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 0, TransformOperation::kTranslate));
+
+  TransformOperations delta;
+  delta.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      0, 0, 1, 30, TransformOperation::kRotate3D));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq, 1e-4f);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNTranslate) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 5,
+      TransformOperation::kTranslate3D));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(3), Length::Fixed(7), 2,
+          TransformOperation::kTranslate3D));
+
+  for (int n : {2, 5, 10, 100}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNTranslatePercent) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Percent(10), Length::Percent(20), 0,
+      TransformOperation::kTranslate));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Percent(5), Length::Percent(3), 0,
+          TransformOperation::kTranslate));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNScale) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      2, 3, 1, TransformOperation::kScale3D));
+
+  TransformOperations delta;
+  delta.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      1.5, 0.5, 2, TransformOperation::kScale3D));
+
+  for (int n : {2, 5, 10, 100}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNRotateSameAxis) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      0, 0, 1, 45, TransformOperation::kRotate3D));
+
+  TransformOperations delta;
+  delta.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      0, 0, 1, 30, TransformOperation::kRotate3D));
+
+  for (int n : {2, 5, 10, 100}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNRotateDifferentAxes) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      1, 0, 0, 45, TransformOperation::kRotate3D));
+
+  TransformOperations delta;
+  delta.Operations().push_back(MakeGarbageCollected<RotateTransformOperation>(
+      0, 1, 0, 30, TransformOperation::kRotate3D));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq, 1e-4f);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNSkew) {
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      10, 20, TransformOperation::kSkew));
+
+  TransformOperations delta;
+  delta.Operations().push_back(MakeGarbageCollected<SkewTransformOperation>(
+      5, 3, TransformOperation::kSkew));
+
+  for (int n : {2, 5, 10, 100}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNPerspective) {
+  TransformOperations ops;
+  ops.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(500));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(1000));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNPerspectiveNone) {
+  // Base is none (infinite perspective).
+  TransformOperations ops;
+  ops.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(std::nullopt));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(500));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+
+  // Delta is none (infinite perspective).
+  TransformOperations ops2;
+  ops2.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(500));
+
+  TransformOperations delta2;
+  delta2.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(std::nullopt));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops2.AccumulateN(delta2, n);
+    TransformOperations result_seq = AccumulateSequential(ops2, delta2, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNMatrix) {
+  gfx::Transform base_matrix;
+  base_matrix.Translate3d(10, 20, 30);
+  base_matrix.RotateAboutZAxis(45);
+
+  gfx::Transform delta_matrix;
+  delta_matrix.Scale3d(1.5, 2.0, 1.0);
+  delta_matrix.Translate3d(5, 10, 0);
+
+  TransformOperations ops;
+  ops.Operations().push_back(
+      MakeGarbageCollected<Matrix3DTransformOperation>(base_matrix));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<Matrix3DTransformOperation>(delta_matrix));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq, 1e-4f);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNMixedList) {
+  // Test with a list of [translate, scale] to test matching prefix behavior.
+  TransformOperations ops;
+  ops.Operations().push_back(MakeGarbageCollected<TranslateTransformOperation>(
+      Length::Fixed(10), Length::Fixed(20), 0, TransformOperation::kTranslate));
+  ops.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      2, 3, 1, TransformOperation::kScale3D));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<TranslateTransformOperation>(
+          Length::Fixed(5), Length::Fixed(3), 0,
+          TransformOperation::kTranslate));
+  delta.Operations().push_back(MakeGarbageCollected<ScaleTransformOperation>(
+      1.5, 0.5, 1, TransformOperation::kScale3D));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNPerspectiveBothNone) {
+  TransformOperations ops;
+  ops.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(std::nullopt));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<PerspectiveTransformOperation>(std::nullopt));
+
+  for (int n : {1, 2, 5}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq);
+  }
+}
+
+TEST(TransformOperationsTest, AccumulateNMatrix2D) {
+  gfx::Transform base_matrix;
+  base_matrix.Translate(10, 20);
+  base_matrix.RotateAboutZAxis(30);
+
+  gfx::Transform delta_matrix;
+  delta_matrix.Scale(1.5, 2.0);
+
+  TransformOperations ops;
+  ops.Operations().push_back(
+      MakeGarbageCollected<MatrixTransformOperation>(base_matrix));
+
+  TransformOperations delta;
+  delta.Operations().push_back(
+      MakeGarbageCollected<MatrixTransformOperation>(delta_matrix));
+
+  for (int n : {2, 5, 10}) {
+    TransformOperations result_n = ops.AccumulateN(delta, n);
+    TransformOperations result_seq = AccumulateSequential(ops, delta, n);
+    ExpectTransformOperationsNear(result_n, result_seq, 1e-4f);
+  }
+}
+
+TEST(TransformOperationsTest, BlendWithVeryLargeMatrixShouldNotCrash) {
+  TransformOperations from_ops;
+  TransformOperations to_ops;
+
+  from_ops.Operations().push_back(
+      MakeGarbageCollected<MatrixTransformOperation>(1.8e+300, 1.8e+300, 0, -1,
+                                                     0, -1));
+  to_ops.Blend(from_ops, 0.5);
 }
 
 }  // namespace blink

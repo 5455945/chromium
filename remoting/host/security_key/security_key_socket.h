@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,18 @@
 
 #include <stddef.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
 
 namespace base {
 class OneShotTimer;
+class TimeDelta;
 }  // namespace base
 
 namespace net {
@@ -36,6 +37,10 @@ class SecurityKeySocket {
   SecurityKeySocket(std::unique_ptr<net::StreamSocket> socket,
                     base::TimeDelta timeout,
                     base::OnceClosure timeout_callback);
+
+  SecurityKeySocket(const SecurityKeySocket&) = delete;
+  SecurityKeySocket& operator=(const SecurityKeySocket&) = delete;
+
   ~SecurityKeySocket();
 
   // Returns false if the request has not yet completed, or is too large to be
@@ -100,7 +105,7 @@ class SecurityKeySocket {
   bool socket_read_error_ = false;
 
   // Request data.
-  std::vector<char> request_data_;
+  std::vector<uint8_t> request_data_;
 
   scoped_refptr<net::DrainableIOBuffer> write_buffer_;
 
@@ -108,8 +113,6 @@ class SecurityKeySocket {
 
   // The activity timer.
   std::unique_ptr<base::OneShotTimer> timer_;
-
-  DISALLOW_COPY_AND_ASSIGN(SecurityKeySocket);
 };
 
 }  // namespace remoting

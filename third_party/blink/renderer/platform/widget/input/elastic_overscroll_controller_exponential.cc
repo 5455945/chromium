@@ -1,23 +1,31 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/widget/input/elastic_overscroll_controller_exponential.h"
+#include "build/build_config.h"
 #include "ui/gfx/geometry/vector2d_conversions.h"
 
 namespace blink {
 
 namespace {
+#if BUILDFLAG(IS_ANDROID)
+constexpr double kRubberbandStiffness = 20;
+constexpr double kRubberbandAmplitude = 0.2f;
+constexpr double kRubberbandPeriod = 1.1f;
+#else
 constexpr double kRubberbandStiffness = 20;
 constexpr double kRubberbandAmplitude = 0.31f;
 constexpr double kRubberbandPeriod = 1.6f;
+#endif
 }  // namespace
 
 ElasticOverscrollControllerExponential::ElasticOverscrollControllerExponential(
     cc::ScrollElasticityHelper* helper)
     : ElasticOverscrollController(helper) {}
 
-void ElasticOverscrollControllerExponential::DidEnterMomentumAnimatedState() {}
+void ElasticOverscrollControllerExponential::DidEnterMomentumAnimatedState(
+    OverscrollEntry& entry) {}
 
 // For these functions which compute the stretch amount, always return a
 // rounded value, instead of a floating-point value. The reason for this is
@@ -27,6 +35,7 @@ void ElasticOverscrollControllerExponential::DidEnterMomentumAnimatedState() {}
 // layer is pinned in a direction).
 
 gfx::Vector2d ElasticOverscrollControllerExponential::StretchAmountForTimeDelta(
+    const OverscrollEntry& entry,
     const base::TimeDelta& delta) const {
   // Compute the stretch amount at a given time after some initial conditions.
   // Do this by first computing an intermediary position given the initial
@@ -39,14 +48,15 @@ gfx::Vector2d ElasticOverscrollControllerExponential::StretchAmountForTimeDelta(
       expf((-delta.InSecondsF() * kRubberbandStiffness) / period);
 
   return gfx::ToRoundedVector2d(gfx::ScaleVector2d(
-      momentum_animation_initial_stretch_ +
-          gfx::ScaleVector2d(momentum_animation_initial_velocity_,
+      entry.momentum_animation_initial_stretch +
+          gfx::ScaleVector2d(entry.momentum_animation_initial_velocity,
                              delta.InSecondsF() * amplitude),
       critical_dampening_factor));
 }
 
 gfx::Vector2d
 ElasticOverscrollControllerExponential::StretchAmountForAccumulatedOverscroll(
+    const OverscrollEntry& entry,
     const gfx::Vector2dF& accumulated_overscroll) const {
   const float stiffness = std::max(kRubberbandStiffness, 1.0);
   return gfx::ToRoundedVector2d(
@@ -55,6 +65,7 @@ ElasticOverscrollControllerExponential::StretchAmountForAccumulatedOverscroll(
 
 gfx::Vector2d
 ElasticOverscrollControllerExponential::AccumulatedOverscrollForStretchAmount(
+    const OverscrollEntry& entry,
     const gfx::Vector2dF& delta) const {
   return gfx::ToRoundedVector2d(
       gfx::ScaleVector2d(delta, kRubberbandStiffness));

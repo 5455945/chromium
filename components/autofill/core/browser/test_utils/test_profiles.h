@@ -1,28 +1,24 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_TEST_UTILS_TEST_PROFILES_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_TEST_UTILS_TEST_PROFILES_H_
 
-#include "base/ranges/ranges.h"
+#include <ranges>
+
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/autofill_structured_address_test_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_test_util.h"
 
-namespace autofill {
-
-using structured_address::VerificationStatus;
-
-namespace test {
+namespace autofill::test {
 
 // Defines the |value| and |verification_status| for a specific Autofill
 // |field_type|
 struct ProfileTestData {
-  ServerFieldType field_type;
+  FieldType field_type;
   std::string value;
-  structured_address::VerificationStatus verification_status =
-      structured_address::VerificationStatus::kNoStatus;
+  VerificationStatus verification_status = VerificationStatus::kNoStatus;
 };
 
 // Set the values and verification statuses for the field types in
@@ -43,7 +39,8 @@ void SetProfileObservedTestValues(AutofillProfile* profile,
 
 // A standard AutofillProfile. All subsequent profiles are defined with respect
 // to this one.
-AutofillProfile StandardProfile();
+AutofillProfile StandardProfile(
+    AddressCountryCode country_code = AddressCountryCode("US"));
 
 // This profile is similar to the standard profile defined above.
 // Here, the verification status for the name is 'only' observed. When merged
@@ -58,8 +55,37 @@ AutofillProfile SubsetOfStandardProfile();
 // This profile that is not similar to the standard profile.
 AutofillProfile DifferentFromStandardProfile();
 
-}  // namespace test
+// Basic profile with alternative name in Hiragana and the address related field
+// values missing.
+AutofillProfile HiraganaProfile();
 
-}  // namespace autofill
+// Copy of `HiraganaProfile()` with address fields set.
+AutofillProfile ExtendedHiraganaProfile();
+
+// Copy of `HiraganaProfile()` but alternative name is in Katakana.
+AutofillProfile KatakanaProfile1();
+
+// A new Katakana profile
+AutofillProfile KatakanaProfile2();
+
+// A new `kAccountNameEmail` profile
+AutofillProfile AccountNameEmailProfile();
+
+// A superset profile of a profile acquired from the `AccountNameEmailProfile`
+// method, with `kAccount` `record_type`.
+AutofillProfile AccountNameEmailProfileSuperset();
+
+// A new profile that contains only address data.
+AutofillProfile OnlyAddressProfile(AutofillProfile::RecordType record_type =
+                                       AutofillProfile::RecordType::kAccount);
+
+// A new profile obtained through repeated merging of data from `profiles`, with
+// a specific record type.
+AutofillProfile SupersetProfileOf(
+    base::span<const AutofillProfile> profiles,
+    std::string_view app_locale,
+    AutofillProfile::RecordType type = AutofillProfile::RecordType::kAccount,
+    AddressCountryCode country_code = AddressCountryCode("US"));
+}  // namespace autofill::test
 
 #endif  // COMPONENTS_AUTOFILL_CORE_BROWSER_TEST_UTILS_TEST_PROFILES_H_

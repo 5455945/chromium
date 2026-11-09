@@ -31,9 +31,11 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_WINDOW_FEATURES_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_WINDOW_FEATURES_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <cstdint>
+#include <optional>
 
-#include "third_party/blink/public/platform/web_impression.h"
+#include "third_party/blink/public/mojom/window_features/window_features.mojom-shared.h"
+#include "third_party/blink/public/platform/web_string.h"
 
 namespace blink {
 
@@ -47,12 +49,14 @@ struct WebWindowFeatures {
   int height = 0;
   bool height_set = false;
 
-  bool menu_bar_visible = true;
-  bool status_bar_visible = true;
-  // This can be set based on "locationbar" or "toolbar" in a window features
-  // string, we don't distinguish between the two.
-  bool tool_bar_visible = true;
-  bool scrollbars_visible = true;
+  bool is_popup = false;
+  bool always_on_top = false;
+
+  // Split tab hints. See window_features.mojom for details.
+  bool is_split = false;
+  mojom::SplitTabPosition split_position =
+      mojom::SplitTabPosition::kUnspecified;
+  std::optional<uint8_t> split_size;
 
   // The members above this line are transferred through mojo
   // in the form of |struct WindowFeatures| defined in window_features.mojom,
@@ -61,13 +65,10 @@ struct WebWindowFeatures {
   bool resizable = true;
 
   bool noopener = false;
+  bool explicit_opener = false;
   bool noreferrer = false;
   bool background = false;
   bool persistent = false;
-
-  // Represents the attribution source declared by Attribution Reporting related
-  // window features, if any.
-  absl::optional<WebImpression> impression;
 };
 
 }  // namespace blink

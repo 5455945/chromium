@@ -1,12 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/capture/video/fuchsia/video_capture_device_fuchsia.h"
 
+#include "base/containers/span.h"
 #include "base/fuchsia/test_component_context_for_process.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "media/capture/video/fuchsia/video_capture_device_factory_fuchsia.h"
 #include "media/fuchsia/camera/fake_fuchsia_camera.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -39,45 +43,38 @@ void ValidateReceivedFrame(const ReceivedFrame& frame,
 
   auto handle = frame.buffer.handle_provider->GetHandleForInProcessAccess();
 
-  FakeCameraStream::ValidateFrameData(handle->data(), coded_size, salt);
+  FakeCameraStream::ValidateFrameData(handle->const_data(), coded_size, salt);
 }
 
 // VideoCaptureBufferHandle implementation that references memory allocated on
 // the heap.
 class HeapBufferHandle : public VideoCaptureBufferHandle {
  public:
-  HeapBufferHandle(size_t size, uint8_t* data) : size_(size), data_(data) {}
+  HeapBufferHandle(base::span<uint8_t> span) : span_(span) {}
 
-  size_t mapped_size() const final { return size_; }
-  uint8_t* data() const final { return data_; }
-  const uint8_t* const_data() const final { return data_; }
+  size_t mapped_size() const final { return span_.size(); }
+  base::span<uint8_t> data() final { return span_; }
+  base::span<const uint8_t> const_data() const final { return span_; }
 
  private:
-  const size_t size_;
-  uint8_t* const data_;
+  base::raw_span<uint8_t> span_;
 };
 
 // VideoCaptureDevice::Client::Buffer::HandleProvider implementation that
 // allocates memory on the heap.
-class HeapBufferHandleProvider
+class HeapBufferHandleProvider final
     : public VideoCaptureDevice::Client::Buffer::HandleProvider {
  public:
   HeapBufferHandleProvider(size_t size) : data_(size) {}
-  ~HeapBufferHandleProvider() final = default;
+  ~HeapBufferHandleProvider() override = default;
 
-  base::UnsafeSharedMemoryRegion DuplicateAsUnsafeRegion() final {
+  base::UnsafeSharedMemoryRegion DuplicateAsUnsafeRegion() override {
     NOTREACHED();
-    return {};
-  }
-
-  mojo::ScopedSharedBufferHandle DuplicateAsMojoBuffer() final {
-    NOTREACHED();
-    return {};
   }
 
   std::unique_ptr<VideoCaptureBufferHandle> GetHandleForInProcessAccess()
       override {
-    return std::make_unique<HeapBufferHandle>(data_.size(), data_.data());
+    return std::make_unique<HeapBufferHandle>(base::span(data_));
   }
 
   gfx::GpuMemoryBufferHandle GetGpuMemoryBufferHandle() override {
@@ -88,9 +85,9 @@ class HeapBufferHandleProvider
   std::vector<uint8_t> data_;
 };
 
-class TestVideoCaptureClient : public VideoCaptureDevice::Client {
+class TestVideoCaptureClient final : public VideoCaptureDevice::Client {
  public:
-  ~TestVideoCaptureClient() final = default;
+  ~TestVideoCaptureClient() override = default;
 
   void WaitFrame() {
     EXPECT_FALSE(wait_frame_run_loop_);
@@ -104,17 +101,27 @@ class TestVideoCaptureClient : public VideoCaptureDevice::Client {
     return received_frames_;
   }
 
+  const std::vector<std::string>& logs() const { return logs_; }
+  void clear_logs() { logs_.clear(); }
+
  private:
   // VideoCaptureDevice::Client implementation.
+  void OnCaptureConfigurationChanged() override {}
+  void InvalidateBuffers() final {}
+
   void OnStarted() final {
     EXPECT_FALSE(started_);
     started_ = true;
   }
 
-  ReserveResult ReserveOutputBuffer(const gfx::Size& dimensions,
-                                    VideoPixelFormat format,
-                                    int frame_feedback_id,
-                                    Buffer* buffer) final {
+  ReserveResult ReserveOutputBuffer(
+      const gfx::Size& dimensions,
+      VideoPixelFormat format,
+      int frame_feedback_id,
+      Buffer* buffer,
+      int* require_new_buffer_id,
+      int* retire_old_buffer_id,
+      const gfx::ColorSpace& color_space) override {
     EXPECT_TRUE(started_);
     EXPECT_EQ(format, PIXEL_FORMAT_I420);
     EXPECT_EQ(dimensions.width() % 2, 0);
@@ -131,8 +138,9 @@ class TestVideoCaptureClient : public VideoCaptureDevice::Client {
       const gfx::ColorSpace& color_space,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_time,
       gfx::Rect visible_rect,
-      const VideoFrameMetadata& additional_metadata) final {
+      const std::optional<VideoFrameMetadata>& additional_metadata) override {
     EXPECT_TRUE(started_);
 
     received_frames_.push_back(ReceivedFrame{std::move(buffer), format,
@@ -143,55 +151,55 @@ class TestVideoCaptureClient : public VideoCaptureDevice::Client {
       wait_frame_run_loop_->Quit();
   }
 
-  void OnIncomingCapturedData(const uint8_t* data,
-                              int length,
+  void OnIncomingCapturedData(base::span<const uint8_t> data,
                               const VideoCaptureFormat& frame_format,
                               const gfx::ColorSpace& color_space,
                               int clockwise_rotation,
                               bool flip_y,
                               base::TimeTicks reference_time,
                               base::TimeDelta timestamp,
-                              int frame_feedback_id) final {
+                              std::optional<base::TimeTicks> capture_begin_time,
+                              const std::optional<VideoFrameMetadata>& metadata,
+                              int frame_feedback_id) override {
     NOTREACHED();
   }
-  void OnIncomingCapturedGfxBuffer(gfx::GpuMemoryBuffer* buffer,
-                                   const VideoCaptureFormat& frame_format,
-                                   int clockwise_rotation,
-                                   base::TimeTicks reference_time,
-                                   base::TimeDelta timestamp,
-                                   int frame_feedback_id) final {
+  void OnIncomingCapturedImage(
+      scoped_refptr<gpu::ClientSharedImage> shared_image,
+      const VideoCaptureFormat& frame_format,
+      int clockwise_rotation,
+      base::TimeTicks reference_time,
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_time,
+      const gfx::Size& natural_size,
+      const std::optional<VideoFrameMetadata>& metadata,
+      int frame_feedback_id) override {
     NOTREACHED();
   }
   void OnIncomingCapturedExternalBuffer(
       CapturedExternalVideoBuffer buffer,
-      std::vector<CapturedExternalVideoBuffer> scaled_buffers,
       base::TimeTicks reference_time,
-      base::TimeDelta timestamp) override {
-    NOTREACHED();
-  }
-  void OnIncomingCapturedBuffer(Buffer buffer,
-                                const VideoCaptureFormat& format,
-                                base::TimeTicks reference_time,
-                                base::TimeDelta timestamp) final {
+      base::TimeDelta timestamp,
+      std::optional<base::TimeTicks> capture_begin_time,
+      const gfx::Rect& visible_rect,
+      const gfx::Size& natural_size,
+      const std::optional<VideoFrameMetadata>& metadata) override {
     NOTREACHED();
   }
   void OnError(VideoCaptureError error,
                const base::Location& from_here,
-               const std::string& reason) final {
+               const std::string& reason) override {
     NOTREACHED();
   }
-  void OnFrameDropped(VideoCaptureFrameDropReason reason) final {
+  void OnFrameDropped(VideoCaptureFrameDropReason reason) override {
     NOTREACHED();
   }
-  void OnLog(const std::string& message) final { NOTREACHED(); }
-  double GetBufferPoolUtilization() const final {
-    NOTREACHED();
-    return 0;
-  }
+  void OnLog(const std::string& message) override { logs_.push_back(message); }
+  double GetBufferPoolUtilization() const override { NOTREACHED(); }
 
   bool started_ = false;
   std::vector<ReceivedFrame> received_frames_;
-  absl::optional<base::RunLoop> wait_frame_run_loop_;
+  std::optional<base::RunLoop> wait_frame_run_loop_;
+  std::vector<std::string> logs_;
 };
 
 }  // namespace
@@ -200,6 +208,7 @@ class VideoCaptureDeviceFuchsiaTest : public testing::Test {
  public:
   VideoCaptureDeviceFuchsiaTest() {
     test_context_.AddService("fuchsia.sysmem.Allocator");
+    test_context_.AddService("fuchsia.sysmem2.Allocator");
   }
 
   ~VideoCaptureDeviceFuchsiaTest() override {
@@ -222,12 +231,18 @@ class VideoCaptureDeviceFuchsiaTest : public testing::Test {
   void CreateDevice() {
     auto devices_info = GetDevicesInfo();
     ASSERT_EQ(devices_info.size(), 1U);
-    device_ = device_factory_.CreateDevice(devices_info[0].descriptor);
+    device_ = device_factory_.CreateDevice(devices_info[0].descriptor)
+                  .ReleaseDevice();
   }
 
   FakeCameraStream* GetDefaultCameraStream() {
     DCHECK(!fake_device_watcher_.devices().empty());
     return fake_device_watcher_.devices().begin()->second->stream();
+  }
+
+  FakeCameraDevice* GetDefaultCameraDevice() {
+    DCHECK(!fake_device_watcher_.devices().empty());
+    return fake_device_watcher_.devices().begin()->second.get();
   }
 
   void StartCapturer() {
@@ -269,7 +284,7 @@ class VideoCaptureDeviceFuchsiaTest : public testing::Test {
 
   VideoCaptureDeviceFactoryFuchsia device_factory_;
   std::unique_ptr<VideoCaptureDevice> device_;
-  TestVideoCaptureClient* client_ = nullptr;
+  raw_ptr<TestVideoCaptureClient> client_ = nullptr;
 };
 
 TEST_F(VideoCaptureDeviceFuchsiaTest, Initialize) {
@@ -313,8 +328,7 @@ TEST_F(VideoCaptureDeviceFuchsiaTest, MultipleFrames) {
   for (size_t i = 0; i < 10; ++i) {
     ASSERT_TRUE(stream->WaitFreeBuffer());
 
-    auto frame_timestamp =
-        start_timestamp + base::TimeDelta::FromMilliseconds(i * 16);
+    auto frame_timestamp = start_timestamp + base::Milliseconds(i * 16);
     stream->ProduceFrame(frame_timestamp, i);
     client_->WaitFrame();
 
@@ -405,7 +419,8 @@ TEST_F(VideoCaptureDeviceFuchsiaTest,
   base::RunLoop().RunUntilIdle();
 
   // The factory is expected to reconnect DeviceWatcher.
-  device_ = device_factory_.CreateDevice(devices_info[0].descriptor);
+  device_ =
+      device_factory_.CreateDevice(devices_info[0].descriptor).ReleaseDevice();
 
   StartCapturer();
 
@@ -413,6 +428,50 @@ TEST_F(VideoCaptureDeviceFuchsiaTest,
   client_->WaitFrame();
 
   ASSERT_EQ(client_->received_frames().size(), 1U);
+}
+
+TEST_F(VideoCaptureDeviceFuchsiaTest, MuteState) {
+  StartCapturer();
+
+  // Initially not muted. We expect the initial state to be logged.
+  // WatchMuteState returns immediately on first call.
+  // FakeCameraDevice defaults to sw_muted=false, hw_muted=false.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return client_->logs().size() == 1U; }));
+  EXPECT_EQ(
+      client_->logs()[0],
+      "Camera mute state updated: software_muted=false, hardware_muted=false");
+
+  client_->clear_logs();
+
+  // Enable software mute.
+  GetDefaultCameraDevice()->SetMuteState(/*sw_muted=*/true, /*hw_muted=*/false);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return client_->logs().size() == 1U; }));
+  EXPECT_EQ(
+      client_->logs()[0],
+      "Camera mute state updated: software_muted=true, hardware_muted=false");
+
+  client_->clear_logs();
+
+  // Enable hardware mute as well.
+  GetDefaultCameraDevice()->SetMuteState(/*sw_muted=*/true, /*hw_muted=*/true);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return client_->logs().size() == 1U; }));
+  EXPECT_EQ(
+      client_->logs()[0],
+      "Camera mute state updated: software_muted=true, hardware_muted=true");
+
+  client_->clear_logs();
+
+  // Disable both.
+  GetDefaultCameraDevice()->SetMuteState(/*sw_muted=*/false,
+                                         /*hw_muted=*/false);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return client_->logs().size() == 1U; }));
+  EXPECT_EQ(
+      client_->logs()[0],
+      "Camera mute state updated: software_muted=false, hardware_muted=false");
 }
 
 }  // namespace media

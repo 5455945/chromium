@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 #include <stddef.h>
 
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
-#include "base/notreached.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_helpers.h"
+#include "base/notimplemented.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_errors.h"
@@ -111,11 +113,11 @@ void AndroidUsbSocket::Terminated(bool closed_by_device) {
 int AndroidUsbSocket::Read(net::IOBuffer* buffer,
                            int length,
                            net::CompletionOnceCallback callback) {
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
   if (!is_connected_)
     return device_.get() ? net::ERR_SOCKET_NOT_CONNECTED : 0;
 
-  DCHECK(read_callback_.is_null());
+  CHECK(read_callback_.is_null(), base::NotFatalUntil::M161);
   if (read_buffer_.empty()) {
     read_callback_ = std::move(callback);
     read_io_buffer_ = buffer;
@@ -125,7 +127,8 @@ int AndroidUsbSocket::Read(net::IOBuffer* buffer,
 
   size_t bytes_to_copy = static_cast<size_t>(length) > read_buffer_.length() ?
       read_buffer_.length() : static_cast<size_t>(length);
-  memcpy(buffer->data(), read_buffer_.data(), bytes_to_copy);
+  buffer->span().copy_prefix_from(
+      base::as_byte_span(read_buffer_).first(bytes_to_copy));
   if (read_buffer_.length() > bytes_to_copy)
     read_buffer_ = read_buffer_.substr(bytes_to_copy);
   else
@@ -138,14 +141,14 @@ int AndroidUsbSocket::Write(
     int length,
     net::CompletionOnceCallback callback,
     const net::NetworkTrafficAnnotationTag& /*traffic_annotation*/) {
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
   if (!is_connected_)
     return net::ERR_SOCKET_NOT_CONNECTED;
 
   if (length > kMaxPayload)
     length = kMaxPayload;
 
-  DCHECK(write_callback_.is_null());
+  CHECK(write_callback_.is_null(), base::NotFatalUntil::M161);
   write_callback_ = std::move(callback);
   write_length_ = length;
   device_->Send(AdbMessage::kCommandWRTE, local_id_, remote_id_,
@@ -165,12 +168,12 @@ int AndroidUsbSocket::SetSendBufferSize(int32_t size) {
 
 int AndroidUsbSocket::Connect(net::CompletionOnceCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
   if (!device_.get())
     return net::ERR_FAILED;
 
-  DCHECK(!is_connected_);
-  DCHECK(connect_callback_.is_null());
+  CHECK(!is_connected_, base::NotFatalUntil::M161);
+  CHECK(connect_callback_.is_null(), base::NotFatalUntil::M161);
   connect_callback_ = std::move(callback);
   device_->Send(AdbMessage::kCommandOPEN, local_id_, 0, command_);
   return net::ERR_IO_PENDING;
@@ -212,23 +215,13 @@ bool AndroidUsbSocket::WasEverUsed() const {
   return true;
 }
 
-bool AndroidUsbSocket::WasAlpnNegotiated() const {
-  NOTIMPLEMENTED();
-  return true;
-}
-
 net::NextProto AndroidUsbSocket::GetNegotiatedProtocol() const {
   NOTIMPLEMENTED();
-  return net::kProtoUnknown;
+  return net::NextProto::kProtoUnknown;
 }
 
 bool AndroidUsbSocket::GetSSLInfo(net::SSLInfo* ssl_info) {
   return false;
-}
-
-void AndroidUsbSocket::GetConnectionAttempts(
-    net::ConnectionAttempts* out) const {
-  out->clear();
 }
 
 int64_t AndroidUsbSocket::GetTotalReceivedBytes() const {
@@ -244,9 +237,11 @@ void AndroidUsbSocket::RespondToReader(bool disconnect) {
   if (read_callback_.is_null() || (read_buffer_.empty() && !disconnect))
     return;
   size_t bytes_to_copy =
-      static_cast<size_t>(read_length_) > read_buffer_.length() ?
-          read_buffer_.length() : static_cast<size_t>(read_length_);
-  memcpy(read_io_buffer_->data(), read_buffer_.data(), bytes_to_copy);
+      static_cast<size_t>(read_length_) > read_buffer_.length()
+          ? read_buffer_.length()
+          : static_cast<size_t>(read_length_);
+  read_io_buffer_->span().copy_prefix_from(
+      base::as_byte_span(read_buffer_).first(bytes_to_copy));
   if (read_buffer_.length() > bytes_to_copy)
     read_buffer_ = read_buffer_.substr(bytes_to_copy);
   else

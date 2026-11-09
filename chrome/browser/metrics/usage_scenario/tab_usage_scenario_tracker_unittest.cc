@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/ukm/content/source_url_recorder.h"
@@ -16,15 +17,33 @@
 #include "content/public/test/web_contents_tester.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/display/screen.h"
-#include "ui/display/test/test_screen.h"
-#include "ui/gfx/geometry/rect.h"
 
 namespace metrics {
 
 namespace {
 
-constexpr base::TimeDelta kInterval = base::TimeDelta::FromMinutes(2);
+constexpr base::TimeDelta kInterval = base::Minutes(2);
+
+class MockTabUsageScenarioTracker : public TabUsageScenarioTracker {
+ public:
+  explicit MockTabUsageScenarioTracker(
+      UsageScenarioDataStoreImpl* usage_scenario_data_store)
+      : TabUsageScenarioTracker(usage_scenario_data_store) {}
+
+  void SetNumDisplays(int num_displays) {
+    num_displays_ = num_displays;
+    OnNumDisplaysChanged();
+  }
+
+  void SetNumDisplaysWithoutNotification(int num_displays) {
+    num_displays_ = num_displays;
+  }
+
+  int GetNumDisplays() override { return num_displays_; }
+
+ private:
+  int num_displays_ = 1;
+};
 
 // Inherit from ChromeRenderViewHostTestHarness for access to test profile.
 class TabUsageScenarioTrackerTest : public ChromeRenderViewHostTestHarness {
@@ -40,15 +59,12 @@ class TabUsageScenarioTrackerTest : public ChromeRenderViewHostTestHarness {
 
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
-    previous_screen_ = display::Screen::SetScreenInstance(&screen_);
-    tab_usage_scenario_tracker_ =
-        std::make_unique<TabUsageScenarioTracker>(&usage_scenario_data_store_);
+    tab_usage_scenario_tracker_ = std::make_unique<MockTabUsageScenarioTracker>(
+        &usage_scenario_data_store_);
   }
 
   void TearDown() override {
     tab_usage_scenario_tracker_.reset();
-    display::Screen::SetScreenInstance(previous_screen_);
-    previous_screen_ = nullptr;
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
@@ -76,14 +92,13 @@ class TabUsageScenarioTrackerTest : public ChromeRenderViewHostTestHarness {
 
   void NavigateAndCommitTab(content::WebContents* contents, const GURL& gurl) {
     content::NavigationSimulator::NavigateAndCommitFromBrowser(contents, gurl);
-    tab_usage_scenario_tracker_->OnMainFrameNavigationCommitted(contents);
+    tab_usage_scenario_tracker_->OnPrimaryMainFrameNavigationCommitted(
+        contents);
   }
 
  protected:
-  display::test::TestScreen screen_;
-  display::Screen* previous_screen_;
   UsageScenarioDataStoreImpl usage_scenario_data_store_;
-  std::unique_ptr<TabUsageScenarioTracker> tab_usage_scenario_tracker_;
+  std::unique_ptr<MockTabUsageScenarioTracker> tab_usage_scenario_tracker_;
   ukm::TestAutoSetUkmRecorder ukm_recorder_;
 };
 
@@ -215,10 +230,8 @@ TEST_F(TabUsageScenarioTrackerTest, FullScreenVideoSingleMonitor) {
 
   // Add a second display, this should stop the fullscreen video on single
   // monitor session.
-  int64_t kDisplayID = 42;
   task_environment()->FastForwardBy(kInterval);
-  screen_.display_list().AddDisplay({kDisplayID, gfx::Rect(100, 100, 801, 802)},
-                                    display::DisplayList::Type::NOT_PRIMARY);
+  tab_usage_scenario_tracker_->SetNumDisplays(2);
   task_environment()->FastForwardBy(kInterval);
 
   interval_data = usage_scenario_data_store_.ResetIntervalData();
@@ -234,11 +247,84 @@ TEST_F(TabUsageScenarioTrackerTest, FullScreenVideoSingleMonitor) {
 
   // Removing the secondary display while there's still some video playing
   // fullscreen should resume the session.
-  screen_.display_list().RemoveDisplay(kDisplayID);
+  tab_usage_scenario_tracker_->SetNumDisplays(1);
   task_environment()->FastForwardBy(kInterval);
   interval_data = usage_scenario_data_store_.ResetIntervalData();
   EXPECT_EQ(interval_data.time_playing_video_full_screen_single_monitor,
             kInterval);
+}
+
+// Regression test for crbug.com/40206265.
+TEST_F(TabUsageScenarioTrackerTest,
+       FullScreenVideoSingleMonitor_StopPlayingWithTwoMonitors) {
+  auto contents = CreateWebContents();
+  tab_usage_scenario_tracker_->OnTabAdded(contents.get());
+
+  // `contents` plays video in fullscreen.
+  tab_usage_scenario_tracker_->OnMediaEffectivelyFullscreenChanged(
+      contents.get(), true);
+  task_environment()->FastForwardBy(kInterval);
+
+  // Add a second display, this should stop the fullscreen video on single
+  // monitor session.
+  tab_usage_scenario_tracker_->SetNumDisplays(2);
+  task_environment()->FastForwardBy(kInterval);
+
+  // Stop playing video in fullscreen in `contents` while there are 2 displays.
+  tab_usage_scenario_tracker_->OnMediaEffectivelyFullscreenChanged(
+      contents.get(), false);
+  task_environment()->FastForwardBy(kInterval);
+
+  // Remove the second display.
+  tab_usage_scenario_tracker_->SetNumDisplays(1);
+  task_environment()->FastForwardBy(kInterval);
+
+  // `contents2` starts playing video in fullscreen.
+  auto contents2 = CreateWebContents();
+  tab_usage_scenario_tracker_->OnTabAdded(contents2.get());
+
+  tab_usage_scenario_tracker_->OnMediaEffectivelyFullscreenChanged(
+      contents2.get(), true);
+  task_environment()->FastForwardBy(kInterval);
+
+  // Expect 2 * kInterval of video playback (kInterval for each WebContents).
+  auto interval_data = usage_scenario_data_store_.ResetIntervalData();
+  EXPECT_EQ(interval_data.time_playing_video_full_screen_single_monitor,
+            2 * kInterval);
+}
+
+// Regression test for crbug.com/341488142.
+TEST_F(TabUsageScenarioTrackerTest,
+       FullScreenVideoSingleMonitor_NumDisplaysChangeWithoutNotification) {
+  auto contents = CreateWebContents();
+  tab_usage_scenario_tracker_->OnTabAdded(contents.get());
+
+  // Add a second display.
+  tab_usage_scenario_tracker_->SetNumDisplays(2);
+
+  // `contents` plays video in fullscreen. There are 2 displays so time isn't
+  // accumulated in `time_playing_video_full_screen_single_monitor`.
+  tab_usage_scenario_tracker_->OnMediaEffectivelyFullscreenChanged(
+      contents.get(), true);
+  task_environment()->FastForwardBy(kInterval);
+
+  // Remove the 2nd display without dispatching a notification yet, to mimic
+  // `XDisplayManager`'s delayed notification
+  // (https://source.chromium.org/chromium/chromium/src/+/main:ui/base/x/x11_display_manager.cc;l=130-135;drc=90cac1911508d3d682a67c97aa62483eb712f69a).
+  tab_usage_scenario_tracker_->SetNumDisplaysWithoutNotification(1);
+  task_environment()->FastForwardBy(kInterval);
+
+  // Stop playing video in fullscreen in `contents` while there is 1 display,
+  // but the display removal notification hasn't been dispatched yet. This
+  // shouldn't crash.
+  tab_usage_scenario_tracker_->OnMediaEffectivelyFullscreenChanged(
+      contents.get(), false);
+
+  // Expect no time playing video in fullscreen, since the display removal
+  // notification was never dispatched.
+  auto interval_data = usage_scenario_data_store_.ResetIntervalData();
+  EXPECT_EQ(interval_data.time_playing_video_full_screen_single_monitor,
+            base::TimeDelta());
 }
 
 TEST_F(TabUsageScenarioTrackerTest, VideoInVisibleTab) {
@@ -286,7 +372,7 @@ TEST_F(TabUsageScenarioTrackerTest, VideoInVisibleTab) {
   tab_usage_scenario_tracker_->OnVideoStoppedPlaying(contents2.get());
   task_environment()->FastForwardBy(kInterval);
   interval_data = usage_scenario_data_store_.ResetIntervalData();
-  EXPECT_TRUE(interval_data.time_playing_video_in_visible_tab.is_zero());
+  EXPECT_EQ(interval_data.time_playing_video_in_visible_tab, kInterval);
 }
 
 TEST_F(TabUsageScenarioTrackerTest, VisibleTabPlayingVideoRemoved) {
@@ -335,7 +421,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibility1tab) {
   EXPECT_EQ(content::Visibility::VISIBLE, contents1->GetVisibility());
   content::NavigationSimulator::NavigateAndCommitFromBrowser(contents1.get(),
                                                              GURL(kUrl1));
-  auto source_id_1 = ukm::GetSourceIdForWebContentsDocument(contents1.get());
+  auto source_id_1 = contents1->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_NE(ukm::kInvalidSourceId, source_id_1);
 
   tab_usage_scenario_tracker_->OnTabAdded(contents1.get());
@@ -375,7 +461,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibility1tab) {
   // Make the tab visible and navigate to a different URL.
   MakeTabVisible(contents1.get());
   NavigateAndCommitTab(contents1.get(), kUrl2);
-  auto source_id_2 = ukm::GetSourceIdForWebContentsDocument(contents1.get());
+  auto source_id_2 = contents1->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_NE(source_id_1, source_id_2);
   task_environment()->FastForwardBy(kInterval);
   interval_data = usage_scenario_data_store_.ResetIntervalData();
@@ -414,7 +500,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibility1tabLateNavigation) {
             usage_scenario_data_store_.GetVisibleSourceIdsForTesting().size());
 
   NavigateAndCommitTab(contents1.get(), kUrl1);
-  auto source_id_1 = ukm::GetSourceIdForWebContentsDocument(contents1.get());
+  auto source_id_1 = contents1->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_NE(ukm::kInvalidSourceId, source_id_1);
 
   task_environment()->FastForwardBy(kInterval);
@@ -448,7 +534,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibilityMultipleTabs) {
 
   task_environment()->FastForwardBy(kInterval);
   auto interval_data = usage_scenario_data_store_.ResetIntervalData();
-  auto source_id_1 = ukm::GetSourceIdForWebContentsDocument(contents1.get());
+  auto source_id_1 = contents1->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_EQ(source_id_1, interval_data.source_id_for_longest_visible_origin);
   EXPECT_EQ(kInterval,
             interval_data.source_id_for_longest_visible_origin_duration);
@@ -471,7 +557,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibilityMultipleTabs) {
   MakeTabOccluded(contents1.get());
   task_environment()->FastForwardBy(kInterval);
   interval_data = usage_scenario_data_store_.ResetIntervalData();
-  auto source_id_2 = ukm::GetSourceIdForWebContentsDocument(contents2.get());
+  auto source_id_2 = contents2->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_EQ(source_id_2, interval_data.source_id_for_longest_visible_origin);
   EXPECT_EQ(kInterval,
             interval_data.source_id_for_longest_visible_origin_duration);
@@ -483,7 +569,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibilityMultipleTabs) {
   MakeTabVisible(contents3.get());
   task_environment()->FastForwardBy(kInterval);
   interval_data = usage_scenario_data_store_.ResetIntervalData();
-  auto source_id_3 = ukm::GetSourceIdForWebContentsDocument(contents3.get());
+  auto source_id_3 = contents3->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_EQ(source_id_3, interval_data.source_id_for_longest_visible_origin);
   EXPECT_EQ(kInterval,
             interval_data.source_id_for_longest_visible_origin_duration);
@@ -498,7 +584,7 @@ TEST_F(TabUsageScenarioTrackerTest, UKMVisibilityMultipleVisibilityEvents) {
   EXPECT_EQ(content::Visibility::VISIBLE, contents1->GetVisibility());
   content::NavigationSimulator::NavigateAndCommitFromBrowser(contents1.get(),
                                                              GURL(kUrl1));
-  auto source_id_1 = ukm::GetSourceIdForWebContentsDocument(contents1.get());
+  auto source_id_1 = contents1->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_NE(ukm::kInvalidSourceId, source_id_1);
   tab_usage_scenario_tracker_->OnTabAdded(contents1.get());
 
@@ -537,9 +623,9 @@ TEST_F(TabUsageScenarioTrackerTest,
   NavigateAndCommitTab(contents2.get(), kUrl2);
   NavigateAndCommitTab(contents3.get(), kUrl3);
 
-  auto source_id_1 = ukm::GetSourceIdForWebContentsDocument(contents1.get());
-  auto source_id_2 = ukm::GetSourceIdForWebContentsDocument(contents2.get());
-  auto source_id_3 = ukm::GetSourceIdForWebContentsDocument(contents3.get());
+  auto source_id_1 = contents1->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  auto source_id_2 = contents2->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  auto source_id_3 = contents3->GetPrimaryMainFrame()->GetPageUkmSourceId();
   EXPECT_NE(source_id_1, source_id_2);
   EXPECT_NE(source_id_1, source_id_3);
   EXPECT_NE(source_id_2, source_id_3);

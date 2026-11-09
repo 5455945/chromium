@@ -1,183 +1,106 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/core/broker_host.h"
 
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+
 #include <utility>
+#include <vector>
 
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/memory/platform_shared_memory_region.h"
-#include "base/memory/ref_counted.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "build/build_config.h"
-#include "mojo/core/broker_messages.h"
-#include "mojo/core/platform_handle_utils.h"
+#include "base/notreached.h"
+#include "base/posix/eintr_wrapper.h"
+#include "mojo/public/cpp/platform/socket_utils_posix.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
-#endif
+namespace mojo::core {
 
-namespace mojo {
-namespace core {
-
-BrokerHost::BrokerHost(base::Process client_process,
-                       ConnectionParams connection_params,
-                       const ProcessErrorCallback& process_error_callback)
-    : process_error_callback_(process_error_callback)
-#if defined(OS_WIN)
-      ,
-      client_process_(std::move(client_process))
-#endif
-{
-  CHECK(connection_params.endpoint().is_valid() ||
-        connection_params.server_endpoint().is_valid());
-
+BrokerHost::BrokerHost(base::ScopedFD socket) : socket_(std::move(socket)) {
+  CHECK(socket_.is_valid());
   base::CurrentThread::Get()->AddDestructionObserver(this);
-
-  channel_ = Channel::Create(this, std::move(connection_params),
-                             Channel::HandlePolicy::kAcceptHandles,
-                             base::ThreadTaskRunnerHandle::Get());
-  channel_->Start();
+  read_watch_ = base::IOWatcher::Get()->WatchFileDescriptor(
+      socket_.get(), base::IOWatcher::FdWatchDuration::kPersistent,
+      base::IOWatcher::FdWatchMode::kRead, *this);
 }
 
 BrokerHost::~BrokerHost() {
   // We're always destroyed on the creation thread, which is the IO thread.
   base::CurrentThread::Get()->RemoveDestructionObserver(this);
-
-  if (channel_)
-    channel_->ShutDown();
 }
 
-bool BrokerHost::PrepareHandlesForClient(
-    std::vector<PlatformHandleInTransit>* handles) {
-#if defined(OS_WIN)
-  bool handles_ok = true;
-  for (auto& handle : *handles) {
-    if (!handle.TransferToProcess(client_process_.Duplicate()))
-      handles_ok = false;
-  }
-  return handles_ok;
-#else
-  return true;
-#endif
-}
+void BrokerHost::OnFdReadable(int fd) {
+  CHECK_EQ(fd, socket_.get());
 
-bool BrokerHost::SendChannel(PlatformHandle handle) {
-  CHECK(handle.is_valid());
-  CHECK(channel_);
-
-#if defined(OS_WIN)
-  InitData* data;
-  Channel::MessagePtr message =
-      CreateBrokerMessage(BrokerMessageType::INIT, 1, 0, &data);
-  data->pipe_name_length = 0;
-#else
-  Channel::MessagePtr message =
-      CreateBrokerMessage(BrokerMessageType::INIT, 1, nullptr);
-#endif
-  std::vector<PlatformHandleInTransit> handles(1);
-  handles[0] = PlatformHandleInTransit(std::move(handle));
-
-  // This may legitimately fail on Windows if the client process is in another
-  // session, e.g., is an elevated process.
-  if (!PrepareHandlesForClient(&handles))
-    return false;
-
-  message->SetHandles(std::move(handles));
-  channel_->Write(std::move(message));
-  return true;
-}
-
-#if defined(OS_WIN)
-
-void BrokerHost::SendNamedChannel(base::WStringPiece pipe_name) {
-  InitData* data;
-  wchar_t* name_data;
-  Channel::MessagePtr message = CreateBrokerMessage(
-      BrokerMessageType::INIT, 0, sizeof(*name_data) * pipe_name.length(),
-      &data, reinterpret_cast<void**>(&name_data));
-  data->pipe_name_length = static_cast<uint32_t>(pipe_name.length());
-  std::copy(pipe_name.begin(), pipe_name.end(), name_data);
-  channel_->Write(std::move(message));
-}
-
-#endif  // defined(OS_WIN)
-
-void BrokerHost::OnBufferRequest(uint32_t num_bytes) {
-  base::subtle::PlatformSharedMemoryRegion region =
-      base::subtle::PlatformSharedMemoryRegion::CreateWritable(num_bytes);
-
-  std::vector<PlatformHandleInTransit> handles;
-  handles.reserve(2);
-  if (region.IsValid()) {
-    PlatformHandle h[2];
-    ExtractPlatformHandlesFromSharedMemoryRegionHandle(
-        region.PassPlatformHandle(), &h[0], &h[1]);
-    handles.emplace_back(std::move(h[0]));
-#if !defined(OS_POSIX) || defined(OS_ANDROID) || defined(OS_MAC)
-    // Non-POSIX systems, as well as Android and Mac, only use a single handle
-    // to represent a writable region.
-    DCHECK(!h[1].is_valid());
-#else
-    DCHECK(h[1].is_valid());
-    handles.emplace_back(std::move(h[1]));
-#endif
-  }
-
-  BufferResponseData* response;
-  Channel::MessagePtr message = CreateBrokerMessage(
-      BrokerMessageType::BUFFER_RESPONSE, handles.size(), 0, &response);
-  if (handles.empty()) {
-    response->guid_high = 0;
-    response->guid_low = 0;
-  } else {
-    const base::UnguessableToken& guid = region.GetGUID();
-    response->guid_high = guid.GetHighForSerialization();
-    response->guid_low = guid.GetLowForSerialization();
-    PrepareHandlesForClient(&handles);
-    message->SetHandles(std::move(handles));
-  }
-
-  channel_->Write(std::move(message));
-}
-
-void BrokerHost::OnChannelMessage(const void* payload,
-                                  size_t payload_size,
-                                  std::vector<PlatformHandle> handles) {
-  if (payload_size < sizeof(BrokerMessageHeader))
+  // The socket is a byte stream, so a request may arrive in pieces. Read at
+  // most the rest of the current request: a well-behaved client waits for each
+  // response before sending another request, and the watch is level-triggered,
+  // so any further data is read in a later call.
+  base::span<uint8_t> unread =
+      base::byte_span_from_ref(request_).subspan(request_bytes_received_);
+  // recv() has no buffer for ancillary data, so the kernel discards any
+  // descriptors sent by the client instead of passing them to this process.
+  const ssize_t result = HANDLE_EINTR(
+      recv(socket_.get(), unread.data(), unread.size(), MSG_DONTWAIT));
+  if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
     return;
+  }
 
-  const BrokerMessageHeader* header =
-      static_cast<const BrokerMessageHeader*>(payload);
-  switch (header->type) {
-    case BrokerMessageType::BUFFER_REQUEST:
-      if (payload_size ==
-          sizeof(BrokerMessageHeader) + sizeof(BufferRequestData)) {
-        const BufferRequestData* request =
-            reinterpret_cast<const BufferRequestData*>(header + 1);
-        OnBufferRequest(request->size);
-      }
-      break;
+  // Close the connection on error or end-of-stream.
+  if (result <= 0) {
+    delete this;
+    return;
+  }
 
-    default:
-      DLOG(ERROR) << "Unexpected broker message type: " << header->type;
-      break;
+  request_bytes_received_ += static_cast<size_t>(result);
+  if (request_bytes_received_ < sizeof(request_)) {
+    return;
+  }
+  request_bytes_received_ = 0;
+  if (!OnBufferRequest(request_.num_bytes)) {
+    delete this;
   }
 }
 
-void BrokerHost::OnChannelError(Channel::Error error) {
-  if (process_error_callback_ &&
-      error == Channel::Error::kReceivedMalformedData) {
-    process_error_callback_.Run("Broker host received malformed message");
-  }
-
-  delete this;
+void BrokerHost::OnFdWritable(int fd) {
+  // Only `socket_`'s readability is watched.
+  NOTREACHED();
 }
 
 void BrokerHost::WillDestroyCurrentMessageLoop() {
   delete this;
 }
 
-}  // namespace core
-}  // namespace mojo
+bool BrokerHost::OnBufferRequest(uint32_t num_bytes) {
+  base::subtle::PlatformSharedMemoryRegion region =
+      base::subtle::PlatformSharedMemoryRegion::CreateWritable(num_bytes);
+
+  // The client reads each response before sending its next request, so there
+  // is always enough room in the socket for the 1-byte response. A failed
+  // write, including one which would have blocked, means that the client is
+  // gone or misbehaving.
+  ssize_t result;
+  if (region.IsValid()) {
+    base::subtle::ScopedFDPair fd_pair = region.PassPlatformHandle();
+    CHECK(fd_pair.readonly_fd.is_valid());
+    std::vector<base::ScopedFD> fds;
+    fds.push_back(std::move(fd_pair.fd));
+    fds.push_back(std::move(fd_pair.readonly_fd));
+    BrokerBufferResponse response = BrokerBufferResponse::kSuccess;
+    struct iovec iov = {&response, sizeof(response)};
+    result = SendmsgWithHandles(socket_.get(), &iov, 1, fds, MSG_DONTWAIT);
+  } else {
+    const BrokerBufferResponse response = BrokerBufferResponse::kFailure;
+    result =
+        SocketWrite(socket_.get(), &response, sizeof(response), MSG_DONTWAIT);
+  }
+  return result == static_cast<ssize_t>(sizeof(BrokerBufferResponse));
+}
+
+}  // namespace mojo::core

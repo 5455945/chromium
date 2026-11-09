@@ -1,65 +1,58 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gtk/wayland/gtk_ui_platform_wayland.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/environment.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
+#include "base/strings/string_util.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "ui/base/glib/glib_cast.h"
-#include "ui/base/linux/linux_ui_delegate.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/events/event_utils.h"
 #include "ui/gtk/gtk_compat.h"
+#include "ui/gtk/gtk_util.h"
+#include "ui/gtk/input_method_context_impl_gtk.h"
+#include "ui/linux/linux_ui_delegate.h"
 
 namespace gtk {
 
 GtkUiPlatformWayland::GtkUiPlatformWayland() {
   gdk_set_allowed_backends("wayland");
-  // GDK_BACKEND takes precedence over gdk_set_allowed_backends(), so override
-  // it to ensure we get the wayland backend.
-  base::Environment::Create()->SetVar("GDK_BACKEND", "wayland");
 }
 
 GtkUiPlatformWayland::~GtkUiPlatformWayland() = default;
 
-void GtkUiPlatformWayland::OnInitialized(GtkWidget* widget) {
+void GtkUiPlatformWayland::OnInitialized() {
   // Nothing to do upon initialization for Wayland.
 }
 
-GdkKeymap* GtkUiPlatformWayland::GetGdkKeymap() {
-  NOTIMPLEMENTED_LOG_ONCE();
-  return nullptr;
-}
-
 GdkWindow* GtkUiPlatformWayland::GetGdkWindow(
-    gfx::AcceleratedWidget window_id) {
+    gfx::AcceleratedWidget window_id) const {
   NOTIMPLEMENTED_LOG_ONCE();
   return nullptr;
 }
 
-bool GtkUiPlatformWayland::ExportWindowHandle(
-    gfx::AcceleratedWidget window_id,
-    base::OnceCallback<void(std::string)> callback) {
-  if (!gtk::GtkCheckVersion(3, 22)) {
-    LOG(WARNING) << "set_transient_for_exported not supported in GTK version "
-                 << gtk_get_major_version() << '.' << gtk_get_minor_version()
-                 << '.' << gtk_get_micro_version();
-    return false;
-  }
-
-  return ui::LinuxUiDelegate::GetInstance()->ExportWindowHandle(
-      window_id,
-      base::BindOnce(&GtkUiPlatformWayland::OnHandleForward,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-bool GtkUiPlatformWayland::SetGtkWidgetTransientFor(
+void GtkUiPlatformWayland::SetGtkWidgetTransientFor(
     GtkWidget* widget,
     gfx::AcceleratedWidget parent) {
-  return ui::LinuxUiDelegate::GetInstance()->ExportWindowHandle(
+  // The parent is set asynchronously, once xdg-foreign has exported it. Until
+  // then, ShowGtkWindow() defers presenting `widget`: a dialog mapped without
+  // its parent is a regular toplevel to the compositor, which places, stacks
+  // and activates it independently of the browser window.
+  pending_transients_.insert_or_assign(
+      widget, PendingTransient{.destroy_signal = ScopedGSignal(
+                                   widget, "destroy",
+                                   base::BindRepeating(
+                                       &GtkUiPlatformWayland::OnWidgetDestroyed,
+                                       weak_factory_.GetWeakPtr()))});
+  ui::LinuxUiDelegate::GetInstance()->ExportWindowHandle(
       parent, base::BindOnce(&GtkUiPlatformWayland::OnHandleSetTransient,
-                             weak_factory_.GetWeakPtr(), widget));
+                             weak_factory_.GetWeakPtr(), WrapGObject(widget)));
 }
 
 void GtkUiPlatformWayland::ClearTransientFor(gfx::AcceleratedWidget parent) {
@@ -67,33 +60,72 @@ void GtkUiPlatformWayland::ClearTransientFor(gfx::AcceleratedWidget parent) {
 }
 
 void GtkUiPlatformWayland::ShowGtkWindow(GtkWindow* window) {
-  // TODO(crbug.com/1008755): Check if gtk_window_present_with_time is needed
+  if (auto it = pending_transients_.find(GTK_WIDGET(window));
+      it != pending_transients_.end()) {
+    it->second.show_requested = true;
+    return;
+  }
+  // TODO(crbug.com/40650162): Check if gtk_window_present_with_time is needed
   // here as well, similarly to what is done in X11 impl.
   gtk_window_present(window);
 }
 
-void GtkUiPlatformWayland::OnHandleSetTransient(GtkWidget* widget,
-                                                const std::string& handle) {
-  char* parent = const_cast<char*>(handle.c_str());
+void GtkUiPlatformWayland::OnWidgetDestroyed(GtkWidget* widget) {
+  pending_transients_.erase(widget);
+}
+
+void GtkUiPlatformWayland::OnHandleSetTransient(
+    ScopedGObject<GtkWidget> widget_ref,
+    std::string handle) {
+  GtkWidget* widget = widget_ref.get();
+  auto it = pending_transients_.find(widget);
+  if (it == pending_transients_.end()) {
+    // `widget` was destroyed while its parent was being exported.
+    return;
+  }
+  const bool show_requested = it->second.show_requested;
+  pending_transients_.erase(it);
+  // Present the dialog even if exporting the parent failed, so that it is
+  // never lost.
+  absl::Cleanup present = [widget, show_requested] {
+    if (show_requested) {
+      gtk_window_present(GTK_WINDOW(widget));
+    }
+  };
+  auto handle_no_prefix = base::RemovePrefix(handle, "wayland:");
+  if (!handle_no_prefix || handle_no_prefix->empty()) {
+    return;
+  }
+  char* parent = const_cast<char*>(handle_no_prefix->data());
   if (gtk::GtkCheckVersion(4)) {
     auto* toplevel = GlibCast<GdkToplevel>(
         gtk_native_get_surface(gtk_widget_get_native(widget)),
         gdk_toplevel_get_type());
     gdk_wayland_toplevel_set_transient_for_exported(toplevel, parent);
-  } else {
+  } else if (gtk::GtkCheckVersion(3, 22)) {
     gdk_wayland_window_set_transient_for_exported(gtk_widget_get_window(widget),
                                                   parent);
+  } else {
+    LOG(WARNING) << "set_transient_for_exported not supported in GTK version "
+                 << gtk_get_major_version() << '.' << gtk_get_minor_version()
+                 << '.' << gtk_get_micro_version();
   }
 }
 
-void GtkUiPlatformWayland::OnHandleForward(
-    base::OnceCallback<void(std::string)> callback,
-    const std::string& handle) {
-  std::move(callback).Run("wayland:" + handle);
+std::unique_ptr<ui::LinuxInputMethodContext>
+GtkUiPlatformWayland::CreateInputMethodContext(
+    ui::LinuxInputMethodContextDelegate* delegate) const {
+  // Use text-input-v3 on Wayland.
+  return nullptr;
 }
 
-int GtkUiPlatformWayland::GetGdkKeyState() {
-  return ui::LinuxUiDelegate::GetInstance()->GetKeyState();
+bool GtkUiPlatformWayland::IncludeFontScaleInDeviceScale() const {
+  // Assume font scaling will be handled by Ozone/Wayland.
+  return true;
+}
+
+bool GtkUiPlatformWayland::IncludeScaleInCursorSize() const {
+  return false;
 }
 
 }  // namespace gtk

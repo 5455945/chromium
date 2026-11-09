@@ -21,10 +21,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_DETAILS_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_DETAILS_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/events/toggle_event.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 
 namespace blink {
+
+class UIEvent;
 
 class HTMLDetailsElement final : public HTMLElement {
   DEFINE_WRAPPERTYPEINFO();
@@ -35,21 +38,52 @@ class HTMLDetailsElement final : public HTMLElement {
   explicit HTMLDetailsElement(Document&);
   ~HTMLDetailsElement() override;
 
-  Element* FindMainSummary() const;
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLDetailsElement;
+  }
 
-  // Used for slot assignment.
-  static bool IsFirstSummary(const Node&);
+  Element& MainSummary() const;
+
+  void ManuallyAssignSlots() override;
+
+  void Trace(Visitor*) const override;
+
+  bool IsValidBuiltinCommand(HTMLElement& invoker,
+                             CommandEventType command) override;
+  bool HandleCommandInternal(HTMLElement& invoker,
+                             CommandEventType command,
+                             UIEvent* activate_event) override;
+
+  // The name attribute for grouping of related details; empty string
+  // means no grouping.
+  const AtomicString& GetName() const {
+    return FastGetAttribute(html_names::kNameAttr);
+  }
+
+  // Returns true if `node` is a child of this details element which is slotted
+  // into the content slot, as opposed to the summary slot.
+  bool IsAssignedToContentSlot(const Node& node) const;
 
  private:
   void DispatchPendingEvent(const AttributeModificationReason);
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  // Return all the <details> elements in the group created by the name
+  // attribute, excluding |this|, in tree order.  If there is no such group
+  // (e.g., because there is no name attribute), returns an empty list.
+  HeapVector<Member<HTMLDetailsElement>> OtherElementsInNameGroup();
+  void MaybeCloseForExclusivity();
+
   void ParseAttribute(const AttributeModificationParams&) override;
+  void AttributeChanged(const AttributeModificationParams&) override;
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void DidAddUserAgentShadowRoot(ShadowRoot&) override;
   bool IsInteractiveContent() const override;
 
-  bool is_open_;
-  TaskHandle pending_event_;
+  bool is_open_ = false;
+  TaskHandle pending_event_task_;
+  Member<ToggleEvent> pending_toggle_event_;
+  Member<HTMLSlotElement> summary_slot_;
+  Member<HTMLSlotElement> content_slot_;
 };
 
 }  // namespace blink

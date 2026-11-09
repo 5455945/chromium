@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
@@ -25,9 +25,15 @@ SVGAnimatedHref::SVGAnimatedHref(SVGElement* context_element)
           MakeGarbageCollected<SVGAnimatedString>(context_element,
                                                   xlink_names::kHrefAttr)) {}
 
-void SVGAnimatedHref::AddToPropertyMap(SVGElement* element) {
-  element->AddToPropertyMap(this);
-  element->AddToPropertyMap(xlink_href_);
+SVGAnimatedPropertyBase* SVGAnimatedHref::PropertyFromAttribute(
+    const QualifiedName& attribute_name) {
+  if (attribute_name == svg_names::kHrefAttr) {
+    return this;
+  } else if (attribute_name.Matches(xlink_names::kHrefAttr)) {
+    return xlink_href_.Get();
+  } else {
+    return nullptr;
+  }
 }
 
 bool SVGAnimatedHref::IsKnownAttribute(const QualifiedName& attr_name) {
@@ -43,7 +49,7 @@ const SVGString* SVGAnimatedHref::CurrentValue() const {
   return BackingString()->SVGAnimatedString::CurrentValue();
 }
 
-V8UnionStringOrTrustedScriptURL* SVGAnimatedHref::baseVal() {
+String SVGAnimatedHref::baseVal() {
   UseCounter::Count(ContextElement()->GetDocument(),
                     WebFeature::kSVGHrefBaseVal);
   return BackingString()->SVGAnimatedString::baseVal();

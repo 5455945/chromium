@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,27 @@
 #define CONTENT_PUBLIC_RENDERER_KEY_SYSTEM_SUPPORT_H_
 
 #include <string>
-#include <vector>
 
+#include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "content/common/content_export.h"
-#include "media/mojo/mojom/key_system_support.mojom.h"
+#include "content/public/renderer/render_frame.h"
+#include "media/base/key_system_capability.h"
+#include "media/base/key_systems_support_registration.h"
 
 namespace content {
 
-// Determines if |key_system| is supported by calling into the browser.
-// If it is supported, return true and |key_system_capability| is updated
-// to match what |key_system| supports. If not supported, false is returned.
-CONTENT_EXPORT bool IsKeySystemSupported(
-    const std::string& key_system,
-    media::mojom::KeySystemCapabilityPtr* key_system_capability);
+using KeySystemCapabilities =
+    base::flat_map<std::string, media::KeySystemCapability>;
+using KeySystemSupportCB = base::RepeatingCallback<void(KeySystemCapabilities)>;
+
+// Observes key system support updates. The callback `cb` will be called with
+// the current key system support, then called every time the key system support
+// changes. If the connection to the browser closes, `cb` is called one last
+// time with pending capabilities reported as unsupported.
+CONTENT_EXPORT std::unique_ptr<media::KeySystemSupportRegistration>
+ObserveKeySystemSupportUpdate(content::RenderFrame* render_frame,
+                              media::KeySystemSupportCB cb);
 
 }  // namespace content
 

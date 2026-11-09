@@ -1,23 +1,30 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/chrome/app/startup/provider_registration.h"
+#import "ios/chrome/app/startup/provider_registration.h"
 
-#include "ios/public/provider/chrome/browser/chrome_browser_provider.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/system/sys_info.h"
+#import "components/crash/core/app/crashpad.h"
+#import "ios/public/provider/chrome/browser/app_utils/app_utils_api.h"
+#import "ios/public/provider/chrome/browser/raccoon/raccoon_api.h"
 
 @implementation ProviderRegistration
 
 + (void)registerProviders {
-  std::unique_ptr<ios::ChromeBrowserProvider> provider =
-      ios::CreateChromeBrowserProvider();
+  // Needs to happen before any function of the provider API is used.
+  ios::provider::Initialize();
 
-  // Leak the providers.
-  ios::SetChromeBrowserProvider(provider.release());
+  if (ios::provider::IsRaccoonEnabled()) {
+    const std::string name = "iPad0,0";
+    // Reset the "platform" value in the crash report that was initialized by
+    // StartCrashController().
+    crash_reporter::OverridePlatformValue(name);
+
+    // Override the hardware model name. This will be used in
+    // base::SysInfo::HardwareModelName().
+    base::SysInfo::OverrideHardwareModelName(std::move(name));
+  }
 }
 
 @end

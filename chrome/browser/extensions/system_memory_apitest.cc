@@ -1,10 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/api/system_memory/memory_info_provider.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -27,36 +30,14 @@ class MockMemoryInfoProviderImpl : public MemoryInfoProvider {
   ~MockMemoryInfoProviderImpl() override = default;
 };
 
-using ContextType = ExtensionBrowserTest::ContextType;
+using SystemMemoryApiTest = ExtensionApiTest;
 
-class SystemMemoryApiTest : public ExtensionApiTest,
-                            public testing::WithParamInterface<ContextType> {
- public:
-  SystemMemoryApiTest() = default;
-  ~SystemMemoryApiTest() override = default;
-  SystemMemoryApiTest(const SystemMemoryApiTest&) = delete;
-  SystemMemoryApiTest& operator=(const SystemMemoryApiTest&) = delete;
-
- protected:
-  bool RunTest(const char* name) {
-    return RunExtensionTest(
-        name, {},
-        {.load_as_service_worker = GetParam() == ContextType::kServiceWorker});
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(EventPage,
-                         SystemMemoryApiTest,
-                         ::testing::Values(ContextType::kEventPage));
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         SystemMemoryApiTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-
-IN_PROC_BROWSER_TEST_P(SystemMemoryApiTest, Memory) {
+// Tests the system.memory extension API.
+IN_PROC_BROWSER_TEST_F(SystemMemoryApiTest, Memory) {
   scoped_refptr<MemoryInfoProvider> provider = new MockMemoryInfoProviderImpl;
   // The provider is owned by the single MemoryInfoProvider instance.
   MemoryInfoProvider::InitializeForTesting(provider);
-  ASSERT_TRUE(RunTest("system_memory")) << message_;
+  ASSERT_TRUE(RunExtensionTest("system_memory")) << message_;
 }
 
 }  // namespace extensions

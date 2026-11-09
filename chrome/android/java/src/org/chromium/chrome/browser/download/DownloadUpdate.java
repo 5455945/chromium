@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,44 @@ package org.chromium.chrome.browser.download;
 
 import android.graphics.Bitmap;
 
-import androidx.annotation.Nullable;
-
-import org.chromium.chrome.browser.profiles.OTRProfileID;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.profiles.OtrProfileId;
+import org.chromium.components.download.DownloadDangerType;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.offline_items_collection.FailState;
 import org.chromium.components.offline_items_collection.OfflineItem.Progress;
 import org.chromium.components.offline_items_collection.PendingState;
+import org.chromium.url.GURL;
 
 /**
  * Class representing information relating to an update in download status.
- * TODO(crbug.com/691805): Consolidate with other downloads-related objects.
+ * TODO(crbug.com/40506285): Consolidate with other downloads-related objects.
  */
+@NullMarked
 public final class DownloadUpdate {
-    private final ContentId mContentId;
-    private final String mFileName;
-    private final String mFilePath;
-    private final Bitmap mIcon;
+    private final @Nullable ContentId mContentId;
+    private final @Nullable String mFileName;
+    private final @Nullable String mFilePath;
+    private final @Nullable Bitmap mIcon;
     private final int mIconId;
     private final boolean mIsOffTheRecord;
-    private final @Nullable OTRProfileID mOTRProfileID;
+    private final @Nullable OtrProfileId mOtrProfileId;
     private final boolean mIsOpenable;
     private final boolean mIsSupportedMimeType;
     private final boolean mIsTransient;
     private final int mNotificationId;
-    private final String mOriginalUrl;
+    private final GURL mOriginalUrl;
     private final boolean mShouldPromoteOrigin;
-    private final Progress mProgress;
-    private final String mReferrer;
+    private final @Nullable Progress mProgress;
+    private final GURL mReferrer;
     private final long mStartTime;
     private final long mSystemDownloadId;
     private final long mTimeRemainingInMillis;
     private final long mTotalBytes;
     private final @FailState int mFailState;
     private final @PendingState int mPendingState;
+    private final @DownloadDangerType int mDangerType;
 
     private DownloadUpdate(Builder builder) {
         this.mContentId = builder.mContentId;
@@ -48,36 +52,37 @@ public final class DownloadUpdate {
         this.mIcon = builder.mIcon;
         this.mIconId = builder.mIconId;
         this.mIsOffTheRecord = builder.mIsOffTheRecord;
-        this.mOTRProfileID = builder.mOTRProfileID;
+        this.mOtrProfileId = builder.mOtrProfileId;
         this.mIsOpenable = builder.mIsOpenable;
         this.mIsSupportedMimeType = builder.mIsSupportedMimeType;
         this.mIsTransient = builder.mIsTransient;
         this.mNotificationId = builder.mNotificationId;
-        this.mOriginalUrl = builder.mOriginalUrl;
+        this.mOriginalUrl = builder.mOriginalUrl == null ? GURL.emptyGURL() : builder.mOriginalUrl;
         this.mShouldPromoteOrigin = builder.mShouldPromoteOrigin;
         this.mProgress = builder.mProgress;
-        this.mReferrer = builder.mReferrer;
+        this.mReferrer = builder.mReferrer == null ? GURL.emptyGURL() : builder.mReferrer;
         this.mStartTime = builder.mStartTime;
         this.mSystemDownloadId = builder.mSystemDownloadId;
         this.mTimeRemainingInMillis = builder.mTimeRemainingInMillis;
         this.mTotalBytes = builder.mTotalBytes;
         this.mFailState = builder.mFailState;
         this.mPendingState = builder.mPendingState;
+        this.mDangerType = builder.mDangerType;
     }
 
-    public ContentId getContentId() {
+    public @Nullable ContentId getContentId() {
         return mContentId;
     }
 
-    public String getFileName() {
+    public @Nullable String getFileName() {
         return mFileName;
     }
 
-    public String getFilePath() {
+    public @Nullable String getFilePath() {
         return mFilePath;
     }
 
-    public Bitmap getIcon() {
+    public @Nullable Bitmap getIcon() {
         return mIcon;
     }
 
@@ -93,9 +98,8 @@ public final class DownloadUpdate {
         return mIsOffTheRecord;
     }
 
-    @Nullable
-    public OTRProfileID getOTRProfileID() {
-        return mOTRProfileID;
+    public @Nullable OtrProfileId getOtrProfileId() {
+        return mOtrProfileId;
     }
 
     public boolean getIsOpenable() {
@@ -114,7 +118,7 @@ public final class DownloadUpdate {
         return mNotificationId;
     }
 
-    public String getOriginalUrl() {
+    public GURL getOriginalUrl() {
         return mOriginalUrl;
     }
 
@@ -122,11 +126,11 @@ public final class DownloadUpdate {
         return mShouldPromoteOrigin;
     }
 
-    public Progress getProgress() {
+    public @Nullable Progress getProgress() {
         return mProgress;
     }
 
-    public String getReferrer() {
+    public GURL getReferrer() {
         return mReferrer;
     }
 
@@ -154,48 +158,51 @@ public final class DownloadUpdate {
         return mPendingState;
     }
 
-    /**
-     * Helper class for building the DownloadUpdate object.
-     */
+    public @DownloadDangerType int getDangerType() {
+        return mDangerType;
+    }
+
+    /** Helper class for building the DownloadUpdate object. */
     public static class Builder {
-        private ContentId mContentId;
-        private String mFileName;
-        private String mFilePath;
-        private Bitmap mIcon;
+        private @Nullable ContentId mContentId;
+        private @Nullable String mFileName;
+        private @Nullable String mFilePath;
+        private @Nullable Bitmap mIcon;
         private int mIconId = -1;
         private boolean mIsOffTheRecord;
-        private @Nullable OTRProfileID mOTRProfileID;
+        private @Nullable OtrProfileId mOtrProfileId;
         private boolean mIsOpenable;
         private boolean mIsSupportedMimeType;
         private boolean mIsTransient;
         private int mNotificationId = -1;
-        private String mOriginalUrl;
+        private @Nullable GURL mOriginalUrl;
         private boolean mShouldPromoteOrigin;
-        private Progress mProgress;
-        private String mReferrer;
+        private @Nullable Progress mProgress;
+        private @Nullable GURL mReferrer;
         private long mStartTime;
         private long mSystemDownloadId = -1;
         private long mTimeRemainingInMillis;
         private long mTotalBytes;
         private @FailState int mFailState;
         private @PendingState int mPendingState;
+        private @DownloadDangerType int mDangerType = DownloadDangerType.NOT_DANGEROUS;
 
         public Builder setContentId(ContentId contentId) {
             this.mContentId = contentId;
             return this;
         }
 
-        public Builder setFileName(String fileName) {
+        public Builder setFileName(@Nullable String fileName) {
             this.mFileName = fileName;
             return this;
         }
 
-        public Builder setFilePath(String filePath) {
+        public Builder setFilePath(@Nullable String filePath) {
             this.mFilePath = filePath;
             return this;
         }
 
-        public Builder setIcon(Bitmap icon) {
+        public Builder setIcon(@Nullable Bitmap icon) {
             this.mIcon = icon;
             return this;
         }
@@ -205,11 +212,11 @@ public final class DownloadUpdate {
             return this;
         }
 
-        public Builder setOTRProfileID(@Nullable OTRProfileID otrProfileID) {
-            this.mOTRProfileID = otrProfileID;
-            // TODO(crbug.com/1161132): Remove this after replacing |DownloadUpdate#isOffTheRecord|
-            // usages with |DownloadUpdate#getOTRProfileID|.
-            this.mIsOffTheRecord = OTRProfileID.isOffTheRecord(otrProfileID);
+        public Builder setOtrProfileId(@Nullable OtrProfileId otrProfileId) {
+            this.mOtrProfileId = otrProfileId;
+            // TODO(crbug.com/40162349): Remove this after replacing |DownloadUpdate#isOffTheRecord|
+            // usages with |DownloadUpdate#getOtrProfileId|.
+            this.mIsOffTheRecord = OtrProfileId.isOffTheRecord(otrProfileId);
             return this;
         }
 
@@ -233,7 +240,7 @@ public final class DownloadUpdate {
             return this;
         }
 
-        public Builder setOriginalUrl(String originalUrl) {
+        public Builder setOriginalUrl(@Nullable GURL originalUrl) {
             this.mOriginalUrl = originalUrl;
             return this;
         }
@@ -243,12 +250,12 @@ public final class DownloadUpdate {
             return this;
         }
 
-        public Builder setProgress(Progress progress) {
+        public Builder setProgress(@Nullable Progress progress) {
             this.mProgress = progress;
             return this;
         }
 
-        public Builder setReferrer(String referrer) {
+        public Builder setReferrer(GURL referrer) {
             this.mReferrer = referrer;
             return this;
         }
@@ -280,6 +287,11 @@ public final class DownloadUpdate {
 
         public Builder setPendingState(@PendingState int pendingState) {
             this.mPendingState = pendingState;
+            return this;
+        }
+
+        public Builder setDangerType(@DownloadDangerType int dangerType) {
+            this.mDangerType = dangerType;
             return this;
         }
 

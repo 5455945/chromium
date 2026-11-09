@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 #define DEVICE_BASE_SYNCHRONIZATION_ONE_WRITER_SEQLOCK_H_
 
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
 
 #include "base/atomicops.h"
-#include "base/macros.h"
-#include "base/threading/platform_thread.h"
+#include "base/check_op.h"
 
 namespace device {
 
@@ -38,12 +40,10 @@ namespace device {
 class OneWriterSeqLock {
  public:
   OneWriterSeqLock();
-  // Copies data from src into dest using atomic stores. This should be used by
-  // writer of SeqLock. Data must be 4-byte aligned.
-  static void AtomicWriterMemcpy(void* dest, const void* src, size_t size);
-  // Copies data from src into dest using atomic loads. This should be used by
-  // readers of SeqLock. Data must be 4-byte aligned.
-  static void AtomicReaderMemcpy(void* dest, const void* src, size_t size);
+
+  OneWriterSeqLock(const OneWriterSeqLock&) = delete;
+  OneWriterSeqLock& operator=(const OneWriterSeqLock&) = delete;
+
   // ReadBegin returns |sequence_| when it is even, or when it has retried
   // |max_retries| times. Omitting |max_retries| results in ReadBegin not
   // returning until |sequence_| is even.
@@ -54,7 +54,6 @@ class OneWriterSeqLock {
 
  private:
   std::atomic<int32_t> sequence_;
-  DISALLOW_COPY_AND_ASSIGN(OneWriterSeqLock);
 };
 
 }  // namespace device

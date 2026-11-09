@@ -152,8 +152,8 @@
 
 // ABSL_LOCKS_EXCLUDED()
 //
-// Documents the locks acquired in the body of the function. These locks
-// cannot be held when calling this function (as Abseil's `Mutex` locks are
+// Documents the locks that cannot be held by callers of this function, as they
+// might be acquired by this function (Abseil's `Mutex` locks are
 // non-reentrant).
 #if ABSL_HAVE_ATTRIBUTE(locks_excluded)
 #define ABSL_LOCKS_EXCLUDED(...) __attribute__((locks_excluded(__VA_ARGS__)))
@@ -188,7 +188,9 @@
 // acquired, and the destructor should use `UNLOCK_FUNCTION()` with no
 // arguments; the analysis will assume that the destructor unlocks whatever the
 // constructor locked.
-#if ABSL_HAVE_ATTRIBUTE(scoped_lockable)
+#if ABSL_HAVE_CPP_ATTRIBUTE(clang::scoped_lockable)
+#define ABSL_SCOPED_LOCKABLE [[clang::scoped_lockable]]
+#elif ABSL_HAVE_ATTRIBUTE(scoped_lockable)
 #define ABSL_SCOPED_LOCKABLE __attribute__((scoped_lockable))
 #else
 #define ABSL_SCOPED_LOCKABLE

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/threading/thread.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
@@ -18,7 +17,6 @@
 
 namespace gpu {
 class CommandBufferTaskExecutor;
-class MailboxManager;
 class Scheduler;
 class SharedImageManager;
 class SyncPointManager;
@@ -32,6 +30,10 @@ class COMPONENT_EXPORT(GPU_THREAD_HOLDER) InProcessGpuThreadHolder
       public GpuInProcessThreadServiceDelegate {
  public:
   InProcessGpuThreadHolder();
+
+  InProcessGpuThreadHolder(const InProcessGpuThreadHolder&) = delete;
+  InProcessGpuThreadHolder& operator=(const InProcessGpuThreadHolder&) = delete;
+
   ~InProcessGpuThreadHolder() override;
 
   // Returns GpuPreferences that can be modified before GetTaskExecutor() is
@@ -64,11 +66,8 @@ class COMPONENT_EXPORT(GPU_THREAD_HOLDER) InProcessGpuThreadHolder
 
   std::unique_ptr<SyncPointManager> sync_point_manager_;
   std::unique_ptr<Scheduler> scheduler_;
-  std::unique_ptr<MailboxManager> mailbox_manager_;
   std::unique_ptr<SharedImageManager> shared_image_manager_;
   std::unique_ptr<CommandBufferTaskExecutor> task_executor_;
-
-  DISALLOW_COPY_AND_ASSIGN(InProcessGpuThreadHolder);
 };
 
 }  // namespace gpu

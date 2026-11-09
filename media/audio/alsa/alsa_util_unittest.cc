@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@ namespace {
 
 using ::testing::_;
 using ::testing::InSequence;
-using ::testing::Invoke;
 using ::testing::Return;
 
 }  // namespace
@@ -26,10 +25,10 @@ TEST(AlsaUtilTest, FreeHwParams) {
       .WillOnce(Return(-1));
   EXPECT_CALL(mock_alsa_wrapper, StrError(_)).WillOnce(Return("error"));
   EXPECT_CALL(mock_alsa_wrapper, PcmHwParamsMalloc(_))
-      .WillOnce(Invoke([params_ptr](snd_pcm_hw_params_t** params) {
+      .WillOnce([params_ptr](snd_pcm_hw_params_t** params) {
         *params = params_ptr;
         return 0;
-      }));
+      });
   EXPECT_CALL(mock_alsa_wrapper, PcmHwParamsAny(_, _)).WillOnce(Return(-1));
   EXPECT_CALL(mock_alsa_wrapper, StrError(_)).WillOnce(Return("error"));
   EXPECT_CALL(mock_alsa_wrapper, PcmHwParamsFree(params_ptr));

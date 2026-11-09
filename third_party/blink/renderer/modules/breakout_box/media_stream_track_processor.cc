@@ -1,17 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/breakout_box/media_stream_track_processor.h"
 
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_track_processor_init.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_track_state.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
-#include "third_party/blink/renderer/core/streams/writable_stream.h"
 #include "third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.h"
 #include "third_party/blink/renderer/modules/breakout_box/media_stream_video_track_underlying_source.h"
-#include "third_party/blink/renderer/modules/breakout_box/video_track_signal_underlying_sink.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_track.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_utils.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_video_track.h"
@@ -21,38 +20,6 @@
 #include "third_party/blink/renderer/platform/wtf/uuid.h"
 
 namespace blink {
-
-namespace {
-
-// Trivial sink for audio control signals.
-class NullUnderlyingSink : public UnderlyingSinkBase {
- public:
-  // UnderlyingSinkBase overrides.
-  ScriptPromise start(ScriptState* script_state,
-                      WritableStreamDefaultController* controller,
-                      ExceptionState& exception_state) override {
-    return ScriptPromise::CastUndefined(script_state);
-  }
-
-  ScriptPromise write(ScriptState* script_state,
-                      ScriptValue chunk,
-                      WritableStreamDefaultController* controller,
-                      ExceptionState& exception_state) override {
-    exception_state.ThrowTypeError("Invalid audio signal");
-    return ScriptPromise();
-  }
-  ScriptPromise abort(ScriptState* script_state,
-                      ScriptValue reason,
-                      ExceptionState& exception_state) override {
-    return ScriptPromise::CastUndefined(script_state);
-  }
-  ScriptPromise close(ScriptState* script_state,
-                      ExceptionState& exception_state) override {
-    return ScriptPromise::CastUndefined(script_state);
-  }
-};
-
-}  // namespace
 
 // A MediaStreamTrack Observer which closes the provided
 // UnderlyingSource whenever the provided track is ended.
@@ -92,9 +59,9 @@ MediaStreamTrackProcessor::MediaStreamTrackProcessor(
 
 ReadableStream* MediaStreamTrackProcessor::readable(ScriptState* script_state) {
   if (source_stream_)
-    return source_stream_;
+    return source_stream_.Get();
 
-  if (input_track_->Component()->Source()->GetType() ==
+  if (input_track_->Component()->GetSourceType() ==
       MediaStreamSource::kTypeVideo) {
     CreateVideoSourceStream(script_state);
   } else {
@@ -105,21 +72,7 @@ ReadableStream* MediaStreamTrackProcessor::readable(ScriptState* script_state) {
       MakeGarbageCollected<UnderlyingSourceCloser>(input_track_, this);
   input_track_->AddObserver(source_closer_);
 
-  return source_stream_;
-}
-
-WritableStream* MediaStreamTrackProcessor::writableControl(
-    ScriptState* script_state) {
-  if (control_stream_)
-    return control_stream_;
-
-  if (input_track_->Component()->Source()->GetType() ==
-      MediaStreamSource::kTypeVideo) {
-    CreateVideoControlStream(script_state);
-  } else {
-    CreateAudioControlStream(script_state);
-  }
-  return control_stream_;
+  return source_stream_.Get();
 }
 
 void MediaStreamTrackProcessor::CreateVideoSourceStream(
@@ -146,23 +99,6 @@ void MediaStreamTrackProcessor::CreateAudioSourceStream(
       audio_underlying_source_->GetTransferringOptimizer());
 }
 
-void MediaStreamTrackProcessor::CreateVideoControlStream(
-    ScriptState* script_state) {
-  DCHECK(!control_stream_);
-  signal_underlying_sink_ =
-      MakeGarbageCollected<VideoTrackSignalUnderlyingSink>(input_track_);
-  control_stream_ = WritableStream::CreateWithCountQueueingStrategy(
-      script_state, signal_underlying_sink_, /*high_water_mark=*/1u);
-}
-
-void MediaStreamTrackProcessor::CreateAudioControlStream(
-    ScriptState* script_state) {
-  DCHECK(!control_stream_);
-  signal_underlying_sink_ = MakeGarbageCollected<NullUnderlyingSink>();
-  control_stream_ = WritableStream::CreateWithCountQueueingStrategy(
-      script_state, signal_underlying_sink_, /*high_water_mark=*/1u);
-}
-
 MediaStreamTrackProcessor* MediaStreamTrackProcessor::Create(
     ScriptState* script_state,
     MediaStreamTrack* track,
@@ -173,7 +109,7 @@ MediaStreamTrackProcessor* MediaStreamTrackProcessor::Create(
     return nullptr;
   }
 
-  if (track->readyState() == "ended") {
+  if (track->readyState() == V8MediaStreamTrackState::Enum::kEnded) {
     exception_state.ThrowTypeError("Input track cannot be ended");
     return nullptr;
   }
@@ -217,6 +153,24 @@ MediaStreamTrackProcessor* MediaStreamTrackProcessor::Create(
   return Create(script_state, init->track(), exception_state);
 }
 
+uint64_t MediaStreamTrackProcessor::totalFrames() const {
+  if (video_underlying_source_) {
+    return video_underlying_source_->TotalFrames();
+  } else if (audio_underlying_source_) {
+    return audio_underlying_source_->TotalFrames();
+  }
+  return 0u;
+}
+
+uint64_t MediaStreamTrackProcessor::discardedFrames() const {
+  if (video_underlying_source_) {
+    return video_underlying_source_->DiscardedFrames();
+  } else if (audio_underlying_source_) {
+    return audio_underlying_source_->DiscardedFrames();
+  }
+  return 0u;
+}
+
 void MediaStreamTrackProcessor::CloseSources() {
   if (audio_underlying_source_ != nullptr) {
     audio_underlying_source_->Close();
@@ -230,9 +184,7 @@ void MediaStreamTrackProcessor::Trace(Visitor* visitor) const {
   visitor->Trace(input_track_);
   visitor->Trace(audio_underlying_source_);
   visitor->Trace(video_underlying_source_);
-  visitor->Trace(signal_underlying_sink_);
   visitor->Trace(source_stream_);
-  visitor->Trace(control_stream_);
   visitor->Trace(source_closer_);
   ScriptWrappable::Trace(visitor);
 }

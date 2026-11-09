@@ -1,10 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/formats/webm/webm_video_client.h"
 
 #include "media/base/video_decoder_config.h"
+#include "media/base/video_spatial_format.h"
+#include "media/formats/mp4/box_definitions.h"
 #include "media/formats/webm/webm_constants.h"
 #include "media/media_buildflags.h"
 
@@ -28,12 +30,27 @@ media::VideoCodecProfile GetVP9CodecProfile(const std::vector<uint8_t>& data,
       static_cast<size_t>(VP9PROFILE_PROFILE0) + data[2]);
 }
 
+#if BUILDFLAG(ENABLE_AV1_DECODER)
+media::VideoCodecProfile GetAV1CodecProfile(const std::vector<uint8_t>& data) {
+  if (data.empty()) {
+    return AV1PROFILE_PROFILE_MAIN;
+  }
+
+  mp4::AV1CodecConfigurationRecord av1_config;
+  if (av1_config.Parse(data)) {
+    return av1_config.profile;
+  }
+
+  DLOG(WARNING) << "Failed to parser AV1 extra data for profile.";
+  return AV1PROFILE_PROFILE_MAIN;
+}
+#endif  // BUILDFLAG(ENABLE_AV1_DECODER)
+
 // Values for "StereoMode" are spec'd here:
 // https://www.matroska.org/technical/elements.html#StereoMode
 bool IsValidStereoMode(int64_t stereo_mode_code) {
-  const int64_t stereo_mode_min = 0;  // mono
-  // both eyes laced in one Block (right eye is first)
-  const int64_t stereo_mode_max = 14;
+  const int64_t stereo_mode_min = kWebMStereoModeMono;
+  const int64_t stereo_mode_max = kWebMStereoModeBothEyesBlockRL;
   return stereo_mode_code >= stereo_mode_min &&
          stereo_mode_code <= stereo_mode_max;
 }
@@ -41,7 +58,8 @@ bool IsValidStereoMode(int64_t stereo_mode_code) {
 }  // namespace
 
 WebMVideoClient::WebMVideoClient(MediaLog* media_log)
-    : media_log_(media_log), projection_parser_(media_log) {
+    : media_log_(MediaLog::CloneSafely(media_log)),
+      projection_parser_(media_log) {
   Reset();
 }
 
@@ -59,8 +77,10 @@ void WebMVideoClient::Reset() {
   display_unit_ = -1;
   alpha_mode_ = -1;
   colour_parsed_ = false;
+  colour_parser_.Reset();
   stereo_mode_ = -1;
   projection_parsed_ = false;
+  projection_parser_.Reset();
 }
 
 bool WebMVideoClient::InitializeConfig(
@@ -75,28 +95,29 @@ bool WebMVideoClient::InitializeConfig(
   if (colour_parsed_) {
     WebMColorMetadata color_metadata = colour_parser_.GetWebMColorMetadata();
     color_space = color_metadata.color_space;
-    if (color_metadata.hdr_metadata.has_value())
-      config->set_hdr_metadata(*color_metadata.hdr_metadata);
+    if (!color_metadata.hdr_metadata.IsEmpty()) {
+      config->set_hdr_metadata(color_metadata.hdr_metadata);
+    }
     is_8bit = color_metadata.BitsPerChannel <= 8;
   }
 
-  VideoCodec video_codec = kUnknownVideoCodec;
+  VideoTransformation transformation =
+      projection_parsed_ ? projection_parser_.GetVideoTransformation()
+                         : kNoTransformation;
+  VideoCodec video_codec = VideoCodec::kUnknown;
   VideoCodecProfile profile = VIDEO_CODEC_PROFILE_UNKNOWN;
   if (codec_id == "V_VP8") {
-    video_codec = kCodecVP8;
+    video_codec = VideoCodec::kVP8;
     profile = VP8PROFILE_ANY;
   } else if (codec_id == "V_VP9") {
-    video_codec = kCodecVP9;
+    video_codec = VideoCodec::kVP9;
     profile = GetVP9CodecProfile(
-        codec_private, color_space.ToGfxColorSpace().IsHDR() ||
-                           config->hdr_metadata().has_value() || !is_8bit);
+        codec_private, color_space.GuessGfxColorSpace().IsHDR() ||
+                           !config->hdr_metadata().IsEmpty() || !is_8bit);
 #if BUILDFLAG(ENABLE_AV1_DECODER)
   } else if (codec_id == "V_AV1") {
-    // TODO(dalecurtis): AV1 profiles in WebM are not finalized, this needs
-    // updating to read the actual profile and configuration before enabling for
-    // release. http://crbug.com/784993
-    video_codec = kCodecAV1;
-    profile = AV1PROFILE_PROFILE_MAIN;
+    video_codec = VideoCodec::kAV1;
+    profile = GetAV1CodecProfile(codec_private);
 #endif
   } else {
     MEDIA_LOG(ERROR, media_log_) << "Unsupported video codec_id " << codec_id;
@@ -129,7 +150,8 @@ bool WebMVideoClient::InitializeConfig(
   // TODO(dalecurtis): This is not correct, but it's what's muxed in webm
   // containers with AV1 right now. So accept it. We won't get here unless the
   // build and runtime flags are enabled for AV1.
-  if (display_unit_ == 0 || (video_codec == kCodecAV1 && display_unit_ == 4)) {
+  if (display_unit_ == 0 ||
+      (video_codec == VideoCodec::kAV1 && display_unit_ == 4)) {
     if (display_width_ <= 0)
       display_width_ = visible_rect.width();
     if (display_height_ <= 0)
@@ -148,8 +170,22 @@ bool WebMVideoClient::InitializeConfig(
                      alpha_mode_ == 1
                          ? VideoDecoderConfig::AlphaMode::kHasAlpha
                          : VideoDecoderConfig::AlphaMode::kIsOpaque,
-                     color_space, kNoTransformation, coded_size, visible_rect,
+                     color_space, transformation, coded_size, visible_rect,
                      natural_size, codec_private, encryption_scheme);
+
+  VideoSpatialFormat spatial_format;
+  if (stereo_mode_ != -1) {
+    if (stereo_mode_ == kWebMStereoModeLeftRight) {
+      spatial_format.stereo_mode = VideoStereoMode::kSideBySideLeftFirst;
+    } else if (stereo_mode_ == kWebMStereoModeTopBottom) {
+      spatial_format.stereo_mode = VideoStereoMode::kTopBottomLeftFirst;
+    }
+  }
+
+  if (projection_parsed_) {
+    spatial_format.projection_type = projection_parser_.GetProjectionType();
+  }
+  config->set_spatial_format(spatial_format);
 
   return config->IsValidConfig();
 }
@@ -164,7 +200,7 @@ WebMParserClient* WebMVideoClient::OnListStart(int id) {
     if (projection_parsed_ == true) {
       MEDIA_LOG(ERROR, media_log_)
           << "Unexpected multiple Projection elements.";
-      return NULL;
+      return nullptr;
     }
     return &projection_parser_;
   }
@@ -176,7 +212,7 @@ bool WebMVideoClient::OnListEnd(int id) {
   if (id == kWebMIdColour) {
     colour_parsed_ = true;
   } else if (id == kWebMIdProjection) {
-    if (!projection_parser_.Validate()) {
+    if (!projection_parser_.OnListEnd(id)) {
       return false;
     }
     projection_parsed_ = true;
@@ -185,7 +221,7 @@ bool WebMVideoClient::OnListEnd(int id) {
 }
 
 bool WebMVideoClient::OnUInt(int id, int64_t val) {
-  int64_t* dst = NULL;
+  int64_t* dst = nullptr;
 
   switch (id) {
     case kWebMIdPixelWidth:
@@ -242,7 +278,7 @@ bool WebMVideoClient::OnUInt(int id, int64_t val) {
   return true;
 }
 
-bool WebMVideoClient::OnBinary(int id, const uint8_t* data, int size) {
+bool WebMVideoClient::OnBinary(int id, base::span<const uint8_t> data) {
   // Accept binary fields we don't care about for now.
   return true;
 }

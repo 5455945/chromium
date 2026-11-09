@@ -1,11 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMECAST_MEDIA_CMA_PIPELINE_AV_PIPELINE_CLIENT_H_
 #define CHROMECAST_MEDIA_CMA_PIPELINE_AV_PIPELINE_CLIENT_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "media/base/pipeline_status.h"
 #include "media/base/waiting.h"
@@ -32,7 +32,7 @@ struct AvPipelineClient {
   base::RepeatingClosure eos_cb;
 
   // Asynchronous playback error notification.
-  ::media::PipelineStatusCB playback_error_cb;
+  ::media::RepeatingPipelineStatusCallback playback_error_cb;
 
   // Callback used to report the playback statistics.
   ::media::StatisticsCB statistics_cb;

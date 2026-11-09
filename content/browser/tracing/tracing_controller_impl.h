@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,42 +6,33 @@
 #define CONTENT_BROWSER_TRACING_TRACING_CONTROLLER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/task_traits.h"
 #include "base/timer/timer.h"
-#include "build/chromeos_buildflags.h"
+#include "base/values.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/tracing_controller.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/core/forward_decls.h"
+#include "third_party/perfetto/protos/perfetto/trace/chrome/chrome_metadata.pbzero.h"
 
-namespace perfetto {
-namespace protos {
-namespace pbzero {
+namespace perfetto::protos::pbzero {
+class ChromeEventBundle;
 class TracePacket;
-}  // namespace pbzero
-}  // namespace protos
-}  // namespace perfetto
+}  // namespace perfetto::protos::pbzero
 
-namespace base {
-
-namespace trace_event {
+namespace base::trace_event {
 class TraceConfig;
-}  // namespace trace_event
-
-class DictionaryValue;
-}  // namespace base
-
-namespace tracing {
-class BaseAgent;
-}  // namespace tracing
+}  // namespace base::trace_event
 
 namespace content {
 
@@ -62,16 +53,36 @@ class TracingControllerImpl : public TracingController,
   CONTENT_EXPORT static TracingControllerImpl* GetInstance();
 
   // Should be called on the UI thread.
-  CONTENT_EXPORT TracingControllerImpl();
+  CONTENT_EXPORT explicit TracingControllerImpl(
+      const TracingDelegate& delegate);
+
+  TracingControllerImpl(const TracingControllerImpl&) = delete;
+  TracingControllerImpl& operator=(const TracingControllerImpl&) = delete;
+
+  // Like StartTracing(), but from a config the caller assembled itself, for
+  // data sources or options with no base::trace_event::TraceConfig
+  // representation. tracing::GetDefaultPerfettoConfig() produces the config
+  // this takes, so callers can start from the default and adjust it.
+  //
+  // The trace is delivered as the raw perfetto protobuf, unless the config's
+  // data sources ask for the legacy JSON conversion. That conversion applies
+  // to the whole trace, so either every data source sets
+  // convert_to_legacy_json or none does; a mixed config is rejected. Fails
+  // while tracing is in progress.
+  CONTENT_EXPORT bool StartTracingWithPerfettoConfig(
+      const perfetto::TraceConfig& perfetto_config,
+      StartTracingDoneCallback callback);
 
   // TracingController implementation.
   bool GetCategories(GetCategoriesDoneCallback callback) override;
-  bool StartTracing(const base::trace_event::TraceConfig& trace_config,
-                    StartTracingDoneCallback callback) override;
+  bool GetTrackEventDescriptor(
+      GetTrackEventDescriptorDoneCallback callback) override;
+  bool StartTracingImpl(const base::trace_event::TraceConfig& trace_config,
+                        StartTracingDoneCallback callback,
+                        bool privacy_filtering_enabled) override;
   bool StopTracing(const scoped_refptr<TraceDataEndpoint>& endpoint) override;
   bool StopTracing(const scoped_refptr<TraceDataEndpoint>& endpoint,
-                   const std::string& agent_label,
-                   bool privacy_filtering_enabled = false) override;
+                   const std::string& agent_label) override;
   bool GetTraceBufferUsage(GetTraceBufferUsageCallback callback) override;
   bool IsTracing() override;
 
@@ -81,31 +92,41 @@ class TracingControllerImpl : public TracingController,
 
   void OnTracingFailed();
 
-  // For unittests.
-  CONTENT_EXPORT void SetTracingDelegateForTesting(
-      std::unique_ptr<TracingDelegate> delegate);
-
  private:
   friend std::default_delete<TracingControllerImpl>;
 
   ~TracingControllerImpl() override;
-  void AddAgents();
+  void InitializeDataSources(const TracingDelegate& delegate);
   void ConnectToServiceIfNeeded();
-  std::unique_ptr<base::DictionaryValue> GenerateMetadataDict();
-  void GenerateMetadataPacket(perfetto::protos::pbzero::TracePacket* packet,
-                              bool privacy_filtering_enabled);
+  static void RecorderMetadataToBundle(
+      perfetto::protos::pbzero::ChromeEventBundle* bundle);
+  static void GenerateMetadataPacket(
+      perfetto::protos::pbzero::TracePacket* packet,
+      bool privacy_filtering_enabled);
 
   // mojo::DataPipeDrainer::Client
-  void OnDataAvailable(const void* data, size_t num_bytes) override;
+  void OnDataAvailable(base::span<const uint8_t> data) override;
   void OnDataComplete() override;
 
   void OnReadBuffersComplete();
+
+  // The format the trace data is delivered in, derived from the config the
+  // session was started with.
+  enum class TraceDataFormat { kLegacyJson, kProtobuf };
+
+  // Enables |perfetto_config| on the service and wires up the session.
+  bool StartTracingSession(perfetto::TraceConfig perfetto_config,
+                           StartTracingDoneCallback callback,
+                           bool converts_to_legacy_json);
+
+  // Only valid once the session has been disabled.
+  void StartProtobufRead();
 
   void CompleteFlush();
 
   void InitStartupTracingForDuration();
   void EndStartupTracing();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void OnMachineStatisticsLoaded();
 #endif
 
@@ -114,21 +135,22 @@ class TracingControllerImpl : public TracingController,
   mojo::Receiver<tracing::mojom::TracingSessionClient> receiver_{this};
   StartTracingDoneCallback start_tracing_callback_;
 
-  std::vector<std::unique_ptr<tracing::BaseAgent>> agents_;
-  std::unique_ptr<TracingDelegate> delegate_;
+  TraceDataFormat output_format_ = TraceDataFormat::kLegacyJson;
+  bool is_tracing_ = false;
+  bool stop_requested_ = false;
+  bool tracing_disabled_ = false;
+  // Null for a session started from a perfetto config.
   std::unique_ptr<base::trace_event::TraceConfig> trace_config_;
   std::unique_ptr<mojo::DataPipeDrainer> drainer_;
   scoped_refptr<TraceDataEndpoint> trace_data_endpoint_;
   bool is_data_complete_ = false;
   bool read_buffers_complete_ = false;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   bool are_statistics_loaded_ = false;
   std::string hardware_class_;
   base::WeakPtrFactory<TracingControllerImpl> weak_ptr_factory_{this};
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(TracingControllerImpl);
 };
 
 }  // namespace content

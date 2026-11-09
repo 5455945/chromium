@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,8 +32,7 @@ enum class UMABluetoothDiscoverySessionOutcome {
   BLUEZ_DBUS_UNSUPPORTED_DEVICE = 14,
 
   STOP_IN_PROGRESS = 15,
-  // NOTE: Add new outcomes immediately above this line. Make sure to update the
-  // enum list in tools/metrics/histograms/histograms.xml accordingly.
+  // NOTE: Add new outcomes immediately above this line.
   COUNT
 };
 

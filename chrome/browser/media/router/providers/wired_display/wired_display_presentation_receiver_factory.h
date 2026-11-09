@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/lazy_instance.h"
+#include "base/functional/callback.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/media/router/providers/wired_display/wired_display_presentation_receiver.h"
 
 class Profile;
@@ -37,13 +37,17 @@ class WiredDisplayPresentationReceiverFactory {
       base::OnceClosure termination_callback,
       base::RepeatingCallback<void(const std::string&)> title_change_callback);
 
+  WiredDisplayPresentationReceiverFactory(
+      const WiredDisplayPresentationReceiverFactory&) = delete;
+  WiredDisplayPresentationReceiverFactory& operator=(
+      const WiredDisplayPresentationReceiverFactory&) = delete;
+
   // Sets the callback used to instantiate a presentation receiver. Used only in
   // tests.
   static void SetCreateReceiverCallbackForTest(CreateReceiverCallback callback);
 
  private:
-  friend struct base::LazyInstanceTraitsBase<
-      WiredDisplayPresentationReceiverFactory>;
+  friend class base::NoDestructor<WiredDisplayPresentationReceiverFactory>;
 
   WiredDisplayPresentationReceiverFactory();
   virtual ~WiredDisplayPresentationReceiverFactory();
@@ -52,8 +56,6 @@ class WiredDisplayPresentationReceiverFactory {
 
   // Used in tests. When this is set, it is used for creating a receiver.
   CreateReceiverCallback create_receiver_for_testing_;
-
-  DISALLOW_COPY_AND_ASSIGN(WiredDisplayPresentationReceiverFactory);
 };
 
 }  // namespace media_router

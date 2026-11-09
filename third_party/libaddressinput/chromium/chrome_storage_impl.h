@@ -1,16 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_LIBADDRESSINPUT_CHROMIUM_CHROME_STORAGE_IMPL_H_
 #define THIRD_PARTY_LIBADDRESSINPUT_CHROMIUM_CHROME_STORAGE_IMPL_H_
 
-#include <list>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/scoped_observation.h"
 #include "components/prefs/pref_store.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/storage.h"
@@ -26,16 +24,18 @@ class ChromeStorageImpl : public ::i18n::addressinput::Storage,
  public:
   // |store| must outlive |this|.
   explicit ChromeStorageImpl(WriteablePrefStore* store);
+
+  ChromeStorageImpl(const ChromeStorageImpl&) = delete;
+  ChromeStorageImpl& operator=(const ChromeStorageImpl&) = delete;
+
   virtual ~ChromeStorageImpl();
 
   // ::i18n::addressinput::Storage implementation.
-  virtual void Put(const std::string& key, std::string* data) override;
-  virtual void Get(const std::string& key, const Callback& data_ready)
-      const override;
+  void Put(const std::string& key, std::string data) override;
+  void Get(const std::string& key, const Callback& data_ready) const override;
 
   // PrefStore::Observer implementation.
-  virtual void OnPrefValueChanged(const std::string& key) override;
-  virtual void OnInitializationCompleted(bool succeeded) override;
+  void OnInitializationCompleted(bool succeeded) override;
 
  private:
   struct Request {
@@ -55,8 +55,6 @@ class ChromeStorageImpl : public ::i18n::addressinput::Storage,
 
   base::ScopedObservation<PrefStore, PrefStore::Observer> scoped_observation_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeStorageImpl);
 };
 
 }  // namespace autofill

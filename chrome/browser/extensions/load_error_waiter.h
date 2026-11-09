@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/extensions/load_error_reporter.h"
+#include "extensions/browser/load_error_reporter.h"
 
 namespace extensions {
 
@@ -21,7 +21,7 @@ class LoadErrorWaiter : public extensions::LoadErrorReporter::Observer {
   // LoadErrorReporter::Observer:
   void OnLoadFailure(content::BrowserContext* browser_context,
                      const base::FilePath& file_path,
-                     const std::string& error) override;
+                     const std::u16string& error) override;
 
   // Waits until the observed LoadErrorReporter report a load error via the
   // OnLoadFailure event.

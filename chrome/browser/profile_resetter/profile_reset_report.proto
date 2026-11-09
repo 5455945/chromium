@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -31,6 +31,10 @@ message ChromeResetReport {
     // Indicates the user wants to restore a specific set of URLs. The URLs
     // are contained in urls.
     URLS = 3;
+
+    // Indicates the user wants to restore the last session and a specific set
+    // of URLs. The URLs are contained in urls.
+    LAST_AND_URLS = 4;
   }
 
   optional SessionStartupType startup_type = 11;
@@ -73,8 +77,8 @@ message ChromeResetReport {
     RESET_REQUEST_ORIGIN_UNKNOWN = 1;
     // User clicked on the reset button on the settings page.
     RESET_REQUEST_ORIGIN_USER_CLICK = 2;
-    // A settings reset was requested by the Chrome Cleanup Tool.
-    RESET_REQUEST_ORIGIN_CCT = 3;
+    // Deprecated: RESET_REQUEST_ORIGIN_CCT
+    reserved 3;
     // The triggered settings reset API was used.
     RESET_REQUEST_ORIGIN_TRIGGERED_RESET = 4;
   }

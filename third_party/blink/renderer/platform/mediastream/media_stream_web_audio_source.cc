@@ -28,10 +28,18 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "third_party/blink/renderer/platform/mediastream/media_stream_web_audio_source.h"
+
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/public/platform/web_audio_source_provider.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
-#include "third_party/blink/renderer/platform/mediastream/media_stream_web_audio_source.h"
 
 namespace blink {
 
@@ -42,7 +50,7 @@ MediaStreamWebAudioSource::MediaStreamWebAudioSource(
 MediaStreamWebAudioSource::~MediaStreamWebAudioSource() = default;
 
 void MediaStreamWebAudioSource::ProvideInput(AudioBus* bus,
-                                             uint32_t frames_to_process) {
+                                             int frames_to_process) {
   DCHECK(bus);
   if (!bus)
     return;
@@ -52,13 +60,16 @@ void MediaStreamWebAudioSource::ProvideInput(AudioBus* bus,
     return;
   }
 
-  // Wrap the AudioBus channel data using WebVector.
+  // Wrap the AudioBus channel data using span.
   uint32_t n = bus->NumberOfChannels();
-  if (web_audio_data_.size() != n)
-    web_audio_data_ = WebVector<float*>(static_cast<size_t>(n));
+  if (web_audio_data_.size() != n) {
+    web_audio_data_.resize(static_cast<size_t>(n));
+  }
 
-  for (uint32_t i = 0; i < n; ++i)
-    web_audio_data_[i] = bus->Channel(i)->MutableData();
+  for (uint32_t i = 0; i < n; ++i) {
+    web_audio_data_[i] = bus->Channel(i)->MutableSpan().first(
+        base::checked_cast<size_t>(frames_to_process));
+  }
 
   web_audio_source_provider_->ProvideInput(web_audio_data_, frames_to_process);
 }

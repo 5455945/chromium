@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,6 @@
 
 #include <memory>
 
-#include "base/cxx17_backports.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
@@ -289,7 +287,7 @@ const char kSampleThirdPartyTokenUsageEmptyJSON[] =
     "\"usage\": \"\", \"feature\": \"Frobulate\", \"expiry\": 1458766277}";
 
 // Various ill-formed trial tokens. These should all fail to parse.
-const char* kInvalidTokens[] = {
+constexpr const char* kInvalidTokens[] = {
     // Empty String
     "",
     // Invalid - Not JSON at all
@@ -325,7 +323,7 @@ const char* kInvalidTokens[] = {
     "1458766277}",
 };
 
-const char* kInvalidTokensVersion3[] = {
+constexpr const char* kInvalidTokensVersion3[] = {
     // Incorrect types
     "{\"origin\": \"https://a.a\", \"isThirdParty\": \"true\", \"feature\": "
     "\"a\", \"expiry\": 1458766277}",
@@ -690,35 +688,38 @@ class TrialTokenTest : public testing::Test {
         incorrect_domain_origin_(
             url::Origin::Create(GURL(kIncorrectDomainOrigin))),
         invalid_tld_origin_(url::Origin::Create(GURL(kInvalidTLDOrigin))),
-        expected_expiry_(base::Time::FromDoubleT(kExpectedExpiry)),
-        valid_timestamp_(base::Time::FromDoubleT(kValidTimestamp)),
-        invalid_timestamp_(base::Time::FromDoubleT(kInvalidTimestamp)),
+        expected_expiry_(
+            base::Time::FromSecondsSinceUnixEpoch(kExpectedExpiry)),
+        valid_timestamp_(
+            base::Time::FromSecondsSinceUnixEpoch(kValidTimestamp)),
+        invalid_timestamp_(
+            base::Time::FromSecondsSinceUnixEpoch(kInvalidTimestamp)),
         expected_v2_signature_(
             std::string(reinterpret_cast<const char*>(kSampleTokenV2Signature),
-                        base::size(kSampleTokenV2Signature))),
+                        std::size(kSampleTokenV2Signature))),
         expected_v3_signature_(
             std::string(reinterpret_cast<const char*>(kSampleTokenV3Signature),
-                        base::size(kSampleTokenV3Signature))),
+                        std::size(kSampleTokenV3Signature))),
         expected_subdomain_signature_(std::string(
             reinterpret_cast<const char*>(kSampleSubdomainTokenSignature),
-            base::size(kSampleSubdomainTokenSignature))),
+            std::size(kSampleSubdomainTokenSignature))),
         expected_nonsubdomain_signature_(std::string(
             reinterpret_cast<const char*>(kSampleNonSubdomainTokenSignature),
-            base::size(kSampleNonSubdomainTokenSignature))),
+            std::size(kSampleNonSubdomainTokenSignature))),
         expected_third_party_signature_(std::string(
             reinterpret_cast<const char*>(kSampleThirdPartyTokenSignature),
-            base::size(kSampleThirdPartyTokenSignature))),
+            std::size(kSampleThirdPartyTokenSignature))),
         expected_non_third_party_signature_(std::string(
             reinterpret_cast<const char*>(kSampleNonThirdPartyTokenSignature),
-            base::size(kSampleNonThirdPartyTokenSignature))),
+            std::size(kSampleNonThirdPartyTokenSignature))),
         expected_third_party_usage_empty_signature_(
             std::string(reinterpret_cast<const char*>(
                             kSampleThirdPartyUsageEmptyTokenSignature),
-                        base::size(kSampleThirdPartyUsageEmptyTokenSignature))),
-        expected_third_party_usage_subset_signature_(std::string(
-            reinterpret_cast<const char*>(
-                kSampleThirdPartyUsageSubsetTokenSignature),
-            base::size(kSampleThirdPartyUsageSubsetTokenSignature))),
+                        std::size(kSampleThirdPartyUsageEmptyTokenSignature))),
+        expected_third_party_usage_subset_signature_(
+            std::string(reinterpret_cast<const char*>(
+                            kSampleThirdPartyUsageSubsetTokenSignature),
+                        std::size(kSampleThirdPartyUsageSubsetTokenSignature))),
         correct_public_key_(kTestPublicKey),
         incorrect_public_key_(kTestPublicKey2) {}
 
@@ -947,7 +948,7 @@ TEST_F(TrialTokenTest, ExtractLargeToken) {
   EXPECT_EQ(kVersion2, token_version);
   std::string expected_signature(
       std::string(reinterpret_cast<const char*>(kLargeValidTokenSignature),
-                  base::size(kLargeValidTokenSignature)));
+                  std::size(kLargeValidTokenSignature)));
   EXPECT_EQ(expected_signature, token_signature);
 }
 

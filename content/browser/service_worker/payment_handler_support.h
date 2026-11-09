@@ -1,14 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_SERVICE_WORKER_PAYMENT_HANDLER_SUPPORT_H_
 #define CONTENT_BROWSER_SERVICE_WORKER_PAYMENT_HANDLER_SUPPORT_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker.mojom.h"
 
 class GURL;
+
+namespace gfx {
+class Size;
+}
 
 namespace content {
 
@@ -34,6 +38,7 @@ class PaymentHandlerSupport {
   // a normal window.
   static void ShowPaymentHandlerWindow(
       const GURL& url,
+      const std::optional<gfx::Size>& preferred_web_contents_size,
       ServiceWorkerContextCore* context,
       ShowPaymentHandlerWindowCallback callback,
       OpenWindowFallback fallback,

@@ -1,8 +1,10 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/schema_map.h"
+
+#include <utility>
 
 #include "base/values.h"
 #include "components/policy/core/common/policy_bundle.h"
@@ -10,13 +12,11 @@
 
 namespace policy {
 
-SchemaMap::SchemaMap() {}
+SchemaMap::SchemaMap() = default;
 
-SchemaMap::SchemaMap(DomainMap& map) {
-  map_.swap(map);
-}
+SchemaMap::SchemaMap(DomainMap map) : map_(std::move(map)) {}
 
-SchemaMap::~SchemaMap() {}
+SchemaMap::~SchemaMap() = default;
 
 const DomainMap& SchemaMap::GetDomains() const {
   return map_;
@@ -35,9 +35,9 @@ const Schema* SchemaMap::GetSchema(const PolicyNamespace& ns) const {
   return it == map->end() ? nullptr : &it->second;
 }
 
-void SchemaMap::FilterBundle(PolicyBundle* bundle,
+void SchemaMap::FilterBundle(PolicyBundle& bundle,
                              bool drop_invalid_component_policies) const {
-  for (auto& bundle_item : *bundle) {
+  for (auto& bundle_item : bundle) {
     const PolicyNamespace& ns = bundle_item.first;
     PolicyMap& policy_map = bundle_item.second;
 
@@ -66,15 +66,14 @@ void SchemaMap::FilterBundle(PolicyBundle* bundle,
       const std::string& policy_name = it_map->first;
       PolicyMap::Entry& entry = it_map->second;
       const Schema policy_schema = schema->GetProperty(policy_name);
-      // TODO (https://crbug.com/1219503) remove this dummy string
-      std::string error;
 
-      const bool has_value = entry.value();
+      const bool has_value = entry.value_unsafe();
       const bool is_valid =
           has_value &&
-          policy_schema.Normalize(entry.value(), SCHEMA_ALLOW_UNKNOWN,
-                                  /* error_path= */ nullptr, &error,
-                                  /* changed = */ nullptr);
+          policy_schema.Normalize(entry.value_unsafe(), SCHEMA_ALLOW_UNKNOWN,
+                                  /* out_error_path=*/nullptr,
+                                  /* out_error=*/nullptr,
+                                  /* out_changed=*/nullptr);
       if (drop_invalid_component_policies && (!has_value || !is_valid)) {
         it_map = policy_map.EraseIt(it_map);
         continue;

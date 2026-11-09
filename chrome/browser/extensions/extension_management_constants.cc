@@ -1,13 +1,18 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_management_constants.h"
 
-#include "base/cxx17_backports.h"
+#include "extensions/buildflags/buildflags.h"
 
-namespace extensions {
-namespace schema_constants {
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace extensions::schema_constants {
+
+// Some values below are used by the policy component to filter out policy
+// values. They must be synced with
+// components/policy/core/common/policy_loader_common.cc
 
 const char kWildcard[] = "*";
 
@@ -37,29 +42,16 @@ const char kUpdateUrlPrefix[] = "update_url:";
 const char kBlockedInstallMessage[] = "blocked_install_message";
 
 const char kToolbarPin[] = "toolbar_pin";
-const char kForcePinned[] = "force_pinned";
-const char kDefaultUnpinned[] = "default_unpinned";
 
-const AllowedTypesMapEntry kAllowedTypesMap[] = {
-  { "extension",           Manifest::TYPE_EXTENSION },
-  { "theme",               Manifest::TYPE_THEME },
-  { "user_script",         Manifest::TYPE_USER_SCRIPT },
-  { "hosted_app",          Manifest::TYPE_HOSTED_APP },
-  { "legacy_packaged_app", Manifest::TYPE_LEGACY_PACKAGED_APP },
-  { "platform_app",        Manifest::TYPE_PLATFORM_APP },
-  // TODO(binjin): Add shared_module type here and update ExtensionAllowedTypes
-  // policy.
-};
+const char kFileUrlNavigationAllowed[] = "file_url_navigation_allowed";
 
-const size_t kAllowedTypesMapSize = base::size(kAllowedTypesMap);
-
-Manifest::Type GetManifestType(const std::string& name) {
-  for (size_t index = 0; index < kAllowedTypesMapSize; ++index) {
-    if (kAllowedTypesMap[index].name == name)
-      return kAllowedTypesMap[index].manifest_type;
+Manifest::Type GetManifestType(std::string_view name) {
+  const auto iter = kAllowedTypesMap.find(name);
+  if (iter != kAllowedTypesMap.end()) {
+    return iter->second;
   }
-  return Manifest::TYPE_UNKNOWN;
+  return Manifest::Type::kUnknown;
 }
 
-}  // namespace schema_constants
-}  // namespace extensions
+
+} // namespace extensions::schema_constants

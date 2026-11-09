@@ -1,10 +1,15 @@
-abigailbklein@google.com
-aboxhall@chromium.org
-aleventhal@chromium.org
-dmazzoni@chromium.org
 dtseng@chromium.org
-katie@chromium.org
-nektar@chromium.org
+janewman@microsoft.com
+kschmi@microsoft.com
+lucasradaelli@google.com
+rhalavati@chromium.org
+
+# For tests and code refactoring changes:
+# If platform a11y API support is affected, please add another
+# owner from the main list above, so that a11y specialist knowledge is
+# represented.
+grt@chromium.org
+chrishtr@chromium.org
 
 per-file *.mojom=set noparent
 per-file *.mojom=file://ipc/SECURITY_OWNERS
@@ -12,4 +17,5 @@ per-file *.mojom=file://ipc/SECURITY_OWNERS
 per-file *_param_traits*.*=set noparent
 per-file *_param_traits*.*=file://ipc/SECURITY_OWNERS
 
-per-file ax_language_detection*=chrishall@chromium.org
+per-file accessibility_features.*=lwinston@google.com,kristislee@google.com,katie@chromium.org
+per-file accessibility_switches.*=katie@chromium.org

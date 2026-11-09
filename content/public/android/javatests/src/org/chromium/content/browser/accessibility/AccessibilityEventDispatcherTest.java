@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,21 +13,24 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
-/**
- * Test suite to ensure that |AccessibilityEventDispatcher| behaves appropriately.
- */
+/** Test suite to ensure that |AccessibilityEventDispatcher| behaves appropriately. */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class AccessibilityEventDispatcherTest {
     private AccessibilityEventDispatcher mDispatcher;
-    private HashMap<Integer, Integer> mEventDelays = new HashMap<Integer, Integer>();
+    private final Map<Integer, Integer> mEventDelays = new HashMap<Integer, Integer>();
+    private final Set<Integer> mViewIndependentEvents = new HashSet<Integer>();
 
     // Helper member variables for testing.
     private boolean mRunnablePosted;
     private boolean mRunnableRemoved;
     private boolean mEventDispatched;
+    private boolean mLastSetSubtreeChanged;
 
     /**
      * Test setup, run before each test. Creates a HashMap of eventType's to delay (fake values),
@@ -40,40 +43,59 @@ public class AccessibilityEventDispatcherTest {
         mEventDelays.put(3, 5000);
 
         // Create a dispatcher, and track which callback methods have been called with booleans
-        mDispatcher = new AccessibilityEventDispatcher(new AccessibilityEventDispatcher.Client() {
-            @Override
-            public void postRunnable(Runnable toPost, long delayInMilliseconds) {
-                mRunnablePosted = true;
-            }
+        mDispatcher =
+                new AccessibilityEventDispatcher(
+                        new AccessibilityEventDispatcher.Client() {
+                            @Override
+                            public void postRunnable(Runnable toPost, long delayInMilliseconds) {
+                                mRunnablePosted = true;
+                            }
 
-            @Override
-            public void removeRunnable(Runnable toRemove) {
-                mRunnableRemoved = true;
-            }
+                            @Override
+                            public void removeRunnable(Runnable toRemove) {
+                                mRunnableRemoved = true;
+                            }
 
-            @Override
-            public boolean dispatchEvent(int virtualViewId, int eventType) {
-                mEventDispatched = true;
-                return true;
-            }
-        }, mEventDelays, new HashSet<Integer>());
+                            @Override
+                            public boolean dispatchEvent(
+                                    int virtualViewId, int eventType, boolean setSubtreeChanged) {
+                                mEventDispatched = true;
+                                mLastSetSubtreeChanged = setSubtreeChanged;
+                                return true;
+                            }
+                        },
+                        mEventDelays,
+                        mViewIndependentEvents,
+                        new HashSet<Integer>(Arrays.asList(1, 2, 3)));
 
         mRunnablePosted = false;
         mRunnableRemoved = false;
         mEventDispatched = false;
+        mLastSetSubtreeChanged = false;
     }
 
-    /**
-     * Test enqueue properly ignores events not being throttled and acts like a pass-through.
-     */
+    /** Test enqueue properly ignores events not being throttled and acts like a pass-through. */
     @Test
     @SmallTest
     public void testEnqueue_notThrottle() {
-        mDispatcher.enqueueEvent(1, 1);
+        mDispatcher.enqueueEvent(1, 1, false);
 
         Assert.assertTrue(mEventDispatched);
         Assert.assertFalse(mRunnablePosted);
         Assert.assertFalse(mRunnableRemoved);
+        Assert.assertFalse(mLastSetSubtreeChanged);
+    }
+
+    /** Test enqueue properly passes the subtree changed value. */
+    @Test
+    @SmallTest
+    public void testEnqueue_subtreeChanged() {
+        mDispatcher.enqueueEvent(1, 1, true);
+
+        Assert.assertTrue(mEventDispatched);
+        Assert.assertFalse(mRunnablePosted);
+        Assert.assertFalse(mRunnableRemoved);
+        Assert.assertTrue(mLastSetSubtreeChanged);
     }
 
     /**
@@ -83,7 +105,7 @@ public class AccessibilityEventDispatcherTest {
     @Test
     @SmallTest
     public void testEnqueue_noPreviousEvents() {
-        mDispatcher.enqueueEvent(1, 2);
+        mDispatcher.enqueueEvent(1, 2, false);
 
         Assert.assertTrue(mEventDispatched);
         Assert.assertFalse(mRunnablePosted);
@@ -100,7 +122,7 @@ public class AccessibilityEventDispatcherTest {
     @SmallTest
     public void testEnqueue_noRecentPreviousEvents() throws InterruptedException {
         // Send first event through as normal
-        mDispatcher.enqueueEvent(1, 2);
+        mDispatcher.enqueueEvent(1, 2, false);
         Assert.assertTrue(mEventDispatched);
         Assert.assertFalse(mRunnablePosted);
         Assert.assertTrue(mRunnableRemoved);
@@ -114,7 +136,7 @@ public class AccessibilityEventDispatcherTest {
         Thread.sleep(5000);
 
         // Send another event and it should pass through as normal (we waited longer than delay)
-        mDispatcher.enqueueEvent(1, 2);
+        mDispatcher.enqueueEvent(1, 2, false);
         Assert.assertTrue(mEventDispatched);
         Assert.assertFalse(mRunnablePosted);
         Assert.assertTrue(mRunnableRemoved);
@@ -128,15 +150,15 @@ public class AccessibilityEventDispatcherTest {
     @SmallTest
     public void testEnqueue_recentEventsInQueue() {
         // Send first event through as normal
-        mDispatcher.enqueueEvent(1, 3);
+        mDispatcher.enqueueEvent(1, 3, false);
         Assert.assertTrue(mEventDispatched);
         Assert.assertFalse(mRunnablePosted);
         Assert.assertTrue(mRunnableRemoved);
 
         // Send a series of more events rapidly
-        mDispatcher.enqueueEvent(1, 3);
-        mDispatcher.enqueueEvent(1, 3);
-        mDispatcher.enqueueEvent(1, 3);
+        mDispatcher.enqueueEvent(1, 3, false);
+        mDispatcher.enqueueEvent(1, 3, false);
+        mDispatcher.enqueueEvent(1, 3, false);
         Assert.assertTrue(mRunnablePosted);
 
         // Reset trackers
@@ -145,7 +167,65 @@ public class AccessibilityEventDispatcherTest {
         mEventDispatched = false;
 
         // Send final event, ensure runnable is posted but nothing was dispatched
-        mDispatcher.enqueueEvent(1, 3);
+        mDispatcher.enqueueEvent(1, 3, false);
+        Assert.assertFalse(mEventDispatched);
+        Assert.assertTrue(mRunnablePosted);
+        Assert.assertTrue(mRunnableRemoved);
+    }
+
+    /** Test enqueue will drop events that are not part of the relevant events type set. */
+    @Test
+    @SmallTest
+    public void testEnqueue_relevantEventsCheck() {
+        // Create a set of relevant events and pass it to the dispatcher.
+        Set<Integer> relevantEvents = new HashSet<Integer>();
+        relevantEvents.add(3);
+        mDispatcher.updateRelevantEventTypes(relevantEvents);
+
+        // Send a relevant event type and ensure it is dispatched.
+        mDispatcher.enqueueEvent(1, 3, false);
+        Assert.assertTrue(mEventDispatched);
+        Assert.assertFalse(mRunnablePosted);
+        Assert.assertTrue(mRunnableRemoved);
+
+        // Reset trackers.
+        mRunnablePosted = false;
+        mRunnableRemoved = false;
+        mEventDispatched = false;
+
+        // Send a not relevant event type and ensure it is dropped.
+        mDispatcher.enqueueEvent(1, 2, false);
+        Assert.assertFalse(mEventDispatched);
+        Assert.assertFalse(mRunnablePosted);
+        Assert.assertFalse(mRunnableRemoved);
+    }
+
+    /** Test the creation of uuid for view independent throttling. */
+    @Test
+    @SmallTest
+    public void testUuid_creation() {
+        // Add a view independent event type.
+        mViewIndependentEvents.add(3);
+
+        // Send first event through as normal.
+        mDispatcher.enqueueEvent(1, 3, false);
+        Assert.assertTrue(mEventDispatched);
+        Assert.assertFalse(mRunnablePosted);
+        Assert.assertTrue(mRunnableRemoved);
+
+        // Send a series of events from various views of the same type.
+        mDispatcher.enqueueEvent(2, 3, false);
+        mDispatcher.enqueueEvent(3, 3, false);
+        mDispatcher.enqueueEvent(4, 3, false);
+        Assert.assertTrue(mRunnablePosted);
+
+        // Reset trackers.
+        mRunnablePosted = false;
+        mRunnableRemoved = false;
+        mEventDispatched = false;
+
+        // Send final event, ensure runnable is posted but nothing was dispatched.
+        mDispatcher.enqueueEvent(5, 3, false);
         Assert.assertFalse(mEventDispatched);
         Assert.assertTrue(mRunnablePosted);
         Assert.assertTrue(mRunnableRemoved);

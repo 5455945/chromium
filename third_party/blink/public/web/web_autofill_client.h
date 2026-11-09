@@ -31,28 +31,56 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_AUTOFILL_CLIENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_AUTOFILL_CLIENT_H_
 
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/functional/function_ref.h"
+#include "third_party/blink/public/mojom/forms/form_control_type.mojom-shared.h"
+#include "third_party/blink/public/web/web_element.h"
+#include "third_party/blink/public/web/web_form_control_element.h"
+#include "third_party/blink/public/web/web_form_related_change_type.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+
+namespace base {
+class UnguessableToken;
+}
+
 namespace blink {
 
-class WebFormControlElement;
 class WebFormElement;
 class WebInputElement;
 class WebKeyboardEvent;
 class WebNode;
+class WebString;
+class WebElement;
 
 class WebAutofillClient {
  public:
   // These methods are called when the users edits a text-field.
   virtual void TextFieldDidEndEditing(const WebInputElement&) {}
-  virtual void TextFieldDidChange(const WebFormControlElement&) {}
-  virtual void TextFieldDidReceiveKeyDown(const WebInputElement&,
-                                          const WebKeyboardEvent&) {}
+  virtual void TextFieldValueChanged(const WebFormControlElement&) {}
+  // Called when a keydown event is fired on a text-type <input>, a <textarea>,
+  // or a contenteditable.
+  virtual bool DidReceiveKeyDown(const WebElement&, const WebKeyboardEvent&) {
+    return false;
+  }
+  // Called when a text field is cleared either by simply deleting the text or
+  // briefly cleared when the whole text is selected and replaced. The latter
+  // would not be conveyed by `TextFieldValueChanged()` and some clients might
+  // need that information.
+  virtual void TextFieldCleared(const WebFormControlElement&) {}
+  // This is called once per-character when a user edits a contenteditable
+  // element by typing.
+  virtual void ContentEditableDidChange(const WebElement&) {}
   // This is called when a datalist indicator is clicked.
   virtual void OpenTextDataListChooser(const WebInputElement&) {}
   // This is called when the datalist for an input has changed.
   virtual void DataListOptionsChanged(const WebInputElement&) {}
 
-  // Called when selected option of select control change.
-  virtual void SelectControlDidChange(const WebFormControlElement&) {}
+  // Called when the selected option of a <select> control is changed as a
+  // result of user activation - see
+  // https://html.spec.whatwg.org/multipage/interaction.html#tracking-user-activation
+  virtual void SelectControlSelectionChanged(const WebFormControlElement&) {}
 
   // Called when the options of a select control change.
   virtual void SelectFieldOptionsChanged(const WebFormControlElement&) {}
@@ -60,24 +88,75 @@ class WebAutofillClient {
   // Called when the user interacts with the page after a load.
   virtual void UserGestureObserved() {}
 
-  virtual void DidAssociateFormControlsDynamically() {}
+  // Called when a form-related element was added, removed, re-associated or
+  // hidden. `form_control_type` is the element's
+  // WebFormControlElement::FormControlTypeForAutofill() if it is a form
+  // control, and std::nullopt otherwise (e.g. for a <form>). `element` returns
+  // the changed element. This is called for every form control inserted into
+  // or removed from the document, so only call `element` (which constructs a
+  // WebElement) for changes that are of interest.
+  virtual void DidChangeFormRelatedElementDynamically(
+      WebFormRelatedChangeType,
+      std::optional<mojom::FormControlType> form_control_type,
+      base::FunctionRef<WebElement()> element) {}
   virtual void AjaxSucceeded() {}
+  // Called when the value of `element` has been changed by JavaScript.
+  // `old_value` contains the value before being changed.
+  // `was_autofilled` is the state of the field prior to the JS change.
+  // `value_changed` denotes whether `old_value` is different from the element's
+  // current value (the boolean is passed around instead of being recomputed for
+  // performance reasons).
+  virtual void JavaScriptSetValue(WebFormControlElement element,
+                                  const WebString& old_value,
+                                  bool was_autofilled,
+                                  bool value_changed) {}
 
+  // Called when the focused node has changed. This is not called if the focus
+  // moves outside the frame.
   virtual void DidCompleteFocusChangeInFrame() {}
+
+  // Called immediately after a left mousedown event or gesture tap has been
+  // dispatched to the DOM node, after element focus has been updated.
   virtual void DidReceiveLeftMouseDownOrGestureTapInNode(const WebNode&) {}
 
-  // Asks the client whether to suppess the keyboard for the given control
-  // element.
-  virtual bool ShouldSuppressKeyboard(const WebFormControlElement&) {
-    return false;
-  }
+  // Called immediately before initiating DOM dispatch for a left
+  // pointerdown/mousedown event. This is called exactly once per event for the
+  // innermost hit-tested node (`target_node`) before DOM event propagation
+  // begins or webpage JavaScript event listeners execute.
+  virtual void DidReceiveLeftPointerDownBeforeDispatch(
+      const WebNode& target_node) {}
 
   // Called when the given form element is reset.
   virtual void FormElementReset(const WebFormElement&) {}
 
+  // Called when DevTools is connected or disconnect to the frame.
+  // The document is not fired again when the document changes.
+  virtual void OnDevToolsSessionConnectionChanged(bool attached) {}
+
+  // Determines the form-related issues in the WebAutofillClient's document and
+  // adds them to the associated frame's DevTools issues.
+  virtual void EmitFormIssuesToDevtools() {}
+
   // Called when the empty value is set for the given input element, which is
   // or has been a password field.
   virtual void PasswordFieldReset(const WebInputElement& element) {}
+
+  // Returns true if the given element is autofillable.
+  virtual bool IsAutofillableElement(const WebFormControlElement&) const {
+    return false;
+  }
+
+  // Callback type for refill completion. The bool indicates success (true) or
+  // failure (false).
+  using RefillCallback = base::OnceCallback<void(bool success)>;
+
+  // Called when a refill is requested after the autofill event handler
+  // completes. This allows the page to prepare forms before autofill fills
+  // them. The `fill_id` is the identifier of the original fill operation,
+  // used to associate the refill request with the correct fill context.
+  // The `callback` should be invoked when the refill completes (or fails).
+  virtual void RequestRefill(const base::UnguessableToken& fill_id,
+                             RefillCallback callback) {}
 
  protected:
   virtual ~WebAutofillClient() = default;

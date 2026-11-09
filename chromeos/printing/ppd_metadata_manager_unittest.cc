@@ -1,20 +1,24 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chromeos/printing/ppd_metadata_manager.h"
+
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "chromeos/printing/ppd_metadata_manager.h"
-
-#include "base/bind.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/test/bind.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/test/test_future.h"
 #include "base/time/clock.h"
 #include "chromeos/printing/fake_printer_config_cache.h"
 #include "chromeos/printing/ppd_metadata_matchers.h"
@@ -32,32 +36,18 @@ using ::testing::Pair;
 using ::testing::StrEq;
 using ::testing::UnorderedElementsAre;
 
-// Default browser locale used to construct PpdMetadataManager instances
-// in the test fixture. Arbitrarily chosen. Changeable by calling
-// PpdMetadataManagerTest::NewManagerWithLocale().
-constexpr base::StringPiece kBrowserLocaleForTesting = "en-US";
-
-// Arbitrarily chosen TimeDelta used in test cases that are not
-// time-senstive.
-constexpr base::TimeDelta kArbitraryTimeDelta =
-    base::TimeDelta::FromSeconds(30LL);
+// Maximum age of metadata for the class under test. Time-sensitive test
+// cases advance the clock past this to force refetching.
+constexpr base::TimeDelta kMaxAge = base::Seconds(30LL);
 
 // Arbitrarily malformed JSON used to exercise code paths in which
 // parsing fails.
-constexpr base::StringPiece kInvalidJson = "blah blah invalid JSON";
+constexpr std::string_view kInvalidJson = "blah blah invalid JSON";
 
 // Caller may bind a default-constructed base::RepeatingClosure to
 // any Catch*() method, indicating that they don't want anything run.
 class PpdMetadataManagerTest : public ::testing::Test {
  public:
-  // Callback method appropriate for passing to
-  // PpdMetadataManager::GetLocale().
-  void CatchGetLocale(base::RepeatingClosure quit_closure, bool succeeded) {
-    results_.get_locale_succeeded = succeeded;
-    if (quit_closure) {
-      quit_closure.Run();
-    }
-  }
 
   // Callback method appropriate for passing to
   // PpdMetadataManager::GetManufacturers().
@@ -131,12 +121,8 @@ class PpdMetadataManagerTest : public ::testing::Test {
  protected:
   // Convenience container that organizes all callback results.
   struct CallbackLandingArea {
-    CallbackLandingArea()
-        : get_locale_succeeded(false), get_printers_succeeded(false) {}
+    CallbackLandingArea() : get_printers_succeeded(false) {}
     ~CallbackLandingArea() = default;
-
-    // Landing area for PpdMetadataManager::GetLocale().
-    bool get_locale_succeeded;
 
     // Landing area for PpdMetadataManager::GetManufacturers().
     PpdProvider::CallbackResultCode get_manufacturers_code;
@@ -168,8 +154,9 @@ class PpdMetadataManagerTest : public ::testing::Test {
   PpdMetadataManagerTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
         manager_(PpdMetadataManager::Create(
-            kBrowserLocaleForTesting,
+            PpdIndexChannel::kProduction,
             &clock_,
+            kMaxAge,
             std::make_unique<FakePrinterConfigCache>())) {}
 
   // Borrows and returns a pointer to the config cache owned by the
@@ -179,16 +166,6 @@ class PpdMetadataManagerTest : public ::testing::Test {
   FakePrinterConfigCache* GetFakeCache() {
     return reinterpret_cast<FakePrinterConfigCache*>(
         manager_->GetPrinterConfigCacheForTesting());
-  }
-
-  // Recreates |manager_| with a new |browser_locale|.
-  //
-  // Useful for testing the manager's ability to parse and select a
-  // proper metadata locale.
-  void NewManagerWithLocale(base::StringPiece browser_locale) {
-    manager_.reset();
-    manager_ = PpdMetadataManager::Create(
-        browser_locale, &clock_, std::make_unique<FakePrinterConfigCache>());
   }
 
   // Holder for all callback results.
@@ -204,171 +181,9 @@ class PpdMetadataManagerTest : public ::testing::Test {
   std::unique_ptr<PpdMetadataManager> manager_;
 };
 
-// Verifies that the manager can fetch and parse the best-fit
-// locale from the Chrome OS Printing serving root.
-//
-// This test is done against the default browser locale used
-// throughout this suite, "en-US."
-TEST_F(PpdMetadataManagerTest, CanGetLocale) {
-  // Known interaction: the manager will fetch the locales metadata.
-  GetFakeCache()->SetFetchResponseForTesting(
-      "metadata_v3/locales.json", R"({ "locales": [ "de", "en", "es" ] })");
-
-  base::RunLoop loop;
-  auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetLocale,
-                                 base::Unretained(this), loop.QuitClosure());
-  auto call =
-      base::BindOnce(&PpdMetadataManager::GetLocale,
-                     base::Unretained(manager_.get()), std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
-  loop.Run();
-
-  ASSERT_TRUE(results_.get_locale_succeeded);
-  EXPECT_THAT(manager_->ExposeMetadataLocaleForTesting(), StrEq("en"));
-}
-
-// Verifies that the manager defaults to the English ("en") locale
-// when it can find no closer fit for the browser locale.
-TEST_F(PpdMetadataManagerTest, DefaultsToEnglishLocale) {
-  // Sets an arbitrarily chosen locale quite distant from what the
-  // fake serving root will have available.
-  NewManagerWithLocale("ja-JP");
-
-  // Known interaction: the manager will fetch the locales metadata.
-  GetFakeCache()->SetFetchResponseForTesting(
-      "metadata_v3/locales.json",
-      R"({ "locales": [ "de", "en", "es", "wo" ] })");
-
-  base::RunLoop loop;
-  auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetLocale,
-                                 base::Unretained(this), loop.QuitClosure());
-  auto call =
-      base::BindOnce(&PpdMetadataManager::GetLocale,
-                     base::Unretained(manager_.get()), std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
-  loop.Run();
-
-  ASSERT_TRUE(results_.get_locale_succeeded);
-  EXPECT_THAT(manager_->ExposeMetadataLocaleForTesting(), StrEq("en"));
-}
-
-// Given that the browser locale is not "en-US," verifies that the
-// manager can select a best-fit locale when one is available.
-TEST_F(PpdMetadataManagerTest, CanSelectNonEnglishCloseFitLocale) {
-  // It's not "en-US" and is close to advertised metadata locale "es."
-  NewManagerWithLocale("es-MX");
-
-  // Known interaction: the manager will fetch the locales metadata.
-  GetFakeCache()->SetFetchResponseForTesting(
-      "metadata_v3/locales.json",
-      R"({ "locales": [ "de", "en", "es", "wo" ] })");
-
-  base::RunLoop loop;
-  auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetLocale,
-                                 base::Unretained(this), loop.QuitClosure());
-  auto call =
-      base::BindOnce(&PpdMetadataManager::GetLocale,
-                     base::Unretained(manager_.get()), std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
-  loop.Run();
-
-  ASSERT_TRUE(results_.get_locale_succeeded);
-  EXPECT_THAT(manager_->ExposeMetadataLocaleForTesting(), StrEq("es"));
-}
-
-// Verifies that the manager fails the GetLocaleCallback
-// *  if it finds no close fit for the browser locale and
-// *  if the serving root does not advertise availability of
-//    English-localized metadata.
-TEST_F(PpdMetadataManagerTest, FailsToFindAnyCloseFitLocale) {
-  // Sets an arbitrarily chosen locale quite distant from what the
-  // fake serving root will have available.
-  NewManagerWithLocale("ja-JP");
-
-  // Known interaction: the manager will fetch the locales metadata.
-  //
-  // Note that we are canning well-formed JSON.
-  GetFakeCache()->SetFetchResponseForTesting(
-      "metadata_v3/locales.json", R"({ "locales": [ "de", "es", "wo" ] })");
-
-  // Jams the result to the opposite of what's expected.
-  results_.get_locale_succeeded = true;
-
-  base::RunLoop loop;
-  auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetLocale,
-                                 base::Unretained(this), loop.QuitClosure());
-  auto call =
-      base::BindOnce(&PpdMetadataManager::GetLocale,
-                     base::Unretained(manager_.get()), std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
-  loop.Run();
-
-  ASSERT_FALSE(results_.get_locale_succeeded);
-  EXPECT_THAT(manager_->ExposeMetadataLocaleForTesting(), StrEq(""));
-}
-
-// Verifies that the manager fails the GetLocaleCallback if it fails to
-// fetch the locales metadata.
-TEST_F(PpdMetadataManagerTest, FailsToGetLocaleOnFetchFailure) {
-  // This test deliberately doesn't can any response from the
-  // FakePrinterConfigCache. We want to see what happens when the
-  // manager fails to fetch the necessary networked resource.
-  //
-  // We do need some way to tell that GetLocale() failed, so we start
-  // by jamming it to the opposite of the expected value.
-  results_.get_locale_succeeded = true;
-
-  base::RunLoop loop;
-  auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetLocale,
-                                 base::Unretained(this), loop.QuitClosure());
-  auto call =
-      base::BindOnce(&PpdMetadataManager::GetLocale,
-                     base::Unretained(manager_.get()), std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
-  loop.Run();
-
-  ASSERT_FALSE(results_.get_locale_succeeded);
-  EXPECT_THAT(manager_->ExposeMetadataLocaleForTesting(), StrEq(""));
-}
-
-// Verifies that the manager fails the GetLocaleCallback if it fails to
-// parse the locales metadata.
-TEST_F(PpdMetadataManagerTest, FailsToGetLocaleOnParseFailure) {
-  // Known interaction: the manager will fetch the locales metadata.
-  GetFakeCache()->SetFetchResponseForTesting("metadata_v3/locales.json",
-                                             kInvalidJson);
-
-  // We've canned an unparsable response for the manager.
-  // To observe that GetLocale() fails, we jam the result to the
-  // opposite of the expected value.
-  results_.get_locale_succeeded = true;
-
-  base::RunLoop loop;
-  auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetLocale,
-                                 base::Unretained(this), loop.QuitClosure());
-  auto call =
-      base::BindOnce(&PpdMetadataManager::GetLocale,
-                     base::Unretained(manager_.get()), std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
-  loop.Run();
-
-  ASSERT_FALSE(results_.get_locale_succeeded);
-  EXPECT_THAT(manager_->ExposeMetadataLocaleForTesting(), StrEq(""));
-}
-
 // Verifies that the manager can fetch, parse, and return a list of
 // manufacturers from the Chrome OS Printing serving root.
 TEST_F(PpdMetadataManagerTest, CanGetManufacturers) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
-  // Known interaction: the manager will fetch manufacturers metadata
-  // localized in English ("en").
-  //
-  // In real life, the values of the filesMap dictionary have a
-  // hyphenated locale suffix attached; this is not something the
-  // manager actually cares about and is not something used directly
-  // in this test case.
   GetFakeCache()->SetFetchResponseForTesting(
       "metadata_v3/manufacturers-en.json",
       R"({ "filesMap": {
@@ -380,10 +195,11 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturers) {
   base::RunLoop loop;
   auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetManufacturers,
                                  base::Unretained(this), loop.QuitClosure());
-  auto call = base::BindOnce(&PpdMetadataManager::GetManufacturers,
-                             base::Unretained(manager_.get()),
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+  auto call =
+      base::BindOnce(&PpdMetadataManager::GetManufacturers,
+                     base::Unretained(manager_.get()), std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   ASSERT_EQ(results_.get_manufacturers_code,
@@ -398,21 +214,17 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturers) {
 // Verifies that the manager fails the ResolveManufacturersCallback
 // when it fails to fetch the manufacturers metadata.
 TEST_F(PpdMetadataManagerTest, FailsToGetManufacturersOnFetchFailure) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
-  // Known interaction: the manager will fetch manufacturers metadata
-  // localized in English ("en"). In this test case, we do _not_
-  // populate the fake config cache with the appropriate metadata,
-  // causing the fetch to fail.
+  // In this test case, we do _not_ populate the fake config cache with
+  // the appropriate metadata, causing the fetch to fail.
 
   base::RunLoop loop;
   auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetManufacturers,
                                  base::Unretained(this), loop.QuitClosure());
-  auto call = base::BindOnce(&PpdMetadataManager::GetManufacturers,
-                             base::Unretained(manager_.get()),
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+  auto call =
+      base::BindOnce(&PpdMetadataManager::GetManufacturers,
+                     base::Unretained(manager_.get()), std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   ASSERT_EQ(results_.get_manufacturers_code,
@@ -422,21 +234,18 @@ TEST_F(PpdMetadataManagerTest, FailsToGetManufacturersOnFetchFailure) {
 // Verifies that the manager fails the ResolveManufacturersCallback
 // when it fails to parse the manufacturers metadata.
 TEST_F(PpdMetadataManagerTest, FailsToGetManufacturersOnParseFailure) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
-  // Known interaction: the manager will fetch manufacturers metadata
-  // localized in English ("en").
+  // Known interaction: the manager will fetch manufacturers metadata.
   GetFakeCache()->SetFetchResponseForTesting(
       "metadata_v3/manufacturers-en.json", kInvalidJson);
 
   base::RunLoop loop;
   auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetManufacturers,
                                  base::Unretained(this), loop.QuitClosure());
-  auto call = base::BindOnce(&PpdMetadataManager::GetManufacturers,
-                             base::Unretained(manager_.get()),
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+  auto call =
+      base::BindOnce(&PpdMetadataManager::GetManufacturers,
+                     base::Unretained(manager_.get()), std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   ASSERT_EQ(results_.get_manufacturers_code,
@@ -446,11 +255,7 @@ TEST_F(PpdMetadataManagerTest, FailsToGetManufacturersOnParseFailure) {
 // Verifies that the manager fetches manufacturers metadata anew when
 // caller asks it for metadata fresher than what it has cached.
 TEST_F(PpdMetadataManagerTest, CanGetManufacturersTimeSensitive) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
-  // Known interaction: the manager will fetch manufacturers metadata
-  // localized in English ("en").
+  // Known interaction: the manager will fetch manufacturers metadata.
   GetFakeCache()->SetFetchResponseForTesting(
       "metadata_v3/manufacturers-en.json",
       R"({ "filesMap": {
@@ -466,8 +271,7 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturersTimeSensitive) {
   // t = 0s: caller requests a list of manufacturers from |manager_|,
   // using metadata parsed within the last thirty seconds. |manager_|
   // performs a live fetch for the manufacturers metadata.
-  manager_->GetManufacturers(base::TimeDelta::FromSeconds(30),
-                             std::move(callback));
+  manager_->GetManufacturers(std::move(callback));
   loop.Run();
 
   ASSERT_EQ(results_.get_manufacturers_code,
@@ -501,8 +305,7 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturersTimeSensitive) {
   // t = 0s: caller requests a list of manufacturers from |manager_|.
   // |manager_| responds using the cached metadata without performing
   // a live fetch.
-  manager_->GetManufacturers(base::TimeDelta::FromSeconds(30),
-                             std::move(second_callback));
+  manager_->GetManufacturers(std::move(second_callback));
   second_loop.Run();
 
   // We assert that the results are unchanged from before.
@@ -512,7 +315,7 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturersTimeSensitive) {
               ElementsAre(StrEq("It"), StrEq("Playing"), StrEq("You Are")));
 
   // t = 31s
-  clock_.Advance(base::TimeDelta::FromSeconds(31));
+  clock_.Advance(base::Seconds(31));
 
   // Jams the result code to something bad to require that the
   // |manager_| positively answer us.
@@ -527,8 +330,7 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturersTimeSensitive) {
   // t = 31s: caller requests a list of manufacturers from |manager_|.
   // |manager_| does not have sufficiently fresh metadata, so it
   // performs a live fetch.
-  manager_->GetManufacturers(base::TimeDelta::FromSeconds(30),
-                             std::move(third_callback));
+  manager_->GetManufacturers(std::move(third_callback));
   third_loop.Run();
 
   // We assert that the results have changed.
@@ -541,9 +343,6 @@ TEST_F(PpdMetadataManagerTest, CanGetManufacturersTimeSensitive) {
 // Verifies that the manager can fetch, parse, and return a map of
 // printers metadata from the Chrome OS Printing serving root.
 TEST_F(PpdMetadataManagerTest, CanGetPrinters) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Bypasses prerequisite call to PpdMetadataManager::GetManufacturers().
   ASSERT_TRUE(manager_->SetManufacturersForTesting(R"(
   {
@@ -574,8 +373,9 @@ TEST_F(PpdMetadataManagerTest, CanGetPrinters) {
                                  base::Unretained(this), loop.QuitClosure());
   auto call = base::BindOnce(&PpdMetadataManager::GetPrinters,
                              base::Unretained(manager_.get()), "Manufacturer A",
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+                             std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   ASSERT_TRUE(results_.get_printers_succeeded);
@@ -588,9 +388,6 @@ TEST_F(PpdMetadataManagerTest, CanGetPrinters) {
 // Verifies that the manager fails the GetPrintersCallback when it fails
 // to fetch the printers metadata.
 TEST_F(PpdMetadataManagerTest, FailsToGetPrintersOnFetchFailure) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Bypasses prerequisite call to PpdMetadataManager::GetManufacturers().
   ASSERT_TRUE(manager_->SetManufacturersForTesting(R"(
   {
@@ -614,8 +411,9 @@ TEST_F(PpdMetadataManagerTest, FailsToGetPrintersOnFetchFailure) {
                                  base::Unretained(this), loop.QuitClosure());
   auto call = base::BindOnce(&PpdMetadataManager::GetPrinters,
                              base::Unretained(manager_.get()), "Manufacturer A",
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+                             std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   EXPECT_FALSE(results_.get_printers_succeeded);
@@ -624,9 +422,6 @@ TEST_F(PpdMetadataManagerTest, FailsToGetPrintersOnFetchFailure) {
 // Verifies that the manager fails the GetPrintersCallback when it fails
 // to parse the printers metadata.
 TEST_F(PpdMetadataManagerTest, FailsToGetPrintersOnParseFailure) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Bypasses prerequisite call to PpdMetadataManager::GetManufacturers().
   ASSERT_TRUE(manager_->SetManufacturersForTesting(R"(
   {
@@ -655,8 +450,9 @@ TEST_F(PpdMetadataManagerTest, FailsToGetPrintersOnParseFailure) {
                                  base::Unretained(this), loop.QuitClosure());
   auto call = base::BindOnce(&PpdMetadataManager::GetPrinters,
                              base::Unretained(manager_.get()), "Manufacturer A",
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+                             std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   EXPECT_FALSE(results_.get_printers_succeeded);
@@ -665,9 +461,6 @@ TEST_F(PpdMetadataManagerTest, FailsToGetPrintersOnParseFailure) {
 // Verifies that the manager fetches printers metadata anew when caller
 // asks it for metadata fresher than what it has cached.
 TEST_F(PpdMetadataManagerTest, CanGetPrintersTimeSensitive) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Bypasses prerequisite call to PpdMetadataManager::GetManufacturers().
   ASSERT_TRUE(manager_->SetManufacturersForTesting(R"(
   {
@@ -698,8 +491,7 @@ TEST_F(PpdMetadataManagerTest, CanGetPrintersTimeSensitive) {
   base::RunLoop loop;
   auto callback = base::BindOnce(&PpdMetadataManagerTest::CatchGetPrinters,
                                  base::Unretained(this), loop.QuitClosure());
-  manager_->GetPrinters("Manufacturer A", base::TimeDelta::FromSeconds(30),
-                        std::move(callback));
+  manager_->GetPrinters("Manufacturer A", std::move(callback));
   loop.Run();
 
   ASSERT_TRUE(results_.get_printers_succeeded);
@@ -733,8 +525,7 @@ TEST_F(PpdMetadataManagerTest, CanGetPrintersTimeSensitive) {
 
   // t = 0s: caller requests the printers for "Manufacturer A."
   // |manager_| re-uses the cached metadata.
-  manager_->GetPrinters("Manufacturer A", base::TimeDelta::FromSeconds(30),
-                        std::move(second_callback));
+  manager_->GetPrinters("Manufacturer A", std::move(second_callback));
   second_loop.Run();
 
   // We assert that the results are unchanged from before.
@@ -745,7 +536,7 @@ TEST_F(PpdMetadataManagerTest, CanGetPrintersTimeSensitive) {
                            ParsedPrinterLike("Some Printer B", "some emm b")));
 
   // t = 31s
-  clock_.Advance(base::TimeDelta::FromSeconds(31));
+  clock_.Advance(base::Seconds(31));
 
   // Jams the results to some bad value, requiring that the manager
   // answer us positively.
@@ -758,8 +549,7 @@ TEST_F(PpdMetadataManagerTest, CanGetPrintersTimeSensitive) {
   auto third_callback =
       base::BindOnce(&PpdMetadataManagerTest::CatchGetPrinters,
                      base::Unretained(this), third_loop.QuitClosure());
-  manager_->GetPrinters("Manufacturer A", base::TimeDelta::FromSeconds(30),
-                        std::move(third_callback));
+  manager_->GetPrinters("Manufacturer A", std::move(third_callback));
   third_loop.Run();
 
   // We assert that the results have changed.
@@ -812,7 +602,7 @@ TEST_F(PpdMetadataManagerTest, CanFindAllAvailableEmmsInIndex) {
                      base::Unretained(this), loop.QuitClosure());
   manager_->FindAllEmmsAvailableInIndex(
       {"some printer a", "some printer b", "some printer c"},
-      kArbitraryTimeDelta, std::move(callback));
+      std::move(callback));
   loop.Run();
 
   EXPECT_THAT(results_.available_effective_make_and_model_strings,
@@ -868,7 +658,7 @@ TEST_F(PpdMetadataManagerTest,
                      base::Unretained(this), loop.QuitClosure());
   manager_->FindAllEmmsAvailableInIndex(
       {"some printer a", "some printer b", "some printer c"},
-      kArbitraryTimeDelta, std::move(callback));
+      std::move(callback));
   loop.Run();
 
   // The manager was unable to get the forward index metadata that would
@@ -918,7 +708,7 @@ TEST_F(PpdMetadataManagerTest,
                      base::Unretained(this), loop.QuitClosure());
   manager_->FindAllEmmsAvailableInIndex(
       {"some printer a", "some printer b", "some printer c"},
-      kArbitraryTimeDelta, std::move(callback));
+      std::move(callback));
   loop.Run();
 
   // The manager was unable to parse the forward index metadata that would
@@ -979,7 +769,7 @@ TEST_F(PpdMetadataManagerTest, CanFindAllAvailableEmmsInIndexTimeSensitive) {
   // 16) and caches the result.
   manager_->FindAllEmmsAvailableInIndex(
       {"some printer a", "some printer b", "some printer c"},
-      base::TimeDelta::FromSeconds(30), std::move(callback));
+      std::move(callback));
   loop.Run();
 
   EXPECT_THAT(results_.available_effective_make_and_model_strings,
@@ -1017,7 +807,7 @@ TEST_F(PpdMetadataManagerTest, CanFindAllAvailableEmmsInIndexTimeSensitive) {
   // seconds, so |manager_| does not perform a live fetch of the data.
   manager_->FindAllEmmsAvailableInIndex(
       {"some printer a", "some printer b", "some printer c"},
-      base::TimeDelta::FromSeconds(30), std::move(second_callback));
+      std::move(second_callback));
   second_loop.Run();
 
   // We expect the results to be unchanged.
@@ -1037,7 +827,7 @@ TEST_F(PpdMetadataManagerTest, CanFindAllAvailableEmmsInIndexTimeSensitive) {
                           "some-ppd-basename-c.ppd.gz")))));
 
   // t = 31s
-  clock_.Advance(base::TimeDelta::FromSeconds(31));
+  clock_.Advance(base::Seconds(31));
 
   base::RunLoop third_loop;
   auto third_callback =
@@ -1054,7 +844,7 @@ TEST_F(PpdMetadataManagerTest, CanFindAllAvailableEmmsInIndexTimeSensitive) {
   // from being served, the |manager_| will fail to fetch these.
   manager_->FindAllEmmsAvailableInIndex(
       {"some printer a", "some printer b", "some printer c"},
-      base::TimeDelta::FromSeconds(30), std::move(third_callback));
+      std::move(third_callback));
   third_loop.Run();
 
   // We expect the results to have changed.
@@ -1086,8 +876,7 @@ TEST_F(PpdMetadataManagerTest, CanFindDeviceInUsbIndex) {
   auto callback =
       base::BindOnce(&PpdMetadataManagerTest::CatchFindDeviceInUsbIndex,
                      base::Unretained(this), loop.QuitClosure());
-  manager_->FindDeviceInUsbIndex(1138, 13, kArbitraryTimeDelta,
-                                 std::move(callback));
+  manager_->FindDeviceInUsbIndex(1138, 13, std::move(callback));
   loop.Run();
 
   EXPECT_THAT(results_.effective_make_and_model_string_from_usb_index,
@@ -1114,8 +903,7 @@ TEST_F(PpdMetadataManagerTest, FailsToFindDeviceInUsbIndexOnFetchFailure) {
   auto callback =
       base::BindOnce(&PpdMetadataManagerTest::CatchFindDeviceInUsbIndex,
                      base::Unretained(this), loop.QuitClosure());
-  manager_->FindDeviceInUsbIndex(1138, 13, kArbitraryTimeDelta,
-                                 std::move(callback));
+  manager_->FindDeviceInUsbIndex(1138, 13, std::move(callback));
   loop.Run();
 
   EXPECT_TRUE(results_.effective_make_and_model_string_from_usb_index.empty());
@@ -1143,8 +931,7 @@ TEST_F(PpdMetadataManagerTest, FailsToFindDeviceInUsbIndexOnParseFailure) {
   auto callback =
       base::BindOnce(&PpdMetadataManagerTest::CatchFindDeviceInUsbIndex,
                      base::Unretained(this), loop.QuitClosure());
-  manager_->FindDeviceInUsbIndex(1138, 13, kArbitraryTimeDelta,
-                                 std::move(callback));
+  manager_->FindDeviceInUsbIndex(1138, 13, std::move(callback));
   loop.Run();
 
   EXPECT_TRUE(results_.effective_make_and_model_string_from_usb_index.empty());
@@ -1175,8 +962,7 @@ TEST_F(PpdMetadataManagerTest, CanFindDeviceInUsbIndexTimeSensitive) {
   // t = 0s: caller requests |manager_| to name a device with vendor ID
   // 1138 and product ID 13. |manager_| fetches, parses, and caches
   // the appropriate USB index metadata.
-  manager_->FindDeviceInUsbIndex(1138, 13, kArbitraryTimeDelta,
-                                 std::move(callback));
+  manager_->FindDeviceInUsbIndex(1138, 13, std::move(callback));
   loop.Run();
 
   EXPECT_THAT(results_.effective_make_and_model_string_from_usb_index,
@@ -1209,8 +995,7 @@ TEST_F(PpdMetadataManagerTest, CanFindDeviceInUsbIndexTimeSensitive) {
   // 1138 and product ID 13. It asks that |manager_| do so with metadata
   // parsed within the last 30 seconds. |manager_| responds with the
   // cached USB index metadata without incurring a live fetch.
-  manager_->FindDeviceInUsbIndex(1138, 13, base::TimeDelta::FromSeconds(30),
-                                 std::move(second_callback));
+  manager_->FindDeviceInUsbIndex(1138, 13, std::move(second_callback));
   second_loop.Run();
 
   // The manager will have responded with the cached
@@ -1219,7 +1004,7 @@ TEST_F(PpdMetadataManagerTest, CanFindDeviceInUsbIndexTimeSensitive) {
               StrEq("some printer a"));
 
   // t = 31s
-  clock_.Advance(base::TimeDelta::FromSeconds(31));
+  clock_.Advance(base::Seconds(31));
 
   // Jams the landing area to hold a test-failing string. We expect
   // the successful callback to overwrite this.
@@ -1236,8 +1021,7 @@ TEST_F(PpdMetadataManagerTest, CanFindDeviceInUsbIndexTimeSensitive) {
   // parsed within the last 30 seconds. |manager_| sees that the cached
   // USB index metadata is too stale, and so incurs a live fetch. The
   // fetch exposes the changed metadata.
-  manager_->FindDeviceInUsbIndex(1138, 13, base::TimeDelta::FromSeconds(30),
-                                 std::move(third_callback));
+  manager_->FindDeviceInUsbIndex(1138, 13, std::move(third_callback));
   third_loop.Run();
 
   // The manager will have responded with the new and changed
@@ -1263,8 +1047,7 @@ TEST_F(PpdMetadataManagerTest, CanGetUsbManufacturerName) {
       base::BindOnce(&PpdMetadataManagerTest::CatchGetUsbManufacturerName,
                      base::Unretained(this), loop.QuitClosure());
 
-  manager_->GetUsbManufacturerName(1138, kArbitraryTimeDelta,
-                                   std::move(callback));
+  manager_->GetUsbManufacturerName(1138, std::move(callback));
   loop.Run();
 
   EXPECT_THAT(results_.usb_manufacturer_name, StrEq("Some Vendor Name"));
@@ -1287,8 +1070,7 @@ TEST_F(PpdMetadataManagerTest, FailsToGetUsbManufacturerNameOnFetchFailure) {
       base::BindOnce(&PpdMetadataManagerTest::CatchGetUsbManufacturerName,
                      base::Unretained(this), loop.QuitClosure());
 
-  manager_->GetUsbManufacturerName(1138, kArbitraryTimeDelta,
-                                   std::move(callback));
+  manager_->GetUsbManufacturerName(1138, std::move(callback));
   loop.Run();
 
   EXPECT_TRUE(results_.usb_manufacturer_name.empty());
@@ -1315,8 +1097,7 @@ TEST_F(PpdMetadataManagerTest, FailsToGetUsbManufacturerNameOnParseFailure) {
       base::BindOnce(&PpdMetadataManagerTest::CatchGetUsbManufacturerName,
                      base::Unretained(this), loop.QuitClosure());
 
-  manager_->GetUsbManufacturerName(1138, kArbitraryTimeDelta,
-                                   std::move(callback));
+  manager_->GetUsbManufacturerName(1138, std::move(callback));
   loop.Run();
 
   EXPECT_TRUE(results_.usb_manufacturer_name.empty());
@@ -1343,8 +1124,7 @@ TEST_F(PpdMetadataManagerTest, CanGetUsbManufacturerNameTimeSensitive) {
   // t = 0s: caller requests the name of a USB manufacturer whose vendor
   // ID is 1138. |manager_| fetches, parses, and caches the USB vendor
   // ID map, responding with the name.
-  manager_->GetUsbManufacturerName(1138, base::TimeDelta::FromSeconds(30),
-                                   std::move(callback));
+  manager_->GetUsbManufacturerName(1138, std::move(callback));
   loop.Run();
 
   EXPECT_THAT(results_.usb_manufacturer_name,
@@ -1369,8 +1149,7 @@ TEST_F(PpdMetadataManagerTest, CanGetUsbManufacturerNameTimeSensitive) {
   // t = 0s: caller requests the name of a USB manufacturer whose vendor
   // ID is 1138. |manager_| responds with the previously fetched
   // metadata.
-  manager_->GetUsbManufacturerName(1138, base::TimeDelta::FromSeconds(30),
-                                   std::move(second_callback));
+  manager_->GetUsbManufacturerName(1138, std::move(second_callback));
   second_loop.Run();
 
   // Since |manager_| has not fetched the mutated USB vendor ID map,
@@ -1379,7 +1158,7 @@ TEST_F(PpdMetadataManagerTest, CanGetUsbManufacturerNameTimeSensitive) {
               StrEq("Vendor One One Three Eight"));
 
   // t = 31s
-  clock_.Advance(base::TimeDelta::FromSeconds(31));
+  clock_.Advance(base::Seconds(31));
 
   base::RunLoop third_loop;
   auto third_callback =
@@ -1390,8 +1169,7 @@ TEST_F(PpdMetadataManagerTest, CanGetUsbManufacturerNameTimeSensitive) {
   // vendor ID is 1138. |manager_| notices that its cached metadata is
   // too stale and performs a live fetch, receiving the mutated
   // USB vendor ID map.
-  manager_->GetUsbManufacturerName(1138, base::TimeDelta::FromSeconds(30),
-                                   std::move(third_callback));
+  manager_->GetUsbManufacturerName(1138, std::move(third_callback));
   third_loop.Run();
 
   // Since |manager_| has not fetched the mutated USB vendor ID map,
@@ -1402,9 +1180,6 @@ TEST_F(PpdMetadataManagerTest, CanGetUsbManufacturerNameTimeSensitive) {
 // Verifies that the manager can split an effective-make-and-model
 // string into its constituent parts (make and model).
 TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModel) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Known interaction: asking the manager to split the string
   // "Hello there!" will cause it to fetch the reverse index metadata
   // with shard number 2.
@@ -1426,8 +1201,9 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModel) {
                      base::Unretained(this), loop.QuitClosure());
   auto call = base::BindOnce(&PpdMetadataManager::SplitMakeAndModel,
                              base::Unretained(manager_.get()), "Hello there!",
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+                             std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   ASSERT_EQ(results_.split_make_and_model_code,
@@ -1440,9 +1216,6 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModel) {
 // fails to fetch the necessary metadata from the Chrome OS Printing
 // serving root.
 TEST_F(PpdMetadataManagerTest, FailsToSplitMakeAndModelOnFetchFailure) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Known interaction: asking the manager to split the string
   // "Hello there!" will cause it to fetch the reverse index metadata
   // with shard number 2.
@@ -1455,8 +1228,9 @@ TEST_F(PpdMetadataManagerTest, FailsToSplitMakeAndModelOnFetchFailure) {
                      base::Unretained(this), loop.QuitClosure());
   auto call = base::BindOnce(&PpdMetadataManager::SplitMakeAndModel,
                              base::Unretained(manager_.get()), "Hello there!",
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+                             std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   EXPECT_EQ(results_.split_make_and_model_code,
@@ -1467,9 +1241,6 @@ TEST_F(PpdMetadataManagerTest, FailsToSplitMakeAndModelOnFetchFailure) {
 // fails to parse the necessary metadata from the Chrome OS Printing
 // serving root.
 TEST_F(PpdMetadataManagerTest, FailsToSplitMakeAndModelOnParseFailure) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Known interaction: asking the manager to split the string
   // "Hello there!" will cause it to fetch the reverse index metadata
   // with shard number 2.
@@ -1485,8 +1256,9 @@ TEST_F(PpdMetadataManagerTest, FailsToSplitMakeAndModelOnParseFailure) {
                      base::Unretained(this), loop.QuitClosure());
   auto call = base::BindOnce(&PpdMetadataManager::SplitMakeAndModel,
                              base::Unretained(manager_.get()), "Hello there!",
-                             kArbitraryTimeDelta, std::move(callback));
-  base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE, std::move(call));
+                             std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           std::move(call));
   loop.Run();
 
   ASSERT_EQ(results_.split_make_and_model_code,
@@ -1496,9 +1268,6 @@ TEST_F(PpdMetadataManagerTest, FailsToSplitMakeAndModelOnParseFailure) {
 // Verifies that the manager fetches reverse index metadata anew when
 // caller asks it for metadata fresher than what it has cached.
 TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModelTimeSensitive) {
-  // Bypasses mandatory call to PpdMetadataManager::GetLocale().
-  manager_->SetLocaleForTesting("en");
-
   // Known interaction: asking the manager to split the string
   // "Hello there!" will cause it to fetch the reverse index metadata
   // with shard number 2.
@@ -1523,8 +1292,7 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModelTimeSensitive) {
   // effective-make-and-model string "Hello there!" using metadata
   // parsed within the last thirty seconds. |manager_| fetches the
   // appropriate reverse index metadata.
-  manager_->SplitMakeAndModel("Hello there!", base::TimeDelta::FromSeconds(30),
-                              std::move(callback));
+  manager_->SplitMakeAndModel("Hello there!", std::move(callback));
   loop.Run();
 
   ASSERT_EQ(results_.split_make_and_model_code,
@@ -1558,8 +1326,7 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModelTimeSensitive) {
   // t = 0s: caller requests that |manager_| split the
   // effective-make-and-model string "Hello there!"
   // |manager_| re-uses the cached reverse index metadata.
-  manager_->SplitMakeAndModel("Hello there!", base::TimeDelta::FromSeconds(30),
-                              std::move(second_callback));
+  manager_->SplitMakeAndModel("Hello there!", std::move(second_callback));
   second_loop.Run();
 
   // We assert that the results are currently unchanged.
@@ -1569,7 +1336,7 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModelTimeSensitive) {
   EXPECT_THAT(results_.split_model, StrEq("Kenobi"));
 
   // t = 31s
-  clock_.Advance(base::TimeDelta::FromSeconds(31));
+  clock_.Advance(base::Seconds(31));
 
   // Jams the result to a bad value, requiring that the |manager_|
   // answer us positively.
@@ -1585,8 +1352,7 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModelTimeSensitive) {
   // effective-make-and-model string "Hello there!"
   // |manager_| doesn't have sufficiently fresh metadata, so it performs
   // a live fetch.
-  manager_->SplitMakeAndModel("Hello there!", base::TimeDelta::FromSeconds(30),
-                              std::move(third_callback));
+  manager_->SplitMakeAndModel("Hello there!", std::move(third_callback));
   third_loop.Run();
 
   // We assert that the live fetch changed the results.
@@ -1594,6 +1360,128 @@ TEST_F(PpdMetadataManagerTest, CanSplitMakeAndModelTimeSensitive) {
             PpdProvider::CallbackResultCode::SUCCESS);
   EXPECT_THAT(results_.split_make, StrEq("You are"));
   EXPECT_THAT(results_.split_model, StrEq("a bold one!"));
+}
+
+class PpdMetadataManagerBase : public ::testing::Test {
+ public:
+  explicit PpdMetadataManagerBase(PpdIndexChannel channel)
+      : task_environment_(base::test::TaskEnvironment::MainThreadType::IO) {
+    auto cache = std::make_unique<FakePrinterConfigCache>();
+    cache_ = cache.get();
+    manager_ =
+        PpdMetadataManager::Create(channel, &clock_, kMaxAge, std::move(cache));
+  }
+  ~PpdMetadataManagerBase() override = default;
+
+ protected:
+
+  bool CallGetManufacturers() {
+    base::RunLoop loop;
+    bool result;
+    auto callback = [&loop, &result](PpdProvider::CallbackResultCode param1,
+                                     const std::vector<std::string>& param2) {
+      result = (param1 == PpdProvider::CallbackResultCode::SUCCESS);
+      loop.Quit();
+    };
+    manager_->GetManufacturers(base::BindLambdaForTesting(callback));
+    loop.Run();
+    return result;
+  }
+
+  // Environment for task schedulers.
+  base::test::TaskEnvironment task_environment_;
+  // Controlled clock that dispenses times of Fetch().
+  base::SimpleTestClock clock_;
+  // Class under test.
+  std::unique_ptr<PpdMetadataManager> manager_;
+  raw_ptr<FakePrinterConfigCache> cache_;
+};
+
+class PpdMetadataManagerForStagingChannelTest : public PpdMetadataManagerBase {
+ public:
+  PpdMetadataManagerForStagingChannelTest()
+      : PpdMetadataManagerBase(PpdIndexChannel::kStaging) {}
+  ~PpdMetadataManagerForStagingChannelTest() override = default;
+};
+
+TEST_F(PpdMetadataManagerForStagingChannelTest, CanGetManufacturers) {
+  cache_->SetFetchResponseForTesting(
+      "metadata_v3_staging/manufacturers-en.json",
+      R"({ "filesMap": {"It":"test-en.json"}})");
+
+  EXPECT_TRUE(CallGetManufacturers());
+}
+
+class PpdMetadataManagerForDevChannelTest : public PpdMetadataManagerBase {
+ public:
+  PpdMetadataManagerForDevChannelTest()
+      : PpdMetadataManagerBase(PpdIndexChannel::kDev) {}
+  ~PpdMetadataManagerForDevChannelTest() override = default;
+};
+
+TEST_F(PpdMetadataManagerForDevChannelTest, CanGetManufacturers) {
+  cache_->SetFetchResponseForTesting("metadata_v3_dev/manufacturers-en.json",
+                                     R"({ "filesMap": {"It":"test-en.json"}})");
+
+  EXPECT_TRUE(CallGetManufacturers());
+}
+
+TEST(PpdMetadataManagerIdleEvictionTest, EvictsExpiredParsedMetadataWhenIdle) {
+  base::test::TaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO,
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  auto fake_cache = std::make_unique<FakePrinterConfigCache>();
+  FakePrinterConfigCache* cache_ptr = fake_cache.get();
+  auto manager = PpdMetadataManager::Create(
+      PpdIndexChannel::kProduction, task_environment.GetMockClock(),
+      base::Minutes(30), std::move(fake_cache));
+
+  ASSERT_TRUE(manager->SetManufacturersForTesting(
+      R"({ "filesMap": { "HP": "HP-en.json" } })"));
+  cache_ptr->SetFetchResponseForTesting(
+      "metadata_v3/HP-en.json",
+      R"({ "printers": [ { "emm": "hp printer", "name": "HP Printer" } ] })");
+  cache_ptr->SetFetchResponseForTesting("metadata_v3/reverse_index-en-02.json",
+                                        R"({
+        "reverseIndex": {
+          "Hello there!": {
+            "manufacturer": "General",
+            "model": "Kenobi"
+          }
+        }
+      })");
+
+  base::test::TestFuture<bool, const ParsedPrinters&> printers_future;
+  manager->GetPrinters("HP", printers_future.GetCallback());
+  ASSERT_TRUE(std::get<0>(printers_future.Get()));
+  EXPECT_EQ(manager->GetCachedMetadataCountForTesting(), 1u);
+
+  // Parse a second metadata entry 10 minutes later to exercise rescheduling.
+  task_environment.FastForwardBy(base::Minutes(10));
+  base::test::TestFuture<PpdProvider::CallbackResultCode, const std::string&,
+                         const std::string&>
+      split_future;
+  manager->SplitMakeAndModel("Hello there!", split_future.GetCallback());
+  ASSERT_EQ(std::get<0>(split_future.Get()),
+            PpdProvider::CallbackResultCode::SUCCESS);
+  EXPECT_EQ(manager->GetCachedMetadataCountForTesting(), 2u);
+
+  // Both parsed metadata entries remain cached at T+29m.
+  task_environment.FastForwardBy(base::Minutes(19));
+  EXPECT_EQ(manager->GetCachedMetadataCountForTesting(), 2u);
+
+  // At T+30m, the printers entry expires while the reverse index remains.
+  task_environment.FastForwardBy(base::Minutes(1));
+  EXPECT_EQ(manager->GetCachedMetadataCountForTesting(), 1u);
+
+  // At T+40m, the reverse index entry expires as well.
+  task_environment.FastForwardBy(base::Minutes(10));
+  EXPECT_EQ(manager->GetCachedMetadataCountForTesting(), 0u);
+
+  // Subsequent GetPrinters() still works using the retained manufacturer map.
+  base::test::TestFuture<bool, const ParsedPrinters&> second_printers_future;
+  manager->GetPrinters("HP", second_printers_future.GetCallback());
+  EXPECT_TRUE(std::get<0>(second_printers_future.Get()));
 }
 
 }  // namespace

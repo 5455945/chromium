@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,13 @@ package org.chromium.chrome.test.util;
 
 import android.view.View;
 
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.base.ThreadUtils;
 import org.chromium.ui.test.util.RenderTestRule;
 
 /**
  * A TestRule for creating Render Tests for Chrome.
  *
- * <pre>
- * {@code
- *
+ * <pre>{@code
  * @RunWith(ChromeJUnit4ClassRunner.class)
  * @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
  * public class MyTest {
@@ -24,6 +22,9 @@ import org.chromium.ui.test.util.RenderTestRule;
  *             // Required. If using ANDROID_RENDER_TESTS_PUBLIC, the Builder can be created with
  *             // the shorthand ChromeRenderTestRule.Builder.withPublicCorpus().
  *             .setCorpus(ChromeRenderTestRule.Corpus.ANDROID_RENDER_TESTS_PUBLIC)
+ *             // Required. If adding a test for the first time for a component, add the string
+ *             // value to the Component @StringDef and @interface.
+ *             .setBugComponent(RenderTestRule.Component.BLINK_FORMS_COLOR)
  *             // Optional, only necessary once a CL lands that should invalidate previous golden
  *             // images, e.g. a UI rework.
  *             .setRevision(2)
@@ -46,13 +47,16 @@ import org.chromium.ui.test.util.RenderTestRule;
  *     }
  * }
  *
- * }
- * </pre>
+ * }</pre>
  */
 public class ChromeRenderTestRule extends RenderTestRule {
-    protected ChromeRenderTestRule(int revision, @RenderTestRule.Corpus String corpus,
-            String description, boolean failOnUnsupportedConfigs) {
-        super(revision, corpus, description, failOnUnsupportedConfigs);
+    protected ChromeRenderTestRule(
+            int revision,
+            @RenderTestRule.Corpus String corpus,
+            String description,
+            boolean failOnUnsupportedConfigs,
+            @RenderTestRule.Component String component) {
+        super(revision, corpus, description, failOnUnsupportedConfigs, component);
     }
 
     /**
@@ -60,22 +64,18 @@ public class ChromeRenderTestRule extends RenderTestRule {
      * example it will disable the blinking cursor in EditTexts.
      */
     public static void sanitize(View view) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> RenderTestRule.sanitize(view));
+        ThreadUtils.runOnUiThreadBlocking(() -> RenderTestRule.sanitize(view));
     }
 
-    /**
-     * Builder to create a ChromeRenderTestRule.
-     */
+    /** Builder to create a ChromeRenderTestRule. */
     public static class Builder extends RenderTestRule.BaseBuilder<Builder> {
         @Override
         public ChromeRenderTestRule build() {
             return new ChromeRenderTestRule(
-                    mRevision, mCorpus, mDescription, mFailOnUnsupportedConfigs);
+                    mRevision, mCorpus, mDescription, mFailOnUnsupportedConfigs, mBugComponent);
         }
 
-        /**
-         * Creates a Builder with the default public corpus.
-         */
+        /** Creates a Builder with the default public corpus. */
         public static Builder withPublicCorpus() {
             return new Builder().setCorpus(Corpus.ANDROID_RENDER_TESTS_PUBLIC);
         }

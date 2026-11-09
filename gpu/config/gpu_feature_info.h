@@ -1,19 +1,21 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_CONFIG_GPU_FEATURE_INFO_H_
 #define GPU_CONFIG_GPU_FEATURE_INFO_H_
 
+#include <stdint.h>
+
+#include <array>
 #include <string>
 #include <vector>
 
+#include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/config/gpu_config_export.h"
 #include "gpu/config/gpu_feature_type.h"
-#include "gpu/gpu_export.h"
-
-namespace gfx {
-enum class BufferFormat;
-}
+#include "gpu/config/gpu_preferences.h"
 
 namespace gl {
 class GLContext;
@@ -22,20 +24,28 @@ class GLContext;
 namespace gpu {
 
 // Flags indicating the status of a GPU feature (see gpu_feature_type.h).
+//
+// These values are persisted to logs (GPU.BlocklistFeatureTestResults.*).
+// Entries should not be renumbered and numeric values should never be reused.
+// LINT.IfChange(GpuFeatureStatus)
 enum GpuFeatureStatus {
-  kGpuFeatureStatusEnabled,
-  kGpuFeatureStatusBlocklisted,
-  kGpuFeatureStatusDisabled,
-  kGpuFeatureStatusSoftware,
-  kGpuFeatureStatusUndefined,
+  kGpuFeatureStatusEnabled = 0,
+  kGpuFeatureStatusBlocklisted = 1,
+  kGpuFeatureStatusDisabled = 2,
+  kGpuFeatureStatusSoftware = 3,
+  kGpuFeatureStatusUndefined = 4,
   kGpuFeatureStatusMax
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/gpu/enums.xml:GPUBlocklistFeatureTestResults)
 
-struct GPU_EXPORT GpuFeatureInfo {
+struct GPU_CONFIG_EXPORT GpuFeatureInfo {
   GpuFeatureInfo();
   GpuFeatureInfo(const GpuFeatureInfo&);
   GpuFeatureInfo(GpuFeatureInfo&&);
   ~GpuFeatureInfo();
+
+  GpuFeatureInfo& operator=(const GpuFeatureInfo&);
+  GpuFeatureInfo& operator=(GpuFeatureInfo&&);
 
   // Set the GL workarounds and disabled GL extensions to the context.
   void ApplyToGLContext(gl::GLContext* context) const;
@@ -45,12 +55,11 @@ struct GPU_EXPORT GpuFeatureInfo {
   // Return true if GpuFeatureInfo is computed.
   bool IsInitialized() const;
 
-  GpuFeatureInfo& operator=(const GpuFeatureInfo&);
-  GpuFeatureInfo& operator=(GpuFeatureInfo&&);
+  bool IsFeatureEnabled(GpuFeatureType feature) const;
 
-  // A vector of GpuFeatureStatus values, one per GpuFeatureType.
+  // An array of GpuFeatureStatus values, one per GpuFeatureType.
   // By default, all features are disabled.
-  GpuFeatureStatus status_values[NUMBER_OF_GPU_FEATURE_TYPES];
+  std::array<GpuFeatureStatus, NUMBER_OF_GPU_FEATURE_TYPES> status_values;
   // Active gpu driver bug workaround IDs.
   // See gpu/config/gpu_driver_bug_workaround_type.h for ID mappings.
   std::vector<int32_t> enabled_gpu_driver_bug_workarounds;
@@ -63,10 +72,12 @@ struct GPU_EXPORT GpuFeatureInfo {
   // Applied gpu driver bug list entry indices.
   std::vector<uint32_t> applied_gpu_driver_bug_list_entries;
 
-  // BufferFormats that can be allocated and then bound, if known and provided
-  // by the platform.
-  std::vector<gfx::BufferFormat>
-      supported_buffer_formats_for_allocation_and_texturing;
+#if BUILDFLAG(IS_OZONE)
+  // SharedImageFormats of native pixmaps that can be imported in GL context.
+  // TODO(crbug.com/482216427): Move these bools to SharedImageCapabilities
+  bool supports_nv12_gl_native_pixmap = false;
+  bool supports_p010_gl_native_pixmap = false;
+#endif  // BUILDFLAG(IS_OZONE)
 };
 
 }  // namespace gpu

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <set>
 
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
 #include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "components/performance_manager/persistence/site_data/leveldb_site_data_store.h"
 #include "components/performance_manager/persistence/site_data/site_data_cache_factory.h"
@@ -23,19 +23,24 @@ constexpr char kDataStoreDBName[] = "Site Characteristics Database";
 
 }  // namespace
 
-SiteDataCacheImpl::SiteDataCacheImpl(const std::string& browser_context_id,
-                                     const base::FilePath& browser_context_path)
+SiteDataCacheImpl::SiteDataCacheImpl(
+    const base::UnguessableToken& browser_context_id,
+    const base::FilePath& browser_context_path)
     : browser_context_id_(browser_context_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   data_store_ = std::make_unique<LevelDBSiteDataStore>(
       browser_context_path.AppendASCII(kDataStoreDBName));
 
-  // Register the debug interface against the browser context.
-  SiteDataCacheFactory::GetInstance()->SetDataCacheInspectorForBrowserContext(
-      this, browser_context_id_);
+  // Register the debug interface against the browser context. The factory
+  // should always exist by the time this is called, since it is created once
+  // there's a browser context with keyed services enabled.
+  auto* factory = SiteDataCacheFactory::GetInstance();
+  CHECK(factory);
+  factory->SetDataCacheInspectorForBrowserContext(this, browser_context_id_);
 }
 
-SiteDataCacheImpl::SiteDataCacheImpl(const std::string& browser_context_id)
+SiteDataCacheImpl::SiteDataCacheImpl(
+    const base::UnguessableToken& browser_context_id)
     : browser_context_id_(browser_context_id) {}
 
 SiteDataCacheImpl::~SiteDataCacheImpl() {
@@ -49,7 +54,7 @@ std::unique_ptr<SiteDataReader> SiteDataCacheImpl::GetReaderForOrigin(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   internal::SiteDataImpl* impl = GetOrCreateFeatureImpl(origin);
   DCHECK(impl);
-  SiteDataReader* data_reader = new SiteDataReader(impl);
+  SiteDataReader* data_reader = new SiteDataReaderImpl(impl);
   return base::WrapUnique(data_reader);
 }
 
@@ -122,8 +127,8 @@ internal::SiteDataImpl* SiteDataCacheImpl::GetOrCreateFeatureImpl(
     return iter->second;
 
   // If not create a new one and add it to the map.
-  internal::SiteDataImpl* site_data =
-      new internal::SiteDataImpl(origin, this, data_store_.get());
+  internal::SiteDataImpl* site_data = new internal::SiteDataImpl(
+      origin, weak_factory_.GetWeakPtr(), data_store_.get());
 
   // internal::SiteDataImpl is a ref-counted object, it's safe to store a raw
   // pointer to it here as this class will get notified when it's about to be
@@ -135,7 +140,7 @@ internal::SiteDataImpl* SiteDataCacheImpl::GetOrCreateFeatureImpl(
 void SiteDataCacheImpl::OnSiteDataImplDestroyed(internal::SiteDataImpl* impl) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(impl);
-  DCHECK(base::Contains(origin_data_map_, impl->origin()));
+  DCHECK(origin_data_map_.contains(impl->origin()));
   // Remove the entry for this origin as this is about to get destroyed.
   auto num_erased = origin_data_map_.erase(impl->origin());
   DCHECK_EQ(1U, num_erased);

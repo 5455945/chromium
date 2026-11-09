@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,10 @@ EVENTS_EXPORT int GetKeyEventUnicodeChar(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& event,
     int meta_state);
+
+EVENTS_EXPORT bool IsVirtualKeyboardEvent(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& event);
 
 }  // namespace android
 }  // namespace events

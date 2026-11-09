@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,31 @@
 #define NET_SOCKET_CLIENT_SOCKET_POOL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/load_states.h"
 #include "net/base/net_export.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/privacy_mode.h"
+#include "net/base/proxy_chain.h"
 #include "net/base/request_priority.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_request_info.h"
 #include "net/log/net_log_capture_mode.h"
 #include "net/socket/connect_job.h"
+#include "net/socket/socket_pool_additional_capacity.h"
 #include "net/socket/socket_tag.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "net/ssl/ssl_config.h"
 #include "url/scheme_host_port.h"
-
-namespace base {
-class Value;
-namespace trace_event {
-class ProcessMemoryDump;
-}
-}  // namespace base
 
 namespace net {
 
@@ -41,7 +40,7 @@ class HttpAuthController;
 class HttpResponseInfo;
 class NetLogWithSource;
 struct NetworkTrafficAnnotationTag;
-class ProxyServer;
+class ProxyChain;
 struct SSLConfig;
 class StreamSocket;
 
@@ -49,7 +48,7 @@ class StreamSocket;
 // socket pools to communicate with higher layer pools.
 class NET_EXPORT HigherLayeredPool {
  public:
-  virtual ~HigherLayeredPool() {}
+  virtual ~HigherLayeredPool() = default;
 
   // Instructs the HigherLayeredPool to close an idle connection. Return true if
   // one was closed.  Closing an idle connection will call into the lower layer
@@ -61,7 +60,7 @@ class NET_EXPORT HigherLayeredPool {
 // socket pools to communicate with lower layer pools.
 class NET_EXPORT LowerLayeredPool {
  public:
-  virtual ~LowerLayeredPool() {}
+  virtual ~LowerLayeredPool() = default;
 
   // Returns true if a there is currently a request blocked on the per-pool
   // (not per-host) max socket limit, either in this pool, or one that it is
@@ -98,15 +97,42 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
       base::OnceClosure restart_with_auth_callback)>
       ProxyAuthCallback;
 
+  // Callback for preconnect socket requests.
+  // The first bool argument indicates whether the request is successful.
+  // Currently, preconnect is considered "successful" when a socket is available
+  // for use. This means that if we have multiple preconnect socket requests,
+  // and if any one of them succeeds, we will return true. False is only
+  // returned when *all* preconnect socket requests fail.
+  // Note that even if this returns true, we might not have the preconnected
+  // socket in the pool already, since we might have another request which might
+  // use the socket right after it was preconnected. This is expected behavior,
+  // since we are correctly using the preconnected socket on a subsequent
+  // request. Since the preconnect itself is correctly handled and completed, we
+  // return true in these cases.
+  // The second `ClientSocketHandle` argument contains an initialized handle if
+  // the preconnect succeeds, otherwise it contains a nullptr.
+  using PreconnectCompletionCallback =
+      base::OnceCallback<void(bool, std::unique_ptr<ClientSocketHandle>)>;
+
   // Group ID for a socket request. Requests with the same group ID are
   // considered indistinguishable.
   class NET_EXPORT GroupId {
    public:
+    // Returns the prefix for `privacy_mode` for logging.
+    static std::string_view GetPrivacyModeGroupIdPrefix(
+        PrivacyMode privacy_mode);
+
+    // Returns the prefix for `secure_dns_policy` for logging.
+    static std::string_view GetSecureDnsPolicyGroupIdPrefix(
+        SecureDnsPolicy secure_dns_policy);
+
     GroupId();
     GroupId(url::SchemeHostPort destination,
             PrivacyMode privacy_mode,
-            NetworkIsolationKey network_isolation_key,
-            SecureDnsPolicy secure_dns_policy);
+            NetworkAnonymizationKey network_anonymization_key,
+            SecureDnsPolicy secure_dns_policy,
+            bool disable_cert_network_fetches,
+            handles::NetworkHandle target_network);
     GroupId(const GroupId& group_id);
 
     ~GroupId();
@@ -118,28 +144,24 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
 
     PrivacyMode privacy_mode() const { return privacy_mode_; }
 
-    const NetworkIsolationKey& network_isolation_key() const {
-      return network_isolation_key_;
+    const NetworkAnonymizationKey& network_anonymization_key() const {
+      return network_anonymization_key_;
     }
 
     SecureDnsPolicy secure_dns_policy() const { return secure_dns_policy_; }
 
+    bool disable_cert_network_fetches() const {
+      return disable_cert_network_fetches_;
+    }
+
+    handles::NetworkHandle target_network() const { return target_network_; }
+
     // Returns the group ID as a string, for logging.
     std::string ToString() const;
 
-    bool operator==(const GroupId& other) const {
-      return std::tie(destination_, privacy_mode_, network_isolation_key_,
-                      secure_dns_policy_) ==
-             std::tie(other.destination_, other.privacy_mode_,
-                      other.network_isolation_key_, other.secure_dns_policy_);
-    }
+    bool operator==(const GroupId& other) const = default;
 
-    bool operator<(const GroupId& other) const {
-      return std::tie(destination_, privacy_mode_, network_isolation_key_,
-                      secure_dns_policy_) <
-             std::tie(other.destination_, other.privacy_mode_,
-                      other.network_isolation_key_, other.secure_dns_policy_);
-    }
+    auto operator<=>(const GroupId& other) const = default;
 
    private:
     // The endpoint of the final destination (not the proxy).
@@ -149,10 +171,17 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
     PrivacyMode privacy_mode_;
 
     // Used to separate requests made in different contexts.
-    NetworkIsolationKey network_isolation_key_;
+    NetworkAnonymizationKey network_anonymization_key_;
 
     // Controls the Secure DNS behavior to use when creating this socket.
     SecureDnsPolicy secure_dns_policy_;
+
+    // Whether cert validation-related network fetches are allowed. Should only
+    // be true for a very limited number of network-configuration related
+    // scripts (e.g., PAC fetches).
+    bool disable_cert_network_fetches_;
+
+    handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
   };
 
   // Parameters that, in combination with GroupId, proxy, websocket information,
@@ -160,38 +189,37 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
   //
   // DO NOT ADD ANY FIELDS TO THIS CLASS.
   //
-  // TODO(https://crbug.com/921369) In order to resolve longstanding issues
+  // TODO(crbug.com/40609237) In order to resolve longstanding issues
   // related to pooling distinguishable sockets together, remove this class
   // entirely.
   class NET_EXPORT_PRIVATE SocketParams
       : public base::RefCounted<SocketParams> {
    public:
-    // For non-SSL requests / non-HTTPS proxies, the corresponding SSLConfig
-    // argument may be nullptr.
-    SocketParams(std::unique_ptr<SSLConfig> ssl_config_for_origin,
-                 std::unique_ptr<SSLConfig> ssl_config_for_proxy);
+    // For non-SSL requests, `allowed_bad_certs` argument will be ignored (and
+    // is likely empty, anyways).
+    explicit SocketParams(
+        const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs);
 
-    // Creates a  SocketParams object with none of the fields populated. This
+    SocketParams(const SocketParams&) = delete;
+    SocketParams& operator=(const SocketParams&) = delete;
+
+    // Creates a SocketParams object with none of the fields populated. This
     // works for the HTTP case only.
     static scoped_refptr<SocketParams> CreateForHttpForTesting();
 
-    const SSLConfig* ssl_config_for_origin() const {
-      return ssl_config_for_origin_.get();
-    }
-
-    const SSLConfig* ssl_config_for_proxy() const {
-      return ssl_config_for_proxy_.get();
+    const std::vector<SSLConfig::CertAndStatus>& allowed_bad_certs() const {
+      return allowed_bad_certs_;
     }
 
    private:
     friend class base::RefCounted<SocketParams>;
     ~SocketParams();
 
-    std::unique_ptr<SSLConfig> ssl_config_for_origin_;
-    std::unique_ptr<SSLConfig> ssl_config_for_proxy_;
-
-    DISALLOW_COPY_AND_ASSIGN(SocketParams);
+    std::vector<SSLConfig::CertAndStatus> allowed_bad_certs_;
   };
+
+  ClientSocketPool(const ClientSocketPool&) = delete;
+  ClientSocketPool& operator=(const ClientSocketPool&) = delete;
 
   ~ClientSocketPool() override;
 
@@ -236,7 +264,7 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
   virtual int RequestSocket(
       const GroupId& group_id,
       scoped_refptr<SocketParams> params,
-      const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+      const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
       RequestPriority priority,
       const SocketTag& socket_tag,
       RespectLimits respect_limits,
@@ -248,18 +276,21 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
   // RequestSockets is used to request that |num_sockets| be connected in the
   // connection group for |group_id|.  If the connection group already has
   // |num_sockets| idle sockets / active sockets / currently connecting sockets,
-  // then this function doesn't do anything.  Otherwise, it will start up as
-  // many connections as necessary to reach |num_sockets| total sockets for the
-  // group.  It uses |params| to control how to connect the sockets.   The
+  // then this function doesn't do anything and returns OK.  Otherwise, it will
+  // start up as many connections as necessary to reach |num_sockets| total
+  // sockets for the group and returns ERR_IO_PENDING. And |callback| will be
+  // called with OK when the connection tasks are finished.
+  // It uses |params| to control how to connect the sockets. The
   // ClientSocketPool will assign a priority to the new connections, if any.
   // This priority will probably be lower than all others, since this method
   // is intended to make sure ahead of time that |num_sockets| sockets are
   // available to talk to a host.
-  virtual void RequestSockets(
+  virtual int RequestSockets(
       const GroupId& group_id,
       scoped_refptr<SocketParams> params,
-      const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
-      int num_sockets,
+      const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+      size_t num_sockets,
+      PreconnectCompletionCallback callback,
       const NetLogWithSource& net_log) = 0;
 
   // Called to change the priority of a RequestSocket call that returned
@@ -312,7 +343,7 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
                                        const char* net_log_reason_utf8) = 0;
 
   // The total number of idle sockets in the pool.
-  virtual int IdleSocketCount() const = 0;
+  virtual size_t IdleSocketCount() const = 0;
 
   // The total number of idle sockets in a connection group.
   virtual size_t IdleSocketCountInGroup(const GroupId& group_id) const = 0;
@@ -328,11 +359,9 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
   virtual base::Value GetInfoAsValue(const std::string& name,
                                      const std::string& type) const = 0;
 
-  // Dumps memory allocation stats. |parent_dump_absolute_name| is the name
-  // used by the parent MemoryAllocatorDump in the memory dump hierarchy.
-  virtual void DumpMemoryStats(
-      base::trace_event::ProcessMemoryDump* pmd,
-      const std::string& parent_dump_absolute_name) const = 0;
+  // Returns whether a connected (idle or handed out) or connecting socket
+  // exists for the group. This method is not supported for WebSockets.
+  virtual bool HasActiveSocket(const GroupId& group_id) const = 0;
 
   // Returns the maximum amount of time to wait before retrying a connect.
   static const int kMaxConnectRetryIntervalMs = 250;
@@ -340,8 +369,28 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
   static base::TimeDelta used_idle_socket_timeout();
   static void set_used_idle_socket_timeout(base::TimeDelta timeout);
 
+  void SetAdditionalCapacityForTest(
+      const SocketPoolAdditionalCapacity& additional_capacity) {
+    additional_capacity_ = additional_capacity;
+  }
+
+  const SocketPoolAdditionalCapacity& AdditionalCapacityForTest() const {
+    return AdditionalCapacity();
+  }
+
+  SocketPoolExpandability ExpandabilityForTest() const {
+    return Expandability();
+  }
+
+  void SetSocketSoftCapOverrideForTest(
+      std::optional<size_t> socket_soft_cap_override_for_test) {
+    socket_soft_cap_override_for_test_ = socket_soft_cap_override_for_test;
+  }
+
  protected:
-  ClientSocketPool(bool is_for_websockets,
+  ClientSocketPool(size_t socket_soft_cap,
+                   const ProxyChain& proxy_chain,
+                   bool is_for_websockets,
                    const CommonConnectJobParams* common_connect_job_params,
                    std::unique_ptr<ConnectJobFactory> connect_job_factory);
 
@@ -349,23 +398,74 @@ class NET_EXPORT ClientSocketPool : public LowerLayeredPool {
                                                 const GroupId& group_id);
 
   // Utility method to log a GroupId with a NetLog event.
-  static base::Value NetLogGroupIdParams(const GroupId& group_id);
+  static base::DictValue NetLogGroupIdParams(const GroupId& group_id);
 
   std::unique_ptr<ConnectJob> CreateConnectJob(
       GroupId group_id,
       scoped_refptr<SocketParams> socket_params,
-      const ProxyServer& proxy_server,
-      const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+      const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
       RequestPriority request_priority,
       SocketTag socket_tag,
       ConnectJob::Delegate* delegate);
 
- private:
-  const bool is_for_websockets_;
-  const CommonConnectJobParams* const common_connect_job_params_;
-  const std::unique_ptr<ConnectJobFactory> connect_job_factory_;
+  size_t SocketSoftCap() const {
+    return socket_soft_cap_override_for_test_
+               ? *socket_soft_cap_override_for_test_
+               : socket_soft_cap_;
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(ClientSocketPool);
+  // This should return the sockets the pool considers to be in-use (reserved)
+  // of the overall pool. This won't contain 'stalled' sockets as those have yet
+  // to have space reserved for themselves, but will include those pending
+  // connection, connected, or idle.
+  virtual size_t SocketsInUse() const = 0;
+
+  const SocketPoolAdditionalCapacity& AdditionalCapacity() const {
+    return additional_capacity_;
+  }
+
+  SocketPoolExpandability Expandability() const { return expandability_; }
+
+  // This should be called exactly once before each attempted socket allocation
+  // via `RequestSocket` or `RequestSockets` (including before each retry after
+  // dropping idle sockets). Under invoking this function can impact security;
+  // over invoking this function can impact performance.
+  void UpdateExpandabilityBeforeAllocation();
+
+  // This should be called once after each successful socket released (and not
+  // reused) via `RequestSocket`, `RequestSockets`, `CancelRequest`,
+  // `ReleaseSocket`, `OnConnectJobComplete`, `CloseIdleSockets`, or
+  // `CloseIdleSocketsInGroup`. Under invoking this function can impact
+  // performance; over invoking this function can impact security.
+  void UpdateExpandabilityAfterRelease();
+
+  // This is used to reset the pool to the initial uncapped expandability when
+  // the socket pool is fully flushed out before later reuse.
+  void ResetExpandability() {
+    expandability_ = SocketPoolExpandability::kUncapped;
+  }
+
+  const ProxyChain& GetProxyChain() const { return proxy_chain_; }
+
+ private:
+  // This section tracks information related to the overall pool capacity.
+  // `socket_soft_cap_` is the amount of sockets always available to the pool
+  // while additional sockets may be available via `additional_capacity_`
+  // depending on the configuration. `expandability_` tracks whether this pool
+  // has exhausted the available sockets (for the moment) or not. Due to
+  // randomization the exact amount of sockets available to this pool will
+  // fluctuate over time.
+  const size_t socket_soft_cap_;
+  SocketPoolAdditionalCapacity additional_capacity_;
+  SocketPoolExpandability expandability_ = SocketPoolExpandability::kUncapped;
+
+  // If set, this overrides `socket_soft_cap_` for future calculations.
+  std::optional<size_t> socket_soft_cap_override_for_test_ = std::nullopt;
+
+  const ProxyChain proxy_chain_;
+  const bool is_for_websockets_;
+  const raw_ptr<const CommonConnectJobParams> common_connect_job_params_;
+  const std::unique_ptr<ConnectJobFactory> connect_job_factory_;
 };
 
 }  // namespace net

@@ -1,10 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/capture/video/shared_memory_buffer_tracker.h"
 
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/notreached.h"
 #include "media/base/video_frame.h"
 #include "mojo/public/cpp/system/platform_handle.h"
@@ -18,17 +20,15 @@ namespace {
 class SharedMemoryBufferTrackerHandle : public media::VideoCaptureBufferHandle {
  public:
   explicit SharedMemoryBufferTrackerHandle(
-      const base::WritableSharedMemoryMapping& mapping)
-      : mapped_size_(mapping.size()),
-        data_(mapping.GetMemoryAsSpan<uint8_t>().data()) {}
+      base::WritableSharedMemoryMapping& mapping)
+      : span_(mapping.GetMemoryAsSpan<uint8_t>()) {}
 
-  size_t mapped_size() const final { return mapped_size_; }
-  uint8_t* data() const final { return data_; }
-  const uint8_t* const_data() const final { return data_; }
+  size_t mapped_size() const final { return span_.size(); }
+  base::span<uint8_t> data() final { return span_; }
+  base::span<const uint8_t> const_data() const final { return span_; }
 
  private:
-  const size_t mapped_size_;
-  uint8_t* data_;
+  base::raw_span<uint8_t> span_;
 };
 
 size_t CalculateRequiredBufferSize(
@@ -56,27 +56,32 @@ size_t CalculateRequiredBufferSize(
 
 namespace media {
 
-SharedMemoryBufferTracker::SharedMemoryBufferTracker() = default;
+SharedMemoryBufferTracker::SharedMemoryBufferTracker(bool strict_pixel_format)
+    : strict_pixel_format_(strict_pixel_format) {}
 
 SharedMemoryBufferTracker::~SharedMemoryBufferTracker() = default;
 
 bool SharedMemoryBufferTracker::Init(const gfx::Size& dimensions,
                                      VideoPixelFormat format,
-                                     const mojom::PlaneStridesPtr& strides) {
+                                     const mojom::PlaneStridesPtr& strides,
+                                     const gfx::ColorSpace& color_space) {
   DCHECK(!region_.IsValid());
   const size_t buffer_size =
       CalculateRequiredBufferSize(dimensions, format, strides);
   region_ = base::UnsafeSharedMemoryRegion::Create(buffer_size);
   mapping_ = {};
+  format_ = format;
   return region_.IsValid();
 }
 
 bool SharedMemoryBufferTracker::IsReusableForFormat(
     const gfx::Size& dimensions,
     VideoPixelFormat format,
-    const mojom::PlaneStridesPtr& strides) {
-  return GetMemorySizeInBytes() >=
-         CalculateRequiredBufferSize(dimensions, format, strides);
+    const mojom::PlaneStridesPtr& strides,
+    const gfx::ColorSpace& color_space) {
+  return (!strict_pixel_format_ || format == format_) &&
+         GetMemorySizeInBytes() >=
+             CalculateRequiredBufferSize(dimensions, format, strides);
 }
 
 std::unique_ptr<VideoCaptureBufferHandle>
@@ -95,16 +100,19 @@ SharedMemoryBufferTracker::DuplicateAsUnsafeRegion() {
   return region_.Duplicate();
 }
 
-mojo::ScopedSharedBufferHandle
-SharedMemoryBufferTracker::DuplicateAsMojoBuffer() {
-  DCHECK(region_.IsValid());
-  return mojo::WrapUnsafeSharedMemoryRegion(region_.Duplicate());
-}
-
 gfx::GpuMemoryBufferHandle
 SharedMemoryBufferTracker::GetGpuMemoryBufferHandle() {
-  NOTREACHED() << "Unsupported operation";
   return gfx::GpuMemoryBufferHandle();
+}
+
+media::mojom::VideoBufferHandlePtr
+SharedMemoryBufferTracker::GetVideoBufferHandle() {
+  return media::mojom::VideoBufferHandle::NewUnsafeShmemRegion(
+      DuplicateAsUnsafeRegion());
+}
+
+VideoCaptureBufferType SharedMemoryBufferTracker::GetBufferType() {
+  return VideoCaptureBufferType::kSharedMemory;
 }
 
 uint32_t SharedMemoryBufferTracker::GetMemorySizeInBytes() {

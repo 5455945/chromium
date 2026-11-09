@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,21 @@ package org.chromium.components.browser_ui.site_settings;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge.StorageInfoClearedCallback;
-import org.chromium.components.embedder_support.browser_context.BrowserContextHandle;
+import org.chromium.content_public.browser.BrowserContextHandle;
 
 import java.io.Serializable;
 
-/**
- * Storage information for a given host URL.
- */
+/** Storage information for a given host URL. */
+@NullMarked
 public class StorageInfo implements Serializable {
     private final String mHost;
-    private final int mType;
     private final long mSize;
 
     @VisibleForTesting
-    public StorageInfo(String host, int type, long size) {
+    public StorageInfo(String host, long size) {
         mHost = host;
-        mType = type;
         mSize = size;
     }
 
@@ -32,8 +30,7 @@ public class StorageInfo implements Serializable {
 
     public void clear(
             BrowserContextHandle browserContextHandle, StorageInfoClearedCallback callback) {
-        WebsitePreferenceBridgeJni.get().clearStorageData(
-                browserContextHandle, mHost, mType, callback);
+        WebsitePreferenceBridgeJni.get().clearStorageData(browserContextHandle, mHost, callback);
     }
 
     public long getSize() {

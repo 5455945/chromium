@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 #define COMPONENTS_LANGUAGE_CONTENT_BROWSER_GEO_LANGUAGE_PROVIDER_H_
 
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/language/content/browser/language_code_locator.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
@@ -34,8 +35,12 @@ namespace language {
 class GeoLanguageProvider {
  public:
   static const char kCachedGeoLanguagesPref[];
+  static const char kTimeOfLastGeoLanguagesUpdatePref[];
 
   static GeoLanguageProvider* GetInstance();
+
+  GeoLanguageProvider(const GeoLanguageProvider&) = delete;
+  GeoLanguageProvider& operator=(const GeoLanguageProvider&) = delete;
 
   static void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
@@ -93,7 +98,7 @@ class GeoLanguageProvider {
   void SetGeoLanguages(const std::vector<std::string>& languages);
 
   // Callback for updates from |ip_geolocation_service_|.
-  void OnIpGeolocationResponse(device::mojom::GeopositionPtr geoposition);
+  void OnIpGeolocationResponse(device::mojom::GeopositionResultPtr result);
 
   // List of BCP-47 language code inferred from public-IP geolocation.
   // May be empty. See comment on CurrentGeoLanguages() above.
@@ -119,9 +124,7 @@ class GeoLanguageProvider {
 
   // The pref service used to cached the latest latitude/longitude pair
   // obtained.
-  PrefService* prefs_;
-
-  DISALLOW_COPY_AND_ASSIGN(GeoLanguageProvider);
+  raw_ptr<PrefService> prefs_;
 };
 
 }  // namespace language

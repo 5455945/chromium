@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,55 +11,58 @@
 #include <string>
 #include <utility>
 
-#include "base/auto_reset.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/notimplemented.h"
 #include "base/task/current_thread.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "components/viz/common/features.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/download/drag_download_util.h"
 #include "content/browser/renderer_host/dip_util.h"
 #include "content/browser/renderer_host/input/touch_selection_controller_client_aura.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
+#include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/overscroll_controller.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/aura/gesture_nav_simple.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/features.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
-#include "content/public/browser/notification_source.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/overscroll_configuration.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/user_browser_context.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/browser/web_drag_dest_delegate.h"
-#include "content/public/common/child_process_host.h"
+#include "content/public/common/buildflags.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/url_constants.h"
+#include "ipc/constants.mojom.h"
 #include "net/base/filename_util.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
-#include "third_party/blink/public/mojom/page/drag.mojom.h"
+#include "third_party/blink/public/mojom/drag/drag.mojom.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/drag_drop_client.h"
 #include "ui/aura/client/drag_drop_delegate.h"
@@ -68,10 +71,10 @@
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
-#include "ui/aura/window_tree_host.h"
 #include "ui/aura/window_tree_host_observer.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/custom_data_helper.h"
+#include "ui/base/clipboard/file_info.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/drop_target_event.h"
@@ -93,16 +96,30 @@
 
 namespace content {
 
-WebContentsView* CreateWebContentsView(
+std::unique_ptr<WebContentsView> CreateWebContentsView(
     WebContentsImpl* web_contents,
-    WebContentsViewDelegate* delegate,
-    RenderViewHostDelegateView** render_view_host_delegate_view) {
-  WebContentsViewAura* rv = new WebContentsViewAura(web_contents, delegate);
-  *render_view_host_delegate_view = rv;
+    std::unique_ptr<WebContentsViewDelegate> delegate,
+    raw_ptr<RenderViewHostDelegateView>* render_view_host_delegate_view) {
+  auto rv =
+      std::make_unique<WebContentsViewAura>(web_contents, std::move(delegate));
+  *render_view_host_delegate_view = rv.get();
   return rv;
 }
 
+class ScopedAllowBlockingForViewAura : public base::ScopedAllowBlocking {};
+
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(DragAndDropSurface)
+enum class DragAndDropSurface {
+  kDragBrowserDropSamePage = 0,
+  kDragBrowserDropOutOfPage = 1,
+  kDragSystemDropBrowser = 2,
+  kMaxValue = kDragSystemDropBrowser
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/event/enums.xml:DragAndDropSurface)
 
 using ::ui::mojom::DragOperation;
 
@@ -116,25 +133,47 @@ RenderWidgetHostViewAura* ToRenderWidgetHostViewAura(
     return nullptr;  // Can't cast to RenderWidgetHostViewAura in unit tests.
   }
 
-  DCHECK(!view || !static_cast<RenderWidgetHostViewBase*>(view)
-                       ->IsRenderWidgetHostViewChildFrame());
+  CHECK(!view || !static_cast<RenderWidgetHostViewBase*>(view)
+                      ->IsRenderWidgetHostViewChildFrame(),
+        base::NotFatalUntil::M158);
   return static_cast<RenderWidgetHostViewAura*>(view);
 }
 
 // Listens to all mouse drag events during a drag and drop and sends them to
 // the renderer.
-class WebDragSourceAura : public content::WebContentsObserver {
+class WebDragSourceAura : public content::WebContentsObserver,
+                          public aura::WindowObserver {
  public:
   WebDragSourceAura(aura::Window* window, WebContentsImpl* contents)
-      : WebContentsObserver(contents), window_(window) {}
+      : WebContentsObserver(contents), window_(window) {
+    window_->AddObserver(this);
+  }
+
+  ~WebDragSourceAura() override {
+    if (window_)
+      window_->RemoveObserver(this);
+  }
+
+  WebDragSourceAura(const WebDragSourceAura&) = delete;
+  WebDragSourceAura& operator=(const WebDragSourceAura&) = delete;
 
   // content::WebContentsObserver
-  void RenderProcessGone(base::TerminationStatus status) override {
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override {
     CancelDrag();
   }
 
   void WebContentsDestroyed() override { CancelDrag(); }
 
+  // aura::WindowObserver:
+  void OnWindowDestroying(aura::Window* window) override {
+    window_->RemoveObserver(this);
+    window_ = nullptr;
+  }
+
+  aura::Window* window() const { return window_; }
+
+ private:
   void CancelDrag() {
     if (!window_)
       return;
@@ -142,59 +181,51 @@ class WebDragSourceAura : public content::WebContentsObserver {
     // Cancel the drag if it is still in progress.
     aura::client::DragDropClient* dnd_client =
         aura::client::GetDragDropClient(window_->GetRootWindow());
+
+    window_->RemoveObserver(this);
+    window_ = nullptr;
+
     if (dnd_client && dnd_client->IsDragDropInProgress())
       dnd_client->DragCancel();
-
-    window_ = nullptr;
   }
 
-  aura::Window* window() const { return window_; }
-
- private:
-  aura::Window* window_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebDragSourceAura);
+  raw_ptr<aura::Window> window_;
 };
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 // Fill out the OSExchangeData with a file contents, synthesizing a name if
 // necessary.
 void PrepareDragForFileContents(const DropData& drop_data,
                                 ui::OSExchangeDataProvider* provider) {
-  absl::optional<base::FilePath> filename =
+  std::optional<base::FilePath> filename =
       drop_data.GetSafeFilenameForImageFileContents();
   if (filename)
     provider->SetFileContents(*filename, drop_data.file_contents);
 }
 #endif
 
-#if defined(OS_WIN)
-void PrepareDragForDownload(const DropData& drop_data,
-                            ui::OSExchangeDataProvider* provider,
-                            WebContentsImpl* web_contents) {
-  const GURL& page_url = web_contents->GetLastCommittedURL();
-  const std::string& page_encoding = web_contents->GetEncoding();
+#if BUILDFLAG(IS_WIN)
+void PrepareDragForDownload(RenderFrameHost& source_rfh,
+                            const DropData& drop_data,
+                            ui::OSExchangeDataProvider* provider) {
+  CHECK(drop_data.download_metadata.has_value(), base::NotFatalUntil::M158);
 
-  // Parse the download metadata.
-  std::u16string mime_type;
-  base::FilePath file_name;
-  GURL download_url;
-  if (!ParseDownloadMetadata(drop_data.download_metadata,
-                             &mime_type,
-                             &file_name,
-                             &download_url))
-    return;
+  const GURL& page_url = source_rfh.GetLastCommittedURL();
+  const std::string& page_encoding =
+      static_cast<RenderFrameHostImpl&>(source_rfh).GetPage().GetEncoding();
+
+  const GURL& download_url = drop_data.download_metadata->url;
 
   // Generate the file name based on both mime type and proposed file name.
   std::string default_name =
       GetContentClient()->browser()->GetDefaultDownloadName();
-  base::FilePath generated_download_file_name =
-      net::GenerateFileName(download_url, std::string(), std::string(),
-                            base::WideToUTF8(file_name.value()),
-                            base::UTF16ToUTF8(mime_type), default_name);
+  base::FilePath generated_download_file_name = net::GenerateFileName(
+      download_url, std::string(), std::string(),
+      drop_data.download_metadata->suggested_file_name,
+      drop_data.download_metadata->mime_type, default_name);
 
   // http://crbug.com/332579
-  base::ThreadRestrictions::ScopedAllowIO allow_file_operations;
+  ScopedAllowBlockingForViewAura allow_file_operations;
 
   base::FilePath temp_dir_path;
   if (!base::CreateNewTempDirectory(FILE_PATH_LITERAL("chrome_drag"),
@@ -212,34 +243,39 @@ void PrepareDragForDownload(const DropData& drop_data,
   // Provide the data as file (CF_HDROP). A temporary download file with the
   // Zone.Identifier ADS (Alternate Data Stream) attached will be created.
   auto download_file = std::make_unique<DragDownloadFile>(
-      download_path, base::File(), download_url,
-      Referrer(page_url, drop_data.referrer_policy), page_encoding,
-      web_contents);
+      source_rfh.GetWeakDocumentPtr(), download_path, base::File(),
+      download_url, Referrer(page_url, drop_data.referrer_policy),
+      page_encoding);
   ui::DownloadFileInfo file_download(base::FilePath(),
                                      std::move(download_file));
   provider->SetDownloadFileInfo(&file_download);
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 // Returns the ClipboardFormatType to store file system files.
 const ui::ClipboardFormatType& GetFileSystemFileFormatType() {
   static base::NoDestructor<ui::ClipboardFormatType> format(
-      ui::ClipboardFormatType::GetType("chromium/x-file-system-files"));
+      ui::ClipboardFormatType::CustomPlatformType(
+          "chromium/x-file-system-files"));
   return *format;
 }
 
 // Utility to fill a ui::OSExchangeDataProvider object from DropData.
-void PrepareDragData(const DropData& drop_data,
-                     ui::OSExchangeDataProvider* provider,
-                     WebContentsImpl* web_contents) {
-  provider->MarkOriginatedFromRenderer();
-#if defined(OS_WIN)
+void PrepareDragData(RenderFrameHost& source_rfh,
+                     const DropData& drop_data,
+                     ui::OSExchangeDataProvider* provider) {
+  provider->MarkRendererTaintedFromOrigin(source_rfh.GetLastCommittedOrigin());
+  if (drop_data.drag_id.has_value()) {
+    provider->SetChromeDragId(*drop_data.drag_id);
+  }
+#if BUILDFLAG(IS_WIN)
   // Put download before file contents to prefer the download of a image over
   // its thumbnail link.
-  if (!drop_data.download_metadata.empty())
-    PrepareDragForDownload(drop_data, provider, web_contents);
+  if (drop_data.download_metadata.has_value()) {
+    PrepareDragForDownload(source_rfh, drop_data, provider);
+  }
 #endif
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
   // We set the file contents before the URL because the URL also sets file
   // contents (to a .URL shortcut).  We want to prefer file content data over
   // a shortcut so we add it first.
@@ -250,10 +286,12 @@ void PrepareDragData(const DropData& drop_data,
   // SetURL() will itself do SetString() when a string hasn't been set yet,
   // but we want to prefer drop_data.text.string() over the URL string if it
   // exists.
-  if (drop_data.text && !drop_data.text->empty())
+  if (drop_data.text) {
     provider->SetString(*drop_data.text);
-  if (drop_data.url.is_valid())
-    provider->SetURL(drop_data.url, drop_data.url_title);
+  }
+  if (!drop_data.url_infos.empty()) {
+    provider->SetURLs(drop_data.url_infos);
+  }
   if (drop_data.html && !drop_data.html->empty())
     provider->SetHtml(*drop_data.html, drop_data.html_base_url);
   if (!drop_data.filenames.empty())
@@ -267,12 +305,12 @@ void PrepareDragData(const DropData& drop_data,
   if (!drop_data.custom_data.empty()) {
     base::Pickle pickle;
     ui::WriteCustomDataToPickle(drop_data.custom_data, &pickle);
-    provider->SetPickledData(ui::ClipboardFormatType::GetWebCustomDataType(),
+    provider->SetPickledData(ui::ClipboardFormatType::DataTransferCustomType(),
                              pickle);
   }
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Function returning whether this drop target should extract virtual file data
 // from the data store.
 // (1) As with real files, only add virtual files if the drag did not originate
@@ -295,63 +333,14 @@ void PrepareDragData(const DropData& drop_data,
 // support was for dragging items out of Outlook.exe for upload to a file
 // hosting service. The Outlook drag source does not add url data to the data
 // object.
-// TODO(https://crbug.com/958273): DragDrop: Extend virtual filename support
+// TODO(crbug.com/41456054): DragDrop: Extend virtual filename support
 // to DropData, for parity with real filename support.
-// TODO(https://crbug.com/964461): Drag and drop: Should support both virtual
+// TODO(crbug.com/41459545): Drag and drop: Should support both virtual
 // file and url data on drop.
 bool ShouldIncludeVirtualFiles(const DropData& drop_data) {
-  return !drop_data.did_originate_from_renderer && drop_data.url.is_empty();
+  return !drop_data.did_originate_from_renderer && drop_data.url_infos.empty();
 }
 #endif
-
-// Utility to fill a DropData object from ui::OSExchangeData.
-void PrepareDropData(DropData* drop_data, const ui::OSExchangeData& data) {
-  drop_data->did_originate_from_renderer = data.DidOriginateFromRenderer();
-
-  std::u16string plain_text;
-  data.GetString(&plain_text);
-  if (!plain_text.empty())
-    drop_data->text = plain_text;
-
-  GURL url;
-  std::u16string url_title;
-  data.GetURLAndTitle(ui::FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES, &url,
-                      &url_title);
-  if (url.is_valid()) {
-    drop_data->url = url;
-    drop_data->url_title = url_title;
-  }
-
-  std::u16string html;
-  GURL html_base_url;
-  data.GetHtml(&html, &html_base_url);
-  if (!html.empty())
-    drop_data->html = html;
-  if (html_base_url.is_valid())
-    drop_data->html_base_url = html_base_url;
-
-  data.GetFilenames(&drop_data->filenames);
-
-#if defined(OS_WIN)
-  // Get a list of virtual files for later retrieval when a drop is performed
-  // (will return empty vector if there are any non-virtual files in the data
-  // store).
-  if (ShouldIncludeVirtualFiles(*drop_data))
-    data.GetVirtualFilenames(&drop_data->filenames);
-#endif
-
-  base::Pickle pickle;
-  std::vector<DropData::FileSystemFileInfo> file_system_files;
-  if (data.GetPickledData(GetFileSystemFileFormatType(), &pickle) &&
-      DropData::FileSystemFileInfo::ReadFileSystemFilesFromPickle(
-          pickle, &file_system_files))
-    drop_data->file_system_files = file_system_files;
-
-  if (data.GetPickledData(ui::ClipboardFormatType::GetWebCustomDataType(),
-                          &pickle))
-    ui::ReadCustomDataIntoMap(
-        pickle.data(), pickle.size(), &drop_data->custom_data);
-}
 
 // Utilities to convert between blink::DragOperationsMask and
 // ui::DragDropTypes.
@@ -381,53 +370,44 @@ GlobalRoutingID GetRenderViewHostID(RenderViewHost* rvh) {
   return GlobalRoutingID(rvh->GetProcess()->GetID(), rvh->GetRoutingID());
 }
 
-// Returns the host window for |window|, or nullpr if it has no host window.
+// Returns the host window for |window|, or nullptr if it has no host window.
 aura::Window* GetHostWindow(aura::Window* window) {
-  aura::Window* host_window = window->GetProperty(aura::client::kHostWindowKey);
-  if (host_window)
-    return host_window;
+  base::WeakPtr<aura::Window>* host_window_ptr =
+      window->GetProperty(aura::client::kHostWindowKey);
+  if (host_window_ptr && *host_window_ptr) {
+    return host_window_ptr->get();
+  }
   return window->parent();
+}
+
+// Returns whether drag-and-drop data from or to `web_contents` is
+// off-the-record.
+bool IsOffTheRecordForDragAndDrop(WebContents& web_contents) {
+  return GetUserBrowserContext(web_contents)->IsOffTheRecord();
 }
 
 }  // namespace
 
-WebContentsViewAura::OnPerformDropContext::OnPerformDropContext(
-    RenderWidgetHostImpl* target_rwh,
-    const ui::DropTargetEvent& event,
-    std::unique_ptr<ui::OSExchangeData> data,
-    base::ScopedClosureRunner end_drag_runner,
-    absl::optional<gfx::PointF> transformed_pt,
-    gfx::PointF screen_pt)
-    : target_rwh(target_rwh->GetWeakPtr()),
-      event(event),
-      data(std::move(data)),
-      end_drag_runner(std::move(end_drag_runner)),
-      transformed_pt(std::move(transformed_pt)),
-      screen_pt(screen_pt) {}
+WebContentsViewAura::DropMetadata::DropMetadata(
+    const ui::DropTargetEvent& event) {
+  localized_location = event.location_f();
+  root_location = event.root_location_f();
+  source_operations = event.source_operations();
+  flags = event.flags();
+}
 
-WebContentsViewAura::OnPerformDropContext::OnPerformDropContext(
-    OnPerformDropContext&&) = default;
-
-WebContentsViewAura::OnPerformDropContext::~OnPerformDropContext() = default;
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // A web contents observer that watches for navigations while an async drop
 // operation is in progress during virtual file data retrieval and temp file
-// creation. Navigations may cause completion of the drop to be disallowed. The
-// class also serves to cache the drop parameters as they were at the beginning
-// of the drop. This is needed for checking that the drop target is still valid
-// when the async operation completes, and if so, passing the parameters on to
-// the render widget host to complete the drop.
+// creation. Navigations may cause completion of the drop to be disallowed.
 class WebContentsViewAura::AsyncDropNavigationObserver
     : public WebContentsObserver {
  public:
-  AsyncDropNavigationObserver(WebContents* watched_contents,
-                              std::unique_ptr<DropData> drop_data,
-                              base::ScopedClosureRunner end_drag_runner,
-                              RenderWidgetHostImpl* target_rwh,
-                              const gfx::PointF& client_pt,
-                              const gfx::PointF& screen_pt,
-                              int key_modifiers);
+  explicit AsyncDropNavigationObserver(WebContents* watched_contents);
+
+  AsyncDropNavigationObserver(const AsyncDropNavigationObserver&) = delete;
+  AsyncDropNavigationObserver& operator=(const AsyncDropNavigationObserver&) =
+      delete;
 
   // WebContentsObserver:
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
@@ -436,63 +416,71 @@ class WebContentsViewAura::AsyncDropNavigationObserver
   // should disallow the drop?
   bool drop_allowed() const { return drop_allowed_; }
 
-  DropData* drop_data() const { return drop_data_.get(); }
-  RenderWidgetHostImpl* target_rwh() const { return target_rwh_.get(); }
-  const gfx::PointF& client_pt() const { return client_pt_; }
-  const gfx::PointF& screen_pt() const { return screen_pt_; }
-  int key_modifiers() const { return key_modifiers_; }
-
  private:
-  bool drop_allowed_;
-
-  // Data cached at the start of the drop operation and needed to complete the
-  // drop.
-  std::unique_ptr<DropData> drop_data_;
-  base::ScopedClosureRunner end_drag_runner_;
-  base::WeakPtr<RenderWidgetHostImpl> target_rwh_;
-  const gfx::PointF client_pt_;
-  const gfx::PointF screen_pt_;
-  const int key_modifiers_;
-
-  DISALLOW_COPY_AND_ASSIGN(AsyncDropNavigationObserver);
+  bool drop_allowed_ = true;
 };
 
 WebContentsViewAura::AsyncDropNavigationObserver::AsyncDropNavigationObserver(
-    WebContents* watched_contents,
-    std::unique_ptr<DropData> drop_data,
-    base::ScopedClosureRunner end_drag_runner,
-    RenderWidgetHostImpl* target_rwh,
-    const gfx::PointF& client_pt,
-    const gfx::PointF& screen_pt,
-    int key_modifiers)
-    : WebContentsObserver(watched_contents),
-      drop_allowed_(true),
-      drop_data_(std::move(drop_data)),
-      end_drag_runner_(std::move(end_drag_runner)),
-      target_rwh_(target_rwh->GetWeakPtr()),
-      client_pt_(client_pt),
-      screen_pt_(screen_pt),
-      key_modifiers_(key_modifiers) {}
+    WebContents* watched_contents)
+    : WebContentsObserver(watched_contents) {}
 
 void WebContentsViewAura::AsyncDropNavigationObserver::DidFinishNavigation(
     NavigationHandle* navigation_handle) {
+  auto* navigation_request = NavigationRequest::From(navigation_handle);
   // This method is called every time any navigation completes in the observed
   // web contents, including subframe navigations. In the case of a subframe
   // navigation, we can't readily determine on the browser process side if the
   // navigated subframe is the intended drop target. Err on the side of security
   // and disallow the drop if any navigation commits to a different url.
-  if (navigation_handle->HasCommitted() &&
-      (navigation_handle->GetURL() !=
-       navigation_handle->GetPreviousMainFrameURL())) {
+  // Note that this method is called twice for prerendering, one when the
+  // prerendering starts and the document is created and starts loading and one
+  // when the prerendered document has been activated and shown to the user.
+  // We should not disallow the drop for the former prerendering state.
+  if (navigation_request->HasCommitted() &&
+      (navigation_request->GetURL() !=
+       navigation_request->GetPreviousMainFrameURL()) &&
+      navigation_request->GetRenderFrameHost()->GetLifecycleState() !=
+          RenderFrameHost::LifecycleState::kPrerendering) {
     drop_allowed_ = false;
   }
 }
+#endif  // BUILDFLAG(IS_WIN)
+
+WebContentsViewAura::OnPerformingDropContext::OnPerformingDropContext(
+    RenderWidgetHostImpl* target_rwh,
+    std::unique_ptr<DropData> drop_data,
+    DropMetadata drop_metadata,
+    uint64_t drag_session_id,
+    std::unique_ptr<ui::OSExchangeData> data,
+    base::ScopedClosureRunner drop_exit_cleanup,
+    std::optional<gfx::PointF> transformed_pt,
+    gfx::PointF screen_pt)
+    : target_rwh(target_rwh->GetWeakPtr()),
+      drop_data(std::move(drop_data)),
+      drop_metadata(drop_metadata),
+      drag_session_id(drag_session_id),
+      data(std::move(data)),
+      drop_exit_cleanup(std::move(drop_exit_cleanup)),
+      transformed_pt(std::move(transformed_pt)),
+      screen_pt(screen_pt) {}
+
+WebContentsViewAura::OnPerformingDropContext::OnPerformingDropContext(
+    OnPerformingDropContext&&) = default;
+
+WebContentsViewAura::OnPerformingDropContext::~OnPerformingDropContext() =
+    default;
+
+#if BUILDFLAG(IS_WIN)
 
 // Deletes registered temp files asynchronously when the object goes out of
 // scope (when the WebContentsViewAura is deleted on tab closure).
 class WebContentsViewAura::AsyncDropTempFileDeleter {
  public:
   AsyncDropTempFileDeleter() = default;
+
+  AsyncDropTempFileDeleter(const AsyncDropTempFileDeleter&) = delete;
+  AsyncDropTempFileDeleter& operator=(const AsyncDropTempFileDeleter&) = delete;
+
   ~AsyncDropTempFileDeleter();
   void RegisterFile(const base::FilePath& path);
 
@@ -501,7 +489,6 @@ class WebContentsViewAura::AsyncDropTempFileDeleter {
   void DeleteFileAsync(const base::FilePath& path) const;
 
   std::vector<base::FilePath> scoped_files_to_delete_;
-  DISALLOW_COPY_AND_ASSIGN(AsyncDropTempFileDeleter);
 };
 
 WebContentsViewAura::AsyncDropTempFileDeleter::~AsyncDropTempFileDeleter() {
@@ -521,11 +508,10 @@ void WebContentsViewAura::AsyncDropTempFileDeleter::DeleteAllFilesAsync()
 
 void WebContentsViewAura::AsyncDropTempFileDeleter::DeleteFileAsync(
     const base::FilePath& path) const {
-  base::ThreadPool::PostTask(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
-       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-      base::BindOnce(base::GetDeleteFileCallback(), std::move(path)));
+  base::ThreadPool::PostTask(FROM_HERE,
+                             {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+                              base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+                             base::GetDeleteFileCallback(std::move(path)));
 }
 #endif
 
@@ -535,6 +521,9 @@ class WebContentsViewAura::WindowObserver
   explicit WindowObserver(WebContentsViewAura* view) : view_(view) {
     view_->window_->AddObserver(this);
   }
+
+  WindowObserver(const WindowObserver&) = delete;
+  WindowObserver& operator=(const WindowObserver&) = delete;
 
   ~WindowObserver() override {
     view_->window_->RemoveObserver(this);
@@ -563,7 +552,11 @@ class WebContentsViewAura::WindowObserver
                              const gfx::Rect& old_bounds,
                              const gfx::Rect& new_bounds,
                              ui::PropertyChangeReason reason) override {
-    DCHECK(window == host_window_ || window == view_->window_.get());
+    CHECK(window == host_window_ || window == view_->window_.get(),
+          base::NotFatalUntil::M158);
+    if (!ShouldNotifyOfBoundsChanges())
+      return;
+
     if (pending_window_changes_) {
       pending_window_changes_->window_bounds_changed = true;
       if (old_bounds.origin() != new_bounds.origin())
@@ -581,8 +574,12 @@ class WebContentsViewAura::WindowObserver
   }
 
   void OnWindowAddedToRootWindow(aura::Window* window) override {
-    if (window == view_->window_.get())
-      window->GetHost()->AddObserver(this);
+    if (window != view_->window_.get())
+      return;
+
+    window->GetHost()->AddObserver(this);
+    if (view_->web_contents_->IsBeingCaptured())
+      view_->video_capture_lock_ = window->GetHost()->CreateVideoCaptureLock();
   }
 
   void OnWindowRemovingFromRootWindow(aura::Window* window,
@@ -590,16 +587,23 @@ class WebContentsViewAura::WindowObserver
     if (window == view_->window_.get()) {
       window->GetHost()->RemoveObserver(this);
       pending_window_changes_.reset();
+      view_->video_capture_lock_.reset();
     }
   }
 
   // Overridden WindowTreeHostObserver:
   void OnHostWillProcessBoundsChange(aura::WindowTreeHost* host) override {
-    DCHECK(!pending_window_changes_);
+    if (!ShouldNotifyOfBoundsChanges())
+      return;
+
+    CHECK(!pending_window_changes_, base::NotFatalUntil::M158);
     pending_window_changes_ = std::make_unique<PendingWindowChanges>();
   }
 
   void OnHostDidProcessBoundsChange(aura::WindowTreeHost* host) override {
+    if (!ShouldNotifyOfBoundsChanges())
+      return;
+
     if (!pending_window_changes_)
       return;  // Happens if added to a new host during bounds change.
 
@@ -610,8 +614,10 @@ class WebContentsViewAura::WindowObserver
     pending_window_changes_.reset();
   }
 
-  void OnHostMovedInPixels(aura::WindowTreeHost* host,
-                           const gfx::Point& new_origin_in_pixels) override {
+  void OnHostMovedInPixels(aura::WindowTreeHost* host) override {
+    if (!ShouldNotifyOfBoundsChanges())
+      return;
+
     if (pending_window_changes_) {
       pending_window_changes_->host_moved = true;
       return;
@@ -620,6 +626,14 @@ class WebContentsViewAura::WindowObserver
   }
 
  private:
+  bool ShouldNotifyOfBoundsChanges() const {
+    // Do not notify of bounds changes for guests as guests' window bounds are
+    // supposed to come from its embedder.
+    // We also do not handle bounds changes during destruction.
+    return !view_->web_contents_->IsBeingDestroyed() &&
+           !view_->web_contents_->IsGuest();
+  }
+
   // Used to avoid multiple calls to SendScreenRects(). In particular, when
   // WindowTreeHost changes its size, it's entirely likely the aura::Windows
   // will change as well. When OnHostWillProcessBoundsChange() is called,
@@ -639,6 +653,7 @@ class WebContentsViewAura::WindowObserver
   };
 
   void ProcessWindowBoundsChange(bool did_origin_change) {
+    CHECK(ShouldNotifyOfBoundsChanges(), base::NotFatalUntil::M158);
     SendScreenRects();
     if (did_origin_change) {
       TouchSelectionControllerClientAura* selection_controller_client =
@@ -649,6 +664,7 @@ class WebContentsViewAura::WindowObserver
   }
 
   void ProcessHostMovedInPixels() {
+    CHECK(ShouldNotifyOfBoundsChanges(), base::NotFatalUntil::M158);
     // NOTE: this function is *not* called if OnHostWillProcessBoundsChange()
     // *and* the bounds changes (OnWindowBoundsChanged() is called).
     TRACE_EVENT1(
@@ -660,15 +676,13 @@ class WebContentsViewAura::WindowObserver
 
   void SendScreenRects() { view_->web_contents_->SendScreenRects(); }
 
-  WebContentsViewAura* view_;
+  raw_ptr<WebContentsViewAura> view_;
 
   // The parent window that hosts the constrained windows. We cache the old host
   // view so that we can unregister when it's not the parent anymore.
-  aura::Window* host_window_ = nullptr;
+  raw_ptr<aura::Window> host_window_ = nullptr;
 
   std::unique_ptr<PendingWindowChanges> pending_window_changes_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowObserver);
 };
 
 // static
@@ -681,26 +695,15 @@ void WebContentsViewAura::InstallCreateHookForTests(
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, public:
 
-WebContentsViewAura::WebContentsViewAura(WebContentsImpl* web_contents,
-                                         WebContentsViewDelegate* delegate)
+WebContentsViewAura::WebContentsViewAura(
+    WebContentsImpl* web_contents,
+    std::unique_ptr<WebContentsViewDelegate> delegate)
     : web_contents_(web_contents),
-      delegate_(delegate),
-      current_drag_op_(DragOperation::kNone),
+      delegate_(std::move(delegate)),
       drag_dest_delegate_(nullptr),
-      current_rvh_for_drag_(ChildProcessHost::kInvalidUniqueID,
-                            MSG_ROUTING_NONE),
-      drag_start_process_id_(ChildProcessHost::kInvalidUniqueID),
-      drag_start_view_id_(ChildProcessHost::kInvalidUniqueID, MSG_ROUTING_NONE),
+      current_rvh_for_drag_(ChildProcessId(), IPC::mojom::kRoutingIdNone),
       drag_in_progress_(false),
       init_rwhv_with_null_parent_for_testing_(false) {}
-
-void WebContentsViewAura::SetDelegateForTesting(
-    WebContentsViewDelegate* delegate) {
-  delegate_.reset(delegate);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// WebContentsViewAura, private:
 
 WebContentsViewAura::~WebContentsViewAura() {
   if (!window_)
@@ -713,12 +716,132 @@ WebContentsViewAura::~WebContentsViewAura() {
   window_.reset();
 }
 
+void WebContentsViewAura::SetDelegateForTesting(
+    std::unique_ptr<WebContentsViewDelegate> delegate) {
+  delegate_ = std::move(delegate);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// WebContentsViewAura, private:
+
+void WebContentsViewAura::PrepareDropData(
+    DropData* drop_data,
+    const ui::OSExchangeData& data) const {
+#if BUILDFLAG(IS_CHROMEOS)
+  // TODO(b/256022714): Using `IsRendererTainted()` breaks the Files app. Always
+  // setting this to false is currently believed to be safe-ish because ChromeOS
+  // separates URL and filename metadata and does not implement the DownloadURL
+  // protocol.
+  drop_data->did_originate_from_renderer = false;
+#else
+  drop_data->did_originate_from_renderer = data.IsRendererTainted();
+#endif
+  drop_data->is_from_privileged = data.IsFromPrivileged();
+  drop_data->drag_id = data.GetChromeDragId();
+
+  if (std::optional<std::u16string> string = data.GetString();
+      string.has_value() && !string->empty()) {
+    drop_data->text = std::move(*string);
+  }
+
+  drop_data->url_infos =
+      data.GetURLs(ui::FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES);
+
+  if (std::optional<ui::OSExchangeData::HtmlInfo> html = data.GetHtml();
+      html.has_value()) {
+    drop_data->html = html->html;
+    if (html->base_url.is_valid()) {
+      drop_data->html_base_url = html->base_url;
+    }
+  }
+
+  if (std::optional<std::vector<ui::FileInfo>> filenames = data.GetFilenames();
+      filenames.has_value()) {
+    drop_data->filenames = filenames.value();
+  }
+#if BUILDFLAG(IS_WIN)
+  // Get a list of virtual files for later retrieval when a drop is performed.
+  // Returns empty vector if there are any non-virtual files in the data store.
+  if (ShouldIncludeVirtualFiles(*drop_data)) {
+    if (std::optional<std::vector<ui::FileInfo>> virtual_filenames =
+            data.GetVirtualFilenames();
+        virtual_filenames.has_value()) {
+      std::ranges::move(virtual_filenames.value(),
+                        std::back_inserter(drop_data->filenames));
+    }
+  }
+#endif
+
+  if (drop_data->filenames.empty()) {
+    // Only add FileContents if Filenames is empty to avoid duplicates
+    // (https://crbug.com/1251482). We prefer filenames since it supports
+    // multiple files and does not send all file data upfront. Do not add
+    // FileContents if this is a tainted-cross-origin same-page image
+    // (https://crbug.com/1264873).
+    bool access_allowed =
+        // Drag began in this top-level WebContents, and image access is allowed
+        // (not cross-origin).
+        drag_security_info_.IsImageAccessibleFromFrame();
+    if (access_allowed) {
+      if (std::optional<ui::OSExchangeData::FileContentsInfo> file_contents =
+              data.GetFileContents();
+          file_contents.has_value()) {
+        drop_data->file_contents = std::move(file_contents->file_contents);
+        drop_data->file_contents_image_accessible = true;
+        drop_data->file_contents_source_url =
+            GURL(ui::FilePathToFileURL(file_contents->filename));
+        base::FilePath::StringType extension =
+            file_contents->filename.Extension();
+        if (!extension.empty()) {
+          drop_data->file_contents_filename_extension = extension.substr(1);
+        }
+      }
+    }
+  }
+
+  if (std::optional<base::Pickle> pickle =
+          data.GetPickledData(GetFileSystemFileFormatType());
+      pickle.has_value()) {
+    std::vector<DropData::FileSystemFileInfo> file_system_files;
+    if (DropData::FileSystemFileInfo::ReadFileSystemFilesFromPickle(
+            pickle.value(), &file_system_files)) {
+      drop_data->file_system_files = file_system_files;
+    }
+  }
+
+  if (std::optional<base::Pickle> pickle = data.GetPickledData(
+          ui::ClipboardFormatType::DataTransferCustomType());
+      pickle.has_value()) {
+    if (std::optional<std::unordered_map<std::u16string, std::u16string>>
+            maybe_custom_data = ui::ReadCustomDataIntoMap(pickle.value());
+        maybe_custom_data.has_value()) {
+      drop_data->custom_data = std::move(maybe_custom_data.value());
+    }
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // The 'fs/*' custom-data types are produced by the ChromeOS Files SWA to
+  // describe filesystem entries it transfers between its own windows. Consumers
+  // such as the Files app resolve them via privileged APIs, so only retain them
+  // when the drag source is a chrome:// WebUI page. This mirrors the source
+  // check performed by file_manager::util::ParseFileSystemSources.
+  if (!drop_data->custom_data.empty()) {
+    const ui::DataTransferEndpoint* source = data.GetSource();
+    const bool from_webui = source && source->IsUrlType() &&
+                            source->GetURL()->SchemeIs(kChromeUIScheme);
+    if (!from_webui) {
+      std::erase_if(drop_data->custom_data, [](const auto& kv) {
+        return kv.first.starts_with(u"fs/");
+      });
+    }
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
+
 void WebContentsViewAura::EndDrag(
     base::WeakPtr<RenderWidgetHostImpl> source_rwh_weak_ptr,
     DragOperation op) {
-  drag_start_process_id_ = ChildProcessHost::kInvalidUniqueID;
-  drag_start_view_id_ = GlobalRoutingID(ChildProcessHost::kInvalidUniqueID,
-                                        MSG_ROUTING_NONE);
+  drag_security_info_.OnDragEnded();
 
   if (!web_contents_)
     return;
@@ -727,8 +850,10 @@ void WebContentsViewAura::EndDrag(
   RenderWidgetHost* source_rwh = source_rwh_weak_ptr.get();
 
   aura::Window* window = GetContentNativeView();
+  CHECK(window);
+
   gfx::PointF screen_loc =
-      gfx::PointF(display::Screen::GetScreen()->GetCursorScreenPoint());
+      gfx::PointF(display::Screen::Get()->GetCursorScreenPoint());
   gfx::PointF client_loc = screen_loc;
   aura::client::ScreenPositionClient* screen_position_client =
       aura::client::GetScreenPositionClient(window->GetRootWindow());
@@ -738,7 +863,8 @@ void WebContentsViewAura::EndDrag(
   // |client_loc| is in the root coordinate space, for non-root
   // RenderWidgetHosts it needs to be transformed.
   gfx::PointF transformed_point = client_loc;
-  if (source_rwh && web_contents_->GetRenderWidgetHostView()) {
+  if (source_rwh && web_contents_->GetRenderWidgetHostView() &&
+      source_rwh->GetView() != web_contents_->GetRenderWidgetHostView()) {
     static_cast<RenderWidgetHostViewBase*>(
         web_contents_->GetRenderWidgetHostView())
         ->TransformPointToCoordSpaceForView(
@@ -747,11 +873,34 @@ void WebContentsViewAura::EndDrag(
             &transformed_point);
   }
 
+  if (op != DragOperation::kNone) {
+    // TODO(crbug.com/467379870): Implement in non-aura platforms.
+    base::UmaHistogramEnumeration(
+        "Event.DragDrop.Surface",
+        (dropped_in_this_web_contents_
+             ? DragAndDropSurface::kDragBrowserDropSamePage
+             : DragAndDropSurface::kDragBrowserDropOutOfPage));
+  }
+
   web_contents_->DragSourceEndedAt(transformed_point.x(), transformed_point.y(),
                                    screen_loc.x(), screen_loc.y(), op,
                                    source_rwh);
 
   web_contents_->SystemDragEnded(source_rwh);
+}
+
+void WebContentsViewAura::EndDragAfterNativeLoop(
+    base::WeakPtr<RenderWidgetHostImpl> source_rwh_weak_ptr,
+    DragOperation op) {
+  if (!drag_in_progress_) {
+    EndDrag(std::move(source_rwh_weak_ptr), op);
+    return;
+  }
+
+  end_drag_runner_.ReplaceClosure(base::BindOnce(
+      &WebContentsViewAura::EndDrag, weak_ptr_factory_.GetWeakPtr(),
+      std::move(source_rwh_weak_ptr), op));
+  end_drag_runner_session_id_ = drag_session_id_;
 }
 
 void WebContentsViewAura::InstallOverscrollControllerDelegate(
@@ -787,13 +936,6 @@ gfx::NativeView WebContentsViewAura::GetRenderWidgetHostViewParent() const {
   return window_.get();
 }
 
-bool WebContentsViewAura::IsValidDragTarget(
-    RenderWidgetHostImpl* target_rwh) const {
-  return target_rwh->GetProcess()->GetID() == drag_start_process_id_ ||
-      GetRenderViewHostID(web_contents_->GetRenderViewHost()) !=
-      drag_start_view_id_;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, WebContentsView implementation:
 
@@ -808,7 +950,11 @@ gfx::NativeView WebContentsViewAura::GetContentNativeView() const {
 
 gfx::NativeWindow WebContentsViewAura::GetTopLevelNativeWindow() const {
   gfx::NativeWindow window = window_->GetToplevelWindow();
-  return window ? window : delegate_->GetNativeWindow();
+  if (window)
+    return window;
+  if (delegate_)
+    return delegate_->GetNativeWindow();
+  return nullptr;
 }
 
 gfx::Rect WebContentsViewAura::GetContainerBounds() const {
@@ -856,16 +1002,26 @@ void WebContentsViewAura::FocusThroughTabTraversal(bool reverse) {
 }
 
 DropData* WebContentsViewAura::GetDropData() const {
-  return current_drop_data_.get();
+  return current_drag_data_.get();
 }
 
 gfx::Rect WebContentsViewAura::GetViewBounds() const {
   return GetNativeView()->GetBoundsInScreen();
 }
 
+void WebContentsViewAura::Resize(const gfx::Rect& new_bounds) {
+  aura::Window* window = GetNativeView();
+  window->SetBounds(gfx::Rect(window->bounds().origin(), new_bounds.size()));
+}
+
+gfx::Size WebContentsViewAura::GetSize() const {
+  aura::Window* window = GetNativeView();
+  return window->bounds().size();
+}
+
 void WebContentsViewAura::CreateAuraWindow(aura::Window* context) {
-  DCHECK(aura::Env::HasInstance());
-  DCHECK(!window_);
+  CHECK(aura::Env::HasInstance(), base::NotFatalUntil::M158);
+  CHECK(!window_, base::NotFatalUntil::M158);
   window_ =
       std::make_unique<aura::Window>(this, aura::client::WINDOW_TYPE_CONTROL);
   window_->set_owned_by_parent(false);
@@ -882,21 +1038,19 @@ void WebContentsViewAura::CreateAuraWindow(aura::Window* context) {
     // explicitly add this WebContentsViewAura to their tree after they create
     // us.
     aura::client::ParentWindowWithContext(window_.get(), root_window,
-                                          root_window->GetBoundsInScreen());
+                                          root_window->GetBoundsInScreen(),
+                                          display::kInvalidDisplayId);
   }
   window_->layer()->SetMasksToBounds(true);
   window_->TrackOcclusionState();
 
-  // WindowObserver is not interesting and is problematic for Browser Plugin
-  // guests.
-  // The use cases for WindowObserver do not apply to Browser Plugins:
-  // 1) guests do not support NPAPI plugins.
-  // 2) guests' window bounds are supposed to come from its embedder.
-  if (!web_contents_->IsGuest())
-    window_observer_ = std::make_unique<WindowObserver>(this);
+  window_observer_ = std::make_unique<WindowObserver>(this);
 }
 
 void WebContentsViewAura::UpdateWebContentsVisibility() {
+  if (web_contents_->IsBeingDestroyed())
+    return;
+
   web_contents_->UpdateWebContentsVisibility(GetVisibility());
 }
 
@@ -907,7 +1061,8 @@ Visibility WebContentsViewAura::GetVisibility() const {
   if (window_->GetOcclusionState() == aura::Window::OcclusionState::OCCLUDED)
     return Visibility::OCCLUDED;
 
-  DCHECK_EQ(window_->GetOcclusionState(), aura::Window::OcclusionState::HIDDEN);
+  CHECK_EQ(window_->GetOcclusionState(), aura::Window::OcclusionState::HIDDEN,
+           base::NotFatalUntil::M158);
   return Visibility::HIDDEN;
 }
 
@@ -932,7 +1087,7 @@ RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForWidget(
     // this actually is happening (and somebody isn't accidentally creating the
     // view twice), we check for the RVH Factory, which will be set when we're
     // making special ones (which go along with the special views).
-    DCHECK(RenderViewHostFactory::has_factory());
+    CHECK(RenderViewHostFactory::has_factory(), base::NotFatalUntil::M158);
     return static_cast<RenderWidgetHostViewBase*>(
         render_widget_host->GetView());
   }
@@ -941,13 +1096,14 @@ RenderWidgetHostViewBase* WebContentsViewAura::CreateViewForWidget(
       g_create_render_widget_host_view
           ? g_create_render_widget_host_view(render_widget_host)
           : new RenderWidgetHostViewAura(render_widget_host);
+  // InitAsChild() can run a nested message loop (e.g. UpdateLegacyWin() and
+  // SetInputScope() on Windows) in which the view is destroyed, e.g. if the
+  // renderer goes away.
+  base::WeakPtr<RenderWidgetHostViewBase> weak_view = view->GetWeakPtr();
   view->InitAsChild(GetRenderWidgetHostViewParent());
-
-  RenderWidgetHostImpl* host_impl =
-      RenderWidgetHostImpl::From(render_widget_host);
-
-  if (!host_impl->is_hidden())
-    view->Show();
+  if (!weak_view) {
+    return nullptr;
+  }
 
   // We listen to drag drop events in the newly created view's window.
   aura::client::SetDragDropDelegate(view->GetNativeView(), this);
@@ -976,7 +1132,10 @@ void WebContentsViewAura::SetPageTitle(const std::u16string& title) {
 void WebContentsViewAura::RenderViewReady() {}
 
 void WebContentsViewAura::RenderViewHostChanged(RenderViewHost* old_host,
-                                                RenderViewHost* new_host) {}
+                                                RenderViewHost* new_host) {
+  WebContentsDelegate* delegate = web_contents_->GetDelegate();
+  SetOverscrollControllerEnabled(!delegate || delegate->CanOverscrollContent());
+}
 
 void WebContentsViewAura::SetOverscrollControllerEnabled(bool enabled) {
   RenderWidgetHostViewAura* view =
@@ -989,32 +1148,121 @@ void WebContentsViewAura::SetOverscrollControllerEnabled(bool enabled) {
     gesture_nav_simple_.reset();
 }
 
+void WebContentsViewAura::OnCapturerCountChanged() {
+  if (web_contents_->IsBeingCaptured()) {
+    if (!video_capture_lock_ && window_->GetHost())
+      video_capture_lock_ = window_->GetHost()->CreateVideoCaptureLock();
+  } else {
+    video_capture_lock_.reset();
+  }
+}
+
+void WebContentsViewAura::FullscreenStateChanged(bool is_fullscreen) {}
+
+BackForwardTransitionAnimationManager*
+WebContentsViewAura::GetBackForwardTransitionAnimationManager() {
+  return nullptr;
+}
+
+void WebContentsViewAura::DestroyBackForwardTransitionAnimationManager() {}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, RenderViewHostDelegateView implementation:
 
-void WebContentsViewAura::ShowContextMenu(RenderFrameHost* render_frame_host,
+void WebContentsViewAura::ShowContextMenu(RenderFrameHost& render_frame_host,
                                           const ContextMenuParams& params) {
   TouchSelectionControllerClientAura* selection_controller_client =
       GetSelectionControllerClient();
-  if (selection_controller_client &&
-      selection_controller_client->HandleContextMenu(params)) {
-    return;
+  if (selection_controller_client) {
+    bool is_touch =
+        params.source_type == ui::mojom::MenuSourceType::kLongPress ||
+        params.source_type == ui::mojom::MenuSourceType::kLongTap ||
+        params.source_type == ui::mojom::MenuSourceType::kTouch;
+
+    // Only query the clipboard asynchronously if we are actually evaluating a
+    // touch quick menu.
+    if (is_touch && params.is_editable && params.selection_text.empty()) {
+      ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
+          ui::EndpointType::kDefault, {.notify_if_restricted = false});
+      ui::Clipboard::GetForCurrentThread()->GetAllAvailableFormats(
+          ui::ClipboardBuffer::kCopyPaste, data_dst,
+          base::BindOnce(
+              [](base::WeakPtr<WebContentsViewAura> weak_this,
+                 const GlobalRenderFrameHostId& rfh_id,
+                 const ContextMenuParams& params,
+                 base::flat_set<ui::ClipboardFormatType> formats) {
+                if (!weak_this) {
+                  return;
+                }
+                bool can_paste =
+                    formats.contains(ui::ClipboardFormatType::PlainTextType());
+                TouchSelectionControllerClientAura*
+                    selection_controller_client =
+                        weak_this->GetSelectionControllerClient();
+
+                if (selection_controller_client &&
+                    selection_controller_client->HandleContextMenu(params,
+                                                                   can_paste)) {
+                  return;
+                }
+                weak_this->OnContextMenuHandled(rfh_id, params,
+                                                /*handled=*/false);
+              },
+              weak_ptr_factory_.GetWeakPtr(), render_frame_host.GetGlobalId(),
+              params));
+      return;
+    }
+
+    // Synchronous fallback for all other context menu requests (e.g. mouse
+    // clicks, keyboard menu button, or touch events on non-empty selections).
+    if (selection_controller_client &&
+        selection_controller_client->HandleContextMenu(params,
+                                                       /*can_paste=*/false)) {
+      return;
+    }
   }
 
   if (delegate_) {
     delegate_->ShowContextMenu(render_frame_host, params);
-    // WARNING: we may have been deleted during the call to ShowContextMenu().
   }
 }
 
+void WebContentsViewAura::OnContextMenuHandled(
+    const GlobalRenderFrameHostId& rfh_id,
+    const ContextMenuParams& params,
+    bool handled) {
+  if (handled) {
+    return;
+  }
+
+  RenderFrameHost* rfh = RenderFrameHost::FromID(rfh_id);
+  if (rfh && delegate_) {
+    delegate_->ShowContextMenu(*rfh, params);
+  }
+}
+
+bool WebContentsViewAura::IsDragAllowedByDataControlPolicy(
+    const ClipboardEndpoint& source,
+    const DropData& drop_data) {
+  return GetContentClient()->browser()->IsDragAllowedByPolicy(source,
+                                                              drop_data);
+}
+
 void WebContentsViewAura::StartDragging(
+    RenderFrameHost& source_rfh,
     const DropData& drop_data,
     blink::DragOperationsMask operations,
     const gfx::ImageSkia& image,
-    const gfx::Vector2d& image_offset,
-    const blink::mojom::DragEventSourceInfo& event_info,
-    RenderWidgetHostImpl* source_rwh) {
+    const gfx::Vector2d& cursor_offset,
+    const gfx::Rect& drag_obj_rect,
+    const blink::mojom::DragEventSourceInfo& event_info) {
   aura::Window* root_window = GetNativeView()->GetRootWindow();
+  RenderWidgetHostImpl* const source_rwh =
+      static_cast<RenderWidgetHostImpl*>(source_rfh.GetRenderWidgetHost());
+  // Disallow reentrant drag which could be an attempt to exploit drag state.
+  if (drag_security_info_.did_initiate()) {
+    return;
+  }
   if (!aura::client::GetDragDropClient(root_window)) {
     web_contents_->SystemDragEnded(source_rwh);
     return;
@@ -1027,38 +1275,92 @@ void WebContentsViewAura::StartDragging(
   // that case.
   base::WeakPtr<RenderWidgetHostImpl> source_rwh_weak_ptr =
       source_rwh->GetWeakPtr();
+  base::WeakPtr<WebContentsViewAura> weak_this = weak_ptr_factory_.GetWeakPtr();
 
-  drag_start_process_id_ = source_rwh->GetProcess()->GetID();
-  drag_start_view_id_ = GetRenderViewHostID(web_contents_->GetRenderViewHost());
+  ClipboardEndpoint source_endpoint = CreateClipboardEndpoint(source_rfh);
+
+  // Synchronous policy check.
+  // If drag is not allowed, it means the policy blocked the action.
+  if (!IsDragAllowedByDataControlPolicy(source_endpoint, drop_data)) {
+    web_contents_->SystemDragEnded(source_rwh);
+    return;
+  }
+
+  drag_security_info_.OnDragInitiated(source_rwh, drop_data);
 
   ui::TouchSelectionController* selection_controller = GetSelectionController();
   if (selection_controller)
     selection_controller->HideAndDisallowShowingAutomatically();
   std::unique_ptr<ui::OSExchangeDataProvider> provider =
       ui::OSExchangeDataProviderFactory::CreateProvider();
-  PrepareDragData(drop_data, provider.get(), web_contents_);
+  PrepareDragData(source_rfh, drop_data, provider.get());
 
-  auto data(std::make_unique<ui::OSExchangeData>(
-      std::move(provider)));  // takes ownership of |provider|.
+  auto data = std::make_unique<ui::OSExchangeData>(std::move(provider));
   data->SetSource(std::make_unique<ui::DataTransferEndpoint>(
-      web_contents_->GetFocusedFrame()->GetLastCommittedOrigin()));
+      web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL(),
+      ui::DataTransferEndpointOptions{
+          .off_the_record = IsOffTheRecordForDragAndDrop(*web_contents_)}));
+  WebContentsDelegate* delegate = web_contents_->GetDelegate();
+  if (delegate && delegate->IsPrivileged())
+    data->MarkAsFromPrivileged();
 
   if (!image.isNull())
-    data->provider().SetDragImage(image, image_offset);
+    data->provider().SetDragImage(image, cursor_offset);
+
+  // TODO(crbug.com/40825138): The param `drag_obj_rect` is unused.
 
   std::unique_ptr<WebDragSourceAura> drag_source(
       new WebDragSourceAura(GetNativeView(), web_contents_));
 
   // We need to enable recursive tasks on the message loop so we can get
   // updates while in the system DoDragDrop loop.
-  DragOperation result_op;
+  DragOperation result_op = DragOperation::kNone;
   {
     gfx::NativeView content_native_view = GetContentNativeView();
-    base::CurrentThread::ScopedNestableTaskAllower allow;
+    // The renderer-supplied `event_info.location` is untrusted. On Windows, a
+    // touch event would reach `::SendInput` via
+    // DesktopWindowTreeHostWin::StartTouchDrag and could redirect the
+    // synthesized click to an overlapping HWND (e.g. a permission bubble).
+    // Require a touch or a left mouse press on the web contents, depending on
+    // the event source, and refuse the drag if the requirement is not met.
+    gfx::Point trusted_location;
+    aura::Env* env = aura::Env::GetInstance();
+    if (event_info.source == ui::mojom::DragEventSource::kTouch) {
+      // A touch elsewhere (e.g. holding the window caption to move the
+      // window), or a touch that already started a drag and whose release was
+      // consumed by the platform drag loop, must not satisfy this check.
+      std::optional<gfx::Point> touch_location =
+          env->ConsumeTouchForDrag(content_native_view);
+      if (!touch_location) {
+        EndDrag(std::move(source_rwh_weak_ptr), result_op);
+        return;
+      }
+      trusted_location = *touch_location;
+    } else {
+      // Likewise, a left button held elsewhere (e.g. on the window caption or
+      // a draggable region of a frameless app window to move the window), or
+      // a press that already started a drag and whose release was consumed by
+      // the platform drag loop or the window manager, must not satisfy this
+      // check.
+      if (event_info.source == ui::mojom::DragEventSource::kMouse &&
+          !env->ConsumeLeftMousePressForDrag(content_native_view)) {
+        EndDrag(std::move(source_rwh_weak_ptr), result_op);
+        return;
+      }
+      trusted_location = env->last_mouse_location();
+    }
+    // Make sure event is within the web contents, and the web contents are
+    // visible.
+    if (!content_native_view->GetBoundsInScreen().Contains(trusted_location) ||
+        !content_native_view->IsVisible()) {
+      EndDrag(std::move(source_rwh_weak_ptr), result_op);
+      return;
+    }
+    base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
     result_op =
         aura::client::GetDragDropClient(root_window)
             ->StartDragAndDrop(std::move(data), root_window,
-                               content_native_view, event_info.location,
+                               content_native_view, trusted_location,
                                ConvertFromDragOperationsMask(operations),
                                event_info.source);
   }
@@ -1073,20 +1375,22 @@ void WebContentsViewAura::StartDragging(
     return;
   }
 
-  // If drag is still in progress that means we haven't received drop targeting
-  // callback yet. So we have to make sure to delay calling EndDrag until drop
-  // is done.
-  if (!drag_in_progress_) {
-    EndDrag(std::move(source_rwh_weak_ptr), result_op);
-  } else {
-    end_drag_runner_.ReplaceClosure(base::BindOnce(
-        &WebContentsViewAura::EndDrag, weak_ptr_factory_.GetWeakPtr(),
-        std::move(source_rwh_weak_ptr), result_op));
-  }
+  // |this| should still be alive at this point.
+  CHECK(weak_this);
+
+  EndDragAfterNativeLoop(std::move(source_rwh_weak_ptr), result_op);
 }
 
-void WebContentsViewAura::UpdateDragCursor(DragOperation operation) {
-  current_drag_op_ = operation;
+void WebContentsViewAura::UpdateDragOperation(
+    DragOperation operation,
+    bool document_is_handling_drag,
+    RenderWidgetHostImpl* source_rwh) {
+  // This asynchronous update may arrive after a drop has already been cancelled
+  // or completed, in which case `current_drag_data_` will have been reset.
+  if (current_drag_data_) {
+    current_drag_data_->operation = operation;
+    current_drag_data_->document_is_handling_drag = document_is_handling_drag;
+  }
 }
 
 void WebContentsViewAura::GotFocus(RenderWidgetHostImpl* render_widget_host) {
@@ -1112,8 +1416,8 @@ gfx::Size WebContentsViewAura::GetMinimumSize() const {
   return gfx::Size();
 }
 
-gfx::Size WebContentsViewAura::GetMaximumSize() const {
-  return gfx::Size();
+std::optional<gfx::Size> WebContentsViewAura::GetMaximumSize() const {
+  return std::nullopt;
 }
 
 void WebContentsViewAura::OnBoundsChanged(const gfx::Rect& old_bounds,
@@ -1136,7 +1440,7 @@ void WebContentsViewAura::OnBoundsChanged(const gfx::Rect& old_bounds,
 }
 
 gfx::NativeCursor WebContentsViewAura::GetCursor(const gfx::Point& point) {
-  return gfx::kNullCursor;
+  return gfx::NativeCursor{};
 }
 
 int WebContentsViewAura::GetNonClientComponent(const gfx::Point& point) const {
@@ -1155,10 +1459,15 @@ bool WebContentsViewAura::CanFocus() {
   // this window can handle key events.
   RenderWidgetHostViewAura* view = ToRenderWidgetHostViewAura(
       web_contents_->GetRenderWidgetHostView());
-  if (view != nullptr && !view->IsClosing())
-    return true;
+  if (view == nullptr || view->IsClosing()) {
+    return false;
+  }
 
-  return false;
+  if (web_contents_->ShouldIgnoreInputEvents()) {
+    return false;
+  }
+
+  return true;
 }
 
 void WebContentsViewAura::OnCaptureLost() {
@@ -1180,7 +1489,8 @@ void WebContentsViewAura::OnWindowTargetVisibilityChanged(bool visible) {
 }
 
 void WebContentsViewAura::OnWindowOcclusionChanged(
-    aura::Window::OcclusionState occlusion_state) {
+    aura::Window::OcclusionState old_occlusion_state,
+    aura::Window::OcclusionState new_occlusion_state) {
   UpdateWebContentsVisibility();
 }
 
@@ -1200,12 +1510,11 @@ void WebContentsViewAura::OnMouseEvent(ui::MouseEvent* event) {
   if (!web_contents_->GetDelegate())
     return;
 
-  ui::EventType type = event->type();
-  if (type == ui::ET_MOUSE_PRESSED) {
+  if (event->type() == ui::EventType::kMousePressed) {
     // Linux window managers like to handle raise-on-click themselves.  If we
     // raise-on-click manually, this may override user settings that prevent
     // focus-stealing.
-#if !defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
     // It is possible for the web-contents to be destroyed while it is being
     // activated. Use a weak-ptr to track whether that happened or not.
     // More in https://crbug.com/1040725
@@ -1216,48 +1525,73 @@ void WebContentsViewAura::OnMouseEvent(ui::MouseEvent* event) {
 #endif
   }
 
-  web_contents_->GetDelegate()->ContentsMouseEvent(
-      web_contents_, type == ui::ET_MOUSE_MOVED, type == ui::ET_MOUSE_EXITED);
+  web_contents_->GetDelegate()->ContentsMouseEvent(web_contents_, *event);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewAura, aura::client::DragDropDelegate implementation:
 
 void WebContentsViewAura::DragEnteredCallback(
-    ui::DropTargetEvent event,
+    uint64_t drag_session_id,
+    DropMetadata drop_metadata,
     std::unique_ptr<DropData> drop_data,
     base::WeakPtr<RenderWidgetHostViewBase> target,
-    absl::optional<gfx::PointF> transformed_pt) {
-  drag_in_progress_ = true;
-  if (!target)
+    std::optional<gfx::PointF> transformed_pt) {
+  if (base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) &&
+      drag_session_id != drag_session_id_) {
     return;
+  }
+  drag_in_progress_ = true;
+  dropped_in_this_web_contents_ = false;
+  if (!target) {
+    return;
+  }
   RenderWidgetHostImpl* target_rwh =
       RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
-  if (!IsValidDragTarget(target_rwh))
+  if (!drag_security_info_.IsValidDragTarget(target_rwh)) {
     return;
+  }
 
   current_rwh_for_drag_ = target_rwh->GetWeakPtr();
   current_rvh_for_drag_ =
       GetRenderViewHostID(web_contents_->GetRenderViewHost());
-  current_drop_data_ = std::move(drop_data);
-  current_rwh_for_drag_->FilterDropData(current_drop_data_.get());
+  current_drag_data_ = std::move(drop_data);
+  current_rwh_for_drag_->FilterDropData(current_drag_data_.get());
 
   blink::DragOperationsMask op_mask =
-      ConvertToDragOperationsMask(event.source_operations());
+      ConvertToDragOperationsMask(drop_metadata.source_operations);
 
-  // Give the delegate an opportunity to cancel the drag.
-  if (web_contents_->GetDelegate() &&
-      !web_contents_->GetDelegate()->CanDragEnter(
-          web_contents_, *current_drop_data_.get(), op_mask)) {
-    current_drop_data_.reset(nullptr);
+  WebContentsDelegate* delegate = web_contents_->GetDelegate();
+
+  auto allow_drag = [&]() {
+    // We only allow drags from privileged WebContents to
+    // another privileged WebContents.
+    // Do not allow dragging privileged WebContents to
+    // non-priviledged WebContents or vice versa.
+    if (current_drag_data_->is_from_privileged !=
+        (delegate && delegate->IsPrivileged())) {
+      return false;
+    }
+
+    // Give the delegate an opportunity to cancel the drag
+    if (delegate && !delegate->CanDragEnter(
+                        web_contents_, *current_drag_data_.get(), op_mask)) {
+      return false;
+    }
+    return true;
+  };
+
+  if (!allow_drag()) {
+    current_drag_data_ = nullptr;
     return;
   }
 
-  DCHECK(transformed_pt.has_value());
-  gfx::PointF screen_pt(display::Screen::GetScreen()->GetCursorScreenPoint());
+  CHECK(transformed_pt.has_value(), base::NotFatalUntil::M158);
+  gfx::PointF screen_pt(display::Screen::Get()->GetCursorScreenPoint());
   current_rwh_for_drag_->DragTargetDragEnter(
-      *current_drop_data_, transformed_pt.value(), screen_pt, op_mask,
-      ui::EventFlagsToWebEventModifiers(event.flags()), base::DoNothing());
+      *current_drag_data_, transformed_pt.value(), screen_pt, op_mask,
+      ui::EventFlagsToWebEventModifiers(drop_metadata.flags),
+      base::DoNothing());
 
   if (drag_dest_delegate_) {
     drag_dest_delegate_->OnDragEnter();
@@ -1265,12 +1599,10 @@ void WebContentsViewAura::DragEnteredCallback(
 }
 
 void WebContentsViewAura::OnDragEntered(const ui::DropTargetEvent& event) {
-  if (web_contents_->ShouldIgnoreInputEvents())
+  ++drag_session_id_;
+  if (web_contents_->ShouldIgnoreInputEvents()) {
     return;
-
-#if defined(OS_WIN)
-  async_drop_navigation_observer_.reset();
-#endif
+  }
 
   std::unique_ptr<DropData> drop_data = std::make_unique<DropData>();
   // Calling this here as event.data might become invalid inside the callback.
@@ -1281,67 +1613,75 @@ void WebContentsViewAura::OnDragEntered(const ui::DropTargetEvent& event) {
     drag_dest_delegate_->OnReceiveDragData(event.data());
   }
 
-  web_contents_->GetInputEventRouter()
-      ->GetRenderWidgetHostAtPointAsynchronously(
-          web_contents_->GetRenderViewHost()->GetWidget()->GetView(),
-          event.location_f(),
-          base::BindOnce(&WebContentsViewAura::DragEnteredCallback,
-                         weak_ptr_factory_.GetWeakPtr(), event,
-                         std::move(drop_data)));
+  DropMetadata drop_metadata(event);
+  web_contents_->GetRenderWidgetHostAtPointAsynchronously(
+      web_contents_->GetRenderViewHost()->GetWidget()->GetView(),
+      event.location_f(),
+      base::BindOnce(&WebContentsViewAura::DragEnteredCallback,
+                     weak_ptr_factory_.GetWeakPtr(), drag_session_id_,
+                     drop_metadata, std::move(drop_data)));
 }
 
 void WebContentsViewAura::DragUpdatedCallback(
-    ui::DropTargetEvent event,
+    uint64_t drag_session_id,
+    DropMetadata drop_metadata,
     std::unique_ptr<DropData> drop_data,
     base::WeakPtr<RenderWidgetHostViewBase> target,
-    absl::optional<gfx::PointF> transformed_pt) {
-  // If drag is not in progress it means drag has already finished and we get
-  // this callback after that already. This happens for example when drag leaves
-  // out window and we get the exit signal while still waiting for this
-  // targeting callback to be called for the previous drag update signal. In
-  // this case we just ignore this operation.
-  if (!drag_in_progress_)
+    std::optional<gfx::PointF> transformed_pt) {
+  if ((base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) &&
+       drag_session_id != drag_session_id_) ||
+      !drag_in_progress_) {
     return;
-  if (!target)
+  }
+  if (!target) {
     return;
+  }
+
+  if (transformed_pt.has_value()) {
+    web_contents_->PreHandleDragUpdate(*drop_data, transformed_pt.value());
+  }
+
   RenderWidgetHostImpl* target_rwh =
       RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
-  if (!IsValidDragTarget(target_rwh))
+  if (!drag_security_info_.IsValidDragTarget(target_rwh)) {
     return;
+  }
 
   aura::Window* root_window = GetNativeView()->GetRootWindow();
   aura::client::ScreenPositionClient* screen_position_client =
       aura::client::GetScreenPositionClient(root_window);
-  gfx::PointF screen_pt = event.root_location_f();
+  gfx::PointF screen_pt = drop_metadata.root_location;
   if (screen_position_client)
     screen_position_client->ConvertPointToScreen(root_window, &screen_pt);
 
   if (target_rwh != current_rwh_for_drag_.get()) {
     if (current_rwh_for_drag_) {
-      gfx::PointF transformed_leave_point = event.location_f();
+      gfx::PointF transformed_leave_point = drop_metadata.localized_location;
       static_cast<RenderWidgetHostViewBase*>(
           web_contents_->GetRenderWidgetHostView())
           ->TransformPointToCoordSpaceForView(
-              event.location_f(),
+              drop_metadata.localized_location,
               static_cast<RenderWidgetHostViewBase*>(
                   current_rwh_for_drag_->GetView()),
               &transformed_leave_point);
       current_rwh_for_drag_->DragTargetDragLeave(transformed_leave_point,
                                                  screen_pt);
     }
-    DragEnteredCallback(event, std::move(drop_data), target, transformed_pt);
+    DragEnteredCallback(drag_session_id, drop_metadata, std::move(drop_data),
+                        target, transformed_pt);
   }
 
-  if (!current_drop_data_) {
+  if (!current_drag_data_) {
     return;
   }
 
-  DCHECK(transformed_pt.has_value());
+  CHECK(transformed_pt.has_value(), base::NotFatalUntil::M158);
   blink::DragOperationsMask op_mask =
-      ConvertToDragOperationsMask(event.source_operations());
+      ConvertToDragOperationsMask(drop_metadata.source_operations);
   target_rwh->DragTargetDragOver(
       transformed_pt.value(), screen_pt, op_mask,
-      ui::EventFlagsToWebEventModifiers(event.flags()), base::DoNothing());
+      ui::EventFlagsToWebEventModifiers(drop_metadata.flags),
+      base::DoNothing());
 
   if (drag_dest_delegate_)
     drag_dest_delegate_->OnDragOver();
@@ -1349,76 +1689,161 @@ void WebContentsViewAura::DragUpdatedCallback(
 
 aura::client::DragUpdateInfo WebContentsViewAura::OnDragUpdated(
     const ui::DropTargetEvent& event) {
-  if (web_contents_->ShouldIgnoreInputEvents())
+  if (web_contents_->ShouldIgnoreInputEvents()) {
     return aura::client::DragUpdateInfo();
-
+  }
   aura::client::DragUpdateInfo drag_info;
   auto* focused_frame = web_contents_->GetFocusedFrame();
-  if (focused_frame) {
+  if (focused_frame && !IsOffTheRecordForDragAndDrop(*web_contents_) &&
+      web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL().is_valid()) {
     drag_info.data_endpoint = ui::DataTransferEndpoint(
-        web_contents_->GetFocusedFrame()->GetLastCommittedOrigin());
+        web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL(),
+        {.off_the_record = IsOffTheRecordForDragAndDrop(*web_contents_)});
   }
 
   std::unique_ptr<DropData> drop_data = std::make_unique<DropData>();
   // Calling this here as event.data might become invalid inside the callback.
   PrepareDropData(drop_data.get(), event.data());
+  DropMetadata drop_metadata(event);
+  web_contents_->GetRenderWidgetHostAtPointAsynchronously(
+      web_contents_->GetRenderViewHost()->GetWidget()->GetView(),
+      event.location_f(),
+      base::BindOnce(&WebContentsViewAura::DragUpdatedCallback,
+                     weak_ptr_factory_.GetWeakPtr(), drag_session_id_,
+                     drop_metadata, std::move(drop_data)));
 
-  web_contents_->GetInputEventRouter()
-      ->GetRenderWidgetHostAtPointAsynchronously(
-          web_contents_->GetRenderViewHost()->GetWidget()->GetView(),
-          event.location_f(),
-          base::BindOnce(&WebContentsViewAura::DragUpdatedCallback,
-                         weak_ptr_factory_.GetWeakPtr(), event,
-                         std::move(drop_data)));
-
-  drag_info.drag_operation = static_cast<int>(current_drag_op_);
+  drag_info.drag_operation =
+      static_cast<int>(current_drag_data_ ? current_drag_data_->operation
+                                          : ui::mojom::DragOperation::kNone);
   return drag_info;
 }
 
 void WebContentsViewAura::OnDragExited() {
-  if (web_contents_->ShouldIgnoreInputEvents())
+  if (web_contents_->ShouldIgnoreInputEvents()) {
+    // Don't compute the results of exiting, but clean up the flag to avoid
+    // hanging the renderer process. See crbug.com/434130454.
+    ++drag_session_id_;
+    drag_in_progress_ = false;
     return;
+  }
   CompleteDragExit();
 }
 
 void WebContentsViewAura::CompleteDragExit() {
+  ++drag_session_id_;
   drag_in_progress_ = false;
 
-  if (current_rvh_for_drag_ !=
-      GetRenderViewHostID(web_contents_->GetRenderViewHost()) ||
-      !current_drop_data_) {
-    return;
+  web_contents_->PreHandleDragExit();
+
+  if (current_rwh_for_drag_ && !web_contents_->IsBeingDestroyed() &&
+      current_rvh_for_drag_ ==
+          GetRenderViewHostID(web_contents_->GetRenderViewHost())) {
+    current_rwh_for_drag_->DragTargetDragLeave(gfx::PointF(), gfx::PointF());
   }
 
   if (current_rwh_for_drag_) {
-    current_rwh_for_drag_->DragTargetDragLeave(gfx::PointF(), gfx::PointF());
     current_rwh_for_drag_.reset();
   }
 
-  if (drag_dest_delegate_)
+  if (drag_dest_delegate_) {
     drag_dest_delegate_->OnDragLeave();
+  }
 
-  current_drop_data_.reset();
+  current_drag_data_.reset();
 }
 
+void WebContentsViewAura::OnDropExit(uint64_t drag_session_id) {
+  if (base::FeatureList::IsEnabled(features::kAuraDragDropSessionId)) {
+    if (drag_session_id == drag_session_id_) {
+      ++drag_session_id_;
+      drag_in_progress_ = false;
+    }
+    if (end_drag_runner_session_id_ == drag_session_id) {
+      end_drag_runner_session_id_.reset();
+      auto end_drag_runner = std::move(end_drag_runner_);
+    }
+    return;
+  }
+  drag_in_progress_ = false;
+  auto end_drag_runner = std::move(end_drag_runner_);
+}
+
+// PerformDropCallback() is called once the user releases the mouse button
+// over this window.  This function completes the drop if possible.  A drop
+// may not be possible for example if the RWH has changed since the user's drag
+// entered this view.
+//
+// Performing the drop is an asynchronous operation that involves the RWH and
+// the web contents delegate.  A drop is not considered done by this view until
+// all the asynchronous operations complete.
+//
+// Assuming that a drop is allowed, an instance of OnPerformingDropContext is
+// created to keep track of the drop state during the various async operations.
+// This context is saved in the `drop_context` argument passed around to the
+// various methods. The data being dropped, stored in `current_drag_data_`, is
+// moved into the context.
+//
+// On the Windows platform, if the drop includes virtuals files (for example,
+// dropping an email attachment dragged out of the native Outlook application)
+// these are first converted into temp real files using the async function
+// GetVirtualFilesAsTempFiles().  The callback OnGotVirtualFilesAsTempFiles()
+// uses AsyncDropTempFileDeleter to make sure the temp files are deleted once
+// the drop completes.  Other platform don't have handling of virtual files.
+//
+// Next, the delegate is given a chance to handle the dropped data in an async
+// manner.  The delegate may perform additional checks on the dropped data,
+// may filter that data according to specific criteria, and may even block the
+// drop altogether.  For example, some enterprise policies may block
+// sensitive data from being dropped on unsanctioned web pages.  This step is
+// kicked off by calling MaybeLetDelegateProcessDrop() and the async response is
+// handled by GotModifiedDropDataFromDelegate().  In tests it's possible that
+// no delegate exists, in which case CompleteDrop() is called
+// directly.
+//
+// GotModifiedDropDataFromDelegate() is called only when a delegate exists and
+// processes the result of the delegate's handling of the dropped data.
+// Assuming the delegate allows the drop, the dropped data in `drop_context`
+// is updated and CompleteDrop() is called.
+//
+// CompleteDrop() calls CompleteDrop() to send the dropped data to
+// the RWH.  At this point the drop is considered completed from this view's
+// point of view.
+//
+// Note that many of the methods above are callback to async operations,
+// like this method itself, OnGotVirtualFilesAsTempFiles(),
+// GotModifiedDropDataFromDelegate().  Therefore these methods begin with
+// similar checks to make sure the drop is still allowed. For example, checks
+// to make sure the target RWH has not changed.  See
+// drag_security_info_.IsValidDragTarget() for details.
 void WebContentsViewAura::PerformDropCallback(
-    ui::DropTargetEvent event,
+    DropMetadata drop_metadata,
+    uint64_t drag_session_id,
     std::unique_ptr<ui::OSExchangeData> data,
     base::WeakPtr<RenderWidgetHostViewBase> target,
-    absl::optional<gfx::PointF> transformed_pt) {
-  drag_in_progress_ = false;
-  base::ScopedClosureRunner end_drag_runner(std::move(end_drag_runner_));
+    std::optional<gfx::PointF> transformed_pt) {
+  // Exit callback to make sure |drag_in_progress_| is flipped on exit and
+  // |end_drag_runner_| is run after OnGotVirtualFilesAsTempFiles finishes.
+  base::ScopedClosureRunner drop_exit_cleanup(
+      base::BindOnce(&WebContentsViewAura::OnDropExit,
+                     weak_ptr_factory_.GetWeakPtr(), drag_session_id));
 
-  if (!target)
+  if (base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) &&
+      drag_session_id != drag_session_id_) {
     return;
+  }
+
+  if (!target) {
+    return;
+  }
   RenderWidgetHostImpl* target_rwh =
       RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
-  if (!IsValidDragTarget(target_rwh))
+  if (!drag_security_info_.IsValidDragTarget(target_rwh)) {
     return;
+  }
 
-  DCHECK(transformed_pt.has_value());
+  CHECK(transformed_pt.has_value(), base::NotFatalUntil::M158);
 
-  gfx::PointF screen_pt(display::Screen::GetScreen()->GetCursorScreenPoint());
+  gfx::PointF screen_pt(display::Screen::Get()->GetCursorScreenPoint());
   if (target_rwh != current_rwh_for_drag_.get()) {
     if (current_rwh_for_drag_)
       current_rwh_for_drag_->DragTargetDragLeave(transformed_pt.value(),
@@ -1426,127 +1851,178 @@ void WebContentsViewAura::PerformDropCallback(
 
     std::unique_ptr<DropData> drop_data = std::make_unique<DropData>();
     PrepareDropData(drop_data.get(), *data.get());
-    DragEnteredCallback(event, std::move(drop_data), target, transformed_pt);
+    DragEnteredCallback(drag_session_id, drop_metadata, std::move(drop_data),
+                        target, transformed_pt);
   }
 
-  if (!current_drop_data_)
-    return;
-
-  OnPerformDropContext context(target_rwh, event, std::move(data),
-                               std::move(end_drag_runner), transformed_pt,
-                               screen_pt);
-  // |delegate_| may be null in unit tests.
-  if (delegate_) {
-    delegate_->OnPerformDrop(
-        *current_drop_data_,
-        base::BindOnce(&WebContentsViewAura::FinishOnPerformDropCallback,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(context)));
-  } else {
-    FinishOnPerformDropCallback(
-        std::move(context),
-        WebContentsViewDelegate::DropCompletionResult::kContinue);
-  }
-}
-
-void WebContentsViewAura::FinishOnPerformDropCallback(
-    OnPerformDropContext context,
-    WebContentsViewDelegate::DropCompletionResult result) {
-  const int key_modifiers =
-      ui::EventFlagsToWebEventModifiers(context.event.flags());
-  // This is possibly an async callback.  Make sure the RWH is still valid.
-  if (!context.target_rwh || !IsValidDragTarget(context.target_rwh.get()))
-    return;
-
-  if (result != WebContentsViewDelegate::DropCompletionResult::kContinue) {
-    if (!drop_callback_for_testing_.is_null()) {
-      std::move(drop_callback_for_testing_)
-          .Run(context.target_rwh.get(), *current_drop_data_,
-               context.transformed_pt.value(), context.screen_pt, key_modifiers,
-               /*drop_allowed=*/false);
-    }
-
-    // The drop not being continued requires this to cleanup the drag data.
-    CompleteDragExit();
-
+  // `current_drag_data_` is set in DragEnteredCallback() when the user begins
+  // to drag over this view and the drag is allowed.  It's possible after the
+  // call to DragEnteredCallback() above that this member becomes null
+  // indicating that the drop should not happen.
+  if (!current_drag_data_) {
     return;
   }
 
-#if defined(OS_WIN)
-  if (ShouldIncludeVirtualFiles(*current_drop_data_) &&
-      context.data->HasVirtualFilenames()) {
+  OnPerformingDropContext drop_context(
+      target_rwh, std::move(current_drag_data_), drop_metadata, drag_session_id,
+      std::move(data), std::move(drop_exit_cleanup), transformed_pt, screen_pt);
+
+#if BUILDFLAG(IS_WIN)
+  if (ShouldIncludeVirtualFiles(*drop_context.drop_data) &&
+      drop_context.data->HasVirtualFilenames()) {
     // Asynchronously retrieve the actual content of any virtual files now (this
     // step is not needed for "real" files already on the file system, e.g.
     // those dropped on Chromium from the desktop). When all content has been
     // written to temporary files, the OnGotVirtualFilesAsTempFiles
     // callback will be invoked and the drop communicated to the renderer
     // process.
-    auto callback =
-        base::BindOnce(&WebContentsViewAura::OnGotVirtualFilesAsTempFiles,
-                       weak_ptr_factory_.GetWeakPtr());
-
-    // GetVirtualFilesAsTempFiles will immediately return false if there are no
-    // virtual files to retrieve (all items are folders e.g.) and no callback
-    // will be received.
-    if (context.data->GetVirtualFilesAsTempFiles(std::move(callback))) {
-      // Cache the parameters as they were at the time of the drop. This is
-      // needed for checking that the drop target is still valid when the async
-      // operation completes.
-      async_drop_navigation_observer_ =
-          std::make_unique<AsyncDropNavigationObserver>(
-              web_contents_, std::move(current_drop_data_),
-              std::move(context.end_drag_runner), context.target_rwh.get(),
-              context.transformed_pt.value(), context.screen_pt, key_modifiers);
-      return;
-    }
+    drop_context.navigation_observer =
+        std::make_unique<AsyncDropNavigationObserver>(web_contents_);
+    ui::OSExchangeData* data_ptr = drop_context.data.get();
+    data_ptr->GetVirtualFilesAsTempFiles(base::BindOnce(
+        &WebContentsViewAura::OnGotVirtualFilesAsTempFiles,
+        weak_ptr_factory_.GetWeakPtr(), std::move(drop_context)));
+    return;
   }
-
 #endif
-  CompleteDrop(context.target_rwh.get(), *current_drop_data_,
-               context.transformed_pt.value(), context.screen_pt,
-               key_modifiers);
-  current_drop_data_.reset();
+
+  MaybeLetDelegateProcessDrop(std::move(drop_context));
 }
 
-DragOperation WebContentsViewAura::OnPerformDrop(
-    const ui::DropTargetEvent& event,
-    std::unique_ptr<ui::OSExchangeData> data) {
-  if (web_contents_->ShouldIgnoreInputEvents())
-    return DragOperation::kNone;
+void WebContentsViewAura::MaybeLetDelegateProcessDrop(
+    OnPerformingDropContext drop_context) {
+  // |delegate_| may be null in unit tests.
+  // TODO(crbug.com/40274271): Tests should use a delegate.
+  if (delegate_) {
+    auto* drop_data_ptr = drop_context.drop_data.get();
+    delegate_->OnPerformingDrop(
+        *drop_data_ptr,
+        base::BindOnce(&WebContentsViewAura::GotModifiedDropDataFromDelegate,
+                       weak_ptr_factory_.GetWeakPtr(),
+                       std::move(drop_context)));
+  } else {
+    CompleteDrop(std::move(drop_context));
+  }
+}
 
-  web_contents_->GetInputEventRouter()
-      ->GetRenderWidgetHostAtPointAsynchronously(
-          web_contents_->GetRenderViewHost()->GetWidget()->GetView(),
-          event.location_f(),
-          base::BindOnce(&WebContentsViewAura::PerformDropCallback,
-                         weak_ptr_factory_.GetWeakPtr(), event,
-                         std::move(data)));
-  return current_drag_op_;
+void WebContentsViewAura::GotModifiedDropDataFromDelegate(
+    OnPerformingDropContext drop_context,
+    std::optional<DropData> drop_data) {
+  // This is possibly an async callback.  Make sure the RWH is still valid.
+  if (!drop_context.target_rwh ||
+      !drag_security_info_.IsValidDragTarget(drop_context.target_rwh.get())) {
+    return;
+  }
+
+  if (!drop_data.has_value()) {
+    if (!drop_callback_for_testing_.is_null()) {
+      const int key_modifiers =
+          ui::EventFlagsToWebEventModifiers(drop_context.drop_metadata.flags);
+      std::move(drop_callback_for_testing_)
+          .Run(drop_context.target_rwh.get(), *drop_context.drop_data,
+               drop_context.transformed_pt.value(), drop_context.screen_pt,
+               key_modifiers,
+               /*drop_allowed=*/false);
+    }
+
+    // The drop not being continued requires this to cleanup the drag data.
+    if (!base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) ||
+        drop_context.drag_session_id == drag_session_id_) {
+      CompleteDragExit();
+    }
+
+    return;
+  }
+
+  *drop_context.drop_data = std::move(drop_data.value());
+  CompleteDrop(std::move(drop_context));
 }
 
 aura::client::DragDropDelegate::DropCallback
 WebContentsViewAura::GetDropCallback(const ui::DropTargetEvent& event) {
-  // TODO(crbug.com/1197522): Return drop callback.
-  NOTIMPLEMENTED();
-  return base::NullCallback();
+  if (web_contents_->ShouldIgnoreInputEvents())
+    return base::DoNothing();
+  const uint64_t drag_session_id = drag_session_id_;
+  base::ScopedClosureRunner drop_cancel_cleanup(
+      base::BindOnce(&WebContentsViewAura::OnDropCancelled,
+                     weak_ptr_factory_.GetWeakPtr(), drag_session_id));
+  DropMetadata drop_metadata(event);
+  return base::BindOnce(&WebContentsViewAura::PerformDropOrExitDrag,
+                        weak_ptr_factory_.GetWeakPtr(),
+                        std::move(drop_cancel_cleanup), drop_metadata,
+                        drag_session_id);
 }
 
-void WebContentsViewAura::CompleteDrop(RenderWidgetHostImpl* target_rwh,
-                                       const DropData& drop_data,
-                                       const gfx::PointF& client_pt,
-                                       const gfx::PointF& screen_pt,
-                                       int key_modifiers) {
+void WebContentsViewAura::CompleteDrop(OnPerformingDropContext drop_context) {
   web_contents_->Focus();
 
-  target_rwh->DragTargetDrop(drop_data, client_pt, screen_pt, key_modifiers,
-                             base::DoNothing());
-  if (drag_dest_delegate_)
+  dropped_in_this_web_contents_ = true;
+  // Drops that originated in a renderer process will be reported by the
+  // drag initiator.
+  if (!drop_context.drop_data->did_originate_from_renderer) {
+    base::UmaHistogramEnumeration("Event.DragDrop.Surface",
+                                  DragAndDropSurface::kDragSystemDropBrowser);
+  }
+
+  const int key_modifiers =
+      ui::EventFlagsToWebEventModifiers(drop_context.drop_metadata.flags);
+  drop_context.target_rwh.get()->DragTargetDrop(
+      *drop_context.drop_data, drop_context.transformed_pt.value(),
+      drop_context.screen_pt, key_modifiers, base::DoNothing());
+  if (drag_dest_delegate_ &&
+      (!base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) ||
+       drop_context.drag_session_id == drag_session_id_)) {
     drag_dest_delegate_->OnDrop();
+  }
 
   if (!drop_callback_for_testing_.is_null()) {
     std::move(drop_callback_for_testing_)
-        .Run(target_rwh, drop_data, client_pt, screen_pt, key_modifiers,
+        .Run(drop_context.target_rwh.get(), *drop_context.drop_data,
+             drop_context.transformed_pt.value(), drop_context.screen_pt,
+             key_modifiers,
              /*drop_allowed=*/true);
   }
+}
+
+void WebContentsViewAura::PerformDropOrExitDrag(
+    base::ScopedClosureRunner drop_cancel_cleanup,
+    DropMetadata drop_metadata,
+    uint64_t drag_session_id,
+    std::unique_ptr<ui::OSExchangeData> data,
+    ui::mojom::DragOperation& output_drag_op,
+    std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+  if (base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) &&
+      drag_session_id != drag_session_id_) {
+    output_drag_op = ui::mojom::DragOperation::kNone;
+    return;
+  }
+
+  // Set output_drag_op before calling on `web_contents_` below because it
+  // is possible for the drop to end and the member `current_drag_data_` to be
+  // reset.
+  output_drag_op = current_drag_data_ ? current_drag_data_->operation
+                                      : ui::mojom::DragOperation::kNone;
+
+  web_contents_->GetRenderWidgetHostAtPointAsynchronously(
+      web_contents_->GetRenderViewHost()->GetWidget()->GetView(),
+      drop_metadata.localized_location,
+      base::BindOnce(&WebContentsViewAura::PerformDropCallback,
+                     weak_ptr_factory_.GetWeakPtr(), drop_metadata,
+                     drag_session_id, std::move(data)));
+  drop_cancel_cleanup.ReplaceClosure(base::DoNothing());
+}
+
+void WebContentsViewAura::OnDropCancelled(uint64_t drag_session_id) {
+  base::ScopedClosureRunner drop_exit_cleanup;
+  if (base::FeatureList::IsEnabled(features::kAuraDragDropSessionId)) {
+    drop_exit_cleanup.ReplaceClosure(
+        base::BindOnce(&WebContentsViewAura::OnDropExit,
+                       weak_ptr_factory_.GetWeakPtr(), drag_session_id));
+    if (drag_session_id != drag_session_id_) {
+      return;
+    }
+  }
+  CompleteDragExit();
 }
 
 void WebContentsViewAura::RegisterDropCallbackForTesting(
@@ -1554,62 +2030,69 @@ void WebContentsViewAura::RegisterDropCallbackForTesting(
   drop_callback_for_testing_ = std::move(callback);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void WebContentsViewAura::OnGotVirtualFilesAsTempFiles(
+    OnPerformingDropContext drop_context,
     const std::vector<std::pair<base::FilePath, base::FilePath>>&
         filepaths_and_names) {
-  DCHECK(!filepaths_and_names.empty());
-
-  if (!async_drop_navigation_observer_)
+  if (!drop_context.navigation_observer) {
     return;
+  }
 
-  std::unique_ptr<AsyncDropNavigationObserver> drop_observer(
-      std::move(async_drop_navigation_observer_));
+  if (!filepaths_and_names.empty()) {
+    std::unique_ptr<AsyncDropNavigationObserver> drop_observer(
+        std::move(drop_context.navigation_observer));
 
-  RenderWidgetHostImpl* target_rwh = drop_observer->target_rwh();
-  DropData* drop_data = drop_observer->drop_data();
+    RenderWidgetHostImpl* target_rwh = drop_context.target_rwh.get();
 
-  // Security check--don't allow the drop if a navigation occurred since the
-  // drop was initiated or the render widget host has changed or it is not a
-  // valid target.
-  if (!drop_observer->drop_allowed() ||
-      !(target_rwh && target_rwh == current_rwh_for_drag_.get() &&
-        IsValidDragTarget(target_rwh))) {
-    // Signal test code that the drop is disallowed
-    if (!drop_callback_for_testing_.is_null()) {
-      std::move(drop_callback_for_testing_)
-          .Run(target_rwh, *drop_data, drop_observer->client_pt(),
-               drop_observer->screen_pt(), drop_observer->key_modifiers(),
-               drop_observer->drop_allowed());
+    // Security check--don't allow the drop if a navigation occurred since the
+    // drop was initiated or the render widget host has changed or it is not a
+    // valid target.
+    const bool is_current_session =
+        !base::FeatureList::IsEnabled(features::kAuraDragDropSessionId) ||
+        drop_context.drag_session_id == drag_session_id_;
+    if (!drop_observer->drop_allowed() || !target_rwh ||
+        !drag_security_info_.IsValidDragTarget(target_rwh) ||
+        (is_current_session && target_rwh != current_rwh_for_drag_.get())) {
+      // Signal test code that the drop is disallowed.
+      if (!drop_callback_for_testing_.is_null()) {
+        std::move(drop_callback_for_testing_)
+            .Run(target_rwh, *drop_context.drop_data,
+                 drop_context.transformed_pt.value(), drop_context.screen_pt,
+                 drop_context.drop_metadata.flags,
+                 drop_observer->drop_allowed());
+      }
+
+      if (is_current_session) {
+        CompleteDragExit();
+      }
+      return;
     }
 
-    return;
+    // The vector of filenames will still have items added during dragenter
+    // (script is allowed to enumerate the files in the data store but not
+    // retrieve the file contents in dragenter). But the temp file path in the
+    // FileInfo structs will just be a placeholder. Clear out the vector before
+    // replacing it with FileInfo structs that have the paths to the retrieved
+    // file contents.
+    drop_context.drop_data->filenames.clear();
+
+    // Ensure we have temp file deleter.
+    if (!async_drop_temp_file_deleter_) {
+      async_drop_temp_file_deleter_ =
+          std::make_unique<AsyncDropTempFileDeleter>();
+    }
+
+    for (const auto& filepath_and_name : filepaths_and_names) {
+      drop_context.drop_data->filenames.push_back(
+          ui::FileInfo(filepath_and_name.first, filepath_and_name.second));
+
+      // Make sure the temp file eventually gets cleaned up.
+      async_drop_temp_file_deleter_->RegisterFile(filepath_and_name.first);
+    }
   }
 
-  // The vector of filenames will still have items added during dragenter
-  // (script is allowed to enumerate the files in the data store but not
-  // retrieve the file contents in dragenter). But the temp file path in the
-  // FileInfo structs will just be a placeholder. Clear out the vector before
-  // replacing it with FileInfo structs that have the paths to the retrieved
-  // file contents.
-  drop_data->filenames.clear();
-
-  // Ensure we have temp file deleter.
-  if (!async_drop_temp_file_deleter_) {
-    async_drop_temp_file_deleter_ =
-        std::make_unique<AsyncDropTempFileDeleter>();
-  }
-
-  for (const auto& filepath_and_name : filepaths_and_names) {
-    drop_data->filenames.push_back(
-        ui::FileInfo(filepath_and_name.first, filepath_and_name.second));
-
-    // Make sure the temp file eventually gets cleaned up.
-    async_drop_temp_file_deleter_->RegisterFile(filepath_and_name.first);
-  }
-
-  CompleteDrop(target_rwh, *drop_data, drop_observer->client_pt(),
-               drop_observer->screen_pt(), drop_observer->key_modifiers());
+  MaybeLetDelegateProcessDrop(std::move(drop_context));
 }
 #endif
 
@@ -1639,7 +2122,6 @@ void WebContentsViewAura::ShowPopupMenu(
     RenderFrameHost* render_frame_host,
     mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
     const gfx::Rect& bounds,
-    int item_height,
     double item_font_size,
     int selected_item,
     std::vector<blink::mojom::MenuItemPtr> menu_items,

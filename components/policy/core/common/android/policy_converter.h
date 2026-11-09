@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <jni.h>
 
-#include <memory>
+#include <optional>
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
+#include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/policy_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -23,8 +24,8 @@ class Value;
 
 namespace policy {
 
-class PolicyBundle;
 class Schema;
+class SchemaRegistry;
 
 namespace android {
 
@@ -32,32 +33,31 @@ namespace android {
 // java classes, allows transforming Android |Bundle|s into |PolicyBundle|s.
 class POLICY_EXPORT PolicyConverter {
  public:
-  explicit PolicyConverter(const Schema* policy_schema);
+  explicit PolicyConverter(const SchemaRegistry* schema_registry);
+  PolicyConverter(const PolicyConverter&) = delete;
+  PolicyConverter& operator=(const PolicyConverter&) = delete;
   ~PolicyConverter();
 
   // Returns a policy bundle containing all policies collected since the last
   // call to this method.
-  std::unique_ptr<PolicyBundle> GetPolicyBundle();
+  PolicyBundle GetPolicyBundle();
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
   // To be called from Java:
   void SetPolicyBoolean(JNIEnv* env,
-                        const base::android::JavaRef<jobject>& obj,
                         const base::android::JavaRef<jstring>& policyKey,
-                        jboolean value);
+                        bool value);
   void SetPolicyInteger(JNIEnv* env,
-                        const base::android::JavaRef<jobject>& obj,
                         const base::android::JavaRef<jstring>& policyKey,
-                        jint value);
+                        int32_t value);
   void SetPolicyString(JNIEnv* env,
-                       const base::android::JavaRef<jobject>& obj,
                        const base::android::JavaRef<jstring>& policyKey,
                        const base::android::JavaRef<jstring>& value);
-  void SetPolicyStringArray(JNIEnv* env,
-                            const base::android::JavaRef<jobject>& obj,
-                            const base::android::JavaRef<jstring>& policyKey,
-                            const base::android::JavaRef<jobjectArray>& value);
+  void SetPolicyStringArray(
+      JNIEnv* env,
+      const base::android::JavaRef<jstring>& policyKey,
+      const base::android::JavaRef<JArray<jstring>>& value);
 
   // Converts the passed in value to the type desired by the schema. If the
   // value is not convertible, it is returned unchanged, so the policy system
@@ -66,24 +66,25 @@ class POLICY_EXPORT PolicyConverter {
   // additional restrictions, or the schema for value's items or properties in
   // the case of a list or dictionary value.
   // Public for testing.
-  static absl::optional<base::Value> ConvertValueToSchema(base::Value value,
-                                                          const Schema& schema);
+  static std::optional<base::Value> ConvertValueToSchema(base::Value value,
+                                                         const Schema& schema);
 
   // Public for testing.
-  static base::Value ConvertJavaStringArrayToListValue(
+  static base::ListValue ConvertJavaStringArrayToListValue(
       JNIEnv* env,
-      const base::android::JavaRef<jobjectArray>& array);
+      const base::android::JavaRef<JArray<jstring>>& array);
+
+  // Exposes `SetPolicyValue` for testing purposes.
+  void SetPolicyValueForTesting(const std::string& key, base::Value raw_value);
 
  private:
-  const Schema* const policy_schema_;
+  const raw_ptr<const SchemaRegistry> schema_registry_;
 
-  std::unique_ptr<PolicyBundle> policy_bundle_;
+  PolicyBundle policy_bundle_;
 
   base::android::ScopedJavaGlobalRef<jobject> java_obj_;
 
   void SetPolicyValue(const std::string& key, base::Value raw_value);
-
-  DISALLOW_COPY_AND_ASSIGN(PolicyConverter);
 };
 
 }  // namespace android

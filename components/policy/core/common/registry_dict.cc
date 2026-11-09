@@ -1,27 +1,32 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/registry_dict.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_byteorder.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/policy/core/common/schema.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/registry.h"
+#include "base/win/win_util.h"
 
 using base::win::RegistryKeyIterator;
 using base::win::RegistryValueIterator;
-#endif  // #if defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace policy {
 
@@ -35,32 +40,35 @@ bool IsKeyNumerical(const std::string& key) {
 
 }  // namespace
 
-absl::optional<base::Value> ConvertRegistryValue(const base::Value& value,
-                                                 const Schema& schema) {
-  if (!schema.valid())
+std::optional<base::Value> ConvertRegistryValue(const base::Value& value,
+                                                const Schema& schema) {
+  if (!schema.valid()) {
     return value.Clone();
+  }
 
   // If the type is good already, go with it.
   if (value.type() == schema.type()) {
     // Recurse for complex types.
     if (value.is_dict()) {
-      base::Value result(base::Value::Type::DICTIONARY);
-      for (auto entry : value.DictItems()) {
-        absl::optional<base::Value> converted =
+      base::DictValue result;
+      for (auto entry : value.GetDict()) {
+        std::optional<base::Value> converted =
             ConvertRegistryValue(entry.second, schema.GetProperty(entry.first));
-        if (converted.has_value())
-          result.SetKey(entry.first, std::move(converted.value()));
+        if (converted.has_value()) {
+          result.Set(entry.first, std::move(converted.value()));
+        }
       }
-      return result;
+      return base::Value(std::move(result));
     } else if (value.is_list()) {
-      base::Value result(base::Value::Type::LIST);
+      base::ListValue result;
       for (const auto& entry : value.GetList()) {
-        absl::optional<base::Value> converted =
+        std::optional<base::Value> converted =
             ConvertRegistryValue(entry, schema.GetItems());
-        if (converted.has_value())
+        if (converted.has_value()) {
           result.Append(std::move(converted.value()));
+        }
       }
-      return result;
+      return base::Value(std::move(result));
     }
     return value.Clone();
   }
@@ -104,28 +112,31 @@ absl::optional<base::Value> ConvertRegistryValue(const base::Value& value,
       // Lists are encoded as subkeys with numbered value in the registry
       // (non-numerical keys are ignored).
       if (value.is_dict()) {
-        base::Value result(base::Value::Type::LIST);
-        for (auto it : value.DictItems()) {
-          if (!IsKeyNumerical(it.first))
+        base::ListValue result;
+        for (auto it : value.GetDict()) {
+          if (!IsKeyNumerical(it.first)) {
             continue;
-          absl::optional<base::Value> converted =
+          }
+          std::optional<base::Value> converted =
               ConvertRegistryValue(it.second, schema.GetItems());
-          if (converted.has_value())
+          if (converted.has_value()) {
             result.Append(std::move(converted.value()));
+          }
         }
-        return result;
+        return base::Value(std::move(result));
       }
       // Fall through in order to accept lists encoded as JSON strings.
-      FALLTHROUGH;
+      [[fallthrough]];
     }
-    case base::Value::Type::DICTIONARY: {
+    case base::Value::Type::DICT: {
       // Dictionaries may be encoded as JSON strings.
       if (value.is_string()) {
-        absl::optional<base::Value> result = base::JSONReader::Read(
+        std::optional<base::Value> result = base::JSONReader::Read(
             value.GetString(),
             base::JSONParserOptions::JSON_ALLOW_TRAILING_COMMAS);
-        if (result.has_value() && result.value().type() == schema.type())
+        if (result.has_value() && result.value().type() == schema.type()) {
           return std::move(result.value());
+        }
       }
       break;
     }
@@ -137,7 +148,7 @@ absl::optional<base::Value> ConvertRegistryValue(const base::Value& value,
 
   LOG(WARNING) << "Failed to convert " << value.type() << " to "
                << schema.type();
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool CaseInsensitiveStringCompare::operator()(const std::string& a,
@@ -145,7 +156,7 @@ bool CaseInsensitiveStringCompare::operator()(const std::string& a,
   return base::CompareCaseInsensitiveASCII(a, b) < 0;
 }
 
-RegistryDict::RegistryDict() {}
+RegistryDict::RegistryDict() = default;
 
 RegistryDict::~RegistryDict() {
   ClearKeys();
@@ -188,27 +199,20 @@ void RegistryDict::ClearKeys() {
 
 base::Value* RegistryDict::GetValue(const std::string& name) {
   auto entry = values_.find(name);
-  return entry != values_.end() ? entry->second.get() : nullptr;
+  return entry != values_.end() ? &entry->second : nullptr;
 }
 
 const base::Value* RegistryDict::GetValue(const std::string& name) const {
   auto entry = values_.find(name);
-  return entry != values_.end() ? entry->second.get() : nullptr;
+  return entry != values_.end() ? &entry->second : nullptr;
 }
 
-void RegistryDict::SetValue(const std::string& name,
-                            std::unique_ptr<base::Value> dict) {
-  if (!dict) {
-    RemoveValue(name);
-    return;
-  }
-
+void RegistryDict::SetValue(const std::string& name, base::Value&& dict) {
   values_[name] = std::move(dict);
 }
 
-std::unique_ptr<base::Value> RegistryDict::RemoveValue(
-    const std::string& name) {
-  std::unique_ptr<base::Value> result;
+std::optional<base::Value> RegistryDict::RemoveValue(const std::string& name) {
+  std::optional<base::Value> result;
   auto entry = values_.find(name);
   if (entry != values_.end()) {
     result = std::move(entry->second);
@@ -231,8 +235,7 @@ void RegistryDict::Merge(const RegistryDict& other) {
 
   for (auto entry(other.values_.begin()); entry != other.values_.end();
        ++entry) {
-    SetValue(entry->first,
-             base::Value::ToUniquePtrValue(entry->second->Clone()));
+    SetValue(entry->first, entry->second.Clone());
   }
 }
 
@@ -241,7 +244,7 @@ void RegistryDict::Swap(RegistryDict* other) {
   values_.swap(other->values_);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void RegistryDict::ReadRegistry(HKEY hive, const std::wstring& root) {
   ClearKeys();
   ClearValues();
@@ -250,24 +253,36 @@ void RegistryDict::ReadRegistry(HKEY hive, const std::wstring& root) {
   for (RegistryValueIterator it(hive, root.c_str()); it.Valid(); ++it) {
     const std::string name = base::WideToUTF8(it.Name());
     switch (it.Type()) {
-      case REG_SZ:
       case REG_EXPAND_SZ:
-        SetValue(name,
-                 std::make_unique<base::Value>(base::WideToUTF8(it.Value())));
+        if (auto expanded_path = base::win::ExpandEnvironmentVariables(
+                UNSAFE_TODO(base::wcstring_view(it.Value())))) {
+          SetValue(name, base::Value(base::WideToUTF8(*expanded_path)));
+          continue;
+        }
+        [[fallthrough]];
+      case REG_SZ:
+        SetValue(name, base::Value(base::WideToUTF8(it.Value())));
         continue;
       case REG_DWORD_LITTLE_ENDIAN:
       case REG_DWORD_BIG_ENDIAN:
         if (it.ValueSize() == sizeof(DWORD)) {
-          DWORD dword_value = *(reinterpret_cast<const DWORD*>(it.Value()));
-          if (it.Type() == REG_DWORD_BIG_ENDIAN)
-            dword_value = base::NetToHost32(dword_value);
-          else
-            dword_value = base::ByteSwapToLE32(dword_value);
-          SetValue(name, std::make_unique<base::Value>(
-                             static_cast<int>(dword_value)));
+          auto value =
+              // TODO(crbug.com/40284755): it.Value() should return a
+              // wcstring_view which will be usable as a span directly. The
+              // ValueSize() here is the number of non-NUL *bytes* in the
+              // Value() string, so we cast the Value() to bytes which is what
+              // we want in the end anyway.
+              UNSAFE_TODO(
+                  base::span(reinterpret_cast<const uint8_t*>(it.Value()),
+                             it.ValueSize()))
+                  .first<sizeof(DWORD)>();
+          DWORD dword_value = it.Type() == REG_DWORD_BIG_ENDIAN
+                                  ? base::U32FromBigEndian(value)
+                                  : base::U32FromLittleEndian(value);
+          SetValue(name, base::Value(static_cast<int>(dword_value)));
           continue;
         }
-        FALLTHROUGH;
+        [[fallthrough]];
       case REG_NONE:
       case REG_LINK:
       case REG_MULTI_SZ:
@@ -292,78 +307,122 @@ void RegistryDict::ReadRegistry(HKEY hive, const std::wstring& root) {
   }
 }
 
-std::unique_ptr<base::Value> RegistryDict::ConvertToJSON(
+namespace {
+
+// Resolves the schema and canonical name for a registry entry.
+//
+// Windows Registry keys/values are case-insensitive, but Chrome policy schema
+// lookups are case-sensitive. This function resolves registry entry names to
+// their canonical schema casings to ensure Chrome correctly recognizes them.
+void GetMatchingPropertiesAndCanonicalName(const std::string& entry_name,
+                                           const Schema& schema,
+                                           std::string& canonical_name,
+                                           SchemaList& matching_schemas) {
+  canonical_name = entry_name;
+  matching_schemas.clear();
+  if (!schema.valid()) {
+    return;
+  }
+
+  // Step 1: Try case-sensitive lookup on known properties first.
+  Schema known_property = schema.GetKnownProperty(entry_name);
+  if (known_property.valid()) {
+    matching_schemas = schema.GetMatchingProperties(entry_name);
+    return;
+  }
+
+  // Step 2: Fallback to case-insensitive lookup for known properties.
+  // This repairs incorrect casing configured by administrators in the registry.
+  std::optional<std::string> canonical_property_name =
+      schema.GetKnownPropertyKeyCaseInsensitive(entry_name);
+  if (canonical_property_name.has_value()) {
+    canonical_name = canonical_property_name.value();
+    // Retrieve all schemas using the resolved canonical name.
+    matching_schemas = schema.GetMatchingProperties(canonical_name);
+    return;
+  }
+
+  // Step 3: Unrecognized keys fallback.
+  // Query matching schemas (e.g. pattern properties or additional properties)
+  // using the original raw name.
+  matching_schemas = schema.GetMatchingProperties(entry_name);
+}
+
+}  // namespace
+
+std::optional<base::Value> RegistryDict::ConvertToJSON(
     const Schema& schema) const {
   base::Value::Type type =
-      schema.valid() ? schema.type() : base::Value::Type::DICTIONARY;
+      schema.valid() ? schema.type() : base::Value::Type::DICT;
   switch (type) {
-    case base::Value::Type::DICTIONARY: {
-      std::unique_ptr<base::DictionaryValue> result(
-          new base::DictionaryValue());
+    case base::Value::Type::DICT: {
+      base::DictValue result;
       for (RegistryDict::ValueMap::const_iterator entry(values_.begin());
            entry != values_.end(); ++entry) {
-        SchemaList matching_schemas =
-            schema.valid() ? schema.GetMatchingProperties(entry->first)
-                           : SchemaList();
+        std::string canonical_name;
+        SchemaList matching_schemas;
+        GetMatchingPropertiesAndCanonicalName(entry->first, schema,
+                                              canonical_name, matching_schemas);
         // Always try the empty schema if no other schemas exist.
         if (matching_schemas.empty())
           matching_schemas.push_back(Schema());
         for (const Schema& subschema : matching_schemas) {
-          absl::optional<base::Value> converted =
-              ConvertRegistryValue(*entry->second, subschema);
+          std::optional<base::Value> converted =
+              ConvertRegistryValue(entry->second, subschema);
           if (converted.has_value()) {
-            result->SetKey(entry->first, std::move(converted.value()));
+            result.Set(canonical_name, std::move(converted.value()));
             break;
           }
         }
       }
       for (RegistryDict::KeyMap::const_iterator entry(keys_.begin());
            entry != keys_.end(); ++entry) {
-        SchemaList matching_schemas =
-            schema.valid() ? schema.GetMatchingProperties(entry->first)
-                           : SchemaList();
+        std::string canonical_name;
+        SchemaList matching_schemas;
+        GetMatchingPropertiesAndCanonicalName(entry->first, schema,
+                                              canonical_name, matching_schemas);
         // Always try the empty schema if no other schemas exist.
         if (matching_schemas.empty())
           matching_schemas.push_back(Schema());
         for (const Schema& subschema : matching_schemas) {
-          std::unique_ptr<base::Value> converted =
+          std::optional<base::Value> converted =
               entry->second->ConvertToJSON(subschema);
           if (converted) {
-            result->SetWithoutPathExpansion(entry->first, std::move(converted));
+            result.Set(canonical_name, std::move(*converted));
             break;
           }
         }
       }
-      return std::move(result);
+      return base::Value(std::move(result));
     }
     case base::Value::Type::LIST: {
-      std::unique_ptr<base::ListValue> result(new base::ListValue());
+      base::ListValue result;
       Schema item_schema = schema.valid() ? schema.GetItems() : Schema();
       for (RegistryDict::KeyMap::const_iterator entry(keys_.begin());
            entry != keys_.end(); ++entry) {
         if (!IsKeyNumerical(entry->first))
           continue;
-        std::unique_ptr<base::Value> converted =
+        std::optional<base::Value> converted =
             entry->second->ConvertToJSON(item_schema);
         if (converted)
-          result->Append(std::move(converted));
+          result.Append(std::move(*converted));
       }
       for (RegistryDict::ValueMap::const_iterator entry(values_.begin());
            entry != values_.end(); ++entry) {
         if (!IsKeyNumerical(entry->first))
           continue;
-        absl::optional<base::Value> converted =
-            ConvertRegistryValue(*entry->second, item_schema);
+        std::optional<base::Value> converted =
+            ConvertRegistryValue(entry->second, item_schema);
         if (converted.has_value())
-          result->Append(std::move(converted.value()));
+          result.Append(std::move(*converted));
       }
-      return std::move(result);
+      return base::Value(std::move(result));
     }
     default:
       LOG(WARNING) << "Can't convert registry key to schema type " << type;
   }
 
-  return nullptr;
+  return std::nullopt;
 }
-#endif  // #if defined(OS_WIN)
+#endif  // #if BUILDFLAG(IS_WIN)
 }  // namespace policy

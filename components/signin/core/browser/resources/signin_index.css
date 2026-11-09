@@ -1,4 +1,4 @@
-/* Copyright (c) 2012 The Chromium Authors. All rights reserved.
+/* Copyright 2012 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file. */
 
@@ -20,19 +20,37 @@ tr.header {
   font-weight: bold;
 }
 
-div {
-  -webkit-column-break-inside: avoid;
+body {
+  margin: 0;
+}
+
+#download-button {
+  margin: 10px;
+}
+
+cr-tab-box {
+  width: auto;
+}
+
+div[slot='panel'] {
+  margin-top: 5px;
+}
+
+/* Exclude cr-tab-box tabs/panels, since document-level styles take precedence
+ * over cr-tab-box's ::slotted() rules that show/hide them. */
+div:not([slot]) {
+  break-inside: avoid;
   display: inline-block;
   width: 100%;
 }
 
 div#signin-info {
-  -webkit-columns: 2;
+  columns: 2;
 }
 
 div#token-info,
 div#cookie-info {
-  -webkit-columns: 1;
+  columns: 1;
 }
 
 table.signin-details {
@@ -46,34 +64,4 @@ tr:nth-child(odd) {
 
 table.signin-details tr:nth-child(odd).ok {
   background: rgb(204, 243, 204);
-}
-
-@-webkit-keyframes highlight1 {
-  0% {
-    background: rgb(255, 255, 0);
-  }
-  100% {
-    background: rgb(255, 255, 255);
-  }
-}
-
-@-webkit-keyframes highlight2 {
-  0% {
-    background: rgb(155, 158, 166);
-  }
-  100% {
-    background: rgb(239, 243, 255);
-  }
-}
-
-tr[highlighted] {
-  -webkit-animation-duration: 3s;
-  -webkit-animation-name: highlight1;
-  -webkit-animation-timing-function: linear;
-}
-
-tr[highlighted]:nth-child(odd) {
-  -webkit-animation-duration: 3s;
-  -webkit-animation-name: highlight2;
-  -webkit-animation-timing-function: linear;
 }

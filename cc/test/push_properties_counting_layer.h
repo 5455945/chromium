@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "cc/layers/layer.h"
 
 namespace cc {
@@ -23,15 +23,20 @@ class PushPropertiesCountingLayer : public Layer {
   PushPropertiesCountingLayer& operator=(const PushPropertiesCountingLayer&) =
       delete;
 
-  // Layer implementation.
-  void PushPropertiesTo(LayerImpl* layer) override;
-  std::unique_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl) override;
+  std::unique_ptr<LayerImpl> CreateLayerImpl(
+      LayerTreeImpl* tree_impl) const override;
 
   // Something to make this layer push properties, but no other layer.
   void MakePushProperties();
 
   size_t push_properties_count() const { return push_properties_count_; }
   void reset_push_properties_count() { push_properties_count_ = 0; }
+
+ protected:
+  // Layer implementation.
+  void PushDirtyPropertiesTo(LayerImpl* layer,
+                             uint8_t dirty_flag,
+                             CommitState& commit_state) override;
 
  private:
   PushPropertiesCountingLayer();

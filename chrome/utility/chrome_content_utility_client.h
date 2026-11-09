@@ -1,55 +1,39 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_UTILITY_CHROME_CONTENT_UTILITY_CLIENT_H_
 #define CHROME_UTILITY_CHROME_CONTENT_UTILITY_CLIENT_H_
 
-#include <memory>
-#include <vector>
-
-#include "base/macros.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "content/public/utility/content_utility_client.h"
-#include "printing/buildflags/buildflags.h"
-
-namespace printing {
-class PrintingHandler;
-}
 
 class ChromeContentUtilityClient : public content::ContentUtilityClient {
  public:
-  using NetworkBinderCreationCallback =
-      base::OnceCallback<void(service_manager::BinderRegistry*)>;
-
   ChromeContentUtilityClient();
+
+  ChromeContentUtilityClient(const ChromeContentUtilityClient&) = delete;
+  ChromeContentUtilityClient& operator=(const ChromeContentUtilityClient&) =
+      delete;
+
   ~ChromeContentUtilityClient() override;
 
   // content::ContentUtilityClient:
   void ExposeInterfacesToBrowser(mojo::BinderMap* binders) override;
   void PostIOThreadCreated(
       base::SingleThreadTaskRunner* io_thread_task_runner) override;
-  void RegisterNetworkBinders(
-      service_manager::BinderRegistry* registry) override;
   void UtilityThreadStarted() override;
   void RegisterMainThreadServices(mojo::ServiceFactory& services) override;
   void RegisterIOThreadServices(mojo::ServiceFactory& services) override;
-  bool GetDefaultUserDataDirectory(base::FilePath* path) override;
 
-  // See NetworkBinderProvider above.
-  static void SetNetworkBinderCreationCallback(
-      NetworkBinderCreationCallback callback);
+#if BUILDFLAG(IS_CHROMEOS)
+  mojo::GenericPendingReceiver InitMojoServiceManager() override;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
  private:
-#if defined(OS_WIN) && BUILDFLAG(ENABLE_PRINT_PREVIEW)
-  // Last IPC message handler.
-  std::unique_ptr<printing::PrintingHandler> printing_handler_;
-#endif
-
   // True if the utility process runs with elevated privileges.
-  bool utility_process_running_elevated_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeContentUtilityClient);
+  bool utility_process_running_elevated_ = false;
 };
 
 #endif  // CHROME_UTILITY_CHROME_CONTENT_UTILITY_CLIENT_H_

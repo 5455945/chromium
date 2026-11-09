@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/permissions/permissions_data.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // static
 std::unique_ptr<ProviderInterface> FakeExtensionProvider::Create(
@@ -32,7 +31,7 @@ std::unique_ptr<ProvidedFileSystemInterface>
 FakeExtensionProvider::CreateProvidedFileSystem(
     Profile* profile,
     const ProvidedFileSystemInfo& file_system_info) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M160);
   return std::make_unique<FakeProvidedFileSystem>(file_system_info);
 }
 
@@ -52,7 +51,13 @@ const IconSet& FakeExtensionProvider::GetIconSet() const {
   return icon_set_;
 }
 
-bool FakeExtensionProvider::RequestMount(Profile* profile) {
+RequestManager* FakeExtensionProvider::GetRequestManager() {
+  NOTREACHED();
+}
+
+bool FakeExtensionProvider::RequestMount(Profile* profile,
+                                         RequestMountCallback callback) {
+  std::move(callback).Run(base::File::Error::FILE_OK);
   return true;
 }
 
@@ -63,5 +68,4 @@ FakeExtensionProvider::FakeExtensionProvider(
       capabilities_(capabilities),
       name_("Fake Extension Provider") {}
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,12 +16,14 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/loader/fetch/console_logger.h"
 #include "third_party/blink/renderer/platform/loader/fetch/loading_behavior_observer.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher_properties.h"
-#include "third_party/blink/renderer/platform/scheduler/public/aggregated_metric_reporter.h"
+#include "third_party/blink/renderer/platform/network/network_state_notifier.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_status.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -32,12 +34,17 @@ constexpr char kRendererSideResourceScheduler[] =
 
 // Used in the tight mode (see the header file for details).
 constexpr size_t kTightLimitForRendererSideResourceScheduler = 2u;
+// The number of medium-priority requests to allow in tight-mode independent of
+// the total number of outstanding requests.
+constexpr size_t kTightMediumLimitForRendererSideResourceScheduler = 2u;
 // Used in the normal mode (see the header file for details).
 constexpr size_t kLimitForRendererSideResourceScheduler = 1024u;
 
 constexpr char kTightLimitForRendererSideResourceSchedulerName[] =
     "tight_limit";
 constexpr char kLimitForRendererSideResourceSchedulerName[] = "limit";
+constexpr char kTightMediumLimitForRendererSideResourceSchedulerName[] =
+    "tight_medium_limit";
 
 // Represents a resource load circumstance, e.g. from main frame vs sub-frames,
 // or on throttled state vs on not-throttled state.
@@ -56,16 +63,19 @@ uint32_t GetFieldTrialUint32Param(const char* trial_name,
                                   uint32_t default_param) {
   base::FieldTrialParams trial_params;
   bool result = base::GetFieldTrialParams(trial_name, &trial_params);
-  if (!result)
+  if (!result) {
     return default_param;
+  }
 
   const auto& found = trial_params.find(parameter_name);
-  if (found == trial_params.end())
+  if (found == trial_params.end()) {
     return default_param;
+  }
 
   uint32_t param;
-  if (!base::StringToUint(found->second, &param))
+  if (!base::StringToUint(found->second, &param)) {
     return default_param;
+  }
 
   return param;
 }
@@ -90,8 +100,9 @@ ResourceLoadScheduler::ResourceLoadScheduler(
       clock_(base::DefaultClock::GetInstance()),
       throttle_option_override_(throttle_option_override),
       loading_behavior_observer_(loading_behavior_observer) {
-  if (!frame_or_worker_scheduler)
+  if (!frame_or_worker_scheduler) {
     return;
+  }
 
   normal_outstanding_limit_ =
       GetFieldTrialUint32Param(kRendererSideResourceScheduler,
@@ -101,9 +112,15 @@ ResourceLoadScheduler::ResourceLoadScheduler(
       GetFieldTrialUint32Param(kRendererSideResourceScheduler,
                                kTightLimitForRendererSideResourceSchedulerName,
                                kTightLimitForRendererSideResourceScheduler);
+  tight_medium_limit_ = GetFieldTrialUint32Param(
+      kRendererSideResourceScheduler,
+      kTightMediumLimitForRendererSideResourceSchedulerName,
+      kTightMediumLimitForRendererSideResourceScheduler);
 
   scheduler_observer_handle_ = frame_or_worker_scheduler->AddLifecycleObserver(
-      FrameScheduler::ObserverType::kLoader, this);
+      FrameScheduler::ObserverType::kLoader,
+      BindRepeating(&ResourceLoadScheduler::OnLifecycleStateChanged,
+                    WrapWeakPersistent(this)));
 }
 
 ResourceLoadScheduler::~ResourceLoadScheduler() = default;
@@ -128,8 +145,9 @@ void ResourceLoadScheduler::LoosenThrottlingPolicy() {
 
 void ResourceLoadScheduler::Shutdown() {
   // Do nothing if the feature is not enabled, or Shutdown() was already called.
-  if (is_shutdown_)
+  if (is_shutdown_) {
     return;
+  }
   is_shutdown_ = true;
 
   scheduler_observer_handle_.reset();
@@ -141,8 +159,9 @@ void ResourceLoadScheduler::Request(ResourceLoadSchedulerClient* client,
                                     int intra_priority,
                                     ResourceLoadScheduler::ClientId* id) {
   *id = GenerateClientId();
-  if (is_shutdown_)
+  if (is_shutdown_) {
     return;
+  }
 
   if (option == ThrottleOption::kStoppable &&
       throttle_option_override_ ==
@@ -159,8 +178,9 @@ void ResourceLoadScheduler::Request(ResourceLoadSchedulerClient* client,
 
   DCHECK(ThrottleOption::kStoppable == option ||
          ThrottleOption::kThrottleable == option);
-  if (pending_requests_[option].empty())
+  if (pending_requests_[option].empty()) {
     pending_queue_update_times_[option] = clock_->Now();
+  }
   pending_requests_[option].insert(request_info);
   pending_request_map_.insert(
       *id, MakeGarbageCollected<ClientInfo>(client, option, priority,
@@ -175,15 +195,16 @@ void ResourceLoadScheduler::SetPriority(ClientId client_id,
                                         ResourceLoadPriority priority,
                                         int intra_priority) {
   auto client_it = pending_request_map_.find(client_id);
-  if (client_it == pending_request_map_.end())
+  if (client_it == pending_request_map_.end()) {
     return;
+  }
 
   auto& throttle_option_queue = pending_requests_[client_it->value->option];
 
   auto it = throttle_option_queue.find(ClientIdWithPriority(
       client_id, client_it->value->priority, client_it->value->intra_priority));
 
-  DCHECK(it != throttle_option_queue.end());
+  CHECK(it != throttle_option_queue.end());
   throttle_option_queue.erase(it);
 
   client_it->value->priority = priority;
@@ -198,21 +219,19 @@ bool ResourceLoadScheduler::Release(
     ResourceLoadScheduler::ReleaseOption option,
     const ResourceLoadScheduler::TrafficReportHints& hints) {
   // Check kInvalidClientId that can not be passed to the HashSet.
-  if (id == kInvalidClientId)
+  if (id == kInvalidClientId) {
     return false;
+  }
 
   auto running_request = running_requests_.find(id);
   if (running_request != running_requests_.end()) {
-    if (running_request->value >= PriorityImportanceThreshold()) {
-      in_flight_important_requests_--;
-      DCHECK_GE(in_flight_important_requests_, 0);
-    }
-
     running_requests_.erase(id);
     running_throttleable_requests_.erase(id);
+    running_medium_requests_.erase(id);
 
-    if (option == ReleaseOption::kReleaseAndSchedule)
+    if (option == ReleaseOption::kReleaseAndSchedule) {
       MaybeRun();
+    }
     return true;
   }
 
@@ -226,17 +245,21 @@ bool ResourceLoadScheduler::Release(
 
     // Didn't release any running requests, but the outstanding limit might be
     // changed to allow another request.
-    if (option == ReleaseOption::kReleaseAndSchedule)
+    if (option == ReleaseOption::kReleaseAndSchedule) {
       MaybeRun();
+    }
     return true;
   }
   return false;
 }
 
-void ResourceLoadScheduler::SetOutstandingLimitForTesting(size_t tight_limit,
-                                                          size_t normal_limit) {
+void ResourceLoadScheduler::SetOutstandingLimitForTesting(
+    size_t tight_limit,
+    size_t normal_limit,
+    size_t tight_medium_limit) {
   tight_outstanding_limit_ = tight_limit;
   normal_outstanding_limit_ = normal_limit;
+  tight_medium_limit_ = tight_medium_limit;
   MaybeRun();
 }
 
@@ -253,13 +276,15 @@ bool ResourceLoadScheduler::IsClientDelayable(ThrottleOption option) const {
 
 void ResourceLoadScheduler::OnLifecycleStateChanged(
     scheduler::SchedulingLifecycleState state) {
-  if (frame_scheduler_lifecycle_state_ == state)
+  if (frame_scheduler_lifecycle_state_ == state) {
     return;
+  }
 
   frame_scheduler_lifecycle_state_ = state;
 
-  if (state == scheduler::SchedulingLifecycleState::kNotThrottled)
+  if (state == scheduler::SchedulingLifecycleState::kNotThrottled) {
     ShowConsoleMessageIfNeeded();
+  }
 
   MaybeRun();
 }
@@ -277,8 +302,7 @@ bool ResourceLoadScheduler::IsPendingRequestEffectivelyEmpty(
     // the request is canceled, or Release() is called before firing its Run(),
     // the entry for the request remains in |pending_request_| until it is
     // popped in GetNextPendingRequest().
-    if (pending_request_map_.find(client.client_id) !=
-        pending_request_map_.end()) {
+    if (pending_request_map_.Contains(client.client_id)) {
       return false;
     }
   }
@@ -296,18 +320,21 @@ bool ResourceLoadScheduler::GetNextPendingRequest(ClientId* id) {
   bool has_runnable_stoppable_request =
       stoppable_it != stoppable_queue.end() &&
       (!IsClientDelayable(ThrottleOption::kStoppable) ||
-       running_throttleable_requests_.size() <
-           GetOutstandingLimit(stoppable_it->priority));
+       IsRunningThrottleableRequestsLessThanOutStandingLimit(
+           GetOutstandingLimit(stoppable_it->priority),
+           stoppable_it->priority));
 
   auto throttleable_it = throttleable_queue.begin();
   bool has_runnable_throttleable_request =
       throttleable_it != throttleable_queue.end() &&
       (!IsClientDelayable(ThrottleOption::kThrottleable) ||
-       running_throttleable_requests_.size() <
-           GetOutstandingLimit(throttleable_it->priority));
+       IsRunningThrottleableRequestsLessThanOutStandingLimit(
+           GetOutstandingLimit(throttleable_it->priority),
+           throttleable_it->priority));
 
-  if (!has_runnable_throttleable_request && !has_runnable_stoppable_request)
+  if (!has_runnable_throttleable_request && !has_runnable_stoppable_request) {
     return false;
+  }
 
   // If both requests are allowed to be run, run the high priority requests
   // first.
@@ -320,16 +347,12 @@ bool ResourceLoadScheduler::GetNextPendingRequest(ClientId* id) {
   // corresponding |pending_queue_update_times_|.
   if (use_stoppable) {
     *id = stoppable_it->client_id;
-    if (ShouldDelay(pending_request_map_.find(*id)))
-      return false;
     stoppable_queue.erase(stoppable_it);
     pending_queue_update_times_[ThrottleOption::kStoppable] = clock_->Now();
     return true;
   }
 
   *id = throttleable_it->client_id;
-  if (ShouldDelay(pending_request_map_.find(*id)))
-    return false;
   throttleable_queue.erase(throttleable_it);
   pending_queue_update_times_[ThrottleOption::kThrottleable] = clock_->Now();
   return true;
@@ -338,51 +361,22 @@ bool ResourceLoadScheduler::GetNextPendingRequest(ClientId* id) {
 void ResourceLoadScheduler::MaybeRun() {
   // Requests for keep-alive loaders could be remained in the pending queue,
   // but ignore them once Shutdown() is called.
-  if (is_shutdown_)
+  if (is_shutdown_) {
     return;
+  }
 
   ClientId id = kInvalidClientId;
   while (GetNextPendingRequest(&id)) {
     auto found = pending_request_map_.find(id);
-    if (found == pending_request_map_.end())
+    if (found == pending_request_map_.end()) {
       continue;  // Already released.
+    }
 
-    auto priority = found->value->priority;
     ResourceLoadSchedulerClient* client = found->value->client;
     ThrottleOption option = found->value->option;
+    ResourceLoadPriority priority = found->value->priority;
     pending_request_map_.erase(found);
     Run(id, client, option == ThrottleOption::kThrottleable, priority);
-  }
-}
-
-void ResourceLoadScheduler::MarkFirstPaint() {
-  if (!base::FeatureList::IsEnabled(
-          features::kDelayCompetingLowPriorityRequests) ||
-      delay_milestone_reached_) {
-    return;
-  }
-
-  if (ComputeDelayMilestone() ==
-      mojom::blink::DelayCompetingLowPriorityRequestsDelayType::kFirstPaint) {
-    DCHECK(!delay_milestone_reached_);
-    delay_milestone_reached_ = true;
-    MaybeRun();
-  }
-}
-
-void ResourceLoadScheduler::MarkFirstContentfulPaint() {
-  if (!base::FeatureList::IsEnabled(
-          features::kDelayCompetingLowPriorityRequests) ||
-      delay_milestone_reached_) {
-    return;
-  }
-
-  if (ComputeDelayMilestone() ==
-      mojom::blink::DelayCompetingLowPriorityRequestsDelayType::
-          kFirstContentfulPaint) {
-    DCHECK(!delay_milestone_reached_);
-    delay_milestone_reached_ = true;
-    MaybeRun();
   }
 }
 
@@ -390,12 +384,13 @@ void ResourceLoadScheduler::Run(ResourceLoadScheduler::ClientId id,
                                 ResourceLoadSchedulerClient* client,
                                 bool throttleable,
                                 ResourceLoadPriority priority) {
-  if (priority >= PriorityImportanceThreshold()) {
-    in_flight_important_requests_++;
-  }
-  running_requests_.insert(id, priority);
-  if (throttleable)
+  running_requests_.insert(id);
+  if (throttleable) {
     running_throttleable_requests_.insert(id);
+  }
+  if (priority == ResourceLoadPriority::kMedium) {
+    running_medium_requests_.insert(id);
+  }
   client->Run();
 }
 
@@ -429,18 +424,15 @@ size_t ResourceLoadScheduler::GetOutstandingLimit(
 }
 
 void ResourceLoadScheduler::ShowConsoleMessageIfNeeded() {
-  if (is_console_info_shown_ || pending_request_map_.IsEmpty())
+  if (is_console_info_shown_ || pending_request_map_.empty()) {
     return;
+  }
 
-  const base::Time limit = clock_->Now() - base::TimeDelta::FromSeconds(60);
-  ThrottleOption target_option;
-  if (pending_queue_update_times_[ThrottleOption::kThrottleable] < limit &&
-      !IsPendingRequestEffectivelyEmpty(ThrottleOption::kThrottleable)) {
-    target_option = ThrottleOption::kThrottleable;
-  } else if (pending_queue_update_times_[ThrottleOption::kStoppable] < limit &&
-             !IsPendingRequestEffectivelyEmpty(ThrottleOption::kStoppable)) {
-    target_option = ThrottleOption::kStoppable;
-  } else {
+  const base::Time limit = clock_->Now() - base::Seconds(60);
+  if ((pending_queue_update_times_[ThrottleOption::kThrottleable] >= limit ||
+       IsPendingRequestEffectivelyEmpty(ThrottleOption::kThrottleable)) &&
+      (pending_queue_update_times_[ThrottleOption::kStoppable] >= limit ||
+       IsPendingRequestEffectivelyEmpty(ThrottleOption::kStoppable))) {
     // At least, one of the top requests in pending queues was handled in the
     // last 1 minutes, or there is no pending requests in the inactive queue.
     return;
@@ -455,139 +447,21 @@ void ResourceLoadScheduler::ShowConsoleMessageIfNeeded() {
   is_console_info_shown_ = true;
 }
 
+bool ResourceLoadScheduler::
+    IsRunningThrottleableRequestsLessThanOutStandingLimit(
+        size_t out_standing_limit,
+        ResourceLoadPriority priority) {
+  // Allow for a minimum number of medium-priority requests to be in-flight
+  // independent of the overall number of pending requests.
+  if (priority == ResourceLoadPriority::kMedium &&
+      running_medium_requests_.size() < tight_medium_limit_) {
+    return true;
+  }
+  return running_throttleable_requests_.size() < out_standing_limit;
+}
+
 void ResourceLoadScheduler::SetClockForTesting(const base::Clock* clock) {
   clock_ = clock;
-}
-
-bool ResourceLoadScheduler::ShouldDelay(
-    PendingRequestMap::iterator found) const {
-  if (!base::FeatureList::IsEnabled(
-          features::kDelayCompetingLowPriorityRequests)) {
-    return false;
-  }
-
-  // The milestone already passed. We no longer have to delay requests.
-  if (delay_milestone_reached_)
-    return false;
-
-  // There are no inflight important requests. We don't have to delay the
-  // pending request even if it has low priority.
-  if (in_flight_important_requests_ == 0)
-    return false;
-
-  // Hidden pages already have requests throttled/deprioritized, and delaying
-  // further can have undesirable effects on sites, and there's little benefit
-  // to try to optimize them using this feature.
-  if (frame_scheduler_lifecycle_state_ ==
-      scheduler::SchedulingLifecycleState::kHidden) {
-    return false;
-  }
-
-  // We didn't find the pending request for the id.
-  if (found == pending_request_map_.end())
-    return false;
-
-  // The pending request is not in low priority.
-  if (found->value->priority > ResourceLoadPriority::kLow)
-    return false;
-
-  if (features::kDelayCompetingLowPriorityRequestsDelayParam.Get() ==
-      features::DelayCompetingLowPriorityRequestsDelayType::
-          kUseOptimizationGuide) {
-    // The optimization guide is supposed to be used, but the hints are not
-    // available. Give up delaying requests.
-    if (!optimization_hints_)
-      return false;
-    // The optimization guide suggests the default behavior (no delay).
-    if (optimization_hints_->delay_type ==
-        mojom::blink::DelayCompetingLowPriorityRequestsDelayType::kUnknown) {
-      return false;
-    }
-  }
-
-  // We get a chance to delay competing low priority requests. Record the fact
-  // in UKM to measure the application ratio of the optimization.
-  if (loading_behavior_observer_) {
-    loading_behavior_observer_->DidObserveLoadingBehavior(
-        kLoadingBehaviorCompetingLowPriorityRequestsDelayed);
-  }
-
-  return true;
-}
-
-ResourceLoadPriority ResourceLoadScheduler::PriorityImportanceThreshold() {
-  // The default value defined by the field trial.
-  DCHECK_EQ(
-      features::DelayCompetingLowPriorityRequestsThreshold::kHigh,
-      features::kDelayCompetingLowPriorityRequestsThresholdParam.default_value);
-  const auto default_value = ResourceLoadPriority::kHigh;
-
-  using FeatureDelayType = features::DelayCompetingLowPriorityRequestsDelayType;
-  using FeaturePriorityThreshold =
-      features::DelayCompetingLowPriorityRequestsThreshold;
-  using MojomPriorityThreshold =
-      mojom::blink::DelayCompetingLowPriorityRequestsPriorityThreshold;
-
-  switch (features::kDelayCompetingLowPriorityRequestsDelayParam.Get()) {
-    // Use parameters provided by the field trial.
-    case FeatureDelayType::kFirstPaint:
-    case FeatureDelayType::kFirstContentfulPaint:
-    case FeatureDelayType::kAlways:
-      switch (
-          features::kDelayCompetingLowPriorityRequestsThresholdParam.Get()) {
-        case FeaturePriorityThreshold::kHigh:
-          return ResourceLoadPriority::kHigh;
-        case FeaturePriorityThreshold::kMedium:
-          return ResourceLoadPriority::kMedium;
-      }
-      NOTREACHED();
-    // Use hints provided by the optimization guide.
-    case FeatureDelayType::kUseOptimizationGuide:
-      if (!optimization_hints_) {
-        // The optimization guide service didn't provide the hints. Fallback to
-        // the default value.
-        return default_value;
-      }
-      switch (optimization_hints_->priority_threshold) {
-        case MojomPriorityThreshold::kHigh:
-          return ResourceLoadPriority::kHigh;
-        case MojomPriorityThreshold::kMedium:
-          return ResourceLoadPriority::kMedium;
-        case MojomPriorityThreshold::kUnknown:
-          // The optimization guide didn't decide the priority threshold.
-          // Fallback to the default value.
-          return default_value;
-      }
-      NOTREACHED();
-  }
-}
-
-mojom::blink::DelayCompetingLowPriorityRequestsDelayType
-ResourceLoadScheduler::ComputeDelayMilestone() {
-  DCHECK(base::FeatureList::IsEnabled(
-      features::kDelayCompetingLowPriorityRequests));
-
-  using FeatureDelayType = features::DelayCompetingLowPriorityRequestsDelayType;
-  using MojomDelayType =
-      mojom::blink::DelayCompetingLowPriorityRequestsDelayType;
-
-  switch (features::kDelayCompetingLowPriorityRequestsDelayParam.Get()) {
-    // Use parameters provided by the field trial.
-    case FeatureDelayType::kFirstPaint:
-      return MojomDelayType::kFirstPaint;
-    case FeatureDelayType::kFirstContentfulPaint:
-      return MojomDelayType::kFirstContentfulPaint;
-    case FeatureDelayType::kAlways:
-      return MojomDelayType::kUnknown;
-
-    // Use hints provided by the optimization guide.
-    case FeatureDelayType::kUseOptimizationGuide:
-      // Give up delaying requests when the optimization guide is enabled but
-      // the hints are not available. See ShouldDelay().
-      if (!optimization_hints_)
-        return MojomDelayType::kUnknown;
-      return optimization_hints_->delay_type;
-  }
 }
 
 }  // namespace blink

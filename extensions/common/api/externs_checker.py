@@ -1,11 +1,14 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+
 class ExternsChecker(object):
-  _UPDATE_MESSAGE = """To update the externs, run:
- src/ $ python tools/json_schema_compiler/compiler.py\
- %s --root=. --generator=externs > %s"""
+  _UPDATE_MESSAGE_HDR = 'To update the externs, run:\n'
+  _UPDATE_MESSAGE_CMD = (
+    ' src/ $ python3 tools/json_schema_compiler/compiler.py %s'
+    ' --root=. --generator=externs > %s'
+  )
 
   def __init__(self, input_api, output_api, api_pairs=None, api_root=None):
     if api_pairs is None:
@@ -25,8 +28,11 @@ class ExternsChecker(object):
     if api_root is None:
       api_root = input_api.PresubmitLocalPath()
     externs_root = input_api.os_path.join(
-        input_api.change.RepositoryRoot(), 'third_party', 'closure_compiler',
-        'externs')
+      input_api.change.RepositoryRoot(),
+      'third_party',
+      'closure_compiler',
+      'externs',
+    )
 
     ret = {}
     listing = input_api.os_path.join(api_root, 'generated_externs_list.txt')
@@ -37,7 +43,7 @@ class ExternsChecker(object):
 
       source = input_api.os_path.join(api_root, line)
       api_name, ext = line.rsplit('.', 1)
-      assert ext == 'json' or ext == 'idl'
+      assert ext == 'json' or ext == 'idl' or ext == 'webidl'
       externs = input_api.os_path.join(externs_root, api_name + '.js')
       ret[source] = externs
 
@@ -46,20 +52,26 @@ class ExternsChecker(object):
 
   def RunChecks(self):
     bad_files = []
-    affected = [f.AbsoluteLocalPath() for f in
-                   self._input_api.change.AffectedFiles()]
+    affected = [
+      f.AbsoluteLocalPath() for f in self._input_api.change.AffectedFiles()
+    ]
     for path in affected:
       pair = self._api_pairs.get(path)
-      if pair != None and pair not in affected:
+      if pair != None and pair not in affected:  # noqa: E711
         bad_files.append({'source': path, 'extern': pair})
     results = []
     if bad_files:
-      replacements = (('<source_file>', '<output_file>') if len(bad_files) > 1
-          else (bad_files[0]['source'], bad_files[0]['extern']))
-      long_text = self._UPDATE_MESSAGE % replacements
-      results.append(self._output_api.PresubmitPromptWarning(
-          str('Found updated extension api files without updated extern files. '
-              'Please update the extern files.'),
+      long_text = self._UPDATE_MESSAGE_HDR + '\n'.join(
+        self._UPDATE_MESSAGE_CMD % (f['source'], f['extern']) for f in bad_files
+      )
+      results.append(
+        self._output_api.PresubmitPromptWarning(
+          str(
+            'Found updated extension api files without updated extern files. '
+            'Please update the extern files.'
+          ),
           [f['source'] for f in bad_files],
-          long_text))
+          long_text,
+        )
+      )
     return results

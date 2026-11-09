@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,10 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/component_export.h"
+#include "base/functional/bind.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/leveldb_proto/internal/proto_leveldb_wrapper.h"
 #include "components/leveldb_proto/public/proto_database.h"
 
@@ -77,6 +78,10 @@ class COMPONENT_EXPORT(LEVELDB_PROTO) UniqueProtoDatabase {
       const std::string& start,
       const std::string& end,
       typename Callbacks::LoadKeysAndEntriesCallback callback);
+  virtual void LoadKeysAndEntriesWhile(
+      const std::string& start,
+      const KeyIteratorController& controller,
+      typename Callbacks::LoadKeysAndEntriesCallback callback);
 
   virtual void LoadKeys(Callbacks::LoadKeysCallback callback);
   virtual void LoadKeys(const std::string& target_prefix,
@@ -90,12 +95,6 @@ class COMPONENT_EXPORT(LEVELDB_PROTO) UniqueProtoDatabase {
   void RemoveKeysForTesting(const KeyFilter& key_filter,
                             const std::string& target_prefix,
                             Callbacks::UpdateCallback callback);
-
-  bool GetApproximateMemoryUse(uint64_t* approx_mem_use);
-
-  // Sets the identifier used by the underlying LevelDB wrapper to record
-  // metrics.
-  void SetMetricsId(const std::string& id);
 
  protected:
   std::unique_ptr<ProtoLevelDBWrapper> db_wrapper_;

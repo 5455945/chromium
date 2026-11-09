@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "content/public/browser/content_browser_client.h"
@@ -67,15 +67,16 @@ PresentationServiceImpl::PresentationServiceImpl(
       receiver_delegate_(receiver_delegate),
       start_presentation_request_id_(kInvalidRequestId),
       // TODO(imcheng): Consider using RenderFrameHost* directly instead of IDs.
-      render_process_id_(render_frame_host->GetProcess()->GetID()),
+      render_process_id_(render_frame_host->GetProcess()->GetDeprecatedID()),
       render_frame_id_(render_frame_host->GetRoutingID()),
-      is_main_frame_(!render_frame_host->GetParent()) {
-  DCHECK(render_frame_host_);
-  DCHECK(web_contents);
+      is_outermost_document_(!render_frame_host->GetParentOrOuterDocument()) {
+  CHECK(render_frame_host_, base::NotFatalUntil::M159);
+  CHECK(web_contents, base::NotFatalUntil::M159);
   CHECK(render_frame_host_->IsRenderFrameLive());
 
   DVLOG(2) << "PresentationServiceImpl: " << render_process_id_ << ", "
-           << render_frame_id_ << " is main frame: " << is_main_frame_;
+           << render_frame_id_
+           << " is outermost document: " << is_outermost_document_;
 
   if (auto* delegate = GetPresentationServiceDelegate())
     delegate->AddObserver(render_process_id_, render_frame_id_, this);
@@ -95,11 +96,12 @@ PresentationServiceImpl::~PresentationServiceImpl() {
 // static
 std::unique_ptr<PresentationServiceImpl> PresentationServiceImpl::Create(
     RenderFrameHost* render_frame_host) {
-  DVLOG(2) << __func__ << ": " << render_frame_host->GetProcess()->GetID()
-           << ", " << render_frame_host->GetRoutingID();
+  DVLOG(2) << __func__ << ": "
+           << render_frame_host->GetProcess()->GetDeprecatedID() << ", "
+           << render_frame_host->GetRoutingID();
   WebContents* web_contents =
       WebContents::FromRenderFrameHost(render_frame_host);
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M159);
 
   auto* browser = GetContentClient()->browser();
   auto* receiver_delegate =
@@ -123,11 +125,21 @@ void PresentationServiceImpl::Bind(
       &PresentationServiceImpl::OnConnectionError, base::Unretained(this)));
 }
 
+void PresentationServiceImpl::BindReceiverService(
+    mojo::PendingReceiver<blink::mojom::PresentationReceiverService> receiver) {
+  presentation_receiver_service_receivers_.Add(this, std::move(receiver));
+  // TODO(crbug.com/566111376): Consider not closing both pipes when one of them
+  // closes.
+  presentation_receiver_service_receivers_.set_disconnect_handler(
+      base::BindRepeating(&PresentationServiceImpl::OnConnectionError,
+                          base::Unretained(this)));
+}
+
 void PresentationServiceImpl::SetController(
     mojo::PendingRemote<blink::mojom::PresentationController>
         presentation_controller_remote) {
   if (presentation_controller_remote_) {
-    mojo::ReportBadMessage(
+    presentation_service_receivers_.ReportBadMessage(
         "There can only be one PresentationController at any given time.");
     return;
   }
@@ -141,6 +153,11 @@ void PresentationServiceImpl::SetController(
 void PresentationServiceImpl::SetReceiver(
     mojo::PendingRemote<blink::mojom::PresentationReceiver>
         presentation_receiver_remote) {
+  // Mojo interfaces for Presentation API are disabled during pre-rendering.
+  CHECK_NE(render_frame_host_->GetLifecycleState(),
+           content::RenderFrameHost::LifecycleState::kPrerendering,
+           base::NotFatalUntil::M159);
+
   // Presentation receiver virtual web tests (which have the flag set) has no
   // ReceiverPresentationServiceDelegate implementation.
   // TODO(imcheng): Refactor content_browser_client to return a no-op
@@ -150,15 +167,15 @@ void PresentationServiceImpl::SetReceiver(
     return;
   }
 
-  if (!receiver_delegate_ || !is_main_frame_) {
-    mojo::ReportBadMessage(
-        "SetReceiver can only be called from a "
-        "presentation receiver main frame.");
+  if (!receiver_delegate_) {
+    presentation_receiver_service_receivers_.ReportBadMessage(
+        "SetReceiver can only be called from a presentation receiver page.");
     return;
   }
 
   if (presentation_receiver_remote_) {
-    mojo::ReportBadMessage("SetReceiver can only be called once.");
+    presentation_receiver_service_receivers_.ReportBadMessage(
+        "SetReceiver can only be called once.");
     return;
   }
 
@@ -213,6 +230,17 @@ void PresentationServiceImpl::StartPresentation(
     const std::vector<GURL>& presentation_urls,
     NewPresentationCallback callback) {
   DVLOG(2) << "StartPresentation";
+
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableGestureRequirementForPresentation) &&
+      !render_frame_host_->HasTransientUserActivation()) {
+    std::move(callback).Run(
+        /** PresentationConnectionResultPtr */ nullptr,
+        PresentationError::New(
+            PresentationErrorType::PRESENTATION_REQUEST_CANCELLED,
+            "PresentationRequest::start() requires user gesture."));
+    return;
+  }
 
   // There is a StartPresentation request in progress. To avoid queueing up
   // requests, the incoming request is rejected.
@@ -283,7 +311,7 @@ int PresentationServiceImpl::RegisterReconnectPresentationCallback(
   int request_id = GetNextRequestId();
   pending_reconnect_presentation_cbs_[request_id] =
       std::make_unique<NewPresentationCallbackWrapper>(std::move(*callback));
-  DCHECK_NE(kInvalidRequestId, request_id);
+  CHECK_NE(kInvalidRequestId, request_id, base::NotFatalUntil::M159);
   return request_id;
 }
 
@@ -306,8 +334,9 @@ void PresentationServiceImpl::OnStartPresentationSucceeded(
     return;
 
   auto presentation_info = *result->presentation_info;
-  DCHECK(pending_start_presentation_cb_.get());
-  DCHECK(presentation_info.id.length() <= kMaxPresentationIdLength);
+  CHECK(pending_start_presentation_cb_.get(), base::NotFatalUntil::M159);
+  CHECK(presentation_info.id.length() <= kMaxPresentationIdLength,
+        base::NotFatalUntil::M159);
   pending_start_presentation_cb_->Run(std::move(result),
                                       /** PresentationErrorPtr */ nullptr);
   ListenForConnectionStateChange(presentation_info);
@@ -355,7 +384,7 @@ bool PresentationServiceImpl::RunAndEraseReconnectPresentationMojoCallback(
   if (it == pending_reconnect_presentation_cbs_.end())
     return false;
 
-  DCHECK(it->second.get());
+  CHECK(it->second.get(), base::NotFatalUntil::M159);
   it->second->Run(std::move(result), std::move(error));
   pending_reconnect_presentation_cbs_.erase(it);
   return true;
@@ -364,7 +393,7 @@ bool PresentationServiceImpl::RunAndEraseReconnectPresentationMojoCallback(
 void PresentationServiceImpl::SetDefaultPresentationUrls(
     const std::vector<GURL>& presentation_urls) {
   DVLOG(2) << "SetDefaultPresentationUrls";
-  if (!controller_delegate_ || !is_main_frame_)
+  if (!controller_delegate_ || !is_outermost_document_)
     return;
 
   if (default_presentation_urls_ == presentation_urls)
@@ -425,7 +454,8 @@ bool PresentationServiceImpl::FrameMatches(
   if (!render_frame_host)
     return false;
 
-  return render_frame_host->GetProcess()->GetID() == render_process_id_ &&
+  return render_frame_host->GetProcess()->GetDeprecatedID() ==
+             render_process_id_ &&
          render_frame_host->GetRoutingID() == render_frame_id_;
 }
 
@@ -440,18 +470,12 @@ PresentationServiceImpl::GetPresentationServiceDelegate() {
              : static_cast<PresentationServiceDelegate*>(controller_delegate_);
 }
 
-// TODO(btolsch): Convert to PresentationConnectionResultPtr.
 void PresentationServiceImpl::OnReceiverConnectionAvailable(
-    PresentationInfoPtr presentation_info,
-    mojo::PendingRemote<blink::mojom::PresentationConnection>
-        controller_connection_remote,
-    mojo::PendingReceiver<blink::mojom::PresentationConnection>
-        receiver_connection_receiver) {
+    blink::mojom::PresentationConnectionResultPtr result) {
   DVLOG(2) << "PresentationServiceImpl::OnReceiverConnectionAvailable";
 
   presentation_receiver_remote_->OnReceiverConnectionAvailable(
-      std::move(presentation_info), std::move(controller_connection_remote),
-      std::move(receiver_connection_receiver));
+      std::move(result));
 }
 
 void PresentationServiceImpl::DidFinishNavigation(
@@ -486,7 +510,7 @@ void PresentationServiceImpl::Reset() {
   if (controller_delegate_)
     controller_delegate_->Reset(render_process_id_, render_frame_id_);
 
-  if (receiver_delegate_ && is_main_frame_)
+  if (receiver_delegate_ && is_outermost_document_)
     receiver_delegate_->Reset(render_process_id_, render_frame_id_);
 
   default_presentation_urls_.clear();
@@ -499,6 +523,7 @@ void PresentationServiceImpl::Reset() {
   pending_reconnect_presentation_cbs_.clear();
 
   presentation_service_receivers_.Clear();
+  presentation_receiver_service_receivers_.Clear();
   presentation_controller_remote_.reset();
   presentation_receiver_remote_.reset();
 }
@@ -527,8 +552,8 @@ PresentationServiceImpl::ScreenAvailabilityListenerImpl::
     ScreenAvailabilityListenerImpl(const GURL& availability_url,
                                    PresentationServiceImpl* service)
     : availability_url_(availability_url), service_(service) {
-  DCHECK(availability_url_.is_valid());
-  DCHECK(service_);
+  CHECK(availability_url_.is_valid(), base::NotFatalUntil::M159);
+  CHECK(service_, base::NotFatalUntil::M159);
 }
 
 PresentationServiceImpl::ScreenAvailabilityListenerImpl::
@@ -565,7 +590,7 @@ PresentationServiceImpl::NewPresentationCallbackWrapper::
 void PresentationServiceImpl::NewPresentationCallbackWrapper::Run(
     blink::mojom::PresentationConnectionResultPtr result,
     blink::mojom::PresentationErrorPtr error) {
-  DCHECK(!callback_.is_null());
+  CHECK(!callback_.is_null(), base::NotFatalUntil::M159);
   std::move(callback_).Run(std::move(result), std::move(error));
 }
 

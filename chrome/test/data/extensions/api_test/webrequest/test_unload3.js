@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,57 +9,79 @@ runTests([
     const url = getSlowURL(hostname);
     const mainUrl = getPageWithFrame(url, hostname);
 
-    expect([
-      { label: 'onBeforeRequest',
-        event: 'onBeforeRequest',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-          frameUrl: url,
-        }
-      },
-      { label: 'onBeforeSendHeaders',
-        event: 'onBeforeSendHeaders',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-        },
-      },
-      { label: 'onSendHeaders',
-        event: 'onSendHeaders',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-        },
-      },
-      { label: 'onErrorOccurred',
-        event: 'onErrorOccurred',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-          fromCache: false,
-          error: 'net::ERR_ABORTED',
-        },
-      }],
-      [['onBeforeRequest', 'onBeforeSendHeaders', 'onSendHeaders',
-        'onErrorOccurred']],
-      {
-        urls: ['<all_urls>'],
-        types: ['sub_frame'],
-      });
+    expect(
+        [
+          {
+            label: 'onBeforeRequest',
+            event: 'onBeforeRequest',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              frameUrl: url,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+          {
+            label: 'onBeforeSendHeaders',
+            event: 'onBeforeSendHeaders',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+          {
+            label: 'onSendHeaders',
+            event: 'onSendHeaders',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+          {
+            label: 'onErrorOccurred',
+            event: 'onErrorOccurred',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+              fromCache: false,
+              error: 'net::ERR_ABORTED',
+            },
+          },
+        ],
+        [[
+          'onBeforeRequest',
+          'onBeforeSendHeaders',
+          'onSendHeaders',
+          'onErrorOccurred',
+        ]],
+        {
+          urls: ['<all_urls>'],
+          types: ['sub_frame'],
+        });
 
     waitUntilSendHeaders('sub_frame', url, function() {
       // Cancels load and triggers onErrorOccurred.
       chrome.tabs.executeScript(tabId, {
-        code: 'document.querySelector("iframe").remove();',
+        code: `document.querySelector('iframe').remove();`,
       });
     });
     chrome.tabs.update(tabId, {url: mainUrl});
@@ -72,54 +94,76 @@ runTests([
     const url = getSlowURL(hostname);
     const mainUrl = getPageWithFrame(url, hostname);
 
-    expect([
-      { label: 'onBeforeRequest',
-        event: 'onBeforeRequest',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-          frameUrl: url,
-        }
-      },
-      { label: 'onBeforeSendHeaders',
-        event: 'onBeforeSendHeaders',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-        },
-      },
-      { label: 'onSendHeaders',
-        event: 'onSendHeaders',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-        },
-      },
-      { label: 'onErrorOccurred',
-        event: 'onErrorOccurred',
-        details: {
-          type: 'sub_frame',
-          url,
-          frameId: 1,
-          parentFrameId: 0,
-          fromCache: false,
-          error: 'net::ERR_ABORTED',
-        },
-      }],
-      [['onBeforeRequest', 'onBeforeSendHeaders', 'onSendHeaders',
-        'onErrorOccurred']],
-      {
-        urls: ['<all_urls>'],
-        types: ['sub_frame'],
-      });
+    expect(
+        [
+          {
+            label: 'onBeforeRequest',
+            event: 'onBeforeRequest',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              frameUrl: url,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+          {
+            label: 'onBeforeSendHeaders',
+            event: 'onBeforeSendHeaders',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+          {
+            label: 'onSendHeaders',
+            event: 'onSendHeaders',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+          {
+            label: 'onErrorOccurred',
+            event: 'onErrorOccurred',
+            details: {
+              type: 'sub_frame',
+              url,
+              frameId: 1,
+              parentFrameId: 0,
+              fromCache: false,
+              error: 'net::ERR_ABORTED',
+              parentDocumentId: 1,
+              initiator: getInitiatorURLForHostname(hostname),
+              frameType: 'sub_frame',
+            },
+          },
+        ],
+        [[
+          'onBeforeRequest',
+          'onBeforeSendHeaders',
+          'onSendHeaders',
+          'onErrorOccurred',
+        ]],
+        {
+          urls: ['<all_urls>'],
+          types: ['sub_frame'],
+        });
 
-    var callbackDone = chrome.test.callbackAdded();
+    const callbackDone = chrome.test.callbackAdded();
 
     waitUntilSendHeaders('sub_frame', url, function() {
       // Cancels load and triggers onErrorOccurred.

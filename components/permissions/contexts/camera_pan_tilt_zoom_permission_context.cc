@@ -1,26 +1,44 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/permissions/contexts/camera_pan_tilt_zoom_permission_context.h"
 
+#include <memory>
+
+#include "base/feature_list.h"
+#include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/common/content_settings_constraints.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/permissions/features.h"
+#include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_manager.h"
 #include "components/permissions/permission_request_id.h"
+#include "components/permissions/permission_util.h"
 #include "components/permissions/permissions_client.h"
 #include "components/webrtc/media_stream_device_enumerator.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/permission_controller.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 
 namespace permissions {
 
 CameraPanTiltZoomPermissionContext::CameraPanTiltZoomPermissionContext(
     content::BrowserContext* browser_context,
+    std::unique_ptr<Delegate> delegate,
     const webrtc::MediaStreamDeviceEnumerator* device_enumerator)
-    : PermissionContextBase(browser_context,
-                            ContentSettingsType::CAMERA_PAN_TILT_ZOOM,
-                            blink::mojom::PermissionsPolicyFeature::kNotFound),
+    : ContentSettingPermissionContextBase(
+          browser_context,
+          ContentSettingsType::CAMERA_PAN_TILT_ZOOM,
+          network::mojom::PermissionsPolicyFeature::kNotFound),
+      delegate_(std::move(delegate)),
       device_enumerator_(device_enumerator) {
   DCHECK(device_enumerator_);
   host_content_settings_map_ =
@@ -34,56 +52,64 @@ CameraPanTiltZoomPermissionContext::~CameraPanTiltZoomPermissionContext() {
 }
 
 void CameraPanTiltZoomPermissionContext::RequestPermission(
-    content::WebContents* web_contents,
-    const permissions::PermissionRequestID& id,
-    const GURL& requesting_frame_origin,
-    bool user_gesture,
+    std::unique_ptr<PermissionRequestData> request_data,
     permissions::BrowserPermissionCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   if (HasAvailableCameraPtzDevices()) {
-    PermissionContextBase::RequestPermission(web_contents, id,
-                                             requesting_frame_origin,
-                                             user_gesture, std::move(callback));
+    ContentSettingPermissionContextBase::RequestPermission(
+        std::move(request_data), std::move(callback));
     return;
   }
 
   // If there is no camera with PTZ capabilities, let's request a "regular"
   // camera permission instead.
-  content::RenderFrameHost* frame = content::RenderFrameHost::FromID(
-      id.render_process_id(), id.render_frame_id());
-  permissions::PermissionManager* permission_manager =
-      permissions::PermissionsClient::Get()->GetPermissionManager(
-          web_contents->GetBrowserContext());
-  permission_manager->RequestPermission(ContentSettingsType::MEDIASTREAM_CAMERA,
-                                        frame, requesting_frame_origin,
-                                        user_gesture, std::move(callback));
+  content::RenderFrameHost* render_frame_host =
+      content::RenderFrameHost::FromID(
+          request_data->id.global_render_frame_host_id());
+
+  if (request_data->requesting_origin !=
+      render_frame_host->GetLastCommittedOrigin().GetURL()) {
+    std::move(callback).Run(content::PermissionResult(
+        blink::mojom::PermissionStatus::DENIED,
+        content::PermissionStatusSource::UNSPECIFIED));
+    return;
+  }
+  render_frame_host->GetBrowserContext()
+      ->GetPermissionController()
+      ->RequestPermissionFromCurrentDocument(
+          render_frame_host,
+          content::PermissionRequestDescription(
+              content::PermissionDescriptorUtil::
+                  CreatePermissionDescriptorForPermissionType(
+                      blink::PermissionType::VIDEO_CAPTURE),
+              request_data->user_gesture),
+          std::move(callback));
 }
 
-#if defined(OS_ANDROID)
-ContentSetting CameraPanTiltZoomPermissionContext::GetPermissionStatusInternal(
+ContentSetting
+CameraPanTiltZoomPermissionContext::GetContentSettingStatusInternal(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     const GURL& embedding_origin) const {
-  // The PTZ permission is automatically granted on Android. It is safe to do so
-  // because pan and tilt are not supported on Android.
-  return CONTENT_SETTING_ALLOW;
-}
-#endif
-
-bool CameraPanTiltZoomPermissionContext::IsRestrictedToSecureOrigins() const {
-  return true;
+  ContentSetting result = CONTENT_SETTING_DEFAULT;
+  if (delegate_->GetPermissionStatusInternal(requesting_origin,
+                                             embedding_origin, &result)) {
+    return result;
+  }
+  return ContentSettingPermissionContextBase::GetContentSettingStatusInternal(
+      render_frame_host, requesting_origin, embedding_origin);
 }
 
 void CameraPanTiltZoomPermissionContext::OnContentSettingChanged(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
-    ContentSettingsType content_type) {
-  PermissionContextBase::OnContentSettingChanged(
-      primary_pattern, secondary_pattern, content_type);
+    ContentSettingsTypeSet content_type_set) {
+  ContentSettingPermissionContextBase::OnContentSettingChanged(
+      primary_pattern, secondary_pattern, content_type_set);
 
-  if (content_type != ContentSettingsType::MEDIASTREAM_CAMERA &&
-      content_type != ContentSettingsType::CAMERA_PAN_TILT_ZOOM) {
+  if (!content_type_set.Contains(ContentSettingsType::MEDIASTREAM_CAMERA) &&
+      !content_type_set.Contains(ContentSettingsType::CAMERA_PAN_TILT_ZOOM)) {
     return;
   }
 
@@ -103,7 +129,7 @@ void CameraPanTiltZoomPermissionContext::OnContentSettingChanged(
     return;
   }
 
-  // TODO(crbug.com/1078272): We should not need to deduce the url from the
+  // TODO(crbug.com/40129438): We should not need to deduce the url from the
   // primary pattern here. Modify the infrastructure to facilitate this
   // particular use case better.
   const GURL url(primary_pattern.ToString());
@@ -114,13 +140,29 @@ void CameraPanTiltZoomPermissionContext::OnContentSettingChanged(
       host_content_settings_map_->GetContentSetting(url, url,
                                                     content_settings_type());
 
-  if (content_type == ContentSettingsType::CAMERA_PAN_TILT_ZOOM) {
+  if (content_type_set.Contains(ContentSettingsType::CAMERA_PAN_TILT_ZOOM)) {
     // Automatically update camera permission to camera PTZ permission as any
     // change to camera PTZ should be reflected to camera.
     updating_mediastream_camera_permission_ = true;
+
+    content_settings::ContentSettingConstraints constraints;
+
+    // Enable last-visit tracking for eligible MEDIASTREAM_CAMERA settings.
+    // This allows Safety Hub to auto-revoke the permission if the site is
+    // not visited for a finite amount of time.
+    if (base::FeatureList::IsEnabled(
+            permissions::features::
+                kSafetyHubUnusedPermissionRevocationForAllSurfaces) &&
+        camera_ptz_setting &&
+        content_settings::CanBeAutoRevokedAsUnusedPermission(
+            ContentSettingsType::MEDIASTREAM_CAMERA, camera_ptz_setting)) {
+      constraints.set_track_last_visit_for_autoexpiration(true);
+    }
+
     host_content_settings_map_->SetContentSettingCustomScope(
         primary_pattern, secondary_pattern,
-        ContentSettingsType::MEDIASTREAM_CAMERA, camera_ptz_setting);
+        ContentSettingsType::MEDIASTREAM_CAMERA, camera_ptz_setting,
+        constraints);
     return;
   }
 
@@ -132,7 +174,8 @@ void CameraPanTiltZoomPermissionContext::OnContentSettingChanged(
   }
 
   ContentSetting mediastream_camera_setting =
-      host_content_settings_map_->GetContentSetting(url, url, content_type);
+      host_content_settings_map_->GetContentSetting(
+          url, url, ContentSettingsType::MEDIASTREAM_CAMERA);
   if (mediastream_camera_setting == CONTENT_SETTING_BLOCK ||
       mediastream_camera_setting == CONTENT_SETTING_ASK) {
     // Automatically reset camera PTZ permission if camera permission

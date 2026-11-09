@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,28 +12,31 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/sequence_checker.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
 #include "net/base/ip_endpoint.h"
 #include "net/dns/dns_config.h"
 #include "net/dns/nsswitch_reader.h"
+#include "net/dns/public/resolv_reader.h"
 #include "net/dns/serial_worker.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 
@@ -56,46 +59,29 @@ constexpr base::FilePath::CharType kFilePathResolv[] = _PATH_RESCONF;
 
 constexpr base::FilePath::CharType kFilePathNsswitch[] = _PATH_NSSWITCH_CONF;
 
-absl::optional<DnsConfig> ConvertResStateToDnsConfig(
+std::optional<DnsConfig> ConvertResStateToDnsConfig(
     const struct __res_state& res) {
+  std::optional<std::vector<net::IPEndPoint>> nameservers = GetNameservers(res);
   DnsConfig dns_config;
   dns_config.unhandled_options = false;
 
-  if (!(res.options & RES_INIT))
-    return absl::nullopt;
+  if (!nameservers.has_value())
+    return std::nullopt;
 
-  static_assert(std::extent<decltype(res.nsaddr_list)>() >= MAXNS &&
-                    std::extent<decltype(res._u._ext.nsaddrs)>() >= MAXNS,
-                "incompatible libresolv res_state");
-  DCHECK_LE(res.nscount, MAXNS);
-  // Initially, glibc stores IPv6 in |_ext.nsaddrs| and IPv4 in |nsaddr_list|.
-  // In res_send.c:res_nsend, it merges |nsaddr_list| into |nsaddrs|,
-  // but we have to combine the two arrays ourselves.
-  for (int i = 0; i < res.nscount; ++i) {
-    IPEndPoint ipe;
-    const struct sockaddr* addr = nullptr;
-    size_t addr_len = 0;
-    if (res.nsaddr_list[i].sin_family) {  // The indicator used by res_nsend.
-      addr = reinterpret_cast<const struct sockaddr*>(&res.nsaddr_list[i]);
-      addr_len = sizeof res.nsaddr_list[i];
-    } else if (res._u._ext.nsaddrs[i]) {
-      addr = reinterpret_cast<const struct sockaddr*>(res._u._ext.nsaddrs[i]);
-      addr_len = sizeof *res._u._ext.nsaddrs[i];
-    } else {
-      return absl::nullopt;
-    }
-    if (!ipe.FromSockAddr(addr, addr_len))
-      return absl::nullopt;
-    dns_config.nameservers.push_back(ipe);
-  }
+  // Expected to be validated by GetNameservers()
+  DCHECK(res.options & RES_INIT);
 
+  dns_config.nameservers = std::move(nameservers.value());
   dns_config.search.clear();
-  for (int i = 0; (i < MAXDNSRCH) && res.dnsrch[i]; ++i) {
-    dns_config.search.emplace_back(res.dnsrch[i]);
+  for (const char* search : base::span(res.dnsrch).first<MAXDNSRCH>()) {
+    if (!search) {
+      break;
+    }
+    dns_config.search.emplace_back(search);
   }
 
   dns_config.ndots = res.ndots;
-  dns_config.fallback_period = base::TimeDelta::FromSeconds(res.retrans);
+  dns_config.fallback_period = base::Seconds(res.retrans);
   dns_config.attempts = res.retry;
 #if defined(RES_ROTATE)
   dns_config.rotate = res.options & RES_ROTATE;
@@ -121,12 +107,12 @@ absl::optional<DnsConfig> ConvertResStateToDnsConfig(
   }
 
   if (dns_config.nameservers.empty())
-    return absl::nullopt;
+    return std::nullopt;
 
   // If any name server is 0.0.0.0, assume the configuration is invalid.
   for (const IPEndPoint& nameserver : dns_config.nameservers) {
     if (nameserver.address().IsZero())
-      return absl::nullopt;
+      return std::nullopt;
   }
   return dns_config;
 }
@@ -150,11 +136,11 @@ bool SetActionBehavior(const NsswitchReader::ServiceAction& action,
       }
     }
   } else {
-    if (in_out_parsed_behavior.count(action.status) >= 1 &&
-        in_out_parsed_behavior[action.status] != action.action) {
+    auto [it, inserted] =
+        in_out_parsed_behavior.try_emplace(action.status, action.action);
+    if (!inserted && it->second != action.action) {
       return false;
     }
-    in_out_parsed_behavior[action.status] = action.action;
   }
 
   return true;
@@ -166,7 +152,7 @@ bool SetActionBehavior(const NsswitchReader::ServiceAction& action,
 // `actions`.
 bool AreActionsCompatible(
     const std::vector<NsswitchReader::ServiceAction>& actions,
-    const std::map<NsswitchReader::Status, NsswitchReader::Action>
+    const std::map<NsswitchReader::Status, NsswitchReader::Action>&
         expected_actions) {
   std::map<NsswitchReader::Status, NsswitchReader::Action> parsed_behavior;
 
@@ -181,23 +167,19 @@ bool AreActionsCompatible(
   }
 
   // Default behavior if not configured.
-  if (parsed_behavior.count(NsswitchReader::Status::kSuccess) == 0)
-    parsed_behavior[NsswitchReader::Status::kSuccess] =
-        NsswitchReader::Action::kReturn;
-  if (parsed_behavior.count(NsswitchReader::Status::kNotFound) == 0)
-    parsed_behavior[NsswitchReader::Status::kNotFound] =
-        NsswitchReader::Action::kContinue;
-  if (parsed_behavior.count(NsswitchReader::Status::kUnavailable) == 0)
-    parsed_behavior[NsswitchReader::Status::kUnavailable] =
-        NsswitchReader::Action::kContinue;
-  if (parsed_behavior.count(NsswitchReader::Status::kTryAgain) == 0)
-    parsed_behavior[NsswitchReader::Status::kTryAgain] =
-        NsswitchReader::Action::kContinue;
+  parsed_behavior.try_emplace(NsswitchReader::Status::kSuccess,
+                              NsswitchReader::Action::kReturn);
+  parsed_behavior.try_emplace(NsswitchReader::Status::kNotFound,
+                              NsswitchReader::Action::kContinue);
+  parsed_behavior.try_emplace(NsswitchReader::Status::kUnavailable,
+                              NsswitchReader::Action::kContinue);
+  parsed_behavior.try_emplace(NsswitchReader::Status::kTryAgain,
+                              NsswitchReader::Action::kContinue);
 
-  for (const std::pair<const NsswitchReader::Status, NsswitchReader::Action>&
-           expected : expected_actions) {
-    if (parsed_behavior[expected.first] != expected.second)
+  for (const auto& [status, action] : expected_actions) {
+    if (parsed_behavior[status] != action) {
       return false;
+    }
   }
 
   return true;
@@ -221,17 +203,17 @@ enum class IncompatibleNsswitchReason {
 
 void RecordIncompatibleNsswitchReason(
     IncompatibleNsswitchReason reason,
-    absl::optional<NsswitchReader::Service> service_token) {
-  UMA_HISTOGRAM_ENUMERATION("Net.DNS.DnsConfig.Nsswitch.IncompatibleReason",
-                            reason);
+    std::optional<NsswitchReader::Service> service_token) {
   if (service_token) {
-    UMA_HISTOGRAM_ENUMERATION("Net.DNS.DnsConfig.Nsswitch.IncompatibleService",
-                              service_token.value());
+    base::UmaHistogramEnumeration(
+        "Net.DNS.DnsConfig.Nsswitch.IncompatibleService",
+        service_token.value());
   }
 }
 
 bool IsNsswitchConfigCompatible(
-    const std::vector<NsswitchReader::ServiceSpecification>& nsswitch_hosts) {
+    const std::vector<NsswitchReader::ServiceSpecification>& nsswitch_hosts,
+    ResolvReader& resolv_reader) {
   bool files_found = false;
   for (const NsswitchReader::ServiceSpecification& specification :
        nsswitch_hosts) {
@@ -267,11 +249,25 @@ bool IsNsswitchConfigCompatible(
         }
         break;
 
+      case NsswitchReader::Service::kResolve:
+        // If /etc/resolv.conf points to systemd-resolved then treat nss-resolve
+        // the same as nss-dns. If it's not then consider the nsswitch
+        // configuration incompatible.
+        if (!resolv_reader.IsLikelySystemdResolved()) {
+          RecordIncompatibleNsswitchReason(
+              IncompatibleNsswitchReason::kIncompatibleService,
+              specification.service);
+          return false;
+        }
+        // systemd-resolved also supports looking up records from /etc/hosts.
+        files_found = true;
+        [[fallthrough]];
+
       case NsswitchReader::Service::kDns:
         if (!files_found) {
           RecordIncompatibleNsswitchReason(
               IncompatibleNsswitchReason::kFilesMissing,
-              /*service_token=*/absl::nullopt);
+              /*service_token=*/std::nullopt);
           return false;
         }
         // Chrome will always stop if DNS finds a result or will otherwise
@@ -294,7 +290,7 @@ bool IsNsswitchConfigCompatible(
       case NsswitchReader::Service::kMdns:
       case NsswitchReader::Service::kMdns4:
       case NsswitchReader::Service::kMdns6:
-      case NsswitchReader::Service::kResolve:
+      case NsswitchReader::Service::kNis:
         RecordIncompatibleNsswitchReason(
             IncompatibleNsswitchReason::kIncompatibleService,
             specification.service);
@@ -318,7 +314,6 @@ bool IsNsswitchConfigCompatible(
         break;
 
       case NsswitchReader::Service::kMyHostname:
-      case NsswitchReader::Service::kNis:
         // Similar enough to Chrome behavior (or unlikely to matter for Chrome
         // resolutions) to be considered compatible unless the actions do
         // something very weird to skip remaining services without a result.
@@ -339,7 +334,7 @@ bool IsNsswitchConfigCompatible(
   }
 
   RecordIncompatibleNsswitchReason(IncompatibleNsswitchReason::kDnsMissing,
-                                   /*service_token=*/absl::nullopt);
+                                   /*service_token=*/std::nullopt);
   return false;
 }
 
@@ -389,12 +384,10 @@ class DnsConfigServiceLinux::Watcher : public DnsConfigService::Watcher {
 
  private:
   void OnResolvFilePathWatcherChange(const base::FilePath& path, bool error) {
-    UMA_HISTOGRAM_BOOLEAN("Net.DNS.DnsConfig.Resolv.FileChange", true);
     OnConfigChanged(!error);
   }
 
   void OnNsswitchFilePathWatcherChange(const base::FilePath& path, bool error) {
-    UMA_HISTOGRAM_BOOLEAN("Net.DNS.DnsConfig.Nsswitch.FileChange", true);
     OnConfigChanged(!error);
   }
 
@@ -415,92 +408,94 @@ class DnsConfigServiceLinux::ConfigReader : public SerialWorker {
                         std::unique_ptr<ResolvReader> resolv_reader,
                         std::unique_ptr<NsswitchReader> nsswitch_reader)
       : service_(&service),
-        resolv_reader_(std::move(resolv_reader)),
-        nsswitch_reader_(std::move(nsswitch_reader)) {
+        work_item_(std::make_unique<WorkItem>(std::move(resolv_reader),
+                                              std::move(nsswitch_reader))) {
     // Allow execution on another thread; nothing thread-specific about
     // constructor.
     DETACH_FROM_SEQUENCE(sequence_checker_);
-
-    DCHECK(resolv_reader_);
-    DCHECK(nsswitch_reader_);
   }
+
+  ~ConfigReader() override = default;
 
   ConfigReader(const ConfigReader&) = delete;
   ConfigReader& operator=(const ConfigReader&) = delete;
 
-  void DoWork() override {
-    base::ScopedBlockingCall scoped_blocking_call(
-        FROM_HERE, base::BlockingType::MAY_BLOCK);
-
-    std::unique_ptr<struct __res_state> res = resolv_reader_->GetResState();
-    if (res) {
-      dns_config_ = ConvertResStateToDnsConfig(*res.get());
-      resolv_reader_->CloseResState(res.get());
-    }
-
-    UMA_HISTOGRAM_BOOLEAN("Net.DNS.DnsConfig.Resolv.Read",
-                          dns_config_.has_value());
-    if (!dns_config_.has_value())
-      return;
-    UMA_HISTOGRAM_BOOLEAN("Net.DNS.DnsConfig.Resolv.Valid",
-                          dns_config_->IsValid());
-    UMA_HISTOGRAM_BOOLEAN("Net.DNS.DnsConfig.Resolv.Compatible",
-                          !dns_config_->unhandled_options);
-
-    // Override `fallback_period` value to match default setting on Windows.
-    dns_config_->fallback_period = kDnsDefaultFallbackPeriod;
-
-    if (dns_config_ && !dns_config_->unhandled_options) {
-      std::vector<NsswitchReader::ServiceSpecification> nsswitch_hosts =
-          nsswitch_reader_->ReadAndParseHosts();
-      UMA_HISTOGRAM_COUNTS_100("Net.DNS.DnsConfig.Nsswitch.NumServices",
-                               nsswitch_hosts.size());
-      dns_config_->unhandled_options =
-          !IsNsswitchConfigCompatible(nsswitch_hosts);
-      UMA_HISTOGRAM_BOOLEAN("Net.DNS.DnsConfig.Nsswitch.Compatible",
-                            !dns_config_->unhandled_options);
-    }
+  std::unique_ptr<SerialWorker::WorkItem> CreateWorkItem() override {
+    // Reuse same `WorkItem` to allow reuse of contained reader objects.
+    DCHECK(work_item_);
+    return std::move(work_item_);
   }
 
-  void OnWorkFinished() override {
+  bool OnWorkFinished(std::unique_ptr<SerialWorker::WorkItem>
+                          serial_worker_work_item) override {
+    DCHECK(serial_worker_work_item);
+    DCHECK(!work_item_);
     DCHECK(!IsCancelled());
-    if (dns_config_.has_value()) {
-      service_->OnConfigRead(std::move(dns_config_).value());
+
+    work_item_.reset(static_cast<WorkItem*>(serial_worker_work_item.release()));
+    if (work_item_->dns_config_.has_value()) {
+      service_->OnConfigRead(std::move(work_item_->dns_config_).value());
+      return true;
     } else {
       LOG(WARNING) << "Failed to read DnsConfig.";
+      return false;
     }
   }
 
  private:
-  ~ConfigReader() override = default;
+  class WorkItem : public SerialWorker::WorkItem {
+   public:
+    WorkItem(std::unique_ptr<ResolvReader> resolv_reader,
+             std::unique_ptr<NsswitchReader> nsswitch_reader)
+        : resolv_reader_(std::move(resolv_reader)),
+          nsswitch_reader_(std::move(nsswitch_reader)) {
+      DCHECK(resolv_reader_);
+      DCHECK(nsswitch_reader_);
+    }
 
-  // Raw pointer to owning DnsConfigService. This must never be accessed inside
-  // DoWork(), since service may be destroyed while SerialWorker is running
-  // on worker thread.
-  DnsConfigServiceLinux* const service_;
-  // Written/accessed in DoWork, read in OnWorkFinished, no locking necessary.
-  absl::optional<DnsConfig> dns_config_;
-  std::unique_ptr<ResolvReader> resolv_reader_;
-  std::unique_ptr<NsswitchReader> nsswitch_reader_;
+    void DoWork() override {
+      base::ScopedBlockingCall scoped_blocking_call(
+          FROM_HERE, base::BlockingType::MAY_BLOCK);
+
+      {
+        std::unique_ptr<ScopedResState> res = resolv_reader_->GetResState();
+        if (res) {
+          dns_config_ = ConvertResStateToDnsConfig(res->state());
+        }
+      }
+
+      if (!dns_config_.has_value())
+        return;
+      base::UmaHistogramBoolean("Net.DNS.DnsConfig.Resolv.Compatible",
+                                !dns_config_->unhandled_options);
+
+      // Override `fallback_period` value to match default setting on
+      // Windows.
+      dns_config_->fallback_period = kDnsDefaultFallbackPeriod;
+
+      if (dns_config_ && !dns_config_->unhandled_options) {
+        std::vector<NsswitchReader::ServiceSpecification> nsswitch_hosts =
+            nsswitch_reader_->ReadAndParseHosts();
+        dns_config_->unhandled_options =
+            !IsNsswitchConfigCompatible(nsswitch_hosts, *resolv_reader_);
+        base::UmaHistogramBoolean("Net.DNS.DnsConfig.Nsswitch.Compatible",
+                                  !dns_config_->unhandled_options);
+      }
+    }
+
+   private:
+    friend class ConfigReader;
+    std::optional<DnsConfig> dns_config_;
+    std::unique_ptr<ResolvReader> resolv_reader_;
+    std::unique_ptr<NsswitchReader> nsswitch_reader_;
+  };
+
+  // Raw pointer to owning DnsConfigService.
+  const raw_ptr<DnsConfigServiceLinux> service_;
+
+  // Null while the `WorkItem` is running on the `ThreadPool`.
+  std::unique_ptr<WorkItem> work_item_;
 };
-
-std::unique_ptr<struct __res_state>
-DnsConfigServiceLinux::ResolvReader::GetResState() {
-  auto res = std::make_unique<struct __res_state>();
-  memset(res.get(), 0, sizeof(struct __res_state));
-
-  if (res_ninit(res.get()) != 0) {
-    CloseResState(res.get());
-    return nullptr;
-  }
-
-  return res;
-}
-
-void DnsConfigServiceLinux::ResolvReader::CloseResState(
-    struct __res_state* res) {
-  res_nclose(res);
-}
 
 DnsConfigServiceLinux::DnsConfigServiceLinux()
     : DnsConfigService(kFilePathHosts) {
@@ -530,7 +525,7 @@ void DnsConfigServiceLinux::CreateReader() {
   DCHECK(!config_reader_);
   DCHECK(resolv_reader_);
   DCHECK(nsswitch_reader_);
-  config_reader_ = base::MakeRefCounted<ConfigReader>(
+  config_reader_ = std::make_unique<ConfigReader>(
       *this, std::move(resolv_reader_), std::move(nsswitch_reader_));
 }
 

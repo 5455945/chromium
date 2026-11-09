@@ -1,13 +1,13 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import BaseHTTPServer
+import http.server
 import os
-import SocketServer
-import threading
+import socketserver
 import ssl
-import sys
+import sys  # noqa: F401
+import threading
 
 
 class Responder(object):
@@ -23,8 +23,11 @@ class Responder(object):
 
   def SendResponseFromFile(self, path):
     """Sends OK response with the given file as the body."""
-    with open(path, 'r') as f:
-      self.SendResponse({}, f.read())
+    headers = {}
+    if path.endswith(".json"):
+      headers["content-type"] = "application/json"
+    with open(path, 'rb') as f:
+      self.SendResponse(headers, f.read())
 
   def SendHeaders(self, headers={}, content_length=None):
     """Sends headers for OK response."""
@@ -54,10 +57,10 @@ class Request(object):
     return self._handler.path
 
   def GetHeader(self, name):
-    return self._handler.headers.getheader(name)
+    return self._handler.headers.get(name)
 
 
-class _BaseServer(BaseHTTPServer.HTTPServer):
+class _BaseServer(http.server.HTTPServer):
   """Internal server that throws if timed out waiting for a request."""
 
   def __init__(self, on_request, server_cert_and_key_path=None):
@@ -70,7 +73,8 @@ class _BaseServer(BaseHTTPServer.HTTPServer):
       server_cert_and_key_path: path to a PEM file containing the cert and key.
                                 if it is None, start the server as an HTTP one.
     """
-    class _Handler(BaseHTTPServer.BaseHTTPRequestHandler):
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
       """Internal handler that just asks the server to handle the request."""
 
       def do_GET(self):
@@ -79,28 +83,32 @@ class _BaseServer(BaseHTTPServer.HTTPServer):
           return
         on_request(Request(self), Responder(self))
 
+      def do_POST(self):
+        on_request(Request(self), Responder(self))
+
       def log_message(self, *args, **kwargs):
         """Overriddes base class method to disable logging."""
         pass
 
       def handle(self):
         try:
-          BaseHTTPServer.BaseHTTPRequestHandler.handle(self)
-        except:
-          pass # Ignore socket errors.
+          http.server.BaseHTTPRequestHandler.handle(self)
+        except:  # noqa: E722
+          pass  # Ignore socket errors.
 
       def finish(self):
         try:
-          BaseHTTPServer.BaseHTTPRequestHandler.finish(self)
-        except:
-          pass # Ignore socket errors.
+          http.server.BaseHTTPRequestHandler.finish(self)
+        except:  # noqa: E722
+          pass  # Ignore socket errors.
 
-    BaseHTTPServer.HTTPServer.__init__(self, ('127.0.0.1', 0), _Handler)
+    http.server.HTTPServer.__init__(self, ('127.0.0.1', 0), _Handler)
 
     if server_cert_and_key_path is not None:
       self._is_https_enabled = True
       self.socket = ssl.wrap_socket(
-          self.socket, certfile=server_cert_and_key_path, server_side=True)
+        self.socket, certfile=server_cert_and_key_path, server_side=True
+      )
     else:
       self._is_https_enabled = False
 
@@ -116,8 +124,9 @@ class _BaseServer(BaseHTTPServer.HTTPServer):
     return 'http' + postfix
 
 
-class _ThreadingServer(SocketServer.ThreadingMixIn, _BaseServer):
+class _ThreadingServer(socketserver.ThreadingMixIn, _BaseServer):
   """_BaseServer enhanced to handle multiple requests simultaneously"""
+
   pass
 
 
@@ -168,8 +177,7 @@ class WebServer(object):
       self._path_maps_lock.release()
 
     # Serve from file.
-    path = os.path.normpath(
-        os.path.join(self._root_dir, *path.split('/')))
+    path = os.path.normpath(os.path.join(self._root_dir, *path.split('/')))
     if not path.startswith(self._root_dir):
       responder.SendError(403)
       return
@@ -194,7 +202,6 @@ class WebServer(object):
         self._path_callback_map[path] = func
     finally:
       self._path_maps_lock.release()
-
 
   def GetUrl(self, host=None):
     """Returns the base URL of the server."""
@@ -241,8 +248,10 @@ class SyncWebServer(object):
 
   def RespondWithContent(self, content):
     """Blocks until request comes in, then handles it with the given content."""
+
     def SendContent(responder):
       responder.SendResponse({}, content)
+
     self.Respond(SendContent)
 
   def GetUrl(self, host=None):

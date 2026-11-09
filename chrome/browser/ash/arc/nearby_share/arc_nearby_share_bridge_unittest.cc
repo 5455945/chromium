@@ -1,14 +1,15 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/nearby_share/arc_nearby_share_bridge.h"
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/session/arc_bridge_service.h"
-#include "components/arc/test/connection_holder_util.h"
-#include "components/arc/test/fake_nearby_share_instance.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_nearby_share_instance.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -40,7 +41,7 @@ class ArcNearbyShareBridgeTest : public testing::Test {
   ArcServiceManager arc_service_manager_;
   FakeNearbyShareInstance nearby_share_instance_;
   TestingProfile profile_;
-  ArcNearbyShareBridge* bridge_ = nullptr;
+  raw_ptr<ArcNearbyShareBridge> bridge_ = nullptr;
 };
 
 TEST_F(ArcNearbyShareBridgeTest, ConstructDestruct) {}

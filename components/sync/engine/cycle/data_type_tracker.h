@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,32 +8,33 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/time/time.h"
-#include "components/sync/base/invalidation_interface.h"
-#include "components/sync/base/model_type.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/base/sync_invalidation.h"
+#include "components/sync/engine/cycle/commit_quota.h"
+
+namespace sync_pb {
+class GetUpdateTriggers;
+}  // namespace sync_pb
 
 namespace syncer {
 
-class InvalidationInterface;
-
 struct WaitInterval {
-  enum BlockingMode {
+  enum class BlockingMode {
     // Uninitialized state, should not be set in practice.
-    UNKNOWN = -1,
+    kUnknown = -1,
     // We enter a series of increasingly longer WaitIntervals if we experience
     // repeated transient failures.  We retry at the end of each interval.
-    EXPONENTIAL_BACKOFF,
+    kExponentialBackoff,
     // A server-initiated throttled interval.  We do not allow any syncing
     // during such an interval.
-    THROTTLED,
+    kThrottled,
     // We re retrying for exponetial backoff.
-    EXPONENTIAL_BACKOFF_RETRYING,
+    kExponentialBackoffRetrying,
   };
-  WaitInterval();
   WaitInterval(BlockingMode mode, base::TimeDelta length);
   ~WaitInterval();
 
@@ -44,7 +45,11 @@ struct WaitInterval {
 // A class to track the per-type scheduling data.
 class DataTypeTracker {
  public:
-  explicit DataTypeTracker(ModelType type);
+  explicit DataTypeTracker(DataType type);
+
+  DataTypeTracker(const DataTypeTracker&) = delete;
+  DataTypeTracker& operator=(const DataTypeTracker&) = delete;
+
   ~DataTypeTracker();
 
   // For STL compatibility, we do not forbid the creation of a default copy
@@ -56,16 +61,17 @@ class DataTypeTracker {
   // Tracks that a local refresh request has been made for this type.
   void RecordLocalRefreshRequest();
 
-  // Tracks that we received invalidation notifications for this type.
-  void RecordRemoteInvalidation(
-      std::unique_ptr<InvalidationInterface> incoming);
-
   // Takes note that initial sync is pending for this type.
   void RecordInitialSyncRequired();
 
   // Takes note that the conflict happended for this type, need to sync to
   // resolve conflict locally.
   void RecordCommitConflict();
+
+  // Records that a commit message has been sent (note that each commit message
+  // may include multiple entities of this data type and each sync cycle may
+  // include an arbitrary number of commit messages).
+  void RecordSuccessfulCommitMessage();
 
   // Records that a sync cycle has been performed successfully.
   // Generally, this means that all local changes have been committed and all
@@ -75,14 +81,11 @@ class DataTypeTracker {
   // called since we count those cases as success. So we need to check if the
   // datatype is in partial throttling or backoff in the beginning of this
   // function.
-  void RecordSuccessfulSyncCycle();
+  void RecordSuccessfulSyncCycleIfNotBlocked();
 
   // Records that the initial sync has completed successfully. This gets called
   // when the initial configuration/download cycle has finished for this type.
   void RecordInitialSyncDone();
-
-  // Updates the size of the invalidations payload buffer.
-  void UpdatePayloadBufferSize(size_t new_size);
 
   // Returns true if there is a good reason to perform a sync cycle.  This does
   // not take into account whether or not now is a good time to perform a sync
@@ -109,14 +112,10 @@ class DataTypeTracker {
   // Returns true if this type is requesting a sync to resolve conflict issue.
   bool IsSyncRequiredToResolveConflict() const;
 
-  // Fills in the legacy invalidaiton payload information fields.
-  void SetLegacyNotificationHint(
-      sync_pb::DataTypeProgressMarker* progress) const;
-
   // Fills some type-specific contents of a GetUpdates request protobuf.  These
   // messages provide the server with the information it needs to decide how to
   // handle a request.
-  void FillGetUpdatesTriggersMessage(sync_pb::GetUpdateTriggers* msg) const;
+  void FillGetUpdatesTriggersMessage(sync_pb::GetUpdateTriggers* msg);
 
   // Returns true if the type is currently throttled or backed off.
   bool IsBlocked() const;
@@ -130,22 +129,29 @@ class DataTypeTracker {
   // Returns the last backoff interval.
   base::TimeDelta GetLastBackoffInterval() const;
 
-  // Throttles the type from |now| until |now| + |duration|.
+  // Throttles the type from `now` until `now` + `duration`.
   void ThrottleType(base::TimeDelta duration, base::TimeTicks now);
 
-  // Backs off the type from |now| until |now| + |duration|.
+  // Backs off the type from `now` until `now` + `duration`.
   void BackOffType(base::TimeDelta duration, base::TimeTicks now);
 
-  // Unblocks the type if base::TimeTicks::Now() >= |unblock_time_| expiry time.
+  // Unblocks the type if base::TimeTicks::Now() >= `unblock_time_` expiry time.
   void UpdateThrottleOrBackoffState();
 
+  // Update `has_pending_invalidations_` flag.
+  void SetHasPendingInvalidations(bool has_pending_invalidations);
+
   // Update the local change nudge delay for this type.
-  // No update happens if |delay| is too small (less than the smallest default
+  // No update happens if `delay` is too small (less than the smallest default
   // delay).
   void UpdateLocalChangeNudgeDelay(base::TimeDelta delay);
 
   // Returns the current local change nudge delay for this type.
-  base::TimeDelta GetLocalChangeNudgeDelay() const;
+  base::TimeDelta GetLocalChangeNudgeDelay(bool is_single_client) const;
+
+  // Returns the current nudge delay for receiving remote invalitation for this
+  // type;
+  base::TimeDelta GetRemoteInvalidationDelay() const;
 
   // Return the BlockingMode for this type.
   WaitInterval::BlockingMode GetBlockingMode() const;
@@ -154,49 +160,56 @@ class DataTypeTracker {
   // is too small. This method ignores that check.
   void SetLocalChangeNudgeDelayIgnoringMinForTest(base::TimeDelta delay);
 
+  // Updates the parameters for the commit quota if the data type can receive
+  // commits via extension APIs. Empty optional means using the defaults.
+  void SetQuotaParamsIfExtensionType(
+      std::optional<int> max_tokens,
+      std::optional<base::TimeDelta> refill_interval,
+      std::optional<base::TimeDelta> depleted_quota_nudge_delay);
+
  private:
   friend class SyncSchedulerImplTest;
 
+  const DataType type_;
+
   // Number of local change nudges received for this type since the last
   // successful sync cycle.
-  int local_nudge_count_;
+  int local_nudge_count_ = 0;
 
   // Number of local refresh requests received for this type since the last
   // successful sync cycle.
-  int local_refresh_request_count_;
-
-  // The list of invalidations received since the last successful sync cycle.
-  // This list may be incomplete.  See also:
-  // drop_tracker_.IsRecoveringFromDropEvent() and server_payload_overflow_.
-  //
-  // This list takes ownership of its contents.
-  std::vector<std::unique_ptr<InvalidationInterface>> pending_invalidations_;
-
-  size_t payload_buffer_size_;
+  int local_refresh_request_count_ = 0;
 
   // Set to true if this type is ready for, but has not yet completed initial
   // sync.
-  bool initial_sync_required_;
+  bool initial_sync_required_ = false;
 
   // Set to true if this type need to get update to resolve conflict issue.
-  bool sync_required_to_resolve_conflict_;
+  bool sync_required_to_resolve_conflict_ = false;
+
+  // Set to true if this type has invalidations that are needed to be used in
+  // GetUpdate() trigger message.
+  bool has_pending_invalidations_ = false;
 
   // If !unblock_time_.is_null(), this type is throttled or backed off, check
-  // |wait_interval_->mode| for specific reason. Now the datatype may not
+  // `wait_interval_->mode` for specific reason. Now the datatype may not
   // download or commit data until the specified time.
   base::TimeTicks unblock_time_;
 
-  // Current wait state.  Null if we're not in backoff or throttling.
-  std::unique_ptr<WaitInterval> wait_interval_;
-
-  // A helper to keep track invalidations we dropped due to overflow.
-  std::unique_ptr<InvalidationInterface> last_dropped_invalidation_;
+  // Current wait state. `Nullopt` if we're not in backoff or throttling.
+  std::optional<WaitInterval> wait_interval_;
 
   // The amount of time to delay a sync cycle by when a local change for this
   // type occurs.
   base::TimeDelta local_change_nudge_delay_;
 
-  DISALLOW_COPY_AND_ASSIGN(DataTypeTracker);
+  // Quota for commits (used only for data types that can be committed by
+  // extensions).
+  const std::unique_ptr<CommitQuota> quota_;
+
+  // The amount of time to delay a sync cycle by when a local change for this
+  // type occurs and the commit quota is depleted.
+  base::TimeDelta depleted_quota_nudge_delay_;
 };
 
 }  // namespace syncer

@@ -3,8 +3,11 @@ Short Name: cityhash
 URL: https://github.com/google/cityhash
 Version: 1.0.3
 Revision: 00b9287e8c1255b5922ef90e304d5287361b2c2a
+Update Mechanism: Manual
 License: MIT
+License File: COPYING
 Security Critical: yes
+Shipped: yes
 
 Description:
 Provides high-quality (but non-cryptographic) hash functions for strings.
@@ -19,3 +22,4 @@ Local Modifications:
 - 004-google-style.patch: Use nullptr, remove 'using namespace std;'.
 - 005-bswap-clang.patch: Use the builtins for bswap when compiling with clang.
 - clang-format
+- 006-warnings.patch: Fix various compiler warnings.

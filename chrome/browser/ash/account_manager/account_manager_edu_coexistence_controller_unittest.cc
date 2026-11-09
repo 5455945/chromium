@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,25 @@
 #include <memory>
 #include <string>
 
-#include "ash/components/account_manager/account_manager_factory.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
-#include "chrome/browser/account_manager_facade_factory.h"
 #include "chrome/browser/ash/child_accounts/edu_coexistence_tos_store_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/supervised_user/supervised_user_constants.h"
-#include "chrome/browser/ui/webui/chromeos/edu_coexistence/edu_coexistence_login_handler_chromeos.h"
+#include "chrome/browser/ui/webui/ash/edu_coexistence/edu_coexistence_login_handler.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "components/account_id/account_id.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/account_manager_core/account.h"
-#include "components/account_manager_core/account_manager_facade.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -36,40 +37,37 @@ namespace {
 constexpr char kValidToken[] = "valid-token";
 
 constexpr char kPrimaryAccount[] = "primaryaccount@gmail.com";
-constexpr char kPrimaryAccountGaiaId[] = "primary-account-id";
+constexpr GaiaId::Literal kPrimaryAccountGaiaId("primary-account-id");
 
 constexpr char kSecondaryAccount1[] = "secondaryAccount1@gmail.com";
-constexpr char kSecondaryAccount1GaiaId[] = "secondary-account-1";
+constexpr GaiaId::Literal kSecondaryAccount1GaiaId("secondary-account-1");
 
 constexpr char kSecondaryAccount2[] = "secondaryAccount2@gmail.com";
-constexpr char kSecondaryAccount2GaiaId[] = "secondary-account-2";
+constexpr GaiaId::Literal kSecondaryAccount2GaiaId("secondary-account-2");
 
 constexpr char kSecondaryAccount3[] = "secondaryAccount3@gmail.com";
-constexpr char kSecondaryAccount3GaiaId[] = "secondary-account-3";
+constexpr GaiaId::Literal kSecondaryAccount3GaiaId("secondary-account-3");
 
 constexpr char kSecondaryAccount4[] = "secondaryAccount4@gmail.com";
-constexpr char kSecondaryAccount4GaiaId[] = "secondary-account-4";
+constexpr GaiaId::Literal kSecondaryAccount4GaiaId("secondary-account-4");
 
-const AccountId kDeviceAccount =
-    AccountId::FromUserEmailGaiaId(kPrimaryAccount, kPrimaryAccountGaiaId);
+constexpr AccountId::Literal kDeviceAccount =
+    AccountId::Literal::FromUserEmailGaiaId(kPrimaryAccount,
+                                            kPrimaryAccountGaiaId);
 
 ::account_manager::Account GetAccountFor(const std::string& email,
-                                         const std::string& gaia_id) {
-  ::account_manager::Account account;
-  account.raw_email = email;
-  account.key.id = gaia_id;
-  account.key.account_type = account_manager::AccountType::kGaia;
-  return account;
+                                         const GaiaId& gaia_id) {
+  ::account_manager::AccountKey key =
+      ::account_manager::AccountKey::FromGaiaId(gaia_id);
+  return {key, email};
 }
 
 void AddAccount(account_manager::AccountManager* account_manager,
                 const std::string& email,
-                const std::string& gaia_id) {
-  ::account_manager::AccountKey account_key;
-  account_key.id = gaia_id;
-  account_key.account_type = account_manager::AccountType::kGaia;
-
-  account_manager->UpsertAccount(account_key, email, kValidToken);
+                const GaiaId& gaia_id) {
+  ::account_manager::AccountKey key =
+      ::account_manager::AccountKey::FromGaiaId(gaia_id);
+  account_manager->UpsertAccount(key, email, kValidToken);
 }
 
 }  // namespace
@@ -85,7 +83,7 @@ class AccountManagerEducoexistenceControllerTest : public testing::Test {
 
   void SetUp() override;
 
-  void UpdatEduCoexistenceToSAcceptedVersion(const std::string& email,
+  void UpdatEduCoexistenceToSAcceptedVersion(const GaiaId& gaia_id,
                                              const std::string& tosVersion);
 
   void UpdateEduCoexistenceToSVersion(const std::string& new_version);
@@ -98,32 +96,25 @@ class AccountManagerEducoexistenceControllerTest : public testing::Test {
   account_manager::AccountManager* account_manager() {
     return account_manager_;
   }
-  account_manager::AccountManagerFacade* account_manager_facade() {
-    return account_manager_facade_;
-  }
 
  private:
   // To support context of browser threads.
   content::BrowserTaskEnvironment task_environment_;
-  account_manager::AccountManager* account_manager_ = nullptr;
-  account_manager::AccountManagerFacade* account_manager_facade_ = nullptr;
+  raw_ptr<account_manager::AccountManager> account_manager_ = nullptr;
   network::TestURLLoaderFactory test_url_loader_factory_;
   TestingProfile testing_profile_;
 };
 
 void AccountManagerEducoexistenceControllerTest::SetUp() {
-  testing_profile_.SetSupervisedUserId(supervised_users::kChildAccountSUID);
-  account_manager_ = g_browser_process->platform_part()
-                         ->GetAccountManagerFactory()
-                         ->GetAccountManager(profile()->GetPath().value());
-  account_manager_facade_ =
-      ::GetAccountManagerFacade(profile()->GetPath().value());
+  testing_profile_.SetIsSupervisedProfile();
+  account_manager_ = AccountManagerFactory::Get()->GetAccountManager(
+      profile()->GetPath().value());
 
   AddAccount(account_manager(), kPrimaryAccount, kPrimaryAccountGaiaId);
 }
 
 void AccountManagerEducoexistenceControllerTest::
-    UpdatEduCoexistenceToSAcceptedVersion(const std::string& gaia_id,
+    UpdatEduCoexistenceToSAcceptedVersion(const GaiaId& gaia_id,
                                           const std::string& tosVersion) {
   edu_coexistence::UpdateAcceptedToSVersionPref(
       profile(), edu_coexistence::UserConsentInfo(gaia_id, tosVersion));
@@ -131,25 +122,15 @@ void AccountManagerEducoexistenceControllerTest::
 
 void AccountManagerEducoexistenceControllerTest::UpdateEduCoexistenceToSVersion(
     const std::string& new_version) {
-  profile()->GetPrefs()->SetString(chromeos::prefs::kEduCoexistenceToSVersion,
+  profile()->GetPrefs()->SetString(prefs::kEduCoexistenceToSVersion,
                                    new_version);
 }
 
 bool AccountManagerEducoexistenceControllerTest::HasInvalidGaiaToken(
     const ::account_manager::Account& account) {
-  base::RunLoop run_loop;
-  bool is_dummy_return = false;
-  account_manager()->HasDummyGaiaToken(
-      account.key, base::BindOnce(
-                       [](const base::RepeatingClosure& run_loop_callback,
-                          bool* out, bool is_invalid) {
-                         *out = is_invalid;
-                         run_loop_callback.Run();
-                       },
-                       run_loop.QuitClosure(), &is_dummy_return));
-  run_loop.Run();
-
-  return is_dummy_return;
+  base::test::TestFuture<bool> future;
+  account_manager()->HasDummyGaiaToken(account.key, future.GetCallback());
+  return future.Get();
 }
 
 TEST_F(AccountManagerEducoexistenceControllerTest,
@@ -177,7 +158,6 @@ TEST_F(AccountManagerEducoexistenceControllerTest,
 
   EduCoexistenceConsentInvalidationController
       edu_coexistence_invalidation_controller(profile(), account_manager(),
-                                              account_manager_facade(),
                                               kDeviceAccount);
   edu_coexistence_invalidation_controller.Init();
 
@@ -204,7 +184,6 @@ TEST_F(AccountManagerEducoexistenceControllerTest,
 
   EduCoexistenceConsentInvalidationController
       edu_coexistence_invalidation_controller(profile(), account_manager(),
-                                              account_manager_facade(),
                                               kDeviceAccount);
   edu_coexistence_invalidation_controller.Init();
 
@@ -239,7 +218,6 @@ TEST_F(AccountManagerEducoexistenceControllerTest,
 
   EduCoexistenceConsentInvalidationController
       edu_coexistence_invalidation_controller(profile(), account_manager(),
-                                              account_manager_facade(),
                                               kDeviceAccount);
   edu_coexistence_invalidation_controller.Init();
 

@@ -1,8 +1,4 @@
-monorail {
-  component: "Blink>WebAuthentication"
-}
-team_email: "identity-dev@chromium.org"
-wpt {
+mixins: "//components/webauthn/COMMON_METADATA"
+wpt: {
   notify: YES
 }
-

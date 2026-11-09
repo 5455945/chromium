@@ -1,54 +1,49 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/javascript_dialogs/app_modal_dialog_manager.h"
 
 #include <algorithm>
+#include <memory>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/i18n/rtl.h"
-#include "base/macros.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/javascript_dialogs/app_modal_dialog_manager_delegate.h"
 #include "components/javascript_dialogs/app_modal_dialog_queue.h"
 #include "components/javascript_dialogs/app_modal_dialog_view.h"
+#include "components/javascript_dialogs/core/dialog_util.h"
 #include "components/javascript_dialogs/extensions_client.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/url_formatter/elide_url.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/javascript_dialog_type.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/font_list.h"
 
+class GURL;
+
 namespace javascript_dialogs {
 
 namespace {
 
-#if !defined(OS_ANDROID)
-// Keep in sync with kDefaultMessageWidth, but allow some space for the rest of
-// the text.
-const int kUrlElideWidth = 350;
-#endif
-
 class DefaultExtensionsClient : public ExtensionsClient {
  public:
-  DefaultExtensionsClient() {}
-  ~DefaultExtensionsClient() override {}
+  DefaultExtensionsClient() = default;
+
+  DefaultExtensionsClient(const DefaultExtensionsClient&) = delete;
+  DefaultExtensionsClient& operator=(const DefaultExtensionsClient&) = delete;
+
+  ~DefaultExtensionsClient() override = default;
 
  private:
   // ExtensionsClient:
   void OnDialogOpened(content::WebContents* web_contents) override {}
   void OnDialogClosed(content::WebContents* web_contents) override {}
-  bool GetExtensionName(content::WebContents* web_contents,
-                        const GURL& alerting_frame_url,
-                        std::string* name_out) override {
-    return false;
-  }
-
-  DISALLOW_COPY_AND_ASSIGN(DefaultExtensionsClient);
 };
 
 bool ShouldDisplaySuppressCheckbox(
@@ -60,7 +55,8 @@ bool ShouldDisplaySuppressCheckbox(
 
 // static
 AppModalDialogManager* AppModalDialogManager::GetInstance() {
-  return base::Singleton<AppModalDialogManager>::get();
+  static base::NoDestructor<AppModalDialogManager> instance;
+  return instance.get();
 }
 
 void AppModalDialogManager::SetNativeDialogFactory(
@@ -73,78 +69,37 @@ void AppModalDialogManager::SetExtensionsClient(
   extensions_client_ = std::move(extensions_client);
 }
 
+void AppModalDialogManager::SetDelegate(
+    std::unique_ptr<AppModalDialogManagerDelegate> delegate) {
+  delegate_ = std::move(delegate);
+}
+
 AppModalDialogManager::AppModalDialogManager()
     : extensions_client_(new DefaultExtensionsClient) {}
 
-AppModalDialogManager::~AppModalDialogManager() {}
+AppModalDialogManager::~AppModalDialogManager() = default;
 
 std::u16string AppModalDialogManager::GetTitle(
     content::WebContents* web_contents,
-    const GURL& alerting_frame_url) {
-  // For extensions, show the extension name, but only if the origin of
-  // the alert matches the top-level WebContents.
-  std::string name;
-  if (extensions_client_->GetExtensionName(web_contents, alerting_frame_url,
-                                           &name))
-    return base::UTF8ToUTF16(name);
+    const url::Origin& alerting_frame_origin) {
+  if (delegate_) {
+    return delegate_->GetTitle(web_contents, alerting_frame_origin);
+  }
 
   // Otherwise, return the formatted URL.
-  return GetTitleImpl(web_contents->GetLastCommittedURL(), alerting_frame_url);
+  return GetSiteFrameTitle(
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
+      alerting_frame_origin);
 }
-
-namespace {
-
-// Unwraps an URL to get to an embedded URL.
-GURL UnwrapURL(const GURL& url) {
-  // GURL will unwrap filesystem:// URLs so ask it to do so.
-  const GURL* unwrapped_url = url.inner_url();
-  if (unwrapped_url)
-    return *unwrapped_url;
-
-  // GURL::inner_url() should unwrap blob: URLs but doesn't do so
-  // (https://crbug.com/690091). Therefore, do it manually.
-  //
-  // https://url.spec.whatwg.org/#origin defines the origin of a blob:// URL as
-  // the origin of the URL which results from parsing the "path", which boils
-  // down to everything after the scheme. GURL's 'GetContent()' gives us exactly
-  // that. See url::Origin()'s constructor.
-  if (url.SchemeIsBlob())
-    return GURL(url.GetContent());
-
-  return url;
-}
-
-}  // namespace
 
 // static
-std::u16string AppModalDialogManager::GetTitleImpl(
-    const GURL& parent_frame_url,
-    const GURL& alerting_frame_url) {
-  GURL unwrapped_parent_frame_url = UnwrapURL(parent_frame_url);
-  GURL unwrapped_alerting_frame_url = UnwrapURL(alerting_frame_url);
-
-  bool is_same_origin_as_main_frame =
-      (unwrapped_parent_frame_url.GetOrigin() ==
-       unwrapped_alerting_frame_url.GetOrigin());
-  if (unwrapped_alerting_frame_url.IsStandard() &&
-      !unwrapped_alerting_frame_url.SchemeIsFile()) {
-#if defined(OS_ANDROID)
-    std::u16string url_string = url_formatter::FormatUrlForSecurityDisplay(
-        unwrapped_alerting_frame_url,
-        url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
-#else
-    std::u16string url_string = url_formatter::ElideHost(
-        unwrapped_alerting_frame_url, gfx::FontList(), kUrlElideWidth);
-#endif
-    return l10n_util::GetStringFUTF16(
-        is_same_origin_as_main_frame ? IDS_JAVASCRIPT_MESSAGEBOX_TITLE
-                                     : IDS_JAVASCRIPT_MESSAGEBOX_TITLE_IFRAME,
-        base::i18n::GetDisplayStringInLTRDirectionality(url_string));
-  }
-  return l10n_util::GetStringUTF16(
-      is_same_origin_as_main_frame
-          ? IDS_JAVASCRIPT_MESSAGEBOX_TITLE_NONSTANDARD_URL
-          : IDS_JAVASCRIPT_MESSAGEBOX_TITLE_NONSTANDARD_URL_IFRAME);
+std::u16string AppModalDialogManager::GetSiteFrameTitle(
+    const GURL& main_frame_url,
+    const url::Origin& main_frame_origin,
+    const url::Origin& alerting_frame_origin) {
+  return util::DialogTitle(main_frame_url, main_frame_origin,
+                           alerting_frame_origin);
 }
 
 void AppModalDialogManager::RunJavaScriptDialog(
@@ -166,19 +121,20 @@ void AppModalDialogManager::RunJavaScriptDialog(
   }
 
   std::u16string dialog_title =
-      GetTitle(web_contents, render_frame_host->GetLastCommittedURL());
+      GetTitle(web_contents, render_frame_host->GetLastCommittedOrigin());
 
   extensions_client_->OnDialogOpened(web_contents);
 
-  AppModalDialogQueue::GetInstance()->AddDialog(new AppModalDialogController(
-      web_contents, &javascript_dialog_extra_data_, dialog_title, dialog_type,
-      message_text, default_prompt_text,
-      ShouldDisplaySuppressCheckbox(extra_data),
-      false,  // is_before_unload_dialog
-      false,  // is_reload
-      base::BindOnce(&AppModalDialogManager::OnDialogClosed,
-                     base::Unretained(this), web_contents,
-                     std::move(callback))));
+  AppModalDialogQueue::GetInstance()->AddDialog(
+      std::make_unique<AppModalDialogController>(
+          web_contents, &javascript_dialog_extra_data_, dialog_title,
+          dialog_type, message_text, default_prompt_text,
+          ShouldDisplaySuppressCheckbox(extra_data),
+          /*is_before_unload_dialog=*/false,
+          /*is_reload=*/false,
+          base::BindOnce(&AppModalDialogManager::OnDialogClosed,
+                         base::Unretained(this), web_contents,
+                         std::move(callback))));
 }
 
 void AppModalDialogManager::RunBeforeUnloadDialog(
@@ -233,16 +189,16 @@ void AppModalDialogManager::RunBeforeUnloadDialogWithOptions(
 
   extensions_client_->OnDialogOpened(web_contents);
 
-  AppModalDialogQueue::GetInstance()->AddDialog(new AppModalDialogController(
-      web_contents, &javascript_dialog_extra_data_, title,
-      content::JAVASCRIPT_DIALOG_TYPE_CONFIRM, message,
-      std::u16string(),  // default_prompt_text
-      ShouldDisplaySuppressCheckbox(extra_data),
-      true,  // is_before_unload_dialog
-      is_reload,
-      base::BindOnce(&AppModalDialogManager::OnDialogClosed,
-                     base::Unretained(this), web_contents,
-                     std::move(callback))));
+  AppModalDialogQueue::GetInstance()->AddDialog(
+      std::make_unique<AppModalDialogController>(
+          web_contents, &javascript_dialog_extra_data_, title,
+          content::JAVASCRIPT_DIALOG_TYPE_CONFIRM, message,
+          /*default_prompt_text=*/std::u16string(),
+          ShouldDisplaySuppressCheckbox(extra_data),
+          /*is_before_unload_dialog=*/true, is_reload,
+          base::BindOnce(&AppModalDialogManager::OnDialogClosed,
+                         base::Unretained(this), web_contents,
+                         std::move(callback))));
 }
 
 bool AppModalDialogManager::HandleJavaScriptDialog(
@@ -266,8 +222,9 @@ bool AppModalDialogManager::HandleJavaScriptDialog(
   }
 
   if (accept) {
-    if (prompt_override)
+    if (prompt_override) {
       dialog->SetOverridePromptText(*prompt_override);
+    }
     dialog->view()->AcceptAppModalDialog();
   } else {
     dialog->view()->CancelAppModalDialog();
@@ -278,16 +235,43 @@ bool AppModalDialogManager::HandleJavaScriptDialog(
 void AppModalDialogManager::CancelDialogs(content::WebContents* web_contents,
                                           bool reset_state) {
   AppModalDialogQueue* queue = AppModalDialogQueue::GetInstance();
-  for (auto* dialog : *queue) {
-    if (dialog->web_contents() == web_contents)
-      dialog->Invalidate();
-  }
-  AppModalDialogController* active_dialog = queue->active_dialog();
-  if (active_dialog && active_dialog->web_contents() == web_contents)
-    active_dialog->Invalidate();
 
-  if (reset_state)
+  // `AppModalDialogController::Invalidate()` runs the dialog's closed callback,
+  // which can synchronously re-enter this method and the dialog queue. That
+  // re-entrancy can both mutate `queue` (invalidating the iterators used here)
+  // and destroy the queued dialogs, since
+  // `AppModalDialogQueue::GetNextDialog()` deletes invalidated dialogs as it
+  // drains the queue. So collect weak pointers to the dialogs to cancel up
+  // front, and re-check each one before using it.
+  // See https://crbug.com/560439699.
+  std::vector<base::WeakPtr<AppModalDialogController>> dialogs_to_cancel;
+  for (auto& dialog : *queue) {
+    if (dialog->web_contents() == web_contents) {
+      dialogs_to_cancel.push_back(dialog->GetWeakPtr());
+    }
+  }
+  for (base::WeakPtr<AppModalDialogController>& dialog : dialogs_to_cancel) {
+    // `dialog` is null if it was already destroyed by the re-entrant cancelling
+    // triggered by an earlier dialog in this loop.
+    if (dialog) {
+      dialog->Invalidate();
+    }
+  }
+
+  // The active dialog is deliberately looked up after the loop above: closing
+  // the queued dialogs can have shown a different dialog in the meantime.
+  // `Invalidate()` may destroy `active_dialog` (it closes its view, which owns
+  // it), so nothing may be done with the pointer afterwards.
+  AppModalDialogController* active_dialog = queue->active_dialog();
+  if (active_dialog && active_dialog->web_contents() == web_contents) {
+    active_dialog->Invalidate();
+  }
+
+  // Note: no weak pointer is needed for `this`: `AppModalDialogManager` is a
+  // `base::NoDestructor` singleton, so it outlives any re-entrant call above.
+  if (reset_state) {
     javascript_dialog_extra_data_.erase(web_contents);
+  }
 }
 
 void AppModalDialogManager::OnDialogClosed(content::WebContents* web_contents,

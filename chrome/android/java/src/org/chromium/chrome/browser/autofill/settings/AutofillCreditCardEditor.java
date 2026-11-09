@@ -1,82 +1,97 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.autofill.settings;
 
-import android.os.Build;
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
-import android.widget.Spinner;
+import android.widget.AutoCompleteTextView;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.autofill.AutofillEditorBase;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
-import org.chromium.chrome.browser.autofill.PersonalDataManager.AutofillProfile;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
+import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
+import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.settings.ProfileDependentSetting;
+import org.chromium.components.autofill.AutofillProfile;
+import org.chromium.components.autofill.FieldType;
+import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.modaldialog.DialogDismissalCause;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
-/**
- * The base class for credit card settings.
- */
-abstract class AutofillCreditCardEditor extends AutofillEditorBase {
+/** The base class for credit card settings. */
+@NullMarked
+public abstract class AutofillCreditCardEditor extends AutofillEditorBase
+        implements ProfileDependentSetting {
+    private @Nullable Profile mProfile;
+    private @Nullable Supplier<@Nullable ModalDialogManager> mModalDialogManagerSupplier;
+
     protected CreditCard mCard;
-    protected Spinner mBillingAddress;
-    protected int mInitialBillingAddressPos;
+    protected @Nullable AutoCompleteTextView mBillingAddressDropdown;
+    protected @Nullable AutofillProfile mInitialBillingProfile;
+    protected @Nullable AutofillProfile mSelectedBillingProfile;
 
     @Override
     public View onCreateView(
-            LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+            LayoutInflater inflater,
+            @Nullable ViewGroup container,
+            @Nullable Bundle savedInstanceState) {
         View v = super.onCreateView(inflater, container, savedInstanceState);
 
-        // Do not use autofill for the fields.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getActivity().getWindow().getDecorView().setImportantForAutofill(
-                    View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-        }
+        PersonalDataManager personalDataManager =
+                PersonalDataManagerFactory.getForProfile(getProfile());
+        mCard = personalDataManager.getCreditCard(mGUID);
+        List<AutofillProfile> profiles = personalDataManager.getProfilesForSettings();
 
-        // Populate the billing address dropdown.
-        ArrayAdapter<AutofillProfile> profilesAdapter = new ArrayAdapter<AutofillProfile>(
-                getActivity(), android.R.layout.simple_spinner_item);
-        profilesAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-
-        AutofillProfile noSelection = new AutofillProfile();
+        List<AutofillProfile> billingAddresses = new ArrayList<>();
+        AutofillProfile noSelection = AutofillProfile.builder().build();
         noSelection.setLabel(getActivity().getString(R.string.select));
-        profilesAdapter.add(noSelection);
+        billingAddresses.add(noSelection);
 
-        List<AutofillProfile> profiles = PersonalDataManager.getInstance().getProfilesForSettings();
-        for (int i = 0; i < profiles.size(); i++) {
-            AutofillProfile profile = profiles.get(i);
-            if (profile.getIsLocal() && !TextUtils.isEmpty(profile.getStreetAddress())) {
-                profilesAdapter.add(profile);
+        for (AutofillProfile profile : profiles) {
+            if (!TextUtils.isEmpty(profile.getInfo(FieldType.ADDRESS_HOME_STREET_ADDRESS))) {
+                billingAddresses.add(profile);
             }
         }
 
-        mBillingAddress =
-                (Spinner) v.findViewById(R.id.autofill_credit_card_editor_billing_address_spinner);
-        mBillingAddress.setAdapter(profilesAdapter);
-
-        // TODO(rouslan): Use an [+ ADD ADDRESS] button instead of disabling the dropdown.
-        // http://crbug.com/623629
-        if (profilesAdapter.getCount() == 1) mBillingAddress.setEnabled(false);
-
-        mCard = PersonalDataManager.getInstance().getCreditCard(mGUID);
-        if (mCard != null) {
-            if (!TextUtils.isEmpty(mCard.getBillingAddressId())) {
-                for (int i = 0; i < mBillingAddress.getAdapter().getCount(); i++) {
-                    AutofillProfile profile =
-                            (AutofillProfile) mBillingAddress.getAdapter().getItem(i);
-                    if (TextUtils.equals(profile.getGUID(), mCard.getBillingAddressId())) {
-                        mInitialBillingAddressPos = i;
-                        mBillingAddress.setSelection(i);
-                        break;
-                    }
+        if (mCard != null && !TextUtils.isEmpty(mCard.getBillingAddressId())) {
+            for (int i = 0; i < billingAddresses.size(); i++) {
+                AutofillProfile profile = billingAddresses.get(i);
+                if (profile != null
+                        && TextUtils.equals(profile.getGUID(), mCard.getBillingAddressId())) {
+                    mInitialBillingProfile = profile;
+                    mSelectedBillingProfile = profile;
+                    break;
                 }
             }
+        }
+
+        mBillingAddressDropdown =
+                v.findViewById(R.id.autofill_credit_card_editor_billing_address_spinner_outlined);
+        ArrayAdapter<AutofillProfile> adapter =
+                new ArrayAdapter<>(
+                        getActivity(),
+                        android.R.layout.simple_dropdown_item_1line,
+                        billingAddresses);
+        mBillingAddressDropdown.setAdapter(adapter);
+        if (mInitialBillingProfile != null) {
+            mBillingAddressDropdown.setText(mInitialBillingProfile.getLabel(), false);
         }
 
         return v;
@@ -85,11 +100,81 @@ abstract class AutofillCreditCardEditor extends AutofillEditorBase {
     @Override
     protected void initializeButtons(View v) {
         super.initializeButtons(v);
+        assert mBillingAddressDropdown != null;
+        mBillingAddressDropdown.setOnItemClickListener(
+                (parent, view, position, id) -> {
+                    mSelectedBillingProfile = (AutofillProfile) parent.getItemAtPosition(position);
+                    onBillingAddressSelected(mSelectedBillingProfile);
+                });
+        mBillingAddressDropdown.setOnFocusChangeListener(
+                (view, hasFocus) -> {
+                    if (hasFocus) {
+                        KeyboardVisibilityDelegate.getInstance().hideKeyboard(view);
+                    }
+                });
+    }
 
-        mBillingAddress.setOnItemSelectedListener(this);
+    /**
+     * Called when a new billing address is selected.
+     *
+     * @param profile The newly selected billing address.
+     */
+    protected void onBillingAddressSelected(AutofillProfile profile) {}
 
-        // Listen for touch events on billing address field. We clear the keyboard when user touches
-        // the billing address field because it is a drop down menu.
-        mBillingAddress.setOnTouchListener(this);
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == R.id.delete_menu_id) {
+            showDeletePaymentMethodConfirmationDialog();
+            return true;
+        }
+        if (item.getItemId() == R.id.help_menu_id) {
+            HelpAndFeedbackLauncherFactory.getForProfile(getProfile())
+                    .show(
+                            getActivity(),
+                            getActivity().getString(R.string.help_context_autofill),
+                            null);
+            return true;
+        }
+
+        return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void setProfile(Profile profile) {
+        mProfile = profile;
+    }
+
+    /** Return the {@link Profile} associated with the card being edited. */
+    public Profile getProfile() {
+        return assertNonNull(mProfile);
+    }
+
+    /**
+     * Sets Supplier for {@link ModalDialogManager} used to display {@link
+     * AutofillDeletePaymentMethodConfirmationDialog}.
+     */
+    public void setModalDialogManagerSupplier(
+            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier) {
+        mModalDialogManagerSupplier = modalDialogManagerSupplier;
+    }
+
+    private void showDeletePaymentMethodConfirmationDialog() {
+        assert mModalDialogManagerSupplier != null;
+
+        ModalDialogManager modalDialogManager = mModalDialogManagerSupplier.get();
+        assert modalDialogManager != null;
+
+        AutofillDeletePaymentMethodConfirmationDialog dialog =
+                new AutofillDeletePaymentMethodConfirmationDialog(
+                        modalDialogManager,
+                        getContext(),
+                        dismissalCause -> {
+                            if (dismissalCause == DialogDismissalCause.POSITIVE_BUTTON_CLICKED) {
+                                deleteEntry();
+                                finishPage();
+                            }
+                        },
+                        /* titleResId= */ R.string.autofill_credit_card_delete_confirmation_title);
+        dialog.show();
     }
 }

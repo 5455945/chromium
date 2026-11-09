@@ -27,7 +27,7 @@
 #include <memory>
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_track.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_descriptor.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
@@ -52,12 +52,14 @@ int WebMediaStream::UniqueId() const {
   return private_->UniqueId();
 }
 
-void WebMediaStream::AddObserver(WebMediaStreamObserver* observer) {
+void WebMediaStream::AddObserver(
+    base::WeakPtr<WebMediaStreamObserver> observer) {
   DCHECK(!IsNull());
   private_->AddObserver(observer);
 }
 
-void WebMediaStream::RemoveObserver(WebMediaStreamObserver* observer) {
+void WebMediaStream::RemoveObserver(
+    base::WeakPtr<WebMediaStreamObserver> observer) {
   DCHECK(!IsNull());
   private_->RemoveObserver(observer);
 }

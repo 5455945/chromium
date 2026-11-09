@@ -1,20 +1,22 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef DEVICE_GAMEPAD_XBOX_DATA_FETCHER_MAC_H_
 #define DEVICE_GAMEPAD_XBOX_DATA_FETCHER_MAC_H_
 
+#include <IOKit/IOMessage.h>
 #include <stdint.h>
 
 #include <set>
 #include <vector>
 
-#include <IOKit/IOMessage.h>
-
-#include "base/containers/unique_ptr_adapters.h"
+#include "base/containers/flat_map.h"
 #include "base/mac/scoped_ionotificationportref.h"
 #include "base/mac/scoped_ioobject.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/gamepad/gamepad_data_fetcher.h"
 #include "device/gamepad/xbox_controller_mac.h"
 
@@ -23,9 +25,8 @@ namespace device {
 class XboxDataFetcher : public GamepadDataFetcher,
                         public XboxControllerMac::Delegate {
  public:
-  typedef GamepadDataFetcherFactoryImpl<XboxDataFetcher,
-                                        GAMEPAD_SOURCE_MAC_XBOX>
-      Factory;
+  using Factory =
+      GamepadDataFetcherFactoryImpl<XboxDataFetcher, GamepadSource::kMacXbox>;
 
   XboxDataFetcher();
   XboxDataFetcher(const XboxDataFetcher& entry) = delete;
@@ -49,18 +50,6 @@ class XboxDataFetcher : public GamepadDataFetcher,
   XboxControllerMac* ControllerForLocation(UInt32 location_id);
 
  private:
-  struct PendingController {
-   public:
-    PendingController(XboxDataFetcher*, std::unique_ptr<XboxControllerMac>);
-    PendingController(const PendingController& entry);
-    PendingController& operator=(const PendingController& entry);
-    ~PendingController();
-
-    XboxDataFetcher* fetcher;
-    std::unique_ptr<XboxControllerMac> controller;
-    base::mac::ScopedIOObject<io_iterator_t> notify;
-  };
-
   static void DeviceAdded(void* context, io_iterator_t iterator);
   static void DeviceRemoved(void* context, io_iterator_t iterator);
   static void InterestCallback(void* context,
@@ -68,13 +57,12 @@ class XboxDataFetcher : public GamepadDataFetcher,
                                IOMessage message_type,
                                void* message_argument);
 
-  bool TryOpenDevice(io_service_t iterator);
+  bool TryOpenDevice(io_service_t service);
   bool RegisterForNotifications();
   bool RegisterForDeviceNotifications(int vendor_id, int product_id);
-  bool RegisterForInterestNotifications(io_service_t service,
-                                        PendingController* pending);
-  void PendingControllerBecameAvailable(io_service_t service,
-                                        PendingController* pending);
+  bool RegisterForInterestNotifications(io_service_t service);
+  void PendingServiceBecameAvailable(io_service_t service);
+  void RetryOpenDevice(uint64_t entry_id);
   void UnregisterFromNotifications();
 
   void OnAddedToProvider() override;
@@ -90,13 +78,14 @@ class XboxDataFetcher : public GamepadDataFetcher,
   void XboxControllerError(XboxControllerMac* controller) override;
 
   // The set of connected controllers.
-  std::set<XboxControllerMac*> controllers_;
+  std::set<raw_ptr<XboxControllerMac>> controllers_;
 
   // The set of enumerated controllers that received an exclusive access error
-  // on opening the device. The data fetcher is notified when these devices
-  // become available so we can try opening them again.
-  std::set<std::unique_ptr<PendingController>, base::UniquePtrComparator>
-      pending_controllers_;
+  // on opening the device, keyed by registry entry ID. The data fetcher is
+  // notified when these devices become available so we can try opening them
+  // again.
+  base::flat_map<uint64_t, base::mac::ScopedIOObject<io_object_t>>
+      pending_services_;
 
   bool listening_ = false;
 
@@ -110,6 +99,8 @@ class XboxDataFetcher : public GamepadDataFetcher,
   // (disconnection) events. These iterators are not referenced directly but
   // must be kept alive in order to continue to receive notifications.
   std::vector<base::mac::ScopedIOObject<io_iterator_t>> device_event_iterators_;
+
+  base::WeakPtrFactory<XboxDataFetcher> weak_factory_{this};
 };
 
 }  // namespace device

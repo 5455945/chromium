@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,8 @@ class CORE_EXPORT VideoTrack final : public ScriptWrappable, public TrackBase {
   void Trace(Visitor*) const override;
 
   bool selected() const { return selected_; }
-  void setSelected(bool);
+  void setSelected(bool selected, ChangeSource source = ChangeSource::kScript);
+  const AtomicString& kind() const { return kind_; }
 
   // Set selected to false without notifying the owner media element. Used when
   // another video track is selected, implicitly deselecting this one.
@@ -43,6 +44,7 @@ class CORE_EXPORT VideoTrack final : public ScriptWrappable, public TrackBase {
 
  private:
   bool selected_;
+  const AtomicString kind_;
 };
 
 template <>

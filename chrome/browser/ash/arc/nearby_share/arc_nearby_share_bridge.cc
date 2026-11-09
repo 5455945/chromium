@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,21 @@
 #include <utility>
 
 #include "ash/public/cpp/app_types_util.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/nearby_share/nearby_share_session_impl.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/arc_util.h"
-#include "components/arc/intent_helper/custom_tab.h"
-#include "components/arc/mojom/nearby_share.mojom.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/intent_helper/custom_tab.h"
+#include "chromeos/ash/experiences/arc/mojom/nearby_share.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "content/public/browser/browser_thread.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 namespace arc {
 
@@ -33,11 +37,12 @@ class ArcNearbyShareBridgeFactory
   static constexpr const char* kName = "ArcNearbyShareBridgeFactory";
 
   static ArcNearbyShareBridgeFactory* GetInstance() {
-    return base::Singleton<ArcNearbyShareBridgeFactory>::get();
+    static base::NoDestructor<ArcNearbyShareBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcNearbyShareBridgeFactory>;
+  friend base::NoDestructor<ArcNearbyShareBridgeFactory>;
   ArcNearbyShareBridgeFactory() = default;
   ~ArcNearbyShareBridgeFactory() override = default;
 };
@@ -47,7 +52,7 @@ class ArcNearbyShareBridgeFactory
 // static
 ArcNearbyShareBridge* ArcNearbyShareBridge::GetForBrowserContext(
     content::BrowserContext* browser_context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return ArcNearbyShareBridgeFactory::GetForBrowserContext(browser_context);
 }
 
@@ -63,31 +68,33 @@ ArcNearbyShareBridge::ArcNearbyShareBridge(
     ArcBridgeService* bridge_service)
     : arc_bridge_service_(bridge_service),
       profile_(Profile::FromBrowserContext(browser_context)) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   arc_bridge_service_->nearby_share()->SetHost(this);
+
+  // On startup, delete the ARC Nearby Share cache path.
+  CHECK(profile_, base::NotFatalUntil::M160);
+  NearbyShareSessionImpl::DeleteShareCacheFilePaths(profile_);
 }
 
 ArcNearbyShareBridge::~ArcNearbyShareBridge() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   arc_bridge_service_->nearby_share()->SetHost(nullptr);
   session_map_.clear();
 }
 
-// TODO(b/191430761): Tie this to Nearby Share transfer complete/abort/cancel
-// so that cache files are not wiped prematurely.
-void ArcNearbyShareBridge::OnNearbyShareSessionFinished(int32_t task_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+void ArcNearbyShareBridge::OnNearbyShareSessionFinished(uint32_t task_id) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!session_map_.erase(task_id)) {
     VLOG(1) << "No share session found for " << task_id;
   }
 }
 
 void ArcNearbyShareBridge::StartNearbyShare(
-    int32_t task_id,
+    uint32_t task_id,
     mojom::ShareIntentInfoPtr share_info,
     mojo::PendingRemote<mojom::NearbyShareSessionInstance> session_instance,
     StartNearbyShareCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   VLOG(1) << "Creating Nearby Share session";
   if (!session_instance) {
@@ -114,6 +121,11 @@ void ArcNearbyShareBridge::StartNearbyShare(
           base::BindOnce(&ArcNearbyShareBridge::OnNearbyShareSessionFinished,
                          weak_ptr_factory_.GetWeakPtr())));
   std::move(callback).Run(std::move(remote));
+}
+
+// static
+void ArcNearbyShareBridge::EnsureFactoryBuilt() {
+  ArcNearbyShareBridgeFactory::GetInstance();
 }
 
 }  // namespace arc

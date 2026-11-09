@@ -1,23 +1,25 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SEARCH_MOST_VISITED_IFRAME_SOURCE_H_
 #define CHROME_BROWSER_SEARCH_MOST_VISITED_IFRAME_SOURCE_H_
 
-#include "base/macros.h"
+#include <string>
+#include <string_view>
+
 #include "build/build_config.h"
 #include "content/public/browser/url_data_source.h"
-
-#if defined(OS_ANDROID)
-#error "Instant is only used on desktop";
-#endif
 
 // Serves HTML for displaying suggestions for 3P remote NTPs using iframes
 // of chrome-search://most-visited/title.html.
 class MostVisitedIframeSource : public content::URLDataSource {
  public:
   MostVisitedIframeSource();
+
+  MostVisitedIframeSource(const MostVisitedIframeSource&) = delete;
+  MostVisitedIframeSource& operator=(const MostVisitedIframeSource&) = delete;
+
   ~MostVisitedIframeSource() override;
 
   // content::URLDataSource:
@@ -26,7 +28,9 @@ class MostVisitedIframeSource : public content::URLDataSource {
       const GURL& url,
       const content::WebContents::Getter& wc_getter,
       content::URLDataSource::GotDataCallback callback) override;
-  std::string GetMimeType(const std::string& path_and_query) override;
+  std::string GetMimeType(const GURL& url) override;
+  bool ShouldServeMimeTypeAsContentTypeHeader() override;
+
   bool AllowCaching() override;
   bool ShouldDenyXFrameOptions() override;
   bool ShouldServiceRequest(const GURL& url,
@@ -35,7 +39,7 @@ class MostVisitedIframeSource : public content::URLDataSource {
 
  protected:
   // Returns whether this source should serve data for a particular path.
-  virtual bool ServesPath(const std::string& path) const;
+  virtual bool ServesPath(std::string_view path) const;
 
   // Sends unmodified resource bytes.
   void SendResource(int resource_id,
@@ -52,9 +56,6 @@ class MostVisitedIframeSource : public content::URLDataSource {
   // does not exist
   virtual bool GetOrigin(const content::WebContents::Getter& wc_getter,
                          std::string* origin) const;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MostVisitedIframeSource);
 };
 
 #endif  // CHROME_BROWSER_SEARCH_MOST_VISITED_IFRAME_SOURCE_H_

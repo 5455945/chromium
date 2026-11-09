@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,9 +19,11 @@
 @interface MockCentralManager : NSObject
 
 @property(nonatomic, assign) NSInteger scanForPeripheralsCallCount;
+@property(nonatomic, readonly, copy)
+    NSArray<CBUUID*>* scanForPeripheralsServiceUUIDs;
 @property(nonatomic, assign) NSInteger stopScanCallCount;
-@property(nonatomic, assign) id<CBCentralManagerDelegate> delegate;
-@property(nonatomic, assign) CBCentralManagerState state;
+@property(nonatomic, weak) id<CBCentralManagerDelegate> delegate;
+@property(nonatomic, assign) CBManagerState state;
 @property(nonatomic, assign) device::BluetoothTestMac* bluetoothTestMac;
 @property(nonatomic, readonly) NSArray* retrieveConnectedPeripheralServiceUUIDs;
 

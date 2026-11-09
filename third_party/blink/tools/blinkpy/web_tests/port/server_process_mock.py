@@ -28,20 +28,21 @@
 
 
 class MockServerProcess(object):
-    def __init__(self,
-                 port_obj=None,
-                 name=None,
-                 cmd=None,
-                 env=None,
-                 treat_no_data_as_crash=False,
-                 more_logging=False,
-                 lines=None,
-                 crashed=False):
+    def __init__(
+        self,
+        port_obj=None,
+        name=None,
+        cmd=None,
+        env=None,
+        treat_no_data_as_crash=False,
+        more_logging=False,
+        lines=None,
+        crashed=False,
+    ):
         # port_obj and name are unused, but are maintained for compatibility
         # with server_process.ServerProcess.
-        # pylint: disable=unused-argument
         self.timed_out = False
-        self.lines = lines or ['#READY']
+        self.lines = lines or [b'#READY']
         self.crashed = crashed
         self.writes = []
         self.cmd = cmd
@@ -58,7 +59,7 @@ class MockServerProcess(object):
         return self.crashed
 
     def read_stdout_line(self, deadline):
-        return self.lines.pop(0) + '\n'
+        return self.lines.pop(0) + b'\n'
 
     def read_stdout(self, deadline, size):
         first_line = self.lines[0]
@@ -66,15 +67,16 @@ class MockServerProcess(object):
             self.lines.pop(0)
             remaining_size = size - len(first_line) - 1
             if not remaining_size:
-                return first_line + '\n'
-            return first_line + '\n' + self.read_stdout(
-                deadline, remaining_size)
+                return first_line + b'\n'
+            return (
+                first_line + b'\n' + self.read_stdout(deadline, remaining_size)
+            )
         result = self.lines[0][:size]
         self.lines[0] = self.lines[0][size:]
         return result
 
     def pop_all_buffered_stderr(self):
-        return ''
+        return b''
 
     def read_either_stdout_or_stderr_line(self, deadline):
         # FIXME: We should have tests which intermix stderr and stdout lines.
@@ -83,7 +85,7 @@ class MockServerProcess(object):
     def start(self):
         self.started = True
 
-    def stop(self, timeout_sec=0.0):
+    def stop(self, timeout_secs=0.0, kill_tree=True, send_sigterm=False):
         self.stopped = True
         return
 

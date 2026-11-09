@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,12 @@
 #include "third_party/blink/public/web/web_form_element.h"
 
 namespace autofill {
-
 namespace {
 
 class MockPageFormAnalyserLogger : public PageFormAnalyserLogger {
  public:
   MockPageFormAnalyserLogger() : PageFormAnalyserLogger(nullptr) {}
-  virtual ~MockPageFormAnalyserLogger() {}
+  virtual ~MockPageFormAnalyserLogger() = default;
 
   void Send(std::string message,
             ConsoleLevel level,
@@ -45,10 +44,6 @@ const char kPasswordFormWithoutUsernameField[] =
     "<form>"
     "   <input type='password' autocomplete='new-password'>"
     "</form>";
-
-const char kElementsWithDuplicateIds[] =
-    "<input id='duplicate'>"
-    "<input id='duplicate'>";
 
 const char kPasswordFormTooComplex[] =
     "<form>"
@@ -113,9 +108,12 @@ const std::string AutocompleteSuggestionString(const std::string& suggestion) {
          suggestion + "\"):";
 }
 
-}  // namespace
-
 class PagePasswordsAnalyserTest : public ChromeRenderViewTest {
+ public:
+  PagePasswordsAnalyserTest(const PagePasswordsAnalyserTest&) = delete;
+  PagePasswordsAnalyserTest& operator=(const PagePasswordsAnalyserTest&) =
+      delete;
+
  protected:
   PagePasswordsAnalyserTest()
       : mock_logger_(new MockPageFormAnalyserLogger()) {}
@@ -132,7 +130,7 @@ class PagePasswordsAnalyserTest : public ChromeRenderViewTest {
     LoadHTML(html);
     blink::WebLocalFrame* frame = GetMainFrame();
     blink::WebElementCollection collection = frame->GetDocument().All();
-    for (blink::WebElement element = collection.FirstItem(); !element.IsNull();
+    for (blink::WebElement element = collection.FirstItem(); element;
          element = collection.NextItem()) {
       elements_.push_back(element);
     }
@@ -160,8 +158,6 @@ class PagePasswordsAnalyserTest : public ChromeRenderViewTest {
   PagePasswordsAnalyser page_passwords_analyser;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(PagePasswordsAnalyserTest);
-
   std::vector<blink::WebElement> elements_;
   std::unique_ptr<MockPageFormAnalyserLogger> mock_logger_;
 };
@@ -182,15 +178,6 @@ TEST_F(PagePasswordsAnalyserTest, PasswordFormWithoutUsernameField) {
       "Password forms should have (optionally hidden) "
       "username fields for accessibility:",
       PageFormAnalyserLogger::kVerbose, {0});
-
-  RunTestCase();
-}
-
-TEST_F(PagePasswordsAnalyserTest, ElementsWithDuplicateIds) {
-  LoadTestCase(kElementsWithDuplicateIds);
-
-  Expect("Found 2 elements with non-unique id #duplicate:",
-         PageFormAnalyserLogger::kWarning, {0, 1});
 
   RunTestCase();
 }
@@ -276,4 +263,5 @@ TEST_F(PagePasswordsAnalyserTest, PasswordFieldWithAndWithoutAutocomplete) {
   RunTestCase();
 }
 
+}  // namespace
 }  // namespace autofill

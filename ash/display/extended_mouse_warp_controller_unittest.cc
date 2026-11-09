@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,6 +28,12 @@ namespace ash {
 class ExtendedMouseWarpControllerTest : public AshTestBase {
  public:
   ExtendedMouseWarpControllerTest() = default;
+
+  ExtendedMouseWarpControllerTest(const ExtendedMouseWarpControllerTest&) =
+      delete;
+  ExtendedMouseWarpControllerTest& operator=(
+      const ExtendedMouseWarpControllerTest&) = delete;
+
   ~ExtendedMouseWarpControllerTest() override = default;
 
  protected:
@@ -73,21 +79,16 @@ class ExtendedMouseWarpControllerTest : public AshTestBase {
     // event is handled and last mouse location is updated.
     base::RunLoop().RunUntilIdle();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ExtendedMouseWarpControllerTest);
 };
 
 // Verifies if MouseCursorEventFilter's bounds calculation works correctly.
 TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnRight) {
-  UpdateDisplay("360x360,700x700");
+  UpdateDisplay("360x350,800x700");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  int64_t display_0_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[0])
-                             .id();
-  int64_t display_1_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[1])
-                             .id();
+  int64_t display_0_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[0]).id();
+  int64_t display_1_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[1]).id();
 
   std::unique_ptr<display::DisplayLayout> layout(
       display::test::CreateDisplayLayout(display_manager(),
@@ -97,12 +98,12 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnRight) {
   event_filter()->ShowSharedEdgeIndicator(root_windows[0] /* primary */);
 
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(359, 32, 1, 328), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 0, 1, 360), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 32, 1, 318), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 0, 1, 350), GetIndicatorBounds(display_1_id));
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
-  EXPECT_EQ(gfx::Rect(359, 0, 1, 360), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 32, 1, 328), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 0, 1, 350), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 32, 1, 318), GetIndicatorBounds(display_1_id));
 
   // Move 2nd display downwards a bit.
   layout->placement_list[0].offset = 5;
@@ -111,12 +112,12 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnRight) {
   // This is same as before because the 2nd display's y is above
   // the indicator's x.
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(359, 32, 1, 328), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 5, 1, 355), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 32, 1, 318), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 5, 1, 345), GetIndicatorBounds(display_1_id));
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
-  EXPECT_EQ(gfx::Rect(359, 5, 1, 355), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 37, 1, 323), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 5, 1, 345), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 37, 1, 313), GetIndicatorBounds(display_1_id));
 
   // Move it down further so that the shared edge is shorter than
   // minimum hole size (160).
@@ -124,41 +125,39 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnRight) {
   display_manager()->SetLayoutForCurrentDisplays(layout->Copy());
   event_filter()->ShowSharedEdgeIndicator(root_windows[0] /* primary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(359, 200, 1, 160), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 200, 1, 160), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 200, 1, 150), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 200, 1, 150), GetIndicatorBounds(display_1_id));
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(359, 200, 1, 160), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 200, 1, 160), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 200, 1, 150), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 200, 1, 150), GetIndicatorBounds(display_1_id));
 
   // Now move 2nd display upwards.
   layout->placement_list[0].offset = -5;
   display_manager()->SetLayoutForCurrentDisplays(layout->Copy());
   event_filter()->ShowSharedEdgeIndicator(root_windows[0] /* primary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(359, 32, 1, 328), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 0, 1, 360), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 32, 1, 318), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 0, 1, 350), GetIndicatorBounds(display_1_id));
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
   // 32 px are reserved on 2nd display from top, so y must be
   // (32 - 5) = 27.
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(359, 0, 1, 360), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 27, 1, 333), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(359, 0, 1, 350), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(360, 27, 1, 323), GetIndicatorBounds(display_1_id));
 
   event_filter()->HideSharedEdgeIndicator();
 }
 
 TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnLeft) {
-  UpdateDisplay("360x360,700x700");
+  UpdateDisplay("360x350,800x700");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
 
-  int64_t display_0_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[0])
-                             .id();
-  int64_t display_1_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[1])
-                             .id();
+  int64_t display_0_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[0]).id();
+  int64_t display_1_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[1]).id();
 
   std::unique_ptr<display::DisplayLayout> layout(
       display::test::CreateDisplayLayout(display_manager(),
@@ -167,38 +166,36 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnLeft) {
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[0] /* primary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(0, 32, 1, 328), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(-1, 0, 1, 360), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(0, 32, 1, 318), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(-1, 0, 1, 350), GetIndicatorBounds(display_1_id));
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(0, 0, 1, 360), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(-1, 32, 1, 328), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(0, 0, 1, 350), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(-1, 32, 1, 318), GetIndicatorBounds(display_1_id));
 
   layout->placement_list[0].offset = 250;
   display_manager()->SetLayoutForCurrentDisplays(layout->Copy());
   event_filter()->ShowSharedEdgeIndicator(root_windows[0] /* primary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(0, 250, 1, 110), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(-1, 250, 1, 110), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(0, 250, 1, 100), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(-1, 250, 1, 100), GetIndicatorBounds(display_1_id));
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(0, 250, 1, 110), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(-1, 250, 1, 110), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(0, 250, 1, 100), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(-1, 250, 1, 100), GetIndicatorBounds(display_1_id));
 
   event_filter()->HideSharedEdgeIndicator();
 }
 
 TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnTopBottom) {
-  UpdateDisplay("360x360,700x700");
+  UpdateDisplay("360x350,800x700");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  int64_t display_0_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[0])
-                             .id();
-  int64_t display_1_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[1])
-                             .id();
+  int64_t display_0_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[0]).id();
+  int64_t display_1_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[1]).id();
 
   std::unique_ptr<display::DisplayLayout> layout(
       display::test::CreateDisplayLayout(display_manager(),
@@ -231,22 +228,22 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestOnTopBottom) {
   display_manager()->SetLayoutForCurrentDisplays(layout->Copy());
   event_filter()->ShowSharedEdgeIndicator(root_windows[0] /* primary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(0, 359, 360, 1), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(0, 360, 360, 1), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(0, 349, 360, 1), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(0, 350, 360, 1), GetIndicatorBounds(display_1_id));
 
   event_filter()->ShowSharedEdgeIndicator(root_windows[1] /* secondary */);
   ASSERT_EQ(1U, GetWarpRegionsCount());
-  EXPECT_EQ(gfx::Rect(0, 359, 360, 1), GetIndicatorBounds(display_0_id));
-  EXPECT_EQ(gfx::Rect(0, 360, 360, 1), GetIndicatorBounds(display_1_id));
+  EXPECT_EQ(gfx::Rect(0, 349, 360, 1), GetIndicatorBounds(display_0_id));
+  EXPECT_EQ(gfx::Rect(0, 350, 360, 1), GetIndicatorBounds(display_1_id));
 
   event_filter()->HideSharedEdgeIndicator();
 }
 
 // Verify indicators show up as expected with 3+ displays.
 TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestThreeDisplays) {
-  UpdateDisplay("360x360,700x700,1000x1000");
+  UpdateDisplay("360x350,800x700,1000x900");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   int64_t display_0_id = screen->GetDisplayNearestWindow(root_windows[0]).id();
   int64_t display_1_id = screen->GetDisplayNearestWindow(root_windows[1]).id();
   int64_t display_2_id = screen->GetDisplayNearestWindow(root_windows[2]).id();
@@ -256,13 +253,13 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestThreeDisplays) {
   ASSERT_EQ(2U, GetWarpRegionsCount());
   const ExtendedMouseWarpController::WarpRegion* region_0 = GetWarpRegion(0);
   const ExtendedMouseWarpController::WarpRegion* region_1 = GetWarpRegion(1);
-  EXPECT_EQ(gfx::Rect(359, 32, 1, 328),
+  EXPECT_EQ(gfx::Rect(359, 32, 1, 318),
             region_1->GetIndicatorBoundsForTest(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 0, 1, 360),
+  EXPECT_EQ(gfx::Rect(360, 0, 1, 350),
             region_1->GetIndicatorBoundsForTest(display_1_id));
-  EXPECT_EQ(gfx::Rect(1059, 0, 1, 700),
+  EXPECT_EQ(gfx::Rect(1159, 0, 1, 700),
             region_0->GetIndicatorBoundsForTest(display_1_id));
-  EXPECT_EQ(gfx::Rect(1060, 0, 1, 700),
+  EXPECT_EQ(gfx::Rect(1160, 0, 1, 700),
             region_0->GetIndicatorBoundsForTest(display_2_id));
 
   // Drag from middle display
@@ -270,13 +267,13 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestThreeDisplays) {
   ASSERT_EQ(2U, mouse_warp_controller()->warp_regions_.size());
   region_0 = GetWarpRegion(0);
   region_1 = GetWarpRegion(1);
-  EXPECT_EQ(gfx::Rect(359, 0, 1, 360),
+  EXPECT_EQ(gfx::Rect(359, 0, 1, 350),
             region_1->GetIndicatorBoundsForTest(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 32, 1, 328),
+  EXPECT_EQ(gfx::Rect(360, 32, 1, 318),
             region_1->GetIndicatorBoundsForTest(display_1_id));
-  EXPECT_EQ(gfx::Rect(1059, 32, 1, 668),
+  EXPECT_EQ(gfx::Rect(1159, 32, 1, 668),
             region_0->GetIndicatorBoundsForTest(display_1_id));
-  EXPECT_EQ(gfx::Rect(1060, 0, 1, 700),
+  EXPECT_EQ(gfx::Rect(1160, 0, 1, 700),
             region_0->GetIndicatorBoundsForTest(display_2_id));
 
   // Right most display
@@ -284,13 +281,13 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestThreeDisplays) {
   ASSERT_EQ(2U, mouse_warp_controller()->warp_regions_.size());
   region_0 = GetWarpRegion(0);
   region_1 = GetWarpRegion(1);
-  EXPECT_EQ(gfx::Rect(359, 0, 1, 360),
+  EXPECT_EQ(gfx::Rect(359, 0, 1, 350),
             region_1->GetIndicatorBoundsForTest(display_0_id));
-  EXPECT_EQ(gfx::Rect(360, 0, 1, 360),
+  EXPECT_EQ(gfx::Rect(360, 0, 1, 350),
             region_1->GetIndicatorBoundsForTest(display_1_id));
-  EXPECT_EQ(gfx::Rect(1059, 0, 1, 700),
+  EXPECT_EQ(gfx::Rect(1159, 0, 1, 700),
             region_0->GetIndicatorBoundsForTest(display_1_id));
-  EXPECT_EQ(gfx::Rect(1060, 32, 1, 668),
+  EXPECT_EQ(gfx::Rect(1160, 32, 1, 668),
             region_0->GetIndicatorBoundsForTest(display_2_id));
   event_filter()->HideSharedEdgeIndicator();
   // TODO(oshima): Add test cases primary swap.
@@ -298,9 +295,9 @@ TEST_F(ExtendedMouseWarpControllerTest, IndicatorBoundsTestThreeDisplays) {
 
 TEST_F(ExtendedMouseWarpControllerTest,
        IndicatorBoundsTestThreeDisplaysWithLayout) {
-  UpdateDisplay("700x500,500x500,1000x1000");
+  UpdateDisplay("700x500,600x500,1000x900");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   int64_t display_0_id = screen->GetDisplayNearestWindow(root_windows[0]).id();
   int64_t display_1_id = screen->GetDisplayNearestWindow(root_windows[1]).id();
   int64_t display_2_id = screen->GetDisplayNearestWindow(root_windows[2]).id();
@@ -346,9 +343,9 @@ TEST_F(ExtendedMouseWarpControllerTest,
 
 TEST_F(ExtendedMouseWarpControllerTest,
        IndicatorBoundsTestThreeDisplaysWithLayout2) {
-  UpdateDisplay("700x500,500x500,1000x1000");
+  UpdateDisplay("700x500,600x500,1000x900");
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   int64_t display_0_id = screen->GetDisplayNearestWindow(root_windows[0]).id();
   int64_t display_1_id = screen->GetDisplayNearestWindow(root_windows[1]).id();
   int64_t display_2_id = screen->GetDisplayNearestWindow(root_windows[2]).id();
@@ -394,14 +391,14 @@ TEST_F(ExtendedMouseWarpControllerTest,
        DISABLED_CheckHostPointToScreenInMouseWarpRegion) {
   // Zoom factor is needed to trigger rounding error which occured in previous
   // code.
-  UpdateDisplay("50+50-200x200@0.8,50+300-300x100/r");
+  UpdateDisplay("50+50-300x200@0.8,50+300-400x200/r");
 
   aura::Window::Windows root_windows = Shell::Get()->GetAllRootWindows();
 
   // Check the primary display's size and scale.
   display::Display primary_display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(root_windows[0]);
-  ASSERT_EQ("250x250", primary_display.size().ToString());
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[0]);
+  ASSERT_EQ("375x250", primary_display.size().ToString());
   ASSERT_EQ(0.8f, primary_display.device_scale_factor());
 
   // Create a window to be dragged in primary display.
@@ -410,9 +407,9 @@ TEST_F(ExtendedMouseWarpControllerTest,
   test_window_delegate->set_window_component(HTCAPTION);
   const gfx::Size initial_window_size(100, 100);
   std::unique_ptr<aura::Window> test_window(
-      CreateTestWindowInShellWithDelegateAndType(
-          test_window_delegate.get(), aura::client::WINDOW_TYPE_NORMAL, 0,
-          gfx::Rect(initial_window_size)));
+      CreateTestWindowInShell({.delegate = test_window_delegate.get(),
+                               .bounds = gfx::Rect(initial_window_size),
+                               .window_id = 0}));
   ASSERT_EQ(root_windows[0], test_window->GetRootWindow());
   ASSERT_FALSE(test_window->HasCapture());
 
@@ -422,10 +419,11 @@ TEST_F(ExtendedMouseWarpControllerTest,
   // Move mouse cursor and capture the window.
   gfx::Point location_in_host_native(0, 0);
   DispatchMouseEventWithNative(window_host, location_in_host_native,
-                               ui::ET_MOUSE_MOVED, ui::EF_NONE, ui::EF_NONE);
-  DispatchMouseEventWithNative(window_host, location_in_host_native,
-                               ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON,
-                               ui::EF_LEFT_MOUSE_BUTTON);
+                               ui::EventType::kMouseMoved, ui::EF_NONE,
+                               ui::EF_NONE);
+  DispatchMouseEventWithNative(
+      window_host, location_in_host_native, ui::EventType::kMousePressed,
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
 
   // Window should be captured.
   ASSERT_TRUE(test_window->HasCapture());
@@ -433,9 +431,8 @@ TEST_F(ExtendedMouseWarpControllerTest,
   int64_t display_0_id = primary_display.id();
   const gfx::Rect indicator_in_primary_display =
       GetIndicatorNativeBounds(display_0_id);
-  int64_t display_1_id = display::Screen::GetScreen()
-                             ->GetDisplayNearestWindow(root_windows[1])
-                             .id();
+  int64_t display_1_id =
+      display::Screen::Get()->GetDisplayNearestWindow(root_windows[1]).id();
   const gfx::Rect indicator_in_secondary_display =
       GetIndicatorNativeBounds(display_1_id);
 
@@ -447,8 +444,8 @@ TEST_F(ExtendedMouseWarpControllerTest,
       location_in_screen_native -
       root_windows[0]->GetHost()->GetBoundsInPixels().OffsetFromOrigin();
   DispatchMouseEventWithNative(window_host, location_in_host_native,
-                               ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON,
-                               0);
+                               ui::EventType::kMouseDragged,
+                               ui::EF_LEFT_MOUSE_BUTTON, 0);
 
   // Mouse cursor should be warped into secondary display.
   location_in_screen_dip = aura::Env::GetInstance()->last_mouse_location();
@@ -461,8 +458,8 @@ TEST_F(ExtendedMouseWarpControllerTest,
       location_in_screen_native -
       root_windows[0]->GetHost()->GetBoundsInPixels().OffsetFromOrigin();
   DispatchMouseEventWithNative(window_host, location_in_host_native,
-                               ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON,
-                               0);
+                               ui::EventType::kMouseDragged,
+                               ui::EF_LEFT_MOUSE_BUTTON, 0);
 
   // Mouse cursor should be warped into first display.
   location_in_screen_dip = aura::Env::GetInstance()->last_mouse_location();
@@ -472,9 +469,9 @@ TEST_F(ExtendedMouseWarpControllerTest,
   // After mouse warping, x-coordinate of mouse location in native coordinates
   // should be 2 px away from end. Primary display has zoom factor of 0.8. So
   // the offset in screen coordinates should be 2/0.8, which is 2.5. The end of
-  // primary display in screen coordinates is 250. So x-coordinate of mouse
-  // cursor in screen coordinates should be 247.
-  EXPECT_EQ(247, aura::Env::GetInstance()->last_mouse_location().x());
+  // primary display in screen coordinates is 375. So x-coordinate of mouse
+  // cursor in screen coordinates should be 372.
+  EXPECT_EQ(372, aura::Env::GetInstance()->last_mouse_location().x());
 
   // Get cursor's location in host native coordinates.
   gfx::Point location_in_host_dip;
@@ -485,9 +482,9 @@ TEST_F(ExtendedMouseWarpControllerTest,
   root_windows[0]->GetHost()->ConvertDIPToPixels(&location_in_host_native);
 
   // Release mouse button.
-  DispatchMouseEventWithNative(window_host, location_in_host_native,
-                               ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON,
-                               ui::EF_LEFT_MOUSE_BUTTON);
+  DispatchMouseEventWithNative(
+      window_host, location_in_host_native, ui::EventType::kMouseReleased,
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
 }
 
 }  // namespace ash

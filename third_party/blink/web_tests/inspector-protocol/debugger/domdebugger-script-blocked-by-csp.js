@@ -1,11 +1,11 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startHTML(`
     <html>
     <head>
     <meta http-equiv='Content-Security-Policy' content="script-src 'self';">
     </head>
     <body>
-    <button id='testButton' onclick='alert(1);'>Button</button>
+    <button id='testButton'>Button</button>
     </body>
     </html>
   `, `Tests pausing on scriptBlockedbyCSP breakpoint.`);
@@ -17,7 +17,7 @@
 
   var expressions = [
     `
-    document.getElementById('testButton').click();
+    document.getElementById('testButton').setAttribute('onclick', 'alert(1);');
     `,
 
     `

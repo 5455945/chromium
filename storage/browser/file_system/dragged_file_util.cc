@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/files/file_util.h"
-#include "storage/browser/blob/shareable_file_reference.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_context.h"
 #include "storage/browser/file_system/file_system_url.h"
@@ -41,6 +40,7 @@ class SetFileEnumerator : public FileSystemFileUtil::AbstractFileEnumerator {
       if (platform_file.empty()) {
         recursive_enumerator_.reset();
       } else {
+        name_ = recursive_enumerator_->GetName();
         file_info_.is_directory = recursive_enumerator_->IsDirectory();
         file_info_.size = recursive_enumerator_->Size();
         file_info_.last_modified = recursive_enumerator_->LastModifiedTime();
@@ -48,6 +48,7 @@ class SetFileEnumerator : public FileSystemFileUtil::AbstractFileEnumerator {
       }
     }
     if (file_iter_ != files_.end()) {
+      name_ = base::FilePath::FromUTF8Unsafe(file_iter_->name);
       base::FilePath platform_file = (file_iter_++)->path;
       NativeFileUtil::GetFileInfo(platform_file, &file_info_);
       if (recursive_ && file_info_.is_directory) {
@@ -58,6 +59,7 @@ class SetFileEnumerator : public FileSystemFileUtil::AbstractFileEnumerator {
     }
     return base::FilePath();
   }
+  base::FilePath GetName() override { return name_; }
   int64_t Size() override { return file_info_.size; }
   bool IsDirectory() override { return file_info_.is_directory; }
   base::Time LastModifiedTime() override { return file_info_.last_modified; }
@@ -66,6 +68,7 @@ class SetFileEnumerator : public FileSystemFileUtil::AbstractFileEnumerator {
   const std::vector<FileInfo> files_;
   const bool recursive_;
   std::vector<FileInfo>::const_iterator file_iter_;
+  base::FilePath name_;
   base::File::Info file_info_;
   std::unique_ptr<FileSystemFileUtil::AbstractFileEnumerator>
       recursive_enumerator_;
@@ -98,7 +101,7 @@ base::File::Error DraggedFileUtil::GetFileInfo(
     return base::File::FILE_OK;
   }
   base::File::Error error = NativeFileUtil::GetFileInfo(url.path(), file_info);
-  if (IsHiddenItem(url.path()) && !base::FilePath().IsParent(url.path())) {
+  if (IsHiddenItemUnderRoot(url.path(), GetRootPathForURL(url))) {
     // Don't follow symlinks unless it's the one that are selected by the user.
     return base::File::FILE_ERROR_NOT_FOUND;
   }

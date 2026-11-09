@@ -1,15 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/p2p/socket_dispatcher.h"
 
 #include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/types/pass_key.h"
 #include "services/network/public/cpp/p2p_param_traits.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
 #include "third_party/blink/renderer/platform/p2p/network_list_observer.h"
@@ -37,7 +38,7 @@ P2PSocketDispatcher& P2PSocketDispatcher::From(MojoBindingContext& context) {
 
 P2PSocketDispatcher::P2PSocketDispatcher(MojoBindingContext& context, PassKey)
     : Supplement(context),
-      main_task_runner_(base::ThreadTaskRunnerHandle::Get()),
+      main_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       network_list_observers_(
           new base::ObserverListThreadSafe<blink::NetworkListObserver>()),
       network_notification_client_receiver_(this, &context) {}
@@ -94,9 +95,9 @@ void P2PSocketDispatcher::NetworkListChanged(
 
   // TODO(crbug.com/787254): Remove this helper when network_list_observer.h
   // gets moved from blink/public to blink/renderer, and operate over
-  // WTF::Vector.
+  // Vector.
   std::vector<net::NetworkInterface> copy(networks.size());
-  for (size_t i = 0; i < networks.size(); i++)
+  for (wtf_size_t i = 0; i < networks.size(); i++)
     copy[i] = networks[i];
 
   network_list_observers_->Notify(
@@ -117,9 +118,9 @@ void P2PSocketDispatcher::RequestNetworkEventsIfNecessary() {
   if (network_notification_client_receiver_.is_bound()) {
     // TODO(crbug.com/787254): Remove this helper when network_list_observer.h
     // gets moved from blink/public to blink/renderer, and operate over
-    // WTF::Vector.
+    // blink::Vector.
     std::vector<net::NetworkInterface> copy(networks_.size());
-    for (size_t i = 0; i < networks_.size(); i++)
+    for (wtf_size_t i = 0; i < networks_.size(); i++)
       copy[i] = networks_[i];
 
     network_list_observers_->Notify(
@@ -146,6 +147,8 @@ void P2PSocketDispatcher::OnConnectionError() {
 
 void P2PSocketDispatcher::ReconnectP2PSocketManager() {
   network_notification_client_receiver_.reset();
+  if (GetSupplementable()->IsContextDestroyed())
+    return;
   GetP2PSocketManager()->StartNetworkNotifications(
       network_notification_client_receiver_.BindNewPipeAndPassRemote(
           GetSupplementable()->GetTaskRunner(TaskType::kNetworking)));

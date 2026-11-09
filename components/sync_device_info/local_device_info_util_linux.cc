@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,41 +8,23 @@
 #include <string>
 
 #include "base/linux_util.h"
-#include "build/chromeos_buildflags.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/devicetype.h"
-#endif
 
 namespace syncer {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-std::string GetChromeOSDeviceNameFromType() {
-  switch (chromeos::GetDeviceType()) {
-    case chromeos::DeviceType::kChromebase:
-      return "Chromebase";
-    case chromeos::DeviceType::kChromebit:
-      return "Chromebit";
-    case chromeos::DeviceType::kChromebook:
-      return "Chromebook";
-    case chromeos::DeviceType::kChromebox:
-      return "Chromebox";
-    case chromeos::DeviceType::kUnknown:
-      break;
-  }
-  return "Chromebook";
-}
-#endif
-
 std::string GetPersonalizableDeviceNameInternal() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  return GetChromeOSDeviceNameFromType();
-#else
   char hostname[HOST_NAME_MAX];
-  if (gethostname(hostname, HOST_NAME_MAX) == 0)  // Success.
-    return hostname;
+  if (gethostname(hostname, HOST_NAME_MAX) == 0) {  // Success.
+    // Many Linux installations default to "localhost" or
+    // "localhost.localdomain" if the hostname is not configured during setup.
+    // These are generic names and do not help identify the device, so they are
+    // discarded in favor of the Linux distribution name.
+    std::string hostname_str(hostname);
+    if (hostname_str != "localhost" &&
+        hostname_str != "localhost.localdomain") {
+      return hostname_str;
+    }
+  }
   return base::GetLinuxDistro();
-#endif
 }
 
 }  // namespace syncer

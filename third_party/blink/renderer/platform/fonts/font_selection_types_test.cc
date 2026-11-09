@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ TEST(FontSelectionTypesTest, HashCollisions) {
   Vector<float> slopes = {-90, -67.5, -30, -20, -10, 0, 10, 20, 30, 67.5, 90};
   Vector<float> widths = {50, 67.5, 75, 100, 125, 150, 167.5, 175, 200};
 
-  HashSet<unsigned> hashes;
+  HashSet<uint32_t> hashes;
   for (auto weight : weights) {
     for (auto slope : slopes) {
       for (auto width : widths) {

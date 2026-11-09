@@ -1,11 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_BASE_CONSTANTS_H_
 #define REMOTING_BASE_CONSTANTS_H_
 
-#include "base/time/time.h"
+#include <array>
+#include <string_view>
+
+#include "build/build_config.h"
 
 namespace remoting {
 
@@ -24,12 +27,20 @@ extern const char kMimeTypeTextUtf8[];
 
 const int kDefaultDpi = 96;
 
-// The default interval for processes to send resource usage to network process.
-constexpr base::TimeDelta kDefaultProcessStatsInterval =
-    base::TimeDelta::FromMilliseconds(2000);
-
 // The video frame rate.
 constexpr int kTargetFrameRate = 30;
+
+#if BUILDFLAG(IS_LINUX)
+inline constexpr char kChromeRemoteDesktopSessionEnvVar[] =
+    "CHROME_REMOTE_DESKTOP_SESSION";
+
+// This list was created by looking at the MIME types claimed by some Wayland
+// and XWayland apps that put text onto the clipboard. It is ordered by
+// priority, preferring modern explicit UTF-8 formats over legacy string
+// formats.
+inline constexpr std::array<std::string_view, 5> kTextMimeTypes = {
+    "text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT"};
+#endif
 
 }  // namespace remoting
 

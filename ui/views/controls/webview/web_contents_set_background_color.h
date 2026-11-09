@@ -1,16 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_WEBVIEW_WEB_CONTENTS_SET_BACKGROUND_COLOR_H_
 #define UI_VIEWS_CONTROLS_WEBVIEW_WEB_CONTENTS_SET_BACKGROUND_COLOR_H_
 
+#include <stdint.h>
+
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/views/controls/webview/webview_export.h"
 
 // Defined in SkColor.h (32-bit ARGB color).
-using SkColor = unsigned int;
+using SkColor = uint32_t;
 
 namespace views {
 
@@ -24,7 +26,13 @@ class WebContentsSetBackgroundColor
       content::WebContents* web_contents,
       SkColor color);
 
+  WebContentsSetBackgroundColor(const WebContentsSetBackgroundColor&) = delete;
+  WebContentsSetBackgroundColor& operator=(
+      const WebContentsSetBackgroundColor&) = delete;
+
   ~WebContentsSetBackgroundColor() override;
+
+  SkColor color() const { return color_; }
 
  private:
   friend class content::WebContentsUserData<WebContentsSetBackgroundColor>;
@@ -37,8 +45,6 @@ class WebContentsSetBackgroundColor
   SkColor color_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(WebContentsSetBackgroundColor);
 };
 
 }  // namespace views

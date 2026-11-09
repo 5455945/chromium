@@ -1,11 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 
-#include "third_party/blink/public/platform/web_url_loader_client.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_network.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_client.h"
 #include "third_party/blink/renderer/platform/loader/static_data_navigation_body_loader.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
@@ -20,10 +20,8 @@ SimRequestBase::SimRequestBase(KURL url,
       redirect_url_(params.redirect_url),
       mime_type_(std::move(mime_type)),
       referrer_(params.referrer),
+      requestor_origin_(params.requestor_origin),
       start_immediately_(start_immediately),
-      started_(false),
-      client_(nullptr),
-      total_encoded_data_length_(0),
       response_http_headers_(params.response_http_headers),
       response_http_status_(params.response_http_status) {
   SimNetwork::Current().AddRequest(*this);
@@ -34,7 +32,7 @@ SimRequestBase::~SimRequestBase() {
   DCHECK(!navigation_body_loader_);
 }
 
-void SimRequestBase::DidReceiveResponse(WebURLLoaderClient* client,
+void SimRequestBase::DidReceiveResponse(URLLoaderClient* client,
                                         const WebURLResponse& response) {
   DCHECK(!navigation_body_loader_);
   client_ = client;
@@ -59,14 +57,16 @@ void SimRequestBase::UsedForNavigation(
 
 void SimRequestBase::StartInternal() {
   DCHECK(!started_);
-  DCHECK(redirect_url_.IsEmpty());  // client_ is nullptr on redirects
+  DCHECK(redirect_url_.empty());  // client_ is nullptr on redirects
   DCHECK(client_);
   started_ = true;
-  client_->DidReceiveResponse(response_);
+  client_->DidReceiveResponse(response_,
+                              /*body=*/mojo::ScopedDataPipeConsumerHandle(),
+                              /*cached_metadata=*/std::nullopt);
 }
 
 void SimRequestBase::Write(const String& data) {
-  WriteInternal(StringUTF8Adaptor(data));
+  WriteInternal(StringUtf8Adaptor(data));
 }
 
 void SimRequestBase::Write(const Vector<char>& data) {
@@ -79,10 +79,11 @@ void SimRequestBase::WriteInternal(base::span<const char> data) {
   DCHECK(started_);
   DCHECK(!error_);
   total_encoded_data_length_ += data.size();
-  if (navigation_body_loader_)
-    navigation_body_loader_->Write(data.data(), data.size());
-  else
-    client_->DidReceiveData(data.data(), data.size());
+  if (navigation_body_loader_) {
+    navigation_body_loader_->Write(data);
+  } else {
+    client_->DidReceiveDataForTesting(data);
+  }
 }
 
 void SimRequestBase::Finish(bool body_loader_finished) {
@@ -101,7 +102,7 @@ void SimRequestBase::Finish(bool body_loader_finished) {
     } else {
       client_->DidFinishLoading(
           base::TimeTicks::Now(), total_encoded_data_length_,
-          total_encoded_data_length_, total_encoded_data_length_, false);
+          total_encoded_data_length_, total_encoded_data_length_);
     }
   }
   Reset();
@@ -112,7 +113,7 @@ void SimRequestBase::Complete(const String& data) {
     ServePending();
   if (!started_)
     StartInternal();
-  if (!data.IsEmpty())
+  if (!data.empty())
     Write(data);
   Finish();
 }
@@ -122,7 +123,7 @@ void SimRequestBase::Complete(const Vector<char>& data) {
     ServePending();
   if (!started_)
     StartInternal();
-  if (!data.IsEmpty())
+  if (!data.empty())
     Write(data);
   Finish();
 }

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,12 @@ namespace wm {
 DEFINE_UI_CLASS_PROPERTY_KEY(AnimationHost*, kRootWindowAnimationHostKey, NULL)
 
 void SetAnimationHost(aura::Window* window, AnimationHost* animation_host) {
-  DCHECK(window);
+  CHECK(window, base::NotFatalUntil::M163);
   window->SetProperty(kRootWindowAnimationHostKey, animation_host);
 }
 
 AnimationHost* GetAnimationHost(aura::Window* window) {
-  DCHECK(window);
+  CHECK(window, base::NotFatalUntil::M163);
   return window->GetProperty(kRootWindowAnimationHostKey);
 }
 

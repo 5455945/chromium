@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,32 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/lens/buildflags.h"
+#include "components/lens/lens_constants.h"
+#include "components/lens/lens_entrypoints.h"
 #include "components/lens/lens_features.h"
+#include "components/lens/lens_url_utils.h"
+#include "components/search/search.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/web_cache/browser/web_cache_manager.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
@@ -34,36 +44,70 @@
 #include "extensions/buildflags/buildflags.h"
 #include "net/base/load_states.h"
 #include "net/http/http_request_headers.h"
+#include "skia/ext/image_operations.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/gfx/codec/jpeg_codec.h"
+#include "ui/gfx/codec/webp_codec.h"
+#include "ui/gfx/image/image_util.h"
 
-#if defined(OS_ANDROID)
-#include "chrome/browser/android/tab_android.h"
-#else
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#endif
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "components/guest_view/browser/guest_view_manager.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "base/time/time.h"
+#include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck crbug.com/40147906
 #endif
 
 using content::WebContents;
 
 namespace {
 
-const int kImageSearchThumbnailMinSize = 300 * 300;
-const int kImageSearchThumbnailMaxWidth = 600;
-const int kImageSearchThumbnailMaxHeight = 600;
+constexpr int kImageSearchThumbnailMinSize = 300 * 300;
+constexpr int kImageSearchThumbnailMaxWidth = 600;
+constexpr int kImageSearchThumbnailMaxHeight = 600;
+constexpr int kEncodingQualityJpeg = 40;
+constexpr int kEncodingQualityWebp = 45;
+
+bool NeedsDownscale(gfx::Image image) {
+  return (image.Height() * image.Width() > lens::kMaxAreaForImageSearch) &&
+         (image.Width() > lens::kMaxPixelsForImageSearch ||
+          image.Height() > lens::kMaxPixelsForImageSearch);
+}
+
+gfx::Image DownscaleImage(const gfx::Image& image) {
+  return gfx::ResizedImageForMaxDimensions(
+      image, lens::kMaxPixelsForImageSearch, lens::kMaxPixelsForImageSearch,
+      lens::kMaxAreaForImageSearch);
+}
 
 }  // namespace
 
-CoreTabHelper::CoreTabHelper(WebContents* web_contents)
-    : content::WebContentsObserver(web_contents), content_restrictions_(0) {}
+DEFINE_USER_DATA(CoreTabHelper);
 
-CoreTabHelper::~CoreTabHelper() {}
+CoreTabHelper::CoreTabHelper(tabs::TabInterface& tab, WebContents* web_contents)
+    : content::WebContentsObserver(web_contents),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {}
 
+CoreTabHelper::~CoreTabHelper() = default;
+
+// static
+CoreTabHelper* CoreTabHelper::From(tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+CoreTabHelper* CoreTabHelper::FromWebContents(WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+  return From(tabs::TabInterface::MaybeGetFromContents(web_contents));
+}
+
+// static
 std::u16string CoreTabHelper::GetDefaultTitle() {
   return l10n_util::GetStringUTF16(IDS_DEFAULT_TAB_TITLE);
 }
@@ -76,83 +120,255 @@ std::u16string CoreTabHelper::GetStatusText() const {
 
 void CoreTabHelper::UpdateContentRestrictions(int content_restrictions) {
   content_restrictions_ = content_restrictions;
-#if !defined(OS_ANDROID)
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  if (!browser)
+#if !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
+  if (!browser) {
     return;
+  }
 
-  browser->command_controller()->ContentRestrictionsChanged();
+  chrome::BrowserCommandController::From(browser)->ContentRestrictionsChanged();
 #endif
 }
 
-void CoreTabHelper::SearchWithLensInNewTab(
-    content::RenderFrameHost* render_frame_host,
-    const GURL& src_url) {
-  SearchByImageInNewTabImpl(
-      render_frame_host, src_url, kImageSearchThumbnailMinSize,
-      lens::features::GetMaxPixels(), lens::features::GetMaxPixels());
+std::vector<unsigned char> CoreTabHelper::EncodeImage(
+    const gfx::Image& image,
+    std::string& content_type,
+    lens::mojom::ImageFormat& image_format) {
+  std::optional<std::vector<uint8_t>> data =
+      gfx::JPEGCodec::Encode(image.AsBitmap(), kEncodingQualityJpeg);
+
+  if (data) {
+    content_type = "image/jpeg";
+    image_format = lens::mojom::ImageFormat::JPEG;
+    return data.value();
+  }
+
+  // Get the front and end of the image bytes in order to store them in the
+  // search_args to be sent as part of the PostContent in the request
+  content_type = "image/png";
+  image_format = lens::mojom::ImageFormat::PNG;
+  auto bytes = image.As1xPNGBytes();
+  return {bytes->begin(), bytes->end()};
 }
 
-void CoreTabHelper::SearchByImageInNewTab(
-    content::RenderFrameHost* render_frame_host,
-    const GURL& src_url) {
-  SearchByImageInNewTabImpl(
-      render_frame_host, src_url, kImageSearchThumbnailMinSize,
-      kImageSearchThumbnailMaxWidth, kImageSearchThumbnailMaxHeight);
+// static
+void CoreTabHelper::DownscaleAndEncodeBitmap(
+    const SkBitmap& bitmap,
+    int thumbnail_min_area,
+    int thumbnail_max_width,
+    int thumbnail_max_height,
+    DownscaleAndEncodeBitmapCallback callback) {
+  gfx::Size original_size;
+  std::string content_type;
+  gfx::Size downscaled_size;
+  std::vector<lens::mojom::LatencyLogPtr> log_data;
+  std::vector<unsigned char> thumbnail_data;
+
+  if (bitmap.isNull()) {
+    return std::move(callback).Run(thumbnail_data, content_type, original_size,
+                                   downscaled_size, std::move(log_data));
+  }
+
+  original_size = gfx::Size(bitmap.width(), bitmap.height());
+  gfx::SizeF scaled_size = gfx::SizeF(original_size);
+  bool needs_downscale = false;
+
+  if (original_size.GetArea() > thumbnail_min_area) {
+    if (scaled_size.width() > thumbnail_max_width) {
+      needs_downscale = true;
+      scaled_size.Scale(thumbnail_max_width / scaled_size.width());
+    }
+
+    if (scaled_size.height() > thumbnail_max_height) {
+      needs_downscale = true;
+      scaled_size.Scale(thumbnail_max_height / scaled_size.height());
+    }
+  }
+
+  SkBitmap thumbnail;
+  if (needs_downscale) {
+    log_data.push_back(lens::mojom::LatencyLog::New(
+        lens::mojom::Phase::DOWNSCALE_START, original_size, gfx::Size(),
+        lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+        /*encoded_size_bytes=*/0));
+    thumbnail = skia::ImageOperations::Resize(
+        bitmap, skia::ImageOperations::RESIZE_GOOD,
+        static_cast<int>(scaled_size.width()),
+        static_cast<int>(scaled_size.height()));
+    downscaled_size = gfx::Size(thumbnail.width(), thumbnail.height());
+    log_data.push_back(lens::mojom::LatencyLog::New(
+        lens::mojom::Phase::DOWNSCALE_END, original_size, downscaled_size,
+        lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+        /*encoded_size_bytes=*/0));
+  } else {
+    thumbnail = std::move(bitmap);
+    downscaled_size = gfx::Size(original_size);
+  }
+
+  lens::mojom::ImageFormat encode_target_format;
+  std::optional<std::vector<uint8_t>> encoded_data;
+  log_data.push_back(lens::mojom::LatencyLog::New(
+      lens::mojom::Phase::ENCODE_START, original_size, downscaled_size,
+      lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+      /*encoded_size_bytes=*/0));
+  if (thumbnail.isOpaque() && (encoded_data = gfx::JPEGCodec::Encode(
+                                   thumbnail, kEncodingQualityJpeg))) {
+    thumbnail_data.swap(encoded_data.value());
+    content_type = "image/jpeg";
+    encode_target_format = lens::mojom::ImageFormat::JPEG;
+  } else if ((encoded_data =
+                  gfx::WebpCodec::Encode(thumbnail, kEncodingQualityWebp))) {
+    thumbnail_data.swap(encoded_data.value());
+    content_type = "image/webp";
+    encode_target_format = lens::mojom::ImageFormat::WEBP;
+  }
+  log_data.push_back(lens::mojom::LatencyLog::New(
+      lens::mojom::Phase::ENCODE_END, original_size, downscaled_size,
+      encode_target_format, base::Time::Now(),
+      /*encoded_size_bytes=*/sizeof(unsigned char) * thumbnail_data.size()));
+  return std::move(callback).Run(thumbnail_data, content_type, original_size,
+                                 downscaled_size, std::move(log_data));
 }
 
-void CoreTabHelper::SearchByImageInNewTabImpl(
+// static
+lens::mojom::ImageFormat CoreTabHelper::EncodeImageIntoSearchArgs(
+    const gfx::Image& image,
+    size_t& encoded_size_bytes,
+    TemplateURLRef::SearchTermsArgs& search_args) {
+  lens::mojom::ImageFormat image_format;
+  std::string content_type;
+  std::vector<uint8_t> data = EncodeImage(image, content_type, image_format);
+  encoded_size_bytes = sizeof(unsigned char) * data.size();
+  search_args.image_thumbnail_content.assign(data.begin(), data.end());
+  search_args.image_thumbnail_content_type = content_type;
+  return image_format;
+}
+
+void CoreTabHelper::SearchWithLens(content::RenderFrameHost* render_frame_host,
+                                   const GURL& src_url,
+                                   lens::EntryPoint entry_point) {
+  SearchByImageImpl(render_frame_host, src_url, kImageSearchThumbnailMinSize,
+                    lens::kMaxPixelsForImageSearch,
+                    lens::kMaxPixelsForImageSearch,
+                    lens::GetQueryParametersForLensRequest(entry_point));
+}
+
+void CoreTabHelper::SearchWithLens(const gfx::Image& image,
+                                   lens::EntryPoint entry_point) {
+  auto lens_query_params = lens::GetQueryParametersForLensRequest(entry_point);
+
+  SearchByImageImpl(image, lens_query_params);
+}
+
+void CoreTabHelper::SearchByImage(content::RenderFrameHost* render_frame_host,
+                                  const GURL& src_url) {
+  SearchByImageImpl(render_frame_host, src_url, kImageSearchThumbnailMinSize,
+                    kImageSearchThumbnailMaxWidth,
+                    kImageSearchThumbnailMaxHeight, std::string());
+}
+
+void CoreTabHelper::SearchByImage(const gfx::Image& image) {
+  SearchByImageImpl(image,
+                    /*additional_query_params=*/std::string());
+}
+
+void CoreTabHelper::SearchByImageImpl(
+    const gfx::Image& original_image,
+    const std::string& additional_query_params) {
+  std::vector<lens::mojom::LatencyLogPtr> log_data;
+  log_data.push_back(lens::mojom::LatencyLog::New(
+      lens::mojom::Phase::OVERALL_START, gfx::Size(), gfx::Size(),
+      lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+      /*encoded_size_bytes=*/0));
+
+  // Downscale the `original_image` if needed.
+  gfx::Image image = original_image;
+  if (NeedsDownscale(original_image)) {
+    log_data.push_back(lens::mojom::LatencyLog::New(
+        lens::mojom::Phase::DOWNSCALE_START, original_image.Size(), gfx::Size(),
+        lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+        /*encoded_size_bytes=*/0));
+
+    image = DownscaleImage(original_image);
+
+    log_data.push_back(lens::mojom::LatencyLog::New(
+        lens::mojom::Phase::DOWNSCALE_END, original_image.Size(), image.Size(),
+        lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+        /*encoded_size_bytes=*/0));
+  }
+
+  TemplateURLService* template_url_service = GetTemplateURLService();
+  const TemplateURL* const default_provider =
+      template_url_service->GetDefaultSearchProvider();
+  CHECK(default_provider, base::NotFatalUntil::M162);
+  TemplateURLRef::SearchTermsArgs search_args =
+      TemplateURLRef::SearchTermsArgs(std::u16string());
+
+  log_data.push_back(lens::mojom::LatencyLog::New(
+      lens::mojom::Phase::ENCODE_START, original_image.Size(), gfx::Size(),
+      lens::mojom::ImageFormat::ORIGINAL, base::Time::Now(),
+      /*encoded_size_bytes=*/0));
+
+  size_t encoded_size_bytes;
+  lens::mojom::ImageFormat image_format;
+  image_format =
+      EncodeImageIntoSearchArgs(image, encoded_size_bytes, search_args);
+  log_data.push_back(lens::mojom::LatencyLog::New(
+      lens::mojom::Phase::ENCODE_END, original_image.Size(), gfx::Size(),
+      image_format, base::Time::Now(), encoded_size_bytes));
+
+  std::string additional_query_params_modified = additional_query_params;
+  if (base::FeatureList::IsEnabled(lens::features::kLensStandalone) &&
+      search::DefaultSearchProviderIsGoogle(template_url_service)) {
+    lens::AppendLogsQueryParam(&additional_query_params_modified,
+                               std::move(log_data));
+  }
+
+  if (search::DefaultSearchProviderIsGoogle(template_url_service)) {
+    search_args.processed_image_dimensions =
+        base::NumberToString(image.Size().width()) + "," +
+        base::NumberToString(image.Size().height());
+  }
+
+  search_args.image_original_size = original_image.Size();
+  search_args.additional_query_params = additional_query_params_modified;
+  TemplateURLRef::PostContent post_content;
+  GURL search_url(default_provider->image_url_ref().ReplaceSearchTerms(
+      search_args, template_url_service->search_terms_data(), &post_content));
+  PostContentToURL(post_content, search_url);
+}
+
+void CoreTabHelper::SearchByImageImpl(
     content::RenderFrameHost* render_frame_host,
     const GURL& src_url,
-    int thumbnail_min_size,
+    int thumbnail_min_area,
     int thumbnail_max_width,
-    int thumbnail_max_height) {
+    int thumbnail_max_height,
+    const std::string& additional_query_params) {
   mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> chrome_render_frame;
   render_frame_host->GetRemoteAssociatedInterfaces()->GetInterface(
       &chrome_render_frame);
   // Bind the InterfacePtr into the callback so that it's kept alive until
   // there's either a connection error or a response.
   auto* thumbnail_capturer_proxy = chrome_render_frame.get();
-  thumbnail_capturer_proxy->RequestImageForContextNode(
-      thumbnail_min_size, gfx::Size(thumbnail_max_width, thumbnail_max_height),
-      chrome::mojom::ImageFormat::JPEG,
-      base::BindOnce(&CoreTabHelper::DoSearchByImageInNewTab,
-                     weak_factory_.GetWeakPtr(), std::move(chrome_render_frame),
-                     src_url));
-}
-
-std::unique_ptr<content::WebContents> CoreTabHelper::SwapWebContents(
-    std::unique_ptr<content::WebContents> new_contents,
-    bool did_start_load,
-    bool did_finish_load) {
-#if defined(OS_ANDROID)
-  TabAndroid* tab = TabAndroid::FromWebContents(web_contents());
-  return tab->SwapWebContents(std::move(new_contents), did_start_load,
-                              did_finish_load);
-#else
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  return browser->SwapWebContents(web_contents(), std::move(new_contents));
-#endif
+  thumbnail_capturer_proxy->RequestBitmapForContextNode(base::BindOnce(
+      &CoreTabHelper::DoSearchByImageWithBitmap, weak_factory_.GetWeakPtr(),
+      std::move(chrome_render_frame), src_url, additional_query_params,
+      thumbnail_min_area, thumbnail_max_width, thumbnail_max_height));
 }
 
 // static
 bool CoreTabHelper::GetStatusTextForWebContents(std::u16string* status_text,
                                                 content::WebContents* source) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  auto* guest_manager = guest_view::GuestViewManager::FromBrowserContext(
-      source->GetBrowserContext());
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(IS_ANDROID)
+  NOTREACHED() << "If this ends up being used on Android update "
+               << "ChromeContentBrowserClient::OverrideURLLoaderFactoryParams.";
+#else
   if (!source->IsLoading() ||
       source->GetLoadState().state == net::LOAD_STATE_IDLE) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-    if (!guest_manager)
-      return false;
-    return guest_manager->ForEachGuest(
-        source, base::BindRepeating(&CoreTabHelper::GetStatusTextForWebContents,
-                                    status_text));
-#else  // !BUILDFLAG(ENABLE_EXTENSIONS)
     return false;
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
   }
 
   switch (source->GetLoadState().state) {
@@ -164,8 +380,7 @@ bool CoreTabHelper::GetStatusTextForWebContents(std::u16string* status_text,
     case net::LOAD_STATE_WAITING_FOR_DELEGATE:
       if (!source->GetLoadState().param.empty()) {
         *status_text = l10n_util::GetStringFUTF16(
-            IDS_LOAD_STATE_WAITING_FOR_DELEGATE,
-            source->GetLoadState().param);
+            IDS_LOAD_STATE_WAITING_FOR_DELEGATE, source->GetLoadState().param);
         return true;
       } else {
         *status_text = l10n_util::GetStringUTF16(
@@ -175,10 +390,6 @@ bool CoreTabHelper::GetStatusTextForWebContents(std::u16string* status_text,
     case net::LOAD_STATE_WAITING_FOR_CACHE:
       *status_text =
           l10n_util::GetStringUTF16(IDS_LOAD_STATE_WAITING_FOR_CACHE);
-      return true;
-    case net::LOAD_STATE_WAITING_FOR_APPCACHE:
-      *status_text =
-          l10n_util::GetStringUTF16(IDS_LOAD_STATE_WAITING_FOR_APPCACHE);
       return true;
     case net::LOAD_STATE_ESTABLISHING_PROXY_TUNNEL:
       *status_text =
@@ -210,7 +421,7 @@ bool CoreTabHelper::GetStatusTextForWebContents(std::u16string* status_text,
         *status_text = l10n_util::GetStringFUTF16Int(
             IDS_LOAD_STATE_SENDING_REQUEST_WITH_PROGRESS,
             static_cast<int>((100 * source->GetUploadPosition()) /
-                source->GetUploadSize()));
+                             source->GetUploadSize()));
         return true;
       } else {
         *status_text =
@@ -218,25 +429,18 @@ bool CoreTabHelper::GetStatusTextForWebContents(std::u16string* status_text,
         return true;
       }
     case net::LOAD_STATE_WAITING_FOR_RESPONSE:
-      *status_text =
-          l10n_util::GetStringFUTF16(IDS_LOAD_STATE_WAITING_FOR_RESPONSE,
-                                     source->GetLoadStateHost());
+      *status_text = l10n_util::GetStringFUTF16(
+          IDS_LOAD_STATE_WAITING_FOR_RESPONSE, source->GetLoadStateHost());
       return true;
-    // Ignore net::LOAD_STATE_READING_RESPONSE and net::LOAD_STATE_IDLE
+    // Ignore net::LOAD_STATE_READING_RESPONSE, net::LOAD_STATE_IDLE and
+    // net::LOAD_STATE_OBSOLETE_WAITING_FOR_APPCACHE
     case net::LOAD_STATE_IDLE:
     case net::LOAD_STATE_READING_RESPONSE:
+    case net::LOAD_STATE_OBSOLETE_WAITING_FOR_APPCACHE:
       break;
   }
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  if (!guest_manager)
-    return false;
-
-  return guest_manager->ForEachGuest(
-      source, base::BindRepeating(&CoreTabHelper::GetStatusTextForWebContents,
-                                  status_text));
-#else  // !BUILDFLAG(ENABLE_EXTENSIONS)
   return false;
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -246,21 +450,17 @@ void CoreTabHelper::DidStartLoading() {
   UpdateContentRestrictions(0);
 }
 
-void CoreTabHelper::OnVisibilityChanged(content::Visibility visibility) {
-  // TODO(jochen): Consider handling OCCLUDED tabs the same way as HIDDEN tabs.
-  if (visibility != content::Visibility::HIDDEN) {
-    web_cache::WebCacheManager::GetInstance()->ObserveActivity(
-        web_contents()->GetMainFrame()->GetProcess()->GetID());
-  }
-}
-
 // Update back/forward buttons for web_contents that are active.
 void CoreTabHelper::NavigationEntriesDeleted() {
-#if !defined(OS_ANDROID)
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    if (web_contents() == browser->tab_strip_model()->GetActiveWebContents())
-      browser->command_controller()->TabStateChanged();
-  }
+#if !BUILDFLAG(IS_ANDROID)
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this](BrowserWindowInterface* browser) {
+        if (web_contents() ==
+            browser->GetTabStripModel()->GetActiveWebContents()) {
+          chrome::BrowserCommandController::From(browser)->TabStateChanged();
+        }
+        return true;
+      });
 #endif
 }
 
@@ -268,72 +468,122 @@ void CoreTabHelper::NavigationEntriesDeleted() {
 // web contents or not.
 void CoreTabHelper::OnWebContentsFocused(
     content::RenderWidgetHost* render_widget_host) {
-#if !defined(OS_ANDROID)
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  if (browser)
-    browser->command_controller()->WebContentsFocusChanged();
-#endif  // defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
+  if (browser) {
+    chrome::BrowserCommandController::From(browser)->WebContentsFocusChanged();
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void CoreTabHelper::OnWebContentsLostFocus(
     content::RenderWidgetHost* render_widget_host) {
-#if !defined(OS_ANDROID)
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  if (browser)
-    browser->command_controller()->WebContentsFocusChanged();
-#endif  // defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
+  if (browser) {
+    chrome::BrowserCommandController::From(browser)->WebContentsFocusChanged();
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
-// Handles the image thumbnail for the context node, composes a image search
-// request based on the received thumbnail and opens the request in a new tab.
-void CoreTabHelper::DoSearchByImageInNewTab(
+void CoreTabHelper::DoSearchByImageWithBitmap(
     mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame>
         chrome_render_frame,
     const GURL& src_url,
-    const std::vector<uint8_t>& thumbnail_data,
+    const std::string& additional_query_params,
+    int thumbnail_min_area,
+    int thumbnail_max_width,
+    int thumbnail_max_height,
+    const SkBitmap& bitmap) {
+  base::ThreadPool::PostTask(base::BindOnce(
+      &CoreTabHelper::DownscaleAndEncodeBitmap, bitmap, thumbnail_min_area,
+      thumbnail_max_width, thumbnail_max_height,
+      base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
+                         base::BindOnce(&CoreTabHelper::DoSearchByImage,
+                                        weak_factory_.GetWeakPtr(), src_url,
+                                        additional_query_params))));
+}
+
+void CoreTabHelper::DoSearchByImage(
+    const GURL& src_url,
+    const std::string& additional_query_params,
+    const std::vector<unsigned char>& thumbnail_data,
+    const std::string& content_type,
     const gfx::Size& original_size,
-    const std::string& image_extension) {
-  if (thumbnail_data.empty())
+    const gfx::Size& downscaled_size,
+    const std::vector<lens::mojom::LatencyLogPtr> log_data) {
+  if (thumbnail_data.empty()) {
     return;
+  }
 
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-
-  TemplateURLService* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(profile);
-  if (!template_url_service)
-    return;
+  TemplateURLService* template_url_service = GetTemplateURLService();
   const TemplateURL* const default_provider =
       template_url_service->GetDefaultSearchProvider();
-  if (!default_provider)
-    return;
+  CHECK(default_provider, base::NotFatalUntil::M162);
+
+  std::string additional_query_params_modified = additional_query_params;
+  if (base::FeatureList::IsEnabled(lens::features::kLensStandalone) &&
+      search::DefaultSearchProviderIsGoogle(template_url_service)) {
+    lens::AppendLogsQueryParam(&additional_query_params_modified,
+                               std::move(log_data));
+  }
 
   TemplateURLRef::SearchTermsArgs search_args =
       TemplateURLRef::SearchTermsArgs(std::u16string());
+  if (search::DefaultSearchProviderIsGoogle(template_url_service)) {
+    search_args.processed_image_dimensions =
+        base::NumberToString(downscaled_size.width()) + "," +
+        base::NumberToString(downscaled_size.height());
+  }
+
   search_args.image_thumbnail_content.assign(thumbnail_data.begin(),
                                              thumbnail_data.end());
+  search_args.image_thumbnail_content_type = content_type;
   search_args.image_url = src_url;
   search_args.image_original_size = original_size;
+  search_args.additional_query_params = additional_query_params_modified;
   TemplateURLRef::PostContent post_content;
-  GURL result(default_provider->image_url_ref().ReplaceSearchTerms(
+  const TemplateURLRef& template_url = default_provider->image_url_ref();
+  GURL search_url(template_url.ReplaceSearchTerms(
       search_args, template_url_service->search_terms_data(), &post_content));
-  if (!result.is_valid())
-    return;
 
-  content::OpenURLParams open_url_params(
-      result, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, false);
+  PostContentToURL(post_content, search_url);
+}
+
+TemplateURLService* CoreTabHelper::GetTemplateURLService() {
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  CHECK(profile, base::NotFatalUntil::M162);
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(profile);
+  CHECK(template_url_service, base::NotFatalUntil::M162);
+  return template_url_service;
+}
+
+void CoreTabHelper::PostContentToURL(TemplateURLRef::PostContent post_content,
+                                     GURL url) {
+  if (!url.is_valid()) {
+    return;
+  }
+  content::OpenURLParams open_url_params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          url, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK);
   const std::string& content_type = post_content.first;
   const std::string& post_data = post_content.second;
   if (!post_data.empty()) {
-    DCHECK(!content_type.empty());
-    open_url_params.post_data = network::ResourceRequestBody::CreateFromBytes(
-        post_data.data(), post_data.size());
-    open_url_params.extra_headers += base::StringPrintf(
-        "%s: %s\r\n", net::HttpRequestHeaders::kContentType,
-        content_type.c_str());
+    CHECK(!content_type.empty(), base::NotFatalUntil::M162);
+    open_url_params.post_data =
+        network::ResourceRequestBody::CreateFromCopyOfBytes(
+            base::as_byte_span(post_data));
+    open_url_params.extra_headers +=
+        base::StringPrintf("%s: %s\r\n", net::HttpRequestHeaders::kContentType,
+                           content_type.c_str());
   }
-  web_contents()->OpenURL(open_url_params);
-}
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(CoreTabHelper)
+  web_contents()->OpenURL(open_url_params, /*navigation_handle_callback=*/{});
+}

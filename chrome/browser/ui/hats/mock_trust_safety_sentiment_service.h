@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,6 +28,44 @@ class MockTrustSafetySentimentService : public TrustSafetySentimentService {
               (content::WebContents * web_contents),
               (override));
   MOCK_METHOD(void, RanSafetyCheck, (), (override));
+  MOCK_METHOD(void, PageInfoOpened, (), (override));
+  MOCK_METHOD(void, InteractedWithPageInfo, (), (override));
+  MOCK_METHOD(void, PageInfoClosed, (), (override));
+  MOCK_METHOD(void, SavedPassword, (), (override));
+  MOCK_METHOD(void,
+              OpenedPasswordManager,
+              (content::WebContents * web_contents),
+              (override));
+  MOCK_METHOD(void, SavedCard, (), (override));
+  MOCK_METHOD(void, RanPasswordCheck, (), (override));
+  MOCK_METHOD(void,
+              ClearedBrowsingData,
+              (browsing_data::BrowsingDataType datatype),
+              (override));
+  MOCK_METHOD(void, FinishedPrivacyGuide, (), (override));
+  MOCK_METHOD(void,
+              InteractedWithSafeBrowsingInterstitial,
+              (bool, safe_browsing::SBThreatType),
+              (override));
+  MOCK_METHOD(void,
+              InteractedWithDownloadWarningUI,
+              (DownloadItemWarningData::WarningSurface,
+               DownloadItemWarningData::WarningAction),
+              (override));
+  MOCK_METHOD(void,
+              ProtectResetOrCheckPasswordClicked,
+              (PasswordProtectionUIType),
+              (override));
+  MOCK_METHOD(void,
+              PhishedPasswordUpdateNotClicked,
+              (PasswordProtectionUIType, PasswordProtectionUIAction),
+              (override));
+  MOCK_METHOD(void, PhishedPasswordUpdateFinished, (), (override));
+  MOCK_METHOD(void,
+              TriggerSafetyHubSurvey,
+              (TrustSafetySentimentService::FeatureArea,
+               (std::map<std::string, bool>)),
+              (override));
 };
 
 std::unique_ptr<KeyedService> BuildMockTrustSafetySentimentService(

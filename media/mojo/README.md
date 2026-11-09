@@ -1,4 +1,4 @@
-# media/mojo
+# //media/mojo
 
 This folder contains mojo interfaces, clients and implementations that extend
 the core "media" target to support most out-of-process use cases, including
@@ -83,10 +83,6 @@ special or more complicated use cases. For example:
 * On desktop platforms, when library CDM is enabled, the
   `media::mojom::ContentDecryptionModule` request will be forwarded to the
   [`CdmService`](#CdmService) running in its own CDM (utility) process.
-* On Android, the `media::mojom::Renderer` request is handled in the
-  `RenderFrameHostImpl` context directly by creating `MediaPlayerRenderer` in
-  the browser process, even though the `MediaService` is configured to run in
-  the GPU process.
 * On Chromecast, the `media::mojom::Renderer` and
   `media::mojom::ContentDecryptionModule` requests are handled by
   [`MediaRendererService`](#MediaRendererService) which runs in the browser
@@ -96,6 +92,18 @@ special or more complicated use cases. For example:
 Note that `media::mojom::InterfaceFactory` interface is reused in the
 communication between `MediaInterfaceProxy` and `MediaService` (see
 [below](#Site-Isolation)).
+
+### Frameless Media Interface Factory
+
+In addition to the main `MediaInterfaceProxy`, which handles requests from
+ordinary media playback, `FramelessMediaInterfaceProxy` handles requests for
+media cases that do not need or have a frame.
+
+A frame is required for protected media playback because media decoding and
+the CDM are associated within a frame.
+
+The `FramelessMediaInterfaceProxy` is used by WebCodecs (which may be operating
+in a worker context), by WebRTC, and for early querying of supported codecs.
 
 ### MediaService
 
@@ -107,13 +115,13 @@ mojo interface implementations. It comes with some nice benefits.
 Different platforms or products have different requirements on where the remote
 media components should run. For example, a hardware decoder typically should
 run in the GPU process. The `ServiceManagerContext` provides the ability to run
-a service_manager::Service in-process (browser), out-of-process (utility) or in
-the GPU process. Therefore, by using a `MediaService`, it’s very easy to support
-hosting remote media components interfaces in most common Chromium process types
-(Browser/Utility/GPU). This can by set using the gn argument  `mojo_media_host`,
+a service in-process (browser) or in the GPU process. Therefore, by using a
+`MediaService`, it’s very easy to support hosting remote media components
+interfaces in most common Chromium process types (Browser/GPU). This can by set
+using the gn argument  `mojo_media_host`,
 e.g.
 ```
-mojo_media_host = "browser" or “gpu” or “utility”
+mojo_media_host = "browser" or “gpu”
 ```
 
 MediaService is registered in `ServiceManagerContext` using `kMediaServiceName`.
@@ -186,12 +194,10 @@ the scope of details to the files and classes need them, by requiring little
 control flow boilerplate, and by generally having little impact on the default
 paths that `WebMediaPlayer` uses most of the time.
 
-Two examples of complex scenarios enabled by specialized renderers are: handling
-HLS playback on Android by delegating it to the Android Media Player (see
-`MediaPlayerRenderer`) and casting "src=" media from an Android phone to a cast
-device (see `FlingingRenderer`). Both of these examples have sub-components that
-need to live in the Browser process. We therefore proxy the
-`MediaPlayerRenderer` and `FlingingRenderer` to the Browser process, using the
+One example of complex scenarios enabled by specialized renderers is casting
+"src=" media from an Android phone to a cast device (see `FlingingRenderer`).
+This example has sub-components that need to live in the Browser process. We
+therefore proxy the `FlingingRenderer` to the Browser process, using the
 Mojo interfaces defined in renderer.mojom and renderer_extensions.mojom. This
 idea can be generalized to handle any special case *Foo scenario* as a
 **specialized OOP FooRenderer**.
@@ -369,11 +375,6 @@ in the browser process. They must defend against compromised media components.
 * `MediaDrmBridge` uses mojo `ProvisionFetcher` service for CDM provisioning
 * `MojoAudioDecoder` + `MediaCodecAudioDecoder`
 * `MojoVideoDecoder` + `MediaCodecVideoDecoder` (in progress)
-* HLS support:
-    * `MojoRenderer` + `MediaPlayerRenderer`
-    * NOT using `MediaService`. Instead, `MojoRendererService` is hosted by
-      `RenderFrameHostImpl`/`MediaInterfaceProxy`  in the browser process
-      directly.
 * Flinging media to cast devices (RemotePlayback API):
     * `MojoRenderer` + `FlingingRenderer`
     * NOT using `MediaService`. Instead, `MojoRendererService` is hosted by
@@ -397,7 +398,7 @@ in the browser process. They must defend against compromised media components.
 * MediaService (in progress)
     * `MediaService` in the GPU process (registered in `GpuServiceFactory` with
       `GpuMojoMediaClient`)
-    * `MojoVideoDecoder` + hardware video decoders such as D3D11VideoDecoder
+    * `MojoVideoDecoder` + hardware video decoders such as D3DVideoDecoder
 
 ## Other Services
 

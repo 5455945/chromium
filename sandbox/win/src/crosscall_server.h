@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "sandbox/win/src/crosscall_params.h"
 #include "sandbox/win/src/ipc_tags.h"
 
@@ -61,6 +64,9 @@ class CrossCallParamsEx : public CrossCallParams {
                                              uint32_t buffer_size,
                                              uint32_t* output_size);
 
+  CrossCallParamsEx(const CrossCallParamsEx&) = delete;
+  CrossCallParamsEx& operator=(const CrossCallParamsEx&) = delete;
+
   // Provides IPCinput parameter raw access:
   // index : the parameter to read; 0 is the first parameter
   // returns nullptr if the parameter is non-existent. If it exists it also
@@ -92,7 +98,6 @@ class CrossCallParamsEx : public CrossCallParams {
   CrossCallParamsEx();
 
   ParamInfo param_info_[1];
-  DISALLOW_COPY_AND_ASSIGN(CrossCallParamsEx);
 };
 
 // Simple helper function that sets the members of CrossCallReturn
@@ -113,19 +118,11 @@ struct ClientInfo {
 // All IPC-related information to be passed to the IPC handler.
 struct IPCInfo {
   IpcTag ipc_tag;
-  const ClientInfo* client_info;
+  raw_ptr<const ClientInfo> client_info;
   CrossCallReturn return_info;
 };
 
-// This structure identifies IPC signatures.
-struct IPCParams {
-  IpcTag ipc_tag;
-  ArgType args[kMaxIpcParams];
-
-  bool Matches(IPCParams* other) const {
-    return !memcmp(this, other, sizeof(*other));
-  }
-};
+using IPCParamTypes = std::array<ArgType, kMaxIpcParams>;
 
 // Models an entity that can process an IPC message or it can route to another
 // one that could handle it. When an IPC arrives the IPC implementation will:
@@ -135,7 +132,7 @@ struct IPCParams {
 // 2) When the  IPC finally obtains a valid Dispatcher the IPC
 //    implementation creates a CrossCallParamsEx from the raw IPC buffer.
 // 3) It calls the returned callback, with the IPC info and arguments.
-class Dispatcher {
+class [[clang::lto_visibility_public]] Dispatcher {
  public:
   // Called from the  IPC implementation to handle a specific IPC message.
   typedef bool (Dispatcher::*CallbackGeneric)();
@@ -196,7 +193,9 @@ class Dispatcher {
   // on a derived class to handle a set of  IPC messages. Return nullptr if your
   // subclass does not handle the message or return the pointer to the subclass
   // that can handle it.
-  virtual Dispatcher* OnMessageReady(IPCParams* ipc, CallbackGeneric* callback);
+  virtual Dispatcher* OnMessageReady(IpcTag ipc_tag,
+                                     const IPCParamTypes& types,
+                                     CallbackGeneric* callback);
 
   // Called when a target proces is created, to setup the interceptions related
   // with the given service (IPC).
@@ -208,12 +207,12 @@ class Dispatcher {
  protected:
   // Structure that defines an IPC Call with all the parameters and the handler.
   struct IPCCall {
-    IPCParams params;
+    IPCParamTypes types;
     CallbackGeneric callback;
   };
 
-  // List of IPC Calls supported by the class.
-  std::vector<IPCCall> ipc_calls_;
+  // IPC Calls supported by the class.
+  base::flat_map<IpcTag, IPCCall> ipc_calls_;
 };
 
 }  // namespace sandbox

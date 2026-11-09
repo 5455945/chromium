@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,18 @@
 #include <utility>
 
 #include "android_webview/browser/gfx/task_queue_webview.h"
+#include "android_webview/common/aw_features.h"
 #include "base/check_op.h"
 #include "base/location.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_restrictions.h"
-#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
+#include "components/viz/common/features.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
+#include "components/viz/service/frame_sinks/shared_image_interface_provider.h"
+#include "components/viz/service/gl/gpu_service_impl.h"
+#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 
 namespace android_webview {
 
@@ -43,8 +47,12 @@ VizCompositorThreadRunnerWebView::GetInstance() {
 
 VizCompositorThreadRunnerWebView::VizCompositorThreadRunnerWebView()
     : viz_thread_("VizWebView") {
-  base::Thread::Options options;
-  options.priority = base::ThreadPriority::DISPLAY;
+  base::Thread::Options options(base::ThreadType::kPresentation);
+  if (base::FeatureList::IsEnabled(
+          android_webview::features::
+              kWebViewVizDirectCompositorThreadIpcFrameSinkManager)) {
+    options.message_pump_type = base::MessagePumpType::IO;
+  }
   CHECK(viz_thread_.StartWithOptions(std::move(options)));
   viz_task_runner_ = viz_thread_.task_runner();
   TaskQueueWebView::GetInstance()->InitializeVizThread(viz_task_runner_);
@@ -60,16 +68,22 @@ VizCompositorThreadRunnerWebView::VizCompositorThreadRunnerWebView()
 
 void VizCompositorThreadRunnerWebView::InitFrameSinkManagerOnViz() {
   DCHECK_CALLED_ON_VALID_THREAD(viz_thread_checker_);
+  mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics("VizWebView");
 
-  // Android doesn't support software compositing, but in some cases
-  // unaccelerated canvas can use SharedBitmaps as resource so we create
-  // SharedBitmapManager anyway.
-  // TODO(1056184): Stop using SharedBitmapManager after fixing fallback to
-  // SharedBitmap.
-  server_shared_bitmap_manager_ =
-      std::make_unique<viz::ServerSharedBitmapManager>();
-  frame_sink_manager_ = std::make_unique<viz::FrameSinkManagerImpl>(
-      server_shared_bitmap_manager_.get());
+  auto init_params = viz::FrameSinkManagerImpl::InitParams();
+
+  // HWUI has 2 frames pipelineing and we need another one because we force
+  // client to be frame behind.
+  init_params.max_uncommitted_frames = 3;
+
+  init_params.use_direct_receiver = base::FeatureList::IsEnabled(
+      android_webview::features::
+          kWebViewVizDirectCompositorThreadIpcFrameSinkManager);
+
+  frame_sink_manager_ =
+      std::make_unique<viz::FrameSinkManagerImpl>(init_params);
+
+  thread_ids_.insert(base::PlatformThread::CurrentId());
 }
 
 viz::FrameSinkManagerImpl*
@@ -97,26 +111,46 @@ void VizCompositorThreadRunnerWebView::PostTaskAndBlock(
 
 VizCompositorThreadRunnerWebView::~VizCompositorThreadRunnerWebView() = default;
 
-base::PlatformThreadId VizCompositorThreadRunnerWebView::thread_id() {
-  DCHECK(viz_thread_.IsRunning());
-  return viz_thread_.GetThreadId();
-}
-
 base::SingleThreadTaskRunner* VizCompositorThreadRunnerWebView::task_runner() {
   return viz_task_runner_.get();
 }
 
-void VizCompositorThreadRunnerWebView::CreateFrameSinkManager(
-    viz::mojom::FrameSinkManagerParamsPtr params) {
-  // Does not support software compositing.
-  NOTREACHED();
+bool VizCompositorThreadRunnerWebView::CreateHintSessionFactory(
+    base::flat_set<base::PlatformThreadId> thread_ids,
+    base::RepeatingClosure* wake_up_closure) {
+  return false;
+}
+
+void VizCompositorThreadRunnerWebView::SetIOThreadId(
+    base::PlatformThreadId io_thread_id) {
+  if (io_thread_id != base::kInvalidThreadId) {
+    viz_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&VizCompositorThreadRunnerWebView::SetIOThreadIdOnViz,
+                       base::Unretained(this), io_thread_id));
+  }
+}
+
+void VizCompositorThreadRunnerWebView::SetGpuMainThreadId(
+    base::PlatformThreadId gpu_main_thread_id) {
+  if (gpu_main_thread_id != base::kInvalidThreadId) {
+    viz_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &VizCompositorThreadRunnerWebView::SetGpuMainThreadIdOnViz,
+            base::Unretained(this), gpu_main_thread_id));
+  }
 }
 
 void VizCompositorThreadRunnerWebView::CreateFrameSinkManager(
     viz::mojom::FrameSinkManagerParamsPtr params,
-    gpu::CommandBufferTaskExecutor* task_executor,
-    viz::GpuServiceImpl* gpu_service,
-    gfx::RenderingPipeline* gpu_pipeline) {
+    viz::GpuServiceImpl* gpu_service) {
+  // Does not support software compositing.
+  DCHECK(gpu_service);
+
+  shared_image_interface_provider_ =
+      std::make_unique<viz::SharedImageInterfaceProvider>(gpu_service);
+
   viz_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -135,19 +169,31 @@ void VizCompositorThreadRunnerWebView::BindFrameSinkManagerOnViz(
 
   frame_sink_manager_->BindAndSetClient(
       std::move(params->frame_sink_manager), viz_task_runner_,
-      std::move(params->frame_sink_manager_client));
+      std::move(params->frame_sink_manager_client),
+      shared_image_interface_provider_.get());
 }
-
-#if BUILDFLAG(USE_VIZ_DEVTOOLS)
-void VizCompositorThreadRunnerWebView::CreateVizDevTools(
-    viz::mojom::VizDevToolsParamsPtr params) {
-  NOTIMPLEMENTED();
-}
-#endif
 
 viz::GpuServiceImpl* VizCompositorThreadRunnerWebView::GetGpuService() {
   DCHECK_CALLED_ON_VALID_THREAD(viz_thread_checker_);
   return gpu_service_impl_;
+}
+
+base::flat_set<base::PlatformThreadId>
+VizCompositorThreadRunnerWebView::GetThreadIds() const {
+  DCHECK_CALLED_ON_VALID_THREAD(viz_thread_checker_);
+  return thread_ids_;
+}
+
+void VizCompositorThreadRunnerWebView::SetIOThreadIdOnViz(
+    base::PlatformThreadId io_thread_id) {
+  DCHECK_CALLED_ON_VALID_THREAD(viz_thread_checker_);
+  thread_ids_.insert(io_thread_id);
+}
+
+void VizCompositorThreadRunnerWebView::SetGpuMainThreadIdOnViz(
+    base::PlatformThreadId gpu_main_thread_id) {
+  DCHECK_CALLED_ON_VALID_THREAD(viz_thread_checker_);
+  thread_ids_.insert(gpu_main_thread_id);
 }
 
 }  // namespace android_webview

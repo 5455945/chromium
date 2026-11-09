@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,17 @@ package org.chromium.components.background_task_scheduler;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
 /**
  * Helper class to allow external code (typically Chrome-specific BackgroundTaskScheduler code) to
  * report UMA.
  */
+@NullMarked
 public abstract class BackgroundTaskSchedulerExternalUma {
     // BackgroundTaskId defined in tools/metrics/histograms/enums.xml
+    public static final int BACKGROUND_TASK_NOT_FOUND = -1;
     public static final int BACKGROUND_TASK_TEST = 0;
     public static final int BACKGROUND_TASK_OMAHA = 1;
     public static final int BACKGROUND_TASK_GCM = 2;
@@ -25,11 +30,9 @@ public abstract class BackgroundTaskSchedulerExternalUma {
     public static final int BACKGROUND_TASK_WEBVIEW_VARIATIONS = 10;
     public static final int BACKGROUND_TASK_OFFLINE_CONTENT_NOTIFICATION = 11;
     public static final int BACKGROUND_TASK_WEBAPK_UPDATE = 12;
-    public static final int BACKGROUND_TASK_DOWNLOAD_RESUMPTION = 13;
+    public static final int BACKGROUND_TASK_DEPRECATED_DOWNLOAD_RESUMPTION = 13;
     public static final int BACKGROUND_TASK_FEED_REFRESH = 14;
     public static final int BACKGROUND_TASK_COMPONENT_UPDATE = 15;
-    public static final int BACKGROUND_TASK_DEPRECATED_EXPLORE_SITES_REFRESH = 16;
-    public static final int BACKGROUND_TASK_EXPLORE_SITES_REFRESH = 17;
     public static final int BACKGROUND_TASK_DOWNLOAD_AUTO_RESUMPTION = 18;
     public static final int BACKGROUND_TASK_ONE_SHOT_SYNC_WAKE_UP = 19;
     public static final int BACKGROUND_TASK_NOTIFICATION_SCHEDULER = 20;
@@ -40,8 +43,20 @@ public abstract class BackgroundTaskSchedulerExternalUma {
     public static final int BACKGROUND_TASK_DOWNLOAD_LATER = 25;
     public static final int BACKGROUND_TASK_OFFLINE_MEASUREMENTS = 26;
     public static final int BACKGROUND_TASK_WEBVIEW_COMPONENT_UPDATE = 27;
+    public static final int BACKGROUND_TASK_ATTRIBUTION_PROVIDER_FLUSH = 28;
+    public static final int BACKGROUND_TASK_DOWNLOAD_AUTO_RESUMPTION_UNMETERED = 29;
+    public static final int BACKGROUND_TASK_DOWNLOAD_AUTO_RESUMPTION_ANY_NETWORK = 30;
+    public static final int BACKGROUND_TASK_NOTIFICATION_PRE_UNSUBSCRIBE = 31;
+    public static final int BACKGROUND_SAFETY_HUB = 32;
+    public static final int BACKGROUND_AUXILIARY_SEARCH_DONATE = 33;
+    public static final int BACKGROUND_CHROME_SIGNALS_REPORTING = 34;
+    public static final int BACKGROUND_UMA_UPLOAD = 35;
+    public static final int BACKGROUND_UKM_UPLOAD = 36;
+    public static final int BACKGROUND_DWA_UPLOAD = 37;
+    public static final int BACKGROUND_PUMA_UPLOAD = 38;
+    public static final int BACKGROUND_STRUCTURED_METRICS_UPLOAD = 39;
     // Keep this one at the end and increment appropriately when adding new tasks.
-    public static final int BACKGROUND_TASK_COUNT = 28;
+    public static final int BACKGROUND_TASK_COUNT = 40;
 
     protected BackgroundTaskSchedulerExternalUma() {}
 
@@ -51,34 +66,24 @@ public abstract class BackgroundTaskSchedulerExternalUma {
      * @param minimalBrowserMode Whether the task will start native in Minimal Browser Mode
      *                              (Reduced Mode) instead of Full Browser Mode.
      */
-    public abstract void reportTaskStartedNative(int taskId, boolean minimalBrowserMode);
+    public abstract void reportTaskStartedNative(int taskId);
 
     /**
-     * Report metrics for starting a NativeBackgroundTask. This does not consider tasks that are
-     * short-circuited before any work is done.
-     * @param taskId An id from {@link TaskIds}.
-     * @param minimalBrowserMode Whether the task will run in Minimal Browser Mode (Reduced
-     *                               Mode) instead of Full Browser Mode.
-     */
-    public abstract void reportNativeTaskStarted(int taskId, boolean minimalBrowserMode);
-
-    /**
-     * Reports metrics that a NativeBackgroundTask has been finished cleanly (i.e., no unexpected
-     * exits because of chrome crash or OOM). This includes tasks that have been stopped due to
-     * timeout.
-     * @param taskId An id from {@link TaskIds}.
-     * @param minimalBrowserMode Whether the task will run in Minimal Browser Mode (Reduced
-     *                               Mode) instead of Full Browser Mode.
-     */
-    public abstract void reportNativeTaskFinished(int taskId, boolean minimalBrowserMode);
-
-    /**
-     * Reports metrics of how Chrome is launched, either in minimal browser mode or as full
-     * browser, as well as either cold start or warm start.
-     * See {@link org.chromium.content.browser.ServicificationStartupUma} for more details.
+     * Reports metrics of how Chrome is launched, either in minimal browser mode or as full browser,
+     * as well as either cold start or warm start. See {@link
+     * org.chromium.content.browser.ServicificationStartupUma} for more details.
+     *
      * @param startupMode Chrome's startup mode.
      */
     public abstract void reportStartupMode(int startupMode);
+
+    /**
+     * Reports metrics for the time taken for a BackgroundTask.
+     *
+     * @param taskId An id from {@link TaskIds}.
+     * @param taskDurationMs Time taken in milliseconds.
+     */
+    public abstract void reportTaskFinished(int taskId, long taskDurationMs);
 
     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
     public static int toUmaEnumValueFromTaskId(int taskId) {
@@ -97,8 +102,6 @@ public abstract class BackgroundTaskSchedulerExternalUma {
                 return BACKGROUND_TASK_CHROME_MINIDUMP;
             case TaskIds.OFFLINE_PAGES_BACKGROUND_JOB_ID:
                 return BACKGROUND_TASK_OFFLINE_PAGES;
-            case TaskIds.OFFLINE_PAGES_PREFETCH_JOB_ID:
-                return BACKGROUND_TASK_OFFLINE_PREFETCH;
             case TaskIds.DOWNLOAD_SERVICE_JOB_ID:
                 return BACKGROUND_TASK_DOWNLOAD_SERVICE;
             case TaskIds.DOWNLOAD_CLEANUP_JOB_ID:
@@ -109,20 +112,14 @@ public abstract class BackgroundTaskSchedulerExternalUma {
                 return BACKGROUND_TASK_DOWNLOAD_LATER;
             case TaskIds.WEBVIEW_VARIATIONS_SEED_FETCH_JOB_ID:
                 return BACKGROUND_TASK_WEBVIEW_VARIATIONS;
-            case TaskIds.OFFLINE_PAGES_PREFETCH_NOTIFICATION_JOB_ID:
-                return BACKGROUND_TASK_OFFLINE_CONTENT_NOTIFICATION;
             case TaskIds.WEBAPK_UPDATE_JOB_ID:
                 return BACKGROUND_TASK_WEBAPK_UPDATE;
-            case TaskIds.DOWNLOAD_RESUMPTION_JOB_ID:
-                return BACKGROUND_TASK_DOWNLOAD_RESUMPTION;
+            case TaskIds.DEPRECATED_DOWNLOAD_RESUMPTION_JOB_ID:
+                return BACKGROUND_TASK_DEPRECATED_DOWNLOAD_RESUMPTION;
             case TaskIds.FEED_REFRESH_JOB_ID:
                 return BACKGROUND_TASK_FEED_REFRESH;
             case TaskIds.COMPONENT_UPDATE_JOB_ID:
                 return BACKGROUND_TASK_COMPONENT_UPDATE;
-            case TaskIds.DEPRECATED_EXPLORE_SITES_REFRESH_JOB_ID:
-                return BACKGROUND_TASK_DEPRECATED_EXPLORE_SITES_REFRESH;
-            case TaskIds.EXPLORE_SITES_REFRESH_JOB_ID:
-                return BACKGROUND_TASK_EXPLORE_SITES_REFRESH;
             case TaskIds.BACKGROUND_SYNC_ONE_SHOT_JOB_ID:
                 return BACKGROUND_TASK_ONE_SHOT_SYNC_WAKE_UP;
             case TaskIds.NOTIFICATION_SCHEDULER_JOB_ID:
@@ -135,14 +132,113 @@ public abstract class BackgroundTaskSchedulerExternalUma {
                 return BACKGROUND_TASK_QUERY_TILE;
             case TaskIds.FEEDV2_REFRESH_JOB_ID:
                 return BACKGROUND_TASK_FEEDV2_REFRESH;
-            case TaskIds.OFFLINE_MEASUREMENT_JOB_ID:
-                return BACKGROUND_TASK_OFFLINE_MEASUREMENTS;
             case TaskIds.WEBVIEW_COMPONENT_UPDATE_JOB_ID:
                 return BACKGROUND_TASK_WEBVIEW_COMPONENT_UPDATE;
-            default:
-                assert false;
+            case TaskIds.DOWNLOAD_AUTO_RESUMPTION_UNMETERED_JOB_ID:
+                return BACKGROUND_TASK_DOWNLOAD_AUTO_RESUMPTION_UNMETERED;
+            case TaskIds.DOWNLOAD_AUTO_RESUMPTION_ANY_NETWORK_JOB_ID:
+                return BACKGROUND_TASK_DOWNLOAD_AUTO_RESUMPTION_ANY_NETWORK;
+            case TaskIds.NOTIFICATION_SERVICE_PRE_UNSUBSCRIBE_JOB_ID:
+                return BACKGROUND_TASK_NOTIFICATION_PRE_UNSUBSCRIBE;
+            case TaskIds.SAFETY_HUB_JOB_ID:
+                return BACKGROUND_SAFETY_HUB;
+            case TaskIds.AUXILIARY_SEARCH_DONATE_JOB_ID:
+                return BACKGROUND_AUXILIARY_SEARCH_DONATE;
+            case TaskIds.CHROME_SIGNALS_REPORTING_JOB_ID:
+                return BACKGROUND_CHROME_SIGNALS_REPORTING;
+            case TaskIds.UMA_UPLOAD_JOB_ID:
+                return BACKGROUND_UMA_UPLOAD;
+            case TaskIds.UKM_UPLOAD_JOB_ID:
+                return BACKGROUND_UKM_UPLOAD;
+            case TaskIds.DWA_UPLOAD_JOB_ID:
+                return BACKGROUND_DWA_UPLOAD;
+            case TaskIds.PUMA_UPLOAD_JOB_ID:
+                return BACKGROUND_PUMA_UPLOAD;
+            case TaskIds.STRUCTURED_METRICS_UPLOAD_JOB_ID:
+                return BACKGROUND_STRUCTURED_METRICS_UPLOAD;
         }
         // Returning a value that is not expected to ever be reported.
-        return BACKGROUND_TASK_TEST;
+        return BACKGROUND_TASK_NOT_FOUND;
+    }
+
+    /**
+     * Keep this in sync with TaskType variant in
+     * //tools/metrics/histograms/metadata/android/histograms.xml.
+     * @return The histogram pattern to be used for the given {@code taskId}.
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
+    public @Nullable String getHistogramPatternForTaskId(int taskId) {
+        switch (taskId) {
+            case TaskIds.TEST:
+                return "Test";
+            case TaskIds.OMAHA_JOB_ID:
+                return "Omaha";
+            case TaskIds.GCM_BACKGROUND_TASK_JOB_ID:
+                return "Gcm";
+            case TaskIds.NOTIFICATION_SERVICE_JOB_ID:
+                return "NotificationService";
+            case TaskIds.WEBVIEW_MINIDUMP_UPLOADING_JOB_ID:
+                return "WebviewMinidumpUploading";
+            case TaskIds.CHROME_MINIDUMP_UPLOADING_JOB_ID:
+                return "ChromeMinidumpUploading";
+            case TaskIds.OFFLINE_PAGES_BACKGROUND_JOB_ID:
+                return "OfflinePages";
+            case TaskIds.DOWNLOAD_SERVICE_JOB_ID:
+                return "DownloadService";
+            case TaskIds.DOWNLOAD_CLEANUP_JOB_ID:
+                return "DownloadCleanup";
+            case TaskIds.DOWNLOAD_AUTO_RESUMPTION_JOB_ID:
+                return "DownloadAutoResumption";
+            case TaskIds.DOWNLOAD_LATER_JOB_ID:
+                return "DownloadLater";
+            case TaskIds.WEBVIEW_VARIATIONS_SEED_FETCH_JOB_ID:
+                return "WebviewVariationsSeedFetch";
+            case TaskIds.WEBAPK_UPDATE_JOB_ID:
+                return "WebApkUpdate";
+            case TaskIds.DEPRECATED_DOWNLOAD_RESUMPTION_JOB_ID:
+                return "DeprecatedDownloadResumption";
+            case TaskIds.FEED_REFRESH_JOB_ID:
+                return "FeedRefresh";
+            case TaskIds.COMPONENT_UPDATE_JOB_ID:
+                return "ComponentUpdate";
+            case TaskIds.BACKGROUND_SYNC_ONE_SHOT_JOB_ID:
+                return "BackgroundSyncOneShot";
+            case TaskIds.NOTIFICATION_SCHEDULER_JOB_ID:
+                return "NotificationScheduler";
+            case TaskIds.NOTIFICATION_TRIGGER_JOB_ID:
+                return "NotificationTrigger";
+            case TaskIds.PERIODIC_BACKGROUND_SYNC_CHROME_WAKEUP_TASK_JOB_ID:
+                return "PeriodicBackgroundSyncChromeWakeup";
+            case TaskIds.QUERY_TILE_JOB_ID:
+                return "QueryTile";
+            case TaskIds.FEEDV2_REFRESH_JOB_ID:
+                return "FeedV2Refresh";
+            case TaskIds.WEBVIEW_COMPONENT_UPDATE_JOB_ID:
+                return "WebviewComponentUpdate";
+            case TaskIds.DOWNLOAD_AUTO_RESUMPTION_UNMETERED_JOB_ID:
+                return "DownloadAutoResumptionUnmetered";
+            case TaskIds.DOWNLOAD_AUTO_RESUMPTION_ANY_NETWORK_JOB_ID:
+                return "DownloadAutoResumptionAnyNetwork";
+            case TaskIds.NOTIFICATION_SERVICE_PRE_UNSUBSCRIBE_JOB_ID:
+                return "NotificationServicePreUnsubscribe";
+            case TaskIds.SAFETY_HUB_JOB_ID:
+                return "SafetyHub";
+            case TaskIds.AUXILIARY_SEARCH_DONATE_JOB_ID:
+                return "AuxiliarySearchDonate";
+            case TaskIds.CHROME_SIGNALS_REPORTING_JOB_ID:
+                return "ChromeSignalsReporting";
+            case TaskIds.UMA_UPLOAD_JOB_ID:
+                return "UmaUpload";
+            case TaskIds.UKM_UPLOAD_JOB_ID:
+                return "UkmUpload";
+            case TaskIds.DWA_UPLOAD_JOB_ID:
+                return "DwaUpload";
+            case TaskIds.PUMA_UPLOAD_JOB_ID:
+                return "PumaUpload";
+            case TaskIds.STRUCTURED_METRICS_UPLOAD_JOB_ID:
+                return "StructuredMetricsUpload";
+        }
+        assert false;
+        return null;
     }
 }

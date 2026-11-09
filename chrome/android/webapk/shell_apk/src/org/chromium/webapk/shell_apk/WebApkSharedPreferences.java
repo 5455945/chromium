@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,10 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** Contains utility methods and constants related to WebAPK shared preferences. */
+@NullMarked
 public final class WebApkSharedPreferences {
     /** Name of the shared preferences file. */
     private static final String PREF_PACKAGE = "org.chromium.webapk.shell_apk";
@@ -21,8 +24,7 @@ public final class WebApkSharedPreferences {
             "org.chromium.webapk.shell_apk.version_code";
 
     /**
-     * Shared preference for the version number of the dynamically loaded dex by the WebAPK
-     * service.
+     * Shared preference for the version number of the dynamically loaded dex by the WebAPK service.
      */
     public static final String PREF_RUNTIME_DEX_VERSION =
             "org.chromium.webapk.shell_apk.dex_version";

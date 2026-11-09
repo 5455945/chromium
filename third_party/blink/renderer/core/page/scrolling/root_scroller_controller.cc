@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/page/scrolling/root_scroller_controller.h"
+
+#include <cmath>
 
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -19,13 +21,13 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scrolling/top_document_root_scroller_controller.h"
-#include "third_party/blink/renderer/core/paint/compositing/paint_layer_compositor.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_layer.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/size_conversions.h"
 
 namespace blink {
 
@@ -54,24 +56,44 @@ bool FillsViewport(const Element& element) {
                           ? layout_box->PhysicalContentBoxRect()
                           : layout_box->PhysicalPaddingBoxRect();
 
-  FloatQuad quad = layout_box->LocalRectToAbsoluteQuad(rect);
+  gfx::QuadF quad = layout_box->LocalRectToAbsoluteQuad(rect);
 
   if (!quad.IsRectilinear())
     return false;
 
-  IntRect bounding_box = EnclosingIntRect(quad.BoundingBox());
-
-  IntSize icb_size = top_document.GetLayoutView()->GetLayoutSize();
-
-  float zoom = top_document.GetFrame()->PageZoomFactor();
-  IntSize controls_hidden_size = ExpandedIntSize(
-      top_document.View()->ViewportSizeForViewportUnits().ScaledBy(zoom));
-
-  if (bounding_box.Size() != icb_size &&
-      bounding_box.Size() != controls_hidden_size)
+  const gfx::Rect bounding_box = gfx::ToEnclosingRect(quad.BoundingBox());
+  if (bounding_box.IsEmpty()) {
     return false;
+  }
 
-  return bounding_box.Location() == IntPoint::Zero();
+  gfx::Size icb_size =
+      top_document.GetLayoutView()->GetLayoutSize(kExcludeScrollbars);
+
+  float zoom = top_document.GetFrame()->LayoutZoomFactor();
+  gfx::Size controls_hidden_size = gfx::ToCeiledSize(gfx::ScaleSize(
+      top_document.View()->LargeViewportSizeForViewportUnits(), zoom));
+
+  // When fractional zoom/DPR is present, subpixel layout unit quantization
+  // can cause the enclosing bounding box and ceiled viewport size to differ
+  // by up to 1px, or produce subpixel origin offsets that floor to -1.
+  // On integer scales, require an exact match.
+  constexpr float kFractionalScaleEpsilon = 0.001f;
+  const bool is_fractional_scale =
+      std::abs(zoom - std::round(zoom)) > kFractionalScaleEpsilon;
+  const int tolerance = is_fractional_scale ? 1 : 0;
+  auto matches_size = [tolerance](const gfx::Size& actual,
+                                  const gfx::Size& target) {
+    return std::abs(actual.width() - target.width()) <= tolerance &&
+           std::abs(actual.height() - target.height()) <= tolerance;
+  };
+
+  if (!matches_size(bounding_box.size(), icb_size) &&
+      !matches_size(bounding_box.size(), controls_hidden_size)) {
+    return false;
+  }
+
+  return std::abs(bounding_box.x()) <= tolerance &&
+         std::abs(bounding_box.y()) <= tolerance;
 }
 
 // If the element is an iframe this grabs the ScrollableArea for the owned
@@ -89,8 +111,10 @@ PaintLayerScrollableArea* GetScrollableArea(const Element& element) {
     return frame_view->LayoutViewport();
   }
 
-  if (!element.GetLayoutBoxForScrolling())
+  if (auto* box = element.GetLayoutBoxForScrolling();
+      !box || !box->GetScrollableArea()->ScrollableAxes()) {
     return nullptr;
+  }
 
   return element.GetLayoutBoxForScrolling()->GetScrollableArea();
 }
@@ -102,24 +126,8 @@ RootScrollerController::RootScrollerController(Document& document)
 
 void RootScrollerController::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
-  visitor->Trace(root_scroller_);
   visitor->Trace(effective_root_scroller_);
   visitor->Trace(implicit_candidates_);
-  visitor->Trace(implicit_root_scroller_);
-}
-
-void RootScrollerController::Set(Element* new_root_scroller) {
-  if (root_scroller_ == new_root_scroller)
-    return;
-
-  root_scroller_ = new_root_scroller;
-
-  if (LocalFrame* frame = document_->GetFrame())
-    frame->ScheduleVisualUpdateUnlessThrottled();
-}
-
-Element* RootScrollerController::Get() const {
-  return root_scroller_;
 }
 
 Node& RootScrollerController::EffectiveRootScroller() const {
@@ -130,9 +138,20 @@ Node& RootScrollerController::EffectiveRootScroller() const {
 void RootScrollerController::DidResizeFrameView() {
   DCHECK(document_);
 
-  Page* page = document_->GetPage();
-  if (document_->GetFrame() && document_->GetFrame()->IsMainFrame() && page)
-    page->GlobalRootScrollerController().DidResizeViewport();
+  // TODO(bokan): This method is called from the LocalFrameView but before it's
+  // attached to the document so View() can be nullptr. It's not great that we
+  // might avoid calling DidResizeViewport on the initial size but it doesn't
+  // currently matter since GlobalRootScrollerController().DidResizeViewport()
+  // is used only to invalidate paint and compositing which is unnecessary when
+  // creating the view.
+  if (document_->View()) {
+    // RootFrameViewport exists only in pages with a RootScroller, see
+    // LocalFrameView::InitializeRootScroller.
+    if (document_->View()->GetRootFrameViewport()) {
+      DCHECK(document_->GetFrame()->IsMainFrame());
+      document_->GetPage()->GlobalRootScrollerController().DidResizeViewport();
+    }
+  }
 
   // If the effective root scroller in this Document is a Frame, it'll match
   // its parent's frame rect. We can't rely on layout to kick it to update its
@@ -145,7 +164,7 @@ void RootScrollerController::DidResizeFrameView() {
 
 void RootScrollerController::DidUpdateIFrameFrameView(
     HTMLFrameOwnerElement& element) {
-  if (&element != root_scroller_.Get() && &element != implicit_root_scroller_)
+  if (&element != effective_root_scroller_)
     return;
 
   // Ensure properties are re-applied even if the effective root scroller
@@ -161,17 +180,11 @@ void RootScrollerController::DidUpdateIFrameFrameView(
 }
 
 bool RootScrollerController::RecomputeEffectiveRootScroller() {
-  ProcessImplicitCandidates();
-
   Node* new_effective_root_scroller = document_;
 
   if (!DocumentFullscreen::fullscreenElement(*document_)) {
-    bool root_scroller_valid =
-        root_scroller_ && IsValidRootScroller(*root_scroller_);
-    if (root_scroller_valid) {
-      new_effective_root_scroller = root_scroller_;
-    } else if (implicit_root_scroller_) {
-      new_effective_root_scroller = implicit_root_scroller_;
+    if (auto* implicit_root_scroller = ImplicitRootScrollerFromCandidates()) {
+      new_effective_root_scroller = implicit_root_scroller;
       UseCounter::Count(document_, WebFeature::kActivatedImplicitRootScroller);
     }
   }
@@ -235,9 +248,10 @@ bool RootScrollerController::IsValidRootScroller(const Element& element) const {
   if (!element.GetLayoutObject()->IsBox())
     return false;
 
-  // Ignore anything inside a FlowThread (multi-col, paginated, etc.).
-  if (element.GetLayoutObject()->IsInsideFlowThread())
+  // Ignore anything inside that might be inside multicol layout.
+  if (element.GetLayoutObject()->IsInsideMulticol()) {
     return false;
+  }
 
   if (!element.GetLayoutObject()->IsScrollContainer() &&
       !element.IsFrameOwnerElement())
@@ -276,9 +290,10 @@ bool RootScrollerController::IsValidImplicitCandidate(
   if (!element.GetLayoutObject()->IsBox())
     return false;
 
-  // Ignore anything inside a FlowThread (multi-col, paginated, etc.).
-  if (element.GetLayoutObject()->IsInsideFlowThread())
+  // Ignore anything inside that might be inside multicol layout.
+  if (element.GetLayoutObject()->IsInsideMulticol()) {
     return false;
+  }
 
   PaintLayerScrollableArea* scrollable_area = GetScrollableArea(element);
   if (!scrollable_area || !scrollable_area->ScrollsOverflow())
@@ -292,13 +307,11 @@ bool RootScrollerController::IsValidImplicit(const Element& element) const {
   if (!IsValidRootScroller(element))
     return false;
 
-  const ComputedStyle* style = element.GetLayoutObject()->Style();
-  if (!style)
-    return false;
-
   // Do not implicitly promote things that are partially or fully invisible.
-  if (style->HasOpacity() || style->Visibility() != EVisibility::kVisible)
+  const ComputedStyle& style = element.GetLayoutObject()->Style();
+  if (style.HasOpacity() || !style.VisibleToHitTesting()) {
     return false;
+  }
 
   PaintLayerScrollableArea* scrollable_area = GetScrollableArea(element);
   if (!scrollable_area)
@@ -310,23 +323,22 @@ bool RootScrollerController::IsValidImplicit(const Element& element) const {
   // If any of the ancestors clip overflow, don't promote. Promoting a
   // descendant of an overflow clip means it may not resize when the URL bar
   // hides so we'd leave a portion of the page hidden/unreachable.
-  for (LayoutBox* ancestor = element.GetLayoutObject()->ContainingBlock();
-       ancestor; ancestor = ancestor->ContainingBlock()) {
+  for (LayoutBox* ancestor = element.GetLayoutObject()->ContainingBox();
+       ancestor; ancestor = ancestor->ContainingBox()) {
     // The LayoutView is allowed to have a clip (since its clip is resized by
     // the URL bar movement). Test it for scrolling so that we only promote if
     // we know we won't block scrolling the main document.
     if (IsA<LayoutView>(ancestor)) {
-      const ComputedStyle* ancestor_style = ancestor->Style();
-      DCHECK(ancestor_style);
-
+      const ComputedStyle& ancestor_style = ancestor->Style();
       PaintLayerScrollableArea* area = ancestor->GetScrollableArea();
       DCHECK(area);
 
-      if (ancestor_style->ScrollsOverflowY() && area->HasVerticalOverflow())
+      if (ancestor_style.ScrollsOverflowY() && area->HasVerticalOverflow()) {
         return false;
+      }
     } else {
       if (ancestor->ShouldClipOverflowAlongEitherAxis() ||
-          ancestor->HasMask() || ancestor->HasClip() ||
+          ancestor->HasMask() || ancestor->HasCSSClip() ||
           ancestor->HasClipPath()) {
         return false;
       }
@@ -390,20 +402,25 @@ void RootScrollerController::UpdateIFrameGeometryAndLayoutSize(
     child_view->SetLayoutSize(document_->GetFrame()->View()->GetLayoutSize());
 }
 
-void RootScrollerController::ProcessImplicitCandidates() {
-  implicit_root_scroller_ = nullptr;
-
+Element* RootScrollerController::ImplicitRootScrollerFromCandidates() {
   if (!RuntimeEnabledFeatures::ImplicitRootScrollerEnabled())
-    return;
+    return nullptr;
 
   if (!document_->GetLayoutView())
-    return;
+    return nullptr;
 
-  if (!document_->GetFrame()->IsMainFrame())
-    return;
+  DCHECK(document_->View());
+
+  // RootFrameViewport exists only in pages with a RootScroller, see
+  // LocalFrameView::InitializeRootScroller.
+  if (!document_->View()->GetRootFrameViewport())
+    return nullptr;
+
+  DCHECK(document_->GetFrame()->IsMainFrame());
 
   bool multiple_matches = false;
 
+  Element* implicit_root_scroller = nullptr;
   HeapHashSet<WeakMember<Element>> copy(implicit_candidates_);
   for (auto& element : copy) {
     if (!IsValidImplicit(*element)) {
@@ -412,15 +429,14 @@ void RootScrollerController::ProcessImplicitCandidates() {
       continue;
     }
 
-    if (implicit_root_scroller_)
+    if (implicit_root_scroller)
       multiple_matches = true;
 
-    implicit_root_scroller_ = element;
+    implicit_root_scroller = element;
   }
 
   // Only promote an implicit root scroller if we have a unique match.
-  if (multiple_matches)
-    implicit_root_scroller_ = nullptr;
+  return multiple_matches ? nullptr : implicit_root_scroller;
 }
 
 void RootScrollerController::ElementRemoved(const Element& element) {
@@ -434,8 +450,10 @@ void RootScrollerController::ElementRemoved(const Element& element) {
 
 void RootScrollerController::ConsiderForImplicit(Node& node) {
   DCHECK(RuntimeEnabledFeatures::ImplicitRootScrollerEnabled());
-  if (!document_->GetFrame()->IsMainFrame())
+  if (!document_->View()->GetRootFrameViewport())
     return;
+
+  DCHECK(document_->GetFrame()->IsMainFrame());
 
   if (document_->GetPage()->GetChromeClient().IsPopup())
     return;

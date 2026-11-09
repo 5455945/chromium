@@ -1,15 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_SERVICE_WORKER_SERVICE_WORKER_LOADER_HELPERS_H_
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_SERVICE_WORKER_SERVICE_WORKER_LOADER_HELPERS_H_
 
+#include <optional>
+
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/http/http_request_headers.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom.h"
@@ -21,16 +22,20 @@ struct ResourceRequest;
 namespace blink {
 
 // Helper functions for service worker classes that use URLLoader
-//(e.g., ServiceWorkerMainResourceLoader and ServiceWorkerSubresourceLoader).
+// (e.g., ServiceWorkerMainResourceLoader and ServiceWorkerSubresourceLoader).
 class BLINK_COMMON_EXPORT ServiceWorkerLoaderHelpers {
  public:
   // Populates |out_head| with given |response|.
   static void SaveResponseInfo(const blink::mojom::FetchAPIResponse& response,
                                network::mojom::URLResponseHead* out_head);
 
+  // Reconstructs net::HttpResponseHeaders from the given |response|.
+  static scoped_refptr<net::HttpResponseHeaders> GetHttpResponseHeaders(
+      const blink::mojom::FetchAPIResponse& response);
+
   // Returns a redirect info if |response_head| is an redirect response.
-  // Otherwise returns absl::nullopt.
-  static absl::optional<net::RedirectInfo> ComputeRedirectInfo(
+  // Otherwise returns std::nullopt.
+  static std::optional<net::RedirectInfo> ComputeRedirectInfo(
       const network::ResourceRequest& original_request,
       const network::mojom::URLResponseHead& response_head);
 
@@ -43,6 +48,12 @@ class BLINK_COMMON_EXPORT ServiceWorkerLoaderHelpers {
       uint64_t blob_size,
       base::OnceCallback<void(int net_error)> on_blob_read_complete,
       mojo::ScopedDataPipeConsumerHandle* handle_out);
+
+  static bool IsMainRequestDestination(
+      network::mojom::RequestDestination destination);
+
+  static const char* FetchResponseSourceToSuffix(
+      network::mojom::FetchResponseSource source);
 };
 
 }  // namespace blink

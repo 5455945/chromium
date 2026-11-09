@@ -1,23 +1,29 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_browsing/content/browser/triggers/suspicious_site_trigger.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/metrics/histogram_macros_local.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/content/browser/interstitials/content_unsafe_resource_util.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_manager.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_throttler.h"
+#include "components/safe_browsing/content/browser/web_contents_key.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
-#include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
+#include "components/security_interstitials/core/unsafe_resource_locator.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -34,10 +40,10 @@ const int64_t kSuspiciousSiteCollectionPeriodMilliseconds = 5000;
 const char kSuspiciousSiteTriggerEventMetricName[] =
     "SafeBrowsing.Triggers.SuspiciousSite.Event";
 
-const char kSuspiciousSiteTriggerReportRejectionMetricName[] =
+const char kSuspiciousSiteTriggerReportRejectionTestMetricName[] =
     "SafeBrowsing.Triggers.SuspiciousSite.ReportRejectionReason";
 
-const char kSuspiciousSiteTriggerReportDelayStateMetricName[] =
+const char kSuspiciousSiteTriggerReportDelayStateTestMetricName[] =
     "SafeBrowsing.Triggers.SuspiciousSite.DelayTimerState";
 
 void NotifySuspiciousSiteTriggerDetected(
@@ -53,7 +59,10 @@ void NotifySuspiciousSiteTriggerDetected(
   }
 }
 
+DEFINE_USER_DATA(SuspiciousSiteTrigger);
+
 SuspiciousSiteTrigger::SuspiciousSiteTrigger(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents,
     TriggerManager* trigger_manager,
     PrefService* prefs,
@@ -70,30 +79,51 @@ SuspiciousSiteTrigger::SuspiciousSiteTrigger(
       url_loader_factory_(url_loader_factory),
       history_service_(history_service),
       referrer_chain_provider_(referrer_chain_provider),
-      task_runner_(content::GetUIThreadTaskRunner({})) {}
+      task_runner_(content::GetUIThreadTaskRunner({})),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {}
 
-SuspiciousSiteTrigger::~SuspiciousSiteTrigger() {}
+SuspiciousSiteTrigger::~SuspiciousSiteTrigger() = default;
+
+// static
+SuspiciousSiteTrigger* SuspiciousSiteTrigger::From(tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+SuspiciousSiteTrigger* SuspiciousSiteTrigger::FromWebContents(
+    content::WebContents* web_contents) {
+  return From(tabs::TabInterface::MaybeGetFromContents(web_contents));
+}
 
 bool SuspiciousSiteTrigger::MaybeStartReport() {
-  SBErrorOptions error_options =
-      TriggerManager::GetSBErrorDisplayOptions(*prefs_, web_contents());
+  TriggerManager::DataCollectionPermissions permissions =
+      TriggerManager::GetDataCollectionPermissions(*prefs_, web_contents());
+
+  // We use primary page's main document to construct `resource` below, since
+  // `WebContents::StartLoading()` is invoked for navigations which updates it.
+  // For more details, refer to the below document:
+  // https://docs.google.com/document/d/1WqzPSpWtJ9bqaaecYWTWvg6h2Q1UMh7kVB8C61o8QL4/edit?resourcekey=0-q9YIhsh5LS-ZfBXcBQCOew#heading=h.b3xiyzalkc6q
+  content::RenderFrameHost& primary_rfh =
+      web_contents()->GetPrimaryPage().GetMainDocument();
+  const content::GlobalRenderFrameHostId primary_rfh_id =
+      primary_rfh.GetGlobalId();
 
   security_interstitials::UnsafeResource resource;
-  resource.threat_type = SB_THREAT_TYPE_SUSPICIOUS_SITE;
-  resource.url = web_contents()->GetLastCommittedURL();
-  resource.web_contents_getter = security_interstitials::GetWebContentsGetter(
-      web_contents()->GetMainFrame()->GetProcess()->GetID(),
-      web_contents()->GetMainFrame()->GetRoutingID());
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_SUSPICIOUS_SITE;
+  resource.url = primary_rfh.GetLastCommittedURL();
+  resource.rfh_locator =
+      security_interstitials::UnsafeResourceLocator::CreateForRenderFrameToken(
+          primary_rfh_id.child_id.value(), primary_rfh.GetFrameToken().value());
 
   TriggerManagerReason reason;
   if (!trigger_manager_->StartCollectingThreatDetailsWithReason(
           TriggerType::SUSPICIOUS_SITE, web_contents(), resource,
           url_loader_factory_, history_service_, referrer_chain_provider_,
-          error_options, &reason)) {
+          permissions, &reason)) {
     UMA_HISTOGRAM_ENUMERATION(kSuspiciousSiteTriggerEventMetricName,
                               SuspiciousSiteTriggerEvent::REPORT_START_FAILED);
-    UMA_HISTOGRAM_ENUMERATION(kSuspiciousSiteTriggerReportRejectionMetricName,
-                              reason);
+    UMA_HISTOGRAM_ENUMERATION(
+        kSuspiciousSiteTriggerReportRejectionTestMetricName, reason);
     return false;
   }
 
@@ -103,7 +133,7 @@ bool SuspiciousSiteTrigger::MaybeStartReport() {
       FROM_HERE,
       base::BindOnce(&SuspiciousSiteTrigger::ReportDelayTimerFired,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(finish_report_delay_ms_));
+      base::Milliseconds(finish_report_delay_ms_));
 
   UMA_HISTOGRAM_ENUMERATION(kSuspiciousSiteTriggerEventMetricName,
                             SuspiciousSiteTriggerEvent::REPORT_STARTED);
@@ -111,11 +141,13 @@ bool SuspiciousSiteTrigger::MaybeStartReport() {
 }
 
 void SuspiciousSiteTrigger::FinishReport() {
-  SBErrorOptions error_options =
-      TriggerManager::GetSBErrorDisplayOptions(*prefs_, web_contents());
-  if (trigger_manager_->FinishCollectingThreatDetails(
-          TriggerType::SUSPICIOUS_SITE, web_contents(), base::TimeDelta(),
-          /*did_proceed=*/false, /*num_visits=*/0, error_options)) {
+  TriggerManager::DataCollectionPermissions permissions =
+      TriggerManager::GetDataCollectionPermissions(*prefs_, web_contents());
+  auto result = trigger_manager_->FinishCollectingThreatDetails(
+      TriggerType::SUSPICIOUS_SITE, GetWebContentsKey(web_contents()),
+      base::TimeDelta(),
+      /*did_proceed=*/false, /*num_visits=*/0, permissions);
+  if (result.IsReportSent()) {
     UMA_HISTOGRAM_ENUMERATION(kSuspiciousSiteTriggerEventMetricName,
                               SuspiciousSiteTriggerEvent::REPORT_FINISHED);
   } else {
@@ -126,11 +158,11 @@ void SuspiciousSiteTrigger::FinishReport() {
 
 void SuspiciousSiteTrigger::SuspiciousSiteDetectedWhenMonitoring() {
   DCHECK_EQ(TriggerState::MONITOR_MODE, current_state_);
-  SBErrorOptions error_options =
-      TriggerManager::GetSBErrorDisplayOptions(*prefs_, web_contents());
+  TriggerManager::DataCollectionPermissions permissions =
+      TriggerManager::GetDataCollectionPermissions(*prefs_, web_contents());
   TriggerManagerReason reason;
   if (trigger_manager_->CanStartDataCollectionWithReason(
-          error_options, TriggerType::SUSPICIOUS_SITE, &reason) ||
+          permissions, TriggerType::SUSPICIOUS_SITE, &reason) ||
       reason == TriggerManagerReason::DAILY_QUOTA_EXCEEDED) {
     UMA_HISTOGRAM_ENUMERATION(
         kSuspiciousSiteTriggerEventMetricName,
@@ -253,8 +285,9 @@ void SuspiciousSiteTrigger::SuspiciousSiteDetected() {
 void SuspiciousSiteTrigger::ReportDelayTimerFired() {
   UMA_HISTOGRAM_ENUMERATION(kSuspiciousSiteTriggerEventMetricName,
                             SuspiciousSiteTriggerEvent::REPORT_DELAY_TIMER);
-  UMA_HISTOGRAM_ENUMERATION(kSuspiciousSiteTriggerReportDelayStateMetricName,
-                            current_state_);
+  // This local histogram is used as a signal for testing.
+  UMA_HISTOGRAM_ENUMERATION(
+      kSuspiciousSiteTriggerReportDelayStateTestMetricName, current_state_);
   switch (current_state_) {
     case TriggerState::IDLE:
     case TriggerState::LOADING:
@@ -272,10 +305,8 @@ void SuspiciousSiteTrigger::ReportDelayTimerFired() {
 }
 
 void SuspiciousSiteTrigger::SetTaskRunnerForTest(
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
   task_runner_ = task_runner;
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(SuspiciousSiteTrigger)
 
 }  // namespace safe_browsing

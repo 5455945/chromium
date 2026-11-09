@@ -1,31 +1,66 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-assert(is_chromeos, "Diagnostics App is Chrome OS only")
+import("//testing/test.gni")
+
+assert(is_chromeos, "Diagnostics App is ChromeOS only")
 
 static_library("diagnostics_ui") {
   sources = [
+    "diagnostics_metrics.cc",
+    "diagnostics_metrics.h",
+    "diagnostics_metrics_message_handler.cc",
+    "diagnostics_metrics_message_handler.h",
     "diagnostics_ui.cc",
     "diagnostics_ui.h",
-    "url_constants.cc",
-    "url_constants.h",
   ]
 
+  public_deps = [ ":url_constants" ]
+
   deps = [
-    "//ash/components/resources:diagnostics_app_resources",
     "//ash/constants",
+    "//ash/webui/common:chrome_os_webui_config",
+    "//ash/webui/common:keyboard_diagram_strings",
+    "//ash/webui/common:trusted_types_util",
+    "//ash/webui/common/backend",
     "//ash/webui/diagnostics_ui/backend",
     "//ash/webui/diagnostics_ui/mojom",
-    "//chromeos/login/login_state",
+    "//ash/webui/diagnostics_ui/resources",
+    "//chromeos/ash/components/feature_usage",
+    "//chromeos/ash/components/login/login_state",
     "//chromeos/strings/",
     "//content/public/browser",
     "//ui/base",
-    "//ui/resources",
+    "//ui/chromeos/strings:strings_provider",
     "//ui/web_dialogs",
+    "//ui/webui",
+    "//ui/webui/resources",
   ]
 }
 
-group("closure_compile") {
-  deps = [ "resources:closure_compile_module" ]
+# Url constants pulled out to enable depending on production url constants in
+# browser tests.
+source_set("url_constants") {
+  sources = [
+    "url_constants.cc",
+    "url_constants.h",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [
+    "diagnostics_metrics_message_handler_unittest.cc",
+    "diagnostics_metrics_unittest.cc",
+  ]
+
+  deps = [
+    ":diagnostics_ui",
+    "//base",
+    "//base/test:test_support",
+    "//content/test:test_support",
+    "//testing/gtest",
+  ]
 }

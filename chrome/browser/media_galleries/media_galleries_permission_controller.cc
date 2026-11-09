@@ -1,21 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media_galleries/media_galleries_permission_controller.h"
 
 #include "base/base_paths.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/media_galleries/media_file_system_registry.h"
-#include "chrome/browser/media_galleries/media_galleries_histograms.h"
 #include "chrome/browser/media_galleries/media_gallery_context_menu.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/common/apps/platform_apps/media_galleries_permission.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/storage_monitor/storage_info.h"
@@ -26,8 +24,9 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/models/simple_menu_model.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/menus/simple_menu_model.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 
 using extensions::APIPermission;
 using extensions::Extension;
@@ -82,7 +81,7 @@ MediaGalleriesPermissionController::MediaGalleriesPermissionController(
 }
 
 void MediaGalleriesPermissionController::OnPreferencesInitialized() {
-  DCHECK(StorageMonitor::GetInstance());
+  CHECK(StorageMonitor::GetInstance(), base::NotFatalUntil::M161);
   StorageMonitor::GetInstance()->AddObserver(this);
 
   // |preferences_| may be NULL in tests.
@@ -108,7 +107,7 @@ MediaGalleriesPermissionController::MediaGalleriesPermissionController(
 }
 
 MediaGalleriesPermissionController::~MediaGalleriesPermissionController() {
-  DCHECK(StorageMonitor::GetInstance());
+  CHECK(StorageMonitor::GetInstance(), base::NotFatalUntil::M161);
   StorageMonitor::GetInstance()->RemoveObserver(this);
 
   // |preferences_| may be NULL in tests.
@@ -172,15 +171,16 @@ MediaGalleriesPermissionController::GetSectionHeaders() const {
 // Note: sorts by display criterion: GalleriesVectorComparator.
 MediaGalleriesDialogController::Entries
 MediaGalleriesPermissionController::GetSectionEntries(size_t index) const {
-  DCHECK_GT(2U, index);  // This dialog only has two sections.
+  CHECK_GT(2U, index,
+           base::NotFatalUntil::M161);  // This dialog only has two sections.
 
   bool existing = !index;
   MediaGalleriesDialogController::Entries result;
   for (auto iter = known_galleries_.begin(); iter != known_galleries_.end();
        ++iter) {
     MediaGalleryPrefId pref_id = GetPrefId(iter->first);
-    if (!base::Contains(forgotten_galleries_, iter->first) &&
-        existing == base::Contains(pref_permitted_galleries_, pref_id)) {
+    if (!forgotten_galleries_.contains(iter->first) &&
+        existing == pref_permitted_galleries_.contains(pref_id)) {
       result.push_back(iter->second);
     }
   }
@@ -202,6 +202,10 @@ std::u16string MediaGalleriesPermissionController::GetAuxiliaryButtonText()
 
 // This is the 'Add Folder' button.
 void MediaGalleriesPermissionController::DidClickAuxiliaryButton() {
+  // Early return if the select file dialog is already active.
+  if (select_folder_dialog_)
+    return;
+
   base::FilePath default_path =
       extensions::file_system_api::GetLastChooseEntryDirectory(
           extensions::ExtensionPrefs::Get(GetProfile()), extension_->id());
@@ -212,12 +216,8 @@ void MediaGalleriesPermissionController::DidClickAuxiliaryButton() {
   select_folder_dialog_->SelectFile(
       ui::SelectFileDialog::SELECT_FOLDER,
       l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_ADD_GALLERY_TITLE),
-      default_path,
-      NULL,
-      0,
-      base::FilePath::StringType(),
-      web_contents_->GetTopLevelNativeWindow(),
-      NULL);
+      default_path, nullptr, 0, base::FilePath::StringType(),
+      web_contents_->GetTopLevelNativeWindow());
 }
 
 void MediaGalleriesPermissionController::DidToggleEntry(
@@ -244,9 +244,8 @@ void MediaGalleriesPermissionController::DidToggleEntry(
 
 void MediaGalleriesPermissionController::DidForgetEntry(
     GalleryDialogId gallery_id) {
-  media_galleries::UsageCount(media_galleries::DIALOG_FORGET_GALLERY);
   if (!new_galleries_.erase(gallery_id)) {
-    DCHECK(base::Contains(known_galleries_, gallery_id));
+    CHECK(known_galleries_.contains(gallery_id), base::NotFatalUntil::M161);
     forgotten_galleries_.insert(gallery_id);
   }
   dialog_->UpdateGalleries();
@@ -275,32 +274,36 @@ content::WebContents* MediaGalleriesPermissionController::WebContents() {
   return web_contents_;
 }
 
+void MediaGalleriesPermissionController::FileSelectionCanceled() {
+  select_folder_dialog_.reset();
+}
+
 void MediaGalleriesPermissionController::FileSelected(
-    const base::FilePath& path,
-    int /*index*/,
-    void* /*params*/) {
+    const ui::SelectedFileInfo& file,
+    int /*index*/) {
   // |web_contents_| is NULL in tests.
   if (web_contents_) {
     extensions::file_system_api::SetLastChooseEntryDirectory(
-          extensions::ExtensionPrefs::Get(GetProfile()),
-          extension_->id(),
-          path);
+        extensions::ExtensionPrefs::Get(GetProfile()), extension_->id(),
+        file.path());
   }
 
   // Try to find it in the prefs.
   MediaGalleryPrefInfo gallery;
-  DCHECK(preferences_);
-  bool gallery_exists = preferences_->LookUpGalleryByPath(path, &gallery);
-  if (gallery_exists && !gallery.IsBlackListedType()) {
+  CHECK(preferences_, base::NotFatalUntil::M161);
+  bool gallery_exists =
+      preferences_->LookUpGalleryByPath(file.path(), &gallery);
+  if (gallery_exists && !gallery.IsBlockListedType()) {
     // The prefs are in sync with |known_galleries_|, so it should exist in
     // |known_galleries_| as well. User selecting a known gallery effectively
     // just sets the gallery to permitted.
     GalleryDialogId gallery_id = GetDialogId(gallery.pref_id);
     auto iter = known_galleries_.find(gallery_id);
-    DCHECK(iter != known_galleries_.end());
+    CHECK(iter != known_galleries_.end());
     iter->second.selected = true;
     forgotten_galleries_.erase(gallery_id);
     dialog_->UpdateGalleries();
+    select_folder_dialog_.reset();
     return;
   }
 
@@ -311,15 +314,17 @@ void MediaGalleriesPermissionController::FileSelected(
         iter->second.pref_info.device_id == gallery.device_id) {
       iter->second.selected = true;
       dialog_->UpdateGalleries();
+      select_folder_dialog_.reset();
       return;
     }
   }
 
   // Lastly, if not found, add a new gallery to |new_galleries_|.
   // prefId == kInvalidMediaGalleryPrefId for completely new galleries.
-  // The old prefId is retained for blacklisted galleries.
+  // The old prefId is retained for blocklisted galleries.
   gallery.pref_id = GetDialogId(gallery.pref_id);
   new_galleries_[gallery.pref_id] = Entry(gallery, true);
+  select_folder_dialog_.reset();
   dialog_->UpdateGalleries();
 }
 
@@ -366,7 +371,7 @@ void MediaGalleriesPermissionController::OnGalleryRemoved(
 void MediaGalleriesPermissionController::OnGalleryInfoUpdated(
     MediaGalleriesPreferences* prefs,
     MediaGalleryPrefId pref_id) {
-  DCHECK(preferences_);
+  CHECK(preferences_, base::NotFatalUntil::M161);
   const MediaGalleriesPrefInfoMap& pref_galleries =
       preferences_->known_galleries();
   auto pref_it = pref_galleries.find(pref_id);
@@ -378,11 +383,11 @@ void MediaGalleriesPermissionController::OnGalleryInfoUpdated(
 
 void MediaGalleriesPermissionController::InitializePermissions() {
   known_galleries_.clear();
-  DCHECK(preferences_);
+  CHECK(preferences_, base::NotFatalUntil::M161);
   const MediaGalleriesPrefInfoMap& galleries = preferences_->known_galleries();
   for (auto iter = galleries.begin(); iter != galleries.end(); ++iter) {
     const MediaGalleryPrefInfo& gallery = iter->second;
-    if (gallery.IsBlackListedType())
+    if (gallery.IsBlockListedType())
       continue;
 
     GalleryDialogId gallery_id = GetDialogId(gallery.pref_id);
@@ -395,7 +400,7 @@ void MediaGalleriesPermissionController::InitializePermissions() {
   for (auto iter = pref_permitted_galleries_.begin();
        iter != pref_permitted_galleries_.end(); ++iter) {
     GalleryDialogId gallery_id = GetDialogId(*iter);
-    DCHECK(base::Contains(known_galleries_, gallery_id));
+    CHECK(known_galleries_.contains(gallery_id), base::NotFatalUntil::M161);
     known_galleries_[gallery_id].selected = true;
   }
 
@@ -408,31 +413,20 @@ void MediaGalleriesPermissionController::InitializePermissions() {
 }
 
 void MediaGalleriesPermissionController::SavePermissions() {
-  DCHECK(preferences_);
-  media_galleries::UsageCount(media_galleries::SAVE_DIALOG);
+  CHECK(preferences_, base::NotFatalUntil::M161);
   for (GalleryPermissionsMap::const_iterator iter = known_galleries_.begin();
        iter != known_galleries_.end(); ++iter) {
     MediaGalleryPrefId pref_id = GetPrefId(iter->first);
-    if (base::Contains(forgotten_galleries_, iter->first)) {
+    if (forgotten_galleries_.contains(iter->first)) {
       preferences_->ForgetGalleryById(pref_id);
     } else {
-      bool changed = preferences_->SetGalleryPermissionForExtension(
-          *extension_, pref_id, iter->second.selected);
-      if (changed) {
-        if (iter->second.selected) {
-          media_galleries::UsageCount(
-              media_galleries::DIALOG_PERMISSION_ADDED);
-        } else {
-          media_galleries::UsageCount(
-              media_galleries::DIALOG_PERMISSION_REMOVED);
-        }
-      }
+      preferences_->SetGalleryPermissionForExtension(*extension_, pref_id,
+                                                     iter->second.selected);
     }
   }
 
   for (GalleryPermissionsMap::const_iterator iter = new_galleries_.begin();
        iter != new_galleries_.end(); ++iter) {
-    media_galleries::UsageCount(media_galleries::DIALOG_GALLERY_ADDED);
     // If the user added a gallery then unchecked it, forget about it.
     if (!iter->second.selected)
       continue;
@@ -508,8 +502,7 @@ MediaGalleriesPermissionController::DialogIdMap::DialogIdMap()
   forward_mapping_.push_back(kInvalidMediaGalleryPrefId);
 }
 
-MediaGalleriesPermissionController::DialogIdMap::~DialogIdMap() {
-}
+MediaGalleriesPermissionController::DialogIdMap::~DialogIdMap() = default;
 
 GalleryDialogId
 MediaGalleriesPermissionController::DialogIdMap::GetDialogId(
@@ -520,7 +513,7 @@ MediaGalleriesPermissionController::DialogIdMap::GetDialogId(
     return it->second;
 
   GalleryDialogId result = next_dialog_id_++;
-  DCHECK_EQ(result, forward_mapping_.size());
+  CHECK_EQ(result, forward_mapping_.size(), base::NotFatalUntil::M161);
   forward_mapping_.push_back(pref_id);
   if (pref_id != kInvalidMediaGalleryPrefId)
     back_map_[pref_id] = result;
@@ -530,10 +523,10 @@ MediaGalleriesPermissionController::DialogIdMap::GetDialogId(
 MediaGalleryPrefId
 MediaGalleriesPermissionController::DialogIdMap::GetPrefId(
     GalleryDialogId id) const {
-  DCHECK_LT(id, next_dialog_id_);
+  CHECK_LT(id, next_dialog_id_, base::NotFatalUntil::M161);
   return forward_mapping_[id];
 }
 
 // MediaGalleries dialog -------------------------------------------------------
 
-MediaGalleriesDialog::~MediaGalleriesDialog() {}
+MediaGalleriesDialog::~MediaGalleriesDialog() = default;

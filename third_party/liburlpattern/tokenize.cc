@@ -1,13 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Copyright 2014 Blake Embrey (hello@blakeembrey.com)
 // Use of this source code is governed by an MIT-style license that can be
 // found in the LICENSE file or at https://opensource.org/licenses/MIT.
 
 #include "third_party/liburlpattern/tokenize.h"
 
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
 #include "third_party/icu/source/common/unicode/utf8.h"
+#include "third_party/liburlpattern/utils.h"
 
 // The following code is a translation from the path-to-regexp typescript at:
 //
@@ -23,37 +27,22 @@ bool IsASCII(UChar32 c) {
   return c >= 0x00 && c <= 0x7f;
 }
 
-bool IsNameCodepoint(UChar32 c, bool first_codepoint) {
-  // Require group names to follow the same character restrictions as
-  // javascript identifiers.  This code originates from v8 at:
-  //
-  // https://source.chromium.org/chromium/chromium/src/+/master:v8/src/strings/char-predicates.cc;l=17-34;drc=be014256adea1552d4a044ef80616cdab6a7d549
-  //
-  // We deviate from js identifiers, however, in not support the backslash
-  // character.  This is mainly used in js identifiers to allow escaped
-  // unicode sequences to be written in ascii.  The js engine, however,
-  // should take care of this long before we reach this level of code.  So
-  // we don't need to handle it here.
-  if (first_codepoint) {
-    return u_hasBinaryProperty(c, UCHAR_ID_START) || c == '$' || c == '_';
-  }
-  return u_hasBinaryProperty(c, UCHAR_ID_CONTINUE) || c == '$' || c == '_' ||
-         c == 0x200c || c == 0x200d;
-}
-
 class Tokenizer {
  public:
-  Tokenizer(absl::string_view pattern, TokenizePolicy policy)
+  Tokenizer(std::string_view pattern, TokenizePolicy policy)
       : pattern_(std::move(pattern)), policy_(policy) {
     token_list_.reserve(pattern_.size());
   }
 
-  absl::StatusOr<std::vector<Token>> Tokenize() {
+  base::expected<std::vector<Token>, absl::Status> Tokenize() {
     while (index_ < pattern_.size()) {
       if (!status_.ok())
-        return std::move(status_);
+        return base::unexpected(std::move(status_));
 
-      NextAt(index_);
+      if (!NextAt(index_)) {
+        Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.", index_));
+        continue;
+      }
       if (codepoint_ == '*') {
         AddToken(TokenType::kAsterisk);
         continue;
@@ -68,11 +57,17 @@ class Tokenizer {
       // level of the pattern.
       if (codepoint_ == '\\') {
         if (index_ == (pattern_.size() - 1)) {
-          Error(absl::StrFormat("Trailing escape character at %d.", index_));
+          Error(absl::StrFormat("Trailing escape character at index %d.",
+                                index_));
           continue;
         }
         size_t escaped_i = next_index_;
-        Next();
+        if (!Next()) {
+          Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.",
+                                next_index_));
+          continue;
+        }
+
         AddToken(TokenType::kEscapedChar, next_index_, escaped_i);
         continue;
       }
@@ -93,14 +88,19 @@ class Tokenizer {
 
         // Iterate over codepoints until we find the first non-name codepoint.
         while (pos < pattern_.size()) {
-          NextAt(pos);
+          if (!status_.ok())
+            return base::unexpected(std::move(status_));
+          if (!NextAt(pos)) {
+            Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.", pos));
+            continue;
+          }
           if (!IsNameCodepoint(codepoint_, pos == name_start))
             break;
           pos = next_index_;
         }
 
         if (pos <= name_start) {
-          Error(absl::StrFormat("Missing parameter name at %d.", index_),
+          Error(absl::StrFormat("Missing parameter name at index %d.", index_),
                 name_start, index_);
           continue;
         }
@@ -116,17 +116,22 @@ class Tokenizer {
         bool error = false;
 
         while (j < pattern_.size()) {
-          NextAt(j);
+          if (!NextAt(j)) {
+            Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.", j));
+            error = true;
+            break;
+          }
 
           if (!IsASCII(codepoint_)) {
-            Error(absl::StrFormat("Invalid character 0x%02x at %d.", codepoint_,
-                                  j),
+            Error(absl::StrFormat(
+                      "Invalid non-ASCII character 0x%02x at index %d.",
+                      codepoint_, j),
                   regex_start, index_);
             error = true;
             break;
           }
           if (j == regex_start && codepoint_ == '?') {
-            Error(absl::StrFormat("Regex cannot start with '?' at %d", j),
+            Error(absl::StrFormat("Regex cannot start with '?' at index %d", j),
                   regex_start, index_);
             error = true;
             break;
@@ -140,16 +145,23 @@ class Tokenizer {
           // propagated on subsequent loop iterations.
           if (codepoint_ == '\\') {
             if (j == (pattern_.size() - 1)) {
-              Error(absl::StrFormat("Trailing escape character at %d.", j),
-                    regex_start, index_);
+              Error(
+                  absl::StrFormat("Trailing escape character at index %d.", j),
+                  regex_start, index_);
               error = true;
               break;
             }
             size_t escaped_j = next_index_;
-            Next();
+            if (!Next()) {
+              Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.",
+                                    next_index_));
+              error = true;
+              break;
+            }
             if (!IsASCII(codepoint_)) {
-              Error(absl::StrFormat("Invalid character 0x%02x at %d.",
-                                    codepoint_, escaped_j),
+              Error(absl::StrFormat(
+                        "Invalid non-ASCII character 0x%02x at index %d.",
+                        codepoint_, escaped_j),
                     regex_start, index_);
               error = true;
               break;
@@ -167,21 +179,26 @@ class Tokenizer {
           } else if (codepoint_ == '(') {
             paren_nesting += 1;
             if (j == (pattern_.size() - 1)) {
-              Error(absl::StrFormat("Unbalanced regex at %d.", j), regex_start,
-                    index_);
+              Error(absl::StrFormat("Unbalanced regex at index %d.", j),
+                    regex_start, index_);
               error = true;
               break;
             }
             size_t tmp_j = next_index_;
-            Next();
+            if (!Next()) {
+              Error(absl::StrFormat("Invalid UTF-8 codepoint at index %d.",
+                                    next_index_));
+              error = true;
+              break;
+            }
             // Require the the first character after an open paren is `?`.  This
             // permits assertions, named capture groups, and non-capturing
             // groups. It blocks, however, unnamed capture groups.
             if (codepoint_ != '?') {
-              Error(
-                  absl::StrFormat(
-                      "Unnamed capturing groups are not allowed at %d.", tmp_j),
-                  regex_start, index_);
+              Error(absl::StrFormat(
+                        "Unnamed capturing groups are not allowed at index %d.",
+                        tmp_j),
+                    regex_start, index_);
               error = true;
               break;
             }
@@ -195,15 +212,15 @@ class Tokenizer {
           continue;
 
         if (paren_nesting) {
-          Error(absl::StrFormat("Unbalanced regex at %d.", index_), regex_start,
-                index_);
+          Error(absl::StrFormat("Unbalanced regex at index %d.", index_),
+                regex_start, index_);
           continue;
         }
 
         const size_t regex_length = j - regex_start - 1;
         if (regex_length == 0) {
-          Error(absl::StrFormat("Missing regex at %d.", index_), regex_start,
-                index_);
+          Error(absl::StrFormat("Missing regex at index %d.", index_),
+                regex_start, index_);
           continue;
         }
 
@@ -215,7 +232,7 @@ class Tokenizer {
     }
 
     if (!status_.ok())
-      return std::move(status_);
+      return base::unexpected(std::move(status_));
 
     AddToken(TokenType::kEnd, index_, index_);
 
@@ -225,17 +242,21 @@ class Tokenizer {
  private:
   // Read the codepoint at `next_index_` in `pattern_` and store it in
   // `codepoint_`.  In addition, `next_index_` is updated to the codepoint to be
-  // read next.
-  void Next() {
-    U8_NEXT(pattern_.data(), next_index_, pattern_.size(), codepoint_);
+  // read next.  Returns true iff the codepoint was read successfully. On
+  // success, `codepoint_` is non-negative.
+  [[nodiscard]] bool Next() {
+    UNSAFE_TODO(
+        U8_NEXT(pattern_.data(), next_index_, pattern_.size(), codepoint_));
+    return codepoint_ >= 0;
   }
 
   // Read the codepoint at the specified `index` in `pattern_` and store it in
   // `codepoint_`.  In addition, `next_index_` is updated to the codepoint to be
-  // read next.
-  void NextAt(size_t index) {
+  // read next.  Returns true iff the codepoint was read successfully. On
+  // success, `codepoint_` is non-negative.
+  [[nodiscard]] bool NextAt(size_t index) {
     next_index_ = index;
-    Next();
+    return Next();
   }
 
   // Append a Token to our list of the given `type` and with a value consisting
@@ -264,16 +285,16 @@ class Tokenizer {
   // `index_`. Update `index_` to `next_index_` automatically.
   void AddToken(TokenType type) { AddToken(type, next_index_, index_); }
 
-  void Error(absl::string_view message, size_t next_pos, size_t value_pos) {
+  void Error(std::string_view message, size_t next_pos, size_t value_pos) {
     if (policy_ == TokenizePolicy::kLenient)
       AddToken(TokenType::kInvalidChar, next_pos, value_pos);
     else
       status_ = absl::InvalidArgumentError(message);
   }
 
-  void Error(absl::string_view message) { Error(message, next_index_, index_); }
+  void Error(std::string_view message) { Error(message, next_index_, index_); }
 
-  const absl::string_view pattern_;
+  const std::string_view pattern_;
   const TokenizePolicy policy_;
   std::vector<Token> token_list_;
   absl::Status status_;
@@ -298,25 +319,25 @@ class Tokenizer {
 const char* TokenTypeToString(TokenType type) {
   switch (type) {
     case TokenType::kOpen:
-      return "OPEN";
+      return "'{'";
     case TokenType::kClose:
-      return "CLOSE";
+      return "'}'";
     case TokenType::kRegex:
-      return "REGEX";
+      return "regex group";
     case TokenType::kName:
-      return "NAME";
+      return "named group";
     case TokenType::kChar:
-      return "CHAR";
+      return "character";
     case TokenType::kEscapedChar:
-      return "ESCAPED_CHAR";
+      return "escaped character";
     case TokenType::kOtherModifier:
-      return "OTHER_MODIFIER";
+      return "modifier";
     case TokenType::kAsterisk:
-      return "ASTERISK";
+      return "asterisk";
     case TokenType::kEnd:
-      return "END";
+      return "end of pattern";
     case TokenType::kInvalidChar:
-      return "INVALID_CHAR";
+      return "invalid character";
   }
 }
 
@@ -327,8 +348,9 @@ std::ostream& operator<<(std::ostream& o, Token token) {
 }
 
 // Split the input pattern into a list of tokens.
-absl::StatusOr<std::vector<Token>> Tokenize(absl::string_view pattern,
-                                            TokenizePolicy policy) {
+base::expected<std::vector<Token>, absl::Status> Tokenize(
+    std::string_view pattern,
+    TokenizePolicy policy) {
   Tokenizer tokenizer(std::move(pattern), policy);
   return tokenizer.Tokenize();
 }

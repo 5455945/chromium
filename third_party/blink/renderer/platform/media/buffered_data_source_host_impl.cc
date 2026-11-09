@@ -1,18 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/public/platform/media/buffered_data_source_host_impl.h"
+#include "third_party/blink/renderer/platform/media/buffered_data_source_host_impl.h"
 
 #include "media/base/timestamp_constants.h"
 
-namespace media {
+namespace blink {
 
 // We want a relatively small window for estimating bandwidth,
 // that way we don't need to worry too much about seeks and pause
 // throwing off the estimates.
-constexpr base::TimeDelta kDownloadHistoryWindowSeconds =
-    base::TimeDelta::FromSecondsD(10.0);
+constexpr base::TimeDelta kDownloadHistoryWindowSeconds = base::Seconds(10.0);
 
 // Limit the number of entries in the rate estimator queue.
 // 1024 entries should be more than enough.
@@ -38,14 +37,14 @@ void BufferedDataSourceHostImpl::SetTotalBytes(int64_t total_bytes) {
 }
 
 int64_t BufferedDataSourceHostImpl::UnloadedBytesInInterval(
-    const Interval<int64_t>& interval) const {
+    const media::Interval<int64_t>& interval) const {
   int64_t bytes = 0;
   auto i = buffered_byte_ranges_.find(interval.begin);
   while (i != buffered_byte_ranges_.end()) {
     if (i.interval_begin() >= interval.end)
       break;
     if (!i.value()) {
-      Interval<int64_t> intersection = i.interval().Intersect(interval);
+      media::Interval<int64_t> intersection = i.interval().Intersect(interval);
       if (!intersection.Empty())
         bytes += intersection.end - intersection.begin;
     }
@@ -56,7 +55,8 @@ int64_t BufferedDataSourceHostImpl::UnloadedBytesInInterval(
 
 void BufferedDataSourceHostImpl::AddBufferedByteRange(int64_t start,
                                                       int64_t end) {
-  int64_t new_bytes = UnloadedBytesInInterval(Interval<int64_t>(start, end));
+  int64_t new_bytes =
+      UnloadedBytesInInterval(media::Interval<int64_t>(start, end));
   if (new_bytes > 0)
     did_loading_progress_ = true;
   buffered_byte_ranges_.SetInterval(start, end, 1);
@@ -95,15 +95,15 @@ static base::TimeDelta TimeForByteOffset(int64_t byte_offset,
     return base::TimeDelta();
   if (position > 0.99)
     return duration;
-  return base::TimeDelta::FromMilliseconds(
+  return base::Milliseconds(
       static_cast<int64_t>(position * duration.InMilliseconds()));
 }
 
 void BufferedDataSourceHostImpl::AddBufferedTimeRanges(
-    Ranges<base::TimeDelta>* buffered_time_ranges,
+    media::Ranges<base::TimeDelta>* buffered_time_ranges,
     base::TimeDelta media_duration) const {
-  DCHECK(media_duration != kNoTimestamp);
-  DCHECK(media_duration != kInfiniteDuration);
+  DCHECK(media_duration != media::kNoTimestamp);
+  DCHECK(media_duration != media::kInfiniteDuration);
   if (total_bytes_ && !buffered_byte_ranges_.empty()) {
     for (const auto i : buffered_byte_ranges_) {
       if (i.second) {
@@ -136,7 +136,8 @@ double BufferedDataSourceHostImpl::DownloadRate() const {
   // data point that has the lowest download rate, we avoid over-estimating.
   const double kVeryLargeRate = 1.0E20;
   double download_rate = kVeryLargeRate;
-  for (int i = 0; i < std::min<int>(20, download_history_.size() - 3); i++) {
+  for (size_t i = 0; i < std::min<size_t>(20, download_history_.size() - 3);
+       i++) {
     int64_t downloaded_bytes =
         download_history_.back().second - download_history_[i].second;
     base::TimeTicks now = tick_clock_->NowTicks();
@@ -155,7 +156,7 @@ bool BufferedDataSourceHostImpl::CanPlayThrough(
     double playback_rate) const {
   DCHECK_GE(playback_rate, 0);
   if (!total_bytes_ || media_duration <= base::TimeDelta() ||
-      media_duration == kInfiniteDuration) {
+      media_duration == media::kInfiniteDuration) {
     return false;
   }
   if (current_position > media_duration)
@@ -164,7 +165,7 @@ bool BufferedDataSourceHostImpl::CanPlayThrough(
   const int64_t byte_pos =
       std::max<int64_t>(total_bytes_ * (current_position / media_duration), 0);
   const int64_t unloaded_bytes =
-      UnloadedBytesInInterval(Interval<int64_t>(byte_pos, total_bytes_));
+      UnloadedBytesInInterval(media::Interval<int64_t>(byte_pos, total_bytes_));
   if (unloaded_bytes == 0)
     return true;
 
@@ -179,4 +180,4 @@ void BufferedDataSourceHostImpl::SetTickClockForTest(
   tick_clock_ = tick_clock;
 }
 
-}  // namespace media
+}  // namespace blink

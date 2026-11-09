@@ -1,10 +1,9 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/frame/frame_content_as_text.h"
 
-#include "base/cxx17_backports.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -15,7 +14,7 @@
 
 namespace blink {
 
-void FrameContentAsText(size_t max_chars,
+void FrameContentAsText(wtf_size_t max_chars,
                         LocalFrame* frame,
                         StringBuilder& output) {
   Document* document = frame->GetDocument();
@@ -37,7 +36,7 @@ void FrameContentAsText(size_t max_chars,
 
   // The separator between frames when the frames are converted to plain text.
   const LChar kFrameSeparator[] = {'\n', '\n'};
-  const size_t frame_separator_length = base::size(kFrameSeparator);
+  const size_t frame_separator_length = std::size(kFrameSeparator);
 
   // Recursively walk the children.
   const FrameTree& frame_tree = frame->Tree();
@@ -49,12 +48,15 @@ void FrameContentAsText(size_t max_chars,
     // Ignore the text of non-visible frames.
     LayoutView* layout_view = cur_local_child->ContentLayoutObject();
     LayoutObject* owner_layout_object = cur_local_child->OwnerLayoutObject();
-    if (!layout_view || !layout_view->Size().Width() ||
-        !layout_view->Size().Height() ||
-        (layout_view->Location().X() + layout_view->Size().Width() <= 0) ||
-        (layout_view->Location().Y() + layout_view->Size().Height() <= 0) ||
-        (owner_layout_object && owner_layout_object->Style() &&
-         owner_layout_object->Style()->Visibility() != EVisibility::kVisible)) {
+    if (!layout_view) {
+      continue;
+    }
+    PhysicalOffset location = layout_view->PhysicalLocation();
+    PhysicalSize size = layout_view->StitchedSize();
+    if (!size.width || !size.height || (location.left + size.width <= 0) ||
+        (location.top + size.height <= 0) ||
+        (owner_layout_object &&
+         owner_layout_object->Style().Visibility() != EVisibility::kVisible)) {
       continue;
     }
 
@@ -66,7 +68,7 @@ void FrameContentAsText(size_t max_chars,
     if (output.length() >= max_chars - frame_separator_length)
       return;
 
-    output.Append(kFrameSeparator, frame_separator_length);
+    output.Append(base::span(kFrameSeparator));
     FrameContentAsText(max_chars, cur_local_child, output);
     if (output.length() >= max_chars)
       return;  // Filled up the buffer.

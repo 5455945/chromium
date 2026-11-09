@@ -1,20 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_POLICY_CLOUD_USER_POLICY_SIGNIN_SERVICE_MOBILE_H_
 #define CHROME_BROWSER_POLICY_CLOUD_USER_POLICY_SIGNIN_SERVICE_MOBILE_H_
 
-#include <memory>
-#include <string>
-#include <vector>
-
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
-#include "chrome/browser/policy/cloud/user_policy_signin_service_base.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_manager_observer.h"
+#include "components/policy/core/browser/cloud/user_policy_signin_service_base.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 
 class Profile;
 
@@ -28,10 +27,33 @@ class SharedURLLoaderFactory;
 
 namespace policy {
 
-class CloudPolicyClientRegistrationHelper;
+class UserPolicySigninService;
 
-// A specialization of UserPolicySigninServiceBase for the Android.
-class UserPolicySigninService : public UserPolicySigninServiceBase {
+// Observer bridge for UserPolicySigninService to observe profile manager
+// events.
+class ProfileManagerObserverBridge : public ProfileManagerObserver {
+ public:
+  explicit ProfileManagerObserverBridge(
+      UserPolicySigninService* user_policy_signin_service);
+  ProfileManagerObserverBridge(const ProfileManagerObserverBridge&) = delete;
+  ProfileManagerObserverBridge& operator=(const ProfileManagerObserverBridge&) =
+      delete;
+  ~ProfileManagerObserverBridge() override;
+
+  // ProfileManagerObserver implementation:
+  void OnProfileAdded(Profile* profile) override;
+  void OnProfileManagerDestroying() override;
+
+ private:
+  base::ScopedObservation<ProfileManager, ProfileManagerObserver>
+      profile_manager_observation_{this};
+  raw_ptr<UserPolicySigninService> user_policy_signin_service_;
+};
+
+// A specialization of UserPolicySigninServiceBase for Android.
+class UserPolicySigninService : public UserPolicySigninServiceBase,
+                                public ProfileAttributesStorage::Observer,
+                                public signin::IdentityManager::Observer {
  public:
   // Creates a UserPolicySigninService associated with the passed |profile|.
   UserPolicySigninService(
@@ -41,49 +63,82 @@ class UserPolicySigninService : public UserPolicySigninServiceBase {
       UserCloudPolicyManager* policy_manager,
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory);
+  UserPolicySigninService(const UserPolicySigninService&) = delete;
+  UserPolicySigninService& operator=(const UserPolicySigninService&) = delete;
   ~UserPolicySigninService() override;
 
-  // Registers a CloudPolicyClient for fetching policy for |username|.
-  // This requests an OAuth2 token for the services involved, and contacts
-  // the policy service if the account has management enabled.
-  // |account_id| is the obfuscated identitifcation of |username| to get OAuth2
-  // token services.
-  // |callback| is invoked once we have registered this device to fetch policy,
-  // or once it is determined that |username| is not a managed account.
-  void RegisterForPolicyWithAccountId(const std::string& username,
-                                      const CoreAccountId& account_id,
-                                      PolicyRegistrationCallback callback);
+  // Overridden from UserPolicySigninServiceForProfile to cancel the pending
+  // delayed registration.
+  void ShutdownCloudPolicyManager() override;
 
-  // Overridden from UserPolicySigninServiceBase to cancel the pending delayed
-  // registration.
-  void ShutdownUserCloudPolicyManager() override;
+  // Handler for when the profile is ready.
+  void OnProfileReady(Profile* profile);
+
+  // Called when the ProfileAttributesStorage is being destroyed.
+  void OnProfileAttributesStorageDestroying();
+
+  // signin::IdentityManager::Observer implementation:
+  void OnPrimaryAccountChanged(
+      const signin::PrimaryAccountChangeEvent& event) override;
+  void OnRefreshTokenUpdatedForAccount(
+      const CoreAccountInfo& account_info) override;
+
+  // ProfileAttributesStorage::Observer implementation:
+  void OnProfileUserManagementAcceptanceChanged(
+      const base::FilePath& profile_path) override;
+
+  void set_profile_can_be_managed_for_testing(bool can_be_managed) {
+    profile_can_be_managed_for_testing_ = can_be_managed;
+  }
 
  private:
-  void CallPolicyRegistrationCallback(std::unique_ptr<CloudPolicyClient> client,
-                                      PolicyRegistrationCallback callback);
-
   // KeyedService implementation:
   void Shutdown() override;
 
-  // CloudPolicyService::Observer implementation:
-  void OnCloudPolicyServiceInitializationCompleted() override;
+  // UserPolicySigninServiceBase implementation:
+  // Returns the delay before attempting registration. If the policy store is in
+  // an error state (status() != CloudPolicyStore::STATUS_OK), clears
+  // policy_prefs::kLastPolicyCheckTime and returns a zero delay so registration
+  // retries immediately.
+  base::TimeDelta GetTryRegistrationDelay() override;
+  void UpdateLastPolicyCheckTime() override;
+  bool CanApplyPolicies(bool check_for_refresh_token) override;
+  void InitializeCloudPolicyManager(
+      const AccountId& account_id,
+      std::unique_ptr<CloudPolicyClient> client) override;
+  CloudPolicyClient::DeviceDMTokenCallback
+  GetDeviceDMTokenIfAffiliatedCallback() override;
+  std::string GetProfileId() override;
 
-  // Registers for cloud policy for an already signed-in user.
-  void RegisterCloudPolicyService();
+  // Helper method that attempts calls |InitializeForSignedInUser| only if
+  // |policy_manager| is not-nul. Expects that there is a refresh token for
+  // the primary account.
+  void TryInitializeForSignedInUser();
 
-  // Cancels a pending cloud policy registration attempt.
-  void CancelPendingRegistration();
+  // Initializes the UserPolicySigninService once its owning Profile becomes
+  // ready. If the Profile has a signed-in account associated with it at startup
+  // then this initializes the cloud policy manager by calling
+  // InitializeForSignedInUser(); otherwise it clears any stored policies.
+  void InitializeOnProfileReady(Profile* profile);
 
-  void OnRegistrationDone();
+  // True when the profile can be managed for testing purpose. Has to be set
+  // from the test fixture. This is used to bypass the check on the profile
+  // attributes entry.
+  bool profile_can_be_managed_for_testing_ = false;
+  bool has_logged_profile_can_be_managed_metric_ = false;
 
-  std::unique_ptr<CloudPolicyClientRegistrationHelper> registration_helper_;
+  // Observer bridge for profile added events.
+  ProfileManagerObserverBridge profile_manager_observer_bridge_{this};
+
+  base::ScopedObservation<ProfileAttributesStorage,
+                          ProfileAttributesStorage::Observer>
+      observed_profile_{this};
 
   // The PrefService associated with the profile.
-  PrefService* profile_prefs_;
+  raw_ptr<PrefService> profile_prefs_;
 
-  base::WeakPtrFactory<UserPolicySigninService> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UserPolicySigninService);
+  // Parent profile for this service.
+  raw_ptr<Profile> profile_;
 };
 
 }  // namespace policy

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,23 +39,44 @@ class NodeDataDescriber {
  public:
   virtual ~NodeDataDescriber() = default;
 
-  virtual base::Value DescribeFrameNodeData(const FrameNode* node) const = 0;
-  virtual base::Value DescribePageNodeData(const PageNode* node) const = 0;
-  virtual base::Value DescribeProcessNodeData(
+  virtual base::DictValue DescribeFrameNodeData(
+      const FrameNode* node) const = 0;
+  virtual base::DictValue DescribePageNodeData(const PageNode* node) const = 0;
+  virtual base::DictValue DescribeProcessNodeData(
       const ProcessNode* node) const = 0;
-  virtual base::Value DescribeSystemNodeData(const SystemNode* node) const = 0;
-  virtual base::Value DescribeWorkerNodeData(const WorkerNode* node) const = 0;
+  virtual base::DictValue DescribeSystemNodeData(
+      const SystemNode* node) const = 0;
+  virtual base::DictValue DescribeWorkerNodeData(
+      const WorkerNode* node) const = 0;
+
+  // Polymorphic accessors.
+  base::DictValue DescribeNodeData(const FrameNode* node) const {
+    return DescribeFrameNodeData(node);
+  }
+  base::DictValue DescribeNodeData(const PageNode* node) const {
+    return DescribePageNodeData(node);
+  }
+  base::DictValue DescribeNodeData(const ProcessNode* node) const {
+    return DescribeProcessNodeData(node);
+  }
+  base::DictValue DescribeNodeData(const SystemNode* node) const {
+    return DescribeSystemNodeData(node);
+  }
+  base::DictValue DescribeNodeData(const WorkerNode* node) const {
+    return DescribeWorkerNodeData(node);
+  }
 };
 
 // A convenience do-nothing implementation of the interface above. Returns
 // an is_none() value for all nodes.
 class NodeDataDescriberDefaultImpl : public NodeDataDescriber {
  public:
-  base::Value DescribeFrameNodeData(const FrameNode* node) const override;
-  base::Value DescribePageNodeData(const PageNode* node) const override;
-  base::Value DescribeProcessNodeData(const ProcessNode* node) const override;
-  base::Value DescribeSystemNodeData(const SystemNode* node) const override;
-  base::Value DescribeWorkerNodeData(const WorkerNode* node) const override;
+  base::DictValue DescribeFrameNodeData(const FrameNode* node) const override;
+  base::DictValue DescribePageNodeData(const PageNode* node) const override;
+  base::DictValue DescribeProcessNodeData(
+      const ProcessNode* node) const override;
+  base::DictValue DescribeSystemNodeData(const SystemNode* node) const override;
+  base::DictValue DescribeWorkerNodeData(const WorkerNode* node) const override;
 };
 
 }  // namespace performance_manager

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "ash/shell.h"
 #include "base/command_line.h"
+#include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/time/time.h"
 #include "components/exo/buffer.h"
@@ -30,7 +31,7 @@ namespace {
 
 class MockGamepadDelegate : public GamepadDelegate {
  public:
-  MockGamepadDelegate() {}
+  MockGamepadDelegate() = default;
 
   // Overridden from GamepadDelegate:
   MOCK_METHOD(void, OnRemoved, (), (override));
@@ -54,12 +55,23 @@ class MockGamingSeatDelegate : public GamingSeatDelegate {
   MOCK_METHOD(void, GamepadAdded, (Gamepad & gamepad), (override));
   MOCK_METHOD(void, Die, (), ());
   void OnGamingSeatDestroying(GamingSeat*) override { delete this; }
-  ~MockGamingSeatDelegate() { Die(); }
+  ~MockGamingSeatDelegate() override { Die(); }
+
+  base::WeakPtr<GamingSeatDelegate> GetWeakPtr() override {
+    return weak_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<MockGamingSeatDelegate> weak_factory_{this};
 };
 
 class GamingSeatTest : public test::ExoTestBase {
  public:
-  GamingSeatTest() {}
+  GamingSeatTest() = default;
+
+  GamingSeatTest(const GamingSeatTest&) = delete;
+  GamingSeatTest& operator=(const GamingSeatTest&) = delete;
+
   void InitializeGamingSeat(MockGamingSeatDelegate* delegate) {
     gaming_seat_ = std::make_unique<GamingSeat>(delegate);
   }
@@ -100,15 +112,13 @@ class GamingSeatTest : public test::ExoTestBase {
 
  protected:
   std::unique_ptr<GamingSeat> gaming_seat_;
-  DISALLOW_COPY_AND_ASSIGN(GamingSeatTest);
 };
 
 TEST_F(GamingSeatTest, ConnectionChange) {
   std::unique_ptr<Surface> surface(new Surface);
   std::unique_ptr<ShellSurface> shell_surface(new ShellSurface(surface.get()));
   gfx::Size buffer_size(10, 10);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   surface->Attach(buffer.get());
   surface->Commit();
 
@@ -127,29 +137,29 @@ TEST_F(GamingSeatTest, ConnectionChange) {
     testing::InSequence s;
     // Connect 2 gamepads.
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegates](auto& gamepad) {
+        .WillOnce([&gamepad_delegates](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegates[0]));
-        }));
+        });
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegates](auto& gamepad) {
+        .WillOnce([&gamepad_delegates](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegates[1]));
-        }));
+        });
     // Send frame to connected gamepad.
     EXPECT_CALL(*gamepad_delegates[0], OnFrame(testing::_)).Times(1);
     EXPECT_CALL(*gamepad_delegates[1], OnFrame(testing::_)).Times(1);
     // Connect 3 more.
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegates](auto& gamepad) {
+        .WillOnce([&gamepad_delegates](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegates[2]));
-        }));
+        });
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegates](auto& gamepad) {
+        .WillOnce([&gamepad_delegates](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegates[3]));
-        }));
+        });
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegates](auto& gamepad) {
+        .WillOnce([&gamepad_delegates](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegates[4]));
-        }));
+        });
     // Send frame to all gamepads.
     EXPECT_CALL(*gamepad_delegates[0], OnFrame(testing::_)).Times(1);
     EXPECT_CALL(*gamepad_delegates[1], OnFrame(testing::_)).Times(1);
@@ -162,9 +172,9 @@ TEST_F(GamingSeatTest, ConnectionChange) {
     EXPECT_CALL(*gamepad_delegates[4], OnRemoved()).Times(1);
     // Connect a new gamepad.
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegates](auto& gamepad) {
+        .WillOnce([&gamepad_delegates](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegates[5]));
-        }));
+        });
     // Send frame to all gamepads.
     EXPECT_CALL(*gamepad_delegates[1], OnFrame(testing::_)).Times(1);
     EXPECT_CALL(*gamepad_delegates[3], OnFrame(testing::_)).Times(1);
@@ -195,8 +205,7 @@ TEST_F(GamingSeatTest, Timestamp) {
   std::unique_ptr<Surface> surface(new Surface);
   std::unique_ptr<ShellSurface> shell_surface(new ShellSurface(surface.get()));
   gfx::Size buffer_size(10, 10);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   surface->Attach(buffer.get());
   surface->Commit();
 
@@ -216,9 +225,9 @@ TEST_F(GamingSeatTest, Timestamp) {
 
     // Connect gamepad.
     EXPECT_CALL(*gaming_seat_delegate, GamepadAdded(testing::_))
-        .WillOnce(testing::Invoke([&gamepad_delegate](auto& gamepad) {
+        .WillOnce([&gamepad_delegate](auto& gamepad) {
           gamepad.SetDelegate(std::move(gamepad_delegate));
-        }));
+        });
     // Send button to connected gamepad. Expect correct timestamp.
     EXPECT_CALL(*gamepad_delegate,
                 OnButton(testing::_, testing::_, testing::Eq(expected_time)))

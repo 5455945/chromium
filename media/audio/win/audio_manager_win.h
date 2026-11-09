@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "media/audio/audio_manager_base.h"
+#include "media/media_buildflags.h"
 
 namespace media {
 
@@ -22,18 +22,22 @@ class MEDIA_EXPORT AudioManagerWin : public AudioManagerBase {
  public:
   AudioManagerWin(std::unique_ptr<AudioThread> audio_thread,
                   AudioLogFactory* audio_log_factory);
+
+  AudioManagerWin(const AudioManagerWin&) = delete;
+  AudioManagerWin& operator=(const AudioManagerWin&) = delete;
+
   ~AudioManagerWin() override;
 
   // Implementation of AudioManager.
   bool HasAudioOutputDevices() override;
   bool HasAudioInputDevices() override;
-  void GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
-  void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
+  bool GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
+  bool GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
   AudioParameters GetInputStreamParameters(
       const std::string& device_id) override;
   std::string GetAssociatedOutputDeviceID(
       const std::string& input_device_id) override;
-  const char* GetName() override;
+  const std::string_view GetName() override;
 
   // Implementation of AudioManagerBase.
   AudioOutputStream* MakeLinearOutputStream(
@@ -51,6 +55,12 @@ class MEDIA_EXPORT AudioManagerWin : public AudioManagerBase {
       const AudioParameters& params,
       const std::string& device_id,
       const LogCallback& log_callback) override;
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
+  AudioOutputStream* MakeBitstreamOutputStream(
+      const AudioParameters& params,
+      const std::string& device_id,
+      const LogCallback& log_callback) override;
+#endif
   std::string GetDefaultInputDeviceID() override;
   std::string GetDefaultOutputDeviceID() override;
   std::string GetCommunicationsInputDeviceID() override;
@@ -70,12 +80,16 @@ class MEDIA_EXPORT AudioManagerWin : public AudioManagerBase {
   // thread instead of on the UI thread which AudioManager is constructed on.
   void InitializeOnAudioThread();
 
-  void GetAudioDeviceNamesImpl(bool input, AudioDeviceNames* device_names);
+  bool GetAudioDeviceNamesImpl(bool input, AudioDeviceNames* device_names);
 
   // Listen for output device changes.
   std::unique_ptr<AudioDeviceListenerWin> output_device_listener_;
 
-  DISALLOW_COPY_AND_ASSIGN(AudioManagerWin);
+  // Used to invalidate pending `output_device_listener_` callbacks on shutdow.
+  // `audio_weak_factory_` must be invalidated on the audio thread as part of
+  // shutdown, before it is destroyed on whichever thread owns `this`.
+  base::WeakPtr<AudioManagerWin> weak_this_on_audio_thread_;
+  base::WeakPtrFactory<AudioManagerWin> weak_factory_on_audio_thread_{this};
 };
 
 }  // namespace media

@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_MEDIA_PERCEPTION_PRIVATE_MEDIA_PERCEPTION_API_DELEGATE_H_
 #define EXTENSIONS_BROWSER_API_MEDIA_PERCEPTION_PRIVATE_MEDIA_PERCEPTION_API_DELEGATE_H_
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "chromeos/services/media_perception/public/mojom/media_perception_service.mojom.h"
 #include "extensions/common/api/media_perception_private.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -22,8 +22,8 @@ namespace extensions {
 
 class MediaPerceptionAPIDelegate {
  public:
-  // Callback for loading a CrOS component. |mount_point| will contain a path to
-  // the loaded component, if |success| is true (installation succeeded).
+  // Callback for loading a CrOS component. `mount_point` will contain a path to
+  // the loaded component, if `success` is true (installation succeeded).
   using LoadCrOSComponentCallback = base::OnceCallback<void(
       const api::media_perception_private::ComponentInstallationError
           installation_error,
@@ -33,7 +33,7 @@ class MediaPerceptionAPIDelegate {
       mojo::PendingReceiver<chromeos::media_perception::mojom::MediaPerception>
           receiver)>;
 
-  virtual ~MediaPerceptionAPIDelegate() {}
+  virtual ~MediaPerceptionAPIDelegate() = default;
 
   // Provides an interface through which a media analytics Chrome OS component
   // from Component Updater can be loaded and mounted on a device.

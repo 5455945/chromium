@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,7 +27,8 @@ struct StructTraits<ax::mojom::AXEventDataView, ui::AXEvent> {
   static ax::mojom::Action event_from_action(const ui::AXEvent& p) {
     return p.event_from_action;
   }
-  static std::vector<ui::AXEventIntent> event_intents(const ui::AXEvent& p) {
+  static const std::vector<ui::AXEventIntent>& event_intents(
+      const ui::AXEvent& p) {
     return p.event_intents;
   }
   static int32_t action_request_id(const ui::AXEvent& p) {

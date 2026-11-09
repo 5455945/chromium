@@ -1,10 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/cdm_promise_adapter.h"
 
 #include <utility>
+
+#include "base/trace_event/trace_event.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace media {
 
@@ -21,8 +24,7 @@ CdmPromise::SystemCode ToSystemCode(CdmPromiseAdapter::ClearReason reason) {
 
 }  // namespace
 
-CdmPromiseAdapter::CdmPromiseAdapter()
-    : next_promise_id_(kInvalidPromiseId + 1) {}
+CdmPromiseAdapter::CdmPromiseAdapter() = default;
 
 CdmPromiseAdapter::~CdmPromiseAdapter() {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -30,15 +32,22 @@ CdmPromiseAdapter::~CdmPromiseAdapter() {
   Clear(ClearReason::kDestruction);
 }
 
-uint32_t CdmPromiseAdapter::SavePromise(std::unique_ptr<CdmPromise> promise) {
+uint32_t CdmPromiseAdapter::SavePromise(std::unique_ptr<CdmPromise> promise,
+                                        const std::string& operation) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK_NE(kInvalidPromiseId, next_promise_id_);
 
   uint32_t promise_id = next_promise_id_++;
-  if (next_promise_id_ == kInvalidPromiseId)
+  if (next_promise_id_ == kInvalidPromiseId) {
     next_promise_id_++;
+  }
 
   promises_[promise_id] = std::move(promise);
+
+  TRACE_EVENT_BEGIN("media", "CdmPromise",
+                    perfetto::NamedTrack("CdmPromise", promise_id), "operation",
+                    operation);
+
   return promise_id;
 }
 
@@ -50,6 +59,9 @@ void CdmPromiseAdapter::ResolvePromise(uint32_t promise_id,
     LOG(ERROR) << "Promise not found for " << promise_id;
     return;
   }
+
+  TRACE_EVENT_END("media", perfetto::NamedTrack("CdmPromise", promise_id),
+                  "status", "resolved");
 
   // Sanity check the type before we do static_cast.
   CdmPromise::ResolveParameterType type = promise->GetResolveParameterType();
@@ -72,25 +84,38 @@ void CdmPromiseAdapter::RejectPromise(uint32_t promise_id,
     return;
   }
 
+  TRACE_EVENT_END("media", perfetto::NamedTrack("CdmPromise", promise_id),
+                  "status", "rejected", "system_code", system_code);
+
   promise->reject(exception_code, system_code, error_message);
 }
 
 void CdmPromiseAdapter::Clear(ClearReason reason) {
   // Reject all outstanding promises.
   DCHECK(thread_checker_.CalledOnValidThread());
-  for (auto& promise : promises_) {
-    promise.second->reject(CdmPromise::Exception::INVALID_STATE_ERROR,
-                           ToSystemCode(reason), "Operation aborted.");
+  // Rejecting a promise runs client code, which may re-enter this class, e.g.
+  // SavePromise() to close a session, or ResolvePromise()/RejectPromise() from
+  // a nested run loop. Move the promises out of `promises_` before rejecting
+  // them so that re-entrant calls cannot invalidate the iteration or settle a
+  // promise twice, and repeat until no new promises were saved.
+  while (!promises_.empty()) {
+    PromiseMap promises = std::exchange(promises_, {});
+    for (auto& [promise_id, promise] : promises) {
+      TRACE_EVENT_END("media", perfetto::NamedTrack("CdmPromise", promise_id),
+                      "status", "cleared");
+      promise->reject(CdmPromise::Exception::INVALID_STATE_ERROR,
+                      ToSystemCode(reason), "Operation aborted.");
+    }
   }
-  promises_.clear();
 }
 
 std::unique_ptr<CdmPromise> CdmPromiseAdapter::TakePromise(
     uint32_t promise_id) {
   DCHECK(thread_checker_.CalledOnValidThread());
   auto it = promises_.find(promise_id);
-  if (it == promises_.end())
+  if (it == promises_.end()) {
     return nullptr;
+  }
 
   std::unique_ptr<CdmPromise> result = std::move(it->second);
   promises_.erase(it);

@@ -1,38 +1,54 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/ash/network/mobile_data_notifications.h"
 
 #include <string>
+#include <utility>
 
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
 #include "base/time/time.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/system_tray_client_impl.h"
-#include "chrome/common/pref_names.h"
+#include "base/trace_event/trace_event.h"
+#include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/grit/generated_resources.h"
-#include "chromeos/login/login_state/login_state.h"
-#include "chromeos/network/network_connection_handler.h"
-#include "chromeos/network/network_state.h"
-#include "chromeos/network/network_state_handler.h"
-#include "chromeos/network/network_type_pattern.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
+#include "chromeos/ash/components/network/network_connection_handler.h"
+#include "chromeos/ash/components/network/network_state.h"
+#include "chromeos/ash/components/network/network_type_pattern.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 
-using chromeos::NetworkHandler;
-using chromeos::NetworkState;
-using chromeos::NetworkStateHandler;
+using ::ash::NetworkHandler;
+using ::ash::NetworkState;
+using ::ash::NetworkStateHandler;
 using session_manager::SessionManager;
 using user_manager::UserManager;
 
 namespace {
+
+// ShowOptionalMobileDataNotification() has checked that the session is not
+// blocked, so there is an active session whose profile has been created.
+// TODO(crbug.com/563546692): Take the AccountId from the callers instead, so
+// that the notification follows the network that triggered it.
+PrefService& GetActiveUserPrefs() {
+  const session_manager::Session& session =
+      CHECK_DEREF(SessionManager::Get()->GetActiveSession());
+  user_manager::User& user =
+      CHECK_DEREF(UserManager::Get()->FindUserAndModify(session.account_id()));
+  return CHECK_DEREF(user.GetProfilePrefs());
+}
 
 const char kMobileDataNotificationId[] =
     "chrome://settings/internet/mobile_data";
@@ -50,7 +66,8 @@ constexpr int kNotificationCheckDelayInSeconds = 2;
 // MobileDataNotifications
 
 MobileDataNotifications::MobileDataNotifications() {
-  NetworkHandler::Get()->network_state_handler()->AddObserver(this, FROM_HERE);
+  network_state_handler_observer_.Observe(
+      NetworkHandler::Get()->network_state_handler());
   NetworkHandler::Get()->network_connection_handler()->AddObserver(this);
   UserManager::Get()->AddSessionStateObserver(this);
   SessionManager::Get()->AddObserver(this);
@@ -58,8 +75,6 @@ MobileDataNotifications::MobileDataNotifications() {
 
 MobileDataNotifications::~MobileDataNotifications() {
   if (NetworkHandler::IsInitialized()) {
-    NetworkHandler::Get()->network_state_handler()->RemoveObserver(this,
-                                                                   FROM_HERE);
     NetworkHandler::Get()->network_connection_handler()->RemoveObserver(this);
   }
   UserManager::Get()->RemoveSessionStateObserver(this);
@@ -68,9 +83,14 @@ MobileDataNotifications::~MobileDataNotifications() {
 
 void MobileDataNotifications::ActiveNetworksChanged(
     const std::vector<const NetworkState*>& active_networks) {
-  if (SessionManager::Get()->IsUserSessionBlocked())
+  if (SessionManager::Get()->IsUserSessionBlocked()) {
     return;
+  }
   ShowOptionalMobileDataNotificationImpl(active_networks);
+}
+
+void MobileDataNotifications::OnShuttingDown() {
+  network_state_handler_observer_.Reset();
 }
 
 void MobileDataNotifications::ConnectSucceeded(
@@ -93,16 +113,18 @@ void MobileDataNotifications::ActiveUserChanged(
 }
 
 void MobileDataNotifications::OnSessionStateChanged() {
+  TRACE_EVENT0("ui", "MobileDataNotifications::OnSessionStateChanged");
   ShowOptionalMobileDataNotification();
 }
 
 void MobileDataNotifications::ShowOptionalMobileDataNotification() {
-  if (SessionManager::Get()->IsUserSessionBlocked())
+  if (SessionManager::Get()->IsUserSessionBlocked() || !NetworkHandler::IsInitialized()) {
     return;
+  }
 
   NetworkStateHandler::NetworkStateList active_networks;
   NetworkHandler::Get()->network_state_handler()->GetActiveNetworkListByType(
-      chromeos::NetworkTypePattern::NonVirtual(), &active_networks);
+      ash::NetworkTypePattern::NonVirtual(), &active_networks);
   ShowOptionalMobileDataNotificationImpl(active_networks);
 }
 
@@ -110,10 +132,12 @@ void MobileDataNotifications::ShowOptionalMobileDataNotificationImpl(
     const std::vector<const NetworkState*>& active_networks) {
   const NetworkState* first_active_network = nullptr;
   for (const auto* network : active_networks) {
-    if (network->IsConnectingState())
+    if (network->IsConnectingState()) {
       return;  // Don not show notification while connecting.
-    if (!first_active_network)
+    }
+    if (!first_active_network) {
       first_active_network = network;
+    }
   }
   if (!first_active_network ||
       first_active_network->type() != shill::kTypeCellular) {
@@ -121,33 +145,34 @@ void MobileDataNotifications::ShowOptionalMobileDataNotificationImpl(
   }
 
   // Check if we've shown this notification before.
-  PrefService* prefs = ProfileManager::GetActiveUserProfile()->GetPrefs();
-  if (!prefs->GetBoolean(prefs::kShowMobileDataNotification))
+  PrefService& pref_service = GetActiveUserPrefs();
+  if (!pref_service.GetBoolean(ash::prefs::kShowMobileDataNotification)) {
     return;
+  }
 
   // Prevent the notification from showing up in the future and stop any running
   // timers.
-  prefs->SetBoolean(prefs::kShowMobileDataNotification, false);
+  pref_service.SetBoolean(ash::prefs::kShowMobileDataNotification, false);
   one_shot_notification_check_delay_.Stop();
 
   // Display a one-time notification on first use of Mobile Data connection.
-  std::unique_ptr<message_center::Notification> notification =
-      ash::CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE, kMobileDataNotificationId,
-          l10n_util::GetStringUTF16(IDS_MOBILE_DATA_NOTIFICATION_TITLE),
-          l10n_util::GetStringUTF16(IDS_3G_NOTIFICATION_MESSAGE),
-          std::u16string() /* display_source */, GURL(),
-          message_center::NotifierId(
-              message_center::NotifierType::SYSTEM_COMPONENT,
-              kNotifierMobileData),
-          message_center::RichNotificationData(),
-          base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
-              base::BindRepeating(&MobileDataNotificationClicked,
-                                  first_active_network->guid())),
-          kNotificationMobileDataIcon,
-          message_center::SystemNotificationWarningLevel::NORMAL);
+  auto notification = ash::CreateSystemNotificationPtr(
+      message_center::NOTIFICATION_TYPE_SIMPLE, kMobileDataNotificationId,
+      l10n_util::GetStringUTF16(IDS_MOBILE_DATA_NOTIFICATION_TITLE),
+      l10n_util::GetStringUTF16(IDS_3G_NOTIFICATION_MESSAGE),
+      std::u16string() /* display_source */,
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kNotifierMobileData,
+                                 ash::NotificationCatalogName::kMobileData),
+      message_center::RichNotificationData(),
+      base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
+          base::BindRepeating(&MobileDataNotificationClicked,
+                              first_active_network->guid())),
+      ash::kNotificationMobileDataIcon,
+      message_center::SystemNotificationWarningLevel::NORMAL);
 
-  SystemNotificationHelper::GetInstance()->Display(*notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void MobileDataNotifications::DelayedShowOptionalMobileDataNotification() {
@@ -156,7 +181,7 @@ void MobileDataNotifications::DelayedShowOptionalMobileDataNotification() {
     return;
   }
   one_shot_notification_check_delay_.Start(
-      FROM_HERE, base::TimeDelta::FromSeconds(kNotificationCheckDelayInSeconds),
+      FROM_HERE, base::Seconds(kNotificationCheckDelayInSeconds),
       base::BindOnce(
           &MobileDataNotifications::ShowOptionalMobileDataNotification,
           // Callbacks won't run after this object is destroyed by using weak

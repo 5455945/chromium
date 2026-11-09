@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include <vector>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -15,19 +16,20 @@ namespace shape_detection {
 
 namespace {
 
-mojom::LandmarkPtr API_AVAILABLE(macos(10.13))
-    BuildLandmark(VNFaceLandmarkRegion2D* landmark_region,
-                  mojom::LandmarkType landmark_type,
-                  gfx::RectF bounding_box) {
+mojom::LandmarkPtr BuildLandmark(VNFaceLandmarkRegion2D* landmark_region,
+                                 mojom::LandmarkType landmark_type,
+                                 gfx::RectF bounding_box) {
   auto landmark = mojom::Landmark::New();
   landmark->type = landmark_type;
   landmark->locations.reserve(landmark_region.pointCount);
   for (NSUInteger i = 0; i < landmark_region.pointCount; ++i) {
     // The points are normalized to the bounding box of the detected face.
     landmark->locations.emplace_back(
-        landmark_region.normalizedPoints[i].x * bounding_box.width() +
+        UNSAFE_TODO(landmark_region.normalizedPoints[i]).x *
+                bounding_box.width() +
             bounding_box.x(),
-        (1 - landmark_region.normalizedPoints[i].y) * bounding_box.height() +
+        (1 - UNSAFE_TODO(landmark_region.normalizedPoints[i]).y) *
+                bounding_box.height() +
             bounding_box.y());
   }
   return landmark;
@@ -68,7 +70,7 @@ void FaceDetectionImplMacVision::OnFacesDetected(VNRequest* request,
   if (receiver_)  // Can be unbound in unit testing.
     receiver_->ResumeIncomingMethodCallProcessing();
 
-  if (![request.results count] || error) {
+  if (!request.results.count || error) {
     std::move(detected_callback_).Run({});
     return;
   }

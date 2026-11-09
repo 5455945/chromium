@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #define CONTENT_COMMON_INPUT_SYNTHETIC_POINTER_ACTION_PARAMS_H_
 
 #include "base/check_op.h"
+#include "base/time/time.h"
 #include "content/common/content_export.h"
-#include "content/common/content_param_traits_macros.h"
 #include "content/common/input/synthetic_gesture_params.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
@@ -65,6 +65,7 @@ struct CONTENT_EXPORT SyntheticPointerActionParams {
 
   void set_button(Button button) {
     DCHECK(pointer_action_type_ == PointerActionType::PRESS ||
+           pointer_action_type_ == PointerActionType::MOVE ||
            pointer_action_type_ == PointerActionType::RELEASE ||
            pointer_action_type_ == PointerActionType::CANCEL);
     button_ = button;
@@ -136,6 +137,7 @@ struct CONTENT_EXPORT SyntheticPointerActionParams {
 
   Button button() const {
     DCHECK(pointer_action_type_ == PointerActionType::PRESS ||
+           pointer_action_type_ == PointerActionType::MOVE ||
            pointer_action_type_ == PointerActionType::RELEASE ||
            pointer_action_type_ == PointerActionType::CANCEL);
     return button_;

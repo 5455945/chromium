@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,14 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
-class CrxInstaller;
+class CWSInfoServiceInterface;
 class Extension;
 }  // namespace extensions
 
@@ -20,32 +24,26 @@ class Extension;
 // this and override the methods you care about.
 class TestExtensionService : public extensions::ExtensionServiceInterface {
  public:
+  TestExtensionService();
   ~TestExtensionService() override;
 
   // ExtensionServiceInterface implementation.
-  extensions::PendingExtensionManager* pending_extension_manager() override;
-
-  bool UpdateExtension(const extensions::CRXFileInfo& file,
-                       bool file_ownership_passed,
-                       extensions::CrxInstaller** out_crx_installer) override;
   const extensions::Extension* GetPendingExtensionUpdate(
       const std::string& extension_id) const override;
   bool FinishDelayedInstallationIfReady(const std::string& extension_id,
                                         bool install_immediately) override;
-  bool IsExtensionEnabled(const std::string& extension_id) const override;
 
   void CheckManagementPolicy() override;
   void CheckForUpdatesSoon() override;
 
-  void AddExtension(const extensions::Extension* extension) override;
-  void AddComponentExtension(const extensions::Extension* extension) override;
-
-  void UnloadExtension(const std::string& extension_id,
-                       extensions::UnloadedExtensionReason reason) override;
-  void RemoveComponentExtension(const std::string& extension_id) override;
-
   bool UserCanDisableInstalledExtension(
       const std::string& extension_id) override;
+
+  base::WeakPtr<ExtensionServiceInterface> AsWeakPtr() override;
+
+ private:
+  std::unique_ptr<extensions::CWSInfoServiceInterface> cws_info_service_;
+  base::WeakPtrFactory<TestExtensionService> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_TEST_EXTENSION_SERVICE_H_

@@ -1,27 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_PASSWORDS_WELL_KNOWN_CHANGE_PASSWORD_NAVIGATION_THROTTLE_H_
 #define CHROME_BROWSER_UI_PASSWORDS_WELL_KNOWN_CHANGE_PASSWORD_NAVIGATION_THROTTLE_H_
 
-#include <memory>
-
+#include "components/password_manager/core/browser/well_known_change_password/well_known_change_password_state.h"
+#include "components/password_manager/core/browser/well_known_change_password/well_known_change_password_util.h"
 #include "content/public/browser/navigation_throttle.h"
-
-#include "components/password_manager/core/browser/well_known_change_password_state.h"
-#include "components/password_manager/core/browser/well_known_change_password_util.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
 class GURL;
-namespace content {
-class NavigationHandle;
-}  // namespace content
-
-namespace password_manager {
-class AffiliationService;
-class ChangePasswordUrlService;
-}  // namespace password_manager
 
 // This NavigationThrottle checks whether a site supports the
 // .well-known/change-password url. To check whether a site supports the
@@ -34,11 +23,10 @@ class WellKnownChangePasswordNavigationThrottle
     : public content::NavigationThrottle,
       public password_manager::WellKnownChangePasswordStateDelegate {
  public:
-  static std::unique_ptr<WellKnownChangePasswordNavigationThrottle>
-  MaybeCreateThrottleFor(content::NavigationHandle* handle);
+  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
 
   explicit WellKnownChangePasswordNavigationThrottle(
-      content::NavigationHandle* handle);
+      content::NavigationThrottleRegistry& registry);
 
   ~WellKnownChangePasswordNavigationThrottle() override;
 
@@ -65,9 +53,8 @@ class WellKnownChangePasswordNavigationThrottle
   password_manager::WellKnownChangePasswordState
       well_known_change_password_state_{this};
   ukm::SourceId source_id_ = ukm::kInvalidSourceId;
-  password_manager::ChangePasswordUrlService* change_password_url_service_ =
-      nullptr;
-  password_manager::AffiliationService* affiliation_service_ = nullptr;
+  base::WeakPtrFactory<password_manager::WellKnownChangePasswordState>
+      weak_ptr_factory_{&well_known_change_password_state_};
 };
 
 #endif  // CHROME_BROWSER_UI_PASSWORDS_WELL_KNOWN_CHANGE_PASSWORD_NAVIGATION_THROTTLE_H_

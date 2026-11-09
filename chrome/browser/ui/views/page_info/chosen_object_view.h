@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,12 @@
 #define CHROME_BROWSER_UI_VIEWS_PAGE_INFO_CHOSEN_OBJECT_VIEW_H_
 
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "components/page_info/page_info_ui.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
@@ -16,14 +20,15 @@ class ImageButton;
 }
 
 class ChosenObjectViewObserver;
-class PageInfoRowView;
+class RichControlsContainerView;
 
 // A ChosenObjectView is a row in the Page Info bubble that shows an individual
 // object (e.g. a Bluetooth device, a USB device) that the current site has
 // access to.
 class ChosenObjectView : public views::View {
+  METADATA_HEADER(ChosenObjectView, views::View)
+
  public:
-  METADATA_HEADER(ChosenObjectView);
   explicit ChosenObjectView(std::unique_ptr<PageInfoUI::ChosenObjectInfo> info,
                             std::u16string display_name);
   ChosenObjectView(const ChosenObjectView&) = delete;
@@ -31,17 +36,18 @@ class ChosenObjectView : public views::View {
   ~ChosenObjectView() override;
 
   void AddObserver(ChosenObjectViewObserver* observer);
+  void ResetPermission();
 
-  // views::View:
-  void OnThemeChanged() override;
+  std::u16string_view GetObjectNameForTesting() const;
+  views::ImageButton* GetDeleteButtonForTesting() const;
 
  private:
   void UpdateIconImage(bool is_deleted) const;
 
   void ExecuteDeleteCommand();
 
-  views::ImageButton* delete_button_ = nullptr;
-  PageInfoRowView* row_view_ = nullptr;
+  raw_ptr<views::ImageButton> delete_button_ = nullptr;
+  raw_ptr<RichControlsContainerView> row_view_ = nullptr;
 
   base::ObserverList<ChosenObjectViewObserver>::Unchecked observer_list_;
   std::unique_ptr<PageInfoUI::ChosenObjectInfo> info_;

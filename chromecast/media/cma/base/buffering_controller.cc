@@ -1,13 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cma/base/buffering_controller.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
 #include "chromecast/media/cma/base/buffering_state.h"
 #include "media/base/timestamp_constants.h"
@@ -18,7 +18,7 @@ namespace media {
 namespace {
 
 // Maximum time for buffering before we error out the stream.
-constexpr base::TimeDelta kBufferingTimeout = base::TimeDelta::FromMinutes(1);
+constexpr base::TimeDelta kBufferingTimeout = base::Minutes(1);
 
 }  // namespace
 
@@ -43,7 +43,7 @@ BufferingController::BufferingController(
 
 BufferingController::~BufferingController() {
   // Some weak pointers might possibly be invalidated here.
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 }
 
 void BufferingController::UpdateHighLevelThreshold(
@@ -78,7 +78,7 @@ void BufferingController::UpdateHighLevelThreshold(
 
 scoped_refptr<BufferingState> BufferingController::AddStream(
     const std::string& stream_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 
   // Add a new stream to the list of streams being monitored.
   scoped_refptr<BufferingState> buffering_state(new BufferingState(
@@ -120,7 +120,7 @@ base::TimeDelta BufferingController::GetMaxRenderingTime() const {
 }
 
 void BufferingController::Reset() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 
   is_buffering_ = false;
   initial_buffering_ = true;
@@ -131,7 +131,7 @@ void BufferingController::Reset() {
 
 void BufferingController::OnBufferingStateChanged(
     bool force_notification, bool buffering_timeout) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 
   // Log the state of each stream.
   DumpState();

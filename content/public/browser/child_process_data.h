@@ -1,15 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_CHILD_PROCESS_DATA_H_
 #define CONTENT_PUBLIC_BROWSER_CHILD_PROCESS_DATA_H_
 
+#include <optional>
 #include <string>
 
-#include "base/process/process.h"
 #include "content/common/content_export.h"
-#include "sandbox/policy/sandbox_type.h"
+#include "content/public/common/child_process_id.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 
 namespace content {
 
@@ -26,31 +27,26 @@ struct CONTENT_EXPORT ChildProcessData {
   // The non-localized name of the process used for metrics reporting.
   std::string metrics_name;
 
+  // The Sandbox that this process was launched at. May be invalid prior to
+  // process launch.
+  std::optional<sandbox::mojom::Sandbox> sandbox_type;
+
+  const ChildProcessId& GetChildProcessId() const;
+
+  ChildProcessData(int process_type, ChildProcessId id);
+  ~ChildProcessData();
+
+  ChildProcessData(const ChildProcessData&);
+  ChildProcessData& operator=(const ChildProcessData&);
+
+  ChildProcessData(ChildProcessData&&);
+  ChildProcessData& operator=(ChildProcessData&&);
+
+ private:
   // The unique identifier for this child process. This identifier is NOT a
   // process ID, and will be unique for all types of child process for
   // one run of the browser.
-  int id = 0;
-
-  // The SandboxType that this process was launched at. May be invalid prior
-  // to process launch.
-  sandbox::policy::SandboxType sandbox_type;
-
-  const base::Process& GetProcess() const { return process_; }
-  // Since base::Process is non-copyable, the caller has to provide a rvalue.
-  void SetProcess(base::Process process) { process_ = std::move(process); }
-
-  explicit ChildProcessData(int process_type);
-  ~ChildProcessData();
-
-  ChildProcessData(ChildProcessData&& rhs);
-
-  // Copying these objects requires duplicating the handle which is moderately
-  // expensive, so make it an explicit action.
-  ChildProcessData Duplicate() const;
-
- private:
-  // May be invalid if the process isn't started or is the current process.
-  base::Process process_;
+  ChildProcessId child_process_id_;
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "content/browser/web_package/signed_exchange_error.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "net/base/ip_address.h"
 #include "net/base/network_isolation_key.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -18,6 +20,8 @@
 #include "url/gurl.h"
 
 namespace content {
+
+class StoragePartitionImpl;
 
 // SignedExchangeReporter sends a signed exchange report for distributor when
 // the distributor of signed exchange has set Network Error Logging (NEL) policy
@@ -28,8 +32,11 @@ class CONTENT_EXPORT SignedExchangeReporter {
       const GURL& outer_url,
       const std::string& referrer,
       const network::mojom::URLResponseHead& response,
-      const net::NetworkIsolationKey& network_isolation_key,
-      int frame_tree_node_id);
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      FrameTreeNodeId frame_tree_node_id);
+
+  SignedExchangeReporter(const SignedExchangeReporter&) = delete;
+  SignedExchangeReporter& operator=(const SignedExchangeReporter&) = delete;
 
   ~SignedExchangeReporter();
 
@@ -44,19 +51,18 @@ class CONTENT_EXPORT SignedExchangeReporter {
   void ReportHeaderIntegrityMismatch();
 
  private:
-  SignedExchangeReporter(const GURL& outer_url,
-                         const std::string& referrer,
-                         const network::mojom::URLResponseHead& response,
-                         const net::NetworkIsolationKey& network_isolation_key,
-                         int frame_tree_node_id);
+  SignedExchangeReporter(
+      const GURL& outer_url,
+      const std::string& referrer,
+      const network::mojom::URLResponseHead& response,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      FrameTreeNodeId frame_tree_node_id);
 
   network::mojom::SignedExchangeReportPtr report_;
   const base::TimeTicks request_start_;
-  const net::NetworkIsolationKey network_isolation_key_;
-  const int frame_tree_node_id_;
+  const net::NetworkAnonymizationKey network_anonymization_key_;
+  base::WeakPtr<StoragePartitionImpl> storage_partition_;
   net::IPAddress cert_server_ip_address_;
-
-  DISALLOW_COPY_AND_ASSIGN(SignedExchangeReporter);
 };
 
 }  // namespace content

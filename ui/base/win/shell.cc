@@ -1,31 +1,32 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/win/shell.h"
 
-#include <dwmapi.h>
+// clang-format off
 #include <shlobj.h>  // Must be before propkey.
+// clang-format on
 
+#include <dwmapi.h>
 #include <propkey.h>
 #include <shellapi.h>
 #include <wrl/client.h>
 
-#include "base/command_line.h"
 #include "base/debug/alias.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/native_library.h"
-#include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions_win.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/scoped_thread_priority.h"
+#include "base/win/com_init_util.h"
+#include "base/win/scoped_co_mem.h"
 #include "base/win/win_util.h"
-#include "base/win/windows_version.h"
 #include "ui/base/ui_base_switches.h"
 
-namespace ui {
-namespace win {
+namespace ui::win {
 
 namespace {
 
@@ -43,17 +44,44 @@ bool InvokeShellExecute(const std::wstring& path,
                         const std::wstring& working_directory,
                         const std::wstring& args,
                         const std::wstring& verb,
+                        const std::wstring& class_name,
                         DWORD mask) {
+  // This can marshal to shell extensions or out-of-process handlers (e.g.,
+  // a hand-off via the Windows DDE protocol) that require the calling
+  // thread to be a COM Single-Threaded Apartment.
+  base::win::AssertComApartmentType(base::win::ComApartmentType::STA);
+
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::WILL_BLOCK);
-  SHELLEXECUTEINFO sei = {sizeof(sei)};
+
+  SHELLEXECUTEINFO sei = {};
+  sei.cbSize = sizeof(sei);
+
+  if (!class_name.empty()) {
+    sei.lpClass = class_name.c_str();
+    mask = (mask | SEE_MASK_CLASSNAME);
+  }
+
   sei.fMask = mask;
   sei.nShow = SW_SHOWNORMAL;
   sei.lpVerb = (verb.empty() ? nullptr : verb.c_str());
-  sei.lpFile = path.c_str();
   sei.lpDirectory =
       (working_directory.empty() ? nullptr : working_directory.c_str());
   sei.lpParameters = (args.empty() ? nullptr : args.c_str());
+
+  base::win::ScopedCoMem<ITEMIDLIST_ABSOLUTE> path_id_list;
+  // ShellExecute will perform legacy resolution of a path if it can't detect
+  // an extension from a given path, appending .pif, .com, .exe, .bat, .lnk,
+  // and .cmd with an assumption the file is a truncated invocable path
+  // (Example: "chrome" referring to "chrome.exe"). ShellExecute will perform
+  // this resolution even if the path refers to a valid file. Chromium
+  // expects paths to be fully qualified and does not need this resolution.
+  if (FAILED(::SHParseDisplayName(path.c_str(), nullptr, &path_id_list,
+                                  SFGAO_FILESYSTEM, nullptr))) {
+    return false;
+  }
+  sei.fMask |= SEE_MASK_IDLIST;
+  sei.lpIDList = path_id_list.get();
 
   // Mitigate the issues caused by loading DLLs on a background thread
   // (http://crbug/973868).
@@ -67,7 +95,7 @@ bool InvokeShellExecute(const std::wstring& path,
 bool OpenFileViaShell(const base::FilePath& full_path) {
   // Invoke the default verb on the file with no arguments.
   return InvokeShellExecute(full_path.value(), full_path.DirName().value(),
-                            std::wstring(), std::wstring(),
+                            std::wstring(), std::wstring(), std::wstring(),
                             kDefaultShellExecuteFlags);
 }
 
@@ -75,12 +103,12 @@ bool OpenFolderViaShell(const base::FilePath& full_path) {
   // The "explore" verb causes the folder at |full_path| to be displayed in a
   // file browser. This will fail if |full_path| is not a directory.
   return InvokeShellExecute(full_path.value(), full_path.value(),
-                            std::wstring(), L"explore",
+                            std::wstring(), L"explore", L"folder",
                             kDefaultShellExecuteFlags);
 }
 
 bool PreventWindowFromPinning(HWND hwnd) {
-  DCHECK(hwnd);
+  CHECK(hwnd, base::NotFatalUntil::M163);
 
   Microsoft::WRL::ComPtr<IPropertyStore> pps;
   if (FAILED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&pps))))
@@ -98,32 +126,30 @@ void SetAppDetailsForWindow(const std::wstring& app_id,
                             const std::wstring& relaunch_command,
                             const std::wstring& relaunch_display_name,
                             HWND hwnd) {
-  DCHECK(hwnd);
+  CHECK(hwnd, base::NotFatalUntil::M163);
 
   Microsoft::WRL::ComPtr<IPropertyStore> pps;
   if (FAILED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&pps))))
     return;
 
   if (!app_id.empty())
-    base::win::SetAppIdForPropertyStore(pps.Get(), app_id.c_str());
+    base::win::SetAppIdForPropertyStore(pps.Get(), app_id);
   if (!app_icon_path.empty()) {
     // Always add the icon index explicitly to prevent bad interaction with the
     // index notation when file path has commas.
     base::win::SetStringValueForPropertyStore(
         pps.Get(), PKEY_AppUserModel_RelaunchIconResource,
-        base::StringPrintf(L"%ls,%d", app_icon_path.value().c_str(),
-                           app_icon_index)
-            .c_str());
+        base::StrCat({app_icon_path.value(), L",",
+                      base::NumberToWString(app_icon_index)}));
   }
   if (!relaunch_command.empty()) {
     base::win::SetStringValueForPropertyStore(
-        pps.Get(), PKEY_AppUserModel_RelaunchCommand,
-        relaunch_command.c_str());
+        pps.Get(), PKEY_AppUserModel_RelaunchCommand, relaunch_command);
   }
   if (!relaunch_display_name.empty()) {
     base::win::SetStringValueForPropertyStore(
         pps.Get(), PKEY_AppUserModel_RelaunchDisplayNameResource,
-        relaunch_display_name.c_str());
+        relaunch_display_name);
   }
 }
 
@@ -147,7 +173,7 @@ void SetRelaunchDetailsForWindow(const std::wstring& relaunch_command,
 }
 
 void ClearWindowPropertyStore(HWND hwnd) {
-  DCHECK(hwnd);
+  CHECK(hwnd, base::NotFatalUntil::M163);
 
   Microsoft::WRL::ComPtr<IPropertyStore> pps;
   if (FAILED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&pps))))
@@ -169,31 +195,8 @@ void ClearWindowPropertyStore(HWND hwnd) {
     return;
 
   // Verify none of the keys are leaking.
-  DCHECK(FAILED(pps->GetCount(&property_count)) || property_count == 0);
+  CHECK(FAILED(pps->GetCount(&property_count)) || property_count == 0,
+        base::NotFatalUntil::M163);
 }
 
-bool IsAeroGlassEnabled() {
-  // For testing in Win8 (where it is not possible to disable composition) the
-  // user can specify this command line switch to mimic the behavior.  In this
-  // mode, cross-HWND transparency is not supported and various types of
-  // widgets fallback to more simplified rendering behavior.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableDwmComposition))
-    return false;
-
-  // If composition is not enabled, we behave like on XP.
-  return IsDwmCompositionEnabled();
-}
-
-bool IsDwmCompositionEnabled() {
-  // As of Windows 8, DWM composition is always enabled.
-  // In Windows 7 this can change at runtime.
-  if (base::win::GetVersion() >= base::win::Version::WIN8) {
-    return true;
-  }
-  BOOL is_enabled;
-  return SUCCEEDED(DwmIsCompositionEnabled(&is_enabled)) && is_enabled;
-}
-
-}  // namespace win
-}  // namespace ui
+}  // namespace ui::win

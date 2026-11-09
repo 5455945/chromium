@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,16 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/cdm_context.h"
 #include "media/base/demuxer_stream.h"
@@ -26,47 +25,40 @@
 #include "media/base/video_decoder.h"
 #include "media/filters/decoder_stream_traits.h"
 #include "media/filters/decrypting_demuxer_stream.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace media {
 
 namespace {
 
-const char kSelectDecoderTrace[] = "DecoderSelector::SelectDecoder";
-
-bool SkipDecoderForRTC(const AudioDecoderConfig& /*config*/,
-                       const AudioDecoder& /*decoder*/) {
-  return false;
+perfetto::NamedTrack GetTracingTrack(
+    const DecoderSelector<DemuxerStream::VIDEO>* selector) {
+  return perfetto::NamedTrack::FromPointer("VideoDecoderSelector", selector);
 }
 
-bool SkipDecoderForRTC(const VideoDecoderConfig& config,
-                       const VideoDecoder& decoder) {
-  // For now, we assume that RTC decoders are able to decode non-RTC streams,
-  // presumably by configuring themselves based on the config's rtc bit.  Since
-  // no decoders take any action at all based on it, this is as good as any.
-  return config.is_rtc() && !decoder.IsOptimizedForRTC();
+perfetto::NamedTrack GetTracingTrack(
+    const DecoderSelector<DemuxerStream::AUDIO>* selector) {
+  return perfetto::NamedTrack::FromPointer("AudioDecoderSelector", selector);
 }
 
-template <typename ConfigT, typename DecoderT>
-DecoderPriority NormalDecoderPriority(const ConfigT& config,
-                                      const DecoderT& decoder) {
-  if (SkipDecoderForRTC(config, decoder))
-    return DecoderPriority::kSkipped;
+constexpr char kSelectDecoderTrace[] = "DecoderSelector::SelectDecoder";
 
-  return DecoderPriority::kNormal;
-}
+enum class DecoderPriority {
+  // `kNormal` indicates that the current decoder should continue through with
+  // selection in it's current order.
+  kNormal,
 
-DecoderPriority ResolutionBasedDecoderPriority(const VideoDecoderConfig& config,
-                                               const VideoDecoder& decoder) {
-#if defined(OS_ANDROID)
+  // `kDeprioritized` indicates that the current decoder should only be selected
+  // if other decoders have failed.
+  kDeprioritized,
+
+  // `kSkipped` indicates that the current decoder should not be used at all.
+  kSkipped,
+};
+
+DecoderPriority SelectDecoderPriority(const VideoDecoderConfig& config,
+                                      const VideoDecoder& decoder) {
   constexpr auto kSoftwareDecoderHeightCutoff = 360;
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
-  constexpr auto kSoftwareDecoderHeightCutoff = 360;
-#else
-  constexpr auto kSoftwareDecoderHeightCutoff = 720;
-#endif
-
-  if (SkipDecoderForRTC(config, decoder))
-    return DecoderPriority::kSkipped;
 
   // We only do a height check to err on the side of prioritizing platform
   // decoders.
@@ -80,37 +72,10 @@ DecoderPriority ResolutionBasedDecoderPriority(const VideoDecoderConfig& config,
              : DecoderPriority::kDeprioritized;
 }
 
-template <typename ConfigT, typename DecoderT>
-DecoderPriority SkipNonPlatformDecoders(const ConfigT& config,
-                                        const DecoderT& decoder) {
-  if (SkipDecoderForRTC(config, decoder))
-    return DecoderPriority::kSkipped;
-
-  return decoder.IsPlatformDecoder() ? DecoderPriority::kNormal
-                                     : DecoderPriority::kSkipped;
-}
-
-void SetDefaultDecoderPriorityCB(VideoDecoderSelector::DecoderPriorityCB* out) {
-  if (base::FeatureList::IsEnabled(kForceHardwareVideoDecoders)) {
-    *out = base::BindRepeating(
-        SkipNonPlatformDecoders<VideoDecoderConfig, VideoDecoder>);
-  } else if (base::FeatureList::IsEnabled(kResolutionBasedDecoderPriority)) {
-    *out = base::BindRepeating(ResolutionBasedDecoderPriority);
-  } else {
-    *out = base::BindRepeating(
-        NormalDecoderPriority<VideoDecoderConfig, VideoDecoder>);
-  }
-}
-
-void SetDefaultDecoderPriorityCB(AudioDecoderSelector::DecoderPriorityCB* out) {
-  if (base::FeatureList::IsEnabled(kForceHardwareAudioDecoders)) {
-    *out = base::BindRepeating(
-        SkipNonPlatformDecoders<AudioDecoderConfig, AudioDecoder>);
-  } else {
-    // Platform audio decoders are not currently prioritized or deprioritized
-    *out = base::BindRepeating(
-        NormalDecoderPriority<AudioDecoderConfig, AudioDecoder>);
-  }
+DecoderPriority SelectDecoderPriority(const AudioDecoderConfig& config,
+                                      const AudioDecoder& decoder) {
+  // Platform audio decoders are not currently prioritized or deprioritized
+  return DecoderPriority::kNormal;
 }
 
 }  // namespace
@@ -119,12 +84,13 @@ template <DemuxerStream::Type StreamType>
 DecoderSelector<StreamType>::DecoderSelector(
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     CreateDecodersCB create_decoders_cb,
-    MediaLog* media_log)
+    MediaLog* media_log,
+    bool enable_priority_based_selection)
     : task_runner_(std::move(task_runner)),
       create_decoders_cb_(std::move(create_decoders_cb)),
-      media_log_(media_log) {
+      media_log_(MediaLog::CloneSafely(media_log)),
+      enable_priority_based_selection_(enable_priority_based_selection) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
-  SetDefaultDecoderPriorityCB(&decoder_priority_cb_);
 }
 
 template <DemuxerStream::Type StreamType>
@@ -132,7 +98,7 @@ DecoderSelector<StreamType>::~DecoderSelector() {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (select_decoder_cb_)
-    ReturnNullDecoder();
+    ReturnSelectionError(DecoderStatus::Codes::kFailed);
 }
 
 template <DemuxerStream::Type StreamType>
@@ -151,9 +117,10 @@ void DecoderSelector<StreamType>::Initialize(StreamTraits* traits,
 }
 
 template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::SelectDecoder(
+void DecoderSelector<StreamType>::SelectDecoderInternal(
     SelectDecoderCB select_decoder_cb,
-    typename Decoder::OutputCB output_cb) {
+    typename Decoder::OutputCB output_cb,
+    bool needs_new_decoders) {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(select_decoder_cb);
@@ -162,25 +129,43 @@ void DecoderSelector<StreamType>::SelectDecoder(
   output_cb_ = std::move(output_cb);
   config_ = traits_->GetDecoderConfig(stream_);
 
-  TRACE_EVENT_ASYNC_BEGIN2("media", kSelectDecoderTrace, this, "type",
-                           DemuxerStream::GetTypeName(StreamType), "config",
-                           config_.AsHumanReadableString());
+  TRACE_EVENT_BEGIN("media", kSelectDecoderTrace, GetTracingTrack(this), "type",
+                    DemuxerStream::GetTypeName(StreamType), "config",
+                    config_.AsHumanReadableString());
 
   if (!config_.IsValidConfig()) {
     DLOG(ERROR) << "Invalid stream config";
-    ReturnNullDecoder();
+    ReturnSelectionError(DecoderStatus::Codes::kUnsupportedConfig);
     return;
   }
 
-  // If this is the first selection (ever or since FinalizeDecoderSelection()),
-  // start selection with the full list of potential decoders.
-  if (!is_selecting_decoders_) {
-    is_selecting_decoders_ = true;
-    decoder_selection_start_ = base::TimeTicks::Now();
+  if (needs_new_decoders) {
+    decode_failure_reinit_cause_ = std::nullopt;
+    ran_out_of_decoders_ = false;
     CreateDecoders();
   }
 
-  InitializeDecoder();
+  GetAndInitializeNextDecoder();
+}
+
+template <DemuxerStream::Type StreamType>
+void DecoderSelector<StreamType>::BeginDecoderSelection(
+    SelectDecoderCB select_decoder_cb,
+    typename Decoder::OutputCB output_cb) {
+  SelectDecoderInternal(std::move(select_decoder_cb), std::move(output_cb),
+                        /*needs_new_decoders = */ true);
+}
+
+template <DemuxerStream::Type StreamType>
+void DecoderSelector<StreamType>::ResumeDecoderSelection(
+    SelectDecoderCB select_decoder_cb,
+    typename Decoder::OutputCB output_cb,
+    DecoderStatus&& reinit_cause) {
+  DVLOG(2) << __func__;
+  if (!decode_failure_reinit_cause_.has_value())
+    decode_failure_reinit_cause_ = std::move(reinit_cause);
+  SelectDecoderInternal(std::move(select_decoder_cb), std::move(output_cb),
+                        /*needs_new_decoders = */ false);
 }
 
 template <DemuxerStream::Type StreamType>
@@ -188,47 +173,10 @@ void DecoderSelector<StreamType>::FinalizeDecoderSelection() {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!select_decoder_cb_);
-  is_selecting_decoders_ = false;
-
-  const std::string decoder_type = is_platform_decoder_ ? "HW" : "SW";
-  const std::string stream_type =
-      StreamType == DemuxerStream::AUDIO ? "Audio" : "Video";
-
-  if (is_selecting_for_config_change_) {
-    is_selecting_for_config_change_ = false;
-    base::UmaHistogramTimes("Media.ConfigChangeDecoderSelectionTime." +
-                                stream_type + "." + decoder_type,
-                            base::TimeTicks::Now() - decoder_selection_start_);
-  } else {
-    // Initial selection
-    base::UmaHistogramTimes(
-        "Media.InitialDecoderSelectionTime." + stream_type + "." + decoder_type,
-        base::TimeTicks::Now() - decoder_selection_start_);
-  }
-
-  if (is_codec_changing_) {
-    is_codec_changing_ = false;
-    base::UmaHistogramTimes(
-        "Media.MSE.CodecChangeTime." + stream_type + "." + decoder_type,
-        base::TimeTicks::Now() - codec_change_start_);
-  }
 
   // Discard any remaining decoder instances, they won't be used.
   decoders_.clear();
-}
-
-template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::NotifyConfigChanged() {
-  DVLOG(2) << __func__;
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  is_selecting_for_config_change_ = true;
-
-  DecoderConfig config = traits_->GetDecoderConfig(stream_);
-  if (config.codec() != config_.codec()) {
-    is_codec_changing_ = true;
-    codec_change_start_ = base::TimeTicks::Now();
-  }
+  prefer_prepended_platform_decoder_ = false;
 }
 
 template <DemuxerStream::Type StreamType>
@@ -236,19 +184,13 @@ void DecoderSelector<StreamType>::PrependDecoder(
     std::unique_ptr<Decoder> decoder) {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(decoders_.empty());
 
-  // Decoders inserted directly should be given priority over those returned by
-  // |create_decoders_cb_|.
+  // Prefer the existing decoder if it's a platform decoder, regardless of the
+  // current resolution. This avoids the potential for graphical glitches when
+  // temporaily adapting below the hardware decoder threshold.
+  prefer_prepended_platform_decoder_ = decoder->IsPlatformDecoder();
   decoders_.insert(decoders_.begin(), std::move(decoder));
-
-  if (is_selecting_decoders_)
-    FilterAndSortAvailableDecoders();
-}
-
-template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::OverrideDecoderPriorityCBForTesting(
-    DecoderPriorityCB decoder_priority_cb) {
-  decoder_priority_cb_ = std::move(decoder_priority_cb);
 }
 
 template <DemuxerStream::Type StreamType>
@@ -264,7 +206,7 @@ void DecoderSelector<StreamType>::CreateDecoders() {
 }
 
 template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::InitializeDecoder() {
+void DecoderSelector<StreamType>::GetAndInitializeNextDecoder() {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!decoder_);
@@ -277,19 +219,26 @@ void DecoderSelector<StreamType>::InitializeDecoder() {
       return;
     }
 
-    ReturnNullDecoder();
+    if (decode_failure_reinit_cause_.has_value()) {
+      ReturnSelectionError(std::move(*decode_failure_reinit_cause_));
+    } else if (ran_out_of_decoders_) {
+      ReturnSelectionError(DecoderStatus::Codes::kTooManyDecoders);
+    } else {
+      ReturnSelectionError(DecoderStatus::Codes::kUnsupportedConfig);
+    }
     return;
   }
 
   // Initialize the first decoder on the list.
   decoder_ = std::move(decoders_.front());
   decoders_.erase(decoders_.begin());
-  is_platform_decoder_ = decoder_->IsPlatformDecoder();
-  TRACE_EVENT_ASYNC_STEP_INTO0("media", kSelectDecoderTrace, this,
-                               GetDecoderName(decoder_->GetDecoderType()));
+  TRACE_EVENT_BEGIN(
+      "media",
+      perfetto::StaticString(GetDecoderName(decoder_->GetDecoderType())),
+      GetTracingTrack(this));
 
   DVLOG(2) << __func__ << ": initializing " << decoder_->GetDecoderType();
-  const bool is_live = stream_->liveness() == DemuxerStream::LIVENESS_LIVE;
+  const bool is_live = stream_->liveness() == StreamLiveness::kLive;
   traits_->InitializeDecoder(
       decoder_.get(), config_, is_live, cdm_context_,
       base::BindOnce(&DecoderSelector<StreamType>::OnDecoderInitializeDone,
@@ -298,36 +247,44 @@ void DecoderSelector<StreamType>::InitializeDecoder() {
 }
 
 template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::OnDecoderInitializeDone(Status status) {
+void DecoderSelector<StreamType>::OnDecoderInitializeDone(
+    DecoderStatus status) {
+  DCHECK(decoder_);
   DVLOG(2) << __func__ << ": " << decoder_->GetDecoderType()
-           << " success=" << std::hex << status.code();
+           << " success=" << static_cast<int>(status.code());
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!status.is_ok()) {
-    // TODO(tmathmeyer) this was too noisy in media log. Batch all the logs
-    // together and then send them as an informational notice instead of
-    // using NotifyError.
+    if (status.code() == DecoderStatus::Codes::kTooManyDecoders) {
+      ran_out_of_decoders_ = true;
+    }
+
+    // Note: Don't track this decode status, as it is the result of decoder
+    // selection (initialization) failure.
     MEDIA_LOG(INFO, media_log_)
-        << "Failed to initialize " << decoder_->GetDecoderType();
+        << "Cannot select " << decoder_->GetDecoderType() << " for "
+        << DemuxerStream::GetTypeName(StreamType)
+        << " decoding. status=" << status;
 
     // Try the next decoder on the list.
-    decoder_.reset();
-    InitializeDecoder();
+    decoder_ = nullptr;
+    GetAndInitializeNextDecoder();
     return;
   }
 
-  RunSelectDecoderCB();
+  RunSelectDecoderCB(std::move(decoder_));
 }
 
 template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::ReturnNullDecoder() {
+void DecoderSelector<StreamType>::ReturnSelectionError(DecoderStatus error) {
   DVLOG(1) << __func__ << ": No decoder selected";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!error.is_ok());
 
   decrypting_demuxer_stream_.reset();
-  decoder_.reset();
   decoders_.clear();
-  RunSelectDecoderCB();
+  prefer_prepended_platform_decoder_ = false;
+  RunSelectDecoderCB(base::unexpected(std::move(error)));
 }
 
 template <DemuxerStream::Type StreamType>
@@ -335,11 +292,10 @@ void DecoderSelector<StreamType>::InitializeDecryptingDemuxerStream() {
   DCHECK(decoders_.empty());
   DCHECK(config_.is_encrypted());
   DCHECK(cdm_context_);
-  TRACE_EVENT_ASYNC_STEP_INTO0("media", kSelectDecoderTrace, this,
-                               "DecryptingDemuxerStream");
+  TRACE_EVENT_BEGIN("media", "DecryptingDemuxerStream", GetTracingTrack(this));
 
   decrypting_demuxer_stream_ = std::make_unique<DecryptingDemuxerStream>(
-      task_runner_, media_log_, waiting_cb_);
+      task_runner_, media_log_.get(), waiting_cb_);
 
   decrypting_demuxer_stream_->Initialize(
       stream_, cdm_context_,
@@ -356,7 +312,8 @@ void DecoderSelector<StreamType>::OnDecryptingDemuxerStreamInitializeDone(
 
   if (status != PIPELINE_OK) {
     // Since we already tried every potential decoder without DDS, give up.
-    ReturnNullDecoder();
+    ReturnSelectionError(
+        {DecoderStatus::Codes::kUnsupportedEncryptionMode, std::move(status)});
     return;
   }
 
@@ -371,24 +328,28 @@ void DecoderSelector<StreamType>::OnDecryptingDemuxerStreamInitializeDone(
 
   // Try decoder selection again now that DDS is being used.
   CreateDecoders();
-  InitializeDecoder();
+  GetAndInitializeNextDecoder();
 }
 
 template <DemuxerStream::Type StreamType>
-void DecoderSelector<StreamType>::RunSelectDecoderCB() {
+void DecoderSelector<StreamType>::RunSelectDecoderCB(
+    DecoderOrError decoder_or_error) {
   DCHECK(select_decoder_cb_);
-  TRACE_EVENT_ASYNC_END2(
-      "media", kSelectDecoderTrace, this, "type",
+  TRACE_EVENT_END(
+      "media", GetTracingTrack(this), "type",
       DemuxerStream::GetTypeName(StreamType), "decoder",
       base::StringPrintf(
           "%s (%s)",
-          decoder_ ? GetDecoderName(decoder_->GetDecoderType()).c_str()
-                   : "null",
+          decoder_or_error.has_value()
+              ? GetDecoderName(decoder_or_error.value()->GetDecoderType())
+              : "null",
           decrypting_demuxer_stream_ ? "encrypted" : "unencrypted"));
+  TRACE_EVENT_END("media",
+                  /* kSelectDecoderTrace */ GetTracingTrack(this));
 
   task_runner_->PostTask(
       FROM_HERE,
-      base::BindOnce(std::move(select_decoder_cb_), std::move(decoder_),
+      base::BindOnce(std::move(select_decoder_cb_), std::move(decoder_or_error),
                      std::move(decrypting_demuxer_stream_)));
 }
 
@@ -397,22 +358,39 @@ void DecoderSelector<StreamType>::FilterAndSortAvailableDecoders() {
   std::vector<std::unique_ptr<Decoder>> decoders = std::move(decoders_);
   std::vector<std::unique_ptr<Decoder>> deprioritized_decoders;
 
+  size_t decoder_index = 0;
   for (auto& decoder : decoders) {
-    // Skip the decoder if this decoder doesn't support encryption for a
-    // decrypting config
-    if (config_.is_encrypted() && !decoder->SupportsDecryption())
+    ++decoder_index;
+
+    // If the config is encrypted, skip decoders which don't support encryption.
+    if (config_.is_encrypted() && !decoder->SupportsDecryption()) {
       continue;
+    }
+
+    // If the stream doesn't support config changes, prioritize decoder
+    // selection based on resolution. Experiments show this greatly improves
+    // rebuffering for src= playbacks without config changes, but doesn't help
+    // and may hurt Media Source based playbacks.
+    if (!enable_priority_based_selection_ || stream_->SupportsConfigChanges()) {
+      decoders_.push_back(std::move(decoder));
+      continue;
+    }
+
+    if (prefer_prepended_platform_decoder_ && decoder_index == 1) {
+      decoders_.push_back(std::move(decoder));
+      continue;
+    }
 
     // Run the predicate on this decoder.
-    switch (decoder_priority_cb_.Run(config_, *decoder)) {
+    switch (SelectDecoderPriority(config_, *decoder)) {
       case DecoderPriority::kSkipped:
         continue;
       case DecoderPriority::kNormal:
         decoders_.push_back(std::move(decoder));
-        break;
+        continue;
       case DecoderPriority::kDeprioritized:
         deprioritized_decoders.push_back(std::move(decoder));
-        break;
+        continue;
     }
   }
 

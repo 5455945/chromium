@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,17 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "ash/constants/ash_paths.h"
+#include "base/check.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/post_task.h"
+#include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner.h"
-#include "base/task_runner_util.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/quirks/pref_names.h"
@@ -44,6 +44,12 @@ base::FilePath CheckForIccFile(const base::FilePath& path) {
   return exists ? path : base::FilePath();
 }
 
+base::FilePath GetDisplayProfilePath() {
+  base::FilePath path;
+  CHECK(base::PathService::Get(ash::DIR_DEVICE_DISPLAY_PROFILES, &path));
+  return path;
+}
+
 }  // namespace
 
 std::string IdToHexString(int64_t product_id) {
@@ -58,11 +64,12 @@ std::string IdToFileName(int64_t product_id) {
 // QuirksManager
 
 QuirksManager::QuirksManager(
-    std::unique_ptr<Delegate> delegate,
+    std::string api_key,
     PrefService* local_state,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : waiting_for_login_(true),
-      delegate_(std::move(delegate)),
+      display_profile_path_(GetDisplayProfilePath()),
+      api_key_(std::move(api_key)),
       task_runner_(base::ThreadPool::CreateTaskRunner({base::MayBlock()})),
       local_state_(local_state),
       url_loader_factory_(std::move(url_loader_factory)) {}
@@ -74,10 +81,10 @@ QuirksManager::~QuirksManager() {
 
 // static
 void QuirksManager::Initialize(
-    std::unique_ptr<Delegate> delegate,
+    std::string api_key,
     PrefService* local_state,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  manager_ = new QuirksManager(std::move(delegate), local_state,
+  manager_ = new QuirksManager(std::move(api_key), local_state,
                                std::move(url_loader_factory));
 }
 
@@ -108,7 +115,7 @@ void QuirksManager::OnLoginCompleted() {
     return;
 
   waiting_for_login_ = false;
-  if (!clients_.empty() && !QuirksEnabled()) {
+  if (!clients_.empty() && !enabled_) {
     VLOG(2) << clients_.size() << " client(s) deleted.";
     clients_.clear();
   }
@@ -123,7 +130,7 @@ void QuirksManager::RequestIccProfilePath(
     RequestFinishedCallback on_request_finished) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  if (!QuirksEnabled()) {
+  if (!enabled_) {
     VLOG(1) << "Quirks Client disabled.";
     std::move(on_request_finished).Run(base::FilePath(), false);
     return;
@@ -136,10 +143,9 @@ void QuirksManager::RequestIccProfilePath(
   }
 
   std::string name = IdToFileName(product_id);
-  base::PostTaskAndReplyWithResult(
-      task_runner_.get(), FROM_HERE,
-      base::BindOnce(&CheckForIccFile,
-                     delegate_->GetDisplayProfileDirectory().Append(name)),
+  task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&CheckForIccFile, display_profile_path_.Append(name)),
       base::BindOnce(&QuirksManager::OnIccFilePathRequestCompleted,
                      weak_ptr_factory_.GetWeakPtr(), product_id, display_name,
                      std::move(on_request_finished)));
@@ -168,15 +174,15 @@ void QuirksManager::OnIccFilePathRequestCompleted(
     return;
   }
 
-  double last_check = 0.0;
-  local_state_->GetDictionary(prefs::kQuirksClientLastServerCheck)
-      ->GetDouble(IdToHexString(product_id), &last_check);
+  double last_check = local_state_->GetDict(prefs::kQuirksClientLastServerCheck)
+                          .FindDouble(IdToHexString(product_id))
+                          .value_or(0.0);
 
   const base::TimeDelta time_since =
-      base::Time::Now() - base::Time::FromDoubleT(last_check);
+      base::Time::Now() - base::Time::FromSecondsSinceUnixEpoch(last_check);
 
   // Don't need server check if we've checked within last 30 days.
-  if (time_since < base::TimeDelta::FromDays(kDaysBetweenServerChecks)) {
+  if (time_since < base::Days(kDaysBetweenServerChecks)) {
     VLOG(2) << time_since.InDays()
             << " days since last Quirks Server check for display "
             << IdToHexString(product_id);
@@ -185,7 +191,7 @@ void QuirksManager::OnIccFilePathRequestCompleted(
   }
 
   // Create and start a client to download file.
-  QuirksClient* client = new QuirksClient(product_id, display_name,
+  QuirksClient* client = new QuirksClient(product_id, display_name, api_key_,
                                           std::move(on_request_finished), this);
   clients_.insert(base::WrapUnique(client));
   if (!waiting_for_login_)
@@ -194,19 +200,15 @@ void QuirksManager::OnIccFilePathRequestCompleted(
     VLOG(2) << "Quirks Client created; waiting for login to begin download.";
 }
 
-bool QuirksManager::QuirksEnabled() {
-  if (!delegate_->DevicePolicyEnabled()) {
-    VLOG(2) << "Quirks Client disabled by device policy.";
-    return false;
-  }
-  return true;
+void QuirksManager::SetEnabled(bool enabled) {
+  enabled_ = enabled;
 }
 
 void QuirksManager::SetLastServerCheck(int64_t product_id,
                                        const base::Time& last_check) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  DictionaryPrefUpdate dict(local_state_, prefs::kQuirksClientLastServerCheck);
-  dict->SetDouble(IdToHexString(product_id), last_check.ToDoubleT());
+  ScopedDictPrefUpdate dict(local_state_, prefs::kQuirksClientLastServerCheck);
+  dict->Set(IdToHexString(product_id), last_check.InSecondsFSinceUnixEpoch());
 }
 
 }  // namespace quirks

@@ -1,13 +1,17 @@
 # Chromium for Arm Macs
 
-This document describes the state of Chromium on Apple Silicon Macs.
+Arm Macs are fully supported. You can build Chromium on an Arm Mac. You
+can cross-build for Arm on an Intel Mac. You can cross-build for Intel on
+an Arm Mac. You don't need Rosetta for anything.
 
-There's a [bot](https://ci.chromium.org/p/chromium/builders/ci/mac-arm64-rel)
-that builds for Arm. It cross-builds on an Intel machine.
+There's a [main waterfall
+bot](https://ci.chromium.org/p/chromium/builders/ci/mac-arm64-rel)
+that builds for Arm. It cross-builds on an x86-64 machine.
 
-There's also a [tester
-bot](https://ci.chromium.org/p/chromium/builders/ci/mac-arm64-rel-tests)
-that continuously runs tests. Most tests pass.
+There's a [main waterfall
+bot](https://ci.chromium.org/p/chromium/builders/ci/mac-arm64-on-arm64-rel)
+that builds for Arm on an Arm bot as well. This bot does not have Rosetta
+installed.
 
 ## Building _for_ Arm Macs
 
@@ -33,12 +37,6 @@ valid: -67050`. To fix this, open a terminal and run
     % cd ~/Downloads && xattr -rc Chromium.app
 
 After that, it should start fine.
-
-As an alternative to building locally, changes can be submitted to the opt-in
-[mac-arm64-rel
-trybot](https://ci.chromium.org/p/chromium/builders/try/mac-arm64-rel). A small
-number of [swarming bots](https://goto.corp.google.com/run-on-dtk) are also
-available for Googlers to run tests on.
 
 Arm Mac-specific bugs are tagged with the
 [Mac-ARM64 label](https://crbug.com/?q=label%3Amac-arm64).
@@ -75,24 +73,4 @@ all-encompassing `gn` configuration because:
 
 ## Building _on_ arm Macs
 
-It's possible to build _on_ an arm Mac, without Rosetta. However, this
-configuration is not yet covered by bots, so it might be broken from time to
-time. If you run into issues, complain on
-[https://crbug.com/1103236](https://crbug.com/1103236).
-
-Also, some of the hermetic binaries in `depot_tools` aren't available for
-Arm yet. Most notably, some parts of `vpython` are not yet working ([tracking
-bug](https://crbug.com/1103275)). The main effect of this is that some
-presubmits don't yet work, and **you need to use
-`git cl upload --bypass-hooks`** to upload CLs.
-
-(The build will also use `git` from `PATH`, instead of `depot_tools`'s
-hermetic versions for now.)
-
-Other than that, checking out and building (with goma too) should just work.
-You should be able to run `fetch chromium` normally, and then build, using
-`gn`, `ninja` etc like normal.
-
-gtest-based binaries should build, run, and mostly pass. Web tests probably
-don't work yet due to lack of an Arm Apache binary
-([tracking bug](https://crbug.com/1190885)).
+This just works these days, without any caveats.

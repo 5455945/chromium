@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,19 @@
 #include <set>
 #include <string>
 
-#include "chrome/browser/profiles/profile.h"
-#include "ui/base/ime/chromeos/input_method_descriptor.h"
+#include "base/memory/raw_ref.h"
+#include "ui/base/ime/ash/input_method_descriptor.h"
+
+class PrefService;
 
 namespace arc {
 
 // A thin wrapper of the input method related prefs.
 class InputMethodPrefs {
  public:
-  explicit InputMethodPrefs(Profile* profile);
+  // `prefs` is the user's PrefService. It must be non-null and must outlive
+  // `this`.
+  explicit InputMethodPrefs(PrefService* prefs);
   ~InputMethodPrefs();
 
   InputMethodPrefs(const InputMethodPrefs& pref) = delete;
@@ -25,13 +29,13 @@ class InputMethodPrefs {
   // Updates input method related prefs according to the passed enabled ARC IME
   // list.
   void UpdateEnabledImes(
-      chromeos::input_method::InputMethodDescriptors enabled_arc_imes);
+      ash::input_method::InputMethodDescriptors enabled_arc_imes);
 
   // Returns the list of IMEs on the pref.
   std::set<std::string> GetEnabledImes() const;
 
  private:
-  Profile* const profile_;
+  const raw_ref<PrefService> prefs_;
 };
 
 }  // namespace arc

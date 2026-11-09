@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,19 @@
 #include "base/check_op.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/content_features.h"
 
 namespace content {
 
 BrowserChildProcessHostIterator::BrowserChildProcessHostIterator()
     : all_(true), process_type_(PROCESS_TYPE_UNKNOWN) {
-  CHECK(BrowserThread::CurrentlyOn(
-      base::FeatureList::IsEnabled(features::kProcessHostOnUI)
-          ? BrowserThread::UI
-          : BrowserThread::IO))
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI))
       << "BrowserChildProcessHostIterator must be used on the IO thread.";
   iterator_ = BrowserChildProcessHostImpl::GetIterator()->begin();
 }
 
 BrowserChildProcessHostIterator::BrowserChildProcessHostIterator(int type)
     : all_(false), process_type_(type) {
-  CHECK(BrowserThread::CurrentlyOn(
-      base::FeatureList::IsEnabled(features::kProcessHostOnUI)
-          ? BrowserThread::UI
-          : BrowserThread::IO))
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI))
       << "BrowserChildProcessHostIterator must be used on the IO thread.";
   DCHECK_NE(PROCESS_TYPE_RENDERER, type) <<
       "BrowserChildProcessHostIterator doesn't work for renderer processes; "
@@ -64,11 +57,6 @@ const ChildProcessData& BrowserChildProcessHostIterator::GetData() {
   return (*iterator_)->GetData();
 }
 
-bool BrowserChildProcessHostIterator::Send(IPC::Message* message) {
-  CHECK(!Done());
-  return (*iterator_)->Send(message);
-}
-
 BrowserChildProcessHostDelegate*
     BrowserChildProcessHostIterator::GetDelegate() {
   return (*iterator_)->delegate();
@@ -77,6 +65,11 @@ BrowserChildProcessHostDelegate*
 ChildProcessHost* BrowserChildProcessHostIterator::GetHost() {
   CHECK(!Done());
   return (*iterator_)->GetHost();
+}
+
+const base::Process& BrowserChildProcessHostIterator::GetProcess() {
+  CHECK(!Done());
+  return (*iterator_)->GetProcess();
 }
 
 }  // namespace content

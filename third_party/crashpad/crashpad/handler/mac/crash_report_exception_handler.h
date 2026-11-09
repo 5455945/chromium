@@ -1,4 +1,4 @@
-// Copyright 2015 The Crashpad Authors. All rights reserved.
+// Copyright 2015 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,8 +19,9 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/files/file_path.h"
 #include "client/crash_report_database.h"
 #include "handler/crash_report_upload_thread.h"
 #include "handler/user_stream_data_source.h"
@@ -57,7 +58,12 @@ class CrashReportExceptionHandler final
       CrashReportDatabase* database,
       CrashReportUploadThread* upload_thread,
       const std::map<std::string, std::string>* process_annotations,
+      const std::vector<base::FilePath>* attachments,
       const UserStreamDataSources* user_stream_data_sources);
+
+  CrashReportExceptionHandler(const CrashReportExceptionHandler&) = delete;
+  CrashReportExceptionHandler& operator=(const CrashReportExceptionHandler&) =
+      delete;
 
   ~CrashReportExceptionHandler();
 
@@ -85,9 +91,8 @@ class CrashReportExceptionHandler final
   CrashReportDatabase* database_;  // weak
   CrashReportUploadThread* upload_thread_;  // weak
   const std::map<std::string, std::string>* process_annotations_;  // weak
+  const std::vector<base::FilePath>* attachments_;  // weak
   const UserStreamDataSources* user_stream_data_sources_;  // weak
-
-  DISALLOW_COPY_AND_ASSIGN(CrashReportExceptionHandler);
 };
 
 }  // namespace crashpad

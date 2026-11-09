@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/events/event.h"
 
@@ -36,9 +36,9 @@ class LocalInputMonitor {
   virtual ~LocalInputMonitor() = default;
 
   // Creates a platform-specific instance of LocalInputMonitor.
-  // |caller_task_runner| is used for all callbacks and notifications.
+  // Callbacks and notifications are invoked on the sequence that calls
+  // StartMonitoring() or StartMonitoringForClientSession().
   static std::unique_ptr<LocalInputMonitor> Create(
-      scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
 

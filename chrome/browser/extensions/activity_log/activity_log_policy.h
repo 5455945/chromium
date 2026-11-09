@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,25 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/activity_log/activity_actions.h"
 #include "chrome/browser/extensions/activity_log/activity_database.h"
 #include "chrome/browser/extensions/activity_log/activity_log_task_runner.h"
 #include "chrome/common/extensions/api/activity_log_private.h"
-#include "content/public/browser/browser_thread.h"
+#include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 class GURL;
@@ -31,10 +33,9 @@ class GURL;
 namespace base {
 class Clock;
 class FilePath;
-}
+}  // namespace base
 
 namespace extensions {
-
 
 // An abstract class for processing and summarizing activity log data.
 // Subclasses will generally store data in an SQLite database (the
@@ -70,6 +71,9 @@ class ActivityLogPolicy {
   // cleaner to pass thread_id as a param of ReadData directly.
   explicit ActivityLogPolicy(Profile* profile);
 
+  ActivityLogPolicy(const ActivityLogPolicy&) = delete;
+  ActivityLogPolicy& operator=(const ActivityLogPolicy&) = delete;
+
   // Instead of a public destructor, ActivityLogPolicy objects have a Close()
   // method which will cause the object to be deleted (but may do so on another
   // thread or in a deferred fashion).
@@ -89,13 +93,17 @@ class ActivityLogPolicy {
   // these methods more convenient from within a policy, but they are public.
   class Util {
    public:
+    Util() = delete;
+    Util(const Util&) = delete;
+    Util& operator=(const Util&) = delete;
+
     // A collection of API calls, used to specify allowlists for argument
     // filtering.
-    typedef std::set<std::pair<Action::ActionType, std::string> > ApiSet;
+    typedef std::set<std::pair<Action::ActionType, std::string>> ApiSet;
 
     // Serialize a Value as a JSON string.  Returns an empty string if value is
     // null.
-    static std::string Serialize(const base::Value* value);
+    static std::string Serialize(std::optional<base::ValueView> value);
 
     // Removes potentially privacy-sensitive data that should not be logged.
     // This should generally be called on an Action before logging, unless
@@ -109,10 +117,6 @@ class ActivityLogPolicy {
     static void StripArguments(const ApiSet& api_allowlist,
                                scoped_refptr<Action> action);
 
-    // Given a base day (timestamp at local midnight), computes the timestamp
-    // at midnight the given number of days before or after.
-    static base::Time AddDays(const base::Time& base_date, int days);
-
     // Compute the time bounds that should be used for a database query to
     // cover a time range days_ago days in the past, relative to the specified
     // time.
@@ -120,9 +124,6 @@ class ActivityLogPolicy {
                                           int days_ago,
                                           int64_t* early_bound,
                                           int64_t* late_bound);
-
-   private:
-    DISALLOW_IMPLICIT_CONSTRUCTORS(Util);
   };
 
  protected:
@@ -139,9 +140,7 @@ class ActivityLogPolicy {
   // Support for a mock clock for testing purposes.  This is used by ReadData
   // to determine the date for "today" when when interpreting date ranges to
   // fetch.  This has no effect on batching of writes to the database.
-  base::Clock* testing_clock_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(ActivityLogPolicy);
+  raw_ptr<base::Clock> testing_clock_ = nullptr;
 };
 
 // A subclass of ActivityLogPolicy which is designed for policies that use
@@ -191,20 +190,22 @@ class ActivityLogDatabasePolicy : public ActivityLogPolicy,
  protected:
   // The Schedule methods dispatch the calls to the database on a
   // separate thread.
-  template<typename DatabaseType, typename DatabaseFunc>
+  template <typename DatabaseType, typename DatabaseFunc>
   void ScheduleAndForget(DatabaseType db, DatabaseFunc func) {
     GetActivityLogTaskRunner()->PostTask(
         FROM_HERE, base::BindOnce(func, base::Unretained(db)));
   }
 
-  template<typename DatabaseType, typename DatabaseFunc, typename ArgA>
+  template <typename DatabaseType, typename DatabaseFunc, typename ArgA>
   void ScheduleAndForget(DatabaseType db, DatabaseFunc func, ArgA a) {
     GetActivityLogTaskRunner()->PostTask(
         FROM_HERE, base::BindOnce(func, base::Unretained(db), a));
   }
 
-  template<typename DatabaseType, typename DatabaseFunc,
-      typename ArgA, typename ArgB>
+  template <typename DatabaseType,
+            typename DatabaseFunc,
+            typename ArgA,
+            typename ArgB>
   void ScheduleAndForget(DatabaseType db, DatabaseFunc func, ArgA a, ArgB b) {
     GetActivityLogTaskRunner()->PostTask(
         FROM_HERE, base::BindOnce(func, base::Unretained(db), a, b));
@@ -221,7 +222,7 @@ class ActivityLogDatabasePolicy : public ActivityLogPolicy,
  private:
   // See the comments for the ActivityDatabase class for a discussion of how
   // database cleanup runs.
-  ActivityDatabase* db_;
+  raw_ptr<ActivityDatabase> db_;
   base::FilePath database_path_;
 };
 

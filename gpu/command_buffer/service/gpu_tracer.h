@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,17 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
 #include "base/containers/stack.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 #include "gpu/gpu_gles2_export.h"
 
 namespace gl {
@@ -58,6 +61,10 @@ struct TraceMarker {
 class GPU_GLES2_EXPORT GPUTracer {
  public:
   explicit GPUTracer(DecoderContext* decoder, bool context_is_gl = true);
+
+  GPUTracer(const GPUTracer&) = delete;
+  GPUTracer& operator=(const GPUTracer&) = delete;
+
   virtual ~GPUTracer();
 
   void Destroy(bool have_context);
@@ -86,16 +93,10 @@ class GPU_GLES2_EXPORT GPUTracer {
   const std::string& CurrentName(GpuTracerSource source) const;
 
  protected:
-  bool is_gpu_service_tracing_enabled() {
-    return *gpu_trace_srv_category_ != 0;
-  }
-  bool is_gpu_device_tracing_enabled() {
-    return *gpu_trace_dev_category_ != 0 && can_trace_dev_;
-  }
+  virtual bool is_gpu_service_tracing_enabled();
+  virtual bool is_gpu_device_tracing_enabled();
 
   scoped_refptr<gl::GPUTimingClient> gpu_timing_client_;
-  const unsigned char* gpu_trace_srv_category_;
-  const unsigned char* gpu_trace_dev_category_;
   // Disable gpu.device tracing if context is corrupted or not GL.
   bool can_trace_dev_;
 
@@ -103,15 +104,13 @@ class GPU_GLES2_EXPORT GPUTracer {
   bool CheckDisjointStatus();
   void ClearOngoingTraces(bool have_context);
 
-  Outputter* outputter_ = nullptr;
-  std::vector<TraceMarker> markers_[NUM_TRACER_SOURCES];
+  raw_ptr<Outputter> outputter_ = nullptr;
+  std::array<std::vector<TraceMarker>, NUM_TRACER_SOURCES> markers_;
   base::circular_deque<scoped_refptr<GPUTrace>> finished_traces_;
-  DecoderContext* decoder_;
+  raw_ptr<DecoderContext> decoder_;
   int64_t disjoint_time_ = 0;
   bool gpu_executing_ = false;
   bool began_device_traces_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(GPUTracer);
 };
 
 class GPU_GLES2_EXPORT Outputter {
@@ -137,6 +136,10 @@ class GPU_GLES2_EXPORT TraceOutputter : public Outputter {
  public:
   TraceOutputter();
   explicit TraceOutputter(const std::string& name);
+
+  TraceOutputter(const TraceOutputter&) = delete;
+  TraceOutputter& operator=(const TraceOutputter&) = delete;
+
   ~TraceOutputter() override;
 
   void TraceDevice(GpuTracerSource source,
@@ -159,9 +162,7 @@ class GPU_GLES2_EXPORT TraceOutputter : public Outputter {
   uint64_t local_trace_device_id_ = 0;
   uint64_t local_trace_service_id_ = 0;
 
-  base::stack<uint64_t> trace_service_id_stack_[NUM_TRACER_SOURCES];
-
-  DISALLOW_COPY_AND_ASSIGN(TraceOutputter);
+  std::array<base::stack<uint64_t>, NUM_TRACER_SOURCES> trace_service_id_stack_;
 };
 
 class GPU_GLES2_EXPORT GPUTrace : public base::RefCounted<GPUTrace> {
@@ -173,6 +174,9 @@ class GPU_GLES2_EXPORT GPUTrace : public base::RefCounted<GPUTrace> {
            const std::string& name,
            const bool tracing_service,
            const bool tracing_device);
+
+  GPUTrace(const GPUTrace&) = delete;
+  GPUTrace& operator=(const GPUTrace&) = delete;
 
   void Destroy(bool have_context);
 
@@ -193,12 +197,10 @@ class GPU_GLES2_EXPORT GPUTrace : public base::RefCounted<GPUTrace> {
   const GpuTracerSource source_ = kTraceGroupInvalid;
   const std::string category_;
   const std::string name_;
-  Outputter* outputter_ = nullptr;
+  raw_ptr<Outputter> outputter_ = nullptr;
   std::unique_ptr<gl::GPUTimer> gpu_timer_;
   const bool service_enabled_ = false;
   const bool device_enabled_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(GPUTrace);
 };
 
 class ScopedGPUTrace {
@@ -214,7 +216,7 @@ class ScopedGPUTrace {
   ~ScopedGPUTrace() { gpu_tracer_->End(source_); }
 
  private:
-  GPUTracer* gpu_tracer_;
+  raw_ptr<GPUTracer> gpu_tracer_;
   GpuTracerSource source_;
 };
 

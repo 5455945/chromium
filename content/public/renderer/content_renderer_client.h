@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,29 +7,36 @@
 
 #include <stddef.h>
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "build/build_config.h"
+#include "build/chromecast_buildflags.h"
+#include "content/common/content_export.h"
+#include "content/public/common/alternative_error_page_override_info.mojom.h"
 #include "content/public/common/content_client.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/key_system_info.h"
+#include "media/base/key_systems_support_registration.h"
 #include "media/base/supported_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/websocket_handshake_throttle_provider.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "ui/base/page_transition_types.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "media/base/speech_recognition_client.h"
 #endif
 
@@ -37,7 +44,6 @@ class GURL;
 class SkBitmap;
 
 namespace base {
-class FilePath;
 class SingleThreadTaskRunner;
 }
 
@@ -47,6 +53,7 @@ class WebFrame;
 class WebLocalFrame;
 class WebPlugin;
 class WebPrescientNetworking;
+class WebSecurityOrigin;
 class WebServiceWorkerContextProxy;
 class WebURL;
 class WebURLRequest;
@@ -57,13 +64,31 @@ struct WebURLError;
 enum class ProtocolHandlerSecurityLevel;
 }  // namespace blink
 
+#if BUILDFLAG(ENABLE_CAST_RECEIVER)
+namespace cast_streaming {
+class ResourceProvider;
+}  // namespace cast_streaming
+#endif
+
 namespace media {
+class DecoderFactory;
 class Demuxer;
-class KeySystemProperties;
+class ExternalMemoryAllocator;
+class GpuVideoAcceleratorFactories;
+class MediaLog;
+class RendererFactory;
 }
 
 namespace mojo {
 class BinderMap;
+}
+
+namespace net {
+class SiteForCookies;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace content {
@@ -82,11 +107,20 @@ class CONTENT_EXPORT ContentRendererClient {
   // binding requests from RenderProcessHost::BindReceiver().
   virtual void ExposeInterfacesToBrowser(mojo::BinderMap* binders) {}
 
+  // Sets up trap handling for WebAssembly. Default implementation assumes that
+  // a crash handler (such as crashpad) is already in use.
+  virtual void SetUpWebAssemblyTrapHandler();
+
   // Notifies that a new RenderFrame has been created.
   virtual void RenderFrameCreated(RenderFrame* render_frame) {}
 
   // Notifies that a new WebView has been created.
-  virtual void WebViewCreated(blink::WebView* web_view) {}
+  // `outermost_origin` is only set if it is an extension scheme, otherwise
+  // it will be null. It is null to avoid leaking unnecessary information into
+  // the renderer.
+  virtual void WebViewCreated(blink::WebView* web_view,
+                              bool was_created_by_renderer,
+                              const url::Origin* outermost_origin) {}
 
   // Returns the bitmap to show when a plugin crashed, or NULL for none.
   virtual SkBitmap* GetSadPluginBitmap();
@@ -103,6 +137,13 @@ class CONTENT_EXPORT ContentRendererClient {
       const GURL& original_url,
       const std::string& original_mime_type);
 
+  // Specifies whether to disable DOM storage interfaces such as localStorage
+  // and sessionStorage.
+  virtual bool IsDomStorageDisabled() const;
+
+  // Specifies whether to disable dedicated workers.
+  virtual bool AreDedicatedWorkersDisabled() const;
+
   // Returns a scriptable object which implements custom javascript API for the
   // given element. This is used for external plugin handlers for providing
   // custom API such as|postMessage| for <embed> and <object>.
@@ -117,31 +158,29 @@ class CONTENT_EXPORT ContentRendererClient {
                                     const blink::WebPluginParams& params,
                                     blink::WebPlugin** plugin);
 
-  // Creates a replacement plugin that is shown when the plugin at |file_path|
-  // couldn't be loaded. This allows the embedder to show a custom placeholder.
-  // This may return nullptr. However, if it does return a WebPlugin, it must
-  // never fail to initialize.
-  virtual blink::WebPlugin* CreatePluginReplacement(
-      RenderFrame* render_frame,
-      const base::FilePath& plugin_path);
-
   // Returns the information to display when a navigation error occurs.
   // |error_html| should be set to null if this is a custom error page that will
   // set its own html content, otherwise if |error_html| is not null then it may
   // be set to a HTML page containing the details of the error and maybe links
   // to more info. Note that |error_html| may be not written to in certain cases
   // (lack of information on the error code) so the caller should take care to
-  // initialize it with a safe default before the call.
-  virtual void PrepareErrorPage(content::RenderFrame* render_frame,
-                                const blink::WebURLError& error,
-                                const std::string& http_method,
-                                std::string* error_html) {}
+  // initialize it with a safe default before the call. |info| contains PWA
+  // information used to customise error page, and is set to null if
+  // the webpage that goes offline is not within the scope of a PWA.
+
+  virtual void PrepareErrorPage(
+      content::RenderFrame* render_frame,
+      const blink::WebURLError& error,
+      const std::string& http_method,
+      mojom::AlternativeErrorPageOverrideInfoPtr alternative_error_page_info,
+      std::string* error_html) {}
 
   virtual void PrepareErrorPageForHttpStatusError(
       content::RenderFrame* render_frame,
       const blink::WebURLError& error,
       const std::string& http_method,
       int http_status,
+      mojom::AlternativeErrorPageOverrideInfoPtr alternative_error_page_info,
       std::string* error_html);
 
   // Allows the embedder to control when media resources are loaded. Embedders
@@ -159,12 +198,28 @@ class CONTENT_EXPORT ContentRendererClient {
   virtual std::unique_ptr<media::Demuxer> OverrideDemuxerForUrl(
       RenderFrame* render_frame,
       const GURL& url,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      scoped_refptr<base::SequencedTaskRunner> task_runner);
 
   // Allows the embedder to provide a WebSocketHandshakeThrottleProvider. If it
   // returns NULL then none will be used.
   virtual std::unique_ptr<blink::WebSocketHandshakeThrottleProvider>
   CreateWebSocketHandshakeThrottleProvider();
+
+  // Allows the embedder to control whether the renderer should leverage the
+  // compiled code cache with hashing for a given `request_url`.
+  virtual bool ShouldUseCodeCacheWithHashing(
+      const blink::WebURL& request_url) const;
+
+  // Returns true if windows with the given origin should allocate isolated
+  // WindowAgents per BrowsingInstance rather than sharing a process-global
+  // agent.
+  virtual bool ShouldUsePerBrowsingInstanceWindowAgent(
+      const url::Origin& origin);
+
+  // Called immediately after the sandbox is initialized on the main thread.
+  // (If the renderer is run with --no-sandbox, it is still called in
+  // RendererMain at about the same time.)
+  virtual void PostSandboxInitialized() {}
 
   // Called on the main-thread immediately after the io thread is
   // created.
@@ -183,10 +238,23 @@ class CONTENT_EXPORT ContentRendererClient {
   // Returns true if a popup window should be allowed.
   virtual bool AllowPopup();
 
-  // Returns the security level to use for Navigator.RegisterProtocolHandler().
-  virtual blink::ProtocolHandlerSecurityLevel GetProtocolHandlerSecurityLevel();
+  // Returns true if documents with the given `origin` are allowed to use the
+  // privileged Unbounded Element API (for example, specific component
+  // extensions). This is called for both the current frame's origin and its
+  // top frame's origin, so it must not depend on the frame being local.
+  virtual bool IsUnboundedElementAllowed(
+      const blink::WebSecurityOrigin& origin);
 
-#if defined(OS_ANDROID)
+  // Service worker may react on the activity. For example, reset the idle
+  // timer.
+  virtual bool ShouldNotifyServiceWorkerOnWebSocketActivity(
+      v8::Local<v8::Context> context);
+
+  // Returns the security level to use for Navigator.RegisterProtocolHandler().
+  virtual blink::ProtocolHandlerSecurityLevel GetProtocolHandlerSecurityLevel(
+      const url::Origin& origin);
+
+#if BUILDFLAG(IS_ANDROID)
   // TODO(sgurun) This callback is deprecated and will be removed as soon
   // as android webview completes implementation of a resource throttle based
   // shouldoverrideurl implementation. See crbug.com/325351
@@ -194,24 +262,24 @@ class CONTENT_EXPORT ContentRendererClient {
   // Returns true if the navigation was handled by the embedder and should be
   // ignored by WebKit. This method is used by CEF and android_webview.
   virtual bool HandleNavigation(RenderFrame* render_frame,
-                                bool render_view_was_created_by_renderer,
                                 blink::WebFrame* frame,
                                 const blink::WebURLRequest& request,
                                 blink::WebNavigationType type,
-                                blink::WebNavigationPolicy default_policy,
-                                bool is_redirect);
+                                blink::WebNavigationPolicy default_policy);
 #endif
 
   // Notifies the embedder that the given frame is requesting the resource at
-  // |url|. If the function returns a valid |new_url|, the request must be
-  // updated to use it.
+  // `target_url`. If the function returns a valid `new_url`, the request must
+  // be updated to use it.
   //
-  // The |site_for_cookies| is the site_for_cookies of the request. (This is
-  // approximately the URL of the main frame. It is empty in the case of
-  // cross-site iframes.)
+  // `upstream_url`: URL of the frame that initiated the request.
+  // `target_url`: URL being requested by `upstream_url`.
+  // `site_for_cookies`: Approximately the URL of the request of the main
+  // frame. It is empty in the case of cross-site iframes.
   virtual void WillSendRequest(blink::WebLocalFrame* frame,
                                ui::PageTransition transition_type,
-                               const blink::WebURL& url,
+                               const blink::WebURL& upstream_url,
+                               const blink::WebURL& target_url,
                                const net::SiteForCookies& site_for_cookies,
                                const url::Origin* initiator_origin,
                                GURL* new_url);
@@ -221,42 +289,54 @@ class CONTENT_EXPORT ContentRendererClient {
   virtual bool IsPrefetchOnly(RenderFrame* render_frame);
 
   // See blink::Platform.
-  virtual uint64_t VisitedLinkHash(const char* canonical_url, size_t length);
+  virtual uint64_t VisitedLinkHash(std::string_view canonical_url);
+  virtual uint64_t PartitionedVisitedLinkFingerprint(
+      std::string_view canonical_link_url,
+      const net::SchemefulSite& top_level_site,
+      const url::Origin& frame_origin);
   virtual bool IsLinkVisited(uint64_t link_hash);
+  virtual void AddOrUpdateVisitedLinkSalt(const url::Origin& origin,
+                                          uint64_t salt);
 
   // Creates a WebPrescientNetworking instance for |render_frame|. The returned
   // instance is owned by the frame. May return null.
   virtual std::unique_ptr<blink::WebPrescientNetworking>
   CreatePrescientNetworking(RenderFrame* render_frame);
 
-  // Returns true if the given Pepper plugin is external (requiring special
-  // startup steps).
-  virtual bool IsExternalPepperPlugin(const std::string& module_name);
+  // Allows embedder to register the key system(s) it supports.
+  virtual std::unique_ptr<media::KeySystemSupportRegistration>
+  GetSupportedKeySystems(RenderFrame* render_frame,
+                         media::GetSupportedKeySystemsCB cb);
 
-  // Returns true if the given Pepper plugin should process content from
-  // different origins in different PPAPI processes. This is generally a
-  // worthwhile precaution when the plugin provides an active scripting
-  // language.
-  virtual bool IsOriginIsolatedPepperPlugin(const base::FilePath& plugin_path);
+  // Allows embedder to describe customized audio decoder capabilities.
+  virtual bool IsDecoderSupportedAudioType(const media::AudioType& type);
 
-  // Allows embedder to register the key system(s) it supports by populating
-  // |key_systems|.
-  virtual void AddSupportedKeySystems(
-      std::vector<std::unique_ptr<media::KeySystemProperties>>* key_systems);
+  // Allows embedder to describe customized video decoder capabilities.
+  virtual bool IsDecoderSupportedVideoType(const media::VideoType& type);
 
-  // Signal that embedder has changed key systems.
-  // TODO(chcunningham): Refactor this to a proper change "observer" API that is
-  // less fragile (don't assume AddSupportedKeySystems has just one caller).
-  virtual bool IsKeySystemsUpdateNeeded();
-
-  // Allows embedder to describe customized audio capabilities.
-  virtual bool IsSupportedAudioType(const media::AudioType& type);
-
-  // Allows embedder to describe customized video capabilities.
-  virtual bool IsSupportedVideoType(const media::VideoType& type);
+  // Allows embedder to describe customized video encoder capabilities.
+  virtual bool IsEncoderSupportedVideoType(const media::VideoType& type);
 
   // Return true if the bitstream format |codec| is supported by the audio sink.
   virtual bool IsSupportedBitstreamAudioCodec(media::AudioCodec codec);
+
+  // For content embedders, this provides a way to control media time
+  // synchronization.
+  //
+  // This is particularly useful for headless clients (e.g., for automated
+  // testing or server-side rendering) which need video playback to follow a
+  // "virtual clock" for deterministic output, rather than the system's
+  // real-time clock.
+  //
+  // By default, video is synced to the audio track's real-time clock. Returning
+  // `true` from this method decouples the video from this real-time constraint,
+  // allowing it to follow virtual time. When suppressed, audio will be neither
+  // decoded nor rendered.
+  virtual bool ShouldSuppressAudioTracks();
+
+  // Returns custom allocator if exists, else nullptr
+  // Allocator will live as long as ContentRendererClient.
+  virtual media::ExternalMemoryAllocator* GetMediaAllocator();
 
   // Returns true if we should report a detailed message (including a stack
   // trace) for console [logs|errors|exceptions]. |source| is the WebKit-
@@ -269,16 +349,11 @@ class CONTENT_EXPORT ContentRendererClient {
   virtual std::unique_ptr<blink::WebContentSettingsClient>
   CreateWorkerContentSettingsClient(RenderFrame* render_frame);
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   // Creates a speech recognition client used to transcribe audio into captions.
   virtual std::unique_ptr<media::SpeechRecognitionClient>
-  CreateSpeechRecognitionClient(
-      RenderFrame* render_frame,
-      media::SpeechRecognitionClient::OnReadyCallback callback);
+  CreateSpeechRecognitionClient(RenderFrame* render_frame);
 #endif
-
-  // Returns true if the page at |url| can use Pepper CameraDevice APIs.
-  virtual bool IsPluginAllowedToUseCameraDeviceAPI(const GURL& url);
 
   // Notifies that a document element has been inserted in the frame's document.
   // This may be called multiple times for the same document. This method may
@@ -297,10 +372,6 @@ class CONTENT_EXPORT ContentRendererClient {
   // started.
   virtual void SetRuntimeFeaturesDefaultsBeforeBlinkInitialization() {}
 
-  // Returns whether or not V8 script extensions should be allowed for a
-  // service worker.
-  virtual bool AllowScriptExtensionForServiceWorker(
-      const url::Origin& script_origin);
 
   // Notifies that a service worker context is going to be initialized. No
   // meaningful task has run on the worker thread at this point. This
@@ -325,14 +396,16 @@ class CONTENT_EXPORT ContentRendererClient {
       v8::Local<v8::Context> v8_context,
       int64_t service_worker_version_id,
       const GURL& service_worker_scope,
-      const GURL& script_url) {}
+      const GURL& script_url,
+      const blink::ServiceWorkerToken& service_worker_token) {}
 
   // Notifies that a service worker context has finished executing its top-level
   // JavaScript. This function is called from the worker thread.
   virtual void DidStartServiceWorkerContextOnWorkerThread(
       int64_t service_worker_version_id,
       const GURL& service_worker_scope,
-      const GURL& script_url) {}
+      const GURL& script_url,
+      const blink::ServiceWorkerToken& service_worker_token) {}
 
   // Notifies that a service worker context will be destroyed. This function
   // is called from the worker thread.
@@ -340,26 +413,12 @@ class CONTENT_EXPORT ContentRendererClient {
       v8::Local<v8::Context> context,
       int64_t service_worker_version_id,
       const GURL& service_worker_scope,
-      const GURL& script_url) {}
-
-  // Asks the embedder whether to exclude the given header from service worker
-  // fetch events. This is useful if the embedder injects headers that it wants
-  // to go to network but not to the service worker. This function is called
-  // from the worker thread.
-  virtual bool IsExcludedHeaderForServiceWorkerFetchEvent(
-      const std::string& header_name);
+      const GURL& script_url,
+      const blink::ServiceWorkerToken& service_worker_token) {}
 
   // Whether this renderer should enforce preferences related to the WebRTC
   // routing logic, i.e. allowing multiple routes and non-proxied UDP.
   virtual bool ShouldEnforceWebRTCRoutingPreferences();
-
-  // Provides a default configuration of WebRTC audio processing, in JSON format
-  // with fields corresponding to webrtc::AudioProcessing::Config. Allows for a
-  // more functional tuning on platforms with known implementation and hardware
-  // limitations.
-  // This is currently not supported when running the Chrome audio service.
-  virtual absl::optional<std::string>
-  WebRTCPlatformSpecificAudioProcessingConfiguration();
 
   // Notifies that a worker context has been created. This function is called
   // from the worker thread.
@@ -388,15 +447,19 @@ class CONTENT_EXPORT ContentRendererClient {
   virtual blink::WebFrame* FindFrame(blink::WebLocalFrame* relative_to_frame,
                                      const std::string& name);
 
-  // Returns true if it is safe to redirect to |url|, otherwise returns false.
-  virtual bool IsSafeRedirectTarget(const GURL& url);
+  // Returns true only if it's safe to redirect `from_url` to `to_url`. May also
+  // check `request_initiator` depending on `to_url`.
+  virtual bool IsSafeRedirectTarget(
+      const GURL& from_url,
+      const GURL& to_url,
+      const std::optional<url::Origin>& request_initiator);
 
   // The user agent string is given from the browser process. This is called at
   // most once.
   virtual void DidSetUserAgent(const std::string& user_agent);
 
   // Optionally returns audio renderer algorithm parameters.
-  virtual absl::optional<::media::AudioRendererAlgorithmParameters>
+  virtual std::optional<::media::AudioRendererAlgorithmParameters>
   GetAudioRendererAlgorithmParameters(
       ::media::AudioParameters audio_parameters);
 
@@ -404,7 +467,26 @@ class CONTENT_EXPORT ContentRendererClient {
   // `url`. This allows the embedder to customize the applied CSP.
   virtual void AppendContentSecurityPolicy(
       const blink::WebURL& url,
-      blink::WebVector<blink::WebContentSecurityPolicyHeader>* csp);
+      std::vector<blink::WebContentSecurityPolicyHeader>* csp);
+
+  // Returns a RendererFactory to use as the "base" for a
+  // RendererFactorySelector. Returns `nullptr` to get the default behaviour.
+  // The arguments will outlive the returned factory.
+  virtual std::unique_ptr<media::RendererFactory> GetBaseRendererFactory(
+      content::RenderFrame* render_frame,
+      media::MediaLog* media_log,
+      media::DecoderFactory* decoder_factory,
+      base::RepeatingCallback<media::GpuVideoAcceleratorFactories*()>
+          get_gpu_factories_cb,
+      int element_id);
+
+#if BUILDFLAG(ENABLE_CAST_RECEIVER)
+  // Creates a new cast_streaming::ResourceProvider. Will only be called once
+  // per RenderFrame.
+  virtual std::unique_ptr<cast_streaming::ResourceProvider>
+  CreateCastStreamingResourceProvider();
+#endif
+
 };
 
 }  // namespace content

@@ -30,10 +30,12 @@
 
 #include "third_party/blink/renderer/core/svg/svg_boolean.h"
 
+#include "base/notreached.h"
+
 namespace blink {
 
 String SVGBoolean::ValueAsString() const {
-  return value_ ? "true" : "false";
+  return String::Boolean(value_);
 }
 
 SVGParsingError SVGBoolean::SetValueAsString(const String& value) {
@@ -48,7 +50,7 @@ SVGParsingError SVGBoolean::SetValueAsString(const String& value) {
   return SVGParseStatus::kExpectedBoolean;
 }
 
-void SVGBoolean::Add(const SVGPropertyBase*, const SVGElement*) {
+bool SVGBoolean::Add(const SVGPropertyBase*, const SVGElement*) {
   NOTREACHED();
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,32 +12,26 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InOrder;
-import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
-/**
- * Unit tests for MagnifierAnimator.
- */
-@RunWith(LocalRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+/** Unit tests for MagnifierAnimator. */
+@RunWith(BaseRobolectricTestRunner.class)
 public class MagnifierAnimatorTest {
-    private MagnifierWrapper mMagnifier;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private MagnifierWrapper mMagnifier;
     private MagnifierAnimator mAnimator;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        ShadowLog.stream = System.out;
-
-        mMagnifier = Mockito.mock(MagnifierWrapper.class);
         when(mMagnifier.isAvailable()).thenReturn(true);
 
         mAnimator = new MagnifierAnimator(mMagnifier);

@@ -1,15 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NET_NET_ERROR_TAB_HELPER_H_
 #define CHROME_BROWSER_NET_NET_ERROR_TAB_HELPER_H_
 
+#include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/net/dns_probe_service.h"
 #include "chrome/common/net/net_error_page_support.mojom.h"
@@ -19,9 +18,13 @@
 #include "components/offline_pages/buildflags/buildflags.h"
 #include "components/prefs/pref_member.h"
 #include "content/public/browser/reload_type.h"
+#include "content/public/browser/render_frame_host_receiver_set.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_receiver_set.h"
-#include "content/public/browser/web_contents_user_data.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -32,23 +35,44 @@ namespace chrome_browser_net {
 // A TabHelper that monitors loads for certain types of network errors and
 // does interesting things with them.  Currently, starts DNS probes using the
 // DnsProbeService whenever a page fails to load with a DNS-related error.
-class NetErrorTabHelper
-    : public content::WebContentsObserver,
-      public content::WebContentsUserData<NetErrorTabHelper>,
-      public chrome::mojom::NetErrorPageSupport,
-      public chrome::mojom::NetworkDiagnostics,
-      public chrome::mojom::NetworkEasterEgg {
+class NetErrorTabHelper : public content::WebContentsObserver,
+                          public chrome::mojom::NetErrorPageSupport,
+                          public chrome::mojom::NetworkDiagnostics,
+                          public chrome::mojom::NetworkEasterEgg {
  public:
+  DECLARE_USER_DATA(NetErrorTabHelper);
+
   enum TestingState {
     TESTING_DEFAULT,
     TESTING_FORCE_DISABLED,
     TESTING_FORCE_ENABLED
   };
 
-  typedef base::RepeatingCallback<void(error_page::DnsProbeStatus)>
-      DnsProbeStatusSnoopCallback;
+  using DnsProbeStatusSnoopCallback =
+      base::RepeatingCallback<void(error_page::DnsProbeStatus)>;
+
+  // |contents| is the WebContents of the tab this NetErrorTabHelper is
+  // attached to.
+  NetErrorTabHelper(tabs::TabInterface& tab, content::WebContents* contents);
+  NetErrorTabHelper(const NetErrorTabHelper&) = delete;
+  NetErrorTabHelper& operator=(const NetErrorTabHelper&) = delete;
 
   ~NetErrorTabHelper() override;
+
+  // Returns the NetErrorTabHelper for the given tab.
+  static NetErrorTabHelper* From(tabs::TabInterface* tab);
+
+  static void BindNetErrorPageSupport(
+      mojo::PendingAssociatedReceiver<chrome::mojom::NetErrorPageSupport>
+          receiver,
+      content::RenderFrameHost* rfh);
+  static void BindNetworkDiagnostics(
+      mojo::PendingAssociatedReceiver<chrome::mojom::NetworkDiagnostics>
+          receiver,
+      content::RenderFrameHost* rfh);
+  static void BindNetworkEasterEgg(
+      mojo::PendingAssociatedReceiver<chrome::mojom::NetworkEasterEgg> receiver,
+      content::RenderFrameHost* rfh);
 
   static void set_state_for_testing(TestingState testing_state);
 
@@ -79,11 +103,11 @@ class NetErrorTabHelper
   void SetIsShowingDownloadButtonInErrorPage(
       bool showing_download_button) override;
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+  void ShowPortalSignin() override;
+#endif
 
  protected:
-  // |contents| is the WebContents of the tab this NetErrorTabHelper is
-  // attached to.
-  explicit NetErrorTabHelper(content::WebContents* contents);
   virtual void StartDnsProbe();
   virtual void SendInfo();
   void OnDnsProbeFinished(error_page::DnsProbeStatus result);
@@ -92,14 +116,22 @@ class NetErrorTabHelper
     return dns_probe_status_;
   }
 
-  content::WebContentsFrameReceiverSet<chrome::mojom::NetworkDiagnostics>&
+  content::RenderFrameHostReceiverSet<chrome::mojom::NetworkDiagnostics>&
   network_diagnostics_receivers_for_testing() {
     return network_diagnostics_receivers_;
   }
 
- private:
-  friend class content::WebContentsUserData<NetErrorTabHelper>;
+  content::RenderFrameHostReceiverSet<chrome::mojom::NetworkEasterEgg>&
+  network_easter_egg_receivers_for_testing() {
+    return network_easter_egg_receivers_;
+  }
 
+  content::RenderFrameHostReceiverSet<chrome::mojom::NetErrorPageSupport>&
+  net_error_page_support_for_testing() {
+    return net_error_page_support_;
+  }
+
+ private:
   void OnMainFrameDnsError();
 
   void InitializePref(content::WebContents* contents);
@@ -122,15 +154,12 @@ class NetErrorTabHelper
   virtual void DownloadPageLaterHelper(const GURL& url);
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
 
-  content::WebContentsFrameReceiverSet<chrome::mojom::NetworkDiagnostics>
+  content::RenderFrameHostReceiverSet<chrome::mojom::NetworkDiagnostics>
       network_diagnostics_receivers_;
-  content::WebContentsFrameReceiverSet<chrome::mojom::NetworkEasterEgg>
+  content::RenderFrameHostReceiverSet<chrome::mojom::NetworkEasterEgg>
       network_easter_egg_receivers_;
-  content::WebContentsFrameReceiverSet<chrome::mojom::NetErrorPageSupport>
+  content::RenderFrameHostReceiverSet<chrome::mojom::NetErrorPageSupport>
       net_error_page_support_;
-
-  // True if the last provisional load that started was for an error page.
-  bool is_error_page_;
 
   // True if the helper has seen a main frame page load fail with a DNS error,
   // but has not yet seen a new page commit successfully afterwards.
@@ -160,11 +189,9 @@ class NetErrorTabHelper
   // Preference storing the user's current easter egg game high score.
   IntegerPrefMember easter_egg_high_score_;
 
+  ui::ScopedUnownedUserData<NetErrorTabHelper> scoped_unowned_user_data_;
+
   base::WeakPtrFactory<NetErrorTabHelper> weak_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(NetErrorTabHelper);
 };
 
 }  // namespace chrome_browser_net

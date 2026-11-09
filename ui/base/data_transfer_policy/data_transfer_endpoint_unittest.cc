@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
-#include "url/origin.h"
 
 namespace ui {
 
@@ -19,18 +18,22 @@ constexpr char kExample2Url[] = "https://wwww.example2.com";
 // members.
 TEST(DataTransferEndpointTest, Clone) {
   DataTransferEndpoint original1(EndpointType::kClipboardHistory,
-                                 /*notify_if_restricted=*/true);
+                                 {.notify_if_restricted = true});
   DataTransferEndpoint clone1(original1);
 
   EXPECT_EQ(original1.type(), clone1.type());
   EXPECT_EQ(original1.notify_if_restricted(), clone1.notify_if_restricted());
 
-  DataTransferEndpoint original2(url::Origin::Create(GURL(kExample1Url)),
-                                 /*notify_if_restricted=*/false);
+  DataTransferEndpoint original2(GURL(kExample1Url),
+                                 {
+                                     .notify_if_restricted = false,
+                                     .off_the_record = true,
+                                 });
   DataTransferEndpoint clone2(original2);
 
   EXPECT_EQ(original2.type(), clone2.type());
-  EXPECT_TRUE(clone2.origin()->IsSameOriginWith(*original2.origin()));
+  EXPECT_EQ(*clone2.GetURL(), *original2.GetURL());
+  EXPECT_EQ(original2.off_the_record(), clone2.off_the_record());
   EXPECT_EQ(original2.notify_if_restricted(), clone2.notify_if_restricted());
 }
 
@@ -38,34 +41,68 @@ TEST(DataTransferEndpointTest, Clone) {
 // the same values for all of their data members.
 TEST(DataTransferEndpointTest, Equal) {
   DataTransferEndpoint default_endpoint1(EndpointType::kDefault,
-                                         /*notify_if_restricted=*/true);
+                                         {.notify_if_restricted = true});
   DataTransferEndpoint default_endpoint2(EndpointType::kDefault,
-                                         /*notify_if_restricted=*/false);
+                                         {.notify_if_restricted = false});
 
   EXPECT_FALSE(default_endpoint1 == default_endpoint2);
 
-  DataTransferEndpoint url_endpoint1(url::Origin::Create(GURL(kExample1Url)),
-                                     /*notify_if_restricted=*/true);
-  DataTransferEndpoint url_endpoint2(url::Origin::Create(GURL(kExample1Url)),
-                                     /*notify_if_restricted=*/true);
+  DataTransferEndpoint default_endpoint3(EndpointType::kDefault,
+                                         {.off_the_record = true});
+  DataTransferEndpoint default_endpoint4(EndpointType::kDefault,
+                                         {.off_the_record = false});
+
+  EXPECT_FALSE(default_endpoint3 == default_endpoint4);
+
+  DataTransferEndpoint default_endpoint5(EndpointType::kDefault, {});
+
+  EXPECT_TRUE(default_endpoint5 == default_endpoint1);
+  EXPECT_FALSE(default_endpoint5 == default_endpoint2);
+  EXPECT_FALSE(default_endpoint5 == default_endpoint3);
+  EXPECT_TRUE(default_endpoint5 == default_endpoint4);
+
+  DataTransferEndpoint url_endpoint1(GURL(kExample1Url),
+                                     {
+                                         .notify_if_restricted = true,
+                                         .off_the_record = true,
+                                     });
+  DataTransferEndpoint url_endpoint2(GURL(kExample1Url),
+                                     {
+                                         .notify_if_restricted = true,
+                                         .off_the_record = true,
+                                     });
+  DataTransferEndpoint url_endpoint3(GURL(kExample1Url),
+                                     {
+                                         .notify_if_restricted = true,
+                                         .off_the_record = false,
+                                     });
 
   EXPECT_TRUE(url_endpoint1 == url_endpoint2);
+  EXPECT_FALSE(url_endpoint1 == url_endpoint3);
 }
 
 // Tests DataTransferEndpoint::IsSameOriginWith.
-TEST(DataTransferEndpointTest, IsSameOriginWith) {
-  DataTransferEndpoint default_endpoint(EndpointType::kDefault,
-                                        /*notify_if_restricted=*/true);
-  DataTransferEndpoint url_endpoint1(url::Origin::Create(GURL(kExample1Url)),
-                                     /*notify_if_restricted=*/false);
-  DataTransferEndpoint url_endpoint2(url::Origin::Create(GURL(kExample2Url)),
-                                     /*notify_if_restricted=*/true);
-  DataTransferEndpoint url_endpoint3(url::Origin::Create(GURL(kExample1Url)),
-                                     /*notify_if_restricted=*/true);
+TEST(DataTransferEndpointTest, IsSameURLWith) {
+  DataTransferEndpoint default_endpoint(EndpointType::kDefault);
+  DataTransferEndpoint url_endpoint1(GURL(kExample1Url),
+                                     {
+                                         .notify_if_restricted = false,
+                                         .off_the_record = true,
+                                     });
+  DataTransferEndpoint url_endpoint2(GURL(kExample2Url),
+                                     {
+                                         .notify_if_restricted = true,
+                                         .off_the_record = true,
+                                     });
+  DataTransferEndpoint url_endpoint3(GURL(kExample1Url),
+                                     {
+                                         .notify_if_restricted = true,
+                                         .off_the_record = false,
+                                     });
 
-  EXPECT_FALSE(url_endpoint2.IsSameOriginWith(default_endpoint));
-  EXPECT_FALSE(url_endpoint1.IsSameOriginWith(url_endpoint2));
-  EXPECT_TRUE(url_endpoint1.IsSameOriginWith(url_endpoint3));
+  EXPECT_FALSE(url_endpoint2.IsSameURLWith(default_endpoint));
+  EXPECT_FALSE(url_endpoint1.IsSameURLWith(url_endpoint2));
+  EXPECT_TRUE(url_endpoint1.IsSameURLWith(url_endpoint3));
 }
 
 }  // namespace ui

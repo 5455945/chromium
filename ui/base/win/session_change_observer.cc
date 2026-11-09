@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,20 @@
 #include <wtsapi32.h>
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/callback_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/singleton.h"
 #include "base/observer_list.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "ui/gfx/win/singleton_hwnd.h"
-#include "ui/gfx/win/singleton_hwnd_observer.h"
 
 namespace ui {
 
@@ -31,23 +31,29 @@ class SessionChangeObserver::WtsRegistrationNotificationManager {
   }
 
   WtsRegistrationNotificationManager() {
-    DCHECK(!singleton_hwnd_observer_);
-    singleton_hwnd_observer_ = std::make_unique<gfx::SingletonHwndObserver>(
+    CHECK(!hwnd_subscription_, base::NotFatalUntil::M163);
+    hwnd_subscription_ = gfx::SingletonHwnd::GetInstance()->RegisterCallback(
         base::BindRepeating(&WtsRegistrationNotificationManager::OnWndProc,
                             base::Unretained(this)));
 
-    base::OnceClosure wts_register = base::BindOnce(
-        base::IgnoreResult(&WTSRegisterSessionNotification),
-        gfx::SingletonHwnd::GetInstance()->hwnd(), NOTIFY_FOR_THIS_SESSION);
+    base::OnceClosure wts_register =
+        base::BindOnce(base::IgnoreResult(&WTSRegisterSessionNotification),
+                       gfx::SingletonHwnd::GetInstance()->hwnd(),
+                       DWORD{NOTIFY_FOR_THIS_SESSION});
 
     base::ThreadPool::CreateCOMSTATaskRunner({})->PostTask(
         FROM_HERE, std::move(wts_register));
   }
 
-  ~WtsRegistrationNotificationManager() { RemoveSingletonHwndObserver(); }
+  WtsRegistrationNotificationManager(
+      const WtsRegistrationNotificationManager&) = delete;
+  WtsRegistrationNotificationManager& operator=(
+      const WtsRegistrationNotificationManager&) = delete;
+
+  ~WtsRegistrationNotificationManager() { ResetHwndSubscription(); }
 
   void AddObserver(SessionChangeObserver* observer) {
-    DCHECK(singleton_hwnd_observer_);
+    CHECK(hwnd_subscription_, base::NotFatalUntil::M163);
     observer_list_.AddObserver(observer);
   }
 
@@ -74,41 +80,39 @@ class SessionChangeObserver::WtsRegistrationNotificationManager {
             is_current_session =
                 (static_cast<DWORD>(lparam) == current_session_id);
           }
-          for (SessionChangeObserver& observer : observer_list_)
-            observer.OnSessionChange(wparam, is_current_session_ptr);
+          observer_list_.Notify(&SessionChangeObserver::OnSessionChange, wparam,
+                                is_current_session_ptr);
         }
         break;
       case WM_DESTROY:
-        RemoveSingletonHwndObserver();
+        ResetHwndSubscription();
         break;
     }
   }
 
-  void RemoveSingletonHwndObserver() {
-    if (!singleton_hwnd_observer_)
+  void ResetHwndSubscription() {
+    if (!hwnd_subscription_) {
       return;
+    }
 
-    singleton_hwnd_observer_.reset(nullptr);
+    hwnd_subscription_.reset();
     // There is no race condition between this code and the worker thread.
-    // RemoveSingletonHwndObserver is only called from two places:
+    // ResetHwndSubscription is only called from two places:
     //   1) Destruction due to Singleton Destruction.
     //   2) WM_DESTROY fired by SingletonHwnd.
     // Under both cases we are in shutdown, which means no other worker threads
     // can be running.
     WTSUnRegisterSessionNotification(gfx::SingletonHwnd::GetInstance()->hwnd());
-    for (SessionChangeObserver& observer : observer_list_)
-      observer.ClearCallback();
+    observer_list_.Notify(&SessionChangeObserver::ClearCallback);
   }
 
   base::ObserverList<SessionChangeObserver, true>::Unchecked observer_list_;
-  std::unique_ptr<gfx::SingletonHwndObserver> singleton_hwnd_observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(WtsRegistrationNotificationManager);
+  std::optional<base::CallbackListSubscription> hwnd_subscription_;
 };
 
 SessionChangeObserver::SessionChangeObserver(const WtsCallback& callback)
     : callback_(callback) {
-  DCHECK(!callback_.is_null());
+  CHECK(!callback_.is_null(), base::NotFatalUntil::M163);
   WtsRegistrationNotificationManager::GetInstance()->AddObserver(this);
 }
 

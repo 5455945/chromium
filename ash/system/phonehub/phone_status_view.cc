@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,24 +11,29 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/root_window_controller.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/ash_color_id.h"
+#include "ash/style/icon_button.h"
+#include "ash/style/typography.h"
 #include "ash/system/phonehub/phone_hub_tray.h"
 #include "ash/system/phonehub/phone_hub_view_ids.h"
-#include "ash/system/power/battery_image_source.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_utils.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_elider.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/separator.h"
@@ -36,9 +41,9 @@
 
 namespace ash {
 
-using PhoneStatusModel = chromeos::phonehub::PhoneStatusModel;
-
 namespace {
+
+using PhoneStatusModel = phonehub::PhoneStatusModel;
 
 // Appearance in Dip.
 constexpr int kTitleContainerSpacing = 16;
@@ -47,11 +52,8 @@ constexpr gfx::Size kStatusIconSize(kUnifiedTrayIconSize, kUnifiedTrayIconSize);
 constexpr gfx::Size kSignalIconSize(15, 15);
 constexpr int kSeparatorHeight = 18;
 constexpr int kPhoneNameLabelWidthMax = 160;
-constexpr gfx::Insets kBorderInsets(0, 16);
-constexpr gfx::Insets kBatteryLabelBorderInsets(0, 0, 0, 4);
-
-// Typograph in dip.
-constexpr int kBatteryLabelFontSize = 11;
+constexpr auto kBorderInsets = gfx::Insets::VH(0, 16);
+constexpr auto kBatteryLabelBorderInsets = gfx::Insets::TLBR(0, 0, 0, 4);
 
 // Multiplied by the int returned by GetSignalStrengthAsInt() to obtain a
 // percentage for the signal strength displayed by the tooltip when hovering
@@ -73,46 +75,14 @@ int GetSignalStrengthAsInt(PhoneStatusModel::SignalStrength signal_strength) {
   }
 }
 
-// ImageSource for the battery icon.
-class PhoneHubBatteryImageSource : public BatteryImageSource {
- public:
-  PhoneHubBatteryImageSource(const PowerStatus::BatteryImageInfo& info,
-                             int height,
-                             SkColor bg_color,
-                             SkColor fg_color,
-                             bool in_battery_saver_mode)
-      : BatteryImageSource(info, height, bg_color, fg_color),
-        bg_color_(bg_color),
-        in_battery_saver_mode_(in_battery_saver_mode) {}
-
-  ~PhoneHubBatteryImageSource() override = default;
-
-  // BatteryImageSource:
-  void Draw(gfx::Canvas* canvas) override {
-    BatteryImageSource::Draw(canvas);
-
-    if (!in_battery_saver_mode_)
-      return;
-
-    SkColor saver_color = AshColorProvider::Get()->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kIconColorWarning);
-
-    gfx::ImageSkia icon = CreateVectorIcon(kBatteryIcon, saver_color);
-    // Draw the solid outline of the battery icon.
-    canvas->DrawImageInt(icon, 0, 0);
-
-    PaintVectorIcon(canvas, kPhoneHubBatterySaverOutlineIcon, bg_color_);
-    PaintVectorIcon(canvas, kPhoneHubBatterySaverIcon, saver_color);
-  }
-
- private:
-  const SkColor bg_color_;
-  bool in_battery_saver_mode_ = false;
-};
+bool IsBatterySaverModeOn(const PhoneStatusModel& phone_status) {
+  return phone_status.battery_saver_state() ==
+         PhoneStatusModel::BatterySaverState::kOn;
+}
 
 }  // namespace
 
-PhoneStatusView::PhoneStatusView(chromeos::phonehub::PhoneModel* phone_model,
+PhoneStatusView::PhoneStatusView(phonehub::PhoneModel* phone_model,
                                  Delegate* delegate)
     : TriView(kTitleContainerSpacing),
       phone_model_(phone_model),
@@ -121,9 +91,6 @@ PhoneStatusView::PhoneStatusView(chromeos::phonehub::PhoneModel* phone_model,
       battery_icon_(new views::ImageView),
       battery_label_(new views::Label) {
   DCHECK(delegate);
-
-  SetPaintToLayer();
-  layer()->SetFillsBoundsOpaquely(false);
   SetID(PhoneHubViewID::kPhoneStatusView);
 
   SetBorder(views::CreateEmptyBorder(kBorderInsets));
@@ -138,49 +105,56 @@ PhoneStatusView::PhoneStatusView(chromeos::phonehub::PhoneModel* phone_model,
   phone_model_->AddObserver(this);
 
   phone_name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  phone_name_label_->SetEnabledColor(
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kTextColorPrimary));
-  TrayPopupUtils::SetLabelFontList(phone_name_label_,
-                                   TrayPopupUtils::FontStyle::kSubHeader);
+  phone_name_label_->SetEnabledColor(cros_tokens::kTextColorPrimary);
+  TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosHeadline1,
+                                        *phone_name_label_);
+
   phone_name_label_->SetElideBehavior(gfx::ElideBehavior::ELIDE_TAIL);
   AddView(TriView::Container::START, phone_name_label_);
 
   AddView(TriView::Container::CENTER, signal_icon_);
+
+  // The battery icon requires its own layer to properly render the masked
+  // outline of the badge within the battery icon.
+  battery_icon_->SetPaintToLayer();
+  battery_icon_->layer()->SetFillsBoundsOpaquely(false);
   AddView(TriView::Container::CENTER, battery_icon_);
 
   battery_label_->SetAutoColorReadabilityEnabled(false);
   battery_label_->SetSubpixelRenderingEnabled(false);
-  battery_label_->SetEnabledColor(AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary));
-  auto default_font = battery_label_->font_list();
-  battery_label_->SetFontList(default_font.DeriveWithSizeDelta(
-      kBatteryLabelFontSize - default_font.GetFontSize()));
+
+  battery_label_->SetEnabledColor(cros_tokens::kTextColorPrimary);
+
+  TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosButton2,
+                                        *battery_label_);
+
   battery_label_->SetBorder(
       views::CreateEmptyBorder(kBatteryLabelBorderInsets));
   AddView(TriView::Container::CENTER, battery_label_);
 
   separator_ = new views::Separator();
-  separator_->SetColor(AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSeparatorColor));
-  separator_->SetPreferredHeight(kSeparatorHeight);
+  separator_->SetColorId(ui::kColorAshSystemUIMenuSeparator);
+  separator_->SetPreferredLength(kSeparatorHeight);
   AddView(TriView::Container::CENTER, separator_);
 
-  settings_button_ = new TopShortcutButton(
+  settings_button_ = new IconButton(
       base::BindRepeating(&Delegate::OpenConnectedDevicesSettings,
                           base::Unretained(delegate)),
-      kSystemMenuSettingsIcon,
+      IconButton::Type::kMedium, &kSystemMenuSettingsIcon,
       IDS_ASH_PHONE_HUB_CONNECTED_DEVICE_SETTINGS_LABEL);
   AddView(TriView::Container::END, settings_button_);
 
   separator_->SetVisible(delegate->CanOpenConnectedDeviceSettings());
   settings_button_->SetVisible(delegate->CanOpenConnectedDeviceSettings());
-
-  Update();
 }
 
 PhoneStatusView::~PhoneStatusView() {
   phone_model_->RemoveObserver(this);
+}
+
+void PhoneStatusView::OnThemeChanged() {
+  TriView::OnThemeChanged();
+  Update();
 }
 
 void PhoneStatusView::OnModelChanged() {
@@ -211,8 +185,8 @@ void PhoneStatusView::UpdateMobileStatus() {
   const PhoneStatusModel& phone_status =
       phone_model_->phone_status_model().value();
 
-  const SkColor primary_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kIconColorPrimary);
+  const SkColor primary_color =
+      GetColorProvider()->GetColor(cros_tokens::kIconColorPrimary);
 
   gfx::ImageSkia signal_image;
   std::u16string tooltip_text;
@@ -247,7 +221,7 @@ void PhoneStatusView::UpdateMobileStatus() {
       break;
   }
 
-  signal_icon_->SetImage(signal_image);
+  signal_icon_->SetImage(ui::ImageModel::FromImageSkia(signal_image));
   signal_icon_->SetTooltipText(tooltip_text);
 }
 
@@ -255,53 +229,50 @@ void PhoneStatusView::UpdateBatteryStatus() {
   const PhoneStatusModel& phone_status =
       phone_model_->phone_status_model().value();
 
-  const PowerStatus::BatteryImageInfo& info = CalculateBatteryInfo();
+  const SkColor icon_fg_color = GetColorProvider()->GetColor(
+      IsBatterySaverModeOn(phone_status) ? cros_tokens::kIconColorWarning
+                                         : cros_tokens::kIconColorPrimary);
 
-  const SkColor icon_bg_color = color_utils::GetResultingPaintColor(
-      ShelfConfig::Get()->GetShelfControlButtonColor(),
-      AshColorProvider::Get()->GetBackgroundColor());
-  const SkColor icon_fg_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kIconColorPrimary);
-
-  bool in_battery_saver_mode = phone_status.battery_saver_state() ==
-                               PhoneStatusModel::BatterySaverState::kOn;
-
-  auto* source = new PhoneHubBatteryImageSource(info, kStatusIconSize.height(),
-                                                icon_bg_color, icon_fg_color,
-                                                in_battery_saver_mode);
   battery_icon_->SetImage(
-      gfx::ImageSkia(base::WrapUnique(source), source->size()));
+      ui::ImageModel::FromImageSkia(PowerStatus::GetBatteryImage(
+          CalculateBatteryInfo(icon_fg_color), kUnifiedTrayBatteryIconSize,
+          battery_icon_->GetColorProvider())));
   SetBatteryTooltipText();
   battery_label_->SetText(
       base::FormatPercent(phone_status.battery_percentage()));
-  battery_label_->SetAccessibleName(l10n_util::GetStringFUTF16(
+  battery_label_->GetViewAccessibility().SetName(l10n_util::GetStringFUTF16(
       IDS_ASH_PHONE_HUB_BATTERY_PERCENTAGE_ACCESSIBLE_TEXT,
       base::NumberToString16(phone_status.battery_percentage())));
 }
 
-PowerStatus::BatteryImageInfo PhoneStatusView::CalculateBatteryInfo() {
-  PowerStatus::BatteryImageInfo info;
-
+PowerStatus::BatteryImageInfo PhoneStatusView::CalculateBatteryInfo(
+    const SkColor icon_fg_color) {
   const PhoneStatusModel& phone_status =
       phone_model_->phone_status_model().value();
-
+  PowerStatus::BatteryImageInfo info(icon_fg_color);
   info.charge_percent = phone_status.battery_percentage();
+
+  if (IsBatterySaverModeOn(phone_status)) {
+    info.icon_badge = &kPhoneHubBatterySaverIcon;
+    info.badge_outline = &kPhoneHubBatterySaverOutlineMaskIcon;
+    return info;
+  }
 
   switch (phone_status.charging_state()) {
     case PhoneStatusModel::ChargingState::kNotCharging:
       info.alert_if_low = true;
       if (info.charge_percent < PowerStatus::kCriticalBatteryChargePercentage) {
         info.icon_badge = &kUnifiedMenuBatteryAlertIcon;
-        info.badge_outline = &kUnifiedMenuBatteryAlertOutlineIcon;
+        info.badge_outline = &kUnifiedMenuBatteryAlertOutlineMaskIcon;
       }
       break;
     case PhoneStatusModel::ChargingState::kChargingAc:
       info.icon_badge = &kUnifiedMenuBatteryBoltIcon;
-      info.badge_outline = &kUnifiedMenuBatteryBoltOutlineIcon;
+      info.badge_outline = &kUnifiedMenuBatteryBoltOutlineMaskIcon;
       break;
     case PhoneStatusModel::ChargingState::kChargingUsb:
       info.icon_badge = &kUnifiedMenuBatteryUnreliableIcon;
-      info.badge_outline = &kUnifiedMenuBatteryUnreliableOutlineIcon;
+      info.badge_outline = &kUnifiedMenuBatteryUnreliableOutlineMaskIcon;
       break;
   }
 
@@ -341,11 +312,17 @@ void PhoneStatusView::SetBatteryTooltipText() {
 
 void PhoneStatusView::ClearExistingStatus() {
   // Clear mobile status.
-  signal_icon_->SetImage(gfx::ImageSkia());
+  signal_icon_->SetImage(ui::ImageModel());
 
   // Clear battery status.
-  battery_icon_->SetImage(gfx::ImageSkia());
+  battery_icon_->SetImage(ui::ImageModel());
   battery_label_->SetText(std::u16string());
+
+  // TODO(b/281844561): When the phone is disconnected the |phone_name_label_|
+  // should have cros.sys.disabled. Setting that here and then re-setting the
+  // label to cros.sys.on-surface on Update() would handle this case, but it
+  // would also incorrectly show cros.sys.disabled for the Connecting and
+  // Onboarding UI states.
 }
 
 void PhoneStatusView::ConfigureTriViewContainer(TriView::Container container) {

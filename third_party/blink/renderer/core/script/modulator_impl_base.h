@@ -1,17 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCRIPT_MODULATOR_IMPL_BASE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCRIPT_MODULATOR_IMPL_BASE_H_
 
-#include "base/single_thread_task_runner.h"
+#include <optional>
+
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/module_record.h"
+#include "third_party/blink/renderer/core/script/import_map_error.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -35,7 +39,7 @@ class ModulatorImplBase : public Modulator {
 
   ExecutionContext* GetExecutionContext() const;
 
-  ScriptState* GetScriptState() override { return script_state_; }
+  ScriptState* GetScriptState() override { return script_state_.Get(); }
 
  private:
   // Implements Modulator
@@ -58,7 +62,9 @@ class ModulatorImplBase : public Modulator {
                  network::mojom::RequestDestination destination,
                  const ScriptFetchOptions&,
                  ModuleScriptCustomFetchType,
-                 ModuleTreeClient*) override;
+                 ModuleTreeClient*,
+                 v8::ModuleImportPhase,
+                 String referrer) override;
   void FetchDescendantsForInlineScript(
       ModuleScript*,
       ResourceFetcher* fetch_client_settings_object_fetcher,
@@ -76,23 +82,16 @@ class ModulatorImplBase : public Modulator {
                               const KURL& base_url,
                               String* failure_reason) final;
   void ResolveDynamically(const ModuleRequest& module_request,
-                          const KURL&,
                           const ReferrerScriptInfo&,
-                          ScriptPromiseResolver*) override;
-  const ImportMap* GetImportMapForTest() const final { return import_map_; }
+                          ScriptPromiseResolver<IDLAny>*) override;
+  void AddEntryToModuleMap(const KURL&, ModuleType, ModuleScript*) override;
 
-  ScriptValue CreateTypeError(const String& message) const override;
-  ScriptValue CreateSyntaxError(const String& message) const override;
-  void RegisterImportMap(const ImportMap*, ScriptValue error_to_rethrow) final;
-  AcquiringImportMapsState GetAcquiringImportMapsState() const final {
-    return acquiring_import_maps_;
-  }
-  void SetAcquiringImportMapsState(AcquiringImportMapsState value) final {
-    acquiring_import_maps_ = value;
-  }
   ModuleImportMeta HostGetImportMetaProperties(
       v8::Local<v8::Module>) const override;
-  ScriptValue InstantiateModule(v8::Local<v8::Module>, const KURL&) override;
+
+  String GetIntegrityMetadataString(const KURL&) const override;
+  IntegrityMetadataSet GetIntegrityMetadata(const KURL&) const override;
+
   ModuleType ModuleTypeFromRequest(
       const ModuleRequest& module_request) const override;
 
@@ -107,20 +106,12 @@ class ModulatorImplBase : public Modulator {
   void ProduceCacheModuleTree(ModuleScript*,
                               HeapHashSet<Member<const ModuleScript>>*);
 
-  Member<ScriptState> script_state_;
+  Member<ScriptState> const script_state_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   Member<ModuleMap> map_;
   Member<ModuleTreeLinkerRegistry> tree_linker_registry_;
   Member<ModuleRecordResolver> module_record_resolver_;
   Member<DynamicModuleResolver> dynamic_module_resolver_;
-
-  Member<const ImportMap> import_map_;
-
-  // https://wicg.github.io/import-maps/#document-acquiring-import-maps
-  // Each Document has an acquiring import maps boolean. It is initially true.
-  // [spec text]
-  AcquiringImportMapsState acquiring_import_maps_ =
-      AcquiringImportMapsState::kAcquiring;
 };
 
 }  // namespace blink

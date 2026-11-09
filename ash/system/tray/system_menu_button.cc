@@ -1,14 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/tray/system_menu_button.h"
 
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/color_util.h"
+#include "ash/style/style_util.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_ink_drop_style.h"
 #include "ash/system/tray/tray_popup_utils.h"
+#include "ash/system/tray/tray_utils.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/color/color_id.h"
+#include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
 #include "ui/views/animation/ink_drop_highlight.h"
@@ -25,8 +31,8 @@ SystemMenuButton::SystemMenuButton(PressedCallback callback,
   DCHECK_EQ(normal_icon.width(), disabled_icon.width());
   DCHECK_EQ(normal_icon.height(), disabled_icon.height());
 
-  SetImage(STATE_NORMAL, normal_icon);
-  SetImage(STATE_DISABLED, disabled_icon);
+  SetImageModel(STATE_NORMAL, ui::ImageModel::FromImageSkia(normal_icon));
+  SetImageModel(STATE_DISABLED, ui::ImageModel::FromImageSkia(disabled_icon));
 
   SetImageHorizontalAlignment(ALIGN_CENTER);
   SetImageVerticalAlignment(ALIGN_MIDDLE);
@@ -34,13 +40,11 @@ SystemMenuButton::SystemMenuButton(PressedCallback callback,
 
   SetTooltipText(l10n_util::GetStringUTF16(accessible_name_id));
 
-  TrayPopupUtils::ConfigureTrayPopupButton(
-      this, TrayPopupInkDropStyle::HOST_CENTERED);
+  StyleUtil::SetUpInkDropForButton(
+      this, GetInkDropInsets(TrayPopupInkDropStyle::HOST_CENTERED));
   TrayPopupUtils::InstallHighlightPathGenerator(
       this, TrayPopupInkDropStyle::HOST_CENTERED);
-  views::FocusRing::Get(this)->SetColor(
-      AshColorProvider::Get()->GetControlsLayerColor(
-          AshColorProvider::ControlsLayerType::kFocusRingColor));
+  views::FocusRing::Get(this)->SetColorId(ui::kColorAshFocusRing);
 }
 
 SystemMenuButton::SystemMenuButton(PressedCallback callback,
@@ -54,14 +58,18 @@ SystemMenuButton::SystemMenuButton(PressedCallback callback,
 }
 
 void SystemMenuButton::SetVectorIcon(const gfx::VectorIcon& icon) {
-  AshColorProvider::Get()->DecorateIconButton(this, icon, /*toggled=*/false,
-                                              GetDefaultSizeOfVectorIcon(icon));
+  SetImageModel(
+      views::Button::STATE_NORMAL,
+      ui::ImageModel::FromVectorIcon(icon, cros_tokens::kColorPrimary));
+  SetImageModel(
+      views::Button::STATE_DISABLED,
+      ui::ImageModel::FromVectorIcon(
+          icon, ColorUtil::GetDisabledColor(cros_tokens::kColorPrimary)));
 }
 
 SystemMenuButton::~SystemMenuButton() = default;
 
-const char* SystemMenuButton::GetClassName() const {
-  return "SystemMenuButton";
-}
+BEGIN_METADATA(SystemMenuButton)
+END_METADATA
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 namespace blink {
 namespace scheduler {
 
-const char* PageVisibilityStateToString(PageVisibilityState visibility) {
+perfetto::StaticString PageVisibilityStateToString(
+    PageVisibilityState visibility) {
   switch (visibility) {
     case PageVisibilityState::kVisible:
       return "visible";
     case PageVisibilityState::kHidden:
-      return "hidden";
+      return nullptr;
   }
   // Keep MSVC happy.
   return nullptr;

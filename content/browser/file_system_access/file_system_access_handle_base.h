@@ -1,33 +1,40 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_FILE_SYSTEM_ACCESS_FILE_SYSTEM_ACCESS_HANDLE_BASE_H_
 #define CONTENT_BROWSER_FILE_SYSTEM_ACCESS_FILE_SYSTEM_ACCESS_HANDLE_BASE_H_
 
-#include <vector>
-
-#include "base/bind_post_task.h"
-#include "base/callback_helpers.h"
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/threading/sequence_bound.h"
+#include "base/thread_annotations.h"
+#include "base/types/expected.h"
+#include "build/build_config.h"
+#include "content/browser/file_system_access/file_system_access_error.h"
+#include "content/browser/file_system_access/file_system_access_lock_manager.h"
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
-#include "content/browser/web_contents/web_contents_impl.h"
+#include "content/browser/file_system_access/file_system_access_transfer_token_impl.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/web_contents_observer.h"
-#include "storage/browser/file_system/file_system_operation_runner.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/file_system_access_permission_context.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "storage/browser/file_system/file_system_url.h"
-#include "storage/browser/file_system/isolated_context.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_cloud_identifier.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_permission_mode.mojom.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 
 namespace storage {
 class FileSystemContext;
-class FileSystemOperationRunner;
 }  // namespace storage
 
 namespace content {
+
+class WebContents;
+class FileSystemAccessSafeMoveHelper;
 
 // Base class for File and Directory handle implementations. Holds data that is
 // common to both and (will) deal with functionality that is common as well,
@@ -38,11 +45,15 @@ namespace content {
 // sequence. That sequence also has to be the same sequence on which the
 // FileSystemAccessPermissionContext expects to be interacted with, which
 // is the UI thread.
-class CONTENT_EXPORT FileSystemAccessHandleBase : public WebContentsObserver {
+class CONTENT_EXPORT FileSystemAccessHandleBase {
  public:
   using BindingContext = FileSystemAccessManagerImpl::BindingContext;
   using SharedHandleState = FileSystemAccessManagerImpl::SharedHandleState;
   using PermissionStatus = blink::mojom::PermissionStatus;
+  using SensitiveEntryResult =
+      FileSystemAccessPermissionContext::SensitiveEntryResult;
+  using HandleType = FileSystemAccessPermissionContext::HandleType;
+  using AccessTrigger = FileSystemAccessPermissionContext::AccessTrigger;
 
   FileSystemAccessHandleBase(FileSystemAccessManagerImpl* manager,
                              const BindingContext& context,
@@ -51,29 +62,87 @@ class CONTENT_EXPORT FileSystemAccessHandleBase : public WebContentsObserver {
   FileSystemAccessHandleBase(const FileSystemAccessHandleBase&) = delete;
   FileSystemAccessHandleBase& operator=(const FileSystemAccessHandleBase&) =
       delete;
-  ~FileSystemAccessHandleBase() override;
+  virtual ~FileSystemAccessHandleBase();
 
   const storage::FileSystemURL& url() const { return url_; }
   const SharedHandleState& handle_state() const { return handle_state_; }
-  const storage::IsolatedContext::ScopedFSHandle& file_system() const {
-    return handle_state_.file_system;
-  }
   const BindingContext& context() const { return context_; }
+  base::WeakPtr<WebContents> web_contents() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return web_contents_;
+  }
+  GlobalRenderFrameHostId outermost_main_frame_id() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return outermost_main_frame_id_;
+  }
+  FileSystemAccessManagerImpl* manager() const { return manager_; }
+  storage::FileSystemContext* file_system_context() const {
+    return manager()->context();
+  }
 
+  // Returns the permission status for reading. This does not check the write
+  // permission status.
   PermissionStatus GetReadPermissionStatus();
+  // Returns the permission status for writing. This does not check the read
+  // permission status.
   PermissionStatus GetWritePermissionStatus();
+  // TODO(crbug.com/40276567): Update call sites to use
+  // `GetWritePermissionStatus()` if appropriate. Returns the permission status
+  // for reading and writing.
+  PermissionStatus GetReadWritePermissionStatus();
+
+  // Checks whether the handle currently allows read operations. Returns
+  // base::ok() if read access is permitted, or an error status on failure.
+  //
+  // Distinction from `GetReadPermissionStatus()`:
+  // - `GetReadPermissionStatus()` queries only whether the underlying
+  //   permission grant is GRANTED, ASK, or DENIED.
+  // - `CheckReadAccess()` is the authorization check for actual read
+  //   operations (e.g. AsBlob, GetEntries). A GRANTED status from
+  //   `GetReadPermissionStatus()` is necessary but not always sufficient: read
+  //   operations may still be blocked by broader context or security
+  //   constraints even when the underlying grant is GRANTED. Callers
+  //   executing read operations should always call `CheckReadAccess()`.
+  // - Use `DoGetPermissionStatus()` to handle the renderer's
+  //   `queryPermission()` API call.
+  base::expected<void, blink::mojom::FileSystemAccessErrorPtr>
+  CheckReadAccess();
+
+  // Checks whether a file system URL and binding context represent a
+  // non-sandboxed file system path bound to a third-party execution context.
+  // Sandboxed file systems (OPFS) are partitioned by storage key and exempt
+  // from third-party restrictions.
+  static bool IsThirdPartyContext(const storage::FileSystemURL& url,
+                                  const BindingContext& context);
+  storage::FileSystemURL GetParentURLForTesting() { return GetParentURL(); }
 
   // Implementation for the GetPermissionStatus method in the
   // blink::mojom::FileSystemAccessFileHandle and DirectoryHandle interfaces.
   void DoGetPermissionStatus(
-      bool writable,
+      blink::mojom::FileSystemAccessPermissionMode mode,
       base::OnceCallback<void(PermissionStatus)> callback);
   // Implementation for the RequestPermission method in the
   // blink::mojom::FileSystemAccessFileHandle and DirectoryHandle interfaces.
   void DoRequestPermission(
-      bool writable,
+      blink::mojom::FileSystemAccessPermissionMode mode,
       base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
                               PermissionStatus)> callback);
+
+  // TODO(crbug.com/40198034): Implement move and rename for directory handles.
+  // Implementation for the Move method in the
+  // blink::mojom::FileSystemAccessFileHandle and DirectoryHandle interfaces.
+  void DoMove(mojo::PendingRemote<blink::mojom::FileSystemAccessTransferToken>
+                  destination_directory,
+              const std::string& new_entry_name,
+              bool has_transient_user_activation,
+              base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
+                  callback);
+  // Implementation for the Rename method in the
+  // blink::mojom::FileSystemAccessFileHandle and DirectoryHandle interfaces.
+  void DoRename(const std::string& new_entry_name,
+                bool has_transient_user_activation,
+                base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
+                    callback);
 
   // Implementation for the Remove and RemoveEntry methods in the
   // blink::mojom::FileSystemAccessFileHandle and DirectoryHandle interfaces.
@@ -81,139 +150,188 @@ class CONTENT_EXPORT FileSystemAccessHandleBase : public WebContentsObserver {
                 bool recurse,
                 base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
                     callback);
+  void DidTakeRemoveLock(
+      const storage::FileSystemURL& url,
+      bool recurse,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+      scoped_refptr<FileSystemAccessLockManager::LockHandle> lock);
 
-  // Invokes |callback|, possibly after first requesting write permission. If
-  // permission isn't granted, |permission_denied| is invoked instead. The
-  // callbacks can be invoked synchronously.
+  // Implementation for the GetCloudIdentifiers method in the
+  // blink::mojom::FileSystemAccessFileHandle and DirectoryHandle interfaces.
+  void DoGetCloudIdentifiers(
+      FileSystemAccessPermissionContext::HandleType handle_type,
+      ContentBrowserClient::GetCloudIdentifiersCallback callback);
+
+  // Invokes `callback`, possibly after first requesting the permission
+  // `permission_to_request`.
+  // If permission is granted, `callback` is invoked with `callback_arg`.
+  // If permission is not granted, `no_permission_callback` is invoked with an
+  // error and `callback_arg`.
+  // The callbacks can be invoked synchronously.
   template <typename CallbackArgType>
-  void RunWithWritePermission(
+  void RunWithPermission(
+      blink::mojom::FileSystemAccessPermissionMode permission_to_request,
       base::OnceCallback<void(CallbackArgType)> callback,
       base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
                               CallbackArgType)> no_permission_callback,
       CallbackArgType callback_arg);
 
  protected:
-  FileSystemAccessManagerImpl* manager() { return manager_; }
-  storage::FileSystemContext* file_system_context() {
-    return manager()->context();
-  }
-
-  WebContentsImpl* web_contents() const {
-    return static_cast<WebContentsImpl*>(WebContentsObserver::web_contents());
-  }
-
   virtual base::WeakPtr<FileSystemAccessHandleBase> AsWeakPtr() = 0;
 
-  // Invokes |method| on the correct sequence on this handle's
-  // FileSystemOperationRunner, passing |args| and a callback to the method. The
-  // passed in |callback| is wrapped to make sure it is called on the correct
-  // sequence before passing it off to the |method|.
-  //
-  // Note that |callback| is passed to this method before other arguments, while
-  // the wrapped callback will be passed as last argument to the underlying
-  // FileSystemOperation |method|.
-  //
-  // TODO(mek): Once Promises are a thing, this can be done a lot cleaner, and
-  // mostly just be integrated in base::SequenceBound, eliminating the need for
-  // these helper methods.
-  template <typename... MethodArgs,
-            typename... ArgsMinusCallback,
-            typename... CallbackArgs>
-  void DoFileSystemOperation(
-      const base::Location& from_here,
-      storage::FileSystemOperationRunner::OperationID (
-          storage::FileSystemOperationRunner::*method)(MethodArgs...),
-      base::OnceCallback<void(CallbackArgs...)> callback,
-      ArgsMinusCallback&&... args) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    // Wrap the passed in callback in one that posts a task back to the current
-    // sequence.
-    auto wrapped_callback = base::BindPostTask(
-        base::SequencedTaskRunnerHandle::Get(), std::move(callback));
+  // Checks whether the handle represents a non-sandboxed file system path
+  // bound to a third-party execution context. Sandboxed file systems (OPFS)
+  // are partitioned by storage key and exempt from third-party restrictions.
+  bool IsThirdPartyContext() const;
 
-    // And then post a task to the sequence bound operation runner to run the
-    // provided method with the provided arguments (and the wrapped callback).
-    //
-    // FileSystemOperationRunner assumes file_system_context() is kept alive, to
-    // make sure this happens it is bound to a DoNothing callback.
-    manager()
-        ->operation_runner()
-        .AsyncCall(base::IgnoreResult(method))
-        .WithArgs(std::forward<ArgsMinusCallback>(args)...,
-                  std::move(wrapped_callback))
-        .Then(base::BindOnce(
-            base::DoNothing::Once<scoped_refptr<storage::FileSystemContext>>(),
-            base::WrapRefCounted(file_system_context())));
-  }
-  // Same as the previous overload, but using RepeatingCallback and
-  // BindRepeating instead.
-  template <typename... MethodArgs,
-            typename... ArgsMinusCallback,
-            typename... CallbackArgs>
-  void DoFileSystemOperation(
-      const base::Location& from_here,
-      storage::FileSystemOperationRunner::OperationID (
-          storage::FileSystemOperationRunner::*method)(MethodArgs...),
-      base::RepeatingCallback<void(CallbackArgs...)> callback,
-      ArgsMinusCallback&&... args) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    // Wrap the passed in callback in one that posts a task back to the current
-    // sequence.
-    auto wrapped_callback = base::BindRepeating(
-        [](scoped_refptr<base::SequencedTaskRunner> runner,
-           const base::RepeatingCallback<void(CallbackArgs...)>& callback,
-           CallbackArgs... args) {
-          runner->PostTask(
-              FROM_HERE,
-              base::BindOnce(callback, std::forward<CallbackArgs>(args)...));
-        },
-        base::SequencedTaskRunnerHandle::Get(), std::move(callback));
+  // Returns the effective write permission status.
+  // This currently returns permission status for kReadWrite, but will switch to
+  // the one for kWrite only when the FileSystemAccessWriteMode feature is fully
+  // rolled out.
+  PermissionStatus GetEffectiveWritePermissionStatus();
 
-    // And then post a task to the sequence bound operation runner to run the
-    // provided method with the provided arguments (and the wrapped callback).
-    //
-    // FileSystemOperationRunner assumes file_system_context() is kept alive, to
-    // make sure this happens it is bound to a DoNothing callback.
-    manager()
-        ->operation_runner()
-        .AsyncCall(base::IgnoreResult(method))
-        .WithArgs(std::forward<ArgsMinusCallback>(args)...,
-                  std::move(wrapped_callback))
-        .Then(base::BindOnce(
-            base::DoNothing::Once<scoped_refptr<storage::FileSystemContext>>(),
-            base::WrapRefCounted(file_system_context())));
-  }
+  // Calls NotifyEntryModified on the permission context for a given file, if
+  // the kFileSystemAccessRevokeReadOnRemove feature is enabled.
+  // See crbug.com/421690393.
+  void MaybeNotifyEntryModified(const storage::FileSystemURL& url);
+
+  enum class RenamePermission {
+    kDeny,
+    kAllowOverwrite,
+    kAllowRenameWithoutOverwrite,
+  };
+
+  RenamePermission GetRenamePermission(
+      const std::string& new_entry_name,
+      const bool has_transient_user_activation,
+      const storage::FileSystemURL destination_url);
+
+  // Invokes `callback` with `callback_arg` if sensitive entry access to `url`
+  // is allowed. If blocked, `blocked_callback` is invoked with `callback_arg`.
+  // The callbacks can be invoked synchronously.
+  template <typename CallbackArgType>
+  void RunWithSensitiveEntryAccess(
+      const storage::FileSystemURL& url,
+      const std::string& display_name,
+      HandleType handle_type,
+      AccessTrigger access_trigger,
+      base::OnceCallback<void(CallbackArgType)> callback,
+      base::OnceCallback<void(CallbackArgType)> blocked_callback,
+      CallbackArgType callback_arg);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
  private:
+  storage::FileSystemURL GetParentURL();
   void DidRequestPermission(
-      bool writable,
+      blink::mojom::FileSystemAccessPermissionMode mode,
       base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
                               PermissionStatus)> callback,
       FileSystemAccessPermissionGrant::PermissionRequestOutcome outcome);
 
-  bool ShouldTrackUsage() const {
-    return url_.type() != storage::kFileSystemTypeTemporary &&
-           url_.type() != storage::kFileSystemTypeTest;
+  void DidResolveTokenToMove(
+      const std::string& new_entry_name,
+      bool has_transient_user_activation,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+      FileSystemAccessTransferTokenImpl* resolved_token);
+  void PrepareForMove(
+      storage::FileSystemURL destination_url,
+      bool has_overwrite_permission,
+      bool has_transient_user_activation,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
+          callback);
+  void DidTakeMoveLocks(
+      storage::FileSystemURL destination_url,
+      bool has_transient_user_activation,
+      bool has_overwrite_permission,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+      std::vector<scoped_refptr<FileSystemAccessLockManager::LockHandle>>
+          locks);
+  template <typename CallbackArgType>
+  void DidVerifySensitiveEntryAccess(
+      base::OnceCallback<void(CallbackArgType)> callback,
+      base::OnceCallback<void(CallbackArgType)> blocked_callback,
+      CallbackArgType callback_arg,
+      SensitiveEntryResult result);
+  void DidVerifySensitiveEntryAccessForMove(
+      storage::FileSystemURL destination_url,
+      bool has_overwrite_permission,
+      bool has_transient_user_activation,
+      std::vector<scoped_refptr<FileSystemAccessLockManager::LockHandle>> locks,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
+          callback);
+  // Only called if the move operation is not allowed to overwrite the target.
+  void ConfirmMoveWillNotOverwriteDestination(
+      const storage::FileSystemURL& destination_url,
+      std::vector<scoped_refptr<FileSystemAccessLockManager::LockHandle>> locks,
+      bool has_transient_user_activation,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+      base::File::Error result);
+  void DoPerformMoveOperation(
+      const storage::FileSystemURL& destination_url,
+      std::vector<scoped_refptr<FileSystemAccessLockManager::LockHandle>> locks,
+      bool has_transient_user_activation,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)>
+          callback);
+
+  void DidMove(
+      storage::FileSystemURL destination_url,
+      std::vector<scoped_refptr<FileSystemAccessLockManager::LockHandle>> locks,
+      std::unique_ptr<FileSystemAccessSafeMoveHelper> move_helper,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+      blink::mojom::FileSystemAccessErrorPtr result);
+
+  void DidRemove(
+      const storage::FileSystemURL& url,
+      scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+      base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr)> callback,
+      base::File::Error result);
+
+  bool ShouldTrackUsage(const storage::FileSystemURL& url) const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return url.type() != storage::kFileSystemTypeTemporary &&
+           url.type() != storage::kFileSystemTypeTest;
   }
 
+  PermissionStatus GetPermissionStatusForMode(
+      blink::mojom::FileSystemAccessPermissionMode mode);
+
   // The FileSystemAccessManagerImpl that owns this instance.
-  FileSystemAccessManagerImpl* const manager_;
+  const raw_ptr<FileSystemAccessManagerImpl, DanglingUntriaged> manager_ =
+      nullptr;
+  base::WeakPtr<WebContents> web_contents_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+  GlobalRenderFrameHostId outermost_main_frame_id_
+      GUARDED_BY_CONTEXT(sequence_checker_);
   const BindingContext context_;
-  const storage::FileSystemURL url_;
+  storage::FileSystemURL url_ GUARDED_BY_CONTEXT(sequence_checker_);
   const SharedHandleState handle_state_;
 };
 
 template <typename CallbackArgType>
-void FileSystemAccessHandleBase::RunWithWritePermission(
+void FileSystemAccessHandleBase::RunWithPermission(
+    blink::mojom::FileSystemAccessPermissionMode permission_to_request,
     base::OnceCallback<void(CallbackArgType)> callback,
     base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
                             CallbackArgType)> no_permission_callback,
     CallbackArgType callback_arg) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kFileSystemAccessWriteMode)) {
+    if (permission_to_request !=
+        blink::mojom::FileSystemAccessPermissionMode::kReadWrite) {
+      // Rejects invalid permission mode.
+      mojo::ReportBadMessage("feature 'FileSystemAccessWriteMode' not enabled");
+      std::move(no_permission_callback)
+          .Run(file_system_access_error::FromStatus(
+                   blink::mojom::FileSystemAccessStatus::kSecurityError),
+               std::move(callback_arg));
+      return;
+    }
+  }
+
   DoRequestPermission(
-      /*writable=*/true,
+      permission_to_request,
       base::BindOnce(
           [](base::OnceCallback<void(CallbackArgType)> callback,
              base::OnceCallback<void(blink::mojom::FileSystemAccessErrorPtr,
@@ -234,6 +352,88 @@ void FileSystemAccessHandleBase::RunWithWritePermission(
           },
           std::move(callback), std::move(no_permission_callback),
           std::move(callback_arg)));
+}
+
+template <typename CallbackArgType>
+void FileSystemAccessHandleBase::RunWithSensitiveEntryAccess(
+    const storage::FileSystemURL& url,
+    const std::string& display_name,
+    HandleType handle_type,
+    AccessTrigger access_trigger,
+    base::OnceCallback<void(CallbackArgType)> callback,
+    base::OnceCallback<void(CallbackArgType)> blocked_callback,
+    CallbackArgType callback_arg) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!manager()->permission_context() ||
+      url.type() == storage::FileSystemType::kFileSystemTypeTemporary) {
+    // Skipping ConfirmSensitiveEntryAccess() as either of the following holds:
+    // (1) no permission context. Possibly because manager() is being destroyed
+    // or in a test.
+    // (2) entry is in Bucket File System, i.e. not a real file or directory.
+    std::move(callback).Run(std::move(callback_arg));
+    return;
+  }
+
+  if (url.type() == storage::FileSystemType::kFileSystemTypeLocal &&
+      !url.path().IsAbsolute()
+#if BUILDFLAG(IS_ANDROID)
+      && !url.path().IsContentUri()
+#endif
+  ) {
+    // Local file system paths must be absolute (or Android content-URIs) to be
+    // evaluated against the sensitive entry blocklist. Synthetic relative paths
+    // (e.g. passed via `LaunchQueue`) are not valid local files and must be
+    // blocked.
+    std::move(blocked_callback).Run(std::move(callback_arg));
+    return;
+  }
+
+  PathType path_type =
+      url.type() == storage::FileSystemType::kFileSystemTypeLocal
+          ? PathType::kLocal
+          : PathType::kExternal;
+  const base::FilePath& path =
+      path_type == PathType::kLocal ? url.path() : url.virtual_path();
+  PathInfo path_info = display_name.empty()
+                           ? PathInfo(path_type, path)
+                           : PathInfo(path_type, path, display_name);
+  // Wrap the callback so that if `permission_context()` is destroyed during
+  // profile shutdown before `manager()` (and drops pending blocklist callbacks
+  // while handle Mojo receivers are still connected), `blocked_callback` still
+  // runs and responds to the Mojo callback.
+  manager()->permission_context()->ConfirmSensitiveEntryAccess(
+      context().storage_key.origin(), path_info, handle_type, access_trigger,
+      context().frame_id,
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(
+              &FileSystemAccessHandleBase::DidVerifySensitiveEntryAccess<
+                  CallbackArgType>,
+              AsWeakPtr(), std::move(callback), std::move(blocked_callback),
+              std::move(callback_arg)),
+          SensitiveEntryResult::kAbort));
+}
+
+template <typename CallbackArgType>
+void FileSystemAccessHandleBase::DidVerifySensitiveEntryAccess(
+    base::OnceCallback<void(CallbackArgType)> callback,
+    base::OnceCallback<void(CallbackArgType)> blocked_callback,
+    CallbackArgType callback_arg,
+    SensitiveEntryResult result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  switch (result) {
+    case SensitiveEntryResult::kAllowed:
+      std::move(callback).Run(std::move(callback_arg));
+      break;
+    case SensitiveEntryResult::kAbort:
+      std::move(blocked_callback).Run(std::move(callback_arg));
+      break;
+    case SensitiveEntryResult::kTryAgain:
+      // `kTryAgain` indicates the user should pick a different entry in the
+      // file picker dialog. It is only applicable to picker flows (e.g.
+      // `ChooseEntries`) and should never occur for handle-based operations.
+      NOTREACHED();
+  }
 }
 
 }  // namespace content

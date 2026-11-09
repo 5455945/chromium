@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,17 +7,20 @@ import json
 import os
 import sys
 
-
 import common
 
 
 def main_run(args):
   with common.temporary_file() as tempfile_path:
-    rc = common.run_command([
+    rc = common.run_command(
+      [
         os.path.join(common.SRC_DIR, 'tools', 'checkperms', 'checkperms.py'),
-        '--root', args.paths['checkout'],
-        '--json', tempfile_path
-    ])
+        '--root',
+        args.paths['checkout'],
+        '--json',
+        tempfile_path,
+      ]
+    )
 
     with open(tempfile_path) as f:
       checkperms_results = json.load(f)
@@ -27,8 +30,7 @@ def main_run(args):
     result_set.add((result['rel_path'], result['error']))
 
   failures = ['%s: %s' % (r[0], r[1]) for r in result_set]
-  common.record_local_script_results(
-      'checkperms', args.output, failures, True)
+  common.record_local_script_results('checkperms', args.output, failures, True)
 
   return rc
 

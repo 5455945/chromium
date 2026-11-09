@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,23 +6,23 @@ import argparse
 import sys
 import os
 
-COPYRIGHT="""// Copyright 2017 The Chromium Authors. All rights reserved.
+COPYRIGHT = """// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 """
 
-HEADER="""{copyright}
+HEADER = """{copyright}
 
-#include "headless/lib/util/embedded_file.h"
+#include "base/containers/span.h"
 
 namespace {namespace} {{
 
-extern const headless::util::EmbeddedFile {variable_name};
+extern const base::span<const uint8_t> {variable_name};
 
 }}  // namespace {namespace}
 """
 
-SOURCE="""{copyright}
+SOURCE = """{copyright}
 
 #include "{header_file}"
 
@@ -34,10 +34,11 @@ const uint8_t contents[] = {contents};
 
 namespace {namespace} {{
 
-const headless::util::EmbeddedFile {variable_name} = {{ {length}, contents }};
+const base::span<const uint8_t> {variable_name}(contents);
 
 }}  // namespace {namespace}
 """
+
 
 def ParseArguments(args):
   cmdline_parser = argparse.ArgumentParser()
@@ -55,27 +56,29 @@ def GenerateArray(filepath):
   with open(filepath, 'rb') as f:
     contents = f.read()
 
-  contents = [ str(byte) for byte in bytearray(contents) ]
+  contents = [str(byte) for byte in bytearray(contents)]
 
-  return len(contents), '{' + ','.join(contents) + '}'
+  return '{' + ','.join(contents) + '}'
 
 
 def GenerateHeader(args):
   return HEADER.format(
-      copyright=COPYRIGHT,
-      namespace=args.namespace,
-      variable_name=args.variable_name)
+    copyright=COPYRIGHT,
+    namespace=args.namespace,
+    variable_name=args.variable_name,
+  )
+
 
 def GenerateSource(args):
-  length, contents = GenerateArray(args.data_file)
+  contents = GenerateArray(args.data_file)
 
   return SOURCE.format(
-      copyright=COPYRIGHT,
-      header_file=args.header_file,
-      namespace=args.namespace,
-      length=length,
-      contents=contents,
-      variable_name=args.variable_name)
+    copyright=COPYRIGHT,
+    header_file=args.header_file,
+    namespace=args.namespace,
+    contents=contents,
+    variable_name=args.variable_name,
+  )
 
 
 def WriteHeader(args):
@@ -93,4 +96,3 @@ if __name__ == '__main__':
 
   WriteHeader(args)
   WriteSource(args)
-

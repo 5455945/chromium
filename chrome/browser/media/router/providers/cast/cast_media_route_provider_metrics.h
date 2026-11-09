@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,21 @@
 
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/cast_channel/cast_message_util.h"
-#include "components/cast_channel/enum_table.h"
+#include "components/media_router/common/providers/cast/channel/cast_message_util.h"
+#include "components/media_router/common/providers/cast/channel/enum_table.h"
 
 namespace media_router {
 
 // Histogram names for app availability.
-static constexpr char kHistogramAppAvailabilitySuccess[] =
+inline constexpr char kHistogramAppAvailabilitySuccess[] =
     "MediaRouter.Cast.App.Availability.Success";
-static constexpr char kHistogramAppAvailabilityFailure[] =
+inline constexpr char kHistogramAppAvailabilityFailure[] =
     "MediaRouter.Cast.App.Availability.Failure";
-static constexpr char kHistogramAudioSender[] =
-    "MediaRouter.CastStreaming.Audio.PlaybackOnReceiver";
-// Histogram name for supportedAppTypes from the web sender.
-static constexpr char kHistogramCastSupportedAppTypes[] =
-    "MediaRouter.Cast.LaunchSessionRequest.SupportedAppTypes";
 // Histogram name for appType set by the receiver device.
-static constexpr char kHistogramCastAppType[] =
+inline constexpr char kHistogramCastAppType[] =
     "MediaRouter.Cast.LaunchSessionResponse.AppType";
 
-// For the puprose of collecting data for
+// For the purpose of collecting data for
 // MediaRouter.Cast.LaunchSessionRequest.SupportedAppType histogram, this enum
 // contains all possible combinations of ReceiverAppType.
 // These values are persisted to logs. Entries should not be renumbered and
@@ -50,11 +45,6 @@ enum class ReceiverAppTypeSet {
 // is recorded.
 void RecordAppAvailabilityResult(cast_channel::GetAppAvailabilityResult result,
                                  base::TimeDelta duration);
-
-// Records the value of supportedAppTypes from LaunchSession request in an
-// Enumberation histogram.
-void RecordLaunchSessionRequestSupportedAppTypes(
-    std::vector<cast_channel::ReceiverAppType> types);
 
 // Records the type of app (web app, native Android app etc.) launched on the
 // receiver side in an Enumeration histogram.

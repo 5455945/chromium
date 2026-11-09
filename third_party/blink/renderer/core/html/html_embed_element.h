@@ -23,7 +23,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_EMBED_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_EMBED_ELEMENT_H_
 
-#include "third_party/blink/public/mojom/frame/frame_owner_element_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
 
@@ -35,14 +34,21 @@ class CORE_EXPORT HTMLEmbedElement final : public HTMLPlugInElement {
  public:
   HTMLEmbedElement(Document&, const CreateElementFlags = CreateElementFlags());
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLEmbedElement;
+  }
+
   // Returns attributes that should be checked against Trusted Types
   const AttrNameToTrustedType& GetCheckedAttributeTypes() const override;
 
   bool IsExposed() const;
 
-  mojom::blink::FrameOwnerElementType OwnerType() const final {
-    return mojom::blink::FrameOwnerElementType::kEmbed;
+  FrameOwnerElementType OwnerType() const final {
+    return FrameOwnerElementType::kEmbed;
   }
+
+  String src();
+  void setSrc(const V8UnionTrustedScriptURLOrUSVString*, ExceptionState&);
 
  private:
   void ParseAttribute(const AttributeModificationParams&) override;
@@ -50,9 +56,9 @@ class CORE_EXPORT HTMLEmbedElement final : public HTMLPlugInElement {
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
 
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override;
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override;
 
   bool IsURLAttribute(const Attribute&) const override;
   const QualifiedName& SubResourceAttributeName() const override;

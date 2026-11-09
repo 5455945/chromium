@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,8 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 
-namespace extensions {
-namespace declarative_net_request {
-namespace filter_list_converter {
+namespace extensions::declarative_net_request::filter_list_converter {
 
 enum WriteType {
   kJSONRuleset,
@@ -20,7 +17,7 @@ enum WriteType {
 };
 
 // Utility function to convert filter list files in the text format to a JSON
-// file in a format supported by the Declarative Net Request API. If |type| is
+// file in a format supported by the Declarative Net Request API. If `type` is
 // kExtension, output_path is treated as the extension directory and the ruleset
 // is written to "rules.json". Else it is treated as the json ruleset location.
 // Returns false if the conversion fails.
@@ -29,8 +26,6 @@ bool ConvertRuleset(const std::vector<base::FilePath>& filter_list_inputs,
                     WriteType type,
                     bool noisy = true);
 
-}  // namespace filter_list_converter
-}  // namespace declarative_net_request
-}  // namespace extensions
+}  // namespace extensions::declarative_net_request::filter_list_converter
 
 #endif  // EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_FILTER_LIST_CONVERTER_CONVERTER_H_

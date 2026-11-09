@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
 namespace message_center {
@@ -43,15 +44,24 @@ class ExtensionRequestNotification
   void Show(NotificationCloseCallback callback);
   void CloseNotification();
 
+  std::string GetNotificationId() const;
+
+  // Constructs and parses notification IDs formatted as:
+  // "ext_req|<type>|<comma_separated_extension_ids>" on Android.
+  static std::string CreateNotificationId(NotifyType notify_type,
+                                          const ExtensionIds& extension_ids);
+  static std::vector<std::string> ParseExtensionIds(
+      const std::string& notification_id);
+
  private:
   // message_center::NotificationObserver
-  void Click(const absl::optional<int>& button_index,
-             const absl::optional<std::u16string>& reply) override;
+  void Click(const std::optional<int>& button_index,
+             const std::optional<std::u16string>& reply) override;
   void Close(bool by_user) override;
 
   std::unique_ptr<message_center::Notification> notification_;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   const NotifyType notify_type_ = kApproved;
   const ExtensionIds extension_ids_;
   NotificationCloseCallback callback_;

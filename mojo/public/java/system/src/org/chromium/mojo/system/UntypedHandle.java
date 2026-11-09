@@ -1,9 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.mojo.system;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.mojo.system.DataPipe.ConsumerHandle;
 import org.chromium.mojo.system.DataPipe.ProducerHandle;
 
@@ -12,34 +13,34 @@ import org.chromium.mojo.system.DataPipe.ProducerHandle;
  * return a handle of the requested type and invalidate this object. No validation is made when the
  * conversion operation is called.
  */
+@NullMarked
 public interface UntypedHandle extends Handle {
 
     /**
      * @see org.chromium.mojo.system.Handle#pass()
      */
     @Override
-    public UntypedHandle pass();
+    UntypedHandle pass();
 
     /**
      * Returns the underlying handle, as a {@link MessagePipeHandle}, invalidating this
      * representation.
      */
-    public MessagePipeHandle toMessagePipeHandle();
+    MessagePipeHandle toMessagePipeHandle();
 
     /**
      * Returns the underlying handle, as a {@link ConsumerHandle}, invalidating this representation.
      */
-    public ConsumerHandle toDataPipeConsumerHandle();
+    ConsumerHandle toDataPipeConsumerHandle();
 
     /**
      * Returns the underlying handle, as a {@link ProducerHandle}, invalidating this representation.
      */
-    public ProducerHandle toDataPipeProducerHandle();
+    ProducerHandle toDataPipeProducerHandle();
 
     /**
      * Returns the underlying handle, as a {@link SharedBufferHandle}, invalidating this
      * representation.
      */
-    public SharedBufferHandle toSharedBufferHandle();
-
+    SharedBufferHandle toSharedBufferHandle();
 }

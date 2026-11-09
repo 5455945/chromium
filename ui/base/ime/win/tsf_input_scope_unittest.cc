@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <stddef.h>
 #include <wrl/client.h>
 
-#include "base/win/windows_version.h"
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ui {
@@ -18,7 +20,7 @@ struct GetInputScopesTestCase {
   TextInputType input_type;
   TextInputMode input_mode;
   size_t expected_size;
-  InputScope expected_input_scopes[2];
+  std::array<InputScope, 2> expected_input_scopes;
 };
 
 // Google Test pretty-printer.
@@ -35,7 +37,7 @@ const GetInputScopesTestCase kGetInputScopesTestCases[] = {
     // Test cases of TextInputType.
     {TEXT_INPUT_TYPE_NONE, TEXT_INPUT_MODE_DEFAULT, 1, {IS_DEFAULT}},
     {TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_MODE_DEFAULT, 1, {IS_DEFAULT}},
-    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, 1, {IS_PASSWORD}},
+    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, 1, {IS_PRIVATE}},
     {TEXT_INPUT_TYPE_SEARCH, TEXT_INPUT_MODE_DEFAULT, 1, {IS_SEARCH}},
     {TEXT_INPUT_TYPE_EMAIL,
      TEXT_INPUT_MODE_DEFAULT,
@@ -97,8 +99,9 @@ TEST_P(TSFInputScopeTest, GetInputScopes) {
       test_case.input_type, test_case.input_mode);
 
   EXPECT_EQ(test_case.expected_size, input_scopes.size());
-  for (size_t i = 0; i < test_case.expected_size; ++i)
+  for (size_t i = 0; i < test_case.expected_size; ++i) {
     EXPECT_EQ(test_case.expected_input_scopes[i], input_scopes[i]);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -110,7 +113,7 @@ struct CreateInputScopesTestCase {
   TextInputMode input_mode;
   bool should_do_learning;
   UINT expected_size;
-  InputScope expected_input_scopes[2];
+  std::array<InputScope, 2> expected_input_scopes;
 };
 class TSFCreateInputScopeTest
     : public testing::TestWithParam<CreateInputScopesTestCase> {};
@@ -118,7 +121,7 @@ const CreateInputScopesTestCase kCreateInputScopesTestCases[] = {
     // Test cases of TextInputType.
     {TEXT_INPUT_TYPE_NONE, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_DEFAULT}},
     {TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_MODE_DEFAULT, false, 1, {IS_PRIVATE}},
-    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_PASSWORD}},
+    {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_PRIVATE}},
     {TEXT_INPUT_TYPE_PASSWORD, TEXT_INPUT_MODE_DEFAULT, false, 1, {IS_PRIVATE}},
     // Test cases of TextInputMode.
     {TEXT_INPUT_TYPE_NONE, TEXT_INPUT_MODE_DEFAULT, true, 1, {IS_DEFAULT}},
@@ -134,8 +137,6 @@ const CreateInputScopesTestCase kCreateInputScopesTestCases[] = {
     {TEXT_INPUT_TYPE_NUMBER, TEXT_INPUT_MODE_NUMERIC, false, 1, {IS_PRIVATE}},
 };
 TEST_P(TSFCreateInputScopeTest, CreateInputScopes) {
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return;
   const CreateInputScopesTestCase& test_case = GetParam();
   Microsoft::WRL::ComPtr<ITfInputScope> input_scope =
       tsf_inputscope::CreateInputScope(test_case.input_type,
@@ -146,8 +147,9 @@ TEST_P(TSFCreateInputScopeTest, CreateInputScopes) {
   HRESULT result = input_scope->GetInputScopes(&input_scopes, &c_input_scopes);
   EXPECT_EQ(S_OK, result);
   EXPECT_EQ(test_case.expected_size, c_input_scopes);
-  for (size_t i = 0; i < test_case.expected_size; ++i)
-    EXPECT_EQ(test_case.expected_input_scopes[i], input_scopes[i]);
+  for (size_t i = 0; i < test_case.expected_size; ++i) {
+    EXPECT_EQ(test_case.expected_input_scopes[i], UNSAFE_TODO(input_scopes[i]));
+  }
   CoTaskMemFree(input_scopes);
 }
 INSTANTIATE_TEST_SUITE_P(All,

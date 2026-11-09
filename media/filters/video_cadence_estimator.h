@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <optional>
+#include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -75,6 +75,10 @@ class MEDIA_EXPORT VideoCadenceEstimator {
   // be dropped or repeated to compensate for reaching the maximum acceptable
   // drift; this time length is controlled by |minimum_time_until_max_drift|.
   explicit VideoCadenceEstimator(base::TimeDelta minimum_time_until_max_drift);
+
+  VideoCadenceEstimator(const VideoCadenceEstimator&) = delete;
+  VideoCadenceEstimator& operator=(const VideoCadenceEstimator&) = delete;
+
   ~VideoCadenceEstimator();
 
   // Clears stored cadence information.
@@ -97,10 +101,7 @@ class MEDIA_EXPORT VideoCadenceEstimator {
                              base::TimeDelta max_acceptable_drift);
 
   // Returns true if a useful cadence was found.
-  bool has_cadence() const {
-    return bm_.use_bresenham_cadence_ ? bm_.perfect_cadence_.has_value()
-                                      : !cadence_.empty();
-  }
+  bool has_cadence() const { return !cadence_.empty(); }
 
   // Given a |frame_number|, where zero is the most recently rendered frame,
   // returns the ideal cadence for that frame.
@@ -121,6 +122,14 @@ class MEDIA_EXPORT VideoCadenceEstimator {
   size_t cadence_size_for_testing() const { return cadence_.size(); }
   std::string GetCadenceForTesting() const { return CadenceToString(cadence_); }
 
+  // Determines whether a simple (single-valued) integer cadence exists for
+  // |render_interval| and |frame_duration| that won't drift more than
+  // |render_interval| within |minimum_time_until_max_drift|.
+  static bool HasSimpleCadence(
+      base::TimeDelta render_interval,
+      base::TimeDelta frame_duration,
+      base::TimeDelta minimum_time_until_max_drift = base::Seconds(8));
+
  private:
   // Attempts to find an N-frame cadence.  Returns the cadence vector if cadence
   // is found and sets |time_until_max_drift| for the computed cadence. If
@@ -138,6 +147,9 @@ class MEDIA_EXPORT VideoCadenceEstimator {
 
   bool UpdateBresenhamCadenceEstimate(base::TimeDelta render_interval,
                                       base::TimeDelta frame_duration);
+
+  void UpdateCadenceInternal(Cadence new_cadence,
+                             base::TimeDelta time_until_max_drift);
 
   // The approximate best N-frame cadence for all frames seen thus far; updated
   // by UpdateCadenceEstimate().  Empty when no cadence has been detected.
@@ -167,22 +179,7 @@ class MEDIA_EXPORT VideoCadenceEstimator {
   const base::TimeDelta minimum_time_until_max_drift_;
 
   bool is_variable_frame_rate_;
-
-  // Data members related to Bresenham cadence algorithm.
-  // No technical reason to have this struct except for grouping related fields.
-  struct {
-    bool use_bresenham_cadence_ = false;
-
-    // By how much to shift frame index before calculating Bresenham cadence.
-    int frame_index_shift_ = 0;
-
-    // In an ideal world, each video frame would be shown for this many display
-    // intervals. It equals (display frequency) divided by (video frame rate).
-    // Absent when a video has variable frame rate.
-    absl::optional<double> perfect_cadence_;
-  } bm_;
-
-  DISALLOW_COPY_AND_ASSIGN(VideoCadenceEstimator);
+  base::TimeDelta last_render_interval_;
 };
 
 }  // namespace media

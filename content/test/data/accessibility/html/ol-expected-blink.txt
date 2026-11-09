@@ -3,39 +3,33 @@ rootWebArea
 ++++genericContainer ignored
 ++++++list
 ++++++++listItem hierarchicalLevel=1
-++++++++++listMarker name='1. '
-++++++++++++staticText name='1. '
-++++++++++++++inlineTextBox name='1. '
+++++++++++listMarker name='1. ' notUserSelectableStyle=true
+++++++++++++staticText ignored
 ++++++++++staticText name='Chrome'
 ++++++++++++inlineTextBox name='Chrome'
 ++++++++listItem hierarchicalLevel=1
-++++++++++listMarker name='2. '
-++++++++++++staticText name='2. '
-++++++++++++++inlineTextBox name='2. '
+++++++++++listMarker name='2. ' notUserSelectableStyle=true
+++++++++++++staticText ignored
 ++++++++++staticText name='Safari'
 ++++++++++++inlineTextBox name='Safari'
 ++++++++listItem hierarchicalLevel=1
-++++++++++listMarker name='3. '
-++++++++++++staticText name='3. '
-++++++++++++++inlineTextBox name='3. '
+++++++++++listMarker name='3. ' notUserSelectableStyle=true
+++++++++++++staticText ignored
 ++++++++++staticText name='IE'
 ++++++++++++inlineTextBox name='IE'
 ++++++list
 ++++++++listItem hierarchicalLevel=1
-++++++++++listMarker name='10. '
-++++++++++++staticText name='10. '
-++++++++++++++inlineTextBox name='10. '
+++++++++++listMarker name='10. ' notUserSelectableStyle=true
+++++++++++++staticText ignored
 ++++++++++staticText name='Android'
 ++++++++++++inlineTextBox name='Android'
 ++++++++listItem hierarchicalLevel=1
-++++++++++listMarker name='11. '
-++++++++++++staticText name='11. '
-++++++++++++++inlineTextBox name='11. '
+++++++++++listMarker name='11. ' notUserSelectableStyle=true
+++++++++++++staticText ignored
 ++++++++++staticText name='Mac'
 ++++++++++++inlineTextBox name='Mac'
 ++++++++listItem hierarchicalLevel=1
-++++++++++listMarker name='12. '
-++++++++++++staticText name='12. '
-++++++++++++++inlineTextBox name='12. '
+++++++++++listMarker name='12. ' notUserSelectableStyle=true
+++++++++++++staticText ignored
 ++++++++++staticText name='Windows'
 ++++++++++++inlineTextBox name='Windows'

@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2018 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -17,8 +17,6 @@ $ tools/android/native_lib_memory/code_pages_pss.py
     --chrome-package com.android.chrome --verbose
 """
 
-from __future__ import print_function
-
 import argparse
 import logging
 import os
@@ -28,7 +26,8 @@ import sys
 import parse_smaps
 
 _SRC_PATH = os.path.join(
-    os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
+  os.path.dirname(__file__), os.pardir, os.pardir, os.pardir
+)
 sys.path.append(os.path.join(_SRC_PATH, 'third_party', 'catapult', 'devil'))
 from devil.android import device_utils
 
@@ -45,12 +44,13 @@ def _GetPssInKb(mappings, chrome_package, verbose):
 
 def _CreateArgumentParser():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--app-package', help='Application to inspect.',
-                      required=True)
-  parser.add_argument('--chrome-package', help='Chrome package to look for.',
-                      required=True)
-  parser.add_argument('--verbose', help='Verbose output.',
-                      action='store_true')
+  parser.add_argument(
+    '--app-package', help='Application to inspect.', required=True
+  )
+  parser.add_argument(
+    '--chrome-package', help='Chrome package to look for.', required=True
+  )
+  parser.add_argument('--verbose', help='Verbose output.', action='store_true')
   return parser
 
 

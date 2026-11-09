@@ -1,8 +1,8 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-source_set("cpp") {
+component("cpp") {
   sources = [
     "audio_system_to_service_adapter.cc",
     "audio_system_to_service_adapter.h",
@@ -16,15 +16,22 @@ source_set("cpp") {
     "input_ipc.h",
     "output_device.cc",
     "output_device.h",
-    "sounds/audio_stream_handler.cc",
-    "sounds/audio_stream_handler.h",
-    "sounds/sounds_manager.cc",
-    "sounds/sounds_manager.h",
-    "sounds/test_data.cc",
-    "sounds/test_data.h",
   ]
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+  if (is_win || is_mac || is_linux || is_chromeos) {
+    sources += [
+      "sounds/audio_stream_handler.cc",
+      "sounds/audio_stream_handler.h",
+      "sounds/global_sounds_manager.cc",
+      "sounds/global_sounds_manager.h",
+      "sounds/sounds_manager.cc",
+      "sounds/sounds_manager.h",
+    ]
+
+    deps = [ "//ui/base" ]
+  }
+
+  defines = [ "IS_AUDIO_PUBLIC_CPP_IMPL" ]
 
   public_deps = [
     "//base",
@@ -32,6 +39,8 @@ source_set("cpp") {
     "//media/mojo/common",
     "//services/audio/public/mojom",
   ]
+
+  output_name = "audio_public_cpp"
 }
 
 source_set("test_support") {
@@ -44,11 +53,14 @@ source_set("test_support") {
     "fake_system_info.h",
   ]
 
-  deps = [ "//testing/gmock" ]
+  if (is_win || is_mac || is_linux || is_chromeos) {
+    sources += [ "sounds/test_data.h" ]
+  }
 
   public_deps = [
+    ":cpp",
     "//base",
-    "//media",
+    "//media/mojo/mojom",
     "//services/audio",
     "//services/audio/public/mojom",
   ]

@@ -1,79 +1,136 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <memory>
+#include <vector>
+
+#include "base/check.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/safe_browsing/password_protection/chrome_password_reuse_detection_manager_client.h"
 #include "chrome/browser/ui/android/passwords/all_passwords_bottom_sheet_view.h"
 #include "chrome/browser/ui/android/passwords/all_passwords_bottom_sheet_view_impl.h"
+#include "components/device_reauth/device_auth_availability_checker.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
-#include "components/password_manager/content/browser/content_password_manager_driver_factory.h"
-#include "components/password_manager/core/browser/biometric_authenticator.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_driver.h"
-#include "components/password_manager/core/browser/password_store.h"
+#include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/gfx/native_ui_types.h"
 
 using autofill::mojom::FocusedFieldType;
 using password_manager::PasswordManagerClient;
+using safe_browsing::PasswordReuseDetectionManagerClient;
 
 // No-op constructor for tests.
 AllPasswordsBottomSheetController::AllPasswordsBottomSheetController(
     base::PassKey<class AllPasswordsBottomSheetControllerTest>,
+    content::WebContents* web_contents,
     std::unique_ptr<AllPasswordsBottomSheetView> view,
     base::WeakPtr<password_manager::PasswordManagerDriver> driver,
-    password_manager::PasswordStoreInterface* store,
+    password_manager::PasswordStoreInterface* profile_store,
+    password_manager::PasswordStoreInterface* account_store,
     base::OnceCallback<void()> dismissal_callback,
     FocusedFieldType focused_field_type,
-    PasswordManagerClient* client)
+    PasswordManagerClient* client,
+    PasswordReuseDetectionManagerClient*
+        password_reuse_detection_manager_client)
     : view_(std::move(view)),
-      store_(store),
+      web_contents_(web_contents),
+      profile_store_(profile_store),
+      account_store_(account_store),
       dismissal_callback_(std::move(dismissal_callback)),
       driver_(std::move(driver)),
       focused_field_type_(focused_field_type),
-      client_(client) {}
+      client_(client),
+      password_reuse_detection_manager_client_(
+          password_reuse_detection_manager_client) {
+  CHECK(driver_);
+  frame_origin_ = driver_->GetLastCommittedOrigin();
+}
 
 AllPasswordsBottomSheetController::AllPasswordsBottomSheetController(
     content::WebContents* web_contents,
-    password_manager::PasswordStoreInterface* store,
+    password_manager::PasswordStoreInterface* profile_store,
+    password_manager::PasswordStoreInterface* account_store,
     base::OnceCallback<void()> dismissal_callback,
     FocusedFieldType focused_field_type)
     : view_(std::make_unique<AllPasswordsBottomSheetViewImpl>(this)),
       web_contents_(web_contents),
-      store_(store),
+      profile_store_(profile_store),
+      account_store_(account_store),
       dismissal_callback_(std::move(dismissal_callback)),
       focused_field_type_(focused_field_type) {
-  DCHECK(web_contents_);
-  DCHECK(store_);
-  DCHECK(dismissal_callback_);
-  password_manager::ContentPasswordManagerDriverFactory* factory =
-      password_manager::ContentPasswordManagerDriverFactory::FromWebContents(
-          web_contents_);
+  CHECK(web_contents_);
+  CHECK(profile_store);
+  CHECK(dismissal_callback_);
+  auto* focused_frame = web_contents->GetFocusedFrame();
+  CHECK(focused_frame->IsRenderFrameLive());
   password_manager::ContentPasswordManagerDriver* driver =
-      factory->GetDriverForFrame(web_contents_->GetFocusedFrame());
+      password_manager::ContentPasswordManagerDriver::GetForRenderFrameHost(
+          focused_frame);
   driver_ = driver->AsWeakPtr();
+  frame_origin_ = driver_->GetLastCommittedOrigin();
   client_ = ChromePasswordManagerClient::FromWebContents(web_contents_);
+  password_reuse_detection_manager_client_ =
+      ChromePasswordReuseDetectionManagerClient::FromWebContents(web_contents_);
 }
 
 AllPasswordsBottomSheetController::~AllPasswordsBottomSheetController() {
   if (authenticator_) {
-    authenticator_->Cancel(
-        password_manager::BiometricAuthRequester::kAllPasswordsList);
+    authenticator_->Cancel();
   }
 }
 
 void AllPasswordsBottomSheetController::Show() {
-  store_->GetAllLoginsWithAffiliationAndBrandingInformation(this);
+  if (on_password_forms_received_barrier_callback_) {
+    return;
+  }
+
+  int awaiting_calls = account_store_ ? 2 : 1;
+  on_password_forms_received_barrier_callback_ =
+      base::BarrierCallback<std::vector<password_manager::PasswordForm>>(
+          awaiting_calls,
+          base::BindOnce(
+              &AllPasswordsBottomSheetController::OnResultFromAllStoresReceived,
+              weak_ptr_factory_.GetWeakPtr()));
+
+  profile_store_->GetAllLoginsWithAffiliationAndBrandingInformation(
+      weak_ptr_factory_.GetWeakPtr());
+  if (account_store_) {
+    account_store_->GetAllLoginsWithAffiliationAndBrandingInformation(
+        weak_ptr_factory_.GetWeakPtr());
+  }
 }
 
-void AllPasswordsBottomSheetController::OnGetPasswordStoreResults(
-    std::vector<std::unique_ptr<password_manager::PasswordForm>> results) {
-  base::EraseIf(results,
-                [](const auto& form_ptr) { return form_ptr->blocked_by_user; });
-  view_->Show(std::move(results), focused_field_type_);
+void AllPasswordsBottomSheetController::OnGetPasswordStoreResultsOrErrorFrom(
+    password_manager::PasswordStoreInterface* store,
+    base::expected<std::vector<password_manager::StoredCredential>,
+                   password_manager::PasswordStoreBackendError>
+        results_or_error) {
+  CHECK(on_password_forms_received_barrier_callback_);
+  if (!results_or_error) {
+    on_password_forms_received_barrier_callback_.Run({});
+    return;
+  }
+  std::vector<password_manager::StoredCredential> results =
+      std::move(*results_or_error);
+  std::erase_if(results, [](const auto& form) { return form.blocked_by_user; });
+
+  on_password_forms_received_barrier_callback_.Run(
+      password_manager::ToPasswordForms(std::move(results)));
+}
+
+Profile* AllPasswordsBottomSheetController::GetProfile() {
+  return Profile::FromBrowserContext(web_contents_->GetBrowserContext());
 }
 
 gfx::NativeView AllPasswordsBottomSheetController::GetNativeView() {
@@ -82,48 +139,68 @@ gfx::NativeView AllPasswordsBottomSheetController::GetNativeView() {
 
 void AllPasswordsBottomSheetController::OnCredentialSelected(
     const std::u16string username,
-    const std::u16string password) {
+    const std::u16string password,
+    RequestsToFillPassword requests_to_fill_password) {
   const bool is_password_field =
       focused_field_type_ == FocusedFieldType::kFillablePasswordField;
-  if (!driver_) {
+  if (!driver_ ||
+      !driver_->GetLastCommittedOrigin().IsSameOriginWith(frame_origin_)) {
     OnDismiss();
     return;
   }
 
-  if (is_password_field) {
+  if (requests_to_fill_password && is_password_field) {
     // `client_` is guaranteed to be valid here.
     // Both the `client_` and `PasswordAccessoryController` are attached to
     // WebContents. And AllPasswordBottomSheetController is owned by
     // PasswordAccessoryController.
-    DCHECK(client_);
-    scoped_refptr<password_manager::BiometricAuthenticator> authenticator =
-        client_->GetBiometricAuthenticator();
-    if (authenticator &&
-        authenticator->CanAuthenticate() ==
-            password_manager::BiometricsAvailability::kAvailable) {
-      authenticator_ = std::move(authenticator);
-      authenticator_->Authenticate(
-          password_manager::BiometricAuthRequester::kAllPasswordsList,
+    CHECK(client_, base::NotFatalUntil::M161);
+    bool should_reauth = false;
+    if (!base::FeatureList::IsEnabled(
+            password_manager::features::kDeviceReauthRefactor)) {
+      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator =
+          client_->GetDeviceAuthenticator();
+      should_reauth =
+          client_->IsReauthBeforeFillingRequiredLegacy(authenticator.get());
+      if (should_reauth) {
+        authenticator_ = std::move(authenticator);
+      }
+    } else {
+      std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker> checker =
+          client_->GetDeviceAuthAvailabilityChecker();
+      should_reauth = client_->IsReauthBeforeFillingRequired(checker.get());
+      if (should_reauth) {
+        authenticator_ = client_->GetDeviceAuthenticator();
+      }
+    }
+
+    if (should_reauth) {
+      CHECK(authenticator_);
+      authenticator_->AuthenticateWithMessage(
+          u"",
           base::BindOnce(&AllPasswordsBottomSheetController::OnReauthCompleted,
                          base::Unretained(this), password));
       return;
     }
 
     FillPassword(password);
-  } else {
+  } else if (!requests_to_fill_password) {
     driver_->FillIntoFocusedField(is_password_field, username);
   }
+
   // Consumes the dismissal callback to destroy the native controller and java
   // controller after the user selects a credential.
   OnDismiss();
 }
 
 void AllPasswordsBottomSheetController::OnDismiss() {
-  std::move(dismissal_callback_).Run();
+  if (dismissal_callback_) {
+    std::move(dismissal_callback_).Run();
+  }
 }
 
-const GURL& AllPasswordsBottomSheetController::GetFrameUrl() {
-  return driver_->GetLastCommittedURL();
+GURL AllPasswordsBottomSheetController::GetFrameOriginUrl() {
+  return frame_origin_.GetURL();
 }
 
 void AllPasswordsBottomSheetController::OnReauthCompleted(
@@ -142,8 +219,29 @@ void AllPasswordsBottomSheetController::OnReauthCompleted(
 
 void AllPasswordsBottomSheetController::FillPassword(
     const std::u16string& password) {
-  if (!driver_)
+  if (!driver_ ||
+      !driver_->GetLastCommittedOrigin().IsSameOriginWith(frame_origin_)) {
     return;
+  }
   driver_->FillIntoFocusedField(true, password);
-  client_->OnPasswordSelected(password);
+  password_reuse_detection_manager_client_->OnPasswordSelected(password);
+}
+
+void AllPasswordsBottomSheetController::OnResultFromAllStoresReceived(
+    std::vector<std::vector<password_manager::PasswordForm>> results) {
+  CHECK(on_password_forms_received_barrier_callback_);
+  CHECK(!results.empty());
+  on_password_forms_received_barrier_callback_.Reset();
+
+  if (!driver_ || !driver_->CanShowAutofillUi() ||
+      !driver_->GetLastCommittedOrigin().IsSameOriginWith(frame_origin_)) {
+    OnDismiss();
+    return;
+  }
+
+  if (results.size() > 1) {
+    std::move(results[1].begin(), results[1].end(),
+              std::back_inserter(results[0]));
+  }
+  view_->Show(std::move(results[0]), focused_field_type_);
 }

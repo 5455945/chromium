@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,8 +30,20 @@ SubresourceWebBundle* SubresourceWebBundleList::GetMatchingBundle(
   for (auto it = subresource_web_bundles_.rbegin();
        it != subresource_web_bundles_.rend(); ++it) {
     if ((*it)->CanHandleRequest(url)) {
-      return *it;
+      return it->Get();
     }
+  }
+  return nullptr;
+}
+
+SubresourceWebBundle*
+SubresourceWebBundleList::FindSubresourceWebBundleWhichWillBeReleased(
+    const KURL& bundle_url,
+    network::mojom::CredentialsMode credentials_mode) const {
+  for (auto& it : subresource_web_bundles_) {
+    if (it->WillBeReleased() && it->GetBundleUrl() == bundle_url &&
+        it->GetCredentialsMode() == credentials_mode)
+      return it.Get();
   }
   return nullptr;
 }

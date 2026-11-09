@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,24 +9,28 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/importer/importer_progress_observer.h"
 #include "chrome/browser/importer/profile_writer.h"
-#include "chrome/common/importer/importer_data_types.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/search_engines/template_url_service.h"
-#include "ui/gfx/native_widget_types.h"
+#include "components/user_data_importer/common/importer_data_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class ExternalProcessImporterClient;
 class FirefoxProfileLock;
 class Profile;
 
-namespace importer {
+namespace bookmarks {
+class BookmarkModel;
+}  // namespace bookmarks
+
+namespace user_data_importer {
 struct SourceProfile;
-}
+}  // namespace user_data_importer
 
 // This class manages the import process. It creates the in-process half of the
 // importer bridge and the external process importer client.
@@ -35,16 +39,21 @@ class ExternalProcessImporterHost
  public:
   ExternalProcessImporterHost();
 
+  ExternalProcessImporterHost(const ExternalProcessImporterHost&) = delete;
+  ExternalProcessImporterHost& operator=(const ExternalProcessImporterHost&) =
+      delete;
+
   void Cancel();
 
   // Starts the process of importing the settings and data depending on what the
   // user selected.
   // |source_profile| - importer profile to import.
   // |target_profile| - profile to import into.
-  // |items| - specifies which data to import (bitmask of importer::ImportItem).
-  // |writer| - called to actually write data back to the profile.
+  // |items| - specifies which data to import (bitmask of
+  // user_data_importer::ImportItem). |writer| - called to actually write data
+  // back to the profile.
   virtual void StartImportSettings(
-      const importer::SourceProfile& source_profile,
+      const user_data_importer::SourceProfile& source_profile,
       Profile* target_profile,
       uint16_t items,
       ProfileWriter* writer);
@@ -68,8 +77,8 @@ class ExternalProcessImporterHost
   // process. The middle functions are notifications that the a harvesting of a
   // particular source of data (specified by |item|) is under way.
   void NotifyImportStarted();
-  void NotifyImportItemStarted(importer::ImportItem item);
-  void NotifyImportItemEnded(importer::ImportItem item);
+  void NotifyImportItemStarted(user_data_importer::ImportItem item);
+  void NotifyImportItemEnded(user_data_importer::ImportItem item);
   void NotifyImportEnded();
 
  private:
@@ -83,9 +92,8 @@ class ExternalProcessImporterHost
   virtual void LaunchImportIfReady();
 
   // bookmarks::BaseBookmarkModelObserver:
-  void BookmarkModelLoaded(bookmarks::BookmarkModel* model,
-                           bool ids_reassigned) override;
-  void BookmarkModelBeingDeleted(bookmarks::BookmarkModel* model) override;
+  void BookmarkModelLoaded(bool ids_reassigned) override;
+  void BookmarkModelBeingDeleted() override;
   void BookmarkModelChanged() override;
 
   // Called when TemplateURLService has been loaded.
@@ -106,7 +114,8 @@ class ExternalProcessImporterHost
   // prior to continue.
   // |source_profile| - importer profile to import.
   // Returns false iff import should be aborted.
-  bool CheckForFirefoxLock(const importer::SourceProfile& source_profile);
+  bool CheckForFirefoxLock(
+      const user_data_importer::SourceProfile& source_profile);
 
   // Make sure BookmarkModel and TemplateURLService are loaded before import
   // process starts, if bookmarks and/or search engines are among the items
@@ -121,22 +130,22 @@ class ExternalProcessImporterHost
   gfx::NativeWindow parent_window_;
 
   // The observer that we need to notify about changes in the import process.
-  importer::ImporterProgressObserver* observer_;
+  raw_ptr<importer::ImporterProgressObserver, DanglingUntriaged> observer_;
 
   // Firefox profile lock.
   std::unique_ptr<FirefoxProfileLock> firefox_lock_;
 
   // Profile we're importing from.
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
-  // True if we're waiting for the model to finish loading.
-  bool waiting_for_bookmarkbar_model_;
+  // Set if we're waiting for the model to finish loading, and represents
+  // the BookmarkModel instance we are waiting for.
+  base::ScopedObservation<bookmarks::BookmarkModel,
+                          bookmarks::BaseBookmarkModelObserver>
+      bookmark_model_observation_for_loading_{this};
 
   // Non-empty when waiting for the TemplateURLService to finish loading.
   base::CallbackListSubscription template_service_subscription_;
-
-  // Have we installed a listener on the bookmark model?
-  bool installed_bookmark_observer_;
 
   // True if source profile is readable.
   bool is_source_readable_;
@@ -145,12 +154,12 @@ class ExternalProcessImporterHost
   scoped_refptr<ProfileWriter> writer_;
 
   // Used to pass notifications from the browser side to the external process.
-  ExternalProcessImporterClient* client_;
+  raw_ptr<ExternalProcessImporterClient, DanglingUntriaged> client_;
 
   // Information about a profile needed for importing.
-  importer::SourceProfile source_profile_;
+  user_data_importer::SourceProfile source_profile_;
 
-  // Bitmask of items to be imported (see importer::ImportItem enum).
+  // Bitmask of items to be imported (see user_data_importer::ImportItem enum).
   uint16_t items_;
 
   // True if the import process has been cancelled.
@@ -158,8 +167,6 @@ class ExternalProcessImporterHost
 
   // Vends weak pointers for the importer to call us back.
   base::WeakPtrFactory<ExternalProcessImporterHost> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ExternalProcessImporterHost);
 };
 
 #endif  // CHROME_BROWSER_IMPORTER_EXTERNAL_PROCESS_IMPORTER_HOST_H_

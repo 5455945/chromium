@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,9 @@
 #include <memory>
 #include <set>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "ui/base/cursor/cursor_loader.h"
-#include "ui/base/cursor/mojom/cursor_type.mojom-forward.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/views/views_export.h"
+#include "ui/wm/core/cursor_loader.h"
 #include "ui/wm/core/native_cursor_manager.h"
 
 namespace aura {
@@ -31,6 +29,11 @@ namespace views {
 class VIEWS_EXPORT DesktopNativeCursorManager : public wm::NativeCursorManager {
  public:
   DesktopNativeCursorManager();
+
+  DesktopNativeCursorManager(const DesktopNativeCursorManager&) = delete;
+  DesktopNativeCursorManager& operator=(const DesktopNativeCursorManager&) =
+      delete;
+
   ~DesktopNativeCursorManager() override;
 
   // Adds |host| to the set |hosts_|.
@@ -38,6 +41,11 @@ class VIEWS_EXPORT DesktopNativeCursorManager : public wm::NativeCursorManager {
 
   // Removes |host| from the set |hosts_|.
   void RemoveHost(aura::WindowTreeHost* host);
+
+  // Initialize the observer that will report system cursor size and visibility
+  // state.
+  virtual void InitSystemCursorObservers(
+      wm::NativeCursorManagerDelegate* delegate);
 
  private:
   // Overridden from wm::NativeCursorManager:
@@ -49,17 +57,20 @@ class VIEWS_EXPORT DesktopNativeCursorManager : public wm::NativeCursorManager {
                      wm::NativeCursorManagerDelegate* delegate) override;
   void SetCursorSize(ui::CursorSize cursor_size,
                      wm::NativeCursorManagerDelegate* delegate) override;
+  void SetLargeCursorSizeInDip(
+      int large_cursor_size_in_dip,
+      wm::NativeCursorManagerDelegate* delegate) override;
   void SetMouseEventsEnabled(
       bool enabled,
       wm::NativeCursorManagerDelegate* delegate) override;
+  void SetCursorColor(SkColor color,
+                      wm::NativeCursorManagerDelegate* delegate) override;
 
   // The set of hosts to notify of changes in cursor state.
-  using Hosts = std::set<aura::WindowTreeHost*>;
+  using Hosts = std::set<raw_ptr<aura::WindowTreeHost, SetExperimental>>;
   Hosts hosts_;
 
-  ui::CursorLoader cursor_loader_;
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopNativeCursorManager);
+  wm::CursorLoader cursor_loader_;
 };
 
 }  // namespace views

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,7 +11,7 @@ from syscalls import syscalls
 
 
 def parseEvents(z):
-  calls = { }
+  calls = {}
   for e in z:
     if e['eventtype'] == 'EVENT_TYPE_SYSCALL' and e['syscall'] == 17:
       delta = e['done'] - e['ms']

@@ -34,6 +34,7 @@ PASS parseThenSerializeRule('a > b { }') is 'a > b { }'
 
 
 PASS parseThenSerializeRule(':active { }') is ':active { }'
+PASS parseThenSerializeRule(':autofill { }') is ':autofill { }'
 PASS parseThenSerializeRule(':checked { }') is ':checked { }'
 PASS parseThenSerializeRule(':disabled { }') is ':disabled { }'
 PASS parseThenSerializeRule(':empty { }') is ':empty { }'
@@ -71,9 +72,6 @@ PASS parseThenSerializeRule(':-webkit-drag { }') is ':-webkit-drag { }'
 
 PASS parseThenSerializeRule('::-webkit-file-upload-button { }') is '::-webkit-file-upload-button { }'
 PASS parseThenSerializeRule('::-webkit-search-cancel-button { }') is '::-webkit-search-cancel-button { }'
-PASS parseThenSerializeRule('::-webkit-search-decoration { }') is '::-webkit-search-decoration { }'
-PASS parseThenSerializeRule('::-webkit-search-results-button { }') is '::-webkit-search-results-button { }'
-PASS parseThenSerializeRule('::-webkit-search-results-decoration { }') is '::-webkit-search-results-decoration { }'
 PASS parseThenSerializeRule('::-webkit-slider-thumb { }') is '::-webkit-slider-thumb { }'
 
 

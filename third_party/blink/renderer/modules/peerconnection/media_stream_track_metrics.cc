@@ -1,17 +1,30 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/media_stream_track_metrics.h"
 
 #include <inttypes.h>
-#include <string>
 
-//#include "base/hash/md5.h"
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_checker.h"
+#include "crypto/hash.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/webrtc/api/peer_connection_interface.h"
 
 namespace blink {
 
@@ -52,29 +65,9 @@ class MediaStreamTrackMetricsObserver {
   std::string track_id_;
 
   // Non-owning.
-  MediaStreamTrackMetrics* owner_;
+  raw_ptr<MediaStreamTrackMetrics> owner_;
   base::ThreadChecker thread_checker_;
 };
-
-namespace {
-
-// Used with std::find_if.
-struct ObserverFinder {
-  ObserverFinder(MediaStreamTrackMetrics::Direction direction,
-                 MediaStreamTrackMetrics::Kind kind,
-                 const std::string& track_id)
-      : direction_(direction), kind_(kind), track_id_(track_id) {}
-  bool operator()(
-      const std::unique_ptr<MediaStreamTrackMetricsObserver>& observer) {
-    return direction_ == observer->direction() && kind_ == observer->kind() &&
-           track_id_ == observer->track_id();
-  }
-  MediaStreamTrackMetrics::Direction direction_;
-  MediaStreamTrackMetrics::Kind kind_;
-  std::string track_id_;
-};
-
-}  // namespace
 
 MediaStreamTrackMetricsObserver::MediaStreamTrackMetricsObserver(
     MediaStreamTrackMetrics::Direction direction,
@@ -152,8 +145,12 @@ void MediaStreamTrackMetrics::RemoveTrack(Direction direction,
                                           Kind kind,
                                           const std::string& track_id) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  auto it = std::find_if(observers_.begin(), observers_.end(),
-                         ObserverFinder(direction, kind, track_id));
+  auto it = std::ranges::find_if(
+      observers_,
+      [&](const std::unique_ptr<MediaStreamTrackMetricsObserver>& observer) {
+        return direction == observer->direction() && kind == observer->kind() &&
+               track_id == observer->track_id();
+      });
   if (it == observers_.end()) {
     // Since external apps could call removeTrack() with a stream they
     // never added, this can happen without it being an error.
@@ -230,23 +227,15 @@ uint64_t MediaStreamTrackMetrics::MakeUniqueIdImpl(uint64_t pc_id,
   // We use a hash over the |track| pointer and the PeerConnection ID,
   // plus a boolean flag indicating whether the track is remote (since
   // you might conceivably have a remote track added back as a sent
-  // track) as the unique ID.
-  //
-  // We don't need a cryptographically secure hash (which MD5 should
-  // no longer be considered), just one with virtually zero chance of
-  // collisions when faced with non-malicious data.
+  // track) as the unique ID, then use SHA-256 for a hash function with low
+  // chance of collision when faced with non-adversarial data.
   std::string unique_id_string =
       base::StringPrintf("%" PRIu64 " %s %d", pc_id, track_id.c_str(),
                          direction == Direction::kReceive ? 1 : 0);
 
-  base::MD5Context ctx;
-  base::MD5Init(&ctx);
-  base::MD5Update(&ctx, unique_id_string);
-  base::MD5Digest digest;
-  base::MD5Final(&digest, &ctx);
-
-  static_assert(sizeof(digest.a) > sizeof(uint64_t), "need a bigger digest");
-  return *reinterpret_cast<uint64_t*>(digest.a);
+  auto hash = crypto::hash::Sha256(unique_id_string);
+  static_assert(sizeof(hash) >= sizeof(uint64_t));
+  return base::U64FromNativeEndian(base::span(hash).first<sizeof(uint64_t)>());
 }
 
 uint64_t MediaStreamTrackMetrics::MakeUniqueId(const std::string& track_id,

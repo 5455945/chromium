@@ -1,15 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/server/web_socket.h"
 
+#include <string_view>
 #include <vector>
 
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/hash/sha1.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/sys_byteorder.h"
 #include "net/server/http_connection.h"
@@ -19,6 +21,7 @@
 #include "net/server/web_socket_encoder.h"
 #include "net/websockets/websocket_deflate_parameters.h"
 #include "net/websockets/websocket_extension.h"
+#include "net/websockets/websocket_handshake_challenge.h"
 #include "net/websockets/websocket_handshake_constants.h"
 
 namespace net {
@@ -38,7 +41,7 @@ std::string ExtensionsHeaderString(
 
 std::string ValidResponseString(
     const std::string& accept_hash,
-    const std::vector<WebSocketExtension> extensions) {
+    const std::vector<WebSocketExtension>& extensions) {
   return base::StringPrintf(
       "HTTP/1.1 101 WebSocket Protocol Handshake\r\n"
       "Upgrade: WebSocket\r\n"
@@ -52,7 +55,7 @@ std::string ValidResponseString(
 }  // namespace
 
 WebSocket::WebSocket(HttpServer* server, HttpConnection* connection)
-    : server_(server), connection_(connection), closed_(false) {}
+    : server_(server), connection_(connection) {}
 
 WebSocket::~WebSocket() = default;
 
@@ -73,9 +76,7 @@ void WebSocket::Accept(const HttpServerRequestInfo& request,
         traffic_annotation);
     return;
   }
-  std::string encoded_hash;
-  base::Base64Encode(base::SHA1HashString(key + websockets::kWebSocketGuid),
-                     &encoded_hash);
+  std::string encoded_hash = ComputeSecWebSocketAccept(key);
 
   std::vector<WebSocketExtension> response_extensions;
   auto i = request.headers.find("sec-websocket-extensions");
@@ -96,11 +97,13 @@ void WebSocket::Accept(const HttpServerRequestInfo& request,
   server_->SendRaw(connection_->id(),
                    ValidResponseString(encoded_hash, response_extensions),
                    traffic_annotation);
+  traffic_annotation_ = std::make_unique<NetworkTrafficAnnotationTag>(
+      NetworkTrafficAnnotationTag(traffic_annotation));
 }
 
-WebSocket::ParseResult WebSocket::Read(std::string* message) {
+WebSocketParseResult WebSocket::Read(std::string* message) {
   if (closed_)
-    return FRAME_CLOSE;
+    return WebSocketParseResult::FRAME_CLOSE;
 
   if (!encoder_) {
     // RFC6455, section 4.1 says "Once the client's opening handshake has been
@@ -110,26 +113,63 @@ WebSocket::ParseResult WebSocket::Read(std::string* message) {
     // a server handshake. Either way, the client clearly couldn't have gotten
     // a proper server handshake, so error out, especially since this method
     // can't proceed without an |encoder_|.
-    return FRAME_ERROR;
+    return WebSocketParseResult::FRAME_ERROR;
   }
 
+  WebSocketParseResult result = WebSocketParseResult::FRAME_OK_MIDDLE;
   HttpConnection::ReadIOBuffer* read_buf = connection_->read_buf();
-  base::StringPiece frame(read_buf->StartOfBuffer(), read_buf->GetSize());
+  std::string_view frame = base::as_string_view(read_buf->readable_bytes());
   int bytes_consumed = 0;
-  ParseResult result = encoder_->DecodeFrame(frame, &bytes_consumed, message);
-  if (result == FRAME_OK)
-    read_buf->DidConsume(bytes_consumed);
-  if (result == FRAME_CLOSE)
+  result = encoder_->DecodeFrame(frame, &bytes_consumed, message);
+  read_buf->DidConsume(bytes_consumed);
+
+  if (result == WebSocketParseResult::FRAME_CLOSE) {
+    // The current websocket implementation does not initiate the Close
+    // handshake before closing the connection.
+    // Therefore the received Close frame most likely belongs to the client that
+    // initiated the Closing handshake.
+    // According to https://datatracker.ietf.org/doc/html/rfc6455#section-5.5.1
+    // if an endpoint receives a Close frame and did not previously send a
+    // Close frame, the endpoint MUST send a Close frame in response.
+    // It also MAY provide the close reason listed in
+    // https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1.
+    // As the closure was initiated by the client the "normal closure" status
+    // code is appropriate.
+    std::string code = "\x03\xe8";  // code = 1000;
+    std::string encoded;
+    encoder_->EncodeCloseFrame(code, 0, &encoded);
+    server_->SendRaw(connection_->id(), encoded, *traffic_annotation_);
+
     closed_ = true;
+  }
+
+  if (result == WebSocketParseResult::FRAME_PING) {
+    if (!traffic_annotation_)
+      return WebSocketParseResult::FRAME_ERROR;
+    Send(*message, WebSocketFrameHeader::kOpCodePong, *traffic_annotation_);
+  }
   return result;
 }
 
-void WebSocket::Send(base::StringPiece message,
+void WebSocket::Send(std::string_view message,
+                     WebSocketFrameHeader::OpCodeEnum op_code,
                      const NetworkTrafficAnnotationTag traffic_annotation) {
   if (closed_)
     return;
   std::string encoded;
-  encoder_->EncodeFrame(message, 0, &encoded);
+  switch (op_code) {
+    case WebSocketFrameHeader::kOpCodeText:
+      encoder_->EncodeTextFrame(message, 0, &encoded);
+      break;
+
+    case WebSocketFrameHeader::kOpCodePong:
+      encoder_->EncodePongFrame(message, 0, &encoded);
+      break;
+
+    default:
+      // Only Pong and Text frame types are supported.
+      NOTREACHED();
+  }
   server_->SendRaw(connection_->id(), encoded, traffic_annotation);
 }
 

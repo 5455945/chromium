@@ -31,7 +31,9 @@
 #include "third_party/blink/renderer/core/svg/svg_integer_optional_integer.h"
 
 #include "third_party/blink/renderer/core/svg/svg_parser_utilities.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -50,21 +52,12 @@ SVGIntegerOptionalInteger* SVGIntegerOptionalInteger::Clone() const {
       first_integer_->Clone(), second_integer_->Clone());
 }
 
-SVGPropertyBase* SVGIntegerOptionalInteger::CloneForAnimation(
-    const String& value) const {
-  auto* clone = MakeGarbageCollected<SVGIntegerOptionalInteger>(
-      MakeGarbageCollected<SVGInteger>(0), MakeGarbageCollected<SVGInteger>(0));
-  clone->SetValueAsString(value);
-  return clone;
-}
-
 String SVGIntegerOptionalInteger::ValueAsString() const {
   if (first_integer_->Value() == second_integer_->Value()) {
     return String::Number(first_integer_->Value());
   }
 
-  return String::Number(first_integer_->Value()) + " " +
-         String::Number(second_integer_->Value());
+  return Format("{} {}", first_integer_->Value(), second_integer_->Value());
 }
 
 SVGParsingError SVGIntegerOptionalInteger::SetValueAsString(
@@ -76,8 +69,8 @@ SVGParsingError SVGIntegerOptionalInteger::SetValueAsString(
     x = y = 0;
   }
 
-  first_integer_->SetValue(clampTo<int>(x));
-  second_integer_->SetValue(clampTo<int>(y));
+  first_integer_->SetValue(ClampTo<int>(x));
+  second_integer_->SetValue(ClampTo<int>(y));
   return parse_status;
 }
 
@@ -87,13 +80,14 @@ void SVGIntegerOptionalInteger::SetInitial(unsigned value) {
   second_integer_->SetInitial(value);
 }
 
-void SVGIntegerOptionalInteger::Add(const SVGPropertyBase* other,
+bool SVGIntegerOptionalInteger::Add(const SVGPropertyBase* other,
                                     const SVGElement* context_element) {
   auto* other_integer_optional_integer = To<SVGIntegerOptionalInteger>(other);
   first_integer_->Add(other_integer_optional_integer->FirstInteger(),
                       context_element);
   second_integer_->Add(other_integer_optional_integer->SecondInteger(),
                        context_element);
+  return true;
 }
 
 void SVGIntegerOptionalInteger::CalculateAnimatedValue(

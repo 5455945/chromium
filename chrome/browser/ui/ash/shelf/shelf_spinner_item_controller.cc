@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/notimplemented.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_context_menu.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
@@ -16,12 +17,12 @@ ShelfSpinnerItemController::ShelfSpinnerItemController(
       start_time_(base::Time::Now()) {}
 
 ShelfSpinnerItemController::~ShelfSpinnerItemController() {
-  DCHECK(!(host_ && host_->HasApp(app_id())));
+  CHECK(!(host_ && host_->HasApp(app_id())), base::NotFatalUntil::M162);
 }
 
 void ShelfSpinnerItemController::SetHost(
     const base::WeakPtr<ShelfSpinnerController>& host) {
-  DCHECK(!host_ || host_.get() == host.get());
+  CHECK(!host_ || host_.get() == host.get(), base::NotFatalUntil::M162);
   host_ = host;
 }
 
@@ -29,9 +30,7 @@ void ShelfSpinnerItemController::ExecuteCommand(bool from_context_menu,
                                                 int64_t command_id,
                                                 int32_t event_flags,
                                                 int64_t display_id) {
-  if (from_context_menu && ExecuteContextMenuCommand(command_id, event_flags))
-    return;
-
+  CHECK(!from_context_menu, base::NotFatalUntil::M162);
   NOTIMPLEMENTED();
 }
 

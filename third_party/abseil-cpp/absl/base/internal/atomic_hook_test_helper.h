@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef ABSL_BASE_ATOMIC_HOOK_TEST_HELPER_H_
-#define ABSL_BASE_ATOMIC_HOOK_TEST_HELPER_H_
+#ifndef ABSL_BASE_INTERNAL_ATOMIC_HOOK_TEST_HELPER_H_
+#define ABSL_BASE_INTERNAL_ATOMIC_HOOK_TEST_HELPER_H_
 
+#include "absl/base/config.h"
 #include "absl/base/internal/atomic_hook.h"
 
 namespace absl {
@@ -31,4 +32,4 @@ void RegisterFunc(VoidF func);
 ABSL_NAMESPACE_END
 }  // namespace absl
 
-#endif  // ABSL_BASE_ATOMIC_HOOK_TEST_HELPER_H_
+#endif  // ABSL_BASE_INTERNAL_ATOMIC_HOOK_TEST_HELPER_H_

@@ -1,18 +1,28 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_TOOLBAR_RELOAD_BUTTON_H_
 #define CHROME_BROWSER_UI_VIEWS_TOOLBAR_RELOAD_BUTTON_H_
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/views/chrome_views_export.h"
+#include "chrome/browser/ui/views/toolbar/reload_control.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/metadata/view_factory.h"
 
 class CommandUpdater;
+class InitialWebUIMetricsDispatcher;
+class Profile;
+class WaapUIMetricsRecorder;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -24,44 +34,64 @@ class CommandUpdater;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-class ReloadButton : public ToolbarButton,
-                     public ui::SimpleMenuModel::Delegate {
+class ReloadButton : public ToolbarButton, public ReloadControl {
+  METADATA_HEADER(ReloadButton, ToolbarButton)
+
  public:
-  METADATA_HEADER(ReloadButton);
-
-  enum class Mode { kReload = 0, kStop };
-
-  explicit ReloadButton(CommandUpdater* command_updater);
+  // `profile` is null when the button is hosted outside a browser window, for
+  // example in the ChromeOS login screen captive portal dialog. No WaaP UI
+  // metrics are recorded in that case.
+  ReloadButton(Profile* profile,
+               CommandUpdater* command_updater,
+               InitialWebUIMetricsDispatcher* metrics_dispatcher);
   ReloadButton(const ReloadButton&) = delete;
   ReloadButton& operator=(const ReloadButton&) = delete;
   ~ReloadButton() override;
 
-  // Ask for a specified button state.  If |force| is true this will be applied
-  // immediately.
-  void ChangeMode(Mode mode, bool force);
-  Mode visible_mode() const { return visible_mode_; }
+  Mode GetVisibleMode() const { return visible_mode_; }
 
-  // Gets/Sets whether reload drop-down menu is enabled.
-  bool GetMenuEnabled() const;
-  void SetMenuEnabled(bool enable);
+  bool GetDoubleClickTimerIsRunning() const;
+
+  [[nodiscard]] base::CallbackListSubscription AddVisibleModeChangedCallback(
+      views::PropertyChangedCallback callback);
 
   // ToolbarButton:
   void OnMouseExited(const ui::MouseEvent& event) override;
-  std::u16string GetTooltipText(const gfx::Point& p) const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   bool ShouldShowMenu() override;
-  void ShowDropDownMenu(ui::MenuSourceType source_type) override;
+  void ShowDropDownMenu(ui::mojom::MenuSourceType source_type) override;
+
+  void UpdateCachedTooltipText();
+
+  // Button:
+  void PaintButtonContents(gfx::Canvas* canvas) override;
 
   // ui::SimpleMenuModel::Delegate:
-  bool IsCommandIdChecked(int command_id) const override;
-  bool IsCommandIdEnabled(int command_id) const override;
-  bool IsCommandIdVisible(int command_id) const override;
   bool GetAcceleratorForCommandId(int command_id,
                                   ui::Accelerator* accelerator) const override;
+
+  // ReloadControl overrides:
+  void ChangeMode(Mode mode, bool force) override;
+  bool GetDevToolsStatusForTesting() const override;
+  void SetDevToolsStatus(bool is_dev_tools_connected) override;
+
   void ExecuteCommand(int command_id, int event_flags) override;
 
+  // Overrides the timer interval delays for testing.
+  void set_double_click_timer_delay_for_testing(
+      base::TimeDelta double_click_timer_delay) {
+    double_click_timer_delay_ = double_click_timer_delay;
+  }
+  void set_mode_switch_timer_delay_for_testing(
+      base::TimeDelta mode_switch_timer_delay) {
+    mode_switch_timer_delay_ = mode_switch_timer_delay;
+  }
+
  private:
-  friend class ReloadButtonTest;
+  friend class ReloadButtonMetricsTest;
+  friend class ReloadButtonTestBase;
+  friend class ReloadButtonWindowMetricsTest;
+  FRIEND_TEST_ALL_PREFIXES(ReloadButtonTest, TooltipText);
+  FRIEND_TEST_ALL_PREFIXES(ReloadButtonTest, TooltipTextAccessibility);
 
   std::unique_ptr<ui::SimpleMenuModel> CreateMenuModel();
 
@@ -73,14 +103,25 @@ class ReloadButton : public ToolbarButton,
 
   void OnDoubleClickTimer();
   void OnStopToReloadTimer();
+  void UpdateAccessibleHasPopup();
+  void OnNextPresentation(const viz::FrameTimingDetails&);
 
   base::OneShotTimer double_click_timer_;
 
   // Timer to delay switching between reload and stop states.
   base::OneShotTimer mode_switch_timer_;
 
+  // Null when the button has no profile, i.e. it is not in a browser window.
+  const std::unique_ptr<WaapUIMetricsRecorder> metrics_recorder_;
+
   // This may be NULL when testing.
-  CommandUpdater* command_updater_;
+  raw_ptr<CommandUpdater, DanglingUntriaged> command_updater_;
+
+  // Vector icons to use for both modes.
+  base::raw_ref<const gfx::VectorIcon> reload_icon_;
+  base::raw_ref<const gfx::VectorIcon> reload_touch_icon_;
+  base::raw_ref<const gfx::VectorIcon> stop_icon_;
+  base::raw_ref<const gfx::VectorIcon> stop_touch_icon_;
 
   // The mode we should be in assuming no timers are running.
   Mode intended_mode_ = Mode::kReload;
@@ -88,13 +129,16 @@ class ReloadButton : public ToolbarButton,
   // The currently-visible mode - this may differ from the intended mode.
   Mode visible_mode_ = Mode::kReload;
 
+  // If true, we will animate the transitions between reload and stop.
+  bool animate_transitions_ = false;
+
   // The delay times for the timers.  These are members so that tests can modify
   // them.
   base::TimeDelta double_click_timer_delay_;
   base::TimeDelta mode_switch_timer_delay_;
 
-  // Indicates if reload menu is enabled.
-  bool menu_enabled_ = false;
+  // Indicates if dev tools is connected.
+  bool is_dev_tools_connected_ = false;
 
   // TESTING ONLY
   // True if we should pretend the button is hovered.
@@ -102,10 +146,17 @@ class ReloadButton : public ToolbarButton,
   // Increments when we would tell the browser to "reload", so
   // test code can tell whether we did so (as there may be no |browser_|).
   int testing_reload_count_ = 0;
+
+  // The initial WebUI metrics dispatcher for the window this button is in.
+  // Not owned and might be null.
+  const raw_ptr<InitialWebUIMetricsDispatcher> metrics_dispatcher_;
+
+  // Must be the last member.
+  base::WeakPtrFactory<ReloadButton> weak_ptr_factory_{this};
 };
 
 BEGIN_VIEW_BUILDER(CHROME_VIEWS_EXPORT, ReloadButton, ToolbarButton)
-VIEW_BUILDER_PROPERTY(bool, MenuEnabled)
+VIEW_BUILDER_PROPERTY(bool, DevToolsStatus)
 END_VIEW_BUILDER
 
 DEFINE_VIEW_BUILDER(CHROME_VIEWS_EXPORT, ReloadButton)

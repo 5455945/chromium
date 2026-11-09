@@ -3,22 +3,23 @@ Fader
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow DIV class='compositing'",
+      "name": "LayoutBlockFlow DIV class='compositing'",
       "bounds": [1, 1],
       "drawsContent": false,
       "transform": 1
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (relative positioned) DIV class='test')",
-      "position": [-10000, -9],
-      "bounds": [10100, 100],
-      "transform": 1
+      "name": "LayoutBlockFlow (relative positioned, children-inline) DIV class='test'",
+      "position": [8, 0],
+      "bounds": [100, 99],
+      "contentsOpaque": true,
+      "backgroundColor": "#FFFFFF"
     }
   ],
   "transforms": [

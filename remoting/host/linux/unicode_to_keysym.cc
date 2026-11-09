@@ -1,12 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/linux/unicode_to_keysym.h"
 
 #include <algorithm>
+#include <array>
 
-#include "base/cxx17_backports.h"
 #include "ui/gfx/x/keysyms/keysyms.h"
 
 namespace remoting {
@@ -23,7 +23,8 @@ struct CodePair {
 // value (e.g. see XK_Tab and XK_KP_Tab). It excludes Latin1 characters (which
 // have 1-to-1 mapping between keysym and unicode), but includes some
 // alternative keysyms for some of them (e.g. XK_KP_0 for '0').
-const CodePair kKeySymUnicodeMap[] = {
+// clang-format off
+const auto kKeySymUnicodeMap = std::to_array<CodePair>({
   { XK_BackSpace,                   0x0008 },
   { XK_Tab,                         0x0009 },
   { XK_KP_Tab,                      0x0009 },
@@ -794,11 +795,8 @@ const CodePair kKeySymUnicodeMap[] = {
   { XK_Hangul_YeorinHieuh,          0x3186 },
   { XK_Hangul_AraeA,                0x318d },
   { XK_Hangul_AraeAE,               0x318e },
-};
-
-bool CompareCodePair(const CodePair& pair, uint32_t unicode) {
-  return pair.unicode < unicode;
-}
+});
+// clang-format on
 
 }  // namespace
 
@@ -811,12 +809,9 @@ std::vector<uint32_t> GetKeySymsForUnicode(uint32_t unicode) {
     keysyms.push_back(unicode);
   }
 
-  const CodePair* map_end = kKeySymUnicodeMap + base::size(kKeySymUnicodeMap);
-  const CodePair* pair =
-      std::lower_bound(kKeySymUnicodeMap, map_end, unicode, &CompareCodePair);
-  while (pair != map_end && pair->unicode == unicode) {
-    keysyms.push_back(pair->keysym);
-    ++pair;
+  for (const CodePair& pair : std::ranges::equal_range(
+           kKeySymUnicodeMap, unicode, {}, &CodePair::unicode)) {
+    keysyms.push_back(pair.keysym);
   }
 
   keysyms.push_back(0x01000000 | unicode);

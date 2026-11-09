@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 // / "overimposed" on top of the template definition and this can lead to
 // generating conflicting replacements - for example the same |t_ptr_field|
 // definition can get replaced with:
-// 1. T* t_ptr_field  ->  CheckedPtr<T> t_ptr_field            // expected
-// 2. T* t_ptr_field  ->  CheckedPtr<SomeClass> t_ptr_field    // undesired
+// 1. T* t_ptr_field  ->  raw_ptr<T> t_ptr_field            // expected
+// 2. T* t_ptr_field  ->  raw_ptr<SomeClass> t_ptr_field    // undesired
 //
 // To avoid generating conflicting replacements, the rewriter excludes implicit
 // template specializations via |implicit_field_decl_matcher|.
@@ -19,51 +19,82 @@
 // Note that rewrites in *explicit* template specializations are still
 // desirable.  For example, see the |T2* t2_ptr_field| in |MyTemplate<int, T2>|
 // partial template specialization.
+#include <optional>
 
-#include "base/memory/checked_ptr.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 
 class SomeClass;
 class SomeClass2;
 
 template <typename T, typename T2>
 class MyTemplate {
-  // Expected rewrite: CheckedPtr<T> t_ptr_field;
-  CheckedPtr<T> t_ptr_field;
+  // Expected rewrite: raw_ptr<T> t_ptr_field;
+  raw_ptr<T> t_ptr_field;
 
-  // Expected rewrite: CheckedPtr<SomeClass> some_class_ptr_field;
-  CheckedPtr<SomeClass> some_class_ptr_field;
+  // Expected rewrite: raw_ptr<SomeClass> some_class_ptr_field;
+  raw_ptr<SomeClass> some_class_ptr_field;
 
   // No rewrite expected.
   int int_field;
+
+  // Expected rewrite: base::raw_span<T> span_field1;
+  base::raw_span<T> span_field1;
+  // Expected rewrite: base::raw_span<SomeClass> span_field2;
+  base::raw_span<SomeClass> span_field2;
+  // Expected rewrite: std::optional<base::raw_span<T>> optional_span_field1;
+  std::optional<base::raw_span<T>> optional_span_field1;
+  // Expected rewrite: std::optional<base::raw_span<SomeClass>>
+  // optional_span_field2;
+  std::optional<base::raw_span<SomeClass>> optional_span_field2;
 };
 
 // Partial *explicit* specialization.
 template <typename T2>
 class MyTemplate<int, T2> {
-  // Expected rewrite: CheckedPtr<T2> t2_ptr_field;
-  CheckedPtr<T2> t2_ptr_field;
+  // Expected rewrite: raw_ptr<T2> t2_ptr_field;
+  raw_ptr<T2> t2_ptr_field;
 
-  // Expected rewrite: CheckedPtr<SomeClass> some_class_ptr_field;
-  CheckedPtr<SomeClass> some_class_ptr_field;
+  // Expected rewrite: raw_ptr<SomeClass> some_class_ptr_field;
+  raw_ptr<SomeClass> some_class_ptr_field;
 
-  // Expected rewrite: CheckedPtr<int> int_ptr_field;
-  CheckedPtr<int> int_ptr_field;
+  // Expected rewrite: raw_ptr<int> int_ptr_field;
+  raw_ptr<int> int_ptr_field;
 
   // No rewrite expected.
   int int_field;
+
+  // Expected rewrite: base::raw_span<T2> span_field1;
+  base::raw_span<T2> span_field1;
+  // Expected rewrite: base::raw_span<SomeClass> span_field2;
+  base::raw_span<SomeClass> span_field2;
+  // Expected rewrite: std::optional<base::raw_span<int>> optional_span_field1;
+  std::optional<base::raw_span<int>> optional_span_field1;
+  // Expected rewrite: std::optional<base::raw_span<T2>> optional_span_field2;
+  std::optional<base::raw_span<T2>> optional_span_field2;
 };
 
 // Full *explicit* specialization.
 template <>
 class MyTemplate<int, SomeClass2> {
-  // Expected rewrite: CheckedPtr<int> int_ptr_field;
-  CheckedPtr<int> int_ptr_field;
+  // Expected rewrite: raw_ptr<int> int_ptr_field;
+  raw_ptr<int> int_ptr_field;
 
-  // Expected rewrite: CheckedPtr<SomeClass2> some_class2_ptr_field;
-  CheckedPtr<SomeClass2> some_class2_ptr_field;
+  // Expected rewrite: raw_ptr<SomeClass2> some_class2_ptr_field;
+  raw_ptr<SomeClass2> some_class2_ptr_field;
 
   // No rewrite expected.
   int int_field;
+
+  // Expected rewrite: base::raw_span<T2> span_field1;
+  base::raw_span<int> span_field1;
+  // Expected rewrite: base::raw_span<SomeClass> span_field2;
+  base::raw_span<SomeClass2> span_field2;
+  // Expected rewrite: std::optional<base::raw_span<int>> optional_span_field1;
+  std::optional<base::raw_span<int>> optional_span_field1;
+  // Expected rewrite: std::optional<base::raw_span<T2>> optional_span_field2;
+  std::optional<base::raw_span<SomeClass2>> optional_span_field2;
 };
 
 // The class definitions below trigger an implicit template specialization of
@@ -86,23 +117,35 @@ template <typename T>
 class TemplateSelfPointerTest {
   // Early versions of the rewriter used to rewrite the type below to three
   // conflicting replacements:
-  // 1. CheckedPtr<TemplateSelfPointerTest<bool>>
-  // 2. CheckedPtr<TemplateSelfPointerTest<SomeClass2>>
-  // 3. CheckedPtr<TemplateSelfPointerTest<T>>
+  // 1. raw_ptr<TemplateSelfPointerTest<bool>>
+  // 2. raw_ptr<TemplateSelfPointerTest<SomeClass2>>
+  // 3. raw_ptr<TemplateSelfPointerTest<T>>
   //
   // Something similar would have happened in //base/scoped_generic.h (in the
   // nested Receiver class):
   //   ScopedGeneric* scoped_generic_;
   //
-  // Expected rewrite: CheckedPtr<TemplateSelfPointerTest<T>>
-  CheckedPtr<TemplateSelfPointerTest<T>> ptr_field_;
+  // Expected rewrite: raw_ptr<TemplateSelfPointerTest<T>>
+  raw_ptr<TemplateSelfPointerTest<T>> ptr_field_;
 
   // Similar test to the above.  Something similar would have happened in
   // //base/id_map.h (in the nested Iterator class):
   //   IDMap<V, K>* map_;
   //
-  // Expected rewrite: CheckedPtr<TemplateSelfPointerTest<T>>
-  CheckedPtr<TemplateSelfPointerTest<T>> ptr_field2_;
+  // Expected rewrite: raw_ptr<TemplateSelfPointerTest<T>>
+  raw_ptr<TemplateSelfPointerTest<T>> ptr_field2_;
+
+  // Expected rewrite: base::raw_span<TemplateSelfPointerTest> span_field1;
+  base::raw_span<TemplateSelfPointerTest> span_field1;
+  // Expected rewrite: base::raw_span<TemplateSelfPointerTest<T>> span_field2;
+  base::raw_span<TemplateSelfPointerTest<T>> span_field2;
+  // Expected rewrite: std::optional<base::raw_span<TemplateSelfPointerTest>>
+  // optional_span_field1;
+  std::optional<base::raw_span<TemplateSelfPointerTest>> optional_span_field1;
+  // Expected rewrite: std::optional<base::raw_span<TemplateSelfPointerTest<T>>>
+  // optional_span_field2;
+  std::optional<base::raw_span<TemplateSelfPointerTest<T>>>
+      optional_span_field2;
 };
 
 void foo() {
@@ -140,8 +183,11 @@ class StringSplitter {
     // |StringSplitter<T>| for |StringSplitter<int>| in an implicit template
     // specialization triggered by the |foo2| function below.
     //
-    // Expected rewrite: CheckedPtr<const StringSplitter<T>> splitter_
-    CheckedPtr<const StringSplitter<T>> splitter_;
+    // Expected rewrite: raw_ptr<const StringSplitter<T>> splitter_
+    raw_ptr<const StringSplitter<T>> splitter_;
+
+    // Expected rewrite: base::raw_span<const StringSplitter> span_field
+    base::raw_span<const StringSplitter> span_field;
   };
 
   Iterator begin() const { return Iterator(*this); }
@@ -162,11 +208,14 @@ namespace template_function {
 template <typename T>
 void foo(T* arg) {
   struct NestedStruct {
-    // Expected rewrite: CheckedPtr<T> ptr_field;
-    CheckedPtr<T> ptr_field;
+    // Expected rewrite: raw_ptr<T> ptr_field;
+    raw_ptr<T> ptr_field;
 
-    // Expected rewrite: CheckedPtr<MyTemplate<T, T>> ptr_field2;
-    CheckedPtr<MyTemplate<T, T>> ptr_field2;
+    // Expected rewrite: raw_ptr<MyTemplate<T, T>> ptr_field2;
+    raw_ptr<MyTemplate<T, T>> ptr_field2;
+
+    // Expected rewrite: base::raw_span<T> span_field;
+    base::raw_span<T> span_field;
   } var;
 
   var.ptr_field = nullptr;

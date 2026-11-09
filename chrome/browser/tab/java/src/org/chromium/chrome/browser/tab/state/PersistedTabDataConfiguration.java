@@ -1,28 +1,36 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tab.state;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import androidx.annotation.VisibleForTesting;
+
+import org.chromium.base.ResettersForTesting;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Contains configuration values such as data storage methods and unique identifiers
- * for {@link PersistedTabData}
+ * Contains configuration values such as data storage methods and unique identifiers for {@link
+ * PersistedTabData}
  */
+@NullMarked
 public enum PersistedTabDataConfiguration {
-    // TODO(crbug.com/1059650) investigate should this go in the app code?
+    // TODO(crbug.com/40678592) investigate should this go in the app code?
     // Also investigate if the storage instance should be shared.
-    CRITICAL_PERSISTED_TAB_DATA("CPTD"),
-    ENCRYPTED_CRITICAL_PERSISTED_TAB_DATA("ECPTD"),
     MOCK_PERSISTED_TAB_DATA("MPTD"),
     ENCRYPTED_MOCK_PERSISTED_TAB_DATA("EMPTD"),
     SHOPPING_PERSISTED_TAB_DATA("SPTD"),
-    STORE_PERSISTED_TAB_DATA("STPTD"),
-    // TODO(crbug.com/1113828) investigate separating test from prod test implementations
+    ARCHIVE_PERSISTED_TAB_DATA("APTD"),
+    SEND_TAB_TO_SELF_TAB_CARD_LABEL_DATA("STTSTCLD"),
+    EMPTY_BYTE_BUFFER_TEST_CONFIG("EBBTC"),
+    // TODO(crbug.com/40143638) investigate separating test from prod test implementations
     TEST_CONFIG("TC");
 
     private static final Map<Class<? extends PersistedTabData>, PersistedTabDataConfiguration>
@@ -30,25 +38,19 @@ public enum PersistedTabDataConfiguration {
     private static final Map<Class<? extends PersistedTabData>, PersistedTabDataConfiguration>
             sEncryptedLookup = new HashMap<>();
 
-    /**
-     * Ensure lazy initialization of singleton storage
-     */
-    private static FilePersistedTabDataStorage sFilePersistedTabDataStorage;
-    private static EncryptedFilePersistedTabDataStorage sEncrpytedFilePersistedTabDataStorage;
-    private static MockPersistedTabDataStorage sMockPersistedTabDataStorage;
+    /** Ensure lazy initialization of singleton storage */
+    private static @Nullable MockPersistedTabDataStorage sMockPersistedTabDataStorage;
 
-    private static FilePersistedTabDataStorage getFilePersistedTabDataStorage() {
-        if (sFilePersistedTabDataStorage == null) {
-            sFilePersistedTabDataStorage = new FilePersistedTabDataStorage();
-        }
-        return sFilePersistedTabDataStorage;
-    }
+    private static @Nullable EmptyByteBufferPersistedTabDataStorage
+            sEmptyByteBufferPersistedTabDataStorage;
+    private static boolean sUseEmptyByteBufferTestConfig;
 
-    private static EncryptedFilePersistedTabDataStorage getEncryptedFilePersistedTabDataStorage() {
-        if (sEncrpytedFilePersistedTabDataStorage == null) {
-            sEncrpytedFilePersistedTabDataStorage = new EncryptedFilePersistedTabDataStorage();
+    private static EmptyByteBufferPersistedTabDataStorage
+            getEmptyByteBufferPersistedTabDataStorage() {
+        if (sEmptyByteBufferPersistedTabDataStorage == null) {
+            sEmptyByteBufferPersistedTabDataStorage = new EmptyByteBufferPersistedTabDataStorage();
         }
-        return sEncrpytedFilePersistedTabDataStorage;
+        return sEmptyByteBufferPersistedTabDataStorage;
     }
 
     private static MockPersistedTabDataStorage getMockPersistedTabDataStorage() {
@@ -61,44 +63,24 @@ public enum PersistedTabDataConfiguration {
     private static boolean sUseTestConfig;
 
     static {
-        // TODO(crbug.com/1060187) remove static initializer and initialization lazy
-        sLookup.put(CriticalPersistedTabData.class, CRITICAL_PERSISTED_TAB_DATA);
-        sEncryptedLookup.put(CriticalPersistedTabData.class, ENCRYPTED_CRITICAL_PERSISTED_TAB_DATA);
+        // TODO(crbug.com/40121925) remove static initializer and initialization lazy
         sLookup.put(MockPersistedTabData.class, MOCK_PERSISTED_TAB_DATA);
         sEncryptedLookup.put(MockPersistedTabData.class, ENCRYPTED_MOCK_PERSISTED_TAB_DATA);
         sLookup.put(ShoppingPersistedTabData.class, SHOPPING_PERSISTED_TAB_DATA);
         sEncryptedLookup.put(ShoppingPersistedTabData.class, SHOPPING_PERSISTED_TAB_DATA);
-        sLookup.put(StorePersistedTabData.class, STORE_PERSISTED_TAB_DATA);
-        sEncryptedLookup.put(StorePersistedTabData.class, STORE_PERSISTED_TAB_DATA);
-
-        CRITICAL_PERSISTED_TAB_DATA.mStorageFactory = () -> {
-            return getFilePersistedTabDataStorage();
-        };
-        ENCRYPTED_CRITICAL_PERSISTED_TAB_DATA.mStorageFactory = () -> {
-            return getEncryptedFilePersistedTabDataStorage();
-        };
-        MOCK_PERSISTED_TAB_DATA.mStorageFactory = () -> {
-            return getFilePersistedTabDataStorage();
-        };
-        ENCRYPTED_MOCK_PERSISTED_TAB_DATA.mStorageFactory = () -> {
-            return getEncryptedFilePersistedTabDataStorage();
-        };
-        SHOPPING_PERSISTED_TAB_DATA.mStorageFactory = new LevelDBPersistedTabDataStorageFactory();
-
-        STORE_PERSISTED_TAB_DATA.mStorageFactory = new LevelDBPersistedTabDataStorageFactory();
-
-        TEST_CONFIG.mStorageFactory = () -> {
-            return getMockPersistedTabDataStorage();
-        };
+        sLookup.put(ArchivePersistedTabData.class, ARCHIVE_PERSISTED_TAB_DATA);
+        sEncryptedLookup.put(ArchivePersistedTabData.class, ARCHIVE_PERSISTED_TAB_DATA);
+        sLookup.put(SendTabToSelfTabCardLabelData.class, SEND_TAB_TO_SELF_TAB_CARD_LABEL_DATA);
+        sEncryptedLookup.put(
+                SendTabToSelfTabCardLabelData.class, SEND_TAB_TO_SELF_TAB_CARD_LABEL_DATA);
     }
 
     private final String mId;
-    private PersistedTabDataStorageFactory mStorageFactory;
 
     /**
      * @param id identifier for {@link PersistedTabData}
      * @param storageFactory {@link PersistedTabDataStorageFactory} associated with {@link
-     *         PersistedTabData}
+     *     PersistedTabData}
      */
     PersistedTabDataConfiguration(String id) {
         mId = id;
@@ -108,7 +90,20 @@ public enum PersistedTabDataConfiguration {
      * @return {@link PersistedTabDataStorage} for a given configuration
      */
     public PersistedTabDataStorage getStorage() {
-        return mStorageFactory.create();
+        switch (this) {
+            case MOCK_PERSISTED_TAB_DATA:
+            case ENCRYPTED_MOCK_PERSISTED_TAB_DATA:
+            case TEST_CONFIG:
+                return getMockPersistedTabDataStorage();
+            case SHOPPING_PERSISTED_TAB_DATA:
+            case ARCHIVE_PERSISTED_TAB_DATA:
+            case SEND_TAB_TO_SELF_TAB_CARD_LABEL_DATA:
+                return new LevelDBPersistedTabDataStorageFactory().create();
+            case EMPTY_BYTE_BUFFER_TEST_CONFIG:
+                return getEmptyByteBufferPersistedTabDataStorage();
+        }
+        assert false;
+        return assumeNonNull(null);
     }
 
     /**
@@ -118,26 +113,35 @@ public enum PersistedTabDataConfiguration {
         return mId;
     }
 
-    /**
-     * Acquire {@link PersistedTabDataConfiguration} for a given {@link PersistedTabData} class
-     */
+    /** Acquire {@link PersistedTabDataConfiguration} for a given {@link PersistedTabData} class */
     public static PersistedTabDataConfiguration get(
             Class<? extends PersistedTabData> clazz, boolean isEncrypted) {
+        if (sUseEmptyByteBufferTestConfig) {
+            return EMPTY_BYTE_BUFFER_TEST_CONFIG;
+        }
         if (sUseTestConfig) {
             return TEST_CONFIG;
         }
         if (isEncrypted) {
-            return sEncryptedLookup.get(clazz);
+            return assertNonNull(sEncryptedLookup.get(clazz));
         }
-        return sLookup.get(clazz);
+        return assertNonNull(sLookup.get(clazz));
     }
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    // TODO(crbug.com/40212560) merge test config options into an enum so there can be just one
+    // setter).
+    @VisibleForTesting
     public static void setUseTestConfig(boolean useTestConfig) {
         sUseTestConfig = useTestConfig;
+        ResettersForTesting.register(() -> sUseTestConfig = false);
     }
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    @VisibleForTesting
+    public static void setUseEmptyByteBufferTestConfig(boolean useEmptyByteBufferTestConfig) {
+        sUseEmptyByteBufferTestConfig = useEmptyByteBufferTestConfig;
+    }
+
+    @VisibleForTesting
     static PersistedTabDataConfiguration getTestConfig() {
         return TEST_CONFIG;
     }

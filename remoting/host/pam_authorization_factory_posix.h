@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include "remoting/protocol/authenticator.h"
 
-
 // PamAuthorizationFactory abuses the AuthenticatorFactory interface to apply
 // PAM-based authorization on top of some underlying authentication scheme.
 
@@ -17,13 +16,15 @@ namespace remoting {
 
 class PamAuthorizationFactory : public protocol::AuthenticatorFactory {
  public:
-  PamAuthorizationFactory(
+  explicit PamAuthorizationFactory(
       std::unique_ptr<protocol::AuthenticatorFactory> underlying);
   ~PamAuthorizationFactory() override;
 
   std::unique_ptr<protocol::Authenticator> CreateAuthenticator(
       const std::string& local_jid,
       const std::string& remote_jid) override;
+
+  std::unique_ptr<AuthenticatorFactory> Clone() const override;
 
  private:
   std::unique_ptr<protocol::AuthenticatorFactory> underlying_;

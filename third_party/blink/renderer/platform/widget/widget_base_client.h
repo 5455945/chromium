@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,21 +10,22 @@
 #include "base/time/time.h"
 #include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/metrics/frame_sequence_tracker_collection.h"
-#include "cc/metrics/web_vital_metrics.h"
 #include "cc/paint/element_id.h"
-#include "cc/trees/layer_tree_host_client.h"
+#include "cc/trees/layer_tree_host_delegate.h"
+#include "services/viz/public/mojom/hit_test/input_target_client.mojom-blink.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
-#include "third_party/blink/public/mojom/page/widget.mojom-blink.h"
-#include "third_party/blink/public/platform/input/input_handler_proxy.h"
+#include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
 #include "third_party/blink/public/web/web_lifecycle_update.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/widget/input/input_handler_proxy.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink-forward.h"
 #include "ui/display/mojom/screen_orientation.mojom-blink.h"
 
 namespace cc {
 class LayerTreeFrameSink;
 struct BeginMainFrameMetrics;
-struct WebVitalMetrics;
 }  // namespace cc
 
 namespace blink {
@@ -38,13 +39,16 @@ class WebMouseEvent;
 // will need to implement.
 class WidgetBaseClient {
  public:
+  // Called when a compositing update is first requested.
+  virtual void OnCommitRequested() {}
+
   // Called to record the time taken to dispatch rAF aligned input.
   virtual void RecordDispatchRafAlignedInputTime(
       base::TimeTicks raf_aligned_input_start_time) {}
 
   // Called to update the document lifecycle, advance the state of animations
   // and dispatch rAF.
-  virtual void BeginMainFrame(base::TimeTicks frame_time) = 0;
+  virtual void BeginMainFrame(const viz::BeginFrameArgs& args) = 0;
 
   // Requests that the lifecycle of the widget be updated.
   virtual void UpdateLifecycle(WebLifecycleUpdate requested_update,
@@ -75,10 +79,6 @@ class WidgetBaseClient {
     return nullptr;
   }
 
-  virtual std::unique_ptr<cc::WebVitalMetrics> GetWebVitalMetrics() {
-    return nullptr;
-  }
-
   // Methods called to mark the beginning and end of the
   // LayerTreeHost::UpdateLayers method. Only called when gathering main frame
   // UMA and UKM. That is, when RecordStartOfFrameMetrics has been called, and
@@ -91,13 +91,17 @@ class WidgetBaseClient {
   // UMA and UKM. That is, when RecordStartOfFrameMetrics has been called, and
   // before RecordEndOfFrameMetrics has been called.
   virtual void BeginCommitCompositorFrame() {}
-  virtual void EndCommitCompositorFrame(base::TimeTicks commit_start_time) {}
+  virtual void EndCommitCompositorFrame(base::TimeTicks commit_start_time,
+                                        base::TimeTicks commit_finish_time) {}
 
   // Applies viewport related properties during a commit from the compositor
   // thread.
   virtual void ApplyViewportChanges(const cc::ApplyViewportChangesArgs& args) {}
 
   virtual void UpdateCompositorScrollState(
+      const cc::CompositorCommitData& commit_data) {}
+
+  virtual void UpdateAnimatedImageState(
       const cc::CompositorCommitData& commit_data) {}
 
   // Notifies that the layer tree host has completed a call to
@@ -110,6 +114,7 @@ class WidgetBaseClient {
       base::TimeTicks first_scroll_timestamp) {}
 
   virtual void WillBeginMainFrame() {}
+  // Called immediately before the commit task is posted to the impl thread.
   virtual void DidCompletePageScaleAnimation() {}
 
   // Allocates a LayerTreeFrameSink to submit CompositorFrames to. Only
@@ -127,6 +132,7 @@ class WidgetBaseClient {
   virtual bool SupportsBufferedTouchEvents() = 0;
 
   virtual void DidHandleKeyEvent() {}
+  virtual void DidHandleGestureEvent(const WebGestureEvent& event) {}
   virtual void WillHandleGestureEvent(const WebGestureEvent& event,
                                       bool* suppress) = 0;
   virtual void WillHandleMouseEvent(const WebMouseEvent& event) = 0;
@@ -147,10 +153,14 @@ class WidgetBaseClient {
   virtual blink::FrameWidget* FrameWidget() { return nullptr; }
 
   // Called to inform the Widget that it has gained or lost keyboard focus.
-  virtual void FocusChanged(bool) {}
+  virtual void FocusChanged(mojom::blink::FocusState focus_state) {}
 
   // Call to request an animation frame from the compositor.
-  virtual void ScheduleAnimation() {}
+  virtual void ScheduleAnimation(cc::BeginMainFrameReason reason, bool urgent) {
+  }
+  void ScheduleAnimation(bool urgent) {
+    ScheduleAnimation(cc::BeginMainFrameReason::kOther, urgent);
+  }
 
   // TODO(bokan): Temporary to unblock synthetic gesture events running under
   // VR. https://crbug.com/940063
@@ -177,20 +187,23 @@ class WidgetBaseClient {
   // Signal the orientation has changed.
   virtual void OrientationChanged() {}
 
-  // Return the original (non-emulated) screen info.
-  virtual const display::ScreenInfo& GetOriginalScreenInfo() = 0;
+  // Return the original (non-emulated) screen infos.
+  virtual const display::ScreenInfos& GetOriginalScreenInfos() = 0;
 
-  // Indication that the surface and screen were updated.
+  // Indication that the surface and screen were updated. The first argument
+  // excludes emulation; the second is the effective value previously held by
+  // the widget.
   virtual void DidUpdateSurfaceAndScreen(
-      const display::ScreenInfo& previous_original_screen_info) {}
+      const display::ScreenInfos& previous_original_screen_infos,
+      const display::ScreenInfos& previous_effective_screen_infos) {}
 
   // Return the viewport visible rect.
   virtual gfx::Rect ViewportVisibleRect() = 0;
 
   // The screen orientation override.
-  virtual absl::optional<display::mojom::blink::ScreenOrientation>
+  virtual std::optional<display::mojom::blink::ScreenOrientation>
   ScreenOrientationOverride() {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   // Return the overridden device scale factor for testing.
@@ -228,6 +241,15 @@ class WidgetBaseClient {
   // touchstart. But we still want to count those touchstart, pointerdown and
   // touchend.
   virtual void CountDroppedPointerDownForEventTiming(unsigned count) {}
+
+  // Whether to use ScrollPredictor to resample scroll events. This is false for
+  // web_tests to ensure that scroll deltas are not timing-dependent.
+  virtual bool AllowsScrollResampling() { return true; }
+
+  virtual void ShowContextMenu(ui::mojom::blink::MenuSourceType source_type,
+                               const gfx::Point& location) {}
+  virtual void BindInputTargetClient(
+      mojo::PendingReceiver<viz::mojom::blink::InputTargetClient> receiver) {}
 };
 
 }  // namespace blink

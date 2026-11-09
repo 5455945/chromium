@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.list;
+
+import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.util.Pair;
 import android.view.View;
@@ -10,6 +12,7 @@ import android.view.View;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.download.home.StableIds;
 import org.chromium.components.offline_items_collection.OfflineItem;
 
@@ -18,6 +21,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.Date;
 
 /** An abstract class that represents a variety of possible list items to show in downloads home. */
+@NullMarked
 public abstract class ListItem {
     private static final long SECTION_HEADER_HASH_CODE_OFFSET = 1000;
 
@@ -54,12 +58,12 @@ public abstract class ListItem {
     }
 
     /** A {@link ListItem} that involves a {@link Date}. */
-    private abstract static class DateListItem extends ListItem {
+    public abstract static class DateListItem extends ListItem {
         public final Date date;
 
         /**
-         * Creates a {@link DateListItem} instance. with a predefined {@code stableId} and
-         * {@code date}.
+         * Creates a {@link DateListItem} instance. with a predefined {@code stableId} and {@code
+         * date}.
          */
         public DateListItem(long stableId, Date date) {
             super(stableId);
@@ -68,7 +72,7 @@ public abstract class ListItem {
     }
 
     /** A {@link ListItem} representing group card decoration such as header or footer. */
-    private static class CardDecorationListItem extends ListItem {
+    public static class CardDecorationListItem extends ListItem {
         public final Pair<Date, String> dateAndDomain;
 
         /** Creates a {@link CardDecorationListItem} instance. */
@@ -105,55 +109,48 @@ public abstract class ListItem {
     /** A {@link ListItem} representing a divider in a group card. */
     public static class CardDividerListItem extends ListItem {
         /** The position of the divider in a group card. */
-        public enum Position {
+        @IntDef({Position.TOP, Position.MIDDLE, Position.BOTTOM})
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface Position {
             /** Represents the curved border at the top of a group card. */
-            TOP,
+            int TOP = 0;
 
             /**
-               Represents the line divider between two items in a group card. It also contains
-               two side bars on left and right to make up for the padding between two items.
+             * Represents the line divider between two items in a group card. It also contains two
+             * side bars on left and right to make up for the padding between two items.
              */
-            MIDDLE,
+            int MIDDLE = 1;
 
             /** Represents the curved border at the bottom of a group card. */
-            BOTTOM
+            int BOTTOM = 2;
         }
 
-        public final Position position;
+        public final @Position int position;
 
         /** Creates a {@link CardDividerListItem} instance for a given position. */
-        public CardDividerListItem(long stableId, Position position) {
+        public CardDividerListItem(long stableId, @Position int position) {
             super(stableId);
             this.position = position;
         }
     }
 
-    /**
-     * The type of the section header.
-     */
-    @IntDef({SectionHeaderType.INVALID, SectionHeaderType.DATE, SectionHeaderType.JUST_NOW,
-            SectionHeaderType.SCHEDULED_LATER})
+    /** The type of the section header. */
+    @IntDef({SectionHeaderType.INVALID, SectionHeaderType.DATE, SectionHeaderType.JUST_NOW})
     @Retention(RetentionPolicy.SOURCE)
     public @interface SectionHeaderType {
         int INVALID = -1;
         int DATE = 0;
         int JUST_NOW = 1;
-        int SCHEDULED_LATER = 2;
     }
 
     /** A {@link ListItem} representing a section header. */
     public static class SectionHeaderListItem extends DateListItem {
         public @SectionHeaderType int type;
-        public boolean showTopDivider;
 
-        /**
-         * Creates a {@link SectionHeaderListItem} instance for a given {@code timestamp}.
-         */
-        public SectionHeaderListItem(
-                long timestamp, @SectionHeaderType int type, boolean showTopDivider) {
+        /** Creates a {@link SectionHeaderListItem} instance for a given {@code timestamp}. */
+        public SectionHeaderListItem(long timestamp, @SectionHeaderType int type) {
             super(generateStableId(type, timestamp), new Date(timestamp));
             this.type = type;
-            this.showTopDivider = showTopDivider;
         }
 
         @VisibleForTesting
@@ -164,8 +161,6 @@ public abstract class ListItem {
                     return hash + SECTION_HEADER_HASH_CODE_OFFSET;
                 case SectionHeaderType.JUST_NOW:
                     return StableIds.JUST_NOW_SECTION;
-                case SectionHeaderType.SCHEDULED_LATER:
-                    return StableIds.SCHEDULE_LATER_SECTION;
             }
             assert false : "Unknown section header type.";
             return -1;
@@ -186,7 +181,8 @@ public abstract class ListItem {
 
         @VisibleForTesting
         static long generateStableId(OfflineItem item) {
-            return (((long) item.id.hashCode()) << 32) + (item.creationTimeMs & 0x0FFFFFFFF);
+            return (((long) assumeNonNull(item.id).hashCode()) << 32)
+                    + (item.creationTimeMs & 0x0FFFFFFFF);
         }
     }
 }

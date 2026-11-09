@@ -1,28 +1,28 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_RENDER_WIDGET_HOST_VIEW_H_
 #define CONTENT_PUBLIC_BROWSER_RENDER_WIDGET_HOST_VIEW_H_
 
+#include <optional>
 #include <string>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_result.mojom.h"
-#include "third_party/blink/public/mojom/page/record_content_to_visible_time_request.mojom-forward.h"
-#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/display/screen_info.h"
+#include "ui/base/ime/mojom/virtual_keyboard_types.mojom-forward.h"
+#include "ui/display/screen_infos.h"
 #include "ui/gfx/geometry/point_conversions.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/range/range.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #endif
 
@@ -31,18 +31,38 @@ class Insets;
 class Point;
 class Rect;
 class Size;
-}
+}  // namespace gfx
 
 namespace ui {
-enum class DomCode;
+enum class DomCode : uint32_t;
 class TextInputClient;
-}
+}  // namespace ui
 
 namespace viz {
 class ClientFrameSinkVideoCapturer;
+struct CopyOutputBitmapWithMetadata;
 }  // namespace viz
 
 namespace content {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(CopyFromSurfaceError)
+enum class CopyFromSurfaceError {
+  kUnknown = 0,
+  kNotImplemented = 1,
+  kFrameGone = 2,
+  kTimeout = 3,
+  kEmbeddingTokenChanged = 4,
+  kVizSentEmptyBitmap = 5,
+  kUnknownVizError = 6,
+  kMaxValue = kUnknownVizError,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:CopyFromSurfaceError)
+
+using CopyFromSurfaceResult =
+    base::expected<viz::CopyOutputBitmapWithMetadata, CopyFromSurfaceError>;
 
 class RenderWidgetHost;
 class TouchSelectionControllerClientManager;
@@ -86,16 +106,14 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // screen space.
   virtual void SetBounds(const gfx::Rect& rect) = 0;
 
-  // Sets a flag that indicates if it is in virtual reality mode.
-  virtual void SetIsInVR(bool is_in_vr) = 0;
-
   // Coordinate points received from a renderer process need to be transformed
-  // to the top-level frame's coordinate space. For coordinates received from
-  // the top-level frame's renderer this is a no-op as they are already
-  // properly transformed; however, coordinates received from an out-of-process
-  // iframe renderer process require transformation.
+  // to the top-level frame's coordinate space, in DIPs (points in physical
+  // pixels must be converted to DIPs first). For coordinates received from the
+  // top-level frame's renderer this is a no-op as they are already properly
+  // transformed; however, coordinates received from an out-of-process iframe
+  // renderer process require transformation.
   virtual gfx::PointF TransformPointToRootCoordSpaceF(
-      const gfx::PointF& point) = 0;
+      const gfx::PointF& point) const = 0;
 
   // A int point variant of the above. Use float version to transform,
   // then rounded back to int point.
@@ -104,8 +122,10 @@ class CONTENT_EXPORT RenderWidgetHostView {
         TransformPointToRootCoordSpaceF(gfx::PointF(point)));
   }
 
-  // Converts a point in the root view's coordinate space to the coordinate
-  // space of whichever view is used to call this method.
+  // Coordinate points received from root frame need to be transformed
+  // to the renderer frame's coordinate space. For same site renderer frame this
+  // is a no-op; however, coordinate in an out-of-process iframe renderer
+  // process require transformation.
   virtual gfx::PointF TransformRootPointToViewCoordSpace(
       const gfx::PointF& point) = 0;
 
@@ -125,20 +145,12 @@ class CONTENT_EXPORT RenderWidgetHostView {
   virtual void Focus() = 0;
   // Returns true if the View currently has the focus.
   virtual bool HasFocus() = 0;
-
-  // Shows/hides the view.  These must always be called together in pairs.
-  // It is not legal to call Hide() multiple times in a row.
-  virtual void Show() = 0;
-  virtual void Hide() = 0;
+  // Overrides the return value of HasFocus() for testing. Passing
+  // `std::nullopt` clears the override.
+  virtual void SetHasFocusForTesting(std::optional<bool> has_focus) {}
 
   // Whether the view is showing.
   virtual bool IsShowing() = 0;
-
-  // Indicates if the view is currently occluded (e.g, not visible because it's
-  // covered up by other windows), and as a result the view's renderer may be
-  // suspended. Calling Show()/Hide() overrides the state set by these methods.
-  virtual void WasUnOccluded() = 0;
-  virtual void WasOccluded() = 0;
 
   // Retrieve the bounds of the View, in screen coordinates.
   virtual gfx::Rect GetViewBounds() = 0;
@@ -160,29 +172,36 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // which is shown if the background color of the renderer is not available.
   virtual void SetBackgroundColor(SkColor color) = 0;
   // GetBackgroundColor returns the current background color of the view.
-  virtual absl::optional<SkColor> GetBackgroundColor() = 0;
+  virtual std::optional<SkColor> GetBackgroundColor() = 0;
   // Copy background color from another view if other view has background color.
   virtual void CopyBackgroundColorIfPresentFrom(
       const RenderWidgetHostView& other) = 0;
 
-  // Return value indicates whether the mouse is locked successfully or a
-  // reason why it failed.
-  virtual blink::mojom::PointerLockResult LockMouse(
+  // Return value indicates whether the mouse pointer is locked successfully or
+  // a reason why it failed.
+  virtual blink::mojom::PointerLockResult LockPointer(
       bool request_unadjusted_movement) = 0;
-  // Return value indicates whether the MouseLock was changed successfully
+  // Return value indicates whether the pointer lock was changed successfully
   // or a reason why the change failed.
-  virtual blink::mojom::PointerLockResult ChangeMouseLock(
+  virtual blink::mojom::PointerLockResult ChangePointerLock(
       bool request_unadjusted_movement) = 0;
-  virtual void UnlockMouse() = 0;
+  virtual void UnlockPointer() = 0;
   // Returns true if the mouse pointer is currently locked.
-  virtual bool IsMouseLocked() = 0;
+  virtual bool IsPointerLocked() = 0;
   // Get the pointer lock unadjusted movement setting for testing.
   // Returns true if mouse is locked and is in unadjusted movement mode.
-  virtual bool GetIsMouseLockedUnadjustedMovementForTesting() = 0;
+  virtual bool GetIsPointerLockedUnadjustedMovementForTesting() = 0;
+  // Whether the view can trigger pointer lock. This is the same as `HasFocus`
+  // on non-Mac platforms, but on Mac it also ensures that the window is key.
+  virtual bool CanBePointerLocked() = 0;
+  // Whether the view is focused in accessibility mode. This is the same as
+  // `HasFocus` on non-Mac platforms, but on Mac it also ensures that the window
+  // is key.
+  virtual bool AccessibilityHasFocus() = 0;
 
   // Start/Stop intercepting future system keyboard events.
   virtual bool LockKeyboard(
-      absl::optional<base::flat_set<ui::DomCode>> dom_codes) = 0;
+      std::optional<base::flat_set<ui::DomCode>> dom_codes) = 0;
   virtual void UnlockKeyboard() = 0;
   // Returns true if keyboard lock is active.
   virtual bool IsKeyboardLocked() = 0;
@@ -196,6 +215,7 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // than the view size if a portion of the view is obstructed (e.g. by a
   // virtual keyboard).
   virtual gfx::Size GetVisibleViewportSize() = 0;
+  virtual gfx::Size GetVisibleViewportSizeDevicePx() = 0;
 
   // Set insets for the visible region of the root window. Used to compute the
   // visible viewport.
@@ -207,32 +227,45 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // Copies the given subset of the view's surface, optionally scales it, and
   // returns the result as a bitmap via the provided callback. This is meant for
   // one-off snapshots. For continuous video capture of the surface, please use
-  // CreateVideoCapturer() instead.
+  // `CreateVideoCapturer()` instead.
   //
-  // |src_rect| is either the subset of the view's surface, in view coordinates,
+  // `src_rect` is either the subset of the view's surface, in view coordinates,
   // or empty to indicate that all of it should be copied. This is NOT the same
-  // coordinate system as that used GetViewBounds() (https://crbug.com/73362).
+  // coordinate system as that used `GetViewBounds()` (https://crbug.com/73362).
   //
-  // |output_size| is the size of the resulting bitmap, or empty to indicate no
+  // `output_size` is the size of the resulting bitmap, or empty to indicate no
   // scaling is desired. If an empty size is provided, note that the resulting
-  // bitmap's size may not be the same as |src_rect.size()| due to the pixel
+  // bitmap's size may not be the same as `src_rect.size()` due to the pixel
   // scale used by the underlying device.
   //
-  // |callback| is guaranteed to be run, either synchronously or at some point
-  // in the future (depending on the platform implementation and the current
-  // state of the Surface). If the copy failed, the bitmap's drawsNothing()
-  // method will return true.
+  // `timeout` is the maximum amount of time once viz has received the message
+  // for a result to be produced. This will result in a timeout error being
+  // produced as the result.
   //
-  // If the view's renderer is suspended (see WasOccluded()), this may result in
-  // copying old data or failing.
+  // `callback` is guaranteed to be run, either synchronously or at some point
+  // in the future (depending on the platform implementation and the current
+  // state of the Surface). If the copy failed, the bitmap's `drawsNothing()`
+  // method will return true. `callback` isn't guaranteed to run on the same
+  // task sequence as this method was called from.
+  //
+  // If the view's renderer is suspended (see `WasOccluded()`), this may result
+  // in copying old data or failing.
   virtual void CopyFromSurface(
       const gfx::Rect& src_rect,
       const gfx::Size& output_size,
-      base::OnceCallback<void(const SkBitmap&)> callback) = 0;
+      base::TimeDelta timeout,
+      base::OnceCallback<void(const CopyFromSurfaceResult&)> callback) = 0;
 
-  // Ensures that all surfaces are synchronized for the next call to
-  // CopyFromSurface. This is used by web tests.
-  virtual void EnsureSurfaceSynchronizedForWebTest() = 0;
+  // Similar to `CopyFromSurface()`, but marks the copy request as secure.
+  // A capture is considered secure if the captured content is not easily
+  // accessible to JavaScript or users, and cannot be trivially shared or
+  // streamed out of the device. Used for capture prevention, e.g. for protected
+  // content or by enterprise policy.
+  virtual void CopyFromSurfaceSecure(
+      const gfx::Rect& src_rect,
+      const gfx::Size& output_size,
+      base::TimeDelta timeout,
+      base::OnceCallback<void(const CopyFromSurfaceResult&)> callback) = 0;
 
   // Creates a video capturer, which will allow the caller to receive a stream
   // of media::VideoFrames captured from this view. The capturer is configured
@@ -244,12 +277,17 @@ class CONTENT_EXPORT RenderWidgetHostView {
   // This method returns the ScreenInfo used by the view to render. If the
   // information is not knowable (e.g, because the view is not attached to a
   // screen yet), then a default best-guess will be used.
-  virtual void GetScreenInfo(display::ScreenInfo* screen_info) = 0;
+  virtual display::ScreenInfo GetScreenInfo() const = 0;
+
+  // This method returns the ScreenInfos used by the view to render. If the
+  // information is not knowable (e.g, because the view is not attached to a
+  // screen yet), then a default best-guess will be used.
+  virtual display::ScreenInfos GetScreenInfos() const = 0;
 
   // This must always return the same device scale factor as GetScreenInfo.
-  virtual float GetDeviceScaleFactor() = 0;
+  virtual float GetDeviceScaleFactor() const = 0;
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Set the view's active state (i.e., tint state of controls).
   virtual void SetActive(bool active) = 0;
 
@@ -275,43 +313,48 @@ class CONTENT_EXPORT RenderWidgetHostView {
   virtual void ShowSharePicker(
       const std::string& title,
       const std::string& text,
-      const std::string& url,
+      const GURL& url,
       const std::vector<std::string>& file_paths,
       blink::mojom::ShareService::ShareCallback callback) = 0;
 
-#endif  // defined(OS_MAC)
+  virtual uint64_t GetNSViewId() const = 0;
+#endif  // BUILDFLAG(IS_MAC)
 
   // Indicates that this view should show the contents of |view| if it doesn't
   // have anything to show.
   virtual void TakeFallbackContentFrom(RenderWidgetHostView* view) = 0;
 
-  // Set the last time a content to visible event starts to be processed for
-  // this RenderWidgetHostView. Will merge with the previous value if exists
-  // (which means that several events may happen at the same time and must be
-  // induvidually reported).  |start_time| marks event start time to calculate
-  // the duration later.
-  //
-  // |destination_is_loaded| is true when
-  //   ResourceCoordinatorTabHelper::IsLoaded() is true for the new tab
-  //   contents.
-  // |show_reason_tab_switching| is true when tab switch event should be
-  //   reported.
-  // |show_reason_unoccluded| is true when "unoccluded" event should be
-  //   reported.
-  // |show_reason_bfcache_restore| is true when page restored from bfcache event
-  // should be reported.
-  virtual void SetRecordContentToVisibleTimeRequest(
-      base::TimeTicks start_time,
-      bool destination_is_loaded,
-      bool show_reason_tab_switching,
-      bool show_reason_unoccluded,
-      bool show_reason_bfcache_restore) = 0;
+  // Returns the virtual keyboard mode requested via author APIs.
+  virtual ui::mojom::VirtualKeyboardMode GetVirtualKeyboardMode() = 0;
 
-  // Returns true if the overlaycontent flag is set in the JS, else false.
-  // This determines whether to fire geometrychange event to JS and also not
-  // resize the visual/layout viewports in response to keyboard visibility
-  // changes.
-  virtual bool ShouldVirtualKeyboardOverlayContent() = 0;
+  // Create a geometrychange event and forward it to the JS with the keyboard
+  // coordinates. No-op unless VirtualKeyboardMode is kOverlaysContent.
+  virtual void NotifyVirtualKeyboardOverlayRect(
+      const gfx::Rect& keyboard_rect) = 0;
+
+  // Returns true if this widget is a HTML popup, e.g. a <select> menu.
+  virtual bool IsHTMLFormPopup() const = 0;
+
+  // Returns true if this view has a saved compositor frame.
+  virtual bool HasSavedCompositorFrame() const = 0;
+
+  // Tells the View if it should use default deadline policy when resizing.
+  virtual void SetShouldUseDefaultDeadlineOnResize(bool enable) = 0;
+
+  // Forces a specified deadline for the next surface embedding. If the optional
+  // has a value, overrides the embedding deadline to the specified duration
+  // (unit: frames). If set to std::nullopt, clears any active override and
+  // restores default resize deadline policies.
+  virtual void SetForceSpecifiedDeadline(
+      std::optional<uint32_t> deadline_in_frames) {}
+
+  // Set whether macOS "AutoFill" is allowed for this view.
+  virtual void SetSupportsAutoFill(bool supports) {}
+
+  virtual std::optional<uint32_t> GetForceSpecifiedDeadlineForTesting();
+
+  // Sets whether the view should evict its saved compositor frame when hidden.
+  virtual void SetEvictOnHide(bool evict_on_hide) = 0;
 };
 
 }  // namespace content

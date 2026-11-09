@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,14 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/byte_size.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/process/process_metrics.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 
 namespace task_manager {
@@ -29,12 +30,14 @@ class TaskGroupSampler : public base::RefCountedThreadSafe<TaskGroupSampler> {
   // Below are the types of callbacks that are invoked on the UI thread upon
   // completion of corresponding refresh tasks on the worker thread.
   using OnCpuRefreshCallback = base::RepeatingCallback<void(double)>;
-  using OnSwappedMemRefreshCallback = base::RepeatingCallback<void(int64_t)>;
+  using OnSwappedMemRefreshCallback =
+      base::RepeatingCallback<void(base::ByteSize)>;
   using OnIdleWakeupsCallback = base::RepeatingCallback<void(int)>;
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
   using OnOpenFdCountCallback = base::RepeatingCallback<void(int)>;
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
-  using OnProcessPriorityCallback = base::RepeatingCallback<void(bool)>;
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+  using OnProcessPriorityCallback =
+      base::RepeatingCallback<void(base::Process::Priority)>;
 
   TaskGroupSampler(
       base::Process process,
@@ -42,9 +45,9 @@ class TaskGroupSampler : public base::RefCountedThreadSafe<TaskGroupSampler> {
       const OnCpuRefreshCallback& on_cpu_refresh,
       const OnSwappedMemRefreshCallback& on_memory_refresh,
       const OnIdleWakeupsCallback& on_idle_wakeups,
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
       const OnOpenFdCountCallback& on_open_fd_count,
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
       const OnProcessPriorityCallback& on_process_priority);
 
   TaskGroupSampler(const TaskGroupSampler&) = delete;
@@ -60,12 +63,12 @@ class TaskGroupSampler : public base::RefCountedThreadSafe<TaskGroupSampler> {
 
   // The refresh calls that will be done on the worker thread.
   double RefreshCpuUsage();
-  int64_t RefreshSwappedMem();
+  base::ByteSize RefreshSwappedMem();
   int RefreshIdleWakeupsPerSecond();
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
   int RefreshOpenFdCount();
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
-  bool RefreshProcessPriority();
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+  base::Process::Priority RefreshProcessPriority();
 
   // The process that holds the handle that we own so that we can use it for
   // creating the ProcessMetrics.
@@ -86,13 +89,13 @@ class TaskGroupSampler : public base::RefCountedThreadSafe<TaskGroupSampler> {
   const OnCpuRefreshCallback on_cpu_refresh_callback_;
   const OnSwappedMemRefreshCallback on_swapped_mem_refresh_callback_;
   const OnIdleWakeupsCallback on_idle_wakeups_callback_;
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
   const OnOpenFdCountCallback on_open_fd_count_callback_;
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
   const OnProcessPriorityCallback on_process_priority_callback_;
 
   // To assert we're running on the correct thread.
-  base::SequenceChecker worker_pool_sequenced_checker_;
+  SEQUENCE_CHECKER(worker_pool_sequenced_checker_);
 };
 
 }  // namespace task_manager

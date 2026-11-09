@@ -1,19 +1,20 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.m.js';
-import 'chrome://resources/cr_elements/cr_button/cr_button.m.js';
-import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
+import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
+import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_search_field/cr_search_field.js';
-import '../shared_style.js';
 import './activity_log_history_item.js';
 
-import {assert} from 'chrome://resources/js/assert.m.js';
-import {PromiseResolver} from 'chrome://resources/js/promise_resolver.m.js';
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {ActivityGroup} from './activity_log_history_item.js';
+import {getCss} from './activity_log_history.css.js';
+import {getHtml} from './activity_log_history.html.js';
+import type {ActivityGroup} from './activity_log_history_item.js';
 
 /**
  * The different states the activity log page can be in. Initial state is
@@ -36,12 +37,28 @@ export interface ActivityLogDelegate {
   downloadActivities(rawActivityData: string, fileName: string): void;
 }
 
+export class DummyActivityLogDelegate implements ActivityLogDelegate {
+  getExtensionActivityLog(_extensionId: string) {
+    return Promise.resolve({activities: []});
+  }
+  getFilteredExtensionActivityLog(_extensionId: string, _searchTerm: string) {
+    return Promise.resolve({activities: []});
+  }
+  deleteActivitiesById(_activityIds: string[]) {
+    return Promise.resolve();
+  }
+  deleteActivitiesFromExtension(_extensionId: string) {
+    return Promise.resolve();
+  }
+  downloadActivities(_rawActivityData: string, _fileName: string) {}
+}
+
 /**
  * Content scripts activities do not have an API call, so we use the names of
  * the scripts executed (specified as a stringified JSON array in the args
  * field) as the keys for an activity group instead.
  */
-function getActivityGroupKeysForContentScript_(
+function getActivityGroupKeysForContentScript(
     activity: chrome.activityLogPrivate.ExtensionActivity): string[] {
   assert(
       activity.activityType ===
@@ -62,8 +79,8 @@ function getActivityGroupKeysForContentScript_(
  * is in activity.other.webRequest and we use this to generate more activity
  * group keys if possible.
  */
-function getActivityGroupKeysForWebRequest_(
-    activity: chrome.activityLogPrivate.ExtensionActivity): Array<string> {
+function getActivityGroupKeysForWebRequest(
+    activity: chrome.activityLogPrivate.ExtensionActivity): string[] {
   assert(
       activity.activityType ===
       chrome.activityLogPrivate.ExtensionActivityType.WEB_REQUEST);
@@ -93,7 +110,7 @@ function getActivityGroupKeysForWebRequest_(
  * matches to one activity type.
  */
 function groupActivities(
-    activityData: Array<chrome.activityLogPrivate.ExtensionActivity>):
+    activityData: chrome.activityLogPrivate.ExtensionActivity[]):
     Map<string, ActivityGroup> {
   const groupedActivities = new Map();
 
@@ -110,9 +127,9 @@ function groupActivities(
 
     let activityGroupKeys = [activity.apiCall];
     if (isContentScript) {
-      activityGroupKeys = getActivityGroupKeysForContentScript_(activity);
+      activityGroupKeys = getActivityGroupKeysForContentScript(activity);
     } else if (isWebRequest) {
-      activityGroupKeys = getActivityGroupKeysForWebRequest_(activity);
+      activityGroupKeys = getActivityGroupKeysForWebRequest(activity);
     }
 
     for (const key of activityGroupKeys) {
@@ -147,7 +164,7 @@ function groupActivities(
  * ties by the alphabetical order of the key.
  */
 function sortActivitiesByCallCount(
-    groupedActivities: Map<string, ActivityGroup>): Array<ActivityGroup> {
+    groupedActivities: Map<string, ActivityGroup>): ActivityGroup[] {
   return Array.from(groupedActivities.values()).sort((a, b) => {
     if (a.count !== b.count) {
       return b.count - a.count;
@@ -164,75 +181,73 @@ function sortActivitiesByCallCount(
 
 declare global {
   interface HTMLElementEventMap {
-    'delete-activity-log-item': CustomEvent<Array<string>>;
+    'delete-activity-log-item': CustomEvent<string[]>;
   }
 }
 
-class ActivityLogHistoryElement extends PolymerElement {
+export class ActivityLogHistoryElement extends CrLitElement {
   static get is() {
     return 'activity-log-history';
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      extensionId: String,
-      delegate: Object,
+      extensionId: {type: String},
+      delegate: {type: Object},
 
       /**
        * An array representing the activity log. Stores activities grouped by
        * API call or content script name sorted in descending order of the call
        * count.
        */
-      activityData_: {
-        type: Array,
-        value: () => [],
-      },
+      activityData_: {type: Array},
 
-      pageState_: {
-        type: String,
-        value: ActivityLogPageState.LOADING,
-      },
-
-      lastSearch_: {
-        type: String,
-        value: '',
-      },
+      pageState_: {type: String},
+      lastSearch_: {type: String},
     };
   }
 
-  extensionId: string;
-  delegate: ActivityLogDelegate;
-  private activityData_: Array<ActivityGroup>;
-  private pageState_: ActivityLogPageState;
-  private lastSearch_: string;
-  private dataFetchedResolver_: PromiseResolver<void>|null;
-  private rawActivities_: string;
+  accessor extensionId: string = '';
+  accessor delegate: ActivityLogDelegate = new DummyActivityLogDelegate();
+  protected accessor activityData_: ActivityGroup[] = [];
+  private accessor pageState_: ActivityLogPageState =
+      ActivityLogPageState.LOADING;
+  private accessor lastSearch_: string = '';
 
-  constructor() {
-    super();
+  /**
+   * A promise resolver for any external files waiting for the
+   * GetExtensionActivity API call to finish.
+   * Currently only used for extension_settings_browsertest.cc
+   */
+  private dataFetchedResolver_: PromiseResolver<void>|null = null;
 
-    /**
-     * A promise resolver for any external files waiting for the
-     * GetExtensionActivity API call to finish.
-     * Currently only used for extension_settings_browsertest.cc
-     */
-    this.dataFetchedResolver_ = null;
+  /**
+   * The stringified API response from the activityLogPrivate API with
+   * individual activities sorted in ascending order by timestamp; used for
+   * exporting the activity log.
+   */
+  private rawActivities_: string = '';
 
-    /**
-     * The stringified API response from the activityLogPrivate API with
-     * individual activities sorted in ascending order by timestamp; used for
-     * exporting the activity log.
-     */
-    this.rawActivities_ = '';
+  override connectedCallback() {
+    super.connectedCallback();
+    this.dataFetchedResolver_ = new PromiseResolver();
+    this.refreshActivities_();
   }
 
-  ready() {
-    super.ready();
+  override firstUpdated() {
     this.addEventListener('delete-activity-log-item', e => this.deleteItem_(e));
+  }
+
+  setPageStateForTest(state: ActivityLogPageState) {
+    this.pageState_ = state;
   }
 
   /**
@@ -242,62 +257,54 @@ class ActivityLogHistoryElement extends PolymerElement {
     return this.dataFetchedResolver_!.promise;
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    this.dataFetchedResolver_ = new PromiseResolver();
-    this.refreshActivities_();
-  }
-
-  private shouldShowEmptyActivityLogMessage_(): boolean {
+  protected shouldShowEmptyActivityLogMessage_(): boolean {
     return this.pageState_ === ActivityLogPageState.LOADED &&
         this.activityData_.length === 0;
   }
 
-  private shouldShowLoadingMessage_(): boolean {
+  protected shouldShowLoadingMessage_(): boolean {
     return this.pageState_ === ActivityLogPageState.LOADING;
   }
 
-  private shouldShowActivities_(): boolean {
+  protected shouldShowActivities_(): boolean {
     return this.pageState_ === ActivityLogPageState.LOADED &&
         this.activityData_.length > 0;
   }
 
-  private onClearActivitiesClick_() {
+  protected onClearActivitiesClick_() {
     this.delegate.deleteActivitiesFromExtension(this.extensionId).then(() => {
       this.processActivities_([]);
     });
   }
 
-  private onMoreActionsClick_() {
-    this.shadowRoot!.querySelector('cr-action-menu')!.showAt(
-        assert(this.shadowRoot!.querySelector('cr-icon-button')!));
+  protected onMoreActionsClick_() {
+    const moreButton = this.shadowRoot.querySelector('cr-icon-button');
+    assert(moreButton);
+    this.shadowRoot.querySelector('cr-action-menu')!.showAt(moreButton);
   }
 
   private expandItems_(expanded: boolean) {
     // Do not use .filter here as we need the original index of the item
     // in |activityData_|.
-    this.activityData_.forEach((item, index) => {
-      if (item.countsByUrl.size > 0) {
-        this.set(`activityData_.${index}.expanded`, expanded);
-      }
-    });
-    this.shadowRoot!.querySelector('cr-action-menu')!.close();
+    const items = this.shadowRoot.querySelectorAll('activity-log-history-item');
+    items.forEach(item => item.expand(expanded));
+    this.shadowRoot.querySelector('cr-action-menu')!.close();
   }
 
-  private onExpandAllClick_() {
+  protected onExpandAllClick_() {
     this.expandItems_(true);
   }
 
-  private onCollapseAllClick_() {
+  protected onCollapseAllClick_() {
     this.expandItems_(false);
   }
 
-  private onExportClick_() {
+  protected onExportClick_() {
     const fileName = `exported_activity_log_${this.extensionId}.json`;
     this.delegate.downloadActivities(this.rawActivities_, fileName);
   }
 
-  private deleteItem_(e: CustomEvent<Array<string>>) {
+  private deleteItem_(e: CustomEvent<string[]>) {
     const activityIds = e.detail;
     this.delegate.deleteActivitiesById(activityIds).then(() => {
       // It is possible for multiple activities displayed to have the same
@@ -309,7 +316,7 @@ class ActivityLogHistoryElement extends PolymerElement {
   }
 
   private processActivities_(
-      activityData: Array<chrome.activityLogPrivate.ExtensionActivity>) {
+      activityData: chrome.activityLogPrivate.ExtensionActivity[]) {
     this.pageState_ = ActivityLogPageState.LOADED;
 
     // Sort |activityData| in ascending order based on the activity's
@@ -349,7 +356,7 @@ class ActivityLogHistoryElement extends PolymerElement {
         });
   }
 
-  private onSearchChanged_(e: CustomEvent<string>) {
+  protected onSearchChanged_(e: CustomEvent<string>) {
     // Remove all whitespaces from the search term, as API call names and
     // urls should not contain any whitespace. As of now, only single term
     // search queries are allowed.
@@ -360,6 +367,12 @@ class ActivityLogHistoryElement extends PolymerElement {
 
     this.lastSearch_ = searchTerm;
     this.refreshActivities_();
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'activity-log-history': ActivityLogHistoryElement;
   }
 }
 

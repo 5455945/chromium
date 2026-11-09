@@ -1,27 +1,49 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/transceiver_state_surfacer.h"
 
 #include <memory>
-#include <tuple>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/memory/ptr_util.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/public/web/web_heap.h"
 #include "third_party/blink/renderer/modules/peerconnection/mock_peer_connection_dependency_factory.h"
 #include "third_party/blink/renderer/modules/peerconnection/mock_peer_connection_impl.h"
+#include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter_map.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_source.h"
-#include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_component_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
-#include "third_party/blink/renderer/platform/peerconnection/webrtc_util.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/webrtc/api/dtls_transport_interface.h"
+#include "third_party/webrtc/api/media_stream_interface.h"
+#include "third_party/webrtc/api/media_types.h"
+#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/peer_connection_tracer_interface.h"
+#include "third_party/webrtc/api/rtp_transceiver_direction.h"
+#include "third_party/webrtc/api/rtp_transceiver_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/api/sctp_transport_interface.h"
+#include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
 using testing::AnyNumber;
 using testing::Return;
@@ -34,7 +56,7 @@ namespace transceiver_state_surfacer_test {
 class MockSctpTransport : public webrtc::SctpTransportInterface {
  public:
   MOCK_CONST_METHOD0(dtls_transport,
-                     rtc::scoped_refptr<webrtc::DtlsTransportInterface>());
+                     webrtc::scoped_refptr<webrtc::DtlsTransportInterface>());
   MOCK_CONST_METHOD0(Information, webrtc::SctpTransportInformation());
   MOCK_METHOD1(RegisterObserver, void(webrtc::SctpTransportObserverInterface*));
   MOCK_METHOD0(UnregisterObserver, void());
@@ -54,7 +76,7 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
     DummyExceptionStateForTesting exception_state;
     peer_connection_ = dependency_factory_->CreatePeerConnection(
         webrtc::PeerConnectionInterface::RTCConfiguration(), nullptr, nullptr,
-        exception_state);
+        /*tracer=*/nullptr, exception_state);
     EXPECT_CALL(
         *(static_cast<blink::MockPeerConnectionImpl*>(peer_connection_.get())),
         GetSctpTransport())
@@ -78,52 +100,54 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
         CreateLocalTrack(id));
   }
 
-  rtc::scoped_refptr<blink::FakeRtpTransceiver> CreateWebRtcTransceiver(
-      rtc::scoped_refptr<webrtc::MediaStreamTrackInterface> local_track,
+  webrtc::scoped_refptr<blink::FakeRtpTransceiver> CreateWebRtcTransceiver(
+      webrtc::scoped_refptr<webrtc::MediaStreamTrackInterface> local_track,
       const std::string& local_stream_id,
       const std::string& remote_track_id,
       const std::string& remote_stream_id,
-      rtc::scoped_refptr<webrtc::DtlsTransportInterface> transport) {
-    rtc::scoped_refptr<blink::FakeRtpTransceiver> transceiver =
-        new rtc::RefCountedObject<blink::FakeRtpTransceiver>(
+      webrtc::scoped_refptr<webrtc::DtlsTransportInterface> transport) {
+    webrtc::scoped_refptr<blink::FakeRtpTransceiver> transceiver(
+        new webrtc::RefCountedObject<blink::FakeRtpTransceiver>(
             local_track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind
-                ? cricket::MEDIA_TYPE_AUDIO
-                : cricket::MEDIA_TYPE_VIDEO,
+                ? webrtc::MediaType::AUDIO
+                : webrtc::MediaType::VIDEO,
             CreateWebRtcSender(local_track, local_stream_id),
             CreateWebRtcReceiver(remote_track_id, remote_stream_id),
-            absl::nullopt, false, webrtc::RtpTransceiverDirection::kSendRecv,
-            absl::nullopt);
-    if (transport.get()) {
+            std::nullopt, false, webrtc::RtpTransceiverDirection::kSendRecv,
+            std::nullopt));
+    if (transport) {
       transceiver->SetTransport(transport);
     }
     return transceiver;
   }
 
-  rtc::scoped_refptr<blink::FakeRtpSender> CreateWebRtcSender(
-      rtc::scoped_refptr<webrtc::MediaStreamTrackInterface> track,
+  webrtc::scoped_refptr<blink::FakeRtpSender> CreateWebRtcSender(
+      webrtc::scoped_refptr<webrtc::MediaStreamTrackInterface> track,
       const std::string& stream_id) {
-    return new rtc::RefCountedObject<blink::FakeRtpSender>(
-        std::move(track), std::vector<std::string>({stream_id}));
+    return webrtc::scoped_refptr<blink::FakeRtpSender>(
+        new webrtc::RefCountedObject<blink::FakeRtpSender>(
+            std::move(track), std::vector<std::string>({stream_id})));
   }
 
-  rtc::scoped_refptr<blink::FakeRtpReceiver> CreateWebRtcReceiver(
+  webrtc::scoped_refptr<blink::FakeRtpReceiver> CreateWebRtcReceiver(
       const std::string& track_id,
       const std::string& stream_id) {
-    rtc::scoped_refptr<webrtc::AudioTrackInterface> remote_track =
-        blink::MockWebRtcAudioTrack::Create(track_id).get();
-    rtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
-        new rtc::RefCountedObject<blink::MockMediaStream>(stream_id));
-    return new rtc::RefCountedObject<blink::FakeRtpReceiver>(
-        remote_track.get(),
-        std::vector<rtc::scoped_refptr<webrtc::MediaStreamInterface>>(
-            {remote_stream}));
+    webrtc::scoped_refptr<webrtc::AudioTrackInterface> remote_track(
+        blink::MockWebRtcAudioTrack::Create(track_id).get());
+    webrtc::scoped_refptr<webrtc::MediaStreamInterface> remote_stream(
+        new webrtc::RefCountedObject<blink::MockMediaStream>(stream_id));
+    return webrtc::scoped_refptr<blink::FakeRtpReceiver>(
+        new webrtc::RefCountedObject<blink::FakeRtpReceiver>(
+            remote_track,
+            std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>(
+                {remote_stream})));
   }
 
   // Initializes the surfacer on the signaling thread and signals the waitable
   // event when done. The WaitableEvent's Wait() blocks the main thread until
   // initialization occurs.
   std::unique_ptr<base::WaitableEvent> AsyncInitializeSurfacerWithWaitableEvent(
-      std::vector<rtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
+      std::vector<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
           transceivers) {
     std::unique_ptr<base::WaitableEvent> waitable_event(new base::WaitableEvent(
         base::WaitableEvent::ResetPolicy::MANUAL,
@@ -144,7 +168,7 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
   // task (such as the callback) to be executed while waiting. The caller must
   // let the loop Run() before destroying it.
   std::unique_ptr<base::RunLoop> AsyncInitializeSurfacerWithCallback(
-      std::vector<rtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
+      std::vector<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
           transceivers,
       base::OnceCallback<void()> callback) {
     std::unique_ptr<base::RunLoop> run_loop(new base::RunLoop());
@@ -158,7 +182,8 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
   }
 
   void ObtainStatesAndExpectInitialized(
-      rtc::scoped_refptr<webrtc::RtpTransceiverInterface> webrtc_transceiver) {
+      webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>
+          webrtc_transceiver) {
     // Inspect SCTP transport
     auto sctp_snapshot = surfacer_->SctpTransportSnapshot();
     EXPECT_EQ(peer_connection_->GetSctpTransport(), sctp_snapshot.transport);
@@ -215,33 +240,31 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
                 receiver_state->webrtc_dtls_transport_information().state());
     }
     // Inspect transceiver states.
-    EXPECT_TRUE(blink::OptionalEquals(transceiver_state.mid(),
-                                      webrtc_transceiver->mid()));
-    EXPECT_EQ(transceiver_state.stopped(), webrtc_transceiver->stopped());
+    EXPECT_EQ(transceiver_state.mid(), webrtc_transceiver->mid());
     EXPECT_TRUE(transceiver_state.direction() ==
                 webrtc_transceiver->direction());
-    EXPECT_TRUE(blink::OptionalEquals(transceiver_state.current_direction(),
-                                      webrtc_transceiver->current_direction()));
+    EXPECT_EQ(transceiver_state.current_direction(),
+              webrtc_transceiver->current_direction());
   }
 
  private:
   MediaStreamComponent* CreateLocalTrack(const std::string& id) {
-    auto* source = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8(id), MediaStreamSource::kTypeAudio,
-        String::FromUTF8("local_audio_track"), false);
     auto audio_source = std::make_unique<MediaStreamAudioSource>(
         scheduler::GetSingleThreadTaskRunnerForTesting(), true);
     auto* audio_source_ptr = audio_source.get();
-    source->SetPlatformSource(std::move(audio_source));
+    auto* source = MakeGarbageCollected<MediaStreamSource>(
+        String::FromUtf8(id), MediaStreamSource::kTypeAudio,
+        "local_audio_track", false, std::move(audio_source));
 
-    auto* component =
-        MakeGarbageCollected<MediaStreamComponent>(source->Id(), source);
-    audio_source_ptr->ConnectToTrack(component);
+    auto* component = MakeGarbageCollected<MediaStreamComponentImpl>(
+        source->Id(), source,
+        std::make_unique<MediaStreamAudioTrack>(/*is_local=*/true));
+    audio_source_ptr->ConnectToInitializedTrack(component);
     return component;
   }
 
   void AsyncInitializeSurfacerWithWaitableEventOnSignalingThread(
-      std::vector<rtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
+      std::vector<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
           transceivers,
       base::WaitableEvent* waitable_event) {
     DCHECK(signaling_task_runner()->BelongsToCurrentThread());
@@ -251,7 +274,7 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
   }
 
   void AsyncInitializeSurfacerWithCallbackOnSignalingThread(
-      std::vector<rtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
+      std::vector<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
           transceivers,
       base::OnceCallback<void()> callback,
       base::RunLoop* run_loop) {
@@ -275,7 +298,8 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
   }
 
  protected:
-  scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
+  test::TaskEnvironment task_environment_;
+  webrtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
   CrossThreadPersistent<MockPeerConnectionDependencyFactory>
       dependency_factory_;
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
@@ -311,7 +335,9 @@ TEST_F(TransceiverStateSurfacerTest, SurfaceTransceiverWithTransport) {
   auto local_track_adapter = CreateLocalTrackAndAdapter("local_track");
   auto webrtc_transceiver = CreateWebRtcTransceiver(
       local_track_adapter->webrtc_track(), "local_stream", "remote_track",
-      "remote_stream", new rtc::RefCountedObject<blink::FakeDtlsTransport>());
+      "remote_stream",
+      webrtc::scoped_refptr<webrtc::DtlsTransportInterface>(
+          new webrtc::RefCountedObject<blink::FakeDtlsTransport>()));
   auto run_loop = AsyncInitializeSurfacerWithCallback(
       {webrtc_transceiver},
       base::BindOnce(
@@ -320,56 +346,13 @@ TEST_F(TransceiverStateSurfacerTest, SurfaceTransceiverWithTransport) {
   run_loop->Run();
 }
 
-TEST_F(TransceiverStateSurfacerTest, SurfaceSenderStateOnly) {
-  auto local_track_adapter = CreateLocalTrackAndAdapter("local_track");
-  auto webrtc_sender =
-      CreateWebRtcSender(local_track_adapter->webrtc_track(), "local_stream");
-  auto waitable_event = AsyncInitializeSurfacerWithWaitableEvent(
-      {new SurfaceSenderStateOnly(webrtc_sender)});
-  waitable_event->Wait();
-  auto transceiver_states = surfacer_->ObtainStates();
-  EXPECT_EQ(1u, transceiver_states.size());
-  auto& transceiver_state = transceiver_states[0];
-  EXPECT_TRUE(transceiver_state.sender_state());
-  EXPECT_TRUE(transceiver_state.sender_state()->is_initialized());
-  EXPECT_FALSE(transceiver_state.receiver_state());
-  // Expect transceiver members be be missing for optional members and have
-  // sensible values for non-optional members.
-  EXPECT_FALSE(transceiver_state.mid());
-  EXPECT_FALSE(transceiver_state.stopped());
-  EXPECT_EQ(transceiver_state.direction(),
-            webrtc::RtpTransceiverDirection::kSendOnly);
-  EXPECT_FALSE(transceiver_state.current_direction());
-}
-
-TEST_F(TransceiverStateSurfacerTest, SurfaceReceiverStateOnly) {
-  auto local_track_adapter = CreateLocalTrackAndAdapter("local_track");
-  auto webrtc_receiver = CreateWebRtcReceiver("remote_track", "remote_stream");
-  auto waitable_event = AsyncInitializeSurfacerWithWaitableEvent(
-      {new SurfaceReceiverStateOnly(webrtc_receiver)});
-  waitable_event->Wait();
-  auto transceiver_states = surfacer_->ObtainStates();
-  EXPECT_EQ(1u, transceiver_states.size());
-  auto& transceiver_state = transceiver_states[0];
-  EXPECT_FALSE(transceiver_state.sender_state());
-  EXPECT_TRUE(transceiver_state.receiver_state());
-  EXPECT_TRUE(transceiver_state.receiver_state()->is_initialized());
-  // Expect transceiver members be be missing for optional members and have
-  // sensible values for non-optional members.
-  EXPECT_FALSE(transceiver_state.mid());
-  EXPECT_FALSE(transceiver_state.stopped());
-  EXPECT_EQ(transceiver_state.direction(),
-            webrtc::RtpTransceiverDirection::kRecvOnly);
-  EXPECT_FALSE(transceiver_state.current_direction());
-}
-
 TEST_F(TransceiverStateSurfacerTest, SurfaceTransceiverWithSctpTransport) {
   auto local_track_adapter = CreateLocalTrackAndAdapter("local_track");
   auto webrtc_transceiver = CreateWebRtcTransceiver(
       local_track_adapter->webrtc_track(), "local_stream", "remote_track",
       "remote_stream", nullptr);
-  rtc::scoped_refptr<MockSctpTransport> mock_sctp_transport =
-      new rtc::RefCountedObject<MockSctpTransport>();
+  webrtc::scoped_refptr<MockSctpTransport> mock_sctp_transport(
+      new webrtc::RefCountedObject<MockSctpTransport>());
   webrtc::SctpTransportInformation sctp_transport_info(
       webrtc::SctpTransportState::kNew);
   EXPECT_CALL(

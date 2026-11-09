@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,15 @@
 #include <set>
 #include <string>
 
+#include "base/time/time.h"
 #include "cc/cc_export.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 
 namespace perfetto {
+class EventContext;
 namespace protos {
 namespace pbzero {
-class BeginImplFrameArgs;
+class BeginImplFrameArgsV2;
 }
 }  // namespace protos
 }  // namespace perfetto
@@ -64,6 +66,7 @@ class CC_EXPORT BeginFrameTracker {
   // **Must** only be called when **not** between the start and finish method
   // calls.
   const viz::BeginFrameArgs& Last() const;
+  bool HasLast() const;
 
   // Helper method to try and return a valid interval property. Defaults to
   // BFA::DefaultInterval() is no other interval can be found. Can be called at
@@ -71,8 +74,9 @@ class CC_EXPORT BeginFrameTracker {
   base::TimeDelta Interval() const;
 
   void AsProtozeroInto(
+      perfetto::EventContext& ctx,
       base::TimeTicks now,
-      perfetto::protos::pbzero::BeginImplFrameArgs* dict) const;
+      perfetto::protos::pbzero::BeginImplFrameArgsV2* dict) const;
 
   // The following methods violate principles of how viz::BeginFrameArgs should
   // be used. These methods should only be used when there is no other choice.

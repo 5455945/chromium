@@ -30,16 +30,14 @@ class {{export_attribute}} {{class_name}} {
     data.unknown = 0U;
   }
 
-  // TODO(crbug.com/1148486): SHOUTY_CASE values are being deprecated per C++ code style
+  // TODO(crbug.com/40731316): SHOUTY_CASE values are being deprecated per C++ code style
   // guidelines (https://google.github.io/styleguide/cppguide.html#Enumerator_Names),
   // please use kCamelCase values instead.  Cleanup NULL_VALUE, BOOL_VALUE, INT_VALUE, etc.
   // generation once codebase is transitioned to kNullValue, kBoolValue, kIntValue, etc.
   enum class {{enum_name}} : uint32_t {
 {%  for field in union.fields %}
     {{ kythe_annotation("%s.%s"|format(union|get_full_mojom_name_for_kind(), field.name)) }}
-    {{field.name|upper}},
-    {{ kythe_annotation("%s.%s"|format(union|get_full_mojom_name_for_kind(), field.name)) }}
-    k{{field.name|under_to_camel}} = {{field.name|upper}},
+    k{{field.name|under_to_camel}},
 {%- endfor %}
   };
 
@@ -47,7 +45,7 @@ class {{export_attribute}} {{class_name}} {
   // "Each non-static data member is allocated as if it were the sole member of
   // a struct." - Section 9.5.2 ISO/IEC 14882:2011 (The C++ Spec)
   union MOJO_ALIGNAS(8) Union_ {
-    Union_() : unknown(0) {}
+    Union_() = default;
 
 {%- for field in union.fields %}
 {%-   if field.kind.spec == 'b' %}

@@ -28,52 +28,66 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SVG_PAINT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SVG_PAINT_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/style_color.h"
+#include "third_party/blink/renderer/core/style/style_svg_resource.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
-class StyleSVGResource;
-
-enum SVGPaintType {
-  SVG_PAINTTYPE_COLOR,
-  SVG_PAINTTYPE_NONE,
-  SVG_PAINTTYPE_URI_NONE,
-  SVG_PAINTTYPE_URI_COLOR,
-  SVG_PAINTTYPE_URI
+enum class SVGPaintType {
+  kColor,
+  kNone,
+  kContextFill,
+  kContextStroke,
+  kUriNone,
+  kUriColor,
+  kUri
 };
 
 struct SVGPaint {
+  DISALLOW_NEW();
+
+ public:
   CORE_EXPORT SVGPaint();
   explicit SVGPaint(Color color);
   SVGPaint(const SVGPaint& paint);
   CORE_EXPORT ~SVGPaint();
   CORE_EXPORT SVGPaint& operator=(const SVGPaint& paint);
 
-  CORE_EXPORT bool operator==(const SVGPaint&) const;
-  bool operator!=(const SVGPaint& other) const { return !(*this == other); }
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(color);
+    visitor->Trace(resource);
+  }
 
-  bool IsNone() const { return type == SVG_PAINTTYPE_NONE; }
-  bool IsColor() const { return type == SVG_PAINTTYPE_COLOR; }
+  CORE_EXPORT bool operator==(const SVGPaint&) const;
+
+  CORE_EXPORT static SVGPaint CreateInitial();
+  CORE_EXPORT static SVGPaint CreateInitialBlack();
+
+  bool IsNone() const { return type == SVGPaintType::kNone; }
+  bool IsInitial() const { return is_initial_value; }
+  bool IsColor() const { return type == SVGPaintType::kColor; }
   // Used by CSSPropertyEquality::PropertiesEqual.
   bool EqualTypeOrColor(const SVGPaint& other) const {
     return type == other.type &&
-           (type != SVG_PAINTTYPE_COLOR || color == other.color);
+           (type != SVGPaintType::kColor || color == other.color);
   }
-  bool HasColor() const { return IsColor() || type == SVG_PAINTTYPE_URI_COLOR; }
-  bool HasUrl() const { return type >= SVG_PAINTTYPE_URI_NONE; }
+  bool HasColor() const { return IsColor() || type == SVGPaintType::kUriColor; }
+  bool HasUrl() const { return type >= SVGPaintType::kUriNone; }
   bool HasCurrentColor() const { return HasColor() && color.IsCurrentColor(); }
-  StyleSVGResource* Resource() const { return resource.get(); }
+  StyleSVGResource* Resource() const { return resource.Get(); }
 
   const StyleColor& GetColor() const { return color; }
   const AtomicString& GetUrl() const;
 
-  scoped_refptr<StyleSVGResource> resource;
   StyleColor color;
-  SVGPaintType type{SVG_PAINTTYPE_NONE};
+  Member<StyleSVGResource> resource{nullptr};
+  SVGPaintType type{SVGPaintType::kNone};
+  bool is_initial_value = false;
 };
 
 }  // namespace blink

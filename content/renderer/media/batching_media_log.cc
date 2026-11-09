@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 
 #include <sstream>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "media/base/logging_override_if_enabled.h"
 
@@ -20,9 +20,7 @@ namespace {
 // Keep the JSON conversion in one function to prevent LOG and DVLOG calls
 // from unnecessarily converting it.
 std::string ToJSON(const media::MediaLogRecord& event) {
-  std::string params_json;
-  base::JSONWriter::Write(event.params, &params_json);
-  return params_json;
+  return base::WriteJson(event.params).value_or("");
 }
 
 // Print an event to the chromium log.
@@ -31,18 +29,12 @@ void Log(const media::MediaLogRecord& event) {
   if (event.type == media::MediaLogRecord::Type::kMediaStatus) {
     DVLOG(1) << "MediaEvent: " << ToJSON(event);
   } else if (event.type == media::MediaLogRecord::Type::kMessage &&
-             event.params.HasKey("error")) {
+             event.params.Find("error")) {
     DVLOG(1) << "MediaEvent: " << ToJSON(event);
   } else if (event.type != media::MediaLogRecord::Type::kMediaPropertyChange) {
     DVLOG(1) << "MediaEvent: " << ToJSON(event);
   }
 }
-
-// This string comes from the TypeName template specialization
-// in media_log_type_enforcement.h, it's not encoded anywhere, so it's
-// just typed out here.
-constexpr char kDurationChangedMessage[] = "kDurationChanged";
-constexpr char kBufferingStateChangedMessage[] = "kBufferingStateChanged";
 
 }  // namespace
 
@@ -52,14 +44,15 @@ BatchingMediaLog::BatchingMediaLog(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     std::vector<std::unique_ptr<EventHandler>> event_handlers)
     : task_runner_(std::move(task_runner)),
-      event_handlers_(std::move(event_handlers)),
       tick_clock_(base::DefaultTickClock::GetInstance()),
       last_ipc_send_time_(tick_clock_->NowTicks()),
+      event_handlers_(std::move(event_handlers)),
       ipc_send_pending_(false),
       logged_rate_limit_warning_(false) {
   // Pre-bind the WeakPtr on the right thread since we'll receive calls from
   // other threads and don't want races.
   weak_this_ = weak_factory_.GetWeakPtr();
+  AddEvent<media::MediaLogEvent::kMediaLogCreated>(base::Time::Now());
 }
 
 BatchingMediaLog::~BatchingMediaLog() {
@@ -75,7 +68,19 @@ BatchingMediaLog::~BatchingMediaLog() {
     SendQueuedMediaEvents();
 }
 
+void BatchingMediaLog::Stop() {
+  base::AutoLock lock(lock_);
+  event_handlers_.clear();
+}
+
 void BatchingMediaLog::OnWebMediaPlayerDestroyedLocked() {
+  // The inspector handler will fail to send events after this, so send queued
+  // events now.
+  base::AutoLock lock(lock_);
+  if (ipc_send_pending_) {
+    SendQueuedMediaEvents_Locked();
+  }
+
   for (const auto& handler : event_handlers_)
     handler->OnWebMediaPlayerDestroyed();
 }
@@ -90,7 +95,7 @@ void BatchingMediaLog::AddLogRecordLocked(
   {
     base::AutoLock auto_lock(lock_);
     switch (event->type) {
-      // Hold onto the most recent PIPELINE_ERROR and the first, if any,
+      // Hold onto the most recent failed status and the first, if any,
       // MEDIA_LOG_ERROR_ENTRY for use in GetErrorMessage().
       case media::MediaLogRecord::Type::kMediaStatus:
         last_pipeline_error_ = *event;
@@ -98,15 +103,30 @@ void BatchingMediaLog::AddLogRecordLocked(
         break;
 
       case media::MediaLogRecord::Type::kMediaEventTriggered: {
-        DCHECK(event->params.HasKey(MediaLog::kEventKey));
-        const auto* event_key =
-            event->params.FindStringKey(MediaLog::kEventKey);
-        if (*event_key == kDurationChangedMessage) {
+        const base::Value* event_key = event->params.Find(MediaLog::kEventKey);
+        DCHECK(event_key);
+
+        // These strings come from the TypeName template specialization
+        // in media_log_type_enforcement.h, it's not encoded anywhere, so it's
+        // just typed out here.
+        if (*event_key == "kDurationChanged") {
           // This may fire many times for badly muxed media; only keep the last.
           last_duration_changed_event_ = *event;
-        } else if (*event_key == kBufferingStateChangedMessage) {
+        } else if (*event_key == "kBufferingStateChanged") {
           // This may fire many times on poor networks; only keep the last.
-          last_buffering_state_event_ = *event;
+          if (event->params.Find("video_buffering_state")) {
+            last_video_buffering_state_ = *event;
+          } else if (event->params.Find("audio_buffering_state")) {
+            last_audio_buffering_state_ = *event;
+          } else if (event->params.Find("pipeline_buffering_state")) {
+            last_pipeline_buffering_state_ = *event;
+          } else {
+            NOTREACHED();
+          }
+        } else if (*event_key == "kPlay") {
+          last_play_event_ = *event;
+        } else if (*event_key == "kPause") {
+          last_pause_event_ = *event;
         } else {
           MaybeQueueEvent_Locked(std::move(event));
         }
@@ -114,7 +134,7 @@ void BatchingMediaLog::AddLogRecordLocked(
       }
 
       case media::MediaLogRecord::Type::kMessage:
-        if (event->params.HasKey(media::MediaLogMessageLevelToString(
+        if (event->params.Find(media::MediaLogMessageLevelToString(
                 media::MediaLogMessageLevel::kERROR)) &&
             !cached_media_error_for_message_) {
           cached_media_error_for_message_ = *event;
@@ -130,11 +150,11 @@ void BatchingMediaLog::AddLogRecordLocked(
       return;
 
     ipc_send_pending_ = true;
-    delay_for_next_ipc_send = base::TimeDelta::FromSeconds(1) -
-                              (tick_clock_->NowTicks() - last_ipc_send_time_);
+    delay_for_next_ipc_send =
+        base::Seconds(1) - (tick_clock_->NowTicks() - last_ipc_send_time_);
   }
 
-  if (delay_for_next_ipc_send > base::TimeDelta()) {
+  if (delay_for_next_ipc_send.is_positive()) {
     task_runner_->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&BatchingMediaLog::SendQueuedMediaEvents, weak_this_),
@@ -175,55 +195,90 @@ std::string BatchingMediaLog::MediaEventToMessageString(
     const media::MediaLogRecord& event) {
   switch (event.type) {
     case media::MediaLogRecord::Type::kMediaStatus: {
-      int error_code = 0;
-      event.params.GetInteger(media::MediaLog::kStatusText, &error_code);
-      DCHECK_NE(error_code, 0);
-      return PipelineStatusToString(
-          static_cast<media::PipelineStatus>(error_code));
+      const std::string* group =
+          event.params.FindString(media::StatusConstants::kGroupKey);
+      auto code =
+          event.params.FindInt(media::StatusConstants::kCodeKey).value_or(0);
+      DCHECK_NE(code, 0);
+      if (group && *group == media::PipelineStatus::Traits::Group()) {
+        return PipelineStatusToString(
+            static_cast<media::PipelineStatusCodes>(code));
+      }
+      return *group;
     }
     case media::MediaLogRecord::Type::kMessage: {
-      std::string result;
-      if (event.params.GetString(
-              MediaLogMessageLevelToString(media::MediaLogMessageLevel::kERROR),
-              &result)) {
-        base::ReplaceChars(result, "\n", " ", &result);
+      const std::string* result = event.params.FindString(
+          MediaLogMessageLevelToString(media::MediaLogMessageLevel::kERROR));
+      if (result) {
+        std::string result_copy;
+        base::ReplaceChars(*result, "\n", " ", &result_copy);
+        return result_copy;
       }
-      return result;
-    }
-    default:
-      NOTREACHED();
       return "";
+    }
+    case media::MediaLogRecord::Type::kMediaPropertyChange:
+    case media::MediaLogRecord::Type::kMediaEventTriggered:
+      NOTREACHED();
   }
+  NOTREACHED();
 }
 
 void BatchingMediaLog::SendQueuedMediaEvents() {
   DCHECK(task_runner_->BelongsToCurrentThread());
+  base::AutoLock auto_lock(lock_);
 
-  std::vector<media::MediaLogRecord> events_to_send;
-  {
-    base::AutoLock auto_lock(lock_);
-    DCHECK(ipc_send_pending_);
-    ipc_send_pending_ = false;
+  // This is called as a posted task and another task may
+  // decide to immediate emit queued events, so we must
+  // check `ipc_send_pending_` first here.
+  if (ipc_send_pending_) {
+    SendQueuedMediaEvents_Locked();
+  }
+}
 
-    if (last_duration_changed_event_) {
-      queued_media_events_.push_back(*last_duration_changed_event_);
-      last_duration_changed_event_.reset();
-    }
+void BatchingMediaLog::SendQueuedMediaEvents_Locked() {
+  lock_.AssertAcquired();
+  DCHECK(ipc_send_pending_);
+  ipc_send_pending_ = false;
 
-    if (last_buffering_state_event_) {
-      queued_media_events_.push_back(*last_buffering_state_event_);
-      last_buffering_state_event_.reset();
-    }
-
-    queued_media_events_.swap(events_to_send);
-    last_ipc_send_time_ = tick_clock_->NowTicks();
+  if (last_duration_changed_event_) {
+    queued_media_events_.push_back(*last_duration_changed_event_);
+    last_duration_changed_event_.reset();
   }
 
-  if (events_to_send.empty())
+  if (last_video_buffering_state_) {
+    queued_media_events_.push_back(*last_video_buffering_state_);
+    last_video_buffering_state_.reset();
+  }
+
+  if (last_audio_buffering_state_) {
+    queued_media_events_.push_back(*last_audio_buffering_state_);
+    last_audio_buffering_state_.reset();
+  }
+
+  if (last_pipeline_buffering_state_) {
+    queued_media_events_.push_back(*last_pipeline_buffering_state_);
+    last_pipeline_buffering_state_.reset();
+  }
+
+  if (last_play_event_) {
+    queued_media_events_.push_back(*last_play_event_);
+    last_play_event_.reset();
+  }
+
+  if (last_pause_event_) {
+    queued_media_events_.push_back(*last_pause_event_);
+    last_pause_event_.reset();
+  }
+
+  last_ipc_send_time_ = tick_clock_->NowTicks();
+
+  if (queued_media_events_.empty())
     return;
 
   for (const auto& handler : event_handlers_)
-    handler->SendQueuedMediaEvents(events_to_send);
+    handler->SendQueuedMediaEvents(queued_media_events_);
+
+  queued_media_events_.clear();
 }
 
 void BatchingMediaLog::SetTickClockForTesting(
@@ -255,7 +310,7 @@ void BatchingMediaLog::MaybeQueueEvent_Locked(
   queued_media_events_.back().id = event->id;
   queued_media_events_.back().type = media::MediaLogRecord::Type::kMessage;
   queued_media_events_.back().time = base::TimeTicks::Now();
-  queued_media_events_.back().params.SetStringPath(
+  queued_media_events_.back().params.Set(
       media::MediaLogMessageLevelToString(
           media::MediaLogMessageLevel::kWARNING),
       message);

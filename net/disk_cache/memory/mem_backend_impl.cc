@@ -1,22 +1,28 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/disk_cache/memory/mem_backend_impl.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/byte_size.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory_coordinator/memory_consumer.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
-#include "base/task/post_task.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
-#include "base/trace_event/memory_usage_estimator.h"
-#include "base/trace_event/process_memory_dump.h"
+#include "base/types/expected.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/cache_util.h"
 #include "net/disk_cache/memory/mem_entry_impl.h"
@@ -27,15 +33,33 @@ namespace disk_cache {
 
 namespace {
 
-const int kDefaultInMemoryCacheSize = 10 * 1024 * 1024;
-const int kDefaultEvictionSize = kDefaultInMemoryCacheSize / 10;
+const int32_t kDefaultInMemoryCacheSize = 10 * 1024 * 1024;
+const int32_t kMaxMemoryCacheSize = kDefaultInMemoryCacheSize * 5;
+
+int32_t CalculateDefaultMaxSize() {
+  // The default max size is based on amount of physical memory of the machine.
+
+  base::ByteSize total_memory = base::SysInfo::AmountOfTotalPhysicalMemory();
+  if (total_memory.is_zero()) {
+    return kDefaultInMemoryCacheSize;
+  }
+
+  // We want to use up to 2% of the computer's memory, with a limit of 50 MB,
+  // reached on system with more than 2.5 GB of RAM.
+  if (total_memory >= base::MiB(2500)) {
+    return kMaxMemoryCacheSize;
+  }
+
+  base::ByteSize max_size = total_memory * 2 / 100;
+  return base::checked_cast<int32_t>(max_size.InBytes());
+}
 
 // Returns the next entry after |node| in |lru_list| that's not a child
 // of |node|.  This is useful when dooming, since dooming a parent entry
 // will also doom its children.
-base::LinkNode<MemEntryImpl>* NextSkippingChildren(
-    const base::LinkedList<MemEntryImpl>& lru_list,
-    base::LinkNode<MemEntryImpl>* node) {
+base::UnsafeLinkNode<MemEntryImpl>* NextSkippingChildren(
+    const base::UnsafeLinkedList<MemEntryImpl>& lru_list,
+    base::UnsafeLinkNode<MemEntryImpl>* node) {
   MemEntryImpl* cur = node->value();
   do {
     node = node->next();
@@ -43,25 +67,33 @@ base::LinkNode<MemEntryImpl>* NextSkippingChildren(
   return node;
 }
 
+constexpr base::MemoryConsumerTraits kMemBackendImplTraits(
+    // Scales with system RAM up to a cap in the tens of MBs.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
+    // Eviction walks the linked list, reading the entries being freed.
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kReads,
+    // Evicted entries can be re-fetched from network.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Eviction runs inline synchronously.
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous);
+
 }  // namespace
 
 MemBackendImpl::MemBackendImpl(net::NetLog* net_log)
     : Backend(net::MEMORY_CACHE),
-      custom_clock_for_testing_(nullptr),
-      max_size_(0),
-      current_size_(0),
       net_log_(net_log),
-      memory_pressure_listener_(
-          FROM_HERE,
-          base::BindRepeating(&MemBackendImpl::OnMemoryPressure,
-                              base::Unretained(this))) {}
+      memory_consumer_registration_(
+          "MemBackendImpl",
+          kMemBackendImplTraits,
+          this,
+          base::AsyncMemoryConsumerRegistration::CheckUnregister::kDisabled) {}
 
 MemBackendImpl::~MemBackendImpl() {
   while (!entries_.empty())
     entries_.begin()->second->Doom();
 
   if (!post_cleanup_callback_.is_null())
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, std::move(post_cleanup_callback_));
 }
 
@@ -69,47 +101,17 @@ MemBackendImpl::~MemBackendImpl() {
 std::unique_ptr<MemBackendImpl> MemBackendImpl::CreateBackend(
     int64_t max_bytes,
     net::NetLog* net_log) {
-  std::unique_ptr<MemBackendImpl> cache(
-      std::make_unique<MemBackendImpl>(net_log));
-  if (cache->SetMaxSize(max_bytes) && cache->Init())
-    return cache;
-
-  LOG(ERROR) << "Unable to create cache";
-  return nullptr;
-}
-
-bool MemBackendImpl::Init() {
-  if (max_size_)
-    return true;
-
-  int64_t total_memory = base::SysInfo::AmountOfPhysicalMemory();
-
-  if (total_memory <= 0) {
-    max_size_ = kDefaultInMemoryCacheSize;
-    return true;
+  if (max_bytes < 0 || max_bytes > std::numeric_limits<int32_t>::max()) {
+    LOG(ERROR) << "Unable to create cache";
+    return nullptr;
   }
 
-  // We want to use up to 2% of the computer's memory, with a limit of 50 MB,
-  // reached on system with more than 2.5 GB of RAM.
-  total_memory = total_memory * 2 / 100;
-  if (total_memory > kDefaultInMemoryCacheSize * 5)
-    max_size_ = kDefaultInMemoryCacheSize * 5;
-  else
-    max_size_ = static_cast<int32_t>(total_memory);
+  auto cache = std::make_unique<MemBackendImpl>(net_log);
 
-  return true;
-}
+  // `max_bytes` is guaranteed to fit because of the check above.
+  cache->Init(base::checked_cast<int32_t>(max_bytes));
 
-bool MemBackendImpl::SetMaxSize(int64_t max_bytes) {
-  if (max_bytes < 0 || max_bytes > std::numeric_limits<int>::max())
-    return false;
-
-  // Zero size means use the default.
-  if (!max_bytes)
-    return true;
-
-  max_size_ = max_bytes;
-  return true;
+  return cache;
 }
 
 int64_t MemBackendImpl::MaxFileSize() const {
@@ -121,15 +123,15 @@ void MemBackendImpl::OnEntryInserted(MemEntryImpl* entry) {
 }
 
 void MemBackendImpl::OnEntryUpdated(MemEntryImpl* entry) {
-  // LinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
+  // UnsafeLinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
   entry->RemoveFromList();
   lru_list_.Append(entry);
 }
 
 void MemBackendImpl::OnEntryDoomed(MemEntryImpl* entry) {
-  if (entry->type() == MemEntryImpl::PARENT_ENTRY)
+  if (entry->type() == MemEntryImpl::EntryType::kParent)
     entries_.erase(entry->key());
-  // LinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
+  // UnsafeLinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
   entry->RemoveFromList();
 }
 
@@ -140,7 +142,7 @@ void MemBackendImpl::ModifyStorageSize(int32_t delta) {
 }
 
 bool MemBackendImpl::HasExceededStorageSize() const {
-  return current_size_ > max_size_;
+  return current_size_ > current_max_size_;
 }
 
 void MemBackendImpl::SetPostCleanupCallback(base::OnceClosure cb) {
@@ -160,8 +162,9 @@ void MemBackendImpl::SetClockForTesting(base::Clock* clock) {
   custom_clock_for_testing_ = clock;
 }
 
-int32_t MemBackendImpl::GetEntryCount() const {
-  return static_cast<int32_t>(entries_.size());
+base::expected<int32_t, net::Error> MemBackendImpl::GetEntryCount(
+    GetEntryCountCallback callback) const {
+  return base::ok(static_cast<int32_t>(entries_.size()));
 }
 
 EntryResult MemBackendImpl::OpenOrCreateEntry(const std::string& key,
@@ -224,7 +227,7 @@ net::Error MemBackendImpl::DoomEntriesBetween(Time initial_time,
     end_time = Time::Max();
   DCHECK_GE(end_time, initial_time);
 
-  base::LinkNode<MemEntryImpl>* node = lru_list_.head();
+  base::UnsafeLinkNode<MemEntryImpl>* node = lru_list_.head();
   while (node != lru_list_.end()) {
     MemEntryImpl* candidate = node->value();
     node = NextSkippingChildren(lru_list_, node);
@@ -257,7 +260,7 @@ int64_t MemBackendImpl::CalculateSizeOfEntriesBetween(
   DCHECK_GE(end_time, initial_time);
 
   int size = 0;
-  base::LinkNode<MemEntryImpl>* node = lru_list_.head();
+  base::UnsafeLinkNode<MemEntryImpl>* node = lru_list_.head();
   while (node != lru_list_.end()) {
     MemEntryImpl* entry = node->value();
     if (entry->GetLastUsed() >= initial_time &&
@@ -314,46 +317,46 @@ class MemBackendImpl::MemIterator final : public Backend::Iterator {
 };
 
 std::unique_ptr<Backend::Iterator> MemBackendImpl::CreateIterator() {
-  return std::unique_ptr<Backend::Iterator>(
-      new MemIterator(weak_factory_.GetWeakPtr()));
+  return std::make_unique<MemIterator>(weak_factory_.GetWeakPtr());
 }
 
 void MemBackendImpl::OnExternalCacheHit(const std::string& key) {
   auto it = entries_.find(key);
   if (it != entries_.end())
-    it->second->UpdateStateOnUse(MemEntryImpl::ENTRY_WAS_NOT_MODIFIED);
+    it->second->UpdateStateOnUse();
 }
 
-size_t MemBackendImpl::DumpMemoryStats(
-    base::trace_event::ProcessMemoryDump* pmd,
-    const std::string& parent_absolute_name) const {
-  base::trace_event::MemoryAllocatorDump* dump =
-      pmd->CreateAllocatorDump(parent_absolute_name + "/memory_backend");
+void MemBackendImpl::SetMaxBytes(base::ByteSize max_bytes) {
+  max_size_ = base::saturated_cast<int32_t>(max_bytes.InBytes());
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    current_max_size_ = CalculateTargetMemoryLimit();
+  } else {
+    current_max_size_ = max_size_;
+  }
+  EvictTill(current_max_size_);
+}
 
-  // Entries in lru_list_ will be counted by EMU but not in entries_ since
-  // they're pointers.
-  size_t size = base::trace_event::EstimateMemoryUsage(lru_list_) +
-                base::trace_event::EstimateMemoryUsage(entries_);
-  dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
-                  base::trace_event::MemoryAllocatorDump::kUnitsBytes, size);
-  dump->AddScalar("mem_backend_size",
-                  base::trace_event::MemoryAllocatorDump::kUnitsBytes,
-                  current_size_);
-  dump->AddScalar("mem_backend_max_size",
-                  base::trace_event::MemoryAllocatorDump::kUnitsBytes,
-                  max_size_);
-  return size;
+base::ByteSize MemBackendImpl::GetMaxBytesForTesting() const {
+  return base::ByteSize(base::checked_cast<uint64_t>(max_size_));
+}
+
+void MemBackendImpl::Init(int32_t max_bytes) {
+  max_size_ = max_bytes ? max_bytes : CalculateDefaultMaxSize();
+  current_max_size_ = max_size_;
 }
 
 void MemBackendImpl::EvictIfNeeded() {
-  if (current_size_ <= max_size_)
+  if (current_size_ <= current_max_size_) {
     return;
-  int target_size = std::max(0, max_size_ - kDefaultEvictionSize);
+  }
+  // Evict 10% more than necessary to avoid evicting on every insertion when the
+  // cache is full.
+  int target_size = current_max_size_ - (current_max_size_ / 10);
   EvictTill(target_size);
 }
 
 void MemBackendImpl::EvictTill(int target_size) {
-  base::LinkNode<MemEntryImpl>* entry = lru_list_.head();
+  base::UnsafeLinkNode<MemEntryImpl>* entry = lru_list_.head();
   while (current_size_ > target_size && entry != lru_list_.end()) {
     MemEntryImpl* to_doom = entry->value();
     entry = NextSkippingChildren(lru_list_, entry);
@@ -363,17 +366,43 @@ void MemBackendImpl::EvictTill(int target_size) {
   }
 }
 
-void MemBackendImpl::OnMemoryPressure(
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  switch (memory_pressure_level) {
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE:
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE:
-      EvictTill(max_size_ / 2);
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL:
+int32_t MemBackendImpl::CalculateTargetMemoryLimit() const {
+  if (memory_limit() <= base::MemoryLimit::ModeratePressureThreshold()) {
+    // Under moderate pressure or worse, we use linear interpolation to ensure
+    // the cache is never completely cleared. We map the [0, 50] memory limit
+    // range to [10%, 50%] of max_size_.
+    float min = max_size_ / 10.0f;
+    float max = max_size_ / 2.0f;
+    return base::checked_cast<int32_t>(
+        std::lerp(min, max, memory_limit().ratio() / 0.5));
+  }
+
+  return memory_limit().Scale(max_size_);
+}
+
+void MemBackendImpl::OnUpdateMemoryLimit() {
+  if (!base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    return;
+  }
+  // IMPORTANT: Ensure no memory is released during this call.
+  // By using std::max, we ensure the new limit is at least the current size,
+  // preventing growth without triggering immediate eviction.
+  current_max_size_ = std::max(current_size_, CalculateTargetMemoryLimit());
+}
+
+void MemBackendImpl::OnReleaseMemory() {
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    // Now we actually evict entries to reach the target size.
+    current_max_size_ = CalculateTargetMemoryLimit();
+    EvictTill(current_max_size_);
+  } else {
+    // Stateless behavior, evict to specific limits.
+    if (memory_limit() <= base::MemoryLimit::CriticalPressureThreshold()) {
       EvictTill(max_size_ / 10);
-      break;
+    } else if (memory_limit() <=
+               base::MemoryLimit::ModeratePressureThreshold()) {
+      EvictTill(max_size_ / 2);
+    }
   }
 }
 

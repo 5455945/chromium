@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 namespace safe_browsing {
 namespace download_type_util {
 
-TEST(DownloadProtectionUtilTest, KnownValues) {
+TEST(DownloadTypeUtilTest, KnownValues) {
   EXPECT_EQ(ClientDownloadRequest::WIN_EXECUTABLE,
             GetDownloadType(base::FilePath(FILE_PATH_LITERAL("foo.exe"))));
   EXPECT_EQ(ClientDownloadRequest::CHROME_EXTENSION,
@@ -25,6 +25,17 @@ TEST(DownloadProtectionUtilTest, KnownValues) {
             GetDownloadType(base::FilePath(FILE_PATH_LITERAL("foo.pkg"))));
   EXPECT_EQ(ClientDownloadRequest::ANDROID_APK,
             GetDownloadType(base::FilePath(FILE_PATH_LITERAL("foo.apk"))));
+}
+
+TEST(DownloadTypeUtilTest, UnknownValues) {
+  // TODO(chlily): There should be a separate unspecified/default value.
+  EXPECT_EQ(ClientDownloadRequest::WIN_EXECUTABLE,
+            GetDownloadType(base::FilePath(FILE_PATH_LITERAL("blah"))));
+  EXPECT_EQ(ClientDownloadRequest::WIN_EXECUTABLE,
+            GetDownloadType(base::FilePath(FILE_PATH_LITERAL("foo.unknown"))));
+  EXPECT_EQ(ClientDownloadRequest::WIN_EXECUTABLE,
+            GetDownloadType(
+                base::FilePath(FILE_PATH_LITERAL("content://media/123"))));
 }
 
 }  // namespace download_type_util

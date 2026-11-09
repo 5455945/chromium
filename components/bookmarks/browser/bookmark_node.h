@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,15 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/guid.h"
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/flat_map.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
+#include "components/bookmarks/browser/bookmark_form_factor.h"
 #include "components/bookmarks/browser/titled_url_node.h"
 #include "ui/base/models/tree_node_model.h"
 #include "ui/gfx/image/image.h"
@@ -28,7 +28,7 @@ class BookmarkModel;
 // BookmarkNode ---------------------------------------------------------------
 
 // BookmarkNode contains information about a starred entry: title, URL, favicon,
-// id and type. BookmarkNodes are returned from BookmarkModel.
+// ID and type. BookmarkNodes are returned from BookmarkModel.
 class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
  public:
   enum Type {
@@ -45,18 +45,12 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
     LOADED_FAVICON,
   };
 
-  typedef std::map<std::string, std::string> MetaInfoMap;
+  typedef base::flat_map<std::string, std::string> MetaInfoMap;
 
-  // TODO(crbug.com/1026195): Make these constants of type base::GUID once there
-  // exists a constexpr constructor.
-  static const char kRootNodeGuid[];
-  static const char kBookmarkBarNodeGuid[];
-  static const char kOtherBookmarksNodeGuid[];
-  static const char kMobileBookmarksNodeGuid[];
-  static const char kManagedNodeGuid[];
+  BookmarkNode(int64_t id, const base::Uuid& uuid, const GURL& url);
 
-  // Creates a new node with |id|, |guid| and |url|.
-  BookmarkNode(int64_t id, const base::GUID& guid, const GURL& url);
+  BookmarkNode(const BookmarkNode&) = delete;
+  BookmarkNode& operator=(const BookmarkNode&) = delete;
 
   ~BookmarkNode() override;
 
@@ -69,17 +63,24 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // BookmarkModel::SetTitle(..) should be used instead.
   void SetTitle(const std::u16string& title) override;
 
-  // Returns an unique id for this node.
+  // Returns an unique ID for this node.
   // For bookmark nodes that are managed by the bookmark model, the IDs are
   // persisted across sessions.
+  //
+  // IDs are unique across both local and account storages.
   int64_t id() const { return id_; }
   void set_id(int64_t id) { id_ = id; }
 
-  // Returns this node's GUID, which is guaranteed to be valid.
-  // For bookmark nodes that are managed by the bookmark model, the GUIDs are
+  // Returns this node's UUID, which is guaranteed to be valid.
+  // For bookmark nodes that are managed by the bookmark model, the UUIDs are
   // persisted across sessions and stable throughout the lifetime of the
-  // bookmark.
-  const base::GUID& guid() const { return guid_; }
+  // bookmark, with the exception of rare cases where moving a bookmark would
+  // otherwise produce a UUID collision (when moved from local to account or
+  // the other way round).
+  //
+  // UUIDs are unique across each individual storage (local or account), but not
+  // across both. See `BookmarkModel::GetNodeByUuid()` for details.
+  const base::Uuid& uuid() const { return uuid_; }
 
   const GURL& url() const { return url_; }
   void set_url(const GURL& url) { url_ = url; }
@@ -116,10 +117,14 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // parent node is marked as invisible, a child node may return "Visible". This
   // function is primarily useful when traversing the model to generate a UI
   // representation but we may want to suppress some nodes.
+  //
+  // This method only considers the visibility of the node based on itself and
+  // its children. Callers should prefer `BookmarkModel::IsVisible()`, which
+  // considers the full tree.
   virtual bool IsVisible() const;
 
-  // Gets/sets/deletes value of |key| in the meta info represented by
-  // |meta_info_str_|. Return true if key is found in meta info for gets or
+  // Gets/sets/deletes value of `key` in the meta info represented by
+  // `meta_info_str_`. Return true if key is found in meta info for gets or
   // meta info is changed indeed for sets/deletes.
   bool GetMetaInfo(const std::string& key, std::string* value) const;
   bool SetMetaInfo(const std::string& key, const std::string& value);
@@ -131,21 +136,29 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // TitledUrlNode interface methods.
   const std::u16string& GetTitledUrlNodeTitle() const override;
   const GURL& GetTitledUrlNodeUrl() const override;
-  std::vector<base::StringPiece16> GetTitledUrlNodeAncestorTitles()
+  std::vector<std::u16string_view> GetTitledUrlNodeAncestorTitles()
       const override;
 
-  // TODO(sky): Consider adding last visit time here, it'll greatly simplify
-  // HistoryContentsProvider.
+  // Returns the last time the bookmark was opened. This is only maintained
+  // for urls (no folders).
+  base::Time date_last_used() const { return date_last_used_; }
+  void set_date_last_used(const base::Time date_last_used) {
+    date_last_used_ = date_last_used;
+  }
 
  protected:
   BookmarkNode(int64_t id,
-               const base::GUID& guid,
+               const base::Uuid& uuid,
                const GURL& url,
                Type type,
                bool is_permanent_node);
 
  private:
   friend class BookmarkModel;
+
+  // Reassignment of UUIDs, used to avoid UUID collisions when a bookmark is
+  // moved.
+  void SetNewRandomUuid() { uuid_ = base::Uuid::GenerateRandomV4(); }
 
   // Called when the favicon becomes invalid.
   void InvalidateFavicon();
@@ -174,12 +187,11 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // The unique identifier for this node.
   int64_t id_;
 
-  // The GUID for this node. A BookmarkNode GUID is immutable and differs from
-  // the |id_| in that it is consistent across different clients and
-  // stable throughout the lifetime of the bookmark, with the exception of nodes
-  // added to the Managed Bookmarks folder, whose GUIDs are re-assigned at
-  // start-up every time.
-  const base::GUID guid_;
+  // The UUID for this node. A BookmarkNode UUID is generally immutable (barring
+  // advanced scenarios) and differs from the `id_` in that it is consistent
+  // across different clients. For managed bookmarks, the UUID is not actually
+  // stable and UUIDs are re-assigned at start-up every time.
+  base::Uuid uuid_;
 
   // The URL of this node. BookmarkModel maintains maps off this URL, so changes
   // to the URL must be done through the BookmarkModel.
@@ -214,7 +226,7 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
 
   const bool is_permanent_node_;
 
-  DISALLOW_COPY_AND_ASSIGN(BookmarkNode);
+  base::Time date_last_used_;
 };
 
 // BookmarkPermanentNode -------------------------------------------------------
@@ -226,36 +238,46 @@ class BookmarkPermanentNode : public BookmarkNode {
   static std::unique_ptr<BookmarkPermanentNode> CreateManagedBookmarks(
       int64_t id);
 
-  ~BookmarkPermanentNode() override;
-
-  // BookmarkNode overrides:
-  bool IsVisible() const override;
-
- private:
-  friend class BookmarkLoadDetails;
-
   // Permanent nodes are well-known, it's not allowed to create arbitrary ones.
+  // Note that the same UUID is used for local-or-syncable instances and
+  // account permanent folders (as exposed by BookmarkModel APIs).
   static std::unique_ptr<BookmarkPermanentNode> CreateBookmarkBar(
       int64_t id,
-      bool visible_when_empty);
+      bool is_account_node);
   static std::unique_ptr<BookmarkPermanentNode> CreateOtherBookmarks(
       int64_t id,
-      bool visible_when_empty);
+      bool is_account_node);
   static std::unique_ptr<BookmarkPermanentNode> CreateMobileBookmarks(
       int64_t id,
-      bool visible_when_empty);
+      bool is_account_node);
 
+  // Returns whether the permanent node of type `type` should be visible even
+  // when it is empty (i.e. no children).
+  static bool IsTypeVisibleWhenEmpty(Type type, BookmarkFormFactor form_factor);
+
+  bool IsVisible() const override;
+
+  void set_visibility(bool is_visible) { is_visible_ = is_visible; }
+
+  // Returns true if the node is part of the account storage.
+  bool is_account_node() const { return is_account_node_; }
+
+  BookmarkPermanentNode(const BookmarkPermanentNode&) = delete;
+  BookmarkPermanentNode& operator=(const BookmarkPermanentNode&) = delete;
+
+  ~BookmarkPermanentNode() override;
+
+ private:
   // Constructor is private to disallow the construction of permanent nodes
   // other than the well-known ones, see factory methods.
   BookmarkPermanentNode(int64_t id,
                         Type type,
-                        const base::GUID& guid,
+                        const base::Uuid& uuid,
                         const std::u16string& title,
-                        bool visible_when_empty);
+                        bool is_account_node);
 
-  const bool visible_when_empty_;
-
-  DISALLOW_COPY_AND_ASSIGN(BookmarkPermanentNode);
+  bool is_visible_ = true;
+  const bool is_account_node_;
 };
 
 // If you are looking for gMock printing via PrintTo(), please check

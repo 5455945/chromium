@@ -40,8 +40,12 @@ class MockReportingServiceProxy {
   }
 
   queueCspViolationReport() {}
+  queueIntegrityViolationReport() {}
+  queueCSPHashReport(url, endpoint, subresourceUrl, integrityHash, type) {}
   queuePermissionsPolicyViolationReport() {}
+  queuePotentialPermissionsPolicyViolationReport() {}
   queueDocumentPolicyViolationReport() {}
+  queueConnectionAllowlistViolationReport() {}
 }
 
 // Make an instance and have it receive the request.
@@ -55,7 +59,7 @@ promise_test(async () => {
   let promise = proxy.promise;
 
   // Use a deprecated feature.
-  window.webkitStorageInfo;
+  webkitRequestAnimationFrame(() => {});
 
   // Ensure the deprecation report is generated and routed to the reporting mojo
   // interface.

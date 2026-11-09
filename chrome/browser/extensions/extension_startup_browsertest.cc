@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,15 +16,16 @@
 #include "base/run_loop.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/prefs/chrome_pref_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
@@ -32,17 +33,19 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/notification_details.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/browser/user_script_loader.h"
 #include "extensions/browser/user_script_manager.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/manifest.h"
@@ -51,12 +54,13 @@
 #include "extensions/test/test_content_script_load_waiter.h"
 #include "net/base/filename_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #endif
 
-using extensions::FeatureSwitch;
+using extensions::ExtensionRegistrar;
 using extensions::ExtensionRegistry;
+using extensions::FeatureSwitch;
 
 // This file contains high-level startup tests for the extensions system. We've
 // had many silly bugs where command line flags did not get propagated correctly
@@ -68,7 +72,7 @@ class ManifestContentScriptWaiter
     : public extensions::UserScriptLoader::Observer {
  public:
   ManifestContentScriptWaiter() = default;
-  ~ManifestContentScriptWaiter() = default;
+  ~ManifestContentScriptWaiter() override = default;
   ManifestContentScriptWaiter(const ManifestContentScriptWaiter& other) =
       delete;
   ManifestContentScriptWaiter& operator=(
@@ -116,26 +120,24 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
  protected:
   // InProcessBrowserTest
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    if (load_extensions_.empty()) {
-      // If no |load_extensions_| were specified, allow unauthenticated
-      // extension settings to be loaded from Preferences as if they had been
-      // authenticated correctly before they were handed to the ExtensionSystem.
-      command_line->AppendSwitchASCII(
-          switches::kForceFieldTrials,
-          base::StringPrintf(
-              "%s/%s/", chrome_prefs::internals::kSettingsEnforcementTrialName,
-              chrome_prefs::internals::kSettingsEnforcementGroupNoEnforcement));
-#if defined(OS_WIN) || defined(OS_MAC)
-      // In Windows and MacOS builds, it is not possible to disable settings
-      // enforcement.
-      unauthenticated_load_allowed_ = false;
-#endif
-    } else {
+    if (!load_extensions_.empty()) {
       base::FilePath::StringType paths = base::JoinString(
           load_extensions_, base::FilePath::StringType(1, ','));
       command_line->AppendSwitchNative(extensions::switches::kLoadExtension,
                                        paths);
-      command_line->AppendSwitch(switches::kDisableExtensionsFileAccessCheck);
+      command_line->AppendSwitch(
+          extensions::switches::kDisableExtensionsFileAccessCheck);
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+      // Command-line loading of unpacked extensions is disabled on desktop
+      // Google Chrome branded builds.
+      unauthenticated_load_allowed_ = false;
+#endif
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    } else {
+      // In Windows and MacOS builds, it is not possible to disable settings
+      // enforcement.
+      unauthenticated_load_allowed_ = false;
+#endif
     }
   }
 
@@ -189,10 +191,14 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
     return found_extensions;
   }
 
+  ExtensionRegistrar* GetExtensionRegistrar() {
+    return ExtensionRegistrar::Get(GetProfile());
+  }
+
   void WaitForServicesToStart(int num_expected_extensions,
                               bool expect_extensions_enabled) {
     extensions::ExtensionSystem* extension_system =
-        extensions::ExtensionSystem::Get(browser()->profile());
+        extensions::ExtensionSystem::Get(GetProfile());
     // Wait until the extension system is ready.
     base::RunLoop run_loop;
     extension_system->ready().Post(FROM_HERE, run_loop.QuitClosure());
@@ -201,21 +207,20 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
     if (!unauthenticated_load_allowed_)
       num_expected_extensions = 0;
     ASSERT_EQ(num_expected_extensions,
-              GetNonComponentEnabledExtensionCount(browser()->profile()));
+              GetNonComponentEnabledExtensionCount(GetProfile()));
 
     ASSERT_EQ(expect_extensions_enabled,
-              extension_system->extension_service()->extensions_enabled());
+              GetExtensionRegistrar()->extensions_enabled());
 
     if (num_expected_extensions == 0)
       return;
 
     extensions::ExtensionRegistry* registry =
-        extensions::ExtensionRegistry::Get(browser()->profile());
+        extensions::ExtensionRegistry::Get(GetProfile());
 
     ManifestContentScriptWaiter waiter;
     extensions::UserScriptManager* manager =
-        extensions::ExtensionSystem::Get(browser()->profile())
-            ->user_script_manager();
+        extensions::ExtensionSystem::Get(GetProfile())->user_script_manager();
 
     for (const auto& extension : registry->enabled_extensions()) {
       extensions::ExtensionUserScriptLoader* loader =
@@ -245,23 +250,20 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
     test_file =
         test_file.AppendASCII("extensions").AppendASCII("test_file.html");
 
-    ui_test_utils::NavigateToURL(browser(), net::FilePathToFileURL(test_file));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), net::FilePathToFileURL(test_file)));
 
-    bool result = false;
-    ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-        browser()->tab_strip_model()->GetActiveWebContents(),
-        "window.domAutomationController.send("
-        "    document.defaultView.getComputedStyle(document.body, null)."
-        "    getPropertyValue('background-color') == 'rgb(245, 245, 220)')",
-        &result));
-    EXPECT_EQ(expect_css, result);
+    EXPECT_EQ(
+        expect_css,
+        content::EvalJs(
+            browser()->GetTabStripModel()->GetActiveWebContents(),
+            "document.defaultView.getComputedStyle(document.body, null)."
+            "getPropertyValue('background-color') == 'rgb(245, 245, 220)'"));
 
-    result = false;
-    ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-        browser()->tab_strip_model()->GetActiveWebContents(),
-        "window.domAutomationController.send(document.title == 'Modified')",
-        &result));
-    EXPECT_EQ(expect_script, result);
+    EXPECT_EQ(
+        expect_script,
+        content::EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
+                        "document.title == 'Modified'"));
   }
 
   base::FilePath preferences_file_;
@@ -274,12 +276,16 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
   std::vector<base::FilePath::StringType> load_extensions_;
 
   int num_expected_extensions_;
+
+  // TODO(https://crbug.com/40804030): Remove when these tests use only MV3
+  // extensions.
+  extensions::ScopedTestMV2Enabler mv2_enabler_;
 };
 
 // ExtensionsStartupTest
 // Ensures that we can startup the browser with --enable-extensions and some
 // extensions installed and see them run and do basic things.
-typedef ExtensionStartupTestBase ExtensionStartupTest;
+using ExtensionStartupTest = ExtensionStartupTestBase;
 
 IN_PROC_BROWSER_TEST_F(ExtensionStartupTest, Test) {
   WaitForServicesToStart(num_expected_extensions_, true);
@@ -296,26 +302,26 @@ IN_PROC_BROWSER_TEST_F(ExtensionStartupTest, NoFileAccess) {
   std::vector<const extensions::Extension*> extension_list;
 
   extensions::ExtensionRegistry* registry =
-      extensions::ExtensionRegistry::Get(browser()->profile());
+      extensions::ExtensionRegistry::Get(GetProfile());
   for (extensions::ExtensionSet::const_iterator it =
            registry->enabled_extensions().begin();
        it != registry->enabled_extensions().end(); ++it) {
     if ((*it)->location() == extensions::mojom::ManifestLocation::kComponent)
       continue;
-    if (extensions::util::AllowFileAccess((*it)->id(), browser()->profile()))
+    if (extensions::util::AllowFileAccess((*it)->id(), GetProfile())) {
       extension_list.push_back(it->get());
+    }
   }
 
   extensions::UserScriptManager* manager =
-      extensions::ExtensionSystem::Get(browser()->profile())
-          ->user_script_manager();
+      extensions::ExtensionSystem::Get(GetProfile())->user_script_manager();
 
   for (size_t i = 0; i < extension_list.size(); ++i) {
     extensions::ExtensionId id = extension_list[i]->id();
     extensions::TestExtensionRegistryObserver registry_observer(registry, id);
     ManifestContentScriptWaiter waiter;
 
-    extensions::util::SetAllowFileAccess(id, browser()->profile(), false);
+    extensions::util::SetAllowFileAccess(id, GetProfile(), false);
     registry_observer.WaitForExtensionLoaded();
     extensions::ExtensionUserScriptLoader* loader =
         manager->GetUserScriptLoaderForExtension(id);
@@ -350,17 +356,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionsLoadTest, Test) {
   TestInjection(true, true);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 IN_PROC_BROWSER_TEST_F(ExtensionsLoadTest,
                        SigninProfileCommandLineExtensionsDontLoad) {
   // The --load-extension command line flag should not be applied to the sign-in
   // profile.
   EXPECT_EQ(0, GetNonComponentEnabledExtensionCount(
-                   chromeos::ProfileHelper::GetSigninProfile()));
+                   ash::ProfileHelper::GetSigninProfile()));
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // ExtensionsLoadMultipleTest
 // Ensures that we can startup the browser with multiple extensions
@@ -402,64 +408,26 @@ IN_PROC_BROWSER_TEST_F(ExtensionsLoadMultipleTest, Test) {
   TestInjection(true, true);
 }
 
-// TODO(catmullings): Remove test in future chrome release, perhaps M59.
-class DeprecatedLoadComponentExtensionSwitchBrowserTest
-    : public extensions::ExtensionBrowserTest {
- public:
-  DeprecatedLoadComponentExtensionSwitchBrowserTest() {}
-
-  void SetUpCommandLine(base::CommandLine* command_line) override;
-
-  ExtensionRegistry* GetExtensionRegistry() {
-    return ExtensionRegistry::Get(browser()->profile());
-  }
-};
-
-void DeprecatedLoadComponentExtensionSwitchBrowserTest::SetUpCommandLine(
-    base::CommandLine* command_line) {
-  extensions::ExtensionBrowserTest::SetUpCommandLine(command_line);
-  base::FilePath fp1(test_data_dir_.AppendASCII("app_dot_com_app/"));
-  base::FilePath fp2(test_data_dir_.AppendASCII("app/"));
-
-  command_line->AppendSwitchASCII(
-      "load-component-extension",
-      fp1.AsUTF8Unsafe() + "," + fp2.AsUTF8Unsafe());
-}
-
-// Tests that the --load-component-extension flag is not supported.
-IN_PROC_BROWSER_TEST_F(DeprecatedLoadComponentExtensionSwitchBrowserTest,
-                       DefunctLoadComponentExtensionFlag) {
-  EXPECT_TRUE(extension_service()->extensions_enabled());
-
-  // Checks that the extensions loaded with the --load-component-extension flag
-  // are not installed.
-  bool is_app_dot_com_extension_installed = false;
-  bool is_app_test_extension_installed = false;
-  for (const scoped_refptr<const extensions::Extension>& extension :
-       GetExtensionRegistry()->enabled_extensions()) {
-    if (extension->name() == "App Dot Com: The App") {
-      is_app_dot_com_extension_installed = true;
-    } else if (extension->name() == "App Test") {
-      is_app_test_extension_installed = true;
-    } else {
-      EXPECT_TRUE(
-          extensions::Manifest::IsComponentLocation(extension->location()));
-    }
-  }
-  EXPECT_FALSE(is_app_dot_com_extension_installed);
-  EXPECT_FALSE(is_app_test_extension_installed);
-}
-
 class DisableExtensionsExceptBrowserTest
     : public extensions::ExtensionBrowserTest {
  public:
-  DisableExtensionsExceptBrowserTest() {}
+  DisableExtensionsExceptBrowserTest() {
+    feature_list_.InitAndDisableFeature(
+        extensions_features::kDisableDisableExtensionsExceptCommandLineSwitch);
+  }
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
   ExtensionRegistry* GetExtensionRegistry() {
-    return ExtensionRegistry::Get(browser()->profile());
+    return ExtensionRegistry::Get(GetProfile());
   }
+
+  ExtensionRegistrar* GetExtensionRegistrar() {
+    return ExtensionRegistrar::Get(GetProfile());
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 void DisableExtensionsExceptBrowserTest::SetUpCommandLine(
@@ -469,7 +437,7 @@ void DisableExtensionsExceptBrowserTest::SetUpCommandLine(
   base::FilePath fp2(test_data_dir_.AppendASCII("app/"));
 
   command_line->AppendSwitchASCII(
-      switches::kDisableExtensionsExcept,
+      extensions::switches::kDisableExtensionsExcept,
       fp1.AsUTF8Unsafe() + "," + fp2.AsUTF8Unsafe());
 
   command_line->AppendSwitch(switches::kNoErrorDialogs);
@@ -479,7 +447,7 @@ void DisableExtensionsExceptBrowserTest::SetUpCommandLine(
 // (--disable-extensions-except).
 IN_PROC_BROWSER_TEST_F(DisableExtensionsExceptBrowserTest,
                        DisableExtensionsExceptFlag) {
-  EXPECT_FALSE(extension_service()->extensions_enabled());
+  EXPECT_FALSE(GetExtensionRegistrar()->extensions_enabled());
 
   // Checks that the extensions loaded with the --disable-extensions-except flag
   // are enabled.

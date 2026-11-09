@@ -1,10 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_BUTTON_DRAG_UTILS_H_
 #define UI_VIEWS_BUTTON_DRAG_UTILS_H_
 
+#include <optional>
 #include <string>
 
 #include "ui/views/views_export.h"
@@ -20,10 +21,6 @@ namespace ui {
 class OSExchangeData;
 }
 
-namespace views {
-class Widget;
-}
-
 namespace button_drag_utils {
 
 // Sets url and title on data as well as setting a suitable image for dragging.
@@ -33,16 +30,16 @@ VIEWS_EXPORT void SetURLAndDragImage(const GURL& url,
                                      const std::u16string& title,
                                      const gfx::ImageSkia& icon,
                                      const gfx::Point* press_pt,
-                                     const views::Widget& widget,
                                      ui::OSExchangeData* data);
 
 // As above, but only sets the image.
-VIEWS_EXPORT void SetDragImage(const GURL& url,
-                               const std::u16string& title,
-                               const gfx::ImageSkia& icon,
-                               const gfx::Point* press_pt,
-                               const views::Widget& widget,
-                               ui::OSExchangeData* data);
+VIEWS_EXPORT void SetDragImage(
+    const GURL& url,
+    const std::u16string& title,
+    const gfx::ImageSkia& icon,
+    const gfx::Point* press_pt,
+    ui::OSExchangeData* data,
+    std::optional<int> icon_label_spacing_override = std::nullopt);
 
 }  // namespace button_drag_utils
 

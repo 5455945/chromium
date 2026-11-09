@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html>
-<head>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-1000">
 <script src="../../../resources/testharness.js"></script>
 <script src="../../../resources/testharnessreport.js"></script>
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src="../resources/common.js"></script>
 <script src="../resources/picker-common.js"></script>
 <script src="../calendar-picker/resources/calendar-picker-common.js"></script>
-</head>
-<body>
+
 <input type="time" id="time" value="14:15:02" oninput="inputEventCount++;" onchange="changeEventCount++">
 <script>
 'use strict';
@@ -19,7 +19,7 @@ let timeElement = document.getElementById("time");
 
 promise_test(() => {
     assert_equals(internals.pagePopupWindow, null);
-    return openPickerWithPromise(timeElement).then(() => {
+    return openPicker(timeElement).then(() => {
         assert_equals(timeElement.value, "14:15:02");
         assert_not_equals(internals.pagePopupWindow, null);
         assert_equals(inputEventCount, 0, "No input event should have not have fired before making changes.");
@@ -49,7 +49,7 @@ promise_test(() => {
 promise_test(() => {
     inputEventCount = changeEventCount = 0;
     assert_equals(internals.pagePopupWindow, null);
-    return openPickerWithPromise(timeElement).then(() => {
+    return openPicker(timeElement).then(() => {
         assert_equals(timeElement.value, "16:15:02");
         assert_not_equals(internals.pagePopupWindow, null);
         assert_equals(inputEventCount, 0, "No input event should have not have fired before making changes.");
@@ -82,5 +82,3 @@ promise_test(() => {
 }, "Test that change does not fire if popup value is modified and then restored to original value.");
 
 </script>
-</body>
-</html>

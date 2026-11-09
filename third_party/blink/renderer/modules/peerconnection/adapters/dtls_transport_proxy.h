@@ -1,15 +1,19 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_ADAPTERS_DTLS_TRANSPORT_PROXY_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_ADAPTERS_DTLS_TRANSPORT_PROXY_H_
 
+#include <memory>
+
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/webrtc/api/dtls_transport_interface.h"
+#include "third_party/webrtc/api/rtc_error.h"
 
 // The DtlsTransportProxy class takes care of thread-jumping when
 // connecting callbacks from a webrtc::DtlsTransport to a
@@ -20,7 +24,7 @@
 // no control, and all information is passed via callbacks on the Delegate.
 
 // The proxy thread = the Blink main thread
-// The host thread = the webrtc signalling thread (the one that gets callbacks)
+// The host thread = the webrtc network thread (the one that gets callbacks)
 
 namespace blink {
 
@@ -67,8 +71,8 @@ class DtlsTransportProxy : public webrtc::DtlsTransportObserverInterface {
 
   const scoped_refptr<base::SingleThreadTaskRunner> proxy_thread_;
   const scoped_refptr<base::SingleThreadTaskRunner> host_thread_;
-  webrtc::DtlsTransportInterface* dtls_transport_;
-  CrossThreadPersistent<Delegate> delegate_;
+  raw_ptr<webrtc::DtlsTransportInterface> dtls_transport_;
+  CrossThreadHandle<Delegate> delegate_;
 };
 
 }  // namespace blink

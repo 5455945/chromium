@@ -1,23 +1,27 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
+
+#include <array>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 #include "mojo/public/cpp/bindings/lib/multiplex_router.h"
+#include "mojo/public/cpp/bindings/lib/responder_thunk.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/test_support/test_support.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -27,6 +31,13 @@ const double kMojoTicksPerSecond = 1000000.0;
 
 const char kTestInterfaceName[] = "TestInterface";
 
+IPCStableHashFunction MessageToMethodInfo(Message& message) {
+  return nullptr;
+}
+
+const char* MessageToMethodName(Message& message) {
+  return "method";
+}
 double MojoTicksToSeconds(MojoTimeTicks ticks) {
   return ticks / kMojoTicksPerSecond;
 }
@@ -34,19 +45,23 @@ double MojoTicksToSeconds(MojoTimeTicks ticks) {
 class PingServiceImpl : public test::PingService {
  public:
   PingServiceImpl() = default;
+
+  PingServiceImpl(const PingServiceImpl&) = delete;
+  PingServiceImpl& operator=(const PingServiceImpl&) = delete;
+
   ~PingServiceImpl() override = default;
 
   // |PingService| methods:
   void Ping(PingCallback callback) override { std::move(callback).Run(); }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PingServiceImpl);
 };
 
 class PingPongTest {
  public:
   explicit PingPongTest(PendingRemote<test::PingService> remote)
       : remote_(std::move(remote)) {}
+
+  PingPongTest(const PingPongTest&) = delete;
+  PingPongTest& operator=(const PingPongTest&) = delete;
 
   void Run(unsigned int iterations) {
     iterations_to_run_ = iterations;
@@ -76,8 +91,6 @@ class PingPongTest {
   unsigned int current_iterations_;
 
   base::OnceClosure quit_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(PingPongTest);
 };
 
 struct BoundPingService {
@@ -108,10 +121,9 @@ TEST_F(MojoBindingsPerftest, InProcessPingPong) {
     const MojoTimeTicks start_time = MojoGetTimeTicksNow();
     test.Run(kIterations);
     const MojoTimeTicks end_time = MojoGetTimeTicksNow();
-    test::LogPerfResult(
-        "InProcessPingPong", "0_Inactive",
-        kIterations / MojoTicksToSeconds(end_time - start_time),
-        "pings/second");
+    test::LogPerfResult("InProcessPingPong", "0_Inactive",
+                        kIterations / MojoTicksToSeconds(end_time - start_time),
+                        "pings/second");
   }
 
   {
@@ -123,10 +135,9 @@ TEST_F(MojoBindingsPerftest, InProcessPingPong) {
     const MojoTimeTicks start_time = MojoGetTimeTicksNow();
     test.Run(kIterations);
     const MojoTimeTicks end_time = MojoGetTimeTicksNow();
-    test::LogPerfResult(
-        "InProcessPingPong", "1000_Inactive",
-        kIterations / MojoTicksToSeconds(end_time - start_time),
-        "pings/second");
+    test::LogPerfResult("InProcessPingPong", "1000_Inactive",
+                        kIterations / MojoTicksToSeconds(end_time - start_time),
+                        "pings/second");
 
     delete[] inactive_services;
   }
@@ -157,9 +168,8 @@ class PingPongPaddle : public MessageReceiverWithResponderStatus {
 
   bool AcceptWithResponder(
       Message* message,
-      std::unique_ptr<MessageReceiverWithStatus> responder) override {
+      std::unique_ptr<internal::ResponderThunk> responder) override {
     NOTREACHED();
-    return true;
   }
 
   base::TimeDelta Serve(uint32_t expected_count) {
@@ -182,7 +192,7 @@ class PingPongPaddle : public MessageReceiverWithResponderStatus {
   base::TimeTicks start_time_;
   base::TimeTicks end_time_;
   uint32_t expected_count_ = 0;
-  MessageReceiver* sender_;
+  raw_ptr<MessageReceiver> sender_;
   base::RepeatingClosure quit_closure_;
 };
 
@@ -191,23 +201,23 @@ TEST_F(MojoBindingsPerftest, MultiplexRouterPingPong) {
   scoped_refptr<internal::MultiplexRouter> router0(
       internal::MultiplexRouter::CreateAndStartReceiving(
           std::move(pipe.handle0), internal::MultiplexRouter::SINGLE_INTERFACE,
-          true, base::ThreadTaskRunnerHandle::Get()));
+          true, base::SingleThreadTaskRunner::GetCurrentDefault()));
   scoped_refptr<internal::MultiplexRouter> router1(
       internal::MultiplexRouter::CreateAndStartReceiving(
           std::move(pipe.handle1), internal::MultiplexRouter::SINGLE_INTERFACE,
-          false, base::ThreadTaskRunnerHandle::Get()));
+          false, base::SingleThreadTaskRunner::GetCurrentDefault()));
 
   PingPongPaddle paddle0(nullptr);
   PingPongPaddle paddle1(nullptr);
 
   InterfaceEndpointClient client0(
       router0->CreateLocalEndpointHandle(kPrimaryInterfaceId), &paddle0,
-      nullptr, false, base::ThreadTaskRunnerHandle::Get(), 0u,
-      kTestInterfaceName);
+      nullptr, {}, base::SingleThreadTaskRunner::GetCurrentDefault(), 0u,
+      kTestInterfaceName, MessageToMethodInfo, MessageToMethodName);
   InterfaceEndpointClient client1(
       router1->CreateLocalEndpointHandle(kPrimaryInterfaceId), &paddle1,
-      nullptr, false, base::ThreadTaskRunnerHandle::Get(), 0u,
-      kTestInterfaceName);
+      nullptr, {}, base::SingleThreadTaskRunner::GetCurrentDefault(), 0u,
+      kTestInterfaceName, MessageToMethodInfo, MessageToMethodName);
 
   paddle0.set_sender(&client0);
   paddle1.set_sender(&client1);
@@ -232,9 +242,8 @@ class CounterReceiver : public MessageReceiverWithResponderStatus {
 
   bool AcceptWithResponder(
       Message* message,
-      std::unique_ptr<MessageReceiverWithStatus> responder) override {
+      std::unique_ptr<internal::ResponderThunk> responder) override {
     NOTREACHED();
-    return true;
   }
 
   uint32_t counter() const { return counter_; }
@@ -248,23 +257,25 @@ class CounterReceiver : public MessageReceiverWithResponderStatus {
 TEST_F(MojoBindingsPerftest, MultiplexRouterDispatchCost) {
   MessagePipe pipe;
   scoped_refptr<internal::MultiplexRouter> router =
-      internal::MultiplexRouter::Create(
+      internal::MultiplexRouter::CreateAndStartReceiving(
           std::move(pipe.handle0), internal::MultiplexRouter::SINGLE_INTERFACE,
-          true, base::ThreadTaskRunnerHandle::Get());
+          true, base::SingleThreadTaskRunner::GetCurrentDefault());
   CounterReceiver receiver;
   InterfaceEndpointClient client(
       router->CreateLocalEndpointHandle(kPrimaryInterfaceId), &receiver,
-      nullptr, false, base::ThreadTaskRunnerHandle::Get(), 0u,
-      kTestInterfaceName);
+      nullptr, {}, base::SingleThreadTaskRunner::GetCurrentDefault(), 0u,
+      kTestInterfaceName, MessageToMethodInfo, MessageToMethodName);
 
-  static const uint32_t kIterations[] = {1000, 3000000};
+  static const auto kIterations = std::to_array<uint32_t>({1000, 3000000});
 
   for (size_t i = 0; i < 2; ++i) {
     receiver.Reset();
     base::TimeTicks start_time = base::TimeTicks::Now();
     for (size_t j = 0; j < kIterations[i]; ++j) {
       Message message(0, 0, 8, 0, nullptr);
-      bool result = router->SimulateReceivingMessageForTesting(&message);
+      message.payload_buffer()->Allocate(8);
+      bool result =
+          router->SimulateReceivingMessageForTesting(message.TakeMojoMessage());
       DCHECK(result);
     }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,19 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/speech/tts_chromeos.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "content/public/browser/tts_controller.h"
 #include "third_party/icu/source/common/unicode/uloc.h"
 
 namespace arc {
 namespace {
 
-// Singleton factory for ArcTtsService.
+// Factory for ArcTtsService.
 class ArcTtsServiceFactory
     : public internal::ArcBrowserContextKeyedServiceFactoryBase<
           ArcTtsService,
@@ -29,11 +29,12 @@ class ArcTtsServiceFactory
   static constexpr const char* kName = "ArcTtsServiceFactory";
 
   static ArcTtsServiceFactory* GetInstance() {
-    return base::Singleton<ArcTtsServiceFactory>::get();
+    static base::NoDestructor<ArcTtsServiceFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcTtsServiceFactory>;
+  friend base::NoDestructor<ArcTtsServiceFactory>;
   ArcTtsServiceFactory() = default;
   ~ArcTtsServiceFactory() override = default;
 };
@@ -80,20 +81,13 @@ ArcTtsService::~ArcTtsService() {
   arc_bridge_service_->tts()->SetHost(nullptr);
 }
 
-void ArcTtsService::OnTtsEventDeprecated(uint32_t id,
-                                         mojom::TtsEventType event_type,
-                                         uint32_t char_index,
-                                         const std::string& error_msg) {
-  OnTtsEvent(id, event_type, char_index, -1 /* length */, error_msg);
-}
-
 void ArcTtsService::OnTtsEvent(uint32_t id,
                                mojom::TtsEventType event_type,
                                uint32_t char_index,
                                uint32_t length,
                                const std::string& error_msg) {
   if (!tts_controller_) {
-    // GetInstance() returns a base::Singleton<> object which always outlives
+    // GetInstance() returns a base::NoDestructor<> object which always outlives
     // |this| object.
     tts_controller_ = content::TtsController::GetInstance();
     if (!tts_controller_) {
@@ -150,10 +144,15 @@ void ArcTtsService::OnVoicesChanged(std::vector<mojom::TtsVoicePtr> voices) {
   }
 
   TtsPlatformImplChromeOs* impl = TtsPlatformImplChromeOs::GetInstance();
-  DCHECK(impl);
+  CHECK(impl, base::NotFatalUntil::M160);
   impl->SetVoices(std::move(chrome_voices));
 
   content::TtsController::GetInstance()->VoicesChanged();
+}
+
+// static
+void ArcTtsService::EnsureFactoryBuilt() {
+  ArcTtsServiceFactory::GetInstance();
 }
 
 }  // namespace arc

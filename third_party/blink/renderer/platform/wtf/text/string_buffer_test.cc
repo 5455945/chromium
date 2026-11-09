@@ -1,27 +1,26 @@
-/*
- * Copyright 2014 The Chromium Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright 2014 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace WTF {
+namespace blink {
 
 TEST(StringBufferTest, Initial) {
   StringBuffer<LChar> buf1;
   EXPECT_EQ(0u, buf1.length());
-  EXPECT_FALSE(buf1.Characters());
+  EXPECT_FALSE(buf1.Span().data());
 
   StringBuffer<LChar> buf2(0);
   EXPECT_EQ(0u, buf2.length());
-  EXPECT_FALSE(buf2.Characters());
+  // The Span() result has a non-null pointer even for zero-length.
+  EXPECT_TRUE(buf2.Span().data());
 
   StringBuffer<LChar> buf3(1);
   EXPECT_EQ(1u, buf3.length());
-  EXPECT_TRUE(buf3.Characters());
+  EXPECT_TRUE(buf3.Span().data());
 }
 
 TEST(StringBufferTest, shrink) {
@@ -38,4 +37,4 @@ TEST(StringBufferTest, shrink) {
   EXPECT_EQ(0u, buf.length());
 }
 
-}  // namespace WTF
+}  // namespace blink

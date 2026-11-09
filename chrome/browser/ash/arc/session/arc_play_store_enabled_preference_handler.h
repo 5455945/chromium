@@ -1,15 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_ARC_SESSION_ARC_PLAY_STORE_ENABLED_PREFERENCE_HANDLER_H_
 #define CHROME_BROWSER_ASH_ARC_SESSION_ARC_PLAY_STORE_ENABLED_PREFERENCE_HANDLER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "components/prefs/pref_change_registrar.h"
 
 class Profile;
+
+namespace consent_auditor {
+class ConsentAuditor;
+}  // namespace consent_auditor
 
 namespace arc {
 
@@ -19,8 +24,17 @@ class ArcSessionManager;
 // for historical reason), and controls ARC via ArcSessionManager.
 class ArcPlayStoreEnabledPreferenceHandler {
  public:
-  ArcPlayStoreEnabledPreferenceHandler(Profile* profile,
-                                       ArcSessionManager* arc_session_manager);
+  // `consent_auditor` must be non-null and must outlive `this`.
+  ArcPlayStoreEnabledPreferenceHandler(
+      Profile* profile,
+      ArcSessionManager* arc_session_manager,
+      consent_auditor::ConsentAuditor* consent_auditor);
+
+  ArcPlayStoreEnabledPreferenceHandler(
+      const ArcPlayStoreEnabledPreferenceHandler&) = delete;
+  ArcPlayStoreEnabledPreferenceHandler& operator=(
+      const ArcPlayStoreEnabledPreferenceHandler&) = delete;
+
   ~ArcPlayStoreEnabledPreferenceHandler();
 
   // Starts observing Google Play Store enabled preference change.
@@ -36,10 +50,11 @@ class ArcPlayStoreEnabledPreferenceHandler {
   // ArcSupportHost's managed state.
   void UpdateArcSessionManager();
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   // Owned by ArcServiceLauncher.
-  ArcSessionManager* const arc_session_manager_;
+  const raw_ptr<ArcSessionManager> arc_session_manager_;
+  const raw_ref<consent_auditor::ConsentAuditor> consent_auditor_;
 
   // Registrar used to monitor ARC enabled state.
   PrefChangeRegistrar pref_change_registrar_;
@@ -47,8 +62,6 @@ class ArcPlayStoreEnabledPreferenceHandler {
   // Must be the last member.
   base::WeakPtrFactory<ArcPlayStoreEnabledPreferenceHandler> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(ArcPlayStoreEnabledPreferenceHandler);
 };
 
 }  // namespace arc

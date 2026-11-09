@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,13 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "chrome/browser/ui/android/layouts/scene_layer.h"
 #include "ui/android/resources/resource_manager_impl.h"
 
-namespace cc {
+namespace cc::slim {
 class Layer;
 class UIResourceLayer;
-}  // namespace cc
+}  // namespace cc::slim
 
 namespace android {
 
@@ -23,20 +22,22 @@ class StatusIndicatorSceneLayer : public SceneLayer {
  public:
   StatusIndicatorSceneLayer(JNIEnv* env,
                             const base::android::JavaRef<jobject>& jobj);
+
+  StatusIndicatorSceneLayer(const StatusIndicatorSceneLayer&) = delete;
+  StatusIndicatorSceneLayer& operator=(const StatusIndicatorSceneLayer&) =
+      delete;
+
   ~StatusIndicatorSceneLayer() override;
 
   // Update the compositor version of the view.
   void UpdateStatusIndicatorLayer(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& object,
-      const base::android::JavaParamRef<jobject>& jresource_manager,
-      jint view_resource_id,
-      jint y_offset);
+      const base::android::JavaRef<jobject>& jresource_manager,
+      int32_t view_resource_id,
+      int32_t y_offset);
 
-  void SetContentTree(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobject>& jcontent_tree);
+  void SetContentTree(JNIEnv* env,
+                      const base::android::JavaRef<jobject>& jcontent_tree);
 
   SkColor GetBackgroundColor() override;
   bool ShouldShowBackground() override;
@@ -44,10 +45,8 @@ class StatusIndicatorSceneLayer : public SceneLayer {
  private:
   bool should_show_background_;
   SkColor background_color_;
-  scoped_refptr<cc::Layer> view_container_;
-  scoped_refptr<cc::UIResourceLayer> view_layer_;
-
-  DISALLOW_COPY_AND_ASSIGN(StatusIndicatorSceneLayer);
+  scoped_refptr<cc::slim::Layer> view_container_;
+  scoped_refptr<cc::slim::UIResourceLayer> view_layer_;
 };
 
 }  // namespace android

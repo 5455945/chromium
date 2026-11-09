@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/security_interstitials/content/ssl_error_navigation_throttle.h"
 
-#include "base/bind.h"
+#include <memory>
+
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
 #include "components/security_interstitials/content/security_interstitial_page.h"
 #include "components/security_interstitials/content/settings_page_helper.h"
@@ -14,6 +16,7 @@
 #include "components/security_interstitials/core/ssl_error_ui.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/test/mock_navigation_handle.h"
+#include "content/public/test/mock_navigation_throttle_registry.h"
 #include "content/public/test/test_renderer_host.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/test/cert_test_util.h"
@@ -30,16 +33,6 @@ CreateMetricsHelperForTest(const GURL& request_url) {
       request_url, report_details, /*history_service=*/nullptr);
 }
 
-// A minimal SSLCertReporter implementation.
-class FakeSSLCertReporter : public SSLCertReporter {
- public:
-  void ReportInvalidCertificateChain(
-      const std::string& serialized_report) override {
-    // Reports are not expected to be sent in this context.
-    NOTREACHED();
-  }
-};
-
 // A SecurityInterstitialPage implementation that does the minimum necessary
 // to satisfy SSLErrorNavigationThrottle's expectations of the instance passed
 // to its ShowInterstitial() method, in particular populates the data
@@ -48,7 +41,7 @@ class FakeSSLBlockingPage
     : public security_interstitials::SecurityInterstitialPage {
  public:
   FakeSSLBlockingPage(content::WebContents* web_contents,
-                      int cert_error,
+                      net::Error cert_error,
                       const net::SSLInfo& ssl_info,
                       const GURL& request_url)
       : security_interstitials::SecurityInterstitialPage(
@@ -70,11 +63,11 @@ class FakeSSLBlockingPage
                       /*support_url=*/GURL(),
                       controller()) {}
 
-  ~FakeSSLBlockingPage() override {}
+  ~FakeSSLBlockingPage() override = default;
 
   // SecurityInterstitialPage:
   void OnInterstitialClosing() override {}
-  void PopulateInterstitialStrings(base::Value* load_time_data) override {
+  void PopulateInterstitialStrings(base::DictValue& load_time_data) override {
     ssl_error_ui_.PopulateStringsForHTML(load_time_data);
   }
 
@@ -87,18 +80,22 @@ class FakeSSLBlockingPage
 // done synchronously or using PostTask().
 void MockHandleSSLError(
     bool async,
+    std::optional<content::OpenURLParams>* out_open_url_params,
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
-    std::unique_ptr<SSLCertReporter> ssl_cert_reporter,
+    std::optional<content::OpenURLParams> open_url_params,
     base::OnceCallback<
         void(std::unique_ptr<security_interstitials::SecurityInterstitialPage>)>
         blocking_page_ready_callback) {
+  if (out_open_url_params && open_url_params.has_value()) {
+    out_open_url_params->emplace(*open_url_params);
+  }
   auto blocking_page = std::make_unique<FakeSSLBlockingPage>(
       web_contents, cert_error, ssl_info, request_url);
   if (async) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(blocking_page_ready_callback),
                                   std::move(blocking_page)));
   } else {
@@ -118,19 +115,26 @@ bool ShouldIgnoreInterstitialBecauseNavigationDefaultedToHttps(
 class TestSSLErrorNavigationThrottle : public SSLErrorNavigationThrottle {
  public:
   TestSSLErrorNavigationThrottle(
-      content::NavigationHandle* handle,
+      content::NavigationThrottleRegistry& registry,
       bool async_handle_ssl_error,
+      std::optional<content::OpenURLParams>* out_open_url_params,
       base::OnceCallback<void(content::NavigationThrottle::ThrottleCheckResult)>
           on_cancel_deferred_navigation)
       : SSLErrorNavigationThrottle(
-            handle,
-            std::make_unique<FakeSSLCertReporter>(),
-            base::BindOnce(&MockHandleSSLError, async_handle_ssl_error),
+            registry,
+            base::BindOnce(&MockHandleSSLError,
+                           async_handle_ssl_error,
+                           out_open_url_params),
             base::BindOnce(&IsInHostedApp),
             base::BindOnce(
                 &ShouldIgnoreInterstitialBecauseNavigationDefaultedToHttps)),
         on_cancel_deferred_navigation_(
             std::move(on_cancel_deferred_navigation)) {}
+
+  TestSSLErrorNavigationThrottle(const TestSSLErrorNavigationThrottle&) =
+      delete;
+  TestSSLErrorNavigationThrottle& operator=(
+      const TestSSLErrorNavigationThrottle&) = delete;
 
   // NavigationThrottle:
   void CancelDeferredNavigation(
@@ -141,22 +145,29 @@ class TestSSLErrorNavigationThrottle : public SSLErrorNavigationThrottle {
  private:
   base::OnceCallback<void(content::NavigationThrottle::ThrottleCheckResult)>
       on_cancel_deferred_navigation_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSSLErrorNavigationThrottle);
 };
 
 class SSLErrorNavigationThrottleTest
     : public content::RenderViewHostTestHarness,
       public testing::WithParamInterface<bool> {
  public:
-  SSLErrorNavigationThrottleTest() {}
+  SSLErrorNavigationThrottleTest() = default;
+
+  SSLErrorNavigationThrottleTest(const SSLErrorNavigationThrottleTest&) =
+      delete;
+  SSLErrorNavigationThrottleTest& operator=(
+      const SSLErrorNavigationThrottleTest&) = delete;
+
   void SetUp() override {
     content::RenderViewHostTestHarness::SetUp();
     handle_ = std::make_unique<content::MockNavigationHandle>(web_contents());
     handle_->set_has_committed(true);
     async_ = GetParam();
+    registry_ = std::make_unique<content::MockNavigationThrottleRegistry>(
+        handle_.get(),
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
     throttle_ = std::make_unique<TestSSLErrorNavigationThrottle>(
-        handle_.get(), async_,
+        *registry_.get(), async_, &captured_open_url_params_,
         base::BindOnce(&SSLErrorNavigationThrottleTest::RecordDeferredResult,
                        base::Unretained(this)));
   }
@@ -168,13 +179,12 @@ class SSLErrorNavigationThrottleTest
 
  protected:
   bool async_ = false;
+  std::optional<content::OpenURLParams> captured_open_url_params_;
   std::unique_ptr<content::MockNavigationHandle> handle_;
+  std::unique_ptr<content::MockNavigationThrottleRegistry> registry_;
   std::unique_ptr<TestSSLErrorNavigationThrottle> throttle_;
   content::NavigationThrottle::ThrottleCheckResult deferred_result_ =
       content::NavigationThrottle::DEFER;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SSLErrorNavigationThrottleTest);
 };
 
 // Tests that the throttle ignores a request with a non SSL related network
@@ -210,6 +220,45 @@ TEST_P(SSLErrorNavigationThrottleTest, SSLInfoWithCertError) {
   EXPECT_EQ(net::ERR_CERT_COMMON_NAME_INVALID,
             deferred_result_.net_error_code());
   EXPECT_TRUE(deferred_result_.error_page_content().has_value());
+}
+
+// Tests that the throttle forwards OpenURLParams from the failing navigation
+// handle to HandleSSLErrorCallback.
+TEST_P(SSLErrorNavigationThrottleTest, ForwardsOpenURLParams) {
+  SCOPED_TRACE(::testing::Message()
+               << "Asynchronous MockHandleSSLError: " << async_);
+
+  const GURL request_url("https://example.test/action");
+  const url::Origin initiator_origin =
+      url::Origin::Create(GURL("https://initiator.test"));
+  handle_->set_url(request_url);
+  handle_->set_redirect_chain({request_url});
+  handle_->set_is_renderer_initiated(true);
+  handle_->set_initiator_origin(initiator_origin);
+  handle_->set_page_transition(ui::PAGE_TRANSITION_LINK);
+  EXPECT_CALL(*handle_, HasUserGesture())
+      .WillRepeatedly(testing::Return(false));
+
+  net::SSLInfo ssl_info;
+  ssl_info.cert =
+      net::ImportCertFromFile(net::GetTestCertsDirectory(), "ok_cert.pem");
+  ssl_info.cert_status = net::CERT_STATUS_COMMON_NAME_INVALID;
+  handle_->set_net_error_code(net::ERR_CERT_COMMON_NAME_INVALID);
+  handle_->set_ssl_info(ssl_info);
+
+  content::NavigationThrottle::ThrottleCheckResult synchronous_result =
+      throttle_->WillFailRequest();
+  EXPECT_EQ(content::NavigationThrottle::DEFER, synchronous_result.action());
+  ASSERT_TRUE(captured_open_url_params_.has_value());
+  EXPECT_EQ(request_url, captured_open_url_params_->url);
+  EXPECT_TRUE(captured_open_url_params_->is_renderer_initiated);
+  EXPECT_EQ(initiator_origin, captured_open_url_params_->initiator_origin);
+  EXPECT_TRUE(ui::PageTransitionCoreTypeIs(
+      captured_open_url_params_->transition, ui::PAGE_TRANSITION_LINK));
+  EXPECT_FALSE(captured_open_url_params_->user_gesture);
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(content::NavigationThrottle::CANCEL, deferred_result_.action());
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

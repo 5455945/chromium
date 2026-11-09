@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/simple_test_tick_clock.h"
@@ -21,14 +21,20 @@
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/error_page/common/net_error_info.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/dns/public/secure_dns_mode.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
+#include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
+#endif
 
 using base::RunLoop;
 using content::BrowserTaskEnvironment;
@@ -42,14 +48,11 @@ class DnsProbeServiceTest : public testing::Test {
  public:
   DnsProbeServiceTest()
       : callback_called_(false), callback_result_(error_page::DNS_PROBE_MAX) {
-    local_state_ = std::make_unique<ScopedTestingLocalState>(
-        TestingBrowserProcess::GetGlobal());
-
     // SystemNetworkContextManager cannot be instantiated here, which normally
     // owns the StubResolverConfigReader instance, so inject a
     // StubResolverConfigReader instance here.
-    stub_resolver_config_reader_ =
-        std::make_unique<StubResolverConfigReader>(local_state_->Get());
+    stub_resolver_config_reader_ = std::make_unique<StubResolverConfigReader>(
+        TestingBrowserProcess::GetGlobal()->local_state());
     SystemNetworkContextManager::set_stub_resolver_config_reader_for_testing(
         stub_resolver_config_reader_.get());
   }
@@ -115,7 +118,9 @@ class DnsProbeServiceTest : public testing::Test {
 
   DnsProbeService* probe_service() const { return service_.get(); }
 
-  TestingPrefServiceSimple* local_state() { return local_state_->Get(); }
+  TestingPrefServiceSimple* local_state() {
+    return TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  }
 
   const std::string kDohTemplateGet = "https://bar.test/dns-query{?dns}";
   const std::string kDohTemplatePost = "https://bar.test/dns-query";
@@ -132,7 +137,6 @@ class DnsProbeServiceTest : public testing::Test {
   std::unique_ptr<FakeHostResolverNetworkContext> network_context_;
   std::unique_ptr<FakeDnsConfigChangeManager> dns_config_change_manager_;
   std::unique_ptr<DnsProbeService> service_;
-  std::unique_ptr<ScopedTestingLocalState> local_state_;
   std::unique_ptr<StubResolverConfigReader> stub_resolver_config_reader_;
   bool callback_called_;
   DnsProbeStatus callback_result_;
@@ -235,7 +239,7 @@ TEST_F(DnsProbeServiceTest, Cache) {
                   FakeHostResolver::kNoResponse}});
   RunTest(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
   // Advance clock, but not enough to expire the cache.
-  AdvanceTime(base::TimeDelta::FromSeconds(4));
+  AdvanceTime(base::Seconds(4));
   // Cached NXDOMAIN result should persist, not the result from the new rules.
   RunTest(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
 }
@@ -253,7 +257,7 @@ TEST_F(DnsProbeServiceTest, Expire) {
                   FakeHostResolver::kNoResponse}});
   RunTest(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
   // Advance clock enough to trigger cache expiration.
-  AdvanceTime(base::TimeDelta::FromSeconds(6));
+  AdvanceTime(base::Seconds(6));
   // New rules should apply, since a new probe should be run.
   RunTest(error_page::DNS_PROBE_FINISHED_NO_INTERNET);
 }
@@ -319,7 +323,7 @@ TEST_F(DnsProbeServiceTest, CurrentConfig_Automatic) {
 
   EXPECT_TRUE(overrides.secure_dns_mode.has_value());
   EXPECT_EQ(net::SecureDnsMode::kOff, overrides.secure_dns_mode.value());
-  EXPECT_FALSE(overrides.dns_over_https_servers.has_value());
+  EXPECT_FALSE(overrides.dns_over_https_config.has_value());
 }
 
 TEST_F(DnsProbeServiceTest, CurrentConfig_Secure) {
@@ -331,6 +335,14 @@ TEST_F(DnsProbeServiceTest, CurrentConfig_Secure) {
   local_state()->SetManagedPref(
       prefs::kDnsOverHttpsTemplates,
       std::make_unique<base::Value>(kDohTemplateGet + " " + kDohTemplatePost));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // In a real user session, the pref
+  // ash::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS is set by
+  // ash::SecureDnsManager.
+  local_state()->SetString(ash::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS,
+                           kDohTemplateGet + " " + kDohTemplatePost);
+#endif
   ConfigureTest({}, {});
   net::DnsConfigOverrides overrides =
       probe_service()->GetCurrentConfigOverridesForTesting();
@@ -340,16 +352,12 @@ TEST_F(DnsProbeServiceTest, CurrentConfig_Secure) {
   EXPECT_TRUE(overrides.attempts.has_value());
   EXPECT_EQ(1, overrides.attempts.value());
 
-  EXPECT_TRUE(overrides.secure_dns_mode.has_value());
-  EXPECT_EQ(net::SecureDnsMode::kSecure, overrides.secure_dns_mode.value());
-  EXPECT_TRUE(overrides.dns_over_https_servers.has_value());
-  ASSERT_EQ(2u, overrides.dns_over_https_servers->size());
-  EXPECT_EQ(kDohTemplateGet,
-            overrides.dns_over_https_servers->at(0).server_template);
-  EXPECT_FALSE(overrides.dns_over_https_servers->at(0).use_post);
-  EXPECT_EQ(kDohTemplatePost,
-            overrides.dns_over_https_servers->at(1).server_template);
-  EXPECT_TRUE(overrides.dns_over_https_servers->at(1).use_post);
+  EXPECT_THAT(overrides.secure_dns_mode,
+              testing::Optional(net::SecureDnsMode::kSecure));
+  EXPECT_THAT(
+      overrides.dns_over_https_config,
+      testing::Optional(*net::DnsOverHttpsConfig::FromTemplatesForTesting(
+          {kDohTemplateGet, kDohTemplatePost})));
 }
 
 }  // namespace

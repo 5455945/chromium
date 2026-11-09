@@ -1,5 +1,5 @@
 #!/usr/bin/env vpython3
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Unit test for branch.py"""
@@ -14,10 +14,12 @@ INFRA_CONFIG_DIR = os.path.abspath(os.path.join(__file__, '..', '..', '..'))
 
 sys.path.append(os.path.join(INFRA_CONFIG_DIR, 'scripts'))
 
-import branch
+import branch  # noqa: E402
+
 
 class ParseError(Exception):
   pass
+
 
 class ArgumentParser(argparse.ArgumentParser):
   """Test version of ArgumentParser
@@ -32,8 +34,8 @@ class ArgumentParser(argparse.ArgumentParser):
   def error(self, message):
     raise ParseError(message)
 
-class BranchUnitTest(unittest.TestCase):
 
+class BranchUnitTest(unittest.TestCase):
   def test_parse_args_fails_without_subcommand(self):
     with self.assertRaises(ParseError) as caught:
       branch.parse_args([], parser_type=ArgumentParser)
@@ -43,91 +45,201 @@ class BranchUnitTest(unittest.TestCase):
     with self.assertRaises(ParseError) as caught:
       branch.parse_args(['initialize'], parser_type=ArgumentParser)
     self.assertEqual(
-        str(caught.exception),
-        'the following arguments are required: --milestone, --branch')
+      str(caught.exception),
+      'the following arguments are required: --milestone, --branch',
+    )
 
   def test_initialize_parse_args(self):
     args = branch.parse_args(
-        ['initialize', '--milestone', 'MM', '--branch', 'BBBB'],
-        parser_type=ArgumentParser)
+      ['initialize', '--milestone', 'MM', '--branch', 'BBBB'],
+      parser_type=ArgumentParser,
+    )
     self.assertEqual(args.milestone, 'MM')
     self.assertEqual(args.branch, 'BBBB')
 
   def test_initial_settings(self):
-    output = branch.initial_settings(milestone='MM', branch='BBBB')
+    output = branch.initial_settings(
+      milestone='MM',
+      branch='BBBB',
+      chromium_project='CHROMIUM',
+      chrome_project='CHROME',
+    )
     self.assertEqual(
-        output,
-        textwrap.dedent("""\
+      output,
+      textwrap.dedent("""\
             {
-                "project": "chromium-mMM",
+                "project": "CHROMIUM",
                 "project_title": "Chromium MMM",
                 "ref": "refs/branch-heads/BBBB",
-                "chrome_project": "chrome-mMM",
-                "branch_types": [
-                    "standard"
-                ]
+                "chrome_project": "CHROME",
+                "dawn_ref": "refs/heads/chromium/BBBB",
+                "is_main": false,
+                "platforms": {
+                    "android": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    },
+                    "cros": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    },
+                    "fuchsia": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    },
+                    "ios": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    },
+                    "linux": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    },
+                    "mac": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    },
+                    "windows": {
+                        "description": "beta/stable",
+                        "gardener_rotation": "chrome_browser_release"
+                    }
+                }
             }
-            """))
+            """),
+    )
 
-  def test_set_type_parse_args_fails_when_missing_required_args(self):
+  def test_enable_platform_parse_args_fails_when_missing_required_args(self):
     with self.assertRaises(ParseError) as caught:
-      branch.parse_args(['set-type'], parser_type=ArgumentParser)
-    self.assertEqual(str(caught.exception),
-                     'the following arguments are required: --type')
+      branch.parse_args(['enable-platform'], parser_type=ArgumentParser)
+    self.assertEqual(
+      str(caught.exception),
+      'the following arguments are required: platform, --description',
+    )
 
-  def test_set_type_parse_args_fails_for_invalid_type(self):
-    with self.assertRaises(ParseError) as caught:
-      branch.parse_args(['set-type', '--type', 'foo'],
-                        parser_type=ArgumentParser)
-    self.assertIn("invalid choice: 'foo'", str(caught.exception))
-
-  def test_set_type_parse_args(self):
+  def test_enable_platform_parse_args(self):
     args = branch.parse_args(
-        ['set-type', '--type', 'desktop-extended-stable', '--type', 'cros-lts'])
-    self.assertEqual(args.type, ['desktop-extended-stable', 'cros-lts'])
+      ['enable-platform', 'fake-platform', '--description', 'fake-description']
+    )
+    self.assertEqual(args.platform, 'fake-platform')
+    self.assertEqual(args.description, 'fake-description')
+    self.assertIsNone(args.gardener_rotation)
 
-  def test_set_type(self):
+  def test_enable_platform_parse_args_gardener_rotation(self):
+    args = branch.parse_args(
+      [
+        'enable-platform',
+        'fake-platform',
+        '--description',
+        'fake-description',
+        '--gardener-rotation',
+        'fake-gardener-rotation',
+      ]
+    )
+    self.assertEqual(args.platform, 'fake-platform')
+    self.assertEqual(args.description, 'fake-description')
+    self.assertEqual(args.gardener_rotation, 'fake-gardener-rotation')
+
+  def test_enable_platform(self):
     input = textwrap.dedent("""\
         {
             "project": "chromium-mMM",
             "project_title": "Chromium MMM",
-            "ref": "refs/branch-heads/AAAA"
+            "ref": "refs/branch-heads/AAAA",
+            "is_main": true
         }""")
-    output = branch.set_type(input, ['desktop-extended-stable', 'cros-lts'])
+    output = branch.enable_platform(
+      input,
+      'fake-platform',
+      'fake-description',
+      None,
+    )
     self.assertEqual(
-        output,
-        textwrap.dedent("""\
+      output,
+      textwrap.dedent("""\
             {
                 "project": "chromium-mMM",
                 "project_title": "Chromium MMM",
                 "ref": "refs/branch-heads/AAAA",
-                "branch_types": [
-                    "desktop-extended-stable",
-                    "cros-lts"
-                ]
+                "is_main": false,
+                "platforms": {
+                    "fake-platform": {
+                        "description": "fake-description"
+                    }
+                }
             }
-            """))
+            """),
+    )
 
-  def test_set_type_mapped(self):
+  def test_enable_platform_gardener_rotation(self):
     input = textwrap.dedent("""\
         {
             "project": "chromium-mMM",
             "project_title": "Chromium MMM",
-            "ref": "refs/branch-heads/AAAA"
+            "ref": "refs/branch-heads/AAAA",
+            "is_main": true
         }""")
-    output = branch.set_type(input, ['lts'])
+    output = branch.enable_platform(
+      input,
+      'fake-platform',
+      'fake-description',
+      'fake-gardener-rotation',
+    )
     self.assertEqual(
-        output,
-        textwrap.dedent("""\
+      output,
+      textwrap.dedent("""\
             {
                 "project": "chromium-mMM",
                 "project_title": "Chromium MMM",
                 "ref": "refs/branch-heads/AAAA",
-                "branch_types": [
-                    "cros-lts"
-                ]
+                "is_main": false,
+                "platforms": {
+                    "fake-platform": {
+                        "description": "fake-description",
+                        "gardener_rotation": "fake-gardener-rotation"
+                    }
+                }
             }
-            """))
+            """),
+    )
+
+  def test_enable_platform_with_existing_platforms(self):
+    input = textwrap.dedent("""\
+        {
+            "project": "chromium-mMM",
+            "project_title": "Chromium MMM",
+            "ref": "refs/branch-heads/AAAA",
+            "platforms": {
+                "fake-platform2": {
+                    "description": "fake-description"
+                }
+            },
+            "is_main": false
+        }""")
+    output = branch.enable_platform(
+      input,
+      'fake-platform1',
+      'fake-description',
+      None,
+    )
+    self.assertEqual(
+      output,
+      textwrap.dedent("""\
+            {
+                "project": "chromium-mMM",
+                "project_title": "Chromium MMM",
+                "ref": "refs/branch-heads/AAAA",
+                "is_main": false,
+                "platforms": {
+                    "fake-platform1": {
+                        "description": "fake-description"
+                    },
+                    "fake-platform2": {
+                        "description": "fake-description"
+                    }
+                }
+            }
+            """),
+    )
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,10 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/scoped_observation.h"
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_service.h"
@@ -23,6 +24,7 @@ class SharedURLLoaderFactory;
 
 namespace policy {
 
+class ClientDataDelegate;
 class CloudPolicyClient;
 class CloudPolicyClientRegistrationHelper;
 class MachineLevelUserCloudPolicyManager;
@@ -34,21 +36,27 @@ class ChromeBrowserCloudManagementRegistrar {
   ChromeBrowserCloudManagementRegistrar(
       DeviceManagementService* device_management_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
+  ChromeBrowserCloudManagementRegistrar(
+      const ChromeBrowserCloudManagementRegistrar&) = delete;
+  ChromeBrowserCloudManagementRegistrar& operator=(
+      const ChromeBrowserCloudManagementRegistrar&) = delete;
+
   ~ChromeBrowserCloudManagementRegistrar();
 
   // The callback invoked once policy registration is complete. Passed
   // |dm_token| and |client_id| parameters are empty if policy registration
   // failed.
-  // TODO(crbug.com/825321): Update this to OnceCallback.
   using CloudManagementRegistrationCallback =
-      base::RepeatingCallback<void(const std::string& dm_token,
-                                   const std::string& client_id)>;
+      base::OnceCallback<void(const std::string& dm_token,
+                              const std::string& client_id)>;
 
   // Registers a CloudPolicyClient for fetching machine level user policy.
   void RegisterForCloudManagementWithEnrollmentToken(
       const std::string& enrollment_token,
       const std::string& client_id,
-      const CloudManagementRegistrationCallback& callback);
+      const ClientDataDelegate& client_data_delegate,
+      CloudManagementRegistrationCallback callback);
 
  private:
   void CallCloudManagementRegistrationCallback(
@@ -56,10 +64,8 @@ class ChromeBrowserCloudManagementRegistrar {
       CloudManagementRegistrationCallback callback);
 
   std::unique_ptr<CloudPolicyClientRegistrationHelper> registration_helper_;
-  DeviceManagementService* device_management_service_;
+  raw_ptr<DeviceManagementService> device_management_service_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeBrowserCloudManagementRegistrar);
 };
 
 // A helper class that setup registration and fetch policy.
@@ -70,6 +76,12 @@ class MachineLevelUserCloudPolicyFetcher : public CloudPolicyService::Observer {
       PrefService* local_state,
       DeviceManagementService* device_management_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
+  MachineLevelUserCloudPolicyFetcher(
+      const MachineLevelUserCloudPolicyFetcher&) = delete;
+  MachineLevelUserCloudPolicyFetcher& operator=(
+      const MachineLevelUserCloudPolicyFetcher&) = delete;
+
   ~MachineLevelUserCloudPolicyFetcher() override;
 
   // Initialize the cloud policy client and policy store then fetch
@@ -94,12 +106,13 @@ class MachineLevelUserCloudPolicyFetcher : public CloudPolicyService::Observer {
   // Fetch policy if device is enrolled.
   void TryToFetchPolicy();
 
-  MachineLevelUserCloudPolicyManager* policy_manager_;
-  PrefService* local_state_;
-  DeviceManagementService* device_management_service_;
+  raw_ptr<MachineLevelUserCloudPolicyManager> policy_manager_;
+  raw_ptr<PrefService> local_state_;
+  raw_ptr<DeviceManagementService> device_management_service_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  DISALLOW_COPY_AND_ASSIGN(MachineLevelUserCloudPolicyFetcher);
+  base::ScopedObservation<CloudPolicyService, CloudPolicyService::Observer>
+      cloud_policy_service_observation_{this};
 };
 
 }  // namespace policy

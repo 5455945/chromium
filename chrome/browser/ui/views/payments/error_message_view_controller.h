@@ -1,13 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_PAYMENTS_ERROR_MESSAGE_VIEW_CONTROLLER_H_
 #define CHROME_BROWSER_UI_VIEWS_PAYMENTS_ERROR_MESSAGE_VIEW_CONTROLLER_H_
 
-#include <memory>
-
-#include "base/macros.h"
 #include "chrome/browser/ui/views/payments/payment_request_sheet_controller.h"
 
 namespace views {
@@ -28,6 +25,11 @@ class ErrorMessageViewController : public PaymentRequestSheetController {
   ErrorMessageViewController(base::WeakPtr<PaymentRequestSpec> spec,
                              base::WeakPtr<PaymentRequestState> state,
                              base::WeakPtr<PaymentRequestDialogView> dialog);
+
+  ErrorMessageViewController(const ErrorMessageViewController&) = delete;
+  ErrorMessageViewController& operator=(const ErrorMessageViewController&) =
+      delete;
+
   ~ErrorMessageViewController() override;
 
  private:
@@ -39,9 +41,15 @@ class ErrorMessageViewController : public PaymentRequestSheetController {
   bool ShouldShowHeaderBackArrow() override;
   bool ShouldShowSecondaryButton() override;
   std::u16string GetSheetTitle() override;
+  void PopulateSheetHeaderView(views::View* view) override;
   void FillContentView(views::View* content_view) override;
+  bool GetSheetId(DialogViewID* sheet_id) override;
+  bool ShouldAccelerateEnterKey() override;
+  bool CanContentViewBeScrollable() override;
+  base::WeakPtr<PaymentRequestSheetController> GetWeakPtr() override;
 
-  DISALLOW_COPY_AND_ASSIGN(ErrorMessageViewController);
+  // Must be the last member of a leaf class.
+  base::WeakPtrFactory<ErrorMessageViewController> weak_ptr_factory_{this};
 };
 
 }  // namespace payments

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_VIDEO_DECODER_H_
 
 #include <stdint.h>
+
 #include <memory>
 
+#include "base/time/time.h"
+#include "media/base/media_types.h"
 #include "media/base/status.h"
 #include "media/base/video_decoder.h"
 #include "media/base/video_decoder_config.h"
@@ -17,26 +20,22 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_video_frame_output_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_webcodecs_error_callback.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/modules/webcodecs/codec_config_eval.h"
 #include "third_party/blink/renderer/modules/webcodecs/decoder_template.h"
+#include "third_party/blink/renderer/modules/webcodecs/video_decoder_helper.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+
+namespace libgav1 {
+class BufferPool;
+}
 
 namespace media {
 
 class VideoFrame;
 class DecoderBuffer;
 class MediaLog;
-
-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
-class H264ToAnnexBBitstreamConverter;
-namespace mp4 {
-struct AVCDecoderConfigurationRecord;
-}
-#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 
 }  // namespace media
 
@@ -46,9 +45,9 @@ class EncodedVideoChunk;
 class ExceptionState;
 class VideoDecoderConfig;
 class VideoDecoderInit;
+class VideoDecoderSupport;
 class VideoFrame;
 class V8VideoFrameOutputCallback;
-class ScriptPromise;
 
 class MODULES_EXPORT VideoDecoderTraits {
  public:
@@ -76,8 +75,6 @@ class MODULES_EXPORT VideoDecoderTraits {
   static void UpdateDecoderLog(const MediaDecoderType& decoder,
                                const MediaConfigType& media_config,
                                media::MediaLog* media_log);
-  static media::StatusOr<OutputType*> MakeOutput(scoped_refptr<MediaOutputType>,
-                                                 ExecutionContext*);
   static const char* GetName();
 };
 
@@ -89,51 +86,78 @@ class MODULES_EXPORT VideoDecoder : public DecoderTemplate<VideoDecoderTraits> {
                               const VideoDecoderInit*,
                               ExceptionState&);
 
-  static ScriptPromise isConfigSupported(ScriptState*,
-                                         const VideoDecoderConfig*,
-                                         ExceptionState&);
+  static ScriptPromise<VideoDecoderSupport>
+  isConfigSupported(ScriptState*, const VideoDecoderConfig*, ExceptionState&);
 
   static HardwarePreference GetHardwareAccelerationPreference(
       const ConfigType& config);
 
-  // For use by MediaSource and by ::MakeMediaConfig.
-  static CodecConfigEval MakeMediaVideoDecoderConfig(
+  // Returns parsed VideoType if the configuration is valid.
+  static std::optional<media::VideoType> IsValidVideoDecoderConfig(
+      const VideoDecoderConfig& config,
+      String* js_error_message);
+
+  // For use by MediaSource
+  static std::optional<media::VideoDecoderConfig> MakeMediaVideoDecoderConfig(
       const ConfigType& config,
-      MediaConfigType& out_media_config,
-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
-      std::unique_ptr<media::H264ToAnnexBBitstreamConverter>&
-          out_h264_converter,
-      std::unique_ptr<media::mp4::AVCDecoderConfigurationRecord>& out_h264_avcc,
-#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
-      String& out_console_message);
+      String* js_error_message,
+      bool* needs_converter_out = nullptr);
 
   VideoDecoder(ScriptState*, const VideoDecoderInit*, ExceptionState&);
-  ~VideoDecoder() override = default;
+  ~VideoDecoder() override;
+
+  // EventTarget interface
+  const AtomicString& InterfaceName() const override;
 
  protected:
-  CodecConfigEval MakeMediaConfig(const ConfigType& config,
-                                  MediaConfigType* out_media_config,
-                                  String* out_console_message) override;
-  media::StatusOr<scoped_refptr<media::DecoderBuffer>> MakeDecoderBuffer(
-      const InputType& input,
-      bool verify_key_frame) override;
-
-  static ScriptPromise IsAcceleratedConfigSupported(ScriptState* script_state,
-                                                    const VideoDecoderConfig*,
-                                                    ExceptionState&);
-
-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
-  std::unique_ptr<media::H264ToAnnexBBitstreamConverter> h264_converter_;
-  std::unique_ptr<media::mp4::AVCDecoderConfigurationRecord> h264_avcc_;
-#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
-
-  media::VideoCodec current_codec_ = media::kUnknownVideoCodec;
+  bool IsValidConfig(const ConfigType& config,
+                     String* js_error_message) override;
+  std::optional<media::VideoDecoderConfig> MakeMediaConfig(
+      const ConfigType& config,
+      String* js_error_message) override;
+  base::expected<scoped_refptr<media::DecoderBuffer>, media::DecoderStatus>
+  MakeInput(const InputType& input, bool verify_key_frame) override;
+  base::expected<OutputType*, media::DecoderStatus> MakeOutput(
+      scoped_refptr<MediaOutputType>,
+      ExecutionContext*) override;
+  void OnActiveConfigChanged(const MediaConfigType& config) override;
+  void OnReset() override;
 
  private:
+  struct DecoderSpecificData {
+    // Bitstream converter to annex B for AVC/HEVC.
+    std::unique_ptr<VideoDecoderHelper> decoder_helper;
+
+    // Buffer pool for use with libgav1::ObuParser.
+    std::unique_ptr<libgav1::BufferPool> av1_buffer_pool;
+  };
+
   // DecoderTemplate implementation.
   HardwarePreference GetHardwarePreference(const ConfigType& config) override;
   bool GetLowDelayPreference(const ConfigType& config) override;
   void SetHardwarePreference(HardwarePreference preference) override;
+  // For use by ::MakeMediaConfig
+  static std::optional<media::VideoDecoderConfig>
+  MakeMediaVideoDecoderConfigInternal(
+      const ConfigType& config,
+      DecoderSpecificData& decoder_specific_data,
+      String* js_error_message,
+      bool* needs_converter_out = nullptr);
+
+  DecoderSpecificData decoder_specific_data_;
+
+  // Note: This may not be the active codec, it is just intended to be the last
+  // codec that was passed to a configure() call.
+  media::VideoCodec pending_codec_ = media::VideoCodec::kUnknown;
+
+  media::VideoTransformation active_transform_ = media::kNoTransformation;
+
+  // Per-chunk metadata to be applied to outputs, ordered by input sequence.
+  struct ChunkMetadata {
+    base::TimeDelta timestamp;
+    base::TimeDelta duration;
+  };
+  Vector<ChunkMetadata> chunk_metadata_;
 };
 
 }  // namespace blink

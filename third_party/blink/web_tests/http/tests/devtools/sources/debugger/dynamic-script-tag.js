@@ -1,12 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as SDK from 'devtools/core/sdk/sdk.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
 
 (async function() {
   TestRunner.addResult(
       `Tests that inline scripts and document.write scripts get different uiSourceCodes with different URLs.`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.navigatePromise('resources/dynamic-script-tag.html');
 
@@ -14,7 +19,7 @@
     function testOpenDevToolsAfterLoad(next) {
       var consoleMessagesCount = 2;
 
-      var messages = SDK.consoleModel.messages();
+      var messages = SDK.ConsoleModel.ConsoleModel.allMessagesUnordered(Main.MainImpl.MainImpl.universeForTest.targetManager);
       for (var i = 0; i < messages.length; ++i)
         processMessage(messages[i]);
       checkWhenScriptsLoaded();

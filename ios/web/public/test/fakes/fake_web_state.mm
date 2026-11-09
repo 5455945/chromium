@@ -1,36 +1,58 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/public/test/fakes/fake_web_state.h"
 
 #import <Foundation/Foundation.h>
-#include <stdint.h>
+#import <stdint.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#import <memory>
+#import <utility>
+
+#import "base/functional/bind.h"
+#import "base/functional/callback.h"
 #import "base/strings/sys_string_conversions.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#import "ios/web/common/crw_content_view.h"
-#include "ios/web/js_messaging/web_frames_manager_impl.h"
-#include "ios/web/public/js_messaging/web_frame.h"
+#import "base/supports_user_data.h"
+#import "components/sessions/core/session_id.h"
+#import "ios/web/js_messaging/web_frames_manager_impl.h"
+#import "ios/web/public/browser_state.h"
+#import "ios/web/public/download/crw_web_view_download.h"
+#import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/navigation/web_state_policy_decider.h"
-#import "ios/web/public/session/crw_navigation_item_storage.h"
-#import "ios/web/public/session/crw_session_storage.h"
-#import "ios/web/public/session/serializable_user_data_manager.h"
+#import "ios/web/public/test/fakes/crw_fake_find_interaction.h"
+#import "ios/web/session/session_certificate_policy_cache_impl.h"
 #import "ios/web/web_state/policy_decision_state_tracker.h"
-#include "ui/gfx/image/image.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/web_state/ui/crw_content_view.h"
+#import "net/http/http_util.h"
 
 namespace web {
+
 namespace {
-// Function used to implement the default WebState getters.
-web::WebState* ReturnWeakReference(base::WeakPtr<FakeWebState> weak_web_state) {
-  return weak_web_state.get();
-}
+
+// Attached as user data to the BrowserState passed to
+// FakeWebState::SetBrowserState(). Runs `on_destroyed` when destroyed, which
+// happens either when the BrowserState is destroyed or when the FakeWebState
+// stops tracking it. This allows the FakeWebState to reset its pointer to the
+// BrowserState before the latter is freed, preventing it from dangling.
+class BrowserStateDestructionObserver : public base::SupportsUserData::Data {
+ public:
+  explicit BrowserStateDestructionObserver(base::OnceClosure on_destroyed)
+      : on_destroyed_(std::move(on_destroyed)) {}
+
+  BrowserStateDestructionObserver(const BrowserStateDestructionObserver&) =
+      delete;
+  BrowserStateDestructionObserver& operator=(
+      const BrowserStateDestructionObserver&) = delete;
+
+  ~BrowserStateDestructionObserver() override {
+    std::move(on_destroyed_).Run();
+  }
+
+ private:
+  base::OnceClosure on_destroyed_;
+};
+
 }  // namespace
 
 void FakeWebState::AddObserver(WebStateObserver* observer) {
@@ -45,36 +67,33 @@ void FakeWebState::CloseWebState() {
   is_closed_ = true;
 }
 
-FakeWebState::FakeWebState()
-    : browser_state_(nullptr),
-      web_usage_enabled_(true),
-      is_loading_(false),
-      is_visible_(false),
-      is_crashed_(false),
-      is_evicted_(false),
-      has_opener_(false),
-      can_take_snapshot_(false),
-      is_closed_(false),
-      trust_level_(kAbsolute),
-      content_is_html_(true),
-      web_view_proxy_(nil) {}
+FakeWebState::FakeWebState() : FakeWebState(WebStateID::NewUnique()) {}
+
+FakeWebState::FakeWebState(WebStateID unique_identifier)
+    : stable_identifier_([[NSUUID UUID] UUIDString]),
+      unique_identifier_(unique_identifier) {
+  DCHECK(stable_identifier_.length);
+  DCHECK(unique_identifier_.valid());
+}
 
 FakeWebState::~FakeWebState() {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.WebStateDestroyed(this);
-  for (auto& observer : policy_deciders_)
+  }
+  for (auto& observer : policy_deciders_) {
     observer.WebStateDestroyed();
-  for (auto& observer : policy_deciders_)
+  }
+  for (auto& observer : policy_deciders_) {
     observer.ResetWebState();
+  }
+  ClearAllUserData();
+  DetachFromBrowserState();
 }
 
-WebState::Getter FakeWebState::CreateDefaultGetter() {
-  return base::BindRepeating(&ReturnWeakReference, weak_factory_.GetWeakPtr());
-}
+void FakeWebState::SerializeToProto(proto::WebStateStorage& storage) const {}
 
-WebState::OnceGetter FakeWebState::CreateDefaultOnceGetter() {
-  return base::BindOnce(&ReturnWeakReference, weak_factory_.GetWeakPtr());
-}
+void FakeWebState::SerializeMetadataToProto(
+    proto::WebStateMetadataStorage& storage) const {}
 
 WebStateDelegate* FakeWebState::GetDelegate() {
   return nil;
@@ -82,8 +101,52 @@ WebStateDelegate* FakeWebState::GetDelegate() {
 
 void FakeWebState::SetDelegate(WebStateDelegate* delegate) {}
 
+std::unique_ptr<WebState> FakeWebState::Clone() const {
+  return std::make_unique<FakeWebState>();
+}
+
+bool FakeWebState::IsRealized() const {
+  return is_realized_;
+}
+
+WebState* FakeWebState::ForceRealizedWithPolicy(RealizationPolicy policy) {
+  if (!is_realized_) {
+    is_realized_ = true;
+    NotifyWebStateRealized(observers_);
+  }
+  return this;
+}
+
 BrowserState* FakeWebState::GetBrowserState() const {
   return browser_state_;
+}
+
+base::WeakPtr<WebState> FakeWebState::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
+void FakeWebState::LoadSimulatedRequest(const GURL& url,
+                                        NSString* response_html_string) {
+  SetCurrentURL(url);
+  mime_type_ = base::SysNSStringToUTF8(@"text/html");
+  last_loaded_data_ =
+      [response_html_string dataUsingEncoding:NSUTF8StringEncoding];
+  // LoadSimulatedRequest is always a success. Send the event accordingly.
+  OnPageLoaded(web::PageLoadCompletionStatus::SUCCESS);
+}
+
+void FakeWebState::Stop() {
+  was_stopped_ = true;
+}
+
+void FakeWebState::LoadSimulatedRequest(const GURL& url,
+                                        NSData* response_data,
+                                        NSString* mime_type) {
+  SetCurrentURL(url);
+  mime_type_ = base::SysNSStringToUTF8(mime_type);
+  last_loaded_data_ = response_data;
+  // LoadSimulatedRequest is always a success. Send the event accordingly.
+  OnPageLoaded(web::PageLoadCompletionStatus::SUCCESS);
 }
 
 bool FakeWebState::IsWebUsageEnabled() const {
@@ -92,8 +155,9 @@ bool FakeWebState::IsWebUsageEnabled() const {
 
 void FakeWebState::SetWebUsageEnabled(bool enabled) {
   web_usage_enabled_ = enabled;
-  if (!web_usage_enabled_)
+  if (!web_usage_enabled_) {
     SetIsEvicted(true);
+  }
 }
 
 UIView* FakeWebState::GetView() {
@@ -104,16 +168,30 @@ void FakeWebState::DidCoverWebContent() {}
 
 void FakeWebState::DidRevealWebContent() {}
 
+base::Time FakeWebState::GetLastActiveTime() const {
+  return last_active_time_;
+}
+
+base::Time FakeWebState::GetCreationTime() const {
+  return creation_time_;
+}
+
 void FakeWebState::WasShown() {
+  if (!is_visible_) {
+    last_active_time_ = base::Time::Now();
+  }
+
   is_visible_ = true;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.WasShown(this);
+  }
 }
 
 void FakeWebState::WasHidden() {
   is_visible_ = false;
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.WasHidden(this);
+  }
 }
 
 void FakeWebState::SetKeepRenderProcessAlive(bool keep_alive) {}
@@ -126,12 +204,12 @@ NavigationManager* FakeWebState::GetNavigationManager() {
   return navigation_manager_.get();
 }
 
-const WebFramesManager* FakeWebState::GetWebFramesManager() const {
-  return web_frames_manager_.get();
+WebFramesManager* FakeWebState::GetPageWorldWebFramesManager() {
+  return web_frames_managers_[ContentWorld::kPageContentWorld].get();
 }
 
-WebFramesManager* FakeWebState::GetWebFramesManager() {
-  return web_frames_manager_.get();
+WebFramesManager* FakeWebState::GetWebFramesManager(ContentWorld world) {
+  return web_frames_managers_[world].get();
 }
 
 const SessionCertificatePolicyCache*
@@ -144,16 +222,6 @@ FakeWebState::GetSessionCertificatePolicyCache() {
   return nullptr;
 }
 
-CRWSessionStorage* FakeWebState::BuildSessionStorage() {
-  std::unique_ptr<web::SerializableUserData> serializable_user_data =
-      web::SerializableUserDataManager::FromWebState(this)
-          ->CreateSerializableUserData();
-  CRWSessionStorage* session_storage = [[CRWSessionStorage alloc] init];
-  [session_storage setSerializableUserData:std::move(serializable_user_data)];
-  session_storage.itemStorages = @[ [[CRWNavigationItemStorage alloc] init] ];
-  return session_storage;
-}
-
 void FakeWebState::SetNavigationManager(
     std::unique_ptr<NavigationManager> navigation_manager) {
   navigation_manager_ = std::move(navigation_manager);
@@ -161,7 +229,14 @@ void FakeWebState::SetNavigationManager(
 
 void FakeWebState::SetWebFramesManager(
     std::unique_ptr<WebFramesManager> web_frames_manager) {
-  web_frames_manager_ = std::move(web_frames_manager);
+  SetWebFramesManager(ContentWorld::kPageContentWorld,
+                      std::move(web_frames_manager));
+}
+
+void FakeWebState::SetWebFramesManager(
+    ContentWorld content_world,
+    std::unique_ptr<WebFramesManager> web_frames_manager) {
+  web_frames_managers_[content_world] = std::move(web_frames_manager);
 }
 
 void FakeWebState::SetView(UIView* view) {
@@ -170,8 +245,9 @@ void FakeWebState::SetView(UIView* view) {
 
 void FakeWebState::SetIsCrashed(bool value) {
   is_crashed_ = value;
-  if (is_crashed_)
+  if (is_crashed_) {
     SetIsEvicted(true);
+  }
 }
 
 void FakeWebState::SetIsEvicted(bool value) {
@@ -180,10 +256,6 @@ void FakeWebState::SetIsEvicted(bool value) {
 
 void FakeWebState::SetWebViewProxy(CRWWebViewProxyType web_view_proxy) {
   web_view_proxy_ = web_view_proxy;
-}
-
-CRWJSInjectionReceiver* FakeWebState::GetJSInjectionReceiver() const {
-  return injection_receiver_;
 }
 
 void FakeWebState::LoadData(NSData* data,
@@ -196,17 +268,11 @@ void FakeWebState::LoadData(NSData* data,
   OnPageLoaded(web::PageLoadCompletionStatus::SUCCESS);
 }
 
-void FakeWebState::ExecuteJavaScript(const std::u16string& javascript) {
-  last_executed_javascript_ = javascript;
-}
-
-void FakeWebState::ExecuteJavaScript(const std::u16string& javascript,
-                                     JavaScriptResultCallback callback) {
-  last_executed_javascript_ = javascript;
-  std::move(callback).Run(nullptr);
-}
-
 void FakeWebState::ExecuteUserJavaScript(NSString* javaScript) {}
+
+WebStateID FakeWebState::GetUniqueIdentifier() const {
+  return unique_identifier_;
+}
 
 const std::string& FakeWebState::GetContentsMimeType() const {
   return mime_type_;
@@ -214,6 +280,10 @@ const std::string& FakeWebState::GetContentsMimeType() const {
 
 bool FakeWebState::ContentIsHTML() const {
   return content_is_html_;
+}
+
+int FakeWebState::GetNavigationItemCount() const {
+  return navigation_item_count_;
 }
 
 const GURL& FakeWebState::GetVisibleURL() const {
@@ -224,28 +294,44 @@ const GURL& FakeWebState::GetLastCommittedURL() const {
   return url_;
 }
 
-GURL FakeWebState::GetCurrentURL(URLVerificationTrustLevel* trust_level) const {
-  if (trust_level) {
-    *trust_level = trust_level_;
-  }
+std::optional<GURL> FakeWebState::GetLastCommittedURLIfTrusted() const {
   return url_;
 }
 
-base::CallbackListSubscription FakeWebState::AddScriptCommandCallback(
-    const ScriptCommandCallback& callback,
-    const std::string& command_prefix) {
-  last_added_callback_ = callback;
-  last_command_prefix_ = command_prefix;
-  return callback_list_.Add(callback);
+void FakeWebState::SetLastActiveTime(base::Time time) {
+  last_active_time_ = time;
 }
 
 void FakeWebState::SetBrowserState(BrowserState* browser_state) {
+  if (browser_state_ == browser_state) {
+    return;
+  }
+
+  DetachFromBrowserState();
   browser_state_ = browser_state;
+  if (browser_state_) {
+    // Use `this` as the key, so that several FakeWebStates can track the
+    // destruction of the same BrowserState.
+    browser_state_->SetUserData(
+        this, std::make_unique<BrowserStateDestructionObserver>(
+                  base::BindOnce(&FakeWebState::OnBrowserStateDestroyed,
+                                 weak_factory_.GetWeakPtr())));
+  }
 }
 
-void FakeWebState::SetJSInjectionReceiver(
-    CRWJSInjectionReceiver* injection_receiver) {
-  injection_receiver_ = injection_receiver;
+void FakeWebState::DetachFromBrowserState() {
+  if (BrowserState* browser_state = browser_state_.get()) {
+    browser_state_ = nullptr;
+    browser_state->RemoveUserData(this);
+  }
+}
+
+void FakeWebState::OnBrowserStateDestroyed() {
+  browser_state_ = nullptr;
+}
+
+void FakeWebState::SetIsRealized(bool value) {
+  is_realized_ = value;
 }
 
 void FakeWebState::SetContentIsHTML(bool content_is_html) {
@@ -258,6 +344,9 @@ void FakeWebState::SetContentsMimeType(const std::string& mime_type) {
 
 void FakeWebState::SetTitle(const std::u16string& title) {
   title_ = title;
+  for (auto& observer : observers_) {
+    observer.TitleWasSet(this);
+  }
 }
 
 const std::u16string& FakeWebState::GetTitle() const {
@@ -288,46 +377,66 @@ bool FakeWebState::IsBeingDestroyed() const {
   return false;
 }
 
+bool FakeWebState::IsWebPageInFullscreenMode() const {
+  return false;
+}
+
+const FaviconStatus& FakeWebState::GetFaviconStatus() const {
+  return favicon_status_;
+}
+
+void FakeWebState::SetFaviconStatus(const FaviconStatus& favicon_status) {
+  favicon_status_ = favicon_status;
+}
+
 void FakeWebState::SetLoading(bool is_loading) {
-  if (is_loading == is_loading_)
+  if (is_loading == is_loading_) {
     return;
+  }
 
   is_loading_ = is_loading;
 
   if (is_loading) {
-    for (auto& observer : observers_)
+    for (auto& observer : observers_) {
       observer.DidStartLoading(this);
+    }
   } else {
-    for (auto& observer : observers_)
+    for (auto& observer : observers_) {
       observer.DidStopLoading(this);
+    }
   }
 }
 
 void FakeWebState::OnPageLoaded(
     PageLoadCompletionStatus load_completion_status) {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.PageLoaded(this, load_completion_status);
+  }
 }
 
 void FakeWebState::OnNavigationStarted(NavigationContext* navigation_context) {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.DidStartNavigation(this, navigation_context);
+  }
 }
 
 void FakeWebState::OnNavigationRedirected(
     NavigationContext* navigation_context) {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.DidRedirectNavigation(this, navigation_context);
+  }
 }
 
 void FakeWebState::OnNavigationFinished(NavigationContext* navigation_context) {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.DidFinishNavigation(this, navigation_context);
+  }
 }
 
 void FakeWebState::OnRenderProcessGone() {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.RenderProcessGone(this);
+  }
 }
 
 void FakeWebState::OnBackForwardStateChanged() {
@@ -342,21 +451,17 @@ void FakeWebState::OnVisibleSecurityStateChanged() {
   }
 }
 
-void FakeWebState::OnWebFrameDidBecomeAvailable(WebFrame* frame) {
-  for (auto& observer : observers_) {
-    observer.WebFrameDidBecomeAvailable(this, frame);
-  }
-}
-
-void FakeWebState::OnWebFrameWillBecomeUnavailable(WebFrame* frame) {
-  for (auto& observer : observers_) {
-    observer.WebFrameWillBecomeUnavailable(this, frame);
+void FakeWebState::OnDownloadFinished(NSError* error) {
+  if (error) {
+    [download_delegate_ downloadDidFailWithError:error];
+  } else {
+    [download_delegate_ downloadDidFinish];
   }
 }
 
 void FakeWebState::ShouldAllowRequest(
     NSURLRequest* request,
-    const WebStatePolicyDecider::RequestInfo& request_info,
+    WebStatePolicyDecider::RequestInfo request_info,
     WebStatePolicyDecider::PolicyDecisionCallback callback) {
   auto request_state_tracker =
       std::make_unique<PolicyDecisionStateTracker>(std::move(callback));
@@ -370,8 +475,9 @@ void FakeWebState::ShouldAllowRequest(
     policy_decider.ShouldAllowRequest(request, request_info,
                                       policy_decider_callback);
     num_decisions_requested++;
-    if (request_state_tracker_ptr->DeterminedFinalResult())
+    if (request_state_tracker_ptr->DeterminedFinalResult()) {
       break;
+    }
   }
 
   request_state_tracker_ptr->FinishedRequestingDecisions(
@@ -380,7 +486,7 @@ void FakeWebState::ShouldAllowRequest(
 
 void FakeWebState::ShouldAllowResponse(
     NSURLResponse* response,
-    bool for_main_frame,
+    WebStatePolicyDecider::ResponseInfo response_info,
     WebStatePolicyDecider::PolicyDecisionCallback callback) {
   auto response_state_tracker =
       std::make_unique<PolicyDecisionStateTracker>(std::move(callback));
@@ -391,28 +497,16 @@ void FakeWebState::ShouldAllowResponse(
       base::Owned(std::move(response_state_tracker)));
   int num_decisions_requested = 0;
   for (auto& policy_decider : policy_deciders_) {
-    policy_decider.ShouldAllowResponse(response, for_main_frame,
+    policy_decider.ShouldAllowResponse(response, response_info,
                                        policy_decider_callback);
     num_decisions_requested++;
-    if (response_state_tracker_ptr->DeterminedFinalResult())
+    if (response_state_tracker_ptr->DeterminedFinalResult()) {
       break;
+    }
   }
 
   response_state_tracker_ptr->FinishedRequestingDecisions(
       num_decisions_requested);
-}
-
-std::u16string FakeWebState::GetLastExecutedJavascript() const {
-  return last_executed_javascript_;
-}
-
-absl::optional<WebState::ScriptCommandCallback>
-FakeWebState::GetLastAddedCallback() const {
-  return last_added_callback_;
-}
-
-std::string FakeWebState::GetLastCommandPrefix() const {
-  return last_command_prefix_;
 }
 
 NSData* FakeWebState::GetLastLoadedData() const {
@@ -427,24 +521,45 @@ void FakeWebState::SetCurrentURL(const GURL& url) {
   url_ = url;
 }
 
+void FakeWebState::SetNavigationItemCount(int count) {
+  navigation_item_count_ = count;
+}
+
 void FakeWebState::SetVisibleURL(const GURL& url) {
   url_ = url;
-}
-
-void FakeWebState::SetTrustLevel(URLVerificationTrustLevel trust_level) {
-  trust_level_ = trust_level;
-}
-
-void FakeWebState::ClearLastExecutedJavascript() {
-  last_executed_javascript_.clear();
 }
 
 void FakeWebState::SetCanTakeSnapshot(bool can_take_snapshot) {
   can_take_snapshot_ = can_take_snapshot;
 }
 
+void FakeWebState::SetFindInteraction(id<CRWFindInteraction> find_interaction)
+    API_AVAILABLE(ios(16)) {
+  find_interaction_ = find_interaction;
+}
+
+void FakeWebState::SetWebViewDownload(
+    id<CRWWebViewDownload> web_view_download) {
+  web_view_download_ = web_view_download;
+}
+
 CRWWebViewProxyType FakeWebState::GetWebViewProxy() const {
   return web_view_proxy_;
+}
+
+std::optional<std::string> FakeWebState::GetUserAgentOverride() const {
+  return user_agent_override_;
+}
+
+void FakeWebState::SetUserAgentOverride(
+    std::optional<std::string> ua_override) {
+  if (ua_override && !net::HttpUtil::IsValidHeaderValue(*ua_override)) {
+    return;
+  }
+  if (ua_override && ua_override->empty()) {
+    ua_override = std::nullopt;
+  }
+  user_agent_override_ = std::move(ua_override);
 }
 
 void FakeWebState::AddPolicyDecider(WebStatePolicyDecider* decider) {
@@ -471,15 +586,16 @@ bool FakeWebState::CanTakeSnapshot() const {
   return can_take_snapshot_;
 }
 
-void FakeWebState::TakeSnapshot(const gfx::RectF& rect,
-                                SnapshotCallback callback) {
-  std::move(callback).Run(gfx::Image([[UIImage alloc] init]));
+void FakeWebState::TakeSnapshot(const CGRect rect, SnapshotCallback callback) {
+  std::move(callback).Run([[UIImage alloc] init]);
 }
 
-void FakeWebState::CreateFullPagePdf(
-    base::OnceCallback<void(NSData*)> callback) {
+void FakeWebState::CreatePdf(const CreatePdfParams& params,
+                             base::OnceCallback<void(NSData*)> callback) {
   std::move(callback).Run([[NSData alloc] init]);
 }
+
+void FakeWebState::CloseMediaPresentations() {}
 
 bool FakeWebState::SetSessionStateData(NSData* data) {
   return false;
@@ -487,6 +603,113 @@ bool FakeWebState::SetSessionStateData(NSData* data) {
 
 NSData* FakeWebState::SessionStateData() {
   return nil;
+}
+
+PermissionState FakeWebState::GetStateForPermission(
+    Permission permission) const {
+  switch (permission) {
+    case PermissionCamera:
+      return camera_permission_state_;
+    case PermissionMicrophone:
+      return microphone_permission_state_;
+  }
+  return PermissionStateNotAccessible;
+}
+
+void FakeWebState::SetStateForPermission(PermissionState state,
+                                         Permission permission) {
+  bool should_notify_observers = false;
+  switch (permission) {
+    case PermissionCamera:
+      if (camera_permission_state_ != state) {
+        should_notify_observers = true;
+      }
+      camera_permission_state_ = state;
+      break;
+    case PermissionMicrophone:
+      if (microphone_permission_state_ != state) {
+        should_notify_observers = true;
+      }
+      microphone_permission_state_ = state;
+      break;
+  }
+  if (should_notify_observers) {
+    for (auto& observer : observers_) {
+      observer.PermissionStateChanged(this, permission);
+    }
+  }
+}
+
+NSDictionary<NSNumber*, NSNumber*>* FakeWebState::GetStatesForAllPermissions()
+    const {
+  return @{
+    @(PermissionCamera) : @(camera_permission_state_),
+    @(PermissionMicrophone) : @(microphone_permission_state_)
+  };
+}
+
+void FakeWebState::DownloadCurrentPage(
+    NSString* destination_file,
+    id<CRWWebViewDownloadDelegate> delegate,
+    void (^handler)(id<CRWWebViewDownload>)) {
+  download_delegate_ = delegate;
+  handler(web_view_download_);
+}
+
+bool FakeWebState::IsFindInteractionSupported() {
+  return true;
+}
+
+bool FakeWebState::IsFindInteractionEnabled() {
+  return is_find_interaction_enabled_;
+}
+
+void FakeWebState::SetFindInteractionEnabled(bool enabled) {
+  is_find_interaction_enabled_ = enabled;
+}
+
+id<CRWFindInteraction> FakeWebState::GetFindInteraction()
+    API_AVAILABLE(ios(16)) {
+  return is_find_interaction_enabled_ ? find_interaction_ : nil;
+}
+
+id FakeWebState::GetActivityItem() API_AVAILABLE(ios(16.4)) {
+  return nil;
+}
+
+bool FakeWebState::IsCustomOpenPanelSupported() const {
+  return supports_custom_open_panel_;
+}
+
+void FakeWebState::SetCustomOpenPanelSupported(bool supports) {
+  supports_custom_open_panel_ = supports;
+}
+
+UIColor* FakeWebState::GetThemeColor() {
+  return nil;
+}
+
+UIColor* FakeWebState::GetUnderPageBackgroundColor() {
+  return nil;
+}
+
+FakeWebStateWithPolicyCache::FakeWebStateWithPolicyCache(
+    BrowserState* browser_state)
+    : FakeWebState(),
+      certificate_policy_cache_(
+          std::make_unique<web::SessionCertificatePolicyCacheImpl>(
+              browser_state)) {}
+
+FakeWebStateWithPolicyCache::~FakeWebStateWithPolicyCache() {}
+
+const SessionCertificatePolicyCache*
+FakeWebStateWithPolicyCache::GetSessionCertificatePolicyCache() const {
+  return certificate_policy_cache_.get();
+}
+
+SessionCertificatePolicyCache*
+FakeWebStateWithPolicyCache::GetSessionCertificatePolicyCache() {
+  return certificate_policy_cache_.get();
 }
 
 }  // namespace web

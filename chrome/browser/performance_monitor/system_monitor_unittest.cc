@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,7 @@ const int kFakeFreePhysMemoryMb = 42;
 
 class MockMetricsMonitorObserver : public SystemObserver {
  public:
-  ~MockMetricsMonitorObserver() override {}
+  ~MockMetricsMonitorObserver() override = default;
   MOCK_METHOD1(OnFreePhysicalMemoryMbSample, void(int free_phys_memory_mb));
   MOCK_METHOD1(OnSystemMetricsStruct,
                void(const base::SystemMetrics& system_metrics));
@@ -32,14 +32,16 @@ class MockMetricsMonitorObserver : public SystemObserver {
 class TestMetricEvaluatorsHelper : public MetricEvaluatorsHelper {
  public:
   TestMetricEvaluatorsHelper() = default;
+
+  TestMetricEvaluatorsHelper(const TestMetricEvaluatorsHelper&) = delete;
+  TestMetricEvaluatorsHelper& operator=(const TestMetricEvaluatorsHelper&) =
+      delete;
+
   ~TestMetricEvaluatorsHelper() override = default;
 
-  absl::optional<int> GetFreePhysicalMemoryMb() override {
+  std::optional<int> GetFreePhysicalMemoryMb() override {
     return kFakeFreePhysMemoryMb;
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestMetricEvaluatorsHelper);
 };
 
 }  // namespace
@@ -51,6 +53,9 @@ class SystemMonitorTest : public testing::Test {
 
   SystemMonitorTest()
       : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  SystemMonitorTest(const SystemMonitorTest&) = delete;
+  SystemMonitorTest& operator=(const SystemMonitorTest&) = delete;
 
   void SetUp() override {
     EXPECT_EQ(nullptr, SystemMonitor::Get());
@@ -81,8 +86,6 @@ class SystemMonitorTest : public testing::Test {
 
  protected:
   base::test::TaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(SystemMonitorTest);
 };
 
 TEST_F(SystemMonitorTest, GetReturnsSingleInstance) {

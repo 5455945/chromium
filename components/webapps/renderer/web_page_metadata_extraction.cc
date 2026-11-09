@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/strings/string_util.h"
 #include "components/webapps/common/web_page_metadata.mojom.h"
 #include "third_party/blink/public/platform/web_icon_sizes_parser.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -41,7 +42,7 @@ void AddInstallIcon(const WebElement& link,
 
   mojom::WebPageIconInfoPtr icon_info(mojom::WebPageIconInfo::New());
   if (link.HasAttribute("sizes")) {
-    blink::WebVector<gfx::Size> icon_sizes =
+    std::vector<gfx::Size> icon_sizes =
         blink::WebIconSizesParser::ParseIconSizes(link.GetAttribute("sizes"));
     if (icon_sizes.size() == 1 && icon_sizes[0].width() != 0 &&
         icon_sizes[0].height() == icon_sizes[0].width()) {
@@ -62,8 +63,11 @@ mojom::WebPageMetadataPtr ExtractWebPageMetadata(WebLocalFrame* frame) {
     return metadata;
 
   WebElement head = document.Head();
-  if (head.IsNull())
+  if (head.IsNull()) {
     return metadata;
+  }
+
+  metadata->title = document.Title().Utf16();
 
   GURL document_url = document.Url();
   for (WebNode child = head.FirstChild(); !child.IsNull();
@@ -81,10 +85,11 @@ mojom::WebPageMetadataPtr ExtractWebPageMetadata(WebLocalFrame* frame) {
       //
       // Bookmark apps also support "apple-touch-icon" and
       // "apple-touch-icon-precomposed".
-      if (base::LowerCaseEqualsASCII(rel, "icon") ||
-          base::LowerCaseEqualsASCII(rel, "shortcut icon") ||
-          base::LowerCaseEqualsASCII(rel, "apple-touch-icon") ||
-          base::LowerCaseEqualsASCII(rel, "apple-touch-icon-precomposed")) {
+      if (base::EqualsCaseInsensitiveASCII(rel, "icon") ||
+          base::EqualsCaseInsensitiveASCII(rel, "shortcut icon") ||
+          base::EqualsCaseInsensitiveASCII(rel, "apple-touch-icon") ||
+          base::EqualsCaseInsensitiveASCII(rel,
+                                           "apple-touch-icon-precomposed")) {
         AddInstallIcon(elem, &metadata->icons);
       }
     } else if (elem.HasHTMLTagName("meta") && elem.HasAttribute("name")) {
@@ -101,10 +106,10 @@ mojom::WebPageMetadataPtr ExtractWebPageMetadata(WebLocalFrame* frame) {
         if (!metadata->application_url.is_valid())
           metadata->application_url = GURL();
       } else if (name == "mobile-web-app-capable" &&
-                 base::LowerCaseEqualsASCII(content.Utf16(), "yes")) {
+                 base::EqualsCaseInsensitiveASCII(content.Utf16(), "yes")) {
         metadata->mobile_capable = mojom::WebPageMobileCapable::ENABLED;
       } else if (name == "apple-mobile-web-app-capable" &&
-                 base::LowerCaseEqualsASCII(content.Utf16(), "yes") &&
+                 base::EqualsCaseInsensitiveASCII(content.Utf16(), "yes") &&
                  metadata->mobile_capable ==
                      mojom::WebPageMobileCapable::UNSPECIFIED) {
         metadata->mobile_capable = mojom::WebPageMobileCapable::ENABLED_APPLE;

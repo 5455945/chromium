@@ -1,35 +1,29 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.device;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.CommandLine;
-import org.chromium.base.ContextUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.SysUtils;
-import org.chromium.chrome.browser.flags.CachedFeatureFlags;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
-import org.chromium.ui.base.DeviceFormFactor;
 
 /**
  * This class is used to turn on and off certain features for different types of
  * devices.
  */
+@NullMarked
 public class DeviceClassManager {
-    private static DeviceClassManager sInstance;
+    private static @Nullable DeviceClassManager sInstance;
 
     // Set of features that can be enabled/disabled
-    private boolean mEnableLayerDecorationCache;
-    private boolean mEnableAccessibilityLayout;
-    private boolean mEnableAnimations;
-    private boolean mEnablePrerendering;
-    private boolean mEnableToolbarSwipe;
+    private final boolean mEnableLayerDecorationCache;
+    private final boolean mEnableAnimations;
+    private final boolean mEnablePrerendering;
+    private final boolean mEnableToolbarSwipe;
 
     private final boolean mEnableFullscreen;
 
@@ -48,32 +42,22 @@ public class DeviceClassManager {
         // Device based configurations.
         if (SysUtils.isLowEndDevice()) {
             mEnableLayerDecorationCache = true;
-            mEnableAccessibilityLayout = true;
             mEnableAnimations = false;
             mEnablePrerendering = false;
             mEnableToolbarSwipe = false;
         } else {
             mEnableLayerDecorationCache = true;
-            mEnableAccessibilityLayout = false;
             mEnableAnimations = true;
             mEnablePrerendering = true;
             mEnableToolbarSwipe = true;
         }
 
-        if (DeviceFormFactor.isTablet()) {
-            mEnableAccessibilityLayout = false;
-        }
-
         // Flag based configurations.
         CommandLine commandLine = CommandLine.getInstance();
-        mEnableAccessibilityLayout |=
-                commandLine.hasSwitch(ChromeSwitches.ENABLE_ACCESSIBILITY_TAB_SWITCHER);
-        mEnableFullscreen = !commandLine.hasSwitch(ChromeSwitches.DISABLE_FULLSCREEN);
-
-        // Related features.
-        if (mEnableAccessibilityLayout) {
-            mEnableAnimations = false;
-        }
+        // To provide a desktop like behavior on an immersive XR device the full screen mode is
+        // disabled on the browser. It is also not controlled by the command line argument.
+        mEnableFullscreen =
+                !DeviceInfo.isXr() && !commandLine.hasSwitch(ChromeSwitches.DISABLE_FULLSCREEN);
     }
 
     /**
@@ -81,23 +65,6 @@ public class DeviceClassManager {
      */
     public static boolean enableLayerDecorationCache() {
         return getInstance().mEnableLayerDecorationCache;
-    }
-
-    /**
-     * @return Whether or not should use the accessibility tab switcher.
-     */
-    public static boolean enableAccessibilityLayout() {
-        // TODO(crbug.com/1007598): Support TabGrid and TabGroup in Accessibility mode.
-        if (isPhone()
-                && CachedFeatureFlags.isEnabled(ChromeFeatureList.TAB_GROUPS_CONTINUATION_ANDROID)
-                && CachedFeatureFlags.isEnabled(ChromeFeatureList.TAB_GROUPS_ANDROID)) {
-            return false;
-        }
-
-        if (getInstance().mEnableAccessibilityLayout) return true;
-        if (!ChromeAccessibilityUtil.get().isAccessibilityEnabled()) return false;
-        return SharedPreferencesManager.getInstance().readBoolean(
-                ChromePreferenceKeys.ACCESSIBILITY_TAB_SWITCHER, true);
     }
 
     /**
@@ -111,10 +78,7 @@ public class DeviceClassManager {
      * @return Whether or not we are showing animations.
      */
     public static boolean enableAnimations() {
-        if (!getInstance().mEnableAnimations) return false;
-        if (!ChromeAccessibilityUtil.get().isAccessibilityEnabled()) return true;
-        return !SharedPreferencesManager.getInstance().readBoolean(
-                ChromePreferenceKeys.ACCESSIBILITY_TAB_SWITCHER, true);
+        return getInstance().mEnableAnimations;
     }
 
     /**
@@ -131,15 +95,7 @@ public class DeviceClassManager {
         return getInstance().mEnableToolbarSwipe;
     }
 
-    private static boolean isPhone() {
-        return !DeviceFormFactor.isNonMultiDisplayContextOnTablet(
-                ContextUtils.getApplicationContext());
-    }
-
-    /**
-     * Reset the instance for testing.
-     */
-    @VisibleForTesting
+    /** Reset the instance for testing. */
     public static void resetForTesting() {
         sInstance = null;
     }

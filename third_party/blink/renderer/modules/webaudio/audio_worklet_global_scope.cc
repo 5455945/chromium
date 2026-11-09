@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,15 +11,22 @@
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/serialization/unpacked_serialized_script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_worklet_processor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_blink_audio_worklet_process_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_blink_audio_worklet_processor_constructor.h"
+#include "third_party/blink/renderer/core/messaging/message_port.h"
+#include "third_party/blink/renderer/core/workers/global_scope_creation_params.h"
+#include "third_party/blink/renderer/core/workers/worker_backing_thread.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_object_proxy.h"
+#include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_definition.h"
 #include "third_party/blink/renderer/modules/webaudio/cross_thread_audio_worklet_processor_info.h"
 #include "third_party/blink/renderer/platform/bindings/callback_method_retriever.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -33,7 +40,7 @@ AudioWorkletGlobalScope::AudioWorkletGlobalScope(
   // are generally put in a background mode (as they are non-visible). Audio is
   // an exception here, requiring low-latency behavior similar to any visible
   // state.
-  GetIsolate()->IsolateInForegroundNotification();
+  GetThread()->GetWorkerBackingThread().SetForegrounded();
 }
 
 AudioWorkletGlobalScope::~AudioWorkletGlobalScope() = default;
@@ -52,7 +59,7 @@ void AudioWorkletGlobalScope::registerProcessor(
   DCHECK(IsContextThread());
 
   // 1. If name is an empty string, throw a NotSupportedError.
-  if (name.IsEmpty()) {
+  if (name.empty()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "The processor name cannot be empty.");
     return;
@@ -61,9 +68,10 @@ void AudioWorkletGlobalScope::registerProcessor(
   // 2. If name already exists as a key in the node name to processor
   //    constructor map, throw a NotSupportedError.
   if (processor_definition_map_.Contains(name)) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "An AudioWorkletProcessor with name:\"" +
-                                          name + "\" is already registered.");
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        StrCat({"An AudioWorkletProcessor with name:\"", name,
+                "\" is already registered."}));
     return;
   }
 
@@ -71,8 +79,8 @@ void AudioWorkletGlobalScope::registerProcessor(
   //    a TypeError .
   if (!processor_ctor->IsConstructor()) {
     exception_state.ThrowTypeError(
-        "The provided class definition of \"" + name +
-        "\" AudioWorkletProcessor is not a constructor.");
+        StrCat({"The provided class definition of \"", name,
+                "\" AudioWorkletProcessor is not a constructor."}));
     return;
   }
 
@@ -81,35 +89,27 @@ void AudioWorkletGlobalScope::registerProcessor(
   //    TypeError .
   CallbackMethodRetriever retriever(processor_ctor);
   retriever.GetPrototypeObject(exception_state);
-  if (exception_state.HadException())
+  if (exception_state.HadException()) {
     return;
-
-  // TODO(crbug.com/1077911): Do not extract process() function at the
-  // registration step.
-  v8::Local<v8::Function> v8_process =
-      retriever.GetMethodOrThrow("process", exception_state);
-  if (exception_state.HadException())
-    return;
-  V8BlinkAudioWorkletProcessCallback* process =
-      V8BlinkAudioWorkletProcessCallback::Create(v8_process);
+  }
 
   // The sufficient information to build a AudioWorkletProcessorDefinition
   // is collected. The rest of registration process is optional.
   // (i.e. parameterDescriptors)
   AudioWorkletProcessorDefinition* definition =
-      AudioWorkletProcessorDefinition::Create(name, processor_ctor, process);
+      AudioWorkletProcessorDefinition::Create(name, processor_ctor);
 
+  // 6. Let parameterDescriptorsValue be the result of Get(O=processorCtor,
+  //    P="parameterDescriptors").
   v8::Isolate* isolate = processor_ctor->GetIsolate();
   v8::Local<v8::Context> current_context = isolate->GetCurrentContext();
-
   v8::Local<v8::Value> v8_parameter_descriptors;
   {
-    v8::TryCatch try_catch(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state);
     if (!processor_ctor->CallbackObject()
              ->Get(current_context,
                    V8AtomicString(isolate, "parameterDescriptors"))
              .ToLocal(&v8_parameter_descriptors)) {
-      exception_state.RethrowV8Exception(try_catch.Exception());
       return;
     }
   }
@@ -123,8 +123,9 @@ void AudioWorkletGlobalScope::registerProcessor(
     const HeapVector<Member<AudioParamDescriptor>>& given_param_descriptors =
         NativeValueTraits<IDLSequence<AudioParamDescriptor>>::NativeValue(
             isolate, v8_parameter_descriptors, exception_state);
-    if (exception_state.HadException())
+    if (exception_state.HadException()) {
       return;
+    }
 
     // 7.2. Let paramNames be an empty Array.
     HeapVector<Member<AudioParamDescriptor>> sanitized_param_descriptors;
@@ -136,13 +137,27 @@ void AudioWorkletGlobalScope::registerProcessor(
       if (!sanitized_names.insert(new_param_name).is_new_entry) {
         exception_state.ThrowDOMException(
             DOMExceptionCode::kNotSupportedError,
-            "Found a duplicate name \"" + new_param_name +
-                "\" in parameterDescriptors() from the AudioWorkletProcessor " +
-                "definition of \"" + name + "\".");
+            StrCat(
+                {"Found a duplicate name \"", new_param_name,
+                 "\" in parameterDescriptors() from the AudioWorkletProcessor "
+                 "definition of \"",
+                 name, "\"."}));
         return;
       }
 
-      // TODO(crbug.com/1078546): The steps 7.3.3 ~ 7.3.6 are missing.
+      // 7.3.3 - 7.3.6. Inspect default value range within [minValue, maxValue].
+      float default_value = given_descriptor->defaultValue();
+      float min_value = given_descriptor->minValue();
+      float max_value = given_descriptor->maxValue();
+      if ((default_value < min_value) || (default_value > max_value)) {
+        exception_state.ThrowDOMException(
+            DOMExceptionCode::kInvalidStateError,
+            Format("The default value, {:g}, in \"{}\" parameterDescriptors() "
+                   "from the AudioWorkletProcessor is out of the range [{:g}, "
+                   "{:g}].",
+                   default_value, new_param_name, min_value, max_value));
+        return;
+      }
 
       sanitized_param_descriptors.push_back(given_descriptor);
     }
@@ -158,7 +173,7 @@ void AudioWorkletGlobalScope::registerProcessor(
   // parameterDescriptorSequence to the node name to parameter descriptor map
   // of the associated BaseAudioContext.
   if (object_proxy_) {
-    // TODO(crbug.com/1223178): |object_proxy_| is designed to outlive the
+    // TODO(crbug.com/1223178): `object_proxy_` is designed to outlive the
     // global scope, so we don't need to null check but the unit test is not
     // able to replicate the cross-thread messaging logic yet, so we skip this
     // call in unit tests.
@@ -166,14 +181,16 @@ void AudioWorkletGlobalScope::registerProcessor(
   }
 }
 
-AudioWorkletProcessor* AudioWorkletGlobalScope::CreateProcessor(
+base::expected<AudioWorkletProcessor*, AudioWorkletProcessorErrorDetails>
+AudioWorkletGlobalScope::CreateProcessor(
     const String& name,
     MessagePortChannel message_port_channel,
     scoped_refptr<SerializedScriptValue> node_options) {
   DCHECK(IsContextThread());
+  CHECK(node_options);
 
   // The registered definition is already checked by AudioWorkletNode
-  // construction process, so the |definition| here must be valid.
+  // construction process, so the `definition` here must be valid.
   AudioWorkletProcessorDefinition* definition = FindDefinition(name);
   DCHECK(definition);
 
@@ -189,7 +206,7 @@ AudioWorkletProcessor* AudioWorkletGlobalScope::CreateProcessor(
   DCHECK(!processor_creation_params_);
   // There is no way to pass additional constructor arguments that are not
   // described in Web IDL, the static constructor will look up
-  // |processor_creation_params_| in the global scope to perform the
+  // `processor_creation_params_` in the global scope to perform the
   // construction properly.
   base::AutoReset<std::unique_ptr<ProcessorCreationParams>>
       processor_creation_extra_param(
@@ -197,31 +214,67 @@ AudioWorkletProcessor* AudioWorkletGlobalScope::CreateProcessor(
           std::make_unique<ProcessorCreationParams>(
               name, std::move(message_port_channel)));
 
-  ScriptValue options(isolate,
-                      ToV8(node_options->Deserialize(isolate), script_state));
-
-  ScriptValue instance;
-  if (!definition->ConstructorFunction()->Construct(options).To(&instance)) {
-    return nullptr;
+  // Make sure that the transferred `node_options` is deserializable.
+  // See https://crbug.com/1429681 for details.
+  if (!node_options->CanDeserializeIn(this)) {
+    AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+        mojom::blink::ConsoleMessageSource::kOther,
+        mojom::blink::ConsoleMessageLevel::kWarning,
+        "Transferred AudioWorkletNodeOptions could not be deserialized because "
+        "it contains an object of a type not available in "
+        "AudioWorkletGlobalScope. See https://crbug.com/1429681 for details."));
+    return base::unexpected(AudioWorkletProcessorErrorDetails::Create(
+        AudioWorkletProcessorErrorState::kConstructionError, name,
+        "Transferred AudioWorkletNodeOptions could not be deserialized "
+        "because it contains an object of a type not available in "
+        "AudioWorkletGlobalScope."));
   }
 
-  // ToImplWithTypeCheck() may return nullptr when the type does not match.
-  AudioWorkletProcessor* processor =
-      V8AudioWorkletProcessor::ToImplWithTypeCheck(isolate, instance.V8Value());
+  UnpackedSerializedScriptValue* unpacked_node_options =
+      MakeGarbageCollected<UnpackedSerializedScriptValue>(
+          std::move(node_options));
+  ScriptValue deserialized_options(
+      isolate, unpacked_node_options->Deserialize(isolate));
+  if (unpacked_node_options->Value()->HasDeserializationError()) {
+    return base::unexpected(AudioWorkletProcessorErrorDetails::Create(
+        AudioWorkletProcessorErrorState::kConstructionError, name,
+        "Failed to deserialize AudioWorkletNodeOptions."));
+  }
 
-  if (processor) {
-    processor_instances_.push_back(processor);
+  ScriptValue instance;
+  if (!definition->ConstructorFunction()
+           ->Construct(deserialized_options)
+           .To(&instance)) {
+    return base::unexpected(AudioWorkletProcessorErrorDetails::Create(
+        AudioWorkletProcessorErrorState::kConstructionError, name,
+        "Invoking the user-supplied constructor failed.",
+        AudioWorkletProcessorErrorDetails::ExtractScriptException(
+            isolate, script_state->GetContext(), try_catch)));
+  }
+
+  // ToWrappable() returns nullptr when the constructor returned an object that
+  // is not an AudioWorkletProcessor.
+  AudioWorkletProcessor* processor =
+      V8AudioWorkletProcessor::ToWrappable(isolate, instance.V8Value());
+  if (!processor) {
+    return base::unexpected(AudioWorkletProcessorErrorDetails::Create(
+        AudioWorkletProcessorErrorState::kConstructionError, name,
+        "Constructor did not return an AudioWorkletProcessor."));
   }
 
   return processor;
 }
 
 AudioWorkletProcessorDefinition* AudioWorkletGlobalScope::FindDefinition(
-    const String& name) {
-  return processor_definition_map_.at(name);
+    const String& name) const {
+  const auto it = processor_definition_map_.find(name);
+  if (it == processor_definition_map_.end()) {
+    return nullptr;
+  }
+  return it->value.Get();
 }
 
-unsigned AudioWorkletGlobalScope::NumberOfRegisteredDefinitions() {
+unsigned AudioWorkletGlobalScope::NumberOfRegisteredDefinitions() const {
   return processor_definition_map_.size();
 }
 
@@ -229,17 +282,18 @@ std::unique_ptr<Vector<CrossThreadAudioWorkletProcessorInfo>>
 AudioWorkletGlobalScope::WorkletProcessorInfoListForSynchronization() {
   auto processor_info_list =
       std::make_unique<Vector<CrossThreadAudioWorkletProcessorInfo>>();
-  for (auto definition_entry : processor_definition_map_) {
-    if (!definition_entry.value->IsSynchronized()) {
-      definition_entry.value->MarkAsSynchronized();
-      processor_info_list->emplace_back(*definition_entry.value);
+  for (const auto& definition : processor_definition_map_.Values()) {
+    if (!definition->IsSynchronized()) {
+      definition->MarkAsSynchronized();
+      processor_info_list->emplace_back(*definition);
     }
   }
   return processor_info_list;
 }
 
-ProcessorCreationParams* AudioWorkletGlobalScope::GetProcessorCreationParams() {
-  return processor_creation_params_.get();
+std::unique_ptr<ProcessorCreationParams>
+AudioWorkletGlobalScope::GetProcessorCreationParams() {
+  return std::move(processor_creation_params_);
 }
 
 void AudioWorkletGlobalScope::SetCurrentFrame(size_t current_frame) {
@@ -248,6 +302,15 @@ void AudioWorkletGlobalScope::SetCurrentFrame(size_t current_frame) {
 
 void AudioWorkletGlobalScope::SetSampleRate(float sample_rate) {
   sample_rate_ = sample_rate;
+}
+
+void AudioWorkletGlobalScope::SetPort(MessagePort* port) {
+  port_ = port;
+}
+
+void AudioWorkletGlobalScope::SetRenderQuantumSize(
+    uint32_t render_quantum_size) {
+  render_quantum_size_ = render_quantum_size;
 }
 
 double AudioWorkletGlobalScope::currentTime() const {
@@ -262,7 +325,7 @@ void AudioWorkletGlobalScope::SetObjectProxy(
 
 void AudioWorkletGlobalScope::Trace(Visitor* visitor) const {
   visitor->Trace(processor_definition_map_);
-  visitor->Trace(processor_instances_);
+  visitor->Trace(port_);
   WorkletGlobalScope::Trace(visitor);
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/types/optional_util.h"
 #include "build/build_config.h"
-#include "third_party/blink/public/common/privacy_budget/identifiability_metric_builder.h"
-#include "third_party/blink/public/common/privacy_budget/identifiability_metrics.h"
-#include "third_party/blink/public/common/privacy_budget/identifiability_study_settings.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -21,7 +20,7 @@
 #include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/image-encoders/image_encoder_utils.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
@@ -29,8 +28,12 @@
 #include "third_party/blink/renderer/platform/scheduler/public/worker_pool.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-
+#include "third_party/blink/renderer/platform/wtf/text/base64.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/encode/SkPngRustEncoder.h"
 
 namespace blink {
 
@@ -38,13 +41,13 @@ namespace {
 
 // small slack period between deadline and current time for safety
 constexpr base::TimeDelta kCreateBlobSlackBeforeDeadline =
-    base::TimeDelta::FromMilliseconds(1);
+    base::Milliseconds(1);
 constexpr base::TimeDelta kEncodeRowSlackBeforeDeadline =
-    base::TimeDelta::FromMicroseconds(100);
+    base::Microseconds(100);
 
 /* The value is based on user statistics on Nov 2017. */
-#if (defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC) || \
-     defined(OS_WIN))
+#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+     BUILDFLAG(IS_WIN))
 const double kIdleTaskStartTimeoutDelayMs = 1000.0;
 #else
 const double kIdleTaskStartTimeoutDelayMs = 4000.0;  // For ChromeOS, Mobile
@@ -53,7 +56,7 @@ const double kIdleTaskStartTimeoutDelayMs = 4000.0;  // For ChromeOS, Mobile
 /* The value is based on user statistics on May 2018. */
 // We should be more lenient on completion timeout delay to ensure that the
 // switch from idle to main thread only happens to a minority of toBlob calls
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 // Png image encoding on 4k by 4k canvas on Mac HDD takes 5.7+ seconds
 // We see that 99% users require less than 5 seconds.
 const double kIdleTaskCompleteTimeoutDelayMs = 5700.0;
@@ -74,7 +77,7 @@ bool IsEncodeRowDeadlineNearOrPassed(base::TimeTicks deadline,
   int row_encode_time_us = 1000 * (kIdleTaskCompleteTimeoutDelayMs / 4000.0) *
                            (image_width / 4000.0);
   base::TimeDelta row_encode_time_delta =
-      base::TimeDelta::FromMicroseconds(row_encode_time_us);
+      base::Microseconds(row_encode_time_us);
   return base::TimeTicks::Now() >=
          deadline - row_encode_time_delta - kEncodeRowSlackBeforeDeadline;
 }
@@ -132,15 +135,6 @@ void RecordScaledDurationHistogram(ImageEncodingMimeType mime_type,
   }
 }
 
-SkColorType GetColorTypeForConversion(SkColorType color_type) {
-  if (color_type == kRGBA_8888_SkColorType ||
-      color_type == kBGRA_8888_SkColorType) {
-    return color_type;
-  }
-
-  return kN32_SkColorType;
-}
-
 }  // anonymous namespace
 
 CanvasAsyncBlobCreator::CanvasAsyncBlobCreator(
@@ -149,15 +143,13 @@ CanvasAsyncBlobCreator::CanvasAsyncBlobCreator(
     ToBlobFunctionType function_type,
     base::TimeTicks start_time,
     ExecutionContext* context,
-    const IdentifiableToken& input_digest,
-    ScriptPromiseResolver* resolver)
+    ScriptPromiseResolver<Blob>* resolver)
     : CanvasAsyncBlobCreator(image,
                              options,
                              function_type,
                              nullptr,
                              start_time,
                              context,
-                             input_digest,
                              resolver) {}
 
 CanvasAsyncBlobCreator::CanvasAsyncBlobCreator(
@@ -167,99 +159,69 @@ CanvasAsyncBlobCreator::CanvasAsyncBlobCreator(
     V8BlobCallback* callback,
     base::TimeTicks start_time,
     ExecutionContext* context,
-    const IdentifiableToken& input_digest,
-    ScriptPromiseResolver* resolver)
+    ScriptPromiseResolver<Blob>* resolver)
     : fail_encoder_initialization_for_test_(false),
       enforce_idle_encoding_for_test_(false),
-      image_(image),
       context_(context),
-      encode_options_(options),
       function_type_(function_type),
       start_time_(start_time),
       static_bitmap_image_loaded_(false),
-      input_digest_(input_digest),
       callback_(callback),
       script_promise_resolver_(resolver) {
-  DCHECK(image);
-  DCHECK(context);
+  CHECK(context);
+  CHECK(image);
 
-  mime_type_ = ImageEncoderUtils::ToEncodingMimeType(
-      encode_options_->type(),
-      ImageEncoderUtils::kEncodeReasonConvertToBlobPromise);
+  mime_type_ = ImageEncoderUtils::ToEncodingMimeType(options->type());
 
   // We use pixmap to access the image pixels. Make the image unaccelerated if
-  // necessary.
-  image_ = image_->MakeUnaccelerated();
+  // necessary. May return nullptr if GPU context lost or readback buffer
+  // allocation failed.
+  image_ = image->MakeUnaccelerated();
 
-  sk_sp<SkImage> skia_image =
-      image_->PaintImageForCurrentFrame().GetSwSkImage();
-  DCHECK(skia_image);
-  DCHECK(!skia_image->isTextureBacked());
+  if (image_) {
+    skia_image_ = image_->PaintImageForCurrentFrame().GetSwSkImage();
+    CHECK(skia_image_);
+    CHECK(!skia_image_->isTextureBacked());
 
-  // If image is lazy decoded, call readPixels() to trigger decoding.
-  if (skia_image->isLazyGenerated()) {
-    SkImageInfo info = SkImageInfo::MakeN32Premul(1, 1);
-    uint8_t pixel[info.bytesPerPixel()];
-    skia_image->readPixels(info, pixel, info.minRowBytes(), 0, 0);
-  }
-
-  // For kHTMLCanvasToBlobCallback and kOffscreenCanvasConvertToBlobPromise
-  // to-blob function types, we keep the color space of the image and save
-  // it in the info if color management is enabled; otherwise, we color convert
-  // to sRGB and do not tag the image with any color space info.
-  // For kHTMLCanvasConvertToBlobPromise to-blob function type, we color
-  // covnert to the requested color space and pixel format.
-  if (function_type_ != kHTMLCanvasConvertToBlobPromise) {
-    if (skia_image->peekPixels(&src_data_))
-      static_bitmap_image_loaded_ = true;
-  } else {
-    sk_sp<SkColorSpace> blob_color_space =
-        BlobColorSpaceToSkColorSpace(encode_options_->colorSpace());
-    bool needs_color_space_conversion = !ApproximatelyEqualSkColorSpaces(
-        skia_image->refColorSpace(), blob_color_space);
-    if (needs_color_space_conversion && !skia_image->colorSpace()) {
-      skia_image->peekPixels(&src_data_);
-      src_data_.setColorSpace(SkColorSpace::MakeSRGB());
-      skia_image = SkImage::MakeRasterCopy(src_data_);
-      DCHECK(skia_image->colorSpace());
+    const SkColorInfo target_color_info =
+        ImageEncoderUtils::GetColorInfoForEncoder(
+            skia_image_->imageInfo().colorInfo(), image_->GetHdrMetadata());
+    // It is more efficient to do alpha un-multiplication inside the decoder.
+    // https://crbug.com/557350372
+    if (target_color_info.makeAlphaType(skia_image_->imageInfo().alphaType()) !=
+        skia_image_->imageInfo().colorInfo()) {
+      SkBitmap bitmap;
+      if (bitmap.tryAllocPixels(SkImageInfo::Make(skia_image_->dimensions(),
+                                                  target_color_info)) &&
+          skia_image_->readPixels(bitmap.pixmap(), 0, 0)) {
+        bitmap.setImmutable();
+        skia_image_ = bitmap.asImage();
+      }
     }
 
-    SkColorType target_color_type =
-        GetColorTypeForConversion(skia_image->colorType());
-    if (encode_options_->pixelFormat() == kRGBA16ImagePixelFormatName)
-      target_color_type = kRGBA_F16_SkColorType;
-    // We can do color space and color type conversion together.
-    if (needs_color_space_conversion) {
-      image_ = UnacceleratedStaticBitmapImage::Create(skia_image);
-      image_ = image_->ConvertToColorSpace(blob_color_space, target_color_type);
-      skia_image = image_->PaintImageForCurrentFrame().GetSwSkImage();
-    } else if (skia_image->colorType() != target_color_type) {
-      size_t data_length = skia_image->width() * skia_image->height() *
-                           SkColorTypeBytesPerPixel(target_color_type);
-      png_data_helper_ = SkData::MakeUninitialized(data_length);
-      SkImageInfo info = SkImageInfo::Make(
-          skia_image->width(), skia_image->height(), target_color_type,
-          skia_image->alphaType(), skia_image->refColorSpace());
-      SkPixmap src_data_f16(info, png_data_helper_->writable_data(),
-                            info.minRowBytes());
-      skia_image->readPixels(src_data_f16, 0, 0);
-      skia_image = SkImage::MakeFromRaster(src_data_f16, nullptr, nullptr);
-      image_ = UnacceleratedStaticBitmapImage::Create(skia_image);
+    // If image is lazy decoded, call readPixels() to trigger decoding.
+    if (skia_image_->isLazyGenerated()) {
+      SkImageInfo info = SkImageInfo::MakeN32Premul(1, 1);
+      // MakeN32Premul uses the kN32_SkColorType, which has 8 bytes per pixel.
+      // Sadly the compiler can't determine that automatically.
+      constexpr int kMaxBytesPerPixel = 16;
+      CHECK_LE(info.bytesPerPixel(), kMaxBytesPerPixel);
+      uint8_t pixel[kMaxBytesPerPixel];
+      skia_image_->readPixels(info, pixel, info.minRowBytes(), 0, 0);
     }
 
-    if (skia_image->peekPixels(&src_data_))
+    if (skia_image_->peekPixels(&src_data_)) {
       static_bitmap_image_loaded_ = true;
-  }
 
-  if (static_bitmap_image_loaded_) {
-    // Ensure that the size of the to-be-encoded-image does not pass the maximum
-    // size supported by the encoders.
-    int max_dimension = ImageEncoder::MaxDimension(mime_type_);
-    if (std::max(src_data_.width(), src_data_.height()) > max_dimension) {
-      SkImageInfo info = src_data_.info();
-      info = info.makeWH(std::min(info.width(), max_dimension),
-                         std::min(info.height(), max_dimension));
-      src_data_.reset(info, src_data_.addr(), src_data_.rowBytes());
+      // Ensure that the size of the to-be-encoded-image does not pass the
+      // maximum size supported by the encoders.
+      int max_dimension = ImageEncoder::MaxDimension(mime_type_);
+      if (std::max(src_data_.width(), src_data_.height()) > max_dimension) {
+        SkImageInfo info = src_data_.info();
+        info = info.makeWH(std::min(info.width(), max_dimension),
+                           std::min(info.height(), max_dimension));
+        src_data_.reset(info, src_data_.addr(), src_data_.rowBytes());
+      }
     }
   }
 
@@ -280,28 +242,56 @@ void CanvasAsyncBlobCreator::Dispose() {
   callback_.Clear();
   script_promise_resolver_.Clear();
   image_ = nullptr;
+  skia_image_ = nullptr;
+  encoded_image_.clear();
 }
 
 ImageEncodeOptions* CanvasAsyncBlobCreator::GetImageEncodeOptionsForMimeType(
     ImageEncodingMimeType mime_type) {
   ImageEncodeOptions* encode_options = ImageEncodeOptions::Create();
-  encode_options->setType(ImageEncodingMimeTypeName(mime_type));
+  encode_options->setType(ImageEncoderUtils::MimeTypeName(mime_type));
   return encode_options;
 }
 
-bool CanvasAsyncBlobCreator::EncodeImage(const double& quality) {
-  std::unique_ptr<ImageDataBuffer> buffer = ImageDataBuffer::Create(src_data_);
-  if (!buffer)
+bool CanvasAsyncBlobCreator::EncodeImage(
+    std::unique_ptr<ImageDataBuffer> buffer,
+    ImageEncodingMimeType mime_type,
+    const double& quality,
+    Vector<unsigned char>* encoded_image) {
+  CHECK(encoded_image);
+  if (!buffer) {
     return false;
-  return buffer->EncodeImage(mime_type_, quality, &encoded_image_);
+  }
+  return buffer->EncodeImage(mime_type, quality, encoded_image);
 }
 
+// Before the blob itself is created, we need to encode the image.
+// This happens in one of the following ways:
+//
+//  1.   If progressive encoding is supported, then we use idle tasks
+//       to gradually encode the image. This happens entirely on
+//       the current thread.
+//  2.   If progressive encoding is NOT supported, and
+//    a. the current thread is the main thread, then we use a worker thread to
+//       encode the image, otherwise:
+//    b. if the current thread is not the main thread, then we encode the image
+//       directly in the current thread.
+//
+// This function acquires SkImage and SkPixmap objects representing the
+// to-be-encoded image, and at the end stores those objects as follows:
+//
+//  - For the progressive encoding case (1), stored to members on `this`,
+//    which are then accessed from the various encoding stages. (All from the
+//    same thread).
+//  - For the off-thread case (2a), sent to that thread via CrossThreadBindOnce.
+//  - For the in-thread case (2b), not stored anywhere, because encoding happens
+//    within this function.
 void CanvasAsyncBlobCreator::ScheduleAsyncBlobCreation(const double& quality) {
   if (!static_bitmap_image_loaded_) {
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
         ->PostTask(FROM_HERE,
-                   WTF::Bind(&CanvasAsyncBlobCreator::CreateNullAndReturnResult,
-                             WrapPersistent(this)));
+                   BindOnce(&CanvasAsyncBlobCreator::CreateNullAndReturnResult,
+                            WrapPersistent(this)));
     return;
   }
   // Webp encoder does not support progressive encoding. We also don't use idle
@@ -313,39 +303,50 @@ void CanvasAsyncBlobCreator::ScheduleAsyncBlobCreation(const double& quality) {
   // not implemented, so the idle task can take a long time even when the thread
   // is not busy.
   bool use_idle_encoding =
-      WTF::IsMainThread() && (mime_type_ != kMimeTypeWebp) &&
+      IsMainThread() && (mime_type_ != kMimeTypeWebp) &&
       (enforce_idle_encoding_for_test_ ||
        !RuntimeEnabledFeatures::NoIdleEncodingForWebTestsEnabled());
 
   if (!use_idle_encoding) {
     if (!IsMainThread()) {
-      DCHECK(function_type_ == kHTMLCanvasConvertToBlobPromise ||
-             function_type_ == kOffscreenCanvasConvertToBlobPromise);
+      DCHECK(function_type_ == kOffscreenCanvasConvertToBlobPromise);
+      // In-thread case, see (2b) in function comment.
+      //
       // When OffscreenCanvas.convertToBlob() occurs on worker thread,
       // we do not need to use background task runner to reduce load on main.
       // So we just directly encode images on the worker thread.
-      if (!EncodeImage(quality)) {
+      Vector<unsigned char> encoded_image;
+      if (!EncodeImage(
+              ImageDataBuffer::Create(src_data_, image_->GetHdrMetadata()),
+              mime_type_, quality, &encoded_image)) {
         context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
             ->PostTask(
                 FROM_HERE,
-                WTF::Bind(&CanvasAsyncBlobCreator::CreateNullAndReturnResult,
-                          WrapPersistent(this)));
+                BindOnce(&CanvasAsyncBlobCreator::CreateNullAndReturnResult,
+                         WrapPersistent(this)));
 
         return;
       }
       context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
           ->PostTask(
               FROM_HERE,
-              WTF::Bind(&CanvasAsyncBlobCreator::CreateBlobAndReturnResult,
-                        WrapPersistent(this)));
+              BindOnce(&CanvasAsyncBlobCreator::CreateBlobAndReturnResult,
+                       WrapPersistent(this), std::move(encoded_image)));
 
     } else {
+      // Off-thread case, see (2a) in function comment.
+
       worker_pool::PostTask(
-          FROM_HERE, CrossThreadBindOnce(
-                         &CanvasAsyncBlobCreator::EncodeImageOnEncoderThread,
-                         WrapCrossThreadPersistent(this), quality));
+          FROM_HERE,
+          CrossThreadBindOnce(
+              &CanvasAsyncBlobCreator::EncodeImageOnEncoderThread,
+              MakeCrossThreadHandle(this), parent_frame_task_runner_,
+              skia_image_,
+              ImageDataBuffer::Create(src_data_, image_->GetHdrMetadata()),
+              mime_type_, quality));
     }
   } else {
+    // Progressive encoding case, see (1) in function comment.
     idle_task_status_ = kIdleTaskNotStarted;
     ScheduleInitiateEncoding(quality);
 
@@ -353,8 +354,8 @@ void CanvasAsyncBlobCreator::ScheduleAsyncBlobCreation(const double& quality) {
     // There's no risk of concurrency as both tasks are on the same thread.
     PostDelayedTaskToCurrentThread(
         FROM_HERE,
-        WTF::Bind(&CanvasAsyncBlobCreator::IdleTaskStartTimeoutEvent,
-                  WrapPersistent(this), quality),
+        BindOnce(&CanvasAsyncBlobCreator::IdleTaskStartTimeoutEvent,
+                 WrapPersistent(this), quality),
         kIdleTaskStartTimeoutDelayMs);
   }
 }
@@ -362,13 +363,14 @@ void CanvasAsyncBlobCreator::ScheduleAsyncBlobCreation(const double& quality) {
 void CanvasAsyncBlobCreator::ScheduleInitiateEncoding(double quality) {
   schedule_idle_task_start_time_ = base::TimeTicks::Now();
   ThreadScheduler::Current()->PostIdleTask(
-      FROM_HERE, WTF::Bind(&CanvasAsyncBlobCreator::InitiateEncoding,
-                           WrapPersistent(this), quality));
+      FROM_HERE, blink::BindOnce(&CanvasAsyncBlobCreator::InitiateEncoding,
+                                 WrapPersistent(this), quality));
 }
 
 void CanvasAsyncBlobCreator::InitiateEncoding(double quality,
                                               base::TimeTicks deadline) {
-  if (idle_task_status_ == kIdleTaskSwitchedToImmediateTask) {
+  if (idle_task_status_ == kIdleTaskSwitchedToImmediateTask ||
+      idle_task_status_ == kIdleTaskFailed) {
     return;
   }
   RecordInitiateEncodingTimeHistogram(
@@ -379,6 +381,7 @@ void CanvasAsyncBlobCreator::InitiateEncoding(double quality,
 
   if (!InitializeEncoder(quality)) {
     idle_task_status_ = kIdleTaskFailed;
+    CreateNullAndReturnResult();
     return;
   }
 
@@ -388,7 +391,8 @@ void CanvasAsyncBlobCreator::InitiateEncoding(double quality,
 }
 
 void CanvasAsyncBlobCreator::IdleEncodeRows(base::TimeTicks deadline) {
-  if (idle_task_status_ == kIdleTaskSwitchedToImmediateTask) {
+  if (idle_task_status_ == kIdleTaskSwitchedToImmediateTask ||
+      idle_task_status_ == kIdleTaskFailed) {
     return;
   }
 
@@ -396,8 +400,8 @@ void CanvasAsyncBlobCreator::IdleEncodeRows(base::TimeTicks deadline) {
     if (IsEncodeRowDeadlineNearOrPassed(deadline, src_data_.width())) {
       num_rows_completed_ = y;
       ThreadScheduler::Current()->PostIdleTask(
-          FROM_HERE, WTF::Bind(&CanvasAsyncBlobCreator::IdleEncodeRows,
-                               WrapPersistent(this)));
+          FROM_HERE, blink::BindOnce(&CanvasAsyncBlobCreator::IdleEncodeRows,
+                                     WrapPersistent(this)));
       return;
     }
 
@@ -415,15 +419,19 @@ void CanvasAsyncBlobCreator::IdleEncodeRows(base::TimeTicks deadline) {
   RecordCompleteEncodingTimeHistogram(mime_type_, elapsed_time);
   if (IsCreateBlobDeadlineNearOrPassed(deadline)) {
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
-        ->PostTask(FROM_HERE,
-                   WTF::Bind(&CanvasAsyncBlobCreator::CreateBlobAndReturnResult,
-                             WrapPersistent(this)));
+        ->PostTask(
+            FROM_HERE,
+            BindOnce(&CanvasAsyncBlobCreator::CreateBlobAndReturnResult,
+                     WrapPersistent(this),
+                     std::exchange(encoded_image_, Vector<unsigned char>())));
   } else {
-    CreateBlobAndReturnResult();
+    CreateBlobAndReturnResult(
+        std::exchange(encoded_image_, Vector<unsigned char>()));
   }
 }
 
-void CanvasAsyncBlobCreator::ForceEncodeRowsOnCurrentThread() {
+void CanvasAsyncBlobCreator::ForceEncodeRows() {
+  DCHECK(context_->IsContextThread());
   DCHECK(idle_task_status_ == kIdleTaskSwitchedToImmediateTask);
 
   // Continue encoding from the last completed row
@@ -436,78 +444,35 @@ void CanvasAsyncBlobCreator::ForceEncodeRowsOnCurrentThread() {
   }
   num_rows_completed_ = src_data_.height();
 
-  if (IsMainThread()) {
-    CreateBlobAndReturnResult();
-  } else {
-    PostCrossThreadTask(
-        *context_->GetTaskRunner(TaskType::kCanvasBlobSerialization), FROM_HERE,
-        CrossThreadBindOnce(&CanvasAsyncBlobCreator::CreateBlobAndReturnResult,
-                            WrapCrossThreadPersistent(this)));
-  }
-
+  CreateBlobAndReturnResult(
+      std::exchange(encoded_image_, Vector<unsigned char>()));
   SignalAlternativeCodePathFinishedForTesting();
 }
 
-void CanvasAsyncBlobCreator::CreateBlobAndReturnResult() {
+void CanvasAsyncBlobCreator::CreateBlobAndReturnResult(
+    Vector<unsigned char> encoded_image) {
   RecordIdleTaskStatusHistogram(idle_task_status_);
 
-  Blob* result_blob = Blob::Create(encoded_image_.data(), encoded_image_.size(),
-                                   ImageEncodingMimeTypeName(mime_type_));
+  Blob* result_blob =
+      Blob::Create(encoded_image, ImageEncoderUtils::MimeTypeName(mime_type_));
   if (function_type_ == kHTMLCanvasToBlobCallback) {
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
         ->PostTask(FROM_HERE,
-                   WTF::Bind(&V8BlobCallback::InvokeAndReportException,
-                             WrapPersistent(callback_.Get()), nullptr,
-                             WrapPersistent(result_blob)));
+                   BindOnce(&V8BlobCallback::InvokeAndReportException,
+                            WrapPersistent(callback_.Get()), nullptr,
+                            WrapPersistent(result_blob)));
   } else {
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
         ->PostTask(FROM_HERE,
-                   WTF::Bind(&ScriptPromiseResolver::Resolve<Blob*>,
-                             WrapPersistent(script_promise_resolver_.Get()),
-                             WrapPersistent(result_blob)));
+                   BindOnce(&ScriptPromiseResolver<Blob>::Resolve<Blob*>,
+                            WrapPersistent(script_promise_resolver_.Get()),
+                            WrapPersistent(result_blob)));
   }
 
   RecordScaledDurationHistogram(mime_type_,
                                 base::TimeTicks::Now() - start_time_,
                                 image_->width(), image_->height());
 
-  if (IdentifiabilityStudySettings::Get()->IsTypeAllowed(
-          blink::IdentifiableSurface::Type::kCanvasReadback)) {
-    // Creating this ImageDataBuffer has some overhead, namely getting the
-    // SkImage and computing the pixmap. We need the StaticBitmapImage to be
-    // deleted on the same thread on which it was created, so we use the same
-    // TaskType here in order to get the same TaskRunner.
-
-    // TODO(crbug.com/1143737) WrapPersistent(this) stores more data than is
-    // needed by the function. It would be good to find a way to wrap only the
-    // objects needed (image_, ukm_source_id_, input_digest_, context_)
-    context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
-        ->PostTask(
-            FROM_HERE,
-            WTF::Bind(&CanvasAsyncBlobCreator::RecordIdentifiabilityMetric,
-                      WrapPersistent(this)));
-  } else {
-    // RecordIdentifiabilityMetric needs a reference to image_, and will run
-    // dispose itself. So here we only call dispose if not recording the metric.
-    Dispose();
-  }
-}
-
-void CanvasAsyncBlobCreator::RecordIdentifiabilityMetric() {
-  std::unique_ptr<ImageDataBuffer> data_buffer =
-      ImageDataBuffer::Create(image_);
-
-  if (data_buffer) {
-    blink::IdentifiabilityMetricBuilder(context_->UkmSourceID())
-        .Set(blink::IdentifiableSurface::FromTypeAndToken(
-                 blink::IdentifiableSurface::Type::kCanvasReadback,
-                 input_digest_),
-             blink::IdentifiabilityDigestOfBytes(base::make_span(
-                 data_buffer->Pixels(), data_buffer->ComputeByteSize())))
-        .Record(context_->UkmRecorder());
-  }
-
-  // Avoid unwanted retention, see dispose().
   Dispose();
 }
 
@@ -517,47 +482,66 @@ void CanvasAsyncBlobCreator::CreateNullAndReturnResult() {
     DCHECK(IsMainThread());
     RecordIdleTaskStatusHistogram(idle_task_status_);
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
-        ->PostTask(
-            FROM_HERE,
-            WTF::Bind(&V8BlobCallback::InvokeAndReportException,
-                      WrapPersistent(callback_.Get()), nullptr, nullptr));
+        ->PostTask(FROM_HERE,
+                   BindOnce(&V8BlobCallback::InvokeAndReportException,
+                            WrapPersistent(callback_.Get()), nullptr, nullptr));
   } else {
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
-        ->PostTask(FROM_HERE,
-                   WTF::Bind(&ScriptPromiseResolver::Reject<DOMException*>,
-                             WrapPersistent(script_promise_resolver_.Get()),
-                             WrapPersistent(MakeGarbageCollected<DOMException>(
-                                 DOMExceptionCode::kEncodingError,
-                                 "Encoding of the source image has failed."))));
+        ->PostTask(
+            FROM_HERE,
+            BindOnce(
+                &ScriptPromiseResolverBase::Reject<DOMException, DOMException*>,
+                WrapPersistent(script_promise_resolver_.Get()),
+                WrapPersistent(MakeGarbageCollected<DOMException>(
+                    DOMExceptionCode::kEncodingError,
+                    "Encoding of the source image has failed."))));
   }
   // Avoid unwanted retention, see dispose().
   Dispose();
 }
 
-void CanvasAsyncBlobCreator::EncodeImageOnEncoderThread(double quality) {
+// Note that we keep `skia_image` around just to ensure that `data_buffer`
+// (which contains a raw pointer to `skia_image`'s pixels') stays valid.
+void CanvasAsyncBlobCreator::EncodeImageOnEncoderThread(
+    CrossThreadHandle<CanvasAsyncBlobCreator> cross_thread_handle,
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    sk_sp<SkImage> skia_image,
+    std::unique_ptr<ImageDataBuffer> data_buffer,
+    ImageEncodingMimeType mime_type,
+    double quality) {
   DCHECK(!IsMainThread());
-  if (!EncodeImage(quality)) {
+  Vector<unsigned char> encoded_image;
+  if (!EncodeImage(std::move(data_buffer), mime_type, quality,
+                   &encoded_image)) {
     PostCrossThreadTask(
-        *parent_frame_task_runner_, FROM_HERE,
-        CrossThreadBindOnce(&CanvasAsyncBlobCreator::CreateNullAndReturnResult,
-                            WrapCrossThreadPersistent(this)));
+        *task_runner, FROM_HERE,
+        CrossThreadBindOnce(
+            &CanvasAsyncBlobCreator::CreateNullAndReturnResult,
+            MakeUnwrappingCrossThreadHandle(cross_thread_handle)));
     return;
   }
 
   PostCrossThreadTask(
-      *parent_frame_task_runner_, FROM_HERE,
+      *task_runner, FROM_HERE,
       CrossThreadBindOnce(&CanvasAsyncBlobCreator::CreateBlobAndReturnResult,
-                          WrapCrossThreadPersistent(this)));
+                          MakeUnwrappingCrossThreadHandle(cross_thread_handle),
+                          std::move(encoded_image)));
 }
 
 bool CanvasAsyncBlobCreator::InitializeEncoder(double quality) {
   // This is solely used for unit tests.
-  if (fail_encoder_initialization_for_test_)
+  if (fail_encoder_initialization_for_test_) {
     return false;
+  }
+  // It is safe for `hdr_metadata` to fall out of scope after the encoder is
+  // created, because the encoders only access it during creation.
+  std::optional<skhdr::Metadata> hdr_metadata =
+      ImageEncoderUtils::ToSkHdrMetadata(image_->GetHdrMetadata());
   if (mime_type_ == kMimeTypeJpeg) {
     SkJpegEncoder::Options options;
     options.fQuality = ImageEncoder::ComputeJpegQuality(quality);
     options.fAlphaOption = SkJpegEncoder::AlphaOption::kBlendOnBlack;
+    options.fHdrMetadata = base::OptionalToPtr(hdr_metadata);
     if (options.fQuality == 100) {
       options.fDownsample = SkJpegEncoder::Downsample::k444;
     }
@@ -569,9 +553,9 @@ bool CanvasAsyncBlobCreator::InitializeEncoder(double quality) {
     // TODO(zakerinasab): Progressive encoding on webp image formats
     // (crbug.com/571399)
     DCHECK_EQ(kMimeTypePng, mime_type_);
-    SkPngEncoder::Options options;
-    options.fFilterFlags = SkPngEncoder::FilterFlag::kSub;
-    options.fZLibLevel = 3;
+    SkPngRustEncoder::Options options;
+    options.fCompressionLevel = SkPngRustEncoder::CompressionLevel::kLow;
+    options.fHdrMetadata = base::OptionalToPtr(hdr_metadata);
     encoder_ = ImageEncoder::Create(&encoded_image_, src_data_, options);
   }
 
@@ -583,8 +567,8 @@ void CanvasAsyncBlobCreator::IdleTaskStartTimeoutEvent(double quality) {
     // Even if the task started quickly, we still want to ensure completion
     PostDelayedTaskToCurrentThread(
         FROM_HERE,
-        WTF::Bind(&CanvasAsyncBlobCreator::IdleTaskCompleteTimeoutEvent,
-                  WrapPersistent(this)),
+        BindOnce(&CanvasAsyncBlobCreator::IdleTaskCompleteTimeoutEvent,
+                 WrapPersistent(this)),
         kIdleTaskCompleteTimeoutDelayMs);
   } else if (idle_task_status_ == kIdleTaskNotStarted) {
     // If the idle task does not start after a delay threshold, we will
@@ -596,12 +580,13 @@ void CanvasAsyncBlobCreator::IdleTaskStartTimeoutEvent(double quality) {
     DCHECK(mime_type_ == kMimeTypePng || mime_type_ == kMimeTypeJpeg);
     if (InitializeEncoder(quality)) {
       context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
-          ->PostTask(
-              FROM_HERE,
-              WTF::Bind(&CanvasAsyncBlobCreator::ForceEncodeRowsOnCurrentThread,
-                        WrapPersistent(this)));
+          ->PostTask(FROM_HERE,
+                     BindOnce(&CanvasAsyncBlobCreator::ForceEncodeRows,
+                              WrapPersistent(this)));
     } else {
       // Failing in initialization of encoder
+      idle_task_status_ = kIdleTaskFailed;
+      CreateNullAndReturnResult();
       SignalAlternativeCodePathFinishedForTesting();
     }
   } else {
@@ -621,10 +606,8 @@ void CanvasAsyncBlobCreator::IdleTaskCompleteTimeoutEvent() {
 
     DCHECK(mime_type_ == kMimeTypePng || mime_type_ == kMimeTypeJpeg);
     context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
-        ->PostTask(
-            FROM_HERE,
-            WTF::Bind(&CanvasAsyncBlobCreator::ForceEncodeRowsOnCurrentThread,
-                      WrapPersistent(this)));
+        ->PostTask(FROM_HERE, BindOnce(&CanvasAsyncBlobCreator::ForceEncodeRows,
+                                       WrapPersistent(this)));
   } else {
     DCHECK(idle_task_status_ == kIdleTaskFailed ||
            idle_task_status_ == kIdleTaskCompleted);
@@ -638,34 +621,13 @@ void CanvasAsyncBlobCreator::PostDelayedTaskToCurrentThread(
     double delay_ms) {
   context_->GetTaskRunner(TaskType::kCanvasBlobSerialization)
       ->PostDelayedTask(location, std::move(task),
-                        base::TimeDelta::FromMillisecondsD(delay_ms));
+                        base::Milliseconds(delay_ms));
 }
 
 void CanvasAsyncBlobCreator::Trace(Visitor* visitor) const {
   visitor->Trace(context_);
-  visitor->Trace(encode_options_);
   visitor->Trace(callback_);
   visitor->Trace(script_promise_resolver_);
-}
-
-sk_sp<SkColorSpace> CanvasAsyncBlobCreator::BlobColorSpaceToSkColorSpace(
-    String blob_color_space) {
-  skcms_Matrix3x3 gamut = SkNamedGamut::kSRGB;
-  if (blob_color_space == kDisplayP3ImageColorSpaceName)
-    gamut = SkNamedGamut::kDisplayP3;
-  else if (blob_color_space == kRec2020ImageColorSpaceName)
-    gamut = SkNamedGamut::kRec2020;
-  return SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB, gamut);
-}
-
-bool CanvasAsyncBlobCreator::EncodeImageForConvertToBlobTest() {
-  if (!static_bitmap_image_loaded_)
-    return false;
-  std::unique_ptr<ImageDataBuffer> buffer = ImageDataBuffer::Create(src_data_);
-  if (!buffer)
-    return false;
-  return buffer->EncodeImage(mime_type_, encode_options_->quality(),
-                             &encoded_image_);
 }
 
 }  // namespace blink

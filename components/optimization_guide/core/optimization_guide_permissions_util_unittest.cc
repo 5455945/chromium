@@ -1,19 +1,27 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 
 #include "base/command_line.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
-#include "components/data_reduction_proxy/core/common/data_reduction_proxy_pref_names.h"
+#include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/unified_consent/pref_names.h"
 #include "components/unified_consent/unified_consent_service.h"
+#include "google_apis/api_key_cache.h"
+#include "google_apis/default_api_keys.h"
+#include "google_apis/google_api_keys.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+namespace {
+#include "google_apis/default_api_keys-inc.cc"
+}  // namespace
 
 namespace optimization_guide {
 
@@ -22,13 +30,9 @@ class OptimizationGuidePermissionsUtilTest : public testing::Test {
   void SetUp() override {
     unified_consent::UnifiedConsentService::RegisterPrefs(
         pref_service_.registry());
-    pref_service_.registry()->RegisterBooleanPref(
-        data_reduction_proxy::prefs::kDataSaverEnabled, false);
-  }
 
-  void SetDataSaverEnabled(bool enabled) {
-    data_reduction_proxy::DataReductionProxySettings::
-        SetDataSaverEnabledForTesting(&pref_service_, enabled);
+    scoped_command_line_.GetProcessCommandLine()->AppendSwitch(
+        kGoogleApiKeyConfigurationCheckOverrideSwitch);
   }
 
   void SetUrlKeyedAnonymizedDataCollectionEnabled(bool enabled) {
@@ -39,122 +43,72 @@ class OptimizationGuidePermissionsUtilTest : public testing::Test {
 
   PrefService* pref_service() { return &pref_service_; }
 
+ protected:
+  base::test::ScopedCommandLine scoped_command_line_;
+
  private:
   base::test::TaskEnvironment task_environment_;
   sync_preferences::TestingPrefServiceSyncable pref_service_;
 };
 
 TEST_F(OptimizationGuidePermissionsUtilTest,
-       IsUserPermittedToFetchHintsNonDataSaverUser) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching});
-  SetDataSaverEnabled(false);
-
+       IsUserPermittedToFetchHintsDefaultUser) {
   EXPECT_FALSE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
       /*is_off_the_record=*/false, pref_service()));
 }
 
 TEST_F(OptimizationGuidePermissionsUtilTest,
-       IsUserPermittedToFetchHintsDataSaverUser) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching});
-  SetDataSaverEnabled(true);
-
-  EXPECT_TRUE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
-      /*is_off_the_record=*/false, pref_service()));
-}
-
-TEST_F(
-    OptimizationGuidePermissionsUtilTest,
-    IsUserPermittedToFetchHintsNonDataSaverUserAnonymousDataCollectionEnabledFeatureEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching,
-       optimization_guide::features::
-           kRemoteOptimizationGuideFetchingAnonymousDataConsent},
-      {});
-  SetDataSaverEnabled(false);
+       IsUserPermittedToFetchHintsDefaultUserAnonymousDataCollectionEnabled) {
   SetUrlKeyedAnonymizedDataCollectionEnabled(true);
 
   EXPECT_TRUE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
       /*is_off_the_record=*/false, pref_service()));
 }
 
-TEST_F(
-    OptimizationGuidePermissionsUtilTest,
-    IsUserPermittedToFetchHintsNonDataSaverUserAnonymousDataCollectionDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching,
-       optimization_guide::features::
-           kRemoteOptimizationGuideFetchingAnonymousDataConsent},
-      {});
-  SetDataSaverEnabled(false);
+TEST_F(OptimizationGuidePermissionsUtilTest,
+       IsUserPermittedToFetchHintsDefaultUserAnonymousDataCollectionDisabled) {
   SetUrlKeyedAnonymizedDataCollectionEnabled(false);
 
   EXPECT_FALSE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
       /*is_off_the_record=*/false, pref_service()));
 }
 
-TEST_F(
-    OptimizationGuidePermissionsUtilTest,
-    IsUserPermittedToFetchHintsNonDataSaverUserAnonymousDataCollectionEnabledFeatureNotEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching},
-      {optimization_guide::features::
-           kRemoteOptimizationGuideFetchingAnonymousDataConsent});
-  SetDataSaverEnabled(false);
+TEST_F(OptimizationGuidePermissionsUtilTest,
+       IsUserPermittedToFetchHintsRequiresGoogleChromeApiKey) {
+  scoped_command_line_.GetProcessCommandLine()->RemoveSwitch(
+      kGoogleApiKeyConfigurationCheckOverrideSwitch);
   SetUrlKeyedAnonymizedDataCollectionEnabled(true);
 
-  EXPECT_FALSE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
-      /*is_off_the_record=*/false, pref_service()));
-}
+  {
+    google_apis::DefaultApiKeys default_keys =
+        GetDefaultApiKeysFromDefinedValues();
+    default_keys.allow_unset_values = true;
+    default_keys.google_api_key = "non_official_api_key";
+    default_keys.is_using_google_chrome_keys = false;
+    google_apis::ApiKeyCache api_key_cache(default_keys);
+    auto scoped_override =
+        google_apis::SetScopedApiKeyCacheForTesting(&api_key_cache);
 
-TEST_F(OptimizationGuidePermissionsUtilTest,
-       IsUserPermittedToFetchHintsAllConsentsEnabledButHintsFetchingDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {}, {optimization_guide::features::kRemoteOptimizationGuideFetching});
-  SetDataSaverEnabled(true);
-  SetUrlKeyedAnonymizedDataCollectionEnabled(true);
+    EXPECT_TRUE(google_apis::HasAPIKeyConfigured());
+    EXPECT_FALSE(google_apis::IsGoogleChromeAPIKeyUsed());
+    EXPECT_FALSE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
+        /*is_off_the_record=*/false, pref_service()));
+  }
 
-  EXPECT_FALSE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
-      /*is_off_the_record=*/false, pref_service()));
-}
+  {
+    google_apis::DefaultApiKeys default_keys =
+        GetDefaultApiKeysFromDefinedValues();
+    default_keys.allow_unset_values = true;
+    default_keys.google_api_key = "official_api_key";
+    default_keys.is_using_google_chrome_keys = true;
+    google_apis::ApiKeyCache api_key_cache(default_keys);
+    auto scoped_override =
+        google_apis::SetScopedApiKeyCacheForTesting(&api_key_cache);
 
-TEST_F(OptimizationGuidePermissionsUtilTest,
-       IsUserPermittedToFetchHintsPerformanceInfoFlagExplicitlyAllows) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching,
-       optimization_guide::features::
-           kContextMenuPerformanceInfoAndRemoteHintFetching},
-      {});
-  SetDataSaverEnabled(false);
-  SetUrlKeyedAnonymizedDataCollectionEnabled(false);
-
-  EXPECT_TRUE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
-      /*is_off_the_record=*/false, pref_service()));
-}
-
-TEST_F(OptimizationGuidePermissionsUtilTest,
-       IsUserPermittedToFetchHintsAllConsentsEnabledIncognitoProfile) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {optimization_guide::features::kRemoteOptimizationGuideFetching,
-       optimization_guide::features::
-           kRemoteOptimizationGuideFetchingAnonymousDataConsent,
-       optimization_guide::features::
-           kContextMenuPerformanceInfoAndRemoteHintFetching},
-      {});
-  SetDataSaverEnabled(true);
-  SetUrlKeyedAnonymizedDataCollectionEnabled(true);
-
-  EXPECT_FALSE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
-      /*is_off_the_record=*/true, pref_service()));
+    EXPECT_TRUE(google_apis::IsGoogleChromeAPIKeyUsed());
+    EXPECT_TRUE(IsUserPermittedToFetchFromRemoteOptimizationGuide(
+        /*is_off_the_record=*/false, pref_service()));
+  }
 }
 
 }  // namespace optimization_guide

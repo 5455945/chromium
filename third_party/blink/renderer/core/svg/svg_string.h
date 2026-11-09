@@ -33,7 +33,8 @@
 
 #include "third_party/blink/renderer/core/svg/properties/svg_property.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
@@ -47,9 +48,6 @@ class SVGString final : public SVGPropertyBase {
   explicit SVGString(const String& value) : value_(value) {}
 
   SVGString* Clone() const { return MakeGarbageCollected<SVGString>(value_); }
-  SVGPropertyBase* CloneForAnimation(const String& value) const override {
-    return MakeGarbageCollected<SVGString>(value);
-  }
 
   String ValueAsString() const override { return value_; }
   SVGParsingError SetValueAsString(const String& value) {
@@ -57,7 +55,7 @@ class SVGString final : public SVGPropertyBase {
     return SVGParseStatus::kNoError;
   }
 
-  void Add(const SVGPropertyBase*, const SVGElement*) override;
+  bool Add(const SVGPropertyBase*, const SVGElement*) override;
   void CalculateAnimatedValue(
       const SMILAnimationEffectParameters&,
       float percentage,
@@ -77,6 +75,13 @@ class SVGString final : public SVGPropertyBase {
 
  private:
   String value_;
+};
+
+template <>
+struct DowncastTraits<SVGString> {
+  static bool AllowFrom(const SVGPropertyBase& value) {
+    return value.GetType() == SVGString::ClassType();
+  }
 };
 
 }  // namespace blink

@@ -1,8 +1,7 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from .code_generator_info import CodeGeneratorInfo
 from .composition_parts import WithCodeGeneratorInfo
 from .composition_parts import WithComponent
 from .composition_parts import WithDebugInfo
@@ -12,24 +11,37 @@ from .make_copy import make_copy
 from .user_defined_type import UserDefinedType
 
 
-class Enumeration(UserDefinedType, WithExtendedAttributes,
-                  WithCodeGeneratorInfo, WithComponent, WithDebugInfo):
-    """https://heycam.github.io/webidl/#idl-enums"""
+class Enumeration(
+    UserDefinedType,
+    WithExtendedAttributes,
+    WithCodeGeneratorInfo,
+    WithComponent,
+    WithDebugInfo,
+):
+    """https://webidl.spec.whatwg.org/#idl-enums"""
 
-    class IR(IRMap.IR, WithExtendedAttributes, WithCodeGeneratorInfo,
-             WithComponent, WithDebugInfo):
-        def __init__(self,
-                     identifier,
-                     values,
-                     extended_attributes=None,
-                     code_generator_info=None,
-                     component=None,
-                     debug_info=None):
+    class IR(
+        IRMap.IR,
+        WithExtendedAttributes,
+        WithCodeGeneratorInfo,
+        WithComponent,
+        WithDebugInfo,
+    ):
+        def __init__(
+            self,
+            identifier,
+            values,
+            extended_attributes=None,
+            code_generator_info=None,
+            component=None,
+            debug_info=None,
+        ):
             assert isinstance(values, (list, tuple))
             assert all(isinstance(value, str) for value in values)
 
             IRMap.IR.__init__(
-                self, identifier=identifier, kind=IRMap.IR.Kind.ENUMERATION)
+                self, identifier=identifier, kind=IRMap.IR.Kind.ENUMERATION
+            )
             WithExtendedAttributes.__init__(self, extended_attributes)
             WithCodeGeneratorInfo.__init__(self, code_generator_info)
             WithComponent.__init__(self, component)

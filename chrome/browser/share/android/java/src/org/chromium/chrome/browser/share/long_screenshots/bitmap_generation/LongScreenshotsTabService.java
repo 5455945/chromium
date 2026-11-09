@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,19 @@ package org.chromium.chrome.browser.share.long_screenshots.bitmap_generation;
 
 import android.graphics.Rect;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import androidx.annotation.VisibleForTesting;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.components.paint_preview.common.proto.PaintPreview.PaintPreviewProto;
 import org.chromium.components.paintpreview.browser.NativePaintPreviewServiceProvider;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.paint_preview.mojom.ClipCoordOverride;
+import org.chromium.url.GURL;
 
 /**
  * The Java-side implementations of long_screenshots_tab_service.cc. The C++ side owns and controls
@@ -20,75 +26,99 @@ import org.chromium.content_public.browser.WebContents;
  * capturing the Paint Preview representation of a tab.
  */
 @JNINamespace("long_screenshots")
+@NullMarked
 public class LongScreenshotsTabService implements NativePaintPreviewServiceProvider {
     /** Interface used for notifying in the event of navigation to a URL. */
     public interface CaptureProcessor {
-        void processCapturedTab(PaintPreviewProto response, @Status int status);
+        void processCapturedTab(long nativeCaptureResultPtr, @Status int status);
     }
 
-    private CaptureProcessor mCaptureProcessor;
+    private @Nullable CaptureProcessor mCaptureProcessor;
 
     private long mNativeLongScreenshotsTabService;
 
     @CalledByNative
-    private LongScreenshotsTabService(long nativeLongScreenshotsTabService) {
+    @VisibleForTesting
+    protected LongScreenshotsTabService(long nativeLongScreenshotsTabService) {
         mNativeLongScreenshotsTabService = nativeLongScreenshotsTabService;
     }
 
     // Set the object responsible for processing the results after a tab capture.
-    public void setCaptureProcessor(CaptureProcessor captureProcessor) {
+    public void setCaptureProcessor(@Nullable CaptureProcessor captureProcessor) {
         mCaptureProcessor = captureProcessor;
     }
 
+    // Clears the capture processor only if it is currently set to {@code expected}, so a
+    // destroyed caller does not remove a newer caller's registration.
+    public void clearCaptureProcessor(CaptureProcessor expected) {
+        if (mCaptureProcessor == expected) {
+            mCaptureProcessor = null;
+        }
+    }
+
     @CalledByNative
-    private void onNativeDestroyed() {
+    @VisibleForTesting
+    protected void onNativeDestroyed() {
         mNativeLongScreenshotsTabService = 0;
     }
 
     @CalledByNative
-    private void processCaptureTabStatus(@Status int status) {
+    @VisibleForTesting
+    protected void processCaptureTabStatus(@Status int status) {
         if (mCaptureProcessor != null) {
-            mCaptureProcessor.processCapturedTab(null, status);
+            mCaptureProcessor.processCapturedTab(0, status);
         }
     }
 
     @CalledByNative
-    private void processPaintPreviewResponse(byte[] paintPreviewProtoResponse) {
+    @VisibleForTesting
+    protected void processPaintPreviewResponse(long nativeCaptureResultPtr) {
         if (mCaptureProcessor == null) {
             // TODO(tgupta): return an error here.
+            releaseNativeCaptureResultPtr(nativeCaptureResultPtr);
             return;
         }
 
-        PaintPreviewProto response;
-        try {
-            response = PaintPreviewProto.parseFrom(paintPreviewProtoResponse);
-        } catch (Exception e) {
-            processCaptureTabStatus(Status.PROTO_DESERIALIZATION_FAILED);
-            return;
-        }
-        mCaptureProcessor.processCapturedTab(response, Status.OK);
+        mCaptureProcessor.processCapturedTab(nativeCaptureResultPtr, Status.OK);
     }
 
-    public void captureTab(Tab tab, Rect clipRect) {
+    public void captureTab(
+            Tab tab,
+            Rect clipRect,
+            boolean inMemory,
+            @ClipCoordOverride.EnumType int clipXCoordOverride,
+            @ClipCoordOverride.EnumType int clipYCoordOverride) {
         if (mNativeLongScreenshotsTabService == 0) {
             processCaptureTabStatus(Status.NATIVE_SERVICE_NOT_INITIALIZED);
+            return;
         }
 
         if (tab.getWebContents() == null) {
             processCaptureTabStatus(Status.WEB_CONTENTS_GONE);
+            return;
         }
 
-        LongScreenshotsTabServiceJni.get().captureTabAndroid(mNativeLongScreenshotsTabService,
-                tab.getId(), tab.getWebContents(), clipRect.left, clipRect.top, clipRect.right,
-                clipRect.height());
+        LongScreenshotsTabServiceJni.get()
+                .captureTabAndroid(
+                        mNativeLongScreenshotsTabService,
+                        tab.getId(),
+                        tab.getUrl(),
+                        tab.getWebContents(),
+                        clipRect.left,
+                        clipRect.top,
+                        clipRect.width(),
+                        clipRect.height(),
+                        inMemory,
+                        clipXCoordOverride,
+                        clipYCoordOverride);
     }
 
     public void longScreenshotsClosed() {
         if (mNativeLongScreenshotsTabService == 0) {
             return;
         }
-        LongScreenshotsTabServiceJni.get().longScreenshotsClosedAndroid(
-                mNativeLongScreenshotsTabService);
+        LongScreenshotsTabServiceJni.get()
+                .longScreenshotsClosedAndroid(mNativeLongScreenshotsTabService);
     }
 
     @Override
@@ -96,11 +126,29 @@ public class LongScreenshotsTabService implements NativePaintPreviewServiceProvi
         return mNativeLongScreenshotsTabService;
     }
 
+    public void releaseNativeCaptureResultPtr(long nativeCaptureResultPtr) {
+        if (nativeCaptureResultPtr == 0) return;
+
+        LongScreenshotsTabServiceJni.get().releaseCaptureResultPtr(nativeCaptureResultPtr);
+    }
+
     @NativeMethods
     interface Natives {
-        void captureTabAndroid(long nativeLongScreenshotsTabService, int tabId,
-                WebContents webContents, int clipX, int clipY, int clipWidth, int clipHeight);
+        void captureTabAndroid(
+                long nativeLongScreenshotsTabService,
+                int tabId,
+                GURL url,
+                WebContents webContents,
+                int clipX,
+                int clipY,
+                int clipWidth,
+                int clipHeight,
+                boolean inMemory,
+                int clipXCoordOverride,
+                int clipYCoordOverride);
 
         void longScreenshotsClosedAndroid(long nativeLongScreenshotsTabService);
+
+        void releaseCaptureResultPtr(long captureResultPtr);
     }
 }

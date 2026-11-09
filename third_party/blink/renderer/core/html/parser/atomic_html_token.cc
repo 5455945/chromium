@@ -1,15 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/parser/atomic_html_token.h"
 
-namespace blink {
+#include "base/compiler_specific.h"
 
-QualifiedName AtomicHTMLToken::NameForAttribute(
-    const HTMLToken::Attribute& attribute) const {
-  return QualifiedName(g_null_atom, attribute.GetName(), g_null_atom);
-}
+namespace blink {
 
 bool AtomicHTMLToken::UsesName() const {
   return type_ == HTMLToken::kStartTag || type_ == HTMLToken::kEndTag ||
@@ -33,22 +30,24 @@ const char* ToString(HTMLToken::TokenType type) {
     DEFINE_STRINGIFY(kComment);
     DEFINE_STRINGIFY(kCharacter);
     DEFINE_STRINGIFY(kEndOfFile);
+    DEFINE_STRINGIFY(kProcessingInstruction);
 #undef DEFINE_STRINGIFY
   }
   return "<unknown>";
 }
 
 void AtomicHTMLToken::Show() const {
-  printf("AtomicHTMLToken %s", ToString(type_));
+  UNSAFE_TODO(printf("AtomicHTMLToken %s", ToString(type_)));
   switch (type_) {
     case HTMLToken::kStartTag:
     case HTMLToken::kEndTag:
       if (self_closing_)
         printf(" selfclosing");
-      FALLTHROUGH;
+      [[fallthrough]];
     case HTMLToken::DOCTYPE:
-      printf(" name \"%s\"", name_.GetString().Utf8().c_str());
+      printf(" name \"%s\"", GetName().GetString().Utf8().c_str());
       break;
+    case HTMLToken::kProcessingInstruction:
     case HTMLToken::kComment:
     case HTMLToken::kCharacter:
       printf(" data \"%s\"", data_.Utf8().c_str());

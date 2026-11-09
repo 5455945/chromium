@@ -1,60 +1,123 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tab.state;
 
+import android.text.TextUtils;
+
+import androidx.annotation.IntDef;
+import androidx.annotation.VisibleForTesting;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.chrome.browser.tab.proto.PriceTracking.PriceTrackingData;
+import org.chromium.build.annotations.NullMarked;
 
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
-/**
- * Records metrics to better understand and enhance our price drops feature
- */
+/** Records metrics to better understand and enhance our price drops feature */
+@NullMarked
 public class PriceDropMetricsLogger {
-    private MetricsResult mMetrics;
+    private static final long NINETY_DAYS_MS = TimeUnit.DAYS.toMillis(90);
+    private static final long ONE_DAY_MS = TimeUnit.DAYS.toMillis(1);
+
+    private ShoppingPersistedTabData mShoppingPersistedTabData;
+
+    @IntDef({TabUsageStatus.ABANDONED, TabUsageStatus.STALE, TabUsageStatus.ACTIVE})
+    @Retention(RetentionPolicy.SOURCE)
+    @VisibleForTesting
+    protected @interface TabUsageStatus {
+        int ABANDONED = 0;
+        int STALE = 1;
+        int ACTIVE = 2;
+    }
+
+    private static String getTabUsageStatusString(@TabUsageStatus int status) {
+        switch (status) {
+            case TabUsageStatus.ABANDONED:
+                return "AbandonedTab";
+            case TabUsageStatus.STALE:
+                return "StaleTab";
+            case TabUsageStatus.ACTIVE:
+                return "ActiveTab";
+            default:
+                assert false : "Unexpected TabUsageStatus: " + status;
+                return "";
+        }
+    }
 
     /**
-     * Log metrics related to our price drops feature
-     * @param priceTrackingDataProto price tracking data proto acquired from OptimizationGuide to
-     *         power the price drops experimence
+     * Log metrics related to our price drops feature.
+     * @param shoppingPersistedTabData {@link ShoppingPersistedTabData} associated with price drop
+     *         data.
      */
-    PriceDropMetricsLogger(PriceTrackingData priceTrackingDataProto) {
-        mMetrics = deriveMetrics(priceTrackingDataProto);
+    PriceDropMetricsLogger(ShoppingPersistedTabData shoppingPersistedTabData) {
+        mShoppingPersistedTabData = shoppingPersistedTabData;
     }
 
     /**
      * Log metrics related to the price drops feature
      * @param locationIdentifier to be placed in the metric name (these metrics are recorded in
-     *         different places in the user experience)
+     *         different places in the user experience).
+     * @param timeSinceTabLastOpenedMs time since the tab was last opened in milliseconds.
      */
-    public void logPriceDropMetrics(String locationIdentifier) {
+    public void logPriceDropMetrics(String locationIdentifier, long timeSinceTabLastOpenedMs) {
+        @TabUsageStatus int tabUsageStatus = getTabUsageStatus(timeSinceTabLastOpenedMs);
+        // Tabs greater than 90 days old are not included in price drops, so the following shouldn't
+        // happen but is included as a safeguard.
+        if (tabUsageStatus == TabUsageStatus.ABANDONED) {
+            return;
+        }
+        MetricsResult metrics = deriveMetrics();
         RecordHistogram.recordBooleanHistogram(
-                String.format(Locale.US, "Commerce.PriceDrops.%s.IsProductDetailPage",
+                String.format(
+                        Locale.US,
+                        "Commerce.PriceDrops.%s%s.IsProductDetailPage",
+                        getTabUsageStatusString(tabUsageStatus),
                         locationIdentifier),
-                mMetrics.isProductDetailPage);
+                metrics.isProductDetailPage);
         RecordHistogram.recordBooleanHistogram(
                 String.format(
-                        Locale.US, "Commerce.PriceDrops.%s.ContainsPrice", locationIdentifier),
-                mMetrics.containsPrice);
+                        Locale.US,
+                        "Commerce.PriceDrops.%s%s.ContainsPrice",
+                        getTabUsageStatusString(tabUsageStatus),
+                        locationIdentifier),
+                metrics.containsPrice);
         RecordHistogram.recordBooleanHistogram(
                 String.format(
-                        Locale.US, "Commerce.PriceDrops.%s.ContainsPriceDrop", locationIdentifier),
-                mMetrics.containsPriceDrop);
+                        Locale.US,
+                        "Commerce.PriceDrops.%s%s.ContainsPriceDrop",
+                        getTabUsageStatusString(tabUsageStatus),
+                        locationIdentifier),
+                metrics.containsPriceDrop);
     }
 
-    private static MetricsResult deriveMetrics(PriceTrackingData priceTrackingDataProto) {
-        return new MetricsResult(priceTrackingDataProto.hasBuyableProduct()
-                        && priceTrackingDataProto.getBuyableProduct().hasOfferId(),
-                priceTrackingDataProto.hasBuyableProduct()
-                        && priceTrackingDataProto.getBuyableProduct().hasCurrentPrice(),
-                priceTrackingDataProto.hasProductUpdate()
-                        && priceTrackingDataProto.getProductUpdate().hasOldPrice()
-                        && priceTrackingDataProto.getProductUpdate().hasNewPrice());
+    protected MetricsResult getMetricsResultForTesting() {
+        return deriveMetrics();
     }
 
-    private static class MetricsResult {
+    private MetricsResult deriveMetrics() {
+        return new MetricsResult(
+                !TextUtils.isEmpty(mShoppingPersistedTabData.getMainOfferId()),
+                mShoppingPersistedTabData.hasPriceMicros(),
+                mShoppingPersistedTabData.hasPriceMicros()
+                        && mShoppingPersistedTabData.hasPreviousPriceMicros());
+    }
+
+    @VisibleForTesting
+    protected static @TabUsageStatus int getTabUsageStatus(long timeSinceTabLastOpenedMs) {
+        if (timeSinceTabLastOpenedMs >= NINETY_DAYS_MS) {
+            return TabUsageStatus.ABANDONED;
+        }
+        return timeSinceTabLastOpenedMs < ONE_DAY_MS ? TabUsageStatus.ACTIVE : TabUsageStatus.STALE;
+    }
+
+    @VisibleForTesting
+    protected static class MetricsResult {
         public final boolean isProductDetailPage;
         public final boolean containsPrice;
         public final boolean containsPriceDrop;
@@ -65,5 +128,10 @@ public class PriceDropMetricsLogger {
             this.containsPrice = containsPrice;
             this.containsPriceDrop = containsPriceDrop;
         }
+    }
+
+    @SuppressWarnings("NullAway")
+    public void destroy() {
+        mShoppingPersistedTabData = null;
     }
 }

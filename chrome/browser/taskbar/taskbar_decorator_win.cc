@@ -1,22 +1,23 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/taskbar/taskbar_decorator_win.h"
 
 #include <objbase.h>
+
 #include <shobjidl.h>
+
 #include <wrl/client.h>
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/win/scoped_gdi_object.h"
 #include "chrome/browser/browser_process.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "skia/ext/font_utils.h"
 #include "skia/ext/image_operations.h"
 #include "skia/ext/legacy_display_globals.h"
 #include "skia/ext/platform_canvas.h"
@@ -32,12 +34,12 @@
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkFont.h"
-#include "third_party/skia/include/core/SkImageEncoder.h"
+#include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkRRect.h"
 #include "third_party/skia/include/core/SkStream.h"
-#include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image.h"
+#include "ui/gfx/win/icon_util.h"
 #include "ui/views/win/hwnd_util.h"
 
 namespace taskbar {
@@ -64,7 +66,8 @@ void SetOverlayIcon(HWND hwnd,
 
   base::win::ScopedGDIObject<HICON> icon;
   if (bitmap) {
-    DCHECK_GE(bitmap.get()->width(), bitmap.get()->height());
+    CHECK_GE(bitmap.get()->width(), bitmap.get()->height(),
+             base::NotFatalUntil::M163);
 
     // Maintain aspect ratio on resize, but prefer more square.
     // (We used to round down here, but rounding up produces nicer results.)
@@ -72,7 +75,7 @@ void SetOverlayIcon(HWND hwnd,
         kOverlayIconSize *
         (static_cast<float>(bitmap.get()->height()) / bitmap.get()->width()));
 
-    DCHECK_GE(kOverlayIconSize, resized_height);
+    CHECK_GE(kOverlayIconSize, resized_height, base::NotFatalUntil::M163);
     // Since the target size is so small, we use our best resizer.
     SkBitmap sk_icon = skia::ImageOperations::Resize(
         *bitmap.get(), skia::ImageOperations::RESIZE_LANCZOS3, kOverlayIconSize,
@@ -148,7 +151,7 @@ void DrawTaskbarDecorationString(gfx::NativeWindow window,
   paint.reset();
   paint.setColor(kForegroundColor);
 
-  SkFont font;
+  SkFont font = skia::DefaultFont();
 
   SkRect bounds;
   int text_size = kMaxTextSize;
@@ -207,7 +210,7 @@ void UpdateTaskbarDecoration(Profile* profile, gfx::NativeWindow window) {
   // the relaunch details.
   // TODO(calamity): ideally this should not be necessary but due to issues
   // with the default shortcut being pinned, we add the runtime badge for
-  // safety. See crbug.com/313800.
+  // safety. See crbug.com/41070028.
   gfx::Image decoration;
   AvatarMenu::ImageLoadStatus status = AvatarMenu::GetImageForMenuButton(
       profile->GetPath(), &decoration, kOverlayIconSize);

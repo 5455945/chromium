@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,6 @@
 #include "content/public/test/browser_test.h"
 #include "ui/base/l10n/time_format.h"
 
-using base::TimeDelta;
 
 class TimeFormatBrowserTest : public InProcessBrowserTest {
  public:
@@ -34,10 +33,10 @@ IN_PROC_BROWSER_TEST_F(TimeFormatBrowserTest, DecimalPointNotDot) {
   // decimal digits. The icu library wasn't handling this, leading to "1"
   // being internally converted to "+1,0e00" and ultimately leading to "NaN".
   // This showed up on the browser on estimated download time, for example.
-  // http://crbug.com/60476
+  // http://crbug.com/40465768
 
-  std::u16string one_min = ui::TimeFormat::Simple(
-      ui::TimeFormat::FORMAT_DURATION, ui::TimeFormat::LENGTH_SHORT,
-      TimeDelta::FromMinutes(1));
+  std::u16string one_min =
+      ui::TimeFormat::Simple(ui::TimeFormat::FORMAT_DURATION,
+                             ui::TimeFormat::LENGTH_SHORT, base::Minutes(1));
   EXPECT_EQ(u"1 min", one_min);
 }

@@ -1,26 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.share.send_tab_to_self;
-
-import android.support.test.filters.SmallTest;
 
 import androidx.annotation.Nullable;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.share.send_tab_to_self.NotificationSharedPrefManager.ActiveNotification;
 
 /** Tests for NotificationSharedPrefManagerTest */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NotificationSharedPrefManagerTest {
     private @Nullable ActiveNotification deserialize(String serialized) {
         return NotificationSharedPrefManager.deserializeNotification(serialized);
@@ -35,7 +32,6 @@ public class NotificationSharedPrefManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testSerialization() {
         ActiveNotification versioned = new ActiveNotification(100, 50, "guid25");
         Assert.assertEquals(
@@ -44,10 +40,14 @@ public class NotificationSharedPrefManagerTest {
         ActiveNotification unVersioned = new ActiveNotification(50, "guid25");
         Assert.assertEquals(
                 "1_50_guid25", NotificationSharedPrefManager.serializeNotification(unVersioned));
+
+        ActiveNotification underscoreGuid = new ActiveNotification(50, "test_guid");
+        Assert.assertEquals(
+                "1_50_test_guid",
+                NotificationSharedPrefManager.serializeNotification(underscoreGuid));
     }
 
     @Test
-    @SmallTest
     public void testActiveNotificationCreation() {
         ActiveNotification versioned = new ActiveNotification(100, 50, "guid25");
         Assert.assertEquals(100, versioned.version);
@@ -61,14 +61,19 @@ public class NotificationSharedPrefManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testDeserialization() {
         assertNotificationEquals(100, 50, "guid25", deserialize("100_50_guid25"));
 
-        // Too many tokens
-        Assert.assertNull(deserialize("100_12_12_12_guid"));
+        // GUIDs containing underscores
+        assertNotificationEquals(1, 50, "test_guid", deserialize("1_50_test_guid"));
+        assertNotificationEquals(100, 12, "12_12_guid", deserialize("100_12_12_12_guid"));
+        assertNotificationEquals(1, 2, "guid_", deserialize("1_2_guid_"));
+        assertNotificationEquals(1, 2, "_guid", deserialize("1_2__guid"));
+        assertNotificationEquals(1, 2, "a_b_c_d", deserialize("1_2_a_b_c_d"));
 
         // Not enough tokens
+        Assert.assertNull(deserialize(""));
+        Assert.assertNull(deserialize("100"));
         Assert.assertNull(deserialize("100_guid"));
 
         // Malformed version
@@ -77,8 +82,7 @@ public class NotificationSharedPrefManagerTest {
         // Malformed notificationId
         Assert.assertNull(deserialize("100_notificationId_guid"));
 
-        // Trailing tokens
-        assertNotificationEquals(1, 2, "guid", deserialize("1_2_guid_"));
+        // Empty tokens (including empty GUID)
         Assert.assertNull(deserialize("_2_guid"));
         Assert.assertNull(deserialize("1__guid"));
         Assert.assertNull(deserialize("1_2_"));
@@ -88,7 +92,6 @@ public class NotificationSharedPrefManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testNextNotificationId() {
         int id = NotificationSharedPrefManager.getNextNotificationId();
         Assert.assertEquals(0, id);
@@ -101,9 +104,8 @@ public class NotificationSharedPrefManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testMaxNotificationId() {
-        SharedPreferencesManager prefs = SharedPreferencesManager.getInstance();
+        SharedPreferencesManager prefs = ChromeSharedPreferences.getInstance();
         prefs.writeInt(
                 ChromePreferenceKeys.SEND_TAB_TO_SELF_NEXT_NOTIFICATION_ID, Integer.MAX_VALUE - 1);
 
@@ -121,7 +123,6 @@ public class NotificationSharedPrefManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testAddAndFindActiveNotification() {
         ActiveNotification notification = new ActiveNotification(100, 50, "guid25");
         NotificationSharedPrefManager.addActiveNotification(notification);
@@ -130,7 +131,6 @@ public class NotificationSharedPrefManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testRemoveActiveNotification() {
         Assert.assertFalse(NotificationSharedPrefManager.removeActiveNotification("guid25"));
 

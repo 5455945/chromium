@@ -1,28 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 chrome.test.runTests([
-  // Tests that attaching a named event twice will fail.
-  function doubleAttach() {
-    function dummy() {};
-    var onClicked = new chrome.Event("browserAction.onClicked");
-    var onClicked2 = new chrome.Event("browserAction.onClicked");
-    onClicked.addListener(dummy);
-    chrome.test.assertTrue(onClicked.hasListeners());
-    try {
-      onClicked2.addListener(dummy);
-      chrome.test.fail();
-    } catch (e) {
-      chrome.test.assertTrue(
-          e.message.search("already attached") >= 0,
-          e.message);
-    }
-    chrome.test.assertFalse(onClicked2.hasListeners());
-    onClicked2.removeListener(dummy);
-
-    onClicked.removeListener(dummy);
-    chrome.test.assertFalse(onClicked.hasListeners());
+  function listenerManagement() {
+    function emptyFunction() {}
+    chrome.action.onClicked.addListener(emptyFunction);
+    chrome.test.assertTrue(chrome.action.onClicked.hasListeners());
+    chrome.action.onClicked.removeListener(emptyFunction);
+    chrome.test.assertFalse(chrome.action.onClicked.hasListeners());
     chrome.test.succeed();
   },
 
@@ -30,9 +16,9 @@ chrome.test.runTests([
   function twoPageAttach() {
     // Test harness should already have opened tab.html, which registers this
     // listener.
-    chrome.browserAction.onClicked.addListener(function() {});
+    chrome.action.onClicked.addListener(function() {});
 
     // Test continues in twoPageAttach.html.
-    window.open("twoPageAttach.html");
+    chrome.tabs.create({url: 'twoPageAttach.html'});
   },
 ]);

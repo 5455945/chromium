@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,101 +6,139 @@
 #define CHROME_BROWSER_BANNERS_APP_BANNER_MANAGER_DESKTOP_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/web_applications/components/app_registrar.h"
-#include "chrome/browser/web_applications/components/app_registrar_observer.h"
-#include "chrome/browser/web_applications/components/web_app_id.h"
+#include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
+#include "chrome/browser/web_applications/web_app_install_manager.h"
+#include "chrome/browser/web_applications/web_app_install_manager_observer.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
-#include "content/public/browser/web_contents_user_data.h"
+#include "components/webapps/common/web_app_id.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace extensions {
 class ExtensionRegistry;
 }
 
-namespace web_app {
-enum class InstallResultCode;
+namespace tabs {
+class TabInterface;
 }
 
 namespace webapps {
+enum class InstallResultCode;
 class TestAppBannerManagerDesktop;
 
-// Manages web app banners for desktop platforms.
-class AppBannerManagerDesktop
-    : public AppBannerManager,
-      public content::WebContentsUserData<AppBannerManagerDesktop>,
-      public web_app::AppRegistrarObserver {
+// Manages web app banners for desktop platforms. Owned by the tab's
+// TabFeatures.
+class AppBannerManagerDesktop : public AppBannerManager::Delegate,
+                                public web_app::WebAppInstallManagerObserver {
  public:
+  DECLARE_USER_DATA(AppBannerManagerDesktop);
+
+  AppBannerManagerDesktop(const AppBannerManagerDesktop&) = delete;
+  AppBannerManagerDesktop& operator=(const AppBannerManagerDesktop&) = delete;
+
   ~AppBannerManagerDesktop() override;
 
-  static void CreateForWebContents(content::WebContents* web_contents);
-  using content::WebContentsUserData<AppBannerManagerDesktop>::FromWebContents;
+  // Creates the manager, honoring the testing factory override.
+  // `web_contents` is passed explicitly because during a discard the manager
+  // is recreated for the incoming WebContents before `tab` swaps its
+  // contents.
+  static std::unique_ptr<AppBannerManagerDesktop> Create(
+      tabs::TabInterface& tab,
+      content::WebContents* web_contents);
 
-  // Turn off triggering on engagement notifications or navigates, for testing
-  // purposes only.
-  static void DisableTriggeringForTesting();
+  static AppBannerManagerDesktop* From(tabs::TabInterface* tab);
+
+  // Deregisters this manager from the tab's UnownedUserDataHost ahead of its
+  // asynchronous destruction during a tab discard, so that the replacement
+  // manager can register while observers of the old one detach in their own
+  // discard callbacks.
+  void DeregisterFromTabForDiscard();
+
   virtual TestAppBannerManagerDesktop*
   AsTestAppBannerManagerDesktopForTesting();
 
+  AppBannerManager* app_banner_manager() const {
+    return app_banner_manager_.get();
+  }
+
  protected:
-  explicit AppBannerManagerDesktop(content::WebContents* web_contents);
+  AppBannerManagerDesktop(tabs::TabInterface& tab,
+                          content::WebContents* web_contents);
 
   using CreateAppBannerManagerForTesting =
-      std::unique_ptr<AppBannerManagerDesktop> (*)(content::WebContents*);
+      std::unique_ptr<AppBannerManagerDesktop> (*)(tabs::TabInterface&,
+                                                   content::WebContents*);
   static CreateAppBannerManagerForTesting
       override_app_banner_manager_desktop_for_testing_;
 
-  // AppBannerManager overrides.
-  base::WeakPtr<AppBannerManager> GetWeakPtr() override;
-  void InvalidateWeakPtrs() override;
+  // AppBannerManager::Delegate overrides.
+  bool CanRequestAppBanner() const override;
+  InstallableParams ParamsToPerformInstallableWebAppCheck() override;
+  bool ShouldDoNativeAppCheck(const blink::Manifest& manifest) const override;
+  void DoNativeAppInstallableCheck(content::WebContents* web_contents,
+                                   const GURL& validated_url,
+                                   const blink::Manifest& manifest,
+                                   NativeCheckCallback callback) override;
+  void OnWebAppInstallableCheckedNoErrors(
+      const ManifestId& manifest_id) override;
+  base::expected<void, InstallableStatusCode> CanRunWebAppInstallableChecks(
+      const blink::Manifest& manifest) override;
   bool IsSupportedNonWebAppPlatform(
       const std::u16string& platform) const override;
   bool IsRelatedNonWebAppInstalled(
       const blink::Manifest::RelatedApplication& related_app) const override;
-  bool IsWebAppConsideredInstalled() const override;
-
-  // content::WebContentsObserver override.
-  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                     const GURL& validated_url) override;
+  void MaybeShowAmbientBadge(const InstallBannerConfig& config) override;
+  void InvalidateWeakPtrsForThisNavigation() override;
+  void ResetCurrentPageData() override;
+  void OnMlInstallPrediction(std::string result_label) override;
+  AppBannerManager::ShowBannerUiResult ShowBannerUi(
+      WebappInstallSource install_source,
+      const InstallBannerConfig& config) override;
 
   // Called when the web app install initiated by a banner has completed.
-  virtual void DidFinishCreatingWebApp(const web_app::AppId& app_id,
-                                       web_app::InstallResultCode code);
+  void DidFinishCreatingWebApp(
+      const webapps::ManifestId& manifest_id,
+      base::WeakPtr<AppBannerManagerDesktop> is_navigation_current,
+      const webapps::AppId& app_id,
+      webapps::InstallResultCode code);
 
  private:
-  friend class content::WebContentsUserData<AppBannerManagerDesktop>;
-  friend class FakeAppBannerManagerDesktop;
+  web_app::WebAppRegistrar& registrar() const;
 
-  web_app::AppRegistrar& registrar();
+  // web_app::WebAppInstallManagerObserver:
+  void OnWebAppInstalledWithOsHooks(const webapps::AppId& app_id) override;
+  void OnWebAppWillBeUninstalled(const webapps::AppId& app_id) override;
+  void OnWebAppUninstalled(
+      const webapps::AppId& app_id,
+      webapps::WebappUninstallSource uninstall_source) override;
+  void OnWebAppInstallManagerDestroyed() override;
+  void InstallableWebAppStatusUpdate() override;
 
-  // AppBannerManager overrides.
-  bool ShouldAllowWebAppReplacementInstall() override;
-  void ShowBannerUi(WebappInstallSource install_source) override;
+  void CreateWebApp(WebappInstallSource install_source,
+                    web_app::WebAppInstalledCallback install_callback);
+  // Catch only kSuccessNewInstall and kUserInstallDeclined user responses if
+  // the dialog is triggered by ML.
+  void DidCreateWebAppFromMLDialog(const webapps::AppId& app_id,
+                                   webapps::InstallResultCode code);
 
-  // SiteEngagementObserver override.
-  void OnEngagementEvent(content::WebContents* web_contents,
-                         const GURL& url,
-                         double score,
-                         site_engagement::EngagementType type) override;
+  std::unique_ptr<AppBannerManager> app_banner_manager_;
 
-  // web_app::AppRegistrarObserver:
-  void OnWebAppInstalled(const web_app::AppId& app_id) override;
-  void OnAppRegistrarDestroyed() override;
+  raw_ptr<extensions::ExtensionRegistry> extension_registry_;
+  webapps::AppId uninstalling_app_id_;
 
-  void CreateWebApp(WebappInstallSource install_source);
+  base::ScopedObservation<web_app::WebAppInstallManager,
+                          web_app::WebAppInstallManagerObserver>
+      install_manager_observation_{this};
 
-  extensions::ExtensionRegistry* extension_registry_;
-
-  base::ScopedObservation<web_app::AppRegistrar, web_app::AppRegistrarObserver>
-      registrar_observation_{this};
+  std::optional<ui::ScopedUnownedUserData<AppBannerManagerDesktop>>
+      scoped_unowned_user_data_;
 
   base::WeakPtrFactory<AppBannerManagerDesktop> weak_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(AppBannerManagerDesktop);
 };
 
 }  // namespace webapps

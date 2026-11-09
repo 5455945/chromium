@@ -1,27 +1,41 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_WALLPAPER_WALLPAPER_CONSTANTS_H_
 #define ASH_WALLPAPER_WALLPAPER_CONSTANTS_H_
 
-#include "ash/login/ui/login_constants.h"
-#include "ash/style/ash_color_provider.h"
+#include <cstdint>
+#include <string_view>
 
-namespace ash {
-
-namespace wallpaper_constants {
+namespace ash::wallpaper_constants {
 
 // Blur sigma used for normal wallpaper.
-constexpr float kClear = 0.f;
-// Blur sigma used in overview mode.
-constexpr float kOverviewBlur =
-    static_cast<float>(AshColorProvider::LayerBlurSigma::kBlurDefault);
+inline constexpr float kClear = 0.f;
 // Blur sigma in lock/login screen.
-constexpr float kLockLoginBlur = 30.0f;
+inline constexpr float kLockLoginBlur = 30.0f;
+// Blur sigma used in oobe.
+inline constexpr float kOobeBlur = 30.0f;
 
-}  // namespace wallpaper_constants
+// File path suffix of resized small wallpapers.
+inline constexpr char kSmallWallpaperSuffix[] = "_small";
 
-}  // namespace ash
+// The ID of the time of day wallpaper collection served by backdrop server.
+inline constexpr char kTimeOfDayWallpaperCollectionId[] =
+    "_time_of_day_chromebook_collection";
+// The ID of the default time of day wallpaper.
+inline constexpr uint64_t kDefaultTimeOfDayWallpaperUnitId = 18;
+
+// Set a different time of day wallpaper for devices with specific customization
+// id.
+inline constexpr std::string_view kAlternateWallpaperCustomizationId = "navi";
+inline constexpr uint64_t kAlternateTimeOfDayWallpaperUnitId = 19;
+
+// The subdirectory name for storing SeaPen wallpaper. There is a SeaPen
+// subdirectory in the global wallpaper directory, and in
+// <user_profile_directory>/wallpaper/sea_pen.
+inline constexpr char kSeaPenWallpaperDirName[] = "sea_pen";
+
+}  // namespace ash::wallpaper_constants
 
 #endif  // ASH_WALLPAPER_WALLPAPER_CONSTANTS_H_

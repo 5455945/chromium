@@ -1,25 +1,28 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/commerce/merchant_viewer/merchant_viewer_data_manager.h"
 
-#include "base/bind.h"
-#include "base/metrics/histogram_macros.h"
+#include <algorithm>
+#include <optional>
+
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros_local.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/commerce/commerce_feature_list.h"
+#include "base/time/time.h"
 #include "chrome/browser/commerce/merchant_viewer/merchant_viewer_data_manager_factory.h"
-#include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/persisted_state_db/profile_proto_db.h"
-#include "chrome/browser/persisted_state_db/profile_proto_db_factory.h"
+#include "chrome/browser/persisted_state_db/session_proto_db_factory.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/embedder_support/android/browser_context/browser_context_handle.h"
+#include "components/commerce/core/commerce_feature_list.h"
+#include "components/session_proto_db/session_proto_db.h"
+#include "content/public/browser/android/browser_context_handle.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 using std::string;
@@ -31,7 +34,8 @@ merchant_signal_db::MerchantSignalContentProto BuildProto(
     base::Time time_created) {
   merchant_signal_db::MerchantSignalContentProto proto;
   proto.set_key(hostname);
-  proto.set_trust_signals_message_displayed_timestamp(time_created.ToDoubleT());
+  proto.set_trust_signals_message_displayed_timestamp(
+      time_created.InSecondsFSinceUnixEpoch());
   return proto;
 }
 }  // namespace
@@ -45,7 +49,6 @@ class MerchantViewerDataManagerTest : public testing::Test {
     testing::Test::SetUp();
 
     service_ = MerchantViewerDataManagerFactory::GetForProfile(&profile_);
-    DCHECK(profile_.CreateHistoryService());
   }
 
   void TearDown() override {
@@ -64,16 +67,12 @@ class MerchantViewerDataManagerTest : public testing::Test {
                              vector<string> expected_hostnames,
                              bool success,
                              MerchantViewerDataManager::MerchantSignals found) {
-    EXPECT_EQ(true, success);
-    vector<string> found_hostnames;
-    std::transform(found.begin(), found.end(),
-                   std::back_inserter(found_hostnames),
-                   [](const auto& item) { return item.second.key(); });
+    EXPECT_TRUE(success);
 
-    std::sort(found_hostnames.begin(), found_hostnames.end());
-    std::sort(expected_hostnames.begin(), expected_hostnames.end());
+    EXPECT_THAT(base::ToVector(
+                    found, [](const auto& item) { return item.second.key(); }),
+                testing::UnorderedElementsAreArray(expected_hostnames));
 
-    EXPECT_EQ(expected_hostnames, found_hostnames);
     std::move(closure).Run();
   }
 
@@ -82,7 +81,7 @@ class MerchantViewerDataManagerTest : public testing::Test {
   // Required to run tests from UI thread.
   content::BrowserTaskEnvironment task_environment_;
   TestingProfile profile_;
-  MerchantViewerDataManager* service_;
+  raw_ptr<MerchantViewerDataManager> service_;
 };
 
 const char kMockMerchantA[] = "foo.com";
@@ -93,7 +92,7 @@ const char kMockMerchantUrlB[] = "https://bar.com/";
 TEST_F(MerchantViewerDataManagerTest, TestDeleteMerchantViewerDataForOrigins) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   merchant_signal_db::MerchantSignalContentProto protoA =
@@ -144,7 +143,7 @@ TEST_F(MerchantViewerDataManagerTest,
        TestDeleteMerchantViewerDataForOriginsEmpty) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   merchant_signal_db::MerchantSignalContentProto protoA =
@@ -181,17 +180,17 @@ TEST_F(MerchantViewerDataManagerTest,
 TEST_F(MerchantViewerDataManagerTest, DeleteMerchantViewerDataForTimeRange) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   base::Time start_time = base::Time::Now();
-  base::Time end_time = start_time + base::TimeDelta::FromDays(3);
+  base::Time end_time = start_time + base::Days(3);
 
   merchant_signal_db::MerchantSignalContentProto protoA =
-      BuildProto(kMockMerchantA, start_time + base::TimeDelta::FromDays(1));
+      BuildProto(kMockMerchantA, start_time + base::Days(1));
 
   merchant_signal_db::MerchantSignalContentProto protoB =
-      BuildProto(kMockMerchantB, start_time + base::TimeDelta::FromDays(2));
+      BuildProto(kMockMerchantB, start_time + base::Days(2));
 
   base::RunLoop run_loop[4];
 
@@ -233,17 +232,17 @@ TEST_F(MerchantViewerDataManagerTest,
        DeleteMerchantViewerDataForTimeRangeNoDeletion) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   base::Time start_time = base::Time::Now();
-  base::Time end_time = start_time + base::TimeDelta::FromDays(3);
+  base::Time end_time = start_time + base::Days(3);
 
   merchant_signal_db::MerchantSignalContentProto protoA =
-      BuildProto(kMockMerchantA, start_time - base::TimeDelta::FromDays(1));
+      BuildProto(kMockMerchantA, start_time - base::Days(1));
 
   merchant_signal_db::MerchantSignalContentProto protoB =
-      BuildProto(kMockMerchantB, start_time - base::TimeDelta::FromDays(1));
+      BuildProto(kMockMerchantB, start_time - base::Days(1));
 
   base::RunLoop run_loop[4];
 
@@ -281,17 +280,17 @@ TEST_F(MerchantViewerDataManagerTest,
        DeleteMerchantViewerDataForTimeRangeWithinWindow) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   base::Time start_time = base::Time::Now();
-  base::Time end_time = start_time + base::TimeDelta::FromDays(3);
+  base::Time end_time = start_time + base::Days(3);
 
   merchant_signal_db::MerchantSignalContentProto protoA =
-      BuildProto(kMockMerchantA, start_time - base::TimeDelta::FromDays(1));
+      BuildProto(kMockMerchantA, start_time - base::Days(1));
 
   merchant_signal_db::MerchantSignalContentProto protoB =
-      BuildProto(kMockMerchantB, start_time + base::TimeDelta::FromDays(1));
+      BuildProto(kMockMerchantB, start_time + base::Days(1));
 
   base::RunLoop run_loop[4];
 
@@ -332,7 +331,7 @@ TEST_F(MerchantViewerDataManagerTest,
        DeleteMerchantViewerDataForOrigins_OriginNotFound) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   base::RunLoop run_loop[1];
@@ -351,7 +350,7 @@ TEST_F(MerchantViewerDataManagerTest,
        DeleteMerchantViewerDataForOrigins_VerifyCount) {
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   merchant_signal_db::MerchantSignalContentProto protoA =
@@ -404,7 +403,7 @@ TEST_F(MerchantViewerDataManagerTest,
 
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   merchant_signal_db::MerchantSignalContentProto protoA =
@@ -456,17 +455,17 @@ TEST_F(MerchantViewerDataManagerTest,
 
   base::HistogramTester histogram_tester;
 
-  ProfileProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
+  SessionProtoDB<merchant_signal_db::MerchantSignalContentProto>* db =
       service_->GetDB();
 
   base::Time start_time = base::Time::Now();
-  base::Time end_time = start_time + base::TimeDelta::FromDays(3);
+  base::Time end_time = start_time + base::Days(3);
 
   merchant_signal_db::MerchantSignalContentProto protoA =
-      BuildProto(kMockMerchantA, start_time - base::TimeDelta::FromDays(4));
+      BuildProto(kMockMerchantA, start_time - base::Days(4));
 
   merchant_signal_db::MerchantSignalContentProto protoB =
-      BuildProto(kMockMerchantB, start_time + base::TimeDelta::FromDays(1));
+      BuildProto(kMockMerchantB, start_time + base::Days(1));
 
   base::RunLoop run_loop[4];
 

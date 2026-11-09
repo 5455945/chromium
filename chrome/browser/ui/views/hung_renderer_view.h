@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "content/public/browser/render_process_host.h"
@@ -69,9 +69,9 @@ class HungPagesTableModel : public ui::TableModel,
   content::RenderWidgetHost* GetRenderWidgetHost();
 
   // Overridden from ui::TableModel:
-  int RowCount() override;
-  std::u16string GetText(int row, int column_id) override;
-  ui::ImageModel GetIcon(int row) override;
+  size_t RowCount() const override;
+  std::u16string GetText(size_t row, int column_id) const override;
+  ui::ImageModel GetIcon(size_t row) const override;
   void SetObserver(ui::TableModelObserver* observer) override;
 
   // Overridden from RenderProcessHostObserver:
@@ -100,12 +100,12 @@ class HungPagesTableModel : public ui::TableModel,
     }
 
     // WebContentsObserver overrides:
-    void RenderViewHostChanged(content::RenderViewHost* old_host,
-                               content::RenderViewHost* new_host) override;
+    void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                                content::RenderFrameHost* new_host) override;
     void WebContentsDestroyed() override;
 
    private:
-    HungPagesTableModel* model_;
+    raw_ptr<HungPagesTableModel> model_;
   };
 
   // Invoked when a WebContents is destroyed. Cleans up |tab_observers_| and
@@ -118,10 +118,10 @@ class HungPagesTableModel : public ui::TableModel,
 
   std::vector<std::unique_ptr<WebContentsObserverImpl>> tab_observers_;
 
-  ui::TableModelObserver* observer_ = nullptr;
-  Delegate* delegate_ = nullptr;
+  raw_ptr<ui::TableModelObserver, DanglingUntriaged> observer_ = nullptr;
+  raw_ptr<Delegate> delegate_ = nullptr;
 
-  content::RenderWidgetHost* render_widget_host_ = nullptr;
+  raw_ptr<content::RenderWidgetHost> render_widget_host_ = nullptr;
 
   // Callback that restarts the hang timeout (e.g. if the user wants to wait
   // some more until the renderer process responds).
@@ -140,9 +140,9 @@ class HungPagesTableModel : public ui::TableModel,
 // renderer process.
 class HungRendererDialogView : public views::DialogDelegateView,
                                public HungPagesTableModel::Delegate {
- public:
-  METADATA_HEADER(HungRendererDialogView);
+  METADATA_HEADER(HungRendererDialogView, views::DialogDelegateView)
 
+ public:
   HungRendererDialogView(const HungRendererDialogView&) = delete;
   HungRendererDialogView& operator=(const HungRendererDialogView&) = delete;
 
@@ -190,6 +190,18 @@ class HungRendererDialogView : public views::DialogDelegateView,
                   base::RepeatingClosure hang_monitor_restarter);
   void EndDialog(content::RenderWidgetHost* render_widget_host);
 
+  // Called when the dialog is accepted (i.e. the user clicked the "Wait"
+  // button).
+  void OnDialogAccepted();
+
+  // Called when the dialog is cancelled (i.e. the user clicked the "Exit Page"
+  // button).
+  void OnDialogCancelled();
+
+  // Called when the dialog is closed (i.e. the user closed the dialog without
+  // clicking any of the buttons, e.g. by pressing the ESC key).
+  void OnDialogClosed();
+
   // Restart the hang timer, giving the page more time.
   void RestartHangTimer();
 
@@ -221,13 +233,14 @@ class HungRendererDialogView : public views::DialogDelegateView,
   static void BypassActiveBrowserRequirementForTests();
 
   // The WebContents that this dialog was created for and is associated with.
-  content::WebContents* const web_contents_;
+  const raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged>
+      web_contents_;
 
   // The label describing the list.
-  views::Label* info_label_ = nullptr;
+  raw_ptr<views::Label> info_label_ = nullptr;
 
   // Controls within the dialog box.
-  views::TableView* hung_pages_table_ = nullptr;
+  raw_ptr<views::TableView> hung_pages_table_ = nullptr;
 
   // The model that provides the contents of the table that shows a list of
   // pages affected by the hang.

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,30 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
+#include "content/common/features.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/common/content_client.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
+#include "net/base/network_isolation_key.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
 
-class GeneratedCodeCacheTest : public testing::Test {
+class GeneratedCodeCacheTest : public testing::TestWithParam<bool> {
  public:
   // This should be larger than |kSmallDataLimit| in generated_code_cache.cc.
   static const size_t kLargeSizeInBytes = 8192;
@@ -34,7 +45,10 @@ class GeneratedCodeCacheTest : public testing::Test {
   static constexpr char kInitialOrigin[] = "http://example.com";
   static constexpr char kInitialData[] = "InitialData";
 
-  GeneratedCodeCacheTest() = default;
+  GeneratedCodeCacheTest() {
+    scoped_feature_list_.InitWithFeatureState(features::kInMemoryCodeCache,
+                                              GetParam());
+  }
 
   void SetUp() override {
     ASSERT_TRUE(cache_dir_.CreateUniqueTempDir());
@@ -43,6 +57,7 @@ class GeneratedCodeCacheTest : public testing::Test {
 
   void TearDown() override {
     disk_cache::FlushCacheThreadForTesting();
+    backend_ = nullptr;
     generated_code_cache_.reset();
     task_environment_.RunUntilIdle();
     EXPECT_TRUE(cache_dir_.Delete()) << cache_dir_.GetPath();
@@ -50,7 +65,9 @@ class GeneratedCodeCacheTest : public testing::Test {
 
   // This function initializes the cache and waits till the transaction is
   // finished. When this function returns, the backend is already initialized.
-  void InitializeCache(GeneratedCodeCache::CodeCacheType cache_type) {
+  void InitializeCache(GeneratedCodeCache::CodeCacheType cache_type,
+                       const char* initial_url = kInitialUrl,
+                       const char* initial_origin = kInitialOrigin) {
     // Create code cache
     generated_code_cache_ = std::make_unique<GeneratedCodeCache>(
         cache_path_, kMaxSizeInBytes, cache_type);
@@ -59,9 +76,8 @@ class GeneratedCodeCacheTest : public testing::Test {
         &GeneratedCodeCacheTest::GetBackendCallback, base::Unretained(this));
     generated_code_cache_->GetBackend(std::move(callback));
 
-    GURL url(kInitialUrl);
-    GURL origin_lock = GURL(kInitialOrigin);
-    WriteToCache(url, origin_lock, kInitialData, base::Time::Now());
+    WriteToCache(GURL(initial_url), GURL(initial_origin), kInitialData,
+                 base::Time::Now());
     task_environment_.RunUntilIdle();
   }
 
@@ -70,6 +86,7 @@ class GeneratedCodeCacheTest : public testing::Test {
   // to test the pending operaions path.
   void InitializeCacheAndReOpen(GeneratedCodeCache::CodeCacheType cache_type) {
     InitializeCache(cache_type);
+    backend_ = nullptr;
     generated_code_cache_ = std::make_unique<GeneratedCodeCache>(
         cache_path_, kMaxSizeInBytes, cache_type);
   }
@@ -78,20 +95,22 @@ class GeneratedCodeCacheTest : public testing::Test {
                     const GURL& origin_lock,
                     const std::string& data,
                     base::Time response_time) {
-    std::vector<uint8_t> vector_data(data.begin(), data.end());
-    generated_code_cache_->WriteEntry(url, origin_lock, response_time,
-                                      vector_data);
+    generated_code_cache_->WriteEntry(url, origin_lock,
+                                      net::NetworkIsolationKey(), response_time,
+                                      base::as_byte_span(data));
   }
 
   void DeleteFromCache(const GURL& url, const GURL& origin_lock) {
-    generated_code_cache_->DeleteEntry(url, origin_lock);
+    generated_code_cache_->DeleteEntry(url, origin_lock,
+                                       net::NetworkIsolationKey());
   }
 
   void FetchFromCache(const GURL& url, const GURL& origin_lock) {
     received_ = false;
     GeneratedCodeCache::ReadDataCallback callback = base::BindOnce(
         &GeneratedCodeCacheTest::FetchEntryCallback, base::Unretained(this));
-    generated_code_cache_->FetchEntry(url, origin_lock, std::move(callback));
+    generated_code_cache_->FetchEntry(
+        url, origin_lock, net::NetworkIsolationKey(), std::move(callback));
   }
 
   void DoomAll() {
@@ -112,14 +131,14 @@ class GeneratedCodeCacheTest : public testing::Test {
       received_response_time_ = response_time;
       return;
     }
-    std::string str(data.data(), data.data() + data.size());
     received_ = true;
     received_null_ = false;
-    received_data_ = str;
+    received_data_ = base::as_string_view(base::span(data));
     received_response_time_ = response_time;
   }
 
  protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::ScopedTempDir cache_dir_;
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<GeneratedCodeCache> generated_code_cache_;
@@ -128,7 +147,7 @@ class GeneratedCodeCacheTest : public testing::Test {
   bool received_;
   bool received_null_;
   base::FilePath cache_path_;
-  disk_cache::Backend* backend_;
+  raw_ptr<disk_cache::Backend> backend_ = nullptr;
 };
 
 constexpr char GeneratedCodeCacheTest::kInitialUrl[];
@@ -136,7 +155,7 @@ constexpr char GeneratedCodeCacheTest::kInitialOrigin[];
 constexpr char GeneratedCodeCacheTest::kInitialData[];
 const size_t GeneratedCodeCacheTest::kMaxSizeInBytes;
 
-TEST_F(GeneratedCodeCacheTest, GetResourceURLFromKey) {
+TEST_P(GeneratedCodeCacheTest, GetResourceURLFromKey) {
   // These must be kept in sync with the values in generated_code_cache.cc.
   constexpr char kPrefix[] = "_key";
   constexpr char kSeparator[] = " \n";
@@ -158,7 +177,7 @@ TEST_F(GeneratedCodeCacheTest, GetResourceURLFromKey) {
           .empty());
 }
 
-TEST_F(GeneratedCodeCacheTest, CheckResponseTime) {
+TEST_P(GeneratedCodeCacheTest, CheckResponseTime) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -174,7 +193,7 @@ TEST_F(GeneratedCodeCacheTest, CheckResponseTime) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchEntry) {
+TEST_P(GeneratedCodeCacheTest, FetchEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -186,7 +205,7 @@ TEST_F(GeneratedCodeCacheTest, FetchEntry) {
   EXPECT_EQ(kInitialData, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteEntry) {
+TEST_P(GeneratedCodeCacheTest, WriteEntry) {
   GURL new_url("http://example1.com/script.js");
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -202,7 +221,7 @@ TEST_F(GeneratedCodeCacheTest, WriteEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteLargeEntry) {
+TEST_P(GeneratedCodeCacheTest, WriteLargeEntry) {
   GURL new_url("http://example1.com/script.js");
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -218,7 +237,7 @@ TEST_F(GeneratedCodeCacheTest, WriteLargeEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteVeryLargeEntry) {
+TEST_P(GeneratedCodeCacheTest, WriteVeryLargeEntry) {
   GURL new_url("http://example1.com/script.js");
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -234,7 +253,7 @@ TEST_F(GeneratedCodeCacheTest, WriteVeryLargeEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, DeleteEntry) {
+TEST_P(GeneratedCodeCacheTest, DeleteEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -247,7 +266,7 @@ TEST_F(GeneratedCodeCacheTest, DeleteEntry) {
   ASSERT_TRUE(received_null_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteEntryWithEmptyData) {
+TEST_P(GeneratedCodeCacheTest, WriteEntryWithEmptyData) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -262,7 +281,7 @@ TEST_F(GeneratedCodeCacheTest, WriteEntryWithEmptyData) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteEntryFailure) {
+TEST_P(GeneratedCodeCacheTest, WriteEntryFailure) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -279,7 +298,7 @@ TEST_F(GeneratedCodeCacheTest, WriteEntryFailure) {
   EXPECT_EQ(base::Time(), received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteEntryFailureOutOfOrder) {
+TEST_P(GeneratedCodeCacheTest, WriteEntryFailureOutOfOrder) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -300,7 +319,7 @@ TEST_F(GeneratedCodeCacheTest, WriteEntryFailureOutOfOrder) {
   EXPECT_EQ(base::Time(), received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchEntryPendingOp) {
+TEST_P(GeneratedCodeCacheTest, FetchEntryPendingOp) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -312,7 +331,7 @@ TEST_F(GeneratedCodeCacheTest, FetchEntryPendingOp) {
   EXPECT_EQ(kInitialData, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteEntryPendingOp) {
+TEST_P(GeneratedCodeCacheTest, WriteEntryPendingOp) {
   GURL new_url("http://example1.com/script1.js");
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -328,7 +347,7 @@ TEST_F(GeneratedCodeCacheTest, WriteEntryPendingOp) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteLargeEntryPendingOp) {
+TEST_P(GeneratedCodeCacheTest, WriteLargeEntryPendingOp) {
   GURL new_url("http://example1.com/script1.js");
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -344,7 +363,7 @@ TEST_F(GeneratedCodeCacheTest, WriteLargeEntryPendingOp) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WriteVeryLargeEntryPendingOp) {
+TEST_P(GeneratedCodeCacheTest, WriteVeryLargeEntryPendingOp) {
   GURL new_url("http://example1.com/script1.js");
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -360,7 +379,7 @@ TEST_F(GeneratedCodeCacheTest, WriteVeryLargeEntryPendingOp) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, DeleteEntryPendingOp) {
+TEST_P(GeneratedCodeCacheTest, DeleteEntryPendingOp) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -373,7 +392,7 @@ TEST_F(GeneratedCodeCacheTest, DeleteEntryPendingOp) {
   ASSERT_TRUE(received_null_);
 }
 
-TEST_F(GeneratedCodeCacheTest, UpdateDataOfExistingEntry) {
+TEST_P(GeneratedCodeCacheTest, UpdateDataOfExistingEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -389,7 +408,7 @@ TEST_F(GeneratedCodeCacheTest, UpdateDataOfExistingEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, UpdateDataOfSmallExistingEntry) {
+TEST_P(GeneratedCodeCacheTest, UpdateDataOfSmallExistingEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -405,7 +424,7 @@ TEST_F(GeneratedCodeCacheTest, UpdateDataOfSmallExistingEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, UpdateDataOfLargeExistingEntry) {
+TEST_P(GeneratedCodeCacheTest, UpdateDataOfLargeExistingEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -424,7 +443,7 @@ TEST_F(GeneratedCodeCacheTest, UpdateDataOfLargeExistingEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, UpdateDataOfVeryLargeExistingEntry) {
+TEST_P(GeneratedCodeCacheTest, UpdateDataOfVeryLargeExistingEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -443,7 +462,7 @@ TEST_F(GeneratedCodeCacheTest, UpdateDataOfVeryLargeExistingEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, TruncateDataOfLargeExistingEntry) {
+TEST_P(GeneratedCodeCacheTest, TruncateDataOfLargeExistingEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -462,7 +481,7 @@ TEST_F(GeneratedCodeCacheTest, TruncateDataOfLargeExistingEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, TruncateDataOfVeryLargeExistingEntry) {
+TEST_P(GeneratedCodeCacheTest, TruncateDataOfVeryLargeExistingEntry) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -481,7 +500,7 @@ TEST_F(GeneratedCodeCacheTest, TruncateDataOfVeryLargeExistingEntry) {
   EXPECT_EQ(response_time, received_response_time_);
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchFailsForNonexistingOrigin) {
+TEST_P(GeneratedCodeCacheTest, FetchFailsForNonexistingOrigin) {
   InitializeCache(GeneratedCodeCache::CodeCacheType::kJavaScript);
   GURL new_origin_lock = GURL("http://not-example.com");
   FetchFromCache(GURL(kInitialUrl), new_origin_lock);
@@ -491,7 +510,7 @@ TEST_F(GeneratedCodeCacheTest, FetchFailsForNonexistingOrigin) {
   ASSERT_TRUE(received_null_);
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchEntriesFromSameOrigin) {
+TEST_P(GeneratedCodeCacheTest, FetchEntriesFromSameOrigin) {
   GURL url("http://example.com/script.js");
   GURL second_url("http://script.com/one.js");
   GURL origin_lock = GURL(kInitialOrigin);
@@ -514,7 +533,7 @@ TEST_F(GeneratedCodeCacheTest, FetchEntriesFromSameOrigin) {
   EXPECT_EQ(data_second_resource, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchSucceedsFromDifferentOrigins) {
+TEST_P(GeneratedCodeCacheTest, FetchSucceedsFromDifferentOrigins) {
   GURL url("http://example.com/script.js");
   GURL origin_lock = GURL("http://example.com");
   GURL origin_lock1 = GURL("http://example1.com");
@@ -537,7 +556,7 @@ TEST_F(GeneratedCodeCacheTest, FetchSucceedsFromDifferentOrigins) {
   EXPECT_EQ(data_origin1, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, VeryLargeEntriesAreMerged) {
+TEST_P(GeneratedCodeCacheTest, VeryLargeEntriesAreMerged) {
   GURL url("http://example.com/script.js");
   InitializeCache(GeneratedCodeCache::CodeCacheType::kJavaScript);
 
@@ -563,7 +582,7 @@ TEST_F(GeneratedCodeCacheTest, VeryLargeEntriesAreMerged) {
   }
 }
 
-TEST_F(GeneratedCodeCacheTest, StressVeryLargeEntries) {
+TEST_P(GeneratedCodeCacheTest, StressVeryLargeEntries) {
   GURL url("http://example.com/script.js");
   InitializeCache(GeneratedCodeCache::CodeCacheType::kJavaScript);
   // Fill the cache with very large data keyed by the SHA-256 checksum.
@@ -605,7 +624,7 @@ TEST_F(GeneratedCodeCacheTest, StressVeryLargeEntries) {
   }
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchSucceedsEmptyOriginLock) {
+TEST_P(GeneratedCodeCacheTest, FetchSucceedsEmptyOriginLock) {
   GURL url("http://example.com/script.js");
   GURL origin_lock = GURL("");
 
@@ -619,7 +638,7 @@ TEST_F(GeneratedCodeCacheTest, FetchSucceedsEmptyOriginLock) {
   EXPECT_EQ(data, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, FetchEmptyOriginVsValidOriginLocks) {
+TEST_P(GeneratedCodeCacheTest, FetchEmptyOriginVsValidOriginLocks) {
   GURL url("http://example.com/script.js");
   GURL empty_origin_lock = GURL("");
   GURL origin_lock = GURL("http://example.com");
@@ -642,7 +661,7 @@ TEST_F(GeneratedCodeCacheTest, FetchEmptyOriginVsValidOriginLocks) {
   EXPECT_EQ(valid_origin_data, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, WasmCache) {
+TEST_P(GeneratedCodeCacheTest, WasmCache) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -654,7 +673,7 @@ TEST_F(GeneratedCodeCacheTest, WasmCache) {
   EXPECT_EQ(kInitialData, received_data_);
 }
 
-TEST_F(GeneratedCodeCacheTest, TestFailedBackendOpening) {
+TEST_P(GeneratedCodeCacheTest, TestFailedBackendOpening) {
   GURL url(kInitialUrl);
   GURL origin_lock = GURL(kInitialOrigin);
 
@@ -669,4 +688,124 @@ TEST_F(GeneratedCodeCacheTest, TestFailedBackendOpening) {
   // We shouldn't receive any data.
   ASSERT_TRUE(received_null_);
 }
+
+// Tests the embedder specifying custom WebUI hostnames for metrics reporting.
+class TestBrowserClient : public ContentBrowserClient {
+ public:
+  TestBrowserClient() = default;
+  TestBrowserClient(const TestBrowserClient&) = delete;
+  TestBrowserClient& operator=(const TestBrowserClient&) = delete;
+  ~TestBrowserClient() override = default;
+
+  // ContentBrowserClient:
+  std::string GetWebUIHostnameForCodeCacheMetrics(
+      const GURL& webui_url) const override {
+    if (webui_url.GetHost() == "foo") {
+      return "Foo";
+    }
+    if (webui_url.GetHost() == "bar") {
+      return "Bar";
+    }
+    return std::string();
+  }
+};
+
+class GeneratedCodeCacheMetricsTest : public GeneratedCodeCacheTest {
+ public:
+  GeneratedCodeCacheMetricsTest() {
+    content::SetBrowserClientForTesting(&browser_client_);
+  }
+  ~GeneratedCodeCacheMetricsTest() override {
+    content::SetBrowserClientForTesting(nullptr);
+  }
+
+ private:
+  TestBrowserClient browser_client_;
+};
+
+TEST_P(GeneratedCodeCacheMetricsTest, JSWebUIMetricsWithEmbedderHostnames) {
+  constexpr char kResource1Url[] = "chrome://foo/resource.js";
+  constexpr char kResource2Url[] = "chrome://bar/resource.js";
+  constexpr char kOriginUrl[] = "chrome://foo/";
+  InitializeCache(GeneratedCodeCache::CodeCacheType::kWebUIJavaScript,
+                  kResource1Url, kOriginUrl);
+  base::HistogramTester histogram_tester;
+
+  // Simulate a request for two resources against different data sources for a
+  // single origin.
+  generated_code_cache_->CollectStatisticsForTest(
+      GURL(kResource1Url), GURL(kOriginUrl),
+      content::GeneratedCodeCache::CacheEntryStatus::kUpdate);
+  generated_code_cache_->CollectStatisticsForTest(
+      GURL(kResource2Url), GURL(kOriginUrl),
+      content::GeneratedCodeCache::CacheEntryStatus::kHit);
+
+  // WebUI scripts report both the generic and WebUI specific metrics.
+  histogram_tester.ExpectBucketCount(
+      "SiteIsolatedCodeCache.JS.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kUpdate, 1);
+  histogram_tester.ExpectBucketCount(
+      "SiteIsolatedCodeCache.JS.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kHit, 1);
+  histogram_tester.ExpectBucketCount(
+      "SiteIsolatedCodeCache.JS.WebUI.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kUpdate, 1);
+  histogram_tester.ExpectBucketCount(
+      "SiteIsolatedCodeCache.JS.WebUI.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kHit, 1);
+
+  // There should be two source specific resource hits.
+  histogram_tester.ExpectUniqueSample(
+      "SiteIsolatedCodeCache.JS.WebUI.Foo.Resource.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kUpdate, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SiteIsolatedCodeCache.JS.WebUI.Bar.Resource.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kHit, 1);
+
+  // Both resource requests should be reported against the same origin.
+  histogram_tester.ExpectBucketCount(
+      "SiteIsolatedCodeCache.JS.WebUI.Foo.Origin.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kUpdate, 1);
+  histogram_tester.ExpectBucketCount(
+      "SiteIsolatedCodeCache.JS.WebUI.Foo.Origin.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kHit, 1);
+}
+
+TEST_P(GeneratedCodeCacheMetricsTest, JavaScriptMetrics) {
+  constexpr char kResourceUrl[] = "https://foo/resource.js";
+  constexpr char kOriginUrl[] = "https://foo/";
+  InitializeCache(GeneratedCodeCache::CodeCacheType::kJavaScript, kResourceUrl,
+                  kOriginUrl);
+  base::HistogramTester histogram_tester;
+
+  generated_code_cache_->CollectStatisticsForTest(
+      GURL(kResourceUrl), GURL(kOriginUrl),
+      content::GeneratedCodeCache::CacheEntryStatus::kHit);
+  histogram_tester.ExpectUniqueSample(
+      "SiteIsolatedCodeCache.JS.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kHit, 1);
+}
+
+TEST_P(GeneratedCodeCacheMetricsTest, WebAssemblyMetrics) {
+  constexpr char kResourceUrl[] = "https://foo/resource.wasm";
+  constexpr char kOriginUrl[] = "https://foo/";
+  InitializeCache(GeneratedCodeCache::CodeCacheType::kWebAssembly, kResourceUrl,
+                  kOriginUrl);
+  base::HistogramTester histogram_tester;
+
+  generated_code_cache_->CollectStatisticsForTest(
+      GURL(kResourceUrl), GURL(kOriginUrl),
+      content::GeneratedCodeCache::CacheEntryStatus::kHit);
+  histogram_tester.ExpectUniqueSample(
+      "SiteIsolatedCodeCache.WASM.Behaviour",
+      content::GeneratedCodeCache::CacheEntryStatus::kHit, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(GeneratedCodeCacheTest,
+                         GeneratedCodeCacheTest,
+                         testing::Bool());
+INSTANTIATE_TEST_SUITE_P(GeneratedCodeCacheMetricsTest,
+                         GeneratedCodeCacheMetricsTest,
+                         testing::Bool());
+
 }  // namespace content

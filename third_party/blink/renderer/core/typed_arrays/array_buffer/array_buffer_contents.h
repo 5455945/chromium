@@ -27,14 +27,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_ARRAY_BUFFER_ARRAY_BUFFER_CONTENTS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_ARRAY_BUFFER_ARRAY_BUFFER_CONTENTS_H_
 
-#include "base/allocator/partition_allocator/page_allocator.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/containers/span.h"
+#include "partition_alloc/partition_alloc_public_constants.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 #include "v8/include/v8.h"
+
+namespace base::subtle {
+class PlatformSharedMemoryRegion;
+}
 
 namespace blink {
 
@@ -56,14 +59,60 @@ class CORE_EXPORT ArrayBufferContents {
     kShared,
   };
 
+  // Behavior of a constructor on memory allocation failure.
+  enum class AllocationFailureBehavior {
+    // Construct an object for which `!IsValid()`.
+    kInvalid,
+    // Generate an OOM crash. The cause of the OOM (excessive size, mapping
+    // failure, commit failure) can be derived from the crash stack, so this is
+    // preferred to having custom logic in the caller to crash if `!IsValid()`.
+    kCrash,
+  };
+
+  enum class MaxAllocationSizePolicy {
+    kNormal,
+    kAllowGigaAllocations,
+  };
+
   ArrayBufferContents() = default;
   ArrayBufferContents(size_t num_elements,
                       size_t element_byte_size,
                       SharingType is_shared,
-                      InitializationPolicy);
-  ArrayBufferContents(void* data, size_t length, DataDeleter deleter);
+                      InitializationPolicy policy,
+                      AllocationFailureBehavior allocation_failure_behavior =
+                          AllocationFailureBehavior::kInvalid)
+      : ArrayBufferContents(num_elements,
+                            std::nullopt,
+                            element_byte_size,
+                            is_shared,
+                            policy,
+                            allocation_failure_behavior) {}
+  // If max_num_elements has a value, a backing store for a resizable
+  // ArrayBuffer is created. Otherwise a backing store for a fixed-length
+  // ArrayBuffer is created.
+  ArrayBufferContents(size_t num_elements,
+                      std::optional<size_t> max_num_elements,
+                      size_t element_byte_size,
+                      SharingType is_shared,
+                      InitializationPolicy policy,
+                      AllocationFailureBehavior allocation_failure_behavior =
+                          AllocationFailureBehavior::kInvalid);
+
+  // The resulting contents is backed by `shared_memory_region`; `offset` is
+  // down to a multiple of the VM allocation granularity. If `sharing_type`
+  // is `kShared`, creates a backing store for a `SharedArrayBuffer` that
+  // uses a mapping from the passed in `shared_memory_region`; otherwise,
+  // creates a backing store for a regular `ArrayBuffer`.
+  ArrayBufferContents(
+      const base::subtle::PlatformSharedMemoryRegion& shared_memory_region,
+      uint64_t offset,
+      size_t length,
+      SharingType is_shared);
+
   ArrayBufferContents(ArrayBufferContents&&) = default;
+
   ArrayBufferContents(const ArrayBufferContents&) = default;
+
   explicit ArrayBufferContents(std::shared_ptr<v8::BackingStore> backing_store)
       : backing_store_(std::move(backing_store)) {}
 
@@ -77,6 +126,7 @@ class CORE_EXPORT ArrayBufferContents {
   // Resets the internal memory so that the ArrayBufferContents is empty.
   void Reset();
 
+  // Prefer using the ByteSpan*() over Data*().
   void* Data() const {
     DCHECK(!IsShared());
     return DataMaybeShared();
@@ -91,42 +141,48 @@ class CORE_EXPORT ArrayBufferContents {
   size_t DataLength() const {
     return backing_store_ ? backing_store_->ByteLength() : 0;
   }
-  bool IsShared() const {
-    return backing_store_ ? backing_store_->IsShared() : false;
+  size_t MaxDataLength() const {
+    return backing_store_ ? backing_store_->MaxByteLength() : 0;
+  }
+  bool IsShared() const { return backing_store_ && backing_store_->IsShared(); }
+  bool IsResizableByUserJavaScript() const {
+    return backing_store_ && backing_store_->IsResizableByUserJavaScript();
   }
   bool IsValid() const { return backing_store_ && backing_store_->Data(); }
+  base::span<uint8_t> ByteSpan() const {
+    DCHECK(!IsShared());
+    return ByteSpanMaybeShared();
+  }
+  base::span<uint8_t> ByteSpanShared() const {
+    DCHECK(IsShared());
+    return ByteSpanMaybeShared();
+  }
+  base::span<uint8_t> ByteSpanMaybeShared() const {
+    return backing_store_ ? base::span(backing_store_->ByteSpan())
+                          : base::span<uint8_t>();
+  }
 
   std::shared_ptr<v8::BackingStore> BackingStore() const {
     return backing_store_;
   }
 
-  void Transfer(ArrayBufferContents& other);
+  void TransferOrCopy(ArrayBufferContents& other);
   void ShareWith(ArrayBufferContents& other);
   void ShareNonSharedForInternalUse(ArrayBufferContents& other);
   void CopyTo(ArrayBufferContents& other);
 
-  static void* AllocateMemoryOrNull(size_t, InitializationPolicy);
+  static void* AllocateMemoryOrNull(size_t,
+                                    InitializationPolicy,
+                                    MaxAllocationSizePolicy);
   static void FreeMemory(void*);
 
  private:
-  static void* AllocateMemoryWithFlags(size_t, InitializationPolicy, int);
+  template <partition_alloc::AllocFlags flags>
+  static void* AllocateMemory(size_t, InitializationPolicy);
 
   std::shared_ptr<v8::BackingStore> backing_store_;
 };
 
 }  // namespace blink
-
-namespace WTF {
-
-template <>
-struct CrossThreadCopier<blink::ArrayBufferContents> {
-  STATIC_ONLY(CrossThreadCopier);
-  using Type = blink::ArrayBufferContents;
-  static Type Copy(Type handle) {
-    return handle;  // This is in fact a move.
-  }
-};
-
-}  // namespace WTF
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_ARRAY_BUFFER_ARRAY_BUFFER_CONTENTS_H_

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 
 #include <inttypes.h>
 
+#include "components/viz/common/resources/shared_image_format.h"
+#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/size.h"
@@ -26,9 +28,10 @@ class GbmBuffer {
   // TODO(reveman): This should not be needed once crbug.com/597932 is
   // fixed, as the size would be queried directly from the underlying bo.
   virtual gfx::Size GetSize() const = 0;
-  virtual gfx::BufferFormat GetBufferFormat() const = 0;
+  virtual viz::SharedImageFormat GetSharedImageFormat() const = 0;
   virtual bool AreFdsValid() const = 0;
   virtual size_t GetNumPlanes() const = 0;
+  virtual bool SupportsZeroCopyWebGPUImport() const = 0;
   virtual int GetPlaneFd(size_t plane) const = 0;
   virtual uint32_t GetPlaneHandle(size_t plane) const = 0;
   virtual uint32_t GetPlaneStride(size_t plane) const = 0;

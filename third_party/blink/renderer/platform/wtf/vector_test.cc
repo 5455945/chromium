@@ -26,23 +26,48 @@
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 #include <memory>
+#include <optional>
+#include <ranges>
+
+#include "base/test/gtest_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/size_assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_test_helper.h"
 
-namespace WTF {
-
-HashSet<void*> g_constructed_wrapped_ints;
-unsigned LivenessCounter::live_ = 0;
+namespace blink {
 
 namespace {
 
+#define FAIL_COMPILE 0
+#if FAIL_COMPILE
+// This code should trigger static_assert failure in Vector::TypeConstraints.
+struct StackAllocatedType {
+  STACK_ALLOCATED();
+};
+
+TEST(VectorTest, FailCompile1) {
+  Vector<StackAllocatedType> v;
+}
+
+TEST(VectorTest, FailCompile2) {
+  Vector<int> v1, v2;
+  // assign() without projection is available only if the input parameter is
+  // of a different vector type.
+  v1.assign(v2);
+}
+
+TEST(VectorTest, FailCompile3) {
+  Vector<int> v1;
+  Vector<int> v2 = ToVector(v1);
+}
+#endif
+
 TEST(VectorTest, Basic) {
   Vector<int> int_vector;
-  EXPECT_TRUE(int_vector.IsEmpty());
+  EXPECT_TRUE(int_vector.empty());
   EXPECT_EQ(0ul, int_vector.size());
   EXPECT_EQ(0ul, int_vector.capacity());
 }
@@ -111,18 +136,20 @@ TEST(VectorTest, Erase) {
   EXPECT_EQ(4, int_vector[4]);
   EXPECT_EQ(5, int_vector[5]);
 
-  auto* first = int_vector.erase(int_vector.begin());
+  auto first = int_vector.erase(int_vector.begin());
   EXPECT_EQ(5u, int_vector.size());
   EXPECT_EQ(1, *first);
   EXPECT_EQ(int_vector.begin(), first);
 
-  auto* last = std::lower_bound(int_vector.begin(), int_vector.end(), 5);
-  auto* end = int_vector.erase(last);
+  auto last = std::lower_bound(int_vector.begin(), int_vector.end(), 5);
+  auto end = int_vector.erase(last);
   EXPECT_EQ(4u, int_vector.size());
   EXPECT_EQ(int_vector.end(), end);
 
-  auto* item2 = std::lower_bound(int_vector.begin(), int_vector.end(), 2);
-  auto* item4 = int_vector.erase(item2, item2 + 2);
+  auto item2 = std::lower_bound(int_vector.begin(), int_vector.end(), 2);
+  // SAFETY: Arithmetic with the return values of begin()/end() is unsafe, but
+  // acceptable for a test.
+  auto item4 = int_vector.erase(item2, UNSAFE_BUFFERS(item2 + 2));
   EXPECT_EQ(2u, int_vector.size());
   EXPECT_EQ(4, *item4);
 
@@ -159,13 +186,17 @@ TEST(VectorTest, Iterator) {
   EXPECT_TRUE(end != it);
 
   EXPECT_EQ(10, *it);
-  ++it;
-  EXPECT_EQ(11, *it);
-  ++it;
-  EXPECT_EQ(12, *it);
-  ++it;
-  EXPECT_EQ(13, *it);
-  ++it;
+  // SAFETY: Arithmetic with the return values of begin()/end() is unsafe, but
+  // acceptable for a test.
+  UNSAFE_BUFFERS({
+    ++it;
+    EXPECT_EQ(11, *it);
+    ++it;
+    EXPECT_EQ(12, *it);
+    ++it;
+    EXPECT_EQ(13, *it);
+    ++it;
+  });
 
   EXPECT_TRUE(end == it);
 }
@@ -193,7 +224,7 @@ TEST(VectorTest, ReverseIterator) {
   EXPECT_TRUE(end == it);
 }
 
-typedef WTF::Vector<std::unique_ptr<DestructCounter>> OwnPtrVector;
+using OwnPtrVector = Vector<std::unique_ptr<DestructCounter>>;
 
 TEST(VectorTest, OwnPtr) {
   int destruct_number = 0;
@@ -209,11 +240,9 @@ TEST(VectorTest, OwnPtr) {
   ASSERT_EQ(0, destruct_number);
 
   wtf_size_t index = 0;
-  for (OwnPtrVector::iterator iter = vector.begin(); iter != vector.end();
-       ++iter) {
-    std::unique_ptr<DestructCounter>* ref_counter = iter;
-    EXPECT_EQ(index, static_cast<wtf_size_t>(ref_counter->get()->Get()));
-    EXPECT_EQ(index, static_cast<wtf_size_t>((*ref_counter)->Get()));
+  for (const auto& ref_counter : vector) {
+    EXPECT_EQ(index, static_cast<wtf_size_t>(ref_counter.get()->Get()));
+    EXPECT_EQ(index, static_cast<wtf_size_t>(ref_counter->Get()));
     index++;
   }
   EXPECT_EQ(0, destruct_number);
@@ -260,7 +289,7 @@ TEST(VectorTest, OwnPtr) {
 }
 
 TEST(VectorTest, MoveOnlyType) {
-  WTF::Vector<MoveOnly> vector;
+  Vector<MoveOnly> vector;
   vector.push_back(MoveOnly(1));
   vector.push_back(MoveOnly(2));
   EXPECT_EQ(2u, vector.size());
@@ -287,7 +316,7 @@ TEST(VectorTest, MoveOnlyType) {
   for (wtf_size_t i = 0; i < vector.size(); i++)
     EXPECT_EQ(static_cast<int>(i + 1), vector[i].Value());
 
-  WTF::Vector<MoveOnly> other_vector;
+  Vector<MoveOnly> other_vector;
   vector.swap(other_vector);
   EXPECT_EQ(count, other_vector.size());
   EXPECT_EQ(0u, vector.size());
@@ -349,39 +378,41 @@ TEST(VectorTest, SwapWithInlineCapacity) {
 TEST(VectorTest, ContainerAnnotations) {
   Vector<int> vector_a;
   vector_a.push_back(10);
-  vector_a.ReserveCapacity(32);
+  vector_a.reserve(32);
+
+  // SAFETY: This is a test for unsafe operations.
 
   volatile int* int_pointer_a = vector_a.data();
-  EXPECT_DEATH(int_pointer_a[1] = 11, "container-overflow");
+  EXPECT_DEATH(UNSAFE_BUFFERS(int_pointer_a[1]) = 11, "container-overflow");
   vector_a.push_back(11);
-  int_pointer_a[1] = 11;
-  EXPECT_DEATH(int_pointer_a[2] = 12, "container-overflow");
-  EXPECT_DEATH((void)int_pointer_a[2], "container-overflow");
-  vector_a.ShrinkToFit();
-  vector_a.ReserveCapacity(16);
+  UNSAFE_BUFFERS(int_pointer_a[1]) = 11;
+  EXPECT_DEATH(UNSAFE_BUFFERS(int_pointer_a[2]) = 12, "container-overflow");
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_a[2]), "container-overflow");
+  vector_a.shrink_to_fit();
+  vector_a.reserve(16);
   int_pointer_a = vector_a.data();
-  EXPECT_DEATH((void)int_pointer_a[2], "container-overflow");
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_a[2]), "container-overflow");
 
   Vector<int> vector_b(vector_a);
-  vector_b.ReserveCapacity(16);
+  vector_b.reserve(16);
   volatile int* int_pointer_b = vector_b.data();
-  EXPECT_DEATH((void)int_pointer_b[2], "container-overflow");
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_b[2]), "container-overflow");
 
   Vector<int> vector_c((Vector<int>(vector_a)));
   volatile int* int_pointer_c = vector_c.data();
-  EXPECT_DEATH((void)int_pointer_c[2], "container-overflow");
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_c[2]), "container-overflow");
   vector_c.push_back(13);
   vector_c.swap(vector_b);
 
   volatile int* int_pointer_b2 = vector_b.data();
   volatile int* int_pointer_c2 = vector_c.data();
-  int_pointer_b2[2] = 13;
-  EXPECT_DEATH((void)int_pointer_b2[3], "container-overflow");
-  EXPECT_DEATH((void)int_pointer_c2[2], "container-overflow");
+  UNSAFE_BUFFERS(int_pointer_b2[2]) = 13;
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_b2[3]), "container-overflow");
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_c2[2]), "container-overflow");
 
   vector_b = vector_c;
   volatile int* int_pointer_b3 = vector_b.data();
-  EXPECT_DEATH((void)int_pointer_b3[2], "container-overflow");
+  EXPECT_DEATH((void)UNSAFE_BUFFERS(int_pointer_b3[2]), "container-overflow");
 }
 #endif  // defined(ANNOTATE_CONTIGUOUS_CONTAINER)
 
@@ -405,11 +436,11 @@ void Compare() {
 TEST(VectorTest, Compare) {
   Compare<int>();
   Compare<Comparable>();
-  Compare<WTF::String>();
+  Compare<String>();
 }
 
 TEST(VectorTest, AppendFirst) {
-  Vector<WTF::String> vector;
+  Vector<String> vector;
   vector.push_back("string");
   // Test passes if it does not crash (reallocation did not make
   // the input reference stale).
@@ -419,7 +450,7 @@ TEST(VectorTest, AppendFirst) {
 
   limit = vector.capacity() + 1;
   for (size_t i = 0; i < limit; i++)
-    vector.push_back(const_cast<const WTF::String&>(vector.front()));
+    vector.push_back(const_cast<const String&>(vector.front()));
 }
 
 // The test below is for the following issue:
@@ -466,19 +497,21 @@ void TestVectorDestructorAndConstructorCallsWhenSwappingWithInlineCapacity() {
   vector2.push_back(&counter);
   EXPECT_EQ(2u, LivenessCounter::live_);
 
-  for (unsigned i = 0; i < 13; i++) {
-    for (unsigned j = 0; j < 13; j++) {
+  for (wtf_size_t i = 0; i < 13; ++i) {
+    for (wtf_size_t j = 0; j < 13; ++j) {
       vector.clear();
       vector2.clear();
       EXPECT_EQ(0u, LivenessCounter::live_);
 
-      for (unsigned k = 0; k < j; k++)
+      for (wtf_size_t k = 0; k < j; ++k) {
         vector.push_back(&counter);
+      }
       EXPECT_EQ(j, LivenessCounter::live_);
       EXPECT_EQ(j, vector.size());
 
-      for (unsigned k = 0; k < i; k++)
+      for (wtf_size_t k = 0; k < i; ++k) {
         vector2.push_back(&counter);
+      }
       EXPECT_EQ(i + j, LivenessCounter::live_);
       EXPECT_EQ(i, vector2.size());
 
@@ -487,10 +520,10 @@ void TestVectorDestructorAndConstructorCallsWhenSwappingWithInlineCapacity() {
       EXPECT_EQ(i, vector.size());
       EXPECT_EQ(j, vector2.size());
 
-      unsigned size = vector.size();
-      unsigned size2 = vector2.size();
+      wtf_size_t size = vector.size();
+      wtf_size_t size2 = vector2.size();
 
-      for (unsigned k = 0; k < 5; k++) {
+      for (wtf_size_t k = 0; k < 5; ++k) {
         vector.swap(vector2);
         std::swap(size, size2);
         EXPECT_EQ(i + j, LivenessCounter::live_);
@@ -510,26 +543,30 @@ TEST(VectorTest, SwapWithConstructorsAndDestructors) {
   TestVectorDestructorAndConstructorCallsWhenSwappingWithInlineCapacity<10>();
 }
 
-template <size_t inlineCapacity>
+template <size_t kInlineCapacity>
 void TestVectorValuesMovedAndSwappedWithInlineCapacity() {
-  Vector<unsigned, inlineCapacity> vector;
-  Vector<unsigned, inlineCapacity> vector2;
+  Vector<wtf_size_t, kInlineCapacity> vector;
+  Vector<wtf_size_t, kInlineCapacity> vector2;
 
-  for (unsigned size = 0; size < 13; size++) {
-    for (unsigned size2 = 0; size2 < 13; size2++) {
+  for (wtf_size_t size = 0; size < 13; ++size) {
+    for (wtf_size_t size2 = 0; size2 < 13; ++size2) {
       vector.clear();
       vector2.clear();
-      for (unsigned i = 0; i < size; i++)
+      for (wtf_size_t i = 0; i < size; ++i) {
         vector.push_back(i);
-      for (unsigned i = 0; i < size2; i++)
+      }
+      for (wtf_size_t i = 0; i < size2; ++i) {
         vector2.push_back(i + 42);
+      }
       EXPECT_EQ(size, vector.size());
       EXPECT_EQ(size2, vector2.size());
       vector.swap(vector2);
-      for (unsigned i = 0; i < size; i++)
+      for (wtf_size_t i = 0; i < size; ++i) {
         EXPECT_EQ(i, vector2[i]);
-      for (unsigned i = 0; i < size2; i++)
+      }
+      for (wtf_size_t i = 0; i < size2; ++i) {
         EXPECT_EQ(i + 42, vector[i]);
+      }
     }
   }
 }
@@ -544,7 +581,7 @@ TEST(VectorTest, UniquePtr) {
   using Pointer = std::unique_ptr<int>;
   Vector<Pointer> vector;
   vector.push_back(std::make_unique<int>(1));
-  vector.ReserveCapacity(2);
+  vector.reserve(2);
   vector.UncheckedAppend(std::make_unique<int>(2));
   vector.insert(2, std::make_unique<int>(3));
   vector.push_front(std::make_unique<int>(0));
@@ -575,9 +612,26 @@ Vector<int> ReturnOneTwoThree() {
   return {1, 2, 3};
 }
 
+TEST(VectorTest, AppendContainers) {
+  Vector<int> result;
+  Vector<int> empty_vector;
+  Vector<int> other_vector({1, 2});
+  std::array<int, 3> other_array = {{3, 4, 5}};
+  int other_c_array[4] = {6, 7, 8, 9};
+  result.append_range(other_vector);
+  result.Append(other_array.begin(), other_array.end());
+  result.append_range(base::span(other_c_array));
+  EXPECT_THAT(result, ::testing::ElementsAre(1, 2, 3, 4, 5, 6, 7, 8, 9));
+
+  result.append_range(empty_vector);
+  result.Append(other_array.end(), other_array.end());
+  result.append_range(base::span(other_c_array).subspan<4>());
+  EXPECT_THAT(result, ::testing::ElementsAre(1, 2, 3, 4, 5, 6, 7, 8, 9));
+}
+
 TEST(VectorTest, InitializerList) {
   Vector<int> empty({});
-  EXPECT_TRUE(empty.IsEmpty());
+  EXPECT_TRUE(empty.empty());
 
   Vector<int> one({1});
   ASSERT_EQ(1u, one.size());
@@ -595,7 +649,7 @@ TEST(VectorTest, InitializerList) {
   one_two_three.push_back(9999);
 
   empty = {};
-  EXPECT_TRUE(empty.IsEmpty());
+  EXPECT_TRUE(empty.empty());
 
   one = {1};
   ASSERT_EQ(1u, one.size());
@@ -641,7 +695,7 @@ TEST(VectorTest, InitializerList) {
 }
 
 TEST(VectorTest, Optional) {
-  absl::optional<Vector<int>> vector;
+  std::optional<Vector<int>> vector;
   EXPECT_FALSE(vector);
   vector.emplace(3);
   EXPECT_TRUE(vector);
@@ -651,10 +705,10 @@ TEST(VectorTest, Optional) {
 TEST(VectorTest, emplace_back) {
   struct Item {
     Item() = default;
-    explicit Item(int value1) : value1(value1), value2() {}
+    explicit Item(int value1) : value1(value1) {}
     Item(int value1, int value2) : value1(value1), value2(value2) {}
-    int value1;
-    int value2;
+    int value1 = 0;
+    int value2 = 0;
   };
 
   Vector<Item> vector;
@@ -712,6 +766,84 @@ TEST(VectorTest, IteratorMultipleInsertion) {
   EXPECT_TRUE(std::is_sorted(v.begin(), v.end()));
 }
 
+TEST(VectorTest, BlinkErase) {
+  Vector<int> v = {1, 2, 3, 3, 5, 3};
+  blink::Erase(v, 3);
+  EXPECT_THAT(v, testing::ElementsAre(1, 2, 5));
+}
+
+TEST(VectorTest, BlinkEraseIf) {
+  Vector<int> v = {1, 2, 3, 4, 5, 6};
+  blink::EraseIf(v, [](int x) { return x % 2 == 0; });
+  EXPECT_THAT(v, testing::ElementsAre(1, 3, 5));
+}
+
+TEST(VectorTest, CopyWithImplicitConversion) {
+  Vector<float> v1 = {1, 2, 3};
+  Vector<double> v2(v1);
+  EXPECT_THAT(v2, testing::ElementsAre(1, 2, 3));
+}
+
+TEST(VectorTest, CopyWithProjection) {
+  {
+    using ValueType = std::pair<int, int>;
+    Vector<ValueType> v1 = {{1, 2}, {3, 4}, {5, 6}};
+    Vector<int> v2(v1, &ValueType::second);
+    EXPECT_THAT(v2, testing::ElementsAre(2, 4, 6));
+  }
+  {
+    Vector<int> v1 = {1, 2, 3, 4, 5, 6};
+    Vector<int> v2(v1, std::negate<>());
+    EXPECT_THAT(v2, testing::ElementsAre(-1, -2, -3, -4, -5, -6));
+  }
+}
+
+TEST(VectorTest, ToVector) {
+  std::array<int, 3> array = {1, 2, 3};
+  auto v = ToVector(array);
+  EXPECT_THAT(v, testing::ElementsAre(1, 2, 3));
+}
+
+TEST(VectorTest, ToVectorWithProjection) {
+  {
+    using ValueType = std::pair<int, int>;
+    Vector<ValueType> v1 = {{1, 2}, {3, 4}, {5, 6}};
+    auto v2 = ToVector(v1, &ValueType::second);
+    EXPECT_THAT(v2, testing::ElementsAre(2, 4, 6));
+  }
+  {
+    Vector<int> v1 = {1, 2, 3, 4, 5, 6};
+    auto v2 = ToVector(v1, std::negate<>());
+    EXPECT_THAT(v2, testing::ElementsAre(-1, -2, -3, -4, -5, -6));
+  }
+}
+
+TEST(VectorTest, ToVectorMoveOnly) {
+  std::vector<std::unique_ptr<int>> v;
+  v.push_back(std::make_unique<int>(1));
+  v.push_back(std::make_unique<int>(2));
+  v.push_back(std::make_unique<int>(3));
+
+  auto v2 = ToVector(std::views::as_rvalue(v));
+  EXPECT_THAT(v2, testing::ElementsAre(testing::Pointee(1), testing::Pointee(2),
+                                       testing::Pointee(3)));
+
+  // The old vector should be consumed. The standard guarantees that a
+  // moved-from std::unique_ptr will be null.
+  // NOLINT(bugprone-use-after-move)
+  EXPECT_THAT(v, testing::ElementsAre(testing::IsNull(), testing::IsNull(),
+                                      testing::IsNull()));
+
+  // Another method which is more verbose so not preferable.
+  auto v3 = ToVector(std::move(v2),
+                     [](std::unique_ptr<int>& p) { return std::move(p); });
+  EXPECT_THAT(v3, testing::ElementsAre(testing::Pointee(1), testing::Pointee(2),
+                                       testing::Pointee(3)));
+  // NOLINT(bugprone-use-after-move)
+  EXPECT_THAT(v2, testing::ElementsAre(testing::IsNull(), testing::IsNull(),
+                                       testing::IsNull()));
+}
+
 static_assert(VectorTraits<int>::kCanCopyWithMemcpy,
               "int should be copied with memcopy.");
 static_assert(VectorTraits<char>::kCanCopyWithMemcpy,
@@ -728,6 +860,90 @@ static_assert(VectorTraits<UnknownType*>::kCanCopyWithMemcpy,
 static_assert(!IsTraceable<Vector<int>>::value,
               "Vector<int> must not be traceable.");
 
+#if DCHECK_IS_ON() || BUILDFLAG(ENABLE_VECTOR_MODIFICATION_CHECKS)
+TEST(VectorTest, MutationDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  EXPECT_EQ(*it, 1);
+  vector.push_back(4);
+  EXPECT_CHECK_DEATH_WITH([[maybe_unused]] int val = *it,
+                          "Vector modified while being iterated.");
+}
+
+TEST(VectorTest, NoMutationDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  EXPECT_EQ(*it, 1);
+  it = std::next(it);
+  EXPECT_EQ(*it, 2);
+}
+
+TEST(VectorTest, NestedIteration) {
+  Vector<int> vector = {1, 2, 3};
+  for ([[maybe_unused]] int& i : vector) {
+    for ([[maybe_unused]] int& j : vector) {
+      // This should be fine.
+    }
+  }
+}
+
+TEST(VectorTest, EraseDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  EXPECT_EQ(*it, 1);
+  vector.EraseAt(1);
+  EXPECT_CHECK_DEATH_WITH([[maybe_unused]] int val = *it,
+                          "Vector modified while being iterated.");
+}
+
+TEST(VectorTest, ResizeAndShrinkDuringIteration) {
+  Vector<int> vector = {1, 2, 3};
+  auto it = vector.begin();
+  // No-op resize and Shrink should not register a modification.
+  vector.resize(3);
+  vector.Shrink(3);
+  EXPECT_EQ(*it, 1);
+
+  vector.Shrink(2);
+  EXPECT_CHECK_DEATH_WITH([[maybe_unused]] int val = *it,
+                          "Vector modified while being iterated.");
+}
+
+TEST(VectorTest, InlineCapacityMutationDuringIteration) {
+  Vector<int, 4> inline_vector = {1, 2, 3};
+  Vector<int> out_of_line_copy(inline_vector);
+  Vector<int, 8> other_inline_copy(out_of_line_copy);
+  EXPECT_THAT(out_of_line_copy, testing::ElementsAre(1, 2, 3));
+  EXPECT_THAT(other_inline_copy, testing::ElementsAre(1, 2, 3));
+
+#if DCHECK_IS_ON()
+  auto it = inline_vector.begin();
+  EXPECT_EQ(*it, 1);
+  inline_vector.push_back(4);
+  EXPECT_CHECK_DEATH_WITH([[maybe_unused]] int val = *it,
+                          "Vector modified while being iterated.");
+#endif
+
+  Vector<int, 4> moved_inline(std::move(inline_vector));
+  inline_vector = std::move(moved_inline);
+  EXPECT_GE(inline_vector.size(), 3u);
+}
+
+TEST(VectorTest, SwapDuringIteration) {
+  Vector<int> vector1 = {1, 2, 3};
+  Vector<int> vector2 = {4, 5, 6};
+  auto it1 = vector1.begin();
+  auto it2 = vector2.begin();
+  EXPECT_EQ(*it1, 1);
+  EXPECT_EQ(*it2, 4);
+  vector1.swap(vector2);
+  EXPECT_CHECK_DEATH_WITH([[maybe_unused]] int val = *it1,
+                          "Vector modified while being iterated.");
+  EXPECT_CHECK_DEATH_WITH([[maybe_unused]] int val = *it2,
+                          "Vector modified while being iterated.");
+}
+#endif
+
 }  // anonymous namespace
 
-}  // namespace WTF
+}  // namespace blink

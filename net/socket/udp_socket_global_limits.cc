@@ -1,13 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "net/socket/udp_socket_global_limits.h"
 
 #include <limits>
 
 #include "base/atomic_ref_count.h"
 #include "base/no_destructor.h"
-#include "net/base/features.h"
-#include "net/socket/udp_socket_global_limits.h"
 
 namespace net {
 
@@ -16,7 +16,7 @@ namespace {
 // Threadsafe singleton for tracking the process-wide count of UDP sockets.
 class GlobalUDPSocketCounts {
  public:
-  GlobalUDPSocketCounts() : count_(0) {}
+  GlobalUDPSocketCounts() = default;
 
   ~GlobalUDPSocketCounts() = delete;
 
@@ -25,9 +25,9 @@ class GlobalUDPSocketCounts {
     return *singleton;
   }
 
-  bool TryAcquireSocket() WARN_UNUSED_RESULT {
-    int previous = count_.Increment(1);
-    if (previous >= GetMax()) {
+  [[nodiscard]] bool TryAcquireSocket() {
+    size_t previous = count_.Increment(1);
+    if (previous >= OwnedUDPSocketCount::kMaxUdpSockets) {
       count_.Increment(-1);
       return false;
     }
@@ -35,24 +35,17 @@ class GlobalUDPSocketCounts {
     return true;
   }
 
-  int GetMax() {
-    if (base::FeatureList::IsEnabled(features::kLimitOpenUDPSockets))
-      return features::kLimitOpenUDPSocketsMax.Get();
-
-    return std::numeric_limits<int>::max();
-  }
-
   void ReleaseSocket() { count_.Increment(-1); }
 
   int GetCountForTesting() { return count_.SubtleRefCountForDebug(); }
 
  private:
-  base::AtomicRefCount count_;
+  base::AtomicRefCount count_{0};
 };
 
 }  // namespace
 
-OwnedUDPSocketCount::OwnedUDPSocketCount() : OwnedUDPSocketCount(true) {}
+OwnedUDPSocketCount::OwnedUDPSocketCount() {}
 
 OwnedUDPSocketCount::OwnedUDPSocketCount(OwnedUDPSocketCount&& other) {
   *this = std::move(other);

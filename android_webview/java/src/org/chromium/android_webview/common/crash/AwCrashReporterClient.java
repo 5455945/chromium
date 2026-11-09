@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,38 @@ package org.chromium.android_webview.common.crash;
 
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
 
-/**
- * A helper class for WebView-specific handling of Java crashes.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** A helper class for WebView-specific handling of Java crashes. */
 @JNINamespace("android_webview")
+@NullMarked
 public class AwCrashReporterClient {
     // The filename prefix used by Chromium proguarding, which we use to
     // recognise stack frames that reference WebView.
     private static final String CHROMIUM_PREFIX = "chromium-";
 
     /**
+     * Sets the process name crash key.
+     *
+     * @param processName The name of the current process.
+     */
+    public static void setProcessNameCrashKey(String processName) {
+        AwCrashReporterClientJni.get().setProcessNameCrashKey(processName);
+    }
+
+    public static void setSkippedDataDirLockCrashKey(boolean skipped) {
+        AwCrashReporterClientJni.get().setSkippedDataDirLockCrashKey(skipped);
+    }
+
+    /**
      * Determine if a Throwable should be reported to the crash reporting mechanism.
      *
-     * We report exceptions if any stack frame corresponds to a class directly defined in the
+     * <p>We report exceptions if any stack frame corresponds to a class directly defined in the
      * WebView classloader (which may have been proguarded) or is defined in an ancestral
      * classloader, but has package android.webkit. (i.e. it is a framework WebView class).
      * Technically we should also include androidx.webkit classes, but these are defined in the app
@@ -43,5 +59,12 @@ public class AwCrashReporterClient {
             }
         }
         return false;
+    }
+
+    @NativeMethods
+    interface Natives {
+        void setProcessNameCrashKey(@JniType("std::string") String processName);
+
+        void setSkippedDataDirLockCrashKey(boolean skipped);
     }
 }

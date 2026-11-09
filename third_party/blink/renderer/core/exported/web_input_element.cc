@@ -30,6 +30,8 @@
 
 #include "third_party/blink/public/web/web_input_element.h"
 
+#include "base/containers/to_vector.h"
+#include "build/build_config.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_element_collection.h"
 #include "third_party/blink/public/web/web_option_element.h"
@@ -44,51 +46,14 @@
 
 namespace blink {
 
+using mojom::blink::FormControlType;
+
 bool WebInputElement::IsTextField() const {
   return ConstUnwrap<HTMLInputElement>()->IsTextField();
 }
 
-bool WebInputElement::IsText() const {
-  return ConstUnwrap<HTMLInputElement>()->IsTextField() &&
-         ConstUnwrap<HTMLInputElement>()->type() != input_type_names::kNumber;
-}
-
-bool WebInputElement::IsEmailField() const {
-  return ConstUnwrap<HTMLInputElement>()->type() == input_type_names::kEmail;
-}
-
-bool WebInputElement::IsPasswordField() const {
-  return ConstUnwrap<HTMLInputElement>()->type() == input_type_names::kPassword;
-}
-
-void WebInputElement::SetHasBeenPasswordField() {
-  Unwrap<HTMLInputElement>()->SetHasBeenPasswordField();
-}
-
-bool WebInputElement::IsPasswordFieldForAutofill() const {
-  if (ConstUnwrap<HTMLInputElement>()->IsTextField() &&
-      ConstUnwrap<HTMLInputElement>()->HasBeenPasswordField()) {
-    return true;
-  }
-
-  return ConstUnwrap<HTMLInputElement>()->type() == input_type_names::kPassword;
-}
-
-bool WebInputElement::IsImageButton() const {
-  return ConstUnwrap<HTMLInputElement>()->type() == input_type_names::kImage;
-}
-
-bool WebInputElement::IsRadioButton() const {
-  return ConstUnwrap<HTMLInputElement>()->type() == input_type_names::kRadio;
-}
-
-bool WebInputElement::IsCheckbox() const {
-  return ConstUnwrap<HTMLInputElement>()->type() == input_type_names::kCheckbox;
-}
-
-int WebInputElement::MaxLength() const {
-  int max_len = ConstUnwrap<HTMLInputElement>()->maxLength();
-  return max_len == -1 ? DefaultMaxLength() : max_len;
+void WebInputElement::MaybeSetHasBeenPasswordField() {
+  Unwrap<HTMLInputElement>()->MaybeSetHasBeenPasswordField();
 }
 
 void WebInputElement::SetActivatedSubmit(bool activated) {
@@ -99,32 +64,32 @@ int WebInputElement::size() const {
   return ConstUnwrap<HTMLInputElement>()->size();
 }
 
-void WebInputElement::SetEditingValue(const WebString& value) {
-  Unwrap<HTMLInputElement>()->SetEditingValue(value);
-}
-
 bool WebInputElement::IsValidValue(const WebString& value) const {
   return ConstUnwrap<HTMLInputElement>()->IsValidValue(value);
 }
 
-void WebInputElement::SetChecked(bool now_checked, bool send_events) {
-  Unwrap<HTMLInputElement>()->setChecked(
-      now_checked, send_events
-                       ? TextFieldEventBehavior::kDispatchInputAndChangeEvent
-                       : TextFieldEventBehavior::kDispatchNoEvent);
+void WebInputElement::SetChecked(bool now_checked,
+                                 bool send_events,
+                                 WebAutofillState autofill_state) {
+  Unwrap<HTMLInputElement>()->SetChecked(
+      now_checked,
+      send_events ? TextFieldEventBehavior::kDispatchInputAndChangeEvent
+                  : TextFieldEventBehavior::kDispatchNoEvent,
+      autofill_state);
 }
 
 bool WebInputElement::IsChecked() const {
-  return ConstUnwrap<HTMLInputElement>()->checked();
+  return ConstUnwrap<HTMLInputElement>()->Checked();
 }
 
 bool WebInputElement::IsMultiple() const {
   return ConstUnwrap<HTMLInputElement>()->Multiple();
 }
 
-WebVector<WebOptionElement> WebInputElement::FilteredDataListOptions() const {
-  return WebVector<WebOptionElement>(
-      ConstUnwrap<HTMLInputElement>()->FilteredDataListOptions());
+std::vector<WebOptionElement> WebInputElement::FilteredDataListOptions() const {
+  return base::ToVector(
+      ConstUnwrap<HTMLInputElement>()->FilteredDataListOptions(),
+      [](HTMLOptionElement* element) { return WebOptionElement(element); });
 }
 
 WebString WebInputElement::LocalizeValue(
@@ -132,16 +97,21 @@ WebString WebInputElement::LocalizeValue(
   return ConstUnwrap<HTMLInputElement>()->LocalizeValue(proposed_value);
 }
 
-int WebInputElement::DefaultMaxLength() {
-  return std::numeric_limits<int>::max();
-}
-
 void WebInputElement::SetShouldRevealPassword(bool value) {
-  Unwrap<HTMLInputElement>()->SetShouldRevealPassword(value);
+  // These visibility changes are part of another operation, such as password
+  // generation, rather than an explicit user request to show/hide the password.
+  // Keep them silent so the UI driving that operation controls its
+  // accessibility feedback.
+  Unwrap<HTMLInputElement>()->SetShouldRevealPassword(
+      value, PasswordVisibilityAnnouncement::kSilent);
 }
 
 bool WebInputElement::ShouldRevealPassword() const {
   return ConstUnwrap<HTMLInputElement>()->ShouldRevealPassword();
+}
+
+void WebInputElement::DispatchSimulatedEnter() {
+  Unwrap<HTMLInputElement>()->DispatchSimulatedEnter();
 }
 
 WebInputElement::WebInputElement(HTMLInputElement* elem)
@@ -159,10 +129,4 @@ WebInputElement::operator HTMLInputElement*() const {
   return blink::To<HTMLInputElement>(private_.Get());
 }
 
-WebInputElement* ToWebInputElement(WebElement* web_element) {
-  if (!IsA<HTMLInputElement>(*web_element->Unwrap<Element>()))
-    return nullptr;
-
-  return static_cast<WebInputElement*>(web_element);
-}
 }  // namespace blink

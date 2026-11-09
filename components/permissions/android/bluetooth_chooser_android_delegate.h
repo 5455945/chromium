@@ -1,11 +1,9 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_ANDROID_BLUETOOTH_CHOOSER_ANDROID_DELEGATE_H_
 #define COMPONENTS_PERMISSIONS_ANDROID_BLUETOOTH_CHOOSER_ANDROID_DELEGATE_H_
-
-#include "base/macros.h"
 
 #include "base/android/scoped_java_ref.h"
 #include "components/security_state/core/security_state.h"

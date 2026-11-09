@@ -1,179 +1,346 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_handler.h"
 
 #include <algorithm>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/command_line.h"
+#include "base/containers/fixed_flat_map.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/hash/hash.h"
 #include "base/i18n/rtl.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
+#include "base/json/values_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/browser_features.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/desktop_to_mobile_promos/promos_pref_names.h"
+#include "chrome/browser/desktop_to_mobile_promos/promos_utils.h"
+#include "chrome/browser/enterprise/util/managed_browser_utils.h"
+#include "chrome/browser/new_tab_page/feature_promo_helper/new_tab_page_feature_promo_helper.h"
+#include "chrome/browser/new_tab_page/microsoft_auth/microsoft_auth_service.h"
+#include "chrome/browser/new_tab_page/microsoft_auth/microsoft_auth_service_factory.h"
+#include "chrome/browser/new_tab_page/modules/modules_constants.h"
+#include "chrome/browser/new_tab_page/modules/new_tab_page_modules.h"
+#include "chrome/browser/new_tab_page/new_tab_page_util.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search/background/ntp_background_service.h"
-#include "chrome/browser/search/background/ntp_background_service_factory.h"
-#include "chrome/browser/search/instant_service.h"
-#include "chrome/browser/search/promos/promo_service_factory.h"
+#include "chrome/browser/search/background/ntp_custom_background_service.h"
+#include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/search_provider_logos/logo_service_factory.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/themes/custom_theme_supplier.h"
+#include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
-#include "chrome/browser/ui/webui/realbox/realbox.mojom.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/views/new_tab_footer/footer_controller.h"
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/ui/views/scheduled_restart/scheduled_restart_bubble_controller.h"
+#endif
+#include "chrome/browser/ui/webui/new_tab_footer/new_tab_footer_helper.h"
+#include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
+#include "chrome/browser/ui/webui/util/webui_util_desktop.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "chrome/browser/ui/webui_browser/webui_browser.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/search/instant_types.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/theme_resources.h"
+#include "components/feature_engagement/public/event_constants.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/ntp_tiles/tile_type.h"
+#include "components/omnibox/browser/omnibox.mojom.h"
+#include "components/omnibox/common/composebox_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/search/ntp_features.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/search_provider_logos/logo_service.h"
 #include "components/search_provider_logos/switches.h"
+#include "components/segmentation_platform/public/constants.h"
+#include "components/segmentation_platform/public/input_context.h"
+#include "components/segmentation_platform/public/prediction_options.h"
+#include "components/segmentation_platform/public/segmentation_platform_service.h"
+#include "components/sync/service/sync_service.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/actions/actions.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/theme_provider.h"
+#include "ui/color/color_provider.h"
+#include "ui/gfx/animation/animation.h"
+#include "ui/gfx/codec/webp_codec.h"
+#include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
+#include "ui/gfx/image/image_skia_rep_default.h"
+#include "ui/native_theme/native_theme.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
+#include "components/user_education/webui/help_bubble_handler.h"  // nogncheck
+#include "ui/webui/tracked_element/tracked_element_handler.h"
+#include "ui/webui/tracked_element/tracked_element_web_ui.h"
+#endif
 
 namespace {
 
 const int64_t kMaxDownloadBytes = 1024 * 1024;
 
-new_tab_page::mojom::ThemePtr MakeTheme(const NtpTheme& ntp_theme) {
+constexpr char kDisableInteraction[] = "disable";
+constexpr char kDismissInteraction[] = "dismiss";
+constexpr char kUseInteraction[] = "use";
+
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+constexpr char kIgnoreInteraction[] = "ignore";
+constexpr auto kModuleInteractionNames =
+    base::MakeFixedFlatSet<std::string_view>(
+        {kDisableInteraction, kDismissInteraction, kIgnoreInteraction,
+         kUseInteraction});
+
+// Returns a list of module IDs that are eligible for HATS.
+std::vector<std::string> GetSurveyEligibleModuleIds() {
+  return base::SplitString(
+      base::GetFieldTrialParamValueByFeature(
+          features::kHappinessTrackingSurveysForDesktopNtpModules,
+          ntp_features::kNtpModulesEligibleForHappinessTrackingSurveyParam),
+      ",:;", base::WhitespaceHandling::TRIM_WHITESPACE,
+      base::SplitResult::SPLIT_WANT_NONEMPTY);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+// Returns true if we should force dark foreground colors for the Google logo
+// and the One Google Bar. This is done to fix specific GWS themes where the
+// always-light logo and OGB colors do not sufficiently contrast with lighter
+// image backgrounds (see crbug.com/40842679).
+// TODO(crbug.com/40842305): Address this in a general way and extend support to
+// custom background images, not just CWS themes.
+bool ShouldForceDarkForegroundColorsForLogo(const ThemeService* theme_service) {
+  const auto* theme_supplier = theme_service->GetThemeSupplier();
+  if (!theme_supplier || theme_supplier->get_theme_type() !=
+                             ui::ColorProviderKey::ThemeInitializerSupplier::
+                                 ThemeType::kExtension) {
+    return false;
+  }
+  static constexpr auto kPrideThemeExtensionIdsDarkForeground =
+      base::MakeFixedFlatSet<std::string_view>({
+          "klnkeldihpjnjoopojllmnpepbpljico",
+          "iffdmpenldeofnlfjmbjcdmafhoekmka",
+          "mckialangcdpcdcflekinnpamfkmkobo",
+      });
+
+  const std::string_view extension_id = theme_supplier->extension_id();
+  return kPrideThemeExtensionIdsDarkForeground.contains(extension_id);
+}
+
+new_tab_page::mojom::ThemePtr MakeTheme(
+    const ui::ColorProvider& color_provider,
+    const ui::ThemeProvider* theme_provider,
+    ThemeService* theme_service,
+    NtpCustomBackgroundService* ntp_custom_background_service,
+    content::WebContents* web_contents) {
+  if (ntp_custom_background_service) {
+    ntp_custom_background_service->RefreshBackgroundIfNeeded();
+  }
   auto theme = new_tab_page::mojom::Theme::New();
   auto most_visited = most_visited::mojom::MostVisitedTheme::New();
-  theme->is_default = ntp_theme.using_default_theme;
-  theme->background_color = ntp_theme.background_color;
-  most_visited->background_color = ntp_theme.shortcut_color;
+  auto custom_background =
+      ntp_custom_background_service
+          ? ntp_custom_background_service->GetCustomBackground()
+          : std::nullopt;
+  theme->background_color = color_provider.GetColor(kColorNewTabPageBackground);
+  theme->is_baseline = theme_service->GetIsBaseline();
+  // Theme is GM3 if there is a GM3 color set or the theme is baseline and no
+  // CWS theme is set.
+  theme->is_gm3 =
+      (theme_service->GetUserColor().has_value() || theme->is_baseline) &&
+      !theme_service->UsingExtensionTheme();
+#if BUILDFLAG(IS_ANDROID)
+  const bool theme_has_custom_image = false;
+#else
+  const bool theme_has_custom_image =
+      theme_provider &&
+      theme_provider->HasCustomImage(IDR_THEME_NTP_BACKGROUND);
+#endif
+  SkColor text_color;
+  if (custom_background.has_value()) {
+    text_color = color_provider.GetColor(kColorNewTabPageTextUnthemed);
+    theme->logo_color =
+        color_provider.GetColor(kColorNewTabPageLogoUnthemedLight);
+    most_visited->background_color =
+        color_provider.GetColor(kColorNewTabPageMostVisitedTileBackground);
+  } else if (theme_has_custom_image) {
+    text_color = color_provider.GetColor(kColorNewTabPageTextUnthemed);
+    theme->logo_color =
+        color_provider.GetColor(kColorNewTabPageLogoUnthemedLight);
+    most_visited->background_color =
+        color_provider.GetColor(kColorNewTabPageMostVisitedTileBackground);
+  } else {
+    text_color = color_provider.GetColor(kColorNewTabPageText);
+    bool use_alternate_logo =
+        theme_provider && theme_provider->GetDisplayProperty(
+                              ThemeProperties::NTP_LOGO_ALTERNATE) == 1;
+    use_alternate_logo =
+        use_alternate_logo || (!theme_service->GetIsGrayscale() &&
+                               theme_service->GetUserColor().has_value());
+    if (use_alternate_logo) {
+      theme->logo_color = color_provider.GetColor(kColorNewTabPageLogo);
+    }
+
+    most_visited->background_color =
+        color_provider.GetColor(kColorNewTabPageMostVisitedTileBackground);
+  }
+
   most_visited->use_white_tile_icon =
       color_utils::IsDark(most_visited->background_color);
-  most_visited->is_dark = !color_utils::IsDark(ntp_theme.text_color);
-  most_visited->use_title_pill = false;
-  theme->text_color = ntp_theme.text_color;
-  theme->is_dark = !color_utils::IsDark(ntp_theme.text_color);
-  if (ntp_theme.logo_alternate) {
-    theme->logo_color = ntp_theme.logo_color;
-  }
-  auto background_image = new_tab_page::mojom::BackgroundImage::New();
-  if (!ntp_theme.custom_background_url.is_empty()) {
-    background_image->url = ntp_theme.custom_background_url;
-  } else if (ntp_theme.has_theme_image) {
-    most_visited->use_title_pill = true;
-    background_image->url =
-        GURL(base::StrCat({"chrome-untrusted://theme/IDR_THEME_NTP_BACKGROUND?",
-                           ntp_theme.theme_id}));
-    background_image->url_2x = GURL(
-        base::StrCat({"chrome-untrusted://theme/IDR_THEME_NTP_BACKGROUND@2x?",
-                      ntp_theme.theme_id}));
-    if (ntp_theme.has_attribution) {
+  most_visited->is_dark = !color_utils::IsDark(text_color);
+  theme->text_color = text_color;
+  theme->is_dark =
+      !color_utils::IsDark(color_provider.GetColor(kColorNewTabPageText));
+  new_tab_page::mojom::BackgroundImagePtr background_image;
+#if !BUILDFLAG(IS_ANDROID)
+  if (theme_has_custom_image) {
+    background_image = new_tab_page::mojom::BackgroundImage::New();
+    if (theme_service->UsingExtensionTheme()) {
+      background_image->image_source =
+          new_tab_page::mojom::NtpBackgroundImageSource::kThirdPartyTheme;
+    }
+    theme->is_custom_background = false;
+    auto theme_id = theme_service->GetThemeID();
+    background_image->url = GURL(base::StrCat(
+        {"chrome-untrusted://theme/IDR_THEME_NTP_BACKGROUND?", theme_id}));
+    background_image->url_2x = GURL(base::StrCat(
+        {"chrome-untrusted://theme/IDR_THEME_NTP_BACKGROUND@2x?", theme_id}));
+    if (theme_provider->HasCustomImage(IDR_THEME_NTP_ATTRIBUTION)) {
       background_image->attribution_url = GURL(base::StrCat(
-          {"chrome://theme/IDR_THEME_NTP_ATTRIBUTION?", ntp_theme.theme_id}));
+          {"chrome://theme/IDR_THEME_NTP_ATTRIBUTION?", theme_id}));
     }
     background_image->size = "initial";
-    switch (ntp_theme.image_tiling) {
-      case THEME_BKGRND_IMAGE_NO_REPEAT:
+    switch (theme_provider->GetDisplayProperty(
+        ThemeProperties::NTP_BACKGROUND_TILING)) {
+      case ThemeProperties::NO_REPEAT:
         background_image->repeat_x = "no-repeat";
         background_image->repeat_y = "no-repeat";
         break;
-      case THEME_BKGRND_IMAGE_REPEAT_X:
+      case ThemeProperties::REPEAT_X:
         background_image->repeat_x = "repeat";
         background_image->repeat_y = "no-repeat";
         break;
-      case THEME_BKGRND_IMAGE_REPEAT_Y:
+      case ThemeProperties::REPEAT_Y:
         background_image->repeat_x = "no-repeat";
         background_image->repeat_y = "repeat";
         break;
-      case THEME_BKGRND_IMAGE_REPEAT:
+      case ThemeProperties::REPEAT:
         background_image->repeat_x = "repeat";
         background_image->repeat_y = "repeat";
         break;
     }
-    switch (ntp_theme.image_horizontal_alignment) {
-      case THEME_BKGRND_IMAGE_ALIGN_CENTER:
-        background_image->position_x = "center";
-        break;
-      case THEME_BKGRND_IMAGE_ALIGN_LEFT:
-        background_image->position_x = "left";
-        break;
-      case THEME_BKGRND_IMAGE_ALIGN_RIGHT:
-        background_image->position_x = "right";
-        break;
-      case THEME_BKGRND_IMAGE_ALIGN_TOP:
-      case THEME_BKGRND_IMAGE_ALIGN_BOTTOM:
-        // Inconsistent. Ignore.
-        break;
+    int alignment = theme_provider->GetDisplayProperty(
+        ThemeProperties::NTP_BACKGROUND_ALIGNMENT);
+    if (alignment & ThemeProperties::ALIGN_LEFT) {
+      background_image->position_x = "left";
+    } else if (alignment & ThemeProperties::ALIGN_RIGHT) {
+      background_image->position_x = "right";
+    } else {
+      background_image->position_x = "center";
     }
-    switch (ntp_theme.image_vertical_alignment) {
-      case THEME_BKGRND_IMAGE_ALIGN_CENTER:
-        background_image->position_y = "center";
-        break;
-      case THEME_BKGRND_IMAGE_ALIGN_TOP:
-        background_image->position_y = "top";
-        break;
-      case THEME_BKGRND_IMAGE_ALIGN_BOTTOM:
-        background_image->position_y = "bottom";
-        break;
-      case THEME_BKGRND_IMAGE_ALIGN_LEFT:
-      case THEME_BKGRND_IMAGE_ALIGN_RIGHT:
-        // Inconsistent. Ignore.
-        break;
+    if (alignment & ThemeProperties::ALIGN_TOP) {
+      background_image->position_y = "top";
+    } else if (alignment & ThemeProperties::ALIGN_BOTTOM) {
+      background_image->position_y = "bottom";
+    } else {
+      background_image->position_y = "center";
     }
-  } else {
-    background_image = nullptr;
   }
+#endif  // !BUILDFLAG(IS_ANDROID)
+  if (!background_image && custom_background.has_value()) {
+    background_image = new_tab_page::mojom::BackgroundImage::New();
+    theme->is_custom_background = true;
+    background_image->url = custom_background->custom_background_url;
+    new_tab_page::mojom::NtpBackgroundImageSource image_source = new_tab_page::
+        mojom::NtpBackgroundImageSource::kFirstPartyThemeWithoutDailyRefresh;
+    if (custom_background->daily_refresh_enabled) {
+      image_source = new_tab_page::mojom::NtpBackgroundImageSource::
+          kFirstPartyThemeWithDailyRefresh;
+    } else if (custom_background->local_background_id.has_value()) {
+      if (custom_background->is_inspiration_image) {
+        image_source = new_tab_page::mojom::NtpBackgroundImageSource::
+            kWallpaperSearchInspiration;
+      } else {
+        image_source =
+            new_tab_page::mojom::NtpBackgroundImageSource::kWallpaperSearch;
+      }
+    } else if (custom_background->is_uploaded_image) {
+      image_source =
+          new_tab_page::mojom::NtpBackgroundImageSource::kUploadedImage;
+    }
+    background_image->image_source = image_source;
+  }
+
+  // The special case handling that forces a dark Google logo should only be
+  // applied when the user does not have a custom background selected and has
+  // installed a CWS theme with a bundled background image. The first condition
+  // is necessary as a custom background image can be set while a CWS theme with
+  // a bundled image is concurrently enabled (see crbug.com/40842679).
+  bool force_dark_logo = ShouldForceDarkForegroundColorsForLogo(theme_service);
+  if (!custom_background.has_value() && theme_has_custom_image &&
+      force_dark_logo) {
+    theme->logo_color =
+        color_provider.GetColor(kColorNewTabPageLogoUnthemedDark);
+  }
+
   theme->background_image = std::move(background_image);
-  if (!ntp_theme.custom_background_attribution_line_1.empty()) {
+  if (custom_background.has_value() && !theme_has_custom_image) {
     theme->background_image_attribution_1 =
-        ntp_theme.custom_background_attribution_line_1;
-  }
-  if (!ntp_theme.custom_background_attribution_line_2.empty()) {
+        custom_background->custom_background_attribution_line_1;
     theme->background_image_attribution_2 =
-        ntp_theme.custom_background_attribution_line_2;
-  }
-  if (!ntp_theme.custom_background_attribution_action_url.is_empty()) {
+        custom_background->custom_background_attribution_line_2;
     theme->background_image_attribution_url =
-        ntp_theme.custom_background_attribution_action_url;
-  }
-  if (!ntp_theme.collection_id.empty()) {
-    theme->daily_refresh_collection_id = ntp_theme.collection_id;
+        custom_background->custom_background_attribution_action_url;
+    theme->background_image_collection_id = custom_background->collection_id;
+    theme->daily_refresh_enabled = custom_background->daily_refresh_enabled;
   }
 
   theme->most_visited = std::move(most_visited);
-
-  auto search_box = realbox::mojom::SearchBoxTheme::New();
-  search_box->bg = ntp_theme.search_box.bg;
-  search_box->icon = ntp_theme.search_box.icon;
-  search_box->icon_selected = ntp_theme.search_box.icon_selected;
-  search_box->placeholder = ntp_theme.search_box.placeholder;
-  search_box->results_bg = ntp_theme.search_box.results_bg;
-  search_box->results_bg_hovered = ntp_theme.search_box.results_bg_hovered;
-  search_box->results_bg_selected = ntp_theme.search_box.results_bg_selected;
-  search_box->results_dim = ntp_theme.search_box.results_dim;
-  search_box->results_dim_selected = ntp_theme.search_box.results_dim_selected;
-  search_box->results_text = ntp_theme.search_box.results_text;
-  search_box->results_text_selected =
-      ntp_theme.search_box.results_text_selected;
-  search_box->results_url = ntp_theme.search_box.results_url;
-  search_box->results_url_selected = ntp_theme.search_box.results_url_selected;
-  search_box->text = ntp_theme.search_box.text;
-  theme->search_box = std::move(search_box);
 
   return theme;
 }
@@ -182,7 +349,7 @@ SkColor ParseHexColor(const std::string& color) {
   SkColor result;
   if (color.size() == 7 && color[0] == '#' &&
       base::HexStringToUInt(color.substr(1), &result)) {
-    return SkColorSetA(result, 255);
+    return SkColorSetA(result, SK_AlphaOPAQUE);
   }
   return SK_ColorTRANSPARENT;
 }
@@ -195,16 +362,10 @@ new_tab_page::mojom::ImageDoodlePtr MakeImageDoodle(
     int width_px,
     int height_px,
     const std::string& background_color,
-    int share_button_x,
-    int share_button_y,
-    const std::string& share_button_icon,
-    const std::string& share_button_bg,
-    double share_button_opacity,
     GURL log_url,
     GURL cta_log_url) {
   auto doodle = new_tab_page::mojom::ImageDoodle::New();
-  std::string base64;
-  base::Base64Encode(data, &base64);
+  std::string base64 = base::Base64Encode(data);
   doodle->image_url = GURL(base::StringPrintf(
       "data:%s;base64,%s", mime_type.c_str(), base64.c_str()));
   if (type == search_provider_logos::LogoType::ANIMATED) {
@@ -213,16 +374,6 @@ new_tab_page::mojom::ImageDoodlePtr MakeImageDoodle(
   doodle->width = width_px;
   doodle->height = height_px;
   doodle->background_color = ParseHexColor(background_color);
-  if (!share_button_icon.empty()) {
-    doodle->share_button = new_tab_page::mojom::DoodleShareButton::New();
-    doodle->share_button->x = share_button_x;
-    doodle->share_button->y = share_button_y;
-    doodle->share_button->icon_url = GURL(base::StringPrintf(
-        "data:image/png;base64,%s", share_button_icon.c_str()));
-    doodle->share_button->background_color =
-        SkColorSetA(ParseHexColor(share_button_bg),
-                    std::max(0.0, std::min(share_button_opacity, 1.0)) * 255.0);
-  }
   if (type == search_provider_logos::LogoType::ANIMATED) {
     doodle->image_impression_log_url = cta_log_url;
     doodle->animation_impression_log_url = log_url;
@@ -232,402 +383,512 @@ new_tab_page::mojom::ImageDoodlePtr MakeImageDoodle(
   return doodle;
 }
 
-new_tab_page::mojom::PromoPtr MakePromo(const PromoData& data) {
-  // |data.middle_slot_json| is safe to be decoded here. The JSON string is part
-  // of a larger JSON initially decoded using the data decoder utility in the
-  // PromoService to base::Value. The middle-slot promo part is then reencoded
-  // from base::Value to a JSON string stored in |data.middle_slot_json|.
-  auto middle_slot = base::JSONReader::Read(data.middle_slot_json);
-  if (!middle_slot.has_value() ||
-      middle_slot.value().FindBoolPath("hidden").value_or(false)) {
-    return nullptr;
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+base::DictValue MakeModuleInteractionTriggerIdDictionary() {
+  const auto data = base::GetFieldTrialParamValueByFeature(
+      features::kHappinessTrackingSurveysForDesktopNtpModules,
+      ntp_features::kNtpModulesInteractionBasedSurveyEligibleIdsParam);
+  if (data.empty()) {
+    return base::DictValue();
   }
-  auto promo = new_tab_page::mojom::Promo::New();
-  promo->id = data.promo_id;
-  if (middle_slot.has_value()) {
-    auto* parts = middle_slot.value().FindListPath("part");
-    if (parts) {
-      std::vector<new_tab_page::mojom::PromoPartPtr> mojom_parts;
-      for (const base::Value& part : parts->GetList()) {
-        if (part.FindKey("image")) {
-          auto mojom_image = new_tab_page::mojom::PromoImagePart::New();
-          auto* image_url = part.FindStringPath("image.image_url");
-          if (!image_url || image_url->empty()) {
-            continue;
-          }
-          mojom_image->image_url = GURL(*image_url);
-          auto* target = part.FindStringPath("image.target");
-          if (target && !target->empty()) {
-            mojom_image->target = GURL(*target);
-          }
-          mojom_parts.push_back(
-              new_tab_page::mojom::PromoPart::NewImage(std::move(mojom_image)));
-        } else if (part.FindKey("link")) {
-          auto mojom_link = new_tab_page::mojom::PromoLinkPart::New();
-          auto* url = part.FindStringPath("link.url");
-          if (!url || url->empty()) {
-            continue;
-          }
-          mojom_link->url = GURL(*url);
-          auto* text = part.FindStringPath("link.text");
-          if (!text || text->empty()) {
-            continue;
-          }
-          mojom_link->text = *text;
-          auto* color = part.FindStringPath("link.color");
-          if (color && !color->empty()) {
-            mojom_link->color = *color;
-          }
-          mojom_parts.push_back(
-              new_tab_page::mojom::PromoPart::NewLink(std::move(mojom_link)));
-        } else if (part.FindKey("text")) {
-          auto mojom_text = new_tab_page::mojom::PromoTextPart::New();
-          auto* text = part.FindStringPath("text.text");
-          if (!text || text->empty()) {
-            continue;
-          }
-          mojom_text->text = *text;
-          auto* color = part.FindStringPath("text.color");
-          if (color && !color->empty()) {
-            mojom_text->color = *color;
-          }
-          mojom_parts.push_back(
-              new_tab_page::mojom::PromoPart::NewText(std::move(mojom_text)));
-        }
-      }
-      promo->middle_slot_parts = std::move(mojom_parts);
-    }
+
+  auto value_with_error = base::JSONReader::ReadAndReturnValueWithError(
+      data, base::JSONParserOptions::JSON_ALLOW_TRAILING_COMMAS);
+  if (!value_with_error.has_value()) {
+    LOG(ERROR)
+        << "Failed to parse "
+           "ntp_features::kNtpModulesInteractionBasedSurveyEligibleIdsParam ("
+        << value_with_error.error().message << ") on line "
+        << value_with_error.error().line << " at position "
+        << value_with_error.error().column;
+    return base::DictValue();
   }
-  promo->log_url = data.promo_log_url;
-  return promo;
+
+  if (!value_with_error->is_dict()) {
+    LOG(WARNING)
+        << "ntp_features::kNtpModulesInteractionBasedSurveyEligibleIdsParam "
+           "data skipped. Not a dictionary.";
+    return base::DictValue();
+  }
+
+  return std::move(*value_with_error).TakeDict();
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 
 // static
 const char NewTabPageHandler::kModuleDismissedHistogram[] =
     "NewTabPage.Modules.Dismissed";
-const char NewTabPageHandler::kModuleRestoredHistogram[] =
-    "NewTabPage.Modules.Restored";
 
 NewTabPageHandler::NewTabPageHandler(
     mojo::PendingReceiver<new_tab_page::mojom::PageHandler>
         pending_page_handler,
     mojo::PendingRemote<new_tab_page::mojom::Page> pending_page,
     Profile* profile,
-    InstantService* instant_service,
+    NtpCustomBackgroundService* ntp_custom_background_service,
+    ThemeService* theme_service,
+    search_provider_logos::LogoService* logo_service,
+    syncer::SyncService* sync_service,
+    segmentation_platform::SegmentationPlatformService*
+        segmentation_platform_service,
     content::WebContents* web_contents,
-    const base::Time& ntp_navigation_start_time)
-    : instant_service_(instant_service),
-      ntp_background_service_(
-          NtpBackgroundServiceFactory::GetForProfile(profile)),
-      logo_service_(LogoServiceFactory::GetForProfile(profile)),
+    const std::vector<ntp::ModuleIdDetail>* module_id_details)
+    : SettingsEnabledObserver(
+          optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
+      logger_(profile, chrome::ChromeUINewTabPageURLAsGURL()),
+      ntp_custom_background_service_(ntp_custom_background_service),
+      logo_service_(logo_service),
+// TODO(b/502297163): Implement for Android.
+#if BUILDFLAG(IS_ANDROID)
+      theme_provider_(nullptr),
+#else
+      theme_provider_(webui::GetThemeProviderDeprecated(web_contents)),
+#endif
+      theme_service_(theme_service),
+      sync_service_(sync_service),
+      segmentation_platform_service_(segmentation_platform_service),
       profile_(profile),
       web_contents_(web_contents),
-      ntp_navigation_start_time_(ntp_navigation_start_time),
-      logger_(profile, GURL(chrome::kChromeUINewTabPageURL)),
-      promo_service_(PromoServiceFactory::GetForProfile(profile)),
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+      feature_promo_helper_(std::make_unique<NewTabPageFeaturePromoHelper>()),
+#endif
+      module_id_details_(module_id_details),
+      microsoft_auth_service_(
+          MicrosoftAuthServiceFactory::GetForProfile(profile)),
+#if !BUILDFLAG(IS_ANDROID)
+      interaction_module_id_trigger_dict_(
+          MakeModuleInteractionTriggerIdDictionary()),
+#endif
+      browser_window_changed_subscription_(
+          webui::RegisterBrowserWindowInterfaceChanged(
+              web_contents_,
+              base::BindRepeating(
+                  &NewTabPageHandler::OnBrowserWindowInterfaceChanged,
+                  base::Unretained(this)))),
       page_{std::move(pending_page)},
       receiver_{this, std::move(pending_page_handler)} {
-  CHECK(instant_service_);
-  CHECK(ntp_background_service_);
+  CHECK(ntp_custom_background_service_);
   CHECK(logo_service_);
-  CHECK(promo_service_);
   CHECK(web_contents_);
-  instant_service_->AddObserver(this);
-  ntp_background_service_->AddObserver(this);
-  instant_service_->UpdateNtpTheme();
-  promo_service_observation_.Observe(promo_service_);
+  CHECK(theme_service_);
+  theme_service_observation_.Observe(theme_service_.get());
+  native_theme_observation_.Observe(ui::NativeTheme::GetInstanceForNativeUi());
+  ntp_custom_background_service_observation_.Observe(
+      ntp_custom_background_service_.get());
+  if (microsoft_auth_service_) {
+    microsoft_auth_service_->AddObserver(this);
+  }
+#if !BUILDFLAG(IS_ANDROID)
+  CHECK(feature_promo_helper_);
+  if (customize_chrome::IsWallpaperSearchEnabledForProfile(profile_)) {
+    optimization_guide_keyed_service_ =
+        OptimizationGuideKeyedServiceFactory::GetForProfile(profile_);
+    if (optimization_guide_keyed_service_) {
+      optimization_guide_keyed_service_
+          ->AddModelExecutionSettingsEnabledObserver(this);
+    }
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+  OnBrowserWindowInterfaceChanged();
+
+  if (base::FeatureList::IsEnabled(
+          ntp_features::kNtpBackgroundImageErrorDetection)) {
+    ntp_custom_background_service_->VerifyCustomBackgroundImageURL();
+  } else {
+    OnThemeChanged();
+  }
+
+  pref_change_registrar_.Init(profile_->GetPrefs());
+  pref_change_registrar_.Add(
+      prefs::kNtpModulesVisible,
+      base::BindRepeating(&NewTabPageHandler::UpdateDisabledModules,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kNtpDisabledModules,
+      base::BindRepeating(&NewTabPageHandler::UpdateDisabledModules,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kNtpHiddenModules,
+      base::BindRepeating(&NewTabPageHandler::UpdateDisabledModules,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kNtpToolChipsVisible,
+      base::BindRepeating(&NewTabPageHandler::UpdateActionChipsVisibility,
+                          base::Unretained(this)));
+
+#if !BUILDFLAG(IS_ANDROID)
+  // `kSeedColorChangeCount` is registered by ThemeColorPickerHandler, which is
+  // desktop-only, and the toast it drives points at the Chrome Web Store.
+  pref_change_registrar_.Add(
+      prefs::kSeedColorChangeCount,
+      base::BindRepeating(&NewTabPageHandler::MaybeShowWebstoreToast,
+                          base::Unretained(this)));
+
+  if (base::FeatureList::IsEnabled(
+          feature_engagement::kIPHDesktopRealboxContextualSearchFeature)) {
+    searchbox_shown_subscription_ =
+        ui::ElementTracker::GetElementTracker()
+            ->AddElementShownInAnyContextCallback(
+                NewTabPageUI::kRealboxContextualEntrypointElementId,
+                base::BindRepeating(
+                    &NewTabPageHandler::TryShowRealboxContextualMenuIPH,
+                    weak_ptr_factory_.GetWeakPtr()));
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  scheduled_restart::ScheduledRestartBubbleController::MaybeShowNTPNudge(
+      web_contents_);
+#endif
 }
 
 NewTabPageHandler::~NewTabPageHandler() {
-  instant_service_->RemoveObserver(this);
-  ntp_background_service_->RemoveObserver(this);
-  if (select_file_dialog_) {
-    select_file_dialog_->ListenerDestroyed();
+  if (optimization_guide_keyed_service_) {
+    optimization_guide_keyed_service_
+        ->RemoveModelExecutionSettingsEnabledObserver(this);
+    optimization_guide_keyed_service_ = nullptr;
   }
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  if (microsoft_auth_service_) {
+    microsoft_auth_service_->RemoveObserver(this);
+  }
+#endif
 }
 
 // static
 void NewTabPageHandler::RegisterProfilePrefs(PrefRegistrySimple* registry) {
+  registry->RegisterIntegerPref(prefs::kNtpComposeButtonShownCountPrefName, 0);
+  registry->RegisterListPref(prefs::kNtpDisabledModules);
+  registry->RegisterListPref(prefs::kNtpHiddenModules);
+  registry->RegisterListPref(prefs::kNtpModulesOrder);
   registry->RegisterBooleanPref(prefs::kNtpModulesVisible, true);
-  registry->RegisterListPref(prefs::kNtpDisabledModules, true);
+  registry->RegisterBooleanPref(prefs::kNtpToolChipsVisible, true);
+  registry->RegisterIntegerPref(prefs::kNtpCustomizeChromeButtonOpenCount, 0);
+  registry->RegisterDictionaryPref(prefs::kNtpModulesInteractedCountDict);
+  registry->RegisterDictionaryPref(prefs::kNtpModulesLoadedCountDict);
+  registry->RegisterIntegerPref(prefs::kNtpWallpaperSearchButtonShownCount, 0);
+  registry->RegisterBooleanPref(prefs::kNtpOutlookModuleVisible, false);
+  registry->RegisterBooleanPref(prefs::kNtpSharepointModuleVisible, false);
+  registry->RegisterIntegerPref(
+      prefs::kNtpCustomizeChromeSidePanelAutoOpeningsCount, 0);
+  registry->RegisterBooleanPref(prefs::kNtpCustomizeChromeExplicitlyClosed,
+                                false);
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(prefs::kNtpCustomizeChromeIPHAutoOpened, false);
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
-void NewTabPageHandler::SetMostVisitedSettings(bool custom_links_enabled,
+void NewTabPageHandler::SetMostVisitedSettings(ntp_tiles::TileType type,
                                                bool visible) {
   bool old_visible = IsShortcutsVisible();
   if (old_visible != visible) {
     profile_->GetPrefs()->SetBoolean(ntp_prefs::kNtpShortcutsVisible, visible);
-    logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_TOGGLE_VISIBILITY,
-                     base::TimeDelta() /* unused */);
+    LogEvent(NTP_CUSTOMIZE_SHORTCUT_TOGGLE_VISIBILITY);
   }
 
-  bool old_custom_links_enabled = IsCustomLinksEnabled();
-  if (old_custom_links_enabled != custom_links_enabled) {
-    profile_->GetPrefs()->SetBoolean(ntp_prefs::kNtpUseMostVisitedTiles,
-                                     !custom_links_enabled);
-    logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE,
-                     base::TimeDelta() /* unused */);
+  ntp_tiles::TileType old_type = GetTileType();
+  if (old_type != type) {
+    profile_->GetPrefs()->SetBoolean(ntp_prefs::kNtpCustomLinksVisible,
+                                     type == ntp_tiles::TileType::kCustomLinks);
+    profile_->GetPrefs()->SetBoolean(
+        ntp_prefs::kNtpEnterpriseShortcutsVisible,
+        type == ntp_tiles::TileType::kEnterpriseShortcuts);
+    LogEvent(NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE);
   }
 }
 
 void NewTabPageHandler::GetMostVisitedSettings(
     GetMostVisitedSettingsCallback callback) {
-  bool custom_links_enabled = IsCustomLinksEnabled();
+  ntp_tiles::TileType type = GetTileType();
   bool visible = IsShortcutsVisible();
-  std::move(callback).Run(custom_links_enabled, visible);
-}
-
-void NewTabPageHandler::SetBackgroundImage(const std::string& attribution_1,
-                                           const std::string& attribution_2,
-                                           const GURL& attribution_url,
-                                           const GURL& image_url) {
-  // Populating the |collection_id| turns on refresh daily which overrides the
-  // the selected image.
-  instant_service_->SetCustomBackgroundInfo(image_url, attribution_1,
-                                            attribution_2, attribution_url,
-                                            /* collection_id= */ "");
-  LogEvent(NTP_BACKGROUND_IMAGE_SET);
-}
-
-void NewTabPageHandler::SetDailyRefreshCollectionId(
-    const std::string& collection_id) {
-  // Populating the |collection_id| turns on refresh daily which overrides the
-  // the selected image.
-  instant_service_->SetCustomBackgroundInfo(
-      /* image_url */ GURL(), /* attribution_1= */ "", /* attribution_2= */ "",
-      /* attribution_url= */ GURL(), collection_id);
-  LogEvent(NTP_BACKGROUND_DAILY_REFRESH_ENABLED);
-}
-
-void NewTabPageHandler::SetNoBackgroundImage() {
-  instant_service_->SetCustomBackgroundInfo(
-      /* image_url */ GURL(), /* attribution_1= */ "", /* attribution_2= */ "",
-      /* attribution_url= */ GURL(), /* collection_id= */ "");
-  LogEvent(NTP_BACKGROUND_IMAGE_RESET);
-}
-
-void NewTabPageHandler::GetBackgroundCollections(
-    GetBackgroundCollectionsCallback callback) {
-  if (!ntp_background_service_ || background_collections_callback_) {
-    std::move(callback).Run(
-        std::vector<new_tab_page::mojom::BackgroundCollectionPtr>());
-    return;
-  }
-  background_collections_request_start_time_ = base::TimeTicks::Now();
-  background_collections_callback_ = std::move(callback);
-  ntp_background_service_->FetchCollectionInfo();
-}
-
-void NewTabPageHandler::GetBackgroundImages(
-    const std::string& collection_id,
-    GetBackgroundImagesCallback callback) {
-  if (background_images_callback_) {
-    std::move(background_images_callback_)
-        .Run(std::vector<new_tab_page::mojom::CollectionImagePtr>());
-  }
-  if (!ntp_background_service_) {
-    std::move(callback).Run(
-        std::vector<new_tab_page::mojom::CollectionImagePtr>());
-    return;
-  }
-  images_request_collection_id_ = collection_id;
-  background_images_request_start_time_ = base::TimeTicks::Now();
-  background_images_callback_ = std::move(callback);
-  ntp_background_service_->FetchCollectionImageInfo(collection_id);
+  std::move(callback).Run(type, visible);
 }
 
 void NewTabPageHandler::GetDoodle(GetDoodleCallback callback) {
+  bool enable_animated_logo =
+      base::FeatureList::IsEnabled(ntp_features::kNtpAnimatedDoodles) &&
+      !gfx::Animation::PrefersReducedMotion();
   search_provider_logos::LogoCallbacks callbacks;
-  std::string fresh_doodle_param;
-  if (net::GetValueForKeyInQuery(web_contents_->GetLastCommittedURL(),
-                                 "fresh-doodle", &fresh_doodle_param) &&
-      fresh_doodle_param == "1") {
-    // In fresh-doodle mode, wait for the desired doodle to be downloaded.
-    callbacks.on_fresh_encoded_logo_available =
-        base::BindOnce(&NewTabPageHandler::OnLogoAvailable,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback));
-  } else {
-    // In regular mode, return cached doodle as it is available faster.
-    callbacks.on_cached_encoded_logo_available =
-        base::BindOnce(&NewTabPageHandler::OnLogoAvailable,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback));
-  }
-  // This will trigger re-downloading the doodle and caching it. This means that
-  // in regular mode a new doodle will be returned on subsequent NTP loads.
-  logo_service_->GetLogo(std::move(callbacks), /*for_webui_ntp=*/true);
-}
-
-void NewTabPageHandler::ChooseLocalCustomBackground(
-    ChooseLocalCustomBackgroundCallback callback) {
-  // Early return if the select file dialog is already active.
-  if (select_file_dialog_)
-    return;
-
-  select_file_dialog_ = ui::SelectFileDialog::Create(
-      this, std::make_unique<ChromeSelectFilePolicy>(web_contents_));
-  ui::SelectFileDialog::FileTypeInfo file_types;
-  file_types.allowed_paths = ui::SelectFileDialog::FileTypeInfo::NATIVE_PATH;
-  file_types.extensions.resize(1);
-  file_types.extensions[0].push_back(FILE_PATH_LITERAL("jpg"));
-  file_types.extensions[0].push_back(FILE_PATH_LITERAL("jpeg"));
-  file_types.extensions[0].push_back(FILE_PATH_LITERAL("png"));
-  file_types.extensions[0].push_back(FILE_PATH_LITERAL("gif"));
-  file_types.extension_description_overrides.push_back(
-      l10n_util::GetStringUTF16(IDS_UPLOAD_IMAGE_FORMAT));
-  choose_local_custom_background_callback_ = std::move(callback);
-  select_file_dialog_->SelectFile(
-      ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
-      profile_->last_selected_directory(), &file_types, 0,
-      base::FilePath::StringType(), web_contents_->GetTopLevelNativeWindow(),
-      nullptr);
-}
-
-void NewTabPageHandler::GetPromo(GetPromoCallback callback) {
-  // Replace the promo URL with "command:<id>" if such a command ID is set
-  // via the feature params.
-  const std::string command_id = base::GetFieldTrialParamValueByFeature(
-      features::kPromoBrowserCommands, features::kPromoBrowserCommandIdParam);
-  if (!command_id.empty()) {
-    auto promo = new_tab_page::mojom::Promo::New();
-    std::vector<new_tab_page::mojom::PromoPartPtr> parts;
-    auto image = new_tab_page::mojom::PromoImagePart::New();
-    // Warning symbol used as the test image.
-    image->image_url = GURL(
-        "data:image/"
-        "svg+xml;base64,"
-        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9Ii01IC"
-        "01IDU4IDU4IiBmaWxsPSIjZmRkNjMzIj48cGF0aCBkPSJNMiA0Mmg0NEwyNCA0IDIgNDJ6"
-        "bTI0LTZoLTR2LTRoNHY0em0wLThoLTR2LThoNHY4eiIvPjwvc3ZnPg==");
-    image->target = GURL("command:" + command_id);
-    parts.push_back(new_tab_page::mojom::PromoPart::NewImage(std::move(image)));
-    auto link = new_tab_page::mojom::PromoLinkPart::New();
-    link->url = GURL("command:" + command_id);
-    link->text = "Test command: " + command_id;
-    parts.push_back(new_tab_page::mojom::PromoPart::NewLink(std::move(link)));
-    promo->middle_slot_parts = std::move(parts);
-    std::move(callback).Run(std::move(promo));
-    return;
-  }
-
-  promo_callbacks_.push_back(std::move(callback));
-  if (promo_service_->promo_data().has_value()) {
-    OnPromoDataUpdated();
-  }
-  promo_load_start_time_ = base::TimeTicks::Now();
-  promo_service_->Refresh();
+  callbacks.on_cached_encoded_logo_available =
+      base::BindOnce(&NewTabPageHandler::OnLogoAvailable,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback));
+  // This will trigger re-downloading the doodle and caching it. This means a
+  // new doodle will be returned on subsequent NTP loads.
+  logo_service_->GetLogo(std::move(callbacks), /*for_webui_ntp=*/true,
+                         enable_animated_logo);
 }
 
 void NewTabPageHandler::OnDismissModule(const std::string& module_id) {
   const std::string histogram_prefix(kModuleDismissedHistogram);
   base::UmaHistogramExactLinear(histogram_prefix, 1, 1);
   base::UmaHistogramExactLinear(histogram_prefix + "." + module_id, 1, 1);
-}
 
-void NewTabPageHandler::OnRestoreModule(const std::string& module_id) {
-  const std::string histogram_prefix(kModuleRestoredHistogram);
-  base::UmaHistogramExactLinear(histogram_prefix, 1, 1);
-  base::UmaHistogramExactLinear(histogram_prefix + "." + module_id, 1, 1);
+  RecordModuleInteraction(module_id);
+  MaybeLaunchInteractionSurvey(kDismissInteraction, module_id);
 }
 
 void NewTabPageHandler::SetModulesVisible(bool visible) {
+  DisableModuleAutoRemoval(profile_, ntp_modules::kAllModulesId);
   profile_->GetPrefs()->SetBoolean(prefs::kNtpModulesVisible, visible);
-  UpdateDisabledModules();
 }
 
-void NewTabPageHandler::SetModuleDisabled(const std::string& module_id,
-                                          bool disabled) {
-  ListPrefUpdate update(profile_->GetPrefs(), prefs::kNtpDisabledModules);
-  base::Value module_id_value(module_id);
-  if (disabled) {
-    if (!base::Contains(update->GetList(), module_id_value))
-      update->Append(std::move(module_id_value));
-  } else {
-    update->EraseListValue(module_id_value);
+void NewTabPageHandler::SetModulesDisabled(
+    const std::vector<std::string>& module_ids,
+    bool disabled,
+    bool is_user_action) {
+  if (module_ids.empty()) {
+    return;
   }
-  UpdateDisabledModules();
+
+  ScopedListPrefUpdate update(profile_->GetPrefs(), prefs::kNtpDisabledModules);
+  base::ListValue& list = update.Get();
+  for (const auto& module_id : module_ids) {
+    if (disabled) {
+      if (!list.contains(module_id)) {
+        list.Append(module_id);
+      }
+    } else {
+      list.EraseValue(base::Value(module_id));
+    }
+  }
+
+  DisableModuleListAutoRemoval(profile_, module_ids);
+
+  // We're not recording a user interaction if the modules were disabled due to
+  // feature optimization auto removal.
+  if (is_user_action) {
+    for (const auto& module_id : module_ids) {
+      IncrementDictPrefKeyCount(prefs::kNtpModulesInteractedCountDict,
+                                module_id);
+      MaybeLaunchInteractionSurvey(kDisableInteraction, module_id);
+    }
+  }
 }
 
 void NewTabPageHandler::UpdateDisabledModules() {
-  std::vector<std::string> module_ids;
+  std::set<std::string> module_ids_set;
   // If the module visibility is managed by policy we either disable all modules
   // (if invisible) or no modules (if visible).
   if (!profile_->GetPrefs()->IsManagedPreference(prefs::kNtpModulesVisible)) {
-    const auto* module_ids_value =
+    const auto& disabled_module_ids_value =
         profile_->GetPrefs()->GetList(prefs::kNtpDisabledModules);
-    for (const auto& id : module_ids_value->GetList()) {
-      module_ids.push_back(id.GetString());
+    for (const auto& id : disabled_module_ids_value) {
+      module_ids_set.insert(id.GetString());
     }
   }
+
+  // Hidden modules should be respected as long as modules are visible.
+  if (profile_->GetPrefs()->GetBoolean(prefs::kNtpModulesVisible)) {
+    const auto& hidden_module_ids_value =
+        profile_->GetPrefs()->GetList(prefs::kNtpHiddenModules);
+    for (const auto& id : hidden_module_ids_value) {
+      module_ids_set.insert(id.GetString());
+    }
+  }
+
+  std::vector<std::string> module_ids(module_ids_set.begin(),
+                                      module_ids_set.end());
   page_->SetDisabledModules(
       !profile_->GetPrefs()->GetBoolean(prefs::kNtpModulesVisible),
       std::move(module_ids));
 }
 
-void NewTabPageHandler::OnModulesLoadedWithData() {
-  HatsService* hats_service =
-      HatsServiceFactory::GetForProfile(profile_, /*create_if_necessary=*/true);
-  CHECK(hats_service);
-  hats_service->LaunchDelayedSurveyForWebContents(kHatsSurveyTriggerNtpModules,
-                                                  web_contents_, 0);
-}
+void NewTabPageHandler::OnModulesLoadedWithData(
+    const std::vector<std::string>& module_ids) {
+  UpdateModulesStaleness(profile_, module_ids);
 
-void NewTabPageHandler::OnPromoDataUpdated() {
-  if (promo_load_start_time_.has_value()) {
-    base::TimeDelta duration = base::TimeTicks::Now() - *promo_load_start_time_;
-    UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.Promos.RequestLatency2", duration);
-    if (promo_service_->promo_status() == PromoService::Status::OK_WITH_PROMO) {
-      UMA_HISTOGRAM_MEDIUM_TIMES(
-          "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", duration);
-    } else if (promo_service_->promo_status() ==
-               PromoService::Status::OK_BUT_BLOCKED) {
-      UMA_HISTOGRAM_MEDIUM_TIMES(
-          "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", duration);
-    } else if (promo_service_->promo_status() ==
-               PromoService::Status::OK_WITHOUT_PROMO) {
-      UMA_HISTOGRAM_MEDIUM_TIMES(
-          "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", duration);
-    } else {
-      UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.Promos.RequestLatency2.Failure",
-                                 duration);
-    }
-    promo_load_start_time_ = absl::nullopt;
+  for (const auto& module_id : module_ids) {
+    IncrementDictPrefKeyCount(prefs::kNtpModulesLoadedCountDict, module_id);
   }
 
-  const auto& data = promo_service_->promo_data();
-  for (auto& callback : promo_callbacks_) {
-    if (data.has_value() && !data->promo_html.empty()) {
-      std::move(callback).Run(MakePromo(data.value()));
-    } else {
-      std::move(callback).Run(nullptr);
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  std::vector<std::string> survey_eligible_module_ids =
+      GetSurveyEligibleModuleIds();
+  if (std::any_of(module_ids.begin(), module_ids.end(),
+                  [&survey_eligible_module_ids](std::string id) {
+                    return std::ranges::contains(survey_eligible_module_ids,
+                                                 id);
+                  })) {
+    HatsService* hats_service = HatsServiceFactory::GetForProfile(
+        profile_, /*create_if_necessary=*/true);
+    CHECK(hats_service);
+    hats_service->LaunchDelayedSurveyForWebContents(
+        kHatsSurveyTriggerNtpModules, web_contents_, 0);
+    return;
+  }
+
+  const auto module_ignored_criteria_threshold =
+      base::GetFieldTrialParamByFeatureAsInt(
+          features::kHappinessTrackingSurveysForDesktopNtpModules,
+          ntp_features::kNtpModuleIgnoredCriteriaThreshold, 25);
+  for (const auto& module_id : module_ids) {
+    const base::DictValue& interacted_counts_dict =
+        profile_->GetPrefs()->GetDict(prefs::kNtpModulesInteractedCountDict);
+    std::optional<int> interacted_count =
+        interacted_counts_dict.FindInt(module_id);
+    if (interacted_count.value_or(0) != 0) {
+      continue;
+    }
+
+    const base::DictValue& loaded_counts_dict =
+        profile_->GetPrefs()->GetDict(prefs::kNtpModulesLoadedCountDict);
+    std::optional<int> loaded_count = loaded_counts_dict.FindInt(module_id);
+    if (loaded_count.value_or(0) >= module_ignored_criteria_threshold) {
+      const auto survey_delay_time_ms = base::GetFieldTrialParamByFeatureAsInt(
+          features::kHappinessTrackingSurveysForDesktopNtpModules,
+          ntp_features::kNtpModuleIgnoredHaTSDelayTimeParam, 0);
+      MaybeLaunchInteractionSurvey(kIgnoreInteraction, module_id,
+                                   survey_delay_time_ms);
+      break;
     }
   }
-  promo_callbacks_.clear();
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
-void NewTabPageHandler::OnPromoServiceShuttingDown() {
-  promo_service_observation_.Reset();
-  promo_service_ = nullptr;
+void NewTabPageHandler::OnModuleUsed(const std::string& module_id) {
+  RecordModuleInteraction(module_id);
+  MaybeLaunchInteractionSurvey(kUseInteraction, module_id);
+}
+
+void NewTabPageHandler::GetModulesIdNames(GetModulesIdNamesCallback callback) {
+  std::vector<new_tab_page::mojom::ModuleIdNamePtr> modules_details;
+  for (const auto& module_id_detail : *module_id_details_) {
+    auto module_id_name = new_tab_page::mojom::ModuleIdName::New();
+    module_id_name->id = module_id_detail.id_;
+    module_id_name->name =
+        l10n_util::GetStringUTF8(module_id_detail.name_message_id_);
+    modules_details.push_back(std::move(module_id_name));
+  }
+
+  std::move(callback).Run(std::move(modules_details));
+}
+
+void NewTabPageHandler::GetModulesEligibleForRemoval(
+    GetModulesEligibleForRemovalCallback callback) {
+  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      std::move(callback), std::vector<std::string>());
+
+  // (1) Skip modules removal if the feature flag is not enabled.
+  std::vector<std::string> removal_eligible_module_ids;
+  if (!base::FeatureList::IsEnabled(
+          ntp_features::kNtpFeatureOptimizationModuleRemoval)) {
+    return;
+  }
+
+  // (2) Skip modules removal if it's a managed preference.
+  if (profile_->GetPrefs()->IsManagedPreference(prefs::kNtpModulesVisible)) {
+    return;
+  }
+
+  // (3) Skip modules removal if it's force disabled for all modules.
+  const base::DictValue& module_removal_disabled_dict =
+      profile_->GetPrefs()->GetDict(
+          ntp_prefs::kNtpModulesAutoRemovalDisabledDict);
+  const bool is_all_module_removal_disabled =
+      module_removal_disabled_dict.FindBool(ntp_modules::kAllModulesId)
+          .value_or(false);
+
+  if (is_all_module_removal_disabled) {
+    return;
+  }
+
+  // (4) Otherwise, we check for each module if the module auto removal is not
+  // force disabled and if the staleness count is above the threshold.
+  const int staleness_threshold =
+      ntp_features::kStaleModulesCountThreshold.Get();
+  const base::DictValue& staleness_counts_dict =
+      profile_->GetPrefs()->GetDict(ntp_prefs::kNtpModuleStalenessCountDict);
+
+  for (const auto& module_id_detail : *module_id_details_) {
+    const bool is_module_removal_disabled =
+        module_removal_disabled_dict.FindBool(module_id_detail.id_)
+            .value_or(false);
+    const int staleness_count =
+        staleness_counts_dict.FindInt(module_id_detail.id_).value_or(0);
+    const bool is_above_threshold = staleness_count >= staleness_threshold;
+    if (!is_module_removal_disabled && is_above_threshold) {
+      removal_eligible_module_ids.push_back(module_id_detail.id_);
+    }
+  }
+
+  return std::move(callback).Run(std::move(removal_eligible_module_ids));
+}
+
+void NewTabPageHandler::SetModulesOrder(
+    const std::vector<std::string>& module_ids) {
+  base::ListValue module_ids_value;
+  for (const auto& module_id : module_ids) {
+    module_ids_value.Append(module_id);
+  }
+  profile_->GetPrefs()->SetList(prefs::kNtpModulesOrder,
+                                std::move(module_ids_value));
+}
+
+void NewTabPageHandler::GetModulesOrder(GetModulesOrderCallback callback) {
+  // First, get Finch order.
+  std::vector<std::string> module_ids = ntp_features::GetModulesOrder();
+
+  // Second, append default module order for any modules not ordered by Finch.
+  std::ranges::copy_if(ntp_modules::kOrderedModuleIds,
+                       std::back_inserter(module_ids),
+                       [&module_ids](const std::string& id) {
+                         return !std::ranges::contains(module_ids, id);
+                       });
+
+  std::move(callback).Run(std::move(module_ids));
+}
+
+void NewTabPageHandler::UpdateModulesLoadable() {
+  if (!microsoft_auth_service_ || SyncMicrosoftModulesWithAuth()) {
+    page_->SetModulesLoadable();
+  }
+}
+
+void NewTabPageHandler::UpdateActionChipsVisibility() {
+  page_->SetActionChipsVisibility(IsActionChipsVisible());
+}
+
+void NewTabPageHandler::UpdateFooterVisibility() {
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(ntp_features::kNtpFooter)) {
+    return;
+  }
+
+  // TODO(webium): FooterController depends on BrowserView, but WebUIBrowser
+  // doesn't have a BrowserView.
+  if (webui_browser::IsWebUIBrowserEnabled()) {
+    return;
+  }
+
+  auto* browser = webui::GetBrowserWindowInterface(web_contents_);
+  if (!browser) {
+    // TODO(crbug.com/378475391): NTP should always load into a WebContents
+    // owned by a TabModel. Remove this once NTP loading has been restricted to
+    // browser tabs only.
+    return;
+  }
+
+  auto* footer_controller =
+      new_tab_footer::NewTabFooterController::From(browser);
+  CHECK(footer_controller);
+  OnFooterVisibilityUpdated(footer_controller->GetFooterVisible(web_contents_));
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
 void NewTabPageHandler::OnAppRendered(double time) {
-  logger_.LogEvent(NTP_APP_RENDERED,
-                   base::Time::FromJsTime(time) - ntp_navigation_start_time_);
+  LogEvent(NTP_APP_RENDERED, base::Milliseconds(time));
 }
 
 void NewTabPageHandler::OnOneGoogleBarRendered(double time) {
-  logger_.LogEvent(NTP_ONE_GOOGLE_BAR_SHOWN,
-                   base::Time::FromJsTime(time) - ntp_navigation_start_time_);
-}
-
-void NewTabPageHandler::OnPromoRendered(double time,
-                                        const absl::optional<GURL>& log_url) {
-  logger_.LogEvent(NTP_MIDDLE_SLOT_PROMO_SHOWN,
-                   base::Time::FromJsTime(time) - ntp_navigation_start_time_);
-  if (log_url.has_value() && log_url->is_valid()) {
-    Fetch(*log_url, base::BindOnce([](bool, std::unique_ptr<std::string>) {}));
-  }
+  LogEvent(NTP_ONE_GOOGLE_BAR_SHOWN, base::Milliseconds(time));
 }
 
 void NewTabPageHandler::OnCustomizeDialogAction(
@@ -685,28 +946,25 @@ void NewTabPageHandler::OnCustomizeDialogAction(
 
 void NewTabPageHandler::OnDoodleImageClicked(
     new_tab_page::mojom::DoodleImageType type,
-    const absl::optional<::GURL>& log_url) {
+    const std::optional<::GURL>& log_url) {
   NTPLoggingEventType event;
   switch (type) {
     case new_tab_page::mojom::DoodleImageType::kAnimation:
       event = NTP_ANIMATED_LOGO_CLICKED;
-      break;
-    case new_tab_page::mojom::DoodleImageType::kCta:
-      event = NTP_CTA_LOGO_CLICKED;
       break;
     case new_tab_page::mojom::DoodleImageType::kStatic:
       event = NTP_STATIC_LOGO_CLICKED;
       break;
     default:
       NOTREACHED();
-      return;
   }
   LogEvent(event);
 
-  if (type == new_tab_page::mojom::DoodleImageType::kCta &&
-      log_url.has_value()) {
-    // We just ping the server to indicate a CTA image has been clicked.
-    Fetch(*log_url, base::BindOnce([](bool, std::unique_ptr<std::string>) {}));
+  // We just ping the server to indicate a CTA image has been clicked.
+  // This only happens when the the initial impression log response
+  // contains an `interaction_log_url` field.
+  if (log_url.has_value()) {
+    Fetch(*log_url, base::NullCallback());
   }
 }
 
@@ -715,12 +973,15 @@ void NewTabPageHandler::OnDoodleImageRendered(
     double time,
     const GURL& log_url,
     OnDoodleImageRenderedCallback callback) {
-  if (type == new_tab_page::mojom::DoodleImageType::kCta ||
-      type == new_tab_page::mojom::DoodleImageType::kStatic) {
-    logger_.LogEvent(type == new_tab_page::mojom::DoodleImageType::kCta
-                         ? NTP_CTA_LOGO_SHOWN_FROM_CACHE
-                         : NTP_STATIC_LOGO_SHOWN_FROM_CACHE,
-                     base::Time::FromJsTime(time) - ntp_navigation_start_time_);
+  switch (type) {
+    case new_tab_page::mojom::DoodleImageType::kAnimation:
+      LogEvent(NTP_ANIMATED_LOGO_SHOWN_FROM_CACHE, base::Milliseconds(time));
+      break;
+    case new_tab_page::mojom::DoodleImageType::kStatic:
+      LogEvent(NTP_STATIC_LOGO_SHOWN_FROM_CACHE, base::Milliseconds(time));
+      break;
+    default:
+      NOTREACHED();
   }
   Fetch(log_url,
         base::BindOnce(&NewTabPageHandler::OnLogFetchResult,
@@ -730,7 +991,7 @@ void NewTabPageHandler::OnDoodleImageRendered(
 void NewTabPageHandler::OnDoodleShared(
     new_tab_page::mojom::DoodleShareChannel channel,
     const std::string& doodle_id,
-    const absl::optional<std::string>& share_id) {
+    const std::optional<std::string>& share_id) {
   int channel_id;
   switch (channel) {
     case new_tab_page::mojom::DoodleShareChannel::kFacebook:
@@ -747,7 +1008,6 @@ void NewTabPageHandler::OnDoodleShared(
       break;
     default:
       NOTREACHED();
-      break;
   }
   std::string query =
       base::StringPrintf("gen_204?atype=i&ct=doodle&ntp=2&cad=sh,%d,ct:%s",
@@ -760,131 +1020,125 @@ void NewTabPageHandler::OnDoodleShared(
                       .GoogleBaseURLValue())
                  .Resolve(query);
   // We just ping the server to indicate a doodle has been shared.
-  Fetch(url, base::BindOnce([](bool s, std::unique_ptr<std::string>) {}));
+  Fetch(url, base::NullCallback());
 }
 
-void NewTabPageHandler::OnPromoLinkClicked() {
-  LogEvent(NTP_MIDDLE_SLOT_PROMO_LINK_CLICKED);
+void NewTabPageHandler::IncrementComposeButtonShownCount() {
+  const int shown_count = profile_->GetPrefs()->GetInteger(
+      prefs::kNtpComposeButtonShownCountPrefName);
+  profile_->GetPrefs()->SetInteger(prefs::kNtpComposeButtonShownCountPrefName,
+                                   shown_count + 1);
 }
 
-void NewTabPageHandler::NtpThemeChanged(const NtpTheme& ntp_theme) {
-  page_->SetTheme(MakeTheme(ntp_theme));
-}
+void NewTabPageHandler::CanShowRealboxContextMenuAnimation(
+    CanShowRealboxContextMenuAnimationCallback callback) {
+  PrefService* prefs = profile_->GetPrefs();
+  const base::DictValue& state_dict =
+      prefs->GetDict(prefs::kContextMenuAnimationState);
 
-void NewTabPageHandler::MostVisitedInfoChanged(
-    const InstantMostVisitedInfo& info) {}
-
-void NewTabPageHandler::OnCollectionInfoAvailable() {
-  if (!background_collections_callback_) {
+  int lifetime_count = state_dict.FindInt("realbox_lifetime_count").value_or(0);
+  if (lifetime_count >= omnibox::kContextMenuAnimationLifetimeLimit.Get()) {
+    std::move(callback).Run(false);
     return;
   }
 
-  base::TimeDelta duration =
-      base::TimeTicks::Now() - background_collections_request_start_time_;
-  UMA_HISTOGRAM_MEDIUM_TIMES(
-      "NewTabPage.BackgroundService.Collections.RequestLatency", duration);
-  // Any response where no collections are returned is considered a failure.
-  if (ntp_background_service_->collection_info().empty()) {
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "NewTabPage.BackgroundService.Collections.RequestLatency.Failure",
-        duration);
-  } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "NewTabPage.BackgroundService.Collections.RequestLatency.Success",
-        duration);
+  base::Time last_impression_time =
+      base::ValueToTime(state_dict.Find("realbox_last_impression_time"))
+          .value_or(base::Time());
+  int daily_count = state_dict.FindInt("realbox_daily_count").value_or(0);
+
+  base::Time today_time = base::Time::Now().LocalMidnight();
+
+  if (last_impression_time != today_time) {
+    daily_count = 0;
   }
 
-  std::vector<new_tab_page::mojom::BackgroundCollectionPtr> collections;
-  for (const auto& info : ntp_background_service_->collection_info()) {
-    auto collection = new_tab_page::mojom::BackgroundCollection::New();
-    collection->id = info.collection_id;
-    collection->label = info.collection_name;
-    collection->preview_image_url = GURL(info.preview_image_url);
-    collections.push_back(std::move(collection));
-  }
-  std::move(background_collections_callback_).Run(std::move(collections));
+  bool can_show = daily_count < omnibox::kContextMenuAnimationDailyLimit.Get();
+  std::move(callback).Run(can_show);
 }
 
-void NewTabPageHandler::OnCollectionImagesAvailable() {
-  if (!background_images_callback_) {
+void NewTabPageHandler::RecordRealboxContextMenuAnimationImpression(
+    bool shown) {
+  base::UmaHistogramBoolean("Omnibox.ContextMenu.AnimationShown.NTP", shown);
+
+  if (!shown) {
     return;
   }
 
-  base::TimeDelta duration =
-      base::TimeTicks::Now() - background_images_request_start_time_;
-  UMA_HISTOGRAM_MEDIUM_TIMES(
-      "NewTabPage.BackgroundService.Images.RequestLatency", duration);
-  // Any response where no images are returned is considered a failure.
-  if (ntp_background_service_->collection_images().empty()) {
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "NewTabPage.BackgroundService.Images.RequestLatency.Failure", duration);
-  } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "NewTabPage.BackgroundService.Images.RequestLatency.Success", duration);
+  PrefService* prefs = profile_->GetPrefs();
+  const base::DictValue& state_dict =
+      prefs->GetDict(prefs::kContextMenuAnimationState);
+
+  base::Time last_impression_time =
+      base::ValueToTime(state_dict.Find("realbox_last_impression_time"))
+          .value_or(base::Time());
+  int daily_count = state_dict.FindInt("realbox_daily_count").value_or(0);
+  int lifetime_count = state_dict.FindInt("realbox_lifetime_count").value_or(0);
+
+  base::Time today_time = base::Time::Now().LocalMidnight();
+
+  if (last_impression_time != today_time) {
+    daily_count = 0;
   }
 
-  std::vector<new_tab_page::mojom::CollectionImagePtr> images;
-  if (ntp_background_service_->collection_images().empty()) {
-    std::move(background_images_callback_).Run(std::move(images));
-    return;
+  if (lifetime_count < omnibox::kContextMenuAnimationLifetimeLimit.Get() &&
+      daily_count < omnibox::kContextMenuAnimationDailyLimit.Get()) {
+    daily_count++;
+    lifetime_count++;
+
+    ScopedDictPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kContextMenuAnimationState);
+    update->Set("realbox_last_impression_time", base::TimeToValue(today_time));
+    update->Set("realbox_daily_count", daily_count);
+    update->Set("realbox_lifetime_count", lifetime_count);
   }
-  auto collection_id =
-      ntp_background_service_->collection_images()[0].collection_id;
-  for (const auto& info : ntp_background_service_->collection_images()) {
-    DCHECK(info.collection_id == collection_id);
-    auto image = new_tab_page::mojom::CollectionImage::New();
-    image->attribution_1 = !info.attribution.empty() ? info.attribution[0] : "";
-    image->attribution_2 =
-        info.attribution.size() > 1 ? info.attribution[1] : "";
-    image->attribution_url = info.attribution_action_url;
-    image->image_url = info.image_url;
-    image->preview_image_url = info.thumbnail_image_url;
-    images.push_back(std::move(image));
-  }
-  std::move(background_images_callback_).Run(std::move(images));
 }
 
-void NewTabPageHandler::OnNextCollectionImageAvailable() {}
-
-void NewTabPageHandler::OnNtpBackgroundServiceShuttingDown() {
-  ntp_background_service_->RemoveObserver(this);
-  ntp_background_service_ = nullptr;
-}
-
-void NewTabPageHandler::FileSelected(const base::FilePath& path,
-                                     int index,
-                                     void* params) {
-  DCHECK(choose_local_custom_background_callback_);
-  if (instant_service_) {
-    profile_->set_last_selected_directory(path.DirName());
-    instant_service_->SelectLocalBackgroundImage(path);
+void NewTabPageHandler::OnContextualSearchIPHEngaged() {
+#if !BUILDFLAG(IS_ANDROID)
+  auto* browser = webui::GetBrowserWindowInterface(web_contents_);
+  if (browser) {
+    auto* user_education = BrowserUserEducationInterface::From(browser);
+    if (user_education) {
+      user_education->NotifyFeaturePromoFeatureUsed(
+          feature_engagement::kIPHDesktopRealboxContextualSearchFeature,
+          FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
+    }
   }
-
-  select_file_dialog_ = nullptr;
-  // File selection can happen at any time after NTP load, and is not logged
-  // with the event.
-  LogEvent(NTP_CUSTOMIZE_LOCAL_IMAGE_DONE);
-  LogEvent(NTP_BACKGROUND_UPLOAD_DONE);
-
-  if (choose_local_custom_background_callback_)
-    std::move(choose_local_custom_background_callback_).Run(true);
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
-void NewTabPageHandler::FileSelectionCanceled(void* params) {
-  DCHECK(choose_local_custom_background_callback_);
-  select_file_dialog_ = nullptr;
-  // File selection can happen at any time after NTP load, and is not logged
-  // with the event.
-  LogEvent(NTP_CUSTOMIZE_LOCAL_IMAGE_CANCEL);
-  LogEvent(NTP_BACKGROUND_UPLOAD_CANCEL);
-  if (choose_local_custom_background_callback_)
-    std::move(choose_local_custom_background_callback_).Run(false);
+void NewTabPageHandler::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
+  OnThemeChanged();
+}
+
+void NewTabPageHandler::OnThemeChanged() {
+  page_->SetTheme(MakeTheme(web_contents_->GetColorProvider(), theme_provider_,
+                            theme_service_, ntp_custom_background_service_,
+                            web_contents_));
+}
+
+void NewTabPageHandler::OnCustomBackgroundImageUpdated() {
+  OnThemeChanged();
+}
+
+void NewTabPageHandler::OnChangeInFeatureCurrentlyEnabledState(
+    bool is_now_enabled) {
+  page_->SetWallpaperSearchButtonVisibility(is_now_enabled);
+}
+
+void NewTabPageHandler::OnAuthStateUpdated() {
+  UpdateModulesLoadable();
+}
+
+void NewTabPageHandler::OnFooterVisibilityUpdated(bool visible) {
+  page_->FooterVisibilityUpdated(visible);
 }
 
 void NewTabPageHandler::OnLogoAvailable(
     GetDoodleCallback callback,
     search_provider_logos::LogoCallbackReason type,
-    const absl::optional<search_provider_logos::EncodedLogo>& logo) {
+    const std::optional<search_provider_logos::EncodedLogo>& logo) {
   if (!logo) {
     std::move(callback).Run(nullptr);
     return;
@@ -898,36 +1152,23 @@ void NewTabPageHandler::OnLogoAvailable(
     }
     auto image_doodle = new_tab_page::mojom::AllModeImageDoodle::New();
     image_doodle->light = MakeImageDoodle(
-        logo->metadata.type, logo->encoded_image->data(),
+        logo->metadata.type, logo->encoded_image->as_string(),
         logo->metadata.mime_type, logo->metadata.animated_url,
         logo->metadata.width_px, logo->metadata.height_px, "#ffffff",
-        logo->metadata.share_button_x, logo->metadata.share_button_y,
-        logo->metadata.share_button_icon, logo->metadata.share_button_bg,
-        logo->metadata.share_button_opacity, logo->metadata.log_url,
-        logo->metadata.cta_log_url);
+        logo->metadata.log_url, logo->metadata.cta_log_url);
     if (logo->dark_encoded_image) {
       image_doodle->dark = MakeImageDoodle(
-          logo->metadata.type, logo->dark_encoded_image->data(),
+          logo->metadata.type, logo->dark_encoded_image->as_string(),
           logo->metadata.dark_mime_type, logo->metadata.dark_animated_url,
           logo->metadata.dark_width_px, logo->metadata.dark_height_px,
-          logo->metadata.dark_background_color,
-          logo->metadata.dark_share_button_x,
-          logo->metadata.dark_share_button_y,
-          logo->metadata.dark_share_button_icon,
-          logo->metadata.dark_share_button_bg,
-          logo->metadata.dark_share_button_opacity, logo->metadata.dark_log_url,
+          logo->metadata.dark_background_color, logo->metadata.dark_log_url,
           logo->metadata.dark_cta_log_url);
     }
-    image_doodle->on_click_url = logo->metadata.on_click_url;
+    if (logo->metadata.on_click_url.is_valid()) {
+      image_doodle->on_click_url = logo->metadata.on_click_url;
+    }
     image_doodle->share_url = logo->metadata.short_link;
     doodle->image = std::move(image_doodle);
-  } else if (logo->metadata.type ==
-             search_provider_logos::LogoType::INTERACTIVE) {
-    auto interactive_doodle = new_tab_page::mojom::InteractiveDoodle::New();
-    interactive_doodle->url = logo->metadata.full_page_url;
-    interactive_doodle->width = logo->metadata.iframe_width_px;
-    interactive_doodle->height = logo->metadata.iframe_height_px;
-    doodle->interactive = std::move(interactive_doodle);
   } else {
     std::move(callback).Run(nullptr);
     return;
@@ -936,8 +1177,50 @@ void NewTabPageHandler::OnLogoAvailable(
   std::move(callback).Run(std::move(doodle));
 }
 
+void NewTabPageHandler::OnBrowserWindowInterfaceChanged() {
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(ntp_features::kNtpFooter)) {
+    return;
+  }
+
+  // TODO(webium): FooterController depends on BrowserView, but WebUIBrowser
+  // doesn't have a BrowserView.
+  if (webui_browser::IsWebUIBrowserEnabled()) {
+    return;
+  }
+
+  footer_controller_observation_.Reset();
+  auto* browser = webui::GetBrowserWindowInterface(web_contents_);
+  if (!browser) {
+    // TODO(crbug.com/378475391): NTP should always load into a WebContents
+    // owned by a TabModel. Remove this once NTP loading has been restricted to
+    // browser tabs only.
+    return;
+  }
+
+  auto* footer_controller =
+      new_tab_footer::NewTabFooterController::From(browser);
+  CHECK(footer_controller);
+  footer_controller_observation_.Observe(footer_controller);
+#endif  // !BUILDFLAG(IS_ANDROID)
+}
+
+void NewTabPageHandler::MaybeTriggerAutomaticCustomizeChromePromo() {
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  feature_promo_helper_->MaybeTriggerAutomaticCustomizeChromePromo(
+      web_contents_);
+#endif
+}
+
 void NewTabPageHandler::LogEvent(NTPLoggingEventType event) {
   logger_.LogEvent(event, base::TimeDelta() /* unused */);
+}
+
+void NewTabPageHandler::LogEvent(NTPLoggingEventType event,
+                                 base::TimeDelta delta) {
+  logger_.LogEvent(event, delta);
 }
 
 void NewTabPageHandler::Fetch(const GURL& url,
@@ -967,8 +1250,7 @@ void NewTabPageHandler::Fetch(const GURL& url,
             }
           }
         })");
-  auto url_loader_factory = profile_->GetDefaultStoragePartition()
-                                ->GetURLLoaderFactoryForBrowserProcess();
+  auto url_loader_factory = profile_->GetURLLoaderFactory();
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = url;
   auto loader =
@@ -983,55 +1265,225 @@ void NewTabPageHandler::Fetch(const GURL& url,
 
 void NewTabPageHandler::OnFetchResult(const network::SimpleURLLoader* loader,
                                       OnFetchResultCallback on_result,
-                                      std::unique_ptr<std::string> body) {
+                                      std::optional<std::string> body) {
   bool success = loader->NetError() == net::OK && loader->ResponseInfo() &&
                  loader->ResponseInfo()->headers &&
                  loader->ResponseInfo()->headers->response_code() >= 200 &&
                  loader->ResponseInfo()->headers->response_code() <= 299 &&
                  body;
-  std::move(on_result).Run(success, std::move(body));
+  if (on_result) {
+    std::move(on_result).Run(success, std::move(body));
+  }
   loader_map_.erase(loader);
 }
 
 void NewTabPageHandler::OnLogFetchResult(OnDoodleImageRenderedCallback callback,
                                          bool success,
-                                         std::unique_ptr<std::string> body) {
+                                         std::optional<std::string> body) {
+  CHECK(!success || body);
   if (!success || body->size() < 4 || body->substr(0, 4) != ")]}'") {
-    std::move(callback).Run("", absl::nullopt, "");
+    std::move(callback).Run("", std::nullopt, "");
     return;
   }
-  auto value = base::JSONReader::Read(body->substr(4));
+  auto value = base::JSONReader::Read(body->substr(4),
+                                      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value.has_value()) {
-    std::move(callback).Run("", absl::nullopt, "");
+    std::move(callback).Run("", std::nullopt, "");
     return;
   }
 
-  auto* target_url_params_value = value->FindPath("ddllog.target_url_params");
+  base::DictValue& dict = value->GetDict();
+  auto* target_url_params_value =
+      dict.FindStringByDottedPath("ddllog.target_url_params");
   auto target_url_params =
-      target_url_params_value && target_url_params_value->is_string()
-          ? target_url_params_value->GetString()
-          : "";
+      target_url_params_value ? *target_url_params_value : "";
   auto* interaction_log_url_value =
-      value->FindPath("ddllog.interaction_log_url");
+      dict.FindStringByDottedPath("ddllog.interaction_log_url");
   auto interaction_log_url =
-      interaction_log_url_value && interaction_log_url_value->is_string()
-          ? absl::optional<GURL>(
+      interaction_log_url_value
+          ? std::optional<GURL>(
                 GURL(TemplateURLServiceFactory::GetForProfile(profile_)
                          ->search_terms_data()
                          .GoogleBaseURLValue())
-                    .Resolve(interaction_log_url_value->GetString()))
-          : absl::nullopt;
-  auto* encoded_ei_value = value->FindPath("ddllog.encoded_ei");
-  auto encoded_ei = encoded_ei_value && encoded_ei_value->is_string()
-                        ? encoded_ei_value->GetString()
-                        : "";
+                    .Resolve(*interaction_log_url_value))
+          : std::nullopt;
+  auto* encoded_ei_value = dict.FindStringByDottedPath("ddllog.encoded_ei");
+  auto encoded_ei = encoded_ei_value ? *encoded_ei_value : "";
   std::move(callback).Run(target_url_params, interaction_log_url, encoded_ei);
 }
 
-bool NewTabPageHandler::IsCustomLinksEnabled() const {
-  return !profile_->GetPrefs()->GetBoolean(ntp_prefs::kNtpUseMostVisitedTiles);
+ntp_tiles::TileType NewTabPageHandler::GetTileType() const {
+  // TODO(crbug.com/444707872): Update logic to account for multi-select
+  // support for shortcuts.
+  if (profile_->GetPrefs()->GetBoolean(
+          ntp_prefs::kNtpEnterpriseShortcutsVisible)) {
+    return ntp_tiles::TileType::kEnterpriseShortcuts;
+  }
+  return profile_->GetPrefs()->GetBoolean(ntp_prefs::kNtpCustomLinksVisible)
+             ? ntp_tiles::TileType::kCustomLinks
+             : ntp_tiles::TileType::kTopSites;
+}
+
+bool NewTabPageHandler::IsActionChipsVisible() const {
+  return profile_->GetPrefs()->GetBoolean(prefs::kNtpToolChipsVisible);
 }
 
 bool NewTabPageHandler::IsShortcutsVisible() const {
   return profile_->GetPrefs()->GetBoolean(ntp_prefs::kNtpShortcutsVisible);
+}
+
+void NewTabPageHandler::MaybeLaunchInteractionSurvey(
+    std::string_view interaction,
+    const std::string& module_id,
+    int delay_time_ms) {
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+  const auto& module_trigger_id =
+      GetSurveyTriggerIdForModuleAndInteraction(interaction, module_id);
+  if (module_trigger_id.empty()) {
+    return;
+  }
+
+  HatsService* hats_service =
+      HatsServiceFactory::GetForProfile(profile_, /*create_if_necessary=*/true);
+  CHECK(hats_service);
+  hats_service->LaunchDelayedSurveyForWebContents(
+      kHatsSurveyTriggerNtpModules, web_contents_, delay_time_ms, {}, {},
+      HatsService::NavigationBehavior::ALLOW_ANY, base::DoNothing(),
+      base::DoNothing(), module_trigger_id);
+#endif  // !BUILDFLAG(IS_ANDROID)
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+void NewTabPageHandler::MaybeShowWebstoreToast() {
+  if (profile_->GetPrefs()->GetInteger(prefs::kSeedColorChangeCount) <= 3) {
+    page_->ShowWebstoreToast();
+  }
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+void NewTabPageHandler::RecordModuleInteraction(const std::string& module_id) {
+  DisableModuleAutoRemoval(profile_, module_id);
+  IncrementDictPrefKeyCount(prefs::kNtpModulesInteractedCountDict, module_id);
+}
+
+void NewTabPageHandler::IncrementDictPrefKeyCount(const std::string& pref_name,
+                                                  const std::string& key) {
+  const base::DictValue& counts_dict = profile_->GetPrefs()->GetDict(pref_name);
+  std::optional<int> count = counts_dict.FindInt(key);
+  ScopedDictPrefUpdate update(profile_->GetPrefs(), pref_name);
+  update->Set(key,
+              count.has_value()
+                  ? ((count.value() < INT_MAX) ? count.value() + 1 : INT_MAX)
+                  : 1);
+}
+
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+const std::string& NewTabPageHandler::GetSurveyTriggerIdForModuleAndInteraction(
+    std::string_view interaction,
+    const std::string& module_id) {
+  static const std::string kNoTriggerId;
+  CHECK(kModuleInteractionNames.find(interaction) !=
+            kModuleInteractionNames.end(),
+        base::NotFatalUntil::M162);
+  const base::DictValue* module_id_trigger_dict =
+      interaction_module_id_trigger_dict_.FindDict(interaction);
+  if (module_id_trigger_dict) {
+    auto* trigger_id = module_id_trigger_dict->FindString(module_id);
+    if (trigger_id) {
+      return *trigger_id;
+    }
+  }
+
+  return kNoTriggerId;
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+void NewTabPageHandler::SetModuleHidden(const std::string& module_id,
+                                        bool hidden) {
+  ScopedListPrefUpdate update(profile_->GetPrefs(), prefs::kNtpHiddenModules);
+  base::ListValue& list = update.Get();
+  if (hidden) {
+    if (!list.contains(module_id)) {
+      list.Append(module_id);
+    }
+  } else {
+    list.EraseValue(base::Value(module_id));
+  }
+}
+
+bool NewTabPageHandler::SyncMicrosoftModulesWithAuth() {
+  MicrosoftAuthService::AuthState state =
+      microsoft_auth_service_->GetAuthState();
+
+  const std::vector<std::string> auth_dependent_modules(
+      ntp_modules::kMicrosoftAuthDependentModuleIds.begin(),
+      ntp_modules::kMicrosoftAuthDependentModuleIds.end());
+  const std::string auth_id = ntp_modules::kMicrosoftAuthenticationModuleId;
+  std::vector<std::string> enabled_modules;
+  std::vector<std::string> disabled_modules;
+  switch (state) {
+    case MicrosoftAuthService::AuthState::kNone:
+      break;
+    case MicrosoftAuthService::AuthState::kError:
+      enabled_modules.push_back(auth_id);
+      disabled_modules = auth_dependent_modules;
+      break;
+    case MicrosoftAuthService::AuthState::kSuccess:
+      enabled_modules = auth_dependent_modules;
+      disabled_modules.push_back(auth_id);
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  for (const auto& module_id : enabled_modules) {
+    SetModuleHidden(module_id, false);
+  }
+  for (const auto& module_id : disabled_modules) {
+    SetModuleHidden(module_id, true);
+  }
+
+  return state != MicrosoftAuthService::AuthState::kNone;
+}
+
+// TODO(b/502297163): Implement for Android.
+#if !BUILDFLAG(IS_ANDROID)
+void NewTabPageHandler::TryShowRealboxContextualMenuIPH(
+    ui::TrackedElement* element) {
+  if (!element || !element->IsA<ui::TrackedElementWebUI>()) {
+    return;
+  }
+
+  auto* anchor = element->AsA<ui::TrackedElementWebUI>();
+  if (anchor->handler()->web_contents() != web_contents_) {
+    return;
+  }
+
+  // TODO(crbug.com/378475391): NTP should always load into a WebContents.
+  auto* browser = webui::GetBrowserWindowInterface(web_contents_);
+  if (!browser) {
+    return;
+  }
+
+  // If a sign-in dialog is being currently displayed, the promo should not be
+  // shown to avoid conflict. The sign-in dialog would be shown as soon as the
+  // browser is opened, before the promo.
+  bool is_signin_modal_dialog_open =
+      feature_promo_helper_->IsSigninModalDialogOpen(web_contents_.get());
+  if (is_signin_modal_dialog_open) {
+    return;
+  }
+
+  feature_promo_helper_->MaybeShowFeaturePromo(
+      feature_engagement::kIPHDesktopRealboxContextualSearchFeature,
+      web_contents_.get());
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+void NewTabPageHandler::ConnectToParentDocument(
+    mojo::PendingRemote<new_tab_page::mojom::MicrosoftAuthUntrustedDocument>
+        child_untrusted_document_remote) {
+  page_->ConnectToParentDocument(std::move(child_untrusted_document_remote));
 }

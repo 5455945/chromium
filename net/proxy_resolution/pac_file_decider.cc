@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,20 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/host_port_pair.h"
+#include "net/base/isolation_info.h"
 #include "net/base/net_errors.h"
-#include "net/base/network_isolation_key.h"
 #include "net/base/request_priority.h"
 #include "net/log/net_log_capture_mode.h"
 #include "net/log/net_log_event_type.h"
@@ -66,9 +66,9 @@ PacFileDataWithSource::PacFileDataWithSource(const PacFileDataWithSource&) =
 PacFileDataWithSource& PacFileDataWithSource::operator=(
     const PacFileDataWithSource&) = default;
 
-base::Value PacFileDecider::PacSource::NetLogParams(
+base::DictValue PacFileDecider::PacSource::NetLogParams(
     const GURL& effective_pac_url) const {
-  base::Value dict(base::Value::Type::DICTIONARY);
+  base::DictValue dict;
   std::string source;
   switch (type) {
     case PacSource::WPAD_DHCP:
@@ -83,7 +83,7 @@ base::Value PacFileDecider::PacSource::NetLogParams(
       source += effective_pac_url.possibly_invalid_spec();
       break;
   }
-  dict.SetStringKey("source", source);
+  dict.Set("source", source);
   return dict;
 }
 
@@ -92,13 +92,8 @@ PacFileDecider::PacFileDecider(PacFileFetcher* pac_file_fetcher,
                                NetLog* net_log)
     : pac_file_fetcher_(pac_file_fetcher),
       dhcp_pac_file_fetcher_(dhcp_pac_file_fetcher),
-      current_pac_source_index_(0u),
-      pac_mandatory_(false),
-      next_state_(STATE_NONE),
-      net_log_(
-          NetLogWithSource::Make(net_log, NetLogSourceType::PAC_FILE_DECIDER)),
-      fetch_pac_bytes_(false),
-      quick_check_enabled_(true) {}
+      net_log_(NetLogWithSource::Make(net_log,
+                                      NetLogSourceType::PAC_FILE_DECIDER)) {}
 
 PacFileDecider::~PacFileDecider() {
   if (next_state_ != STATE_NONE)
@@ -111,7 +106,6 @@ int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
                           CompletionOnceCallback callback) {
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!callback.is_null());
-  DCHECK(config.value().HasAutomaticSettings());
 
   net_log_.BeginEvent(NetLogEventType::PAC_FILE_DECIDER);
 
@@ -119,14 +113,18 @@ int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
 
   // Save the |wait_delay| as a non-negative value.
   wait_delay_ = wait_delay;
-  if (wait_delay_ < base::TimeDelta())
+  if (wait_delay_.is_negative())
     wait_delay_ = base::TimeDelta();
 
   pac_mandatory_ = config.value().pac_mandatory();
   have_custom_pac_url_ = config.value().has_pac_url();
+  proxy_override_rules_ = config.value().proxy_override_rules();
 
   pac_sources_ = BuildPacSourcesFallbackList(config.value());
-  DCHECK(!pac_sources_.empty());
+  if (pac_sources_.empty()) {
+    DidComplete();
+    return ERR_PAC_SCRIPT_FAILED;
+  }
 
   traffic_annotation_ =
       net::MutableNetworkTrafficAnnotationTag(config.traffic_annotation());
@@ -222,8 +220,6 @@ int PacFileDecider::DoLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;
@@ -265,7 +261,7 @@ int PacFileDecider::DoQuickCheck() {
     return OK;
   }
 
-  std::string host = current_pac_source().url.host();
+  std::string host = current_pac_source().url.GetHost();
 
   HostResolver::ResolveHostParameters parameters;
   // We use HIGHEST here because proxy decision blocks doing any other requests.
@@ -286,20 +282,19 @@ int PacFileDecider::DoQuickCheck() {
 
   HostResolver* host_resolver =
       pac_file_fetcher_->GetRequestContext()->host_resolver();
-  // It's safe to use an empty NetworkIsolationKey() here, since this is only
-  // for fetching the PAC script, so can't usefully leak data to web-initiated
-  // requests (Which can't use an empty NIK for resolving IPs other than that of
-  // the proxy).
   resolve_request_ = host_resolver->CreateRequest(
-      HostPortPair(host, 80), NetworkIsolationKey(), net_log_, parameters);
+      HostPortPair(std::move(host), 80),
+      pac_file_fetcher_->isolation_info().network_anonymization_key(),
+      // TODO(crbug.com/516746450): Support targeting a network when fetching
+      // PAC files.
+      handles::kInvalidNetworkHandle, net_log_, parameters);
 
   CompletionRepeatingCallback callback = base::BindRepeating(
       &PacFileDecider::OnIOCompletion, base::Unretained(this));
 
   next_state_ = STATE_QUICK_CHECK_COMPLETE;
-  quick_check_timer_.Start(
-      FROM_HERE, base::TimeDelta::FromMilliseconds(kQuickCheckDelayMs),
-      base::BindOnce(callback, ERR_NAME_NOT_RESOLVED));
+  quick_check_timer_.Start(FROM_HERE, base::Milliseconds(kQuickCheckDelayMs),
+                           base::BindOnce(callback, ERR_NAME_NOT_RESOLVED));
 
   return resolve_request_->Start(callback);
 }
@@ -420,6 +415,8 @@ int PacFileDecider::DoVerifyPacScriptComplete(int result) {
       config = ProxyConfig::CreateAutoDetect();
     }
   }
+
+  config.set_proxy_override_rules(proxy_override_rules_);
 
   effective_config_ = ProxyConfigWithAnnotation(
       config, net::NetworkTrafficAnnotationTag(traffic_annotation_));

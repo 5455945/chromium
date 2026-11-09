@@ -1,12 +1,14 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ANDROID_WEBAPPS_WEBAPP_REGISTRY_H_
 #define CHROME_BROWSER_ANDROID_WEBAPPS_WEBAPP_REGISTRY_H_
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include <jni.h>
+
+#include "base/android/scoped_java_ref.h"
+#include "base/functional/callback_forward.h"
 
 class GURL;
 
@@ -18,6 +20,10 @@ class GURL;
 class WebappRegistry {
  public:
   WebappRegistry() { }
+
+  WebappRegistry(const WebappRegistry&) = delete;
+  WebappRegistry& operator=(const WebappRegistry&) = delete;
+
   virtual ~WebappRegistry() { }
 
   // Cleans up data stored by web apps on URLs matching |url_filter|.
@@ -29,8 +35,19 @@ class WebappRegistry {
   virtual void ClearWebappHistoryForUrls(
       const base::RepeatingCallback<bool(const GURL&)>& url_filter);
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(WebappRegistry);
+  // Returns a std::vector of all origins that have an installed WebAPK.
+  virtual std::vector<std::string> GetOriginsWithWebApk();
+
+  // Returns all origins that have a WebAPK or TWA installed.
+  virtual std::vector<std::string> GetOriginsWithInstalledApp();
+
+  // Sets an Android Shared Preference bit to indicate that there are WebAPKs
+  // that need to be restored from Sync on Chrome's 2nd run.
+  static void SetNeedsPwaRestore(bool needs);
+
+  // Gets an Android Shared Preference bit which indicates whether or not there
+  // are WebAPKs that need to be restored from Sync on Chrome's 2nd run.
+  static bool GetNeedsPwaRestore();
 };
 
 #endif  // CHROME_BROWSER_ANDROID_WEBAPPS_WEBAPP_REGISTRY_H_

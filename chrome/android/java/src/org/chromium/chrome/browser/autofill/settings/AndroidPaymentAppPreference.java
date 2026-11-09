@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,11 @@ import android.view.ViewGroup;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceViewHolder;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 
 /** Preference with fixed icon size for Android payment apps. */
+@NullMarked
 public class AndroidPaymentAppPreference extends Preference {
     public AndroidPaymentAppPreference(Context context) {
         super(context, null);

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,14 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/native_library.h"
+#include "base/trace_event/trace_event.h"
 #include "ui/gl/gl_bindings.h"
+#include "ui/gl/gl_display.h"
 #include "ui/gl/gl_egl_api_implementation.h"
 #include "ui/gl/gl_gl_api_implementation.h"
-#include "ui/gl/gl_surface_egl.h"
-#include "ui/gl/init/gl_initializer.h"
+#include "ui/gl/gl_switches.h"
+#include "ui/gl/gl_utils.h"
+#include "ui/gl/init/gl_display_initializer.h"
 
 namespace gl {
 namespace init {
@@ -21,10 +24,18 @@ namespace init {
 namespace {
 
 bool InitializeStaticNativeEGLInternal() {
-  base::NativeLibrary gles_library = LoadLibraryAndPrintError("libGLESv2.so");
+  base::NativeLibrary gles_library;
+  {
+    TRACE_EVENT("gpu,startup", "Load gles_library");
+    gles_library = LoadLibraryAndPrintError("libGLESv2.so");
+  }
   if (!gles_library)
     return false;
-  base::NativeLibrary egl_library = LoadLibraryAndPrintError("libEGL.so");
+  base::NativeLibrary egl_library;
+  {
+    TRACE_EVENT("gpu,startup", "Load egl_library");
+    egl_library = LoadLibraryAndPrintError("libEGL.so");
+  }
   if (!egl_library) {
     base::UnloadNativeLibrary(gles_library);
     return false;
@@ -53,7 +64,9 @@ bool InitializeStaticEGLInternal(GLImplementationParts implementation) {
 
 #if BUILDFLAG(USE_STATIC_ANGLE)
   // Use ANGLE if it is requested and it is statically linked
-  if (implementation.gl == kGLImplementationEGLANGLE) {
+  if (implementation.gl == kGLImplementationEGLANGLE &&
+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kUseDynamicAngle)) {
     initialized = InitializeStaticANGLEEGL();
   }
 #endif  // BUILDFLAG(USE_STATIC_ANGLE)
@@ -76,19 +89,21 @@ bool InitializeStaticEGLInternal(GLImplementationParts implementation) {
 
 }  // namespace
 
-bool InitializeGLOneOffPlatform() {
+GLDisplay* InitializeGLOneOffPlatform(gl::GpuPreference gpu_preference) {
+  GLDisplayEGL* display = GetDisplayEGL(gpu_preference);
   switch (GetGLImplementation()) {
     case kGLImplementationEGLGLES2:
     case kGLImplementationEGLANGLE:
-      if (!GLSurfaceEGL::InitializeOneOff(
-              EGLDisplayPlatform(EGL_DEFAULT_DISPLAY))) {
-        LOG(ERROR) << "GLSurfaceEGL::InitializeOneOff failed.";
-        return false;
+      if (!InitializeDisplay(display,
+                             EGLDisplayPlatform(EGL_DEFAULT_DISPLAY))) {
+        LOG(ERROR) << "GLDisplayEGL::Initialize failed.";
+        return nullptr;
       }
-      return true;
+      break;
     default:
-      return true;
+      break;
   }
+  return display;
 }
 
 bool InitializeStaticGLBindings(GLImplementationParts implementation) {
@@ -109,12 +124,11 @@ bool InitializeStaticGLBindings(GLImplementationParts implementation) {
     default:
       NOTREACHED();
   }
-
-  return false;
 }
 
-void ShutdownGLPlatform() {
-  GLSurfaceEGL::ShutdownOneOff();
+void ShutdownGLPlatform(GLDisplay* display) {
+  if (display)
+    display->Shutdown();
   ClearBindingsEGL();
   ClearBindingsGL();
 }

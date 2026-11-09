@@ -1,9 +1,9 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/bluetooth/test/mock_bluetooth_gatt_notify_session.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "device/bluetooth/test/mock_bluetooth_gatt_characteristic.h"
 
@@ -24,7 +24,7 @@ void MockBluetoothGattNotifySession::StartTestNotifications(
     MockBluetoothGattCharacteristic* characteristic,
     const std::vector<uint8_t>& value) {
   test_notifications_timer_.Start(
-      FROM_HERE, base::TimeDelta::FromMilliseconds(10),
+      FROM_HERE, base::Milliseconds(10),
       base::BindRepeating(&MockBluetoothGattNotifySession::DoNotify,
                           // base::Timer guarantees it won't call back after its
                           // destructor starts.

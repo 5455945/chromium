@@ -25,25 +25,60 @@
 
 #include "third_party/blink/renderer/modules/speech/speech_recognition_result.h"
 
+#include "base/time/time.h"
+
 namespace blink {
+
+namespace {
+double FuzzTimestamp(const base::TimeDelta& time) {
+  // Quantize timestamps to 2ms precision to mitigate fingerprinting risks.
+  // The quantization granularity is independent of the reported unit, which
+  // is seconds per the Web Speech API spec.
+  constexpr base::TimeDelta kFuzzInterval = base::Milliseconds(2);
+  return time.FloorToMultiple(kFuzzInterval).InSecondsF();
+}
+}  // namespace
 
 SpeechRecognitionResult* SpeechRecognitionResult::Create(
     const HeapVector<Member<SpeechRecognitionAlternative>>& alternatives,
-    bool final) {
-  return MakeGarbageCollected<SpeechRecognitionResult>(alternatives, final);
+    bool final,
+    std::optional<base::TimeDelta> speech_start_time,
+    std::optional<base::TimeDelta> speech_end_time) {
+  return MakeGarbageCollected<SpeechRecognitionResult>(
+      alternatives, final, speech_start_time, speech_end_time);
 }
 
 SpeechRecognitionAlternative* SpeechRecognitionResult::item(unsigned index) {
-  if (index >= alternatives_.size())
+  if (index >= alternatives_.size()) {
     return nullptr;
+  }
 
-  return alternatives_[index];
+  return alternatives_[index].Get();
 }
 
 SpeechRecognitionResult::SpeechRecognitionResult(
     const HeapVector<Member<SpeechRecognitionAlternative>>& alternatives,
-    bool final)
-    : final_(final), alternatives_(alternatives) {}
+    bool final,
+    std::optional<base::TimeDelta> speech_start_time,
+    std::optional<base::TimeDelta> speech_end_time)
+    : final_(final),
+      alternatives_(alternatives),
+      speech_start_time_(speech_start_time),
+      speech_end_time_(speech_end_time) {}
+
+double SpeechRecognitionResult::speechStartTime() const {
+  if (!speech_start_time_.has_value()) {
+    return 0.0;
+  }
+  return FuzzTimestamp(*speech_start_time_);
+}
+
+double SpeechRecognitionResult::speechEndTime() const {
+  if (!speech_end_time_.has_value()) {
+    return 0.0;
+  }
+  return FuzzTimestamp(*speech_end_time_);
+}
 
 void SpeechRecognitionResult::Trace(Visitor* visitor) const {
   visitor->Trace(alternatives_);

@@ -1,13 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/cookies/site_for_cookies.h"
 
+#include <utility>
+
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/cookie_util.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -59,8 +62,7 @@ std::string SiteForCookies::ToDebugString() const {
 }
 
 bool SiteForCookies::IsFirstParty(const GURL& url) const {
-  return IsFirstPartyWithSchemefulMode(
-      url, cookie_util::IsSchemefulSameSiteEnabled());
+  return IsFirstPartyWithSchemefulMode(url, /*compute_schemefully=*/true);
 }
 
 bool SiteForCookies::IsFirstPartyWithSchemefulMode(
@@ -79,15 +81,7 @@ bool SiteForCookies::IsEquivalent(const SiteForCookies& other) const {
     return IsNull() && other.IsNull();
   }
 
-  // In the case where the site has no registrable domain or host, the scheme
-  // cannot be ws(s) or http(s), so equality of sites implies actual equality of
-  // schemes (not just modulo ws-http and wss-https compatibility).
-  if (cookie_util::IsSchemefulSameSiteEnabled() ||
-      !site_.has_registrable_domain_or_host()) {
-    return site_ == other.site_;
-  }
-
-  return site_.SchemelesslyEqual(other.site_);
+  return site_ == other.site_;
 }
 
 bool SiteForCookies::CompareWithFrameTreeSiteAndRevise(
@@ -141,17 +135,13 @@ GURL SiteForCookies::RepresentativeUrl() const {
 }
 
 bool SiteForCookies::IsNull() const {
-  if (cookie_util::IsSchemefulSameSiteEnabled())
-    return site_.opaque() || !schemefully_same_;
-
-  return site_.opaque();
+  return site_.opaque() || !schemefully_same_;
 }
 
 bool SiteForCookies::IsSchemefullyFirstParty(const GURL& url) const {
-  // Can't use IsNull() as we want the same behavior regardless of
-  // SchemefulSameSite feature status.
-  if (site_.opaque() || !schemefully_same_ || !url.is_valid())
+  if (IsNull() || !url.is_valid()) {
     return false;
+  }
 
   SchemefulSite other_site(url);
   other_site.ConvertWebSocketToHttp();
@@ -159,8 +149,6 @@ bool SiteForCookies::IsSchemefullyFirstParty(const GURL& url) const {
 }
 
 bool SiteForCookies::IsSchemelesslyFirstParty(const GURL& url) const {
-  // Can't use IsNull() as we want the same behavior regardless of
-  // SchemefulSameSite feature status.
   if (site_.opaque() || !url.is_valid())
     return false;
 
@@ -202,6 +190,24 @@ void SiteForCookies::MarkIfCrossScheme(const SchemefulSite& other) {
 
   // Mark that the two are cross-scheme to each other.
   schemefully_same_ = false;
+}
+
+bool operator<(const SiteForCookies& lhs, const SiteForCookies& rhs) {
+  // Similar to IsEquivalent(), if they're both null then they're equivalent
+  // and therefore `lhs` is not < `rhs`.
+  if (lhs.IsNull() && rhs.IsNull())
+    return false;
+
+  // If only `lhs` is null then it's always < `rhs`.
+  if (lhs.IsNull())
+    return true;
+
+  // If only `rhs` is null then `lhs` is not < `rhs`.
+  if (rhs.IsNull())
+    return false;
+
+  // Otherwise neither are null and we need to compare the `site_`s.
+  return lhs.site_ < rhs.site_;
 }
 
 }  // namespace net

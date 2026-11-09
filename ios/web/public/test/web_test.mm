@@ -1,43 +1,58 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/public/test/web_test.h"
+#import "ios/web/public/test/web_test.h"
 
-#include "base/check.h"
-#include "base/memory/ptr_util.h"
-#import "ios/web/js_messaging/java_script_feature_manager.h"
-#include "ios/web/public/deprecated/global_web_state_observer.h"
-#include "ios/web/public/test/fakes/fake_browser_state.h"
+#import "base/check.h"
+#import "base/memory/ptr_util.h"
+#import "base/scoped_multi_source_observation.h"
+#import "ios/web/public/test/fakes/fake_browser_state.h"
 #import "ios/web/public/test/fakes/fake_web_client.h"
-#import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/public/test/js_test_util.h"
+#import "ios/web/public/web_state.h"
+#import "ios/web/public/web_state_observer.h"
 
 namespace web {
 
-class WebTestRenderProcessCrashObserver : public GlobalWebStateObserver {
+class WebTestRenderProcessCrashObserver : public WebStateObserver {
  public:
   WebTestRenderProcessCrashObserver() = default;
   ~WebTestRenderProcessCrashObserver() override = default;
 
+  void Observe(WebState* web_state) {
+    web_state_observations_.AddObservation(web_state);
+  }
+
+  void WebStateDestroyed(WebState* web_state) override {
+    web_state_observations_.RemoveObservation(web_state);
+  }
+
   void RenderProcessGone(WebState* web_state) override {
     FAIL() << "Renderer process died unexpectedly during the test";
   }
+
+ private:
+  base::ScopedMultiSourceObservation<WebState, WebStateObserver>
+      web_state_observations_{this};
 };
 
-WebTest::WebTest(WebTaskEnvironment::Options options)
-    : WebTest(std::make_unique<FakeWebClient>(), options) {}
+WebTest::WebTest(WebTaskEnvironment::MainThreadType main_thread_type)
+    : WebTest(std::make_unique<FakeWebClient>(), main_thread_type) {}
 
 WebTest::WebTest(std::unique_ptr<web::WebClient> web_client,
-                 WebTaskEnvironment::Options options)
-    : web_client_(std::move(web_client)),
-      task_environment_(options),
-      crash_observer_(std::make_unique<WebTestRenderProcessCrashObserver>()) {}
+                 WebTaskEnvironment::MainThreadType main_thread_type)
+    : web_client_(std::move(web_client)), task_environment_(main_thread_type) {}
 
-WebTest::~WebTest() {}
+WebTest::~WebTest() {
+  // Drain autoreleased objects from `browser_state_` teardown before
+  // `task_environment_` is destroyed; otherwise they are held by
+  // `PlatformTest`'s pool and outlive `WebThread`s.
+  @autoreleasepool {
+    crash_observer_.reset();
+    browser_state_.reset();
+  }
+}
 
 void WebTest::SetUp() {
   PlatformTest::SetUp();
@@ -53,17 +68,7 @@ std::unique_ptr<BrowserState> WebTest::CreateBrowserState() {
 
 void WebTest::OverrideJavaScriptFeatures(
     std::vector<JavaScriptFeature*> features) {
-  WKWebViewConfigurationProvider& configuration_provider =
-      WKWebViewConfigurationProvider::FromBrowserState(GetBrowserState());
-  WKWebViewConfiguration* configuration =
-      configuration_provider.GetWebViewConfiguration();
-  // User scripts must be removed because
-  // |JavaScriptFeatureManager::ConfigureFeatures| will remove script message
-  // handlers.
-  [configuration.userContentController removeAllUserScripts];
-
-  JavaScriptFeatureManager::FromBrowserState(GetBrowserState())
-      ->ConfigureFeatures(features);
+  web::test::OverrideJavaScriptFeatures(GetBrowserState(), features);
 }
 
 web::WebClient* WebTest::GetWebClient() {
@@ -75,12 +80,15 @@ BrowserState* WebTest::GetBrowserState() {
   return browser_state_.get();
 }
 
-void WebTest::SetIgnoreRenderProcessCrashesDuringTesting(bool allow) {
-  if (allow) {
-    crash_observer_ = nullptr;
-  } else {
+void WebTest::StartObservingWebStateForRenderProcessGone(WebState* web_state) {
+  if (!crash_observer_) {
     crash_observer_ = std::make_unique<WebTestRenderProcessCrashObserver>();
   }
+  crash_observer_->Observe(web_state);
+}
+
+void WebTest::StopObservingWebStatesForRenderProcessGone() {
+  crash_observer_.reset();
 }
 
 }  // namespace web

@@ -1,17 +1,27 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// https://github.com/WICG/raw-sockets/blob/main/docs/explainer.md#udp
+// https://github.com/WICG/direct-sockets/blob/main/docs/explainer.md#udp
 
 [
-    Exposed=Window,
-    RuntimeEnabled=DirectSockets,
-    DirectSocketEnabled
+    Exposed(
+      Window DirectSockets,
+      DedicatedWorker DirectSockets,
+      SharedWorker DirectSocketsInSharedWorkers,
+      ServiceWorker DirectSocketsInServiceWorkers
+    ),
+    ActiveScriptWrappable,
+    SecureContext
 ] interface UDPSocket {
-  // TODO(crbug.com/1119620): Add support for sending, receiving
-  // TODO(crbug.com/1119620): Add measurement
+  [CallWith=ScriptState, RaisesException, MeasureAs=UDPSocketConstructor]
+  constructor(UDPSocketOptions options);
 
-  [RaisesException, CallWith=ScriptState]
-  Promise<void> close();
+  [CallWith=ScriptState, MeasureAs=UDPSocketOpenedAttribute]
+  readonly attribute Promise<UDPSocketOpenInfo> opened;
+  [CallWith=ScriptState, MeasureAs=UDPSocketClosedAttribute]
+  readonly attribute Promise<undefined> closed;
+
+  [CallWith=ScriptState, RaisesException, MeasureAs=UDPSocketCloseFunction]
+  Promise<undefined> close();
 };

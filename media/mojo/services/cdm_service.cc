@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/cdm_factory.h"
 #include "media/mojo/services/mojo_cdm_service.h"
@@ -54,32 +55,32 @@ class CdmFactoryImpl final : public DeferredDestroy<mojom::CdmFactory> {
   ~CdmFactoryImpl() final { DVLOG(1) << __func__; }
 
   // mojom::CdmFactory implementation.
-  void CreateCdm(const std::string& key_system,
-                 const CdmConfig& cdm_config,
+  void CreateCdm(const CdmConfig& cdm_config,
                  CreateCdmCallback callback) final {
     DVLOG(2) << __func__;
 
     auto* cdm_factory = GetCdmFactory();
     if (!cdm_factory) {
       std::move(callback).Run(mojo::NullRemote(), nullptr,
-                              "CDM Factory creation failed");
+                              CreateCdmStatus::kCdmFactoryCreationFailed);
       return;
     }
 
     auto mojo_cdm_service =
         std::make_unique<MojoCdmService>(&cdm_service_context_);
     auto* raw_mojo_cdm_service = mojo_cdm_service.get();
-    DCHECK(!pending_mojo_cdm_services_.count(raw_mojo_cdm_service));
+    CHECK(!pending_mojo_cdm_services_.count(raw_mojo_cdm_service),
+          base::NotFatalUntil::M163);
     pending_mojo_cdm_services_[raw_mojo_cdm_service] =
         std::move(mojo_cdm_service);
     raw_mojo_cdm_service->Initialize(
-        cdm_factory, key_system, cdm_config,
+        cdm_factory, cdm_config,
         base::BindOnce(&CdmFactoryImpl::OnCdmServiceInitialized,
                        weak_ptr_factory_.GetWeakPtr(), raw_mojo_cdm_service,
                        std::move(callback)));
   }
 
-  // DeferredDestroy<mojom::CdmFactory> implemenation.
+  // DeferredDestroy<mojom::CdmFactory> implementation.
   void OnDestroyPending(base::OnceClosure destroy_cb) final {
     destroy_cb_ = std::move(destroy_cb);
     if (cdm_receivers_.empty())
@@ -104,24 +105,26 @@ class CdmFactoryImpl final : public DeferredDestroy<mojom::CdmFactory> {
   void OnCdmServiceInitialized(MojoCdmService* raw_mojo_cdm_service,
                                CreateCdmCallback callback,
                                mojom::CdmContextPtr cdm_context,
-                               const std::string& error_message) {
-    DCHECK(raw_mojo_cdm_service);
+                               CreateCdmStatus status) {
+    CHECK(raw_mojo_cdm_service, base::NotFatalUntil::M163);
 
     // Remove pending MojoCdmService from the mapping in all cases.
-    DCHECK(pending_mojo_cdm_services_.count(raw_mojo_cdm_service));
+    CHECK(pending_mojo_cdm_services_.count(raw_mojo_cdm_service),
+          base::NotFatalUntil::M163);
     auto mojo_cdm_service =
         std::move(pending_mojo_cdm_services_[raw_mojo_cdm_service]);
     pending_mojo_cdm_services_.erase(raw_mojo_cdm_service);
 
     if (!cdm_context) {
-      std::move(callback).Run(mojo::NullRemote(), nullptr, error_message);
+      std::move(callback).Run(mojo::NullRemote(), nullptr, status);
       return;
     }
 
     mojo::PendingRemote<mojom::ContentDecryptionModule> remote;
     cdm_receivers_.Add(std::move(mojo_cdm_service),
                        remote.InitWithNewPipeAndPassReceiver());
-    std::move(callback).Run(std::move(remote), std::move(cdm_context), "");
+    std::move(callback).Run(std::move(remote), std::move(cdm_context),
+                            CreateCdmStatus::kSuccess);
   }
 
   // Must be declared before the receivers below because the bound objects might
@@ -129,7 +132,7 @@ class CdmFactoryImpl final : public DeferredDestroy<mojom::CdmFactory> {
   // available.
   MojoCdmServiceContext cdm_service_context_;
 
-  CdmService::Client* client_;
+  raw_ptr<CdmService::Client> client_;
   mojo::Remote<mojom::FrameInterfaceFactory> interfaces_;
   mojo::UniqueReceiverSet<mojom::ContentDecryptionModule> cdm_receivers_;
   std::unique_ptr<media::CdmFactory> cdm_factory_;
@@ -149,7 +152,7 @@ CdmService::CdmService(std::unique_ptr<Client> client,
                        mojo::PendingReceiver<mojom::CdmService> receiver)
     : receiver_(this, std::move(receiver)), client_(std::move(client)) {
   DVLOG(1) << __func__;
-  DCHECK(client_);
+  CHECK(client_, base::NotFatalUntil::M163);
 }
 
 CdmService::~CdmService() {
@@ -163,10 +166,9 @@ void CdmService::CreateCdmFactory(
   if (!client_)
     return;
 
-  cdm_factory_receivers_.AddReceiver(
-      std::make_unique<CdmFactoryImpl>(client_.get(),
-                                       std::move(frame_interfaces)),
-      std::move(receiver));
+  cdm_factory_receivers_.Add(std::make_unique<CdmFactoryImpl>(
+                                 client_.get(), std::move(frame_interfaces)),
+                             std::move(receiver));
 }
 
 }  // namespace media

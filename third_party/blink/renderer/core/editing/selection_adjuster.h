@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,14 @@
 
 namespace blink {
 
+enum class WordInclusion {
+  // Default behaviour. Include a word if selection is touching it.
+  kDefault,
+  // Only include a word in the adjusted selection if the middle of the word
+  // is within the selection.
+  kMiddle
+};
+
 // |SelectionAdjuster| adjusts positions in |VisibleSelection| directly without
 // calling |validate()|. Users of |SelectionAdjuster| should keep invariant of
 // |VisibleSelection|, e.g. all positions are canonicalized.
@@ -19,21 +27,23 @@ class CORE_EXPORT SelectionAdjuster final {
   STATIC_ONLY(SelectionAdjuster);
 
  public:
-  static SelectionInDOMTree AdjustSelectionRespectingGranularity(
-      const SelectionInDOMTree&,
-      TextGranularity);
+  static SelectionInDomTree AdjustSelectionRespectingGranularity(
+      const SelectionInDomTree&,
+      TextGranularity,
+      const WordInclusion);
   static SelectionInFlatTree AdjustSelectionRespectingGranularity(
       const SelectionInFlatTree&,
-      TextGranularity);
-  static SelectionInDOMTree AdjustSelectionToAvoidCrossingShadowBoundaries(
-      const SelectionInDOMTree&);
+      TextGranularity,
+      const WordInclusion);
+  static SelectionInDomTree AdjustSelectionToAvoidCrossingShadowBoundaries(
+      const SelectionInDomTree&);
   static SelectionInFlatTree AdjustSelectionToAvoidCrossingShadowBoundaries(
       const SelectionInFlatTree&);
-  static SelectionInDOMTree AdjustSelectionToAvoidCrossingEditingBoundaries(
-      const SelectionInDOMTree&);
+  static SelectionInDomTree AdjustSelectionToAvoidCrossingEditingBoundaries(
+      const SelectionInDomTree&);
   static SelectionInFlatTree AdjustSelectionToAvoidCrossingEditingBoundaries(
       const SelectionInFlatTree&);
-  static SelectionInDOMTree AdjustSelectionType(const SelectionInDOMTree&);
+  static SelectionInDomTree AdjustSelectionType(const SelectionInDomTree&);
   static SelectionInFlatTree AdjustSelectionType(const SelectionInFlatTree&);
 };
 

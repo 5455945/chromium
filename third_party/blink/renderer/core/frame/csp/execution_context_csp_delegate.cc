@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
 #include "third_party/blink/public/common/security_context/insecure_request_policy.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
-#include "third_party/blink/renderer/bindings/core/v8/source_location.h"
+#include "third_party/blink/renderer/bindings/core/v8/capture_source_location.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/events/security_policy_violation_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -20,11 +21,13 @@
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/report.h"
 #include "third_party/blink/renderer/core/frame/reporting_context.h"
+#include "third_party/blink/renderer/core/inspector/inspector_audits_issue.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/ping_loader.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
+#include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/network/encoded_form_data.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
@@ -76,20 +79,19 @@ void ExecutionContextCSPDelegate::SetRequireTrustedTypes() {
   execution_context_->SetRequireTrustedTypes();
 }
 
-void ExecutionContextCSPDelegate::AddInsecureRequestPolicy(
+void ExecutionContextCSPDelegate::ApplyInsecureRequestPolicy(
     mojom::blink::InsecureRequestPolicy policy) {
   SecurityContext& security_context = GetSecurityContext();
 
   auto* window = DynamicTo<LocalDOMWindow>(execution_context_.Get());
 
   // Step 2. Set settings’s insecure requests policy to Upgrade. [spec text]
-  // Upgrade Insecure Requests: Update the policy.
+  // Upgrade Insecure Requests: Update the local policy. Browser-side
+  // replicated state is intentionally NOT updated here; see the comment on
+  // ContentSecurityPolicyDelegate::ApplyInsecureRequestPolicy and
+  // crbug/40580002.
   security_context.SetInsecureRequestPolicy(
       security_context.GetInsecureRequestPolicy() | policy);
-  if (window && window->GetFrame()) {
-    window->GetFrame()->GetLocalFrameHostRemote().EnforceInsecureRequestPolicy(
-        security_context.GetInsecureRequestPolicy());
-  }
 
   // Upgrade Insecure Requests: Update the set of insecure URLs to upgrade.
   if ((policy &
@@ -106,25 +108,45 @@ void ExecutionContextCSPDelegate::AddInsecureRequestPolicy(
     // WorkerGlobalScope::Url() before it's ready. https://crbug.com/861564
     // This should be safe, because the insecure navigations set is not used
     // in non-Document contexts.
-    if (window && !Url().Host().IsEmpty()) {
-      uint32_t hash = Url().Host().Impl()->GetHash();
+    if (window && !Url().Host().empty()) {
+      uint32_t hash = Url().Host().ToString().Impl()->GetHash();
       security_context.AddInsecureNavigationUpgrade(hash);
-      if (auto* frame = window->GetFrame()) {
-        frame->GetLocalFrameHostRemote().EnforceInsecureNavigationsSet(
-            SecurityContext::SerializeInsecureNavigationSet(
-                GetSecurityContext().InsecureNavigationsToUpgrade()));
-      }
     }
   }
 }
 
-std::unique_ptr<SourceLocation>
-ExecutionContextCSPDelegate::GetSourceLocation() {
-  return SourceLocation::Capture(execution_context_);
+void ExecutionContextCSPDelegate::NotifyBrowserOfInsecureRequestPolicy(
+    mojom::blink::InsecureRequestPolicy added_policy) {
+  auto* window = DynamicTo<LocalDOMWindow>(execution_context_.Get());
+  if (!window || !window->GetFrame()) {
+    return;
+  }
+
+  SecurityContext& security_context = GetSecurityContext();
+  window->GetFrame()->GetLocalFrameHostRemote().EnforceInsecureRequestPolicy(
+      security_context.GetInsecureRequestPolicy());
+
+  // Only send the navigations-set IPC when |added_policy| actually included
+  // upgrade-insecure-requests: the set can only change if the incoming
+  // policy contained UIR, and the host must be non-empty (matching the
+  // gating on AddInsecureNavigationUpgrade in ApplyInsecureRequestPolicy
+  // above).
+  if ((added_policy &
+       mojom::blink::InsecureRequestPolicy::kUpgradeInsecureRequests) !=
+          mojom::blink::InsecureRequestPolicy::kLeaveInsecureRequestsAlone &&
+      !Url().Host().empty()) {
+    window->GetFrame()->GetLocalFrameHostRemote().EnforceInsecureNavigationsSet(
+        SecurityContext::SerializeInsecureNavigationSet(
+            security_context.InsecureNavigationsToUpgrade()));
+  }
 }
 
-absl::optional<uint16_t> ExecutionContextCSPDelegate::GetStatusCode() {
-  absl::optional<uint16_t> status_code;
+SourceLocation* ExecutionContextCSPDelegate::GetSourceLocation() {
+  return CaptureSourceLocation(execution_context_);
+}
+
+std::optional<uint16_t> ExecutionContextCSPDelegate::GetStatusCode() {
+  std::optional<uint16_t> status_code;
 
   // TODO(mkwst): We only have status code information for Documents. It would
   // be nice to get them for Workers as well.
@@ -151,10 +173,9 @@ void ExecutionContextCSPDelegate::DispatchViolationEvent(
   execution_context_->GetTaskRunner(TaskType::kNetworking)
       ->PostTask(
           FROM_HERE,
-          WTF::Bind(
-              &ExecutionContextCSPDelegate::DispatchViolationEventInternal,
-              WrapPersistent(this), WrapPersistent(&violation_data),
-              WrapPersistent(element)));
+          BindOnce(&ExecutionContextCSPDelegate::DispatchViolationEventInternal,
+                   WrapPersistent(this), WrapPersistent(&violation_data),
+                   WrapPersistent(element)));
 }
 
 void ExecutionContextCSPDelegate::PostViolationReport(
@@ -196,7 +217,8 @@ void ExecutionContextCSPDelegate::PostViolationReport(
 
   for (const auto& report_endpoint : report_endpoints) {
     PingLoader::SendViolationReport(execution_context_.Get(),
-                                    KURL(report_endpoint), report);
+                                    KURL(report_endpoint), report,
+                                    is_frame_ancestors_violation);
   }
 }
 
@@ -209,13 +231,17 @@ void ExecutionContextCSPDelegate::AddConsoleMessage(
   execution_context_->AddConsoleMessage(console_message);
 }
 
-void ExecutionContextCSPDelegate::AddInspectorIssue(
-    mojom::blink::InspectorIssueInfoPtr info) {
-  execution_context_->AddInspectorIssue(std::move(info));
+void ExecutionContextCSPDelegate::AddInspectorIssue(AuditsIssue issue) {
+  execution_context_->AddInspectorIssue(std::move(issue));
 }
 
 void ExecutionContextCSPDelegate::DisableEval(const String& error_message) {
   execution_context_->DisableEval(error_message);
+}
+
+void ExecutionContextCSPDelegate::SetWasmEvalErrorMessage(
+    const String& error_message) {
+  execution_context_->SetWasmEvalErrorMessage(error_message);
 }
 
 void ExecutionContextCSPDelegate::ReportBlockedScriptExecutionToInspector(
@@ -224,7 +250,7 @@ void ExecutionContextCSPDelegate::ReportBlockedScriptExecutionToInspector(
 }
 
 void ExecutionContextCSPDelegate::DidAddContentSecurityPolicies(
-    WTF::Vector<network::mojom::blink::ContentSecurityPolicyPtr> policies) {
+    Vector<network::mojom::blink::ContentSecurityPolicyPtr> policies) {
   auto* window = DynamicTo<LocalDOMWindow>(execution_context_.Get());
   if (!window)
     return;
@@ -233,8 +259,11 @@ void ExecutionContextCSPDelegate::DidAddContentSecurityPolicies(
   if (!frame)
     return;
 
-  // Record what source was used to find main frame CSP.
-  if (frame->IsMainFrame()) {
+  // Record what source was used to find main frame CSP. Do not record
+  // this for fence frame roots since they will never become an
+  // outermost main frame.
+  bool is_main_frame = frame->IsMainFrame() && !frame->IsInFencedFrameTree();
+  if (is_main_frame) {
     for (const auto& policy : policies) {
       switch (policy->header->source) {
         case network::mojom::ContentSecurityPolicySource::kHTTP:
@@ -243,12 +272,19 @@ void ExecutionContextCSPDelegate::DidAddContentSecurityPolicies(
         case network::mojom::ContentSecurityPolicySource::kMeta:
           Count(WebFeature::kMainFrameCSPViaMeta);
           break;
-        case network::mojom::ContentSecurityPolicySource::kOriginPolicy:
-          Count(WebFeature::kMainFrameCSPViaOriginPolicy);
-          break;
       }
     }
   }
+  // As the injection-mitigatedness of a context changes only when CSPs are
+  // added, we can measure the prevalance here:
+  if (execution_context_->IsInjectionMitigatedContext()) {
+    Count(is_main_frame ? WebFeature::kInjectionMitigatedContextMainFrame
+                        : WebFeature::kInjectionMitigatedContextSubFrame);
+  }
+}
+
+bool ExecutionContextCSPDelegate::ScriptSrcExtendedHashesEnabled() {
+  return RuntimeEnabledFeatures::CSPHashesV1Enabled(execution_context_);
 }
 
 SecurityContext& ExecutionContextCSPDelegate::GetSecurityContext() {
@@ -283,11 +319,11 @@ void ExecutionContextCSPDelegate::DispatchViolationEventInternal(
 
   if (auto* document = GetDocument()) {
     if (element && element->isConnected() && element->GetDocument() == document)
-      element->EnqueueEvent(event, TaskType::kInternalDefault);
+      element->DispatchEvent(event);
     else
-      document->EnqueueEvent(event, TaskType::kInternalDefault);
+      document->DispatchEvent(event);
   } else if (auto* scope = DynamicTo<WorkerGlobalScope>(*execution_context_)) {
-    scope->EnqueueEvent(event, TaskType::kInternalDefault);
+    scope->DispatchEvent(event);
   }
 }
 

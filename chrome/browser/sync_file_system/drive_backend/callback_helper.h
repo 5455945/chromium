@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,13 @@
 #include <memory>
 #include <type_traits>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 
-// TODO(tzik): Merge this file to media/base/bind_to_current_loop.h.
+// TODO(tzik): Merge this file to base/task/bind_post_task.h.
 
 namespace sync_file_system {
 namespace drive_backend {
@@ -44,8 +43,11 @@ class CallbackHolder {
       : task_runner_(task_runner),
         from_here_(from_here),
         callback_(std::move(callback)) {
-    DCHECK(task_runner_.get());
+    CHECK(task_runner_.get(), base::NotFatalUntil::M162);
   }
+
+  CallbackHolder(const CallbackHolder&) = delete;
+  CallbackHolder& operator=(const CallbackHolder&) = delete;
 
   ~CallbackHolder() {
     if (callback_) {
@@ -67,8 +69,6 @@ class CallbackHolder {
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   const base::Location from_here_;
   CallbackType callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(CallbackHolder);
 };
 
 }  // namespace internal
@@ -78,7 +78,7 @@ base::OnceCallback<void(Args...)> RelayCallbackToTaskRunner(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     const base::Location& from_here,
     base::OnceCallback<void(Args...)> callback) {
-  DCHECK(task_runner->RunsTasksInCurrentSequence());
+  CHECK(task_runner->RunsTasksInCurrentSequence(), base::NotFatalUntil::M162);
 
   if (callback.is_null())
     return {};
@@ -96,7 +96,7 @@ base::RepeatingCallback<void(Args...)> RelayCallbackToTaskRunner(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     const base::Location& from_here,
     base::RepeatingCallback<void(Args...)> callback) {
-  DCHECK(task_runner->RunsTasksInCurrentSequence());
+  CHECK(task_runner->RunsTasksInCurrentSequence(), base::NotFatalUntil::M162);
 
   if (callback.is_null())
     return {};
@@ -113,8 +113,9 @@ base::RepeatingCallback<void(Args...)> RelayCallbackToTaskRunner(
 template <typename CallbackType>
 CallbackType RelayCallbackToCurrentThread(const base::Location& from_here,
                                           CallbackType callback) {
-  return RelayCallbackToTaskRunner(base::ThreadTaskRunnerHandle::Get(),
-                                   from_here, std::move(callback));
+  return RelayCallbackToTaskRunner(
+      base::SingleThreadTaskRunner::GetCurrentDefault(), from_here,
+      std::move(callback));
 }
 
 }  // namespace drive_backend

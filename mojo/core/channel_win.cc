@@ -1,28 +1,35 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/core/channel.h"
 
-#include <stdint.h>
 #include <windows.h>
+
+#include <stdint.h>
 
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <tuple>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/containers/queue.h"
-#include "base/debug/activity_tracker.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_for_io.h"
+#include "base/metrics/histogram_macros.h"
+#include "base/process/current_process.h"
 #include "base/process/process_handle.h"
+#include "base/rand_util.h"
 #include "base/synchronization/lock.h"
 #include "base/task/current_thread.h"
-#include "base/task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
+#include "base/time/time.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/win_util.h"
 
@@ -31,50 +38,47 @@ namespace core {
 
 namespace {
 
-std::atomic<uint64_t>* MaybeGetExtendedCrashAnnotation() {
-  base::debug::GlobalActivityTracker* activity_tracker =
-      base::debug::GlobalActivityTracker::Get();
-  if (!activity_tracker)
-    return nullptr;
+constexpr int kMaxOpenChannelSample = 101;
 
-  static std::atomic<uint64_t>* sum = activity_tracker->process_data().SetUint(
-      "channel_win_total_outgoing_messages", 0u);
+struct OpenChannelMetrics {
+  size_t open_channels = 0;
+  int recorded_peak = 0;
+};
 
-  return sum;
-}
+constinit thread_local OpenChannelMetrics g_open_channel_metrics;
 
 class ChannelWinMessageQueue {
  public:
-  explicit ChannelWinMessageQueue()
-      : queue_size_sum_(MaybeGetExtendedCrashAnnotation()) {}
-  ~ChannelWinMessageQueue() {
-    if (queue_size_sum_) {
-      queue_size_sum_->fetch_sub(queue_.size(), std::memory_order_relaxed);
-    }
+  ChannelWinMessageQueue() = default;
+  ~ChannelWinMessageQueue() = default;
+
+  void Append(Channel::MessagePtr message, base::TimeTicks creation_time) {
+    queue_.emplace_back(std::move(message), creation_time);
   }
 
-  void Append(Channel::MessagePtr message) {
-    queue_.emplace_back(std::move(message));
-    if (queue_size_sum_)
-      ++(*queue_size_sum_);
-  }
-
-  Channel::Message* GetFirst() const { return queue_.front().get(); }
+  Channel::Message* GetFirst() const { return queue_.front().message.get(); }
 
   Channel::MessagePtr TakeFirst() {
-    if (queue_size_sum_)
-      --(*queue_size_sum_);
-
-    Channel::MessagePtr message = std::move(queue_.front());
+    QueuedMessage entry = std::move(queue_.front());
     queue_.pop_front();
-    return message;
+    if (!entry.creation_time.is_null()) {
+      base::TimeDelta latency = base::TimeTicks::Now() - entry.creation_time;
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES("Mojo.Channel.WriteLatencyUs",
+                                              latency, base::Microseconds(1),
+                                              base::Seconds(1), 100);
+    }
+    return std::move(entry.message);
   }
 
   bool IsEmpty() const { return queue_.empty(); }
 
  private:
-  base::circular_deque<Channel::MessagePtr> queue_;
-  std::atomic<uint64_t>* queue_size_sum_ = nullptr;
+  struct QueuedMessage {
+    Channel::MessagePtr message;
+    base::TimeTicks creation_time;
+  };
+
+  base::circular_deque<QueuedMessage> queue_;
 };
 
 class ChannelWin : public Channel,
@@ -87,20 +91,16 @@ class ChannelWin : public Channel,
              scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
       : Channel(delegate, handle_policy),
         base::MessagePumpForIO::IOHandler(FROM_HERE),
+        is_untrusted_process_(connection_params.is_untrusted_process()),
         self_(this),
         io_task_runner_(io_task_runner) {
-    if (connection_params.server_endpoint().is_valid()) {
-      handle_ = connection_params.TakeServerEndpoint()
-                    .TakePlatformHandle()
-                    .TakeHandle();
-      needs_connection_ = true;
-    } else {
-      handle_ =
-          connection_params.TakeEndpoint().TakePlatformHandle().TakeHandle();
-    }
-
-    CHECK(handle_.IsValid());
+    handle_ =
+        connection_params.TakeEndpoint().TakePlatformHandle().TakeHandle();
+    CHECK(handle_.is_valid());
   }
+
+  ChannelWin(const ChannelWin&) = delete;
+  ChannelWin& operator=(const ChannelWin&) = delete;
 
   void Start() override {
     io_task_runner_->PostTask(
@@ -114,13 +114,25 @@ class ChannelWin : public Channel,
   }
 
   void Write(MessagePtr message) override {
+    RecordSentMessageMetricsSubsampled(message->data_num_bytes());
+
+    base::TimeTicks creation_time;
+    if (base::ShouldRecordSubsampledMetric(
+            Channel::kMetricSubsamplingProbability)) {
+      creation_time = base::TimeTicks::Now();
+    }
+
     if (remote_process().IsValid()) {
       // If we know the remote process handle, we transfer all outgoing handles
       // to the process now rewriting them in the message.
       std::vector<PlatformHandleInTransit> handles = message->TakeHandles();
       for (auto& handle : handles) {
-        if (handle.handle().is_valid())
-          handle.TransferToProcess(remote_process().Duplicate());
+        if (handle.handle().is_valid()) {
+          handle.TransferToProcess(
+              remote_process().Duplicate(),
+              is_untrusted_process_ ? PlatformHandleInTransit::kUntrustedTarget
+                                    : PlatformHandleInTransit::kTrustedTarget);
+        }
       }
       message->SetHandles(std::move(handles));
     }
@@ -128,13 +140,15 @@ class ChannelWin : public Channel,
     bool write_error = false;
     {
       base::AutoLock lock(write_lock_);
-      if (reject_writes_)
+      if (reject_writes_) {
         return;
+      }
 
       bool write_now = !delay_writes_ && outgoing_messages_.IsEmpty();
-      outgoing_messages_.Append(std::move(message));
-      if (write_now && !WriteNoLock(outgoing_messages_.GetFirst()))
+      outgoing_messages_.Append(std::move(message), creation_time);
+      if (write_now && !WriteNoLock(outgoing_messages_.GetFirst())) {
         reject_writes_ = write_error = true;
+      }
     }
     if (write_error) {
       // Do not synchronously invoke OnWriteError(). Write() may have been
@@ -155,24 +169,26 @@ class ChannelWin : public Channel,
                               size_t num_handles,
                               const void* extra_header,
                               size_t extra_header_size,
-                              std::vector<PlatformHandle>* handles,
-                              bool* deferred) override {
+                              std::vector<PlatformHandle>* handles) override {
     DCHECK(extra_header);
-    if (num_handles > std::numeric_limits<uint16_t>::max())
+    if (num_handles > std::numeric_limits<uint16_t>::max()) {
       return false;
+    }
     using HandleEntry = Channel::Message::HandleEntry;
     size_t handles_size = sizeof(HandleEntry) * num_handles;
-    if (handles_size > extra_header_size)
+    if (handles_size > extra_header_size) {
       return false;
+    }
     handles->reserve(num_handles);
     const HandleEntry* extra_header_handles =
         reinterpret_cast<const HandleEntry*>(extra_header);
     for (size_t i = 0; i < num_handles; i++) {
-      HANDLE handle_value =
-          base::win::Uint32ToHandle(extra_header_handles[i].handle);
-      if (PlatformHandleInTransit::IsPseudoHandle(handle_value))
+      HANDLE handle_value = base::win::Uint32ToHandle(
+          UNSAFE_TODO(extra_header_handles[i]).handle);
+      if (PlatformHandleInTransit::IsPseudoHandle(handle_value)) {
         return false;
-      if (remote_process().IsValid()) {
+      }
+      if (remote_process().IsValid() && handle_value != INVALID_HANDLE_VALUE) {
         // If we know the remote process's handle, we assume it doesn't know
         // ours; that means any handle values still belong to that process, and
         // we need to transfer them to this process.
@@ -185,63 +201,84 @@ class ChannelWin : public Channel,
     return true;
   }
 
+  bool GetReadPlatformHandlesForIpcz(
+      size_t num_handles,
+      std::vector<PlatformHandle>& handles) override {
+    // Always a validation failure if we're asked for handles on Windows,
+    // because ChannelWin for ipcz never sends handles out-of-band from data.
+    return false;
+  }
+
  private:
   // May run on any thread.
   ~ChannelWin() override = default;
 
   void StartOnIOThread() {
     base::CurrentThread::Get()->AddDestructionObserver(this);
-    base::CurrentIOThread::Get()->RegisterIOHandler(handle_.Get(), this);
-
-    if (needs_connection_) {
-      BOOL ok = ::ConnectNamedPipe(handle_.Get(), &connect_context_.overlapped);
-      if (ok) {
-        PLOG(ERROR) << "Unexpected success while waiting for pipe connection";
-        OnError(Error::kConnectionFailed);
-        return;
-      }
-
-      const DWORD err = GetLastError();
-      switch (err) {
-        case ERROR_PIPE_CONNECTED:
-          break;
-        case ERROR_IO_PENDING:
-          is_connect_pending_ = true;
-          AddRef();
-          return;
-        case ERROR_NO_DATA:
-        default:
-          OnError(Error::kConnectionFailed);
-          return;
-      }
+    if (!base::CurrentIOThread::Get()->RegisterIOHandler(handle_.get(), this)) {
+      OnError(Error::kConnectionFailed);
+      return;
     }
 
-    // Now that we have registered our IOHandler, we can start writing.
-    {
-      base::AutoLock lock(write_lock_);
-      if (delay_writes_) {
-        delay_writes_ = false;
-        WriteNextNoLock();
+    counted_for_metrics_ = IsRendererProcessForMetrics();
+    if (counted_for_metrics_) {
+      ++g_open_channel_metrics.open_channels;
+      if (g_open_channel_metrics.recorded_peak < kMaxOpenChannelSample &&
+          g_open_channel_metrics.open_channels >
+              static_cast<size_t>(g_open_channel_metrics.recorded_peak)) {
+        ++g_open_channel_metrics.recorded_peak;
+        UMA_HISTOGRAM_EXACT_LINEAR(
+            "Stability.Mojo.Channel.Win.PeakOpenChannels.Renderer",
+            g_open_channel_metrics.recorded_peak, kMaxOpenChannelSample);
       }
     }
 
     // Keep this alive in case we synchronously run shutdown, via OnError(),
     // as a result of a ReadFile() failure on the channel.
     scoped_refptr<ChannelWin> keep_alive(this);
+
+    // Now that we have registered our IOHandler, we can start writing.
+    {
+      base::AutoLock lock(write_lock_);
+      if (delay_writes_) {
+        delay_writes_ = false;
+        if (!WriteNextNoLock()) {
+          reject_writes_ = true;
+        }
+      }
+    }
+
     ReadMore(0);
   }
 
   void ShutDownOnIOThread() {
     base::CurrentThread::Get()->RemoveDestructionObserver(this);
 
-    // TODO(https://crbug.com/583525): This function is expected to be called
+    {
+      // Prevent attempts to write if we've closed the handle.
+      base::AutoLock lock(write_lock_);
+      reject_writes_ = true;
+    }
+
+    // TODO(crbug.com/40455076): This function is expected to be called
     // once, and |handle_| should be valid at this point.
-    CHECK(handle_.IsValid());
-    CancelIo(handle_.Get());
-    if (leak_handle_)
-      ignore_result(handle_.Take());
-    else
+    CHECK(handle_.is_valid());
+    // Write() may issue an overlapped WriteFile() from any thread, so pending
+    // writes are not necessarily owned by the IO thread. CancelIo() only
+    // cancels I/O issued by the calling thread; use CancelIoEx() with a null
+    // OVERLAPPED to cancel all pending I/O on the handle regardless of which
+    // thread issued it.
+    CancelIoEx(handle_.get(), nullptr);
+    if (leak_handle_) {
+      std::ignore = handle_.release();
+    } else {
       handle_.Close();
+    }
+
+    if (counted_for_metrics_) {
+      DCHECK_GT(g_open_channel_metrics.open_channels, 0u);
+      --g_open_channel_metrics.open_channels;
+    }
 
     // Allow |this| to be destroyed as soon as no IO is pending.
     self_ = nullptr;
@@ -250,47 +287,54 @@ class ChannelWin : public Channel,
   // base::CurrentThread::DestructionObserver:
   void WillDestroyCurrentMessageLoop() override {
     DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-    if (self_)
+    if (self_) {
       ShutDownOnIOThread();
+    }
   }
 
   // base::MessageLoop::IOHandler:
   void OnIOCompleted(base::MessagePumpForIO::IOContext* context,
-                     DWORD bytes_transfered,
-                     DWORD error) override {
-    if (error != ERROR_SUCCESS) {
-      if (context == &write_context_) {
-        {
-          base::AutoLock lock(write_lock_);
-          reject_writes_ = true;
-        }
-        OnWriteError(Error::kDisconnected);
-      } else {
-        OnError(Error::kDisconnected);
-      }
-    } else if (context == &connect_context_) {
-      DCHECK(is_connect_pending_);
-      is_connect_pending_ = false;
-      ReadMore(0);
-
-      base::AutoLock lock(write_lock_);
-      if (delay_writes_) {
-        delay_writes_ = false;
-        WriteNextNoLock();
-      }
-    } else if (context == &read_context_) {
-      OnReadDone(static_cast<size_t>(bytes_transfered));
-    } else {
-      CHECK(context == &write_context_);
-      OnWriteDone(static_cast<size_t>(bytes_transfered));
+                     DWORD /*bytes_transfered*/,
+                     DWORD /*error*/) override {
+    // I/O completion port association belongs to the underlying file object
+    // rather than to `handle_`, so a packet delivered here does not necessarily
+    // correspond to an operation started by this Channel. OnReadDone() and
+    // OnWriteDone() act only on an outstanding operation of ours which the
+    // kernel has completed, and take its result from our own OVERLAPPED rather
+    // than from the packet.
+    if (context == &read_context_) {
+      OnReadDone();
+    } else if (context == &write_context_) {
+      OnWriteDone();
     }
-    Release();
   }
 
-  void OnReadDone(size_t bytes_read) {
-    DCHECK(is_read_pending_);
-    is_read_pending_ = false;
+  // Returns the number of bytes transferred by the operation most recently
+  // started with `context`, which the kernel must have completed, or nullopt if
+  // that operation failed.
+  std::optional<size_t> GetCompletedBytes(
+      base::MessagePumpForIO::IOContext& context) {
+    if (!handle_.is_valid()) {
+      // ShutDownOnIOThread() has cancelled every outstanding operation.
+      return std::nullopt;
+    }
+    DWORD bytes_transferred = 0;
+    if (!::GetOverlappedResult(handle_.get(), context.GetOverlapped(),
+                               &bytes_transferred, /*bWait=*/FALSE)) {
+      return std::nullopt;
+    }
+    return bytes_transferred;
+  }
 
+  void OnReadDone() {
+    if (!pending_read_ ||
+        !HasOverlappedIoCompleted(read_context_.GetOverlapped())) {
+      return;
+    }
+    scoped_refptr<ChannelWin> keep_alive = std::move(pending_read_);
+
+    // A failed read is handled like the end of the stream.
+    const size_t bytes_read = GetCompletedBytes(read_context_).value_or(0);
     if (bytes_read > 0) {
       size_t next_read_size = 0;
       if (OnReadComplete(bytes_read, &next_read_size)) {
@@ -303,43 +347,51 @@ class ChannelWin : public Channel,
     }
   }
 
-  void OnWriteDone(size_t bytes_written) {
-    if (bytes_written == 0)
-      return;
-
+  void OnWriteDone() {
+    scoped_refptr<ChannelWin> keep_alive;
     bool write_error = false;
     {
       base::AutoLock lock(write_lock_);
-
-      DCHECK(is_write_pending_);
-      is_write_pending_ = false;
+      if (!pending_write_ ||
+          !HasOverlappedIoCompleted(write_context_.GetOverlapped())) {
+        return;
+      }
+      keep_alive = std::move(pending_write_);
       DCHECK(!outgoing_messages_.IsEmpty());
 
       Channel::MessagePtr message = outgoing_messages_.TakeFirst();
 
       // Overlapped WriteFile() to a pipe should always fully complete.
-      if (message->data_num_bytes() != bytes_written)
+      std::optional<size_t> bytes_written = GetCompletedBytes(write_context_);
+      if (!bytes_written || message->data_num_bytes() != *bytes_written) {
         reject_writes_ = write_error = true;
-      else if (!WriteNextNoLock())
+      } else if (!WriteNextNoLock()) {
         reject_writes_ = write_error = true;
+      }
     }
-    if (write_error)
+    if (write_error) {
       OnWriteError(Error::kDisconnected);
+    }
   }
 
   void ReadMore(size_t next_read_size_hint) {
-    DCHECK(!is_read_pending_);
+    DCHECK(!pending_read_);
 
     size_t buffer_capacity = next_read_size_hint;
     char* buffer = GetReadBuffer(&buffer_capacity);
+    // A null buffer means the size computation for the buffer overflowed;
+    // break the connection.
+    if (!buffer) {
+      OnError(Error::kDisconnected);
+      return;
+    }
     DCHECK_GT(buffer_capacity, 0u);
 
     BOOL ok =
-        ::ReadFile(handle_.Get(), buffer, static_cast<DWORD>(buffer_capacity),
-                   NULL, &read_context_.overlapped);
+        ::ReadFile(handle_.get(), buffer, static_cast<DWORD>(buffer_capacity),
+                   NULL, read_context_.GetOverlapped());
     if (ok || GetLastError() == ERROR_IO_PENDING) {
-      is_read_pending_ = true;
-      AddRef();
+      pending_read_ = this;
     } else {
       OnError(Error::kDisconnected);
     }
@@ -360,23 +412,28 @@ class ChannelWin : public Channel,
     // process is if the remote process dies before receiving this message. At
     // that point, again, potential handle leaks don't matter.
     std::vector<PlatformHandleInTransit> handles = message->TakeHandles();
-    for (auto& handle : handles)
+    for (auto& handle : handles) {
       handle.CompleteTransit();
+    }
 
-    BOOL ok = WriteFile(handle_.Get(), message->data(),
+    DCHECK(handle_.is_valid());
+    BOOL ok = WriteFile(handle_.get(), message->data(),
                         static_cast<DWORD>(message->data_num_bytes()), NULL,
-                        &write_context_.overlapped);
+                        write_context_.GetOverlapped());
     if (ok || GetLastError() == ERROR_IO_PENDING) {
-      is_write_pending_ = true;
-      AddRef();
+      pending_write_ = this;
       return true;
     }
     return false;
   }
 
   bool WriteNextNoLock() {
-    if (outgoing_messages_.IsEmpty())
+    if (outgoing_messages_.IsEmpty()) {
       return true;
+    }
+    if (reject_writes_) {
+      return false;
+    }
     return WriteNoLock(outgoing_messages_.GetFirst());
   }
 
@@ -388,12 +445,15 @@ class ChannelWin : public Channel,
       // If we can't write because the pipe is disconnected then continue
       // reading to fetch any in-flight messages, relying on end-of-stream to
       // signal the actual disconnection.
-      if (is_read_pending_ || is_connect_pending_)
+      if (pending_read_) {
         return;
+      }
     }
 
     OnError(error);
   }
+
+  const bool is_untrusted_process_;
 
   // Keeps the Channel alive at least until explicit shutdown on the IO thread.
   scoped_refptr<Channel> self_;
@@ -401,15 +461,13 @@ class ChannelWin : public Channel,
   // The pipe handle this Channel uses for communication.
   base::win::ScopedHandle handle_;
 
-  // Indicates whether |handle_| must wait for a connection.
-  bool needs_connection_ = false;
-
   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 
-  base::MessagePumpForIO::IOContext connect_context_;
+  bool counted_for_metrics_ = false;
+
   base::MessagePumpForIO::IOContext read_context_;
-  bool is_connect_pending_ = false;
-  bool is_read_pending_ = false;
+  // A reference to this Channel, held while a read is outstanding.
+  scoped_refptr<ChannelWin> pending_read_;
 
   // Protects all fields potentially accessed on multiple threads via Write().
   base::Lock write_lock_;
@@ -417,14 +475,22 @@ class ChannelWin : public Channel,
   ChannelWinMessageQueue outgoing_messages_;
   bool delay_writes_ = true;
   bool reject_writes_ = false;
-  bool is_write_pending_ = false;
+  // A reference to this Channel, held while a write is outstanding.
+  scoped_refptr<ChannelWin> pending_write_;
 
   bool leak_handle_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ChannelWin);
 };
 
 }  // namespace
+
+// static
+bool Channel::IsRendererProcessForMetrics() {
+  const auto process_type =
+      base::CurrentProcess::GetInstance().GetShortType({});
+  return process_type == base::ShortProcessType::kRenderer ||
+         process_type == base::ShortProcessType::kRendererExtension ||
+         process_type == base::ShortProcessType::kRendererTopWebUI;
+}
 
 // static
 scoped_refptr<Channel> Channel::Create(

@@ -1,31 +1,29 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "extensions/browser/api/web_request/web_request_permissions.h"
 
 #include <stddef.h>
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/common/extensions/extension_test_util.h"
 #include "chrome/common/url_constants.h"
-#include "chromeos/login/login_state/scoped_test_public_session_login_state.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/api/web_request/permission_helper.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
-#include "extensions/browser/api/web_request/web_request_permissions.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "ipc/ipc_message.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/login/login_state/login_state.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extension_test_util::LoadManifestUnchecked;
 using extensions::Extension;
@@ -40,8 +38,9 @@ class ExtensionWebRequestHelpersTestWithThreadsTest
     : public extensions::ExtensionServiceTestBase {
  protected:
   void SetUp() override;
+  void TearDown() override;
 
-  extensions::PermissionHelper* permission_helper_ = nullptr;
+  raw_ptr<extensions::PermissionHelper> permission_helper_ = nullptr;
   // This extension has Web Request permissions, but no host permission.
   scoped_refptr<Extension> permissionless_extension_;
   // This extension has Web Request permissions, and *.com a host permission.
@@ -78,15 +77,23 @@ void ExtensionWebRequestHelpersTestWithThreadsTest::SetUp() {
   ExtensionRegistry::Get(browser_context())->AddEnabled(com_policy_extension_);
 }
 
+void ExtensionWebRequestHelpersTestWithThreadsTest::TearDown() {
+  com_policy_extension_.reset();
+  com_extension_.reset();
+  permissionless_extension_.reset();
+  permission_helper_ = nullptr;
+  ExtensionServiceTestBase::TearDown();
+}
+
 // Ensures that requests to extension blocklist urls can't be intercepted by
 // extensions.
 TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest,
        BlocklistUpdateUrlsHidden) {
   auto create_request_params = [](const std::string& url) {
-    const int kRendererProcessId = 2;
+    const content::ChildProcessId kRendererProcessId(2);
     WebRequestInfoInitParams request;
     request.url = GURL(url);
-    request.render_process_id = kRendererProcessId;
+    request.global_id.child_id = kRendererProcessId;
     return request;
   };
 
@@ -102,7 +109,7 @@ TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest,
 }
 
 // Ensure requests made by the local WebUINTP are hidden from extensions.
-// Regression test for crbug.com/931013.
+// Regression test for crbug.com/40094017.
 TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest, LocalWebUINTPRequests) {
   const GURL example_com("http://example.com");
 
@@ -113,14 +120,14 @@ TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest, LocalWebUINTPRequests) {
         WebRequestInfoInitParams info_params;
         info_params.url = example_com;
         info_params.initiator = initiator;
-        info_params.render_process_id = -1;
+        info_params.global_id.child_id = content::ChildProcessId();
         info_params.web_request_type = web_request_type;
         info_params.is_navigation_request = is_navigation_request;
         return info_params;
       };
 
   url::Origin ntp_origin =
-      url::Origin::Create(GURL(chrome::kChromeUINewTabPageURL));
+      url::Origin::Create(chrome::ChromeUINewTabPageURLAsGURL());
 
   // Sub-resource browser initiated requests are hidden from extensions.
   WebRequestInfoInitParams info_params_1 = create_request_params(
@@ -154,7 +161,7 @@ TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest,
                 permission_helper_, permissionless_extension_->id(), url,
                 -1,     // No tab id.
                 false,  // crosses_incognito
-                WebRequestPermissions::DO_NOT_CHECK_HOST, absl::nullopt,
+                WebRequestPermissions::DO_NOT_CHECK_HOST, std::nullopt,
                 kWebRequestType));
   EXPECT_EQ(PermissionsData::PageAccess::kDenied,
             WebRequestPermissions::CanExtensionAccessURL(
@@ -162,14 +169,14 @@ TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest,
                 -1,     // No tab id.
                 false,  // crosses_incognito
                 WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL,
-                absl::nullopt, kWebRequestType));
+                std::nullopt, kWebRequestType));
   EXPECT_EQ(PermissionsData::PageAccess::kAllowed,
             WebRequestPermissions::CanExtensionAccessURL(
                 permission_helper_, com_extension_->id(), url,
                 -1,     // No tab id.
                 false,  // crosses_incognito
                 WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL,
-                absl::nullopt, kWebRequestType));
+                std::nullopt, kWebRequestType));
   EXPECT_EQ(
       PermissionsData::PageAccess::kAllowed,
       WebRequestPermissions::CanExtensionAccessURL(
@@ -177,16 +184,16 @@ TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest,
           -1,     // No tab id.
           false,  // crosses_incognito
           WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL_AND_INITIATOR,
-          absl::nullopt, kWebRequestType));
+          std::nullopt, kWebRequestType));
   EXPECT_EQ(PermissionsData::PageAccess::kDenied,
             WebRequestPermissions::CanExtensionAccessURL(
                 permission_helper_, com_extension_->id(), url,
                 -1,     // No tab id.
                 false,  // crosses_incognito
-                WebRequestPermissions::REQUIRE_ALL_URLS, absl::nullopt,
+                WebRequestPermissions::REQUIRE_ALL_URLS, std::nullopt,
                 kWebRequestType));
 
-  absl::optional<url::Origin> initiator(
+  std::optional<url::Origin> initiator(
       url::Origin::Create(GURL("http://www.example.org")));
 
   EXPECT_EQ(PermissionsData::PageAccess::kAllowed,
@@ -237,48 +244,23 @@ TEST_F(ExtensionWebRequestHelpersTestWithThreadsTest,
           false,  // crosses_incognito
           WebRequestPermissions::REQUIRE_ALL_URLS, initiator, kWebRequestType));
 
-  // Public Sessions tests.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  const GURL org_url("http://example.org");
-
   // com_extension_ doesn't have host permission for .org URLs.
+  const GURL org_url("http://example.org");
   EXPECT_EQ(PermissionsData::PageAccess::kDenied,
             WebRequestPermissions::CanExtensionAccessURL(
                 permission_helper_, com_policy_extension_->id(), org_url,
                 -1,     // No tab id.
                 false,  // crosses_incognito
                 WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL,
-                absl::nullopt, kWebRequestType));
-
-  chromeos::ScopedTestPublicSessionLoginState login_state;
-
-  // Host permission checks are disabled in Public Sessions, instead all URLs
-  // are allowlisted.
-  EXPECT_EQ(PermissionsData::PageAccess::kAllowed,
-            WebRequestPermissions::CanExtensionAccessURL(
-                permission_helper_, com_policy_extension_->id(), org_url,
-                -1,     // No tab id.
-                false,  // crosses_incognito
-                WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL,
-                absl::nullopt, kWebRequestType));
-
-  EXPECT_EQ(PermissionsData::PageAccess::kAllowed,
-            WebRequestPermissions::CanExtensionAccessURL(
-                permission_helper_, com_policy_extension_->id(), org_url,
-                -1,     // No tab id.
-                false,  // crosses_incognito
-                WebRequestPermissions::REQUIRE_ALL_URLS, absl::nullopt,
-                kWebRequestType));
+                std::nullopt, kWebRequestType));
 
   // Make sure that chrome:// URLs cannot be accessed.
   const GURL chrome_url("chrome://version/");
-
   EXPECT_EQ(PermissionsData::PageAccess::kDenied,
             WebRequestPermissions::CanExtensionAccessURL(
                 permission_helper_, com_policy_extension_->id(), chrome_url,
                 -1,     // No tab id.
                 false,  // crosses_incognito
                 WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL,
-                absl::nullopt, kWebRequestType));
-#endif
+                std::nullopt, kWebRequestType));
 }

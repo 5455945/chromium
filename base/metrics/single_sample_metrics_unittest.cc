@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,8 @@ namespace base {
 
 namespace {
 
-const HistogramBase::Sample kMin = 1;
-const HistogramBase::Sample kMax = 10;
+const HistogramBase::Sample32 kMin = 1;
+const HistogramBase::Sample32 kMax = 10;
 const uint32_t kBucketCount = 10;
 const char kMetricName[] = "Single.Sample.Metric";
 
@@ -22,13 +22,13 @@ class SingleSampleMetricsTest : public testing::Test {
  public:
   SingleSampleMetricsTest() = default;
 
+  SingleSampleMetricsTest(const SingleSampleMetricsTest&) = delete;
+  SingleSampleMetricsTest& operator=(const SingleSampleMetricsTest&) = delete;
+
   ~SingleSampleMetricsTest() override {
     // Ensure we cleanup after ourselves.
     SingleSampleMetricsFactory::DeleteFactoryForTesting();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SingleSampleMetricsTest);
 };
 
 }  // namespace
@@ -70,7 +70,7 @@ TEST_F(SingleSampleMetricsTest, DefaultSingleSampleMetricWithValue) {
   std::unique_ptr<SingleSampleMetric> metric =
       factory->CreateCustomCountsMetric(kMetricName, kMin, kMax, kBucketCount);
 
-  const HistogramBase::Sample kLastSample = 9;
+  const HistogramBase::Sample32 kLastSample = 9;
   metric->SetSample(1);
   metric->SetSample(3);
   metric->SetSample(5);
@@ -103,11 +103,11 @@ TEST_F(SingleSampleMetricsTest, MultipleMetricsAreDistinct) {
   std::unique_ptr<SingleSampleMetric> metric3 =
       factory->CreateCustomCountsMetric(kMetricName2, kMin, kMax, kBucketCount);
 
-  const HistogramBase::Sample kSample1 = 5;
+  const HistogramBase::Sample32 kSample1 = 5;
   metric->SetSample(kSample1);
   metric2->SetSample(kSample1);
 
-  const HistogramBase::Sample kSample2 = 7;
+  const HistogramBase::Sample32 kSample2 = 7;
   metric3->SetSample(kSample2);
 
   metric.reset();

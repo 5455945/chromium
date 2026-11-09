@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,21 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 
-#include <memory>
+#import <memory>
 
 #import "base/test/ios/wait_util.h"
-#include "ios/net/cookies/system_cookie_store_unittest_template.h"
-#include "ios/web/public/test/fakes/fake_browser_state.h"
-#include "ios/web/public/test/scoped_testing_web_client.h"
-#include "ios/web/public/test/web_task_environment.h"
+#import "ios/net/cookies/system_cookie_store_unittest_template.h"
+#import "ios/web/public/test/fakes/fake_browser_state.h"
+#import "ios/web/public/test/scoped_testing_web_client.h"
+#import "ios/web/public/test/web_task_environment.h"
 #import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
-#include "testing/gtest/include/gtest/gtest.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
 
 // Test class that conforms to net::SystemCookieStoreTestDelegate to exercise
 // WKHTTPSystemCookieStore.
-class API_AVAILABLE(ios(11.0)) WKHTTPSystemCookieStoreTestDelegate {
+class WKHTTPSystemCookieStoreTestDelegate {
  public:
   WKHTTPSystemCookieStoreTestDelegate() {
     // Using off the record browser state so it will use non-persistent
@@ -33,9 +29,13 @@ class API_AVAILABLE(ios(11.0)) WKHTTPSystemCookieStoreTestDelegate {
     browser_state_.SetOffTheRecord(true);
     web::WKWebViewConfigurationProvider& config_provider =
         web::WKWebViewConfigurationProvider::FromBrowserState(&browser_state_);
-    shared_store_ = config_provider.GetWebViewConfiguration()
-                        .websiteDataStore.httpCookieStore;
-    store_ = std::make_unique<web::WKHTTPSystemCookieStore>(&config_provider);
+    WKWebViewConfiguration* configuration =
+        config_provider.GetWebViewConfiguration();
+
+    cookie_store_ = [[CRWWKHTTPCookieStore alloc] init];
+    cookie_store_.websiteDataStore = configuration.websiteDataStore;
+    shared_store_ = configuration.websiteDataStore.httpCookieStore;
+    store_ = std::make_unique<web::WKHTTPSystemCookieStore>(cookie_store_);
   }
 
   bool IsCookieSet(NSHTTPCookie* system_cookie, NSURL* url) {
@@ -101,13 +101,12 @@ class API_AVAILABLE(ios(11.0)) WKHTTPSystemCookieStoreTestDelegate {
   web::WebTaskEnvironment task_environment_;
   web::FakeBrowserState browser_state_;
   WKHTTPCookieStore* shared_store_ = nil;
+  CRWWKHTTPCookieStore* cookie_store_ = nil;
   std::unique_ptr<web::WKHTTPSystemCookieStore> store_;
 };
 
-#if defined(__IPHONE_11_0) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_11_0)
 INSTANTIATE_TYPED_TEST_SUITE_P(WKHTTPSystemCookieStore,
                                SystemCookieStoreTest,
                                WKHTTPSystemCookieStoreTestDelegate);
-#endif
 
 }  // namespace net

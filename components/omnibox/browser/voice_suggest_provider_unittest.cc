@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,20 @@
 
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
-#include "components/omnibox/browser/autocomplete_provider_listener.h"
+#include "components/omnibox/browser/autocomplete_enums.h"
 #include "components/omnibox/browser/fake_autocomplete_provider_client.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-class VoiceSuggestProviderTest : public testing::Test,
-                                 public AutocompleteProviderListener {
+class VoiceSuggestProviderTest : public testing::Test {
  public:
   VoiceSuggestProviderTest() = default;
   VoiceSuggestProviderTest(const VoiceSuggestProviderTest&) = delete;
   VoiceSuggestProviderTest& operator=(const VoiceSuggestProviderTest&) = delete;
 
   void SetUp() override;
-  void TearDown() override;
 
  protected:
-  // AutocompleteProviderListener:
-  void OnProviderUpdate(bool updated_matches) override;
-
   base::test::TaskEnvironment environment_;
   FakeAutocompleteProviderClient client_;
   scoped_refptr<VoiceSuggestProvider> provider_;
@@ -34,17 +29,11 @@ class VoiceSuggestProviderTest : public testing::Test,
 };
 
 void VoiceSuggestProviderTest::SetUp() {
-  provider_ = base::MakeRefCounted<VoiceSuggestProvider>(&client_, this);
+  provider_ = base::MakeRefCounted<VoiceSuggestProvider>(&client_);
   input_ = std::make_unique<AutocompleteInput>(
       std::u16string(), metrics::OmniboxEventProto::OTHER,
       TestSchemeClassifier());
 }
-
-void VoiceSuggestProviderTest::TearDown() {
-  provider_->Stop(true, true);
-}
-
-void VoiceSuggestProviderTest::OnProviderUpdate(bool updated_matches) {}
 
 TEST_F(VoiceSuggestProviderTest, ServesNoSuggestionsByDefault) {
   provider_->Start(*input_, false);
@@ -81,7 +70,7 @@ TEST_F(VoiceSuggestProviderTest,
   provider_->AddVoiceSuggestion(u"Bob", 0.5f);
   provider_->AddVoiceSuggestion(u"Carol", 0.4f);
   provider_->Start(*input_, false);
-  provider_->Stop(true, false);
+  provider_->Stop(AutocompleteStopReason::kClobbered);
   provider_->Start(*input_, false);
 
   EXPECT_TRUE(provider_->matches().empty());

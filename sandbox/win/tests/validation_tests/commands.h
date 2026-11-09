@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <windows.h>
 
 #include <string>
+
+#include "sandbox/win/tests/common/controller.h"
 
 namespace sandbox {
 
@@ -42,6 +44,20 @@ int TestOpenAlternateDesktop(wchar_t *desktop_name);
 // Tries to enumerate desktops on the alternate windowstation.
 // Returns a SboxTestResult.
 int TestEnumAlternateWinsta();
+
+// Declare validation test commands.
+SBOX_TEST_DECLARE_COMMAND(ValidWindow);
+SBOX_TEST_DECLARE_COMMAND(OpenProcessCmd);
+SBOX_TEST_DECLARE_COMMAND(OpenThreadCmd);
+SBOX_TEST_DECLARE_COMMAND(OpenFileCmd);
+SBOX_TEST_DECLARE_COMMAND(OpenKey);
+SBOX_TEST_DECLARE_COMMAND(OpenInteractiveDesktop);
+SBOX_TEST_DECLARE_COMMAND(SwitchToSboxDesktop);
+SBOX_TEST_DECLARE_COMMAND(OpenAlternateDesktop);
+SBOX_TEST_DECLARE_COMMAND(EnumAlternateWinsta);
+SBOX_TEST_DECLARE_COMMAND(SleepCmd);
+SBOX_TEST_DECLARE_COMMAND(AllocateCmd);
+SBOX_TEST_DECLARE_COMMAND(InitCompleted);
 
 }  // namespace sandbox
 

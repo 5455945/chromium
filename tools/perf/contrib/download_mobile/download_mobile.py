@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -55,9 +55,11 @@ class DownloadMobile(perf_benchmark.PerfBenchmark):
   def SetExtraBrowserOptions(self, options):
     # Note that this overwrites the --proxy-bypass-list argument
     # set in chrome_startup_args.py.
-    options.AppendExtraBrowserArgs([
+    options.AppendExtraBrowserArgs(
+      [
         '--proxy-bypass-list=<-loopback>;storage.googleapis.com',
-    ])
+      ]
+    )
 
   @classmethod
   def Name(cls):

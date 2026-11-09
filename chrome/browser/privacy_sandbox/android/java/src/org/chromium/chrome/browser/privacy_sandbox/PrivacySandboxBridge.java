@@ -1,79 +1,65 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.privacy_sandbox;
 
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.profiles.Profile;
 
 /** Bridge, providing access to the native-side Privacy Sandbox configuration. */
+@NullMarked
 public class PrivacySandboxBridge {
-    public static boolean isPrivacySandboxSettingsFunctional() {
-        return PrivacySandboxBridgeJni.get().isPrivacySandboxSettingsFunctional();
+
+    private final Profile mProfile;
+
+    public PrivacySandboxBridge(Profile profile) {
+        mProfile = profile;
     }
 
-    public static boolean isPrivacySandboxEnabled() {
-        return PrivacySandboxBridgeJni.get().isPrivacySandboxEnabled();
+    public boolean isRelatedWebsiteSetsDataAccessEnabled() {
+        return PrivacySandboxBridgeJni.get().isRelatedWebsiteSetsDataAccessEnabled(mProfile);
     }
 
-    public static boolean isPrivacySandboxManaged() {
-        return PrivacySandboxBridgeJni.get().isPrivacySandboxManaged();
+    public boolean isRelatedWebsiteSetsDataAccessManaged() {
+        return PrivacySandboxBridgeJni.get().isRelatedWebsiteSetsDataAccessManaged(mProfile);
     }
 
-    public static void setPrivacySandboxEnabled(boolean enabled) {
-        PrivacySandboxBridgeJni.get().setPrivacySandboxEnabled(enabled);
+    public boolean isPartOfManagedRelatedWebsiteSet(String origin) {
+        return PrivacySandboxBridgeJni.get().isPartOfManagedRelatedWebsiteSet(mProfile, origin);
     }
 
-    public static boolean isFlocEnabled() {
-        return PrivacySandboxBridgeJni.get().isFlocEnabled();
+    public void setRelatedWebsiteSetsDataAccessEnabled(boolean enabled) {
+        PrivacySandboxBridgeJni.get().setRelatedWebsiteSetsDataAccessEnabled(mProfile, enabled);
     }
 
-    public static void setFlocEnabled(boolean enabled) {
-        PrivacySandboxBridgeJni.get().setFlocEnabled(enabled);
-    }
-
-    public static boolean isFlocIdResettable() {
-        return PrivacySandboxBridgeJni.get().isFlocIdResettable();
-    }
-
-    public static void resetFlocId() {
-        PrivacySandboxBridgeJni.get().resetFlocId();
-    }
-
-    public static String getFlocStatusString() {
-        return PrivacySandboxBridgeJni.get().getFlocStatusString();
-    }
-
-    public static String getFlocGroupString() {
-        return PrivacySandboxBridgeJni.get().getFlocGroupString();
-    }
-
-    public static String getFlocUpdateString() {
-        return PrivacySandboxBridgeJni.get().getFlocUpdateString();
-    }
-
-    public static String getFlocDescriptionString() {
-        return PrivacySandboxBridgeJni.get().getFlocDescriptionString();
-    }
-
-    public static String getFlocResetExplanationString() {
-        return PrivacySandboxBridgeJni.get().getFlocResetExplanationString();
+    /**
+     * Gets the Related Website Sets owner hostname given a RWS member origin.
+     *
+     * @param memberOrigin RWS member origin.
+     * @return A string containing the owner hostname, null if it doesn't exist.
+     */
+    public @Nullable String getRelatedWebsiteSetOwner(String memberOrigin) {
+        return PrivacySandboxBridgeJni.get().getRelatedWebsiteSetOwner(mProfile, memberOrigin);
     }
 
     @NativeMethods
-    interface Natives {
-        boolean isPrivacySandboxSettingsFunctional();
-        boolean isPrivacySandboxEnabled();
-        boolean isPrivacySandboxManaged();
-        void setPrivacySandboxEnabled(boolean enabled);
-        boolean isFlocEnabled();
-        void setFlocEnabled(boolean enabled);
-        boolean isFlocIdResettable();
-        void resetFlocId();
-        String getFlocStatusString();
-        String getFlocGroupString();
-        String getFlocUpdateString();
-        String getFlocDescriptionString();
-        String getFlocResetExplanationString();
+    public interface Natives {
+        boolean isRelatedWebsiteSetsDataAccessEnabled(@JniType("Profile*") Profile profile);
+
+        boolean isRelatedWebsiteSetsDataAccessManaged(@JniType("Profile*") Profile profile);
+
+        boolean isPartOfManagedRelatedWebsiteSet(
+                @JniType("Profile*") Profile profile, @JniType("std::string") String origin);
+
+        void setRelatedWebsiteSetsDataAccessEnabled(
+                @JniType("Profile*") Profile profile, boolean enabled);
+
+        @Nullable String getRelatedWebsiteSetOwner(
+                @JniType("Profile*") Profile profile, @JniType("std::string") String memberOrigin);
     }
 }

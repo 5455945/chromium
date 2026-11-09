@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -11,23 +11,32 @@
 
 #include <alsa/asoundlib.h>
 
-#include "base/macros.h"
+#include "base/containers/heap_array.h"
+#include "base/memory/free_deleter.h"
 #include "media/base/media_export.h"
 
 namespace media {
 
 class MEDIA_EXPORT AlsaWrapper {
  public:
+  using ScopedAlsaString = base::HeapArray<char, base::FreeDeleter>;
+
   AlsaWrapper();
+
+  AlsaWrapper(const AlsaWrapper&) = delete;
+  AlsaWrapper& operator=(const AlsaWrapper&) = delete;
+
   virtual ~AlsaWrapper();
 
   virtual int DeviceNameHint(int card, const char* iface, void*** hints);
-  virtual char* DeviceNameGetHint(const void* hint, const char* id);
+  virtual ScopedAlsaString DeviceNameGetHint(const void* hint, const char* id);
   virtual int DeviceNameFreeHint(void** hints);
   virtual int CardNext(int* rcard);
 
-  virtual int PcmOpen(snd_pcm_t** handle, const char* name,
-                      snd_pcm_stream_t stream, int mode);
+  virtual int PcmOpen(snd_pcm_t** handle,
+                      const char* name,
+                      snd_pcm_stream_t stream,
+                      int mode);
   virtual int PcmClose(snd_pcm_t* handle);
   virtual int PcmPrepare(snd_pcm_t* handle);
   virtual int PcmDrain(snd_pcm_t* handle);
@@ -41,11 +50,15 @@ class MEDIA_EXPORT AlsaWrapper {
                                      void* buffer,
                                      snd_pcm_uframes_t size);
   virtual int PcmRecover(snd_pcm_t* handle, int err, int silent);
-  virtual int PcmSetParams(snd_pcm_t* handle, snd_pcm_format_t format,
-                           snd_pcm_access_t access, unsigned int channels,
-                           unsigned int rate, int soft_resample,
+  virtual int PcmSetParams(snd_pcm_t* handle,
+                           snd_pcm_format_t format,
+                           snd_pcm_access_t access,
+                           unsigned int channels,
+                           unsigned int rate,
+                           int soft_resample,
                            unsigned int latency);
-  virtual int PcmGetParams(snd_pcm_t* handle, snd_pcm_uframes_t* buffer_size,
+  virtual int PcmGetParams(snd_pcm_t* handle,
+                           snd_pcm_uframes_t* buffer_size,
                            snd_pcm_uframes_t* period_size);
   virtual int PcmHwParamsMalloc(snd_pcm_hw_params_t** hw_params);
   virtual int PcmHwParamsAny(snd_pcm_t* handle, snd_pcm_hw_params_t* hw_params);
@@ -111,14 +124,15 @@ class MEDIA_EXPORT AlsaWrapper {
   virtual snd_mixer_elem_t* MixerFirstElem(snd_mixer_t* mixer);
   virtual snd_mixer_elem_t* MixerNextElem(snd_mixer_elem_t* elem);
   virtual int MixerSelemIsActive(snd_mixer_elem_t* elem);
-  virtual const char* MixerSelemName(snd_mixer_elem_t* elem);
+  virtual std::string_view MixerSelemName(snd_mixer_elem_t* elem);
   virtual int MixerSelemSetCaptureVolumeAll(snd_mixer_elem_t* elem, long value);
   virtual int MixerSelemGetCaptureVolume(snd_mixer_elem_t* elem,
                                          snd_mixer_selem_channel_id_t channel,
                                          long* value);
   virtual int MixerSelemHasCaptureVolume(snd_mixer_elem_t* elem);
   virtual int MixerSelemGetCaptureVolumeRange(snd_mixer_elem_t* elem,
-                                              long* min, long* max);
+                                              long* min,
+                                              long* max);
   virtual void* MixerElemGetCallbackPrivate(const snd_mixer_elem_t* obj);
   virtual void MixerElemSetCallback(snd_mixer_elem_t* obj,
                                     snd_mixer_elem_callback_t val);
@@ -139,12 +153,21 @@ class MEDIA_EXPORT AlsaWrapper {
   virtual int MixerSelemGetPlaybackVolumeRange(snd_mixer_elem_t* elem,
                                                long* min,
                                                long* max);
+  virtual int MixerSelemAskPlaybackVolDb(snd_mixer_elem_t* elem,
+                                         long value,
+                                         long* db_value);
+  virtual int MixerSelemAskPlaybackDbVol(snd_mixer_elem_t* elem,
+                                         long db_value,
+                                         long* value);
   virtual int MixerSelemHasPlaybackSwitch(snd_mixer_elem_t* elem);
+  virtual int MixerSelemHasPlaybackVolume(snd_mixer_elem_t* elem);
   virtual void MixerSelemIdSetIndex(snd_mixer_selem_id_t* obj,
                                     unsigned int val);
   virtual void MixerSelemIdSetName(snd_mixer_selem_id_t* obj, const char* val);
   virtual int MixerSelemSetPlaybackSwitch(snd_mixer_elem_t* elem,
                                           snd_mixer_selem_channel_id_t channel,
+                                          int value);
+  virtual int MixerSelemSetPlaybackSwitchAll(snd_mixer_elem_t* elem,
                                           int value);
   virtual int MixerSelemSetPlaybackVolumeAll(snd_mixer_elem_t* elem,
                                              long value);
@@ -152,8 +175,6 @@ class MEDIA_EXPORT AlsaWrapper {
   virtual void MixerSelemIdFree(snd_mixer_selem_id_t* obj);
 
   virtual const char* StrError(int errnum);
-
-  DISALLOW_COPY_AND_ASSIGN(AlsaWrapper);
 };
 
 }  // namespace media

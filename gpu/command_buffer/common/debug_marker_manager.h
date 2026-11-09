@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 #include <string>
 
 #include "base/containers/stack.h"
-#include "gpu/gpu_export.h"
+#include "gpu/command_buffer/common/gpu_command_buffer_common_export.h"
 
 namespace gpu {
 namespace gles2 {
 
 // Tracks debug marker.
-class GPU_EXPORT DebugMarkerManager {
+class GPU_COMMAND_BUFFER_COMMON_EXPORT DebugMarkerManager {
  public:
    DebugMarkerManager();
    ~DebugMarkerManager();

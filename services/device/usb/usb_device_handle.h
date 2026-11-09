@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,7 @@
 #include <map>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
 #include "services/device/usb/usb_descriptors.h"
@@ -36,6 +35,9 @@ class UsbDeviceHandle : public base::RefCountedThreadSafe<UsbDeviceHandle> {
   using IsochronousTransferCallback = base::OnceCallback<void(
       scoped_refptr<base::RefCountedBytes>,
       std::vector<mojom::UsbIsochronousPacketPtr> packets)>;
+
+  UsbDeviceHandle(const UsbDeviceHandle&) = delete;
+  UsbDeviceHandle& operator=(const UsbDeviceHandle&) = delete;
 
   virtual scoped_refptr<UsbDevice> GetDevice() const = 0;
 
@@ -95,6 +97,14 @@ class UsbDeviceHandle : public base::RefCountedThreadSafe<UsbDeviceHandle> {
   virtual const mojom::UsbInterfaceInfo* FindInterfaceByEndpoint(
       uint8_t endpoint_address) = 0;
 
+  // Sets whether this handle is permitted to detach kernel drivers marked as
+  // `unrestricted_only` in `UsbInterfaceDetachAllowlist` (true only when opened
+  // via `UsbDeviceManager::GetUnrestrictedDevice` by internal callers).
+  void set_allow_unrestricted_detach(bool allow) {
+    allow_unrestricted_detach_ = allow;
+  }
+  bool allow_unrestricted_detach() const { return allow_unrestricted_detach_; }
+
  protected:
   friend class base::RefCountedThreadSafe<UsbDeviceHandle>;
 
@@ -102,7 +112,7 @@ class UsbDeviceHandle : public base::RefCountedThreadSafe<UsbDeviceHandle> {
   virtual ~UsbDeviceHandle();
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(UsbDeviceHandle);
+  bool allow_unrestricted_detach_ = false;
 };
 
 }  // namespace device

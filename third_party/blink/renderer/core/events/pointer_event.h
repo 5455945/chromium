@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EVENTS_POINTER_EVENT_H_
 
 #include "third_party/blink/public/common/input/pointer_id.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
+class Document;
 class PointerEventInit;
 
 class CORE_EXPORT PointerEvent : public MouseEvent {
@@ -23,17 +25,21 @@ class CORE_EXPORT PointerEvent : public MouseEvent {
       base::TimeTicks platform_time_stamp = base::TimeTicks::Now(),
       MouseEvent::SyntheticEventType synthetic_event_type =
           kRealOrIndistinguishable,
-      WebMenuSourceType menu_source_type = kMenuSourceNone) {
+      ui::mojom::blink::MenuSourceType menu_source_type =
+          ui::mojom::blink::MenuSourceType::kNone,
+      bool prevent_counting_as_interaction = false) {
     return MakeGarbageCollected<PointerEvent>(
         type, initializer, platform_time_stamp, synthetic_event_type,
-        menu_source_type);
+        menu_source_type, prevent_counting_as_interaction);
   }
 
   PointerEvent(const AtomicString&,
                const PointerEventInit*,
                base::TimeTicks platform_time_stamp,
                MouseEvent::SyntheticEventType synthetic_event_type,
-               WebMenuSourceType menu_source_type = kMenuSourceNone);
+               ui::mojom::blink::MenuSourceType menu_source_type =
+                   ui::mojom::blink::MenuSourceType::kNone,
+               bool prevent_counting_as_interaction = false);
 
   PointerId pointerId() const { return pointer_id_; }
   PointerId pointerIdForBindings() const;
@@ -56,32 +62,32 @@ class CORE_EXPORT PointerEvent : public MouseEvent {
   double screenX() const override {
     if (ShouldHaveIntegerCoordinates())
       return MouseEvent::screenX();
-    return screen_location_.X();
+    return screen_x_;
   }
   double screenY() const override {
     if (ShouldHaveIntegerCoordinates())
       return MouseEvent::screenY();
-    return screen_location_.Y();
+    return screen_y_;
   }
   double clientX() const override {
     if (ShouldHaveIntegerCoordinates())
       return MouseEvent::clientX();
-    return client_location_.X();
+    return client_x_;
   }
   double clientY() const override {
     if (ShouldHaveIntegerCoordinates())
       return MouseEvent::clientY();
-    return client_location_.Y();
+    return client_y_;
   }
   double pageX() const override {
     if (ShouldHaveIntegerCoordinates())
       return MouseEvent::pageX();
-    return page_location_.X();
+    return page_x_;
   }
   double pageY() const override {
     if (ShouldHaveIntegerCoordinates())
       return MouseEvent::pageY();
-    return page_location_.Y();
+    return page_y_;
   }
 
   double offsetX() const override;
@@ -99,6 +105,14 @@ class CORE_EXPORT PointerEvent : public MouseEvent {
   base::TimeTicks OldestPlatformTimeStamp() const;
 
   DispatchEventResult DispatchEvent(EventDispatcher&) override;
+
+  Document* GetDocument() const;
+
+  int32_t persistentDeviceId() const { return persistent_device_id_; }
+
+  bool GetPreventCountingAsInteraction() const {
+    return prevent_counting_as_interaction_;
+  }
 
   void Trace(Visitor*) const override;
 
@@ -118,12 +132,14 @@ class CORE_EXPORT PointerEvent : public MouseEvent {
   String pointer_type_;
   bool is_primary_;
 
-  bool coalesced_events_targets_dirty_;
-  bool predicted_events_targets_dirty_;
-
   HeapVector<Member<PointerEvent>> coalesced_events_;
 
   HeapVector<Member<PointerEvent>> predicted_events_;
+
+  int32_t persistent_device_id_;
+
+  // See equivalent member in web_input_event.h.
+  bool prevent_counting_as_interaction_ = false;
 };
 
 template <>

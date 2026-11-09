@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,16 @@
 
 #include "base/test/bind.h"
 #include "base/timer/timer.h"
+#include "ui/compositor/compositor_metrics_tracker.h"
 #include "ui/compositor/test/draw_waiter_for_test.h"
-#include "ui/compositor/throughput_tracker.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/buildflags.h"
 #include "ui/views/test/widget_test.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 namespace {
-constexpr base::TimeDelta kDuration = base::TimeDelta::FromMilliseconds(100);
+constexpr base::TimeDelta kDuration = base::Milliseconds(100);
 }
 
 using CompositorAnimationRunnerTest = WidgetTest;
@@ -37,14 +36,20 @@ TEST_F(CompositorAnimationRunnerTest, BasicCoverageTest) {
   EXPECT_TRUE(delegate.container()->has_custom_animation_runner());
 
   interval_timer.Start(FROM_HERE, kDuration, base::BindLambdaForTesting([&]() {
-                         if (animation.is_animating())
+                         if (animation.is_animating()) {
                            return;
+                         }
 
                          interval_timer.Stop();
                          run_loop.Quit();
                        }));
 
   run_loop.Run();
+
+  // Verifies that AnimationDelegateViews carries location of call sites
+  // instead of implementation.
+  EXPECT_STREQ(base::Location::Current().file_name(),
+               delegate.location_for_test().file_name());
 }
 
 namespace {
@@ -67,8 +72,11 @@ class TestAnimationDelegateViews : public AnimationDelegateViews {
 
 }  // namespace
 
-// Tests that ui::ThroughputTracker will report for gfx::Animation.
-TEST_F(CompositorAnimationRunnerTest, ThroughputTracker) {
+#if BUILDFLAG(IS_CHROMEOS)
+// Tests that ui::CompositorMetricsTracker will report for gfx::Animation. Only
+// supported on ChromeOS.
+// TODO(crbug.com/470035500): Re-enable the tests after flakiness is fixed.
+TEST_F(CompositorAnimationRunnerTest, DISABLED_ThroughputTracker) {
   WidgetAutoclosePtr widget(CreateTopLevelPlatformWidget());
   widget->Show();
 
@@ -85,8 +93,8 @@ TEST_F(CompositorAnimationRunnerTest, ThroughputTracker) {
   base::RepeatingTimer interval_timer;
   base::RunLoop run_loop;
 
-  ui::ThroughputTracker tracker1 =
-      widget->GetCompositor()->RequestNewThroughputTracker();
+  ui::CompositorMetricsTracker tracker1 =
+      widget->GetCompositor()->RequestNewCompositorMetricsTracker();
   tracker1.Start(base::BindLambdaForTesting(
       [&](const cc::FrameSequenceMetrics::CustomReportData& data) {
         ++report_count;
@@ -98,8 +106,9 @@ TEST_F(CompositorAnimationRunnerTest, ThroughputTracker) {
   EXPECT_TRUE(delegate.container()->has_custom_animation_runner());
 
   interval_timer.Start(FROM_HERE, kDuration, base::BindLambdaForTesting([&]() {
-                         if (animation.is_animating())
+                         if (animation.is_animating()) {
                            return;
+                         }
 
                          interval_timer.Stop();
                          tracker1.Stop();
@@ -112,8 +121,8 @@ TEST_F(CompositorAnimationRunnerTest, ThroughputTracker) {
   // expected.
   base::RunLoop run_loop2;
 
-  ui::ThroughputTracker tracker2 =
-      widget->GetCompositor()->RequestNewThroughputTracker();
+  ui::CompositorMetricsTracker tracker2 =
+      widget->GetCompositor()->RequestNewCompositorMetricsTracker();
   tracker2.Start(base::BindLambdaForTesting(
       [&](const cc::FrameSequenceMetrics::CustomReportData& data) {
         ++report_count2;
@@ -124,8 +133,9 @@ TEST_F(CompositorAnimationRunnerTest, ThroughputTracker) {
   EXPECT_TRUE(animation.is_animating());
 
   interval_timer.Start(FROM_HERE, kDuration, base::BindLambdaForTesting([&]() {
-                         if (animation.is_animating())
+                         if (animation.is_animating()) {
                            return;
+                         }
 
                          interval_timer.Stop();
                          tracker2.Stop();
@@ -134,6 +144,7 @@ TEST_F(CompositorAnimationRunnerTest, ThroughputTracker) {
   EXPECT_EQ(1, report_count);
   EXPECT_EQ(1, report_count2);
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // No DesktopAura on ChromeOS.
 // Each widget on MACOSX has its own ui::Compositor.
@@ -164,8 +175,9 @@ TEST_F(CompositorAnimationRunnerDesktopTest, SwitchCompositor) {
     base::RunLoop run_loop;
     interval_timer.Start(FROM_HERE, kDuration,
                          base::BindLambdaForTesting([&]() {
-                           if (animation.is_animating())
+                           if (animation.is_animating()) {
                              return;
+                           }
                            interval_timer.Stop();
                            run_loop.Quit();
                          }));
@@ -185,8 +197,9 @@ TEST_F(CompositorAnimationRunnerDesktopTest, SwitchCompositor) {
     base::RunLoop run_loop;
     interval_timer.Start(FROM_HERE, kDuration,
                          base::BindLambdaForTesting([&]() {
-                           if (animation.is_animating())
+                           if (animation.is_animating()) {
                              return;
+                           }
 
                            interval_timer.Stop();
                            run_loop.Quit();
@@ -197,5 +210,4 @@ TEST_F(CompositorAnimationRunnerDesktopTest, SwitchCompositor) {
 }
 #endif
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test

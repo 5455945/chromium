@@ -1,22 +1,35 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_BROWSER_CONTENT_SETTING_BUBBLE_MODEL_DELEGATE_H_
 #define CHROME_BROWSER_UI_BROWSER_CONTENT_SETTING_BUBBLE_MODEL_DELEGATE_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model_delegate.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 // Implementation of ContentSettingBubbleModelDelegate which uses an instance of
 // Browser in order to fulfil its duties.
 class BrowserContentSettingBubbleModelDelegate
     : public ContentSettingBubbleModelDelegate {
  public:
-  explicit BrowserContentSettingBubbleModelDelegate(Browser* browser);
+  DECLARE_USER_DATA(BrowserContentSettingBubbleModelDelegate);
+
+  explicit BrowserContentSettingBubbleModelDelegate(
+      BrowserWindowInterface* browser);
+
+  // Returns the delegate for `browser`, or null if it does not have one.
+  static BrowserContentSettingBubbleModelDelegate* From(
+      BrowserWindowInterface* browser);
+
+  BrowserContentSettingBubbleModelDelegate(
+      const BrowserContentSettingBubbleModelDelegate&) = delete;
+  BrowserContentSettingBubbleModelDelegate& operator=(
+      const BrowserContentSettingBubbleModelDelegate&) = delete;
+
   ~BrowserContentSettingBubbleModelDelegate() override;
 
   // ContentSettingBubbleModelDelegate implementation:
@@ -26,9 +39,10 @@ class BrowserContentSettingBubbleModelDelegate
   void ShowLearnMorePage(ContentSettingsType type) override;
 
  private:
-  Browser* const browser_;
+  ui::ScopedUnownedUserData<BrowserContentSettingBubbleModelDelegate>
+      scoped_unowned_user_data_;
 
-  DISALLOW_COPY_AND_ASSIGN(BrowserContentSettingBubbleModelDelegate);
+  const raw_ref<BrowserWindowInterface> browser_;
 };
 
 #endif  // CHROME_BROWSER_UI_BROWSER_CONTENT_SETTING_BUBBLE_MODEL_DELEGATE_H_

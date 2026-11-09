@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,17 +10,6 @@ import json
 import sys
 import os
 import urllib.parse
-
-SOURCE_ROOT = os.path.join(os.path.dirname(
-    os.path.abspath(__file__)), os.pardir, os.pardir)
-
-# Manually inject dependency paths.
-sys.path.insert(0, os.path.join(
-    SOURCE_ROOT, "third_party", "protobuf", "third_party", "six"))
-sys.path.insert(0, os.path.join(
-    SOURCE_ROOT, "third_party", "protobuf", "python"))
-
-import media_engagement_preload_pb2
 
 """
 A Deterministic acyclic finite state automaton (DAFSA) is a compact
@@ -228,6 +217,7 @@ def to_dafsa(words):
   """
   if not words:
     raise InputError('The origin list must not be empty')
+
   def ToNodes(word):
     """Split words into characters"""
     if not 0x1F < ord(word[0]) < 0x80:
@@ -235,6 +225,7 @@ def to_dafsa(words):
     if len(word) == 1:
       return chr(ord(word[0]) & 0x0F), [None]
     return word[0], [ToNodes(word[1:])]
+
   return [ToNodes(word) for word in words]
 
 
@@ -276,8 +267,8 @@ def join_labels(dafsa):
   """Generates a new DAFSA where internal nodes are merged if there is a one to
   one connection.
   """
-  parentcount = { id(None): 2 }
-  nodemap = { id(None): None }
+  parentcount = {id(None): 2}
+  nodemap = {id(None): None}
 
   def count_parents(node):
     """Count incoming references"""
@@ -308,7 +299,7 @@ def join_suffixes(dafsa):
   """Generates a new DAFSA where nodes that represent the same word lists
   towards the sink are merged.
   """
-  nodemap = { frozenset(('',)): None }
+  nodemap = {frozenset(('',)): None}
 
   def join(node):
     """Returns a macthing node. A new node is created if no matching node
@@ -365,7 +356,7 @@ def encode_links(children, offsets, current):
     return []
   guess = 3 * len(children)
   assert children
-  children = sorted(children, key = lambda x: -offsets[id(x)])
+  children = sorted(children, key=lambda x: -offsets[id(x)])
   while True:
     offset = current + guess
     buf = []
@@ -393,7 +384,7 @@ def encode_links(children, offsets, current):
       break
     guess = len(buf)
   # Set most significant bit to mark end of links in this node.
-  buf[last] |= (1 << 7)
+  buf[last] |= 1 << 7
   buf.reverse()
   return buf
 
@@ -410,11 +401,10 @@ def encode_prefix(label):
 
 
 def encode_label(label):
-  """Encodes a node label as a list of bytes with a trailing high byte >0x80.
-  """
+  """Encodes a node label as a list of bytes with a trailing high byte >0x80."""
   buf = encode_prefix(label)
   # Set most significant bit to mark end of label in this node.
-  buf[0] |= (1 << 7)
+  buf[0] |= 1 << 7
   return buf
 
 
@@ -424,8 +414,11 @@ def encode(dafsa):
   offsets = {}
 
   for node in reversed(top_sort(dafsa)):
-    if (len(node[1]) == 1 and node[1][0] and
-        (offsets[id(node[1][0])] == len(output))):
+    if (
+      len(node[1]) == 1
+      and node[1][0]
+      and (offsets[id(node[1][0])] == len(output))
+    ):
       output.extend(encode_prefix(node[0]))
     else:
       output.extend(encode_links(node[1], offsets, len(output)))
@@ -434,22 +427,15 @@ def encode(dafsa):
 
   output.extend(encode_links(dafsa, offsets, len(output)))
   output.reverse()
-  return output
+  return bytes(output)
 
 
-def to_proto(data):
-  """Generates protobuf from a list of encoded bytes."""
-  message = media_engagement_preload_pb2.PreloadedData()
-  message.dafsa = array.array('B', data).tobytes()
-  return message.SerializeToString()
-
-
-def words_to_proto(words):
-  """Generates protobuf from a word list"""
+def words_to_encoded_dafsa(words):
+  """Generates an encoded DAFSA from a word list"""
   dafsa = to_dafsa(words)
   for fun in (reverse, join_suffixes, reverse, join_suffixes, join_labels):
     dafsa = fun(dafsa)
-  return to_proto(encode(dafsa))
+  return encode(dafsa)
 
 
 def parse_json(infile):
@@ -466,8 +452,9 @@ def parse_json(infile):
       # only. The HTTP+HTTPS value is numerically higher than HTTPS only so it
       # will take priority.
       netlocs[parsed.netloc] = max(
-          netlocs.get(parsed.netloc, HTTPS_ONLY),
-          HTTP_AND_HTTPS if parsed.scheme == 'http' else HTTPS_ONLY)
+        netlocs.get(parsed.netloc, HTTPS_ONLY),
+        HTTP_AND_HTTPS if parsed.scheme == 'http' else HTTPS_ONLY,
+      )
 
     # Join the numerical values to the netlocs.
     output = []
@@ -477,12 +464,23 @@ def parse_json(infile):
   except ValueError:
     raise InputError('Failed to parse JSON.')
 
+
 def main():
-  if len(sys.argv) != 3:
-    print('usage: %s infile outfile' % sys.argv[0])
+  if len(sys.argv) != 4:
+    print('usage: %s builddir infile outfile' % sys.argv[0])
     return 1
-  with open(sys.argv[1], 'r') as infile, open(sys.argv[2], 'wb') as outfile:
-    outfile.write(words_to_proto(parse_json(infile.read())))
+
+  pyproto = os.path.join(sys.argv[1], 'pyproto')
+  sys.path.insert(0, pyproto)
+  sys.path.insert(0, os.path.join(pyproto, 'chrome', 'browser', 'media'))
+  import media_engagement_preload_pb2
+
+  with open(sys.argv[2], 'r') as infile, open(sys.argv[3], 'wb') as outfile:
+    dafsa = words_to_encoded_dafsa(parse_json(infile.read()))
+
+    message = media_engagement_preload_pb2.PreloadedData()
+    message.dafsa = dafsa
+    outfile.write(message.SerializeToString())
   return 0
 
 

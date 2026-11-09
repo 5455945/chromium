@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,12 @@
 #include "base/types/strong_alias.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
+#if BUILDFLAG(IS_LINUX)
 namespace base {
 class Environment;
 }
+#endif  // BUILDFLAG(IS_LINUX)
 
 namespace version_info {
 enum class Channel;
@@ -44,11 +45,10 @@ std::string GetVersionString(WithExtendedStable with_extended_stable);
 // effect on Chrome OS Ash or Android due to lack of support for extended stable
 // on those configurations.
 //
-// On Windows, the channel name may be modified with additional information
-// after a hyphen (e.g., "canary-dcheck"). In branded builds, when the channel
-// cannot be determined, "unknown" will be returned. In unbranded builds, the
-// modifier is usually an empty string (""), although on Linux, it may vary in
-// certain distributions. To simply test the channel, use GetChannel().
+// In branded builds, when the channel cannot be determined, "unknown" will be
+// returned. In unbranded builds, the modifier is usually an empty string (""),
+// although on Linux, it may vary in certain distributions. To simply test the
+// channel, use GetChannel().
 std::string GetChannelName(WithExtendedStable with_extended_stable);
 
 // Returns the channel for the installation. In branded builds, this will be
@@ -63,7 +63,7 @@ version_info::Channel GetChannel();
 // lack of support for extended stable on those configurations.
 bool IsExtendedStableChannel();
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Because the channel information on the Mac is baked into the Info.plist file,
 // and that file may change during an update, this function must be called
 // early in startup to cache the channel info so that the correct channel info
@@ -90,22 +90,22 @@ bool IsSideBySideCapable();
 void SetChannelIdForTesting(const std::string& channel_id);
 void ClearChannelIdForTesting();
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
-#if defined(OS_POSIX) && !defined(OS_MAC)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
 // Returns a channel-specific suffix to use when constructing the path of the
 // default user data directory, allowing multiple channels to run side-by-side.
 // In the stable channel and in unbranded builds, this returns the empty string.
 std::string GetChannelSuffixForDataDir();
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
+std::string GetChannelSuffixForExtraFlagsEnvVarName();
+
 // Returns the channel-specific filename of the desktop shortcut used to launch
 // the browser.
 std::string GetDesktopName(base::Environment* env);
-#endif
+#endif  // BUILDFLAG(IS_LINUX)
 
 }  // namespace chrome
 

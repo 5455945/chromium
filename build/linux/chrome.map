@@ -22,6 +22,7 @@ global:
 
   # Memory allocation symbols.  We want chrome and any libraries to
   # share the same heap, so it is correct to export these symbols.
+  aligned_alloc;
   calloc;
   cfree;
   free;
@@ -49,6 +50,26 @@ global:
   realloc;
   __realloc_hook;
   valloc;
+
+  # Symbols for malloc and operator new introduced by the AllocToken feature.
+  # go/keep-sorted start
+  __alloc_token__Znam;
+  __alloc_token__ZnamRKSt9nothrow_t;
+  __alloc_token__ZnamSt11align_val_t;
+  __alloc_token__ZnamSt11align_val_tRKSt9nothrow_t;
+  __alloc_token__Znwm;
+  __alloc_token__ZnwmRKSt9nothrow_t;
+  __alloc_token__ZnwmSt11align_val_t;
+  __alloc_token__ZnwmSt11align_val_tRKSt9nothrow_t;
+  __alloc_token_aligned_alloc;
+  __alloc_token_calloc;
+  __alloc_token_malloc;
+  __alloc_token_memalign;
+  __alloc_token_posix_memalign;
+  __alloc_token_pvalloc;
+  __alloc_token_realloc;
+  __alloc_token_valloc;
+  # go/keep-sorted end
 
   # Various flavors of operator new and operator delete.
   _ZdaPv;
@@ -81,6 +102,13 @@ global:
   localtime64;
   localtime64_r;
   localtime_r;
+
+  # getaddrinfo() is exported by the sandbox to ensure the network service and
+  # other sandboxed processes don't try to run system DNS resolution
+  # in-process, which is not supported by the sandbox. This override
+  # uses dlsym(getaddrinfo) to make the real calls in unsandboxed
+  # processes.
+  getaddrinfo;
 
   v8dbg_*;
 

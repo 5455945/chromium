@@ -1,13 +1,11 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-'''Supports making amessage from a text file.
-'''
-
-from __future__ import print_function
+'''Supports making amessage from a text file.'''
 
 from grit.gather import interface
+from grit import constants
 from grit import tclib
 
 
@@ -31,8 +29,16 @@ class TxtFile(interface.GathererBase):
     '''Returns the MessageClique objects for all translateable portions.'''
     return [self.clique_]
 
-  def Translate(self, lang, pseudo_if_not_available=True,
-                skeleton_gatherer=None, fallback_to_english=False):
-    return self.clique_.MessageForLanguage(lang,
-                                           pseudo_if_not_available,
-                                           fallback_to_english).GetRealContent()
+  def Translate(
+    self,
+    lang,
+    pseudo_if_not_available=True,
+    skeleton_gatherer=None,
+    fallback_to_english=False,
+  ):
+    return self.clique_.MessageForLanguageAndGender(
+      lang,
+      constants.DEFAULT_GENDER,
+      pseudo_if_not_available,
+      fallback_to_english,
+    ).GetRealContent()

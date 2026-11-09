@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/web_contents_media_capture_id.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 
@@ -20,15 +20,23 @@ namespace content {
 struct CONTENT_EXPORT DesktopMediaID {
  public:
   enum Type { TYPE_NONE, TYPE_SCREEN, TYPE_WINDOW, TYPE_WEB_CONTENTS };
+  enum class AudioType { kNone, kSystem, kApplication };
 
-  typedef intptr_t Id;
+  // Explicitly defines the provenance of the |id| field.
+  enum class IdType {
+    kPlatformNative,       // ID is a direct platform handle (e.g., CGWindowID).
+    kNativePickerSession,  // ID is an opaque handle for a native picker
+                           // session.
+  };
+
+  using Id = intptr_t;
 
   // Represents an "unset" value for either |id| or |window_id|.
   static constexpr Id kNullId = 0;
   // Represents a fake id to create a dummy capturer for autotests.
   static constexpr Id kFakeId = -3;
 
-#if defined(USE_AURA) || defined(OS_MAC)
+#if defined(USE_AURA) || BUILDFLAG(IS_MAC)
   // Assigns integer identifier to the |window| and returns its DesktopMediaID.
   static DesktopMediaID RegisterNativeWindow(Type type,
                                              gfx::NativeWindow window);
@@ -36,7 +44,7 @@ struct CONTENT_EXPORT DesktopMediaID {
   // Returns the Window that was previously registered using
   // RegisterNativeWindow(), else nullptr.
   static gfx::NativeWindow GetNativeWindowById(const DesktopMediaID& id);
-#endif  // USE_AURA || OS_MAC
+#endif  // defined(USE_AURA) || BUILDFLAG(IS_MAC)
 
   constexpr DesktopMediaID() = default;
 
@@ -51,9 +59,10 @@ struct CONTENT_EXPORT DesktopMediaID {
       : type(type), id(id), audio_share(audio_share) {}
 
   // Operators so that DesktopMediaID can be used with STL containers.
-  bool operator<(const DesktopMediaID& other) const;
-  bool operator==(const DesktopMediaID& other) const;
-  bool operator!=(const DesktopMediaID& other) const;
+  friend bool operator==(const DesktopMediaID&,
+                         const DesktopMediaID&) = default;
+  friend auto operator<=>(const DesktopMediaID&,
+                          const DesktopMediaID&) = default;
 
   bool is_null() const { return type == TYPE_NONE; }
   std::string ToString() const;
@@ -67,14 +76,17 @@ struct CONTENT_EXPORT DesktopMediaID {
   // it possible for both of these to be non-null, which means both IDs are
   // referring to the same logical window.
   Id id = kNullId;
-  // TODO(miu): Make this an int, after clean-up for http://crbug.com/513490.
   Id window_id = kNullId;
 
-  // This records whether the desktop share has sound or not.
-  bool audio_share = false;
+  IdType id_type = IdType::kPlatformNative;
 
   // This id contains information for WebContents capture.
   WebContentsMediaCaptureId web_contents_id;
+
+  // This records whether the desktop share has sound or not.
+  bool audio_share = false;
+  // This records the type of audio share, if any.
+  AudioType window_audio_type = AudioType::kNone;
 };
 
 }  // namespace content

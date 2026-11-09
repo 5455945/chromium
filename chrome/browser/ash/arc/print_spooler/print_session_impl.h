@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,14 @@
 #include <memory>
 
 #include "base/containers/flat_map.h"
+#include "base/files/file_path.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
-#include "chrome/browser/ui/ash/arc_custom_tab_modal_dialog_host.h"
 #include "chrome/services/printing/public/mojom/pdf_flattener.mojom.h"
-#include "components/arc/mojom/print_spooler.mojom.h"
+#include "chromeos/ash/experiences/arc/custom_tab/arc_custom_tab_modal_dialog_host.h"
+#include "chromeos/ash/experiences/arc/mojom/print_spooler.mojom.h"
 #include "components/printing/common/print.mojom.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -22,7 +23,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/system/platform_handle.h"
+#include "mojo/public/cpp/platform/platform_handle.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 
@@ -43,7 +44,8 @@ class PrintSessionImpl : public mojom::PrintSessionHost,
   static mojo::PendingRemote<mojom::PrintSessionHost> Create(
       std::unique_ptr<content::WebContents> web_contents,
       aura::Window* arc_window,
-      mojo::PendingRemote<mojom::PrintSessionInstance> instance);
+      mojo::PendingRemote<mojom::PrintSessionInstance> instance,
+      base::FilePath document_path);
 
   PrintSessionImpl(const PrintSessionImpl&) = delete;
   PrintSessionImpl& operator=(const PrintSessionImpl&) = delete;
@@ -59,11 +61,12 @@ class PrintSessionImpl : public mojom::PrintSessionHost,
   PrintSessionImpl(std::unique_ptr<content::WebContents> web_contents,
                    aura::Window* arc_window,
                    mojo::PendingRemote<mojom::PrintSessionInstance> instance,
-                   mojo::PendingReceiver<mojom::PrintSessionHost> receiver);
+                   mojo::PendingReceiver<mojom::PrintSessionHost> receiver,
+                   base::FilePath document_path);
   friend class content::WebContentsUserData<PrintSessionImpl>;
 
   // printing::mojom::PrintRenderer:
-  void CreatePreviewDocument(base::Value job_settings,
+  void CreatePreviewDocument(base::DictValue job_settings,
                              CreatePreviewDocumentCallback callback) override;
 
   // Called once the preview document has been created by ARC. The preview
@@ -71,7 +74,7 @@ class PrintSessionImpl : public mojom::PrintSessionHost,
   // PrintRenderer.
   void OnPreviewDocumentCreated(int request_id,
                                 CreatePreviewDocumentCallback callback,
-                                mojo::ScopedHandle preview_document,
+                                mojo::PlatformHandle preview_document,
                                 int64_t data_size);
 
   // Called once the preview document from ARC has been read. The preview
@@ -81,9 +84,8 @@ class PrintSessionImpl : public mojom::PrintSessionHost,
       CreatePreviewDocumentCallback callback,
       base::ReadOnlySharedMemoryRegion preview_document_region);
 
-  void OnPdfFlattened(
-      int request_id,
-      base::ReadOnlySharedMemoryRegion flattened_document_region);
+  void OnPdfFlattened(int request_id,
+                      printing::mojom::FlattenPdfResultPtr result);
 
   void OnPdfFlattenerDisconnected();
 
@@ -117,6 +119,9 @@ class PrintSessionImpl : public mojom::PrintSessionHost,
 
   // Web contents for the ARC custom tab.
   std::unique_ptr<content::WebContents> web_contents_;
+
+  // Path to the temporary document displayed in the ARC custom tab.
+  const base::FilePath document_path_;
 
   // Observes the ARC window.
   base::ScopedObservation<aura::Window, aura::WindowObserver>

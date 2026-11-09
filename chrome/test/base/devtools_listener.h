@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 #define CHROME_TEST_BASE_DEVTOOLS_LISTENER_H_
 
 #include <map>
-#include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
+#include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client.h"
@@ -61,12 +62,18 @@ class DevToolsListener : public content::DevToolsAgentHostClient {
   void StoreScripts(content::DevToolsAgentHost* host,
                     const base::FilePath& store);
 
+  // Retrieves scripts that are in the coverage info but were not collected via
+  // the `Debugger.scriptParsed` event.
+  void RetrieveMissingScripts(content::DevToolsAgentHost* host,
+                              const base::ListValue* coverage_entries);
+
   // Sends CDP commands to host.
   void SendCommandMessage(content::DevToolsAgentHost* host,
                           const std::string& command);
 
-  // Awaits CDP response to command |id|.
-  void AwaitCommandResponse(int id);
+  // Awaits CDP response to command `id` and returns false if the host was
+  // closed whilst waiting, true otherwise.
+  bool AwaitCommandResponse(int id);
 
   // Receives CDP messages from host.
   void DispatchProtocolMessage(content::DevToolsAgentHost* host,
@@ -78,19 +85,20 @@ class DevToolsListener : public content::DevToolsAgentHostClient {
   // Called if host was shut down (closed).
   void AgentHostClosed(content::DevToolsAgentHost* host) override;
 
- private:
-  std::vector<std::unique_ptr<base::DictionaryValue>> script_;
-  std::unique_ptr<base::DictionaryValue> script_coverage_;
-  std::map<std::string, std::string> script_hash_map_;
+  std::vector<base::DictValue> scripts_;
+  base::DictValue script_coverage_;
+  std::set<std::string> script_hash_set_;
   std::map<std::string, std::string> script_id_map_;
 
   base::OnceClosure value_closure_;
-  std::unique_ptr<base::DictionaryValue> value_;
+  base::DictValue value_;
   int value_id_ = 0;
 
   const std::string uuid_;
   bool navigated_ = false;
   bool attached_ = true;
+
+  base::WeakPtrFactory<DevToolsListener> weak_ptr_factory_{this};
 };
 
 }  // namespace coverage

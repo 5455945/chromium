@@ -1,17 +1,39 @@
 rootWebArea
-++genericContainer
-++++video name='Unable to play media.' restriction=disabled
-++++++genericContainer
-++++++++genericContainer
-++++++++genericContainer
+++genericContainer ignored
+++++genericContainer
+++++++video name='Unable to play media.' restriction=disabled
+++++++++genericContainer ignored
+++++++++++group ignored invisible
 ++++++++++genericContainer
-++++++++++++button name='play' restriction=disabled
-++++++++++++genericContainer name='elapsed time: 0:00'
-++++++++++++++staticText name='0:00'
-++++++++++++++++inlineTextBox name='0:00'
-++++++++++++genericContainer
+++++++++++++button ignored invisible
+++++++++++genericContainer ignored
+++++++++++++genericContainer ignored
+++++++++++++++genericContainer ignored invisible
 ++++++++++++++genericContainer
-++++++++++++++button name='mute' restriction=disabled
-++++++++++++button name='enter full screen' restriction=disabled
-++++++++++++button description='more options' name='show more media controls' descriptionFrom=attribute restriction=disabled
-++++++++++slider horizontal description='video time scrubber' value='0:00' descriptionFrom=uninitialized restriction=disabled valueForRange=0.00 minValueForRange=0.00 maxValueForRange=0.00
+++++++++++++++++button name='play' restriction=disabled
+++++++++++++++++++genericContainer
+++++++++++++++++genericContainer ignored
+++++++++++++++++genericContainer
+++++++++++++++++++genericContainer
+++++++++++++++++++slider ignored invisible
+++++++++++++++++++button name='mute' restriction=disabled
+++++++++++++++++button name='enter full screen' restriction=disabled
+++++++++++++++++++genericContainer
+++++++++++++++++popUpButton description='more options' name='show more media controls' descriptionFrom=title restriction=disabled
+++++++++++++++++++genericContainer
+++++++++++++++slider horizontal description='total time: 0:00' name='video time scrubber' value='0' ariaValueText='elapsed time: 0:00' descriptionFrom=ariaDescription restriction=disabled valueForRange=0.00 minValueForRange=0.00 maxValueForRange=100.00
+++++++++++menu ignored invisible
+++++++++++menu ignored invisible
+++++++++++menu ignored invisible
+++++++++++menu ignored invisible
+++++++++++menu ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible
+++++++++++++menuItem ignored invisible

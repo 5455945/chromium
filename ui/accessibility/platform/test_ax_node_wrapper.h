@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,17 @@
 #include <vector>
 
 #include "base/auto_reset.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_tree.h"
+#include "ui/accessibility/ax_tree_observer.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
-#include "ui/accessibility/platform/ax_platform_node_delegate_base.h"
+#include "ui/accessibility/platform/ax_platform_node_delegate.h"
+#include "ui/accessibility/platform/ax_unique_id.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 namespace gfx {
 const AcceleratedWidget kMockAcceleratedWidget = reinterpret_cast<HWND>(-1);
 }
@@ -26,7 +30,9 @@ namespace ui {
 
 // For testing, a TestAXNodeWrapper wraps an AXNode, implements
 // AXPlatformNodeDelegate, and owns an AXPlatformNode.
-class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
+// TODO(crbug.com/374813016): Refactor global variables into class members in
+// ui/accessibility/platform/test_ax_node_wrapper.h
+class TestAXNodeWrapper : public AXPlatformNodeDelegate, public AXTreeObserver {
  public:
   // Create TestAXNodeWrapper instances on-demand from an AXTree and AXNode.
   static TestAXNodeWrapper* GetOrCreate(AXTree* tree, AXNode* node);
@@ -60,7 +66,7 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
 
   ~TestAXNodeWrapper() override;
 
-  AXPlatformNode* ax_platform_node() const { return platform_node_; }
+  AXPlatformNode* ax_platform_node() const { return platform_node_.get(); }
   void set_minimized(bool minimized) { minimized_ = minimized; }
 
   // Test helpers.
@@ -70,7 +76,7 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
   // AXPlatformNodeDelegate.
   const AXNodeData& GetData() const override;
   const AXTreeData& GetTreeData() const override;
-  const AXTree::Selection GetUnignoredSelection() const override;
+  const AXSelection GetUnignoredSelection() const override;
   AXNodePosition::AXPositionInstance CreatePositionAt(
       int offset,
       ax::mojom::TextAffinity affinity =
@@ -80,9 +86,9 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
       ax::mojom::TextAffinity affinity =
           ax::mojom::TextAffinity::kDownstream) const override;
   gfx::NativeViewAccessible GetNativeViewAccessible() override;
-  gfx::NativeViewAccessible GetParent() override;
-  int GetChildCount() const override;
-  gfx::NativeViewAccessible ChildAtIndex(int index) override;
+  gfx::NativeViewAccessible GetParent() const override;
+  size_t GetChildCount() const override;
+  gfx::NativeViewAccessible ChildAtIndex(size_t index) const override;
   gfx::Rect GetBoundsRect(const AXCoordinateSystem coordinate_system,
                           const AXClippingBehavior clipping_behavior,
                           AXOffscreenResult* offscreen_result) const override;
@@ -104,36 +110,36 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
   gfx::NativeViewAccessible GetFocus() const override;
   bool IsMinimized() const override;
   bool IsWebContent() const override;
+  bool IsReadOnlySupported() const override;
+  bool IsReadOnlyOrDisabled() const override;
   AXPlatformNode* GetFromNodeID(int32_t id) override;
-  AXPlatformNode* GetFromTreeIDAndNodeID(const ui::AXTreeID& ax_tree_id,
+  AXPlatformNode* GetFromTreeIDAndNodeID(const AXTreeID& ax_tree_id,
                                          int32_t id) override;
-  int GetIndexInParent() override;
-  bool IsTable() const override;
-  absl::optional<int> GetTableRowCount() const override;
-  absl::optional<int> GetTableColCount() const override;
-  absl::optional<int> GetTableAriaColCount() const override;
-  absl::optional<int> GetTableAriaRowCount() const override;
-  absl::optional<int> GetTableCellCount() const override;
-  absl::optional<bool> GetTableHasColumnOrRowHeaderNode() const override;
+  std::optional<size_t> GetIndexInParent() const override;
+  std::optional<int> GetTableDomRowCount() const override;
+  std::optional<int> GetTableDomColCount() const override;
+  std::optional<int> GetTableAriaColCount() const override;
+  std::optional<int> GetTableAriaRowCount() const override;
+  std::optional<int> GetTableCellCount() const override;
   std::vector<int32_t> GetColHeaderNodeIds() const override;
   std::vector<int32_t> GetColHeaderNodeIds(int col_index) const override;
   std::vector<int32_t> GetRowHeaderNodeIds() const override;
   std::vector<int32_t> GetRowHeaderNodeIds(int row_index) const override;
   bool IsTableRow() const override;
-  absl::optional<int> GetTableRowRowIndex() const override;
+  std::optional<int> GetTableRowRowIndex() const override;
   bool IsTableCellOrHeader() const override;
-  absl::optional<int> GetTableCellIndex() const override;
-  absl::optional<int> GetTableCellColIndex() const override;
-  absl::optional<int> GetTableCellRowIndex() const override;
-  absl::optional<int> GetTableCellColSpan() const override;
-  absl::optional<int> GetTableCellRowSpan() const override;
-  absl::optional<int> GetTableCellAriaColIndex() const override;
-  absl::optional<int> GetTableCellAriaRowIndex() const override;
-  absl::optional<int32_t> GetCellId(int row_index,
-                                    int col_index) const override;
-  absl::optional<int32_t> CellIndexToId(int cell_index) const override;
-  bool IsCellOrHeaderOfARIATable() const override;
-  bool IsCellOrHeaderOfARIAGrid() const override;
+  std::optional<int> GetTableCellIndex() const override;
+  std::optional<int> GetTableCellDomColIndex() const override;
+  std::optional<int> GetTableCellDomRowIndex() const override;
+  std::optional<int> GetTableCellDomColSpan() const override;
+  std::optional<int> GetTableCellDomRowSpan() const override;
+  std::optional<int> GetTableCellAriaColIndex() const override;
+  std::optional<int> GetTableCellAriaRowIndex() const override;
+  std::optional<int32_t> GetCellId(int row_index, int col_index) const override;
+  std::optional<int32_t> GetCellIdAriaCoords(int aria_row_index,
+                                             int aria_col_index) const override;
+  std::optional<int32_t> CellIndexToId(int cell_index) const override;
+  bool IsCellOrHeaderOfAriaGrid() const override;
   gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
   bool AccessibilityPerformAction(const AXActionData& data) override;
   std::u16string GetLocalizedRoleDescriptionForUnlabeledImage() const override;
@@ -143,24 +149,25 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
       ax::mojom::ImageAnnotationStatus status) const override;
   std::u16string GetStyleNameAttributeAsLocalizedString() const override;
   bool ShouldIgnoreHoveredStateForTesting() override;
-  const ui::AXUniqueId& GetUniqueId() const override;
+  AXPlatformNodeId GetUniqueId() const override;
   bool HasVisibleCaretOrSelection() const override;
-  std::set<AXPlatformNode*> GetReverseRelations(
+  std::vector<AXPlatformNode*> GetSourceNodesForReverseRelations(
       ax::mojom::IntAttribute attr) override;
-  std::set<AXPlatformNode*> GetReverseRelations(
+  std::vector<AXPlatformNode*> GetSourceNodesForReverseRelations(
       ax::mojom::IntListAttribute attr) override;
   bool IsOrderedSetItem() const override;
   bool IsOrderedSet() const override;
-  absl::optional<int> GetPosInSet() const override;
-  absl::optional<int> GetSetSize() const override;
+  std::optional<int> GetPosInSet() const override;
+  std::optional<int> GetSetSize() const override;
   SkColor GetColor() const override;
   SkColor GetBackgroundColor() const override;
 
-  const std::vector<gfx::NativeViewAccessible> GetUIADescendants()
-      const override;
+  const std::vector<gfx::NativeViewAccessible> GetUIADirectChildrenInRange(
+      AXPlatformNodeDelegate* start,
+      AXPlatformNodeDelegate* end) override;
   gfx::RectF GetLocation() const;
-  int InternalChildCount() const;
-  TestAXNodeWrapper* InternalGetChild(int index) const;
+  size_t InternalChildCount() const;
+  TestAXNodeWrapper* InternalGetChild(size_t index) const;
 
  private:
   TestAXNodeWrapper(AXTree* tree, AXNode* node);
@@ -194,12 +201,16 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegateBase {
   // Determine the offscreen status of a particular element given its bounds.
   AXOffscreenResult DetermineOffscreenResult(gfx::RectF bounds) const;
 
-  AXTree* tree_;
-  AXNode* node_;
-  ui::AXUniqueId unique_id_;
-  AXPlatformNode* platform_node_;
+  // `AXTreeObserver`
+  void OnNodeWillBeDeleted(AXTree* tree, AXNode* node) override;
+
+  raw_ptr<AXTree> tree_;
+  raw_ptr<AXNode> node_;
+  AXUniqueId unique_id_;
+  AXPlatformNode::Pointer platform_node_;
   gfx::AcceleratedWidget native_event_target_;
   bool minimized_ = false;
+  base::ScopedObservation<AXTree, AXTreeObserver> observation_{this};
 };
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,15 @@ import android.content.pm.PackageManager;
 import android.os.Looper;
 import android.util.Log;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.webapk.lib.common.WebApkCommonUtils;
 
 import java.io.File;
 import java.util.Scanner;
 
-/**
- * Creates ClassLoader for WebAPK-specific dex file in Chrome APK's assets.
- */
+/** Creates ClassLoader for WebAPK-specific dex file in Chrome APK's assets. */
+@NullMarked
 public class HostBrowserClassLoader {
     /** Directory for storing cached dex files. */
     public static final String DEX_DIR_NAME = "dex";
@@ -29,15 +30,16 @@ public class HostBrowserClassLoader {
      * The ClassLoader is re-created if the host browser is upgraded while the WebAPK is still
      * running.
      */
-    private static ClassLoader sClassLoader;
+    private static @Nullable ClassLoader sClassLoader;
 
     /**
      * Gets / creates ClassLoader for WebAPK dex.
+     *
      * @param context WebAPK's context.
-     * @param canaryClassname Class to load to check that ClassLoader is valid.
+     * @param canaryClassName Class to load to check that ClassLoader is valid.
      * @return The ClassLoader.
      */
-    public static ClassLoader getClassLoaderInstance(
+    public static @Nullable ClassLoader getClassLoaderInstance(
             Context context, String hostBrowserPackage, String canaryClassName) {
         assertRunningOnUiThread();
         Context remoteContext = WebApkUtils.fetchRemoteContext(context, hostBrowserPackage);
@@ -55,13 +57,14 @@ public class HostBrowserClassLoader {
 
     /**
      * Creates ClassLoader for WebAPK dex.
+     *
      * @param context WebAPK's context.
      * @param remoteContext Host browser's context.
      * @param canaryClassName Class to load to check that ClassLoader is valid.
      * @param dexLoader DexLoader for creating ClassLoader.
      * @return The ClassLoader.
      */
-    public static ClassLoader createClassLoader(
+    public static @Nullable ClassLoader createClassLoader(
             Context context, Context remoteContext, DexLoader dexLoader, String canaryClassName) {
         SharedPreferences preferences = WebApkSharedPreferences.getPrefs(context);
 
@@ -78,15 +81,10 @@ public class HostBrowserClassLoader {
         }
 
         String dexAssetName = WebApkCommonUtils.getRuntimeDexName(newRuntimeDexVersion);
-        File remoteDexFile =
-                new File(remoteContext.getDir(DEX_DIR_NAME, Context.MODE_PRIVATE), dexAssetName);
-        return dexLoader.load(
-                remoteContext, dexAssetName, canaryClassName, remoteDexFile, localDexDir);
+        return dexLoader.load(remoteContext, dexAssetName, canaryClassName, localDexDir);
     }
 
-    /**
-     * Returns whether {@link sClassLoader} can be reused.
-     */
+    /** Returns whether {@link sClassLoader} can be reused. */
     public static boolean canReuseClassLoaderInstance(Context context, Context remoteContext) {
         // WebAPK may still be running when the host browser gets upgraded. Prevent ClassLoader from
         // getting reused in this scenario.
@@ -100,8 +98,8 @@ public class HostBrowserClassLoader {
     /**
      * Checks if there is a new "runtime dex" version number. If there is a new version number,
      * updates SharedPreferences.
+     *
      * @param preferences WebAPK's SharedPreferences.
-     * @param remoteContext
      * @return The new "runtime dex" version number. -1 if there is no new version number.
      */
     private static int checkForNewRuntimeDexVersion(
@@ -124,9 +122,7 @@ public class HostBrowserClassLoader {
         return runtimeDexVersion;
     }
 
-    /**
-     * Returns version code of {@link context}'s APK.
-     */
+    /** Returns version code of {@link context}'s APK. */
     private static int getVersionCode(Context context) {
         try {
             return context.getPackageManager()
@@ -140,7 +136,7 @@ public class HostBrowserClassLoader {
 
     /**
      * Returns the first integer in an asset file's contents.
-     * @param context
+     *
      * @param assetName The name of the asset.
      * @return The first integer.
      */
@@ -163,9 +159,7 @@ public class HostBrowserClassLoader {
         return value;
     }
 
-    /**
-     * Asserts that current thread is the UI thread.
-     */
+    /** Asserts that current thread is the UI thread. */
     private static void assertRunningOnUiThread() {
         assert Looper.getMainLooper().equals(Looper.myLooper());
     }

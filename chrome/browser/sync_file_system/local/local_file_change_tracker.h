@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,11 @@
 #include <map>
 #include <memory>
 
-#include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
 #include "chrome/browser/sync_file_system/file_change.h"
 #include "chrome/browser/sync_file_system/sync_status_code.h"
@@ -40,8 +40,10 @@ namespace sync_file_system {
 // Tracks local file changes for cloud-backed file systems.
 // All methods must be called on the file_task_runner given to the constructor.
 // Owned by FileSystemContext.
-class LocalFileChangeTracker : public storage::FileUpdateObserver,
-                               public storage::FileChangeObserver {
+class LocalFileChangeTracker
+    : public storage::FileUpdateObserver,
+      public storage::FileChangeObserver,
+      public base::RefCountedDeleteOnSequence<LocalFileChangeTracker> {
  public:
   // |file_task_runner| must be the one where the observee file operations run.
   // (So that we can make sure DB operations are done before actual update
@@ -49,9 +51,16 @@ class LocalFileChangeTracker : public storage::FileUpdateObserver,
   LocalFileChangeTracker(const base::FilePath& base_path,
                          leveldb::Env* env_override,
                          base::SequencedTaskRunner* file_task_runner);
-  ~LocalFileChangeTracker() override;
+
+  LocalFileChangeTracker(const LocalFileChangeTracker&) = delete;
+  LocalFileChangeTracker& operator=(const LocalFileChangeTracker&) = delete;
 
   // FileUpdateObserver overrides.
+  void AddRef() const override;
+  void Release() const override;
+
+  void Disable() override;
+
   void OnStartUpdate(const storage::FileSystemURL& url) override;
   void OnUpdate(const storage::FileSystemURL& url, int64_t delta) override {}
   void OnEndUpdate(const storage::FileSystemURL& url) override;
@@ -60,6 +69,8 @@ class LocalFileChangeTracker : public storage::FileUpdateObserver,
   void OnCreateFile(const storage::FileSystemURL& url) override;
   void OnCreateFileFrom(const storage::FileSystemURL& url,
                         const storage::FileSystemURL& src) override;
+  void OnMoveFileFrom(const storage::FileSystemURL& url,
+                      const storage::FileSystemURL& src) override;
   void OnRemoveFile(const storage::FileSystemURL& url) override;
   void OnModifyFile(const storage::FileSystemURL& url) override;
   void OnCreateDirectory(const storage::FileSystemURL& url) override;
@@ -120,6 +131,13 @@ class LocalFileChangeTracker : public storage::FileUpdateObserver,
   }
 
  private:
+  friend class base::RefCountedDeleteOnSequence<LocalFileChangeTracker>;
+  friend class base::DeleteHelper<LocalFileChangeTracker>;
+
+  mutable base::Lock is_disabled_lock_;
+  bool is_disabled_ GUARDED_BY(is_disabled_lock_) = false;
+  ~LocalFileChangeTracker() override;
+
   class TrackerDB;
   friend class CannedSyncableFileSystem;
   friend class LocalFileChangeTrackerTest;
@@ -188,8 +206,6 @@ class LocalFileChangeTracker : public storage::FileUpdateObserver,
   // This can be accessed on any threads (with num_changes_lock_).
   int64_t num_changes_;
   mutable base::Lock num_changes_lock_;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileChangeTracker);
 };
 
 }  // namespace sync_file_system

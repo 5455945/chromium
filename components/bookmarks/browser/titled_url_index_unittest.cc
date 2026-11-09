@@ -1,18 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/bookmarks/browser/titled_url_index.h"
 
+#include <array>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "components/bookmarks/browser/titled_url_match.h"
 #include "components/bookmarks/browser/titled_url_node.h"
 #include "components/bookmarks/browser/typed_count_sorter.h"
@@ -30,6 +34,9 @@ class BookmarkClientMock : public TestBookmarkClient {
  public:
   explicit BookmarkClientMock(const std::map<GURL, int>& typed_count_map)
       : typed_count_map_(typed_count_map) {}
+
+  BookmarkClientMock(const BookmarkClientMock&) = delete;
+  BookmarkClientMock& operator=(const BookmarkClientMock&) = delete;
 
   bool SupportsTypedCountForUrls() override { return true; }
 
@@ -49,8 +56,6 @@ class BookmarkClientMock : public TestBookmarkClient {
 
  private:
   const std::map<GURL, int> typed_count_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(BookmarkClientMock);
 };
 
 // Minimal implementation of TitledUrlNode.
@@ -69,7 +74,7 @@ class TestTitledUrlNode : public TitledUrlNode {
 
   const GURL& GetTitledUrlNodeUrl() const override { return url_; }
 
-  std::vector<base::StringPiece16> GetTitledUrlNodeAncestorTitles()
+  std::vector<std::u16string_view> GetTitledUrlNodeAncestorTitles()
       const override {
     return {ancestor_title_};
   }
@@ -80,6 +85,33 @@ class TestTitledUrlNode : public TitledUrlNode {
   std::u16string ancestor_title_;
 };
 
+}  // namespace
+
+class TitledUrlIndexFake : public TitledUrlIndex {
+ public:
+  using TitledUrlIndex::ExtractQueryWords;
+  using TitledUrlIndex::MatchTitledUrlNodeWithQuery;
+  using TitledUrlIndex::RetrieveNodesMatchingAllTerms;
+  using TitledUrlIndex::RetrieveNodesMatchingAnyTerms;
+
+  // Helper to call `TitledUrlIndex::MatchTitledUrlNodeWithQuery` with simpler
+  // parameters, returning a bool indicating success.
+  bool MatchTitledUrlNodeWithQuery(std::u16string node_title,
+                                   std::u16string query) {
+    TestTitledUrlNode node{node_title, GURL("http://foo.com"), u""};
+    std::vector<std::u16string> query_terms =
+        TitledUrlIndexFake::ExtractQueryWords(query);
+    query_parser::QueryNodeVector query_nodes;
+    query_parser::QueryParser::ParseQueryNodes(
+        query, query_parser::MatchingAlgorithm::ALWAYS_PREFIX_SEARCH,
+        &query_nodes);
+    return MatchTitledUrlNodeWithQuery(&node, query_nodes, query_terms)
+        .has_value();
+  }
+};
+
+namespace {
+
 class TitledUrlIndexTest : public testing::Test {
  public:
   const GURL kAboutBlankURL = GURL("about:blank");
@@ -89,46 +121,45 @@ class TitledUrlIndexTest : public testing::Test {
   ~TitledUrlIndexTest() override = default;
 
   void ResetNodes() {
-    index_ = std::make_unique<TitledUrlIndex>();
+    index_ = std::make_unique<TitledUrlIndexFake>();
     owned_nodes_.clear();
+    owned_path_nodes_.clear();
   }
 
-  TitledUrlNode* AddNode(const std::string& title,
-                         const GURL& url,
-                         const std::string& ancestor_title = "") {
+  std::pair<TitledUrlNode*, TitledUrlNode*> AddNode(
+      const std::string& title,
+      const GURL& url,
+      const std::string& ancestor_title = "") {
     return AddNode(UTF8ToUTF16(title), url, UTF8ToUTF16(ancestor_title));
   }
 
-  TitledUrlNode* AddNode(
+  std::pair<TitledUrlNode*, TitledUrlNode*> AddNode(
       const std::u16string& title,
       const GURL& url,
       const std::u16string& ancestor_title = std::u16string()) {
+    // Add the node.
     owned_nodes_.push_back(
         std::make_unique<TestTitledUrlNode>(title, url, ancestor_title));
     index_->Add(owned_nodes_.back().get());
-    return owned_nodes_.back().get();
+    // Add its parent node.
+    owned_path_nodes_.push_back(
+        std::make_unique<TestTitledUrlNode>(ancestor_title, GURL{}, u""));
+    index_->AddPath(owned_path_nodes_.back().get());
+    return {owned_nodes_.back().get(), owned_path_nodes_.back().get()};
   }
 
-  void AddNodes(const char** titles, const char** urls, size_t count) {
-    for (size_t i = 0; i < count; ++i)
-      AddNode(titles[i], GURL(urls[i]));
-  }
-
-  std::vector<TitledUrlMatch> GetResultsMatching(
-      const std::string& query,
-      size_t max_count,
-      bool match_ancestor_titles = false) {
+  std::vector<TitledUrlMatch> GetResultsMatching(const std::string& query,
+                                                 size_t max_count) {
     return index_->GetResultsMatching(UTF8ToUTF16(query), max_count,
-                                      query_parser::MatchingAlgorithm::DEFAULT,
-                                      match_ancestor_titles);
+                                      query_parser::MatchingAlgorithm::DEFAULT);
   }
 
   void ExpectMatches(const std::string& query,
-                     const char** expected_titles,
-                     size_t expected_count) {
+                     base::span<const char*> expected_titles) {
     std::vector<std::string> title_vector;
-    for (size_t i = 0; i < expected_count; ++i)
-      title_vector.push_back(expected_titles[i]);
+    for (const char* expected_title : expected_titles) {
+      title_vector.push_back(expected_title);
+    }
     ExpectMatches(query, query_parser::MatchingAlgorithm::DEFAULT,
                   title_vector);
   }
@@ -137,7 +168,7 @@ class TitledUrlIndexTest : public testing::Test {
                      query_parser::MatchingAlgorithm matching_algorithm,
                      const std::vector<std::string>& expected_titles) {
     std::vector<TitledUrlMatch> matches = index_->GetResultsMatching(
-        UTF8ToUTF16(query), 1000, matching_algorithm, false);
+        UTF8ToUTF16(query), 1000, matching_algorithm);
     ASSERT_EQ(expected_titles.size(), matches.size());
     for (const std::string& expected_title : expected_titles) {
       bool found = false;
@@ -155,9 +186,9 @@ class TitledUrlIndexTest : public testing::Test {
 
   void ExtractMatchPositions(const std::string& string,
                              TitledUrlMatch::MatchPositions* matches) {
-    for (const base::StringPiece& match : base::SplitStringPiece(
+    for (std::string_view match : base::SplitStringPiece(
              string, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
-      std::vector<base::StringPiece> chunks = base::SplitStringPiece(
+      std::vector<std::string_view> chunks = base::SplitStringPiece(
           match, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
       ASSERT_EQ(2U, chunks.size());
       matches->push_back(TitledUrlMatch::MatchPosition());
@@ -179,11 +210,32 @@ class TitledUrlIndexTest : public testing::Test {
     }
   }
 
-  TitledUrlIndex* index() { return index_.get(); }
+  void VerifyRetrieveNodesMatchingAnyTerms(
+      const std::string& query,
+      const std::vector<int> expected_node_indexes) {
+    SCOPED_TRACE("Query: " + query);
+    std::vector<std::u16string> terms =
+        base::SplitString(base::UTF8ToUTF16(query), u" ", base::TRIM_WHITESPACE,
+                          base::SPLIT_WANT_ALL);
+    auto matches = index()->RetrieveNodesMatchingAnyTerms(
+        terms, query_parser::MatchingAlgorithm::DEFAULT, 3);
+
+    // Verify the correct nodes matched.
+    ASSERT_EQ(matches.size(), expected_node_indexes.size());
+    for (int index : expected_node_indexes) {
+      SCOPED_TRACE(
+          "node: " +
+          base::UTF16ToUTF8(owned_nodes_[index]->GetTitledUrlNodeTitle()));
+      EXPECT_TRUE(matches.contains(owned_nodes_[index].get()));
+    }
+  }
+
+  TitledUrlIndexFake* index() { return index_.get(); }
 
  private:
   std::vector<std::unique_ptr<TestTitledUrlNode>> owned_nodes_;
-  std::unique_ptr<TitledUrlIndex> index_;
+  std::vector<std::unique_ptr<TestTitledUrlNode>> owned_path_nodes_;
+  std::unique_ptr<TitledUrlIndexFake> index_;
 };
 
 // Various permutations with differing input, queries and output that exercises
@@ -235,6 +287,7 @@ TEST_F(TitledUrlIndexTest, GetResultsMatching) {
       {"abc def", "abc d", ""},
   };
   for (const TestData& test_data : data) {
+    SCOPED_TRACE("Query: " + test_data.query);
     ResetNodes();
 
     for (const std::string& title :
@@ -369,6 +422,45 @@ TEST_F(TitledUrlIndexTest, GetResultsMatchingWithURLs) {
   }
 }
 
+TEST_F(TitledUrlIndexTest, GetResultsMatchingWithSymbols) {
+  auto does_query_match_title = [&](std::string query, std::string title) {
+    ResetNodes();
+    AddNode(title, kAboutBlankURL);
+    size_t num_matches = GetResultsMatching(query, 10).size();
+    EXPECT_LE(num_matches, 1u);
+    return num_matches > 0;
+  };
+
+  // Symbols should act as word breaks and don't need to match between the query
+  // and title.
+  EXPECT_TRUE(does_query_match_title("abc@xyz", "xyz@abc"));
+  EXPECT_TRUE(does_query_match_title("abc&xyz", "xyz&abc"));
+  EXPECT_TRUE(does_query_match_title("abc@xyz", "xyz abc"));
+  EXPECT_TRUE(does_query_match_title("abc xyz", "xyz@abc"));
+
+  // Treating symbols as word breaks doesn't mean simply pretending they're not
+  // there.
+  EXPECT_FALSE(does_query_match_title("xyz@abc", "xyzabc"));
+  EXPECT_FALSE(does_query_match_title("xyzabc", "xyz@abc"));
+
+  // '@' as the first character of the query should be treated special since it
+  // indicates the user likely wants search scope.
+  EXPECT_FALSE(does_query_match_title("@abc", "@abc"));
+  // Other symbols shouldn't have that exception.
+  EXPECT_TRUE(does_query_match_title("&abc", "@abc"));
+  // '@' as the first character of the node shouldn't have that exception.
+  EXPECT_TRUE(does_query_match_title("abc", "@abc"));
+  // '@' in other locations in the query shouldn't have that exception.
+  EXPECT_TRUE(does_query_match_title("abc @abc", "@abc"));
+  // '@' followed by other symbols shouldn't have that exception.
+  EXPECT_TRUE(does_query_match_title("@ abc", "@abc"));
+  EXPECT_TRUE(does_query_match_title("@@abc", "@abc"));
+  EXPECT_TRUE(does_query_match_title("@&abc", "@abc"));
+
+  // '@' input or title shouldn't crash.
+  EXPECT_FALSE(does_query_match_title("@", "@"));
+}
+
 TEST_F(TitledUrlIndexTest, Normalization) {
   struct TestData {
     const char* const title;
@@ -477,9 +569,9 @@ TEST_F(TitledUrlIndexTest, MatchPositionsURLs) {
 
 // Makes sure index is updated when a node is removed.
 TEST_F(TitledUrlIndexTest, Remove) {
-  TitledUrlNode* n1 = AddNode("foo", GURL("http://foo"));
-  TitledUrlNode* n2 = AddNode("bar", GURL("http://bar"));
-  TitledUrlNode* n3 = AddNode("bar", GURL("http://bar/baz"));
+  TitledUrlNode* n1 = AddNode("foo", GURL("http://foo")).first;
+  TitledUrlNode* n2 = AddNode("bar", GURL("http://bar")).first;
+  TitledUrlNode* n3 = AddNode("bar", GURL("http://bar/baz")).first;
 
   ASSERT_EQ(1U, GetResultsMatching("foo", 10).size());
   ASSERT_EQ(2U, GetResultsMatching("bar", 10).size());
@@ -496,6 +588,16 @@ TEST_F(TitledUrlIndexTest, Remove) {
   EXPECT_EQ(0U, GetResultsMatching("bar", 10).size());
 }
 
+// Makes sure index is updated when a node is removed.
+TEST_F(TitledUrlIndexTest, Remove_PathIndex) {
+  auto* parent_dir = AddNode("foo", GURL("http://foo"), "folder").second;
+  ASSERT_EQ(1U, GetResultsMatching("foo folder", 10).size());
+
+  index()->RemovePath(parent_dir);
+  ASSERT_EQ(0U, GetResultsMatching("foo folder", 10).size());
+  ASSERT_EQ(1U, GetResultsMatching("foo", 10).size());
+}
+
 // Makes sure no more than max queries is returned.
 TEST_F(TitledUrlIndexTest, HonorMax) {
   AddNode("abcd", kAboutBlankURL);
@@ -507,7 +609,7 @@ TEST_F(TitledUrlIndexTest, HonorMax) {
 // Makes sure if the lower case string of a bookmark title is more characters
 // than the upper case string no match positions are returned.
 TEST_F(TitledUrlIndexTest, EmptyMatchOnMultiwideLowercaseString) {
-  TitledUrlNode* n1 = AddNode(u"\u0130 i", GURL("http://www.google.com"));
+  TitledUrlNode* n1 = AddNode(u"\u0130 i", GURL("http://www.google.com")).first;
 
   std::vector<TitledUrlMatch> matches = GetResultsMatching("i", 100);
   ASSERT_EQ(1U, matches.size());
@@ -520,12 +622,13 @@ TEST_F(TitledUrlIndexTest, GetResultsSortedByTypedCount) {
     const GURL url;
     const char* title;
     const int typed_count;
-  } data[] = {
+  };
+  auto data = std::to_array<TestData>({
       {GURL("http://www.google.com/"), "Google", 100},
       {GURL("http://maps.google.com/"), "Google Maps", 40},
       {GURL("http://docs.google.com/"), "Google Docs", 50},
       {GURL("http://reader.google.com/"), "Google Reader", 80},
-  };
+  });
 
   std::map<GURL, int> typed_count_map;
   for (const TestData& test_data : data)
@@ -558,11 +661,31 @@ TEST_F(TitledUrlIndexTest, GetResultsSortedByTypedCount) {
   ASSERT_EQ(2U, matches.size());
   EXPECT_EQ(data[0].url, matches[0].node->GetTitledUrlNodeUrl());
   EXPECT_EQ(data[3].url, matches[1].node->GetTitledUrlNodeUrl());
+
+  index()->SetNodeSorter(nullptr);
+}
+
+TEST_F(TitledUrlIndexTest, MatchTitledUrlNodeWithQuery) {
+  // When the query matches the node, should return non `nullopt`.
+  EXPECT_TRUE(index()->MatchTitledUrlNodeWithQuery(u"matching", u"match"));
+  // When the query approximately matches the node, should return `nullopt`.
+  EXPECT_FALSE(index()->MatchTitledUrlNodeWithQuery(u"mmmatch", u"match"));
+  // WHen the query doesn't match the node, should return `nullopt`.
+  EXPECT_FALSE(index()->MatchTitledUrlNodeWithQuery(u"natch", u"match"));
+}
+
+TEST_F(TitledUrlIndexTest, MatchTitledUrlNodeWithQuery_ApproximateNodeMatch) {
+  // When the query matches the node, should return non `nullopt`.
+  EXPECT_TRUE(index()->MatchTitledUrlNodeWithQuery(u"matching", u"match"));
+  // When the query approximately matches the node, should return `nullopt`.
+  EXPECT_FALSE(index()->MatchTitledUrlNodeWithQuery(u"mmmatch", u"match"));
+  // WHen the query doesn't match the node, should return `nullopt`.
+  EXPECT_FALSE(index()->MatchTitledUrlNodeWithQuery(u"natch", u"match"));
 }
 
 TEST_F(TitledUrlIndexTest, RetrieveNodesMatchingAllTerms) {
   TitledUrlNode* node =
-      AddNode("termA termB otherTerm xyz ab", GURL("http://foo.com"));
+      AddNode("term1 term2 other xyz ab", GURL("http://foo.com")).first;
 
   struct TestData {
     const std::string query;
@@ -581,7 +704,7 @@ TEST_F(TitledUrlIndexTest, RetrieveNodesMatchingAllTerms) {
     std::vector<std::u16string> terms =
         base::SplitString(base::UTF8ToUTF16(test_data.query), u" ",
                           base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-    auto matches = index()->RetrieveNodesMatchingAllTermsForTesting(
+    auto matches = index()->RetrieveNodesMatchingAllTerms(
         terms, query_parser::MatchingAlgorithm::DEFAULT);
     if (test_data.should_be_retrieved) {
       EXPECT_EQ(matches.size(), 1u);
@@ -591,74 +714,95 @@ TEST_F(TitledUrlIndexTest, RetrieveNodesMatchingAllTerms) {
   };
 }
 
-TEST_F(TitledUrlIndexTest, RetrieveNodesMatchingAnyTerms) {
-  TitledUrlNode* node =
-      AddNode("termA termB otherTerm xyz ab", GURL("http://foo.com"));
+TEST_F(TitledUrlIndexTest, RetrieveNodesMatchingAnyTerms_PathMatch) {
+  ResetNodes();
+  AddNode("term1 term2 other xyz ab", GURL("http://foo.com"));
+  AddNode("no_match", GURL("http://no_match.com"), "path commo");
+  AddNode("common1", GURL("http://foo.com"));
+  AddNode("common2", GURL("http://foo.com"));
+  AddNode("common3", GURL("http://foo.com"));
+  AddNode("common4", GURL("http://foo.com"));
 
-  struct TestData {
-    const std::string query;
-    const bool should_be_retrieved;
-  } data[] = {// Should return matches if any input terms match, even if not all
-              // node terms match.
-              {"term not", true},
-              // Should not return duplicate matches.
-              {"term termA termB", true},
-              // Should not early exit when there are no intermediate matches.
-              {"not term", true},
-              // Should not match midword.
-              {"ther", false},
-              // Short input terms should only return exact matches.
-              {"xy", false},
-              {"ab", true}};
+  // Should return match even if an input term does not match, as long as it's
+  // in the path index.
+  VerifyRetrieveNodesMatchingAnyTerms("term path", {0});
+  // Should not return matches if any input term is neither matching nor in the
+  // path index.
+  VerifyRetrieveNodesMatchingAnyTerms("term not", {});
 
-  for (const TestData& test_data : data) {
-    SCOPED_TRACE("Query: " + test_data.query);
-    std::vector<std::u16string> terms =
-        base::SplitString(base::UTF8ToUTF16(test_data.query), u" ",
-                          base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-    auto matches = index()->RetrieveNodesMatchingAnyTermsForTesting(
-        terms, query_parser::MatchingAlgorithm::DEFAULT);
-    if (test_data.should_be_retrieved) {
-      EXPECT_EQ(matches.size(), 1u);
-      EXPECT_TRUE(matches.contains(node));
-    } else
-      EXPECT_TRUE(matches.empty());
-  };
+  // If any input term is not in the path index, should do full matching (i.e.
+  // all input terms need to be non-path matched).
+  VerifyRetrieveNodesMatchingAnyTerms("term common", {});
+  // If all input terms are in the path index, only 1 input term needs to
+  // non-path match.
+  VerifyRetrieveNodesMatchingAnyTerms("comm path", {2, 3, 4});
+
+  // Should not return duplicate matches.
+  VerifyRetrieveNodesMatchingAnyTerms("term term1 term2", {0});
+
+  // Should not early exit when there are no intermediate matches.
+  VerifyRetrieveNodesMatchingAnyTerms("path comm", {2, 3, 4});
+
+  // Should not match midword ('ther' in 'other').
+  VerifyRetrieveNodesMatchingAnyTerms("ther ther", {});
+
+  // Short input terms should only return exact matches.
+  VerifyRetrieveNodesMatchingAnyTerms("xy xy", {});
+  VerifyRetrieveNodesMatchingAnyTerms("ab ab", {0});
+
+  // Allows complete title/URL matches to exceed `max_nodes` (3 in tests).
+  VerifyRetrieveNodesMatchingAnyTerms("commo commo", {2, 3, 4, 5});
+}
+
+TEST_F(TitledUrlIndexTest, RetrieveNodesMatchingAnyTerms_PathIndex) {
+  AddNode("term1 term2 other xyz ab", GURL("http://foo.com"), "parent");
+  AddNode("term1 term3", GURL("http://foo.com"), "parent2");
+
+  // When short-circuiting to matching all terms, should not intersect with path
+  // matching terms, only non-path matching terms.
+
+  // Should intersect 'term1' matches only, returning both nodes, even though
+  // the 1st node doesn't match 'parent2'.
+  VerifyRetrieveNodesMatchingAnyTerms("term1 parent2", {0, 1});
+  // Should intersect 'term1' and 'term2' matches returning the 1st node,
+  // even though it doesn't match 'parent2'.
+  VerifyRetrieveNodesMatchingAnyTerms("term1 term2 parent2", {0});
+  // Should intersect 'term2' and 'term3' matches returning 0 nodes.
+  VerifyRetrieveNodesMatchingAnyTerms("term2 term3 parent", {});
 }
 
 TEST_F(TitledUrlIndexTest, GetResultsMatchingAncestors) {
-  TitledUrlNode* node = AddNode("leaf pare", GURL("http://foo.com"), "parent");
+  TitledUrlNode* node =
+      AddNode("leaf pare", GURL("http://foo.com"), "parent").first;
 
   struct TestData {
     const std::string query;
-    const bool match_ancestor_titles;
     const bool should_be_retrieved;
     const bool should_have_ancestor_match;
   } data[] = {
-      // Should exclude matches with ancestor matches when
-      // |match_ancestor_titles| is false.
-      {"leaf parent", false, false, false},
-      // Should allow ancestor matches when |match_ancestor_titles| is true.
-      {"leaf parent", true, true, true},
-      // Should not early exit when there are no accumulated
-      // non-ancestor matches.
-      {"parent leaf", true, true, true},
+      // Should allow ancestor matches when `match_ancestor_titles` is true.
+      {"leaf parent", true, true},
+      // Should not early exit when there are no accumulated non-ancestor
+      // matches.
+      {"parent leaf", true, true},
       // Should still require at least 1 non-ancestor match when
-      // |match_ancestor_titles| is true.
-      {"parent", true, false, false},
-      // Should set |has_ancestor_match| to true even if a term matched
-      // both an ancestor and title/URL.
-      {"pare", true, true, true},
+      // `match_ancestor_titles` is true.
+      {"parent parent", false, false},
+      // Should set `has_ancestor_match` to true even if a term matched both an
+      // ancestor and title/URL.
+      {"pare", true, true},
       // Short inputs should only match exact title or ancestor terms.
-      {"pa", true, false, false},
-      // Should not return matches if a term matches neither the title
-      // nor ancestor.
-      {"term not parent", true, false, false}};
+      {"pa pa", false, false},
+      // Should not return matches if a term matches neither the title nor
+      // ancestor.
+      {"leaf not parent", false, false},
+  };
 
   for (const TestData& test_data : data) {
     SCOPED_TRACE("Query: " + test_data.query);
-    auto matches = GetResultsMatching(test_data.query, 10,
-                                      test_data.match_ancestor_titles);
+    auto matches = GetResultsMatching(test_data.query, 10);
+
+    // Verify whether the match.
     if (test_data.should_be_retrieved) {
       EXPECT_EQ(matches.size(), 1u);
       EXPECT_EQ(matches[0].node, node);

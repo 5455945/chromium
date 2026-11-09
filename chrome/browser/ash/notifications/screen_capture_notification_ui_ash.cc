@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include "ash/shell.h"
 #include "ash/system/tray/system_tray_notifier.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 
 namespace ash {
 
@@ -18,20 +19,27 @@ ScreenCaptureNotificationUIAsh::~ScreenCaptureNotificationUIAsh() {
   // MediaStreamCaptureIndicator will delete ScreenCaptureNotificationUI object
   // after it stops screen capture.
   stop_callback_.Reset();
-  ash::Shell::Get()->system_tray_notifier()->NotifyScreenCaptureStop();
+  // Some owners (e.g. Cast mirroring sessions) may outlive ash::Shell during
+  // shutdown.
+  if (ash::Shell::HasInstance()) {
+    ash::Shell::Get()->system_tray_notifier()->NotifyScreenAccessStop();
+  }
 }
 
 gfx::NativeViewId ScreenCaptureNotificationUIAsh::OnStarted(
     base::OnceClosure stop_callback,
-    content::MediaStreamUI::SourceCallback source_callback) {
+    content::MediaStreamUI::SourceCallback source_callback,
+    const std::vector<content::DesktopMediaID>& media_ids) {
   stop_callback_ = std::move(stop_callback);
-  ash::Shell::Get()->system_tray_notifier()->NotifyScreenCaptureStart(
+  ash::Shell::Get()->system_tray_notifier()->NotifyScreenAccessStart(
       base::BindRepeating(
           &ScreenCaptureNotificationUIAsh::ProcessStopRequestFromUI,
-          base::Unretained(this)),
-      source_callback ? base::BindRepeating(std::move(source_callback),
-                                            content::DesktopMediaID())
-                      : base::RepeatingClosure(),
+          weak_ptr_factory_.GetWeakPtr()),
+      source_callback
+          ? base::BindRepeating(std::move(source_callback),
+                                content::DesktopMediaID(),
+                                /*captured_surface_control_active=*/false)
+          : base::RepeatingClosure(),
       text_);
   return 0;
 }
@@ -46,6 +54,8 @@ void ScreenCaptureNotificationUIAsh::ProcessStopRequestFromUI() {
 
 // static
 std::unique_ptr<ScreenCaptureNotificationUI>
-ScreenCaptureNotificationUI::Create(const std::u16string& text) {
+ScreenCaptureNotificationUI::Create(
+    const std::u16string& text,
+    content::WebContents* capturing_web_contents) {
   return std::make_unique<ash::ScreenCaptureNotificationUIAsh>(text);
 }

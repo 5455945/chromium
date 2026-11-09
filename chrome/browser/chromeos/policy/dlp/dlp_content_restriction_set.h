@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,17 +16,15 @@ namespace policy {
 // Enum representing the possible restrictions applied to on-screen content.
 // These values are used in bitmask in DlpContentRestrictionSet and should
 // correspond to the type in which the mask is stored.
-enum DlpContentRestriction {
-  // Do not allow any screenshots of the corresponding content.
+enum class DlpContentRestriction : int {
+  // Do not allow any screenshots or video capture of the corresponding content.
   kScreenshot = 0,
   // Enforce ePrivacy screen when content is visible.
   kPrivacyScreen = 1,
   // Do not allow printing.
   kPrint = 2,
-  // Do not allow video capturing of the content.
-  kVideoCapture = 3,
   // Do not allow screen share.
-  kScreenShare = 4,
+  kScreenShare = 3,
   // Should be equal to the last restriction.
   kMaxValue = kScreenShare,
 };
@@ -56,6 +54,8 @@ struct RestrictionLevelAndUrl {
 class DlpContentRestrictionSet {
  public:
   DlpContentRestrictionSet();
+  // TODO(b/324549895): Remove this constructor. Content restrictions shouldn't
+  // be set without a url since it's used for reporting.
   DlpContentRestrictionSet(DlpContentRestriction restriction,
                            DlpRulesManager::Level level);
 
@@ -64,8 +64,8 @@ class DlpContentRestrictionSet {
 
   ~DlpContentRestrictionSet();
 
-  bool operator==(const DlpContentRestrictionSet& other) const;
-  bool operator!=(const DlpContentRestrictionSet& other) const;
+  friend bool operator==(const DlpContentRestrictionSet&,
+                         const DlpContentRestrictionSet&) = default;
 
   // Sets the |restriction| to the |level| if not set to a higher one yet and
   // remembers the |url| in this case.
@@ -76,6 +76,9 @@ class DlpContentRestrictionSet {
   // Returns the level for the |restriction|.
   DlpRulesManager::Level GetRestrictionLevel(
       DlpContentRestriction restriction) const;
+
+  // Returns the url for most restrictive level for the |restriction|.
+  const GURL& GetRestrictionUrl(DlpContentRestriction restriction) const;
 
   // Returns the level and url for the |restriction|.
   RestrictionLevelAndUrl GetRestrictionLevelAndUrl(
@@ -92,9 +95,20 @@ class DlpContentRestrictionSet {
   DlpContentRestrictionSet DifferenceWith(
       const DlpContentRestrictionSet& other) const;
 
+  // Returns which content restrictions are being applied to the |url| according
+  // to the policies.
+  static DlpContentRestrictionSet GetForURL(const GURL& url);
+
+  static void SetRestrictionsForURLForTesting(
+      const GURL& url,
+      const DlpContentRestrictionSet& restrictions);
+
  private:
+  friend class DlpContentManagerTestHelper;
+
   // The current level and url of each of the restrictions.
-  std::array<RestrictionLevelAndUrl, DlpContentRestriction::kMaxValue + 1>
+  std::array<RestrictionLevelAndUrl,
+             static_cast<int>(DlpContentRestriction::kMaxValue) + 1>
       restrictions_;
 };
 

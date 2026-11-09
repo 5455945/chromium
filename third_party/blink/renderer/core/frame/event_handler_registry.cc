@@ -1,12 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/frame/event_handler_registry.h"
 
-#include "cc/base/features.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_add_event_listener_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_event_listener_options.h"
-#include "third_party/blink/renderer/core/dom/events/add_event_listener_options_resolved.h"
 #include "third_party/blink/renderer/core/events/event_util.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -14,7 +13,10 @@
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scrolling/scrolling_coordinator.h"
+#include "third_party/blink/renderer/platform/heap/thread_state_scopes.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 
 namespace blink {
 
@@ -54,23 +56,22 @@ EventHandlerRegistry::~EventHandlerRegistry() {
   }
 }
 
-bool EventHandlerRegistry::EventTypeToClass(
-    const AtomicString& event_type,
-    const AddEventListenerOptions* options,
-    EventHandlerClass* result) {
+bool EventHandlerRegistry::EventTypeToClass(const AtomicString& event_type,
+                                            bool passive,
+                                            EventHandlerClass* result) {
   if (event_type == event_type_names::kScroll) {
     *result = kScrollEvent;
   } else if (event_type == event_type_names::kWheel ||
              event_type == event_type_names::kMousewheel) {
-    *result = options->passive() ? kWheelEventPassive : kWheelEventBlocking;
+    *result = passive ? kWheelEventPassive : kWheelEventBlocking;
   } else if (event_type == event_type_names::kTouchend ||
              event_type == event_type_names::kTouchcancel) {
-    *result = options->passive() ? kTouchEndOrCancelEventPassive
-                                 : kTouchEndOrCancelEventBlocking;
+    *result = passive ? kTouchEndOrCancelEventPassive
+                      : kTouchEndOrCancelEventBlocking;
   } else if (event_type == event_type_names::kTouchstart ||
              event_type == event_type_names::kTouchmove) {
-    *result = options->passive() ? kTouchStartOrMoveEventPassive
-                                 : kTouchStartOrMoveEventBlocking;
+    *result = passive ? kTouchStartOrMoveEventPassive
+                      : kTouchStartOrMoveEventBlocking;
   } else if (event_type == event_type_names::kPointerrawupdate) {
     // This will be used to avoid waking up the main thread to
     // process pointerrawupdate events and hit-test them when
@@ -114,7 +115,6 @@ void EventHandlerRegistry::UpdateEventHandlerTargets(
       targets->insert(target);
       return;
     case kRemove:
-      DCHECK(targets->Contains(target));
       targets->erase(target);
       return;
     case kRemoveAll:
@@ -142,11 +142,12 @@ bool EventHandlerRegistry::UpdateEventHandlerInternal(
 void EventHandlerRegistry::UpdateEventHandlerOfType(
     ChangeOperation op,
     const AtomicString& event_type,
-    const AddEventListenerOptions* options,
+    bool passive,
     EventTarget* target) {
   EventHandlerClass handler_class;
-  if (!EventTypeToClass(event_type, options, &handler_class))
+  if (!EventTypeToClass(event_type, passive, &handler_class)) {
     return;
+  }
   UpdateEventHandlerInternal(op, handler_class, target);
 }
 
@@ -154,14 +155,26 @@ void EventHandlerRegistry::DidAddEventHandler(
     EventTarget& target,
     const AtomicString& event_type,
     const AddEventListenerOptions* options) {
-  UpdateEventHandlerOfType(kAdd, event_type, options, &target);
+  DidAddEventHandler(target, event_type, options->passive());
+}
+
+void EventHandlerRegistry::DidAddEventHandler(EventTarget& target,
+                                              const AtomicString& event_type,
+                                              bool passive) {
+  UpdateEventHandlerOfType(kAdd, event_type, passive, &target);
 }
 
 void EventHandlerRegistry::DidRemoveEventHandler(
     EventTarget& target,
     const AtomicString& event_type,
     const AddEventListenerOptions* options) {
-  UpdateEventHandlerOfType(kRemove, event_type, options, &target);
+  DidRemoveEventHandler(target, event_type, options->passive());
+}
+
+void EventHandlerRegistry::DidRemoveEventHandler(EventTarget& target,
+                                                 const AtomicString& event_type,
+                                                 bool passive) {
+  UpdateEventHandlerOfType(kRemove, event_type, passive, &target);
 }
 
 void EventHandlerRegistry::DidAddEventHandler(EventTarget& target,
@@ -175,7 +188,7 @@ void EventHandlerRegistry::DidRemoveEventHandler(
   UpdateEventHandlerInternal(kRemove, handler_class, &target);
 }
 
-void EventHandlerRegistry::DidMoveIntoPage(EventTarget& target) {
+void EventHandlerRegistry::DidMoveIntoLocalRoot(EventTarget& target) {
   if (!target.HasEventListeners())
     return;
 
@@ -187,29 +200,25 @@ void EventHandlerRegistry::DidMoveIntoPage(EventTarget& target) {
       continue;
     for (wtf_size_t count = listeners->size(); count > 0; --count) {
       EventHandlerClass handler_class;
-      if (!EventTypeToClass(event_types[i], (*listeners)[count - 1].Options(),
-                            &handler_class))
+      if (!EventTypeToClass(event_types[i], (*listeners)[count - 1]->Passive(),
+                            &handler_class)) {
         continue;
+      }
 
       DidAddEventHandler(target, handler_class);
     }
   }
 }
 
-void EventHandlerRegistry::DidMoveOutOfPage(EventTarget& target) {
+void EventHandlerRegistry::DidMoveOutOfLocalRoot(EventTarget& target) {
   DidRemoveAllEventHandlers(target);
 }
 
 void EventHandlerRegistry::DidRemoveAllEventHandlers(EventTarget& target) {
-  bool handlers_changed[kEventHandlerClassCount];
-  bool target_set_changed[kEventHandlerClassCount];
+  std::array<bool, kEventHandlerClassCount> handlers_changed;
 
   for (int i = 0; i < kEventHandlerClassCount; ++i) {
     EventHandlerClass handler_class = static_cast<EventHandlerClass>(i);
-
-    EventTargetSet* targets = &targets_[handler_class];
-    target_set_changed[i] = targets->Contains(&target);
-
     handlers_changed[i] =
         UpdateEventHandlerInternal(kRemoveAll, handler_class, &target);
   }
@@ -249,7 +258,7 @@ void EventHandlerRegistry::NotifyHandlersChanged(
     case kTouchStartOrMoveEventBlockingLowLatency:
       GetPage()->GetChromeClient().SetNeedsLowLatencyInput(frame,
                                                            has_active_handlers);
-      FALLTHROUGH;
+      [[fallthrough]];
     case kTouchAction:
     case kTouchStartOrMoveEventBlocking:
     case kTouchStartOrMoveEventPassive:
@@ -283,7 +292,6 @@ void EventHandlerRegistry::NotifyHandlersChanged(
 #endif
     default:
       NOTREACHED();
-      break;
   }
 
   if (handler_class == kTouchStartOrMoveEventBlocking ||
@@ -291,11 +299,6 @@ void EventHandlerRegistry::NotifyHandlersChanged(
     if (auto* node = target->ToNode()) {
       if (auto* layout_object = node->GetLayoutObject()) {
         layout_object->MarkEffectiveAllowedTouchActionChanged();
-        auto* continuation = layout_object->VirtualContinuation();
-        while (continuation) {
-          continuation->MarkEffectiveAllowedTouchActionChanged();
-          continuation = continuation->VirtualContinuation();
-        }
       }
     } else if (auto* dom_window = target->ToLocalDOMWindow()) {
       // This event handler is on a window. Ensure the layout view is
@@ -305,23 +308,16 @@ void EventHandlerRegistry::NotifyHandlersChanged(
         layout_view->MarkEffectiveAllowedTouchActionChanged();
     }
   } else if (handler_class == kWheelEventBlocking) {
-    if (base::FeatureList::IsEnabled(::features::kWheelEventRegions)) {
-      if (auto* node = target->ToNode()) {
-        if (auto* layout_object = node->GetLayoutObject()) {
-          layout_object->MarkBlockingWheelEventHandlerChanged();
-          auto* continuation = layout_object->VirtualContinuation();
-          while (continuation) {
-            continuation->MarkBlockingWheelEventHandlerChanged();
-            continuation = continuation->VirtualContinuation();
-          }
-        }
-      } else if (auto* dom_window = target->ToLocalDOMWindow()) {
-        // This event handler is on a window. Ensure the layout view is
-        // invalidated because the layout view tracks the window's blocking
-        // wheel event handler rects.
-        if (auto* layout_view = dom_window->GetFrame()->ContentLayoutObject())
-          layout_view->MarkBlockingWheelEventHandlerChanged();
+    if (auto* node = target->ToNode()) {
+      if (auto* layout_object = node->GetLayoutObject()) {
+        layout_object->MarkBlockingWheelEventHandlerChanged();
       }
+    } else if (auto* dom_window = target->ToLocalDOMWindow()) {
+      // This event handler is on a window. Ensure the layout view is
+      // invalidated because the layout view tracks the window's blocking
+      // wheel event handler rects.
+      if (auto* layout_view = dom_window->GetFrame()->ContentLayoutObject())
+        layout_view->MarkBlockingWheelEventHandlerChanged();
     }
   }
 }
@@ -360,22 +356,28 @@ void EventHandlerRegistry::DocumentDetached(Document& document) {
     EventHandlerClass handler_class =
         static_cast<EventHandlerClass>(handler_class_index);
     HeapVector<Member<EventTarget>> targets_to_remove;
-    const EventTargetSet* targets = &targets_[handler_class];
-    for (const auto& event_target : *targets) {
-      if (Node* node = event_target.key->ToNode()) {
-        for (Document* doc = &node->GetDocument(); doc;
-             doc = doc->LocalOwner() ? &doc->LocalOwner()->GetDocument()
-                                     : nullptr) {
-          if (doc == &document) {
-            targets_to_remove.push_back(event_target.key);
-            break;
+    {
+      // TODO(keishi): If a GC happens while iterating a EventTargetSet, the
+      // custom weak processing may remove elements from it. Remove this scope
+      // when we get rid of the custom weak processing. crbug.com/1235316
+      ThreadState::GCForbiddenScope gc_forbidden(ThreadState::Current());
+      const EventTargetSet* targets = &targets_[handler_class];
+      for (const auto& event_target : *targets) {
+        if (Node* node = event_target.key->ToNode()) {
+          for (Document* doc = &node->GetDocument(); doc;
+               doc = doc->LocalOwner() ? &doc->LocalOwner()->GetDocument()
+                                       : nullptr) {
+            if (doc == &document) {
+              targets_to_remove.push_back(event_target.key);
+              break;
+            }
           }
+        } else if (event_target.key->ToLocalDOMWindow()) {
+          // DOMWindows may outlive their documents, so we shouldn't remove
+          // their handlers here.
+        } else {
+          NOTREACHED();
         }
-      } else if (event_target.key->ToLocalDOMWindow()) {
-        // DOMWindows may outlive their documents, so we shouldn't remove their
-        // handlers here.
-      } else {
-        NOTREACHED();
       }
     }
     for (wtf_size_t i = 0; i < targets_to_remove.size(); ++i)
@@ -387,11 +389,15 @@ void EventHandlerRegistry::DocumentDetached(Document& document) {
 void EventHandlerRegistry::CheckConsistency(
     EventHandlerClass handler_class) const {
 #if DCHECK_IS_ON()
+  // TODO(keishi): If a GC happens while iterating a EventTargetSet, the
+  // custom weak processing may remove elements from it. Remove this scope
+  // when we get rid of the custom weak processing. crbug.com/1235316
+  ThreadState::GCForbiddenScope gc_forbidden(ThreadState::Current());
   const EventTargetSet* targets = &targets_[handler_class];
   for (const auto& event_target : *targets) {
     if (Node* node = event_target.key->ToNode()) {
-      // See the comment for |documentDetached| if either of these assertions
-      // fails.
+      // See the header file comment for `DocumentDetached()` if either of these
+      // assertions fails.
       DCHECK(node->GetDocument().GetPage());
       DCHECK_EQ(frame_, &node->GetDocument().GetFrame()->LocalFrameRoot());
     } else if (LocalDOMWindow* window = event_target.key->ToLocalDOMWindow()) {

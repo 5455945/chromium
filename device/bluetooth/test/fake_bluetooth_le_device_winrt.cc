@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/win/async_operation.h"
 #include "base/win/scoped_hstring.h"
 #include "device/bluetooth/bluetooth_remote_gatt_service_winrt.h"
@@ -52,6 +53,10 @@ using ABI::Windows::Devices::Bluetooth::GenericAttributeProfile::
 using ABI::Windows::Devices::Enumeration::DeviceAccessStatus;
 using ABI::Windows::Devices::Enumeration::IDeviceAccessInformation;
 using ABI::Windows::Devices::Enumeration::IDeviceInformation;
+using ABI::Windows::Devices::Enumeration::DevicePairingKinds::
+    DevicePairingKinds_ConfirmOnly;
+using ABI::Windows::Devices::Enumeration::DevicePairingKinds::
+    DevicePairingKinds_ConfirmPinMatch;
 using ABI::Windows::Foundation::IAsyncOperation;
 using ABI::Windows::Foundation::ITypedEventHandler;
 using ABI::Windows::Foundation::Collections::IVectorView;
@@ -86,9 +91,25 @@ class FakeBluetoothDeviceId
 
 FakeBluetoothLEDeviceWinrt::FakeBluetoothLEDeviceWinrt(
     BluetoothTestWinrt* bluetooth_test_winrt)
-    : bluetooth_test_winrt_(bluetooth_test_winrt) {}
+    : bluetooth_test_winrt_(bluetooth_test_winrt) {
+  if (bluetooth_test_winrt_) {
+    bluetooth_test_winrt_->RegisterFakeDevice(this);
+  }
+}
 
-FakeBluetoothLEDeviceWinrt::~FakeBluetoothLEDeviceWinrt() = default;
+FakeBluetoothLEDeviceWinrt::~FakeBluetoothLEDeviceWinrt() {
+  if (bluetooth_test_winrt_) {
+    bluetooth_test_winrt_->UnregisterFakeDevice(this);
+  }
+}
+
+void FakeBluetoothLEDeviceWinrt::ClearBluetoothTestWinrt() {
+  bluetooth_test_winrt_ = nullptr;
+  gatt_services_callback_.Reset();
+  for (const auto& service : fake_services_) {
+    service->ClearBluetoothTestWinrt();
+  }
+}
 
 HRESULT FakeBluetoothLEDeviceWinrt::get_DeviceId(HSTRING* value) {
   *value =
@@ -191,6 +212,9 @@ HRESULT FakeBluetoothLEDeviceWinrt::RequestAccessAsync(
 
 HRESULT FakeBluetoothLEDeviceWinrt::GetGattServicesAsync(
     IAsyncOperation<GattDeviceServicesResult*>** operation) {
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
   auto async_op = Make<base::win::AsyncOperation<GattDeviceServicesResult*>>();
   gatt_services_callback_ = async_op->callback();
   *operation = async_op.Detach();
@@ -205,12 +229,22 @@ HRESULT FakeBluetoothLEDeviceWinrt::GetGattServicesAsync(
 HRESULT FakeBluetoothLEDeviceWinrt::GetGattServicesWithCacheModeAsync(
     BluetoothCacheMode cache_mode,
     IAsyncOperation<GattDeviceServicesResult*>** operation) {
-  return E_NOTIMPL;
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
+  auto hr = GetGattServicesAsync(operation);
+  bluetooth_test_winrt_
+      ->OnFakeBluetoothDeviceGattServiceDiscoveryAttemptWithCacheMode(
+          cache_mode);
+  return hr;
 }
 
 HRESULT FakeBluetoothLEDeviceWinrt::GetGattServicesForUuidAsync(
     GUID service_uuid,
     IAsyncOperation<GattDeviceServicesResult*>** operation) {
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
   auto async_op = Make<base::win::AsyncOperation<GattDeviceServicesResult*>>();
   gatt_services_callback_ = async_op->callback();
   service_uuid_ = service_uuid;
@@ -226,7 +260,14 @@ HRESULT FakeBluetoothLEDeviceWinrt::GetGattServicesForUuidWithCacheModeAsync(
     GUID service_uuid,
     BluetoothCacheMode cache_mode,
     IAsyncOperation<GattDeviceServicesResult*>** operation) {
-  return E_NOTIMPL;
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
+  auto hr = GetGattServicesForUuidAsync(service_uuid, operation);
+  bluetooth_test_winrt_
+      ->OnFakeBluetoothDeviceGattServiceDiscoveryAttemptWithCacheMode(
+          cache_mode);
+  return hr;
 }
 
 HRESULT FakeBluetoothLEDeviceWinrt::get_BluetoothDeviceId(
@@ -235,6 +276,9 @@ HRESULT FakeBluetoothLEDeviceWinrt::get_BluetoothDeviceId(
 }
 
 HRESULT FakeBluetoothLEDeviceWinrt::Close() {
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
   --reference_count_;
   fake_services_.clear();
   bluetooth_test_winrt_->OnFakeBluetoothGattDisconnect();
@@ -259,10 +303,22 @@ void FakeBluetoothLEDeviceWinrt::SimulatePairingPinCode(std::string pin_code) {
       Make<FakeDeviceInformationPairingWinrt>(std::move(pin_code)));
 }
 
-absl::optional<BluetoothUUID> FakeBluetoothLEDeviceWinrt::GetTargetGattService()
+void FakeBluetoothLEDeviceWinrt::SimulateConfirmOnly() {
+  device_information_ = Make<FakeDeviceInformationWinrt>(
+      Make<FakeDeviceInformationPairingWinrt>(DevicePairingKinds_ConfirmOnly));
+}
+
+void FakeBluetoothLEDeviceWinrt::SimulateDisplayPin(
+    std::string_view display_pin) {
+  device_information_ =
+      Make<FakeDeviceInformationWinrt>(Make<FakeDeviceInformationPairingWinrt>(
+          DevicePairingKinds_ConfirmPinMatch, display_pin));
+}
+
+std::optional<BluetoothUUID> FakeBluetoothLEDeviceWinrt::GetTargetGattService()
     const {
   if (!service_uuid_)
-    return absl::nullopt;
+    return std::nullopt;
   return BluetoothUUID(*service_uuid_);
 }
 
@@ -287,6 +343,9 @@ void FakeBluetoothLEDeviceWinrt ::SimulateGattConnectionError(
 }
 
 void FakeBluetoothLEDeviceWinrt::SimulateGattDisconnection() {
+  if (!bluetooth_test_winrt_) {
+    return;
+  }
   if (status_ == BluetoothConnectionStatus_Disconnected) {
     if (!gatt_services_callback_) {
       DCHECK(bluetooth_test_winrt_->UsesNewGattSessionHandling());
@@ -327,6 +386,9 @@ void FakeBluetoothLEDeviceWinrt::SimulateGattNameChange(
 void FakeBluetoothLEDeviceWinrt::SimulateGattServicesDiscovered(
     const std::vector<std::string>& uuids,
     const std::vector<std::string>& blocked_uuids) {
+  if (!bluetooth_test_winrt_) {
+    return;
+  }
   for (const auto& uuid : uuids) {
     // Attribute handles need to be unique for a given BLE device. Increasing by
     // a large number ensures enough address space for the contained
@@ -353,11 +415,10 @@ void FakeBluetoothLEDeviceWinrt::SimulateGattServiceRemoved(
     BluetoothRemoteGattService* service) {
   auto* device_service = static_cast<BluetoothRemoteGattServiceWinrt*>(service)
                              ->GetDeviceServiceForTesting();
-  auto iter = std::find_if(fake_services_.begin(), fake_services_.end(),
-                           [device_service](const auto& fake_service) {
-                             return device_service == fake_service.Get();
-                           });
-  DCHECK(iter != fake_services_.end());
+  auto iter = std::ranges::find(
+      fake_services_, device_service,
+      &Microsoft::WRL::ComPtr<FakeGattDeviceServiceWinrt>::Get);
+  CHECK(iter != fake_services_.end());
   fake_services_.erase(iter);
   SimulateGattServicesChanged();
   DCHECK(gatt_services_callback_);
@@ -415,10 +476,21 @@ void FakeBluetoothLEDeviceWinrt::SimulateGattServicesDiscoveryError() {
 
 FakeBluetoothLEDeviceStaticsWinrt::FakeBluetoothLEDeviceStaticsWinrt(
     BluetoothTestWinrt* bluetooth_test_winrt)
-    : bluetooth_test_winrt_(bluetooth_test_winrt) {}
+    : bluetooth_test_winrt_(bluetooth_test_winrt) {
+  if (bluetooth_test_winrt_) {
+    bluetooth_test_winrt_->RegisterFakeDeviceStatics(this);
+  }
+}
 
-FakeBluetoothLEDeviceStaticsWinrt::~FakeBluetoothLEDeviceStaticsWinrt() =
-    default;
+FakeBluetoothLEDeviceStaticsWinrt::~FakeBluetoothLEDeviceStaticsWinrt() {
+  if (bluetooth_test_winrt_) {
+    bluetooth_test_winrt_->UnregisterFakeDeviceStatics(this);
+  }
+}
+
+void FakeBluetoothLEDeviceStaticsWinrt::ClearBluetoothTestWinrt() {
+  bluetooth_test_winrt_ = nullptr;
+}
 
 HRESULT FakeBluetoothLEDeviceStaticsWinrt::FromIdAsync(
     HSTRING device_id,
@@ -429,8 +501,11 @@ HRESULT FakeBluetoothLEDeviceStaticsWinrt::FromIdAsync(
 HRESULT FakeBluetoothLEDeviceStaticsWinrt::FromBluetoothAddressAsync(
     uint64_t bluetooth_address,
     IAsyncOperation<BluetoothLEDevice*>** operation) {
+  if (!bluetooth_test_winrt_) {
+    return E_UNEXPECTED;
+  }
   auto async_op = Make<base::win::AsyncOperation<BluetoothLEDevice*>>();
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(async_op->callback(),
                      Make<FakeBluetoothLEDeviceWinrt>(bluetooth_test_winrt_)));

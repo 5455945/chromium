@@ -27,7 +27,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_SHEET_CANDIDATE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_SHEET_CANDIDATE_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -49,7 +49,6 @@ class StyleSheetCandidate {
   bool IsEnabledViaScript() const;
   bool IsEnabledAndLoading() const;
   bool CanBeActivated(const String& current_preferrable_name) const;
-  bool IsCSSStyle() const;
 
   StyleSheet* Sheet() const;
   AtomicString Title() const;

@@ -1,22 +1,31 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "services/data_decoder/image_decoder_impl.h"
+
+#include <array>
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
-#include "base/lazy_instance.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "build/build_config.h"
 #include "gin/array_buffer.h"
 #include "gin/public/isolate_holder.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
-#include "services/data_decoder/image_decoder_impl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "tools/v8_context_snapshot/buildflags.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
@@ -30,29 +39,30 @@ namespace {
 const int64_t kTestMaxImageSize = 128 * 1024;
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
-#if defined(USE_V8_CONTEXT_SNAPSHOT)
-constexpr gin::V8Initializer::V8SnapshotFileType kSnapshotType =
-    gin::V8Initializer::V8SnapshotFileType::kWithAdditionalContext;
+#if BUILDFLAG(USE_V8_CONTEXT_SNAPSHOT)
+constexpr gin::V8SnapshotFileType kSnapshotType =
+    gin::V8SnapshotFileType::kWithAdditionalContext;
 #else
-constexpr gin::V8Initializer::V8SnapshotFileType kSnapshotType =
-    gin::V8Initializer::V8SnapshotFileType::kDefault;
+constexpr gin::V8SnapshotFileType kSnapshotType =
+    gin::V8SnapshotFileType::kDefault;
 #endif
 #endif
 
-bool CreateJPEGImage(int width,
-                     int height,
-                     SkColor color,
-                     std::vector<unsigned char>* output) {
+std::optional<std::vector<uint8_t>> CreateJPEGImage(int width,
+                                                    int height,
+                                                    SkColor color) {
   SkBitmap bitmap;
   bitmap.allocN32Pixels(width, height);
   bitmap.eraseColor(color);
 
   constexpr int kQuality = 50;
-  if (!gfx::JPEGCodec::Encode(bitmap, kQuality, output)) {
+  std::optional<std::vector<uint8_t>> result =
+      gfx::JPEGCodec::Encode(bitmap, kQuality);
+
+  if (!result) {
     LOG(ERROR) << "Unable to encode " << width << "x" << height << " bitmap";
-    return false;
   }
-  return true;
+  return result;
 }
 
 class Request {
@@ -61,7 +71,7 @@ class Request {
 
   void DecodeImage(const std::vector<unsigned char>& image, bool shrink) {
     decoder_->DecodeImage(
-        image, mojom::ImageCodec::kDefault, shrink, kTestMaxImageSize,
+        {image}, mojom::ImageCodec::kDefault, shrink, kTestMaxImageSize,
         gfx::Size(),  // Take the smallest frame (there's only one frame).
         base::BindOnce(&Request::OnRequestDone, base::Unretained(this)));
   }
@@ -71,7 +81,7 @@ class Request {
  private:
   void OnRequestDone(const SkBitmap& result_image) { bitmap_ = result_image; }
 
-  ImageDecoderImpl* decoder_;
+  raw_ptr<ImageDecoderImpl> decoder_;
   SkBitmap bitmap_;
 };
 
@@ -86,29 +96,40 @@ class BlinkInitializer : public blink::Platform {
 
     mojo::BinderMap binders;
     blink::CreateMainThreadAndInitialize(this, &binders);
+    blink::CreateMainThreadIsolate();
   }
+
+  BlinkInitializer(const BlinkInitializer&) = delete;
+  BlinkInitializer& operator=(const BlinkInitializer&) = delete;
 
   ~BlinkInitializer() override = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(BlinkInitializer);
-};
+  // Required for binders to work, for testing, run on a single thread.
+  scoped_refptr<base::SequencedTaskRunner> MediaThreadTaskRunner() override {
+    return base::SequencedTaskRunner::GetCurrentDefault();
+  }
 
-base::LazyInstance<BlinkInitializer>::Leaky g_blink_initializer =
-    LAZY_INSTANCE_INITIALIZER;
+  scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() const override {
+    return base::SingleThreadTaskRunner::GetCurrentDefault();
+  }
+};
 
 class ImageDecoderImplTest : public testing::Test {
  public:
   ImageDecoderImplTest() = default;
   ~ImageDecoderImplTest() override = default;
 
-  void SetUp() override { g_blink_initializer.Get(); }
+  void SetUp() override {
+    static base::NoDestructor<BlinkInitializer> instance;
+  }
 
  protected:
   ImageDecoderImpl* decoder() { return &decoder_; }
 
  private:
-  base::test::SingleThreadTaskEnvironment task_environment_;
+  // V8 is generally multi threaded and may use tasks for arbitrary reasons,
+  // such as GC and off-thread compilation.
+  base::test::TaskEnvironment task_environment_;
   ImageDecoderImpl decoder_;
 };
 
@@ -122,15 +143,23 @@ TEST_F(ImageDecoderImplTest, DecodeImageSizeLimit) {
   int base_msg_size = sizeof(skia::mojom::BitmapN32::Data_);
 
   // Sizes which should trigger dimension-halving 0, 1 and 2 times
-  int heights[] = {max_height_for_msg - 10, max_height_for_msg + 10,
-                   2 * max_height_for_msg + 10};
-  int widths[] = {heights[0] * 3 / 2, heights[1] * 3 / 2, heights[2] * 3 / 2};
-  for (size_t i = 0; i < base::size(heights); i++) {
-    std::vector<unsigned char> jpg;
-    ASSERT_TRUE(CreateJPEGImage(widths[i], heights[i], SK_ColorRED, &jpg));
+  auto heights = std::to_array<int>({
+      max_height_for_msg - 10,
+      max_height_for_msg + 10,
+      2 * max_height_for_msg + 10,
+  });
+  auto widths = std::to_array<int>({
+      heights[0] * 3 / 2,
+      heights[1] * 3 / 2,
+      heights[2] * 3 / 2,
+  });
+  for (size_t i = 0; i < std::size(heights); i++) {
+    std::optional<std::vector<uint8_t>> jpg =
+        CreateJPEGImage(widths[i], heights[i], SK_ColorRED);
+    ASSERT_TRUE(jpg);
 
     Request request(decoder());
-    request.DecodeImage(jpg, true);
+    request.DecodeImage(jpg.value(), true);
     ASSERT_FALSE(request.bitmap().isNull());
 
     // Check that image has been shrunk appropriately
@@ -138,16 +167,16 @@ TEST_F(ImageDecoderImplTest, DecodeImageSizeLimit) {
               static_cast<uint64_t>(kTestMaxImageSize));
 // Android does its own image shrinking for memory conservation deeper in
 // the decode, so more specific tests here won't work.
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
     EXPECT_EQ(widths[i] >> i, request.bitmap().width());
     EXPECT_EQ(heights[i] >> i, request.bitmap().height());
 
     // Check that if resize not requested and image exceeds IPC size limit,
     // an empty image is returned
     if (heights[i] > max_height_for_msg) {
-      Request request(decoder());
-      request.DecodeImage(jpg, false);
-      EXPECT_TRUE(request.bitmap().isNull());
+      Request request2(decoder());
+      request2.DecodeImage(jpg.value(), /*shrink=*/false);
+      EXPECT_TRUE(request2.bitmap().isNull());
     }
 #endif
   }
@@ -155,13 +184,23 @@ TEST_F(ImageDecoderImplTest, DecodeImageSizeLimit) {
 
 TEST_F(ImageDecoderImplTest, DecodeImageFailed) {
   // The "jpeg" is just some "random" data;
-  const char kRandomData[] = "u gycfy7xdjkhfgui bdui ";
-  std::vector<unsigned char> jpg(kRandomData,
-                                 kRandomData + sizeof(kRandomData));
-
+  auto jpg = base::ToVector<unsigned char>("u gycfy7xdjkhfgui bdui ");
   Request request(decoder());
   request.DecodeImage(jpg, false);
   EXPECT_TRUE(request.bitmap().isNull());
+}
+
+TEST_F(ImageDecoderImplTest, DecodeAnimationFailed) {
+  auto data = base::as_byte_span("this ASCII text is *defintely* an animation");
+
+  std::vector<mojom::AnimationFramePtr> frames;
+  decoder()->DecodeAnimation(
+      {data}, false, kTestMaxImageSize,
+      base::BindLambdaForTesting(
+          [&frames](std::vector<mojom::AnimationFramePtr> result) {
+            frames = std::move(result);
+          }));
+  EXPECT_EQ(0u, frames.size());
 }
 
 }  // namespace data_decoder

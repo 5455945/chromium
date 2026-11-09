@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,8 +21,8 @@ int JavaBookmarkIdGetType(JNIEnv* env,
                           const base::android::JavaRef<jobject>& obj);
 
 // See BookmarkId#createBookmarkId
-base::android::ScopedJavaLocalRef<jobject> JavaBookmarkIdCreateBookmarkId(
-    JNIEnv* env, jlong id, jint type);
+base::android::ScopedJavaLocalRef<jobject>
+JavaBookmarkIdCreateBookmarkId(JNIEnv* env, int64_t id, int32_t type);
 
 }  // namespace android
 }  // namespace bookmarks

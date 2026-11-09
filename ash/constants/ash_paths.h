@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class FilePath;
 // This file declares path keys for the chromeos module.  These can be used with
 // the PathService to access various special directories and files.
 
-namespace chromeos {
+namespace ash {
 
 enum {
   PATH_START = 7000,
@@ -22,15 +22,27 @@ enum {
   FILE_DEFAULT_APP_ORDER,  // Full path to the json file that defines the
                            // default app order.
   FILE_MACHINE_INFO,       // Full path to machine hardware info file.
-  FILE_VPD,                // Full path to VPD file.
   FILE_UPTIME,             // Full path to the file via which the kernel
                            // exposes the current device uptime.
   FILE_UPDATE_REBOOT_NEEDED_UPTIME,  // Full path to a file in which Chrome can
                                      // store the uptime at which an update
                                      // became necessary. The file should be
                                      // cleared on boot.
-  FILE_STARTUP_CUSTOMIZATION_MANIFEST,     // Path to OEM partner startup
-                                           // customization manifest.
+  FILE_STARTUP_CUSTOMIZATION_MANIFEST,  // Path to OEM partner startup
+                                        // customization manifest.
+  FILE_TPM_FIRMWARE_UPDATE_LOCATION,    // File containing the location of
+                                        // the updated TPM firmware binary
+                                        // in the file system.
+  FILE_TPM_FIRMWARE_UPDATE_SRK_VULNERABLE_ROCA,  // Flag file indicating SRK
+                                                 // ROCA vulnerability status.
+  FILE_DEVICE_REFRESH_TOKEN,  // File under DIR_USER_DATA containing the
+                              // device refresh token.
+  DIR_USER_DATA,      // The same as chrome::DIR_USER_DATA. Allowed to access
+                      // the value from //ash.
+  DIR_RESOURCES,      // The same as chrome::DIR_RESOURCES. Allowed to access
+                      // the value from //ash.
+  DIR_HOMEDIR_MOUNT,  // Base directory where user cryptohome mount point
+                      // (named as hash of username) resides.
   DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS,     // Directory under which a cache of
                                            // force-installed extensions is
                                            // maintained for each device-local
@@ -56,10 +68,21 @@ enum {
   DIR_SIGNIN_PROFILE_EXTENSIONS,        // Directory under which a cache of
                                         // force-installed extensions is
                                         // maintained for the signin profile.
-  DIR_PREINSTALLED_COMPONENTS,          // Directory that contains pre-installed
-                                        // components.
-  DIR_DEVICE_POLICY_EXTERNAL_DATA,  // Directory where device policy external
-                                    // data resources are cached.
+  DIR_DEVICE_POLICY_EXTERNAL_DATA,     // Directory where device policy external
+                                       // data resources are cached.
+  DIR_DEVICE_POLICY_SCREENSAVER_DATA,  // Directory where the device policy
+                                       // managed screensaver images are cached.
+  DIR_DEVICE_LOCAL_ACCOUNT_IWA_CACHE,  // Directory under which a cache of
+                                       // force-installed IWAs is maintained for
+                                       // kiosk and MGS.
+  DIR_WALLPAPERS,                      // Directory where downloaded chromeos
+                                       // wallpapers reside.
+  DIR_CUSTOM_WALLPAPERS,               // Directory where custom wallpapers
+                                       // reside.
+  DIR_ARC_DEFAULT_APPS,  // Directory containing the declarations of the ARC
+                         // apps installed by default. Board specific ones are
+                         // in the sub directory named with the board name.
+
   PATH_END
 };
 
@@ -72,28 +95,6 @@ COMPONENT_EXPORT(ASH_CONSTANTS) void RegisterPathProvider();
 COMPONENT_EXPORT(ASH_CONSTANTS)
 void RegisterStubPathOverrides(const base::FilePath& stubs_dir);
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove when moved to ash.
-namespace ash {
-using ::chromeos::DIR_DEVICE_DISPLAY_PROFILES;
-using ::chromeos::DIR_DEVICE_DISPLAY_PROFILES_VPD;
-using ::chromeos::DIR_DEVICE_EXTENSION_LOCAL_CACHE;
-using ::chromeos::DIR_DEVICE_LOCAL_ACCOUNT_COMPONENT_POLICY;
-using ::chromeos::DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS;
-using ::chromeos::DIR_DEVICE_LOCAL_ACCOUNT_EXTERNAL_DATA;
-using ::chromeos::DIR_DEVICE_POLICY_EXTERNAL_DATA;
-using ::chromeos::DIR_PREINSTALLED_COMPONENTS;
-using ::chromeos::DIR_SIGNIN_PROFILE_COMPONENT_POLICY;
-using ::chromeos::DIR_SIGNIN_PROFILE_EXTENSIONS;
-using ::chromeos::FILE_DEFAULT_APP_ORDER;
-using ::chromeos::FILE_MACHINE_INFO;
-using ::chromeos::FILE_STARTUP_CUSTOMIZATION_MANIFEST;
-using ::chromeos::FILE_UPDATE_REBOOT_NEEDED_UPTIME;
-using ::chromeos::FILE_UPTIME;
-using ::chromeos::FILE_VPD;
-using ::chromeos::PATH_END;
-using ::chromeos::PATH_START;
 }  // namespace ash
 
 #endif  // ASH_CONSTANTS_ASH_PATHS_H_

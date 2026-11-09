@@ -1,11 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "mojo/public/cpp/bindings/message.h"
@@ -13,7 +12,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/system/functions.h"
-#include "mojo/public/interfaces/bindings/tests/test_bad_messages.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_bad_messages.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -23,6 +22,10 @@ namespace {
 class TestBadMessagesImpl : public TestBadMessages {
  public:
   TestBadMessagesImpl() = default;
+
+  TestBadMessagesImpl(const TestBadMessagesImpl&) = delete;
+  TestBadMessagesImpl& operator=(const TestBadMessagesImpl&) = delete;
+
   ~TestBadMessagesImpl() override = default;
 
   void Bind(PendingReceiver<TestBadMessages> receiver) {
@@ -55,8 +58,6 @@ class TestBadMessagesImpl : public TestBadMessages {
 
   ReportBadMessageCallback bad_message_callback_;
   mojo::Receiver<TestBadMessages> receiver_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TestBadMessagesImpl);
 };
 
 class ReportBadMessageTest : public BindingsTestBase {
@@ -84,8 +85,9 @@ class ReportBadMessageTest : public BindingsTestBase {
 
  private:
   void OnProcessError(const std::string& error) {
-    if (error_handler_)
+    if (error_handler_) {
       std::move(error_handler_).Run();
+    }
   }
 
   Remote<TestBadMessages> remote_;
@@ -93,7 +95,7 @@ class ReportBadMessageTest : public BindingsTestBase {
   base::OnceClosure error_handler_;
 };
 
-TEST_P(ReportBadMessageTest, Request) {
+TEST_F(ReportBadMessageTest, Request) {
   // Verify that basic immediate error reporting works.
   bool error = false;
   SetErrorHandler(base::BindLambdaForTesting([&] { error = true; }));
@@ -101,7 +103,7 @@ TEST_P(ReportBadMessageTest, Request) {
   EXPECT_TRUE(error);
 }
 
-TEST_P(ReportBadMessageTest, RequestAsync) {
+TEST_F(ReportBadMessageTest, RequestAsync) {
   bool error = false;
   SetErrorHandler(base::BindLambdaForTesting([&] { error = true; }));
 
@@ -118,7 +120,7 @@ TEST_P(ReportBadMessageTest, RequestAsync) {
   EXPECT_TRUE(error);
 }
 
-TEST_P(ReportBadMessageTest, Response) {
+TEST_F(ReportBadMessageTest, Response) {
   bool error = false;
   SetErrorHandler(base::BindLambdaForTesting([&] { error = true; }));
 
@@ -134,7 +136,7 @@ TEST_P(ReportBadMessageTest, Response) {
   EXPECT_TRUE(error);
 }
 
-TEST_P(ReportBadMessageTest, ResponseAsync) {
+TEST_F(ReportBadMessageTest, ResponseAsync) {
   bool error = false;
   SetErrorHandler(base::BindLambdaForTesting([&] { error = true; }));
 
@@ -155,8 +157,6 @@ TEST_P(ReportBadMessageTest, ResponseAsync) {
       .Run("this message is bad and should feel bad");
   EXPECT_TRUE(error);
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(ReportBadMessageTest);
 
 }  // namespace
 }  // namespace test

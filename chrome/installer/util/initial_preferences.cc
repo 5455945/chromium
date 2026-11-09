@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/cxx17_backports.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
 #include "base/json/json_string_value_serializer.h"
@@ -32,53 +32,56 @@ const char kFirstRunTabs[] = "first_run_tabs";
 base::LazyInstance<installer::InitialPreferences>::DestructorAtExit
     g_initial_preferences = LAZY_INSTANCE_INITIALIZER;
 
-bool GetURLFromValue(const base::Value* in_value, std::string* out_value) {
-  return in_value && out_value && in_value->GetAsString(out_value);
-}
-
 std::vector<std::string> GetNamedList(const char* name,
-                                      const base::DictionaryValue* prefs) {
+                                      const base::DictValue& prefs) {
   std::vector<std::string> list;
-  if (!prefs)
+  const base::ListValue* value_list = prefs.FindListByDottedPath(name);
+  if (!value_list)
     return list;
 
-  const base::ListValue* value_list = nullptr;
-  if (!prefs->GetList(name, &value_list))
-    return list;
-
-  list.reserve(value_list->GetSize());
-  for (size_t i = 0; i < value_list->GetSize(); ++i) {
-    const base::Value* entry;
-    std::string url_entry;
-    if (!value_list->Get(i, &entry) || !GetURLFromValue(entry, &url_entry)) {
+  list.reserve(value_list->size());
+  for (const base::Value& entry : *value_list) {
+    if (!entry.is_string()) {
       NOTREACHED();
-      break;
     }
-    list.push_back(url_entry);
+    list.push_back(entry.GetString());
   }
   return list;
 }
 
-base::DictionaryValue* ParseDistributionPreferences(
+std::optional<base::DictValue> ParseDistributionPreferences(
     const std::string& json_data) {
   JSONStringValueDeserializer json(json_data);
   std::string error;
   std::unique_ptr<base::Value> root(json.Deserialize(nullptr, &error));
   if (!root.get()) {
     LOG(WARNING) << "Failed to parse initial prefs file: " << error;
-    return nullptr;
+    return std::nullopt;
   }
   if (!root->is_dict()) {
     LOG(WARNING) << "Failed to parse initial prefs file: "
                  << "Root item must be a dictionary.";
-    return nullptr;
+    return std::nullopt;
   }
-  return static_cast<base::DictionaryValue*>(root.release());
+  return std::move(*root).TakeDict();
 }
 
 }  // namespace
 
 namespace installer {
+
+#if !BUILDFLAG(IS_MAC)
+// static
+base::FilePath InitialPreferences::Path(const base::FilePath& dir,
+                                        bool for_read) {
+  base::FilePath initial_prefs = dir.AppendASCII("initial_preferences");
+  if (!for_read || base::PathIsReadable(initial_prefs)) {
+    return initial_prefs;
+  }
+
+  return dir.AppendASCII("master_preferences");
+}
+#endif  // !BUILDFLAG(IS_MAC)
 
 InitialPreferences::InitialPreferences() {
   InitializeFromCommandLine(*base::CommandLine::ForCurrentProcess());
@@ -96,11 +99,11 @@ InitialPreferences::InitialPreferences(const std::string& prefs) {
   InitializeFromString(prefs);
 }
 
-InitialPreferences::InitialPreferences(const base::DictionaryValue& prefs)
-    : initial_dictionary_(prefs.CreateDeepCopy()) {
+InitialPreferences::InitialPreferences(base::DictValue prefs)
+    : initial_dictionary_(std::move(prefs)) {
   // Cache a pointer to the distribution dictionary.
-  initial_dictionary_->GetDictionary(
-      installer::initial_preferences::kDistroDict, &distribution_);
+  distribution_ = initial_dictionary_->FindDict(
+      installer::initial_preferences::kDistroDict);
 
   EnforceLegacyPreferences();
 }
@@ -109,16 +112,16 @@ InitialPreferences::~InitialPreferences() = default;
 
 void InitialPreferences::InitializeFromCommandLine(
     const base::CommandLine& cmd_line) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (cmd_line.HasSwitch(installer::switches::kInstallerData)) {
     base::FilePath prefs_path(
         cmd_line.GetSwitchValuePath(installer::switches::kInstallerData));
     InitializeFromFilePath(prefs_path);
   } else {
-    initial_dictionary_ = std::make_unique<base::DictionaryValue>();
+    initial_dictionary_.emplace();
   }
 
-  DCHECK(initial_dictionary_.get());
+  DCHECK(initial_dictionary_);
 
   // A simple map from command line switches to equivalent switches in the
   // distribution dictionary.  Currently all switches added will be set to
@@ -136,8 +139,6 @@ void InitialPreferences::InitializeFromCommandLine(
        installer::initial_preferences::kDoNotRegisterForUpdateLaunch},
       {installer::switches::kDoNotLaunchChrome,
        installer::initial_preferences::kDoNotLaunchChrome},
-      {installer::switches::kMakeChromeDefault,
-       installer::initial_preferences::kMakeChromeDefault},
       {installer::switches::kSystemLevel,
        installer::initial_preferences::kSystemLevel},
       {installer::switches::kVerboseLogging,
@@ -145,11 +146,11 @@ void InitialPreferences::InitializeFromCommandLine(
   };
 
   std::string name(installer::initial_preferences::kDistroDict);
-  for (size_t i = 0; i < base::size(translate_switches); ++i) {
-    if (cmd_line.HasSwitch(translate_switches[i].cmd_line_switch)) {
+  for (const auto& translate_switch : translate_switches) {
+    if (cmd_line.HasSwitch(translate_switch.cmd_line_switch)) {
       name.assign(installer::initial_preferences::kDistroDict);
-      name.append(".").append(translate_switches[i].distribution_switch);
-      initial_dictionary_->SetBoolean(name, true);
+      name.append(".").append(translate_switch.distribution_switch);
+      initial_dictionary_->SetByDottedPath(name, true);
     }
   }
 
@@ -159,26 +160,27 @@ void InitialPreferences::InitializeFromCommandLine(
   if (!str_value.empty()) {
     name.assign(installer::initial_preferences::kDistroDict);
     name.append(".").append(installer::initial_preferences::kLogFile);
-    initial_dictionary_->SetString(name, base::WideToUTF8(str_value));
+    initial_dictionary_->SetByDottedPath(name, base::WideToUTF8(str_value));
   }
 
   // Handle the special case of --system-level being implied by the presence of
   // the kGoogleUpdateIsMachineEnvVar environment variable.
   std::unique_ptr<base::Environment> env(base::Environment::Create());
   if (env) {
-    std::string is_machine_var;
-    env->GetVar(env_vars::kGoogleUpdateIsMachineEnvVar, &is_machine_var);
+    std::string is_machine_var =
+        env->GetVar(env_vars::kGoogleUpdateIsMachineEnvVar)
+            .value_or(std::string());
     if (is_machine_var == "1") {
       VLOG(1) << "Taking system-level from environment.";
       name.assign(installer::initial_preferences::kDistroDict);
       name.append(".").append(installer::initial_preferences::kSystemLevel);
-      initial_dictionary_->SetBoolean(name, true);
+      initial_dictionary_->SetByDottedPath(name, true);
     }
   }
 
   // Cache a pointer to the distribution dictionary. Ignore errors if any.
-  initial_dictionary_->GetDictionary(
-      installer::initial_preferences::kDistroDict, &distribution_);
+  distribution_ = initial_dictionary_->FindDict(
+      installer::initial_preferences::kDistroDict);
 #endif
 }
 
@@ -198,16 +200,16 @@ void InitialPreferences::InitializeFromFilePath(
 
 bool InitialPreferences::InitializeFromString(const std::string& json_data) {
   if (!json_data.empty())
-    initial_dictionary_.reset(ParseDistributionPreferences(json_data));
+    initial_dictionary_ = ParseDistributionPreferences(json_data);
 
   bool data_is_valid = true;
-  if (!initial_dictionary_.get()) {
-    initial_dictionary_ = std::make_unique<base::DictionaryValue>();
+  if (!initial_dictionary_) {
+    initial_dictionary_.emplace();
     data_is_valid = false;
   } else {
     // Cache a pointer to the distribution dictionary.
-    initial_dictionary_->GetDictionary(
-        installer::initial_preferences::kDistroDict, &distribution_);
+    distribution_ = initial_dictionary_->FindDict(
+        installer::initial_preferences::kDistroDict);
   }
 
   EnforceLegacyPreferences();
@@ -227,9 +229,9 @@ void InitialPreferences::EnforceLegacyPreferences() {
   bool create_all_shortcuts = true;
   GetBool(kCreateAllShortcuts, &create_all_shortcuts);
   if (!create_all_shortcuts) {
-    distribution_->SetBoolean(
+    distribution_->Set(
         installer::initial_preferences::kDoNotCreateDesktopShortcut, true);
-    distribution_->SetBoolean(
+    distribution_->Set(
         installer::initial_preferences::kDoNotCreateQuickLaunchShortcut, true);
   }
 
@@ -253,7 +255,7 @@ void InitialPreferences::EnforceLegacyPreferences() {
   for (const auto& mapping : kLegacyDistroImportPrefMappings) {
     bool value = false;
     if (GetBool(mapping.old_distro_pref_path, &value))
-      initial_dictionary_->SetBoolean(mapping.modern_pref_path, value);
+      initial_dictionary_->Set(mapping.modern_pref_path, value);
   }
 
 #if BUILDFLAG(ENABLE_RLZ)
@@ -262,31 +264,39 @@ void InitialPreferences::EnforceLegacyPreferences() {
   static constexpr char kDistroPingDelay[] = "ping_delay";
   int rlz_ping_delay = 0;
   if (GetInt(kDistroPingDelay, &rlz_ping_delay))
-    initial_dictionary_->SetInteger(prefs::kRlzPingDelaySeconds,
-                                    rlz_ping_delay);
+    initial_dictionary_->Set(prefs::kRlzPingDelaySeconds, rlz_ping_delay);
 #endif  // BUILDFLAG(ENABLE_RLZ)
 }
 
 bool InitialPreferences::GetBool(const std::string& name, bool* value) const {
-  bool ret = false;
-  if (distribution_)
-    ret = distribution_->GetBoolean(name, value);
-  return ret;
+  if (!distribution_)
+    return false;
+  const std::optional<bool> v = distribution_->FindBoolByDottedPath(name);
+  if (!v)
+    return false;
+  *value = *v;
+  return true;
 }
 
 bool InitialPreferences::GetInt(const std::string& name, int* value) const {
-  bool ret = false;
-  if (distribution_)
-    ret = distribution_->GetInteger(name, value);
-  return ret;
+  if (!distribution_)
+    return false;
+  const std::optional<int> v = distribution_->FindInt(name);
+  if (!v)
+    return false;
+  *value = *v;
+  return true;
 }
 
 bool InitialPreferences::GetString(const std::string& name,
                                    std::string* value) const {
-  bool ret = false;
-  if (distribution_)
-    ret = (distribution_->GetString(name, value) && !value->empty());
-  return ret;
+  if (!distribution_)
+    return false;
+  const std::string* v = distribution_->FindString(name);
+  if (!v || v->empty())
+    return false;
+  *value = *v;
+  return true;
 }
 
 bool InitialPreferences::GetPath(const std::string& name,
@@ -299,30 +309,44 @@ bool InitialPreferences::GetPath(const std::string& name,
 }
 
 std::vector<std::string> InitialPreferences::GetFirstRunTabs() const {
-  return GetNamedList(kFirstRunTabs, initial_dictionary_.get());
+  return GetNamedList(kFirstRunTabs, *initial_dictionary_);
 }
 
-bool InitialPreferences::GetExtensionsBlock(
-    base::DictionaryValue** extensions) const {
-  return initial_dictionary_->GetDictionary(
-      initial_preferences::kExtensionsBlock, extensions);
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+std::string InitialPreferences::GetInitialExtensionsProviderName() const {
+  const std::string* provider_name =
+      initial_dictionary_->FindStringByDottedPath(
+          initial_preferences::kInitialExtensionsProviderName);
+  return provider_name ? *provider_name : std::string();
 }
 
-std::string InitialPreferences::GetCompressedVariationsSeed() const {
+const base::ListValue* InitialPreferences::GetInitialExtensionsList() const {
+  return initial_dictionary_->FindListByDottedPath(
+      initial_preferences::kInitialExtensionsList);
+}
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+const base::DictValue* InitialPreferences::GetBookmarksBlock() const {
+  return initial_dictionary_->FindDict(initial_preferences::kBookmarksBlock);
+}
+
+std::string InitialPreferences::GetCompressedVariationsSeed() {
   return ExtractPrefString(variations::prefs::kVariationsCompressedSeed);
 }
 
-std::string InitialPreferences::GetVariationsSeedSignature() const {
+std::string InitialPreferences::GetVariationsSeedSignature() {
   return ExtractPrefString(variations::prefs::kVariationsSeedSignature);
 }
 
-std::string InitialPreferences::ExtractPrefString(
-    const std::string& name) const {
+std::string InitialPreferences::ExtractPrefString(const std::string& name) {
   std::string result;
-  std::unique_ptr<base::Value> pref_value;
-  if (initial_dictionary_->Remove(name, &pref_value)) {
-    if (!pref_value->GetAsString(&result))
+  std::optional<base::Value> pref_value = initial_dictionary_->Extract(name);
+  if (pref_value.has_value()) {
+    if (pref_value->is_string()) {
+      result = pref_value->GetString();
+    } else {
       NOTREACHED();
+    }
   }
   return result;
 }

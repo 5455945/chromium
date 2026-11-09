@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -52,6 +52,32 @@ TEST(AffReaderTest, IndexedAffix) {
   // The class name ("ADJECTIVE" in the input) should have been converted into
   // an index in the AffReader's internal class table.
   EXPECT_EQ(reader.affix_rules()[3], "SFX VERB 0 able/1 .");
+}
+
+TEST(AffReaderTest, MorphologicalDescription) {
+  AffReader reader(TestFilePath("description.aff"));
+  EXPECT_TRUE(reader.Read());
+  // The description after the condition is dropped, so a slash or a dash in
+  // it is not mistaken for continuation flags.
+  EXPECT_EQ(reader.affix_rules()[3], "SFX VERB 0 ed .");
+  EXPECT_EQ(reader.affix_rules()[4], "SFX VERB 0 able/1 .");
+  EXPECT_EQ(reader.affix_rules()[5], "SFX VERB 0 -ing .");
+  // No alias must have been registered for the description text.
+  ASSERT_EQ(reader.GetAffixGroups().size(), 1u);
+  EXPECT_EQ(reader.GetAffixGroups()[0], "AF ADJECTIVE");
+  // The AM table of descriptions is dropped as well.
+  EXPECT_TRUE(reader.other_commands().empty());
+}
+
+TEST(AffReaderTest, TabSeparatedAffix) {
+  AffReader reader(TestFilePath("tab-separated.aff"));
+  EXPECT_TRUE(reader.Read());
+  // Tabs are accepted as field separators and normalized to single spaces,
+  // and the continuation class is converted into an index just like in a
+  // space-separated rule.
+  EXPECT_EQ(reader.affix_rules()[0], "SFX VERB Y 1");
+  EXPECT_EQ(reader.affix_rules()[1], "SFX VERB 0 able/1 .");
+  EXPECT_EQ(reader.GetAffixGroups()[0], "AF ADJECTIVE");
 }
 
 TEST(AffReaderTest, Rep) {

@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,28 +8,26 @@ from telemetry import benchmark
 from contrib.system_health_scroll_jank import janky_story_set
 
 _BENCHMARK_UMA = [
-    'Browser.Responsiveness.JankyIntervalsPerThirtySeconds',
-    'Compositing.Display.DrawToSwapUs',
-    'CompositorLatency.TotalLatency',
-    'CompositorLatency.Type',
-    'Event.Latency.ScrollBegin.Touch.TimeToScrollUpdateSwapBegin4',
-    'Event.Latency.ScrollUpdate.Touch.TimeToScrollUpdateSwapBegin4',
-    'Event.Latency.ScrollBegin.Wheel.TimeToScrollUpdateSwapBegin4',
-    'Event.Latency.ScrollUpdate.Wheel.TimeToScrollUpdateSwapBegin4',
-    'Event.Latency.ScrollJank',
-    'Event.Latency.ScrollUpdate.JankyDuration',
-    'Event.Latency.ScrollUpdate.JankyEvents',
-    'Event.Latency.ScrollUpdate.TotalDuration',
-    'Event.Latency.ScrollUpdate.TotalEvents',
-    'Graphics.Smoothness.Checkerboarding.TouchScroll',
-    'Graphics.Smoothness.Checkerboarding.WheelScroll',
-    'Graphics.Smoothness.Jank.Compositor.TouchScroll',
-    'Graphics.Smoothness.Jank.Main.TouchScroll',
-    'Graphics.Smoothness.PercentDroppedFrames.AllAnimations',
-    'Graphics.Smoothness.PercentDroppedFrames.AllInteractions',
-    'Graphics.Smoothness.PercentDroppedFrames.AllSequences',
-    'Memory.GPU.PeakMemoryUsage2.Scroll',
-    'Memory.GPU.PeakMemoryUsage2.PageLoad',
+  'Browser.MainThreadsCongestion',
+  'Compositing.Display.DrawToSwapUs',
+  'CompositorLatency.TotalLatency',
+  'CompositorLatency.Type',
+  'Event.ScrollJank.DelayedFramesPercentage.FixedWindow',
+  'Event.ScrollJank.MissedVsyncsSum.FixedWindow',
+  'Event.Jank.PredictorJankyFramePercentage2',
+  'Event.Jank.ScrollUpdate.FastScroll.MissedVsync.FrameAboveJankyThreshold2',
+  'Event.Jank.ScrollUpdate.FastScroll.NoMissedVsync.FrameAboveJankyThreshold2',
+  'Event.Jank.ScrollUpdate.SlowScroll.MissedVsync.FrameAboveJankyThreshold2',
+  'Event.Jank.ScrollUpdate.SlowScroll.NoMissedVsync.FrameAboveJankyThreshold2',
+  'EventLatency.FirstGestureScrollUpdate.TotalLatency2',
+  'EventLatency.GestureScrollUpdate.TotalLatency2',
+  'Graphics.Smoothness.Checkerboarding3.AllInteractions',
+  'Graphics.Smoothness.Jank3.AllInteractions',
+  'Graphics.Smoothness.PercentDroppedFrames3.AllAnimations',
+  'Graphics.Smoothness.PercentDroppedFrames3.AllInteractions',
+  'Graphics.Smoothness.PercentDroppedFrames3.AllSequences',
+  'Memory.GPU.PeakMemoryUsage2.Scroll',
+  'Memory.GPU.PeakMemoryUsage2.PageLoad',
 ]
 
 
@@ -47,19 +45,29 @@ class SystemHealthScrollJankMobile(system_health.MobileCommonSystemHealth):
     return 'system_health.scroll_jank_mobile'
 
   def CreateCoreTimelineBasedMeasurementOptions(self):
-    options = super(SystemHealthScrollJankMobile,
-                    self).CreateCoreTimelineBasedMeasurementOptions()
+    options = super(
+      SystemHealthScrollJankMobile, self
+    ).CreateCoreTimelineBasedMeasurementOptions()
     options.ExtendTraceCategoryFilter(
-        ['benchmark', 'cc', 'input', 'disabled-by-default-histogram_samples'])
+      [
+        'benchmark',
+        'cc',
+        'input',
+        'disabled-by-default-histogram_samples',
+        'latencyInfo',
+      ]
+    )
     options.config.chrome_trace_config.EnableUMAHistograms(*_BENCHMARK_UMA)
-    options.SetTimelineBasedMetrics([
+    options.SetTimelineBasedMetrics(
+      [
         'renderingMetric',
         'umaMetric',
         # Unless --experimentatil-tbmv3-metric flag is used, the following tbmv3
         # metrics do nothing.
         'tbmv3:uma_metrics',
         'tbmv3:scroll_jank',
-    ])
+      ]
+    )
     return options
 
   def CreateStorySet(self, options):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -56,17 +56,16 @@ def get_size(filename):
 
 
 def get_linux_stripped_size(filename):
-  EU_STRIP_NAME = 'eu-strip'
   # Assumes |filename| is in out/Release
-  # build/linux/bin/eu-strip'
   src_dir = os.path.dirname(os.path.dirname(os.path.dirname(filename)))
-  eu_strip_path = os.path.join(src_dir, 'build', 'linux', 'bin', EU_STRIP_NAME)
-  if (platform.architecture()[0] == '64bit' or
-      not os.path.exists(eu_strip_path)):
-    eu_strip_path = EU_STRIP_NAME
+  llvm_strip_path = os.path.join(src_dir, 'third_party', 'llvm-build',
+                                 'Release+Asserts', 'bin', 'llvm-strip')
 
   with tempfile.NamedTemporaryFile() as stripped_file:
-    strip_cmd = [eu_strip_path, '-o', stripped_file.name, filename]
+    strip_cmd = [
+        llvm_strip_path, '--strip-unneeded', '--strip-debug', '-o',
+        stripped_file.name, filename
+    ]
     result = 0
     result, _ = run_process(result, strip_cmd)
     if result != 0:
@@ -406,12 +405,9 @@ def main_win(options, args, results_collector):
     'mini_installer.exe',
     'resources.pak',
     'setup.exe',
-    'swiftshader\\libEGL.dll',
-    'swiftshader\\libGLESv2.dll',
+    'WidevineCdm\\_platform_specific\\win_arm64\\widevinecdm.dll',
     'WidevineCdm\\_platform_specific\\win_x64\\widevinecdm.dll',
-    'WidevineCdm\\_platform_specific\\win_x64\\widevinecdmadapter.dll',
     'WidevineCdm\\_platform_specific\\win_x86\\widevinecdm.dll',
-    'WidevineCdm\\_platform_specific\\win_x86\\widevinecdmadapter.dll',
   ]
 
   build_dir = build_directory.GetBuildOutputDirectory(SRC_DIR)
@@ -448,7 +444,7 @@ def main():
     default_platform = 'win'
   elif sys.platform.startswith('darwin'):
     default_platform = 'mac'
-  elif sys.platform == 'linux2':
+  elif sys.platform.startswith('linux'):
     default_platform = 'linux'
   else:
     default_platform = None

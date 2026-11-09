@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,18 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/child_accounts/parent_access_controller.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/check_deref.h"
+#include "base/check_op.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
-#include "components/user_manager/known_user.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 
@@ -26,10 +27,10 @@ namespace parent_access {
 
 namespace {
 
+static ParentAccessService* g_instance = nullptr;
+
 // Returns true when the device owner is a child.
 bool IsDeviceOwnedByChild() {
-  // TODO(crbug.com/1143369): Owner id might not be available early after
-  // startup. Wait for it to be ready.
   AccountId owner_account_id =
       user_manager::UserManager::Get()->GetOwnerAccountId();
   if (owner_account_id.empty()) {
@@ -54,32 +55,16 @@ bool IsDeviceOwnedByChild() {
   return device_owner->IsChild();
 }
 
-// Returns true is any parent code config is available on the device.
-bool IsParentCodeConfigAvailable() {
-  const user_manager::UserList& users =
-      user_manager::UserManager::Get()->GetUsers();
-  const base::Value* dictionary = nullptr;
-  for (const auto* user : users) {
-    if (user_manager::known_user::GetPref(
-            user->GetAccountId(), prefs::kKnownUserParentAccessCodeConfig,
-            &dictionary)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 }  // namespace
 
 // static
 void ParentAccessService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(prefs::kParentAccessCodeConfig);
+  registry->RegisterDictionaryPref(ash::prefs::kParentAccessCodeConfig);
 }
 
 // static
 ParentAccessService& ParentAccessService::Get() {
-  static base::NoDestructor<ParentAccessService> instance;
-  return *instance;
+  return CHECK_DEREF(g_instance);
 }
 
 // static
@@ -87,28 +72,32 @@ bool ParentAccessService::IsApprovalRequired(SupervisedAction action) {
   switch (action) {
     case SupervisedAction::kUpdateClock:
     case SupervisedAction::kUpdateTimezone:
-      if (user_manager::UserManager::Get()->IsUserLoggedIn())
-        return user_manager::UserManager::Get()->GetActiveUser()->IsChild();
+      if (const auto* active_session =
+              session_manager::SessionManager::Get()->GetActiveSession()) {
+        return CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                               active_session->account_id()))
+            .IsChild();
+      }
       return IsDeviceOwnedByChild();
     case SupervisedAction::kAddUser:
-      if (!features::IsParentAccessCodeForOnlineLoginEnabled())
-        return false;
-      return IsDeviceOwnedByChild();
-    case SupervisedAction::kReauth:
-      if (!features::IsParentAccessCodeForOnlineLoginEnabled())
-        return false;
-      if (!IsParentCodeConfigAvailable())
-        return false;
       return IsDeviceOwnedByChild();
     case SupervisedAction::kUnlockTimeLimits:
-      DCHECK(user_manager::UserManager::Get()->IsUserLoggedIn());
+      CHECK(user_manager::UserManager::Get()->IsUserLoggedIn(),
+            base::NotFatalUntil::M160);
       return true;
   }
 }
 
-ParentAccessService::ParentAccessService() = default;
+ParentAccessService::ParentAccessService(PrefService* local_state)
+    : config_source_(local_state) {
+  CHECK(!g_instance);
+  g_instance = this;
+}
 
-ParentAccessService::~ParentAccessService() = default;
+ParentAccessService::~ParentAccessService() {
+  CHECK_EQ(g_instance, this);
+  g_instance = nullptr;
+}
 
 ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
     const AccountId& account_id,
@@ -118,7 +107,7 @@ ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
 
   if (config_source_.config_map().empty() ||
       (account_id.is_valid() &&
-       !base::Contains(config_source_.config_map(), account_id))) {
+       !config_source_.config_map().contains(account_id))) {
     result = ParentCodeValidationResult::kNoConfig;
     NotifyObservers(result, account_id);
     return result;
@@ -140,8 +129,14 @@ ParentCodeValidationResult ParentAccessService::ValidateParentAccessCode(
   return result;
 }
 
-void ParentAccessService::LoadConfigForUser(const user_manager::User* user) {
-  config_source_.LoadConfigForUser(user);
+void ParentAccessService::UpdateConfigForUser(
+    const AccountId& account_id,
+    std::optional<base::DictValue> config) {
+  if (config) {
+    config_source_.UpdateConfigForUser(account_id, std::move(config.value()));
+  } else {
+    config_source_.RemoveConfigForUser(account_id);
+  }
 }
 
 void ParentAccessService::AddObserver(Observer* observer) {
@@ -150,6 +145,20 @@ void ParentAccessService::AddObserver(Observer* observer) {
 
 void ParentAccessService::RemoveObserver(Observer* observer) {
   observers_.RemoveObserver(observer);
+}
+
+bool ParentAccessService::IsTimezoneChangeApproved(
+    const AccountId& account_id) const {
+  return timezone_change_approved_users_.contains(account_id);
+}
+
+void ParentAccessService::SetTimezoneChangeApproved(const AccountId& account_id,
+                                                    bool is_approved) {
+  if (is_approved) {
+    timezone_change_approved_users_.insert(account_id);
+  } else {
+    timezone_change_approved_users_.erase(account_id);
+  }
 }
 
 void ParentAccessService::NotifyObservers(

@@ -1,17 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_LOGIN_UI_LOGIN_USER_VIEW_H_
 #define ASH_LOGIN_UI_LOGIN_USER_VIEW_H_
 
+#include <string_view>
+
 #include "ash/ash_export.h"
 #include "ash/login/ui/login_base_bubble_view.h"
 #include "ash/login/ui/login_display_style.h"
 #include "ash/login/ui/login_remove_account_dialog.h"
 #include "ash/public/cpp/login_types.h"
-#include "base/macros.h"
+#include "ash/shell_observer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/display/manager/display_configurator.h"
 #include "ui/views/view.h"
 
@@ -23,7 +27,10 @@ class LoginButton;
 // Display the user's profile icon, name, and a remove_account_dialog icon in
 // various layout styles.
 class ASH_EXPORT LoginUserView : public views::View,
-                                 public display::DisplayConfigurator::Observer {
+                                 public display::DisplayConfigurator::Observer,
+                                 public ShellObserver {
+  METADATA_HEADER(LoginUserView, views::View)
+
  public:
   // TestApi is used for tests to get internal implementation details.
   class ASH_EXPORT TestApi {
@@ -33,25 +40,25 @@ class ASH_EXPORT LoginUserView : public views::View,
 
     LoginDisplayStyle display_style() const;
 
-    const std::u16string& displayed_name() const;
+    std::u16string_view displayed_name() const;
 
     views::View* user_label() const;
     views::View* tap_button() const;
     views::View* dropdown() const;
-    LoginRemoveAccountDialog* remove_account_dialog() const;
-    views::View* enterprise_icon() const;
+    views::View* enterprise_icon_container() const;
 
     void OnTap() const;
 
     bool is_opaque() const;
 
    private:
-    LoginUserView* const view_;
+    const raw_ptr<LoginUserView, DanglingUntriaged> view_;
   };
 
   using OnTap = base::RepeatingClosure;
   using OnRemoveWarningShown = base::RepeatingClosure;
   using OnRemove = base::RepeatingClosure;
+  using OnDropdownPressed = base::RepeatingClosure;
 
   // Returns the width of this view for the given display style.
   static int WidthForLayoutStyle(LoginDisplayStyle style);
@@ -61,8 +68,11 @@ class ASH_EXPORT LoginUserView : public views::View,
   LoginUserView(LoginDisplayStyle style,
                 bool show_dropdown,
                 const OnTap& on_tap,
-                const OnRemoveWarningShown& on_remove_warning_shown,
-                const OnRemove& on_remove);
+                const OnDropdownPressed& on_dropdown_pressed);
+
+  LoginUserView(const LoginUserView&) = delete;
+  LoginUserView& operator=(const LoginUserView&) = delete;
+
   ~LoginUserView() override;
 
   // Update the user view to display the given user information.
@@ -77,16 +87,24 @@ class ASH_EXPORT LoginUserView : public views::View,
   // DisplayConfigurator::Observer
   void OnPowerStateChanged(chromeos::DisplayPowerState power_state) override;
 
+  // ShellObserver:
+  void OnShellDestroying() override;
+
   const LoginUserInfo& current_user() const { return current_user_; }
 
-  void UpdateDropdownIcon();
+  // Get dropdown view that can be used as an anchor view for attaching a bubble
+  // view.
+  base::WeakPtr<views::View> GetDropdownAnchorView();
+
+  // Get dropdown view as a LoginButton.
+  LoginButton* GetDropdownButton();
 
   // views::View:
-  const char* GetClassName() const override;
-  gfx::Size CalculatePreferredSize() const override;
-  void Layout() override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
+  void Layout(PassKey) override;
   void RequestFocus() override;
-  void OnThemeChanged() override;
+  views::View::Views GetChildrenInZOrder() override;
 
  private:
   class UserImage;
@@ -108,10 +126,8 @@ class ASH_EXPORT LoginUserView : public views::View,
 
   // Executed when the user view is pressed.
   OnTap on_tap_;
-  // Executed when the user has seen the remove user warning.
-  OnRemoveWarningShown on_remove_warning_shown_;
   // Executed when a user-remove has been requested.
-  OnRemove on_remove_;
+  OnDropdownPressed on_dropdown_pressed_;
 
   // The user that is currently being displayed (or will be displayed when an
   // animation completes).
@@ -121,16 +137,10 @@ class ASH_EXPORT LoginUserView : public views::View,
   std::unique_ptr<HoverNotifier> hover_notifier_;
 
   LoginDisplayStyle display_style_;
-  UserImage* user_image_ = nullptr;
-  UserLabel* user_label_ = nullptr;
-  LoginButton* dropdown_ = nullptr;
-  TapButton* tap_button_ = nullptr;
-
-  // Bubble used for displaying the user remove account dialog. Its parent is
-  // the top level view, either LockContentsView or LockDebugView. This allows
-  // the remove account dialog to be clicked outside the bounds of the user
-  // view.
-  LoginRemoveAccountDialog* remove_account_dialog_ = nullptr;
+  raw_ptr<UserImage> user_image_ = nullptr;
+  raw_ptr<UserLabel> user_label_ = nullptr;
+  raw_ptr<LoginButton> dropdown_ = nullptr;
+  raw_ptr<TapButton> tap_button_ = nullptr;
 
   // True iff the view is currently opaque (ie, opacity = 1).
   bool is_opaque_ = false;
@@ -141,8 +151,6 @@ class ASH_EXPORT LoginUserView : public views::View,
   base::ScopedObservation<display::DisplayConfigurator,
                           display::DisplayConfigurator::Observer>
       display_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LoginUserView);
 };
 
 }  // namespace ash

@@ -1,43 +1,44 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/metrics/histograms_monitor.h"
 
-#include "base/macros.h"
+#include "base/containers/map_util.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
-#include "content/browser/metrics/histogram_synchronizer.h"
 
 namespace content {
+
+namespace {
+
+base::StatisticsRecorder::Histograms GetAllHistograms() {
+  return base::StatisticsRecorder::GetHistograms(
+      /*include_persistent=*/true,
+      /*exclude_flags=*/base::HistogramBase::Flags::kNoFlags);
+}
+
+}  // namespace
 
 HistogramsMonitor::HistogramsMonitor() = default;
 
 HistogramsMonitor::~HistogramsMonitor() = default;
 
-void HistogramsMonitor::StartMonitoring(const std::string& query) {
-  query_ = query;
-  FetchHistograms();
+void HistogramsMonitor::StartMonitoring() {
   histograms_snapshot_.clear();
   // Save a snapshot of all current histograms that will be used as a baseline.
-  for (const auto* const histogram : base::StatisticsRecorder::WithName(
-           base::StatisticsRecorder::GetHistograms(), query_)) {
-    histograms_snapshot_[histogram->histogram_name()] =
-        histogram->SnapshotSamples();
+  for (const auto* histogram : GetAllHistograms()) {
+    base::InsertOrAssign(histograms_snapshot_, histogram->histogram_name(),
+                         histogram->SnapshotSamples());
   }
 }
 
-base::ListValue HistogramsMonitor::GetDiff() {
-  FetchHistograms();
+base::ListValue HistogramsMonitor::GetDiff(const std::string& query) {
   base::StatisticsRecorder::Histograms histograms =
-      base::StatisticsRecorder::Sort(base::StatisticsRecorder::WithName(
-          base::StatisticsRecorder::GetHistograms(), query_));
+      base::StatisticsRecorder::Sort(
+          base::StatisticsRecorder::WithName(GetAllHistograms(), query,
+                                             /*case_sensitive=*/false));
   return GetDiffInternal(histograms);
-}
-
-void HistogramsMonitor::FetchHistograms() {
-  base::StatisticsRecorder::ImportProvidedHistograms();
-  HistogramSynchronizer::FetchHistograms();
 }
 
 base::ListValue HistogramsMonitor::GetDiffInternal(
@@ -51,7 +52,7 @@ base::ListValue HistogramsMonitor::GetDiffInternal(
       snapshot->Subtract(*it->second.get());
     }
     if (snapshot->TotalCount() > 0) {
-      base::Value histogram_dict = snapshot->ToGraphDict(
+      base::DictValue histogram_dict = snapshot->ToGraphDict(
           histogram->histogram_name(), histogram->flags());
       histograms_list.Append(std::move(histogram_dict));
     }

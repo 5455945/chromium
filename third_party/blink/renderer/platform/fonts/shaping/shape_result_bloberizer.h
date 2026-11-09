@@ -1,40 +1,69 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_SHAPE_RESULT_BLOBERIZER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_SHAPE_RESULT_BLOBERIZER_H_
 
+#include <string_view>
+
+#include "base/containers/span.h"
+#include "cc/paint/node_id.h"
 #include "third_party/blink/renderer/platform/fonts/canvas_rotation_in_vertical.h"
 #include "third_party/blink/renderer/platform/fonts/glyph.h"
-#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_buffer.h"
 #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkTextBlob.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
+
+namespace cc {
+class PaintCanvas;
+class PaintFlags;
+}  // namespace cc
 
 namespace blink {
 
 class FontDescription;
-struct TextRunPaintInfo;
+class PlainTextNode;
+class ShapeResultView;
 
 class PLATFORM_EXPORT ShapeResultBloberizer {
   STACK_ALLOCATED();
 
  public:
-  enum class Type { kNormal, kTextIntercepts, kEmitText };
+  enum class Type { kNormal, kTextIntercepts, kTextInterceptsAll, kEmitText };
 
-  struct FillGlyphsNG;
-  struct FillTextEmphasisGlyphsNG;
+  static ShapeResultBloberizer FillGlyphs(
+      const FontDescription& font_description,
+      const StringView& text,
+      wtf_size_t from,
+      wtf_size_t to,
+      const ShapeResultView* result,
+      Type type) {
+    return ShapeResultBloberizer(font_description, text, from, to, result,
+                                 type);
+  }
+  // This doesn't work for RTL. See PlainTextPainter::DrawWithBidiReorder().
+  static ShapeResultBloberizer FillGlyphs(
+      const FontDescription& font_description,
+      const PlainTextNode& node,
+      Type type) {
+    return ShapeResultBloberizer(font_description, node, type);
+  }
+  static ShapeResultBloberizer FillTextEmphasisGlyphs(
+      const FontDescription& font_description,
+      const StringView& text,
+      wtf_size_t from,
+      wtf_size_t to,
+      const ShapeResultView* result,
+      const GlyphData& emphasis_data) {
+    return ShapeResultBloberizer(font_description, text, from, to, result,
+                                 emphasis_data);
+  }
 
-  struct FillGlyphs;
-  struct FillTextEmphasisGlyphs;
-
-  ShapeResultBloberizer(const FontDescription&,
-                        float device_scale_factor,
-                        Type);
   ShapeResultBloberizer(const ShapeResultBloberizer&) = delete;
   ShapeResultBloberizer& operator=(const ShapeResultBloberizer&) = delete;
 
@@ -50,18 +79,43 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
   float Advance() const { return advance_; }
 
  private:
-  friend class ShapeResultBloberizerTestInfo;
+  friend class ShapeResultBloberizerTest;
+
+  using CommitTextRunCallback =
+      void (*)(void* context,
+               const ShapeResultBloberizer& bloberizer,
+               size_t blob_index,
+               size_t run_index,
+               std::string_view utf8,
+               base::span<const uint32_t> clusters);
+  static void SetCommitTextRunCallback(CommitTextRunCallback callback,
+                                       void* context);
+
+  ShapeResultBloberizer(const FontDescription&, Type);
+  ShapeResultBloberizer(const FontDescription&,
+                        const StringView&,
+                        wtf_size_t from,
+                        wtf_size_t to,
+                        const ShapeResultView*,
+                        Type);
+  ShapeResultBloberizer(const FontDescription&, const PlainTextNode&, Type);
+  ShapeResultBloberizer(const FontDescription&,
+                        const StringView&,
+                        wtf_size_t from,
+                        wtf_size_t to,
+                        const ShapeResultView*,
+                        const GlyphData& emphasis_data);
 
   void Add(Glyph glyph,
            const SimpleFontData* font_data,
            CanvasRotationInVertical canvas_rotation,
            float h_offset,
-           unsigned character_index) {
+           wtf_size_t character_index) {
     // cannot mix x-only/xy offsets
     DCHECK(!HasPendingVerticalOffsets());
 
-    if (UNLIKELY(font_data != pending_font_data_) ||
-        UNLIKELY(canvas_rotation != pending_canvas_rotation_)) {
+    if (font_data != pending_font_data_ ||
+        canvas_rotation != pending_canvas_rotation_) [[unlikely]] {
       CommitPendingRun();
       pending_font_data_ = font_data;
       pending_canvas_rotation_ = canvas_rotation;
@@ -71,7 +125,7 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
 
     pending_glyphs_.push_back(glyph);
     pending_offsets_.push_back(h_offset);
-    if (UNLIKELY(!current_text_.IsNull())) {
+    if (!current_text_.IsNull()) [[unlikely]] {
       DVLOG(5) << "  Appending glyph " << glyph << " with start index "
                << character_index;
       current_character_indexes_.push_back(character_index);
@@ -81,13 +135,13 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
   void Add(Glyph glyph,
            const SimpleFontData* font_data,
            CanvasRotationInVertical canvas_rotation,
-           const FloatPoint& offset,
-           unsigned character_index) {
+           const gfx::Vector2dF& offset,
+           wtf_size_t character_index) {
     // cannot mix x-only/xy offsets
-    DCHECK(pending_glyphs_.IsEmpty() || HasPendingVerticalOffsets());
+    DCHECK(pending_glyphs_.empty() || HasPendingVerticalOffsets());
 
-    if (UNLIKELY(font_data != pending_font_data_) ||
-        UNLIKELY(canvas_rotation != pending_canvas_rotation_)) {
+    if (font_data != pending_font_data_ ||
+        canvas_rotation != pending_canvas_rotation_) [[unlikely]] {
       CommitPendingRun();
       pending_font_data_ = font_data;
       pending_canvas_rotation_ = canvas_rotation;
@@ -95,14 +149,15 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
       pending_vertical_baseline_x_offset_ =
           !IsCanvasRotationInVerticalUpright(canvas_rotation)
               ? 0
-              : metrics.FloatAscent() - metrics.FloatAscent(kCentralBaseline);
+              : metrics.FloatAscent() -
+                    metrics.FloatAscent(FontBaseline::kCentral);
     }
 
     pending_glyphs_.push_back(glyph);
-    pending_offsets_.push_back(offset.X() +
+    pending_offsets_.push_back(offset.x() +
                                pending_vertical_baseline_x_offset_);
-    pending_offsets_.push_back(offset.Y());
-    if (UNLIKELY(!current_text_.IsNull())) {
+    pending_offsets_.push_back(offset.y());
+    if (!current_text_.IsNull()) [[unlikely]] {
       DVLOG(5) << "  Appending glyph " << glyph << " with start index "
                << character_index;
       current_character_indexes_.push_back(character_index);
@@ -112,32 +167,37 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
   // Whether the FillFastHorizontalGlyphs or AddFastHorizontalGlyphToBloberizer
   // can be used. Only applies for full runs with no vertical offsets, no text
   // intercepts, and not emitting text.
-  bool CanUseFastPath(unsigned from,
-                      unsigned to,
-                      unsigned length,
+  bool CanUseFastPath(wtf_size_t from,
+                      wtf_size_t to,
+                      wtf_size_t length,
                       bool has_vertical_offsets);
-  bool CanUseFastPath(unsigned from, unsigned to, const ShapeResultView*);
-  float FillFastHorizontalGlyphs(const ShapeResultBuffer&, TextDirection);
+  bool CanUseFastPath(wtf_size_t from, wtf_size_t to, const ShapeResultView*);
   float FillFastHorizontalGlyphs(const ShapeResult*, float advance = 0);
   static void AddFastHorizontalGlyphToBloberizer(void* context,
-                                                 unsigned,
+                                                 wtf_size_t,
                                                  Glyph,
-                                                 FloatSize glyph_offset,
+                                                 gfx::Vector2dF glyph_offset,
                                                  float advance,
                                                  bool is_horizontal,
                                                  CanvasRotationInVertical,
                                                  const SimpleFontData*);
 
+  template <typename ShapeList>
+  void FillGlyphsSlow(StringView text,
+                      TextDirection direction,
+                      const ShapeList& list,
+                      wtf_size_t from,
+                      wtf_size_t to);
   float FillGlyphsForResult(const ShapeResult*,
                             const StringView&,
-                            unsigned from,
-                            unsigned to,
+                            wtf_size_t from,
+                            wtf_size_t to,
                             float initial_advance,
-                            unsigned run_offset);
+                            wtf_size_t run_offset);
   static void AddGlyphToBloberizer(void* context,
-                                   unsigned character_index,
+                                   wtf_size_t character_index,
                                    Glyph,
-                                   FloatSize glyph_offset,
+                                   gfx::Vector2dF glyph_offset,
                                    float advance,
                                    bool is_horizontal,
                                    CanvasRotationInVertical,
@@ -145,22 +205,23 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
 
   void AddEmphasisMark(const GlyphData& emphasis_data,
                        CanvasRotationInVertical canvas_rotation,
-                       FloatPoint glyph_center,
-                       float mid_glyph_offset);
+                       gfx::PointF glyph_center,
+                       float mid_glyph_offset,
+                       float letter_spacing);
   static void AddEmphasisMarkToBloberizer(
       void* context,
-      unsigned character_index,
+      wtf_size_t character_index,
       float advance_so_far,
-      unsigned graphemes_in_cluster,
+      wtf_size_t graphemes_in_cluster,
       float cluster_advance,
       CanvasRotationInVertical canvas_rotation);
 
-  bool IsSkipInkException(const StringView& text, unsigned character_index);
+  bool IsSkipInkException(const StringView& text, wtf_size_t character_index);
 
   void SetText(const StringView& text,
-               unsigned from,
-               unsigned to,
-               base::span<const unsigned> cluster_starts);
+               wtf_size_t from,
+               wtf_size_t to,
+               base::span<const wtf_size_t> cluster_starts);
   void CommitText();
   void CommitPendingRun();
   void CommitPendingBlob();
@@ -168,7 +229,6 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
   bool HasPendingVerticalOffsets() const;
 
   const FontDescription& font_description_;
-  const float device_scale_factor_;
   const Type type_;
 
   // Current text blob state.
@@ -188,9 +248,9 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
   // Allowing this class to grow larger than ~7k impacts user perf.
   Vector<uint8_t, 64> pending_utf8_;
   Vector<uint32_t, 64> pending_utf8_character_indexes_;
-  Vector<unsigned, 64> current_character_indexes_;
-  Vector<unsigned, 64> cluster_ends_;
-  unsigned cluster_ends_offset_ = 0;
+  Vector<wtf_size_t, 64> current_character_indexes_;
+  Vector<wtf_size_t, 64> cluster_ends_;
+  wtf_size_t cluster_ends_offset_ = 0;
   StringView current_text_;
 
   float pending_vertical_baseline_x_offset_ = 0;
@@ -200,43 +260,11 @@ class PLATFORM_EXPORT ShapeResultBloberizer {
   float advance_ = 0;
 };
 
-struct PLATFORM_EXPORT ShapeResultBloberizer::FillGlyphsNG
-    : public ShapeResultBloberizer {
-  FillGlyphsNG(const FontDescription&,
-               float device_scale_factor,
-               const StringView&,
-               unsigned from,
-               unsigned to,
-               const ShapeResultView*,
-               Type);
-};
-struct PLATFORM_EXPORT ShapeResultBloberizer::FillTextEmphasisGlyphsNG
-    : public ShapeResultBloberizer {
-  FillTextEmphasisGlyphsNG(const FontDescription&,
-                           float device_scale_factor,
-                           const StringView&,
-                           unsigned from,
-                           unsigned to,
-                           const ShapeResultView*,
-                           const GlyphData& emphasis_data);
-};
-
-struct PLATFORM_EXPORT ShapeResultBloberizer::FillGlyphs
-    : public ShapeResultBloberizer {
-  FillGlyphs(const FontDescription&,
-             float device_scale_factor,
-             const TextRunPaintInfo&,
-             const ShapeResultBuffer&,
-             Type);
-};
-struct PLATFORM_EXPORT ShapeResultBloberizer::FillTextEmphasisGlyphs
-    : public ShapeResultBloberizer {
-  FillTextEmphasisGlyphs(const FontDescription&,
-                         float device_scale_factor,
-                         const TextRunPaintInfo&,
-                         const ShapeResultBuffer&,
-                         const GlyphData& emphasis_data);
-};
+void DrawTextBlobs(const ShapeResultBloberizer::BlobBuffer& blobs,
+                   cc::PaintCanvas& canvas,
+                   const gfx::PointF& point,
+                   const cc::PaintFlags& flags,
+                   cc::NodeId node_id = cc::kInvalidNodeId);
 
 }  // namespace blink
 

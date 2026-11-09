@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,14 @@
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root_map_factory.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
+#include "chrome/browser/ash/arc/fileapi/arc_media_view_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/arc/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "content/public/browser/browser_thread.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 using content::BrowserThread;
 
@@ -26,11 +31,16 @@ struct DocumentsProviderSpec {
 
 // List of documents providers for media views.
 constexpr DocumentsProviderSpec kDocumentsProviderAllowlist[] = {
-    {"com.android.providers.media.documents", "images_root", "images_root",
-     true},
-    {"com.android.providers.media.documents", "videos_root", "videos_root",
-     true},
-    {"com.android.providers.media.documents", "audio_root", "audio_root", true},
+    {kMediaDocumentsProviderAuthority, kImagesRootId, kImagesRootId,
+     // All roots are now writable after the introduction of this feature
+     // (b/255697751).
+     /*read_only=*/false},
+    {kMediaDocumentsProviderAuthority, kVideosRootId, kVideosRootId,
+     /*read_only=*/false},
+    {kMediaDocumentsProviderAuthority, kAudioRootId, kAudioRootId,
+     /*read_only=*/false},
+    {kMediaDocumentsProviderAuthority, kDocumentsRootId, kDocumentsRootId,
+     /*read_only=*/false},
 };
 
 }  // namespace
@@ -49,10 +59,10 @@ ArcDocumentsProviderRootMap::GetForArcBrowserContext() {
 
 ArcDocumentsProviderRootMap::ArcDocumentsProviderRootMap(Profile* profile)
     : runner_(ArcFileSystemOperationRunner::GetForBrowserContext(profile)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   // ArcDocumentsProviderRootMap is created only for the profile with ARC
   // in ArcDocumentsProviderRootMapFactory.
-  DCHECK(runner_);
+  CHECK(runner_, base::NotFatalUntil::M160);
 
   for (const auto& spec : kDocumentsProviderAllowlist) {
     RegisterRoot(spec.authority, spec.root_document_id, spec.root_id,
@@ -61,22 +71,23 @@ ArcDocumentsProviderRootMap::ArcDocumentsProviderRootMap(Profile* profile)
 }
 
 ArcDocumentsProviderRootMap::~ArcDocumentsProviderRootMap() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(map_.empty());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(map_.empty(), base::NotFatalUntil::M160);
 }
 
 ArcDocumentsProviderRoot* ArcDocumentsProviderRootMap::ParseAndLookup(
     const storage::FileSystemURL& url,
     base::FilePath* path) const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   base::FilePath tmp_path;
-  if (!ParseDocumentsProviderUrl(url, &authority, &root_document_id, &tmp_path))
+  if (!ParseDocumentsProviderUrl(url, &authority, &root_id, &tmp_path)) {
     return nullptr;
+  }
 
-  ArcDocumentsProviderRoot* root = Lookup(authority, root_document_id);
+  ArcDocumentsProviderRoot* root = Lookup(authority, root_id);
   if (!root)
     return nullptr;
 
@@ -86,10 +97,10 @@ ArcDocumentsProviderRoot* ArcDocumentsProviderRootMap::ParseAndLookup(
 
 ArcDocumentsProviderRoot* ArcDocumentsProviderRootMap::Lookup(
     const std::string& authority,
-    const std::string& root_document_id) const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    const std::string& root_id) const {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
-  auto iter = map_.find(Key(authority, root_document_id));
+  auto iter = map_.find(Key(authority, root_id));
   if (iter == map_.end())
     return nullptr;
   return iter->second.get();
@@ -101,12 +112,12 @@ void ArcDocumentsProviderRootMap::RegisterRoot(
     const std::string& root_id,
     bool read_only,
     const std::vector<std::string>& mime_types) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
-  Key key(authority, root_document_id);
+  Key key(authority, root_id);
   if (map_.find(key) != map_.end()) {
-    VLOG(1) << "Trying to register (" << authority << ", " << root_document_id
-            << ") which is already regisered.";
+    VLOG(1) << "Trying to register (" << authority << ", " << root_id
+            << ") which is already registered.";
     return;
   }
   map_.emplace(key, std::make_unique<ArcDocumentsProviderRoot>(
@@ -114,19 +125,18 @@ void ArcDocumentsProviderRootMap::RegisterRoot(
                         read_only, mime_types));
 }
 
-void ArcDocumentsProviderRootMap::UnregisterRoot(
-    const std::string& authority,
-    const std::string& root_document_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ArcDocumentsProviderRootMap::UnregisterRoot(const std::string& authority,
+                                                 const std::string& root_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
-  if (!map_.erase(Key(authority, root_document_id))) {
-    VLOG(1) << "Trying to unregister (" << authority << ", " << root_document_id
+  if (!map_.erase(Key(authority, root_id))) {
+    VLOG(1) << "Trying to unregister (" << authority << ", " << root_id
             << ") which is not registered.";
   }
 }
 
 void ArcDocumentsProviderRootMap::Shutdown() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   // ArcDocumentsProviderRoot has a reference to another KeyedService
   // (ArcFileSystemOperationRunner), so we need to destruct them on shutdown.

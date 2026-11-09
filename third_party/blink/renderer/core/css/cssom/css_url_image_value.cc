@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/core/css/css_image_value.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/style/style_image.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 
 namespace blink {
 
@@ -14,38 +15,42 @@ const String& CSSURLImageValue::url() const {
   return value_->RelativeUrl();
 }
 
-absl::optional<IntSize> CSSURLImageValue::IntrinsicSize() const {
-  if (Status() != ResourceStatus::kCached)
-    return absl::nullopt;
+std::optional<gfx::Size> CSSURLImageValue::IntrinsicSize() const {
+  if (Status() != ResourceStatus::kCached) {
+    return std::nullopt;
+  }
 
-  DCHECK(!value_->IsCachePending());
-  ImageResourceContent* resource_content = value_->CachedImage()->CachedImage();
+  DCHECK(!value_->IsCachePending(fetcher_));
+  ImageResourceContent* resource_content =
+      value_->CachedImage(fetcher_)->CachedImage();
 
   return resource_content
              ? resource_content->IntrinsicSize(kRespectImageOrientation)
-             : IntSize(0, 0);
+             : gfx::Size(0, 0);
 }
 
 ResourceStatus CSSURLImageValue::Status() const {
-  if (value_->IsCachePending())
+  if (value_->IsCachePending(fetcher_)) {
     return ResourceStatus::kNotStarted;
-  return value_->CachedImage()->CachedImage()->GetContentStatus();
+  }
+  return value_->CachedImage(fetcher_)->CachedImage()->GetContentStatus();
 }
 
 scoped_refptr<Image> CSSURLImageValue::GetSourceImageForCanvas(
-    SourceImageStatus*,
-    const FloatSize&,
-    const AlphaDisposition alpha_disposition) {
-  // UnpremultiplyAlpha is not implemented yet.
-  DCHECK_EQ(alpha_disposition, kPremultiplyAlpha);
-  return GetImage();
+    SourceImageStatus* status,
+    const gfx::SizeF&) {
+  scoped_refptr<Image> image = GetImage();
+  *status = image ? kNormalSourceImageStatus : kInvalidSourceImageStatus;
+  return image;
 }
 
 scoped_refptr<Image> CSSURLImageValue::GetImage() const {
-  if (value_->IsCachePending())
+  if (value_->IsCachePending(fetcher_)) {
     return nullptr;
+  }
   // cachedImage can be null if image is StyleInvalidImage
-  ImageResourceContent* cached_image = value_->CachedImage()->CachedImage();
+  ImageResourceContent* cached_image =
+      value_->CachedImage(fetcher_)->CachedImage();
   if (cached_image) {
     // getImage() returns the nullImage() if the image is not available yet
     return cached_image->GetImage()->ImageForDefaultFrame();
@@ -58,11 +63,12 @@ bool CSSURLImageValue::IsAccelerated() const {
 }
 
 const CSSValue* CSSURLImageValue::ToCSSValue() const {
-  return value_;
+  return value_.Get();
 }
 
 void CSSURLImageValue::Trace(Visitor* visitor) const {
   visitor->Trace(value_);
+  visitor->Trace(fetcher_);
   CSSStyleImageValue::Trace(visitor);
 }
 

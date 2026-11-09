@@ -1,22 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/loader/browser_initiated_resource_request.h"
 
-#include "base/command_line.h"
-#include "base/metrics/field_trial_params.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
-#include "content/public/common/content_switches.h"
-#include "content/public/common/origin_util.h"
 #include "net/http/http_request_headers.h"
-#include "services/network/public/cpp/features.h"
-#include "services/network/public/cpp/request_mode.h"
-#include "services/network/public/cpp/resource_request.h"
+#include "third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h"
 #include "third_party/blink/public/common/loader/loader_constants.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 
@@ -26,8 +19,9 @@ void UpdateAdditionalHeadersForBrowserInitiatedRequest(
     net::HttpRequestHeaders* headers,
     BrowserContext* browser_context,
     bool should_update_existing_headers,
-    const blink::RendererPreferences& renderer_preferences) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    const blink::RendererPreferences& renderer_preferences,
+    bool is_for_worker_script) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   // Set the DoNotTrack header if appropriate.
   // https://w3c.github.io/dnt/drafts/tracking-dnt.html#expression-format
@@ -38,11 +32,27 @@ void UpdateAdditionalHeadersForBrowserInitiatedRequest(
     headers->SetHeaderIfMissing(blink::kDoNotTrackHeader, "1");
   }
 
-  // Set the Save-Data header if appropriate.
-  // https://tools.ietf.org/html/draft-grigorik-http-client-hints-03#section-7
-  if (GetContentClient()->browser()->IsDataSaverEnabled(browser_context) &&
-      !base::GetFieldTrialParamByFeatureAsBool(features::kDataSaverHoldback,
-                                               "holdback_web", false)) {
+  // Set the GlobalPrivacyControl header if appropriate.
+  // https://w3c.github.io/gpc/#expression-format
+  if (blink::IsGlobalPrivacyControlFeatureAndSettingEnabled(
+          renderer_preferences)) {
+    if (should_update_existing_headers) {
+      headers->RemoveHeader(blink::kGlobalPrivacyControlHeader);
+    }
+    headers->SetHeaderIfMissing(blink::kGlobalPrivacyControlHeader, "1");
+    blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+        is_for_worker_script ? blink::GPCSignalSourceType::kWorkerNavigation
+                             : blink::GPCSignalSourceType::kFrameNavigation);
+  }
+
+  // TODO(crbug.com/40833603): WARNING: This bypasses the permissions policy.
+  // Unfortunately, workers lack a permissions policy and to derive proper hints
+  // https://github.com/w3c/webappsec-permissions-policy/issues/207.
+  // Save-Data was previously included in hints for workers, thus we cannot
+  // remove it for the time being. If you're reading this, consider building
+  // permissions policies for workers and/or deprecating this inclusion.
+  if (is_for_worker_script &&
+      GetContentClient()->browser()->IsDataSaverEnabled(browser_context)) {
     if (should_update_existing_headers) {
       headers->RemoveHeader("Save-Data");
     }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,10 @@
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/probe/async_task_context.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl_hash.h"
@@ -51,7 +53,9 @@ class CORE_EXPORT ModuleTreeLinker final : public SingleModuleClient {
   void FetchRoot(const KURL&,
                  ModuleType,
                  const ScriptFetchOptions&,
-                 base::PassKey<ModuleTreeLinkerRegistry>);
+                 base::PassKey<ModuleTreeLinkerRegistry>,
+                 v8::ModuleImportPhase,
+                 String referrer);
   void FetchRootInline(ModuleScript*, base::PassKey<ModuleTreeLinkerRegistry>);
 
  private:
@@ -71,11 +75,13 @@ class CORE_EXPORT ModuleTreeLinker final : public SingleModuleClient {
 #endif
   void AdvanceState(State);
 
-  void NotifyModuleLoadFinished(ModuleScript*) override;
+  void NotifyModuleLoadFinished(ModuleScript*, v8::ModuleImportPhase) override;
   void FetchDescendants(const ModuleScript*);
 
   // Completion of [FD].
   void FinalizeFetchDescendantsForOneModuleScript();
+
+  bool AbortBeforeFinalizingIfNecessary(const ModuleScript* module_script);
 
   // [FDaI] Steps 4--8.
   void Instantiate();
@@ -103,6 +109,8 @@ class CORE_EXPORT ModuleTreeLinker final : public SingleModuleClient {
   bool found_parse_error_ = false;
 
   size_t num_incomplete_fetches_ = 0;
+
+  probe::AsyncTaskContext async_task_context_;
 
 #if DCHECK_IS_ON()
   KURL original_url_;

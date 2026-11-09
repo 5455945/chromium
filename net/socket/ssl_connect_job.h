@@ -1,24 +1,30 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SOCKET_SSL_CONNECT_JOB_H_
 #define NET_SOCKET_SSL_CONNECT_JOB_H_
 
+#include <stdint.h>
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/net_export.h"
-#include "net/base/network_isolation_key.h"
-#include "net/base/privacy_mode.h"
+#include "net/base/network_anonymization_key.h"
+#include "net/dns/public/host_resolver_results.h"
+#include "net/dns/public/resolution_details.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/socket/connect_job.h"
+#include "net/socket/connect_job_params.h"
 #include "net/socket/connection_attempts.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/ssl/ssl_cert_request_info.h"
@@ -30,6 +36,7 @@ class HostPortPair;
 class HttpProxySocketParams;
 class SocketTag;
 class SOCKSSocketParams;
+class TcpConnectJob;
 class TransportSocketParams;
 
 class NET_EXPORT_PRIVATE SSLSocketParams
@@ -39,47 +46,49 @@ class NET_EXPORT_PRIVATE SSLSocketParams
 
   // Exactly one of |direct_params|, |socks_proxy_params|, and
   // |http_proxy_params| must be non-NULL.
-  SSLSocketParams(scoped_refptr<TransportSocketParams> direct_params,
-                  scoped_refptr<SOCKSSocketParams> socks_proxy_params,
-                  scoped_refptr<HttpProxySocketParams> http_proxy_params,
+  SSLSocketParams(ConnectJobParams params,
                   const HostPortPair& host_and_port,
                   const SSLConfig& ssl_config,
-                  PrivacyMode privacy_mode,
-                  NetworkIsolationKey network_isolation_key);
+                  NetworkAnonymizationKey network_anonymization_key);
+
+  SSLSocketParams(const SSLSocketParams&) = delete;
+  SSLSocketParams& operator=(const SSLSocketParams&) = delete;
 
   // Returns the type of the underlying connection.
   ConnectionType GetConnectionType() const;
 
   // Must be called only when GetConnectionType() returns DIRECT.
-  const scoped_refptr<TransportSocketParams>& GetDirectConnectionParams() const;
+  const scoped_refptr<TransportSocketParams>& GetDirectConnectionParams()
+      const {
+    return nested_params_.transport();
+  }
 
   // Must be called only when GetConnectionType() returns SOCKS_PROXY.
-  const scoped_refptr<SOCKSSocketParams>& GetSocksProxyConnectionParams() const;
+  const scoped_refptr<SOCKSSocketParams>& GetSocksProxyConnectionParams()
+      const {
+    return nested_params_.socks();
+  }
 
   // Must be called only when GetConnectionType() returns HTTP_PROXY.
   const scoped_refptr<HttpProxySocketParams>& GetHttpProxyConnectionParams()
-      const;
+      const {
+    return nested_params_.http_proxy();
+  }
 
   const HostPortPair& host_and_port() const { return host_and_port_; }
   const SSLConfig& ssl_config() const { return ssl_config_; }
-  PrivacyMode privacy_mode() const { return privacy_mode_; }
-  const NetworkIsolationKey& network_isolation_key() const {
-    return network_isolation_key_;
+  const NetworkAnonymizationKey& network_anonymization_key() const {
+    return network_anonymization_key_;
   }
 
  private:
   friend class base::RefCounted<SSLSocketParams>;
   ~SSLSocketParams();
 
-  const scoped_refptr<TransportSocketParams> direct_params_;
-  const scoped_refptr<SOCKSSocketParams> socks_proxy_params_;
-  const scoped_refptr<HttpProxySocketParams> http_proxy_params_;
+  const ConnectJobParams nested_params_;
   const HostPortPair host_and_port_;
   const SSLConfig ssl_config_;
-  const PrivacyMode privacy_mode_;
-  const NetworkIsolationKey network_isolation_key_;
-
-  DISALLOW_COPY_AND_ASSIGN(SSLSocketParams);
+  const NetworkAnonymizationKey network_anonymization_key_;
 };
 
 // SSLConnectJob establishes a connection, through a proxy if needed, and then
@@ -101,14 +110,16 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
         const NetLogWithSource* net_log);
   };
 
-  // Note: the SSLConnectJob does not own |messenger| so it must outlive the
-  // job.
   SSLConnectJob(RequestPriority priority,
                 const SocketTag& socket_tag,
                 const CommonConnectJobParams* common_connect_job_params,
                 scoped_refptr<SSLSocketParams> params,
                 ConnectJob::Delegate* delegate,
                 const NetLogWithSource* net_log);
+
+  SSLConnectJob(const SSLConnectJob&) = delete;
+  SSLConnectJob& operator=(const SSLConnectJob&) = delete;
+
   ~SSLConnectJob() override;
 
   // ConnectJob methods.
@@ -125,6 +136,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   ResolveErrorInfo GetResolveErrorInfo() const override;
   bool IsSSLError() const override;
   scoped_refptr<SSLCertRequestInfo> GetCertRequestInfo() override;
+  std::optional<ResolutionDetails> GetResolutionDetails() const override;
 
   // Returns the timeout for the SSL handshake. This is the same for all
   // connections regardless of whether or not there is a proxy in use.
@@ -171,20 +183,24 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   void ChangePriorityInternal(RequestPriority priority) override;
 
   scoped_refptr<SSLSocketParams> params_;
+  std::optional<ResolutionDetails> resolution_details_;
 
   State next_state_;
   CompletionRepeatingCallback callback_;
   std::unique_ptr<ConnectJob> nested_connect_job_;
+  // Points to `nested_connect_job_` if it's of type TcpConnectJob. Used to call
+  // GetServiceEndpoint() on successful connect if non-null.
+  raw_ptr<TcpConnectJob> tcp_connect_job_;
   std::unique_ptr<StreamSocket> nested_socket_;
   std::unique_ptr<SSLClientSocket> ssl_socket_;
 
   // True once SSL negotiation has started.
-  bool ssl_negotiation_started_;
+  bool ssl_negotiation_started_ = false;
 
   // True if legacy crypto should be disabled for the job's current connection
   // attempt. On error, the connection will be retried with legacy crypto
   // enabled.
-  bool disable_legacy_crypto_with_fallback_;
+  bool disable_legacy_crypto_with_fallback_ = true;
 
   scoped_refptr<SSLCertRequestInfo> ssl_cert_request_info_;
 
@@ -195,14 +211,34 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   // through an HTTPS CONNECT request or a SOCKS proxy).
   IPEndPoint server_address_;
 
-  // Any DNS aliases for the remote endpoint. The alias chain order is
-  // preserved in reverse, from canonical name (i.e. address record name)
-  // through to query name. Stored because `nested_connect_job_` has a
-  // limited lifetime and the aliases can no longer be retrieved from there by
-  // by the time that the aliases are needed to be passed in SetSocket.
-  std::vector<std::string> dns_aliases_;
+  // Any DNS aliases for the remote endpoint. Includes all known aliases, e.g.
+  // from A, AAAA, or HTTPS, not just from the address used for the connection,
+  // in no particular order. Stored because `nested_connect_job_` has a limited
+  // lifetime and the aliases can no longer be retrieved from there by the
+  // time that the aliases are needed to be passed in SetSocket.
+  base::flat_set<std::string> dns_aliases_;
 
-  DISALLOW_COPY_AND_ASSIGN(SSLConnectJob);
+  // The endpoint result used by `nested_connect_job_`. Stored because
+  // `nested_connect_job_` has a limited lifetime.
+  std::optional<HostResolverEndpointResult> endpoint_result_;
+
+  // Same as `endpoint_result_`, except in the case that TcpConnectJob is in
+  // use.
+  std::optional<ServiceEndpoint> service_endpoint_result_;
+
+  // If not `std::nullopt`, the ECH retry configs to use in the ECH recovery
+  // flow. `endpoint_result_` will then contain the endpoint to reconnect to.
+  std::optional<std::vector<uint8_t>> ech_retry_configs_;
+
+
+  // True if the connection was established using a stale DNS result. Passed
+  // up from the nested ConnectJob.
+  bool is_connected_via_stale_dns_ = false;
+
+  // True if the use of stale DNS results should be disabled for this connection
+  // attempt. Set to true when a previous connection attempt via stale DNS
+  // failed and the job needs to retry with fresh results.
+  bool disable_stale_dns_ = false;
 };
 
 }  // namespace net

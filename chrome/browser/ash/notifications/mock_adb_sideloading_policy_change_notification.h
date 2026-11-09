@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,10 @@
 
 #include "chrome/browser/ash/notifications/adb_sideloading_policy_change_notification.h"
 
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
 namespace ash {
 
 class MockAdbSideloadingPolicyChangeNotification
@@ -14,7 +18,9 @@ class MockAdbSideloadingPolicyChangeNotification
  public:
   using NotificationType = AdbSideloadingPolicyChangeNotification::Type;
 
-  MockAdbSideloadingPolicyChangeNotification();
+  // `browser_policy_connector_ash` must be non-null and must outlive `this`.
+  explicit MockAdbSideloadingPolicyChangeNotification(
+      const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash);
   ~MockAdbSideloadingPolicyChangeNotification() override;
 
   void Show(NotificationType type) override;

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,10 @@
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/common/pref_names.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/account_info.h"
-#include "components/signin/public/identity_manager/consent_level.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 
 SigninProfileAttributesUpdater::SigninProfileAttributesUpdater(
     signin::IdentityManager* identity_manager,
@@ -23,9 +24,9 @@ SigninProfileAttributesUpdater::SigninProfileAttributesUpdater(
       profile_attributes_storage_(profile_attributes_storage),
       profile_path_(profile_path),
       prefs_(prefs) {
-  DCHECK(identity_manager_);
-  DCHECK(profile_attributes_storage_);
-  identity_manager_observation_.Observe(identity_manager_);
+  CHECK(identity_manager_, base::NotFatalUntil::M162);
+  CHECK(profile_attributes_storage_, base::NotFatalUntil::M162);
+  identity_manager_observation_.Observe(identity_manager_.get());
 
   UpdateProfileAttributes();
 }
@@ -57,7 +58,7 @@ void SigninProfileAttributesUpdater::UpdateProfileAttributes() {
   }
 
   if (clear_profile) {
-    entry->SetAuthInfo(std::string(), std::u16string(),
+    entry->SetAuthInfo(GaiaId(), std::u16string(),
                        /*is_consented_primary_account=*/false);
   } else {
     entry->SetAuthInfo(

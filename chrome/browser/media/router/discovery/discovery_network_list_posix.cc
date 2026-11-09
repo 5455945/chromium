@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,13 +12,19 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <optional>
+#include <string>
+#include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
-#include "chrome/browser/media/router/discovery/discovery_network_list_wifi.h"
-#include "net/base/net_errors.h"
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/media/router/discovery/discovery_network_list_wifi.h"
+#endif
+
+#if !BUILDFLAG(IS_MAC)
 #include <netpacket/packet.h>
 #else
 #include <net/if_dl.h>
@@ -27,12 +33,12 @@
 namespace media_router {
 namespace {
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
 using sll = struct sockaddr_ll;
 #define SOCKET_ARP_TYPE(s) ((s)->sll_hatype)
 #define SOCKET_ADDRESS_LEN(s) ((s)->sll_halen)
 #define SOCKET_ADDRESS(s) ((s)->sll_addr)
-#else  // defined(OS_MAC)
+#else  // BUILDFLAG(IS_MAC)
 #define AF_PACKET AF_LINK
 using sll = struct sockaddr_dl;
 #define SOCKET_ARP_TYPE(s) ((s)->sdl_type)
@@ -40,11 +46,18 @@ using sll = struct sockaddr_dl;
 #define SOCKET_ADDRESS(s) (LLADDR(s))
 #endif
 
+base::span<const uint8_t> SocketAddressAsByteSpan(const sll* ll_addr) {
+  // SAFETY: The size of SOCKET_ADDRESS() can be reliably retrieved via
+  // SOCKET_ADDRESS_LEN().
+  return UNSAFE_BUFFERS(base::span<const uint8_t>(
+      reinterpret_cast<const unsigned char*>(SOCKET_ADDRESS(ll_addr)),
+      SOCKET_ADDRESS_LEN(ll_addr)));
+}
+
 void GetDiscoveryNetworkInfoListImpl(
     const struct ifaddrs* if_list,
     std::vector<DiscoveryNetworkInfo>* network_info_list) {
-  std::string ssid;
-  for (; if_list != NULL; if_list = if_list->ifa_next) {
+  for (; if_list != nullptr; if_list = if_list->ifa_next) {
     if ((if_list->ifa_flags & IFF_RUNNING) == 0 ||
         (if_list->ifa_flags & IFF_UP) == 0) {
       continue;
@@ -73,19 +86,19 @@ void GetDiscoveryNetworkInfoListImpl(
       continue;
     }
 
-    if (MaybeGetWifiSSID(name, &ssid)) {
-      network_info_list->push_back({name, ssid});
+#if !BUILDFLAG(IS_ANDROID)
+    if (std::optional<std::string> ssid = MaybeGetWifiSSID(name)) {
+      network_info_list->emplace_back(name, std::move(*ssid));
       continue;
     }
+#endif
 
     if (SOCKET_ADDRESS_LEN(ll_addr) == 0) {
       continue;
     }
 
     network_info_list->push_back(
-        {name, base::HexEncode(reinterpret_cast<const unsigned char*>(
-                                   SOCKET_ADDRESS(ll_addr)),
-                               SOCKET_ADDRESS_LEN(ll_addr))});
+        {name, base::HexEncode(SocketAddressAsByteSpan(ll_addr))});
   }
 }
 

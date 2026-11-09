@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 
@@ -45,7 +45,7 @@ class CORE_EXPORT TextSuggestionController final
   void OnSuggestionMenuClosed();
   void SuggestionMenuTimeoutCallback(size_t max_number_of_suggestions);
 
-  virtual void Trace(Visitor*) const;
+  void Trace(Visitor*) const;
 
  private:
   friend class TextSuggestionControllerTest;
@@ -72,7 +72,7 @@ class CORE_EXPORT TextSuggestionController final
   void ReplaceActiveSuggestionRange(const String&);
   void ReplaceRangeWithText(const EphemeralRange&, const String& replacement);
 
-  bool is_suggestion_menu_open_;
+  bool is_suggestion_menu_open_ = false;
   const Member<LocalDOMWindow> window_;
   HeapMojoRemote<mojom::blink::TextSuggestionHost> text_suggestion_host_;
 };

@@ -1,27 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <ChromeWebView/ChromeWebView.h>
 #import <Foundation/Foundation.h>
 
-#include "base/bind.h"
+#import "base/functional/bind.h"
 #import "base/test/ios/wait_util.h"
+#import "ios/web_view/public/cwv_global_state.h"
 #import "ios/web_view/test/web_view_inttest_base.h"
 #import "ios/web_view/test/web_view_test_util.h"
-#import "net/base/mac/url_conversions.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
-#include "net/test/embedded_test_server/http_request.h"
-#include "net/test/embedded_test_server/http_response.h"
-#include "testing/gtest_mac.h"
-#include "url/gurl.h"
+#import "net/base/apple/url_conversions.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/http_request.h"
+#import "net/test/embedded_test_server/http_response.h"
+#import "testing/gtest_mac.h"
+#import "url/gurl.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
-using base::test::ios::WaitUntilConditionOrTimeout;
 using base::test::ios::kWaitForPageLoadTimeout;
+using base::test::ios::WaitUntilConditionOrTimeout;
 
 namespace ios_web_view {
 
@@ -37,12 +34,12 @@ class WebViewTest : public ios_web_view::WebViewInttestBase {
 
   void SetUp() override {
     ios_web_view::WebViewInttestBase::SetUp();
-    CWVWebView.customUserAgent = nil;
+    CWVGlobalState.sharedInstance.customUserAgent = nil;
   }
 
   void TearDown() override {
     ios_web_view::WebViewInttestBase::TearDown();
-    CWVWebView.customUserAgent = nil;
+    CWVGlobalState.sharedInstance.customUserAgent = nil;
   }
 
   std::unique_ptr<net::test_server::HttpResponse> CaptureRequestHandler(
@@ -61,12 +58,13 @@ class WebViewTest : public ios_web_view::WebViewInttestBase {
   std::unique_ptr<net::test_server::HttpRequest> last_request_;
 };
 
-// Tests +[CWVWebView customUserAgent].
+// Tests CWVWebView uses the configured custom user agent.
 TEST_F(WebViewTest, CustomUserAgent) {
   ASSERT_TRUE(test_server_->Start());
 
-  CWVWebView.customUserAgent = @"FooCustomUserAgent";
-  ASSERT_NSEQ(@"FooCustomUserAgent", CWVWebView.customUserAgent);
+  CWVGlobalState.sharedInstance.customUserAgent = @"FooCustomUserAgent";
+  ASSERT_NSEQ(@"FooCustomUserAgent",
+              CWVGlobalState.sharedInstance.customUserAgent);
 
   // Cannot use existing |web_view_| here because the change above may only
   // affect web views created after the change.
@@ -86,12 +84,13 @@ TEST_F(WebViewTest, CustomUserAgent) {
   EXPECT_EQ("FooCustomUserAgent", user_agent_it->second);
 }
 
-// Tests +[CWVWebView setUserAgentProduct] and +[CWVWebView userAgentProduct].
+// Tests CWVWebView uses the configured user agent product.
 TEST_F(WebViewTest, UserAgentProduct) {
   ASSERT_TRUE(test_server_->Start());
 
-  [CWVWebView setUserAgentProduct:@"MyUserAgentProduct"];
-  ASSERT_NSEQ(@"MyUserAgentProduct", [CWVWebView userAgentProduct]);
+  CWVGlobalState.sharedInstance.userAgentProduct = @"MyUserAgentProduct";
+  ASSERT_NSEQ(@"MyUserAgentProduct",
+              CWVGlobalState.sharedInstance.userAgentProduct);
 
   // Cannot use existing |web_view_| here because the change above may only
   // affect web views created after the change.
@@ -142,14 +141,14 @@ TEST_F(WebViewTest, EvaluateJavaScript) {
   GURL url = GetUrlForPageWithTitleAndBody("Title", "Body");
   ASSERT_TRUE(test::LoadUrl(web_view_, net::NSURLWithGURL(url)));
 
-  NSError* error = nil;
+  NSError* error;
   EXPECT_NSEQ(@"Body", test::EvaluateJavaScript(
                            web_view_, @"document.body.textContent", &error));
-  EXPECT_NSEQ(nil, error);
+  EXPECT_FALSE(error);
 
   // Calls a function which doesn't exist.
   test::EvaluateJavaScript(web_view_, @"hoge()", &error);
-  EXPECT_NSNE(nil, error);
+  EXPECT_TRUE(error);
 }
 
 }  // namespace ios_web_view

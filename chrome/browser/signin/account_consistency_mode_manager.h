@@ -1,13 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SIGNIN_ACCOUNT_CONSISTENCY_MODE_MANAGER_H_
 #define CHROME_BROWSER_SIGNIN_ACCOUNT_CONSISTENCY_MODE_MANAGER_H_
 
-#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "build/buildflag.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_member.h"
@@ -19,30 +18,34 @@ class PrefRegistrySyncable;
 }
 
 class Profile;
+class ProfileAttributesEntry;
 
 // Manages the account consistency mode for each profile.
 class AccountConsistencyModeManager : public KeyedService {
  public:
-  // Returns the AccountConsistencyModeManager associated with this profile.
-  // May return nullptr if there is none (e.g. in incognito).
-  static AccountConsistencyModeManager* GetForProfile(Profile* profile);
-
   explicit AccountConsistencyModeManager(Profile* profile);
+
+  AccountConsistencyModeManager(const AccountConsistencyModeManager&) = delete;
+  AccountConsistencyModeManager& operator=(
+      const AccountConsistencyModeManager&) = delete;
+
   ~AccountConsistencyModeManager() override;
 
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // Helper method, shorthand for calling GetAccountConsistencyMethod().
+  // TODO(crbug.com/40780204): Migrate usages to
+  // `IdentityManager::GetAccountConsistency`.
   static signin::AccountConsistencyMethod GetMethodForProfile(Profile* profile);
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  // Sets migration to Dice as completed.
-  void SetDiceMigrationCompleted();
-  // Returns true if migration to Dice is completed.
-  static bool IsDiceMigrationCompleted(Profile* profile);
   // This is a pre-requisite of IsDiceEnabledForProfile(), independent of
   // particular profile type or profile prefs.
-  static bool IsDiceSignInAllowed();
+  // `entry` should be nullptr for profiles that are not registered in the
+  // `ProfileAttributesStorage` (e.g. the system profile). Profiles with a
+  // managed using a profile-level management token are not allowed to sign in
+  // with a Google account.
+  static bool IsDiceSignInAllowed(ProfileAttributesEntry* entry = nullptr);
 #endif
 
   // If true, then account management is done through Gaia webpages.
@@ -69,28 +72,19 @@ class AccountConsistencyModeManager : public KeyedService {
 
  private:
   FRIEND_TEST_ALL_PREFIXES(AccountConsistencyModeManagerTest,
-                           MigrateAtCreation);
-  FRIEND_TEST_ALL_PREFIXES(AccountConsistencyModeManagerTest,
                            SigninAllowedChangesDiceState);
   FRIEND_TEST_ALL_PREFIXES(AccountConsistencyModeManagerTest,
                            AllowBrowserSigninSwitch);
   FRIEND_TEST_ALL_PREFIXES(AccountConsistencyModeManagerTest,
-                           ForceDiceMigration);
+                           DiceEnabledForNewProfiles);
 
   // Returns the account consistency method for the current profile.
   signin::AccountConsistencyMethod GetAccountConsistencyMethod();
 
-  // Computes the account consistency method for the current profile. This is
-  // only called from the constructor, the account consistency method cannot
-  // change during the lifetime of a profile.
-  static signin::AccountConsistencyMethod ComputeAccountConsistencyMethod(
-      Profile* profile);
-
-  Profile* profile_;
-  signin::AccountConsistencyMethod account_consistency_;
-  bool account_consistency_initialized_;
-
-  DISALLOW_COPY_AND_ASSIGN(AccountConsistencyModeManager);
+  const raw_ptr<Profile> profile_;
+  signin::AccountConsistencyMethod account_consistency_ =
+      signin::AccountConsistencyMethod::kDisabled;
+  bool account_consistency_initialized_ = false;
 };
 
 #endif  // CHROME_BROWSER_SIGNIN_ACCOUNT_CONSISTENCY_MODE_MANAGER_H_

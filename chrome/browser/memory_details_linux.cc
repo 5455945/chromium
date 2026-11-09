@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,18 +12,16 @@
 #include <memory>
 #include <set>
 
-#include "base/bind.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/process/process_iterator.h"
 #include "base/process/process_metrics.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/version_info/version_info.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/grit/chromium_strings.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/process_type.h"
@@ -43,7 +41,7 @@ typedef std::map<pid_t, Process> ProcessMap;
 ProcessMap GetProcesses() {
   ProcessMap map;
 
-  base::ProcessIterator process_iter(NULL);
+  base::ProcessIterator process_iter(nullptr);
   while (const ProcessEntry* process_entry = process_iter.NextProcessEntry()) {
     Process process;
     process.pid = process_entry->pid();
@@ -103,8 +101,7 @@ std::vector<pid_t> GetAllChildren(const ProcessMap& processes, pid_t root) {
 
 }  // namespace
 
-MemoryDetails::MemoryDetails() {
-}
+MemoryDetails::MemoryDetails() = default;
 
 ProcessData* MemoryDetails::ChromeBrowser() {
   return &process_data_[0];
@@ -116,11 +113,10 @@ void MemoryDetails::CollectProcessData(
                                                 base::BlockingType::MAY_BLOCK);
 
   ProcessMap process_map = GetProcesses();
-  std::set<pid_t> browsers_found;
 
   ProcessData current_browser =
       GetProcessDataMemoryInformation(GetAllChildren(process_map, getpid()));
-  current_browser.name = l10n_util::GetStringUTF16(IDS_SHORT_PRODUCT_NAME);
+  current_browser.name = base::ASCIIToUTF16(version_info::GetProductName());
   current_browser.process_name = u"chrome";
 
   for (auto i = current_browser.processes.begin();
@@ -138,7 +134,7 @@ void MemoryDetails::CollectProcessData(
 
   process_data_.push_back(current_browser);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   base::GetSwapInfo(&swap_info_);
 #endif
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,56 +14,85 @@
 #include "build/chromecast_buildflags.h"
 #include "components/tracing/common/tracing_switches.h"
 
-#if defined(OS_ANDROID)
-#include "base/android/build_info.h"  // nogncheck
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/android_info.h"  // nogncheck
 #endif
 
 namespace features {
 
-// Causes the BackgroundTracingManager to upload proto messages via UMA,
-// rather than JSON via the crash frontend.
-const base::Feature kBackgroundTracingProtoOutput{
-    "BackgroundTracingProtoOutput", base::FEATURE_ENABLED_BY_DEFAULT};
+namespace {
+
+BASE_FEATURE(kPerfettoBackendParams,
+             "kPerfettoBackendParams",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+}  // namespace
 
 // Runs the tracing service as an in-process browser service.
-const base::Feature kTracingServiceInProcess {
-  "TracingServiceInProcess",
-#if defined(OS_ANDROID) || BUILDFLAG(IS_CHROMECAST)
-      base::FEATURE_ENABLED_BY_DEFAULT
+BASE_FEATURE(kTracingServiceInProcess,
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CASTOS)
+             base::FEATURE_ENABLED_BY_DEFAULT
 #else
-      base::FEATURE_DISABLED_BY_DEFAULT
+             base::FEATURE_DISABLED_BY_DEFAULT
 #endif
-};
+);
 
-const base::Feature kEnablePerfettoSystemTracing{
-    "EnablePerfettoSystemTracing", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Controls whether trace points are implemented using Perfetto's client library
-// (enabled) or legacy TraceLog (disabled).
-const base::Feature kEnablePerfettoClientApiProducer {
-  "EnablePerfettoClientApiProducer",
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-      base::FEATURE_ENABLED_BY_DEFAULT
+// This feature is enabled by default on WebView using
+// `variations::FeatureOverrides` since we can't have #ifdef for WebView only.
+BASE_FEATURE(kEnablePerfettoSystemTracing,
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+    // TODO(crbug.com/42050521): Read from structured config on Fuchsia.
+    base::FEATURE_ENABLED_BY_DEFAULT
 #else
-      base::FEATURE_DISABLED_BY_DEFAULT
+    base::FEATURE_DISABLED_BY_DEFAULT
 #endif
-};
+);
+
+BASE_FEATURE(kEnablePerfettoSystemBackgroundTracing,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Controls the preferred size of each page in the shmem buffer.
+BASE_FEATURE_PARAM(int,
+                   kPerfettoSMBPageSizeBytes,
+                   &kPerfettoBackendParams,
+                   "page_size_bytes",
+                   tracing::kDefaultSMBPageSizeBytes);
+
+// Controls the size of the shared memory buffer between the current process and
+// the service backend(s)
+BASE_FEATURE_PARAM(int,
+                   kPerfettoSharedMemorySizeBytes,
+                   &kPerfettoBackendParams,
+                   "shared_memory_size_bytes",
+                   tracing::kDefaultSharedMemorySizeBytes);
+
+BASE_FEATURE_PARAM(int,
+                   kPerfettoBrowserSharedMemorySizeBytes,
+                   &kPerfettoBackendParams,
+                   "browser_shared_memory_size_bytes",
+                   tracing::kDefaultBrowserSharedMemorySizeBytes);
 
 }  // namespace features
 
 namespace tracing {
 
 bool ShouldSetupSystemTracing() {
-#if defined(OS_ANDROID)
-  if (base::android::BuildInfo::GetInstance()->is_debug_android()) {
+#if BUILDFLAG(IS_ANDROID)
+  if (base::android::android_info::is_debug_android()) {
     return true;
   }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::GetInstance()) {
     return base::FeatureList::IsEnabled(features::kEnablePerfettoSystemTracing);
   }
-  return features::kEnablePerfettoSystemTracing.default_state ==
+  return features::kEnablePerfettoSystemTracing.GetDefaultState() ==
          base::FEATURE_ENABLED_BY_DEFAULT;
+}
+
+bool SystemBackgroundTracingEnabled() {
+  return ShouldSetupSystemTracing() &&
+         base::FeatureList::IsEnabled(
+             features::kEnablePerfettoSystemBackgroundTracing);
 }
 
 }  // namespace tracing

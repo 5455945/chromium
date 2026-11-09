@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <stdint.h>
 
-#include <string>
+#include <array>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
 
 namespace mojo {
@@ -34,9 +37,10 @@ struct MessageHeader : internal::StructHeader {
   // A combination of zero or more of the flag constants defined within the
   // Message class.
   uint32_t flags;
-  // A unique (hopefully) id for a message. Used in tracing to match trace
-  // events for sending and receiving a message.
-  uint32_t trace_id;
+  // A unique (hopefully) value for a message. Used in tracing, forming the
+  // lower part of the 64-bit trace id, which is used to match trace events for
+  // sending and receiving a message (`name` forms the upper part).
+  uint32_t trace_nonce;
 };
 static_assert(sizeof(MessageHeader) == 24, "Bad sizeof(MessageHeader)");
 
@@ -54,28 +58,58 @@ struct MessageHeaderV2 : MessageHeaderV1 {
 };
 static_assert(sizeof(MessageHeaderV2) == 48, "Bad sizeof(MessageHeaderV2)");
 
+struct MessageHeaderV3 : MessageHeaderV2 {
+  MessageHeaderV3();
+  int64_t creation_timeticks_us;
+};
+static_assert(sizeof(MessageHeaderV3) == 56, "Bad sizeof(MessageHeaderV3)");
+
 #pragma pack(pop)
 
 class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) MessageDispatchContext {
  public:
   explicit MessageDispatchContext(Message* message);
+
+  MessageDispatchContext(const MessageDispatchContext&) = delete;
+  MessageDispatchContext& operator=(const MessageDispatchContext&) = delete;
+
   ~MessageDispatchContext();
 
   static MessageDispatchContext* current();
 
-  base::OnceCallback<void(const std::string&)> GetBadMessageCallback();
+  base::OnceCallback<void(std::string_view)> GetBadMessageCallback();
+
+  const Message* message() const { return message_; }
+
+  static constexpr size_t kMaxErrorTraceEntries = 4;
+
+  void AddError(const DeserializationError& error) {
+    if (error_trace_count_ < error_trace_.size()) {
+      error_trace_[error_trace_count_++] = error;
+    }
+  }
+
+  base::span<const DeserializationError> error_trace() const;
 
  private:
-  MessageDispatchContext* outer_context_;
-  Message* message_;
-
-  DISALLOW_COPY_AND_ASSIGN(MessageDispatchContext);
+  raw_ptr<MessageDispatchContext> outer_context_;
+  raw_ptr<Message> message_;
+  std::array<DeserializationError, kMaxErrorTraceEntries> error_trace_;
+  uint8_t error_trace_count_ = 0;
 };
 
 COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE)
-size_t ComputeSerializedMessageSize(uint32_t flags,
-                                    size_t payload_size,
+void AddDeserializationError(const DeserializationError& error);
+
+COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE)
+size_t ComputeSerializedMessageSize(size_t payload_size,
                                     size_t payload_interface_id_count);
+
+COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE)
+size_t EstimateSerializedMessageSize(uint32_t message_name,
+                                     size_t payload_size,
+                                     size_t total_size,
+                                     size_t estimated_payload_size);
 
 }  // namespace internal
 }  // namespace mojo

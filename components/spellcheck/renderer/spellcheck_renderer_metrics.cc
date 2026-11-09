@@ -1,9 +1,6 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#ifndef COMPONENTS_SPELLCHECK_RENDERER_SPELLCHECK_RENDERER_METRICS_H_
-#define COMPONENTS_SPELLCHECK_RENDERER_SPELLCHECK_RENDERER_METRICS_H_
 
 #include "components/spellcheck/renderer/spellcheck_renderer_metrics.h"
 
@@ -12,7 +9,7 @@
 #include "build/build_config.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 namespace {
 
 // Records the duration of a spell check request. This variation is for when
@@ -37,7 +34,7 @@ void RecordNativeSpellcheckDuration(base::TimeDelta duration) {
 }
 
 }  // anonymous namespace
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
 namespace spellcheck_renderer_metrics {
 
@@ -53,7 +50,7 @@ void RecordCheckedTextLengthWithSuggestions(int length) {
   UMA_HISTOGRAM_COUNTS_1M("SpellCheck.api.check.suggestions", length);
 }
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 void RecordHunspellSuggestionDuration(base::TimeDelta duration) {
   UMA_HISTOGRAM_TIMES(
       "Spellcheck.Windows.SuggestionGatheringDuration.HunspellOnly", duration);
@@ -75,8 +72,6 @@ void RecordSpellcheckDuration(base::TimeDelta duration,
     RecordNativeSpellcheckDuration(duration);
   }
 }
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
 }  // namespace spellcheck_renderer_metrics
-
-#endif  // COMPONENTS_SPELLCHECK_RENDERER_SPELLCHECK_RENDERER_METRICS_H_

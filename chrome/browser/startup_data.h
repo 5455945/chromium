@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,20 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
-#include "components/leveldb_proto/public/proto_database_provider.h"
+#include "extensions/buildflags/buildflags.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/files/file_path.h"
+#include "components/leveldb_proto/public/proto_database_provider.h"  // nogncheck
+#endif
+
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+namespace extensions {
+class ExtensionsBrowserClient;
+}
+#endif
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -37,6 +47,10 @@ class ChromeFeatureListCreator;
 class StartupData {
  public:
   StartupData();
+
+  StartupData(const StartupData&) = delete;
+  StartupData& operator=(const StartupData&) = delete;
+
   ~StartupData();
 
   // Records core profile settings into the SystemProfileProto. It is important
@@ -46,7 +60,10 @@ class StartupData {
   // browser mode.
   void RecordCoreSystemProfile();
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  // Early initialization of the profile key for reduced mode startup.
+  void InitProfileKey();
+
   // Initializes all necessary parameters to create the Profile's PrefService.
   void CreateProfilePrefService();
 
@@ -54,6 +71,22 @@ class StartupData {
   bool HasBuiltProfilePrefService();
 
   ProfileKey* GetProfileKey();
+
+  // Returns the profile directory that the ProfileKey and PrefService are
+  // built for. The full browser opens this profile first, so that its
+  // ProfileImpl can take over the pre-created objects. Unlike GetProfileKey(),
+  // this stays valid after the key has been taken over. Empty before
+  // InitProfileKey() is called.
+  const base::FilePath& GetProfilePath() const;
+
+  // Returns the base name of the profile directory that InitProfileKey()
+  // builds the ProfileKey and PrefService for: the last used profile in
+  // `local_state` with AndroidMultiprofileStartupData, and the initial profile
+  // otherwise.
+  static base::FilePath GetProfileBaseNameForStartup(
+      const PrefService& local_state);
+
+  void SetProfilePathForTesting(const base::FilePath& profile_path);
 
   // Passes ownership of the |key_| to the caller.
   std::unique_ptr<ProfileKey> TakeProfileKey();
@@ -79,14 +112,22 @@ class StartupData {
   TakeProtoDatabaseProvider();
 #endif
 
-  ChromeFeatureListCreator* chrome_feature_list_creator() {
-    return chrome_feature_list_creator_.get();
-  }
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  // Passes ownership of the `extensions_browser_client_` to the caller.
+  std::unique_ptr<extensions::ExtensionsBrowserClient>
+  TakeExtensionsBrowserClient();
+#endif
+
+  // TODO(martinkong): Remove this function and replace its usage with
+  // ChromeFeatureListCreator::GetInstance()
+  ChromeFeatureListCreator* chrome_feature_list_creator();
 
  private:
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void PreProfilePrefServiceInit();
   void CreateServicesInternal();
+
+  base::FilePath profile_path_;
 
   std::unique_ptr<ProfileKey> key_;
 
@@ -101,9 +142,10 @@ class StartupData {
   std::unique_ptr<leveldb_proto::ProtoDatabaseProvider> proto_db_provider_;
 #endif
 
-  std::unique_ptr<ChromeFeatureListCreator> chrome_feature_list_creator_;
-
-  DISALLOW_COPY_AND_ASSIGN(StartupData);
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  std::unique_ptr<extensions::ExtensionsBrowserClient>
+      extensions_browser_client_;
+#endif
 };
 
 #endif  // CHROME_BROWSER_STARTUP_DATA_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,19 @@ namespace ui {
 
 // This window property if set on the window does not activate the window for a
 // touch based WM_MOUSEACTIVATE message.
-COMPONENT_EXPORT(UI_BASE)
-extern const wchar_t kIgnoreTouchMouseActivateForWindow[];
+inline constexpr wchar_t kIgnoreTouchMouseActivateForWindow[] =
+    L"Chrome.IgnoreMouseActivate";
+
+// This class name is assigned to legacy windows created for screen readers that
+// expect each web content container to be in its own HWNDs.
+inline constexpr wchar_t kLegacyRenderWidgetHostHwnd[] =
+    L"Chrome_RenderWidgetHostHWND";
 
 // This property is put on an HWND so the compositor output knows to treat it
 // as transparent and draw to it using WS_EX_LAYERED (if using the software
 // compositor).
-COMPONENT_EXPORT(UI_BASE) extern const wchar_t kWindowTranslucent[];
+inline constexpr wchar_t kWindowTranslucent[] = L"Chrome.WindowTranslucent";
 
 }  // namespace ui
 
 #endif  // UI_BASE_WIN_INTERNAL_CONSTANTS_H_
-
-

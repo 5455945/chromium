@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,6 @@ MockPage::MockPage() = default;
 MockPage::~MockPage() = default;
 
 mojo::PendingRemote<downloads::mojom::Page> MockPage::BindAndGetRemote() {
-  DCHECK(!receiver_.is_bound());
+  CHECK(!receiver_.is_bound(), base::NotFatalUntil::M162);
   return receiver_.BindNewPipeAndPassRemote();
 }

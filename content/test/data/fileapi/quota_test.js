@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,11 +41,11 @@ function requestFileSystemSuccess(fs) {
   }, function(e) { fail('Open for 1st truncate:' + fileErrorToString(e)); } );
 }
 
-function quotaSuccess(usage, quota) {
-  if (usage != 0)
-    fail('Usage is not zero: ' + usage);
-  if (quota != 5000 * 1024)
-    fail('Quota is not 5000KiB: ' + quota);
+function quotaSuccess(result, expectedQuota) {
+  if (result.usage != 0)
+    fail('Usage is not zero: ' + result.usage);
+  if (result.quota != expectedQuota)
+    fail('Estimated quota is not ' + expectedQuota + ': ' + result.quota);
 
   window.webkitRequestFileSystem(
       window.TEMPORARY,
@@ -55,12 +55,21 @@ function quotaSuccess(usage, quota) {
 }
 
 function test() {
-  if (window.webkitStorageInfo) {
+  const params = new URLSearchParams(window.location.search);
+  const expectedQuota = Number(params.get('quota'));
+  if (isNaN(expectedQuota) || expectedQuota < 0) {
+    fail(
+        'Missing or invalid "quota" URL parameter, url was ' +
+        window.location.href);
+    return;
+  }
+
+  if (navigator.storage) {
     debug('Querying usage and quota.');
-    webkitStorageInfo.queryUsageAndQuota(webkitStorageInfo.TEMPORARY,
-                                         quotaSuccess,
-                                         unexpectedErrorCallback);
+    navigator.storage.estimate()
+        .then(result => quotaSuccess(result, expectedQuota))
+        .catch(unexpectedErrorCallback);
   } else {
-    debug('This test requires window.webkitStorageInfo.');
+    debug('This test requires navigator.storage.');
   }
 }

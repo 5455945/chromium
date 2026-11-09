@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,18 @@
 #include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/document_metadata/document_metadata.mojom-blink.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 
 namespace blink {
 
-class Document;
 class LocalFrame;
 
 // Mojo interface to return extracted metadata for AppIndexing.
-class DocumentMetadataServer final
+class MODULES_EXPORT DocumentMetadataServer final
     : public GarbageCollected<DocumentMetadataServer>,
       public mojom::blink::DocumentMetadata,
       public Supplement<Document> {
@@ -40,6 +41,9 @@ class DocumentMetadataServer final
 
   // mojom::blink::DocumentMetadata overrides.
   void GetEntities(GetEntitiesCallback) override;
+  void ClassifyProductDetails(const Vector<String>& allowed_keywords,
+                              const Vector<String>& blocked_keywords,
+                              ClassifyProductDetailsCallback) override;
 
  private:
   void Bind(mojo::PendingReceiver<mojom::blink::DocumentMetadata> receiver);

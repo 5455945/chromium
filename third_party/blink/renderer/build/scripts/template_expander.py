@@ -27,28 +27,32 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import os
-import sys
 
 import jinja2
 
 
-def apply_template(template_path,
-                   params,
-                   filters=None,
-                   tests=None,
-                   template_cache=None):
+def apply_template(
+    template_path,
+    params,
+    filters=None,
+    tests=None,
+    template_cache=None,
+    template_dir=None,
+):
     template = None
 
     if filters is None and tests is None and template_cache is not None:
         template = template_cache.get(template_path, None)
 
     if template is None:
-        current_dir = os.path.dirname(os.path.realpath(__file__))
+        if template_dir is None:
+            template_dir = os.path.dirname(os.path.realpath(__file__))
         jinja_env = jinja2.Environment(
-            loader=jinja2.FileSystemLoader(current_dir),
+            loader=jinja2.FileSystemLoader(template_dir),
             keep_trailing_newline=True,  # newline-terminate generated files
             lstrip_blocks=True,  # so can indent control flow tags
-            trim_blocks=True)  # so don't need {%- -%} everywhere
+            trim_blocks=True,
+        )  # so don't need {%- -%} everywhere
         if filters:
             jinja_env.filters.update(filters)
         if tests:
@@ -62,7 +66,13 @@ def apply_template(template_path,
     return template.render(params)
 
 
-def use_jinja(template_path, filters=None, tests=None, template_cache=None):
+def use_jinja(
+    template_path,
+    filters=None,
+    tests=None,
+    template_cache=None,
+    template_dir=None,
+):
     def real_decorator(generator):
         def generator_internal(*args, **kwargs):
             parameters = generator(*args, **kwargs)
@@ -71,7 +81,9 @@ def use_jinja(template_path, filters=None, tests=None, template_cache=None):
                 parameters,
                 filters=filters,
                 tests=tests,
-                template_cache=template_cache)
+                template_cache=template_cache,
+                template_dir=template_dir,
+            )
 
         generator_internal.__name__ = generator.__name__
         return generator_internal

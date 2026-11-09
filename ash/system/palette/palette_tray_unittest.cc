@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,20 @@
 #include <memory>
 #include <string>
 
-#include "ash/assistant/assistant_controller_impl.h"
-#include "ash/assistant/test/test_assistant_service.h"
-#include "ash/assistant/util/assistant_util.h"
+#include "ash/annotator/annotation_source_watcher.h"
+#include "ash/annotator/annotation_tray.h"
+#include "ash/annotator/annotator_controller.h"
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/highlighter/highlighter_controller.h"
-#include "ash/highlighter/highlighter_controller_test_api.h"
-#include "ash/public/cpp/ash_pref_names.h"
-#include "ash/public/cpp/assistant/assistant_state.h"
+#include "ash/projector/model/projector_session_impl.h"
+#include "ash/projector/projector_controller_impl.h"
 #include "ash/public/cpp/stylus_utils.h"
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/system/palette/palette_tray_test_api.h"
 #include "ash/system/palette/palette_utils.h"
 #include "ash/system/palette/palette_welcome_bubble.h"
@@ -28,15 +28,18 @@
 #include "ash/system/status_area_widget_test_helper.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test_shell_delegate.h"
+#include "ash/webui/annotator/test/mock_annotator_client.h"
 #include "base/command_line.h"
+#include "base/files/safe_base_name.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
-#include "chromeos/services/assistant/public/cpp/assistant_prefs.h"
-#include "chromeos/services/assistant/test_support/scoped_assistant_browser_delegate.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/session_manager_types.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/devices/device_data_manager.h"
@@ -44,20 +47,19 @@
 #include "ui/events/devices/stylus_state.h"
 #include "ui/events/event.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace ash {
 
 class PaletteTrayTest : public AshTestBase {
  public:
   PaletteTrayTest() = default;
-  ~PaletteTrayTest() override = default;
 
-  // Performs a tap on the palette tray button.
-  void PerformTap() {
-    ui::GestureEvent tap(0, 0, 0, base::TimeTicks(),
-                         ui::GestureEventDetails(ui::ET_GESTURE_TAP));
-    palette_tray_->PerformAction(tap);
-  }
+  PaletteTrayTest(const PaletteTrayTest&) = delete;
+  PaletteTrayTest& operator=(const PaletteTrayTest&) = delete;
+
+  ~PaletteTrayTest() override = default;
 
   // Fake a stylus ejection.
   void EjectStylus() {
@@ -86,6 +88,22 @@ class PaletteTrayTest : public AshTestBase {
         .SetFirstDisplayAsInternalDisplay();
   }
 
+  void TearDown() override {
+    test_api_.reset();
+    palette_tray_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
+  // Sends a stylus event, which makes the `PaletteTray` show up.
+  void ShowPaletteTray() {
+    ui::test::EventGenerator* generator = GetEventGenerator();
+    generator->EnterPenPointerMode();
+    generator->PressTouch();
+    generator->ReleaseTouch();
+    generator->ExitPenPointerMode();
+    ASSERT_TRUE(palette_tray_->GetVisible());
+  }
+
   PrefService* prefs() {
     return Shell::Get()->session_controller()->GetPrimaryUserPrefService();
   }
@@ -95,12 +113,9 @@ class PaletteTrayTest : public AshTestBase {
     return Shell::Get()->session_controller()->GetActivePrefService();
   }
 
-  PaletteTray* palette_tray_ = nullptr;  // not owned
+  raw_ptr<PaletteTray> palette_tray_ = nullptr;  // not owned
 
   std::unique_ptr<PaletteTrayTestApi> test_api_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PaletteTrayTest);
 };
 
 // Verify the palette tray button exists and but is not visible initially.
@@ -164,8 +179,19 @@ TEST_F(PaletteTrayTest, PaletteTrayVisibleIfEnableStylusToolsNotSet) {
   EXPECT_FALSE(palette_tray_->GetVisible());
 }
 
+// A basic test to ensure the OnPressedCallback is triggered on tap.
+TEST_F(PaletteTrayTest, PressingTrayButton) {
+  ShowPaletteTray();
+
+  GestureTapOn(palette_tray_);
+
+  EXPECT_TRUE(palette_tray_->is_active());
+}
+
 // Verify taps on the palette tray button results in expected behaviour.
 TEST_F(PaletteTrayTest, PaletteTrayWorkflow) {
+  ShowPaletteTray();
+
   // Verify the palette tray button is not active, and the palette tray bubble
   // is not shown initially.
   EXPECT_FALSE(palette_tray_->is_active());
@@ -173,7 +199,7 @@ TEST_F(PaletteTrayTest, PaletteTrayWorkflow) {
 
   // Verify that by tapping the palette tray button, the button will become
   // active and the palette tray bubble will be open.
-  PerformTap();
+  GestureTapOn(palette_tray_);
   EXPECT_TRUE(palette_tray_->is_active());
   EXPECT_TRUE(test_api_->tray_bubble_wrapper());
 
@@ -187,18 +213,16 @@ TEST_F(PaletteTrayTest, PaletteTrayWorkflow) {
 
   // Verify that tapping the palette tray while a tool is active will deactivate
   // the tool, and the palette tray button will not be active.
-  PerformTap();
+  GestureTapOn(palette_tray_);
   EXPECT_FALSE(palette_tray_->is_active());
   EXPECT_FALSE(test_api_->palette_tool_manager()->IsToolActive(
       PaletteToolId::LASER_POINTER));
 
   // Verify that activating a action tool will close the palette tray bubble and
   // the palette tray button is will not be active.
-  PerformTap();
+  GestureTapOn(palette_tray_);
   ASSERT_TRUE(test_api_->tray_bubble_wrapper());
-  const auto capture_tool_id = features::IsCaptureModeEnabled()
-                                   ? PaletteToolId::ENTER_CAPTURE_MODE
-                                   : PaletteToolId::CAPTURE_SCREEN;
+  const auto capture_tool_id = PaletteToolId::ENTER_CAPTURE_MODE;
   test_api_->palette_tool_manager()->ActivateTool(capture_tool_id);
   EXPECT_FALSE(
       test_api_->palette_tool_manager()->IsToolActive(capture_tool_id));
@@ -213,7 +237,8 @@ TEST_F(PaletteTrayTest, PaletteTrayWorkflow) {
 // capture region) are deactivated.
 TEST_F(PaletteTrayTest, ModeToolDeactivatedAutomatically) {
   // Open the palette tray with a tap.
-  PerformTap();
+  ShowPaletteTray();
+  GestureTapOn(palette_tray_);
   ASSERT_TRUE(palette_tray_->is_active());
   ASSERT_TRUE(test_api_->tray_bubble_wrapper());
 
@@ -282,310 +307,6 @@ TEST_F(PaletteTrayTest, WelcomeBubbleVisibility) {
   EXPECT_TRUE(test_api_->welcome_bubble()->GetBubbleViewForTesting());
 }
 
-// Base class for tests that rely on Assistant enabled.
-class PaletteTrayTestWithAssistant : public PaletteTrayTest {
- public:
-  PaletteTrayTestWithAssistant() = default;
-  ~PaletteTrayTestWithAssistant() override = default;
-
-  // PaletteTrayTest:
-  void SetUp() override {
-    assistant::util::OverrideIsGoogleDeviceForTesting(true);
-
-    PaletteTrayTest::SetUp();
-
-    // Instantiate EventGenerator now so that its constructor does not overwrite
-    // the simulated clock that is being installed below.
-    GetEventGenerator();
-
-    // Tests fail if event time is ever 0.
-    simulated_clock_.Advance(base::TimeDelta::FromMilliseconds(10));
-    ui::SetEventTickClockForTesting(&simulated_clock_);
-
-    highlighter_test_api_ = std::make_unique<HighlighterControllerTestApi>(
-        Shell::Get()->highlighter_controller());
-  }
-
-  void TearDown() override {
-    assistant::util::OverrideIsGoogleDeviceForTesting(false);
-    ui::SetEventTickClockForTesting(nullptr);
-    // This needs to be called first to reset the controller state before the
-    // shell instance gets torn down.
-    highlighter_test_api_.reset();
-    PaletteTrayTest::TearDown();
-  }
-
- protected:
-  bool metalayer_enabled() const {
-    return test_api_->palette_tool_manager()->IsToolActive(
-        PaletteToolId::METALAYER);
-  }
-
-  bool highlighter_showing() const {
-    return highlighter_test_api_->IsShowingHighlighter();
-  }
-
-  AssistantState* assistant_state() const { return AssistantState::Get(); }
-
-  void DragAndAssertMetalayer(const std::string& context,
-                              const gfx::Point& origin,
-                              int event_flags,
-                              bool expected,
-                              bool expected_on_press) {
-    SCOPED_TRACE(context);
-
-    ui::test::EventGenerator* generator = GetEventGenerator();
-    gfx::Point pos = origin;
-    generator->MoveTouch(pos);
-    generator->set_flags(event_flags);
-    generator->PressTouch();
-    // If this gesture is supposed to enable the tool, it should have done it by
-    // now.
-    EXPECT_EQ(expected, metalayer_enabled());
-    // Unlike the tool, the highlighter might become visible only after the
-    // first move, hence a separate parameter to check against.
-    EXPECT_EQ(expected_on_press, highlighter_showing());
-    pos += gfx::Vector2d(1, 1);
-    generator->MoveTouch(pos);
-    // If this gesture is supposed to show the highlighter, it should have done
-    // it by now.
-    EXPECT_EQ(expected, highlighter_showing());
-    EXPECT_EQ(expected, metalayer_enabled());
-    generator->set_flags(ui::EF_NONE);
-    pos += gfx::Vector2d(1, 1);
-    generator->MoveTouch(pos);
-    EXPECT_EQ(expected, highlighter_showing());
-    EXPECT_EQ(expected, metalayer_enabled());
-    generator->ReleaseTouch();
-    // If the tool is not enabled, the gesture may open a context menu instead.
-    // Press escape to close the menu.
-    generator->PressKey(ui::VKEY_ESCAPE, ui::EF_NONE);
-  }
-
-  void WaitDragAndAssertMetalayer(const std::string& context,
-                                  const gfx::Point& origin,
-                                  int event_flags,
-                                  bool expected,
-                                  bool expected_on_press) {
-    const int kStrokeGap = 1000;
-    simulated_clock_.Advance(base::TimeDelta::FromMilliseconds(kStrokeGap));
-    DragAndAssertMetalayer(context, origin, event_flags, expected,
-                           expected_on_press);
-  }
-
-  std::unique_ptr<HighlighterControllerTestApi> highlighter_test_api_;
-
- private:
-  base::SimpleTestTickClock simulated_clock_;
-  chromeos::assistant::ScopedAssistantBrowserDelegate delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaletteTrayTestWithAssistant);
-};
-
-TEST_F(PaletteTrayTestWithAssistant, MetalayerToolViewCreated) {
-  EXPECT_TRUE(
-      test_api_->palette_tool_manager()->HasTool(PaletteToolId::METALAYER));
-}
-
-TEST_F(PaletteTrayTestWithAssistant, MetalayerToolActivatesHighlighter) {
-  ui::ScopedAnimationDurationScaleMode animation_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
-  assistant_state()->NotifyFeatureAllowed(
-      chromeos::assistant::AssistantAllowedState::ALLOWED);
-  assistant_state()->NotifyStatusChanged(
-      chromeos::assistant::AssistantStatus::READY);
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantEnabled, true);
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantContextEnabled,
-                      true);
-
-  ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->EnterPenPointerMode();
-
-  const gfx::Point origin(1, 1);
-  const gfx::Vector2d step(1, 1);
-  EXPECT_FALSE(palette_utils::PaletteContainsPointInScreen(origin + step));
-  EXPECT_FALSE(
-      palette_utils::PaletteContainsPointInScreen(origin + step + step));
-
-  // Press/drag does not activate the highlighter unless the palette tool is
-  // activated.
-  DragAndAssertMetalayer("tool disabled", origin, ui::EF_NONE,
-                         false /* no metalayer */,
-                         false /* no highlighter on press */);
-
-  // Activate the palette tool, still no highlighter.
-  test_api_->palette_tool_manager()->ActivateTool(PaletteToolId::METALAYER);
-  EXPECT_FALSE(highlighter_showing());
-
-  // Press/drag over a regular (non-palette) location. This should activate the
-  // highlighter. Note that a diagonal stroke does not create a valid selection.
-  highlighter_test_api_->ResetSelection();
-  DragAndAssertMetalayer("tool enabled", origin, ui::EF_NONE,
-                         true /* metalayer stays enabled after the press */,
-                         true /* highlighter shown on press */);
-  // When metalayer is entered normally (not via stylus button), a failed
-  // selection should not exit the mode.
-  EXPECT_FALSE(highlighter_test_api_->HandleSelectionCalled());
-  EXPECT_TRUE(metalayer_enabled());
-
-  // A successfull selection should exit the metalayer mode.
-  SCOPED_TRACE("horizontal stroke");
-  highlighter_test_api_->ResetSelection();
-  generator->MoveTouch(gfx::Point(100, 100));
-  generator->PressTouch();
-  EXPECT_TRUE(metalayer_enabled());
-  generator->MoveTouch(gfx::Point(300, 100));
-  generator->ReleaseTouch();
-  EXPECT_TRUE(highlighter_test_api_->HandleSelectionCalled());
-  EXPECT_FALSE(metalayer_enabled());
-
-  SCOPED_TRACE("drag over palette");
-  highlighter_test_api_->DestroyPointerView();
-  // Press/drag over the palette button. This should not activate the
-  // highlighter, but should disable the palette tool instead.
-  gfx::Point palette_point = palette_tray_->GetBoundsInScreen().CenterPoint();
-  EXPECT_TRUE(palette_utils::PaletteContainsPointInScreen(palette_point));
-  generator->MoveTouch(palette_point);
-  generator->PressTouch();
-  EXPECT_FALSE(highlighter_showing());
-  palette_point += gfx::Vector2d(1, 1);
-  EXPECT_TRUE(palette_utils::PaletteContainsPointInScreen(palette_point));
-  generator->MoveTouch(palette_point);
-  EXPECT_FALSE(highlighter_showing());
-  generator->ReleaseTouch();
-  EXPECT_FALSE(metalayer_enabled());
-
-  // Disabling metalayer support in the delegate should disable the palette
-  // tool.
-  test_api_->palette_tool_manager()->ActivateTool(PaletteToolId::METALAYER);
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantContextEnabled,
-                      false);
-  EXPECT_FALSE(metalayer_enabled());
-
-  // With the metalayer disabled again, press/drag does not activate the
-  // highlighter.
-  DragAndAssertMetalayer("tool disabled again", origin, ui::EF_NONE,
-                         false /* no metalayer */,
-                         false /* no highlighter on press */);
-}
-
-TEST_F(PaletteTrayTestWithAssistant, StylusBarrelButtonActivatesHighlighter) {
-  ui::ScopedAnimationDurationScaleMode animation_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
-  assistant_state()->NotifyStatusChanged(
-      chromeos::assistant::AssistantStatus::NOT_READY);
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantEnabled, false);
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantContextEnabled,
-                      false);
-
-  ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->EnterPenPointerMode();
-
-  const gfx::Point origin(1, 1);
-  const gfx::Vector2d step(1, 1);
-
-  EXPECT_FALSE(palette_utils::PaletteContainsPointInScreen(origin));
-  EXPECT_FALSE(palette_utils::PaletteContainsPointInScreen(origin + step));
-  EXPECT_FALSE(
-      palette_utils::PaletteContainsPointInScreen(origin + step + step));
-
-  // Press and drag while holding down the stylus button, no highlighter unless
-  // the metalayer support is fully enabled and the the framework is ready.
-  WaitDragAndAssertMetalayer("nothing enabled", origin,
-                             ui::EF_LEFT_MOUSE_BUTTON, false /* no metalayer */,
-                             false /* no highlighter on press */);
-
-  // Enable one of the two user prefs, should not be sufficient.
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantContextEnabled,
-                      true);
-  WaitDragAndAssertMetalayer("one pref enabled", origin,
-                             ui::EF_LEFT_MOUSE_BUTTON, false /* no metalayer */,
-                             false /* no highlighter on press */);
-
-  // Enable the other user pref, still not sufficient.
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantEnabled, true);
-  WaitDragAndAssertMetalayer("two prefs enabled", origin,
-                             ui::EF_LEFT_MOUSE_BUTTON, false /* no metalayer */,
-                             false /* no highlighter on press */);
-
-  // Once the service is ready, the button should start working.
-  assistant_state()->NotifyStatusChanged(
-      chromeos::assistant::AssistantStatus::READY);
-
-  // Press and drag with no button, still no highlighter.
-  WaitDragAndAssertMetalayer("all enabled, no button ", origin, ui::EF_NONE,
-                             false /* no metalayer */,
-                             false /* no highlighter on press */);
-
-  // Press/drag with while holding down the stylus button, but over the palette
-  // tray. This should activate neither the palette tool nor the highlighter.
-  gfx::Point palette_point = palette_tray_->GetBoundsInScreen().CenterPoint();
-  EXPECT_TRUE(palette_utils::PaletteContainsPointInScreen(palette_point));
-  EXPECT_TRUE(
-      palette_utils::PaletteContainsPointInScreen(palette_point + step));
-  EXPECT_TRUE(
-      palette_utils::PaletteContainsPointInScreen(palette_point + step + step));
-  WaitDragAndAssertMetalayer("drag over palette", palette_point,
-                             ui::EF_LEFT_MOUSE_BUTTON, false /* no metalayer */,
-                             false /* no highlighter on press */);
-
-  // Perform a regular stroke (no button), followed by a button-down stroke
-  // without a pause. This should not trigger metalayer.
-  DragAndAssertMetalayer("writing, no button", origin, ui::EF_NONE,
-                         false /* no metalayer */,
-                         false /* no highlighter on press */);
-  DragAndAssertMetalayer("writing, with button ", origin,
-                         ui::EF_LEFT_MOUSE_BUTTON, false /* no metalayer */,
-                         false /* no highlighter on press */);
-
-  // Wait, then press/drag while holding down the stylus button over a regular
-  // location. This should activate the palette tool and the highlighter.
-  WaitDragAndAssertMetalayer("with button", origin, ui::EF_LEFT_MOUSE_BUTTON,
-                             true /* enables metalayer */,
-                             false /* no highlighter on press */);
-  // Metalayer mode entered via the stylus button should not be sticky.
-  EXPECT_FALSE(metalayer_enabled());
-
-  // Repeat the previous step without a pause, make sure that the palette tool
-  // is not toggled, and the highlighter is enabled immediately.
-  DragAndAssertMetalayer("with button, again", origin, ui::EF_LEFT_MOUSE_BUTTON,
-                         true /* enables metalayer */,
-                         true /* highlighter shown on press */);
-
-  // Same after a pause.
-  WaitDragAndAssertMetalayer(
-      "with button, after a pause", origin, ui::EF_LEFT_MOUSE_BUTTON,
-      true /* enables metalayer */, true /* highlighter shown on press */);
-
-  // The barrel button should not work on the lock screen.
-  highlighter_test_api_->DestroyPointerView();
-  GetSessionControllerClient()->LockScreen();
-  EXPECT_FALSE(test_api_->palette_tool_manager()->IsToolActive(
-      PaletteToolId::METALAYER));
-  WaitDragAndAssertMetalayer("screen locked", origin, ui::EF_LEFT_MOUSE_BUTTON,
-                             false /* no metalayer */,
-                             false /* no highlighter on press */);
-
-  // Unlock the screen, the barrel button should work again.
-  GetSessionControllerClient()->UnlockScreen();
-  WaitDragAndAssertMetalayer(
-      "screen unlocked", origin, ui::EF_LEFT_MOUSE_BUTTON,
-      true /* enables metalayer */, false /* no highlighter on press */);
-
-  // Disable the metalayer support.
-  // This should deactivate both the palette tool and the highlighter.
-  prefs()->SetBoolean(chromeos::assistant::prefs::kAssistantContextEnabled,
-                      false);
-  EXPECT_FALSE(test_api_->palette_tool_manager()->IsToolActive(
-      PaletteToolId::METALAYER));
-
-  highlighter_test_api_->DestroyPointerView();
-  EXPECT_FALSE(highlighter_showing());
-  DragAndAssertMetalayer("disabled", origin, ui::EF_LEFT_MOUSE_BUTTON,
-                         false /* no metalayer */,
-                         false /* no highlighter on press */);
-}
-
 // Base class for tests that need to simulate an internal stylus.
 class PaletteTrayTestWithInternalStylus : public PaletteTrayTest {
  public:
@@ -593,6 +314,12 @@ class PaletteTrayTestWithInternalStylus : public PaletteTrayTest {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kHasInternalStylus);
   }
+
+  PaletteTrayTestWithInternalStylus(const PaletteTrayTestWithInternalStylus&) =
+      delete;
+  PaletteTrayTestWithInternalStylus& operator=(
+      const PaletteTrayTestWithInternalStylus&) = delete;
+
   ~PaletteTrayTestWithInternalStylus() override = default;
 
   // PaletteTrayTest:
@@ -600,9 +327,6 @@ class PaletteTrayTestWithInternalStylus : public PaletteTrayTest {
     PaletteTrayTest::SetUp();
     test_api_->SetDisplayHasStylus();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PaletteTrayTestWithInternalStylus);
 };
 
 // Verify the palette tray button exists and is visible if the device has an
@@ -673,6 +397,11 @@ TEST_F(PaletteTrayTestWithInternalStylus, WelcomeBubbleShownOnEject) {
 
 // Verify if the pref which tracks if the welcome bubble has been shown before
 // is true, the welcome bubble is not shown when the stylus is removed.
+//
+// This test used to be disabled due to flakiness (crbug.com/1423035). It was
+// then re-enabled in crbug.com/281717553 after local verification. Please feel
+// free to disable it again and leave a comment in crbug.com/281717553 if the
+// flake reappears.
 TEST_F(PaletteTrayTestWithInternalStylus, WelcomeBubbleNotShownIfShownBefore) {
   active_user_pref_service()->SetBoolean(prefs::kLaunchPaletteOnEjectEvent,
                                          false);
@@ -767,6 +496,31 @@ TEST_F(PaletteTrayTestWithInternalStylus, PaletteBubbleShownOnEject) {
       PaletteToolId::LASER_POINTER));
 }
 
+// Verify that palette tray and bubble view have the correct accessible names.
+TEST_F(PaletteTrayTestWithInternalStylus, AccessibleNames) {
+  active_user_pref_service()->SetBoolean(prefs::kEnableStylusTools, true);
+
+  {
+    ui::AXNodeData node_data;
+    palette_tray_->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+    EXPECT_EQ(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+              l10n_util::GetStringUTF16(IDS_ASH_STYLUS_TOOLS_TITLE));
+  }
+
+  // Removing the stylus shows the bubble.
+  EjectStylus();
+  ASSERT_TRUE(palette_tray_->GetBubbleView());
+
+  {
+    ui::AXNodeData node_data;
+    palette_tray_->GetBubbleView()
+        ->GetViewAccessibility()
+        .GetAccessibleNodeData(&node_data);
+    EXPECT_EQ(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+              test_api_->GetAccessibleNameForBubble());
+  }
+}
+
 // Base class for tests that need to simulate an internal stylus, and need to
 // start without an active session.
 class PaletteTrayNoSessionTestWithInternalStylus : public PaletteTrayTest {
@@ -776,15 +530,18 @@ class PaletteTrayNoSessionTestWithInternalStylus : public PaletteTrayTest {
         switches::kHasInternalStylus);
     stylus_utils::SetHasStylusInputForTesting();
   }
+
+  PaletteTrayNoSessionTestWithInternalStylus(
+      const PaletteTrayNoSessionTestWithInternalStylus&) = delete;
+  PaletteTrayNoSessionTestWithInternalStylus& operator=(
+      const PaletteTrayNoSessionTestWithInternalStylus&) = delete;
+
   ~PaletteTrayNoSessionTestWithInternalStylus() override = default;
 
  protected:
   PrefService* active_user_pref_service() {
     return Shell::Get()->session_controller()->GetActivePrefService();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PaletteTrayNoSessionTestWithInternalStylus);
 };
 
 // Verify that the palette tray is created on an external display, but it is not
@@ -804,13 +561,13 @@ TEST_F(PaletteTrayNoSessionTestWithInternalStylus,
   };
 
   // Add a external display, then sign in.
-  UpdateDisplay("200x200,200x200");
+  UpdateDisplay("320x200,320x200");
   display::test::DisplayManagerTestApi(display_manager())
       .SetFirstDisplayAsInternalDisplay();
   Shell::RootWindowControllerList controllers =
       Shell::GetAllRootWindowControllers();
   ASSERT_EQ(2u, controllers.size());
-  SimulateUserLogin("test@test.com");
+  SimulateUserLogin(AccountId::FromUserEmail("test@test.com"));
 
   base::CommandLine::ForCurrentProcess()->RemoveSwitch(
       switches::kAshEnablePaletteOnAllDisplays);
@@ -843,10 +600,10 @@ class PaletteTrayTestWithOOBE : public PaletteTrayTest {
   PaletteTrayTestWithOOBE() = default;
   ~PaletteTrayTestWithOOBE() override = default;
 
-  // PalatteTrayTest:
-  void SetUp() override {
-    set_start_session(false);
-    PaletteTrayTest::SetUp();
+  // PaletteTrayTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    PaletteTrayTest::SetUpInitParams(init_params);
+    init_params.users.clear();
   }
 };
 
@@ -871,13 +628,6 @@ class PaletteTrayTestMultiDisplay : public PaletteTrayTest {
   PaletteTrayTestMultiDisplay& operator=(const PaletteTrayTestMultiDisplay&) =
       delete;
 
-  // Performs a tap on the palette tray button.
-  void PerformTap(PaletteTray* tray) {
-    ui::GestureEvent tap(0, 0, 0, base::TimeTicks(),
-                         ui::GestureEventDetails(ui::ET_GESTURE_TAP));
-    tray->PerformAction(tap);
-  }
-
   // Fake a stylus ejection.
   void EjectStylus() {
     test_api_->OnStylusStateChanged(ui::StylusState::REMOVED);
@@ -898,13 +648,13 @@ class PaletteTrayTestMultiDisplay : public PaletteTrayTest {
         switches::kAshEnablePaletteOnAllDisplays);
 
     // Add a external display, then sign in.
-    UpdateDisplay("200x200,200x200");
+    UpdateDisplay("320x200,320x200");
     display::test::DisplayManagerTestApi(display_manager())
         .SetFirstDisplayAsInternalDisplay();
     Shell::RootWindowControllerList controllers =
         Shell::GetAllRootWindowControllers();
     ASSERT_EQ(2u, controllers.size());
-    SimulateUserLogin("test@test.com");
+    SimulateUserLogin(AccountId::FromUserEmail("test@test.com"));
 
     palette_tray_ = controllers[0]->GetStatusAreaWidget()->palette_tray();
     palette_tray_external_ =
@@ -917,8 +667,14 @@ class PaletteTrayTestMultiDisplay : public PaletteTrayTest {
         std::make_unique<PaletteTrayTestApi>(palette_tray_external_);
   }
 
+  void TearDown() override {
+    test_api_external_.reset();
+    palette_tray_external_ = nullptr;
+    PaletteTrayTest::TearDown();
+  }
+
  protected:
-  PaletteTray* palette_tray_external_ = nullptr;
+  raw_ptr<PaletteTray> palette_tray_external_ = nullptr;
 
   std::unique_ptr<PaletteTrayTestApi> test_api_external_;
 };
@@ -1030,6 +786,8 @@ TEST_F(PaletteTrayTestMultiDisplay, MirrorModeEnable) {
   EXPECT_TRUE(palette_tray_external_->GetVisible());
 
   // Enable mirror mode
+  // Reset because external display will be gone
+  palette_tray_external_ = nullptr;
   Shell::Get()->display_manager()->SetMultiDisplayMode(
       display::DisplayManager::MIRRORING);
   Shell::Get()->display_manager()->UpdateDisplays();
@@ -1041,6 +799,134 @@ TEST_F(PaletteTrayTestMultiDisplay, MirrorModeEnable) {
   // The external tray will have been deleted, so only check if
   // we're visible on the internal display now.
   EXPECT_TRUE(palette_tray_->GetVisible());
+}
+
+class PaletteTrayTestWithProjector : public PaletteTrayTest {
+ public:
+  PaletteTrayTestWithProjector() = default;
+
+  PaletteTrayTestWithProjector(const PaletteTrayTestWithProjector&) = delete;
+  PaletteTrayTestWithProjector& operator=(const PaletteTrayTestWithProjector&) =
+      delete;
+
+  ~PaletteTrayTestWithProjector() override = default;
+
+  // AshTestBase:
+  void SetUp() override {
+    PaletteTrayTest::SetUp();
+    projector_session_ = ProjectorControllerImpl::Get()->projector_session();
+  }
+
+  void TearDown() override {
+    projector_session_ = nullptr;
+    PaletteTrayTest::TearDown();
+  }
+
+ protected:
+  raw_ptr<ProjectorSessionImpl> projector_session_;
+};
+
+// Verify that the palette tray is hidden during a Projector session.
+TEST_F(PaletteTrayTestWithProjector,
+       PaletteTrayNotVisibleDuringProjectorSession) {
+  active_user_pref_service()->SetBoolean(prefs::kEnableStylusTools, true);
+  local_state()->SetBoolean(prefs::kHasSeenStylus, true);
+  test_api_->palette_tool_manager()->ActivateTool(PaletteToolId::LASER_POINTER);
+
+  EXPECT_TRUE(palette_tray_->GetVisible());
+  EXPECT_EQ(
+      test_api_->palette_tool_manager()->GetActiveTool(PaletteGroup::MODE),
+      PaletteToolId::LASER_POINTER);
+
+  // Verify palette tray is hidden and the active tool is deactivated during
+  // Projector session.
+  projector_session_->Start(
+      base::SafeBaseName::Create("projector_data").value());
+  EXPECT_FALSE(palette_tray_->GetVisible());
+  EXPECT_EQ(
+      test_api_->palette_tool_manager()->GetActiveTool(PaletteGroup::MODE),
+      PaletteToolId::NONE);
+
+  // Verify palette tray is visible when Projector session ends.
+  projector_session_->Stop();
+  EXPECT_TRUE(palette_tray_->GetVisible());
+}
+
+class PaletteTrayTestWithAnnotator : public PaletteTrayTest {
+ public:
+  PaletteTrayTestWithAnnotator() = default;
+
+  PaletteTrayTestWithAnnotator(const PaletteTrayTestWithAnnotator&) = delete;
+  PaletteTrayTestWithAnnotator& operator=(const PaletteTrayTestWithAnnotator&) =
+      delete;
+
+  ~PaletteTrayTestWithAnnotator() override = default;
+
+  // AshTestBase:
+  void SetUp() override {
+    PaletteTrayTest::SetUp();
+    annotator_controller()->SetToolClient(&annotator_client_);
+  }
+
+  AnnotatorController* annotator_controller() {
+    return Shell::Get()->annotator_controller();
+  }
+
+  AnnotationTray* annotation_tray() {
+    return Shell::GetPrimaryRootWindowController()
+        ->GetStatusAreaWidget()
+        ->annotation_tray();
+  }
+
+ protected:
+  MockAnnotatorClient annotator_client_;
+};
+
+// Verify that the palette tray behavior in marker mode.
+TEST_F(PaletteTrayTestWithAnnotator,
+       PaletteTrayChangesVisibilityOnAnnotatorChanges) {
+  active_user_pref_service()->SetBoolean(prefs::kEnableStylusTools, true);
+  local_state()->SetBoolean(prefs::kHasSeenStylus, true);
+
+  // Activate laser tool and verify the palette is visible
+  test_api_->palette_tool_manager()->ActivateTool(PaletteToolId::LASER_POINTER);
+  EXPECT_TRUE(palette_tray_->GetVisible());
+  EXPECT_EQ(
+      test_api_->palette_tool_manager()->GetActiveTool(PaletteGroup::MODE),
+      PaletteToolId::LASER_POINTER);
+
+  // Simulate activating marker in the controller.
+  annotator_controller()->OnCanvasInitialized(true);
+  annotator_controller()->RegisterView(Shell::GetPrimaryRootWindow());
+  annotator_controller()->CreateAnnotationOverlayForMarkerMode(
+      Shell::GetPrimaryRootWindow());
+  annotator_controller()->EnableAnnotatorTool();
+
+  // Verify annotation tray is shown, palette tray is hidden.
+  EXPECT_FALSE(palette_tray_->GetVisible());
+  EXPECT_TRUE(annotation_tray()->visible_preferred());
+
+  // Reset Marker, verify annotation tray is hidden, both marker and palette
+  // tray is shown and the active tool is none.
+  annotator_controller()->ResetTools();
+  EXPECT_TRUE(annotation_tray()->visible_preferred());
+  EXPECT_TRUE(palette_tray_->GetVisible());
+  EXPECT_EQ(
+      test_api_->palette_tool_manager()->GetActiveTool(PaletteGroup::MODE),
+      PaletteToolId::NONE);
+
+  // Enable marker tools again.
+  annotator_controller()->OnCanvasInitialized(true);
+  annotator_controller()->EnableAnnotatorTool();
+
+  // Disable annotator. Verify annotation tray is hidden, palette tray is shown
+  // and the active tool is none.
+  annotator_controller()->DisableAnnotator();
+  EXPECT_FALSE(annotation_tray()->visible_preferred());
+  EXPECT_TRUE(palette_tray_->GetVisible());
+  EXPECT_EQ(
+      test_api_->palette_tool_manager()->GetActiveTool(PaletteGroup::MODE),
+      PaletteToolId::NONE);
 }
 
 }  // namespace ash

@@ -1,8 +1,8 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       `Tests that virtual time survives cross-process navigation.`);
 
@@ -60,8 +60,7 @@
   });
 
   await dp.Emulation.setVirtualTimePolicy({policy: 'pause'});
-  await dp.Emulation.setVirtualTimePolicy({
-      policy: 'pauseIfNetworkFetchesPending', budget: virtualTimeBudget,
-      waitForNavigation: true});
   dp.Page.navigate({url: 'http://a.com'});
+  await dp.Emulation.setVirtualTimePolicy({
+      policy: 'pauseIfNetworkFetchesPending', budget: virtualTimeBudget});
 })

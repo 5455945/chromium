@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,31 +8,23 @@
 #include <bitset>
 #include <memory>
 
-#include "ash/components/audio/cras_audio_handler.h"
-#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
-#include "components/keyed_service/core/keyed_service.h"
+#include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "media/capture/video/chromeos/camera_hal_dispatcher_impl.h"
-#include "ui/message_center/public/cpp/notification.h"
-#include "ui/message_center/public/cpp/notification_delegate.h"
-
-class Profile;
 
 namespace ash {
 
-// This class manages camera/mic access (and the access notifications) for VMs
-// (crostini and parallels for now). All of the notifications are sent to the
-// primary profile since all VMs support only the primary profile. We might need
-// to change this if we extend this class to support the browser, in which case
-// we will also need to make the notification ids different for different
-// profiles.
-class VmCameraMicManager : public media::CameraActiveClientObserver,
-                           public media::CameraPrivacySwitchObserver,
+// This class manages camera/mic access (and the access notifications) for VMs.
+// All of the notifications are associated with the primary user since all VMs
+// support only the primary user. We might need to change this if we extend this
+// class to support the browser, in which case we will also need to make the
+// notification ids different for different users.
+class VmCameraMicManager : public media::CameraPrivacySwitchObserver,
                            public CrasAudioHandler::AudioObserver {
  public:
-  enum class VmType { kCrostiniVm, kPluginVm };
+  enum class VmType { kCrostiniVm, kBorealis };
 
   enum class DeviceType {
     kMic,
@@ -50,8 +42,7 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
       (1 << static_cast<size_t>(DeviceType::kMic)) |
       (1 << static_cast<size_t>(DeviceType::kCamera))};
 
-  static constexpr base::TimeDelta kDebounceTime =
-      base::TimeDelta::FromMilliseconds(300);
+  static constexpr base::TimeDelta kDebounceTime = base::Milliseconds(300);
 
   class Observer : public base::CheckedObserver {
    public:
@@ -63,7 +54,7 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   VmCameraMicManager();
   ~VmCameraMicManager() override;
 
-  void OnPrimaryUserSessionStarted(Profile* primary_profile);
+  void OnPrimaryUserSessionStarted();
 
   VmCameraMicManager(const VmCameraMicManager&) = delete;
   VmCameraMicManager& operator=(const VmCameraMicManager&) = delete;
@@ -74,6 +65,9 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   // Return true if any of the VMs is using the device. Note that if the camera
   // privacy switch is on, this always returns false for `kCamera`.
   bool IsDeviceActive(DeviceType device) const;
+  // Return true if the selected VM is using the device. Note that if the camera
+  // privacy switch is on, this always returns false for `kCamera`.
+  bool IsDeviceActive(VmType vm, DeviceType device) const;
   // Return true if any of the VMs is displaying the `notification`.
   bool IsNotificationActive(NotificationType notification) const;
 
@@ -86,12 +80,9 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
 
   void MaybeSubscribeToCameraService(bool should_use_cros_camera_service);
 
-  // media::CameraActiveClientObserver
-  void OnActiveClientChange(cros::mojom::CameraClientType type,
-                            bool is_active) override;
-
   // media::CameraPrivacySwitchObserver
-  void OnCameraPrivacySwitchStatusChanged(
+  void OnCameraHWPrivacySwitchStateChanged(
+      const std::string& device_id,
       cros::mojom::CameraPrivacySwitchState state) override;
 
   // CrasAudioHandler::AudioObserver
@@ -106,18 +97,11 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   void UpdateVmInfo(VmType vm, void (VmInfo::*updator)(bool), bool value);
   void NotifyActiveChanged();
 
-  Profile* primary_profile_ = nullptr;
   std::map<VmType, VmInfo> vm_info_map_;
 
   base::ObserverList<Observer> observers_;
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-using ::ash::VmCameraMicManager;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_CAMERA_MIC_VM_CAMERA_MIC_MANAGER_H_

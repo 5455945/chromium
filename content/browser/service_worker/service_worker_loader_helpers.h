@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,13 @@
 #define CONTENT_BROWSER_SERVICE_WORKER_SERVICE_WORKER_LOADER_HELPERS_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "content/browser/service_worker/service_worker_version.h"
+#include "content/browser/storage_partition_impl.h"
+#include "content/common/content_export.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -21,10 +25,6 @@ namespace base {
 class TimeDelta;
 }  // namespace base
 
-namespace url {
-class Origin;
-}  // namespace url
-
 namespace blink {
 namespace mojom {
 enum class ServiceWorkerUpdateViaCache;
@@ -34,6 +34,7 @@ enum class ServiceWorkerUpdateViaCache;
 namespace content {
 
 class BrowserContext;
+class ServiceWorkerContextCore;
 
 namespace service_worker_loader_helpers {
 
@@ -67,12 +68,61 @@ void CheckVersionStatusBeforeWorkerScriptLoad(
 
 network::ResourceRequest CreateRequestForServiceWorkerScript(
     const GURL& script_url,
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     bool is_main_script,
     blink::mojom::ScriptType worker_script_type,
     const blink::mojom::FetchClientSettingsObject& fetch_client_settings_object,
     BrowserContext& browser_context);
 
+// Returns true if the script at |script_url| is allowed to control |scope|
+// according to Service Worker's path restriction policy. If
+// |service_worker_allowed| is not null, it points to the
+// Service-Worker-Allowed header value.
+CONTENT_EXPORT bool IsPathRestrictionSatisfied(
+    const GURL& scope,
+    const GURL& script_url,
+    const std::optional<std::string_view>& service_worker_allowed_header_value,
+    std::string* error_message);
+
+// Same as above IsPathRestrictionSatisfied, but without considering
+// 'Service-Worker-Allowed' header.
+CONTENT_EXPORT bool IsPathRestrictionSatisfiedWithoutHeader(
+    const GURL& scope,
+    const GURL& script_url,
+    std::string* error_message);
+
+// Validates a request for a service worker main script.
+// Returns the validation result.
+ServiceWorkerMainScriptRequestValidationResult ValidateMainScriptRequest(
+    const network::ResourceRequest& resource_request,
+    const ServiceWorkerVersion& version);
+
+// Returns the set of hash strings of fetch handlers which can be bypassed.
+const base::flat_set<std::string> FetchHandlerBypassedHashStrings();
+
+// Check if `client_url` is eligible for Synsthtic Response.
+// Exposes one method which accepts `allowed_url` for testing.
+bool IsEligibleForSyntheticResponse(BrowserContext* browser_context,
+                                    StoragePartitionImpl* storage_partition,
+                                    const GURL& client_url);
+CONTENT_EXPORT bool IsEligibleForSyntheticResponseForTesting(  // IN-TEST
+    BrowserContext* browser_context,
+    StoragePartitionImpl* storage_partition,
+    const GURL& client_url,
+    const std::string& allowed_url,
+    const std::string& denied_url_params);
+bool IsEligibleForSyntheticResponseInternal(
+    BrowserContext* browser_context,
+    StoragePartitionImpl* storage_partition,
+    const GURL& client_url,
+    const std::string& allowed_url,
+    const base::flat_set<std::string>& denied_url_params);
+bool IsSyntheticResponseDryRunModeEnabled();
+
+CONTENT_EXPORT storage::mojom::ServiceWorkerFindRegistrationResultPtr
+GetOrCreateSyntheticRegistration(ServiceWorkerContextCore* context,
+                                 const GURL& client_url,
+                                 const blink::StorageKey& key);
 }  // namespace service_worker_loader_helpers
 
 }  // namespace content

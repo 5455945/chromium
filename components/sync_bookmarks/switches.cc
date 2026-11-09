@@ -1,23 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/sync_bookmarks/switches.h"
+
 #include "base/feature_list.h"
 
 namespace switches {
 
-const base::Feature kSyncReuploadBookmarkFullTitles{
-    "SyncReuploadBookmarkFullTitles", base::FEATURE_ENABLED_BY_DEFAULT};
+// TODO(crbug.com/40780588): remove the feature toggle once most of bookmarks
+// have been reuploaded.
+BASE_FEATURE(kSyncReuploadBookmarks, base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kSyncUseClientTagForBookmarkCommits{
-    "SyncUseClientTagForBookmarkCommits", base::FEATURE_ENABLED_BY_DEFAULT};
-
-const base::Feature kSyncReuploadBookmarksUponMatchingData{
-    "SyncReuploadBookmarksUponMatchingData", base::FEATURE_ENABLED_BY_DEFAULT};
-
-const base::Feature kSyncBookmarksEnforceLateMaxEntriesToCommit{
-    "SyncBookmarksEnforceLateMaxEntriesToCommit",
-    base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kSyncMigrateBookmarksWithoutClientTagHash,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace switches

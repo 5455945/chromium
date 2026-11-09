@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,10 @@ struct COMPONENT_EXPORT(DISPLAY_SHARED_MOJOM_TRAITS)
     return r.device_scale_factor;
   }
 
+  static float text_scale_multiplier(const display::ScreenInfo& r) {
+    return r.text_scale_multiplier;
+  }
+
   static const gfx::DisplayColorSpaces& display_color_spaces(
       const display::ScreenInfo& r) {
     return r.display_color_spaces;
@@ -26,16 +30,16 @@ struct COMPONENT_EXPORT(DISPLAY_SHARED_MOJOM_TRAITS)
 
   static int depth(const display::ScreenInfo& r) { return r.depth; }
 
+  static int handwriting_radius(const display::ScreenInfo& r) {
+    return r.handwriting_radius;
+  }
+
   static int depth_per_component(const display::ScreenInfo& r) {
     return r.depth_per_component;
   }
 
   static bool is_monochrome(const display::ScreenInfo& r) {
     return r.is_monochrome;
-  }
-
-  static int display_frequency(const display::ScreenInfo& r) {
-    return r.display_frequency;
   }
 
   static const gfx::Rect& rect(const display::ScreenInfo& r) { return r.rect; }
@@ -61,6 +65,14 @@ struct COMPONENT_EXPORT(DISPLAY_SHARED_MOJOM_TRAITS)
 
   static bool is_internal(const display::ScreenInfo& r) {
     return r.is_internal;
+  }
+
+  static const std::string& label(const display::ScreenInfo& r) {
+    return r.label;
+  }
+
+  static float display_frequency(const display::ScreenInfo& r) {
+    return r.display_frequency;
   }
 
   static int64_t display_id(const display::ScreenInfo& r) {

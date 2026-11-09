@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,12 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "build/chromeos_buildflags.h"
 #include "dbus/object_path.h"
 #include "dbus/property.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -43,6 +43,12 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattCharacteristicClient
   };
 
   FakeBluetoothGattCharacteristicClient();
+
+  FakeBluetoothGattCharacteristicClient(
+      const FakeBluetoothGattCharacteristicClient&) = delete;
+  FakeBluetoothGattCharacteristicClient& operator=(
+      const FakeBluetoothGattCharacteristicClient&) = delete;
+
   ~FakeBluetoothGattCharacteristicClient() override;
 
   // DBusClient override.
@@ -57,15 +63,15 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattCharacteristicClient
                  ValueCallback callback,
                  ErrorCallback error_callback) override;
   void WriteValue(const dbus::ObjectPath& object_path,
-                  const std::vector<uint8_t>& value,
-                  base::StringPiece type_option,
+                  base::span<const uint8_t> value,
+                  std::string_view type_option,
                   base::OnceClosure callback,
                   ErrorCallback error_callback) override;
   void PrepareWriteValue(const dbus::ObjectPath& object_path,
-                         const std::vector<uint8_t>& value,
+                         base::span<const uint8_t> value,
                          base::OnceClosure callback,
                          ErrorCallback error_callback) override;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void StartNotify(
       const dbus::ObjectPath& object_path,
       device::BluetoothGattCharacteristic::NotificationType notification_type,
@@ -75,7 +81,7 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattCharacteristicClient
   void StartNotify(const dbus::ObjectPath& object_path,
                    base::OnceClosure callback,
                    ErrorCallback error_callback) override;
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   void StopNotify(const dbus::ObjectPath& object_path,
                   base::OnceClosure callback,
@@ -194,7 +200,8 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattCharacteristicClient
   };
 
   // Map of delayed callbacks.
-  std::map<std::string, DelayedCallback*> action_extra_requests_;
+  std::map<std::string, raw_ptr<DelayedCallback, CtnExperimental>>
+      action_extra_requests_;
 
   // List of observers interested in event notifications from us.
   base::ObserverList<Observer>::Unchecked observers_;
@@ -205,8 +212,6 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattCharacteristicClient
   // invalidate its weak pointers before any other members are destroyed.
   base::WeakPtrFactory<FakeBluetoothGattCharacteristicClient> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothGattCharacteristicClient);
 };
 
 }  // namespace bluez

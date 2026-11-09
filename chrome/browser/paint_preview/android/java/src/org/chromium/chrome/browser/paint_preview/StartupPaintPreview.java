@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,14 @@ import android.content.res.Resources;
 import android.os.Handler;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.paint_preview.StartupPaintPreviewMetrics.ExitCause;
 import org.chromium.chrome.browser.paint_preview.StartupPaintPreviewMetrics.PaintPreviewMetricsObserver;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabObserver;
@@ -34,43 +32,39 @@ import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.function.Supplier;
 
-/**
- * Used for displaying a paint preview representation of a tab on startup.
- */
+/** Used for displaying a paint preview representation of a tab on startup. */
+@NullMarked
 public class StartupPaintPreview implements PlayerManager.Listener {
-    private Tab mTab;
-    private StartupPaintPreviewMetrics mMetricsHelper;
-    private TabbedPaintPreview mTabbedPaintPreview;
-    private Runnable mOnDismissed;
-    private SnackbarManager.SnackbarController mSnackbarController;
-    private TabObserver mStartupTabObserver;
-    private Callback<Long> mVisibleContentCallback;
+    private static final int DEFAULT_INITIAL_REMOVE_DELAY_MS = 0;
+    private static final int SNACKBAR_DURATION_MS = 8 * 1000;
 
+    private final Tab mTab;
+    private final StartupPaintPreviewMetrics mMetricsHelper;
+    private final TabbedPaintPreview mTabbedPaintPreview;
+    private final TabObserver mStartupTabObserver;
+
+    private @Nullable Runnable mOnDismissed;
+    private @MonotonicNonNull SnackbarManager.SnackbarController mSnackbarController;
+    private @Nullable Supplier<Boolean> mShouldRecordFirstPaint;
+    private @Nullable Supplier<Boolean> mIsOfflinePage;
     private @State int mState;
     private boolean mFirstMeaningfulPaintHappened;
     private boolean mDidStartRestore;
     private int mSnackbarShownCount;
     private boolean mShowingSnackbar;
     private long mActivityCreationTimestampMs;
-    private Supplier<Boolean> mShouldRecordFirstPaint;
-    private Supplier<Boolean> mIsOfflinePage;
-
-    private static final int DEFAULT_INITIAL_REMOVE_DELAY_MS = 0;
-    private static final String INITIAL_REMOVE_DELAY_PARAM = "initial_remove_delay_ms";
-    private static final int SNACKBAR_DURATION_MS = 8 * 1000;
 
     @IntDef({
-            State.READY,
-            State.SHOWING,
-            State.REMOVED,
-            State.NO_CAPTURE,
+        State.READY,
+        State.SHOWING,
+        State.REMOVED,
+        State.NO_CAPTURE,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface State {
-        /**
-         * Ready to be shown.
-         */
+        /** Ready to be shown. */
         int READY = 0;
 
         /**
@@ -79,20 +73,18 @@ public class StartupPaintPreview implements PlayerManager.Listener {
          */
         int SHOWING = 1;
 
-        /**
-         * The paint preview has been removed.
-         */
+        /** The paint preview has been removed. */
         int REMOVED = 2;
 
-        /**
-         * There was no capture available for the current tab.
-         */
+        /** There was no capture available for the current tab. */
         int NO_CAPTURE = 3;
     }
 
-    public StartupPaintPreview(Tab tab,
+    public StartupPaintPreview(
+            Tab tab,
             BrowserStateBrowserControlsVisibilityDelegate visibilityDelegate,
-            Runnable progressSimulatorCallback, Callback<Boolean> progressPreventionCallback) {
+            Runnable progressSimulatorCallback,
+            Callback<Boolean> progressPreventionCallback) {
         mTab = tab;
         mMetricsHelper = new StartupPaintPreviewMetrics();
         mTabbedPaintPreview = TabbedPaintPreview.get(mTab);
@@ -149,14 +141,14 @@ public class StartupPaintPreview implements PlayerManager.Listener {
         mOnDismissed = null;
         mTab.removeObserver(mStartupTabObserver);
 
-        @State
-        int oldState = mState;
+        @State int oldState = mState;
         mState = State.REMOVED;
         if (oldState != State.SHOWING) return;
 
-        boolean needsAnimation = exitCause == ExitCause.TAB_FINISHED_LOADING
-                || exitCause == ExitCause.SNACK_BAR_ACTION
-                || exitCause == ExitCause.PULL_TO_REFRESH;
+        boolean needsAnimation =
+                exitCause == ExitCause.TAB_FINISHED_LOADING
+                        || exitCause == ExitCause.SNACK_BAR_ACTION
+                        || exitCause == ExitCause.PULL_TO_REFRESH;
         mTabbedPaintPreview.remove(needsAnimation);
         if (exitCause == ExitCause.TAB_FINISHED_LOADING) showUpgradeToast();
         dismissSnackbar();
@@ -164,41 +156,45 @@ public class StartupPaintPreview implements PlayerManager.Listener {
     }
 
     private void showSnackbar() {
-        if (mTab == null || mTab.getWindowAndroid() == null || mShowingSnackbar) return;
+        if (mTab.getWindowAndroid() == null || mShowingSnackbar) return;
 
         SnackbarManager snackbarManager = SnackbarManagerProvider.from(mTab.getWindowAndroid());
         if (snackbarManager == null) return;
 
         if (mSnackbarController == null) {
-            mSnackbarController = new SnackbarManager.SnackbarController() {
-                @Override
-                public void onAction(Object actionData) {
-                    mShowingSnackbar = false;
-                    remove(ExitCause.SNACK_BAR_ACTION);
-                }
+            mSnackbarController =
+                    new SnackbarManager.SnackbarController() {
+                        @Override
+                        public void onAction(@Nullable Object actionData) {
+                            mShowingSnackbar = false;
+                            remove(ExitCause.SNACK_BAR_ACTION);
+                        }
 
-                @Override
-                public void onDismissNoAction(Object actionData) {
-                    mShowingSnackbar = false;
-                }
-            };
+                        @Override
+                        public void onDismissNoAction(@Nullable Object actionData) {
+                            mShowingSnackbar = false;
+                        }
+                    };
         }
 
         Resources resources = mTab.getContext().getResources();
-        Snackbar snackbar = Snackbar.make(
-                resources.getString(R.string.paint_preview_startup_upgrade_snackbar_message),
-                mSnackbarController, Snackbar.TYPE_NOTIFICATION,
-                Snackbar.UMA_PAINT_PREVIEW_UPGRADE_NOTIFICATION);
+        Snackbar snackbar =
+                Snackbar.make(
+                        resources.getString(
+                                R.string.paint_preview_startup_upgrade_snackbar_message),
+                        mSnackbarController,
+                        Snackbar.TYPE_NOTIFICATION,
+                        Snackbar.UMA_PAINT_PREVIEW_UPGRADE_NOTIFICATION);
         snackbar.setAction(
                 resources.getString(R.string.paint_preview_startup_upgrade_snackbar_action), null);
         snackbar.setDuration(SNACKBAR_DURATION_MS);
-        SnackbarManagerProvider.from(mTab.getWindowAndroid()).showSnackbar(snackbar);
+        snackbarManager.showSnackbar(snackbar);
         mShowingSnackbar = true;
         mSnackbarShownCount++;
     }
 
     private void dismissSnackbar() {
-        if (mSnackbarController == null || mTab == null || mTab.getWindowAndroid() == null) return;
+        if (mSnackbarController == null || mTab.getWindowAndroid() == null) return;
 
         SnackbarManager snackbarManager = SnackbarManagerProvider.from(mTab.getWindowAndroid());
         if (snackbarManager == null) return;
@@ -207,38 +203,40 @@ public class StartupPaintPreview implements PlayerManager.Listener {
     }
 
     private void showUpgradeToast() {
-        if (mTab == null || mTab.isHidden()) return;
+        if (mTab.isHidden()) return;
 
-        Toast.makeText(mTab.getContext(), R.string.paint_preview_startup_auto_upgrade_toast,
-                     Toast.LENGTH_SHORT)
+        Toast.makeText(
+                        mTab.getContext(),
+                        R.string.paint_preview_startup_auto_upgrade_toast,
+                        Toast.LENGTH_SHORT)
                 .show();
     }
 
     /**
      * Triggered via {@link PageLoadMetrics.Observer} when First Meaningful Paint happens.
+     *
      * @param webContents the webContents that triggered the event.
-     * @return Whether the event was handled for the provided webContents.
      */
     public void onWebContentsFirstMeaningfulPaint(WebContents webContents) {
         // If there is no observer or tab this will never handle the event so it should be
         // treated as a success.
-        if (mTab == null || mTab.getWebContents() != webContents) return;
+        if (mTab.getWebContents() != webContents) return;
 
         mFirstMeaningfulPaintHappened = true;
         mMetricsHelper.onTabLoadFinished();
 
         if (mState != State.SHOWING) return;
 
-        long delayMs = ChromeFeatureList.getFieldTrialParamByFeatureAsInt(
-                ChromeFeatureList.PAINT_PREVIEW_SHOW_ON_STARTUP, INITIAL_REMOVE_DELAY_PARAM,
-                DEFAULT_INITIAL_REMOVE_DELAY_MS);
         // Delay removing paint preview after didFirstVisuallyNonEmptyPaint and no user
         // interaction by |delayMs|. This is to account for 'heavy' pages that take a while
         // to finish painting and avoid having flickers when switching from paint preview
         // to the live page.
-        new Handler().postDelayed(() -> {
-            remove(ExitCause.TAB_FINISHED_LOADING);
-        }, delayMs);
+        new Handler()
+                .postDelayed(
+                        () -> {
+                            remove(ExitCause.TAB_FINISHED_LOADING);
+                        },
+                        DEFAULT_INITIAL_REMOVE_DELAY_MS);
     }
 
     @Override
@@ -281,7 +279,7 @@ public class StartupPaintPreview implements PlayerManager.Listener {
 
     @Override
     public void onLinkClick(GURL url) {
-        if (mTab == null || !url.isValid() || url.isEmpty()) return;
+        if (!url.isValid() || url.isEmpty()) return;
 
         mTab.loadUrl(new LoadUrlParams(url.getSpec()));
         remove(ExitCause.LINK_CLICKED);
@@ -300,12 +298,11 @@ public class StartupPaintPreview implements PlayerManager.Listener {
         remove(ExitCause.ACCESSIBILITY_NOT_SUPPORTED);
     }
 
-    @VisibleForTesting
     TabObserver getTabObserverForTesting() {
         return mStartupTabObserver;
     }
 
-    private class StartupPaintPreviewTabObserver extends EmptyTabObserver {
+    private class StartupPaintPreviewTabObserver implements TabObserver {
         @Override
         public void onPageLoadFinished(Tab tab, GURL url) {
             // onWebContentsFirstMeaningfulPaint won't be called if we're loading an offline page,
@@ -323,11 +320,8 @@ public class StartupPaintPreview implements PlayerManager.Listener {
         }
 
         @Override
-        public void onDidStartNavigation(Tab tab, NavigationHandle navigationHandle) {
-            // Ignore navigations from subframes. We should only remove the paint preview
-            // player when the user navigates to a new page.
-            if (!navigationHandle.isInPrimaryMainFrame()) return;
-
+        public void onDidStartNavigationInPrimaryMainFrame(
+                Tab tab, NavigationHandle navigationHandle) {
             // If we haven't started to restore, this is the navigation call to start the
             // restoration. We shouldn't remove the paint preview player.
             if (!mDidStartRestore) return;

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 
 #include "third_party/blink/renderer/core/layout/background_bleed_avoidance.h"
 #include "third_party/blink/renderer/core/layout/geometry/box_sides.h"
+#include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/style/border_edge.h"
+#include "third_party/blink/renderer/platform/geometry/contoured_rect.h"
 #include "third_party/blink/renderer/platform/geometry/float_rounded_rect.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+#include "ui/gfx/geometry/outsets.h"
 
 namespace blink {
 
 class ComputedStyle;
-class GraphicsContext;
-class Path;
-struct PaintInfo;
-struct PhysicalRect;
+class StyledStrokeData;
 
 typedef unsigned BorderEdgeFlags;
 
@@ -24,19 +25,78 @@ class BoxBorderPainter {
   STACK_ALLOCATED();
 
  public:
-  BoxBorderPainter(const PhysicalRect& border_rect,
+  static void PaintBorder(GraphicsContext& context,
+                          const PhysicalRect& border_rect,
+                          const ComputedStyle& style,
+                          BackgroundBleedAvoidance bleed_avoidance,
+                          PhysicalBoxSides sides_to_include) {
+    BoxBorderPainter(context, border_rect, style, bleed_avoidance,
+                     sides_to_include)
+        .Paint();
+  }
+
+  // Paints the border area mask in opaque black, ignoring border colors and
+  // dark mode. Used by background-clip: border-area to create a DstIn mask
+  // that clips the background to where the border strokes would paint.
+  static void PaintBorderArea(GraphicsContext& context,
+                              const PhysicalRect& border_rect,
+                              const ComputedStyle& style,
+                              BackgroundBleedAvoidance bleed_avoidance,
+                              PhysicalBoxSides sides_to_include) {
+    BoxBorderPainter(context, border_rect, style, bleed_avoidance,
+                     sides_to_include, BorderAreaMaskTag::kTag)
+        .Paint();
+  }
+
+  static void PaintSingleRectOutline(GraphicsContext& context,
+                                     const ComputedStyle& style,
+                                     const PhysicalRect& border_rect,
+                                     int width,
+                                     const gfx::Outsets& inner_outsets) {
+    BoxBorderPainter(context, style, border_rect, width, inner_outsets).Paint();
+  }
+
+  static void DrawBoxSide(GraphicsContext& context,
+                          const gfx::Rect& snapped_edge_rect,
+                          BoxSide side,
+                          Color color,
+                          EBorderStyle style,
+                          const AutoDarkMode& auto_dark_mode);
+
+  // DrawLineWithStyle() only operates on horizontal or vertical lines and uses
+  // the current stroke color. For dotted or dashed stroke, the line need to be
+  // top-to-down or left-to-right to get correct interval of dots/dashes.
+  static void DrawLineWithStyle(GraphicsContext& context,
+                                const gfx::Point&,
+                                const gfx::Point&,
+                                const StyledStrokeData&,
+                                const AutoDarkMode& auto_dark_mode);
+
+ private:
+  enum class BorderAreaMaskTag { kTag };
+
+  // For PaintBorder().
+  BoxBorderPainter(GraphicsContext&,
+                   const PhysicalRect& border_rect,
                    const ComputedStyle&,
                    BackgroundBleedAvoidance,
                    PhysicalBoxSides sides_to_include);
+  // For PaintBorderArea().
+  BoxBorderPainter(GraphicsContext&,
+                   const PhysicalRect& border_rect,
+                   const ComputedStyle&,
+                   BackgroundBleedAvoidance,
+                   PhysicalBoxSides sides_to_include,
+                   BorderAreaMaskTag);
+  // For PaintSingleRectOutline().
+  BoxBorderPainter(GraphicsContext&,
+                   const ComputedStyle&,
+                   const PhysicalRect& border_rect,
+                   int width,
+                   const gfx::Outsets& inner_outsets);
 
-  BoxBorderPainter(const ComputedStyle&,
-                   const PhysicalRect& outer,
-                   const PhysicalRect& inner,
-                   const BorderEdge& uniform_edge_info);
+  void Paint() const;
 
-  void PaintBorder(const PaintInfo&, const PhysicalRect& border_rect) const;
-
- private:
   struct ComplexBorderInfo;
   enum MiterType {
     kNoMiter,
@@ -44,102 +104,95 @@ class BoxBorderPainter {
     kHardMiter,  // Not anti-aliased
   };
 
+  void InitFromEdges(const PhysicalRect& border_rect);
   void ComputeBorderProperties();
 
-  BorderEdgeFlags PaintOpacityGroup(GraphicsContext&,
-                                    const ComplexBorderInfo&,
+  BorderEdgeFlags PaintOpacityGroup(const ComplexBorderInfo&,
                                     unsigned index,
                                     float accumulated_opacity) const;
-  void PaintSide(GraphicsContext&,
-                 const ComplexBorderInfo&,
+  void PaintSide(const ComplexBorderInfo&,
                  BoxSide,
-                 unsigned alpha,
+                 float alpha,
                  BorderEdgeFlags) const;
-  void PaintOneBorderSide(GraphicsContext&,
-                          const FloatRect& side_rect,
+
+  enum SideType {
+    kStraight,
+    kCurved,
+  };
+  void PaintOneBorderSide(const gfx::Rect& side_rect,
                           BoxSide,
                           BoxSide adjacent_side1,
                           BoxSide adjacent_side2,
-                          const Path*,
-                          bool antialias,
+                          SideType side_type,
                           Color,
                           BorderEdgeFlags) const;
-  bool PaintBorderFastPath(GraphicsContext&,
-                           const PhysicalRect& border_rect) const;
-  void DrawDoubleBorder(GraphicsContext&,
-                        const PhysicalRect& border_rect) const;
+  bool PaintBorderFastPath() const;
+  void DrawDoubleBorder() const;
 
-  void DrawBoxSideFromPath(GraphicsContext&,
-                           const PhysicalRect&,
-                           const Path&,
-                           float thickness,
-                           float draw_thickness,
-                           BoxSide,
-                           Color,
-                           EBorderStyle) const;
-  void DrawDashedDottedBoxSideFromPath(GraphicsContext&,
-                                       const PhysicalRect&,
-                                       float thickness,
-                                       float draw_thickness,
-                                       Color,
-                                       EBorderStyle) const;
-  void DrawWideDottedBoxSideFromPath(GraphicsContext&,
-                                     const Path&,
-                                     float thickness) const;
-  void DrawDoubleBoxSideFromPath(GraphicsContext&,
-                                 const PhysicalRect&,
-                                 const Path&,
-                                 float thickness,
-                                 float draw_thickness,
-                                 BoxSide,
-                                 Color) const;
-  void DrawRidgeGrooveBoxSideFromPath(GraphicsContext&,
-                                      const PhysicalRect&,
-                                      const Path&,
-                                      float thickness,
-                                      float draw_thickness,
-                                      BoxSide,
-                                      Color,
-                                      EBorderStyle) const;
-  void ClipBorderSidePolygon(GraphicsContext&,
-                             BoxSide,
-                             MiterType miter1,
-                             MiterType miter2) const;
-  void ClipBorderSideForComplexInnerPath(GraphicsContext&, BoxSide) const;
-
-  MiterType ComputeMiter(BoxSide,
-                         BoxSide adjacent_side,
-                         BorderEdgeFlags,
-                         bool antialias) const;
+  void DrawCurvedBoxSide(int thickness,
+                         int draw_thickness,
+                         BoxSide,
+                         Color,
+                         EBorderStyle) const;
+  void DrawCurvedDashedDottedBoxSide(int thickness,
+                                     int draw_thickness,
+                                     Color,
+                                     EBorderStyle) const;
+  void DrawCurvedDoubleBoxSide(Color) const;
+  void DrawCurvedRidgeGrooveBoxSide(BoxSide, Color, EBorderStyle) const;
+  void ClipBorderSidePolygon(BoxSide, MiterType miter1, MiterType miter2) const;
+  void ClipBorderSidePolygonCloseToEdges(BoxSide,
+                                         MiterType miter1,
+                                         MiterType miter2) const;
+  void ClipContouredRect(const ContouredRect&) const;
+  void ClipOutContouredRect(const ContouredRect&) const;
+  MiterType ComputeMiter(BoxSide, BoxSide adjacent_side, BorderEdgeFlags) const;
   static bool MitersRequireClipping(MiterType miter1,
                                     MiterType miter2,
-                                    EBorderStyle,
-                                    bool antialias);
+                                    EBorderStyle);
+
+  gfx::Outsets DoubleStripeOutsets(BorderEdge::DoubleBorderStripe stripe) const;
+  gfx::Outsets CenterOutsets() const;
+
+  bool ColorsMatchAtCorner(BoxSide side, BoxSide adjacent_side) const;
 
   const BorderEdge& FirstEdge() const {
     DCHECK(visible_edge_set_);
     return edges_[first_visible_edge_];
   }
 
+  BorderEdge& Edge(BoxSide side) { return edges_[static_cast<unsigned>(side)]; }
+  const BorderEdge& Edge(BoxSide side) const {
+    return edges_[static_cast<unsigned>(side)];
+  }
+
+  GraphicsContext& context_;
+
   // const inputs
+  const PhysicalRect border_rect_;
+  const gfx::Outsets outer_outsets_;
   const ComputedStyle& style_;
   const BackgroundBleedAvoidance bleed_avoidance_;
   const PhysicalBoxSides sides_to_include_;
 
+  // invariant attributes
+  const DarkModeFilter::ElementRole element_role_ =
+      DarkModeFilter::ElementRole::kBorder;
+
   // computed attributes
-  FloatRoundedRect outer_;
-  FloatRoundedRect inner_;
-  BorderEdge edges_[4];
+  ContouredRect outer_;
+  ContouredRect inner_;
+  BorderEdgeArray edges_;
 
-  unsigned visible_edge_count_;
-  unsigned first_visible_edge_;
-  BorderEdgeFlags visible_edge_set_;
+  unsigned visible_edge_count_ = 0;
+  unsigned first_visible_edge_ = 0;
+  BorderEdgeFlags visible_edge_set_ = 0;
 
-  bool is_uniform_style_;
-  bool is_uniform_width_;
-  bool is_uniform_color_;
-  bool is_rounded_;
-  bool has_alpha_;
+  bool is_uniform_style_ = true;
+  bool is_uniform_width_ = true;
+  bool is_uniform_color_ = true;
+  bool is_rounded_ = false;
+  bool has_transparency_ = false;
 };
 
 }  // namespace blink

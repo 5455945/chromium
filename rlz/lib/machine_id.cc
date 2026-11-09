@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,14 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+
+#include "base/containers/span.h"
 #include "base/hash/sha1.h"
+#include "base/no_destructor.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "rlz/lib/assert.h"
 #include "rlz/lib/crc8.h"
 #include "rlz/lib/string_utils.h"
@@ -20,7 +24,7 @@ bool GetMachineId(std::string* machine_id) {
   if (!machine_id)
     return false;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
   // Generate a random machine Id each time this function is called.  This
   // prevents the RLZ server from correlating two RLZ pings from the same
@@ -32,8 +36,8 @@ bool GetMachineId(std::string* machine_id) {
   // hex character for 45 characters.
   unsigned char bytes[23];
   std::string str_bytes;
-  base::RandBytes(bytes, sizeof(bytes));
-  rlz_lib::BytesToString(bytes, sizeof(bytes), &str_bytes);
+  base::RandBytes(bytes);
+  rlz_lib::BytesToString(bytes, &str_bytes);
   str_bytes.resize(45);
   machine_id->clear();
   base::StringAppendF(machine_id, "NONCE%s", str_bytes.c_str());
@@ -42,10 +46,11 @@ bool GetMachineId(std::string* machine_id) {
 
 #else
 
-  static std::string calculated_id;
+  // Process-lifetime cache of a value computed at runtime.
+  static base::NoDestructor<std::string> calculated_id;
   static bool calculated = false;
   if (calculated) {
-    *machine_id = calculated_id;
+    *machine_id = *calculated_id;
     return true;
   }
 
@@ -58,10 +63,10 @@ bool GetMachineId(std::string* machine_id) {
     return false;
 
   calculated = true;
-  calculated_id = *machine_id;
+  *calculated_id = *machine_id;
   return true;
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 namespace testing {
@@ -72,8 +77,8 @@ bool GetMachineIdImpl(const std::u16string& sid_string,
   machine_id->clear();
 
   // The ID should be the SID hash + the Hard Drive SNo. + checksum byte.
-  static const int kSizeWithoutChecksum = base::kSHA1Length + sizeof(int);
-  std::basic_string<unsigned char> id_binary(kSizeWithoutChecksum + 1, 0);
+  static const size_t kSizeWithoutChecksum = base::kSHA1Length + sizeof(int);
+  std::vector<unsigned char> id_binary(kSizeWithoutChecksum + 1, 0);
 
   if (!sid_string.empty()) {
     // In order to be compatible with the old version of RLZ, the hash of the
@@ -88,7 +93,7 @@ bool GetMachineIdImpl(const std::u16string& sid_string,
     // Note that digest can have embedded nulls.
     std::string digest(base::SHA1HashString(sid_string_buffer));
     VERIFY(digest.size() == base::kSHA1Length);
-    std::copy(digest.begin(), digest.end(), id_binary.begin());
+    std::ranges::copy(digest, id_binary.begin());
   }
 
   // Convert from int to binary (makes big-endian).
@@ -99,13 +104,12 @@ bool GetMachineIdImpl(const std::u16string& sid_string,
   }
 
   // Append the checksum byte.
-  if (!sid_string.empty() || (0 != volume_id))
-    rlz_lib::Crc8::Generate(id_binary.c_str(),
-                            kSizeWithoutChecksum,
+  if (!sid_string.empty() || (0 != volume_id)) {
+    rlz_lib::Crc8::Generate(base::span(id_binary).first(kSizeWithoutChecksum),
                             &id_binary[kSizeWithoutChecksum]);
+  }
 
-  return rlz_lib::BytesToString(
-      id_binary.c_str(), kSizeWithoutChecksum + 1, machine_id);
+  return rlz_lib::BytesToString(id_binary, machine_id);
 }
 
 }  // namespace testing

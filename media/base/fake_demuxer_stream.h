@@ -1,12 +1,14 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_BASE_FAKE_DEMUXER_STREAM_H_
 #define MEDIA_BASE_FAKE_DEMUXER_STREAM_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_resource.h"
@@ -39,10 +41,14 @@ class FakeDemuxerStream : public DemuxerStream {
                     bool is_encrypted,
                     gfx::Size start_coded_size,
                     gfx::Vector2dF coded_size_delta);
+
+  FakeDemuxerStream(const FakeDemuxerStream&) = delete;
+  FakeDemuxerStream& operator=(const FakeDemuxerStream&) = delete;
+
   ~FakeDemuxerStream() override;
 
   // DemuxerStream implementation.
-  void Read(ReadCB read_cb) override;
+  void Read(uint32_t count, ReadCB read_cb) override;
   AudioDecoderConfig audio_decoder_config() override;
   VideoDecoderConfig video_decoder_config() override;
   Type type() const override;
@@ -86,7 +92,7 @@ class FakeDemuxerStream : public DemuxerStream {
 
  private:
   void UpdateVideoDecoderConfig();
-  void DoRead();
+  void DoRead(int read_count = 1);
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
@@ -116,8 +122,6 @@ class FakeDemuxerStream : public DemuxerStream {
   // Zero-based number indicating which read operation should be held. -1 means
   // no read shall be held.
   int read_to_hold_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeDemuxerStream);
 };
 
 class FakeMediaResource : public MediaResource {
@@ -126,15 +130,17 @@ class FakeMediaResource : public MediaResource {
   FakeMediaResource(int num_video_configs,
                     int num_video_buffers_in_one_config,
                     bool is_video_encrypted);
+
+  FakeMediaResource(const FakeMediaResource&) = delete;
+  FakeMediaResource& operator=(const FakeMediaResource&) = delete;
+
   ~FakeMediaResource() override;
 
   // MediaResource implementation.
-  std::vector<DemuxerStream*> GetAllStreams() override;
+  std::vector<raw_ptr<DemuxerStream>> GetAllStreams() override;
 
  private:
   FakeDemuxerStream fake_video_stream_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeMediaResource);
 };
 
 }  // namespace media

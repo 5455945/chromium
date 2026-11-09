@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "components/viz/service/display/display_resource_provider.h"
 #include "components/viz/service/display/external_use_client.h"
 #include "components/viz/service/viz_service_export.h"
@@ -50,14 +51,11 @@ class VIZ_SERVICE_EXPORT DisplayResourceProviderSkia
 
     // Lock a resource for external use. The return value was created by
     // |client| at some point in the past. The SkImage color space will be set
-    // to |color_space| if valid, otherwise it will be set to the resource's
-    // color space. If |is_video_plane| is true, the image color space will be
-    // set to nullptr (to avoid LOG spam).
-    ExternalUseClient::ImageContext* LockResource(
-        ResourceId resource_id,
-        bool maybe_concurrent_reads,
-        bool is_video_plane,
-        const gfx::ColorSpace& color_space = gfx::ColorSpace());
+    // to |override_color_space| if non-nullptr, otherwise it will be set to the
+    // resource's color space. If |is_video_plane| is true, the image color
+    // space will be set to nullptr (to avoid LOG spam).
+    ExternalUseClient::ImageContext* LockResource(ResourceId resource_id,
+                                                  bool maybe_concurrent_reads);
 
     // Unlock all locked resources with a |sync_token|.  The |sync_token| should
     // be waited on before reusing the resource's backing to ensure that any
@@ -65,20 +63,40 @@ class VIZ_SERVICE_EXPORT DisplayResourceProviderSkia
     // verified.  All resources must be unlocked before destroying this class.
     void UnlockResources(const gpu::SyncToken& sync_token);
 
+    // Returns true if there are no resources currently locked.
+    bool empty() const { return resources_.empty(); }
+
    private:
-    DisplayResourceProviderSkia* const resource_provider_;
+    const raw_ptr<DisplayResourceProviderSkia, DanglingUntriaged>
+        resource_provider_;
     std::vector<std::pair<ResourceId, ChildResource*>> resources_;
   };
 
+  // Sets the current read fence. If a resource is locked for read
+  // and has read fences enabled, the resource will not allow writes
+  // until this fence has passed. This is used if a client uses
+  // TransferableResource::SynchronizationType::kGpuCommandsCompleted.
+  void SetGpuCommandsCompletedFence(ResourceFence* fence) {
+    current_gpu_commands_completed_fence_ = fence;
+  }
+  // Sets the current release fence. If a client uses
+  // TransferableResource::SynchronizationType::kReleaseFence, resources must be
+  // returned only after a release fence is stored in this resource fence.
+  // Returned only when gpu commands and the gpu fence are submitted.
+  void SetReleaseFence(ResourceFence* fence) { current_release_fence_ = fence; }
+
  private:
   // DisplayResourceProvider overrides:
-  std::vector<ReturnedResource> DeleteAndReturnUnusedResourcesToChildImpl(
+  std::vector<ReturnedResourceViz> DeleteAndReturnUnusedResourcesToChildImpl(
       Child& child_info,
       DeleteStyle style,
       const std::vector<ResourceId>& unused) override;
 
   // Used to release resources held by an external consumer.
-  ExternalUseClient* external_use_client_ = nullptr;
+  raw_ptr<ExternalUseClient> external_use_client_ = nullptr;
+
+  scoped_refptr<ResourceFence> current_gpu_commands_completed_fence_;
+  scoped_refptr<ResourceFence> current_release_fence_;
 };
 
 }  // namespace viz

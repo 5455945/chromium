@@ -1,23 +1,29 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/policy_handlers.h"
 
 #include <stddef.h>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "base/check.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_management_constants.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
 #include "components/crx_file/id_util.h"
+#include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/schema.h"
@@ -25,31 +31,47 @@
 #include "components/prefs/pref_value_map.h"
 #include "components/strings/grit/components_strings.h"
 #include "extensions/browser/pref_names.h"
-#include "extensions/common/extension.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_urls.h"
+#include "extensions/common/url_pattern.h"
 #include "url/gurl.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/enterprise_util.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace {
 // Returns true if extensions_ids contains a list of valid extension ids,
 // divided by comma.
 bool IsValidIdList(const std::string& extension_ids) {
-  std::vector<base::StringPiece> ids = base::SplitStringPiece(
+  std::vector<std::string_view> ids = base::SplitStringPiece(
       extension_ids, ",", base::WhitespaceHandling::TRIM_WHITESPACE,
       base::SplitResult::SPLIT_WANT_NONEMPTY);
-  if (ids.size() == 0)
+  if (ids.size() == 0) {
     return false;
+  }
   for (const auto& id : ids) {
-    if (!crx_file::id_util::IdIsValid(std::string(id)))
+    if (!crx_file::id_util::IdIsValid(id)) {
       return false;
+    }
   }
   return true;
 }
+
+// Returns true if URL is valid and uses one of the supported schemes.
+bool IsValidUpdateUrl(const std::string& update_url) {
+  GURL update_gurl(update_url);
+  if (!update_gurl.is_valid()) {
+    return false;
+  }
+  return update_gurl.SchemeIsHTTPOrHTTPS() || update_gurl.SchemeIsFile();
+}
+
 }  // namespace
+
 // ExtensionListPolicyHandler implementation -----------------------------------
 
 ExtensionListPolicyHandler::ExtensionListPolicyHandler(const char* policy_name,
@@ -59,21 +81,21 @@ ExtensionListPolicyHandler::ExtensionListPolicyHandler(const char* policy_name,
       pref_path_(pref_path),
       allow_wildcards_(allow_wildcards) {}
 
-ExtensionListPolicyHandler::~ExtensionListPolicyHandler() {}
+ExtensionListPolicyHandler::~ExtensionListPolicyHandler() = default;
 
 bool ExtensionListPolicyHandler::CheckListEntry(const base::Value& value) {
   const std::string& str = value.GetString();
-  if (allow_wildcards_ && str == "*")
+  if (allow_wildcards_ && str == "*") {
     return true;
+  }
 
   // Make sure str is an extension id.
   return crx_file::id_util::IdIsValid(str);
 }
 
-void ExtensionListPolicyHandler::ApplyList(base::Value filtered_list,
+void ExtensionListPolicyHandler::ApplyList(base::ListValue filtered_list,
                                            PrefValueMap* prefs) {
-  DCHECK(filtered_list.is_list());
-  prefs->SetValue(pref_path_, std::move(filtered_list));
+  prefs->SetValue(pref_path_, base::Value(std::move(filtered_list)));
 }
 
 // ExtensionInstallForceListPolicyHandler implementation -----------------------
@@ -93,39 +115,39 @@ bool ExtensionInstallForceListPolicyHandler::CheckPolicySettings(
 void ExtensionInstallForceListPolicyHandler::ApplyPolicySettings(
     const policy::PolicyMap& policies,
     PrefValueMap* prefs) {
-  const base::Value* value = nullptr;
-  base::DictionaryValue dict;
-  if (CheckAndGetValue(policies, nullptr, &value) && value &&
-      ParseList(value, &dict, nullptr)) {
-    prefs->SetValue(pref_names::kInstallForceList, std::move(dict));
+  auto dict = GetPolicyDict(policies);
+
+  if (dict.has_value()) {
+    prefs->SetValue(pref_names::kInstallForceList,
+                    base::Value(std::move(dict).value()));
   }
 }
 
 bool ExtensionInstallForceListPolicyHandler::ParseList(
     const base::Value* policy_value,
-    base::DictionaryValue* extension_dict,
+    base::DictValue* extension_dict,
     policy::PolicyErrorMap* errors) {
-  if (!policy_value)
+  if (!policy_value) {
     return true;
+  }
 
-  const base::ListValue* policy_list_value = nullptr;
-  if (!policy_value->GetAsList(&policy_list_value)) {
+  if (!policy_value->is_list()) {
     // This should have been caught in CheckPolicySettings.
     NOTREACHED();
-    return false;
   }
 
   int index = -1;
-  for (const auto& entry : policy_list_value->GetList()) {
+  for (const auto& entry : policy_value->GetList()) {
     ++index;
-    std::string entry_string;
-    if (!entry.GetAsString(&entry_string)) {
+    if (!entry.is_string()) {
       if (errors) {
-        errors->AddError(policy_name(), index, IDS_POLICY_TYPE_ERROR,
-                         base::Value::GetTypeName(base::Value::Type::STRING));
+        errors->AddError(policy_name(), IDS_POLICY_TYPE_ERROR,
+                         base::Value::GetTypeName(base::Value::Type::STRING),
+                         policy::PolicyErrorPath{index});
       }
       continue;
     }
+    std::string entry_string = entry.GetString();
 
     // Each string item of the list should be of one of the following forms:
     // * <extension_id>
@@ -142,21 +164,64 @@ bool ExtensionInstallForceListPolicyHandler::ParseList(
       update_url = entry_string.substr(pos + 1);
     }
 
-    if (!crx_file::id_util::IdIsValid(extension_id) ||
-        !GURL(update_url).is_valid()) {
+    if (!crx_file::id_util::IdIsValid(extension_id)) {
       if (errors) {
-        errors->AddError(policy_name(), index, IDS_POLICY_VALUE_FORMAT_ERROR);
+        errors->AddError(policy_name(), IDS_POLICY_INVALID_EXTENSION_ID_ERROR,
+                         policy::PolicyErrorPath{index});
+      }
+      continue;
+    }
+
+    // Check that url is valid and uses one of the supported schemes.
+    if (!IsValidUpdateUrl(update_url)) {
+      if (errors) {
+        errors->AddError(policy_name(), IDS_POLICY_INVALID_UPDATE_URL_ERROR,
+                         extension_id, policy::PolicyErrorPath{index});
       }
       continue;
     }
 
     if (extension_dict) {
-      ExternalPolicyLoader::AddExtension(extension_dict, extension_id,
+      ExternalPolicyLoader::AddExtension(*extension_dict, extension_id,
                                          update_url);
     }
   }
 
   return true;
+}
+
+std::optional<base::DictValue>
+ExtensionInstallForceListPolicyHandler::GetPolicyDict(
+    const policy::PolicyMap& policies) {
+  const base::Value* value = nullptr;
+  base::DictValue dict;
+  if (CheckAndGetValue(policies, nullptr, &value) && value &&
+      ParseList(value, &dict, nullptr)) {
+    return dict;
+  }
+  return std::nullopt;
+}
+
+// ExtensionInstallBlockListPolicyHandler implementation ----------------------
+
+ExtensionInstallBlockListPolicyHandler::ExtensionInstallBlockListPolicyHandler()
+    : list_handler_(policy::key::kExtensionInstallBlocklist,
+                    pref_names::kInstallDenyList,
+                    /*allow_wildcards*/ true) {}
+
+ExtensionInstallBlockListPolicyHandler::
+    ~ExtensionInstallBlockListPolicyHandler() = default;
+
+bool ExtensionInstallBlockListPolicyHandler::CheckPolicySettings(
+    const policy::PolicyMap& policies,
+    policy::PolicyErrorMap* errors) {
+  return list_handler_.CheckPolicySettings(policies, errors);
+}
+
+void ExtensionInstallBlockListPolicyHandler::ApplyPolicySettings(
+    const policy::PolicyMap& policies,
+    PrefValueMap* prefs) {
+  list_handler_.ApplyPolicySettings(policies, prefs);
 }
 
 // ExtensionURLPatternListPolicyHandler implementation -------------------------
@@ -167,38 +232,41 @@ ExtensionURLPatternListPolicyHandler::ExtensionURLPatternListPolicyHandler(
     : policy::TypeCheckingPolicyHandler(policy_name, base::Value::Type::LIST),
       pref_path_(pref_path) {}
 
-ExtensionURLPatternListPolicyHandler::~ExtensionURLPatternListPolicyHandler() {}
+ExtensionURLPatternListPolicyHandler::~ExtensionURLPatternListPolicyHandler() =
+    default;
 
 bool ExtensionURLPatternListPolicyHandler::CheckPolicySettings(
     const policy::PolicyMap& policies,
     policy::PolicyErrorMap* errors) {
-  const base::Value* value = NULL;
-  if (!CheckAndGetValue(policies, errors, &value))
+  const base::Value* value = nullptr;
+  if (!CheckAndGetValue(policies, errors, &value)) {
     return false;
+  }
 
-  if (!value)
+  if (!value) {
     return true;
+  }
 
-  const base::ListValue* list_value = NULL;
-  if (!value->GetAsList(&list_value)) {
+  if (!value->is_list()) {
     NOTREACHED();
-    return false;
   }
 
   // Check that the list contains valid URLPattern strings only.
   int index = 0;
-  for (const auto& entry : list_value->GetList()) {
-    std::string url_pattern_string;
-    if (!entry.GetAsString(&url_pattern_string)) {
-      errors->AddError(policy_name(), index, IDS_POLICY_TYPE_ERROR,
-                       base::Value::GetTypeName(base::Value::Type::STRING));
+  for (const auto& entry : value->GetList()) {
+    if (!entry.is_string()) {
+      errors->AddError(policy_name(), IDS_POLICY_TYPE_ERROR,
+                       base::Value::GetTypeName(base::Value::Type::STRING),
+                       policy::PolicyErrorPath{index});
       return false;
     }
+    std::string url_pattern_string = entry.GetString();
 
     URLPattern pattern(URLPattern::SCHEME_ALL);
     if (pattern.Parse(url_pattern_string) !=
         URLPattern::ParseResult::kSuccess) {
-      errors->AddError(policy_name(), index, IDS_POLICY_VALUE_FORMAT_ERROR);
+      errors->AddError(policy_name(), IDS_POLICY_INVALID_URL_ERROR,
+                       policy::PolicyErrorPath{index});
       return false;
     }
     ++index;
@@ -210,11 +278,14 @@ bool ExtensionURLPatternListPolicyHandler::CheckPolicySettings(
 void ExtensionURLPatternListPolicyHandler::ApplyPolicySettings(
     const policy::PolicyMap& policies,
     PrefValueMap* prefs) {
-  if (!pref_path_)
+  if (!pref_path_) {
     return;
-  const base::Value* value = policies.GetValue(policy_name());
-  if (value)
+  }
+  // It is safe to use `GetValueUnsafe()` as multiple policy types are handled.
+  const base::Value* value = policies.GetValueUnsafe(policy_name());
+  if (value) {
     prefs->SetValue(pref_path_, value->Clone());
+  }
 }
 
 // ExtensionSettingsPolicyHandler implementation  ------------------------------
@@ -224,81 +295,62 @@ ExtensionSettingsPolicyHandler::ExtensionSettingsPolicyHandler(
     : policy::SchemaValidatingPolicyHandler(
           policy::key::kExtensionSettings,
           chrome_schema.GetKnownProperty(policy::key::kExtensionSettings),
-          policy::SCHEMA_ALLOW_UNKNOWN) {
-}
+          policy::SCHEMA_ALLOW_UNKNOWN) {}
 
-ExtensionSettingsPolicyHandler::~ExtensionSettingsPolicyHandler() {
-}
+ExtensionSettingsPolicyHandler::~ExtensionSettingsPolicyHandler() = default;
 
 void ExtensionSettingsPolicyHandler::SanitizePolicySettings(
     base::Value* policy_value,
     policy::PolicyErrorMap* errors) {
-  DCHECK(policy_value);
+  CHECK(policy_value, base::NotFatalUntil::M161);
 
   // |policy_value| is expected to conform to the defined schema. But it's
   // not strictly valid since there are additional restrictions.
-  const base::DictionaryValue* dict_value = NULL;
-  DCHECK(policy_value->is_dict());
-  policy_value->GetAsDictionary(&dict_value);
+  CHECK(policy_value->is_dict(), base::NotFatalUntil::M161);
 
   // Dictionary entries with any invalid setting get removed at the end. We
   // can't mutate the dict while iterating, so store them here.
   std::unordered_set<std::string> invalid_keys;
 
   // Check each entry, populating |invalid_keys| and |errors|.
-  for (base::DictionaryValue::Iterator it(*dict_value); !it.IsAtEnd();
-       it.Advance()) {
-    DCHECK(it.key() == schema_constants::kWildcard || IsValidIdList(it.key()));
-    DCHECK(it.value().is_dict());
+  for (const auto [extension_ids, policy] : policy_value->GetDict()) {
+    CHECK(extension_ids == schema_constants::kWildcard ||
+              IsValidIdList(extension_ids) ||
+              extension_ids.starts_with(schema_constants::kUpdateUrlPrefix),
+          base::NotFatalUntil::M161);
+    CHECK(policy.is_dict(), base::NotFatalUntil::M161);
 
     // Extracts sub dictionary.
-    const base::DictionaryValue* sub_dict = NULL;
-    it.value().GetAsDictionary(&sub_dict);
+    const base::DictValue& sub_dict = policy.GetDict();
 
-    std::string installation_mode;
-    if (sub_dict->GetString(schema_constants::kInstallationMode,
-                            &installation_mode)) {
-      if (installation_mode == schema_constants::kForceInstalled ||
-          installation_mode == schema_constants::kNormalInstalled) {
-        DCHECK(it.key() != schema_constants::kWildcard);
+    const std::string* installation_mode =
+        sub_dict.FindString(schema_constants::kInstallationMode);
+    if (installation_mode) {
+      if (*installation_mode == schema_constants::kForceInstalled ||
+          *installation_mode == schema_constants::kNormalInstalled) {
+        CHECK(extension_ids != schema_constants::kWildcard,
+              base::NotFatalUntil::M161);
         // Verifies that 'update_url' is specified for 'force_installed' and
         // 'normal_installed' mode.
-        std::string update_url;
-        if (!sub_dict->GetString(schema_constants::kUpdateUrl, &update_url) ||
-            update_url.empty()) {
+        const std::string* update_url =
+            sub_dict.FindString(schema_constants::kUpdateUrl);
+        if (!update_url || update_url->empty()) {
           if (errors) {
-            errors->AddError(policy_name(),
-                             it.key() + "." + schema_constants::kUpdateUrl,
-                             IDS_POLICY_NOT_SPECIFIED_ERROR);
+            errors->AddError(policy_name(), IDS_POLICY_NOT_SPECIFIED_ERROR,
+                             policy::PolicyErrorPath{
+                                 extension_ids, schema_constants::kUpdateUrl});
           }
-          invalid_keys.insert(it.key());
+          invalid_keys.insert(extension_ids);
           continue;
         }
-        if (GURL(update_url).is_valid()) {
-// Unless enterprise managed only extensions from the Chrome Webstore
-// can be force installed.
-#if defined(OS_WIN)
-          // We can't use IsWebstoreUpdateUrl() here since the ExtensionClient
-          // isn't set this early during startup.
-          if (!base::IsMachineExternallyManaged() &&
-              !base::LowerCaseEqualsASCII(
-                  update_url, extension_urls::kChromeWebstoreUpdateURL)) {
-            if (errors) {
-              errors->AddError(policy_name(), it.key(),
-                               IDS_POLICY_OFF_CWS_URL_ERROR,
-                               extension_urls::kChromeWebstoreUpdateURL);
-            }
-            invalid_keys.insert(it.key());
-            continue;
-          }
-#endif
-        } else {
-          // Warns about an invalid update URL.
+
+        // Check that url is valid and uses one of the supported schemes.
+        if (!IsValidUpdateUrl(*update_url)) {
           if (errors) {
             errors->AddError(policy_name(), IDS_POLICY_INVALID_UPDATE_URL_ERROR,
-                             it.key());
+                             extension_ids);
           }
-          invalid_keys.insert(it.key());
+          invalid_keys.insert(extension_ids);
           continue;
         }
       }
@@ -309,11 +361,10 @@ void ExtensionSettingsPolicyHandler::SanitizePolicySettings(
     const int extension_scheme_mask =
         URLPattern::GetValidSchemeMaskForExtensions();
     for (const char* key : host_keys) {
-      const base::ListValue* unparsed_urls;
-      if (sub_dict->GetList(key, &unparsed_urls)) {
-        for (size_t i = 0; i < unparsed_urls->GetSize(); ++i) {
-          std::string unparsed_url;
-          unparsed_urls->GetString(i, &unparsed_url);
+      const base::ListValue* unparsed_urls = sub_dict.FindList(key);
+      if (unparsed_urls != nullptr) {
+        for (const auto& url_value : *unparsed_urls) {
+          const std::string& unparsed_url = url_value.GetString();
           URLPattern pattern(extension_scheme_mask);
           URLPattern::ParseResult parse_result = pattern.Parse(unparsed_url);
           // These keys don't support paths due to how we track the initiator
@@ -327,85 +378,100 @@ void ExtensionSettingsPolicyHandler::SanitizePolicySettings(
             if (!pattern.match_all_urls()) {
               if (errors) {
                 errors->AddError(
-                    policy_name(), it.key(),
-                    "The URL pattern '" + unparsed_url + "' for attribute " +
-                        key + " has a path specified. Paths are not " +
-                        "supported, please remove the path and try again. " +
-                        "e.g. *://example.com/ => *://example.com");
+                    policy_name(), IDS_POLICY_URL_PATH_SPECIFIED_ERROR,
+                    unparsed_url, policy::PolicyErrorPath{extension_ids, key});
               }
-              invalid_keys.insert(it.key());
+              invalid_keys.insert(extension_ids);
               break;
             }
           }
           if (parse_result != URLPattern::ParseResult::kSuccess) {
             if (errors) {
-              errors->AddError(policy_name(), it.key(),
-                               "Invalid URL pattern '" + unparsed_url +
-                                   "' for attribute " + key);
+              errors->AddError(policy_name(), IDS_POLICY_INVALID_URL_ERROR,
+                               policy::PolicyErrorPath{extension_ids, key});
             }
-            invalid_keys.insert(it.key());
+            invalid_keys.insert(extension_ids);
             break;
           }
         }
       }
     }
 
-    const base::ListValue* runtime_blocked_hosts = nullptr;
-    if (sub_dict->GetList(schema_constants::kPolicyBlockedHosts,
-                          &runtime_blocked_hosts) &&
-        runtime_blocked_hosts->GetList().size() >
+    const base::ListValue* runtime_blocked_hosts =
+        sub_dict.FindList(schema_constants::kPolicyBlockedHosts);
+    if (runtime_blocked_hosts != nullptr &&
+        runtime_blocked_hosts->size() >
             schema_constants::kMaxItemsURLPatternSet) {
       if (errors) {
+        policy::PolicyErrorPath error_path = {
+            extension_ids, schema_constants::kPolicyBlockedHosts};
         errors->AddError(
-            policy_name(),
-            it.key() + "." + schema_constants::kPolicyBlockedHosts,
-            IDS_POLICY_EXTENSION_SETTINGS_ORIGIN_LIMIT_WARNING,
-            base::NumberToString(schema_constants::kMaxItemsURLPatternSet));
+            policy_name(), IDS_POLICY_EXTENSION_SETTINGS_ORIGIN_LIMIT_WARNING,
+            base::NumberToString(schema_constants::kMaxItemsURLPatternSet),
+            error_path);
       }
     }
 
-    const base::ListValue* runtime_allowed_hosts = nullptr;
-    if (sub_dict->GetList(schema_constants::kPolicyAllowedHosts,
-                          &runtime_allowed_hosts) &&
-        runtime_allowed_hosts->GetList().size() >
+    const base::ListValue* runtime_allowed_hosts =
+        sub_dict.FindList(schema_constants::kPolicyAllowedHosts);
+    if (runtime_allowed_hosts != nullptr &&
+        runtime_allowed_hosts->size() >
             schema_constants::kMaxItemsURLPatternSet) {
       if (errors) {
+        policy::PolicyErrorPath error_path = {
+            extension_ids, schema_constants::kPolicyAllowedHosts};
         errors->AddError(
-            policy_name(),
-            it.key() + "." + schema_constants::kPolicyAllowedHosts,
-            IDS_POLICY_EXTENSION_SETTINGS_ORIGIN_LIMIT_WARNING,
-            base::NumberToString(schema_constants::kMaxItemsURLPatternSet));
+            policy_name(), IDS_POLICY_EXTENSION_SETTINGS_ORIGIN_LIMIT_WARNING,
+            base::NumberToString(schema_constants::kMaxItemsURLPatternSet),
+            error_path);
       }
     }
   }
 
   // Remove |invalid_keys| from the dictionary.
-  for (const std::string& key : invalid_keys)
-    policy_value->RemoveKey(key);
+  for (const std::string& key : invalid_keys) {
+    policy_value->GetDict().Remove(key);
+  }
 }
 
 bool ExtensionSettingsPolicyHandler::CheckPolicySettings(
     const policy::PolicyMap& policies,
     policy::PolicyErrorMap* errors) {
+  checked_value_.reset();
+  check_called_ = true;
   std::unique_ptr<base::Value> policy_value;
-  if (!CheckAndGetValue(policies, errors, &policy_value))
+  if (!CheckAndGetValue(policies, errors, &policy_value)) {
     return false;
-  if (!policy_value)
+  }
+  if (!policy_value) {
     return true;
+  }
 
   SanitizePolicySettings(policy_value.get(), errors);
+  checked_value_ = std::move(policy_value);
   return true;
 }
 
 void ExtensionSettingsPolicyHandler::ApplyPolicySettings(
     const policy::PolicyMap& policies,
     PrefValueMap* prefs) {
-  std::unique_ptr<base::Value> policy_value;
-  if (!CheckAndGetValue(policies, NULL, &policy_value) || !policy_value)
+  // CheckPolicySettings() must be called before ApplyPolicySettings().
+  // This is guaranteed by the framework (configuration_policy_handler_list.cc)
+  // and documented in ConfigurationPolicyHandler::ApplyPolicySettingsWithParameters().
+  CHECK(check_called_);
+  check_called_ = false;
+
+  if (!checked_value_) {
     return;
-  SanitizePolicySettings(policy_value.get(), nullptr);
+  }
+
   prefs->SetValue(pref_names::kExtensionManagement,
-                  base::Value::FromUniquePtrValue(std::move(policy_value)));
+                  base::Value::FromUniquePtrValue(std::move(checked_value_)));
+}
+
+void ExtensionSettingsPolicyHandler::OnPolicySettingsNotApplied() {
+  checked_value_.reset();
+  check_called_ = false;
 }
 
 }  // namespace extensions

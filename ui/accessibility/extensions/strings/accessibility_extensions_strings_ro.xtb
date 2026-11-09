@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Dezactivează toate imaginile animate.</translation>
 <translation id="1703735871906654364">Navigare cu tastatura</translation>
 <translation id="1791496371305830581">Permite toate imaginile animate.</translation>
+<translation id="1974060860693918893">Avansate</translation>
 <translation id="1996252509865389616">Activezi?</translation>
 <translation id="2079545284768500474">Anulează</translation>
 <translation id="2179565792157161713">Deschide descrierea lungă într-o filă nouă</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Vizualizator text pentru imagini Alt</translation>
 <translation id="381767806621926835">Dă clic dreapta pe orice cu un atribut „longdesc” sau „aria-describedat” pentru a accesa descrierea lungă.</translation>
 <translation id="4023902424053835668">Răsfoiește textul paginilor web cu ajutorul tastelor săgeată.</translation>
+<translation id="4384008284958619421">Cititoarele de ecran moderne și Google Chrome acceptă acum nativ descrierile accesibile ale elementelor și standardele ARIA.</translation>
 <translation id="4388820049312272371">Evidențiază poziția cursorului cu o clipire intermitentă rapidă.</translation>
 <translation id="4394049700291259645">Dezactivează</translation>
 <translation id="4769065380738716500">Imaginile au fost înlocuite cu textul „alt”.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Color Enhancer</translation>
 <translation id="633394792577263429">Apasă lung pe &lt;span class='key'&gt;Control&lt;/span&gt; pentru a te deplasa cuvânt cu cuvânt.</translation>
 <translation id="6550675742724504774">Opțiuni</translation>
+<translation id="6699630355767768222">Pasul 3: modifică axa culorilor pentru corecție</translation>
 <translation id="6838518108677880446">Configurează:</translation>
 <translation id="690628312087070417">Când cursorul sare la o distanță mare:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Anulează</translation>
 <translation id="786423340267544509">Adaugă chenare la elementele cu atributele aria-describedat sau longdesc.</translation>
 <translation id="7942349550061667556">Roșu</translation>
+<translation id="8081200409424070383">Extensia Descrieri lungi va fi retrasă pe 20 noiembrie 2026.</translation>
 <translation id="8260673944985561857">Opțiuni de navigare cu tastatura</translation>
 <translation id="8321034316479930120">Politica privind animația</translation>
 <translation id="8480209185614411573">Contrast mare</translation>
 <translation id="8609925175482059018">Apasă pe &lt;span class='key'&gt;F7&lt;/span&gt; pentru a activa navigarea cu tastatura. Apasă din nou pentru a o dezactiva.</translation>
+<translation id="8798099450830957504">Prestabilit</translation>
 <translation id="894241283505723656">Descrieri lungi în meniul contextual</translation>
 </translationbundle>

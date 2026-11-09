@@ -21,18 +21,21 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PRESERVE_ASPECT_RATIO_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PRESERVE_ASPECT_RATIO_H_
 
-#include "third_party/blink/renderer/core/svg/properties/svg_property_helper.h"
+#include "third_party/blink/renderer/core/svg/properties/svg_property.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
+
+namespace gfx {
+class RectF;
+class SizeF;
+}  // namespace gfx
 
 namespace blink {
 
 class AffineTransform;
-class FloatRect;
-class FloatSize;
 class SVGPreserveAspectRatioTearOff;
 
-class SVGPreserveAspectRatio final
-    : public SVGPropertyHelper<SVGPreserveAspectRatio> {
+class SVGPreserveAspectRatio final : public SVGPropertyBase {
  public:
   enum SVGPreserveAspectRatioType {
     kSvgPreserveaspectratioUnknown = 0,
@@ -58,12 +61,9 @@ class SVGPreserveAspectRatio final
 
   SVGPreserveAspectRatio();
 
-  virtual SVGPreserveAspectRatio* Clone() const;
+  SVGPreserveAspectRatio* Clone() const;
 
   bool operator==(const SVGPreserveAspectRatio&) const;
-  bool operator!=(const SVGPreserveAspectRatio& other) const {
-    return !operator==(other);
-  }
 
   void SetAlign(SVGPreserveAspectRatioType align) { align_ = align; }
   SVGPreserveAspectRatioType Align() const { return align_; }
@@ -73,17 +73,17 @@ class SVGPreserveAspectRatio final
   }
   SVGMeetOrSliceType MeetOrSlice() const { return meet_or_slice_; }
 
-  void TransformRect(FloatRect& dest_rect, FloatRect& src_rect) const;
+  void TransformRect(gfx::RectF& dest_rect, gfx::RectF& src_rect) const;
 
-  AffineTransform ComputeTransform(const FloatRect& view_box,
-                                   const FloatSize& viewport_size) const;
+  AffineTransform ComputeTransform(const gfx::RectF& view_box,
+                                   const gfx::SizeF& viewport_size) const;
 
   String ValueAsString() const override;
   SVGParsingError SetValueAsString(const String&);
-  bool Parse(const UChar*& ptr, const UChar* end, bool validate);
-  bool Parse(const LChar*& ptr, const LChar* end, bool validate);
+  bool Parse(base::span<const UChar>& span, bool validate);
+  bool Parse(base::span<const LChar>& span, bool validate);
 
-  void Add(const SVGPropertyBase*, const SVGElement*) override;
+  bool Add(const SVGPropertyBase*, const SVGElement*) override;
   void CalculateAnimatedValue(
       const SMILAnimationEffectParameters&,
       float percentage,
@@ -98,17 +98,23 @@ class SVGPreserveAspectRatio final
   static AnimatedPropertyType ClassType() {
     return kAnimatedPreserveAspectRatio;
   }
+  AnimatedPropertyType GetType() const override { return ClassType(); }
 
   void SetDefault();
 
  private:
   template <typename CharType>
-  SVGParsingError ParseInternal(const CharType*& ptr,
-                                const CharType* end,
-                                bool validate);
+  SVGParsingError ParseInternal(base::span<CharType>& span, bool validate);
 
   SVGPreserveAspectRatioType align_;
   SVGMeetOrSliceType meet_or_slice_;
+};
+
+template <>
+struct DowncastTraits<SVGPreserveAspectRatio> {
+  static bool AllowFrom(const SVGPropertyBase& value) {
+    return value.GetType() == SVGPreserveAspectRatio::ClassType();
+  }
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/android/jni_android.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
@@ -22,6 +22,10 @@ namespace media {
 class VolumeControlAndroid : SystemVolumeTableAccessApi {
  public:
   VolumeControlAndroid();
+
+  VolumeControlAndroid(const VolumeControlAndroid&) = delete;
+  VolumeControlAndroid& operator=(const VolumeControlAndroid&) = delete;
+
   ~VolumeControlAndroid() override;
 
   void AddVolumeObserver(VolumeObserver* observer);
@@ -35,15 +39,8 @@ class VolumeControlAndroid : SystemVolumeTableAccessApi {
   float DbFSToVolumeCached(AudioContentType type, float db);
 
   // Called from java to signal a change volume.
-  void OnVolumeChange(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jint type,
-                      jfloat level);
-
-  void OnMuteChange(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj,
-                    jint type,
-                    jboolean muted);
+  void OnVolumeChange(JNIEnv* env, int32_t type, float level);
+  void OnMuteChange(JNIEnv* env, int32_t type, bool muted);
 
   // SystemVolumeTableAccessApi implementation.
   int GetMaxVolumeIndex(AudioContentType type) override;
@@ -70,6 +67,7 @@ class VolumeControlAndroid : SystemVolumeTableAccessApi {
                                           AudioContentType to_type,
                                           float level);
 
+  const bool is_single_volume_;
   base::android::ScopedJavaGlobalRef<jobject> j_volume_control_;
 
   std::map<AudioContentType, std::unique_ptr<VolumeCache>> volume_cache_;
@@ -79,12 +77,10 @@ class VolumeControlAndroid : SystemVolumeTableAccessApi {
   std::map<AudioContentType, bool> muted_;
 
   base::Lock observer_lock_;
-  std::vector<VolumeObserver*> volume_observers_;
+  std::vector<raw_ptr<VolumeObserver>> volume_observers_;
 
   base::Thread thread_;
   base::WaitableEvent initialize_complete_event_;
-
-  DISALLOW_COPY_AND_ASSIGN(VolumeControlAndroid);
 };
 
 }  // namespace media

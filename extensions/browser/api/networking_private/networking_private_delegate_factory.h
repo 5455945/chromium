@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef EXTENSIONS_BROWSER_API_NETWORKING_PRIVATE_NETWORKING_PRIVATE_DELEGATE_FACTORY_H_
@@ -6,15 +6,13 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/singleton.h"
-#include "build/build_config.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "extensions/browser/api/networking_private/networking_private_delegate.h"
 
-namespace context {
+namespace content {
 class BrowserContext;
-}
+}  // namespace content
 
 namespace extensions {
 
@@ -31,14 +29,20 @@ class NetworkingPrivateDelegateFactory
   class UIDelegateFactory {
    public:
     UIDelegateFactory();
+
+    UIDelegateFactory(const UIDelegateFactory&) = delete;
+    UIDelegateFactory& operator=(const UIDelegateFactory&) = delete;
+
     virtual ~UIDelegateFactory();
 
     virtual std::unique_ptr<NetworkingPrivateDelegate::UIDelegate>
     CreateDelegate() = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(UIDelegateFactory);
   };
+
+  NetworkingPrivateDelegateFactory(const NetworkingPrivateDelegateFactory&) =
+      delete;
+  NetworkingPrivateDelegateFactory& operator=(
+      const NetworkingPrivateDelegateFactory&) = delete;
 
   // Provide optional factories for creating delegate instances.
   void SetUIDelegateFactory(std::unique_ptr<UIDelegateFactory> factory);
@@ -48,20 +52,18 @@ class NetworkingPrivateDelegateFactory
   static NetworkingPrivateDelegateFactory* GetInstance();
 
  private:
-  friend struct base::DefaultSingletonTraits<NetworkingPrivateDelegateFactory>;
+  friend base::NoDestructor<NetworkingPrivateDelegateFactory>;
 
   NetworkingPrivateDelegateFactory();
   ~NetworkingPrivateDelegateFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* browser_context) const override;
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;
 
   std::unique_ptr<UIDelegateFactory> ui_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkingPrivateDelegateFactory);
 };
 
 }  // namespace extensions

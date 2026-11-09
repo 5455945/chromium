@@ -23,6 +23,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_PARAGRAPH_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_PARAGRAPH_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 
 namespace blink {
@@ -33,11 +34,15 @@ class CORE_EXPORT HTMLParagraphElement final : public HTMLElement {
  public:
   explicit HTMLParagraphElement(Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLParagraphElement;
+  }
+
  private:
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
 };
 
 }  // namespace blink

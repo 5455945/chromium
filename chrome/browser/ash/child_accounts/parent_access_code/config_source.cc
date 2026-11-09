@@ -1,18 +1,20 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/child_accounts/parent_access_code/config_source.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "ash/constants/ash_pref_names.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/logging.h"
 #include "base/values.h"
-#include "chrome/common/pref_names.h"
 #include "components/account_id/account_id.h"
-#include "components/prefs/pref_service.h"
 #include "components/user_manager/known_user.h"
+#include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 
 namespace ash {
@@ -27,64 +29,87 @@ constexpr char kOldConfigsDictKey[] = "old_configs";
 
 }  // namespace
 
-ConfigSource::ConfigSource() {
+ConfigSource::ConfigSource(PrefService* local_state)
+    : local_state_(CHECK_DEREF(local_state)) {
+  user_manager::KnownUser known_user(&local_state_.get());
+
   const user_manager::UserList& users =
-      user_manager::UserManager::Get()->GetUsers();
+      user_manager::UserManager::Get()->GetPersistedUsers();
   for (const user_manager::User* user : users) {
-    if (user->IsChild())
-      LoadConfigForUser(user);
+    if (!user->IsChild()) {
+      continue;
+    }
+
+    const base::Value* dictionary = known_user.FindPath(
+        user->GetAccountId(), ash::prefs::kKnownUserParentAccessCodeConfig);
+    if (dictionary) {
+      LoadConfigForUser(user->GetAccountId(), dictionary->GetDict());
+    }
   }
 }
 
 ConfigSource::~ConfigSource() = default;
 
-void ConfigSource::LoadConfigForUser(const user_manager::User* user) {
-  DCHECK(user->IsChild());
+void ConfigSource::UpdateConfigForUser(const AccountId& account_id,
+                                       base::DictValue config) {
+#if DCHECK_IS_ON()
+  const user_manager::User* user =
+      user_manager::UserManager::Get()->FindUser(account_id);
+  CHECK(user, base::NotFatalUntil::M160);
+  CHECK(user->IsChild(), base::NotFatalUntil::M160);
+#endif  // DCHECK_IS_ON()
 
-  const base::Value* dictionary = nullptr;
-  if (!user_manager::known_user::GetPref(
-          user->GetAccountId(), prefs::kKnownUserParentAccessCodeConfig,
-          &dictionary)) {
-    return;
-  }
+  user_manager::KnownUser known_user(&local_state_.get());
+  known_user.SetPath(account_id, ash::prefs::kKnownUserParentAccessCodeConfig,
+                     base::Value(std::move(config)));
 
+  const base::Value* dictionary = known_user.FindPath(
+      account_id, ash::prefs::kKnownUserParentAccessCodeConfig);
+  CHECK(dictionary);
+  LoadConfigForUser(account_id, dictionary->GetDict());
+}
+
+void ConfigSource::RemoveConfigForUser(const AccountId& account_id) {
+  user_manager::KnownUser(&local_state_.get())
+      .RemovePref(account_id, ash::prefs::kKnownUserParentAccessCodeConfig);
+}
+
+void ConfigSource::LoadConfigForUser(const AccountId& account_id,
+                                     const base::DictValue& dictionary) {
   // Clear old authenticators for that user.
-  config_map_[user->GetAccountId()].clear();
+  config_map_[account_id].clear();
 
-  const base::Value* future_config_value = dictionary->FindKeyOfType(
-      kFutureConfigDictKey, base::Value::Type::DICTIONARY);
+  const base::DictValue* future_config_value =
+      dictionary.FindDict(kFutureConfigDictKey);
   if (future_config_value) {
-    AddAuthenticator(*future_config_value, user);
+    AddAuthenticator(*future_config_value, account_id);
   } else {
     LOG(WARNING) << "No future config for parent access code in the policy";
   }
 
-  const base::Value* current_config_value = dictionary->FindKeyOfType(
-      kCurrentConfigDictKey, base::Value::Type::DICTIONARY);
+  const base::DictValue* current_config_value =
+      dictionary.FindDict(kCurrentConfigDictKey);
   if (current_config_value) {
-    AddAuthenticator(*current_config_value, user);
+    AddAuthenticator(*current_config_value, account_id);
   } else {
     LOG(WARNING) << "No current config for parent access code in the policy";
   }
 
-  const base::Value* old_configs_value =
-      dictionary->FindKeyOfType(kOldConfigsDictKey, base::Value::Type::LIST);
+  const base::ListValue* old_configs_value =
+      dictionary.FindList(kOldConfigsDictKey);
   if (old_configs_value) {
-    for (const auto& config_value : old_configs_value->GetList())
-      AddAuthenticator(config_value, user);
+    for (const auto& config_value : *old_configs_value) {
+      AddAuthenticator(config_value.GetDict(), account_id);
+    }
   }
 }
 
-void ConfigSource::AddAuthenticator(const base::Value& dict,
-                                    const user_manager::User* user) {
-  if (!dict.is_dict())
-    return;
-
-  absl::optional<AccessCodeConfig> code_config =
-      AccessCodeConfig::FromDictionary(
-          static_cast<const base::DictionaryValue&>(dict));
+void ConfigSource::AddAuthenticator(const base::DictValue& dict,
+                                    const AccountId& account_id) {
+  std::optional<AccessCodeConfig> code_config =
+      AccessCodeConfig::FromDictionary(dict);
   if (code_config) {
-    config_map_[user->GetAccountId()].push_back(
+    config_map_[account_id].push_back(
         std::make_unique<Authenticator>(std::move(code_config.value())));
   }
 }

@@ -26,82 +26,40 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_BIQUAD_FILTER_NODE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_BIQUAD_FILTER_NODE_H_
 
-#include "base/memory/weak_ptr.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_basic_processor_handler.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
-#include "third_party/blink/renderer/modules/webaudio/biquad_processor.h"
+#include "third_party/blink/renderer/modules/webaudio/audio_param.h"
+#include "third_party/blink/renderer/modules/webaudio/biquad_filter_handler.h"
+#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 
 namespace blink {
 
 class BaseAudioContext;
-class AudioParam;
 class BiquadFilterOptions;
-
-class BiquadFilterHandler : public AudioBasicProcessorHandler,
-                            public base::SupportsWeakPtr<BiquadFilterHandler> {
- public:
-  static scoped_refptr<BiquadFilterHandler> Create(AudioNode&,
-                                                   float sample_rate,
-                                                   AudioParamHandler& frequency,
-                                                   AudioParamHandler& q,
-                                                   AudioParamHandler& gain,
-                                                   AudioParamHandler& detune);
-
-  void Process(uint32_t frames_to_process) override;
-
- private:
-  BiquadFilterHandler(AudioNode&,
-                      float sample_rate,
-                      AudioParamHandler& frequency,
-                      AudioParamHandler& q,
-                      AudioParamHandler& gain,
-                      AudioParamHandler& detune);
-
-  void NotifyBadState() const;
-
-  // Only notify the user of the once.  No need to spam the console with
-  // messages, because once we're in a bad state, it usually stays that way
-  // forever.  Only accessed from audio thread.
-  bool did_warn_bad_filter_state_ = false;
-
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
-};
+class ExceptionState;
+class V8BiquadFilterType;
 
 class BiquadFilterNode final : public AudioNode {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  // These must be defined as in the .idl file and must match those in the
-  // BiquadProcessor class.
-  enum {
-    LOWPASS = 0,
-    HIGHPASS = 1,
-    BANDPASS = 2,
-    LOWSHELF = 3,
-    HIGHSHELF = 4,
-    PEAKING = 5,
-    NOTCH = 6,
-    ALLPASS = 7
-  };
-
   static BiquadFilterNode* Create(BaseAudioContext&, ExceptionState&);
   static BiquadFilterNode* Create(BaseAudioContext*,
                                   const BiquadFilterOptions*,
                                   ExceptionState&);
 
-  BiquadFilterNode(BaseAudioContext&);
+  explicit BiquadFilterNode(BaseAudioContext&);
 
   void Trace(Visitor*) const override;
 
-  String type() const;
-  void setType(const String&);
+  V8BiquadFilterType type() const;
+  void setType(const V8BiquadFilterType&);
 
-  AudioParam* frequency() { return frequency_; }
-  AudioParam* q() { return q_; }
-  AudioParam* gain() { return gain_; }
-  AudioParam* detune() { return detune_; }
+  AudioParam* frequency() { return frequency_.Get(); }
+  AudioParam* q() { return q_.Get(); }
+  AudioParam* gain() { return gain_.Get(); }
+  AudioParam* detune() { return detune_.Get(); }
 
   // Get the magnitude and phase response of the filter at the given
   // set of frequencies (in Hz). The phase response is in radians.
@@ -115,8 +73,7 @@ class BiquadFilterNode final : public AudioNode {
   void ReportWillBeDestroyed() final;
 
  private:
-  BiquadProcessor* GetBiquadProcessor() const;
-  bool SetType(BiquadProcessor::FilterType);  // Returns true on success.
+  BiquadFilterHandler& GetBiquadFilterHandler() const;
 
   Member<AudioParam> frequency_;
   Member<AudioParam> q_;

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,14 @@ import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.widget.TextView;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.widget.ViewResourceFrameLayout;
 import org.chromium.components.browser_ui.widget.text.TextViewWithCompoundDrawables;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
+@NullMarked
 class StatusIndicatorViewBinder {
     /**
      * A wrapper class that holds a {@link ViewResourceFrameLayout} and a composited layer to be
@@ -67,9 +69,15 @@ class StatusIndicatorViewBinder {
                     ColorStateList.valueOf(model.get(StatusIndicatorProperties.ICON_TINT));
             text.setDrawableTintColor(tint);
         } else if (StatusIndicatorProperties.CURRENT_VISIBLE_HEIGHT == propertyKey) {
-            final float yOffset = model.get(StatusIndicatorProperties.CURRENT_VISIBLE_HEIGHT)
-                    - view.javaViewRoot.getHeight();
+            final float yOffset =
+                    model.get(StatusIndicatorProperties.CURRENT_VISIBLE_HEIGHT)
+                            - view.javaViewRoot.getHeight();
             view.javaViewRoot.setTranslationY(yOffset);
+        } else if (StatusIndicatorProperties.IS_OBSCURED == propertyKey) {
+            view.javaViewRoot.setImportantForAccessibility(
+                    model.get(StatusIndicatorProperties.IS_OBSCURED)
+                            ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                            : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
         } else {
             assert false : "Unhandled property detected in StatusIndicatorViewBinder!";
         }

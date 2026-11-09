@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include <memory>
 #include <set>
-#include <vector>
 
 #include "base/command_line.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/in_memory_database.h"
 #include "components/history/core/browser/url_database.h"
 
@@ -19,9 +19,9 @@ namespace history {
 InMemoryHistoryBackend::InMemoryHistoryBackend() = default;
 InMemoryHistoryBackend::~InMemoryHistoryBackend() = default;
 
-bool InMemoryHistoryBackend::Init(const base::FilePath& history_filename) {
+bool InMemoryHistoryBackend::Init(URLDatabase& history_db) {
   db_ = std::make_unique<InMemoryDatabase>();
-  return db_->InitFromDisk(history_filename);
+  return db_->InitFromUrlDatabase(history_db);
 }
 
 void InMemoryHistoryBackend::AttachToHistoryService(
@@ -38,12 +38,16 @@ void InMemoryHistoryBackend::DeleteAllSearchTermsForKeyword(
   db_->DeleteAllSearchTermsForKeyword(keyword_id);
 }
 
-void InMemoryHistoryBackend::OnURLVisited(HistoryService* history_service,
-                                          ui::PageTransition transition,
-                                          const URLRow& row,
-                                          const RedirectList& redirects,
-                                          base::Time visit_time) {
-  OnURLVisitedOrModified(row);
+void InMemoryHistoryBackend::OnURLVisited(
+    history::HistoryService* history_service,
+    const VisitedURLInfo& visited_url_info) {
+  // Filter out 404 visits to prevent them from impacting user
+  // journeys on search.
+  if (visited_url_info.response_code_category ==
+      history::VisitResponseCodeCategory::k404) {
+    return;
+  }
+  OnURLVisitedOrModified(visited_url_info.url_row);
 }
 
 void InMemoryHistoryBackend::OnURLsModified(HistoryService* history_service,
@@ -53,8 +57,9 @@ void InMemoryHistoryBackend::OnURLsModified(HistoryService* history_service,
   }
 }
 
-void InMemoryHistoryBackend::OnURLsDeleted(HistoryService* history_service,
-                                           const DeletionInfo& deletion_info) {
+void InMemoryHistoryBackend::OnHistoryDeletions(
+    HistoryService* history_service,
+    const DeletionInfo& deletion_info) {
   DCHECK(db_);
 
   if (deletion_info.IsAllHistory()) {

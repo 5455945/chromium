@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <vector>
 
-#include "base/macros.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/animation/square_ink_drop_ripple.h"
 #include "ui/views/animation/test/ink_drop_ripple_test_api.h"
@@ -16,8 +15,7 @@ namespace ui {
 class LayerAnimator;
 }  // namespace ui
 
-namespace views {
-namespace test {
+namespace views::test {
 
 // Test API to provide internal access to a SquareInkDropRipple.
 class SquareInkDropRippleTestApi : public InkDropRippleTestApi {
@@ -27,6 +25,11 @@ class SquareInkDropRippleTestApi : public InkDropRippleTestApi {
   using PaintedShape = SquareInkDropRipple::PaintedShape;
 
   explicit SquareInkDropRippleTestApi(SquareInkDropRipple* ink_drop_ripple);
+
+  SquareInkDropRippleTestApi(const SquareInkDropRippleTestApi&) = delete;
+  SquareInkDropRippleTestApi& operator=(const SquareInkDropRippleTestApi&) =
+      delete;
+
   ~SquareInkDropRippleTestApi() override;
 
   // Wrapper functions to the wrapped InkDropRipple:
@@ -53,11 +56,8 @@ class SquareInkDropRippleTestApi : public InkDropRippleTestApi {
     return static_cast<SquareInkDropRipple*>(
         InkDropRippleTestApi::ink_drop_ripple());
   }
-
-  DISALLOW_COPY_AND_ASSIGN(SquareInkDropRippleTestApi);
 };
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test
 
 #endif  // UI_VIEWS_ANIMATION_TEST_SQUARE_INK_DROP_RIPPLE_TEST_API_H_

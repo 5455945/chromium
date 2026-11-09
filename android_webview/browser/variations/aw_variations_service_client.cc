@@ -1,37 +1,25 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/variations/aw_variations_service_client.h"
 
-#include "base/bind.h"
-#include "base/threading/scoped_blocking_call.h"
-#include "build/build_config.h"
+#include "android_webview/browser/metrics/aw_metrics_service_client.h"
+#include "base/check.h"
 #include "components/version_info/android/channel_getter.h"
+#include "components/version_info/version_info.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 using version_info::Channel;
 
 namespace android_webview {
-namespace {
 
-// Gets the version number to use for variations seed simulation. Must be called
-// on a thread where IO is allowed.
-base::Version GetVersionForSimulation() {
-  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
-                                                base::BlockingType::MAY_BLOCK);
+AwVariationsServiceClient::AwVariationsServiceClient() = default;
+
+AwVariationsServiceClient::~AwVariationsServiceClient() = default;
+
+base::Version AwVariationsServiceClient::GetVersionForSimulation() {
   return version_info::GetVersion();
-}
-
-}  // namespace
-
-AwVariationsServiceClient::AwVariationsServiceClient() {}
-
-AwVariationsServiceClient::~AwVariationsServiceClient() {}
-
-AwVariationsServiceClient::VersionCallback
-AwVariationsServiceClient::GetVersionForSimulationCallback() {
-  return base::BindOnce(&GetVersionForSimulation);
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -44,10 +32,6 @@ AwVariationsServiceClient::GetNetworkTimeTracker() {
   return nullptr;
 }
 
-Channel AwVariationsServiceClient::GetChannel() {
-  return version_info::android::GetChannel();
-}
-
 bool AwVariationsServiceClient::OverridesRestrictParameter(
     std::string* parameter) {
   return false;
@@ -55,6 +39,35 @@ bool AwVariationsServiceClient::OverridesRestrictParameter(
 
 bool AwVariationsServiceClient::IsEnterprise() {
   return false;
+}
+
+Channel AwVariationsServiceClient::GetChannel() {
+  return version_info::android::GetChannel();
+}
+
+bool AwVariationsServiceClient::EnableSignatureVerificationOnLoad() {
+  // TODO(549757421): Investigate whether we can skip signature verification
+  // on WebView to improve WebView's startup performance.
+  return true;
+}
+
+metrics::MetricsService::RotateUmaLogResult
+AwVariationsServiceClient::RotateUmaLogForRuntimeMutability(
+    metrics::MetricsService::RuntimeMutabilityPassKey passkey) {
+  AwMetricsServiceClient* client = AwMetricsServiceClient::GetInstance();
+  CHECK(client);
+  metrics::MetricsService* metrics_service = client->GetMetricsService();
+  CHECK(metrics_service);
+  return metrics_service->RotateUmaLogForRuntimeMutability(passkey);
+}
+
+bool AwVariationsServiceClient::ShouldDelayRuntimeMutability(
+    metrics::MetricsService::RuntimeMutabilityPassKey passkey) {
+  AwMetricsServiceClient* client = AwMetricsServiceClient::GetInstance();
+  CHECK(client);
+  metrics::MetricsService* metrics_service = client->GetMetricsService();
+  CHECK(metrics_service);
+  return metrics_service->ShouldDelayRuntimeMutability(passkey);
 }
 
 }  // namespace android_webview

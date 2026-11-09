@@ -1,12 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_MANAGER_UTILS_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_MANAGER_UTILS_H_
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include <memory>
+
+#include "base/functional/callback_forward.h"
 
 class Profile;
 class ProfileKey;
@@ -17,9 +18,12 @@ class InProgressDownloadManager;
 
 class DownloadManagerUtils {
  public:
+  DownloadManagerUtils(const DownloadManagerUtils&) = delete;
+  DownloadManagerUtils& operator=(const DownloadManagerUtils&) = delete;
+
   // Creates an InProgressDownloadManager from a profile.
-  static download::InProgressDownloadManager* RetrieveInProgressDownloadManager(
-      Profile* profile);
+  static std::unique_ptr<download::InProgressDownloadManager>
+  RetrieveInProgressDownloadManager(Profile* profile);
 
   // Initializes the SimpleDownloadManager that is associated with |key| whenver
   // possible.
@@ -36,9 +40,6 @@ class DownloadManagerUtils {
   static void SetRetrieveInProgressDownloadManagerCallbackForTesting(
       base::RepeatingCallback<void(download::InProgressDownloadManager*)>
           callback);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadManagerUtils);
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_DOWNLOAD_MANAGER_UTILS_H_

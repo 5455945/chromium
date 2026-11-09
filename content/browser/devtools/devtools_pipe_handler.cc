@@ -1,33 +1,39 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/devtools/devtools_pipe_handler.h"
-#include "base/task/thread_pool.h"
 
-#if defined(OS_WIN)
-#include <io.h>
+#include "base/containers/span.h"
+#include "base/task/thread_pool.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
+#include <io.h>
+#include <stdlib.h>
 #else
 #include <sys/socket.h>
 #endif
 
 #include <stdio.h>
+
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
-#include "base/bind.h"
+
 #include "base/command_line.h"
-#include "base/files/file_util.h"
-#include "base/memory/ref_counted_memory.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/atomic_flag.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
-#include "build/build_config.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -37,8 +43,6 @@
 
 const size_t kReceiveBufferSizeForDevTools = 100 * 1024 * 1024;  // 100Mb
 const size_t kWritePacketSize = 1 << 16;
-const int kReadFD = 3;
-const int kWriteFD = 4;
 
 // Our CBOR (RFC 7049) based format starts with a tag 24 indicating
 // an envelope, that is, a byte string which as payload carries the
@@ -91,6 +95,41 @@ class PipeIOBase {
   std::unique_ptr<base::Thread> thread_;
   base::AtomicFlag shutting_down_;
 };
+
+#if BUILDFLAG(IS_WIN)
+// Temporary CRT parameter validation error handler override that allows
+//  _get_osfhandle() to return INVALID_HANDLE_VALUE instead of crashing.
+class ScopedInvalidParameterHandlerOverride {
+ public:
+  ScopedInvalidParameterHandlerOverride()
+      : prev_invalid_parameter_handler_(
+            _set_thread_local_invalid_parameter_handler(
+                InvalidParameterHandler)) {}
+
+  ScopedInvalidParameterHandlerOverride(
+      const ScopedInvalidParameterHandlerOverride&) = delete;
+  ScopedInvalidParameterHandlerOverride& operator=(
+      const ScopedInvalidParameterHandlerOverride&) = delete;
+
+  ~ScopedInvalidParameterHandlerOverride() {
+    _set_thread_local_invalid_parameter_handler(
+        prev_invalid_parameter_handler_);
+  }
+
+ private:
+  // A do nothing invalid parameter handler that causes CRT routine to return
+  // error to the caller.
+  static void InvalidParameterHandler(const wchar_t* expression,
+                                      const wchar_t* function,
+                                      const wchar_t* file,
+                                      unsigned int line,
+                                      uintptr_t reserved) {}
+
+  const _invalid_parameter_handler prev_invalid_parameter_handler_;
+};
+
+#endif  // BUILDFLAG(IS_WIN)
+
 }  // namespace
 
 class PipeReaderBase : public PipeIOBase {
@@ -98,11 +137,11 @@ class PipeReaderBase : public PipeIOBase {
   PipeReaderBase(base::WeakPtr<DevToolsPipeHandler> devtools_handler,
                  int read_fd)
       : PipeIOBase("DevToolsPipeHandlerReadThread"),
-        devtools_handler_(std::move(devtools_handler)) {
-#if defined(OS_WIN)
+        devtools_handler_(std::move(devtools_handler)),
+        read_fd_(read_fd) {
+#if BUILDFLAG(IS_WIN)
+    ScopedInvalidParameterHandlerOverride invalid_parameter_handler_override;
     read_handle_ = reinterpret_cast<HANDLE>(_get_osfhandle(read_fd));
-#else
-    read_fd_ = read_fd;
 #endif
   }
 
@@ -115,10 +154,12 @@ class PipeReaderBase : public PipeIOBase {
 
   void ClosePipe() override {
 // Concurrently discard the pipe handles to successfully join threads.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // Cancel pending synchronous read.
     CancelIoEx(read_handle_, nullptr);
-    CloseHandle(read_handle_);
+    ScopedInvalidParameterHandlerOverride invalid_parameter_handler_override;
+    _close(read_fd_);
+    read_handle_ = INVALID_HANDLE_VALUE;
 #else
     shutdown(read_fd_, SHUT_RDWR);
 #endif
@@ -126,17 +167,17 @@ class PipeReaderBase : public PipeIOBase {
 
   virtual void ReadLoopInternal() = 0;
 
-  size_t ReadBytes(void* buffer, size_t size, bool exact_size) {
+  size_t ReadBytes(base::span<uint8_t> buffer, bool exact_size) {
     size_t bytes_read = 0;
-    while (bytes_read < size) {
-#if defined(OS_WIN)
+    while (bytes_read < buffer.size()) {
+      base::span<uint8_t> remaining = buffer.subspan(bytes_read);
+#if BUILDFLAG(IS_WIN)
       DWORD size_read = 0;
       bool had_error =
-          !ReadFile(read_handle_, static_cast<char*>(buffer) + bytes_read,
-                    size - bytes_read, &size_read, nullptr);
+          !ReadFile(read_handle_, remaining.data(),
+                    static_cast<DWORD>(remaining.size()), &size_read, nullptr);
 #else
-      int size_read = read(read_fd_, static_cast<char*>(buffer) + bytes_read,
-                           size - bytes_read);
+      int size_read = read(read_fd_, remaining.data(), remaining.size());
       if (size_read < 0 && errno == EINTR)
         continue;
       bool had_error = size_read <= 0;
@@ -172,21 +213,19 @@ class PipeReaderBase : public PipeIOBase {
   }
 
   base::WeakPtr<DevToolsPipeHandler> devtools_handler_;
-#if defined(OS_WIN)
-  HANDLE read_handle_;
-#else
   int read_fd_;
+#if BUILDFLAG(IS_WIN)
+  HANDLE read_handle_;
 #endif
 };
 
 class PipeWriterBase : public PipeIOBase {
  public:
   explicit PipeWriterBase(int write_fd)
-      : PipeIOBase("DevToolsPipeHandlerWriteThread") {
-#if defined(OS_WIN)
+      : PipeIOBase("DevToolsPipeHandlerWriteThread"), write_fd_(write_fd) {
+#if BUILDFLAG(IS_WIN)
+    ScopedInvalidParameterHandlerOverride invalid_parameter_handler_override;
     write_handle_ = reinterpret_cast<HANDLE>(_get_osfhandle(write_fd));
-#else
-    write_fd_ = write_fd;
 #endif
   }
 
@@ -200,8 +239,10 @@ class PipeWriterBase : public PipeIOBase {
 
  protected:
   void ClosePipe() override {
-#if defined(OS_WIN)
-    CloseHandle(write_handle_);
+#if BUILDFLAG(IS_WIN)
+    ScopedInvalidParameterHandlerOverride invalid_parameter_handler_override;
+    _close(write_fd_);
+    write_handle_ = INVALID_HANDLE_VALUE;
 #else
     shutdown(write_fd_, SHUT_RDWR);
 #endif
@@ -209,19 +250,19 @@ class PipeWriterBase : public PipeIOBase {
 
   virtual void WriteIntoPipe(std::string message) = 0;
 
-  void WriteBytes(const char* bytes, size_t size) {
+  void WriteBytes(base::span<const uint8_t> bytes) {
     size_t total_written = 0;
-    while (total_written < size) {
-      size_t length = size - total_written;
-      if (length > kWritePacketSize)
-        length = kWritePacketSize;
-#if defined(OS_WIN)
+    while (total_written < bytes.size()) {
+      base::span<const uint8_t> remaining = bytes.subspan(total_written);
+      base::span<const uint8_t> packet =
+          remaining.first(std::min(remaining.size(), kWritePacketSize));
+#if BUILDFLAG(IS_WIN)
       DWORD bytes_written = 0;
-      bool had_error =
-          !WriteFile(write_handle_, bytes + total_written,
-                     static_cast<DWORD>(length), &bytes_written, nullptr);
+      bool had_error = !WriteFile(write_handle_, packet.data(),
+                                  static_cast<DWORD>(packet.size()),
+                                  &bytes_written, nullptr);
 #else
-      int bytes_written = write(write_fd_, bytes + total_written, length);
+      int bytes_written = write(write_fd_, packet.data(), packet.size());
       if (bytes_written < 0 && errno == EINTR)
         continue;
       bool had_error = bytes_written <= 0;
@@ -236,10 +277,9 @@ class PipeWriterBase : public PipeIOBase {
   }
 
  private:
-#if defined(OS_WIN)
-  HANDLE write_handle_;
-#else
   int write_fd_;
+#if BUILDFLAG(IS_WIN)
+  HANDLE write_handle_;
 #endif
 };
 
@@ -250,8 +290,9 @@ class PipeWriterASCIIZ : public PipeWriterBase {
   explicit PipeWriterASCIIZ(int write_fd) : PipeWriterBase(write_fd) {}
 
   void WriteIntoPipe(std::string message) override {
-    WriteBytes(message.data(), message.size());
-    WriteBytes("\0", 1);
+    static constexpr uint8_t kNullTerminator = 0;
+    WriteBytes(base::as_byte_span(message));
+    WriteBytes(base::span_from_ref(kNullTerminator));
   }
 };
 
@@ -260,8 +301,9 @@ class PipeWriterCBOR : public PipeWriterBase {
   explicit PipeWriterCBOR(int write_fd) : PipeWriterBase(write_fd) {}
 
   void WriteIntoPipe(std::string message) override {
-    DCHECK(crdtp::cbor::IsCBORMessage(crdtp::SpanFrom(message)));
-    WriteBytes(message.data(), message.size());
+    CHECK(crdtp::cbor::IsCBORMessage(crdtp::SpanFrom(message)),
+          base::NotFatalUntil::M159);
+    WriteBytes(base::as_byte_span(message));
   }
 };
 
@@ -283,23 +325,25 @@ class PipeReaderASCIIZ : public PipeReaderBase {
         break;
       }
 
-      size_t bytes_read = ReadBytes(read_buffer_->data(),
-                                    read_buffer_->RemainingCapacity(), false);
+      // `span()` covers the remaining capacity past the already-read bytes.
+      size_t bytes_read = ReadBytes(read_buffer_->span(), false);
       if (!bytes_read)
         break;
       read_buffer_->DidRead(bytes_read);
 
-      // Go over the last read chunk, look for \0, extract messages.
-      int offset = 0;
-      for (int i = read_buffer_->GetSize() - bytes_read;
-           i < read_buffer_->GetSize(); ++i) {
-        if (read_buffer_->StartOfBuffer()[i] == '\0') {
-          HandleMessage(
-              std::vector<uint8_t>(read_buffer_->StartOfBuffer() + offset,
-                                   read_buffer_->StartOfBuffer() + i));
-          offset = i + 1;
+      // Go over the last read chunk, look for null byte, extract messages.
+      base::span<const uint8_t> readable_bytes = read_buffer_->readable_bytes();
+      auto next_message_start = readable_bytes.begin();
+      // Bytes from the previous read have already been checked again null byte,
+      // so no need to look at them again.
+      for (auto it = read_buffer_->readable_bytes().end() - bytes_read;
+           it != read_buffer_->readable_bytes().end(); ++it) {
+        if (*it == 0u) {
+          HandleMessage(std::vector<uint8_t>(next_message_start, it));
+          next_message_start = it + 1;
         }
       }
+      int offset = next_message_start - readable_bytes.begin();
       if (offset)
         read_buffer_->DidConsume(offset);
     }
@@ -315,27 +359,31 @@ class PipeReaderCBOR : public PipeReaderBase {
       : PipeReaderBase(std::move(devtools_handler), read_fd) {}
 
  private:
-  static uint32_t UInt32FromCBOR(const uint8_t* buf) {
+  static uint32_t UInt32FromCBOR(base::span<const uint8_t> buf) {
     return (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
   }
 
   void ReadLoopInternal() override {
     while (true) {
-      const size_t kHeaderSize = 6;  // tag? type length*4
-      std::vector<uint8_t> buffer(kHeaderSize);
-      if (!ReadBytes(&buffer.front(), kHeaderSize, true))
+      const size_t kPeekSize =
+          8;  // tag tag_type? byte_string length*4 map_start
+      std::vector<uint8_t> buffer(kPeekSize);
+      if (!ReadBytes(buffer, true)) {
         break;
-      const uint8_t* prefix = buffer.data();
-      if (prefix[0] != crdtp::cbor::InitialByteForEnvelope() ||
-          prefix[1] != crdtp::cbor::InitialByteFor32BitLengthByteString()) {
-        LOG(ERROR) << "Unexpected start of CBOR envelope " << prefix[0] << ","
-                   << prefix[1];
+      }
+      auto status_or_header = crdtp::cbor::EnvelopeHeader::ParseFromFragment(
+          crdtp::SpanFrom(buffer));
+      if (!status_or_header.ok()) {
+        LOG(ERROR) << "Error parsing CBOR envelope: "
+                   << status_or_header.status().ToASCIIString();
         return;
       }
-      uint32_t msg_size = UInt32FromCBOR(prefix + 2);
-      buffer.resize(kHeaderSize + msg_size);
-      if (!ReadBytes(&buffer.front() + kHeaderSize, msg_size, true))
+      const size_t msg_size = (*status_or_header).outer_size();
+      CHECK_GT(msg_size, kPeekSize);
+      buffer.resize(msg_size);
+      if (!ReadBytes(base::span(buffer).subspan(kPeekSize), true)) {
         return;
+      }
       HandleMessage(std::move(buffer));
     }
   }
@@ -345,10 +393,12 @@ class PipeReaderCBOR : public PipeReaderBase {
 
 // DevToolsPipeHandler ---------------------------------------------------
 
-DevToolsPipeHandler::DevToolsPipeHandler(base::OnceClosure on_disconnect)
+DevToolsPipeHandler::DevToolsPipeHandler(int read_fd,
+                                         int write_fd,
+                                         base::OnceClosure on_disconnect)
     : on_disconnect_(std::move(on_disconnect)),
-      read_fd_(kReadFD),
-      write_fd_(kWriteFD) {
+      read_fd_(read_fd),
+      write_fd_(write_fd) {
   browser_target_ = DevToolsAgentHost::CreateForBrowser(
       nullptr, DevToolsAgentHost::CreateServerSocketCallback());
   browser_target_->AttachClient(this);
@@ -382,7 +432,7 @@ void DevToolsPipeHandler::Shutdown() {
   shutting_down_ = true;
 
   // Disconnect from the target.
-  DCHECK(browser_target_);
+  CHECK(browser_target_, base::NotFatalUntil::M159);
   browser_target_->DetachClient(this);
   browser_target_ = nullptr;
 
@@ -415,6 +465,18 @@ void DevToolsPipeHandler::AgentHostClosed(DevToolsAgentHost* agent_host) {}
 
 bool DevToolsPipeHandler::UsesBinaryProtocol() {
   return mode_ == ProtocolMode::kCBOR;
+}
+
+bool DevToolsPipeHandler::AllowUnsafeOperations() {
+  return true;
+}
+
+std::string DevToolsPipeHandler::GetTypeForMetrics() {
+  return "RemoteDebugger";
+}
+
+DevToolsAgentHostClient::PeerMetadata DevToolsPipeHandler::GetPeerMetadata() {
+  return {.transport_type = PeerMetadata::TransportType::kPipe};
 }
 
 }  // namespace content

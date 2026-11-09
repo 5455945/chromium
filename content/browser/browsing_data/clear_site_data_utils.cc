@@ -1,47 +1,62 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/browser/clear_site_data_utils.h"
 
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "content/browser/browser_context_impl.h"
+#include "content/browser/browsing_data/browsing_data_remover_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace content {
 
 namespace {
 
 // Finds the BrowserContext associated with the request and requests
-// the actual clearing of data for |origin|. The data types to be deleted
-// are determined by |clear_cookies|, |clear_storage|, and |clear_cache|.
-// |web_contents_getter| identifies the WebContents from which the request
-// originated. Must be run on the UI thread. The |callback| will be executed
+// the actual clearing of data for `origin`. The data types to be deleted
+// are determined by `clear_site_data_types` and `storage_buckets_to_remove`.
+// `web_contents_getter` identifies the WebContents from which the request
+// originated. Must be run on the UI thread. The `callback` will be executed
 // on the IO thread.
 class SiteDataClearer : public BrowsingDataRemover::Observer {
  public:
-  SiteDataClearer(BrowserContext* browser_context,
-                  const url::Origin& origin,
-                  bool clear_cookies,
-                  bool clear_storage,
-                  bool clear_cache,
-                  bool avoid_closing_connections,
-                  base::OnceClosure callback)
-      : origin_(origin),
-        clear_cookies_(clear_cookies),
-        clear_storage_(clear_storage),
-        clear_cache_(clear_cache),
+  SiteDataClearer(
+      BrowserContext* browser_context,
+      std::optional<StoragePartitionConfig> storage_partition_config,
+      const url::Origin& origin,
+      const ClearSiteDataTypeSet clear_site_data_types,
+      const std::set<std::string>& storage_buckets_to_remove,
+      bool avoid_closing_connections,
+      std::optional<net::CookiePartitionKey> cookie_partition_key,
+      std::optional<blink::StorageKey> storage_key,
+      bool partitioned_state_allowed_only,
+      base::OnceClosure callback)
+      : storage_partition_config_(std::move(storage_partition_config)),
+        origin_(origin),
+        clear_site_data_types_(clear_site_data_types),
+        storage_buckets_to_remove_(storage_buckets_to_remove),
         avoid_closing_connections_(avoid_closing_connections),
+        cookie_partition_key_(std::move(cookie_partition_key)),
+        storage_key_(std::move(storage_key)),
+        partitioned_state_allowed_only_(partitioned_state_allowed_only),
         callback_(std::move(callback)),
         pending_task_count_(0),
         remover_(nullptr) {
-    remover_ = browser_context->GetBrowsingDataRemover();
-    DCHECK(remover_);
-    scoped_observation_.Observe(remover_);
+    remover_ =
+        BrowserContextImpl::From(browser_context)->GetBrowsingDataRemover();
+    CHECK(remover_, base::NotFatalUntil::M159);
+    scoped_observation_.Observe(remover_.get());
   }
 
   ~SiteDataClearer() override {
@@ -49,32 +64,49 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
     // destroyed should be the "delete this" part in
     // OnBrowsingDataRemoverDone() function, and it invokes the |callback_|. So
     // when this destructor is called, the |callback_| should be null.
-    DCHECK(!callback_);
+    CHECK(!callback_, base::NotFatalUntil::M159);
   }
 
   void RunAndDestroySelfWhenDone() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+    // Keep a baseline count of 1 until all tasks have been scheduled so that
+    // synchronous task completion cannot destroy `this` before the method
+    // finishes, and so that `callback_` and self-deletion still run if no
+    // individual tasks are scheduled.
+    CHECK_EQ(pending_task_count_, 0, base::NotFatalUntil::M159);
+    pending_task_count_ = 1;
+
     // Cookies and channel IDs are scoped to
     // a) eTLD+1 of |origin|'s host if |origin|'s host is a registrable domain
     //    or a subdomain thereof
     // b) |origin|'s host exactly if it is an IP address or an internal hostname
     //    (e.g. "localhost" or "fileserver").
-    // TODO(msramek): What about plugin data?
-    if (clear_cookies_) {
+    if (clear_site_data_types_.Has(ClearSiteDataType::kCookies)) {
       std::string domain = GetDomainAndRegistry(
           origin_,
           net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 
-      if (domain.empty())
+      if (domain.empty()) {
         domain = origin_.host();  // IP address or internal hostname.
+      }
 
-      std::unique_ptr<BrowsingDataFilterBuilder> domain_filter_builder(
+      std::unique_ptr<BrowsingDataFilterBuilder> cookie_filter_builder(
           BrowsingDataFilterBuilder::Create(
               BrowsingDataFilterBuilder::Mode::kDelete));
-      domain_filter_builder->AddRegisterableDomain(domain);
+      cookie_filter_builder->AddRegisterableDomain(domain);
+      cookie_filter_builder->SetCookiePartitionKeyCollection(
+          net::CookiePartitionKeyCollection(cookie_partition_key_));
+      cookie_filter_builder->SetPartitionedCookiesOnly(
+          partitioned_state_allowed_only_);
+      if (storage_partition_config_.has_value()) {
+        cookie_filter_builder->SetStoragePartitionConfig(
+            storage_partition_config_.value());
+      }
 
       pending_task_count_++;
-      uint64_t remove_mask = BrowsingDataRemover::DATA_TYPE_COOKIES;
+      uint64_t remove_mask =
+          BrowsingDataRemover::DATA_TYPE_COOKIES |
+          BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
       if (avoid_closing_connections_) {
         remove_mask |= BrowsingDataRemover::DATA_TYPE_AVOID_CLOSING_CONNECTIONS;
       }
@@ -82,21 +114,63 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
           base::Time(), base::Time::Max(), remove_mask,
           BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
               BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB,
-          std::move(domain_filter_builder), this);
+          std::move(cookie_filter_builder), this);
+    }
+
+    // Storage buckets
+    if (!storage_buckets_to_remove_.empty()) {
+      pending_task_count_++;
+
+      // For storage buckets, no mask is being passed per se. Therefore, when
+      // the storage buckets are successfully removed, the `failed_data_types`
+      // arg should be set to 0 to align with existing behaviour in this class.
+      remover_->RemoveStorageBucketsAndReply(
+          storage_partition_config_,
+          storage_key_.value_or(blink::StorageKey::CreateFirstParty(origin_)),
+          storage_buckets_to_remove_,
+          base::BindOnce(&SiteDataClearer::OnBrowsingDataRemoverDone,
+                         weak_factory_.GetWeakPtr(), 0));
     }
 
     // Delete origin-scoped data.
     uint64_t remove_mask = 0;
-    if (clear_storage_)
+    if (clear_site_data_types_.Has(ClearSiteDataType::kStorage)) {
       remove_mask |= BrowsingDataRemover::DATA_TYPE_DOM_STORAGE;
-    if (clear_cache_)
+      remove_mask |= BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX;
+      remove_mask |= BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      remove_mask |=
+          BrowsingDataRemover::DATA_TYPE_DECLARATIVE_PERFORMANCE_OBSERVER;
+      // Internal data should not be removed by site-initiated deletions.
+      remove_mask &= ~BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX_INTERNAL;
+      // Some deletions should also be more narrow for Clear-Site-Data, to avoid
+      // sites from hostilely interfering with each other where a user-initiated
+      // deletion would be conservative.
+      remove_mask &= ~BrowsingDataRemover::DATA_TYPE_INTEREST_GROUPS_USER_CLEAR;
+    }
+
+    if (clear_site_data_types_.Has(ClearSiteDataType::kCache)) {
       remove_mask |= BrowsingDataRemover::DATA_TYPE_CACHE;
+      remove_mask |= BrowsingDataRemover::DATA_TYPE_LOGICAL_CLEAR;
+    }
+
+    if (clear_site_data_types_.Has(ClearSiteDataType::kPrefetchCache)) {
+      remove_mask |= BrowsingDataRemover::DATA_TYPE_PREFETCH_CACHE;
+    }
+
+    if (clear_site_data_types_.Has(ClearSiteDataType::kPrerenderCache)) {
+      remove_mask |= BrowsingDataRemover::DATA_TYPE_PRERENDER_CACHE;
+    }
 
     if (remove_mask) {
       std::unique_ptr<BrowsingDataFilterBuilder> origin_filter_builder(
           BrowsingDataFilterBuilder::Create(
               BrowsingDataFilterBuilder::Mode::kDelete));
       origin_filter_builder->AddOrigin(origin_);
+      origin_filter_builder->SetStorageKey(storage_key_);
+      if (storage_partition_config_.has_value()) {
+        origin_filter_builder->SetStoragePartitionConfig(
+            storage_partition_config_.value());
+      }
 
       pending_task_count_++;
       remover_->RemoveWithFilterAndReply(
@@ -106,50 +180,82 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
           std::move(origin_filter_builder), this);
     }
 
-    DCHECK_GT(pending_task_count_, 0);
+    // We should clear client hints when we clear cookies and cache as well.
+    // The client hints cache is only read in first-party contexts, so can only
+    // be cleared in them too (see ClearSiteDataHandler::Run for the warning).
+    if (clear_site_data_types_.HasAny({ClearSiteDataType::kCookies,
+                                       ClearSiteDataType::kCache,
+                                       ClearSiteDataType::kClientHints}) &&
+        (!storage_key_ || storage_key_->IsFirstPartyContext())) {
+      pending_task_count_++;
+
+      // For client hints, no mask is being passed per se. Therefore, when
+      // the client hints are successfully removed, the `failed_data_types`
+      // arg should be set to 0 to align with existing behaviour in this class.
+      remover_->ClearClientHintCacheAndReply(
+          origin_, base::BindOnce(&SiteDataClearer::OnBrowsingDataRemoverDone,
+                                  weak_factory_.GetWeakPtr(), 0));
+    }
+
+    OnBrowsingDataRemoverDone(/*failed_data_types=*/0);
   }
 
  private:
   // BrowsingDataRemover::Observer:
   void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override {
-    DCHECK(pending_task_count_);
-    if (--pending_task_count_)
+    CHECK(pending_task_count_, base::NotFatalUntil::M159);
+    if (--pending_task_count_) {
       return;
+    }
 
-    std::move(callback_).Run();
+    base::OnceClosure callback = std::move(callback_);
     delete this;
+    std::move(callback).Run();
   }
 
-  url::Origin origin_;
-  bool clear_cookies_;
-  bool clear_storage_;
-  bool clear_cache_;
-  bool avoid_closing_connections_;
+  const std::optional<StoragePartitionConfig> storage_partition_config_;
+  const url::Origin origin_;
+  const ClearSiteDataTypeSet clear_site_data_types_;
+  const std::set<std::string> storage_buckets_to_remove_;
+  const bool avoid_closing_connections_;
+  const std::optional<net::CookiePartitionKey> cookie_partition_key_;
+  const std::optional<blink::StorageKey> storage_key_;
+  const bool partitioned_state_allowed_only_;
   base::OnceClosure callback_;
-  int pending_task_count_;
-  BrowsingDataRemover* remover_;
+  int pending_task_count_ = 0;
+  raw_ptr<BrowsingDataRemoverImpl> remover_ = nullptr;
   base::ScopedObservation<BrowsingDataRemover, BrowsingDataRemover::Observer>
       scoped_observation_{this};
+  base::WeakPtrFactory<SiteDataClearer> weak_factory_{this};
 };
 
 }  // namespace
 
 void ClearSiteData(
-    const base::RepeatingCallback<BrowserContext*()>& browser_context_getter,
+    base::WeakPtr<BrowserContext> browser_context,
+    std::optional<StoragePartitionConfig> storage_partition_config,
     const url::Origin& origin,
-    bool clear_cookies,
-    bool clear_storage,
-    bool clear_cache,
+    const ClearSiteDataTypeSet clear_site_data_types,
+    const std::set<std::string>& storage_buckets_to_remove,
     bool avoid_closing_connections,
+    std::optional<net::CookiePartitionKey> cookie_partition_key,
+    std::optional<blink::StorageKey> storage_key,
+    bool partitioned_state_allowed_only,
     base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  BrowserContext* browser_context = browser_context_getter.Run();
-  if (!browser_context) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+
+  // It's not possible to clear all storage and also only specific buckets.
+  CHECK(!clear_site_data_types.Has(ClearSiteDataType::kStorage) ||
+            storage_buckets_to_remove.empty(),
+        base::NotFatalUntil::M159);
+  if (!browser_context || browser_context->ShutdownStarted()) {
     std::move(callback).Run();
     return;
   }
-  (new SiteDataClearer(browser_context, origin, clear_cookies, clear_storage,
-                       clear_cache, avoid_closing_connections,
+  (new SiteDataClearer(browser_context.get(), storage_partition_config, origin,
+                       clear_site_data_types, storage_buckets_to_remove,
+                       avoid_closing_connections, cookie_partition_key,
+                       storage_key, partitioned_state_allowed_only,
                        std::move(callback)))
       ->RunAndDestroySelfWhenDone();
 }

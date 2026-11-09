@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,6 @@
 #include <stdint.h>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
@@ -29,6 +27,10 @@ class CrostiniReportingUtilTest : public testing::Test {
  public:
   CrostiniReportingUtilTest() = default;
 
+  CrostiniReportingUtilTest(const CrostiniReportingUtilTest&) = delete;
+  CrostiniReportingUtilTest& operator=(const CrostiniReportingUtilTest&) =
+      delete;
+
  protected:
   void enable_crostini_reporting() {
     profile_.GetPrefs()->SetBoolean(prefs::kReportCrostiniUsageEnabled, true);
@@ -38,9 +40,6 @@ class CrostiniReportingUtilTest : public testing::Test {
   base::SimpleTestClock test_clock_;
   TestingProfile profile_;
   component_updater::MockComponentUpdateService update_service_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CrostiniReportingUtilTest);
 };
 
 TEST_F(CrostiniReportingUtilTest, WriteMetricsForReportingToPrefsIfEnabled) {
@@ -49,7 +48,7 @@ TEST_F(CrostiniReportingUtilTest, WriteMetricsForReportingToPrefsIfEnabled) {
   test_clock_.SetNow(time);
 
   const auto component_info = component_updater::ComponentInfo(
-      "id2", "fingerprint2", u"cros-termina", base::Version("1.33.7"));
+      "id2", "fingerprint2", u"cros-termina", base::Version("1.33.7"), "");
   EXPECT_CALL(update_service_, GetComponents())
       .Times(1)
       .WillOnce(Return(
@@ -127,13 +126,13 @@ TEST_F(CrostiniReportingUtilTest, GetThreeDayWindowStart) {
   base::Time next_window_start;
   EXPECT_TRUE(base::Time::FromString("Sat, 1 Sep 2018 00:00:00 GMT",
                                      &next_window_start));
-  test_clock_.Advance(base::TimeDelta::FromDays(1));
+  test_clock_.Advance(base::Days(1));
   EXPECT_EQ(next_window_start, GetThreeDayWindowStart(test_clock_.Now()));
 
-  test_clock_.Advance(base::TimeDelta::FromDays(1));
+  test_clock_.Advance(base::Days(1));
   EXPECT_EQ(next_window_start, GetThreeDayWindowStart(test_clock_.Now()));
 
-  test_clock_.Advance(base::TimeDelta::FromDays(1));
+  test_clock_.Advance(base::Days(1));
   EXPECT_EQ(next_window_start, GetThreeDayWindowStart(test_clock_.Now()));
 
   // After three consecutive days logged with the same value, we now expect
@@ -141,7 +140,7 @@ TEST_F(CrostiniReportingUtilTest, GetThreeDayWindowStart) {
   base::Time three_days_later;
   EXPECT_TRUE(base::Time::FromString("Tue, 4 Sep 2018 00:00:00 GMT",
                                      &three_days_later));
-  test_clock_.Advance(base::TimeDelta::FromDays(1));
+  test_clock_.Advance(base::Days(1));
   EXPECT_EQ(three_days_later, GetThreeDayWindowStart(test_clock_.Now()));
 }
 
@@ -156,11 +155,11 @@ TEST_F(CrostiniReportingUtilTest, GetTerminaVersion) {
   Mock::VerifyAndClearExpectations(update_service);
 
   const auto component_info_1 = component_updater::ComponentInfo(
-      "id1", "fingerprint1", u"name1", base::Version("1.0"));
+      "id1", "fingerprint1", u"name1", base::Version("1.0"), "");
   const auto component_info_2 = component_updater::ComponentInfo(
-      "id2", "fingerprint2", u"cros-termina", base::Version("1.33.7"));
+      "id2", "fingerprint2", u"cros-termina", base::Version("1.33.7"), "");
   const auto component_info_3 = component_updater::ComponentInfo(
-      "id3", "fingerprint3", u"name1", base::Version("1.0"));
+      "id3", "fingerprint3", u"name1", base::Version("1.0"), "");
   EXPECT_CALL(*update_service, GetComponents())
       .Times(1)
       .WillOnce(Return(std::vector<component_updater::ComponentInfo>(

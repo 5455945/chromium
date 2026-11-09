@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,11 @@ class VariationsCrashKeysChromeOsTest : public ::testing::Test {
     crash_reporter::InitializeCrashKeysForTesting();
   }
 
+  VariationsCrashKeysChromeOsTest(const VariationsCrashKeysChromeOsTest&) =
+      delete;
+  VariationsCrashKeysChromeOsTest& operator=(
+      const VariationsCrashKeysChromeOsTest&) = delete;
+
   ~VariationsCrashKeysChromeOsTest() override {
     SyntheticTrialsActiveGroupIdProvider::GetInstance()->ResetForTesting();
     ClearCrashKeysInstanceForTesting();
@@ -34,9 +39,6 @@ class VariationsCrashKeysChromeOsTest : public ::testing::Test {
 
  protected:
   base::test::TaskEnvironment task_environment_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(VariationsCrashKeysChromeOsTest);
 };
 
 TEST_F(VariationsCrashKeysChromeOsTest, WritesVariationsList) {
@@ -50,7 +52,7 @@ TEST_F(VariationsCrashKeysChromeOsTest, WritesVariationsList) {
       home_path.Append(".variations-list.txt");
 
   // Start with 2 trials, one active and one not
-  base::FieldTrialList::CreateFieldTrial("Trial1", "Group1")->group();
+  base::FieldTrialList::CreateFieldTrial("Trial1", "Group1")->Activate();
   base::FieldTrialList::CreateFieldTrial("Trial2", "Group2");
 
   InitCrashKeys();

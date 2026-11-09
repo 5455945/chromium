@@ -1,21 +1,23 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/media_engagement_service.h"
 
 #include <functional>
+#include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/media/media_engagement_contents_observer.h"
+#include "chrome/browser/media/media_engagement_preloaded_list.h"
 #include "chrome/browser/media/media_engagement_score.h"
 #include "chrome/browser/media/media_engagement_service_factory.h"
-#include "chrome/browser/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -31,7 +33,12 @@ namespace {
 
 // The current schema version of the MEI data. If this value is higher
 // than the stored value, all MEI data will be wiped.
-static const int kSchemaVersion = 4;
+static const int kSchemaVersion = 5;
+
+// The schema version that adds an expiration duration to the media engagement
+// scores.
+// TODO: Remove this once kSchemaVersion is incremented beyond 5.
+static const int kSchemaVersionAddingExpiration = 5;
 
 // Do not change the values of this enum as it is used for UMA.
 enum class MediaEngagementClearReason {
@@ -43,28 +50,6 @@ enum class MediaEngagementClearReason {
   kCount
 };
 
-bool MediaEngagementFilterAdapter(
-    const url::Origin& predicate,
-    const ContentSettingsPattern& primary_pattern,
-    const ContentSettingsPattern& secondary_pattern) {
-  url::Origin origin = url::Origin::Create(GURL(primary_pattern.ToString()));
-  DCHECK(!origin.opaque());
-  return predicate == origin;
-}
-
-bool MediaEngagementTimeFilterAdapter(
-    MediaEngagementService* service,
-    base::Time delete_begin,
-    base::Time delete_end,
-    const ContentSettingsPattern& primary_pattern,
-    const ContentSettingsPattern& secondary_pattern) {
-  url::Origin origin = url::Origin::Create(GURL(primary_pattern.ToString()));
-  DCHECK(!origin.opaque());
-  MediaEngagementScore score = service->CreateEngagementScore(origin);
-  base::Time playback_time = score.last_media_playback_time();
-  return playback_time >= delete_begin && playback_time <= delete_end;
-}
-
 }  // namespace
 
 // static
@@ -74,14 +59,14 @@ bool MediaEngagementService::IsEnabled() {
 
 // static
 MediaEngagementService* MediaEngagementService::Get(Profile* profile) {
-  DCHECK(IsEnabled());
+  CHECK(IsEnabled(), base::NotFatalUntil::M161);
   return MediaEngagementServiceFactory::GetForProfile(profile);
 }
 
 // static
 void MediaEngagementService::CreateWebContentsObserver(
     content::WebContents* web_contents) {
-  DCHECK(IsEnabled());
+  CHECK(IsEnabled(), base::NotFatalUntil::M161);
 
   // Ignore WebContents that are used for NoStatePrefetch.
   if (prerender::ChromeNoStatePrefetchContentsDelegate::FromWebContents(
@@ -109,7 +94,7 @@ MediaEngagementService::MediaEngagementService(Profile* profile)
 MediaEngagementService::MediaEngagementService(Profile* profile,
                                                base::Clock* clock)
     : profile_(profile), clock_(clock) {
-  DCHECK(IsEnabled());
+  CHECK(IsEnabled(), base::NotFatalUntil::M161);
 
   // May be null in tests.
   history::HistoryService* history = HistoryServiceFactory::GetForProfile(
@@ -120,8 +105,21 @@ MediaEngagementService::MediaEngagementService(Profile* profile,
   // If kSchemaVersion is higher than what we have stored we should wipe
   // all Media Engagement data.
   if (GetSchemaVersion() < kSchemaVersion) {
-    HostContentSettingsMapFactory::GetForProfile(profile_)
-        ->ClearSettingsForOneType(ContentSettingsType::MEDIA_ENGAGEMENT);
+    if (GetSchemaVersion() == kSchemaVersionAddingExpiration - 1) {
+      // Schema version 5 just adds an expiration time, so we can update
+      // all records with an expiration time instead of clearing all media
+      // engagement entries when upgrading from version 4 to 5.
+      // TODO: Remove this code once kSchemaVersion is incremented beyond 5.
+      std::vector<MediaEngagementScore> data = GetAllStoredScores();
+      for (MediaEngagementScore& score : data) {
+        // Recommit the score to update it with an expiration time.
+        score.Commit(true);
+      }
+    } else {
+      HostContentSettingsMapFactory::GetForProfile(profile_)
+          ->ClearSettingsForOneType(ContentSettingsType::MEDIA_ENGAGEMENT);
+    }
+
     SetSchemaVersion(kSchemaVersion);
   }
 }
@@ -142,17 +140,22 @@ void MediaEngagementService::ClearDataBetweenTime(
     const base::Time& delete_end) {
   HostContentSettingsMapFactory::GetForProfile(profile_)
       ->ClearSettingsForOneTypeWithPredicate(
-          ContentSettingsType::MEDIA_ENGAGEMENT, base::Time(),
-          base::Time::Max(),
-          base::BindRepeating(&MediaEngagementTimeFilterAdapter, this,
-                              delete_begin, delete_end));
+          ContentSettingsType::MEDIA_ENGAGEMENT,
+          [&](const ContentSettingPatternSource& setting) {
+            url::Origin origin =
+                url::Origin::Create(GURL(setting.primary_pattern.ToString()));
+            CHECK(!origin.opaque(), base::NotFatalUntil::M161);
+            MediaEngagementScore score = CreateEngagementScore(origin);
+            base::Time playback_time = score.last_media_playback_time();
+            return playback_time >= delete_begin && playback_time <= delete_end;
+          });
 }
 
 void MediaEngagementService::Shutdown() {
   history_service_observation_.Reset();
 }
 
-void MediaEngagementService::OnURLsDeleted(
+void MediaEngagementService::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
   if (deletion_info.IsAllHistory()) {
@@ -164,7 +167,7 @@ void MediaEngagementService::OnURLsDeleted(
   // If origins are expired by the history service delete them if they have no
   // more visits.
   if (deletion_info.is_from_expiration()) {
-    DCHECK(history_service);
+    CHECK(history_service, base::NotFatalUntil::M161);
 
     // Build a set of all origins in |deleted_rows|.
     std::set<url::Origin> origins;
@@ -224,10 +227,13 @@ void MediaEngagementService::RemoveOriginsWithNoVisits(
 void MediaEngagementService::Clear(const url::Origin& origin) {
   HostContentSettingsMapFactory::GetForProfile(profile_)
       ->ClearSettingsForOneTypeWithPredicate(
-          ContentSettingsType::MEDIA_ENGAGEMENT, base::Time(),
-          base::Time::Max(),
-          base::BindRepeating(&MediaEngagementFilterAdapter,
-                              std::cref(origin)));
+          ContentSettingsType::MEDIA_ENGAGEMENT,
+          [&](const ContentSettingPatternSource& setting) {
+            url::Origin pattern_origin =
+                url::Origin::Create(GURL(setting.primary_pattern.ToString()));
+            CHECK(!pattern_origin.opaque(), base::NotFatalUntil::M161);
+            return origin == pattern_origin;
+          });
 }
 
 double MediaEngagementService::GetEngagementScore(
@@ -237,7 +243,27 @@ double MediaEngagementService::GetEngagementScore(
 
 bool MediaEngagementService::HasHighEngagement(
     const url::Origin& origin) const {
-  return CreateEngagementScore(origin).high_score();
+  MediaEngagementScore score = CreateEngagementScore(origin);
+  bool has_high_engagement = score.high_score();
+  if (has_high_engagement) {
+    return true;
+  }
+
+  if (base::FeatureList::IsEnabled(media::kMediaEngagementHTTPSOnly)) {
+    CHECK(!has_high_engagement || (origin.scheme() == url::kHttpsScheme),
+          base::NotFatalUntil::M161);
+  }
+
+  if (!base::FeatureList::IsEnabled(media::kPreloadMediaEngagementData)) {
+    return false;
+  }
+
+  if (score.visits() >= MediaEngagementScore::GetScoreMinVisits()) {
+    return false;
+  }
+
+  return MediaEngagementPreloadedList::GetInstance()->CheckOriginIsPresent(
+      origin);
 }
 
 std::map<url::Origin, double> MediaEngagementService::GetScoreMapForTesting()
@@ -306,25 +332,23 @@ bool MediaEngagementService::ShouldRecordEngagement(
 
 std::vector<MediaEngagementScore> MediaEngagementService::GetAllStoredScores()
     const {
-  ContentSettingsForOneType content_settings;
   std::vector<MediaEngagementScore> data;
 
   HostContentSettingsMap* settings =
       HostContentSettingsMapFactory::GetForProfile(profile_);
-  settings->GetSettingsForOneType(ContentSettingsType::MEDIA_ENGAGEMENT,
-                                  &content_settings);
 
   // `GetSettingsForOneType` mixes incognito and non-incognito results in
   // incognito profiles creating duplicates. The incognito results are first so
   // we should discard the results following.
   std::map<url::Origin, const ContentSettingPatternSource*> filtered_results;
 
-  for (const auto& site : content_settings) {
+  ContentSettingsForOneType content_settings =
+      settings->GetSettingsForOneType(ContentSettingsType::MEDIA_ENGAGEMENT);
+  for (const ContentSettingPatternSource& site : content_settings) {
     url::Origin origin =
         url::Origin::Create(GURL(site.primary_pattern.ToString()));
     if (origin.opaque()) {
       NOTREACHED();
-      continue;
     }
 
     if (base::FeatureList::IsEnabled(media::kMediaEngagementHTTPSOnly) &&
@@ -334,7 +358,8 @@ std::vector<MediaEngagementScore> MediaEngagementService::GetAllStoredScores()
 
     const auto& result = filtered_results.find(origin);
     if (result != filtered_results.end()) {
-      DCHECK(result->second->incognito && !site.incognito);
+      CHECK(result->second->incognito && !site.incognito,
+            base::NotFatalUntil::M161);
       continue;
     }
 
@@ -345,12 +370,11 @@ std::vector<MediaEngagementScore> MediaEngagementService::GetAllStoredScores()
     const auto& origin = it.first;
     auto* const site = it.second;
 
-    std::unique_ptr<base::Value> clone =
-        base::Value::ToUniquePtrValue(site->setting_value.Clone());
+    base::Value clone = site->setting_value.Clone();
+    CHECK(clone.is_dict(), base::NotFatalUntil::M161);
 
-    data.push_back(MediaEngagementScore(
-        clock_, origin, base::DictionaryValue::From(std::move(clone)),
-        settings));
+    data.push_back(MediaEngagementScore(clock_, origin,
+                                        std::move(clone).TakeDict(), settings));
   }
 
   return data;

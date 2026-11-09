@@ -1,24 +1,28 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/history/core/test/history_backend_db_base_test.h"
 
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/history/core/browser/download_constants.h"
 #include "components/history/core/browser/download_row.h"
 #include "components/history/core/browser/history_backend.h"
 #include "components/history/core/browser/history_backend_client.h"
 #include "components/history/core/browser/history_constants.h"
+#include "components/history/core/browser/history_database.h"
 #include "components/history/core/browser/history_database_params.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/in_memory_history_backend.h"
 #include "components/history/core/test/database_test_utils.h"
 #include "components/history/core/test/test_history_database.h"
+#include "sql/test/test_helpers.h"
 #include "url/gurl.h"
 
 namespace history {
@@ -30,6 +34,7 @@ class BackendDelegate : public HistoryBackend::Delegate {
       : history_test_(history_test) {}
 
   // HistoryBackend::Delegate implementation.
+  bool CanAddURL(const GURL& url) const override { return true; }
   void NotifyProfileError(sql::InitStatus init_status,
                           const std::string& diagnostics) override {
     history_test_->last_profile_error_ = init_status;
@@ -42,12 +47,12 @@ class BackendDelegate : public HistoryBackend::Delegate {
   }
   void NotifyFaviconsChanged(const std::set<GURL>& page_urls,
                              const GURL& icon_url) override {}
-  void NotifyURLVisited(ui::PageTransition transition,
-                        const URLRow& row,
-                        const RedirectList& redirects,
-                        base::Time visit_time) override {}
+  void NotifyURLVisited(VisitedURLInfo visited_url_info) override {}
   void NotifyURLsModified(const URLRows& changed_urls) override {}
-  void NotifyURLsDeleted(DeletionInfo deletion_info) override {}
+  void NotifyDeletions(DeletionInfo deletion_info) override {}
+  void NotifyVisitedLinksAdded(const HistoryAddPageArgs& args) override {}
+  void NotifyVisitedLinksDeleted(
+      const std::vector<DeletedVisitedLink>& links) override {}
   void NotifyKeywordSearchTermUpdated(const URLRow& row,
                                       KeywordID keyword_id,
                                       const std::u16string& term) override {}
@@ -55,7 +60,7 @@ class BackendDelegate : public HistoryBackend::Delegate {
   void DBLoaded() override {}
 
  private:
-  HistoryBackendDBBaseTest* history_test_;
+  raw_ptr<HistoryBackendDBBaseTest> history_test_;
 };
 
 HistoryBackendDBBaseTest::HistoryBackendDBBaseTest()
@@ -81,39 +86,62 @@ void HistoryBackendDBBaseTest::TearDown() {
   base::RunLoop().RunUntilIdle();
 }
 
-void HistoryBackendDBBaseTest::CreateBackendAndDatabase() {
+bool HistoryBackendDBBaseTest::CreateBackendAndDatabase() {
   backend_ = base::MakeRefCounted<HistoryBackend>(
       std::make_unique<BackendDelegate>(this), nullptr,
-      base::ThreadTaskRunnerHandle::Get());
+      base::SingleThreadTaskRunner::GetCurrentDefault());
   backend_->Init(false,
                  TestHistoryDatabaseParamsForPath(history_dir_));
   db_ = backend_->db_.get();
-  DCHECK(in_mem_backend_) << "Mem backend should have been set by "
-      "HistoryBackend::Init";
-}
-
-void HistoryBackendDBBaseTest::CreateBackendAndDatabaseAllowFail() {
-  backend_ = base::MakeRefCounted<HistoryBackend>(
-      std::make_unique<BackendDelegate>(this), nullptr,
-      base::ThreadTaskRunnerHandle::Get());
-  backend_->Init(false,
-                 TestHistoryDatabaseParamsForPath(history_dir_));
-  db_ = backend_->db_.get();
+  return in_mem_backend_ != nullptr;
 }
 
 void HistoryBackendDBBaseTest::CreateDBVersion(int version) {
+  CreateDBFromSQLFile(base::StringPrintf("history.%d.sql", version));
+}
+
+void HistoryBackendDBBaseTest::CreateDBFromSQLFile(
+    const std::string& filename) {
   base::FilePath data_path;
   ASSERT_TRUE(GetTestDataHistoryDir(&data_path));
-  data_path =
-      data_path.AppendASCII(base::StringPrintf("history.%d.sql", version));
+  data_path = data_path.AppendASCII(filename);
   ASSERT_NO_FATAL_FAILURE(
       ExecuteSQLScript(data_path, history_dir_.Append(kHistoryFilename)));
 }
 
+int HistoryBackendDBBaseTest::GetDatabaseVersion() const {
+  // If the backend is open, read the version directly from it.
+  // Otherwise, open a standalone connection to read the version.
+
+  if (db_) {
+    return db_->GetDatabaseVersionForTesting();
+  }
+  sql::Database db(sql::test::kTestTag);
+  CHECK(db.Open(history_dir_.Append(kHistoryFilename)));
+  return sql::InitializedMetaTable(db).GetVersionNumber();
+}
+
+bool HistoryBackendDBBaseTest::SetDatabaseVersion(int version) const {
+  sql::Database db(sql::test::kTestTag);
+  CHECK(db.Open(history_dir_.Append(kHistoryFilename)));
+  return sql::InitializedMetaTable(db).SetVersionNumber(version);
+}
+
 void HistoryBackendDBBaseTest::DeleteBackend() {
   if (backend_) {
+    // The backend is ref-counted and won't be deleted right away if a database
+    // error queued a `KillHistoryDatabase` task (which holds a reference on the
+    // backend). Thus, releasing the backend pointer isn't enough here, we need
+    // to explicitly wait for the object to be deleted.
+    base::RunLoop loop;
+    backend_->SetOnBackendDestroyTask(
+        base::SingleThreadTaskRunner::GetCurrentDefault(), loop.QuitClosure());
+
     backend_->Closing();
+    db_ = nullptr;
     backend_ = nullptr;
+
+    loop.Run();
   }
 }
 
@@ -127,6 +155,7 @@ bool HistoryBackendDBBaseTest::AddDownload(uint32_t id,
   download.url_chain.push_back(GURL("foo-url"));
   download.referrer_url = GURL("http://referrer.example.com/");
   download.site_url = GURL("http://site-url.example.com");
+  download.embedder_download_data = "embedder_download_data";
   download.tab_url = GURL("http://tab-url.example.com/");
   download.tab_referrer_url = GURL("http://tab-referrer-url.example.com/");
   download.http_method = std::string();
@@ -146,6 +175,7 @@ bool HistoryBackendDBBaseTest::AddDownload(uint32_t id,
   download.transient = true;
   download.by_ext_id = "by_ext_id";
   download.by_ext_name = "by_ext_name";
+  download.by_web_app_id = "by_web_app_id";
   return db_->CreateDownload(download);
 }
 

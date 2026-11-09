@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,7 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -23,22 +22,28 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/network/public/cpp/cross_origin_embedder_policy.h"
+#include "services/network/public/cpp/document_isolation_policy.h"
+#include "services/network/public/mojom/cross_origin_embedder_policy.mojom.h"
+#include "services/network/public/mojom/document_isolation_policy.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/controller_service_worker.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container_type.mojom-forward.h"
-#include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom-forward.h"
-#include "third_party/blink/public/mojom/service_worker/service_worker_provider.mojom.h"
-#include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom-forward.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_worker_client_registry.mojom.h"
-#include "third_party/blink/public/mojom/timing/worker_timing_container.mojom-forward.h"
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom-forward.h"
-#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider_client.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-forward.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider_context.h"
 
 namespace base {
 class SingleThreadTaskRunner;
 }  // namespace base
+
+namespace blink {
+class WebServiceWorkerProvider;
+}  // namespace blink
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -46,10 +51,6 @@ class WeakWrapperSharedURLLoaderFactory;
 }  // namespace network
 
 namespace content {
-
-namespace mojom {
-class URLLoaderFactory;
-}  // namespace mojom
 
 namespace service_worker_provider_context_unittest {
 class ServiceWorkerProviderContextTest;
@@ -60,7 +61,6 @@ FORWARD_DECLARE_TEST(ServiceWorkerProviderContextTest,
 }  // namespace service_worker_provider_context_unittest
 
 class WebServiceWorkerProviderImpl;
-struct ServiceWorkerProviderContextDeleter;
 
 // ServiceWorkerProviderContext stores common state for "providers" for service
 // worker clients (currently WebServiceWorkerProviderImpl and
@@ -68,20 +68,17 @@ struct ServiceWorkerProviderContextDeleter;
 // entity hold strong references to a shared instance of this class.
 //
 // ServiceWorkerProviderContext is also a
-// blink::mojom::ServiceWorkerWorkerClientRegistry. If it's a provider for a
-// document, then it tracks all the dedicated workers created from the document
-// (including nested workers), as dedicated workers don't yet have their own
-// providers. If it's a provider for a shared worker, then it tracks only the
-// shared worker itself.
+// blink::mojom::ServiceWorkerWorkerClientRegistry. It tracks the worker fetch
+// contexts associated with this service worker client so they can update their
+// URL loader factories when its controller changes.
 //
 // Created and destructed on the main thread. Unless otherwise noted, all
 // methods are called on the main thread.
 class CONTENT_EXPORT ServiceWorkerProviderContext
-    : public base::RefCountedThreadSafe<ServiceWorkerProviderContext,
-                                        ServiceWorkerProviderContextDeleter>,
-      public blink::WebServiceWorkerProviderContext,
+    : public blink::WebServiceWorkerProviderContext,
       public blink::mojom::ServiceWorkerContainer,
-      public blink::mojom::ServiceWorkerWorkerClientRegistry {
+      public blink::mojom::ServiceWorkerWorkerClientRegistry,
+      private blink::mojom::ServiceWorkerObject {
  public:
   // |receiver| is connected to the content::ServiceWorkerContainerHost that
   // notifies of changes to the registration's and workers' status.
@@ -102,8 +99,20 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
       blink::mojom::ControllerServiceWorkerInfoPtr controller_info,
       scoped_refptr<network::SharedURLLoaderFactory> fallback_loader_factory);
 
+  ServiceWorkerProviderContext(const ServiceWorkerProviderContext&) = delete;
+  ServiceWorkerProviderContext& operator=(const ServiceWorkerProviderContext&) =
+      delete;
+
   blink::mojom::ServiceWorkerContainerType container_type() const {
     return container_type_;
+  }
+
+  // TODO(crbug.com/324939068): remove the code when the feature launched.
+  bool container_is_blob_url_shared_worker() const override;
+  // This must only be set once during construction in order to be safe to be
+  // called cross-thread.
+  void set_container_is_blob_url_shared_worker(bool is_blob_url) {
+    container_is_blob_url_shared_worker_ = is_blob_url;
   }
 
   // Returns version id of the controller service worker object
@@ -111,7 +120,8 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   int64_t GetControllerVersionId() const;
 
   // Takes the controller service worker object info set by SetController() if
-  // any, otherwise returns nullptr.
+  // any, otherwise returns nullptr. Restores its associated receiver so the new
+  // owner can receive subsequent state notifications.
   blink::mojom::ServiceWorkerObjectInfoPtr TakeController();
 
   // Returns the factory for loading subresources with the controller
@@ -154,14 +164,15 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   // ServiceWorkerClient from the system (thus allowing unregistration/update to
   // occur and ensuring the Clients API doesn't return the client).
   //
-  // TODO(https://crbug.com/931497): Remove this weird partially destroyed
+  // TODO(crbug.com/41441021): Remove this weird partially destroyed
   // state.
   void OnNetworkProviderDestroyed();
 
-  // May be nullptr if OnNetworkProviderDestroyed() has already been called.
-  // Currently this can be called only for clients that are Documents,
-  // see comments of |container_host_|.
-  blink::mojom::ServiceWorkerContainerHost* container_host() const;
+  // May be false if OnNetworkProviderDestroyed() has already been called.
+  // This should only be used by tests. It should only be called from the
+  // window thread or main thread as the value may not be accurate otherwise.
+  // See comments of |container_host_|.
+  bool has_container_host_for_testing() const;
 
   // Called when blink::IdlenessDetector emits its network idle signal. Tells
   // the browser process that this page is quiet soon after page load, as a
@@ -171,16 +182,6 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   // Tells the container host that this context is execution ready:
   // https://html.spec.whatwg.org/multipage/webappapis.html#concept-environment-execution-ready-flag
   void NotifyExecutionReady();
-
-  // Sets up |receiver| to receive resource performance timings for the given
-  // |request_id|. This receiver will be taken later by
-  // TakePendingWorkerTimingReceiver().
-  void AddPendingWorkerTimingReceiver(
-      int request_id,
-      mojo::PendingReceiver<blink::mojom::WorkerTimingContainer> receiver);
-
-  mojo::PendingReceiver<blink::mojom::WorkerTimingContainer>
-  TakePendingWorkerTimingReceiver(int request_id);
 
   // WebServiceWorkerProviderContext implementation.
   void BindServiceWorkerWorkerClientRemote(
@@ -194,20 +195,41 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   blink::CrossVariantMojoRemote<
       blink::mojom::ServiceWorkerContainerHostInterfaceBase>
   CloneRemoteContainerHost() override;
+  // SetController must be called before these functions.
   blink::mojom::ControllerServiceWorkerMode GetControllerServiceWorkerMode()
       const override;
+  blink::mojom::ServiceWorkerFetchHandlerType GetFetchHandlerType()
+      const override;
+  blink::mojom::ServiceWorkerFetchHandlerBypassOption
+  GetFetchHandlerBypassOption() const override;
   const blink::WebString client_id() const override;
 
-  std::string subresource_filter() const { return subresource_filter_; }
-  void SetSubresourceFilter(const std::string& filter) {
-    CountFeature(blink::mojom::WebFeature::kServiceWorkerSubresourceFilter);
-    subresource_filter_ = filter;
-  }
+  std::unique_ptr<blink::WebServiceWorkerProvider> CreateServiceWorkerProvider()
+      override;
+
+  void Destroy() const override;
+
+  void Register(
+      const GURL& script_url,
+      blink::mojom::ServiceWorkerRegistrationOptionsPtr options,
+      blink::mojom::FetchClientSettingsObjectPtr fetch_client_settings,
+      blink::mojom::ServiceWorkerContainerHost::RegisterCallback callback);
+
+  void GetRegistration(
+      const GURL& document_url,
+      blink::mojom::ServiceWorkerContainerHost::GetRegistrationCallback
+          callback);
+
+  void GetRegistrations(
+      blink::mojom::ServiceWorkerContainerHost::GetRegistrationsCallback
+          callback);
+
+  void GetRegistrationForReady(
+      blink::mojom::ServiceWorkerContainerHost::GetRegistrationForReadyCallback
+          callback);
 
  private:
   friend class base::DeleteHelper<ServiceWorkerProviderContext>;
-  friend class base::RefCountedThreadSafe<ServiceWorkerProviderContext,
-                                          ServiceWorkerProviderContextDeleter>;
   friend class service_worker_provider_context_unittest::
       ServiceWorkerProviderContextTest;
   friend struct ServiceWorkerProviderContextDeleter;
@@ -217,9 +239,6 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   FRIEND_TEST_ALL_PREFIXES(service_worker_provider_context_unittest::
                                ServiceWorkerProviderContextTest,
                            ControllerWithoutFetchHandler);
-  using WorkerTimingContainerReceiverMap =
-      std::map<int /* request_id */,
-               mojo::PendingReceiver<blink::mojom::WorkerTimingContainer>>;
 
   ~ServiceWorkerProviderContext() override;
 
@@ -237,15 +256,31 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
                            blink::TransferableMessage message) override;
   void CountFeature(blink::mojom::WebFeature feature) override;
 
+  // Implementation of blink::mojom::ServiceWorkerObject while holding the
+  // controller's object info for a future WebServiceWorkerProviderImpl.
+  void StateChanged(blink::mojom::ServiceWorkerState state) override;
+
   // A convenient utility method to tell if a subresource loader factory
   // can be created for this context.
   bool CanCreateSubresourceLoaderFactory() const;
 
   // Returns URLLoaderFactory for loading subresources with the controller
-  // ServiceWorker, or nullptr if no controller is attached.
+  // ServiceWorker, or nullptr.
+  //
+  // If the router evaluation is needed, this function always returns
+  // URLLoaderFactory for subresources. the URLLoaderFactory can be created
+  // without the controller ServiceWorker if |remote_controller_| is null, that
+  // happens when there is no fetch handler. This behavior is needed because the
+  // router evaluation is done in the ServiceWorkerSubresourceLoader.
+  //
+  // If the router evaluation is not needed, this function returns nullptr if no
+  // controller is attached (e.g. no fetch handler), or the fetch handler
+  // is no-op.
   network::mojom::URLLoaderFactory* GetSubresourceLoaderFactoryInternal();
 
   const blink::mojom::ServiceWorkerContainerType container_type_;
+  // TODO(crbug.com/324939068): remove the flag when the feature launched.
+  bool container_is_blob_url_shared_worker_ = false;
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner_;
 
   // This keeps the connection to the content::ServiceWorkerContainerHost in the
@@ -266,8 +301,14 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   mojo::AssociatedRemote<blink::mojom::ServiceWorkerContainerHost>
       container_host_;
 
-  // |controller_| will be set by SetController() and taken by TakeController().
+  // Set by SetController(). Move out only via TakeController(), which unbinds
+  // controller_receiver_ back into the object info. A direct move would leave
+  // the state-change receiver bound here instead of transferring it to Blink.
   blink::mojom::ServiceWorkerObjectInfoPtr controller_;
+  // An unbound associated receiver would block subsequent container messages.
+  // Keep the cached state current until the endpoint is handed to Blink.
+  mojo::AssociatedReceiver<blink::mojom::ServiceWorkerObject>
+      controller_receiver_{this};
   // Keeps version id of the current controller service worker object.
   int64_t controller_version_id_ = blink::mojom::kInvalidServiceWorkerVersionId;
 
@@ -293,8 +334,30 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
   blink::mojom::ControllerServiceWorkerMode controller_mode_ =
       blink::mojom::ControllerServiceWorkerMode::kNoController;
 
+  blink::mojom::ServiceWorkerFetchHandlerType fetch_handler_type_ =
+      blink::mojom::ServiceWorkerFetchHandlerType::kNoHandler;
+  bool need_router_evaluate_ = false;
+
+  blink::mojom::ServiceWorkerFetchHandlerBypassOption
+      fetch_handler_bypass_option_ =
+          blink::mojom::ServiceWorkerFetchHandlerBypassOption::kDefault;
+
+  std::optional<std::string> sha256_script_checksum_;
+
+  std::optional<blink::ServiceWorkerRouterRules> router_rules_;
+  std::optional<blink::EmbeddedWorkerStatus> initial_running_status_;
+  mojo::PendingRemote<blink::mojom::CacheStorage> remote_cache_storage_;
+  mojo::PendingReceiver<blink::mojom::ServiceWorkerRunningStatusCallback>
+      running_status_receiver_;
+
   // Tracks feature usage for UseCounter.
   std::set<blink::mojom::WebFeature> used_features_;
+  network::CrossOriginEmbedderPolicy cross_origin_embedder_policy_;
+  mojo::Remote<network::mojom::CrossOriginEmbedderPolicyReporter>
+      cross_origin_embedder_policy_reporter_;
+  network::DocumentIsolationPolicy document_isolation_policy_;
+  mojo::Remote<network::mojom::DocumentIsolationPolicyReporter>
+      document_isolation_policy_reporter_;
 
   // Corresponds to this context's ServiceWorkerContainer. May be null when not
   // yet created, when already destroyed, or when this client is not a Document
@@ -333,17 +396,7 @@ class CONTENT_EXPORT ServiceWorkerProviderContext
       controller_connector_;
 
   bool sent_execution_ready_ = false;
-
-  std::string subresource_filter_;
-
-  // Contains pending receivers whose corresponding requests are still
-  // in-flight. The pending receivers are taken by
-  // TakePendingWorkerTimingReceiver() when the request is completed.
-  WorkerTimingContainerReceiverMap worker_timing_container_receivers_;
-
-  base::WeakPtrFactory<ServiceWorkerProviderContext> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerProviderContext);
+  base::WeakPtrFactory<ServiceWorkerProviderContext> weak_ptr_factory_{this};
 };
 
 struct ServiceWorkerProviderContextDeleter {

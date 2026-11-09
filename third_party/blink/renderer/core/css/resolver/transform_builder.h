@@ -31,8 +31,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_RESOLVER_TRANSFORM_BUILDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_RESOLVER_TRANSFORM_BUILDER_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/transforms/transform_operations.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -44,7 +44,9 @@ class TransformBuilder {
   STATIC_ONLY(TransformBuilder);
 
  public:
-  static bool HasRelativeLengths(const CSSValueList&);
+  // Returns true if all the values are known numbers and do not rely on
+  // resolving e.g. relative lengths or sibling-index().
+  static bool IsResolvableAtParseTime(const CSSValueList&);
   static TransformOperations CreateTransformOperations(
       const CSSValue& in_value,
       const CSSToLengthConversionData&);

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@ chrome.runtime.onInstalled.addListener(function(details) {
       {title: 'Context Menu #1', id: 'multi5_1'}, function() {
         if (!chrome.runtime.lastError) {
           chrome.contextMenus.create(
-              {title: 'Context Menu #2', id: 'multi5_2'},
-              function() {
+              {title: 'Context Menu #2', id: 'multi5_2'}, function() {
                 if (!chrome.runtime.lastError) {
                   chrome.test.sendMessage('created items');
                 }
               });
         }
-  });
+      });
 });

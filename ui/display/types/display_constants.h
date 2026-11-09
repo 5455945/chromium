@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,28 @@
 #define UI_DISPLAY_TYPES_DISPLAY_CONSTANTS_H_
 
 #include <stdint.h>
-#include <array>
 
-#include "ui/gfx/geometry/size_conversions.h"
+#include <array>
+#include <string>
+#include <utility>
+
+#include "base/containers/enum_set.h"
+#include "ui/display/types/display_types_export.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace display {
+
+// 1 inch in mm.
+constexpr float kInchInMm = 25.4f;
+
+// Minimum display size in DIP for landscape and portrait orientations.
+inline constexpr gfx::Size kMinLandscapeDisplaySize{320, 200};
+inline constexpr gfx::Size kMinPortraitDisplaySize{200, 320};
+
+constexpr gfx::Size GetMinimumDisplaySize(const gfx::Size& size) {
+  return size.width() >= size.height() ? kMinLandscapeDisplaySize
+                                       : kMinPortraitDisplaySize;
+}
 
 // Display ID that represents an invalid display. Often used as a default value
 // before display IDs are known.
@@ -18,13 +35,36 @@ constexpr int64_t kInvalidDisplayId = -1;
 
 // Display ID that represents a valid display to be used when there's no actual
 // display connected.
-constexpr int64_t kDefaultDisplayId = 0xFF;
+constexpr int64_t kDefaultDisplayId = -2;
 
 // Display ID for a virtual display assigned to a unified desktop.
 constexpr int64_t kUnifiedDisplayId = -10;
 
 // Invalid year of manufacture of the display.
 constexpr int32_t kInvalidYearOfManufacture = -1;
+
+// Used to determine if the two scale factor values are considered the same.
+// TODO(crbug.com/40255259): Remove this once the scale factor precision
+// issue is fixed for ARC.
+constexpr float kDeviceScaleFactorErrorTolerance = 0.01f;
+
+// The minimum HDR headroom for an HDR capable display. On macOS, when a
+// display's brightness is set to maximum, it can report that there is no
+// HDR headroom via maximumExtendedDynamicRangeColorComponentValue being 1.
+// On Windows, when the SDR slider is at its maximum, it is possible for the
+// reported SDR white level to be brighter than the maximum brightness of the
+// display. These situations can create appearance that a display is rapidly
+// fluctuating between being HDR capable and HDR incapable. To avoid this
+// confusion, set this as the minimum maximum relative luminance for HDR
+// capable displays.
+constexpr float kMinHDRCapableMaxLuminanceRelative = 1.0625;
+// Set SDR content to 75% of display brightness so SDR colors look good
+// and there is no perceived brightness change during SDR-HDR.
+constexpr float kSDRJoint = 0.75;
+
+// Set the HDR level multiplier to 4x so that the bright areas of the videos
+// are not overexposed, and maintain local contrast.
+constexpr float kHDRLevel = 4.0;
 
 // Used to describe the state of a multi-display configuration.
 enum MultipleDisplayState {
@@ -87,22 +127,67 @@ enum PanelOrientation {
 enum PrivacyScreenState {
   kDisabled = 0,
   kEnabled = 1,
-  kNotSupported = 2,
+  // |kDisabledLocked| and |kEnabledLocked| are states in which the hardware is
+  // force-disabled or forced-enabled by a physical external switch. When
+  // privacy screen is set to one of these states, an attempt to set it to a
+  // non-conforming state (e.g. enable it when it's Disabled-locked) should
+  // fail.
+  kDisabledLocked = 2,
+  kEnabledLocked = 3,
+  kNotSupported = 4,
+  kPrivacyScreenLegacyStateLast = kDisabledLocked,
   kPrivacyScreenStateLast = kNotSupported,
 };
 
+// Whether a configuration should be seamless or full. Full configuration may
+// result in visible artifacts such as blanking to achieve the specified
+// configuration. Seamless configuration requests will fail if the system cannot
+// achieve it without visible artifacts.
+enum ConfigurationType {
+  kConfigurationTypeFull,
+  kConfigurationTypeSeamless,
+};
+
+// A flag to allow ui/display and ozone to adjust the behavior of display
+// configurations.
+enum class ModesetFlag {
+  // At least one of kTestModeset and kCommitModeset must be set.
+  kTestModeset,
+  kCommitModeset,
+  // When |kSeamlessModeset| is set, the commit (or test) will succeed only if
+  // the submitted configuration can be completed without visual artifacts such
+  // as blanking.
+  kSeamlessModeset,
+
+  kMinValue = kTestModeset,
+  kMaxValue = kSeamlessModeset,
+};
+
+// A bitmask of flags as defined in display::ModesetFlag.
+using ModesetFlags = base::EnumSet<ModesetFlag>;
+
+// Enum of possible states for variable refresh rates pertaining to a display.
+enum class VariableRefreshRateState {
+  kVrrDisabled = 0,
+  kVrrEnabled = 1,
+  kVrrNotCapable = 2,
+  kVrrLast = kVrrNotCapable,
+};
+
 // Defines the float values closest to repeating decimal scale factors.
-constexpr float kDsf_1_777 = 1.77777779102325439453125f;
-constexpr float kDsf_2_252 = 2.2522523403167724609375f;
-constexpr float kDsf_2_666 = 2.6666667461395263671875f;
-constexpr float kDsf_1_8 = 1.80000007152557373046875f;
-constexpr char kDsfStr_1_777[] = "1.77777779102325439453125";
-constexpr char kDsfStr_2_252[] = "2.2522523403167724609375";
-constexpr char kDsfStr_2_666[] = "2.6666667461395263671875";
-constexpr char kDsfStr_1_8[] = "1.80000007152557373046875";
+inline constexpr float kDsf_1_333 = 1.33333337306976318359375f;
+inline constexpr float kDsf_1_777 = 1.77777779102325439453125f;
+inline constexpr float kDsf_2_252 = 2.2522523403167724609375f;
+inline constexpr float kDsf_2_666 = 2.6666667461395263671875f;
+inline constexpr float kDsf_1_8 = 1.80000007152557373046875f;
+inline constexpr char kDsfStr_1_333[] = "1.33333337306976318359375";
+inline constexpr char kDsfStr_1_777[] = "1.77777779102325439453125";
+inline constexpr char kDsfStr_2_252[] = "2.2522523403167724609375";
+inline constexpr char kDsfStr_2_666[] = "2.6666667461395263671875";
+inline constexpr char kDsfStr_1_8[] = "1.80000007152557373046875";
 
 // The total number of display zoom factors to enumerate.
-constexpr int kNumOfZoomFactors = 9;
+inline constexpr int kNumOfZoomFactors = 9;
 
 // A pair representing the list of zoom values for a given minimum display
 // resolution width.
@@ -117,7 +202,7 @@ using ZoomListBucketDsf =
 // find its associated list of zoom values by simply finding the last bucket
 // with a width less than the given resolution width.
 // Ex. A resolution width of 1024, we will use the bucket with the width of 960.
-constexpr std::array<ZoomListBucket, 8> kZoomListBuckets{{
+inline constexpr std::array<ZoomListBucket, 8> kZoomListBuckets{{
     {0, {0.60f, 0.65f, 0.70f, 0.75f, 0.80f, 0.85f, 0.90f, 0.95f, 1.f}},
     {720, {0.70f, 0.75f, 0.80f, 0.85f, 0.90f, 0.95f, 1.f, 1.05f, 1.10f}},
     {800, {0.75f, 0.80f, 0.85f, 0.90f, 0.95f, 1.f, 1.05f, 1.10f, 1.15f}},
@@ -132,8 +217,11 @@ constexpr std::array<ZoomListBucket, 8> kZoomListBuckets{{
 // zoom values that includes a zoom level to go to the native resolution of the
 // display. Ensure that the list of DSFs are in sync with the list of default
 // device scale factors in display_change_observer.cc.
-constexpr std::array<ZoomListBucketDsf, 8> kZoomListBucketsForDsf{{
+inline constexpr std::array<ZoomListBucketDsf, 10> kZoomListBucketsForDsf{{
+    {1.2f, {0.7f, 0.8f, 1.0f / 1.2f, 0.9f, 0.95f, 1.0f, 1.1f, 1.2f, 1.3f}},
     {1.25f, {0.7f, 1.f / 1.25f, 0.85f, 0.9f, 0.95f, 1.f, 1.1f, 1.2f, 1.3f}},
+    {kDsf_1_333,
+     {0.7f, 1.f / kDsf_1_333, 0.85f, 0.9f, 0.95f, 1.f, 1.1f, 1.2f, 1.3f}},
     {1.6f, {1.f / 1.6f, 0.7f, 0.75f, 0.8f, 0.85f, 0.9f, 1.f, 1.15f, 1.3f}},
     {kDsf_1_777,
      {1.f / kDsf_1_777, 0.65f, 0.75f, 0.8f, 0.9f, 1.f, 1.1f, 1.2f, 1.3f}},
@@ -148,25 +236,31 @@ constexpr std::array<ZoomListBucketDsf, 8> kZoomListBucketsForDsf{{
 }};
 
 // Valid Displays
-constexpr gfx::Size kWXGA_768{1366, 768};
-constexpr gfx::Size kWXGA_800{1280, 800};
-constexpr gfx::Size kHD_PLUS{1600, 900};
-constexpr gfx::Size kFHD{1920, 1080};
-constexpr gfx::Size kSHD{1280, 720};
-constexpr gfx::Size kWUXGA{1920, 1200};
+inline constexpr gfx::Size kWXGA_768{1366, 768};
+inline constexpr gfx::Size kWXGA_800{1280, 800};
+inline constexpr gfx::Size kHD_PLUS{1600, 900};
+inline constexpr gfx::Size kFHD{1920, 1080};
+inline constexpr gfx::Size kSHD{1280, 720};
+inline constexpr gfx::Size kWUXGA{1920, 1200};
+inline constexpr gfx::Size kFHD_1280{1920, 1280};
+inline constexpr gfx::Size k2K{2256, 1504};
+inline constexpr gfx::Size k4K_UHD{3840, 2160};
+inline constexpr gfx::Size k4K_WUHD(5120, 2160);
+inline constexpr gfx::Size k8k_UHD(7680, 4320);
+inline constexpr gfx::Size kQHD{2560, 1440};
+inline constexpr gfx::Size kWQXGA{2560, 1600};
+
 // Dru
-constexpr gfx::Size kQXGA_P{1536, 2048};
-constexpr gfx::Size kQHD{2560, 1440};
+inline constexpr gfx::Size kQXGA_P{1536, 2048};
+
 // Chell
-constexpr gfx::Size kQHD_PLUS{3200, 1800};
-constexpr gfx::Size k4K_UHD{3840, 2160};
+inline constexpr gfx::Size kQHD_PLUS{3200, 1800};
 
 // Chromebook special panels
-constexpr gfx::Size kLux{2160, 1440};
-constexpr gfx::Size kAkaliQHD{2256, 1504};
-constexpr gfx::Size kLink{2560, 1700};
-constexpr gfx::Size kEveDisplay{2400, 1600};
-constexpr gfx::Size kNocturne{3000, 2000};
+inline constexpr gfx::Size kLux{2160, 1440};
+inline constexpr gfx::Size kLink{2560, 1700};
+inline constexpr gfx::Size kEveDisplay{2400, 1600};
+inline constexpr gfx::Size kNocturne{3000, 2000};
 
 enum SizeErrorCheckType {
   kExact,    // Exact match.
@@ -174,14 +268,20 @@ enum SizeErrorCheckType {
   kSkip,     // Skip testing the error.
 };
 
-constexpr struct Data {
+struct DisplayData {
   const float diagonal_size;
   const gfx::Size resolution;
   const float expected_dsf;
   const gfx::Size expected_dp_size;
   const bool bad_range;
   const SizeErrorCheckType screenshot_size_error;
-} display_configs[] = {
+};
+
+// List of known ChromeOS display. Any new [diagonal size, resolution] entries
+// should also be added to the display list used for the ui.DisplayValidation
+// tast test.
+// https://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform/tast-tests/src/go.chromium.org/tast-tests/cros/local/bundles/cros/ui/displayvalidation/utils.go
+inline constexpr DisplayData lcd_display_configs[] = {
     // clang-format off
     // inch, resolution, DSF,        size in DP,  Bad range, size error
     {9.7f,   kQXGA_P,    2.0f,       {768, 1024}, false,     kExact},
@@ -202,11 +302,16 @@ constexpr struct Data {
     {13.1f,  k4K_UHD,    kDsf_2_666, {1440, 810}, false,     kExact},
     {13.3f,  kWXGA_768,  1.f,        kWXGA_768,   true,      kExact},
     {13.3f,  kFHD,       1.25f,      {1536, 864}, true,      kExact},
+    {13.3f,  k2K,        1.6f,       {1410, 940}, false,     kExact},
     {13.3f,  k4K_UHD,    kDsf_2_666, {1440, 810}, false,     kExact},
     {13.5f,  kFHD,       1.25f,      {1536, 864}, false,     kExact},
+    {13.5f,  kFHD_1280,  1.25f,      {1536, 1024},true,      kExact},
+    {13.5f,  k2K,        1.6f,       {1410, 940}, false,     kExact},
+    {13.6f,  k2K,        1.6f,       {1410, 940}, false,     kExact},
     {14.f,   kWXGA_768,  1.f,        kWXGA_768,   true,      kExact},
     {14.f,   kFHD,       1.25f,      {1536, 864}, false,     kExact},
     {14.f,   kWUXGA,     1.25f,      {1536, 960}, false,     kExact},
+    {14.f,   kWQXGA,     1.6f,       {1600, 1000},true,      kExact},
     {14.f,   k4K_UHD,    kDsf_2_666, {1440, 810}, false,     kExact},
     {15.6f,  kWXGA_768,  1.f,        kWXGA_768,   true,      kExact},
     {15.6f,  kWUXGA,     1.f,        kWUXGA,      false,     kExact},
@@ -224,16 +329,22 @@ constexpr struct Data {
     {12.85f, kLink,      2.0f,       {1280, 850}, false,     kExact},
     {12.3f,  kNocturne,  kDsf_2_252, {1332, 888}, false,     kEpsilon},
     {13.3f,  kQHD_PLUS,  2.f,        {1600, 900}, false,     kExact},
-    {13.3f,  kAkaliQHD,  1.6f,       {1410, 940}, false,     kExact},
-    {13.6f,  kAkaliQHD,  1.6f,       {1410, 940}, false,     kExact},
 
     // Chromebase
     {19.5,   kHD_PLUS,   1.f,        kHD_PLUS,    true,      kExact},
     {21.5f,  kFHD,       1.f,        kFHD,        true,      kExact},
     {23.8f,  kFHD,       1.f,        kFHD,        true,      kExact},
-
+};
+inline constexpr DisplayData oled_display_configs[] = {
+    {13.3f, k4K_UHD,     kDsf_2_666, {1440, 810}, false,     kExact},
+    {14.f,   kWUXGA,     kDsf_1_333, {1440, 900}, false,     kExact},
+    {15.6f,  kFHD,       1.25,       {1536, 864}, false,     kExact},
     // clang-format on
 };
+
+// Converts the display connection type from enum to string.
+DISPLAY_TYPES_EXPORT std::string DisplayConnectionTypeString(
+    DisplayConnectionType type);
 
 }  // namespace display
 

@@ -22,6 +22,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#import "base/no_destructor.h"
 #import "third_party/blink/public/common/sandbox_support/sandbox_support_mac.h"
 #import "third_party/blink/public/platform/mac/web_sandbox_support.h"
 #import "third_party/blink/public/platform/platform.h"
@@ -29,22 +30,31 @@
 #import "third_party/blink/renderer/core/style/computed_style.h"
 #import "third_party/blink/renderer/platform/web_test_support.h"
 #import "ui/base/ui_base_features.h"
+#import "ui/color/color_provider.h"
 #import "ui/native_theme/native_theme.h"
 
 namespace blink {
 
 namespace {
+
+// The focus ring colors used in web tests for light and dark mode.
+constexpr Color kDefaultFocusRingColorForTestsLight =
+    Color::FromRGBA(0x10, 0x10, 0x10, 0xFF);
+constexpr Color kDefaultFocusRingColorForTestsDark =
+    Color::FromRGBA(0x99, 0xC8, 0xFF, 0xFF);
+
 Color GetSystemColor(MacSystemColorID color_id,
                      mojom::blink::ColorScheme color_scheme) {
   // TODO(almaher): Consider using the mac light and dark high-contrast themes
   // here instead if forced colors mode is enabled.
 
   // In tests, a WebSandboxSupport may not be set up. Just return a dummy
-  // color, in this case, black.
+  // color, in this case opaque black.
   auto* sandbox_support = Platform::Current()->GetSandboxSupport();
   if (!sandbox_support)
-    return Color();
-  return sandbox_support->GetSystemColor(color_id, color_scheme);
+    return Color(0, 0, 0, 255);
+  return Color::FromSkColor(
+      sandbox_support->GetSystemColor(color_id, color_scheme));
 }
 }
 
@@ -72,89 +82,82 @@ Color LayoutThemeMac::PlatformActiveSelectionForegroundColor(
 }
 
 Color LayoutThemeMac::PlatformSpellingMarkerUnderlineColor() const {
-  return Color(251, 45, 29);
+  // Using the same color than WebKit (see
+  // https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm#L167).
+  return Color(255, 59, 48, 191);
 }
 
 Color LayoutThemeMac::PlatformGrammarMarkerUnderlineColor() const {
-  return Color(107, 107, 107);
+  // Using the same color than WebKit (see
+  // https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm#L175).
+  return Color(25, 175, 50, 191);
 }
 
 bool LayoutThemeMac::IsAccentColorCustomized(
     mojom::blink::ColorScheme color_scheme) const {
-  if (@available(macOS 10.14, *)) {
-    static const Color kControlBlueAccentColor =
-        GetSystemColor(MacSystemColorID::kControlAccentBlueColor, color_scheme);
-    if (kControlBlueAccentColor ==
-        GetSystemColor(MacSystemColorID::kControlAccentColor, color_scheme)) {
-      return false;
-    }
-  } else {
-    int user_custom_color = [[NSUserDefaults standardUserDefaults]
-        integerForKey:@"AppleAquaColorVariant"];
-    if (user_custom_color == NSBlueControlTint ||
-        user_custom_color == NSDefaultControlTint) {
-      return false;
-    }
+  static const Color kControlBlueAccentColor =
+      GetSystemColor(MacSystemColorID::kControlAccentBlueColor, color_scheme);
+  if (kControlBlueAccentColor ==
+      GetSystemColor(MacSystemColorID::kControlAccentColor, color_scheme)) {
+    return false;
   }
+
   return true;
 }
 
-Color LayoutThemeMac::GetAccentColor(
+Color LayoutThemeMac::GetSystemAccentColor(
     mojom::blink::ColorScheme color_scheme) const {
-  if (@available(macOS 10.14, *)) {
-    return GetSystemColor(MacSystemColorID::kControlAccentColor, color_scheme);
-  } else {
-    return [[NSUserDefaults standardUserDefaults]
-        integerForKey:@"AppleAquaColorVariant"];
-  }
+  return GetSystemColor(MacSystemColorID::kControlAccentColor, color_scheme);
 }
 
-Color LayoutThemeMac::GetCustomFocusRingColor(
-    mojom::blink::ColorScheme color_scheme) const {
-  return color_scheme == mojom::blink::ColorScheme::kDark
-             ? SkColorSetRGB(0x99, 0xC8, 0xFF)
-             : LayoutTheme::GetCustomFocusRingColor();
+Color LayoutThemeMac::SystemHighlightFromColorProvider(
+    mojom::blink::ColorScheme color_scheme,
+    const ui::ColorProvider* color_provider) const {
+  SkColor system_highlight_color =
+      color_provider->GetColor(ui::kColorCssSystemHighlight);
+  Color color = Color::FromSkColor(system_highlight_color);
+  // BlendWithWhite() darkens Mac system colors too much.
+  // Apply .8 (204/255) alpha instead, same as Safari.
+  if (color_scheme == mojom::blink::ColorScheme::kDark) {
+    return Color(color.Red(), color.Green(), color.Blue(), 204);
+  }
+
+  return color.BlendWithWhite();
 }
 
 Color LayoutThemeMac::FocusRingColor(
     mojom::blink::ColorScheme color_scheme) const {
-  static const RGBA32 kDefaultFocusRingColorLight = 0xFF101010;
-  static const RGBA32 kDefaultFocusRingColorDark = 0xFF99C8FF;
-  if (UsesTestModeFocusRingColor()) {
-    return HasCustomFocusRingColor()
-               ? GetCustomFocusRingColor(color_scheme)
-               : color_scheme == mojom::blink::ColorScheme::kDark
-                     ? kDefaultFocusRingColorDark
-                     : kDefaultFocusRingColorLight;
+  if (WebTestSupport::IsRunningWebTest()) {
+    return CustomFocusRingColor().value_or(
+        color_scheme == mojom::blink::ColorScheme::kDark
+            ? kDefaultFocusRingColorForTestsDark
+            : kDefaultFocusRingColorForTestsLight);
   }
 
-  if (ui::NativeTheme::GetInstanceForWeb()->UserHasContrastPreference()) {
+  if (ui::NativeTheme::GetInstanceForWeb()->preferred_contrast() ==
+      ui::NativeTheme::PreferredContrast::kMore) {
     // When high contrast is enabled, #101010 should be used.
-    return Color(0xFF101010);
+    return Color::FromRGBA(0x10, 0x10, 0x10, 0xFF);
   }
 
-  SkColor keyboard_focus_indicator = SkColor(
-      GetSystemColor(MacSystemColorID::kKeyboardFocusIndicator, color_scheme));
-  Color focus_ring =
-      ui::NativeTheme::GetInstanceForWeb()->FocusRingColorForBaseColor(
-          keyboard_focus_indicator);
+  if (std::optional<Color> custom_color = CustomFocusRingColor()) {
+    return color_scheme == mojom::blink::ColorScheme::kDark
+               ? Color::FromRGB(0x99, 0xC8, 0xFF)
+               : *custom_color;
+  }
 
-  if (!HasCustomFocusRingColor())
-    return focus_ring;
-  // Use the custom focus ring color when the system accent color wasn't
-  // changed.
-  if (!IsAccentColorCustomized(color_scheme))
-    return GetCustomFocusRingColor(color_scheme);
+  Color focus_ring =
+      Color::FromSkColor(color_scheme == mojom::blink::ColorScheme::kDark
+                             ? SkColorSetRGB(0x1A, 0xA9, 0xFF)
+                             : SkColorSetRGB(0x00, 0x67, 0xF4));
+  focus_ring.SetAlpha(166 / 255.0f);
   return focus_ring;
 }
 
-bool LayoutThemeMac::UsesTestModeFocusRingColor() const {
-  return WebTestSupport::IsRunningWebTest();
-}
-
 LayoutTheme& LayoutTheme::NativeTheme() {
-  DEFINE_STATIC_REF(LayoutTheme, layout_theme, (LayoutThemeMac::Create()));
-  return *layout_theme;
+  static const base::NoDestructor<scoped_refptr<LayoutTheme>> layout_theme(
+      LayoutThemeMac::Create());
+  return **layout_theme;
 }
 
 }  // namespace blink

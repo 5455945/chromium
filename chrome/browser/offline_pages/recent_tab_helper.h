@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,20 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/offline_pages/core/offline_page_model.h"
 #include "components/offline_pages/core/snapshot_controller.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
-#include "url/gurl.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace content {
 class NavigationHandle;
 }
+
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
 
 namespace offline_pages {
 
@@ -25,37 +29,25 @@ namespace offline_pages {
 // loaded to proper degree and then makes a snapshot of the page. Removes the
 // oldest snapshot in the 'ring buffer'. As a result, there is always up to N
 // snapshots of recent pages on the device.
-class RecentTabHelper
-    : public content::WebContentsObserver,
-      public content::WebContentsUserData<RecentTabHelper>,
-      public SnapshotController::Client {
+class RecentTabHelper : public content::WebContentsObserver,
+                        public SnapshotController::Client {
  public:
-  // Possible values to be reported to the IsSavingSamePage histogram. Reflects
-  // the contents of the respective histogram enum and must be kept in sync with
-  // it.
-  enum class IsSavingSamePageEnum {
-    // The snapshot is for a new page.
-    kNewPage = 0,
-    // The snapshot is for a page that has already been saved but a better
-    // expected quality.
-    kSamePageBetterQuality = 1,
-    // The snapshot is for a page that has already been saved at the same
-    // expected quality.
-    kSamePageSameQuality = 2,
-    // Note: Always leave this item last. Update if the actual last item
-    // changes.
-    kMaxValue = kSamePageSameQuality,
-  };
+  DECLARE_USER_DATA(RecentTabHelper);
+
+  RecentTabHelper(tabs::TabInterface& tab, content::WebContents* web_contents);
+
+  RecentTabHelper(const RecentTabHelper&) = delete;
+  RecentTabHelper& operator=(const RecentTabHelper&) = delete;
 
   ~RecentTabHelper() override;
+
+  static RecentTabHelper* From(tabs::TabInterface* tab);
 
   // content::WebContentsObserver
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void DocumentAvailableInMainFrame(
-      content::RenderFrameHost* render_frame_host) override;
-  void DocumentOnLoadCompletedInMainFrame(
-      content::RenderFrameHost* render_frame_host) override;
+  void PrimaryMainDocumentElementAvailable() override;
+  void DocumentOnLoadCompletedInPrimaryMainFrame() override;
   void WebContentsDestroyed() override;
   void OnVisibilityChanged(content::Visibility visibility) override;
 
@@ -70,7 +62,7 @@ class RecentTabHelper
   // Default implementation lives in .cc file, while tests provide an override.
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
     virtual std::unique_ptr<OfflinePageArchiver> CreatePageArchiver(
         content::WebContents* web_contents) = 0;
     // There is no expectations that tab_id is always present.
@@ -109,9 +101,6 @@ class RecentTabHelper
  private:
   struct SnapshotProgressInfo;
 
-  explicit RecentTabHelper(content::WebContents* web_contents);
-  friend class content::WebContentsUserData<RecentTabHelper>;
-
   void WebContentsWasHidden();
   void WebContentsWasShown();
 
@@ -134,7 +123,7 @@ class RecentTabHelper
 
   // Page model is a service, no ownership. Can be null - for example, in
   // case when tab is in incognito profile.
-  OfflinePageModel* page_model_ = nullptr;
+  raw_ptr<OfflinePageModel> page_model_ = nullptr;
 
   // If false, never make snapshots off the attached WebContents.
   // Not page-specific.
@@ -182,11 +171,9 @@ class RecentTabHelper
   // process of being closed.
   bool tab_is_closing_ = false;
 
+  ui::ScopedUnownedUserData<RecentTabHelper> scoped_unowned_user_data_;
+
   base::WeakPtrFactory<RecentTabHelper> weak_ptr_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(RecentTabHelper);
 };
 
 }  // namespace offline_pages

@@ -1,71 +1,102 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_TEST_MOCK_PERMISSION_REQUEST_H_
 #define COMPONENTS_PERMISSIONS_TEST_MOCK_PERMISSION_REQUEST_H_
 
-#include <string>
+#include <vector>
 
-#include "build/build_config.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "components/permissions/permission_request.h"
 #include "url/gurl.h"
 
 namespace permissions {
 enum class RequestType;
+struct PermissionPromptDecision;
 
 class MockPermissionRequest : public PermissionRequest {
  public:
-  MockPermissionRequest();
-  explicit MockPermissionRequest(const std::u16string& text);
-  MockPermissionRequest(const std::u16string& text,
-                        RequestType request_type,
-                        PermissionRequestGestureType gesture_type);
-  MockPermissionRequest(const std::u16string& text,
-                        RequestType request_type,
-                        const GURL& url);
-  MockPermissionRequest(const std::u16string& text,
-                        ContentSettingsType content_settings_type_);
-  MockPermissionRequest(const std::u16string& text,
-                        const GURL& url,
-                        RequestType request_type,
-                        PermissionRequestGestureType gesture_type,
-                        ContentSettingsType content_settings_type);
+  struct MockPermissionRequestState {
+   public:
+    MockPermissionRequestState();
+    ~MockPermissionRequestState();
+
+    base::WeakPtr<MockPermissionRequestState> GetWeakPtr();
+
+    bool granted;
+    bool cancelled;
+    bool finished;
+    RequestType request_type;
+    std::optional<GeolocationAccuracy> selected_accuracy;
+
+   private:
+    base::WeakPtrFactory<MockPermissionRequestState> weak_factory_{this};
+  };
+
+  static constexpr const char* kDefaultOrigin = "https://www.google.com";
+
+  explicit MockPermissionRequest(
+      RequestType request_type,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
+  MockPermissionRequest(
+      const GURL& requesting_origin,
+      RequestType request_type,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
+  MockPermissionRequest(
+      RequestType request_type,
+      PermissionRequestGestureType gesture_type,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
+  MockPermissionRequest(
+      const GURL& requesting_origin,
+      RequestType request_type,
+      PermissionRequestGestureType gesture_type,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
+  MockPermissionRequest(
+      const GURL& requesting_origin,
+      RequestType request_type,
+      PermissionRequestGestureType gesture_type,
+      std::optional<GeolocationPromptType> geolocation_prompt_type,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
+  MockPermissionRequest(
+      const GURL& requesting_origin,
+      RequestType request_type,
+      bool embedded_permission_element_initiated,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
+  MockPermissionRequest(
+      const GURL& requesting_origin,
+      RequestType request_type,
+      std::vector<std::string> requested_audio_capture_device_ids,
+      std::vector<std::string> requested_video_capture_device_ids,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
 
   ~MockPermissionRequest() override;
 
-  RequestType GetRequestType() const override;
+  void RegisterOnPermissionDecidedCallback(base::OnceClosure callback);
 
-#if defined(OS_ANDROID)
-  std::u16string GetMessageText() const override;
-#else
-  std::u16string GetMessageTextFragment() const override;
-#endif
-  GURL GetOrigin() const override;
+  explicit MockPermissionRequest(
+      std::unique_ptr<PermissionRequestData> request_data,
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr);
 
-  void PermissionGranted(bool is_one_time) override;
-  void PermissionDenied() override;
-  void Cancelled() override;
-  void RequestFinished() override;
-  PermissionRequestGestureType GetGestureType() const override;
-  ContentSettingsType GetContentSettingsType() const override;
+  void PermissionDecided(
+      const permissions::PermissionPromptDecision& decision,
+      const permissions::PermissionRequestData& request_data);
 
-  bool granted();
-  bool cancelled();
-  bool finished();
+  const std::vector<std::string>& GetRequestedAudioCaptureDeviceIds()
+      const override;
+  const std::vector<std::string>& GetRequestedVideoCaptureDeviceIds()
+      const override;
 
-  std::unique_ptr<MockPermissionRequest> CreateDuplicateRequest() const;
+  std::unique_ptr<MockPermissionRequest> CreateDuplicateRequest(
+      base::WeakPtr<MockPermissionRequestState> request_state = nullptr) const;
 
  private:
-  bool granted_;
-  bool cancelled_;
-  bool finished_;
-  RequestType request_type_;
-  PermissionRequestGestureType gesture_type_;
-  ContentSettingsType content_settings_type_;
+  base::WeakPtr<MockPermissionRequestState> request_state_;
 
-  std::u16string text_;
-  GURL origin_;
+  base::OnceClosure on_permission_decided_;
+  std::vector<std::string> requested_audio_capture_device_ids_;
+  std::vector<std::string> requested_video_capture_device_ids_;
 };
 
 }  // namespace permissions

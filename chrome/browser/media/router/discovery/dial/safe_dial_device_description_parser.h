@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,14 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/media/router/discovery/dial/parsed_dial_device_description.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
 namespace media_router {
-
-class DataDecoder;
 
 // SafeDialDeviceDescriptionParser parses the given device description XML file
 // safely via a utility process.
@@ -28,25 +24,31 @@ class DataDecoder;
 // Section 2.3 Device description.
 class SafeDialDeviceDescriptionParser {
  public:
-  enum class ParsingError : int32_t {
-    kNone = 0,
-    kInvalidXml = 1,
-    kFailedToReadUdn = 2,
-    kFailedToReadFriendlyName = 3,
-    kFailedToReadModelName = 4,
-    kFailedToReadDeviceType = 5,
-    kMissingUniqueId = 6,
-    kMissingFriendlyName = 7,
-    kMissingAppUrl = 8,
-    kInvalidAppUrl = 9,
-    kUtilityProcessError = 10,
-
-    // Note: Add entries only immediately above this line.
-    // TODO(https://crbug.com/742517): remove this enum value.
-    kTotalCount = 11,
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused. This class must stay in sync with
+  // the UMA enum MediaRouterDeviceDescriptionParsingResult.
+  enum class ParsingResult {
+    kSuccess = 0,
+    kInvalidXml,
+    kFailedToReadUdn,
+    kFailedToReadFriendlyName,
+    kFailedToReadModelName,
+    kFailedToReadDeviceType,
+    kMissingUniqueId,
+    kMissingFriendlyName,
+    kMissingAppUrl,
+    kInvalidAppUrl,
+    kUtilityProcessError,
+    kMaxValue = kUtilityProcessError,
   };
 
   SafeDialDeviceDescriptionParser();
+
+  SafeDialDeviceDescriptionParser(const SafeDialDeviceDescriptionParser&) =
+      delete;
+  SafeDialDeviceDescriptionParser& operator=(
+      const SafeDialDeviceDescriptionParser&) = delete;
+
   ~SafeDialDeviceDescriptionParser();
 
   // Callback function invoked when done parsing some device description XML.
@@ -55,7 +57,7 @@ class SafeDialDeviceDescriptionParser {
   // description.
   using ParseCallback = base::OnceCallback<void(
       const ParsedDialDeviceDescription& device_description,
-      ParsingError parsing_error)>;
+      ParsingResult parsing_result)>;
 
   // Parses the device description in |xml_text| in a utility process.
   // If the parsing succeeds, invokes callback with a valid
@@ -78,8 +80,6 @@ class SafeDialDeviceDescriptionParser {
                         data_decoder::DataDecoder::ValueOrError result);
 
   base::WeakPtrFactory<SafeDialDeviceDescriptionParser> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SafeDialDeviceDescriptionParser);
 };
 
 }  // namespace media_router

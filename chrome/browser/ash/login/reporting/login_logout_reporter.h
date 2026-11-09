@@ -1,74 +1,116 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_REPORTING_LOGIN_LOGOUT_REPORTER_H_
 #define CHROME_BROWSER_ASH_LOGIN_REPORTING_LOGIN_LOGOUT_REPORTER_H_
 
-#include "chrome/browser/ash/login/reporting/login_logout_record.pb.h"
-#include "components/policy/core/common/cloud/dm_token.h"
-#include "components/reporting/client/report_queue_provider.h"
+#include <memory>
 
-namespace chromeos {
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/scoped_observation.h"
+#include "base/time/clock.h"
+#include "base/time/default_clock.h"
+#include "chrome/browser/ash/policy/status_collector/managed_session_service.h"
+#include "chrome/browser/policy/messaging_layer/proto/synced/login_logout_event.pb.h"
+#include "chromeos/ash/components/login/auth/auth_status_consumer.h"
+
+class PrefRegistrySimple;
+class PrefService;
+
 namespace reporting {
 
-class LoginLogoutReporter {
+class UserEventReporterHelper;
+
+}  // namespace reporting
+
+namespace ash {
+
+class AuthFailure;
+
+namespace reporting {
+
+class LoginLogoutReporter : public policy::ManagedSessionService::Observer {
  public:
   class Delegate {
    public:
+    Delegate() = default;
+
+    Delegate(const Delegate& other) = delete;
+    Delegate& operator=(const Delegate& other) = delete;
+
     virtual ~Delegate() = default;
 
-    // Return whether the login/logout event reporting is allowed by policy.
-    virtual bool ShouldReportEvent() const;
-
-    // Return whether the user email can be included the login/logout report,
-    // only affiliated user emails are included. Function can accept
-    // canonicalized and non canonicalized user_email.
-    virtual bool ShouldReportUser(base::StringPiece user_email) const;
-
-    // Return the device DM token.
-    virtual policy::DMToken GetDMToken() const;
-
-    // Create a new reporting pipeline queue to be used for reporting the
-    // login/logout event.
-    virtual void CreateReportingQueue(
-        std::unique_ptr<::reporting::ReportQueueConfiguration> config,
-        ::reporting::ReportQueueProvider::CreateReportQueueCallback
-            create_queue_cb);
+    // Get account id used in last login attempt, return empty account id if
+    // unable to get it.
+    virtual AccountId GetLastLoginAttemptAccountId() const;
   };
-
-  // Default parameter value used in production, and set in testing.
-  explicit LoginLogoutReporter(
-      std::unique_ptr<Delegate> delegate = std::make_unique<Delegate>());
 
   LoginLogoutReporter(const LoginLogoutReporter& other) = delete;
   LoginLogoutReporter& operator=(const LoginLogoutReporter& other) = delete;
 
-  virtual ~LoginLogoutReporter();
+  ~LoginLogoutReporter() override;
 
-  // Report user device login if allowed by policy. Function can accept
-  // canonicalized and non canonicalized user_email.
-  void MaybeReportLogin(base::StringPiece user_email) const;
+  // `local_state` must be non-null and must be valid while the main RunLoop is
+  // running.
+  static std::unique_ptr<LoginLogoutReporter> Create(
+      PrefService* local_state,
+      policy::ManagedSessionService* managed_session_service);
 
-  // Report user device logout if allowed by policy. Function can accept
-  // canonicalized and non canonicalized user_email.
-  void MaybeReportLogout(base::StringPiece user_email) const;
+  // `local_state` must be non-null and must be valid while the main RunLoop is
+  // running.
+  static std::unique_ptr<LoginLogoutReporter> CreateForTest(
+      PrefService* local_state,
+      std::unique_ptr<::reporting::UserEventReporterHelper> reporter_helper,
+      std::unique_ptr<Delegate> delegate,
+      policy::ManagedSessionService* managed_session_service,
+      base::Clock* clock = base::DefaultClock::GetInstance());
+
+  static void RegisterPrefs(PrefRegistrySimple* registry);
+
+  // Report user device failed login attempt.
+  void OnLoginFailure(const AuthFailure& error) override;
+
+  // Report user device successful login.
+  void OnLogin(Profile* profile) override;
+
+  // Report user device logout.
+  void OnSessionTerminationStarted(const user_manager::User* user) override;
+
+  void OnKioskLoginFailure() override;
 
  private:
+  // `local_state` must be non-null and must be valid while the main RunLoop is
+  // running.
+  LoginLogoutReporter(
+      PrefService* local_state,
+      std::unique_ptr<::reporting::UserEventReporterHelper> reporter_helper,
+      std::unique_ptr<Delegate> delegate,
+      policy::ManagedSessionService* managed_session_service,
+      base::Clock* clock = base::DefaultClock::GetInstance());
+
+  void MaybeReportEvent(LoginLogoutRecord record, const AccountId& account_id);
+
+  void MaybeReportKioskLoginFailure();
+
+  const raw_ref<PrefService> local_state_;
+
+  std::unique_ptr<::reporting::UserEventReporterHelper> reporter_helper_;
+
   std::unique_ptr<Delegate> delegate_;
 
-  static void OnReportQueueCreated(
-      LoginLogoutRecord record,
-      ::reporting::StatusOr<std::unique_ptr<::reporting::ReportQueue>>
-          report_queue_result);
+  base::ScopedObservation<policy::ManagedSessionService,
+                          policy::ManagedSessionService::Observer>
+      managed_session_observation_{this};
 
-  static void OnRecordEnqueued(::reporting::ReportQueue* report_queue,
-                               ::reporting::Status status);
+  const raw_ptr<base::Clock> clock_;
 
-  void MaybeReportEvent(base::StringPiece user_email,
-                        LoginLogoutRecord record) const;
+  // To be able to access |kEnableKioskAndGuestLoginLogoutReporting| in tests.
+  friend class LoginLogoutTestHelper;
 };
+
 }  // namespace reporting
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_REPORTING_LOGIN_LOGOUT_REPORTER_H_

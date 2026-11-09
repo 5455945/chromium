@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,15 @@ namespace history {
 // change the signatures of HistoryServiceObserver to use it for both classes.
 class WebHistoryServiceObserver {
  public:
+  // Called when the state of the history sync has changed.
+  virtual void OnWebHistoryEnabled(bool enabled) {}
+
   // Called after a successful WebHistoryService deletion request. This could
   // be partial or complete history deletion.
   virtual void OnWebHistoryDeleted() = 0;
 
  protected:
-  virtual ~WebHistoryServiceObserver() {}
+  virtual ~WebHistoryServiceObserver() = default;
 };
 
 }  // history

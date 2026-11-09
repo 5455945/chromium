@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,21 @@ import android.graphics.Canvas;
 import android.view.View;
 import android.widget.EdgeEffect;
 
-/**
- * This class manages the edge glow effect when a WebView is flung or pulled beyond the edges.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** This class manages the edge glow effect when a WebView is flung or pulled beyond the edges. */
+@NullMarked
 class OverScrollGlow {
-    private View mHostView;
+    private final View mHostView;
 
-    private EdgeEffect mEdgeGlowTop;
-    private EdgeEffect mEdgeGlowBottom;
-    private EdgeEffect mEdgeGlowLeft;
-    private EdgeEffect mEdgeGlowRight;
+    private final EdgeEffect mEdgeGlowTop;
+    private final EdgeEffect mEdgeGlowBottom;
+    private final EdgeEffect mEdgeGlowLeft;
+    private final EdgeEffect mEdgeGlowRight;
 
+    // These track how far the overscroll glow is being pulled. These will be negative if the
+    // overscroll is being pulled off of the top of the View or the left side of the View. These are
+    // zero when there is no overscroll.
     private int mOverScrollDeltaX;
     private int mOverScrollDeltaY;
 
@@ -57,7 +61,8 @@ class OverScrollGlow {
             if (maxX > 0) {
                 final int pulledToX = oldX + mOverScrollDeltaX;
                 if (pulledToX < 0) {
-                    mEdgeGlowLeft.onPull((float) mOverScrollDeltaX / mHostView.getWidth());
+                    // |mOverScrollDeltaX| will be negative when overscroll to the left.
+                    mEdgeGlowLeft.onPull((float) -mOverScrollDeltaX / mHostView.getWidth());
                     if (!mEdgeGlowRight.isFinished()) {
                         mEdgeGlowRight.onRelease();
                     }
@@ -73,7 +78,8 @@ class OverScrollGlow {
             if (maxY > 0 || mHostView.getOverScrollMode() == View.OVER_SCROLL_ALWAYS) {
                 final int pulledToY = oldY + mOverScrollDeltaY;
                 if (pulledToY < 0) {
-                    mEdgeGlowTop.onPull((float) mOverScrollDeltaY / mHostView.getHeight());
+                    // |mOverScrollDeltaY| will be negative when overscroll to the top.
+                    mEdgeGlowTop.onPull((float) -mOverScrollDeltaY / mHostView.getHeight());
                     if (!mEdgeGlowBottom.isFinished()) {
                         mEdgeGlowBottom.onRelease();
                     }
@@ -99,8 +105,8 @@ class OverScrollGlow {
      * @param rangeY Maximum range for vertical scrolling
      * @param currentFlingVelocity Current fling velocity
      */
-    public void absorbGlow(int x, int y, int oldX, int oldY, int rangeX, int rangeY,
-            float currentFlingVelocity) {
+    public void absorbGlow(
+            int x, int y, int oldX, int oldY, int rangeX, int rangeY, float currentFlingVelocity) {
         if (mShouldPull) {
             // Not absorb the glow because the user is pulling the glow now.
             // TODO(hush): crbug.com/501556. Do not use "mShouldPull" to switch
@@ -108,6 +114,7 @@ class OverScrollGlow {
             return;
         }
         if (rangeY > 0 || mHostView.getOverScrollMode() == View.OVER_SCROLL_ALWAYS) {
+            mOverScrollDeltaY = 0;
             if (y < 0 && oldY >= 0) {
                 mEdgeGlowTop.onAbsorb((int) currentFlingVelocity);
                 if (!mEdgeGlowBottom.isFinished()) {
@@ -122,6 +129,7 @@ class OverScrollGlow {
         }
 
         if (rangeX > 0) {
+            mOverScrollDeltaX = 0;
             if (x < 0 && oldX >= 0) {
                 mEdgeGlowLeft.onAbsorb((int) currentFlingVelocity);
                 if (!mEdgeGlowRight.isFinished()) {
@@ -136,12 +144,7 @@ class OverScrollGlow {
         }
     }
 
-    /**
-     * Set touch delta values indicating the current amount of overscroll.
-     *
-     * @param deltaX
-     * @param deltaY
-     */
+    /** Set touch delta values indicating the current amount of overscroll. */
     public void setOverScrollDeltas(int deltaX, int deltaY) {
         mOverScrollDeltaX += deltaX;
         mOverScrollDeltaY += deltaY;
@@ -200,17 +203,20 @@ class OverScrollGlow {
         return invalidateForGlow;
     }
 
-    /**
-     * @return True if any glow is still animating
-     */
-    public boolean isAnimating() {
-        return (!mEdgeGlowTop.isFinished() || !mEdgeGlowBottom.isFinished()
-                || !mEdgeGlowLeft.isFinished() || !mEdgeGlowRight.isFinished());
+    @androidx.annotation.VisibleForTesting
+    public int getEdgeEffectColor() {
+        return mEdgeGlowTop.getColor();
     }
 
-    /**
-     * Release all glows from any touch pulls in progress.
-     */
+    /** Returns {@code true} if any glow is still animating. */
+    public boolean isAnimating() {
+        return (!mEdgeGlowTop.isFinished()
+                || !mEdgeGlowBottom.isFinished()
+                || !mEdgeGlowLeft.isFinished()
+                || !mEdgeGlowRight.isFinished());
+    }
+
+    /** Release all glows from any touch pulls in progress. */
     public void releaseAll() {
         mEdgeGlowTop.onRelease();
         mEdgeGlowBottom.onRelease();

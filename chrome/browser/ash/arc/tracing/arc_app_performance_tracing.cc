@@ -1,45 +1,55 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing.h"
 
-#include "base/memory/singleton.h"
+#include "ash/constants/ash_features.h"
+#include "ash/display/cros_display_config.h"
+#include "ash/shell.h"
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing_custom_session.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs_factory.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
+#include "chrome/browser/ash/app_list/arc/arc_package_syncable_service.h"
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing_session.h"
-#include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing_uma_session.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs_factory.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ui/app_list/arc/arc_package_syncable_service.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/arc_features.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/arc_util.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/sync/sync_service_provider.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "components/account_id/account_id.h"
+#include "components/app_restore/window_properties.h"
 #include "components/exo/shell_surface_util.h"
 #include "components/exo/surface.h"
+#include "components/exo/surface_observer.h"
+#include "components/exo/window_properties.h"
 #include "components/exo/wm_helper.h"
 #include "components/sync/base/passphrase_enums.h"
-#include "components/sync/base/sync_prefs.h"
 #include "components/sync/base/user_selectable_type.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_user_settings.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_user_settings.h"
 #include "ui/aura/window.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/screen.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 namespace arc {
 
 namespace {
 
 // Tracing delay for jankinees.
-constexpr base::TimeDelta kJankinessTracingTime =
-    base::TimeDelta::FromMinutes(5);
+constexpr base::TimeDelta kJankinessTracingTime = base::Minutes(5);
 
 // Minimum number of frames for a jankiness tracing result to be valid.
 constexpr int kMinTotalFramesJankiness = 1000;
@@ -54,13 +64,15 @@ class ArcAppPerformanceTracingFactory
   static constexpr const char* kName = "ArcAppPerformanceTracingFactory";
 
   static ArcAppPerformanceTracingFactory* GetInstance() {
-    return base::Singleton<ArcAppPerformanceTracingFactory>::get();
+    static base::NoDestructor<ArcAppPerformanceTracingFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcAppPerformanceTracingFactory>;
+  friend base::NoDestructor<ArcAppPerformanceTracingFactory>;
   ArcAppPerformanceTracingFactory() {
     DependsOn(ArcAppListPrefsFactory::GetInstance());
+    // TODO(crbug.com/40227318): This should probably depend on SyncService.
   }
   ~ArcAppPerformanceTracingFactory() override = default;
 };
@@ -77,6 +89,15 @@ class AppToCategoryMapper {
     Add("niajncocfieigpbiamllekeadpgbhkke", "GarenaFreeFire");
     Add("icloenboalgjkknjdficgpgpcedmmojn", "Netflix");
     Add("nlhkolcnehphdkaljhgcbkmahloeacoj", "PUBGMobile");
+    Add("gihmggjjlnjaldngedmnegjmhccccahg", "MinecraftConsumerEdition");
+    Add("aejndhminbfocgmlbmmccankkembehmc", "AmongUs");
+    Add("lbefcdhjbnilmnokeflglbaiaebadckd", "RaidLegends");
+    Add("bifaabbnnccaenolhjngemgmegdjflkg", "Underlords");
+    Add("indkdfghopoafaifcjbnonjkgdjnbhli", "TocaLife");
+    Add("kmglgjicdcmjphkoojighlhjejkiefih", "CandyCrush");
+    Add("ckkdolbnmedndlibioieibdjnifacikn", "Homescapes");
+    Add("hpnpilodeljgmlapcmaaachbolchfcmh", "FIFAMobile");
+    Add("fkhbcehgdndojcdlkhkihhhnhipkgddd", "GenshinImpact");
   }
 
   static AppToCategoryMapper& GetInstance() {
@@ -84,11 +105,15 @@ class AppToCategoryMapper {
     return *instance.get();
   }
 
+  AppToCategoryMapper(const AppToCategoryMapper&) = delete;
+  AppToCategoryMapper& operator=(const AppToCategoryMapper&) = delete;
+
   // Returns empty string if category is not set for app |app_id|.
   const std::string& GetCategory(const std::string& app_id) const {
     const auto& it = app_id_to_category_.find(app_id);
-    if (it == app_id_to_category_.end())
+    if (it == app_id_to_category_.end()) {
       return base::EmptyString();
+    }
     return it->second;
   }
 
@@ -97,35 +122,41 @@ class AppToCategoryMapper {
   }
 
  private:
+  friend base::NoDestructor<AppToCategoryMapper>;
+
   ~AppToCategoryMapper() = default;
 
   std::map<std::string, std::string> app_id_to_category_;
-
-  DISALLOW_COPY_AND_ASSIGN(AppToCategoryMapper);
 };
 
 }  // namespace
 
+struct ArcAppPerformanceTracing::ActiveTask {
+  ActiveTask(exo::Surface* root_surface, exo::SurfaceObserver* observer, int id)
+      : root_surface(root_surface, observer), id(id) {}
+
+  // Used for automatic observer adding/removing.
+  exo::ScopedSurface root_surface;
+
+  // ARC task id of the window.
+  const int id;
+};
+
 ArcAppPerformanceTracing::ArcAppPerformanceTracing(
     content::BrowserContext* context,
     ArcBridgeService* bridge)
-    : context_(context) {
+    : context_(context), weak_ptr_factory_(this) {
   // Not related tests may indirectly create this instance and helper might
   // not be set.
-  if (exo::WMHelper::HasInstance())
+  if (exo::WMHelper::HasInstance()) {
     exo::WMHelper::GetInstance()->AddActivationObserver(this);
+  }
   ArcAppListPrefs::Get(context_)->AddObserver(this);
+  display::Screen::Get()->AddObserver(this);
 }
 
 // Releasing resources in DTOR is not safe, see |Shutdown|.
-ArcAppPerformanceTracing::~ArcAppPerformanceTracing() {
-  if (arc_active_window_) {
-    exo::Surface* const surface = exo::GetShellRootSurface(arc_active_window_);
-    // Surface might be destroyed.
-    if (surface)
-      surface->RemoveSurfaceObserver(this);
-  }
-}
+ArcAppPerformanceTracing::~ArcAppPerformanceTracing() = default;
 
 // static
 ArcAppPerformanceTracing* ArcAppPerformanceTracing::GetForBrowserContext(
@@ -155,46 +186,94 @@ void ArcAppPerformanceTracing::SetCustomSessionReadyCallbackForTesting(
   custom_session_ready_callback_ = std::move(callback);
 }
 
+void ArcAppPerformanceTracing::MaybeCancelTracing() {
+  jankiness_timer_.Stop();
+  session_.reset();
+}
+
 void ArcAppPerformanceTracing::Shutdown() {
-  CancelJankinessTracing();
+  display::Screen::Get()->RemoveObserver(this);
 
-  MaybeStopTracing();
+  MaybeCancelTracing();
 
-  // |session_|. Make sure that |arc_active_window_| is detached.
+  // |session_|. Make sure that |active_window_| is detached.
   DetachActiveWindow();
 
   ArcAppListPrefs::Get(context_)->RemoveObserver(this);
-  if (exo::WMHelper::HasInstance())
+  if (exo::WMHelper::HasInstance()) {
     exo::WMHelper::GetInstance()->RemoveActivationObserver(this);
+  }
+}
+
+void ArcAppPerformanceTracing::OnCustomTraceDone(
+    const std::optional<PerfTraceResult>& result) {
+  bool success = result.has_value();
+
+  // TODO(b/318754606): commitDeviation is still used by tast-test clients, only
+  // switch from commitDeviation to presentDeviation (and fps to perceivedFps)
+  // once the it's fixed to not output 0 FPS on display-less Chromebox devices.
+  custom_trace_result_.emplace(
+      base::DictValue()
+          .Set("success", success)
+          .Set("fps", success ? result->fps : 0)
+          .Set("perceivedFps", success ? result->perceived_fps : 0)
+          .Set("commitDeviation", success ? result->commit_deviation : 0)
+          .Set("presentDeviation", success ? result->present_deviation : 0)
+          .Set("renderQuality", success ? result->render_quality : 0)
+          .Set("janksPerMinute", success ? result->janks_per_minute : 0)
+          .Set("janksPercentage", success ? result->janks_percentage : 0));
+}
+
+bool ExpectingPresentEvents() {
+  auto* screen = display::Screen::Get();
+
+  return screen->GetNumDisplays() > 1 || screen->GetPrimaryDisplay().detected();
 }
 
 bool ArcAppPerformanceTracing::StartCustomTracing() {
-  if (!arc_active_window_)
+  if (!active_window_) {
     return false;
+  }
 
-  session_ = std::make_unique<ArcAppPerformanceTracingCustomSession>(this);
-  session_->Schedule();
-  if (custom_session_ready_callback_)
+  session_ = std::make_unique<ArcAppPerformanceTracingSession>(
+      active_window_, *ticks_now_callback());
+
+  // Disable listening for presents if we don't have an attached display.
+  // See b/332726656
+  session_->set_trace_real_presents(ExpectingPresentEvents());
+
+  custom_trace_result_.reset();
+  session_->Schedule(
+      false /* detect_idles */, base::TimeDelta() /* start_delay */,
+      base::TimeDelta() /* tracing_period */,
+      base::BindOnce(&ArcAppPerformanceTracing::OnCustomTraceDone,
+                     weak_ptr_factory_.GetWeakPtr()));
+  if (custom_session_ready_callback_) {
     custom_session_ready_callback_.Run();
+  }
 
   return true;
 }
 
-void ArcAppPerformanceTracing::StopCustomTracing(
-    ResultCallback result_callback) {
-  if (!session_ || !session_->AsCustomSession()) {
-    std::move(result_callback).Run(false /* success */, 0, 0, 0);
-    return;
+base::DictValue ArcAppPerformanceTracing::StopCustomTracing() {
+  custom_trace_result_.reset();
+  if (session_ && session_->tracing_active()) {
+    session_->Finish();
+    CHECK(custom_trace_result_.has_value(), base::NotFatalUntil::M160);
   }
 
-  session_->AsCustomSession()->StopAndAnalyze(std::move(result_callback));
+  if (!custom_trace_result_.has_value()) {
+    OnCustomTraceDone(std::nullopt);
+  }
+
+  return *std::move(custom_trace_result_);
 }
 
 void ArcAppPerformanceTracing::OnWindowActivated(ActivationReason reason,
                                                  aura::Window* gained_active,
                                                  aura::Window* lost_active) {
   // Discard any active tracing if any.
-  MaybeStopTracing();
+  session_.reset();
 
   // Stop and report previous active window's jankiness tracing so far.
   FinalizeJankinessTracing(true /* stopped_early */);
@@ -202,12 +281,46 @@ void ArcAppPerformanceTracing::OnWindowActivated(ActivationReason reason,
   // Detach previous active window if it is set.
   DetachActiveWindow();
 
-  // Ignore any non-ARC++ window.
-  if (arc::GetWindowTaskId(gained_active) <= 0)
+  if (!gained_active) {
     return;
+  }
+
+  active_window_ = gained_active;
+  active_window_->AddObserver(this);
+  TrackIfTaskIsActive();
+
+  if (!active_task_ && !GetWindowSessionId(gained_active)) {
+    // No need to observe if this is not a task or an ARC ghost window.
+    DetachActiveWindow();
+  }
+}
+
+void ArcAppPerformanceTracing::TrackIfTaskIsActive() {
+  CHECK(active_window_, base::NotFatalUntil::M160);
+
+  if (active_task_) {
+    return;
+  }
+
+  auto task_id = arc::GetWindowTaskId(active_window_);
+  if (!task_id) {
+    // Not a task window, so is not traceable, but if this is a ghost window,
+    // it may be traceable later.
+    return;
+  }
+
+  exo::Surface* const surface = exo::GetShellRootSurface(active_window_);
+  // Should never happen, but check against a task with unset root surface.
+  if (!surface) {
+    return;
+  }
 
   // Observe active ARC++ window.
-  AttachActiveWindow(gained_active);
+  // Use scoped surface observer to be safe on the surface
+  // destruction. |exo::GetShellRootSurface| would fail in case
+  // the surface gets destroyed before widget.
+  active_task_ =
+      std::make_unique<ActiveTask>(surface, this /* observer */, *task_id);
 
   StartJankinessTracing();
 
@@ -216,13 +329,19 @@ void ArcAppPerformanceTracing::OnWindowActivated(ActivationReason reason,
 
 void ArcAppPerformanceTracing::OnWindowDestroying(aura::Window* window) {
   // ARC++ window will be destroyed.
-  DCHECK_EQ(arc_active_window_, window);
+  CHECK_EQ(active_window_, window, base::NotFatalUntil::M160);
 
-  CancelJankinessTracing();
-
-  MaybeStopTracing();
+  MaybeCancelTracing();
 
   DetachActiveWindow();
+}
+
+void ArcAppPerformanceTracing::OnWindowPropertyChanged(aura::Window* window,
+                                                       const void* key,
+                                                       intptr_t old) {
+  if (key == exo::kApplicationIdKey) {
+    TrackIfTaskIsActive();
+  }
 }
 
 void ArcAppPerformanceTracing::OnTaskCreated(int32_t task_id,
@@ -240,7 +359,7 @@ void ArcAppPerformanceTracing::OnTaskDestroyed(int32_t task_id) {
 }
 
 void ArcAppPerformanceTracing::StartJankinessTracing() {
-  DCHECK(!jankiness_timer_.IsRunning());
+  CHECK(!jankiness_timer_.IsRunning(), base::NotFatalUntil::M160);
   jankiness_timer_.Start(
       FROM_HERE, kJankinessTracingTime,
       base::BindOnce(&ArcAppPerformanceTracing::FinalizeJankinessTracing,
@@ -248,10 +367,9 @@ void ArcAppPerformanceTracing::StartJankinessTracing() {
 }
 
 void ArcAppPerformanceTracing::HandleActiveAppRendered(base::Time timestamp) {
-  auto task_id = arc::GetWindowTaskId(arc_active_window_);
-  DCHECK(task_id);
+  CHECK(active_task_, base::NotFatalUntil::M160);
 
-  const std::string& app_id = task_id_to_app_id_[*task_id].first;
+  const std::string& app_id = task_id_to_app_id_[active_task_->id].first;
   const base::Time launch_request_time =
       ArcAppListPrefs::Get(context_)->PollLaunchRequestTime(app_id);
   if (!launch_request_time.is_null()) {
@@ -268,43 +386,59 @@ void ArcAppPerformanceTracing::OnCommit(exo::Surface* surface) {
 }
 
 void ArcAppPerformanceTracing::OnSurfaceDestroying(exo::Surface* surface) {
-  if (surface)
-    surface->RemoveSurfaceObserver(this);
+  // |scoped_surface_| might be already reset in case window is destroyed
+  // first.
+  CHECK(!active_task_ || (active_task_->root_surface.get() == surface),
+        base::NotFatalUntil::M160);
+  DetachActiveWindow();
 }
 
-void ArcAppPerformanceTracing::CancelJankinessTracing() {
-  jankiness_timer_.Stop();
+// This method is invoked when a display changes between detected and not
+// detected. One can test manually on a Chromebook by turning off
+// sleep-on-lid-close in the Power settings and closing the lid during a trace.
+// Jankiness tracing is not affected, as this does not rely on frame present
+// events, and uses internal Android tracing.
+void ArcAppPerformanceTracing::OnDisplayMetricsChanged(
+    const display::Display& display,
+    uint32_t changed_metrics) {
+  if (!ExpectingPresentEvents()) {
+    session_.reset();
+  } else {
+    MaybeStartTracing();
+  }
 }
 
 void ArcAppPerformanceTracing::FinalizeJankinessTracing(bool stopped_early) {
   // Never started. Nothing to do.
-  if (!jankiness_timer_.IsRunning() && stopped_early)
+  if (!jankiness_timer_.IsRunning() && stopped_early) {
     return;
+  }
 
   jankiness_timer_.Stop();
 
   // Check if we have all conditions met, ARC++ window is active and information
   // is available for associated task.
-  if (!arc_active_window_)
+  if (!active_task_) {
     return;
+  }
 
-  auto task_id = arc::GetWindowTaskId(arc_active_window_);
-  DCHECK(task_id);
-
-  const auto it = task_id_to_app_id_.find(*task_id);
-  if (it == task_id_to_app_id_.end())
+  const auto it = task_id_to_app_id_.find(active_task_->id);
+  if (it == task_id_to_app_id_.end()) {
     // It is normal that information might not be available at this time.
     return;
+  }
 
   // Test instances might not have Service Manager running.
   auto* arc_service_manager = ArcServiceManager::Get();
-  if (!arc_service_manager)
+  if (!arc_service_manager) {
     return;
+  }
 
   auto* instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc_service_manager->arc_bridge_service()->metrics(), GetGfxMetrics);
-  if (!instance)
+  if (!instance) {
     return;
+  }
 
   const std::string package_name = it->second.second;
   auto callback = base::BindOnce(&ArcAppPerformanceTracing::OnGfxMetrics,
@@ -312,8 +446,9 @@ void ArcAppPerformanceTracing::FinalizeJankinessTracing(bool stopped_early) {
   instance->GetGfxMetrics(package_name, std::move(callback));
 
   // Finalized normally, safe to restart.
-  if (!stopped_early)
+  if (!stopped_early) {
     StartJankinessTracing();
+  }
 }
 
 void ArcAppPerformanceTracing::OnGfxMetrics(const std::string& package_name,
@@ -348,8 +483,7 @@ void ArcAppPerformanceTracing::OnGfxMetrics(const std::string& package_name,
   // We can only calculate real numbers for initial data. Only report if first
   // time.
   if (first_time) {
-    const base::TimeDelta frameTime =
-        base::TimeDelta::FromMilliseconds(frameTime95);
+    const base::TimeDelta frameTime = base::Milliseconds(frameTime95);
     base::UmaHistogramTimes("Arc.Runtime.Performance.Generic.FrameTime",
                             frameTime);
     VLOG(1) << "Total Frames: " << framesTotal << " | "
@@ -367,32 +501,24 @@ void ArcAppPerformanceTracing::OnGfxMetrics(const std::string& package_name,
                                jankiness);
 }
 
-bool ArcAppPerformanceTracing::WasReported(const std::string& category) const {
-  DCHECK(!category.empty());
-  return reported_categories_.count(category);
-}
-
-void ArcAppPerformanceTracing::SetReported(const std::string& category) {
-  DCHECK(!category.empty());
-  reported_categories_.insert(category);
-}
-
 void ArcAppPerformanceTracing::MaybeStartTracing() {
   if (session_) {
     // We are already tracing, ignore.
-    DCHECK_EQ(session_->window(), arc_active_window_);
+    CHECK_EQ(session_->window(), active_window_, base::NotFatalUntil::M160);
     return;
   }
 
   // Check if we have all conditions met, ARC++ window is active and information
   // is available for associated task.
-  if (!arc_active_window_)
+  if (!active_task_) {
     return;
+  }
 
-  auto task_id = arc::GetWindowTaskId(arc_active_window_);
-  DCHECK(task_id);
+  if (!ExpectingPresentEvents()) {
+    return;
+  }
 
-  const auto it = task_id_to_app_id_.find(*task_id);
+  const auto it = task_id_to_app_id_.find(active_task_->id);
   if (it == task_id_to_app_id_.end()) {
     // It is normal that information might not be available at this time.
     return;
@@ -406,57 +532,66 @@ void ArcAppPerformanceTracing::MaybeStartTracing() {
     return;
   }
 
-  Profile* const profile = Profile::FromBrowserContext(context_);
-  DCHECK(profile);
-
-  const syncer::SyncPrefs prefs(profile->GetPrefs());
-
-  if (!prefs.GetSelectedTypes().Has(syncer::UserSelectableType::kApps)) {
-    VLOG(1) << "Cannot trace: App Sync is not enabled.";
+  // ARC only runs for regular user sessions, so `context_` is always an
+  // annotated user context here; the null branch below still covers a
+  // context without one.
+  const AccountId* const account_id = ash::AnnotatedAccountId::Get(context_);
+  const syncer::SyncService* sync_service =
+      account_id ? ash::SyncServiceProvider::Get().Find(*account_id) : nullptr;
+  if (!sync_service) {
+    // Possible if sync is disabled by command line flag.
+    // TODO(crbug.com/40227318): This should probably handled by
+    // ArcAppPerformanceTracingFactory.
+    VLOG(1) << "Cannot trace: Sync service not available";
     return;
   }
 
   const syncer::SyncUserSettings* sync_user_settings =
-      SyncServiceFactory::GetForProfile(profile)->GetUserSettings();
+      sync_service->GetUserSettings();
+
+  const bool apps_sync_enabled = sync_user_settings->GetSelectedOsTypes().Has(
+      syncer::UserSelectableOsType::kOsApps);
+
+  if (!apps_sync_enabled) {
+    VLOG(1) << "Cannot trace: App Sync is not enabled.";
+    return;
+  }
 
   if (sync_user_settings->IsUsingExplicitPassphrase()) {
     VLOG(1) << "Cannot trace: User has a sync passphrase.";
     return;
   }
 
-  // Start tracing for |arc_active_window_|.
-  session_ =
-      std::make_unique<ArcAppPerformanceTracingUmaSession>(this, category);
-  session_->Schedule();
-}
-
-void ArcAppPerformanceTracing::MaybeStopTracing() {
-  // Reset tracing if it was set.
-  session_.reset();
-}
-
-void ArcAppPerformanceTracing::AttachActiveWindow(aura::Window* window) {
-  DCHECK(window);
-  DCHECK(!arc_active_window_);
-  arc_active_window_ = window;
-  arc_active_window_->AddObserver(this);
-
-  exo::Surface* const surface = exo::GetShellRootSurface(window);
-  DCHECK(surface);
-  surface->AddSurfaceObserver(this);
+  session_ = std::make_unique<ArcAppPerformanceTracingSession>(
+      active_window_, *ticks_now_callback());
+  reporting_.Schedule(session_.get(), category);
 }
 
 void ArcAppPerformanceTracing::DetachActiveWindow() {
-  if (!arc_active_window_)
+  if (!active_window_) {
     return;
+  }
 
-  exo::Surface* const surface = exo::GetShellRootSurface(arc_active_window_);
-  // Surface might be destroyed.
-  if (surface)
-    surface->RemoveSurfaceObserver(this);
+  active_task_.reset();
+  active_window_->RemoveObserver(this);
+  active_window_ = nullptr;
+}
 
-  arc_active_window_->RemoveObserver(this);
-  arc_active_window_ = nullptr;
+// static
+void ArcAppPerformanceTracing::EnsureFactoryBuilt() {
+  ArcAppPerformanceTracingFactory::GetInstance();
+}
+
+// static
+TicksNowCallback* ArcAppPerformanceTracing::ticks_now_callback() {
+  static base::NoDestructor<TicksNowCallback> storage{
+      base::BindRepeating(&base::TimeTicks::Now)};
+  return storage.get();
+}
+
+// static
+void ArcAppPerformanceTracing::reset_ticks_now_callback() {
+  *ticks_now_callback() = base::BindRepeating(&base::TimeTicks::Now);
 }
 
 }  // namespace arc

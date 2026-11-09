@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "services/network/trust_tokens/trust_token_store.h"
 
 namespace network {
@@ -43,4 +43,4 @@ class PendingTrustTokenStore {
 
 }  // namespace network
 
-#endif  //  SERVICES_NETWORK_TRUST_TOKENS_PENDING_TRUST_TOKEN_STORE_H_
+#endif  // SERVICES_NETWORK_TRUST_TOKENS_PENDING_TRUST_TOKEN_STORE_H_

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,8 +18,9 @@ import sys
 
 import cpp_source
 
-UNLIMITED_THROUGHPUT = ('WebInspector.OverridesSupport'
-                        '.NetworkThroughputUnlimitedValue')
+UNLIMITED_THROUGHPUT = (
+  'WebInspector.OverridesSupport.NetworkThroughputUnlimitedValue'
+)
 
 
 def quotizeKeys(s, keys):
@@ -43,6 +44,7 @@ def evaluateMultiplications(s):
   Args:
     s: a string containing bare multiplications that need to be evaluated.
   """
+
   def evaluateBinaryMultiplication(match):
     return str(float(match.group(1)) * float(match.group(2)))
 
@@ -52,14 +54,18 @@ def evaluateMultiplications(s):
 def main():
   parser = optparse.OptionParser()
   parser.add_option(
-      '', '--directory', type='string', default='.',
-      help='Path to directory where the cc/h files should be created')
+    '',
+    '--directory',
+    type='string',
+    default='.',
+    help='Path to directory where the cc/h files should be created',
+  )
   options, args = parser.parse_args()
 
   networks = '['
   file_name = args[0]
   inside_list = False
-  with open(file_name, 'r') as f:
+  with open(file_name, 'r', encoding='utf-8') as f:
     for line in f:
       if not inside_list:
         if 'WebInspector.OverridesUI._networkConditionsPresets = [' in line:
@@ -75,9 +81,9 @@ def main():
   networks += ']'
   networks = quotizeKeys(networks, ['id', 'title', 'throughput', 'latency'])
   networks = evaluateMultiplications(networks)
-  cpp_source.WriteSource('network_list',
-                         output_dir,
-                         options.directory, {'kNetworks': networks})
+  cpp_source.WriteSource(
+    'network_list', output_dir, options.directory, {'kNetworks': networks}
+  )
 
   clang_format = ['clang-format', '-i']
   subprocess.Popen(clang_format + ['%s/network_list.cc' % output_dir])

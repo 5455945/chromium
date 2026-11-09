@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/containers/flat_map.h"
+#include "build/build_config.h"
 #include "printing/backend/print_backend.h"
 #include "printing/mojom/print.mojom.h"
 
@@ -21,7 +22,7 @@ class TestPrintBackend : public PrintBackend {
   TestPrintBackend();
 
   // PrintBackend overrides
-  mojom::ResultCode EnumeratePrinters(PrinterList* printer_list) override;
+  mojom::ResultCode EnumeratePrinters(PrinterList& printer_list) override;
   mojom::ResultCode GetDefaultPrinterName(
       std::string& default_printer) override;
   mojom::ResultCode GetPrinterBasicInfo(
@@ -30,10 +31,17 @@ class TestPrintBackend : public PrintBackend {
   mojom::ResultCode GetPrinterSemanticCapsAndDefaults(
       const std::string& printer_name,
       PrinterSemanticCapsAndDefaults* printer_info) override;
+#if BUILDFLAG(IS_WIN)
   mojom::ResultCode GetPrinterCapsAndDefaults(
       const std::string& printer_name,
       PrinterCapsAndDefaults* printer_info) override;
-  std::string GetPrinterDriverInfo(const std::string& printer_name) override;
+  std::optional<gfx::Rect> GetPaperPrintableArea(
+      const std::string& printer_name,
+      const std::string& paper_vendor_id,
+      const gfx::Size& paper_size_um) override;
+#endif
+  std::vector<std::string> GetPrinterDriverInfo(
+      const std::string& printer_name) override;
   bool IsValidPrinter(const std::string& printer_name) override;
 
   // Methods for test setup:
@@ -48,8 +56,8 @@ class TestPrintBackend : public PrintBackend {
   // will still show true even if `caps` is null, which provides the benefit of
   // simulating a printer that exists in the system but cannot be queried.
   // `info` can be null, which will result in queries for basic info to fail.
-  // Calling EnumeratePrinters() will include the identified `printer_name`
-  // even if either parameter is null.
+  // Calling EnumeratePrinters() will include the identified `printer_name` even
+  // if either parameter is null.
   void AddValidPrinter(const std::string& printer_name,
                        std::unique_ptr<PrinterSemanticCapsAndDefaults> caps,
                        std::unique_ptr<PrinterBasicInfo> info);

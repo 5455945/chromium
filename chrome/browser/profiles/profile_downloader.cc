@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
@@ -20,18 +21,18 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_downloader_delegate.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "components/signin/public/base/avatar_icon_util.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/account_info.h"
-#include "components/signin/public/identity_manager/consent_level.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "google_apis/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "skia/ext/image_operations.h"
 #include "url/gurl.h"
 
@@ -44,8 +45,8 @@ constexpr char kAuthorizationHeader[] = "Bearer %s";
 
 ProfileDownloader::ProfileDownloader(ProfileDownloaderDelegate* delegate)
     : delegate_(delegate), identity_manager_(delegate_->GetIdentityManager()) {
-  DCHECK(delegate_);
-  identity_manager_observation_.Observe(identity_manager_);
+  CHECK(delegate_, base::NotFatalUntil::M162);
+  identity_manager_observation_.Observe(identity_manager_.get());
 }
 
 void ProfileDownloader::Start() {
@@ -71,15 +72,15 @@ void ProfileDownloader::StartForAccount(const CoreAccountId& account_id) {
 }
 
 std::u16string ProfileDownloader::GetProfileFullName() const {
-  return base::UTF8ToUTF16(account_info_.full_name);
+  return base::UTF8ToUTF16(account_info_.GetFullName().value_or(""));
 }
 
 std::u16string ProfileDownloader::GetProfileGivenName() const {
-  return base::UTF8ToUTF16(account_info_.given_name);
+  return base::UTF8ToUTF16(account_info_.GetGivenName().value_or(""));
 }
 
 std::string ProfileDownloader::GetProfileLocale() const {
-  return account_info_.locale;
+  return std::string(account_info_.GetLocale().value_or(""));
 }
 
 SkBitmap ProfileDownloader::GetProfilePicture() const {
@@ -91,14 +92,16 @@ ProfileDownloader::PictureStatus ProfileDownloader::GetProfilePictureStatus()
   return picture_status_;
 }
 
-std::string ProfileDownloader::GetProfilePictureURL() const {
-  GURL url(account_info_.picture_url);
-  if (!url.is_valid())
-    return std::string();
+GURL ProfileDownloader::GetProfilePictureURL() const {
+  if (!account_info_.GetAvatarUrl().has_value()) {
+    return GURL();
+  }
+  GURL url(*account_info_.GetAvatarUrl());
+  if (!url.is_valid()) {
+    return GURL();
+  }
   return signin::GetAvatarImageURLWithOptions(
-             GURL(account_info_.picture_url),
-             delegate_->GetDesiredImageSideLength(), true /* no_silhouette */)
-      .spec();
+      url, delegate_->GetDesiredImageSideLength(), /*no_silhouette=*/true);
 }
 
 void ProfileDownloader::StartFetchingImage() {
@@ -119,14 +122,9 @@ void ProfileDownloader::StartFetchingImage() {
 }
 
 void ProfileDownloader::StartFetchingOAuth2AccessToken() {
-  signin::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kGoogleUserInfoProfile);
-  // Required to determine if lock should be enabled.
-  scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-
   oauth2_access_token_fetcher_ =
       identity_manager_->CreateAccessTokenFetcherForAccount(
-          account_id_, "profile_downloader", scopes,
+          account_id_, signin::OAuthConsumerId::kProfileDownloader,
           base::BindOnce(&ProfileDownloader::OnAccessTokenFetchComplete,
                          base::Unretained(this)),
           signin::AccessTokenFetcher::Mode::kWaitUntilRefreshTokenAvailable);
@@ -134,11 +132,13 @@ void ProfileDownloader::StartFetchingOAuth2AccessToken() {
 
 ProfileDownloader::~ProfileDownloader() {
   oauth2_access_token_fetcher_.reset();
-  DCHECK(identity_manager_observation_.IsObservingSource(identity_manager_));
+  CHECK(
+      identity_manager_observation_.IsObservingSource(identity_manager_.get()),
+      base::NotFatalUntil::M162);
 }
 
 void ProfileDownloader::FetchImageData() {
-  DCHECK(account_info_.IsValid());
+  CHECK(account_info_.IsValid(), base::NotFatalUntil::M162);
 
   if (!delegate_->NeedsProfilePicture()) {
     VLOG(1) << "Skipping profile picture download";
@@ -146,16 +146,17 @@ void ProfileDownloader::FetchImageData() {
     return;
   }
 
-  if (account_info_.picture_url == kNoPictureURLFound) {
-    VLOG(1) << "No picture URL for account " << account_info_.email
+  if (account_info_.GetAvatarUrl().has_value() &&
+      account_info_.GetAvatarUrl()->empty()) {
+    VLOG(1) << "No picture URL for account " << account_info_.GetEmail()
             << ". Using the default profile picture.";
     picture_status_ = PICTURE_DEFAULT;
     delegate_->OnProfileDownloadSuccess(this);
     return;
   }
 
-  std::string image_url_with_size = GetProfilePictureURL();
-  if (!image_url_with_size.empty() &&
+  GURL image_url_with_size = GetProfilePictureURL();
+  if (!image_url_with_size.is_empty() &&
       image_url_with_size == delegate_->GetCachedPictureURL()) {
     VLOG(1) << "Picture URL matches cached picture URL";
     picture_status_ = PICTURE_CACHED;
@@ -163,11 +164,10 @@ void ProfileDownloader::FetchImageData() {
     return;
   }
 
-  GURL image_url_to_fetch(image_url_with_size);
-  if (!image_url_to_fetch.is_valid()) {
-    VLOG(1) << "Profile picture URL with size |" << image_url_to_fetch << "| "
+  if (!image_url_with_size.is_valid()) {
+    VLOG(1) << "Profile picture URL with size |" << image_url_with_size << "| "
             << "is not valid (the account picture URL is "
-            << "|" << account_info_.picture_url << "|)";
+            << "|" << account_info_.GetAvatarUrl().value_or("UNKNOWN") << "|)";
     delegate_->OnProfileDownloadFailure(
         this,
         ProfileDownloaderDelegate::FailureReason::INVALID_PROFILE_PICTURE_URL);
@@ -178,29 +178,40 @@ void ProfileDownloader::FetchImageData() {
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("signed_in_profile_avatar", R"(
         semantics {
-          sender: "Profile G+ Image Downloader"
+          sender: "Profile Google Image Downloader"
           description:
-            "Signed in users use their G+ profile image as their Chrome "
+            "Signed in users use their Google account image as their Chrome "
             "profile image, unless they explicitly select otherwise. This "
             "fetcher uses the sign-in token and the image URL provided by GAIA "
             "to fetch the image."
           trigger: "User signs into a Profile."
           data: "Filename of the png to download and Google OAuth bearer token."
           destination: GOOGLE_OWNED_SERVICE
+          internal {
+            contacts {
+              owners: "//chrome/browser/profiles/OWNERS"
+            }
+          }
+          user_data {
+            type: ACCESS_TOKEN
+            type: FILE_DATA
+          }
+          last_reviewed: "2023-07-31"
         }
         policy {
           cookies_allowed: NO
           setting: "This feature cannot be disabled by settings."
-          policy_exception_justification:
-            "Not implemented, considered not useful as no content is being "
-            "uploaded or saved; this request merely downloads the user's G+ "
-            "profile image."
+          chrome_policy {
+            UserAvatarCustomizationSelectorsEnabled {
+              UserAvatarCustomizationSelectorsEnabled: false
+            }
+          }
         })");
 
-  VLOG(1) << "Loading profile image from " << image_url_to_fetch;
+  VLOG(1) << "Loading profile image from " << image_url_with_size;
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = image_url_to_fetch;
+  resource_request->url = image_url_with_size;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   if (!auth_token_.empty()) {
     resource_request->headers.SetHeader(
@@ -219,7 +230,7 @@ void ProfileDownloader::FetchImageData() {
 }
 
 void ProfileDownloader::OnURLLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   int response_code = -1;
   if (simple_loader_->ResponseInfo() && simple_loader_->ResponseInfo()->headers)
@@ -228,7 +239,7 @@ void ProfileDownloader::OnURLLoaderComplete(
   if (response_body) {
     simple_loader_.reset();
     DVLOG(1) << "Decoding the image...";
-    ImageDecoder::Start(this, *response_body);
+    ImageDecoder::Start(this, std::move(response_body).value());
   } else if (response_code == net::HTTP_NOT_FOUND) {
     simple_loader_.reset();
     VLOG(1) << "Got 404, using default picture...";
@@ -284,7 +295,7 @@ void ProfileDownloader::OnAccessTokenFetchComplete(
 }
 
 void ProfileDownloader::OnExtendedAccountInfoUpdated(const AccountInfo& info) {
-  if (info.account_id == account_id_ && info.IsValid()) {
+  if (info.GetAccountId() == account_id_ && info.IsValid()) {
     account_info_ = info;
 
     // If the StartFetchingImage was called before we had valid info, the

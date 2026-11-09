@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/threading/thread_checker.h"
 #include "base/timer/timer.h"
@@ -18,6 +18,7 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/common/extension_id.h"
 #include "ui/base/idle/idle.h"
 
 namespace base {
@@ -44,30 +45,36 @@ class IdleManager : public ExtensionRegistryObserver,
  public:
   class IdleTimeProvider {
    public:
-    IdleTimeProvider() {}
-    virtual ~IdleTimeProvider() {}
+    IdleTimeProvider() = default;
+
+    IdleTimeProvider(const IdleTimeProvider&) = delete;
+    IdleTimeProvider& operator=(const IdleTimeProvider&) = delete;
+
+    virtual ~IdleTimeProvider() = default;
     virtual ui::IdleState CalculateIdleState(int idle_threshold) = 0;
     virtual int CalculateIdleTime() = 0;
     virtual bool CheckIdleStateIsLocked() = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(IdleTimeProvider);
   };
 
   class EventDelegate {
    public:
-    EventDelegate() {}
-    virtual ~EventDelegate() {}
-    virtual void OnStateChanged(const std::string& extension_id,
+    EventDelegate() = default;
+
+    EventDelegate(const EventDelegate&) = delete;
+    EventDelegate& operator=(const EventDelegate&) = delete;
+
+    virtual ~EventDelegate() = default;
+    virtual void OnStateChanged(const ExtensionId& extension_id,
                                 ui::IdleState new_state) = 0;
     virtual void RegisterObserver(EventRouter::Observer* observer) = 0;
     virtual void UnregisterObserver(EventRouter::Observer* observer) = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(EventDelegate);
   };
 
   explicit IdleManager(content::BrowserContext* context);
+
+  IdleManager(const IdleManager&) = delete;
+  IdleManager& operator=(const IdleManager&) = delete;
+
   ~IdleManager() override;
 
   void Init();
@@ -85,14 +92,16 @@ class IdleManager : public ExtensionRegistryObserver,
   void OnListenerRemoved(const EventListenerInfo& details) override;
 
   ui::IdleState QueryState(int threshold);
-  void SetThreshold(const std::string& extension_id, int threshold);
+  void SetThreshold(const ExtensionId& extension_id, int threshold);
+  int GetThresholdForTest(const ExtensionId& extension_id) const;
+
   // Returns the maximum time in seconds until the screen lock automatically
   // when idle.
   // Note: Currently supported on Chrome OS only. Returns a zero duration for
   // other operating systems.
   base::TimeDelta GetAutoLockDelay() const;
 
-  static std::unique_ptr<base::Value> CreateIdleValue(ui::IdleState idle_state);
+  static base::Value CreateIdleValue(ui::IdleState idle_state);
 
   // Override default event class. Callee assumes ownership. Used for testing.
   void SetEventDelegateForTest(std::unique_ptr<EventDelegate> event_delegate);
@@ -117,14 +126,14 @@ class IdleManager : public ExtensionRegistryObserver,
   FRIEND_TEST_ALL_PREFIXES(IdleTest, SetDetectionIntervalMinimum);
   FRIEND_TEST_ALL_PREFIXES(IdleTest, UnloadCleanup);
 
-  typedef std::map<const std::string, IdleMonitor> MonitorMap;
+  using MonitorMap = std::map<const std::string, IdleMonitor>;
 
-  IdleMonitor* GetMonitor(const std::string& extension_id);
+  IdleMonitor* GetMonitor(const ExtensionId& extension_id);
   void StartPolling();
   void StopPolling();
   void UpdateIdleState();
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
 
   ui::IdleState last_state_;
   MonitorMap monitors_;
@@ -139,8 +148,6 @@ class IdleManager : public ExtensionRegistryObserver,
   // Listen to extension unloaded notification.
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(IdleManager);
 };
 
 }  // namespace extensions

@@ -1,20 +1,32 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/check_op.h"
-#include "base/strings/stringprintf.h"
+#include "base/functional/callback_forward.h"
+#include "base/strings/to_string.h"
+#include "base/synchronization/lock.h"
+#include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_audio_sink.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_source.h"
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_source.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
@@ -27,7 +39,7 @@ constexpr char kTag[] = "MSAT::";
 MediaStreamAudioTrack::MediaStreamAudioTrack(bool is_local_track)
     : MediaStreamTrackPlatform(is_local_track), is_enabled_(1) {
   WebRtcLog(kTag, this, "%s({is_local_track=%s})", __func__,
-            (is_local_track ? "true" : "false"));
+            base::ToString(is_local_track).c_str());
 }
 
 MediaStreamAudioTrack::~MediaStreamAudioTrack() {
@@ -36,11 +48,21 @@ MediaStreamAudioTrack::~MediaStreamAudioTrack() {
   Stop();
 }
 
+std::unique_ptr<MediaStreamTrackPlatform>
+MediaStreamAudioTrack::CreateFromComponent(
+    const MediaStreamComponent* component,
+    const String& id) {
+  MediaStreamSource* source = component->Source();
+  CHECK_EQ(source->GetType(), MediaStreamSource::kTypeAudio);
+  return MediaStreamAudioSource::From(source)->CreateMediaStreamAudioTrack(
+      id.Utf8());
+}
+
 // static
 MediaStreamAudioTrack* MediaStreamAudioTrack::From(
     const MediaStreamComponent* component) {
   if (!component ||
-      component->Source()->GetType() != MediaStreamSource::kTypeAudio) {
+      component->GetSourceType() != MediaStreamSource::kTypeAudio) {
     return nullptr;
   }
   return static_cast<MediaStreamAudioTrack*>(component->GetPlatformTrack());
@@ -58,7 +80,7 @@ void MediaStreamAudioTrack::AddSink(WebMediaStreamAudioSink* sink) {
   }
 
   deliverer_.AddConsumer(sink);
-  sink->OnEnabledChanged(!!base::subtle::NoBarrier_Load(&is_enabled_));
+  sink->OnEnabledChanged(is_enabled_.load(std::memory_order_relaxed));
 }
 
 void MediaStreamAudioTrack::RemoveSink(WebMediaStreamAudioSink* sink) {
@@ -74,10 +96,10 @@ media::AudioParameters MediaStreamAudioTrack::GetOutputFormat() const {
 void MediaStreamAudioTrack::SetEnabled(bool enabled) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   WebRtcLog(kTag, this, "%s({enabled=%s})", __func__,
-            (enabled ? "true" : "false"));
+            base::ToString(enabled).c_str());
 
   const bool previously_enabled =
-      !!base::subtle::NoBarrier_AtomicExchange(&is_enabled_, enabled ? 1 : 0);
+      is_enabled_.exchange(enabled, std::memory_order_relaxed);
   if (enabled == previously_enabled)
     return;
 
@@ -89,7 +111,7 @@ void MediaStreamAudioTrack::SetEnabled(bool enabled) {
 
 bool MediaStreamAudioTrack::IsEnabled() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return is_enabled_;
+  return is_enabled_.load(std::memory_order_relaxed);
 }
 
 void MediaStreamAudioTrack::SetContentHint(
@@ -122,8 +144,26 @@ void MediaStreamAudioTrack::StopAndNotify(base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   WebRtcLog(kTag, this, "%s()", __func__);
 
-  if (!stop_callback_.is_null())
+  // Running |stop_callback_| (MediaStreamAudioSource::StopAudioDeliveryTo)
+  // stops the source if this was its last track. That synchronously fires
+  // 'ended' on other MediaStreamTrackImpls sharing the source, which runs
+  // script, which can trigger a GC. If nothing else references the
+  // MediaStreamComponentImpl owning |this|, its pre-finalizer deletes |this|
+  // while this frame is still on the stack. In that case
+  // ~MediaStreamAudioTrack() has already run Stop() (ending the sinks and
+  // invalidating weak pointers), so the only thing left to do is run
+  // |callback|, which UserMediaClient's request queue relies on to make
+  // progress. See https://crbug.com/576215540.
+  base::WeakPtr<MediaStreamAudioTrack> weak_this = GetWeakPtr();
+  if (!stop_callback_.is_null()) {
     std::move(stop_callback_).Run();
+  }
+  if (!weak_this) {
+    if (callback) {
+      std::move(callback).Run();
+    }
+    return;
+  }
 
   Vector<WebMediaStreamAudioSink*> sinks_to_end;
   deliverer_.GetConsumerList(&sinks_to_end);
@@ -132,8 +172,9 @@ void MediaStreamAudioTrack::StopAndNotify(base::OnceClosure callback) {
     sink->OnReadyStateChanged(WebMediaStreamSource::kReadyStateEnded);
   }
 
-  if (callback)
+  if (callback) {
     std::move(callback).Run();
+  }
   weak_factory_.InvalidateWeakPtrs();
 }
 
@@ -144,7 +185,8 @@ void MediaStreamAudioTrack::OnSetFormat(const media::AudioParameters& params) {
 }
 
 void MediaStreamAudioTrack::OnData(const media::AudioBus& audio_bus,
-                                   base::TimeTicks reference_time) {
+                                   base::TimeTicks reference_time,
+                                   const media::AudioGlitchInfo& glitch_info) {
   TRACE_EVENT2(TRACE_DISABLED_BY_DEFAULT("mediastream"),
                "MediaStreamAudioTrack::OnData", "this",
                static_cast<void*>(this), "frame", audio_bus.frames());
@@ -157,12 +199,13 @@ void MediaStreamAudioTrack::OnData(const media::AudioBus& audio_bus,
     received_audio_callback_ = true;
   }
 
-  // Note: Using NoBarrier_Load because the timing of when the audio thread sees
-  // a changed |is_enabled_| value can be relaxed.
-  const bool deliver_data = !!base::subtle::NoBarrier_Load(&is_enabled_);
+  // Note: Using relaxed ordering because the timing of when the audio thread
+  // sees a changed |is_enabled_| value can be relaxed.
+  const bool deliver_data = is_enabled_.load(std::memory_order_relaxed);
 
   if (deliver_data) {
-    deliverer_.OnData(audio_bus, reference_time);
+    UpdateFrameStats(audio_bus, reference_time, glitch_info);
+    deliverer_.OnData(audio_bus, reference_time, glitch_info);
   } else {
     // The W3C spec requires silent audio to flow while a track is disabled.
     if (!silent_bus_ || silent_bus_->channels() != audio_bus.channels() ||
@@ -171,7 +214,27 @@ void MediaStreamAudioTrack::OnData(const media::AudioBus& audio_bus,
           media::AudioBus::Create(audio_bus.channels(), audio_bus.frames());
       silent_bus_->Zero();
     }
-    deliverer_.OnData(*silent_bus_, reference_time);
+    deliverer_.OnData(*silent_bus_, reference_time, {});
+  }
+}
+
+void MediaStreamAudioTrack::TransferAudioFrameStatsTo(
+    MediaStreamTrackPlatform::AudioFrameStats& destination) {
+  base::AutoLock auto_lock(mainthread_frame_stats_lock_);
+  destination.Absorb(mainthread_frame_stats_);
+}
+
+void MediaStreamAudioTrack::UpdateFrameStats(
+    const media::AudioBus& audio_bus,
+    base::TimeTicks reference_time,
+    const media::AudioGlitchInfo& glitch_info) {
+  pending_frame_stats_.Update(GetOutputFormat(), reference_time, glitch_info);
+
+  // If the main thread does not already hold the lock, take it and transfer
+  // the latest stats to the main thread.
+  if (mainthread_frame_stats_lock_.Try()) {
+    mainthread_frame_stats_.Absorb(pending_frame_stats_);
+    mainthread_frame_stats_lock_.Release();
   }
 }
 

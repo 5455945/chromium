@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,8 @@ class FakeUIResourceLayerTreeHostImpl : public FakeLayerTreeHostImpl {
   void DeleteUIResource(UIResourceId uid) override;
 
   viz::ResourceId ResourceIdForUIResource(UIResourceId uid) const override;
+
+  gfx::Size GetUIResourceSize(UIResourceId uid) const override;
 
   bool IsUIResourceOpaque(UIResourceId uid) const override;
 

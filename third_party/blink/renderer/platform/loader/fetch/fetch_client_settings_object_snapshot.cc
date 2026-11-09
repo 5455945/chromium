@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,11 +14,10 @@ FetchClientSettingsObjectSnapshot::FetchClientSettingsObjectSnapshot(
           fetch_client_setting_object.GlobalObjectUrl(),
           fetch_client_setting_object.BaseUrl(),
           fetch_client_setting_object.GetSecurityOrigin(),
-          fetch_client_setting_object.GetReferrerPolicy(),
+          fetch_client_setting_object.GetPolicyContainerPolicies().Clone(),
           fetch_client_setting_object.GetOutgoingReferrer(),
           fetch_client_setting_object.GetHttpsState(),
           fetch_client_setting_object.MimeTypeCheckForClassicWorkerScript(),
-          fetch_client_setting_object.GetAddressSpace(),
           fetch_client_setting_object.GetInsecureRequestsPolicy(),
           fetch_client_setting_object.GetUpgradeInsecureNavigationsSet()) {}
 
@@ -28,11 +27,10 @@ FetchClientSettingsObjectSnapshot::FetchClientSettingsObjectSnapshot(
           data->global_object_url,
           data->base_url,
           data->security_origin,
-          data->referrer_policy,
+          data->policy_container_policies->Clone(),
           data->outgoing_referrer,
           data->https_state,
           data->mime_type_check_for_classic_worker_script,
-          data->address_space,
           data->insecure_requests_policy,
           data->insecure_navigations_set) {}
 
@@ -40,23 +38,40 @@ FetchClientSettingsObjectSnapshot::FetchClientSettingsObjectSnapshot(
     const KURL& global_object_url,
     const KURL& base_url,
     const scoped_refptr<const SecurityOrigin> security_origin,
-    network::mojom::ReferrerPolicy referrer_policy,
+    mojom::blink::PolicyContainerPoliciesPtr policy_container_policies,
     const String& outgoing_referrer,
     HttpsState https_state,
     AllowedByNosniff::MimeTypeCheck mime_type_check_for_classic_worker_script,
-    network::mojom::IPAddressSpace address_space,
     mojom::blink::InsecureRequestPolicy insecure_requests_policy,
     InsecureNavigationsSet insecure_navigations_set)
     : global_object_url_(global_object_url),
       base_url_(base_url),
       security_origin_(std::move(security_origin)),
-      referrer_policy_(referrer_policy),
+      policy_container_policies_(std::move(policy_container_policies)),
       outgoing_referrer_(outgoing_referrer),
       https_state_(https_state),
       mime_type_check_for_classic_worker_script_(
           mime_type_check_for_classic_worker_script),
-      address_space_(address_space),
       insecure_requests_policy_(insecure_requests_policy),
       insecure_navigations_set_(std::move(insecure_navigations_set)) {}
+
+// static
+FetchClientSettingsObjectSnapshot&
+FetchClientSettingsObjectSnapshot::CreateForTesting(
+    const KURL& script_url,
+    scoped_refptr<const SecurityOrigin> origin) {
+  return *MakeGarbageCollected<FetchClientSettingsObjectSnapshot>(
+      /*global_object_url=*/script_url,
+      /*base_url=*/script_url, std::move(origin),
+      []() {
+        auto policies = mojom::blink::PolicyContainerPolicies::New();
+        policies->referrer_policy = network::mojom::ReferrerPolicy::kDefault;
+        return policies;
+      }(),
+      /*outgoing_referrer=*/script_url, HttpsState::kModern,
+      AllowedByNosniff::MimeTypeCheck::kStrict,
+      mojom::blink::InsecureRequestPolicy::kLeaveInsecureRequestsAlone,
+      InsecureNavigationsSet());
+}
 
 }  // namespace blink

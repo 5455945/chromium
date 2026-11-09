@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/callback.h"
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/writable_shared_memory_region.h"
 #include "components/viz/common/frame_timing_details_map.h"
+#include "components/viz/common/performance_hint_utils.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "third_party/blink/public/mojom/input/synchronous_compositor.mojom-blink.h"
-#include "third_party/blink/public/platform/input/synchronous_input_handler_proxy.h"
 #include "third_party/blink/renderer/platform/widget/compositing/android_webview/synchronous_layer_tree_frame_sink.h"
-#include "ui/gfx/geometry/scroll_offset.h"
+#include "third_party/blink/renderer/platform/widget/input/input_handler_proxy.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size_f.h"
-
-namespace power_scheduler {
-class PowerModeVoter;
-}  // namespace power_scheduler
 
 namespace viz {
 class CompositorFrame;
@@ -36,8 +35,7 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
                                    public SynchronousLayerTreeFrameSinkClient,
                                    public mojom::blink::SynchronousCompositor {
  public:
-  SynchronousCompositorProxy(
-      blink::SynchronousInputHandlerProxy* input_handler_proxy);
+  SynchronousCompositorProxy(InputHandlerProxy* input_handler_proxy);
   SynchronousCompositorProxy(const SynchronousCompositorProxy&) = delete;
   SynchronousCompositorProxy& operator=(const SynchronousCompositorProxy&) =
       delete;
@@ -51,10 +49,11 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
           host,
       mojo::PendingAssociatedReceiver<mojom::blink::SynchronousCompositor>
           compositor_request);
+  void SetThreads(const Vector<viz::Thread>& threads);
 
   // blink::SynchronousInputHandler overrides.
-  void UpdateRootLayerState(const gfx::ScrollOffset& total_scroll_offset,
-                            const gfx::ScrollOffset& max_scroll_offset,
+  void UpdateRootLayerState(const gfx::PointF& total_scroll_offset,
+                            const gfx::PointF& max_scroll_offset,
                             const gfx::SizeF& scrollable_size,
                             float page_scale_factor,
                             float min_page_scale_factor,
@@ -66,8 +65,8 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
   void SubmitCompositorFrame(
       uint32_t layer_tree_frame_sink_id,
       const viz::LocalSurfaceId& local_surface_id,
-      absl::optional<viz::CompositorFrame> frame,
-      absl::optional<viz::HitTestRegionList> hit_test_region_list) final;
+      std::optional<viz::CompositorFrame> frame,
+      std::optional<viz::HitTestRegionList> hit_test_region_list) final;
   void SetNeedsBeginFrames(bool needs_begin_frames) final;
   void SinkDestroyed() final;
 
@@ -91,10 +90,13 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
   void SetMemoryPolicy(uint32_t bytes_limit) final;
   void ReclaimResources(uint32_t layer_tree_frame_sink_id,
                         Vector<viz::ReturnedResource> resources) final;
-  void SetScroll(const gfx::ScrollOffset& total_scroll_offset) final;
-  void BeginFrame(const viz::BeginFrameArgs& args,
-                  const WTF::HashMap<uint32_t, viz::FrameTimingDetails>&
-                      timing_details) final;
+  void OnCompositorFrameTransitionDirectiveProcessed(
+      uint32_t layer_tree_frame_sink_id,
+      uint32_t sequence_id) final;
+  void SetScroll(const gfx::PointF& total_scroll_offset) final;
+  void BeginFrame(
+      const viz::BeginFrameArgs& args,
+      const HashMap<uint32_t, viz::FrameTimingDetails>& timing_details) final;
   void SetBeginFrameSourcePaused(bool paused) final;
 
  protected:
@@ -106,14 +108,14 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
       mojom::blink::SyncCompositorCommonRendererParamsPtr,
       uint32_t layer_tree_frame_sink_id,
       uint32_t metadata_version,
-      const absl::optional<viz::LocalSurfaceId>& local_surface_id,
-      absl::optional<viz::CompositorFrame>,
-      absl::optional<viz::HitTestRegionList> hit_test_region_list);
+      const std::optional<viz::LocalSurfaceId>& local_surface_id,
+      std::optional<viz::CompositorFrame>,
+      std::optional<viz::HitTestRegionList> hit_test_region_list);
 
   DemandDrawHwCallback hardware_draw_reply_;
   DemandDrawSwCallback software_draw_reply_;
   ZoomByCallback zoom_by_reply_;
-  SynchronousLayerTreeFrameSink* layer_tree_frame_sink_ = nullptr;
+  raw_ptr<SynchronousLayerTreeFrameSink> layer_tree_frame_sink_ = nullptr;
   bool begin_frame_paused_ = false;
 
  private:
@@ -123,27 +125,25 @@ class SynchronousCompositorProxy : public blink::SynchronousInputHandler,
 
   struct SharedMemoryWithSize;
 
-  blink::SynchronousInputHandlerProxy* const input_handler_proxy_;
+  const raw_ptr<InputHandlerProxy> input_handler_proxy_;
   mojo::Remote<mojom::blink::SynchronousCompositorControlHost> control_host_;
   mojo::AssociatedRemote<mojom::blink::SynchronousCompositorHost> host_;
   mojo::AssociatedReceiver<mojom::blink::SynchronousCompositor> receiver_{this};
   bool use_in_process_zero_copy_software_draw_ = false;
 
-  std::unique_ptr<power_scheduler::PowerModeVoter> animation_power_mode_voter_;
-
   const bool viz_frame_submission_enabled_;
 
   bool needs_begin_frames_ = false;
+  Vector<viz::Thread> threads_;
 
   // From browser.
   std::unique_ptr<SharedMemoryWithSize> software_draw_shm_;
 
   // To browser.
   uint32_t version_ = 0;
-  // |total_scroll_offset_| and |max_scroll_offset_| are in physical pixel when
-  // use-zoom-for-dsf is enabled, otherwise in dip.
-  gfx::ScrollOffset total_scroll_offset_;  // Modified by both.
-  gfx::ScrollOffset max_scroll_offset_;
+  // |total_scroll_offset_| and |max_scroll_offset_| are in physical pixels.
+  gfx::PointF total_scroll_offset_;  // Modified by both.
+  gfx::PointF max_scroll_offset_;
   gfx::SizeF scrollable_size_;
   float page_scale_factor_;
   float min_page_scale_factor_;

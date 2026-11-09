@@ -1,152 +1,230 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.browserservices.permissiondelegation;
 
-import android.os.Build;
-import android.support.test.InstrumentationRegistry;
+import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
+import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
+
+import androidx.preference.Preference;
+import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.params.ParameterAnnotations.UseMethodParameter;
+import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
+import org.chromium.base.test.params.ParameterProvider;
+import org.chromium.base.test.params.ParameterSet;
+import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.browser.ChromeApplicationImpl;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.settings.SettingsActivity;
 import org.chromium.chrome.browser.site_settings.SiteSettingsTestUtils;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.components.browser_ui.settings.ChromeImageViewPreference;
 import org.chromium.components.browser_ui.settings.ExpandablePreferenceGroup;
+import org.chromium.components.browser_ui.site_settings.ContentSettingException;
 import org.chromium.components.browser_ui.site_settings.SingleCategorySettings;
 import org.chromium.components.browser_ui.site_settings.SingleWebsiteSettings;
 import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
 import org.chromium.components.browser_ui.site_settings.Website;
 import org.chromium.components.browser_ui.site_settings.WebsiteAddress;
+import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
+import org.chromium.components.content_settings.ProviderType;
 import org.chromium.components.embedder_support.util.Origin;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
-/**
- * Tests for TrustedWebActivity functionality under Settings > Site Settings.
- */
-@RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({
-        ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-})
+import java.util.Arrays;
+import java.util.List;
+
+/** Tests for TrustedWebActivity functionality under Settings > Site Settings. */
+@RunWith(ParameterizedRunner.class)
+@UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
+@Batch(Batch.PER_CLASS)
 public class TrustedWebActivityPreferencesUiTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private String mPackage;
-    private TrustedWebActivityPermissionManager mPermissionMananger;
+    private String mSite;
+    private Origin mOrigin;
 
     @Before
     public void setUp() throws Exception {
-        mActivityTestRule.startMainActivityOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
 
-        mPackage = InstrumentationRegistry.getTargetContext().getPackageName();
-        mPermissionMananger = ChromeApplicationImpl.getComponent().resolveTwaPermissionManager();
+        mPackage = ApplicationProvider.getApplicationContext().getPackageName();
+        mSite = "http://example.com";
+        mOrigin = Origin.create(mSite);
+    }
+
+    @After
+    public void tearDown() throws Exception {
+        if (mOrigin != null) {
+            runOnUiThreadBlocking(() -> InstalledWebappPermissionManager.unregister(mOrigin));
+        }
     }
 
     /**
      * Tests that the 'Managed by' section appears correctly and that it contains our registered
      * website.
-     * @throws Exception
      */
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.P,
-            message = "This test is disabled on Android O because of https://crbug.com/1202711")
-    public void
-    testSingleCategoryManagedBy() throws Exception {
-        final String site = "http://example.com";
-        final Origin origin = Origin.create(site);
+    public void testSingleCategoryManagedBy() throws Exception {
+        runOnUiThreadBlocking(
+                () ->
+                        InstalledWebappPermissionManager.updatePermission(
+                                mOrigin,
+                                mPackage,
+                                ContentSettingsType.NOTIFICATIONS,
+                                ContentSetting.ALLOW));
 
-        TestThreadUtils.runOnUiThreadBlocking(
-                ()
-                        -> mPermissionMananger.updatePermission(
-                                origin, mPackage, ContentSettingsType.NOTIFICATIONS, true));
-
-        SettingsActivity settingsActivity = SiteSettingsTestUtils.startSiteSettingsCategory(
-                SiteSettingsCategory.Type.NOTIFICATIONS);
+        SettingsActivity settingsActivity =
+                SiteSettingsTestUtils.startSiteSettingsCategory(
+                        SiteSettingsCategory.Type.NOTIFICATIONS);
         final String groupName = "managed_group";
 
-        final SingleCategorySettings websitePreferences =
-                TestThreadUtils.runOnUiThreadBlocking(() -> {
+        CriteriaHelper.pollUiThread(
+                () -> {
                     final SingleCategorySettings preferences =
                             (SingleCategorySettings) settingsActivity.getMainFragment();
                     final ExpandablePreferenceGroup group =
                             (ExpandablePreferenceGroup) preferences.findPreference(groupName);
-                    preferences.onPreferenceClick(group);
-                    return preferences;
+                    return group.isExpanded();
                 });
 
-        CriteriaHelper.pollUiThread(() -> {
-            // The preference group gets recreated in onPreferenceClick, so we need to find it
-            // again.
-            final ExpandablePreferenceGroup group =
-                    (ExpandablePreferenceGroup) websitePreferences.findPreference(groupName);
-            return group.isExpanded();
-        });
+        runOnUiThreadBlocking(
+                () -> {
+                    final SingleCategorySettings preferences =
+                            (SingleCategorySettings) settingsActivity.getMainFragment();
+                    final ExpandablePreferenceGroup group =
+                            (ExpandablePreferenceGroup) preferences.findPreference(groupName);
+                    Assert.assertEquals(1, group.getPreferenceCount());
+                    Preference preference = group.getPreference(0);
+                    CharSequence title = preference.getTitle();
+                    Assert.assertEquals("example.com", title.toString());
+                });
+    }
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            final ExpandablePreferenceGroup group =
-                    (ExpandablePreferenceGroup) websitePreferences.findPreference(groupName);
-            Assert.assertEquals(1, group.getPreferenceCount());
-            androidx.preference.Preference preference = group.getPreference(0);
-            CharSequence title = preference.getTitle();
-            Assert.assertEquals("example.com", title.toString());
-        });
+    public static class ContentSettingParam implements ParameterProvider {
+        private static final List<ParameterSet> sMethodParam =
+                Arrays.asList(
+                        new ParameterSet().value(ContentSetting.ALLOW).name("allow"),
+                        new ParameterSet().value(ContentSetting.ASK).name("ask"),
+                        new ParameterSet().value(ContentSetting.BLOCK).name("block"));
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mPermissionMananger.unregister(origin));
-
-        settingsActivity.finish();
+        @Override
+        public List<ParameterSet> getParameters() {
+            return sMethodParam;
+        }
     }
 
     /**
-     * Tests that registered sites show 'Managed by' in the title when viewing the details for a
-     * single website.
+     * Tests that the 'Managed by' is displayed when notifications are allowed or blocked, or when
+     * hasRequestedNotificationsPermission is true. A Subscribe button is not displayed for TWAs.
      */
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testWebsitePreferencesManagedBy() {
-        final String site = "http://example.com";
-        final Origin origin = Origin.create(site);
+    @UseMethodParameter(ContentSettingParam.class)
+    public void testWebsitePreferencesManagedBy_SubscribeButtonNotDisplayed(
+            @ContentSetting int contentSetting) {
+        runOnUiThreadBlocking(
+                () ->
+                        InstalledWebappPermissionManager.updatePermission(
+                                mOrigin,
+                                mPackage,
+                                ContentSettingsType.NOTIFICATIONS,
+                                contentSetting));
 
-        TestThreadUtils.runOnUiThreadBlocking(
-                ()
-                        -> mPermissionMananger.updatePermission(
-                                origin, mPackage, ContentSettingsType.NOTIFICATIONS, true));
+        Website website = createWebsiteWithContentSettingException(contentSetting);
 
-        WebsiteAddress address = WebsiteAddress.create(site);
-        Website website = new Website(address, address);
-        final SettingsActivity settingsActivity =
+        SettingsActivity settingsActivity =
                 SiteSettingsTestUtils.startSingleWebsitePreferences(website);
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            final SingleWebsiteSettings websitePreferences =
-                    (SingleWebsiteSettings) settingsActivity.getMainFragment();
-            final ChromeImageViewPreference notificationPreference =
-                    (ChromeImageViewPreference) websitePreferences.findPreference(
-                            "push_notifications_list");
-            CharSequence summary = notificationPreference.getSummary();
-            Assert.assertTrue(summary.toString().startsWith("Managed by "));
-        });
+        runOnUiThreadBlocking(
+                () -> {
+                    // Simulate the Page Info prompt flow.
+                    final SingleWebsiteSettings websitePreferences =
+                            (SingleWebsiteSettings) settingsActivity.getMainFragment();
+                    websitePreferences.setHasRequestedNotificationsPermission(
+                            contentSetting == ContentSetting.ASK);
+                    websitePreferences.refreshSitePermissions();
+                    final Preference preference =
+                            websitePreferences.findPreference(
+                                    SingleWebsiteSettings.getPreferenceKey(
+                                            ContentSettingsType.NOTIFICATIONS));
+                    Assert.assertNotNull("Notification Preference not found.", preference);
+                    Assert.assertTrue(
+                            "Preference should be ChromeImageViewPreference",
+                            preference instanceof ChromeImageViewPreference);
+                    CharSequence summary = preference.getSummary();
+                    Assert.assertTrue(summary.toString().startsWith("Managed by "));
+                });
+        onView(withText(R.string.notifications_permission_subscribe)).check(doesNotExist());
+    }
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mPermissionMananger.unregister(origin));
+    /**
+     * Tests that no entry is displayed in the ASK state if hasRequestedNotificationsPermission is
+     * false.
+     */
+    @Test
+    @SmallTest
+    @Feature({"Preferences"})
+    public void testWebsitePreferencesManagedBy_NotDisplayedOnAsk() {
+        runOnUiThreadBlocking(
+                () ->
+                        InstalledWebappPermissionManager.updatePermission(
+                                mOrigin,
+                                mPackage,
+                                ContentSettingsType.NOTIFICATIONS,
+                                ContentSetting.ASK));
 
-        settingsActivity.finish();
+        Website website = createWebsiteWithContentSettingException(ContentSetting.ASK);
+
+        SettingsActivity settingsActivity =
+                SiteSettingsTestUtils.startSingleWebsitePreferences(website);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    final SingleWebsiteSettings websitePreferences =
+                            (SingleWebsiteSettings) settingsActivity.getMainFragment();
+                    final Preference preference =
+                            websitePreferences.findPreference(
+                                    SingleWebsiteSettings.getPreferenceKey(
+                                            ContentSettingsType.NOTIFICATIONS));
+                    Assert.assertNull("Notification Preference found.", preference);
+                });
+    }
+
+    private Website createWebsiteWithContentSettingException(@ContentSetting int value) {
+        WebsiteAddress address = WebsiteAddress.create(mSite);
+        Website website = new Website(address, address);
+        website.setContentSettingException(
+                ContentSettingsType.NOTIFICATIONS,
+                new ContentSettingException(
+                        ContentSettingsType.NOTIFICATIONS,
+                        website.getAddress().getOrigin(),
+                        value,
+                        ProviderType.PREF_PROVIDER,
+                        /* isEmbargoed= */ false));
+        return website;
     }
 }

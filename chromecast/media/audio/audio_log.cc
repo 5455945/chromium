@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,21 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
-#include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 
 namespace logging {
 
 namespace {
 constexpr int kBufferSize = 256;
-constexpr int kMaxBuffers = 16;
+constexpr int kMaxBuffers = 32;
 }  // namespace
 
 class AudioLogMessage::StreamBuf : public std::streambuf {
@@ -34,7 +34,7 @@ class AudioLogMessage::StreamBuf : public std::streambuf {
     file_ = file;
     line_ = line;
     severity_ = severity;
-    setp(buffer_, buffer_ + kBufferSize);
+    setp(buffer_, UNSAFE_TODO(buffer_ + kBufferSize));
   }
 
   void Log() {
@@ -69,12 +69,12 @@ class AudioLogMessage::BufferManager {
       return;
     }
 
-    task_runner_ = base::SequencedTaskRunnerHandle::Get();
+    task_runner_ = base::SequencedTaskRunner::GetCurrentDefault();
     dispose_callback_ = base::BindRepeating(
         &BufferManager::HandleDisposedBuffers, base::Unretained(this));
 
     for (int i = 0; i < kMaxBuffers; ++i) {
-      free_buffers_[i] = &buffers_[i];
+      UNSAFE_TODO(free_buffers_[i]) = &UNSAFE_TODO(buffers_[i]);
     }
     num_free_buffers_ = kMaxBuffers;
     ready_ = true;
@@ -96,7 +96,7 @@ class AudioLogMessage::BufferManager {
       }
 
       --num_free_buffers_;
-      buffer = free_buffers_[num_free_buffers_];
+      buffer = UNSAFE_TODO(free_buffers_[num_free_buffers_]);
     }
     buffer->Initialize(file, line, severity);
     return buffer;
@@ -113,11 +113,11 @@ class AudioLogMessage::BufferManager {
 
     {
       base::AutoLock lock(lock_);
-      DCHECK_LT(num_disposed_buffers_, kMaxBuffers);
-      disposed_buffers_[num_disposed_buffers_] = buffer;
+      CHECK_LT(num_disposed_buffers_, kMaxBuffers, base::NotFatalUntil::M163);
+      UNSAFE_TODO(disposed_buffers_[num_disposed_buffers_]) = buffer;
       ++num_disposed_buffers_;
     }
-    DCHECK(task_runner_);
+    CHECK(task_runner_, base::NotFatalUntil::M163);
     task_runner_->PostTask(FROM_HERE, dispose_callback_);
   }
 
@@ -137,10 +137,10 @@ class AudioLogMessage::BufferManager {
     }
 
     for (int i = 0; i < num_buffers; ++i) {
-      buffers[i]->Log();
+      UNSAFE_TODO(buffers[i]->Log());
       {
         base::AutoLock lock(lock_);
-        free_buffers_[num_free_buffers_] = buffers[i];
+        UNSAFE_TODO(free_buffers_[num_free_buffers_]) = UNSAFE_TODO(buffers[i]);
         ++num_free_buffers_;
       }
     }

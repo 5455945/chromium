@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 #define UI_VIEWS_EXAMPLES_LOGIN_BUBBLE_DIALOG_EXAMPLE_H_
 
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -22,8 +24,9 @@ namespace examples {
 class LoginBubbleDialogView : public BubbleDialogDelegateView,
                               public TextfieldController {
  public:
-  using OnSubmitCallback = base::OnceCallback<void(std::u16string username,
-                                                   std::u16string password)>;
+  using OnSubmitCallback =
+      base::OnceCallback<void(std::u16string_view username,
+                              std::u16string_view password)>;
 
   static void Show(View* anchor_view,
                    BubbleBorder::Arrow anchor_position,
@@ -40,8 +43,8 @@ class LoginBubbleDialogView : public BubbleDialogDelegateView,
                         BubbleBorder::Arrow anchor_position,
                         OnSubmitCallback accept_callback);
 
-  Textfield* username_ = nullptr;
-  Textfield* password_ = nullptr;
+  raw_ptr<Textfield> username_ = nullptr;
+  raw_ptr<Textfield> password_ = nullptr;
 };
 
 // Instantiates the login dialog example.
@@ -54,14 +57,14 @@ class LoginBubbleDialogExample : public ExampleBase {
   void CreateExampleView(View* container) override;
 
   // LoginBubbleDialogController:
-  void OnSubmit(std::u16string username, std::u16string password);
+  void OnSubmit(std::u16string_view username, std::u16string_view password);
 
  private:
-  LabelButton* button_ = nullptr;
-  Label* username_label_ = nullptr;
-  Label* username_input_ = nullptr;
-  Label* password_label_ = nullptr;
-  Label* password_input_ = nullptr;
+  raw_ptr<LabelButton> button_ = nullptr;
+  raw_ptr<Label> username_label_ = nullptr;
+  raw_ptr<Label> username_input_ = nullptr;
+  raw_ptr<Label> password_label_ = nullptr;
+  raw_ptr<Label> password_input_ = nullptr;
 };
 
 }  // namespace examples

@@ -1,11 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as UIModule from 'devtools/ui/legacy/legacy.js';
+import * as Console from 'devtools/panels/console/console.js';
 
 (async function() {
   TestRunner.addResult('Tests that expanded tree element is editable in console.\n');
 
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
 
   await TestRunner.evaluateInPagePromise(`
@@ -19,29 +24,35 @@
     })();
   `);
 
-  ConsoleTestRunner.expandConsoleMessages(onConsoleMessageExpanded);
+  await ConsoleTestRunner.expandConsoleMessagesPromise();
+  if (ConsoleTestRunner.waitForAllPopulations) {
+    await ConsoleTestRunner.waitForAllPopulations();
+  }
 
-  function onConsoleMessageExpanded() {
-    var messages = Console.ConsoleView.instance()._visibleViewMessages;
+  const messages =
+      Console.ConsoleView.ConsoleView.instance().visibleViewMessages;
+  for (let i = 0; i < messages.length; ++i) {
+    const message = messages[i];
 
-    for (var i = 0; i < messages.length; ++i) {
-      var message = messages[i];
-      var node = message.contentElement();
-
-      for (var node = message.contentElement(); node; node = node.traverseNextNode(message.contentElement())) {
-        const treeElement = UI.TreeElement.getTreeElementBylistItemNode(node);
-        if (treeElement) {
-          onTreeElement(treeElement.firstChild());
-          return;
-        }
+    for (let node = message.contentElement(); node;
+         node = node.traverseNextNode(message.contentElement())) {
+      const treeElement =
+          UIModule.TreeOutline.TreeElement.getTreeElementBylistItemNode(node);
+      if (treeElement?.firstChild()) {
+        onTreeElement(treeElement.firstChild());
+        return;
       }
     }
   }
 
   function onTreeElement(treeElement) {
-    treeElement._startEditing();
-    Console.ConsoleView.instance()._viewport.refresh();
-    TestRunner.addResult('After viewport refresh tree element remains in editing mode: ' + !!treeElement._prompt);
+    const widget = UIModule.Widget.Widget.get(
+        treeElement.titleElement.querySelector('devtools-widget'));
+    widget.startEditing();
+    Console.ConsoleView.ConsoleView.instance().viewport.refresh();
+    TestRunner.addResult(
+        'After viewport refresh tree element remains in editing mode: ' +
+        !!widget.editing);
     TestRunner.completeTest();
   }
 })();

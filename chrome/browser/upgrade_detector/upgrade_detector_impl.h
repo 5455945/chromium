@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,17 @@
 #define CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_IMPL_H_
 
 #include <array>
+#include <optional>
 
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/version.h"
 #include "chrome/browser/upgrade_detector/build_state_observer.h"
 #include "chrome/browser/upgrade_detector/installed_version_poller.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "components/variations/service/variations_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class Clock;
@@ -28,19 +28,17 @@ class UpgradeDetectorImpl : public UpgradeDetector,
                             public BuildStateObserver,
                             public variations::VariationsService::Observer {
  public:
-  // Returns the currently installed Chrome version, which may be newer than the
-  // one currently running. Not supported on Android, iOS or ChromeOS. Must be
-  // run on a thread where I/O operations are allowed.
-  static base::Version GetCurrentlyInstalledVersion();
-
   // Returns the global instance.
   static UpgradeDetectorImpl* GetInstance();
+
+  UpgradeDetectorImpl(const UpgradeDetectorImpl&) = delete;
+  UpgradeDetectorImpl& operator=(const UpgradeDetectorImpl&) = delete;
 
   // UpgradeDetector:
   void Init() override;
   void Shutdown() override;
-  base::TimeDelta GetHighAnnoyanceLevelDelta() override;
-  base::Time GetHighAnnoyanceDeadline() override;
+  base::Time GetAnnoyanceLevelDeadline(
+      UpgradeNotificationAnnoyanceLevel level) override;
 
   // BuildStateObserver:
   void OnUpdate(const BuildState* build_state) override;
@@ -85,7 +83,7 @@ class UpgradeDetectorImpl : public UpgradeDetector,
       size_t index);
 
   // UpgradeDetector:
-  void OnMonitoredPrefsChanged() override;
+  void RecomputeSchedule() override;
 
   // Starts the upgrade notification timer that will check periodically whether
   // enough time has elapsed to update the severity (which maps to visual
@@ -106,7 +104,7 @@ class UpgradeDetectorImpl : public UpgradeDetector,
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  absl::optional<InstalledVersionPoller> installed_version_poller_;
+  std::optional<InstalledVersionPoller> installed_version_poller_;
 
   // A timer used to periodically check if the build has become outdated.
   base::OneShotTimer outdated_build_timer_;
@@ -135,8 +133,6 @@ class UpgradeDetectorImpl : public UpgradeDetector,
   base::Time build_date_;
 
   base::WeakPtrFactory<UpgradeDetectorImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UpgradeDetectorImpl);
 };
 
 #endif  // CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_IMPL_H_

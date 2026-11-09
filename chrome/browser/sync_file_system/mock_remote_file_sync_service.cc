@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "url/gurl.h"
@@ -25,8 +24,6 @@ MockRemoteFileSyncService::MockRemoteFileSyncService()
   typedef MockRemoteFileSyncService self;
   ON_CALL(*this, AddServiceObserver(_))
       .WillByDefault(Invoke(this, &self::AddServiceObserverStub));
-  ON_CALL(*this, AddFileStatusObserver(_))
-      .WillByDefault(Invoke(this, &self::AddFileStatusObserverStub));
   ON_CALL(*this, RegisterOrigin(_, _))
       .WillByDefault(Invoke(this, &self::RegisterOriginStub));
   ON_CALL(*this, UninstallOrigin(_, _, _))
@@ -40,17 +37,7 @@ MockRemoteFileSyncService::MockRemoteFileSyncService()
       .WillByDefault(Invoke(this, &self::GetCurrentStateStub));
 }
 
-MockRemoteFileSyncService::~MockRemoteFileSyncService() {
-}
-
-void MockRemoteFileSyncService::DumpFiles(const GURL& origin,
-                                          ListCallback callback) {
-  std::move(callback).Run(nullptr);
-}
-
-void MockRemoteFileSyncService::DumpDatabase(ListCallback callback) {
-  std::move(callback).Run(nullptr);
-}
+MockRemoteFileSyncService::~MockRemoteFileSyncService() = default;
 
 void MockRemoteFileSyncService::SetServiceState(RemoteServiceState state) {
   state_ = state;
@@ -69,31 +56,14 @@ void MockRemoteFileSyncService::NotifyRemoteServiceStateUpdated(
     observer.OnRemoteServiceStateUpdated(state, description);
 }
 
-void MockRemoteFileSyncService::NotifyFileStatusChanged(
-    const storage::FileSystemURL& url,
-    SyncFileType file_type,
-    SyncFileStatus sync_status,
-    SyncAction action_taken,
-    SyncDirection direction) {
-  for (auto& observer : file_status_observers_) {
-    observer.OnFileStatusChanged(url, file_type, sync_status, action_taken,
-                                 direction);
-  }
-}
-
 void MockRemoteFileSyncService::AddServiceObserverStub(Observer* observer) {
   service_observers_.AddObserver(observer);
-}
-
-void MockRemoteFileSyncService::AddFileStatusObserverStub(
-    FileStatusObserver* observer) {
-  file_status_observers_.AddObserver(observer);
 }
 
 void MockRemoteFileSyncService::RegisterOriginStub(
     const GURL& origin,
     SyncStatusCallback callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), SYNC_STATUS_OK));
 }
 
@@ -101,13 +71,13 @@ void MockRemoteFileSyncService::DeleteOriginDirectoryStub(
     const GURL& origin,
     UninstallFlag flag,
     SyncStatusCallback callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), SYNC_STATUS_OK));
 }
 
 void MockRemoteFileSyncService::ProcessRemoteChangeStub(
     SyncFileCallback callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(std::move(callback), SYNC_STATUS_NO_CHANGE_TO_SYNC,
                      storage::FileSystemURL()));

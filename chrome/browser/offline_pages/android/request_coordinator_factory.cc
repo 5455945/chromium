@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/memory/singleton.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/offline_pages/android/background_scheduler_bridge.h"
@@ -19,7 +19,6 @@
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/common/chrome_constants.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/offline_pages/core/background/offliner.h"
 #include "components/offline_pages/core/background/offliner_policy.h"
 #include "components/offline_pages/core/background/request_coordinator.h"
@@ -35,42 +34,53 @@ class NetworkQualityTracker;
 
 namespace offline_pages {
 
+namespace {
+
 class ActiveTabInfo : public RequestCoordinator::ActiveTabInfo {
  public:
   explicit ActiveTabInfo(Profile* profile) : profile_(profile) {}
-  ~ActiveTabInfo() override {}
+  ~ActiveTabInfo() override = default;
   bool DoesActiveTabMatch(const GURL& url) override {
     // Loop through to find the active tab and report whether the URL matches.
-    for (const TabModel* model : TabModelList::models()) {
-      if (model->GetProfile() == profile_) {
-        content::WebContents* contents = model->GetActiveWebContents();
-        // Check visibility to make sure Chrome is in the foreground.
-        if (contents &&
-            contents->GetVisibility() == content::Visibility::VISIBLE) {
-          if (contents->GetVisibleURL() == url)
-            return true;
-          if (contents->GetLastCommittedURL() == url)
-            return true;
+    bool matched = false;
+    TabModelList::ForEach(profile_, [&](TabModel* model) {
+      content::WebContents* contents = model->GetActiveWebContents();
+      // Check visibility to make sure Chrome is in the foreground.
+      if (contents &&
+          contents->GetVisibility() == content::Visibility::VISIBLE) {
+        if (contents->GetVisibleURL() == url ||
+            contents->GetLastCommittedURL() == url) {
+          matched = true;
+          return false;
         }
       }
-    }
-    return false;
+      return true;
+    });
+    return matched;
   }
 
  private:
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 };
 
+}  // namespace
+
 RequestCoordinatorFactory::RequestCoordinatorFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "OfflineRequestCoordinator",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              .Build()) {
   // Depends on OfflinePageModelFactory in SimpleDependencyManager.
 }
 
 // static
 RequestCoordinatorFactory* RequestCoordinatorFactory::GetInstance() {
-  return base::Singleton<RequestCoordinatorFactory>::get();
+  static base::NoDestructor<RequestCoordinatorFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -80,7 +90,8 @@ RequestCoordinator* RequestCoordinatorFactory::GetForBrowserContext(
       GetInstance()->GetServiceForBrowserContext(context, true));
 }
 
-KeyedService* RequestCoordinatorFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+RequestCoordinatorFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   std::unique_ptr<OfflinerPolicy> policy(new OfflinerPolicy());
   std::unique_ptr<Offliner> offliner;
@@ -94,7 +105,7 @@ KeyedService* RequestCoordinatorFactory::BuildServiceInstanceFor(
 
   scoped_refptr<base::SequencedTaskRunner> background_task_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(), base::TaskPriority::BEST_EFFORT});
+          {base::MayBlock(), base::TaskPriority::USER_VISIBLE});
   Profile* profile = Profile::FromBrowserContext(context);
   base::FilePath queue_store_path =
       profile->GetPath().Append(chrome::kOfflinePageRequestQueueDirname);
@@ -106,12 +117,10 @@ KeyedService* RequestCoordinatorFactory::BuildServiceInstanceFor(
       scheduler(new android::BackgroundSchedulerBridge());
   network::NetworkQualityTracker* network_quality_tracker =
       g_browser_process->network_quality_tracker();
-  RequestCoordinator* request_coordinator = new RequestCoordinator(
+  return std::make_unique<RequestCoordinator>(
       std::move(policy), std::move(offliner), std::move(queue),
       std::move(scheduler), network_quality_tracker,
       std::make_unique<ActiveTabInfo>(profile));
-
-  return request_coordinator;
 }
 
 }  // namespace offline_pages

@@ -20,47 +20,48 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_RECT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_RECT_H_
 
-#include "third_party/blink/renderer/core/svg/properties/svg_property_helper.h"
+#include "third_party/blink/renderer/core/svg/properties/svg_property.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
 class SVGRectTearOff;
 
-class SVGRect final : public SVGPropertyHelper<SVGRect> {
+class SVGRect final : public SVGPropertyBase {
  public:
   typedef SVGRectTearOff TearOffType;
 
   static SVGRect* CreateInvalid() {
     SVGRect* rect = MakeGarbageCollected<SVGRect>();
-    rect->SetInvalid();
+    rect->is_valid_ = false;
     return rect;
   }
 
-  SVGRect();
-  SVGRect(const FloatRect&);
+  SVGRect() = default;
+  SVGRect(float x, float y, float width, float height)
+      : x_(x), y_(y), width_(width), height_(height) {}
 
   SVGRect* Clone() const;
 
-  const FloatRect& Value() const { return value_; }
-  void SetValue(const FloatRect& v) { value_ = v; }
+  // Negative width_/height_ will be clamped to 0.
+  gfx::RectF Rect() const { return gfx::RectF(x_, y_, width_, height_); }
 
-  float X() const { return value_.X(); }
-  float Y() const { return value_.Y(); }
-  float Width() const { return value_.Width(); }
-  float Height() const { return value_.Height(); }
-  void SetX(float f) { value_.SetX(f); }
-  void SetY(float f) { value_.SetY(f); }
-  void SetWidth(float f) { value_.SetWidth(f); }
-  void SetHeight(float f) { value_.SetHeight(f); }
+  float X() const { return x_; }
+  float Y() const { return y_; }
+  float Width() const { return width_; }
+  float Height() const { return height_; }
+  void SetX(float f) { x_ = f; }
+  void SetY(float f) { y_ = f; }
+  void SetWidth(float f) { width_ = f; }
+  void SetHeight(float f) { height_ = f; }
 
   String ValueAsString() const override;
   SVGParsingError SetValueAsString(const String&);
 
-  void Add(const SVGPropertyBase*, const SVGElement*) override;
+  bool Add(const SVGPropertyBase*, const SVGElement*) override;
   void CalculateAnimatedValue(
       const SMILAnimationEffectParameters&,
       float percentage,
@@ -72,17 +73,24 @@ class SVGRect final : public SVGPropertyHelper<SVGRect> {
   float CalculateDistance(const SVGPropertyBase* to,
                           const SVGElement* context_element) const override;
 
-  bool IsValid() const { return is_valid_; }
-  void SetInvalid();
-
   static AnimatedPropertyType ClassType() { return kAnimatedRect; }
+  AnimatedPropertyType GetType() const override { return ClassType(); }
 
  private:
-  template <typename CharType>
-  SVGParsingError Parse(const CharType*& ptr, const CharType* end);
+  friend class SVGFitToViewBox;
+  bool IsValid() const { return is_valid_; }
 
-  bool is_valid_;
-  FloatRect value_;
+  template <typename CharType>
+  SVGParsingError Parse(base::span<const CharType>);
+  void Set(float x, float y, float width, float height);
+  void Add(float x, float y, float width, float height);
+
+  bool is_valid_ = true;
+  // Not using gfx::RectF because width_ and height_ can be negative.
+  float x_ = 0;
+  float y_ = 0;
+  float width_ = 0;
+  float height_ = 0;
 };
 
 template <>

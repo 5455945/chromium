@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,22 @@
 
 #include <string>
 
+#include "base/files/file_path.h"
 #include "base/json/json_reader.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/mock_callback.h"
 #include "chrome/browser/ash/arc/fileapi/arc_select_files_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
-#include "components/arc/mojom/file_system.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/file_system.mojom.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 
 using JavaScriptResultCallback =
     content::RenderFrameHost::JavaScriptResultCallback;
@@ -81,13 +84,14 @@ class MockSelectFileDialogHolder : public SelectFileDialogHolder {
   explicit MockSelectFileDialogHolder(ui::SelectFileDialog::Listener* listener)
       : SelectFileDialogHolder(listener) {}
   ~MockSelectFileDialogHolder() override = default;
-  MOCK_METHOD6(SelectFile,
+  MOCK_METHOD7(SelectFile,
                bool(ui::SelectFileDialog::Type type,
                     const base::FilePath& default_path,
                     const ui::SelectFileDialog::FileTypeInfo* file_types,
                     int task_id,
                     const std::string& search_query,
-                    bool show_android_picker_apps));
+                    bool show_android_picker_apps,
+                    bool use_media_store_filter));
   MOCK_METHOD2(ExecuteJavaScript,
                void(const std::string&, JavaScriptResultCallback));
 };
@@ -114,7 +118,7 @@ class ArcSelectFilesHandlerTest : public testing::Test {
     mock_dialog_holder_ = mock_dialog_holder.get();
     arc_select_files_handler_->SetDialogHolderForTesting(
         std::move(mock_dialog_holder));
-    ON_CALL(*mock_dialog_holder_, SelectFile(_, _, _, _, _, _))
+    ON_CALL(*mock_dialog_holder_, SelectFile(_, _, _, _, _, _, _))
         .WillByDefault(Return(true));
   }
 
@@ -128,14 +132,16 @@ class ArcSelectFilesHandlerTest : public testing::Test {
       SelectFilesActionType request_action_type,
       bool request_allow_multiple,
       SelectFileDialog::Type expected_dialog_type,
-      bool expected_show_android_picker_apps) {
+      bool expected_show_android_picker_apps,
+      bool expected_use_media_store_filter) {
     SelectFilesRequestPtr request = SelectFilesRequest::New();
     request->action_type = request_action_type;
     request->allow_multiple = request_allow_multiple;
 
     EXPECT_CALL(*mock_dialog_holder_,
                 SelectFile(expected_dialog_type, _, _, _, _,
-                           expected_show_android_picker_apps))
+                           expected_show_android_picker_apps,
+                           expected_use_media_store_filter))
         .Times(1);
 
     SelectFilesCallback callback;
@@ -165,26 +171,34 @@ class ArcSelectFilesHandlerTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfileManager> profile_manager_;
   std::unique_ptr<ArcSelectFilesHandler> arc_select_files_handler_;
-  MockSelectFileDialogHolder* mock_dialog_holder_;
+  raw_ptr<MockSelectFileDialogHolder, DanglingUntriaged> mock_dialog_holder_;
 };
 
 TEST_F(ArcSelectFilesHandlerTest, SelectFiles_DialogType) {
   CallSelectFilesAndCheckDialogType(SelectFilesActionType::GET_CONTENT, false,
-                                    SelectFileDialog::SELECT_OPEN_FILE, true);
+                                    SelectFileDialog::SELECT_OPEN_FILE, true,
+                                    false);
   CallSelectFilesAndCheckDialogType(SelectFilesActionType::GET_CONTENT, true,
                                     SelectFileDialog::SELECT_OPEN_MULTI_FILE,
-                                    true);
+                                    true, false);
   CallSelectFilesAndCheckDialogType(SelectFilesActionType::OPEN_DOCUMENT, false,
-                                    SelectFileDialog::SELECT_OPEN_FILE, false);
+                                    SelectFileDialog::SELECT_OPEN_FILE, false,
+                                    false);
   CallSelectFilesAndCheckDialogType(SelectFilesActionType::OPEN_DOCUMENT, true,
                                     SelectFileDialog::SELECT_OPEN_MULTI_FILE,
-                                    false);
+                                    false, false);
   CallSelectFilesAndCheckDialogType(
       SelectFilesActionType::OPEN_DOCUMENT_TREE, false,
-      SelectFileDialog::SELECT_EXISTING_FOLDER, false);
+      SelectFileDialog::SELECT_EXISTING_FOLDER, false, false);
   CallSelectFilesAndCheckDialogType(SelectFilesActionType::CREATE_DOCUMENT,
                                     true, SelectFileDialog::SELECT_SAVEAS_FILE,
-                                    false);
+                                    false, false);
+  CallSelectFilesAndCheckDialogType(
+      SelectFilesActionType::OPEN_MEDIA_STORE_FILES, false,
+      SelectFileDialog::SELECT_OPEN_FILE, false, true);
+  CallSelectFilesAndCheckDialogType(
+      SelectFilesActionType::OPEN_MEDIA_STORE_FILES, true,
+      SelectFileDialog::SELECT_OPEN_MULTI_FILE, false, true);
 }
 
 TEST_F(ArcSelectFilesHandlerTest, SelectFiles_FileTypeInfo) {
@@ -197,15 +211,43 @@ TEST_F(ArcSelectFilesHandlerTest, SelectFiles_FileTypeInfo) {
   expected_file_type_info.allowed_paths =
       SelectFileDialog::FileTypeInfo::ANY_PATH;
   std::vector<base::FilePath::StringType> extensions;
-  extensions.push_back("text");
   extensions.push_back("txt");
+  extensions.push_back("text");
   expected_file_type_info.extensions.push_back(extensions);
 
   EXPECT_CALL(
       *mock_dialog_holder_,
       SelectFile(_, _,
                  testing::Pointee(FileTypeInfoMatcher(expected_file_type_info)),
-                 1234, _, _))
+                 1234, _, _, _))
+      .Times(1);
+
+  base::MockCallback<SelectFilesCallback> callback;
+  arc_select_files_handler_->SelectFiles(request, callback.Get());
+}
+
+TEST_F(ArcSelectFilesHandlerTest, SelectFiles_FileTypeInfo_UnknownExtension) {
+  SelectFilesRequestPtr request = SelectFilesRequest::New();
+  request->action_type = SelectFilesActionType::OPEN_DOCUMENT;
+  request->mime_types.push_back("text/plain");
+  request->mime_types.push_back("unknown/mime_type");
+  request->task_id = 1234;
+
+  SelectFileDialog::FileTypeInfo expected_file_type_info;
+  expected_file_type_info.allowed_paths =
+      SelectFileDialog::FileTypeInfo::ANY_PATH;
+  std::vector<base::FilePath::StringType> extensions;
+  extensions.push_back("txt");
+  extensions.push_back("text");
+  expected_file_type_info.extensions.push_back(extensions);
+  // include_all_files should be enabled when there is unknown MIME type.
+  expected_file_type_info.include_all_files = true;
+
+  EXPECT_CALL(
+      *mock_dialog_holder_,
+      SelectFile(_, _,
+                 testing::Pointee(FileTypeInfoMatcher(expected_file_type_info)),
+                 1234, _, _, _))
       .Times(1);
 
   base::MockCallback<SelectFilesCallback> callback;
@@ -232,7 +274,7 @@ TEST_F(ArcSelectFilesHandlerTest, SelectFiles_FileTypeInfo_Asterisk) {
       *mock_dialog_holder_,
       SelectFile(_, _,
                  testing::Pointee(FileTypeInfoMatcher(expected_file_type_info)),
-                 1234, _, _))
+                 1234, _, _, _))
       .Times(1);
 
   base::MockCallback<SelectFilesCallback> callback;
@@ -245,13 +287,14 @@ TEST_F(ArcSelectFilesHandlerTest, SelectFiles_InitialDocumentPath) {
   request->initial_document_path = arc::mojom::DocumentPath::New();
   request->initial_document_path->authority = "testing.provider";
   request->initial_document_path->path = {"doc:root", "doc:file1"};
+  request->initial_document_path->root_id = "root";
 
-  // "doc:file1" is expected to be ignored.
-  base::FilePath expected_file_path = base::FilePath(
-      "/special/arc-documents-provider/testing.provider/doc:root");
+  // |initial_document_path->path| is expected to be ignored.
+  base::FilePath expected_file_path =
+      base::FilePath("/special/arc-documents-provider/testing.provider/root");
 
   EXPECT_CALL(*mock_dialog_holder_,
-              SelectFile(_, FilePathMatcher(expected_file_path), _, _, _, _))
+              SelectFile(_, FilePathMatcher(expected_file_path), _, _, _, _, _))
       .Times(1);
 
   base::MockCallback<SelectFilesCallback> callback;
@@ -266,7 +309,7 @@ TEST_F(ArcSelectFilesHandlerTest, FileSelected_CallbackCalled) {
   arc_select_files_handler_->SelectFiles(request, callback.Get());
 
   EXPECT_CALL(std::move(callback), Run(_)).Times(1);
-  arc_select_files_handler_->FileSelected(base::FilePath(), 0, nullptr);
+  arc_select_files_handler_->FileSelected(ui::SelectedFileInfo(), 0);
 }
 
 TEST_F(ArcSelectFilesHandlerTest, FileSelected_PickerActivitySelected) {
@@ -287,9 +330,9 @@ TEST_F(ArcSelectFilesHandlerTest, FileSelected_PickerActivitySelected) {
               Run(SelectFilesResultMatcher(expected_result.get())))
       .Times(1);
 
-  arc_select_files_handler_->FileSelected(
-      ConvertAndroidActivityToFilePath(package_name, activity_name), 0,
-      nullptr);
+  base::FilePath path =
+      ConvertAndroidActivityToFilePath(package_name, activity_name);
+  arc_select_files_handler_->FileSelected(ui::SelectedFileInfo(path), 0);
 }
 
 TEST_F(ArcSelectFilesHandlerTest, FileSelectionCanceled_CallbackCalled) {
@@ -304,7 +347,7 @@ TEST_F(ArcSelectFilesHandlerTest, FileSelectionCanceled_CallbackCalled) {
   EXPECT_CALL(std::move(callback),
               Run(SelectFilesResultMatcher(expected_result.get())))
       .Times(1);
-  arc_select_files_handler_->FileSelectionCanceled(nullptr);
+  arc_select_files_handler_->FileSelectionCanceled();
 }
 
 TEST_F(ArcSelectFilesHandlerTest, OnFileSelectorEvent) {
@@ -326,13 +369,13 @@ TEST_F(ArcSelectFilesHandlerTest, OnFileSelectorEvent) {
 
 TEST_F(ArcSelectFilesHandlerTest, GetFileSelectorElements) {
   EXPECT_CALL(*mock_dialog_holder_, ExecuteJavaScript(kScriptGetElements, _))
-      .WillOnce(testing::Invoke(
-          [](const std::string&, JavaScriptResultCallback callback) {
-            std::move(callback).Run(
-                base::JSONReader::Read("{\"dirNames\" :[\"dir1\", \"dir2\"],"
-                                       " \"fileNames\":[\"file1\",\"file2\"]}")
-                    .value());
-          }));
+      .WillOnce([](const std::string&, JavaScriptResultCallback callback) {
+        std::move(callback).Run(
+            base::JSONReader::Read("{\"dirNames\" :[\"dir1\", \"dir2\"],"
+                                   " \"fileNames\":[\"file1\",\"file2\"]}",
+                                   base::JSON_PARSE_CHROMIUM_EXTENSIONS)
+                .value());
+      });
 
   mojom::FileSelectorElementsPtr expectedElements =
       mojom::FileSelectorElements::New();

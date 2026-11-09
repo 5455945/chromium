@@ -27,6 +27,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WEBORIGIN_SCHEME_REGISTRY_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WEBORIGIN_SCHEME_REGISTRY_H_
 
+#include "base/types/pass_key.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
@@ -36,15 +37,26 @@
 
 namespace blink {
 
+class KURL;
+class SecurityOrigin;
+class WebSecurityPolicy;
+
 using URLSchemesSet = HashSet<String>;
 
 template <typename Mapped, typename MappedTraits>
-using URLSchemesMap = HashMap<String,
-                              Mapped,
-                              DefaultHash<String>::Hash,
-                              HashTraits<String>,
-                              MappedTraits>;
+using URLSchemesMap = HashMap<String, Mapped, HashTraits<String>, MappedTraits>;
 
+// Scheme registration should happen as early as possible to ensure consistency,
+// though it is technically possible to mutate the scheme registry up until
+// worker threads start.
+//
+// In this spirit:
+// - registration functions are callable by anything, including non-test code
+// - querying functions are similarly callable by anything, including non-test
+//   code
+// - but other mutators (removing, resetting, et cetera) are limited to test
+//   code only. In non-test code, it doesn't make sense to register a scheme and
+//   then remove it: just don't register it at all.
 class PLATFORM_EXPORT SchemeRegistry {
   STATIC_ONLY(SchemeRegistry);
 
@@ -71,7 +83,8 @@ class PLATFORM_EXPORT SchemeRegistry {
   // bookmarklets from running on sensitive pages).
   static void RegisterURLSchemeAsNotAllowingJavascriptURLs(
       const String& scheme);
-  static void RemoveURLSchemeAsNotAllowingJavascriptURLs(const String& scheme);
+  static void RemoveURLSchemeAsNotAllowingJavascriptURLsForTest(
+      const String& scheme_for_test);
   static bool ShouldTreatURLSchemeAsNotAllowingJavascriptURLs(
       const String& scheme);
 
@@ -79,10 +92,6 @@ class PLATFORM_EXPORT SchemeRegistry {
 
   // Serialize the registered schemes in a comma-separated list.
   static String ListOfCorsEnabledURLSchemes();
-
-  // "Legacy" schemes (e.g. 'ftp:') which we might want to treat differently
-  // from "webby" schemes.
-  static bool ShouldTreatURLSchemeAsLegacy(const String& scheme);
 
   // Does the scheme represent a location relevant to web compatibility metrics?
   static bool ShouldTrackUsageMetricsForScheme(const String& scheme);
@@ -101,7 +110,8 @@ class PLATFORM_EXPORT SchemeRegistry {
 
   // Schemes which override the first-/third-party checks on a Document.
   static void RegisterURLSchemeAsFirstPartyWhenTopLevel(const String& scheme);
-  static void RemoveURLSchemeAsFirstPartyWhenTopLevel(const String& scheme);
+  static void RemoveURLSchemeAsFirstPartyWhenTopLevelForTest(
+      const String& scheme);
   static bool ShouldTreatURLSchemeAsFirstPartyWhenTopLevel(
       const String& scheme);
 
@@ -109,13 +119,22 @@ class PLATFORM_EXPORT SchemeRegistry {
   // document to be delivered over a secure scheme.
   static void RegisterURLSchemeAsFirstPartyWhenTopLevelEmbeddingSecure(
       const String& scheme);
-  static bool ShouldTreatURLSchemeAsFirstPartyWhenTopLevelEmbeddingSecure(
-      const String& top_level_scheme,
+  // Like RegisterURLSchemeAsFirstPartyWhenTopLevelEmbeddingSecure, but instead
+  // of allowing the exception for an entire scheme, it limits it to the origin
+  // of the specific URL.
+  // TODO(crbug.com/483614998): This origin top-level cookie exemption was
+  // granted to chrome-untrusted://lens. This is temporary and should not be
+  // used by new callers.
+  static void RegisterURLAsFirstPartyWhenTopLevelEmbeddingSecure(
+      const KURL& url,
+      base::PassKey<WebSecurityPolicy>);
+  static bool ShouldTreatURLAsFirstPartyWhenTopLevelEmbeddingSecure(
+      const SecurityOrigin* top_level_origin,
       const String& child_scheme);
 
   // Schemes that can be used in a referrer.
   static void RegisterURLSchemeAsAllowedForReferrer(const String& scheme);
-  static void RemoveURLSchemeAsAllowedForReferrer(const String& scheme);
+  static void RemoveURLSchemeAsAllowedForReferrerForTest(const String& scheme);
   static bool ShouldTreatURLSchemeAsAllowedForReferrer(const String& scheme);
 
   // Schemes used for internal error pages, for failed navigations.
@@ -139,7 +158,7 @@ class PLATFORM_EXPORT SchemeRegistry {
   static void RegisterURLSchemeAsBypassingContentSecurityPolicy(
       const String& scheme,
       PolicyAreas = kPolicyAreaAll);
-  static void RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicy(
+  static void RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicyForTest(
       const String& scheme);
   static bool SchemeShouldBypassContentSecurityPolicy(
       const String& scheme,
@@ -155,24 +174,38 @@ class PLATFORM_EXPORT SchemeRegistry {
   static void RegisterURLSchemeAsAllowingWasmEvalCSP(const String& scheme);
   static bool SchemeSupportsWasmEvalCSP(const String& scheme);
 
-  // Schemes that represent browser extensions.
-  // TODO(chromium:1197375) Reconsider usages of this category. Are there
-  // meaningful ways to define more abstract permissions or requirements that
-  // could be used instead?
-  static void RegisterURLSchemeAsExtension(const String& scheme);
-  static void RemoveURLSchemeAsExtension(const String& scheme);
-  static bool IsExtensionScheme(const String& scheme);
-
   // Schemes that represent trusted browser UI.
   // TODO(chromium:1197375) Reconsider usages of this category. Are there
   // meaningful ways to define more abstract permissions or requirements that
   // could be used instead?
   static void RegisterURLSchemeAsWebUI(const String& scheme);
-  static void RemoveURLSchemeAsWebUI(const String& scheme);
   static bool IsWebUIScheme(const String& scheme);
 
- private:
-  static const URLSchemesSet& LocalSchemes();
+  // Like the above, but without threading safety checks.
+  static void RegisterURLSchemeAsWebUIForTest(const String& scheme);
+  static void RemoveURLSchemeAsWebUIForTest(const String& scheme);
+
+  // Schemes which can use code caching but must check in the renderer whether
+  // the script content has changed rather than relying on a response time match
+  // from the network cache.
+  static void RegisterURLSchemeAsCodeCacheWithHashing(const String& scheme);
+  static void RemoveURLSchemeAsCodeCacheWithHashingForTest(
+      const String& scheme);
+  static bool SchemeSupportsCodeCacheWithHashing(const String& scheme);
+
+  // WebUI Schemes that can use bundled resource bytecode retrieved from the
+  // static resource bundle.
+  static void RegisterURLSchemeAsWebUIBundledBytecode(const String& scheme);
+  static void RegisterURLSchemeAsWebUIBundledBytecodeForTest(
+      const String& scheme);
+  static void RemoveURLSchemeAsWebUIBundledBytecodeForTest(
+      const String& scheme);
+  static bool SchemeSupportsWebUIBundledBytecode(const String& scheme);
+
+  // Schemes used for direct launch targeting the current browser instance.
+  static void RegisterURLSchemeAsDirectLaunch(const String& scheme);
+  static void RemoveURLSchemeAsDirectLaunchForTest(const String& scheme);
+  static bool IsDirectLaunchScheme(const String& scheme);
 };
 
 }  // namespace blink

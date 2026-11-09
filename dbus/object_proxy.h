@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,21 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "dbus/dbus_export.h"
+#include "dbus/error.h"
 #include "dbus/object_path.h"
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 namespace dbus {
 
@@ -28,7 +33,6 @@ class Bus;
 class ErrorResponse;
 class MethodCall;
 class Response;
-class ScopedDBusError;
 class Signal;
 
 // ObjectProxy is used to communicate with remote objects, mainly for
@@ -44,9 +48,12 @@ class CHROME_DBUS_EXPORT ObjectProxy
   // Client code should use Bus::GetObjectProxy() or
   // Bus::GetObjectProxyWithOptions() instead of this constructor.
   ObjectProxy(Bus* bus,
-              const std::string& service_name,
+              std::string_view service_name,
               const ObjectPath& object_path,
               int options);
+
+  ObjectProxy(const ObjectProxy&) = delete;
+  ObjectProxy& operator=(const ObjectProxy&) = delete;
 
   // Options to be OR-ed together when calling Bus::GetObjectProxyWithOptions().
   // Set the IGNORE_SERVICE_UNKNOWN_ERRORS option to silence logging of
@@ -58,13 +65,16 @@ class CHROME_DBUS_EXPORT ObjectProxy
   };
 
   // Special timeout constants.
-  //
-  // The constants correspond to DBUS_TIMEOUT_USE_DEFAULT and
-  // DBUS_TIMEOUT_INFINITE. Here we use literal numbers instead of these
-  // macros as these aren't defined with D-Bus earlier than 1.4.12.
   enum {
+    // The constant corresponds to DBUS_TIMEOUT_USE_DEFAULT. Here we use literal
+    // numbers instead of these macros as these aren't defined with D-Bus
+    // earlier than 1.4.12.
     TIMEOUT_USE_DEFAULT = -1,
-    TIMEOUT_INFINITE = 0x7fffffff,
+
+    // Max timeout for methods calls. Long method calls add to `pending_replies"
+    // in dbus_daemon and it has a limit. Once that limit is exceeded, no more
+    // calls could be made on the relevant DBusConnection.
+    TIMEOUT_MAX = base::Hours(1).InMilliseconds(),
   };
 
   // Called when an error response is returned or no response is returned.
@@ -103,21 +113,16 @@ class CHROME_DBUS_EXPORT ObjectProxy
       base::OnceCallback<void(const std::string&, const std::string&, bool)>;
 
   // Calls the method of the remote object and blocks until the response
-  // is returned. Returns NULL on error with the error details specified
-  // in the |error| object.
+  // is returned.
+  //
+  // If this is failing due to the reason outside of libdbus, this may return
+  // an invalid error to indicate the situation.
+  // This must be called on D-Bus thread.
   //
   // BLOCKING CALL.
-  virtual std::unique_ptr<Response> CallMethodAndBlockWithErrorDetails(
+  virtual base::expected<std::unique_ptr<Response>, Error> CallMethodAndBlock(
       MethodCall* method_call,
-      int timeout_ms,
-      ScopedDBusError* error);
-
-  // Calls the method of the remote object and blocks until the response
-  // is returned. Returns NULL on error.
-  //
-  // BLOCKING CALL.
-  virtual std::unique_ptr<Response> CallMethodAndBlock(MethodCall* method_call,
-                                                       int timeout_ms);
+      int timeout_ms);
 
   // Requests to call the method of the remote object.
   //
@@ -128,7 +133,7 @@ class CHROME_DBUS_EXPORT ObjectProxy
   //
   // If the method call is successful, a pointer to Response object will
   // be passed to the callback. If unsuccessful, nullptr will be passed to
-  // the callback.
+  // the callback and ObjectProxy will emit a log message with the error.
   //
   // Must be called in the origin thread.
   virtual void CallMethod(MethodCall* method_call,
@@ -142,30 +147,11 @@ class CHROME_DBUS_EXPORT ObjectProxy
   // In case of error, ErrorResponse object is passed to the |callback|
   // if the remote object returned an error, or nullptr if a response was not
   // received at all (e.g., D-Bus connection is not established). In either
-  // error case, Response* should be nullptr.
+  // error case, Response* should be nullptr. Unlike CallMethod() above,
+  // ObjectProxy will not emit a log message with the error.
   virtual void CallMethodWithErrorResponse(MethodCall* method_call,
                                            int timeout_ms,
                                            ResponseOrErrorCallback callback);
-
-  // DEPRECATED. Please use CallMethodWithErrorResponse() instead.
-  // TODO(hidehiko): Remove this when migration is done.
-  // Requests to call the method of the remote object.
-  //
-  // |callback| and |error_callback| will be called in the origin thread, once
-  // the method call is complete. As it's called in the origin thread,
-  // |callback| can safely reference objects in the origin thread (i.e.
-  // UI thread in most cases).
-  //
-  // If the method call is successful, |callback| will be invoked with a
-  // Response object. If unsuccessful, |error_callback| will be invoked with an
-  // ErrorResponse object (if the remote object returned an error) or nullptr
-  // (if a response was not received at all).
-  //
-  // Must be called in the origin thread.
-  virtual void CallMethodWithErrorCallback(MethodCall* method_call,
-                                           int timeout_ms,
-                                           ResponseCallback callback,
-                                           ErrorCallback error_callback);
 
   // Requests to connect to the signal from the remote object.
   //
@@ -205,7 +191,9 @@ class CHROME_DBUS_EXPORT ObjectProxy
   // service is already available, or if connecting to the name-owner-changed
   // signal fails, |callback| will be run once asynchronously. Otherwise,
   // |callback| will be run once in the future after the service becomes
-  // available.
+  // available. |callback| will be called in the origin thread in either case.
+  //
+  // Must be called in the origin thread.
   virtual void WaitForServiceToBeAvailable(
       WaitForServiceToBeAvailableCallback callback);
 
@@ -237,6 +225,9 @@ class CHROME_DBUS_EXPORT ObjectProxy
     // This is movable to be bound to an OnceCallback.
     ReplyCallbackHolder(ReplyCallbackHolder&& other);
 
+    ReplyCallbackHolder(const ReplyCallbackHolder&) = delete;
+    ReplyCallbackHolder& operator=(const ReplyCallbackHolder&) = delete;
+
     // |callback_| needs to be destroyed on the origin thread.
     // If this is not destroyed on non-origin thread, it PostTask()s the
     // callback to the origin thread for destroying.
@@ -246,31 +237,23 @@ class CHROME_DBUS_EXPORT ObjectProxy
     // This must be called on the origin thread.
     ResponseOrErrorCallback ReleaseCallback();
 
-    // Whether |callback_| is null.
-    // TODO(http://crbug/1211451): Remove after fix.
-    bool IsNullCallback() const;
-
    private:
     scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
     ResponseOrErrorCallback callback_;
-    DISALLOW_COPY_AND_ASSIGN(ReplyCallbackHolder);
   };
 
   // Starts the async method call. This is a helper function to implement
   // CallMethod().
   void StartAsyncMethodCall(int timeout_ms,
                             DBusMessage* request_message,
-                            ReplyCallbackHolder callback_holder,
-                            base::TimeTicks start_time);
+                            ReplyCallbackHolder callback_holder);
 
   // Called when the pending call is complete.
   void OnPendingCallIsComplete(ReplyCallbackHolder callback_holder,
-                               base::TimeTicks start_time,
                                DBusPendingCall* pending_call);
 
   // Runs the ResponseOrErrorCallback with the given response object.
-  void RunResponseOrErrorCallback(ReplyCallbackHolder callback_holderk,
-                                  base::TimeTicks start_time,
+  void RunResponseOrErrorCallback(ReplyCallbackHolder callback_holder,
                                   Response* response,
                                   ErrorResponse* error_response);
 
@@ -289,9 +272,7 @@ class CHROME_DBUS_EXPORT ObjectProxy
                                   DBusMessage* raw_message);
 
   // Runs the method. Helper function for HandleMessage().
-  void RunMethod(base::TimeTicks start_time,
-                 std::vector<SignalCallback> signal_callbacks,
-                 Signal* signal);
+  void RunMethod(std::vector<SignalCallback> signal_callbacks, Signal* signal);
 
   // Redirects the function call to HandleMessage().
   static DBusHandlerResult HandleMessageThunk(DBusConnection* connection,
@@ -299,10 +280,10 @@ class CHROME_DBUS_EXPORT ObjectProxy
                                               void* user_data);
 
   // Helper method for logging response errors appropriately.
-  void LogMethodCallFailure(const base::StringPiece& interface_name,
-                            const base::StringPiece& method_name,
-                            const base::StringPiece& error_name,
-                            const base::StringPiece& error_message) const;
+  void LogMethodCallFailure(const std::string_view& interface_name,
+                            const std::string_view& method_name,
+                            const std::string_view& error_name,
+                            const std::string_view& error_message) const;
 
   // Used as ResponseOrErrorCallback by CallMethod().
   // Logs error message, and drops |error_response| from the arguments to pass
@@ -362,9 +343,7 @@ class CHROME_DBUS_EXPORT ObjectProxy
   // Known name owner of the well-known bus name represented by |service_name_|.
   std::string service_name_owner_;
 
-  std::set<DBusPendingCall*> pending_calls_;
-
-  DISALLOW_COPY_AND_ASSIGN(ObjectProxy);
+  std::set<raw_ptr<DBusPendingCall, SetExperimental>> pending_calls_;
 };
 
 }  // namespace dbus

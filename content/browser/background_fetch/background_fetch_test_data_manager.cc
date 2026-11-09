@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,14 @@
 #include <utility>
 
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/services/storage/public/mojom/quota_client.mojom.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/test/mock_quota_manager.h"
@@ -29,26 +31,16 @@ class MockBGFQuotaManagerProxy : public storage::MockQuotaManagerProxy {
   explicit MockBGFQuotaManagerProxy(storage::MockQuotaManager* quota_manager)
       : storage::MockQuotaManagerProxy(
             quota_manager,
-            base::ThreadTaskRunnerHandle::Get().get()) {}
+            base::SingleThreadTaskRunner::GetCurrentDefault().get()) {}
 
   // Ignore quota client, it is irrelevant for these tests.
-  void RegisterClient(
-      mojo::PendingRemote<storage::mojom::QuotaClient> client,
-      storage::QuotaClientType client_type,
-      const std::vector<blink::mojom::StorageType>& storage_types) override {}
+  void RegisterClient(mojo::PendingRemote<storage::mojom::QuotaClient> client,
+                      storage::QuotaClientType client_type) override {}
 
   void GetUsageAndQuota(
       const blink::StorageKey& storage_key,
-      blink::mojom::StorageType type,
-      scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
       UsageAndQuotaCallback callback) override {
-    DCHECK(callback_task_runner);
-
-    // While this DCHECK is true, the PostTask() below isn't strictly necessary.
-    // The callback could be Run() directly.
-    DCHECK(callback_task_runner->RunsTasksInCurrentSequence());
-
-    callback_task_runner->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), blink::mojom::QuotaStatusCode::kOk,
                        /* usage= */ 0, kBackgroundFetchMaxQuotaBytes));
@@ -62,23 +54,22 @@ class MockBGFQuotaManagerProxy : public storage::MockQuotaManagerProxy {
 
 BackgroundFetchTestDataManager::BackgroundFetchTestDataManager(
     BrowserContext* browser_context,
-    StoragePartition* storage_partition,
+    base::WeakPtr<StoragePartitionImpl> storage_partition,
     scoped_refptr<ServiceWorkerContextWrapper> service_worker_context)
-    : BackgroundFetchDataManager(browser_context,
-                                 storage_partition,
+    : BackgroundFetchDataManager(storage_partition,
                                  service_worker_context,
                                  /* quota_manager_proxy= */ nullptr),
       browser_context_(browser_context),
       storage_partition_(storage_partition) {}
 
-void BackgroundFetchTestDataManager::InitializeOnCoreThread() {
+void BackgroundFetchTestDataManager::Initialize() {
   // CacheStorage uses the default QuotaManager and not the mock one in this
   // class.  Set QuotaSettings appropriately so that all platforms have quota.
   // The mock one is still used for testing quota exceeded scenarios in
   // DatabaseTask.
   storage::QuotaSettings settings;
-  settings.per_host_quota = kBackgroundFetchMaxQuotaBytes;
-  settings.pool_size = settings.per_host_quota * 5;
+  settings.per_storage_key_quota = kBackgroundFetchMaxQuotaBytes;
+  settings.pool_size = settings.per_storage_key_quota * 5;
   settings.must_remain_available = 0;
   settings.refresh_interval = base::TimeDelta::Max();
   storage_partition_->GetQuotaManager()->SetQuotaSettings(settings);
@@ -89,7 +80,7 @@ void BackgroundFetchTestDataManager::InitializeOnCoreThread() {
 
   mock_quota_manager_ = base::MakeRefCounted<storage::MockQuotaManager>(
       storage_partition_->GetPath().empty(), storage_partition_->GetPath(),
-      base::ThreadTaskRunnerHandle::Get().get(),
+      base::SingleThreadTaskRunner::GetCurrentDefault().get(),
       base::MakeRefCounted<storage::MockSpecialStoragePolicy>());
 
   quota_manager_proxy_ =

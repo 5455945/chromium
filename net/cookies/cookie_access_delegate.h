@@ -1,25 +1,31 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_COOKIES_COOKIE_ACCESS_DELEGATE_H_
 #define NET_COOKIES_COOKIE_ACCESS_DELEGATE_H_
 
-#include "base/containers/flat_map.h"
+#include <optional>
+
 #include "net/base/net_export.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_constants.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
+#include "net/cookies/cookie_partition_key.h"
+#include "url/origin.h"
+
+class GURL;
 
 namespace net {
 
-class SchemefulSite;
 class SiteForCookies;
 
 class NET_EXPORT CookieAccessDelegate {
  public:
   CookieAccessDelegate();
+
+  CookieAccessDelegate(const CookieAccessDelegate&) = delete;
+  CookieAccessDelegate& operator=(const CookieAccessDelegate&) = delete;
+
   virtual ~CookieAccessDelegate();
 
   // Returns true if the passed in |url| should be permitted to access secure
@@ -33,35 +39,17 @@ class NET_EXPORT CookieAccessDelegate {
   virtual CookieAccessSemantics GetAccessSemantics(
       const CanonicalCookie& cookie) const = 0;
 
+  // Gets the scope semantics to apply to based on the given domain (i.e.,
+  // whether a policy specifies this legacy cookie scope should apply).
+  virtual CookieScopeSemantics GetScopeSemantics(
+      const std::string_view domain) const = 0;
+
   // Returns whether a cookie should be attached regardless of its SameSite
   // value vs the request context.
   virtual bool ShouldIgnoreSameSiteRestrictions(
       const GURL& url,
-      const SiteForCookies& site_for_cookies) const = 0;
-
-  // Returns whether `site` is same-party with `party_context` and
-  // `top_frame_site`. If `top_frame_site` is nullopt, then `site` will be
-  // checked only against `party_context`.
-  virtual bool IsContextSamePartyWithSite(
-      const net::SchemefulSite& site,
-      const absl::optional<net::SchemefulSite>& top_frame_site,
-      const std::set<net::SchemefulSite>& party_context) const = 0;
-
-  // Returns whether `site` belongs to a non-singleton First-Party Set.
-  virtual bool IsInNontrivialFirstPartySet(
-      const net::SchemefulSite& site) const = 0;
-
-  virtual FirstPartySetsContextType ComputeFirstPartySetsContextType(
-      const SchemefulSite& site,
-      const absl::optional<SchemefulSite>& top_frame_site,
-      const std::set<SchemefulSite>& party_context) const = 0;
-
-  // Returns the First-Party Sets.
-  virtual base::flat_map<net::SchemefulSite, std::set<net::SchemefulSite>>
-  RetrieveFirstPartySets() const = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CookieAccessDelegate);
+      const SiteForCookies& site_for_cookies,
+      const url::Origin& top_level_origin) const = 0;
 };
 
 }  // namespace net

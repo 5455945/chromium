@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,20 @@
 
 #include <stddef.h>
 
-#include <map>
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/extensions_activity.h"
-#include "components/sync/base/model_type.h"
-#include "components/sync/base/syncer_error.h"
 #include "components/sync/engine/commit_contribution.h"
 #include "components/sync/engine/cycle/nudge_tracker.h"
+#include "components/sync/engine/syncer_error.h"
 #include "components/sync/protocol/sync.pb.h"
 
 namespace syncer {
 
+class ActiveDevicesInvalidationInfo;
 class CommitProcessor;
 class StatusController;
 class SyncCycle;
@@ -37,33 +36,36 @@ class SyncCycle;
 class Commit {
  public:
   using ContributionMap =
-      std::map<ModelType, std::unique_ptr<CommitContribution>>;
+      base::flat_map<DataType, std::unique_ptr<CommitContribution>>;
 
   Commit(ContributionMap contributions,
          const sync_pb::ClientToServerMessage& message,
          ExtensionsActivity::Records extensions_activity_buffer);
 
+  Commit(const Commit&) = delete;
+  Commit& operator=(const Commit&) = delete;
+
   ~Commit();
 
-  // |extensions_activity| may be null.
+  // `extensions_activity` may be null.
   static std::unique_ptr<Commit> Init(
-      ModelTypeSet enabled_types,
+      DataTypeSet enabled_types,
       size_t max_entries,
+      size_t max_target_specifics_bytes,
       const std::string& account_name,
       const std::string& cache_guid,
       bool cookie_jar_mismatch,
-      bool single_client,
-      const std::vector<std::string>& fcm_registration_tokens,
+      const ActiveDevicesInvalidationInfo& active_devices_invalidation_info,
       CommitProcessor* commit_processor,
       ExtensionsActivity* extensions_activity);
 
-  // |extensions_activity| may be null.
+  // `extensions_activity` may be null.
   SyncerError PostAndProcessResponse(NudgeTracker* nudge_tracker,
                                      SyncCycle* cycle,
                                      StatusController* status,
                                      ExtensionsActivity* extensions_activity);
 
-  ModelTypeSet GetContributingDataTypes() const;
+  DataTypeSet GetContributingDataTypes() const;
 
  private:
   // Report commit failure to each contribution.
@@ -73,8 +75,6 @@ class Commit {
 
   sync_pb::ClientToServerMessage message_;
   ExtensionsActivity::Records extensions_activity_buffer_;
-
-  DISALLOW_COPY_AND_ASSIGN(Commit);
 };
 
 }  // namespace syncer

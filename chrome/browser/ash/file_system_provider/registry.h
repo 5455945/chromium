@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,17 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/ash/file_system_provider/registry_interface.h"
 #include "chrome/browser/ash/file_system_provider/watcher.h"
 
-class Profile;
+class PrefService;
 
 namespace user_prefs {
 class PrefRegistrySyncable;
 }  // namespace user_prefs
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // Key names for preferences.
 extern const char kPrefKeyFileSystemId[];
@@ -41,7 +40,13 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 // Remembers and restores file systems in a persistent storage.
 class Registry : public RegistryInterface {
  public:
-  explicit Registry(Profile* profile);
+  // `prefs` is the user's PrefService. It must be non-null and must outlive
+  // `this`.
+  explicit Registry(PrefService* prefs);
+
+  Registry(const Registry&) = delete;
+  Registry& operator=(const Registry&) = delete;
+
   ~Registry() override;
 
   // RegistryInterface overrides.
@@ -55,11 +60,9 @@ class Registry : public RegistryInterface {
                         const Watcher& watcher) override;
 
  private:
-  Profile* profile_;  // Not owned.
-  DISALLOW_COPY_AND_ASSIGN(Registry);
+  const raw_ref<PrefService> prefs_;
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_REGISTRY_H_

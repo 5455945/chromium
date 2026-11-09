@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
 
@@ -23,9 +22,9 @@ namespace base {
 //     (e.g. integration tests in which a TickClock would be several layers
 //     removed from the test code)
 //
-// For new unit tests, developers are highly encouraged to structure new code
-// around a dependency injected base::Clock, base::TickClock, etc. to be able
-// to supply a mock time in tests without a global override.
+// NOTE: Overriding Time/TimeTicks altogether via
+// TaskEnvironment::TimeSource::MOCK_TIME is now the preferred way of overriding
+// time in unit tests.
 //
 // NOTE: ScopedMockClockOverride should be created while single-threaded and
 // before the first call to Now() to avoid threading issues and inconsistencies
@@ -33,6 +32,10 @@ namespace base {
 class ScopedMockClockOverride {
  public:
   ScopedMockClockOverride();
+
+  ScopedMockClockOverride(const ScopedMockClockOverride&) = delete;
+  ScopedMockClockOverride& operator=(const ScopedMockClockOverride&) = delete;
+
   ~ScopedMockClockOverride();
 
   static Time Now();
@@ -43,10 +46,8 @@ class ScopedMockClockOverride {
 
  private:
   std::unique_ptr<base::subtle::ScopedTimeClockOverrides> time_clock_overrides_;
-  TimeDelta offset_;
+  TimeDelta offset_from_windows_epoch_;
   static ScopedMockClockOverride* scoped_mock_clock_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedMockClockOverride);
 };
 
 }  // namespace base

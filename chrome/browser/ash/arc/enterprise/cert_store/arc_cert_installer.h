@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,12 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chromeos/ash/services/keymanagement/public/mojom/cert_store_types.mojom.h"
 #include "components/policy/core/common/remote_commands/remote_command_job.h"
 #include "components/policy/core/common/remote_commands/remote_commands_queue.h"
-#include "crypto/rsa_private_key.h"
+#include "crypto/keypair.h"
 #include "net/cert/scoped_nss_types.h"
 
 class Profile;
@@ -27,17 +29,30 @@ class BrowserContext;
 
 namespace arc {
 
+// This class is basically a value holder associating metadata relevant to an
+// NSS CERTCertificate.
 struct CertDescription {
-  CertDescription(crypto::RSAPrivateKey* placeholder_key,
-                  CERTCertificate* nss_cert);
+  CertDescription(crypto::keypair::PrivateKey placeholder_key,
+                  CERTCertificate* nss_cert,
+                  keymanagement::mojom::ChapsSlot slot,
+                  std::string label,
+                  std::string id);
   CertDescription(CertDescription&& other);
   CertDescription(const CertDescription& other) = delete;
   CertDescription& operator=(CertDescription&& other);
   CertDescription& operator=(const CertDescription& other) = delete;
   ~CertDescription();
 
-  std::unique_ptr<crypto::RSAPrivateKey> placeholder_key;
+  // The dummy key to be installed in ARC as a placeholder for |nss_cert|.
+  crypto::keypair::PrivateKey placeholder_key;
+  // The NSS certificate that corresponds to this object.
   net::ScopedCERTCertificate nss_cert;
+  // The chaps slot where this key is stored.
+  keymanagement::mojom::ChapsSlot slot;
+  // The PKCS#11 CKA_LABEL of this key.
+  std::string label;
+  // The PKCS#11 CKA_ID of this key.
+  std::string id;
 };
 
 // This class manages the certificates, available to ARC.
@@ -50,6 +65,10 @@ class ArcCertInstaller : public policy::RemoteCommandsQueue::Observer {
   // This constructor should be used only for testing.
   ArcCertInstaller(Profile* profile,
                    std::unique_ptr<policy::RemoteCommandsQueue> queue);
+
+  ArcCertInstaller(const ArcCertInstaller&) = delete;
+  ArcCertInstaller& operator=(const ArcCertInstaller&) = delete;
+
   ~ArcCertInstaller() override;
 
   using InstallArcCertsCallback = base::OnceCallback<void(bool result)>;
@@ -78,7 +97,7 @@ class ArcCertInstaller : public policy::RemoteCommandsQueue::Observer {
   void OnJobStarted(policy::RemoteCommandJob* command) override {}
   void OnJobFinished(policy::RemoteCommandJob* command) override;
 
-  Profile* profile_;  // not owned
+  raw_ptr<Profile> profile_;  // not owned
 
   // A valid callback when the caller of |InstallArcCerts| method is awaiting
   // for a response.
@@ -103,8 +122,6 @@ class ArcCertInstaller : public policy::RemoteCommandsQueue::Observer {
   int next_id_ = 1;
 
   base::WeakPtrFactory<ArcCertInstaller> weak_ptr_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcCertInstaller);
 };
 
 }  // namespace arc

@@ -1,11 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef DEVICE_GAMEPAD_GAMEPAD_DATA_FETCHER_H_
 #define DEVICE_GAMEPAD_GAMEPAD_DATA_FETCHER_H_
 
-#include "base/sequenced_task_runner.h"
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/gamepad/gamepad_data_fetcher_manager.h"
 #include "device/gamepad/gamepad_export.h"
 #include "device/gamepad/gamepad_pad_state_provider.h"
@@ -46,11 +49,20 @@ class DEVICE_GAMEPAD_EXPORT GamepadDataFetcher {
 
   GamepadPadStateProvider* provider() { return provider_; }
 
-  PadState* GetPadState(int source_id, bool new_pad_recognized = true) {
+  PadState* GetPadState(
+      int source_id,
+      bool new_pad_recognized = true,
+      std::optional<std::string_view> product_identifier = std::nullopt) {
     if (!provider_)
       return nullptr;
 
-    return provider_->GetPadState(source(), source_id, new_pad_recognized);
+    return provider_->GetPadState(source(), source_id, new_pad_recognized,
+                                  product_identifier);
+  }
+
+  void ClaimProductIdentifier(std::string_view product_identifier) {
+    CHECK(provider_);
+    provider_->ClaimProductIdentifierForSource(source(), product_identifier);
   }
 
   // Returns the current time value in microseconds. Data fetchers should use
@@ -98,7 +110,7 @@ class DEVICE_GAMEPAD_EXPORT GamepadDataFetcher {
  private:
   // GamepadPadStateProvider is the base class of GamepadProvider, which owns
   // this data fetcher.
-  GamepadPadStateProvider* provider_ = nullptr;
+  raw_ptr<GamepadPadStateProvider> provider_ = nullptr;
 };
 
 // Factory class for creating a GamepadDataFetcher. Used by the

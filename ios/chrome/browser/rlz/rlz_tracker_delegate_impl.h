@@ -1,18 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef IOS_CHROME_BROWSER_RLZ_RLZ_TRACKER_DELEGATE_IMPL_H_
 #define IOS_CHROME_BROWSER_RLZ_RLZ_TRACKER_DELEGATE_IMPL_H_
 
-#include <memory>
+#import <memory>
 
-#include "base/callback.h"
-#include "base/callback_list.h"
-#include "base/macros.h"
-#include "components/rlz/rlz_tracker_delegate.h"
+#import "base/callback_list.h"
+#import "base/functional/callback.h"
+#import "components/rlz/rlz_tracker_delegate.h"
+class ProfileIOS;
 
-class ChromeBrowserState;
 struct OmniboxLog;
 
 // RLZTrackerDelegateImpl implements RLZTrackerDelegate abstract interface
@@ -20,11 +19,15 @@ struct OmniboxLog;
 class RLZTrackerDelegateImpl : public rlz::RLZTrackerDelegate {
  public:
   RLZTrackerDelegateImpl();
+
+  RLZTrackerDelegateImpl(const RLZTrackerDelegateImpl&) = delete;
+  RLZTrackerDelegateImpl& operator=(const RLZTrackerDelegateImpl&) = delete;
+
   ~RLZTrackerDelegateImpl() override;
 
-  static bool IsGoogleDefaultSearch(ChromeBrowserState* browser_state);
-  static bool IsGoogleHomepage(ChromeBrowserState* browser_state);
-  static bool IsGoogleInStartpages(ChromeBrowserState* browser_state);
+  static bool IsGoogleDefaultSearch(ProfileIOS* profile);
+  static bool IsGoogleHomepage(ProfileIOS* profile);
+  static bool IsGoogleInStartpages(ProfileIOS* profile);
 
  private:
   // RLZTrackerDelegate implementation.
@@ -40,6 +43,7 @@ class RLZTrackerDelegateImpl : public rlz::RLZTrackerDelegate {
   bool ClearReferral() override;
   void SetOmniboxSearchCallback(base::OnceClosure callback) override;
   void SetHomepageSearchCallback(base::OnceClosure callback) override;
+  void RunHomepageSearchCallback() override;
   bool ShouldUpdateExistingAccessPointRlz() override;
 
   // Called when user open an URL from the Omnibox.
@@ -47,8 +51,6 @@ class RLZTrackerDelegateImpl : public rlz::RLZTrackerDelegate {
 
   base::OnceClosure on_omnibox_search_callback_;
   base::CallbackListSubscription on_omnibox_url_opened_subscription_;
-
-  DISALLOW_COPY_AND_ASSIGN(RLZTrackerDelegateImpl);
 };
 
 #endif  // IOS_CHROME_BROWSER_RLZ_RLZ_TRACKER_DELEGATE_IMPL_H_

@@ -1,32 +1,32 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/net/net_error_diagnostics_dialog.h"
 
-// Winsock.h must be included before ndfapi.h.
-#include <winsock2.h>  // NOLINT
-#include <ndfapi.h>    // NOLINT
-#include <windows.h>   // NOLINT
+#include <windows.h>
+#include <winsock2.h>
+
+#include <ndfapi.h>
 
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/native_library.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/threading/thread.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/base_shell_dialog_win.h"
 #include "ui/views/win/hwnd_util.h"
 
@@ -34,14 +34,19 @@ namespace {
 
 class NetErrorDiagnosticsDialog : public ui::BaseShellDialogImpl {
  public:
-  NetErrorDiagnosticsDialog() {}
-  ~NetErrorDiagnosticsDialog() override {}
+  NetErrorDiagnosticsDialog() = default;
+
+  NetErrorDiagnosticsDialog(const NetErrorDiagnosticsDialog&) = delete;
+  NetErrorDiagnosticsDialog& operator=(const NetErrorDiagnosticsDialog&) =
+      delete;
+
+  ~NetErrorDiagnosticsDialog() override = default;
 
   // NetErrorDiagnosticsDialog implementation.
   void Show(content::WebContents* web_contents,
             const std::string& failed_url,
             base::OnceClosure callback) {
-    DCHECK(!callback.is_null());
+    CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
     HWND parent =
         views::HWNDForNativeWindow(web_contents->GetTopLevelNativeWindow());
@@ -62,6 +67,10 @@ class NetErrorDiagnosticsDialog : public ui::BaseShellDialogImpl {
   }
 
  private:
+// TODO(crbug.com/370065739): The Ndf* functions here have been deprecated.
+// Update this function and then remove these pragmas.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
   void ShowDialogOnPrivateThread(HWND parent, const std::string& failed_url) {
     NDFHANDLE incident_handle;
     std::wstring failed_url_wide = base::UTF8ToWide(failed_url);
@@ -72,14 +81,13 @@ class NetErrorDiagnosticsDialog : public ui::BaseShellDialogImpl {
     NdfExecuteDiagnosis(incident_handle, parent);
     NdfCloseIncident(incident_handle);
   }
+#pragma clang diagnostic pop
 
   void DiagnosticsDone(std::unique_ptr<RunState> run_state,
                        base::OnceClosure callback) {
     EndRun(std::move(run_state));
     std::move(callback).Run();
   }
-
-  DISALLOW_COPY_AND_ASSIGN(NetErrorDiagnosticsDialog);
 };
 
 }  // namespace
@@ -88,13 +96,16 @@ bool CanShowNetworkDiagnosticsDialog(content::WebContents* web_contents) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   // The Windows diagnostic tool logs URLs it's run with, so it shouldn't be
-  // used with incognito or guest profiles.  See https://crbug.com/929141
-  return !profile->IsIncognitoProfile() && !profile->IsGuestSession();
+  // used with incognito, Enterprise Isolated Mode or guest profiles.
+  // See https://crbug.com/40612751
+  return !profile->IsPrimaryOTRProfileWithRegularParent() &&
+         !profile->IsGuestSession();
 }
 
 void ShowNetworkDiagnosticsDialog(content::WebContents* web_contents,
                                   const std::string& failed_url) {
-  DCHECK(CanShowNetworkDiagnosticsDialog(web_contents));
+  CHECK(CanShowNetworkDiagnosticsDialog(web_contents),
+        base::NotFatalUntil::M161);
 
   NetErrorDiagnosticsDialog* dialog = new NetErrorDiagnosticsDialog();
   dialog->Show(

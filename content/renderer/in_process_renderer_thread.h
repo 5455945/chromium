@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,13 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/threading/thread.h"
 #include "content/common/content_export.h"
 #include "content/common/in_process_child_thread_params.h"
 
+namespace blink::scheduler {
+class WebThreadScheduler;
+}  // namespace blink::scheduler
 namespace content {
 class RenderProcess;
 
@@ -19,20 +21,33 @@ class RenderProcess;
 // single-process mode.  It's not used in multi-process mode.
 class InProcessRendererThread : public base::Thread {
  public:
+  class ThreadDelegate : public base::Thread::Delegate {
+   public:
+    explicit ThreadDelegate(InProcessRendererThread* outer);
+    ~ThreadDelegate() override = default;
+    scoped_refptr<base::SingleThreadTaskRunner> GetDefaultTaskRunner() override;
+    void BindToCurrentThread() override;
+
+   private:
+    raw_ptr<blink::scheduler::WebThreadScheduler> web_thread_scheduler_;
+    raw_ptr<InProcessRendererThread> outer_;
+  };
+
   InProcessRendererThread(const InProcessChildThreadParams& params,
                           int32_t renderer_client_id);
+
+  InProcessRendererThread(const InProcessRendererThread&) = delete;
+  InProcessRendererThread& operator=(const InProcessRendererThread&) = delete;
+
   ~InProcessRendererThread() override;
 
  protected:
-  void Init() override;
   void CleanUp() override;
 
  private:
   const InProcessChildThreadParams params_;
   const int32_t renderer_client_id_;
   std::unique_ptr<RenderProcess> render_process_;
-
-  DISALLOW_COPY_AND_ASSIGN(InProcessRendererThread);
 };
 
 CONTENT_EXPORT base::Thread* CreateInProcessRendererThread(

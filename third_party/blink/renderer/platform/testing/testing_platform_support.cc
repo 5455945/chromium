@@ -33,19 +33,26 @@
 #include <memory>
 #include <string>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/memory/discardable_memory_allocator.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/test_discardable_memory_allocator.h"
+#include "base/test/test_suite_helper.h"
+#include "base/time/default_clock.h"
+#include "base/time/default_tick_clock.h"
 #include "gin/public/v8_platform.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/geometry/length.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/heap_test_platform.h"
 #include "third_party/blink/renderer/platform/heap/heap_test_utilities.h"
+#include "third_party/blink/renderer/platform/heap/process_heap.h"
 #include "third_party/blink/renderer/platform/language.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
@@ -98,7 +105,7 @@ TestingPlatformSupport::TestingPlatformSupport()
     : old_platform_(Platform::Current()),
       interface_broker_(base::MakeRefCounted<TestingBrowserInterfaceBroker>()) {
   DCHECK(old_platform_);
-  DCHECK(WTF::IsMainThread());
+  DCHECK(IsMainThread());
 }
 
 TestingPlatformSupport::~TestingPlatformSupport() {
@@ -106,7 +113,7 @@ TestingPlatformSupport::~TestingPlatformSupport() {
 }
 
 WebString TestingPlatformSupport::DefaultLocale() {
-  return WebString::FromUTF8("en-US");
+  return WebString("en-US");
 }
 
 WebData TestingPlatformSupport::GetDataResource(
@@ -117,9 +124,9 @@ WebData TestingPlatformSupport::GetDataResource(
              : WebData();
 }
 
-WebData TestingPlatformSupport::UncompressDataResource(int resource_id) {
-  return old_platform_ ? old_platform_->UncompressDataResource(resource_id)
-                       : WebData();
+std::string TestingPlatformSupport::GetDataResourceString(int resource_id) {
+  return old_platform_ ? old_platform_->GetDataResourceString(resource_id)
+                       : std::string();
 }
 
 ThreadSafeBrowserInterfaceBrokerProxy*
@@ -127,14 +134,159 @@ TestingPlatformSupport::GetBrowserInterfaceBroker() {
   return interface_broker_.get();
 }
 
-cc::TaskGraphRunner* TestingPlatformSupport::GetTaskGraphRunner() {
-  // We want to ensure that if the underlying platform has a TaskGraphRunner
-  // that we continue to return its instance.
-  return old_platform_ ? old_platform_->GetTaskGraphRunner() : nullptr;
+scoped_refptr<base::SequencedTaskRunner>
+TestingPlatformSupport::MediaThreadTaskRunner() {
+  return old_platform_ ? old_platform_->MediaThreadTaskRunner()
+                       : base::SequencedTaskRunner::GetCurrentDefault();
+}
+
+scoped_refptr<base::SingleThreadTaskRunner>
+TestingPlatformSupport::GetIOTaskRunner() const {
+  return old_platform_ ? old_platform_->GetIOTaskRunner()
+                       : base::SingleThreadTaskRunner::GetCurrentDefault();
+}
+
+// ValueConverter only for simple data types used in tests.
+class V8ValueConverterForTest final : public WebV8ValueConverter {
+ public:
+  void SetDateAllowed(bool val) override {}
+  void SetRegExpAllowed(bool val) override {}
+
+  v8::Local<v8::Value> ToV8Value(base::ValueView value,
+                                 v8::Local<v8::Context> context) override {
+    // The following logic is forked from V8ValueConverterImpl::ToV8Value() to
+    // support converting basic types.
+    struct Visitor {
+      raw_ptr<const V8ValueConverterForTest> converter;
+      raw_ptr<v8::Isolate> isolate;
+      v8::Local<v8::Object> creation_context;
+
+      v8::Local<v8::Value> operator()(std::monostate value) {
+        return v8::Null(isolate);
+      }
+
+      v8::Local<v8::Value> operator()(bool value) {
+        return v8::Boolean::New(isolate, value);
+      }
+
+      v8::Local<v8::Value> operator()(int value) {
+        return v8::Integer::New(isolate, value);
+      }
+
+      v8::Local<v8::Value> operator()(double value) {
+        return v8::Number::New(isolate, value);
+      }
+
+      v8::Local<v8::Value> operator()(std::string_view value) {
+        return v8::String::NewFromUtf8(isolate, value.data(),
+                                       v8::NewStringType::kNormal,
+                                       base::checked_cast<int>(value.length()))
+            .ToLocalChecked();
+      }
+
+      v8::Local<v8::Value> operator()(const base::Value::BlobStorage& value) {
+        NOTREACHED();
+      }
+
+      v8::Local<v8::Value> operator()(const base::DictValue& value) {
+        NOTREACHED();
+      }
+
+      v8::Local<v8::Value> operator()(const base::ListValue& value) {
+        NOTREACHED();
+      }
+    };
+
+    return value.Visit(Visitor{.converter = this,
+                               .isolate = v8::Isolate::GetCurrent(),
+                               .creation_context = context->Global()});
+  }
+
+  std::unique_ptr<base::Value> FromV8Value(
+      v8::Local<v8::Value> val,
+      v8::Local<v8::Context> context) override {
+    CHECK(!val.IsEmpty());
+
+    v8::Context::Scope context_scope(context);
+    auto* isolate = v8::Isolate::GetCurrent();
+    v8::HandleScope handle_scope(isolate);
+
+    if (val->IsBoolean()) {
+      return std::make_unique<base::Value>(
+          base::Value(val->ToBoolean(isolate)->Value()));
+    }
+
+    if (val->IsInt32()) {
+      return std::make_unique<base::Value>(
+          base::Value(val.As<v8::Int32>()->Value()));
+    }
+
+    if (val->IsString()) {
+      v8::String::Utf8Value utf8(isolate, val);
+      return std::make_unique<base::Value>(
+          base::Value(std::string(*utf8, utf8.length())));
+    }
+
+    // The following logic is forked from V8ValueConverterImpl::FromV8Object()
+    // to support converting ScriptObject in tests.
+    if (val->IsObject()) {
+      v8::Local<v8::Object> val_obj = val.As<v8::Object>();
+      base::DictValue result;
+      v8::Local<v8::Array> property_names;
+      if (!val_obj->GetOwnPropertyNames(isolate->GetCurrentContext())
+               .ToLocal(&property_names)) {
+        return std::make_unique<base::Value>(std::move(result));
+      }
+
+      for (uint32_t i = 0; i < property_names->Length(); ++i) {
+        v8::Local<v8::Value> key =
+            property_names->Get(isolate->GetCurrentContext(), i)
+                .ToLocalChecked();
+
+        // Extend this test to cover more types as necessary and if sensible.
+        if (!key->IsString() && !key->IsNumber()) {
+          NOTREACHED() << "Key \"" << *v8::String::Utf8Value(isolate, key)
+                       << "\" "
+                          "is neither a string nor a number";
+        }
+
+        v8::String::Utf8Value name_utf8(isolate, key);
+
+        v8::TryCatch try_catch(isolate);
+        v8::Local<v8::Value> child_v8;
+        v8::MaybeLocal<v8::Value> maybe_child =
+            val_obj->Get(isolate->GetCurrentContext(), key);
+        if (try_catch.HasCaught() || !maybe_child.ToLocal(&child_v8)) {
+          LOG(WARNING) << "Getter for property " << *name_utf8
+                       << " threw an exception.";
+          child_v8 = v8::Null(isolate);
+        }
+
+        std::unique_ptr<base::Value> child = FromV8Value(child_v8, context);
+        if (!child) {
+          // JSON.stringify skips properties whose values don't serialize, for
+          // example undefined and functions. Emulate that behavior.
+          continue;
+        }
+
+        result.Set(std::string(*name_utf8, name_utf8.length()),
+                   std::move(*child));
+      }
+      return std::make_unique<base::Value>(std::move(result));
+    }
+
+    // Returns `nullptr` for a broader range of values than actual
+    // `V8ValueConverter`.
+    return nullptr;
+  }
+};
+
+std::unique_ptr<blink::WebV8ValueConverter>
+TestingPlatformSupport::CreateWebV8ValueConverter() {
+  return std::make_unique<V8ValueConverterForTest>();
 }
 
 void TestingPlatformSupport::RunUntilIdle() {
-  HeapPointersOnStackScope scan_stack(ThreadState::Current());
   base::RunLoop().RunUntilIdle();
 }
 
@@ -146,12 +298,16 @@ void TestingPlatformSupport::SetThreadedAnimationEnabled(bool enabled) {
   is_threaded_animation_enabled_ = enabled;
 }
 
-bool TestingPlatformSupport::IsUseZoomForDSFEnabled() {
-  return is_zoom_for_dsf_enabled_;
+const base::Clock* TestingPlatformSupport::GetClock() const {
+  return base::DefaultClock::GetInstance();
 }
 
-void TestingPlatformSupport::SetUseZoomForDSF(bool enabled) {
-  is_zoom_for_dsf_enabled_ = enabled;
+const base::TickClock* TestingPlatformSupport::GetTickClock() const {
+  return base::DefaultTickClock::GetInstance();
+}
+
+base::TimeTicks TestingPlatformSupport::NowTicks() const {
+  return base::TimeTicks::Now();
 }
 
 ScopedUnittestsEnvironmentSetup::ScopedUnittestsEnvironmentSetup(int argc,
@@ -165,6 +321,21 @@ ScopedUnittestsEnvironmentSetup::ScopedUnittestsEnvironmentSetup(int argc,
   base::DiscardableMemoryAllocator::SetInstance(
       discardable_memory_allocator_.get());
 
+  // FeatureList must be initialized before Partitions::Initialize(),
+  // because Partitions::Initialize() uses base::FeatureList to obtain
+  // PartitionOptions.
+  // NOTE: InitScopedFeatureListForTesting() deliberately removes
+  // `--enable-features` and `--disable-features` from the command line of the
+  // current process after processing them. However, here that behavior is
+  // undesirable: This helper object is used by Blink test suites to configure
+  // their environment before they run their tests via the base::TestSuite
+  // infrastructure, which itself queries `--enable-features` and
+  // `--disable-features` from the command line in order to configure the
+  // environment that the tests run in.
+  base::CommandLine command_line = *base::CommandLine::ForCurrentProcess();
+  base::test::InitScopedFeatureListForTesting(scoped_feature_list_);
+  *base::CommandLine::ForCurrentProcess() = command_line;
+
   // TODO(yutak): The initialization steps below are essentially a subset of
   // Platform::Initialize() steps with a few modifications for tests.
   // We really shouldn't have those initialization steps in two places,
@@ -174,11 +345,12 @@ ScopedUnittestsEnvironmentSetup::ScopedUnittestsEnvironmentSetup(int argc,
   dummy_platform_ = std::make_unique<Platform>();
   Platform::SetCurrentPlatformForTesting(dummy_platform_.get());
 
-  WTF::Partitions::Initialize();
-  WTF::Initialize();
+  Partitions::Initialize();
+  InitializeWtf();
+  Length::Initialize();
 
-  // This must be called after WTF::Initialize(), because ThreadSpecific<>
-  // used in this function depends on WTF::IsMainThread().
+  // This must be called after blink::InitializeWtf(), because ThreadSpecific<>
+  // used in this function depends on blink::IsMainThread().
   Platform::CreateMainThreadForTesting();
 
   testing_platform_support_ = std::make_unique<TestingPlatformSupport>();
@@ -194,6 +366,7 @@ ScopedUnittestsEnvironmentSetup::ScopedUnittestsEnvironmentSetup(int argc,
   v8_platform_for_heap_testing_ =
       std::make_unique<HeapTestingPlatformAdapter>(gin::V8Platform::Get());
   ThreadState::AttachMainThreadForTesting(v8_platform_for_heap_testing_.get());
+  conservative_gc_scope_.emplace(ThreadState::Current());
   http_names::Init();
   fetch_initiator_type_names::Init();
 

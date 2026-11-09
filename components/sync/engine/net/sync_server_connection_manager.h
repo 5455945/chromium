@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/sync/engine/net/server_connection_manager.h"
 #include "url/gurl.h"
 
@@ -23,16 +22,23 @@ class HttpPostProviderFactory;
 // instance of the HttpPostProviderFactory class.
 class SyncServerConnectionManager : public ServerConnectionManager {
  public:
-  // |factory| and |cancelation_signal| must not be null, and the latter must
+  // `factory` and `cancelation_signal` must not be null, and the latter must
   // outlive this object.
   SyncServerConnectionManager(const GURL& sync_request_url,
                               std::unique_ptr<HttpPostProviderFactory> factory,
                               CancelationSignal* cancelation_signal);
+
+  SyncServerConnectionManager(const SyncServerConnectionManager&) = delete;
+  SyncServerConnectionManager& operator=(const SyncServerConnectionManager&) =
+      delete;
+
   ~SyncServerConnectionManager() override;
 
-  HttpResponse PostBuffer(const std::string& buffer_in,
-                          const std::string& access_token,
-                          std::string* buffer_out) override;
+ protected:
+  HttpResponse PostBuffer(
+      const std::string& buffer_in,
+      std::string* buffer_out,
+      const signin::AccessTokenInfo& access_token_info) override;
 
  private:
   // The full URL that requests will be made to.
@@ -44,9 +50,7 @@ class SyncServerConnectionManager : public ServerConnectionManager {
 
   // Cancelation signal is signalled when engine shuts down. Current blocking
   // operation should be aborted.
-  CancelationSignal* const cancelation_signal_;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncServerConnectionManager);
+  const raw_ptr<CancelationSignal> cancelation_signal_;
 };
 
 }  // namespace syncer

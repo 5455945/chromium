@@ -1,32 +1,53 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {SDKTestRunner} from 'sdk_test_runner';
+
+import * as Sources from 'devtools/panels/sources/sources.js';
+import * as UI from 'devtools/ui/legacy/legacy.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
 
 (async function() {
   'use strict';
   TestRunner.addResult(`Tests scripts sorting in the scripts panel.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadTestModule('sdk_test_runner');
   await TestRunner.showPanel('sources');
 
   function createNavigatorView(constructor) {
-    var navigatorView = new constructor();
-    navigatorView.show(UI.inspectorView.element);
+    var navigatorView = new constructor(Main.MainImpl.MainImpl.universeForTest.networkProjectManager);
+    navigatorView.show(UI.InspectorView.InspectorView.instance().element);
     return navigatorView;
   }
 
   const sourcesNavigatorView =
-      createNavigatorView(Sources.NetworkNavigatorView);
+      createNavigatorView(Sources.SourcesNavigator.NetworkNavigatorView);
   const contentScriptsNavigatorView =
-      createNavigatorView(Sources.ContentScriptsNavigatorView);
+      createNavigatorView(Sources.SourcesNavigator.ContentScriptsNavigatorView);
 
-  var pageMock = new SDKTestRunner.PageMock('http://example.com');
-  pageMock.turnIntoWorker();
-  pageMock.connectAsMainTarget('mock-target-1');
+  var rootMock = new SDKTestRunner.PageMock('http://example.com');
+  rootMock.turnIntoWorker();
+  rootMock.connectAsMainTarget('mock-target-root');
+  rootMock.target.setInspectedURL(TestRunner.url(''));
+
+  const pageMocks = new Map();
+  function getPageMock(url) {
+    var parsedURL = new URL(url.startsWith('*') ? 'http://example.com' + url : url);
+    var origin = parsedURL.origin;
+    if (!pageMocks.has(origin)) {
+      var mock = new SDKTestRunner.PageMock(origin);
+      mock.turnIntoWorker();
+      mock.connectAsChildTarget('mock-target-' + pageMocks.size, rootMock);
+      mock.target.setInspectedURL(origin + '/');
+      pageMocks.set(origin, mock);
+    }
+    return pageMocks.get(origin);
+  }
 
   var uiSourceCodes = [];
   async function addUISourceCode(url, isContentScript) {
-    pageMock.evalScript(url, '', isContentScript);
+    getPageMock(url).evalScript(url, '', isContentScript);
     var uiSourceCode = await TestRunner.waitForUISourceCode(url);
     uiSourceCodes.push(uiSourceCode);
   }

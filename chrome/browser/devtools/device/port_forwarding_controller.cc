@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,17 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -32,7 +31,9 @@
 #include "net/base/address_list.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/network_isolation_key.h"
+#include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_with_source.h"
@@ -68,35 +69,40 @@ const char kPortParam[] = "port";
 const char kConnectionIdParam[] = "connectionId";
 
 static bool ParseNotification(const std::string& json,
-                              std::string* method,
-                              absl::optional<base::Value>* params) {
-  absl::optional<base::Value> value = base::JSONReader::Read(json);
-  if (!value || !value->is_dict())
+                              std::string& method,
+                              std::optional<base::DictValue>& params) {
+  std::optional<base::DictValue> value =
+      base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
     return false;
+  }
 
-  const std::string* method_value = value->FindStringKey(kMethodParam);
+  std::string* method_value = value->FindString(kMethodParam);
   if (!method_value)
     return false;
-  *method = *method_value;
+  method = std::move(*method_value);
 
-  auto extracted_param = value->ExtractKey(kParamsParam);
-  if (extracted_param && extracted_param->is_dict())
-    *params = std::move(extracted_param);
+  base::DictValue* param_dict = value->FindDict(kParamsParam);
+  if (param_dict) {
+    params = std::move(*param_dict);
+  }
   return true;
 }
 
 static bool ParseResponse(const std::string& json,
                           int* command_id,
                           int* error_code) {
-  absl::optional<base::Value> value = base::JSONReader::Read(json);
-  if (!value || !value->is_dict())
+  std::optional<base::DictValue> value =
+      base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
     return false;
-  absl::optional<int> command_id_opt = value->FindIntKey(kIdParam);
+  }
+  std::optional<int> command_id_opt = value->FindInt(kIdParam);
   if (!command_id_opt)
     return false;
   *command_id = *command_id_opt;
 
-  absl::optional<int> error_value = value->FindIntPath(kErrorCodePath);
+  std::optional<int> error_value = value->FindIntByDottedPath(kErrorCodePath);
   if (error_value)
     *error_code = *error_value;
 
@@ -106,14 +112,12 @@ static bool ParseResponse(const std::string& json,
 static std::string SerializeCommand(int command_id,
                                     const std::string& method,
                                     base::Value params) {
-  base::Value command(base::Value::Type::DICTIONARY);
-  command.SetIntKey(kIdParam, command_id);
-  command.SetStringKey(kMethodParam, method);
-  command.SetKey(kParamsParam, std::move(params));
+  base::DictValue command;
+  command.Set(kIdParam, command_id);
+  command.Set(kMethodParam, method);
+  command.Set(kParamsParam, std::move(params));
 
-  std::string json_command;
-  base::JSONWriter::Write(command, &json_command);
-  return json_command;
+  return base::WriteJson(command).value_or("");
 }
 
 net::NetworkTrafficAnnotationTag kPortForwardingControllerTrafficAnnotation =
@@ -156,38 +160,46 @@ class PortForwardingHostResolver : public network::ResolveHostClientBase {
                              int port,
                              ResolveHostCallback resolve_host_callback)
       : resolve_host_callback_(std::move(resolve_host_callback)) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    DCHECK(!receiver_.is_bound());
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+    CHECK(!receiver_.is_bound(), base::NotFatalUntil::M161);
 
     net::HostPortPair host_port_pair(host, port);
-    // Use a transient NetworkIsolationKey, as there's no need to share cached
-    // DNS results from this request with anything else.
+    // Intentionally using a HostPortPair because scheme isn't specified.
+    // Use a transient NetworkAnonymizationKey, as there's no need to share
+    // cached DNS results from this request with anything else.
     profile->GetDefaultStoragePartition()->GetNetworkContext()->ResolveHost(
-        host_port_pair, net::NetworkIsolationKey::CreateTransient(), nullptr,
+        network::mojom::HostResolverHost::NewHostPortPair(
+            std::move(host_port_pair)),
+        net::NetworkAnonymizationKey::CreateTransient(), nullptr,
         receiver_.BindNewPipeAndPassRemote());
-    receiver_.set_disconnect_handler(
-        base::BindOnce(&PortForwardingHostResolver::OnComplete,
-                       base::Unretained(this), net::ERR_NAME_NOT_RESOLVED,
-                       net::ResolveErrorInfo(net::ERR_FAILED), absl::nullopt));
+    receiver_.set_disconnect_handler(base::BindOnce(
+        &PortForwardingHostResolver::OnComplete, base::Unretained(this),
+        net::ERR_NAME_NOT_RESOLVED, net::ResolveErrorInfo(net::ERR_FAILED),
+        net::AddressList(), net::HostResolverEndpointResults()));
   }
+
+  PortForwardingHostResolver(const PortForwardingHostResolver&) = delete;
+  PortForwardingHostResolver& operator=(const PortForwardingHostResolver&) =
+      delete;
 
  private:
   ~PortForwardingHostResolver() override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   }
 
   // network::mojom::ResolveHostClient:
   void OnComplete(
       int result,
       const net::ResolveErrorInfo& resolve_error_info,
-      const absl::optional<net::AddressList>& resolved_addresses) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+      const net::AddressList& resolved_addresses,
+      const net::HostResolverEndpointResults& alternative_endpoints) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     if (result < 0) {
       std::move(resolve_host_callback_).Run(net::AddressList());
     } else {
-      DCHECK(resolved_addresses && !resolved_addresses->empty());
-      std::move(resolve_host_callback_).Run(resolved_addresses.value());
+      CHECK(!resolved_addresses.empty(), base::NotFatalUntil::M161);
+      std::move(resolve_host_callback_).Run(resolved_addresses);
     }
 
     delete this;
@@ -195,8 +207,6 @@ class PortForwardingHostResolver : public network::ResolveHostClientBase {
 
   mojo::Receiver<network::mojom::ResolveHostClient> receiver_{this};
   ResolveHostCallback resolve_host_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(PortForwardingHostResolver);
 };
 
 static void ResolveHost(Profile* profile,
@@ -221,6 +231,9 @@ class SocketTunnel {
       new SocketTunnel(profile, std::move(socket), host, port);
   }
 
+  SocketTunnel(const SocketTunnel&) = delete;
+  SocketTunnel& operator=(const SocketTunnel&) = delete;
+
   ~SocketTunnel() { DCHECK_CALLED_ON_VALID_THREAD(thread_checker_); }
 
  private:
@@ -231,7 +244,7 @@ class SocketTunnel {
       : remote_socket_(std::move(socket)),
         pending_writes_(0),
         pending_destruction_(false),
-        adb_thread_runner_(base::ThreadTaskRunnerHandle::Get()) {
+        adb_thread_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {
     ResolveHostCallback resolve_host_callback = base::BindOnce(
         &SocketTunnel::OnResolveHostComplete, base::Unretained(this));
     content::GetUIThreadTaskRunner({})->PostTask(
@@ -240,7 +253,7 @@ class SocketTunnel {
   }
 
   void OnResolveHostComplete(net::AddressList resolved_addresses) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     if (resolved_addresses.empty()) {
       adb_thread_runner_->DeleteSoon(FROM_HERE, this);
@@ -256,7 +269,11 @@ class SocketTunnel {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
     host_socket_ = std::make_unique<net::TCPClientSocket>(
-        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource());
+        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource(),
+        // There are currently no use cases for targeting a network when
+        // forwarding via devtools. This will need to be reconsidered if a need
+        // arises.
+        net::handles::kInvalidNetworkHandle);
     int result = host_socket_->Connect(
         base::BindOnce(&SocketTunnel::OnConnected, base::Unretained(this)));
     if (result != net::ERR_IO_PENDING)
@@ -284,8 +301,7 @@ class SocketTunnel {
   void Pump(net::StreamSocket* from, net::StreamSocket* to) {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-    scoped_refptr<net::IOBuffer> buffer =
-        base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+    auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
     int result =
         from->Read(buffer.get(), kBufferSize,
                    base::BindOnce(&SocketTunnel::OnRead, base::Unretained(this),
@@ -368,8 +384,6 @@ class SocketTunnel {
   scoped_refptr<base::SingleThreadTaskRunner> adb_thread_runner_;
 
   THREAD_CHECKER(thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(SocketTunnel);
 };
 
 }  // namespace
@@ -382,6 +396,10 @@ class PortForwardingController::Connection
              scoped_refptr<AndroidDeviceManager::Device> device,
              scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> browser,
              const ForwardingMap& forwarding_map);
+
+  Connection(const Connection&) = delete;
+  Connection& operator=(const Connection&) = delete;
+
   ~Connection() override;
 
   const PortStatusMap& GetPortStatusMap();
@@ -416,8 +434,8 @@ class PortForwardingController::Connection
   void OnFrameRead(const std::string& message) override;
   void OnSocketClosed() override;
 
-  Profile* profile_;
-  PortForwardingController::Registry* registry_;
+  raw_ptr<Profile> profile_;
+  raw_ptr<PortForwardingController::Registry> registry_;
   scoped_refptr<AndroidDeviceManager::Device> device_;
   scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> browser_;
   std::unique_ptr<AndroidDeviceManager::AndroidWebSocket> web_socket_;
@@ -426,8 +444,6 @@ class PortForwardingController::Connection
   ForwardingMap forwarding_map_;
   CommandCallbackMap pending_responses_;
   PortStatusMap port_status_;
-
-  DISALLOW_COPY_AND_ASSIGN(Connection);
 };
 
 PortForwardingController::Connection::Connection(
@@ -443,21 +459,22 @@ PortForwardingController::Connection::Connection(
       command_id_(0),
       connected_(false),
       forwarding_map_(forwarding_map) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   (*registry_)[device_->serial()] = this;
   web_socket_.reset(device_->CreateWebSocket(
       browser->socket(), browser->browser_target_id(), this));
 }
 
 PortForwardingController::Connection::~Connection() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(registry_->find(device_->serial()) != registry_->end());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(registry_->find(device_->serial()) != registry_->end(),
+        base::NotFatalUntil::M161);
   registry_->erase(device_->serial());
 }
 
 void PortForwardingController::Connection::UpdateForwardingMap(
     const ForwardingMap& new_forwarding_map) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   if (connected_) {
     SerializeChanges(kUnbindMethod, new_forwarding_map, forwarding_map_);
     SerializeChanges(kBindMethod, forwarding_map_, new_forwarding_map);
@@ -469,7 +486,7 @@ void PortForwardingController::Connection::SerializeChanges(
     const std::string& method,
     const ForwardingMap& old_map,
     const ForwardingMap& new_map) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   for (auto new_it(new_map.begin()); new_it != new_map.end(); ++new_it) {
     int port = new_it->first;
     const std::string& location = new_it->second;
@@ -483,10 +500,11 @@ void PortForwardingController::Connection::SerializeChanges(
 
 void PortForwardingController::Connection::SendCommand(
     const std::string& method, int port) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::Value params(base::Value::Type::DICTIONARY);
-  DCHECK(method == kBindMethod || kUnbindMethod == method);
-  params.SetIntKey(kPortParam, port);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+  base::DictValue params;
+  CHECK(method == kBindMethod || kUnbindMethod == method,
+        base::NotFatalUntil::M161);
+  params.Set(kPortParam, port);
   int id = ++command_id_;
 
   if (method == kBindMethod) {
@@ -504,7 +522,8 @@ void PortForwardingController::Connection::SendCommand(
                                             base::Unretained(this), port);
   }
 
-  web_socket_->SendFrame(SerializeCommand(id, method, std::move(params)));
+  web_socket_->SendFrame(
+      SerializeCommand(id, method, base::Value(std::move(params))));
 }
 
 bool PortForwardingController::Connection::ProcessResponse(
@@ -541,12 +560,12 @@ void PortForwardingController::Connection::ProcessUnbindResponse(
 
 const PortForwardingController::PortStatusMap&
 PortForwardingController::Connection::GetPortStatusMap() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   return port_status_;
 }
 
 void PortForwardingController::Connection::OnSocketOpened() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   connected_ = true;
   SerializeChanges(kBindMethod, ForwardingMap(), forwarding_map_);
 }
@@ -557,22 +576,23 @@ void PortForwardingController::Connection::OnSocketClosed() {
 
 void PortForwardingController::Connection::OnFrameRead(
     const std::string& message) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   if (ProcessResponse(message))
     return;
 
   std::string method;
-  absl::optional<base::Value> params;
-  if (!ParseNotification(message, &method, &params))
+  std::optional<base::DictValue> params;
+  if (!ParseNotification(message, method, params)) {
     return;
+  }
 
   if (method != kAcceptedEvent || !params)
     return;
 
-  absl::optional<int> port = params->FindIntKey(kPortParam);
+  std::optional<int> port = params->FindInt(kPortParam);
   if (!port)
     return;
-  const std::string* connection_id = params->FindStringKey(kConnectionIdParam);
+  const std::string* connection_id = params->FindString(kConnectionIdParam);
   if (!connection_id)
     return;
 
@@ -603,7 +623,7 @@ PortForwardingController::PortForwardingController(Profile* profile)
   OnPrefsChange();
 }
 
-PortForwardingController::~PortForwardingController() {}
+PortForwardingController::~PortForwardingController() = default;
 
 PortForwardingController::ForwardingStatus
 PortForwardingController::DeviceListChanged(
@@ -642,9 +662,9 @@ void PortForwardingController::OnPrefsChange() {
   forwarding_map_.clear();
 
   if (pref_service_->GetBoolean(prefs::kDevToolsPortForwardingEnabled)) {
-    const base::Value* value =
-        pref_service_->GetDictionary(prefs::kDevToolsPortForwardingConfig);
-    for (auto dict_element : value->DictItems()) {
+    const base::DictValue& value =
+        pref_service_->GetDict(prefs::kDevToolsPortForwardingConfig);
+    for (auto dict_element : value) {
       int port_num;
       if (base::StringToInt(dict_element.first, &port_num) &&
           dict_element.second.is_string()) {

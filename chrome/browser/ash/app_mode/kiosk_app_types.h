@@ -1,52 +1,90 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_APP_MODE_KIOSK_APP_TYPES_H_
 #define CHROME_BROWSER_ASH_APP_MODE_KIOSK_APP_TYPES_H_
 
+#include <optional>
+#include <ostream>
 #include <string>
+#include <string_view>
 
 #include "components/account_id/account_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 
-// Type of different kiosk apps to be launched.
-enum class KioskAppType { kArcApp, kChromeApp, kWebApp };
+// Supported types of Kiosk apps.
+enum class KioskAppType { kChromeApp, kWebApp, kIsolatedWebApp, kArcvmApp };
 
-// Universal identifier for all kiosk apps.
+// Universal identifier for Kiosk apps.
 class KioskAppId {
  public:
-  KioskAppType type;
-  absl::optional<std::string> app_id;
-  absl::optional<AccountId> account_id;
+  static KioskAppId ForChromeApp(std::string_view chrome_app_id,
+                                 const AccountId& account_id);
+  static KioskAppId ForWebApp(const AccountId& account_id);
+  static KioskAppId ForIsolatedWebApp(const AccountId& account_id);
+  static KioskAppId ForArcvmApp(const AccountId& account_id);
 
   KioskAppId();
-  ~KioskAppId();
   KioskAppId(const KioskAppId&);
+  KioskAppId(KioskAppId&&);
+  KioskAppId& operator=(const KioskAppId&);
+  KioskAppId& operator=(KioskAppId&&);
+  ~KioskAppId();
 
-  static KioskAppId ForChromeApp(const std::string& app_id);
-  static KioskAppId ForWebApp(const AccountId& account_id);
-  static KioskAppId ForArcApp(const AccountId& account_id);
-
-  // Use this method when we are unsure which type of kiosk app this AccountId
-  // belongs to.
-  static bool FromAccountId(const AccountId& account_id,
-                            KioskAppId* kiosk_app_id);
+  KioskAppType type;
+  std::optional<std::string> app_id;
+  AccountId account_id;
 
  private:
-  KioskAppId(KioskAppType type, const std::string& app_id);
+  KioskAppId(std::string_view chrome_app_id, const AccountId& account_id);
   KioskAppId(KioskAppType type, const AccountId& account_id);
 };
 
-}  // namespace ash
+std::ostream& operator<<(std::ostream& stream, const KioskAppId& app_id);
+bool operator==(const KioskAppId& first, const KioskAppId& second);
 
-// TODO(https://crbug.com/1164001): remove when the //chrome/browser/chromeos
-// source code migration is finished.
-namespace chromeos {
-using ::ash::KioskAppId;
-using ::ash::KioskAppType;
-}  // namespace chromeos
+// Set of parameters required to install a Kiosk app from a cached location.
+struct KioskAppInstallParams {
+  KioskAppInstallParams(std::string id,
+                        std::string crx_file_location,
+                        std::string version,
+                        bool is_store_app);
+  KioskAppInstallParams(const KioskAppInstallParams& other);
+  KioskAppInstallParams(KioskAppInstallParams&& other) noexcept;
+  KioskAppInstallParams& operator=(const KioskAppInstallParams& other);
+  KioskAppInstallParams& operator=(KioskAppInstallParams&& other) noexcept;
+  ~KioskAppInstallParams();
+
+  // Id of the primary Kiosk app.
+  std::string id;
+  // Location of the crx file in local cache.
+  std::string crx_file_location;
+  // Version of the app to be installed.
+  std::string version;
+  // Indicates whether the app should be downloaded from Chrome Web Store.
+  bool is_store_app;
+};
+
+enum class KioskInstallResult {
+  kUnknown = 0,
+  // Installation completed successfully, kiosk is ready to launch.
+  kSuccess = 1,
+  // Primary app is not cached yet, network is required to rectify.
+  kPrimaryAppNotCached = 2,
+  // Install of primary app failed
+  kPrimaryAppInstallFailed = 3,
+  // Install of a secondary app failed
+  kSecondaryAppInstallFailed = 4,
+  // The primary app does not have kiosk support in the manifest
+  kPrimaryAppNotKioskEnabled = 5,
+  // Update of primary app failed, but an installed version already exists.
+  kPrimaryAppUpdateFailed = 6,
+  // Update of secondary app failed, but an installed version already exists.
+  kSecondaryAppUpdateFailed = 7,
+};
+
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_APP_MODE_KIOSK_APP_TYPES_H_

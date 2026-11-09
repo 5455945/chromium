@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TEXT_PLATFORM_LOCALE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TEXT_PLATFORM_LOCALE_H_
 
+#include <array>
 #include <memory>
 
 #include "third_party/blink/renderer/platform/language.h"
@@ -48,8 +49,8 @@ class PLATFORM_EXPORT Locale {
   String QueryString(int resource_id,
                      const String& parameter1,
                      const String& parameter2);
-  String ValidationMessageTooLongText(unsigned value_length, int max_length);
-  String ValidationMessageTooShortText(unsigned value_length, int min_length);
+  String ValidationMessageTooLongText(wtf_size_t value_length, int max_length);
+  String ValidationMessageTooShortText(wtf_size_t value_length, int min_length);
 
   // Converts the specified number string to another number string localized
   // for this Locale locale. The input string must conform to HTML
@@ -59,7 +60,7 @@ class PLATFORM_EXPORT Locale {
   // Converts the specified localized number string to a number string in the
   // HTML floating-point number format. The input string is provided by a end
   // user, and might not be a number string. It's ok that the function returns
-  // a string which is not conforms to the HTML floating-point number format,
+  // a string which does not conform to the HTML floating-point number format,
   // callers of this function are responsible to check the format of the
   // resultant string.
   String ConvertFromLocalizedNumber(const String&);
@@ -108,7 +109,7 @@ class PLATFORM_EXPORT Locale {
   // Returns a year-month format in Unicode TR35 LDML.
   virtual String MonthFormat() = 0;
 
-  // Returns a year-month format using short month lanel in Unicode TR35 LDML.
+  // Returns a year-month format using short month label in Unicode TR35 LDML.
   virtual String ShortMonthFormat() = 0;
 
   // Returns time format in Unicode TR35 LDML[1] containing hour, minute, and
@@ -129,9 +130,9 @@ class PLATFORM_EXPORT Locale {
   // field.
   virtual String DateTimeFormatWithoutSeconds() = 0;
 
-  // weekFormatInLDML() returns week and year format in LDML, Unicode
+  // WeekFormatInLdml() returns week and year format in LDML, Unicode
   // technical standard 35, Locale Data Markup Language, e.g. "'Week' ww, yyyy"
-  String WeekFormatInLDML();
+  String WeekFormatInLdml();
 
   // Returns a vector of string of which size is 12. The first item is a
   // localized string of Jan and the last item is a localized string of
@@ -148,7 +149,7 @@ class PLATFORM_EXPORT Locale {
   virtual const Vector<String>& ShortStandAloneMonthLabels() = 0;
 
   // Returns localized period field(AM/PM) strings.
-  virtual const Vector<String>& TimeAMPMLabels() = 0;
+  virtual const Vector<String>& TimeAmPmLabels() = 0;
 
   // Returns a vector of string of which size is 12. The first item is a
   // localized string of January, and the last item is a localized string of
@@ -161,11 +162,11 @@ class PLATFORM_EXPORT Locale {
   virtual const Vector<String>& WeekDayShortLabels() = 0;
 
   // The first day of a week. 0 is Sunday, and 6 is Saturday.
-  virtual unsigned FirstDayOfWeek() = 0;
+  virtual wtf_size_t FirstDayOfWeek() = 0;
 
   // Returns true if people use right-to-left writing in the locale for this
   // object.
-  virtual bool IsRTL() = 0;
+  virtual bool IsRtl() = 0;
 
   enum FormatType {
     kFormatTypeUnspecified,
@@ -192,7 +193,16 @@ class PLATFORM_EXPORT Locale {
     kDecimalSymbolsSize
   };
 
-  Locale() : has_locale_data_(false) {}
+  static constexpr char kFallbackWeekdayShortNames[7][4] = {
+      "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static constexpr char kFallbackMonthShortNames[12][4] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  static constexpr const char* kFallbackMonthNames[12] = {
+      "January", "February", "March",     "April",   "May",      "June",
+      "July",    "August",   "September", "October", "November", "December"};
+
+  Locale() = default;
   virtual void InitializeLocaleData() = 0;
   void SetLocaleData(const Vector<String, kDecimalSymbolsSize>&,
                      const String& positive_prefix,
@@ -203,20 +213,21 @@ class PLATFORM_EXPORT Locale {
  private:
   bool DetectSignAndGetDigitRange(const String& input,
                                   bool& is_negative,
-                                  unsigned& start_index,
-                                  unsigned& end_index);
-  unsigned MatchedDecimalSymbolIndex(const String& input, unsigned& position);
+                                  wtf_size_t& start_index,
+                                  wtf_size_t& end_index);
+  wtf_size_t MatchedDecimalSymbolIndex(const String& input,
+                                       wtf_size_t& position);
 
-  String decimal_symbols_[kDecimalSymbolsSize];
+  std::array<String, kDecimalSymbolsSize> decimal_symbols_;
   String positive_prefix_;
   String positive_suffix_;
   String negative_prefix_;
   String negative_suffix_;
   String acceptable_number_characters_;
-  bool has_locale_data_;
+  bool has_locale_data_ = false;
   // Does the locale use single character filtering to do additional number
   // input validation?
-  bool uses_single_char_number_filtering_;
+  bool uses_single_char_number_filtering_ = false;
 };
 
 }  // namespace blink

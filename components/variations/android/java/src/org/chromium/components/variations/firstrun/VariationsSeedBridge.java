@@ -1,14 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.variations.firstrun;
 
+import android.text.TextUtils;
 import android.util.Base64;
 
+import org.jni_zero.CalledByNative;
+
 import org.chromium.base.ContextUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * VariationsSeedBridge is a class which is used to pass variations first run seed that was fetched
@@ -16,10 +19,13 @@ import org.chromium.base.metrics.RecordHistogram;
  * in SharedPreferences and to get the seed from there. To store raw seed data class serializes
  * byte[] to Base64 encoded string and decodes this string before passing to C++ side.
  */
+@NullMarked
 public class VariationsSeedBridge {
     protected static final String VARIATIONS_FIRST_RUN_SEED_BASE64 = "variations_seed_base64";
     protected static final String VARIATIONS_FIRST_RUN_SEED_SIGNATURE = "variations_seed_signature";
     protected static final String VARIATIONS_FIRST_RUN_SEED_COUNTRY = "variations_seed_country";
+    protected static final String VARIATIONS_FIRST_RUN_SEED_GEO_LEVEL1 =
+            "variations_seed_geo_level1";
     protected static final String VARIATIONS_FIRST_RUN_SEED_DATE = "variations_seed_date_ms";
     protected static final String VARIATIONS_FIRST_RUN_SEED_IS_GZIP_COMPRESSED =
             "variations_seed_is_gzip_compressed";
@@ -29,75 +35,60 @@ public class VariationsSeedBridge {
     protected static final String VARIATIONS_FIRST_RUN_SEED_NATIVE_STORED =
             "variations_seed_native_stored";
 
-    // These must be kept in sync with VariationsFirstRunPrefEvents in enums.xml.
-    private static final int DEBUG_PREFS_STORED = 0;
-    private static final int DEBUG_PREFS_CLEARED = 1;
-    private static final int DEBUG_PREFS_RETRIEVED_DATA_EMPTY = 2;
-    private static final int DEBUG_PREFS_RETRIEVED_DATA_NON_EMPTY = 3;
-    private static final int DEBUG_PREFS_CLEARED_NON_EMPTY = 4;
-    private static final int DEBUG_PREFS_MAX = 5;
-
-    // TODO(crbug.com/1090968): Debug histogram to investigate a regression. Remove when resolved.
-    private static void logDebugHistogram(int value) {
-        RecordHistogram.recordEnumeratedHistogram(
-                "Variations.FirstRunPrefsDebug", value, DEBUG_PREFS_MAX);
-    }
-
-    protected static String getVariationsFirstRunSeedPref(String prefName) {
+    protected static @Nullable String getVariationsFirstRunSeedPref(String prefName) {
         return ContextUtils.getAppSharedPreferences().getString(prefName, "");
     }
 
     /**
-     * Stores variations seed data (raw data, seed signature and country code) in SharedPreferences.
-     * CalledByNative attribute is used by unit tests code to set test data.
+     * Stores variations seed data (raw data, seed signature, country code and geo level 1) in
+     * SharedPreferences. CalledByNative attribute is used by unit tests code to set test data.
      */
     @CalledByNative
     public static void setVariationsFirstRunSeed(
-            byte[] rawSeed, String signature, String country, long date, boolean isGzipCompressed) {
+            byte @Nullable [] rawSeed,
+            @Nullable String signature,
+            @Nullable String country,
+            @Nullable String geoLevel1,
+            long date,
+            boolean isGzipCompressed) {
         ContextUtils.getAppSharedPreferences()
                 .edit()
-                .putString(VARIATIONS_FIRST_RUN_SEED_BASE64,
+                .putString(
+                        VARIATIONS_FIRST_RUN_SEED_BASE64,
                         Base64.encodeToString(rawSeed, Base64.NO_WRAP))
                 .putString(VARIATIONS_FIRST_RUN_SEED_SIGNATURE, signature)
                 .putString(VARIATIONS_FIRST_RUN_SEED_COUNTRY, country)
+                .putString(VARIATIONS_FIRST_RUN_SEED_GEO_LEVEL1, geoLevel1)
                 .putLong(VARIATIONS_FIRST_RUN_SEED_DATE, date)
                 .putBoolean(VARIATIONS_FIRST_RUN_SEED_IS_GZIP_COMPRESSED, isGzipCompressed)
                 .apply();
-        logDebugHistogram(DEBUG_PREFS_STORED);
     }
 
     @CalledByNative
     private static void clearFirstRunPrefs() {
-        if (hasJavaPref()) {
-            logDebugHistogram(DEBUG_PREFS_CLEARED_NON_EMPTY);
-        }
         ContextUtils.getAppSharedPreferences()
                 .edit()
                 .remove(VARIATIONS_FIRST_RUN_SEED_BASE64)
                 .remove(VARIATIONS_FIRST_RUN_SEED_SIGNATURE)
                 .remove(VARIATIONS_FIRST_RUN_SEED_COUNTRY)
+                .remove(VARIATIONS_FIRST_RUN_SEED_GEO_LEVEL1)
                 .remove(VARIATIONS_FIRST_RUN_SEED_DATE)
                 .remove(VARIATIONS_FIRST_RUN_SEED_IS_GZIP_COMPRESSED)
                 .apply();
-        logDebugHistogram(DEBUG_PREFS_CLEARED);
     }
 
-    /**
-     * Returns the status of the variations first run fetch: was it successful or not.
-     */
+    /** Returns the status of the variations first run fetch: was it successful or not. */
     public static boolean hasJavaPref() {
-        return !ContextUtils.getAppSharedPreferences()
-                        .getString(VARIATIONS_FIRST_RUN_SEED_BASE64, "")
-                        .isEmpty();
+        return !TextUtils.isEmpty(
+                ContextUtils.getAppSharedPreferences()
+                        .getString(VARIATIONS_FIRST_RUN_SEED_BASE64, null));
     }
 
-    /**
-     * Returns the status of the variations seed storing on the C++ side: was it successful or not.
-     */
+    /** Returns the status of the variations seed storing on the C++ side: was it successful or not. */
     @CalledByNative
     public static boolean hasNativePref() {
-        return ContextUtils.getAppSharedPreferences().getBoolean(
-                VARIATIONS_FIRST_RUN_SEED_NATIVE_STORED, false);
+        return ContextUtils.getAppSharedPreferences()
+                .getBoolean(VARIATIONS_FIRST_RUN_SEED_NATIVE_STORED, false);
     }
 
     @CalledByNative
@@ -110,21 +101,23 @@ public class VariationsSeedBridge {
 
     @CalledByNative
     private static byte[] getVariationsFirstRunSeedData() {
-        byte[] data = Base64.decode(
+        return Base64.decode(
                 getVariationsFirstRunSeedPref(VARIATIONS_FIRST_RUN_SEED_BASE64), Base64.NO_WRAP);
-        logDebugHistogram(data.length == 0 ? DEBUG_PREFS_RETRIEVED_DATA_EMPTY
-                                           : DEBUG_PREFS_RETRIEVED_DATA_NON_EMPTY);
-        return data;
     }
 
     @CalledByNative
-    private static String getVariationsFirstRunSeedSignature() {
+    private static @Nullable String getVariationsFirstRunSeedSignature() {
         return getVariationsFirstRunSeedPref(VARIATIONS_FIRST_RUN_SEED_SIGNATURE);
     }
 
     @CalledByNative
-    private static String getVariationsFirstRunSeedCountry() {
+    private static @Nullable String getVariationsFirstRunSeedCountry() {
         return getVariationsFirstRunSeedPref(VARIATIONS_FIRST_RUN_SEED_COUNTRY);
+    }
+
+    @CalledByNative
+    private static @Nullable String getVariationsFirstRunSeedGeoLevel1() {
+        return getVariationsFirstRunSeedPref(VARIATIONS_FIRST_RUN_SEED_GEO_LEVEL1);
     }
 
     @CalledByNative
@@ -134,7 +127,7 @@ public class VariationsSeedBridge {
 
     @CalledByNative
     private static boolean getVariationsFirstRunSeedIsGzipCompressed() {
-        return ContextUtils.getAppSharedPreferences().getBoolean(
-                VARIATIONS_FIRST_RUN_SEED_IS_GZIP_COMPRESSED, false);
+        return ContextUtils.getAppSharedPreferences()
+                .getBoolean(VARIATIONS_FIRST_RUN_SEED_IS_GZIP_COMPRESSED, false);
     }
 }

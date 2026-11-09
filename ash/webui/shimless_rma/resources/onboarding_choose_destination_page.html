@@ -1,30 +1,25 @@
 <style include="cr-shared-style shimless-rma-shared">
 </style>
 
-<base-page>
-  <div slot="header">
-    <!-- TODO(gavindodd): Update text for i18n -->
-    <h1>After repair, who will be using the device.</h1>
-  </div>
-  <div slot="body">
+<base-page left-pane-only>
+  <div slot="left-pane">
+    <h1 tabindex="-1">[[i18n('chooseDestinationTitleText')]]</h1>
     <cr-radio-group
         id="chooseDestinationGroup"
-        on-selected-changed="onDestinationSelectionChanged_">
-      <cr-radio-button name="originalOwner" id="destinationOriginalOwner">
-        Device will go to the same owner
+        on-selected-changed="onDestinationSelectionChanged"
+        disabled="[[allButtonsDisabled]]">
+      <cr-radio-button name="newOwner" id="destinationNewOwner"
+          label="[[i18n('newOwnerText')]]">
+        <div class="indented-description" aria-hidden="true">
+          [[i18n('newOwnerDescriptionText')]]
+        </div>
       </cr-radio-button>
-      <p>
-        Select this option if the ownership of the device isn't changing.
-        For example the device is being transferred to a different person within
-        an organization
-      </p>
-      <cr-radio-button name="newOwner" id="destinationNewOwner">
-        Device will go to a different owner
+      <cr-radio-button name="originalOwner" id="destinationOriginalOwner"
+          label="[[i18n('sameOwnerText')]]">
       </cr-radio-button>
-      <p>
-        Select this option if the device is being restocked or refurbished for
-        distribution to a new customer
-      </p>
+      <cr-radio-button name="notSureOwner" id="destinationNotSureOwner"
+          label="[[i18n('notSureOwnerText')]]">
+      </cr-radio-button>
     </cr-radio-group>
-</div>
+  </div>
 </base-page>

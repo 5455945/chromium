@@ -24,13 +24,18 @@
 
 #include "third_party/blink/public/common/input/web_pointer_properties.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mouse_event_init.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
 #include "third_party/blink/renderer/core/event_interface_names.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+#include "third_party/blink/renderer/core/html/html_frame_element_base.h"
+#include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/input/input_device_capabilities.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -48,29 +53,13 @@ namespace blink {
 
 namespace {
 
-DoubleSize ContentsScrollOffset(AbstractView* abstract_view) {
-  auto* local_dom_window = DynamicTo<LocalDOMWindow>(abstract_view);
+float LayoutZoomFactor(const LocalDOMWindow* local_dom_window) {
   if (!local_dom_window)
-    return DoubleSize();
+    return 1.f;
   LocalFrame* frame = local_dom_window->GetFrame();
   if (!frame)
-    return DoubleSize();
-  ScrollableArea* scrollable_area = frame->View()->LayoutViewport();
-  if (!scrollable_area)
-    return DoubleSize();
-  float scale_factor = frame->PageZoomFactor();
-  return DoubleSize(scrollable_area->ScrollOffsetInt().Width() / scale_factor,
-                    scrollable_area->ScrollOffsetInt().Height() / scale_factor);
-}
-
-float PageZoomFactor(const UIEvent* event) {
-  auto* local_dom_window = DynamicTo<LocalDOMWindow>(event->view());
-  if (!local_dom_window)
-    return 1;
-  LocalFrame* frame = local_dom_window->GetFrame();
-  if (!frame)
-    return 1;
-  return frame->PageZoomFactor();
+    return 1.f;
+  return frame->LayoutZoomFactor();
 }
 
 const LayoutObject* FindTargetLayoutObject(Node*& target_node) {
@@ -111,19 +100,33 @@ unsigned ButtonsToWebInputEventModifiers(uint16_t buttons) {
 MouseEvent* MouseEvent::Create(ScriptState* script_state,
                                const AtomicString& type,
                                const MouseEventInit* initializer) {
-  if (script_state && script_state->World().IsIsolatedWorld()) {
-    UIEventWithKeyState::DidCreateEventInIsolatedWorld(
-        initializer->ctrlKey(), initializer->altKey(), initializer->shiftKey(),
-        initializer->metaKey());
+  LocalDOMWindow* fallback_dom_window = nullptr;
+  if (script_state) {
+    if (script_state->World().IsIsolatedWorld()) {
+      UIEventWithKeyState::DidCreateEventInIsolatedWorld(
+          initializer->ctrlKey(), initializer->altKey(),
+          initializer->shiftKey(), initializer->metaKey());
+    }
+    // If we don't have a view, we'll have to get a fallback dom window in
+    // order to properly account for device scale factor.
+    if (!initializer || !initializer->view()) {
+      if (auto* execution_context = ExecutionContext::From(script_state);
+          execution_context && execution_context->IsWindow()) {
+        fallback_dom_window = static_cast<LocalDOMWindow*>(execution_context);
+      }
+    }
   }
-  return MakeGarbageCollected<MouseEvent>(type, initializer);
+  return MakeGarbageCollected<MouseEvent>(
+      type, initializer, base::TimeTicks::Now(), kRealOrIndistinguishable,
+      ui::mojom::blink::MenuSourceType::kNone, fallback_dom_window);
 }
 
-MouseEvent* MouseEvent::Create(const AtomicString& event_type,
-                               const MouseEventInit* initializer,
-                               base::TimeTicks platform_time_stamp,
-                               SyntheticEventType synthetic_event_type,
-                               WebMenuSourceType menu_source_type) {
+MouseEvent* MouseEvent::Create(
+    const AtomicString& event_type,
+    const MouseEventInit* initializer,
+    base::TimeTicks platform_time_stamp,
+    SyntheticEventType synthetic_event_type,
+    ui::mojom::blink::MenuSourceType menu_source_type) {
   return MakeGarbageCollected<MouseEvent>(
       event_type, initializer, platform_time_stamp, synthetic_event_type,
       menu_source_type);
@@ -133,42 +136,63 @@ MouseEvent::MouseEvent()
     : position_type_(PositionType::kPosition),
       button_(0),
       buttons_(0),
-      related_target_(nullptr),
       synthetic_event_type_(kRealOrIndistinguishable) {}
 
 MouseEvent::MouseEvent(const AtomicString& event_type,
                        const MouseEventInit* initializer,
                        base::TimeTicks platform_time_stamp,
                        SyntheticEventType synthetic_event_type,
-                       WebMenuSourceType menu_source_type)
+                       ui::mojom::blink::MenuSourceType menu_source_type,
+                       LocalDOMWindow* fallback_dom_window)
     : UIEventWithKeyState(event_type, initializer, platform_time_stamp),
-      screen_location_(
-          DoublePoint(initializer->screenX(), initializer->screenY())),
-      movement_delta_(
-          DoublePoint(initializer->movementX(), initializer->movementY())),
+      screen_x_(initializer->screenX()),
+      screen_y_(initializer->screenY()),
+      related_target_(initializer->relatedTarget()),
+      movement_delta_(initializer->movementX(), initializer->movementY()),
       position_type_(synthetic_event_type == kPositionless
                          ? PositionType::kPositionless
                          : PositionType::kPosition),
       button_(initializer->button()),
       buttons_(initializer->buttons()),
-      related_target_(initializer->relatedTarget()),
       synthetic_event_type_(synthetic_event_type),
-      region_(initializer->region()),
       menu_source_type_(menu_source_type) {
-  InitCoordinates(initializer->clientX(), initializer->clientY());
+  InitCoordinates(initializer->clientX(), initializer->clientY(),
+                  fallback_dom_window);
   modifiers_ |= ButtonsToWebInputEventModifiers(buttons_);
 }
 
-void MouseEvent::InitCoordinates(const double client_x, const double client_y) {
-  // Set up initial values for coordinates.
-  // Correct values are computed lazily, see computeRelativePosition.
-  client_location_ = DoublePoint(client_x, client_y);
-  page_location_ = client_location_ + ContentsScrollOffset(view());
+void MouseEvent::InitCoordinates(const double client_x,
+                                 const double client_y,
+                                 const LocalDOMWindow* fallback_dom_window) {
+  client_x_ = page_x_ = client_x;
+  client_y_ = page_y_ = client_y;
+  absolute_location_ = gfx::PointF(client_x, client_y);
 
-  layer_location_ = page_location_;
-  offset_location_ = page_location_;
+  auto* local_dom_window = DynamicTo<LocalDOMWindow>(view());
+  float zoom_factor = LayoutZoomFactor(local_dom_window ? local_dom_window
+                                                        : fallback_dom_window);
 
-  ComputePageLocation();
+  if (local_dom_window) {
+    if (LocalFrame* frame = local_dom_window->GetFrame()) {
+      // Adjust page_x_ and page_y_ by layout viewport scroll offset.
+      if (ScrollableArea* scrollable_area = frame->View()->LayoutViewport()) {
+        gfx::Vector2d scroll_offset =
+            scrollable_area->PixelSnappedScrollOffset();
+        page_x_ += scroll_offset.x() / zoom_factor;
+        page_y_ += scroll_offset.y() / zoom_factor;
+      }
+    }
+  }
+
+  // absolute_location_ is not an API value. It's in layout space.
+  absolute_location_.Scale(zoom_factor);
+
+  // Correct values of the following are computed lazily, see
+  // ComputeRelativePosition().
+  offset_x_ = page_x_;
+  offset_y_ = page_y_;
+  layer_location_ = gfx::PointF(page_x_, page_y_);
+
   has_cached_relative_position_ = false;
 }
 
@@ -176,12 +200,12 @@ void MouseEvent::SetCoordinatesFromWebPointerProperties(
     const WebPointerProperties& web_pointer_properties,
     const LocalDOMWindow* dom_window,
     MouseEventInit* initializer) {
-  FloatPoint client_point;
-  FloatPoint screen_point(web_pointer_properties.PositionInScreen());
-  float scale_factor = 1.0f;
+  gfx::PointF client_point;
+  gfx::PointF screen_point = web_pointer_properties.PositionInScreen();
+  float inverse_zoom_factor = 1.0f;
   if (dom_window && dom_window->GetFrame() && dom_window->GetFrame()->View()) {
     LocalFrame* frame = dom_window->GetFrame();
-    FloatPoint root_frame_point(web_pointer_properties.PositionInWidget());
+    gfx::PointF root_frame_point = web_pointer_properties.PositionInWidget();
     if (Page* p = frame->GetPage()) {
       if (p->GetPointerLockController().GetElement() &&
           !p->GetPointerLockController().LockPending()) {
@@ -189,21 +213,20 @@ void MouseEvent::SetCoordinatesFromWebPointerProperties(
                                                              &screen_point);
       }
     }
-    FloatPoint frame_point =
+    gfx::PointF frame_point =
         frame->View()->ConvertFromRootFrame(root_frame_point);
-    scale_factor = 1.0f / frame->PageZoomFactor();
-    client_point = frame_point.ScaledBy(scale_factor);
+    inverse_zoom_factor = 1.0f / frame->LayoutZoomFactor();
+    client_point = gfx::ScalePoint(frame_point, inverse_zoom_factor);
   }
 
-  initializer->setScreenX(screen_point.X());
-  initializer->setScreenY(screen_point.Y());
-  initializer->setClientX(client_point.X());
-  initializer->setClientY(client_point.Y());
+  initializer->setScreenX(screen_point.x());
+  initializer->setScreenY(screen_point.y());
+  initializer->setClientX(client_point.x());
+  initializer->setClientY(client_point.y());
 
   // TODO(crbug.com/982379): We need to merge the code path of raw movement
   // events and regular events so that we can remove the block below.
-  if (web_pointer_properties.is_raw_movement_event ||
-      !RuntimeEnabledFeatures::ConsolidatedMovementXYEnabled()) {
+  if (web_pointer_properties.is_raw_movement_event) {
     // TODO(nzolghadr): We need to scale movement attrinutes as well. But if we
     // do that here and round it to the int again it causes inconsistencies
     // between screenX/Y and cumulative movementX/Y.
@@ -280,7 +303,8 @@ void MouseEvent::InitMouseEventInternal(
   InitUIEventInternal(type, bubbles, cancelable, related_target, view, detail,
                       source_capabilities);
 
-  screen_location_ = DoublePoint(screen_x, screen_y);
+  screen_x_ = screen_x;
+  screen_y_ = screen_y;
   button_ = button;
   buttons_ = buttons;
   related_target_ = related_target;
@@ -289,6 +313,15 @@ void MouseEvent::InitMouseEventInternal(
   InitCoordinates(client_x, client_y);
 
   // FIXME: SyntheticEventType is not set to RealOrIndistinguishable here.
+}
+
+void MouseEvent::InitCoordinatesForTesting(double screen_x,
+                                           double screen_y,
+                                           double client_x,
+                                           double client_y) {
+  screen_x_ = screen_x;
+  screen_y_ = screen_y;
+  InitCoordinates(client_x, client_y);
 }
 
 const AtomicString& MouseEvent::InterfaceName() const {
@@ -311,6 +344,16 @@ int16_t MouseEvent::button() const {
   return button_;
 }
 
+bool MouseEvent::IsLeftButton() const {
+  return button() == static_cast<int16_t>(WebPointerProperties::Button::kLeft);
+}
+
+bool MouseEvent::IsLinkClickButton() const {
+  int16_t b = button();
+  return b == static_cast<int16_t>(WebPointerProperties::Button::kLeft) ||
+         b == static_cast<int16_t>(WebPointerProperties::Button::kMiddle);
+}
+
 unsigned MouseEvent::which() const {
   // For the DOM, the return values for left, middle and right mouse buttons are
   // 0, 1, 2, respectively.
@@ -327,7 +370,7 @@ Node* MouseEvent::toElement() const {
       type() == event_type_names::kMouseleave)
     return relatedTarget() ? relatedTarget()->ToNode() : nullptr;
 
-  return target() ? target()->ToNode() : nullptr;
+  return RawTarget() ? RawTarget()->ToNode() : nullptr;
 }
 
 Node* MouseEvent::fromElement() const {
@@ -337,7 +380,7 @@ Node* MouseEvent::fromElement() const {
       type() != event_type_names::kMouseleave)
     return relatedTarget() ? relatedTarget()->ToNode() : nullptr;
 
-  return target() ? target()->ToNode() : nullptr;
+  return RawTarget() ? RawTarget()->ToNode() : nullptr;
 }
 
 void MouseEvent::Trace(Visitor* visitor) const {
@@ -346,39 +389,40 @@ void MouseEvent::Trace(Visitor* visitor) const {
 }
 
 DispatchEventResult MouseEvent::DispatchEvent(EventDispatcher& dispatcher) {
+  CheckCrossOriginRelatedTarget(dispatcher.GetNode(), related_target_);
+  // TODO(mustaq): Move click-specific code to `PointerEvent::DispatchEvent`.
   GetEventPath().AdjustForRelatedTarget(dispatcher.GetNode(), relatedTarget());
 
   bool is_click = type() == event_type_names::kClick;
-  bool send_to_disabled_form_controls =
-      RuntimeEnabledFeatures::SendMouseEventsDisabledFormControlsEnabled();
-
-  if (send_to_disabled_form_controls && is_click &&
-      GetEventPath().DisabledFormControlExistsInPath()) {
-    return DispatchEventResult::kCanceledBeforeDispatch;
-  }
 
   if (!isTrusted())
     return dispatcher.Dispatch();
 
-  if (!send_to_disabled_form_controls &&
-      IsDisabledFormControl(&dispatcher.GetNode())) {
-    if (GetEventPath().HasEventListenersInPath(type())) {
-      UseCounter::Count(dispatcher.GetNode().GetDocument(),
-                        WebFeature::kDispatchMouseEventOnDisabledFormControl);
-      if (type() == event_type_names::kMousedown ||
-          type() == event_type_names::kMouseup) {
-        UseCounter::Count(
-            dispatcher.GetNode().GetDocument(),
-            WebFeature::kDispatchMouseUpDownEventOnDisabledFormControl);
-      }
-    }
-    return DispatchEventResult::kCanceledBeforeDispatch;
+  if (is_click || type() == event_type_names::kMousedown ||
+      type() == event_type_names::kMouseup ||
+      type() == event_type_names::kDblclick) {
+    GetEventPath().AdjustForDisabledFormControl();
   }
 
-  if (type().IsEmpty())
+  if (type().empty())
     return DispatchEventResult::kNotCanceled;  // Shouldn't happen.
 
-  DCHECK(!target() || target() != relatedTarget());
+  if (is_click) {
+    auto& path = GetEventPath();
+    bool saw_disabled_control = false;
+    for (unsigned i = 0; i < path.size(); i++) {
+      auto& node = path[i].GetNode();
+      if (saw_disabled_control && node.WillRespondToMouseClickEvents()) {
+        UseCounter::Count(
+            node.GetDocument(),
+            WebFeature::kParentOfDisabledFormControlRespondsToMouseEvents);
+      }
+      if (IsDisabledFormControl(&node))
+        saw_disabled_control = true;
+    }
+  }
+
+  DCHECK(!RawTarget() || RawTarget() != relatedTarget());
 
   EventTarget* related_target = relatedTarget();
 
@@ -409,39 +453,35 @@ DispatchEventResult MouseEvent::DispatchEvent(EventDispatcher& dispatcher) {
   return dispatch_result;
 }
 
-void MouseEvent::ComputePageLocation() {
-  auto* local_dom_window = DynamicTo<LocalDOMWindow>(view());
-  LocalFrame* frame = local_dom_window ? local_dom_window->GetFrame() : nullptr;
-  DoublePoint scaled_page_location =
-      page_location_.ScaledBy(PageZoomFactor(this));
-  if (frame && frame->View()) {
-    absolute_location_ = frame->View()->DocumentToFrame(scaled_page_location);
-  } else {
-    absolute_location_ = scaled_page_location;
-  }
-}
-
 void MouseEvent::ReceivedTarget() {
   has_cached_relative_position_ = false;
 }
 
 void MouseEvent::ComputeRelativePosition() {
-  Node* target_node = target() ? target()->ToNode() : nullptr;
+  Node* target_node = RawTarget() ? RawTarget()->ToNode() : nullptr;
   if (!target_node)
     return;
 
   // Compute coordinates that are based on the target.
-  layer_location_ = page_location_;
-  offset_location_ = page_location_;
-  float inverse_zoom_factor = 1 / PageZoomFactor(this);
+  offset_x_ = page_x_;
+  offset_y_ = page_y_;
+  layer_location_ = gfx::PointF(page_x_, page_y_);
+
+  LocalDOMWindow* dom_window_for_zoom_factor =
+      DynamicTo<LocalDOMWindow>(view());
+  if (!dom_window_for_zoom_factor)
+    dom_window_for_zoom_factor = target_node->GetDocument().domWindow();
+
+  float zoom_factor = LayoutZoomFactor(dom_window_for_zoom_factor);
+  float inverse_zoom_factor = 1 / zoom_factor;
 
   // Must have an updated layout tree for this math to work correctly.
   target_node->GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kInput);
 
   // Adjust offsetLocation to be relative to the target's padding box.
   if (const LayoutObject* layout_object = FindTargetLayoutObject(target_node)) {
-    FloatPoint local_pos = layout_object->AbsoluteToLocalFloatPoint(
-        FloatPoint(AbsoluteLocation()));
+    gfx::PointF local_pos =
+        layout_object->AbsoluteToLocalPoint(AbsoluteLocation());
 
     if (layout_object->IsInline()) {
       UseCounter::Count(
@@ -454,12 +494,12 @@ void MouseEvent::ComputeRelativePosition() {
     // box.
     if (layout_object->IsBoxModelObject()) {
       const auto* layout_box = To<LayoutBoxModelObject>(layout_object);
-      local_pos.Move(-layout_box->BorderLeft(), -layout_box->BorderTop());
+      const PhysicalOffset offset = layout_box->BorderOutsets().Offset();
+      local_pos.Offset(-offset.left, -offset.top);
     }
 
-    offset_location_ = DoublePoint(local_pos);
-    if (inverse_zoom_factor != 1.0f)
-      offset_location_.Scale(inverse_zoom_factor, inverse_zoom_factor);
+    offset_x_ = local_pos.x() * inverse_zoom_factor;
+    offset_y_ = local_pos.y() * inverse_zoom_factor;
   }
 
   // Adjust layerLocation to be relative to the layer.
@@ -471,37 +511,59 @@ void MouseEvent::ComputeRelativePosition() {
     n = n->parentNode();
 
   if (n) {
-    DoublePoint scaled_page_location =
-        page_location_.ScaledBy(PageZoomFactor(this));
+    layer_location_.Scale(zoom_factor);
     if (LocalFrameView* view = n->GetLayoutObject()->View()->GetFrameView())
-      layer_location_ = view->DocumentToFrame(scaled_page_location);
+      layer_location_ = view->DocumentToFrame(layer_location_);
 
     PaintLayer* layer = n->GetLayoutObject()->EnclosingLayer();
+    layer = layer->EnclosingSelfPaintingLayer();
 
-    PhysicalOffset physical_offset;
-    layer->ConvertToLayerCoords(nullptr, physical_offset);
-    layer_location_ -= DoubleSize(physical_offset.left.ToDouble(),
-                                  physical_offset.top.ToDouble());
+    PhysicalOffset physical_offset =
+        layer->GetLayoutObject().LocalToAbsolutePoint(PhysicalOffset());
+    layer_location_ -= gfx::Vector2dF(physical_offset);
 
-    if (inverse_zoom_factor != 1.0f)
-      layer_location_.Scale(inverse_zoom_factor, inverse_zoom_factor);
+    layer_location_.Scale(inverse_zoom_factor);
   }
 
   has_cached_relative_position_ = true;
+}
+
+void MouseEvent::RecordLayerXYMetrics() {
+  Node* node = RawTarget() ? RawTarget()->ToNode() : nullptr;
+  if (!node)
+    return;
+  // Using the target for these metrics is a heuristic for measuring the impact
+  // of https://crrev.com/370604#c57. The heuristic will be accurate for canvas
+  // elements which do not have children, but will undercount the impact on
+  // child elements (e.g., descendants of frames).
+  if (IsA<HTMLMediaElement>(node)) {
+    UseCounter::Count(node->GetDocument(), WebFeature::kLayerXYWithMediaTarget);
+  } else if (IsA<HTMLCanvasElement>(node)) {
+    UseCounter::Count(node->GetDocument(),
+                      WebFeature::kLayerXYWithCanvasTarget);
+  } else if (IsA<HTMLFrameElementBase>(node)) {
+    UseCounter::Count(node->GetDocument(), WebFeature::kLayerXYWithFrameTarget);
+  } else if (IsA<SVGElement>(node)) {
+    UseCounter::Count(node->GetDocument(), WebFeature::kLayerXYWithSVGTarget);
+  }
 }
 
 int MouseEvent::layerX() {
   if (!has_cached_relative_position_)
     ComputeRelativePosition();
 
-  return clampTo<int, double>(std::floor(layer_location_.X()));
+  RecordLayerXYMetrics();
+
+  return ClampTo<int>(std::floor(layer_location_.x()));
 }
 
 int MouseEvent::layerY() {
   if (!has_cached_relative_position_)
     ComputeRelativePosition();
 
-  return clampTo<int, double>(std::floor(layer_location_.Y()));
+  RecordLayerXYMetrics();
+
+  return ClampTo<int>(std::floor(layer_location_.y()));
 }
 
 double MouseEvent::offsetX() const {
@@ -509,7 +571,7 @@ double MouseEvent::offsetX() const {
     return 0;
   if (!has_cached_relative_position_)
     const_cast<MouseEvent*>(this)->ComputeRelativePosition();
-  return std::round(offset_location_.X());
+  return std::round(offset_x_);
 }
 
 double MouseEvent::offsetY() const {
@@ -517,7 +579,7 @@ double MouseEvent::offsetY() const {
     return 0;
   if (!has_cached_relative_position_)
     const_cast<MouseEvent*>(this)->ComputeRelativePosition();
-  return std::round(offset_location_.Y());
+  return std::round(offset_y_);
 }
 
 }  // namespace blink

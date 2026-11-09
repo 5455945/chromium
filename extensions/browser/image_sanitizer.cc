@@ -1,16 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/image_sanitizer.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <tuple>
+
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_util.h"
-#include "base/task_runner_util.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/common/extension_resource_path_normalizer.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
+#include "services/data_decoder/public/cpp/decode_image.h"
 #include "ui/gfx/codec/png_codec.h"
 
 namespace extensions {
@@ -28,75 +31,59 @@ std::tuple<std::vector<uint8_t>, bool, bool> ReadAndDeleteBinaryFile(
     const base::FilePath& path) {
   std::vector<uint8_t> contents;
   bool read_success = false;
-  int64_t file_size;
-  if (base::GetFileSize(path, &file_size)) {
-    contents.resize(file_size);
+  std::optional<int64_t> file_size = base::GetFileSize(path);
+  if (file_size.has_value()) {
+    int64_t size = file_size.value();
+    contents.resize(size);
     read_success =
-        base::ReadFile(path, reinterpret_cast<char*>(contents.data()),
-                       file_size) == file_size;
+        base::ReadFile(path, reinterpret_cast<char*>(contents.data()), size) ==
+        size;
   }
   bool delete_success = base::DeleteFile(path);
   return std::make_tuple(std::move(contents), read_success, delete_success);
 }
 
-std::pair<bool, std::vector<unsigned char>> EncodeImage(const SkBitmap& image) {
-  std::vector<unsigned char> image_data;
-  bool success = gfx::PNGCodec::EncodeBGRASkBitmap(
-      image,
-      /*discard_transparency=*/false, &image_data);
-  return std::make_pair(success, std::move(image_data));
-}
-
-int WriteFile(const base::FilePath& path,
-              const std::vector<unsigned char>& data) {
-  return base::WriteFile(path, reinterpret_cast<const char*>(data.data()),
-                         base::checked_cast<int>(data.size()));
+bool WriteFile(const base::FilePath& path,
+               const std::vector<unsigned char>& data) {
+  return base::WriteFile(path, data);
 }
 
 }  // namespace
 
 // static
 std::unique_ptr<ImageSanitizer> ImageSanitizer::CreateAndStart(
-    data_decoder::DataDecoder* decoder,
+    scoped_refptr<Client> client,
     const base::FilePath& image_dir,
     const std::set<base::FilePath>& image_paths,
-    ImageDecodedCallback image_decoded_callback,
-    SanitizationDoneCallback done_callback,
     const scoped_refptr<base::SequencedTaskRunner>& io_task_runner) {
-  std::unique_ptr<ImageSanitizer> sanitizer(new ImageSanitizer(
-      image_dir, image_paths, std::move(image_decoded_callback),
-      std::move(done_callback), io_task_runner));
-  sanitizer->Start(decoder);
+  std::unique_ptr<ImageSanitizer> sanitizer(
+      new ImageSanitizer(client, image_dir, image_paths, io_task_runner));
+  sanitizer->Start();
   return sanitizer;
 }
 
 ImageSanitizer::ImageSanitizer(
+    scoped_refptr<Client> client,
     const base::FilePath& image_dir,
     const std::set<base::FilePath>& image_relative_paths,
-    ImageDecodedCallback image_decoded_callback,
-    SanitizationDoneCallback done_callback,
     const scoped_refptr<base::SequencedTaskRunner>& io_task_runner)
     : image_dir_(image_dir),
       image_paths_(image_relative_paths),
-      image_decoded_callback_(std::move(image_decoded_callback)),
-      done_callback_(std::move(done_callback)),
-      io_task_runner_(io_task_runner) {}
+      client_(std::move(client)),
+      io_task_runner_(io_task_runner) {
+  DCHECK(client_);
+}
 
 ImageSanitizer::~ImageSanitizer() = default;
+ImageSanitizer::Client::~Client() = default;
 
-void ImageSanitizer::Start(data_decoder::DataDecoder* decoder) {
+void ImageSanitizer::Start() {
   if (image_paths_.empty()) {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&ImageSanitizer::ReportSuccess,
                                   weak_factory_.GetWeakPtr()));
     return;
   }
-
-  decoder->GetService()->BindImageDecoder(
-      image_decoder_.BindNewPipeAndPassReceiver());
-  image_decoder_.set_disconnect_handler(
-      base::BindOnce(&ImageSanitizer::ReportError, weak_factory_.GetWeakPtr(),
-                     Status::kServiceError, base::FilePath()));
 
   std::set<base::FilePath> normalized_image_paths;
   for (const base::FilePath& path : image_paths_) {
@@ -107,7 +94,7 @@ void ImageSanitizer::Start(data_decoder::DataDecoder* decoder) {
         !NormalizeExtensionResourcePath(path, &normalized_path)) {
       // Report the error asynchronously so the caller stack has chance to
       // unwind.
-      base::SequencedTaskRunnerHandle::Get()->PostTask(
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(&ImageSanitizer::ReportError,
                                     weak_factory_.GetWeakPtr(),
                                     Status::kImagePathError, path));
@@ -125,28 +112,28 @@ void ImageSanitizer::Start(data_decoder::DataDecoder* decoder) {
   // either error to be reported (kImagePathError or kFileReadError).
   for (const base::FilePath& path : image_paths_) {
     base::FilePath full_image_path = image_dir_.Append(path);
-    base::PostTaskAndReplyWithResult(
-        io_task_runner_.get(), FROM_HERE,
-        base::BindOnce(&ReadAndDeleteBinaryFile, full_image_path),
+    io_task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE, base::BindOnce(&ReadAndDeleteBinaryFile, full_image_path),
         base::BindOnce(&ImageSanitizer::ImageFileRead,
                        weak_factory_.GetWeakPtr(), path));
   }
 }
 
-void ImageSanitizer::ImageFileRead(
-    const base::FilePath& image_path,
-    std::tuple<std::vector<uint8_t>, bool, bool> read_and_delete_result) {
-  if (!std::get<1>(read_and_delete_result)) {
+void ImageSanitizer::ImageFileRead(const base::FilePath& image_path,
+                                   std::vector<uint8_t> contents,
+                                   bool read_successful,
+                                   bool delete_successful) {
+  if (!read_successful) {
     ReportError(Status::kFileReadError, image_path);
     return;
   }
-  if (!std::get<2>(read_and_delete_result)) {
+  if (!delete_successful) {
     ReportError(Status::kFileDeleteError, image_path);
     return;
   }
-  const std::vector<uint8_t>& image_data = std::get<0>(read_and_delete_result);
-  image_decoder_->DecodeImage(
-      image_data, data_decoder::mojom::ImageCodec::kDefault,
+  data_decoder::DecodeImage(
+      client_->GetDataDecoder(), contents,
+      data_decoder::mojom::ImageCodec::kDefault,
       /*shrink_to_fit=*/false, kMaxImageCanvas, gfx::Size(),
       base::BindOnce(&ImageSanitizer::ImageDecoded, weak_factory_.GetWeakPtr(),
                      image_path));
@@ -167,42 +154,37 @@ void ImageSanitizer::ImageDecoded(const base::FilePath& image_path,
     return;
   }
 
-  if (image_decoded_callback_)
-    image_decoded_callback_.Run(image_path, decoded_image);
-
-  // TODO(mpcomplete): It's lame that we're encoding all images as PNG, even
-  // though they may originally be .jpg, etc.  Figure something out.
-  // http://code.google.com/p/chromium/issues/detail?id=12459
-  base::PostTaskAndReplyWithResult(
-      io_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&EncodeImage, decoded_image),
+  io_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(gfx::PNGCodec::EncodeBGRASkBitmap, decoded_image,
+                     /*discard_transparency=*/false),
       base::BindOnce(&ImageSanitizer::ImageReencoded,
                      weak_factory_.GetWeakPtr(), image_path));
+
+  client_->OnImageDecoded(image_path, decoded_image);
+  // Note that the `client` callback could potentially delete `this` object.
 }
 
 void ImageSanitizer::ImageReencoded(
     const base::FilePath& image_path,
-    std::pair<bool, std::vector<unsigned char>> result) {
-  bool success = result.first;
-  std::vector<unsigned char> image_data = std::move(result.second);
+    std::optional<std::vector<uint8_t>> result) {
+  bool success = result.has_value();
   if (!success) {
     ReportError(Status::kEncodingError, image_path);
     return;
   }
 
-  int size = base::checked_cast<int>(image_data.size());
-  base::PostTaskAndReplyWithResult(
-      io_task_runner_.get(), FROM_HERE,
+  io_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&WriteFile, image_dir_.Append(image_path),
-                     std::move(image_data)),
+                     std::move(result.value())),
       base::BindOnce(&ImageSanitizer::ImageWritten, weak_factory_.GetWeakPtr(),
-                     image_path, size));
+                     image_path));
 }
 
 void ImageSanitizer::ImageWritten(const base::FilePath& image_path,
-                                  int expected_size,
-                                  int actual_size) {
-  if (expected_size != actual_size) {
+                                  bool success) {
+  if (!success) {
     ReportError(Status::kFileWriteError, image_path);
     return;
   }
@@ -217,23 +199,26 @@ void ImageSanitizer::ImageWritten(const base::FilePath& image_path,
 }
 
 void ImageSanitizer::ReportSuccess() {
-  CleanUp();
-  std::move(done_callback_).Run(Status::kSuccess, base::FilePath());
+  // Reset `client_` early, before the callback potentially deletes `this`.
+  scoped_refptr<Client> client = std::move(client_);
+  DCHECK(!client_);
+
+  // The `client_` callback is the last statement, because it can potentially
+  // delete `this` object.
+  client->OnImageSanitizationDone(Status::kSuccess, base::FilePath());
 }
 
 void ImageSanitizer::ReportError(Status status, const base::FilePath& path) {
-  CleanUp();
   // Prevent any other task from reporting, we want to notify only once.
   weak_factory_.InvalidateWeakPtrs();
-  std::move(done_callback_).Run(status, path);
-}
 
-void ImageSanitizer::CleanUp() {
-  image_decoder_.reset();
-  // It's important to clear the repeating callback as it may cause a circular
-  // reference (the callback holds a ref to an object that has a ref to |this|)
-  // that would cause a leak.
-  image_decoded_callback_.Reset();
+  // Reset `client_` early, before the callback potentially deletes `this`.
+  scoped_refptr<Client> client = std::move(client_);
+  DCHECK(!client_);
+
+  // The `client_` callback is the last statement, because it can potentially
+  // delete `this` object.
+  client->OnImageSanitizationDone(status, path);
 }
 
 }  // namespace extensions

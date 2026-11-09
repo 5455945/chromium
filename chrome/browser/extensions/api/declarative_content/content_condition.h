@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,10 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "chrome/browser/extensions/api/declarative_content/content_predicate_evaluator.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class Value;
@@ -32,18 +34,19 @@ struct ContentCondition {
  public:
   explicit ContentCondition(
       std::vector<std::unique_ptr<const ContentPredicate>> predicates);
+
+  ContentCondition(const ContentCondition&) = delete;
+  ContentCondition& operator=(const ContentCondition&) = delete;
+
   ~ContentCondition();
 
   std::vector<std::unique_ptr<const ContentPredicate>> predicates;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ContentCondition);
 };
 
 // Factory function that instantiates a ContentCondition according to the
-// description |condition|, which should be an instance of
+// description `condition`, which should be an instance of
 // declarativeContent.PageStateMatcher from the Declarative Content
-// API. |predicate_factories| maps attribute names in the API to factories that
+// API. `predicate_factories` maps attribute names in the API to factories that
 // create the corresponding predicate.
 std::unique_ptr<ContentCondition> CreateContentCondition(
     const Extension* extension,

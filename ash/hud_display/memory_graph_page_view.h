@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,18 @@
 
 #include "ash/hud_display/graph.h"
 #include "ash/hud_display/graph_page_view_base.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ash {
 namespace hud_display {
 
-class Grid;
+class ReferenceLines;
 
 // MemoryGraphPageView class draws memory graphs.
 class MemoryGraphPageView : public GraphPageViewBase {
- public:
-  METADATA_HEADER(MemoryGraphPageView);
+  METADATA_HEADER(MemoryGraphPageView, GraphPageViewBase)
 
+ public:
   explicit MemoryGraphPageView(const base::TimeDelta refresh_interval);
   MemoryGraphPageView(const MemoryGraphPageView&) = delete;
   MemoryGraphPageView& operator=(const MemoryGraphPageView&) = delete;
@@ -30,7 +31,7 @@ class MemoryGraphPageView : public GraphPageViewBase {
   void UpdateData(const DataSource::Snapshot& snapshot) override;
 
  private:
-  // This is used to re-layout grid when total ram size is known.
+  // This is used to re-layout reference lines when total ram size is known.
   double total_ram_ = 0;
 
   // --- Stacked:
@@ -54,7 +55,7 @@ class MemoryGraphPageView : public GraphPageViewBase {
   // Share of the total RAM occupied by Chrome browser process shared RSS.
   Graph graph_chrome_rss_shared_;
 
-  Grid* grid_ = nullptr;  // not owned.
+  raw_ptr<ReferenceLines> reference_lines_ = nullptr;  // not owned.
 };
 
 }  // namespace hud_display

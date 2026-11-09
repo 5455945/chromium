@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,12 +17,10 @@ namespace {
 class CommonSwitches {
  public:
   CommonSwitches()
-      : force_dev_mode_highlighting(switches::kForceDevModeHighlighting,
-                                    FeatureSwitch::DEFAULT_DISABLED),
-        // Intentionally no flag since turning this off outside of tests
-        // is a security risk.
+      :  // Intentionally no flag since turning this off outside of tests
+         // is a security risk.
         prompt_for_external_extensions(nullptr,
-#if defined(OS_WIN) || defined(OS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
                                        FeatureSwitch::DEFAULT_ENABLED),
 #else
                                        FeatureSwitch::DEFAULT_DISABLED),
@@ -32,8 +30,6 @@ class CommonSwitches {
         trace_app_source(switches::kTraceAppSource,
                          FeatureSwitch::DEFAULT_ENABLED) {
   }
-
-  FeatureSwitch force_dev_mode_highlighting;
 
   // Should we prompt the user before allowing external extensions to install?
   // Default is yes.
@@ -48,9 +44,6 @@ base::LazyInstance<CommonSwitches>::DestructorAtExit g_common_switches =
 
 }  // namespace
 
-FeatureSwitch* FeatureSwitch::force_dev_mode_highlighting() {
-  return &g_common_switches.Get().force_dev_mode_highlighting;
-}
 FeatureSwitch* FeatureSwitch::prompt_for_external_extensions() {
   return &g_common_switches.Get().prompt_for_external_extensions;
 }
@@ -85,6 +78,8 @@ FeatureSwitch::FeatureSwitch(const base::CommandLine* command_line,
       switch_name_(switch_name),
       default_value_(default_value == DEFAULT_ENABLED),
       override_value_(OVERRIDE_NONE) {}
+
+FeatureSwitch::~FeatureSwitch() = default;
 
 bool FeatureSwitch::IsEnabled() const {
   if (override_value_ != OVERRIDE_NONE)

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/dragdrop/drop_target_win.h"
 
@@ -31,6 +32,10 @@ class DesktopDropTargetWin : public ui::DropTargetWin,
                              public aura::WindowObserver {
  public:
   explicit DesktopDropTargetWin(aura::Window* root_window);
+
+  DesktopDropTargetWin(const DesktopDropTargetWin&) = delete;
+  DesktopDropTargetWin& operator=(const DesktopDropTargetWin&) = delete;
+
   ~DesktopDropTargetWin() override;
 
  private:
@@ -65,16 +70,20 @@ class DesktopDropTargetWin : public ui::DropTargetWin,
   void NotifyDragLeave();
 
   // The root window associated with this drop target.
-  aura::Window* root_window_;
+  raw_ptr<aura::Window> root_window_;
+
+  // Observe the root window so we can clear |root_window_| if it is destroyed
+  // and avoid dereferencing a dangling pointer.
+  base::ScopedObservation<aura::Window, aura::WindowObserver>
+      root_window_observation_{this};
 
   // The Aura window that is currently under the cursor. We need to manually
   // keep track of this because Windows will only call our drag enter method
   // once when the user enters the associated HWND. But inside that HWND there
   // could be multiple aura windows, so we need to generate drag enter events
   // for them.
-  aura::Window* target_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopDropTargetWin);
+  base::ScopedObservation<aura::Window, aura::WindowObserver>
+      target_window_observation_{this};
 };
 
 }  // namespace views

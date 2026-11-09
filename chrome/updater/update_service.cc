@@ -1,25 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/updater/update_service.h"
 
+#include <stdint.h>
+
 #include <ostream>
+
+#include "base/version.h"
 
 namespace updater {
 
-UpdateService::UpdateState::UpdateState() = default;
-UpdateService::UpdateState::UpdateState(const UpdateState&) = default;
-UpdateService::UpdateState& UpdateService::UpdateState::operator=(
-    const UpdateState&) = default;
-UpdateService::UpdateState::UpdateState(UpdateState&&) = default;
-UpdateService::UpdateState& UpdateService::UpdateState::operator=(
-    UpdateState&&) = default;
-UpdateService::UpdateState::~UpdateState() = default;
-
 std::ostream& operator<<(std::ostream& os,
                          const UpdateService::UpdateState& update_state) {
-  auto state_formatter = [update_state]() {
+  auto state_formatter = [update_state] {
     switch (update_state.state) {
       case UpdateService::UpdateState::State::kUnknown:
         return "unknown";
@@ -31,6 +26,10 @@ std::ostream& operator<<(std::ostream& os,
         return "update available";
       case UpdateService::UpdateState::State::kDownloading:
         return "downloading";
+      case UpdateService::UpdateState::State::kDecompressing:
+        return "decompressing";
+      case UpdateService::UpdateState::State::kPatching:
+        return "patching";
       case UpdateService::UpdateState::State::kInstalling:
         return "installing";
       case UpdateService::UpdateState::State::kUpdated:
@@ -42,13 +41,13 @@ std::ostream& operator<<(std::ostream& os,
     }
   };
 
-  auto version_formatter = [update_state]() {
-    return update_state.next_version.IsValid()
-               ? update_state.next_version.GetString()
+  auto version_formatter = [update_state] {
+    return base::Version(update_state.next_version).IsValid()
+               ? update_state.next_version
                : "";
   };
 
-  auto error_category_formatter = [update_state]() {
+  auto error_category_formatter = [update_state] {
     switch (update_state.error_category) {
       case UpdateService::ErrorCategory::kNone:
         return "none";
@@ -62,6 +61,10 @@ std::ostream& operator<<(std::ostream& os,
         return "service";
       case UpdateService::ErrorCategory::kUpdateCheck:
         return "update check";
+      case UpdateService::ErrorCategory::kUnknown:
+        return "unknown";
+      case UpdateService::ErrorCategory::kInstaller:
+        return "installer";
     }
   };
 
@@ -70,10 +73,26 @@ std::ostream& operator<<(std::ostream& os,
             << ", next_version: " << version_formatter()
             << ", downloaded_bytes: " << update_state.downloaded_bytes
             << ", total_bytes: " << update_state.total_bytes
-            << ", install_progress: " << update_state.install_progress
+            << ", install_progress: " << int16_t{update_state.install_progress}
             << ", error_category: " << error_category_formatter()
             << ", error_code: " << update_state.error_code
             << ", extra_code1: " << update_state.extra_code1 << "}";
+}
+
+bool operator==(const UpdateService::UpdateState& lhs,
+                const UpdateService::UpdateState& rhs) {
+  const base::Version lhs_next_version = base::Version(lhs.next_version);
+  const base::Version rhs_next_version = base::Version(rhs.next_version);
+  const bool versions_equal =
+      (lhs_next_version.IsValid() && rhs_next_version.IsValid() &&
+       lhs_next_version == rhs_next_version) ||
+      (!lhs_next_version.IsValid() && !rhs_next_version.IsValid());
+  return versions_equal && lhs.app_id == rhs.app_id && lhs.state == rhs.state &&
+         lhs.downloaded_bytes == rhs.downloaded_bytes &&
+         lhs.total_bytes == rhs.total_bytes &&
+         lhs.install_progress == rhs.install_progress &&
+         lhs.error_category == rhs.error_category &&
+         lhs.error_code == rhs.error_code && lhs.extra_code1 == rhs.extra_code1;
 }
 
 }  // namespace updater

@@ -26,6 +26,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GRADIENT_GENERATED_IMAGE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GRADIENT_GENERATED_IMAGE_H_
 
+#include <memory>
+
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/graphics/generated_image.h"
 #include "third_party/blink/renderer/platform/graphics/gradient.h"
@@ -35,36 +37,34 @@ namespace blink {
 class PLATFORM_EXPORT GradientGeneratedImage final : public GeneratedImage {
  public:
   static scoped_refptr<GradientGeneratedImage> Create(
-      scoped_refptr<Gradient> generator,
-      const FloatSize& size) {
+      std::unique_ptr<Gradient> generator,
+      const gfx::SizeF& size) {
     return base::AdoptRef(
         new GradientGeneratedImage(std::move(generator), size));
   }
 
   ~GradientGeneratedImage() override = default;
 
-  bool ApplyShader(PaintFlags&, const SkMatrix&) override;
-
-  bool IsGradientGeneratedImage() const override { return true; }
+  bool ApplyShader(cc::PaintFlags&,
+                   const SkMatrix&,
+                   const gfx::RectF& src_rect,
+                   const ImageDrawOptions&) override;
 
  protected:
   void Draw(cc::PaintCanvas*,
-            const PaintFlags&,
-            const FloatRect&,
-            const FloatRect&,
-            const SkSamplingOptions&,
-            RespectImageOrientationEnum,
-            ImageClampingMode,
-            ImageDecodingMode) override;
-  void DrawTile(GraphicsContext&,
-                const FloatRect&,
-                RespectImageOrientationEnum) override;
+            const cc::PaintFlags&,
+            const gfx::RectF& dest_rect,
+            const gfx::RectF& src_rect,
+            const ImageDrawOptions&) override;
+  void DrawTile(cc::PaintCanvas*,
+                const gfx::RectF&,
+                const ImageDrawOptions& draw_options) override;
 
-  GradientGeneratedImage(scoped_refptr<Gradient> generator,
-                         const FloatSize& size)
+  GradientGeneratedImage(std::unique_ptr<Gradient> generator,
+                         const gfx::SizeF& size)
       : GeneratedImage(size), gradient_(std::move(generator)) {}
 
-  scoped_refptr<Gradient> gradient_;
+  std::unique_ptr<Gradient> gradient_;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,15 @@
 #include "cc/paint/paint_image.h"
 #include "cc/paint/paint_image_builder.h"
 #include "skia/ext/image_operations.h"
+#include "third_party/blink/public/common/widget/constants.h"
 #include "third_party/blink/renderer/core/frame/child_frame_compositor.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/skia_util.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 
 namespace blink {
 
@@ -46,23 +49,22 @@ void ChildFrameCompositingHelper::ChildFrameGone(float device_scale_factor) {
 
 void ChildFrameCompositingHelper::SetSurfaceId(
     const viz::SurfaceId& surface_id,
-    bool capture_sequence_number_changed) {
+    AllowPaintHolding allow_paint_holding) {
   if (surface_id_ == surface_id)
     return;
 
+  const auto current_surface_id = surface_id_;
   surface_id_ = surface_id;
+  paint_holding_timer_.Stop();
 
   surface_layer_ = cc::SurfaceLayer::Create();
   surface_layer_->SetMasksToBounds(true);
   surface_layer_->SetSurfaceHitTestable(true);
-  surface_layer_->SetBackgroundColor(SK_ColorTRANSPARENT);
+  surface_layer_->SetBackgroundColor(SkColors::kTransparent);
 
-  // If we're synchronizing surfaces, then use an infinite deadline to ensure
-  // everything is synchronized.
-  cc::DeadlinePolicy deadline = capture_sequence_number_changed
-                                    ? cc::DeadlinePolicy::UseInfiniteDeadline()
-                                    : cc::DeadlinePolicy::UseDefaultDeadline();
-  surface_layer_->SetSurfaceId(surface_id, deadline);
+  surface_layer_->SetSurfaceId(surface_id,
+                               cc::DeadlinePolicy::UseDefaultDeadline());
+  MaybeSetUpPaintHolding(current_surface_id, allow_paint_holding);
 
   // TODO(lfg): Investigate if it's possible to propagate the information
   // about the child surface's opacity. https://crbug.com/629851.
@@ -70,6 +72,33 @@ void ChildFrameCompositingHelper::SetSurfaceId(
                                       true /* is_surface_layer */);
 
   UpdateVisibility(true);
+}
+
+void ChildFrameCompositingHelper::MaybeSetUpPaintHolding(
+    const viz::SurfaceId& fallback_id,
+    AllowPaintHolding allow_paint_holding) {
+  if (!RuntimeEnabledFeatures::PaintHoldingForIframesEnabled()) {
+    return;
+  }
+
+  if (fallback_id.is_valid() &&
+      allow_paint_holding == AllowPaintHolding::kYes) {
+    surface_layer_->SetOldestAcceptableFallback(fallback_id);
+
+    paint_holding_timer_.Start(
+        FROM_HERE, kNewContentRenderingDelay,
+        BindOnce(&ChildFrameCompositingHelper::PaintHoldingTimerFired,
+                 base::Unretained(this)));
+  } else {
+    surface_layer_->SetOldestAcceptableFallback(viz::SurfaceId());
+  }
+}
+
+void ChildFrameCompositingHelper::PaintHoldingTimerFired() {
+  CHECK(RuntimeEnabledFeatures::PaintHoldingForIframesEnabled());
+  if (surface_layer_) {
+    surface_layer_->SetOldestAcceptableFallback(viz::SurfaceId());
+  }
 }
 
 void ChildFrameCompositingHelper::UpdateVisibility(bool visible) {
@@ -80,18 +109,13 @@ void ChildFrameCompositingHelper::UpdateVisibility(bool visible) {
   }
 }
 
-gfx::Rect ChildFrameCompositingHelper::PaintableRegion() const {
-  DCHECK(crash_ui_layer_);
-  return gfx::Rect(crash_ui_layer_->bounds());
-}
-
 scoped_refptr<cc::DisplayItemList>
 ChildFrameCompositingHelper::PaintContentsToDisplayList() {
   DCHECK(crash_ui_layer_);
   auto layer_size = crash_ui_layer_->bounds();
   auto display_list = base::MakeRefCounted<cc::DisplayItemList>();
   display_list->StartPaint();
-  display_list->push<cc::DrawColorOp>(SK_ColorGRAY, SkBlendMode::kSrc);
+  display_list->push<cc::DrawColorOp>(SkColors::kGray, SkBlendMode::kSrc);
 
   SkBitmap* sad_bitmap = child_frame_compositor_->GetSadPageBitmap();
   if (sad_bitmap) {
@@ -112,7 +136,7 @@ ChildFrameCompositingHelper::PaintContentsToDisplayList() {
 
       auto image = cc::PaintImageBuilder::WithDefault()
                        .set_id(cc::PaintImage::GetNextId())
-                       .set_image(SkImage::MakeFromBitmap(*sad_bitmap),
+                       .set_image(SkImages::RasterFromBitmap(*sad_bitmap),
                                   cc::PaintImage::GetNextContentId())
                        .TakePaintImage();
       display_list->push<cc::DrawImageOp>(image, x, y);

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "base/containers/flat_set.h"
 #include "base/observer_list_threadsafe.h"
 #include "components/crash/content/browser/child_exit_observer_android.h"
+#include "content/public/common/child_process_id.h"
 
 namespace crash_reporter {
 
@@ -16,6 +17,20 @@ namespace crash_reporter {
 // wants to observe reason for the death of a child process.
 class CrashMetricsReporter {
  public:
+  // The status of the spare renderer when a process is killed.
+  //
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(SpareRendererAvailabilityWhenKilled)
+  enum class SpareRendererAvailabilityWhenKilled {
+    kKillSpareRenderer = 0,
+    kKillNonSpareRendererWithoutSpareRenderer = 1,
+    kKillNonSpareRendererWithSpareRender = 2,
+    kMaxValue = kKillNonSpareRendererWithSpareRender,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/stability/enums.xml:SpareRendererAvailabilityWhenKilled)
+
   // This enum is used to back a UMA histogram, and must be treated as
   // append-only.
   enum ExitStatus {
@@ -51,7 +66,13 @@ class CrashMetricsReporter {
     kUtilityForegroundOom = 17,
     kUtilityCrashAll = 18,
     kRendererProcessHostShutdown = 19,
-    kMaxValue = kRendererProcessHostShutdown
+    kRendererForegroundInvisibleWithVisibleBindingKilled = 20,
+    kRendererForegroundInvisibleWithVisibleBindingOom = 21,
+    kRendererForegroundInvisibleWithNotPerceptibleBindingKilled = 22,
+    kRendererForegroundInvisibleWithNotPerceptibleBindingOom = 23,
+    kRendererForegroundInvisibleWithWaivedBindingOom = 24,
+    kRendererForegroundInvisibleWithWaivedBindingKilled = 25,
+    kMaxValue = kRendererForegroundInvisibleWithWaivedBindingKilled
   };
   using ReportedCrashTypeSet = base::flat_set<ProcessedCrashCounts>;
 
@@ -65,11 +86,14 @@ class CrashMetricsReporter {
     // |reported_counts| is a set of recorded metrics about child process
     // crashes. It could be empty if no metrics were recorded.
     virtual void OnCrashDumpProcessed(
-        int rph_id,
+        content::ChildProcessId rph_id,
         const ReportedCrashTypeSet& reported_counts) = 0;
   };
 
   static CrashMetricsReporter* GetInstance();
+
+  CrashMetricsReporter(const CrashMetricsReporter&) = delete;
+  CrashMetricsReporter& operator=(const CrashMetricsReporter&) = delete;
 
   // Can be called on any thread.
   void AddObserver(Observer* observer);
@@ -82,12 +106,11 @@ class CrashMetricsReporter {
   CrashMetricsReporter();
   ~CrashMetricsReporter();
 
-  void NotifyObservers(int rph_id, const ReportedCrashTypeSet& reported_counts);
+  void NotifyObservers(content::ChildProcessId rph_id,
+                       const ReportedCrashTypeSet& reported_counts);
 
   scoped_refptr<base::ObserverListThreadSafe<CrashMetricsReporter::Observer>>
       async_observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashMetricsReporter);
 };
 
 }  // namespace crash_reporter

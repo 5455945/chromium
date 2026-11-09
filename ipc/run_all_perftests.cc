@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,13 @@
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/embedder/scoped_ipc_support.h"
+#include "mojo/core/test/multiprocess_test_helper.h"
 #include "mojo/core/test/test_support_impl.h"
 
 int main(int argc, char** argv) {
   base::PerfTestSuite test(argc, argv);
 
-  mojo::core::Init();
+  mojo::core::test::MultiprocessTestHelper::InitForMultiprocessTest();
   base::TestIOThread test_io_thread(base::TestIOThread::kAutoStart);
   mojo::core::ScopedIPCSupport ipc_support(
       test_io_thread.task_runner(),

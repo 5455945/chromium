@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,15 @@ class GURL;
 
 namespace content {
 
-// Checks if the given url is a url used for debugging purposes, and if so
-// handles it and returns true.
-bool HandleDebugURL(const GURL& url,
-                    ui::PageTransition transition,
-                    bool is_explicit_navigation);
+// Returns true if |url| is a special debugging URL for triggering
+// intentional browser behaviors like crashes or hangs.
+CONTENT_EXPORT bool IsDebugURL(const GURL& url);
+
+// Triggers debug action for |url| if |IsDebugURL| returns true for it;
+// otherwise, this function will crash.
+CONTENT_EXPORT void HandleDebugURL(const GURL& url,
+                                   ui::PageTransition transition,
+                                   bool is_explicit_navigation);
 
 }  // namespace content
 

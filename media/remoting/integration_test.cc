@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "media/remoting/end2end_test_renderer.h"
 #include "media/test/pipeline_integration_test_base.h"
 #include "media/test/test_media_source.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace media {
 namespace remoting {
@@ -23,14 +24,16 @@ class MediaRemotingIntegrationTest : public testing::Test,
         base::Unretained(this)));
   }
 
+  MediaRemotingIntegrationTest(const MediaRemotingIntegrationTest&) = delete;
+  MediaRemotingIntegrationTest& operator=(const MediaRemotingIntegrationTest&) =
+      delete;
+
  private:
   std::unique_ptr<Renderer> CreateEnd2EndTestRenderer(
-      absl::optional<RendererType> renderer_type) {
+      std::optional<RendererType> renderer_type) {
     return std::make_unique<End2EndTestRenderer>(
-        this->CreateDefaultRenderer(renderer_type));
+        this->CreateRendererImpl(renderer_type));
   }
-
-  DISALLOW_COPY_AND_ASSIGN(MediaRemotingIntegrationTest);
 };
 
 TEST_F(MediaRemotingIntegrationTest, BasicPlayback) {
@@ -38,8 +41,9 @@ TEST_F(MediaRemotingIntegrationTest, BasicPlayback) {
   Play();
   ASSERT_TRUE(WaitUntilOnEnded());
 
-  EXPECT_EQ("f0be120a90a811506777c99a2cdf7cc1", GetVideoHash());
-  EXPECT_EQ("-3.59,-2.06,-0.43,2.15,0.77,-0.95,", GetAudioHash());
+  EXPECT_EQ("a6dbca10f0730373ab948df04b4bc16d7bca6d3a1593dc989b6e376487544bf5",
+            GetVideoHash());
+  EXPECT_EQ("-3.59,-2.06,-0.43,2.15,0.77,-0.95,", GetAudioHash().ToString());
 }
 
 TEST_F(MediaRemotingIntegrationTest, BasicPlayback_MediaSource) {
@@ -60,9 +64,7 @@ TEST_F(MediaRemotingIntegrationTest, MediaSource_ConfigChange_WebM) {
   EXPECT_CALL(*this, OnVideoNaturalSizeChange(gfx::Size(640, 360))).Times(1);
   scoped_refptr<DecoderBuffer> second_file =
       ReadTestDataFile("bear-640x360.webm");
-  ASSERT_TRUE(source.AppendAtTime(base::TimeDelta::FromSeconds(kAppendTimeSec),
-                                  second_file->data(),
-                                  second_file->data_size()));
+  ASSERT_TRUE(source.AppendAtTime(base::Seconds(kAppendTimeSec), *second_file));
   source.EndOfStream();
 
   Play();

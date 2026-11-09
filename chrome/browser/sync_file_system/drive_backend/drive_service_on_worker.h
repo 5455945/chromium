@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/drive/service/drive_service_interface.h"
@@ -36,6 +35,10 @@ class DriveServiceOnWorker : public drive::DriveServiceInterface {
       const base::WeakPtr<DriveServiceWrapper>& wrapper,
       base::SingleThreadTaskRunner* ui_task_runner,
       base::SequencedTaskRunner* worker_task_runner);
+
+  DriveServiceOnWorker(const DriveServiceOnWorker&) = delete;
+  DriveServiceOnWorker& operator=(const DriveServiceOnWorker&) = delete;
+
   ~DriveServiceOnWorker() override;
 
   google_apis::CancelCallbackOnce AddNewDirectory(
@@ -172,6 +175,7 @@ class DriveServiceOnWorker : public drive::DriveServiceInterface {
       google_apis::drive::UploadRangeCallback callback) override;
   google_apis::CancelCallbackOnce MultipartUploadNewFile(
       const std::string& content_type,
+      std::optional<std::string_view> converted_mime_type,
       int64_t content_length,
       const std::string& parent_resource_id,
       const std::string& title,
@@ -200,9 +204,7 @@ class DriveServiceOnWorker : public drive::DriveServiceInterface {
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
   scoped_refptr<base::SequencedTaskRunner> worker_task_runner_;
 
-  base::SequenceChecker sequence_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(DriveServiceOnWorker);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace drive_backend

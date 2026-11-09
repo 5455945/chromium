@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,10 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_frame.h"
 #include "extensions/common/error_utils.h"
-#include "extensions/common/extension_messages.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/mojom/host_id.mojom.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/script_constants.h"
 #include "extensions/renderer/injection_host.h"
 #include "extensions/renderer/renderer_extension_registry.h"
 #include "extensions/renderer/script_context.h"
@@ -39,9 +37,20 @@ mojom::InjectionType ProgrammaticScriptInjector::script_type() const {
   return mojom::InjectionType::kProgrammaticScript;
 }
 
-bool ProgrammaticScriptInjector::IsUserGesture() const {
+blink::mojom::UserActivationOption ProgrammaticScriptInjector::IsUserGesture()
+    const {
   DCHECK(params_->injection->is_js());
   return params_->injection->get_js()->user_gesture;
+}
+
+mojom::ExecutionWorld ProgrammaticScriptInjector::GetExecutionWorld() const {
+  DCHECK(params_->injection->is_js());
+  return params_->injection->get_js()->world;
+}
+
+const std::optional<std::string>&
+ProgrammaticScriptInjector::GetExecutionWorldId() const {
+  return params_->injection->get_js()->world_id;
 }
 
 mojom::CSSOrigin ProgrammaticScriptInjector::GetCssOrigin() const {
@@ -55,9 +64,16 @@ ProgrammaticScriptInjector::GetCSSInjectionOperation() const {
   return params_->injection->get_css()->operation;
 }
 
-bool ProgrammaticScriptInjector::ExpectsResults() const {
+blink::mojom::WantResultOption ProgrammaticScriptInjector::ExpectsResults()
+    const {
   DCHECK(params_->injection->is_js());
   return params_->injection->get_js()->wants_result;
+}
+
+blink::mojom::PromiseResultOption
+ProgrammaticScriptInjector::ShouldWaitForPromise() const {
+  DCHECK(params_->injection->is_js());
+  return params_->injection->get_js()->wait_for_promise;
 }
 
 bool ProgrammaticScriptInjector::ShouldInjectJs(
@@ -87,11 +103,9 @@ PermissionsData::PageAccess ProgrammaticScriptInjector::CanExecuteOnFrame(
   GURL effective_document_url =
       ScriptContext::GetEffectiveDocumentURLForInjection(
           frame, frame->GetDocument().Url(),
-          params_->match_about_blank
-              ? MatchOriginAsFallbackBehavior::kMatchForAboutSchemeAndClimbTree
-              : MatchOriginAsFallbackBehavior::kNever);
+          params_->match_origin_as_fallback_behavior);
   if (params_->is_web_view) {
-    if (frame->Parent()) {
+    if (!frame->IsOutermostMainFrame()) {
       // This is a subframe inside <webview>, so allow it.
       return PermissionsData::PageAccess::kAllowed;
     }
@@ -112,7 +126,8 @@ PermissionsData::PageAccess ProgrammaticScriptInjector::CanExecuteOnFrame(
 std::vector<blink::WebScriptSource> ProgrammaticScriptInjector::GetJsSources(
     mojom::RunLocation run_location,
     std::set<std::string>* executing_scripts,
-    size_t* num_injected_js_scripts) const {
+    size_t* num_injected_js_scripts,
+    ExtensionFrameHelper* frame_helper) const {
   DCHECK_EQ(params_->run_at, run_location);
   DCHECK(params_->injection->is_js());
 
@@ -120,7 +135,7 @@ std::vector<blink::WebScriptSource> ProgrammaticScriptInjector::GetJsSources(
   std::vector<blink::WebScriptSource> sources;
   sources.reserve(js_injection->sources.size());
   for (const auto& source : js_injection->sources) {
-    sources.emplace_back(blink::WebString::FromUTF8(source->code),
+    sources.emplace_back(blink::WebString::FromUtf8(source->code),
                          source->script_url);
   }
 
@@ -141,28 +156,26 @@ ProgrammaticScriptInjector::GetCssSources(
   for (const auto& source : css_injection->sources) {
     blink::WebStyleSheetKey style_sheet_key;
     if (source->key)
-      style_sheet_key = blink::WebString::FromASCII(*source->key);
+      style_sheet_key = blink::WebString::FromAscii(*source->key);
     sources.push_back(
-        CSSSource{blink::WebString::FromUTF8(source->code), style_sheet_key});
+        CSSSource{blink::WebString::FromUtf8(source->code), style_sheet_key});
   }
 
   return sources;
 }
 
 void ProgrammaticScriptInjector::OnInjectionComplete(
-    std::unique_ptr<base::Value> execution_result,
+    std::optional<base::Value> execution_result,
     mojom::RunLocation run_location) {
   DCHECK(!result_.has_value());
-  if (execution_result) {
-    result_ = base::Value::FromUniquePtrValue(std::move(execution_result));
-  }
+  result_ = std::move(execution_result);
   Finish(std::string());
 }
 
 void ProgrammaticScriptInjector::OnWillNotInject(InjectFailureReason reason) {
   std::string error;
   switch (reason) {
-    case NOT_ALLOWED:
+    case ScriptInjector::InjectFailureReason::kNotAllowed:
       if (!CanShowUrlInError()) {
         error = manifest_errors::kCannotAccessPage;
       } else if (!origin_for_about_error_.empty()) {
@@ -174,8 +187,9 @@ void ProgrammaticScriptInjector::OnWillNotInject(InjectFailureReason reason) {
             manifest_errors::kCannotAccessPageWithUrl, url_.spec());
       }
       break;
-    case EXTENSION_REMOVED:  // no special error here.
-    case WONT_INJECT:
+    case ScriptInjector::InjectFailureReason::kExtensionRemoved:  // no special
+                                                                  // error here.
+    case ScriptInjector::InjectFailureReason::kWontInject:
       break;
   }
   Finish(error);

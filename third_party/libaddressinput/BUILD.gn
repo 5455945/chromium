@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,16 +22,16 @@ config("internal_config") {
   include_dirs = [ target_gen_dir ]
 }
 
-grit("strings") {
+grit_strings("strings") {
   source = "chromium/address_input_strings.grd"
-
+  inputs = [ "chromium/address_input_strings.grdp" ] + process_file_template(
+               xtb_locales,
+               [ "chromium/resources/address_input_strings_{{source_name_part}}.xtb" ])
   outputs = [
     "messages.h",
     "en_messages.cc",
   ]
-  foreach(locale, locales_with_pseudolocales) {
-    outputs += [ "address_input_strings_$locale.pak" ]
-  }
+  output_prefix = "address_input_strings_"
 
   configs = [ ":internal_config" ]
 }
@@ -60,8 +60,8 @@ static_library("util") {
     "src/cpp/src/localization.cc",
     "src/cpp/src/lookup_key.cc",
     "src/cpp/src/lookup_key.h",
-    "src/cpp/src/region_data_constants.cc",
     "src/cpp/src/region_data_constants.h",
+    "src/cpp/src/region_metadata_constants.cc",
     "src/cpp/src/rule.cc",
     "src/cpp/src/rule.h",
     "src/cpp/src/util/cctype_tolower_equal.cc",
@@ -112,8 +112,6 @@ static_library("libaddressinput") {
     "chromium/chrome_storage_impl.h",
     "chromium/fallback_data_store.cc",
     "chromium/fallback_data_store.h",
-    "chromium/input_suggester.cc",
-    "chromium/input_suggester.h",
     "chromium/storage_test_runner.h",
     "chromium/string_compare.cc",
     "chromium/trie.cc",

@@ -1,10 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/models/menu_model.h"
 
+#include <optional>
+
+#include "build/build_config.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/resource/resource_bundle.h"
 
 namespace ui {
 
@@ -15,29 +19,37 @@ MenuModel::~MenuModel() {
     menu_model_delegate_->OnMenuClearingDelegate();
 }
 
-bool MenuModel::IsVisibleAt(int index) const {
+bool MenuModel::IsVisibleAt(size_t index) const {
   return true;
 }
 
-bool MenuModel::IsAlertedAt(int index) const {
+bool MenuModel::IsAlertedAt(size_t index) const {
   return false;
 }
 
-bool MenuModel::IsNewFeatureAt(int index) const {
+bool MenuModel::IsNewFeatureAt(size_t index) const {
   return false;
 }
 
-ElementIdentifier MenuModel::GetElementIdentifierAt(int index) const {
+std::optional<NewBadgeType> MenuModel::GetNewBadgeTypeAt(size_t index) const {
+  return std::nullopt;
+}
+
+bool MenuModel::GetForceShowAcceleratorForItemAt(size_t index) const {
+  return false;
+}
+
+ElementIdentifier MenuModel::GetElementIdentifierAt(size_t index) const {
   return ElementIdentifier();
 }
 
 // static
 bool MenuModel::GetModelAndIndexForCommandId(int command_id,
                                              MenuModel** model,
-                                             int* index) {
-  const int item_count = (*model)->GetItemCount();
-  for (int i = 0; i < item_count; ++i) {
-    const int candidate_index = i;
+                                             size_t* index) {
+  const size_t item_count = (*model)->GetItemCount();
+  for (size_t i = 0; i < item_count; ++i) {
+    const size_t candidate_index = i;
     // Actionable submenus have commands.
     if ((*model)->GetTypeAt(candidate_index) == TYPE_ACTIONABLE_SUBMENU &&
         (*model)->GetCommandIdAt(candidate_index) == command_id) {
@@ -60,37 +72,72 @@ bool MenuModel::GetModelAndIndexForCommandId(int command_id,
   return false;
 }
 
-std::u16string MenuModel::GetMinorTextAt(int index) const {
+std::u16string MenuModel::GetMinorTextAt(size_t index) const {
   return std::u16string();
 }
 
-std::u16string MenuModel::GetSecondaryLabelAt(int index) const {
+bool MenuModel::GetMinorTextIsUrlAt(size_t index) const {
+  return false;
+}
+
+std::u16string MenuModel::GetSecondaryLabelAt(size_t index) const {
   return std::u16string();
 }
 
-ImageModel MenuModel::GetMinorIconAt(int index) const {
+ImageModel MenuModel::GetMinorIconAt(size_t index) const {
   return ImageModel();
 }
 
-bool MenuModel::MayHaveMnemonicsAt(int index) const {
+bool MenuModel::GetMinorIconOnRight(MinorIconOnRightPasskey) const {
+  return false;
+}
+
+bool MenuModel::MayHaveMnemonicsAt(size_t index) const {
   return true;
 }
 
-const gfx::FontList* MenuModel::GetLabelFontListAt(int index) const {
-  return nullptr;
+std::u16string MenuModel::GetAccessibleNameAt(size_t index) const {
+  return std::u16string();
+}
+
+const gfx::FontList* MenuModel::GetLabelFontListAt(size_t index) const {
+  return (GetTypeAt(index) == ui::MenuModel::TYPE_TITLE)
+             ? &ui::ResourceBundle::GetSharedInstance().GetFontList(
+                   ui::ResourceBundle::BoldFont)
+             : nullptr;
 }
 
 // Default implementation ignores the event flags.
-void MenuModel::ActivatedAt(int index, int event_flags) {
+void MenuModel::ActivatedAt(size_t index, int event_flags) {
   ActivatedAt(index);
 }
 
 void MenuModel::SetMenuModelDelegate(MenuModelDelegate* delegate) {
   // A non-null delegate overwriting our non-null delegate is not allowed.
-  DCHECK(!(menu_model_delegate_ && delegate));
+  CHECK(!(menu_model_delegate_ && delegate), base::NotFatalUntil::M163);
   if (menu_model_delegate_)
     menu_model_delegate_->OnMenuClearingDelegate();
   menu_model_delegate_ = delegate;
 }
+
+std::optional<ui::ColorId> MenuModel::GetForegroundColorId(size_t index) {
+  return std::nullopt;
+}
+
+std::optional<ui::ColorId> MenuModel::GetSubmenuBackgroundColorId(
+    size_t index) {
+  return std::nullopt;
+}
+
+std::optional<ui::ColorId> MenuModel::GetSelectedBackgroundColorId(
+    size_t index) {
+  return std::nullopt;
+}
+
+#if BUILDFLAG(IS_ANDROID)
+int MenuModel::GetDisplayOrderAt(size_t index) const {
+  return -1;
+}
+#endif
 
 }  // namespace ui

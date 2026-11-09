@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "base/unguessable_token.h"
 #include "components/payments/core/android_app_description.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
@@ -32,15 +33,15 @@ namespace payments {
 class AndroidAppCommunication : public base::SupportsUserData::Data {
  public:
   using GetAppDescriptionsCallback = base::OnceCallback<void(
-      const absl::optional<std::string>& error_message,
+      const std::optional<std::string>& error_message,
       std::vector<std::unique_ptr<AndroidAppDescription>> app_descriptions)>;
 
   using IsReadyToPayCallback =
-      base::OnceCallback<void(const absl::optional<std::string>& error_message,
+      base::OnceCallback<void(const std::optional<std::string>& error_message,
                               bool is_ready_to_pay)>;
 
   using InvokePaymentAppCallback =
-      base::OnceCallback<void(const absl::optional<std::string>& error_message,
+      base::OnceCallback<void(const std::optional<std::string>& error_message,
                               bool is_activity_result_ok,
                               const std::string& payment_method_identifier,
                               const std::string& stringified_details)>;
@@ -114,7 +115,7 @@ class AndroidAppCommunication : public base::SupportsUserData::Data {
       content::BrowserContext* context);
 
   // Owns this object, so always valid.
-  content::BrowserContext* context_;
+  raw_ptr<content::BrowserContext> context_;
 
   base::WeakPtrFactory<AndroidAppCommunication> weak_ptr_factory_{this};
 };

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,15 @@
 
 #include <jni.h>
 #include <stddef.h>
+
+#include <array>
 #include <string>
 
 #include "base/android/jni_string.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/external_intents/android/jni_headers/ExternalIntentsFeatures_jni.h"
 
 namespace external_intents {
@@ -17,19 +22,25 @@ namespace external_intents {
 namespace {
 
 // Array of features exposed through the Java ExternalIntentsFeatures API.
-const base::Feature* kFeaturesExposedToJava[] = {
-    &kIntentBlockExternalFormRedirectsNoGesture,
+constexpr std::array kFeaturesExposedToJava = {
+    &kExternalNavigationDebugLogs,
+    &kDontClobberTabsWithChromeAppId,
+    &kWebApkSelfOwnedRendererNavLaunch,
 };
-
 }  // namespace
 
 // Alphabetical:
-const base::Feature kIntentBlockExternalFormRedirectsNoGesture{
-    "IntentBlockExternalFormRedirectsNoGesture",
-    base::FEATURE_DISABLED_BY_DEFAULT};
 
-static jlong JNI_ExternalIntentsFeatures_GetFeature(JNIEnv* env, jint ordinal) {
-  return reinterpret_cast<jlong>(kFeaturesExposedToJava[ordinal]);
+BASE_FEATURE(kExternalNavigationDebugLogs, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDontClobberTabsWithChromeAppId, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kWebApkSelfOwnedRendererNavLaunch,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+static int64_t JNI_ExternalIntentsFeatures_GetFeature(JNIEnv* env,
+                                                      int32_t ordinal) {
+  return reinterpret_cast<int64_t>(kFeaturesExposedToJava[ordinal]);
 }
 
 }  // namespace external_intents
+
+DEFINE_JNI(ExternalIntentsFeatures)

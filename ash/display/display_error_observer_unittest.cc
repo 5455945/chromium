@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,18 @@
 #include "ash/test/ash_test_base.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
-#include "ui/display/fake/fake_display_snapshot.h"
 #include "ui/display/manager/display_manager.h"
+#include "ui/display/manager/test/fake_display_snapshot.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/display/types/display_snapshot.h"
 
 namespace ash {
 
 class DisplayErrorObserverTest : public AshTestBase {
+ public:
+  DisplayErrorObserverTest(const DisplayErrorObserverTest&) = delete;
+  DisplayErrorObserverTest& operator=(const DisplayErrorObserverTest&) = delete;
+
  protected:
   DisplayErrorObserverTest() = default;
 
@@ -38,13 +42,11 @@ class DisplayErrorObserverTest : public AshTestBase {
 
  private:
   std::unique_ptr<DisplayErrorObserver> observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(DisplayErrorObserverTest);
 };
 
 TEST_F(DisplayErrorObserverTest, Normal) {
-  UpdateDisplay("200x200,300x300");
-  observer()->OnDisplayModeChangeFailed(
+  UpdateDisplay("320x200,400x300");
+  observer()->OnDisplayConfigurationChangeFailed(
       display::DisplayConfigurator::DisplayStateList(),
       display::MULTIPLE_DISPLAY_STATE_MULTI_MIRROR);
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_ASH_DISPLAY_FAILURE_ON_MIRRORING),
@@ -52,14 +54,14 @@ TEST_F(DisplayErrorObserverTest, Normal) {
 }
 
 TEST_F(DisplayErrorObserverTest, CallTwice) {
-  UpdateDisplay("200x200,300x300");
-  observer()->OnDisplayModeChangeFailed(
+  UpdateDisplay("320x200,400x300");
+  observer()->OnDisplayConfigurationChangeFailed(
       display::DisplayConfigurator::DisplayStateList(),
       display::MULTIPLE_DISPLAY_STATE_MULTI_MIRROR);
   std::u16string message = GetMessageContents();
   EXPECT_FALSE(message.empty());
 
-  observer()->OnDisplayModeChangeFailed(
+  observer()->OnDisplayConfigurationChangeFailed(
       display::DisplayConfigurator::DisplayStateList(),
       display::MULTIPLE_DISPLAY_STATE_MULTI_MIRROR);
   std::u16string message2 = GetMessageContents();
@@ -68,14 +70,14 @@ TEST_F(DisplayErrorObserverTest, CallTwice) {
 }
 
 TEST_F(DisplayErrorObserverTest, CallWithDifferentState) {
-  UpdateDisplay("200x200,300x300");
-  observer()->OnDisplayModeChangeFailed(
+  UpdateDisplay("320x200,400x300");
+  observer()->OnDisplayConfigurationChangeFailed(
       display::DisplayConfigurator::DisplayStateList(),
       display::MULTIPLE_DISPLAY_STATE_MULTI_MIRROR);
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_ASH_DISPLAY_FAILURE_ON_MIRRORING),
             GetMessageContents());
 
-  observer()->OnDisplayModeChangeFailed(
+  observer()->OnDisplayConfigurationChangeFailed(
       display::DisplayConfigurator::DisplayStateList(),
       display::MULTIPLE_DISPLAY_STATE_MULTI_EXTENDED);
   EXPECT_EQ(ui::SubstituteChromeOSDeviceType(
@@ -85,7 +87,7 @@ TEST_F(DisplayErrorObserverTest, CallWithDifferentState) {
 
 TEST_F(DisplayErrorObserverTest, FailureWithInternalDisplay) {
   // Failure with a single internal display --> No notification.
-  UpdateDisplay("200x200,300x300");
+  UpdateDisplay("320x200,400x300");
   const int64_t internal_display_id = display_manager()->GetDisplayAt(0).id();
   const int64_t external_display_id = display_manager()->GetDisplayAt(1).id();
   display::test::ScopedSetInternalDisplayId set_internal(display_manager(),
@@ -95,7 +97,7 @@ TEST_F(DisplayErrorObserverTest, FailureWithInternalDisplay) {
                        .SetNativeMode({200, 200})
                        .SetType(display::DISPLAY_CONNECTION_TYPE_INTERNAL)
                        .Build();
-  observer()->OnDisplayModeChangeFailed(
+  observer()->OnDisplayConfigurationChangeFailed(
       {snapshot1.get()}, display::MULTIPLE_DISPLAY_STATE_MULTI_EXTENDED);
   EXPECT_TRUE(GetMessageContents().empty());
 
@@ -106,7 +108,7 @@ TEST_F(DisplayErrorObserverTest, FailureWithInternalDisplay) {
                        .SetNativeMode({300, 300})
                        .SetType(display::DISPLAY_CONNECTION_TYPE_UNKNOWN)
                        .Build();
-  observer()->OnDisplayModeChangeFailed(
+  observer()->OnDisplayConfigurationChangeFailed(
       {snapshot1.get(), snapshot2.get()},
       display::MULTIPLE_DISPLAY_STATE_MULTI_EXTENDED);
   EXPECT_EQ(ui::SubstituteChromeOSDeviceType(

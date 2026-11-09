@@ -1,8 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
+
+#include <string_view>
+
+#include "base/debug/crash_logging.h"
 
 namespace mojo {
 namespace debug {
@@ -20,7 +24,7 @@ base::debug::CrashKeyString* GetMojoMessageErrorCrashKey() {
 }  // namespace
 
 ScopedMessageErrorCrashKey::ScopedMessageErrorCrashKey(
-    const std::string& mojo_message_error)
+    std::string_view mojo_message_error)
     : base::debug::ScopedCrashKeyString(GetMojoMessageErrorCrashKey(),
                                         mojo_message_error) {}
 

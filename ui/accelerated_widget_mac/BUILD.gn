@@ -1,13 +1,12 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/apple/mobile_config.gni")
 import("//testing/test.gni")
 
 component("accelerated_widget_mac") {
   sources = [
-    "accelerated_widget_mac.h",
-    "accelerated_widget_mac.mm",
     "accelerated_widget_mac_export.h",
     "ca_layer_frame_sink.h",
     "ca_layer_frame_sink.mm",
@@ -15,30 +14,11 @@ component("accelerated_widget_mac") {
     "ca_layer_tree_coordinator.mm",
     "ca_renderer_layer_tree.h",
     "ca_renderer_layer_tree.mm",
-    "ca_transaction_observer.h",
-    "ca_transaction_observer.mm",
-    "display_ca_layer_tree.h",
-    "display_ca_layer_tree.mm",
-    "io_surface_context.h",
-    "io_surface_context.mm",
-    "window_resize_helper_mac.cc",
-    "window_resize_helper_mac.h",
   ]
 
-  defines = [ "ACCELERATED_WIDGET_MAC_IMPLEMENTATION" ]
-
-  deps = [
-    "//base",
-    "//components/metal_util",
-    "//media",
-    "//skia",
-    "//ui/base",
-    "//ui/events",
-    "//ui/events:events_base",
-    "//ui/gfx",
-    "//ui/gfx:gfx_io_surface_hdr_metadata",
-    "//ui/gfx/geometry",
-    "//ui/gl",
+  defines = [
+    "ACCELERATED_WIDGET_MAC_IMPLEMENTATION",
+    "GL_SILENCE_DEPRECATION",
   ]
 
   frameworks = [
@@ -47,9 +27,63 @@ component("accelerated_widget_mac") {
     "Foundation.framework",
     "CoreFoundation.framework",
     "CoreMedia.framework",
+    "CoreVideo.framework",
     "IOSurface.framework",
-    "OpenGL.framework",
     "QuartzCore.framework",
+  ]
+
+  if (is_ios) {
+    sources += [
+      "ca_layer_frame_sink_provider.h",
+      "ca_layer_frame_sink_provider.mm",
+    ]
+
+    if (target_platform == "iphoneos") {
+      frameworks += [ "BrowserEngineKit.framework" ]
+    }
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+
+  if (is_mac) {
+    sources += [
+      "accelerated_widget_mac.h",
+      "accelerated_widget_mac.mm",
+      "accelerated_widget_mac_export.h",
+      "ca_transaction_observer.h",
+      "ca_transaction_observer.mm",
+      "window_resize_helper_mac.cc",
+      "window_resize_helper_mac.h",
+    ]
+
+    frameworks += [ "OpenGL.framework" ]
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+
+  if (is_mac || (is_ios && target_platform != "iphoneos")) {
+    sources += [
+      "display_ca_layer_tree.h",
+      "display_ca_layer_tree.mm",
+    ]
+  }
+
+  deps = [
+    "//base",
+    "//build:ios_buildflags",
+    "//components/metal_util",
+    "//media",
+    "//skia",
+    "//ui/base",
+    "//ui/events",
+    "//ui/events:events_base",
+    "//ui/gfx",
+    "//ui/gfx/geometry",
+    "//ui/gl",
   ]
 }
 
@@ -61,9 +95,11 @@ test("accelerated_widget_mac_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//components/metal_util",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
+    "//ui/base",
     "//ui/gfx:test_support",
     "//ui/gl",
   ]

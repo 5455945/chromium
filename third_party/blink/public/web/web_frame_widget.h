@@ -33,7 +33,9 @@
 
 #include <stdint.h>
 
-#include "base/callback_forward.h"
+#include <vector>
+
+#include "base/functional/callback_forward.h"
 #include "base/types/pass_key.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "third_party/blink/public/common/page/drag_operation.h"
@@ -41,9 +43,35 @@
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_touch_action.h"
-#include "third_party/blink/public/web/web_swap_result.h"
 #include "third_party/blink/public/web/web_widget.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
+#include "ui/gfx/ca_layer_result.h"
+#include "ui/gfx/geometry/rect.h"
+
+namespace base {
+class SingleThreadTaskRunner;
+}
+
+namespace cc {
+struct ApplyViewportChangesArgs;
+class LayerTreeHost;
+}  // namespace cc
+
+namespace display {
+struct ScreenInfo;
+struct ScreenInfos;
+}  // namespace display
+
+namespace gfx {
+class PointF;
+class RectF;
+}  // namespace gfx
+
+namespace viz {
+class FrameTimingDetails;
+class LocalSurfaceId;
+}  // namespace viz
 
 namespace blink {
 
@@ -61,13 +89,23 @@ class WebFrameWidget : public WebWidget {
   virtual void InitializeNonCompositing(
       WebNonCompositedWidgetClient* client) = 0;
 
+  // Similar to `WebWidget::InitializeCompositing()` but for cases where there
+  // is a `previous_widget` whose compositing setup should be reused instead of
+  // initializing a new compositor.
+  virtual void InitializeCompositingFromPreviousWidget(
+      const display::ScreenInfos& screen_info,
+      const cc::LayerTreeSettings* settings,
+      WebFrameWidget& previous_widget) = 0;
+
   // Returns the local root of this WebFrameWidget.
   virtual WebLocalFrame* LocalRoot() const = 0;
 
-  // Converts from Blink coordinate (ie. Viewport/Physical pixels) space to
-  // DIPs.
-  virtual gfx::RectF BlinkSpaceToDIPs(const gfx::RectF& rect) = 0;
-  virtual gfx::Rect BlinkSpaceToEnclosedDIPs(const gfx::Rect& rect) = 0;
+  // Conversions between Blink coordinate (ie. Viewport/Physical pixels) space
+  // and DIPs (Device Independent Pixels).
+  virtual gfx::RectF BlinkSpaceToDIPs(const gfx::RectF&) = 0;
+  virtual gfx::Rect BlinkSpaceToEnclosedDIPs(const gfx::Rect&) = 0;
+  virtual gfx::PointF DIPsToBlinkSpace(const gfx::PointF&) = 0;
+  virtual gfx::RectF DIPsToBlinkSpace(const gfx::RectF& rect) = 0;
 
   // Current instance of the active WebInputMethodController, that is, the
   // WebInputMethodController corresponding to (and owned by) the focused
@@ -84,13 +122,13 @@ class WebFrameWidget : public WebWidget {
       const gfx::PointF& screen_point,
       DragOperationsMask operations_allowed,
       uint32_t key_modifiers,
-      base::OnceCallback<void(ui::mojom::DragOperation)> callback) = 0;
+      base::OnceCallback<void(ui::mojom::DragOperation, bool)> callback) = 0;
   virtual void DragTargetDragOver(
       const gfx::PointF& point_in_viewport,
       const gfx::PointF& screen_point,
       DragOperationsMask operations_allowed,
       uint32_t key_modifiers,
-      base::OnceCallback<void(ui::mojom::DragOperation)> callback) = 0;
+      base::OnceCallback<void(ui::mojom::DragOperation, bool)> callback) = 0;
   virtual void DragTargetDragLeave(const gfx::PointF& point_in_viewport,
                                    const gfx::PointF& screen_point) = 0;
   virtual void DragTargetDrop(const WebDragData&,
@@ -132,11 +170,23 @@ class WebFrameWidget : public WebWidget {
       const cc::ApplyViewportChangesArgs& args) = 0;
 
   // The |callback| will be fired when the corresponding renderer frame is
-  // submitted (still called "swapped") to the display compositor (either with
-  // DidSwap or DidNotSwap).
-  virtual void NotifySwapAndPresentationTime(
-      WebReportTimeCallback swap_callback,
-      WebReportTimeCallback presentation_callback) = 0;
+  // presented to the user. If the presentation is successful, the argument
+  // passed to the callback is the presentation timestamp; otherwise, it would
+  // be timestamp of when the failure is detected.
+  virtual void NotifyPresentationTime(
+      base::OnceCallback<void(const viz::FrameTimingDetails&)> callback) = 0;
+
+  // Returns true if a main frame update has been requested but has not yet
+  // started. A DOM mutation made while a main frame update is already running
+  // (e.g. inside a requestAnimationFrame or ResizeObserver callback) does not
+  // request a new one, so this may read false there even though the running
+  // update will include the mutation.
+  virtual bool RequestedMainFramePending() = 0;
+
+#if BUILDFLAG(IS_APPLE)
+  virtual void NotifyCoreAnimationErrorCode(
+      base::OnceCallback<void(gfx::CALayerResult)> callback) = 0;
+#endif
 
   // Instructs devtools to pause loading of the frame as soon as it's shown
   // until explicit command from the devtools client.
@@ -166,6 +216,12 @@ class WebFrameWidget : public WebWidget {
   // If the widget is currently selecting a range.
   virtual bool HandlingSelectRange() = 0;
 
+  // Calculates the selection bounds in the root frame. Returns bounds unchanged
+  // when there is no focused frame. Returns the caret bounds if the selection
+  // range is empty.
+  virtual void CalculateSelectionBounds(gfx::Rect& anchor_in_root_frame,
+                                        gfx::Rect& focus_in_root_frame) = 0;
+
   // Returns true if a pinch gesture is currently active in main frame.
   virtual bool PinchGestureActiveInMainFrame() = 0;
 
@@ -181,9 +237,10 @@ class WebFrameWidget : public WebWidget {
   // Override the device scale factor for testing.
   virtual void SetDeviceScaleFactorForTesting(float factor) = 0;
 
-  // Get the window segments for this widget.
-  // See https://github.com/webscreens/window-segments/blob/master/EXPLAINER.md
-  virtual const WebVector<gfx::Rect>& WindowSegments() const = 0;
+  // Get the viewport segments for this widget.
+  // See
+  // https://github.com/WICG/visual-viewport/blob/gh-pages/segments-explainer/SEGMENTS-EXPLAINER.md
+  virtual const std::vector<gfx::Rect>& ViewportSegments() const = 0;
 
   // Release any mouse lock or pointer capture held. This is used to reset
   // state between WebTest runs.
@@ -196,6 +253,37 @@ class WebFrameWidget : public WebWidget {
   // Returns a FrameWidgetTestHelper if this widget was created using
   // `FrameWidgetTestHelper::CreateTestWebFrameWidget()`.
   virtual FrameWidgetTestHelper* GetFrameWidgetTestHelperForTesting() = 0;
+
+  // This should be called for the local root frame before calling the final
+  // UpdateAllLifecyclePhases() just before dumping pixels.
+  virtual void PrepareForFinalLifecyclUpdateForTesting() = 0;
+
+  // Returns the current zoom level.  0 is "original size", and each increment
+  // above or below represents zooming 20% larger or smaller to default limits
+  // of 300% and 50% of original size, respectively.  Only plugins use
+  // non whole-numbers, since they might choose to have specific zoom level so
+  // that fixed-width content is fit-to-page-width, for example.
+  virtual double GetZoomLevel() = 0;
+  // Changes the zoom level to the specified level, clamping at the limits
+  // defined by the associated `webView`.
+  virtual void SetZoomLevel(double zoom_level) = 0;
+
+  // Returns the cumulative effect of the CSS "zoom" property on the embedding
+  // element of this widget (if any) and all of its WebFrame ancestors.
+  virtual double GetCSSZoomFactor() const = 0;
+
+  // Update the LocalSurfaceId used for frames produced by this widget.
+  virtual void ApplyLocalSurfaceIdUpdate(const viz::LocalSurfaceId& id) = 0;
+
+  // Returns information about the screen where this widget is being displayed.
+  virtual const display::ScreenInfo& GetScreenInfo() = 0;
+
+  // Returns information about all available screens.
+  virtual const display::ScreenInfos& GetScreenInfos() = 0;
+
+  // Returns the original (non-emulated) device scale factor of the screen
+  // where this widget is being displayed.
+  virtual float GetOriginalDeviceScaleFactor() = 0;
 
  private:
   // This is a private virtual method so we don't expose cc::LayerTreeHost
@@ -230,7 +318,8 @@ using CreateWebFrameWidgetCallback = base::RepeatingCallback<WebFrameWidget*(
     bool hidden,
     bool never_composited,
     bool is_for_child_local_root,
-    bool is_for_nested_main_frame)>;
+    bool is_for_nested_main_frame,
+    bool is_for_scalable_page)>;
 // Allows tests to inject their own type of WebFrameWidget in order to
 // override methods of the WebFrameWidgetImpl.
 void BLINK_EXPORT

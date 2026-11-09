@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,26 @@
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 // This test summarizes which platforms use background thread priority.
 TEST(ThreadPoolEnvironmentConfig, CanUseBackgroundPriorityForWorker) {
-#if defined(OS_WIN) || defined(OS_APPLE)
-  EXPECT_TRUE(CanUseBackgroundPriorityForWorkerThread());
-#elif defined(OS_LINUX) || defined(OS_ANDROID) || defined(OS_FUCHSIA) || \
-    defined(OS_CHROMEOS) || defined(OS_NACL)
-  EXPECT_FALSE(CanUseBackgroundPriorityForWorkerThread());
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+  EXPECT_TRUE(CanUseBackgroundThreadTypeForWorkerThread());
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS)
+  EXPECT_FALSE(CanUseBackgroundThreadTypeForWorkerThread());
+#else
+#error Platform doesn't match any block
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_ANDROID)
+  EXPECT_TRUE(CanUseUtilityThreadTypeForWorkerThread());
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_CHROMEOS)
+  EXPECT_FALSE(CanUseUtilityThreadTypeForWorkerThread());
 #else
 #error Platform doesn't match any block
 #endif
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

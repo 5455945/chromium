@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,19 @@
 
 #include <memory>
 
-#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/loader/navigation_loader_interceptor.h"
-#include "content/browser/loader/single_request_url_loader_factory.h"
 #include "content/browser/navigation_subresource_loader_params.h"
 #include "content/browser/service_worker/service_worker_controllee_request_handler.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/service_worker_client_info.h"
-#include "content/public/common/child_process_host.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/network/public/cpp/single_request_url_loader_factory.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_provider.mojom.h"
 
 namespace content {
@@ -35,7 +33,7 @@ struct NavigationRequestInfo;
 // The corresponding legacy class is ServiceWorkerControlleeRequestHandler which
 // used to live on a different thread. Currently, this class just delegates to
 // the legacy class.
-// TODO(crbug.com/1138155): Merge the classes together now that they are on
+// TODO(crbug.com/40725202): Merge the classes together now that they are on
 // the same thread.
 class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
     : public NavigationLoaderInterceptor {
@@ -50,11 +48,36 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
   // Creates a ServiceWorkerMainResourceLoaderInterceptor for a worker.
   // Returns nullptr if the interceptor could not be created for the URL of the
   // worker.
-  static std::unique_ptr<NavigationLoaderInterceptor> CreateForWorker(
+  static std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
+  CreateForWorker(
       const network::ResourceRequest& resource_request,
-      int process_id,
+      const net::IsolationInfo& isolation_info,
+      ChildProcessId process_id,
       const DedicatedOrSharedWorkerToken& worker_token,
       base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle);
+
+  static std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
+  CreateForPrefetch(
+      const network::ResourceRequest& resource_request,
+      base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle,
+      scoped_refptr<network::SharedURLLoaderFactory>
+          network_url_loader_factory);
+
+  // Creates a ServiceWorkerMainResourceLoaderInterceptor for a download
+  // request ("Save link as", "Save image as", <a download>). Returns nullptr
+  // if the interceptor could not be created for the URL.
+  // Precondition: `resource_request.trusted_params` must be set; its
+  // `isolation_info` is consumed when constructing the ServiceWorkerClient.
+  // Requires features::kServiceWorkerInterceptDownloads to be enabled.
+  static std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
+  CreateForDownload(
+      const network::ResourceRequest& resource_request,
+      base::WeakPtr<ServiceWorkerMainResourceHandle> navigation_handle);
+
+  ServiceWorkerMainResourceLoaderInterceptor(
+      const ServiceWorkerMainResourceLoaderInterceptor&) = delete;
+  ServiceWorkerMainResourceLoaderInterceptor& operator=(
+      const ServiceWorkerMainResourceLoaderInterceptor&) = delete;
 
   ~ServiceWorkerMainResourceLoaderInterceptor() override;
 
@@ -67,23 +90,19 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
                          BrowserContext* browser_context,
                          LoaderCallback callback,
                          FallbackCallback fallback_callback) override;
-  // Returns params with the ControllerServiceWorkerInfoPtr if we have found
-  // a matching controller service worker for the |request| that is given
-  // to MaybeCreateLoader(). Otherwise this returns absl::nullopt.
-  absl::optional<SubresourceLoaderParams> MaybeCreateSubresourceLoaderParams()
-      override;
+
+  // MaybeCreateLoaderForResponse() should NOT overridden here, because
+  // `WorkerScriptLoader` assumes so.
+
+  static void CompleteWithoutLoader(
+      NavigationLoaderInterceptor::LoaderCallback loader_callback,
+      base::WeakPtr<ServiceWorkerClient> service_worker_client);
 
  private:
   friend class ServiceWorkerMainResourceLoaderInterceptorTest;
 
   ServiceWorkerMainResourceLoaderInterceptor(
-      base::WeakPtr<ServiceWorkerMainResourceHandle> handle,
-      network::mojom::RequestDestination request_destination,
-      bool skip_service_worker,
-      bool are_ancestors_secure,
-      int frame_tree_node_id,
-      int process_id,
-      const DedicatedOrSharedWorkerToken* worker_token);
+      base::WeakPtr<ServiceWorkerMainResourceHandle> handle);
 
   // Returns true if a ServiceWorkerMainResourceLoaderInterceptor should be
   // created for a navigation to |url|.
@@ -94,7 +113,7 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
 
   // Given as a callback to NavigationURLLoaderImpl.
   void RequestHandlerWrapper(
-      SingleRequestURLLoaderFactory::RequestHandler handler,
+      network::SingleRequestURLLoaderFactory::RequestHandler handler,
       const network::ResourceRequest& resource_request,
       mojo::PendingReceiver<network::mojom::URLLoader> receiver,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client);
@@ -107,30 +126,8 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoaderInterceptor final
   // TODO(falken): Arrange things so |handle_| outlives |this| for workers too.
   const base::WeakPtr<ServiceWorkerMainResourceHandle> handle_;
 
-  // For all clients:
-  const network::mojom::RequestDestination request_destination_;
-  const bool skip_service_worker_;
-
-  // For window clients:
-  // Whether all ancestor frames of the frame that is navigating have a secure
-  // origin. True for main frames.
-  const bool are_ancestors_secure_;
-  // If the intercepted resource load is on behalf
-  // of a window, the |frame_tree_node_id_| will be set, |worker_token_| will be
-  // absl::nullopt, and |process_id_| will be invalid.
-  const int frame_tree_node_id_;
-
-  // For web worker clients:
-  // If the intercepted resource load is on behalf of a worker the
-  // |frame_tree_node_id_| will be invalid, and both |process_id_| and
-  // |worker_token_| will be set.
-  const int process_id_;
-  const absl::optional<DedicatedOrSharedWorkerToken> worker_token_;
-
   // Handles a single request. Set to a new instance on redirects.
   std::unique_ptr<ServiceWorkerControlleeRequestHandler> request_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerMainResourceLoaderInterceptor);
 };
 
 }  // namespace content

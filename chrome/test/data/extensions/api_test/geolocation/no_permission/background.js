@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,18 @@
 chrome.test.runTests([
   function geolocation_getCurrentPosition() {
     try {
-      navigator.geolocation.getCurrentPosition(chrome.test.fail,
-                                               chrome.test.succeed);
+      navigator.geolocation.getCurrentPosition(
+          chrome.test.fail, chrome.test.succeed);
     } catch (e) {
       chrome.test.fail();
     }
   },
   function geolocation_watchPosition() {
     try {
-      navigator.geolocation.watchPosition(chrome.test.fail,
-                                          chrome.test.succeed);
+      navigator.geolocation.watchPosition(
+          chrome.test.fail, chrome.test.succeed);
     } catch (e) {
       chrome.test.fail();
     }
-  }
+  },
 ]);

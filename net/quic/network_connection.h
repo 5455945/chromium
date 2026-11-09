@@ -1,11 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_QUIC_NETWORK_CONNECTION_H_
 #define NET_QUIC_NETWORK_CONNECTION_H_
 
-#include "base/macros.h"
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
 
@@ -18,6 +17,10 @@ class NET_EXPORT NetworkConnection
       public NetworkChangeNotifier::ConnectionTypeObserver {
  public:
   NetworkConnection();
+
+  NetworkConnection(const NetworkConnection&) = delete;
+  NetworkConnection& operator=(const NetworkConnection&) = delete;
+
   ~NetworkConnection() override;
 
   // Returns the underlying connection type.
@@ -31,13 +34,14 @@ class NET_EXPORT NetworkConnection
   // hopefully leave only ethernet (with no WiFi available) in the
   // CONNECTION_UNKNOWN category.  This *might* err if there is both ethernet,
   // as well as WiFi, where WiFi was not being used that much. Most platforms
-  // don't distinguish Wifi vs Etherenet, and call everything CONNECTION_UNKNOWN
-  // :-(. Fo non CONNECTIION_WIFI, this returns the C-string returned by
+  // don't distinguish Wifi vs Ethernet, and call everything CONNECTION_UNKNOWN
+  // :-(. For non CONNECTIION_WIFI, this returns the C-string returned by
   // NetworkChangeNotifier::ConnectionTypeToString.
   const char* connection_description() { return connection_description_; }
 
   // NetworkChangeNotifier::IPAddressObserver methods:
-  void OnIPAddressChanged() override;
+  void OnIPAddressChanged(
+      NetworkChangeNotifier::IPAddressChangeType change_type) override;
 
   // NetworkChangeNotifier::ConnectionTypeObserver methods:
   void OnConnectionTypeChanged(
@@ -46,12 +50,10 @@ class NET_EXPORT NetworkConnection
  private:
   // Cache the connection type to avoid calling the potentially expensive
   // NetworkChangeNotifier::GetConnectionType() function.
-  NetworkChangeNotifier::ConnectionType connection_type_;
-  // Cache the connection description string to avoid calling the expensive
-  // GetWifiPHYLayerProtocol() function.
-  const char* connection_description_;
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkConnection);
+  NetworkChangeNotifier::ConnectionType connection_type_ =
+      NetworkChangeNotifier::CONNECTION_UNKNOWN;
+  // Cache the connection description string.
+  const char* connection_description_ = nullptr;
 };
 
 }  // namespace net

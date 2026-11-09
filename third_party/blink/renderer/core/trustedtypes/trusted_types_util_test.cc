@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,17 +16,20 @@
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script_url.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
 
 void TrustedTypesCheckForHTMLThrows(const String& string) {
-  auto dummy_page_holder = std::make_unique<DummyPageHolder>(IntSize(800, 600));
+  auto dummy_page_holder =
+      std::make_unique<DummyPageHolder>(gfx::Size(800, 600));
   LocalDOMWindow* window = dummy_page_holder->GetFrame().DomWindow();
   V8TestingScope scope;
   DummyExceptionStateForTesting exception_state;
   ASSERT_FALSE(exception_state.HadException());
-  String s = TrustedTypesCheckForHTML(string, window, exception_state);
+  String s = TrustedTypesCheckForHTML(string, window, g_empty_atom,
+                                      g_empty_atom, exception_state);
   EXPECT_FALSE(exception_state.HadException());
 
   window->GetContentSecurityPolicy()->AddPolicies(ParseContentSecurityPolicies(
@@ -35,19 +38,20 @@ void TrustedTypesCheckForHTMLThrows(const String& string) {
       network::mojom::ContentSecurityPolicySource::kMeta,
       *(window->GetSecurityOrigin())));
   ASSERT_FALSE(exception_state.HadException());
-  String s1 = TrustedTypesCheckForHTML(string, window, exception_state);
+  String s1 = TrustedTypesCheckForHTML(string, window, g_empty_atom,
+                                       g_empty_atom, exception_state);
   EXPECT_TRUE(exception_state.HadException());
-  EXPECT_EQ(ESErrorType::kTypeError, exception_state.CodeAs<ESErrorType>());
-  exception_state.ClearException();
 }
 
 void TrustedTypesCheckForScriptThrows(const String& string) {
-  auto dummy_page_holder = std::make_unique<DummyPageHolder>(IntSize(800, 600));
+  auto dummy_page_holder =
+      std::make_unique<DummyPageHolder>(gfx::Size(800, 600));
   LocalDOMWindow* window = dummy_page_holder->GetFrame().DomWindow();
   V8TestingScope scope;
   DummyExceptionStateForTesting exception_state;
   ASSERT_FALSE(exception_state.HadException());
-  String s = TrustedTypesCheckForScript(string, window, exception_state);
+  String s = TrustedTypesCheckForScript(string, window, g_empty_atom,
+                                        g_empty_atom, exception_state);
   EXPECT_FALSE(exception_state.HadException());
 
   window->GetContentSecurityPolicy()->AddPolicies(ParseContentSecurityPolicies(
@@ -56,19 +60,20 @@ void TrustedTypesCheckForScriptThrows(const String& string) {
       network::mojom::ContentSecurityPolicySource::kMeta,
       *(window->GetSecurityOrigin())));
   ASSERT_FALSE(exception_state.HadException());
-  String s1 = TrustedTypesCheckForScript(string, window, exception_state);
+  String s1 = TrustedTypesCheckForScript(string, window, g_empty_atom,
+                                         g_empty_atom, exception_state);
   EXPECT_TRUE(exception_state.HadException());
-  EXPECT_EQ(ESErrorType::kTypeError, exception_state.CodeAs<ESErrorType>());
-  exception_state.ClearException();
 }
 
 void TrustedTypesCheckForScriptURLThrows(const String& string) {
-  auto dummy_page_holder = std::make_unique<DummyPageHolder>(IntSize(800, 600));
+  auto dummy_page_holder =
+      std::make_unique<DummyPageHolder>(gfx::Size(800, 600));
   LocalDOMWindow* window = dummy_page_holder->GetFrame().DomWindow();
   V8TestingScope scope;
   DummyExceptionStateForTesting exception_state;
   ASSERT_FALSE(exception_state.HadException());
-  String s = TrustedTypesCheckForScriptURL(string, window, exception_state);
+  String s = TrustedTypesCheckForScriptURL(string, window, g_empty_atom,
+                                           g_empty_atom, exception_state);
   EXPECT_FALSE(exception_state.HadException());
 
   window->GetContentSecurityPolicy()->AddPolicies(ParseContentSecurityPolicies(
@@ -77,31 +82,34 @@ void TrustedTypesCheckForScriptURLThrows(const String& string) {
       network::mojom::ContentSecurityPolicySource::kMeta,
       *(window->GetSecurityOrigin())));
   ASSERT_FALSE(exception_state.HadException());
-  String s1 = TrustedTypesCheckForScriptURL(string, window, exception_state);
+  String s1 = TrustedTypesCheckForScriptURL(string, window, g_empty_atom,
+                                            g_empty_atom, exception_state);
   EXPECT_TRUE(exception_state.HadException());
-  EXPECT_EQ(ESErrorType::kTypeError, exception_state.CodeAs<ESErrorType>());
-  exception_state.ClearException();
 }
 
 void TrustedTypesCheckForScriptWorks(
     const V8UnionStringOrTrustedScript* string_or_trusted_script,
     String expected) {
-  auto dummy_page_holder = std::make_unique<DummyPageHolder>(IntSize(800, 600));
+  auto dummy_page_holder =
+      std::make_unique<DummyPageHolder>(gfx::Size(800, 600));
   LocalDOMWindow* window = dummy_page_holder->GetFrame().DomWindow();
   V8TestingScope scope;
   DummyExceptionStateForTesting exception_state;
-  String s = TrustedTypesCheckForScript(string_or_trusted_script, window,
-                                        exception_state);
+  String s =
+      TrustedTypesCheckForScript(string_or_trusted_script, window, g_empty_atom,
+                                 g_empty_atom, exception_state);
   ASSERT_EQ(s, expected);
 }
 
 // TrustedTypesCheckForHTML tests
 TEST(TrustedTypesUtilTest, TrustedTypesCheckForHTML_String) {
+  test::TaskEnvironment task_environment;
   TrustedTypesCheckForHTMLThrows("A string");
 }
 
 // TrustedTypesCheckForScript tests
 TEST(TrustedTypesUtilTest, TrustedTypesCheckForScript_TrustedScript) {
+  test::TaskEnvironment task_environment;
   auto* script = MakeGarbageCollected<TrustedScript>("A string");
   auto* trusted_value =
       MakeGarbageCollected<V8UnionStringOrTrustedScript>(script);
@@ -109,11 +117,47 @@ TEST(TrustedTypesUtilTest, TrustedTypesCheckForScript_TrustedScript) {
 }
 
 TEST(TrustedTypesUtilTest, TrustedTypesCheckForScript_String) {
+  test::TaskEnvironment task_environment;
   TrustedTypesCheckForScriptThrows("A string");
 }
 
 // TrustedTypesCheckForScriptURL tests
 TEST(TrustedTypesUtilTest, TrustedTypesCheckForScriptURL_String) {
+  test::TaskEnvironment task_environment;
   TrustedTypesCheckForScriptURLThrows("A string");
 }
+
+// Spot checks for IsTrustedTypesEventHandlerAttribute.
+//
+// The main tests are in the WPT repository. Chrome assembles its event
+// handler list from several sources. We spot check a few names here, to
+// ensure that names from the relevant sources are included.
+TEST(TrustedTypesUtilTest, IsTrustedTypesEventHandlerAttribute) {
+  test::TaskEnvironment task_environment;
+
+  // Event handler names declared in IDL:
+  EXPECT_TRUE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("onclick"), g_empty_atom)));
+  EXPECT_TRUE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("onload"), g_empty_atom)));
+  EXPECT_TRUE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("onfocus"), g_empty_atom)));
+
+  // Event handler names declared in event_handler_names:
+  EXPECT_TRUE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("onfocusin"), g_empty_atom)));
+  EXPECT_TRUE(IsTrustedTypesEventHandlerAttribute(QualifiedName(
+      g_empty_atom, AtomicString("ondomfocusout"), g_empty_atom)));
+  EXPECT_TRUE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("onunbounded"), g_empty_atom)));
+
+  // Not event handler names:
+  EXPECT_FALSE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("one"), g_empty_atom)));
+  EXPECT_FALSE(IsTrustedTypesEventHandlerAttribute(
+      QualifiedName(g_empty_atom, AtomicString("two"), g_empty_atom)));
+  EXPECT_FALSE(IsTrustedTypesEventHandlerAttribute(QualifiedName(
+      g_empty_atom, AtomicString("onvrdisplayconnect"), g_empty_atom)));
+}
+
 }  // namespace blink

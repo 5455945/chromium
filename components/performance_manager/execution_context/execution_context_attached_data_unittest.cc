@@ -1,9 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/performance_manager/public/execution_context/execution_context_attached_data.h"
 
+#include "base/memory/raw_ptr.h"
 #include "components/performance_manager/execution_context/execution_context_registry_impl.h"
 #include "components/performance_manager/test_support/graph_test_harness.h"
 #include "components/performance_manager/test_support/mock_graphs.h"
@@ -34,12 +35,12 @@ class ExecutionContextAttachedDataTest : public GraphTestHarness {
 
   void SetUp() override {
     Super::SetUp();
-    registry_ =
-        graph()->PassToGraph(std::make_unique<ExecutionContextRegistryImpl>());
+    registry_ = GraphRegisteredImpl<ExecutionContextRegistryImpl>::GetFromGraph(
+        graph());
   }
 
  protected:
-  ExecutionContextRegistryImpl* registry_ = nullptr;
+  raw_ptr<ExecutionContextRegistryImpl> registry_ = nullptr;
 };
 
 }  // namespace

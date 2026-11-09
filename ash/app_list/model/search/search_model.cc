@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,40 +8,19 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace ash {
 
 SearchModel::SearchModel()
     : search_box_(std::make_unique<SearchBoxModel>()),
-      results_(std::make_unique<SearchResults>()) {}
+      results_(std::make_unique<SearchResults>()),
+      ordered_categories_(std::vector<ash::AppListSearchResultCategory>()) {}
 
 SearchModel::~SearchModel() {}
 
-void SearchModel::SetTabletMode(bool is_tablet_mode) {
-  search_box_->SetTabletMode(is_tablet_mode);
-}
-
 void SearchModel::SetSearchEngineIsGoogle(bool is_google) {
   search_box_->SetSearchEngineIsGoogle(is_google);
-}
-
-std::vector<SearchResult*> SearchModel::FilterSearchResultsByDisplayType(
-    SearchResults* results,
-    SearchResult::DisplayType display_type,
-    const std::set<std::string>& excludes,
-    size_t max_results) {
-  base::RepeatingCallback<bool(const SearchResult&)> filter_function =
-      base::BindRepeating(
-          [](const SearchResult::DisplayType& display_type,
-             const std::set<std::string>& excludes,
-             const SearchResult& r) -> bool {
-            return excludes.count(r.id()) == 0 &&
-                   display_type == r.display_type();
-          },
-          display_type, excludes);
-  return SearchModel::FilterSearchResultsByFunction(results, filter_function,
-                                                    max_results);
 }
 
 std::vector<SearchResult*> SearchModel::FilterSearchResultsByFunction(
@@ -60,7 +39,10 @@ std::vector<SearchResult*> SearchModel::FilterSearchResultsByFunction(
 }
 
 void SearchModel::PublishResults(
-    std::vector<std::unique_ptr<SearchResult>> new_results) {
+    std::vector<std::unique_ptr<SearchResult>> new_results,
+    const std::vector<ash::AppListSearchResultCategory>& categories) {
+  ordered_categories_ = categories;
+
   // The following algorithm is used:
   // 1. Transform the |results_| list into an unordered map from result ID
   // to item.
@@ -83,8 +65,8 @@ void SearchModel::PublishResults(
       // Update and use the old result if it exists.
       std::unique_ptr<SearchResult> ui_result = std::move(ui_result_it->second);
       ui_result->SetMetadata(new_result->TakeMetadata());
-      results_->Add(std::move(ui_result));
 
+      results_->Add(std::move(ui_result));
       // Remove the item from the map so that it ends up only with unused
       // results.
       results_map.erase(ui_result_it);
@@ -97,7 +79,7 @@ void SearchModel::PublishResults(
   // Any remaining results in |results_map| will be automatically deleted.
 }
 
-SearchResult* SearchModel::FindSearchResult(const std::string& id) {
+SearchResult* SearchModel::FindSearchResult(std::string_view id) {
   for (const auto& result : *results_) {
     if (result->id() == id)
       return result.get();
@@ -105,27 +87,9 @@ SearchResult* SearchModel::FindSearchResult(const std::string& id) {
   return nullptr;
 }
 
-SearchResult* SearchModel::GetFirstVisibleResult() {
-  for (const auto& result : *results_) {
-    if (result->is_visible())
-      return result.get();
-  }
-
-  return nullptr;
-}
-
 void SearchModel::DeleteAllResults() {
-  PublishResults(std::vector<std::unique_ptr<SearchResult>>());
-}
-
-void SearchModel::DeleteResultById(const std::string& id) {
-  for (size_t i = 0; i < results_->item_count(); ++i) {
-    SearchResult* result = results_->GetItemAt(i);
-    if (result->id() == id) {
-      results_->DeleteAt(i);
-      break;
-    }
-  }
+  PublishResults(std::vector<std::unique_ptr<SearchResult>>(),
+                 std::vector<ash::AppListSearchResultCategory>());
 }
 
 }  // namespace ash

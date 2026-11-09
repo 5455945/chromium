@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,25 +12,26 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
-#include "base/win/scoped_com_initializer.h"
+#include "components/crash/core/common/crash_key.h"
 #include "media/base/cdm_factory.h"
 #include "media/base/media_export.h"
 #include "media/cdm/cdm_auxiliary_helper.h"
+#include "media/cdm/win/media_foundation_cdm_util.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace media {
 
-class MEDIA_EXPORT MediaFoundationCdmFactory : public CdmFactory {
+class MEDIA_EXPORT MediaFoundationCdmFactory final : public CdmFactory {
  public:
-  MediaFoundationCdmFactory(std::unique_ptr<CdmAuxiliaryHelper> helper,
-                            const base::FilePath& user_data_dir);
+  MediaFoundationCdmFactory(std::unique_ptr<CdmAuxiliaryHelper> helper);
   MediaFoundationCdmFactory(const MediaFoundationCdmFactory&) = delete;
   MediaFoundationCdmFactory& operator=(const MediaFoundationCdmFactory&) =
       delete;
-  ~MediaFoundationCdmFactory() final;
+  ~MediaFoundationCdmFactory() override;
 
   // Provides a way to customize IMFContentDecryptionModuleFactory creation to
   // support different key systems and for testing.
@@ -41,27 +42,38 @@ class MEDIA_EXPORT MediaFoundationCdmFactory : public CdmFactory {
       CreateCdmFactoryCB create_cdm_factory_cb);
 
   // CdmFactory implementation.
-  void Create(const std::string& key_system,
-              const CdmConfig& cdm_config,
+  void Create(const CdmConfig& cdm_config,
               const SessionMessageCB& session_message_cb,
               const SessionClosedCB& session_closed_cb,
               const SessionKeysChangeCB& session_keys_change_cb,
               const SessionExpirationUpdateCB& session_expiration_update_cb,
-              CdmCreatedCB cdm_created_cb) final;
+              CdmCreatedCB cdm_created_cb) override;
 
  private:
   // Callback to MediaFoundationCDM to resolve the promise.
-  using IsTypeSupportedResultCB = base::OnceCallback<void(bool is_supported)>;
+  using IsTypeSupportedResultCB =
+      base::OnceCallback<void(IsTypeSupportedValueOrError value_or_error)>;
 
-  void OnCdmOriginIdObtained(
-      const std::string& key_system,
+  // `content_protection_hwnd_value` is the browser-owned HWND for Media
+  // Foundation GPU adapter selection, transmitted as a `uint32` (see
+  // `base::win::Uint32ToHandle()`).
+  using InitializeCdmCB = base::OnceCallback<void(
+      uint32_t content_protection_hwnd_value,
+      std::unique_ptr<MediaFoundationCdmData> media_foundation_cdm_data)>;
+
+  void OnContentProtectionWindowObtained(
+      InitializeCdmCB init_cdm_cb,
+      uint32_t content_protection_hwnd_value);
+
+  void InitializeMediaFoundationCdm(
       const CdmConfig& cdm_config,
       const SessionMessageCB& session_message_cb,
       const SessionClosedCB& session_closed_cb,
       const SessionKeysChangeCB& session_keys_change_cb,
       const SessionExpirationUpdateCB& session_expiration_update_cb,
       CdmCreatedCB cdm_created_cb,
-      const base::UnguessableToken& cdm_origin_id);
+      uint32_t content_protection_hwnd_value,
+      std::unique_ptr<MediaFoundationCdmData> media_foundation_cdm_data);
 
   HRESULT GetCdmFactory(
       const std::string& key_system,
@@ -71,29 +83,25 @@ class MEDIA_EXPORT MediaFoundationCdmFactory : public CdmFactory {
                        const std::string& content_type,
                        IsTypeSupportedResultCB is_type_supported_result_cb);
 
-  HRESULT CreateMfCdmInternal(
-      const std::string& key_system,
-      const CdmConfig& cdm_config,
-      const base::UnguessableToken& cdm_origin_id,
-      Microsoft::WRL::ComPtr<IMFContentDecryptionModule>& mf_cdm);
+  void OnCdmEvent(CdmEvent event, HRESULT hresult);
 
-  // Same as `CreateMfCdmInternal()`, but returns the HRESULT in out parameter
-  // so we can bind it to a repeating callback using weak pointer.
-  void CreateMfCdm(const std::string& key_system,
-                   const CdmConfig& cdm_config,
+  // Creates `mf_cdm` based on the input parameters. Same as
+  // CreateMediaFoundationCdm() but returns the HRESULT in out parameter so we
+  // can bind it to a repeating callback using weak pointer.
+  void CreateMfCdm(const CdmConfig& cdm_config,
                    const base::UnguessableToken& cdm_origin_id,
+                   const base::FilePath& cdm_store_path_root,
                    HRESULT& hresult,
                    Microsoft::WRL::ComPtr<IMFContentDecryptionModule>& mf_cdm);
 
   std::unique_ptr<CdmAuxiliaryHelper> helper_;
-  base::FilePath user_data_dir_;
 
-  // IMFContentDecryptionModule implementations typically require MTA to run.
-  base::win::ScopedCOMInitializer com_initializer_{
-      base::win::ScopedCOMInitializer::kMTA};
+  // CDM origin crash key used in crash reporting.
+  crash_reporter::ScopedCrashKeyString cdm_origin_crash_key_;
 
   // Key system to CreateCdmFactoryCB mapping. This is for testing only.
-  std::map<std::string, CreateCdmFactoryCB> create_cdm_factory_cbs_for_testing_;
+  absl::flat_hash_map<std::string, CreateCdmFactoryCB>
+      create_cdm_factory_cbs_for_testing_;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<MediaFoundationCdmFactory> weak_factory_{this};

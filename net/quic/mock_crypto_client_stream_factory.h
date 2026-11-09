@@ -1,30 +1,43 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_QUIC_MOCK_CRYPTO_CLIENT_STREAM_FACTORY_H_
 #define NET_QUIC_MOCK_CRYPTO_CLIENT_STREAM_FACTORY_H_
 
+#include <map>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "net/quic/crypto/proof_verifier_chromium.h"
 #include "net/quic/mock_crypto_client_stream.h"
 #include "net/quic/quic_crypto_client_stream_factory.h"
-#include "net/third_party/quiche/src/quic/core/quic_server_id.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_server_id.h"
+
+namespace base {
+class RunLoop;
+}  // namespace base
 
 namespace quic {
 class QuicCryptoClientStream;
 }  // namespace quic
+
 namespace net {
 
 class MockCryptoClientStreamFactory : public QuicCryptoClientStreamFactory {
  public:
   MockCryptoClientStreamFactory();
+
+  MockCryptoClientStreamFactory(const MockCryptoClientStreamFactory&) = delete;
+  MockCryptoClientStreamFactory& operator=(
+      const MockCryptoClientStreamFactory&) = delete;
+
   ~MockCryptoClientStreamFactory() override;
 
-  quic::QuicCryptoClientStream* CreateQuicCryptoClientStream(
+  std::unique_ptr<quic::QuicCryptoClientStream> CreateQuicCryptoClientStream(
       const quic::QuicServerId& server_id,
       QuicChromiumClientSession* session,
       std::unique_ptr<quic::ProofVerifyContext> proof_verify_context,
@@ -45,19 +58,37 @@ class MockCryptoClientStreamFactory : public QuicCryptoClientStreamFactory {
     proof_verify_details_queue_.push(proof_verify_details);
   }
 
-  MockCryptoClientStream* last_stream() const { return last_stream_; }
+  // Waits until `streams_` has a length of `count`.
+  void WaitForStreams(size_t count);
 
-  // Sets initial config for new sessions.
+  MockCryptoClientStream* last_stream() const;
+  const std::vector<base::WeakPtr<MockCryptoClientStream>>& streams() const {
+    return streams_;
+  }
+
+  // Sets initial config for new sessions with no matching server_id.
   void SetConfig(const quic::QuicConfig& config);
 
- private:
-  MockCryptoClientStream::HandshakeMode handshake_mode_;
-  MockCryptoClientStream* last_stream_;
-  base::queue<const ProofVerifyDetailsChromium*> proof_verify_details_queue_;
-  std::unique_ptr<quic::QuicConfig> config_;
-  bool use_mock_crypter_;
+  // Sets the initial config for a new session with the given server_id,
+  // overriding any existing setting.
+  void SetConfigForServerId(const quic::QuicServerId& server_id,
+                            const quic::QuicConfig& config);
 
-  DISALLOW_COPY_AND_ASSIGN(MockCryptoClientStreamFactory);
+ private:
+  MockCryptoClientStream::HandshakeMode handshake_mode_ =
+      MockCryptoClientStream::CONFIRM_HANDSHAKE;
+  std::vector<base::WeakPtr<MockCryptoClientStream>> streams_;
+  base::queue<raw_ptr<const ProofVerifyDetailsChromium, CtnExperimental>>
+      proof_verify_details_queue_;
+  std::unique_ptr<quic::QuicConfig> config_;
+  std::map<quic::QuicServerId, std::unique_ptr<quic::QuicConfig>>
+      config_for_server_;
+  bool use_mock_crypter_ = false;
+
+  // When populated, `wait_for_stream_run_loop_` will be quit once
+  // `streams_.size()` reaches `wait_for_stream_count_`.
+  std::optional<size_t> wait_for_stream_count_;
+  raw_ptr<base::RunLoop> wait_for_stream_run_loop_;
 };
 
 }  // namespace net

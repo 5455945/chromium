@@ -1,11 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/layout/layout_video.h"
 
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
-#include "third_party/blink/renderer/core/layout/layout_image.h"
+#include "third_party/blink/renderer/core/layout/layout_video.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
@@ -21,16 +21,17 @@ class LayoutVideoTest : public RenderingTest {
     sk_sp<SkColorSpace> src_rgb_color_space = SkColorSpace::MakeSRGB();
     SkImageInfo raster_image_info =
         SkImageInfo::MakeN32Premul(width, height, src_rgb_color_space);
-    sk_sp<SkSurface> surface(SkSurface::MakeRaster(raster_image_info));
+    sk_sp<SkSurface> surface(SkSurfaces::Raster(raster_image_info));
     sk_sp<SkImage> image = surface->makeImageSnapshot();
     ImageResourceContent* image_content = ImageResourceContent::CreateLoaded(
         UnacceleratedStaticBitmapImage::Create(image).get());
 
     // Set image to video
     auto* video = To<HTMLVideoElement>(GetElementById(id));
-    auto* layout_image = To<LayoutImage>(video->GetLayoutObject());
-    video->setAttribute(html_names::kPosterAttr, "http://example.com/foo.jpg");
-    layout_image->ImageResource()->SetImageResource(image_content);
+    auto* layout_video = To<LayoutVideo>(video->GetLayoutObject());
+    video->setAttribute(html_names::kPosterAttr,
+                        AtomicString("http://example.com/foo.jpg"));
+    layout_video->ImageResource()->SetImageResource(image_content);
   }
 };
 
@@ -47,7 +48,7 @@ TEST_F(LayoutVideoTest, PosterSizeWithNormal) {
 
   int width = To<LayoutBox>(GetLayoutObjectByElementId("video"))
                   ->AbsoluteBoundingBoxRect()
-                  .Width();
+                  .width();
   EXPECT_EQ(width, 10);
 }
 
@@ -64,7 +65,7 @@ TEST_F(LayoutVideoTest, PosterSizeWithZoom) {
 
   int width = To<LayoutBox>(GetLayoutObjectByElementId("video"))
                   ->AbsoluteBoundingBoxRect()
-                  .Width();
+                  .width();
   EXPECT_EQ(width, 15);
 }
 
@@ -86,7 +87,7 @@ TEST_F(LayoutVideoTest, PosterSizeAfterPlay) {
   // element width
   int width = To<LayoutBox>(GetLayoutObjectByElementId("video"))
                   ->AbsoluteBoundingBoxRect()
-                  .Width();
+                  .width();
   EXPECT_EQ(width, 10);
 }
 
@@ -109,7 +110,7 @@ TEST_F(LayoutVideoTest, DefaultPosterImageSize) {
   // Width should be the default video width, NOT poster image width
   int width = To<LayoutBox>(GetLayoutObjectByElementId("video"))
                   ->AbsoluteBoundingBoxRect()
-                  .Width();
+                  .width();
   EXPECT_NE(width, 10);
   EXPECT_EQ(width, LayoutVideo::kDefaultWidth);
 }

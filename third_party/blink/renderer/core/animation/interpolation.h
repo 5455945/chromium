@@ -1,14 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_INTERPOLATION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_INTERPOLATION_H_
 
+#include "third_party/blink/renderer/core/animation/effect_model.h"
 #include "third_party/blink/renderer/core/animation/interpolable_value.h"
 #include "third_party/blink/renderer/core/animation/property_handle.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
@@ -60,7 +62,10 @@ class CORE_EXPORT Interpolation : public GarbageCollected<Interpolation> {
   Interpolation& operator=(const Interpolation&) = delete;
   virtual ~Interpolation() {}
 
-  virtual void Interpolate(int iteration, double fraction) = 0;
+  virtual void Interpolate(
+      int iteration,
+      double fraction,
+      EffectModel::IterationCompositeOperation iteration_composite) = 0;
 
   virtual bool IsInvalidatableInterpolation() const { return false; }
   virtual bool IsTransitionInterpolation() const { return false; }
@@ -79,7 +84,7 @@ class CORE_EXPORT Interpolation : public GarbageCollected<Interpolation> {
   Interpolation() = default;
 };
 
-using ActiveInterpolations = HeapVector<Member<Interpolation>, 1>;
+using ActiveInterpolations = GCedHeapVector<Member<Interpolation>, 1>;
 using ActiveInterpolationsMap =
     HeapHashMap<PropertyHandle, Member<ActiveInterpolations>>;
 

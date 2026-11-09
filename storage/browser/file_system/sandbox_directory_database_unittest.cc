@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,6 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "storage/browser/test/sandbox_database_test_helper.h"
@@ -39,6 +38,10 @@ class SandboxDirectoryDatabaseTest : public testing::Test {
     EXPECT_TRUE(base_.CreateUniqueTempDir());
     InitDatabase();
   }
+
+  SandboxDirectoryDatabaseTest(const SandboxDirectoryDatabaseTest&) = delete;
+  SandboxDirectoryDatabaseTest& operator=(const SandboxDirectoryDatabaseTest&) =
+      delete;
 
   SandboxDirectoryDatabase* db() { return db_.get(); }
 
@@ -132,13 +135,19 @@ class SandboxDirectoryDatabaseTest : public testing::Test {
             .ok());
   }
 
+  // Moves the database entry for |file_id| to |new_key|.
+  void ReplaceFileEntryKey(FileId file_id, const std::string& new_key) {
+    std::string old_key = base::NumberToString(file_id);
+    std::string value;
+    ASSERT_TRUE(db()->db_->Get(leveldb::ReadOptions(), old_key, &value).ok());
+    ASSERT_TRUE(db()->db_->Put(leveldb::WriteOptions(), new_key, value).ok());
+    ASSERT_TRUE(db()->db_->Delete(leveldb::WriteOptions(), old_key).ok());
+  }
+
  protected:
   // Common temp base for nondestructive uses.
   base::ScopedTempDir base_;
   std::unique_ptr<SandboxDirectoryDatabase> db_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SandboxDirectoryDatabaseTest);
 };
 
 TEST_F(SandboxDirectoryDatabaseTest, TestMissingFileGetInfo) {
@@ -383,8 +392,8 @@ TEST_F(SandboxDirectoryDatabaseTest, TestUpdateModificationTime) {
   EXPECT_EQ(info0.name, info1.name);
   EXPECT_EQ(info0.parent_id, info1.parent_id);
   EXPECT_EQ(info0.data_path, info1.data_path);
-  EXPECT_EQ(floor(info0.modification_time.ToDoubleT()),
-            info1.modification_time.ToDoubleT());
+  EXPECT_EQ(floor(info0.modification_time.InSecondsFSinceUnixEpoch()),
+            info1.modification_time.InSecondsFSinceUnixEpoch());
 
   EXPECT_TRUE(db()->UpdateModificationTime(file_id, base::Time::UnixEpoch()));
   EXPECT_TRUE(db()->GetFileInfo(file_id, &info1));
@@ -392,8 +401,8 @@ TEST_F(SandboxDirectoryDatabaseTest, TestUpdateModificationTime) {
   EXPECT_EQ(info0.parent_id, info1.parent_id);
   EXPECT_EQ(info0.data_path, info1.data_path);
   EXPECT_NE(info0.modification_time, info1.modification_time);
-  EXPECT_EQ(info1.modification_time.ToDoubleT(),
-            floor(base::Time::UnixEpoch().ToDoubleT()));
+  EXPECT_EQ(info1.modification_time.InSecondsFSinceUnixEpoch(),
+            floor(base::Time::UnixEpoch().InSecondsFSinceUnixEpoch()));
 
   EXPECT_FALSE(db()->UpdateModificationTime(999, base::Time::UnixEpoch()));
 }
@@ -412,8 +421,8 @@ TEST_F(SandboxDirectoryDatabaseTest, TestSimpleFileOperations) {
   EXPECT_EQ(info0.parent_id, info1.parent_id);
   EXPECT_EQ(info0.data_path, info1.data_path);
   EXPECT_EQ(info0.name, info1.name);
-  EXPECT_EQ(floor(info0.modification_time.ToDoubleT()),
-            info1.modification_time.ToDoubleT());
+  EXPECT_EQ(floor(info0.modification_time.InSecondsFSinceUnixEpoch()),
+            info1.modification_time.InSecondsFSinceUnixEpoch());
 }
 
 TEST_F(SandboxDirectoryDatabaseTest, TestOverwritingMoveFileSrcDirectory) {
@@ -542,6 +551,23 @@ TEST_F(SandboxDirectoryDatabaseTest, TestConsistencyCheck_FileLost) {
   EXPECT_TRUE(db()->IsFileSystemConsistent());
   ASSERT_TRUE(base::DeleteFile(path().Append(kBackingFileName)));
   EXPECT_TRUE(db()->IsFileSystemConsistent());
+}
+
+TEST_F(SandboxDirectoryDatabaseTest,
+       TestConsistencyCheck_FileLostRemoveFailure) {
+  const base::FilePath::CharType kBackingFileName[] = FPL("hoge");
+  FileId file_id;
+  CreateFile(0, FPL("foo"), kBackingFileName, &file_id);
+
+  EXPECT_TRUE(db()->IsFileSystemConsistent());
+  ASSERT_TRUE(base::DeleteFile(path().Append(kBackingFileName)));
+
+  // Replace the canonical key with a non-canonical one so that ScanDatabase()
+  // visits the entry and attempts RemoveFileInfo(), which fails and closes the
+  // database via HandleError().
+  ReplaceFileEntryKey(file_id, "0" + base::NumberToString(file_id));
+
+  EXPECT_FALSE(db()->IsFileSystemConsistent());
 }
 
 TEST_F(SandboxDirectoryDatabaseTest, TestConsistencyCheck_OrphanFile) {

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,17 @@
 
 #include <math.h>
 
-#include "base/time/time.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/test/gfx_util.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size_f.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/geometry/transform_operations.h"
+#include "ui/gfx/geometry/test/geometry_util.h"
+#include "ui/gfx/test/sk_color_eq.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <float.h>
 #endif
 
@@ -19,7 +24,7 @@ namespace gfx {
 namespace {
 
 double next_double(double d) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return _nextafter(d, d + 1);
 #else
   // Step two units of least precision towards positive infinity. On some 32
@@ -137,36 +142,14 @@ TEST(TweenTest, LinearIntValueBetweenNegative) {
   EXPECT_EQ(0, Tween::LinearIntValueBetween(4.0 / 4.0, -2, 0));
 }
 
-TEST(TweenTest, ClampedFloatValueBetweenTimeTicks) {
-  const float v1 = 10.0f;
-  const float v2 = 20.0f;
-
-  const auto t0 = base::TimeTicks();
-
-  base::TimeTicks from = t0 + base::TimeDelta::FromSecondsD(1);
-  base::TimeTicks to = t0 + base::TimeDelta::FromSecondsD(2);
-
-  base::TimeTicks t_before = t0 + base::TimeDelta::FromSecondsD(0.9);
-  base::TimeTicks t_between = t0 + base::TimeDelta::FromSecondsD(1.6);
-  base::TimeTicks t_after = t0 + base::TimeDelta::FromSecondsD(2.2);
-
-  EXPECT_EQ(v1, Tween::ClampedFloatValueBetween(t_before, from, v1, to, v2));
-  EXPECT_EQ(16.0, Tween::ClampedFloatValueBetween(t_between, from, v1, to, v2));
-  EXPECT_EQ(v2, Tween::ClampedFloatValueBetween(t_after, from, v1, to, v2));
-}
-
 // Verifies the corners of the rect are animated, rather than the origin/size
 // (which would result in different rounding).
 TEST(TweenTest, RectValueBetween) {
   constexpr gfx::Rect r1(0, 0, 10, 10);
   constexpr gfx::Rect r2(10, 10, 30, 30);
 
-  // TODO(pkasting): Move the geometry test helpers from
-  // cc/test/geometry_test_utils.h to ui/gfx/test/gfx_util.h or similar and use
-  // a rect-comparison function here.
   const gfx::Rect tweened = Tween::RectValueBetween(0.08, r1, r2);
-  EXPECT_EQ(11, tweened.width());
-  EXPECT_EQ(11, tweened.height());
+  EXPECT_EQ(gfx::Size(11, 11), tweened.size());
 }
 
 TEST(TweenTest, SizeValueBetween) {
@@ -227,6 +210,18 @@ TEST(TweenTest, SizeFValueBetweenClampedExtrapolation) {
   // We should not extrapolate in this case as it would result in a negative and
   // invalid size.
   EXPECT_SIZEF_EQ(s1, Tween::SizeFValueBetween(kBefore, s1, s2));
+}
+
+// ACCEL_90_DECEL_5_70 is the time-reverse of ACCEL_5_70_DECEL_90, so an exit
+// played on it retraces the enter curve backwards.
+TEST(TweenTest, Accel90Decel570IsTimeReversedAccel570Decel90) {
+  for (int i = 0; i <= 20; ++i) {
+    const double t = i / 20.0;
+    EXPECT_NEAR(
+        Tween::CalculateValue(Tween::ACCEL_90_DECEL_5_70, t),
+        1.0 - Tween::CalculateValue(Tween::ACCEL_5_70_DECEL_90, 1.0 - t), 1e-4)
+        << "t = " << t;
+  }
 }
 
 }  // namespace

@@ -1,29 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_PASSWORDS_PASSWORD_BUBBLE_VIEW_BASE_H_
 #define CHROME_BROWSER_UI_VIEWS_PASSWORDS_PASSWORD_BUBBLE_VIEW_BASE_H_
 
-#include <memory>
-
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace content {
 class WebContents;
 }
 
-namespace password_manager {
-struct PasswordForm;
-}  // namespace password_manager
-
-namespace views {
-class Label;
-}
-
-class FeaturePromoControllerViews;
+class BrowserWindowInterface;
 class PasswordBubbleControllerBase;
 
 // Base class for all manage-passwords bubbles. Provides static methods for
@@ -36,7 +27,12 @@ class PasswordBubbleControllerBase;
 // no longer relevant for checking dialog ownership. These two work items should
 // make this base class significantly smaller.
 class PasswordBubbleViewBase : public LocationBarBubbleDelegateView {
+  METADATA_HEADER(PasswordBubbleViewBase, LocationBarBubbleDelegateView)
+
  public:
+  PasswordBubbleViewBase(const PasswordBubbleViewBase&) = delete;
+  PasswordBubbleViewBase& operator=(const PasswordBubbleViewBase&) = delete;
+
   // Returns a pointer to the bubble.
   static PasswordBubbleViewBase* manage_password_bubble() {
     return g_manage_passwords_bubble_;
@@ -50,9 +46,8 @@ class PasswordBubbleViewBase : public LocationBarBubbleDelegateView {
   // current password_manager::ui::State value for the provided |web_contents|.
   static PasswordBubbleViewBase* CreateBubble(
       content::WebContents* web_contents,
-      views::View* anchor_view,
-      DisplayReason reason,
-      FeaturePromoControllerViews* promo_controller);
+      views::BubbleAnchor anchor_view,
+      DisplayReason reason);
 
   // Closes the existing bubble.
   static void CloseCurrentBubble();
@@ -68,40 +63,37 @@ class PasswordBubbleViewBase : public LocationBarBubbleDelegateView {
   virtual PasswordBubbleControllerBase* GetController() = 0;
   virtual const PasswordBubbleControllerBase* GetController() const = 0;
 
+  // views::View:
+  void OnMouseEntered(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
+
  protected:
   // The |easily_dismissable| flag indicates if the bubble should close upon
   // a click in the content area of the browser.
   PasswordBubbleViewBase(content::WebContents* web_contents,
-                         views::View* anchor_view,
+                         views::BubbleAnchor anchor_view,
                          bool easily_dismissable);
 
   ~PasswordBubbleViewBase() override;
 
-  static std::unique_ptr<views::Label> CreateUsernameLabel(
-      const password_manager::PasswordForm& form);
-  static std::unique_ptr<views::Label> CreatePasswordLabel(
-      const password_manager::PasswordForm& form);
-
   // Sets the resource ids of the images used in the header in light and dark
   // mode.
+  // TODO(crbug.com/427581151): Remove this function once all callsites are
+  // converted to use the Lottie version. Then rename the Lottie function.
   void SetBubbleHeader(int light_image_id, int dark_image_id);
+
+  // Similar to SetBubbleHeader but specifically used for lottie illustrations.
+  void SetBubbleHeaderLottie(int lottie_image_id);
 
  private:
   // views::BubbleDialogDelegateView:
   void Init() override;
 
-  // WidgetObserver:
-  void OnWidgetClosing(views::Widget* widget) override;
+  raw_ptr<BrowserWindowInterface> browser_ = nullptr;
 
   // Singleton instance of the Password bubble.The instance is owned by the
   // Bubble and will be deleted when the bubble closes.
   static PasswordBubbleViewBase* g_manage_passwords_bubble_;
-
-  // Listens for WebContentsView events and closes the bubble so the bubble gets
-  // dismissed when users keep using the web page.
-  std::unique_ptr<WebContentMouseHandler> mouse_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(PasswordBubbleViewBase);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PASSWORDS_PASSWORD_BUBBLE_VIEW_BASE_H_

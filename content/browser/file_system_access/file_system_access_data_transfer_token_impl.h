@@ -1,14 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_FILE_SYSTEM_ACCESS_FILE_SYSTEM_ACCESS_DATA_TRANSFER_TOKEN_IMPL_H_
 #define CONTENT_BROWSER_FILE_SYSTEM_ACCESS_FILE_SYSTEM_ACCESS_DATA_TRANSFER_TOKEN_IMPL_H_
 
-#include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
+#include "base/sequence_checker.h"
+#include "base/thread_annotations.h"
 #include "base/unguessable_token.h"
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/file_system_access_permission_context.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_data_transfer_token.mojom.h"
@@ -27,8 +30,7 @@ class CONTENT_EXPORT FileSystemAccessDataTransferTokenImpl
  public:
   FileSystemAccessDataTransferTokenImpl(
       FileSystemAccessManagerImpl* manager,
-      FileSystemAccessManagerImpl::PathType path_type,
-      const base::FilePath& file_path,
+      const content::PathInfo& file_path_info,
       int renderer_process_id,
       mojo::PendingReceiver<blink::mojom::FileSystemAccessDataTransferToken>
           receiver);
@@ -43,9 +45,7 @@ class CONTENT_EXPORT FileSystemAccessDataTransferTokenImpl
 
   int renderer_process_id() const { return renderer_process_id_; }
 
-  FileSystemAccessManagerImpl::PathType path_type() const { return path_type_; }
-
-  const base::FilePath& file_path() const { return file_path_; }
+  const content::PathInfo& file_path_info() const { return file_path_info_; }
 
   const base::UnguessableToken& token() const { return token_; }
 
@@ -59,10 +59,11 @@ class CONTENT_EXPORT FileSystemAccessDataTransferTokenImpl
  private:
   void OnMojoDisconnect();
 
+  SEQUENCE_CHECKER(sequence_checker_);
+
   // Raw pointer since FileSystemAccessManagerImpl owns `this`.
-  FileSystemAccessManagerImpl* const manager_;
-  const FileSystemAccessManagerImpl::PathType path_type_;
-  const base::FilePath file_path_;
+  const raw_ptr<FileSystemAccessManagerImpl> manager_ = nullptr;
+  const content::PathInfo file_path_info_;
   const int renderer_process_id_;
   const base::UnguessableToken token_;
 
@@ -70,7 +71,8 @@ class CONTENT_EXPORT FileSystemAccessDataTransferTokenImpl
   // the originally constructed instance and then additional receivers for
   // each clone. `manager_` must not remove this token until `receivers_` is
   // empty.
-  mojo::ReceiverSet<blink::mojom::FileSystemAccessDataTransferToken> receivers_;
+  mojo::ReceiverSet<blink::mojom::FileSystemAccessDataTransferToken> receivers_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 };
 
 }  // namespace content

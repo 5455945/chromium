@@ -1,24 +1,28 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WAKE_LOCK_WAKE_LOCK_TEST_UTILS_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WAKE_LOCK_WAKE_LOCK_TEST_UTILS_H_
 
-#include "base/callback.h"
+#include <array>
+#include <optional>
+
+#include "base/functional/callback.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "services/device/public/mojom/wake_lock.mojom-blink-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/device/public/mojom/wake_lock.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/wake_lock/wake_lock.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_function.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/modules/wake_lock/wake_lock_type.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -76,7 +80,7 @@ class MockWakeLockService : public mojom::blink::WakeLockService {
 
   void BindRequest(mojo::ScopedMessagePipeHandle handle);
 
-  MockWakeLock& get_wake_lock(WakeLockType type);
+  MockWakeLock& get_wake_lock(V8WakeLockType::Enum type);
 
  private:
   // mojom::blink::WakeLockService implementation
@@ -86,7 +90,7 @@ class MockWakeLockService : public mojom::blink::WakeLockService {
       const String& description,
       mojo::PendingReceiver<device::mojom::blink::WakeLock> receiver) override;
 
-  MockWakeLock mock_wake_lock_[kWakeLockTypeCount];
+  std::array<MockWakeLock, V8WakeLockType::kEnumSize> mock_wake_lock_;
   mojo::ReceiverSet<mojom::blink::WakeLockService> receivers_;
 };
 
@@ -100,40 +104,57 @@ class MockPermissionService final : public mojom::blink::PermissionService {
 
   void BindRequest(mojo::ScopedMessagePipeHandle handle);
 
-  void SetPermissionResponse(WakeLockType, mojom::blink::PermissionStatus);
+  void SetPermissionResponse(V8WakeLockType::Enum,
+                             mojom::blink::PermissionStatus);
 
-  void WaitForPermissionRequest(WakeLockType);
+  void WaitForPermissionRequest(V8WakeLockType::Enum);
 
  private:
   bool GetWakeLockTypeFromDescriptor(
       const mojom::blink::PermissionDescriptorPtr& descriptor,
-      WakeLockType* output);
+      V8WakeLockType::Enum* output);
 
   // mojom::blink::PermissionService implementation
   void HasPermission(mojom::blink::PermissionDescriptorPtr permission,
                      HasPermissionCallback) override;
+  void RegisterPageEmbeddedPermissionControl(
+      Vector<mojom::blink::PermissionDescriptorPtr> permissions,
+      mojom::blink::EmbeddedPermissionRequestDescriptorPtr descriptor,
+      mojo::PendingRemote<mojom::blink::EmbeddedPermissionControlClient> client)
+      override;
+  void RequestPageEmbeddedPermission(
+      Vector<mojom::blink::PermissionDescriptorPtr> descriptors,
+      mojom::blink::EmbeddedPermissionRequestDescriptorPtr permissions,
+      RequestPageEmbeddedPermissionCallback) override;
   void RequestPermission(mojom::blink::PermissionDescriptorPtr permission,
-                         bool user_gesture,
                          RequestPermissionCallback) override;
   void RequestPermissions(
       Vector<mojom::blink::PermissionDescriptorPtr> permissions,
-      bool user_gesture,
       RequestPermissionsCallback) override;
   void RevokePermission(mojom::blink::PermissionDescriptorPtr permission,
                         RevokePermissionCallback) override;
   void AddPermissionObserver(
       mojom::blink::PermissionDescriptorPtr permission,
+      mojom::blink::PermissionStatusWithDetailsPtr last_known_status,
+      mojo::PendingRemote<mojom::blink::PermissionObserver>) override;
+  void AddPageEmbeddedPermissionObserver(
+      mojom::blink::PermissionDescriptorPtr permission,
       mojom::blink::PermissionStatus last_known_status,
       mojo::PendingRemote<mojom::blink::PermissionObserver>) override;
+  void NotifyEventListener(mojom::blink::PermissionDescriptorPtr permission,
+                           const String& event_type,
+                           bool is_added) override;
 
   void OnConnectionError();
 
   mojo::Receiver<mojom::blink::PermissionService> receiver_{this};
 
-  absl::optional<mojom::blink::PermissionStatus>
-      permission_responses_[kWakeLockTypeCount];
+  std::array<std::optional<mojom::blink::PermissionStatus>,
+             V8WakeLockType::kEnumSize>
+      permission_responses_;
 
-  base::OnceClosure request_permission_callbacks_[kWakeLockTypeCount];
+  std::array<base::OnceClosure, V8WakeLockType::kEnumSize>
+      request_permission_callbacks_;
 };
 
 // Overrides requests for WakeLockService with MockWakeLockService instances.
@@ -160,10 +181,10 @@ class WakeLockTestingContext final {
   MockPermissionService& GetPermissionService();
 
   // Synchronously waits for |promise| to be fulfilled.
-  ScriptPromise WaitForPromiseFulfillment(ScriptPromise promise);
+  void WaitForPromiseFulfillment(ScriptPromise<WakeLockSentinel> promise);
 
   // Synchronously waits for |promise| to be rejected.
-  void WaitForPromiseRejection(ScriptPromise promise);
+  void WaitForPromiseRejection(ScriptPromise<WakeLockSentinel> promise);
 
  private:
   MockPermissionService permission_service_;
@@ -175,18 +196,21 @@ class ScriptPromiseUtils final {
  public:
   // Shorthand for getting a PromiseState out of a ScriptPromise.
   static v8::Promise::PromiseState GetPromiseState(
-      const ScriptPromise& promise);
+      const ScriptPromise<WakeLockSentinel>& promise);
 
-  // Shorthand for getting a DOMException* out of a ScriptPromise. This assumes
-  // the promise has been resolved with a DOMException. If the conversion fails,
-  // nullptr is returned.
-  static DOMException* GetPromiseResolutionAsDOMException(const ScriptPromise&);
+  // Shorthand for getting a DOMException* out of a ScriptPromise. This
+  // assumes the promise has been resolved with a DOMException. If the
+  // conversion fails, nullptr is returned.
+  static DOMException* GetPromiseResolutionAsDOMException(
+      v8::Isolate*,
+      const ScriptPromise<WakeLockSentinel>&);
 
-  // Shorthand for getting a WakeLockSentinel* out of a ScriptPromise. This
-  // assumes the promise has been resolved with a WakeLockSentinel. If the
+  // Shorthand for getting a WakeLockSentinel* out of a ScriptPromise.
+  // This assumes the promise has been resolved with a WakeLockSentinel. If the
   // conversion fails, nullptr is returned.
   static WakeLockSentinel* GetPromiseResolutionAsWakeLockSentinel(
-      const ScriptPromise&);
+      v8::Isolate*,
+      const ScriptPromise<WakeLockSentinel>&);
 };
 
 }  // namespace blink

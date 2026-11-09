@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,15 @@
 #define MEDIA_MIDI_TASK_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/thread_annotations.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
@@ -31,20 +30,25 @@ class MIDI_EXPORT TaskService final {
   using InstanceId = int64_t;
 
   static constexpr RunnerId kDefaultRunnerId = 0;
+  static constexpr InstanceId kInvalidInstanceId = -1;
 
   TaskService();
+
+  TaskService(const TaskService&) = delete;
+  TaskService& operator=(const TaskService&) = delete;
+
   ~TaskService();
 
   // Issues an InstanceId internally to post tasks via PostBoundTask() and
   // PostDelayedBoundTask() with the InstanceId. Once UnbindInstance() is
   // called, tasks posted via these methods with unbind InstanceId won't be
   // invoked any more.
-  // Returns true if call is bound or unbound correctly. Otherwise returns
-  // false, that happens when the BindInstance() is called twice without
-  // unbinding the previous instance, or the UnbindInstance() is called without
-  // any successful BindInstance() call.
-  bool BindInstance() WARN_UNUSED_RESULT;
-  bool UnbindInstance() WARN_UNUSED_RESULT;
+  // BindInstance() returns the bound InstanceId, or nullopt if
+  // it fails (e.g., if another instance is already bound).
+  // UnbindInstance() returns true if unbound correctly, or false if there
+  // was no active binding.
+  [[nodiscard]] std::optional<InstanceId> BindInstance();
+  [[nodiscard]] bool UnbindInstance();
 
   // Checks if the current thread belongs to the specified runner.
   bool IsOnTaskRunner(RunnerId runner_id);
@@ -59,7 +63,20 @@ class MIDI_EXPORT TaskService final {
   // |runner_id| should be |kDefaultRunnerId| or a positive number. If
   // |kDefaultRunnerId| is specified, the task runs on the thread on which
   // BindInstance() was called.
-  void PostBoundTask(RunnerId runner, base::OnceClosure task);
+  //
+  // The overloads taking |instance_id| will only run the task if the instance
+  // is still bound (i.e., UnbindInstance() has not been called for this
+  // instance) when the task is about to run.
+  // The overloads without |instance_id| will bind the task to the current
+  // bound instance at the time of posting.
+  void PostBoundTask(InstanceId instance_id,
+                     RunnerId runner_id,
+                     base::OnceClosure task);
+  void PostBoundTask(RunnerId runner_id, base::OnceClosure task);
+  void PostBoundDelayedTask(InstanceId instance_id,
+                            RunnerId runner_id,
+                            base::OnceClosure task,
+                            base::TimeDelta delay);
   void PostBoundDelayedTask(RunnerId runner_id,
                             base::OnceClosure task,
                             base::TimeDelta delay);
@@ -67,8 +84,6 @@ class MIDI_EXPORT TaskService final {
   void OverflowInstanceIdForTesting();
 
  private:
-  static constexpr TaskService::InstanceId kInvalidInstanceId = -1;
-
   // Returns a SingleThreadTaskRunner reference. Each TaskRunner will be
   // constructed on demand.
   scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner(RunnerId runner_id);
@@ -111,8 +126,6 @@ class MIDI_EXPORT TaskService final {
   // Verifies all UnbindInstance() calls occur on the same sequence as
   // BindInstance().
   SEQUENCE_CHECKER(instance_binding_sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(TaskService);
 };
 
 }  // namespace midi

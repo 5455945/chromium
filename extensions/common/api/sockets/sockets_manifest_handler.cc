@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,20 +11,21 @@
 
 namespace extensions {
 
-SocketsManifestHandler::SocketsManifestHandler() {}
+SocketsManifestHandler::SocketsManifestHandler() = default;
 
-SocketsManifestHandler::~SocketsManifestHandler() {}
+SocketsManifestHandler::~SocketsManifestHandler() = default;
 
 bool SocketsManifestHandler::Parse(Extension* extension,
                                    std::u16string* error) {
-  const base::Value* sockets = NULL;
-  CHECK(extension->manifest()->Get(manifest_keys::kSockets, &sockets));
+  const base::Value* sockets =
+      extension->manifest()->FindPath(manifest_keys::kSockets);
+  CHECK(sockets != nullptr);
   std::unique_ptr<SocketsManifestData> data =
       SocketsManifestData::FromValue(*sockets, error);
   if (!data)
     return false;
 
-  extension->SetManifestData(manifest_keys::kSockets, std::move(data));
+  extension->SetManifestData(std::move(data));
   return true;
 }
 
@@ -34,10 +35,10 @@ ManifestPermission* SocketsManifestHandler::CreatePermission() {
 
 ManifestPermission* SocketsManifestHandler::CreateInitialRequiredPermission(
     const Extension* extension) {
-  SocketsManifestData* data = SocketsManifestData::Get(extension);
+  const SocketsManifestData* data = SocketsManifestData::Get(extension);
   if (data)
     return data->permission()->Clone().release();
-  return NULL;
+  return nullptr;
 }
 
 base::span<const char* const> SocketsManifestHandler::Keys() const {

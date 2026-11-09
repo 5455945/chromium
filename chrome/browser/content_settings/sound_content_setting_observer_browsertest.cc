@@ -1,22 +1,26 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/content_settings/sound_content_setting_observer.h"
 
 #include "base/run_loop.h"
+#include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/content_settings/sound_content_setting_observer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_utils.h"
+#include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -29,17 +33,18 @@ namespace {
 
 const char* kMediaTestDataPath = "media/test/data";
 
-// Observes a WebContents and waits until it becomes audible.
-// both indicate that they are audible.
-class TestAudioStartObserver : public content::WebContentsObserver {
+// Observes a WebContents and waits until the audio state is updated.
+class TestAudioStateObserver : public content::WebContentsObserver {
  public:
-  TestAudioStartObserver(content::WebContents* web_contents,
-                         base::OnceClosure quit_closure)
+  TestAudioStateObserver(content::WebContents* web_contents,
+                         base::OnceClosure quit_closure,
+                         bool is_audible = false)
       : content::WebContentsObserver(web_contents),
         quit_closure_(std::move(quit_closure)) {
-    DCHECK(!web_contents->IsCurrentlyAudible());
+    if (!is_audible)
+      DCHECK(!web_contents->IsCurrentlyAudible());
   }
-  ~TestAudioStartObserver() override = default;
+  ~TestAudioStateObserver() override = default;
 
   // WebContentsObserver:
   void OnAudioStateChanged(bool audible) override {
@@ -48,6 +53,7 @@ class TestAudioStartObserver : public content::WebContentsObserver {
     audio_state_changed_ = true;
   }
 
+  void set_audio_state_changed(bool value) { audio_state_changed_ = value; }
   bool audio_state_changed() { return audio_state_changed_; }
 
  private:
@@ -110,11 +116,10 @@ class TestAutoplayConfigurationClient
 // overrides binding for blink::mojom::AutoplayConfigurationClient.
 class MultipleFramesObserver : public content::WebContentsObserver {
  public:
-  explicit MultipleFramesObserver(content::WebContents* web_contents)
-      : content::WebContentsObserver(web_contents) {}
+  explicit MultipleFramesObserver(content::WebContents* web_contents,
+                                  size_t num_frames)
+      : content::WebContentsObserver(web_contents), num_frames_(num_frames) {}
   ~MultipleFramesObserver() override = default;
-
-  const size_t kMaxFrameSize = 2u;
 
   void RenderFrameCreated(
       content::RenderFrameHost* render_frame_host) override {
@@ -124,18 +129,36 @@ class MultipleFramesObserver : public content::WebContentsObserver {
         std::make_unique<TestAutoplayConfigurationClient>();
     OverrideInterface(render_frame_host,
                       frame_to_client_map_[render_frame_host].get());
-    if (quit_on_sub_frame_created_) {
-      if (frame_to_client_map_.size() == kMaxFrameSize)
+    if (render_frame_host->GetParent() && quit_on_sub_frame_created_) {
+      if (frame_to_client_map_.size() == num_frames_)
         std::move(quit_on_sub_frame_created_).Run();
+    } else if (render_frame_host->IsFencedFrameRoot() &&
+               quit_on_fenced_frame_created_) {
+      if (frame_to_client_map_.size() == num_frames_)
+        std::move(quit_on_fenced_frame_created_).Run();
     }
+  }
+
+  void RenderFrameDeleted(
+      content::RenderFrameHost* render_frame_host) override {
+    frame_to_client_map_.erase(render_frame_host);
   }
 
   // Waits for sub frame creations.
   void WaitForSubFrame() {
-    if (frame_to_client_map_.size() == kMaxFrameSize)
+    if (frame_to_client_map_.size() == num_frames_)
       return;
     base::RunLoop run_loop;
     quit_on_sub_frame_created_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+  // Wait for fenced frame creation.
+  void WaitForFencedFrame() {
+    if (frame_to_client_map_.size() == num_frames_)
+      return;
+    base::RunLoop run_loop;
+    quit_on_fenced_frame_created_ = run_loop.QuitClosure();
     run_loop.Run();
   }
 
@@ -143,14 +166,18 @@ class MultipleFramesObserver : public content::WebContentsObserver {
   // it searches for the main frame and return it. Otherwise, it returns a
   // sub frame.
   TestAutoplayConfigurationClient* GetTestClient(bool request_main_frame) {
-    for (auto& client : frame_to_client_map_) {
-      bool is_main_frame = client.first->GetMainFrame() == client.first;
-      bool expected = request_main_frame ? is_main_frame : !is_main_frame;
-      if (expected)
-        return client.second.get();
-    }
-    NOTREACHED();
-    return nullptr;
+    return GetTestClientWithFilter(base::BindLambdaForTesting(
+        [&request_main_frame](content::RenderFrameHost* rfh) {
+          bool is_main_frame = rfh->GetMainFrame() == rfh;
+          return request_main_frame ? is_main_frame : !is_main_frame;
+        }));
+  }
+
+  TestAutoplayConfigurationClient* GetTestClientForFencedFrame() {
+    return GetTestClientWithFilter(
+        base::BindLambdaForTesting([](content::RenderFrameHost* rfh) {
+          return rfh->IsFencedFrameRoot();
+        }));
   }
 
  private:
@@ -163,10 +190,22 @@ class MultipleFramesObserver : public content::WebContentsObserver {
                                 base::Unretained(client)));
   }
 
+  using Filter = base::RepeatingCallback<bool(content::RenderFrameHost*)>;
+  TestAutoplayConfigurationClient* GetTestClientWithFilter(Filter filter) {
+    for (auto& client : frame_to_client_map_) {
+      if (filter.Run(client.first)) {
+        return client.second.get();
+      }
+    }
+    NOTREACHED();
+  }
+
   std::map<content::RenderFrameHost*,
            std::unique_ptr<TestAutoplayConfigurationClient>>
       frame_to_client_map_;
   base::OnceClosure quit_on_sub_frame_created_;
+  base::OnceClosure quit_on_fenced_frame_created_;
+  size_t num_frames_;
 };
 
 }  // namespace
@@ -189,6 +228,7 @@ class SoundContentSettingObserverBrowserTest : public InProcessBrowserTest {
 
  private:
   content::test::PrerenderTestHelper prerender_helper_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // Tests that the prerending doesn't affect SoundContentSettingObserver status
@@ -204,29 +244,29 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   // Configures to check `logged_site_muted_ukm_` in
   // SoundContentSettingObserver.
   HostContentSettingsMap* content_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   content_settings->SetDefaultContentSetting(ContentSettingsType::SOUND,
                                              CONTENT_SETTING_BLOCK);
 
   GURL url = embedded_test_server()->GetURL("/webaudio_oscillator.html");
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   // Start the audio on the current main frame.
   base::RunLoop run_loop;
-  TestAudioStartObserver audio_start_observer(web_contents(),
+  TestAudioStateObserver audio_state_observer(web_contents(),
                                               run_loop.QuitClosure());
-  EXPECT_EQ("OK", content::EvalJs(web_contents(), "StartOscillator();",
-                                  content::EXECUTE_SCRIPT_USE_MANUAL_REPLY));
+  EXPECT_EQ("OK", content::EvalJs(web_contents(), "StartOscillator();"));
   run_loop.Run();
 
   SoundContentSettingObserver* observer =
-      SoundContentSettingObserver::FromWebContents(web_contents());
+      SoundContentSettingObserver::From(browser()->GetActiveTabInterface());
   // `logged_site_muted_ukm_` should be set.
   EXPECT_TRUE(observer->HasLoggedSiteMutedUkmForTesting());
 
   // Loads a page in the prerender.
   auto prerender_url = embedded_test_server()->GetURL("/simple.html");
-  int host_id = prerender_helper()->AddPrerender(prerender_url);
+  content::PrerenderHostId host_id =
+      prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   // The prerendering should not affect the current status.
   EXPECT_TRUE(observer->HasLoggedSiteMutedUkmForTesting());
@@ -254,13 +294,12 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   // Configures SoundContentSettingObserver.
   GURL url = embedded_test_server()->GetURL("/simple.html");
   HostContentSettingsMap* content_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
-  content_settings->SetWebsiteSettingDefaultScope(
-      url, url, ContentSettingsType::SOUND,
-      std::make_unique<base::Value>(CONTENT_SETTING_ALLOW));
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
+  content_settings->SetContentSettingDefaultScope(
+      url, url, ContentSettingsType::SOUND, CONTENT_SETTING_ALLOW);
 
   // Loads a simple page.
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::test::PrerenderHostRegistryObserver registry_observer(
       *web_contents());
@@ -268,12 +307,13 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
 
   // Creates MultipleFramesObserver to intercept AddAutoplayFlags() for each
   // frame.
-  MultipleFramesObserver observer{web_contents()};
+  MultipleFramesObserver observer{web_contents(), 2};
 
   // Loads a page in the prerender.
   prerender_helper()->AddPrerenderAsync(prerender_url);
   registry_observer.WaitForTrigger(prerender_url);
-  auto host_id = prerender_helper()->GetHostForUrl(prerender_url);
+  content::PrerenderHostId host_id =
+      prerender_helper()->GetHostForUrl(prerender_url);
 
   // Adds the expected url and flag for the main frame.
   observer.GetTestClient(true)->AddExpectedOriginAndFlags(
@@ -309,71 +349,6 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   EXPECT_TRUE(host_observer.was_activated());
 }
 
-// Tests that the page in the prerendering doesn't change the audio state. After
-// the page is activated, it can play a sound and change the audio state.
-IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
-                       AudioStateIsNotChangedInPrerendering) {
-  // Sets up the embedded test server to serve the test javascript file.
-  embedded_test_server()->ServeFilesFromSourceDirectory(kMediaTestDataPath);
-  net::test_server::EmbeddedTestServerHandle test_server_handle;
-  ASSERT_TRUE(test_server_handle =
-                  embedded_test_server()->StartAndReturnHandle());
 
-  // Allows to play a sound by default.
-  HostContentSettingsMap* content_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
-  content_settings->SetDefaultContentSetting(ContentSettingsType::SOUND,
-                                             CONTENT_SETTING_BLOCK);
 
-  // Loads a simple page as a primary page.
-  GURL url = embedded_test_server()->GetURL("/simple.html");
-  ui_test_utils::NavigateToURL(browser(), url);
 
-  content::test::PrerenderHostRegistryObserver registry_observer(
-      *web_contents());
-  // Loads a page in the prerender.
-  auto prerender_url =
-      embedded_test_server()->GetURL("/webaudio_oscillator.html");
-  prerender_helper()->AddPrerenderAsync(prerender_url);
-  registry_observer.WaitForTrigger(prerender_url);
-  auto host_id = prerender_helper()->GetHostForUrl(prerender_url);
-  EXPECT_NE(content::RenderFrameHost::kNoFrameTreeNodeId, host_id);
-
-  content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
-  content::RenderFrameHost* render_frame_host =
-      prerender_helper()->GetPrerenderedMainFrameHost(host_id);
-  EXPECT_TRUE(content::WaitForRenderFrameReady(render_frame_host));
-  // Tries to start the audio on the prerendered page.
-  {
-    base::RunLoop run_loop;
-    TestAudioStartObserver audio_start_observer(web_contents(),
-                                                run_loop.QuitClosure());
-    content::ExecuteScriptAsync(render_frame_host, "StartOscillator();");
-    // The prerendering page should not start the audio.
-    EXPECT_FALSE(audio_start_observer.audio_state_changed());
-  }
-  // The prerendering should not affect the current status.
-  SoundContentSettingObserver* observer =
-      SoundContentSettingObserver::FromWebContents(web_contents());
-  EXPECT_FALSE(observer->HasLoggedSiteMutedUkmForTesting());
-
-  // Activates the page from the prerendering.
-  prerender_helper()->NavigatePrimaryPage(prerender_url);
-  // Makes sure that the page is activated from the prerendering.
-  EXPECT_TRUE(host_observer.was_activated());
-  EXPECT_TRUE(content::WaitForRenderFrameReady(web_contents()->GetMainFrame()));
-  // Tries to start the audio on the primary page.
-  {
-    base::RunLoop run_loop;
-    TestAudioStartObserver audio_start_observer(web_contents(),
-                                                run_loop.QuitClosure());
-    EXPECT_EQ("OK", content::EvalJs(web_contents(), "StartOscillator();",
-                                    content::EXECUTE_SCRIPT_USE_MANUAL_REPLY));
-    run_loop.Run();
-    // The page should try to start the audio.
-    EXPECT_TRUE(audio_start_observer.audio_state_changed());
-  }
-  // The page starts logging for the muted site since the setting is
-  // CONTENT_SETTING_BLOCK.
-  EXPECT_TRUE(observer->HasLoggedSiteMutedUkmForTesting());
-}

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,14 @@
 #include <unordered_map>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/values.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_test_util.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_util.h"
@@ -194,7 +193,10 @@ class MetadataDatabaseTest : public testing::TestWithParam<bool> {
         next_file_id_number_(1),
         next_md5_sequence_number_(1) {}
 
-  virtual ~MetadataDatabaseTest() {}
+  MetadataDatabaseTest(const MetadataDatabaseTest&) = delete;
+  MetadataDatabaseTest& operator=(const MetadataDatabaseTest&) = delete;
+
+  virtual ~MetadataDatabaseTest() = default;
 
   void SetUp() override {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
@@ -235,13 +237,12 @@ class MetadataDatabaseTest : public testing::TestWithParam<bool> {
     base::RunLoop().RunUntilIdle();
   }
 
-  void SetUpDatabaseByTrackedFiles(const TrackedFile** tracked_files,
-                                   int size) {
+  void SetUpDatabaseByTrackedFiles(
+      base::span<const TrackedFile*> tracked_files) {
     std::unique_ptr<LevelDBWrapper> db = InitializeLevelDB();
     ASSERT_TRUE(db);
 
-    for (int i = 0; i < size; ++i) {
-      const TrackedFile* file = tracked_files[i];
+    for (const auto* file : tracked_files) {
       if (file->should_be_absent)
         continue;
       if (!file->tracker_only)
@@ -268,9 +269,10 @@ class MetadataDatabaseTest : public testing::TestWithParam<bool> {
         file.tracker.tracker_id(), nullptr));
   }
 
-  void VerifyTrackedFiles(const TrackedFile** tracked_files, int size) {
-    for (int i = 0; i < size; ++i)
-      VerifyTrackedFile(*tracked_files[i]);
+  void VerifyTrackedFiles(base::span<const TrackedFile*> tracked_files) {
+    for (const auto* file : tracked_files) {
+      VerifyTrackedFile(*file);
+    }
   }
 
   MetadataDatabase* metadata_database() { return metadata_database_.get(); }
@@ -634,8 +636,6 @@ class MetadataDatabaseTest : public testing::TestWithParam<bool> {
   int64_t next_tracker_id_;
   int64_t next_file_id_number_;
   int64_t next_md5_sequence_number_;
-
-  DISALLOW_COPY_AND_ASSIGN(MetadataDatabaseTest);
 };
 
 INSTANTIATE_TEST_SUITE_P(MetadataDatabaseTestWithIndexesOnDisk,
@@ -674,11 +674,11 @@ TEST_P(MetadataDatabaseTest, InitializationTest_SimpleTree) {
     &sync_root, &app_root, &file, &folder, &file_in_folder, &orphaned_file
   };
 
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
 
   orphaned_file.should_be_absent = true;
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
 }
 
 TEST_P(MetadataDatabaseTest, AppManagementTest) {
@@ -694,9 +694,9 @@ TEST_P(MetadataDatabaseTest, AppManagementTest) {
   const TrackedFile* tracked_files[] = {
     &sync_root, &app_root, &file, &folder,
   };
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
 
   folder.tracker.set_app_id("foo");
   EXPECT_EQ(SYNC_STATUS_OK, RegisterApp(
@@ -911,7 +911,7 @@ TEST_P(MetadataDatabaseTest, UpdateByChangeListTest) {
     &new_file,
   };
 
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
 
   ApplyRenameChangeToMetadata("renamed", &renamed_file.metadata);
@@ -948,7 +948,7 @@ TEST_P(MetadataDatabaseTest, UpdateByChangeListTest) {
 
   new_file.should_be_absent = false;
 
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 }
 
@@ -970,9 +970,9 @@ TEST_P(MetadataDatabaseTest, PopulateFolderTest_RegularFolder) {
     &sync_root, &app_root, &folder_to_populate, &known_file, &new_file
   };
 
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
 
   FileIDList listed_children;
   listed_children.push_back(known_file.metadata.file_id());
@@ -990,7 +990,7 @@ TEST_P(MetadataDatabaseTest, PopulateFolderTest_RegularFolder) {
   new_file.tracker.clear_synced_details();
   new_file.should_be_absent = false;
   new_file.tracker_only = true;
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 }
 
@@ -1010,9 +1010,9 @@ TEST_P(MetadataDatabaseTest, PopulateFolderTest_InactiveFolder) {
     &sync_root, &app_root, &inactive_folder, &new_file,
   };
 
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
 
   FileIDList listed_children;
   listed_children.push_back(new_file.metadata.file_id());
@@ -1020,7 +1020,7 @@ TEST_P(MetadataDatabaseTest, PopulateFolderTest_InactiveFolder) {
   EXPECT_EQ(SYNC_STATUS_OK,
             PopulateFolder(inactive_folder.metadata.file_id(),
                            listed_children));
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 }
 
@@ -1039,9 +1039,9 @@ TEST_P(MetadataDatabaseTest, PopulateFolderTest_DisabledAppRoot) {
     &sync_root, &disabled_app_root, &disabled_app_root, &known_file, &file,
   };
 
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
 
   FileIDList disabled_app_children;
   disabled_app_children.push_back(file.metadata.file_id());
@@ -1056,7 +1056,7 @@ TEST_P(MetadataDatabaseTest, PopulateFolderTest_DisabledAppRoot) {
 
   disabled_app_root.tracker.set_dirty(false);
   disabled_app_root.tracker.set_needs_folder_listing(false);
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 }
 
@@ -1082,15 +1082,15 @@ TEST_P(MetadataDatabaseTest, DISABLED_UpdateTrackerTest) {
     &sync_root, &app_root, &file, &inactive_file, &new_conflict
   };
 
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
+  SetUpDatabaseByTrackedFiles(tracked_files);
   EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 
   *file.tracker.mutable_synced_details() = file.metadata.details();
   file.tracker.set_dirty(false);
   EXPECT_EQ(SYNC_STATUS_OK, UpdateTracker(file.tracker));
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 
   *inactive_file.tracker.mutable_synced_details() =
@@ -1098,7 +1098,7 @@ TEST_P(MetadataDatabaseTest, DISABLED_UpdateTrackerTest) {
   inactive_file.tracker.set_dirty(false);
   inactive_file.tracker.set_active(true);
   EXPECT_EQ(SYNC_STATUS_OK, UpdateTracker(inactive_file.tracker));
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 
   *new_conflict.tracker.mutable_synced_details() =
@@ -1108,7 +1108,7 @@ TEST_P(MetadataDatabaseTest, DISABLED_UpdateTrackerTest) {
   file.tracker.set_dirty(true);
   file.tracker.set_active(false);
   EXPECT_EQ(SYNC_STATUS_OK, UpdateTracker(new_conflict.tracker));
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
 }
 
@@ -1139,42 +1139,8 @@ TEST_P(MetadataDatabaseTest, PopulateInitialDataTest) {
   ResetTrackerID(&app_root.tracker);
   app_root.tracker.set_parent_tracker_id(sync_root.tracker.tracker_id());
 
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
+  VerifyTrackedFiles(tracked_files);
   VerifyReloadConsistency();
-}
-
-TEST_P(MetadataDatabaseTest, DumpFiles) {
-  TrackedFile sync_root(CreateTrackedSyncRoot());
-  TrackedFile app_root(CreateTrackedAppRoot(sync_root, "app_id"));
-  app_root.tracker.set_app_id(app_root.metadata.details().title());
-
-  TrackedFile folder_0(CreateTrackedFolder(app_root, "folder_0"));
-  TrackedFile file_0(CreateTrackedFile(folder_0, "file_0"));
-
-  const TrackedFile* tracked_files[] = {
-    &sync_root, &app_root, &folder_0, &file_0
-  };
-
-  SetUpDatabaseByTrackedFiles(tracked_files, base::size(tracked_files));
-  EXPECT_EQ(SYNC_STATUS_OK, InitializeMetadataDatabase());
-  VerifyTrackedFiles(tracked_files, base::size(tracked_files));
-
-  std::unique_ptr<base::ListValue> files =
-      metadata_database()->DumpFiles(app_root.tracker.app_id());
-  ASSERT_EQ(2u, files->GetSize());
-
-  base::DictionaryValue* file = nullptr;
-  std::string str;
-
-  ASSERT_TRUE(files->GetDictionary(0, &file));
-  EXPECT_TRUE(file->GetString("title", &str) && str == "folder_0");
-  EXPECT_TRUE(file->GetString("type", &str) && str == "folder");
-  EXPECT_TRUE(file->HasKey("details"));
-
-  ASSERT_TRUE(files->GetDictionary(1, &file));
-  EXPECT_TRUE(file->GetString("title", &str) && str == "file_0");
-  EXPECT_TRUE(file->GetString("type", &str) && str == "file");
-  EXPECT_TRUE(file->HasKey("details"));
 }
 
 TEST_P(MetadataDatabaseTest, ClearDatabase) {

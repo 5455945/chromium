@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync_file_system/subtree_set.h"
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/notreached.h"
 #include "storage/common/file_system/file_system_util.h"
 
@@ -22,18 +21,18 @@ SubtreeSet::Node::Node(bool contained_as_subtree_root,
       number_of_subtrees_below(number_of_subtrees_below) {
 }
 
-SubtreeSet::SubtreeSet() {}
+SubtreeSet::SubtreeSet() = default;
 SubtreeSet::SubtreeSet(const SubtreeSet& other) = default;
-SubtreeSet::~SubtreeSet() {}
+SubtreeSet::~SubtreeSet() = default;
 
 bool SubtreeSet::IsDisjointWith(const base::FilePath& subtree_root) const {
   base::FilePath::StringType normalized_subtree_root =
       storage::VirtualPath::GetNormalizedFilePath(subtree_root);
 
   // Check if |subtree_root| contains any of subtrees in the container.
-  if (base::Contains(inclusive_ancestors_of_subtree_roots_,
-                     normalized_subtree_root))
+  if (inclusive_ancestors_of_subtree_roots_.contains(normalized_subtree_root)) {
     return false;
+  }
 
   base::FilePath path(normalized_subtree_root);
   while (!storage::VirtualPath::IsRootPath(path)) {
@@ -59,8 +58,9 @@ bool SubtreeSet::insert(const base::FilePath& subtree_root) {
   base::FilePath path(normalized_subtree_root);
   while (!storage::VirtualPath::IsRootPath(path)) {
     path = storage::VirtualPath::DirName(path);
-    DCHECK(!inclusive_ancestors_of_subtree_roots_[path.value()]
-                .contained_as_subtree_root);
+    CHECK(!inclusive_ancestors_of_subtree_roots_[path.value()]
+               .contained_as_subtree_root,
+          base::NotFatalUntil::M162);
     ++(inclusive_ancestors_of_subtree_roots_[path.value()]
            .number_of_subtrees_below);
   }
@@ -79,7 +79,8 @@ bool SubtreeSet::erase(const base::FilePath& subtree_root) {
         !found->second.contained_as_subtree_root)
       return false;
 
-    DCHECK_EQ(1u, found->second.number_of_subtrees_below);
+    CHECK_EQ(1u, found->second.number_of_subtrees_below,
+             base::NotFatalUntil::M162);
     inclusive_ancestors_of_subtree_roots_.erase(found);
   }
 
@@ -90,10 +91,9 @@ bool SubtreeSet::erase(const base::FilePath& subtree_root) {
     auto found = inclusive_ancestors_of_subtree_roots_.find(path.value());
     if (found == inclusive_ancestors_of_subtree_roots_.end()) {
       NOTREACHED();
-      continue;
     }
 
-    DCHECK(!found->second.contained_as_subtree_root);
+    CHECK(!found->second.contained_as_subtree_root, base::NotFatalUntil::M162);
     if (!--(found->second.number_of_subtrees_below))
       inclusive_ancestors_of_subtree_roots_.erase(found);
   }

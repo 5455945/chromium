@@ -1,14 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 
+#include "third_party/blink/renderer/core/layout/geometry/box_strut.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
-#include "third_party/blink/renderer/core/layout/ng/geometry/ng_box_strut.h"
-#include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
-#include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -25,6 +24,18 @@ PhysicalSize PhysicalRect::DistanceAsSize(PhysicalOffset target) const {
   else if (target.top > size.height)
     distance.height = target.top - size.height;
   return distance;
+}
+
+LayoutUnit PhysicalRect::SquaredDistanceTo(const PhysicalOffset& point) const {
+  LayoutUnit x1 = X(), x2 = Right();
+  if (x1 > x2)
+    std::swap(x1, x2);
+  LayoutUnit diff_x = point.left - ClampTo<LayoutUnit>(point.left, x1, x2);
+  LayoutUnit y1 = Y(), y2 = Bottom();
+  if (y1 > y2)
+    std::swap(y1, y2);
+  LayoutUnit diff_y = point.top - ClampTo<LayoutUnit>(point.top, y1, y2);
+  return diff_x * diff_x + diff_y * diff_y;
 }
 
 bool PhysicalRect::Contains(const PhysicalRect& other) const {
@@ -83,12 +94,8 @@ void PhysicalRect::UniteEvenIfEmpty(const PhysicalRect& other) {
   offset = {right - size.width, bottom - size.height};
 }
 
-void PhysicalRect::Expand(const NGPhysicalBoxStrut& strut) {
+void PhysicalRect::Expand(const PhysicalBoxStrut& strut) {
   ExpandEdges(strut.top, strut.right, strut.bottom, strut.left);
-}
-
-void PhysicalRect::Expand(const LayoutRectOutsets& outsets) {
-  ExpandEdges(outsets.Top(), outsets.Right(), outsets.Bottom(), outsets.Left());
 }
 
 void PhysicalRect::ExpandEdgesToPixelBoundaries() {
@@ -102,13 +109,8 @@ void PhysicalRect::ExpandEdgesToPixelBoundaries() {
   size.height = LayoutUnit(max_bottom - top);
 }
 
-void PhysicalRect::Contract(const NGPhysicalBoxStrut& strut) {
+void PhysicalRect::Contract(const PhysicalBoxStrut& strut) {
   ExpandEdges(-strut.top, -strut.right, -strut.bottom, -strut.left);
-}
-
-void PhysicalRect::Contract(const LayoutRectOutsets& outsets) {
-  ExpandEdges(-outsets.Top(), -outsets.Right(), -outsets.Bottom(),
-              -outsets.Left());
 }
 
 void PhysicalRect::Intersect(const PhysicalRect& other) {
@@ -145,18 +147,8 @@ bool PhysicalRect::InclusiveIntersect(const PhysicalRect& other) {
   return true;
 }
 
-LayoutRect PhysicalRect::ToLayoutFlippedRect(
-    const ComputedStyle& style,
-    const PhysicalSize& container_size) const {
-  if (!style.IsFlippedBlocksWritingMode())
-    return {offset.left, offset.top, size.width, size.height};
-  return {container_size.width - offset.left - size.width, offset.top,
-          size.width, size.height};
-}
-
 String PhysicalRect::ToString() const {
-  return String::Format("%s %s", offset.ToString().Ascii().c_str(),
-                        size.ToString().Ascii().c_str());
+  return StrCat({offset.ToString(), " ", size.ToString()});
 }
 
 PhysicalRect UnionRect(const Vector<PhysicalRect>& rects) {
@@ -180,18 +172,6 @@ PhysicalRect UnionRectEvenIfEmpty(const Vector<PhysicalRect>& rects) {
 
 std::ostream& operator<<(std::ostream& os, const PhysicalRect& value) {
   return os << value.ToString();
-}
-
-WTF::TextStream& operator<<(WTF::TextStream& ts, const PhysicalRect& r) {
-  // This format is required by some layout tests.
-  ts << "at ("
-     << WTF::TextStream::FormatNumberRespectingIntegers(r.X().ToFloat());
-  ts << "," << WTF::TextStream::FormatNumberRespectingIntegers(r.Y().ToFloat());
-  ts << ") size "
-     << WTF::TextStream::FormatNumberRespectingIntegers(r.Width().ToFloat());
-  ts << "x"
-     << WTF::TextStream::FormatNumberRespectingIntegers(r.Height().ToFloat());
-  return ts;
 }
 
 }  // namespace blink

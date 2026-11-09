@@ -1,29 +1,34 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/fonts/android/font_unique_name_lookup_android.h"
 
 #include "base/files/file.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/timer/elapsed_timer.h"
+#include "skia/ext/font_utils.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/font_unique_name_lookup/icu_fold_case_util.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/skia/include/core/SkData.h"
+#include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 
 namespace blink {
+namespace {
+
+}  // namespace
 
 FontUniqueNameLookupAndroid::~FontUniqueNameLookupAndroid() = default;
 
 void FontUniqueNameLookupAndroid::PrepareFontUniqueNameLookup(
     NotifyFontUniqueNameLookupReady callback) {
   DCHECK(!font_table_matcher_.get());
-  DCHECK(RuntimeEnabledFeatures::FontSrcLocalMatchingEnabled());
 
   pending_callbacks_.push_back(std::move(callback));
 
@@ -36,15 +41,12 @@ void FontUniqueNameLookupAndroid::PrepareFontUniqueNameLookup(
 
   EnsureServiceConnected();
 
-  firmware_font_lookup_service_->GetUniqueNameLookupTable(base::BindOnce(
+  firmware_font_lookup_service_->GetUniqueNameLookupTable(blink::BindOnce(
       &FontUniqueNameLookupAndroid::ReceiveReadOnlySharedMemoryRegion,
-      base::Unretained(this)));
+      Unretained(this)));
 }
 
 bool FontUniqueNameLookupAndroid::IsFontUniqueNameLookupReadyForSyncLookup() {
-  if (!RuntimeEnabledFeatures::FontSrcLocalMatchingEnabled())
-    return true;
-
   EnsureServiceConnected();
 
   // If we have the table already, we're ready for sync lookups.
@@ -69,7 +71,11 @@ bool FontUniqueNameLookupAndroid::IsFontUniqueNameLookupReadyForSyncLookup() {
     // Adopt the shared memory region, do not notify anyone in callbacks as
     // PrepareFontUniqueNameLookup must not have been called yet. Just return
     // true from this function.
-    DCHECK_EQ(pending_callbacks_.size(), 0u);
+    // TODO(crbug.com/1416529): Investigate why pending_callbacks is not 0 in
+    // some cases when kPrefetchFontLookupTables is enabled
+    if (pending_callbacks_.size() != 0) {
+      LOG(WARNING) << "Number of pending callbacks not zero";
+    }
     ReceiveReadOnlySharedMemoryRegion(std::move(shared_memory_region));
   }
 
@@ -90,6 +96,26 @@ sk_sp<SkTypeface> FontUniqueNameLookupAndroid::MatchUniqueName(
     return MatchUniqueNameFromDownloadableFonts(font_unique_name);
   } else {
     return nullptr;
+  }
+}
+
+void FontUniqueNameLookupAndroid::Init() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (RuntimeEnabledFeatures::AndroidDownloadableFontsMatchingEnabled()) {
+    EnsureServiceConnected();
+    if (android_font_lookup_service_) {
+      // blink::Unretained is safe here because |this| owns
+      // |android_font_lookup_service_|.
+      android_font_lookup_service_->FetchAllFontFiles(blink::BindOnce(
+          &FontUniqueNameLookupAndroid::FontsPrefetched, Unretained(this)));
+    }
+  }
+  if (base::FeatureList::IsEnabled(features::kPrefetchFontLookupTables) &&
+      RuntimeEnabledFeatures::AndroidDownloadableFontsMatchingEnabled()) {
+    // This call primes IsFontUniqueNameLookupReadyForSyncLookup() by
+    // asynchronously fetching the font table so it will be ready when needed.
+    // It isn't needed now, so base::DoNothing() is passed as the callback.
+    PrepareFontUniqueNameLookup(base::DoNothing());
   }
 }
 
@@ -115,7 +141,7 @@ void FontUniqueNameLookupAndroid::ReceiveReadOnlySharedMemoryRegion(
     base::ReadOnlySharedMemoryRegion shared_memory_region) {
   font_table_matcher_ =
       std::make_unique<FontTableMatcher>(shared_memory_region.Map());
-  while (!pending_callbacks_.IsEmpty()) {
+  while (!pending_callbacks_.empty()) {
     NotifyFontUniqueNameLookupReady callback = pending_callbacks_.TakeFirst();
     std::move(callback).Run();
   }
@@ -123,12 +149,14 @@ void FontUniqueNameLookupAndroid::ReceiveReadOnlySharedMemoryRegion(
 
 sk_sp<SkTypeface> FontUniqueNameLookupAndroid::MatchUniqueNameFromFirmwareFonts(
     const String& font_unique_name) {
-  absl::optional<FontTableMatcher::MatchResult> match_result =
-      font_table_matcher_->MatchName(font_unique_name.Utf8().c_str());
-  if (!match_result)
+  std::optional<FontTableMatcher::MatchResult> match_result =
+      font_table_matcher_->MatchName(font_unique_name.Utf8());
+  if (!match_result) {
     return nullptr;
-  return SkTypeface::MakeFromFile(match_result->font_path.c_str(),
-                                  match_result->ttc_index);
+  }
+  sk_sp<SkFontMgr> mgr = skia::DefaultFontMgr();
+  return mgr->makeFromFile(match_result->font_path.c_str(),
+                           match_result->ttc_index);
 }
 
 bool FontUniqueNameLookupAndroid::RequestedNameInQueryableFonts(
@@ -138,13 +166,14 @@ bool FontUniqueNameLookupAndroid::RequestedNameInQueryableFonts(
     android_font_lookup_service_->GetUniqueNameLookupTable(&retrieved_fonts);
     queryable_fonts_ = std::move(retrieved_fonts);
   }
-  return queryable_fonts_ && queryable_fonts_->Contains(String::FromUTF8(
-                                 IcuFoldCase(font_unique_name.Utf8()).c_str()));
+  return queryable_fonts_ && queryable_fonts_->Contains(String::FromUtf8(
+                                 IcuFoldCase(font_unique_name.Utf8())));
 }
 
 sk_sp<SkTypeface>
 FontUniqueNameLookupAndroid::MatchUniqueNameFromDownloadableFonts(
     const String& font_unique_name) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!android_font_lookup_service_.is_bound()) {
     LOG(ERROR) << "Service not connected.";
     return nullptr;
@@ -153,34 +182,24 @@ FontUniqueNameLookupAndroid::MatchUniqueNameFromDownloadableFonts(
   if (!RequestedNameInQueryableFonts(font_unique_name))
     return nullptr;
 
-  DEFINE_STATIC_LOCAL_IMPL(
-      CustomCountHistogram, lookup_latency_histogram_success,
-      ("Android.FontLookup.Blink.DLFontsLatencySuccess", 0, 10000000, 50),
-      false);
-  DEFINE_STATIC_LOCAL_IMPL(
-      CustomCountHistogram, lookup_latency_histogram_failure,
-      ("Android.FontLookup.Blink.DLFontsLatencySuccess", 0, 10000000, 50),
-      false);
-
   base::File font_file;
   String case_folded_unique_font_name =
-      String::FromUTF8(IcuFoldCase(font_unique_name.Utf8()).c_str());
+      String::FromUtf8(IcuFoldCase(font_unique_name.Utf8()));
 
-  base::ElapsedTimer elapsed_timer;
-
-  if (!android_font_lookup_service_->MatchLocalFontByUniqueName(
-          case_folded_unique_font_name, &font_file)) {
+  auto it = prefetched_font_map_.find(case_folded_unique_font_name);
+  if (it != prefetched_font_map_.end()) {
+    font_file = it->value.Duplicate();
+  } else if (!android_font_lookup_service_->MatchLocalFontByUniqueName(
+                 case_folded_unique_font_name, &font_file)) {
     LOG(ERROR)
         << "Mojo method returned false for case-folded unique font name: "
         << case_folded_unique_font_name;
-    lookup_latency_histogram_failure.CountMicroseconds(elapsed_timer.Elapsed());
     return nullptr;
   }
 
   if (!font_file.IsValid()) {
     LOG(ERROR) << "Received platform font handle invalid, fd: "
                << font_file.GetPlatformFile();
-    lookup_latency_histogram_failure.CountMicroseconds(elapsed_timer.Elapsed());
     return nullptr;
   }
 
@@ -188,19 +207,31 @@ FontUniqueNameLookupAndroid::MatchUniqueNameFromDownloadableFonts(
 
   if (!font_data || font_data->isEmpty()) {
     LOG(ERROR) << "Received file descriptor has 0 size.";
-    lookup_latency_histogram_failure.CountMicroseconds(elapsed_timer.Elapsed());
     return nullptr;
   }
 
-  sk_sp<SkTypeface> return_typeface(SkTypeface::MakeFromData(font_data));
+  sk_sp<SkFontMgr> mgr = skia::DefaultFontMgr();
+  sk_sp<SkTypeface> return_typeface = mgr->makeFromData(font_data);
 
   if (!return_typeface) {
-    lookup_latency_histogram_failure.CountMicroseconds(elapsed_timer.Elapsed());
     LOG(ERROR) << "Cannot instantiate SkTypeface from font blob SkData.";
   }
 
-  lookup_latency_histogram_success.CountMicroseconds(elapsed_timer.Elapsed());
   return return_typeface;
+}
+
+void FontUniqueNameLookupAndroid::FontsPrefetched(
+    HashMap<String, base::File> font_files) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  prefetched_font_map_ = std::move(font_files);
+
+  if (base::FeatureList::IsEnabled(features::kPrefetchFontLookupTables)) {
+    // The |prefetched_font_map_| contains all the fonts that are available from
+    // the AndroidFontLookup service. We can directly set |queryable_fonts_|
+    // here from the map keys since |queryable_fonts_| is used to check which
+    // fonts can be fetched from the AndroidFontLookup service.
+    queryable_fonts_.emplace(prefetched_font_map_.Keys());
+  }
 }
 
 }  // namespace blink

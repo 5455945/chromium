@@ -1,8 +1,10 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/location_bar_model_impl.h"
+
+#include <string>
 
 #include "base/check.h"
 #include "base/feature_list.h"
@@ -11,6 +13,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/omnibox/browser/buildflags.h"
@@ -24,11 +27,14 @@
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "url/gurl.h"
 #include "url/origin.h"
+#include "url/url_canon.h"
 
-#if (!defined(OS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !defined(OS_IOS)
+#if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !BUILDFLAG(IS_IOS)
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
 #endif
 
@@ -40,28 +46,46 @@ LocationBarModelImpl::LocationBarModelImpl(LocationBarModelDelegate* delegate,
   DCHECK(delegate_);
 }
 
-LocationBarModelImpl::~LocationBarModelImpl() {}
+LocationBarModelImpl::LocationBarModelImpl(ui::UnownedUserDataHost& host,
+                                           LocationBarModelDelegate* delegate,
+                                           size_t max_url_display_chars)
+    : LocationBarModel(host),
+      delegate_(delegate),
+      max_url_display_chars_(max_url_display_chars) {
+  DCHECK(delegate_);
+}
+
+LocationBarModelImpl::~LocationBarModelImpl() = default;
 
 // LocationBarModelImpl Implementation.
 std::u16string LocationBarModelImpl::GetFormattedFullURL() const {
+  if (IsContextualTasksPage()) {
+    return GetContextualTasksDisplayURL();
+  }
   return GetFormattedURL(url_formatter::kFormatUrlOmitDefaults);
 }
 
 std::u16string LocationBarModelImpl::GetURLForDisplay() const {
+  // For the contextual tasks page, apply "origin-swapping" logic in order to
+  // display the proper URL in the Omnibox.
+  if (IsContextualTasksPage()) {
+    return GetContextualTasksDisplayURL();
+  }
+
   url_formatter::FormatUrlTypes format_types =
       url_formatter::kFormatUrlOmitDefaults;
   if (delegate_->ShouldTrimDisplayUrlAfterHostName()) {
     format_types |= url_formatter::kFormatUrlTrimAfterHost;
   }
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   format_types |= url_formatter::kFormatUrlTrimAfterHost;
 #endif
 
   format_types |= url_formatter::kFormatUrlOmitHTTPS;
   format_types |= url_formatter::kFormatUrlOmitTrivialSubdomains;
 
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   // On desktop, the File chip makes the scheme redundant in the steady state.
   format_types |= url_formatter::kFormatUrlOmitFileScheme;
 #endif
@@ -93,14 +117,17 @@ std::u16string LocationBarModelImpl::GetFormattedURL(
 
   GURL url(GetURL());
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   // On iOS, the blob: display URLs should be simply the domain name. However,
   // url_formatter parses everything past blob: as path, not domain, so swap
   // the url here to be just origin.
   if (url.SchemeIsBlob()) {
-    url = url::Origin::Create(url).GetURL();
+    url::Origin origin = url::Origin::Create(url);
+    if (!origin.host().empty()) {
+      url = origin.GetURL();
+    }
   }
-#endif  // defined(OS_IOS)
+#endif  // BUILDFLAG(IS_IOS)
 
   // Special handling for dom-distiller:. Instead of showing internal reader
   // mode URLs, show the original article URL in the omnibox.
@@ -122,9 +149,9 @@ std::u16string LocationBarModelImpl::GetFormattedURL(
   // the space.
   const std::u16string formatted_text =
       delegate_->FormattedStringWithEquivalentMeaning(
-          url,
-          url_formatter::FormatUrl(url, format_types, net::UnescapeRule::NORMAL,
-                                   nullptr, nullptr, nullptr));
+          url, url_formatter::FormatUrl(url, format_types,
+                                        base::UnescapeRule::NORMAL, nullptr,
+                                        nullptr, nullptr));
 
   // Truncating the URL breaks editing and then pressing enter, but hopefully
   // people won't try to do much with such enormous URLs anyway. If this becomes
@@ -142,6 +169,14 @@ GURL LocationBarModelImpl::GetURL() const {
              : GURL(url::kAboutBlankURL);
 }
 
+bool LocationBarModelImpl::IsContextualTasksPage() const {
+  return delegate_->IsContextualTasksPage();
+}
+
+GURL LocationBarModelImpl::GetContextualTasksInnerFrameURL() const {
+  return delegate_->GetContextualTasksInnerFrameURL();
+}
+
 security_state::SecurityLevel LocationBarModelImpl::GetSecurityLevel() const {
   // When empty, assume no security style.
   if (!ShouldDisplayURL())
@@ -150,53 +185,89 @@ security_state::SecurityLevel LocationBarModelImpl::GetSecurityLevel() const {
   return delegate_->GetSecurityLevel();
 }
 
+net::CertStatus LocationBarModelImpl::GetCertStatus() const {
+  // When empty, assume no cert status.
+  if (!ShouldDisplayURL())
+    return 0;
+
+  return delegate_->GetCertStatus();
+}
+
 OmniboxEventProto::PageClassification
-LocationBarModelImpl::GetPageClassification(OmniboxFocusSource focus_source) {
+LocationBarModelImpl::GetPageClassification(bool is_prefetch) const {
   // We may be unable to fetch the current URL during startup or shutdown when
   // the omnibox exists but there is no attached page.
   GURL gurl;
-  if (!delegate_->GetURL(&gurl))
+  if (!delegate_->GetURL(&gurl)) {
     return OmniboxEventProto::OTHER;
-
-  if (delegate_->IsNewTabPage()) {
-    // Note that we treat OMNIBOX as the source if focus_source_ is INVALID,
-    // i.e., if input isn't actually in progress.
-    return (focus_source == OmniboxFocusSource::FAKEBOX)
-               ? OmniboxEventProto::INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS
+  }
+  if (delegate_->IsNewTabPage() || delegate_->IsNewTabPageURL(gurl)) {
+    return is_prefetch ? OmniboxEventProto::NTP_ZPS_PREFETCH
                : OmniboxEventProto::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS;
   }
-  if (!gurl.is_valid())
+  if (!gurl.is_valid()) {
     return OmniboxEventProto::INVALID_SPEC;
-  if (delegate_->IsNewTabPageURL(gurl))
-    return OmniboxEventProto::NTP;
-  if (gurl.spec() == url::kAboutBlankURL)
+  }
+  if (gurl.spec() == url::kAboutBlankURL) {
     return OmniboxEventProto::BLANK;
-  if (delegate_->IsHomePage(gurl))
+  }
+  if (delegate_->IsHomePage(gurl)) {
     return OmniboxEventProto::HOME_PAGE;
+  }
 
   TemplateURLService* template_url_service = delegate_->GetTemplateURLService();
   if (template_url_service &&
       template_url_service->IsSearchResultsPageFromDefaultSearchProvider(
           gurl)) {
-    return OmniboxEventProto::SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT;
+    return is_prefetch ? OmniboxEventProto::SRP_ZPS_PREFETCH
+                       : OmniboxEventProto::
+                             SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT;
   }
 
-  return OmniboxEventProto::OTHER;
+  return is_prefetch ? OmniboxEventProto::OTHER_ZPS_PREFETCH
+                     : OmniboxEventProto::OTHER;
+}
+
+metrics::OmniboxEventProto::PageClassification
+LocationBarModelImpl::GetOmniboxComposeboxPageClassification() const {
+  GURL gurl;
+  if (!delegate_->GetURL(&gurl)) {
+    return metrics::OmniboxEventProto::OTHER_OMNIBOX_COMPOSEBOX;
+  }
+  if (delegate_->IsNewTabPage()) {
+    return metrics::OmniboxEventProto::NTP_OMNIBOX_COMPOSEBOX;
+  }
+  if (!gurl.is_valid() || (gurl.spec() == url::kAboutBlankURL) ||
+      delegate_->IsHomePage(gurl)) {
+    return metrics::OmniboxEventProto::OTHER_OMNIBOX_COMPOSEBOX;
+  }
+  if (delegate_->IsNewTabPageURL(gurl)) {
+    return metrics::OmniboxEventProto::NTP_OMNIBOX_COMPOSEBOX;
+  }
+
+  TemplateURLService* template_url_service = delegate_->GetTemplateURLService();
+  if (template_url_service &&
+      template_url_service->IsSearchResultsPageFromDefaultSearchProvider(
+          gurl)) {
+    return metrics::OmniboxEventProto::SRP_OMNIBOX_COMPOSEBOX;
+  }
+
+  return metrics::OmniboxEventProto::OTHER_OMNIBOX_COMPOSEBOX;
 }
 
 const gfx::VectorIcon& LocationBarModelImpl::GetVectorIcon() const {
-#if (!defined(OS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !defined(OS_IOS)
+#if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !BUILDFLAG(IS_IOS)
   auto* const icon_override = delegate_->GetVectorIconOverride();
   if (icon_override)
     return *icon_override;
 
   if (IsOfflinePage())
-    return omnibox::kOfflinePinIcon;
+    return features::IsRoundedIconsEnabled() ? omnibox::kOfflinePinFilledIcon
+                                             : omnibox::kOfflinePinOldIcon;
 #endif
 
   return location_bar_model::GetSecurityVectorIcon(
-      GetSecurityLevel(),
-      delegate_->ShouldUseUpdatedConnectionSecurityIndicators());
+      GetSecurityLevel(), delegate_->GetVisibleSecurityState().get());
 }
 
 std::u16string LocationBarModelImpl::GetSecureDisplayText() const {
@@ -217,10 +288,19 @@ std::u16string LocationBarModelImpl::GetSecureDisplayText() const {
           visible_security_state = delegate_->GetVisibleSecurityState();
 
       // Don't show any text in the security indicator for sites on the billing
-      // interstitial list.
+      // interstitial list or blocked by the enterprise administrator.
       if (visible_security_state->malicious_content_status ==
-          security_state::MALICIOUS_CONTENT_STATUS_BILLING) {
+              security_state::MALICIOUS_CONTENT_STATUS_BILLING ||
+          visible_security_state->malicious_content_status ==
+              security_state::MALICIOUS_CONTENT_STATUS_MANAGED_POLICY_BLOCK ||
+          visible_security_state->malicious_content_status ==
+              security_state::MALICIOUS_CONTENT_STATUS_MANAGED_POLICY_WARN) {
         return std::u16string();
+      }
+
+      if (visible_security_state->malicious_content_status ==
+          security_state::MALICIOUS_CONTENT_STATUS_WARNABLE_SUSPICIOUS_SITE) {
+        return l10n_util::GetStringUTF16(IDS_SUSPICIOUS_VERBOSE_STATE);
       }
 
       bool fails_malware_check =
@@ -246,6 +326,13 @@ std::u16string LocationBarModelImpl::GetSecureAccessibilityText() const {
     default:
       return std::u16string();
   }
+}
+
+std::u16string LocationBarModelImpl::GetContextualTasksDisplayURL() const {
+  const auto inner_frame_url = delegate_->GetContextualTasksInnerFrameURL();
+  GURL display_url =
+      location_bar_model::GetContextualTasksDisplayURL(inner_frame_url);
+  return display_url.is_valid() ? base::UTF8ToUTF16(display_url.spec()) : u"";
 }
 
 bool LocationBarModelImpl::ShouldDisplayURL() const {

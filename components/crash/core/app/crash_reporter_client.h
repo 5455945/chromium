@@ -1,21 +1,55 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CRASH_CORE_APP_CRASH_REPORTER_CLIENT_H_
 #define COMPONENTS_CRASH_CORE_APP_CRASH_REPORTER_CLIENT_H_
 
-#include <string>
+#include <stdint.h>
 
+#include <map>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <vector>
+
+#include "base/containers/span.h"
+#include "base/memory/read_only_shared_memory_region.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
 
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
 namespace base {
 class FilePath;
 }
 #endif
 
 namespace crash_reporter {
+
+// Structure used to pass product info across module boundaries without
+// allocating std::string across different module allocators.
+struct ProductInfo {
+ public:
+  ProductInfo() = default;
+  ProductInfo(std::string_view product_name,
+              std::string_view version,
+              std::string_view channel) {
+    base::strlcpy(product_name_, product_name);
+    base::strlcpy(version_, version);
+    base::strlcpy(channel_, channel);
+  }
+
+  std::string_view product_name() const { return product_name_; }
+  std::string_view version() const { return version_; }
+  std::string_view channel() const { return channel_; }
+
+ private:
+  char product_name_[128] = {};
+  char version_[128] = {};
+  char channel_[128] = {};
+};
+static_assert(std::is_trivially_copyable_v<ProductInfo>);
+static_assert(std::is_trivially_destructible_v<ProductInfo>);
 
 class CrashReporterClient;
 
@@ -26,32 +60,37 @@ void SetCrashReporterClient(CrashReporterClient* client);
 
 #if defined(CRASH_IMPLEMENTATION)
 // The components's embedder API should only be used by the component.
+// WARNING: do not use this outside of the component.
+// On Windows, the CrashReporterClient lives in chrome_elf.dll. Unless you are
+// in chrome_elf.dll, this function will returns nullptr. If you want to access
+// the client data from outside of the component, use functions in
+// crash_export_thunks.h (Windows-only) or client_upload_info.h (all platforms).
 CrashReporterClient* GetCrashReporterClient();
 #endif
 
 // Interface that the embedder implements.
 class CrashReporterClient {
  public:
+  // Type alias for subclasses outside of crash_reporter to reference
+  // ProductInfo without needing to include the crash_reporter:: prefix.
+  using ProductInfo = crash_reporter::ProductInfo;
+
   CrashReporterClient();
   virtual ~CrashReporterClient();
 
-#if !defined(OS_APPLE) && !defined(OS_WIN) && !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_ANDROID)
   // Sets the crash reporting client ID, a unique identifier for the client
   // that is sending crash reports. After it is set, it should not be changed.
   // |client_guid| may either be a full GUID or a GUID that was already stripped
   // from its dashes.
   //
-  // On macOS, Windows, and Android this is the responsibility of Crashpad, and
-  // can not be set directly by the client.
+  // When using Crashpad (all platforms except CastOS, which uses Breakpad),
+  // this is the responsibility of Crashpad and cannot be set directly by the
+  // client.
   virtual void SetCrashReporterClientIdFromGUID(const std::string& client_guid);
 #endif
 
-#if defined(OS_WIN)
-  // Returns true if the pipe name to connect to breakpad should be computed and
-  // stored in the process's environment block. By default, returns true for the
-  // "browser" process.
-  virtual bool ShouldCreatePipeName(const std::wstring& process_type);
-
+#if BUILDFLAG(IS_WIN)
   // Returns true if an alternative location to store the minidump files was
   // specified. Returns true if |crash_dir| was set.
   virtual bool GetAlternativeCrashDumpLocation(std::wstring* crash_dir);
@@ -64,40 +103,18 @@ class CrashReporterClient {
                                         std::wstring* special_build,
                                         std::wstring* channel_name);
 
-  // Returns true if a restart dialog should be displayed. In that case,
-  // |message| and |title| are set to a message to display in a dialog box with
-  // the given title before restarting, and |is_rtl_locale| indicates whether
-  // to display the text as RTL.
-  virtual bool ShouldShowRestartDialog(std::wstring* title,
-                                       std::wstring* message,
-                                       bool* is_rtl_locale);
-
-  // Returns true if it is ok to restart the application. Invoked right before
-  // restarting after a crash.
-  virtual bool AboutToRestart();
-
-  // Returns true if the running binary is a per-user installation.
-  virtual bool GetIsPerUserInstall();
-
-  // Returns true if larger crash dumps should be dumped.
-  virtual bool GetShouldDumpLargerDumps();
-
-  // Returns the result code to return when breakpad failed to respawn a
-  // crashed process.
-  virtual int GetResultCodeRespawnFailed();
+  // Returns the fully-qualified path for a registered out of process exception
+  // helper module. The module is optional. Return an empty string to indicate
+  // that no module should be registered.
+  virtual std::wstring GetWerRuntimeExceptionModule();
 #endif
 
-#if defined(OS_POSIX) && !defined(OS_MAC)
-  // Returns a textual description of the product type and version to include
-  // in the crash report. Neither out parameter should be set to NULL.
-  // TODO(jperaza): Remove the 2-parameter overload of this method once all
-  // Linux-ish breakpad clients have transitioned to crashpad.
-  virtual void GetProductNameAndVersion(const char** product_name,
-                                        const char** version);
-  virtual void GetProductNameAndVersion(std::string* product_name,
-                                        std::string* version,
-                                        std::string* channel);
+#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC))
+  // Returns true if larger crash dumps should be dumped.
+  virtual bool GetShouldDumpLargerDumps();
+#endif
 
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
   virtual base::FilePath GetReporterLogFilename();
 
   // Custom crash minidump handler after the minidump is generated.
@@ -113,7 +130,7 @@ class CrashReporterClient {
   // |crash_dir| was set. Windows has to use std::wstring because this code
   // needs to work in chrome_elf, where only kernel32.dll is allowed, and
   // base::FilePath and its dependencies pull in other DLLs.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   virtual bool GetCrashDumpLocation(std::wstring* crash_dir);
 #else
   virtual bool GetCrashDumpLocation(base::FilePath* crash_dir);
@@ -123,11 +140,15 @@ class CrashReporterClient {
   // |metrics_dir| was set. Windows has to use std::wstring because this code
   // needs to work in chrome_elf, where only kernel32.dll is allowed, and
   // base::FilePath and its dependencies pull in other DLLs.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   virtual bool GetCrashMetricsLocation(std::wstring* metrics_dir);
 #else
   virtual bool GetCrashMetricsLocation(base::FilePath* metrics_dir);
 #endif
+
+  // Returns a textual description of the product info (product name, version,
+  // etc.) to include in the crash report.
+  virtual void GetProductInfo(ProductInfo* product_info);
 
   // Returns true if running in unattended mode (for automated testing).
   virtual bool IsRunningUnattended();
@@ -144,7 +165,7 @@ class CrashReporterClient {
   // that case, |breakpad_enabled| is set to the value enforced by policies.
   virtual bool ReportingIsEnforcedByPolicy(bool* breakpad_enabled);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Used by WebView to sample crashes without generating the unwanted dumps. If
   // the returned value is less than 100, crash dumping will be sampled to that
   // percentage.
@@ -154,22 +175,11 @@ class CrashReporterClient {
   // annotation used for the browser process.
   virtual bool GetBrowserProcessType(std::string* ptype);
 
-  // Returns the descriptor key of the android minidump global descriptor.
-  virtual int GetAndroidMinidumpDescriptor();
-
-  // Returns the file descriptor of the pipe used to inform apps of
-  // webview renderer crashes.
-  virtual int GetAndroidCrashSignalFD();
-
-  // Returns true if breakpad microdumps should be enabled. This orthogonal to
-  // the standard minidump uploader (which depends on the user consent).
-  virtual bool ShouldEnableBreakpadMicrodumps();
-
   // Returns true if minudump should be written to android log.
   virtual bool ShouldWriteMinidumpToLog();
 #endif
 
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Configures sanitization of crash dumps.
   // |allowed_annotations| is a nullptr terminated array of NUL-terminated
   // strings of allowed annotation names or nullptr if all annotations are
@@ -188,6 +198,21 @@ class CrashReporterClient {
   // Returns the URL target for crash report uploads.
   virtual std::string GetUploadUrl();
 
+  // Returns true (the default) if the handler should rate limit uploads.
+  // Returning false passes --no-rate-limit to the Crashpad handler.
+  virtual bool ShouldRateLimitUploads();
+
+  // Returns true (the default) if the handler should gzip-compress uploads.
+  // Returning false passes --no-upload-gzip to the Crashpad handler, for
+  // collection servers that do not accept compressed bodies.
+  virtual bool ShouldCompressUploads();
+
+  // Returns process-wide ("simple") annotations to pass to the Crashpad
+  // handler in addition to the default prod/ver/channel/plat ones. Entries
+  // with the same key replace the defaults. The default implementation returns
+  // an empty map.
+  virtual std::map<std::string, std::string> GetExtraProcessAnnotations();
+
   // This method should return true to configure a crash reporter capable of
   // monitoring itself for its own crashes to do so, even if self-monitoring
   // would be expensive. "Expensive" self-monitoring dedicates an additional
@@ -202,8 +227,30 @@ class CrashReporterClient {
   // The default implementation returns false.
   virtual bool ShouldMonitorCrashHandlerExpensively();
 
-  // Returns true if breakpad should run in the given process type.
+  // Returns true if Breakpad should run in the given process type (used only on
+  // CastOS).
   virtual bool EnableBreakpadForProcess(const std::string& process_type);
+
+  // Returns a list of read-only shared memory regions containing user streams.
+  // These streams are extracted upon crash and attached to the minidump.
+  //
+  // This method is only ever called for the initial client during Crashpad
+  // handler startup to pass and inherit the shared memory handles/descriptors
+  // to the spawned handler process. It is not called for child processes.
+  //
+  // Each region must conform to the double-buffered binary layout defined in
+  // `components/crash/core/common/shared_memory_user_stream.h` (typically
+  // managed and written via `SharedMemoryUserStreamWriter`).
+  virtual std::vector<base::ReadOnlySharedMemoryRegion>
+  GetUserStreamSharedMemoryRegions();
+
+  // Writes `data` into one of the streams returned by
+  // `GetUserStreamSharedMemoryRegions()`. `data` must not exceed the stream's
+  // capacity. Returns true if the write succeeded, or false if this client has
+  // no stream of `user_stream_type`. The default implementation does nothing
+  // and returns false.
+  virtual bool WriteUserStreamData(uint32_t user_stream_type,
+                                   base::span<const uint8_t> data);
 };
 
 }  // namespace crash_reporter

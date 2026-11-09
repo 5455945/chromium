@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -35,7 +35,19 @@ KEY_FINGERS=(
   "790BC7277767219C42C86F933B4FE6ACC0B21F32"
   # Ubuntu Archive Automatic Signing Key (2018)
   "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+  # Debian Archive Automatic Signing Key (11/bullseye)
+  "A7236886F3CCCAAD148A27F80E98404D386FA1D9"
+  # Debian Security Archive Automatic Signing Key (11/bullseye)
+  "ED541312A33F1128F10B1C6C54404762BBB6E853"
+  # Debian Archive Automatic Signing Key (12/bookworm)
+  "4CB50190207B4758A3F73A796ED0E7B82643E131"
+  # Debian Stable Release Key (12/bookworm)
+  "4D64FEC119C2029067D6E791F8D2585B8783D481"
+  # Debian Security Archive Automatic Signing Key (12/bookworm)
+  "B0CAB9266E8C3929798B3EEEBDE6D2B9216EC7A8"
+  # Debian Stable Release Key (11/bullseye)
+  "A4285295FC7B1A81600062A9605C66F00D6C9793"
 )
 
-gpg --keyserver ha.pool.sks-keyservers.net --recv-keys ${KEY_FINGERS[@]}
+gpg --keyserver keyserver.ubuntu.com --recv-keys ${KEY_FINGERS[@]}
 gpg --output "${SCRIPT_DIR}/repo_signing_keys.gpg" --export ${KEY_FINGERS[@]}

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -26,14 +25,14 @@ namespace {
 void ReadFileRunCallback(CastAudioJsonProvider::TuningChangedCallback callback,
                          const base::FilePath& path,
                          bool error) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M163);
 
   std::string contents;
   base::ReadFileToString(path, &contents);
-  std::unique_ptr<base::Value> value =
-      base::JSONReader::ReadDeprecated(contents);
+  std::optional<base::DictValue> value = base::JSONReader::ReadDict(
+      contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (value) {
-    callback.Run(std::move(value));
+    callback.Run(std::move(*value));
     return;
   }
   LOG(ERROR) << "Unable to parse JSON in " << path;
@@ -41,7 +40,7 @@ void ReadFileRunCallback(CastAudioJsonProvider::TuningChangedCallback callback,
 
 }  // namespace
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
 const char kCastAudioJsonFilePath[] = "/system/data/cast_audio.json";
 #else
 const char kCastAudioJsonFilePath[] = "/etc/cast_audio.json";
@@ -78,10 +77,16 @@ CastAudioJsonProviderImpl::CastAudioJsonProviderImpl() {
 
 CastAudioJsonProviderImpl::~CastAudioJsonProviderImpl() = default;
 
-std::unique_ptr<base::Value> CastAudioJsonProviderImpl::GetCastAudioConfig() {
+std::optional<base::DictValue> CastAudioJsonProviderImpl::GetCastAudioConfig() {
   std::string contents;
   base::ReadFileToString(CastAudioJson::GetFilePath(), &contents);
-  return base::JSONReader::ReadDeprecated(contents);
+  std::optional<base::DictValue> value = base::JSONReader::ReadDict(
+      contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
+    return std::nullopt;
+  }
+
+  return std::move(*value);
 }
 
 void CastAudioJsonProviderImpl::SetTuningChangedCallback(

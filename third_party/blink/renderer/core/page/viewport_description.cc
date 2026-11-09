@@ -60,65 +60,57 @@ static void RecordViewportTypeMetric(
 }
 
 float ViewportDescription::ResolveViewportLength(
-    const Length& length,
-    const FloatSize& initial_viewport_size,
-    Direction direction) {
+    const ViewportLength& length,
+    const gfx::SizeF& initial_viewport_size) {
   if (length.IsAuto())
     return ViewportDescription::kValueAuto;
 
   if (length.IsFixed())
-    return length.GetFloatValue();
+    return length.Pixels();
 
   if (length.IsExtendToZoom())
     return ViewportDescription::kValueExtendToZoom;
 
-  if (length.IsPercent() && direction == kHorizontal)
-    return initial_viewport_size.Width() * length.GetFloatValue() / 100.0f;
-
-  if (length.IsPercent() && direction == kVertical)
-    return initial_viewport_size.Height() * length.GetFloatValue() / 100.0f;
-
   if (length.IsDeviceWidth())
-    return initial_viewport_size.Width();
+    return initial_viewport_size.width();
 
   if (length.IsDeviceHeight())
-    return initial_viewport_size.Height();
+    return initial_viewport_size.height();
 
   NOTREACHED();
-  return ViewportDescription::kValueAuto;
 }
 
 PageScaleConstraints ViewportDescription::Resolve(
-    const FloatSize& initial_viewport_size,
-    const Length& legacy_fallback_width) const {
+    const gfx::SizeF& initial_viewport_size,
+    const ViewportLength& legacy_fallback_width) const {
   float result_width = kValueAuto;
 
-  Length copy_max_width = max_width;
-  Length copy_min_width = min_width;
+  ViewportLength copy_max_width = max_width;
+  ViewportLength copy_min_width = min_width;
   // In case the width (used for min- and max-width) is undefined.
   if (IsLegacyViewportType() && max_width.IsAuto()) {
     // The width viewport META property is translated into 'width' descriptors,
     // setting the 'min' value to 'extend-to-zoom' and the 'max' value to the
     // intended length.  In case the UA-defines a min-width, use that as length.
     if (zoom == ViewportDescription::kValueAuto) {
-      copy_min_width = Length::ExtendToZoom();
+      copy_min_width = ViewportLength::ExtendToZoom();
       copy_max_width = legacy_fallback_width;
     } else if (max_height.IsAuto()) {
-      copy_min_width = Length::ExtendToZoom();
-      copy_max_width = Length::ExtendToZoom();
+      copy_min_width = ViewportLength::ExtendToZoom();
+      copy_max_width = ViewportLength::ExtendToZoom();
     }
   }
 
   float result_max_width =
-      ResolveViewportLength(copy_max_width, initial_viewport_size, kHorizontal);
+      ResolveViewportLength(copy_max_width, initial_viewport_size);
   float result_min_width =
-      ResolveViewportLength(copy_min_width, initial_viewport_size, kHorizontal);
+      ResolveViewportLength(copy_min_width, initial_viewport_size);
 
   float result_height = kValueAuto;
   float result_max_height =
-      ResolveViewportLength(max_height, initial_viewport_size, kVertical);
+      ResolveViewportLength(max_height, initial_viewport_size);
   float result_min_height =
-      ResolveViewportLength(min_height, initial_viewport_size, kVertical);
+      ResolveViewportLength(min_height, initial_viewport_size);
 
   float result_zoom = zoom;
   float result_min_zoom = min_zoom;
@@ -153,8 +145,8 @@ PageScaleConstraints ViewportDescription::Resolve(
     if (result_min_height == ViewportDescription::kValueExtendToZoom)
       result_min_height = result_max_height;
   } else {
-    float extend_width = initial_viewport_size.Width() / extend_zoom;
-    float extend_height = initial_viewport_size.Height() / extend_zoom;
+    float extend_width = initial_viewport_size.width() / extend_zoom;
+    float extend_height = initial_viewport_size.height() / extend_zoom;
 
     if (result_max_width == ViewportDescription::kValueExtendToZoom)
       result_max_width = extend_width;
@@ -176,7 +168,7 @@ PageScaleConstraints ViewportDescription::Resolve(
       result_max_width != ViewportDescription::kValueAuto)
     result_width = CompareIgnoringAuto(
         result_min_width,
-        CompareIgnoringAuto(result_max_width, initial_viewport_size.Width(),
+        CompareIgnoringAuto(result_max_width, initial_viewport_size.width(),
                             std::min),
         std::max);
 
@@ -185,37 +177,39 @@ PageScaleConstraints ViewportDescription::Resolve(
       result_max_height != ViewportDescription::kValueAuto)
     result_height = CompareIgnoringAuto(
         result_min_height,
-        CompareIgnoringAuto(result_max_height, initial_viewport_size.Height(),
+        CompareIgnoringAuto(result_max_height, initial_viewport_size.height(),
                             std::min),
         std::max);
 
   // Resolve width value.
   if (result_width == ViewportDescription::kValueAuto) {
     if (result_height == ViewportDescription::kValueAuto ||
-        !initial_viewport_size.Height())
-      result_width = initial_viewport_size.Width();
-    else
-      result_width = result_height * (initial_viewport_size.Width() /
-                                      initial_viewport_size.Height());
+        !initial_viewport_size.height()) {
+      result_width = initial_viewport_size.width();
+    } else {
+      result_width = result_height * (initial_viewport_size.width() /
+                                      initial_viewport_size.height());
+    }
   }
 
   // Resolve height value.
   if (result_height == ViewportDescription::kValueAuto) {
-    if (!initial_viewport_size.Width())
-      result_height = initial_viewport_size.Height();
-    else
-      result_height = result_width * initial_viewport_size.Height() /
-                      initial_viewport_size.Width();
+    if (!initial_viewport_size.width()) {
+      result_height = initial_viewport_size.height();
+    } else {
+      result_height = result_width * initial_viewport_size.height() /
+                      initial_viewport_size.width();
+    }
   }
 
   // Resolve initial-scale value.
   if (result_zoom == ViewportDescription::kValueAuto) {
     if (result_width != ViewportDescription::kValueAuto && result_width > 0)
-      result_zoom = initial_viewport_size.Width() / result_width;
+      result_zoom = initial_viewport_size.width() / result_width;
     if (result_height != ViewportDescription::kValueAuto && result_height > 0) {
       // if 'auto', the initial-scale will be negative here and thus ignored.
       result_zoom = std::max<float>(
-          result_zoom, initial_viewport_size.Height() / result_height);
+          result_zoom, initial_viewport_size.height() / result_height);
     }
 
     // Reconstrain zoom value to the [min-zoom, max-zoom] range.
@@ -237,8 +231,8 @@ PageScaleConstraints ViewportDescription::Resolve(
   result.minimum_scale = result_min_zoom;
   result.maximum_scale = result_max_zoom;
   result.initial_scale = result_zoom;
-  result.layout_size.SetWidth(result_width);
-  result.layout_size.SetHeight(result_height);
+  result.layout_size.set_width(result_width);
+  result.layout_size.set_height(result_height);
   return result;
 }
 
@@ -254,8 +248,9 @@ void ViewportDescription::ReportMobilePageStats(
 
   // Avoid chrome:// pages like the new-tab page (on Android new tab is
   // non-http).
-  if (!main_frame->GetDocument()->Url().ProtocolIsInHTTPFamily())
+  if (!main_frame->GetDocument()->Url().ProtocolIsInHttpFamily()) {
     return;
+  }
 
   if (!IsSpecifiedByAuthor()) {
     RecordViewportTypeMetric(main_frame->GetDocument()->IsMobileDocument()

@@ -1,14 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_OZONE_PUBLIC_PLATFORM_USER_INPUT_MONITOR_H_
 #define UI_OZONE_PUBLIC_PLATFORM_USER_INPUT_MONITOR_H_
 
-
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/memory/shared_memory_mapping.h"
-#include "base/single_thread_task_runner.h"
 
 namespace ui {
 
@@ -22,8 +21,9 @@ class COMPONENT_EXPORT(OZONE_BASE) PlatformUserInputMonitor {
  public:
   // Via this callback, the platform implementation of the monitor gets the
   // WriteKeyPressMonitorCount defined in media/base/user_input_monitor.h.
-  using WriteKeyPressCallback = base::RepeatingCallback<
-      void(const base::WritableSharedMemoryMapping& shmem, uint32_t count)>;
+  using WriteKeyPressCallback =
+      base::RepeatingCallback<void(base::WritableSharedMemoryMapping& shmem,
+                                   uint32_t count)>;
 
   PlatformUserInputMonitor();
   PlatformUserInputMonitor(const PlatformUserInputMonitor&) = delete;

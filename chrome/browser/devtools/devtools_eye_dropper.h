@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -26,6 +26,10 @@ class DevToolsEyeDropper : public content::WebContentsObserver,
 
   DevToolsEyeDropper(content::WebContents* web_contents,
                      EyeDropperCallback callback);
+
+  DevToolsEyeDropper(const DevToolsEyeDropper&) = delete;
+  DevToolsEyeDropper& operator=(const DevToolsEyeDropper&) = delete;
+
   ~DevToolsEyeDropper() override;
 
  private:
@@ -45,11 +49,14 @@ class DevToolsEyeDropper : public content::WebContentsObserver,
 
   // viz::mojom::FrameSinkVideoConsumer implementation.
   void OnFrameCaptured(
-      base::ReadOnlySharedMemoryRegion data,
+      ::media::mojom::VideoBufferHandlePtr data,
       ::media::mojom::VideoFrameInfoPtr info,
       const gfx::Rect& content_rect,
       mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
           callbacks) override;
+  void OnNewCaptureVersion(
+      const media::CaptureVersion& capture_version) override;
+  void OnFrameWithEmptyRegionCapture() override;
   void OnStopped() override;
   void OnLog(const std::string& /*message*/) override {}
 
@@ -58,11 +65,9 @@ class DevToolsEyeDropper : public content::WebContentsObserver,
   int last_cursor_x_ = -1;
   int last_cursor_y_ = -1;
   content::RenderWidgetHost::MouseEventCallback mouse_event_callback_;
-  content::RenderWidgetHost* host_ = nullptr;
+  raw_ptr<content::RenderWidgetHost> host_ = nullptr;
   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> video_capturer_;
   base::WeakPtrFactory<DevToolsEyeDropper> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsEyeDropper);
 };
 
 #endif  // CHROME_BROWSER_DEVTOOLS_DEVTOOLS_EYE_DROPPER_H_

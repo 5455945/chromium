@@ -1,37 +1,55 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 "use strict";
 
 var tree;
+var headerSpan;
+var sourceXML;
+var sourceXMLIsHiddenContainer;
+var xmlViewerRoot;
 
-function prepareWebKitXMLViewer()
+function prepareWebKitXMLViewer(root)
 {
-  var html = createHTMLElement('html');
-  var head = createHTMLElement('head');
-  html.appendChild(head);
-  var style = createHTMLElement('style');
-  style.id = 'xml-viewer-style';
-  head.appendChild(style);
-  var body = createHTMLElement('body');
-  html.appendChild(body);
-  var sourceXML = createHTMLElement('div');
-  sourceXML.id = 'webkit-xml-viewer-source-xml';
-  body.appendChild(sourceXML);
+  var body;
+  var style;
+  if (root) {
+    style = createHTMLElement('style');
+    style.id = 'xml-viewer-style';
+    root.appendChild(style);
+    body = root;
+    xmlViewerRoot = root;
+    sourceXML = document;
+    sourceXMLIsHiddenContainer = false;
+  } else {
+    var html = createHTMLElement('html');
+    var head = createHTMLElement('head');
+    html.appendChild(head);
+    style = createHTMLElement('style');
+    style.id = 'xml-viewer-style';
+    head.appendChild(style);
+    body = createHTMLElement('body');
+    xmlViewerRoot = document;
+    html.appendChild(body);
+    sourceXML = createHTMLElement('div');
+    sourceXML.id = 'webkit-xml-viewer-source-xml';
+    body.appendChild(sourceXML);
+    sourceXMLIsHiddenContainer = true;
 
-  var child;
-  while (child = document.firstChild) {
-    document.removeChild(child);
-    if (child.nodeType != Node.DOCUMENT_TYPE_NODE)
-      sourceXML.appendChild(child);
+    var child;
+    while (child = document.firstChild) {
+      document.removeChild(child);
+      if (child.nodeType != Node.DOCUMENT_TYPE_NODE)
+        sourceXML.appendChild(child);
+    }
+    document.appendChild(html);
   }
-  document.appendChild(html);
 
   var header = createHTMLElement('div');
   body.appendChild(header);
   header.classList.add('header');
-  var headerSpan = createHTMLElement('span');
+  headerSpan = createHTMLElement('span');
   header.appendChild(headerSpan);
   headerSpan.textContent =
       'This XML file does not appear to have any style information ' +
@@ -46,8 +64,8 @@ function prepareWebKitXMLViewer()
 
 function sourceXMLLoaded()
 {
-  var sourceXML = document.getElementById('webkit-xml-viewer-source-xml');
-  if (!sourceXML)
+  if (sourceXMLIsHiddenContainer &&
+      !document.getElementById('webkit-xml-viewer-source-xml'))
     return;  // Stop if some XML tree extension is already processing this
              // document
 
@@ -60,6 +78,20 @@ function sourceXMLLoaded()
 }
 
 // Tree processing.
+
+// https://www.w3.org/TR/xml/#sec-white-space
+// xml:space applies to descendants until one declares its own value. The class
+// goes on the element's container so that `white-space` is inherited, and a
+// nested declaration overrides it.
+function applyXMLSpace(element, node) {
+  const value =
+      node.getAttributeNS('http://www.w3.org/XML/1998/namespace', 'space');
+  if (value === 'preserve') {
+    element.classList.add('space-preserve');
+  } else if (value === 'default') {
+    element.classList.add('space-default');
+  }
+}
 
 function processNode(parentElement, node)
 {
@@ -107,6 +139,7 @@ function processEmptyElement(parentElement, node)
 function processShortTextOnlyElement(parentElement, node)
 {
   var line = createLine();
+  applyXMLSpace(line, node);
   line.appendChild(createTag(node, false, false));
   for (var child = node.firstChild; child; child = child.nextSibling)
     line.appendChild(createText(child.nodeValue));
@@ -117,6 +150,7 @@ function processShortTextOnlyElement(parentElement, node)
 function processComplexElement(parentElement, node)
 {
   var folder = createFolder();
+  applyXMLSpace(folder, node);
   folder.start.appendChild(createTag(node, false, false));
 
   for (var child = node.firstChild; child; child = child.nextSibling)
@@ -137,20 +171,49 @@ function processComment(parentElement, node)
 function processCDATA(parentElement, node)
 {
   var line = createLine();
-  line.appendChild(createText('<![CDATA[ ' + node.nodeValue + ' ]]>'));
+  line.appendChild(createCDATA('<![CDATA[ ' + node.nodeValue + ' ]]>'));
   parentElement.appendChild(line);
+}
+
+function isProcessingInstructionInProlog(node) {
+  if (node.parentNode !== sourceXML) {
+    return false;
+  }
+  for (var sibling = node.previousSibling; sibling;
+       sibling = sibling.previousSibling) {
+    if (sibling.nodeType === Node.ELEMENT_NODE) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function processProcessingInstruction(parentElement, node)
 {
+  const inProlog = isProcessingInstructionInProlog(node);
   var line = createLine();
   line.appendChild(
       createComment('<?' + node.nodeName + ' ' + node.nodeValue + '?>'));
   parentElement.appendChild(line);
+  if (inProlog && node.nodeName === 'xml-stylesheet') {
+    // This will only get hit if XSLT is disabled in the renderer.
+    headerSpan.innerHTML =
+        'This document cannot be formatted as intended. It uses XSLT, which ' +
+        'the browser does not support. You might be able to <a ' +
+        'target="_blank" rel="noopener noreferrer" ' +
+        'href="https://chromewebstore.google.com/search/XSLT%20Polyfill">install ' +
+        'a browser extension</a> that allows you to view it.';
+  }
 }
 
 function processText(parentElement, node)
 {
+  // When an xml:space="preserve" element has child nodes, the whitespace
+  // around them is a text node of its own. Appending it would produce blank
+  // lines that the XML file does not have, so skip it. Firefox does the same.
+  if (!/\S/.test(node.nodeValue)) {
+    return;
+  }
   parentElement.appendChild(createText(node.nodeValue));
 }
 
@@ -200,6 +263,14 @@ function createComment(commentString)
   comment.classList.add('html-comment');
   comment.textContent = commentString;
   return comment;
+}
+
+function createCDATA(cdataString)
+{
+  var cdata = createHTMLElement('span');
+  cdata.classList.add('cdata');
+  cdata.textContent = cdataString;
+  return cdata;
 }
 
 function createText(value)
@@ -269,12 +340,21 @@ function createAttribute(attributeNode)
   return attribute;
 }
 
-function toggleFunction(sectionId) {
+function directChildWithClass(element, className)
+{
+  for (var child = element.firstElementChild; child; child = child.nextElementSibling) {
+    if (child.classList.contains(className))
+      return child;
+  }
+  return null;
+}
+
+function toggleFunction(section) {
   return function() {
-    var foldedContent = document.querySelector('#' + sectionId + ' > .folded');
-    var openedContent = document.querySelector('#' + sectionId + ' > .opened');
-    var folderButton =
-        document.querySelector('#' + sectionId + ' > .line > .folder-button');
+    var foldedContent = directChildWithClass(section, 'folded');
+    var openedContent = directChildWithClass(section, 'opened');
+    var startLine = directChildWithClass(section, 'line');
+    var folderButton = startLine ? startLine.querySelector('.folder-button') : null;
 
     if (foldedContent) {
       if (foldedContent.className.includes('hidden'))
@@ -301,13 +381,13 @@ function toggleFunction(sectionId) {
 
 function initButtons()
 {
-  var sections = document.querySelectorAll('.folder');
+  var sections = xmlViewerRoot.querySelectorAll('.folder');
   for (var i = 0; i < sections.length; i++) {
     var sectionId = 'folder' + i;
     sections[i].id = sectionId;
 
     var folderButton = sections[i].querySelector('.folder-button');
-    folderButton.onclick = toggleFunction(sectionId);
+    folderButton.onclick = toggleFunction(sections[i]);
     folderButton.onmousedown = handleButtonMouseDown;
   }
 }
@@ -318,4 +398,3 @@ function handleButtonMouseDown(e)
    e.preventDefault();
 }
 
-prepareWebKitXMLViewer();

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,19 @@
 
 #include <string>
 
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/constants.h"
+#include "gpu/gpu_gles2_export.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rrect_f.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/overlay_transform.h"
-#include "ui/gfx/rrect_f.h"
-#include "ui/gfx/transform.h"
 #include "ui/gl/gl_bindings.h"
 
 // Define this for extra GL error debugging (slower).
@@ -31,13 +37,10 @@
 #define CHECK_GL_ERROR() void(0)
 #endif  // GL_ERROR_DEBUGGING
 
-namespace gl {
-struct GLVersionInfo;
-}
-
 namespace gpu {
 
 struct Capabilities;
+struct GLCapabilities;
 
 namespace gles2 {
 
@@ -66,10 +69,9 @@ struct CALayerSharedState {
 bool PrecisionMeetsSpecForHighpFloat(GLint rangeMin,
                                      GLint rangeMax,
                                      GLint precision);
-void QueryShaderPrecisionFormat(const gl::GLVersionInfo& gl_version_info,
-                                GLenum shader_type,
+void QueryShaderPrecisionFormat(GLenum shader_type,
                                 GLenum precision_type,
-                                GLint* range,
+                                base::span<GLint> range,
                                 GLint* precision);
 
 // Using the provided feature info, query the numeric limits of the underlying
@@ -77,6 +79,23 @@ void QueryShaderPrecisionFormat(const gl::GLVersionInfo& gl_version_info,
 // extension checks.
 void PopulateNumericCapabilities(Capabilities* caps,
                                  const FeatureInfo* feature_info);
+
+// Using the provided feature info, query the numeric limits of the underlying
+// GL and fill in the members of the GLCapabilities struct.  Does not perform
+// any extension checks.
+void PopulateGLCapabilities(GLCapabilities* caps,
+                            const FeatureInfo* feature_info);
+
+#if BUILDFLAG(IS_CHROMEOS)
+// Validate the list of formats `drm_formats_and_modifiers` only contains valid
+// drm formats that are mappable for Exo on ChromeOS. Provide fallback list of
+// mappable formats with invalid modifiers, if it is empty.
+void PopulateMappableDrmFormatsForExo(
+    base::flat_map<uint32_t, std::vector<uint64_t>>& drm_formats_and_modifiers,
+    const FeatureInfo* feature_info);
+void PopulateDRMCapabilities(Capabilities* caps,
+                             const FeatureInfo* feature_info);
+#endif
 
 bool CheckUniqueAndNonNullIds(GLsizei n, const GLuint* client_ids);
 
@@ -91,13 +110,15 @@ void LogGLDebugMessage(GLenum source,
                        GLsizei length,
                        const GLchar* message,
                        Logger* error_logger);
-void InitializeGLDebugLogging(bool log_non_errors,
-                              GLDEBUGPROC callback,
-                              const void* user_param);
+GPU_GLES2_EXPORT void InitializeGLDebugLogging(bool log_non_errors,
+                                               GLDEBUGPROC callback,
+                                               const void* user_param);
 
 bool ValidContextLostReason(GLenum reason);
 error::ContextLostReason GetContextLostReasonFromResetStatus(
     GLenum reset_status);
+
+GPU_GLES2_EXPORT gfx::Vector2d GetCompressedTexBlockDimensions(GLenum format);
 
 bool GetCompressedTexSizeInBytes(const char* function_name,
                                  GLsizei width,
@@ -145,8 +166,7 @@ CopyTextureMethod GetCopyTextureCHROMIUMMethod(const FeatureInfo* feature_info,
                                                GLenum dest_internal_format,
                                                bool flip_y,
                                                bool premultiply_alpha,
-                                               bool unpremultiply_alpha,
-                                               bool dither);
+                                               bool unpremultiply_alpha);
 
 bool ValidateCopyTextureCHROMIUMInternalFormats(const FeatureInfo* feature_info,
                                                 GLenum source_internal_format,
@@ -157,13 +177,27 @@ GLenum GetTextureBindingQuery(GLenum texture_type);
 
 gfx::OverlayTransform GetGFXOverlayTransform(GLenum plane_transform);
 
-bool GetGFXBufferFormat(GLenum internal_format, gfx::BufferFormat* out_format);
-bool GetGFXBufferUsage(GLenum buffer_usage, gfx::BufferUsage* out_usage);
-
 bool IsASTCFormat(GLenum internal_format);
 bool IsCompressedTextureFormat(GLenum internal_format);
 
+Texture* CreateGLES2TextureWithLightRef(GLuint service_id, GLenum target);
+
 }  // namespace gles2
+
+// Drains all GL errors from `gl_api` and returns the first error encountered,
+// or GL_NO_ERROR if there were no errors or `gl_api` is null.
+inline GLenum DrainGLErrors(gl::GLApi* gl_api) {
+  if (!gl_api) {
+    return GL_NO_ERROR;
+  }
+  GLenum error = gl_api->glGetErrorFn();
+  GLenum first_error = error;
+  while (error != GL_NO_ERROR) {
+    error = gl_api->glGetErrorFn();
+  }
+  return first_error;
+}
+
 }  // namespace gpu
 
 #endif  // GPU_COMMAND_BUFFER_SERVICE_GL_UTILS_H_

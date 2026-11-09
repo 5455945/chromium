@@ -25,6 +25,7 @@ import logging
 import sys
 
 from blinkpy.common.host import Host
+from blinkpy.common.path_finder import get_chromium_src_dir
 from blinkpy.style import checker
 from blinkpy.style.checker import StyleProcessor
 from blinkpy.style.filereader import TextFileReader
@@ -85,7 +86,10 @@ def change_directory(filesystem, checkout_root, paths):
 
   Pass only files below the checkout root to ensure correct results.
   See the help documentation for more info.
-""", path, checkout_root)
+""",
+                    path,
+                    checkout_root,
+                )
 
                 return paths
             rel_paths.append(rel_path)
@@ -102,9 +106,15 @@ class CheckBlinkStyle(object):
     def _engage_awesome_stderr_hacks(self):
         # Change stderr to write with replacement characters so we don't die
         # if we try to print something containing non-ASCII characters.
-        stderr = codecs.StreamReaderWriter(sys.stderr,
-                                           codecs.getreader('utf8'),
-                                           codecs.getwriter('utf8'), 'replace')
+        # We use sys.stderr.buffer in Python 3, since StreamReaderWriter writes
+        # bytes to the specified stream (this fix copied from cpplint.py).
+        stderr = codecs.StreamReaderWriter(
+            getattr(sys.stderr, 'buffer', sys.stderr),
+            codecs.getreader('utf8'),
+            codecs.getwriter('utf8'),
+            'replace',
+        )
+
         # Setting an "encoding" attribute on the stream is necessary to
         # prevent the logging module from raising an error.  See
         # the checker.configure_logging() function for more information.
@@ -135,29 +145,34 @@ class CheckBlinkStyle(object):
         (paths, options) = parser.parse(args)
 
         configuration = checker.check_blink_style_configuration(options)
-
-        paths = change_directory(
-            host.filesystem,
-            checkout_root=host.git().checkout_root,
-            paths=paths)
-
         style_processor = StyleProcessor(configuration)
         file_reader = TextFileReader(host.filesystem, style_processor)
 
-        if paths and not options.diff_files:
-            file_reader.process_paths(paths)
+        chromium_src_dir = get_chromium_src_dir()
+        paths = change_directory(
+            host.filesystem, checkout_root=chromium_src_dir, paths=paths
+        )
+
+        if git := host.git():
+            if paths and not options.diff_files:
+                file_reader.process_paths(paths)
+            else:
+                changed_files = paths if options.diff_files else None
+                patch = git.create_patch(
+                    options.git_commit, changed_files=changed_files
+                )
+                # create_patch intentionally returns binary data, but we have to
+                # decode it because patch_checker.check assumes str data.
+                patch = patch.decode()
+                patch_checker = PatchReader(file_reader)
+                patch_checker.check(patch)
         else:
-            changed_files = paths if options.diff_files else None
-            patch = host.git().create_patch(
-                options.git_commit, changed_files=changed_files)
-            patch_checker = PatchReader(file_reader)
-            patch_checker.check(patch)
+            file_reader.process_paths(paths)
 
         error_count = style_processor.error_count
         file_count = file_reader.file_count
-        delete_only_file_count = file_reader.delete_only_file_count
+        delete_only_file_count = file_reader.delete_only_file_count  # noqa: F841
 
-        _log.info('Total errors found: %d in %d files', error_count,
-                  file_count)
+        _log.info('Total errors found: %d in %d files', error_count, file_count)
         # We fail when style errors are found.
         return error_count > 0

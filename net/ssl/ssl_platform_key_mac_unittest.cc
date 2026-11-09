@@ -1,25 +1,31 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/ssl/ssl_platform_key_mac.h"
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <Security/SecItem.h>
+#include <Security/SecKey.h>
 
 #include <string>
+#include <string_view>
 
+#include "base/apple/scoped_cftyperef.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/mac/scoped_cftyperef.h"
 #include "base/memory/ref_counted.h"
+#include "base/numerics/checked_math.h"
 #include "base/test/task_environment.h"
+#include "crypto/apple/scoped_fake_keychain_v2.h"
+#include "crypto/apple/test_helpers.h"
+#include "crypto/sign.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/ssl/ssl_private_key_test_util.h"
 #include "net/test/cert_test_util.h"
-#include "net/test/keychain_test_util_mac.h"
 #include "net/test/test_data_directory.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
 
 namespace net {
 
@@ -34,9 +40,9 @@ struct TestKey {
 
 const TestKey kTestKeys[] = {
     {"RSA", "client_1.pem", "client_1.pk8", EVP_PKEY_RSA},
-    {"ECDSA_P256", "client_4.pem", "client_4.pk8", EVP_PKEY_EC},
-    {"ECDSA_P384", "client_5.pem", "client_5.pk8", EVP_PKEY_EC},
-    {"ECDSA_P521", "client_6.pem", "client_6.pk8", EVP_PKEY_EC},
+    {"ECDSA_P256", "client_p256.pem", "client_p256.pk8", EVP_PKEY_EC},
+    {"ECDSA_P384", "client_p384.pem", "client_p384.pk8", EVP_PKEY_EC},
+    {"ECDSA_P521", "client_p521.pem", "client_p521.pk8", EVP_PKEY_EC},
 };
 
 std::string TestKeyToString(const testing::TestParamInfo<TestKey>& params) {
@@ -57,36 +63,84 @@ TEST_P(SSLPlatformKeyMacTest, KeyMatches) {
       ImportCertFromFile(GetTestCertsDirectory(), test_key.cert_file);
   ASSERT_TRUE(cert);
 
-  std::string pkcs8;
   base::FilePath pkcs8_path =
       GetTestCertsDirectory().AppendASCII(test_key.key_file);
-  ASSERT_TRUE(base::ReadFileToString(pkcs8_path, &pkcs8));
+  std::optional<std::vector<uint8_t>> pkcs8 = base::ReadFileToBytes(pkcs8_path);
+  ASSERT_TRUE(pkcs8);
+  base::apple::ScopedCFTypeRef<SecKeyRef> sec_key =
+      crypto::apple::SecKeyFromPKCS8(*pkcs8);
+  ASSERT_TRUE(sec_key);
 
-  // Create a temporary keychain.
-  ScopedTestKeychain scoped_keychain;
-  ASSERT_TRUE(scoped_keychain.Initialize());
-  SecKeychainRef keychain = scoped_keychain.keychain();
-
-  // Import cert and key to the keychain.
-  base::ScopedCFTypeRef<SecIdentityRef> sec_identity(
-      ImportCertAndKeyToKeychain(cert.get(), pkcs8, keychain));
-  ASSERT_TRUE(sec_identity);
-
-  // Finally, test the code to look up the key.
+  // Make an `SSLPrivateKey` backed by `sec_key`.
   scoped_refptr<SSLPrivateKey> key =
-      CreateSSLPrivateKeyForSecIdentity(cert.get(), sec_identity.get());
+      CreateSSLPrivateKeyForSecKey(cert.get(), sec_key.get());
   ASSERT_TRUE(key);
 
   // Mac keys from the default provider are expected to support all algorithms.
   EXPECT_EQ(SSLPrivateKey::DefaultAlgorithmPreferences(test_key.type, true),
             key->GetAlgorithmPreferences());
 
-  TestSSLPrivateKeyMatches(key.get(), pkcs8);
+  TestSSLPrivateKeyMatches(key.get(), *pkcs8);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
                          SSLPlatformKeyMacTest,
                          testing::ValuesIn(kTestKeys),
                          TestKeyToString);
+
+TEST(SSLPlatformKeyMacInvalidTest, UnsupportedKeyType) {
+  base::test::TaskEnvironment task_environment;
+
+  scoped_refptr<X509Certificate> cert =
+      ImportCertFromFile(GetTestCertsDirectory(), "client_x25519.pem");
+  ASSERT_TRUE(cert);
+
+  // macOS does not support X25519 SecKeyRefs. However,
+  // `CreateSSLPrivateKeyForSecKey` only inspects the certificate's public key
+  // when checking the key type, so test rejection by pairing the certificate
+  // with an arbitrary other key.
+  base::FilePath pkcs8_path =
+      GetTestCertsDirectory().AppendASCII("client_1.pk8");
+  std::optional<std::vector<uint8_t>> pkcs8 = base::ReadFileToBytes(pkcs8_path);
+  ASSERT_TRUE(pkcs8);
+  base::apple::ScopedCFTypeRef<SecKeyRef> sec_key =
+      crypto::apple::SecKeyFromPKCS8(*pkcs8);
+  ASSERT_TRUE(sec_key);
+
+  scoped_refptr<SSLPrivateKey> key =
+      CreateSSLPrivateKeyForSecKey(cert.get(), sec_key.get());
+  EXPECT_FALSE(key);
+}
+
+namespace {
+
+constexpr char kTestKeychainAccessGroup[] = "test-keychain-access-group";
+constexpr crypto::sign::SignatureKind kAcceptableAlgos[] = {
+    crypto::sign::ECDSA_SHA256};
+
+const crypto::UnexportableKeyProvider::Config config = {
+    .keychain_access_group = kTestKeychainAccessGroup,
+};
+
+}  // namespace
+
+// Tests that a SSLPrivateKey can be created from a
+// crypto::UnexportableSigningKey.
+TEST(UnexportableSSLPlatformKeyMacTest, Convert) {
+  crypto::apple::ScopedFakeKeychainV2 scoped_fake_apple_keychain_{
+      kTestKeychainAccessGroup};
+  // Create a crypto::UnexportableSigningKey and verify preconditions.
+  std::unique_ptr<crypto::UnexportableKeyProvider> provider =
+      crypto::GetUnexportableKeyProvider(config);
+  ASSERT_TRUE(provider);
+  std::unique_ptr<crypto::UnexportableSigningKey> unexportable_key =
+      provider->GenerateSigningKeySlowly(kAcceptableAlgos);
+  ASSERT_TRUE(unexportable_key);
+  SecKeyRef key_ref = unexportable_key->GetSecKeyRef();
+  EXPECT_TRUE(key_ref);
+
+  auto ssl_private_key = WrapUnexportableKey(*unexportable_key);
+  EXPECT_TRUE(ssl_private_key);
+}
 
 }  // namespace net

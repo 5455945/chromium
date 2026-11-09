@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,46 +7,44 @@
 
 #include "base/component_export.h"
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "printing/buildflags/buildflags.h"
 
-namespace printing {
-namespace features {
+namespace printing::features {
 
 // The following features are declared alphabetically. The features should be
 // documented with descriptions of their behaviors in the .cc file.
 
-#if defined(OS_MAC)
 COMPONENT_EXPORT(PRINTING_BASE)
-extern const base::Feature kCupsIppPrintingBackend;
-#endif  // defined(OS_MAC)
+BASE_DECLARE_FEATURE(kAlignPdfDefaultPrintSettingsWithHTML);
 
-#if defined(OS_WIN)
-COMPONENT_EXPORT(PRINTING_BASE)
-extern const base::Feature kPrintWithReducedRasterization;
-COMPONENT_EXPORT(PRINTING_BASE)
-extern const base::Feature kUseXpsForPrinting;
-COMPONENT_EXPORT(PRINTING_BASE)
-extern const base::Feature kUseXpsForPrintingFromPdf;
+#if BUILDFLAG(IS_LINUX)
+COMPONENT_EXPORT(PRINTING_BASE) BASE_DECLARE_FEATURE(kCupsIppPrintingBackend);
+COMPONENT_EXPORT(PRINTING_BASE) BASE_DECLARE_FEATURE(kLinuxXdgPrintPortal);
+#endif  // BUILDFLAG(IS_LINUX)
 
-// Helper function to determine if there is any print path which could require
-// the use of XPS print capabilities.
-COMPONENT_EXPORT(PRINTING_BASE) bool IsXpsPrintCapabilityRequired();
-
-// Helper function to determine if printing of a document from a particular
-// source should be done using XPS printing API instead of with GDI.
+#if BUILDFLAG(IS_WIN)
 COMPONENT_EXPORT(PRINTING_BASE)
-bool ShouldPrintUsingXps(bool source_is_pdf);
-#endif  // defined(OS_WIN)
-
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) || \
-    defined(OS_CHROMEOS)
+BASE_DECLARE_FEATURE(kPrintWithPostScriptType42Fonts);
 COMPONENT_EXPORT(PRINTING_BASE)
-extern const base::Feature kEnableOopPrintDrivers;
-#endif  // defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) ||
-        // defined(OS_CHROMEOS)
+BASE_DECLARE_FEATURE(kPrintWithReducedRasterization);
+#endif  // BUILDFLAG(IS_WIN)
 
-}  // namespace features
-}  // namespace printing
+#if BUILDFLAG(ENABLE_OOP_PRINTING)
+COMPONENT_EXPORT(PRINTING_BASE) BASE_DECLARE_FEATURE(kEnableOopPrintDrivers);
+COMPONENT_EXPORT(PRINTING_BASE)
+extern const base::FeatureParam<bool> kEnableOopPrintDriversEarlyStart;
+COMPONENT_EXPORT(PRINTING_BASE)
+extern const base::FeatureParam<bool> kEnableOopPrintDriversJobPrint;
+COMPONENT_EXPORT(PRINTING_BASE)
+extern const base::FeatureParam<bool> kEnableOopPrintDriversSandbox;
+#if BUILDFLAG(IS_WIN)
+COMPONENT_EXPORT(PRINTING_BASE)
+extern const base::FeatureParam<bool> kEnableOopPrintDriversSingleProcess;
+#endif
+#endif  // BUILDFLAG(ENABLE_OOP_PRINTING)
+
+}  // namespace printing::features
 
 #endif  // PRINTING_PRINTING_FEATURES_H_

@@ -35,11 +35,14 @@
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/callback.h"
+#include "base/check_op.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/platform/heap/heap_test_utilities.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/testing/code_cache_loader_mock.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "v8/include/v8-platform.h"
 
@@ -64,15 +67,20 @@ class TestingPlatformSupport : public Platform {
   WebString DefaultLocale() override;
   WebData GetDataResource(int resource_id,
                           ui::ResourceScaleFactor scale_factor) override;
-  WebData UncompressDataResource(int resource_id) override;
+  std::string GetDataResourceString(int resource_id) override;
   ThreadSafeBrowserInterfaceBrokerProxy* GetBrowserInterfaceBroker() override;
   bool IsThreadedAnimationEnabled() override;
-  bool IsUseZoomForDSFEnabled() override;
-  cc::TaskGraphRunner* GetTaskGraphRunner() override;
+  std::unique_ptr<blink::WebV8ValueConverter> CreateWebV8ValueConverter()
+      override;
+  scoped_refptr<base::SequencedTaskRunner> MediaThreadTaskRunner() override;
+  scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() const override;
 
   virtual void RunUntilIdle();
   void SetThreadedAnimationEnabled(bool enabled);
-  void SetUseZoomForDSF(bool enabled);
+
+  virtual const base::Clock* GetClock() const;
+  virtual const base::TickClock* GetTickClock() const;
+  virtual base::TimeTicks NowTicks() const;
 
   // Overrides the handling of GetInterface on the platform's associated
   // interface provider.
@@ -91,12 +99,11 @@ class TestingPlatformSupport : public Platform {
  protected:
   class TestingBrowserInterfaceBroker;
 
-  Platform* const old_platform_;
+  const raw_ptr<Platform> old_platform_;
   scoped_refptr<TestingBrowserInterfaceBroker> interface_broker_;
 
  private:
   bool is_threaded_animation_enabled_ = false;
-  bool is_zoom_for_dsf_enabled_ = true;
 };
 
 // ScopedTestingPlatformSupport<MyTestingPlatformSupport> can be used to
@@ -151,10 +158,12 @@ class ScopedTestingPlatformSupport final {
 
  private:
   std::unique_ptr<T> testing_platform_support_;
-  Platform* original_platform_;
+  raw_ptr<Platform> original_platform_;
 };
 
 class ScopedUnittestsEnvironmentSetup final {
+  STACK_ALLOCATED();
+
  public:
   ScopedUnittestsEnvironmentSetup(int argc, char** argv);
   ScopedUnittestsEnvironmentSetup(const ScopedUnittestsEnvironmentSetup&) =
@@ -164,11 +173,13 @@ class ScopedUnittestsEnvironmentSetup final {
   ~ScopedUnittestsEnvironmentSetup();
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<base::TestDiscardableMemoryAllocator>
       discardable_memory_allocator_;
   std::unique_ptr<Platform> dummy_platform_;
   std::unique_ptr<v8::Platform> v8_platform_for_heap_testing_;
   std::unique_ptr<TestingPlatformSupport> testing_platform_support_;
+  std::optional<HeapPointersOnStackScope> conservative_gc_scope_;
 };
 
 }  // namespace blink

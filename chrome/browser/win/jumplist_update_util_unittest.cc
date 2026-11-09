@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,11 +46,11 @@ TEST(JumpListUpdateUtilTest, MostVisitedItemsUnchanged) {
   // Reverse history_items, so the 3 urls in history_items are in reverse order:
   // Gmail, Youtube, Google.
   // The 3 urls in jumplist_items remain the same: Google, Youtube, Gmail.
-  std::reverse(history_items.begin(), history_items.end());
+  std::ranges::reverse(history_items);
   EXPECT_FALSE(MostVisitedItemsUnchanged(jumplist_items, history_items, 3));
 
   // Reverse history_items back.
-  std::reverse(history_items.begin(), history_items.end());
+  std::ranges::reverse(history_items);
   EXPECT_TRUE(MostVisitedItemsUnchanged(jumplist_items, history_items, 3));
 
   // Pop out the last url ("Gmail") from jumplist_items.

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 
 #include <jni.h>
 
+#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
 #include "url/origin.h"
 
@@ -24,6 +25,11 @@ class CONTENT_EXPORT NavigationControllerAndroid {
  public:
   explicit NavigationControllerAndroid(
       NavigationControllerImpl* navigation_controller);
+
+  NavigationControllerAndroid(const NavigationControllerAndroid&) = delete;
+  NavigationControllerAndroid& operator=(const NavigationControllerAndroid&) =
+      delete;
+
   ~NavigationControllerAndroid();
 
   NavigationControllerImpl* navigation_controller() const {
@@ -32,127 +38,92 @@ class CONTENT_EXPORT NavigationControllerAndroid {
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
-  jboolean CanGoBack(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& obj);
-  jboolean CanGoForward(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& obj);
-  jboolean CanGoToOffset(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj,
-                         jint offset);
-  void GoBack(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void GoForward(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void GoToOffset(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& obj,
-                  jint offset);
-  jboolean IsInitialNavigation(JNIEnv* env,
-                               const base::android::JavaParamRef<jobject>& obj);
-  void LoadIfNecessary(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& obj);
-  void ContinuePendingReload(JNIEnv* env,
-                             const base::android::JavaParamRef<jobject>& obj);
-  void Reload(JNIEnv* env,
-              const base::android::JavaParamRef<jobject>& obj,
-              jboolean check_for_repost);
-  void ReloadBypassingCache(JNIEnv* env,
-                            const base::android::JavaParamRef<jobject>& obj,
-                            jboolean check_for_repost);
-  jboolean NeedsReload(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& obj);
-  void SetNeedsReload(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj);
-  void CancelPendingReload(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj);
-  void GoToNavigationIndex(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj,
-                           jint index);
-  void LoadUrl(
+  bool CanGoBack(JNIEnv* env);
+  bool CanGoForward(JNIEnv* env);
+  bool CanGoToOffset(JNIEnv* env, int32_t offset);
+  void GoBack(JNIEnv* env);
+  void GoForward(JNIEnv* env);
+  void GoToOffset(JNIEnv* env, int32_t offset);
+  bool IsInitialNavigation(JNIEnv* env);
+  void LoadIfNecessary(JNIEnv* env);
+  void ContinuePendingReload(JNIEnv* env);
+  void Reload(JNIEnv* env, bool check_for_repost);
+  void ReloadBypassingCache(JNIEnv* env, bool check_for_repost);
+  bool NeedsReload(JNIEnv* env);
+  void SetNeedsReload(JNIEnv* env);
+  void CancelPendingReload(JNIEnv* env);
+  void GoToNavigationIndex(JNIEnv* env, int32_t index);
+  base::android::ScopedJavaLocalRef<jobject> LoadUrl(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jstring>& url,
-      jint load_url_type,
-      jint transition_type,
-      const base::android::JavaParamRef<jstring>& j_referrer_url,
-      jint referrer_policy,
-      jint ua_override_option,
-      const base::android::JavaParamRef<jstring>& extra_headers,
-      const base::android::JavaParamRef<jobject>& j_post_data,
-      const base::android::JavaParamRef<jstring>& base_url_for_data_url,
-      const base::android::JavaParamRef<jstring>& virtual_url_for_data_url,
-      const base::android::JavaParamRef<jstring>& data_url_as_string,
-      jboolean can_load_local_resources,
-      jboolean is_renderer_initiated,
-      jboolean should_replace_current_entry,
-      const base::android::JavaParamRef<jobject>& j_initiator_origin,
-      jboolean has_user_gesture,
-      jboolean should_clear_history_list,
-      jlong input_start,
-      const base::android::JavaParamRef<jstring>& source_package_name,
-      const base::android::JavaParamRef<jstring>& attribution_source_event_id,
-      const base::android::JavaParamRef<jstring>& attribution_destination,
-      const base::android::JavaParamRef<jstring>& attribution_report_to,
-      jlong attributionExpiry);
-  void ClearSslPreferences(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& /* obj */);
-  bool GetUseDesktopUserAgent(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& /* obj */);
-  void SetUseDesktopUserAgent(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& /* obj */,
-      jboolean state,
-      jboolean reload_on_state_change);
-  base::android::ScopedJavaLocalRef<jobject> GetEntryAtIndex(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      int index);
-  base::android::ScopedJavaLocalRef<jobject> GetVisibleEntry(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& /* obj */);
-  base::android::ScopedJavaLocalRef<jobject> GetPendingEntry(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& /* obj */);
+      const base::android::JavaRef<jstring>& url,
+      int32_t load_url_type,
+      int32_t transition_type,
+      const base::android::JavaRef<jstring>& j_referrer_url,
+      int32_t referrer_policy,
+      int32_t ua_override_option,
+      const base::android::JavaRef<jstring>& extra_headers,
+      const base::android::JavaRef<jobject>& j_post_data,
+      const base::android::JavaRef<jstring>& base_url_for_data_url,
+      const base::android::JavaRef<jstring>& virtual_url_for_special_cases,
+      const base::android::JavaRef<jstring>& data_url_as_string,
+      bool can_load_local_resources,
+      bool is_renderer_initiated,
+      bool should_replace_current_entry,
+      const base::android::JavaRef<jobject>& j_initiator_origin,
+      bool has_user_gesture,
+      bool should_clear_history_list,
+      const base::android::JavaRef<jobject>& j_additional_navigation_params,
+      int64_t input_start,
+      int64_t navigation_ui_data_ptr,
+      bool is_pdf,
+      bool remove_extra_headers_on_cross_origin_redirect,
+      const base::android::JavaRef<jstring>& internal_scroll_to_text_fragment);
+  void ClearSslPreferences(JNIEnv* env);
+  bool GetUseDesktopUserAgent(JNIEnv* env);
+  void SetUseDesktopUserAgent(JNIEnv* env,
+                              bool state,
+                              bool reload_on_state_change,
+                              bool skip_on_initial_navigation);
+  base::android::ScopedJavaLocalRef<jobject> GetEntryAtIndex(JNIEnv* env,
+                                                             int index);
+  base::android::ScopedJavaLocalRef<jobject> GetVisibleEntry(JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jobject> GetPendingEntry(JNIEnv* env);
   int GetNavigationHistory(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj,
-                           const base::android::JavaParamRef<jobject>& history);
+                           const base::android::JavaRef<jobject>& history);
   void GetDirectedNavigationHistory(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& history,
-      jboolean is_forward,
-      jint max_entries);
-  void ClearHistory(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj);
-  int GetLastCommittedEntryIndex(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj);
-  jboolean RemoveEntryAtIndex(JNIEnv* env,
-                              const base::android::JavaParamRef<jobject>& obj,
-                              jint index);
-  void PruneForwardEntries(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj);
+      const base::android::JavaRef<jobject>& history,
+      bool is_forward,
+      int32_t max_entries);
+  void ClearHistory(JNIEnv* env);
+  int GetLastCommittedEntryIndex(JNIEnv* env);
+  bool CanViewSource(JNIEnv* env);
+  bool RemoveEntryAtIndex(JNIEnv* env, int32_t index);
+  void PruneForwardEntries(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jstring> GetEntryExtraData(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jint index,
-      const base::android::JavaParamRef<jstring>& jkey);
+      int32_t index,
+      const base::android::JavaRef<jstring>& jkey);
   void SetEntryExtraData(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj,
-                         jint index,
-                         const base::android::JavaParamRef<jstring>& jkey,
-                         const base::android::JavaParamRef<jstring>& jvalue);
-  jboolean IsEntryMarkedToBeSkipped(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jint index);
+                         int32_t index,
+                         const base::android::JavaRef<jstring>& jkey,
+                         const base::android::JavaRef<jstring>& jvalue);
+  void CopyStateFrom(JNIEnv* env,
+                     int64_t source_navigation_controller_ptr,
+                     bool needs_reload);
 
  private:
-  url::Origin OriginFromPackageName(const std::string& package);
+  void SetUseDesktopUserAgentInternal(bool enabled,
+                                      bool reload_on_state_change,
+                                      bool skip_on_initial_navigation);
 
-  NavigationControllerImpl* navigation_controller_;
-  base::android::ScopedJavaGlobalRef<jobject> obj_;
-
-  DISALLOW_COPY_AND_ASSIGN(NavigationControllerAndroid);
+  raw_ptr<NavigationControllerImpl> navigation_controller_;
+  // A weak reference to the Java object. The Java object is kept alive by a
+  // static map in the Java code. ScopedJavaGlobalRef would scale poorly with a
+  // large number of WebContents as it consumes an entry in the finite global
+  // ref table.
+  JavaObjectWeakGlobalRef obj_;
+  base::WeakPtrFactory<NavigationControllerAndroid> weak_factory_{this};
 };
 
 }  // namespace content

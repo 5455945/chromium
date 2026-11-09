@@ -1,21 +1,24 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FETCH_FETCH_DATA_LOADER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FETCH_FETCH_DATA_LOADER_H_
 
-#include "base/single_thread_task_runner.h"
+#include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/system/data_pipe.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
 class BytesConsumer;
+class DrainedDataPipeClient;
 class FormData;
 class TextResourceDecoderOptions;
 
@@ -46,9 +49,12 @@ class CORE_EXPORT FetchDataLoader : public GarbageCollected<FetchDataLoader> {
     virtual void DidFetchDataLoadedString(const String&) { NOTREACHED(); }
     // This is called synchronously from FetchDataLoader::Start() to provide
     // the target data pipe.  This may be a pipe extracted from the consumer
-    // or a new pipe that data will be copied into.
+    // or a new pipe that data will be copied into. `drained_pipe_client` is
+    // only non-null in the former case, when the consumer has an object that
+    // must be told what is done with the pipe contents.
     virtual void DidFetchDataStartedDataPipe(
-        mojo::ScopedDataPipeConsumerHandle handle) {
+        mojo::ScopedDataPipeConsumerHandle handle,
+        DrainedDataPipeClient* drained_pipe_client) {
       NOTREACHED();
     }
     // This is called after all data are read from |handle| and written
@@ -64,7 +70,7 @@ class CORE_EXPORT FetchDataLoader : public GarbageCollected<FetchDataLoader> {
     virtual void DidFetchDataLoadFailed() = 0;
 
     // This function is called when an abort has been signalled.
-    virtual void Abort() = 0;
+    virtual void Abort(ScriptValue reason) = 0;
 
     void Trace(Visitor* visitor) const override {}
   };

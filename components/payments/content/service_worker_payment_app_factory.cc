@@ -1,48 +1,44 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/payments/content/service_worker_payment_app_factory.h"
 
+#include <algorithm>
 #include <map>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/developer_console_logger.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
 #include "components/payments/content/service_worker_payment_app.h"
 #include "components/payments/content/service_worker_payment_app_finder.h"
 #include "components/payments/core/error_message_util.h"
 #include "components/payments/core/features.h"
 #include "components/payments/core/method_strings.h"
+#include "components/payments/core/web_payments_web_data_service.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/stored_payment_app.h"
 #include "content/public/browser/supported_delegations.h"
 #include "content/public/browser/web_contents.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 
 namespace payments {
-namespace {
-
-std::vector<mojom::PaymentMethodDataPtr> Clone(
-    const std::vector<mojom::PaymentMethodDataPtr>& original) {
-  std::vector<mojom::PaymentMethodDataPtr> clone(original.size());
-  std::transform(
-      original.begin(), original.end(), clone.begin(),
-      [](const mojom::PaymentMethodDataPtr& item) { return item.Clone(); });
-  return clone;
-}
-
-}  // namespace
 
 class ServiceWorkerPaymentAppCreator {
  public:
-  ServiceWorkerPaymentAppCreator(
-      ServiceWorkerPaymentAppFactory* owner,
+  explicit ServiceWorkerPaymentAppCreator(
       base::WeakPtr<PaymentAppFactory::Delegate> delegate)
-      : owner_(owner), delegate_(delegate), log_(delegate->GetWebContents()) {}
+      : delegate_(delegate), log_(delegate->GetWebContents()) {}
 
-  ~ServiceWorkerPaymentAppCreator() {}
+  ServiceWorkerPaymentAppCreator(const ServiceWorkerPaymentAppCreator&) =
+      delete;
+  ServiceWorkerPaymentAppCreator& operator=(
+      const ServiceWorkerPaymentAppCreator&) = delete;
+
+  ~ServiceWorkerPaymentAppCreator() = default;
 
   void CreatePaymentApps(
       content::InstalledPaymentAppsFinder::PaymentApps apps,
@@ -59,14 +55,14 @@ class ServiceWorkerPaymentAppCreator {
 
     base::RepeatingClosure show_processing_spinner = base::BindRepeating(
         &PaymentAppFactory::Delegate::ShowProcessingSpinner, delegate_);
+    base::RepeatingClosure show_loading_view = base::BindRepeating(
+        &PaymentAppFactory::Delegate::ShowLoadingView, delegate_);
     std::vector<std::string> skipped_app_names;
     for (auto& installed_app : apps) {
       std::vector<std::string> enabled_methods =
           installed_app.second->enabled_methods;
       bool has_app_store_billing_method =
-          enabled_methods.end() != std::find(enabled_methods.begin(),
-                                             enabled_methods.end(),
-                                             methods::kGooglePlayBilling);
+          std::ranges::contains(enabled_methods, methods::kGooglePlayBilling);
       if (ShouldSkipAppForPartialDelegation(
               installed_app.second->supported_delegations, delegate_,
               has_app_store_billing_method)) {
@@ -77,7 +73,8 @@ class ServiceWorkerPaymentAppCreator {
           delegate_->GetWebContents(), delegate_->GetTopOrigin(),
           delegate_->GetFrameOrigin(), delegate_->GetSpec(),
           std::move(installed_app.second), delegate_->IsOffTheRecord(),
-          show_processing_spinner);
+          delegate_->PrefsCanMakePayment(), show_processing_spinner,
+          show_loading_view);
       app->ValidateCanMakePayment(base::BindOnce(
           &ServiceWorkerPaymentAppCreator::OnSWPaymentAppValidated,
           weak_ptr_factory_.GetWeakPtr()));
@@ -96,10 +93,12 @@ class ServiceWorkerPaymentAppCreator {
         continue;
       }
       auto app = std::make_unique<ServiceWorkerPaymentApp>(
-          delegate_->GetWebContents(), delegate_->GetTopOrigin(),
+          delegate_->GetWebContents(),
+          delegate_->GetInitiatorRenderFrameHostId(), delegate_->GetTopOrigin(),
           delegate_->GetFrameOrigin(), delegate_->GetSpec(),
           std::move(installable_app.second), installable_app.first.spec(),
-          delegate_->IsOffTheRecord(), show_processing_spinner);
+          delegate_->IsOffTheRecord(), delegate_->PrefsCanMakePayment(),
+          show_processing_spinner, show_loading_view);
       app->ValidateCanMakePayment(base::BindOnce(
           &ServiceWorkerPaymentAppCreator::OnSWPaymentAppValidated,
           weak_ptr_factory_.GetWeakPtr()));
@@ -141,16 +140,15 @@ class ServiceWorkerPaymentAppCreator {
   }
 
  private:
-  void OnSWPaymentAppValidated(ServiceWorkerPaymentApp* app, bool result) {
-    if (!delegate_) {
+  void OnSWPaymentAppValidated(base::WeakPtr<ServiceWorkerPaymentApp> app) {
+    if (!app || !delegate_) {
       FinishAndCleanup();
       return;
     }
 
-    auto iterator = available_apps_.find(app);
+    auto iterator = available_apps_.find(app.get());
     if (iterator != available_apps_.end()) {
-      if (result)
-        delegate_->OnPaymentAppCreated(std::move(iterator->second));
+      delegate_->OnPaymentAppCreated(std::move(iterator->second));
       available_apps_.erase(iterator);
     }
 
@@ -161,53 +159,44 @@ class ServiceWorkerPaymentAppCreator {
   void FinishAndCleanup() {
     if (delegate_)
       delegate_->OnDoneCreatingPaymentApps();
-    owner_->DeleteCreator(this);
   }
 
-  ServiceWorkerPaymentAppFactory* owner_;
   base::WeakPtr<PaymentAppFactory::Delegate> delegate_;
   std::map<PaymentApp*, std::unique_ptr<PaymentApp>> available_apps_;
   DeveloperConsoleLogger log_;
   int number_of_pending_sw_payment_apps_ = 0;
 
   base::WeakPtrFactory<ServiceWorkerPaymentAppCreator> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerPaymentAppCreator);
 };
 
 ServiceWorkerPaymentAppFactory::ServiceWorkerPaymentAppFactory()
     : PaymentAppFactory(PaymentApp::Type::SERVICE_WORKER_APP) {}
 
-ServiceWorkerPaymentAppFactory::~ServiceWorkerPaymentAppFactory() {}
+ServiceWorkerPaymentAppFactory::~ServiceWorkerPaymentAppFactory() = default;
 
 void ServiceWorkerPaymentAppFactory::Create(base::WeakPtr<Delegate> delegate) {
   auto* rfh = delegate->GetInitiatorRenderFrameHost();
-  if (!rfh || !rfh->IsActive() || !delegate->GetWebContents())
-    return;  // The frame or page is being unloaded.
+  // Exit if frame or page is being unloaded or payments are otherwise
+  // disallowed.
+  if (!rfh || !rfh->IsActive() || !delegate->GetWebContents() ||
+      !rfh->IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kPayment)) {
+    return;
+  }
 
-  auto creator = std::make_unique<ServiceWorkerPaymentAppCreator>(
-      /*owner=*/this, delegate);
-  ServiceWorkerPaymentAppCreator* creator_raw_pointer = creator.get();
-  creators_[creator_raw_pointer] = std::move(creator);
+  creator_ = std::make_unique<ServiceWorkerPaymentAppCreator>(delegate);
 
   ServiceWorkerPaymentAppFinder::GetOrCreateForCurrentDocument(rfh)
       ->GetAllPaymentApps(
           delegate->GetFrameSecurityOrigin(),
-          delegate->GetPaymentManifestWebDataService(),
-          Clone(delegate->GetMethodData()),
-          delegate->MayCrawlForInstallablePaymentApps(),
+          delegate->GetWebPaymentsWebDataService(),
+          mojo::Clone(delegate->GetMethodData()), delegate->GetCSPChecker(),
           base::BindOnce(&ServiceWorkerPaymentAppCreator::CreatePaymentApps,
-                         creator_raw_pointer->GetWeakPtr()),
+                         creator_->GetWeakPtr()),
           base::BindOnce([]() {
             // Nothing needs to be done after writing cache. This callback is
             // used only in tests.
           }));
-}
-
-void ServiceWorkerPaymentAppFactory::DeleteCreator(
-    ServiceWorkerPaymentAppCreator* creator_raw_pointer) {
-  size_t number_of_deleted_creators = creators_.erase(creator_raw_pointer);
-  DCHECK_EQ(1U, number_of_deleted_creators);
 }
 
 }  // namespace payments

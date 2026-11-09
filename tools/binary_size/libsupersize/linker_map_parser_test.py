@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -9,6 +9,7 @@ import sys
 import unittest
 
 import linker_map_parser
+import models
 import test_util
 
 _SCRIPT_DIR = os.path.dirname(__file__)
@@ -34,16 +35,14 @@ def _CompareWithGolden(name=None):
   return real_decorator
 
 
-def _ReadMapFile(map_file):
-  ret = []
-  with open(map_file, 'r') as f:
+def _ReadMapFile(path):
+  with open(path, 'r') as f:
     for line in f:
       # Strip blank lines and comments.
       stripped_line = line.lstrip()
       if not stripped_line or stripped_line.startswith('#'):
         continue
-      ret.append(line)
-  return ret
+      yield line
 
 
 def _RenderSectionSizesAndRawSymbols(section_sizes, raw_symbols):
@@ -60,21 +59,16 @@ def _RenderSectionSizesAndRawSymbols(section_sizes, raw_symbols):
 
 
 class LinkerMapParserTest(unittest.TestCase):
-
   @_CompareWithGolden()
   def test_Parser(self):
-    map_file = _ReadMapFile(_TEST_MAP_PATH)
-    linker_name = linker_map_parser.DetectLinkerNameFromMapFile(iter(map_file))
-    section_sizes, raw_symbols, _ = (
-        linker_map_parser.MapFileParser().Parse(linker_name, iter(map_file)))
+    lines = _ReadMapFile(_TEST_MAP_PATH)
+    section_sizes, raw_symbols, _ = linker_map_parser.ParseLines(lines)
     return _RenderSectionSizesAndRawSymbols(section_sizes, raw_symbols)
 
   @_CompareWithGolden()
   def test_ParserCfi(self):
-    map_file = _ReadMapFile(_TEST_CFI_MAP_PATH)
-    linker_name = linker_map_parser.DetectLinkerNameFromMapFile(iter(map_file))
-    section_sizes, raw_symbols, _ = (
-        linker_map_parser.MapFileParser().Parse(linker_name, iter(map_file)))
+    lines = _ReadMapFile(_TEST_CFI_MAP_PATH)
+    section_sizes, raw_symbols, _ = linker_map_parser.ParseLines(lines)
     return _RenderSectionSizesAndRawSymbols(section_sizes, raw_symbols)
 
   def test_ParseArmAnnotations(self):
@@ -105,16 +99,35 @@ class LinkerMapParserTest(unittest.TestCase):
     self.assertEqual((False, None), fun('OUTLINED_FUNCTION_'))
     self.assertEqual((False, None), fun('abc'))
 
+  def test_ParseFeatureSection(self):
+    for section in ('.data', '.data.rel.ro'):
+      with self.subTest(section=section):
+        map_lines = [
+          '     VMA      LMA     Size Align Out     In      Symbol',
+          f'    1000     1000      100     8 {section}',
+          '    1000     1000       18     8         '
+          f'obj/foo.o:({section}..cr_features)',
+          '    1000     1000       18     1                 kMyFeature',
+        ]
+        parser = linker_map_parser.MapFileParserLld('lld_v1')
+        _, syms, _ = parser.Parse(iter(map_lines))
+        self.assertEqual(1, len(syms))
+        self.assertEqual('kMyFeature', syms[0].full_name)
+        self.assertEqual(section, syms[0].section_name)
+        self.assertTrue(syms[0].is_feature)
+        self.assertTrue(syms[0].flags & models.FLAG_FEATURE)
+
   @_CompareWithGolden()
   def test_Tokenize(self):
     ret = []
-    map_file = _ReadMapFile(_TEST_MAP_PATH)
-    linker_name = linker_map_parser.DetectLinkerNameFromMapFile(iter(map_file))
-    parser = linker_map_parser.MapFileParserLld(linker_name)
-    tokenizer = parser.Tokenize(iter(map_file))
-    for (_, address, size, level, span, tok) in tokenizer:
-      ret.append('%8X %8X (%d) %s %s' % (address, size, level, '-' * 8 if
-                                         span is None else '%8X' % span, tok))
+    lines = _ReadMapFile(_TEST_MAP_PATH)
+    parser = linker_map_parser.MapFileParserLld('lld-lto_v1')
+    tokenizer = parser.Tokenize(lines)
+    for _, address, size, level, span, tok in tokenizer:
+      ret.append(
+        '%8X %8X (%d) %s %s'
+        % (address, size, level, '-' * 8 if span is None else '%8X' % span, tok)
+      )
     return ret
 
 

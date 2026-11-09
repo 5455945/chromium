@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
 
 #include "base/strings/utf_string_conversions.h"
-#include "components/omnibox/browser/actions/omnibox_pedal_implementations.h"
 #include "components/omnibox/browser/actions/omnibox_pedal_provider.h"
 #include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,7 +20,7 @@ OmniboxPedal::TokenSequence make_sequence(std::vector<int> token_ids) {
 
 class OmniboxPedalTest : public testing::Test {
  protected:
-  OmniboxPedalTest() {}
+  OmniboxPedalTest() = default;
 };
 
 TEST_F(OmniboxPedalTest, SynonymGroupRespectsSingle) {
@@ -103,4 +102,28 @@ TEST_F(OmniboxPedalTest, SynonymGroupsDriveConceptMatches) {
   // This includes extra instances of optional groups, since it is match_once.
   EXPECT_FALSE(is_concept_match(
       make_sequence({required_b, required_a, optional, optional})));
+}
+
+TEST_F(OmniboxPedalTest, VerbatimSynonymGroupDrivesConceptMatches) {
+  constexpr int required_a = 1;
+  constexpr int required_b = 2;
+  constexpr int nonsense = 3;
+  scoped_refptr<OmniboxPedal> test_pedal = base::MakeRefCounted<OmniboxPedal>(
+      OmniboxPedalId::CLEAR_BROWSING_DATA,
+      OmniboxPedal::LabelStrings(
+          IDS_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_HINT,
+          IDS_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_SUGGESTION_CONTENTS,
+          IDS_ACC_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA_SUFFIX,
+          IDS_ACC_OMNIBOX_PEDAL_CLEAR_BROWSING_DATA),
+      GURL());
+  const auto is_concept_match = [&](OmniboxPedal::TokenSequence sequence) {
+    return test_pedal->IsConceptMatch(sequence);
+  };
+
+  test_pedal->AddVerbatimSequence(make_sequence({required_a, required_b}));
+
+  EXPECT_TRUE(is_concept_match(make_sequence({required_a, required_b})));
+  EXPECT_FALSE(
+      is_concept_match(make_sequence({required_a, required_b, nonsense})));
+  EXPECT_FALSE(is_concept_match(make_sequence({required_b, required_a})));
 }

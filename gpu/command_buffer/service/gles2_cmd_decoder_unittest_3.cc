@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,7 +41,6 @@ class GLES3DecoderTest3 : public GLES2DecoderTest3 {
   void SetUp() override {
     InitState init;
     init.gl_version = "OpenGL ES 3.0";
-    init.bind_generates_resource = true;
     init.context_type = CONTEXT_TYPE_OPENGLES3;
     InitDecoder(init);
   }
@@ -49,12 +48,6 @@ class GLES3DecoderTest3 : public GLES2DecoderTest3 {
 
 INSTANTIATE_TEST_SUITE_P(Service, GLES2DecoderTest3, ::testing::Bool());
 INSTANTIATE_TEST_SUITE_P(Service, GLES3DecoderTest3, ::testing::Bool());
-
-template <>
-void GLES2DecoderTestBase::SpecializedSetup<cmds::Uniform4f, 0>(
-    bool /* valid */) {
-  SetupShaderForUniform(GL_FLOAT_VEC4);
-}
 
 template <>
 void GLES2DecoderTestBase::SpecializedSetup<cmds::Uniform4fvImmediate, 0>(

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,20 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/time/time.h"
 #include "media/audio/audio_debug_recording_helper.h"
 #include "media/audio/audio_io.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
+
+using Error = AudioInputStream::AudioInputCallback::Error;
 
 namespace {
 
@@ -22,9 +27,9 @@ using testing::Return;
 using testing::StrictMock;
 using testing::Mock;
 
-const double kMaxVolume = 0.1234;
-const double kNewVolume = 0.2345;
-const double kVolume = 0.3456;
+constexpr double kMaxVolume = 0.1234;
+constexpr double kNewVolume = 0.2345;
+constexpr double kVolume = 0.3456;
 
 class MockStream : public AudioInputStream {
  public:
@@ -55,8 +60,10 @@ class MockCallback : public AudioInputStream::AudioInputCallback {
   MockCallback() = default;
   ~MockCallback() override = default;
 
-  MOCK_METHOD3(OnData, void(const AudioBus*, base::TimeTicks, double));
-  MOCK_METHOD0(OnError, void());
+  MOCK_METHOD4(
+      OnData,
+      void(const AudioBus*, base::TimeTicks, double, const AudioGlitchInfo&));
+  MOCK_METHOD1(OnError, void(Error));
 };
 
 class MockDebugRecorderFactory {
@@ -133,18 +140,19 @@ TEST(AudioInputStreamDataInterceptorTest, Start) {
   Mock::VerifyAndClearExpectations(&stream);
 
   base::TimeTicks time = base::TimeTicks::Now();
+  AudioGlitchInfo glitch_info{.duration = base::Milliseconds(123), .count = 5};
 
   // Audio data should be passed to both callback and recorder.
-  EXPECT_CALL(callback, OnData(audio_bus.get(), time, kVolume));
+  EXPECT_CALL(callback, OnData(audio_bus.get(), time, kVolume, glitch_info));
   EXPECT_CALL(*recorder, OnData(audio_bus.get()));
-  interceptor->OnData(audio_bus.get(), time, kVolume);
+  interceptor->OnData(audio_bus.get(), time, kVolume, glitch_info);
 
   Mock::VerifyAndClearExpectations(&callback);
   Mock::VerifyAndClearExpectations(recorder);
 
   // Errors should be propagated to the renderer
-  EXPECT_CALL(callback, OnError());
-  interceptor->OnError();
+  EXPECT_CALL(callback, OnError(Error::kRuntimeError));
+  interceptor->OnError(Error::kRuntimeError);
 
   Mock::VerifyAndClearExpectations(&callback);
 

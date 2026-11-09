@@ -1,22 +1,31 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_SCROLL_TIMELINE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_SCROLL_TIMELINE_H_
 
+#include "base/gtest_prod_util.h"
+#include "base/time/time.h"
+#include "cc/animation/scroll_timeline.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_scroll_axis.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
-#include "third_party/blink/renderer/core/animation/animation_timeline.h"
-#include "third_party/blink/renderer/core/animation/scroll_timeline_offset.h"
+#include "third_party/blink/renderer/core/animation/animation_trigger.h"
+#include "third_party/blink/renderer/core/animation/scroll_snapshot_timeline.h"
 #include "third_party/blink/renderer/core/animation/timing.h"
-#include "third_party/blink/renderer/core/css/css_primitive_value.h"
-#include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
+#include "third_party/blink/renderer/core/scroll/scroll_types.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
+#include "third_party/blink/renderer/platform/text/writing_direction_mode.h"
 
 namespace blink {
 
+class Element;
+class LayoutObject;
+class PaintLayerScrollableArea;
 class ScrollTimelineOptions;
-class V8UnionDoubleOrScrollTimelineAutoKeyword;
+class TreeScope;
 
 // Implements the ScrollTimeline concept from the Scroll-linked Animations spec.
 //
@@ -27,174 +36,123 @@ class V8UnionDoubleOrScrollTimelineAutoKeyword;
 // control the conversion of scroll amount to time output.
 //
 // Spec: https://wicg.github.io/scroll-animations/#scroll-timelines
-class CORE_EXPORT ScrollTimeline : public AnimationTimeline {
+class CORE_EXPORT ScrollTimeline : public ScrollSnapshotTimeline {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  enum ScrollDirection {
-    Block,
-    Inline,
-    Horizontal,
-    Vertical,
+  // Indicates the relation between the reference element and source of the
+  // scroll timeline.
+  enum class ReferenceType {
+    kSource,          // The reference element matches the source.
+    kNearestAncestor  // The source is the nearest scrollable ancestor to the
+                      // reference element.
   };
+
+  static constexpr double kScrollTimelineMicrosecondsPerPixel =
+      cc::ScrollTimeline::kScrollTimelineMicrosecondsPerPixel;
 
   static ScrollTimeline* Create(Document&,
                                 ScrollTimelineOptions*,
                                 ExceptionState&);
 
+  static ScrollTimeline* Create(Document* document,
+                                Element* source,
+                                ScrollAxis axis);
+
+  // Construct ScrollTimeline objects through one of the Create methods, which
+  // perform initial snapshots, as it can't be done during the constructor due
+  // to possibly depending on overloaded functions. When constructed for a CSS
+  // rule, a tree scope is required for name resolution. Imperative
+  // declarations have no CSS defining tree scope.
   ScrollTimeline(Document*,
-                 absl::optional<Element*> scroll_source,
-                 ScrollDirection,
-                 HeapVector<Member<ScrollTimelineOffset>>,
-                 absl::optional<double>);
+                 ReferenceType reference_type,
+                 Element* reference,
+                 ScrollAxis axis,
+                 const TreeScope* tree_scope);
 
   bool IsScrollTimeline() const override { return true; }
-  // TODO (crbug.com/1216655): Time range should be removed from ScrollTimeline
-  // at which point this function becomes redundant as all scroll timelines will
-  // then be progress based timelines.
-  bool IsProgressBasedTimeline() const override { return !time_range_; }
-  // ScrollTimeline is not active if scrollSource is null, does not currently
-  // have a CSS layout box, or if its layout box is not a scroll container.
-  // https://github.com/WICG/scroll-animations/issues/31
-  bool IsActive() const override;
-  absl::optional<base::TimeDelta> InitialStartTimeForAnimations() override;
-  AnimationTimeDelta CalculateIntrinsicIterationDuration(
-      const Timing&) override;
-  AnimationTimeDelta ZeroTime() override { return AnimationTimeDelta(); }
 
-  void ServiceAnimations(TimingUpdateReason) override;
-  void ScheduleNextService() override;
+  const TreeScope* GetTreeScope() const { return tree_scope_.Get(); }
 
   // IDL API implementation.
-  Element* scrollSource() const;
-  String orientation();
-  const HeapVector<Member<V8ScrollTimelineOffset>> scrollOffsets() const;
+  Element* source() const;
+  const V8ScrollAxis axis() const { return V8ScrollAxis(GetAxis()); }
 
-  V8CSSNumberish* currentTime() override;
-  V8CSSNumberish* duration() override;
-  V8UnionDoubleOrScrollTimelineAutoKeyword* timeRange() const;
-  V8CSSNumberish* ConvertTimeToProgress(AnimationTimeDelta time) const;
+  bool Matches(ReferenceType,
+               Element* reference_element,
+               ScrollAxis,
+               const TreeScope* tree_scope) const;
 
-  // Returns the Node that should actually have the ScrollableArea (if one
-  // exists). This can differ from |scrollSource| when |scroll_source_| is the
-  // Document's scrollingElement, and it may be null if the document was
-  // removed before the ScrollTimeline was created.
-  Node* ResolvedScrollSource() const { return resolved_scroll_source_; }
-
-  // Return the latest resolved scroll offsets. This will be empty when
-  // timeline is inactive.
-  const std::vector<double> GetResolvedScrollOffsets() const;
-
-  ScrollDirection GetOrientation() const { return orientation_; }
-
-  void GetCurrentAndMaxOffset(const LayoutBox*,
-                              double& current_offset,
-                              double& max_offset) const;
-  // Invalidates scroll timeline as a result of scroller properties change.
-  // This may lead the timeline to request a new animation frame.
-  virtual void Invalidate();
-
-  // Mark every effect target of every Animation attached to this timeline
-  // for style recalc.
-  void InvalidateEffectTargetStyle();
-
-  // See DocumentAnimations::ValidateTimelines
-  void ValidateState();
-
-  CompositorAnimationTimeline* EnsureCompositorTimeline() override;
-  void UpdateCompositorTimeline() override;
-
-  // TODO(crbug.com/896249): These methods are temporary and currently required
-  // to support worklet animations. Once worklet animations become animations
-  // these methods will not be longer needed. They are used to keep track of
-  // number of worklet animations attached to the scroll timeline for updating
-  // compositing state.
-  void WorkletAnimationAttached();
-  void WorkletAnimationDetached();
+  ScrollAxis GetAxis() const override;
 
   void AnimationAttached(Animation*) override;
   void AnimationDetached(Animation*) override;
 
+  std::optional<double> GetCurrentScrollPosition() const;
+
+  static PhysicalAxis ResolvePhysicalAxis(ScrollAxis, WritingDirectionMode);
+
+  Node* ComputeResolvedSource() const;
+
   void Trace(Visitor*) const override;
 
-  static bool HasActiveScrollTimeline(Node* node);
-  // Invalidates scroll timelines with a given scroller node.
-  // Called when scroller properties, affecting scroll timeline state, change.
-  // These properties are scroller offset, content size, viewport size,
-  // overflow, adding and removal of scrollable area.
-  static void Invalidate(Node* node);
+  TimelineState ComputeTimelineState() const override;
 
-  // TODO (crbug.com/1216655): Time range should be removed from ScrollTimeline.
-  // Currently still left in for the sake of backwards compatibility with
-  // existing tests.
-  double GetTimeRange() const { return time_range_ ? time_range_.value() : 0; }
+  // ScrollTimelines may be created with reference to an element,
+  // which, in combination with ReferenceType, defines the source [1]
+  // (for scroll timelines) or subject [2] (for view timelines).
+  //
+  // For timelines created from CSS, the reference element is always present,
+  // and it is always the element that produced the timeline.
+  //
+  // [1] https://drafts.csswg.org/scroll-animations-1/#dom-scrolltimeline-source
+  // [2] https://drafts.csswg.org/scroll-animations-1/#dom-viewtimeline-subject
+  Element* GetReferenceElement() const { return reference_element_.Get(); }
 
-  // Duration is the maximum value a timeline may generate for current time.
-  // Used to convert time values to proportional values.
-  absl::optional<AnimationTimeDelta> GetDuration() const override {
-    return time_range_
-               ? absl::nullopt
-               // Any arbitrary value should be able to be used here.
-               : absl::make_optional(AnimationTimeDelta::FromSecondsD(100));
-  }
+  // Returns an element eligible to be web exposed. This may be the element
+  // itself, the ultimate owning element in the case of a pseudo-element, or
+  // shadow host in the case of UA shadow content.
+  static Element* Sanitize(Element* element);
 
  protected:
-  PhaseAndTime CurrentPhaseAndTime() override;
-  bool ScrollOffsetsEqual(
-      const HeapVector<Member<ScrollTimelineOffset>>& other) const;
+  // Scroll offsets corresponding to 0% and 100% progress. By default, these
+  // correspond to the scroll range of the container.
+  virtual void CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
+                                PhysicalAxis physical_orientation,
+                                TimelineState* state) const;
+
+  // Determines the source for the scroll timeline. It may be the reference
+  // element or its nearest scrollable ancestor for the timeline's axis,
+  // depending on |reference_type_|.
+  Element* ComputeSource() const;
+  // This version does not force a style update and is therefore safe to call
+  // during lifecycle update.
+  Element* ComputeSourceNoLayout() const;
+
+  void AddTrigger(TimelineTrigger* trigger) override;
+  void RemoveTrigger(TimelineTrigger* trigger) override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(ScrollTimelineTest, MultipleScrollOffsetsClamping);
   FRIEND_TEST_ALL_PREFIXES(ScrollTimelineTest, ResolveScrollOffsets);
-  // https://wicg.github.io/scroll-animations/#avoiding-cycles
-  // Snapshots scroll timeline current time and phase.
-  // Called once per animation frame.
-  void SnapshotState();
-  bool ComputeIsActive() const;
-  PhaseAndTime ComputeCurrentPhaseAndTime() const;
 
-  // Resolve scroll offsets The resolution process turns length-based values
-  // into concrete length values resolving percentages and zoom factor. For
-  // element-based values it computes the corresponding length value that maps
-  // to the particular element intersection. See
-  // |ScrollTimelineOffset::ResolveOffset()| for more details.
-  bool ResolveScrollOffsets(WTF::Vector<double>& resolved_offsets) const;
+  // Finds the layout object the timeline uses to determine source. It may be
+  // the reference element or its nearest scrollable ancestor for the given
+  // scrollable axes, depending on |reference_type_|.
+  const LayoutObject* ComputeLayoutObjectNoLayout(
+      PhysicalAxes scrollable_axes) const;
+  std::optional<WritingDirectionMode> ComputeWritingDirectionNoLayout() const;
 
-  struct TimelineState {
-    TimelinePhase phase;
-    absl::optional<base::TimeDelta> current_time;
-    // The resolved version of scroll offset. The vector is empty
-    // when timeline is inactive (e.g., when source does not overflow).
-    WTF::Vector<double> scroll_offsets;
+  // The retaining element is the element responsible for keeping
+  // the timeline alive while animations are attached.
+  //
+  // See Node::[Un]RegisterScrollTimeline.
+  Element* RetainingElement() const;
 
-    bool operator==(const TimelineState& other) const {
-      return phase == other.phase && current_time == other.current_time &&
-             scroll_offsets == other.scroll_offsets;
-    }
-  };
-
-  TimelineState ComputeTimelineState() const;
-  ScrollTimelineOffset* StartScrollOffset() const;
-  ScrollTimelineOffset* EndScrollOffset() const;
-
-  // Use time_check true to request next service if time has changed.
-  // false - regardless of time change.
-  void ScheduleNextServiceInternal(bool time_check);
-
-  // Use |scroll_source_| only to implement the web-exposed API but use
-  // resolved_scroll_source_ to actually access the scroll related properties.
-  Member<Element> scroll_source_;
-  Member<Node> resolved_scroll_source_;
-  ScrollDirection orientation_;
-  HeapVector<Member<ScrollTimelineOffset>> scroll_offsets_;
-
-  // TODO (crbug.com/1216655): Time range should be removed from ScrollTimeline.
-  // Currently still left in for the sake of backwards compatibility with
-  // existing tests.
-  absl::optional<double> time_range_;
-
-  // Snapshotted value produced by the last SnapshotState call.
-  TimelineState timeline_state_snapshotted_;
+  ReferenceType reference_type_;
+  Member<Element> reference_element_;
+  ScrollAxis axis_;
+  Member<const TreeScope> tree_scope_;
 };
 
 template <>

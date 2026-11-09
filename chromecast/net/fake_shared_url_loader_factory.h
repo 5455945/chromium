@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,23 +14,25 @@
 namespace chromecast {
 
 // A simple SharedURLLoaderFactory implementation for tests.
-class FakeSharedURLLoaderFactory : public network::SharedURLLoaderFactory {
+class FakeSharedURLLoaderFactory final
+    : public network::SharedURLLoaderFactory {
  public:
   FakeSharedURLLoaderFactory() = default;
 
   // network::mojom::URLLoaderFactory implementation:
-  void Clone(
-      mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver) final;
+  void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
+      override;
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
       int32_t request_id,
       uint32_t options,
       const network::ResourceRequest& request,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
-      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) final;
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
+      override;
 
   // network::SharedURLLoaderFactory implementation:
-  std::unique_ptr<network::PendingSharedURLLoaderFactory> Clone() final;
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> Clone() override;
 
   network::TestURLLoaderFactory& test_url_loader_factory() {
     return test_url_loader_factory_;
@@ -39,7 +41,7 @@ class FakeSharedURLLoaderFactory : public network::SharedURLLoaderFactory {
  private:
   friend class base::RefCounted<FakeSharedURLLoaderFactory>;
 
-  ~FakeSharedURLLoaderFactory() final = default;
+  ~FakeSharedURLLoaderFactory() override = default;
 
   network::TestURLLoaderFactory test_url_loader_factory_;
 
@@ -53,7 +55,7 @@ class FakePendingSharedURLLoaderFactory
     : public network::PendingSharedURLLoaderFactory {
  public:
   FakePendingSharedURLLoaderFactory();
-  ~FakePendingSharedURLLoaderFactory() final;
+  ~FakePendingSharedURLLoaderFactory() override;
 
   scoped_refptr<FakeSharedURLLoaderFactory> fake_shared_url_loader_factory() {
     return fake_shared_url_loader_factory_;
@@ -63,7 +65,7 @@ class FakePendingSharedURLLoaderFactory
   friend class network::SharedURLLoaderFactory;
 
   // network::PendingSharedURLLoaderFactory implementation:
-  scoped_refptr<network::SharedURLLoaderFactory> CreateFactory() final;
+  scoped_refptr<network::SharedURLLoaderFactory> CreateFactory() override;
 
   scoped_refptr<FakeSharedURLLoaderFactory> fake_shared_url_loader_factory_;
 

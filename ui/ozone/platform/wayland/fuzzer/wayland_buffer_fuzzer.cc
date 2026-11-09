@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,29 +9,39 @@
 #include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <unistd.h>
+
 #include <memory>
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/task/single_thread_task_executor.h"
+#include "base/test/bind.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "mojo/core/embedder/embedder.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/hdr_metadata.h"
 #include "ui/ozone/platform/wayland/host/wayland_buffer_manager_host.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+#include "ui/ozone/platform/wayland/host/wayland_event_source.h"
 #include "ui/ozone/platform/wayland/host/wayland_output_manager.h"
 #include "ui/ozone/platform/wayland/host/wayland_window.h"
 #include "ui/ozone/platform/wayland/test/test_wayland_server_thread.h"
+#include "ui/ozone/platform/wayland/test/test_zwp_linux_buffer_params.h"
+#include "ui/ozone/platform/wayland/test/wayland_connection_test_api.h"
 #include "ui/platform_window/platform_window_delegate.h"
 #include "ui/platform_window/platform_window_init_properties.h"
 
@@ -46,7 +56,12 @@ using TerminateGpuCallback = base::OnceCallback<void(std::string)>;
 class MockPlatformWindowDelegate : public ui::PlatformWindowDelegate {
  public:
   MockPlatformWindowDelegate() = default;
-  ~MockPlatformWindowDelegate() = default;
+
+  MockPlatformWindowDelegate(const MockPlatformWindowDelegate&) = delete;
+  MockPlatformWindowDelegate& operator=(const MockPlatformWindowDelegate&) =
+      delete;
+
+  ~MockPlatformWindowDelegate() override = default;
 
   MOCK_METHOD1(OnBoundsChanged, void(const BoundsChange& change));
   MOCK_METHOD1(OnDamageRect, void(const gfx::Rect& damaged_region));
@@ -62,10 +77,7 @@ class MockPlatformWindowDelegate : public ui::PlatformWindowDelegate {
   MOCK_METHOD0(OnWillDestroyAcceleratedWidget, void());
   MOCK_METHOD0(OnAcceleratedWidgetDestroyed, void());
   MOCK_METHOD1(OnActivationChanged, void(bool active));
-  MOCK_METHOD0(OnMouseEnter, void());
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockPlatformWindowDelegate);
+  MOCK_METHOD0(OnCursorUpdate, void());
 };
 
 struct Environment {
@@ -73,13 +85,13 @@ struct Environment {
       : task_environment((base::CommandLine::Init(0, nullptr),
                           TestTimeouts::Initialize(),
                           base::test::TaskEnvironment::MainThreadType::UI)) {
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
 
     mojo::core::Init();
   }
 
   void SetTerminateGpuCallback(ui::WaylandBufferManagerHost* host) {
-    DCHECK(host);
+    CHECK(host, base::NotFatalUntil::M163);
     host->SetTerminateGpuCallback(base::BindOnce(
         &Environment::OnTerminateCallbackFired, base::Unretained(this)));
   }
@@ -94,7 +106,7 @@ struct Environment {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   static Environment env;
-  DCHECK(!env.terminated);
+  CHECK(!env.terminated, base::NotFatalUntil::M163);
 
   // Required for ICU initialization.
   static base::NoDestructor<base::AtExitManager> exit_manager;
@@ -112,13 +124,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       DRM_FORMAT_NV12,        DRM_FORMAT_YVU420};
 
   wl::TestWaylandServerThread server;
-  CHECK(server.Start({.shell_version = wl::ShellVersion::kV6}));
+  CHECK(server.Start());
 
   std::unique_ptr<ui::WaylandConnection> connection =
       std::make_unique<ui::WaylandConnection>();
   CHECK(connection->Initialize());
 
+  // Wait until everything is initialised.
+  env.task_environment.RunUntilIdle();
+
   auto screen = connection->wayland_output_manager()->CreateWaylandScreen();
+  connection->wayland_output_manager()->InitWaylandScreen(screen.get());
 
   MockPlatformWindowDelegate delegate;
   gfx::AcceleratedWidget widget = gfx::kNullAcceleratedWidget;
@@ -133,12 +149,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   CHECK_NE(widget, gfx::kNullAcceleratedWidget);
 
-  // Wait until everything is initialised.
-  env.task_environment.RunUntilIdle();
+  // Let the server process the events and wait until everything is initialised.
+  ui::WaylandConnectionTestApi test_api(connection.get());
+  test_api.SyncDisplay();
 
   base::FilePath temp_dir, temp_path;
-  base::ScopedFD fd =
-      base::CreateAndOpenFdForTemporaryFileInDir(temp_dir, &temp_path);
+  base::ScopedFD fd = base::CreateAndOpenFdForTemporaryFileInDir(
+      temp_dir, /*name_prefix=*/{}, &temp_path);
   EXPECT_TRUE(fd.is_valid());
 
   // 10K screens are reality these days.
@@ -169,24 +186,42 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   auto* manager_host = connection->buffer_manager_host();
   env.SetTerminateGpuCallback(manager_host);
+  std::vector<mojo::PlatformHandle> fds;
+  for (uint32_t i = 0; i < kPlaneCount; ++i) {
+    fds.emplace_back(base::ScopedFD(HANDLE_EINTR(dup(fd.get()))));
+  }
   manager_host->CreateDmabufBasedBuffer(
-      mojo::PlatformHandle(std::move(fd)), buffer_size, strides, offsets,
-      modifiers, kFormat, kPlaneCount, kBufferId);
+      std::move(fds), buffer_size, strides, offsets, modifiers, kFormat,
+      kPlaneCount, gfx::ColorSpace(), gfx::HDRMetadata(), kBufferId);
 
   // Wait until the buffers are created.
-  env.task_environment.RunUntilIdle();
+  test_api.SyncDisplay();
 
-  // If the |manager_host| fires the terminate gpu callback, we need to set the
-  // callback again.
-  if (env.terminated)
+  if (!env.terminated) {
+    server.RunAndWait(
+        base::BindLambdaForTesting([](wl::TestWaylandServerThread* server) {
+          // The server must notify the buffers are created so that the client
+          // is able to free the resources (destroy the params).
+          auto params_vector = server->zwp_linux_dmabuf_v1()->buffer_params();
+          // To ensure, no other buffers are created, test the size of the
+          // vector.
+          for (wl::TestZwpLinuxBufferParamsV1* mock_params : params_vector) {
+            zwp_linux_buffer_params_v1_send_created(
+                mock_params->resource(), mock_params->buffer_resource());
+          }
+        }));
+
+    test_api.SyncDisplay();
+  } else {
+    // If the |manager_host| fires the terminate gpu callback, we need to set
+    // the callback again.
     env.SetTerminateGpuCallback(manager_host);
+  }
 
-  manager_host->DestroyBuffer(widget, kBufferId);
+  manager_host->DestroyBuffer(kBufferId);
+
   // Wait until the buffers are destroyed.
-  env.task_environment.RunUntilIdle();
-
-  // Pause the server so it is not running when mock expectations are validated.
-  server.Pause();
+  test_api.SyncDisplay();
 
   // Reset the value as |env| is a static object.
   env.terminated = false;

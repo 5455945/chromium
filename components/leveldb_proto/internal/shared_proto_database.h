@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,17 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/cancelable_callback.h"
 #include "base/component_export.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "components/leveldb_proto/internal/proto/shared_db_metadata.pb.h"
 #include "components/leveldb_proto/internal/shared_proto_database_client.h"
 #include "components/leveldb_proto/public/proto_database.h"
@@ -31,6 +34,9 @@ class COMPONENT_EXPORT(LEVELDB_PROTO) SharedProtoDatabase
   using SharedClientInitCallback =
       base::OnceCallback<void(Enums::InitStatus,
                               SharedDBMetadataProto::MigrationStatus)>;
+
+  SharedProtoDatabase(const SharedProtoDatabase&) = delete;
+  SharedProtoDatabase& operator=(const SharedProtoDatabase&) = delete;
 
   // Always returns a SharedProtoDatabaseClient pointer, but that should ONLY
   // be used if the callback returns success.
@@ -190,11 +196,9 @@ class COMPONENT_EXPORT(LEVELDB_PROTO) SharedProtoDatabase
   base::queue<std::unique_ptr<InitRequest>> outstanding_init_requests_;
   bool create_if_missing_ = false;
 
-  base::TimeDelta delete_obsolete_delay_ = base::TimeDelta::FromSeconds(120);
+  base::TimeDelta delete_obsolete_delay_ = base::Seconds(120);
   base::Lock delete_obsolete_delay_lock_;
   base::CancelableOnceClosure delete_obsolete_task_;
-
-  DISALLOW_COPY_AND_ASSIGN(SharedProtoDatabase);
 };
 
 }  // namespace leveldb_proto

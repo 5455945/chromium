@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
@@ -20,6 +19,10 @@ class UserEventSyncBridge;
 class UserEventServiceImpl : public UserEventService {
  public:
   explicit UserEventServiceImpl(std::unique_ptr<UserEventSyncBridge> bridge);
+
+  UserEventServiceImpl(const UserEventServiceImpl&) = delete;
+  UserEventServiceImpl& operator=(const UserEventServiceImpl&) = delete;
+
   ~UserEventServiceImpl() override;
 
   // KeyedService implementation.
@@ -28,13 +31,12 @@ class UserEventServiceImpl : public UserEventService {
   // UserEventService implementation.
   void RecordUserEvent(
       std::unique_ptr<sync_pb::UserEventSpecifics> specifics) override;
-  void RecordUserEvent(const sync_pb::UserEventSpecifics& specifics) override;
-  base::WeakPtr<syncer::ModelTypeControllerDelegate> GetControllerDelegate()
+  base::WeakPtr<syncer::DataTypeControllerDelegate> GetControllerDelegate()
       override;
 
  private:
   // Checks dynamic or event specific conditions.
-  bool ShouldRecordEvent(const sync_pb::UserEventSpecifics& specifics);
+  bool ShouldRecordEvent(const sync_pb::UserEventSpecifics& specifics) const;
 
   std::unique_ptr<UserEventSyncBridge> bridge_;
 
@@ -42,8 +44,6 @@ class UserEventServiceImpl : public UserEventService {
   // restart it will be regenerated. This can be attached to events to know
   // which events came from the same session.
   uint64_t session_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserEventServiceImpl);
 };
 
 }  // namespace syncer

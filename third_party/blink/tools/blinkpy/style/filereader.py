@@ -40,14 +40,14 @@ _log = logging.getLogger(__name__)
 class TextFileReader(object):
     """Supports reading and processing text files.
 
-       Attributes:
-         file_count: The total number of files passed to this instance
-                     for processing, including non-text files and files
-                     that should be skipped.
-         delete_only_file_count: The total number of files that are not
-                                 processed this instance actually because
-                                 the files don't have any modified lines
-                                 but should be treated as processed.
+    Attributes:
+      file_count: The total number of files passed to this instance
+                  for processing, including non-text files and files
+                  that should be skipped.
+      delete_only_file_count: The total number of files that are not
+                              processed this instance actually because
+                              the files don't have any modified lines
+                              but should be treated as processed.
     """
 
     def __init__(self, filesystem, processor):
@@ -70,17 +70,14 @@ class TextFileReader(object):
         """
         # Support the UNIX convention of using "-" for stdin.
         if file_path == '-':
-            file = codecs.StreamReaderWriter(sys.stdin,
-                                             codecs.getreader('utf8'),
-                                             codecs.getwriter('utf8'),
-                                             'replace')
+            file = codecs.StreamReaderWriter(
+                sys.stdin,
+                codecs.getreader('utf8'),
+                codecs.getwriter('utf8'),
+                'replace',
+            )
         else:
-            # We do not open the file with universal newline support
-            # (codecs does not support it anyway), so the resulting
-            # lines contain trailing "\r" characters if we are reading
-            # a file with CRLF endings.
-            # FIXME: This should use self.filesystem
-            file = codecs.open(file_path, 'r', 'utf8', 'replace')
+            file = self.filesystem.open_text_file_for_reading(file_path)
 
         try:
             contents = file.read()
@@ -117,8 +114,10 @@ class TextFileReader(object):
         try:
             lines = self._read_lines(file_path)
         except IOError as err:
-            message = (
-                "Could not read file. Skipping: '%s'\n  %s" % (file_path, err))
+            message = "Could not read file. Skipping: '%s'\n  %s" % (
+                file_path,
+                err,
+            )
             _log.warning(message)
             return
 

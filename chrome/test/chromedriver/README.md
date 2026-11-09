@@ -48,7 +48,7 @@ binding provided by Selenium.
 ```python
 $ cd ~/chromium/src/chrome/test/chromedriver
 $ export PYTHONPATH=$PWD:$PWD/server:$PWD/client
-$ python
+$ python3
 >>> import server
 >>> import chromedriver
 >>> cd_server = server.Server('../../../out/Default/chromedriver')
@@ -116,6 +116,10 @@ Integration tests.
 
 There are several test suites for verifying ChromeDriver's correctness.
 For details, see the [testing page](docs/testing.md).
+
+## Releasing
+
+As of M115, ChromeDriver is fully integrated into the Chrome release process. Across all release channels (Stable, Beta, Dev, Canary), every Chrome release that gets pushed to users automatically gets a correspondingly-versioned ChromeDriver release, [available for download via Chrome for Testing infrastructure](https://googlechromelabs.github.io/chrome-for-testing/).
 
 ## Contributing
 

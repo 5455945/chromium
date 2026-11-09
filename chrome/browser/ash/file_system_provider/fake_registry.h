@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,9 @@
 
 #include "chrome/browser/ash/file_system_provider/registry_interface.h"
 
-#include "base/macros.h"
 #include "chrome/browser/ash/file_system_provider/watcher.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 class ProvidedFileSystemInfo;
 
@@ -20,6 +18,10 @@ class ProvidedFileSystemInfo;
 class FakeRegistry : public RegistryInterface {
  public:
   FakeRegistry();
+
+  FakeRegistry(const FakeRegistry&) = delete;
+  FakeRegistry& operator=(const FakeRegistry&) = delete;
+
   ~FakeRegistry() override;
   void RememberFileSystem(const ProvidedFileSystemInfo& file_system_info,
                           const Watchers& watchers) override;
@@ -35,11 +37,8 @@ class FakeRegistry : public RegistryInterface {
  private:
   std::unique_ptr<ProvidedFileSystemInfo> file_system_info_;
   std::unique_ptr<Watchers> watchers_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeRegistry);
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_FAKE_REGISTRY_H_

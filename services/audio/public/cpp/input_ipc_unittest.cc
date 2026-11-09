@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/task_environment.h"
 #include "media/base/audio_capturer_source.h"
+#include "media/base/audio_processing.h"
 #include "media/mojo/mojom/audio_data_pipe.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -48,12 +49,15 @@ class TestStreamFactory : public audio::FakeStreamFactory {
       mojo::PendingRemote<media::mojom::AudioLog> log,
       const std::string& device_id,
       const media::AudioParameters& params,
+      const base::UnguessableToken& group_id,
       uint32_t shared_memory_count,
       bool enable_agc,
-      base::ReadOnlySharedMemoryRegion key_press_count_buffer,
-      CreateInputStreamCallback created_callback) {
+      media::mojom::AudioProcessingConfigPtr processing_config,
+      CreateInputStreamCallback created_callback) override {
+    processing_config_ = std::move(processing_config);
+
     if (should_fail_) {
-      std::move(created_callback).Run(nullptr, initially_muted_, absl::nullopt);
+      std::move(created_callback).Run(nullptr, initially_muted_, std::nullopt);
       return;
     }
 
@@ -69,8 +73,7 @@ class TestStreamFactory : public audio::FakeStreamFactory {
     base::SyncSocket socket1, socket2;
     base::SyncSocket::CreatePair(&socket1, &socket2);
     std::move(created_callback)
-        .Run({base::in_place,
-              base::ReadOnlySharedMemoryRegion::Create(kShMemSize).region,
+        .Run({std::in_place, base::UnsafeSharedMemoryRegion::Create(kShMemSize),
               mojo::PlatformHandle(socket1.Take())},
              initially_muted_, base::UnguessableToken::Create());
   }
@@ -88,6 +91,7 @@ class TestStreamFactory : public audio::FakeStreamFactory {
   mojo::Receiver<media::mojom::AudioInputStream> stream_receiver_;
   bool initially_muted_ = true;
   bool should_fail_ = false;
+  media::mojom::AudioProcessingConfigPtr processing_config_;
 };
 
 class MockDelegate : public media::AudioInputIPCDelegate {
@@ -95,7 +99,7 @@ class MockDelegate : public media::AudioInputIPCDelegate {
   MockDelegate() = default;
   ~MockDelegate() override = default;
 
-  void OnStreamCreated(base::ReadOnlySharedMemoryRegion mem_handle,
+  void OnStreamCreated(base::UnsafeSharedMemoryRegion mem_handle,
                        base::SyncSocket::ScopedHandle socket_handle,
                        bool initially_muted) override {
     GotOnStreamCreated(initially_muted);
@@ -113,7 +117,7 @@ class InputIPCTest : public ::testing::Test {
   std::unique_ptr<audio::InputIPC> ipc;
   const media::AudioParameters audioParameters =
       media::AudioParameters(media::AudioParameters::AUDIO_PCM_LINEAR,
-                             media::CHANNEL_LAYOUT_STEREO,
+                             media::ChannelLayoutConfig::Stereo(),
                              16000,
                              1600);
 
@@ -138,6 +142,35 @@ TEST_F(InputIPCTest, CreateStreamPropagates) {
   EXPECT_CALL(delegate, GotOnStreamCreated(_));
   ipc->CreateStream(&delegate, audioParameters, false, 0);
   task_environment.RunUntilIdle();
+  EXPECT_FALSE(factory_->processing_config_);
+}
+
+TEST_F(InputIPCTest, CreateStreamWithProcessingSettings_PassesConfig) {
+  factory_ = std::make_unique<StrictMock<TestStreamFactory>>();
+  media::AudioProcessingSettings settings{
+      .echo_cancellation = true,
+      .noise_suppression = true,
+      .automatic_gain_control = true,
+      .multi_channel_capture_processing = false,
+  };
+  ipc = std::make_unique<InputIPC>(factory_->MakeRemote(), kDeviceId,
+                                   mojo::NullRemote(), settings);
+
+  base::RunLoop run_loop;
+  StrictMock<MockDelegate> delegate;
+  EXPECT_CALL(delegate, GotOnStreamCreated(_)).WillOnce([&] {
+    run_loop.Quit();
+  });
+  ipc->CreateStream(&delegate, audioParameters, false, 0);
+  run_loop.Run();
+
+  ASSERT_TRUE(factory_->processing_config_);
+  EXPECT_TRUE(factory_->processing_config_->settings.echo_cancellation);
+  EXPECT_TRUE(factory_->processing_config_->settings.noise_suppression);
+  EXPECT_TRUE(factory_->processing_config_->settings.automatic_gain_control);
+  EXPECT_FALSE(
+      factory_->processing_config_->settings.multi_channel_capture_processing);
+  EXPECT_TRUE(factory_->processing_config_->controls_receiver.is_valid());
 }
 
 TEST_F(InputIPCTest, StreamCreatedAfterCloseIsIgnored) {

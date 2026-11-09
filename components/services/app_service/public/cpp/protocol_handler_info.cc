@@ -1,10 +1,8 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/services/app_service/public/cpp/protocol_handler_info.h"
-
-#include <ostream>
 
 namespace apps {
 
@@ -15,14 +13,14 @@ ProtocolHandlerInfo::ProtocolHandlerInfo(const ProtocolHandlerInfo& other) =
 
 ProtocolHandlerInfo::~ProtocolHandlerInfo() = default;
 
-bool operator==(const ProtocolHandlerInfo& handler1,
-                const ProtocolHandlerInfo& handler2) {
-  return handler1.protocol == handler2.protocol && handler1.url == handler2.url;
-}
-
-std::ostream& operator<<(std::ostream& out,
-                         const ProtocolHandlerInfo& handler) {
-  return out << "protocol: " << handler.protocol << " url: " << handler.url;
+base::Value ProtocolHandlerInfo::AsDebugValue() const {
+  base::DictValue root;
+  root.Set("protocol", protocol);
+  root.Set("url", url.spec());
+  if (!name.empty()) {
+    root.Set("name", name);
+  }
+  return base::Value(std::move(root));
 }
 
 }  // namespace apps

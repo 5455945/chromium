@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startHTML(`
     <div id='node' style='background-color: red; height: 100px; transition: width 100ms; width: 100px'></div>
   `, 'Tests replaying css animation.');
@@ -11,6 +11,11 @@
 
   for (var run = 0; run < 5; run++) {
     await dp.Animation.seekAnimations({ animations: [ response.params.animation.id ], currentTime: 0 });
+    testRunner.log("Animation seeked");
+  }
+
+  for (var run = 0; run < 5; run++) {
+    await dp.Animation.seekAnimations({ animations: [ response.params.animation.id ], currentTimes: [0] });
     testRunner.log("Animation seeked");
   }
   testRunner.completeTest();

@@ -1,18 +1,18 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/common/font_cache_dispatcher_win.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/singleton.h"
 #include "base/numerics/checked_math.h"
 #include "base/thread_annotations.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -25,6 +25,9 @@ typedef std::map<FontCacheDispatcher*, FontNameVector> DispatcherToFontNames;
 class FontCache {
  public:
   static FontCache* GetInstance() { return base::Singleton<FontCache>::get(); }
+
+  FontCache(const FontCache&) = delete;
+  FontCache& operator=(const FontCache&) = delete;
 
   void PreCacheFont(const LOGFONT& font, FontCacheDispatcher* dispatcher) {
     base::AutoLock lock(mutex_);
@@ -45,7 +48,7 @@ class FontCache {
 
     std::wstring font_name = font.lfFaceName;
     bool inc_ref_count = true;
-    if (!base::Contains(dispatcher_font_map_[dispatcher], font_name)) {
+    if (!std::ranges::contains(dispatcher_font_map_[dispatcher], font_name)) {
       // Requested font is new to cache.
       dispatcher_font_map_[dispatcher].push_back(font_name);
     } else {
@@ -129,8 +132,6 @@ class FontCache {
   std::map<std::wstring, CacheElement> cache_ GUARDED_BY(mutex_);
   DispatcherToFontNames dispatcher_font_map_ GUARDED_BY(mutex_);
   base::Lock mutex_;
-
-  DISALLOW_COPY_AND_ASSIGN(FontCache);
 };
 
 }  // namespace

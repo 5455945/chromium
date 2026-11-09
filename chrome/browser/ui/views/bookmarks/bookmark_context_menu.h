@@ -1,30 +1,32 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_CONTEXT_MENU_H_
 #define CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_CONTEXT_MENU_H_
 
-#include "base/callback_forward.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/bookmarks/bookmark_context_menu_controller.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace views {
 class MenuRunner;
 class Widget;
-}
+}  // namespace views
 
 // Observer for the BookmarkContextMenu.
-class BookmarkContextMenuObserver {
+class BookmarkContextMenuObserver : public base::CheckedObserver {
  public:
   // Invoked before the specified items are removed from the bookmark model.
   virtual void WillRemoveBookmarks(
-      const std::vector<const bookmarks::BookmarkNode*>& bookmarks) = 0;
+      const std::vector<raw_ptr<const bookmarks::BookmarkNode,
+                                VectorExperimental>>& bookmarks) = 0;
 
   // Invoked after the items have been removed from the model.
   virtual void DidRemoveBookmarks() = 0;
@@ -33,24 +35,26 @@ class BookmarkContextMenuObserver {
   virtual void OnContextMenuClosed() = 0;
 
  protected:
-  virtual ~BookmarkContextMenuObserver() {}
+  ~BookmarkContextMenuObserver() override;
 };
 
 class BookmarkContextMenu : public BookmarkContextMenuControllerDelegate,
                             public views::MenuDelegate {
  public:
-  // |browser| is used to open the bookmark manager, and is NULL in tests.
-  // |get_navigator| is used to get the current PageNavigator for opening
-  // bookmarks.
-  BookmarkContextMenu(
-      views::Widget* parent_widget,
-      Browser* browser,
-      Profile* profile,
-      base::RepeatingCallback<content::PageNavigator*()> get_navigator,
-      BookmarkLaunchLocation opened_from,
-      const bookmarks::BookmarkNode* parent,
-      const std::vector<const bookmarks::BookmarkNode*>& selection,
-      bool close_on_remove);
+  // |browser| is used to open bookmarks as well as the bookmark manager, and
+  // is NULL in tests.
+  BookmarkContextMenu(views::Widget* parent_widget,
+                      BrowserWindowInterface* browser,
+                      Profile* profile,
+                      BookmarkLaunchLocation opened_from,
+                      const std::vector<raw_ptr<const bookmarks::BookmarkNode,
+                                                VectorExperimental>>& selection,
+                      bool close_on_remove,
+                      bool can_paste);
+
+  BookmarkContextMenu(const BookmarkContextMenu&) = delete;
+  BookmarkContextMenu& operator=(const BookmarkContextMenu&) = delete;
+
   ~BookmarkContextMenu() override;
 
   // Installs a callback to be run before the context menu is run. The callback
@@ -60,13 +64,12 @@ class BookmarkContextMenu : public BookmarkContextMenuControllerDelegate,
 
   // Shows the context menu at the specified point.
   void RunMenuAt(const gfx::Point& point,
-                 ui::MenuSourceType source_type);
+                 ui::mojom::MenuSourceType source_type);
 
   views::MenuItemView* menu() const { return menu_; }
 
-  void set_observer(BookmarkContextMenuObserver* observer) {
-    observer_ = observer;
-  }
+  void AddObserver(BookmarkContextMenuObserver* observer);
+  void RemoveObserver(BookmarkContextMenuObserver* observer);
 
   // Overridden from views::MenuDelegate:
   void ExecuteCommand(int command_id, int event_flags) override;
@@ -74,33 +77,39 @@ class BookmarkContextMenu : public BookmarkContextMenuControllerDelegate,
   bool IsCommandEnabled(int command_id) const override;
   bool IsCommandVisible(int command_id) const override;
   bool ShouldCloseAllMenusOnExecute(int id) override;
+  bool ShouldExecuteCommandWithoutClosingMenu(int id,
+                                              const ui::Event& e) override;
   void OnMenuClosed(views::MenuItemView* menu) override;
 
   // Overridden from BookmarkContextMenuControllerDelegate:
   void CloseMenu() override;
   void WillExecuteCommand(
       int command_id,
-      const std::vector<const bookmarks::BookmarkNode*>& bookmarks) override;
+      const std::vector<raw_ptr<const bookmarks::BookmarkNode,
+                                VectorExperimental>>& bookmarks) override;
   void DidExecuteCommand(int command_id) override;
+
+  void UpdateSubMenuState();
 
  private:
   std::unique_ptr<BookmarkContextMenuController> controller_;
 
-  // The parent of dialog boxes opened from the context menu.
-  views::Widget* parent_widget_;
-
-  // The menu itself. This is owned by |menu_runner_|.
-  views::MenuItemView* menu_;
+  // The parent of dialog boxes opened from the context menu. Uses a WeakPtr
+  // because on macOS immersive fullscreen, the parent widget may be an
+  // OverlayWidgetMac that is destroyed before this menu during browser
+  // shutdown.
+  base::WeakPtr<views::Widget> parent_widget_;
 
   // Responsible for running the menu.
   std::unique_ptr<views::MenuRunner> menu_runner_;
 
-  BookmarkContextMenuObserver* observer_;
+  // The menu itself. This is owned by `menu_runner_`.
+  const raw_ptr<views::MenuItemView> menu_;
+
+  base::ObserverList<BookmarkContextMenuObserver> observers_;
 
   // Should the menu close when a node is removed.
   bool close_on_remove_;
-
-  DISALLOW_COPY_AND_ASSIGN(BookmarkContextMenu);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_CONTEXT_MENU_H_

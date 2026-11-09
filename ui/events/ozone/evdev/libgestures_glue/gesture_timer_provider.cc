@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <gestures/gestures.h>
 
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 
 // libgestures requires that this be in the top level namespace.
@@ -19,10 +20,8 @@ struct GesturesTimer {
     callback_ = callback;
     callback_data_ = callback_data;
     timer_.Start(FROM_HERE,
-                 base::TimeDelta::FromMicroseconds(
-                     delay * base::Time::kMicrosecondsPerSecond),
-                 this,
-                 &GesturesTimer::OnTimerExpired);
+                 base::Microseconds(delay * base::Time::kMicrosecondsPerSecond),
+                 this, &GesturesTimer::OnTimerExpired);
   }
 
   void Cancel() { timer_.Stop(); }
@@ -32,16 +31,15 @@ struct GesturesTimer {
     // Run the callback and reschedule the next run if requested.
     stime_t next_delay = callback_(ui::StimeNow(), callback_data_);
     if (next_delay >= 0) {
-      timer_.Start(FROM_HERE,
-                   base::TimeDelta::FromMicroseconds(
-                       next_delay * base::Time::kMicrosecondsPerSecond),
-                   this,
-                   &GesturesTimer::OnTimerExpired);
+      timer_.Start(
+          FROM_HERE,
+          base::Microseconds(next_delay * base::Time::kMicrosecondsPerSecond),
+          this, &GesturesTimer::OnTimerExpired);
     }
   }
 
   GesturesTimerCallback callback_ = nullptr;
-  void* callback_data_ = nullptr;
+  raw_ptr<void> callback_data_ = nullptr;
   base::OneShotTimer timer_;
 };
 

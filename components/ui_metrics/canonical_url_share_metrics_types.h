@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,6 +36,10 @@ enum CanonicalURLResult {
   // The canonical URL retrieval succeeded. The canonical URL is not HTTPS
   // (but the visible URL is).
   SUCCESS_CANONICAL_URL_NOT_HTTPS,
+
+  // The canonical URL retrieval failed because the retrieved canonical URL is
+  // not HTTP nor HTTPS.
+  FAILED_CANONICAL_URL_NOT_HTTP_NOR_HTTPS,
 
   // The count of canonical URL results. This must be the last item in the enum.
   CANONICAL_URL_RESULT_COUNT

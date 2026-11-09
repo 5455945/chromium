@@ -1,14 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_V8_INTERFACE_BRIDGE_BASE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_V8_INTERFACE_BRIDGE_BASE_H_
 
+#include "third_party/blink/public/mojom/origin_trials/origin_trial_feature.mojom-blink-forward.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 namespace blink {
 
@@ -35,15 +35,15 @@ class PLATFORM_EXPORT V8InterfaceBridgeBase {
   //
   // FeatureSelector() is used for usage 1) and
   // FeatureSelector(feature) is used for usage 2).
-  class FeatureSelector final {
+  class PLATFORM_EXPORT FeatureSelector final {
    public:
     // Selects all properties not associated to any origin trial feature and
     // properties associated with the origin trial features that are already
     // enabled.
-    FeatureSelector() : does_select_all_(true) {}
+    FeatureSelector();
     // Selects only the properties that are associated to the given origin
     // trial feature.
-    explicit FeatureSelector(OriginTrialFeature feature) : selector_(feature) {}
+    explicit FeatureSelector(blink::mojom::blink::OriginTrialFeature feature);
     FeatureSelector(const FeatureSelector&) = default;
     FeatureSelector(FeatureSelector&&) = default;
     ~FeatureSelector() = default;
@@ -58,17 +58,19 @@ class PLATFORM_EXPORT V8InterfaceBridgeBase {
     // Returns true if properties should be installed.  Arguments |featureN|
     // represent the origin trial features to which the properties are
     // associated.
-    bool IsAnyOf(OriginTrialFeature feature1) const {
+    bool IsAnyOf(blink::mojom::blink::OriginTrialFeature feature1) const {
       return selector_ == feature1;
     }
-    bool IsAnyOf(OriginTrialFeature feature1,
-                 OriginTrialFeature feature2) const {
+    bool IsAnyOf(blink::mojom::blink::OriginTrialFeature feature1,
+                 blink::mojom::blink::OriginTrialFeature feature2) const {
       return selector_ == feature1 || selector_ == feature2;
     }
 
    private:
     bool does_select_all_ = false;
-    OriginTrialFeature selector_ = OriginTrialFeature::kNonExisting;
+    // We intentionally avoid default member initializer for |selector_| in
+    // order not to include runtime_enabled_features.h.
+    blink::mojom::blink::OriginTrialFeature selector_;
   };
 
   using InstallInterfaceTemplateFuncType =
@@ -78,14 +80,14 @@ class PLATFORM_EXPORT V8InterfaceBridgeBase {
   using InstallUnconditionalPropertiesFuncType =
       void (*)(v8::Isolate* isolate,
                const DOMWrapperWorld& world,
-               v8::Local<v8::Template> instance_template,
-               v8::Local<v8::Template> prototype_template,
+               v8::Local<v8::ObjectTemplate> instance_template,
+               v8::Local<v8::ObjectTemplate> prototype_template,
                v8::Local<v8::Template> interface_template);
   using InstallContextIndependentPropertiesFuncType =
       void (*)(v8::Isolate* isolate,
                const DOMWrapperWorld& world,
-               v8::Local<v8::Template> instance_template,
-               v8::Local<v8::Template> prototype_template,
+               v8::Local<v8::ObjectTemplate> instance_template,
+               v8::Local<v8::ObjectTemplate> prototype_template,
                v8::Local<v8::Template> interface_template);
   using InstallContextDependentPropertiesFuncType =
       void (*)(v8::Local<v8::Context> context,

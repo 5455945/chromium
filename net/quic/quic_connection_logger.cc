@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,34 +18,19 @@
 #include "net/cert/x509_certificate.h"
 #include "net/quic/address_utils.h"
 #include "net/quic/quic_address_mismatch.h"
-#include "net/third_party/quiche/src/quic/core/crypto/crypto_handshake_message.h"
-#include "net/third_party/quiche/src/quic/core/crypto/crypto_protocol.h"
-#include "net/third_party/quiche/src/quic/core/quic_connection_id.h"
-#include "net/third_party/quiche/src/quic/core/quic_packets.h"
-#include "net/third_party/quiche/src/quic/core/quic_socket_address_coder.h"
-#include "net/third_party/quiche/src/quic/core/quic_time.h"
-#include "net/third_party/quiche/src/quic/core/quic_utils.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_handshake_message.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_protocol.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_connection_id.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_socket_address_coder.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_time.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_utils.h"
 
-using quic::kMaxOutgoingPacketSize;
 using std::string;
 
 namespace net {
 
 namespace {
-
-void UpdatePublicResetAddressMismatchHistogram(
-    const IPEndPoint& server_hello_address,
-    const IPEndPoint& public_reset_address) {
-  int sample = GetAddressMismatch(server_hello_address, public_reset_address);
-  // We are seemingly talking to an older server that does not support the
-  // feature, so we can't report the results in the histogram.
-  if (sample < 0) {
-    return;
-  }
-  UMA_HISTOGRAM_ENUMERATION("Net.QuicSession.PublicResetAddressMismatch2",
-                            static_cast<QuicAddressMismatch>(sample),
-                            QUIC_ADDRESS_MISMATCH_MAX);
-}
 
 // If |address| is an IPv4-mapped IPv6 address, returns ADDRESS_FAMILY_IPV4
 // instead of ADDRESS_FAMILY_IPV6. Othewise, behaves like GetAddressFamily().
@@ -62,19 +47,6 @@ QuicConnectionLogger::QuicConnectionLogger(
     std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
     const NetLogWithSource& net_log)
     : session_(session),
-      last_received_packet_size_(0),
-      no_packet_received_after_ping_(false),
-      previous_received_packet_size_(0),
-      num_out_of_order_received_packets_(0),
-      num_out_of_order_large_received_packets_(0),
-      num_packets_received_(0),
-      num_frames_received_(0),
-      num_duplicate_frames_received_(0),
-      num_incorrect_connection_ids_(0),
-      num_undecryptable_packets_(0),
-      num_duplicate_packets_(0),
-      num_blocked_frames_received_(0),
-      num_blocked_frames_sent_(0),
       connection_description_(connection_description),
       socket_performance_watcher_(std::move(socket_performance_watcher)),
       event_logger_(session, net_log) {}
@@ -97,9 +69,9 @@ QuicConnectionLogger::~QuicConnectionLogger() {
 
   const quic::QuicConnectionStats& stats = session_->connection()->GetStats();
   UMA_HISTOGRAM_TIMES("Net.QuicSession.MinRTT",
-                      base::TimeDelta::FromMicroseconds(stats.min_rtt_us));
+                      base::Microseconds(stats.min_rtt_us));
   UMA_HISTOGRAM_TIMES("Net.QuicSession.SmoothedRTT",
-                      base::TimeDelta::FromMicroseconds(stats.srtt_us));
+                      base::Microseconds(stats.srtt_us));
 
   if (num_frames_received_ > 0) {
     int duplicate_stream_frame_per_thousand =
@@ -162,9 +134,9 @@ void QuicConnectionLogger::OnFrameAddedToPacket(const quic::QuicFrame& frame) {
       break;
     case quic::STOP_SENDING_FRAME:
       base::UmaHistogramSparse("Net.QuicSession.StopSendingErrorCodeClient",
-                               frame.stop_sending_frame->error_code);
+                               frame.stop_sending_frame.error_code);
       break;
-    case quic::MESSAGE_FRAME:
+    case quic::DATAGRAM_FRAME:
       break;
     case quic::CRYPTO_FRAME:
       break;
@@ -191,44 +163,23 @@ void QuicConnectionLogger::OnPacketSent(
     quic::EncryptionLevel encryption_level,
     const quic::QuicFrames& retransmittable_frames,
     const quic::QuicFrames& nonretransmittable_frames,
-    quic::QuicTime sent_time) {
+    quic::QuicTime sent_time,
+    uint32_t batch_id) {
   // 4.4.1.4.  Minimum Packet Size
   // The payload of a UDP datagram carrying the Initial packet MUST be
   // expanded to at least 1200 octets
   const quic::QuicPacketLength kMinClientInitialPacketLength = 1200;
-  switch (encryption_level) {
-    case quic::ENCRYPTION_INITIAL:
-      UMA_HISTOGRAM_CUSTOM_COUNTS("Net.QuicSession.SendPacketSize.Initial",
-                                  packet_length, 1, kMaxOutgoingPacketSize, 50);
-      if (packet_length < kMinClientInitialPacketLength) {
-        UMA_HISTOGRAM_CUSTOM_COUNTS(
-            "Net.QuicSession.TooSmallInitialSentPacket",
-            kMinClientInitialPacketLength - packet_length, 1,
-            kMinClientInitialPacketLength, 50);
-      }
-      break;
-    case quic::ENCRYPTION_HANDSHAKE:
-      UMA_HISTOGRAM_CUSTOM_COUNTS("Net.QuicSession.SendPacketSize.Hanshake",
-                                  packet_length, 1, kMaxOutgoingPacketSize, 50);
-      break;
-    case quic::ENCRYPTION_ZERO_RTT:
-      UMA_HISTOGRAM_CUSTOM_COUNTS("Net.QuicSession.SendPacketSize.0RTT",
-                                  packet_length, 1, kMaxOutgoingPacketSize, 50);
-      break;
-    case quic::ENCRYPTION_FORWARD_SECURE:
-      UMA_HISTOGRAM_CUSTOM_COUNTS(
-          "Net.QuicSession.SendPacketSize.ForwardSecure", packet_length, 1,
-          kMaxOutgoingPacketSize, 50);
-      break;
-    case quic::NUM_ENCRYPTION_LEVELS:
-      NOTREACHED();
-      break;
+  if (encryption_level == quic::ENCRYPTION_INITIAL &&
+      packet_length < kMinClientInitialPacketLength) {
+    UMA_HISTOGRAM_CUSTOM_COUNTS("Net.QuicSession.TooSmallInitialSentPacket",
+                                kMinClientInitialPacketLength - packet_length,
+                                1, kMinClientInitialPacketLength, 50);
   }
 
   event_logger_.OnPacketSent(packet_number, packet_length, has_crypto_handshake,
                              transmission_type, encryption_level,
                              retransmittable_frames, nonretransmittable_frames,
-                             sent_time);
+                             sent_time, batch_id);
 }
 
 void QuicConnectionLogger::OnPacketLoss(
@@ -238,6 +189,12 @@ void QuicConnectionLogger::OnPacketLoss(
     quic::QuicTime detection_time) {
   event_logger_.OnPacketLoss(lost_packet_number, encryption_level,
                              transmission_type, detection_time);
+}
+
+void QuicConnectionLogger::OnConfigProcessed(
+    const quic::QuicSentPacketManager::DebugDelegate::SendParameters&
+        parameters) {
+  event_logger_.OnConfigProcessed(parameters);
 }
 
 void QuicConnectionLogger::OnPingSent() {
@@ -315,7 +272,7 @@ void QuicConnectionLogger::OnPacketHeader(const quic::QuicPacketHeader& header,
       // delivery.
       UMA_HISTOGRAM_COUNTS_1M(
           "Net.QuicSession.PacketGapReceived",
-          static_cast<base::HistogramBase::Sample>(delta - 1));
+          static_cast<base::HistogramBase::Sample32>(delta - 1));
     }
     largest_received_packet_number_ = header.packet_number;
   }
@@ -327,17 +284,18 @@ void QuicConnectionLogger::OnPacketHeader(const quic::QuicPacketHeader& header,
   if (last_received_packet_number_.IsInitialized() &&
       header.packet_number < last_received_packet_number_) {
     ++num_out_of_order_received_packets_;
-    if (previous_received_packet_size_ < last_received_packet_size_)
+    if (previous_received_packet_size_ < last_received_packet_size_) {
       ++num_out_of_order_large_received_packets_;
+    }
     UMA_HISTOGRAM_COUNTS_1M(
         "Net.QuicSession.OutOfOrderGapReceived",
-        static_cast<base::HistogramBase::Sample>(last_received_packet_number_ -
-                                                 header.packet_number));
+        static_cast<base::HistogramBase::Sample32>(
+            last_received_packet_number_ - header.packet_number));
   } else if (no_packet_received_after_ping_) {
     if (last_received_packet_number_.IsInitialized()) {
       UMA_HISTOGRAM_COUNTS_1M(
           "Net.QuicSession.PacketGapReceivedNearPing",
-          static_cast<base::HistogramBase::Sample>(
+          static_cast<base::HistogramBase::Sample32>(
               header.packet_number - last_received_packet_number_));
     }
     no_packet_received_after_ping_ = false;
@@ -402,11 +360,6 @@ void QuicConnectionLogger::OnIncomingAck(
                               least_unacked_sent_packet);
 }
 
-void QuicConnectionLogger::OnStopWaitingFrame(
-    const quic::QuicStopWaitingFrame& frame) {
-  event_logger_.OnStopWaitingFrame(frame);
-}
-
 void QuicConnectionLogger::OnRstStreamFrame(
     const quic::QuicRstStreamFrame& frame) {
   base::UmaHistogramSparse("Net.QuicSession.RstStreamErrorCodeServer",
@@ -462,8 +415,9 @@ void QuicConnectionLogger::OnRetireConnectionIdFrame(
   event_logger_.OnRetireConnectionIdFrame(frame);
 }
 
-void QuicConnectionLogger::OnMessageFrame(const quic::QuicMessageFrame& frame) {
-  event_logger_.OnMessageFrame(frame);
+void QuicConnectionLogger::OnDatagramFrame(
+    const quic::QuicDatagramFrame& frame) {
+  event_logger_.OnDatagramFrame(frame);
 }
 
 void QuicConnectionLogger::OnHandshakeDoneFrame(
@@ -477,13 +431,6 @@ void QuicConnectionLogger::OnCoalescedPacketSent(
   event_logger_.OnCoalescedPacketSent(coalesced_packet, length);
 }
 
-void QuicConnectionLogger::OnPublicResetPacket(
-    const quic::QuicPublicResetPacket& packet) {
-  UpdatePublicResetAddressMismatchHistogram(
-      local_address_from_shlo_, ToIPEndPoint(packet.client_address));
-  event_logger_.OnPublicResetPacket(packet);
-}
-
 void QuicConnectionLogger::OnVersionNegotiationPacket(
     const quic::QuicVersionNegotiationPacket& packet) {
   event_logger_.OnVersionNegotiationPacket(packet);
@@ -492,7 +439,7 @@ void QuicConnectionLogger::OnVersionNegotiationPacket(
 void QuicConnectionLogger::OnCryptoHandshakeMessageReceived(
     const quic::CryptoHandshakeMessage& message) {
   if (message.tag() == quic::kSHLO) {
-    absl::string_view address;
+    std::string_view address;
     quic::QuicSocketAddressCoder decoder;
     if (message.GetStringPiece(quic::kCADR, &address) &&
         decoder.Decode(address.data(), address.size())) {
@@ -505,8 +452,9 @@ void QuicConnectionLogger::OnCryptoHandshakeMessageReceived(
 
       int sample = GetAddressMismatch(local_address_from_shlo_,
                                       local_address_from_self_);
-      // We are seemingly talking to an older server that does not support the
-      // feature, so we can't report the results in the histogram.
+      // If `sample` is negative, we are seemingly talking to an older server
+      // that does not support the feature, so we can't report the results in
+      // the histogram.
       if (sample >= 0) {
         UMA_HISTOGRAM_ENUMERATION("Net.QuicSession.SelfShloAddressMismatch",
                                   static_cast<QuicAddressMismatch>(sample),
@@ -545,23 +493,15 @@ void QuicConnectionLogger::UpdateReceivedFrameCounts(
 }
 
 void QuicConnectionLogger::OnCertificateVerified(
-    const CertVerifyResult& result) {
-  event_logger_.OnCertificateVerified(result);
-}
-
-base::HistogramBase* QuicConnectionLogger::Get6PacketHistogram(
-    const char* which_6) const {
-  // This histogram takes a binary encoding of the 6 consecutive packets
-  // received.  As a result, there are 64 possible sample-patterns.
-  string prefix("Net.QuicSession.6PacketsPatternsReceived_");
-  return base::LinearHistogram::FactoryGet(
-      prefix + which_6 + connection_description_, 1, 64, 65,
-      base::HistogramBase::kUmaTargetedHistogramFlag);
+    const CertVerifyResult& result,
+    const std::vector<std::vector<uint8_t>>& server_tais) {
+  event_logger_.OnCertificateVerified(result, server_tais);
 }
 
 float QuicConnectionLogger::ReceivedPacketLossRate() const {
-  if (!largest_received_packet_number_.IsInitialized())
+  if (!largest_received_packet_number_.IsInitialized()) {
     return 0.0f;
+  }
   float num_packets =
       largest_received_packet_number_ - first_received_packet_number_ + 1;
   float num_missing = num_packets - num_packets_received_;
@@ -570,14 +510,15 @@ float QuicConnectionLogger::ReceivedPacketLossRate() const {
 
 void QuicConnectionLogger::OnRttChanged(quic::QuicTime::Delta rtt) const {
   // Notify socket performance watcher of the updated RTT value.
-  if (!socket_performance_watcher_)
+  if (!socket_performance_watcher_) {
     return;
+  }
 
   int64_t microseconds = rtt.ToMicroseconds();
   if (microseconds != 0 &&
       socket_performance_watcher_->ShouldNotifyUpdatedRTT()) {
     socket_performance_watcher_->OnUpdatedRTTAvailable(
-        base::TimeDelta::FromMicroseconds(rtt.ToMicroseconds()));
+        base::Microseconds(rtt.ToMicroseconds()));
   }
 }
 
@@ -600,22 +541,27 @@ void QuicConnectionLogger::OnZeroRttRejected(int reason) {
   event_logger_.OnZeroRttRejected(reason);
 }
 
+void QuicConnectionLogger::OnEncryptedClientHelloSent(
+    std::string_view client_hello) {
+  event_logger_.OnEncryptedClientHelloSent(client_hello);
+}
+
 void QuicConnectionLogger::RecordAggregatePacketLossRate() const {
-  // For short connections under 22 packets in length, we'll rely on the
-  // Net.QuicSession.21CumulativePacketsReceived_* histogram to indicate packet
-  // loss rates.  This way we avoid tremendously anomalous contributions to our
-  // histogram.  (e.g., if we only got 5 packets, but lost 1, we'd otherwise
+  // We don't report packet loss rates for short connections under 22 packets in
+  // length to avoid tremendously anomalous contributions to our histogram.
+  // (e.g., if we only got 5 packets, but lost 1, we'd otherwise
   // record a 20% loss in this histogram!). We may still get some strange data
   // (1 loss in 22 is still high :-/).
   if (!largest_received_packet_number_.IsInitialized() ||
-      largest_received_packet_number_ - first_received_packet_number_ < 22)
+      largest_received_packet_number_ - first_received_packet_number_ < 22) {
     return;
+  }
 
   string prefix("Net.QuicSession.PacketLossRate_");
   base::HistogramBase* histogram = base::Histogram::FactoryGet(
       prefix + connection_description_, 1, 1000, 75,
       base::HistogramBase::kUmaTargetedHistogramFlag);
-  histogram->Add(static_cast<base::HistogramBase::Sample>(
+  histogram->Add(static_cast<base::HistogramBase::Sample32>(
       ReceivedPacketLossRate() * 1000));
 }
 

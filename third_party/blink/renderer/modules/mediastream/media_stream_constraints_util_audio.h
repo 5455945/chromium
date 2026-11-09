@@ -1,21 +1,128 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIASTREAM_MEDIA_STREAM_CONSTRAINTS_UTIL_AUDIO_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIASTREAM_MEDIA_STREAM_CONSTRAINTS_UTIL_AUDIO_H_
 
+#include "base/memory/raw_ptr.h"
+#include "base/types/expected.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-blink-forward.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
+// ============================================================================
+// MediaStream Audio Constraints Resolution (W3C SelectSettings)
+// ============================================================================
+// Implements the W3C Media Capture and Streams `SelectSettings` algorithm for
+// audio tracks (https://w3c.github.io/mediacapture-main/#dfn-selectsettings).
+//
+// The entry point `SelectSettingsAudioCapture()` evaluates JavaScript
+// `MediaTrackConstraints` against available `AudioDeviceCaptureCapabilities`
+// to select concrete `AudioCaptureSettings`:
+//   - Target audio device (`deviceId`, `groupId`)
+//   - Audio capture pipeline (`kUnprocessed`, `kNoApmProcessed`,
+//     `kApmProcessed`)
+//   - Audio processing properties (AEC mode, AGC, NS, Voice Isolation)
+//   - Audio parameters (sample rate, channel count, buffer size / latency)
+//
+// Resolution Lifecycle:
+// 1. Phase 1 (Filtering / Pruning):
+//    - Mandatory Basic Constraints: Prunes all candidate devices and processing
+//      pipelines that cannot satisfy the `Basic` constraint set. If all
+//      candidates are eliminated, resolution fails with OverconstrainedError.
+//    - Optional Advanced Constraints: Evaluates each `Advanced` constraint set
+//      sequentially. If an advanced set would eliminate all remaining
+//      candidates, it is discarded (best-effort matching).
+// 2. Phase 2 (Ranking / Selection):
+//    - Ranks surviving candidates using a composite lexicographical score:
+//      Fitness distance to ideal constraints -> Default device preference ->
+//      Echo cancellation mode preference -> Audio processing priority.
+//
+// Multi-Track Source Sharing & Sibling Constraints:
+// - Processed tracks (`kApmProcessed`, `kNoApmProcessed`) on a physical device
+//   share an underlying `ProcessedLocalAudioSource` when their session-identity
+//   properties (AEC mode, and `voice_isolation` under
+//   `CHROME_WIDE_ECHO_CANCELLATION`) match, and open a separate
+//   `ProcessedLocalAudioSource` when those properties differ. An unprocessed
+//   track (`kUnprocessed`) opens a separate `LocalMediaStreamAudioSource`.
+// - Only `exact` constraints from the mandatory `Basic` set are recorded on
+//   tracks and enforced against sibling tracks sharing the same source
+//   (`Advanced` sets are optional and ignored if unsatisfied).
+//
+// Session Splitting vs. In-Place Reconfiguration
+// (`is_full_reconfiguration_allowed`):
+// When a device already has an active source, this flag distinguishes whether
+// the caller can open a separate capture session/source or is bound to the
+// existing source:
+// - When `is_full_reconfiguration_allowed = true` (used by `getUserMedia()`):
+//   * All processing pipelines (`kUnprocessed`, `kNoApmProcessed`,
+//     `kApmProcessed`) remain candidates. The caller can open a separate source
+//     when selecting a different pipeline, a different `echo_cancellation_mode`
+//     (when AEC reconfiguration is supported; see `EchoCancellationContainer`),
+//     or a different `voice_isolation` value (under
+//     `CHROME_WIDE_ECHO_CANCELLATION`), and reuses the active source when
+//     session-identity properties match.
+//   * Sibling track `exact` constraints on the active source only restrict
+//     candidate settings that would reuse the active source.
+//   * Device-interlocked properties (`auto_gain_control`, `noise_suppression`,
+//     `channels`, `sample_rate`, and `latency` for `kApmProcessed` and
+//     `kNoApmProcessed`; `disable_local_echo` and `render_to_associated_sink`
+//     for all pipelines) remain restricted to the active source's values.
+// - When `is_full_reconfiguration_allowed = false` (used by
+//   `MediaStreamTrack.applyConstraints()`):
+//   * The track is already attached to the active source and cannot switch to a
+//     different source or session (crbug.com/796964).
+//   * Candidates are confined strictly to the active source's processing type
+//     and startup configuration. Only properties that support dynamic in-place
+//     toggling on the active source (`voice_isolation` when the source was
+//     started with it enabled) can change, subject to sibling track `exact`
+//     constraints on the shared source.
+
 namespace blink {
 class MediaConstraints;
 class MediaStreamAudioSource;
+class MediaStreamAudioTrack;
+class V8UnionBooleanOrString;
 }  // namespace blink
 
 namespace blink {
+
+V8UnionBooleanOrString* EchoCancellationModeToBooleanOrString(
+    EchoCancellationMode);
+Vector<EchoCancellationMode> GetSupportedEchoCancellationModes(
+    int platform_effects,
+    mojom::blink::MediaStreamType);
+
+// Returns the set of supported values for the voiceIsolation constraint on a
+// specific device, given its platform effects.
+// If voice isolation is supported by the platform and the device, returns
+// {true, false}. Otherwise, returns {false} (only disabled state is supported).
+Vector<bool> GetSupportedVoiceIsolationValues(int platform_effects);
+
+// Returns true if `audio_source` was started with voice isolation enabled.
+bool IsVoiceIsolationInitiallyEnabled(
+    const MediaStreamAudioSource* audio_source);
+
+// Returns the exact voiceIsolation constraint held by any track attached to
+// `source` (excluding `excluding_track` if non-null), or `std::nullopt` if no
+// attached track holds an exact voiceIsolation constraint.
+std::optional<bool> GetSiblingVoiceIsolationExactConstraint(
+    const MediaStreamAudioSource* source,
+    const MediaStreamAudioTrack* excluding_track = nullptr);
+
+// If `source` was started with voice isolation enabled and has a track
+// reconfigured to `voiceIsolation: {exact: false}`, returns `source`'s
+// EchoCancellationMode (which disallows `voiceIsolation = true`). Otherwise
+// returns `std::nullopt`.
+std::optional<EchoCancellationMode> GetEcModeDisallowingVoiceIsolation(
+    const MediaStreamAudioSource* source);
+
+// Returns true if voice isolation is supported by the platform (either
+// system-wide or browser-side).
+MODULES_EXPORT bool IsVoiceIsolationSupported();
 
 // This class represents the capability of an audio-capture device.
 // It may represent three different things:
@@ -50,9 +157,18 @@ class MODULES_EXPORT AudioDeviceCaptureCapability {
   // settings are restricted to the current settings of |source|. Intended to be
   // used by applyConstraints() for both device and content capture, and by
   // getUserMedia() with device capture for devices that are currently in use.
+  // |ec_modes_disallowing_voice_isolation| lists EchoCancellationModes on this
+  // device that have an active source, started with voice isolation enabled,
+  // with a track reconfigured to `voiceIsolation: {exact: false}`, disallowing
+  // `voiceIsolation = true` for those modes. The single-argument overload
+  // populates this from |source| when applicable.
   explicit AudioDeviceCaptureCapability(blink::MediaStreamAudioSource* source);
+  AudioDeviceCaptureCapability(
+      blink::MediaStreamAudioSource* source,
+      Vector<EchoCancellationMode> ec_modes_disallowing_voice_isolation);
 
-  AudioDeviceCaptureCapability(const AudioDeviceCaptureCapability& other);
+  AudioDeviceCaptureCapability(const AudioDeviceCaptureCapability&);
+  AudioDeviceCaptureCapability& operator=(const AudioDeviceCaptureCapability&);
 
   // If this capability represents a device currently in use, this method
   // returns a pointer to the MediaStreamAudioSource object associated with the
@@ -72,12 +188,24 @@ class MODULES_EXPORT AudioDeviceCaptureCapability {
   // capability. If DeviceID() returns an empty string, these parameters contain
   // default values that work well for content capture.
   const media::AudioParameters& Parameters() const;
+  std::optional<bool> GetVoiceIsolationExactConstraint(
+      const MediaStreamAudioTrack* current_track = nullptr) const;
+  const Vector<EchoCancellationMode>& ec_modes_disallowing_voice_isolation()
+      const {
+    return ec_modes_disallowing_voice_isolation_;
+  }
 
  private:
-  blink::MediaStreamAudioSource* source_ = nullptr;
+  raw_ptr<blink::MediaStreamAudioSource> source_ = nullptr;
   String device_id_;
   String group_id_;
   media::AudioParameters parameters_;
+  // EchoCancellationModes on this device that have an active source, started
+  // with voice isolation enabled, with a track reconfigured to
+  // `voiceIsolation: {exact: false}`. Selecting `voiceIsolation = true` with
+  // any of these modes would reuse that source and conflict with that
+  // constraint, so `voiceIsolation = true` is disallowed for these modes.
+  Vector<EchoCancellationMode> ec_modes_disallowing_voice_isolation_;
 };
 
 using AudioDeviceCaptureCapabilities = Vector<AudioDeviceCaptureCapability>;
@@ -119,9 +247,6 @@ using AudioDeviceCaptureCapabilities = Vector<AudioDeviceCaptureCapability>;
 //        the same name. "System" is selected only if the device supports it.
 //        If constraint is not specified, "system" is selected if supported,
 //        with exception for experimental system echo cancellation.
-//      - goog_audio_mirroring: This property is mapped directly from the final
-//        value of the goog_audio_mirroring constraint. If no value is
-//        explicitly specified, the default value is false.
 //    The remaining audio-processing properties are directly mapped from the
 //    final value of the corresponding constraints. If no value is explicitly
 //    specified, the default value is the same as the final value of the
@@ -134,33 +259,48 @@ using AudioDeviceCaptureCapabilities = Vector<AudioDeviceCaptureCapability>;
 //    constraints. Constraints are an input to SelectSettings, while properties
 //    are part of the output. The value for most boolean properties comes
 //    directly from a corresponding boolean constraint, but this is not true for
-//    all constraints and properties. For example, the echo_cancellation and
-//    goog_echo_cancellation constraints  are not directly mapped to any
-//    property, but they, together with hardware characteristics, influence the
-//    selection of echo cancellation type.
+//    all constraints and properties. For example, the echo_cancellation is not
+//    directly mapped to any property, but, together with hardware
+//    characteristics, influence the selection of echo cancellation type.
 //    Moreover, the echo_cancellation constraint influences most other
 //    audio-processing properties for which no explicit value is provided in
 //    their corresponding constraints.
-// |is_reconfiguration_allowed| indicates whether it is possible to reconfigure
-// settings on an open audio track.
-// TODO(crbug.com/796964): remove |is_reconfiguration_allowed| when both
+// When a capability in `capabilities` references an active source,
+// `is_full_reconfiguration_allowed` indicates whether the caller can open a
+// new source/session with different session-identity settings or is restricted
+// to reconfiguring the existing source in-place.
+// TODO(crbug.com/796964): remove `is_full_reconfiguration_allowed` when both
 // getUserMedia and applyConstraints code paths allow for reconfiguration.
 MODULES_EXPORT blink::AudioCaptureSettings SelectSettingsAudioCapture(
     const AudioDeviceCaptureCapabilities& capabilities,
     const MediaConstraints& constraints,
-    bool should_disable_hardware_noise_suppression,
-    bool is_reconfiguration_allowed = false);
+    mojom::blink::MediaStreamType stream_type,
+    bool is_full_reconfiguration_allowed,
+    const MediaStreamAudioTrack* current_track = nullptr);
 
 // This variant of SelectSettings takes an existing MediaStreamAudioSource
-// as input in order to determine settings that are compatible with it.
-// This is intended to be used by applyConstraints().
-// The current implementation rejects constraints that would result in settings
-// different from those of |source| because it is currently not possible to
-// reconfigure audio tracks or sources.
+// as input in order to determine settings that are compatible with it
+// (`is_full_reconfiguration_allowed = false`). This is intended to be used by
+// applyConstraints().
+// Rejects constraints that would require settings different from those of
+// `source`, except for properties that support dynamic in-place toggling on
+// `source` (such as `voice_isolation` when `source` was started with it
+// enabled).
 // TODO(guidou): Allow reconfiguring audio tracks. https://crbug.com/796964
 MODULES_EXPORT blink::AudioCaptureSettings SelectSettingsAudioCapture(
     blink::MediaStreamAudioSource* source,
-    const MediaConstraints& constraints);
+    const MediaConstraints& constraints,
+    const MediaStreamAudioTrack* current_track = nullptr);
+
+// Selects settings for each eligible device in `capabilities` in isolation and
+// returns them as a vector. If none of the devices are eligible, then the name
+// of one of the failed constraints is returned.
+MODULES_EXPORT base::expected<Vector<blink::AudioCaptureSettings>, std::string>
+SelectEligibleSettingsAudioCapture(
+    const AudioDeviceCaptureCapabilities& capabilities,
+    const MediaConstraints& constraints,
+    mojom::blink::MediaStreamType stream_type,
+    bool is_full_reconfiguration_allowed);
 
 // Return a tuple with <min,max> representing the min and max buffer sizes or
 // latencies that can be provided by the given AudioParameters. The min and max

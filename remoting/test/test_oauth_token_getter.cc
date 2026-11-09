@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "google_apis/google_api_keys.h"
-#include "net/base/escape.h"
 #include "remoting/base/fake_oauth_token_getter.h"
 #include "remoting/base/oauth_token_getter_impl.h"
 #include "remoting/base/url_request_context_getter.h"
@@ -32,9 +32,6 @@ constexpr char kChromotingAuthScopeValues[] =
     "https://www.googleapis.com/auth/userinfo.email "
     "https://www.googleapis.com/auth/tachyon";
 
-constexpr char kOauthRedirectUrl[] =
-    "https://remotedesktop.google.com/_/oauthredirect";
-
 std::string GetAuthorizationCodeUri(bool show_consent_page) {
   // Replace space characters with a '+' sign when formatting.
   bool use_plus = true;
@@ -45,8 +42,8 @@ std::string GetAuthorizationCodeUri(bool show_consent_page) {
       "&response_type=code"
       "&client_id=%s"
       "&access_type=offline",
-      net::EscapeUrlEncodedData(kChromotingAuthScopeValues, use_plus).c_str(),
-      net::EscapeUrlEncodedData(
+      base::EscapeUrlEncodedData(kChromotingAuthScopeValues, use_plus).c_str(),
+      base::EscapeUrlEncodedData(
           google_apis::GetOAuth2ClientID(google_apis::CLIENT_REMOTING),
           use_plus)
           .c_str());
@@ -62,7 +59,7 @@ constexpr char TestOAuthTokenGetter::kSwitchNameAuthCode[];
 
 // static
 bool TestOAuthTokenGetter::IsServiceAccount(const std::string& email) {
-  return email.find("@chromoting.gserviceaccount.com") != std::string::npos;
+  return email.contains("@chromoting.gserviceaccount.com");
 }
 
 TestOAuthTokenGetter::TestOAuthTokenGetter(TestTokenStorage* token_storage) {
@@ -70,7 +67,7 @@ TestOAuthTokenGetter::TestOAuthTokenGetter(TestTokenStorage* token_storage) {
   token_storage_ = token_storage;
   auto url_request_context_getter =
       base::MakeRefCounted<URLRequestContextGetter>(
-          base::ThreadTaskRunnerHandle::Get());
+          base::SingleThreadTaskRunner::GetCurrentDefault());
   url_loader_factory_owner_ =
       std::make_unique<network::TransitionalURLLoaderFactoryOwner>(
           url_request_context_getter);
@@ -93,7 +90,8 @@ void TestOAuthTokenGetter::Initialize(base::OnceClosure on_done) {
   } else {
     VLOG(0) << "Reusing access token: " << access_token;
     token_getter_ = std::make_unique<FakeOAuthTokenGetter>(
-        OAuthTokenGetter::Status::SUCCESS, user_email, access_token);
+        OAuthTokenGetter::Status::SUCCESS,
+        OAuthTokenInfo(access_token, user_email));
   }
   std::move(on_done).Run();
 }
@@ -129,32 +127,10 @@ void TestOAuthTokenGetter::InvalidateCache() {
 
   // Make sure we don't try to reuse an auth code.
   base::CommandLine::ForCurrentProcess()->RemoveSwitch(kSwitchNameAuthCode);
-
-  token_getter_ = CreateFromIntermediateCredentials(
-      auth_code, base::BindRepeating(&TestOAuthTokenGetter::OnCredentialsUpdate,
-                                     weak_factory_.GetWeakPtr()));
-
-  // This triggers |OnCredentialsUpdate| to be called.
-  token_getter_->CallWithToken(base::DoNothing());
 }
 
-base::WeakPtr<TestOAuthTokenGetter> TestOAuthTokenGetter::GetWeakPtr() {
+base::WeakPtr<OAuthTokenGetter> TestOAuthTokenGetter::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
-}
-
-std::unique_ptr<OAuthTokenGetter>
-TestOAuthTokenGetter::CreateFromIntermediateCredentials(
-    const std::string& auth_code,
-    const OAuthTokenGetter::CredentialsUpdatedCallback& on_credentials_update) {
-  auto oauth_credentials =
-      std::make_unique<OAuthTokenGetter::OAuthIntermediateCredentials>(
-          auth_code, /* is_service_account */ false);
-  oauth_credentials->oauth_redirect_uri = kOauthRedirectUrl;
-
-  return std::make_unique<OAuthTokenGetterImpl>(
-      std::move(oauth_credentials), on_credentials_update,
-      url_loader_factory_owner_->GetURLLoaderFactory(),
-      /* auto_refresh */ true);
 }
 
 std::unique_ptr<OAuthTokenGetter> TestOAuthTokenGetter::CreateWithRefreshToken(
@@ -171,27 +147,10 @@ std::unique_ptr<OAuthTokenGetter> TestOAuthTokenGetter::CreateWithRefreshToken(
       /*auto_refresh=*/true);
 }
 
-void TestOAuthTokenGetter::OnCredentialsUpdate(
-    const std::string& user_email,
-    const std::string& refresh_token) {
-  VLOG(0) << "Received user_email: " << user_email
-          << ", refresh_token: " << refresh_token;
-  token_storage_->StoreUserEmail(user_email);
-  if (refresh_token.empty()) {
-    VLOG(0)
-        << "No refresh token is returned. Will cache the access token instead.";
-    token_getter_->CallWithToken(base::BindOnce(
-        &TestOAuthTokenGetter::OnAccessToken, weak_factory_.GetWeakPtr()));
-    return;
-  }
-  is_authenticating_ = false;
-  token_storage_->StoreRefreshToken(refresh_token);
-  RunAuthenticationDoneCallbacks();
-}
-
 void TestOAuthTokenGetter::OnAccessToken(OAuthTokenGetter::Status status,
                                          const std::string& user_email,
-                                         const std::string& access_token) {
+                                         const std::string& access_token,
+                                         const std::string& scopes) {
   is_authenticating_ = false;
   if (status != OAuthTokenGetter::Status::SUCCESS) {
     fprintf(stderr,

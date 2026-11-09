@@ -1,12 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "mojo/public/tools/fuzzers/fuzz_impl.h"
 
 #include <utility>
 
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/tools/fuzzers/fuzz.mojom.h"
-#include "mojo/public/tools/fuzzers/fuzz_impl.h"
 
 FuzzImpl::FuzzImpl(mojo::PendingReceiver<fuzz::mojom::FuzzInterface> receiver)
     : receiver_(this, std::move(receiver)) {}
@@ -37,6 +38,9 @@ void FuzzImpl::FuzzArgsSyncResp(fuzz::mojom::FuzzStructPtr a,
                                 FuzzArgsSyncRespCallback callback) {
   std::move(callback).Run();
 }
+
+void FuzzImpl::FuzzNullableValueArrays(
+    fuzz::mojom::FuzzNullableValueArrayStructPtr s) {}
 
 void FuzzImpl::FuzzAssociated(
     mojo::PendingAssociatedReceiver<fuzz::mojom::FuzzDummyInterface> receiver) {

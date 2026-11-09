@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,58 +9,77 @@
 
 #include <memory>
 
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/user_metrics.h"
+#include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/note_taking_helper.h"
 #include "chrome/browser/download/download_commands.h"
-#include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
+#include "chrome/browser/download/download_stats.h"
 #include "chrome/browser/download/notification/download_notification_manager.h"
+#include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/notifications/notification_handler.h"
-#include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
-#include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
+#include "chrome/browser/safe_browsing/advanced_protection/advanced_protection_status_manager.h"
+#include "chrome/browser/safe_browsing/advanced_protection/advanced_protection_status_manager_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/extension_util.h"
 #include "net/base/mime_util.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkImage.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/public/cpp/notification.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/notifier_catalogs.h"
+#include "chrome/browser/apps/app_service/policy_util.h"
+#include "chrome/browser/ash/file_manager/file_tasks.h"
+#endif
 
 using base::UserMetricsAction;
 using offline_items_collection::FailState;
@@ -85,14 +104,15 @@ std::string ReadNotificationImage(const base::FilePath& file_path) {
   if (!ret)
     return std::string();
 
-  DCHECK_LE(data.size(), static_cast<size_t>(kMaxImagePreviewSize));
+  CHECK_LE(data.size(), static_cast<size_t>(kMaxImagePreviewSize),
+           base::NotFatalUntil::M161);
 
   return data;
 }
 
 SkBitmap CropImage(const SkBitmap& original_bitmap) {
-  DCHECK_NE(0, original_bitmap.width());
-  DCHECK_NE(0, original_bitmap.height());
+  CHECK_NE(0, original_bitmap.width(), base::NotFatalUntil::M161);
+  CHECK_NE(0, original_bitmap.height(), base::NotFatalUntil::M161);
 
   const SkSize container_size =
       SkSize::Make(message_center::kNotificationPreferredImageWidth,
@@ -137,14 +157,6 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_OpenWhenComplete"));
       break;
-    case DownloadCommands::ALWAYS_OPEN_TYPE:
-      base::RecordAction(
-          UserMetricsAction("DownloadNotification.Button_AlwaysOpenType"));
-      break;
-    case DownloadCommands::PLATFORM_OPEN:
-      base::RecordAction(
-          UserMetricsAction("DownloadNotification.Button_PlatformOpen"));
-      break;
     case DownloadCommands::CANCEL:
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_Cancel"));
@@ -160,11 +172,7 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_LearnScanning"));
       break;
-    case DownloadCommands::LEARN_MORE_INTERRUPTED:
-      base::RecordAction(
-          UserMetricsAction("DownloadNotification.Button_LearnInterrupted"));
-      break;
-    case DownloadCommands::LEARN_MORE_MIXED_CONTENT:
+    case DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD:
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_LearnMixedContent"));
       break;
@@ -180,24 +188,40 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_CopyToClipboard"));
       break;
-    case DownloadCommands::ANNOTATE:
-      base::RecordAction(
-          UserMetricsAction("DownloadNotification.Button_Annotate"));
-      break;
     case DownloadCommands::DEEP_SCAN:
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Button_DeepScan"));
       break;
-    case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::REVIEW:
       base::RecordAction(
-          UserMetricsAction("DownloadNotification.Button_BypassDeepScanning"));
+          UserMetricsAction("DownloadNotification.Button_Review"));
       break;
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+      base::RecordAction(
+          UserMetricsAction("DownloadNotification.Button_OpenWithMediaApp"));
+      return;
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+      base::RecordAction(
+          UserMetricsAction("DownloadNotification.Button_EditWithMediaApp"));
+      return;
+    // Not actually displayed in notification, so should never be reached.
+    case DownloadCommands::ALWAYS_OPEN_TYPE:
+    case DownloadCommands::PLATFORM_OPEN:
+    case DownloadCommands::OPEN_WITH:
+    case DownloadCommands::LEARN_MORE_INTERRUPTED:
+    case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
+    case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING_AND_OPEN:
+    case DownloadCommands::CANCEL_DEEP_SCAN:
+    case DownloadCommands::RETRY:
+      NOTREACHED();
   }
 }
 
 bool IsExtensionDownload(DownloadUIModel* item) {
-  return item->download() &&
-         download_crx_util::IsExtensionDownload(*item->download());
+  return item->GetDownloadItem() &&
+         extensions::util::IsExtensionDownload(*item->GetDownloadItem());
 }
 
 }  // namespace
@@ -206,26 +230,41 @@ DownloadItemNotification::DownloadItemNotification(
     Profile* profile,
     DownloadUIModel::DownloadUIModelPtr item)
     : profile_(profile), item_(std::move(item)) {
-  item_->AddObserver(this);
+  item_->SetDelegate(this);
   // Creates the notification instance. |title|, |body| and |icon| will be
   // overridden by UpdateNotificationData() below.
   message_center::RichNotificationData rich_notification_data;
   rich_notification_data.should_make_spoken_feedback_for_popup_updates = false;
-  rich_notification_data.vector_small_image = &kNotificationDownloadIcon;
+  rich_notification_data.vector_small_image =
+      &(features::IsRoundedIconsEnabled()
+            ? vector_icons::kDownload2FilledIcon
+            : vector_icons::kNotificationDownloadOldIcon);
 
   notification_ = std::make_unique<message_center::Notification>(
       message_center::NOTIFICATION_TYPE_PROGRESS, GetNotificationId(),
       std::u16string(),  // title
       std::u16string(),  // body
-      gfx::Image(),      // icon
+      ui::ImageModel(),  // icon
       l10n_util::GetStringUTF16(
           IDS_DOWNLOAD_NOTIFICATION_DISPLAY_SOURCE),  // display_source
       GURL(kDownloadNotificationOrigin),              // origin_url
+#if BUILDFLAG(IS_CHROMEOS)
+      message_center::NotifierId(
+          message_center::NotifierType::SYSTEM_COMPONENT,
+          kDownloadNotificationNotifierId,
+          ash::NotificationCatalogName::kDownloadNotification),
+#else
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kDownloadNotificationNotifierId),
+#endif  // BUILDFLAG(IS_CHROMEOS)
       rich_notification_data,
       base::MakeRefCounted<message_center::ThunkNotificationDelegate>(
           weak_factory_.GetWeakPtr()));
+  if (item_->GetDownloadItem() == nullptr) {
+    // For background fetches, OfflineItem::original_url is its job's
+    // registration origin.
+    notification_->set_origin_url(item_->GetOriginalURL());
+  }
   notification_->set_progress(0);
   notification_->set_fullscreen_visibility(
       message_center::FullscreenVisibility::OVER_USER);
@@ -233,8 +272,6 @@ DownloadItemNotification::DownloadItemNotification(
 }
 
 DownloadItemNotification::~DownloadItemNotification() {
-  ShutDown();
-
   if (image_decode_status_ == IN_PROGRESS)
     ImageDecoder::Cancel(this);
 }
@@ -251,30 +288,34 @@ void DownloadItemNotification::OnDownloadUpdated() {
   Update();
 }
 
-void DownloadItemNotification::OnDownloadDestroyed() {
+void DownloadItemNotification::OnDownloadDestroyed(const ContentId& id) {
+  item_.reset();
   NotificationDisplayServiceFactory::GetForProfile(profile())->Close(
-      NotificationHandler::Type::TRANSIENT, GetNotificationId());
+      NotificationHandler::Type::TRANSIENT, id.id);
   // |this| will be deleted before there's a chance for Close() to be called
   // through the delegate, so preemptively call it now.
   Close(false);
 
-  observer_->OnDownloadDestroyed(item_->GetContentId());
-
-  item_.reset();
+  // This object may get deleted after this call.
+  observer_->OnDownloadDestroyed(id);
 }
 
 void DownloadItemNotification::DisablePopup() {
   if (notification_->priority() == message_center::LOW_PRIORITY)
     return;
+
   // Hides a notification from popup notifications if it's a pop-up, by
   // decreasing its priority and reshowing itself. Low-priority notifications
   // doesn't pop-up itself so this logic works as disabling pop-up.
   CloseNotification();
   notification_->set_priority(message_center::LOW_PRIORITY);
   closed_ = false;
-  NotificationDisplayServiceFactory::GetForProfile(profile())->Display(
-      NotificationHandler::Type::TRANSIENT, *notification_,
-      /*metadata=*/nullptr);
+  // If shutting down, the BrowserContext won't be valid.
+  if (profile() && !profile()->ShutdownStarted()) {
+    NotificationDisplayServiceFactory::GetForProfile(profile())->Display(
+        NotificationHandler::Type::TRANSIENT, *notification_,
+        /*metadata=*/nullptr);
+  }
 }
 
 void DownloadItemNotification::Close(bool by_user) {
@@ -287,7 +328,7 @@ void DownloadItemNotification::Close(bool by_user) {
     return;
   }
 
-  if (item_ && item_->IsMixedContent() && !item_->IsDone()) {
+  if (item_ && item_->IsInsecure() && !item_->IsDone()) {
     item_->Cancel(by_user);
     return;
   }
@@ -299,8 +340,8 @@ void DownloadItemNotification::Close(bool by_user) {
 }
 
 void DownloadItemNotification::Click(
-    const absl::optional<int>& button_index,
-    const absl::optional<std::u16string>& reply) {
+    const std::optional<int>& button_index,
+    const std::optional<std::u16string>& reply) {
   if (!item_)
     return;
 
@@ -309,7 +350,6 @@ void DownloadItemNotification::Click(
         static_cast<size_t>(*button_index) >= button_actions_->size()) {
       // Out of boundary.
       NOTREACHED();
-      return;
     }
 
     DownloadCommands::Command command = button_actions_->at(*button_index);
@@ -323,15 +363,40 @@ void DownloadItemNotification::Click(
 
     DownloadCommands(item_->GetWeakPtr()).ExecuteCommand(command);
 
+    // After DISCARD, `this` has been destroyed.
+    if (command == DownloadCommands::DISCARD) {
+      return;
+    }
+
     // ExecuteCommand() might cause |item_| to be destroyed.
     if (item_ && command != DownloadCommands::PAUSE &&
-        command != DownloadCommands::RESUME) {
+        command != DownloadCommands::RESUME &&
+        command != DownloadCommands::REVIEW) {
       CloseNotification();
     }
 
     // Shows the notification again after clicking "Keep" on dangerous download.
     if (command == DownloadCommands::KEEP) {
       show_next_ = true;
+      Update();
+    }
+
+    if (command == DownloadCommands::REVIEW) {
+      content::WebContents* contents =
+          GetBrowser()->GetTabStripModel()->GetActiveWebContents();
+
+      // If there is no currently active web contents, just show the user the
+      // downloads page so they get more context on the warned download needing
+      // to be reviewed.
+      // TODO(b/285119059): Expand this solution by having the review dialog
+      // also open immediately after the download page is available.
+      if (!contents) {
+        chrome::ShowDownloads(GetBrowser());
+        return;
+      }
+
+      item_->ReviewScanningVerdict(contents);
+      in_review_ = true;
       Update();
     }
 
@@ -347,7 +412,7 @@ void DownloadItemNotification::Click(
   }
 
   // Handle a click on the notification's body.
-  if (item_->IsMixedContent()) {
+  if (item_->IsInsecure()) {
     chrome::ShowDownloads(GetBrowser());
     return;
   }
@@ -369,10 +434,7 @@ void DownloadItemNotification::Click(
     case download::DownloadItem::INTERRUPTED:
       base::RecordAction(
           UserMetricsAction("DownloadNotification.Click_Stopped"));
-      GetBrowser()->OpenURL(content::OpenURLParams(
-          GURL(chrome::kChromeUIDownloadsURL), content::Referrer(),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
-          false /* is_renderer_initiated */));
+      chrome::ShowDownloads(GetBrowser());
       CloseNotification();
       break;
     case download::DownloadItem::COMPLETE:
@@ -384,11 +446,6 @@ void DownloadItemNotification::Click(
     case download::DownloadItem::MAX_DOWNLOAD_STATE:
       NOTREACHED();
   }
-}
-
-void DownloadItemNotification::ShutDown() {
-  if (item_)
-    item_->RemoveObserver(this);
 }
 
 std::string DownloadItemNotification::GetNotificationId() const {
@@ -413,7 +470,7 @@ void DownloadItemNotification::Update() {
   // dangerous, make sure it pops up again.
   bool pop_up =
       ((item_->IsDangerous() && !previous_dangerous_state_) ||
-       (item_->IsMixedContent() && !previous_mixed_content_state_) ||
+       (item_->IsInsecure() && !previous_insecure_state_) ||
        (download_state == download::DownloadItem::COMPLETE &&
         previous_download_state_ != download::DownloadItem::COMPLETE) ||
        (download_state == download::DownloadItem::INTERRUPTED &&
@@ -423,17 +480,18 @@ void DownloadItemNotification::Update() {
   show_next_ = false;
   previous_download_state_ = item_->GetState();
   previous_dangerous_state_ = item_->IsDangerous();
-  previous_mixed_content_state_ = item_->IsMixedContent();
+  previous_insecure_state_ = item_->IsInsecure();
 }
 
 void DownloadItemNotification::UpdateNotificationData(bool display,
                                                       bool force_pop_up) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (item_->GetState() == download::DownloadItem::CANCELLED) {
     // Confirms that a download is cancelled by user action.
-    DCHECK(item_->GetLastFailState() == FailState::USER_CANCELED ||
-           item_->GetLastFailState() == FailState::USER_SHUTDOWN);
+    CHECK(item_->GetLastFailState() == FailState::USER_CANCELED ||
+              item_->GetLastFailState() == FailState::USER_SHUTDOWN,
+          base::NotFatalUntil::M161);
 
     CloseNotification();
     return;
@@ -443,32 +501,34 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
 
   notification_->set_title(GetTitle());
   notification_->set_message(GetSubStatusString());
-  notification_->set_progress_status(GetStatusString());
+  notification_->set_progress_status((item_->GetDownloadItem() != nullptr)
+                                         ? GetStatusString()
+                                         : std::u16string());
 
   if (item_->IsDangerous()) {
-    notification_->set_type(message_center::NOTIFICATION_TYPE_BASE_FORMAT);
-    if (!item_->MightBeMalicious() &&
-        item_->GetDangerType() !=
+    notification_->set_type(message_center::NOTIFICATION_TYPE_SIMPLE);
+    MaybeRecordDangerousDownloadWarningShown(*item_);
+    if (!item_->MightBeMalicious() ||
+        item_->GetDangerType() ==
             download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING) {
       notification_->set_priority(message_center::HIGH_PRIORITY);
     } else {
       notification_->set_priority(message_center::DEFAULT_PRIORITY);
     }
-  } else if (item_->IsMixedContent()) {
-    notification_->set_type(message_center::NOTIFICATION_TYPE_BASE_FORMAT);
-    switch (item_->GetMixedContentStatus()) {
-      case download::DownloadItem::MixedContentStatus::BLOCK:
+  } else if (item_->IsInsecure()) {
+    notification_->set_type(message_center::NOTIFICATION_TYPE_SIMPLE);
+    switch (item_->GetInsecureDownloadStatus()) {
+      case download::DownloadItem::InsecureDownloadStatus::BLOCK:
         notification_->set_priority(message_center::HIGH_PRIORITY);
         break;
-      case download::DownloadItem::MixedContentStatus::WARN:
+      case download::DownloadItem::InsecureDownloadStatus::WARN:
         notification_->set_priority(message_center::DEFAULT_PRIORITY);
         break;
-      case download::DownloadItem::MixedContentStatus::UNKNOWN:
-      case download::DownloadItem::MixedContentStatus::SAFE:
-      case download::DownloadItem::MixedContentStatus::VALIDATED:
-      case download::DownloadItem::MixedContentStatus::SILENT_BLOCK:
+      case download::DownloadItem::InsecureDownloadStatus::UNKNOWN:
+      case download::DownloadItem::InsecureDownloadStatus::SAFE:
+      case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
+      case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
         NOTREACHED();
-        break;
     }
   } else {
     switch (item_->GetState()) {
@@ -486,19 +546,18 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
         break;
       }
       case download::DownloadItem::COMPLETE:
-        DCHECK(item_->IsDone());
+        CHECK(item_->IsDone(), base::NotFatalUntil::M161);
         notification_->set_priority(message_center::DEFAULT_PRIORITY);
-        notification_->set_type(message_center::NOTIFICATION_TYPE_BASE_FORMAT);
+        notification_->set_type(message_center::NOTIFICATION_TYPE_SIMPLE);
         notification_->set_progress(100);
         break;
       case download::DownloadItem::CANCELLED:
         // Handled above.
         NOTREACHED();
-        return;
       case download::DownloadItem::INTERRUPTED:
         // Shows a notifiation as progress type once so the visible content will
         // be updated. (same as the case of type = COMPLETE)
-        notification_->set_type(message_center::NOTIFICATION_TYPE_BASE_FORMAT);
+        notification_->set_type(message_center::NOTIFICATION_TYPE_SIMPLE);
         notification_->set_progress(0);
         notification_->set_priority(message_center::DEFAULT_PRIORITY);
         break;
@@ -506,7 +565,20 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
         NOTREACHED();
     }
   }
-  notification_->set_accent_color(GetNotificationIconColor());
+  SkColor notification_color = GetNotificationIconColor();
+  ui::ColorId color_id = cros_tokens::kCrosSysPrimary;
+  switch (notification_color) {
+    case ash::kSystemNotificationColorNormal:
+      color_id = cros_tokens::kCrosSysPrimary;
+      break;
+    case ash::kSystemNotificationColorWarning:
+      color_id = cros_tokens::kCrosSysWarning;
+      break;
+    case ash::kSystemNotificationColorCriticalWarning:
+      color_id = cros_tokens::kCrosSysError;
+      break;
+  }
+  notification_->set_accent_color_id(color_id);
 
   std::vector<message_center::ButtonInfo> notification_actions;
   std::unique_ptr<std::vector<DownloadCommands::Command>> actions(
@@ -536,7 +608,7 @@ void DownloadItemNotification::UpdateNotificationData(bool display,
     if (item_->GetCompletedBytes() > kMaxImagePreviewSize)
       return;
 
-    DCHECK(notification_->image().IsEmpty());
+    CHECK(notification_->image().IsEmpty(), base::NotFatalUntil::M161);
 
     image_decode_status_ = IN_PROGRESS;
 
@@ -559,18 +631,17 @@ SkColor DownloadItemNotification::GetNotificationIconColor() {
                ? ash::kSystemNotificationColorCriticalWarning
                : ash::kSystemNotificationColorWarning;
   }
-  if (item_->IsMixedContent()) {
-    switch (item_->GetMixedContentStatus()) {
-      case download::DownloadItem::MixedContentStatus::BLOCK:
+  if (item_->IsInsecure()) {
+    switch (item_->GetInsecureDownloadStatus()) {
+      case download::DownloadItem::InsecureDownloadStatus::BLOCK:
         return ash::kSystemNotificationColorCriticalWarning;
-      case download::DownloadItem::MixedContentStatus::WARN:
+      case download::DownloadItem::InsecureDownloadStatus::WARN:
         return ash::kSystemNotificationColorWarning;
-      case download::DownloadItem::MixedContentStatus::UNKNOWN:
-      case download::DownloadItem::MixedContentStatus::SAFE:
-      case download::DownloadItem::MixedContentStatus::VALIDATED:
-      case download::DownloadItem::MixedContentStatus::SILENT_BLOCK:
+      case download::DownloadItem::InsecureDownloadStatus::UNKNOWN:
+      case download::DownloadItem::InsecureDownloadStatus::SAFE:
+      case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
+      case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
         NOTREACHED();
-        break;
     }
   }
 
@@ -587,22 +658,21 @@ SkColor DownloadItemNotification::GetNotificationIconColor() {
 
     case download::DownloadItem::MAX_DOWNLOAD_STATE:
       NOTREACHED();
-      break;
   }
 
   return gfx::kPlaceholderColor;
 }
 
-void DownloadItemNotification::OnImageLoaded(const std::string& image_data) {
+void DownloadItemNotification::OnImageLoaded(std::string image_data) {
   if (image_data.empty())
     return;
 
   // TODO(yoshiki): Set option to reduce the image size to supress memory usage.
-  ImageDecoder::Start(this, image_data);
+  ImageDecoder::Start(this, std::move(image_data));
 }
 
 void DownloadItemNotification::OnImageDecoded(const SkBitmap& decoded_bitmap) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (decoded_bitmap.drawsNothing()) {
     OnDecodeImageFailed();
@@ -618,14 +688,20 @@ void DownloadItemNotification::OnImageDecoded(const SkBitmap& decoded_bitmap) {
 
 void DownloadItemNotification::OnImageCropped(const SkBitmap& bitmap) {
   gfx::Image image = gfx::Image::CreateFrom1xBitmap(bitmap);
-  notification_->set_image(image);
+  notification_->SetImage(image);
+
+// Provide the file path that backs the image to facilitate notification drag.
+#if BUILDFLAG(IS_CHROMEOS)
+  notification_->set_image_path(item_->GetFullPath());
+#endif
+
   image_decode_status_ = DONE;
   UpdateNotificationData(!closed_, false);
 }
 
 void DownloadItemNotification::OnDecodeImageFailed() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(notification_->image().IsEmpty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(notification_->image().IsEmpty(), base::NotFatalUntil::M161);
 
   image_decode_status_ = FAILED;
   UpdateNotificationData(!closed_, false);
@@ -644,33 +720,53 @@ DownloadItemNotification::GetExtraActions() const {
   }
 
   if (item_->IsDangerous()) {
-    if (item_->MightBeMalicious() &&
-        item_->GetDangerType() !=
-            download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING) {
+    if (item_->GetDangerType() ==
+        download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING) {
       actions->push_back(DownloadCommands::LEARN_MORE_SCANNING);
-    } else {
+    } else if (item_->GetDangerType() ==
+                   download::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT ||
+               item_->GetDangerType() ==
+                   download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE) {
       actions->push_back(DownloadCommands::DISCARD);
       actions->push_back(DownloadCommands::KEEP);
+    } else if (item_->GetDangerType() !=
+               download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING) {
+      actions->push_back(DownloadCommands::DISCARD);
+    } else {
+      actions->push_back(DownloadCommands::DISCARD);
+
+      // Only include a keep/review button if there isn't an extra review dialog
+      // opened already.
+      if (!in_review_) {
+        if (enterprise_connectors::ShouldPromptReviewForDownload(
+                profile(), item_->GetDownloadItem())) {
+          actions->push_back(DownloadCommands::REVIEW);
+        } else {
+          actions->push_back(DownloadCommands::KEEP);
+        }
+      }
+    }
+    if (item_->GetDownloadItem() == nullptr) {
+      actions->push_back(DownloadCommands::CANCEL);
     }
     return actions;
   }
 
-  if (item_->IsMixedContent()) {
-    switch (item_->GetMixedContentStatus()) {
-      case download::DownloadItem::MixedContentStatus::BLOCK:
+  if (item_->IsInsecure()) {
+    switch (item_->GetInsecureDownloadStatus()) {
+      case download::DownloadItem::InsecureDownloadStatus::BLOCK:
         actions->push_back(DownloadCommands::DISCARD);
         break;
-      case download::DownloadItem::MixedContentStatus::WARN:
+      case download::DownloadItem::InsecureDownloadStatus::WARN:
         actions->push_back(DownloadCommands::KEEP);
         break;
-      case download::DownloadItem::MixedContentStatus::UNKNOWN:
-      case download::DownloadItem::MixedContentStatus::SAFE:
-      case download::DownloadItem::MixedContentStatus::VALIDATED:
-      case download::DownloadItem::MixedContentStatus::SILENT_BLOCK:
+      case download::DownloadItem::InsecureDownloadStatus::UNKNOWN:
+      case download::DownloadItem::InsecureDownloadStatus::SAFE:
+      case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
+      case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
         NOTREACHED();
-        break;
     }
-    actions->push_back(DownloadCommands::LEARN_MORE_MIXED_CONTENT);
+    actions->push_back(DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD);
     return actions;
   }
 
@@ -680,9 +776,9 @@ DownloadItemNotification::GetExtraActions() const {
           download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING) {
         if (AllowedToOpenWhileScanning())
           actions->push_back(DownloadCommands::OPEN_WHEN_COMPLETE);
-      } else if (!item_->IsPaused()) {
+      } else if (!item_->IsPaused() && item_->GetUploadedBytes() == 0) {
         actions->push_back(DownloadCommands::PAUSE);
-      } else {
+      } else if (item_->IsPaused() && item_->GetUploadedBytes() == 0) {
         actions->push_back(DownloadCommands::RESUME);
       }
       actions->push_back(DownloadCommands::CANCEL);
@@ -692,14 +788,28 @@ DownloadItemNotification::GetExtraActions() const {
       if (item_->CanResume())
         actions->push_back(DownloadCommands::RESUME);
       break;
-    case download::DownloadItem::COMPLETE:
-      actions->push_back(DownloadCommands::SHOW_IN_FOLDER);
-      if (!notification_->image().IsEmpty()) {
-        actions->push_back(DownloadCommands::COPY_TO_CLIPBOARD);
-        if (chromeos::NoteTakingHelper::Get()->IsAppAvailable(profile()))
-          actions->push_back(DownloadCommands::ANNOTATE);
+    case download::DownloadItem::COMPLETE: {
+#if BUILDFLAG(IS_CHROMEOS)
+      std::optional<DownloadCommands::Command> command =
+          item_->MaybeGetMediaAppAction();
+      if (command) {
+        actions->push_back(*command);
       }
+#endif
+
+      // Do not include the Show in folder action for downloads we can't show in
+      // the folder.
+      if (item_->GetDownloadItem() != nullptr) {
+        actions->push_back(DownloadCommands::SHOW_IN_FOLDER);
+      }
+      // We disable this functionality for now as the usage is very low, the
+      // feature gets re-written at this time and there is currently no secure
+      // way to determine the caller on the Ash side as the dialog is still
+      // active when |seat::SetSelection| is reached.
+      if (!notification_->image().IsEmpty())
+        actions->push_back(DownloadCommands::COPY_TO_CLIPBOARD);
       break;
+    }
     case download::DownloadItem::MAX_DOWNLOAD_STATE:
       NOTREACHED();
   }
@@ -727,8 +837,9 @@ std::u16string DownloadItemNotification::GetTitle() const {
     }
   }
 
-  if (item_->IsMixedContent()) {
-    return l10n_util::GetStringUTF16(IDS_PROMPT_BLOCKED_MIXED_DOWNLOAD_TITLE);
+  if (item_->IsInsecure()) {
+    return l10n_util::GetStringUTF16(
+        IDS_PROMPT_BLOCKED_INSECURE_DOWNLOAD_TITLE);
   }
 
   std::u16string file_name =
@@ -787,8 +898,7 @@ std::u16string DownloadItemNotification::GetCommandLabel(
       id = IDS_DOWNLOAD_LINK_RESUME;
       break;
     case DownloadCommands::SHOW_IN_FOLDER:
-      id = IDS_DOWNLOAD_LINK_SHOW;
-      break;
+      return item_->GetShowInFolderText();
     case DownloadCommands::DISCARD:
       id = IDS_DISCARD_DOWNLOAD;
       break;
@@ -804,35 +914,52 @@ std::u16string DownloadItemNotification::GetCommandLabel(
     case DownloadCommands::COPY_TO_CLIPBOARD:
       id = IDS_DOWNLOAD_NOTIFICATION_COPY_TO_CLIPBOARD;
       break;
-    case DownloadCommands::ANNOTATE:
-      id = IDS_DOWNLOAD_NOTIFICATION_ANNOTATE;
-      break;
-    case DownloadCommands::LEARN_MORE_MIXED_CONTENT:
+    case DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD:
       id = IDS_LEARN_MORE;
       break;
     case DownloadCommands::DEEP_SCAN:
       id = IDS_SCAN_DOWNLOAD;
       break;
+    case DownloadCommands::REVIEW:
+      id = IDS_REVIEW_DOWNLOAD;
+      break;
+#if BUILDFLAG(IS_CHROMEOS)
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+      id = IDS_DOWNLOAD_NOTIFICATION_LABEL_OPEN;
+      break;
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+      id = IDS_DOWNLOAD_NOTIFICATION_LABEL_OPEN_AND_EDIT;
+      break;
+#else
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+      NOTREACHED();
+#endif
     case DownloadCommands::ALWAYS_OPEN_TYPE:
     case DownloadCommands::PLATFORM_OPEN:
+    case DownloadCommands::OPEN_WITH:
     case DownloadCommands::LEARN_MORE_INTERRUPTED:
+    case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
+    case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
     case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING_AND_OPEN:
+    case DownloadCommands::CANCEL_DEEP_SCAN:
+    case DownloadCommands::RETRY:
       // Only for menu.
       NOTREACHED();
-      return std::u16string();
   }
-  CHECK(id != -1);
+  CHECK_NE(id, -1);
   return l10n_util::GetStringUTF16(id);
 }
 
 std::u16string DownloadItemNotification::GetWarningStatusString() const {
-  // Should only be called if IsDangerous() or IsMixedContent().
-  DCHECK(item_->IsDangerous() || item_->IsMixedContent());
+  // Should only be called if IsDangerous() or IsInsecure().
+  CHECK(item_->IsDangerous() || item_->IsInsecure(), base::NotFatalUntil::M161);
   std::u16string elided_filename =
       item_->GetFileNameToReportUser().LossyDisplayName();
-  // If mixed content, that warning is shown first.
-  if (item_->IsMixedContent()) {
-    return l10n_util::GetStringFUTF16(IDS_PROMPT_DOWNLOAD_MIXED_CONTENT_BLOCKED,
+  // If insecure, that warning is shown first.
+  if (item_->IsInsecure()) {
+    return l10n_util::GetStringFUTF16(IDS_PROMPT_DOWNLOAD_INSECURE_BLOCKED,
                                       elided_filename);
   }
   switch (item_->GetDangerType()) {
@@ -849,18 +976,10 @@ std::u16string DownloadItemNotification::GetWarningStatusString() const {
       }
     }
     case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT:
-    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST: {
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST:
+    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE: {
       return l10n_util::GetStringFUTF16(IDS_PROMPT_MALICIOUS_DOWNLOAD_CONTENT,
                                         elided_filename);
-    }
-    case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE: {
-      return base::FeatureList::IsEnabled(
-                 safe_browsing::kSafeBrowsingCTDownloadWarning)
-                 ? l10n_util::GetStringFUTF16(
-                       IDS_PROMPT_DANGEROUS_DOWNLOAD_ACCOUNT_COMPROMISE,
-                       elided_filename)
-                 : l10n_util::GetStringFUTF16(
-                       IDS_PROMPT_MALICIOUS_DOWNLOAD_CONTENT, elided_filename);
     }
     case download::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT: {
       bool requests_ap_verdicts =
@@ -886,20 +1005,36 @@ std::u16string DownloadItemNotification::GetWarningStatusString() const {
           IDS_PROMPT_DOWNLOAD_BLOCKED_PASSWORD_PROTECTED, elided_filename);
     }
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING: {
-      return l10n_util::GetStringFUTF16(
-          IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_WARNING, elided_filename);
+      return l10n_util::GetStringUTF16(
+          IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_WARNING);
     }
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
+      return l10n_util::GetStringUTF16(
+          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK: {
-      return l10n_util::GetStringFUTF16(
-          IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_BLOCKED, elided_filename);
+      return l10n_util::GetStringUTF16(
+          IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_BLOCKED);
     }
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING: {
       return l10n_util::GetStringFUTF16(IDS_PROMPT_DEEP_SCANNING,
                                         elided_filename);
     }
+    case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
+    case download::DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING: {
+      // TODO(crbug.com/40074456): Implement UX for this danger type.
+      DUMP_WILL_BE_NOTREACHED();
+      break;
+    }
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED: {
+      return l10n_util::GetStringUTF16(IDS_PROMPT_DOWNLOAD_BLOCKED_SCAN_FAILED);
+    }
+    case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS: {
+      return l10n_util::GetStringUTF16(
+          IDS_PROMPT_DOWNLOAD_DEEP_SCANNED_OPENED_DANGEROUS);
+    }
+    case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
-    case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
@@ -910,7 +1045,6 @@ std::u16string DownloadItemNotification::GetWarningStatusString() const {
     }
   }
   NOTREACHED();
-  return std::u16string();
 }
 
 std::u16string DownloadItemNotification::GetInProgressSubStatusString() const {
@@ -955,15 +1089,8 @@ std::u16string DownloadItemNotification::GetInProgressSubStatusString() const {
 }
 
 std::u16string DownloadItemNotification::GetSubStatusString() const {
-  if (item_->IsMixedContent() || item_->IsDangerous())
+  if (item_->IsInsecure() || item_->IsDangerous())
     return GetWarningStatusString();
-
-  if (item_->GetDangerType() ==
-      download::DownloadDangerType::
-          DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS) {
-    return l10n_util::GetStringUTF16(
-        IDS_PROMPT_DOWNLOAD_DEEP_SCANNED_OPENED_DANGEROUS);
-  }
 
   switch (item_->GetState()) {
     case download::DownloadItem::IN_PROGRESS:
@@ -975,9 +1102,9 @@ std::u16string DownloadItemNotification::GetSubStatusString() const {
       } else {
         return GetInProgressSubStatusString();
       }
-    case download::DownloadItem::COMPLETE:
-      // If the file has been removed: Removed
+    case download::DownloadItem::COMPLETE: {
       if (item_->GetFileExternallyRemoved()) {
+        // If the file has been removed: "Removed"
         return l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_REMOVED);
       } else {
         std::u16string file_name =
@@ -985,35 +1112,33 @@ std::u16string DownloadItemNotification::GetSubStatusString() const {
         base::i18n::AdjustStringForLocaleDirection(&file_name);
         return file_name;
       }
-    case download::DownloadItem::CANCELLED:
-      // "Cancelled"
-      return l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_CANCELLED);
+    }
     case download::DownloadItem::INTERRUPTED: {
       FailState fail_state = item_->GetLastFailState();
       if (fail_state != FailState::USER_CANCELED) {
-        // "Failed - <REASON>"
-        std::u16string interrupt_reason = item_->GetInterruptReasonText();
-        DCHECK(!interrupt_reason.empty());
-        return l10n_util::GetStringFUTF16(IDS_DOWNLOAD_STATUS_INTERRUPTED,
-                                          interrupt_reason);
-      } else {
-        // Same as DownloadItem::CANCELLED.
-        return l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_CANCELLED);
+        const auto interrupt_text = item_->GetInterruptDescription();
+        CHECK(!interrupt_text.empty(), base::NotFatalUntil::M161);
+        return interrupt_text;
       }
+      [[fallthrough]];  // Same as download::DownloadItem::CANCELLED.
     }
+    case download::DownloadItem::CANCELLED:
+      // "Cancelled"
+      return l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_CANCELLED);
+
     default:
       NOTREACHED();
   }
-
-  return std::u16string();
 }
 
 std::u16string DownloadItemNotification::GetStatusString() const {
-  if (item_->IsDangerous() || item_->IsMixedContent())
+  if (item_->IsDangerous() || item_->IsInsecure())
     return std::u16string();
 
   if (IsScanning()) {
-    return l10n_util::GetStringUTF16(IDS_PROMPT_DEEP_SCANNING_APP_DOWNLOAD);
+    return l10n_util::GetStringFUTF16(
+        IDS_PROMPT_DEEP_SCANNING_APP_DOWNLOAD,
+        item_->GetFileNameToReportUser().LossyDisplayName());
   }
 
   // The hostname. (E.g.:"example.com" or "127.0.0.1")
@@ -1036,7 +1161,8 @@ std::u16string DownloadItemNotification::GetStatusString() const {
       } else {
         // Otherwise, the download should be completed.
         // "3.4 MB from example.com"
-        std::u16string size = ui::FormatBytes(item_->GetCompletedBytes());
+        std::u16string size = ui::FormatBytes(base::ByteSize(
+            base::checked_cast<uint64_t>(item_->GetCompletedBytes())));
         return l10n_util::GetStringFUTF16(
             IDS_DOWNLOAD_NOTIFICATION_STATUS_COMPLETED, size, host_name);
       }
@@ -1047,9 +1173,11 @@ std::u16string DownloadItemNotification::GetStatusString() const {
 
   // Indication of progress (E.g.:"100/200 MB" or "100 MB"), or just the
   // received bytes if the |show_size_ratio| flag is false.
-  std::u16string size = show_size_ratio
-                            ? item_->GetProgressSizesString()
-                            : ui::FormatBytes(item_->GetCompletedBytes());
+  std::u16string size =
+      show_size_ratio
+          ? item_->GetProgressSizesString()
+          : ui::FormatBytes(base::ByteSize(
+                base::checked_cast<uint64_t>(item_->GetCompletedBytes())));
 
   return l10n_util::GetStringFUTF16(IDS_DOWNLOAD_NOTIFICATION_STATUS_SHORT,
                                     size, host_name);
@@ -1070,10 +1198,11 @@ bool DownloadItemNotification::AllowedToOpenWhileScanning() const {
              enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED);
 }
 
-Browser* DownloadItemNotification::GetBrowser() const {
+BrowserWindowInterface* DownloadItemNotification::GetBrowser() const {
   chrome::ScopedTabbedBrowserDisplayer browser_displayer(profile());
-  DCHECK(browser_displayer.browser());
-  return browser_displayer.browser();
+  CHECK(browser_displayer.browser_window_interface(),
+        base::NotFatalUntil::M161);
+  return browser_displayer.browser_window_interface();
 }
 
 Profile* DownloadItemNotification::profile() const {

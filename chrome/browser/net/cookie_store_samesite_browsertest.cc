@@ -1,15 +1,17 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/features.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_paths.h"
@@ -30,6 +32,9 @@ class CookieStoreSameSiteTest : public InProcessBrowserTest,
   CookieStoreSameSiteTest()
       : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
 
+  CookieStoreSameSiteTest(const CookieStoreSameSiteTest&) = delete;
+  CookieStoreSameSiteTest& operator=(const CookieStoreSameSiteTest&) = delete;
+
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
     base::FilePath path;
@@ -43,30 +48,32 @@ class CookieStoreSameSiteTest : public InProcessBrowserTest,
     // legacy access for all sites.
     if (!HasNonLegacySameSiteAccessSemantics()) {
       browser()
-          ->profile()
+          ->GetProfile()
           ->GetDefaultStoragePartition()
           ->GetNetworkContext()
           ->GetCookieManager(
               cookie_manager_remote_.BindNewPipeAndPassReceiver());
-      cookie_manager_remote_->SetContentSettingsForLegacyCookieAccess(
+      cookie_manager_remote_->SetContentSettings(
+          ContentSettingsType::LEGACY_COOKIE_ACCESS,
           {ContentSettingPatternSource(
               ContentSettingsPattern::Wildcard(),
               ContentSettingsPattern::Wildcard(),
               base::Value(ContentSetting::CONTENT_SETTING_ALLOW),
-              std::string() /* source */, false /* incognito */)});
+              content_settings::ProviderType::kNone, false /* incognito */)},
+          base::NullCallback());
       cookie_manager_remote_.FlushForTesting();
     }
   }
 
   void NavigateToPageWithFrame(const std::string& host) {
     GURL main_url(https_server_.GetURL(host, "/iframe.html"));
-    ui_test_utils::NavigateToURL(browser(), main_url);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
   }
 
   content::RenderFrameHost* GetFrame() {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    return ChildFrameAt(web_contents->GetMainFrame(), 0);
+    return ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
   }
 
   std::string GetCookieSameSite(const std::string& cookie_name) {
@@ -85,9 +92,6 @@ class CookieStoreSameSiteTest : public InProcessBrowserTest,
 
   mojo::Remote<network::mojom::CookieManager> cookie_manager_remote_;
   net::test_server::EmbeddedTestServer https_server_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CookieStoreSameSiteTest);
 };
 
 IN_PROC_BROWSER_TEST_P(CookieStoreSameSiteTest,

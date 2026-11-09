@@ -1,19 +1,21 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 
 #include <memory>
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ssl/https_upgrades_util.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_features.h"
@@ -22,9 +24,13 @@
 #include "extensions/browser/api/declarative_webrequest/webrequest_constants.h"
 #include "extensions/browser/api/declarative_webrequest/webrequest_rules_registry.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/rules_registry_ids.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/test_extension_dir.h"
+
+// This file tests declarativeWebRequest, which is not supported on Android.
+static_assert(!BUILDFLAG(IS_ANDROID));
 
 namespace extensions {
 
@@ -100,8 +106,7 @@ const char kRedirectToDataNoRules[] =
 class DeclarativeApiTest : public ExtensionApiTest {
  public:
   std::string GetTitle() {
-    std::u16string title(
-        browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
+    std::u16string title(GetActiveWebContents()->GetTitle());
     return base::UTF16ToUTF8(title);
   }
 
@@ -109,10 +114,10 @@ class DeclarativeApiTest : public ExtensionApiTest {
   // non-webview rules registry.
   size_t NumberOfRegisteredRules(const std::string& extension_id) {
     RulesRegistryService* rules_registry_service =
-        extensions::RulesRegistryService::Get(browser()->profile());
+        extensions::RulesRegistryService::Get(profile());
     scoped_refptr<RulesRegistry> rules_registry =
         rules_registry_service->GetRulesRegistry(
-            RulesRegistryService::kDefaultRulesRegistryID,
+            rules_registry_ids::kDefaultRulesRegistryID,
             extensions::declarative_webrequest_constants::kOnRequest);
 
     std::vector<const api::events::Rule*> rules;
@@ -120,54 +125,6 @@ class DeclarativeApiTest : public ExtensionApiTest {
     return rules.size();
   }
 };
-
-// Copied from origin_policy_browsertest.cc.
-const base::FilePath::CharType kDataRoot[] =
-    FILE_PATH_LITERAL("chrome/test/data/origin_policy_browsertest");
-
-class DeclarativeApiTestWithOriginPolicy : public DeclarativeApiTest {
- protected:
-  std::u16string NavigateToAndReturnTitle(const char* url) {
-    EXPECT_TRUE(server());
-    ui_test_utils::NavigateToURL(browser(), GURL(server()->GetURL(url)));
-    std::u16string title;
-    ui_test_utils::GetCurrentTabTitle(browser(), &title);
-    return title;
-  }
-
- private:
-  void SetUpInProcessBrowserTestFixture() override {
-    server_ = std::make_unique<net::test_server::EmbeddedTestServer>(
-        net::test_server::EmbeddedTestServer::TYPE_HTTPS);
-    server_->AddDefaultHandlers(base::FilePath(kDataRoot));
-    feature_list_.InitAndEnableFeature(features::kOriginPolicy);
-    EXPECT_TRUE(server()->Start());
-    DeclarativeApiTest::SetUpInProcessBrowserTestFixture();
-  }
-
-  void TearDownInProcessBrowserTestFixture() override { server_.reset(); }
-
-  net::test_server::EmbeddedTestServer* server() { return server_.get(); }
-
-  std::unique_ptr<net::test_server::EmbeddedTestServer> server_;
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Regression test for crbug.com/1047275.
-IN_PROC_BROWSER_TEST_F(DeclarativeApiTestWithOriginPolicy,
-                       OriginPolicyEnabled) {
-  // Navigate to a page with an origin policy. It should load correctly.
-  EXPECT_EQ(u"Page With Policy",
-            NavigateToAndReturnTitle("/page-with-policy.html"));
-
-  // Load an extension that has the |declarativeWebRequest| permission.
-  ASSERT_TRUE(RunExtensionTest("declarative/api")) << message_;
-
-  // Future navigations to the page with the origin policy should still work,
-  // and not throw an interstitial.
-  EXPECT_EQ(u"Page With Policy",
-            NavigateToAndReturnTitle("/page-with-policy.html"));
-}
 
 IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, DeclarativeApi) {
   ASSERT_TRUE(RunExtensionTest("declarative/api")) << message_;
@@ -185,6 +142,9 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, DeclarativeApi) {
 // PersistRules test first installs an extension, which registers some rules.
 // Then after browser restart, it checks that the rules are still in effect.
 IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, PRE_PersistRules) {
+  ScopedAllowHttpForHostnamesForTesting allow_https({"www.example.com"},
+                                                    profile()->GetPrefs());
+
   // Note that we cannot use an extension generated by *GetRedirectToData*
   // helpers in a TestExtensionDir, because we need the extension to persist
   // until the PersistRules test is run.
@@ -192,15 +152,21 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, PRE_PersistRules) {
 }
 
 IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, PersistRules) {
+  ScopedAllowHttpForHostnamesForTesting allow_https({"www.example.com"},
+                                                    profile()->GetPrefs());
+
   // Wait for declarative rules to be set up from PRE test.
   profile()->GetDefaultStoragePartition()->FlushNetworkInterfaceForTesting();
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_EQ(kTestTitle, GetTitle());
 }
 
 // Test that the rules are correctly persisted and (de)activated during
 // changing the "installed" and "enabled" status of an extension.
 IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, ExtensionLifetimeRulesHandling) {
+  ScopedAllowHttpForHostnamesForTesting allow_https({"www.example.com"},
+                                                    profile()->GetPrefs());
+
   TestExtensionDir ext_dir;
 
   // 1. Install the extension. Rules should become active.
@@ -210,28 +176,28 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, ExtensionLifetimeRulesHandling) {
                                        kRedirectToDataConstants,
                                        kRedirectToDataRules,
                                        kRedirectToDataInstallRules));
-  ExtensionTestMessageListener ready("ready", /*will_reply=*/false);
+  ExtensionTestMessageListener ready("ready");
   const Extension* extension = InstallExtensionWithUIAutoConfirm(
-      ext_dir.Pack(), 1 /*+1 installed extension*/, browser());
+      ext_dir.Pack(), 1 /*+1 installed extension*/);
   ASSERT_TRUE(extension);
   // Wait for declarative rules to be set up.
   profile()->GetDefaultStoragePartition()->FlushNetworkInterfaceForTesting();
   std::string extension_id(extension->id());
   ASSERT_TRUE(ready.WaitUntilSatisfied());
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_EQ(kTestTitle, GetTitle());
   EXPECT_EQ(1u, NumberOfRegisteredRules(extension_id));
 
   // 2. Disable the extension. Rules are no longer active, but are still
   // registered.
   DisableExtension(extension_id);
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_NE(kTestTitle, GetTitle());
   EXPECT_EQ(1u, NumberOfRegisteredRules(extension_id));
 
   // 3. Enable the extension again. Rules are active again.
   EnableExtension(extension_id);
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_EQ(kTestTitle, GetTitle());
   EXPECT_EQ(1u, NumberOfRegisteredRules(extension_id));
 
@@ -243,24 +209,23 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, ExtensionLifetimeRulesHandling) {
       FILE_PATH_LITERAL("background.js"),
       base::StringPrintf(
           "%s%s", kRedirectToDataConstants, kRedirectToDataNoRules));
-  ExtensionTestMessageListener ready_after_update("ready",
-                                                  /*will_reply=*/false);
+  ExtensionTestMessageListener ready_after_update("ready");
   EXPECT_TRUE(UpdateExtension(
       extension_id, ext_dir.Pack(), 0 /*no new installed extension*/));
   ASSERT_TRUE(ready_after_update.WaitUntilSatisfied());
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_EQ(kTestTitle, GetTitle());
   EXPECT_EQ(1u, NumberOfRegisteredRules(extension_id));
 
   // 5. Reload the extension. Rules remain active.
   ReloadExtension(extension_id);
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_EQ(kTestTitle, GetTitle());
   EXPECT_EQ(1u, NumberOfRegisteredRules(extension_id));
 
   // 6. Uninstall the extension. Rules are gone.
   UninstallExtension(extension_id);
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_NE(kTestTitle, GetTitle());
   EXPECT_EQ(0u, NumberOfRegisteredRules(extension_id));
 }
@@ -269,6 +234,9 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, ExtensionLifetimeRulesHandling) {
 // stored for that extension. We need to make sure we don't store anything after
 // that deletion occurs.
 IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, NoTracesAfterUninstalling) {
+  ScopedAllowHttpForHostnamesForTesting allow_https({"www.example.com"},
+                                                    profile()->GetPrefs());
+
   TestExtensionDir ext_dir;
 
   // 1. Install the extension. Verify that rules become active and some prefs
@@ -279,25 +247,25 @@ IN_PROC_BROWSER_TEST_F(DeclarativeApiTest, NoTracesAfterUninstalling) {
                                        kRedirectToDataConstants,
                                        kRedirectToDataRules,
                                        kRedirectToDataInstallRules));
-  ExtensionTestMessageListener ready("ready", /*will_reply=*/false);
+  ExtensionTestMessageListener ready("ready");
   const Extension* extension = InstallExtensionWithUIAutoConfirm(
-      ext_dir.Pack(), 1 /*+1 installed extension*/, browser());
+      ext_dir.Pack(), 1 /*+1 installed extension*/);
   ASSERT_TRUE(extension);
   // Wait for declarative rules to be set up.
   profile()->GetDefaultStoragePartition()->FlushNetworkInterfaceForTesting();
   std::string extension_id(extension->id());
   ASSERT_TRUE(ready.WaitUntilSatisfied());
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_EQ(kTestTitle, GetTitle());
   EXPECT_EQ(1u, NumberOfRegisteredRules(extension_id));
-  ExtensionPrefs* extension_prefs = ExtensionPrefs::Get(browser()->profile());
+  ExtensionPrefs* extension_prefs = ExtensionPrefs::Get(profile());
   EXPECT_TRUE(extension_prefs->HasPrefForExtension(extension_id));
 
   // 2. Uninstall the extension. Rules are gone and preferences should be empty.
   UninstallExtension(extension_id);
   // Wait for declarative rules to be removed.
   profile()->GetDefaultStoragePartition()->FlushNetworkInterfaceForTesting();
-  ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kArbitraryUrl)));
   EXPECT_NE(kTestTitle, GetTitle());
   EXPECT_EQ(0u, NumberOfRegisteredRules(extension_id));
   EXPECT_FALSE(extension_prefs->HasPrefForExtension(extension_id));

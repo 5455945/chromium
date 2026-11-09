@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,19 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/demuxer_stream.h"
 #include "media/remoting/fake_media_resource.h"
 #include "media/remoting/fake_remoter.h"
-#include "media/remoting/proto_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using openscreen::cast::RpcMessenger;
 using testing::_;
 using testing::Invoke;
 using testing::Return;
@@ -36,13 +36,15 @@ class MockDemuxerStreamAdapter {
       DemuxerStream* demuxer_stream,
       mojo::PendingRemote<mojom::RemotingDataStreamSender> stream_sender_remote,
       mojo::ScopedDataPipeProducerHandle producer_handle) {
-    rpc_broker_ = std::make_unique<RpcBroker>(
-        base::BindRepeating(&MockDemuxerStreamAdapter::OnSendMessageToSink,
-                            weak_factory_.GetWeakPtr()));
+    rpc_messenger_ = std::make_unique<RpcMessenger>(
+        [cb =
+             base::BindRepeating(&MockDemuxerStreamAdapter::OnSendMessageToSink,
+                                 weak_factory_.GetWeakPtr())](
+            std::vector<uint8_t> message) { cb.Run(std::move(message)); });
     demuxer_stream_adapter_ = std::make_unique<DemuxerStreamAdapter>(
         std::move(main_task_runner), std::move(media_task_runner), name,
-        demuxer_stream, rpc_broker_->GetWeakPtr(),
-        rpc_broker_->GetUniqueHandle(), std::move(stream_sender_remote),
+        demuxer_stream, rpc_messenger_->GetWeakPtr(),
+        rpc_messenger_->GetUniqueHandle(), std::move(stream_sender_remote),
         std::move(producer_handle),
         base::BindOnce(&MockDemuxerStreamAdapter::OnError,
                        weak_factory_.GetWeakPtr()));
@@ -50,6 +52,9 @@ class MockDemuxerStreamAdapter {
     // Faking initialization with random callback handle to start mojo watcher.
     demuxer_stream_adapter_->Initialize(3);
   }
+
+  MockDemuxerStreamAdapter(const MockDemuxerStreamAdapter&) = delete;
+  MockDemuxerStreamAdapter& operator=(const MockDemuxerStreamAdapter&) = delete;
 
   ~MockDemuxerStreamAdapter() {
     // Make sure unit tests that did not expect errors did not cause any errors.
@@ -93,27 +98,29 @@ class MockDemuxerStreamAdapter {
   }
 
  private:
-  void OnSendMessageToSink(std::unique_ptr<std::vector<uint8_t>> message) {
+  void OnSendMessageToSink(std::vector<uint8_t> message) {
     last_received_rpc_ = std::make_unique<openscreen::cast::RpcMessage>();
-    CHECK(last_received_rpc_->ParseFromArray(message->data(), message->size()));
+    CHECK(last_received_rpc_->ParseFromArray(message.data(), message.size()));
   }
 
   void OnError(StopTrigger stop_trigger) { errors_.push_back(stop_trigger); }
 
-  std::unique_ptr<RpcBroker> rpc_broker_;
+  std::unique_ptr<RpcMessenger> rpc_messenger_;
   std::unique_ptr<DemuxerStreamAdapter> demuxer_stream_adapter_;
   std::unique_ptr<openscreen::cast::RpcMessage> last_received_rpc_;
 
   std::vector<StopTrigger> errors_;
 
   base::WeakPtrFactory<MockDemuxerStreamAdapter> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MockDemuxerStreamAdapter);
 };
 
 class DemuxerStreamAdapterTest : public ::testing::Test {
  public:
   DemuxerStreamAdapterTest() = default;
+
+  DemuxerStreamAdapterTest(const DemuxerStreamAdapterTest&) = delete;
+  DemuxerStreamAdapterTest& operator=(const DemuxerStreamAdapterTest&) = delete;
+
   ~DemuxerStreamAdapterTest() override = default;
 
   void SetUpDataPipe() {
@@ -149,20 +156,16 @@ class DemuxerStreamAdapterTest : public ::testing::Test {
  protected:
   void SetUp() override { SetUpDataPipe(); }
 
-  // TODO(miu): Add separate media thread, to test threading also.
   base::test::SingleThreadTaskEnvironment task_environment_;
   std::unique_ptr<FakeDemuxerStream> demuxer_stream_;
   std::unique_ptr<FakeRemotingDataStreamSender> data_stream_sender_;
   std::unique_ptr<MockDemuxerStreamAdapter> demuxer_stream_adapter_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DemuxerStreamAdapterTest);
 };
 
 TEST_F(DemuxerStreamAdapterTest, SingleReadUntil) {
   // Read will be called once since it doesn't return frame buffer in the dummy
   // implementation.
-  EXPECT_CALL(*demuxer_stream_, Read(_)).Times(1);
+  EXPECT_CALL(*demuxer_stream_, Read(_, _)).Times(1);
 
   demuxer_stream_adapter_->FakeReadUntil(3, 999);
   RunPendingTasks();
@@ -171,7 +174,7 @@ TEST_F(DemuxerStreamAdapterTest, SingleReadUntil) {
 TEST_F(DemuxerStreamAdapterTest, MultiReadUntil) {
   // Read will be called once since it doesn't return frame buffer in the dummy
   // implementation, and 2nd one will not proceed when there is ongoing read.
-  EXPECT_CALL(*demuxer_stream_, Read(_)).Times(1);
+  EXPECT_CALL(*demuxer_stream_, Read(_, _)).Times(1);
 
   demuxer_stream_adapter_->FakeReadUntil(1, 100);
   RunPendingTasks();
@@ -181,7 +184,7 @@ TEST_F(DemuxerStreamAdapterTest, MultiReadUntil) {
 }
 
 TEST_F(DemuxerStreamAdapterTest, WriteOneFrameSmallerThanCapacity) {
-  EXPECT_CALL(*demuxer_stream_, Read(_)).Times(1);
+  EXPECT_CALL(*demuxer_stream_, Read(_, _)).Times(1);
   // Sends a frame with size 50 bytes, pts = 1 and key frame.
   demuxer_stream_->CreateFakeFrame(50, true, 1 /* pts */);
   demuxer_stream_adapter_->FakeReadUntil(1, 999);
@@ -200,7 +203,7 @@ TEST_F(DemuxerStreamAdapterTest, WriteOneFrameSmallerThanCapacity) {
 }
 
 TEST_F(DemuxerStreamAdapterTest, WriteOneFrameLargerThanCapacity) {
-  EXPECT_CALL(*demuxer_stream_, Read(_)).Times(1);
+  EXPECT_CALL(*demuxer_stream_, Read(_, _)).Times(1);
   // Sends a frame with size 800 bytes, pts = 1 and key frame.
   demuxer_stream_->CreateFakeFrame(800, true, 1 /* pts */);
   demuxer_stream_adapter_->FakeReadUntil(1, 999);
@@ -219,7 +222,7 @@ TEST_F(DemuxerStreamAdapterTest, WriteOneFrameLargerThanCapacity) {
 }
 
 TEST_F(DemuxerStreamAdapterTest, SendFrameAndSignalFlushMix) {
-  EXPECT_CALL(*demuxer_stream_, Read(_)).Times(4);
+  EXPECT_CALL(*demuxer_stream_, Read(_, _)).Times(4);
   // Sends a frame with size 50 bytes, pts = 1 and key frame.
   demuxer_stream_->CreateFakeFrame(50, true, 1 /* pts */);
   // Issues ReadUntil request with frame count up to 1 (fetch #0).
@@ -295,19 +298,37 @@ TEST_F(DemuxerStreamAdapterTest, DuplicateInitializeCausesFatalError) {
   EXPECT_EQ(PEERS_OUT_OF_SYNC, errors[0]);
 }
 
-TEST_F(DemuxerStreamAdapterTest, ClosingPipeCausesFatalError) {
+TEST_F(DemuxerStreamAdapterTest, ClosingMessagePipeCausesMojoDisconnected) {
   std::vector<StopTrigger> errors;
   demuxer_stream_adapter_->TakeErrors(&errors);
   ASSERT_TRUE(errors.empty());
 
-  // Closes one end of mojo message and data pipes.
+  // Closes one end of mojo message pipes.
   data_stream_sender_.reset();
   RunPendingTasks();  // Allow notification from mojo to propagate.
 
   demuxer_stream_adapter_->TakeErrors(&errors);
   ASSERT_EQ(1u, errors.size());
-  EXPECT_EQ(MOJO_PIPE_ERROR, errors[0]);
+  EXPECT_EQ(MOJO_DISCONNECTED, errors[0]);
 }
 
-}  // namesapce remoting
+TEST_F(DemuxerStreamAdapterTest, ClosingDataPipeCausesWriteError) {
+  EXPECT_CALL(*demuxer_stream_, Read(_, _)).Times(1);
+
+  std::vector<StopTrigger> errors;
+  demuxer_stream_adapter_->TakeErrors(&errors);
+  ASSERT_TRUE(errors.empty());
+
+  // Closes the consumer end of the data pipe.
+  data_stream_sender_->CloseDataPipe();
+  demuxer_stream_->CreateFakeFrame(100, true /* key frame */, 1 /* pts */);
+  demuxer_stream_adapter_->FakeReadUntil(1, 999);
+  RunPendingTasks();  // Allow notification from mojo to propagate.
+
+  demuxer_stream_adapter_->TakeErrors(&errors);
+  ASSERT_EQ(1u, errors.size());
+  EXPECT_EQ(DATA_PIPE_WRITE_ERROR, errors[0]);
+}
+
+}  // namespace remoting
 }  // namespace media

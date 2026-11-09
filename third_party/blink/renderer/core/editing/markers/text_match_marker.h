@@ -27,42 +27,39 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_MARKERS_TEXT_MATCH_MARKER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_MARKERS_TEXT_MATCH_MARKER_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
-#include "third_party/blink/renderer/core/editing/markers/text_marker_base.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
 // A subclass of DocumentMarker used to store information specific to TextMatch
-// markers. We store whether or not the match is active, a LayoutRect used for
-// rendering the marker, and whether or not the LayoutRect is currently
+// markers. We store whether or not the match is active, a PhysicalRect used for
+// rendering the marker, and whether or not the PhysicalRect is currently
 // up-to-date.
-class CORE_EXPORT TextMatchMarker final : public TextMarkerBase {
+class CORE_EXPORT TextMatchMarker final : public DocumentMarker {
  private:
   enum class LayoutStatus { kInvalid, kValidNull, kValidNotNull };
 
  public:
   enum class MatchStatus { kInactive, kActive };
 
-  TextMatchMarker(unsigned start_offset, unsigned end_offset, MatchStatus);
+  TextMatchMarker(wtf_size_t start_offset, wtf_size_t end_offset, MatchStatus);
   TextMatchMarker(const TextMatchMarker&) = delete;
   TextMatchMarker& operator=(const TextMatchMarker&) = delete;
 
   // DocumentMarker implementations
   MarkerType GetType() const final;
 
-  // TextMarkerBase implementations
-  bool IsActiveMatch() const final;
-
   // TextMatchMarker-specific
+  bool IsActiveMatch() const;
   void SetIsActiveMatch(bool active);
 
   bool IsRendered() const;
   bool Contains(const PhysicalOffset&) const;
   void SetRect(const PhysicalRect&);
   const PhysicalRect& GetRect() const;
-  void NullifyLayoutRect();
 
   void Invalidate();
   bool IsValid() const;
@@ -76,9 +73,6 @@ class CORE_EXPORT TextMatchMarker final : public TextMarkerBase {
 template <>
 struct DowncastTraits<TextMatchMarker> {
   static bool AllowFrom(const DocumentMarker& marker) {
-    return marker.GetType() == DocumentMarker::kTextMatch;
-  }
-  static bool AllowFrom(const TextMarkerBase& marker) {
     return marker.GetType() == DocumentMarker::kTextMatch;
   }
 };

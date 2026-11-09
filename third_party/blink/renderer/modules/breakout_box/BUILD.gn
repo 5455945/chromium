@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,6 +6,8 @@ import("//third_party/blink/renderer/modules/modules.gni")
 
 blink_modules_sources("breakout_box") {
   sources = [
+    "breakout_box_util.cc",
+    "breakout_box_util.h",
     "frame_queue.h",
     "frame_queue_transferring_optimizer.cc",
     "frame_queue_transferring_optimizer.h",
@@ -31,14 +33,12 @@ blink_modules_sources("breakout_box") {
     "pushable_media_stream_video_source.h",
     "transferred_frame_queue_underlying_source.cc",
     "transferred_frame_queue_underlying_source.h",
-    "video_track_signal_underlying_sink.cc",
-    "video_track_signal_underlying_sink.h",
-    "video_track_signal_underlying_source.cc",
-    "video_track_signal_underlying_source.h",
+    "video_track_generator.cc",
+    "video_track_generator.h",
   ]
   deps = [
-    "//third_party/blink/renderer/modules/mediastream:mediastream",
-    "//third_party/blink/renderer/modules/webcodecs:webcodecs",
+    "//third_party/blink/renderer/modules/mediastream",
+    "//third_party/blink/renderer/modules/webcodecs",
   ]
 }
 
@@ -56,16 +56,19 @@ source_set("unit_tests") {
     "pushable_media_stream_video_source_test.cc",
     "stream_test_utils.cc",
     "stream_test_utils.h",
-    "video_track_signal_underlying_sink_test.cc",
-    "video_track_signal_underlying_source_test.cc",
   ]
 
   deps = [
-    "//testing/gmock:gmock",
-    "//testing/gtest:gtest",
+    "//testing/gmock",
+    "//testing/gtest",
     "//third_party/blink/public:test_headers",
     "//third_party/blink/renderer/controller:blink_bindings_test_sources",
-    "//third_party/blink/renderer/modules:modules",
+    "//third_party/blink/renderer/core:unit_test_support",
+    "//third_party/blink/renderer/modules",
     "//third_party/blink/renderer/modules/mediastream:test_support",
   ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

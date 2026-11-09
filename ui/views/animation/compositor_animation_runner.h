@@ -1,11 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_ANIMATION_COMPOSITOR_ANIMATION_RUNNER_H_
 #define UI_VIEWS_ANIMATION_COMPOSITOR_ANIMATION_RUNNER_H_
 
-
+#include "base/location.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_animation_observer.h"
@@ -23,7 +24,9 @@ class VIEWS_EXPORT CompositorAnimationRunner
       public ui::CompositorAnimationObserver,
       public WidgetObserver {
  public:
-  explicit CompositorAnimationRunner(Widget* widget);
+  explicit CompositorAnimationRunner(
+      Widget* widget,
+      const base::Location& location = FROM_HERE);
   CompositorAnimationRunner(CompositorAnimationRunner&) = delete;
   CompositorAnimationRunner& operator=(CompositorAnimationRunner&) = delete;
   ~CompositorAnimationRunner() override;
@@ -47,17 +50,15 @@ class VIEWS_EXPORT CompositorAnimationRunner
   // the widget is destroyed.
   void StopInternal();
 
-  // When |widget_| is nullptr, it means the widget has been destroyed and
-  // |compositor_| must also be nullptr.
-  Widget* widget_;
+  base::TimeTicks start_tick_;
 
-  // When |compositor_| is nullptr, it means either the animation is not
-  // running, or the compositor or |widget_| associated with the compositor_ has
-  // been destroyed during animation.
-  ui::Compositor* compositor_ = nullptr;
+  // Stops observing when the widget is destroyed. Once it is no longer
+  // observing, `compositor_observation_` must not be observing either.
+  base::ScopedObservation<Widget, WidgetObserver> widget_observation_{this};
 
-  base::TimeDelta min_interval_ = base::TimeDelta::Max();
-  base::TimeTicks last_tick_;
+  // Only observing while an animation is actually running.
+  base::ScopedObservation<ui::Compositor, ui::CompositorAnimationObserver>
+      compositor_observation_{this};
 };
 
 }  // namespace views

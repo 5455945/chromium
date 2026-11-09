@@ -1,11 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_HOST_CONTINUE_WINDOW_H_
 #define REMOTING_HOST_CONTINUE_WINDOW_H_
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "remoting/host/host_window.h"
@@ -14,6 +13,9 @@ namespace remoting {
 
 class ContinueWindow : public HostWindow {
  public:
+  ContinueWindow(const ContinueWindow&) = delete;
+  ContinueWindow& operator=(const ContinueWindow&) = delete;
+
   ~ContinueWindow() override;
 
   // HostWindow override.
@@ -33,10 +35,16 @@ class ContinueWindow : public HostWindow {
   virtual void ShowUi() = 0;
   virtual void HideUi() = 0;
 
+  // Enables or disables the UI buttons.
+  virtual void SetButtonsEnabled(bool enabled) = 0;
+
  private:
   // Invoked periodically to ask for the local user whether the session should
   // be continued.
   void OnSessionExpired();
+
+  // Invoked when the initial activation delay expires.
+  void OnActivationDelayExpired();
 
   // Used to disconnect the client session.
   base::WeakPtr<ClientSessionControl> client_session_control_;
@@ -47,7 +55,8 @@ class ContinueWindow : public HostWindow {
   // Used to ask the local user whether the session should be continued.
   base::OneShotTimer session_expired_timer_;
 
-  DISALLOW_COPY_AND_ASSIGN(ContinueWindow);
+  // Used to delay enabling the default action / buttons.
+  base::OneShotTimer activation_delay_timer_;
 };
 
 }  // namespace remoting

@@ -1,11 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
 
 (async function() {
   TestRunner.addResult(`Tests that console's copy command is copying into front-end buffer.\n`);
 
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
 
   var results = [];
@@ -34,5 +36,6 @@
   }
 
   InspectorFrontendHost.copyText = copyText;
-  for (var i = 0; i < testCases.length; ++i) TestRunner.RuntimeAgent.evaluate(testCases[i], '', true);
+  for (var i = 0; i < testCases.length; ++i)
+    TestRunner.RuntimeAgent.invoke_evaluate({expression: testCases[i], objectGroup: '', includeCommandLineAPI: true});
 })();

@@ -107,9 +107,8 @@ Sometimes the values to log aren't readily available and need to be computed
 specially. This should be avoided when logging is disabled.
 
 ```java
-static private final boolean DEBUG = false;  // debug toggle.
 ...
-if (DEBUG) {
+if (Log.isLoggable(TAG, Log.INFO)) {
   Log.i(TAG, createThatExpensiveLogMessage(activity))
 }
 ```
@@ -118,42 +117,6 @@ Because the variable is a `static final` that can be evaluated at compile
 time, the Java compiler will optimize out all guarded calls from the
 generated `.class` file. Changing it however requires editing each of the
 files for which debug should be enabled and recompiling.
-
-#### Annotate debug functions with the `@RemovableInRelease` annotation.
-
-That annotation tells Proguard to assume that a given function has no side
-effects, and is called only for its returned value. If this value is unused,
-the call will be removed. If the function is not called at all, it will also
-be removed. Since Proguard is already used to strip debug and verbose calls
-out of release builds, this annotation allows it to have a deeper action by
-removing also function calls used to generate the log call's arguments.
-
-```java
-/* If that function is only used in Log.d calls, proguard should
- * completely remove it from the release builds. */
-@RemovableInRelease
-private static String getSomeDebugLogString(Thing[] things) {
-  StringBuilder sb = new StringBuilder(
-      "Reporting " + thing.length + " things: ");
-  for (Thing thing : things) {
-    sb.append('\n').append(thing.id).append(' ').append(report.foo);
-  }
-  return sb.toString();
-}
-
-public void bar() {
-  ...
-  Log.d(TAG, getSomeDebugLogString(things)); /* The line is removed in
-                                              *  release builds. */
-}
-```
-
-Again, this is useful only if the input to that function are variables
-already available in the scope. The idea is to move computations,
-concatenations, etc. to a place where that can be removed when not needed,
-without invading the main function's logic. It can then have a similar
-effect as guarding with a static final property that would be enabled in
-Debug and disabled in Release.
 
 ### Rule #3: Favor small log messages
 
@@ -212,14 +175,16 @@ For more, see the [related page on developer.android.com]
 ## Logs in JUnit tests
 
 We use [robolectric](http://robolectric.org/) to run our JUnit tests. It
-replaces some of the Android framework classes with "Shadow" classes
-to ensure that we can run our code in a regular JVM. `android.util.Log` is one
-of those replaced classes, and by default calling `Log` methods doesn't print
-anything.
+replaces some of the Android framework classes with "Shadow" classes to ensure
+that we can run our code in a regular JVM. `android.util.Log` is one of those
+replaced classes, and by default calling `Log` methods doesn't print anything.
 
-That default is not changed in the normal configuration, but if you need to
-enable logging locally or for a specific test, just add those few lines to your
-test:
+In Chromium, `BaseRobolectricTestRule` (used by `BaseRobolectricTestRunner`)
+automatically configures `ShadowLog` to print to `System.out`, so you should
+see your logs in the test output without any additional setup.
+
+If you are not using `BaseRobolectricTestRunner`, you may need to manually
+enable logging in your `@Before` method:
 
 ```java
 @Before

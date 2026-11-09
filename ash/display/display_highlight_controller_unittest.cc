@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,12 +23,6 @@ class DisplayHighlightControllerTest : public AshTestBase {
     return Shell::Get()->display_highlight_controller();
   }
 
-  // AshTestBase:
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(features::kDisplayIdentification);
-    AshTestBase::SetUp();
-  }
-
   void ExpectNoHighlight() {
     EXPECT_EQ(display_highlight_controller()->GetWidgetForTesting(), nullptr);
   }
@@ -47,9 +41,6 @@ class DisplayHighlightControllerTest : public AshTestBase {
     EXPECT_EQ(widget->GetWindowBoundsInScreen(), target.bounds());
     EXPECT_TRUE(widget->IsVisible());
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(DisplayHighlightControllerTest, OnDisplayChangedNoDisplaySelected) {
@@ -155,12 +146,12 @@ TEST_F(DisplayHighlightControllerTest, VisibleMixedMode) {
   // display)
   display::DisplayManager* display_manager_ptr = display_manager();
   display::DisplayIdList id_list =
-      display_manager_ptr->GetCurrentDisplayIdList();
+      display_manager_ptr->GetConnectedDisplayIdList();
   display::DisplayIdList dst_ids;
 
   dst_ids.emplace_back(id_list[1]);
-  absl::optional<display::MixedMirrorModeParams> mixed_params(
-      absl::in_place, id_list[0], dst_ids);
+  std::optional<display::MixedMirrorModeParams> mixed_params(
+      std::in_place, id_list[0], dst_ids);
 
   display_manager_ptr->SetMirrorMode(display::MirrorMode::kMixed, mixed_params);
 

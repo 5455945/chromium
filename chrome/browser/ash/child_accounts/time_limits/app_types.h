@@ -1,19 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_CHILD_ACCOUNTS_TIME_LIMITS_APP_TYPES_H_
 #define CHROME_BROWSER_ASH_CHILD_ACCOUNTS_TIME_LIMITS_APP_TYPES_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/time/time.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 // Type of usage restriction that can be applied to the installed app.
 enum class AppRestriction {
@@ -66,12 +65,8 @@ enum class AppNotification {
 };
 
 enum class ChromeAppActivityState {
-  // The browser is active and hosts urls in its active tab which are not
-  // allowlisted.
+  // The browser is active.
   kActive,
-
-  // Same as |kActive| except the urls the browser hosts are allowlisted.
-  kActiveAllowlisted,
 
   // The browser window is not active.
   kInactive,
@@ -83,23 +78,22 @@ enum class ChromeAppActivityState {
 // specific app id.
 class AppId {
  public:
-  AppId(apps::mojom::AppType app_type, const std::string& app_id);
+  AppId(apps::AppType app_type, const std::string& app_id);
   AppId(const AppId&);
   AppId& operator=(const AppId&);
   AppId(AppId&&);
   AppId& operator=(AppId&&);
   ~AppId();
 
-  apps::mojom::AppType app_type() const { return app_type_; }
+  apps::AppType app_type() const { return app_type_; }
   const std::string& app_id() const { return app_id_; }
 
-  bool operator==(const AppId&) const;
-  bool operator!=(const AppId&) const;
+  friend bool operator==(const AppId&, const AppId&) = default;
   bool operator<(const AppId&) const;
   friend std::ostream& operator<<(std::ostream&, const AppId&);
 
  private:
-  apps::mojom::AppType app_type_ = apps::mojom::AppType::kUnknown;
+  apps::AppType app_type_ = apps::AppType::kUnknown;
 
   // Package name for |ARC| apps, 32 character long Chrome specific app id
   // otherwise.
@@ -121,7 +115,7 @@ class AppLimit {
   // |daily_limit| can only be set when |restriction| is kTimeLimit.
   // |daily_limit| needs to be in range of [0, 24] hours.
   AppLimit(AppRestriction restriction,
-           absl::optional<base::TimeDelta> daily_limit,
+           std::optional<base::TimeDelta> daily_limit,
            base::Time last_updated);
   AppLimit(const AppLimit&);
   AppLimit& operator=(const AppLimit&);
@@ -131,7 +125,7 @@ class AppLimit {
 
   AppRestriction restriction() const { return restriction_; }
   base::Time last_updated() const { return last_updated_; }
-  const absl::optional<base::TimeDelta>& daily_limit() const {
+  const std::optional<base::TimeDelta>& daily_limit() const {
     return daily_limit_;
   }
 
@@ -141,7 +135,7 @@ class AppLimit {
 
   // Daily usage limit. Only set |restriction| is kTimeLimit.
   // Has to be between 0 and 24 hours.
-  absl::optional<base::TimeDelta> daily_limit_;
+  std::optional<base::TimeDelta> daily_limit_;
 
   // UTC timestamp for the last time the limit was updated.
   base::Time last_updated_;
@@ -158,8 +152,8 @@ class AppActivity {
     // each other, this static method creates a new ActiveTime with the earlier
     // of |t1|'s or |t2|'s |active_from| and the later of |t1|'s or |t2|'s
     // |active_to_|.
-    static absl::optional<ActiveTime> Merge(const ActiveTime& t1,
-                                            const ActiveTime& t2);
+    static std::optional<ActiveTime> Merge(const ActiveTime& t1,
+                                           const ActiveTime& t2);
 
     ActiveTime(base::Time start, base::Time end);
     ActiveTime(const ActiveTime& rhs);
@@ -230,7 +224,7 @@ class AppActivity {
   // Chrome and web apps share the same time limit. Therefore, we need to have a
   // consistent |running_active_time_| across all web apps and chrome.
   void set_running_active_time(base::TimeDelta time) {
-    DCHECK(!is_active_);
+    CHECK(!is_active_, base::NotFatalUntil::M160);
     running_active_time_ = time;
   }
 
@@ -255,7 +249,6 @@ class AppActivity {
   base::TimeTicks last_updated_time_ticks_;
 };
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_TIME_LIMITS_APP_TYPES_H_

@@ -1,75 +1,36 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/web_request/web_request_event_details.h"
 
 #include <memory>
+#include <optional>
 
-#include "base/cxx17_backports.h"
+#include "base/check_deref.h"
+#include "base/no_destructor.h"
+#include "base/strings/string_util.h"
 #include "base/values.h"
 #include "extensions/browser/api/web_request/web_request_api_constants.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_urls.h"
+#include "net/base/net_errors.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/test/cert_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/re2/src/re2/re2.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
-TEST(WebRequestEventDetailsTest, WhitelistedCopyForPublicSession) {
-  // Create original, and populate it with some values.
-  std::unique_ptr<WebRequestEventDetails> orig(new WebRequestEventDetails);
-
-  const char* const safe_attributes[] = {
-    "method", "requestId", "timeStamp", "type", "tabId", "frameId",
-    "parentFrameId", "fromCache", "error", "ip", "statusLine", "statusCode"
-  };
-
-  orig->render_process_id_ = 1;
-  orig->extra_info_spec_ = 3;
-
-  orig->request_body_ = std::make_unique<base::DictionaryValue>();
-  orig->request_headers_ = std::make_unique<base::ListValue>();
-  orig->response_headers_ = std::make_unique<base::ListValue>();
-
-  for (const char* safe_attr : safe_attributes) {
-    orig->dict_.SetString(safe_attr, safe_attr);
-  }
-
-  orig->dict_.SetString("url", "http://www.foo.bar/baz");
-
-  // Add some extra dict_ values that should be filtered out.
-  orig->dict_.SetString("requestBody", "request body value");
-  orig->dict_.SetString("requestHeaders", "request headers value");
-
-  // Get a filtered copy then check that filtering really works.
-  std::unique_ptr<WebRequestEventDetails> copy =
-      orig->CreatePublicSessionCopy();
-
-  EXPECT_EQ(orig->render_process_id_, copy->render_process_id_);
-  EXPECT_EQ(0, copy->extra_info_spec_);
-
-  EXPECT_EQ(nullptr, copy->request_body_);
-  EXPECT_EQ(nullptr, copy->request_headers_);
-  EXPECT_EQ(nullptr, copy->response_headers_);
-
-  for (const char* safe_attr : safe_attributes) {
-    std::string copy_str;
-    copy->dict_.GetString(safe_attr, &copy_str);
-    EXPECT_EQ(safe_attr, copy_str);
-  }
-
-  // URL is stripped down to origin.
-  std::string url;
-  copy->dict_.GetString("url", &url);
-  EXPECT_EQ("http://www.foo.bar/", url);
-
-  // Extras are filtered out (+1 for url).
-  EXPECT_EQ(base::size(safe_attributes) + 1, copy->dict_.DictSize());
-}
+namespace keys = extension_web_request_api_constants;
+using ExtraInfoSpec = extension_web_request_api_helpers::ExtraInfoSpec;
 
 TEST(WebRequestEventDetailsTest, SetResponseHeaders) {
   const int kFilter =
@@ -79,6 +40,7 @@ TEST(WebRequestEventDetailsTest, SetResponseHeaders) {
       "HTTP/1.0 200 OK\r\n"
       "Key1: Value1\r\n"
       "X-Chrome-ID-Consistency-Response: Value2\r\n"
+      "X-Chrome-Manage-Accounts: Value3\r\n"
       "\r\n";
   auto headers = base::MakeRefCounted<net::HttpResponseHeaders>(
       net::HttpUtil::AssembleRawHeaders(headers_string));
@@ -90,19 +52,25 @@ TEST(WebRequestEventDetailsTest, SetResponseHeaders) {
     WebRequestInfo request_info(std::move(params));
     WebRequestEventDetails details(request_info, kFilter);
     details.SetResponseHeaders(request_info, headers.get());
-    std::unique_ptr<base::DictionaryValue> dict =
+    base::DictValue dict =
         details.GetFilteredDict(kFilter, nullptr, std::string(), false);
-    base::Value* filtered_headers = dict->FindKey("responseHeaders");
+    const base::ListValue* filtered_headers = dict.FindList("responseHeaders");
     ASSERT_TRUE(filtered_headers);
-    ASSERT_EQ(2u, filtered_headers->GetList().size());
-    EXPECT_EQ("Key1",
-              filtered_headers->GetList()[0].FindKey("name")->GetString());
-    EXPECT_EQ("Value1",
-              filtered_headers->GetList()[0].FindKey("value")->GetString());
+    ASSERT_EQ(3u, filtered_headers->size());
+    const base::DictValue& first_header =
+        CHECK_DEREF(filtered_headers)[0].GetDict();
+    const base::DictValue& second_header =
+        CHECK_DEREF(filtered_headers)[1].GetDict();
+    const base::DictValue& third_header =
+        CHECK_DEREF(filtered_headers)[2].GetDict();
+    EXPECT_EQ("Key1", CHECK_DEREF(first_header.FindString("name")));
+    EXPECT_EQ("Value1", CHECK_DEREF(first_header.FindString("value")));
     EXPECT_EQ("X-Chrome-ID-Consistency-Response",
-              filtered_headers->GetList()[1].FindKey("name")->GetString());
-    EXPECT_EQ("Value2",
-              filtered_headers->GetList()[1].FindKey("value")->GetString());
+              CHECK_DEREF(second_header.FindString("name")));
+    EXPECT_EQ("Value2", CHECK_DEREF(second_header.FindString("value")));
+    EXPECT_EQ("X-Chrome-Manage-Accounts",
+              CHECK_DEREF(third_header.FindString("name")));
+    EXPECT_EQ("Value3", CHECK_DEREF(third_header.FindString("value")));
   }
 
   {
@@ -112,16 +80,237 @@ TEST(WebRequestEventDetailsTest, SetResponseHeaders) {
     WebRequestInfo gaia_request_info(std::move(params));
     WebRequestEventDetails gaia_details(gaia_request_info, kFilter);
     gaia_details.SetResponseHeaders(gaia_request_info, headers.get());
-    std::unique_ptr<base::DictionaryValue> dict =
+    base::DictValue dict =
         gaia_details.GetFilteredDict(kFilter, nullptr, std::string(), false);
-    base::Value* filtered_headers = dict->FindKey("responseHeaders");
+    base::ListValue* filtered_headers = dict.FindList("responseHeaders");
     ASSERT_TRUE(filtered_headers);
-    ASSERT_EQ(1u, filtered_headers->GetList().size());
-    EXPECT_EQ("Key1",
-              filtered_headers->GetList()[0].FindKey("name")->GetString());
-    EXPECT_EQ("Value1",
-              filtered_headers->GetList()[0].FindKey("value")->GetString());
+    ASSERT_EQ(1u, filtered_headers->size());
+    const base::DictValue& header = CHECK_DEREF(filtered_headers)[0].GetDict();
+    EXPECT_EQ("Key1", CHECK_DEREF(header.FindString("name")));
+    EXPECT_EQ("Value1", CHECK_DEREF(header.FindString("value")));
   }
+}
+
+// Tests that a status line that is valid UTF-8 is passed through unchanged.
+TEST(WebRequestEventDetailsTest, SetResponseHeaders_StatusLineUTF8) {
+  auto headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+      net::HttpUtil::AssembleRawHeaders("HTTP/1.1 200 OK \xC3\xA9t\xC3\xA9"
+                                        "\r\n"
+                                        "\r\n"));
+  WebRequestInfoInitParams params;
+  params.url = GURL("http://www.example.com");
+  WebRequestInfo request_info(std::move(params));
+  WebRequestEventDetails details(request_info, /*extra_info_spec=*/0);
+  details.SetResponseHeaders(request_info, headers.get());
+
+  base::DictValue dict = details.GetFilteredDict(
+      /*extra_info_spec=*/0, nullptr, std::string(), false);
+  EXPECT_EQ(200, dict.FindInt(keys::kStatusCodeKey));
+  EXPECT_EQ("HTTP/1.1 200 OK \xC3\xA9t\xC3\xA9",
+            CHECK_DEREF(dict.FindString(keys::kStatusLineKey)));
+}
+
+// Tests that a status line containing bytes that are not valid UTF-8 doesn't
+// crash (base::Value requires UTF-8) and that invalid sequences are replaced
+// with U+FFFD. Regression test for crbug.com/539400310.
+TEST(WebRequestEventDetailsTest, SetResponseHeaders_StatusLineNotUTF8) {
+  auto headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+      net::HttpUtil::AssembleRawHeaders("HTTP/1.1 200 OK\xFF"
+                                        "\r\n"
+                                        "Key1: Value1\r\n"
+                                        "\r\n"));
+  // Sanity check: net passes the reason phrase through unmodified.
+  ASSERT_FALSE(
+      base::IsStringUTF8AllowingNoncharacters(headers->GetStatusLine()));
+
+  WebRequestInfoInitParams params;
+  params.url = GURL("http://www.example.com");
+  WebRequestInfo request_info(std::move(params));
+  WebRequestEventDetails details(request_info, /*extra_info_spec=*/0);
+  details.SetResponseHeaders(request_info, headers.get());
+
+  base::DictValue dict = details.GetFilteredDict(
+      /*extra_info_spec=*/0, nullptr, std::string(), false);
+  EXPECT_EQ(200, dict.FindInt(keys::kStatusCodeKey));
+  const std::string& status_line =
+      CHECK_DEREF(dict.FindString(keys::kStatusLineKey));
+  EXPECT_TRUE(base::IsStringUTF8AllowingNoncharacters(status_line));
+  EXPECT_EQ("HTTP/1.1 200 OK\xEF\xBF\xBD", status_line);
+}
+
+std::unique_ptr<WebRequestInfo> CreateFakeRequestInfoWithSSL(
+    net::CertStatus status) {
+  WebRequestInfoInitParams params;
+  params.url = GURL("https://secure.example.com");
+
+  auto request_info = std::make_unique<WebRequestInfo>(std::move(params));
+
+  scoped_refptr<net::X509Certificate> certificate =
+      net::CertBuilder::CreateSimpleChain(1)[0]->GetX509CertificateChain();
+
+  net::SSLInfo ssl_info;
+  ssl_info.cert = certificate;
+  ssl_info.cert_status = status;
+  request_info->AddSslInfo(std::make_optional(std::move(ssl_info)));
+
+  return request_info;
+}
+
+// Checks that a string is formatted properly as sha256 fingerprint
+// which is formatted as 31 pairs of "XX:" followed by one "XX".
+bool IsSha256Fingerprint(const std::string& input) {
+  // Use static so the exppression is only compiled once and base::NoDestructor
+  // to avoid an exit-time destructor.
+  static base::NoDestructor<re2::RE2> pattern("([0-9A-F]{2}:){31}[0-9A-F]{2}");
+  return re2::RE2::FullMatch(input, *pattern);
+}
+
+// Tests that if no SSLInfo is provided (e.g. HTTP request)
+// then WebRequestEventDetails will produce SecurityInfo object
+// with state insecure and other fields absent according to the explainer
+// https://github.com/explainers-by-googlers/security-info-web-request
+TEST(WebRequestEventDetailsTest, SetSecurityInfo_Insecure) {
+  // No SSLInfo provided .
+  WebRequestInfoInitParams params;
+  params.url = GURL("http://insecure.example.com");
+  WebRequestInfo request_info(std::move(params));
+
+  const int kFilter = ExtraInfoSpec::SECURITY_INFO;
+  WebRequestEventDetails details(request_info, kFilter);
+  details.SetSecurityInfo(request_info);
+
+  // Check that filter will not remove the necessary keys.
+  base::DictValue dict =
+      details.GetFilteredDict(kFilter, nullptr, std::string(), false);
+
+  const base::DictValue* security_info = dict.FindDict(keys::kSecurityInfoKey);
+  ASSERT_TRUE(security_info);
+  EXPECT_EQ("insecure", *security_info->FindString(keys::kStateKey));
+  EXPECT_FALSE(security_info->FindList(keys::kCertificatesKey));
+}
+
+// Tests that when SSLInfo is provided with cert status error
+// then WebRequestEventDetails will produce SecurityInfo object
+// with state broken and other fields filled according to the explainer
+// https://github.com/explainers-by-googlers/security-info-web-request
+TEST(WebRequestEventDetailsTest, SetSecurityInfo_Broken) {
+  auto request_info =
+      CreateFakeRequestInfoWithSSL(net::CERT_STATUS_DATE_INVALID);
+
+  const int kFilter = ExtraInfoSpec::SECURITY_INFO;
+  WebRequestEventDetails details(*request_info, kFilter);
+  details.SetSecurityInfo(*request_info);
+
+  // Check that filter will not remove the necessary keys.
+  base::DictValue dict =
+      details.GetFilteredDict(kFilter, nullptr, std::string(), false);
+
+  const base::DictValue* security_info = dict.FindDict(keys::kSecurityInfoKey);
+  ASSERT_TRUE(security_info);
+  EXPECT_EQ("broken", *security_info->FindString(keys::kStateKey));
+  // Certificate list should still be present even if broken.
+  const base::ListValue* certificates =
+      security_info->FindList(keys::kCertificatesKey);
+  ASSERT_TRUE(certificates);
+  ASSERT_EQ(1u, certificates->size());
+
+  const base::DictValue& leaf_cert = certificates->front().GetDict();
+  EXPECT_FALSE(leaf_cert.FindBlob(keys::kRawDerKey));
+
+  const base::DictValue* fingerprint =
+      leaf_cert.FindDict(keys::kFingerprintKey);
+  ASSERT_TRUE(fingerprint);
+
+  std::string sha256 = CHECK_DEREF(fingerprint->FindString(keys::kSha256Key));
+  ASSERT_TRUE(IsSha256Fingerprint(sha256));
+}
+// Tests that when SSLInfo is provided (e.g. successful https request)
+// then WebRequestEventDetails will produce SecurityInfo object
+// with state secure and other fields filled according to the explainer
+// https://github.com/explainers-by-googlers/security-info-web-request
+TEST(WebRequestEventDetailsTest, SetSecurityInfoRawDer_Secure) {
+  auto request_info = CreateFakeRequestInfoWithSSL(net::OK);
+
+  const int kFilter =
+      ExtraInfoSpec::SECURITY_INFO | ExtraInfoSpec::SECURITY_INFO_RAW_DER;
+  WebRequestEventDetails details(*request_info, kFilter);
+  details.SetSecurityInfo(*request_info);
+
+  // Check that filter will not remove the necessary keys.
+  base::DictValue dict =
+      details.GetFilteredDict(kFilter, nullptr, std::string(), false);
+
+  const base::DictValue* security_info = dict.FindDict(keys::kSecurityInfoKey);
+  ASSERT_TRUE(security_info);
+  EXPECT_EQ("secure", *security_info->FindString(keys::kStateKey));
+
+  const base::ListValue* certificates =
+      security_info->FindList(keys::kCertificatesKey);
+  ASSERT_TRUE(certificates);
+  ASSERT_EQ(1u, certificates->size());
+
+  const base::DictValue& leaf_cert = certificates->front().GetDict();
+
+  EXPECT_TRUE(leaf_cert.FindBlob(keys::kRawDerKey));
+
+  const base::DictValue* fingerprint =
+      leaf_cert.FindDict(keys::kFingerprintKey);
+  ASSERT_TRUE(fingerprint);
+  std::string sha256 = CHECK_DEREF(fingerprint->FindString(keys::kSha256Key));
+  ASSERT_TRUE(IsSha256Fingerprint(sha256));
+}
+
+// Test checks that WebRequestEventDetails::GetFilteredDict
+// without passing ExtraInfoSpec::SECURITY_INFO as filter
+// will erase securityInfo values.
+TEST(WebRequestEventDetailsTest, SetSecurityInfo_FilteredOut) {
+  auto request_info = CreateFakeRequestInfoWithSSL(net::OK);
+
+  const int kFilter =
+      ExtraInfoSpec::SECURITY_INFO | ExtraInfoSpec::SECURITY_INFO_RAW_DER;
+  WebRequestEventDetails details(*request_info, kFilter);
+  details.SetSecurityInfo(*request_info);
+
+  base::DictValue dict = details.GetFilteredDict(
+      /*extra_info_spec=*/0, nullptr, std::string(), false);
+
+  const base::DictValue* security_info = dict.FindDict(keys::kSecurityInfoKey);
+  ASSERT_FALSE(security_info);
+}
+
+// Test checks that WebRequestEventDetails::GetFilteredDict
+// when passing only ExtraInfoSpec::SECURITY_INFO and not
+// ExtraInfoSpec::SECURITY_INFO_RAW_DER as filter
+// will erase CertificateInfo.rawDER field.
+TEST(WebRequestEventDetailsTest, SetSecurityInfoRawDer_FilteredOut) {
+  auto request_info = CreateFakeRequestInfoWithSSL(net::OK);
+
+  WebRequestEventDetails details(
+      *request_info,
+      ExtraInfoSpec::SECURITY_INFO | ExtraInfoSpec::SECURITY_INFO_RAW_DER);
+  details.SetSecurityInfo(*request_info);
+
+  base::DictValue dict = details.GetFilteredDict(ExtraInfoSpec::SECURITY_INFO,
+                                                 nullptr, std::string(), false);
+
+  const base::DictValue* security_info = dict.FindDict(keys::kSecurityInfoKey);
+  ASSERT_TRUE(security_info);
+  EXPECT_EQ("secure", *security_info->FindString(keys::kStateKey));
+
+  const base::ListValue* certificates =
+      security_info->FindList(keys::kCertificatesKey);
+  ASSERT_TRUE(certificates);
+  ASSERT_EQ(1u, certificates->size());
+
+  const base::DictValue& leaf_cert = certificates->front().GetDict();
+
+  EXPECT_FALSE(leaf_cert.FindBlob(keys::kRawDerKey));
+
+  const base::DictValue* fingerprint =
+      leaf_cert.FindDict(keys::kFingerprintKey);
+  ASSERT_TRUE(fingerprint);
+  std::string sha256 = CHECK_DEREF(fingerprint->FindString(keys::kSha256Key));
+  ASSERT_TRUE(IsSha256Fingerprint(sha256));
 }
 
 }  // namespace extensions

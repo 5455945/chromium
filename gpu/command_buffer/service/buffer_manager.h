@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "gpu/command_buffer/common/buffer.h"
@@ -36,20 +36,6 @@ class TestHelper;
 // Info about Buffers currently in the system.
 class GPU_GLES2_EXPORT Buffer : public base::RefCounted<Buffer> {
  public:
-  struct MappedRange {
-    GLintptr offset;
-    GLsizeiptr size;
-    GLenum access;
-    void* pointer;  // Pointer returned by driver.
-    scoped_refptr<gpu::Buffer> shm;  // Client side mem buffer.
-    unsigned int shm_offset;  // Client side mem buffer offset.
-
-    MappedRange(GLintptr offset, GLsizeiptr size, GLenum access, void* pointer,
-                scoped_refptr<gpu::Buffer> shm, unsigned int shm_offset);
-    ~MappedRange();
-    void* GetShmPointer() const;
-  };
-
   Buffer(BufferManager* manager, GLuint service_id);
 
   GLenum initial_target() const { return initial_target_; }
@@ -98,19 +84,17 @@ class GPU_GLES2_EXPORT Buffer : public base::RefCounted<Buffer> {
     return is_client_side_array_;
   }
 
-  void SetMappedRange(GLintptr offset, GLsizeiptr size, GLenum access,
-                      void* pointer, scoped_refptr<gpu::Buffer> shm,
-                      unsigned int shm_offset);
-  void RemoveMappedRange();
-  const MappedRange* GetMappedRange() const {
-    return mapped_range_.get();
-  }
+  void ClearMapping();
 
   // These maintain the reference counts for checking whether a buffer is
   // double-bound to transform feedback and non-transform-feedback binding
   // points.
   void OnBind(GLenum target, bool indexed);
   void OnUnbind(GLenum target, bool indexed);
+
+  bool IsBoundForTransformFeedback() const {
+    return transform_feedback_indexed_binding_count_ > 0;
+  }
 
   bool IsBoundForTransformFeedbackAndOther() const {
     return transform_feedback_indexed_binding_count_ > 0 &&
@@ -194,7 +178,7 @@ class GPU_GLES2_EXPORT Buffer : public base::RefCounted<Buffer> {
   void ClearCache();
 
   // The manager that owns this Buffer.
-  BufferManager* manager_;
+  raw_ptr<BufferManager> manager_;
 
   // A copy of the data in the buffer. This data is only kept if the conditions
   // checked in UseShadowBuffer() are true.
@@ -227,9 +211,6 @@ class GPU_GLES2_EXPORT Buffer : public base::RefCounted<Buffer> {
   // Usage of buffer.
   GLenum usage_;
 
-  // Data cached from last glMapBufferRange call.
-  std::unique_ptr<MappedRange> mapped_range_;
-
   // A map of ranges to the highest value in that range of a certain type.
   typedef std::map<Range, GLuint, Range::Less> RangeToMaxValueMap;
   RangeToMaxValueMap range_set_;
@@ -246,7 +227,12 @@ class GPU_GLES2_EXPORT Buffer : public base::RefCounted<Buffer> {
 class GPU_GLES2_EXPORT BufferManager
     : public base::trace_event::MemoryDumpProvider {
  public:
-  BufferManager(MemoryTracker* memory_tracker, FeatureInfo* feature_info);
+  BufferManager(scoped_refptr<MemoryTracker> memory_tracker,
+                FeatureInfo* feature_info);
+
+  BufferManager(const BufferManager&) = delete;
+  BufferManager& operator=(const BufferManager&) = delete;
+
   ~BufferManager() override;
 
   void MarkContextLost();
@@ -315,14 +301,6 @@ class GPU_GLES2_EXPORT BufferManager
 
   void set_max_buffer_size(GLsizeiptr max_buffer_size) {
     max_buffer_size_ = max_buffer_size;
-  }
-
-  void set_allow_buffers_on_multiple_targets(bool allow) {
-    allow_buffers_on_multiple_targets_ = allow;
-  }
-
-  void set_allow_fixed_attribs(bool allow) {
-    allow_fixed_attribs_ = allow;
   }
 
   size_t mem_represented() const {
@@ -443,7 +421,6 @@ class GPU_GLES2_EXPORT BufferManager
                             va_list varargs);
 
   std::unique_ptr<MemoryTypeTracker> memory_type_tracker_;
-  MemoryTracker* memory_tracker_;
   scoped_refptr<FeatureInfo> feature_info_;
 
   // Info for each buffer in the system.
@@ -453,12 +430,6 @@ class GPU_GLES2_EXPORT BufferManager
   // The maximum size of buffers.
   GLsizeiptr max_buffer_size_;
 
-  // Whether or not buffers can be bound to multiple targets.
-  bool allow_buffers_on_multiple_targets_;
-
-  // Whether or not allow using GL_FIXED type for vertex attribs.
-  bool allow_fixed_attribs_;
-
   // Counts the number of Buffer allocated with 'this' as its manager.
   // Allows to check no Buffer will outlive this.
   unsigned int buffer_count_;
@@ -467,8 +438,6 @@ class GPU_GLES2_EXPORT BufferManager
 
   bool lost_context_;
   bool use_client_side_arrays_for_stream_buffers_;
-
-  DISALLOW_COPY_AND_ASSIGN(BufferManager);
 };
 
 }  // namespace gles2

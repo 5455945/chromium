@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2013 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -24,9 +24,11 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
 def main():
-  popen = subprocess.Popen('git diff --cached --raw -M',
-                           shell=True, stdout=subprocess.PIPE)
+  popen = subprocess.Popen(
+    'git diff --cached --raw -M', shell=True, stdout=subprocess.PIPE
+  )
   out, _ = popen.communicate()
+  out = out.decode('utf-8')
   if popen.returncode != 0:
     return 1
   lines = out.splitlines()
@@ -41,12 +43,16 @@ def main():
     attrs, fro, to = parts
     if attrs.split()[4].startswith('R'):
       print('Moving: %s' % fro)
-      subprocess.check_call([
-        sys.executable,
-        os.path.join(BASE_DIR, 'move_source_file.py'),
-        '--already_moved',
-        '--no_error_for_non_source_file',
-        fro, to])
+      subprocess.check_call(
+        [
+          sys.executable,
+          os.path.join(BASE_DIR, 'move_source_file.py'),
+          '--already_moved',
+          '--no_error_for_non_source_file',
+          fro,
+          to,
+        ]
+      )
     else:
       print('Skipping: %s -- not a rename?' % fro)
   return 0

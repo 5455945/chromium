@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
-#include "components/ui_devtools/DOM.h"
 #include "components/ui_devtools/devtools_base_agent.h"
 #include "components/ui_devtools/devtools_export.h"
+#include "components/ui_devtools/dom.h"
 #include "components/ui_devtools/ui_element_delegate.h"
 
 namespace ui_devtools {
@@ -31,6 +32,10 @@ class UI_DEVTOOLS_EXPORT DOMAgent
       public UIElementDelegate {
  public:
   DOMAgent();
+
+  DOMAgent(const DOMAgent&) = delete;
+  DOMAgent& operator=(const DOMAgent&) = delete;
+
   ~DOMAgent() override;
 
   // DOM::Backend:
@@ -42,7 +47,7 @@ class UI_DEVTOOLS_EXPORT DOMAgent
       std::unique_ptr<protocol::Array<int>>* result) override;
   protocol::Response performSearch(
       const protocol::String& query,
-      protocol::Maybe<bool> include_user_agent_shadow_dom,
+      std::optional<bool> include_user_agent_shadow_dom,
       protocol::String* search_id,
       int* result_count) override;
   protocol::Response getSearchResults(
@@ -58,6 +63,13 @@ class UI_DEVTOOLS_EXPORT DOMAgent
   protocol::Response dispatchKeyEvent(
       int node_id,
       std::unique_ptr<protocol::DOM::KeyEvent> event) override;
+  protocol::Response getNodeBoundsInScreen(
+      int node_id,
+      std::unique_ptr<protocol::DOM::Rect>* bounds_in_screen) override;
+  protocol::Response getDeviceScaleFactor(int node_id,
+                                          double* device_scale_factor) override;
+  protocol::Response getOuterHTML(int node_id,
+                                  protocol::String* outer_html) override;
 
   // UIElementDelegate:
   void OnUIElementAdded(UIElement* parent, UIElement* child) override;
@@ -105,16 +117,16 @@ class UI_DEVTOOLS_EXPORT DOMAgent
   void SearchDomTree(const Query& query, std::vector<int>* result_collector);
 
   std::unique_ptr<UIElement> element_root_;
-  std::unordered_map<int, UIElement*> node_id_to_ui_element_;
+  std::unordered_map<int, raw_ptr<UIElement, CtnExperimental>>
+      node_id_to_ui_element_;
 
-  base::ObserverList<DOMAgentObserver>::Unchecked observers_;
+  base::ObserverList<DOMAgentObserver>::UncheckedAndDanglingUntriaged
+      observers_;
 
   using SearchResults = std::unordered_map<std::string, std::vector<int>>;
   SearchResults search_results_;
 
   bool is_document_created_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(DOMAgent);
 };
 
 }  // namespace ui_devtools

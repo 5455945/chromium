@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,39 +14,43 @@
 // navigations.
 
 namespace blink {
-// Navigation type that affects the download decision and relevant metrics to be
-// reported at download-discovery time.
-//
-// This enum backs a histogram. Please keep enums.xml up to date with any
-// changes, and new entries should be appended at the end. Never re-arrange /
-// re-use values.
+// Navigation type that affects the download decision at download-discovery
+// time.
 enum class NavigationDownloadType {
-  // An entry reserved just for histogram. The client code is not expected to
-  // set or query this type in a policy.
-  kDefaultAllow = 0,
-
-  kViewSource = 1,
-  kInterstitial = 2,
+  kViewSource,
 
   // The navigation was initiated on a x-origin opener.
-  kOpenerCrossOrigin = 5,
+  kOpenerCrossOrigin,
 
   // The navigation was initiated from or occurred in an ad frame without user
   // activation.
-  kAdFrameNoGesture = 8,
+  kAdFrameNoGesture,
 
   // The navigation was initiated from or occurred in an ad frame.
-  kAdFrame = 10,
+  kAdFrame,
 
   // The navigation was initiated from or occurred in an iframe with
   // |network::mojom::WebSandboxFlags::kDownloads| flag set.
-  kSandbox = 11,
+  kSandbox,
 
   // The navigation was initiated without user activation.
-  kNoGesture = 12,
+  kNoGesture,
 
-  kMaxValue = kNoGesture
+  // The navigation was initiated from an ad script.
+  kAdScript,
+
+  kMaxValue = kAdScript
 };
+
+// LINT.IfChange(InputStartPresence)
+enum class InputStartPresence {
+  kNone = 0,
+  kOnlyOld = 1,
+  kOnlyNew = 2,
+  kBoth = 3,
+  kMaxValue = kBoth,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:InputStartPresence)
 
 // Stores the navigation types that may be of interest to the download-related
 // metrics to be reported at download-discovery time. Also controls how
@@ -72,17 +76,15 @@ struct BLINK_COMMON_EXPORT NavigationDownloadPolicy {
   // Returns if download is allowed based on |disallowed_types|.
   bool IsDownloadAllowed() const;
 
-  // Record the download policy to histograms from |observed_types|.
-  void RecordHistogram() const;
-
-  // Possibly set the kOpenerCrossOrigin and kSandboxNoGesture policy in
-  // |download_policy|.
+  // Possibly set the impacted types in `observed_types` and `disallowed_types`.
+  // The parameter `openee_can_access_opener_origin` only matters if
+  // `is_opener_navigation` is true.
   void ApplyDownloadFramePolicy(bool is_opener_navigation,
                                 bool has_gesture,
-                                bool can_access_current_origin,
+                                bool openee_can_access_opener_origin,
                                 bool has_download_sandbox_flag,
-                                bool is_blocking_downloads_in_sandbox_enabled,
-                                bool from_ad);
+                                bool from_ad_frame,
+                                bool is_ad_script_in_stack);
 
   // An alias of a bitset of navigation types.
   using NavigationDownloadTypes =
@@ -95,8 +97,6 @@ struct BLINK_COMMON_EXPORT NavigationDownloadPolicy {
   // A bitset of navigation types observed where if the navigation turns into
   // a download, the download should be dropped.
   NavigationDownloadTypes disallowed_types;
-
-  bool blocking_downloads_in_sandbox_enabled = false;
 };
 
 }  // namespace blink

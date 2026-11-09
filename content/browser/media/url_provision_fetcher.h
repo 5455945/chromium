@@ -1,12 +1,20 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_MEDIA_URL_PROVISION_FETCHER_H_
 #define CONTENT_BROWSER_MEDIA_URL_PROVISION_FETCHER_H_
 
-#include "base/macros.h"
+#include <optional>
+#include <string>
+#include <string_view>
+
 #include "media/base/provision_fetcher.h"
+#include "services/network/public/mojom/url_response_head.mojom-forward.h"
+
+namespace net {
+struct RedirectInfo;
+}  // namespace net
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -21,21 +29,32 @@ class URLProvisionFetcher : public media::ProvisionFetcher {
  public:
   explicit URLProvisionFetcher(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+  URLProvisionFetcher(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      std::string_view user_agent);
+
+  URLProvisionFetcher(const URLProvisionFetcher&) = delete;
+  URLProvisionFetcher& operator=(const URLProvisionFetcher&) = delete;
+
   ~URLProvisionFetcher() override;
 
   // media::ProvisionFetcher implementation.
   void Retrieve(const GURL& default_url,
                 const std::string& request_data,
-                ProvisionFetcher::ResponseCB response_cb) override;
+                media::ProvisionFetcher::ResponseCB response_cb) override;
 
  private:
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
+
+  void OnRedirect(const GURL& url_before_redirect,
+                  const net::RedirectInfo& redirect_info,
+                  const network::mojom::URLResponseHead& response_head,
+                  std::vector<std::string>* removed_headers);
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
   media::ProvisionFetcher::ResponseCB response_cb_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLProvisionFetcher);
+  const std::string user_agent_;
 };
 
 }  // namespace content

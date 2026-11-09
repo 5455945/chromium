@@ -1,15 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.page_info;
 
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.content_public.browser.WebContents;
 
-/**
- * Helper class for obtaining site certificate chain from WebContents.
- */
+/** Helper class for obtaining site certificate chain from WebContents. */
+@NullMarked
 public class CertificateChainHelper {
     public static byte[][] getCertificateChain(WebContents webContents) {
         return CertificateChainHelperJni.get().getCertificateChain(webContents);

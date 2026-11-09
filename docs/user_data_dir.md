@@ -44,10 +44,12 @@ The default location is in the local app data folder:
 
 * [Chrome] `%LOCALAPPDATA%\Google\Chrome\User Data`
 * [Chrome Beta] `%LOCALAPPDATA%\Google\Chrome Beta\User Data`
+* [Chrome Dev] `%LOCALAPPDATA%\Google\Chrome Dev\User Data`
 * [Chrome Canary] `%LOCALAPPDATA%\Google\Chrome SxS\User Data`
+* [Chrome for Testing] `%LOCALAPPDATA%\Google\Chrome for Testing\User Data`
 * [Chromium] `%LOCALAPPDATA%\Chromium\User Data`
 
-(The canary channel suffix is determined using
+(The channel suffix is determined using
 [`InstallConstants::install_suffix`](https://cs.chromium.org/chromium/src/chrome/install_static/install_constants.h?q=install_suffix).)
 
 ### Mac OS X
@@ -56,10 +58,12 @@ The default location is in the `Application Support` folder:
 
 * [Chrome] `~/Library/Application Support/Google/Chrome`
 * [Chrome Beta] `~/Library/Application Support/Google/Chrome Beta`
+* [Chrome Dev] `~/Library/Application Support/Google/Chrome Dev`
 * [Chrome Canary] `~/Library/Application Support/Google/Chrome Canary`
+* [Chrome for Testing] `~/Library/Application Support/Google/Chrome for Testing`
 * [Chromium] `~/Library/Application Support/Chromium`
 
-(The canary channel suffix is determined using the `CrProductDirName` key in the
+(The channel suffix is determined using the `CrProductDirName` key in the
 browser app's `Info.plist`.)
 
 ### Linux
@@ -69,10 +73,13 @@ The default location is in `~/.config`:
 * [Chrome Stable] `~/.config/google-chrome`
 * [Chrome Beta] `~/.config/google-chrome-beta`
 * [Chrome Dev] `~/.config/google-chrome-unstable`
+* [Chrome Canary] `~/.config/google-chrome-canary`
+* [Chrome for Testing] `~/.config/google-chrome-for-testing`
 * [Chromium] `~/.config/chromium`
 
-(The beta and dev channel suffixes are determined from `$CHROME_VERSION_EXTRA`,
-which is passed by the [launch wrapper script](https://cs.chromium.org/chromium/src/chrome/installer/linux/common/wrapper?q=CHROME_VERSION_EXTRA).)
+(The beta, dev, and canary channel suffixes are determined from
+`$CHROME_VERSION_EXTRA`, which is passed by the
+[launch wrapper script](https://cs.chromium.org/chromium/src/chrome/installer/linux/common/wrapper?q=CHROME_VERSION_EXTRA).)
 
 The `~/.config` portion of the default location can be overridden by
 `$CHROME_CONFIG_HOME` (since M61) or by `$XDG_CONFIG_HOME`.
@@ -105,8 +112,12 @@ sandbox.
 
 ### Command Line
 
-On all platforms, the user data directory can be overridden by passing the
+On most platforms, the user data directory can be overridden by passing the
 `--user-data-dir` command-line flag to the Chrome binary.
+
+The override happens in `chrome/app/chrome_main_delegate.cc`. Platforms not
+building with the file may not have implemented the override. Overriding the
+user data directory via the command line is not supported on iOS.
 
 Example:
 
@@ -122,30 +133,23 @@ The `--user-data-dir` flag takes precedence if both are present.
 
 ### Chrome Remote Desktop sessions (Linux)
 
-A single Chrome instance cannot show windows on multiple X displays, and two
-running Chrome instances cannot share the same user data directory.
-Therefore, it's desirable for Chrome to have a separate user data directory
-when running inside a [Chrome Remote
-Desktop](https://support.google.com/chrome/answer/1649523) (CRD) virtual session
-on a Linux host.
+[Chrome Remote
+Desktop](https://support.google.com/chrome/answer/1649523) (CRD) used to set
+`$CHROME_USER_DATA_DIR` or `$CHROME_CONFIG_HOME` on the virtual session on a
+Linux host, since a single Chrome instance cannot show windows on multiple X
+displays, and two running Chrome instances cannot share the same user data
+directory. However, with the obsolescence of `dbus-x11`, most modern Linux
+distros have lost the ability to simultaneously run multiple graphical sessions
+for the same user without running into difficult-to-trace dbus cross talk
+issues, and Chrome can only be run on a single X display per user in reality.
+Therefore, CRD no longer sets these environment variables for new installations
+after CRD host M105.
 
-By default, CRD achieves this by setting `$CHROME_USER_DATA_DIR` in the session.
-Unfortunately this means that inside the session we don't get separate defaults
-for different channels (Stable, Beta, Dev) or for Chrome vs. Chromium.  This can
-lead to profile version errors ("Your profile can not be used because it is from
-a newer version of Google Chrome").
-
-Since M61, this can be solved by setting `$CHROME_CONFIG_HOME` instead of
-`$CHROME_USER_DATA_DIR`. Specifically, put the following in
-`~/.chrome-remote-desktop-session`:
-
-```
-export CHROME_CONFIG_HOME="$HOME/.config/chrome-remote-desktop/chrome-config"
-unset CHROME_USER_DATA_DIR
-. /etc/chrome-remote-desktop-session
-```
-
-Then restart the host by running: `/etc/init.d/chrome-remote-desktop restart`
+The CRD host will continue to set these environment variables if either
+`chrome-config/` or `chrome-profile/` exists in
+`~/.config/chrome-remote-desktop/`. If you want to use the local Chrome profile
+in CRD sessions, quit Chrome and delete these folders from
+`~/.config/chrome-remote-desktop/`, then reboot the host device.
 
 ### Writing an AppleScript wrapper (Mac OS X)
 

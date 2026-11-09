@@ -1,46 +1,40 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/launcher/test_launcher.h"
 #include "build/build_config.h"
-#include "content/public/common/content_switches.h"
 #include "content/public/test/content_test_suite_base.h"
 #include "content/public/test/network_service_test_helper.h"
 #include "content/public/test/test_launcher.h"
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/headless_content_main_delegate.h"
-#include "headless/lib/utility/headless_content_utility_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#include <sys/resource.h>
+#endif
 
 namespace headless {
 namespace {
 
-class HeadlessBrowserImplForTest : public HeadlessBrowserImpl {
- public:
-  explicit HeadlessBrowserImplForTest(HeadlessBrowser::Options options)
-      : HeadlessBrowserImpl(base::BindOnce(&HeadlessBrowserImplForTest::OnStart,
-                                           base::Unretained(this)),
-                            std::move(options)) {}
-
-  void OnStart(HeadlessBrowser* browser) { EXPECT_EQ(this, browser); }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HeadlessBrowserImplForTest);
-};
-
 class HeadlessTestLauncherDelegate : public content::TestLauncherDelegate {
  public:
   HeadlessTestLauncherDelegate() = default;
+
+  HeadlessTestLauncherDelegate(const HeadlessTestLauncherDelegate&) = delete;
+  HeadlessTestLauncherDelegate& operator=(const HeadlessTestLauncherDelegate&) =
+      delete;
+
   ~HeadlessTestLauncherDelegate() override = default;
 
   // content::TestLauncherDelegate implementation:
@@ -53,50 +47,42 @@ class HeadlessTestLauncherDelegate : public content::TestLauncherDelegate {
 
  protected:
   content::ContentMainDelegate* CreateContentMainDelegate() override {
-    // Use HeadlessBrowserTest::options() or HeadlessBrowserContextOptions to
-    // modify these defaults.
-    HeadlessBrowser::Options::Builder options_builder;
-    std::unique_ptr<HeadlessBrowserImpl> browser(
-        new HeadlessBrowserImplForTest(options_builder.Build()));
-    return new HeadlessContentMainDelegate(std::move(browser));
+    return new HeadlessContentMainDelegate(
+        std::make_unique<HeadlessBrowserImpl>(base::DoNothing()));
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HeadlessTestLauncherDelegate);
 };
 
 }  // namespace
 }  // namespace headless
 
 int main(int argc, char** argv) {
+  base::test::AllowCheckIsTestForTesting();
   base::CommandLine::Init(argc, argv);
   size_t parallel_jobs = base::NumParallelJobs(/*cores_per_job=*/2);
-  if (parallel_jobs == 0U)
+  if (parallel_jobs == 0U) {
     return 1;
+  }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  // Set core dump limit to 0 for Linux/ChromeOS.
+  // Some tests intentionally cause renderer crashes, which may cause a core
+  // dump on unix systems, which is slow and usually causes a test to time-out.
+  struct rlimit limit = {0, 0};
+  if (setrlimit(RLIMIT_CORE, &limit) != 0) {
+    PLOG(WARNING) << "Failed to set core dump limit";
+  }
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_WIN)
   // Load and pin user32.dll to avoid having to load it once tests start while
   // on the main thread loop where blocking calls are disallowed.
   base::win::PinUser32();
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
   // Setup a working test environment for the network service in case it's used.
   // Only create this object in the utility process, so that its members don't
   // interfere with other test objects in the browser process.
   std::unique_ptr<content::NetworkServiceTestHelper>
-      network_service_test_helper;
-  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kProcessType) == switches::kUtilityProcess) {
-    network_service_test_helper =
-        std::make_unique<content::NetworkServiceTestHelper>();
-    headless::HeadlessContentUtilityClient::
-        SetNetworkBinderCreationCallbackForTests(base::BindRepeating(
-            [](content::NetworkServiceTestHelper* helper,
-               service_manager::BinderRegistry* registry) {
-              helper->RegisterNetworkBinders(registry);
-            },
-            network_service_test_helper.get()));
-  }
+      network_service_test_helper = content::NetworkServiceTestHelper::Create();
 
   headless::HeadlessTestLauncherDelegate launcher_delegate;
   return LaunchTests(&launcher_delegate, parallel_jobs, argc, argv);

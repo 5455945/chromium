@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,20 +14,43 @@ function postToWindowClients(msg) {
 }
 
 self.addEventListener('message', e => {
-  const fetchPromise = self.registration.backgroundFetch.fetch(
-    'sw-fetch', '/background_fetch/types_of_cheese.txt');
+  let url = '/background_fetch/types_of_cheese.txt';
+  if (e.data && e.data.url) {
+    url = e.data.url;
+  }
+  const id = 'sw-fetch-' + Math.random().toString();
+  const fetchPromise = self.registration.backgroundFetch.fetch(id, url);
   if (e.data === 'fetchnowait')
     postToWindowClients('ok');
-  else if (e.data === 'fetch')
-    fetchPromise.catch(e => postToWindowClients('permissionerror'));
+  else if (e.data === 'fetch' || (e.data && e.data.url))
+    fetchPromise.catch(e => {
+      postToWindowClients('permissionerror');
+    });
+  else if (e.data === 'fetch_resolves')
+    fetchPromise.then(() => postToWindowClients('resolved'))
+                .catch(e => {
+                  postToWindowClients(e.name);
+                });
   else
     postToWindowClients('unexpected message');
 });
 
 // Background Fetch event listeners.
 self.addEventListener('backgroundfetchsuccess', e => {
-  e.waitUntil(e.updateUI({title: 'New Fetched Title!'}).then(
-      () => postToWindowClients(e.type)));
+  e.waitUntil(e.updateUI({title: 'New Fetched Title!'}).then(async () => {
+    if (e.registration.id === 'check-response-type') {
+      const records = await e.registration.matchAll();
+      const response = await records[0].responseReady;
+      return postToWindowClients(response.type);
+    }
+    if (e.registration.id === 'check-secret-header') {
+      const records = await e.registration.matchAll();
+      const response = await records[0].responseReady;
+      const val = response.headers.get('X-Secret-Server-Header');
+      return postToWindowClients(val ? val : 'null');
+    }
+    return postToWindowClients(e.type);
+  }));
 });
 
 self.addEventListener('backgroundfetchfail', e => {

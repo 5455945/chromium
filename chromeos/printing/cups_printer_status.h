@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,38 @@
 
 #include <string>
 
+#include "base/component_export.h"
 #include "base/containers/flat_set.h"
 #include "base/time/time.h"
-#include "chromeos/chromeos_export.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
+#include "base/values.h"
+#include "printing/cups_printer_status_reason_ash.h"
 
 namespace chromeos {
+
+// Holds information about authentication required by a printer.
+struct PrinterAuthenticationInfo {
+  // URI of OAuth2 Authorization Server and scope. Empty strings if not set.
+  std::string oauth_server;
+  std::string oauth_scope;
+
+  bool operator==(const PrinterAuthenticationInfo& other) const {
+    return oauth_server == other.oauth_server &&
+           oauth_scope == other.oauth_scope;
+  }
+};
 
 // A container for the results of a printer status query. A printer status query
 // can return multiple error reasons so CupsPrinterStatus contains multiple
 // CupsPrinterStatusReasons. |timestamp| is set at the time of CupsPrinterStatus
 // creation.
-class CHROMEOS_EXPORT CupsPrinterStatus {
+class COMPONENT_EXPORT(CHROMEOS_PRINTING) CupsPrinterStatus {
  public:
   // A combination of a reason, which describes the state of a printer, and a
   // severity, which is the level of seriousness of that state.
-  class CHROMEOS_EXPORT CupsPrinterStatusReason {
+  class COMPONENT_EXPORT(CHROMEOS_PRINTING) CupsPrinterStatusReason {
    public:
-    using Reason = crosapi::mojom::StatusReason::Reason;
-    using Severity = crosapi::mojom::StatusReason::Severity;
+    using Reason = ::printing::CupsPrinterStatusReason;
+    using Severity = ::printing::CupsPrinterStatusSeverity;
 
     CupsPrinterStatusReason(const Reason& reason, const Severity& severity);
     ~CupsPrinterStatusReason();
@@ -59,11 +72,20 @@ class CHROMEOS_EXPORT CupsPrinterStatus {
 
   ~CupsPrinterStatus();
 
+  bool operator==(const CupsPrinterStatus& other) const {
+    return status_reasons_ == other.status_reasons_ &&
+           auth_info_ == other.auth_info_;
+  }
+
   const std::string& GetPrinterId() const;
 
   // Returns set of status reasons. Each reason describing status of the
   // printer.
   const base::flat_set<CupsPrinterStatusReason>& GetStatusReasons() const;
+
+  const PrinterAuthenticationInfo& GetAuthenticationInfo() const {
+    return auth_info_;
+  }
 
   const base::Time& GetTimestamp() const;
 
@@ -71,9 +93,14 @@ class CHROMEOS_EXPORT CupsPrinterStatus {
   void AddStatusReason(const CupsPrinterStatusReason::Reason& reason,
                        const CupsPrinterStatusReason::Severity& severity);
 
+  void SetAuthenticationInfo(const PrinterAuthenticationInfo& auth_info);
+
+  base::DictValue ConvertToValue() const;
+
  private:
   std::string printer_id_;
   base::flat_set<CupsPrinterStatusReason> status_reasons_;
+  PrinterAuthenticationInfo auth_info_;
   base::Time timestamp_;
 };
 

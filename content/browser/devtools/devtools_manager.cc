@@ -1,52 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/devtools/devtools_manager.h"
 
-#include "base/bind.h"
-#include "content/browser/devtools/devtools_agent_host_impl.h"
-#include "content/browser/devtools/devtools_http_handler.h"
-#include "content/browser/devtools/devtools_pipe_handler.h"
-#include "content/public/browser/browser_thread.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/memory_dump_manager.h"
+#include "content/browser/devtools/devtools_session.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/devtools_socket_factory.h"
 #include "content/public/common/content_client.h"
 
 namespace content {
-
-// static
-void DevToolsAgentHost::StartRemoteDebuggingServer(
-    std::unique_ptr<DevToolsSocketFactory> server_socket_factory,
-    const base::FilePath& active_port_output_directory,
-    const base::FilePath& debug_frontend_dir) {
-  DevToolsManager* manager = DevToolsManager::GetInstance();
-  if (!manager->delegate())
-    return;
-  manager->SetHttpHandler(std::make_unique<DevToolsHttpHandler>(
-      manager->delegate(), std::move(server_socket_factory),
-      active_port_output_directory, debug_frontend_dir));
-}
-
-// static
-void DevToolsAgentHost::StartRemoteDebuggingPipeHandler(
-    base::OnceClosure on_disconnect) {
-  DevToolsManager* manager = DevToolsManager::GetInstance();
-  manager->SetPipeHandler(
-      std::make_unique<DevToolsPipeHandler>(std::move(on_disconnect)));
-}
-
-// static
-void DevToolsAgentHost::StopRemoteDebuggingServer() {
-  DevToolsManager* manager = DevToolsManager::GetInstance();
-  manager->SetHttpHandler(nullptr);
-}
-
-// static
-void DevToolsAgentHost::StopRemoteDebuggingPipeHandler() {
-  DevToolsManager* manager = DevToolsManager::GetInstance();
-  manager->SetPipeHandler(nullptr);
-}
 
 // static
 DevToolsManager* DevToolsManager::GetInstance() {
@@ -55,18 +19,29 @@ DevToolsManager* DevToolsManager::GetInstance() {
 
 DevToolsManager::DevToolsManager()
     : delegate_(
-          GetContentClient()->browser()->CreateDevToolsManagerDelegate()) {}
-
-DevToolsManager::~DevToolsManager() = default;
-
-void DevToolsManager::SetHttpHandler(
-    std::unique_ptr<DevToolsHttpHandler> http_handler) {
-  http_handler_ = std::move(http_handler);
+          GetContentClient()->browser()->CreateDevToolsManagerDelegate()) {
+  base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
+      this, "DevToolsManager",
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
-void DevToolsManager::SetPipeHandler(
-    std::unique_ptr<DevToolsPipeHandler> pipe_handler) {
-  pipe_handler_ = std::move(pipe_handler);
+void DevToolsManager::ShutdownForTests() {
+  base::Singleton<DevToolsManager>::OnExit(nullptr);
+}
+
+DevToolsManager::~DevToolsManager() {
+  base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
+      this);
+}
+
+bool DevToolsManager::OnMemoryDump(
+    const base::trace_event::MemoryDumpArgs& args,
+    base::trace_event::ProcessMemoryDump* pmd) {
+  auto* dump = pmd->CreateAllocatorDump("devtools/sessions");
+  dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameObjectCount,
+                  base::trace_event::MemoryAllocatorDump::kUnitsObjects,
+                  DevToolsSession::GetRootSessionCount());
+  return true;
 }
 
 }  // namespace content

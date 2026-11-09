@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 #define COMPONENTS_CONTENT_SETTINGS_CORE_BROWSER_CONTENT_SETTINGS_GLOBAL_VALUE_MAP_H_
 
 #include <map>
+#include <optional>
 
 #include "components/content_settings/core/browser/content_settings_provider.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 
 namespace content_settings {
@@ -22,19 +24,22 @@ class RuleIterator;
 class GlobalValueMap {
  public:
   GlobalValueMap();
+
+  GlobalValueMap(const GlobalValueMap&) = delete;
+  GlobalValueMap& operator=(const GlobalValueMap&) = delete;
+
   ~GlobalValueMap();
 
   // Returns nullptr to indicate the RuleIterator is empty.
   std::unique_ptr<RuleIterator> GetRuleIterator(
       ContentSettingsType content_type) const;
-  void SetContentSetting(ContentSettingsType content_type,
-                         ContentSetting setting);
-  ContentSetting GetContentSetting(ContentSettingsType content_type) const;
+  void SetPermissionSetting(ContentSettingsType content_type,
+                            std::optional<PermissionSetting> setting);
+  std::optional<PermissionSetting> GetPermissionSetting(
+      ContentSettingsType content_type) const;
 
  private:
-  std::map<ContentSettingsType, ContentSetting> settings_;
-
-  DISALLOW_COPY_AND_ASSIGN(GlobalValueMap);
+  std::map<ContentSettingsType, PermissionSetting> settings_;
 };
 
 }  // namespace content_settings

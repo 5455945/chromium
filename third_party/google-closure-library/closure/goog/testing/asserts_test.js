@@ -1,16 +1,8 @@
-// Copyright 2007 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.testing.assertsTest');
 goog.setTestOnly();
@@ -18,16 +10,16 @@ goog.setTestOnly();
 const Deferred = goog.require('goog.async.Deferred');
 const GoogPromise = goog.require('goog.Promise');
 const IterIterator = goog.require('goog.iter.Iterator');
-const StopIteration = goog.require('goog.iter.StopIteration');
 const StructsMap = goog.require('goog.structs.Map');
 const StructsSet = goog.require('goog.structs.Set');
 const TestCase = goog.require('goog.testing.TestCase');
 const asserts = goog.require('goog.testing.asserts');
 const dom = goog.require('goog.dom');
 const googArray = goog.require('goog.array');
+const googIter = goog.require('goog.iter');
 const product = goog.require('goog.userAgent.product');
 const testSuite = goog.require('goog.testing.testSuite');
-const userAgent = goog.require('goog.userAgent');
+const throwException = goog.require('goog.async.throwException');
 
 const SUPPORTS_TYPED_ARRAY =
     typeof Uint8Array === 'function' && typeof Uint8Array.of === 'function';
@@ -41,13 +33,14 @@ const implicitlyFalse = [false, 0, '', null, undefined, NaN];
  * rejection.
  * @param {boolean} swallowUnhandledRejections
  * @param {function(function(function(?), function(?))): !IThenable<?>} factory
+ * @suppress {strictMissingProperties} suppression added to enable type checking
  */
 async function internalTestAssertRejects(swallowUnhandledRejections, factory) {
   try {
-    // TODO(b/136116638): Stop the unhandled rejection handler from firing
+    // TODO(user): Stop the unhandled rejection handler from firing
     // rather than swallowing the errors.
     if (swallowUnhandledRejections) {
-      GoogPromise.setUnhandledRejectionHandler(goog.nullFunction);
+      GoogPromise.setUnhandledRejectionHandler(() => {});
     }
 
     let e;
@@ -86,11 +79,15 @@ async function internalTestAssertRejects(swallowUnhandledRejections, factory) {
     TestCase.invalidateAssertionException(/** @type {?} */ (e));
   } finally {
     // restore the default exception handler.
-    GoogPromise.setUnhandledRejectionHandler(goog.async.throwException);
+    GoogPromise.setUnhandledRejectionHandler(throwException);
   }
 }
 
 function stringForWindowIEHelper() {
+  /**
+   * @suppress {strictMissingProperties} suppression added to enable type
+   * checking
+   */
   window.stringForWindowIEResult = _displayStringForValue(window);
 }
 
@@ -303,8 +300,9 @@ testSuite({
     assertThrowsJsUnitException(() => {
       assertNonEmptyString(['hello']);
     }, 'Expected non-empty string but was <hello> (Array)');
-    // Different browsers return different values/types in the failure message
-    // so don't bother checking if the message is exactly as expected.
+    // Different browsers return different values/types in the failure
+    // message so don't bother checking if the message is exactly as
+    // expected.
     assertThrowsJsUnitException(() => {
       assertNonEmptyString(dom.createTextNode('hello'));
     });
@@ -393,6 +391,19 @@ testSuite({
     assertThrowsJsUnitException(() => {
       assertObjectEquals(obj5, obj4);
     });
+
+    // Check with identical Trusted Types instances.
+    if (typeof window.trustedTypes !== 'undefined') {
+      const policy = trustedTypes.createPolicy('testAssertObjectEquals', {
+        createHTML: (s) => {
+          return s;
+        }
+      });
+
+      const tt1 = policy.createHTML('hello');
+      const tt2 = policy.createHTML('hello');
+      assertObjectEquals(tt1, tt2);
+    }
   },
 
   testAssertObjectNotEquals() {
@@ -432,6 +443,19 @@ testSuite({
     if (SUPPORTS_TYPED_ARRAY) {
       assertObjectNotEquals(
           new Uint32Array([1, 2, 3]), new Uint32Array([1, 4, 3]));
+    }
+
+    // Check with different Trusted Types instances.
+    if (typeof window.trustedTypes !== 'undefined') {
+      const policy = trustedTypes.createPolicy('testAssertObjectNotEquals', {
+        createHTML: (s) => {
+          return s;
+        }
+      });
+
+      const tt1 = policy.createHTML('hello');
+      const tt2 = policy.createHTML('world');
+      assertObjectNotEquals(tt1, tt2);
     }
   },
 
@@ -574,6 +598,13 @@ testSuite({
         Uint16Array.of(1, 3, 5), Uint16Array.of(0, 1, 3, 5, 7).subarray(1, 4));
   },
 
+  testAssertObjectEqualsArrayBufferContents() {
+    if (!SUPPORTS_TYPED_ARRAY) return;  // not supported in IE<11
+    assertObjectEquals(
+        'Same ArrayBuffer contents should be equal',
+        Uint16Array.of(1, 2, 3).buffer, Uint16Array.of(1, 2, 3).buffer);
+  },
+
   testAssertObjectNotEqualsMutatedTypedArray() {
     if (!SUPPORTS_TYPED_ARRAY) return;  // not supported in IE<11
 
@@ -627,6 +658,7 @@ testSuite({
 
     // Check mutation.
     const arr1 = BigInt64Array.of(BigInt(2), BigInt(-5), BigInt(7));
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const arr2 = BigInt64Array.from(arr1);
     assertObjectEquals('BigInt64Arrays should be equal', arr1, arr2);
     ++arr1[1];
@@ -652,6 +684,16 @@ testSuite({
     assertThrowsJsUnitException(() => {
       assertObjectEquals(Uint8Array.of(1, 2), Uint8Array.of(3, 2));
     });
+  },
+
+  testAssertObjectNotEqualsArrayBufferContents() {
+    if (!SUPPORTS_TYPED_ARRAY) return;  // not supported in IE<11
+    assertObjectNotEquals(
+        'Different ArrayBuffer contents should not equal',
+        Uint16Array.of(1, 3, 2).buffer, Uint16Array.of(1, 2, 3).buffer);
+    assertObjectNotEquals(
+        'Different ArrayBuffer contents should not equal',
+        Uint16Array.of(1, 2, 3, 4).buffer, Uint16Array.of(1, 2, 3).buffer);
   },
 
   testAssertObjectNotEqualsTypedArrayOneExtra() {
@@ -689,21 +731,37 @@ testSuite({
     };
     Thing.prototype.__iterator__ = function() {
       const iter = new IterIterator;
+      /**
+       * @suppress {strictMissingProperties} suppression added to enable
+       * type checking
+       */
       iter.index = 0;
+      /**
+       * @suppress {strictMissingProperties} suppression added to enable
+       * type checking
+       */
       iter.thing = this;
+      /**
+       * @return {!IIterableResult<string>}
+       * @override
+       */
       iter.next = function() {
         if (this.index < this.thing.what.length) {
-          return this.thing.what[this.index++].split('@')[0];
+          return googIter.createEs6IteratorYield(
+              this.thing.what[this.index++].split('@')[0]);
         } else {
-          throw StopIteration;
+          return googIter.ES6_ITERATOR_DONE;
         }
       };
+
       return iter;
     };
 
     const thing1 = new Thing();
+    /** @suppress {checkTypes} suppression added to enable type checking */
     thing1.name = 'thing1';
     const thing2 = new Thing();
+    /** @suppress {checkTypes} suppression added to enable type checking */
     thing2.name = 'thing2';
     thing1.add('red', 'fish');
     thing1.add('blue', 'fish');
@@ -722,6 +780,22 @@ testSuite({
     assertObjectEquals(new Date(2010, 0, 1), date);
     assertThrowsJsUnitException(
         goog.partial(assertObjectEquals, date, dateWithMilliseconds));
+  },
+
+
+  testAssertObjectEqualsWithCustomComparatorErrorMessage() {
+    class A {}
+
+    asserts.registerComparator(
+        A.prototype, (a, b, cmp) => 'pretty error message');
+    let exception = assertThrowsJsUnitException(() => {
+      assertObjectEquals(new A(), new A());
+    });
+    assertEquals('pretty error message', exception.message);
+    exception = assertThrowsJsUnitException(() => {
+      assertObjectEquals({a: new A()}, {a: new A()});
+    });
+    assertContains('a: pretty error message', exception.message);
   },
 
   testAssertObjectEqualsSparseArrays() {
@@ -804,6 +878,10 @@ testSuite({
   testAssertObjectEqualsArraysWithExtraProps() {
     const arr1 = [1];
     const arr2 = [1];
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     arr2.foo = 3;
 
     assertThrowsJsUnitException(() => {
@@ -843,11 +921,18 @@ testSuite({
     }, 'Expected 2 elements: [0,1], got 1 elements: [0]');
   },
 
+  testAssertSameElementsOnStructsSet() {
+    assertSameElements({0: 0, 1: 1, length: 2}, new StructsSet([0, 1]));
+    assertThrowsJsUnitException(() => {
+      assertSameElements({0: 0, 1: 1, length: 2}, new StructsSet([0]));
+    }, 'Expected 2 elements: [0,1], got 1 elements: [0]');
+  },
+
   testAssertSameElementsWithBadArguments() {
     const ex = assertThrowsJsUnitException(
         /** @suppress {checkTypes} */
         () => {
-          assertSameElements([], new StructsSet());
+          assertSameElements([], new StructsMap());
         });
     assertContains('actual', ex.toString());
     assertContains('array-like or iterable', ex.toString());
@@ -1026,8 +1111,8 @@ testSuite({
   },
 
   /**
-   * Tests `assertContains` and 'assertNotContains` with an arbitrary type that
-   * has a custom `indexOf`.
+   * Tests `assertContains` and 'assertNotContains` with an arbitrary type
+   * that has a custom `indexOf`.
    */
   testAssertContainsAndAssertNotContainsOnCustomObjectWithIndexof() {
     const valueContained = {toString: () => 'I am in'};
@@ -1116,15 +1201,15 @@ testSuite({
 
   testAssertThrowsThrowsIfJsUnitException() {
     // Asserts that assertThrows will throw a JsUnitException if the method
-    // passed to assertThrows throws a JsUnitException of its own. assertThrows
-    // should not be used for catching JsUnitExceptions.
+    // passed to assertThrows throws a JsUnitException of its own.
+    // assertThrows should not be used for catching JsUnitExceptions.
     const e = assertThrowsJsUnitException(() => {
       assertThrows(() => {
         // We need to invalidate this exception so it's not flagged as a
-        // legitimate failure by the test framework. The only way to get at the
-        // exception thrown by assertTrue is to catch it so we can invalidate
-        // it. We then need to rethrow it so the surrounding assertThrows
-        // behaves as expected.
+        // legitimate failure by the test framework. The only way to get at
+        // the exception thrown by assertTrue is to catch it so we can
+        // invalidate it. We then need to rethrow it so the surrounding
+        // assertThrows behaves as expected.
         try {
           assertTrue(false);
         } catch (ex) {
@@ -1148,18 +1233,21 @@ testSuite({
         throw new Error('fail');
       });
     });
-    assertEquals('Call to fail()\nExpected a JsUnitException', error.message);
+    assertEquals(
+        'Call to fail()\nExpected a JsUnitException, ' +
+            'got \'Error: fail\' instead',
+        error.message);
 
     error = assertThrowsJsUnitException(() => {
-      assertThrowsJsUnitException(goog.nullFunction);
+      assertThrowsJsUnitException(() => {});
     });
     assertEquals('Expected a failure', error.message);
   },
 
   testAssertNotThrows() {
     if (product.SAFARI) {
-      // TODO(b/20733468): Disabled so we can get the rest of the Closure test
-      // suite running in a continuous build. Will investigate later.
+      // TODO(user): Disabled so we can get the rest of the Closure
+      // test suite running in a continuous build. Will investigate later.
       return;
     }
 
@@ -1298,8 +1386,8 @@ testSuite({
     // The following test fails unexpectedly. The bug is tracked at
     // http://code.google.com/p/closure-library/issues/detail?id=419
     // assertThrows(
-    //     'assertArrayEquals distinguishes undefined items from sparse arrays',
-    //     function() {
+    //     'assertArrayEquals distinguishes undefined items from sparse
+    //     arrays', function() {
     //       assertArrayEquals(a1, a2);
     //     });
 
@@ -1349,7 +1437,8 @@ testSuite({
     a2[-1] = -1;
     // The following test fails unexpectedly. The bug is tracked at
     // http://code.google.com/p/closure-library/issues/detail?id=418
-    // assertThrows('assertObjectEquals compares negative indexes', function() {
+    // assertThrows('assertObjectEquals compares negative indexes',
+    // function() {
     //   assertObjectEquals(a1, a2);
     // });
   },
@@ -1417,6 +1506,23 @@ testSuite({
         asserts.findDifferences(new Set(['a', 'b']), new Set(['b', 'a'])));
   },
 
+  testFindDifferences_customNoOpPredicate_equal() {
+    const findDifferences = (a, b) => asserts.findDifferences(
+        a, b, () => asserts.EQUALITY_PREDICATE_CANT_PROCESS);
+    assertNull(findDifferences(true, true));
+    assertNull(findDifferences(null, null));
+    assertNull(findDifferences(undefined, undefined));
+    assertNull(findDifferences(1, 1));
+    assertNull(findDifferences([1, 'a'], [1, 'a']));
+    assertNull(findDifferences([[1, 2], [3, 4]], [[1, 2], [3, 4]]));
+    assertNull(findDifferences([{a: 1, b: 2}], [{b: 2, a: 1}]));
+    assertNull(findDifferences(null, null));
+    assertNull(findDifferences(undefined, undefined));
+    assertNull(findDifferences(
+        new Map([['a', 1], ['b', 2]]), new Map([['b', 2], ['a', 1]])));
+    assertNull(findDifferences(new Set(['a', 'b']), new Set(['b', 'a'])));
+  },
+
   testFindDifferences_unequal() {
     assertNotNull(asserts.findDifferences(true, false));
     assertNotNull(asserts.findDifferences([{a: 1, b: 2}], [{a: 2, b: 1}]));
@@ -1442,6 +1548,35 @@ testSuite({
     assertNotNull(
         'Values have different types"',
         asserts.findDifferences(new Set(['1']), new Set([1])));
+  },
+
+  testFindDifferences_customNoOpPredicate_unequal() {
+    const findDifferences = (a, b) => asserts.findDifferences(
+        a, b, () => asserts.EQUALITY_PREDICATE_CANT_PROCESS);
+    assertNotNull(findDifferences(true, false));
+    assertNotNull(findDifferences([{a: 1, b: 2}], [{a: 2, b: 1}]));
+    assertNotNull(findDifferences([{a: 1}], [{a: 1, b: [2]}]));
+    assertNotNull(findDifferences([{a: 1, b: [2]}], [{a: 1}]));
+
+    assertNotNull(
+        'Second map is missing key "a"; first map is missing key "b"',
+        findDifferences(new Map([['a', 1]]), new Map([['b', 2]])));
+    assertNotNull(
+        'Value for key "a" differs by value',
+        findDifferences(new Map([['a', '1']]), new Map([['a', '2']])));
+    assertNotNull(
+        'Value for key "a" differs by type',
+        findDifferences(new Map([['a', '1']]), new Map([['a', 1]])));
+
+    assertNotNull(
+        'Second set is missing key "a"',
+        findDifferences(new Set(['a', 'b']), new Set(['b'])));
+    assertNotNull(
+        'First set is missing key "b"',
+        findDifferences(new Set(['a']), new Set(['a', 'b'])));
+    assertNotNull(
+        'Values have different types"',
+        findDifferences(new Set(['1']), new Set([1])));
   },
 
   testFindDifferences_arrays_nonNaturalKeys_notConfsuedForSparseness() {
@@ -1570,15 +1705,58 @@ testSuite({
         createBinTree(4, null), createBinTree(5, null)));
   },
 
-  testStringForWindowIE() {
-    if (userAgent.IE && !userAgent.isVersionOrHigher('8')) {
-      // NOTE(user): This test sees of we are being affected by a JScript bug
-      // in try/finally handling. This bug only affects the lowest try/finally
-      // block in the stack. Calling this function via VBScript allows
-      // us to run the test synchronously in an empty JS stack.
-      window.execScript('stringForWindowIEHelper()', 'vbscript');
-      assertEquals('<[object]> (Object)', window.stringForWindowIEResult);
-    }
+  testFindDifferences_customEquality() {
+    const A = class {};
+    const B = class extends A {};
+    const C = class extends A {};
+    const D = class extends C {};
+
+    // Asserts that the result of findDifferences on a and b results in the
+    // given failure. Because findDifferences will not output the actual failure
+    // message for root types, we have to parse the failure message for types
+    // with paths.
+    const assertFindDifferencesFailure = (a, b, failure) => assertEquals(
+        failure,
+        asserts.findDifferences([a], [b])
+            .split('\n')[1]  // There will be one failure, on the 0th element.
+            .split(':')[1]   // We want the message on the RHS of the index.
+            .substring(1)    // Skip the leading space.
+    );
+
+    // Test registration of one comparator. All subtypes of A should use this
+    // comparator.
+    const aDifferences = 'hello';
+    asserts.registerComparator(A.prototype, (a, b, cmp) => aDifferences);
+    assertFindDifferencesFailure(new A(), new A(), aDifferences);
+    assertFindDifferencesFailure(new B(), new C(), aDifferences);
+    assertFindDifferencesFailure(new C(), new B(), aDifferences);
+    assertFindDifferencesFailure(new C(), new A(), aDifferences);
+
+    // Test registration of two comparators on subtypes. We should only use
+    // the comparator for B if _both_ arguments are B.
+    const bDifferences = 'goodbye';
+    asserts.registerComparator(B.prototype, (a, b, cmp) => bDifferences);
+    assertFindDifferencesFailure(new A(), new A(), aDifferences);
+    assertFindDifferencesFailure(new B(), new C(), aDifferences);
+    assertFindDifferencesFailure(new C(), new B(), aDifferences);
+    assertFindDifferencesFailure(new B(), new B(), bDifferences);
+
+    // Test registration of comparators on disjoint types. We should use the
+    // comparator for C on its subclass D, and use A otherwise.
+    const cDifferences = 'hello again';
+    asserts.registerComparator(C.prototype, (a, b, cmp) => cDifferences);
+    assertFindDifferencesFailure(new C(), new D(), cDifferences);
+    assertFindDifferencesFailure(new B(), new D(), aDifferences);
+    assertFindDifferencesFailure(new A(), new D(), aDifferences);
+
+    // Test that we can clear out these comparators correctly. Note that if
+    // a test above fails, we can end up with some prototypes still in our
+    // global registration list, but because the classes are anonymous, they
+    // cannot break other code.
+    asserts.clearCustomComparator(B.prototype);
+    asserts.clearCustomComparator(C.prototype);
+    assertFindDifferencesFailure(new C(), new D(), aDifferences);
+    asserts.clearCustomComparator(A.prototype);
   },
 
   testStringSamePrefix() {
@@ -1683,6 +1861,7 @@ testSuite({
 
   testToArrayForIterable() {
     const s = new Set([3]);
+    /** @suppress {visibility} suppression added to enable type checking */
     const arr = asserts.toArray_(s);
     assertEquals(3, arr[0]);
   },

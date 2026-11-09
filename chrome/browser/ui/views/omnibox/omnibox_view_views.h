@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,21 +10,27 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/supports_user_data.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_sub_menu_model.h"
-#include "components/omnibox/browser/omnibox_view.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_view.h"
+#include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_context_menu_mixin.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/search_engines/template_url_service_observer.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_observer.h"
+#include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/animation/multi_animation.h"
 #include "ui/gfx/range/range.h"
 #include "ui/views/animation/animation_delegate_views.h"
@@ -32,13 +38,12 @@
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ui/base/ime/chromeos/input_method_manager.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ui/base/ime/ash/input_method_manager.h"
 #endif
 
 class LocationBarView;
-class OmniboxClient;
-class OmniboxPopupContentsView;
+class IconLabelBubbleView;
 
 namespace content {
 class WebContents;
@@ -52,26 +57,57 @@ namespace ui {
 class OSExchangeData;
 }  // namespace ui
 
-// Views-implementation of OmniboxView.
-class OmniboxViewViews : public OmniboxView,
-                         public views::Textfield,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-                         public chromeos::input_method::InputMethodManager::
-                             CandidateWindowObserver,
-#endif
-                         public views::TextfieldController,
-                         public ui::CompositorObserver,
-                         public TemplateURLServiceObserver {
- public:
-  METADATA_HEADER(OmniboxViewViews);
+// Stores omnibox state for each tab.
+struct OmniboxState : public base::SupportsUserData::Data {
+  OmniboxState(const OmniboxEditModel::State& model_state,
+               const gfx::Range& selection,
+               const gfx::Range& saved_selection_for_focus_change,
+               const bool show_full_url = false);
 
+  ~OmniboxState() override;
+
+  const OmniboxEditModel::State model_state;
+
+  // We store both the actual selection and any saved selection (for when the
+  // omnibox is not focused).  This allows us to properly handle cases like
+  // selecting text, tabbing out of the omnibox, switching tabs away and back,
+  // and tabbing back into the omnibox.
+  const gfx::Range selection;
+  const gfx::Range saved_selection_for_focus_change;
+  const bool show_full_url;
+};
+
+// Views-implementation of OmniboxView.
+class OmniboxViewViews
+    : public OmniboxView,
+      public OmniboxContextMenuMixin<views::Textfield>,
+#if BUILDFLAG(IS_CHROMEOS)
+      public ash::input_method::InputMethodManager::CandidateWindowObserver,
+#endif
+      public views::TextfieldController,
+      public ui::CompositorObserver,
+      public TemplateURLServiceObserver,
+      public content::WebContentsObserver {
+  // TODO(crbug.com/392015004): Remove this macro once it gets fixed.
+  //
+  // Both `OmniboxView` and `views::Textfield` (*1) have the
+  // `SANITIZED_OBJECT` macro, hence there is ambiguity about which
+  // `operator new` should be used (although the two `operator new` are
+  // eventually equivalent). Choose `OmniboxView` with no deep reason.
+  //
+  // (*1) Note that `views::Textfield` inherits from `views::View`, which has
+  // the `SANITIZED_OBJECT` macro.
+  INHERIT_SANITIZED_OBJECT(OmniboxView);
+
+  METADATA_HEADER(OmniboxViewViews, views::Textfield)
+
+ public:
   // Max width of the gradient mask used to smooth ElideAnimation edges.
   static const int kSmoothingGradientMaxWidth = 15;
 
-  OmniboxViewViews(OmniboxEditController* controller,
-                   std::unique_ptr<OmniboxClient> client,
-                   bool popup_window_mode,
-                   LocationBarView* location_bar,
+  OmniboxViewViews(bool popup_window_mode,
+                   OmniboxController* controller,
+                   LocationBarView* location_bar_view,
                    const gfx::FontList& font_list);
   OmniboxViewViews(const OmniboxViewViews&) = delete;
   OmniboxViewViews& operator=(const OmniboxViewViews&) = delete;
@@ -82,9 +118,7 @@ class OmniboxViewViews : public OmniboxView,
 
   // Exposes the RenderText for tests.
 #if defined(UNIT_TEST)
-  gfx::RenderText* GetRenderText() {
-    return views::Textfield::GetRenderText();
-  }
+  gfx::RenderText* GetRenderText() { return views::Textfield::GetRenderText(); }
 #endif
 
   // For use when switching tabs, this saves the current state onto the tab so
@@ -94,8 +128,15 @@ class OmniboxViewViews : public OmniboxView,
   // Called when the window's active tab changes.
   void OnTabChanged(content::WebContents* web_contents);
 
-  // Called to clear the saved state for |web_contents|.
+  // Called to clear the saved state for `web_contents`.
   void ResetTabState(content::WebContents* web_contents);
+
+  // Updates the saved state for `web_contents` with the provided `text` and
+  // optional cursor position. The cursor position is clamped to the text
+  // bounds.
+  static void SetUserTextForTab(content::WebContents* web_contents,
+                                const std::u16string& text,
+                                size_t cursor_position = std::u16string::npos);
 
   // Installs the placeholder text with the name of the current default search
   // provider. For example, if Google is the default search provider, this shows
@@ -128,73 +169,107 @@ class OmniboxViewViews : public OmniboxView,
   void SetAdditionalText(const std::u16string& additional_text) override;
   void EnterKeywordModeForDefaultSearchProvider() override;
   bool IsSelectAll() const override;
-  void GetSelectionBounds(std::u16string::size_type* start,
-                          std::u16string::size_type* end) const override;
-  size_t GetAllSelectionsLength() const override;
+  gfx::Range GetSelectionBounds() const override;
+  void SetSelectionBounds(gfx::Range selection) override;
+  bool HasSelection() const override;
   void SelectAll(bool reversed) override;
   void RevertAll() override;
   void SetFocus(bool is_user_initiated) override;
-  bool IsImeComposing() const override;
-  gfx::NativeView GetRelativeWindowForPopup() const override;
+  bool is_user_initiated_focus() const { return is_user_initiated_focus_; }
+  void ApplyFocusRingToAimButton(bool focus_aim) override;
+  bool AimButtonVisible() const override;
   bool IsImeShowingPopup() const override;
 
   // views::Textfield:
   gfx::Size GetMinimumSize() const override;
+  bool SupportsDrag() const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
+  void OnMouseCaptureLost() override;
   void OnPaint(gfx::Canvas* canvas) override;
   void ExecuteCommand(int command_id, int event_flags) override;
   void OnInputMethodChanged() override;
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
-  std::u16string GetLabelForCommandId(int command_id) const override;
-  bool IsCommandIdEnabled(int command_id) const override;
+  bool SupportsEmoji() const override;
+#if BUILDFLAG(IS_MAC)
+  bool SupportsEditableContextMenuItems() const override;
+  bool SupportsLookUp() const override;
+  bool SupportsAutoFill() const override;
+#endif
 
-  // For testing only.
-  OmniboxPopupContentsView* GetPopupContentsViewForTesting() const {
-    return popup_view_.get();
-  }
+  // OmniboxContextMenuMixinBase:
+  bool IsContextMenuForReadOnlyOmnibox() const override;
+  const gfx::FontList& FontListForContextMenu() const override;
+  bool IsContextMenuTextEditingCommandEnabled(int command_id) const override;
 
  protected:
+  // OmniboxView:
+  void UpdateSchemeStyle(const gfx::Range& range) override;
+
   // views::Textfield:
   void OnThemeChanged() override;
   bool IsDropCursorForInsertion() const override;
 
-  // Applies the given |color| to |range|. This is a wrapper method around
-  // Textfield::ApplyColor that tests can override.
+  // Wrappers around Textfield methods that tests can override.
   virtual void ApplyColor(SkColor color, const gfx::Range& range);
+  virtual void ApplyStyle(gfx::TextStyle style,
+                          bool value,
+                          const gfx::Range& range);
+
+  // Whether the client has a Full WebUI Omnibox. Constant for
+  // the lifetime of the window. Use for structural decisions: tab state
+  // ownership, painting, accessibility.
+  bool IsFullWebUIOmnibox() const override;
+  // Whether the Full WebUI Omnibox's WebUI has loaded and taken over. Flips
+  // false->true once, asynchronously. Use for behavioral decisions: focus,
+  // selection, caret and mouse gestures, all of which the Views omnibox must
+  // keep handling normally until the handoff completes.
+  virtual bool IsFullWebUIOmniboxReady() const;
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(
-      OmniboxViewViewsTest,
-      RendererInitiatedFocusPreservesCursorWhenStartingFocused);
-  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsRevealOnHoverTest, PrivateRegistry);
-  FRIEND_TEST_ALL_PREFIXES(OmniboxPopupContentsViewTest,
-                           EmitAccessibilityEvents);
+  friend class TestingOmniboxView;
+  FRIEND_TEST_ALL_PREFIXES(OmniboxPopupViewViewsTest, EmitAccessibilityEvents);
   // TODO(tommycli): Remove the rest of these friends after porting these
   // browser tests to unit tests.
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, CloseOmniboxPopupOnTextDrag);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, FriendlyAccessibleLabel);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, DoNotNavigateOnDrop);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, AyncDropCallback);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, AccessibleTextSelectBoundTest);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsAIMButtonPreferenceTest,
+                           ButtonVisibilityTogglesWithPref_OmniboxFocused);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsAIMButtonDynamicTest,
+                           QueryShowsArrowIcon);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsPlaceholderTest,
+                           ContextualTasksPlaceholderForContextualTasksPage);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsPlaceholderTest,
+                           DefaultSearchEnginePlaceholderForNewTabPage);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsPlaceholderTest,
+                           NavigationToAndFromContextualTasks);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsPlaceholderTest,
+                           TitleChangeUpdatesPlaceholder);
 
   enum class UnelisionGesture {
-    HOME_KEY_PRESSED,
-    MOUSE_RELEASE,
-    OTHER,
+    kHomeKeyPressed,
+    kMouseRelease,
+    kOther,
   };
 
   // Update the field with |text| and set the selection. |ranges| should not be
   // empty; even text with no selections must have at least 1 empty range in
   // |ranges| to indicate the cursor position.
-  void SetTextAndSelectedRanges(const std::u16string& text,
-                                const std::vector<gfx::Range>& ranges);
-
-  void SetSelectedRanges(const std::vector<gfx::Range>& ranges);
+  void SetTextAndSelectedRange(const std::u16string& text,
+                               const gfx::Range& selection);
 
   // Returns the selected text.
-  std::u16string GetSelectedText() const;
+  std::u16string_view GetSelectedText() const;
+  void UpdateAccessibleTextSelection() override;
 
   // Paste text from the clipboard into the omnibox.
   // Textfields implementation of Paste() pastes the contents of the clipboard
@@ -202,11 +277,31 @@ class OmniboxViewViews : public OmniboxView,
   // for details). The function invokes OnBefore/AfterPossibleChange() as
   // necessary.
   void OnOmniboxPaste();
+  void OnOmniboxPasteComplete(std::u16string text);
+
+  void HandleCutOrCopyAdjustments(ui::ClipboardBuffer clipboard_buffer,
+                                  std::u16string* text);
 
   // Handle keyword hint tab-to-search and tabbing through dropdown results.
   bool HandleEarlyTabActions(const ui::KeyEvent& event);
 
   void ClearAccessibilityLabel();
+
+  // Stops tail-eliding the text, so that it can scroll to keep the caret in
+  // view. `OnFocus()` does this for the focused classic omnibox. In Full WebUI
+  // mode the textfield never takes focus, so `OnMousePressed()` does it for the
+  // duration of a left press instead, letting the text follow a drag past its
+  // visible end.
+  void StopEliding();
+
+  // Elides the text again once a press is over (on release, capture loss, or
+  // a context menu handoff), undoing `StopEliding()` from `OnMousePressed()`.
+  // Does nothing while the textfield is focused.
+  void ElideAfterPress();
+
+  // Tail-elides the text and resets the scroll position, for when the
+  // textfield stops being where the user edits text.
+  void ElideAndResetScrollPosition();
 
   void SetAccessibilityLabel(const std::u16string& display_text,
                              const AutocompleteMatch& match,
@@ -216,9 +311,17 @@ class OmniboxViewViews : public OmniboxView,
   // steady-state elisions).  |gesture| is the user gesture causing unelision.
   bool UnapplySteadyStateElisions(UnelisionGesture gesture);
 
-#if defined(OS_MAC)
+  // In Full WebUI mode, shows the WebUI searchbox menu instead of the views
+  // one. Returns true if handled.
+  bool HandOffContextMenuToWebUI(const gfx::Point& point,
+                                 ui::mojom::MenuSourceType source_type);
+
+#if BUILDFLAG(IS_MAC)
   void AnnounceFriendlySuggestionText();
 #endif
+
+  // Get the preferred text input type, this checks the IME locale on Windows.
+  ui::TextInputType GetPreferredTextInputType() const;
 
   // OmniboxView:
   void SetCaretPos(size_t caret_pos) override;
@@ -229,47 +332,52 @@ class OmniboxViewViews : public OmniboxView,
                                    bool save_original_selection,
                                    bool notify_text_changed) override;
   void OnInlineAutocompleteTextMaybeChanged(
-      const std::u16string& display_text,
-      std::vector<gfx::Range> selections,
-      const std::u16string& prefix_autocompletion,
+      const std::u16string& user_text,
       const std::u16string& inline_autocompletion) override;
   void OnInlineAutocompleteTextCleared() override;
   void OnRevertTemporaryText(const std::u16string& display_text,
                              const AutocompleteMatch& match) override;
   void OnBeforePossibleChange() override;
   bool OnAfterPossibleChange(bool allow_keyword_ui_change) override;
+  void OnKeywordPlaceholderTextChange() override;
   gfx::NativeView GetNativeView() const override;
   void ShowVirtualKeyboardIfEnabled() override;
   void HideImeIfNeeded() override;
   int GetOmniboxTextLength() const override;
   void SetEmphasis(bool emphasize, const gfx::Range& range) override;
-  void UpdateSchemeStyle(const gfx::Range& range) override;
 
   // views::View
   void OnMouseMoved(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
 
   // views::Textfield:
-  bool IsItemForCommandIdDynamic(int command_id) const override;
   void OnGestureEvent(ui::GestureEvent* event) override;
-  void AboutToRequestFocusFromTabTraversal(bool reverse) override;
   bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   void OnFocus() override;
   void OnBlur() override;
-  std::u16string GetSelectionClipboardText() const override;
+  void PasteSelectionClipboard(
+      base::OnceCallback<void(bool)> callback) override;
+  void OnTextReadForPasteSelectionClipboard(
+      base::OnceCallback<void(bool)> callback,
+      std::u16string text);
   void DoInsertChar(char16_t ch) override;
   bool IsTextEditCommandEnabled(ui::TextEditCommand command) const override;
   void ExecuteTextEditCommand(ui::TextEditCommand command) override;
   bool ShouldShowPlaceholderText() const override;
 
-  // chromeos::input_method::InputMethodManager::CandidateWindowObserver:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  void UpdateAccessibleValue() override;
+
+  void ShowContextMenuForViewImplComplete(
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type);
+
+  // ash::input_method::InputMethodManager::CandidateWindowObserver:
+#if BUILDFLAG(IS_CHROMEOS)
   void CandidateWindowOpened(
-      chromeos::input_method::InputMethodManager* manager) override;
+      ash::input_method::InputMethodManager* manager) override;
   void CandidateWindowClosed(
-      chromeos::input_method::InputMethodManager* manager) override;
+      ash::input_method::InputMethodManager* manager) override;
 #endif
 
   // views::TextfieldController:
@@ -279,60 +387,79 @@ class OmniboxViewViews : public OmniboxView,
                       const ui::KeyEvent& key_event) override;
   void OnBeforeUserAction(views::Textfield* sender) override;
   void OnAfterUserAction(views::Textfield* sender) override;
+  bool OnBeforeCutOrCopy(views::Textfield* sender,
+                         std::u16string* copy_contents) override;
   void OnAfterCutOrCopy(ui::ClipboardBuffer clipboard_buffer) override;
   void OnWriteDragData(ui::OSExchangeData* data) override;
   void OnGetDragOperationsForTextfield(int* drag_operations) override;
   void AppendDropFormats(
       int* formats,
       std::set<ui::ClipboardFormatType>* format_types) override;
-  ui::mojom::DragOperation OnDrop(const ui::DropTargetEvent& event) override;
-  views::View::DropCallback GetDropCallback(
+  views::View::DropCallback CreateDropCallback(
       const ui::DropTargetEvent& event) override;
   void UpdateContextMenu(ui::SimpleMenuModel* menu_contents) override;
-
-  // ui::SimpleMenuModel::Delegate:
-  bool IsCommandIdChecked(int id) const override;
+  std::unique_ptr<ui::ScopedClipboardWriter> CreateClipboardWriter() override;
+  void UpdateSelectionClipboard() override;
 
   // ui::CompositorObserver:
   void OnCompositingDidCommit(ui::Compositor* compositor) override;
   void OnCompositingStarted(ui::Compositor* compositor,
                             base::TimeTicks start_time) override;
-  void OnCompositingEnded(ui::Compositor* compositor) override;
+  void OnDidPresentCompositorFrame(
+      ui::Compositor* compositor,
+      uint32_t frame_token,
+      const gfx::PresentationFeedback& feedback) override;
   void OnCompositingShuttingDown(ui::Compositor* compositor) override;
 
   // TemplateURLServiceObserver:
   void OnTemplateURLServiceChanged() override;
+
+  // content::WebContentsObserver:
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void TitleWasSet(content::NavigationEntry* entry) override;
 
   // Permits launch of the external protocol handler after user actions in
   // the omnibox. The handler needs to be informed that omnibox input should
   // always be considered "user gesture-triggered", lest it always return BLOCK.
   void PermitExternalProtocolHandler();
 
+  // Opens the full WebUI omnibox popup and syncs native selection state to
+  // WebUI when double-click forwarding is enabled.
+  void OpenFullWebUIOmniboxPopup(bool query_zps, bool preserve_matches = false);
+
   // Drops dragged text and updates `output_drag_op` accordingly.
   void PerformDrop(const ui::DropTargetEvent& event,
-                   ui::mojom::DragOperation& output_drag_op);
+                   ui::mojom::DragOperation& output_drag_op,
+                   std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
+
+  // Helper for updating placeholder color depending on whether its a keyword or
+  // DSE placeholder.
+  void UpdatePlaceholderTextColor();
+
+  // Returns the AI Mode page action icon view, if present, or nullptr if the
+  // view doesn't exist.
+  IconLabelBubbleView* GetAiModePageActionIconView() const;
 
   // When true, the location bar view is read only and also is has a slightly
   // different presentation (smaller font size). This is used for popups.
   bool popup_window_mode_;
 
-  std::unique_ptr<OmniboxPopupContentsView> popup_view_;
-
   // Selection persisted across temporary text changes, like popup suggestions.
-  std::vector<gfx::Range> saved_temporary_selection_;
+  gfx::Range saved_temporary_selection_;
 
   // Holds the user's selection across focus changes.  There is only a saved
   // selection if this range IsValid().
-  std::vector<gfx::Range> saved_selection_for_focus_change_;
+  gfx::Range saved_selection_for_focus_change_;
 
   // Tracking state before and after a possible change.
   State state_before_change_;
   bool ime_composing_before_change_ = false;
 
   // |location_bar_view_| can be NULL in tests.
-  LocationBarView* location_bar_view_;
+  raw_ptr<LocationBarView> location_bar_view_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // True if the IME candidate window is open. When this is true, we want to
   // avoid showing the popup. So far, the candidate window is detected only
   // on Chrome OS.
@@ -351,7 +478,19 @@ class OmniboxViewViews : public OmniboxView,
   // We select in response to a click that focuses the omnibox, but we defer
   // until release, setting this variable back to false if we saw a drag, to
   // allow the user to select just a portion of the text.
+  //
+  // This also controls whether we trigger zero-prefix suggestions on mouse
+  // release, potentially presenting the popup, which we don't want to do if the
+  // user made a selection via a click-drag gesture.
   bool select_all_on_mouse_release_ = false;
+
+  // In Full WebUI mode, whether the current click gesture requested zero-prefix
+  // suggestions on mouse release. This is set by the single click that opens
+  // the popup and is carried over to the later clicks of the same multi-click
+  // gesture, so that those clicks keep the dropdown open. Those later clicks
+  // land on the newly opened popup, which forwards them to this view for a
+  // short time (see `OmniboxPopupFullPresenter::Show()`).
+  bool click_gesture_requested_zps_ = false;
 
   // Indicates if we want to select all text in the omnibox when we get a
   // GESTURE_TAP. We want to select all only when the textfield is not in focus
@@ -377,12 +516,12 @@ class OmniboxViewViews : public OmniboxView,
 
   // The state machine for logging the Omnibox.CharTypedToRepaintLatency
   // histogram.
-  enum {
-    NOT_ACTIVE,           // Not currently tracking a char typed event.
-    CHAR_TYPED,           // Character was typed.
-    ON_PAINT_CALLED,      // Character was typed and OnPaint() called.
-    COMPOSITING_COMMIT,   // Compositing was committed after OnPaint().
-    COMPOSITING_STARTED,  // Compositing was started.
+  enum class LatencyHistogramState {
+    kNotActive,           // Not currently tracking a char typed event.
+    kCharTyped,           // Character was typed.
+    kOnPaintCalled,       // Character was typed and OnPaint() called.
+    kCompositingCommit,   // Compositing was committed after OnPaint().
+    kCompositingStarted,  // Compositing was started.
   } latency_histogram_state_;
 
   // The currently selected match, if any, with additional labelling text
@@ -396,14 +535,24 @@ class OmniboxViewViews : public OmniboxView,
   // this is set to 7 (the length of "Google ").
   int friendly_suggestion_text_prefix_length_;
 
+  // Used to track whether focus indicators have been changed to show the AI
+  // mode page action icon as focused. Only used when keyboard accessibility is
+  // disabled (which currently only happens on Mac).
+  bool aim_page_action_icon_has_fake_focus_ = false;
+
+  // Used to track whether the AIM hint has been shown during a single focus
+  // session (omnibox focused -> omnibox blurred).
+  bool aim_hint_shown_ = false;
+
+  // Tracks whether the most recent call to `SetFocus()` was user-initiated.
+  // Used during full WebUI omnibox startup handoff to determine whether to
+  // query zero-prefix suggestions (ZPS).
+  bool is_user_initiated_focus_ = false;
+
   base::ScopedObservation<ui::Compositor, ui::CompositorObserver>
       scoped_compositor_observation_{this};
   base::ScopedObservation<TemplateURLService, TemplateURLServiceObserver>
       scoped_template_url_service_observation_{this};
-
-  // Send tab to self submenu.
-  std::unique_ptr<send_tab_to_self::SendTabToSelfSubMenuModel>
-      send_tab_to_self_sub_menu_model_;
 
   PrefChangeRegistrar pref_change_registrar_;
 

@@ -1,35 +1,49 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.media.ui;
 
-import org.chromium.chrome.browser.base.SplitCompatService;
-import org.chromium.chrome.browser.base.SplitCompatUtils;
+import org.chromium.base.SplitCompatService;
+import org.chromium.build.annotations.IdentifierNameString;
+import org.chromium.build.annotations.NullMarked;
 
 /** Exposes services from {@link ChromeMediaNotificationControllerDelegate} in the base module. */
+@NullMarked
 public class ChromeMediaNotificationControllerServices {
     /** See {@link ChromeMediaNotificationControllerDelegate$PlaybackListenerServiceImpl}. */
     public static class PlaybackListenerService extends SplitCompatService {
+        @SuppressWarnings("FieldCanBeFinal") // @IdentifierNameString requires non-final
+        private static @IdentifierNameString String sImplClassName =
+                "org.chromium.chrome.browser.media.ui."
+                        + "ChromeMediaNotificationControllerDelegate$PlaybackListenerServiceImpl";
+
         public PlaybackListenerService() {
-            super(SplitCompatUtils.getIdentifierName("org.chromium.chrome.browser.media.ui."
-                    + "ChromeMediaNotificationControllerDelegate$PlaybackListenerServiceImpl"));
+            super(sImplClassName);
         }
     }
 
     /** See {@link ChromeMediaNotificationControllerDelegate$PresentationListenerServiceImpl}. */
     public static class PresentationListenerService extends SplitCompatService {
+        @SuppressWarnings("FieldCanBeFinal") // @IdentifierNameString requires non-final
+        private static @IdentifierNameString String sImplClassName =
+                "org.chromium.chrome.browser.media.ui."
+                    + "ChromeMediaNotificationControllerDelegate$PresentationListenerServiceImpl";
+
         public PresentationListenerService() {
-            super(SplitCompatUtils.getIdentifierName("org.chromium.chrome.browser.media.ui."
-                    + "ChromeMediaNotificationControllerDelegate$PresentationListenerServiceImpl"));
+            super(sImplClassName);
         }
     }
 
     /** See {@link ChromeMediaNotificationControllerDelegate$CastListenerServiceImpl}. */
     public static class CastListenerService extends SplitCompatService {
+        @SuppressWarnings("FieldCanBeFinal") // @IdentifierNameString requires non-final
+        private static @IdentifierNameString String sImplClassName =
+                "org.chromium.chrome.browser.media.ui."
+                        + "ChromeMediaNotificationControllerDelegate$CastListenerServiceImpl";
+
         public CastListenerService() {
-            super(SplitCompatUtils.getIdentifierName("org.chromium.chrome.browser.media.ui."
-                    + "ChromeMediaNotificationControllerDelegate$CastListenerServiceImpl"));
+            super(sImplClassName);
         }
     }
 }

@@ -1,33 +1,65 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
 
+#include <hb.h>
+#include <unicode/locid.h>
+#include <unicode/ulocdata.h>
+
+#include <array>
+
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/platform/language.h"
 #include "third_party/blink/renderer/platform/text/hyphenation.h"
 #include "third_party/blink/renderer/platform/text/icu_error.h"
 #include "third_party/blink/renderer/platform/text/locale_to_script_mapping.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
+#include "third_party/blink/renderer/platform/wtf/text/ignoring_ascii_case_hash.h"
 #include "third_party/blink/renderer/platform/wtf/thread_specific.h"
-
-#include <hb.h>
-#include <unicode/locid.h>
 
 namespace blink {
 
 namespace {
 
+using IgnoringCaseHashSet =
+    HashSet<String, IgnoringAsciiCaseHashTraits<String>>;
+
+IgnoringCaseHashSet CreateMacrolanguageChineseLanguageTags() {
+  // This list is from the IANA language-subtag-registry:
+  // https://www.iana.org/assignments/language-subtag-registry/language-subtag-registry
+  // where "Type: language" and "Macrolanguage: zh".
+  return IgnoringCaseHashSet{"cdo", "cjy", "cmn", "cnp", "cpx", "csp", "czh",
+                             "czo", "gan", "hak", "hnm", "hsn", "luh", "lzh",
+                             "mnp", "nan", "sjc", "wuu", "yue", "zh"};
+}
+
+const IgnoringCaseHashSet& MacrolanguageChineseLanguageTags() {
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(IgnoringCaseHashSet, tags,
+                                  (CreateMacrolanguageChineseLanguageTags()));
+  return tags;
+}
+
+bool ComputeIsMacrolanguageChinese(const String& value) {
+  StringView language_tag{value};
+  language_tag = language_tag.substr(0, value.find('-'));
+  return MacrolanguageChineseLanguageTags()
+      .Contains<IgnoringAsciiCaseHashTranslator>(language_tag);
+}
+
 struct PerThreadData {
-  HashMap<AtomicString, scoped_refptr<LayoutLocale>, CaseFoldingHash>
+  HashMap<AtomicString,
+          scoped_refptr<LayoutLocale>,
+          IgnoringAsciiCaseHashTraits<AtomicString>>
       locale_map;
-  const LayoutLocale* default_locale = nullptr;
-  const LayoutLocale* system_locale = nullptr;
-  const LayoutLocale* default_locale_for_han = nullptr;
+  raw_ptr<const LayoutLocale> default_locale = nullptr;
+  raw_ptr<const LayoutLocale> system_locale = nullptr;
+  raw_ptr<const LayoutLocale> default_locale_for_han = nullptr;
   bool default_locale_for_han_computed = false;
   String current_accept_languages;
 };
@@ -37,39 +69,138 @@ PerThreadData& GetPerThreadData() {
   return *data;
 }
 
-}  // namespace
+// Expect returned buffer size is 1 to match QuotesData type
+constexpr int kUcharDelimMaxLength = 1;
 
-static hb_language_t ToHarfbuzLanguage(const AtomicString& locale) {
-  std::string locale_as_latin1 = locale.Latin1();
-  return hb_language_from_string(locale_as_latin1.data(),
-                                 locale_as_latin1.length());
+struct DelimiterConfig {
+  ULocaleDataDelimiterType type;
+  std::array<UChar, kUcharDelimMaxLength> data;
+};
+
+// Use ICU ulocdata to find quote delimiters for an ICU locale
+// https://unicode-org.github.io/icu-docs/apidoc/dev/icu4c/ulocdata_8h.html#a0bf1fdd1a86918871ae2c84b5ce8421f
+scoped_refptr<QuotesData> GetQuotesDataForIcuLocale(const char* locale) {
+  UErrorCode status = U_ZERO_ERROR;
+
+  auto ulocdata_cleanup = [](ULocaleData* uld) { ulocdata_close(uld); };
+  std::unique_ptr<ULocaleData, decltype(ulocdata_cleanup)> uld(
+      ulocdata_open(locale, &status), ulocdata_cleanup);
+  if (U_FAILURE(status)) {
+    return nullptr;
+  }
+
+  struct DelimiterConfig delimiters[] = {
+      {ULOCDATA_QUOTATION_START},
+      {ULOCDATA_QUOTATION_END},
+      {ULOCDATA_ALT_QUOTATION_START},
+      {ULOCDATA_ALT_QUOTATION_END},
+  };
+  for (DelimiterConfig& delim : delimiters) {
+    const int32_t delim_result_length = ulocdata_getDelimiter(
+        uld.get(), delim.type, delim.data.data(), delim.data.size(), &status);
+    if (U_FAILURE(status) || delim_result_length != 1) {
+      return nullptr;
+    }
+  }
+  const auto& open1 = delimiters[0].data;
+  const auto& close1 = delimiters[1].data;
+  const auto& open2 = delimiters[2].data;
+  const auto& close2 = delimiters[3].data;
+  return QuotesData::Create(open1[0], close1[0], open2[0], close2[0]);
 }
 
-// SkFontMgr requires script-based locale names, like "zh-Hant" and "zh-Hans",
-// instead of "zh-CN" and "zh-TW".
+scoped_refptr<QuotesData> GetQuotesDataForLanguage(const StringView& lang) {
+  UErrorCode status = U_ZERO_ERROR;
+  // Use uloc_openAvailableByType() to find all CLDR recognized locales
+  // https://unicode-org.github.io/icu-docs/apidoc/dev/icu4c/uloc_8h.html#aa0332857185774f3e0520a0823c14d16
+  auto uenum_cleanup = [](UEnumeration* enumerator) {
+    uenum_close(enumerator);
+  };
+  std::unique_ptr<UEnumeration, decltype(uenum_cleanup)> ulocales(
+      uloc_openAvailableByType(ULOC_AVAILABLE_DEFAULT, &status), uenum_cleanup);
+  if (U_FAILURE(status)) {
+    return nullptr;
+  }
+
+  while (const char* loc = uenum_next(ulocales.get(), nullptr, &status)) {
+    if (U_FAILURE(status)) {
+      return nullptr;
+    }
+    if (EqualIgnoringAsciiCase(loc, lang)) {
+      return GetQuotesDataForIcuLocale(loc);
+    }
+  }
+  return nullptr;
+}
+
+// Returns the Unicode Line Break Style Identifier (key "lb") value.
+// https://www.unicode.org/reports/tr35/#UnicodeLineBreakStyleIdentifier
+inline const char* LbValueFromStrictness(LineBreakStrictness strictness) {
+  switch (strictness) {
+    case LineBreakStrictness::kDefault:
+      return nullptr;  // nullptr removes any existing values.
+    case LineBreakStrictness::kNormal:
+      return "normal";
+    case LineBreakStrictness::kStrict:
+      return "strict";
+    case LineBreakStrictness::kLoose:
+      return "loose";
+  }
+  NOTREACHED();
+}
+
+inline UScriptCode NormalizeStylishVariants(UScriptCode script) {
+  if (script == USCRIPT_ARABIC_NASTALIQ) [[unlikely]] {
+    return USCRIPT_ARABIC;
+  }
+  return script;
+}
+
+}  // namespace
+
+static hb_language_t ToHarfbuzzLanguage(const AtomicString& locale) {
+  std::string locale_as_latin1 = locale.Latin1();
+  return hb_language_from_string(locale_as_latin1.data(),
+                                 static_cast<int>(locale_as_latin1.length()));
+}
+
+// SkFontMgr uses two/three-letter language code with an optional ISO 15924
+// four-letter script code, in POSIX style (with '-' as the separator,) such as
+// "zh-Hant" and "zh-Hans". See `fonts.xml`.
 static const char* ToSkFontMgrLocale(UScriptCode script) {
   switch (script) {
     case USCRIPT_KATAKANA_OR_HIRAGANA:
-      return "ja-JP";
+      return "ja";
     case USCRIPT_HANGUL:
-      return "ko-KR";
+      return "ko";
     case USCRIPT_SIMPLIFIED_HAN:
       return "zh-Hans";
     case USCRIPT_TRADITIONAL_HAN:
       return "zh-Hant";
+    case USCRIPT_ARABIC_NASTALIQ:
+      return "und-Aran";
     default:
       return nullptr;
   }
 }
 
 const char* LayoutLocale::LocaleForSkFontMgr() const {
-  if (string_for_sk_font_mgr_.empty()) {
-    const char* sk_font_mgr_locale = ToSkFontMgrLocale(script_);
-    string_for_sk_font_mgr_ =
-        sk_font_mgr_locale ? sk_font_mgr_locale : std::string();
-    if (string_for_sk_font_mgr_.empty())
-      string_for_sk_font_mgr_ = string_.Ascii();
+  if (!string_for_sk_font_mgr_.empty())
+    return string_for_sk_font_mgr_.c_str();
+
+  if (const char* sk_font_mgr_locale = ToSkFontMgrLocale(script_for_font_)) {
+    string_for_sk_font_mgr_ = sk_font_mgr_locale;
+    DCHECK(!string_for_sk_font_mgr_.empty());
+    return string_for_sk_font_mgr_.c_str();
   }
+
+  const icu::Locale locale(Ascii().c_str());
+  const char* language = locale.getLanguage();
+  string_for_sk_font_mgr_ = language && *language ? language : "und";
+  const char* script = locale.getScript();
+  if (script && *script)
+    string_for_sk_font_mgr_ = string_for_sk_font_mgr_ + "-" + script;
+  DCHECK(!string_for_sk_font_mgr_.empty());
   return string_for_sk_font_mgr_.c_str();
 }
 
@@ -107,13 +238,13 @@ const LayoutLocale* LayoutLocale::LocaleForHan(
     return content_locale;
 
   PerThreadData& data = GetPerThreadData();
-  if (UNLIKELY(!data.default_locale_for_han_computed)) {
+  if (!data.default_locale_for_han_computed) [[unlikely]] {
     // Use the first acceptLanguages that can disambiguate.
-    Vector<String> languages;
-    data.current_accept_languages.Split(',', languages);
-    for (String token : languages) {
-      token = token.StripWhiteSpace();
-      const LayoutLocale* locale = LayoutLocale::Get(AtomicString(token));
+    Vector<StringView> languages =
+        StringView(data.current_accept_languages).SplitSkippingEmpty(',');
+    for (const StringView& token : languages) {
+      const LayoutLocale* locale =
+          LayoutLocale::Get(token.StripWhiteSpace().ToAtomicString());
       if (locale->HasScriptForHan()) {
         data.default_locale_for_han = locale;
         break;
@@ -140,6 +271,12 @@ const char* LayoutLocale::LocaleForHanForSkFontMgr() const {
   return locale;
 }
 
+bool LayoutLocale::IsMacrolanguageChineseSlow() const {
+  is_macrolanguage_chinese_computed_ = true;
+  is_macrolanguage_chinese_ = ComputeIsMacrolanguageChinese(string_);
+  return is_macrolanguage_chinese_;
+}
+
 void LayoutLocale::ComputeCaseMapLocale() const {
   DCHECK(!case_map_computed_);
   case_map_computed_ = true;
@@ -148,12 +285,9 @@ void LayoutLocale::ComputeCaseMapLocale() const {
 
 LayoutLocale::LayoutLocale(const AtomicString& locale)
     : string_(locale),
-      harfbuzz_language_(ToHarfbuzLanguage(locale)),
-      script_(LocaleToScriptCodeForFontSelection(locale)),
-      script_for_han_(USCRIPT_COMMON),
-      has_script_for_han_(false),
-      hyphenation_computed_(false),
-      case_map_computed_(false) {}
+      harfbuzz_language_(ToHarfbuzzLanguage(locale)),
+      script_for_font_(LocaleToScriptCodeForFontSelection(locale)),
+      script_(NormalizeStylishVariants(script_for_font_)) {}
 
 // static
 const LayoutLocale* LayoutLocale::Get(const AtomicString& locale) {
@@ -169,10 +303,10 @@ const LayoutLocale* LayoutLocale::Get(const AtomicString& locale) {
 // static
 const LayoutLocale& LayoutLocale::GetDefault() {
   PerThreadData& data = GetPerThreadData();
-  if (UNLIKELY(!data.default_locale)) {
+  if (!data.default_locale) [[unlikely]] {
     AtomicString language = DefaultLanguage();
     data.default_locale =
-        LayoutLocale::Get(!language.IsEmpty() ? language : "en");
+        LayoutLocale::Get(!language.empty() ? language : AtomicString("en"));
   }
   return *data.default_locale;
 }
@@ -180,7 +314,7 @@ const LayoutLocale& LayoutLocale::GetDefault() {
 // static
 const LayoutLocale& LayoutLocale::GetSystem() {
   PerThreadData& data = GetPerThreadData();
-  if (UNLIKELY(!data.system_locale)) {
+  if (!data.system_locale) [[unlikely]] {
     // Platforms such as Windows can give more information than the default
     // locale, such as "en-JP" for English speakers in Japan.
     String name = icu::Locale::getDefault().getName();
@@ -212,59 +346,97 @@ void LayoutLocale::SetHyphenationForTesting(
   locale.hyphenation_ = std::move(hyphenation);
 }
 
+scoped_refptr<QuotesData> LayoutLocale::GetQuotesData() const {
+  if (quotes_data_computed_)
+    return quotes_data_;
+  quotes_data_computed_ = true;
+
+  // BCP 47 uses '-' as the delimiter but ICU uses '_'.
+  // https://tools.ietf.org/html/bcp47
+  String normalized_lang = LocaleString();
+  normalized_lang.Replace('-', '_');
+
+  // Try the exact locale first, then remove subtags one at a time.
+  wtf_size_t locale_length = normalized_lang.length();
+  while (locale_length) {
+    quotes_data_ =
+        GetQuotesDataForLanguage(StringView(normalized_lang, 0, locale_length));
+    if (quotes_data_) {
+      break;
+    }
+
+    // No exact match, try again without the last subtag.
+    wtf_size_t separator_offset = normalized_lang.rfind('_', locale_length - 1);
+    if (separator_offset == kNotFound) {
+      break;
+    }
+    locale_length = separator_offset;
+  }
+  return quotes_data_;
+}
+
 AtomicString LayoutLocale::LocaleWithBreakKeyword(
-    LineBreakIteratorMode mode) const {
-  if (string_.IsEmpty())
+    LineBreakStrictness strictness,
+    bool use_phrase) const {
+  if (string_.empty() && strictness == LineBreakStrictness::kDefault) {
     return string_;
+  }
 
   // uloc_setKeywordValue_58 has a problem to handle "@" in the original
   // string. crbug.com/697859
-  if (string_.Contains('@'))
+  if (string_.contains('@')) {
     return string_;
-
-  std::string utf8_locale = string_.Utf8();
-  Vector<char> buffer(utf8_locale.length() + 11, 0);
-  memcpy(buffer.data(), utf8_locale.c_str(), utf8_locale.length());
-
-  const char* keyword_value = nullptr;
-  switch (mode) {
-    default:
-      NOTREACHED();
-      FALLTHROUGH;
-    case LineBreakIteratorMode::kDefault:
-      // nullptr will cause any existing values to be removed.
-      break;
-    case LineBreakIteratorMode::kNormal:
-      keyword_value = "normal";
-      break;
-    case LineBreakIteratorMode::kStrict:
-      keyword_value = "strict";
-      break;
-    case LineBreakIteratorMode::kLoose:
-      keyword_value = "loose";
-      break;
   }
 
-  ICUError status;
-  int32_t length_needed = uloc_setKeywordValue(
-      "lb", keyword_value, buffer.data(), buffer.size(), &status);
-  if (U_SUCCESS(status))
-    return AtomicString::FromUTF8(buffer.data(), length_needed);
+  constexpr wtf_size_t kMaxLbValueLen = 6;
+  constexpr wtf_size_t kMaxKeywordsLen =
+      /* strlen("@lb=") */ 4 + kMaxLbValueLen + /* strlen("@lw=phrase") */ 10;
+  class ULocaleKeywordBuilder {
+   public:
+    explicit ULocaleKeywordBuilder(const std::string& utf8_locale)
+        : length_(base::saturated_cast<wtf_size_t>(utf8_locale.length())),
+          buffer_(length_ + kMaxKeywordsLen + 1, 0) {
+      // The `buffer_` is initialized to 0 above.
+      base::span(buffer_).copy_prefix_from(
+          base::span(utf8_locale).first(length_));
+    }
+    explicit ULocaleKeywordBuilder(const String& locale)
+        : ULocaleKeywordBuilder(locale.Utf8()) {}
 
-  if (status == U_BUFFER_OVERFLOW_ERROR) {
-    buffer.Grow(length_needed + 1);
-    memset(buffer.data() + utf8_locale.length(), 0,
-           buffer.size() - utf8_locale.length());
-    status = U_ZERO_ERROR;
-    int32_t length_needed2 = uloc_setKeywordValue(
-        "lb", keyword_value, buffer.data(), buffer.size(), &status);
-    DCHECK_EQ(length_needed, length_needed2);
-    if (U_SUCCESS(status) && length_needed == length_needed2)
-      return AtomicString::FromUTF8(buffer.data(), length_needed);
+    AtomicString ToAtomicString() const {
+      return AtomicString::FromUtf8(base::as_byte_span(buffer_).first(length_));
+    }
+
+    bool SetStrictness(LineBreakStrictness strictness) {
+      const char* const lb_value = LbValueFromStrictness(strictness);
+      DCHECK(!lb_value || strlen(lb_value) <= kMaxLbValueLen);
+      return SetKeywordValue("lb", lb_value);
+    }
+
+    bool SetKeywordValue(const char* keyword_name, const char* value) {
+      IcuError status;
+      int32_t length_needed = uloc_setKeywordValue(
+          keyword_name, value, buffer_.data(), buffer_.size(), &status);
+      if (U_SUCCESS(status)) {
+        DCHECK_GE(length_needed, 0);
+        length_ = length_needed;
+        DCHECK_LT(length_, buffer_.size());
+        return true;
+      }
+      DCHECK_NE(status, U_BUFFER_OVERFLOW_ERROR);
+      return false;
+    }
+
+   private:
+    wtf_size_t length_;
+    Vector<char> buffer_;
+  } builder(string_);
+
+  if (builder.SetStrictness(strictness) &&
+      (!use_phrase || builder.SetKeywordValue("lw", "phrase"))) {
+    return builder.ToAtomicString();
   }
-
   NOTREACHED();
-  return string_;
 }
 
 // static

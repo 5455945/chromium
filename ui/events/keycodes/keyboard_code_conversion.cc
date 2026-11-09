@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/cxx17_backports.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
@@ -246,15 +245,16 @@ DomCode UsLayoutKeyboardCodeToDomCode(KeyboardCode key_code) {
 }
 
 KeyboardCode DomCodeToUsLayoutKeyboardCode(DomCode dom_code) {
-  const DomCodeToKeyboardCodeEntry* end =
-      kDomCodeToKeyboardCodeMap + base::size(kDomCodeToKeyboardCodeMap);
   const DomCodeToKeyboardCodeEntry* found = std::lower_bound(
-      kDomCodeToKeyboardCodeMap, end, dom_code,
+      std::begin(kDomCodeToKeyboardCodeMap),
+      std::end(kDomCodeToKeyboardCodeMap), dom_code,
       [](const DomCodeToKeyboardCodeEntry& a, DomCode b) {
         return static_cast<int>(a.dom_code) < static_cast<int>(b);
       });
-  if ((found != end) && (found->dom_code == dom_code))
+  if ((found != std::end(kDomCodeToKeyboardCodeMap)) &&
+      (found->dom_code == dom_code)) {
     return found->key_code;
+  }
 
   return VKEY_UNKNOWN;
 }
@@ -280,12 +280,15 @@ int ModifierDomKeyToEventFlag(DomKey key) {
       return EF_SHIFT_DOWN;
     case DomKey::SHIFT_LEVEL5:
       return EF_MOD3_DOWN;
+#if BUILDFLAG(IS_CHROMEOS)
+    case DomKey::FN:
+      return EF_FUNCTION_DOWN;
+#endif
     default:
       return EF_NONE;
   }
   // Not represented:
   //   DomKey::ACCEL
-  //   DomKey::FN
   //   DomKey::FN_LOCK
   //   DomKey::HYPER
   //   DomKey::NUM_LOCK

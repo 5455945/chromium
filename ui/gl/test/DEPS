@@ -1,7 +1,7 @@
 include_rules = [
+  "+gpu/config/gpu_util.h",
   "+ui/base",
   "+ui/ozone/public",
-  "+ui/platform_window/x11",
   "+mojo/core/embedder",
   "+services/service_manager/public",
   "+services/viz/public",

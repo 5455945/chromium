@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,56 @@
 
 #include <utility>
 
+#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
+#include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
+ScriptFetchOptions::ScriptFetchOptions()
+    : parser_state_(ParserDisposition::kNotParserInserted),
+      credentials_mode_(network::mojom::CredentialsMode::kSameOrigin),
+      referrer_policy_(network::mojom::ReferrerPolicy::kDefault),
+      fetch_priority_hint_(mojom::blink::FetchPriorityHint::kAuto) {}
+
+ScriptFetchOptions::ScriptFetchOptions(
+    const String& nonce,
+    const IntegrityMetadataSet& integrity_metadata,
+    const String& integrity_attribute,
+    ParserDisposition parser_state,
+    network::mojom::CredentialsMode credentials_mode,
+    network::mojom::ReferrerPolicy referrer_policy,
+    mojom::blink::FetchPriorityHint fetch_priority_hint,
+    RenderBlockingBehavior render_blocking_behavior)
+    : nonce_(nonce),
+      integrity_metadata_(integrity_metadata),
+      integrity_attribute_(integrity_attribute),
+      parser_state_(parser_state),
+      credentials_mode_(credentials_mode),
+      referrer_policy_(referrer_policy),
+      fetch_priority_hint_(fetch_priority_hint),
+      render_blocking_behavior_(render_blocking_behavior) {}
+
+ScriptFetchOptions::~ScriptFetchOptions() = default;
+
 // https://html.spec.whatwg.org/C/#fetch-a-classic-script
 FetchParameters ScriptFetchOptions::CreateFetchParameters(
     const KURL& url,
     const SecurityOrigin* security_origin,
-    scoped_refptr<const DOMWrapperWorld> world_for_csp,
+    const DOMWrapperWorld* world_for_csp,
     CrossOriginAttributeValue cross_origin,
-    const WTF::TextEncoding& encoding,
+    const TextEncoding& encoding,
     FetchParameters::DeferOption defer) const {
   // Step 1. Let request be the result of creating a potential-CORS request
   // given url, ... [spec text]
   ResourceRequest resource_request(url);
 
   // Step 1. ... "script", ... [spec text]
-  ResourceLoaderOptions resource_loader_options(std::move(world_for_csp));
-  resource_loader_options.initiator_info.name = "script";
-  resource_loader_options.reject_coep_unsafe_none = reject_coep_unsafe_none_;
+  ResourceLoaderOptions resource_loader_options(world_for_csp);
+  resource_loader_options.initiator_info.name =
+      fetch_initiator_type_names::kScript;
   FetchParameters params(std::move(resource_request), resource_loader_options);
   params.SetRequestContext(mojom::blink::RequestContextType::SCRIPT);
   params.SetRequestDestination(network::mojom::RequestDestination::kScript);
@@ -55,10 +84,9 @@ FetchParameters ScriptFetchOptions::CreateFetchParameters(
   // its parser metadata to options's parser metadata, [spec text]
   params.SetParserDisposition(ParserState());
 
-  // Priority Hints is currently non-standard, but we can assume the following
-  // (see https://crbug.com/821464):
-  // its importance to options's importance, [spec text]
-  params.MutableResourceRequest().SetFetchImportanceMode(importance_);
+  // https://wicg.github.io/priority-hints/#script
+  // set request’s priority to option’s fetchpriority
+  params.MutableResourceRequest().SetFetchPriorityHint(fetch_priority_hint_);
 
   // its referrer policy to options's referrer policy. [spec text]
   params.MutableResourceRequest().SetReferrerPolicy(referrer_policy_);

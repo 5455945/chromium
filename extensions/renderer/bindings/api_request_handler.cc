@@ -1,12 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/bindings/api_request_handler.h"
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/strcat.h"
 #include "base/values.h"
 #include "content/public/renderer/v8_value_converter.h"
 #include "extensions/renderer/bindings/api_binding_util.h"
@@ -16,72 +17,94 @@
 #include "gin/arguments.h"
 #include "gin/converter.h"
 #include "gin/data_object_builder.h"
+#include "third_party/blink/public/web/web_blob.h"
 
 namespace extensions {
 
 // Keys used for passing data back through a custom callback;
 constexpr const char kErrorKey[] = "error";
 constexpr const char kResolverKey[] = "resolver";
+constexpr const char kExceptionHandlerKey[] = "exceptionHandler";
 
 // A helper class to adapt base::Value-style response arguments to v8 arguments
 // lazily, or simply return v8 arguments directly (depending on which style of
 // arguments were used in construction).
 class APIRequestHandler::ArgumentAdapter {
  public:
-  explicit ArgumentAdapter(const base::Value* base_argumements);
-  explicit ArgumentAdapter(
-      const std::vector<v8::Local<v8::Value>>& v8_arguments);
+  ArgumentAdapter(const base::ListValue* base_argumements,
+                  mojom::ExtraResponseDataPtr extra_data);
+  explicit ArgumentAdapter(const v8::LocalVector<v8::Value>& v8_arguments);
+
+  ArgumentAdapter(ArgumentAdapter&) = delete;
+  ArgumentAdapter& operator=(const ArgumentAdapter&) = delete;
+  ArgumentAdapter(ArgumentAdapter&&) = default;
+  ArgumentAdapter& operator=(ArgumentAdapter&&) = default;
+
   ~ArgumentAdapter();
 
-  const std::vector<v8::Local<v8::Value>>& GetArguments(
+  const v8::LocalVector<v8::Value>& GetArguments(
       v8::Local<v8::Context> context) const;
 
- private:
-  const base::Value* base_arguments_ = nullptr;
-  mutable std::vector<v8::Local<v8::Value>> v8_arguments_;
+  mojom::ExtraResponseDataPtr TakeExtraData() { return std::move(extra_data_); }
 
-  DISALLOW_COPY_AND_ASSIGN(ArgumentAdapter);
+ private:
+  raw_ptr<const base::ListValue> base_arguments_ = nullptr;
+  mutable std::optional<v8::LocalVector<v8::Value>> v8_arguments_;
+  mojom::ExtraResponseDataPtr extra_data_ = nullptr;
 };
 
 APIRequestHandler::ArgumentAdapter::ArgumentAdapter(
-    const base::Value* base_arguments)
-    : base_arguments_(base_arguments) {}
+    const base::ListValue* base_arguments,
+    mojom::ExtraResponseDataPtr extra_data)
+    : base_arguments_(base_arguments), extra_data_(std::move(extra_data)) {}
 APIRequestHandler::ArgumentAdapter::ArgumentAdapter(
-    const std::vector<v8::Local<v8::Value>>& v8_arguments)
+    const v8::LocalVector<v8::Value>& v8_arguments)
     : v8_arguments_(v8_arguments) {}
 APIRequestHandler::ArgumentAdapter::~ArgumentAdapter() = default;
 
-const std::vector<v8::Local<v8::Value>>&
+const v8::LocalVector<v8::Value>&
 APIRequestHandler::ArgumentAdapter::GetArguments(
     v8::Local<v8::Context> context) const {
-  v8::Isolate* isolate = context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   DCHECK(isolate->GetCurrentContext() == context);
 
   if (base_arguments_) {
-    DCHECK(v8_arguments_.empty())
+    DCHECK(!v8_arguments_.has_value())
         << "GetArguments() should only be called once.";
     std::unique_ptr<content::V8ValueConverter> converter =
         content::V8ValueConverter::Create();
-    v8_arguments_.reserve(base_arguments_->GetList().size());
-    for (const auto& arg : base_arguments_->GetList())
-      v8_arguments_.push_back(converter->ToV8Value(&arg, context));
+    v8_arguments_.emplace(isolate);
+    v8_arguments_->reserve(base_arguments_->size());
+    for (const auto& arg : *base_arguments_) {
+      v8_arguments_->push_back(converter->ToV8Value(arg, context));
+    }
   }
 
-  return v8_arguments_;
+  DCHECK(v8_arguments_.has_value());
+  return v8_arguments_.value();
 }
 
 // A helper class to handler delivering the results of an API call to a handler,
 // which can be either a callback or a promise.
+// TODO(devlin): The overlap in this class for handling a promise vs a callback
+// is pretty minimal, leading to a lot of if/else branching. This might be
+// cleaner with separate versions for the two cases.
 class APIRequestHandler::AsyncResultHandler {
  public:
   // A callback-based result handler.
   AsyncResultHandler(v8::Isolate* isolate,
                      v8::Local<v8::Function> callback,
-                     v8::Local<v8::Function> custom_callback);
+                     v8::Local<v8::Function> custom_callback,
+                     binding::ResultModifierFunction result_modifier,
+                     ExceptionHandler* exception_handler);
   // A promise-based result handler.
   AsyncResultHandler(v8::Isolate* isolate,
                      v8::Local<v8::Promise::Resolver> promise_resolver,
-                     v8::Local<v8::Function> custom_callback);
+                     v8::Local<v8::Function> custom_callback,
+                     binding::ResultModifierFunction result_modifier);
+
+  AsyncResultHandler(const AsyncResultHandler&) = delete;
+  AsyncResultHandler& operator=(const AsyncResultHandler&) = delete;
 
   ~AsyncResultHandler();
 
@@ -93,27 +116,25 @@ class APIRequestHandler::AsyncResultHandler {
   // immediately.
   void ResolveRequest(v8::Local<v8::Context> context,
                       APILastError* last_error,
-                      const std::vector<v8::Local<v8::Value>>& response_args,
+                      const v8::LocalVector<v8::Value>& response_args,
                       const std::string& error,
-                      int request_id,
-                      const std::string& method_name);
+                      mojom::ExtraResponseDataPtr extra_data);
 
   // Returns true if the request handler is using a custom callback.
   bool has_custom_callback() const { return !custom_callback_.IsEmpty(); }
 
  private:
   // Delivers the result to the promise resolver.
-  static void ResolvePromise(
-      v8::Local<v8::Context> context,
-      const std::vector<v8::Local<v8::Value>>& response_args,
-      const std::string& error,
-      v8::Local<v8::Promise::Resolver> resolver);
+  static void ResolvePromise(v8::Local<v8::Context> context,
+                             const v8::LocalVector<v8::Value>& response_args,
+                             const std::string& error,
+                             v8::Local<v8::Promise::Resolver> resolver);
 
-  // Delivers the result to the callback.
-  static void CallExtensionCallback(
-      v8::Local<v8::Context> context,
-      std::vector<v8::Local<v8::Value>> response_args,
-      v8::Local<v8::Function> callback);
+  // Delivers the result to the callback provided by the extension.
+  static void CallExtensionCallback(v8::Local<v8::Context> context,
+                                    v8::LocalVector<v8::Value> response_args,
+                                    v8::Local<v8::Function> extension_callback,
+                                    ExceptionHandler* exception_handler);
 
   // Helper function to handle the result after the bindings' custom callback
   // has completed.
@@ -121,58 +142,77 @@ class APIRequestHandler::AsyncResultHandler {
       const v8::FunctionCallbackInfo<v8::Value>& info);
 
   // Delivers the result to the custom callback.
-  void CallCustomCallback(
-      v8::Local<v8::Context> context,
-      const std::vector<v8::Local<v8::Value>>& response_args,
-      const std::string& error,
-      int request_id,
-      const std::string& method_name);
+  void CallCustomCallback(v8::Local<v8::Context> context,
+                          const v8::LocalVector<v8::Value>& response_args,
+                          const std::string& error);
+
+  // The type of asynchronous response this handler is for.
+  const binding::AsyncResponseType async_type_;
 
   // Callback-based handlers. Mutually exclusive with promise-based handlers.
-  v8::Global<v8::Function> callback_;
+  v8::Global<v8::Function> extension_callback_;
 
   // Promise-based handlers. Mutually exclusive with callback-based handlers.
   v8::Global<v8::Promise::Resolver> promise_resolver_;
 
+  // The ExceptionHandler used to catch any exceptions thrown when handling the
+  // extension's callback. Only non-null for callback-based requests.
+  // This is guaranteed to be valid while the AsyncResultHandler is valid
+  // because the ExceptionHandler lives for the duration of the bindings
+  // system, similar to the APIRequestHandler (which owns this).
+  raw_ptr<ExceptionHandler> exception_handler_ = nullptr;
+
   // Custom callback handlers.
   v8::Global<v8::Function> custom_callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(AsyncResultHandler);
+  // A OnceCallback that can be used to modify the return arguments.
+  binding::ResultModifierFunction result_modifier_;
 };
 
 APIRequestHandler::AsyncResultHandler::AsyncResultHandler(
     v8::Isolate* isolate,
-    v8::Local<v8::Function> callback,
-    v8::Local<v8::Function> custom_callback) {
-  DCHECK(!callback.IsEmpty() || !custom_callback.IsEmpty());
-  if (!callback.IsEmpty())
-    callback_.Reset(isolate, callback);
-  if (!custom_callback.IsEmpty())
+    v8::Local<v8::Function> extension_callback,
+    v8::Local<v8::Function> custom_callback,
+    binding::ResultModifierFunction result_modifier,
+    ExceptionHandler* exception_handler)
+    : async_type_(binding::AsyncResponseType::kCallback),
+      exception_handler_(exception_handler),
+      result_modifier_(std::move(result_modifier)) {
+  DCHECK(!extension_callback.IsEmpty() || !custom_callback.IsEmpty());
+  DCHECK(exception_handler_);
+  if (!extension_callback.IsEmpty()) {
+    extension_callback_.Reset(isolate, extension_callback);
+  }
+  if (!custom_callback.IsEmpty()) {
     custom_callback_.Reset(isolate, custom_callback);
+  }
 }
 
 APIRequestHandler::AsyncResultHandler::AsyncResultHandler(
     v8::Isolate* isolate,
     v8::Local<v8::Promise::Resolver> promise_resolver,
-    v8::Local<v8::Function> custom_callback) {
+    v8::Local<v8::Function> custom_callback,
+    binding::ResultModifierFunction result_modifier)
+    : async_type_(binding::AsyncResponseType::kPromise),
+      result_modifier_(std::move(result_modifier)) {
   // NOTE(devlin): We'll need to handle an empty promise resolver if
   // v8::Promise::Resolver::New() isn't guaranteed.
   DCHECK(!promise_resolver.IsEmpty());
   promise_resolver_.Reset(isolate, promise_resolver);
-  if (!custom_callback.IsEmpty())
+  if (!custom_callback.IsEmpty()) {
     custom_callback_.Reset(isolate, custom_callback);
+  }
 }
 
-APIRequestHandler::AsyncResultHandler::~AsyncResultHandler() {}
+APIRequestHandler::AsyncResultHandler::~AsyncResultHandler() = default;
 
 void APIRequestHandler::AsyncResultHandler::ResolveRequest(
     v8::Local<v8::Context> context,
     APILastError* last_error,
-    const std::vector<v8::Local<v8::Value>>& response_args,
+    const v8::LocalVector<v8::Value>& response_args,
     const std::string& error,
-    int request_id,
-    const std::string& method_name) {
-  v8::Isolate* isolate = context->GetIsolate();
+    mojom::ExtraResponseDataPtr extra_data) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
 
   // Set runtime.lastError if there is an error and this isn't a promise-based
   // request (promise-based requests instead reject to indicate failure).
@@ -181,44 +221,73 @@ void APIRequestHandler::AsyncResultHandler::ResolveRequest(
     last_error->SetError(context, error);
   }
 
+  // If there is a result modifier for this async request and the response args
+  // are not empty, run the result modifier and allow it to massage the return
+  // arguments before we send them back.
+  // Note: a request can end up with a result modifier and be returning an empty
+  // set of args if we are responding that an error occurred.
+  v8::LocalVector<v8::Value> args =
+      result_modifier_.is_null() || response_args.empty()
+          ? response_args
+          : std::move(result_modifier_)
+                .Run(response_args, context, async_type_);
+
   if (has_custom_callback()) {
+    // Blobs that are part of the response are passed in as an extra parameter
+    // to the custom callback. The custom callback can then incorporate these
+    // blobs appropriately in its response.
+    if (extra_data) {
+      v8::LocalVector<v8::Value> v8_blobs(isolate);
+      for (auto& blob : extra_data->blobs) {
+        auto web_blob =
+            blink::WebBlob::CreateFromSerializedBlob(std::move(blob));
+        v8_blobs.push_back(web_blob.ToV8Value(isolate));
+      }
+      auto blobs = v8::Array::New(isolate, v8_blobs.data(), v8_blobs.size());
+      args.push_back(std::move(blobs));
+    }
+
     // Custom callback case; the custom callback will invoke a curried-in
     // callback, which will trigger the response in the extension (either
     // promise or callback).
-    CallCustomCallback(context, response_args, error, request_id, method_name);
+    CallCustomCallback(context, args, error);
   } else if (!promise_resolver_.IsEmpty()) {  // Promise-based request.
-    DCHECK(callback_.IsEmpty());
-    ResolvePromise(context, response_args, error,
-                   promise_resolver_.Get(isolate));
-  } else {  // Callback case.
-    CallExtensionCallback(context, std::move(response_args),
-                          callback_.Get(isolate));
+    DCHECK(extension_callback_.IsEmpty());
+    ResolvePromise(context, args, error, promise_resolver_.Get(isolate));
+  } else {  // Callback-based request.
+    DCHECK(!extension_callback_.IsEmpty());
+    DCHECK(exception_handler_);
+    CallExtensionCallback(context, std::move(args),
+                          extension_callback_.Get(isolate), exception_handler_);
   }
 
   // Since arbitrary JS was run the context might have been invalidated, so only
   // clear last error if the context is still valid.
-  if (set_last_error && binding::IsContextValid(context))
+  if (set_last_error && binding::IsContextValid(context)) {
     last_error->ClearError(context, true);
+  }
 }
 
 // static
 void APIRequestHandler::AsyncResultHandler::ResolvePromise(
     v8::Local<v8::Context> context,
-    const std::vector<v8::Local<v8::Value>>& response_args,
+    const v8::LocalVector<v8::Value>& response_args,
     const std::string& error,
     v8::Local<v8::Promise::Resolver> resolver) {
   DCHECK_LE(response_args.size(), 1u);
 
-  v8::Isolate* isolate = context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::MicrotasksScope microtasks_scope(
-      isolate, v8::MicrotasksScope::kDoNotRunMicrotasks);
+      isolate, context->GetMicrotaskQueue(),
+      v8::MicrotasksScope::kDoNotRunMicrotasks);
 
   if (error.empty()) {
     v8::Local<v8::Value> result;
-    if (!response_args.empty())
+    if (!response_args.empty()) {
       result = response_args[0];
-    else
+    } else {
       result = v8::Undefined(isolate);
+    }
 
     v8::Maybe<bool> promise_result = resolver->Resolve(context, result);
     // TODO(devlin): It's potentially possible that this could throw if V8
@@ -240,10 +309,14 @@ void APIRequestHandler::AsyncResultHandler::ResolvePromise(
 // static
 void APIRequestHandler::AsyncResultHandler::CallExtensionCallback(
     v8::Local<v8::Context> context,
-    std::vector<v8::Local<v8::Value>> response_args,
-    v8::Local<v8::Function> callback) {
-  JSRunner::Get(context)->RunJSFunction(callback, context, response_args.size(),
-                                        response_args.data());
+    v8::LocalVector<v8::Value> args,
+    v8::Local<v8::Function> extension_callback,
+    ExceptionHandler* exception_handler) {
+  DCHECK(exception_handler);
+  // TODO(devlin): Integrate the API method name in the error message. This
+  // will require currying it around a bit more.
+  exception_handler->RunExtensionCallback(
+      context, extension_callback, std::move(args), "Error handling response");
 }
 
 // static
@@ -254,14 +327,26 @@ void APIRequestHandler::AsyncResultHandler::CustomCallbackAdaptor(
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
-  v8::Local<v8::Object> data = info.Data().As<v8::Object>();
+  v8::Local<v8::Object> data = info.DataV2().As<v8::Value>().As<v8::Object>();
 
   v8::Local<v8::Value> resolver =
       data->Get(context, gin::StringToSymbol(isolate, kResolverKey))
           .ToLocalChecked();
   if (resolver->IsFunction()) {
+    v8::Local<v8::Value> exception_handler_value =
+        data->Get(context, gin::StringToSymbol(isolate, kExceptionHandlerKey))
+            .ToLocalChecked();
+    ExceptionHandler* exception_handler =
+        ExceptionHandler::FromV8Wrapper(isolate, exception_handler_value);
+    // `exception_handler` could be null if the context were invalidated.
+    // Since this can be invoked arbitrarily from running JS, we need to
+    // handle this case gracefully.
+    if (!exception_handler) {
+      return;
+    }
+
     CallExtensionCallback(context, arguments.GetAll(),
-                          resolver.As<v8::Function>());
+                          resolver.As<v8::Function>(), exception_handler);
   } else {
     v8::Local<v8::Value> error_value =
         data->Get(context, gin::StringToSymbol(isolate, kErrorKey))
@@ -276,33 +361,24 @@ void APIRequestHandler::AsyncResultHandler::CustomCallbackAdaptor(
 
 void APIRequestHandler::AsyncResultHandler::CallCustomCallback(
     v8::Local<v8::Context> context,
-    const std::vector<v8::Local<v8::Value>>& response_args,
-    const std::string& error,
-    int request_id,
-    const std::string& method_name) {
-  v8::Isolate* isolate = context->GetIsolate();
-
-  // TODO(devlin): The |request| object in the JS bindings includes
-  // properties for callback, callbackSchema, args, stack, id, and
-  // customCallback. Of those, it appears that we only use stack, args, and
-  // id (since callback is curried in separately). We may be able to update
-  // bindings to get away from some of those. For now, just pass in an
-  // object with the request id.
-  v8::Local<v8::Object> request =
-      gin::DataObjectBuilder(isolate).Set("id", request_id).Build();
+    const v8::LocalVector<v8::Value>& response_args,
+    const std::string& error) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
 
   v8::Local<v8::Value> callback_to_pass = v8::Undefined(isolate);
-  if (!callback_.IsEmpty() || !promise_resolver_.IsEmpty()) {
+  if (!extension_callback_.IsEmpty() || !promise_resolver_.IsEmpty()) {
+    gin::DataObjectBuilder data_builder(isolate);
     v8::Local<v8::Value> resolver_value;
     if (!promise_resolver_.IsEmpty()) {
       resolver_value = promise_resolver_.Get(isolate);
     } else {
-      DCHECK(!callback_.IsEmpty());
-      resolver_value = callback_.Get(isolate);
+      DCHECK(exception_handler_);
+      resolver_value = extension_callback_.Get(isolate);
+      data_builder.Set(kExceptionHandlerKey,
+                       exception_handler_->GetV8Wrapper(isolate));
     }
-    v8::Local<v8::Object> data = gin::DataObjectBuilder(isolate)
+    v8::Local<v8::Object> data = data_builder.Set(kResolverKey, resolver_value)
                                      .Set(kErrorKey, error)
-                                     .Set(kResolverKey, resolver_value)
                                      .Build();
     // Rather than passing the original callback, we create a function which
     // calls back to an adpator which will invoke the original callback or
@@ -313,23 +389,27 @@ void APIRequestHandler::AsyncResultHandler::CallCustomCallback(
   }
 
   // Custom callbacks in the JS bindings are called with the arguments of the
-  // method name, request object, callback function and the response from
-  // the API.
-  std::vector<v8::Local<v8::Value>> custom_callback_args;
-  custom_callback_args.reserve(3 + response_args.size());
-  custom_callback_args.push_back(gin::StringToSymbol(isolate, method_name));
-  custom_callback_args.push_back(request);
+  // callback function and the response from the API.
+  v8::LocalVector<v8::Value> custom_callback_args(isolate);
+  custom_callback_args.reserve(1 + response_args.size());
   custom_callback_args.push_back(callback_to_pass);
   custom_callback_args.insert(custom_callback_args.end(), response_args.begin(),
                               response_args.end());
 
   JSRunner::Get(context)->RunJSFunction(custom_callback_.Get(isolate), context,
-                                        custom_callback_args.size(),
-                                        custom_callback_args.data());
+                                        custom_callback_args);
 }
 
 APIRequestHandler::Request::Request() = default;
 APIRequestHandler::Request::~Request() = default;
+
+APIRequestHandler::RequestDetails::RequestDetails(
+    int request_id,
+    v8::Local<v8::Promise> promise)
+    : request_id(request_id), promise(promise) {}
+APIRequestHandler::RequestDetails::~RequestDetails() = default;
+APIRequestHandler::RequestDetails::RequestDetails(const RequestDetails& other) =
+    default;
 
 APIRequestHandler::PendingRequest::PendingRequest(
     v8::Isolate* isolate,
@@ -343,11 +423,12 @@ APIRequestHandler::PendingRequest::PendingRequest(
       async_handler(std::move(async_handler)) {
   // Only curry the user gesture through if there's something to handle the
   // response.
-  if (this->async_handler)
+  if (this->async_handler) {
     user_gesture_token = std::move(gesture_token);
+  }
 }
 
-APIRequestHandler::PendingRequest::~PendingRequest() {}
+APIRequestHandler::PendingRequest::~PendingRequest() = default;
 APIRequestHandler::PendingRequest::PendingRequest(PendingRequest&&) = default;
 APIRequestHandler::PendingRequest& APIRequestHandler::PendingRequest::operator=(
     PendingRequest&&) = default;
@@ -362,85 +443,106 @@ APIRequestHandler::APIRequestHandler(
       exception_handler_(exception_handler),
       interaction_provider_(interaction_provider) {}
 
-APIRequestHandler::~APIRequestHandler() {}
+APIRequestHandler::~APIRequestHandler() = default;
 
-int APIRequestHandler::StartRequest(v8::Local<v8::Context> context,
-                                    const std::string& method,
-                                    std::unique_ptr<base::Value> arguments_list,
-                                    v8::Local<v8::Function> callback,
-                                    v8::Local<v8::Function> custom_callback) {
-  std::unique_ptr<AsyncResultHandler> async_handler;
-  int request_id = GetNextRequestId();
-  if (!custom_callback.IsEmpty() || !callback.IsEmpty()) {
-    v8::Isolate* isolate = context->GetIsolate();
-
-    async_handler = std::make_unique<AsyncResultHandler>(isolate, callback,
-                                                         custom_callback);
-  }
-
-  StartRequestImpl(context, request_id, method, std::move(arguments_list),
-                   std::move(async_handler));
-  return request_id;
-}
-
-std::pair<int, v8::Local<v8::Promise>>
-APIRequestHandler::StartPromiseBasedRequest(
+v8::Local<v8::Promise> APIRequestHandler::StartRequest(
     v8::Local<v8::Context> context,
     const std::string& method,
-    std::unique_ptr<base::Value> arguments_list,
-    v8::Local<v8::Function> custom_callback) {
-  v8::Isolate* isolate = context->GetIsolate();
+    base::ListValue arguments_list,
+    binding::AsyncResponseType async_type,
+    v8::Local<v8::Function> callback,
+    v8::Local<v8::Function> custom_callback,
+    binding::ResultModifierFunction result_modifier) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+
+  v8::Local<v8::Promise> promise;
+  std::unique_ptr<AsyncResultHandler> async_handler =
+      GetAsyncResultHandler(context, async_type, callback, custom_callback,
+                            std::move(result_modifier), &promise);
+  DCHECK_EQ(async_type == binding::AsyncResponseType::kPromise,
+            !promise.IsEmpty());
+
   int request_id = GetNextRequestId();
-  v8::Local<v8::Promise::Resolver> resolver =
-      v8::Promise::Resolver::New(context).ToLocalChecked();
-  auto async_handler =
-      std::make_unique<AsyncResultHandler>(isolate, resolver, custom_callback);
-  StartRequestImpl(context, request_id, method, std::move(arguments_list),
-                   std::move(async_handler));
+  auto request = std::make_unique<Request>();
+  request->request_id = request_id;
 
-  return {request_id, resolver->GetPromise()};
-}
+  std::unique_ptr<InteractionProvider::Token> user_gesture_token;
+  if (async_handler) {
+    user_gesture_token = interaction_provider_->GetCurrentToken(context);
+    request->has_async_response_handler = true;
+  }
 
-void APIRequestHandler::CompleteRequest(int request_id,
-                                        const base::Value& response_args,
-                                        const std::string& error) {
-  CompleteRequestImpl(request_id, ArgumentAdapter(&response_args), error);
+  pending_requests_.emplace(
+      request_id,
+      PendingRequest(isolate, context, method, std::move(async_handler),
+                     std::move(user_gesture_token)));
+
+  request->has_user_gesture =
+      interaction_provider_->HasActiveInteraction(context);
+  request->arguments_list = std::move(arguments_list);
+  request->method_name = method;
+
+  last_sent_request_id_ = request_id;
+  send_request_.Run(std::move(request), context);
+
+  return promise;
 }
 
 void APIRequestHandler::CompleteRequest(
     int request_id,
-    const std::vector<v8::Local<v8::Value>>& response_args,
+    const base::ListValue& response_args,
+    const std::string& error,
+    mojom::ExtraResponseDataPtr extra_data) {
+  CompleteRequestImpl(request_id,
+                      ArgumentAdapter(&response_args, std::move(extra_data)),
+                      error);
+}
+
+void APIRequestHandler::CompleteRequest(
+    int request_id,
+    const v8::LocalVector<v8::Value>& response_args,
     const std::string& error) {
   CompleteRequestImpl(request_id, ArgumentAdapter(response_args), error);
 }
 
-int APIRequestHandler::AddPendingRequest(v8::Local<v8::Context> context,
-                                         v8::Local<v8::Function> callback) {
+APIRequestHandler::RequestDetails APIRequestHandler::AddPendingRequest(
+    v8::Local<v8::Context> context,
+    binding::AsyncResponseType async_type,
+    v8::Local<v8::Function> callback,
+    binding::ResultModifierFunction result_modifier) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Local<v8::Promise> promise;
+  std::unique_ptr<AsyncResultHandler> async_handler = GetAsyncResultHandler(
+      context, async_type, callback, v8::Local<v8::Function>(),
+      std::move(result_modifier), &promise);
+  DCHECK_EQ(async_type == binding::AsyncResponseType::kPromise,
+            !promise.IsEmpty());
+
   int request_id = GetNextRequestId();
 
   // NOTE(devlin): We ignore the UserGestureToken for synthesized requests like
   // these that aren't sent to the browser. It is the caller's responsibility to
   // handle any user gesture behavior. This prevents an issue where messaging
   // handling would create an extra scoped user gesture, causing issues. See
-  // https://crbug.com/921141.
+  // https://crbug.com/41435171.
   std::unique_ptr<InteractionProvider::Token> null_user_gesture_token;
 
-  auto async_handler = std::make_unique<AsyncResultHandler>(
-      context->GetIsolate(), callback, v8::Local<v8::Function>());
   pending_requests_.emplace(
-      request_id, PendingRequest(context->GetIsolate(), context, std::string(),
-                                 std::move(async_handler),
-                                 std::move(null_user_gesture_token)));
-  return request_id;
+      request_id,
+      PendingRequest(isolate, context, std::string(), std::move(async_handler),
+                     std::move(null_user_gesture_token)));
+
+  return RequestDetails(request_id, promise);
 }
 
 void APIRequestHandler::InvalidateContext(v8::Local<v8::Context> context) {
   for (auto iter = pending_requests_.begin();
        iter != pending_requests_.end();) {
-    if (iter->second.context == context)
+    if (iter->second.context == context) {
       iter = pending_requests_.erase(iter);
-    else
+    } else {
       ++iter;
+    }
   }
 }
 
@@ -452,8 +554,9 @@ void APIRequestHandler::SetResponseValidator(
 
 std::set<int> APIRequestHandler::GetPendingRequestIdsForTesting() const {
   std::set<int> result;
-  for (const auto& pair : pending_requests_)
+  for (const auto& pair : pending_requests_) {
     result.insert(pair.first);
+  }
   return result;
 }
 
@@ -471,44 +574,43 @@ int APIRequestHandler::GetNextRequestId() {
   return next_request_id_++;
 }
 
-void APIRequestHandler::StartRequestImpl(
+std::unique_ptr<APIRequestHandler::AsyncResultHandler>
+APIRequestHandler::GetAsyncResultHandler(
     v8::Local<v8::Context> context,
-    int request_id,
-    const std::string& method,
-    std::unique_ptr<base::Value> arguments_list,
-    std::unique_ptr<AsyncResultHandler> async_handler) {
-  auto request = std::make_unique<Request>();
-  request->request_id = request_id;
+    binding::AsyncResponseType async_type,
+    v8::Local<v8::Function> extension_callback,
+    v8::Local<v8::Function> custom_callback,
+    binding::ResultModifierFunction result_modifier,
+    v8::Local<v8::Promise>* promise_out) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
 
-  std::unique_ptr<InteractionProvider::Token> user_gesture_token;
-  if (async_handler) {
-    user_gesture_token = interaction_provider_->GetCurrentToken(context);
-    request->has_callback = true;
+  std::unique_ptr<AsyncResultHandler> async_handler;
+  if (async_type == binding::AsyncResponseType::kPromise) {
+    DCHECK(extension_callback.IsEmpty())
+        << "Promise based requests should never be "
+           "started with a callback being passed in.";
+    v8::Local<v8::Promise::Resolver> resolver =
+        v8::Promise::Resolver::New(context).ToLocalChecked();
+    async_handler = std::make_unique<AsyncResultHandler>(
+        isolate, resolver, custom_callback, std::move(result_modifier));
+    *promise_out = resolver->GetPromise();
+  } else if (!custom_callback.IsEmpty() || !extension_callback.IsEmpty()) {
+    async_handler = std::make_unique<AsyncResultHandler>(
+        isolate, extension_callback, custom_callback,
+        std::move(result_modifier), exception_handler_);
   }
-
-  v8::Isolate* isolate = context->GetIsolate();
-  pending_requests_.emplace(
-      request_id,
-      PendingRequest(isolate, context, method, std::move(async_handler),
-                     std::move(user_gesture_token)));
-
-  request->has_user_gesture =
-      interaction_provider_->HasActiveInteraction(context);
-  request->arguments_list = std::move(arguments_list);
-  request->method_name = method;
-
-  last_sent_request_id_ = request_id;
-  send_request_.Run(std::move(request), context);
+  return async_handler;
 }
 
 void APIRequestHandler::CompleteRequestImpl(int request_id,
-                                            const ArgumentAdapter& arguments,
+                                            ArgumentAdapter arguments,
                                             const std::string& error) {
   auto iter = pending_requests_.find(request_id);
   // The request may have been removed if the context was invalidated before a
   // response is ready.
-  if (iter == pending_requests_.end())
+  if (iter == pending_requests_.end()) {
     return;
+  }
 
   PendingRequest pending_request = std::move(iter->second);
   pending_requests_.erase(iter);
@@ -529,7 +631,7 @@ void APIRequestHandler::CompleteRequestImpl(int request_id,
     return;
   }
 
-  const std::vector<v8::Local<v8::Value>>& response_args =
+  const v8::LocalVector<v8::Value>& response_args =
       arguments.GetArguments(context);
 
   std::unique_ptr<InteractionProvider::Scope> user_gesture;
@@ -549,21 +651,16 @@ void APIRequestHandler::CompleteRequestImpl(int request_id,
   }
 
   v8::TryCatch try_catch(isolate);
-
   pending_request.async_handler->ResolveRequest(
-      context, &last_error_, response_args, error, request_id,
-      pending_request.method_name);
+      context, &last_error_, response_args, error, arguments.TakeExtraData());
 
   // Since arbitrary JS has ran, the context may have been invalidated. If it
   // was, bail.
-  if (!binding::IsContextValid(context))
+  if (!binding::IsContextValid(context)) {
     return;
+  }
 
   if (try_catch.HasCaught()) {
-    v8::Local<v8::Message> v8_message = try_catch.Message();
-    absl::optional<std::string> message;
-    if (!v8_message.IsEmpty())
-      message = gin::V8ToString(isolate, v8_message->Get());
     exception_handler_->HandleException(context, "Error handling response",
                                         &try_catch);
   }

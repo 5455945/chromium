@@ -1,14 +1,26 @@
 <style include="scanning-shared">
-  #actionToolbar {
-    --height: 40px;
+  :host-context(body.jelly-enabled) #actionToolbar {
+    background-color: var(--cros-sys-secondary_container);
+  }
 
+  :host-context(body.jelly-enabled) #pageNumbers {
+    font: var(--cros-button-2-font);
+  }
+
+  :host-context(body:not(.jelly-enabled)) cr-icon-button {
+    --cr-icon-button-fill-color: var(--google-grey-200);
+    --cr-icon-button-hover-background-color:
+          rgba(var(--google-grey-900-rgb), .4);
+  }
+
+  #actionToolbar {
     align-items: center;
     background-color: rgba(var(--google-grey-900-rgb), .8);
-    border-radius:  calc(var(--height) / 2);
+    border-radius:  calc(var(--action-toolbar-height) / 2);
     display: flex;
-    height: var(--height);
+    height: var(--action-toolbar-height);
     justify-content: center;
-    width: 176px;
+    width: var(--action-toolbar-width);
   }
 
   .separator {
@@ -21,9 +33,16 @@
   }
 
   cr-icon-button {
-    --cr-icon-button-size: 24px;
     --cr-icon-button-margin-start: 0;
-    --cr-icon-button-fill-color: var(--google-grey-200);
+    --cr-icon-button-size: 24px;
+  }
+
+  #pageNumbers {
+    color: var(--scanning-action-toolbar-text-color);
+    font-family: var(--scanning-action-toolbar-font-family);
+    font-size: var(--scanning-action-toolbar-font-size);
+    font-weight: var(--scanning-medium-font-weight);
+    line-height: var(--scanning-action-toolbar-line-height);
   }
 
   #removePageIcon {
@@ -36,9 +55,14 @@
   }
 </style>
 <div id="actionToolbar">
+  <div id="pageNumbers" aria-hidden="true">[[pageNumberText]]</div>
   <div class="separator"></div>
   <div>
-    <cr-icon-button id="removePageIcon"></cr-icon-button>
-    <cr-icon-button id="rescanPageIcon"></cr-icon-button>
+    <cr-icon-button id="removePageIcon" on-click="onRemovePageIconClick"
+        title="[[i18n('removePageButtonLabel')]]">
+    </cr-icon-button>
+    <cr-icon-button id="rescanPageIcon" on-click="onRescanPageIconClick"
+         title="[[i18n('rescanPageButtonLabel')]]">
+    </cr-icon-button>
   </div>
 </div>

@@ -13,11 +13,11 @@
 <translation id="43113324827158664">No puedes dejar este campo en blanco.</translation>
 <translation id="4376888869070172068">No se reconoce el formato de este código postal.</translation>
 <translation id="4518701284698680367">Debes indicar un código postal (por ejemplo, <ph name="EXAMPLE" />). Si no sabes tu código postal, puedes consultar <ph name="BEGIN_LINK" />esta página<ph name="END_LINK" />.</translation>
-<translation id="5089810972385038852">Estado/provincia</translation>
+<translation id="5089810972385038852">Estado/Provincia</translation>
 <translation id="5095208057601539847">Provincia</translation>
 <translation id="5327248766486351172">Nombre</translation>
 <translation id="5937097533660449554">Óblast</translation>
-<translation id="6132429659673988671">Suburbio</translation>
+<translation id="6132429659673988671">Barrio</translation>
 <translation id="6207937957461833379">País o región</translation>
 <translation id="6247152910634872706">Organización</translation>
 <translation id="6271429879296260742">Código PIN</translation>

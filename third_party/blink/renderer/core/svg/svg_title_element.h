@@ -31,6 +31,10 @@ class SVGTitleElement final : public SVGElement {
  public:
   explicit SVGTitleElement(Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kSVGTitleElement;
+  }
+
   void SetText(const String&);
 
  private:
@@ -38,7 +42,7 @@ class SVGTitleElement final : public SVGElement {
   void RemovedFrom(ContainerNode&) override;
   void ChildrenChanged(const ChildrenChange&) override;
 
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override {
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override {
     return false;
   }
 

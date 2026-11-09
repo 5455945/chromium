@@ -1,4 +1,4 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,9 +10,10 @@ _ARGUMENT_TYPE_PATTERN = re.compile('\([^()]*\)(\s*const)?')
 _TEMPLATE_ARGUMENT_PATTERN = re.compile('<[^<>]*>')
 _LEADING_TYPE_PATTERN = re.compile('^.*\s+(\w+::)')
 _READELF_SECTION_HEADER_PATTER = re.compile(
-    '^\s*\[\s*(Nr|\d+)\]\s+(|\S+)\s+([A-Z_]+)\s+([0-9a-f]+)\s+'
-    '([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9]+)\s+([WAXMSILGxOop]*)\s+'
-    '([0-9]+)\s+([0-9]+)\s+([0-9]+)')
+  '^\s*\[\s*(Nr|\d+)\]\s+(|\S+)\s+([A-Z_]+)\s+([0-9a-f]+)\s+'
+  '([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9]+)\s+([WAXMSILGxOop]*)\s+'
+  '([0-9]+)\s+([0-9]+)\s+([0-9]+)'
+)
 
 
 class ParsingException(Exception):
@@ -20,7 +21,7 @@ class ParsingException(Exception):
     return repr(self.args[0])
 
 
-class AddressMapping(object):
+class AddressMapping:
   def __init__(self):
     self._symbol_map = {}
 
@@ -33,7 +34,7 @@ class AddressMapping(object):
 
 class RangeAddressMapping(AddressMapping):
   def __init__(self):
-    super(RangeAddressMapping, self).__init__()
+    super().__init__()
     self._sorted_start_list = []
     self._is_sorted = True
 
@@ -57,7 +58,7 @@ class RangeAddressMapping(AddressMapping):
     return self._symbol_map[found_start_address]
 
 
-class Procedure(object):
+class Procedure:
   """A class for a procedure symbol and an address range for the symbol."""
 
   def __init__(self, start, end, name):
@@ -66,9 +67,11 @@ class Procedure(object):
     self.name = name
 
   def __eq__(self, other):
-    return (self.start == other.start and
-            self.end == other.end and
-            self.name == other.name)
+    return (
+      self.start == other.start
+      and self.end == other.end
+      and self.name == other.name
+    )
 
   def __ne__(self, other):
     return not self.__eq__(other)
@@ -77,11 +80,12 @@ class Procedure(object):
     return '%x-%x: %s' % (self.start, self.end, self.name)
 
 
-class ElfSection(object):
+class ElfSection:
   """A class for an elf section header."""
 
   def __init__(
-      self, number, name, stype, address, offset, size, es, flg, lk, inf, al):
+    self, number, name, stype, address, offset, size, es, flg, lk, inf, al
+  ):
     self.number = number
     self.name = name
     self.stype = stype
@@ -95,17 +99,19 @@ class ElfSection(object):
     self.al = al
 
   def __eq__(self, other):
-    return (self.number == other.number and
-            self.name == other.name and
-            self.stype == other.stype and
-            self.address == other.address and
-            self.offset == other.offset and
-            self.size == other.size and
-            self.es == other.es and
-            self.flg == other.flg and
-            self.lk == other.lk and
-            self.inf == other.inf and
-            self.al == other.al)
+    return (
+      self.number == other.number
+      and self.name == other.name
+      and self.stype == other.stype
+      and self.address == other.address
+      and self.offset == other.offset
+      and self.size == other.size
+      and self.es == other.es
+      and self.flg == other.flg
+      and self.lk == other.lk
+      and self.inf == other.inf
+      and self.al == other.al
+    )
 
   def __ne__(self, other):
     return not self.__eq__(other)
@@ -114,7 +120,7 @@ class ElfSection(object):
     return '%x+%x(%x) %s' % (self.address, self.size, self.offset, self.name)
 
 
-class StaticSymbolsInFile(object):
+class StaticSymbolsInFile:
   """Represents static symbol information in a binary file."""
 
   def __init__(self, my_name):
@@ -169,25 +175,27 @@ class StaticSymbolsInFile(object):
         found_header = True
         break
     if not found_header:
-      return None
+      return
 
     for line in f:
       line = line.rstrip()
       matched = _READELF_SECTION_HEADER_PATTER.match(line)
       if matched:
-        self._append_elf_section(ElfSection(
-            int(matched.group(1), 10), # number
-            matched.group(2), # name
-            matched.group(3), # stype
-            int(matched.group(4), 16), # address
-            int(matched.group(5), 16), # offset
-            int(matched.group(6), 16), # size
-            matched.group(7), # es
-            matched.group(8), # flg
-            matched.group(9), # lk
-            matched.group(10), # inf
-            matched.group(11) # al
-            ))
+        self._append_elf_section(
+          ElfSection(
+            int(matched.group(1), 10),  # number
+            matched.group(2),  # name
+            matched.group(3),  # stype
+            int(matched.group(4), 16),  # address
+            int(matched.group(5), 16),  # offset
+            int(matched.group(6), 16),  # size
+            matched.group(7),  # es
+            matched.group(8),  # flg
+            matched.group(9),  # lk
+            matched.group(10),  # inf
+            matched.group(11),  # al
+          )
+        )
       else:
         if line in ('Key to Flags:', 'Program Headers:'):
           break
@@ -201,7 +209,7 @@ class StaticSymbolsInFile(object):
   def _parse_nm_bsd_line(line):
     if line[8] == ' ':
       return line[0:8], line[9], line[11:]
-    elif line[16] == ' ':
+    if line[16] == ' ':
       return line[0:16], line[17], line[19:]
     raise ParsingException('Invalid nm output.')
 
@@ -230,8 +238,9 @@ class StaticSymbolsInFile(object):
 
       start_val = int(sym_value, 16)
 
-      if (sym_type in ('r', 'R', 'D', 'U', 'd', 'V') and
-          (not mangled and sym_name.startswith('typeinfo'))):
+      if sym_type in ('r', 'R', 'D', 'U', 'd', 'V') and (
+        not mangled and sym_name.startswith('typeinfo')
+      ):
         self._append_typeinfo(start_val, sym_name)
 
       # It's possible for two symbols to share the same address, if
@@ -249,11 +258,11 @@ class StaticSymbolsInFile(object):
       # that is, a line with type 'T'.  If we never see a 'T' entry,
       # we'll just go ahead and process the first entry (which never
       # got touched in the queue), and ignore the others.
-      if start_val == last_start and (sym_type == 't' or sym_type == 'T'):
+      if start_val == last_start and sym_type in ('t', 'T'):
         # We are the 'T' symbol at this address, replace previous symbol.
         routine = sym_name
         continue
-      elif start_val == last_start:
+      if start_val == last_start:
         # We're not the 'T' symbol at this address, so ignore us.
         continue
 
@@ -266,7 +275,8 @@ class StaticSymbolsInFile(object):
       if not mangled:
         routine = self._get_short_function_name(routine)
       self._append_procedure(
-          last_start, Procedure(last_start, start_val, routine))
+        last_start, Procedure(last_start, start_val, routine)
+      )
 
       last_start = start_val
       routine = sym_name
@@ -274,4 +284,5 @@ class StaticSymbolsInFile(object):
     if not mangled:
       routine = self._get_short_function_name(routine)
     self._append_procedure(
-        last_start, Procedure(last_start, last_start, routine))
+      last_start, Procedure(last_start, last_start, routine)
+    )

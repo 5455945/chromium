@@ -1,30 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/debug/task_trace.h"
 
-#include "base/ranges/algorithm.h"
-#include "build/build_config.h"
-
-#if defined(OS_ANDROID)
-#include <android/log.h>
-#endif  // OS_ANDROID
-
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 
-#if defined(OS_ANDROID)
-#include "base/no_destructor.h"
-#endif
-
 #include "base/pending_task.h"
 #include "base/task/common/task_annotator.h"
+#include "build/build_config.h"
 
-namespace base {
-namespace debug {
+#if BUILDFLAG(IS_ANDROID)
+#include <android/log.h>
+
+#include "base/no_destructor.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
+namespace base::debug {
 namespace {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // Android sends stdout and stderr to /dev/null; logging should be done through
 // the __android_log_write() function. Here we create an override of
 // std::stringbuf that writes to the Android log.
@@ -46,22 +42,25 @@ std::ostream& DefaultOutputStream() {
 std::ostream& DefaultOutputStream() {
   return std::cerr;
 }
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)
 }  // namespace
 
 TaskTrace::TaskTrace() {
   const PendingTask* current_task = TaskAnnotator::CurrentTaskForThread();
-  if (!current_task)
+  if (!current_task) {
     return;
-  std::array<const void*, PendingTask::kTaskBacktraceLength + 1> task_trace;
+  }
+  std::array<uintptr_t, PendingTask::kTaskBacktraceLength + 1> task_trace;
   task_trace[0] = current_task->posted_from.program_counter();
-  ranges::copy(current_task->task_backtrace, task_trace.begin() + 1);
+  std::ranges::copy(current_task->task_backtrace, task_trace.begin() + 1);
   size_t length = 0;
-  while (length < task_trace.size() && task_trace[length])
+  while (length < task_trace.size() && task_trace[length]) {
     ++length;
-  if (length == 0)
+  }
+  if (length == 0) {
     return;
-  stack_trace_.emplace(task_trace.data(), length);
+  }
+  stack_trace_.emplace(span(task_trace).first(length));
   trace_overflow_ = current_task->task_backtrace_overflow;
 }
 
@@ -90,15 +89,18 @@ void TaskTrace::OutputToStream(std::ostream* os) const {
 std::string TaskTrace::ToString() const {
   std::stringstream stream;
   OutputToStream(&stream);
-  return stream.str();
+  return std::move(stream).str();
 }
 
-base::span<const void* const> TaskTrace::AddressesForTesting() const {
-  if (empty())
-    return {};
+size_t TaskTrace::GetAddresses(span<const void*> addresses) const {
   size_t count = 0;
-  const void* const* addresses = stack_trace_->Addresses(&count);
-  return {addresses, count};
+  if (empty()) {
+    return count;
+  }
+  span<const void* const> current_addresses = stack_trace_->addresses();
+  const size_t copy_size = std::min(current_addresses.size(), addresses.size());
+  addresses.first(copy_size).copy_from(current_addresses.first(copy_size));
+  return current_addresses.size();
 }
 
 std::ostream& operator<<(std::ostream& os, const TaskTrace& task_trace) {
@@ -106,5 +108,4 @@ std::ostream& operator<<(std::ostream& os, const TaskTrace& task_trace) {
   return os;
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

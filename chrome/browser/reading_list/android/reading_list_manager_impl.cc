@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 
 #include <utility>
 
-#include "base/guid.h"
+#include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/uuid.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
@@ -23,12 +25,14 @@ constexpr char kReadStatusKey[] = "read_status";
 constexpr char kReadStatusRead[] = "true";
 constexpr char kReadStatusUnread[] = "false";
 
+namespace reading_list {
+
 namespace {
 
 // Sync the bookmark node with |entry|. Returns whether the conversion is
 // succeeded.
 bool SyncToBookmark(const ReadingListEntry& entry, BookmarkNode* bookmark) {
-  DCHECK(bookmark);
+  CHECK(bookmark, base::NotFatalUntil::M162);
   std::u16string title;
   if (!base::UTF8ToUTF16(entry.Title().c_str(), entry.Title().size(), &title)) {
     LOG(ERROR) << "Failed to convert the following title to string16:"
@@ -37,9 +41,8 @@ bool SyncToBookmark(const ReadingListEntry& entry, BookmarkNode* bookmark) {
   }
 
   bookmark->set_url(entry.URL());
-  bookmark->set_date_added(
-      base::Time::UnixEpoch() +
-      base::TimeDelta::FromMicroseconds(entry.CreationTime()));
+  bookmark->set_date_added(base::Time::UnixEpoch() +
+                           base::Microseconds(entry.CreationTime()));
   bookmark->SetTitle(title);
   bookmark->SetMetaInfo(kReadStatusKey,
                         entry.IsRead() ? kReadStatusRead : kReadStatusUnread);
@@ -49,16 +52,18 @@ bool SyncToBookmark(const ReadingListEntry& entry, BookmarkNode* bookmark) {
 }  // namespace
 
 ReadingListManagerImpl::ReadingListManagerImpl(
-    ReadingListModel* reading_list_model)
+    ReadingListModel* reading_list_model,
+    const IdGenerationFunction& id_gen_func)
     : reading_list_model_(reading_list_model),
-      maximum_id_(0L),
+      id_gen_func_(id_gen_func),
       loaded_(false),
-      performing_batch_update_(false) {
-  DCHECK(reading_list_model_);
+      performing_batch_update_(false),
+      changes_applied_during_batch_(false) {
+  CHECK(reading_list_model_, base::NotFatalUntil::M162);
   root_ = std::make_unique<BookmarkNode>(
-      maximum_id_++, base::GUID::GenerateRandomV4(), GURL());
+      id_gen_func_.Run(), base::Uuid::GenerateRandomV4(), GURL());
   root_->SetTitle(l10n_util::GetStringUTF16(IDS_READ_LATER_TITLE));
-  DCHECK(root_->is_folder());
+  CHECK(root_->is_folder(), base::NotFatalUntil::M162);
   reading_list_model_->AddObserver(this);
 }
 
@@ -70,8 +75,9 @@ void ReadingListManagerImpl::ReadingListModelLoaded(
     const ReadingListModel* model) {
   // Constructs the bookmark tree.
   root_->DeleteAll();
-  for (const auto& url : model->Keys())
-    AddOrUpdateBookmark(model->GetEntryByURL(url));
+  for (const auto& url : model->GetKeys()) {
+    AddOrUpdateBookmark(model->GetEntryByURL(url).get());
+  }
 
   loaded_ = true;
 
@@ -83,7 +89,7 @@ void ReadingListManagerImpl::ReadingListDidAddEntry(
     const ReadingListModel* model,
     const GURL& url,
     reading_list::EntrySource source) {
-  AddOrUpdateBookmark(model->GetEntryByURL(url));
+  AddOrUpdateBookmark(model->GetEntryByURL(url).get());
 }
 
 void ReadingListManagerImpl::ReadingListWillRemoveEntry(
@@ -92,35 +98,43 @@ void ReadingListManagerImpl::ReadingListWillRemoveEntry(
   RemoveBookmark(url);
 }
 
-void ReadingListManagerImpl::ReadingListDidMoveEntry(
+void ReadingListManagerImpl::ReadingListDidUpdateEntry(
     const ReadingListModel* model,
     const GURL& url) {
-  DCHECK(reading_list_model_->loaded());
-  const auto* moved_entry = reading_list_model_->GetEntryByURL(url);
-  DCHECK(moved_entry);
-  AddOrUpdateBookmark(moved_entry);
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
+  scoped_refptr<const ReadingListEntry> updated_entry =
+      reading_list_model_->GetEntryByURL(url);
+  CHECK(updated_entry, base::NotFatalUntil::M162);
+  AddOrUpdateBookmark(updated_entry.get());
 }
 
 void ReadingListManagerImpl::ReadingListDidApplyChanges(
     ReadingListModel* model) {
   // Ignores ReadingListDidApplyChanges() invocations during batch update.
-  if (performing_batch_update_)
+  if (performing_batch_update_) {
+    changes_applied_during_batch_ = true;
     return;
+  }
 
   NotifyReadingListChanged();
 }
 
 void ReadingListManagerImpl::ReadingListModelBeganBatchUpdates(
     const ReadingListModel* model) {
+  CHECK(!changes_applied_during_batch_, base::NotFatalUntil::M162);
   performing_batch_update_ = true;
 }
 
 void ReadingListManagerImpl::ReadingListModelCompletedBatchUpdates(
     const ReadingListModel* model) {
-  performing_batch_update_ = false;
+  // Batch update is done -- notify the observers only once, but only if there
+  // were actual changes.
+  if (changes_applied_during_batch_) {
+    NotifyReadingListChanged();
+  }
 
-  // Batch update is done, notify the observer only once.
-  NotifyReadingListChanged();
+  performing_batch_update_ = false;
+  changes_applied_during_batch_ = false;
 }
 
 void ReadingListManagerImpl::AddObserver(Observer* observer) {
@@ -133,19 +147,21 @@ void ReadingListManagerImpl::RemoveObserver(Observer* observer) {
 
 const BookmarkNode* ReadingListManagerImpl::Add(const GURL& url,
                                                 const std::string& title) {
-  DCHECK(reading_list_model_->loaded());
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
   if (!reading_list_model_->IsUrlSupported(url))
     return nullptr;
 
   // Add or swap the reading list entry.
-  const auto& new_entry = reading_list_model_->AddEntry(
-      url, title, reading_list::ADDED_VIA_CURRENT_APP);
+  const auto& new_entry = reading_list_model_->AddOrReplaceEntry(
+      url, title, reading_list::ADDED_VIA_CURRENT_APP,
+      /*estimated_read_time=*/std::nullopt,
+      /*creation_time=*/std::nullopt);
   const auto* node = FindBookmarkByURL(new_entry.URL());
   return node;
 }
 
 const BookmarkNode* ReadingListManagerImpl::Get(const GURL& url) const {
-  DCHECK(reading_list_model_->loaded());
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
   return FindBookmarkByURL(url);
 }
 
@@ -192,32 +208,56 @@ bool ReadingListManagerImpl::IsReadingListBookmark(
 }
 
 void ReadingListManagerImpl::Delete(const GURL& url) {
-  DCHECK(reading_list_model_->loaded());
-  reading_list_model_->RemoveEntryByURL(url);
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
+  reading_list_model_->RemoveEntryByURL(url, FROM_HERE);
+}
+
+void ReadingListManagerImpl::DeleteAll() {
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
+  reading_list_model_->DeleteAllEntries(FROM_HERE);
 }
 
 const BookmarkNode* ReadingListManagerImpl::GetRoot() const {
+  // TODO(crbug.com/577253050): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(reading_list_model_->loaded());
   return root_.get();
 }
 
 size_t ReadingListManagerImpl::size() const {
-  DCHECK(reading_list_model_->loaded());
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
   return reading_list_model_->size();
 }
 
 size_t ReadingListManagerImpl::unread_size() const {
-  DCHECK(reading_list_model_->loaded());
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
   return reading_list_model_->unread_size();
 }
 
-void ReadingListManagerImpl::SetReadStatus(const GURL& url, bool read) {
-  DCHECK(reading_list_model_->loaded());
-  const auto* entry = reading_list_model_->GetEntryByURL(url);
+void ReadingListManagerImpl::SetTitle(const GURL& url,
+                                      const std::u16string& title) {
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
+  scoped_refptr<const ReadingListEntry> entry =
+      reading_list_model_->GetEntryByURL(url);
   if (!entry)
     return;
 
-  reading_list_model_->SetReadStatus(url, read);
+  std::string str_title;
+  if (!base::UTF16ToUTF8(title.c_str(), title.size(), &str_title)) {
+    LOG(ERROR) << "Failed to convert the following title to string16:" << title;
+    return;
+  }
+  reading_list_model_->SetEntryTitleIfExists(url, str_title);
+}
+
+void ReadingListManagerImpl::SetReadStatus(const GURL& url, bool read) {
+  CHECK(reading_list_model_->loaded(), base::NotFatalUntil::M162);
+  scoped_refptr<const ReadingListEntry> entry =
+      reading_list_model_->GetEntryByURL(url);
+  if (!entry)
+    return;
+
+  reading_list_model_->SetReadStatusIfExists(url, read);
   auto* node = FindBookmarkByURL(url);
   if (node) {
     node->SetMetaInfo(kReadStatusKey,
@@ -239,7 +279,6 @@ bool ReadingListManagerImpl::GetReadStatus(
     return false;
 
   NOTREACHED() << "May not be reading list node.";
-  return false;
 }
 
 bool ReadingListManagerImpl::IsLoaded() const {
@@ -261,7 +300,7 @@ BookmarkNode* ReadingListManagerImpl::FindBookmarkByURL(const GURL& url) const {
 void ReadingListManagerImpl::RemoveBookmark(const GURL& url) {
   const BookmarkNode* node = FindBookmarkByURL(url);
   if (node)
-    root_->Remove(root_->GetIndexOf(node));
+    root_->Remove(root_->GetIndexOf(node).value());
 }
 
 const BookmarkNode* ReadingListManagerImpl::AddOrUpdateBookmark(
@@ -278,7 +317,7 @@ const BookmarkNode* ReadingListManagerImpl::AddOrUpdateBookmark(
 
   // Add a new node.
   auto new_node = std::make_unique<BookmarkNode>(
-      maximum_id_++, base::GUID::GenerateRandomV4(), entry->URL());
+      id_gen_func_.Run(), base::Uuid::GenerateRandomV4(), entry->URL());
   bool success = SyncToBookmark(*entry, new_node.get());
   return success ? root_->Add(std::move(new_node)) : nullptr;
 }
@@ -287,3 +326,5 @@ void ReadingListManagerImpl::NotifyReadingListChanged() {
   for (Observer& observer : observers_)
     observer.ReadingListChanged();
 }
+
+}  // namespace reading_list

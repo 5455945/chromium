@@ -23,6 +23,7 @@
 
 #include "third_party/blink/renderer/platform/geometry/blend.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -31,20 +32,35 @@ Length AddLengths(const Length& lhs, const Length& rhs) {
   PixelsAndPercent lhs_pap = lhs.GetPixelsAndPercent();
   PixelsAndPercent rhs_pap = rhs.GetPixelsAndPercent();
 
-  PixelsAndPercent result = PixelsAndPercent(lhs_pap.pixels + rhs_pap.pixels,
-                                             lhs_pap.percent + rhs_pap.percent);
+  PixelsAndPercent result = lhs_pap + rhs_pap;
   if (result.percent == 0)
     return Length(result.pixels, Length::kFixed);
   if (result.pixels == 0)
     return Length(result.percent, Length::kPercent);
-  return Length(CalculationValue::Create(result, kValueRangeAll));
+  return Length(
+      MakeGarbageCollected<CalculationValue>(result, Length::ValueRange::kAll));
+}
+
+Length ScaleAndAddLength(const Length& base, const Length& delta, int n) {
+  PixelsAndPercent base_pap = base.GetPixelsAndPercent();
+  PixelsAndPercent delta_pap = delta.GetPixelsAndPercent();
+  delta_pap *= static_cast<float>(n);
+  PixelsAndPercent result = base_pap + delta_pap;
+  if (result.percent == 0) {
+    return Length(result.pixels, Length::kFixed);
+  }
+  if (result.pixels == 0) {
+    return Length(result.percent, Length::kPercent);
+  }
+  return Length(
+      MakeGarbageCollected<CalculationValue>(result, Length::ValueRange::kAll));
 }
 
 TransformOperation::OperationType GetTypeForTranslate(const Length& x,
                                                       const Length& y,
                                                       double z) {
   bool x_zero = x.IsZero();
-  bool y_zero = x.IsZero();
+  bool y_zero = y.IsZero();
   bool z_zero = !z;
   if (y_zero && z_zero)
     return TransformOperation::kTranslateX;
@@ -58,7 +74,7 @@ TransformOperation::OperationType GetTypeForTranslate(const Length& x,
 }
 }  // namespace
 
-scoped_refptr<TransformOperation> TranslateTransformOperation::Accumulate(
+TransformOperation* TranslateTransformOperation::Accumulate(
     const TransformOperation& other) {
   DCHECK(other.CanBlendWith(*this));
 
@@ -66,11 +82,23 @@ scoped_refptr<TransformOperation> TranslateTransformOperation::Accumulate(
   Length new_x = AddLengths(x_, other_op.x_);
   Length new_y = AddLengths(y_, other_op.y_);
   double new_z = z_ + other_op.z_;
-  return TranslateTransformOperation::Create(
+  return MakeGarbageCollected<TranslateTransformOperation>(
       new_x, new_y, new_z, GetTypeForTranslate(new_x, new_y, new_z));
 }
 
-scoped_refptr<TransformOperation> TranslateTransformOperation::Blend(
+TransformOperation* TranslateTransformOperation::AccumulateN(
+    const TransformOperation& other,
+    int n) {
+  DCHECK(other.CanBlendWith(*this));
+  const auto& other_op = To<TranslateTransformOperation>(other);
+  Length new_x = ScaleAndAddLength(x_, other_op.x_, n);
+  Length new_y = ScaleAndAddLength(y_, other_op.y_, n);
+  double new_z = z_ + n * other_op.z_;
+  return MakeGarbageCollected<TranslateTransformOperation>(
+      new_x, new_y, new_z, GetTypeForTranslate(new_x, new_y, new_z));
+}
+
+TransformOperation* TranslateTransformOperation::Blend(
     const TransformOperation* from,
     double progress,
     bool blend_to_identity) {
@@ -78,9 +106,9 @@ scoped_refptr<TransformOperation> TranslateTransformOperation::Blend(
 
   const Length zero_length = Length::Fixed(0);
   if (blend_to_identity) {
-    return TranslateTransformOperation::Create(
-        zero_length.Blend(x_, progress, kValueRangeAll),
-        zero_length.Blend(y_, progress, kValueRangeAll),
+    return MakeGarbageCollected<TranslateTransformOperation>(
+        zero_length.Blend(x_, progress, Length::ValueRange::kAll),
+        zero_length.Blend(y_, progress, Length::ValueRange::kAll),
         blink::Blend(z_, 0., progress), type_);
   }
 
@@ -88,17 +116,48 @@ scoped_refptr<TransformOperation> TranslateTransformOperation::Blend(
   const Length& from_x = from_op ? from_op->x_ : zero_length;
   const Length& from_y = from_op ? from_op->y_ : zero_length;
   double from_z = from_op ? from_op->z_ : 0;
+  OperationType type;
 
-  bool is_3d = Is3DOperation() || (from && from->Is3DOperation());
-  return TranslateTransformOperation::Create(
-      x_.Blend(from_x, progress, kValueRangeAll),
-      y_.Blend(from_y, progress, kValueRangeAll),
-      blink::Blend(from_z, z_, progress), is_3d ? kTranslate3D : kTranslate);
+  CommonPrimitiveForInterpolation(from, type);
+
+  return MakeGarbageCollected<TranslateTransformOperation>(
+      x_.Blend(from_x, progress, Length::ValueRange::kAll),
+      y_.Blend(from_y, progress, Length::ValueRange::kAll),
+      blink::Blend(from_z, z_, progress), type);
 }
 
-scoped_refptr<TranslateTransformOperation>
-TranslateTransformOperation::ZoomTranslate(double factor) {
-  return Create(x_.Zoom(factor), y_.Zoom(factor), z_ * factor, type_);
+TranslateTransformOperation* TranslateTransformOperation::ZoomTranslate(
+    double factor) {
+  return MakeGarbageCollected<TranslateTransformOperation>(
+      x_.Zoom(factor), y_.Zoom(factor), z_ * factor, type_);
+}
+
+void TranslateTransformOperation::CommonPrimitiveForInterpolation(
+    const TransformOperation* from,
+    TransformOperation::OperationType& common_type) const {
+  bool is_3d = Is3DOperation() || (from && from->Is3DOperation());
+  const auto* from_op = To<TranslateTransformOperation>(from);
+  TransformOperation::OperationType from_type =
+      from_op ? from_op->type_ : type_;
+  if (type_ == from_type) {
+    common_type = type_;
+  } else if (is_3d) {
+    common_type = kTranslate3D;
+  } else {
+    common_type = kTranslate;
+  }
+}
+
+String TranslateTransformOperation::DebugString() const {
+  StringBuilder sb;
+  sb.Append("translate(");
+  sb.Append(x_.ToString());
+  sb.Append(", ");
+  sb.Append(y_.ToString());
+  sb.Append(", ");
+  sb.AppendNumber(z_);
+  sb.Append(")");
+  return sb.ReleaseString();
 }
 
 }  // namespace blink

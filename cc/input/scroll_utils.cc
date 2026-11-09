@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/numerics/ranges.h"
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
@@ -25,14 +24,52 @@ gfx::Vector2dF ScrollUtils::ResolveScrollPercentageToPixels(
 
   // Resolve and clamp horizontal scroll
   if (delta_x > 0)
-    delta_x = delta_x * std::min(scroller.width(), viewport.width());
+    delta_x =
+        std::max(1.0f, delta_x * std::min(scroller.width(), viewport.width()));
 
   // Resolve and clamps vertical scroll.
   if (delta_y > 0)
-    delta_y = delta_y * std::min(scroller.height(), viewport.height());
+    delta_y = std::max(
+        1.0f, delta_y * std::min(scroller.height(), viewport.height()));
 
   return gfx::Vector2dF(std::copysign(delta_x, sign_x),
                         std::copysign(delta_y, sign_y));
+}
+
+// static
+int ScrollUtils::CalculateMinPageSnap(int length) {
+  const int min_page_step = length * kMinFractionToStepWhenSnapPaging;
+  return std::max(min_page_step, 1);
+}
+
+// static
+int ScrollUtils::CalculateMaxPageSnap(int length) {
+  return std::max(length, 1);
+}
+
+// static
+int ScrollUtils::CalculatePageStep(int length) {
+  const int min_page_step = length * kMinFractionToStepWhenPaging;
+  const int page_step =
+      std::max(min_page_step, length - kMaxOverlapBetweenPages);
+  return std::max(page_step, 1);
+}
+
+// static
+int ScrollUtils::CalculateScrollbarThumbLength(int total_size,
+                                               int visible_size,
+                                               int track_length,
+                                               int minimum_thumb_length) {
+  float proportion = 0.0f;
+  if (total_size > 0) {
+    proportion = static_cast<float>(visible_size) / total_size;
+  }
+  int length = round(proportion * track_length);
+  length = std::max(length, minimum_thumb_length);
+  if (length > track_length) {
+    length = track_length;
+  }
+  return length;
 }
 
 }  // namespace cc

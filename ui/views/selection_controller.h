@@ -1,10 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_SELECTION_CONTROLLER_H_
 #define UI_VIEWS_SELECTION_CONTROLLER_H_
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/gfx/geometry/point.h"
@@ -38,6 +40,10 @@ class VIEWS_EXPORT SelectionController {
   // |delegate| must be non-null.
   explicit SelectionController(SelectionControllerDelegate* delegate);
 
+  SelectionController(const SelectionController&) = delete;
+  SelectionController& operator=(const SelectionController&) = delete;
+  ~SelectionController();
+
   // Handle mouse events forwarded by |delegate_|. |handled| specifies whether
   // the event has already been handled by the |delegate_|. If |handled| is
   // true, the mouse event is just used to update the internal state without
@@ -54,6 +60,9 @@ class VIEWS_EXPORT SelectionController {
     return last_click_root_location_;
   }
 
+  // Returns the time stamp of the latest click.
+  base::TimeTicks last_click_time() const { return last_click_time_; }
+
   // Sets whether the SelectionController should update or paste the
   // selection clipboard on middle-click. Default is false.
   void set_handles_selection_clipboard(bool value) {
@@ -63,7 +72,7 @@ class VIEWS_EXPORT SelectionController {
   // Offsets the double-clicked word's range. This is only used in the unusual
   // case where the text changes on the second mousedown of a double-click.
   // This is harmless if there is not a currently double-clicked word.
-  void OffsetDoubleClickWord(int offset);
+  void OffsetDoubleClickWord(size_t offset);
 
  private:
   // Tracks the mouse clicks for single/double/triple clicks.
@@ -99,18 +108,18 @@ class VIEWS_EXPORT SelectionController {
   // Used to track double and triple clicks. Can take the values 0, 1 and 2
   // which specify a single, double and triple click respectively. Alternates
   // between a double and triple click for continuous clicks.
-  size_t aggregated_clicks_;
+  size_t aggregated_clicks_ = 0;
 
   // The range selected on a double click.
   gfx::Range double_click_word_;
 
   // Weak pointer.
-  SelectionControllerDelegate* delegate_;
+  raw_ptr<SelectionControllerDelegate> delegate_;
 
   // Whether the selection clipboard is handled.
-  bool handles_selection_clipboard_;
+  bool handles_selection_clipboard_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(SelectionController);
+  base::WeakPtrFactory<SelectionController> weak_ptr_factory_{this};
 };
 
 }  // namespace views

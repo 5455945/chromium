@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_navigator_ua_brand_version.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -17,8 +18,10 @@ namespace blink {
 
 class NavigatorUABrandVersion;
 class ScriptState;
+class UADataValues;
 
-class NavigatorUAData : public ScriptWrappable, ExecutionContextClient {
+class CORE_EXPORT NavigatorUAData : public ScriptWrappable,
+                                    ExecutionContextClient {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -29,25 +32,33 @@ class NavigatorUAData : public ScriptWrappable, ExecutionContextClient {
   explicit NavigatorUAData(ExecutionContext* context);
 
   void SetBrandVersionList(const UserAgentBrandList& brand_version_list);
+  void SetFullVersionList(const UserAgentBrandList& full_version_list);
   void SetMobile(bool mobile);
-  void SetPlatform(const String& brand, const String& version);
-  void SetArchitecture(const String& architecture);
-  void SetModel(const String& model);
-  void SetUAFullVersion(const String& uaFullVersion);
-  void SetBitness(const String& bitness);
+  void SetPlatform(String brand, String version);
+  void SetArchitecture(String architecture);
+  void SetModel(String model);
+  void SetUAFullVersion(String ua_full_version);
+  void SetBitness(String bitness);
+  void SetWoW64(bool wow64);
+  void SetFormFactors(Vector<String> form_factors);
 
   // IDL implementation
   const HeapVector<Member<NavigatorUABrandVersion>>& brands() const;
   bool mobile() const;
   const String& platform() const;
-  ScriptPromise getHighEntropyValues(ScriptState*, Vector<String>&) const;
-  ScriptValue toJSON(ScriptState*) const;
+  ScriptPromise<UADataValues> getHighEntropyValues(ScriptState*,
+                                                   const Vector<String>&) const;
+  ScriptObject toJSON(ScriptState*) const;
 
   void Trace(Visitor* visitor) const final;
 
  private:
   HeapVector<Member<NavigatorUABrandVersion>> brand_set_;
-  HeapVector<Member<NavigatorUABrandVersion>> empty_brand_set_;
+  // Only returned by brands() once the execution context is gone, so it is
+  // populated lazily to avoid an allocation on every navigator.userAgentData
+  // access.
+  mutable HeapVector<Member<NavigatorUABrandVersion>> empty_brand_set_;
+  HeapVector<Member<NavigatorUABrandVersion>> full_version_list_;
   bool is_mobile_ = false;
   String platform_;
   String platform_version_;
@@ -55,8 +66,8 @@ class NavigatorUAData : public ScriptWrappable, ExecutionContextClient {
   String model_;
   String ua_full_version_;
   String bitness_;
-
-  void AddBrandVersion(const String& brand, const String& version);
+  bool is_wow64_ = false;
+  Vector<String> form_factors_;
 };
 
 }  // namespace blink

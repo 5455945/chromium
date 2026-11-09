@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <list>
 
-#include "base/macros.h"
 #include "google_apis/gcm/base/mcs_message.h"
 #include "google_apis/gcm/engine/connection_handler.h"
 #include "mojo/public/cpp/system/data_pipe.h"
@@ -20,7 +19,12 @@ class FakeConnectionHandler : public ConnectionHandler {
  public:
   FakeConnectionHandler(
       const ConnectionHandler::ProtoReceivedCallback& read_callback,
-      const ConnectionHandler::ProtoSentCallback& write_callback);
+      const ConnectionHandler::ProtoSentCallback& write_callback,
+      const ConnectionHandler::ConnectionChangedCallback& connection_callback);
+
+  FakeConnectionHandler(const FakeConnectionHandler&) = delete;
+  FakeConnectionHandler& operator=(const FakeConnectionHandler&) = delete;
+
   ~FakeConnectionHandler() override;
 
   // ConnectionHandler implementation.
@@ -64,6 +68,7 @@ class FakeConnectionHandler : public ConnectionHandler {
  private:
   ConnectionHandler::ProtoReceivedCallback read_callback_;
   ConnectionHandler::ProtoSentCallback write_callback_;
+  ConnectionHandler::ConnectionChangedCallback connection_callback_;
 
   std::list<MCSMessage> expected_outgoing_messages_;
 
@@ -78,8 +83,6 @@ class FakeConnectionHandler : public ConnectionHandler {
 
   // Whether an error was encountered after a successful login.
   bool had_error_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeConnectionHandler);
 };
 
 }  // namespace gcm

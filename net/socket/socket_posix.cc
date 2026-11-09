@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,20 @@
 
 #include <errno.h>
 #include <netinet/in.h>
+#include <stdio.h>
 #include <sys/socket.h>
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/debug/alias.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/rand_util.h"
 #include "base/task/current_thread.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
@@ -26,10 +30,18 @@
 #include "net/base/trace_constants.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
 #include <poll.h>
 #include <sys/ioctl.h>
-#endif  // OS_FUCHSIA
+#endif  // BUILDFLAG(IS_FUCHSIA)
+
+#if BUILDFLAG(IS_APPLE)
+#include "net/socket/socket_apple.h"
+#endif  // BUILDFLAG(IS_APPLE)
+
+#if BUILDFLAG(IS_ANDROID)
+#include "net/android/network_library.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace net {
 
@@ -49,7 +61,23 @@ int MapAcceptError(int os_error) {
   }
 }
 
-int MapConnectError(int os_error) {
+int MapConnectError(int os_error, SocketDescriptor fd) {
+#if BUILDFLAG(IS_ANDROID)
+  // Android local network permission errors are surfaced as
+  // EPERM/EACCESS/EINPROGRESS/ETIMEDOUT when connecting (or reading/writing
+  // from) a TCP socket
+  // (https://developer.android.com/privacy-and-security/local-network-permission).
+  // Note that these errors are not unique to LNP. So, before returning the
+  // LNP-specific ERR_LOCAL_NETWORK_PERMISSION_MISSING, we must check whether
+  // LNP was really the cause.
+  if (os_error == EINPROGRESS || os_error == EPERM || os_error == EACCES ||
+      os_error == ETIMEDOUT) {
+    if (android::GetNetworkBlockedReason(fd) ==
+        android::NetworkBlockedReason::kLnp) {
+      return ERR_LOCAL_NETWORK_PERMISSION_MISSING;
+    }
+  }
+#endif
   switch (os_error) {
     case EINPROGRESS:
       return ERR_IO_PENDING;
@@ -72,10 +100,7 @@ SocketPosix::SocketPosix()
     : socket_fd_(kInvalidSocket),
       accept_socket_watcher_(FROM_HERE),
       read_socket_watcher_(FROM_HERE),
-      read_buf_len_(0),
-      write_socket_watcher_(FROM_HERE),
-      write_buf_len_(0),
-      waiting_connect_(false) {}
+      write_socket_watcher_(FROM_HERE) {}
 
 SocketPosix::~SocketPosix() {
   Close();
@@ -145,7 +170,7 @@ int SocketPosix::Bind(const SockaddrStorage& address) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK_NE(kInvalidSocket, socket_fd_);
 
-  int rv = bind(socket_fd_, address.addr, address.addr_len);
+  int rv = bind(socket_fd_, address.addr(), address.addr_len);
   if (rv < 0) {
     PLOG(ERROR) << "bind() failed";
     return MapSystemError(errno);
@@ -225,7 +250,7 @@ int SocketPosix::Connect(const SockaddrStorage& address,
     errno = os_error;
   }
 
-  rv = MapConnectError(errno);
+  rv = MapConnectError(errno, socket_fd_);
   if (rv != OK && rv != ERR_IO_PENDING) {
     write_socket_watcher_.StopWatchingFileDescriptor();
     return rv;
@@ -328,12 +353,12 @@ int SocketPosix::Write(
     CompletionOnceCallback callback,
     const NetworkTrafficAnnotationTag& /* traffic_annotation */) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK_NE(kInvalidSocket, socket_fd_);
-  DCHECK(!waiting_connect_);
+  CHECK_NE(kInvalidSocket, socket_fd_);
+  CHECK(!waiting_connect_);
   CHECK(write_callback_.is_null());
   // Synchronous operation not supported
-  DCHECK(!callback.is_null());
-  DCHECK_LT(0, buf_len);
+  CHECK(!callback.is_null());
+  CHECK_LT(0, buf_len);
 
   int rv = DoWrite(buf, buf_len);
   if (rv == ERR_IO_PENDING)
@@ -368,8 +393,9 @@ int SocketPosix::GetLocalAddress(SockaddrStorage* address) const {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(address);
 
-  if (getsockname(socket_fd_, address->addr, &address->addr_len) < 0)
+  if (getsockname(socket_fd_, address->addr(), &address->addr_len) < 0) {
     return MapSystemError(errno);
+  }
   return OK;
 }
 
@@ -434,13 +460,12 @@ void SocketPosix::OnFileCanWriteWithoutBlocking(int fd) {
 
 int SocketPosix::DoAccept(std::unique_ptr<SocketPosix>* socket) {
   SockaddrStorage new_peer_address;
-  int new_socket = HANDLE_EINTR(accept(socket_fd_,
-                                       new_peer_address.addr,
-                                       &new_peer_address.addr_len));
+  int new_socket = HANDLE_EINTR(
+      accept(socket_fd_, new_peer_address.addr(), &new_peer_address.addr_len));
   if (new_socket < 0)
     return MapAcceptError(errno);
 
-  std::unique_ptr<SocketPosix> accepted_socket(new SocketPosix);
+  auto accepted_socket = std::make_unique<SocketPosix>();
   int rv = accepted_socket->AdoptConnectedSocket(new_socket, new_peer_address);
   if (rv != OK)
     return rv;
@@ -462,11 +487,10 @@ void SocketPosix::AcceptCompleted() {
 }
 
 int SocketPosix::DoConnect() {
-  int rv = HANDLE_EINTR(connect(socket_fd_,
-                                peer_address_->addr,
-                                peer_address_->addr_len));
+  int rv = HANDLE_EINTR(
+      connect(socket_fd_, peer_address_->addr(), peer_address_->addr_len));
   DCHECK_GE(0, rv);
-  return rv == 0 ? OK : MapConnectError(errno);
+  return rv == 0 ? OK : MapConnectError(errno, socket_fd_);
 }
 
 void SocketPosix::ConnectCompleted() {
@@ -478,7 +502,7 @@ void SocketPosix::ConnectCompleted() {
     errno = os_error;
   }
 
-  int rv = MapConnectError(errno);
+  int rv = MapConnectError(errno, socket_fd_);
   if (rv == ERR_IO_PENDING)
     return;
 
@@ -489,6 +513,9 @@ void SocketPosix::ConnectCompleted() {
 }
 
 int SocketPosix::DoRead(IOBuffer* buf, int buf_len) {
+  SCOPED_UMA_HISTOGRAM_TIMER_MICROS_SUBSAMPLED(
+      "Net.SocketPosix.DoReadDuration",
+      base::ShouldRecordSubsampledMetric(0.001));
   int rv = HANDLE_EINTR(read(socket_fd_, buf->data(), buf_len));
   return rv >= 0 ? rv : MapSystemError(errno);
 }
@@ -519,16 +546,25 @@ void SocketPosix::ReadCompleted() {
 }
 
 int SocketPosix::DoWrite(IOBuffer* buf, int buf_len) {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
-  // Disable SIGPIPE for this write. Although Chromium globally disables
-  // SIGPIPE, the net stack may be used in other consumers which do not do
-  // this. MSG_NOSIGNAL is a Linux-only API. On OS X, this is a setsockopt on
-  // socket creation.
-  int rv = HANDLE_EINTR(send(socket_fd_, buf->data(), buf_len, MSG_NOSIGNAL));
-#else
-  int rv = HANDLE_EINTR(write(socket_fd_, buf->data(), buf_len));
-#endif
-  return rv >= 0 ? rv : MapSystemError(errno);
+#if defined(WORK_AROUND_CRBUG_40064248)
+  ssize_t send_rv = HANDLE_EINTR(SendAndDetectBogusReturnValue(
+      socket_fd_, buf->data(), buf_len, MSG_NOSIGNAL));
+  if (send_rv == kSendBogusReturnValueDetected) {
+    // https://crbug.com/40064248 is known to occur as a result of certain
+    // network configuration changes.
+    return ERR_NETWORK_CHANGED;
+  }
+#else   // WORK_AROUND_CRBUG_40064248
+  ssize_t send_rv =
+      HANDLE_EINTR(send(socket_fd_, buf->data(), buf_len, MSG_NOSIGNAL));
+#endif  // WORK_AROUND_CRBUG_40064248
+
+  if (send_rv < 0) {
+    return MapSystemError(errno);
+  }
+
+  CHECK_LE(send_rv, buf_len);
+  return send_rv;
 }
 
 void SocketPosix::WriteCompleted() {

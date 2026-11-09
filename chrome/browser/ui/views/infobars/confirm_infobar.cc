@@ -1,138 +1,255 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/infobars/confirm_infobar.h"
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
+#include "chrome/browser/infobars/confirm_infobar_creation_allowlist.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/elevation_icon_setter.h"
-#include "ui/base/window_open_disposition.h"
-#include "ui/views/controls/button/label_button.h"
+#include "chrome/browser/ui/views/infobars/confirm_infobar_with_custom_view.h"
+#include "chrome/browser/ui/views/infobars/confirm_infobar_with_normal_label.h"
+#include "chrome/browser/ui/views/infobars/confirm_infobar_with_styled_label.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
+#include "ui/views/controls/styled_label.h"
+#include "ui/views/layout/flex_layout.h"
 #include "ui/views/view_class_properties.h"
+
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ConfirmInfoBar, kOkButtonElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ConfirmInfoBar, kCancelButtonElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ConfirmInfoBar, kExtraButtonElementId);
+
+// static
+std::unique_ptr<ConfirmInfoBar> ConfirmInfoBar::Create(
+    base::PassKey<ConfirmInfoBarCreationAllowlist>,
+    std::unique_ptr<ConfirmInfoBarDelegate> delegate) {
+  if (!delegate->GetMessageTextTemplate().empty()) {
+    return std::make_unique<ConfirmInfoBarWithStyledLabel>(std::move(delegate));
+  }
+  return std::make_unique<ConfirmInfoBarWithNormalLabel>(std::move(delegate));
+}
+
+// static
+std::unique_ptr<ConfirmInfoBar> ConfirmInfoBar::Create(
+    base::PassKey<ConfirmInfoBarCreationAllowlist> pass_key,
+    std::unique_ptr<ConfirmInfoBarDelegate> delegate,
+    std::unique_ptr<views::View> custom_message_view) {
+  if (custom_message_view) {
+    return std::make_unique<ConfirmInfoBarWithCustomView>(
+        std::move(delegate), std::move(custom_message_view));
+  }
+  return Create(pass_key, std::move(delegate));
+}
+
+template <typename T>
+T* ConfirmInfoBar::AssignMessageLabel(std::unique_ptr<T> view) {
+  auto* message_label = content_container()->AddChildViewAt(std::move(view), 0);
+  message_view_ = message_label;
+  int kHorizontalDistanceLabel = ChromeLayoutProvider::Get()->GetDistanceMetric(
+      views::DISTANCE_UNRELATED_CONTROL_HORIZONTAL);
+  if (GetDelegate()->ShouldShowLinkBeforeButton()) {
+    kHorizontalDistanceLabel = 4;
+  }
+  // Set horizontal distance for label for flex layout.
+  message_label->SetProperty(views::kMarginsKey,
+                             std::make_unique<gfx::Insets>(gfx::Insets::TLBR(
+                                 0, 0, 0, kHorizontalDistanceLabel)));
+  message_label->SetProperty(
+      views::kFlexBehaviorKey,
+      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
+                               views::MaximumFlexSizeRule::kPreferred)
+          .WithWeight(1));
+  return message_label;
+}
+
+template views::View* ConfirmInfoBar::AssignMessageLabel(
+    std::unique_ptr<views::View>);
+template views::Label* ConfirmInfoBar::AssignMessageLabel(
+    std::unique_ptr<views::Label>);
+template views::StyledLabel* ConfirmInfoBar::AssignMessageLabel(
+    std::unique_ptr<views::StyledLabel>);
 
 ConfirmInfoBar::ConfirmInfoBar(std::unique_ptr<ConfirmInfoBarDelegate> delegate)
     : InfoBarView(std::move(delegate)) {
+  SetProperty(views::kElementIdentifierKey, kInfoBarElementId);
   auto* delegate_ptr = GetDelegate();
-  label_ = CreateLabel(delegate_ptr->GetMessageText());
-  label_->SetElideBehavior(delegate_ptr->GetMessageElideBehavior());
-  AddChildView(label_);
 
-  const auto create_button = [this](ConfirmInfoBarDelegate::InfoBarButton type,
-                                    void (ConfirmInfoBar::*click_function)()) {
-    auto* button = AddChildView(std::make_unique<views::MdTextButton>(
+  // TODO: (457800852) Create hierarchy of views for Infobar.
+  // Set the layout on the content container for flex layout.
+  auto* layout = content_container()->SetLayoutManager(
+      std::make_unique<views::FlexLayout>());
+  layout->SetOrientation(views::LayoutOrientation::kHorizontal)
+      .SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
+
+  const views::FlexSpecification kRigidFlex =
+      views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                               views::MaximumFlexSizeRule::kPreferred);
+
+  const int buttons = delegate_ptr->GetButtons();
+  const auto create_button = [&](ConfirmInfoBarDelegate::InfoBarButton type,
+                                 void (ConfirmInfoBar::*click_function)()) {
+    // Safe: `this` owns the button.
+    auto button = std::make_unique<views::MdTextButton>(
         base::BindRepeating(click_function, base::Unretained(this)),
-        GetDelegate()->GetButtonLabel(type)));
-    button->SetProperty(
+        GetDelegate()->GetButtonLabel(type), views::style::CONTEXT_BUTTON_MD,
+        delegate_ptr->ShouldUseTextColorForButtonIcon(type));
+    auto* button_ptr = button.get();
+    // Set custom padding on the buttons.
+    button_ptr->SetCustomPadding(
+        gfx::Insets::VH(ChromeLayoutProvider::Get()->GetDistanceMetric(
+                            DISTANCE_INFOBAR_BUTTON_VERTICAL_PADDING),
+                        ChromeLayoutProvider::Get()->GetDistanceMetric(
+                            DISTANCE_INFOBAR_BUTTON_HORIZONTAL_PADDING)));
+
+    button_ptr->SetProperty(
         views::kMarginsKey,
-        gfx::Insets(ChromeLayoutProvider::Get()->GetDistanceMetric(
-                        DISTANCE_TOAST_CONTROL_VERTICAL),
-                    0));
-    button->SizeToPreferredSize();
-    return button;
+        gfx::Insets::VH(ChromeLayoutProvider::Get()->GetDistanceMetric(
+                            DISTANCE_TOAST_CONTROL_VERTICAL),
+                        0));
+
+    const bool is_default_button =
+        type == buttons || type == ConfirmInfoBarDelegate::BUTTON_OK;
+    const auto fallback_style = is_default_button ? ui::ButtonStyle::kProminent
+                                                  : ui::ButtonStyle::kTonal;
+    button_ptr->SetStyle(
+        delegate_ptr->GetButtonStyle(type).value_or(fallback_style));
+
+    button_ptr->SetImageModel(views::Button::STATE_NORMAL,
+                              delegate_ptr->GetButtonImage(type));
+    button_ptr->SetEnabled(delegate_ptr->GetButtonEnabled(type));
+    button_ptr->SetTooltipText(delegate_ptr->GetButtonTooltip(type));
+
+    AddContentChildView(std::move(button));
+    return button_ptr;
   };
 
-  const auto buttons = delegate_ptr->GetButtons();
   if (buttons & ConfirmInfoBarDelegate::BUTTON_OK) {
     ok_button_ = create_button(ConfirmInfoBarDelegate::BUTTON_OK,
                                &ConfirmInfoBar::OkButtonPressed);
-    ok_button_->SetProminent(true);
-    if (delegate_ptr->OKButtonTriggersUACPrompt()) {
-      elevation_icon_setter_ = std::make_unique<ElevationIconSetter>(
-          ok_button_,
-          base::BindOnce(&ConfirmInfoBar::Layout, base::Unretained(this)));
-    }
+    ok_button_->SetProperty(views::kElementIdentifierKey, kOkButtonElementId);
+
+    ok_button_->SetProperty(views::kFlexBehaviorKey, kRigidFlex);
+    // Set the margin for FlexLayout for ok button.
+    ok_button_->SetProperty(
+        views::kMarginsKey,
+        std::make_unique<gfx::Insets>(gfx::Insets::TLBR(0, 0, 0, 0)));
   }
 
   if (buttons & ConfirmInfoBarDelegate::BUTTON_CANCEL) {
     cancel_button_ = create_button(ConfirmInfoBarDelegate::BUTTON_CANCEL,
                                    &ConfirmInfoBar::CancelButtonPressed);
-    if (buttons == ConfirmInfoBarDelegate::BUTTON_CANCEL)
-      cancel_button_->SetProminent(true);
+    cancel_button_->SetProperty(views::kElementIdentifierKey,
+                                kCancelButtonElementId);
+
+    cancel_button_->SetProperty(views::kFlexBehaviorKey, kRigidFlex);
+    // Set the margin for FlexLayout for cancel button.
+    cancel_button_->SetProperty(
+        views::kMarginsKey, std::make_unique<gfx::Insets>(gfx::Insets::TLBR(
+                                0,
+                                ChromeLayoutProvider::Get()->GetDistanceMetric(
+                                    views::DISTANCE_RELATED_BUTTON_HORIZONTAL),
+                                0, 0)));
   }
 
-  link_ = CreateLink(delegate_ptr->GetLinkText());
-  AddChildView(link_);
-}
+  if (buttons & ConfirmInfoBarDelegate::BUTTON_EXTRA) {
+    extra_button_ = create_button(ConfirmInfoBarDelegate::BUTTON_EXTRA,
+                                  &ConfirmInfoBar::ExtraButtonPressed);
+    extra_button_->SetProperty(views::kElementIdentifierKey,
+                               kExtraButtonElementId);
 
-ConfirmInfoBar::~ConfirmInfoBar() {
-  // Ensure |elevation_icon_setter_| is destroyed before |ok_button_|.
-  elevation_icon_setter_.reset();
-}
-
-void ConfirmInfoBar::Layout() {
-  InfoBarView::Layout();
-
-  int x = GetStartX();
-  Views views;
-  views.push_back(label_);
-  views.push_back(link_);
-  AssignWidths(&views, std::max(0, GetEndX() - x - NonLabelWidth()));
-
-  ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
-
-  label_->SetPosition(gfx::Point(x, OffsetY(label_)));
-  if (!label_->GetText().empty())
-    x = label_->bounds().right() +
-        layout_provider->GetDistanceMetric(
-            views::DISTANCE_RELATED_LABEL_HORIZONTAL);
-
-  if (ok_button_) {
-    ok_button_->SetPosition(gfx::Point(x, OffsetY(ok_button_)));
-    x = ok_button_->bounds().right() +
-        layout_provider->GetDistanceMetric(
-            views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
+    extra_button_->SetProperty(views::kFlexBehaviorKey, kRigidFlex);
+    const int left_margin =
+        (ok_button_ || cancel_button_)
+            ? ChromeLayoutProvider::Get()->GetDistanceMetric(
+                  views::DISTANCE_RELATED_BUTTON_HORIZONTAL)
+            : 0;
+    extra_button_->SetProperty(
+        views::kMarginsKey,
+        std::make_unique<gfx::Insets>(gfx::Insets::TLBR(0, left_margin, 0, 0)));
   }
+  auto link_unique_ptr = CreateLink(delegate_ptr->GetLinkText(),
+                                    delegate_ptr->GetLinkAccessibleText());
 
-  if (cancel_button_)
-    cancel_button_->SetPosition(gfx::Point(x, OffsetY(cancel_button_)));
+  if (link_unique_ptr) {
+    link_ = link_unique_ptr.get();
 
-  link_->SetPosition(gfx::Point(GetEndX() - link_->width(), OffsetY(link_)));
+    // Add the link to the infobar view and reorder it to be placed before the
+    // close button.
+    if (GetDelegate()->ShouldShowLinkBeforeButton()) {
+      AddContentChildView(std::move(link_unique_ptr));
+    } else {
+      AddViewBeforeCloseButton(std::move(link_unique_ptr));
+    }
+    link_->SetProperty(views::kFlexBehaviorKey, kRigidFlex);
+    // Add margins for spacing for flex layout.
+    link_->SetProperty(views::kMarginsKey, std::make_unique<gfx::Insets>(
+                                               gfx::Insets::TLBR(0, 0, 0, 0)));
+  }
+}
+
+ConfirmInfoBar::~ConfirmInfoBar() = default;
+
+void ConfirmInfoBar::Layout(PassKey) {
+  LayoutSuperclass<InfoBarView>(this);
 }
 
 void ConfirmInfoBar::OkButtonPressed() {
-  if (!owner())
+  if (!owner()) {
     return;  // We're closing; don't call anything, it might access the owner.
-  if (GetDelegate()->Accept())
+  }
+  if (GetDelegate()->Accept()) {
     RemoveSelf();
+  }
 }
 
 void ConfirmInfoBar::CancelButtonPressed() {
-  if (!owner())
+  if (!owner()) {
     return;  // We're closing; don't call anything, it might access the owner.
-  if (GetDelegate()->Cancel())
+  }
+  if (GetDelegate()->Cancel()) {
     RemoveSelf();
+  }
+}
+
+void ConfirmInfoBar::ExtraButtonPressed() {
+  if (!owner()) {
+    return;
+  }
+  if (GetDelegate()->ExtraButtonPressed()) {
+    RemoveSelf();
+  }
 }
 
 ConfirmInfoBarDelegate* ConfirmInfoBar::GetDelegate() {
   return delegate()->AsConfirmInfoBarDelegate();
 }
 
+const ConfirmInfoBarDelegate* ConfirmInfoBar::GetDelegate() const {
+  return delegate()->AsConfirmInfoBarDelegate();
+}
+
 int ConfirmInfoBar::GetContentMinimumWidth() const {
-  return label_->GetMinimumSize().width() + link_->GetMinimumSize().width() +
-         NonLabelWidth();
+  // With using flex layout, no manual calculations are needed.
+  return 0;
 }
 
-int ConfirmInfoBar::NonLabelWidth() const {
-  ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
-
-  const int label_spacing = layout_provider->GetDistanceMetric(
-      views::DISTANCE_RELATED_LABEL_HORIZONTAL);
-  const int button_spacing = layout_provider->GetDistanceMetric(
-      views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
-
-  int width = (label_->GetText().empty() || (!ok_button_ && !cancel_button_))
-                  ? 0
-                  : label_spacing;
-  if (ok_button_)
-    width += ok_button_->width() + (cancel_button_ ? button_spacing : 0);
-  width += cancel_button_ ? cancel_button_->width() : 0;
-  return width + ((link_->GetText().empty() || !width) ? 0 : label_spacing);
+int ConfirmInfoBar::GetContentPreferredWidth() const {
+  // With using flex layout, no manual calculations are needed.
+  return 0;
 }
+
+views::Label* ConfirmInfoBar::label_for_testing() {
+  return nullptr;
+}
+
+BEGIN_METADATA(ConfirmInfoBar)
+END_METADATA

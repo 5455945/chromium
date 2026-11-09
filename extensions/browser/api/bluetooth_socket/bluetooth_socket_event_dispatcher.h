@@ -1,14 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_BLUETOOTH_SOCKET_BLUETOOTH_SOCKET_EVENT_DISPATCHER_H_
 #define EXTENSIONS_BROWSER_API_BLUETOOTH_SOCKET_BLUETOOTH_SOCKET_EVENT_DISPATCHER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/api_resource_manager.h"
 #include "extensions/browser/api/bluetooth_socket/bluetooth_api_socket.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/common/extension_id.h"
 
 namespace content {
 class BrowserContext;
@@ -29,21 +31,19 @@ namespace api {
 
 // Dispatch events related to "bluetooth" sockets from callback on native socket
 // instances. There is one instance per browser context.
-class BluetoothSocketEventDispatcher
-    : public BrowserContextKeyedAPI,
-      public base::SupportsWeakPtr<BluetoothSocketEventDispatcher> {
+class BluetoothSocketEventDispatcher : public BrowserContextKeyedAPI {
  public:
   explicit BluetoothSocketEventDispatcher(content::BrowserContext* context);
   ~BluetoothSocketEventDispatcher() override;
 
   // Socket is active, start receiving data from it.
-  void OnSocketConnect(const std::string& extension_id, int socket_id);
+  void OnSocketConnect(const ExtensionId& extension_id, int socket_id);
 
   // Socket is active again, start accepting connections from it.
-  void OnSocketListen(const std::string& extension_id, int socket_id);
+  void OnSocketListen(const ExtensionId& extension_id, int socket_id);
 
   // Socket is active again, start receiving data from it.
-  void OnSocketResume(const std::string& extension_id, int socket_id);
+  void OnSocketResume(const ExtensionId& extension_id, int socket_id);
 
   // BrowserContextKeyedAPI implementation.
   static BrowserContextKeyedAPIFactory<BluetoothSocketEventDispatcher>*
@@ -53,7 +53,7 @@ class BluetoothSocketEventDispatcher
   static BluetoothSocketEventDispatcher* Get(content::BrowserContext* context);
 
  private:
-  typedef ApiResourceManager<BluetoothApiSocket>::ApiResourceData SocketData;
+  using SocketData = ApiResourceManager<BluetoothApiSocket>::ApiResourceData;
   friend class BrowserContextKeyedAPIFactory<BluetoothSocketEventDispatcher>;
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "BluetoothSocketEventDispatcher"; }
@@ -69,8 +69,8 @@ class BluetoothSocketEventDispatcher
     ~SocketParams();
 
     content::BrowserThread::ID thread_id;
-    void* browser_context_id;
-    std::string extension_id;
+    raw_ptr<void> browser_context_id;
+    ExtensionId extension_id;
     scoped_refptr<SocketData> sockets;
     int socket_id;
   };
@@ -107,16 +107,21 @@ class BluetoothSocketEventDispatcher
 
   // Dispatch an extension event on to EventRouter instance on UI thread.
   static void DispatchEvent(void* browser_context_id,
-                            const std::string& extension_id,
+                            const ExtensionId& extension_id,
                             std::unique_ptr<Event> event);
 
   // Usually FILE thread (except for unit testing).
   content::BrowserThread::ID thread_id_;
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::BrowserContext> browser_context_;
   scoped_refptr<SocketData> sockets_;
 };
 
 }  // namespace api
+
+template <>
+bool BrowserContextKeyedAPIFactory<api::BluetoothSocketEventDispatcher>::
+    ServiceIsCreatedWithBrowserContext() const;
+
 }  // namespace extensions
 
 #endif  // EXTENSIONS_BROWSER_API_BLUETOOTH_SOCKET_BLUETOOTH_SOCKET_EVENT_DISPATCHER_H_

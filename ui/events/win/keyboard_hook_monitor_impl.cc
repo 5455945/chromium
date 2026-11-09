@@ -1,8 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/events/win/keyboard_hook_monitor_impl.h"
+
+#include "base/no_destructor.h"
 
 namespace ui {
 
@@ -27,22 +29,18 @@ bool KeyboardHookMonitorImpl::IsActive() {
 
 void KeyboardHookMonitorImpl::NotifyHookRegistered() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(!is_hook_active_);
+  CHECK(!is_hook_active_, base::NotFatalUntil::M163);
 
   is_hook_active_ = true;
-  for (auto& observer : observers_) {
-    observer.OnHookRegistered();
-  }
+  observers_.Notify(&KeyboardHookObserver::OnHookRegistered);
 }
 
 void KeyboardHookMonitorImpl::NotifyHookUnregistered() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(is_hook_active_);
+  CHECK(is_hook_active_, base::NotFatalUntil::M163);
 
   is_hook_active_ = false;
-  for (auto& observer : observers_) {
-    observer.OnHookUnregistered();
-  }
+  observers_.Notify(&KeyboardHookObserver::OnHookUnregistered);
 }
 
 // static

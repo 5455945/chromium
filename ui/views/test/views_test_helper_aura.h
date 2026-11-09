@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,7 @@ class ViewsTestHelperAura : public ViewsTestHelper {
   // ViewsTestHelper:
   std::unique_ptr<TestViewsDelegate> GetFallbackTestViewsDelegate() override;
   void SetUp() override;
+  void TearDown() override;
   gfx::NativeWindow GetContext() override;
 
   // Provides a way for test bases to customize what test helper will be used
@@ -39,6 +40,7 @@ class ViewsTestHelperAura : public ViewsTestHelper {
 
  private:
   std::unique_ptr<aura::test::AuraTestHelper> aura_test_helper_;
+  bool is_set_up_ = false;
 };
 
 }  // namespace views

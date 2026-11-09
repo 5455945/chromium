@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,19 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
-#include "base/callback.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time/time.h"
 #include "chrome/browser/ui/autofill/payments/credit_card_scanner_view.h"
 #include "chrome/browser/ui/autofill/payments/credit_card_scanner_view_delegate.h"
-#include "components/autofill/core/browser/autofill_metrics.h"
+#include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 
 namespace autofill {
 
@@ -22,36 +26,43 @@ namespace {
 
 // Controller for the credit card scanner UI. The controller deletes itself
 // after the view is dismissed.
-class Controller : public CreditCardScannerViewDelegate,
-                   public base::SupportsWeakPtr<Controller> {
+class Controller final : public CreditCardScannerViewDelegate {
  public:
   Controller(content::WebContents* web_contents,
-             AutofillClient::CreditCardScanCallback callback)
-      : view_(CreditCardScannerView::Create(AsWeakPtr(), web_contents)),
-        callback_(std::move(callback)) {
-    DCHECK(view_);
+             payments::PaymentsAutofillClient::CreditCardScanCallback callback)
+      : callback_(std::move(callback)) {
+    view_ = CreditCardScannerView::Create(weak_ptr_factory_.GetWeakPtr(),
+                                          web_contents);
+    CHECK(view_, base::NotFatalUntil::M162);
+    if (auto* client = ContentAutofillClient::FromWebContents(web_contents)) {
+      user_has_cards = !client->GetPersonalDataManager()
+                         .payments_data_manager()
+                         .GetCreditCards()
+                         .empty();
+    }
   }
+  Controller(const Controller&) = delete;
+  Controller& operator=(const Controller&) = delete;
 
   // Shows the UI to scan the credit card.
   void Show() {
-    show_time_ = base::TimeTicks::Now();
     view_->Show();
   }
 
  private:
-  ~Controller() override {}
+  ~Controller() override = default;
 
   // CreditCardScannerViewDelegate implementation.
   void ScanCancelled() override {
-    AutofillMetrics::LogScanCreditCardCompleted(
-        base::TimeTicks::Now() - show_time_, false);
+    AutofillMetrics::LogScanCreditCardCompleted(false);
     delete this;
   }
 
   // CreditCardScannerViewDelegate implementation.
   void ScanCompleted(const CreditCard& card) override {
-    AutofillMetrics::LogScanCreditCardCompleted(
-        base::TimeTicks::Now() - show_time_, true);
+    AutofillMetrics::LogScanCreditCardCompleted(true);
+    AutofillMetrics::LogScanCreditCardCompletedNewUser(
+        /*is_new_user=*/!user_has_cards);
     std::move(callback_).Run(card);
     delete this;
   }
@@ -60,18 +71,21 @@ class Controller : public CreditCardScannerViewDelegate,
   std::unique_ptr<CreditCardScannerView> view_;
 
   // The callback to be invoked when scanning completes successfully.
-  AutofillClient::CreditCardScanCallback callback_;
+  payments::PaymentsAutofillClient::CreditCardScanCallback callback_;
 
-  // The time when the UI was shown.
-  base::TimeTicks show_time_;
+  // Whether the user has any saved credit cards.
+  bool user_has_cards = false;
 
-  DISALLOW_COPY_AND_ASSIGN(Controller);
+  base::WeakPtrFactory<Controller> weak_ptr_factory_{this};
 };
 
 }  // namespace
 
 // static
 bool CreditCardScannerController::HasCreditCardScanFeature() {
+  if (base::FeatureList::IsEnabled(features::kAutofillCardScanningBugfixes)) {
+    return CreditCardScannerView::CanShow();
+  }
   static const bool kCanShow = CreditCardScannerView::CanShow();
   return kCanShow;
 }
@@ -79,7 +93,7 @@ bool CreditCardScannerController::HasCreditCardScanFeature() {
 // static
 void CreditCardScannerController::ScanCreditCard(
     content::WebContents* web_contents,
-    AutofillClient::CreditCardScanCallback callback) {
+    payments::PaymentsAutofillClient::CreditCardScanCallback callback) {
   (new Controller(web_contents, std::move(callback)))->Show();
 }
 

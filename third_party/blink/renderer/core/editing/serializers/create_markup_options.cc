@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,8 @@ CreateMarkupOptions::Builder::SetConstrainingAncestor(const Node* node) {
 }
 
 CreateMarkupOptions::Builder&
-CreateMarkupOptions::Builder::SetShouldResolveURLs(
-    AbsoluteURLs should_resolve_urls) {
-  data_.should_resolve_urls_ = should_resolve_urls;
+CreateMarkupOptions::Builder::SetShouldResolveUrls(ResolveUrls resolve_urls) {
+  data_.should_resolve_urls_ = resolve_urls;
   return *this;
 }
 
@@ -37,6 +36,21 @@ CreateMarkupOptions::Builder&
 CreateMarkupOptions::Builder::SetIsForMarkupSanitization(
     bool is_for_sanitization) {
   data_.is_for_markup_sanitization_ = is_for_sanitization;
+  return *this;
+}
+
+CreateMarkupOptions::Builder&
+CreateMarkupOptions::Builder::SetIgnoresCssTextTransformsForRenderedText(
+    bool ignores_text_transforms) {
+  data_.ignores_css_text_transforms_for_rendered_text_ =
+      ignores_text_transforms;
+  return *this;
+}
+
+CreateMarkupOptions::Builder&
+CreateMarkupOptions::Builder::SetShouldSkipUnselectableContent(
+    bool skip_unselectable_content) {
+  data_.should_skip_unselectable_content_ = skip_unselectable_content;
   return *this;
 }
 

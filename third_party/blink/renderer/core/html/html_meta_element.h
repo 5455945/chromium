@@ -23,10 +23,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_META_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_META_ELEMENT_H_
 
+#include <optional>
+
+#include "services/network/public/cpp/client_hints.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/page/viewport_description.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
+#include "ui/base/ime/mojom/virtual_keyboard_types.mojom-blink.h"
 
 namespace blink {
 
@@ -49,28 +53,46 @@ class CORE_EXPORT HTMLMetaElement final : public HTMLElement {
       Document*,
       bool viewport_meta_zero_values_quirk);
 
-  explicit HTMLMetaElement(Document&);
+  static void ProcessMetaCH(Document&,
+                            const AtomicString& content,
+                            network::MetaCHType type,
+                            bool is_doc_preloader,
+                            bool is_sync_parser);
+
+  explicit HTMLMetaElement(Document&, const CreateElementFlags);
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLMetaElement;
+  }
 
   // Encoding computed from processing the http-equiv, charset and content
   // attributes.
-  WTF::TextEncoding ComputeEncoding() const;
+  TextEncoding ComputeEncoding() const;
 
   const AtomicString& Content() const;
   const AtomicString& HttpEquiv() const;
   const AtomicString& Media() const;
   const AtomicString& GetName() const;
+  const AtomicString& Property() const;
+  const AtomicString& Itemprop() const;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(HTMLMetaElementSimTest,
+                           ResponsiveEmbeddedSizingAllowOrigins);
+  FRIEND_TEST_ALL_PREFIXES(HTMLMetaElementSimTest,
+                           ResponsiveEmbeddedSizingAllowOriginsHttp);
+
   static void ProcessViewportKeyValuePair(Document*,
                                           bool report_warnings,
-                                          const String& key,
-                                          const String& value,
+                                          const StringView& key,
+                                          const StringView& value,
                                           bool viewport_meta_zero_values_quirk,
                                           ViewportDescription&);
-  static void ParseContentAttribute(const String& content,
-                                    ViewportDescription&,
-                                    Document*,
-                                    bool viewport_meta_zero_values_quirk);
+  static void ParseViewportContentAttribute(
+      const String& content,
+      ViewportDescription&,
+      Document*,
+      bool viewport_meta_zero_values_quirk);
 
   void ParseAttribute(const AttributeModificationParams&) override;
   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
@@ -79,46 +101,55 @@ class CORE_EXPORT HTMLMetaElement final : public HTMLElement {
 
   static float ParsePositiveNumber(Document*,
                                    bool report_warnings,
-                                   const String& key,
-                                   const String& value,
+                                   const StringView& key,
+                                   const StringView& value,
                                    bool* ok = nullptr);
 
-  static Length ParseViewportValueAsLength(Document*,
-                                           bool report_warnings,
-                                           const String& key,
-                                           const String& value);
+  static ViewportLength ParseViewportValueAsLength(Document*,
+                                                   bool report_warnings,
+                                                   const StringView& key,
+                                                   const StringView& value);
   static float ParseViewportValueAsZoom(
       Document*,
       bool report_warnings,
-      const String& key,
-      const String& value,
+      const StringView& key,
+      const StringView& value,
       bool& computed_value_matches_parsed_value,
       bool viewport_meta_zero_values_quirk);
   static bool ParseViewportValueAsUserZoom(
       Document*,
       bool report_warnings,
-      const String& key,
-      const String& value,
+      const StringView& key,
+      const StringView& value,
       bool& computed_value_matches_parsed_value);
   static float ParseViewportValueAsDPI(Document*,
                                        bool report_warnings,
-                                       const String& key,
-                                       const String& value);
+                                       const StringView& key,
+                                       const StringView& value);
 
-  static mojom::ViewportFit ParseViewportFitValueAsEnum(bool& unknown_value,
-                                                        const String& value);
+  static mojom::ViewportFit ParseViewportFitValueAsEnum(
+      bool& unknown_value,
+      const StringView& value);
+
+  static std::optional<ui::mojom::blink::VirtualKeyboardMode>
+  ParseVirtualKeyboardValueAsEnum(const StringView& value);
 
   static void ReportViewportWarning(Document*,
                                     ViewportErrorCode,
-                                    const String& replacement1,
-                                    const String& replacement2);
+                                    const StringView& replacement1,
+                                    const StringView& replacement2);
 
   void ProcessContent();
   void ProcessHttpEquiv();
   void NameRemoved(const AtomicString& name_value);
   void ProcessViewportContentAttribute(const String& content,
                                        ViewportDescription::Type origin);
-  void ProcessColorScheme(const AtomicString& content);
+  bool IsAllowOrigins() const;
+  void FinishParsingChildren() final;
+
+  // ClientHintsPreferences::UpdateFromMetaCH needs to know if the synchronous
+  // parser was used as otherwise the value may be discarded.
+  bool is_sync_parser_;
 };
 
 }  // namespace blink

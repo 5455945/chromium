@@ -1,16 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/xr/xr_hit_test_result.h"
 
-#include "third_party/blink/renderer/modules/xr/type_converters.h"
+#include "third_party/blink/renderer/modules/xr/vr_service_type_converters.h"
 #include "third_party/blink/renderer/modules/xr/xr_hit_test_source.h"
 #include "third_party/blink/renderer/modules/xr/xr_pose.h"
 #include "third_party/blink/renderer/modules/xr/xr_reference_space.h"
 #include "third_party/blink/renderer/modules/xr/xr_rigid_transform.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
 #include "third_party/blink/renderer/modules/xr/xr_space.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
 namespace blink {
 
@@ -19,16 +21,25 @@ XRHitTestResult::XRHitTestResult(
     const device::mojom::blink::XRHitResult& hit_result)
     : session_(session),
       mojo_from_this_(hit_result.mojo_from_result),
-      plane_id_(hit_result.plane_id != 0
-                    ? absl::optional<uint64_t>(hit_result.plane_id)
-                    : absl::nullopt) {}
+      plane_id_(hit_result.plane_id.has_value() &&
+                        *hit_result.plane_id != device::kInvalidPlaneId
+                    ? hit_result.plane_id
+                    : std::nullopt) {}
 
-XRPose* XRHitTestResult::getPose(XRSpace* other) {
+XRPose* XRHitTestResult::getPose(XRSpace* other,
+                                 ExceptionState& exception_state) {
+  if (!session_->CanReportPoses()) {
+    DVLOG(3) << __func__ << ": cannot report poses";
+    exception_state.ThrowSecurityError(XRSession::kCannotReportPoses);
+    return nullptr;
+  }
+
   auto maybe_other_space_native_from_mojo = other->NativeFromMojo();
-  DCHECK(maybe_other_space_native_from_mojo);
+  if (!maybe_other_space_native_from_mojo) {
+    return nullptr;
+  }
 
-  auto mojo_from_this =
-      TransformationMatrix(mojo_from_this_.ToTransform().matrix());
+  auto mojo_from_this = mojo_from_this_.ToTransform();
 
   auto other_native_from_mojo = *maybe_other_space_native_from_mojo;
   auto other_offset_from_other_native = other->OffsetFromNativeMatrix();
@@ -41,8 +52,9 @@ XRPose* XRHitTestResult::getPose(XRSpace* other) {
   return MakeGarbageCollected<XRPose>(other_offset_from_this, false);
 }
 
-ScriptPromise XRHitTestResult::createAnchor(ScriptState* script_state,
-                                            ExceptionState& exception_state) {
+ScriptPromise<XRAnchor> XRHitTestResult::createAnchor(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
   if (!session_->IsFeatureEnabled(device::mojom::XRSessionFeature::ANCHORS)) {
@@ -60,7 +72,7 @@ ScriptPromise XRHitTestResult::createAnchor(ScriptState* script_state,
   // (their poses may change dramatically on a frame-by-frame basis). Grab an
   // information about reference space that is well-suited for anchor creation
   // from session:
-  absl::optional<XRSession::ReferenceSpaceInformation>
+  std::optional<XRSession::ReferenceSpaceInformation>
       reference_space_information = session_->GetStationaryReferenceSpace();
 
   if (!reference_space_information) {
@@ -70,15 +82,9 @@ ScriptPromise XRHitTestResult::createAnchor(ScriptState* script_state,
     return {};
   }
 
-  const TransformationMatrix& mojo_from_space =
-      reference_space_information->mojo_from_space;
-
-  DCHECK(mojo_from_space.IsInvertible());
-
-  auto space_from_mojo = mojo_from_space.Inverse();
-  auto space_from_anchor =
-      space_from_mojo *
-      TransformationMatrix(mojo_from_this_.ToTransform().matrix());
+  auto space_from_mojo =
+      reference_space_information->mojo_from_space.GetCheckedInverse();
+  auto space_from_anchor = space_from_mojo * mojo_from_this_.ToTransform();
 
   return session_->CreateAnchorHelper(
       script_state, space_from_anchor,

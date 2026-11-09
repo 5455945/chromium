@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "net/base/backoff_entry.h"
 #include "url/gurl.h"
@@ -100,9 +103,6 @@ class GCM_EXPORT UnregistrationRequest {
     // Parses the HTTP response. It is called after
     // UnregistrationRequest::ParseResponse to proceed the parsing.
     virtual Status ParseResponse(const std::string& response) = 0;
-
-    // Reports UMAs.
-    virtual void ReportUMAs(Status status) = 0;
   };
 
   // Creates an instance of UnregistrationRequest. |callback| will be called
@@ -119,6 +119,10 @@ class GCM_EXPORT UnregistrationRequest {
       scoped_refptr<base::SequencedTaskRunner> io_task_runner,
       GCMStatsRecorder* recorder,
       const std::string& source_to_record);
+
+  UnregistrationRequest(const UnregistrationRequest&) = delete;
+  UnregistrationRequest& operator=(const UnregistrationRequest&) = delete;
+
   ~UnregistrationRequest();
 
   // Starts an unregistration request.
@@ -127,12 +131,12 @@ class GCM_EXPORT UnregistrationRequest {
  private:
   // Invoked from SimpleURLLoader.
   void OnURLLoadComplete(const network::SimpleURLLoader* source,
-                         std::unique_ptr<std::string> body);
+                         std::optional<std::string> body);
 
   void BuildRequestHeaders(net::HttpRequestHeaders* headers);
   void BuildRequestBody(std::string* body);
   Status ParseResponse(const network::SimpleURLLoader* source,
-                       std::unique_ptr<std::string> body);
+                       std::optional<std::string> body);
 
   // Schedules a retry attempt with a backoff.
   void RetryWithBackoff();
@@ -150,12 +154,10 @@ class GCM_EXPORT UnregistrationRequest {
   const scoped_refptr<base::SequencedTaskRunner> io_task_runner_;
 
   // Recorder that records GCM activities for debugging purpose. Not owned.
-  GCMStatsRecorder* recorder_;
+  raw_ptr<GCMStatsRecorder> recorder_;
   std::string source_to_record_;
 
   base::WeakPtrFactory<UnregistrationRequest> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UnregistrationRequest);
 };
 
 }  // namespace gcm

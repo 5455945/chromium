@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/webrtc_overrides/rtc_base/event.h"
 
+#include "base/synchronization/waitable_event.h"
 #include "base/time/time.h"
+#include "third_party/webrtc/api/units/time_delta.h"
 
-namespace rtc {
+namespace webrtc {
 
 using base::WaitableEvent;
 
@@ -28,13 +30,12 @@ void Event::Reset() {
   event_.Reset();
 }
 
-bool Event::Wait(int give_up_after_ms) {
-  if (give_up_after_ms == kForever) {
+bool Event::Wait(webrtc::TimeDelta give_up_after) {
+  if (give_up_after.IsPlusInfinity()) {
     event_.Wait();
     return true;
   }
-
-  return event_.TimedWait(base::TimeDelta::FromMilliseconds(give_up_after_ms));
+  return event_.TimedWait(base::Microseconds(give_up_after.us()));
 }
 
-}  // namespace rtc
+}  // namespace webrtc

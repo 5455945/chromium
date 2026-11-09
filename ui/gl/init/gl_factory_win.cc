@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,10 +21,9 @@
 namespace gl {
 namespace init {
 
-std::vector<GLImplementation> GetAllowedGLImplementations() {
-  std::vector<GLImplementation> impls;
-  impls.push_back(kGLImplementationEGLANGLE);
-  impls.push_back(kGLImplementationSwiftShaderGL);
+std::vector<GLImplementationParts> GetAllowedGLImplementations() {
+  std::vector<GLImplementationParts> impls;
+  impls.emplace_back(kGLImplementationEGLANGLE);
   return impls;
 }
 
@@ -43,61 +42,65 @@ scoped_refptr<GLContext> CreateGLContext(GLShareGroup* share_group,
                                          const GLContextAttribs& attribs) {
   TRACE_EVENT0("gpu", "gl::init::CreateGLContext");
   switch (GetGLImplementation()) {
-    case kGLImplementationSwiftShaderGL:
     case kGLImplementationEGLANGLE:
       return InitializeGLContext(new GLContextEGL(share_group),
                                  compatible_surface, attribs);
     case kGLImplementationMockGL:
-      return new GLContextStub(share_group);
     case kGLImplementationStubGL: {
       scoped_refptr<GLContextStub> stub_context =
-          new GLContextStub(share_group);
-      stub_context->SetUseStubApi(true);
+          base::MakeRefCounted<GLContextStub>(share_group);
+      if (GetGLImplementation() == kGLImplementationStubGL) {
+        stub_context->SetUseStubApi(true);
+      }
+      // The stub ctx needs to be initialized so that the gl::GLContext can
+      // store the |compatible_surface|.
+      stub_context->Initialize(compatible_surface, attribs);
       return stub_context;
     }
+    case kGLImplementationDisabled:
+      return nullptr;
     default:
-      NOTREACHED();
+      DUMP_WILL_BE_NOTREACHED();
       return nullptr;
   }
 }
 
-scoped_refptr<GLSurface> CreateViewGLSurface(gfx::AcceleratedWidget window) {
+scoped_refptr<GLSurface> CreateViewGLSurface(GLDisplay* display,
+                                             gfx::AcceleratedWidget window) {
   TRACE_EVENT0("gpu", "gl::init::CreateViewGLSurface");
   switch (GetGLImplementation()) {
-    case kGLImplementationSwiftShaderGL:
     case kGLImplementationEGLANGLE: {
       DCHECK_NE(window, gfx::kNullAcceleratedWidget);
       return InitializeGLSurface(base::MakeRefCounted<NativeViewGLSurfaceEGL>(
-          window, std::make_unique<VSyncProviderWin>(window)));
+          display->GetAs<gl::GLDisplayEGL>(), window,
+          std::make_unique<VSyncProviderWin>(window)));
     }
     case kGLImplementationMockGL:
     case kGLImplementationStubGL:
-      return new GLSurfaceStub;
+      return InitializeGLSurface(new GLSurfaceStub());
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
-scoped_refptr<GLSurface> CreateOffscreenGLSurfaceWithFormat(
-    const gfx::Size& size, GLSurfaceFormat format) {
+scoped_refptr<GLSurface> CreateOffscreenGLSurface(GLDisplay* display,
+                                                  const gfx::Size& size) {
   TRACE_EVENT0("gpu", "gl::init::CreateOffscreenGLSurface");
   switch (GetGLImplementation()) {
-    case kGLImplementationSwiftShaderGL:
-    case kGLImplementationEGLANGLE:
-      if (GLSurfaceEGL::IsEGLSurfacelessContextSupported() &&
+    case kGLImplementationEGLANGLE: {
+      GLDisplayEGL* display_egl = display->GetAs<gl::GLDisplayEGL>();
+      if (display_egl->IsEGLSurfacelessContextSupported() &&
           size.width() == 0 && size.height() == 0) {
-        return InitializeGLSurfaceWithFormat(new SurfacelessEGL(size), format);
+        return InitializeGLSurface(new SurfacelessEGL(display_egl, size));
       } else {
-        return InitializeGLSurfaceWithFormat(new PbufferGLSurfaceEGL(size),
-                                             format);
+        return InitializeGLSurface(new PbufferGLSurfaceEGL(display_egl, size));
       }
+    }
     case kGLImplementationMockGL:
     case kGLImplementationStubGL:
-      return new GLSurfaceStub;
+      return InitializeGLSurface(new GLSurfaceStub());
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -108,7 +111,6 @@ void SetDisabledExtensionsPlatform(const std::string& disabled_extensions) {
     case kGLImplementationEGLANGLE:
       SetDisabledExtensionsEGL(disabled_extensions);
       break;
-    case kGLImplementationSwiftShaderGL:
     case kGLImplementationMockGL:
     case kGLImplementationStubGL:
       break;
@@ -117,19 +119,18 @@ void SetDisabledExtensionsPlatform(const std::string& disabled_extensions) {
   }
 }
 
-bool InitializeExtensionSettingsOneOffPlatform() {
+bool InitializeExtensionSettingsOneOffPlatform(GLDisplay* display) {
   GLImplementation implementation = GetGLImplementation();
   DCHECK_NE(kGLImplementationNone, implementation);
   switch (implementation) {
     case kGLImplementationEGLANGLE:
-      return InitializeExtensionSettingsOneOffEGL();
-    case kGLImplementationSwiftShaderGL:
+      return InitializeExtensionSettingsOneOffEGL(
+          display->GetAs<GLDisplayEGL>());
     case kGLImplementationMockGL:
     case kGLImplementationStubGL:
       return true;
     default:
       NOTREACHED();
-      return false;
   }
 }
 

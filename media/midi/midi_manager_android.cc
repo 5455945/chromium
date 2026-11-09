@@ -1,24 +1,24 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/midi/midi_manager_android.h"
 
-#include "base/android/build_info.h"
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "media/midi/midi_device_android.h"
-#include "media/midi/midi_jni_headers/MidiManagerAndroid_jni.h"
-#include "media/midi/midi_manager_usb.h"
 #include "media/midi/midi_output_port_android.h"
 #include "media/midi/midi_service.h"
-#include "media/midi/midi_switches.h"
 #include "media/midi/task_service.h"
-#include "media/midi/usb_midi_device_factory_android.h"
+#include "third_party/jni_zero/jni_zero.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "media/midi/midi_jni_headers/MidiManagerAndroid_jni.h"
+
+using base::android::JavaRef;
 using midi::mojom::PortState;
 using midi::mojom::Result;
 
@@ -27,46 +27,47 @@ namespace midi {
 namespace {
 
 bool HasSystemFeatureMidi() {
-  // MIDI API was added at Android M.
-  auto sdk_version = base::android::BuildInfo::GetInstance()->sdk_int();
-  if (sdk_version < base::android::SDK_VERSION_MARSHMALLOW)
-    return false;
-
   // Check if the MIDI service actually runs on the system.
   return Java_MidiManagerAndroid_hasSystemFeatureMidi(
-      base::android::AttachCurrentThread());
+      jni_zero::AttachCurrentThread());
 }
 
 }  // namespace
 
-MidiManager* MidiManager::Create(MidiService* service) {
-  if (HasSystemFeatureMidi())
-    return new MidiManagerAndroid(service);
+bool HasSystemFeatureMidiForTesting() {
+  return HasSystemFeatureMidi();
+}
 
-  return new MidiManagerUsb(service,
-                            std::make_unique<UsbMidiDeviceFactoryAndroid>());
+MidiManager* MidiManager::Create(MidiService* service) {
+  if (HasSystemFeatureMidi()) {
+    return new MidiManagerAndroid(service);
+  }
+
+  return new MidiManager(service);
 }
 
 MidiManagerAndroid::MidiManagerAndroid(MidiService* service)
     : MidiManager(service) {}
 
 MidiManagerAndroid::~MidiManagerAndroid() {
-  if (!service()->task_service()->UnbindInstance())
+  if (!service()->task_service()->UnbindInstance()) {
     return;
+  }
 
   // Finalization steps should be implemented after the UnbindInstance() call.
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   Java_MidiManagerAndroid_stop(env, raw_manager_);
 }
 
 void MidiManagerAndroid::StartInitialization() {
-  if (!service()->task_service()->BindInstance())
+  if (!service()->task_service()->BindInstance()) {
     return CompleteInitialization(Result::INITIALIZATION_ERROR);
+  }
 
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
 
-  uintptr_t pointer = reinterpret_cast<uintptr_t>(this);
-  raw_manager_.Reset(Java_MidiManagerAndroid_create(env, pointer));
+  raw_manager_.Reset(
+      Java_MidiManagerAndroid_create(env, jni_zero::MakeRaw(this)));
 
   Java_MidiManagerAndroid_initialize(env, raw_manager_);
 }
@@ -75,15 +76,21 @@ void MidiManagerAndroid::DispatchSendMidiData(MidiManagerClient* client,
                                               uint32_t port_index,
                                               const std::vector<uint8_t>& data,
                                               base::TimeTicks timestamp) {
-  if (port_index >= all_output_ports_.size()) {
-    // |port_index| is provided by a renderer so we can't believe that it is
-    // in the valid range.
-    return;
+  MidiOutputPortAndroid* port = nullptr;
+  {
+    base::AutoLock auto_lock(lock_);
+    if (port_index >= all_output_ports_.size()) {
+      // |port_index| is provided by a renderer so we can't believe that it is
+      // in the valid range.
+      return;
+    }
+    port = all_output_ports_[port_index];
   }
+
   if (GetOutputPortState(port_index) == PortState::CONNECTED) {
     // We treat send call as implicit open.
     // TODO(yhirano): Implement explicit open operation from the renderer.
-    if (all_output_ports_[port_index]->Open()) {
+    if (port->Open()) {
       SetOutputPortState(port_index, PortState::OPENED);
     } else {
       // We cannot open the port. It's useless to send data to such a port.
@@ -98,7 +105,7 @@ void MidiManagerAndroid::DispatchSendMidiData(MidiManagerClient* client,
   service()->task_service()->PostBoundDelayedTask(
       TaskService::kDefaultRunnerId,
       base::BindOnce(&MidiOutputPortAndroid::Send,
-                     base::Unretained(all_output_ports_[port_index]), data),
+                     base::Unretained(port), data),
       delay);
   service()->task_service()->PostBoundDelayedTask(
       TaskService::kDefaultRunnerId,
@@ -108,18 +115,21 @@ void MidiManagerAndroid::DispatchSendMidiData(MidiManagerClient* client,
 }
 
 void MidiManagerAndroid::OnReceivedData(MidiInputPortAndroid* port,
-                                        const uint8_t* data,
-                                        size_t size,
+                                        base::span<const uint8_t> data,
                                         base::TimeTicks timestamp) {
-  const auto i = input_port_to_index_.find(port);
-  DCHECK(input_port_to_index_.end() != i);
-  ReceiveMidiData(i->second, data, size, timestamp);
+  size_t index = 0;
+  {
+    base::AutoLock auto_lock(lock_);
+    const auto i = input_port_to_index_.find(port);
+    DCHECK(input_port_to_index_.end() != i);
+    index = i->second;
+  }
+  ReceiveMidiData(index, data, timestamp);
 }
 
-void MidiManagerAndroid::OnInitialized(
-    JNIEnv* env,
-    const JavaParamRef<jobjectArray>& devices) {
-  for (auto raw_device : devices.ReadElements<jobject>()) {
+void MidiManagerAndroid::OnInitialized(JNIEnv* env,
+                                       const JavaRef<jobjectArray>& devices) {
+  for (auto raw_device : devices.CreateView(env)) {
     AddDevice(std::make_unique<MidiDeviceAndroid>(env, raw_device, this));
   }
   service()->task_service()->PostBoundTask(
@@ -136,12 +146,13 @@ void MidiManagerAndroid::OnInitializationFailed(JNIEnv* env) {
 }
 
 void MidiManagerAndroid::OnAttached(JNIEnv* env,
-                                    const JavaParamRef<jobject>& raw_device) {
+                                    const JavaRef<jobject>& raw_device) {
   AddDevice(std::make_unique<MidiDeviceAndroid>(env, raw_device, this));
 }
 
 void MidiManagerAndroid::OnDetached(JNIEnv* env,
-                                    const JavaParamRef<jobject>& raw_device) {
+                                    const JavaRef<jobject>& raw_device) {
+  base::AutoLock auto_lock(lock_);
   for (auto& device : devices_) {
     if (device->HasRawDevice(env, raw_device)) {
       for (auto& port : device->input_ports()) {
@@ -161,6 +172,7 @@ void MidiManagerAndroid::OnDetached(JNIEnv* env,
 }
 
 void MidiManagerAndroid::AddDevice(std::unique_ptr<MidiDeviceAndroid> device) {
+  base::AutoLock auto_lock(lock_);
   for (auto& port : device->input_ports()) {
     // We implicitly open input ports here, because there are no signal
     // from the renderer when to open.
@@ -199,3 +211,5 @@ void MidiManagerAndroid::AddDevice(std::unique_ptr<MidiDeviceAndroid> device) {
 }
 
 }  // namespace midi
+
+DEFINE_JNI(MidiManagerAndroid)

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,21 +13,20 @@
 
 #include <stdint.h>
 
+#include "base/time/time.h"
+
 namespace media {
 namespace cast {
 
 // Integer constants set either by the Cast Streaming Protocol Spec or due to
 // design limitations.
 enum Specifications {
-  // Target number of milliseconds between the sending of RTCP reports.  Both
-  // senders and receivers regularly send RTCP reports to their peer.
-  kRtcpReportIntervalMs = 500,
 
   // This is an important system-wide constant.  This limits how much history
   // the implementation must retain in order to process the acknowledgements of
   // past frames.
   //
-  // This value is carefully choosen such that it fits in the 8-bits range for
+  // This value is carefully chosen such that it fits in the 8-bits range for
   // frame IDs. It is also less than half of the full 8-bits range such that
   // logic can handle wrap around and compare two frame IDs meaningfully.
   kMaxUnackedFrames = 120,
@@ -36,6 +35,10 @@ enum Specifications {
   // per second for video.
   kVideoFrequency = 90000,
 };
+
+// Target time interval between the sending of RTCP reports.  Both
+// senders and receivers regularly send RTCP reports to their peer.
+constexpr base::TimeDelta kRtcpReportInterval = base::Milliseconds(500);
 
 // Success/in-progress/failure status codes reported to clients to indicate
 // readiness state.
@@ -64,6 +67,38 @@ enum OperationalStatus {
 
   // Session has halted due to a codec runtime failure.
   STATUS_CODEC_RUNTIME_ERROR,
+};
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class CastStreamingFrameDropReason {
+  // The frame was not dropped.
+  kNotDropped = 0,
+
+  // Reported by the FrameSender implementation.
+  kTooManyFramesInFlight = 1,
+  kBurstThresholdExceeded = 2,
+  kInFlightDurationTooHigh = 3,
+
+  // Reported by openscreen::Sender as the EnqueueFrameResult.
+  // Payload is too large, typically meaning several dozen megabytes or more.
+  kPayloadTooLarge = 4,
+  // Surpassed the max number of FrameIds in flight.
+  kReachedIdSpanLimit = 5,
+  // Too large of a media duration in flight. Dropping the frame before encoding
+  // (kInFlightDurationTooHigh) is strongly preferred, but in some rare cases
+  // we may drop the frame after encoding instead.
+  kInFlightDurationTooHighAfterEncoding = 6,
+
+  // Reported by the OpenscreenFrameSender.
+  kInvalidReferencedFrameId = 7,
+
+  // Reported by the VideoSender when the encoder dropped the frame (e.g., due
+  // to rate control) and produced no output.
+  kDroppedByEncoder = 8,
+
+  // Should stay updated as the maximum enum value above.
+  kMaxValue = kDroppedByEncoder
 };
 
 }  // namespace cast

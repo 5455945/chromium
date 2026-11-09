@@ -23,9 +23,10 @@
 #include "third_party/blink/renderer/platform/graphics/filters/fe_specular_lighting.h"
 
 #include <algorithm>
+
 #include "third_party/blink/renderer/platform/graphics/filters/light_source.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
-#include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 
 namespace blink {
 
@@ -46,28 +47,6 @@ FESpecularLighting::FESpecularLighting(Filter* filter,
 
 FESpecularLighting::~FESpecularLighting() = default;
 
-Color FESpecularLighting::LightingColor() const {
-  return lighting_color_;
-}
-
-bool FESpecularLighting::SetLightingColor(const Color& lighting_color) {
-  if (lighting_color_ == lighting_color)
-    return false;
-  lighting_color_ = lighting_color;
-  return true;
-}
-
-float FESpecularLighting::SurfaceScale() const {
-  return surface_scale_;
-}
-
-bool FESpecularLighting::SetSurfaceScale(float surface_scale) {
-  if (surface_scale_ == surface_scale)
-    return false;
-  surface_scale_ = surface_scale;
-  return true;
-}
-
 float FESpecularLighting::SpecularConstant() const {
   return specular_constant_;
 }
@@ -85,24 +64,16 @@ float FESpecularLighting::SpecularExponent() const {
 }
 
 bool FESpecularLighting::SetSpecularExponent(float specular_exponent) {
-  specular_exponent = clampTo(specular_exponent, 1.0f, 128.0f);
+  specular_exponent = ClampTo(specular_exponent, 1.0f, 128.0f);
   if (specular_exponent_ == specular_exponent)
     return false;
   specular_exponent_ = specular_exponent;
   return true;
 }
 
-const LightSource* FESpecularLighting::GetLightSource() const {
-  return light_source_.get();
-}
-
-void FESpecularLighting::SetLightSource(
-    scoped_refptr<LightSource> light_source) {
-  light_source_ = std::move(light_source);
-}
-
-WTF::TextStream& FESpecularLighting::ExternalRepresentation(WTF::TextStream& ts,
-                                                            int indent) const {
+StringBuilder& FESpecularLighting::ExternalRepresentation(
+    StringBuilder& ts,
+    wtf_size_t indent) const {
   WriteIndent(ts, indent);
   ts << "[feSpecularLighting";
   FilterEffect::ExternalRepresentation(ts);

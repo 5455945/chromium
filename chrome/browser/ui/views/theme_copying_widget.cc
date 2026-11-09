@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,20 @@ ThemeCopyingWidget::ThemeCopyingWidget(views::Widget* role_model)
 
 ThemeCopyingWidget::~ThemeCopyingWidget() = default;
 
-const ui::NativeTheme* ThemeCopyingWidget::GetNativeTheme() const {
-  return observed_widget_.IsObserving() ? role_model_->GetNativeTheme()
-                                        : Widget::GetNativeTheme();
-}
-
 const ui::ThemeProvider* ThemeCopyingWidget::GetThemeProvider() const {
   return observed_widget_.IsObserving() ? role_model_->GetThemeProvider()
                                         : Widget::GetThemeProvider();
+}
+
+ui::ColorProviderKey::ThemeInitializerSupplier*
+ThemeCopyingWidget::GetCustomTheme() const {
+  return observed_widget_.IsObserving() ? role_model_->GetCustomTheme()
+                                        : Widget::GetCustomTheme();
+}
+
+const ui::NativeTheme* ThemeCopyingWidget::GetNativeTheme() const {
+  return observed_widget_.IsObserving() ? role_model_->GetNativeTheme()
+                                        : Widget::GetNativeTheme();
 }
 
 void ThemeCopyingWidget::OnWidgetDestroying(Widget* widget) {

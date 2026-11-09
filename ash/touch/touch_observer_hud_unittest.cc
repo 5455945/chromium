@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "base/command_line.h"
 #include "base/format_macros.h"
 #include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "ui/aura/window.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/test/display_manager_test_api.h"
@@ -25,6 +26,10 @@ namespace ash {
 class TouchHudTestBase : public AshTestBase {
  public:
   TouchHudTestBase() = default;
+
+  TouchHudTestBase(const TouchHudTestBase&) = delete;
+  TouchHudTestBase& operator=(const TouchHudTestBase&) = delete;
+
   ~TouchHudTestBase() override = default;
 
   void SetUp() override {
@@ -39,15 +44,26 @@ class TouchHudTestBase : public AshTestBase {
     mirrored_display_id_ = 11;
 
     internal_display_info_ =
-        CreateDisplayInfo(internal_display_id_, gfx::Rect(0, 0, 500, 500));
+        CreateDisplayInfo(internal_display_id_, gfx::Rect(0, 0, 600, 500));
     external_display_info_ =
-        CreateDisplayInfo(external_display_id_, gfx::Rect(1, 1, 100, 100));
+        CreateDisplayInfo(external_display_id_, {1, 1, 400, 300});
     mirrored_display_info_ =
-        CreateDisplayInfo(mirrored_display_id_, gfx::Rect(0, 0, 100, 100));
+        CreateDisplayInfo(mirrored_display_id_, {400, 300});
   }
 
   display::Display GetPrimaryDisplay() {
-    return display::Screen::GetScreen()->GetPrimaryDisplay();
+    return display::Screen::Get()->GetPrimaryDisplay();
+  }
+
+  display::ManagedDisplayInfo CreateDisplayInfo(int64_t id,
+                                                const gfx::Rect& bounds) {
+    display::ManagedDisplayInfo info = display::CreateDisplayInfo(id, bounds);
+    // Each display should have at least one native mode.
+    display::ManagedDisplayMode mode(bounds.size(), /*refresh_rate=*/60.f,
+                                     /*is_interlaced=*/true,
+                                     /*native=*/true);
+    info.SetManagedDisplayModes({mode});
+    return info;
   }
 
   void SetupSingleDisplay() {
@@ -169,14 +185,6 @@ class TouchHudTestBase : public AshTestBase {
     return RootWindowController::ForWindow(root);
   }
 
-  display::ManagedDisplayInfo CreateDisplayInfo(int64_t id,
-                                                const gfx::Rect& bounds) {
-    display::ManagedDisplayInfo info(id, base::StringPrintf("x-%" PRId64, id),
-                                     false);
-    info.SetBounds(bounds);
-    return info;
-  }
-
   aura::Window* GetRootWindowForTouchHud(TouchObserverHud* hud) {
     return hud->root_window_;
   }
@@ -193,13 +201,15 @@ class TouchHudTestBase : public AshTestBase {
   display::ManagedDisplayInfo mirrored_display_info_;
 
   std::vector<display::ManagedDisplayInfo> display_info_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(TouchHudTestBase);
 };
 
 class TouchHudDebugTest : public TouchHudTestBase {
  public:
   TouchHudDebugTest() = default;
+
+  TouchHudDebugTest(const TouchHudDebugTest&) = delete;
+  TouchHudDebugTest& operator=(const TouchHudDebugTest&) = delete;
+
   ~TouchHudDebugTest() override = default;
 
   void SetUp() override {
@@ -257,13 +267,15 @@ class TouchHudDebugTest : public TouchHudTestBase {
   TouchHudDebug* GetSecondaryTouchHudDebug() {
     return GetSecondaryRootController()->touch_hud_debug();
   }
-
-  DISALLOW_COPY_AND_ASSIGN(TouchHudDebugTest);
 };
 
 class TouchHudProjectionTest : public TouchHudTestBase {
  public:
   TouchHudProjectionTest() = default;
+
+  TouchHudProjectionTest(const TouchHudProjectionTest&) = delete;
+  TouchHudProjectionTest& operator=(const TouchHudProjectionTest&) = delete;
+
   ~TouchHudProjectionTest() override = default;
 
   // testing::Test:
@@ -289,13 +301,11 @@ class TouchHudProjectionTest : public TouchHudTestBase {
     GetInternalTouchHudProjection()->OnTouchEvent(&event);
 
     // Advance time for next event.
-    event_time += base::TimeDelta::FromMilliseconds(100);
+    event_time += base::Milliseconds(100);
   }
 
  private:
   base::TimeTicks event_time;
-
-  DISALLOW_COPY_AND_ASSIGN(TouchHudProjectionTest);
 };
 
 // Checks if debug touch HUD is correctly initialized for a single display.
@@ -493,13 +503,16 @@ TEST_F(TouchHudProjectionTest, TouchMoveRelease) {
   EXPECT_NE(nullptr, GetInternalTouchHudProjection());
   EXPECT_EQ(0, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_PRESSED, gfx::Point(10, 10), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchPressed, gfx::Point(10, 10),
+                              1);
   EXPECT_EQ(1, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_MOVED, gfx::Point(10, 20), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchMoved, gfx::Point(10, 20),
+                              1);
   EXPECT_EQ(1, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_RELEASED, gfx::Point(10, 20), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchReleased, gfx::Point(10, 20),
+                              1);
   EXPECT_EQ(0, GetInternalTouchPointsCount());
 }
 
@@ -510,13 +523,16 @@ TEST_F(TouchHudProjectionTest, TouchMoveCancel) {
   EXPECT_NE(nullptr, GetInternalTouchHudProjection());
   EXPECT_EQ(0, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_PRESSED, gfx::Point(10, 10), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchPressed, gfx::Point(10, 10),
+                              1);
   EXPECT_EQ(1, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_MOVED, gfx::Point(10, 20), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchMoved, gfx::Point(10, 20),
+                              1);
   EXPECT_EQ(1, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_CANCELLED, gfx::Point(10, 20), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchCancelled,
+                              gfx::Point(10, 20), 1);
   EXPECT_EQ(0, GetInternalTouchPointsCount());
 }
 
@@ -526,22 +542,28 @@ TEST_F(TouchHudProjectionTest, DoubleTouch) {
   EXPECT_NE(nullptr, GetInternalTouchHudProjection());
   EXPECT_EQ(0, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_PRESSED, gfx::Point(10, 10), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchPressed, gfx::Point(10, 10),
+                              1);
   EXPECT_EQ(1, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_PRESSED, gfx::Point(20, 10), 2);
+  SendTouchEventToInternalHud(ui::EventType::kTouchPressed, gfx::Point(20, 10),
+                              2);
   EXPECT_EQ(2, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_MOVED, gfx::Point(10, 20), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchMoved, gfx::Point(10, 20),
+                              1);
   EXPECT_EQ(2, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_MOVED, gfx::Point(20, 20), 2);
+  SendTouchEventToInternalHud(ui::EventType::kTouchMoved, gfx::Point(20, 20),
+                              2);
   EXPECT_EQ(2, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_RELEASED, gfx::Point(10, 20), 1);
+  SendTouchEventToInternalHud(ui::EventType::kTouchReleased, gfx::Point(10, 20),
+                              1);
   EXPECT_EQ(1, GetInternalTouchPointsCount());
 
-  SendTouchEventToInternalHud(ui::ET_TOUCH_RELEASED, gfx::Point(20, 20), 2);
+  SendTouchEventToInternalHud(ui::EventType::kTouchReleased, gfx::Point(20, 20),
+                              2);
   EXPECT_EQ(0, GetInternalTouchPointsCount());
 }
 

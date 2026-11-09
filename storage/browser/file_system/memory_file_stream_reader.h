@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/net_errors.h"
 #include "storage/browser/file_system/file_stream_reader.h"
 #include "storage/browser/file_system/obfuscated_file_util_memory_delegate.h"
 
@@ -35,18 +37,22 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) MemoryFileStreamReader
       const base::FilePath& file_path,
       int64_t initial_offset,
       const base::Time& expected_modification_time);
+
+  MemoryFileStreamReader(const MemoryFileStreamReader&) = delete;
+  MemoryFileStreamReader& operator=(const MemoryFileStreamReader&) = delete;
+
   ~MemoryFileStreamReader() override;
 
   // FileStreamReader overrides.
-  int Read(net::IOBuffer* buf,
+  int Read(scoped_refptr<net::IOBuffer> buf,
            int buf_len,
            net::CompletionOnceCallback callback) override;
-  int64_t GetLength(net::Int64CompletionOnceCallback callback) override;
+  int64_t GetLength(GetLengthCallback callback) override;
 
  private:
   void OnReadCompleted(net::CompletionOnceCallback callback, int result);
-  void OnGetLengthCompleted(net::Int64CompletionOnceCallback callback,
-                            int64_t result);
+  void OnGetLengthCompleted(GetLengthCallback callback,
+                            base::expected<int64_t, net::Error> result);
 
   base::WeakPtr<ObfuscatedFileUtilMemoryDelegate> memory_file_util_;
 
@@ -56,8 +62,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) MemoryFileStreamReader
   int64_t offset_;
 
   base::WeakPtrFactory<MemoryFileStreamReader> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MemoryFileStreamReader);
 };
 
 }  // namespace storage

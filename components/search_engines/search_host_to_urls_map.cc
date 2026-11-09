@@ -1,10 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/search_engines/search_host_to_urls_map.h"
 
+#include <algorithm>
 #include <memory>
+#include <string_view>
 
 #include "components/search_engines/template_url.h"
 
@@ -33,7 +35,7 @@ void SearchHostToURLsMap::Add(TemplateURL* template_url,
   if (!url.is_valid() || !url.has_host())
     return;
 
-  host_to_urls_map_[url.host()].insert(template_url);
+  host_to_urls_map_[url.GetHost()].insert(template_url);
 }
 
 void SearchHostToURLsMap::Remove(const TemplateURL* template_url) {
@@ -42,28 +44,34 @@ void SearchHostToURLsMap::Remove(const TemplateURL* template_url) {
   DCHECK_NE(TemplateURL::OMNIBOX_API_EXTENSION, template_url->type());
 
   // A given TemplateURL only occurs once in the map.
-  auto set_with_url =
-      std::find_if(host_to_urls_map_.begin(), host_to_urls_map_.end(),
-                   [&](std::pair<const std::string, TemplateURLSet>& entry) {
-                     return entry.second.erase(template_url);
-                   });
+  auto set_with_url = std::ranges::find_if(
+      host_to_urls_map_,
+      [&](std::pair<const std::string, TemplateURLSet>& entry) {
+        return entry.second.erase(template_url);
+      });
 
   if (set_with_url != host_to_urls_map_.end() && set_with_url->second.empty())
     host_to_urls_map_.erase(set_with_url);
 }
 
-TemplateURL* SearchHostToURLsMap::GetTemplateURLForHost(
-    base::StringPiece host) {
+TemplateURL* SearchHostToURLsMap::GetTemplateURLForHost(std::string_view host) {
   DCHECK(initialized_);
 
   HostToURLsMap::const_iterator iter = host_to_urls_map_.find(host);
   if (iter == host_to_urls_map_.end() || iter->second.empty())
     return nullptr;
-  return *(iter->second.begin());  // Return the 1st element.
+
+  // Because we have to happily tolerate duplicates in TemplateURLService now,
+  /// return the best TemplateURL for `host`, just like
+  // `GetTemplateURLForKeyword` returns the best TemplateURL for a keyword.
+  return *std::min_element(iter->second.begin(), iter->second.end(),
+                           [](const auto& a, const auto& b) {
+                             return a->IsBetterThanConflictingEngine(b);
+                           });
 }
 
 SearchHostToURLsMap::TemplateURLSet* SearchHostToURLsMap::GetURLsForHost(
-    base::StringPiece host) {
+    std::string_view host) {
   DCHECK(initialized_);
 
   auto urls_for_host = host_to_urls_map_.find(host);

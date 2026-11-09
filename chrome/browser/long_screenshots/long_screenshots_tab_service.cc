@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,22 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/callback.h"
-#include "base/memory/memory_pressure_listener.h"
-#include "base/memory/memory_pressure_monitor.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
+#include "base/metrics/histogram_functions.h"
+#include "chrome/browser/flags/android/chrome_feature_list.h"
+#include "components/google/core/common/google_util.h"
 #include "components/paint_preview/browser/file_manager.h"
+#include "components/paint_preview/common/mojom/paint_preview_types.mojom.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/render_frame_host.h"
+#include "url/android/gurl_android.h"
 
-#include "chrome/browser/share/android/jni_headers/LongScreenshotsTabService_jni.h"
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/LongScreenshotsTabService_jni.h"
 
 namespace long_screenshots {
 
@@ -24,9 +33,37 @@ using paint_preview::DirectoryKey;
 using paint_preview::FileManager;
 
 namespace {
-// TODO(skare): Evaluate what to send, if anything; paint_preview team is changing
-// the logic around capture discarding.
-constexpr size_t kMaxPerCaptureSizeBytes = 20 * 1000L * 1000L;  // 20 MB.
+// TODO(skare): Evaluate what to send, if anything; paint_preview team is
+// changing the logic around capture discarding.
+constexpr size_t kMaxPerCaptureSizeBytes = 50 * 1000L * 1000L;  // 50 MB.
+
+// Host/regex pattern for Google AMP Cache URLs.
+// See https://developers.google.com/amp/cache/overview#amp-cache-url-format
+// for a definition of the format of AMP Cache URLs.
+const char kGoogleAmpCacheHost[] = "cdn.ampproject.org";
+const char kGoogleAmpCachePathPattern[] = "/[a-z]/(s/)?(.*)";
+
+// Regex pattern for the path of Google AMP Viewer URLs.
+const char kGoogleAmpViewerPathPattern[] = "/amp/(s/)?(.*)";
+
+const char kGoogleNewsHost[] = "news.google.com";
+const char kGoogleNewsPathPattern[] = "/articles/(.*)";
+
+}  // namespace
+
+// Used to free a CaptureResult if it is passed up to Java and cannot be used by
+// the compositior for some reason.
+static void JNI_LongScreenshotsTabService_ReleaseCaptureResultPtr(
+    JNIEnv* env,
+    int64_t j_capture_result_ptr) {
+  // `j_capture_result_ptr` is checked to not be nullptr in Java.
+  delete reinterpret_cast<paint_preview::CaptureResult*>(j_capture_result_ptr);
+}
+
+namespace {
+
+constexpr base::MemoryConsumerTraits kLongScreenshotsMemoryConsumerTraits(
+    base::MemoryConsumerTraits::ConsumerType::kPassive);
 
 }  // namespace
 
@@ -36,7 +73,17 @@ LongScreenshotsTabService::LongScreenshotsTabService(
     bool is_off_the_record)
     : PaintPreviewBaseService(std::move(file_mixin),
                               std::move(policy),
-                              is_off_the_record) {
+                              is_off_the_record),
+      google_amp_cache_path_regex_(kGoogleAmpCachePathPattern),
+      google_amp_viewer_path_regex_(kGoogleAmpViewerPathPattern),
+      google_news_path_regex_(kGoogleNewsPathPattern),
+      memory_consumer_registration_("LongScreenshotsTabService",
+                                    kLongScreenshotsMemoryConsumerTraits,
+                                    this) {
+  CHECK(google_amp_cache_path_regex_.ok(), base::NotFatalUntil::M161);
+  CHECK(google_amp_viewer_path_regex_.ok(), base::NotFatalUntil::M161);
+  CHECK(google_news_path_regex_.ok(), base::NotFatalUntil::M161);
+
   JNIEnv* env = base::android::AttachCurrentThread();
 
   // TODO(tgupta): If using PlayerCompositorDelegate for compositing to bitmaps
@@ -50,31 +97,54 @@ LongScreenshotsTabService::~LongScreenshotsTabService() {
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_LongScreenshotsTabService_onNativeDestroyed(env, java_ref_);
   java_ref_.Reset();
+  capture_handle_.RunAndReset();
 }
 
-void LongScreenshotsTabService::CaptureTab(int tab_id,
-                                           content::WebContents* contents,
-                                           int clipX,
-                                           int clipY,
-                                           int clipWidth,
-                                           int clipHeight) {
+void LongScreenshotsTabService::CaptureTab(
+    int tab_id,
+    const GURL& url,
+    content::WebContents* contents,
+    int clip_x,
+    int clip_y,
+    int clip_width,
+    int clip_height,
+    bool in_memory,
+    paint_preview::mojom::ClipCoordOverride clip_x_coord_override,
+    paint_preview::mojom::ClipCoordOverride clip_y_coord_override) {
+  base::UmaHistogramPercentage("Sharing.LongScreenshots.MemoryLimitOnCapture",
+                               memory_limit().percent());
+
   // If the system is under memory pressure don't try to capture.
-  auto* memory_monitor = base::MemoryPressureMonitor::Get();
-  if (memory_monitor &&
-      memory_monitor->GetCurrentPressureLevel() >=
-          base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE) {
-    JNIEnv* env = base::android::AttachCurrentThread();
-    Java_LongScreenshotsTabService_processCaptureTabStatus(
-        env, java_ref_, Status::kLowMemoryDetected);
-    return;
+  if (!base::FeatureList::IsEnabled(
+          chrome::android::kLongScreenshotsNoMemoryCheck)) {
+    const base::MemoryLimit memory_threshold =
+        base::FeatureList::IsEnabled(
+            chrome::android::kLongScreenshotsLenientMemoryCheck)
+            ? base::MemoryLimit::CriticalPressureThreshold()
+            : base::MemoryLimit::ModeratePressureThreshold();
+    if (memory_limit() <= memory_threshold) {
+      JNIEnv* env = base::android::AttachCurrentThread();
+      Java_LongScreenshotsTabService_processCaptureTabStatus(
+          env, java_ref_, Status::kLowMemoryDetected);
+      return;
+    }
   }
 
   // Mark |contents| as being captured so that the renderer doesn't go away
   // until the capture is finished. This is done even before a file is created
   // to ensure the renderer doesn't go away while that happens.
-  capture_handle_ =
-      contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
-                                       /*stay_awake=*/true);
+  capture_handle_ = contents->IncrementCapturerCount(
+      gfx::Size(), /*stay_hidden=*/true,
+      /*stay_awake=*/true, /*is_activity=*/true);
+  content::RenderFrameHost* rfh =
+      GetRootRenderFrameHost(contents->GetPrimaryMainFrame(), url);
+  if (in_memory) {
+    CaptureTabInternal(tab_id, rfh->GetFrameTreeNodeId(), rfh->GetGlobalId(),
+                       clip_x, clip_y, clip_width, clip_height, in_memory,
+                       clip_x_coord_override, clip_y_coord_override,
+                       std::nullopt);
+    return;
+  }
 
   auto file_manager = GetFileMixin()->GetFileManager();
   auto key = file_manager->CreateKey(tab_id);
@@ -82,25 +152,26 @@ void LongScreenshotsTabService::CaptureTab(int tab_id,
       FROM_HERE,
       base::BindOnce(&paint_preview::FileManager::CreateOrGetDirectory,
                      GetFileMixin()->GetFileManager(), key, true),
-      // TODO(tgupta): Check for AMP pages here and get the right node id.
       base::BindOnce(&LongScreenshotsTabService::CaptureTabInternal,
-                     weak_ptr_factory_.GetWeakPtr(), tab_id, key,
-                     contents->GetMainFrame()->GetFrameTreeNodeId(),
-                     contents->GetMainFrame()->GetGlobalId(), clipX, clipY,
-                     clipWidth, clipHeight));
+                     weak_ptr_factory_.GetWeakPtr(), tab_id,
+                     rfh->GetFrameTreeNodeId(), rfh->GetGlobalId(), clip_x,
+                     clip_y, clip_width, clip_height, in_memory,
+                     clip_x_coord_override, clip_y_coord_override));
 }
 
 void LongScreenshotsTabService::CaptureTabInternal(
     int tab_id,
-    const paint_preview::DirectoryKey& key,
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     content::GlobalRenderFrameHostId frame_routing_id,
-    int clipX,
-    int clipY,
-    int clipWidth,
-    int clipHeight,
-    const absl::optional<base::FilePath>& file_path) {
-  if (!file_path.has_value()) {
+    int clip_x,
+    int clip_y,
+    int clip_width,
+    int clip_height,
+    bool in_memory,
+    paint_preview::mojom::ClipCoordOverride clip_x_coord_override,
+    paint_preview::mojom::ClipCoordOverride clip_y_coord_override,
+    const std::optional<base::FilePath>& file_path) {
+  if (!in_memory && !file_path.has_value()) {
     JNIEnv* env = base::android::AttachCurrentThread();
     Java_LongScreenshotsTabService_processCaptureTabStatus(
         env, java_ref_, Status::kDirectoryCreationFailed);
@@ -112,11 +183,10 @@ void LongScreenshotsTabService::CaptureTabInternal(
   // There is a small chance RenderFrameHost may be destroyed when the UI thread
   // is used to create the directory.  By doing a lookup for the RenderFrameHost
   // and comparing it to the WebContent, we can ensure that the content is still
-  // available for capture and WebContents::GetMainFrame did not return a
+  // available for capture and WebContents::GetPrimaryMainFrame did not return a
   // defunct pointer.
   auto* rfh = content::RenderFrameHost::FromID(frame_routing_id);
-  if (!contents || !rfh || contents->IsBeingDestroyed() ||
-      contents->GetMainFrame() != rfh || !rfh->IsActive()) {
+  if (!contents || !rfh || contents->IsBeingDestroyed() || !rfh->IsActive()) {
     JNIEnv* env = base::android::AttachCurrentThread();
     Java_LongScreenshotsTabService_processCaptureTabStatus(
         env, java_ref_, Status::kWebContentsGone);
@@ -125,9 +195,16 @@ void LongScreenshotsTabService::CaptureTabInternal(
 
   CaptureParams capture_params;
   capture_params.web_contents = contents;
-  capture_params.root_dir = &file_path.value();
-  capture_params.persistence = paint_preview::RecordingPersistence::kFileSystem;
-  capture_params.clip_rect = gfx::Rect(clipX, clipY, clipWidth, clipHeight);
+  if (!in_memory) {
+    capture_params.root_dir = &file_path.value();
+  }
+  capture_params.persistence =
+      in_memory ? paint_preview::RecordingPersistence::kMemoryBuffer
+                : paint_preview::RecordingPersistence::kFileSystem;
+  capture_params.render_frame_host = rfh;
+  capture_params.clip_rect = gfx::Rect(clip_x, clip_y, clip_width, clip_height);
+  capture_params.clip_x_coord_override = clip_x_coord_override;
+  capture_params.clip_y_coord_override = clip_y_coord_override;
   capture_params.capture_links = false;
   capture_params.max_per_capture_size = kMaxPerCaptureSizeBytes;
   CapturePaintPreview(capture_params,
@@ -149,10 +226,63 @@ void LongScreenshotsTabService::OnCaptured(
     return;
   }
 
-  std::string serialized;
-  (result->proto).SerializeToString(&serialized);
+  result->proto.mutable_metadata()->clear_chrome_version();
   Java_LongScreenshotsTabService_processPaintPreviewResponse(
-      env, java_ref_, base::android::ToJavaByteArray(env, serialized));
+      env, java_ref_, reinterpret_cast<int64_t>(result.release()));
+}
+
+content::RenderFrameHost* LongScreenshotsTabService::GetRootRenderFrameHost(
+    content::RenderFrameHost* main_frame,
+    const GURL& url) {
+  if (!IsAmpUrl(url)) {
+    return main_frame;
+  }
+
+  std::vector<content::RenderFrameHost*> child_frames;
+  main_frame->ForEachRenderFrameHostWithAction(
+      [main_frame, &child_frames](content::RenderFrameHost* rfh) {
+        // All frames get traversed in breadth-first order.
+        // If a direct child is found, skip traversing its children.
+        if (rfh->GetParent() == main_frame) {
+          child_frames.push_back(rfh);
+          return content::RenderFrameHost::FrameIterationAction::kSkipChildren;
+        }
+        return content::RenderFrameHost::FrameIterationAction::kContinue;
+      });
+
+  // In AMP pages the main frame should have exactly one child subframe.
+  if (child_frames.size() != 1) {
+    return main_frame;
+  }
+  return child_frames[0];
+}
+
+bool LongScreenshotsTabService::IsAmpUrl(const GURL& url) {
+  if (!url.is_valid()) {
+    return false;
+  }
+
+  // Check for "*.cdn.ampproject.org" URLs.
+  if (url.DomainIs(kGoogleAmpCacheHost) &&
+      re2::RE2::FullMatch(url.GetPath(), google_amp_cache_path_regex_)) {
+    return true;
+  }
+
+  // Check for "www.google.TLD/amp/" URLs.
+  if (google_util::IsGoogleDomainUrl(
+          url, google_util::DISALLOW_SUBDOMAIN,
+          google_util::DISALLOW_NON_STANDARD_PORTS) &&
+      re2::RE2::FullMatch(url.GetPath(), google_amp_viewer_path_regex_)) {
+    return true;
+  }
+
+  // Check for "news.google.com/articles/*".
+  if (url.DomainIs(kGoogleNewsHost) &&
+      re2::RE2::FullMatch(url.GetPath(), google_news_path_regex_)) {
+    return true;
+  }
+
+  return false;
 }
 
 void LongScreenshotsTabService::DeleteAllLongScreenshotFiles() {
@@ -163,21 +293,45 @@ void LongScreenshotsTabService::DeleteAllLongScreenshotFiles() {
 
 void LongScreenshotsTabService::CaptureTabAndroid(
     JNIEnv* env,
-    jint j_tab_id,
-    const base::android::JavaParamRef<jobject>& j_web_contents,
-    jint clipX,
-    jint clipY,
-    jint clipWidth,
-    jint clipHeight) {
+    int32_t j_tab_id,
+    const base::android::JavaRef<jobject>& j_gurl,
+    const base::android::JavaRef<jobject>& j_web_contents,
+    int32_t clip_x,
+    int32_t clip_y,
+    int32_t clip_width,
+    int32_t clip_height,
+    bool in_memory,
+    int32_t clip_x_coord_override,
+    int32_t clip_y_coord_override) {
+  CHECK_GE(
+      clip_x_coord_override,
+      static_cast<int>(paint_preview::mojom::ClipCoordOverride::kMinValue));
+  CHECK_LE(
+      clip_x_coord_override,
+      static_cast<int>(paint_preview::mojom::ClipCoordOverride::kMaxValue));
+  CHECK_GE(
+      clip_y_coord_override,
+      static_cast<int>(paint_preview::mojom::ClipCoordOverride::kMinValue));
+  CHECK_LE(
+      clip_y_coord_override,
+      static_cast<int>(paint_preview::mojom::ClipCoordOverride::kMaxValue));
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(j_web_contents);
+  GURL url = url::GURLAndroid::ToNativeGURL(env, j_gurl);
 
-  CaptureTab(static_cast<int>(j_tab_id), web_contents, static_cast<int>(clipX),
-             static_cast<int>(clipY), static_cast<int>(clipWidth),
-             static_cast<int>(clipHeight));
+  CaptureTab(static_cast<int>(j_tab_id), url, web_contents,
+             static_cast<int>(clip_x), static_cast<int>(clip_y),
+             static_cast<int>(clip_width), static_cast<int>(clip_height),
+             in_memory,
+             static_cast<paint_preview::mojom::ClipCoordOverride>(
+                 clip_x_coord_override),
+             static_cast<paint_preview::mojom::ClipCoordOverride>(
+                 clip_y_coord_override));
 }
 
 void LongScreenshotsTabService::LongScreenshotsClosedAndroid(JNIEnv* env) {
   DeleteAllLongScreenshotFiles();
 }
 }  // namespace long_screenshots
+
+DEFINE_JNI(LongScreenshotsTabService)

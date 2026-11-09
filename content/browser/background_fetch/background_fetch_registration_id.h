@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,10 +39,10 @@ class CONTENT_EXPORT BackgroundFetchRegistrationId {
 
   // Return whether the |other| registration id are identical or different.
   bool operator==(const BackgroundFetchRegistrationId& other) const;
-  bool operator!=(const BackgroundFetchRegistrationId& other) const;
 
   // Enables this type to be used in an std::map and std::set.
-  bool operator<(const BackgroundFetchRegistrationId& other) const;
+  std::weak_ordering operator<=>(
+      const BackgroundFetchRegistrationId& other) const;
 
   // Returns whether this registration id refers to valid data.
   bool is_null() const;

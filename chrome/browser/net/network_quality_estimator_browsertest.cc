@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/run_loop.h"
 #include "base/values.h"
@@ -36,6 +37,10 @@ class TestNetworkQualityObserver
         effective_connection_type_(net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN) {
     tracker_->AddEffectiveConnectionTypeObserver(this);
   }
+
+  TestNetworkQualityObserver(const TestNetworkQualityObserver&) = delete;
+  TestNetworkQualityObserver& operator=(const TestNetworkQualityObserver&) =
+      delete;
 
   ~TestNetworkQualityObserver() override {
     tracker_->RemoveEffectiveConnectionTypeObserver(this);
@@ -73,10 +78,8 @@ class TestNetworkQualityObserver
  private:
   net::EffectiveConnectionType run_loop_wait_effective_connection_type_;
   std::unique_ptr<base::RunLoop> run_loop_;
-  network::NetworkQualityTracker* tracker_;
+  raw_ptr<network::NetworkQualityTracker> tracker_;
   net::EffectiveConnectionType effective_connection_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestNetworkQualityObserver);
 };
 
 void CheckEffectiveConnectionType(net::EffectiveConnectionType expected) {
@@ -87,8 +90,8 @@ void CheckEffectiveConnectionType(net::EffectiveConnectionType expected) {
 
 class NetworkQualityEstimatorBrowserTest : public InProcessBrowserTest {
  public:
-  NetworkQualityEstimatorBrowserTest() {}
-  ~NetworkQualityEstimatorBrowserTest() override {}
+  NetworkQualityEstimatorBrowserTest() = default;
+  ~NetworkQualityEstimatorBrowserTest() override = default;
 
   void SetUp() override {
     // Must start listening (And get a port for the proxy) before calling
@@ -111,8 +114,8 @@ class NetworkQualityEstimatorBrowserTest : public InProcessBrowserTest {
 class NetworkQualityEstimatorEctCommandLineBrowserTest
     : public NetworkQualityEstimatorBrowserTest {
  public:
-  NetworkQualityEstimatorEctCommandLineBrowserTest() {}
-  ~NetworkQualityEstimatorEctCommandLineBrowserTest() override {}
+  NetworkQualityEstimatorEctCommandLineBrowserTest() = default;
+  ~NetworkQualityEstimatorEctCommandLineBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII("--force-effective-connection-type",
@@ -128,11 +131,11 @@ IN_PROC_BROWSER_TEST_F(NetworkQualityEstimatorEctCommandLineBrowserTest,
 class NetworkQualityEstimatorEctFieldTrialBrowserTest
     : public NetworkQualityEstimatorBrowserTest {
  public:
-  NetworkQualityEstimatorEctFieldTrialBrowserTest() {}
-  ~NetworkQualityEstimatorEctFieldTrialBrowserTest() override {}
+  NetworkQualityEstimatorEctFieldTrialBrowserTest() = default;
+  ~NetworkQualityEstimatorEctFieldTrialBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    variations::testing::ClearAllVariationParams();
+    variations::test::ClearAllVariationParams();
     std::map<std::string, std::string> variation_params;
     variation_params["force_effective_connection_type"] = "2G";
     scoped_feature_list_.InitAndEnableFeatureWithParameters(
@@ -151,8 +154,9 @@ IN_PROC_BROWSER_TEST_F(NetworkQualityEstimatorEctFieldTrialBrowserTest,
 class NetworkQualityEstimatorEctFieldTrialAndCommandLineBrowserTest
     : public NetworkQualityEstimatorEctFieldTrialBrowserTest {
  public:
-  NetworkQualityEstimatorEctFieldTrialAndCommandLineBrowserTest() {}
-  ~NetworkQualityEstimatorEctFieldTrialAndCommandLineBrowserTest() override {}
+  NetworkQualityEstimatorEctFieldTrialAndCommandLineBrowserTest() = default;
+  ~NetworkQualityEstimatorEctFieldTrialAndCommandLineBrowserTest() override =
+      default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     NetworkQualityEstimatorEctFieldTrialBrowserTest::SetUpCommandLine(

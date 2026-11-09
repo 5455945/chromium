@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "remoting/protocol/errors.h"
 #include "remoting/protocol/message_pipe.h"
 
@@ -18,8 +17,6 @@ namespace remoting {
 class CompoundBuffer;
 
 namespace protocol {
-
-class MessageChannelFactory;
 
 // Base class for channel message dispatchers. It's responsible for
 // creating the named channel. Derived dispatchers then dispatch
@@ -40,11 +37,10 @@ class ChannelDispatcherBase : public MessagePipe::EventHandler {
     virtual void OnChannelClosed(ChannelDispatcherBase* channel_dispatcher) = 0;
   };
 
-  ~ChannelDispatcherBase() override;
+  ChannelDispatcherBase(const ChannelDispatcherBase&) = delete;
+  ChannelDispatcherBase& operator=(const ChannelDispatcherBase&) = delete;
 
-  // Creates and connects the channel using |channel_factory|.
-  void Init(MessageChannelFactory* channel_factory,
-            EventHandler* event_handler);
+  ~ChannelDispatcherBase() override;
 
   // Initializes the channel using |message_pipe| that's already connected.
   void Init(std::unique_ptr<MessagePipe> message_pipe,
@@ -72,13 +68,10 @@ class ChannelDispatcherBase : public MessagePipe::EventHandler {
   void OnMessagePipeClosed() override;
 
   std::string channel_name_;
-  MessageChannelFactory* channel_factory_ = nullptr;
-  EventHandler* event_handler_ = nullptr;
+  raw_ptr<EventHandler> event_handler_ = nullptr;
   bool is_connected_ = false;
 
   std::unique_ptr<MessagePipe> message_pipe_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChannelDispatcherBase);
 };
 
 }  // namespace protocol

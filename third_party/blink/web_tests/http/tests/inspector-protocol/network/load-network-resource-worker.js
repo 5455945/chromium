@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startBlank(
     'Verifies that we can retrieve a request body consisting of blob in service worker.');
 
@@ -18,7 +18,8 @@
     const result = await swdp.Network.enable();
     testRunner.log(result);
     const url = `http://localhost:8000/inspector-protocol/network/resources/source.map`;
-    const response1 = await swdp.Network.loadNetworkResource({frameId: "", url, options: {disableCache:false, includeCredentials: false}});
+    const response1 = await swdp.Network.loadNetworkResource(
+        {url, options: {disableCache: false, includeCredentials: false}});
 
     testRunner.log(response1, `Response for fetch with existing resource: `, ["headers", "id", "sessionId"]);
     testRunner.completeTest();

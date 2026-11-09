@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,31 +24,34 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/scoped_observation.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
+#include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/keyword_id.h"
-
-namespace base {
-class FilePath;
-}
 
 namespace history {
 
 class HistoryBackendTestBase;
 class InMemoryDatabase;
 class InMemoryHistoryBackendTest;
+class URLDatabase;
 class URLRow;
 
 class InMemoryHistoryBackend : public HistoryServiceObserver {
  public:
   InMemoryHistoryBackend();
+
+  InMemoryHistoryBackend(const InMemoryHistoryBackend&) = delete;
+  InMemoryHistoryBackend& operator=(const InMemoryHistoryBackend&) = delete;
+
   ~InMemoryHistoryBackend() override;
 
-  // Initializes the backend from the history database pointed to by the
-  // full path in `history_filename`.
-  bool Init(const base::FilePath& history_filename);
+  // Populates the backend from `history_db`, the main history database, which
+  // must have been successfully initialized. Must be called on the history
+  // backend's sequence, before this object is handed to the main thread.
+  // Returns false if the in-memory database could not be created.
+  bool Init(URLDatabase& history_db);
 
   // Does initialization work when this object is attached to the history
   // system on the main thread. The argument is the profile with which the
@@ -70,15 +73,12 @@ class InMemoryHistoryBackend : public HistoryServiceObserver {
   friend class InMemoryHistoryBackendTest;
 
   // HistoryServiceObserver:
-  void OnURLVisited(HistoryService* history_service,
-                    ui::PageTransition transition,
-                    const URLRow& row,
-                    const RedirectList& redirects,
-                    base::Time visit_time) override;
+  void OnURLVisited(history::HistoryService* history_service,
+                    const VisitedURLInfo& visited_url_info) override;
   void OnURLsModified(HistoryService* history_service,
                       const URLRows& changed_urls) override;
-  void OnURLsDeleted(HistoryService* history_service,
-                     const DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(HistoryService* history_service,
+                          const DeletionInfo& deletion_info) override;
   void OnKeywordSearchTermUpdated(HistoryService* history_service,
                                   const URLRow& row,
                                   KeywordID keyword_id,
@@ -93,8 +93,6 @@ class InMemoryHistoryBackend : public HistoryServiceObserver {
 
   base::ScopedObservation<HistoryService, HistoryServiceObserver>
       history_service_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(InMemoryHistoryBackend);
 };
 
 }  // namespace history

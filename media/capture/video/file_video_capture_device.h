@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,9 @@
 #include "base/containers/queue.h"
 #include "base/files/file.h"
 #include "base/files/memory_mapped_file.h"
-#include "base/macros.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
-#include "gpu/ipc/common/gpu_memory_buffer_support.h"
+#include "base/time/time.h"
 #include "media/capture/video/video_capture_device.h"
 
 namespace media {
@@ -44,9 +43,10 @@ class CAPTURE_EXPORT FileVideoCaptureDevice : public VideoCaptureDevice {
 
   // Constructor of the class, with a fully qualified file path as input, which
   // represents the Y4M or MJPEG file to stream repeatedly.
-  explicit FileVideoCaptureDevice(
-      const base::FilePath& file_path,
-      std::unique_ptr<gpu::GpuMemoryBufferSupport> gmb_support = nullptr);
+  explicit FileVideoCaptureDevice(const base::FilePath& file_path);
+
+  FileVideoCaptureDevice(const FileVideoCaptureDevice&) = delete;
+  FileVideoCaptureDevice& operator=(const FileVideoCaptureDevice&) = delete;
 
   // VideoCaptureDevice implementation, class methods.
   ~FileVideoCaptureDevice() override;
@@ -54,6 +54,7 @@ class CAPTURE_EXPORT FileVideoCaptureDevice : public VideoCaptureDevice {
       const VideoCaptureParams& params,
       std::unique_ptr<VideoCaptureDevice::Client> client) override;
   void StopAndDeAllocate() override;
+  void InvalidateBuffers() override;
   void GetPhotoState(GetPhotoStateCallback callback) override;
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                        SetPhotoOptionsCallback callback) override;
@@ -68,8 +69,9 @@ class CAPTURE_EXPORT FileVideoCaptureDevice : public VideoCaptureDevice {
       VideoCaptureFormat* video_format);
 
   // Crops frame with respect to PTZ settings.
-  std::unique_ptr<uint8_t[]> CropPTZRegion(const uint8_t* frame,
-                                           size_t frame_buffer_size);
+  std::vector<uint8_t> CropPTZRegion(const uint8_t* frame,
+                                     size_t frame_buffer_size,
+                                     VideoPixelFormat* final_pixel_format);
 
   // Called on the |capture_thread_|.
   void OnAllocateAndStart(const VideoCaptureParams& params,
@@ -113,16 +115,13 @@ class CAPTURE_EXPORT FileVideoCaptureDevice : public VideoCaptureDevice {
   // The system time when we receive the first frame.
   base::TimeTicks first_ref_time_;
 
-  // Whether GpuMemoryBuffer-based video capture buffer is enabled or not.
-  bool video_capture_use_gmb_ = false;
-  std::unique_ptr<gpu::GpuMemoryBufferSupport> gmb_support_;
+  // Whether MappableSI based video capture buffer is enabled or not.
+  bool video_capture_use_mappable_buffer_ = false;
 
   // Guards the below variables from concurrent access between methods running
   // on the main thread and |capture_thread_|.
   base::Lock lock_;
   base::queue<TakePhotoCallback> take_photo_callbacks_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileVideoCaptureDevice);
 };
 
 }  // namespace media

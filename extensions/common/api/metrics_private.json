@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,7 +49,22 @@
             }
           }
         }
+      },
+      // LINT.IfChange(ExtensionUsageAction)
+      {
+        "id": "ExtensionUsageAction",
+        "type": "string",
+        "enum": [
+          "kPinned",
+          "kUnpinned",
+          "kContextMenuInit",
+          "kActionClicked",
+          "kEnabled",
+          "kDisabled"
+        ],
+        "description": "The type of extension usage action triggered by user UI actions."
       }
+      // LINT.ThenChange(/extensions/common/extension_usage.h:ExtensionUsageAction,/tools/metrics/histograms/metadata/extensions/enums.xml:ExtensionUsageAction)
     ],
     "functions": [
       {
@@ -125,6 +140,15 @@
         ]
       },
       {
+        "name": "recordExtensionUsageUkm",
+        "type": "function",
+        "description": "Records an extension usage UKM event triggered by user UI actions.",
+        "parameters": [
+          {"name": "extensionId", "type": "string"},
+          {"name": "action", "$ref": "ExtensionUsageAction"}
+        ]
+      },
+      {
         "name": "recordPercentage",
         "type": "function",
         "description": "Records a percentage value from 1 to 100.",
@@ -188,9 +212,18 @@
         ]
       },
       {
-        "name": "recordSparseHashable",
+        "name": "recordSparseValueWithHashMetricName",
         "type": "function",
-        "description": "Increments the count associated with the hash of |value| in the sparse histogram defined by the |metricName|.",
+        "description": "Increments the count associated with the hash of |value| in the sparse histogram defined by the |metricName| using base::HashMetricName(value).",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "string"}
+        ]
+      },
+      {
+        "name": "recordSparseValueWithPersistentHash",
+        "type": "function",
+        "description": "Increments the count associated with the hash of |value| in the sparse histogram defined by the |metricName| using base::PersistentHash(value).",
         "parameters": [
           {"name": "metricName", "type": "string"},
           {"name": "value", "type": "string"}

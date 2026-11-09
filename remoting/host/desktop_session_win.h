@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,18 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/win/scoped_handle.h"
-#include "ipc/ipc_channel_handle.h"
+#include "mojo/public/cpp/bindings/associated_receiver.h"
+#include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
+#include "mojo/public/cpp/system/message_pipe.h"
+#include "remoting/base/errors.h"
+#include "remoting/base/source_location.h"
 #include "remoting/host/desktop_session.h"
+#include "remoting/host/mojom/desktop_session.mojom.h"
 #include "remoting/host/win/wts_terminal_observer.h"
 #include "remoting/host/worker_process_ipc_delegate.h"
 
@@ -28,7 +33,6 @@ namespace remoting {
 class AutoThreadTaskRunner;
 class DaemonProcess;
 class DesktopSession;
-class ScreenResolution;
 class WorkerProcessLauncher;
 class WtsTerminalMonitor;
 
@@ -36,10 +40,10 @@ class WtsTerminalMonitor;
 // (RDP) console. Receives IPC messages from the desktop process, running in
 // the target session, via |WorkerProcessIpcDelegate|, and monitors session
 // attach/detach events via |WtsTerminalObserer|.
-class DesktopSessionWin
-    : public DesktopSession,
-      public WorkerProcessIpcDelegate,
-      public WtsTerminalObserver {
+class DesktopSessionWin : public DesktopSession,
+                          public WorkerProcessIpcDelegate,
+                          public WtsTerminalObserver,
+                          public mojom::DesktopSessionRequestHandler {
  public:
   // Creates a desktop session instance that attaches to the physical console.
   static std::unique_ptr<DesktopSession> CreateForConsole(
@@ -47,7 +51,7 @@ class DesktopSessionWin
       scoped_refptr<AutoThreadTaskRunner> io_task_runner,
       DaemonProcess* daemon_process,
       int id,
-      const ScreenResolution& resolution);
+      const mojom::DesktopSessionOptions& options);
 
   // Creates a desktop session instance that attaches to a virtual console.
   static std::unique_ptr<DesktopSession> CreateForVirtualTerminal(
@@ -55,18 +59,23 @@ class DesktopSessionWin
       scoped_refptr<AutoThreadTaskRunner> io_task_runner,
       DaemonProcess* daemon_process,
       int id,
-      const ScreenResolution& resolution);
+      const mojom::DesktopSessionOptions& options);
+
+  DesktopSessionWin(const DesktopSessionWin&) = delete;
+  DesktopSessionWin& operator=(const DesktopSessionWin&) = delete;
+
+  // Returns the Windows Session ID, which is different from id().
+  uint32_t windows_session_id() const { return session_id_; }
 
  protected:
   // Passes the owning |daemon_process|, a unique identifier of the desktop
   // session |id| and the interface for monitoring session attach/detach events.
   // Both |daemon_process| and |monitor| must outlive |this|.
-  DesktopSessionWin(
-    scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
-    scoped_refptr<AutoThreadTaskRunner> io_task_runner,
-    DaemonProcess* daemon_process,
-    int id,
-    WtsTerminalMonitor* monitor);
+  DesktopSessionWin(scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
+                    scoped_refptr<AutoThreadTaskRunner> io_task_runner,
+                    DaemonProcess* daemon_process,
+                    int id,
+                    WtsTerminalMonitor* monitor);
   ~DesktopSessionWin() override;
 
   const scoped_refptr<AutoThreadTaskRunner>& caller_task_runner() const {
@@ -83,24 +92,35 @@ class DesktopSessionWin
   void StopMonitoring();
 
   // Asks DaemonProcess to terminate this session.
-  void TerminateSession();
+  void TerminateSession(ErrorCode error_code = ErrorCode::OK,
+                        const std::string& error_details = {},
+                        const SourceLocation& error_location = FROM_HERE);
 
   // Injects a secure attention sequence into the session.
   virtual void InjectSas() = 0;
 
   // WorkerProcessIpcDelegate implementation.
   void OnChannelConnected(int32_t peer_pid) override;
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnPermanentError(int exit_code) override;
   void OnWorkerProcessStopped() override;
+  void OnAssociatedInterfaceRequest(
+      const std::string& interface_name,
+      mojo::ScopedInterfaceEndpointHandle handle) override;
 
   // WtsTerminalObserver implementation.
   void OnSessionAttached(uint32_t session_id) override;
   void OnSessionDetached() override;
 
  private:
-  // ChromotingDesktopDaemonMsg_DesktopAttached handler.
-  void OnDesktopSessionAgentAttached(const IPC::ChannelHandle& desktop_pipe);
+  // mojom::DesktopSessionRequestHandler implementation.
+  void ConnectDesktopChannel(
+      mojo::ScopedMessagePipeHandle desktop_pipe) override;
+  void InjectSecureAttentionSequence() override;
+  void CrashNetworkProcess() override;
+
+  // DesktopSession implementation.
+  void ReconnectNetworkChannel(
+      const mojom::DesktopSessionOptions& options) override;
 
   // Requests the desktop process to crash.
   void CrashDesktopProcess(const base::Location& location);
@@ -121,22 +141,22 @@ class DesktopSessionWin
   std::unique_ptr<WorkerProcessLauncher> launcher_;
 
   // Used to unsubscribe from session attach and detach events.
-  WtsTerminalMonitor* monitor_;
+  raw_ptr<WtsTerminalMonitor> monitor_;
 
-  // True if |this| is subsribed to receive session attach/detach notifications.
+  // Indicates whether session attach/detach notifications are subscribed to.
   bool monitoring_notifications_;
 
-  // Used to report an error if the session attach notification does not arrives
-  // for too long.
+  // Reports an error if the session attach notification does not arrive.
   base::OneShotTimer session_attach_timer_;
 
   base::Time last_timestamp_;
 
+  mojo::AssociatedReceiver<mojom::DesktopSessionRequestHandler>
+      desktop_session_request_handler_{this};
+
   // The id of the current desktop session being remoted or UINT32_MAX if no
   // session exists.
-  int session_id_ = UINT32_MAX;
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopSessionWin);
+  uint32_t session_id_ = UINT32_MAX;
 };
 
 }  // namespace remoting

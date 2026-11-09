@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 #include <memory>
 #include <utility>
 
-#include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "chrome/browser/apps/app_service/app_shortcut_item.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_test.h"
 #include "chrome/browser/ash/arc/icon_decode_request.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,17 +23,24 @@ namespace arc {
 class ArcAppShortcutsRequestTest : public testing::Test {
  public:
   ArcAppShortcutsRequestTest() = default;
+
+  ArcAppShortcutsRequestTest(const ArcAppShortcutsRequestTest&) = delete;
+  ArcAppShortcutsRequestTest& operator=(const ArcAppShortcutsRequestTest&) =
+      delete;
+
   ~ArcAppShortcutsRequestTest() override = default;
 
   void SetUp() override {
+    arc_app_test_.PreProfileSetUp();
     profile_ = std::make_unique<TestingProfile>();
-    arc_app_test_.SetUp(profile_.get());
+    arc_app_test_.PostProfileSetUp(profile_.get());
     IconDecodeRequest::DisableSafeDecodingForTesting();
   }
 
   void TearDown() override {
-    arc_app_test_.TearDown();
+    arc_app_test_.PreProfileTearDown();
     profile_.reset();
+    arc_app_test_.PostProfileTearDown();
   }
 
  private:
@@ -42,8 +48,6 @@ class ArcAppShortcutsRequestTest : public testing::Test {
   ArcAppTest arc_app_test_;
 
   content::BrowserTaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcAppShortcutsRequestTest);
 };
 
 TEST_F(ArcAppShortcutsRequestTest, Basic) {

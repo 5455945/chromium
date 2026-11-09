@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -56,8 +56,6 @@ EMEApp.prototype.updateDocument = function(testConfig) {
   Utils.addOptions(MEDIA_TYPE_ELEMENT_ID, MEDIA_TYPES);
   document.getElementById(MEDIA_FILE_ELEMENT_ID).value =
       testConfig.mediaFile || DEFAULT_MEDIA_FILE;
-  document.getElementById(LICENSE_SERVER_ELEMENT_ID).value =
-      testConfig.licenseServerURL || DEFAULT_LICENSE_SERVER;
   if (testConfig.keySystem)
     Utils.ensureOptionInList(KEYSYSTEM_ELEMENT_ID, testConfig.keySystem);
   if (testConfig.mediaType)
@@ -75,6 +73,4 @@ EMEApp.prototype.updateTestConfig = function() {
       document.getElementById(MEDIA_TYPE_ELEMENT_ID).value;
   this.testConfig_.useMSE =
       document.getElementById(USE_MSE_ELEMENT_ID).value == 'true';
-  this.testConfig_.licenseServerURL =
-      document.getElementById(LICENSE_SERVER_ELEMENT_ID).value;
 };

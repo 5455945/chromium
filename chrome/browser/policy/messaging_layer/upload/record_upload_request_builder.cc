@@ -1,75 +1,55 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/policy/messaging_layer/upload/record_upload_request_builder.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/containers/queue.h"
-#include "base/json/json_reader.h"
-#include "base/notreached.h"
-#include "base/sequenced_task_runner.h"
-#include "base/strings/strcat.h"
+#include "base/feature_list.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
-#include "base/strings/string_util.h"
-#include "base/task/thread_pool.h"
-#include "base/task_runner.h"
+#include "base/token.h"
 #include "base/values.h"
-#include "chrome/browser/policy/messaging_layer/upload/dm_server_upload_service.h"
-#include "chrome/browser/policy/messaging_layer/upload/record_upload_request_builder.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/profiles/reporting_util.h"
-#include "components/policy/core/common/cloud/cloud_policy_client.h"
-#include "components/reporting/proto/record.pb.h"
-#include "components/reporting/proto/record_constants.pb.h"
-#include "components/reporting/util/status.h"
-#include "components/reporting/util/status_macros.h"
-#include "components/reporting/util/statusor.h"
-#include "components/reporting/util/task_runner_context.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "build/build_config.h"
+#include "components/reporting/proto/synced/record.pb.h"
+#include "components/reporting/util/encrypted_reporting_json_keys.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace reporting {
+// Feature that controls if the configuration file should be requested
+// from the server.
+BASE_FEATURE(kShouldRequestConfigurationFile,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-namespace {
-
-// UploadEncryptedReportingRequestBuilder list key
-constexpr char kEncryptedRecordListKey[] = "encryptedRecord";
-constexpr char kAttachEncryptionSettingsKey[] = "attachEncryptionSettings";
-
-// EncrypedRecordDictionaryBuilder strings
-constexpr char kEncryptedWrappedRecord[] = "encryptedWrappedRecord";
-constexpr char kUnsignedSequencingInformationKey[] = "sequencingInformation";
-constexpr char kSequencingInformationKey[] = "sequenceInformation";
-constexpr char kEncryptionInfoKey[] = "encryptionInfo";
-constexpr char kCompressionInformationKey[] = "compressionInformation";
-
-// SequencingInformationDictionaryBuilder strings
-constexpr char kSequencingId[] = "sequencingId";
-constexpr char kGenerationId[] = "generationId";
-constexpr char kPriority[] = "priority";
-
-// EncryptionInfoDictionaryBuilder strings
-constexpr char kEncryptionKey[] = "encryptionKey";
-constexpr char kPublicKeyId[] = "publicKeyId";
-
-// CompressionInformationDictionaryBuilder strings
-constexpr char kCompressionAlgorithmKey[] = "compressionAlgorithm";
-
-}  // namespace
+// Feature used in the tast tests to let the server know that the events are
+// coming from an automated client test. Only used in tast tests.
+BASE_FEATURE(kClientAutomatedTest, base::FEATURE_DISABLED_BY_DEFAULT);
 
 UploadEncryptedReportingRequestBuilder::UploadEncryptedReportingRequestBuilder(
-    bool attach_encryption_settings) {
-  result_ = base::Value{base::Value::Type::DICTIONARY};
+    bool is_generation_guid_required,
+    bool attach_encryption_settings,
+    int config_file_version)
+    : is_generation_guid_required_(is_generation_guid_required) {
+  result_.emplace();
   if (attach_encryption_settings) {
-    result_.value().SetBoolKey(GetAttachEncryptionSettingsPath(), true);
+    result_->Set(GetAttachEncryptionSettingsPath(), true);
+  }
+
+  // Only attach the configuration file version to the request if the feature
+  // is enabled. The server will only return the configuration file if there is
+  // a mismatch between the version in the request and the version that it
+  // holds.
+  if (base::FeatureList::IsEnabled(kShouldRequestConfigurationFile)) {
+    result_->Set(GetConfigurationFileVersionPath(), config_file_version);
+  }
+
+  // This feature signals the server that this is an automated client test.
+  if (base::FeatureList::IsEnabled(kClientAutomatedTest)) {
+    result_->Set(GetSourcePath(), "tast");
   }
 }
 
@@ -78,26 +58,27 @@ UploadEncryptedReportingRequestBuilder::
 
 UploadEncryptedReportingRequestBuilder&
 UploadEncryptedReportingRequestBuilder::AddRecord(
-    const EncryptedRecord& record) {
+    EncryptedRecord record,
+    ScopedReservation& scoped_reservation) {
   if (!result_.has_value()) {
     // Some errors were already detected.
     return *this;
   }
-  base::Value* records_list =
-      result_.value().FindListKey(GetEncryptedRecordListPath());
+  base::ListValue* records_list =
+      result_->FindList(GetEncryptedRecordListPath());
   if (!records_list) {
-    records_list = result_.value().SetKey(GetEncryptedRecordListPath(),
-                                          base::Value{base::Value::Type::LIST});
-  }
-  if (!records_list->is_list()) {
-    NOTREACHED();  // Should not happen.
-    return *this;
+    records_list =
+        &result_->Set(GetEncryptedRecordListPath(), base::ListValue())
+             ->GetList();
   }
 
-  auto record_result = EncryptedRecordDictionaryBuilder(record).Build();
+  auto record_result =
+      EncryptedRecordDictionaryBuilder(std::move(record), scoped_reservation,
+                                       is_generation_guid_required_)
+          .Build();
   if (!record_result.has_value()) {
     // Record has errors. Stop here.
-    result_ = absl::nullopt;
+    result_ = std::nullopt;
     return *this;
   }
 
@@ -105,53 +86,83 @@ UploadEncryptedReportingRequestBuilder::AddRecord(
   return *this;
 }
 
-absl::optional<base::Value> UploadEncryptedReportingRequestBuilder::Build() {
+UploadEncryptedReportingRequestBuilder&
+UploadEncryptedReportingRequestBuilder::SetRequestId(
+    std::string_view request_id) {
+  if (!result_.has_value()) {
+    // Some errors were already detected
+    return *this;
+  }
+
+  result_->Set(reporting::json_keys::kRequestId, request_id);
+
+  return *this;
+}
+
+std::optional<base::DictValue> UploadEncryptedReportingRequestBuilder::Build() {
+  if (result_.has_value()) {
+    if (result_->empty()) {
+      // Request is empty.
+      return std::nullopt;
+    }
+    if (result_->size() == 1u &&
+        result_->Find(reporting::json_keys::kRequestId) != nullptr) {
+      // Nothing but request id in the request.
+      return std::nullopt;
+    }
+    if (result_->FindString(reporting::json_keys::kRequestId) == nullptr) {
+      CHECK(!result_->Find(reporting::json_keys::kRequestId))
+          << "Non-string request id";
+      SetRequestId(base::Token::CreateRandom().ToString());
+    }
+  }
   return std::move(result_);
 }
 
 // static
-base::StringPiece
+std::string_view
 UploadEncryptedReportingRequestBuilder::GetEncryptedRecordListPath() {
-  return kEncryptedRecordListKey;
+  return reporting::json_keys::kEncryptedRecordList;
 }
 
 // static
-base::StringPiece
+std::string_view
 UploadEncryptedReportingRequestBuilder::GetAttachEncryptionSettingsPath() {
-  return kAttachEncryptionSettingsKey;
+  return reporting::json_keys::kAttachEncryptionSettings;
+}
+
+// static
+std::string_view
+UploadEncryptedReportingRequestBuilder::GetConfigurationFileVersionPath() {
+  return reporting::json_keys::kConfigurationFileVersion;
+}
+
+// static
+std::string_view UploadEncryptedReportingRequestBuilder::GetSourcePath() {
+  return reporting::json_keys::kSource;
 }
 
 EncryptedRecordDictionaryBuilder::EncryptedRecordDictionaryBuilder(
-    const EncryptedRecord& record) {
-  base::Value record_dictionary{base::Value::Type::DICTIONARY};
+    EncryptedRecord record,
+    ScopedReservation& scoped_reservation,
+    bool is_generation_guid_required) {
+  base::DictValue record_dictionary;
 
-  // A record without sequencing information cannot be uploaded - deny it.
-  if (!record.has_sequencing_information()) {
+  // A record without sequence information cannot be uploaded - deny it.
+  if (!record.has_sequence_information()) {
     return;
   }
-  auto sequencing_information_result =
-      SequencingInformationDictionaryBuilder(record.sequencing_information())
+  auto sequence_information_result =
+      SequenceInformationDictionaryBuilder(record.sequence_information(),
+                                           is_generation_guid_required)
           .Build();
-  if (!sequencing_information_result.has_value()) {
+  if (!sequence_information_result.has_value()) {
     // Sequencing information was improperly configured. Record cannot be
     // uploaded. Deny it.
     return;
   }
-  record_dictionary.SetKey(GetSequencingInformationKeyPath(),
-                           std::move(sequencing_information_result.value()));
-  // For backwards compatibility, store unsigned sequencing information too.
-  // The values are non-negative anyway, so the same builder can be used.
-  auto unsigned_sequencing_information_result =
-      SequencingInformationDictionaryBuilder(record.sequencing_information())
-          .Build();
-  if (!unsigned_sequencing_information_result.has_value()) {
-    // Sequencing information was improperly configured. Record cannot be
-    // uploaded. Deny it.
-    return;
-  }
-  record_dictionary.SetKey(
-      GetUnsignedSequencingInformationKeyPath(),
-      std::move(unsigned_sequencing_information_result.value()));
+  record_dictionary.Set(GetSequenceInformationKeyPath(),
+                        std::move(sequence_information_result.value()));
 
   // Encryption information can be missing until we set up encryption as
   // mandatory.
@@ -162,12 +173,12 @@ EncryptedRecordDictionaryBuilder::EncryptedRecordDictionaryBuilder(
       // Encryption info has been corrupted or set improperly. Deny it.
       return;
     }
-    record_dictionary.SetKey(GetEncryptionInfoPath(),
-                             std::move(encryption_info_result.value()));
+    record_dictionary.Set(GetEncryptionInfoPath(),
+                          std::move(encryption_info_result.value()));
   }
 
-  // TODO (b/189130411) Compression information can be missing until we set up
-  // compression as mandatory.
+  // Compression information can be missing until we set up compression as
+  // mandatory.
   if (record.has_compression_information()) {
     auto compression_information_result =
         CompressionInformationDictionaryBuilder(
@@ -177,16 +188,25 @@ EncryptedRecordDictionaryBuilder::EncryptedRecordDictionaryBuilder(
       // Compression info has been corrupted or set improperly. Deny it.
       return;
     }
-    record_dictionary.SetKey(GetCompressionInformationPath(),
-                             std::move(compression_information_result.value()));
+    record_dictionary.Set(GetCompressionInformationPath(),
+                          std::move(compression_information_result.value()));
   }
 
   // Gap records won't fill in this field, so it can be missing.
   if (record.has_encrypted_wrapped_record()) {
-    std::string base64_encode;
-    base::Base64Encode(record.encrypted_wrapped_record(), &base64_encode);
-    record_dictionary.SetStringKey(GetEncryptedWrappedRecordPath(),
-                                   base64_encode);
+    std::string base64_encode =
+        base::Base64Encode(record.encrypted_wrapped_record());
+    ScopedReservation base64_encode_reservation(base64_encode.size(),
+                                                scoped_reservation);
+    if (!base64_encode_reservation.reserved()) {
+      // Insufficient memory
+      return;
+    }
+    record_dictionary.Set(GetEncryptedWrappedRecordPath(),
+                          std::move(base64_encode));
+    // Replace record reservation with base64_encode.
+    scoped_reservation.Reduce(0uL);
+    scoped_reservation.HandOver(base64_encode_reservation);
   }
 
   // Result complete.
@@ -195,87 +215,95 @@ EncryptedRecordDictionaryBuilder::EncryptedRecordDictionaryBuilder(
 
 EncryptedRecordDictionaryBuilder::~EncryptedRecordDictionaryBuilder() = default;
 
-absl::optional<base::Value> EncryptedRecordDictionaryBuilder::Build() {
+std::optional<base::DictValue> EncryptedRecordDictionaryBuilder::Build() {
   return std::move(result_);
 }
 
 // static
-base::StringPiece
+std::string_view
 EncryptedRecordDictionaryBuilder::GetEncryptedWrappedRecordPath() {
-  return kEncryptedWrappedRecord;
+  return json_keys::kEncryptedWrappedRecord;
 }
 
 // static
-base::StringPiece
-EncryptedRecordDictionaryBuilder::GetUnsignedSequencingInformationKeyPath() {
-  return kUnsignedSequencingInformationKey;
+std::string_view
+EncryptedRecordDictionaryBuilder::GetSequenceInformationKeyPath() {
+  return reporting::json_keys::kSequenceInformation;
 }
 
 // static
-base::StringPiece
-EncryptedRecordDictionaryBuilder::GetSequencingInformationKeyPath() {
-  return kSequencingInformationKey;
+std::string_view EncryptedRecordDictionaryBuilder::GetEncryptionInfoPath() {
+  return json_keys::kEncryptionInfo;
 }
 
 // static
-base::StringPiece EncryptedRecordDictionaryBuilder::GetEncryptionInfoPath() {
-  return kEncryptionInfoKey;
-}
-
-// static
-base::StringPiece
+std::string_view
 EncryptedRecordDictionaryBuilder::GetCompressionInformationPath() {
-  return kCompressionInformationKey;
+  return json_keys::kCompressionInformation;
 }
 
-SequencingInformationDictionaryBuilder::SequencingInformationDictionaryBuilder(
-    const SequencingInformation& sequencing_information) {
-  // SequencingInformation requires all three fields be set.
-  if (!sequencing_information.has_sequencing_id() ||
-      !sequencing_information.has_generation_id() ||
-      !sequencing_information.has_priority()) {
+SequenceInformationDictionaryBuilder::SequenceInformationDictionaryBuilder(
+    const SequenceInformation& sequence_information,
+    bool is_generation_guid_required) {
+  bool generation_guid_is_invalid = false;
+#if BUILDFLAG(IS_CHROMEOS)
+  if (is_generation_guid_required) {
+    generation_guid_is_invalid = !sequence_information.has_generation_guid() ||
+                                 sequence_information.generation_guid().empty();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // SequenceInformation requires these fields be set. `generation_guid` is
+  // required only for unmanaged ChromeOS devices.
+  if (!sequence_information.has_sequencing_id() ||
+      !sequence_information.has_generation_id() ||
+      !sequence_information.has_priority() || generation_guid_is_invalid) {
     return;
   }
 
-  base::Value sequencing_dictionary{base::Value::Type::DICTIONARY};
-  sequencing_dictionary.SetStringKey(
-      GetSequencingIdPath(),
-      base::NumberToString(sequencing_information.sequencing_id()));
-  sequencing_dictionary.SetStringKey(
-      GetGenerationIdPath(),
-      base::NumberToString(sequencing_information.generation_id()));
-  sequencing_dictionary.SetIntKey(GetPriorityPath(),
-                                  sequencing_information.priority());
-  result_ = std::move(sequencing_dictionary);
+  result_.emplace();
+  result_->Set(GetSequencingIdPath(),
+               base::NumberToString(sequence_information.sequencing_id()));
+  result_->Set(GetGenerationIdPath(),
+               base::NumberToString(sequence_information.generation_id()));
+  result_->Set(GetPriorityPath(), sequence_information.priority());
+#if BUILDFLAG(IS_CHROMEOS)
+  result_->Set(GetGenerationGuidPath(), sequence_information.generation_guid());
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-SequencingInformationDictionaryBuilder::
-    ~SequencingInformationDictionaryBuilder() = default;
+SequenceInformationDictionaryBuilder::~SequenceInformationDictionaryBuilder() =
+    default;
 
-absl::optional<base::Value> SequencingInformationDictionaryBuilder::Build() {
+std::optional<base::DictValue> SequenceInformationDictionaryBuilder::Build() {
   return std::move(result_);
 }
 
 // static
-base::StringPiece
-SequencingInformationDictionaryBuilder::GetSequencingIdPath() {
-  return kSequencingId;
+std::string_view SequenceInformationDictionaryBuilder::GetSequencingIdPath() {
+  return reporting::json_keys::kSequencingId;
 }
 
 // static
-base::StringPiece
-SequencingInformationDictionaryBuilder::GetGenerationIdPath() {
-  return kGenerationId;
+std::string_view SequenceInformationDictionaryBuilder::GetGenerationIdPath() {
+  return reporting::json_keys::kGenerationId;
 }
 
 // static
-base::StringPiece SequencingInformationDictionaryBuilder::GetPriorityPath() {
-  return kPriority;
+std::string_view SequenceInformationDictionaryBuilder::GetPriorityPath() {
+  return reporting::json_keys::kPriority;
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+// static
+std::string_view SequenceInformationDictionaryBuilder::GetGenerationGuidPath() {
+  return json_keys::kGenerationGuid;
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 EncryptionInfoDictionaryBuilder::EncryptionInfoDictionaryBuilder(
     const EncryptionInfo& encryption_info) {
-  base::Value encryption_info_dictionary{base::Value::Type::DICTIONARY};
+  base::DictValue encryption_info_dictionary;
 
   // EncryptionInfo requires both fields are set.
   if (!encryption_info.has_encryption_key() ||
@@ -283,10 +311,9 @@ EncryptionInfoDictionaryBuilder::EncryptionInfoDictionaryBuilder(
     return;
   }
 
-  std::string base64_key;
-  base::Base64Encode(encryption_info.encryption_key(), &base64_key);
-  encryption_info_dictionary.SetStringKey(GetEncryptionKeyPath(), base64_key);
-  encryption_info_dictionary.SetStringKey(
+  std::string base64_key = base::Base64Encode(encryption_info.encryption_key());
+  encryption_info_dictionary.Set(GetEncryptionKeyPath(), base64_key);
+  encryption_info_dictionary.Set(
       GetPublicKeyIdPath(),
       base::NumberToString(encryption_info.public_key_id()));
   result_ = std::move(encryption_info_dictionary);
@@ -294,24 +321,24 @@ EncryptionInfoDictionaryBuilder::EncryptionInfoDictionaryBuilder(
 
 EncryptionInfoDictionaryBuilder::~EncryptionInfoDictionaryBuilder() = default;
 
-absl::optional<base::Value> EncryptionInfoDictionaryBuilder::Build() {
+std::optional<base::DictValue> EncryptionInfoDictionaryBuilder::Build() {
   return std::move(result_);
 }
 
 // static
-base::StringPiece EncryptionInfoDictionaryBuilder::GetEncryptionKeyPath() {
-  return kEncryptionKey;
+std::string_view EncryptionInfoDictionaryBuilder::GetEncryptionKeyPath() {
+  return json_keys::kEncryptionKey;
 }
 
 // static
-base::StringPiece EncryptionInfoDictionaryBuilder::GetPublicKeyIdPath() {
-  return kPublicKeyId;
+std::string_view EncryptionInfoDictionaryBuilder::GetPublicKeyIdPath() {
+  return json_keys::kPublicKeyId;
 }
 
 CompressionInformationDictionaryBuilder::
     CompressionInformationDictionaryBuilder(
         const CompressionInformation& compression_information) {
-  base::Value compression_information_dictionary{base::Value::Type::DICTIONARY};
+  base::DictValue compression_information_dictionary;
 
   // Ensure that compression_algorithm is valid.
   if (!CompressionInformation::CompressionAlgorithm_IsValid(
@@ -319,7 +346,7 @@ CompressionInformationDictionaryBuilder::
     return;
   }
 
-  compression_information_dictionary.SetIntKey(
+  compression_information_dictionary.Set(
       GetCompressionAlgorithmPath(),
       compression_information.compression_algorithm());
   result_ = std::move(compression_information_dictionary);
@@ -328,14 +355,15 @@ CompressionInformationDictionaryBuilder::
 CompressionInformationDictionaryBuilder::
     ~CompressionInformationDictionaryBuilder() = default;
 
-absl::optional<base::Value> CompressionInformationDictionaryBuilder::Build() {
+std::optional<base::DictValue>
+CompressionInformationDictionaryBuilder::Build() {
   return std::move(result_);
 }
 
 // static
-base::StringPiece
+std::string_view
 CompressionInformationDictionaryBuilder::GetCompressionAlgorithmPath() {
-  return kCompressionAlgorithmKey;
+  return json_keys::kCompressionAlgorithm;
 }
 
 }  // namespace reporting

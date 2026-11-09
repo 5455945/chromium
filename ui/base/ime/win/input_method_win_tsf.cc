@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,9 @@ class InputMethodWinTSF::TSFEventObserver : public TSFEventRouterObserver {
  public:
   TSFEventObserver() = default;
 
+  TSFEventObserver(const TSFEventObserver&) = delete;
+  TSFEventObserver& operator=(const TSFEventObserver&) = delete;
+
   // Returns true if we know for sure that a candidate window (or IME suggest,
   // etc.) is open.
   bool IsCandidatePopupOpen() const { return is_candidate_popup_open_; }
@@ -27,17 +30,36 @@ class InputMethodWinTSF::TSFEventObserver : public TSFEventRouterObserver {
  private:
   // True if we know for sure that a candidate window is open.
   bool is_candidate_popup_open_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(TSFEventObserver);
 };
 
-InputMethodWinTSF::InputMethodWinTSF(internal::InputMethodDelegate* delegate,
-                                     HWND toplevel_window_handle)
-    : InputMethodWinBase(delegate, toplevel_window_handle),
+InputMethodWinTSF::InputMethodWinTSF(
+    ImeKeyEventDispatcher* ime_key_event_dispatcher,
+    HWND attached_window_handle)
+    : InputMethodWinBase(ime_key_event_dispatcher, attached_window_handle),
       tsf_event_observer_(new TSFEventObserver()),
       tsf_event_router_(new TSFEventRouter(tsf_event_observer_.get())) {}
 
-InputMethodWinTSF::~InputMethodWinTSF() {}
+InputMethodWinTSF::~InputMethodWinTSF() {
+  // A pointer to |this| might have been passed to ui::TSFBridge::GetInstance()
+  // in InputMethodWinTSF::OnFocus(). This TSFBridge can sometime be called
+  // asynchronously with the following stack:
+  //   chrome.dll               ui::TSFTextStore::DispatchKeyEvent
+  //   chrome.dll               ui::TSFTextStore::RequestLock
+  //   textinputframework.dll   SafeRequestLock
+  //   textinputframework.dll   CInputContext::RequestLock
+  //
+  // This will cause the TSFBridge to try to access this pointer, which could
+  // cause a UAF if this object is already destroyed. To avoid this, we need to
+  // explicitly remove the dispatcher before destroying this object. The code in
+  // ui::TSFTextStore::DispatchKeyEvent does properly check the pointer before
+  // trying to use it. Note that everything happens on the same thread here.
+  //
+  // See crbug.com/41488962
+  if (ui::TSFBridge::GetInstance()) {
+    ui::TSFBridge::GetInstance()->RemoveImeKeyEventDispatcher(
+        InputMethodBase::ime_key_event_dispatcher());
+  }
+}
 
 void InputMethodWinTSF::OnFocus() {
   InputMethodBase::OnFocus();
@@ -47,8 +69,8 @@ void InputMethodWinTSF::OnFocus() {
   }
   tsf_event_router_->SetManager(
       ui::TSFBridge::GetInstance()->GetThreadManager().Get());
-  ui::TSFBridge::GetInstance()->SetInputMethodDelegate(
-      InputMethodBase::delegate());
+  ui::TSFBridge::GetInstance()->SetImeKeyEventDispatcher(
+      InputMethodBase::ime_key_event_dispatcher());
 }
 
 void InputMethodWinTSF::OnBlur() {
@@ -58,11 +80,12 @@ void InputMethodWinTSF::OnBlur() {
     return;
   }
   tsf_event_router_->SetManager(nullptr);
-  ui::TSFBridge::GetInstance()->RemoveInputMethodDelegate();
+  ui::TSFBridge::GetInstance()->RemoveImeKeyEventDispatcher(
+      InputMethodBase::ime_key_event_dispatcher());
 }
 
 bool InputMethodWinTSF::OnUntranslatedIMEMessage(
-    const MSG event,
+    const CHROME_MSG event,
     InputMethod::NativeEventResult* result) {
   LRESULT original_result = 0;
   BOOL handled = FALSE;
@@ -92,7 +115,7 @@ bool InputMethodWinTSF::OnUntranslatedIMEMessage(
   return !!handled;
 }
 
-void InputMethodWinTSF::OnTextInputTypeChanged(const TextInputClient* client) {
+void InputMethodWinTSF::OnTextInputTypeChanged(TextInputClient* client) {
   InputMethodBase::OnTextInputTypeChanged(client);
   if (!ui::TSFBridge::GetInstance() || !IsTextInputClientFocused(client) ||
       !IsWindowFocused(client)) {
@@ -127,6 +150,8 @@ void InputMethodWinTSF::DetachTextInputClient(TextInputClient* client) {
   ui::TSFBridge::GetInstance()->RemoveFocusedClient(client);
 }
 
+void InputMethodWinTSF::OnInputLocaleChanged() {}
+
 bool InputMethodWinTSF::IsInputLocaleCJK() const {
   if (!ui::TSFBridge::GetInstance()) {
     return false;
@@ -153,7 +178,7 @@ void InputMethodWinTSF::OnDidChangeFocusedClient(
     TextInputClient* focused) {
   if (ui::TSFBridge::GetInstance() && IsWindowFocused(focused) &&
       IsTextInputClientFocused(focused)) {
-    ui::TSFBridge::GetInstance()->SetFocusedClient(toplevel_window_handle_,
+    ui::TSFBridge::GetInstance()->SetFocusedClient(attached_window_handle_,
                                                    focused);
     // Force to update the input type since client's TextInputStateChanged()
     // function might not be called if text input types before the client loses
@@ -175,9 +200,12 @@ void InputMethodWinTSF::ConfirmCompositionText() {
     ui::TSFBridge::GetInstance()->ConfirmComposition();
 }
 
-void InputMethodWinTSF::ShowVirtualKeyboardIfEnabled() {
-  if (auto* controller = GetVirtualKeyboardController())
-    controller->DisplayVirtualKeyboard();
+void InputMethodWinTSF::OnUrlChanged() {
+  if (!ui::TSFBridge::GetInstance()) {
+    return;
+  }
+
+  ui::TSFBridge::GetInstance()->OnUrlChanged();
 }
 
 }  // namespace ui

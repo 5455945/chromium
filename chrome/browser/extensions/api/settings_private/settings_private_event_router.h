@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <map>
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/settings_private/generated_pref.h"
@@ -17,8 +17,8 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "extensions/browser/event_router.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/settings/cros_settings.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/settings/cros_settings.h"
 #endif
 
 namespace content {
@@ -35,8 +35,14 @@ class SettingsPrivateEventRouter
       public EventRouter::Observer,
       public settings_private::GeneratedPref::Observer {
  public:
-  static SettingsPrivateEventRouter* Create(
+  static std::unique_ptr<SettingsPrivateEventRouter> Create(
       content::BrowserContext* browser_context);
+
+  explicit SettingsPrivateEventRouter(content::BrowserContext* context);
+  SettingsPrivateEventRouter(const SettingsPrivateEventRouter&) = delete;
+  SettingsPrivateEventRouter& operator=(const SettingsPrivateEventRouter&) =
+      delete;
+
   ~SettingsPrivateEventRouter() override;
 
   // settings_private::GeneratedPref::Observer implementation.
@@ -45,8 +51,6 @@ class SettingsPrivateEventRouter
   content::BrowserContext* context_for_test() { return context_; }
 
  protected:
-  explicit SettingsPrivateEventRouter(content::BrowserContext* context);
-
   // KeyedService overrides:
   void Shutdown() override;
 
@@ -74,19 +78,17 @@ class SettingsPrivateEventRouter
 
   PrefChangeRegistrar* FindRegistrarForPref(const std::string& pref_name);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   using SubscriptionMap = std::map<std::string, base::CallbackListSubscription>;
   SubscriptionMap cros_settings_subscription_map_;
 #endif
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
   bool listening_ = false;
 
   std::unique_ptr<PrefsUtil> prefs_util_;
 
   base::WeakPtrFactory<SettingsPrivateEventRouter> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SettingsPrivateEventRouter);
 };
 
 }  // namespace extensions

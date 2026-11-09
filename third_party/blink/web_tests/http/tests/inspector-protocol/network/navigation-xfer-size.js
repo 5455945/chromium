@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startURL(
       '../resources/test-page.html',
       `Tests that transfer size is correctly reported for navigations.`);
@@ -9,15 +9,23 @@
     iframe.src = '/inspector/network/resources/resource.php?gzip=1&size=8000';
     document.body.appendChild(iframe);
   `);
-  const response = (await dp.Network.onceResponseReceived()).params.response;
+  let [response, responseExtraInfo] = await Promise.all([
+    dp.Network.onceResponseReceived(),
+    dp.Network.onceResponseReceivedExtraInfo()]);
+  response = response.params.response;
 
-  const encodedLength = (await dp.Network.onceLoadingFinished()).params.encodedDataLength;
+  const {encodedDataLength: encodedLength, encodedBodyLength} =
+      (await dp.Network.onceLoadingFinished()).params;
   if (encodedLength > 2000)
     testRunner.log(`FAIL: encoded data length is suspiciously large (${encodedLength})`);
 
-  const headersLength = response.headersText.length;
+  const headersLength = responseExtraInfo.params.headersText.length;
   const contentLength = +response.headers['Content-Length'];
+  if (encodedBodyLength !== contentLength)
+    testRunner.log(`FAIL: encodedBodyLength (${
+        encodedBodyLength}) !== contentLength (${contentLength})`);
   if (headersLength + contentLength !== encodedLength)
-    testRunner.log(`FAIL: headersLength (${headersLength}) + contentLength (${contentLength}) !== encodedLength (${encodedLength})`)
+    testRunner.log(`FAIL: headersLength (${headersLength}) + contentLength (${
+        contentLength}) !== encodedLength (${encodedLength})`);
   testRunner.completeTest();
 })

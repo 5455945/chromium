@@ -20,16 +20,6 @@ README.md
 =========
 This file.
 
-wpt.config.json
-===============
-The configuration file used when running WPTServe. Note that this file loads
-after wpt/config.default.json and this configuration gets merged onto it. When
-changing the ports (HTTP/S, WS/S), make sure to also:
-
-- update `WPT_HOST_AND_PORTS` in
-  `//third_party/blink/tools/blinkpy/web_tests/port/driver.py`
-- update WebTestContentBrowserClient::GetOriginsRequiringDedicatedProcess()
-
 checkout.sh
 ===========
 Running this script without arguments will remove the existing checkout
@@ -48,7 +38,7 @@ for self-signed CA. By default, WPTServe generates these files using the
 "openssl" command, but we check in pre-generated files to avoid "openssl"
 dependency.
 
-These certificates will expire in January 2025. Here is an instruction to
+These certificates will expire in February 2033. Here is an instruction to
 re-generate them:
 
 1. Make sure the following commands are in $PATH.
@@ -59,13 +49,10 @@ re-generate them:
  - sed
 2. Run update_certs.py
 3. Look at the "Not After" date in the output of the command, and update
-  "January 2025" in this document and expiration_date in wptserve.py to new
+  "February 2033" in this document and expiration_date in wptserve.py to new
   expiration date.
-4. Update certs/127.0.0.1.sxg.\*.
-  Please refer to
-  //third_party/blink/web_tests/http/tests/loading/sxg/resources/README.md
-5. git commit
-6. git cl upload, etc.
+4. git commit
+5. git cl upload, etc.
 
 Rolling in WPT
 ==============
@@ -74,15 +61,19 @@ If there are new files that need to be rolled in, add the intended files to
 the WPTIncludeList. Ensure these files are in the correct order by running
 "LC_ALL=C sort WPTIncludeList".
 
-When rolling in new versions of WPT support, modify WPT_HEAD in checkout.sh to
-the desired HEAD position. You can then call "./checkout.sh clone" which will
+The easiest way to roll is to just call "./roll_wpt.py" which does everything
+listed below and uploads a CL to Gerrit. See instructions below for more
+manually rolling in WPT.
+
+When rolling in new versions of WPT support, make note of the revision you want
+to roll to.  You can then call "./checkout.sh REVISION clone" which will
 pull in all the code.
 
-It is also important to update the hashes in the 'Version:' fields of
-//third_party/wpt_tools/README.chromium. While you're in this file, look at the
-"Local Modifications" section which lists ways in which Chromium has diverged
-from WPT. Make sure these modifications are persisted when reviewing the changes
-being made.
+It is also important to update the hash in the `Revision` field of
+`//third_party/wpt_tools/README.chromium`. While you're in this file, look at
+the "Local Modifications" section which lists ways in which Chromium has
+diverged from WPT. Make sure these modifications are persisted when reviewing
+the changes being made.
 
 You can examine what's pulled in and update WPTIncludeList if some new files are
 required to run the updated version.
@@ -90,8 +81,8 @@ required to run the updated version.
 Once you've cloned the repositories you can call "./checkout.sh reduce" to
 remove everything that is not listed in WPTIncludeList.
 
-Note that calling "./checkout.sh" without arguments is equivalent of calling
-"./checkout.sh clone reduce".
+Note that calling "./checkout.sh" with only a revision argument is equivalent
+of calling "./checkout.sh clone reduce".
 
 Configuration
 =============
@@ -100,7 +91,7 @@ Read instructions in WPT README:
 https://github.com/web-platform-tests/wpt/blob/master/README.md
 
 Also, check out the WPTServe Documentation
-(https://wptserve.readthedocs.org/en/latest/).
+(https://web-platform-tests.org/tools/wptserve/docs/).
 
 Note that editing /etc/hosts is not required for run_web_tests.py since
 content_shell is invoked with flags to map all \*.test domains to 127.0.0.1.

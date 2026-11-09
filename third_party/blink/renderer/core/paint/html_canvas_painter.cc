@@ -1,19 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/paint/html_canvas_painter.h"
 
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/layout/layout_html_canvas.h"
 #include "third_party/blink/renderer/core/paint/box_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
-#include "third_party/blink/renderer/core/paint/paint_timing.h"
-#include "third_party/blink/renderer/platform/geometry/layout_point.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/foreign_layer_display_item.h"
-#include "third_party/blink/renderer/platform/graphics/scoped_interpolation_quality.h"
+#include "third_party/blink/renderer/platform/graphics/scoped_image_rendering_settings.h"
 
 namespace blink {
 
@@ -23,8 +23,10 @@ InterpolationQuality InterpolationQualityForCanvas(const ComputedStyle& style) {
   if (style.ImageRendering() == EImageRendering::kWebkitOptimizeContrast)
     return kInterpolationLow;
 
-  if (style.ImageRendering() == EImageRendering::kPixelated)
+  if (style.ImageRendering() == EImageRendering::kPixelated ||
+      style.ImageRendering() == EImageRendering::kCrispEdges) {
     return kInterpolationNone;
+  }
 
   return CanvasDefaultInterpolationQuality;
 }
@@ -39,13 +41,30 @@ void HTMLCanvasPainter::PaintReplaced(const PaintInfo& paint_info,
   paint_rect.Move(paint_offset);
 
   auto* canvas = To<HTMLCanvasElement>(layout_html_canvas_.GetNode());
+  if (paint_info.IsReadBackAllowedRendering() && !canvas->OriginClean()) {
+    return;
+  }
+
   if (!canvas->IsCanvasClear()) {
     PaintTiming::From(layout_html_canvas_.GetDocument())
         .MarkFirstContentfulPaint();
   }
 
-  bool flatten_composited_layers =
-      paint_info.GetGlobalPaintFlags() & kGlobalPaintFlattenCompositingLayers;
+  if (canvas->IsInCanvasSubtree()) {
+    if (DrawingRecorder::UseCachedDrawingIfPossible(
+            context, layout_html_canvas_, paint_info.phase)) {
+      return;
+    }
+    BoxDrawingRecorder recorder(context, layout_html_canvas_, paint_info.phase,
+                                paint_offset);
+    // For nested canvases in a canvas subtree, record a placeholder
+    // CustomDataOp with the DOMNodeId. When GetCanvasDrawablePaintRecord() is
+    // called, this placeholder is replaced with the nested canvas's actual
+    // unaccelerated snapshot.
+    context.Canvas()->recordCustomData(
+        static_cast<uint32_t>(canvas->GetDomNodeId()));
+    return;
+  }
 
   if (auto* layer = canvas->ContentsCcLayer()) {
     // TODO(crbug.com/705019): For a texture layer canvas, setting the layer
@@ -55,30 +74,34 @@ void HTMLCanvasPainter::PaintReplaced(const PaintInfo& paint_info,
     if (layout_html_canvas_.DrawsBackgroundOntoContentLayer()) {
       Color background_color =
           layout_html_canvas_.ResolveColor(GetCSSPropertyBackgroundColor());
-      layer->SetBackgroundColor(background_color.Rgb());
+      // TODO(crbug/1308932): Remove FromColor and use just SkColor4f.
+      layer->SetBackgroundColor(SkColor4f::FromColor(background_color.Rgb()));
     }
-    if (RuntimeEnabledFeatures::CompositeAfterPaintEnabled() &&
-        !flatten_composited_layers) {
-      IntRect pixel_snapped_rect = PixelSnappedIntRect(paint_rect);
-      layer->SetBounds(gfx::Size(pixel_snapped_rect.Size()));
+    // We do not take the foreign layer code path when printing because it
+    // prevents painting canvas content as vector graphics.
+    if (!paint_info.ShouldOmitCompositingInfo() && !canvas->IsPrinting()) {
+      gfx::Rect pixel_snapped_rect = ToPixelSnappedRect(paint_rect);
+      layer->SetBounds(pixel_snapped_rect.size());
       layer->SetIsDrawable(true);
       layer->SetHitTestable(true);
       RecordForeignLayer(context, layout_html_canvas_,
                          DisplayItem::kForeignLayerCanvas, layer,
-                         pixel_snapped_rect.Location());
+                         pixel_snapped_rect.origin());
       return;
     }
   }
 
   if (DrawingRecorder::UseCachedDrawingIfPossible(context, layout_html_canvas_,
-                                                  paint_info.phase))
+                                                  paint_info.phase)) {
     return;
+  }
 
   BoxDrawingRecorder recorder(context, layout_html_canvas_, paint_info.phase,
                               paint_offset);
-  ScopedInterpolationQuality interpolation_quality_scope(
-      context, InterpolationQualityForCanvas(layout_html_canvas_.StyleRef()));
-  canvas->Paint(context, paint_rect, flatten_composited_layers);
+  ScopedImageRenderingSettings image_rendering_settings_scope(
+      context, InterpolationQualityForCanvas(layout_html_canvas_.Style()),
+      layout_html_canvas_.Style().GetDynamicRangeLimit());
+  canvas->Paint(context, paint_rect, paint_info.ShouldOmitCompositingInfo());
 }
 
 }  // namespace blink

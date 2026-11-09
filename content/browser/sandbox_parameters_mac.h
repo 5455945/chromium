@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_SANDBOX_PARAMETERS_MAC_H_
 #define CONTENT_BROWSER_SANDBOX_PARAMETERS_MAC_H_
 
+#include "base/feature_list.h"
 #include "content/common/content_export.h"
-#include "sandbox/policy/sandbox_type.h"
 
 namespace base {
 class CommandLine;
@@ -14,17 +14,23 @@ class FilePath;
 }
 
 namespace sandbox {
-class SeatbeltExecClient;
-}
+class SandboxSerializer;
+namespace mojom {
+enum class Sandbox;
+}  // namespace mojom
+}  // namespace sandbox
 
 namespace content {
 
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kMacSandboxAllowNetworkSymlinkCreation);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kMacSandboxAllowRendererPidinfo);
+
 // This populates the sandbox parameters in the client for the given
 // |sandbox_type|. Some parameters may be extracted from the |command_line|.
-CONTENT_EXPORT void SetupSandboxParameters(
-    sandbox::policy::SandboxType sandbox_type,
+CONTENT_EXPORT bool SetupSandboxParameters(
+    sandbox::mojom::Sandbox sandbox_type,
     const base::CommandLine& command_line,
-    sandbox::SeatbeltExecClient* client);
+    sandbox::SandboxSerializer* serializer);
 
 // Expands the SandboxType::kNetwork policy to allow reading files from
 // the specified |path|, which stores TLS certificates used by the browser

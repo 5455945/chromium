@@ -1,14 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/background_fetch/storage/get_initialization_data_task.h"
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
@@ -34,6 +34,12 @@ class InitializationSubTask : public DatabaseTask {
   // Holds data used by all SubTasks.
   struct SubTaskInit {
     SubTaskInit() = delete;
+    SubTaskInit(int64_t service_worker_registration_id,
+                std::string unique_id,
+                BackgroundFetchInitializationData* initialization_data)
+        : service_worker_registration_id(service_worker_registration_id),
+          unique_id(std::move(unique_id)),
+          initialization_data(initialization_data) {}
     ~SubTaskInit() = default;
 
     // Service Worker Database metadata.
@@ -41,7 +47,8 @@ class InitializationSubTask : public DatabaseTask {
     std::string unique_id;
 
     // The results to report.
-    BackgroundFetchInitializationData* initialization_data;
+    raw_ptr<BackgroundFetchInitializationData, DanglingUntriaged>
+        initialization_data;
   };
 
   InitializationSubTask(DatabaseTaskHost* host,
@@ -50,8 +57,11 @@ class InitializationSubTask : public DatabaseTask {
       : DatabaseTask(host),
         sub_task_init_(sub_task_init),
         done_closure_(std::move(done_closure)) {
-    DCHECK(sub_task_init_.initialization_data);
+    CHECK(sub_task_init_.initialization_data, base::NotFatalUntil::M158);
   }
+
+  InitializationSubTask(const InitializationSubTask&) = delete;
+  InitializationSubTask& operator=(const InitializationSubTask&) = delete;
 
   ~InitializationSubTask() override = default;
 
@@ -68,8 +78,6 @@ class InitializationSubTask : public DatabaseTask {
  private:
   SubTaskInit sub_task_init_;
   base::OnceClosure done_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(InitializationSubTask);
 };
 
 // Fills the BackgroundFetchInitializationData with the most recent UI title.
@@ -146,6 +154,9 @@ class GetRequestsTask : public InitializationSubTask {
                   const SubTaskInit& sub_task_init,
                   base::OnceClosure done_closure)
       : InitializationSubTask(host, sub_task_init, std::move(done_closure)) {}
+
+  GetRequestsTask(const GetRequestsTask&) = delete;
+  GetRequestsTask& operator=(const GetRequestsTask&) = delete;
 
   ~GetRequestsTask() override = default;
 
@@ -233,7 +244,8 @@ class GetRequestsTask : public InitializationSubTask {
         FinishWithError(blink::mojom::BackgroundFetchError::STORAGE_ERROR);
         return;
       }
-      DCHECK_EQ(sub_task_init().unique_id, active_request.unique_id());
+      CHECK_EQ(sub_task_init().unique_id, active_request.unique_id(),
+               base::NotFatalUntil::M158);
 
       auto request_info = base::MakeRefCounted<BackgroundFetchRequestInfo>(
           active_request.request_index(),
@@ -275,8 +287,6 @@ class GetRequestsTask : public InitializationSubTask {
   }
 
   base::WeakPtrFactory<GetRequestsTask> weak_factory_{this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(GetRequestsTask);
 };
 
 // Fills the BackgroundFetchInitializationData with all the relevant information
@@ -287,6 +297,9 @@ class FillFromMetadataTask : public InitializationSubTask {
                        const SubTaskInit& sub_task_init,
                        base::OnceClosure done_closure)
       : InitializationSubTask(host, sub_task_init, std::move(done_closure)) {}
+
+  FillFromMetadataTask(const FillFromMetadataTask&) = delete;
+  FillFromMetadataTask& operator=(const FillFromMetadataTask&) = delete;
 
   ~FillFromMetadataTask() override = default;
 
@@ -330,9 +343,7 @@ class FillFromMetadataTask : public InitializationSubTask {
     sub_task_init().initialization_data->registration_id =
         BackgroundFetchRegistrationId(
             sub_task_init().service_worker_registration_id,
-            // TODO(https://crbug.com/1199077): Store the full serialization of
-            // the storage key inside `metadata`.
-            blink::StorageKey(url::Origin::Create(GURL(metadata.origin()))),
+            GetMetadataStorageKey(metadata),
             metadata.registration().developer_id(),
             metadata.registration().unique_id());
 
@@ -360,25 +371,25 @@ class FillFromMetadataTask : public InitializationSubTask {
       ir.purpose.reserve(icon.purpose_size());
       for (auto purpose : icon.purpose()) {
         switch (purpose) {
-          case proto::BackgroundFetchOptions_ImageResource_Purpose_ANY:
+          case proto::ImageResource_Purpose_ANY:
             ir.purpose.push_back(
                 blink::mojom::ManifestImageResource_Purpose::ANY);
             break;
-          case proto::BackgroundFetchOptions_ImageResource_Purpose_MONOCHROME:
+          case proto::ImageResource_Purpose_MONOCHROME:
             ir.purpose.push_back(
                 blink::mojom::ManifestImageResource_Purpose::MONOCHROME);
             break;
         }
       }
     }
+    sub_task_init().initialization_data->isolation_info =
+        net::IsolationInfo::Deserialize(metadata.isolation_info());
 
     FinishWithError(blink::mojom::BackgroundFetchError::NONE);
   }
 
   base::WeakPtrFactory<FillFromMetadataTask> weak_factory_{
       this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(FillFromMetadataTask);
 };
 
 // Asynchronously calls the SubTasks required to collect all the information for
@@ -389,6 +400,11 @@ class FillBackgroundFetchInitializationDataTask : public InitializationSubTask {
                                             const SubTaskInit& sub_task_init,
                                             base::OnceClosure done_closure)
       : InitializationSubTask(host, sub_task_init, std::move(done_closure)) {}
+
+  FillBackgroundFetchInitializationDataTask(
+      const FillBackgroundFetchInitializationDataTask&) = delete;
+  FillBackgroundFetchInitializationDataTask& operator=(
+      const FillBackgroundFetchInitializationDataTask&) = delete;
 
   ~FillBackgroundFetchInitializationDataTask() override = default;
 
@@ -417,8 +433,6 @@ class FillBackgroundFetchInitializationDataTask : public InitializationSubTask {
  private:
   base::WeakPtrFactory<FillBackgroundFetchInitializationDataTask> weak_factory_{
       this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(FillBackgroundFetchInitializationDataTask);
 };
 
 }  // namespace
@@ -472,7 +486,8 @@ void GetInitializationDataTask::DidGetRegistrations(
   for (const auto& ud : user_data) {
     auto insertion_result = initialization_data_map_.emplace(
         ud.second, BackgroundFetchInitializationData());
-    DCHECK(insertion_result.second);  // Check unique_id is in fact unique.
+    CHECK(insertion_result.second,
+          base::NotFatalUntil::M158);  // Check unique_id is in fact unique.
 
     AddSubTask(std::make_unique<FillBackgroundFetchInitializationDataTask>(
         this,
@@ -498,7 +513,7 @@ void GetInitializationDataTask::FinishWithError(
       // is available, mark the registration for deletion.
       // Note that the Developer ID isn't available if the metadata extraction
       // failed.
-      // TODO(crbug.com/865388): Getting the Developer ID should be possible
+      // TODO(crbug.com/40585668): Getting the Developer ID should be possible
       // since it is part of the key for when we got the Unique ID.
       AddDatabaseTask(std::make_unique<MarkRegistrationForDeletionTask>(
           data_manager(), data.second.registration_id,
@@ -513,14 +528,8 @@ void GetInitializationDataTask::FinishWithError(
     }
   }
 
-  ReportStorageError();
-
   std::move(callback_).Run(error, std::move(results));
   Finished();  // Destroys |this|.
-}
-
-std::string GetInitializationDataTask::HistogramName() const {
-  return "GetInitializationDataTask";
 }
 
 }  // namespace background_fetch

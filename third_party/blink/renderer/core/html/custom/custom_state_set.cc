@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,15 +20,10 @@ class CustomStateIterationSource : public CustomStateSet::IterationSource {
     CustomStateSet::IterationSource::Trace(visitor);
   }
 
-  bool Next(ScriptState*,
-            String& out_key,
-            String& out_value,
-            ExceptionState&) override {
+  bool FetchNextItem(ScriptState*, String& out_value) override {
     if (index_ >= states_->list_.size())
       return false;
-    String value = states_->list_[index_++];
-    out_key = value;
-    out_value = value;
+    out_value = states_->list_[index_++];
     return true;
   }
 
@@ -53,34 +48,11 @@ void CustomStateSet::Trace(Visitor* visitor) const {
 }
 
 void CustomStateSet::add(const String& value, ExceptionState& exception_state) {
-  // https://wicg.github.io/custom-state-pseudo-class/#dom-customstateset-add
-
-  // 1. If value does not match to <dashed-ident>, then throw a "SyntaxError"
-  // DOMException.
-  if (!value.StartsWith("--")) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kSyntaxError,
-        "The specified value '" + value + "' must start with '--'.");
-    return;
-  }
-  for (wtf_size_t i = 2; i < value.length(); ++i) {
-    if (IsNameCodePoint(value[i]))
-      continue;
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kSyntaxError,
-        "The specified value '" + value +
-            "' must match to <dashed-ident> production. '" + value[i] +
-            "' is invalid.");
-    return;
-  }
-
-  // 2. Invoke the default add operation, which the setlike<DOMString> would
-  // have if CustomStateSet interface had no add(value) operation, with value
-  // argument.
-  if (!list_.Contains(value))
+  if (!list_.Contains(value)) {
     list_.push_back(value);
-
+  }
   InvalidateStyle();
+  return;
 }
 
 uint32_t CustomStateSet::size() const {
@@ -96,8 +68,9 @@ bool CustomStateSet::deleteForBinding(ScriptState*,
                                       const String& value,
                                       ExceptionState&) {
   wtf_size_t index = list_.Find(value);
-  if (index == WTF::kNotFound)
+  if (index == kNotFound) {
     return false;
+  }
   list_.EraseAt(index);
   for (auto& iterator : iterators_)
     iterator->DidEraseAt(index);
@@ -115,9 +88,8 @@ bool CustomStateSet::Has(const String& value) const {
   return list_.Contains(value);
 }
 
-CustomStateSet::IterationSource* CustomStateSet::StartIteration(
-    ScriptState*,
-    ExceptionState&) {
+CustomStateSet::IterationSource* CustomStateSet::CreateIterationSource(
+    ScriptState*) {
   auto* iterator = MakeGarbageCollected<CustomStateIterationSource>(*this);
   iterators_.insert(iterator);
   return iterator;
@@ -125,9 +97,9 @@ CustomStateSet::IterationSource* CustomStateSet::StartIteration(
 
 void CustomStateSet::InvalidateStyle() const {
   // TOOD(tkent): The following line invalidates all of rulesets with any
-  // custom state pseudo classes though we should invalidate only rulesets
+  // custom state pseudo-classes though we should invalidate only rulesets
   // with the updated state ideally. We can improve style resolution
-  // performance in documents with various custom state pseudo classes by
+  // performance in documents with various custom state pseudo-classes by
   // having blink::InvalidationSet for each of states.
   element_->PseudoStateChanged(CSSSelector::kPseudoState);
 }

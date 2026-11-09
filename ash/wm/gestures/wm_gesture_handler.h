@@ -1,13 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_WM_GESTURES_WM_GESTURE_HANDLER_H_
 #define ASH_WM_GESTURES_WM_GESTURE_HANDLER_H_
 
+#include <optional>
+
 #include "ash/ash_export.h"
 #include "components/prefs/pref_registry_simple.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ui {
 class ScrollEvent;
@@ -17,7 +18,7 @@ namespace ash {
 
 // This handles the following interactions:
 //   - 3-finger touchpad scroll events to enter/exit overview mode and move the
-//   overview highlight if it is visible.
+//   overview focus ring if it is visible.
 //   - 4-finger horizontal scrolls to switch desks.
 class ASH_EXPORT WmGestureHandler {
  public:
@@ -37,7 +38,7 @@ class ASH_EXPORT WmGestureHandler {
   virtual ~WmGestureHandler();
 
   // Processes a scroll event and may switch desks, start overview or move the
-  // overview highlight. Returns true if the event has been handled and should
+  // overview focus ring. Returns true if the event has been handled and should
   // not be processed further, false otherwise.
   bool ProcessScrollEvent(const ui::ScrollEvent& event);
 
@@ -53,7 +54,7 @@ class ASH_EXPORT WmGestureHandler {
 
     // Continuous gestures need to first pass a threshold before we update the
     // UI. We still update this struct before that happens.
-    bool continuous_gesture_started = false;
+    bool horizontal_continuous_gesture_started = false;
   };
 
   // Called by ProcessScrollEvent(). Depending on |finger_count|, may switch
@@ -76,7 +77,7 @@ class ASH_EXPORT WmGestureHandler {
                                 float scroll_y);
 
   // Contains the data during a scroll session. Empty is no scroll is underway.
-  absl::optional<ScrollData> scroll_data_;
+  std::optional<ScrollData> scroll_data_;
 };
 
 }  // namespace ash

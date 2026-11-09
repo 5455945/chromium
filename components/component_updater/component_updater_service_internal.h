@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,17 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/threading/thread_checker.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
+#include "build/branding_buildflags.h"
 #include "components/component_updater/update_scheduler.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/update_client/persisted_data.h"
 
 namespace base {
 class TimeTicks;
@@ -28,9 +30,7 @@ enum class Error;
 namespace component_updater {
 
 class OnDemandUpdater;
-
-using CrxInstaller = update_client::CrxInstaller;
-using UpdateClient = update_client::UpdateClient;
+class RequiredComponentsController;
 
 class CrxUpdateService : public ComponentUpdateService,
                          public ComponentUpdateService::Observer,
@@ -40,13 +40,19 @@ class CrxUpdateService : public ComponentUpdateService,
  public:
   CrxUpdateService(scoped_refptr<Configurator> config,
                    std::unique_ptr<UpdateScheduler> scheduler,
-                   scoped_refptr<UpdateClient> update_client);
+                   scoped_refptr<update_client::UpdateClient> update_client,
+                   const std::string& brand,
+                   bool update_checks_disabled);
+
+  CrxUpdateService(const CrxUpdateService&) = delete;
+  CrxUpdateService& operator=(const CrxUpdateService&) = delete;
+
   ~CrxUpdateService() override;
 
   // Overrides for ComponentUpdateService.
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
-  bool RegisterComponent(const CrxComponent& component) override;
+  bool RegisterComponent(const ComponentRegistration& component) override;
   bool UnregisterComponent(const std::string& id) override;
   std::vector<std::string> GetComponentIDs() const override;
   std::vector<ComponentInfo> GetComponents() const override;
@@ -55,9 +61,17 @@ class CrxUpdateService : public ComponentUpdateService,
                      base::OnceClosure callback) override;
   bool GetComponentDetails(const std::string& id,
                            CrxUpdateItem* item) const override;
+  bool Cancel(const std::string& id) override;
+  base::Version GetRegisteredVersion(const std::string& app_id) override;
+  base::Version GetMaxPreviousProductVersion(
+      const std::string& app_id) override;
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  void EnsureRequiredComponentsReady(base::TimeDelta timeout) override;
+#endif
+  void Stop() override;
 
   // Overrides for Observer.
-  void OnEvent(Events event, const std::string& id) override;
+  void OnEvent(const CrxUpdateItem& item) override;
 
   // Overrides for OnDemandUpdater.
   void OnDemandUpdate(const std::string& id,
@@ -66,7 +80,6 @@ class CrxUpdateService : public ComponentUpdateService,
 
  private:
   void Start();
-  void Stop();
 
   bool CheckForUpdates(UpdateScheduler::OnFinishedCallback on_finished);
 
@@ -75,27 +88,36 @@ class CrxUpdateService : public ComponentUpdateService,
                               Callback callback);
   bool OnDemandUpdateWithCooldown(const std::string& id);
 
-  bool DoUnregisterComponent(const CrxComponent& component);
+  bool DoUnregisterComponent(const std::string& id);
 
-  absl::optional<CrxComponent> GetComponent(const std::string& id) const;
+  CrxComponent ToCrxComponent(const ComponentRegistration& component) const;
+
+  std::optional<ComponentRegistration> GetComponent(
+      const std::string& id) const;
 
   const CrxUpdateItem* GetComponentState(const std::string& id) const;
 
-  std::vector<absl::optional<CrxComponent>> GetCrxComponents(
-      const std::vector<std::string>& ids);
+  void GetCrxComponents(
+      const std::vector<std::string>& ids,
+      base::OnceCallback<void(const std::vector<std::optional<CrxComponent>>&)>
+          callback);
   void OnUpdateComplete(Callback callback,
                         const base::TimeTicks& start_time,
                         update_client::Error error);
 
-  base::ThreadChecker thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   scoped_refptr<Configurator> config_;
   std::unique_ptr<UpdateScheduler> scheduler_;
+  scoped_refptr<update_client::UpdateClient> update_client_;
 
-  scoped_refptr<UpdateClient> update_client_;
+  std::string brand_;
+
+  // If true, components are registered but never checked for updates.
+  const bool update_checks_disabled_;
 
   // A collection of every registered component.
-  using Components = base::flat_map<std::string, CrxComponent>;
+  using Components = base::flat_map<std::string, ComponentRegistration>;
   Components components_;
 
   // Maintains the order in which components have been registered. The position
@@ -106,7 +128,7 @@ class CrxUpdateService : public ComponentUpdateService,
 
   // Contains the components pending unregistration. If a component is not
   // busy installing or updating, it can be unregistered right away. Otherwise,
-  // the component will be lazily unregistered after the its operations have
+  // the component will be lazily unregistered after its operations have
   // completed.
   std::vector<std::string> components_pending_unregistration_;
 
@@ -124,7 +146,11 @@ class CrxUpdateService : public ComponentUpdateService,
   // tracked. May include the IDs of un-registered components.
   std::map<std::string, std::string> component_ids_by_mime_type_;
 
-  DISALLOW_COPY_AND_ASSIGN(CrxUpdateService);
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  std::unique_ptr<RequiredComponentsController> required_components_controller_;
+#endif
+
+  base::WeakPtrFactory<CrxUpdateService> weak_ptr_factory_{this};
 };
 
 }  // namespace component_updater

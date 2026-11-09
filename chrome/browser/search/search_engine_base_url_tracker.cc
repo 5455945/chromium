@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,9 +15,9 @@ SearchEngineBaseURLTracker::SearchEngineBaseURLTracker(
       search_terms_data_(std::move(search_terms_data)),
       base_url_changed_callback_(base_url_changed_callback),
       previous_google_base_url_(search_terms_data_->GoogleBaseURLValue()) {
-  DCHECK(template_url_service_);
+  CHECK(template_url_service_, base::NotFatalUntil::M162);
 
-  observation_.Observe(template_url_service_);
+  observation_.Observe(template_url_service_.get());
 
   const TemplateURL* default_search_provider =
       template_url_service_->GetDefaultSearchProvider();
@@ -45,7 +45,7 @@ void SearchEngineBaseURLTracker::OnTemplateURLServiceChanged() {
     if (template_url)
       previous_default_search_provider_data_ = template_url->data();
     else
-      previous_default_search_provider_data_ = absl::nullopt;
+      previous_default_search_provider_data_ = std::nullopt;
 
     // Also update the cached Google base URL, without separately notifying.
     previous_google_base_url_ = google_base_url;

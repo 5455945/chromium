@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/media_export.h"
 
 namespace media {
@@ -29,13 +30,16 @@ namespace media {
 // error is reported by the parser.
 class MEDIA_EXPORT WebMParserClient {
  public:
+  WebMParserClient(const WebMParserClient&) = delete;
+  WebMParserClient& operator=(const WebMParserClient&) = delete;
+
   virtual ~WebMParserClient();
 
   virtual WebMParserClient* OnListStart(int id);
   virtual bool OnListEnd(int id);
   virtual bool OnUInt(int id, int64_t val);
   virtual bool OnFloat(int id, double val);
-  virtual bool OnBinary(int id, const uint8_t* data, int size);
+  virtual bool OnBinary(int id, base::span<const uint8_t> data);
 
   // Note that |str| is not necessarily a valid WebM string-value; various EBML
   // "s" or "8" string elements are specified as either ASCII-printable (0x20 -
@@ -45,8 +49,6 @@ class MEDIA_EXPORT WebMParserClient {
 
  protected:
   WebMParserClient();
-
-  DISALLOW_COPY_AND_ASSIGN(WebMParserClient);
 };
 
 struct ListElementInfo;
@@ -61,17 +63,21 @@ class MEDIA_EXPORT WebMListParser {
   // |id| - Element ID of the list we intend to parse.
   // |client| - Called as different elements in the list are parsed.
   WebMListParser(int id, WebMParserClient* client);
+
+  WebMListParser(const WebMListParser&) = delete;
+  WebMListParser& operator=(const WebMListParser&) = delete;
+
   ~WebMListParser();
 
   // Resets the state of the parser so it can start parsing a new list.
   void Reset();
 
-  // Parses list data contained in |buf|.
+  // Parses list data contained in `buf`.
   //
   // Returns < 0 if the parse fails.
   // Returns 0 if more data is needed.
   // Returning > 0 indicates success & the number of bytes parsed.
-  int Parse(const uint8_t* buf, int size);
+  int Parse(base::span<const uint8_t> buf);
 
   // Returns true if the entire list has been parsed.
   bool IsParsingComplete() const;
@@ -88,8 +94,8 @@ class MEDIA_EXPORT WebMListParser {
     int id_;
     int64_t size_;
     int64_t bytes_parsed_;
-    const ListElementInfo* element_info_;
-    WebMParserClient* client_;
+    raw_ptr<const ListElementInfo> element_info_;
+    raw_ptr<WebMParserClient> client_;
   };
 
   void ChangeState(State new_state);
@@ -99,8 +105,7 @@ class MEDIA_EXPORT WebMListParser {
   // |header_size| - The size of the element header
   // |id| - The ID of the element being parsed.
   // |element_size| - The size of the element body.
-  // |data| - Pointer to the element contents.
-  // |size| - Number of bytes in |data|
+  // |data| - The element contents.
   // |client| - Client to pass the parsed data to.
   //
   // Returns < 0 if the parse fails.
@@ -109,8 +114,7 @@ class MEDIA_EXPORT WebMListParser {
   int ParseListElement(int header_size,
                        int id,
                        int64_t element_size,
-                       const uint8_t* data,
-                       int size);
+                       base::span<const uint8_t> data);
 
   // Called when starting to parse a new list.
   //
@@ -146,13 +150,11 @@ class MEDIA_EXPORT WebMListParser {
   const int root_level_;
 
   // WebMParserClient to handle the root list.
-  WebMParserClient* const root_client_;
+  const raw_ptr<WebMParserClient> root_client_;
 
   // Stack of state for all the lists currently being parsed. Lists are
   // added and removed from this stack as they are parsed.
   std::vector<ListState> list_state_stack_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebMListParser);
 };
 
 // Parses an element header & returns the ID and element size.
@@ -163,8 +165,7 @@ class MEDIA_EXPORT WebMListParser {
 // |*id| contains the element ID on success and is undefined otherwise.
 // |*element_size| contains the element size on success and is undefined
 //                 otherwise.
-int MEDIA_EXPORT WebMParseElementHeader(const uint8_t* buf,
-                                        int size,
+int MEDIA_EXPORT WebMParseElementHeader(base::span<const uint8_t> buf,
                                         int* id,
                                         int64_t* element_size);
 

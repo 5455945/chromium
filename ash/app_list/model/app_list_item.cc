@@ -1,13 +1,29 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/app_list/model/app_list_item.h"
 
+#include "ash/app_list/model/app_list_folder_item.h"
 #include "ash/app_list/model/app_list_item_observer.h"
 #include "ash/public/cpp/app_list/app_list_config_provider.h"
+#include "ash/public/cpp/shelf_types.h"
+#include "ui/gfx/image/image_skia.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
+
+namespace {
+
+// The maximum number of children that a folder is allowed to have. The
+// restriction was a result of UI restrictions for paged folder views, with a
+// goal to reduce size taken by the page switcher within the folder UI. While
+// this is not relevant concern when the folder items grid is scrollabe, the
+// restriction is kept to reduce risk of creating overflown folders via sync on
+// devices that do not yet use scrollable folder UI.
+constexpr int kMaxFolderChildren = 48;
+
+}  // namespace
 
 AppListItem::AppListItem(const std::string& id)
     : metadata_(std::make_unique<AppListItemMetadata>()) {
@@ -19,10 +35,13 @@ AppListItem::~AppListItem() {
     observer.ItemBeingDestroyed();
 }
 
+AppListFolderItem* AppListItem::AsFolderItem() {
+  return nullptr;
+}
+
 void AppListItem::SetIcon(AppListConfigType config_type,
                           const gfx::ImageSkia& icon) {
   per_config_icons_[config_type] = icon;
-  icon.EnsureRepsForSupportedScales();
 
   for (auto& observer : observers_)
     observer.ItemIconChanged(config_type);
@@ -39,9 +58,12 @@ const gfx::ImageSkia& AppListItem::GetIcon(
   return metadata_->icon;
 }
 
-void AppListItem::SetDefaultIcon(const gfx::ImageSkia& icon) {
+void AppListItem::SetDefaultIconAndColor(const gfx::ImageSkia& icon,
+                                         const IconColor& color,
+                                         bool is_placeholder_icon) {
   metadata_->icon = icon;
-  icon.EnsureRepsForSupportedScales();
+  metadata_->icon_color = color;
+  metadata_->is_placeholder_icon = is_placeholder_icon;
 
   // If the item does not have a config specific icon, it will be represented by
   // the (possibly scaled) default icon, which means that changing the default
@@ -49,15 +71,52 @@ void AppListItem::SetDefaultIcon(const gfx::ImageSkia& icon) {
   // icon.
   for (auto config_type :
        AppListConfigProvider::Get().GetAvailableConfigTypes()) {
-    if (per_config_icons_.find(config_type) == per_config_icons_.end()) {
+    if (!per_config_icons_.contains(config_type)) {
       for (auto& observer : observers_)
         observer.ItemIconChanged(config_type);
     }
+  }
+
+  for (auto& observer : observers_) {
+    observer.ItemDefaultIconChanged();
   }
 }
 
 const gfx::ImageSkia& AppListItem::GetDefaultIcon() const {
   return metadata_->icon;
+}
+
+const IconColor& AppListItem::GetDefaultIconColor() const {
+  return metadata_->icon_color;
+}
+
+void AppListItem::SetIconVersion(int icon_version) {
+  if (metadata_->icon_version == icon_version)
+    return;
+
+  // Clears last set icon if any. AppIconLoadHelper use that to decide
+  // whether to trigger an icon load when it is created with UI.
+  metadata_->icon = gfx::ImageSkia();
+
+  metadata_->icon_version = icon_version;
+  for (auto& observer : observers_) {
+    observer.ItemIconVersionChanged();
+  }
+}
+
+const gfx::ImageSkia& AppListItem::GetHostBadgeIcon() const {
+  return metadata_->badge_icon;
+}
+
+void AppListItem::SetHostBadgeIcon(const gfx::ImageSkia host_badge_icon) {
+  metadata_->badge_icon = host_badge_icon;
+  for (auto& observer : observers_) {
+    observer.ItemHostBadgeIconChanged();
+  }
+}
+
+SkColor AppListItem::GetNotificationBadgeColor() const {
+  return metadata_->badge_color;
 }
 
 void AppListItem::SetNotificationBadgeColor(const SkColor color) {
@@ -80,7 +139,11 @@ const char* AppListItem::GetItemType() const {
   return app_type;
 }
 
-AppListItem* AppListItem::FindChildItem(const std::string& id) {
+AppListItem* AppListItem::FindChildItem(std::string_view id) {
+  return nullptr;
+}
+
+AppListItem* AppListItem::GetChildItemAt(size_t index) {
   return nullptr;
 }
 
@@ -88,30 +151,45 @@ size_t AppListItem::ChildItemCount() const {
   return 0;
 }
 
+void AppListItem::SetProgress(float progress) {
+  metadata_->progress = progress;
+  for (auto& observer : observers_) {
+    observer.ItemProgressUpdated();
+  }
+}
+
+bool AppListItem::IsFolderFull() const {
+  return is_folder() && ChildItemCount() >= kMaxFolderChildren;
+}
+
 std::string AppListItem::ToDebugString() const {
-  return id().substr(0, 8) + " '" + (is_page_break() ? "page_break" : name()) +
-         "'" + " [" + position().ToDebugString() + "]";
+  return id().substr(0, 8) + " '" + "'" + " [" + position().ToDebugString() +
+         "]";
 }
 
 // Protected methods
 
 void AppListItem::SetName(const std::string& name) {
-  if (metadata_->name == name && (short_name_.empty() || short_name_ == name))
+  if (metadata_->name == name) {
     return;
+  }
   metadata_->name = name;
-  short_name_.clear();
+  for (auto& observer : observers_) {
+    observer.ItemNameChanged();
+  }
+}
+
+void AppListItem::SetAccessibleName(const std::string& accessible_name) {
+  if (metadata_->accessible_name == accessible_name) {
+    return;
+  }
+  metadata_->accessible_name = accessible_name;
   for (auto& observer : observers_)
     observer.ItemNameChanged();
 }
 
-void AppListItem::SetNameAndShortName(const std::string& name,
-                                      const std::string& short_name) {
-  if (metadata_->name == name && short_name_ == short_name)
-    return;
-  metadata_->name = name;
-  short_name_ = short_name;
-  for (auto& observer : observers_)
-    observer.ItemNameChanged();
+void AppListItem::SetAppCollectionId(AppCollection collection_id) {
+  metadata_->collection_id = collection_id;
 }
 
 void AppListItem::UpdateNotificationBadge(bool has_badge) {
@@ -121,6 +199,27 @@ void AppListItem::UpdateNotificationBadge(bool has_badge) {
   has_notification_badge_ = has_badge;
   for (auto& observer : observers_) {
     observer.ItemBadgeVisibilityChanged();
+  }
+}
+
+void AppListItem::SetIsNewInstall(bool is_new_install) {
+  if (metadata_->is_new_install == is_new_install)
+    return;
+
+  metadata_->is_new_install = is_new_install;
+  for (auto& observer : observers_) {
+    observer.ItemIsNewInstallChanged();
+  }
+}
+
+void AppListItem::SetAppStatus(AppStatus app_status) {
+  if (metadata_->app_status == app_status) {
+    return;
+  }
+
+  metadata_->app_status = app_status;
+  for (auto& observer : observers_) {
+    observer.ItemAppStatusUpdated();
   }
 }
 

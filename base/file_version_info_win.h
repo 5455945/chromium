@@ -1,11 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_FILE_VERSION_INFO_WIN_H_
 #define BASE_FILE_VERSION_INFO_WIN_H_
-
-#include <windows.h>
 
 #include <stdint.h>
 
@@ -15,7 +13,10 @@
 
 #include "base/base_export.h"
 #include "base/file_version_info.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/version.h"
+#include "base/win/windows_types.h"
 
 struct tagVS_FIXEDFILEINFO;
 typedef tagVS_FIXEDFILEINFO VS_FIXEDFILEINFO;
@@ -65,12 +66,12 @@ class BASE_EXPORT FileVersionInfoWin : public FileVersionInfo {
   FileVersionInfoWin(void* data, WORD language, WORD code_page);
 
   const std::vector<uint8_t> owned_data_;
-  const void* const data_;
+  const raw_ptr<const void> data_;
   const WORD language_;
   const WORD code_page_;
 
   // This is a reference for a portion of |data_|.
-  const VS_FIXEDFILEINFO& fixed_file_info_;
+  const raw_ref<const VS_FIXEDFILEINFO> fixed_file_info_;
 };
 
 #endif  // BASE_FILE_VERSION_INFO_WIN_H_

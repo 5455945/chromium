@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,13 +18,9 @@ import static androidx.test.espresso.intent.matcher.IntentMatchers.hasAction;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasExtra;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasExtras;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasType;
-import static androidx.test.espresso.matcher.RootMatchers.DEFAULT;
 import static androidx.test.espresso.matcher.RootMatchers.withDecorView;
 import static androidx.test.espresso.matcher.ViewMatchers.isClickable;
-import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.isEnabled;
-import static androidx.test.espresso.matcher.ViewMatchers.withChild;
-import static androidx.test.espresso.matcher.ViewMatchers.withClassName;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
@@ -34,12 +30,10 @@ import static androidx.test.espresso.web.webdriver.DriverAtoms.findElement;
 import static androidx.test.espresso.web.webdriver.DriverAtoms.getText;
 
 import static org.hamcrest.CoreMatchers.allOf;
-import static org.hamcrest.CoreMatchers.endsWith;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.core.AnyOf.anyOf;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
 
 import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
 
@@ -47,10 +41,6 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
 import android.os.Build;
-import android.support.test.InstrumentationRegistry;
-import android.support.test.uiautomator.UiDevice;
-import android.support.test.uiautomator.UiObject;
-import android.support.test.uiautomator.UiSelector;
 import android.view.MenuItem;
 
 import androidx.test.espresso.NoMatchingViewException;
@@ -64,27 +54,25 @@ import androidx.test.espresso.intent.Intents;
 import androidx.test.espresso.web.webdriver.Locator;
 import androidx.test.filters.SmallTest;
 
-import junit.framework.AssertionFailedError;
-
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.TypeSafeMatcher;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.webview_ui_test.R;
 import org.chromium.webview_ui_test.WebViewUiTestActivity;
 import org.chromium.webview_ui_test.test.util.UseLayout;
 import org.chromium.webview_ui_test.test.util.WebViewUiTestRule;
 
-/**
- * Tests for WebView ActionMode.
- */
-@DisableIf.Build(message = "crbug.com/947352", sdk_is_greater_than = Build.VERSION_CODES.LOLLIPOP)
+/** Tests for WebView ActionMode. */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class ActionModeTest {
     private static final String TAG = "ActionModeTest";
@@ -116,9 +104,8 @@ public class ActionModeTest {
                 .check(webMatches(getText(), containsString("Hello world")));
     }
 
-    /**
-     * Test Copy and Paste
-     */
+    /** Test Copy and Paste */
+    @DisabledTest(message = "https://crbug.com/947352")
     @Test
     @SmallTest
     @UseLayout("edittext_webview")
@@ -127,13 +114,11 @@ public class ActionModeTest {
         clickPopupAction(COPY_ACTION);
         longClickOnLastWord(R.id.edittext);
         clickPopupAction(PASTE_ACTION);
-        onView(withId(R.id.edittext))
-                .check(matches(withText("world")));
+        onView(withId(R.id.edittext)).check(matches(withText("world")));
     }
 
-    /**
-     * Test Select All
-     */
+    /** Test Select All */
+    @DisabledTest(message = "https://crbug.com/947352")
     @Test
     @SmallTest
     @UseLayout("edittext_webview")
@@ -143,17 +128,18 @@ public class ActionModeTest {
         clickPopupAction(COPY_ACTION);
         longClickOnLastWord(R.id.edittext);
         clickPopupAction(PASTE_ACTION);
-        onView(withId(R.id.edittext))
-                .check(matches(withText("Hello world")));
+        onView(withId(R.id.edittext)).check(matches(withText("Hello world")));
     }
 
-    /**
-     * Test Share
-     */
+    /** Test Share */
     @Test
     @SmallTest
     @UseLayout("edittext_webview")
+    @DisableIf.Build(
+            sdk_is_greater_than = Build.VERSION_CODES.BAKLAVA,
+            message = "https://crbug.com/579554355")
     public void testShare() {
+        Assume.assumeFalse("Share is not supported on Automotive", DeviceInfo.isAutomotive());
         Intents.init();
         intending(anyIntent())
                 .respondWith(new Instrumentation.ActivityResult(Activity.RESULT_OK, new Intent()));
@@ -161,17 +147,23 @@ public class ActionModeTest {
         longClickOnLastWord(R.id.webview);
         clickPopupAction(SHARE_ACTION);
 
-        intended(allOf(hasAction(Intent.ACTION_CHOOSER),
-                hasExtras(allOf(hasEntry(Intent.EXTRA_TITLE, SHARE_ACTION),
-                        hasEntry(Intent.EXTRA_INTENT,
-                                allOf(hasAction(Intent.ACTION_SEND), hasType("text/plain"),
-                                        hasExtra(Intent.EXTRA_TEXT, "world")))))));
+        intended(
+                allOf(
+                        hasAction(Intent.ACTION_CHOOSER),
+                        hasExtras(
+                                allOf(
+                                        hasEntry(Intent.EXTRA_TITLE, SHARE_ACTION),
+                                        hasEntry(
+                                                Intent.EXTRA_INTENT,
+                                                allOf(
+                                                        hasAction(Intent.ACTION_SEND),
+                                                        hasType("text/plain"),
+                                                        hasExtra(Intent.EXTRA_TEXT, "world")))))));
         assertNoUnverifiedIntents();
     }
 
-    /**
-     * Test Web Search
-     */
+    /** Test Web Search */
+    @DisabledTest(message = "https://crbug.com/947352")
     @Test
     @SmallTest
     @UseLayout("edittext_webview")
@@ -181,51 +173,22 @@ public class ActionModeTest {
                 .respondWith(new Instrumentation.ActivityResult(Activity.RESULT_OK, new Intent()));
         longClickOnLastWord(R.id.webview);
         clickPopupAction(WEB_SEARCH_ACTION);
-        intended(allOf(hasAction(Intent.ACTION_WEB_SEARCH),
-                hasExtras(allOf(hasEntry("com.android.browser.application_id",
-                                         "org.chromium.webview_ui_test"),
-                                hasEntry("query", "world"),
-                                hasEntry("new_search", true)))));
+        intended(
+                allOf(
+                        hasAction(Intent.ACTION_WEB_SEARCH),
+                        hasExtras(
+                                allOf(
+                                        hasEntry(
+                                                "com.android.browser.application_id",
+                                                "org.chromium.webview_ui_test"),
+                                        hasEntry("query", "world"),
+                                        hasEntry("new_search", true)))));
         assertNoUnverifiedIntents();
     }
 
-    /**
-     * Test Assist
-     */
-    @Test
-    @SmallTest
-    @UseLayout("edittext_webview")
-    public void testAssist() {
-        // The assist option is only available on N
-        assumeTrue(Build.VERSION.SDK_INT == Build.VERSION_CODES.N);
-        longClickOnLastWord(R.id.webview);
-        clickPopupAction(ASSIST_ACTION);
-        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
-        UiObject assistUi = device.findObject(new UiSelector().packageName(QUICK_SEARCH_BOX_PKG));
-        assertTrue(assistUi.waitForExists(ASSIST_TIMEOUT));
-        device.pressBack();
-    }
-
-    /**
-     * Click an item on the Action Mode popup
-     */
+    /** Click an item on the Action Mode popup */
     public void clickPopupAction(final String name) {
-        Matcher<Root> rootMatcher;
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            try {
-                // On L and lower, use the espresso DEFAULT root matcher if ActionBar is detected
-                onView(withClassName(endsWith("ActionBarContextView")))
-                        .check(matches(isDisplayed()));
-                rootMatcher = DEFAULT;
-            } catch (NoMatchingViewException | AssertionFailedError e) {
-                // Else match in a popup
-                rootMatcher = withDecorView(withChild(withText(name)));
-            }
-        } else {
-            // On M and above, can use the decoreView matcher
-            rootMatcher = withDecorView(isEnabled());
-        }
+        Matcher<Root> rootMatcher = withDecorView(isEnabled());
 
         try {
             onView(allOf(anyOf(withText(name), withContentDescription(name)), isClickable()))
@@ -239,32 +202,31 @@ public class ActionModeTest {
             onData(new MenuItemMatcher(equalTo(name))).inRoot(rootMatcher).perform(click());
         }
 
-        /**
-         * After select all action is clicked, the PopUp Menu may disappear
-         * briefly due to selection change, wait for the menu to reappear
-         */
+        // After select all action is clicked, the PopUp Menu may disappear briefly due to selection
+        // change, wait for the menu to reappear
         if (name.equals(SELECT_ALL_ACTION)) {
             assertTrue(mWebViewActivityRule.waitForActionBarPopup());
         }
     }
 
     /**
-     * Perform a view action that clicks on the last word and start the idling resource
-     * to wait for completion of the popup menu
+     * Perform a view action that clicks on the last word and start the idling resource to wait for
+     * completion of the popup menu
      */
-    private final void longClickOnLastWord(int viewId) {
+    private void longClickOnLastWord(int viewId) {
         // TODO(aluo): This function is not guaranteed to click on element. Change to
         // implementation that gets bounding box for elements using Javascript.
-        onView(withId(viewId)).perform(actionWithAssertions(
-                new GeneralClickAction(Tap.LONG, GeneralLocation.CENTER_RIGHT, Press.FINGER)));
+        onView(withId(viewId))
+                .perform(
+                        actionWithAssertions(
+                                new GeneralClickAction(
+                                        Tap.LONG, GeneralLocation.CENTER_RIGHT, Press.FINGER)));
         assertTrue(mWebViewActivityRule.waitForActionBarPopup());
     }
 
-    /**
-     * Matches an item on the Action Mode popup by the title
-     */
+    /** Matches an item on the Action Mode popup by the title */
     private static class MenuItemMatcher extends TypeSafeMatcher<MenuItem> {
-        private Matcher<String> mTitleMatcher;
+        private final Matcher<String> mTitleMatcher;
 
         public MenuItemMatcher(Matcher<String> titleMatcher) {
             mTitleMatcher = titleMatcher;

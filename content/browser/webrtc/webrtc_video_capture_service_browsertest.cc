@@ -1,15 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
+#include <algorithm>
+
 #include "base/command_line.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "cc/base/math_util.h"
-#include "components/viz/common/gpu/context_provider.h"
+#include "components/viz/common/gpu/raster_context_provider.h"
+#include "content/browser/webrtc/mock_camera_device.h"
+#include "content/browser/webrtc/mock_capture_device_controller.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/video_capture_service.h"
 #include "content/public/common/content_features.h"
@@ -19,8 +28,11 @@
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "gpu/command_buffer/client/gles2_interface.h"
-#include "media/base/bind_to_current_loop.h"
+#include "gpu/GLES2/gl2extchromium.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/client/raster_interface.h"
+#include "gpu/command_buffer/client/shared_image_interface.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_frame_metadata.h"
@@ -30,19 +42,20 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "mojo/public/cpp/system/platform_handle.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/video_capture/public/cpp/mock_video_frame_handler.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
-#include "services/video_capture/public/mojom/device_factory.mojom.h"
 #include "services/video_capture/public/mojom/producer.mojom.h"
+#include "services/video_capture/public/mojom/video_capture_service.mojom.h"
+#include "services/video_capture/public/mojom/video_source_provider.mojom.h"
 #include "services/video_capture/public/mojom/virtual_device.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/khronos/GLES2/gl2ext.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor.h"
 
 // ImageTransportFactory::GetInstance is not available on all build configs.
-#if defined(USE_AURA) || defined(OS_MAC)
+#if defined(USE_AURA) || BUILDFLAG(IS_MAC)
 #define CAN_USE_IMAGE_TRANSPORT_FACTORY 1
 #endif
 
@@ -58,8 +71,8 @@ static const char kStartVideoCaptureAndVerify[] =
     "startVideoCaptureFromVirtualDeviceAndVerifyUniformColorVideoWithSize(%d, "
     "%d)";
 
-static const char kVirtualDeviceId[] = "/virtual/device";
-static const char kVirtualDeviceName[] = "Virtual Device";
+static const char kVirtualDeviceId[] = "virtual-chromium-device";
+static const char kVirtualDeviceName[] = "Virtual Chromium Device";
 
 static const gfx::Size kDummyFrameCodedSize(320, 200);
 static const gfx::Rect kDummyFrameVisibleRect(94, 36, 178, 150);
@@ -74,8 +87,8 @@ class VirtualDeviceExerciser {
  public:
   virtual ~VirtualDeviceExerciser() {}
   virtual void Initialize() = 0;
-  virtual void RegisterVirtualDeviceAtFactory(
-      mojo::Remote<video_capture::mojom::DeviceFactory>* factory,
+  virtual void RegisterVirtualDeviceAtVideoSourceProvider(
+      mojo::Remote<video_capture::mojom::VideoSourceProvider>* video_source,
       const media::VideoCaptureDeviceInfo& info) = 0;
   virtual gfx::Size GetVideoSize() = 0;
   virtual void PushNextFrame(base::TimeDelta timestamp) = 0;
@@ -93,32 +106,45 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
     ImageTransportFactory* factory = ImageTransportFactory::GetInstance();
     CHECK(factory);
     context_provider_ =
-        factory->GetContextFactory()->SharedMainThreadContextProvider();
+        factory->GetContextFactory()->SharedMainThreadRasterContextProvider();
     CHECK(context_provider_);
-    gpu::gles2::GLES2Interface* gl = context_provider_->ContextGL();
-    CHECK(gl);
+    gpu::raster::RasterInterface* ri = context_provider_->RasterInterface();
+    CHECK(ri);
 
-    const uint8_t kDarkFrameByteValue = 0;
-    const uint8_t kLightFrameByteValue = 200;
-    CreateDummyRgbFrame(gl, kDarkFrameByteValue,
-                        &dummy_frame_0_mailbox_holder_);
-    CreateDummyRgbFrame(gl, kLightFrameByteValue,
-                        &dummy_frame_1_mailbox_holder_);
+    gpu::SharedImageInterface* sii = context_provider_->SharedImageInterface();
+    CHECK(sii);
+
+    const SkColor4f kDarkFrameColor = SkColors::kBlack;
+    const SkColor4f kLightFrameColor = SkColors::kGray;
+    dummy_frame_0_shared_image_ = CreateDummyRgbFrame(
+        ri, sii, kDarkFrameColor, dummy_frame_0_sync_token_);
+    dummy_frame_1_shared_image_ = CreateDummyRgbFrame(
+        ri, sii, kLightFrameColor, dummy_frame_1_sync_token_);
   }
 
-  void RegisterVirtualDeviceAtFactory(
-      mojo::Remote<video_capture::mojom::DeviceFactory>* factory,
+  void RegisterVirtualDeviceAtVideoSourceProvider(
+      mojo::Remote<video_capture::mojom::VideoSourceProvider>* video_source,
       const media::VideoCaptureDeviceInfo& info) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    (*factory)->AddTextureVirtualDevice(
-        info, virtual_device_.BindNewPipeAndPassReceiver());
+    (*video_source)
+        ->AddTextureVirtualDevice(info,
+                                  virtual_device_.BindNewPipeAndPassReceiver());
 
-    virtual_device_->OnNewMailboxHolderBufferHandle(
-        0, media::mojom::MailboxBufferHandleSet::New(
-               std::move(dummy_frame_0_mailbox_holder_)));
-    virtual_device_->OnNewMailboxHolderBufferHandle(
-        1, media::mojom::MailboxBufferHandleSet::New(
-               std::move(dummy_frame_1_mailbox_holder_)));
+    gpu::ExportedSharedImage dummy_frame_0_exported_shared_image =
+        dummy_frame_0_shared_image_->Export();
+    gpu::ExportedSharedImage dummy_frame_1_exported_shared_image =
+        dummy_frame_1_shared_image_->Export();
+
+    virtual_device_->OnNewSharedImageBufferHandle(
+        0, media::mojom::SharedImageBufferHandleSet::New(
+               std::move(dummy_frame_0_exported_shared_image),
+               dummy_frame_0_sync_token_,
+               /*is_rewritten_in_place=*/false));
+    virtual_device_->OnNewSharedImageBufferHandle(
+        1, media::mojom::SharedImageBufferHandleSet::New(
+               std::move(dummy_frame_1_exported_shared_image),
+               dummy_frame_1_sync_token_,
+               /*is_rewritten_in_place=*/false));
     frame_being_consumed_[0] = false;
     frame_being_consumed_[1] = false;
   }
@@ -153,9 +179,10 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
 
     media::mojom::VideoFrameInfoPtr info = media::mojom::VideoFrameInfo::New();
     info->timestamp = timestamp;
-    info->pixel_format = media::PIXEL_FORMAT_ARGB;
+    info->pixel_format = media::PIXEL_FORMAT_ABGR;
     info->coded_size = kDummyFrameCodedSize;
     info->visible_rect = gfx::Rect(kDummyFrameCodedSize);
+    info->natural_size = kDummyFrameCodedSize;
     info->metadata = metadata;
 
     frame_being_consumed_[dummy_frame_index_] = true;
@@ -171,46 +198,41 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
   }
 
  private:
-  void CreateDummyRgbFrame(gpu::gles2::GLES2Interface* gl,
-                           uint8_t value_for_all_rgb_bytes,
-                           std::vector<gpu::MailboxHolder>* target) {
-    const int32_t kBytesPerRGBPixel = 3;
-    int32_t frame_size_in_bytes = kDummyFrameCodedSize.width() *
-                                  kDummyFrameCodedSize.height() *
-                                  kBytesPerRGBPixel;
-    std::unique_ptr<uint8_t[]> dummy_frame_data(
-        new uint8_t[frame_size_in_bytes]);
-    memset(dummy_frame_data.get(), value_for_all_rgb_bytes,
-           frame_size_in_bytes);
-    for (int i = 0; i < media::VideoFrame::kMaxPlanes; i++) {
-      // For RGB formats, only the first plane needs to be filled with an
-      // actual texture.
-      if (i != 0) {
-        target->push_back(gpu::MailboxHolder());
-        continue;
-      }
+  scoped_refptr<gpu::ClientSharedImage> CreateDummyRgbFrame(
+      gpu::raster::RasterInterface* ri,
+      gpu::SharedImageInterface* sii,
+      SkColor4f frame_color,
+      gpu::SyncToken& ri_token) {
+    SkBitmap frame_bitmap;
+    frame_bitmap.allocPixels(SkImageInfo::Make(
+        kDummyFrameCodedSize.width(), kDummyFrameCodedSize.height(),
+        kRGBA_8888_SkColorType, kOpaque_SkAlphaType));
+    frame_bitmap.eraseColor(frame_color);
 
-      GLuint texture_id = 0;
-      gl->GenTextures(1, &texture_id);
-      gl->BindTexture(GL_TEXTURE_2D, texture_id);
-      gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-      gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-      gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-      gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RGB, kDummyFrameCodedSize.width(),
-                     kDummyFrameCodedSize.height(), 0, GL_RGB, GL_UNSIGNED_BYTE,
-                     dummy_frame_data.get());
-      gl->BindTexture(GL_TEXTURE_2D, 0);
+    // This SharedImage is populated via the raster interface below and may
+    // be read via the raster interface in normal VideoFrame usage exercised
+    // by the tests.
+    auto shared_image = sii->CreateSharedImage(
+        {viz::SinglePlaneFormat::kRGBA_8888, kDummyFrameCodedSize,
+         gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+         kOpaque_SkAlphaType,
+         gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+             gpu::SHARED_IMAGE_USAGE_RASTER_WRITE,
+         "TestLabel"},
+        gpu::kNullSurfaceHandle);
 
-      gpu::Mailbox mailbox;
-      gl->ProduceTextureDirectCHROMIUM(texture_id, mailbox.name);
-      gpu::SyncToken sync_token;
-      gl->GenSyncTokenCHROMIUM(sync_token.GetData());
+    auto ri_access = shared_image->BeginRasterAccess(
+        ri, shared_image->creation_sync_token(), /*readonly=*/false);
+    ri->WritePixels(shared_image->mailbox(), 0, 0, GL_TEXTURE_2D,
+                    frame_bitmap.pixmap());
 
-      target->push_back(gpu::MailboxHolder(mailbox, sync_token, GL_TEXTURE_2D));
-    }
-    gl->ShallowFlushCHROMIUM();
-    CHECK_EQ(gl->GetError(), static_cast<GLenum>(GL_NO_ERROR));
+    ri_token = gpu::RasterScopedAccess::EndAccess(std::move(ri_access));
+    int8_t* ri_token_data = ri_token.GetData();
+    ri->VerifySyncTokensCHROMIUM(&ri_token_data, 1);
+    ri->ShallowFlushCHROMIUM();
+    CHECK_EQ(ri->GetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+    return shared_image;
   }
 
   void OnFrameConsumptionFinished(int32_t frame_index) {
@@ -219,12 +241,14 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
   }
 
   SEQUENCE_CHECKER(sequence_checker_);
-  scoped_refptr<viz::ContextProvider> context_provider_;
+  scoped_refptr<viz::RasterContextProvider> context_provider_;
   mojo::Remote<video_capture::mojom::TextureVirtualDevice> virtual_device_;
   bool virtual_device_has_frame_access_handler_ = false;
   int dummy_frame_index_ = 0;
-  std::vector<gpu::MailboxHolder> dummy_frame_0_mailbox_holder_;
-  std::vector<gpu::MailboxHolder> dummy_frame_1_mailbox_holder_;
+  scoped_refptr<gpu::ClientSharedImage> dummy_frame_0_shared_image_;
+  scoped_refptr<gpu::ClientSharedImage> dummy_frame_1_shared_image_;
+  gpu::SyncToken dummy_frame_0_sync_token_;
+  gpu::SyncToken dummy_frame_1_sync_token_;
   std::array<bool, 2> frame_being_consumed_;
   base::WeakPtrFactory<TextureDeviceExerciser> weak_factory_{this};
 };
@@ -242,16 +266,15 @@ class SharedMemoryDeviceExerciser : public VirtualDeviceExerciser,
 
   // VirtualDeviceExerciser implementation.
   void Initialize() override {}
-  void RegisterVirtualDeviceAtFactory(
-      mojo::Remote<video_capture::mojom::DeviceFactory>* factory,
+  void RegisterVirtualDeviceAtVideoSourceProvider(
+      mojo::Remote<video_capture::mojom::VideoSourceProvider>* video_source,
       const media::VideoCaptureDeviceInfo& info) override {
     mojo::PendingRemote<video_capture::mojom::Producer> producer;
-    static const bool kSendBufferHandlesToProducerAsRawFileDescriptors = false;
     producer_receiver_.Bind(producer.InitWithNewPipeAndPassReceiver());
-    (*factory)->AddSharedMemoryVirtualDevice(
-        info, std::move(producer),
-        kSendBufferHandlesToProducerAsRawFileDescriptors,
-        virtual_device_.BindNewPipeAndPassReceiver());
+    (*video_source)
+        ->AddSharedMemoryVirtualDevice(
+            info, std::move(producer),
+            virtual_device_.BindNewPipeAndPassReceiver());
   }
   gfx::Size GetVideoSize() override {
     return gfx::Size(kDummyFrameVisibleRect.width(),
@@ -274,10 +297,9 @@ class SharedMemoryDeviceExerciser : public VirtualDeviceExerciser,
   void OnNewBuffer(int32_t buffer_id,
                    media::mojom::VideoBufferHandlePtr buffer_handle,
                    OnNewBufferCallback callback) override {
-    CHECK(buffer_handle->is_shared_buffer_handle());
+    CHECK(buffer_handle->is_unsafe_shmem_region());
     base::UnsafeSharedMemoryRegion region =
-        mojo::UnwrapUnsafeSharedMemoryRegion(
-            std::move(buffer_handle->get_shared_buffer_handle()));
+        std::move(buffer_handle->get_unsafe_shmem_region());
     CHECK(region.IsValid());
     base::WritableSharedMemoryMapping mapping = region.Map();
     CHECK(mapping.IsValid());
@@ -303,10 +325,11 @@ class SharedMemoryDeviceExerciser : public VirtualDeviceExerciser,
     info->pixel_format = media::PIXEL_FORMAT_I420;
     info->coded_size = kDummyFrameCodedSize;
     info->visible_rect = kDummyFrameVisibleRect;
+    info->natural_size = kDummyFrameVisibleRect.size();
     info->metadata = metadata;
     info->strides = strides_.Clone();
 
-    const base::WritableSharedMemoryMapping& outgoing_buffer =
+    base::WritableSharedMemoryMapping& outgoing_buffer =
         outgoing_buffer_id_to_buffer_map_.at(buffer_id);
 
     static int frame_count = 0;
@@ -314,7 +337,8 @@ class SharedMemoryDeviceExerciser : public VirtualDeviceExerciser,
     const uint8_t dummy_value = frame_count % 256;
 
     // Reset the whole buffer to 0
-    memset(outgoing_buffer.memory(), 0, outgoing_buffer.size());
+    auto data = base::span(outgoing_buffer);
+    std::ranges::fill(data, 0);
 
     // Set all bytes affecting |info->visible_rect| to |dummy_value|.
     const int kYStride = info->strides ? info->strides->stride_by_plane[0]
@@ -342,47 +366,41 @@ class SharedMemoryDeviceExerciser : public VirtualDeviceExerciser,
     const int kVStride = info->strides ? info->strides->stride_by_plane[2]
                                        : info->coded_size.width() / 2;
 
-    uint8_t* write_ptr = outgoing_buffer.GetMemoryAsSpan<uint8_t>().data();
-    FillVisiblePortionOfPlane(&write_ptr, dummy_value, kYCodedRowCount,
-                              kYRowsToSkipAtStart, kYVisibleRowCount, kYStride,
-                              kYColsToSkipAtStart, kYVisibleColCount);
-    FillVisiblePortionOfPlane(&write_ptr, dummy_value, kUCodedRowCount,
-                              kURowsToSkipAtStart, kUVisibleRowCount, kUStride,
-                              kUColsToSkipAtStart, kUVisibleColCount);
-    FillVisiblePortionOfPlane(&write_ptr, dummy_value, kUCodedRowCount,
-                              kURowsToSkipAtStart, kUVisibleRowCount, kVStride,
-                              kUColsToSkipAtStart, kUVisibleColCount);
+    data = FillVisiblePortionOfPlane(
+        data, dummy_value, kYCodedRowCount, kYRowsToSkipAtStart,
+        kYVisibleRowCount, kYStride, kYColsToSkipAtStart, kYVisibleColCount);
+    data = FillVisiblePortionOfPlane(
+        data, dummy_value, kUCodedRowCount, kURowsToSkipAtStart,
+        kUVisibleRowCount, kUStride, kUColsToSkipAtStart, kUVisibleColCount);
+    data = FillVisiblePortionOfPlane(
+        data, dummy_value, kUCodedRowCount, kURowsToSkipAtStart,
+        kUVisibleRowCount, kVStride, kUColsToSkipAtStart, kUVisibleColCount);
 
     virtual_device_->OnFrameReadyInBuffer(buffer_id, std::move(info));
   }
 
-  void FillVisiblePortionOfPlane(uint8_t** write_ptr,
-                                 uint8_t fill_value,
-                                 int row_count,
-                                 int rows_to_skip_at_start,
-                                 int visible_row_count,
-                                 int col_count,
-                                 int cols_to_skip_at_start,
-                                 int visible_col_count) {
-    const int kColsToSkipAtEnd =
-        col_count - visible_col_count - cols_to_skip_at_start;
-    const int kRowsToSkipAtEnd =
-        row_count - visible_row_count - rows_to_skip_at_start;
-
-    // Skip rows at start
-    (*write_ptr) += col_count * rows_to_skip_at_start;
-    // Fill rows
+  base::span<uint8_t> FillVisiblePortionOfPlane(base::span<uint8_t> buffer,
+                                                uint8_t fill_value,
+                                                int row_count,
+                                                int rows_to_skip_at_start,
+                                                int visible_row_count,
+                                                int col_count,
+                                                int cols_to_skip_at_start,
+                                                int visible_col_count) {
+    const size_t stride = base::checked_cast<size_t>(col_count);
+    // Consume the entire plane, including padding, before filling visible rows.
+    auto plane =
+        buffer.take_first(base::checked_cast<size_t>(row_count) * stride);
+    plane = plane.subspan(base::checked_cast<size_t>(rows_to_skip_at_start) *
+                          stride);
     for (int i = 0; i < visible_row_count; i++) {
-      // Skip cols at start
-      (*write_ptr) += cols_to_skip_at_start;
-      // Fill visible bytes
-      memset(*write_ptr, fill_value, visible_col_count);
-      (*write_ptr) += visible_col_count;
-      // Skip cols at end
-      (*write_ptr) += kColsToSkipAtEnd;
+      auto row = plane.take_first(stride);
+      std::ranges::fill(
+          row.subspan(base::checked_cast<size_t>(cols_to_skip_at_start),
+                      base::checked_cast<size_t>(visible_col_count)),
+          fill_value);
     }
-    // Skip rows at end
-    (*write_ptr) += col_count * kRowsToSkipAtEnd;
+    return buffer;
   }
 
   media::mojom::PlaneStridesPtr strides_;
@@ -402,9 +420,13 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
  public:
   WebRtcVideoCaptureServiceBrowserTest()
       : virtual_device_thread_("Virtual Device Thread") {
-    scoped_feature_list_.InitAndEnableFeature(features::kMojoVideoCapture);
     virtual_device_thread_.Start();
   }
+
+  WebRtcVideoCaptureServiceBrowserTest(
+      const WebRtcVideoCaptureServiceBrowserTest&) = delete;
+  WebRtcVideoCaptureServiceBrowserTest& operator=(
+      const WebRtcVideoCaptureServiceBrowserTest&) = delete;
 
   ~WebRtcVideoCaptureServiceBrowserTest() override {}
 
@@ -415,12 +437,12 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     main_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(
-            [](mojo::PendingReceiver<video_capture::mojom::DeviceFactory>
+            [](mojo::PendingReceiver<video_capture::mojom::VideoSourceProvider>
                    receiver) {
-              GetVideoCaptureService().ConnectToDeviceFactory(
+              GetVideoCaptureService().ConnectToVideoSourceProvider(
                   std::move(receiver));
             },
-            factory_.BindNewPipeAndPassReceiver()));
+            video_source_provider_.BindNewPipeAndPassReceiver()));
 
     media::VideoCaptureDeviceInfo info;
     info.descriptor.device_id = kVirtualDeviceId;
@@ -428,14 +450,15 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     info.descriptor.capture_api = media::VideoCaptureApi::VIRTUAL_DEVICE;
 
     video_size_ = device_exerciser->GetVideoSize();
-    device_exerciser->RegisterVirtualDeviceAtFactory(&factory_, info);
+    device_exerciser->RegisterVirtualDeviceAtVideoSourceProvider(
+        &video_source_provider_, info);
 
     main_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
                            OpenVirtualDeviceInRendererAndWaitForPlaying,
                        base::Unretained(this),
-                       media::BindToCurrentLoop(base::BindOnce(
+                       base::BindPostTaskToCurrentDefault(base::BindOnce(
                            &WebRtcVideoCaptureServiceBrowserTest::
                                ShutDownVirtualDeviceAndContinue,
                            base::Unretained(this), device_exerciser,
@@ -444,16 +467,354 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     PushDummyFrameAndScheduleNextPush(device_exerciser);
   }
 
+  void RunOnVirtualDeviceThreadAndWait(base::OnceClosure task) {
+    base::RunLoop run_loop;
+
+    CHECK(virtual_device_thread_.task_runner()->PostTaskAndReply(
+        FROM_HERE, std::move(task), run_loop.QuitClosure()));
+
+    run_loop.Run();
+  }
+
+  bool SetUpMockCaptureDeviceTest() {
+    Initialize();
+    embedded_test_server()->StartAcceptingConnections();
+
+    if (!NavigateToURL(shell(),
+                       embedded_test_server()->GetURL(kVideoCaptureHtmlFile))) {
+      return false;
+    }
+
+    CreateMockCaptureDeviceController();
+    return true;
+  }
+
+  void CreateMockCaptureDeviceController() {
+    RunOnVirtualDeviceThreadAndWait(base::BindOnce(
+        [](WebRtcVideoCaptureServiceBrowserTest* test) {
+          DCHECK(test->virtual_device_thread_.task_runner()
+                     ->RunsTasksInCurrentSequence());
+
+          test->mock_capture_device_controller_ =
+              std::make_unique<MockCaptureDeviceController>(
+                  test->main_task_runner_,
+                  base::BindRepeating(
+                      [](mojo::PendingReceiver<
+                          video_capture::mojom::VideoSourceProvider> receiver) {
+                        GetVideoCaptureService().ConnectToVideoSourceProvider(
+                            std::move(receiver));
+                      }));
+        },
+        base::Unretained(this)));
+  }
+
+  void DestroyMockCaptureDeviceController() {
+    if (!mock_capture_device_controller_) {
+      return;
+    }
+
+    RunOnVirtualDeviceThreadAndWait(base::BindOnce(
+        [](WebRtcVideoCaptureServiceBrowserTest* test) {
+          DCHECK(test->virtual_device_thread_.task_runner()
+                     ->RunsTasksInCurrentSequence());
+          test->mock_capture_device_controller_.reset();
+        },
+        base::Unretained(this)));
+  }
+
+  void AddDefaultMockCamera() {
+    RunOnVirtualDeviceThreadAndWait(base::BindOnce(
+        [](MockCaptureDeviceController* controller) {
+          controller->AddMockCamera(MockCameraConfig{
+              .device_id = kVirtualDeviceId,
+              .label = kVirtualDeviceName,
+              .size = gfx::Size(640, 480),
+              .frame_rate = 5.0,
+          });
+        },
+        base::Unretained(mock_capture_device_controller_.get())));
+  }
+
+  void RemoveDefaultMockCamera() {
+    RunOnVirtualDeviceThreadAndWait(base::BindOnce(
+        [](MockCaptureDeviceController* controller) {
+          controller->RemoveMockCamera(kVirtualDeviceId);
+        },
+        base::Unretained(mock_capture_device_controller_.get())));
+  }
+
+  void ResetMockCameras() {
+    RunOnVirtualDeviceThreadAndWait(base::BindOnce(
+        [](MockCaptureDeviceController* controller) { controller->Reset(); },
+        base::Unretained(mock_capture_device_controller_.get())));
+  }
+
+  void PrepareDeviceChangeWatcher() {
+    EXPECT_EQ("OK", EvalJs(shell(), R"JS(
+    (async () => {
+      const stream =
+          await navigator.mediaDevices.getUserMedia({video: true});
+      stream.getTracks().forEach(track => track.stop());
+
+      window.deviceChangeEventCount = 0;
+      navigator.mediaDevices.addEventListener("devicechange", () => {
+        window.deviceChangeEventCount++;
+      });
+
+      await navigator.mediaDevices.enumerateDevices();
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      return "OK";
+    })()
+  )JS")
+                        .ExtractString());
+  }
+
+  void ArmNextDeviceChange() {
+    EXPECT_EQ("OK", EvalJs(shell(), R"JS(
+    (() => {
+      window.nextDeviceChange = new Promise(resolve => {
+        const handler = () => {
+          navigator.mediaDevices.removeEventListener("devicechange", handler);
+          resolve("OK");
+        };
+        navigator.mediaDevices.addEventListener("devicechange", handler);
+      });
+      return "OK";
+    })()
+  )JS")
+                        .ExtractString());
+  }
+
+  std::string WaitForNextDeviceChange() {
+    return EvalJs(shell(), R"JS(
+    (async () => {
+      return await Promise.race([
+        window.nextDeviceChange,
+        new Promise(resolve => {
+          setTimeout(() => {
+            resolve("FAIL: timeout waiting for devicechange; count=" +
+                    String(window.deviceChangeEventCount || 0));
+          }, 5000);
+        }),
+      ]);
+    })()
+  )JS")
+        .ExtractString();
+  }
+
+  int GetVideoInputCount() {
+    return EvalJs(shell(), R"JS(
+    (async () => {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter(d => d.kind === 'videoinput').length;
+    })()
+  )JS")
+        .ExtractInt();
+  }
+
+  void SaveCurrentVideoInputIds() {
+    EXPECT_EQ("OK", EvalJs(shell(), R"JS(
+    (async () => {
+      // Warm-up getUserMedia to make device metadata available in this test
+      // environment. Stop immediately because we only need permission/metadata.
+      let warmupStream;
+      try {
+        warmupStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+        warmupStream.getTracks().forEach(track => track.stop());
+      } catch (e) {
+        return "FAIL: warmup getUserMedia rejected: " +
+            e.name + ": " + e.message;
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      window.beforeVideoInputIds = devices
+        .filter(d => d.kind === "videoinput")
+        .map(d => d.deviceId);
+
+      return "OK";
+    })()
+  )JS")
+                        .ExtractString());
+  }
+
+  std::string WaitForAddedVideoInputAndOpenIt() {
+    return EvalJs(shell(), R"JS(
+    (async () => {
+      const beforeIds = new Set(window.beforeVideoInputIds || []);
+      let addedDevice = null;
+
+      for (let i = 0; i < 50; ++i) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        addedDevice = devices
+          .filter(d => d.kind === "videoinput")
+          .find(d => !beforeIds.has(d.deviceId));
+
+        if (addedDevice && addedDevice.deviceId)
+          break;
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      if (!addedDevice)
+        return "FAIL: no added videoinput";
+
+      if (!addedDevice.deviceId)
+        return "FAIL: added videoinput has empty deviceId";
+
+      const withTimeout = (promise, message) => {
+        let timeoutId;
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error(message)), 5000);
+        });
+
+        return Promise.race([promise, timeoutPromise]).finally(() => {
+          clearTimeout(timeoutId);
+        });
+      };
+
+      let stream;
+      try {
+        stream = await withTimeout(
+            navigator.mediaDevices.getUserMedia({
+              video: {
+                deviceId: { exact: addedDevice.deviceId },
+              },
+            }),
+            "timed out waiting for exact-device getUserMedia");
+      } catch (e) {
+        return "FAIL: exact-device getUserMedia failed: " +
+            e.name + ": " + e.message;
+      }
+
+      const tracks = stream.getVideoTracks();
+      if (tracks.length !== 1 || tracks[0].readyState !== "live") {
+        const result =
+            "FAIL: expected one live video track, got " +
+            JSON.stringify(tracks.map(t => ({
+              label: t.label,
+              readyState: t.readyState,
+              settings: t.getSettings(),
+            })));
+        stream.getTracks().forEach(track => track.stop());
+        return result;
+      }
+
+      const video = document.createElement("video");
+      video.autoplay = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      document.body.appendChild(video);
+
+      const framePromise = new Promise(resolve => {
+        const timeout = setTimeout(() => {
+          resolve("FAIL: timed out waiting for a video frame; " +
+                  JSON.stringify({
+                    readyState: video.readyState,
+                    videoWidth: video.videoWidth,
+                    videoHeight: video.videoHeight,
+                    paused: video.paused,
+                    trackStates: stream.getTracks().map(track => ({
+                      kind: track.kind,
+                      readyState: track.readyState,
+                      muted: track.muted,
+                    })),
+                  }));
+        }, 5000);
+
+        video.requestVideoFrameCallback(() => {
+          clearTimeout(timeout);
+
+          if (video.videoWidth === 640 && video.videoHeight === 480) {
+            resolve("OK");
+            return;
+          }
+
+          resolve("FAIL: unexpected video size " +
+                  video.videoWidth + "x" + video.videoHeight);
+        });
+      });
+
+      try {
+        await withTimeout(video.play(), "timed out waiting for video.play()");
+        return await framePromise;
+      } catch (e) {
+        return "FAIL: video playback failed: " + e.name + ": " + e.message;
+      } finally {
+        video.srcObject = null;
+        video.remove();
+        stream.getTracks().forEach(track => track.stop());
+      }
+    })()
+  )JS")
+        .ExtractString();
+  }
+
+  std::string WaitForVideoInputCount(int expected_count) {
+    return EvalJs(shell(), base::StringPrintf(R"JS(
+    (async () => {
+      for (let i = 0; i < 50; ++i) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+
+        if (videoInputs.length === %d)
+          return "OK";
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return "FAIL: " + JSON.stringify(devices.map(d => ({
+        kind: d.kind,
+        label: d.label,
+        deviceId: d.deviceId,
+        groupId: d.groupId,
+      })));
+    })()
+  )JS",
+                                              expected_count))
+        .ExtractString();
+  }
+
+  std::string WaitForVideoInputCountAtLeast(int expected_count) {
+    return EvalJs(shell(), base::StringPrintf(R"JS(
+    (async () => {
+      for (let i = 0; i < 50; ++i) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+
+        if (videoInputs.length >= %d)
+          return "OK";
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return "FAIL: " + JSON.stringify(devices.map(d => ({
+        kind: d.kind,
+        label: d.label,
+        deviceId: d.deviceId,
+        groupId: d.groupId,
+      })));
+    })()
+  )JS",
+                                              expected_count))
+        .ExtractString();
+  }
+
   void PushDummyFrameAndScheduleNextPush(
       VirtualDeviceExerciser* device_exerciser) {
     DCHECK(virtual_device_thread_.task_runner()->RunsTasksInCurrentSequence());
     device_exerciser->PushNextFrame(CalculateTimeSinceFirstInvocation());
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
                            PushDummyFrameAndScheduleNextPush,
                        weak_factory_.GetWeakPtr(), device_exerciser),
-        base::TimeDelta::FromMilliseconds(1000 / kDummyFrameRate));
+        base::Milliseconds(1000 / kDummyFrameRate));
   }
 
   void ShutDownVirtualDeviceAndContinue(
@@ -462,7 +823,7 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     DCHECK(virtual_device_thread_.task_runner()->RunsTasksInCurrentSequence());
     LOG(INFO) << "Shutting down virtual device";
     device_exerciser->ShutDown();
-    factory_.reset();
+    video_source_provider_.reset();
     weak_factory_.InvalidateWeakPtrs();
     std::move(continuation).Run();
   }
@@ -477,8 +838,7 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     std::string javascript_to_execute = base::StringPrintf(
         kStartVideoCaptureAndVerify, video_size_.width(), video_size_.height());
     // Start video capture and wait until it started rendering
-    ASSERT_EQ("OK", EvalJs(shell(), javascript_to_execute,
-                           EXECUTE_SCRIPT_USE_MANUAL_REPLY));
+    ASSERT_TRUE(ExecJs(shell(), javascript_to_execute));
 
     std::move(finish_test_cb).Run();
   }
@@ -496,9 +856,14 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     ContentBrowserTest::SetUp();
   }
 
+  void TearDownOnMainThread() override {
+    DestroyMockCaptureDeviceController();
+    ContentBrowserTest::TearDownOnMainThread();
+  }
+
   void Initialize() {
     DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
-    main_task_runner_ = base::ThreadTaskRunnerHandle::Get();
+    main_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
   }
 
   base::Thread virtual_device_thread_;
@@ -511,53 +876,141 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
     return base::TimeTicks::Now() - first_frame_time_;
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_;
-  mojo::Remote<video_capture::mojom::DeviceFactory> factory_;
+  // The browsertest selects |virtual_device_thread_| as the controller's
+  // owning sequence. Production callers may select a different sequence.
+  std::unique_ptr<MockCaptureDeviceController> mock_capture_device_controller_;
+  mojo::Remote<video_capture::mojom::VideoSourceProvider>
+      video_source_provider_;
   gfx::Size video_size_;
   base::TimeTicks first_frame_time_;
   base::WeakPtrFactory<WebRtcVideoCaptureServiceBrowserTest> weak_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(WebRtcVideoCaptureServiceBrowserTest);
 };
 
 IN_PROC_BROWSER_TEST_F(
     WebRtcVideoCaptureServiceBrowserTest,
-    FramesSentThroughTextureVirtualDeviceGetDisplayedOnPage) {
+    MockCaptureDeviceControllerCanAddAndRemoveCameraFromEnumerateDevices) {
+  ASSERT_TRUE(SetUpMockCaptureDeviceTest());
+  const int before_count = GetVideoInputCount();
+
+  AddDefaultMockCamera();
+  EXPECT_EQ("OK", WaitForVideoInputCountAtLeast(before_count + 1));
+
+  RemoveDefaultMockCamera();
+  EXPECT_EQ("OK", WaitForVideoInputCount(before_count));
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcVideoCaptureServiceBrowserTest,
+                       MockCaptureDeviceControllerFiresDeviceChange) {
+  ASSERT_TRUE(SetUpMockCaptureDeviceTest());
+  PrepareDeviceChangeWatcher();
+
+  ArmNextDeviceChange();
+  AddDefaultMockCamera();
+  EXPECT_EQ("OK", WaitForNextDeviceChange());
+
+  ArmNextDeviceChange();
+
+  RemoveDefaultMockCamera();
+  EXPECT_EQ("OK", WaitForNextDeviceChange());
+}
+
+#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40781953): This test is flakey on macOS.
+#define MAYBE_MockCaptureDeviceControllerCameraCanBeTargetedByGetUserMedia \
+  DISABLED_MockCaptureDeviceControllerCameraCanBeTargetedByGetUserMedia
+#else
+#define MAYBE_MockCaptureDeviceControllerCameraCanBeTargetedByGetUserMedia \
+  MockCaptureDeviceControllerCameraCanBeTargetedByGetUserMedia
+#endif
+IN_PROC_BROWSER_TEST_F(
+    WebRtcVideoCaptureServiceBrowserTest,
+    MAYBE_MockCaptureDeviceControllerCameraCanBeTargetedByGetUserMedia) {
+  ASSERT_TRUE(SetUpMockCaptureDeviceTest());
+  SaveCurrentVideoInputIds();
+
+  AddDefaultMockCamera();
+  EXPECT_EQ("OK", WaitForAddedVideoInputAndOpenIt());
+  RemoveDefaultMockCamera();
+}
+
+IN_PROC_BROWSER_TEST_F(WebRtcVideoCaptureServiceBrowserTest,
+                       MockCaptureDeviceControllerResetRemovesCamera) {
+  ASSERT_TRUE(SetUpMockCaptureDeviceTest());
+  const int before_count = GetVideoInputCount();
+
+  AddDefaultMockCamera();
+  EXPECT_EQ("OK", WaitForVideoInputCountAtLeast(before_count + 1));
+
+  ResetMockCameras();
+  EXPECT_EQ("OK", WaitForVideoInputCount(before_count));
+}
+
+// TODO(crbug.com/40835247): Fix and enable on Fuchsia.
+// TODO(crbug.com/40781953): This test is flakey on macOS.
+// TODO(crbug.com/41484083): This test is flakey on ChromeOS.
+// TODO(crbug.com/576838747): This test is flakey on Linux.
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_LINUX)
+#define MAYBE_FramesSentThroughTextureVirtualDeviceGetDisplayedOnPage \
+  DISABLED_FramesSentThroughTextureVirtualDeviceGetDisplayedOnPage
+#else
+#define MAYBE_FramesSentThroughTextureVirtualDeviceGetDisplayedOnPage \
+  FramesSentThroughTextureVirtualDeviceGetDisplayedOnPage
+#endif
+IN_PROC_BROWSER_TEST_F(
+    WebRtcVideoCaptureServiceBrowserTest,
+    MAYBE_FramesSentThroughTextureVirtualDeviceGetDisplayedOnPage) {
   Initialize();
   auto device_exerciser = std::make_unique<TextureDeviceExerciser>();
   device_exerciser->Initialize();
 
   base::RunLoop run_loop;
   virtual_device_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
-                         AddVirtualDeviceAndStartCapture,
-                     base::Unretained(this), device_exerciser.get(),
-                     media::BindToCurrentLoop(run_loop.QuitClosure())));
+      FROM_HERE, base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
+                                    AddVirtualDeviceAndStartCapture,
+                                base::Unretained(this), device_exerciser.get(),
+                                base::BindPostTaskToCurrentDefault(
+                                    run_loop.QuitClosure())));
   run_loop.Run();
 }
 
+#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40781953): This test is flakey on macOS.
+#define MAYBE_FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage \
+  DISABLED_FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage
+#else
+#define MAYBE_FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage \
+  FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage
+#endif
 IN_PROC_BROWSER_TEST_F(
     WebRtcVideoCaptureServiceBrowserTest,
-    FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage) {
+    MAYBE_FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage) {
   Initialize();
   auto device_exerciser = std::make_unique<SharedMemoryDeviceExerciser>();
   device_exerciser->Initialize();
 
   base::RunLoop run_loop;
   virtual_device_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
-                         AddVirtualDeviceAndStartCapture,
-                     base::Unretained(this), device_exerciser.get(),
-                     media::BindToCurrentLoop(run_loop.QuitClosure())));
+      FROM_HERE, base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
+                                    AddVirtualDeviceAndStartCapture,
+                                base::Unretained(this), device_exerciser.get(),
+                                base::BindPostTaskToCurrentDefault(
+                                    run_loop.QuitClosure())));
   run_loop.Run();
 }
 
+#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40781953): This test is flakey on macOS.
+#define MAYBE_PaddedI420FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage \
+  DISABLED_PaddedI420FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage
+#else
+#define MAYBE_PaddedI420FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage \
+  PaddedI420FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage
+#endif
 IN_PROC_BROWSER_TEST_F(
     WebRtcVideoCaptureServiceBrowserTest,
-    PaddedI420FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage) {
+    MAYBE_PaddedI420FramesSentThroughSharedMemoryVirtualDeviceGetDisplayedOnPage) {
   Initialize();
   auto device_exerciser = std::make_unique<SharedMemoryDeviceExerciser>(
       media::mojom::PlaneStrides::New(
@@ -566,11 +1019,11 @@ IN_PROC_BROWSER_TEST_F(
 
   base::RunLoop run_loop;
   virtual_device_thread_.task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
-                         AddVirtualDeviceAndStartCapture,
-                     base::Unretained(this), device_exerciser.get(),
-                     media::BindToCurrentLoop(run_loop.QuitClosure())));
+      FROM_HERE, base::BindOnce(&WebRtcVideoCaptureServiceBrowserTest::
+                                    AddVirtualDeviceAndStartCapture,
+                                base::Unretained(this), device_exerciser.get(),
+                                base::BindPostTaskToCurrentDefault(
+                                    run_loop.QuitClosure())));
   run_loop.Run();
 }
 

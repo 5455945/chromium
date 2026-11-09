@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,13 @@
 #define CHROME_BROWSER_ASH_ARC_FILEAPI_ARC_CONTENT_FILE_SYSTEM_FILE_STREAM_READER_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/system/handle.h"
+#include "chrome/browser/ash/arc/fileapi/arc_file_system_operation_runner_util.h"
+#include "chromeos/ash/experiences/arc/mojom/file_system.mojom-forward.h"
 #include "net/base/completion_once_callback.h"
 #include "storage/browser/file_system/file_stream_reader.h"
 #include "url/gurl.h"
@@ -30,31 +33,43 @@ namespace arc {
 class ArcContentFileSystemFileStreamReader : public storage::FileStreamReader {
  public:
   ArcContentFileSystemFileStreamReader(const GURL& arc_url, int64_t offset);
+
+  ArcContentFileSystemFileStreamReader(
+      const ArcContentFileSystemFileStreamReader&) = delete;
+  ArcContentFileSystemFileStreamReader& operator=(
+      const ArcContentFileSystemFileStreamReader&) = delete;
+
   ~ArcContentFileSystemFileStreamReader() override;
 
   // storage::FileStreamReader override:
-  int Read(net::IOBuffer* buffer,
+  int Read(scoped_refptr<net::IOBuffer> buffer,
            int buffer_length,
            net::CompletionOnceCallback callback) override;
-  int64_t GetLength(net::Int64CompletionOnceCallback callback) override;
+  int64_t GetLength(GetLengthCallback callback) override;
 
  private:
+  using CloseStatus = file_system_operation_runner_util::CloseStatus;
+
+  // Called to close the ARC file descriptor when operations are completed.
+  void CloseInternal(const CloseStatus status);
+
   // Actually performs read.
-  void ReadInternal(net::IOBuffer* buffer,
+  void ReadInternal(scoped_refptr<net::IOBuffer> buffer,
                     int buffer_length,
                     net::CompletionOnceCallback callback);
 
   // Called when read completes.
-  void OnRead(net::CompletionOnceCallback callback, int result);
+  void OnRead(net::CompletionOnceCallback callback,
+              std::optional<size_t> result);
 
   // Called when GetFileSize() completes.
-  void OnGetFileSize(net::Int64CompletionOnceCallback callback, int64_t size);
+  void OnGetFileSize(GetLengthCallback callback, int64_t size);
 
-  // Called when opening file completes.
-  void OnOpenFile(scoped_refptr<net::IOBuffer> buf,
-                  int buffer_length,
-                  net::CompletionOnceCallback callback,
-                  mojo::ScopedHandle handle);
+  // Called when opening file session completes.
+  void OnOpenFileSession(scoped_refptr<net::IOBuffer> buf,
+                         int buffer_length,
+                         net::CompletionOnceCallback callback,
+                         mojom::FileSessionPtr maybe_file_handle);
 
   // Called when seek completes.
   void OnSeekFile(scoped_refptr<net::IOBuffer> buf,
@@ -77,10 +92,11 @@ class ArcContentFileSystemFileStreamReader : public storage::FileStreamReader {
       net::CompletionOnceCallback callback,
       scoped_refptr<net::IOBufferWithSize> temporary_buffer,
       int64_t num_bytes_to_consume,
-      int read_result);
+      std::optional<size_t> read_result);
 
   GURL arc_url_;
   int64_t offset_;
+  std::string session_id_;
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
@@ -88,8 +104,6 @@ class ArcContentFileSystemFileStreamReader : public storage::FileStreamReader {
 
   base::WeakPtrFactory<ArcContentFileSystemFileStreamReader> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(ArcContentFileSystemFileStreamReader);
 };
 
 }  // namespace arc

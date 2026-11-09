@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,26 +9,32 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/values.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_refresh_scheduler.h"
 #include "components/policy/core/common/cloud/component_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/component_cloud_policy_updater.h"
 #include "components/policy/core/common/cloud/external_policy_data_fetcher.h"
 #include "components/policy/core/common/cloud/resource_cache.h"
+#include "components/policy/core/common/policy_bundle.h"
+#include "components/policy/core/common/policy_logger.h"
+#include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/core/common/schema_map.h"
+#include "components/policy/core/common/values_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace em = enterprise_management;
@@ -47,17 +53,51 @@ bool NotInResponseMap(const ScopedResponseMap& map,
   return map.find(PolicyNamespace(domain, component_id)) == map.end();
 }
 
-bool ToPolicyNamespace(const std::pair<std::string, std::string>& key,
-                       PolicyNamespace* ns) {
-  if (!ComponentCloudPolicyStore::GetPolicyDomain(key.first, &ns->domain))
+bool ToPolicyNamespace(const PolicyTypeToFetch& key, PolicyNamespace* ns) {
+  if (!ComponentCloudPolicyStore::GetPolicyDomain(key.policy_type(),
+                                                  &ns->domain)) {
     return false;
-  ns->component_id = key.second;
+  }
+  ns->component_id = key.settings_entity_id();
   return true;
+}
+
+base::DictValue TranslatePolicyMapEntryToJson(const PolicyMap::Entry& entry) {
+  constexpr const char kValue[] = "Value";
+  constexpr const char kLevel[] = "Level";
+  constexpr const char kRecommended[] = "Recommended";
+
+  base::DictValue result;
+  // This is actually safe because this code just copies the value,
+  // not caring about its type.
+  result.Set(kValue, entry.value_unsafe()->Clone());
+  if (entry.level == POLICY_LEVEL_RECOMMENDED) {
+    result.Set(kLevel, std::string_view(kRecommended));
+  }
+  return result;
+}
+
+base::DictValue TranslatePolicyMapToJson(const PolicyMap& policy_map) {
+  base::DictValue result;
+  for (const auto& [key, entry] : policy_map) {
+    result.Set(key, TranslatePolicyMapEntryToJson(entry));
+  }
+  return result;
+}
+
+// Returns the map of JSON policy value for each namespace.
+ComponentPolicyMap ToComponentPolicyMap(const PolicyBundle& policy_bundle) {
+  ComponentPolicyMap result;
+  for (const auto& [policy_namespace, policy_map] : policy_bundle) {
+    result[policy_namespace] =
+        base::Value(TranslatePolicyMapToJson(policy_map));
+  }
+  return result;
 }
 
 }  // namespace
 
-ComponentCloudPolicyService::Delegate::~Delegate() {}
+ComponentCloudPolicyService::Delegate::~Delegate() = default;
 
 // Owns the objects that live on the background thread, and posts back to the
 // thread that the ComponentCloudPolicyService runs on whenever the policy
@@ -75,8 +115,9 @@ class ComponentCloudPolicyService::Backend
       scoped_refptr<base::SequencedTaskRunner> service_task_runner,
       std::unique_ptr<ResourceCache> cache,
       std::unique_ptr<ExternalPolicyDataFetcher> external_policy_data_fetcher,
-      const std::string& policy_type,
-      PolicySource policy_source);
+      const std::string& policy_type);
+  Backend(const Backend&) = delete;
+  Backend& operator=(const Backend&) = delete;
 
   ~Backend() override;
 
@@ -85,7 +126,7 @@ class ComponentCloudPolicyService::Backend
 
   // The passed credentials will be used to validate the policies.
   void SetCredentials(const std::string& username,
-                      const std::string& gaia_id,
+                      const GaiaId& gaia_id,
                       const std::string& dm_token,
                       const std::string& device_id,
                       const std::string& public_key,
@@ -130,8 +171,6 @@ class ComponentCloudPolicyService::Backend
   std::unique_ptr<ScopedResponseMap> last_fetched_policy_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(Backend);
 };
 
 ComponentCloudPolicyService::Backend::Backend(
@@ -140,14 +179,13 @@ ComponentCloudPolicyService::Backend::Backend(
     scoped_refptr<base::SequencedTaskRunner> service_task_runner,
     std::unique_ptr<ResourceCache> cache,
     std::unique_ptr<ExternalPolicyDataFetcher> external_policy_data_fetcher,
-    const std::string& policy_type,
-    PolicySource policy_source)
+    const std::string& policy_type)
     : service_(service),
       task_runner_(task_runner),
       service_task_runner_(service_task_runner),
       cache_(std::move(cache)),
       external_policy_data_fetcher_(std::move(external_policy_data_fetcher)),
-      store_(this, cache_.get(), policy_type, policy_source) {
+      store_(this, cache_.get(), policy_type) {
   // This class is allowed to be instantiated on any thread.
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
@@ -158,14 +196,14 @@ ComponentCloudPolicyService::Backend::~Backend() {
 
 void ComponentCloudPolicyService::Backend::ClearCache() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DVLOG(1) << "Clearing cache";
+  DVLOG_POLICY(1, POLICY_FETCHING) << "Clearing cache";
   store_.Clear();
   has_credentials_set_ = false;
 }
 
 void ComponentCloudPolicyService::Backend::SetCredentials(
     const std::string& username,
-    const std::string& gaia_id,
+    const GaiaId& gaia_id,
     const std::string& dm_token,
     const std::string& device_id,
     const std::string& public_key,
@@ -173,8 +211,9 @@ void ComponentCloudPolicyService::Backend::SetCredentials(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!username.empty());
   DCHECK(!dm_token.empty());
-  DVLOG(1) << "Updating credentials: username = " << username
-           << ", public_key_version = " << public_key_version;
+  DVLOG_POLICY(1, POLICY_FETCHING)
+      << "Updating credentials: username = " << username
+      << ", public_key_version = " << public_key_version;
   store_.SetCredentials(username, gaia_id, dm_token, device_id, public_key,
                         public_key_version);
   has_credentials_set_ = true;
@@ -205,8 +244,7 @@ void ComponentCloudPolicyService::Backend::InitIfNeeded() {
   updater_ = std::make_unique<ComponentCloudPolicyUpdater>(
       task_runner_, std::move(external_policy_data_fetcher_), &store_);
 
-  std::unique_ptr<PolicyBundle> bundle(std::make_unique<PolicyBundle>());
-  bundle->CopyFrom(store_.policy());
+  auto bundle(std::make_unique<PolicyBundle>(store_.policy().Clone()));
   service_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&ComponentCloudPolicyService::SetPolicy,
                                 service_, std::move(bundle)));
@@ -236,8 +274,8 @@ void ComponentCloudPolicyService::Backend::
   }
   DVLOG(2) << "Installing updated policy from the component policy store";
 
-  std::unique_ptr<PolicyBundle> bundle(std::make_unique<PolicyBundle>());
-  bundle->CopyFrom(store_.policy());
+  std::unique_ptr<PolicyBundle> bundle(
+      std::make_unique<PolicyBundle>(store_.policy().Clone()));
   service_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&ComponentCloudPolicyService::SetPolicy,
                                 service_, std::move(bundle)));
@@ -249,12 +287,15 @@ void ComponentCloudPolicyService::Backend::UpdateWithLastFetchedPolicy() {
   if (!has_credentials_set_ || !last_fetched_policy_ || !initialized_)
     return;
 
-  DVLOG(1) << "Processing the last fetched policies (count = "
-           << last_fetched_policy_->size() << ")";
+  DVLOG_POLICY(1, POLICY_FETCHING)
+      << "Processing the last fetched policies (count = "
+      << last_fetched_policy_->size() << ")";
 
   // Purge any components that don't have a policy configured at the server.
-  // TODO(emaxx): This is insecure, as it happens before the policy validation:
-  // see crbug.com/668733.
+  // Note that this is less secure than the data integrity validation, since
+  // at this point we can only rely on the TLS to prevent the tampering. The
+  // MITM attacker can trick the client into dropping policies for extensions
+  // (even though they can't inject malicious policies). See crbug.com/668733.
   store_.Purge(
       base::BindRepeating(&NotInResponseMap, std::cref(*last_fetched_policy_)));
 
@@ -267,7 +308,6 @@ void ComponentCloudPolicyService::Backend::UpdateWithLastFetchedPolicy() {
 
 ComponentCloudPolicyService::ComponentCloudPolicyService(
     const std::string& policy_type,
-    PolicySource policy_source,
     Delegate* delegate,
     SchemaRegistry* schema_registry,
     CloudPolicyCore* core,
@@ -287,10 +327,10 @@ ComponentCloudPolicyService::ComponentCloudPolicyService(
 
   backend_ = std::make_unique<Backend>(
       weak_ptr_factory_.GetWeakPtr(), backend_task_runner_,
-      base::ThreadTaskRunnerHandle::Get(), std::move(cache),
+      base::SingleThreadTaskRunner::GetCurrentDefault(), std::move(cache),
       std::make_unique<ExternalPolicyDataFetcher>(client->GetURLLoaderFactory(),
                                                   backend_task_runner_),
-      policy_type, policy_source);
+      policy_type);
 
   // Observe the schema registry for keeping |current_schema_map_| up to date.
   schema_registry_->AddObserver(this);
@@ -314,6 +354,9 @@ ComponentCloudPolicyService::ComponentCloudPolicyService(
 ComponentCloudPolicyService::~ComponentCloudPolicyService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  for (auto& observer : observers_)
+    observer.OnComponentPolicyServiceDestruction(this);
+
   schema_registry_->RemoveObserver(this);
   core_->store()->RemoveObserver(this);
   core_->RemoveObserver(this);
@@ -333,6 +376,23 @@ void ComponentCloudPolicyService::ClearCache() {
   backend_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&Backend::ClearCache, base::Unretained(backend_.get())));
+}
+
+void ComponentCloudPolicyService::AddObserver(
+    ComponentCloudPolicyServiceObserver* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  observers_.AddObserver(observer);
+  // Pretend that the ComponentPolicyStore was updated so Backend triggers
+  // notification of all observers, including the newly added one.
+  backend_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&Backend::OnComponentCloudPolicyStoreUpdated,
+                                base::Unretained(backend_.get())));
+}
+
+void ComponentCloudPolicyService::RemoveObserver(
+    ComponentCloudPolicyServiceObserver* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  observers_.RemoveObserver(observer);
 }
 
 void ComponentCloudPolicyService::OnSchemaRegistryReady() {
@@ -384,18 +444,6 @@ void ComponentCloudPolicyService::OnPolicyFetched(CloudPolicyClient* client) {
   UpdateFromClient();
 }
 
-void ComponentCloudPolicyService::OnRegistrationStateChanged(
-    CloudPolicyClient* client) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // Ignored; the registration state is tracked by looking at the
-  // CloudPolicyStore instead.
-}
-
-void ComponentCloudPolicyService::OnClientError(CloudPolicyClient* client) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // Ignored.
-}
-
 void ComponentCloudPolicyService::UpdateFromSuperiorStore() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -413,7 +461,7 @@ void ComponentCloudPolicyService::UpdateFromSuperiorStore() {
     // updates, to handle the case of the user registering for policy after the
     // session starts.
     std::string username = policy->username();
-    std::string gaia_id = policy->gaia_id();
+    GaiaId gaia_id(policy->gaia_id());
     std::string request_token = policy->request_token();
     std::string device_id =
         policy->has_device_id() ? policy->device_id() : std::string();
@@ -437,7 +485,7 @@ void ComponentCloudPolicyService::UpdateFromSuperiorStore() {
 void ComponentCloudPolicyService::UpdateFromClient() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (core_->client()->responses().empty()) {
+  if (core_->client()->last_policy_fetch_responses().empty()) {
     // The client's responses will be empty if it hasn't fetched policy from the
     // DMServer yet. Make sure we don't purge the caches in this case.
     return;
@@ -447,10 +495,11 @@ void ComponentCloudPolicyService::UpdateFromClient() {
 
   std::unique_ptr<ScopedResponseMap> valid_responses =
       std::make_unique<ScopedResponseMap>();
-  for (const auto& response : core_->client()->responses()) {
+  for (const auto& response : core_->client()->last_policy_fetch_responses()) {
     PolicyNamespace ns;
     if (!ToPolicyNamespace(response.first, &ns)) {
-      DVLOG(1) << "Ignored policy with type = " << response.first.first;
+      DVLOG_POLICY(1, POLICY_FETCHING)
+          << "Ignored policy with type = " << response.first.policy_type();
       continue;
     }
     (*valid_responses)[ns] = response.second;
@@ -488,9 +537,13 @@ void ComponentCloudPolicyService::SetPolicy(
     std::unique_ptr<PolicyBundle> policy) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  CHECK(policy);
+  component_policy_map_ = ToComponentPolicyMap(*policy);
+
   // Store the current unfiltered policies.
   unfiltered_policy_ = std::move(policy);
 
+  NotifyComponentPolicyUpdated();
   FilterAndInstallPolicy();
 }
 
@@ -502,14 +555,21 @@ void ComponentCloudPolicyService::FilterAndInstallPolicy() {
 
   // Make a copy in |policy_| and filter it and validate against the schemas;
   // this is what's passed to the outside world.
-  policy_.CopyFrom(*unfiltered_policy_);
-  current_schema_map_->FilterBundle(&policy_,
+  policy_ = unfiltered_policy_->Clone();
+  current_schema_map_->FilterBundle(policy_,
                                     /*drop_invalid_component_policies=*/false);
 
   policy_installed_ = true;
-  DVLOG(1) << "Installed policy (count = "
-           << std::distance(policy_.begin(), policy_.end()) << ")";
+  DVLOG_POLICY(1, POLICY_FETCHING)
+      << "Installed policy (count = "
+      << std::distance(policy_.begin(), policy_.end()) << ")";
   delegate_->OnComponentCloudPolicyUpdated();
+}
+
+void ComponentCloudPolicyService::NotifyComponentPolicyUpdated() {
+  for (auto& observer : observers_) {
+    observer.OnComponentPolicyUpdated(component_policy_map_);
+  }
 }
 
 }  // namespace policy

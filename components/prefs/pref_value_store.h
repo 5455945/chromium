@@ -1,27 +1,27 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PREFS_PREF_VALUE_STORE_H_
 #define COMPONENTS_PREFS_PREF_VALUE_STORE_H_
 
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "components/prefs/pref_store.h"
 #include "components/prefs/prefs_export.h"
 
-class PersistentPrefStore;
 class PrefNotifier;
-class PrefRegistry;
 class PrefStore;
 
 // The PrefValueStore manages various sources of values for Preferences
@@ -35,44 +35,20 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
  public:
   using PrefChangedCallback = base::RepeatingCallback<void(const std::string&)>;
 
-  // Delegate used to observe certain events in the |PrefValueStore|'s lifetime.
-  class Delegate {
-   public:
-    virtual ~Delegate() {}
-
-    // Called by the PrefValueStore constructor with the PrefStores passed to
-    // it.
-    virtual void Init(PrefStore* managed_prefs,
-                      PrefStore* supervised_user_prefs,
-                      PrefStore* extension_prefs,
-                      PrefStore* command_line_prefs,
-                      PrefStore* user_prefs,
-                      PrefStore* recommended_prefs,
-                      PrefStore* default_prefs,
-                      PrefNotifier* pref_notifier) = 0;
-
-    virtual void InitIncognitoUserPrefs(
-        scoped_refptr<PersistentPrefStore> incognito_user_prefs_overlay,
-        scoped_refptr<PersistentPrefStore> incognito_user_prefs_underlay,
-        const std::vector<const char*>& overlay_pref_names) = 0;
-
-    virtual void InitPrefRegistry(PrefRegistry* pref_registry) = 0;
-
-    // Called whenever PrefValueStore::UpdateCommandLinePrefStore is called,
-    // with the same argument.
-    virtual void UpdateCommandLinePrefStore(PrefStore* command_line_prefs) = 0;
-  };
-
   // PrefStores must be listed here in order from highest to lowest priority.
-  //   MANAGED contains all managed preference values that are provided by
+  //   MANAGED contains all managed preferences that are provided by
   //      mandatory policies (e.g. Windows Group Policy or cloud policy).
   //   SUPERVISED_USER contains preferences that are valid for supervised users.
-  //   EXTENSION contains preference values set by extensions.
-  //   COMMAND_LINE contains preference values set by command-line switches.
-  //   USER contains all user-set preference values.
+  //   EXTENSION contains preferences set by extensions.
+  //   STANDALONE_BROWSER contains system preferences inherited from a separate
+  //      Chrome instance. One relevant source is extension prefs in lacros
+  //      passed to ash, so these prefs have similar precedence to extension
+  //      prefs.
+  //   COMMAND_LINE contains preferences set by command-line switches.
+  //   USER contains all user-set preferences.
   //   RECOMMENDED contains all preferences that are provided by recommended
   //      policies.
-  //   DEFAULT contains all application default preference values.
+  //   DEFAULT contains all application default preferences.
   enum PrefStoreType {
     // INVALID_STORE is not associated with an actual PrefStore but used as
     // an invalid marker, e.g. as a return value.
@@ -102,15 +78,18 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
   //
   // |pref_notifier| facilitates broadcasting preference change notifications
   // to the world.
-  PrefValueStore(PrefStore* managed_prefs,
-                 PrefStore* supervised_user_prefs,
-                 PrefStore* extension_prefs,
-                 PrefStore* command_line_prefs,
-                 PrefStore* user_prefs,
-                 PrefStore* recommended_prefs,
-                 PrefStore* default_prefs,
-                 PrefNotifier* pref_notifier,
-                 std::unique_ptr<Delegate> delegate = nullptr);
+  PrefValueStore(scoped_refptr<PrefStore> managed_prefs,
+                 scoped_refptr<PrefStore> supervised_user_prefs,
+                 scoped_refptr<PrefStore> extension_prefs,
+                 scoped_refptr<PrefStore> command_line_prefs,
+                 scoped_refptr<PrefStore> user_prefs,
+                 scoped_refptr<PrefStore> recommended_prefs,
+                 scoped_refptr<PrefStore> default_prefs,
+                 PrefNotifier* pref_notifier);
+
+  PrefValueStore(const PrefValueStore&) = delete;
+  PrefValueStore& operator=(const PrefValueStore&) = delete;
+
   virtual ~PrefValueStore();
 
   // Creates a clone of this PrefValueStore with PrefStores overwritten
@@ -118,32 +97,35 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
   //
   // The new PrefValueStore is passed the |delegate| in its constructor.
   std::unique_ptr<PrefValueStore> CloneAndSpecialize(
-      PrefStore* managed_prefs,
-      PrefStore* supervised_user_prefs,
-      PrefStore* extension_prefs,
-      PrefStore* command_line_prefs,
-      PrefStore* user_prefs,
-      PrefStore* recommended_prefs,
-      PrefStore* default_prefs,
-      PrefNotifier* pref_notifier,
-      std::unique_ptr<Delegate> delegate = nullptr);
+      scoped_refptr<PrefStore> managed_prefs,
+      scoped_refptr<PrefStore> supervised_user_prefs,
+      scoped_refptr<PrefStore> extension_prefs,
+      scoped_refptr<PrefStore> command_line_prefs,
+      scoped_refptr<PrefStore> user_prefs,
+      scoped_refptr<PrefStore> recommended_prefs,
+      scoped_refptr<PrefStore> default_prefs,
+      PrefNotifier* pref_notifier);
 
-  // A PrefValueStore can have exactly one callback that is directly
-  // notified of preferences changing in the store. This does not
-  // filter through the PrefNotifier mechanism, which may not forward
-  // certain changes (e.g. unregistered prefs).
-  void set_callback(PrefChangedCallback callback) {
-    pref_changed_callback_ = std::move(callback);
-  }
+  // Returns the pref store type identifying the source that controls the
+  // Preference identified by |name|. If none of the sources has a value,
+  // INVALID_STORE is returned. In practice, the default PrefStore
+  // should always have a value for any registered preferencem, so INVALID_STORE
+  // indicates an error.
+  PrefStoreType ControllingPrefStoreForPref(const std::string& name) const;
 
   // Gets the value for the given preference name that has the specified value
   // type. Values stored in a PrefStore that have the matching |name| but
   // a non-matching |type| are silently skipped. Returns true if a valid value
   // was found in any of the available PrefStores. Most callers should use
   // Preference::GetValue() instead of calling this method directly.
-  bool GetValue(const std::string& name,
+  bool GetValue(std::string_view name,
                 base::Value::Type type,
                 const base::Value** out_value) const;
+
+  // Like GetValue(), but checks only non-default stores.
+  bool GetValueFromNonDefaultStores(std::string_view name,
+                                    base::Value::Type type,
+                                    const base::Value** out_value) const;
 
   // Gets the recommended value for the given preference name that has the
   // specified value type. A value stored in the recommended PrefStore that has
@@ -179,12 +161,12 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
   bool PrefValueExtensionModifiable(const std::string& name) const;
 
   // Update the command line PrefStore with |command_line_prefs|.
-  void UpdateCommandLinePrefStore(PrefStore* command_line_prefs);
+  void UpdateCommandLinePrefStore(scoped_refptr<PrefStore> command_line_prefs);
+
+  // Updates the extension PrefStore with `extension_prefs`.
+  void UpdateExtensionPrefStore(scoped_refptr<PrefStore> extension_prefs);
 
   bool IsInitializationComplete() const;
-
-  // Check whether a particular type of PrefStore exists.
-  bool HasPrefStore(PrefStoreType type) const;
 
  private:
   // Keeps a PrefStore reference on behalf of the PrefValueStore and monitors
@@ -194,31 +176,35 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
   class PrefStoreKeeper : public PrefStore::Observer {
    public:
     PrefStoreKeeper();
+
+    PrefStoreKeeper(const PrefStoreKeeper&) = delete;
+    PrefStoreKeeper& operator=(const PrefStoreKeeper&) = delete;
+
     ~PrefStoreKeeper() override;
 
     // Takes ownership of |pref_store|.
     void Initialize(PrefValueStore* store,
-                    PrefStore* pref_store,
+                    scoped_refptr<PrefStore> pref_store,
                     PrefStoreType type);
 
     PrefStore* store() { return pref_store_.get(); }
     const PrefStore* store() const { return pref_store_.get(); }
 
+    scoped_refptr<PrefStore> store_ref() const { return pref_store_; }
+
    private:
     // PrefStore::Observer implementation.
-    void OnPrefValueChanged(const std::string& key) override;
+    void OnPrefValueChanged(std::string_view key) override;
     void OnInitializationCompleted(bool succeeded) override;
 
     // PrefValueStore this keeper is part of.
-    PrefValueStore* pref_value_store_;
+    raw_ptr<PrefValueStore> pref_value_store_;
 
     // The PrefStore managed by this keeper.
     scoped_refptr<PrefStore> pref_store_;
 
     // Type of the pref store.
     PrefStoreType type_;
-
-    DISALLOW_COPY_AND_ASSIGN(PrefStoreKeeper);
   };
 
   typedef std::map<std::string, base::Value::Type> PrefTypeMap;
@@ -236,20 +222,13 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
                              PrefStoreType first_checked_store,
                              PrefStoreType last_checked_store) const;
 
-  // Returns the pref store type identifying the source that controls the
-  // Preference identified by |name|. If none of the sources has a value,
-  // INVALID_STORE is returned. In practice, the default PrefStore
-  // should always have a value for any registered preferencem, so INVALID_STORE
-  // indicates an error.
-  PrefStoreType ControllingPrefStoreForPref(const std::string& name) const;
-
   // Get a value from the specified |store|.
-  bool GetValueFromStore(const std::string& name,
+  bool GetValueFromStore(std::string_view name,
                          PrefStoreType store,
                          const base::Value** out_value) const;
 
   // Get a value from the specified |store| if its |type| matches.
-  bool GetValueFromStoreWithType(const std::string& name,
+  bool GetValueFromStoreWithType(std::string_view name,
                                  base::Value::Type type,
                                  PrefStoreType store,
                                  const base::Value** out_value) const;
@@ -258,18 +237,18 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
   // the user-visible pref value has changed. Triggers the change notification
   // if the effective value of the preference has changed, or if the store
   // controlling the pref has changed.
-  void NotifyPrefChanged(const std::string& path, PrefStoreType new_store);
+  void NotifyPrefChanged(std::string_view, PrefStoreType new_store);
 
   // Called from the PrefStoreKeeper implementation when a pref value for |key|
   // changed in the pref store for |type|.
-  void OnPrefValueChanged(PrefStoreType type, const std::string& key);
+  void OnPrefValueChanged(PrefStoreType type, std::string_view key);
 
   // Handle the event that the store for |type| has completed initialization.
   void OnInitializationCompleted(PrefStoreType type, bool succeeded);
 
   // Initializes a pref store keeper. Sets up a PrefStoreKeeper that will take
   // ownership of the passed |pref_store|.
-  void InitPrefStore(PrefStoreType type, PrefStore* pref_store);
+  void InitPrefStore(PrefStoreType type, scoped_refptr<PrefStore> pref_store);
 
   // Checks whether initialization is completed and tells the notifier if that
   // is the case.
@@ -284,25 +263,24 @@ class COMPONENTS_PREFS_EXPORT PrefValueStore {
     return pref_stores_[type].store();
   }
 
-  // Keeps the PrefStore references in order of precedence.
-  PrefStoreKeeper pref_stores_[PREF_STORE_TYPE_MAX + 1];
+  // Like GetPrefStore, but returns a scoped_refptr so caller may share
+  // ownership.
+  scoped_refptr<PrefStore> GetPrefStoreRef(PrefStoreType type) const {
+    return pref_stores_[type].store_ref();
+  }
 
-  PrefChangedCallback pref_changed_callback_;
+  // Keeps the PrefStore references in order of precedence.
+  std::array<PrefStoreKeeper, PREF_STORE_TYPE_MAX + 1> pref_stores_;
 
   // Used for generating notifications. This is a weak reference,
   // since the notifier is owned by the corresponding PrefService.
-  PrefNotifier* pref_notifier_;
+  raw_ptr<PrefNotifier> pref_notifier_;
 
   // A mapping of preference names to their registered types.
   PrefTypeMap pref_types_;
 
   // True if not all of the PrefStores were initialized successfully.
   bool initialization_failed_;
-
-  // Might be null.
-  std::unique_ptr<Delegate> delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(PrefValueStore);
 };
 
 namespace std {

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,27 +8,36 @@
 namespace autofill {
 
 // The type of save card bubble to show.
-enum class BubbleType {
+enum class PaymentsBubbleType {
   // Save prompt when the user is saving locally.
-  LOCAL_SAVE,
+  kLocalSave,
 
-  // Save prompt when uploading a card to Google payments.
-  UPLOAD_SAVE,
+  // Save prompt for saving CVC locally to an existing local card.
+  kLocalCvcSave,
 
-  // Credit card upload is in progress. No bubble visible but show the credit
-  // card icon with the loading indicator animation.
-  UPLOAD_IN_PROGRESS,
+  // Save prompt when uploading a card to Google Payments.
+  kUploadSave,
+
+  // Save prompt for uploading CVC to the Sync server for an existing server
+  // card.
+  kUploadCvcSave,
+
+  // Save prompt for updating the cardholder name for an existing server card.
+  kUploadCardholderNameUpdate,
+
+  // Credit card upload is in progress.
+  kUploadInProgress,
+
+  // Credit card upload is completed.
+  kUploadComplete,
 
   // The manage cards bubble when bubble is reshown after
   // icon is clicked.
-  MANAGE_CARDS,
-
-  // The failure bubble when credit card uploading failed.
-  FAILURE,
+  kManageCards,
 
   // There is no bubble to show anymore. This also
   // indicates that the icon should not be visible.
-  INACTIVE
+  kInactive
 };
 
 }  // namespace autofill

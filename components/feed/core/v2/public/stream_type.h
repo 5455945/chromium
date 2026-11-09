@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,39 +16,23 @@ namespace feed {
 // parameters.
 class StreamType {
  public:
-  enum class Type {
-    // An unspecified stream type. Used only to represent an uninitialized
-    // stream type value.
-    kUnspecified,
-    // The For-You feed stream.
-    kForYou,
-    // The Web Feed stream.
-    kWebFeed,
-  };
-  constexpr StreamType() = default;
-  constexpr explicit StreamType(Type t) : type_(t) {}
-  bool operator<(const StreamType& rhs) const { return type_ < rhs.type_; }
-  bool operator==(const StreamType& rhs) const { return type_ == rhs.type_; }
-  bool IsForYou() const { return type_ == Type::kForYou; }
-  bool IsWebFeed() const { return type_ == Type::kWebFeed; }
-  bool IsValid() const { return type_ != Type::kUnspecified; }
-  Type GetType() const { return type_; }
+  StreamType() = default;
+  virtual ~StreamType() = default;
+  explicit StreamType(StreamKind k) : kind_(k) {}
+  bool operator<(const StreamType& rhs) const {
+    return kind_ < rhs.kind_;
+  }
+  bool operator==(const StreamType& rhs) const { return kind_ == rhs.kind_; }
+  bool IsForYou() const { return kind_ == StreamKind::kForYou; }
+  bool IsValid() const { return kind_ != StreamKind::kUnknown; }
+  StreamKind GetKind() const { return kind_; }
 
   // Returns a human-readable value, for debugging/DCHECK prints.
   std::string ToString() const;
 
-  // Mapping functions between RefreshTaskId and StreamType.
-  // Returns false if there should be no background refreshes associated with
-  // this stream.
-  bool GetRefreshTaskId(RefreshTaskId& out_id) const;
-  static StreamType ForTaskId(RefreshTaskId task_id);
-
  private:
-  Type type_ = Type::kUnspecified;
+  StreamKind kind_ = StreamKind::kUnknown;
 };
-
-constexpr StreamType kForYouStream(StreamType::Type::kForYou);
-constexpr StreamType kWebFeedStream(StreamType::Type::kWebFeed);
 
 inline std::ostream& operator<<(std::ostream& os,
                                 const StreamType& stream_type) {

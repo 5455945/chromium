@@ -44,10 +44,11 @@ class BaseCheckableInputType : public InputType, public InputTypeView {
   using InputType::GetElement;
 
   void HandleBlurEvent() override;
+  bool CanSetStringValue() const;
 
  protected:
-  BaseCheckableInputType(HTMLInputElement& element)
-      : InputType(element),
+  BaseCheckableInputType(Type type, HTMLInputElement& element)
+      : InputType(type, element),
         InputTypeView(element),
         is_in_click_handler_(false) {}
   void HandleKeydownEvent(KeyboardEvent&) override;
@@ -57,12 +58,11 @@ class BaseCheckableInputType : public InputType, public InputTypeView {
 
  private:
   InputTypeView* CreateView() override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) const override;
   FormControlState SaveFormControlState() const final;
   void RestoreFormControlState(const FormControlState&) final;
   void AppendToFormData(FormData&) const final;
   void HandleKeypressEvent(KeyboardEvent&) final;
-  bool CanSetStringValue() const final;
-  void AccessKeyAction(SimulatedClickCreationScope creation_scope) final;
   bool MatchesDefaultPseudoClass() override;
   ValueMode GetValueMode() const override;
   void SetValue(const String&,
@@ -71,6 +71,13 @@ class BaseCheckableInputType : public InputType, public InputTypeView {
                 TextControlSetValueSelection) final;
   void ReadingChecked() const final;
   bool IsCheckable() final;
+};
+
+template <>
+struct DowncastTraits<BaseCheckableInputType> {
+  static bool AllowFrom(const InputType& type) {
+    return type.IsBaseCheckableInputType();
+  }
 };
 
 }  // namespace blink

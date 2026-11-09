@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@ std::ostream& operator<<(std::ostream& ostream, WritingMode writing_mode) {
     case WritingMode::kSidewaysLr:
       return ostream << "sideways-lr";
   }
-  return ostream << static_cast<unsigned>(writing_mode);
+  return ostream << static_cast<uint32_t>(writing_mode);
 }
 
 }  // namespace blink

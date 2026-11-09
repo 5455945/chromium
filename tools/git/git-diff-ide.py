@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,8 +18,6 @@ Examples:
   %prog HEAD
 """
 
-from __future__ import print_function
-
 import subprocess
 import sys
 
@@ -28,31 +26,31 @@ def GitShell(args, ignore_return=False):
   """A shell invocation suitable for communicating with git. Returns
   output as list of lines, raises exception on error.
   """
-  job = subprocess.Popen(args,
-                         shell=True,
-                         stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT)
+  job = subprocess.Popen(
+    args, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+  )
   (out, err) = job.communicate()
   if job.returncode != 0 and not ignore_return:
     print(out)
-    raise Exception("Error %d running command %s" % (
-        job.returncode, args))
+    raise Exception("Error %d running command %s" % (job.returncode, args))
   return out.split('\n')
 
 
 def PrintGitDiff(extra_args):
   """Outputs git diff extra_args with file:line inserted into relevant lines."""
-  current_file = '';
-  line_num = 0;
+  current_file = ''
+  line_num = 0
   lines = GitShell('git diff %s' % ' '.join(extra_args))
   for line in lines:
     # Pass-through lines:
     #  diff --git a/file.c b/file.c
     #  index 0e38c2d..8cd69ae 100644
     #  --- a/file.c
-    if (line.startswith('diff ') or
-        line.startswith('index ') or
-        line.startswith('--- ')):
+    if (
+      line.startswith('diff ')
+      or line.startswith('index ')
+      or line.startswith('--- ')
+    ):
       print(line)
       continue
 

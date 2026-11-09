@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,72 +6,104 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
+#include <variant>
 
 #include "base/base_switches.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "cc/base/switches.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/confirm_infobar_creation_allowlist.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/infobars/simple_alert_infobar_creator.h"
 #include "chrome/browser/ui/simple_message_box.h"
+#include "chrome/browser/webauthn/webauthn_switches.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/autofill/core/common/autofill_switches.h"
-#include "components/data_reduction_proxy/core/common/data_reduction_proxy_switches.h"
+#include "components/history_clusters/core/file_clustering_backend.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar_delegate.h"
-#include "components/nacl/common/buildflags.h"
-#include "components/nacl/common/nacl_switches.h"
+#include "components/media_router/common/providers/cast/certificate/switches.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "components/translate/core/common/translate_switches.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
-#include "extensions/common/switches.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "gpu/config/gpu_switches.h"
 #include "media/base/media_switches.h"
 #include "media/media_buildflags.h"
+#include "net/base/features.h"
+#include "net/base/switches.h"
 #include "sandbox/policy/switches.h"
-#include "services/device/public/cpp/hid/hid_switches.h"
 #include "services/network/public/cpp/network_switches.h"
-#include "third_party/blink/public/common/features.h"
+#include "services/webnn/public/mojom/features.mojom.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/resource/scoped_startup_resource_bundle.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/views/views_switches.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_WIN)
+#include "services/webnn/webnn_switches.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/command_line_android.h"
+#include "base/android/jni_android.h"
+#include "chrome/browser/android/flags/bad_flags_snackbar_manager.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #else
-#include "chrome/browser/ui/browser.h"
-#endif  // OS_ANDROID
+#include "components/actor/core/actor_switches.h"
+#include "components/tabs/public/tab_interface.h"
+#include "services/device/public/cpp/hid/hid_switches.h"
+#endif
 
-namespace chrome {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "extensions/common/switches.h"
+#endif
 
 namespace {
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 // Dangerous command line flags for which to display a warning that "stability
 // and security will suffer".
-static const char* kBadFlags[] = {
-    network::switches::kIgnoreCertificateErrorsSPKIList,
+const char* const kBadFlags[] = {
+    // These flags allow redirecting user traffic.
+    network::switches::kHostResolverRules,
+    network::switches::kHostRules,
+
+    // These flags, which can expose network data, are considered potentially
+    // dangerous.
+    net::switches::kLogNetLog,
+    network::switches::kNetLogCaptureMode,
+
     // These flags disable sandbox-related security.
     sandbox::policy::switches::kDisableGpuSandbox,
+    sandbox::policy::switches::kDisableLandlockSandbox,
     sandbox::policy::switches::kDisableSeccompFilterSandbox,
     sandbox::policy::switches::kDisableSetuidSandbox,
+    sandbox::policy::switches::kDisableWebNNCompilerSandbox,
     sandbox::policy::switches::kNoSandbox,
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     sandbox::policy::switches::kAllowThirdPartyModules,
 #endif
-    switches::kDisableSiteIsolation,
     switches::kDisableWebSecurity,
-#if BUILDFLAG(ENABLE_NACL)
-    switches::kNaClDangerousNoSandboxNonSfi,
-#endif
     switches::kSingleProcess,
 
     // These flags disable or undermine the Same Origin Policy.
@@ -80,33 +112,28 @@ static const char* kBadFlags[] = {
     // These flags undermine HTTPS / connection security.
     switches::kDisableWebRtcEncryption,
     switches::kIgnoreCertificateErrors,
-
-    // This flag could prevent QuotaChange events from firing or cause the event
-    // to fire too often, potentially impacting web application behavior.
-    switches::kQuotaChangeEventInterval,
+    network::switches::kIgnoreCertificateErrorsSPKIList,
 
     // These flags change the URLs that handle PII.
     switches::kGaiaUrl,
     translate::switches::kTranslateScriptURL,
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-    // This flag gives extensions more powers.
+    // These flags enable extensions running scripts on chrome:// and
+    // chrome-extension:// URLs.
     extensions::switches::kExtensionsOnChromeURLs,
+    extensions::switches::kExtensionsOnExtensionURLs,
+
+    // This flag gives the specified extension(s) access to restricted extension
+    // APIs.
+    extensions::switches::kAllowlistedExtensionID,
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
     // Speech dispatcher is buggy, it can crash and it can make Chrome freeze.
-    // http://crbug.com/327295
+    // http://crbug.com/40078530
     switches::kEnableSpeechDispatcher,
 #endif
-
-#if defined(OS_MAC)
-    // This flag is only used for performance tests in mac, to ensure that
-    // calculated values are reliable. Should not be used elsewhere.
-    switches::kUseHighGPUThreadPriorityForPerfTests,
-#endif  // OS_MAC
 
     // These flags control Blink feature state, which is not supported and is
     // intended only for use by Chromium developers.
@@ -133,44 +160,141 @@ static const char* kBadFlags[] = {
     // updating components won't be performed until shutdown.
     switches::kDisableBestEffortTasks,
 
-    // Enables save data feature which can cause user traffic to be proxied via
-    // Google's data reduction proxy servers.
-    data_reduction_proxy::switches::kEnableDataReductionProxy,
-
     // GPU sanboxing isn't implemented for the Web GPU API yet meaning it would
     // be possible to read GPU data for other Chromium processes.
     switches::kEnableUnsafeWebGPU,
-    switches::kEnableUnsafeWebGPUService,
 
-    // A flag to support local file based WebBundle loading, only for testing
-    // purpose.
-    switches::kTrustableWebBundleFileUrl,
+#if BUILDFLAG(IS_WIN)
+    // These flags allow loading libraries from specified paths, which may
+    // compromise process integrity and security.
+    switches::kWebNNOrtLibraryPathForTesting,
+    switches::kWebNNOrtEpLibraryPathForTesting,
+#endif
 
+#if !BUILDFLAG(IS_ANDROID)
     // A flag to bypass the WebHID blocklist for testing purposes.
     switches::kDisableHidBlocklist,
-};
-#endif  // OS_ANDROID
+#endif
 
-// Dangerous feature flags in about:flags for which to display a warning that
-// "stability and security will suffer".
-static const base::Feature* kBadFeatureFlagsInAboutFlags[] = {
-    &blink::features::kRawClipboard,
-    &features::kWebBundlesFromNetwork,
-#if defined(OS_ANDROID)
-    &chrome::android::kCommandLineOnNonRooted,
-#endif  // OS_ANDROID
+    // This flag tells Chrome to automatically install an Isolated Web App in
+    // developer mode. The flag should contain the path to an unsigned Web
+    // Bundle containing the IWA. Paths will be resolved relative to the
+    // current working directory.
+    switches::kInstallIsolatedWebAppFromFile,
+
+    // This flag tells Chrome to automatically install an Isolated Web App in
+    // developer mode. The flag should contain an HTTP(S) URL that all of the
+    // app's requests will be proxied to.
+    switches::kInstallIsolatedWebAppFromUrl,
+
+    // Allows the specified origin to make Web Authentication API requests on
+    // behalf of other origins, if a corresponding Google-internal
+    // platform-level enterprise policy is also applied.
+    webauthn::switches::kRemoteProxiedRequestsAllowedAdditionalOrigin,
+
+    // When a file is specified as part of this flag, this sideloads machine
+    // learning model output used by the History Clusters service and should
+    // only be used for testing purposes.
+    history_clusters::switches::kClustersOverrideFile,
+
+    // This flag disables protection against potentially unintentional user
+    // interaction with certain UI elements.
+    views::switches::kDisableInputEventActivationProtectionForTesting,
+
+    // This flag enables injecting synthetic input. It is meant to be used only
+    // in tests and performance benchmarks. Using it could allow faking user
+    // interaction across origins.
+    switches::kEnableGpuBenchmarking,
+
+    // This flag enables loading a developer-signed certificate for Cast
+    // streaming receivers and should only be used for testing purposes.
+    cast_certificate::switches::kCastDeveloperCertificatePath,
+
+    // This flag ignores potential bad mojo messages received in network
+    // service process instead of collecting dump about their occurrence.
+    network::switches::kIgnoreBadMessageForTesting,
+
+    // This flag bypasses several safety checks in the glic actor (e.g. an
+    // origin blocklist) for testing purposes.
+    actor::switches::kDisableActorSafetyChecks,
+};
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+// Dangerous flags that can be enabled in about:flags, for which to display a
+// warning that "stability and security will suffer".
+//
+// A flag should be listed here if it is available in about:flags on Android.
+// Flags that are only available on the command line and not in about:flags
+// should be listed in `kBadFlags` above, which is only checked on desktop
+// platforms. This is because command-line flags cannot be set by users on
+// non-rooted Android devices, so we avoid showing a warning for them.
+static const std::variant<const base::Feature*, const char*>
+    kBadFeatureFlagsInAboutFlags[] = {
+        // This feature enables developer mode support for Isolated Web Apps.
+        &features::kIsolatedWebAppDevMode,
+
+        // This flag disables site isolation.
+        switches::kDisableSiteIsolation,
+
+#if BUILDFLAG(IS_ANDROID)
+        &chrome::android::kCommandLineOnNonRooted,
+#endif
+
+        // This flag disables security for the Page Embedded Permission Control,
+        // for testing purposes. Can only be enabled via the command line.
+        &blink::features::kBypassPepcSecurityForTesting,
+
+        // This feature is under development and has known security risks.
+        &webnn::mojom::features::kWebMachineLearningNeuralNetwork,
+
+        // This feature enables the test root store, which can contain roots
+        // that are not actually trusted.
+        &net::features::kTestRootStore,
+
+        // This feature allows open web content to use the Unbounded Element
+        // API, which lets a page paint outside the bounds of its frame.
+        &blink::features::kUnsafeUnboundedElementOnTheOpenWeb,
+
+        // This feature allows open web content to use the Unbounded Element
+        // API, which lets a page paint outside the bounds of its window.
+        &blink::features::kUnsafeEscapingUnboundedElementOnTheOpenWeb,
+
+        // This feature is under development and currently has security
+        // concerns.
+        &blink::features::kPersistentWidgetAPI,
 };
 
-void ShowBadFlagsInfoBarHelper(content::WebContents* web_contents,
-                               int message_id,
-                               base::StringPiece flag) {
+void ShowBadFlagsInfoBarHelper(
+    base::PassKey<ConfirmInfoBarCreationAllowlist> pass_key,
+    content::WebContents* web_contents,
+    int message_id,
+    std::string_view flag) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE)) {
+    auto* manager = infobars::BrowserInfoBarManager::From(g_browser_process);
+    CHECK(manager);
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents);
+    if (!tab) {
+      return;
+    }
+    infobars::InfoBarShowParams params;
+    params.message_text =
+        l10n_util::GetStringFUTF16(message_id, base::UTF8ToUTF16(flag));
+    manager->Show(tab, infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE,
+                  std::move(params));
+    return;
+  }
+#endif
+
   // Animating the infobar also animates the content area size which can trigger
   // a flood of page layout, compositing, texture reallocations, etc.  Do not
   // animate the infobar to reduce noise in perf benchmarks because they pass
   // --ignore-certificate-errors-spki-list.  This infobar only appears at
   // startup so the animation isn't visible to users anyway.
   CreateSimpleAlertInfoBar(
-      infobars::ContentInfoBarManager::FromWebContents(web_contents),
+      pass_key, infobars::ContentInfoBarManager::FromWebContents(web_contents),
       infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE, nullptr,
       l10n_util::GetStringFUTF16(message_id, base::UTF8ToUTF16(flag)),
       /*auto_expire=*/false, /*should_animate=*/false);
@@ -181,19 +305,58 @@ void ShowBadFlagsInfoBarHelper(content::WebContents* web_contents,
 void ShowBadFlagsPrompt(content::WebContents* web_contents) {
 // On Android, ShowBadFlagsPrompt doesn't show the warning notification
 // for flags which are not available in about:flags.
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   for (const char* flag : kBadFlags) {
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(flag)) {
       ShowBadFlagsInfoBar(web_contents, IDS_BAD_FLAGS_WARNING_MESSAGE, flag);
       return;
     }
   }
-#endif  // OS_ANDROID
+#endif
 
-  for (const base::Feature* feature : kBadFeatureFlagsInAboutFlags) {
-    if (base::FeatureList::IsEnabled(*feature)) {
-      ShowBadFlagsInfoBarHelper(web_contents, IDS_BAD_FEATURES_WARNING_MESSAGE,
-                                feature->name);
+#if BUILDFLAG(IS_ANDROID) && defined(OFFICIAL_BUILD)
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::CommandLine* commandLine = base::CommandLine::ForCurrentProcess();
+  bool isTestIntent = commandLine->HasSwitch("enable-test-intents");
+  if (base::android::WasFlagsLoadedFromFile(env) &&
+      !commandLine->HasSwitch(switches::kEnableAutomation) && !isTestIntent) {
+    // If the command line file was loaded, we show a snackbar warning about
+    // all the flags in the file.
+    ShowBadFlagsSnackbar(
+        web_contents,
+        l10n_util::GetStringUTF16(IDS_BAD_FLAGS_FROM_FILE_WARNING_MESSAGE));
+  }
+#endif
+
+  for (const auto& flag_or_feature : kBadFeatureFlagsInAboutFlags) {
+    std::string_view bad_flag_name = std::visit(
+        absl::Overload{[](const base::Feature* feature) -> std::string_view {
+                         if (feature &&
+                             base::FeatureList::IsEnabled(*feature)) {
+                           return feature->name;
+                         }
+                         return {};
+                       },
+                       [](const char* flag_name) -> std::string_view {
+                         if (flag_name &&
+                             base::CommandLine::ForCurrentProcess()->HasSwitch(
+                                 flag_name)) {
+                           return flag_name;
+                         }
+                         return {};
+                       }},
+        flag_or_feature);
+
+    if (!bad_flag_name.empty()) {
+#if BUILDFLAG(IS_ANDROID)
+      ShowBadFlagsSnackbar(web_contents, l10n_util::GetStringFUTF16(
+                                             IDS_BAD_FEATURES_WARNING_MESSAGE,
+                                             base::UTF8ToUTF16(bad_flag_name)));
+#else
+      ShowBadFlagsInfoBarHelper(
+          ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(),
+          web_contents, IDS_BAD_FEATURES_WARNING_MESSAGE, bad_flag_name);
+#endif
       return;
     }
   }
@@ -201,44 +364,33 @@ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
 
 void ShowBadFlagsInfoBar(content::WebContents* web_contents,
                          int message_id,
-                         const char* flag) {
+                         std::string_view flag) {
   std::string switch_value =
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(flag);
-  if (!switch_value.empty())
-    switch_value = "=" + switch_value;
-  ShowBadFlagsInfoBarHelper(web_contents, message_id,
-                            std::string("--") + flag + switch_value);
+  ShowBadFlagsInfoBarHelper(
+      ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(), web_contents,
+      message_id,
+      switch_value.empty() ? base::StrCat({"--", flag})
+                           : base::StrCat({"--", flag, "=", switch_value}));
 }
 
 void MaybeShowInvalidUserDataDirWarningDialog() {
-  const base::FilePath& user_data_dir = GetInvalidSpecifiedUserDataDir();
-  if (user_data_dir.empty())
+  const base::FilePath& user_data_dir =
+      chrome::GetInvalidSpecifiedUserDataDir();
+  if (user_data_dir.empty()) {
     return;
-
-  startup_metric_utils::SetNonBrowserUIDisplayed();
-
-  // Ensure the ResourceBundle is initialized for string resource access.
-  bool cleanup_resource_bundle = false;
-  if (!ui::ResourceBundle::HasSharedInstance()) {
-    cleanup_resource_bundle = true;
-    std::string locale = l10n_util::GetApplicationLocale(std::string());
-    const char kUserDataDirDialogFallbackLocale[] = "en-US";
-    if (locale.empty())
-      locale = kUserDataDirDialogFallbackLocale;
-    ui::ResourceBundle::InitSharedInstanceWithLocale(
-        locale, NULL, ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
   }
 
+  startup_metric_utils::GetBrowser().SetNonBrowserUIDisplayed();
+
+  // Ensure there is an instance of ResourceBundle that is initialized for
+  // localized string resource accesses.
+  ui::ScopedStartupResourceBundle startup_resource_bundle;
   const std::u16string& title =
       l10n_util::GetStringUTF16(IDS_CANT_WRITE_USER_DIRECTORY_TITLE);
   const std::u16string& message = l10n_util::GetStringFUTF16(
       IDS_CANT_WRITE_USER_DIRECTORY_SUMMARY, user_data_dir.LossyDisplayName());
 
-  if (cleanup_resource_bundle)
-    ui::ResourceBundle::CleanupSharedInstance();
-
   // More complex dialogs cannot be shown before the earliest calls here.
-  ShowWarningMessageBox(NULL, title, message);
+  chrome::ShowWarningMessageBoxAsync(gfx::NativeWindow(), title, message);
 }
-
-}  // namespace chrome

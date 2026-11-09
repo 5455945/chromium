@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CONTENT_PUBLIC_BROWSER_SMS_FETCHER_H_
 
 #include <string>
+#include <vector>
 
 #include "base/observer_list_types.h"
 #include "content/common/content_export.h"
@@ -30,19 +31,20 @@ enum class SmsFetchFailureType {
 
   // The underlying API is not available
   kBackendNotAvailable = 6,
-  kMaxValue = kBackendNotAvailable,
-};
 
-// TODO(yigu): Do not use anonymous namespace in header.
-namespace {
-using OriginList = std::vector<url::Origin>;
-}  // namespace
+  // Failure type when using WebOTP on desktop
+  kCrossDeviceFailure = 7,
+
+  kMaxValue = kCrossDeviceFailure,
+};
 
 // SmsFetcher coordinates between the provisioning of SMSes coming from the
 // local device or remote devices to multiple origins.
 // There is one SmsFetcher per profile.
 class SmsFetcher {
  public:
+  using OriginList = std::vector<url::Origin>;
+
   // Indicates whether the subscriber needs to obtain its own user consent or
   // not.
   enum class UserConsent {
@@ -77,18 +79,18 @@ class SmsFetcher {
   // have telephony capabilities and exclusively listen for SMSes received
   // on other devices.
   virtual void Subscribe(const OriginList& origin_list,
-                         Subscriber* subscriber) = 0;
+                         Subscriber& subscriber) = 0;
   // Subscribes to incoming SMSes from SmsProvider for telephony
   // devices that can receive SMSes locally and can show a permission prompt.
   // TODO(yigu): This API is used in content/ only. We should move it to the
-  // SmsFetcherImpl per guideline. https://crbug.com/1136062.
+  // SmsFetcherImpl per guideline. https://crbug.com/40152118.
   virtual void Subscribe(const OriginList& origin_list,
-                         Subscriber* subscriber,
-                         RenderFrameHost* render_frame_host) = 0;
+                         Subscriber& subscriber,
+                         RenderFrameHost& render_frame_host) = 0;
   virtual void Unsubscribe(const OriginList& origin_list,
                            Subscriber* subscriber) = 0;
   // TODO(yigu): This API is used in content/ only. We should move it to the
-  // SmsFetcherImpl per guideline. https://crbug.com/1136062.
+  // SmsFetcherImpl per guideline. https://crbug.com/40152118.
   virtual bool HasSubscribers() = 0;
 };
 

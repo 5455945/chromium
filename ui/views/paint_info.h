@@ -1,10 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_PAINT_INFO_H_
 #define UI_VIEWS_PAINT_INFO_H_
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/compositor/paint_context.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/views_export.h"
@@ -44,8 +46,7 @@ class VIEWS_EXPORT PaintInfo {
                                         const gfx::Rect& bounds,
                                         const gfx::Size& parent_size,
                                         ScaleType scale_type,
-                                        bool is_layer,
-                                        bool needs_paint = false);
+                                        bool is_layer);
 
   PaintInfo(const PaintInfo& other);
   ~PaintInfo();
@@ -90,8 +91,7 @@ class VIEWS_EXPORT PaintInfo {
             const gfx::Rect& bounds,
             const gfx::Size& parent_size,
             ScaleType scale_type,
-            bool is_layer,
-            bool needs_paint = false);
+            bool is_layer);
 
   // Scales the |child_bounds| to its recording bounds based on the
   // |context.device_scale_factor()|. The recording bounds are snapped to the
@@ -117,11 +117,7 @@ class VIEWS_EXPORT PaintInfo {
 
   // Compositor PaintContext associated with the view this object belongs to.
   ui::PaintContext context_;
-  const ui::PaintContext* root_context_;
-
-  // True if the individual View has been marked invalid for paint (i.e.
-  // SchedulePaint() was invoked on the View).
-  bool needs_paint_ = false;
+  raw_ptr<const ui::PaintContext> root_context_;
 };
 
 }  // namespace views

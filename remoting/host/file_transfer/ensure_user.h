@@ -1,9 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_HOST_FILE_TRANSFER_ENSURE_USER_H_
 #define REMOTING_HOST_FILE_TRANSFER_ENSURE_USER_H_
+
+#include <variant>
 
 #include "remoting/protocol/file_transfer_helpers.h"
 
@@ -17,7 +19,10 @@ namespace remoting {
 // user is on the log-in screen, an error of type NOT_LOGGED_IN will be
 // returned. If something else goes wrong, the error type will be
 // UNEXPECTED_ERROR.
-protocol::FileTransferResult<Monostate> EnsureUserContext();
+protocol::FileTransferResult<std::monostate> EnsureUserContext();
+
+// Makes `EnsureUserContext` always return success, for use during unittests.
+void DisableUserContextCheckForTesting();
 
 }  // namespace remoting
 

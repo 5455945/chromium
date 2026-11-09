@@ -1,42 +1,55 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TRACING_PERFETTO_PLATFORM_H_
 #define BASE_TRACING_PERFETTO_PLATFORM_H_
 
-#include "third_party/perfetto/include/perfetto/tracing/platform.h"
-
 #include "base/base_export.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/threading/thread_id_name_manager.h"
+#include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
+#include "base/process/process_handle.h"
 #include "base/threading/thread_local_storage.h"
+#include "third_party/perfetto/include/perfetto/base/thread_utils.h"
+#include "third_party/perfetto/include/perfetto/tracing/platform.h"
 
 namespace base {
-class DeferredSequencedTaskRunner;
 
 namespace tracing {
 
-class BASE_EXPORT PerfettoPlatform : public perfetto::Platform,
-                                     ThreadIdNameManager::Observer {
+class PerfettoTaskRunner;
+
+class BASE_EXPORT PerfettoPlatform : public perfetto::Platform {
  public:
-  // Specifies the type of task runner used by Perfetto.
-  // TODO(skyostil): Move all scenarios to use the default task runner to
-  // avoid problems with unexpected re-entrancy and IPC deadlocks.
-  enum class TaskRunnerType {
-    // Use Perfetto's own task runner which runs tasks on a dedicated (internal)
-    // thread.
-    kBuiltin,
-    // Use base::ThreadPool.
-    kThreadPool,
+  struct Options final {
+    // The prefix to return in GetCurrentProcessName(). This makes it possible
+    // to customize the Perfetto "producer name", which can then be used as
+    // a filter in the Perfetto trace config (see
+    // TraceConfig.DataSource.producer_name_filter).
+    std::string process_name_prefix = "org.chromium-";
+
+    // Defer delayed tasks to PerfettoTaskRunner until task runner resets after
+    // sandbox entry.
+    bool defer_delayed_tasks = false;
+
+    // The real process ID of the current process (useful when in a PID
+    // namespace).
+    base::ProcessId real_process_id = base::kNullProcessId;
+
+    // Work around https://bugs.llvm.org/show_bug.cgi?id=36684
+    static Options Default() { return {}; }
   };
 
-  explicit PerfettoPlatform(TaskRunnerType = TaskRunnerType::kThreadPool);
-  ~PerfettoPlatform() override;
+  // Creates the process-wide instance of the PerfettoPlatform.
+  static PerfettoPlatform& MaybeCreateInstance(
+      scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr,
+      Options options = Options::Default());
 
-  SequencedTaskRunner* task_runner() const;
-  bool did_start_task_runner() const { return did_start_task_runner_; }
-  void StartTaskRunner(scoped_refptr<SequencedTaskRunner>);
+  // Returns the process-wide instance of the PerfettoPlatform.
+  static PerfettoPlatform& Get();
+
+  ~PerfettoPlatform() override;
 
   // perfetto::Platform implementation:
   ThreadLocalObject* GetOrCreateThreadLocalObject() override;
@@ -44,13 +57,29 @@ class BASE_EXPORT PerfettoPlatform : public perfetto::Platform,
       const CreateTaskRunnerArgs&) override;
   std::string GetCurrentProcessName() override;
 
-  // ThreadIdNameManager::Observer implementation.
-  void OnThreadNameChanged(const char* name) override;
+  // Chrome uses different thread IDs than Perfetto on Mac. So we need to
+  // override this method to keep Perfetto tracks consistent with Chrome
+  // thread IDs.
+  perfetto::base::PlatformThreadId GetCurrentThreadId() override;
+
+  scoped_refptr<base::SequencedTaskRunner> task_runner() const;
+
+  void ResetTaskRunner(scoped_refptr<base::SequencedTaskRunner> task_runner);
+
+  void SetupForTesting(scoped_refptr<base::SequencedTaskRunner> task_runner);
 
  private:
-  const TaskRunnerType task_runner_type_;
-  scoped_refptr<DeferredSequencedTaskRunner> deferred_task_runner_;
-  bool did_start_task_runner_ = false;
+  friend class base::NoDestructor<PerfettoPlatform>;
+
+  explicit PerfettoPlatform(
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
+      Options options = Options::Default());
+
+  const std::string process_name_prefix_;
+  const bool defer_delayed_tasks_;
+  const base::ProcessId real_process_id_;
+  WeakPtr<PerfettoTaskRunner> perfetto_task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
   ThreadLocalStorage::Slot thread_local_object_;
 };
 

@@ -1,12 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PASSWORD_MANAGER_CONTENT_BROWSER_PASSWORD_MANAGER_LOG_ROUTER_FACTORY_H_
 #define COMPONENTS_PASSWORD_MANAGER_CONTENT_BROWSER_PASSWORD_MANAGER_LOG_ROUTER_FACTORY_H_
 
-#include "base/macros.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 
 namespace autofill {
@@ -31,17 +30,20 @@ class PasswordManagerLogRouterFactory
 
   static PasswordManagerLogRouterFactory* GetInstance();
 
+  PasswordManagerLogRouterFactory(const PasswordManagerLogRouterFactory&) =
+      delete;
+  PasswordManagerLogRouterFactory& operator=(
+      const PasswordManagerLogRouterFactory&) = delete;
+
  private:
-  friend struct base::DefaultSingletonTraits<PasswordManagerLogRouterFactory>;
+  friend base::NoDestructor<PasswordManagerLogRouterFactory>;
 
   PasswordManagerLogRouterFactory();
   ~PasswordManagerLogRouterFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(PasswordManagerLogRouterFactory);
 };
 
 }  // namespace password_manager

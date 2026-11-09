@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 #define CONTENT_BROWSER_BLUETOOTH_BLUETOOTH_BLOCKLIST_H_
 
 #include <map>
+#include <string_view>
 #include <vector>
 
-#include "base/lazy_instance.h"
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/no_destructor.h"
 #include "content/common/content_export.h"
+#include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
 
@@ -35,6 +35,14 @@ class CONTENT_EXPORT BluetoothBlocklist final {
     EXCLUDE_WRITES  // Excluded from write operations.
   };
 
+  using DataPrefix = std::vector<blink::mojom::WebBluetoothDataFilterPtr>;
+  using BlocklistedManufacturerDataMap =
+      std::map<device::BluetoothDevice::ManufacturerId,
+               std::vector<DataPrefix>>;
+
+  BluetoothBlocklist(const BluetoothBlocklist&) = delete;
+  BluetoothBlocklist& operator=(const BluetoothBlocklist&) = delete;
+
   ~BluetoothBlocklist();
 
   // Returns a singleton instance of the blocklist.
@@ -57,10 +65,30 @@ class CONTENT_EXPORT BluetoothBlocklist final {
   //
   // Malformed pairs in the string are ignored, including invalid UUID or
   // exclusion values. Duplicate UUIDs follow Add()'s merging rule.
-  void Add(base::StringPiece blocklist_string);
+  void Add(std::string_view blocklist_string);
+
+  // Adds a manufacturer data prefix to |blocklisted_manufacturer_data_prefix_|
+  // so that any manufacturer data in the device's advertisement matched
+  // |prefix| will be excluded from device's advertisements.
+  void Add(const device::BluetoothDevice::ManufacturerId& company_identifier,
+           const std::vector<blink::mojom::WebBluetoothDataFilter>& prefix);
 
   // Returns if a UUID is excluded from all operations. UUID must be valid.
   bool IsExcluded(const device::BluetoothUUID&) const;
+
+  // Returns if the filter of |company_identifier| and |data_filter| pair
+  // is a strict subset of any blocked records in
+  // |blocklisted_manufacturer_data_prefix_| hence should be excluded.
+  bool IsExcluded(
+      const blink::mojom::WebBluetoothCompanyPtr& company_identifier,
+      const std::vector<blink::mojom::WebBluetoothDataFilterPtr>& data_filter)
+      const;
+
+  // Return if the |company_identifier| and |manufacturer_data| should be
+  // excluded according to |blocklisted_manufacturer_data_prefix_|
+  bool IsExcluded(
+      const device::BluetoothDevice::ManufacturerId& company_identifier,
+      const device::BluetoothDevice::ManufacturerData& manufacturer_data) const;
 
   // Returns if any UUID in a set of filters is excluded from all operations.
   // UUID must be valid.
@@ -84,8 +112,8 @@ class CONTENT_EXPORT BluetoothBlocklist final {
   void ResetToDefaultValuesForTest();
 
  private:
-  // friend LazyInstance to permit access to private constructor.
-  friend base::LazyInstanceTraitsBase<BluetoothBlocklist>;
+  // friend NoDestructor to permit access to private constructor.
+  friend class base::NoDestructor<BluetoothBlocklist>;
 
   BluetoothBlocklist();
 
@@ -98,7 +126,7 @@ class CONTENT_EXPORT BluetoothBlocklist final {
   // Map of UUID to blocklisted value.
   std::map<device::BluetoothUUID, Value> blocklisted_uuids_;
 
-  DISALLOW_COPY_AND_ASSIGN(BluetoothBlocklist);
+  BlocklistedManufacturerDataMap blocklisted_manufacturer_data_prefix_;
 };
 
 }  // namespace content

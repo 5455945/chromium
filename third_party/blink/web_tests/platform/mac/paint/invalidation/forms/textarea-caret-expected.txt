@@ -1,55 +1,60 @@
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF",
       "invalidations": [
-        [8, 8, 181, 36]
+        [7, 7, 183, 38]
       ]
     },
     {
-      "name": "LayoutNGTextControlMultiLine TEXTAREA id='editor'",
-      "position": [-2, -2],
-      "bounds": [185, 40],
-      "backgroundColor": "#FFFFFF",
+      "name": "LayoutTextControlMultiLine (inline) TEXTAREA id='editor'",
+      "position": [1, 1],
+      "bounds": [179, 19],
+      "drawsContent": false,
+      "transform": 1
+    },
+    {
+      "name": "Scroll corner of LayoutTextControlMultiLine (inline) TEXTAREA id='editor'",
+      "position": [150, 5],
+      "bounds": [30, 30],
       "invalidations": [
-        [0, 0, 185, 40]
+        [0, 0, 30, 30]
       ],
       "transform": 1
     },
     {
-      "name": "ContentsLayer for Horizontal Scrollbar Layer",
+      "name": "HorizontalScrollbar",
       "position": [1, 20],
       "bounds": [164, 15],
+      "contentsOpaque": true,
       "transform": 1
     },
     {
-      "name": "Scroll Corner Layer",
-      "position": [165, 20],
-      "bounds": [15, 15],
-      "invalidations": [
-        [0, 0, 15, 15]
-      ],
-      "transform": 1
-    },
-    {
-      "name": "Scrolling Contents Layer",
+      "name": "LayoutTextControlMultiLine (inline) TEXTAREA id='editor'",
       "position": [1, 1],
-      "bounds": [470, 19],
+      "bounds": [472, 19],
       "backgroundColor": "#FFFFFF",
       "invalidations": [
-        [0, 0, 470, 19]
+        [0, 0, 472, 19]
       ],
       "transform": 2
     },
     {
-      "name": "Decoration Layer",
-      "position": [-2, -2],
-      "bounds": [185, 40],
+      "name": "Caret",
+      "position": [471, 3],
+      "bounds": [1, 15],
+      "contentsOpaque": true,
+      "transform": 2
+    },
+    {
+      "name": "LayoutTextControlMultiLine (inline) TEXTAREA id='editor'",
+      "position": [-1, -1],
+      "bounds": [183, 38],
       "invalidations": [
-        [0, 0, 185, 40]
+        [0, 0, 183, 38]
       ],
       "transform": 1
     }
@@ -71,7 +76,7 @@
         [1, 0, 0, 0],
         [0, 1, 0, 0],
         [0, 0, 1, 0],
-        [-291, 0, 0, 1]
+        [-293, 0, 0, 1]
       ]
     }
   ]

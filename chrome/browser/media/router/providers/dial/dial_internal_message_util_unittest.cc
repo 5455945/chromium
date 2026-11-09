@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "chrome/browser/media/router/discovery/dial/dial_app_discovery_service.h"
 #include "chrome/browser/media/router/providers/dial/dial_activity_manager.h"
 #include "chrome/browser/media/router/test/provider_test_helpers.h"
+#include "components/media_router/common/test/test_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -18,12 +19,12 @@ class DialInternalMessageUtilTest : public ::testing::Test {
  public:
   DialInternalMessageUtilTest()
       : launch_info_("YouTube",
-                     absl::nullopt,
+                     std::nullopt,
                      "152127444812943594",
                      GURL("http://172.17.32.151/app/YouTube")),
         util_("hash-token") {
-    MediaSink sink("dial:<29a400068c051073801508058128105d>", "Lab Roku",
-                   SinkIconType::GENERIC);
+    MediaSink sink{
+        CreateDialSink("dial:<29a400068c051073801508058128105d>", "Lab Roku")};
     DialSinkExtraData extra_data;
     extra_data.ip_address = net::IPAddress(172, 17, 32, 151);
     sink_ = MediaSinkInternal(sink, extra_data);
@@ -31,11 +32,12 @@ class DialInternalMessageUtilTest : public ::testing::Test {
 
   void ExpectMessagesEqual(const std::string& expected_message,
                            const std::string& message) {
-    auto expected_message_value =
-        base::JSONReader::ReadDeprecated(expected_message);
+    auto expected_message_value = base::JSONReader::Read(
+        expected_message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(expected_message_value);
 
-    auto message_value = base::JSONReader::ReadDeprecated(message);
+    auto message_value =
+        base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(message_value);
 
     EXPECT_EQ(*expected_message_value, *message_value);
@@ -123,7 +125,7 @@ TEST_F(DialInternalMessageUtilTest, CreateReceiverActionCastMessage) {
           "friendlyName":"Lab Roku",
           "ipAddress":"172.17.32.151",
           "isActiveInput":null,
-          "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+          "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
           "receiverType":"dial",
           "volume":null
         }
@@ -151,7 +153,7 @@ TEST_F(DialInternalMessageUtilTest, CreateReceiverActionStopMessage) {
           "friendlyName":"Lab Roku",
           "ipAddress":"172.17.32.151",
           "isActiveInput":null,
-          "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+          "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
           "receiverType":"dial",
           "volume":null
         }
@@ -183,7 +185,7 @@ TEST_F(DialInternalMessageUtilTest, CreateNewSessionMessage) {
         "friendlyName":"Lab Roku",
         "ipAddress":"172.17.32.151",
         "isActiveInput":null,
-        "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+        "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
         "receiverType":"dial",
         "volume":null
       },
@@ -216,7 +218,7 @@ TEST_F(DialInternalMessageUtilTest, CreateCustomDialLaunchMessage) {
         "friendlyName":"Lab Roku",
         "ipAddress":"172.17.32.151",
         "isActiveInput":null,
-        "label":"vgK6BDL84IzefOLUvy2OcgFPhoo",
+        "label":"0Y-QXIPsivL2EPhAp0YlSe2oHJYWau34NlD7c2ENeQk",
         "receiverType":"dial",
         "volume":null
       },

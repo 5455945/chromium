@@ -1,10 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/bluetooth_low_energy/bluetooth_low_energy_notify_session.h"
 
 #include "base/lazy_instance.h"
+#include "extensions/browser/extensions_browser_client.h"
 
 namespace extensions {
 
@@ -19,6 +20,18 @@ ApiResourceManager<BluetoothLowEnergyNotifySession>::GetFactoryInstance() {
   return g_factory.Pointer();
 }
 
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<
+    BluetoothLowEnergyNotifySession>>::ServiceIsCreatedWithBrowserContext()
+    const {
+  if (ExtensionsBrowserClient::Get() &&
+      ExtensionsBrowserClient::Get()
+          ->IsLazyChromeOSResourceKeyedServiceInstantiationEnabled()) {
+    return false;
+  }
+  return true;
+}
+
 BluetoothLowEnergyNotifySession::BluetoothLowEnergyNotifySession(
     bool persistent,
     const std::string& owner_extension_id,
@@ -27,7 +40,7 @@ BluetoothLowEnergyNotifySession::BluetoothLowEnergyNotifySession(
       persistent_(persistent),
       session_(session.release()) {}
 
-BluetoothLowEnergyNotifySession::~BluetoothLowEnergyNotifySession() {}
+BluetoothLowEnergyNotifySession::~BluetoothLowEnergyNotifySession() = default;
 
 device::BluetoothGattNotifySession*
 BluetoothLowEnergyNotifySession::GetSession() const {

@@ -1,11 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cma/backend/proxy/media_pipeline_buffer_extension.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/time/time.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/public/media/decoder_config.h"
 #include "chromecast/public/media/media_pipeline_device_params.h"
@@ -49,7 +50,7 @@ MediaPipelineBufferExtension::MediaPipelineBufferExtension(
     : AudioDecoderPipelineNode(delegated_decoder),
       task_runner_(task_runner),
       weak_factory_(this) {
-  DCHECK(task_runner_);
+  CHECK(task_runner_, base::NotFatalUntil::M163);
 }
 
 MediaPipelineBufferExtension::MediaPipelineBufferExtension(
@@ -83,8 +84,9 @@ int64_t MediaPipelineBufferExtension::GetBufferDuration() const {
     return 0;
   }
 
-  DCHECK_GE(last_buffer_pts_, 0);
-  DCHECK_GE(most_recent_buffer_pts_, last_buffer_pts_);
+  CHECK_GE(last_buffer_pts_, 0, base::NotFatalUntil::M163);
+  CHECK_GE(most_recent_buffer_pts_, last_buffer_pts_,
+           base::NotFatalUntil::M163);
 
   return most_recent_buffer_pts_ - last_buffer_pts_;
 }
@@ -102,7 +104,7 @@ void MediaPipelineBufferExtension::OnPushBufferComplete(BufferStatus status) {
   // If the buffer was full and the call failed, inform the caller via callback
   // per method contract.
   if (status == BufferStatus::kBufferFailed && IsBufferFull()) {
-    DCHECK(!IsBufferEmpty());
+    CHECK(!IsBufferEmpty(), base::NotFatalUntil::M163);
     AudioDecoderPipelineNode::OnPushBufferComplete(status);
     return;
   }
@@ -126,7 +128,8 @@ bool MediaPipelineBufferExtension::TryPushToDecoder() {
   PendingCommand& next_command = command_queue_.front();
 
   // Only one of the config or buffer may be set.
-  DCHECK_NE(next_command.buffer.has_value(), next_command.config.has_value());
+  CHECK_NE(next_command.buffer.has_value(), next_command.config.has_value(),
+           base::NotFatalUntil::M163);
 
   // If the next command in the queue can be processed, do. Else, return true.
   if (next_command.buffer.has_value() &&

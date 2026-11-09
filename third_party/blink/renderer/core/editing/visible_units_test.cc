@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/core/dom/text.h"
+#include "third_party/blink/renderer/core/editing/ephemeral_range.h"
+#include "third_party/blink/renderer/core/editing/position_units.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
@@ -16,7 +18,7 @@
 namespace blink {
 namespace visible_units_test {
 
-PositionWithAffinity PositionWithAffinityInDOMTree(
+PositionWithAffinity PositionWithAffinityInDomTree(
     Node& anchor,
     int offset,
     TextAffinity affinity = TextAffinity::kDownstream) {
@@ -24,7 +26,7 @@ PositionWithAffinity PositionWithAffinityInDOMTree(
                               affinity);
 }
 
-VisiblePosition CreateVisiblePositionInDOMTree(
+VisiblePosition CreateVisiblePositionInDomTree(
     Node& anchor,
     int offset,
     TextAffinity affinity = TextAffinity::kDownstream) {
@@ -51,14 +53,14 @@ class VisibleUnitsTest : public EditingTestBase {
   std::string TestSnapBackward(
       const std::string& selection_text,
       EditingBoundaryCrossingRule rule = kCannotCrossEditingBoundary) {
-    const Position position = SetSelectionTextToBody(selection_text).Base();
+    const Position position = SetCaretTextToBody(selection_text);
     return GetCaretTextFromBody(MostBackwardCaretPosition(position, rule));
   }
 
   std::string TestSnapForward(
       const std::string& selection_text,
       EditingBoundaryCrossingRule rule = kCannotCrossEditingBoundary) {
-    const Position position = SetSelectionTextToBody(selection_text).Base();
+    const Position position = SetCaretTextToBody(selection_text);
     return GetCaretTextFromBody(MostForwardCaretPosition(position, rule));
   }
 };
@@ -67,7 +69,7 @@ TEST_F(VisibleUnitsTest, caretMinOffset) {
   const char* body_content = "<p id=one>one</p>";
   SetBodyContent(body_content);
 
-  Element* one = GetDocument().getElementById("one");
+  Element* one = GetElementById("one");
 
   EXPECT_EQ(0, CaretMinOffset(one->firstChild()));
 }
@@ -77,7 +79,7 @@ TEST_F(VisibleUnitsTest, caretMinOffsetWithFirstLetter) {
       "<style>#one:first-letter { font-size: 200%; }</style><p id=one>one</p>";
   SetBodyContent(body_content);
 
-  Element* one = GetDocument().getElementById("one");
+  Element* one = GetElementById("one");
 
   EXPECT_EQ(0, CaretMinOffset(one->firstChild()));
 }
@@ -93,16 +95,16 @@ TEST_F(VisibleUnitsTest, characterAfter) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
 
   EXPECT_EQ(
-      0, CharacterAfter(CreateVisiblePositionInDOMTree(*one->firstChild(), 1)));
+      0, CharacterAfter(CreateVisiblePositionInDomTree(*one->firstChild(), 1)));
   EXPECT_EQ('5', CharacterAfter(
                      CreateVisiblePositionInFlatTree(*one->firstChild(), 1)));
 
   EXPECT_EQ('1', CharacterAfter(
-                     CreateVisiblePositionInDOMTree(*two->firstChild(), 2)));
+                     CreateVisiblePositionInDomTree(*two->firstChild(), 2)));
   EXPECT_EQ('1', CharacterAfter(
                      CreateVisiblePositionInFlatTree(*two->firstChild(), 2)));
 }
@@ -133,10 +135,10 @@ TEST_F(VisibleUnitsTest, canonicalPositionOfWithHTMLHtmlElement) {
       "contenteditable=false>333</span></html>";
   SetBodyContent(body_content);
 
-  Node* one = GetDocument().QuerySelector("#one");
-  Node* two = GetDocument().QuerySelector("#two");
-  Node* three = GetDocument().QuerySelector("#three");
-  Node* four = GetDocument().QuerySelector("#four");
+  Node* one = QuerySelector("#one");
+  Node* two = QuerySelector("#two");
+  Node* three = QuerySelector("#three");
+  Node* four = QuerySelector("#four");
   Element* html = GetDocument().CreateRawElement(html_names::kHTMLTag);
   // Move two, three and four into second html element.
   html->AppendChild(two);
@@ -171,7 +173,7 @@ TEST_F(VisibleUnitsTest, canonicalPositionOfWithHTMLHtmlElement) {
 // For http://crbug.com/695317
 TEST_F(VisibleUnitsTest, canonicalPositionOfWithInputElement) {
   SetBodyContent("<input>123");
-  Element* const input = GetDocument().QuerySelector("input");
+  Element* const input = QuerySelector("input");
 
   EXPECT_EQ(Position::BeforeNode(*input),
             CanonicalPositionOf(Position::FirstPositionInNode(
@@ -180,6 +182,37 @@ TEST_F(VisibleUnitsTest, canonicalPositionOfWithInputElement) {
   EXPECT_EQ(PositionInFlatTree::BeforeNode(*input),
             CanonicalPositionOf(PositionInFlatTree::FirstPositionInNode(
                 *GetDocument().documentElement())));
+}
+
+// http://crbug.com/1116214
+TEST_F(VisibleUnitsTest, canonicalPositionOfWithCrossBlockFlowlement) {
+  const char* body_content =
+      "<div id=one>line1<span>X</span><div>line2</div></div>"
+      "<div id=two>line3"
+      "<span style='user-select: none'>X</span><div>line4</div></div>"
+      "<div id=three>line5"
+      "<span style='user-select: none'>X</span>333<div>line6</div></div>";
+  SetBodyContent(body_content);
+
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* const one = QuerySelector("#one");
+  Element* const two = QuerySelector("#two");
+  Element* const three = QuerySelector("#three");
+  Element* const one_span = one->QuerySelector(AtomicString("span"));
+  Element* const two_span = two->QuerySelector(AtomicString("span"));
+  Element* const three_span = three->QuerySelector(AtomicString("span"));
+  Position one_text_pos(one_span->firstChild(), 1);
+  Position two_text_pos(two_span->firstChild(), 1);
+  Position three_text_pos(three_span->firstChild(), 1);
+
+  EXPECT_EQ(one_text_pos, CanonicalPositionOf(one_text_pos));
+
+  EXPECT_EQ(Position::LastPositionInNode(*two->firstChild()),
+            CanonicalPositionOf(two_text_pos));
+
+  EXPECT_EQ(Position(*three->lastChild()->previousSibling(), 0),
+            CanonicalPositionOf(three_text_pos));
 }
 
 TEST_F(VisibleUnitsTest, characterBefore) {
@@ -192,20 +225,20 @@ TEST_F(VisibleUnitsTest, characterBefore) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
 
-  EXPECT_EQ('2', CharacterBefore(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_EQ('2', CharacterBefore(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_EQ('2', CharacterBefore(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInFlatTree(*one, 1)));
 
-  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDOMTree(*two, 0)));
+  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDomTree(*two, 0)));
   EXPECT_EQ('4', CharacterBefore(CreateVisiblePositionInFlatTree(*two, 0)));
 
-  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDOMTree(*five, 0)));
+  EXPECT_EQ(0, CharacterBefore(CreateVisiblePositionInDomTree(*five, 0)));
   EXPECT_EQ('1', CharacterBefore(CreateVisiblePositionInFlatTree(*five, 0)));
 }
 
@@ -218,11 +251,11 @@ TEST_F(VisibleUnitsTest, endOfDocument) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
 
   EXPECT_EQ(Position(two->firstChild(), 2),
-            EndOfDocument(CreateVisiblePositionInDOMTree(*one->firstChild(), 0))
+            EndOfDocument(CreateVisiblePositionInDomTree(*one->firstChild(), 0))
                 .DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one->firstChild(), 1),
@@ -230,7 +263,7 @@ TEST_F(VisibleUnitsTest, endOfDocument) {
           .DeepEquivalent());
 
   EXPECT_EQ(Position(two->firstChild(), 2),
-            EndOfDocument(CreateVisiblePositionInDOMTree(*two->firstChild(), 1))
+            EndOfDocument(CreateVisiblePositionInDomTree(*two->firstChild(), 1))
                 .DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one->firstChild(), 1),
@@ -240,7 +273,7 @@ TEST_F(VisibleUnitsTest, endOfDocument) {
 
 TEST_F(VisibleUnitsTest,
        AdjustForwardPositionToAvoidCrossingEditingBoundariesNestedEditable) {
-  const SelectionInDOMTree& selection = SetSelectionTextToBody(
+  const SelectionInDomTree& selection = SetSelectionTextToBody(
       "<div contenteditable>"
       "abc"
       "<span contenteditable=\"false\">A^BC</span>"
@@ -248,7 +281,7 @@ TEST_F(VisibleUnitsTest,
       "</div>");
   const PositionWithAffinity& result =
       AdjustForwardPositionToAvoidCrossingEditingBoundaries(
-          PositionWithAffinity(selection.Extent()), selection.Base());
+          PositionWithAffinity(selection.Focus()), selection.Anchor());
   ASSERT_TRUE(result.IsNotNull());
   EXPECT_EQ(
       "<div contenteditable>"
@@ -269,16 +302,16 @@ TEST_F(VisibleUnitsTest, isEndOfEditableOrNonEditableContent) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
 
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*one->firstChild(), 1)));
+      CreateVisiblePositionInDomTree(*one->firstChild(), 1)));
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*one->firstChild(), 1)));
 
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*two->firstChild(), 2)));
+      CreateVisiblePositionInDomTree(*two->firstChild(), 2)));
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*two->firstChild(), 2)));
 }
@@ -287,22 +320,22 @@ TEST_F(VisibleUnitsTest, isEndOfEditableOrNonEditableContentWithInput) {
   const char* body_content = "<input id=sample value=ab>cde";
   SetBodyContent(body_content);
 
-  Node* text = ToTextControl(GetDocument().getElementById("sample"))
+  Node* text = ToTextControl(GetElementById("sample"))
                    ->InnerEditorElement()
                    ->firstChild();
 
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*text, 0)));
+      CreateVisiblePositionInDomTree(*text, 0)));
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*text, 0)));
 
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*text, 1)));
+      CreateVisiblePositionInDomTree(*text, 1)));
   EXPECT_FALSE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*text, 1)));
 
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
-      CreateVisiblePositionInDOMTree(*text, 2)));
+      CreateVisiblePositionInDomTree(*text, 2)));
   EXPECT_TRUE(IsEndOfEditableOrNonEditableContent(
       CreateVisiblePositionInFlatTree(*text, 2)));
 }
@@ -315,10 +348,10 @@ TEST_F(VisibleUnitsTest, IsVisuallyEquivalentCandidateWithHTMLHtmlElement) {
       "contenteditable=false>333</span></html>";
   SetBodyContent(body_content);
 
-  Node* one = GetDocument().QuerySelector("#one");
-  Node* two = GetDocument().QuerySelector("#two");
-  Node* three = GetDocument().QuerySelector("#three");
-  Node* four = GetDocument().QuerySelector("#four");
+  Node* one = QuerySelector("#one");
+  Node* two = QuerySelector("#two");
+  Node* three = QuerySelector("#three");
+  Node* four = QuerySelector("#four");
   Element* html = GetDocument().CreateRawElement(html_names::kHTMLTag);
   // Move two, three and four into second html element.
   html->AppendChild(two);
@@ -352,10 +385,10 @@ TEST_F(VisibleUnitsTest, isVisuallyEquivalentCandidateWithHTMLBodyElement) {
       "contenteditable=false>333</span>";
   SetBodyContent(body_content);
 
-  Node* one = GetDocument().QuerySelector("#one");
-  Node* two = GetDocument().QuerySelector("#two");
-  Node* three = GetDocument().QuerySelector("#three");
-  Node* four = GetDocument().QuerySelector("#four");
+  Node* one = QuerySelector("#one");
+  Node* two = QuerySelector("#two");
+  Node* three = QuerySelector("#three");
+  Node* four = QuerySelector("#four");
   Element* body = GetDocument().CreateRawElement(html_names::kBodyTag);
   Element* empty_body = GetDocument().CreateRawElement(html_names::kBodyTag);
   Element* div = GetDocument().CreateRawElement(html_names::kDivTag);
@@ -404,7 +437,7 @@ TEST_F(VisibleUnitsTest, mostBackwardCaretPositionAfterAnchor) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
 
   EXPECT_EQ(Position::LastPositionInNode(*host),
             MostForwardCaretPosition(Position::AfterNode(*host)));
@@ -413,12 +446,12 @@ TEST_F(VisibleUnitsTest, mostBackwardCaretPositionAfterAnchor) {
 }
 
 TEST_F(VisibleUnitsTest, mostBackwardCaretPositionFirstLetter) {
-  // Note: first-letter pseudo element contains letter and punctuations.
+  // Note: first-letter pseudo-element contains letter and punctuations.
   const char* body_content =
       "<style>p:first-letter {color:red;}</style><p id=sample> (2)45 </p>";
   SetBodyContent(body_content);
 
-  Node* sample = GetDocument().getElementById("sample")->firstChild();
+  Node* sample = GetElementById("sample")->firstChild();
 
   EXPECT_EQ(Position(sample->parentNode(), 0),
             MostBackwardCaretPosition(Position(sample, 0)));
@@ -454,7 +487,7 @@ TEST_F(VisibleUnitsTest, mostBackwardCaretPositionFirstLetterSplit) {
       "<style>p:first-letter {color:red;}</style><p id=sample>abc</p>";
   SetBodyContent(body_content);
 
-  Node* sample = GetDocument().getElementById("sample");
+  Node* sample = GetElementById("sample");
   Node* first_letter = sample->firstChild();
   // Split "abc" into "a" "bc"
   auto* remaining = To<Text>(first_letter)->splitText(1, ASSERT_NO_EXCEPTION);
@@ -484,8 +517,8 @@ TEST_F(VisibleUnitsTest, mostForwardCaretPositionAfterAnchor) {
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* host = GetDocument().getElementById("host");
-  Element* three = shadow_root->getElementById("three");
+  Element* host = GetElementById("host");
+  Element* three = shadow_root->getElementById(AtomicString("three"));
 
   EXPECT_EQ(Position::AfterNode(*host),
             MostBackwardCaretPosition(Position::AfterNode(*host)));
@@ -493,13 +526,37 @@ TEST_F(VisibleUnitsTest, mostForwardCaretPositionAfterAnchor) {
             MostBackwardCaretPosition(PositionInFlatTree::AfterNode(*host)));
 }
 
+// http://crbug.com/1348816
+TEST_F(VisibleUnitsTest, MostBackwardCaretPositionBeforeSvg) {
+  EXPECT_EQ(
+      "<div>A<svg><foreignObject height=\"10\" width=\"20\">| "
+      "Z</foreignObject></svg></div>",
+      TestSnapBackward("<div>A<svg><foreignObject height=10 width=20> "
+                       "|Z</foreignObject></svg></div>"));
+}
+
+// http://crbug.com/1348816
+TEST_F(VisibleUnitsTest, MostForwardCaretPositionBeforeSvg) {
+  EXPECT_EQ(
+      "<div>A|<svg><foreignObject height=\"10\" width=\"20\"> "
+      "Z</foreignObject></svg></div>",
+      TestSnapForward("<div>A|<svg><foreignObject height=10 width=20> "
+                      "Z</foreignObject></svg></div>"));
+
+  EXPECT_EQ(
+      "<div>A<svg><foreignObject height=\"10\" width=\"20\"> "
+      "|Z</foreignObject></svg></div>",
+      TestSnapForward("<div>A<svg><foreignObject height=10 width=20>| "
+                      "Z</foreignObject></svg></div>"));
+}
+
 TEST_F(VisibleUnitsTest, mostForwardCaretPositionFirstLetter) {
-  // Note: first-letter pseudo element contains letter and punctuations.
+  // Note: first-letter pseudo-element contains letter and punctuations.
   const char* body_content =
       "<style>p:first-letter {color:red;}</style><p id=sample> (2)45 </p>";
   SetBodyContent(body_content);
 
-  Node* sample = GetDocument().getElementById("sample")->firstChild();
+  Node* sample = GetElementById("sample")->firstChild();
 
   EXPECT_EQ(Position(GetDocument().body(), 0),
             MostForwardCaretPosition(
@@ -531,12 +588,12 @@ TEST_F(VisibleUnitsTest, nextPositionOf) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Element* zero = GetDocument().getElementById("zero");
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
-  Element* three = GetDocument().getElementById("three");
-  Element* four = shadow_root->getElementById("four");
-  Element* five = shadow_root->getElementById("five");
+  Element* zero = GetElementById("zero");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
+  Element* three = GetElementById("three");
+  Element* four = shadow_root->getElementById(AtomicString("four"));
+  Element* five = shadow_root->getElementById(AtomicString("five"));
 
   EXPECT_EQ(Position(two->firstChild(), 2),
             NextPositionOf(CreateVisiblePosition(Position(zero, 1)))
@@ -571,10 +628,10 @@ TEST_F(VisibleUnitsTest, nextPositionOf) {
 
 TEST_F(VisibleUnitsTest, nextPositionOfTable) {
   SetBodyContent("<table id='table'></table>");
-  Element* table = GetDocument().getElementById("table");
+  Element* table = GetElementById("table");
   // Couldn't include the <br> in the HTML above since the parser would have
   // messed up the structure in the DOM.
-  table->setInnerHTML("<br>", ASSERT_NO_EXCEPTION);
+  table->SetInnerHTMLWithoutTrustedTypes("<br>");
   UpdateAllLifecyclePhasesForTest();
 
   Position position(table, 0);
@@ -596,12 +653,12 @@ TEST_F(VisibleUnitsTest, previousPositionOf) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* zero = GetDocument().getElementById("zero")->firstChild();
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = shadow_root->getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
+  Node* zero = GetElementById("zero")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = shadow_root->getElementById(AtomicString("four"))->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
 
   EXPECT_EQ(Position(zero, 0),
             PreviousPositionOf(CreateVisiblePosition(Position(zero, 1)))
@@ -669,7 +726,7 @@ TEST_F(VisibleUnitsTest, previousPositionOfOneCharPerLine) {
       "<div id=sample style='font-size: 500px'>A&#x714a;&#xfa67;</div>";
   SetBodyContent(body_content);
 
-  Node* sample = GetDocument().getElementById("sample")->firstChild();
+  Node* sample = GetElementById("sample")->firstChild();
 
   // In case of each line has one character, VisiblePosition are:
   // [C,Dn]   [C,Up]  [B, Dn]   [B, Up]
@@ -692,8 +749,7 @@ TEST_F(VisibleUnitsTest, previousPositionOfNoPreviousPosition) {
       " "  // This whitespace causes no previous position.
       "<div id='anchor'> bar</div>"
       "</span>");
-  const Position position(GetDocument().getElementById("anchor")->firstChild(),
-                          1);
+  const Position position(GetElementById("anchor")->firstChild(), 1);
   EXPECT_EQ(
       Position(),
       PreviousPositionOf(CreateVisiblePosition(position)).DeepEquivalent());
@@ -702,7 +758,7 @@ TEST_F(VisibleUnitsTest, previousPositionOfNoPreviousPosition) {
 TEST_F(VisibleUnitsTest, rendersInDifferentPositionAfterAnchor) {
   const char* body_content = "<p id='sample'>00</p>";
   SetBodyContent(body_content);
-  Element* sample = GetDocument().getElementById("sample");
+  Element* sample = GetElementById("sample");
 
   EXPECT_FALSE(RendersInDifferentPosition(Position(), Position()));
   EXPECT_FALSE(
@@ -719,8 +775,8 @@ TEST_F(VisibleUnitsTest, rendersInDifferentPositionAfterAnchorWithHidden) {
       "<p><span id=one>11</span><span id=two style='display:none'>  "
       "</span></p>";
   SetBodyContent(body_content);
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
 
   EXPECT_TRUE(RendersInDifferentPosition(Position::LastPositionInNode(*one),
                                          Position(two, 0)))
@@ -732,8 +788,8 @@ TEST_F(VisibleUnitsTest,
   const char* body_content =
       "<p><span id=one>11</span><span id=two>  </span></p>";
   SetBodyContent(body_content);
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
 
   EXPECT_FALSE(RendersInDifferentPosition(Position::LastPositionInNode(*one),
                                           Position(two, 0)));
@@ -747,8 +803,8 @@ TEST_F(VisibleUnitsTest, renderedOffset) {
       "<div contenteditable><span id='sample1'>1</span><span "
       "id='sample2'>22</span></div>";
   SetBodyContent(body_content);
-  Element* sample1 = GetDocument().getElementById("sample1");
-  Element* sample2 = GetDocument().getElementById("sample2");
+  Element* sample1 = GetElementById("sample1");
+  Element* sample2 = GetElementById("sample2");
 
   EXPECT_FALSE(
       RendersInDifferentPosition(Position::AfterNode(*sample1->firstChild()),
@@ -767,8 +823,8 @@ TEST_F(VisibleUnitsTest, startOfDocument) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
 
   EXPECT_EQ(Position(one, 0),
             CreateVisiblePosition(StartOfDocument(Position(*one, 0)))
@@ -792,7 +848,7 @@ TEST_F(VisibleUnitsTest,
       "<button> </button><script>document.designMode = 'on'</script>";
   SetBodyContent(body_content);
 
-  Node* button = GetDocument().QuerySelector("button");
+  Node* button = QuerySelector("button");
   EXPECT_TRUE(EndsOfNodeAreVisuallyDistinctPositions(button));
 }
 
@@ -803,7 +859,7 @@ TEST_F(VisibleUnitsTest,
       "<button><rt><script>document.designMode = 'on'</script></rt></button>";
   SetBodyContent(body_content);
 
-  Node* button = GetDocument().QuerySelector("button");
+  Node* button = QuerySelector("button");
   EXPECT_TRUE(EndsOfNodeAreVisuallyDistinctPositions(button));
 }
 
@@ -812,7 +868,7 @@ TEST_F(VisibleUnitsTest,
        canonicalizationWithCollapsedSpaceAndIsolatedCombiningCharacter) {
   SetBodyContent("<p>  &#x20E3;</p>");  // Leading space is necessary
 
-  Node* paragraph = GetDocument().QuerySelector("p");
+  Node* paragraph = QuerySelector("p");
   Node* text = paragraph->firstChild();
   Position start = CanonicalPositionOf(Position::BeforeNode(*paragraph));
   EXPECT_EQ(Position(text, 2), start);
@@ -822,14 +878,14 @@ TEST_F(VisibleUnitsTest, MostForwardCaretPositionWithInvisibleFirstLetter) {
   InsertStyleElement("div::first-letter{visibility:hidden}");
   // Use special syntax to set input position DIV@0
   const Position position = SetCaretTextToBody("<div><!--|-->foo</div>");
-  const Node* foo = GetDocument().QuerySelector("div")->firstChild();
+  const Node* foo = QuerySelector("div")->firstChild();
   EXPECT_EQ(Position(foo, 1), MostForwardCaretPosition(position));
 }
 
 // Regression test for crbug.com/1172091
 TEST_F(VisibleUnitsTest, MostBackwardOrForwardCaretPositionWithBrInOptgroup) {
   SetBodyContent("<optgroup><br></optgroup>");
-  Node* br = GetDocument().QuerySelector("br");
+  Node* br = QuerySelector("br");
   const Position& before = Position::BeforeNode(*br);
   EXPECT_EQ(before, MostBackwardCaretPosition(before));
   EXPECT_EQ(before, MostForwardCaretPosition(before));
@@ -842,47 +898,246 @@ TEST_F(VisibleUnitsTest, MostBackwardOrForwardCaretPositionWithBrInOptgroup) {
 TEST_F(VisibleUnitsTest, SnapBackwardWithZeroWidthSpace) {
   // Note: We should skip <wbr> otherwise caret stops before/after <wbr>.
 
-  EXPECT_EQ(u8"<p>ab|<wbr></p>", TestSnapBackward(u8"<p>ab<wbr>|</p>"));
-  EXPECT_EQ(u8"<p>ab\u200B|</p>", TestSnapBackward(u8"<p>ab\u200B|</p>"));
-  EXPECT_EQ(u8"<p>ab<!-- -->\u200B|</p>",
-            TestSnapBackward(u8"<p>ab<!-- -->\u200B|</p>"));
+  EXPECT_EQ("<p>ab|<wbr></p>", TestSnapBackward("<p>ab<wbr>|</p>"));
+  EXPECT_EQ("<p>ab\u200B|</p>", TestSnapBackward("<p>ab\u200B|</p>"));
+  EXPECT_EQ("<p>ab<!-- -->\u200B|</p>",
+            TestSnapBackward("<p>ab<!-- -->\u200B|</p>"));
 
-  EXPECT_EQ(u8"<p>ab|<wbr><wbr></p>",
-            TestSnapBackward(u8"<p>ab<wbr><wbr>|</p>"));
-  EXPECT_EQ(u8"<p>ab\u200B\u200B|</p>",
-            TestSnapBackward(u8"<p>ab\u200B\u200B|</p>"));
+  EXPECT_EQ("<p>ab|<wbr><wbr></p>", TestSnapBackward("<p>ab<wbr><wbr>|</p>"));
+  EXPECT_EQ("<p>ab\u200B\u200B|</p>",
+            TestSnapBackward("<p>ab\u200B\u200B|</p>"));
 
-  EXPECT_EQ(u8"<p>ab|<wbr>cd</p>", TestSnapBackward(u8"<p>ab<wbr>|cd</p>"));
-  EXPECT_EQ(u8"<p>ab\u200B|cd</p>", TestSnapBackward(u8"<p>ab\u200B|cd</p>"));
+  EXPECT_EQ("<p>ab|<wbr>cd</p>", TestSnapBackward("<p>ab<wbr>|cd</p>"));
+  EXPECT_EQ("<p>ab\u200B|cd</p>", TestSnapBackward("<p>ab\u200B|cd</p>"));
 
-  EXPECT_EQ(u8"<p>ab|<wbr><wbr>cd</p>",
-            TestSnapBackward(u8"<p>ab<wbr><wbr>|cd</p>"));
-  EXPECT_EQ(u8"<p>ab\u200B\u200B|cd</p>",
-            TestSnapBackward(u8"<p>ab\u200B\u200B|cd</p>"));
+  EXPECT_EQ("<p>ab|<wbr><wbr>cd</p>",
+            TestSnapBackward("<p>ab<wbr><wbr>|cd</p>"));
+  EXPECT_EQ("<p>ab\u200B\u200B|cd</p>",
+            TestSnapBackward("<p>ab\u200B\u200B|cd</p>"));
+}
+TEST_F(VisibleUnitsTest, SnapForwardWithImg) {
+  SetBodyContent("<img>");
+  const auto& body = *GetDocument().body();
+  const auto& img = *QuerySelector("img");
+
+  EXPECT_EQ(Position::BeforeNode(img),
+            MostForwardCaretPosition(Position::FirstPositionInNode(body)));
+  EXPECT_EQ(Position::BeforeNode(img),
+            MostForwardCaretPosition(Position(body, 0)));
+  EXPECT_EQ(Position::BeforeNode(img),
+            MostForwardCaretPosition(Position::BeforeNode(img)));
+  EXPECT_EQ(Position::BeforeNode(img),
+            MostForwardCaretPosition(Position(img, 0)));
+  EXPECT_EQ(Position::AfterNode(img),
+            MostForwardCaretPosition(Position::LastPositionInNode(img)));
+  EXPECT_EQ(Position::AfterNode(img),
+            MostForwardCaretPosition(Position::AfterNode(img)));
+}
+
+TEST_F(VisibleUnitsTest, SnapForwardWithInput) {
+  SetBodyContent("<input>");
+  const auto& body = *GetDocument().body();
+  const auto& input = *QuerySelector("input");
+
+  EXPECT_EQ(Position::BeforeNode(input),
+            MostForwardCaretPosition(Position::FirstPositionInNode(body)));
+  EXPECT_EQ(Position::BeforeNode(input),
+            MostForwardCaretPosition(Position(body, 0)));
+  EXPECT_EQ(Position::BeforeNode(input),
+            MostForwardCaretPosition(Position::BeforeNode(input)));
+  EXPECT_EQ(Position::BeforeNode(input),
+            MostForwardCaretPosition(Position::FirstPositionInNode(input)));
+  EXPECT_EQ(Position::BeforeNode(input),
+            MostForwardCaretPosition(Position(input, 0)));
+  EXPECT_EQ(Position::AfterNode(input),
+            MostForwardCaretPosition(Position::LastPositionInNode(input)));
+  EXPECT_EQ(Position::AfterNode(input),
+            MostForwardCaretPosition(Position::AfterNode(input)));
+}
+
+TEST_F(VisibleUnitsTest, SnapForwardWithSelect) {
+  SetBodyContent(
+      "<select><option>1</option><option>2</option><option>3</option></"
+      "select>");
+  const auto& body = *GetDocument().body();
+  const auto& select = *QuerySelector("select");
+
+  EXPECT_EQ(Position::BeforeNode(select),
+            MostForwardCaretPosition(Position(body, 0)));
+  EXPECT_EQ(Position::BeforeNode(select),
+            MostForwardCaretPosition(Position::FirstPositionInNode(body)));
+  EXPECT_EQ(Position::BeforeNode(select),
+            MostForwardCaretPosition(Position::BeforeNode(select)));
+  EXPECT_EQ(Position::BeforeNode(select),
+            MostForwardCaretPosition(Position::FirstPositionInNode(select)));
+  EXPECT_EQ(Position::BeforeNode(select),
+            MostForwardCaretPosition(Position(select, 0)));
+
+  // The internal version of `MostForwardCaretPosition()` is called with
+  // `PositionInFlatTree(slot, 1)` and it scans at end of `<select>` then
+  // returns `PositionInFlatTree(slot, 1)` and converts to
+  // `Position(select, 1)`.
+  EXPECT_EQ(Position(select, 1), MostForwardCaretPosition(Position(select, 1)));
+  EXPECT_EQ(Position(select, 2), MostForwardCaretPosition(Position(select, 2)));
+  EXPECT_EQ(Position::AfterNode(select),
+            MostForwardCaretPosition(Position(select, 3)));
+  EXPECT_EQ(Position::AfterNode(select),
+            MostForwardCaretPosition(Position::LastPositionInNode(select)));
+  EXPECT_EQ(Position::AfterNode(select),
+            MostForwardCaretPosition(Position::AfterNode(select)));
+
+  // Flat tree is
+  //  <select>
+  //    <div>""</div>
+  //    <slot><option>1</option><option>2</option></slot>
+  //  </select>
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(PositionInFlatTree(body, 0)));
+  EXPECT_EQ(
+      PositionInFlatTree::BeforeNode(select),
+      MostForwardCaretPosition(PositionInFlatTree::FirstPositionInNode(body)));
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(PositionInFlatTree::BeforeNode(select)));
+
+  // Note: `PositionIterator::DeprecatedComputePosition()` returns
+  // `BeforeNode(<select>)` for <select>@n where n is 0 to 3, because
+  // `EditingIgnoresContent(<select>)` is true.
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(
+                PositionInFlatTree::FirstPositionInNode(select)));
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(PositionInFlatTree(select, 0)));
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(PositionInFlatTree(select, 1)));
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(PositionInFlatTree(select, 2)));
+  EXPECT_EQ(PositionInFlatTree::BeforeNode(select),
+            MostForwardCaretPosition(PositionInFlatTree(select, 3)));
+  EXPECT_EQ(PositionInFlatTree::AfterNode(select),
+            MostForwardCaretPosition(PositionInFlatTree(select, 4)));
+
+  EXPECT_EQ(
+      PositionInFlatTree::AfterNode(select),
+      MostForwardCaretPosition(PositionInFlatTree::LastPositionInNode(select)));
+  EXPECT_EQ(PositionInFlatTree::AfterNode(select),
+            MostForwardCaretPosition(PositionInFlatTree::AfterNode(select)));
+}
+
+// From ReplaceSelectionCommandTest.TableAndImages)
+TEST_F(VisibleUnitsTest, SnapForwardWithTableAndImages) {
+  SetBodyContent("<table> <tbody></tbody> </table>");
+  const auto& table = *QuerySelector("table");
+  const auto& body = *GetDocument().body();
+  auto& tbody = *QuerySelector("tbody");
+  auto& img1 = *GetDocument().CreateRawElement(html_names::kImgTag);
+  tbody.AppendChild(&img1);
+  auto& img2 = *GetDocument().CreateRawElement(html_names::kImgTag);
+  tbody.AppendChild(&img2);
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(Position(body, 0), MostForwardCaretPosition(Position(body, 0)));
+  EXPECT_EQ(Position(body, 0),
+            MostForwardCaretPosition(Position::FirstPositionInNode(body)));
+  EXPECT_EQ(Position(table, 0),
+            MostForwardCaretPosition(Position::BeforeNode(table)));
+  EXPECT_EQ(Position(table, 0),
+            MostForwardCaretPosition(Position::FirstPositionInNode(table)));
+  EXPECT_EQ(Position(table, 0), MostForwardCaretPosition(Position(table, 0)));
+  EXPECT_EQ(Position(table, 1), MostForwardCaretPosition(Position(table, 1)));
+  EXPECT_EQ(Position::BeforeNode(img1),
+            MostForwardCaretPosition(Position::BeforeNode(tbody)));
+  EXPECT_EQ(Position::BeforeNode(img1),
+            MostForwardCaretPosition(Position(tbody, 0)));
+  EXPECT_EQ(Position::BeforeNode(img1),
+            MostForwardCaretPosition(Position::FirstPositionInNode(tbody)));
+  EXPECT_EQ(Position::BeforeNode(img2),
+            MostForwardCaretPosition(Position(tbody, 1)));
+  EXPECT_EQ(Position::LastPositionInNode(tbody),
+            MostForwardCaretPosition(Position(tbody, 2)));
+  EXPECT_EQ(Position::LastPositionInNode(tbody),
+            MostForwardCaretPosition(Position::LastPositionInNode(tbody)));
+  EXPECT_EQ(Position::LastPositionInNode(tbody),
+            MostForwardCaretPosition(Position::AfterNode(tbody)));
+  EXPECT_EQ(Position(table, 2), MostForwardCaretPosition(Position(table, 2)));
+  EXPECT_EQ(Position::LastPositionInNode(table),
+            MostForwardCaretPosition(Position(table, 3)));
+  EXPECT_EQ(Position::LastPositionInNode(table),
+            MostForwardCaretPosition(Position::LastPositionInNode(table)));
+  EXPECT_EQ(Position::LastPositionInNode(table),
+            MostForwardCaretPosition(Position::AfterNode(table)));
 }
 
 // http://crbug.com/1134470
 TEST_F(VisibleUnitsTest, SnapForwardWithZeroWidthSpace) {
   // Note: We should skip <wbr> otherwise caret stops before/after <wbr>.
 
-  EXPECT_EQ(u8"<p>ab<wbr></p>", TestSnapForward(u8"<p>ab|<wbr></p>"))
+  EXPECT_EQ("<p>ab<wbr></p>", TestSnapForward("<p>ab|<wbr></p>"))
       << "We get <wbr>@0";
-  EXPECT_EQ(u8"<p>ab|\u200B</p>", TestSnapForward(u8"<p>ab|\u200B</p>"));
-  EXPECT_EQ(u8"<p>ab<!-- -->|\u200B</p>",
-            TestSnapForward(u8"<p>ab<!-- -->|\u200B</p>"));
+  EXPECT_EQ("<p>ab|\u200B</p>", TestSnapForward("<p>ab|\u200B</p>"));
+  EXPECT_EQ("<p>ab<!-- -->|\u200B</p>",
+            TestSnapForward("<p>ab<!-- -->|\u200B</p>"));
 
-  EXPECT_EQ(u8"<p>ab<wbr><wbr></p>", TestSnapForward(u8"<p>ab|<wbr><wbr></p>"))
+  EXPECT_EQ("<p>ab<wbr><wbr></p>", TestSnapForward("<p>ab|<wbr><wbr></p>"))
       << "We get <wbr>@0";
-  EXPECT_EQ(u8"<p>ab|\u200B\u200B</p>",
-            TestSnapForward(u8"<p>ab|\u200B\u200B</p>"));
+  EXPECT_EQ("<p>ab|\u200B\u200B</p>",
+            TestSnapForward("<p>ab|\u200B\u200B</p>"));
 
-  EXPECT_EQ(u8"<p>ab<wbr>|cd</p>", TestSnapForward(u8"<p>ab|<wbr>cd</p>"));
-  EXPECT_EQ(u8"<p>ab|\u200Bcd</p>", TestSnapForward(u8"<p>ab|\u200Bcd</p>"));
+  EXPECT_EQ("<p>ab<wbr>|cd</p>", TestSnapForward("<p>ab|<wbr>cd</p>"));
+  EXPECT_EQ("<p>ab|\u200Bcd</p>", TestSnapForward("<p>ab|\u200Bcd</p>"));
 
-  EXPECT_EQ(u8"<p>ab<wbr><wbr>|cd</p>",
-            TestSnapForward(u8"<p>ab|<wbr><wbr>cd</p>"));
-  EXPECT_EQ(u8"<p>ab|\u200B\u200Bcd</p>",
-            TestSnapForward(u8"<p>ab|\u200B\u200Bcd</p>"));
+  EXPECT_EQ("<p>ab<wbr><wbr>|cd</p>",
+            TestSnapForward("<p>ab|<wbr><wbr>cd</p>"));
+  EXPECT_EQ("<p>ab|\u200B\u200Bcd</p>",
+            TestSnapForward("<p>ab|\u200B\u200Bcd</p>"));
+}
+
+TEST_F(VisibleUnitsTest, FirstRectForRangeHorizontal) {
+  LoadAhem();
+  InsertStyleElement("div { font:20px/20px Ahem;}");
+  const SelectionInDomTree selection =
+      SetSelectionTextToBody("<div>^abcdef|</div>");
+  const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
+  EXPECT_EQ(gfx::Rect(8, 8, 120, 20), rect);
+}
+
+TEST_F(VisibleUnitsTest, FirstRectForRangeHorizontalWrap) {
+  LoadAhem();
+  InsertStyleElement("div { font:20px/20px Ahem; inline-size:60px;}");
+  const SelectionInDomTree selection =
+      SetSelectionTextToBody("<div>^abc def|</div>");
+  const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
+  EXPECT_EQ(gfx::Rect(8, 8, 59, 20), rect);
+}
+
+TEST_F(VisibleUnitsTest, FirstRectForRangeVertical) {
+  LoadAhem();
+  InsertStyleElement("div { writing-mode:vertical-rl; font:20px/20px Ahem;}");
+  const SelectionInDomTree selection =
+      SetSelectionTextToBody("<div>^abcdef|</div>");
+  const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
+  EXPECT_EQ(gfx::Rect(8, 8, 20, 119), rect);
+}
+
+TEST_F(VisibleUnitsTest, FirstRectForRangeVerticalWrap) {
+  LoadAhem();
+  InsertStyleElement(
+      "div { writing-mode:vertical-rl; font:20px/20px Ahem; "
+      "inline-size:60px;}");
+  const SelectionInDomTree selection =
+      SetSelectionTextToBody("<div>^abc def|</div>");
+  const gfx::Rect rect = FirstRectForRange(selection.ComputeRange());
+  EXPECT_EQ(gfx::Rect(28, 8, 20, 59), rect);
+}
+
+// crbug.com/402791086
+TEST_F(VisibleUnitsTest, ComputeTextRect) {
+  LoadAhem();
+  InsertStyleElement("div { font:10px Ahem; white-space:pre}");
+  const gfx::Rect rect = ComputeTextRect(
+      SetSelectionTextToBody("<div>^start<br>end|</div>").ComputeRange());
+  const gfx::Rect reference = ComputeTextRect(
+      SetSelectionTextToBody("<div>^start\nend|</div>").ComputeRange());
+  EXPECT_EQ(reference, rect);
 }
 
 }  // namespace visible_units_test

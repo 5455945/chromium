@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,51 @@
 
 #include <utility>
 
-#include "base/debug/dump_without_crashing.h"
+#include "base/check_is_test.h"
+#include "base/debug/crash_logging.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/memory/ref_counted.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "components/content_settings/core/common/features.h"
 #include "content/browser/background_sync/background_sync_scheduler.h"
 #include "content/browser/browsing_data/browsing_data_remover_impl.h"
+#include "content/browser/btm/btm_service_impl.h"
 #include "content/browser/download/download_manager_impl.h"
 #include "content/browser/permissions/permission_controller_impl.h"
+#include "content/browser/preloading/prefetch/prefetch_service.h"
+#include "content/browser/renderer_host/initiator_navigation_state_impl.h"
+#include "content/browser/renderer_host/navigation_state_keep_alive.h"
+#include "content/browser/renderer_host/navigation_transitions/navigation_entry_screenshot_cache.h"
+#include "content/browser/renderer_host/navigation_transitions/navigation_entry_screenshot_manager.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/speech/tts_controller_impl.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/browser/storage_partition_impl_map.h"
+#include "content/browser/webid/in_memory_federated_permission_context.h"
+#include "content/common/content_navigation_policy.h"
+#include "content/public/browser/back_forward_transition_animation_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
-#include "media/learning/common/media_learning_tasks.h"
-#include "media/learning/impl/learning_session_impl.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/shared_worker_service.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
+#include "media/capabilities/webrtc_video_stats_db_impl.h"
 #include "media/mojo/services/video_decode_perf_history.h"
+#include "media/mojo/services/webrtc_video_perf_history.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_ANDROID)
+#include "content/browser/renderer_host/navigation_transitions/navigation_transition_config.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
 #include "storage/browser/file_system/external_mount_points.h"
 #endif
 
@@ -30,50 +58,80 @@ namespace content {
 
 namespace {
 
-void ShutdownServiceWorkerContext(StoragePartition* partition) {
-  ServiceWorkerContextWrapper* wrapper =
-      static_cast<ServiceWorkerContextWrapper*>(
-          partition->GetServiceWorkerContext());
-  wrapper->process_manager()->Shutdown();
+void NotifyContextWillBeDestroyed(StoragePartition* partition) {
+  static_cast<StoragePartitionImpl*>(partition)
+      ->OnBrowserContextWillBeDestroyed();
 }
 
-void ShutdownSharedWorkerContext(StoragePartition* partition) {
-  partition->GetSharedWorkerService()->Shutdown();
-}
-
-void RegisterMediaLearningTask(
-    media::learning::LearningSessionImpl* learning_session,
-    const media::learning::LearningTask& task) {
-  // The RegisterTask method cannot be directly used in base::Bind, because it
-  // provides a default argument value for the 2nd parameter
-  // (`feature_provider`).
-  learning_session->RegisterTask(task);
-}
+// Kill switch that controls whether to cancel navigations as part of
+// BrowserContext shutdown. See https://crbug.com/40274462.
+BASE_FEATURE(kCancelNavigationsDuringBrowserContextShutdown,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace
 
-BrowserContext::Impl::Impl(BrowserContext* self) : self_(self) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  background_sync_scheduler_ = base::MakeRefCounted<BackgroundSyncScheduler>();
+// static
+BrowserContextImpl* BrowserContextImpl::From(BrowserContext* self) {
+  return self->impl();
 }
 
-BrowserContext::Impl::~Impl() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void BrowserContextImpl::MaybeCleanupBtm() {
+  base::ScopedClosureRunner quit_runner(btm_cleanup_loop_.QuitClosure());
+  // Don't attempt to delete the database if the BTM feature is enabled; we need
+  // it.
+  if (base::FeatureList::IsEnabled(features::kBtm)) {
+    return;
+  }
+
+  // Don't attempt to delete the database if this browser context should never
+  // have BTM enabled. (This is important for embedders like ChromeOS, which
+  // have internal non-user-facing browser contexts. We don't want to touch
+  // them.)
+  if (!GetContentClient()->browser()->ShouldEnableBtm(self_)) {
+    return;
+  }
+
+  // Don't attempt to delete the database if this browser context doesn't write
+  // to disk. (This is important for embedders like Chrome, which can make OTR
+  // browser contexts share the same data directory as a non-OTR context.)
+  if (self_->IsOffTheRecord()) {
+    return;
+  }
+
+  BtmStorage::DeleteDatabaseFiles(GetBtmFilePath(self_), quit_runner.Release());
+}
+
+void BrowserContextImpl::WaitForBtmCleanupForTesting() {
+  btm_cleanup_loop_.Run();
+}
+
+BrowserContextImpl::BrowserContextImpl(BrowserContext* self) : self_(self) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+
+  background_sync_scheduler_ = base::MakeRefCounted<BackgroundSyncScheduler>();
+
+  // Run MaybeCleanupBtm() very soon. We can't call it right now because it
+  // calls a virtual function (BrowserContext::IsOffTheRecord()), which causes
+  // undefined behavior since we're called by the BrowserContext constructor
+  // and the method is not implemented by that class.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&BrowserContextImpl::MaybeCleanupBtm,
+                                weak_factory_.GetWeakPtr()));
+}
+
+BrowserContextImpl::~BrowserContextImpl() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   DCHECK(!storage_partition_map_)
       << "StoragePartitionMap is not shut down properly";
 
   if (!will_be_destroyed_soon_) {
     NOTREACHED();
-    base::debug::DumpWithoutCrashing();
   }
 
   // Verify that there are no outstanding RenderProcessHosts that reference
   // this context. Trigger a crash report if there are still references so
   // we can detect/diagnose potential UAFs.
   std::string rph_crash_key_value;
-  ChildProcessSecurityPolicyImpl* policy =
-      ChildProcessSecurityPolicyImpl::GetInstance();
   for (RenderProcessHost::iterator host_iterator =
            RenderProcessHost::AllHostsIterator();
        !host_iterator.IsAtEnd(); host_iterator.Advance()) {
@@ -85,51 +143,50 @@ BrowserContext::Impl::~Impl() {
     }
   }
   if (!rph_crash_key_value.empty()) {
-    NOTREACHED() << "rph_with_bc_reference : " << rph_crash_key_value;
-
     SCOPED_CRASH_KEY_STRING256("BrowserContext", "dangling_rph",
                                rph_crash_key_value);
-    base::debug::DumpWithoutCrashing();
+    DUMP_WILL_BE_NOTREACHED()
+        << "rph_with_bc_reference : " << rph_crash_key_value;
   }
 
-  // Clean up any isolated origins and other security state associated with this
-  // BrowserContext.
-  policy->RemoveStateForBrowserContext(*self_);
-
-  if (download_manager_)
+  if (download_manager_) {
     download_manager_->Shutdown();
+  }
 
   TtsControllerImpl::GetInstance()->OnBrowserContextDestroyed(self_);
 
-  TRACE_EVENT_NESTABLE_ASYNC_END1(
-      "shutdown", "BrowserContext::Impl::NotifyWillBeDestroyed() called.", this,
-      "browser_context_impl", static_cast<void*>(this));
+  // Corresponds to the TRACE_EVENT_BEGIN in NotifyWillBeDestroyed.
+  TRACE_EVENT_END("shutdown", perfetto::Track::FromPointer(this),
+                  "browser_context_impl", static_cast<void*>(this));
 }
 
-bool BrowserContext::Impl::ShutdownStarted() {
+bool BrowserContextImpl::ShutdownStarted() {
   return will_be_destroyed_soon_;
 }
 
-void BrowserContext::Impl::NotifyWillBeDestroyed() {
-  TRACE_EVENT1("shutdown", "BrowserContext::Impl::NotifyWillBeDestroyed",
+void BrowserContextImpl::NotifyWillBeDestroyed() {
+  TRACE_EVENT1("shutdown", "BrowserContextImpl::NotifyWillBeDestroyed",
                "browser_context_impl", static_cast<void*>(this));
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(
-      "shutdown", "BrowserContext::Impl::NotifyWillBeDestroyed() called.", this,
-      "browser_context_impl", static_cast<void*>(this));
+  TRACE_EVENT_BEGIN("shutdown",
+                    "BrowserContextImpl::NotifyWillBeDestroyed() called.",
+                    perfetto::Track::FromPointer(this), "browser_context_impl",
+                    static_cast<void*>(this));
   // Make sure NotifyWillBeDestroyed is idempotent.  This helps facilitate the
   // pattern where NotifyWillBeDestroyed is called from *both*
   // ShellBrowserContext and its derived classes (e.g. WebTestBrowserContext).
-  if (will_be_destroyed_soon_)
+  if (will_be_destroyed_soon_) {
     return;
+  }
   will_be_destroyed_soon_ = true;
 
-  // Shut down service worker and shared worker machinery because these can keep
-  // RenderProcessHosts and SiteInstances alive, and the codebase assumes these
-  // are destroyed before the BrowserContext is destroyed.
-  self_->ForEachStoragePartition(
-      base::BindRepeating(ShutdownServiceWorkerContext));
-  self_->ForEachStoragePartition(
-      base::BindRepeating(ShutdownSharedWorkerContext));
+  self_->ForEachLoadedStoragePartition(&NotifyContextWillBeDestroyed);
+
+  // Cancel navigations that are happening in the BrowserContext that's going
+  // away.
+  if (base::FeatureList::IsEnabled(
+          kCancelNavigationsDuringBrowserContextShutdown)) {
+    RenderFrameHostImpl::CancelAllNavigationsForBrowserContextShutdown(self_);
+  }
 
   // Also forcibly release keep alive refcounts on RenderProcessHosts, to ensure
   // they destruct before the BrowserContext does.
@@ -139,23 +196,32 @@ void BrowserContext::Impl::NotifyWillBeDestroyed() {
     RenderProcessHost* host = host_iterator.GetCurrentValue();
     if (host->GetBrowserContext() == self_) {
       // This will also clean up spare RPH references.
-      host->DisableKeepAliveRefCount();
+      host->DisableRefCounts();
     }
+  }
+
+  // Clean up any isolated origins and other security state associated with this
+  // BrowserContext.
+  ChildProcessSecurityPolicyImpl::GetInstance()->RemoveStateForBrowserContext(
+      *self_);
+
+  if (permission_controller_) {
+    permission_controller_->Shutdown();
   }
 }
 
-StoragePartitionImplMap*
-BrowserContext::Impl::GetOrCreateStoragePartitionMap() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+StoragePartitionImplMap* BrowserContextImpl::GetOrCreateStoragePartitionMap() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
-  if (!storage_partition_map_)
+  if (!storage_partition_map_) {
     storage_partition_map_ = std::make_unique<StoragePartitionImplMap>(self_);
+  }
 
   return storage_partition_map_.get();
 }
 
-BrowsingDataRemover* BrowserContext::Impl::GetBrowsingDataRemover() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+BrowsingDataRemoverImpl* BrowserContextImpl::GetBrowsingDataRemover() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!browsing_data_remover_) {
     browsing_data_remover_ = std::make_unique<BrowsingDataRemoverImpl>(self_);
@@ -166,45 +232,61 @@ BrowsingDataRemover* BrowserContext::Impl::GetBrowsingDataRemover() {
   return browsing_data_remover_.get();
 }
 
-media::learning::LearningSession* BrowserContext::Impl::GetLearningSession() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+media::VideoDecodePerfHistory* BrowserContextImpl::GetVideoDecodePerfHistory() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
-  if (!learning_session_) {
-    learning_session_ = std::make_unique<media::learning::LearningSessionImpl>(
-        base::SequencedTaskRunnerHandle::Get());
-
-    // Using base::Unretained is safe below, because the callback here will not
-    // be called or retained after the Register method below returns.
-    media::learning::MediaLearningTasks::Register(base::BindRepeating(
-        &RegisterMediaLearningTask, base::Unretained(learning_session_.get())));
-  }
-
-  return learning_session_.get();
-}
-
-media::VideoDecodePerfHistory*
-BrowserContext::Impl::GetVideoDecodePerfHistory() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  if (!video_decode_perf_history_)
+  if (!video_decode_perf_history_) {
     video_decode_perf_history_ = self_->CreateVideoDecodePerfHistory();
+  }
 
   return video_decode_perf_history_.get();
 }
 
-void BrowserContext::Impl::ShutdownStoragePartitions() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+std::unique_ptr<media::WebrtcVideoPerfHistory>
+BrowserContextImpl::CreateWebrtcVideoPerfHistory() {
+  // TODO(crbug.com/40172952): Implement in memory path in
+  // off_the_record_profile_impl.cc and web_engine_browser_context.cc
+
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  auto* db_provider =
+      self_->GetDefaultStoragePartition()->GetProtoDatabaseProvider();
+
+  std::unique_ptr<media::WebrtcVideoStatsDB> stats_db =
+      media::WebrtcVideoStatsDBImpl::Create(
+          self_->GetPath().Append(FILE_PATH_LITERAL("WebrtcVideoStats")),
+          db_provider);
+
+  return std::make_unique<media::WebrtcVideoPerfHistory>(std::move(stats_db));
+}
+
+media::WebrtcVideoPerfHistory* BrowserContextImpl::GetWebrtcVideoPerfHistory() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+
+  if (!webrtc_video_perf_history_) {
+    webrtc_video_perf_history_ = CreateWebrtcVideoPerfHistory();
+  }
+
+  return webrtc_video_perf_history_.get();
+}
+
+void BrowserContextImpl::ShutdownStoragePartitions() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // The BackgroundSyncScheduler keeps raw pointers to partitions; clear it
   // first.
-  DCHECK(background_sync_scheduler_->HasOneRef());
+  CHECK(background_sync_scheduler_->HasOneRef(), base::NotFatalUntil::M159);
   background_sync_scheduler_.reset();
 
   storage_partition_map_.reset();
+
+  // Delete the BtmService, causing its SQLite database file to be closed. This
+  // is necessary for TestBrowserContext to be able to delete its temporary
+  // directory.
+  btm_service_.reset();
 }
 
-DownloadManager* BrowserContext::Impl::GetDownloadManager() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+DownloadManager* BrowserContextImpl::GetDownloadManager() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // Lazily populate `download_manager_`.  This is important to
   // 1) Avoid constructing DownloadManagerImpl when a test might have provided
@@ -223,40 +305,243 @@ DownloadManager* BrowserContext::Impl::GetDownloadManager() {
   return download_manager_.get();
 }
 
-void BrowserContext::Impl::SetDownloadManagerForTesting(
+void BrowserContextImpl::SetDownloadManagerForTesting(
     std::unique_ptr<DownloadManager> download_manager) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  if (download_manager_) {
+    download_manager_->Shutdown();
+  }
   download_manager_ = std::move(download_manager);
 }
 
-PermissionController* BrowserContext::Impl::GetPermissionController() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+PermissionController* BrowserContextImpl::GetPermissionController() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
-  if (!permission_controller_)
+  if (permission_controller_for_testing_) {
+    return permission_controller_for_testing_.get();
+  }
+
+  if (!permission_controller_) {
     permission_controller_ = std::make_unique<PermissionControllerImpl>(self_);
+  }
 
   return permission_controller_.get();
 }
 
-void BrowserContext::Impl::SetPermissionControllerForTesting(
+void BrowserContextImpl::SetPermissionControllerForTesting(
     std::unique_ptr<PermissionController> permission_controller) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  permission_controller_ = std::move(permission_controller);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  if (permission_controller_) {
+    permission_controller_->Shutdown();
+    permission_controller_.reset();
+  }
+  permission_controller_for_testing_ = std::move(permission_controller);
 }
 
-storage::ExternalMountPoints* BrowserContext::Impl::GetMountPoints() {
+storage::ExternalMountPoints* BrowserContextImpl::GetMountPoints() {
   // Ensure that these methods are called on the UI thread, except for
   // unittests where a UI thread might not have been created.
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
-         !BrowserThread::IsThreadInitialized(BrowserThread::UI));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
+            !BrowserThread::IsThreadInitialized(BrowserThread::UI),
+        base::NotFatalUntil::M159);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!external_mount_points_)
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!external_mount_points_) {
     external_mount_points_ = storage::ExternalMountPoints::CreateRefCounted();
+  }
   return external_mount_points_.get();
 #else
   return nullptr;
 #endif
+}
+
+PrefetchService* BrowserContextImpl::GetPrefetchService() {
+  if (!prefetch_service_) {
+    prefetch_service_ = std::make_unique<PrefetchService>(self_);
+  }
+
+  return prefetch_service_.get();
+}
+
+webid::InMemoryFederatedPermissionContext*
+BrowserContextImpl::GetFederatedPermissionContext() {
+  if (!federated_permission_context_) {
+    federated_permission_context_ =
+        std::make_unique<webid::InMemoryFederatedPermissionContext>();
+  }
+  return federated_permission_context_.get();
+}
+
+void BrowserContextImpl::ResetFederatedPermissionContext() {
+  federated_permission_context_.reset();
+}
+
+void BrowserContextImpl::SetPrefetchServiceForTesting(
+    std::unique_ptr<PrefetchService> prefetch_service) {
+  prefetch_service_ = std::move(prefetch_service);
+}
+
+#if BUILDFLAG(IS_ANDROID)
+NavigationEntryScreenshotManager*
+BrowserContextImpl::GetNavigationEntryScreenshotManager() {
+  if (!nav_entry_screenshot_manager_ &&
+      BackForwardTransitionAnimationManager::
+          ShouldAnimateBackForwardTransitions()) {
+    nav_entry_screenshot_manager_ =
+        std::make_unique<NavigationEntryScreenshotManager>();
+  }
+  return nav_entry_screenshot_manager_.get();
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+void BrowserContextImpl::WriteIntoTrace(
+    perfetto::TracedProto<TraceProto> proto) const {
+  proto->set_id(UniqueId());
+}
+
+namespace {
+bool ShouldEnableBtm(BrowserContext* browser_context) {
+  if (!base::FeatureList::IsEnabled(features::kBtm)) {
+    return false;
+  }
+
+  if (!GetContentClient()->browser()->ShouldEnableBtm(browser_context)) {
+    return false;
+  }
+
+  return true;
+}
+}  // namespace
+
+BtmServiceImpl* BrowserContextImpl::GetBtmService() {
+  if (!btm_service_) {
+    if (!ShouldEnableBtm(self_)) {
+      return nullptr;
+    }
+    btm_service_ = std::make_unique<BtmServiceImpl>(
+        base::PassKey<BrowserContextImpl>(), self_);
+    GetContentClient()->browser()->OnBtmServiceCreated(self_,
+                                                       btm_service_.get());
+  }
+
+  return btm_service_.get();
+}
+
+void BrowserContextImpl::RegisterKeepAliveHandle(
+    mojo::PendingReceiver<blink::mojom::NavigationStateKeepAliveHandle>
+        receiver,
+    std::unique_ptr<NavigationStateKeepAlive> handle) {
+  keep_alive_handles_receiver_set_.Add(std::move(handle), std::move(receiver));
+}
+
+scoped_refptr<InitiatorNavigationState>
+BrowserContextImpl::GetInitiatorNavigationState(
+    const blink::DocumentToken& initiator_document_token,
+    const blink::InitiatorStateToken& initiator_state_token) {
+  auto it = initiator_navigation_state_map_.find(
+      std::make_pair(initiator_document_token, initiator_state_token));
+  if (it == initiator_navigation_state_map_.end()) {
+    return nullptr;
+  }
+  return base::WrapRefCounted(it->second);
+}
+
+bool BrowserContextImpl::AddInitiatorNavigationStateToMap(
+    InitiatorNavigationState* initiator_navigation_state) {
+  InitiatorNavigationStateImpl* initiator_navigation_state_impl =
+      static_cast<InitiatorNavigationStateImpl*>(initiator_navigation_state);
+  auto key =
+      std::make_pair(initiator_navigation_state_impl->document_token(),
+                     initiator_navigation_state_impl->initiator_state_token());
+  auto it = initiator_navigation_state_map_.find(key);
+  if (it != initiator_navigation_state_map_.end()) {
+    // Do not override an existing InitiatorNavigationState.
+    return false;
+  }
+  initiator_navigation_state_impl->SetBrowserContext(
+      weak_factory_.GetWeakPtr());
+  initiator_navigation_state_map_.insert(
+      std::make_pair(key, initiator_navigation_state));
+  return true;
+}
+
+void BrowserContextImpl::RemoveInitiatorNavigationStateFromMap(
+    InitiatorNavigationState* initiator_navigation_state) {
+  InitiatorNavigationStateImpl* initiator_navigation_state_impl =
+      static_cast<InitiatorNavigationStateImpl*>(initiator_navigation_state);
+  auto key =
+      std::make_pair(initiator_navigation_state_impl->document_token(),
+                     initiator_navigation_state_impl->initiator_state_token());
+  auto it = initiator_navigation_state_map_.find(key);
+  if (it != initiator_navigation_state_map_.end()) {
+    CHECK(it->second == initiator_navigation_state);
+    initiator_navigation_state_map_.erase(it);
+  }
+}
+
+void BrowserContextImpl::SetSitesForEmbedderShard(
+    const base::flat_set<net::SchemefulSite>& sites) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK(CanSetSitesForEmbedderShard())
+      << "Not in a valid state to call SetSitesForEmbedderShard().";
+  CHECK(!sites.empty()) << "SetSitesForEmbedderShard() requires sites.";
+  for (const net::SchemefulSite& site : sites) {
+    // Only HTTP(S) sites are supported, since other schemes either always
+    // require a dedicated process (e.g. WebUI), or don't have sites that are
+    // computed consistently with SiteInfo (e.g. file:).
+    CHECK(!site.opaque()) << "Opaque sites can't be put in a shard.";
+    CHECK(site.GetURL().SchemeIsHTTPOrHTTPS())
+        << "Only HTTP(S) sites can be put in a shard: " << site;
+  }
+  embedder_shard_sites_ = sites;
+}
+
+bool BrowserContextImpl::CanSetSitesForEmbedderShard() const {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+  // TODO(crbug.com/576113096): Support shards with default SiteInstanceGroups,
+  // e.g. by having one default SiteInstanceGroup per shard.
+  if (ShouldUseDefaultSiteInstanceGroup()) {
+    return false;
+  }
+  // In single-process mode there is only one renderer, so content from
+  // different shards can't be kept apart.
+  if (RenderProcessHost::run_renderer_in_process()) {
+    return false;
+  }
+  // TODO(crbug.com/576113096): Support shards in the Rust implementation of
+  // ChildProcessSecurityPolicy's ProcessState, which doesn't track shards yet.
+  if (base::FeatureList::IsEnabled(
+          features::kChildProcessSecurityPolicyRustProcessState)) {
+    return false;
+  }
+  // SetSitesForEmbedderShard() may only be called once.
+  if (!embedder_shard_sites_.empty()) {
+    return false;
+  }
+  // Shards must be set before any RenderProcessHost in this BrowserContext is
+  // used, so that the shard of content never changes after it is loaded.
+  // Enforce this by checking that no process in this BrowserContext has been
+  // used yet. Unused processes (e.g. spare renderers) are allowed, since they
+  // can still be used for any shard.
+  for (RenderProcessHost::iterator it = RenderProcessHost::AllHostsIterator();
+       !it.IsAtEnd(); it.Advance()) {
+    RenderProcessHost* host = it.GetCurrentValue();
+    if (host->GetBrowserContext() == self_ && !host->IsUnused()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+SiteShard BrowserContextImpl::GetShardForSite(
+    const net::SchemefulSite& site) const {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+  return embedder_shard_sites_.contains(site) ? SiteShard::kEmbedderSites
+                                              : SiteShard::kDefault;
+}
+
+bool BrowserContextImpl::HasShards() const {
+  return !embedder_shard_sites_.empty();
 }
 
 }  // namespace content

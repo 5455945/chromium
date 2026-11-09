@@ -20,11 +20,15 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_flood_element.h"
 
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/filters/fe_flood.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
@@ -38,8 +42,10 @@ bool SVGFEFloodElement::SetFilterEffectAttribute(
 
   FEFlood* flood = static_cast<FEFlood*>(effect);
   if (attr_name == svg_names::kFloodColorAttr) {
+    // TODO(crbug.com/1308932): ComputedStyle::VisitedDependentColor to
+    // SkColor4f
     return flood->SetFloodColor(
-        style.VisitedDependentColor(GetCSSPropertyFloodColor()));
+        style.VisitedDependentColor(GetCSSPropertyFloodColor()).toSkColor4f());
   }
   if (attr_name == svg_names::kFloodOpacityAttr)
     return flood->SetFloodOpacity(style.FloodOpacity());
@@ -49,22 +55,23 @@ bool SVGFEFloodElement::SetFilterEffectAttribute(
 }
 
 FilterEffect* SVGFEFloodElement::Build(SVGFilterBuilder*, Filter* filter) {
-  const ComputedStyle* style = GetComputedStyle();
-  if (!style)
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFEFloodElement);
+  const LayoutObject* layout_object = GetLayoutObject();
+  if (!layout_object) {
     return nullptr;
+  }
 
-  Color color = style->VisitedDependentColor(GetCSSPropertyFloodColor());
-  float opacity = style->FloodOpacity();
+  const ComputedStyle& style = layout_object->Style();
+  // TODO(crbug.com/1308932): ComputedStyle::VisitedDependentColor to SkColor4f
+  SkColor4f color =
+      style.VisitedDependentColor(GetCSSPropertyFloodColor()).toSkColor4f();
+  float opacity = style.FloodOpacity();
 
   return MakeGarbageCollected<FEFlood>(filter, color, opacity);
 }
 
 bool SVGFEFloodElement::TaintsOrigin() const {
-  const ComputedStyle* style = GetComputedStyle();
-  // TaintsOrigin() is only called after a successful call to Build()
-  // (see above), so we should have a ComputedStyle here.
-  DCHECK(style);
-  return style->FloodColor().IsCurrentColor();
+  return StyleColorTaintsOrigin(GetCSSPropertyFloodColor());
 }
 
 }  // namespace blink

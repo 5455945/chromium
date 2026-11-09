@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,7 @@ class CC_PAINT_EXPORT SkiaPaintImageGenerator final : public SkImageGenerator {
 
   SkiaPaintImageGenerator& operator=(const SkiaPaintImageGenerator&) = delete;
 
-  sk_sp<SkData> onRefEncodedData() override;
+  sk_sp<const SkData> onRefEncodedData() override;
   bool onGetPixels(const SkImageInfo&,
                    void* pixels,
                    size_t row_bytes,

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,23 @@
 #include <stdint.h>
 
 #include <memory>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/base/x/x11_move_loop.h"
 #include "ui/base/x/x11_move_loop_delegate.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
+#include "ui/events/pointer_details.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/x/connection.h"
 
 namespace x11 {
-class XScopedEventSelector;
+class ScopedEventSelector;
 }
 
 namespace ui {
@@ -37,6 +38,10 @@ class COMPONENT_EXPORT(UI_BASE_X) X11WholeScreenMoveLoop
       public ui::PlatformEventDispatcher {
  public:
   explicit X11WholeScreenMoveLoop(X11MoveLoopDelegate* delegate);
+
+  X11WholeScreenMoveLoop(const X11WholeScreenMoveLoop&) = delete;
+  X11WholeScreenMoveLoop& operator=(const X11WholeScreenMoveLoop&) = delete;
+
   ~X11WholeScreenMoveLoop() override;
 
   // ui:::PlatformEventDispatcher:
@@ -46,9 +51,25 @@ class COMPONENT_EXPORT(UI_BASE_X) X11WholeScreenMoveLoop
   // X11MoveLoop:
   bool RunMoveLoop(bool can_grab_pointer,
                    scoped_refptr<ui::X11Cursor> old_cursor,
-                   scoped_refptr<ui::X11Cursor> new_cursor) override;
+                   scoped_refptr<ui::X11Cursor> new_cursor,
+                   base::OnceClosure started_callback) override;
   void UpdateCursor(scoped_refptr<ui::X11Cursor> cursor) override;
   void EndMoveLoop() override;
+
+  // Returns and clears the ids of the touch sequences whose release or cancel
+  // was consumed by the last loop, so it never reached the window the touch
+  // was targeted at. The caller is expected to end them (e.g. by dispatching a
+  // touch cancel) once the loop has returned; otherwise they remain active
+  // indefinitely.
+  std::vector<PointerId> TakeConsumedTouches();
+
+  // Returns true if the last loop grabbed the pointer itself. Releasing that
+  // grab when the loop ends also ends every touch sequence that was still
+  // active, and the X server reports their end relative to the loop's own
+  // input window, so it never reaches the window the touch was targeted at.
+  // The caller is expected to end all touch sequences that are still active
+  // once the loop has returned.
+  bool grabbed_pointer() const { return grabbed_pointer_; }
 
  private:
   // Grabs the pointer, setting the mouse cursor to |cursor|. Returns true if
@@ -60,12 +81,9 @@ class COMPONENT_EXPORT(UI_BASE_X) X11WholeScreenMoveLoop
   // Creates an input-only window to be used during the drag.
   void CreateDragInputWindow(x11::Connection* connection);
 
-  // Dispatch mouse movement event to |delegate_| in a posted task.
-  void DispatchMouseMovement();
-
   void PostDispatchIfNeeded(const ui::MouseEvent& event);
 
-  X11MoveLoopDelegate* delegate_;
+  raw_ptr<X11MoveLoopDelegate> delegate_;
 
   // Are we running a nested run loop from RunMoveLoop()?
   bool in_move_loop_;
@@ -80,7 +98,7 @@ class COMPONENT_EXPORT(UI_BASE_X) X11WholeScreenMoveLoop
   x11::Window grab_input_window_;
 
   // Events selected on |grab_input_window_|.
-  std::unique_ptr<x11::XScopedEventSelector> grab_input_window_events_;
+  x11::ScopedEventSelector grab_input_window_events_;
 
   // Whether the pointer was grabbed on |grab_input_window_|.
   bool grabbed_pointer_;
@@ -91,10 +109,11 @@ class COMPONENT_EXPORT(UI_BASE_X) X11WholeScreenMoveLoop
   // pressing escape).
   bool canceled_;
 
-  std::unique_ptr<ui::MouseEvent> last_motion_in_screen_;
-  base::WeakPtrFactory<X11WholeScreenMoveLoop> weak_factory_{this};
+  // Ids of the touch sequences whose release or cancel was consumed by the
+  // loop.
+  std::vector<PointerId> consumed_touches_;
 
-  DISALLOW_COPY_AND_ASSIGN(X11WholeScreenMoveLoop);
+  base::WeakPtrFactory<X11WholeScreenMoveLoop> weak_factory_{this};
 };
 
 }  // namespace ui

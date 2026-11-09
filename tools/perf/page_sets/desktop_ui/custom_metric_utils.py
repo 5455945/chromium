@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 '''
@@ -33,8 +33,9 @@ def SetMetricNames(action_runner, metric_names):
 # and description(optional, default to empty).
 # {'name':<METRIC_NAME>, 'unit':<UNIT_NAME>, 'description':<DESCRIPTION>}
 def SetMetrics(action_runner, metrics):
-  action_runner.ExecuteJavaScript(REPORT_TRACE_EVENT_SCRIPT %
-                                  json.dumps(metrics))
+  action_runner.ExecuteJavaScript(
+    REPORT_TRACE_EVENT_SCRIPT % json.dumps(metrics)
+  )
 
 
 REPORT_TRACE_EVENT_SCRIPT = '''

@@ -1,22 +1,28 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as Sources from 'devtools/panels/sources/sources.js';
+import * as UI from 'devtools/ui/legacy/legacy.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
+
 (async function() {
   TestRunner.addResult(`The test verifies that extension names are resolved properly in navigator view.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
 
-  var contentScriptsNavigatorView = new Sources.ContentScriptsNavigatorView();
-  contentScriptsNavigatorView.show(UI.inspectorView.element);
+  var contentScriptsNavigatorView = new Sources.SourcesNavigator.ContentScriptsNavigatorView(Main.MainImpl.MainImpl.universeForTest.networkProjectManager);
+  contentScriptsNavigatorView.show(UI.InspectorView.InspectorView.instance().element);
 
   var mockExecutionContext =
-      {id: 1234567, isDefault: false, origin: 'chrome-extension://113581321345589144', name: 'FibExtension'};
+      {id: 1234567, origin: 'chrome-extension://113581321345589144', name: 'FibExtension', auxData: {isDefault: false}, uniqueId: 'unique-id-1234567'};
   var mockContentScriptURL = mockExecutionContext.origin + '/script.js';
 
   TestRunner.runTestSuite([
     async function testAddExecutionContextBeforeFile(next) {
-      TestRunner.runtimeModel._executionContextCreated(mockExecutionContext);
+      TestRunner.runtimeModel.executionContextCreated(mockExecutionContext);
       await SourcesTestRunner.addScriptUISourceCode(mockContentScriptURL, '', true, 1234567);
       SourcesTestRunner.dumpNavigatorView(contentScriptsNavigatorView);
       next();

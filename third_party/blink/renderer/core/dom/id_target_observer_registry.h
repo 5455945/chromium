@@ -27,10 +27,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_ID_TARGET_OBSERVER_REGISTRY_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
@@ -42,7 +43,7 @@ class CORE_EXPORT IdTargetObserverRegistry final
   friend class IdTargetObserver;
 
  public:
-  IdTargetObserverRegistry() : notifying_observers_in_set_(nullptr) {}
+  IdTargetObserverRegistry() = default;
   IdTargetObserverRegistry(const IdTargetObserverRegistry&) = delete;
   IdTargetObserverRegistry& operator=(const IdTargetObserverRegistry&) = delete;
 
@@ -55,15 +56,13 @@ class CORE_EXPORT IdTargetObserverRegistry final
   void RemoveObserver(const AtomicString& id, IdTargetObserver*);
   void NotifyObserversInternal(const AtomicString& id);
 
-  typedef HeapHashSet<Member<IdTargetObserver>> ObserverSet;
-  typedef HeapHashMap<StringImpl*, Member<ObserverSet>> IdToObserverSetMap;
+  using ObserverSet = GCedHeapHashSet<Member<IdTargetObserver>>;
+  using IdToObserverSetMap = HeapHashMap<StringImpl*, Member<ObserverSet>>;
   IdToObserverSetMap registry_;
-  Member<ObserverSet> notifying_observers_in_set_;
 };
 
 inline void IdTargetObserverRegistry::NotifyObservers(const AtomicString& id) {
-  DCHECK(!notifying_observers_in_set_);
-  if (id.IsEmpty() || registry_.IsEmpty())
+  if (id.empty() || registry_.empty())
     return;
   IdTargetObserverRegistry::NotifyObserversInternal(id);
 }

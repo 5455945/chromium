@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,16 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "components/login/login_export.h"
-
-namespace base {
-class DictionaryValue;
-}
 
 namespace login {
 
 // Class that collects Localized Values for translation.
 class LOGIN_EXPORT LocalizedValuesBuilder {
  public:
-  explicit LocalizedValuesBuilder(base::DictionaryValue* dict);
-  explicit LocalizedValuesBuilder(const std::string& prefix,
-                                  base::DictionaryValue* dict);
+  explicit LocalizedValuesBuilder(base::DictValue* dict);
 
   // Method to declare localized value. |key| is the i18n key used in html.
   // |message| is text of the message.
@@ -62,30 +57,9 @@ class LOGIN_EXPORT LocalizedValuesBuilder {
   // one format parameter subsituted by resource identified by |message_id_a|.
   void AddF(const std::string& key, int message_id, int message_id_a);
 
-  // Method to declare localized value. |key| is the i18n key used in html.
-  // |message_id| is a resource id of message. Message is expected to have
-  // two format parameters subsituted by resource identified by |message_id_a|
-  // and |message_id_b| respectively.
-  void AddF(const std::string& key,
-            int message_id,
-            int message_id_a,
-            int message_id_b);
-
-  // Method to declare localized value. |key| is the i18n key used in html.
-  // |message_id| is a resource id of message. Message is expected to have
-  // three format parameters subsituted by resource identified by
-  // |message_id_a|, |message_id_b| and |message_id_c| respectively.
-  void AddF(const std::string& key,
-            int message_id,
-            int message_id_a,
-            int message_id_b,
-            int message_id_c);
-
  private:
-  std::string prefix_;
-
   // Not owned.
-  base::DictionaryValue* dict_;
+  raw_ptr<base::DictValue> dict_;
 };
 
 }  // namespace login

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chromeos/components/mojo_bootstrap/pending_connection_manager.h"
 #include "dbus/message.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
+namespace ash {
 
-DriveFileStreamServiceProvider::DriveFileStreamServiceProvider() {}
+DriveFileStreamServiceProvider::DriveFileStreamServiceProvider() = default;
 
 DriveFileStreamServiceProvider::~DriveFileStreamServiceProvider() = default;
 
@@ -52,7 +52,7 @@ void DriveFileStreamServiceProvider::HandleOpenIpcChannel(
                                                  "Second argument is not FD."));
     return;
   }
-  if (!mojo_bootstrap::PendingConnectionManager::Get().OpenIpcChannel(
+  if (!mojo_bootstrap::PendingConnectionManager::GetForDriveFs().OpenIpcChannel(
           id, std::move(fd))) {
     std::move(response_sender)
         .Run(dbus::ErrorResponse::FromMethodCall(method_call, DBUS_ERROR_FAILED,
@@ -62,4 +62,4 @@ void DriveFileStreamServiceProvider::HandleOpenIpcChannel(
   std::move(response_sender).Run(dbus::Response::FromMethodCall(method_call));
 }
 
-}  // namespace chromeos
+}  // namespace ash

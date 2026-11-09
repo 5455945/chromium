@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,60 @@
 #define COMPONENTS_METRICS_STRUCTURED_STRUCTURED_METRICS_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/time/time.h"
 
-namespace metrics {
-namespace structured {
+namespace metrics::features {
+// This is forward-declared since this file cannot have a direct dependency on
+// //components/metrics to avoid circular dependencies. This feature is defined
+// in //components/metrics/metrics_features.cc.
+BASE_DECLARE_FEATURE(kStructuredMetrics);
 
-// This can be used to disable structured metrics as a whole.
-extern const base::Feature kStructuredMetrics;
+}  // namespace metrics::features
 
-extern const base::Feature kBluetoothSessionizedMetrics;
+namespace metrics::structured {
 
-// TODO(crbug.com/1148168): This is a temporary switch to revert structured
-// metrics upload to its old behaviour. Old behaviour:
-// - all metrics are uploaded in the main UMA upload
+// Controls whether Phone Hub Structured Metrics is enabled or not.
+BASE_DECLARE_FEATURE(kPhoneHubStructuredMetrics);
+
+// Returns the parameter used to control how many files will be read into memory
+// before events start being discarded.
 //
-// New behaviour:
-// - Projects with id type 'uma' are uploaded in the main UMA uploaded
-// - Projects with id type 'project-id' or 'none' are uploaded independently.
-//
-// Once we are comfortable with this change, this parameter can be removed.
-bool IsIndependentMetricsUploadEnabled();
+// This is to prevent too many files to be read into memory, causing Chrome to
+// OOM.
+int GetFileLimitPerScan();
 
-}  // namespace structured
-}  // namespace metrics
+// Returns the parameter used to control the max size of an event. Any event
+// exceeding this memory limit will be discarded. Defaults to 50KB.
+int GetFileSizeByteLimit();
+
+// Returns the upload cadence in minutes for which events are uploaded to the
+// UMA service to either be persisted as logs or uploaded.
+int GetUploadCadenceMinutes();
+
+// Returns the KiB proto limit per log. Events will not be added if the current
+// log exceeds the proto limit and events will be dropped if exceeded.
+int GetProtoKiBLimit();
+
+// Returns the parameter used to control what projects are allowed to be
+// recorded.
+std::string GetDisabledProjects();
+
+// Retrieves the collection interval for external metrics (defaults to 10
+// minutes).
+base::TimeDelta GetExternalMetricsCollectionInterval();
+
+// Retrieves the interval in which events are periodically backed up to disk
+// while still available in-memory.
+base::TimeDelta GetBackupTimeDelta();
+
+// Returns the percentage of memory size that can be used for storing in-memory
+// events.
+double GetMaxBufferSizeRatio();
+
+// Returns the percentage of writable disk space that can be used for storing
+// flushed events.
+double GetMaxDiskSizeRatio();
+
+}  // namespace metrics::structured
 
 #endif  // COMPONENTS_METRICS_STRUCTURED_STRUCTURED_METRICS_FEATURES_H_

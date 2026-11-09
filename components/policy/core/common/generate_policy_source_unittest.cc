@@ -1,15 +1,16 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <cstring>
-#include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/common/policy_details.h"
+#include "components/policy/core/common/proxy_settings_constants.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/policy_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,7 +22,7 @@ namespace policy {
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Checks if two schemas are the same or not. Note that this function doesn't
 // consider restrictions on integers and strings nor pattern properties.
 bool IsSameSchema(Schema a, Schema b) {
@@ -33,15 +34,17 @@ bool IsSameSchema(Schema a, Schema b) {
     return false;
   if (a.type() == base::Value::Type::LIST)
     return IsSameSchema(a.GetItems(), b.GetItems());
-  if (a.type() != base::Value::Type::DICTIONARY)
+  if (a.type() != base::Value::Type::DICT) {
     return true;
+  }
   Schema::Iterator a_it = a.GetPropertiesIterator();
   Schema::Iterator b_it = b.GetPropertiesIterator();
   while (!a_it.IsAtEnd()) {
     if (b_it.IsAtEnd())
       return false;
-    if (strcmp(a_it.key(), b_it.key()) != 0)
+    if (std::string_view(a_it.key()) != std::string_view(b_it.key())) {
       return false;
+    }
     if (!IsSameSchema(a_it.schema(), b_it.schema()))
       return false;
     a_it.Advance();
@@ -58,7 +61,7 @@ bool IsSameSchema(Schema a, Schema b) {
 TEST(GeneratePolicySource, ChromeSchemaData) {
   Schema schema = Schema::Wrap(GetChromeSchemaData());
   ASSERT_TRUE(schema.valid());
-  EXPECT_EQ(base::Value::Type::DICTIONARY, schema.type());
+  EXPECT_EQ(base::Value::Type::DICT, schema.type());
 
   Schema subschema = schema.GetAdditionalProperties();
   EXPECT_FALSE(subschema.valid());
@@ -80,11 +83,11 @@ TEST(GeneratePolicySource, ChromeSchemaData) {
   for (Schema::Iterator it = schema.GetPropertiesIterator(); !it.IsAtEnd();
        it.Advance()) {
     EXPECT_TRUE(it.key());
-    EXPECT_FALSE(std::string(it.key()).empty());
+    EXPECT_FALSE(std::string_view(it.key()).empty());
     EXPECT_TRUE(GetChromePolicyDetails(it.key()));
   }
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   subschema = schema.GetProperty(key::kDefaultCookiesSetting);
   ASSERT_TRUE(subschema.valid());
   EXPECT_EQ(base::Value::Type::INTEGER, subschema.type());
@@ -95,38 +98,47 @@ TEST(GeneratePolicySource, ChromeSchemaData) {
 
   subschema = schema.GetProperty(key::kProxySettings);
   ASSERT_TRUE(subschema.valid());
-  EXPECT_EQ(base::Value::Type::DICTIONARY, subschema.type());
+  EXPECT_EQ(base::Value::Type::DICT, subschema.type());
   EXPECT_FALSE(subschema.GetAdditionalProperties().valid());
   EXPECT_FALSE(subschema.GetProperty("no such proxy key exists").valid());
   ASSERT_TRUE(subschema.GetProperty(key::kProxyMode).valid());
   ASSERT_TRUE(subschema.GetProperty(key::kProxyServer).valid());
   ASSERT_TRUE(subschema.GetProperty(key::kProxyServerMode).valid());
   ASSERT_TRUE(subschema.GetProperty(key::kProxyPacUrl).valid());
+  ASSERT_TRUE(subschema.GetProperty(kProxyPacMandatory).valid());
   ASSERT_TRUE(subschema.GetProperty(key::kProxyBypassList).valid());
 
   // The properties are iterated in order.
-  const char* kExpectedProperties[] = {
-      key::kProxyBypassList, key::kProxyMode,       key::kProxyPacUrl,
-      key::kProxyServer,     key::kProxyServerMode, nullptr,
-  };
-  const char** next = kExpectedProperties;
-  for (Schema::Iterator it(subschema.GetPropertiesIterator());
-       !it.IsAtEnd(); it.Advance(), ++next) {
-    ASSERT_TRUE(*next != nullptr);
-    EXPECT_STREQ(*next, it.key());
+  const auto kExpectedProperties = std::to_array<std::string_view>({
+      key::kProxyBypassList,
+      key::kProxyMode,
+      kProxyPacMandatory,
+      key::kProxyPacUrl,
+      key::kProxyServer,
+      key::kProxyServerMode,
+  });
+  auto next = kExpectedProperties.begin();
+  Schema::Iterator it(subschema.GetPropertiesIterator());
+  for (; !it.IsAtEnd() && next != kExpectedProperties.end();
+       it.Advance(), ++next) {
+    EXPECT_EQ(*next, std::string_view(it.key()));
     ASSERT_TRUE(it.schema().valid());
-    if (it.key() == key::kProxyServerMode)
+    if (it.key() == key::kProxyServerMode) {
       EXPECT_EQ(base::Value::Type::INTEGER, it.schema().type());
-    else
+    } else if (std::string_view(it.key()) == kProxyPacMandatory) {
+      EXPECT_EQ(base::Value::Type::BOOLEAN, it.schema().type());
+    } else {
       EXPECT_EQ(base::Value::Type::STRING, it.schema().type());
+    }
   }
-  EXPECT_TRUE(*next == nullptr);
-#endif  // !OS_IOS
+  EXPECT_TRUE(it.IsAtEnd());
+  EXPECT_TRUE(next == kExpectedProperties.end());
+#endif  // !BUILDFLAG(IS_IOS)
 
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA)
   subschema = schema.GetProperty(key::kExtensionSettings);
   ASSERT_TRUE(subschema.valid());
-  ASSERT_EQ(base::Value::Type::DICTIONARY, subschema.type());
+  ASSERT_EQ(base::Value::Type::DICT, subschema.type());
   EXPECT_FALSE(subschema.GetAdditionalProperties().valid());
   EXPECT_FALSE(subschema.GetProperty("no such extension id exists").valid());
   EXPECT_TRUE(subschema.GetPatternProperties("*").empty());
@@ -142,20 +154,20 @@ TEST(GeneratePolicySource, ChromeSchemaData) {
   ASSERT_EQ(1u, schema_list.size());
   subschema = schema_list[0];
   ASSERT_TRUE(subschema.valid());
-  ASSERT_EQ(base::Value::Type::DICTIONARY, subschema.type());
+  ASSERT_EQ(base::Value::Type::DICT, subschema.type());
   subschema = subschema.GetProperty("installation_mode");
   ASSERT_TRUE(subschema.valid());
   ASSERT_EQ(base::Value::Type::STRING, subschema.type());
 
   subschema = schema.GetProperty(key::kExtensionSettings).GetProperty("*");
   ASSERT_TRUE(subschema.valid());
-  ASSERT_EQ(base::Value::Type::DICTIONARY, subschema.type());
+  ASSERT_EQ(base::Value::Type::DICT, subschema.type());
   subschema = subschema.GetProperty("installation_mode");
   ASSERT_TRUE(subschema.valid());
   ASSERT_EQ(base::Value::Type::STRING, subschema.type());
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   subschema = schema.GetKnownProperty(key::kPowerManagementIdleSettings);
   ASSERT_TRUE(subschema.valid());
 
@@ -170,6 +182,29 @@ TEST(GeneratePolicySource, ChromeSchemaData) {
 #endif
 }
 
+TEST(GeneratePolicySource, PolicyScope) {
+  const PolicyDetails* details;
+#if !BUILDFLAG(IS_IOS)
+  details = GetChromePolicyDetails(key::kCloudProfileReportingEnabled);
+  ASSERT_TRUE(details);
+  EXPECT_EQ(kSingleProfile, details->scope);
+#endif
+
+  details = GetChromePolicyDetails(key::kDefaultSearchProviderEnabled);
+  ASSERT_TRUE(details);
+  EXPECT_EQ(kProfile, details->scope);
+
+  details = GetChromePolicyDetails(key::kCloudReportingEnabled);
+  ASSERT_TRUE(details);
+  EXPECT_EQ(kBrowser, details->scope);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  details = GetChromePolicyDetails(key::kDeviceGuestModeEnabled);
+  ASSERT_TRUE(details);
+  EXPECT_EQ(kDevice, details->scope);
+#endif
+}
+
 TEST(GeneratePolicySource, PolicyDetails) {
   EXPECT_FALSE(GetChromePolicyDetails(""));
   EXPECT_FALSE(GetChromePolicyDetails("no such policy"));
@@ -181,53 +216,59 @@ TEST(GeneratePolicySource, PolicyDetails) {
       GetChromePolicyDetails(key::kSearchSuggestEnabled);
   ASSERT_TRUE(details);
   EXPECT_FALSE(details->is_deprecated);
-  EXPECT_FALSE(details->is_device_policy);
+  EXPECT_EQ(kProfile, details->scope);
   EXPECT_EQ(6, details->id);
   EXPECT_EQ(0u, details->max_external_data_size);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   details = GetChromePolicyDetails(key::kJavascriptEnabled);
   ASSERT_TRUE(details);
   EXPECT_TRUE(details->is_deprecated);
-  EXPECT_FALSE(details->is_device_policy);
+  EXPECT_EQ(kProfile, details->scope);
   EXPECT_EQ(9, details->id);
   EXPECT_EQ(0u, details->max_external_data_size);
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   details = GetChromePolicyDetails(key::kDevicePolicyRefreshRate);
   ASSERT_TRUE(details);
   EXPECT_FALSE(details->is_deprecated);
-  EXPECT_TRUE(details->is_device_policy);
+  EXPECT_EQ(kDevice, details->scope);
   EXPECT_EQ(90, details->id);
   EXPECT_EQ(0u, details->max_external_data_size);
-#endif
 
-  // TODO(bartfab): add a test that verifies a max_external_data_size larger
-  // than 0, once a type 'external' policy is added.
+  // Policies of type 'external' have a greater-than-zero value for
+  // |max_external_data_size|.
+  details = GetChromePolicyDetails(key::kWallpaperImage);
+  ASSERT_TRUE(details);
+  EXPECT_FALSE(details->is_deprecated);
+  EXPECT_EQ(kProfile, details->scope);
+  EXPECT_EQ(262, details->id);
+  EXPECT_GT(details->max_external_data_size, 0u);
+#endif
 }
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST(GeneratePolicySource, SetEnterpriseDefaults) {
   PolicyMap policy_map;
 
   // If policy not configured yet, set the enterprise default.
   SetEnterpriseUsersDefaults(&policy_map);
 
-  const base::Value* multiprof_behavior =
-      policy_map.GetValue(key::kChromeOsMultiProfileUserBehavior);
+  const base::Value* multiprof_behavior = policy_map.GetValue(
+      key::kChromeOsMultiProfileUserBehavior, base::Value::Type::STRING);
   base::Value expected("primary-only");
-  EXPECT_TRUE(expected.Equals(multiprof_behavior));
+  EXPECT_EQ(expected, *multiprof_behavior);
 
   // If policy already configured, it's not changed to enterprise defaults.
   policy_map.Set(key::kChromeOsMultiProfileUserBehavior, POLICY_LEVEL_MANDATORY,
                  POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
                  base::Value("test_value"), nullptr);
   SetEnterpriseUsersDefaults(&policy_map);
-  multiprof_behavior =
-      policy_map.GetValue(key::kChromeOsMultiProfileUserBehavior);
+  multiprof_behavior = policy_map.GetValue(
+      key::kChromeOsMultiProfileUserBehavior, base::Value::Type::STRING);
   expected = base::Value("test_value");
-  EXPECT_TRUE(expected.Equals(multiprof_behavior));
+  EXPECT_EQ(expected, *multiprof_behavior);
 }
 
 TEST(GeneratePolicySource, SetEnterpriseSystemWideDefaults) {
@@ -236,12 +277,12 @@ TEST(GeneratePolicySource, SetEnterpriseSystemWideDefaults) {
   // If policy not configured yet, set the enterprise system-wide default.
   SetEnterpriseUsersSystemWideDefaults(&policy_map);
 
-  const base::Value* pin_unlock_autosubmit_enabled =
-      policy_map.GetValue(key::kPinUnlockAutosubmitEnabled);
+  const base::Value* pin_unlock_autosubmit_enabled = policy_map.GetValue(
+      key::kPinUnlockAutosubmitEnabled, base::Value::Type::BOOLEAN);
   ASSERT_TRUE(pin_unlock_autosubmit_enabled);
   EXPECT_FALSE(pin_unlock_autosubmit_enabled->GetBool());
-  const base::Value* allow_dinosaur_easter_egg =
-      policy_map.GetValue(key::kAllowDinosaurEasterEgg);
+  const base::Value* allow_dinosaur_easter_egg = policy_map.GetValue(
+      key::kAllowDinosaurEasterEgg, base::Value::Type::BOOLEAN);
   EXPECT_EQ(nullptr, allow_dinosaur_easter_egg);
 
   // If policy already configured, it's not changed to enterprise defaults.
@@ -249,11 +290,12 @@ TEST(GeneratePolicySource, SetEnterpriseSystemWideDefaults) {
                  POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(true),
                  nullptr);
   SetEnterpriseUsersSystemWideDefaults(&policy_map);
-  pin_unlock_autosubmit_enabled =
-      policy_map.GetValue(key::kPinUnlockAutosubmitEnabled);
+  pin_unlock_autosubmit_enabled = policy_map.GetValue(
+      key::kPinUnlockAutosubmitEnabled, base::Value::Type::BOOLEAN);
   ASSERT_TRUE(pin_unlock_autosubmit_enabled);
   EXPECT_TRUE(pin_unlock_autosubmit_enabled->GetBool());
-  allow_dinosaur_easter_egg = policy_map.GetValue(key::kAllowDinosaurEasterEgg);
+  allow_dinosaur_easter_egg = policy_map.GetValue(key::kAllowDinosaurEasterEgg,
+                                                  base::Value::Type::BOOLEAN);
   EXPECT_EQ(nullptr, allow_dinosaur_easter_egg);
 }
 
@@ -263,12 +305,12 @@ TEST(GeneratePolicySource, SetEnterpriseProfileDefaults) {
   // If policy not configured yet, set the enterprise profile default.
   SetEnterpriseUsersProfileDefaults(&policy_map);
 
-  const base::Value* allow_dinosaur_easter_egg =
-      policy_map.GetValue(key::kAllowDinosaurEasterEgg);
+  const base::Value* allow_dinosaur_easter_egg = policy_map.GetValue(
+      key::kAllowDinosaurEasterEgg, base::Value::Type::BOOLEAN);
   ASSERT_TRUE(allow_dinosaur_easter_egg);
   EXPECT_FALSE(allow_dinosaur_easter_egg->GetBool());
-  const base::Value* pin_unlock_autosubmit_enabled =
-      policy_map.GetValue(key::kPinUnlockAutosubmitEnabled);
+  const base::Value* pin_unlock_autosubmit_enabled = policy_map.GetValue(
+      key::kPinUnlockAutosubmitEnabled, base::Value::Type::BOOLEAN);
   EXPECT_EQ(nullptr, pin_unlock_autosubmit_enabled);
 
   // If policy already configured, it's not changed to enterprise defaults.
@@ -276,11 +318,12 @@ TEST(GeneratePolicySource, SetEnterpriseProfileDefaults) {
                  POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(true),
                  nullptr);
   SetEnterpriseUsersProfileDefaults(&policy_map);
-  allow_dinosaur_easter_egg = policy_map.GetValue(key::kAllowDinosaurEasterEgg);
+  allow_dinosaur_easter_egg = policy_map.GetValue(key::kAllowDinosaurEasterEgg,
+                                                  base::Value::Type::BOOLEAN);
   ASSERT_TRUE(allow_dinosaur_easter_egg);
   EXPECT_TRUE(allow_dinosaur_easter_egg->GetBool());
-  pin_unlock_autosubmit_enabled =
-      policy_map.GetValue(key::kPinUnlockAutosubmitEnabled);
+  pin_unlock_autosubmit_enabled = policy_map.GetValue(
+      key::kPinUnlockAutosubmitEnabled, base::Value::Type::BOOLEAN);
   EXPECT_EQ(nullptr, pin_unlock_autosubmit_enabled);
 }
 #endif

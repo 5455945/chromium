@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 class ToolbarButton;
 class ToolbarButtonProvider;
 
-#if defined(OS_MAC)
-constexpr int kWebAppMenuMargin = 7;
+#if BUILDFLAG(IS_MAC)
+inline constexpr int kWebAppMenuMargin = 7;
 #endif
 
 // Makes adjustments to |toolbar_button| for display in a web app frame.

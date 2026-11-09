@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,18 +10,19 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "gpu/command_buffer/common/command_buffer_shared.h"
 #include "gpu/command_buffer/service/async_api_interface.h"
+#include "gpu/command_buffer/service/gpu_command_buffer_service_export.h"
 
 namespace gpu {
 
 class MemoryTracker;
 class TransferBufferManager;
 
-class GPU_EXPORT CommandBufferServiceBase {
+class GPU_COMMAND_BUFFER_SERVICE_EXPORT CommandBufferServiceBase {
  public:
   virtual ~CommandBufferServiceBase() = default;
 
@@ -47,7 +48,7 @@ class GPU_EXPORT CommandBufferServiceBase {
   virtual void SetContextLostReason(error::ContextLostReason) = 0;
 };
 
-class GPU_EXPORT CommandBufferServiceClient {
+class GPU_COMMAND_BUFFER_SERVICE_EXPORT CommandBufferServiceClient {
  public:
   enum CommandBatchProcessedResult {
     kContinueExecution,
@@ -69,12 +70,18 @@ union CommandBufferEntry;
 
 // An object that implements a shared memory command buffer and a synchronous
 // API to manage the put and get pointers.
-class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
+class GPU_COMMAND_BUFFER_SERVICE_EXPORT CommandBufferService
+    : public CommandBufferServiceBase {
  public:
-  static const int kParseCommandsSlice = 20;
+  static const int kParseCommandsSliceSmall = 20;
+  static const int kParseCommandsSliceLarge = 100;
 
   CommandBufferService(CommandBufferServiceClient* client,
-                       MemoryTracker* memory_tracker);
+                       scoped_refptr<MemoryTracker> memory_tracker);
+
+  CommandBufferService(const CommandBufferService&) = delete;
+  CommandBufferService& operator=(const CommandBufferService&) = delete;
+
   ~CommandBufferService() override;
 
   // CommandBufferServiceBase implementation:
@@ -107,10 +114,14 @@ class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
 
   // Creates an in-process transfer buffer and register it with a newly created
   // id.
-  scoped_refptr<Buffer> CreateTransferBuffer(uint32_t size, int32_t* id);
+  scoped_refptr<Buffer> CreateTransferBuffer(uint32_t size,
+                                             int32_t* id,
+                                             uint32_t alignment = 0);
 
   // Creates an in-process transfer buffer and register it with a given id.
-  scoped_refptr<Buffer> CreateTransferBufferWithId(uint32_t size, int32_t id);
+  scoped_refptr<Buffer> CreateTransferBufferWithId(uint32_t size,
+                                                   int32_t id,
+                                                   uint32_t alignment = 0);
 
   // Sets whether commands should be processed by this scheduler. Setting to
   // false unschedules. Setting to true reschedules.
@@ -127,7 +138,7 @@ class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
   size_t GetSharedMemoryBytesAllocated() const;
 
  private:
-  CommandBufferServiceClient* client_;
+  raw_ptr<CommandBufferServiceClient> client_;
   std::unique_ptr<TransferBufferManager> transfer_buffer_manager_;
 
   CommandBuffer::State state_;
@@ -135,16 +146,14 @@ class GPU_EXPORT CommandBufferService : public CommandBufferServiceBase {
 
   int32_t num_entries_ = 0;
   scoped_refptr<Buffer> ring_buffer_;
-  volatile CommandBufferEntry* buffer_ = nullptr;
+  raw_ptr<volatile CommandBufferEntry, AllowPtrArithmetic> buffer_ = nullptr;
 
   std::unique_ptr<BufferBacking> shared_state_buffer_;
-  CommandBufferSharedState* shared_state_ = nullptr;
+  raw_ptr<CommandBufferSharedState> shared_state_ = nullptr;
 
   // Whether the scheduler is currently able to process more commands.
   bool scheduled_ = true;
   bool paused_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(CommandBufferService);
 };
 
 }  // namespace gpu

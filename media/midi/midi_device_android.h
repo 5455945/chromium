@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 #define MEDIA_MIDI_MIDI_DEVICE_ANDROID_H_
 
 #include <jni.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "media/midi/midi_input_port_android.h"
 
@@ -36,8 +38,9 @@ class MidiDeviceAndroid final {
       const {
     return output_ports_;
   }
-  bool HasRawDevice(JNIEnv* env, jobject raw_device) const {
-    return env->IsSameObject(raw_device_.obj(), raw_device);
+  bool HasRawDevice(JNIEnv* env,
+                    const base::android::JavaRef<jobject>& raw_device) const {
+    return env->IsSameObject(raw_device_.obj(), raw_device.obj());
   }
 
  private:

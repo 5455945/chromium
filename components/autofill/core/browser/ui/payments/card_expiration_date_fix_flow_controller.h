@@ -1,17 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_UI_PAYMENTS_CARD_EXPIRATION_DATE_FIX_FLOW_CONTROLLER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_UI_PAYMENTS_CARD_EXPIRATION_DATE_FIX_FLOW_CONTROLLER_H_
 
-#include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "components/autofill/core/browser/autofill_metrics.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
 
 namespace autofill {
 
@@ -19,7 +14,7 @@ namespace autofill {
 // Only used on mobile.
 class CardExpirationDateFixFlowController {
  public:
-  virtual ~CardExpirationDateFixFlowController() {}
+  virtual ~CardExpirationDateFixFlowController() = default;
 
   // Interaction.
   virtual void OnAccepted(const std::u16string& month,

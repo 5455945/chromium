@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,11 @@
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/common_export.h"
-#include "url/gurl.h"
 
 namespace blink {
 
-// Used to load the main script for dedicated workers (PlzDedicatedWorker),
-// service workers (PlzServiceWorker), and shared workers, which is
-// pre-requested by browser process.
+// Used to load the main script for dedicated workers, shared workers, and
+// service workers, which is pre-requested by browser process.
 struct BLINK_COMMON_EXPORT WorkerMainScriptLoadParameters {
  public:
   WorkerMainScriptLoadParameters() = default;

@@ -1,23 +1,23 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_H_
 #define CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_H_
 
+#include <optional>
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/upgrade_detector/upgrade_observer.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 class UpgradeObserver;
@@ -62,8 +62,7 @@ class UpgradeDetector {
 
     bool IsValid() const {
       return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 &&
-             duration >= base::TimeDelta::FromMinutes(1) &&
-             duration != base::TimeDelta::Max();
+             duration >= base::Minutes(1) && duration != base::TimeDelta::Max();
     }
 
     int hour;
@@ -74,6 +73,9 @@ class UpgradeDetector {
   // Returns the singleton implementation instance.
   static UpgradeDetector* GetInstance();
 
+  UpgradeDetector(const UpgradeDetector&) = delete;
+  UpgradeDetector& operator=(const UpgradeDetector&) = delete;
+
   virtual ~UpgradeDetector();
 
   // Returns the default delta from upgrade detection until high annoyance is
@@ -83,6 +85,17 @@ class UpgradeDetector {
   // Returns the default delta from upgrade detection until elevated annoyance
   // is reached.
   static base::TimeDelta GetDefaultElevatedAnnoyanceThreshold();
+
+  // Returns the adjusted deadline to fall within `window`. If the
+  // `deadline` has already passed the window for the day, it is prolonged for
+  // the next day within the window. If the `deadline` already falls within the
+  // window, no change is made.
+  static base::Time AdjustDeadline(base::Time deadline,
+                                   const RelaunchWindow& window);
+
+  // Returns the relaunch window specified via the RelaunchWindow policy
+  // setting, or nullopt if unset or set incorrectly.
+  static std::optional<RelaunchWindow> GetRelaunchWindowPolicyValue();
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -135,7 +148,7 @@ class UpgradeDetector {
     return critical_update_acknowledged_;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   bool is_factory_reset_required() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return is_factory_reset_required_;
@@ -145,19 +158,17 @@ class UpgradeDetector {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return is_rollback_;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   UpgradeNotificationAnnoyanceLevel upgrade_notification_stage() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return upgrade_notification_stage_;
   }
 
-  // Returns the delta between "elevated" and "high" annoyance levels.
-  virtual base::TimeDelta GetHighAnnoyanceLevelDelta() = 0;
-
-  // Returns the tick count at which "high" annoyance level will be (or was)
-  // reached, or a null tick count if an upgrade has not yet been detected.
-  virtual base::Time GetHighAnnoyanceDeadline() = 0;
+  // Returns the time at which `level` annoyance level will be (or was) reached,
+  // or a null time object if an upgrade has not yet been detected.
+  virtual base::Time GetAnnoyanceLevelDeadline(
+      UpgradeNotificationAnnoyanceLevel level) = 0;
 
   // Overrides the "high" annoyance deadline, setting it to |deadline|. On
   // Chrome OS, this also sets the "elevated" annoyance deadline to the time at
@@ -184,6 +195,13 @@ class UpgradeDetector {
   // Notifies that the current install is outdated and auto-update (AU) is
   // disabled. No details are expected.
   void NotifyOutdatedInstallNoAutoUpdate();
+
+  void set_upgrade_notification_stage_for_testing(
+      UpgradeNotificationAnnoyanceLevel stage) {
+    set_upgrade_notification_stage(stage);
+  }
+
+  void NotifyUpgradeForTesting();
 
  protected:
   enum UpgradeAvailable {
@@ -213,17 +231,6 @@ class UpgradeDetector {
   static base::TimeDelta GetRelaunchNotificationPeriod();
   static bool IsRelaunchNotificationPolicyEnabled();
 
-  // Returns the adjusted deadline to fall within `window`. If the
-  // `deadline` has already passed the window for the day, it is prolonged for
-  // the next day within the window. If the `deadline` already falls within the
-  // window, no change is made.
-  static base::Time AdjustDeadline(base::Time deadline,
-                                   const RelaunchWindow& window);
-
-  // Returns the relaunch window specified via the RelaunchWindow policy
-  // setting, or nullopt if unset or set incorrectly.
-  static absl::optional<RelaunchWindow> GetRelaunchWindowPolicyValue();
-
   // Returns the default relaunch window within which the relaunch should take
   // place. It is 2am to 4am from Chrome OS and the whole day for others.
   static RelaunchWindow GetDefaultRelaunchWindow();
@@ -232,6 +239,22 @@ class UpgradeDetector {
   // `elevated_to_high_delta` which is the delta between "elevated" and "high"
   // annoyance levels.
   static base::TimeDelta GetGracePeriod(base::TimeDelta elevated_to_high_delta);
+
+  // Returns the network time, falling back to system time if unavailable.
+  // Returns true if it's network time, or false if it's not.
+  bool GetNetworkTimeWithFallback(base::Time& network_time);
+
+  // Returns true if `last_served_date_` is known and older than the number
+  // of days specified by the RelaunchFastIfOutdated policy.
+  bool ShouldRelaunchFast();
+
+  // Returns true if the last served date should be fetched on update, for
+  // the RelaunchOutdatedInstall policy.
+  bool ShouldFetchLastServedDate() const;
+
+  // Fetches the last served date via GetLastServedDate(), and updates
+  // `last_served_date_`.
+  void FetchLastServedDate();
 
   const base::Clock* clock() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -253,6 +276,10 @@ class UpgradeDetector {
   // Notifies that a critical update has been installed. No details are
   // expected.
   void NotifyCriticalUpgradeInstalled();
+
+  // Notifies that an update is downloaded but deferred. Set `use_notification`
+  // to true to enable system tray notification.
+  void NotifyUpdateDeferred(bool use_notification);
 
   // The function that sends out a notification that lets the rest of the UI
   // know we should notify the user that a new update is available to download
@@ -309,7 +336,7 @@ class UpgradeDetector {
     upgrade_notification_stage_ = stage;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void set_is_factory_reset_required(bool is_factory_reset_required) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     is_factory_reset_required_ = is_factory_reset_required;
@@ -319,17 +346,22 @@ class UpgradeDetector {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     is_rollback_ = is_rollback;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
  private:
   FRIEND_TEST_ALL_PREFIXES(AppMenuModelTest, Basics);
+  FRIEND_TEST_ALL_PREFIXES(RelaunchNotificationControllerUiTest,
+                           ReactivateAfterDeadline);
   FRIEND_TEST_ALL_PREFIXES(SystemTrayClientTest, UpdateTrayIcon);
+  friend class RelaunchNotificationControllerUiTest;
   friend class UpgradeMetricsProviderTest;
+  friend class UpdateMetricsProviderBrowserTest;
 
-  // Called on the UI thread after one or more monitored prefs have changed. If
-  // an update has been detected, subclasses may need to recompute the schedule
-  // for advancing through the annoyance levels.
-  virtual void OnMonitoredPrefsChanged() {}
+  // Called on the UI thread after one or more monitored prefs or
+  // `last_served_date_` have changed. If an update has been detected,
+  // subclasses may need to recompute the schedule for advancing through the
+  // annoyance levels.
+  virtual void RecomputeSchedule() {}
 
   // Initiates an Idle check. Tells us whether Chrome has received any
   // input events since the specified time.
@@ -340,11 +372,14 @@ class UpgradeDetector {
   // already posted and pending for execution.
   void OnRelaunchPrefChanged();
 
+  // Handles the result of GetLastServedDate().
+  void OnGotLastServedDate(std::optional<base::Time> last_served_date);
+
   // A provider of Time to the detector.
-  const base::Clock* const clock_;
+  const raw_ptr<const base::Clock> clock_;
 
   // A provider of TimeTicks to the detectors' timers.
-  const base::TickClock* const tick_clock_;
+  const raw_ptr<const base::TickClock> tick_clock_;
 
   // Observes changes to the browser.relaunch_notification_period Local State
   // preference.
@@ -370,7 +405,7 @@ class UpgradeDetector {
   // for execution.
   bool pref_change_task_pending_ = false;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Whether a factory reset is needed to complete an update.
   bool is_factory_reset_required_ = false;
 
@@ -378,7 +413,7 @@ class UpgradeDetector {
   // to an earlier version of Chrome OS, which results in the device being
   // wiped when it's rebooted.
   bool is_rollback_ = false;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // A timer to check to see if we've been idle for long enough to show the
   // critical warning. Should only be set if |upgrade_available_| is
@@ -392,13 +427,14 @@ class UpgradeDetector {
   // is we should start nagging about upgrading).
   bool notify_upgrade_;
 
+  bool fetched_last_served_date_ = false;
+  std::optional<base::Time> last_served_date_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::ObserverList<UpgradeObserver>::Unchecked observer_list_;
 
   base::WeakPtrFactory<UpgradeDetector> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UpgradeDetector);
 };
 
 #endif  // CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_H_

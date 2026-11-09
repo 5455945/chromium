@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,12 @@
 
 #include <list>
 #include <memory>
+#include <tuple>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_descriptor_watcher_posix.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/threading/platform_thread.h"
@@ -56,8 +57,7 @@ void SignalListener::OnFileCanReadWithoutBlocking() {
   int result = HANDLE_EINTR(read(g_read_fd, &buffer, sizeof(buffer)));
   if (result > 0) {
     for (SignalHandlers::const_iterator i = signal_handlers_.begin();
-         i != signal_handlers_.end();
-         ++i) {
+         i != signal_handlers_.end(); ++i) {
       if (i->first == buffer) {
         i->second.Run(i->first);
       }
@@ -69,7 +69,7 @@ SignalListener* g_signal_listener = nullptr;
 
 void GlobalSignalHandler(int signal) {
   char byte = signal;
-  ignore_result(write(g_write_fd, &byte, 1));
+  std::ignore = write(g_write_fd, &byte, 1);
 }
 
 }  // namespace

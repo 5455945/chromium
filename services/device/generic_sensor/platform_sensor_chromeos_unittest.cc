@@ -1,12 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/platform_sensor_chromeos.h"
 
+#include <array>
 #include <memory>
+#include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/gmock_callback_support.h"
@@ -25,10 +29,28 @@ namespace {
 
 constexpr int kFakeDeviceId = 1;
 
-constexpr char kAccelerometerChannels[][10] = {"accel_x", "accel_y", "accel_z"};
-constexpr char kGyroscopeChannels[][10] = {"anglvel_x", "anglvel_y",
-                                           "anglvel_z"};
-constexpr char kMagnetometerChannels[][10] = {"magn_x", "magn_y", "magn_z"};
+constexpr auto kAccelerometerChannels = std::to_array<std::string_view>({
+    "accel_x",
+    "accel_y",
+    "accel_z",
+});
+constexpr auto kGyroscopeChannels = std::to_array<std::string_view>({
+    "anglvel_x",
+    "anglvel_y",
+    "anglvel_z",
+});
+constexpr auto kMagnetometerChannels = std::to_array<std::string_view>({
+    "magn_x",
+    "magn_y",
+    "magn_z",
+});
+constexpr auto kGravityChannels = std::to_array<std::string_view>({
+    "gravity_x",
+    "gravity_y",
+    "gravity_z",
+});
+
+constexpr double kScaleValueLightSensor = device::kAlsRoundingMultiple;
 
 constexpr double kScaleValue = 10.0;
 
@@ -36,7 +58,7 @@ constexpr double kScaleValue = 10.0;
 constexpr uint32_t kNumberOfAxes = 3u;
 
 constexpr int64_t kFakeSampleData = 1;
-constexpr int64_t kFakeAxesSampleData[] = {1, 2, 3};
+constexpr auto kFakeAxesSampleData = std::to_array<int64_t>({1, 2, 3});
 constexpr int64_t kFakeTimestampData = 163176689212344ll;
 
 }  // namespace
@@ -60,15 +82,12 @@ class PlatformSensorChromeOSTestBase {
   void DisableFirstChannel() {
     DCHECK(sensor_device_.get());
 
-    sensor_device_->SetChannelsEnabled(
-        {0}, false,
-        base::BindOnce(
-            &PlatformSensorChromeOSTestBase::SetChannelsEnabledCallback,
-            base::Unretained(this)));
+    sensor_device_->SetChannelsEnabledWithId(receiver_id_, {0}, false);
   }
 
-  void SetChannelsEnabledCallback(const std::vector<int32_t>& failed_indices) {
-    EXPECT_EQ(failed_indices.size(), 0u);
+  void OnSensorDeviceDisconnect(uint32_t custom_reason_code,
+                                const std::string& description) {
+    custom_reason_code_ = custom_reason_code;
   }
 
   std::unique_ptr<chromeos::sensors::FakeSensorDevice> sensor_device_;
@@ -79,6 +98,8 @@ class PlatformSensorChromeOSTestBase {
   mojo::Remote<chromeos::sensors::mojom::SensorDevice> sensor_device_remote_;
   mojo::PendingReceiver<chromeos::sensors::mojom::SensorDevice>
       pending_receiver_;
+
+  std::optional<uint32_t> custom_reason_code_;
 
   base::test::SingleThreadTaskEnvironment task_environment;
 };
@@ -95,7 +116,11 @@ class PlatformSensorChromeOSOneChannelTest
 
     sensor_ = base::MakeRefCounted<PlatformSensorChromeOS>(
         kFakeDeviceId, type, provider_->GetSensorReadingBuffer(type),
-        provider_.get(), kScaleValue, std::move(sensor_device_remote_));
+        provider_->AsWeakPtr(),
+        base::BindOnce(
+            &PlatformSensorChromeOSOneChannelTest::OnSensorDeviceDisconnect,
+            base::Unretained(this)),
+        kScaleValueLightSensor, std::move(sensor_device_remote_));
 
     EXPECT_EQ(sensor_->GetReportingMode(),
               type == mojom::SensorType::AMBIENT_LIGHT
@@ -125,16 +150,15 @@ class PlatformSensorChromeOSOneChannelTest
         return reading.als;
       default:
         LOG(FATAL) << "Invalid type: " << GetParam().first;
-        return reading.als;
     }
   }
 
   void GetRoundedSensorReadingSingle(SensorReadingSingle* reading_single) {
-    reading_single->value = kFakeSampleData * kScaleValue;
+    reading_single->value = kFakeSampleData * kScaleValueLightSensor;
     reading_single->timestamp =
-        base::TimeDelta::FromNanoseconds(kFakeTimestampData).InSecondsF();
+        base::Nanoseconds(kFakeTimestampData).InSecondsF();
 
-    // No need to do rounding for these types of sensors.
+    RoundIlluminanceReading(reading_single);
   }
 
   void WaitForAndCheckReading(
@@ -196,7 +220,10 @@ TEST_P(PlatformSensorChromeOSOneChannelTest, GetSamples) {
   base::RunLoop().RunUntilIdle();
   // No reading updated.
 
-  sensor_device_->ResetObserverRemote(receiver_id_);
+  sensor_device_->ResetObserverRemoteWithReason(
+      receiver_id_,
+      chromeos::sensors::mojom::SensorDeviceDisconnectReason::DEVICE_REMOVED,
+      "Device was removed");
 
   base::RunLoop loop;
   // Wait until the disconnect arrives at |sensor_|.
@@ -204,6 +231,10 @@ TEST_P(PlatformSensorChromeOSOneChannelTest, GetSamples) {
       .WillOnce(base::test::RunOnceClosure(loop.QuitClosure()));
   loop.Run();
 
+  EXPECT_EQ(
+      custom_reason_code_,
+      static_cast<uint32_t>(chromeos::sensors::mojom::
+                                SensorDeviceDisconnectReason::DEVICE_REMOVED));
   sensor_->RemoveClient(client.get());
 }
 
@@ -254,7 +285,7 @@ INSTANTIATE_TEST_SUITE_P(
 class PlatformSensorChromeOSAxesTest
     : public PlatformSensorChromeOSTestBase,
       public ::testing::TestWithParam<
-          std::pair<mojom::SensorType, const char (*)[10]>> {
+          std::pair<mojom::SensorType, base::span<const std::string_view>>> {
  protected:
   void SetUp() override {
     SetUpBase();
@@ -263,6 +294,9 @@ class PlatformSensorChromeOSAxesTest
 
     sensor_ = base::MakeRefCounted<PlatformSensorChromeOS>(
         kFakeDeviceId, type, provider_->GetSensorReadingBuffer(type), nullptr,
+        base::BindOnce(
+            &PlatformSensorChromeOSAxesTest::OnSensorDeviceDisconnect,
+            base::Unretained(this)),
         kScaleValue, std::move(sensor_device_remote_));
 
     EXPECT_EQ(sensor_->GetReportingMode(), mojom::ReportingMode::CONTINUOUS);
@@ -270,11 +304,11 @@ class PlatformSensorChromeOSAxesTest
               GetSensorMaxAllowedFrequency(type));
   }
 
-  void SetChannelsWithAxes(const char channels[][10], uint32_t num_of_axes) {
-    CHECK_LE(num_of_axes, kNumberOfAxes);
+  void SetChannelsWithAxes(base::span<const std::string_view> channels) {
+    CHECK_LE(channels.size(), kNumberOfAxes);
     std::vector<chromeos::sensors::FakeSensorDevice::ChannelData> channels_data(
-        num_of_axes + 1);
-    for (uint32_t i = 0; i < num_of_axes; ++i) {
+        channels.size() + 1);
+    for (size_t i = 0; i < channels.size(); ++i) {
       channels_data[i].id = channels[i];
       channels_data[i].sample_data = kFakeAxesSampleData[i];
     }
@@ -287,6 +321,7 @@ class PlatformSensorChromeOSAxesTest
   SensorReadingXYZ& GetSensorReadingXYZ(SensorReading& reading) {
     switch (GetParam().first) {
       case mojom::SensorType::ACCELEROMETER:
+      case mojom::SensorType::GRAVITY:
         return reading.accel;
       case mojom::SensorType::GYROSCOPE:
         return reading.gyro;
@@ -294,7 +329,6 @@ class PlatformSensorChromeOSAxesTest
         return reading.magn;
       default:
         LOG(FATAL) << "Invalid type: " << GetParam().first;
-        return reading.accel;
     }
   }
 
@@ -302,21 +336,21 @@ class PlatformSensorChromeOSAxesTest
     reading_xyz->x = kFakeAxesSampleData[0] * kScaleValue;
     reading_xyz->y = kFakeAxesSampleData[1] * kScaleValue;
     reading_xyz->z = kFakeAxesSampleData[2] * kScaleValue;
-    reading_xyz->timestamp =
-        base::TimeDelta::FromNanoseconds(kFakeTimestampData).InSecondsF();
+    reading_xyz->timestamp = base::Nanoseconds(kFakeTimestampData).InSecondsF();
 
     switch (GetParam().first) {
       case mojom::SensorType::ACCELEROMETER:
+      case mojom::SensorType::GRAVITY:
         RoundAccelerometerReading(reading_xyz);
         break;
       case mojom::SensorType::GYROSCOPE:
         RoundGyroscopeReading(reading_xyz);
         break;
       case mojom::SensorType::MAGNETOMETER:
+        RoundMagnetometerReading(reading_xyz);
         break;
       default:
         LOG(FATAL) << "Invalid type: " << GetParam().first;
-        break;
     }
   }
 
@@ -343,7 +377,7 @@ class PlatformSensorChromeOSAxesTest
 };
 
 TEST_P(PlatformSensorChromeOSAxesTest, MissingChannels) {
-  SetChannelsWithAxes(GetParam().second, kNumberOfAxes - 1);
+  SetChannelsWithAxes(GetParam().second.first(kNumberOfAxes - 1));
 
   auto client = std::make_unique<testing::NiceMock<MockPlatformSensorClient>>();
   sensor_->AddClient(client.get());
@@ -360,7 +394,7 @@ TEST_P(PlatformSensorChromeOSAxesTest, MissingChannels) {
 }
 
 TEST_P(PlatformSensorChromeOSAxesTest, GetSamples) {
-  SetChannelsWithAxes(GetParam().second, kNumberOfAxes);
+  SetChannelsWithAxes(GetParam().second);
 
   auto client = std::make_unique<testing::NiceMock<MockPlatformSensorClient>>();
   sensor_->AddClient(client.get());
@@ -396,10 +430,12 @@ INSTANTIATE_TEST_SUITE_P(
     PlatformSensorChromeOSAxesTestRun,
     PlatformSensorChromeOSAxesTest,
     ::testing::Values(std::make_pair(mojom::SensorType::ACCELEROMETER,
-                                     kAccelerometerChannels),
+                                     base::span(kAccelerometerChannels)),
                       std::make_pair(mojom::SensorType::GYROSCOPE,
-                                     kGyroscopeChannels),
+                                     base::span(kGyroscopeChannels)),
                       std::make_pair(mojom::SensorType::MAGNETOMETER,
-                                     kMagnetometerChannels)));
+                                     base::span(kMagnetometerChannels)),
+                      std::make_pair(mojom::SensorType::GRAVITY,
+                                     base::span(kGravityChannels))));
 
 }  // namespace device

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,11 @@
 #include <vector>
 
 #include "base/time/time.h"
+#include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/installer/util/initial_preferences.h"
+#include "extensions/buildflags/buildflags.h"
 
 class GURL;
 class Profile;
@@ -20,10 +23,6 @@ class Profile;
 namespace base {
 class CommandLine;
 class FilePath;
-}
-
-namespace content {
-class WebContents;
 }
 
 namespace user_prefs {
@@ -67,6 +66,21 @@ struct MasterPrefs {
   std::vector<GURL> bookmarks;
   std::string import_bookmarks_path;
   std::string suppress_default_browser_prompt_for_version;
+  base::DictValue import_bookmarks_dict;
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  std::string initial_extensions_provider_name;
+  base::ListValue initial_extensions;
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(IS_MAC)
+  bool confirm_to_quit;
+#endif
+#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  bool eula_required = true;
+#else
+  bool eula_required = false;
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif  // BUILDFLAG(IS_LINUX)
 };
 
 void RegisterProfilePrefs(
@@ -76,25 +90,14 @@ void RegisterProfilePrefs(
 // run for this user.
 bool IsChromeFirstRun();
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Returns true if |command_line|'s switches explicitly specify that first run
 // should be suppressed in the current run.
 bool IsFirstRunSuppressed(const base::CommandLine& command_line);
 #endif
 
-// Returns whether metrics reporting is currently opt-in. This is used to
-// determine if the enable metrics reporting checkbox on first-run should be
-// initially checked. Opt-in means it is not initially checked, opt-out means it
-// is. This is not guaranteed to be correct outside of the first-run situation,
-// as the default may change over time. For that, use
-// GetMetricsReportingDefaultState in
-// chrome/browser/metrics/metrics_reporting_state.h, which gives a value that
-// was stored during first-run.
-bool IsMetricsReportingOptIn();
-
 // Creates the first run sentinel if needed. This should only be called after
-// the process singleton has been grabbed by the current process
-// (http://crbug.com/264694).
+// the process singleton has been grabbed by the current process.
 void CreateSentinelIfNeeded();
 
 // Returns the first run sentinel creation time. This only requires I/O
@@ -104,32 +107,6 @@ base::Time GetFirstRunSentinelCreationTime();
 // Resets the first run status and cached first run sentinel creation time.
 // This is needed for unit tests which are runned in the same process.
 void ResetCachedSentinelDataForTesting();
-
-// Sets a flag that will cause ShouldShowWelcomePage to return true
-// exactly once, so that the browser loads the welcome tab once the
-// message loop gets going.
-void SetShouldShowWelcomePage();
-
-// Returns true if the welcome page should be shown.
-//
-// This will return true only once: The first time it is called after
-// SetShouldShowWelcomePage() is called.
-bool ShouldShowWelcomePage();
-
-// Returns true if |contents| hosts one of the welcome pages.
-bool IsOnWelcomePage(content::WebContents* contents);
-
-// Sets a flag that will cause ShouldDoPersonalDataManagerFirstRun()
-// to return true exactly once, so that the browser loads
-// PersonalDataManager once the main message loop gets going.
-void SetShouldDoPersonalDataManagerFirstRun();
-
-// Returns true if the autofill personal data manager first-run action
-// should be taken.
-//
-// This will return true only once, the first time it is called after
-// SetShouldDoPersonalDataManagerFirstRun() is called.
-bool ShouldDoPersonalDataManagerFirstRun();
 
 // Automatically imports items requested by |profile|'s configuration (sum of
 // policies and initial prefs). Also imports bookmarks from file if
@@ -141,7 +118,7 @@ void AutoImport(Profile* profile,
 // linux. |make_chrome_default_for_user| is the value of
 // kMakeChromeDefaultForUser in master_preferences which contributes to the
 // decision of making chrome default browser in post import tasks.
-void DoPostImportTasks(Profile* profile, bool make_chrome_default_for_user);
+void DoPostImportTasks(bool make_chrome_default_for_user);
 
 // Returns the current state of AutoImport as recorded in a bitfield formed from
 // values in AutoImportState.
@@ -172,6 +149,13 @@ ProcessInitialPreferencesResult ProcessInitialPreferences(
     const base::FilePath& user_data_dir,
     std::unique_ptr<installer::InitialPreferences> initial_prefs,
     MasterPrefs* out_prefs);
+
+#if BUILDFLAG(IS_LINUX)
+// Shows the EULA dialog if required. Returns true if the EULA is accepted
+// or not required. Returns false if the EULA has not been accepted. If the EULA
+// has not been accepted, the caller should exit promptly.
+bool ShowEulaDialog();
+#endif
 
 }  // namespace first_run
 

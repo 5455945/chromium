@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -101,7 +101,33 @@ FakeProfileOAuth2TokenService::GetFakeAccessTokenManager() {
   return static_cast<FakeOAuth2AccessTokenManager*>(GetAccessTokenManager());
 }
 
+FakeProfileOAuth2TokenServiceDelegate*
+FakeProfileOAuth2TokenService::GetFakeDelegate() {
+  if (!GetDelegate()) {
+    return nullptr;
+  }
+  return GetDelegate()->AsFakeProfileOAuth2TokenServiceDelegateForTesting();
+}
+
 bool FakeProfileOAuth2TokenService::IsFakeProfileOAuth2TokenServiceForTesting()
     const {
   return true;
 }
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+void FakeProfileOAuth2TokenService::EnableTokenBindingRegistration() {
+  CHECK(GetFakeDelegate())
+      << "This method can only be used with a fake delegate.";
+  GetFakeDelegate()->EnableTokenBindingRegistration();
+}
+
+void FakeProfileOAuth2TokenService::
+    IssueTokenBindingRegistrationTokenForAuthCode(
+        std::string_view auth_code,
+        std::optional<signin::BindingKeyRegistrationTokenResult> result) {
+  CHECK(GetFakeDelegate())
+      << "This method can only be used with a fake delegate.";
+  GetFakeDelegate()->IssueTokenBindingRegistrationTokenForAuthCode(
+      auth_code, std::move(result));
+}
+#endif

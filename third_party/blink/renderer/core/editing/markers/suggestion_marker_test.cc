@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,6 +37,7 @@ TEST_F(SuggestionMarkerTest, ConstructorAndGetters) {
           .Build());
   EXPECT_EQ(suggestions, marker->Suggestions());
   EXPECT_FALSE(marker->IsMisspelling());
+  EXPECT_FALSE(marker->IsGrammarError());
   EXPECT_EQ(Color::kTransparent, marker->SuggestionHighlightColor());
   EXPECT_EQ(Color::kDarkGray, marker->UnderlineColor());
   EXPECT_TRUE(marker->HasThicknessThin());
@@ -52,6 +53,17 @@ TEST_F(SuggestionMarkerTest, ConstructorAndGetters) {
   EXPECT_TRUE(marker2->HasThicknessThick());
   EXPECT_TRUE(marker2->IsMisspelling());
   EXPECT_EQ(marker2->SuggestionHighlightColor(), Color::kBlack);
+
+  SuggestionMarker* marker3 = MakeGarbageCollected<SuggestionMarker>(
+      0, 1,
+      SuggestionMarkerProperties::Builder()
+          .SetType(SuggestionMarker::SuggestionType::kGrammar)
+          .SetHighlightColor(Color::kBlack)
+          .SetThickness(ui::mojom::ImeTextSpanThickness::kThick)
+          .Build());
+  EXPECT_TRUE(marker3->HasThicknessThick());
+  EXPECT_TRUE(marker3->IsGrammarError());
+  EXPECT_EQ(marker3->SuggestionHighlightColor(), Color::kBlack);
 }
 
 TEST_F(SuggestionMarkerTest, SetSuggestion) {

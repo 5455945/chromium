@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "chromecast/media/api/cma_backend.h"
 #include "chromecast/media/common/audio_decoder_software_wrapper.h"
 #include "chromecast/media/common/media_pipeline_backend_manager.h"
@@ -33,6 +32,11 @@ class ActiveAudioDecoderWrapper : public DestructableAudioDecoder {
       MediaPipelineBackend::AudioDecoder* backend_decoder,
       AudioContentType type,
       MediaPipelineBackendManager::BufferDelegate* buffer_delegate);
+
+  ActiveAudioDecoderWrapper(const ActiveAudioDecoderWrapper&) = delete;
+  ActiveAudioDecoderWrapper& operator=(const ActiveAudioDecoderWrapper&) =
+      delete;
+
   ~ActiveAudioDecoderWrapper() override;
 
   AudioContentType content_type() const { return content_type_; }
@@ -46,8 +50,9 @@ class ActiveAudioDecoderWrapper : public DestructableAudioDecoder {
   bool SetVolume(float multiplier) override;
   RenderingDelay GetRenderingDelay() override;
   void GetStatistics(Statistics* statistics) override;
+  AudioTrackTimestamp GetAudioTrackTimestamp() override;
+  int GetStartThresholdInFrames() override;
   bool RequiresDecryption() override;
-  void SetObserver(CmaBackend::AudioDecoder::Observer* observer) override {}
 
   AudioDecoderSoftwareWrapper decoder_;
   const AudioContentType content_type_;
@@ -59,8 +64,6 @@ class ActiveAudioDecoderWrapper : public DestructableAudioDecoder {
   float stream_volume_multiplier_;
 
   scoped_refptr<DecoderBufferBase> pushed_buffer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ActiveAudioDecoderWrapper);
 };
 
 class AudioDecoderWrapper : public CmaBackend::AudioDecoder {
@@ -72,12 +75,15 @@ class AudioDecoderWrapper : public CmaBackend::AudioDecoder {
       MediaPipelineBackendManager::BufferDelegate* buffer_delegate);
   // Create a "fake" AudioDecoder that's already in revoked state.
   AudioDecoderWrapper(AudioContentType type);
+
+  AudioDecoderWrapper(const AudioDecoderWrapper&) = delete;
+  AudioDecoderWrapper& operator=(const AudioDecoderWrapper&) = delete;
+
   ~AudioDecoderWrapper() override;
 
   void OnInitialized();
   void Revoke();
 
- private:
   // CmaBackend::AudioDecoder implementation:
   void SetDelegate(Delegate* delegate) override;
   BufferStatus PushBuffer(scoped_refptr<DecoderBufferBase> buffer) override;
@@ -85,14 +91,15 @@ class AudioDecoderWrapper : public CmaBackend::AudioDecoder {
   bool SetVolume(float multiplier) override;
   RenderingDelay GetRenderingDelay() override;
   void GetStatistics(Statistics* statistics) override;
+  AudioTrackTimestamp GetAudioTrackTimestamp() override;
+  int GetStartThresholdInFrames() override;
   bool RequiresDecryption() override;
-  void SetObserver(CmaBackend::AudioDecoder::Observer* observer) override {}
 
+ private:
+  scoped_refptr<DecoderBufferBase> pushed_buffer_;
   bool decoder_revoked_;
 
   std::unique_ptr<DestructableAudioDecoder> audio_decoder_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioDecoderWrapper);
 };
 
 }  // namespace media

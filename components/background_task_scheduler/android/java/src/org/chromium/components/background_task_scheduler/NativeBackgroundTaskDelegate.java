@@ -1,13 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.background_task_scheduler;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * Delegate for {@link NativeBackgroundTask} that handles native initialization, and runs the task
  * after Chrome is successfully started.
  */
+@NullMarked
 public interface NativeBackgroundTaskDelegate {
     /**
      * Initializes native and runs the task.

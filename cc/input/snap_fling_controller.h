@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 #define CC_INPUT_SNAP_FLING_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "cc/cc_export.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
 namespace cc {
@@ -24,10 +27,11 @@ class SnapFlingCurve;
 class SnapFlingClient {
  public:
   virtual bool GetSnapFlingInfoAndSetAnimatingSnapTarget(
+      const gfx::Vector2dF& current_delta,
       const gfx::Vector2dF& natural_displacement,
-      gfx::Vector2dF* out_initial_position,
-      gfx::Vector2dF* out_target_position) const = 0;
-  virtual gfx::Vector2dF ScrollByForSnapFling(const gfx::Vector2dF& delta) = 0;
+      gfx::PointF* out_initial_position,
+      gfx::PointF* out_target_position) const = 0;
+  virtual gfx::PointF ScrollByForSnapFling(const gfx::Vector2dF& delta) = 0;
   virtual void ScrollEndForSnapFling(bool did_finish) = 0;
   virtual void RequestAnimationForSnapFling() = 0;
 };
@@ -45,6 +49,7 @@ class CC_EXPORT SnapFlingController {
   struct GestureScrollUpdateInfo {
     gfx::Vector2dF delta;
     bool is_in_inertial_phase;
+    bool is_overscroll;
     base::TimeTicks event_time;
   };
 
@@ -70,6 +75,9 @@ class CC_EXPORT SnapFlingController {
 
   // Notifies the snap fling controller to update or end the scroll animation.
   void Animate(base::TimeTicks time);
+
+  // Finishes the current snap fling animation if active.
+  void Finish();
 
  private:
   friend class test::SnapFlingControllerTest;
@@ -98,9 +106,11 @@ class CC_EXPORT SnapFlingController {
 
   void SetActiveStateForTest() { state_ = State::kActive; }
 
-  SnapFlingClient* client_;
+  raw_ptr<SnapFlingClient> client_;
   State state_ = State::kIdle;
   std::unique_ptr<SnapFlingCurve> curve_;
+  std::optional<gfx::Vector2dF> last_inertial_delta_;
+  int consecutive_decay_frames_ = 0;
 };
 
 }  // namespace cc

@@ -1,15 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/accessibility/select_to_speak/select_to_speak_speed_view.h"
 
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/system/accessibility/select_to_speak/select_to_speak_constants.h"
 #include "ash/system/tray/hover_highlight_view.h"
 #include "ash/system/tray/tray_popup_utils.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -27,6 +27,11 @@ namespace {
 // Start offset in pixels to use for option views.
 constexpr int kOptionInset = 16;
 
+void RecordSpeedMetric(int value) {
+  base::UmaHistogramSparse("Accessibility.CrosSelectToSpeak.SpeedSetFromBubble",
+                           value);
+}
+
 }  // namespace
 
 SelectToSpeakSpeedView::SelectToSpeakSpeedView(Delegate* delegate,
@@ -37,9 +42,9 @@ SelectToSpeakSpeedView::SelectToSpeakSpeedView(Delegate* delegate,
 }
 
 void SelectToSpeakSpeedView::SetInitialSpeechRate(double initial_speech_rate) {
-  RemoveAllChildViews(true);
+  RemoveAllChildViews();
 
-  for (size_t i = 0; i < base::size(kSelectToSpeakSpeechRates); i++) {
+  for (size_t i = 0; i < std::size(kSelectToSpeakSpeechRates); i++) {
     double option_speed = kSelectToSpeakSpeechRates[i];
     bool is_selected = option_speed == initial_speech_rate;
     // Add 1 to the index, because view IDs cannot be 0.
@@ -60,8 +65,10 @@ void SelectToSpeakSpeedView::AddMenuItem(int option_id,
 
 void SelectToSpeakSpeedView::OnViewClicked(views::View* sender) {
   unsigned int speed_index = sender->GetID() - 1;
-  if (speed_index >= 0 && speed_index < base::size(kSelectToSpeakSpeechRates)) {
-    delegate_->OnSpeechRateSelected(kSelectToSpeakSpeechRates[speed_index]);
+  double speech_rate = kSelectToSpeakSpeechRates[speed_index];
+  if (speed_index >= 0 && speed_index < std::size(kSelectToSpeakSpeechRates)) {
+    delegate_->OnSpeechRateSelected(speech_rate);
+    RecordSpeedMetric(floor(speech_rate * 100));
   }
 }
 
@@ -73,7 +80,8 @@ void SelectToSpeakSpeedView::SetInitialFocus() {
 }
 
 void SelectToSpeakSpeedView::OnKeyEvent(ui::KeyEvent* key_event) {
-  if (key_event->type() != ui::ET_KEY_PRESSED || key_event->is_repeat()) {
+  if (key_event->type() != ui::EventType::kKeyPressed ||
+      key_event->is_repeat()) {
     // Only process key when first pressed.
     return;
   }
@@ -93,7 +101,7 @@ void SelectToSpeakSpeedView::OnKeyEvent(ui::KeyEvent* key_event) {
   key_event->StopPropagation();
 }
 
-BEGIN_METADATA(SelectToSpeakSpeedView, views::BoxLayoutView)
+BEGIN_METADATA(SelectToSpeakSpeedView)
 END_METADATA
 
 }  // namespace ash

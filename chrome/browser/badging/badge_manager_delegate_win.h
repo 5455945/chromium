@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,8 @@
 #include <string>
 
 #include "chrome/browser/badging/badge_manager_delegate.h"
-#include "chrome/browser/ui/browser.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
+class BrowserWindowInterface;
 class Profile;
 
 namespace badging {
@@ -23,11 +22,11 @@ class BadgeManagerDelegateWin : public BadgeManagerDelegate {
   explicit BadgeManagerDelegateWin(Profile* profile,
                                    BadgeManager* badge_manager);
 
-  void OnAppBadgeUpdated(const web_app::AppId& app_id) override;
+  void OnAppBadgeUpdated(const webapps::AppId& app_id) override;
 
  private:
   // Determines if a browser is for a specific hosted app, on this profile.
-  bool IsAppBrowser(Browser* browser, const std::string& app_id);
+  bool IsAppBrowser(BrowserWindowInterface* browser, const std::string& app_id);
 };
 
 }  // namespace badging

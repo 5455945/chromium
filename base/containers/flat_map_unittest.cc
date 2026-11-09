@@ -1,21 +1,31 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/containers/flat_map.h"
 
+#include <algorithm>
+#include <concepts>
+#include <deque>
+#include <functional>
+#include <map>
+#include <ranges>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/span.h"
 #include "base/test/move_only_int.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/hash/hash_testing.h"
 
 // A flat_map is basically a interface to flat_tree. So several basic
 // operations are tested to make sure things are set up properly, but the bulk
-// of the tests are in flat_tree_unittests.cc.
+// of the tests are in flat_tree_unittest.cc.
 
 using ::testing::ElementsAre;
 
@@ -35,6 +45,59 @@ bool operator<(const Unsortable& lhs, const Unsortable& rhs) = delete;
 bool operator<=(const Unsortable& lhs, const Unsortable& rhs) = delete;
 bool operator>(const Unsortable& lhs, const Unsortable& rhs) = delete;
 bool operator>=(const Unsortable& lhs, const Unsortable& rhs) = delete;
+
+class ImplicitInt {
+ public:
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  ImplicitInt(int data) : data_(data) {}
+
+ private:
+  friend bool operator<(const ImplicitInt& lhs, const ImplicitInt& rhs) {
+    return lhs.data_ < rhs.data_;
+  }
+
+  int data_;
+};
+
+template <typename T>
+struct ResetOnMove {
+  explicit ResetOnMove(T val) : val(std::move(val)) {}
+  ResetOnMove(const ResetOnMove& other) = default;
+  ResetOnMove& operator=(const ResetOnMove& other) = default;
+  ResetOnMove(ResetOnMove&& other) : val(std::exchange(other.val, T())) {}
+  ResetOnMove& operator=(ResetOnMove&& other) {
+    val = std::exchange(other.val, T());
+    return *this;
+  }
+
+  friend constexpr auto operator<=>(const ResetOnMove& lhs,
+                                    const ResetOnMove& rhs) = default;
+
+  friend constexpr auto operator<=>(const T& lhs, const ResetOnMove& rhs) {
+    return lhs <=> rhs.val;
+  }
+
+  friend constexpr auto operator<=>(const ResetOnMove& lhs, const T& rhs) {
+    return lhs.val <=> rhs;
+  }
+
+  T val = {};
+};
+
+// Whether `flat_map(c)` and `flat_map(sorted_unique, c)` deduce a `flat_map`
+// for a `Container`.
+template <typename Container>
+concept CanDeduceFlatMap = requires(Container c) { flat_map(c); };
+template <typename Container>
+concept CanDeduceSortedFlatMap =
+    requires(Container c) { flat_map(sorted_unique, c); };
+
+// An alias template whose container defaults to one built from the key and
+// mapped types.
+template <typename Key,
+          typename Mapped,
+          typename Container = std::vector<std::pair<Key, Mapped>>>
+using DescendingFlatMap = flat_map<Key, Mapped, std::greater<>, Container>;
 
 }  // namespace
 
@@ -169,6 +232,28 @@ TEST(FlatMap, CopySwap) {
   EXPECT_THAT(copy, ElementsAre(std::make_pair(1, 1), std::make_pair(2, 2)));
 }
 
+// operator[](Key&)
+TEST(FlatMap, SubscriptMutableKey) {
+  base::flat_map<ResetOnMove<int>, int> m;
+
+  // Default construct elements that don't exist yet.
+  ResetOnMove key(1);
+  int& s = m[key];
+  EXPECT_EQ(0, s);
+  EXPECT_EQ(1u, m.size());
+  EXPECT_EQ(1, key.val);
+
+  // The returned mapped reference should refer into the map.
+  s = 22;
+  EXPECT_EQ(22, m[key]);
+  EXPECT_EQ(1, key.val);
+
+  // Overwrite existing elements.
+  m[key] = 44;
+  EXPECT_EQ(44, m[key]);
+  EXPECT_EQ(1, key.val);
+}
+
 // operator[](const Key&)
 TEST(FlatMap, SubscriptConstKey) {
   base::flat_map<std::string, int> m;
@@ -205,6 +290,24 @@ TEST(FlatMap, SubscriptMoveOnlyKey) {
   EXPECT_EQ(44, m[MoveOnlyInt(1)]);
 }
 
+// operator[](K&&)
+TEST(FlatMap, SubscriptConstructibleKey) {
+  base::flat_map<std::string, int> m;
+
+  // Default construct elements that don't exist yet.
+  int& s = m[std::string_view("a")];
+  EXPECT_EQ(0, s);
+  EXPECT_EQ(1u, m.size());
+
+  // The returned mapped reference should refer into the map.
+  s = 22;
+  EXPECT_EQ(22, m[std::string_view("a")]);
+
+  // Overwrite existing elements.
+  m[std::string_view("a")] = 44;
+  EXPECT_EQ(44, m[std::string_view("a")]);
+}
+
 // Mapped& at(const Key&)
 // const Mapped& at(const Key&) const
 TEST(FlatMap, AtFunction) {
@@ -215,7 +318,7 @@ TEST(FlatMap, AtFunction) {
   EXPECT_EQ("b", m.at(2));
 
   // Const reference works.
-  const std::string& const_ref = base::as_const(m).at(1);
+  const std::string& const_ref = std::as_const(m).at(1);
   EXPECT_EQ("a", const_ref);
 
   // Reference works, can operate on the string.
@@ -228,8 +331,8 @@ TEST(FlatMap, AtFunction) {
 
   // Heterogeneous look-up works.
   base::flat_map<std::string, int> m2 = {{"a", 1}, {"b", 2}};
-  EXPECT_EQ(1, m2.at(base::StringPiece("a")));
-  EXPECT_EQ(2, base::as_const(m2).at(base::StringPiece("b")));
+  EXPECT_EQ(1, m2.at(std::string_view("a")));
+  EXPECT_EQ(2, std::as_const(m2).at(std::string_view("b")));
 }
 
 // insert_or_assign(K&&, M&&)
@@ -246,8 +349,8 @@ TEST(FlatMap, InsertOrAssignMoveOnlyKey) {
   EXPECT_EQ(22, result.first->second.data());
   EXPECT_TRUE(result.second);
   EXPECT_EQ(1u, m.size());
-  EXPECT_EQ(0, key.data());  // moved from
-  EXPECT_EQ(0, val.data());  // moved from
+  EXPECT_EQ(0, key.data());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val.data());  // NOLINT(bugprone-use-after-move)
 
   // Second call with same key should result in an assignment, overwriting the
   // old value. Assignment should be indicated by setting the second pair member
@@ -260,14 +363,14 @@ TEST(FlatMap, InsertOrAssignMoveOnlyKey) {
   EXPECT_EQ(44, result.first->second.data());
   EXPECT_FALSE(result.second);
   EXPECT_EQ(1u, m.size());
-  EXPECT_EQ(1, key.data());  // not moved from
-  EXPECT_EQ(0, val.data());  // moved from
+  EXPECT_EQ(1, key.data());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val.data());  // NOLINT(bugprone-use-after-move)
 
   // Check that random insertion results in sorted range.
   base::flat_map<MoveOnlyInt, int> map;
   for (int i : {3, 1, 5, 6, 8, 7, 0, 9, 4, 2}) {
     map.insert_or_assign(MoveOnlyInt(i), i);
-    EXPECT_TRUE(ranges::is_sorted(map));
+    EXPECT_TRUE(std::ranges::is_sorted(map));
   }
 }
 
@@ -283,8 +386,8 @@ TEST(FlatMap, InsertOrAssignMoveOnlyKeyWithHint) {
   EXPECT_EQ(1, result->first.data());
   EXPECT_EQ(22, result->second.data());
   EXPECT_EQ(1u, m.size());
-  EXPECT_EQ(0, key.data());  // moved from
-  EXPECT_EQ(0, val.data());  // moved from
+  EXPECT_EQ(0, key.data());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val.data());  // NOLINT(bugprone-use-after-move)
 
   // Second call with same key should result in an assignment, overwriting the
   // old value. Only the inserted value should be moved from, the key should be
@@ -295,14 +398,14 @@ TEST(FlatMap, InsertOrAssignMoveOnlyKeyWithHint) {
   EXPECT_EQ(1, result->first.data());
   EXPECT_EQ(44, result->second.data());
   EXPECT_EQ(1u, m.size());
-  EXPECT_EQ(1, key.data());  // not moved from
-  EXPECT_EQ(0, val.data());  // moved from
+  EXPECT_EQ(1, key.data());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val.data());  // NOLINT(bugprone-use-after-move)
 
   // Check that random insertion results in sorted range.
   base::flat_map<MoveOnlyInt, int> map;
   for (int i : {3, 1, 5, 6, 8, 7, 0, 9, 4, 2}) {
     map.insert_or_assign(map.end(), MoveOnlyInt(i), i);
-    EXPECT_TRUE(ranges::is_sorted(map));
+    EXPECT_TRUE(std::ranges::is_sorted(map));
   }
 }
 
@@ -323,9 +426,9 @@ TEST(FlatMap, TryEmplaceMoveOnlyKey) {
   EXPECT_EQ(44, result.first->second.second.data());
   EXPECT_TRUE(result.second);
   EXPECT_EQ(1u, m.size());
-  EXPECT_EQ(0, key.data());   // moved from
-  EXPECT_EQ(0, val1.data());  // moved from
-  EXPECT_EQ(0, val2.data());  // moved from
+  EXPECT_EQ(0, key.data());   // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val1.data());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val2.data());  // NOLINT(bugprone-use-after-move)
 
   // Second call with same key should result in a no-op, returning an iterator
   // to the existing element and returning false as the second pair member.
@@ -347,7 +450,7 @@ TEST(FlatMap, TryEmplaceMoveOnlyKey) {
   base::flat_map<MoveOnlyInt, int> map;
   for (int i : {3, 1, 5, 6, 8, 7, 0, 9, 4, 2}) {
     map.try_emplace(MoveOnlyInt(i), i);
-    EXPECT_TRUE(ranges::is_sorted(map));
+    EXPECT_TRUE(std::ranges::is_sorted(map));
   }
 }
 
@@ -368,9 +471,9 @@ TEST(FlatMap, TryEmplaceMoveOnlyKeyWithHint) {
   EXPECT_EQ(22, result->second.first.data());
   EXPECT_EQ(44, result->second.second.data());
   EXPECT_EQ(1u, m.size());
-  EXPECT_EQ(0, key.data());   // moved from
-  EXPECT_EQ(0, val1.data());  // moved from
-  EXPECT_EQ(0, val2.data());  // moved from
+  EXPECT_EQ(0, key.data());   // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val1.data());  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(0, val2.data());  // NOLINT(bugprone-use-after-move)
 
   // Second call with same key should result in a no-op, returning an iterator
   // to the existing element. Key and values that were attempted to be inserted
@@ -393,7 +496,7 @@ TEST(FlatMap, TryEmplaceMoveOnlyKeyWithHint) {
   base::flat_map<MoveOnlyInt, int> map;
   for (int i : {3, 1, 5, 6, 8, 7, 0, 9, 4, 2}) {
     map.try_emplace(map.end(), MoveOnlyInt(i), i);
-    EXPECT_TRUE(ranges::is_sorted(map));
+    EXPECT_TRUE(std::ranges::is_sorted(map));
   }
 }
 
@@ -409,6 +512,8 @@ TEST(FlatMap, UsingTransparentCompare) {
   m1.count(x);
   m.find(x);
   m1.find(x);
+  m.contains(x);
+  m1.contains(x);
   m.equal_range(x);
   m1.equal_range(x);
   m.lower_bound(x);
@@ -422,6 +527,224 @@ TEST(FlatMap, UsingTransparentCompare) {
   m.emplace(ExplicitInt(1), 0);
   m.erase(m.begin());
   m.erase(m.cbegin());
+}
+
+TEST(FlatMap, UsingInitializerList) {
+  base::flat_map<ImplicitInt, int> m;
+  const auto& m1 = m;
+
+  // Check if the calls can be resolved. Correctness is checked in flat_tree
+  // tests.
+  m.count({1});
+  m1.count({2});
+  m.find({3});
+  m1.find({4});
+  m.contains({5});
+  m1.contains({6});
+  m.equal_range({7});
+  m1.equal_range({8});
+  m.lower_bound({9});
+  m1.lower_bound({10});
+  m.upper_bound({11});
+  m1.upper_bound({12});
+  m.erase({13});
+}
+
+TEST(FlatMap, DeductionGuides) {
+  {
+    std::vector<std::pair<int, float>> v = {{1, 4.0}, {2, 3.0}};
+    flat_map map{v};
+    static_assert(std::same_as<decltype(map), flat_map<int, float>>);
+  }
+
+  {
+    std::vector<std::pair<int, float>> v = {{1, 4.0}, {2, 3.0}};
+    flat_map map(std::move(v));
+    static_assert(std::same_as<decltype(map), flat_map<int, float>>);
+  }
+
+  using IntCharMap = flat_map<int, char>;
+  std::vector<std::pair<int, char>> v = {{2, 'b'}, {1, 'a'}, {2, 'c'}};
+  std::map<int, char> std_map(std::from_range, v);
+
+  // Container.
+  {
+    flat_map map(v, std::greater<>());
+    static_assert(
+        std::same_as<decltype(map), flat_map<int, char, std::greater<>>>);
+    EXPECT_THAT(map, ElementsAre(std::pair(2, 'b'), std::pair(1, 'a')));
+  }
+  {
+    flat_map map(sorted_unique, std::vector<std::pair<int, char>>{{1, 'a'}});
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+  }
+  {
+    std::deque<std::pair<int, char>> d = {{2, 'b'}, {1, 'a'}};
+    flat_map map(sorted_unique, d, std::greater<>());
+    static_assert(std::same_as<decltype(map),
+                               flat_map<int, char, std::greater<>,
+                                        std::deque<std::pair<int, char>>>>);
+    EXPECT_THAT(map, ElementsAre(std::pair(2, 'b'), std::pair(1, 'a')));
+  }
+  // Container deduction also works through alias templates.
+  {
+    DescendingFlatMap map(v);
+    static_assert(
+        std::same_as<decltype(map), flat_map<int, char, std::greater<>>>);
+    EXPECT_THAT(map, ElementsAre(std::pair(2, 'b'), std::pair(1, 'a')));
+  }
+  {
+    std::deque<std::pair<int, char>> d = {{2, 'b'}, {1, 'a'}};
+    DescendingFlatMap map(sorted_unique, d);
+    static_assert(std::same_as<decltype(map),
+                               flat_map<int, char, std::greater<>,
+                                        std::deque<std::pair<int, char>>>>);
+  }
+
+  // Views are rejected, since the deduced map wouldn't own its elements.
+  static_assert(CanDeduceFlatMap<std::vector<std::pair<int, char>>>);
+  static_assert(!CanDeduceFlatMap<span<const std::pair<int, char>>>);
+  static_assert(CanDeduceSortedFlatMap<std::vector<std::pair<int, char>>>);
+  static_assert(!CanDeduceSortedFlatMap<span<const std::pair<int, char>>>);
+  // So are non-ranges, even if they have a pair `value_type`.
+  using PairIterator = std::vector<std::pair<int, char>>::iterator;
+  static_assert(!CanDeduceFlatMap<PairIterator>);
+  static_assert(!CanDeduceSortedFlatMap<PairIterator>);
+
+  // Iterator pair. The const key of `std::map`'s value type is dropped.
+  {
+    flat_map map(v.begin(), v.end());
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+    EXPECT_THAT(map, ElementsAre(std::pair(1, 'a'), std::pair(2, 'b')));
+  }
+  {
+    flat_map map(std_map.begin(), std_map.end(), std::greater<>());
+    static_assert(
+        std::same_as<decltype(map), flat_map<int, char, std::greater<>>>);
+  }
+  {
+    flat_map map(sorted_unique, std_map.begin(), std_map.end());
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+  }
+  // As for `std::flat_map`, any tuple-like value type works for iterators.
+  {
+    std::vector<std::tuple<int, char>> tuples = {{2, 'b'}, {1, 'a'}};
+    flat_map map(tuples.begin(), tuples.end());
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+    EXPECT_THAT(map, ElementsAre(std::pair(1, 'a'), std::pair(2, 'b')));
+  }
+
+  // Range.
+  {
+    flat_map map(std::from_range, std_map);
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+    EXPECT_THAT(map, ElementsAre(std::pair(1, 'a'), std::pair(2, 'b')));
+  }
+  {
+    flat_map map(std::from_range, std_map, std::greater<>());
+    static_assert(
+        std::same_as<decltype(map), flat_map<int, char, std::greater<>>>);
+    EXPECT_THAT(map, ElementsAre(std::pair(2, 'b'), std::pair(1, 'a')));
+  }
+  {
+    flat_map map(std::from_range, sorted_unique, std_map);
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+  }
+
+  // Initializer list.
+  {
+    flat_map map = {std::pair(2, 'b'), std::pair(1, 'a')};
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+    EXPECT_THAT(map, ElementsAre(std::pair(1, 'a'), std::pair(2, 'b')));
+  }
+  {
+    flat_map map({std::pair(1, 'a')}, std::greater<>());
+    static_assert(
+        std::same_as<decltype(map), flat_map<int, char, std::greater<>>>);
+  }
+  {
+    flat_map map(sorted_unique, {std::pair(1, 'a'), std::pair(2, 'b')});
+    static_assert(std::same_as<decltype(map), IntCharMap>);
+  }
+
+  // Copying a `flat_map` deduces the same type, with or without braces.
+  {
+    flat_map<int, char, std::greater<>> source = {{1, 'a'}};
+    flat_map map1(source);
+    flat_map map2{source};
+    static_assert(std::same_as<decltype(map1), decltype(source)>);
+    static_assert(std::same_as<decltype(map2), decltype(source)>);
+  }
+}
+
+TEST(FlatMap, AbslHashValue) {
+  enum class Word { kCabbage, kLettuce, kKale };
+  using Map = flat_map<Word, std::string>;
+  EXPECT_TRUE(absl::VerifyTypeImplementsAbslHashCorrectly({
+      // These two are identical.
+      Map({{Word::kCabbage, "green"}, {Word::kLettuce, "green"}}),
+      Map({{Word::kCabbage, "green"}, {Word::kLettuce, "green"}}),
+      // `flat_map` is ordered, so this is also identical.
+      Map({{Word::kLettuce, "green"}, {Word::kCabbage, "green"}}),
+      // Different content.
+      Map({{Word::kKale, "green"}, {Word::kLettuce, "green"}}),
+      Map({}),
+      Map({{Word::kCabbage, "purple"}, {Word::kLettuce, "green"}}),
+  }));
+}
+
+TEST(FlatMap, ConstexprBracketOperator) {
+  static_assert([] {
+    flat_map<int, int> map;
+    map[2] = 25;
+    return map[2];
+  }() == 25);
+
+  // Default element is constructed.
+  static_assert([] {
+    flat_map<int, int> map;
+    return map[2];
+  }() == 0);
+
+  // Element is overridden.
+  static_assert([] {
+    flat_map<int, int> map;
+    map[2] = 25;
+    map[2] = 20;
+    return map[2];
+  }() == 20);
+}
+
+TEST(FlatMap, Constexpr) {
+  static constexpr flat_map<int, int, std::less<>,
+                            std::array<std::pair<int, int>, 3>>
+      kMap(sorted_unique,
+           std::array<std::pair<int, int>, 3>{{{1, 10}, {2, 20}, {3, 30}}});
+
+  static_assert(kMap.size() == 3);
+  static_assert(!kMap.empty());
+  static_assert(kMap.contains(2));
+  static_assert(!kMap.contains(4));
+  static_assert(kMap.find(2)->second == 20);
+  static_assert(kMap.lower_bound(2)->second == 20);
+  static_assert(kMap.upper_bound(2)->second == 30);
+  static_assert(kMap.equal_range(2).first->second == 20);
+  EXPECT_EQ(kMap.size(), 3u);
+}
+
+TEST(FlatMap, ConstexprTryEmplace) {
+  static_assert([] {
+    flat_map<int, int> map;
+    auto try_emplace_result = map.try_emplace(2, 2);
+    return try_emplace_result.second && map.find(2)->second == 2;
+  }() == true);
+
+  static_assert([] {
+    flat_map<int, int> map;
+    map[2] = 3;
+    auto try_emplace_result = map.try_emplace(2, 2);
+    return try_emplace_result.second && map.find(2)->second == 3;
+  }() == false);
 }
 
 }  // namespace base

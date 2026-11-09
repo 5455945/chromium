@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,22 @@ using blink::mojom::UserActivationNotificationType;
 
 namespace blink {
 
-// The expiry time should be long enough to allow network round trips even in a
-// very slow connection (to support xhr-like calls with user activation), yet
-// not too long to make an "unattended" page feel activated.
-constexpr base::TimeDelta kActivationLifespan = base::TimeDelta::FromSeconds(5);
+namespace {
+
+// Indicates if |notification_type| should be considered restricted.  See
+// |LastActivationWasRestricted| for details.
+bool IsRestricted(UserActivationNotificationType notification_type) {
+  return notification_type == UserActivationNotificationType::
+                                  kExtensionMessagingBothPrivileged ||
+         notification_type == UserActivationNotificationType::
+                                  kExtensionMessagingSenderPrivileged ||
+         notification_type == UserActivationNotificationType::
+                                  kExtensionMessagingReceiverPrivileged ||
+         notification_type == UserActivationNotificationType::
+                                  kExtensionMessagingNeitherPrivileged;
+}
+
+}  // namespace
 
 UserActivationState::UserActivationState()
     : first_notification_type_(UserActivationNotificationType::kNone),
@@ -23,19 +35,27 @@ UserActivationState::UserActivationState()
 void UserActivationState::Activate(
     UserActivationNotificationType notification_type) {
   has_been_active_ = true;
+  last_activation_was_restricted_ = IsRestricted(notification_type);
   ActivateTransientState();
 
   // Update states for UMA.
-  DCHECK(notification_type != UserActivationNotificationType::kNone);
-  if (first_notification_type_ == UserActivationNotificationType::kNone)
+  CHECK_NE(notification_type, UserActivationNotificationType::kNone);
+  if (first_notification_type_ == UserActivationNotificationType::kNone) {
     first_notification_type_ = notification_type;
+  }
   last_notification_type_ = notification_type;
-  if (notification_type == UserActivationNotificationType::kInteraction)
+  if (notification_type == UserActivationNotificationType::kInteraction) {
     transient_state_expiry_time_for_interaction_ = transient_state_expiry_time_;
+  }
+}
+
+void UserActivationState::SetHasBeenActive() {
+  has_been_active_ = true;
 }
 
 void UserActivationState::Clear() {
   has_been_active_ = false;
+  last_activation_was_restricted_ = false;
   first_notification_type_ = UserActivationNotificationType::kNone;
   last_notification_type_ = UserActivationNotificationType::kNone;
   DeactivateTransientState();
@@ -70,9 +90,14 @@ bool UserActivationState::ConsumeIfActive() {
   return true;
 }
 
+bool UserActivationState::LastActivationWasRestricted() const {
+  return last_activation_was_restricted_;
+}
+
 void UserActivationState::RecordPreconsumptionUma() const {
-  if (!IsActiveInternal())
+  if (!IsActiveInternal()) {
     return;
+  }
   base::UmaHistogramEnumeration("Event.UserActivation.TriggerForConsuming",
                                 EffectiveNotificationType());
 }

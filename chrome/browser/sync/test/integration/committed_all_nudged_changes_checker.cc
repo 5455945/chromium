@@ -1,14 +1,16 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/test/integration/committed_all_nudged_changes_checker.h"
 
-#include "components/sync/driver/sync_service_impl.h"
+#include "base/check.h"
+#include "components/sync/service/sync_service_impl.h"
 
 CommittedAllNudgedChangesChecker::CommittedAllNudgedChangesChecker(
     syncer::SyncServiceImpl* service)
     : SingleClientStatusChangeChecker(service) {
+  CHECK(service->IsEngineInitialized());
   service->HasUnsyncedItemsForTest(
       base::BindOnce(&CommittedAllNudgedChangesChecker::GotHasUnsyncedItems,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -19,9 +21,6 @@ CommittedAllNudgedChangesChecker::~CommittedAllNudgedChangesChecker() = default;
 bool CommittedAllNudgedChangesChecker::IsExitConditionSatisfied(
     std::ostream* os) {
   *os << "Waiting for all committed items";
-
-  // Check that progress markers are non-empty to verify that there was at least
-  // one sync cycle.
   return has_unsynced_items_.has_value() && !has_unsynced_items_.value();
 }
 

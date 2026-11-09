@@ -1,10 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/memory/enterprise_memory_limit_evaluator.h"
 
-#include "base/bind.h"
+#include "base/byte_size.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/performance_manager/public/decorators/process_metrics_decorator.h"
 #include "components/performance_manager/public/graph/process_node.h"
 #include "components/performance_manager/public/performance_manager.h"
@@ -12,56 +14,49 @@
 namespace memory {
 
 EnterpriseMemoryLimitEvaluator::EnterpriseMemoryLimitEvaluator(
-    std::unique_ptr<util::MemoryPressureVoter> voter)
+    std::unique_ptr<memory_pressure::MemoryPressureVoter> voter)
     : voter_(std::move(voter)), weak_ptr_factory_(this) {}
 
 EnterpriseMemoryLimitEvaluator::~EnterpriseMemoryLimitEvaluator() {
-  DCHECK(!observer_);
+  CHECK(!observer_, base::NotFatalUntil::M161);
 }
 
 void EnterpriseMemoryLimitEvaluator::Start() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!observer_);
+  CHECK(!observer_, base::NotFatalUntil::M161);
   auto observer =
       std::make_unique<EnterpriseMemoryLimitEvaluator::GraphObserver>(
           base::BindRepeating(
               &EnterpriseMemoryLimitEvaluator::OnTotalResidentSetKbSample,
               weak_ptr_factory_.GetWeakPtr()),
-          base::SequencedTaskRunnerHandle::Get());
+          base::SequencedTaskRunner::GetCurrentDefault());
   observer_ = observer.get();
-  performance_manager::PerformanceManager::PassToGraph(FROM_HERE,
-                                                       std::move(observer));
+  performance_manager::PerformanceManager::GetGraph()->PassToGraph(
+      std::move(observer));
 }
 
 std::unique_ptr<EnterpriseMemoryLimitEvaluator::GraphObserver>
 EnterpriseMemoryLimitEvaluator::StartForTesting() {
-  DCHECK(!observer_);
+  CHECK(!observer_, base::NotFatalUntil::M161);
   auto observer =
       std::make_unique<EnterpriseMemoryLimitEvaluator::GraphObserver>(
           base::BindRepeating(
               &EnterpriseMemoryLimitEvaluator::OnTotalResidentSetKbSample,
               weak_ptr_factory_.GetWeakPtr()),
-          base::SequencedTaskRunnerHandle::Get());
+          base::SequencedTaskRunner::GetCurrentDefault());
   observer_ = observer.get();
   return observer;
 }
 
 void EnterpriseMemoryLimitEvaluator::Stop() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M161);
   // Start by invalidating all the WeakPtrs that have been served, this will
   // invalidate the callback owned by the observer.
   weak_ptr_factory_.InvalidateWeakPtrs();
-  // It's safe to pass |observer_| as Unretained, it's merely used as a key.
-  performance_manager::PerformanceManager::CallOnGraph(
-      FROM_HERE, base::BindOnce(
-                     [](performance_manager::GraphOwned* observer,
-                        performance_manager::Graph* graph) {
-                       // This will destroy the observer since TakeFromGraph
-                       // returns a unique_ptr.
-                       graph->TakeFromGraph(observer);
-                     },
-                     base::Unretained(observer_)));
+
+  // This will destroy the observer since TakeFromGraph returns a unique_ptr.
+  performance_manager::PerformanceManager::GetGraph()->TakeFromGraph(observer_);
   observer_ = nullptr;
 }
 
@@ -72,12 +67,13 @@ void EnterpriseMemoryLimitEvaluator::StopForTesting() {
 void EnterpriseMemoryLimitEvaluator::OnTotalResidentSetKbSample(
     uint64_t resident_set_sample_kb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::MemoryPressureLevel old_vote = current_vote_;
   // Limit is in mb, must convert to kb.
   bool is_critical = resident_set_sample_kb > (resident_set_limit_mb_ * 1024);
-  voter_->SetVote(
-      is_critical ? base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL
-                  : base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE,
-      /* notify_listeners = */ is_critical);
+  current_vote_ = is_critical ? base::MEMORY_PRESSURE_LEVEL_CRITICAL
+                              : base::MEMORY_PRESSURE_LEVEL_NONE;
+  bool notify = is_critical || current_vote_ != old_vote;
+  voter_->SetVote(current_vote_, /* notify_listeners = */ notify);
 }
 
 void EnterpriseMemoryLimitEvaluator::SetResidentSetLimitMb(
@@ -115,11 +111,14 @@ void EnterpriseMemoryLimitEvaluator::GraphObserver::OnTakenFromGraph(
 void EnterpriseMemoryLimitEvaluator::GraphObserver::
     OnProcessMemoryMetricsAvailable(
         const performance_manager::SystemNode* system_node) {
-  uint64_t total_rss_kb = 0U;
-  for (const auto* node : system_node->GetGraph()->GetAllProcessNodes())
-    total_rss_kb += node->GetResidentSetKb();
+  base::ByteSize total_rss;
+  for (const performance_manager::ProcessNode* process_node :
+       system_node->GetGraph()->GetAllProcessNodes()) {
+    total_rss += process_node->GetResidentSet();
+  }
   task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(std::move(on_sample_callback_), total_rss_kb));
+      FROM_HERE,
+      base::BindOnce(std::move(on_sample_callback_), total_rss.InKiB()));
 }
 
 void EnterpriseMemoryLimitEvaluator::GraphObserver::

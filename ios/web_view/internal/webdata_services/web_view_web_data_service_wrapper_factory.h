@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "components/keyed_service/ios/browser_state_keyed_service_factory.h"
 
@@ -33,7 +32,7 @@ class WebViewWebDataServiceWrapperFactory
   static WebDataServiceWrapper* GetForBrowserState(
       WebViewBrowserState* browser_state,
       ServiceAccessType access_type);
-  static WebDataServiceWrapper* GetForBrowserStateIfExists(
+  static WebDataServiceWrapper* GetForProfileIfExists(
       WebViewBrowserState* browser_state,
       ServiceAccessType access_type);
 
@@ -55,6 +54,11 @@ class WebViewWebDataServiceWrapperFactory
 
   static WebViewWebDataServiceWrapperFactory* GetInstance();
 
+  WebViewWebDataServiceWrapperFactory(
+      const WebViewWebDataServiceWrapperFactory&) = delete;
+  WebViewWebDataServiceWrapperFactory& operator=(
+      const WebViewWebDataServiceWrapperFactory&) = delete;
+
  private:
   friend class base::NoDestructor<WebViewWebDataServiceWrapperFactory>;
 
@@ -65,8 +69,6 @@ class WebViewWebDataServiceWrapperFactory
   std::unique_ptr<KeyedService> BuildServiceInstanceFor(
       web::BrowserState* context) const override;
   bool ServiceIsNULLWhileTesting() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(WebViewWebDataServiceWrapperFactory);
 };
 
 }  // namespace ios_web_view

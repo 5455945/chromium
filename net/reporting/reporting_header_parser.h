@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,57 +6,51 @@
 #define NET_REPORTING_REPORTING_HEADER_PARSER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
+#include "base/values.h"
 #include "net/base/net_export.h"
 #include "net/http/structured_headers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
 #include "url/origin.h"
-
-namespace base {
-class Value;
-}  // namespace base
 
 namespace net {
 
-class NetworkIsolationKey;
+class IsolationInfo;
+class NetworkAnonymizationKey;
 class ReportingContext;
 
 // Tries to parse a Reporting-Endpoints header. Returns base::nullopt if parsing
 // failed and the header should be ignored; otherwise returns a (possibly
 // empty) mapping of endpoint names to URLs.
 NET_EXPORT
-absl::optional<base::flat_map<std::string, std::string>>
-ParseReportingEndpoints(const std::string& header);
+std::optional<base::flat_map<std::string, std::string>> ParseReportingEndpoints(
+    const std::string& header);
 
 class NET_EXPORT ReportingHeaderParser {
  public:
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  enum class ReportingHeaderType {
-    kReportTo = 0,
-    kReportToInvalid = 1,
-    kMaxValue = kReportToInvalid,
-  };
+  ReportingHeaderParser() = delete;
+  ReportingHeaderParser(const ReportingHeaderParser&) = delete;
+  ReportingHeaderParser& operator=(const ReportingHeaderParser&) = delete;
 
   static void ParseReportToHeader(
       ReportingContext* context,
-      const NetworkIsolationKey& network_isolation_key,
-      const GURL& url,
-      std::unique_ptr<base::Value> value);
+      const NetworkAnonymizationKey& network_anonymization_key,
+      const url::Origin& origin,
+      const base::ListValue& list);
 
+  // `isolation_info` here will be stored in the cache, associated with the
+  // `reporting_source`. `network_anonymization_key` is the NAK which will be
+  // passed in with reports to be queued. This must match the NAK from
+  // `isolation_source`, unless it is empty (which will be the case if the
+  // network state partitioning is disabled).
   static void ProcessParsedReportingEndpointsHeader(
       ReportingContext* context,
-      const NetworkIsolationKey& network_isolation_key,
+      const base::UnguessableToken& reporting_source,
+      const IsolationInfo& isolation_info,
+      const NetworkAnonymizationKey& network_anonymization_key,
       const url::Origin& origin,
       base::flat_map<std::string, std::string> parsed_header);
-
-  static void RecordReportingHeaderType(ReportingHeaderType header_type);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(ReportingHeaderParser);
 };
 
 }  // namespace net

@@ -1,14 +1,13 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/component_updater/chrome_origin_trials_component_installer.h"
 
-#include <cstdint>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/browser_process.h"
 #include "components/embedder_support/origin_trials/component_updater_utils.h"
 
@@ -17,7 +16,7 @@ namespace component_updater {
 void ChromeOriginTrialsComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   // Read the configuration from the manifest and set values in browser
   // local_state. These will be used on the next browser restart.
   // If an individual configuration value is missing, treat as a reset to the

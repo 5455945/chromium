@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/test/gtest_util.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "printing/backend/mojom/print_backend.mojom.h"
 #include "printing/backend/print_backend.h"
@@ -19,6 +20,10 @@
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/size.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/test/gmock_expected_support.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace printing {
 
@@ -31,22 +36,15 @@ constexpr char kAccessDeniedPrinterName[] = "access-denied-test-printer";
 constexpr char kInvalidPrinterName[] = "invalid-test-printer";
 constexpr char kInvalidDataPrinterName[] = "invalid-data-test-printer";
 
-constexpr int kDefaultPrinterStatus = 0;
-constexpr int kAlternatePrinterStatus = 1;
-
 const PrinterBasicInfo kDefaultPrinterInfo(
     /*printer_name=*/kDefaultPrinterName,
     /*display_name=*/"default test printer",
     /*printer_description=*/"Default printer for testing.",
-    /*printer_status=*/kDefaultPrinterStatus,
-    /*is_default=*/true,
     /*options=*/PrinterBasicInfoOptions{});
 const PrinterBasicInfo kAlternatePrinterInfo(
     /*printer_name=*/kAlternatePrinterName,
     /*display_name=*/"alternate test printer",
     /*printer_description=*/"Alternate printer for testing.",
-    /*printer_status=*/kAlternatePrinterStatus,
-    /*is_default=*/false,
     /*options=*/PrinterBasicInfoOptions{});
 
 constexpr int32_t kDefaultCopiesMax = 123;
@@ -101,17 +99,16 @@ TEST_F(TestPrintBackendTest, EnumeratePrinters) {
 
   AddPrinters();
 
-  EXPECT_EQ(GetPrintBackend()->EnumeratePrinters(&printer_list),
+  EXPECT_EQ(GetPrintBackend()->EnumeratePrinters(printer_list),
             mojom::ResultCode::kSuccess);
   EXPECT_THAT(printer_list, testing::ContainerEq(kPrinterList));
 }
 
 TEST_F(TestPrintBackendTest, EnumeratePrintersNoneFound) {
-  const PrinterList kPrinterList{kAlternatePrinterInfo, kDefaultPrinterInfo};
   PrinterList printer_list;
 
   // Should return true even when there are no printers in the environment.
-  EXPECT_EQ(GetPrintBackend()->EnumeratePrinters(&printer_list),
+  EXPECT_EQ(GetPrintBackend()->EnumeratePrinters(printer_list),
             mojom::ResultCode::kSuccess);
   EXPECT_TRUE(printer_list.empty());
 }
@@ -124,11 +121,11 @@ TEST_F(TestPrintBackendTest, DefaultPrinterName) {
             mojom::ResultCode::kSuccess);
   EXPECT_TRUE(default_printer.empty());
 
-  // Once printers are available, should be a default.
+  // Once printers are available, not automatically marked as default.
   AddPrinters();
   ASSERT_EQ(GetPrintBackend()->GetDefaultPrinterName(default_printer),
             mojom::ResultCode::kSuccess);
-  EXPECT_EQ(default_printer, kDefaultPrinterName);
+  EXPECT_TRUE(default_printer.empty());
 
   // Changing default should be reflected on next query.
   GetPrintBackend()->SetDefaultPrinterName(kAlternatePrinterName);
@@ -136,15 +133,15 @@ TEST_F(TestPrintBackendTest, DefaultPrinterName) {
             mojom::ResultCode::kSuccess);
   EXPECT_EQ(default_printer, kAlternatePrinterName);
 
-  // Adding a new printer to environment which is marked as default should
-  // automatically make it the new default.
+  // Adding a new printer to environment and marking it as default should
+  // reflect it as the new default.
   static constexpr char kNewDefaultPrinterName[] = "new-default-test-printer";
   auto caps = std::make_unique<PrinterSemanticCapsAndDefaults>();
   auto printer_info = std::make_unique<PrinterBasicInfo>();
   printer_info->printer_name = kNewDefaultPrinterName;
-  printer_info->is_default = true;
   GetPrintBackend()->AddValidPrinter(kNewDefaultPrinterName, std::move(caps),
                                      std::move(printer_info));
+  GetPrintBackend()->SetDefaultPrinterName(kNewDefaultPrinterName);
   ASSERT_EQ(GetPrintBackend()->GetDefaultPrinterName(default_printer),
             mojom::ResultCode::kSuccess);
   EXPECT_EQ(default_printer, kNewDefaultPrinterName);
@@ -173,30 +170,15 @@ TEST_F(TestPrintBackendTest, PrinterBasicInfo) {
                                                    &printer_info),
             mojom::ResultCode::kSuccess);
   EXPECT_EQ(printer_info.printer_name, kDefaultPrinterName);
-  EXPECT_EQ(printer_info.printer_status, kDefaultPrinterStatus);
-  EXPECT_TRUE(printer_info.is_default);
 
   EXPECT_EQ(GetPrintBackend()->GetPrinterBasicInfo(kAlternatePrinterName,
                                                    &printer_info),
             mojom::ResultCode::kSuccess);
   EXPECT_EQ(printer_info.printer_name, kAlternatePrinterName);
-  EXPECT_EQ(printer_info.printer_status, kAlternatePrinterStatus);
-  EXPECT_FALSE(printer_info.is_default);
 
   EXPECT_EQ(GetPrintBackend()->GetPrinterBasicInfo(kInvalidPrinterName,
                                                    &printer_info),
             mojom::ResultCode::kFailed);
-
-  // Changing default should be reflected on next query.
-  GetPrintBackend()->SetDefaultPrinterName(kAlternatePrinterName);
-  EXPECT_EQ(GetPrintBackend()->GetPrinterBasicInfo(kAlternatePrinterName,
-                                                   &printer_info),
-            mojom::ResultCode::kSuccess);
-  EXPECT_TRUE(printer_info.is_default);
-  EXPECT_EQ(GetPrintBackend()->GetPrinterBasicInfo(kDefaultPrinterName,
-                                                   &printer_info),
-            mojom::ResultCode::kSuccess);
-  EXPECT_FALSE(printer_info.is_default);
 
   // Printers added with null basic info fail to get data on a query.
   EXPECT_EQ(GetPrintBackend()->GetPrinterBasicInfo(kNullDataPrinterName,

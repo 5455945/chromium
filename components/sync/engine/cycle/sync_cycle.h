@@ -1,24 +1,25 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SYNC_ENGINE_CYCLE_SYNC_CYCLE_H_
 #define COMPONENTS_SYNC_ENGINE_CYCLE_SYNC_CYCLE_H_
 
-#include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
-#include <vector>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "components/sync/base/model_type.h"
+#include "components/signin/public/identity_manager/access_token_info.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/engine/cycle/status_controller.h"
 #include "components/sync/engine/cycle/sync_cycle_context.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/sync_cycle_event.h"
-#include "components/sync/protocol/sync_protocol_error.h"
+#include "components/sync/engine/sync_protocol_error.h"
 
 namespace syncer {
 
@@ -40,11 +41,11 @@ class SyncCycle {
     virtual void OnThrottled(const base::TimeDelta& throttle_duration) = 0;
 
     // Some of the client's types were throttled.
-    virtual void OnTypesThrottled(ModelTypeSet types,
+    virtual void OnTypesThrottled(DataTypeSet types,
                                   const base::TimeDelta& throttle_duration) = 0;
 
     // Some of the client's types were backed off.
-    virtual void OnTypesBackedOff(ModelTypeSet types) = 0;
+    virtual void OnTypesBackedOff(DataTypeSet types) = 0;
 
     // Silenced intervals can be out of phase with individual cycles, so the
     // delegate is the only thing that can give an authoritative answer for
@@ -63,27 +64,34 @@ class SyncCycle {
 
     // The client has been instructed to change a nudge delay.
     virtual void OnReceivedCustomNudgeDelays(
-        const std::map<ModelType, base::TimeDelta>& nudge_delays) = 0;
+        const base::flat_map<DataType, base::TimeDelta>& nudge_delays) = 0;
 
     // Called for the syncer to respond to the error sent by the server.
     virtual void OnSyncProtocolError(
         const SyncProtocolError& sync_protocol_error) = 0;
 
-    // Called when the server wants to change the number of hints the client
-    // will buffer locally.
-    virtual void OnReceivedClientInvalidationHintBufferSize(int size) = 0;
-
-    // Called when server wants to schedule a retry GU.
-    virtual void OnReceivedGuRetryDelay(const base::TimeDelta& delay) = 0;
-
     // Called when server requests a migration.
-    virtual void OnReceivedMigrationRequest(ModelTypeSet types) = 0;
+    virtual void OnReceivedMigrationRequest(DataTypeSet types) = 0;
+
+    // Called when server wants to change the parameters for commit quotas of
+    // data types that can receive commits via extension APIs. Empty optional
+    // means using the client-side defaults.
+    virtual void OnReceivedQuotaParamsForExtensionTypes(
+        std::optional<int> max_tokens,
+        std::optional<base::TimeDelta> refill_interval,
+        std::optional<base::TimeDelta> depleted_quota_nudge_delay) = 0;
 
    protected:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
   };
 
-  SyncCycle(SyncCycleContext* context, Delegate* delegate);
+  SyncCycle(SyncCycleContext* context,
+            Delegate* delegate,
+            signin::AccessTokenInfo access_token_info);
+
+  SyncCycle(const SyncCycle&) = delete;
+  SyncCycle& operator=(const SyncCycle&) = delete;
+
   ~SyncCycle();
 
   // Builds a thread-safe and read-only copy of the current cycle state.
@@ -108,17 +116,22 @@ class SyncCycle {
     return status_controller_.get();
   }
 
+  const signin::AccessTokenInfo& access_token_info() const {
+    return access_token_info_;
+  }
+
  private:
-  // The context for this cycle, guaranteed to outlive |this|.
-  SyncCycleContext* const context_;
+  // The context for this cycle, guaranteed to outlive `this`.
+  const raw_ptr<SyncCycleContext, DanglingUntriaged> context_;
 
   // The delegate for this cycle, must never be null.
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
+
+  // The access token info for this cycle.
+  const signin::AccessTokenInfo access_token_info_;
 
   // Our controller for various status and error counters.
   std::unique_ptr<StatusController> status_controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncCycle);
 };
 
 }  // namespace syncer

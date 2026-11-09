@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,13 +28,13 @@ using sandbox::bpf_dsl::ResultExpr;
 namespace sandbox {
 namespace policy {
 
-CrosAmdGpuProcessPolicy::CrosAmdGpuProcessPolicy() {}
+CrosAmdGpuProcessPolicy::CrosAmdGpuProcessPolicy(MremapPolicy mremap_policy)
+    : GpuProcessPolicy(mremap_policy) {}
 
 CrosAmdGpuProcessPolicy::~CrosAmdGpuProcessPolicy() {}
 
 ResultExpr CrosAmdGpuProcessPolicy::EvaluateSyscall(int sysno) const {
   switch (sysno) {
-    case __NR_fstatfs:
     case __NR_sched_setaffinity:
     case __NR_sched_setscheduler:
     case __NR_sysinfo:

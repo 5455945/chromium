@@ -29,7 +29,6 @@
 
 #include "base/dcheck_is_on.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
@@ -74,6 +73,9 @@ class CORE_EXPORT FlatTreeTraversal {
 
   static ContainerNode* Parent(const Node&);
   static Element* ParentElement(const Node&);
+  // Return the passed in Node if it is an Element, otherwise return the
+  // ParentElement()
+  static const Element* InclusiveParentElement(const Node&);
 
   static Node* NextSibling(const Node&);
   static Node* PreviousSibling(const Node&);
@@ -94,6 +96,8 @@ class CORE_EXPORT FlatTreeTraversal {
   // NextSkippingChildren(3) will return 4.
   // NextSkippingChildren(2) will return 3.
   // NextSkippingChildren(4) will return nullptr.
+  // If you're looking for the "Previous" version of this method, see
+  // PreviousAbsoluteSibling().
   static Node* NextSkippingChildren(const Node&);
   static Node* NextSkippingChildren(const Node&, const Node* stay_within);
 
@@ -124,6 +128,11 @@ class CORE_EXPORT FlatTreeTraversal {
   // false. If |other| is |node|, this function returns false.
   static bool IsDescendantOf(const Node& /*node*/, const Node& other);
 
+  // Like |IsDescendantOf|, but also returns true if |node| == |other|.
+  static bool IsInclusiveDescendantOf(const Node& node, const Node& other) {
+    return node == other || IsDescendantOf(node, other);
+  }
+
   static bool Contains(const ContainerNode& container, const Node& node) {
     AssertPrecondition(container);
     AssertPrecondition(node);
@@ -150,17 +159,15 @@ class CORE_EXPORT FlatTreeTraversal {
   static Node& LastWithinOrSelf(const Node&);
 
   // Flat tree range helper functions for range based for statement.
-  // TODO(dom-team): We should have following functions to match with
-  // |NodeTraversal|:
-  //   - DescendantsOf()
-  //   - InclusiveDescendantsOf()
-  //   - StartsAt()
-  //   - StartsAfter()
   static TraversalAncestorRange<FlatTreeTraversal> AncestorsOf(const Node&);
-  static TraversalSiblingRange<FlatTreeTraversal> ChildrenOf(const Node&);
-
   static TraversalAncestorRange<FlatTreeTraversal> InclusiveAncestorsOf(
       const Node&);
+  static TraversalSiblingRange<FlatTreeTraversal> ChildrenOf(const Node&);
+  static TraversalDescendantRange<FlatTreeTraversal> DescendantsOf(const Node&);
+  static TraversalInclusiveDescendantRange<FlatTreeTraversal>
+  InclusiveDescendantsOf(const Node&);
+  static TraversalNextRange<FlatTreeTraversal> StartsAt(const Node&);
+  static TraversalNextRange<FlatTreeTraversal> StartsAfter(const Node&);
 
  private:
   enum TraversalDirection {
@@ -168,19 +175,8 @@ class CORE_EXPORT FlatTreeTraversal {
     kTraversalDirectionBackward
   };
 
-  static void AssertPrecondition(const Node& node) {
-    DCHECK(!node.GetDocument().IsFlatTreeTraversalForbidden());
-    DCHECK(!node.IsShadowRoot());
-  }
-
-  static void AssertPostcondition(const Node* node) {
-#if DCHECK_IS_ON()
-    if (node)
-      AssertPrecondition(*node);
-#endif
-  }
-
-  static Node* ResolveDistributionStartingAt(const Node*, TraversalDirection);
+  static void AssertPrecondition(const Node& node);
+  static void AssertPostcondition(const Node* node);
 
   static Node* TraverseNext(const Node&);
   static Node* TraverseNext(const Node&, const Node* stay_within);
@@ -193,7 +189,6 @@ class CORE_EXPORT FlatTreeTraversal {
   static Node* TraverseChild(const Node&, TraversalDirection);
 
   static ContainerNode* TraverseParent(const Node&);
-  static ContainerNode* TraverseParentOrHost(const Node&);
 
   static Node* TraverseNextSibling(const Node&);
   static Node* TraversePreviousSibling(const Node&);
@@ -352,15 +347,35 @@ inline TraversalAncestorRange<FlatTreeTraversal> FlatTreeTraversal::AncestorsOf(
       FlatTreeTraversal::Parent(node));
 }
 
+inline TraversalAncestorRange<FlatTreeTraversal>
+FlatTreeTraversal::InclusiveAncestorsOf(const Node& node) {
+  return TraversalAncestorRange<FlatTreeTraversal>(&node);
+}
+
 inline TraversalSiblingRange<FlatTreeTraversal> FlatTreeTraversal::ChildrenOf(
     const Node& parent) {
   return TraversalSiblingRange<FlatTreeTraversal>(
       FlatTreeTraversal::FirstChild(parent));
 }
 
-inline TraversalAncestorRange<FlatTreeTraversal>
-FlatTreeTraversal::InclusiveAncestorsOf(const Node& node) {
-  return TraversalAncestorRange<FlatTreeTraversal>(&node);
+inline TraversalDescendantRange<FlatTreeTraversal>
+FlatTreeTraversal::DescendantsOf(const Node& root) {
+  return TraversalDescendantRange<FlatTreeTraversal>(&root);
+}
+
+inline TraversalInclusiveDescendantRange<FlatTreeTraversal>
+FlatTreeTraversal::InclusiveDescendantsOf(const Node& root) {
+  return TraversalInclusiveDescendantRange<FlatTreeTraversal>(&root);
+}
+
+inline TraversalNextRange<FlatTreeTraversal> FlatTreeTraversal::StartsAt(
+    const Node& start) {
+  return TraversalNextRange<FlatTreeTraversal>(&start);
+}
+
+inline TraversalNextRange<FlatTreeTraversal> FlatTreeTraversal::StartsAfter(
+    const Node& start) {
+  return TraversalNextRange<FlatTreeTraversal>(FlatTreeTraversal::Next(start));
 }
 
 }  // namespace blink

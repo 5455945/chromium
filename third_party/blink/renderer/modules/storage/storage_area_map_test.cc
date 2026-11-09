@@ -1,10 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/storage/storage_area_map.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -66,7 +67,6 @@ TEST(StorageAreaMapTest, EnforcesQuota) {
   const String kKey("test_key");
   const String kValue("test_value");
   const String kKey2("test_key_2");
-  String old_value;
 
   // A 50 byte quota is too small to hold both keys and values, so we
   // should see the StorageAreaMap enforcing it.
@@ -107,7 +107,7 @@ TEST(StorageAreaMapTest, Iteration) {
 
   // Fill the map with some data.
   for (int i = 0; i < kNumTestItems; ++i)
-    EXPECT_TRUE(map.SetItem("key" + String::Number(i), "val", nullptr));
+    EXPECT_TRUE(map.SetItem(Format("key{}", i), "val", nullptr));
   EXPECT_EQ(unsigned{kNumTestItems}, map.GetLength());
 
   Vector<String> keys(kNumTestItems);

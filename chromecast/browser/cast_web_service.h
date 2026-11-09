@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,17 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "chromecast/browser/cast_web_view.h"
+#include "chromecast/browser/cast_web_view_factory.h"
 #include "chromecast/browser/mojom/cast_web_service.mojom.h"
-#include "chromecast/common/identification_settings_manager.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "url/origin.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -32,7 +32,6 @@ class StoragePartition;
 
 namespace chromecast {
 
-class CastWebViewFactory;
 class CastWindowManager;
 class LRURendererCache;
 
@@ -44,79 +43,74 @@ class LRURendererCache;
 class CastWebService : public mojom::CastWebService {
  public:
   CastWebService(content::BrowserContext* browser_context,
-                 CastWebViewFactory* web_view_factory,
                  CastWindowManager* window_manager);
   CastWebService(const CastWebService&) = delete;
   CastWebService& operator=(const CastWebService&) = delete;
   ~CastWebService() override;
 
-  CastWebView::Scoped CreateWebView(const CastWebView::CreateParams& params,
-                                    const GURL& initial_url);
+  // Allow a client to use its own CastWebViewFactory implementation instead of
+  // |default_web_view_factory_| below.
+  void OverrideWebViewFactory(CastWebViewFactory* web_view_factory);
 
+  // These are temporary methods to allow in-process embedders to directly own
+  // the CastWebView. This will be removed once the lifetime of CastWebview is
+  // scoped by the CastWebContents mojo::Remote.
+  CastWebView::Scoped CreateWebViewInternal(
+      mojom::CastWebViewParamsPtr params);
+
+  // This implementation varies by platform (Aura vs Android).
   std::unique_ptr<CastContentWindow> CreateWindow(
-      const CastContentWindow::CreateParams& params);
+      mojom::CastWebViewParamsPtr params);
 
   content::BrowserContext* browser_context() { return browser_context_; }
+  CastWindowManager* window_manager() { return window_manager_; }
   LRURendererCache* overlay_renderer_cache() {
     return overlay_renderer_cache_.get();
   }
 
-  void FlushDomLocalStorage();
-
-  // |callback| is called when data deletion is done or at least the deletion
-  // is scheduled.
-  void ClearLocalStorage(base::OnceClosure callback);
+  bool IsCastWebUIOrigin(const url::Origin& origin);
 
   // mojom::CastWebService implementation:
+  void CreateWebView(
+      mojom::CastWebViewParamsPtr params,
+      mojo::PendingReceiver<mojom::CastWebContents> web_contents,
+      mojo::PendingReceiver<mojom::CastContentWindow> window) override;
   void RegisterWebUiClient(mojo::PendingRemote<mojom::WebUiClient> client,
                            const std::vector<std::string>& hosts) override;
-  void CreateSessionWithSubstitutions(
-      const std::string& session_id,
-      std::vector<mojom::SubstitutableParameterPtr> params) override;
-  void SetClientAuthForSession(const std::string& session_id,
-                               mojo::PendingRemote<mojom::ClientAuthDelegate>
-                                   client_auth_delegate) override;
-  void UpdateAppSettingsForSession(const std::string& session_id,
-                                   mojom::AppSettingsPtr app_settings) override;
-  void UpdateDeviceSettingsForSession(
-      const std::string& session_id,
-      mojom::DeviceSettingsPtr device_settings) override;
-  void UpdateSubstitutableParamValuesForSession(
-      const std::string& session_id,
-      std::vector<mojom::IndexValuePairPtr> updated_values) override;
-  void UpdateBackgroundModeForSession(const std::string& session_id,
-                                      bool background_mode) override;
-  void OnSessionDestroyed(const std::string& session_id) override;
-
-  CastURLLoaderThrottle::Delegate* GetURLLoaderThrottleDelegateForSession(
-      const std::string& session_id);
+  void FlushDomLocalStorage() override;
+  void ClearLocalStorage(ClearLocalStorageCallback callback) override;
 
   // Immediately deletes all owned CastWebViews. This should happen before
   // CastWebService is deleted, to prevent UAF of shared browser objects.
-  void DeleteExpiringWebViews();
+  void DeleteOwnedWebViews();
 
  private:
   void OwnerDestroyed(CastWebView* web_view);
   void DeleteWebView(CastWebView* web_view);
 
-  IdentificationSettingsManager* GetSessionManager(
-      const std::string& session_id);
-
   content::BrowserContext* const browser_context_;
-  CastWebViewFactory* const web_view_factory_;
+  // This is used on Aura platforms.
   CastWindowManager* const window_manager_;
+  CastWebViewFactory default_web_view_factory_;
+  CastWebViewFactory* override_web_view_factory_ = nullptr;
 
-  // If a CastWebView is marked for delayed deletion, it is temporarily held
-  // here for a short time after the original owner releases the CastWebView.
-  // After the desired shutdown time elapses, the CastWebView is deleted.
-  base::flat_set<std::unique_ptr<CastWebView>> expiring_web_views_;
+  // These CastWebViews are owned by CastWebService. This happens in two
+  // scenarios:
+  //
+  // 1. The CastWebView was created via the Mojo service. This CastWebView will
+  // be deleted when the mojo::Remote disconnects.
+  //
+  // 2. The CastWebView is in the process of extended shutdown. It is
+  // temporarily held here for a short time after the original owner releases
+  // the CastWebView. After the desired shutdown time elapses, the CastWebView
+  // is deleted.
+  base::flat_set<std::unique_ptr<CastWebView>> web_views_;
 
   const std::unique_ptr<LRURendererCache> overlay_renderer_cache_;
   bool immediately_delete_webviews_ = false;
 
-  base::flat_map<std::string /* session_id */,
-                 std::unique_ptr<IdentificationSettingsManager>>
-      settings_managers_;
+  std::vector<std::string> cast_webui_hosts_;
+  bool webui_factory_registered_ = false;
 
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::WeakPtr<CastWebService> weak_ptr_;

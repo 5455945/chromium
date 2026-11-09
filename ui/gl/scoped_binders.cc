@@ -1,8 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gl/scoped_binders.h"
+
+#include "base/notimplemented.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_state_restorer.h"
@@ -67,8 +69,14 @@ ScopedTextureBinder::ScopedTextureBinder(unsigned int target, unsigned int id)
       case GL_TEXTURE_EXTERNAL_OES:
         target_getter = GL_TEXTURE_BINDING_EXTERNAL_OES;
         break;
-      case GL_TEXTURE_RECTANGLE_ARB:
-        target_getter = GL_TEXTURE_BINDING_RECTANGLE_ARB;
+      case GL_TEXTURE_RECTANGLE_ANGLE:
+        target_getter = GL_TEXTURE_BINDING_RECTANGLE_ANGLE;
+        break;
+      case GL_TEXTURE_3D:
+        target_getter = GL_TEXTURE_BINDING_3D;
+        break;
+      case GL_TEXTURE_2D_ARRAY:
+        target_getter = GL_TEXTURE_BINDING_2D_ARRAY;
         break;
       default:
         NOTIMPLEMENTED() << " Target not supported.";
@@ -132,7 +140,8 @@ ScopedVertexAttribArray::ScopedVertexAttribArray(unsigned int index,
     glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_TYPE, &type_);
     glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_NORMALIZED, &normalized_);
     glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &stride_);
-    glGetVertexAttribPointerv(index, GL_VERTEX_ATTRIB_ARRAY_POINTER, &pointer_);
+    glGetVertexAttribPointerv(index, GL_VERTEX_ATTRIB_ARRAY_POINTER,
+                              &pointer_.AsEphemeralRawAddr());
   }
 
   glEnableVertexAttribArray(index);
@@ -186,7 +195,7 @@ ScopedBufferBinder::~ScopedBufferBinder() {
 }
 
 ScopedViewport::ScopedViewport(int x, int y, int width, int height) {
-  glGetIntegerv(GL_VIEWPORT, data_);
+  glGetIntegerv(GL_VIEWPORT, data_.data());
   glViewport(x, y, width, height);
 }
 
@@ -195,7 +204,7 @@ ScopedViewport::~ScopedViewport() {
 }
 
 ScopedColorMask::ScopedColorMask(char red, char green, char blue, char alpha) {
-  glGetBooleanv(GL_COLOR_WRITEMASK, colors_);
+  glGetBooleanv(GL_COLOR_WRITEMASK, colors_.data());
   glColorMask(red, green, blue, alpha);
 }
 

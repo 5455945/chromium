@@ -1,15 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/platform_sensor_chromeos.h"
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "services/device/public/cpp/generic_sensor/sensor_traits.h"
@@ -26,11 +25,14 @@ PlatformSensorChromeOS::PlatformSensorChromeOS(
     int32_t iio_device_id,
     mojom::SensorType type,
     SensorReadingSharedBuffer* reading_buffer,
-    PlatformSensorProvider* provider,
+    base::WeakPtr<PlatformSensorProvider> provider,
+    mojo::ConnectionErrorWithReasonCallback sensor_device_disconnect_callback,
     double scale,
     mojo::Remote<chromeos::sensors::mojom::SensorDevice> sensor_device_remote)
-    : PlatformSensor(type, reading_buffer, provider),
+    : PlatformSensor(type, reading_buffer, std::move(provider)),
       iio_device_id_(iio_device_id),
+      sensor_device_disconnect_callback_(
+          std::move(sensor_device_disconnect_callback)),
       default_configuration_(
           PlatformSensorConfiguration(GetSensorMaxAllowedFrequency(type))),
       scale_(scale),
@@ -39,8 +41,9 @@ PlatformSensorChromeOS::PlatformSensorChromeOS(
   DCHECK(sensor_device_remote_.is_bound());
   DCHECK_GT(scale_, 0.0);
 
-  sensor_device_remote_.set_disconnect_handler(base::BindOnce(
-      &PlatformSensorChromeOS::ResetOnError, weak_factory_.GetWeakPtr()));
+  sensor_device_remote_.set_disconnect_with_reason_handler(
+      base::BindOnce(&PlatformSensorChromeOS::OnSensorDeviceDisconnect,
+                     weak_factory_.GetWeakPtr()));
 
   sensor_device_remote_->SetTimeout(0);
 
@@ -73,7 +76,7 @@ void PlatformSensorChromeOS::OnSampleUpdated(
   }
 
   for (auto index : channel_indices_) {
-    if (!base::Contains(sample, index)) {
+    if (!sample.contains(index)) {
       LOG(ERROR) << "Missing channel: " << iio_channel_ids_[index]
                  << " in sample.";
       OnErrorOccurred(chromeos::sensors::mojom::ObserverErrorType::READ_FAILED);
@@ -94,12 +97,8 @@ void PlatformSensorChromeOS::OnSampleUpdated(
       reading.als.value = GetScaledValue(sample.at(channel_indices_[0]));
       break;
 
-    case mojom::SensorType::PROXIMITY:
-      DCHECK_EQ(channel_indices_.size(), 2u);
-      reading.proximity.value = GetScaledValue(sample.at(channel_indices_[0]));
-      break;
-
     case mojom::SensorType::ACCELEROMETER:
+    case mojom::SensorType::GRAVITY:
       DCHECK_EQ(channel_indices_.size(), 4u);
       reading.accel.x = GetScaledValue(sample.at(channel_indices_[0]));
       reading.accel.y = GetScaledValue(sample.at(channel_indices_[1]));
@@ -125,8 +124,7 @@ void PlatformSensorChromeOS::OnSampleUpdated(
   }
 
   reading.raw.timestamp =
-      base::TimeDelta::FromNanoseconds(sample.at(channel_indices_.back()))
-          .InSecondsF();
+      base::Nanoseconds(sample.at(channel_indices_.back())).InSecondsF();
 
   UpdateSharedBufferAndNotifyClients(reading);
 }
@@ -237,6 +235,23 @@ void PlatformSensorChromeOS::ResetOnError() {
   NotifySensorError();
 }
 
+void PlatformSensorChromeOS::OnSensorDeviceDisconnect(
+    uint32_t custom_reason_code,
+    const std::string& description) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto reason =
+      static_cast<chromeos::sensors::mojom::SensorDeviceDisconnectReason>(
+          custom_reason_code);
+  LOG(ERROR) << "OnSensorDeviceDisconnect, reason: " << reason
+             << ", description: " << description;
+
+  std::move(sensor_device_disconnect_callback_)
+      .Run(custom_reason_code, description);
+
+  ResetOnError();
+}
+
 void PlatformSensorChromeOS::StartReadingIfReady() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(sensor_device_remote_.is_bound());
@@ -261,19 +276,27 @@ PlatformSensorChromeOS::BindNewPipeAndPassRemote() {
   DCHECK(!receiver_.is_bound());
   auto pending_remote = receiver_.BindNewPipeAndPassRemote(main_task_runner());
 
-  receiver_.set_disconnect_handler(
+  receiver_.set_disconnect_with_reason_handler(
       base::BindOnce(&PlatformSensorChromeOS::OnObserverDisconnect,
                      weak_factory_.GetWeakPtr()));
   return pending_remote;
 }
 
-void PlatformSensorChromeOS::OnObserverDisconnect() {
+void PlatformSensorChromeOS::OnObserverDisconnect(
+    uint32_t custom_reason_code,
+    const std::string& description) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(receiver_.is_bound());
 
-  LOG(ERROR) << "OnObserverDisconnect";
+  auto reason =
+      static_cast<chromeos::sensors::mojom::SensorDeviceDisconnectReason>(
+          custom_reason_code);
+  LOG(ERROR) << "OnObserverDisconnect, reason: " << reason
+             << ", description: " << description;
 
-  // Assumes IIO Service has crashed and waits for its relaunch.
+  std::move(sensor_device_disconnect_callback_)
+      .Run(custom_reason_code, description);
+
   ResetOnError();
 }
 
@@ -281,7 +304,7 @@ void PlatformSensorChromeOS::SetRequiredChannels() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(required_channel_ids_.empty());  // Should only be called once.
 
-  absl::optional<std::string> axes_prefix = absl::nullopt;
+  std::optional<std::string> axes_prefix = std::nullopt;
   switch (GetType()) {
     case mojom::SensorType::AMBIENT_LIGHT:
       required_channel_ids_.push_back(chromeos::sensors::mojom::kLightChannel);
@@ -297,6 +320,10 @@ void PlatformSensorChromeOS::SetRequiredChannels() {
 
     case mojom::SensorType::MAGNETOMETER:
       axes_prefix = chromeos::sensors::mojom::kMagnetometerChannel;
+      break;
+
+    case mojom::SensorType::GRAVITY:
+      axes_prefix = chromeos::sensors::mojom::kGravityChannel;
       break;
 
     default:
@@ -321,7 +348,7 @@ void PlatformSensorChromeOS::GetAllChannelIdsCallback(
   iio_channel_ids_ = iio_channel_ids;
 
   for (const std::string& channel : required_channel_ids_) {
-    auto it = base::ranges::find(iio_channel_ids_, channel);
+    auto it = std::ranges::find(iio_channel_ids_, channel);
     if (it == iio_channel_ids_.end()) {
       LOG(ERROR) << "Missing channel: " << channel;
       ResetOnError();

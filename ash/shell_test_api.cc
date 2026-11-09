@@ -1,25 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/test/shell_test_api.h"
+#include "base/memory/raw_ptr.h"
 
 #include <memory>
-#include <utility>
 
 #include "ash/accelerators/accelerator_commands.h"
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accelerometer/accelerometer_reader.h"
-#include "ash/app_list/app_list_controller_impl.h"
-#include "ash/app_list/app_list_presenter_impl.h"
-#include "ash/app_list/views/app_list_view.h"
 #include "ash/hud_display/hud_display.h"
 #include "ash/keyboard/keyboard_controller_impl.h"
 #include "ash/public/cpp/autotest_private_api_utils.h"
 #include "ash/public/cpp/tablet_mode_observer.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "ash/system/message_center/session_state_notification_blocker.h"
+#include "ash/system/notification_center/session_state_notification_blocker.h"
 #include "ash/system/power/backlights_forced_off_setter.h"
 #include "ash/system/power/power_button_controller.h"
 #include "ash/wm/overview/overview_animation_state_waiter.h"
@@ -27,56 +24,19 @@
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/workspace_controller.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "components/prefs/testing_pref_service.h"
-#include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
+#include "ui/compositor/layer_animator.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/events/devices/device_data_manager_test_api.h"
 #include "ui/events/gesture_detection/gesture_configuration.h"
 
 namespace ash {
 namespace {
-
-// Wait for a WindowTreeHost to no longer be holding pointer events.
-class PointerMoveLoopWaiter : public ui::CompositorObserver {
- public:
-  explicit PointerMoveLoopWaiter(aura::WindowTreeHost* window_tree_host)
-      : window_tree_host_(window_tree_host) {
-    window_tree_host_->compositor()->AddObserver(this);
-  }
-
-  ~PointerMoveLoopWaiter() override {
-    window_tree_host_->compositor()->RemoveObserver(this);
-  }
-
-  void Wait() {
-    // Use a while loop as it's possible for releasing the lock to trigger
-    // processing events, which again grabs the lock.
-    while (window_tree_host_->holding_pointer_moves()) {
-      run_loop_ = std::make_unique<base::RunLoop>(
-          base::RunLoop::Type::kNestableTasksAllowed);
-      run_loop_->Run();
-      run_loop_.reset();
-    }
-  }
-
-  // ui::CompositorObserver:
-  void OnCompositingEnded(ui::Compositor* compositor) override {
-    if (run_loop_)
-      run_loop_->Quit();
-  }
-
- private:
-  aura::WindowTreeHost* window_tree_host_;
-  std::unique_ptr<base::RunLoop> run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(PointerMoveLoopWaiter);
-};
 
 class WindowAnimationWaiter : public ui::LayerAnimationObserver {
  public:
@@ -100,12 +60,10 @@ class WindowAnimationWaiter : public ui::LayerAnimationObserver {
   void OnLayerAnimationScheduled(
       ui::LayerAnimationSequence* sequence) override {}
 
-  void Wait() {
-    run_loop_.Run();
-  }
+  void Wait() { run_loop_.Run(); }
 
  private:
-  ui::LayerAnimator* animator_;
+  const raw_ptr<ui::LayerAnimator> animator_;
   base::RunLoop run_loop_;
 };
 
@@ -124,13 +82,6 @@ void ShellTestApi::SetTabletControllerUseScreenshotForTest(
 void ShellTestApi::SetUseLoginNotificationDelayForTest(bool use_delay) {
   SessionStateNotificationBlocker::SetUseLoginNotificationDelayForTest(
       use_delay);
-}
-
-// static
-void ShellTestApi::SetShouldShowShortcutNotificationForTest(
-    bool show_notification) {
-  AcceleratorControllerImpl::SetShouldShowShortcutNotificationForTest(
-      show_notification);
 }
 
 MessageCenterController* ShellTestApi::message_center_controller() {
@@ -164,6 +115,7 @@ display::DisplayManager* ShellTestApi::display_manager() {
 
 void ShellTestApi::ResetPowerButtonControllerForTest() {
   shell_->backlights_forced_off_setter_->ResetForTest();
+  shell_->power_button_controller_.reset();
   shell_->power_button_controller_ = std::make_unique<PowerButtonController>(
       shell_->backlights_forced_off_setter_.get());
 }
@@ -203,25 +155,6 @@ void ShellTestApi::AddRemoveDisplay() {
   shell_->display_manager()->AddRemoveDisplay();
 }
 
-void ShellTestApi::WaitForNoPointerHoldLock() {
-  aura::WindowTreeHost* primary_host =
-      Shell::GetPrimaryRootWindowController()->GetHost();
-  if (primary_host->holding_pointer_moves())
-    PointerMoveLoopWaiter(primary_host).Wait();
-}
-
-void ShellTestApi::WaitForNextFrame(base::OnceClosure closure) {
-  Shell::GetPrimaryRootWindowController()
-      ->GetHost()
-      ->compositor()
-      ->RequestPresentationTimeForNextFrame(base::BindOnce(
-          [](base::OnceClosure closure,
-             const gfx::PresentationFeedback& feedback) {
-            std::move(closure).Run();
-          },
-          std::move(closure)));
-}
-
 void ShellTestApi::WaitForOverviewAnimationState(OverviewAnimationState state) {
   auto* overview_controller = shell_->overview_controller();
   if (state == OverviewAnimationState::kEnterAnimationComplete &&
@@ -244,40 +177,20 @@ void ShellTestApi::WaitForOverviewAnimationState(OverviewAnimationState state) {
   run_loop.Run();
 }
 
-void ShellTestApi::WaitForLauncherAnimationState(
-    AppListViewState target_state) {
-  base::RunLoop run_loop;
-  WaitForLauncherState(target_state, run_loop.QuitWhenIdleClosure());
-  run_loop.Run();
-}
-
 void ShellTestApi::WaitForWindowFinishAnimating(aura::Window* window) {
   WindowAnimationWaiter waiter(window);
   waiter.Wait();
 }
 
-base::OnceClosure ShellTestApi::CreateWaiterForFinishingWindowAnimation(
-    aura::Window* window) {
-  auto waiter = std::make_unique<WindowAnimationWaiter>(window);
-  return base::BindOnce(&WindowAnimationWaiter::Wait, std::move(waiter));
-}
-
-PaginationModel* ShellTestApi::GetAppListPaginationModel() {
-  AppListView* view =
-      Shell::Get()->app_list_controller()->presenter()->GetView();
-  if (!view)
-    return nullptr;
-  return view->GetAppsPaginationModel();
-}
-
 bool ShellTestApi::IsContextMenuShown() const {
-  return Shell::GetPrimaryRootWindowController()->IsContextMenuShown();
+  return Shell::GetPrimaryRootWindowController()->IsContextMenuShownForTest();
 }
 
 bool ShellTestApi::IsActionForAcceleratorEnabled(
     const ui::Accelerator& accelerator) const {
-  return Shell::Get()->accelerator_controller()->IsActionForAcceleratorEnabled(
-      accelerator);
+  auto* controller = Shell::Get()->accelerator_controller();
+  return AcceleratorControllerImpl::TestApi(controller)
+      .IsActionForAcceleratorEnabled(accelerator);
 }
 
 bool ShellTestApi::PressAccelerator(const ui::Accelerator& accelerator) {

@@ -65,17 +65,40 @@ synthetic microbenchmarks that measure performance in various scenarios:
   * MessageLoopPerfTest: Measures the speed of task posting in various
     configurations.
   * ObserverListPerfTest: Exercises adding, removing and signalling observers.
+  * PartitionLockPerfTest: Tests the implementation of Lock used in
+    PartitionAlloc
   * PthreadEventPerfTest: Establishes the baseline thread switching cost using
     pthreads.
+  * RandUtilPerfTest: Measures the time it takes to generate random numbers.
   * ScheduleWorkTest: Measures the overhead of MessagePump::ScheduleWork.
   * SequenceManagerPerfTest: Benchmarks SequenceManager scheduling with various
     underlying task runners.
   * TaskObserverPerfTest: Measures the incremental cost of adding task
     observers.
   * TaskPerfTest: Checks the cost of posting tasks between threads.
+  * ThreadLocalStoragePerfTest: Exercises different mechanisms for accessing
+    data associated with the current thread (C++ `thread_local`, the
+    implementation in //base, the POSIX/WinAPI directly)
   * WaitableEvent{Thread,}PerfTest: Measures waitable events in single and
     multithreaded scenarios.
 
 Regressions in these benchmarks can generally by caused by 1) operating system
 changes, 2) compiler version or flag changes or 3) changes in //base code
 itself.
+
+## Rust code
+Rust code in base should be organized into very small crates, split up by
+function. Merging crates is sometimes unavoidable (due to dependency cycles or
+the orphaning rule).
+
+Rust files should live near the equivalent C++ files (if any), and use the
+same naming scheme (for example, `run_loop.rs`, not `run_loop_rust.rs`).
+
+When adding FFI shims, prefer separate `_shim.h` files rather than adding code
+to existing C++ files. This helps avoid circular dependencies with the `//base`
+target. It also avoids adding code to commonly-used headers, which can increase
+compile size by a lot.
+
+Crates which you expect to be widely used should be added to the
+`public_deps` of the `//base:base_rust` target, so that developers can simply
+depend on `//base:base_rust` the same way they do with `//base`.

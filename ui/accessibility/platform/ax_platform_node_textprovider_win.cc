@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,47 +8,39 @@
 
 #include "base/win/scoped_safearray.h"
 #include "ui/accessibility/ax_node_position.h"
+#include "ui/accessibility/ax_selection.h"
+#include "ui/accessibility/ax_tree_data.h"
 #include "ui/accessibility/platform/ax_platform_node_base.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
 #include "ui/accessibility/platform/ax_platform_node_textrangeprovider_win.h"
 
 #define UIA_VALIDATE_TEXTPROVIDER_CALL() \
-  if (!owner()->GetDelegate())           \
+  if (owner()->IsDestroyed())            \
     return UIA_E_ELEMENTNOTAVAILABLE;
 #define UIA_VALIDATE_TEXTPROVIDER_CALL_1_ARG(arg) \
-  if (!owner()->GetDelegate())                    \
+  if (owner()->IsDestroyed())                     \
     return UIA_E_ELEMENTNOTAVAILABLE;             \
   if (!arg)                                       \
     return E_INVALIDARG;
 
 namespace ui {
 
-AXPlatformNodeTextProviderWin::AXPlatformNodeTextProviderWin() {
-  DVLOG(1) << __func__;
-}
+AXPlatformNodeTextProviderWin::AXPlatformNodeTextProviderWin(
+    AXPlatformNodeWin* owner)
+    : owner_(owner) {}
 
 AXPlatformNodeTextProviderWin::~AXPlatformNodeTextProviderWin() {}
 
 // static
-AXPlatformNodeTextProviderWin* AXPlatformNodeTextProviderWin::Create(
+Microsoft::WRL::ComPtr<ITextEditProvider> AXPlatformNodeTextProviderWin::Create(
     AXPlatformNodeWin* owner) {
-  CComObject<AXPlatformNodeTextProviderWin>* text_provider = nullptr;
-  if (SUCCEEDED(CComObject<AXPlatformNodeTextProviderWin>::CreateInstance(
-          &text_provider))) {
-    DCHECK(text_provider);
-    text_provider->owner_ = owner;
-    text_provider->AddRef();
-    return text_provider;
-  }
-
-  return nullptr;
+  return Microsoft::WRL::Make<AXPlatformNodeTextProviderWin>(owner);
 }
 
 // static
 void AXPlatformNodeTextProviderWin::CreateIUnknown(AXPlatformNodeWin* owner,
                                                    IUnknown** unknown) {
-  Microsoft::WRL::ComPtr<AXPlatformNodeTextProviderWin> text_provider(
-      Create(owner));
+  Microsoft::WRL::ComPtr<ITextEditProvider> text_provider(Create(owner));
   if (text_provider)
     *unknown = text_provider.Detach();
 }
@@ -63,9 +55,23 @@ HRESULT AXPlatformNodeTextProviderWin::GetSelection(SAFEARRAY** selection) {
 
   *selection = nullptr;
 
+  // The parent tree can project an iframe selection onto its frame node.
+  // Resolve the actual selection in the focused descendant's tree instead.
+  bool using_focused_delegate = false;
   AXPlatformNodeDelegate* delegate = owner()->GetDelegate();
-  ui::AXTree::Selection unignored_selection = delegate->GetUnignoredSelection();
+  if (AXPlatformNode* focused_node =
+          AXPlatformNode::FromNativeViewAccessible(delegate->GetFocus());
+      focused_node && focused_node->IsDescendantOf(owner())) {
+    AXPlatformNodeDelegate* focused_delegate = focused_node->GetDelegate();
+    if (focused_delegate->GetTreeData().tree_id != AXTreeIDUnknown() &&
+        focused_delegate->GetTreeData().tree_id !=
+            delegate->GetTreeData().tree_id) {
+      delegate = focused_delegate;
+      using_focused_delegate = true;
+    }
+  }
 
+  AXSelection unignored_selection = delegate->GetUnignoredSelection();
   AXPlatformNode* anchor_object =
       delegate->GetFromNodeID(unignored_selection.anchor_object_id);
   AXPlatformNode* focus_object =
@@ -85,35 +91,47 @@ HRESULT AXPlatformNodeTextProviderWin::GetSelection(SAFEARRAY** selection) {
   AXNodePosition::AXPositionInstance end =
       focus_object->GetDelegate()->CreatePositionAt(end_offset);
 
+  // TODO(crbug.com/580103833): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!start->IsNullPosition());
-  DCHECK(!end->IsNullPosition());
+  CHECK(!end->IsNullPosition(), base::NotFatalUntil::M163);
 
-  // Reverse start and end if the selection goes backwards
-  if (*start > *end)
+  start->SnapToMaxTextOffsetIfBeyond();
+  end->SnapToMaxTextOffsetIfBeyond();
+  if (*start > *end) {
     std::swap(start, end);
+  }
 
-  Microsoft::WRL::ComPtr<ITextRangeProvider> text_range_provider =
-      AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
-          owner_.Get(), std::move(start), std::move(end));
+  // If we resolved against a focused descendant's tree earlier, we
+  // should ensure we have a leaf textposition here, since we need them
+  // to be anchored in the descendant's tree.
+  if (using_focused_delegate) {
+    start = start->AsLeafTextPosition();
+    end = end->AsLeafTextPosition();
+  }
+
+  Microsoft::WRL::ComPtr<ITextRangeProvider> text_range_provider;
+  AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      std::move(start), std::move(end), &text_range_provider);
   if (&text_range_provider == nullptr)
     return E_OUTOFMEMORY;
 
   // Since we don't support disjoint text ranges, the SAFEARRAY returned
   // will always have one element
-  base::win::ScopedSafearray selections_to_return(
-      SafeArrayCreateVector(VT_UNKNOWN /* element type */, 0 /* lower bound */,
-                            1 /* number of elements */));
+  base::win::ScopedSafearray selections_to_return(::SafeArrayCreateVector(
+      /* element type */ VT_UNKNOWN, /* lower bound */ 0,
+      /* number of elements */ 1));
 
   if (!selections_to_return.Get())
     return E_OUTOFMEMORY;
 
   LONG index = 0;
-  HRESULT hr = SafeArrayPutElement(selections_to_return.Get(), &index,
-                                   text_range_provider.Get());
-  DCHECK(SUCCEEDED(hr));
+  HRESULT hr = ::SafeArrayPutElement(selections_to_return.Get(), &index,
+                                     text_range_provider.Get());
+  CHECK(SUCCEEDED(hr), base::NotFatalUntil::M163);
 
   // Since DCHECK only happens in debug builds, return immediately to ensure
-  // that we're not leaking the SAFEARRAY on release builds
+  // that we're not leaking the SAFEARRAY on release builds.
   if (FAILED(hr))
     return E_FAIL;
 
@@ -127,6 +145,17 @@ HRESULT AXPlatformNodeTextProviderWin::GetVisibleRanges(
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_TEXT_GETVISIBLERANGES);
   UIA_VALIDATE_TEXTPROVIDER_CALL();
 
+  // Whether we expose embedded object characters for nodes is managed by the
+  // |g_ax_embedded_object_behavior| global variable set in ax_node_position.cc.
+  // When on Windows, this variable is always set to
+  // kExposeCharacterForHypertext... which is incorrect if we run UIA-specific
+  // code relating to computing text content of nodes that themselves do not
+  // have text, such as `<p>` elements. To avoid problems caused by that, we use
+  // the following ScopedAXEmbeddedObjectBehaviorSetter to modify the value of
+  // the global variable to what is really expected on UIA.
+
+  ScopedAXEmbeddedObjectBehaviorSetter ax_embedded_object_behavior(
+      AXEmbeddedObjectBehavior::kSuppressCharacter);
   const AXPlatformNodeDelegate* delegate = owner()->GetDelegate();
 
   // Get the Clipped Frame Bounds of the current node, not from the root,
@@ -137,7 +166,7 @@ HRESULT AXPlatformNodeTextProviderWin::GetVisibleRanges(
 
   const auto start = delegate->CreateTextPositionAt(0);
   const auto end = start->CreatePositionAtEndOfAnchor();
-  DCHECK(start->GetAnchor() == end->GetAnchor());
+  CHECK(start->GetAnchor() == end->GetAnchor(), base::NotFatalUntil::M163);
 
   // SAFEARRAYs are not dynamic, so fill the visible ranges in a vector
   // and then transfer to an appropriately-sized SAFEARRAY
@@ -146,7 +175,8 @@ HRESULT AXPlatformNodeTextProviderWin::GetVisibleRanges(
   auto current_line_start = start->Clone();
   while (!current_line_start->IsNullPosition() && *current_line_start < *end) {
     auto current_line_end = current_line_start->CreateNextLineEndPosition(
-        AXBoundaryBehavior::CrossBoundary);
+        {AXBoundaryBehavior::kCrossBoundary,
+         AXBoundaryDetection::kDontCheckInitialPosition});
     if (current_line_end->IsNullPosition() || *current_line_end > *end)
       current_line_end = end->Clone();
 
@@ -154,38 +184,39 @@ HRESULT AXPlatformNodeTextProviderWin::GetVisibleRanges(
         current_line_start->text_offset(), current_line_end->text_offset(),
         AXCoordinateSystem::kFrame, AXClippingBehavior::kUnclipped);
 
-    if (frame_rect.Contains(current_rect)) {
-      Microsoft::WRL::ComPtr<ITextRangeProvider> text_range_provider =
-          AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
-              owner_.Get(), current_line_start->Clone(),
-              current_line_end->Clone());
+    // There are scenarios where the text range bounds might be slightly outside
+    // the container bounds, so we check if the bounding rects intersect rather
+    // than if it is only contained within.
+    if (frame_rect.Intersects(current_rect)) {
+      Microsoft::WRL::ComPtr<ITextRangeProvider> text_range_provider;
+      AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+          current_line_start->AsLeafTextPosition(),
+          current_line_end->AsLeafTextPosition(),
+          &text_range_provider);
 
       ranges.emplace_back(text_range_provider);
     }
 
     current_line_start = current_line_start->CreateNextLineStartPosition(
-        AXBoundaryBehavior::CrossBoundary);
+        {AXBoundaryBehavior::kCrossBoundary,
+         AXBoundaryDetection::kDontCheckInitialPosition});
   }
 
-  base::win::ScopedSafearray scoped_visible_ranges(
-      SafeArrayCreateVector(VT_UNKNOWN /* element type */, 0 /* lower bound */,
-                            ranges.size() /* number of elements */));
+  base::win::ScopedSafearray scoped_visible_ranges(::SafeArrayCreateVector(
+      /* element type */ VT_UNKNOWN, /* lower bound */ 0,
+      /* number of elements */ ranges.size()));
 
   if (!scoped_visible_ranges.Get())
     return E_OUTOFMEMORY;
 
+  auto locked_ranges = scoped_visible_ranges.CreateLockScope<VT_UNKNOWN>();
+  if (!locked_ranges) {
+    return E_OUTOFMEMORY;
+  }
+  auto ranges_span = base::span(*locked_ranges);
   LONG index = 0;
   for (Microsoft::WRL::ComPtr<ITextRangeProvider>& current_provider : ranges) {
-    HRESULT hr = SafeArrayPutElement(scoped_visible_ranges.Get(), &index,
-                                     current_provider.Get());
-    DCHECK(SUCCEEDED(hr));
-
-    // Since DCHECK only happens in debug builds, return immediately to ensure
-    // that we're not leaking the SAFEARRAY on release builds
-    if (FAILED(hr))
-      return E_FAIL;
-
-    ++index;
+    ranges_span[index++] = current_provider.Detach();
   }
 
   *visible_ranges = scoped_visible_ranges.Release();
@@ -201,14 +232,14 @@ HRESULT AXPlatformNodeTextProviderWin::RangeFromChild(
 
   *range = nullptr;
 
-  Microsoft::WRL::ComPtr<ui::AXPlatformNodeWin> child_platform_node;
+  Microsoft::WRL::ComPtr<AXPlatformNodeWin> child_platform_node;
   if (!SUCCEEDED(child->QueryInterface(IID_PPV_ARGS(&child_platform_node))))
     return UIA_E_INVALIDOPERATION;
 
   if (!owner()->IsDescendant(child_platform_node.Get()))
     return E_INVALIDARG;
 
-  *range = GetRangeFromChild(owner(), child_platform_node.Get());
+  GetRangeFromChild(owner(), child_platform_node.Get(), range);
 
   return S_OK;
 }
@@ -227,29 +258,31 @@ HRESULT AXPlatformNodeTextProviderWin::RangeFromPoint(
 
   AXPlatformNodeWin* nearest_node =
       static_cast<AXPlatformNodeWin*>(owner()->NearestLeafToPoint(point));
-  DCHECK(nearest_node);
-  DCHECK(nearest_node->IsLeaf());
+  CHECK(nearest_node, base::NotFatalUntil::M163);
+  CHECK(nearest_node->IsLeaf(), base::NotFatalUntil::M163);
 
   AXNodePosition::AXPositionInstance start, end;
   start = nearest_node->GetDelegate()->CreateTextPositionAt(
       nearest_node->NearestTextIndexToPoint(point));
-  DCHECK(!start->IsNullPosition());
+  CHECK(!start->IsNullPosition(), base::NotFatalUntil::M163);
   end = start->Clone();
 
-  *range = AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
-      nearest_node, std::move(start), std::move(end));
+  AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      std::move(start), std::move(end), range);
+
   return S_OK;
 }
 
 HRESULT AXPlatformNodeTextProviderWin::get_DocumentRange(
     ITextRangeProvider** range) {
+  ScopedAXEmbeddedObjectBehaviorSetter ax_embedded_object_behavior(
+      AXEmbeddedObjectBehavior::kUIAExposeCharacterForTextContent);
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_TEXT_GET_DOCUMENTRANGE);
   UIA_VALIDATE_TEXTPROVIDER_CALL();
 
   // Get range from child, where child is the current node. In other words,
   // getting the text range of the current owner AxPlatformNodeWin node.
-  *range = GetRangeFromChild(owner(), owner());
-
+  GetRangeFromChild(owner(), owner(), range);
   return S_OK;
 }
 
@@ -284,14 +317,16 @@ HRESULT AXPlatformNodeTextProviderWin::GetConversionTarget(
   return GetTextRangeProviderFromActiveComposition(range);
 }
 
-ITextRangeProvider* AXPlatformNodeTextProviderWin::GetRangeFromChild(
-    ui::AXPlatformNodeWin* ancestor,
-    ui::AXPlatformNodeWin* descendant) {
-
-  DCHECK(ancestor);
-  DCHECK(descendant);
-  DCHECK(descendant->GetDelegate());
-  DCHECK(ancestor->IsDescendant(descendant));
+void AXPlatformNodeTextProviderWin::GetRangeFromChild(
+    AXPlatformNodeWin* ancestor,
+    AXPlatformNodeWin* descendant,
+    ITextRangeProvider** range) {
+  CHECK(ancestor, base::NotFatalUntil::M163);
+  CHECK(descendant, base::NotFatalUntil::M163);
+  CHECK(descendant->GetDelegate(), base::NotFatalUntil::M163);
+  CHECK(ancestor->IsDescendant(descendant), base::NotFatalUntil::M163);
+  ScopedAXEmbeddedObjectBehaviorSetter ax_embedded_object_behavior(
+      AXEmbeddedObjectBehavior::kUIAExposeCharacterForTextContent);
 
   // Start and end should be leaf text positions that span the beginning and end
   // of text content within a node. The start position should be the directly
@@ -302,7 +337,13 @@ ITextRangeProvider* AXPlatformNodeTextProviderWin::GetRangeFromChild(
   AXNodePosition::AXPositionInstance end;
   if (descendant->IsPlatformDocument()) {
     // Fast path for getting the range of the web or PDF root.
-    end = start->CreatePositionAtEndOfContent();
+    // If the last position is ignored, we need to get an unignored position
+    // otherwise future comparisons can end up with null positions (which in
+    // turn might collapse the range). Note that we move backwards, since there
+    // is no position after the end-of-content position (i.e. moving forward
+    // results in a null position).
+    end = start->CreatePositionAtEndOfContent()->AsUnignoredPosition(
+        AXPositionAdjustmentBehavior::kMoveBackward);
   } else if (descendant->GetChildCount() == 0) {
     end = descendant->GetDelegate()
               ->CreateTextPositionAt(0)
@@ -319,24 +360,25 @@ ITextRangeProvider* AXPlatformNodeTextProviderWin::GetRangeFromChild(
               ->AsLeafTextPosition();
   }
 
-  return AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
-      ancestor, std::move(start), std::move(end));
+  AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      std::move(start), std::move(end), range);
 }
 
-ITextRangeProvider* AXPlatformNodeTextProviderWin::CreateDegenerateRangeAtStart(
-    ui::AXPlatformNodeWin* node) {
-  DCHECK(node);
-  DCHECK(node->GetDelegate());
+void AXPlatformNodeTextProviderWin::CreateDegenerateRangeAtStart(
+    AXPlatformNodeWin* node,
+    ITextRangeProvider** text_range_provider) {
+  CHECK(node, base::NotFatalUntil::M163);
+  CHECK(node->GetDelegate(), base::NotFatalUntil::M163);
 
   // Create a degenerate range positioned at the node's start.
   AXNodePosition::AXPositionInstance start, end;
   start = node->GetDelegate()->CreateTextPositionAt(0)->AsLeafTextPosition();
   end = start->Clone();
-  return AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
-      node, std::move(start), std::move(end));
+  AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      std::move(start), std::move(end), text_range_provider);
 }
 
-ui::AXPlatformNodeWin* AXPlatformNodeTextProviderWin::owner() const {
+AXPlatformNodeWin* AXPlatformNodeTextProviderWin::owner() const {
   return owner_.Get();
 }
 
@@ -362,8 +404,8 @@ AXPlatformNodeTextProviderWin::GetTextRangeProviderFromActiveComposition(
         owner()->GetDelegate()->CreateTextPositionAt(
             /*offset*/ active_composition_offset.end());
 
-    *range = AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
-        owner_.Get(), std::move(start), std::move(end));
+    AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+        std::move(start), std::move(end), range);
   }
 
   return S_OK;

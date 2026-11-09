@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,59 +6,66 @@
 
 #include <algorithm>
 
+#include "base/time/time.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_connection_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_effective_connection_type.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
-#include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/supplementable.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
 namespace {
 
-Settings* GetSettings(ExecutionContext* execution_context) {
-  auto* window = DynamicTo<LocalDOMWindow>(execution_context);
-  return window ? window->GetFrame()->GetSettings() : nullptr;
-}
-
-bool IsInDataSaverHoldbackWebApi(ExecutionContext* execution_context) {
-  Settings* settings = GetSettings(execution_context);
-  if (!settings)
-    return false;
-  return settings->GetDataSaverHoldbackWebApi();
-}
-
-String ConnectionTypeToString(WebConnectionType type) {
+V8ConnectionType::Enum ConnectionTypeToEnum(WebConnectionType type) {
   switch (type) {
     case kWebConnectionTypeCellular2G:
     case kWebConnectionTypeCellular3G:
     case kWebConnectionTypeCellular4G:
-      return "cellular";
+      return V8ConnectionType::Enum::kCellular;
     case kWebConnectionTypeBluetooth:
-      return "bluetooth";
+      return V8ConnectionType::Enum::kBluetooth;
     case kWebConnectionTypeEthernet:
-      return "ethernet";
+      return V8ConnectionType::Enum::kEthernet;
     case kWebConnectionTypeWifi:
-      return "wifi";
+      return V8ConnectionType::Enum::kWifi;
     case kWebConnectionTypeWimax:
-      return "wimax";
+      return V8ConnectionType::Enum::kWimax;
     case kWebConnectionTypeOther:
-      return "other";
+      return V8ConnectionType::Enum::kOther;
     case kWebConnectionTypeNone:
-      return "none";
+      return V8ConnectionType::Enum::kNone;
     case kWebConnectionTypeUnknown:
-      return "unknown";
+      return V8ConnectionType::Enum::kUnknown;
   }
   NOTREACHED();
-  return "none";
+}
+
+V8EffectiveConnectionType::Enum EffectiveConnectionTypeToEnum(
+    WebEffectiveConnectionType type) {
+  switch (type) {
+    case WebEffectiveConnectionType::kTypeSlow2G:
+      return V8EffectiveConnectionType::Enum::kSlow2G;
+    case WebEffectiveConnectionType::kType2G:
+      return V8EffectiveConnectionType::Enum::k2G;
+    case WebEffectiveConnectionType::kType3G:
+      return V8EffectiveConnectionType::Enum::k3G;
+    case WebEffectiveConnectionType::kTypeUnknown:
+    case WebEffectiveConnectionType::kTypeOffline:
+    case WebEffectiveConnectionType::kType4G:
+      return V8EffectiveConnectionType::Enum::k4G;
+  }
+  NOTREACHED();
 }
 
 String GetConsoleLogStringForWebHoldback() {
@@ -76,46 +83,57 @@ bool NetworkInformation::IsObserving() const {
   return !!connection_observer_handle_;
 }
 
-String NetworkInformation::type() const {
+V8ConnectionType NetworkInformation::type() const {
+  if (RuntimeEnabledFeatures::NetInfoConstantTypeEnabled()) {
+    return V8ConnectionType(V8ConnectionType::Enum::kUnknown);
+  }
+
   // type_ is only updated when listening for events, so ask
   // networkStateNotifier if not listening (crbug.com/379841).
-  if (!IsObserving())
-    return ConnectionTypeToString(GetNetworkStateNotifier().ConnectionType());
+  if (!IsObserving()) {
+    return V8ConnectionType(
+        ConnectionTypeToEnum(GetNetworkStateNotifier().ConnectionType()));
+  }
 
   // If observing, return m_type which changes when the event fires, per spec.
-  return ConnectionTypeToString(type_);
+  return V8ConnectionType(ConnectionTypeToEnum(type_));
 }
 
 double NetworkInformation::downlinkMax() const {
+  if (RuntimeEnabledFeatures::NetInfoConstantTypeEnabled()) {
+    return std::numeric_limits<double>::infinity();
+  }
+
   if (!IsObserving())
     return GetNetworkStateNotifier().MaxBandwidth();
 
   return downlink_max_mbps_;
 }
 
-String NetworkInformation::effectiveType() {
+V8EffectiveConnectionType NetworkInformation::effectiveType() {
   MaybeShowWebHoldbackConsoleMsg();
-  absl::optional<WebEffectiveConnectionType> override_ect =
+  std::optional<WebEffectiveConnectionType> override_ect =
       GetNetworkStateNotifier().GetWebHoldbackEffectiveType();
   if (override_ect) {
-    return NetworkStateNotifier::EffectiveConnectionTypeToString(
-        override_ect.value());
+    return V8EffectiveConnectionType(
+        EffectiveConnectionTypeToEnum(override_ect.value()));
   }
 
   // effective_type_ is only updated when listening for events, so ask
   // networkStateNotifier if not listening (crbug.com/379841).
   if (!IsObserving()) {
-    return NetworkStateNotifier::EffectiveConnectionTypeToString(
-        GetNetworkStateNotifier().EffectiveType());
+    return V8EffectiveConnectionType(EffectiveConnectionTypeToEnum(
+        GetNetworkStateNotifier().EffectiveType()));
   }
 
   // If observing, return m_type which changes when the event fires, per spec.
-  return NetworkStateNotifier::EffectiveConnectionTypeToString(effective_type_);
+  return V8EffectiveConnectionType(
+      EffectiveConnectionTypeToEnum(effective_type_));
 }
 
 uint32_t NetworkInformation::rtt() {
   MaybeShowWebHoldbackConsoleMsg();
-  absl::optional<base::TimeDelta> override_rtt =
+  std::optional<base::TimeDelta> override_rtt =
       GetNetworkStateNotifier().GetWebHoldbackHttpRtt();
   if (override_rtt) {
     return GetNetworkStateNotifier().RoundRtt(Host(), override_rtt.value());
@@ -131,7 +149,7 @@ uint32_t NetworkInformation::rtt() {
 
 double NetworkInformation::downlink() {
   MaybeShowWebHoldbackConsoleMsg();
-  absl::optional<double> override_downlink_mbps =
+  std::optional<double> override_downlink_mbps =
       GetNetworkStateNotifier().GetWebHoldbackDownlinkThroughputMbps();
   if (override_downlink_mbps) {
     return GetNetworkStateNotifier().RoundMbps(Host(),
@@ -147,19 +165,21 @@ double NetworkInformation::downlink() {
 }
 
 bool NetworkInformation::saveData() const {
-  return IsObserving()
-             ? save_data_
-             : GetNetworkStateNotifier().SaveDataEnabled() &&
-                   !IsInDataSaverHoldbackWebApi(GetExecutionContext());
+  bool save_data =
+      IsObserving() ? save_data_ : GetNetworkStateNotifier().SaveDataEnabled();
+
+  probe::ApplyDataSaverOverride(probe::ToCoreProbeSink(GetExecutionContext()),
+                                save_data);
+  return save_data;
 }
 
 void NetworkInformation::ConnectionChange(
     WebConnectionType type,
     double downlink_max_mbps,
     WebEffectiveConnectionType effective_type,
-    const absl::optional<base::TimeDelta>& http_rtt,
-    const absl::optional<base::TimeDelta>& transport_rtt,
-    const absl::optional<double>& downlink_mbps,
+    const std::optional<base::TimeDelta>& http_rtt,
+    const std::optional<base::TimeDelta>& transport_rtt,
+    const std::optional<double>& downlink_mbps,
     bool save_data) {
   DCHECK(GetExecutionContext()->IsContextThread());
 
@@ -222,8 +242,7 @@ ExecutionContext* NetworkInformation::GetExecutionContext() const {
 void NetworkInformation::AddedEventListener(
     const AtomicString& event_type,
     RegisteredEventListener& registered_listener) {
-  EventTargetWithInlineData::AddedEventListener(event_type,
-                                                registered_listener);
+  EventTarget::AddedEventListener(event_type, registered_listener);
   MaybeShowWebHoldbackConsoleMsg();
   StartObserving();
 }
@@ -231,14 +250,13 @@ void NetworkInformation::AddedEventListener(
 void NetworkInformation::RemovedEventListener(
     const AtomicString& event_type,
     const RegisteredEventListener& registered_listener) {
-  EventTargetWithInlineData::RemovedEventListener(event_type,
-                                                  registered_listener);
+  EventTarget::RemovedEventListener(event_type, registered_listener);
   if (!HasEventListeners())
     StopObserving();
 }
 
 void NetworkInformation::RemoveAllEventListeners() {
-  EventTargetWithInlineData::RemoveAllEventListeners();
+  EventTarget::RemoveAllEventListeners();
   DCHECK(!HasEventListeners());
   StopObserving();
 }
@@ -287,12 +305,13 @@ NetworkInformation* NetworkInformation::connection(NavigatorBase& navigator) {
 }
 
 NetworkInformation::NetworkInformation(NavigatorBase& navigator)
-    : Supplement<NavigatorBase>(navigator),
+    : ActiveScriptWrappable<NetworkInformation>({}),
+      Supplement<NavigatorBase>(navigator),
       ExecutionContextLifecycleObserver(navigator.GetExecutionContext()),
       web_holdback_console_message_shown_(false),
       context_stopped_(false) {
-  absl::optional<base::TimeDelta> http_rtt;
-  absl::optional<double> downlink_mbps;
+  std::optional<base::TimeDelta> http_rtt;
+  std::optional<double> downlink_mbps;
 
   GetNetworkStateNotifier().GetMetricsWithWebHoldback(
       &type_, &downlink_max_mbps_, &effective_type_, &http_rtt, &downlink_mbps,
@@ -300,21 +319,21 @@ NetworkInformation::NetworkInformation(NavigatorBase& navigator)
 
   http_rtt_msec_ = GetNetworkStateNotifier().RoundRtt(Host(), http_rtt);
   downlink_mbps_ = GetNetworkStateNotifier().RoundMbps(Host(), downlink_mbps);
-  save_data_ =
-      save_data_ && !IsInDataSaverHoldbackWebApi(GetExecutionContext());
 
   DCHECK_LE(1u, GetNetworkStateNotifier().RandomizationSalt());
   DCHECK_GE(20u, GetNetworkStateNotifier().RandomizationSalt());
 }
 
 void NetworkInformation::Trace(Visitor* visitor) const {
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   Supplement<NavigatorBase>::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
+  NetworkStateNotifier::NetworkStateObserver::Trace(visitor);
 }
 
 const String NetworkInformation::Host() const {
-  return GetExecutionContext() ? GetExecutionContext()->Url().Host() : String();
+  return GetExecutionContext() ? GetExecutionContext()->Url().Host().ToString()
+                               : String();
 }
 
 void NetworkInformation::MaybeShowWebHoldbackConsoleMsg() {

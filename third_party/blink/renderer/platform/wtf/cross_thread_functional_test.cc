@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <utility>
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace WTF {
+namespace blink {
 namespace {
 
 // Tests that "currying" CrossThreadFunction and CrossThreadOnceFunction works,
@@ -43,4 +43,4 @@ TEST(CrossThreadFunctionalTest, CrossThreadBindOnce_CrossThreadFunction) {
 }
 
 }  // namespace
-}  // namespace WTF
+}  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,22 +24,26 @@ std::string GetFullWindowsVersion() {
   // Server or Desktop
   const bool server =
       gi->version_type() == base::win::VersionType::SUITE_SERVER;
-  // Service Pack
-  const std::string sp = gi->service_pack_str();
 
-  if (major == 10) {
-    version += (server) ? "Server OS" : "10 OS";
+  if (major == 11) {
+    version += (server) ? "Server OS" : "11";
+  } else if (major == 10) {
+    if (build < 20348) {
+      version += (server) ? "Server OS" : "10";
+    } else if (build < 22000) {
+      version += (server) ? "Server 2022" : "10";
+    } else {
+      version += (server) ? "Server OS" : "11";
+    }
   } else if (major == 6) {
     switch (minor) {
       case 0:
         // Windows Vista or Server 2008
-        version += (server) ? "Server 2008 " : "Vista ";
-        version += sp;
+        version += (server) ? "Server 2008" : "Vista";
         break;
       case 1:
         // Windows 7 or Server 2008 R2
-        version += (server) ? "Server 2008 R2 " : "7 ";
-        version += sp;
+        version += (server) ? "Server 2008 R2" : "7";
         break;
       case 2:
         // Windows 8 or Server 2012
@@ -55,8 +59,7 @@ std::string GetFullWindowsVersion() {
     }
   } else if ((major == 5) && (minor > 0)) {
     // Windows XP or Server 2003
-    version += (server) ? "Server 2003 " : "XP ";
-    version += sp;
+    version += (server) ? "Server 2003" : "XP";
   } else {
     // unknown version
     return base::StringPrintf("unknown version %u.%u", major, minor);
@@ -64,13 +67,15 @@ std::string GetFullWindowsVersion() {
 
   const std::string release_id = gi->release_id();
 
-  if (!release_id.empty())
+  if (!release_id.empty()) {
     version += " Version " + release_id;
+  }
 
-  if (patch > 0)
+  if (patch > 0) {
     version += base::StringPrintf(" (Build %u.%u)", build, patch);
-  else
+  } else {
     version += base::StringPrintf(" (Build %u)", build);
+  }
   return version;
 }
 

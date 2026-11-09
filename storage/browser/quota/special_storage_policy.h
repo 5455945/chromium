@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
-#include "services/network/public/cpp/session_cookie_delete_predicate.h"
 
 class GURL;
 
@@ -28,6 +27,8 @@ namespace storage {
 class COMPONENT_EXPORT(STORAGE_BROWSER) SpecialStoragePolicy
     : public base::RefCountedThreadSafe<SpecialStoragePolicy> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   using StoragePolicy = int;
   enum ChangeFlags {
     STORAGE_PROTECTED = 1 << 0,
@@ -65,8 +66,8 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SpecialStoragePolicy
   // Unlimited storage is not subject to quota or storage pressure eviction.
   virtual bool IsStorageUnlimited(const GURL& origin) = 0;
 
-  // Durable storage is not subject to storage pressure eviction.
-  virtual bool IsStorageDurable(const GURL& origin) = 0;
+  // Persistent storage is not subject to storage pressure eviction.
+  virtual bool IsStoragePersistent(const GURL& origin) = 0;
 
   // Checks if the origin contains per-site isolated storage.
   virtual bool HasIsolatedStorage(const GURL& origin) = 0;
@@ -77,16 +78,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SpecialStoragePolicy
 
   // Returns true if some origins are only allowed session-only storage.
   virtual bool HasSessionOnlyOrigins() = 0;
-
-  // Returns a predicate that takes the domain of a cookie and a bool whether
-  // the cookie is secure and returns true if the cookie should be deleted on
-  // exit.
-  // If |HasSessionOnlyOrigins()| is true a non-null callback is returned.
-  // It uses domain matching as described in section 5.1.3 of RFC 6265 to
-  // identify content setting rules that could have influenced the cookie
-  // when it was created.
-  virtual network::DeleteCookiePredicate
-  CreateDeleteCookieOnExitPredicate() = 0;
 
   // Adds/removes an observer, the policy does not take
   // ownership of the observer. Should only be called on the IO thread.

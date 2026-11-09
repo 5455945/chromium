@@ -1,35 +1,66 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/socket/next_proto.h"
 
+#include <string_view>
+
 namespace net {
 
-NextProto NextProtoFromString(base::StringPiece proto_string) {
-  if (proto_string == "http1.1" || proto_string == "http/1.1")
-    return kProtoHTTP11;
-  if (proto_string == "h2") {
-    return kProtoHTTP2;
+NextProto NextProtoFromString(std::string_view proto_string) {
+  if (proto_string == "http/1.1") {
+    return NextProto::kProtoHTTP11;
   }
-  if (proto_string == "quic" || proto_string == "hq")
-    return kProtoQUIC;
+  if (proto_string == "h2") {
+    return NextProto::kProtoHTTP2;
+  }
+  if (proto_string == "quic" || proto_string == "hq") {
+    return NextProto::kProtoQUIC;
+  }
 
-  return kProtoUnknown;
+  return NextProto::kProtoUnknown;
 }
 
 const char* NextProtoToString(NextProto next_proto) {
   switch (next_proto) {
-    case kProtoHTTP11:
+    case NextProto::kProtoHTTP11:
       return "http/1.1";
-    case kProtoHTTP2:
+    case NextProto::kProtoHTTP2:
       return "h2";
-    case kProtoQUIC:
+    case NextProto::kProtoQUIC:
       return "quic";
-    case kProtoUnknown:
+    case NextProto::kProtoUnknown:
       break;
   }
   return "unknown";
+}
+
+const std::string_view NegotiatedProtocolToHistogramSuffix(
+    NextProto next_proto) {
+  switch (next_proto) {
+    case NextProto::kProtoHTTP11:
+      return "H1";
+    case NextProto::kProtoHTTP2:
+      return "H2";
+    case NextProto::kProtoQUIC:
+      return "H3";
+    case NextProto::kProtoUnknown:
+      return "Unknown";
+  }
+}
+
+const std::string_view NegotiatedProtocolToHistogramSuffixCoalesced(
+    NextProto next_proto) {
+  switch (next_proto) {
+    case NextProto::kProtoHTTP11:
+    case NextProto::kProtoUnknown:
+      return "H1";
+    case NextProto::kProtoHTTP2:
+      return "H2";
+    case NextProto::kProtoQUIC:
+      return "H3";
+  }
 }
 
 }  // namespace net

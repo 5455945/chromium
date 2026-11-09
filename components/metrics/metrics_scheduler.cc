@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include "build/build_config.h"
 
 namespace metrics {
-
 namespace {
 
 // The delay, in seconds, after startup before sending the first log message.
-#if defined(OS_ANDROID) || defined(OS_IOS)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 // Sessions are more likely to be short on a mobile device, so handle the
 // initial log quickly.
 const int kInitialIntervalSeconds = 15;
@@ -22,14 +21,13 @@ const int kInitialIntervalSeconds = 60;
 }  // namespace
 
 MetricsScheduler::MetricsScheduler(const base::RepeatingClosure& task_callback,
-                                   bool fast_startup_for_testing)
+                                   bool fast_startup)
     : task_callback_(task_callback),
-      interval_(base::TimeDelta::FromSeconds(
-          fast_startup_for_testing ? 0 : kInitialIntervalSeconds)),
+      interval_(base::Seconds(fast_startup ? 0 : kInitialIntervalSeconds)),
       running_(false),
       callback_pending_(false) {}
 
-MetricsScheduler::~MetricsScheduler() {}
+MetricsScheduler::~MetricsScheduler() = default;
 
 void MetricsScheduler::Start() {
   running_ = true;
@@ -42,12 +40,27 @@ void MetricsScheduler::Stop() {
     timer_.Stop();
 }
 
+void MetricsScheduler::SetDoneCallback(base::OnceClosure done_callback) {
+  CHECK(done_callback_.is_null());
+  CHECK(callback_pending_);
+  done_callback_ = std::move(done_callback);
+}
+
+// static
+int MetricsScheduler::GetInitialIntervalSeconds() {
+  return kInitialIntervalSeconds;
+}
+
 void MetricsScheduler::TaskDone(base::TimeDelta next_interval) {
   DCHECK(callback_pending_);
   callback_pending_ = false;
-  interval_ = next_interval;
-  if (running_)
+  SetInterval(next_interval);
+  if (running_) {
     ScheduleNextTask();
+  }
+  if (!done_callback_.is_null()) {
+    std::move(done_callback_).Run();
+  }
 }
 
 void MetricsScheduler::TriggerTask() {

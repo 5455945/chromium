@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,35 @@
 
 #include <memory>
 
-#include "base/strings/string_util.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
-// Helper to get list of media stream devices for desktop capture in |devices|.
-// Registers to display notification if |display_notification| is true.
-// Returns an instance of MediaStreamUI to be passed to content layer.
-std::unique_ptr<content::MediaStreamUI> GetDevicesForDesktopCapture(
+// Helper to get the list of media stream devices for desktop capture and store
+// them in |out_devices|. Registers to display notification if
+// |display_notification| is true. Returns an instance of MediaStreamUI to be
+// passed to content layer via
+// `on_media_stream_capture_indicator_ui_created_callback`.
+void GetDevicesForDesktopCapture(
     content::WebContents* web_contents,
-    const url::Origin& capturer_origin,
-    blink::MediaStreamDevices* devices,
     const content::DesktopMediaID& media_id,
-    blink::mojom::MediaStreamType devices_video_type,
-    blink::mojom::MediaStreamType devices_audio_type,
+    const blink::mojom::MediaStreamType video_type,
+    const blink::mojom::MediaStreamType audio_type,
+    const GURL& security_origin,
     bool capture_audio,
     bool disable_local_echo,
+    bool suppress_local_audio_playback,
+    bool restrict_own_audio,
     bool display_notification,
     const std::u16string& application_title,
-    const std::u16string& registered_extension_name);
+    bool captured_surface_control_active,
+    base::OnceCallback<void(blink::mojom::StreamDevices,
+                            std::unique_ptr<content::MediaStreamUI>)>
+        on_media_stream_capture_indicator_ui_created_callback);
+
+content::WebContents* GetWebContentsFromWindowIfCaptureHandleAllowed(
+    gfx::NativeWindow native_window);
 
 #endif  // CHROME_BROWSER_MEDIA_WEBRTC_DESKTOP_CAPTURE_DEVICES_UTIL_H_

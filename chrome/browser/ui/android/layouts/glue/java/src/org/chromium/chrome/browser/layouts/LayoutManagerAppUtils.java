@@ -1,15 +1,18 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.layouts;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.base.WindowAndroid;
 
 /** A class used by app code to manage an instance of the {@link LayoutManager}. */
+@NullMarked
 public class LayoutManagerAppUtils {
     /**
      * Attach a shared {@link LayoutManager} to a {@link WindowAndroid}.
+     *
      * @param windowAndroid The window to attach the manager to.
      * @param controller The controller to attach.
      */

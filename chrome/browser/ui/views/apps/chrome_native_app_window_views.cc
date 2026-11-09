@@ -1,90 +1,99 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/apps/chrome_native_app_window_views.h"
 
 #include <stddef.h>
+
+#include <array>
+#include <optional>
 #include <utility>
 
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
+#include "chrome/browser/devtools/devtools_toggle_action.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/chrome_app_icon.h"
 #include "chrome/browser/extensions/chrome_app_icon_service.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/views/accelerator_table.h"
+#include "chrome/browser/ui/accelerator_table.h"
 #include "chrome/browser/ui/views/extensions/extension_keybinding_registry_views.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
 #include "extensions/browser/app_window/app_delegate.h"
+#include "extensions/browser/extension_util.h"
 #include "third_party/skia/include/core/SkRegion.h"
+#include "ui/base/hit_test.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
-#include "ui/gfx/skia_util.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/frame_view.h"
 
 using extensions::AppWindow;
 
 namespace {
 
-const AcceleratorMapping kAppWindowAcceleratorMap[] = {
-  { ui::VKEY_W, ui::EF_CONTROL_DOWN, IDC_CLOSE_WINDOW },
-  { ui::VKEY_W, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_CLOSE_WINDOW },
-  { ui::VKEY_F4, ui::EF_ALT_DOWN, IDC_CLOSE_WINDOW },
-};
+constexpr auto kAppWindowAcceleratorMap = std::to_array<AcceleratorMapping>({
+    {ui::VKEY_W, ui::EF_CONTROL_DOWN, IDC_CLOSE_WINDOW},
+    {ui::VKEY_W, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_CLOSE_WINDOW},
+    {ui::VKEY_F4, ui::EF_ALT_DOWN, IDC_CLOSE_WINDOW},
+});
 
 // These accelerators will only be available in kiosk mode. These allow the
 // user to manually zoom app windows. This is only necessary in kiosk mode
 // (in normal mode, the user can zoom via the screen magnifier).
 // TODO(xiyuan): Write a test for kiosk accelerators.
-const AcceleratorMapping kAppWindowKioskAppModeAcceleratorMap[] = {
-  { ui::VKEY_OEM_MINUS, ui::EF_CONTROL_DOWN, IDC_ZOOM_MINUS },
-  { ui::VKEY_OEM_MINUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
-    IDC_ZOOM_MINUS },
-  { ui::VKEY_SUBTRACT, ui::EF_CONTROL_DOWN, IDC_ZOOM_MINUS },
-  { ui::VKEY_OEM_PLUS, ui::EF_CONTROL_DOWN, IDC_ZOOM_PLUS },
-  { ui::VKEY_OEM_PLUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_ZOOM_PLUS },
-  { ui::VKEY_ADD, ui::EF_CONTROL_DOWN, IDC_ZOOM_PLUS },
-  { ui::VKEY_0, ui::EF_CONTROL_DOWN, IDC_ZOOM_NORMAL },
-  { ui::VKEY_NUMPAD0, ui::EF_CONTROL_DOWN, IDC_ZOOM_NORMAL },
-};
+constexpr auto kAppWindowKioskAppModeAcceleratorMap =
+    std::to_array<AcceleratorMapping>(
+        {{ui::VKEY_OEM_MINUS, ui::EF_CONTROL_DOWN, IDC_ZOOM_MINUS},
+         {ui::VKEY_OEM_MINUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
+          IDC_ZOOM_MINUS},
+         {ui::VKEY_SUBTRACT, ui::EF_CONTROL_DOWN, IDC_ZOOM_MINUS},
+         {ui::VKEY_OEM_PLUS, ui::EF_CONTROL_DOWN, IDC_ZOOM_PLUS},
+         {ui::VKEY_OEM_PLUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
+          IDC_ZOOM_PLUS},
+         {ui::VKEY_ADD, ui::EF_CONTROL_DOWN, IDC_ZOOM_PLUS},
+         {ui::VKEY_0, ui::EF_CONTROL_DOWN, IDC_ZOOM_NORMAL},
+         {ui::VKEY_NUMPAD0, ui::EF_CONTROL_DOWN, IDC_ZOOM_NORMAL},
+         {ui::VKEY_I, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS},
+         {ui::VKEY_J, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
+          IDC_DEV_TOOLS_CONSOLE},
+         {ui::VKEY_C, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
+          IDC_DEV_TOOLS_INSPECT}});
 
 std::map<ui::Accelerator, int> AcceleratorsFromMapping(
-    const AcceleratorMapping mapping_array[],
-    size_t mapping_length) {
-  std::map<ui::Accelerator, int> mapping;
-  for (size_t i = 0; i < mapping_length; ++i) {
-    ui::Accelerator accelerator(mapping_array[i].keycode,
-                                mapping_array[i].modifiers);
-    mapping.insert(std::make_pair(accelerator, mapping_array[i].command_id));
+    base::span<const AcceleratorMapping> mapping_span) {
+  std::map<ui::Accelerator, int> mappings;
+  for (const AcceleratorMapping& mapping : mapping_span) {
+    ui::Accelerator accelerator(mapping.keycode, mapping.modifiers);
+    mappings.insert(std::make_pair(accelerator, mapping.command_id));
   }
 
-  return mapping;
+  return mappings;
 }
 
 const std::map<ui::Accelerator, int>& GetAcceleratorTable() {
-  if (!chrome::IsRunningInForcedAppMode()) {
+  if (!IsRunningInForcedAppMode()) {
     static base::NoDestructor<std::map<ui::Accelerator, int>> accelerators(
-        AcceleratorsFromMapping(kAppWindowAcceleratorMap,
-                                base::size(kAppWindowAcceleratorMap)));
+        AcceleratorsFromMapping(kAppWindowAcceleratorMap));
     return *accelerators;
   }
 
   static base::NoDestructor<std::map<ui::Accelerator, int>>
       app_mode_accelerators([]() {
-        std::map<ui::Accelerator, int> mapping = AcceleratorsFromMapping(
-            kAppWindowAcceleratorMap, base::size(kAppWindowAcceleratorMap));
-        std::map<ui::Accelerator, int> kiosk_mapping = AcceleratorsFromMapping(
-            kAppWindowKioskAppModeAcceleratorMap,
-            base::size(kAppWindowKioskAppModeAcceleratorMap));
+        std::map<ui::Accelerator, int> mapping =
+            AcceleratorsFromMapping(kAppWindowAcceleratorMap);
+        std::map<ui::Accelerator, int> kiosk_mapping =
+            AcceleratorsFromMapping(kAppWindowKioskAppModeAcceleratorMap);
         mapping.insert(std::begin(kiosk_mapping), std::end(kiosk_mapping));
         return mapping;
       }());
@@ -93,26 +102,22 @@ const std::map<ui::Accelerator, int>& GetAcceleratorTable() {
 
 }  // namespace
 
-ChromeNativeAppWindowViews::ChromeNativeAppWindowViews()
-    : has_frame_color_(false),
-      active_frame_color_(SK_ColorBLACK),
-      inactive_frame_color_(SK_ColorBLACK) {
-}
+ChromeNativeAppWindowViews::ChromeNativeAppWindowViews() = default;
 
-ChromeNativeAppWindowViews::~ChromeNativeAppWindowViews() {}
+ChromeNativeAppWindowViews::~ChromeNativeAppWindowViews() = default;
 
 void ChromeNativeAppWindowViews::OnBeforeWidgetInit(
     const AppWindow::CreateParams& create_params,
     views::Widget::InitParams* init_params,
-    views::Widget* widget) {
-}
+    views::Widget* widget) {}
 
 void ChromeNativeAppWindowViews::InitializeDefaultWindow(
     const AppWindow::CreateParams& create_params) {
-  views::Widget::InitParams init_params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams init_params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   init_params.delegate = this;
   init_params.remove_standard_frame = ShouldRemoveStandardFrame();
-  init_params.use_system_default_icon = true;
   if (create_params.alpha_enabled) {
     init_params.opacity =
         views::Widget::InitParams::WindowOpacity::kTranslucent;
@@ -121,21 +126,27 @@ void ChromeNativeAppWindowViews::InitializeDefaultWindow(
     // transparency and has no standard frame, don't show a shadow for it.
     // TODO(skuhne): If we run into an application which should have a shadow
     // but does not have, a new attribute has to be added.
-    if (IsFrameless())
+    if (IsFrameless()) {
       init_params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
+    }
   }
-  if (create_params.always_on_top)
+  if (create_params.always_on_top) {
     init_params.z_order = ui::ZOrderLevel::kFloatingWindow;
+  }
   init_params.visible_on_all_workspaces =
       create_params.visible_on_all_workspaces;
 
   OnBeforeWidgetInit(create_params, &init_params, widget());
+  gfx::Rect init_param_bounds = init_params.bounds;
   widget()->Init(std::move(init_params));
 
-  // The frame insets are required to resolve the bounds specifications
-  // correctly. So we set the window bounds and constraints now.
+  // The frame insets and window radii are required to resolve the bounds
+  // specifications correctly. So we set the window bounds and constraints now.
   gfx::Insets frame_insets = GetFrameInsets();
-  gfx::Rect window_bounds = create_params.GetInitialWindowBounds(frame_insets);
+  gfx::Rect window_bounds =
+      init_param_bounds.IsEmpty()
+          ? create_params.GetInitialWindowBounds(frame_insets, GetWindowRadii())
+          : init_param_bounds;
   SetContentSizeConstraints(create_params.GetContentMinimumSize(frame_insets),
                             create_params.GetContentMaximumSize(frame_insets));
   if (!window_bounds.IsEmpty()) {
@@ -144,7 +155,7 @@ void ChromeNativeAppWindowViews::InitializeDefaultWindow(
         window_bounds.x() != BoundsSpecification::kUnspecifiedPosition &&
         window_bounds.y() != BoundsSpecification::kUnspecifiedPosition;
     if (!position_specified) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
       // On Mac, this will call NativeWidgetMac's CenterWindow() which relies
       // on the size being its content size instead of window size. That
       // API only causes a problem when we use system title bar in an old
@@ -160,16 +171,17 @@ void ChromeNativeAppWindowViews::InitializeDefaultWindow(
     }
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (create_params.is_ime_window)
+#if BUILDFLAG(IS_CHROMEOS)
+  if (create_params.is_ime_window) {
     return;
+  }
 #endif
 
   // Register accelarators supported by app windows.
   views::FocusManager* focus_manager = GetFocusManager();
   const std::map<ui::Accelerator, int>& accelerator_table =
       GetAcceleratorTable();
-  const bool is_kiosk_app_mode = chrome::IsRunningInForcedAppMode();
+  const bool is_kiosk_app_mode = IsRunningInForcedAppMode();
 
   // Ensures that kiosk mode accelerators are enabled when in kiosk mode (to be
   // future proof). This is needed because GetAcceleratorTable() uses a static
@@ -178,8 +190,8 @@ void ChromeNativeAppWindowViews::InitializeDefaultWindow(
   // registered. This CHECK catches the case.
   CHECK(!is_kiosk_app_mode ||
         accelerator_table.size() ==
-            base::size(kAppWindowAcceleratorMap) +
-                base::size(kAppWindowKioskAppModeAcceleratorMap));
+            std::size(kAppWindowAcceleratorMap) +
+                std::size(kAppWindowKioskAppModeAcceleratorMap));
 
   // Ensure there is a ZoomController in kiosk mode, otherwise the processing
   // of the accelerators will cause a crash. Note CHECK here because DCHECK
@@ -187,20 +199,24 @@ void ChromeNativeAppWindowViews::InitializeDefaultWindow(
   CHECK(!is_kiosk_app_mode ||
         zoom::ZoomController::FromWebContents(web_view()->GetWebContents()));
 
-  for (auto iter = accelerator_table.begin(); iter != accelerator_table.end();
-       ++iter) {
+  for (const auto& iter : accelerator_table) {
     if (is_kiosk_app_mode &&
-        !chrome::IsCommandAllowedInAppMode(iter->second, /* is_popup */ false))
+        !IsCommandAllowedInAppMode(iter.second, /* is_popup */ false)) {
       continue;
+    }
 
     focus_manager->RegisterAccelerator(
-        iter->first, ui::AcceleratorManager::kNormalPriority, this);
+        iter.first, ui::AcceleratorManager::kNormalPriority, this);
   }
 }
 
-std::unique_ptr<views::NonClientFrameView>
+std::unique_ptr<views::FrameView>
 ChromeNativeAppWindowViews::CreateStandardDesktopAppFrame() {
-  return views::WidgetDelegateView::CreateNonClientFrameView(widget());
+  return views::WidgetDelegateView::CreateFrameView(widget());
+}
+
+bool ChromeNativeAppWindowViews::ShouldCreateNonStandardAppFrame() const {
+  return IsFrameless() || has_frame_color_;
 }
 
 bool ChromeNativeAppWindowViews::ShouldRemoveStandardFrame() {
@@ -213,13 +229,16 @@ gfx::Rect ChromeNativeAppWindowViews::GetRestoredBounds() const {
   return widget()->GetRestoredBounds();
 }
 
-ui::WindowShowState ChromeNativeAppWindowViews::GetRestoredState() const {
-  if (IsMaximized())
-    return ui::SHOW_STATE_MAXIMIZED;
-  if (IsFullscreen())
-    return ui::SHOW_STATE_FULLSCREEN;
+ui::mojom::WindowShowState ChromeNativeAppWindowViews::GetRestoredState()
+    const {
+  if (IsMaximized()) {
+    return ui::mojom::WindowShowState::kMaximized;
+  }
+  if (IsFullscreen()) {
+    return ui::mojom::WindowShowState::kFullscreen;
+  }
 
-  return ui::SHOW_STATE_NORMAL;
+  return ui::mojom::WindowShowState::kNormal;
 }
 
 ui::ZOrderLevel ChromeNativeAppWindowViews::GetZOrderLevel() const {
@@ -255,8 +274,9 @@ ui::ImageModel ChromeNativeAppWindowViews::GetWindowAppIcon() {
             base_image.AsImageSkia(), GetAppIconImage().AsImageSkia()));
   }
 
-  if (!custom_image.IsEmpty())
+  if (!custom_image.IsEmpty()) {
     return ui::ImageModel::FromImage(custom_image);
+  }
   EnsureAppIconCreated();
   return ui::ImageModel::FromImage(GetAppIconImage());
 }
@@ -272,18 +292,25 @@ ui::ImageModel ChromeNativeAppWindowViews::GetWindowIcon() {
   return ui::ImageModel();
 }
 
-std::unique_ptr<views::NonClientFrameView>
-ChromeNativeAppWindowViews::CreateNonClientFrameView(views::Widget* widget) {
-  return (IsFrameless() || has_frame_color_) ?
-      CreateNonStandardAppFrame() : CreateStandardDesktopAppFrame();
+std::unique_ptr<views::FrameView> ChromeNativeAppWindowViews::CreateFrameView(
+    views::Widget* widget) {
+  auto frame_view = ShouldCreateNonStandardAppFrame()
+                        ? CreateNonStandardAppFrame()
+                        : CreateStandardDesktopAppFrame();
+  if (ShouldCreateNonStandardAppFrame()) {
+    frame_view->set_non_client_hit_test_callback(base::BindRepeating(
+        &ChromeNativeAppWindowViews::NonClientHitTest, base::Unretained(this)));
+  }
+
+  return frame_view;
 }
 
 bool ChromeNativeAppWindowViews::WidgetHasHitTestMask() const {
-  return shape_ != NULL;
+  return shape_ != nullptr;
 }
 
 void ChromeNativeAppWindowViews::GetWidgetHitTestMask(SkPath* mask) const {
-  shape_->getBoundaryPath(mask);
+  *mask = shape_->getBoundaryPath();
 }
 
 // views::View implementation.
@@ -293,7 +320,7 @@ bool ChromeNativeAppWindowViews::AcceleratorPressed(
   const std::map<ui::Accelerator, int>& accelerator_table =
       GetAcceleratorTable();
   auto iter = accelerator_table.find(accelerator);
-  DCHECK(iter != accelerator_table.end());
+  CHECK(iter != accelerator_table.end());
   int command_id = iter->second;
   switch (command_id) {
     case IDC_CLOSE_WINDOW:
@@ -310,10 +337,25 @@ bool ChromeNativeAppWindowViews::AcceleratorPressed(
     case IDC_ZOOM_PLUS:
       zoom::PageZoom::Zoom(web_view()->GetWebContents(), content::PAGE_ZOOM_IN);
       return true;
+    case IDC_DEV_TOOLS:
+      DevToolsWindow::OpenDevToolsWindow(
+          web_view()->GetWebContents(), DevToolsToggleAction::Show(),
+          DevToolsOpenedByAction::kMainMenuOrMainShortcut);
+      return true;
+    case IDC_DEV_TOOLS_CONSOLE:
+      DevToolsWindow::OpenDevToolsWindow(
+          web_view()->GetWebContents(),
+          DevToolsToggleAction::ShowConsolePanel(),
+          DevToolsOpenedByAction::kConsoleShortcut);
+      return true;
+    case IDC_DEV_TOOLS_INSPECT:
+      DevToolsWindow::OpenDevToolsWindow(
+          web_view()->GetWebContents(), DevToolsToggleAction::Inspect(),
+          DevToolsOpenedByAction::kInspectorModeShortcut);
+      return true;
     default:
       NOTREACHED() << "Unknown accelerator sent to app window.";
   }
-  return NativeAppWindowViews::AcceleratorPressed(accelerator);
 }
 
 // NativeAppWindow implementation.
@@ -334,8 +376,9 @@ void ChromeNativeAppWindowViews::UpdateShape(
   std::unique_ptr<SkRegion> region;
   if (shape_rects_) {
     region = std::make_unique<SkRegion>();
-    for (const gfx::Rect& input_rect : *shape_rects_.get())
+    for (const gfx::Rect& input_rect : *shape_rects_) {
       region->op(gfx::RectToSkIRect(input_rect), SkRegion::kUnion_Op);
+    }
   }
   shape_ = std::move(region);
   OnWidgetHasHitTestMaskChanged();
@@ -361,7 +404,7 @@ SkColor ChromeNativeAppWindowViews::InactiveFrameColor() const {
 void ChromeNativeAppWindowViews::InitializeWindow(
     AppWindow* app_window,
     const AppWindow::CreateParams& create_params) {
-  DCHECK(widget());
+  CHECK(widget(), base::NotFatalUntil::M162);
   has_frame_color_ = create_params.has_frame_color;
   active_frame_color_ = create_params.active_frame_color;
   inactive_frame_color_ = create_params.inactive_frame_color;
@@ -369,8 +412,9 @@ void ChromeNativeAppWindowViews::InitializeWindow(
   extension_keybinding_registry_ =
       std::make_unique<ExtensionKeybindingRegistryViews>(
           Profile::FromBrowserContext(app_window->browser_context()),
-          widget()->GetFocusManager(),
-          extensions::ExtensionKeybindingRegistry::PLATFORM_APPS_ONLY, nullptr);
+          /*tab_list_interface=*/nullptr,
+          extensions::ExtensionKeybindingRegistry::PLATFORM_APPS_ONLY,
+          widget()->GetFocusManager());
 }
 
 gfx::Image ChromeNativeAppWindowViews::GetCustomImage() {
@@ -378,13 +422,14 @@ gfx::Image ChromeNativeAppWindowViews::GetCustomImage() {
 }
 
 gfx::Image ChromeNativeAppWindowViews::GetAppIconImage() {
-  DCHECK(app_icon_);
+  CHECK(app_icon_, base::NotFatalUntil::M162);
   return gfx::Image(app_icon_->image_skia());
 }
 
 void ChromeNativeAppWindowViews::EnsureAppIconCreated() {
-  if (app_icon_ && app_icon_->IsValid())
+  if (app_icon_ && app_icon_->IsValid()) {
     return;
+  }
 
   // To avoid recursive call, reset the smart pointer. It will be checked in
   // OnIconUpdated to determine if this is a real update or the initial callback
@@ -398,8 +443,22 @@ void ChromeNativeAppWindowViews::EnsureAppIconCreated() {
 
 void ChromeNativeAppWindowViews::OnIconUpdated(
     extensions::ChromeAppIcon* icon) {
-  if (!app_icon_)
+  if (!app_icon_) {
     return;
-  DCHECK_EQ(app_icon_.get(), icon);
+  }
+  CHECK_EQ(app_icon_.get(), icon, base::NotFatalUntil::M162);
   UpdateWindowIcon();
+}
+
+int ChromeNativeAppWindowViews::NonClientHitTest(const gfx::Point& point) {
+  if (!widget()->IsFullscreen()) {
+    // Check for possible draggable region in the client area for the frameless
+    // window.
+    SkRegion* draggable_region = GetDraggableRegion();
+    if (draggable_region && draggable_region->contains(point.x(), point.y())) {
+      return HTCAPTION;
+    }
+  }
+
+  return HTNOWHERE;
 }

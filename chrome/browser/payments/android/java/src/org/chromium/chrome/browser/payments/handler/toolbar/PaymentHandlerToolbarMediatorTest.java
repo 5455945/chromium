@@ -1,8 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.payments.handler.toolbar;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -20,21 +23,18 @@ import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.payments.handler.toolbar.PaymentHandlerToolbarMediator.PaymentHandlerToolbarMediatorDelegate;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.content_public.browser.NavigationHandle;
-import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.RenderFrameHost;
+import org.chromium.content_public.browser.test.mock.MockWebContents;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.url.Origin;
 
-/**
- * A test for PaymentHandlerToolbarMediator.
- */
+/** A test for PaymentHandlerToolbarMediator. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class PaymentHandlerToolbarMediatorTest {
-    @Rule
-    public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    @Mock
-    private WebContents mMockWebContents;
-    @Mock
-    private PaymentHandlerToolbarMediatorDelegate mMockDelegate;
+    @Mock private MockWebContents mMockWebContents;
+    @Mock private PaymentHandlerToolbarMediatorDelegate mMockDelegate;
 
     private PropertyModel mModel;
     private PaymentHandlerToolbarMediator mMediator;
@@ -51,7 +51,7 @@ public class PaymentHandlerToolbarMediatorTest {
         Mockito.doReturn(ConnectionSecurityLevel.NONE).when(mMockDelegate).getSecurityLevel();
         Mockito.doReturn(123)
                 .when(mMockDelegate)
-                .getSecurityIconResource(ConnectionSecurityLevel.NONE);
+                .getSecurityIconResource(eq(ConnectionSecurityLevel.NONE), any());
         Mockito.doReturn("this is content description.")
                 .when(mMockDelegate)
                 .getSecurityIconContentDescription(ConnectionSecurityLevel.NONE);
@@ -59,26 +59,64 @@ public class PaymentHandlerToolbarMediatorTest {
         mMediator.didChangeVisibleSecurityState();
 
         Assert.assertEquals(123, mModel.get(PaymentHandlerToolbarProperties.SECURITY_ICON));
-        Assert.assertEquals("this is content description.",
+        Assert.assertEquals(
+                "this is content description.",
                 mModel.get(PaymentHandlerToolbarProperties.SECURITY_ICON_CONTENT_DESCRIPTION));
     }
 
     @Test
     @Feature({"Payments"})
     public void testDidStartNavigation() {
-        Mockito.doReturn(123).when(mMockDelegate).getSecurityIconResource(Mockito.anyInt());
+        Mockito.doReturn(123)
+                .when(mMockDelegate)
+                .getSecurityIconResource(eq(ConnectionSecurityLevel.NONE), any());
         Mockito.doReturn("this is content description.")
                 .when(mMockDelegate)
-                .getSecurityIconContentDescription(Mockito.anyInt());
+                .getSecurityIconContentDescription(ConnectionSecurityLevel.NONE);
 
         NavigationHandle navigation = Mockito.mock(NavigationHandle.class);
-        Mockito.when(navigation.isInPrimaryMainFrame()).thenReturn(true);
         Mockito.when(navigation.isSameDocument()).thenReturn(false);
 
-        mMediator.didStartNavigation(navigation);
+        mMediator.didStartNavigationInPrimaryMainFrame(navigation);
 
         Assert.assertEquals(123, mModel.get(PaymentHandlerToolbarProperties.SECURITY_ICON));
-        Assert.assertEquals("this is content description.",
+        Assert.assertEquals(
+                "this is content description.",
                 mModel.get(PaymentHandlerToolbarProperties.SECURITY_ICON_CONTENT_DESCRIPTION));
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testDidFinishNavigation_Committed() {
+        mModel.set(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE, true);
+        RenderFrameHost mainFrame = Mockito.mock(RenderFrameHost.class);
+        Origin committedOrigin = Mockito.mock(Origin.class);
+        Mockito.doReturn(mainFrame).when(mMockWebContents).getMainFrame();
+        Mockito.doReturn(committedOrigin).when(mainFrame).getLastCommittedOrigin();
+
+        NavigationHandle navigation = Mockito.mock(NavigationHandle.class);
+        Mockito.when(navigation.hasCommitted()).thenReturn(true);
+
+        mMediator.didFinishNavigationInPrimaryMainFrame(navigation);
+
+        Assert.assertEquals(committedOrigin, mModel.get(PaymentHandlerToolbarProperties.ORIGIN));
+        Assert.assertFalse(mModel.get(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE));
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testDidFinishNavigation_NotCommitted() {
+        Origin initialOrigin = Mockito.mock(Origin.class);
+        mModel.set(PaymentHandlerToolbarProperties.ORIGIN, initialOrigin);
+        mModel.set(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE, true);
+
+        NavigationHandle navigation = Mockito.mock(NavigationHandle.class);
+        Mockito.when(navigation.hasCommitted()).thenReturn(false);
+
+        mMediator.didFinishNavigationInPrimaryMainFrame(navigation);
+
+        Mockito.verify(mMockWebContents, Mockito.never()).getMainFrame();
+        Assert.assertEquals(initialOrigin, mModel.get(PaymentHandlerToolbarProperties.ORIGIN));
+        Assert.assertTrue(mModel.get(PaymentHandlerToolbarProperties.PROGRESS_VISIBLE));
     }
 }

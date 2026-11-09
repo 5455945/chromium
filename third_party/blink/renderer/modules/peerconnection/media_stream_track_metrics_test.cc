@@ -1,19 +1,26 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "third_party/blink/renderer/modules/peerconnection/media_stream_track_metrics.h"
 
 #include <stddef.h>
 
 #include <memory>
+#include <string>
 
-#include "base/bind.h"
-#include "base/run_loop.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/threading/thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/modules/peerconnection/media_stream_track_metrics.h"
 #include "third_party/blink/renderer/modules/peerconnection/mock_peer_connection_dependency_factory.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
+#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/video/video_frame.h"
+#include "third_party/webrtc/api/video/video_sink_interface.h"
+#include "third_party/webrtc/api/video/video_source_interface.h"
+#include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
 using webrtc::AudioSourceInterface;
 using webrtc::AudioTrackInterface;
@@ -65,9 +72,10 @@ class MockVideoTrackInterface : public VideoTrackInterface {
   MOCK_METHOD1(set_enabled, bool(bool));
   MOCK_METHOD1(set_state, bool(TrackState));
   MOCK_METHOD2(AddOrUpdateSink,
-               void(rtc::VideoSinkInterface<webrtc::VideoFrame>*,
-                    const rtc::VideoSinkWants&));
-  MOCK_METHOD1(RemoveSink, void(rtc::VideoSinkInterface<webrtc::VideoFrame>*));
+               void(webrtc::VideoSinkInterface<webrtc::VideoFrame>*,
+                    const webrtc::VideoSinkWants&));
+  MOCK_METHOD1(RemoveSink,
+               void(webrtc::VideoSinkInterface<webrtc::VideoFrame>*));
   MOCK_CONST_METHOD0(GetSource, VideoTrackSourceInterface*());
 
  private:
@@ -89,7 +97,7 @@ class MediaStreamTrackMetricsTest : public testing::Test {
 
   void SetUp() override {
     metrics_ = std::make_unique<MockMediaStreamTrackMetrics>();
-    stream_ = new rtc::RefCountedObject<blink::MockMediaStream>("stream");
+    stream_ = new webrtc::RefCountedObject<blink::MockMediaStream>("stream");
     signaling_thread_.Start();
   }
 
@@ -99,53 +107,15 @@ class MediaStreamTrackMetricsTest : public testing::Test {
     stream_ = nullptr;
   }
 
-  // Adds an audio track to |stream_| on the signaling thread to simulate how
-  // notifications will be fired in Chrome.
-  template <typename TrackType>
-  void AddTrack(TrackType* track) {
-    // Explicitly casting to this type is necessary since the
-    // MediaStreamInterface has two methods with the same name.
-    typedef bool (MediaStreamInterface::*AddTrack)(TrackType*);
-    base::RunLoop run_loop;
-    signaling_thread_.task_runner()->PostTaskAndReply(
-        FROM_HERE,
-        base::BindOnce(
-            base::IgnoreResult<AddTrack>(&MediaStreamInterface::AddTrack),
-            stream_, base::Unretained(track)),
-        run_loop.QuitClosure());
-    run_loop.Run();
-  }
-
-  template <typename TrackType>
-  void RemoveTrack(TrackType* track) {
-    // Explicitly casting to this type is necessary since the
-    // MediaStreamInterface has two methods with the same name.
-    typedef bool (MediaStreamInterface::*RemoveTrack)(TrackType*);
-    base::RunLoop run_loop;
-    signaling_thread_.task_runner()->PostTaskAndReply(
-        FROM_HERE,
-        base::BindOnce(
-            base::IgnoreResult<RemoveTrack>(&MediaStreamInterface::RemoveTrack),
-            stream_, base::Unretained(track)),
-        run_loop.QuitClosure());
-    run_loop.Run();
-  }
-
-  // Convenience methods to cast the mock track types into their webrtc
-  // equivalents.
-  void AddAudioTrack(AudioTrackInterface* track) { AddTrack(track); }
-  void RemoveAudioTrack(AudioTrackInterface* track) { RemoveTrack(track); }
-  void AddVideoTrack(VideoTrackInterface* track) { AddTrack(track); }
-  void RemoveVideoTrack(VideoTrackInterface* track) { RemoveTrack(track); }
-
   scoped_refptr<MockAudioTrackInterface> MakeAudioTrack(const std::string& id) {
-    return new rtc::RefCountedObject<MockAudioTrackInterface>(id);
+    return new webrtc::RefCountedObject<MockAudioTrackInterface>(id);
   }
 
   scoped_refptr<MockVideoTrackInterface> MakeVideoTrack(const std::string& id) {
-    return new rtc::RefCountedObject<MockVideoTrackInterface>(id);
+    return new webrtc::RefCountedObject<MockVideoTrackInterface>(id);
   }
 
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<MockMediaStreamTrackMetrics> metrics_;
   scoped_refptr<MediaStreamInterface> stream_;
 

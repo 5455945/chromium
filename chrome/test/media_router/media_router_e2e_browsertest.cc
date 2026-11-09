@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/media_router/browser/media_router.h"
@@ -19,20 +18,12 @@
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/route_request_result.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "media/base/test_data_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
-
-// Use the following command to run e2e browser tests:
-// ./out/Debug/browser_tests --user-data-dir=<empty user data dir>
-//   --extension-unpacked=<mr extension dir>
-//   --receiver=<chromecast device name>
-//   --enable-pixel-output-in-tests --run-manual
-//   --gtest_filter=MediaRouterE2EBrowserTest.<test case name>
-//   --enable-logging=stderr
-//   --ui-test-action-timeout=200000
 
 namespace {
 // URL to launch Castv2Player_Staging app on Chromecast
@@ -40,35 +31,45 @@ const char kCastAppPresentationUrl[] =
     "cast:BE6E4473?clientId=143692175507258981";
 const char kVideo[] = "video";
 const char kBearVP9Video[] = "bear-vp9.webm";
-const char kPlayer[] = "player.html";
 const char kOrigin[] = "http://origin/";
 }  // namespace
 
 namespace media_router {
 
-MediaRouterE2EBrowserTest::MediaRouterE2EBrowserTest()
-    : media_router_(nullptr) {}
+MediaRouterE2EBrowserTest::MediaRouterE2EBrowserTest(
+    UiForBrowserTest test_ui_type)
+    : MediaRouterIntegrationBrowserTest(test_ui_type), media_router_(nullptr) {}
 
-MediaRouterE2EBrowserTest::~MediaRouterE2EBrowserTest() {}
+MediaRouterE2EBrowserTest::~MediaRouterE2EBrowserTest() = default;
 
 void MediaRouterE2EBrowserTest::SetUpOnMainThread() {
   MediaRouterIntegrationBrowserTest::SetUpOnMainThread();
   media_router_ =
-      MediaRouterFactory::GetApiForBrowserContext(browser()->profile());
+      MediaRouterFactory::GetApiForBrowserContext(browser()->GetProfile());
   DCHECK(media_router_);
+// On Mac, cast device discovery isn't started until explicit user gesture.
+// Starting sink discovery now for tests.
+#if BUILDFLAG(IS_MAC)
+  media_router_->OnUserGesture();
+#endif
 }
 
 void MediaRouterE2EBrowserTest::TearDownOnMainThread() {
   observer_.reset();
   route_id_.clear();
   media_router_ = nullptr;
-  InProcessBrowserTest::TearDownOnMainThread();
+  MediaRouterIntegrationBrowserTest::TearDownOnMainThread();
+}
+
+bool MediaRouterE2EBrowserTest::RequiresMediaRouteProviders() const {
+  return true;
 }
 
 void MediaRouterE2EBrowserTest::OnRouteResponseReceived(
     mojom::RoutePresentationConnectionPtr,
     const RouteRequestResult& result) {
-  ASSERT_TRUE(result.route());
+  ASSERT_TRUE(result.route())
+      << "RouteRequestResult code: " << result.result_code();
   route_id_ = result.route()->media_route_id();
 }
 
@@ -82,9 +83,11 @@ void MediaRouterE2EBrowserTest::CreateMediaRoute(
   observer_->Init();
 
   DVLOG(1) << "Receiver name: " << receiver_;
-  // Wait for MediaSinks compatible with |source| to be discovered.
+  // Wait for MediaSinks compatible with |source| to be discovered.  Waiting is
+  // needed here because tests that use this method are always executed using a
+  // real device, as opposed to a fake device provided by the test MRP.
   ASSERT_TRUE(ConditionalWait(
-      base::TimeDelta::FromSeconds(30), base::TimeDelta::FromSeconds(1),
+      base::Seconds(60), base::Seconds(1),
       base::BindRepeating(&MediaRouterE2EBrowserTest::IsSinkDiscovered,
                           base::Unretained(this))));
 
@@ -97,11 +100,11 @@ void MediaRouterE2EBrowserTest::CreateMediaRoute(
       source.id(), sink.id(), origin, web_contents,
       base::BindOnce(&MediaRouterE2EBrowserTest::OnRouteResponseReceived,
                      base::Unretained(this)),
-      base::TimeDelta(), is_incognito());
+      base::TimeDelta());
 
   // Wait for the route request to be fulfilled (and route to be started).
   ASSERT_TRUE(ConditionalWait(
-      base::TimeDelta::FromSeconds(30), base::TimeDelta::FromSeconds(1),
+      base::Seconds(60), base::Seconds(1),
       base::BindRepeating(&MediaRouterE2EBrowserTest::IsRouteCreated,
                           base::Unretained(this))));
 }
@@ -112,7 +115,7 @@ void MediaRouterE2EBrowserTest::StopMediaRoute() {
 }
 
 bool MediaRouterE2EBrowserTest::IsSinkDiscovered() const {
-  return base::Contains(observer_->sink_map, receiver_);
+  return observer_->sink_map.contains(receiver_);
 }
 
 bool MediaRouterE2EBrowserTest::IsRouteCreated() const {
@@ -123,31 +126,31 @@ void MediaRouterE2EBrowserTest::OpenMediaPage() {
   base::StringPairs query_params;
   query_params.push_back(std::make_pair(kVideo, kBearVP9Video));
   std::string query = media::GetURLQueryString(query_params);
-  GURL gurl =
-      content::GetFileUrlWithQuery(media::GetTestDataFilePath(kPlayer), query);
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetResourceFile(FILE_PATH_LITERAL("player.html")), query);
   ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), gurl, 1);
 }
 
 // Test cases
 
 IN_PROC_BROWSER_TEST_F(MediaRouterE2EBrowserTest, MANUAL_TabMirroring) {
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
 
   ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
       browser(), GURL("about:blank"), 1);
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   SessionID tab_id = sessions::SessionTabHelper::IdForTab(web_contents);
 
   // Wait for 30 seconds to make sure the route is stable.
   CreateMediaRoute(MediaSource::ForTab(tab_id.id()),
                    url::Origin::Create(GURL(kOrigin)), web_contents);
-  Wait(base::TimeDelta::FromSeconds(30));
+  Wait(base::Seconds(30));
 
   // Wait for 10 seconds to make sure route has been stopped.
   StopMediaRoute();
-  Wait(base::TimeDelta::FromSeconds(10));
+  Wait(base::Seconds(10));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaRouterE2EBrowserTest, MANUAL_CastApp) {
@@ -155,11 +158,11 @@ IN_PROC_BROWSER_TEST_F(MediaRouterE2EBrowserTest, MANUAL_CastApp) {
   CreateMediaRoute(
       MediaSource::ForPresentationUrl(GURL(kCastAppPresentationUrl)),
       url::Origin::Create(GURL(kOrigin)), nullptr);
-  Wait(base::TimeDelta::FromSeconds(30));
+  Wait(base::Seconds(30));
 
   // Wait for 10 seconds to make sure route has been stopped.
   StopMediaRoute();
-  Wait(base::TimeDelta::FromSeconds(10));
+  Wait(base::Seconds(10));
 }
 
 }  // namespace media_router

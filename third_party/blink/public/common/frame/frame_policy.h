@@ -1,13 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_FRAME_FRAME_POLICY_H_
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_FRAME_FRAME_POLICY_H_
 
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
 #include "third_party/blink/public/common/permissions_policy/document_policy_features.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
+#include "third_party/blink/public/mojom/frame/deferred_fetch_policy.mojom-shared.h"
 
 namespace blink {
 
@@ -26,35 +27,24 @@ namespace blink {
 struct BLINK_COMMON_EXPORT FramePolicy {
   FramePolicy();
   FramePolicy(network::mojom::WebSandboxFlags sandbox_flags,
-              const ParsedPermissionsPolicy& container_policy,
-              const DocumentPolicyFeatureState& required_document_policy);
+              const network::ParsedPermissionsPolicy& container_policy,
+              const DocumentPolicyFeatureState& required_document_policy,
+              mojom::DeferredFetchPolicy deferred_fetch_policy);
   FramePolicy(const FramePolicy& lhs);
   ~FramePolicy();
 
+  friend bool BLINK_COMMON_EXPORT operator==(const FramePolicy& lhs,
+                                             const FramePolicy& rhs);
+
   network::mojom::WebSandboxFlags sandbox_flags;
-  ParsedPermissionsPolicy container_policy;
+  network::ParsedPermissionsPolicy container_policy;
   // |required_document_policy| is the combination of the following:
   // - iframe 'policy' attribute
   // - 'Require-Document-Policy' http header
   // - |required_document_policy| of parent frame
   DocumentPolicyFeatureState required_document_policy;
-
-  // This signals to a frame whether or not it is hosted in a <fencedframe>
-  // element, and therefore should restrict some sensitive Window APIs that
-  // would otherwise grant access to the parent frame, or information about it.
-  //
-  // IMPORTANT NOTE: This is a temporary member that does not align with the
-  // long-term architecture, and will be removed after the <fencedframe>
-  // ShadowDOM-based origin trial, please do not use this for anything else. See
-  // https://docs.google.com/document/d/1ijTZJT3DHQ1ljp4QQe4E4XCCRaYAxmInNzN1SzeJM8s/edit
-  // and crbug.com/1123606. Note that this bit is immutable and cannot
-  // experience transitions, therefore `FramePolicy` is not actually a good
-  // place for this bit to live, and would be best suited to be manually plumbed
-  // through like `TreeScopeType`. However since this bit is temporary, any
-  // plumbing we introduce for it will be thrown away once we migrate to the
-  // long-term MPArch architecture, so we're using `FramePolicy` to avoid
-  // temporarily investing in the manual plumbing that will not stick around.
-  bool is_fenced = false;
+  // See `mojom::DeferredFetchPolicy` documentation.
+  mojom::DeferredFetchPolicy deferred_fetch_policy;
 };
 
 }  // namespace blink

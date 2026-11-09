@@ -1,17 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/accelerometer/accelerometer_provider_mojo.h"
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
 #include "ash/accelerometer/accelerometer_constants.h"
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
-#include "base/bind.h"
-#include "base/ranges/algorithm.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -22,12 +22,10 @@ namespace ash {
 namespace {
 
 // Delay of the reconnection to Sensor Hal Dispatcher.
-constexpr base::TimeDelta kDelayReconnect =
-    base::TimeDelta::FromMilliseconds(1000);
+constexpr base::TimeDelta kDelayReconnect = base::Milliseconds(1000);
 
 // Timeout for the late-present devices: 10 seconds.
-constexpr base::TimeDelta kNewDevicesTimeout =
-    base::TimeDelta::FromMilliseconds(10000);
+constexpr base::TimeDelta kNewDevicesTimeout = base::Milliseconds(10000);
 
 }  // namespace
 
@@ -65,17 +63,7 @@ void AccelerometerProviderMojo::SetUpChannel(
       &AccelerometerProviderMojo::OnSensorServiceDisconnect, this));
   SetNewDevicesObserver();
 
-  if (GetECLidAngleDriverStatus() == ECLidAngleDriverStatus::UNKNOWN) {
-    sensor_service_remote_->GetDeviceIds(
-        chromeos::sensors::mojom::DeviceType::ANGL,
-        base::BindOnce(&AccelerometerProviderMojo::GetLidAngleIdsCallback,
-                       this));
-  }
-
-  sensor_service_remote_->GetDeviceIds(
-      chromeos::sensors::mojom::DeviceType::ACCEL,
-      base::BindOnce(&AccelerometerProviderMojo::GetAccelerometerIdsCallback,
-                     this));
+  QueryDevices();
 }
 
 void AccelerometerProviderMojo::OnNewDeviceAdded(
@@ -91,7 +79,7 @@ void AccelerometerProviderMojo::OnNewDeviceAdded(
         continue;
       }
 
-      if (accelerometers_.find(iio_device_id) != accelerometers_.end())
+      if (accelerometers_.contains(iio_device_id))
         continue;
 
       RegisterAccelerometerWithId(iio_device_id);
@@ -168,6 +156,35 @@ void AccelerometerProviderMojo::ResetSensorService() {
   sensor_service_remote_.reset();
 }
 
+void AccelerometerProviderMojo::ResetStates() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  initialization_state_ = MojoState::INITIALIZING;
+  accelerometers_.clear();
+  location_to_accelerometer_id_.clear();
+  update_.Reset();
+
+  if (sensor_service_remote_.is_bound())
+    QueryDevices();
+}
+
+void AccelerometerProviderMojo::QueryDevices() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(sensor_service_remote_.is_bound());
+
+  if (GetECLidAngleDriverStatus() == ECLidAngleDriverStatus::UNKNOWN) {
+    sensor_service_remote_->GetDeviceIds(
+        chromeos::sensors::mojom::DeviceType::ANGL,
+        base::BindOnce(&AccelerometerProviderMojo::GetLidAngleIdsCallback,
+                       this));
+  }
+
+  sensor_service_remote_->GetDeviceIds(
+      chromeos::sensors::mojom::DeviceType::ACCEL,
+      base::BindOnce(&AccelerometerProviderMojo::GetAccelerometerIdsCallback,
+                     this));
+}
+
 void AccelerometerProviderMojo::SetECLidAngleDriverSupported() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -184,11 +201,6 @@ void AccelerometerProviderMojo::SetECLidAngleDriverSupported() {
     // status and revert some changes.
     LOG(WARNING) << "Overwriting ECLidAngleDriverStatus from NOT_SUPPORTED "
                     "to SUPPORTED";
-
-    // Restarts to listen to TabletPhysicalStateChanged from
-    // TabletModeController. Allows the enabled samples when setting
-    // ECLidAngleDriverStatus to SUPPORTED.
-    StartListenToTabletModeController();
   }
 
   SetECLidAngleDriverStatus(ECLidAngleDriverStatus::SUPPORTED);
@@ -240,7 +252,6 @@ void AccelerometerProviderMojo::UpdateStateWithECLidAngleDriverSupported() {
     default:
       LOG(FATAL) << "Unexpected state: "
                  << static_cast<int32_t>(initialization_state_);
-      break;
   }
 
   if (initialization_state_ == MojoState::ANGL_LID)
@@ -275,7 +286,6 @@ void AccelerometerProviderMojo::UpdateStateWithLidAccelerometer() {
     default:
       LOG(FATAL) << "Unexpected state: "
                  << static_cast<int32_t>(initialization_state_);
-      break;
   }
 }
 
@@ -306,7 +316,6 @@ void AccelerometerProviderMojo::UpdateStateWithBaseAccelerometer() {
     default:
       LOG(FATAL) << "Unexpected state: "
                  << static_cast<int32_t>(initialization_state_);
-      break;
   }
 }
 
@@ -393,7 +402,10 @@ void AccelerometerProviderMojo::RegisterAccelerometerWithId(int32_t id) {
     return;
   }
 
-  DCHECK(!accelerometer.remote.is_bound());
+  if (accelerometer.remote.is_bound()) {
+    // Has already been registered.
+    return;
+  }
   DCHECK(!accelerometer.samples_observer.get());
 
   if (!sensor_service_remote_.is_bound()) {
@@ -401,11 +413,9 @@ void AccelerometerProviderMojo::RegisterAccelerometerWithId(int32_t id) {
     return;
   }
 
-  accelerometer.remote.reset();
-
   sensor_service_remote_->GetDevice(
       id, accelerometer.remote.BindNewPipeAndPassReceiver());
-  accelerometer.remote.set_disconnect_handler(base::BindOnce(
+  accelerometer.remote.set_disconnect_with_reason_handler(base::BindOnce(
       &AccelerometerProviderMojo::OnAccelerometerRemoteDisconnect, this, id));
 
   std::vector<std::string> attr_names;
@@ -434,19 +444,41 @@ void AccelerometerProviderMojo::RegisterAccelerometerWithId(int32_t id) {
                      id));
 }
 
-void AccelerometerProviderMojo::OnAccelerometerRemoteDisconnect(int32_t id) {
+void AccelerometerProviderMojo::OnAccelerometerRemoteDisconnect(
+    int32_t id,
+    uint32_t custom_reason_code,
+    const std::string& description) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  LOG(ERROR)
-      << "OnAccelerometerRemoteDisconnect: " << id
-      << ", resetting SensorService as IIO Service should be destructed and "
-         "waiting for the relaunch of it.";
-  ResetSensorService();
+  auto& accelerometer = accelerometers_[id];
+  auto reason =
+      static_cast<chromeos::sensors::mojom::SensorDeviceDisconnectReason>(
+          custom_reason_code);
+  LOG(WARNING) << "OnAccelerometerRemoteDisconnect: " << id
+               << ", reason: " << reason << ", description: " << description;
+
+  switch (reason) {
+    case chromeos::sensors::mojom::SensorDeviceDisconnectReason::
+        IIOSERVICE_CRASHED:
+      ResetSensorService();
+      break;
+
+    case chromeos::sensors::mojom::SensorDeviceDisconnectReason::DEVICE_REMOVED:
+      // This accelerometer is not in use.
+      if (accelerometer.ignored || !accelerometer.location.has_value() ||
+          !accelerometer.scale.has_value()) {
+        accelerometers_.erase(id);
+      } else {
+        // Reset usages & states, and restart the mojo devices initialization.
+        ResetStates();
+      }
+      break;
+  }
 }
 
 void AccelerometerProviderMojo::GetAttributesCallback(
     int32_t id,
-    const std::vector<absl::optional<std::string>>& values) {
+    const std::vector<std::optional<std::string>>& values) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto& accelerometer = accelerometers_[id];
@@ -466,7 +498,7 @@ void AccelerometerProviderMojo::GetAttributesCallback(
       return;
     }
 
-    auto* it = base::ranges::find(kLocationStrings, values[index]);
+    auto* it = std::ranges::find(kLocationStrings, values[index]);
     if (it == std::end(kLocationStrings)) {
       LOG(WARNING) << "Unrecognized location: " << values[index].value()
                    << " for device with id: ";
@@ -478,8 +510,7 @@ void AccelerometerProviderMojo::GetAttributesCallback(
         std::distance(std::begin(kLocationStrings), it));
     accelerometer.location = source;
 
-    if (location_to_accelerometer_id_.find(source) !=
-        location_to_accelerometer_id_.end()) {
+    if (location_to_accelerometer_id_.contains(source)) {
       LOG(WARNING) << "Duplicated location source " << source
                    << " of accel id: " << id << ", and accel id: "
                    << location_to_accelerometer_id_[source];
@@ -554,11 +585,10 @@ void AccelerometerProviderMojo::CreateAccelerometerSamplesObserver(int32_t id) {
     return;
   }
 
-  accelerometer.samples_observer =
-      std::make_unique<AccelerometerSamplesObserver>(
-          id, std::move(accelerometer.remote), accelerometer.scale.value(),
-          base::BindRepeating(
-              &AccelerometerProviderMojo::OnSampleUpdatedCallback, this));
+  accelerometer.samples_observer = std::make_unique<AccelGyroSamplesObserver>(
+      id, std::move(accelerometer.remote), accelerometer.scale.value(),
+      base::BindRepeating(&AccelerometerProviderMojo::OnSampleUpdatedCallback,
+                          this));
 
   if (initialization_state_ == MojoState::BASE) {
     DCHECK_EQ(accelerometer.location.value(),

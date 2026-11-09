@@ -1,56 +1,65 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview;
 
-import android.annotation.SuppressLint;
 import android.os.CancellationSignal;
 import android.os.ParcelFileDescriptor;
 import android.print.PrintAttributes;
-import android.util.Log;
 import android.view.ViewGroup;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.android_webview.common.Lifetime;
+import org.chromium.base.Log;
+import org.chromium.build.annotations.DoNotInline;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * Export the android webview as a PDF.
- * @TODO(sgurun) explain the ownership of this class and its native counterpart
+ *
+ * <p>Owned by Java-side AwContents. This object is lazy-instantiated when needed and receives a
+ * pointer to the native counterpart, which is owned by the native side of AwContents.
  */
-@SuppressLint("NewApi")  // Printing requires API level 19.
+@Lifetime.WebView
 @JNINamespace("android_webview")
 public class AwPdfExporter {
+    @JniType("::android_webview::AwPdfExporter")
+    interface NativeAwPdfExporter extends JniTypeToken {}
 
     private static final String TAG = "AwPdfExporter";
-    private long mNativeAwPdfExporter;
+    private final AwContents mAwContents;
+    private @Nullable JniRawPtr<NativeAwPdfExporter> mNativeAwPdfExporter;
     // TODO(sgurun) result callback should return an int/object indicating errors.
     // potential errors: invalid print parameters, already pending, IO error
     private AwPdfExporterCallback mResultCallback;
     private PrintAttributes mAttributes;
-    private ParcelFileDescriptor mFd;
     // Maintain a reference to the top level object (i.e. WebView) since in a common
     // use case (offscreen webview) application may expect the framework's print manager
     // to own the Webview (via PrintDocumentAdapter).
-    // NOTE: it looks unused, but please do not remove this reference. There is also a proguard
-    // configuration to prevent this variable to be optimized away. Any name changes should
-    // be reflected there.
+    @DoNotInline // Causes R8 to not remove this.
     private ViewGroup mContainerView;
 
-    /**
-     * AwPdfExporter callback used to call onWrite* callbacks in Android framework.
-     */
+    /** AwPdfExporter callback used to call onWrite* callbacks in Android framework. */
     public interface AwPdfExporterCallback {
         /**
          * Called by the native side when PDF generation is done.
+         *
          * @param pageCount How many pages native side wrote to PDF file descriptor. Non-positive
-         *                  value indicates native side writing failed.
+         *     value indicates native side writing failed.
          */
-        public void pdfWritingDone(int pageCount);
+        void pdfWritingDone(int pageCount);
     }
 
-    AwPdfExporter(ViewGroup containerView) {
+    AwPdfExporter(ViewGroup containerView, AwContents awContents) {
+        mAwContents = awContents;
         setContainerView(containerView);
     }
 
@@ -58,8 +67,12 @@ public class AwPdfExporter {
         mContainerView = containerView;
     }
 
-    public void exportToPdf(final ParcelFileDescriptor fd, PrintAttributes attributes, int[] pages,
-            AwPdfExporterCallback resultCallback, CancellationSignal cancellationSignal) {
+    public void exportToPdf(
+            final ParcelFileDescriptor fd,
+            PrintAttributes attributes,
+            int[] pages,
+            AwPdfExporterCallback resultCallback,
+            CancellationSignal cancellationSignal) {
         if (fd == null) {
             throw new IllegalArgumentException("fd cannot be null");
         }
@@ -70,7 +83,7 @@ public class AwPdfExporter {
             throw new IllegalStateException("printing is already pending");
         }
         if (attributes.getMediaSize() == null) {
-            throw new  IllegalArgumentException("attributes must specify a media size");
+            throw new IllegalArgumentException("attributes must specify a media size");
         }
         if (attributes.getResolution() == null) {
             throw new IllegalArgumentException("attributes must specify print resolution");
@@ -78,23 +91,29 @@ public class AwPdfExporter {
         if (attributes.getMinMargins() == null) {
             throw new IllegalArgumentException("attributes must specify margins");
         }
-        if (mNativeAwPdfExporter == 0) {
+        if (mNativeAwPdfExporter == null) {
             resultCallback.pdfWritingDone(0);
             return;
         }
         mResultCallback = resultCallback;
         mAttributes = attributes;
-        mFd = fd;
-        AwPdfExporterJni.get().exportToPdf(
-                mNativeAwPdfExporter, AwPdfExporter.this, mFd.getFd(), pages, cancellationSignal);
+        AwPdfExporterJni.get()
+                .exportToPdf(mNativeAwPdfExporter, this, fd.detachFd(), pages, cancellationSignal);
     }
 
     @CalledByNative
-    private void setNativeAwPdfExporter(long nativePdfExporter) {
+    private void setNativeAwPdfExporter(
+            @Nullable JniRawPtr<NativeAwPdfExporter> nativePdfExporter) {
+        if (mNativeAwPdfExporter != null) {
+            mNativeAwPdfExporter.release();
+        }
         mNativeAwPdfExporter = nativePdfExporter;
+        if (nativePdfExporter != null) {
+            mAwContents.registerSafePointer(nativePdfExporter);
+        }
         // Handle the cornercase that the native side is destroyed (for example
         // via Webview.Destroy) before it has a chance to complete the pdf exporting.
-        if (nativePdfExporter == 0 && mResultCallback != null) {
+        if (nativePdfExporter == null && mResultCallback != null) {
             try {
                 mResultCallback.pdfWritingDone(0);
                 mResultCallback = null;
@@ -111,8 +130,13 @@ public class AwPdfExporter {
         int horizontalDpi = attributes.getResolution().getHorizontalDpi();
         int verticalDpi = attributes.getResolution().getVerticalDpi();
         if (horizontalDpi != verticalDpi) {
-            Log.w(TAG, "Horizontal and vertical DPIs differ. Using horizontal DPI "
-                    + " hDpi=" + horizontalDpi + " vDPI=" + verticalDpi);
+            Log.w(
+                    TAG,
+                    "Horizontal and vertical DPIs differ. Using horizontal DPI "
+                            + " hDpi="
+                            + horizontalDpi
+                            + " vDPI="
+                            + verticalDpi);
         }
         return horizontalDpi;
     }
@@ -122,8 +146,6 @@ public class AwPdfExporter {
         mResultCallback.pdfWritingDone(pageCount);
         mResultCallback = null;
         mAttributes = null;
-        // The caller should close the file.
-        mFd = null;
     }
 
     @CalledByNative
@@ -163,7 +185,11 @@ public class AwPdfExporter {
 
     @NativeMethods
     interface Natives {
-        void exportToPdf(long nativeAwPdfExporter, AwPdfExporter caller, int fd, int[] pages,
+        void exportToPdf(
+                JniPtr<NativeAwPdfExporter> self,
+                AwPdfExporter caller,
+                int fd,
+                int[] pages,
                 CancellationSignal cancellationSignal);
     }
 }

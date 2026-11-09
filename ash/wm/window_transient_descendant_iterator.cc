@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/wm/window_transient_descendant_iterator.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "ash/wm/window_util.h"
 #include "ui/aura/window.h"
@@ -15,7 +16,7 @@ namespace {
 
 // Helper that returns the next window in the preorder traversal.
 aura::Window* GetNextWindow(aura::Window* current_window) {
-  const aura::Window::Windows transient_children =
+  const aura::Window::Windows& transient_children =
       ::wm::GetTransientChildren(current_window);
 
   if (!transient_children.empty()) {
@@ -27,16 +28,15 @@ aura::Window* GetNextWindow(aura::Window* current_window) {
         current_window = nullptr;
         break;
       }
-      const aura::Window::Windows transient_siblings =
+      const aura::Window::Windows& transient_siblings =
           ::wm::GetTransientChildren(parent);
-      auto iter = std::find(transient_siblings.begin(),
-                            transient_siblings.end(), current_window);
+      auto iter = std::ranges::find(transient_siblings, current_window);
       ++iter;
       if (iter != transient_siblings.end()) {
         current_window = *iter;
         break;
       }
-      current_window = ::wm::GetTransientParent(current_window);
+      current_window = parent;
     }
   }
   return current_window;
@@ -60,7 +60,8 @@ WindowTransientDescendantIterator::WindowTransientDescendantIterator(
 WindowTransientDescendantIterator::WindowTransientDescendantIterator(
     aura::Window* root_window,
     TransientTreeIgnorePredicate hide_predicate)
-    : current_window_(root_window), hide_predicate_(hide_predicate) {}
+    : current_window_(root_window),
+      hide_predicate_(std::move(hide_predicate)) {}
 
 // Performs a pre-order traversal of the transient descendants.
 const WindowTransientDescendantIterator& WindowTransientDescendantIterator::
@@ -87,6 +88,9 @@ aura::Window* WindowTransientDescendantIterator::operator*() const {
   return current_window_;
 }
 
+WindowTransientDescendantIterator& WindowTransientDescendantIterator::operator=(
+    const WindowTransientDescendantIterator& other) = default;
+
 WindowTransientDescendantIteratorRange::WindowTransientDescendantIteratorRange(
     const WindowTransientDescendantIterator& begin)
     : begin_(begin) {}
@@ -102,7 +106,7 @@ WindowTransientDescendantIteratorRange GetTransientTreeIterator(
     TransientTreeIgnorePredicate hide_predicate) {
   return WindowTransientDescendantIteratorRange(
       WindowTransientDescendantIterator(::wm::GetTransientRoot(window),
-                                        hide_predicate));
+                                        std::move(hide_predicate)));
 }
 
 }  // namespace ash

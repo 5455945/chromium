@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,12 @@
 
 namespace remoting {
 
-bool DisplaySize::operator==(const DisplaySize& other) {
+bool DisplaySize::operator==(const DisplaySize& other) const {
   return other.width_dips_ == width_dips_ &&
          other.height_dips_ == height_dips_ && other.dpi_ == dpi_;
 }
 
-bool DisplaySize::operator!=(const DisplaySize& other) {
+bool DisplaySize::operator!=(const DisplaySize& other) const {
   return !(*this == other);
 }
 
@@ -46,10 +46,10 @@ float DisplaySize::GetScalingFactor() const {
   return (float)dpi_ / (float)kDefaultDpi;
 }
 
-}  // namespace remoting
-
-std::ostream& operator<<(std::ostream& out, const remoting::DisplaySize& size) {
+std::ostream& operator<<(std::ostream& out, const DisplaySize& size) {
   out << size.WidthAsDips() << "x" << size.HeightAsDips() << " @"
       << size.GetDpi();
   return out;
 }
+
+}  // namespace remoting

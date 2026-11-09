@@ -1,69 +1,84 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/browser/tracing_controller.h"
 
 #include <stdint.h>
+
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/run_loop.h"
 #include "base/strings/pattern.h"
 #include "base/task/task_traits.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/trace_event/trace_config.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/tracing/tracing_controller_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/trace_uploader.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/test_content_browser_client.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "services/tracing/public/cpp/trace_event_agent.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
+#include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"
+#include "third_party/perfetto/protos/perfetto/trace/trace.pbzero.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/system/fake_statistics_provider.h"
-#include "chromeos/system/statistics_provider.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "chromeos/ash/components/system/statistics_provider.h"
+#include "content/browser/tracing/cros_tracing_agent.h"
 #endif
 
-using base::trace_event::RECORD_CONTINUOUSLY;
-using base::trace_event::RECORD_UNTIL_FULL;
+#if BUILDFLAG(IS_CASTOS)
+#include "content/browser/tracing/cast_tracing_agent.h"
+#endif
+
 using base::trace_event::TraceConfig;
 
 namespace content {
 
 namespace {
 
-bool KeyEquals(const base::Value* value,
-               const char* key_name,
-               const char* expected) {
-  const base::Value* content =
-      value->FindKeyOfType(key_name, base::Value::Type::STRING);
-  if (!content)
-    return false;
-  return content->GetString() == expected;
+// A legacy JSON trace decodes to no packets, so a non-zero count means the
+// trace is a protobuf.
+size_t CountTracePackets(const std::string& serialized_trace) {
+  perfetto::protos::pbzero::Trace::Decoder trace(serialized_trace);
+  size_t packets = 0;
+  for (auto it = trace.packet(); !!it; ++it) {
+    ++packets;
+  }
+  return packets;
 }
 
-bool KeyNotEquals(const base::Value* value,
-                  const char* key_name,
-                  const char* expected) {
-  const base::Value* content =
-      value->FindKeyOfType(key_name, base::Value::Type::STRING);
-  if (!content)
-    return false;
-  return content->GetString() != expected;
+// The default config, asking for the protobuf trace instead of JSON.
+perfetto::TraceConfig ProtobufTraceConfig() {
+  return tracing::GetDefaultPerfettoConfig(TraceConfig(),
+                                           /*privacy_filtering_enabled=*/false,
+                                           /*convert_to_legacy_json=*/false);
+}
+
+// Stops tracing and waits for the session to finish, discarding the trace.
+void StopTracingAndWait() {
+  base::test::TestFuture<std::unique_ptr<std::string>> trace;
+  ASSERT_TRUE(TracingController::GetInstance()->StopTracing(
+      TracingControllerImpl::CreateCallbackEndpoint(trace.GetCallback())));
+  ASSERT_TRUE(trace.Wait());
 }
 
 }  // namespace
@@ -94,39 +109,35 @@ class TracingControllerTestEndpoint
   TracingController::CompletionCallback done_callback_;
 };
 
-class TestTracingDelegate : public TracingDelegate {
- public:
-  std::unique_ptr<TraceUploader> GetTraceUploader(
-      scoped_refptr<network::SharedURLLoaderFactory>) override {
-    return nullptr;
-  }
-};
-
 class TracingControllerTest : public ContentBrowserTest {
  public:
-  TracingControllerTest() {}
+  TracingControllerTest() = default;
 
   void SetUp() override {
     get_categories_done_callback_count_ = 0;
     enable_recording_done_callback_count_ = 0;
     disable_recording_done_callback_count_ = 0;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+    ash::DebugDaemonClient::InitializeFake();
     // Set statistic provider for hardware class tests.
-    chromeos::system::StatisticsProvider::SetTestProvider(
+    ash::system::StatisticsProvider::SetTestProvider(
         &fake_statistics_provider_);
     fake_statistics_provider_.SetMachineStatistic(
-        chromeos::system::kHardwareClassKey, "test-hardware-class");
+        ash::system::kHardwareClassKey, "test-hardware-class");
 #endif
     ContentBrowserTest::SetUp();
   }
 
-  void Navigate(Shell* shell) {
-    EXPECT_TRUE(NavigateToURL(shell, GetTestUrl("", "title1.html")));
+  void TearDown() override {
+    ContentBrowserTest::TearDown();
+#if BUILDFLAG(IS_CHROMEOS)
+    ash::DebugDaemonClient::Shutdown();
+#endif
   }
 
-  std::unique_ptr<base::DictionaryValue> GenerateMetadataDict() {
-    return std::move(metadata_);
+  void Navigate(Shell* shell) {
+    EXPECT_TRUE(NavigateToURL(shell, GetTestUrl("", "title1.html")));
   }
 
   void GetCategoriesDoneCallbackTest(base::OnceClosure quit_callback,
@@ -155,9 +166,9 @@ class TracingControllerTest : public ContentBrowserTest {
     {
       base::ScopedAllowBlockingForTesting allow_blocking;
       EXPECT_TRUE(PathExists(file_path));
-      int64_t file_size;
-      base::GetFileSize(file_path, &file_size);
-      EXPECT_GT(file_size, 0);
+      std::optional<int64_t> file_size = base::GetFileSize(file_path);
+      ASSERT_TRUE(file_size.has_value());
+      EXPECT_GT(file_size.value(), 0);
     }
     std::move(quit_callback).Run();
     last_actual_recording_file_path_ = file_path;
@@ -214,8 +225,6 @@ class TracingControllerTest : public ContentBrowserTest {
   }
 
   void TestStartAndStopTracingStringWithFilter() {
-    TracingControllerImpl::GetInstance()->SetTracingDelegateForTesting(
-        std::make_unique<TestTracingDelegate>());
 
     Navigate(shell());
 
@@ -228,7 +237,8 @@ class TracingControllerTest : public ContentBrowserTest {
                          base::Unretained(this), run_loop.QuitClosure());
 
       bool result =
-          controller->StartTracing(TraceConfig(), std::move(callback));
+          controller->StartTracing(TraceConfig(), std::move(callback),
+                                   /*privacy_filtering_enabled=*/true);
       ASSERT_TRUE(result);
       run_loop.Run();
       EXPECT_EQ(enable_recording_done_callback_count(), 1);
@@ -243,21 +253,12 @@ class TracingControllerTest : public ContentBrowserTest {
       scoped_refptr<TracingController::TraceDataEndpoint> trace_data_endpoint =
           TracingController::CreateStringEndpoint(std::move(callback));
 
-      metadata_ = std::make_unique<base::DictionaryValue>();
-      metadata_->SetString("not-whitelisted", "this_not_found");
-      tracing::TraceEventAgent::GetInstance()->AddMetadataGeneratorFunction(
-          base::BindRepeating(&TracingControllerTest::GenerateMetadataDict,
-                              base::Unretained(this)));
-
       bool result =
-          controller->StopTracing(trace_data_endpoint, /*agent_label=*/"",
-                                  /*privacy_filtering_enabled=*/true);
+          controller->StopTracing(trace_data_endpoint, /*agent_label=*/"");
       ASSERT_TRUE(result);
       run_loop.Run();
       EXPECT_EQ(disable_recording_done_callback_count(), 1);
     }
-
-    TracingControllerImpl::GetInstance()->SetTracingDelegateForTesting(nullptr);
   }
 
   void TestStartAndStopTracingCompressed() {
@@ -325,9 +326,9 @@ class TracingControllerTest : public ContentBrowserTest {
     }
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
  protected:
-  chromeos::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
+  ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
 #endif
 
  private:
@@ -335,17 +336,12 @@ class TracingControllerTest : public ContentBrowserTest {
   int enable_recording_done_callback_count_;
   int disable_recording_done_callback_count_;
   base::FilePath last_actual_recording_file_path_;
-  std::unique_ptr<base::DictionaryValue> metadata_;
   std::unique_ptr<std::string> last_data_;
 };
 
 // Consistent failures on Android Asan https://crbug.com/1045519
-#if defined(OS_ANDROID) && defined(ADDRESS_SANITIZER)
+#if BUILDFLAG(IS_ANDROID) && defined(ADDRESS_SANITIZER)
 #define MAYBE_EnableAndStopTracing DISABLED_EnableAndStopTracing
-#define MAYBE_DisableRecordingStoresMetadata \
-  DISABLED_DisableRecordingStoresMetadata
-#define MAYBE_NotWhitelistedMetadataStripped \
-  DISABLED_NotWhitelistedMetadataStripped
 #define MAYBE_EnableAndStopTracingWithFilePath \
   DISABLED_EnableAndStopTracingWithFilePath
 #define MAYBE_EnableAndStopTracingWithCompression \
@@ -354,10 +350,20 @@ class TracingControllerTest : public ContentBrowserTest {
   DISABLED_EnableAndStopTracingWithEmptyFile
 #define MAYBE_DoubleStopTracing DISABLED_DoubleStopTracing
 #define MAYBE_ProcessesPresentInTrace DISABLED_ProcessesPresentInTrace
+#define MAYBE_EnableAndStopTracingWithProtobufOutput \
+  DISABLED_EnableAndStopTracingWithProtobufOutput
+#define MAYBE_ProtobufOutputToFileIsNotTranslated \
+  DISABLED_ProtobufOutputToFileIsNotTranslated
+#define MAYBE_StartTracingWithAddedDataSource \
+  DISABLED_StartTracingWithAddedDataSource
+#define MAYBE_StartTracingWithMixedOutputFormatsFails \
+  DISABLED_StartTracingWithMixedOutputFormatsFails
+#define MAYBE_StartTracingWithPerfettoConfigFailsWhileTracing \
+  DISABLED_StartTracingWithPerfettoConfigFailsWhileTracing
+#define MAYBE_StopTracingWithAgentLabelFailsForProtobuf \
+  DISABLED_StopTracingWithAgentLabelFailsForProtobuf
 #else
 #define MAYBE_EnableAndStopTracing EnableAndStopTracing
-#define MAYBE_DisableRecordingStoresMetadata DisableRecordingStoresMetadata
-#define MAYBE_NotWhitelistedMetadataStripped NotWhitelistedMetadataStripped
 #define MAYBE_EnableAndStopTracingWithFilePath EnableAndStopTracingWithFilePath
 #define MAYBE_EnableAndStopTracingWithCompression \
   EnableAndStopTracingWithCompression
@@ -365,10 +371,21 @@ class TracingControllerTest : public ContentBrowserTest {
   EnableAndStopTracingWithEmptyFile
 #define MAYBE_DoubleStopTracing DoubleStopTracing
 #define MAYBE_ProcessesPresentInTrace ProcessesPresentInTrace
+#define MAYBE_EnableAndStopTracingWithProtobufOutput \
+  EnableAndStopTracingWithProtobufOutput
+#define MAYBE_ProtobufOutputToFileIsNotTranslated \
+  ProtobufOutputToFileIsNotTranslated
+#define MAYBE_StartTracingWithAddedDataSource StartTracingWithAddedDataSource
+#define MAYBE_StartTracingWithMixedOutputFormatsFails \
+  StartTracingWithMixedOutputFormatsFails
+#define MAYBE_StartTracingWithPerfettoConfigFailsWhileTracing \
+  StartTracingWithPerfettoConfigFailsWhileTracing
+#define MAYBE_StopTracingWithAgentLabelFailsForProtobuf \
+  StopTracingWithAgentLabelFailsForProtobuf
 #endif
 
 IN_PROC_BROWSER_TEST_F(TracingControllerTest, GetCategories) {
-  Navigate(shell());
+  TestStartAndStopTracingString();
 
   TracingController* controller = TracingController::GetInstance();
 
@@ -383,61 +400,6 @@ IN_PROC_BROWSER_TEST_F(TracingControllerTest, GetCategories) {
 
 IN_PROC_BROWSER_TEST_F(TracingControllerTest, MAYBE_EnableAndStopTracing) {
   TestStartAndStopTracingString();
-}
-
-IN_PROC_BROWSER_TEST_F(TracingControllerTest,
-                       MAYBE_DisableRecordingStoresMetadata) {
-  TestStartAndStopTracingString();
-  // Check that a number of important keys exist in the metadata dictionary. The
-  // values are not checked to ensure the test is robust.
-  absl::optional<base::Value> trace_json = base::JSONReader::Read(last_data());
-  ASSERT_TRUE(trace_json);
-  auto* metadata_json = static_cast<base::DictionaryValue*>(
-      trace_json->FindKeyOfType("metadata", base::Value::Type::DICTIONARY));
-  ASSERT_TRUE(metadata_json);
-
-  std::string network_type;
-  metadata_json->GetString("network-type", &network_type);
-  EXPECT_FALSE(network_type.empty());
-  std::string user_agent;
-  metadata_json->GetString("user-agent", &user_agent);
-  EXPECT_FALSE(user_agent.empty());
-  std::string os_name;
-  metadata_json->GetString("os-name", &os_name);
-  EXPECT_FALSE(os_name.empty());
-  std::string command_line;
-  metadata_json->GetString("command_line", &command_line);
-  EXPECT_FALSE(command_line.empty());
-  std::string trace_config;
-  metadata_json->GetString("trace-config", &trace_config);
-  EXPECT_EQ(TraceConfig().ToString(), trace_config);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::string hardware_class;
-  metadata_json->GetString("hardware-class", &hardware_class);
-  EXPECT_EQ(hardware_class, "test-hardware-class");
-#endif
-}
-
-IN_PROC_BROWSER_TEST_F(TracingControllerTest,
-                       MAYBE_NotWhitelistedMetadataStripped) {
-  TestStartAndStopTracingStringWithFilter();
-  // Check that a number of important keys exist in the metadata dictionary.
-  absl::optional<base::Value> trace_json = base::JSONReader::Read(last_data());
-  ASSERT_TRUE(trace_json);
-  const base::Value* metadata_json =
-      trace_json->FindKeyOfType("metadata", base::Value::Type::DICTIONARY);
-  ASSERT_TRUE(metadata_json);
-
-  EXPECT_TRUE(KeyNotEquals(metadata_json, "cpu-brand", "__stripped__"));
-  EXPECT_TRUE(KeyNotEquals(metadata_json, "network-type", "__stripped__"));
-  EXPECT_TRUE(KeyNotEquals(metadata_json, "os-name", "__stripped__"));
-  EXPECT_TRUE(KeyNotEquals(metadata_json, "user-agent", "__stripped__"));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  EXPECT_TRUE(KeyNotEquals(metadata_json, "hardware-class", "__stripped__"));
-#endif
-
-  // The following field is not whitelisted and is supposed to be stripped.
-  EXPECT_TRUE(KeyEquals(metadata_json, "v8-version", "__stripped__"));
 }
 
 IN_PROC_BROWSER_TEST_F(TracingControllerTest,
@@ -494,16 +456,27 @@ IN_PROC_BROWSER_TEST_F(TracingControllerTest, MAYBE_DoubleStopTracing) {
 }
 
 // Only CrOS and Cast support system tracing.
-// TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
-// complete.
-#if BUILDFLAG(IS_CHROMEOS_ASH) || \
-    (BUILDFLAG(IS_CHROMECAST) &&  \
-     (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)))
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_CASTOS)
 #define MAYBE_SystemTraceEvents SystemTraceEvents
 #else
 #define MAYBE_SystemTraceEvents DISABLED_SystemTraceEvents
 #endif
-IN_PROC_BROWSER_TEST_F(TracingControllerTest, MAYBE_SystemTraceEvents) {
+class SystemTraceTracingControllerTest : public TracingControllerTest {
+ public:
+  SystemTraceTracingControllerTest() {
+#if BUILDFLAG(IS_CHROMEOS)
+    feature_list_.InitAndEnableFeature(kCrOSTracingDataSource);
+#elif BUILDFLAG(IS_CASTOS)
+    feature_list_.InitAndEnableFeature(kCastTracingDataSource);
+#endif
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(SystemTraceTracingControllerTest,
+                       MAYBE_SystemTraceEvents) {
   TestStartAndStopTracingString(true /* enable_systrace */);
   EXPECT_TRUE(last_data().find("systemTraceEvents") != std::string::npos);
 }
@@ -512,6 +485,142 @@ IN_PROC_BROWSER_TEST_F(TracingControllerTest, MAYBE_ProcessesPresentInTrace) {
   TestStartAndStopTracingString();
   EXPECT_TRUE(last_data().find("CrBrowserMain") != std::string::npos);
   EXPECT_TRUE(last_data().find("CrRendererMain") != std::string::npos);
+}
+
+// A config that does not set convert_to_legacy_json yields a protobuf trace.
+IN_PROC_BROWSER_TEST_F(TracingControllerTest,
+                       MAYBE_EnableAndStopTracingWithProtobufOutput) {
+  Navigate(shell());
+
+  TracingControllerImpl* controller = TracingControllerImpl::GetInstance();
+
+  base::test::TestFuture<void> started;
+  ASSERT_TRUE(controller->StartTracingWithPerfettoConfig(
+      ProtobufTraceConfig(), started.GetCallback()));
+  ASSERT_TRUE(started.Wait());
+
+  base::test::TestFuture<std::unique_ptr<std::string>> trace;
+  ASSERT_TRUE(controller->StopTracing(
+      TracingController::CreateStringEndpoint(trace.GetCallback())));
+  std::unique_ptr<std::string> contents = trace.Take();
+
+  ASSERT_FALSE(contents->empty());
+  // A legacy JSON trace starts with '{'; a protobuf trace does not.
+  EXPECT_NE('{', (*contents)[0]);
+  EXPECT_GT(CountTracePackets(*contents), 0u);
+}
+
+// A protobuf trace must reach disk byte for byte; Windows text mode would
+// expand its '\n' bytes and it would no longer decode.
+IN_PROC_BROWSER_TEST_F(TracingControllerTest,
+                       MAYBE_ProtobufOutputToFileIsNotTranslated) {
+  Navigate(shell());
+
+  base::FilePath file_path;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
+  }
+
+  TracingControllerImpl* controller = TracingControllerImpl::GetInstance();
+
+  base::test::TestFuture<void> started;
+  ASSERT_TRUE(controller->StartTracingWithPerfettoConfig(
+      ProtobufTraceConfig(), started.GetCallback()));
+  ASSERT_TRUE(started.Wait());
+
+  base::test::TestFuture<void> written;
+  ASSERT_TRUE(controller->StopTracing(TracingController::CreateFileEndpoint(
+      file_path, written.GetCallback(), base::TaskPriority::USER_BLOCKING)));
+  ASSERT_TRUE(written.Wait());
+
+  std::string trace;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::ReadFileToString(file_path, &trace));
+  }
+
+  ASSERT_FALSE(trace.empty());
+  EXPECT_NE('{', trace[0]);
+  EXPECT_GT(CountTracePackets(trace), 0u);
+}
+
+// A caller may add data sources GetDefaultPerfettoConfig() does not produce.
+IN_PROC_BROWSER_TEST_F(TracingControllerTest,
+                       MAYBE_StartTracingWithAddedDataSource) {
+  Navigate(shell());
+
+  perfetto::TraceConfig config = ProtobufTraceConfig();
+  ASSERT_FALSE(config.data_sources().empty());
+  config.add_data_sources()->mutable_config()->set_name(
+      "org.chromium.tracing_controller_browsertest");
+
+  TracingControllerImpl* controller = TracingControllerImpl::GetInstance();
+
+  base::test::TestFuture<void> started;
+  ASSERT_TRUE(controller->StartTracingWithPerfettoConfig(
+      config, started.GetCallback()));
+  ASSERT_TRUE(started.Wait());
+
+  StopTracingAndWait();
+}
+
+// convert_to_legacy_json applies to the whole session, so a config whose data
+// sources disagree is rejected.
+IN_PROC_BROWSER_TEST_F(TracingControllerTest,
+                       MAYBE_StartTracingWithMixedOutputFormatsFails) {
+  Navigate(shell());
+
+  TracingControllerImpl* controller = TracingControllerImpl::GetInstance();
+
+  perfetto::TraceConfig config = ProtobufTraceConfig();
+  ASSERT_GT(config.data_sources().size(), 1u);
+  (*config.mutable_data_sources())[0]
+      .mutable_config()
+      ->mutable_chrome_config()
+      ->set_convert_to_legacy_json(true);
+
+  EXPECT_FALSE(controller->StartTracingWithPerfettoConfig(
+      config, TracingController::StartTracingDoneCallback()));
+  EXPECT_FALSE(controller->IsTracing());
+}
+
+// The config belongs to the session and cannot be swapped while tracing.
+IN_PROC_BROWSER_TEST_F(TracingControllerTest,
+                       MAYBE_StartTracingWithPerfettoConfigFailsWhileTracing) {
+  Navigate(shell());
+
+  TracingControllerImpl* controller = TracingControllerImpl::GetInstance();
+
+  base::test::TestFuture<void> started;
+  ASSERT_TRUE(controller->StartTracing(TraceConfig(), started.GetCallback()));
+  ASSERT_TRUE(started.Wait());
+
+  EXPECT_FALSE(controller->StartTracingWithPerfettoConfig(
+      ProtobufTraceConfig(), TracingController::StartTracingDoneCallback()));
+
+  StopTracingAndWait();
+}
+
+// An agent label filters the converted JSON, so it needs a JSON trace.
+IN_PROC_BROWSER_TEST_F(TracingControllerTest,
+                       MAYBE_StopTracingWithAgentLabelFailsForProtobuf) {
+  Navigate(shell());
+
+  TracingControllerImpl* controller = TracingControllerImpl::GetInstance();
+
+  base::test::TestFuture<void> started;
+  ASSERT_TRUE(controller->StartTracingWithPerfettoConfig(
+      ProtobufTraceConfig(), started.GetCallback()));
+  ASSERT_TRUE(started.Wait());
+
+  base::test::TestFuture<std::unique_ptr<std::string>> rejected;
+  EXPECT_FALSE(controller->StopTracing(
+      TracingController::CreateStringEndpoint(rejected.GetCallback()),
+      "traceEvents"));
+
+  StopTracingAndWait();
+  EXPECT_FALSE(rejected.IsReady());
 }
 
 }  // namespace content

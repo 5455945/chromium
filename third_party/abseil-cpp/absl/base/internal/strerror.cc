@@ -22,6 +22,7 @@
 #include <string>
 #include <type_traits>
 
+#include "absl/base/config.h"
 #include "absl/base/internal/errno_saver.h"
 
 namespace absl {
@@ -39,7 +40,7 @@ const char* StrErrorAdaptor(int errnum, char* buf, size_t buflen) {
   // The type of `ret` is platform-specific; both of these branches must compile
   // either way but only one will execute on any given platform:
   auto ret = strerror_r(errnum, buf, buflen);
-  if (std::is_same<decltype(ret), int>::value) {
+  if (std::is_same_v<decltype(ret), int>) {
     // XSI `strerror_r`; `ret` is `int`:
     if (ret) *buf = '\0';
     return buf;
@@ -61,13 +62,13 @@ std::string StrErrorInternal(int errnum) {
 }
 
 // kSysNerr is the number of errors from a recent glibc. `StrError()` falls back
-// to `StrErrorAdaptor()` if the value is larger than this.
+// to `StrErrorInternal()` if the value is larger than this.
 constexpr int kSysNerr = 135;
 
 std::array<std::string, kSysNerr>* NewStrErrorTable() {
   auto* table = new std::array<std::string, kSysNerr>;
-  for (int i = 0; i < static_cast<int>(table->size()); ++i) {
-    (*table)[i] = StrErrorInternal(i);
+  for (size_t i = 0; i < table->size(); ++i) {
+    (*table)[i] = StrErrorInternal(static_cast<int>(i));
   }
   return table;
 }
@@ -77,8 +78,8 @@ std::array<std::string, kSysNerr>* NewStrErrorTable() {
 std::string StrError(int errnum) {
   absl::base_internal::ErrnoSaver errno_saver;
   static const auto* table = NewStrErrorTable();
-  if (errnum >= 0 && errnum < static_cast<int>(table->size())) {
-    return (*table)[errnum];
+  if (errnum >= 0 && static_cast<size_t>(errnum) < table->size()) {
+    return (*table)[static_cast<size_t>(errnum)];
   }
   return StrErrorInternal(errnum);
 }

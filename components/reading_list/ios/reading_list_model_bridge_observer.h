@@ -1,5 +1,4 @@
-
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/reading_list/core/reading_list_model_observer.h"
 
 // Protocol duplicating all Reading List Model Observer methods in Objective-C.
@@ -17,14 +16,12 @@
 @required
 
 - (void)readingListModelLoaded:(const ReadingListModel*)model;
-- (void)readingListModelDidApplyChanges:(const ReadingListModel*)model;
 
 @optional
-- (void)readingListModel:(const ReadingListModel*)model
-         willRemoveEntry:(const GURL&)url;
+- (void)readingListModelDidApplyChanges:(const ReadingListModel*)model;
 
 - (void)readingListModel:(const ReadingListModel*)model
-           willMoveEntry:(const GURL&)url;
+         willRemoveEntry:(const GURL&)url;
 
 - (void)readingListModel:(const ReadingListModel*)model
             willAddEntry:(const ReadingListEntry&)entry;
@@ -41,6 +38,8 @@
 
 - (void)readingListModel:(const ReadingListModel*)model
          willUpdateEntry:(const GURL&)url;
+- (void)readingListModel:(const ReadingListModel*)model
+          didUpdateEntry:(const GURL&)url;
 
 @end
 
@@ -50,6 +49,10 @@ class ReadingListModelBridge : public ReadingListModelObserver {
  public:
   explicit ReadingListModelBridge(id<ReadingListModelBridgeObserver> observer,
                                   ReadingListModel* model);
+
+  ReadingListModelBridge(const ReadingListModelBridge&) = delete;
+  ReadingListModelBridge& operator=(const ReadingListModelBridge&) = delete;
+
   ~ReadingListModelBridge() override;
 
  private:
@@ -63,8 +66,6 @@ class ReadingListModelBridge : public ReadingListModelObserver {
   void ReadingListModelBeingDeleted(const ReadingListModel* model) override;
   void ReadingListWillRemoveEntry(const ReadingListModel* model,
                                   const GURL& url) override;
-  void ReadingListWillMoveEntry(const ReadingListModel* model,
-                                const GURL& url) override;
   void ReadingListWillAddEntry(const ReadingListModel* model,
                                const ReadingListEntry& entry) override;
   void ReadingListDidAddEntry(const ReadingListModel* model,
@@ -73,12 +74,12 @@ class ReadingListModelBridge : public ReadingListModelObserver {
   void ReadingListDidApplyChanges(ReadingListModel* model) override;
   void ReadingListWillUpdateEntry(const ReadingListModel* model,
                                   const GURL& url) override;
+  void ReadingListDidUpdateEntry(const ReadingListModel* model,
+                                 const GURL& url) override;
 
-  __unsafe_unretained id<ReadingListModelBridgeObserver> observer_;
+  __weak id<ReadingListModelBridgeObserver> observer_;
 
-  ReadingListModel* model_;  // weak
-
-  DISALLOW_COPY_AND_ASSIGN(ReadingListModelBridge);
+  raw_ptr<ReadingListModel> model_;  // weak
 };
 
 #endif  // COMPONENTS_READING_LIST_IOS_READING_LIST_MODEL_BRIDGE_OBSERVER_H_

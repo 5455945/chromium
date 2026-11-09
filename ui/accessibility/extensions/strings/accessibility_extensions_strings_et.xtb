@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Keela kõik kujutiste animatsioonid.</translation>
 <translation id="1703735871906654364">Sisestusmärgiga sirvimine</translation>
 <translation id="1791496371305830581">Luba kõik animeeritud kujutised.</translation>
+<translation id="1974060860693918893">Täpsemad</translation>
 <translation id="1996252509865389616">Kas lubada?</translation>
 <translation id="2079545284768500474">Võta tagasi</translation>
 <translation id="2179565792157161713">Ava pikk kirjeldus uuel vahelehel</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Kujutise Alt-tekstivaatur</translation>
 <translation id="381767806621926835">Paremklõpsake elemendil, mille atribuut on „longdesc” või „aria-describedat”, et saada juurdepääs selle pikale kirjeldusele.</translation>
 <translation id="4023902424053835668">Veebilehtedel oleva teksti nooleklahvidega sirvimine.</translation>
+<translation id="4384008284958619421">Moodsad ekraanilugejad ja Google Chrome toetavad nüüd juurdepääsetavaid elemendikirjeldusi ja ARIA standardeid otse süsteemis.</translation>
 <translation id="4388820049312272371">Tõsta kursori asukoht esile kiire vilkumisega.</translation>
 <translation id="4394049700291259645">Keela</translation>
 <translation id="4769065380738716500">Kujutised on asendatud alt-tekstiga.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Värvide täiustaja</translation>
 <translation id="633394792577263429">Sõnahaaval liikumiseks hoidke all &lt;span class='key'&gt;juhtklahvi&lt;/span&gt;.</translation>
 <translation id="6550675742724504774">Valikud</translation>
+<translation id="6699630355767768222">3. toiming: alistage paranduse puhul värvitelg.</translation>
 <translation id="6838518108677880446">Seadistamine:</translation>
 <translation id="690628312087070417">Kui sisestusmärk liigub edasi suure vahemaaga:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Tühista</translation>
 <translation id="786423340267544509">Lisa ääris elementidele, mis kasutavad atribuute aria-describedat või longdesc.</translation>
 <translation id="7942349550061667556">Punane</translation>
+<translation id="8081200409424070383">Pikkade kirjelduste tugi katkestatakse 20. novembril 2026.</translation>
 <translation id="8260673944985561857">Sisestusmärgiga sirvimise valikud</translation>
 <translation id="8321034316479930120">Animatsioonide eeskirjad</translation>
 <translation id="8480209185614411573">Suur kontrast</translation>
 <translation id="8609925175482059018">Sisestusmärgiga sirvimise sisselülitamiseks vajutage klahvi &lt;span class='key'&gt;F7&lt;/span&gt;. Selle väljalülitamiseks vajutage klahvi uuesti.</translation>
+<translation id="8798099450830957504">Vaikimisi</translation>
 <translation id="894241283505723656">Pikad kirjeldused kontekstimenüüs</translation>
 </translationbundle>

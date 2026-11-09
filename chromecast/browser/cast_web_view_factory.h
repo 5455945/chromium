@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
 #include "chromecast/browser/cast_web_view.h"
-#include "url/gurl.h"
 
 namespace content {
 class BrowserContext;
@@ -25,20 +22,21 @@ class CastWebService;
 class CastWebViewFactory {
  public:
   explicit CastWebViewFactory(content::BrowserContext* browser_context);
+
+  CastWebViewFactory(const CastWebViewFactory&) = delete;
+  CastWebViewFactory& operator=(const CastWebViewFactory&) = delete;
+
   virtual ~CastWebViewFactory();
 
   virtual std::unique_ptr<CastWebView> CreateWebView(
-      const CastWebView::CreateParams& params,
-      CastWebService* web_service,
-      const GURL& initial_url);
+      mojom::CastWebViewParamsPtr params,
+      CastWebService* web_service);
 
   content::BrowserContext* browser_context() const { return browser_context_; }
 
  protected:
   content::BrowserContext* const browser_context_;
   base::RepeatingCallback<void(CastWebView*, int)> register_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastWebViewFactory);
 };
 
 }  // namespace chromecast

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 
 #include <utility>
 
-#include "base/single_thread_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
 #include "components/services/storage/public/mojom/quota_client.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -16,73 +18,101 @@ namespace storage {
 MockQuotaManagerProxy::MockQuotaManagerProxy(
     MockQuotaManager* quota_manager,
     scoped_refptr<base::SequencedTaskRunner> quota_manager_task_runner)
-    : QuotaManagerProxy(quota_manager, std::move(quota_manager_task_runner)),
-      mock_quota_manager_(quota_manager),
-      storage_accessed_count_(0),
-      storage_modified_count_(0),
-      last_notified_type_(blink::mojom::StorageType::kUnknown),
-      last_notified_delta_(0) {}
+    : QuotaManagerProxy(
+          quota_manager,
+          std::move(quota_manager_task_runner),
+          quota_manager ? quota_manager->profile_path() : base::FilePath()),
+      mock_quota_manager_(quota_manager) {}
 
-void MockQuotaManagerProxy::RegisterClient(
-    mojo::PendingRemote<storage::mojom::QuotaClient> client,
-    QuotaClientType client_type,
-    const std::vector<blink::mojom::StorageType>& storage_types) {
-  DCHECK(!registered_client_);
-  registered_client_.Bind(std::move(client));
+void MockQuotaManagerProxy::UpdateOrCreateBucket(
+    const BucketInitParams& params,
+    base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) {
+  if (mock_quota_manager_) {
+    mock_quota_manager_->UpdateOrCreateBucket(params, std::move(callback));
+  }
+}
+
+QuotaErrorOr<BucketInfo> MockQuotaManagerProxy::GetOrCreateBucketSync(
+    const BucketInitParams& params) {
+  return (mock_quota_manager_)
+             ? mock_quota_manager_->GetOrCreateBucketSync(params)
+             : base::unexpected(QuotaError::kUnknownError);
+}
+
+void MockQuotaManagerProxy::CreateBucketForTesting(
+    const blink::StorageKey& storage_key,
+    const std::string& bucket_name,
+    base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) {
+  if (mock_quota_manager_) {
+    mock_quota_manager_->CreateBucketForTesting(storage_key, bucket_name,
+                                                std::move(callback));
+  }
+}
+
+void MockQuotaManagerProxy::GetBucketByNameUnsafe(
+    const blink::StorageKey& storage_key,
+    const std::string& bucket_name,
+    base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) {
+  if (mock_quota_manager_) {
+    mock_quota_manager_->GetBucketByNameUnsafe(storage_key, bucket_name,
+                                               std::move(callback));
+  }
+}
+
+void MockQuotaManagerProxy::GetBucketById(
+    const BucketId& bucket_id,
+    base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) {
+  if (mock_quota_manager_) {
+    mock_quota_manager_->GetBucketById(bucket_id, std::move(callback));
+  }
+}
+
+void MockQuotaManagerProxy::GetBucketsForStorageKey(
+    const blink::StorageKey& storage_key,
+    bool delete_expired,
+    base::OnceCallback<void(QuotaErrorOr<std::set<BucketInfo>>)> callback) {
+  if (mock_quota_manager_) {
+    mock_quota_manager_->GetBucketsForStorageKey(
+        storage_key, std::move(callback), delete_expired);
+  } else {
+    std::move(callback).Run(std::set<BucketInfo>());
+  }
 }
 
 void MockQuotaManagerProxy::GetUsageAndQuota(
     const blink::StorageKey& storage_key,
-    blink::mojom::StorageType type,
-    scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     QuotaManager::UsageAndQuotaCallback callback) {
   if (mock_quota_manager_) {
-    mock_quota_manager_->GetUsageAndQuota(storage_key, type,
+    mock_quota_manager_->GetUsageAndQuota(storage_key,
                                           std::move(callback));
   }
 }
 
-void MockQuotaManagerProxy::NotifyStorageAccessed(
-    const blink::StorageKey& storage_key,
-    blink::mojom::StorageType type,
-    base::Time access_time) {
-  ++storage_accessed_count_;
-  last_notified_storage_key_ = storage_key;
-  last_notified_type_ = type;
+void MockQuotaManagerProxy::NotifyBucketAccessed(const BucketLocator& bucket,
+                                                 base::Time access_time) {
+  base::AutoLock locked(lock_);
+  ++bucket_accessed_count_;
+  last_notified_bucket_id_ = bucket.id;
+  last_notified_storage_key_ = bucket.storage_key;
 }
 
-void MockQuotaManagerProxy::NotifyStorageModified(
-    storage::QuotaClientType client_id,
-    const blink::StorageKey& storage_key,
-    blink::mojom::StorageType type,
-    int64_t delta,
+void MockQuotaManagerProxy::NotifyBucketModified(
+    QuotaClientType client_id,
+    const BucketLocator& bucket,
+    std::optional<int64_t> delta,
     base::Time modification_time,
-    scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     base::OnceClosure callback) {
-  ++storage_modified_count_;
-  last_notified_storage_key_ = storage_key;
-  last_notified_type_ = type;
-  last_notified_delta_ = delta;
+  base::AutoLock locked(lock_);
+  ++bucket_modified_count_;
+  last_notified_bucket_id_ = bucket.id;
+  last_notified_bucket_delta_ = delta;
   if (mock_quota_manager_) {
-    mock_quota_manager_->UpdateUsage(storage_key, type, delta);
+    mock_quota_manager_->UpdateUsage(bucket, delta);
   }
-  if (callback)
-    callback_task_runner->PostTask(FROM_HERE, std::move(callback));
-}
-
-void MockQuotaManagerProxy::NotifyStorageKeyInUse(
-    const blink::StorageKey& storage_key) {
-  storage_keys_in_use_.insert(storage_key);
-}
-
-void MockQuotaManagerProxy::NotifyStorageKeyNoLongerInUse(
-    const blink::StorageKey& storage_key) {
-  storage_keys_in_use_.erase(storage_key);
-}
-
-bool MockQuotaManagerProxy::StorageKeyInUse(
-    const blink::StorageKey& storage_key) const {
-  return storage_keys_in_use_.contains(storage_key);
+  if (callback) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
+  }
 }
 
 MockQuotaManagerProxy::~MockQuotaManagerProxy() = default;

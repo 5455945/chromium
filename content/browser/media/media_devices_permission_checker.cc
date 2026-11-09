@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,68 +7,101 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/task/bind_post_task.h"
 #include "build/build_config.h"
+#include "content/browser/permissions/permission_util.h"
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/permission_controller.h"
-#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "third_party/blink/public/common/mediastream/media_devices.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/common/content_client.h"
+#include "media/capture/capture_switches.h"
+#endif
 
 namespace content {
 
 namespace {
 
-MediaDevicesManager::BoolDeviceTypes DoCheckPermissionsOnUIThread(
+MediaDevicesManager::DevicePermissionStates DoCheckPermissionsOnUIThread(
     MediaDevicesManager::BoolDeviceTypes requested_device_types,
-    int render_process_id,
-    int render_frame_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  RenderFrameHostImpl* frame_host =
-      RenderFrameHostImpl::FromID(render_process_id, render_frame_id);
+    GlobalRenderFrameHostId render_frame_host_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  MediaDevicesManager::DevicePermissionStates result;
+#if BUILDFLAG(IS_WIN)
+  if (switches::IsWinDeviceEnumerationWithoutActivationEnabled()) {
+    ContentBrowserClient* browser = GetContentClient()->browser();
+    result[static_cast<size_t>(MediaDeviceType::kMediaVideoInput)]
+        .system_may_prompt = browser->SystemMayPromptForVideoCapture();
+  }
+#endif
 
-  // If there is no |frame_host|, return false for all permissions.
+  RenderFrameHostImpl* frame_host =
+      RenderFrameHostImpl::FromID(render_frame_host_id);
+
+  // If there is no |frame_host|, return false for all browser permissions.
   if (!frame_host)
-    return MediaDevicesManager::BoolDeviceTypes();
+    return result;
 
   RenderFrameHostDelegate* delegate = frame_host->delegate();
-  url::Origin origin = frame_host->GetLastCommittedOrigin();
-  bool audio_permission = delegate->CheckMediaAccessPermission(
-      frame_host, origin, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
-  bool mic_permissions_policy = true;
-  bool camera_permissions_policy = true;
-  mic_permissions_policy = frame_host->IsFeatureEnabled(
-      blink::mojom::PermissionsPolicyFeature::kMicrophone);
-  camera_permissions_policy = frame_host->IsFeatureEnabled(
-      blink::mojom::PermissionsPolicyFeature::kCamera);
+  if (!delegate) {
+    return result;
+  }
 
-  MediaDevicesManager::BoolDeviceTypes result;
-  // Speakers.
-  // TODO(guidou): use specific permission for audio output when it becomes
-  // available. See http://crbug.com/556542.
-  result[static_cast<size_t>(MediaDeviceType::MEDIA_AUDIO_OUTPUT)] =
+  url::Origin origin = frame_host->GetLastCommittedOrigin();
+  bool microphone_permission = delegate->CheckMediaAccessPermission(
+      frame_host, origin, blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE);
+
+  bool speaker_selection_permission =
+      frame_host->GetBrowserContext()
+          ->GetPermissionController()
+          ->GetPermissionStatusForCurrentDocument(
+              content::PermissionDescriptorUtil::
+                  CreatePermissionDescriptorForPermissionType(
+                      blink::PermissionType::SPEAKER_SELECTION),
+              frame_host) == blink::mojom::PermissionStatus::GRANTED;
+
+  bool mic_permissions_policy = frame_host->IsFeatureEnabled(
+      network::mojom::PermissionsPolicyFeature::kMicrophone);
+  bool camera_permissions_policy = frame_host->IsFeatureEnabled(
+      network::mojom::PermissionsPolicyFeature::kCamera);
+  bool speaker_selection_permissions_policy = frame_host->IsFeatureEnabled(
+      network::mojom::PermissionsPolicyFeature::kSpeakerSelection);
+
+  // Speakers. Also allow speakers if the microphone permission is given, even
+  // if speaker permission is not explicitly given.
+  result[static_cast<size_t>(MediaDeviceType::kMediaAudioOutput)]
+      .has_browser_permission =
       requested_device_types[static_cast<size_t>(
-          MediaDeviceType::MEDIA_AUDIO_OUTPUT)] &&
-      audio_permission;
+          MediaDeviceType::kMediaAudioOutput)] &&
+      ((microphone_permission && mic_permissions_policy) ||
+       (speaker_selection_permission && speaker_selection_permissions_policy));
 
   // Mic.
-  result[static_cast<size_t>(MediaDeviceType::MEDIA_AUDIO_INPUT)] =
-      requested_device_types[static_cast<size_t>(
-          MediaDeviceType::MEDIA_AUDIO_INPUT)] &&
-      audio_permission && mic_permissions_policy;
+  result[static_cast<size_t>(MediaDeviceType::kMediaAudioInput)]
+      .has_browser_permission = requested_device_types[static_cast<size_t>(
+                                    MediaDeviceType::kMediaAudioInput)] &&
+                                microphone_permission && mic_permissions_policy;
 
   // Camera.
-  result[static_cast<size_t>(MediaDeviceType::MEDIA_VIDEO_INPUT)] =
+  result[static_cast<size_t>(MediaDeviceType::kMediaVideoInput)]
+      .has_browser_permission =
       requested_device_types[static_cast<size_t>(
-          MediaDeviceType::MEDIA_VIDEO_INPUT)] &&
+          MediaDeviceType::kMediaVideoInput)] &&
       delegate->CheckMediaAccessPermission(
           frame_host, origin,
           blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) &&
@@ -77,15 +110,58 @@ MediaDevicesManager::BoolDeviceTypes DoCheckPermissionsOnUIThread(
   return result;
 }
 
-bool CheckSinglePermissionOnUIThread(MediaDeviceType device_type,
-                                     int render_process_id,
-                                     int render_frame_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+bool CheckSinglePermissionOnUIThread(
+    MediaDeviceType device_type,
+    GlobalRenderFrameHostId render_frame_host_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   MediaDevicesManager::BoolDeviceTypes requested;
   requested[static_cast<size_t>(device_type)] = true;
-  MediaDevicesManager::BoolDeviceTypes result = DoCheckPermissionsOnUIThread(
-      requested, render_process_id, render_frame_id);
-  return result[static_cast<size_t>(device_type)];
+  MediaDevicesManager::DevicePermissionStates result =
+      DoCheckPermissionsOnUIThread(requested, render_frame_host_id);
+  return result[static_cast<size_t>(device_type)].has_browser_permission;
+}
+
+void GetSpeakerSelectionAndMicrophoneState(
+    GlobalRenderFrameHostId render_frame_host_id,
+    base::OnceCallback<void(MediaDevicesManager::PermissionDeniedState, bool)>
+        callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  RenderFrameHostImpl* frame_host =
+      RenderFrameHostImpl::FromID(render_frame_host_id);
+
+  // If there is no |frame_host|, return PermissionDeniedState::kDenied.
+  if (!frame_host) {
+    std::move(callback).Run(MediaDevicesManager::PermissionDeniedState::kDenied,
+                            false);
+    return;
+  }
+
+  bool has_micophone_permission = CheckSinglePermissionOnUIThread(
+      MediaDeviceType::kMediaAudioInput, render_frame_host_id);
+
+  blink::mojom::PermissionStatus speaker_selection_permission_status =
+      frame_host->GetBrowserContext()
+          ->GetPermissionController()
+          ->GetPermissionStatusForCurrentDocument(
+              content::PermissionDescriptorUtil::
+                  CreatePermissionDescriptorForPermissionType(
+                      blink::PermissionType::SPEAKER_SELECTION),
+              frame_host);
+
+  bool speaker_selection_permissions_policy = frame_host->IsFeatureEnabled(
+      network::mojom::PermissionsPolicyFeature::kSpeakerSelection);
+
+  // Check if permission is DENIED or permissions policy is not enabled.
+  MediaDevicesManager::PermissionDeniedState
+      speaker_selection_permission_state =
+          (!speaker_selection_permissions_policy ||
+           speaker_selection_permission_status ==
+               blink::mojom::PermissionStatus::DENIED)
+              ? MediaDevicesManager::PermissionDeniedState::kDenied
+              : MediaDevicesManager::PermissionDeniedState::kNotDenied;
+
+  std::move(callback).Run(speaker_selection_permission_state,
+                          has_micophone_permission);
 }
 
 }  // namespace
@@ -95,27 +171,52 @@ MediaDevicesPermissionChecker::MediaDevicesPermissionChecker()
           switches::kUseFakeUIForMediaStream)),
       override_value_(
           base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-              switches::kUseFakeUIForMediaStream) != "deny") {}
+              switches::kUseFakeUIForMediaStream) != "deny"),
+      override_system_may_prompt_(false) {}
 
 MediaDevicesPermissionChecker::MediaDevicesPermissionChecker(
-    bool override_value)
-    : use_override_(true), override_value_(override_value) {}
+    bool override_value,
+    bool override_system_may_prompt)
+    : use_override_(true),
+      override_value_(override_value),
+      override_system_may_prompt_(override_system_may_prompt) {}
 
 bool MediaDevicesPermissionChecker::CheckPermissionOnUIThread(
     MediaDeviceType device_type,
-    int render_process_id,
-    int render_frame_id) const {
+    GlobalRenderFrameHostId render_frame_host_id) const {
   if (use_override_)
     return override_value_;
 
-  return CheckSinglePermissionOnUIThread(device_type, render_process_id,
-                                         render_frame_id);
+  return CheckSinglePermissionOnUIThread(device_type, render_frame_host_id);
+}
+
+void MediaDevicesPermissionChecker::
+    GetSpeakerSelectionAndMicrophonePermissionState(
+        GlobalRenderFrameHostId render_frame_host_id,
+        base::OnceCallback<void(MediaDevicesManager::PermissionDeniedState,
+                                bool)> callback) const {
+  if (use_override_) {
+    if (override_value_) {
+      std::move(callback).Run(
+          MediaDevicesManager::PermissionDeniedState::kNotDenied, true);
+    } else {
+      std::move(callback).Run(
+          MediaDevicesManager::PermissionDeniedState::kDenied, false);
+    }
+    return;
+  }
+
+  GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &GetSpeakerSelectionAndMicrophoneState, render_frame_host_id,
+          base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
+                             std::move(callback))));
 }
 
 void MediaDevicesPermissionChecker::CheckPermission(
     MediaDeviceType device_type,
-    int render_process_id,
-    int render_frame_id,
+    GlobalRenderFrameHostId render_frame_host_id,
     base::OnceCallback<void(bool)> callback) const {
   if (use_override_) {
     std::move(callback).Run(override_value_);
@@ -125,19 +226,21 @@ void MediaDevicesPermissionChecker::CheckPermission(
   GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&CheckSinglePermissionOnUIThread, device_type,
-                     render_process_id, render_frame_id),
+                     render_frame_host_id),
       std::move(callback));
 }
 
 void MediaDevicesPermissionChecker::CheckPermissions(
     MediaDevicesManager::BoolDeviceTypes requested,
-    int render_process_id,
-    int render_frame_id,
-    base::OnceCallback<void(const MediaDevicesManager::BoolDeviceTypes&)>
+    GlobalRenderFrameHostId render_frame_host_id,
+    base::OnceCallback<void(const MediaDevicesManager::DevicePermissionStates&)>
         callback) const {
   if (use_override_) {
-    MediaDevicesManager::BoolDeviceTypes result;
-    result.fill(override_value_);
+    MediaDevicesManager::DevicePermissionStates result;
+    for (auto& permission_state : result) {
+      permission_state.has_browser_permission = override_value_;
+      permission_state.system_may_prompt = override_system_may_prompt_;
+    }
     std::move(callback).Run(result);
     return;
   }
@@ -145,39 +248,36 @@ void MediaDevicesPermissionChecker::CheckPermissions(
   GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&DoCheckPermissionsOnUIThread, requested,
-                     render_process_id, render_frame_id),
+                     render_frame_host_id),
       std::move(callback));
 }
 
 // static
 bool MediaDevicesPermissionChecker::HasPanTiltZoomPermissionGrantedOnUIThread(
-    int render_process_id,
-    int render_frame_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-#if defined(OS_ANDROID)
+    GlobalRenderFrameHostId render_frame_host_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+#if BUILDFLAG(IS_ANDROID)
   // The PTZ permission is automatically granted on Android. This way, zoom is
   // not initially empty in ImageCapture. It is safe to do so because pan and
   // tilt are not supported on Android.
   return true;
 #else
   RenderFrameHostImpl* frame_host =
-      RenderFrameHostImpl::FromID(render_process_id, render_frame_id);
+      RenderFrameHostImpl::FromID(render_frame_host_id);
 
   if (!frame_host)
     return false;
 
-  auto* web_contents = WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
-    return false;
-
   auto* permission_controller =
-      web_contents->GetBrowserContext()->GetPermissionController();
-  DCHECK(permission_controller);
+      frame_host->GetBrowserContext()->GetPermissionController();
+  CHECK(permission_controller, base::NotFatalUntil::M160);
 
-  const GURL& origin = web_contents->GetLastCommittedURL();
   blink::mojom::PermissionStatus status =
-      permission_controller->GetPermissionStatusForFrame(
-          PermissionType::CAMERA_PAN_TILT_ZOOM, frame_host, origin);
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::CAMERA_PAN_TILT_ZOOM),
+          frame_host);
 
   return status == blink::mojom::PermissionStatus::GRANTED;
 #endif

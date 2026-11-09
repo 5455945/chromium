@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "components/consent_auditor/consent_auditor.h"
+#include "components/sync/protocol/user_consent_specifics.pb.h"
+#include "components/sync/protocol/user_consent_types.pb.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 using ::testing::Matcher;
@@ -19,56 +21,54 @@ namespace consent_auditor {
 class FakeConsentAuditor : public ConsentAuditor {
  public:
   FakeConsentAuditor();
+
+  FakeConsentAuditor(const FakeConsentAuditor&) = delete;
+  FakeConsentAuditor& operator=(const FakeConsentAuditor&) = delete;
+
   ~FakeConsentAuditor() override;
 
   // ConsentAuditor implementation.
   void RecordSyncConsent(
-      const CoreAccountId& account_id,
+      const GaiaId& gaia_id,
       const sync_pb::UserConsentTypes::SyncConsent& consent) override;
-  MOCK_METHOD2(
-      RecordArcPlayConsent,
-      void(const CoreAccountId&,
-           const sync_pb::UserConsentTypes::ArcPlayTermsOfServiceConsent&));
-  MOCK_METHOD2(
-      RecordArcBackupAndRestoreConsent,
-      void(const CoreAccountId&,
-           const sync_pb::UserConsentTypes::ArcBackupAndRestoreConsent&));
-  MOCK_METHOD2(
+  MOCK_METHOD(void,
+              RecordArcPlayConsent,
+              (const GaiaId&,
+               const sync_pb::UserConsentTypes::ArcPlayTermsOfServiceConsent&));
+  MOCK_METHOD(void,
+              RecordArcBackupAndRestoreConsent,
+              (const GaiaId&,
+               const sync_pb::UserConsentTypes::ArcBackupAndRestoreConsent&));
+  MOCK_METHOD(
+      void,
       RecordArcGoogleLocationServiceConsent,
-      void(const CoreAccountId&,
-           const sync_pb::UserConsentTypes::ArcGoogleLocationServiceConsent&));
-  void RecordAssistantActivityControlConsent(
-      const CoreAccountId& account_id,
-      const sync_pb::UserConsentTypes::AssistantActivityControlConsent& consent)
-      override;
-  void RecordAccountPasswordsConsent(
-      const CoreAccountId& account_id,
-      const sync_pb::UserConsentTypes::AccountPasswordsConsent& consent)
-      override;
+      (const GaiaId&,
+       const sync_pb::UserConsentTypes::ArcGoogleLocationServiceConsent&));
+  MOCK_METHOD(void,
+              RecordRecorderSpeakerLabelConsent,
+              (const GaiaId&,
+               const sync_pb::UserConsentTypes::RecorderSpeakerLabelConsent&));
+  MOCK_METHOD(void,
+              RecordWalletPrivatePassConsent,
+              (const GaiaId&,
+               const SessionId&,
+               const sync_pb::UserConsentTypes::WalletPrivatePassConsent&));
 
-  void RecordLocalConsent(const std::string& feature,
-                          const std::string& description_text,
-                          const std::string& confirmation_text) override;
-  base::WeakPtr<syncer::ModelTypeControllerDelegate> GetControllerDelegate()
+  base::WeakPtr<syncer::DataTypeControllerDelegate> GetControllerDelegate()
       override;
 
   // Methods for fake.
   // TODO(markusheintz): Replace the usage of this methods in all tests.
-  void RecordGaiaConsent(const CoreAccountId& account_id,
+  void RecordGaiaConsent(const GaiaId& gaia_id,
                          consent_auditor::Feature feature,
                          const std::vector<int>& description_grd_ids,
                          int confirmation_grd_id,
                          consent_auditor::ConsentStatus status);
 
-  const CoreAccountId& account_id() const { return account_id_; }
+  const GaiaId& gaia_id() const { return gaia_id_; }
 
-  const sync_pb::UserConsentTypes::SyncConsent& recorded_sync_consent() const {
-    return recorded_sync_consent_;
-  }
-
-  const sync_pb::UserConsentTypes::ArcPlayTermsOfServiceConsent&
-  recorded_play_consent() const {
-    return recorded_play_consent_;
+  const std::vector<sync_pb::UserConsentSpecifics>& recorded_consents() const {
+    return recorded_consents_;
   }
 
   const std::vector<std::vector<int>>& recorded_id_vectors() {
@@ -86,17 +86,16 @@ class FakeConsentAuditor : public ConsentAuditor {
   }
 
  private:
-  CoreAccountId account_id_;
+  GaiaId gaia_id_;
 
-  sync_pb::UserConsentTypes::SyncConsent recorded_sync_consent_;
-  sync_pb::UserConsentTypes_ArcPlayTermsOfServiceConsent recorded_play_consent_;
+  // Holds specific consent information for assistant activity control consent
+  // and account password consent. Does not (yet) contain recorded sync consent.
+  std::vector<sync_pb::UserConsentSpecifics> recorded_consents_;
 
   std::vector<std::vector<int>> recorded_id_vectors_;
   std::vector<int> recorded_confirmation_ids_;
   std::vector<Feature> recorded_features_;
   std::vector<ConsentStatus> recorded_statuses_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeConsentAuditor);
 };
 
 MATCHER_P(ArcPlayConsentEq, expected_consent, "") {

@@ -1,56 +1,65 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "printing/printing_features.h"
 
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
+#include "printing/buildflags/buildflags.h"
 
-namespace printing {
-namespace features {
+#if BUILDFLAG(ENABLE_OOP_PRINTING)
+#include "base/metrics/field_trial_params.h"
+#endif
 
-#if defined(OS_MAC)
+namespace printing::features {
+
+// Align PDF default print settings (scale&center) with HTML.
+BASE_FEATURE(kAlignPdfDefaultPrintSettingsWithHTML,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_LINUX)
 // Use the CUPS IPP printing backend instead of the original CUPS backend that
 // calls the deprecated PPD API.
-const base::Feature kCupsIppPrintingBackend{"CupsIppPrintingBackend",
-                                            base::FEATURE_ENABLED_BY_DEFAULT};
-#endif  // defined(OS_MAC)
+BASE_FEATURE(kCupsIppPrintingBackend, base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if defined(OS_WIN)
+// Use the XDG Print Portal for the system print dialog.
+BASE_FEATURE(kLinuxXdgPrintPortal, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_LINUX)
+
+#if BUILDFLAG(IS_WIN)
+// When using PostScript level 3 printing, render text with Type 42 fonts if
+// possible.
+BASE_FEATURE(kPrintWithPostScriptType42Fonts,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 // When using GDI printing, avoid rasterization if possible.
-const base::Feature kPrintWithReducedRasterization{
-    "PrintWithReducedRasterization", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kPrintWithReducedRasterization, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN)
 
-// Use XPS for printing instead of GDI.
-const base::Feature kUseXpsForPrinting{"UseXpsForPrinting",
-                                       base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Use XPS for printing instead of GDI for printing PDF documents. This is
-// independent of `kUseXpsForPrinting`; can use XPS for PDFs even if still using
-// GDI for modifiable content.
-const base::Feature kUseXpsForPrintingFromPdf{
-    "UseXpsForPrintingFromPdf", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsXpsPrintCapabilityRequired() {
-  return base::FeatureList::IsEnabled(features::kUseXpsForPrinting) ||
-         base::FeatureList::IsEnabled(features::kUseXpsForPrintingFromPdf);
-}
-
-bool ShouldPrintUsingXps(bool source_is_pdf) {
-  return base::FeatureList::IsEnabled(source_is_pdf
-                                          ? features::kUseXpsForPrintingFromPdf
-                                          : features::kUseXpsForPrinting);
-}
-#endif  // defined(OS_WIN)
-
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) || \
-    defined(OS_CHROMEOS)
+#if BUILDFLAG(ENABLE_OOP_PRINTING)
 // Enables printing interactions with the operating system to be performed
 // out-of-process.
-const base::Feature kEnableOopPrintDrivers{"EnableOopPrintDrivers",
-                                           base::FEATURE_DISABLED_BY_DEFAULT};
-#endif  // defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) ||
-        // defined(OS_CHROMEOS)
+BASE_FEATURE(kEnableOopPrintDrivers,
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
 
-}  // namespace features
-}  // namespace printing
+const base::FeatureParam<bool> kEnableOopPrintDriversEarlyStart{
+    &kEnableOopPrintDrivers, "EarlyStart", false};
+
+const base::FeatureParam<bool> kEnableOopPrintDriversJobPrint{
+    &kEnableOopPrintDrivers, "JobPrint", true};
+
+const base::FeatureParam<bool> kEnableOopPrintDriversSandbox{
+    &kEnableOopPrintDrivers, "Sandbox", false};
+
+#if BUILDFLAG(IS_WIN)
+const base::FeatureParam<bool> kEnableOopPrintDriversSingleProcess{
+    &kEnableOopPrintDrivers, "SingleProcess", true};
+#endif
+#endif  // BUILDFLAG(ENABLE_OOP_PRINTING)
+
+}  // namespace printing::features

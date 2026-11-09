@@ -1,11 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CONSTRAINED_WINDOW_CONSTRAINED_WINDOW_VIEWS_CLIENT_H_
 #define COMPONENTS_CONSTRAINED_WINDOW_CONSTRAINED_WINDOW_VIEWS_CLIENT_H_
 
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace web_modal {
 class ModalDialogHost;
@@ -15,7 +15,7 @@ namespace constrained_window {
 
 class ConstrainedWindowViewsClient {
  public:
-  virtual ~ConstrainedWindowViewsClient() {}
+  virtual ~ConstrainedWindowViewsClient() = default;
 
   // Returns the modal window host for the |parent| native window.
   virtual web_modal::ModalDialogHost* GetModalDialogHost(

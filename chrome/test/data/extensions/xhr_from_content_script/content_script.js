@@ -1,9 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // Add a button to the page that can fetch a cross-origin file.
-var b = document.createElement('button');
+const b = document.createElement('button');
 b.id = 'xhrButton';
 b.innerText = 'Send XHR';
 document.body.appendChild(b);
@@ -16,6 +16,6 @@ b.onclick = () =>
         .then((result) => result.text())
         .then((text) => {
           window.domAutomationController.send(
-              text == 'File to request via XHR.\n');
+              text === 'File to request via XHR.\n');
         })
         .catch(err => window.domAutomationController.send(false));

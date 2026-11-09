@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,22 @@
 #include "chrome/common/safe_browsing/archive_analyzer_results.h"
 #include "chrome/common/safe_browsing/ipc_protobuf_message_macros.h"
 #include "components/safe_browsing/buildflags.h"
-#include "ipc/ipc_message_macros.h"
-#include "ipc/ipc_message_protobuf_utils.h"
+#include "ipc/param_traits_macros.h"
+#include "ipc/param_traits_protobuf_utils.h"
 
-#if !BUILDFLAG(FULL_SAFE_BROWSING)
-#error BUILDFLAG(FULL_SAFE_BROWSING) should be set.
+#if !BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+#error BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) should be set.
 #endif
+
+#undef IPC_MESSAGE_EXPORT
+#define IPC_MESSAGE_EXPORT
 
 IPC_ENUM_TRAITS_VALIDATE(
     safe_browsing::ClientDownloadRequest_DownloadType,
     safe_browsing::ClientDownloadRequest_DownloadType_IsValid(value))
+
+IPC_ENUM_TRAITS_MAX_VALUE(safe_browsing::ArchiveAnalysisResult,
+                          safe_browsing::ArchiveAnalysisResult::kMaxValue)
 
 IPC_PROTOBUF_MESSAGE_TRAITS_BEGIN(safe_browsing::ClientDownloadRequest_Digests)
   IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_COMPLEX_MEMBER(sha256)
@@ -81,7 +87,7 @@ IPC_PROTOBUF_MESSAGE_TRAITS_END()
 
 IPC_PROTOBUF_MESSAGE_TRAITS_BEGIN(
     safe_browsing::ClientDownloadRequest_ArchivedBinary)
-  IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_COMPLEX_MEMBER(file_basename)
+  IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_COMPLEX_MEMBER(file_path)
   IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_FUNDAMENTAL_MEMBER(download_type)
   IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_COMPLEX_MEMBER(digests)
   IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_FUNDAMENTAL_MEMBER(length)
@@ -98,16 +104,28 @@ IPC_PROTOBUF_MESSAGE_TRAITS_BEGIN(
   IPC_PROTOBUF_MESSAGE_TRAITS_REPEATED_COMPLEX_MEMBER(contents)
 IPC_PROTOBUF_MESSAGE_TRAITS_END()
 
+IPC_ENUM_TRAITS_MAX_VALUE(
+    safe_browsing::EncryptionInfo::PasswordStatus,
+    safe_browsing::EncryptionInfo::PasswordStatus::kMaxValue)
+
+IPC_STRUCT_TRAITS_BEGIN(safe_browsing::EncryptionInfo)
+  IPC_STRUCT_TRAITS_MEMBER(is_encrypted)
+  IPC_STRUCT_TRAITS_MEMBER(is_top_level_encrypted)
+  IPC_STRUCT_TRAITS_MEMBER(password_status)
+IPC_STRUCT_TRAITS_END()
+
 IPC_STRUCT_TRAITS_BEGIN(safe_browsing::ArchiveAnalyzerResults)
   IPC_STRUCT_TRAITS_MEMBER(success)
   IPC_STRUCT_TRAITS_MEMBER(has_executable)
   IPC_STRUCT_TRAITS_MEMBER(has_archive)
   IPC_STRUCT_TRAITS_MEMBER(archived_binary)
   IPC_STRUCT_TRAITS_MEMBER(archived_archive_filenames)
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   IPC_STRUCT_TRAITS_MEMBER(signature_blob)
   IPC_STRUCT_TRAITS_MEMBER(detached_code_signatures)
-#endif  // OS_MAC
+#endif  // BUILDFLAG(IS_MAC)
   IPC_STRUCT_TRAITS_MEMBER(file_count)
   IPC_STRUCT_TRAITS_MEMBER(directory_count)
+  IPC_STRUCT_TRAITS_MEMBER(analysis_result)
+  IPC_STRUCT_TRAITS_MEMBER(encryption_info)
 IPC_STRUCT_TRAITS_END()

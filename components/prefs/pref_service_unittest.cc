@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <string>
 
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/language_tag.h"
+#include "base/test/gtest_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/prefs/json_pref_store.h"
@@ -18,6 +19,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service_factory.h"
 #include "components/prefs/pref_value_store.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/prefs/testing_pref_store.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -28,10 +30,8 @@ using testing::Mock;
 
 namespace {
 
+using base::i18n::GetKnownLanguageTag;
 const char kPrefName[] = "pref.name";
-const char kManagedPref[] = "managed_pref";
-const char kRecommendedPref[] = "recommended_pref";
-const char kSupervisedPref[] = "supervised_pref";
 
 }  // namespace
 
@@ -71,6 +71,36 @@ TEST(PrefServiceTest, NoObserverFire) {
   Mock::VerifyAndClearExpectations(&obs);
 }
 
+TEST(PrefServiceTest, GetMutableUserPrefRecoversFromTypeConflict) {
+  TestingPrefServiceSimple prefs;
+
+  // Register a nested dictionary preference.
+  const char kNestedDictPref[] = "parent.child";
+  prefs.registry()->RegisterDictionaryPref(kNestedDictPref);
+
+  // Simulate a type conflict: write a non-dictionary value directly to the
+  // parent path.
+  prefs.SetUserPref("parent", base::Value(true));
+
+  // Attempting to access the nested dictionary should trigger recovery.
+  ScopedDictPrefUpdate update(&prefs, kNestedDictPref);
+
+  // The update should be successful (not null/fallback) and we can mutate it.
+  update->Set("key", "value");
+
+  // Verify that the parent node was cleared and reconstructed as a dictionary
+  // containing "child" by checking that the registered pref "parent.child" now
+  // works and has our mutation.
+  const base::Value* recovered_val = prefs.GetUserPrefValue(kNestedDictPref);
+  ASSERT_TRUE(recovered_val);
+  ASSERT_TRUE(recovered_val->is_dict());
+
+  // Verify our mutation exists.
+  const std::string* inner_val = recovered_val->GetDict().FindString("key");
+  ASSERT_TRUE(inner_val);
+  EXPECT_EQ(*inner_val, "value");
+}
+
 TEST(PrefServiceTest, HasPrefPath) {
   TestingPrefServiceSimple prefs;
 
@@ -93,8 +123,7 @@ TEST(PrefServiceTest, Observers) {
   const char pref_name[] = "homepage";
 
   TestingPrefServiceSimple prefs;
-  prefs.SetUserPref(pref_name,
-                    std::make_unique<base::Value>("http://www.cnn.com"));
+  prefs.SetUserPref(pref_name, base::Value("http://www.cnn.com"));
   prefs.registry()->RegisterStringPref(pref_name, std::string());
 
   const char new_pref_value[] = "http://www.google.com/";
@@ -130,7 +159,7 @@ TEST(PrefServiceTest, Observers) {
   obs2.Expect(pref_name, &expected_new_pref_value2);
   // This should fire the checks in obs and obs2 but with an unchanged value
   // as the recommended value is being overridden by the user-set value.
-  prefs.SetRecommendedPref(pref_name, recommended_pref_value.CreateDeepCopy());
+  prefs.SetRecommendedPref(pref_name, recommended_pref_value.Clone());
   Mock::VerifyAndClearExpectations(&obs);
   Mock::VerifyAndClearExpectations(&obs2);
 
@@ -152,7 +181,7 @@ TEST(PrefServiceTest, GetValueChangedType) {
   prefs.registry()->RegisterIntegerPref(kPrefName, kTestValue);
 
   // Check falling back to a recommended value.
-  prefs.SetUserPref(kPrefName, std::make_unique<base::Value>("not an integer"));
+  prefs.SetUserPref(kPrefName, base::Value("not an integer"));
   const PrefService::Preference* pref = prefs.FindPreference(kPrefName);
   ASSERT_TRUE(pref);
   const base::Value* value = pref->GetValue();
@@ -185,7 +214,7 @@ TEST(PrefServiceTest, GetValueAndGetRecommendedValue) {
   ASSERT_FALSE(value);
 
   // Set a user-set value.
-  prefs.SetUserPref(kPrefName, std::make_unique<base::Value>(kUserValue));
+  prefs.SetUserPref(kPrefName, base::Value(kUserValue));
 
   // Check that GetValue() returns the user-set value.
   value = pref->GetValue();
@@ -199,8 +228,7 @@ TEST(PrefServiceTest, GetValueAndGetRecommendedValue) {
   ASSERT_FALSE(value);
 
   // Set a recommended value.
-  prefs.SetRecommendedPref(kPrefName,
-                           std::make_unique<base::Value>(kRecommendedValue));
+  prefs.SetRecommendedPref(kPrefName, base::Value(kRecommendedValue));
 
   // Check that GetValue() returns the user-set value.
   value = pref->GetValue();
@@ -251,8 +279,8 @@ TEST(PrefServiceTest, SetTimeValue_NullTime) {
   TestingPrefServiceSimple prefs;
 
   // Register a non-null time as the default.
-  const base::Time default_time = base::Time::FromDeltaSinceWindowsEpoch(
-      base::TimeDelta::FromMicroseconds(12345));
+  const base::Time default_time =
+      base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(12345));
   prefs.registry()->RegisterTimePref(kPrefName, default_time);
   EXPECT_FALSE(prefs.GetTime(kPrefName).is_null());
 
@@ -279,8 +307,7 @@ TEST(PrefServiceTest, SetTimeDeltaValue_ZeroTimeDelta) {
   TestingPrefServiceSimple prefs;
 
   // Register a non-zero time delta as the default.
-  const base::TimeDelta default_delta =
-      base::TimeDelta::FromMicroseconds(12345);
+  const base::TimeDelta default_delta = base::Microseconds(12345);
   prefs.registry()->RegisterTimeDeltaPref(kPrefName, default_delta);
   EXPECT_FALSE(prefs.GetTimeDelta(kPrefName).is_zero());
 
@@ -294,25 +321,25 @@ TEST(PrefServiceTest, SetTimeDeltaValue_ZeroTimeDelta) {
 // values to it.
 class WriteFlagChecker : public TestingPrefStore {
  public:
-  WriteFlagChecker() {}
+  WriteFlagChecker() = default;
 
-  void ReportValueChanged(const std::string& key, uint32_t flags) override {
+  void ReportValueChanged(std::string_view key, uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
-  void SetValue(const std::string& key,
-                std::unique_ptr<base::Value> value,
+  void SetValue(std::string_view key,
+                base::Value value,
                 uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
-  void SetValueSilently(const std::string& key,
-                        std::unique_ptr<base::Value> value,
+  void SetValueSilently(std::string_view key,
+                        base::Value value,
                         uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
-  void RemoveValue(const std::string& key, uint32_t flags) override {
+  void RemoveValue(std::string_view key, uint32_t flags) override {
     SetLastWriteFlags(flags);
   }
 
@@ -327,7 +354,7 @@ class WriteFlagChecker : public TestingPrefStore {
   bool last_write_flags_set() { return last_write_flags_set_; }
 
  private:
-  ~WriteFlagChecker() override {}
+  ~WriteFlagChecker() override = default;
 
   void SetLastWriteFlags(uint32_t flags) {
     CHECK(!last_write_flags_set_);
@@ -371,15 +398,14 @@ TEST(PrefServiceTest, WriteablePrefStoreFlags) {
        PrefRegistry::LOSSY_PREF | kCustomRegistrationFlag,
        WriteablePrefStore::LOSSY_PREF_WRITE_FLAG}};
 
-  for (size_t i = 0; i < base::size(kRegistrationToWriteFlags); ++i) {
-    RegistrationToWriteFlags entry = kRegistrationToWriteFlags[i];
+  for (const RegistrationToWriteFlags& entry : kRegistrationToWriteFlags) {
     registry->RegisterDictionaryPref(entry.pref_name,
                                      entry.registration_flags);
 
     SCOPED_TRACE("Currently testing pref with name: " +
                  std::string(entry.pref_name));
 
-    prefs->GetMutableUserPref(entry.pref_name, base::Value::Type::DICTIONARY);
+    prefs->GetMutableUserPref(entry.pref_name, base::Value::Type::DICT);
     EXPECT_TRUE(flag_checker->last_write_flags_set());
     EXPECT_EQ(entry.write_flags, flag_checker->GetLastFlagsAndClear());
 
@@ -392,7 +418,7 @@ TEST(PrefServiceTest, WriteablePrefStoreFlags) {
     EXPECT_EQ(entry.write_flags, flag_checker->GetLastFlagsAndClear());
 
     prefs->SetUserPrefValue(entry.pref_name,
-                            base::Value(base::Value::Type::DICTIONARY));
+                            base::Value(base::Value::Type::DICT));
     EXPECT_TRUE(flag_checker->last_write_flags_set());
     EXPECT_EQ(entry.write_flags, flag_checker->GetLastFlagsAndClear());
   }
@@ -446,8 +472,9 @@ TEST_F(PrefServiceSetValueTest, SetDictionaryValue) {
   prefs_.RemoveUserPref(kName);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::DictionaryValue new_value;
-  new_value.SetString(kName, kValue);
+  base::DictValue new_value_dict;
+  new_value_dict.Set(kName, kValue);
+  base::Value new_value(std::move(new_value_dict));
   observer_.Expect(kName, &new_value);
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
@@ -456,7 +483,7 @@ TEST_F(PrefServiceSetValueTest, SetDictionaryValue) {
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::DictionaryValue empty;
+  base::Value empty((base::DictValue()));
   observer_.Expect(kName, &empty);
   prefs_.Set(kName, empty);
   Mock::VerifyAndClearExpectations(&observer_);
@@ -472,8 +499,9 @@ TEST_F(PrefServiceSetValueTest, SetListValue) {
   prefs_.RemoveUserPref(kName);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::ListValue new_value;
-  new_value.AppendString(kValue);
+  base::ListValue new_value_list;
+  new_value_list.Append(kValue);
+  base::Value new_value(std::move(new_value_list));
   observer_.Expect(kName, &new_value);
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
@@ -482,136 +510,63 @@ TEST_F(PrefServiceSetValueTest, SetListValue) {
   prefs_.Set(kName, new_value);
   Mock::VerifyAndClearExpectations(&observer_);
 
-  base::ListValue empty;
+  base::Value empty((base::ListValue()));
   observer_.Expect(kName, &empty);
   prefs_.Set(kName, empty);
   Mock::VerifyAndClearExpectations(&observer_);
 }
 
-class PrefValueStoreChangeTest : public testing::Test {
- protected:
-  PrefValueStoreChangeTest()
-      : user_pref_store_(base::MakeRefCounted<TestingPrefStore>()),
-        pref_registry_(base::MakeRefCounted<PrefRegistrySimple>()) {}
+// TODO(crbug.com/441781730): Failing on CrOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_GetValueWithTypeConversion DISABLED_GetValueWithTypeConversion
+#else
+#define MAYBE_GetValueWithTypeConversion GetValueWithTypeConversion
+#endif
+TEST(PrefServiceTest, MAYBE_GetValueWithTypeConversion) {
+  TestingPrefServiceSimple prefs;
+  const char kTimePref[] = "time_pref";
+  const char kInt64Pref[] = "int64_pref";
+  prefs.registry()->RegisterTimePref(kTimePref, base::Time());
+  prefs.registry()->RegisterInt64Pref(kInt64Pref, 0);
 
-  ~PrefValueStoreChangeTest() override = default;
+  // Good cases:
+  prefs.SetTime(kTimePref, base::Time::Now());
+  prefs.GetTime(kTimePref);
+  prefs.SetInt64(kInt64Pref, 123);
+  prefs.GetInt64(kInt64Pref);
 
-  void SetUp() override {
-    auto pref_notifier = std::make_unique<PrefNotifierImpl>();
-    auto pref_value_store = std::make_unique<PrefValueStore>(
-        nullptr /* managed_prefs */, nullptr /* supervised_user_prefs */,
-        nullptr /* extension_prefs */, new TestingPrefStore(),
-        user_pref_store_.get(), nullptr /* recommended_prefs */,
-        pref_registry_->defaults().get(), pref_notifier.get());
-    pref_service_ = std::make_unique<PrefService>(
-        std::move(pref_notifier), std::move(pref_value_store), user_pref_store_,
-        pref_registry_, base::DoNothing(), false);
-    pref_registry_->RegisterIntegerPref(kManagedPref, 1);
-    pref_registry_->RegisterIntegerPref(kRecommendedPref, 2);
-    pref_registry_->RegisterIntegerPref(kSupervisedPref, 3);
-  }
-
-  std::unique_ptr<PrefService> pref_service_;
-  scoped_refptr<TestingPrefStore> user_pref_store_;
-  scoped_refptr<PrefRegistrySimple> pref_registry_;
-};
-
-// Check that value from the new PrefValueStore will be correctly retrieved.
-TEST_F(PrefValueStoreChangeTest, ChangePrefValueStore) {
-  const PrefService::Preference* preference =
-      pref_service_->FindPreference(kManagedPref);
-  EXPECT_TRUE(preference->IsDefaultValue());
-  EXPECT_EQ(base::Value(1), *(preference->GetValue()));
-  const PrefService::Preference* supervised =
-      pref_service_->FindPreference(kSupervisedPref);
-  EXPECT_TRUE(supervised->IsDefaultValue());
-  EXPECT_EQ(base::Value(3), *(supervised->GetValue()));
-  const PrefService::Preference* recommended =
-      pref_service_->FindPreference(kRecommendedPref);
-  EXPECT_TRUE(recommended->IsDefaultValue());
-  EXPECT_EQ(base::Value(2), *(recommended->GetValue()));
-
-  user_pref_store_->SetInteger(kManagedPref, 10);
-  EXPECT_TRUE(preference->IsUserControlled());
-  ASSERT_EQ(base::Value(10), *(preference->GetValue()));
-
-  scoped_refptr<TestingPrefStore> managed_pref_store =
-      base::MakeRefCounted<TestingPrefStore>();
-  pref_service_->ChangePrefValueStore(
-      managed_pref_store.get(), nullptr /* supervised_user_prefs */,
-      nullptr /* extension_prefs */, nullptr /* recommended_prefs */);
-  EXPECT_TRUE(preference->IsUserControlled());
-  ASSERT_EQ(base::Value(10), *(preference->GetValue()));
-
-  // Test setting a managed pref after overriding the managed PrefStore.
-  managed_pref_store->SetInteger(kManagedPref, 20);
-  EXPECT_TRUE(preference->IsManaged());
-  ASSERT_EQ(base::Value(20), *(preference->GetValue()));
-
-  // Test overriding the supervised and recommended PrefStore with already set
-  // prefs.
-  scoped_refptr<TestingPrefStore> supervised_pref_store =
-      base::MakeRefCounted<TestingPrefStore>();
-  scoped_refptr<TestingPrefStore> recommened_pref_store =
-      base::MakeRefCounted<TestingPrefStore>();
-  supervised_pref_store->SetInteger(kManagedPref, 30);
-  supervised_pref_store->SetInteger(kSupervisedPref, 31);
-  recommened_pref_store->SetInteger(kManagedPref, 40);
-  recommened_pref_store->SetInteger(kRecommendedPref, 41);
-  pref_service_->ChangePrefValueStore(
-      nullptr /* managed_prefs */, supervised_pref_store.get(),
-      nullptr /* extension_prefs */, recommened_pref_store.get());
-  EXPECT_TRUE(preference->IsManaged());
-  ASSERT_EQ(base::Value(20), *(preference->GetValue()));
-  EXPECT_TRUE(supervised->IsManagedByCustodian());
-  EXPECT_EQ(base::Value(31), *(supervised->GetValue()));
-  EXPECT_TRUE(recommended->IsRecommended());
-  EXPECT_EQ(base::Value(41), *(recommended->GetValue()));
+  // Bad cases:
+  EXPECT_CHECK_DEATH(prefs.SetInt64(kTimePref, 123));
+  EXPECT_CHECK_DEATH(prefs.GetInt64(kTimePref));
+  EXPECT_CHECK_DEATH(prefs.SetTime(kInt64Pref, base::Time::Now()));
+  EXPECT_CHECK_DEATH(prefs.GetTime(kInt64Pref));
 }
 
-// Tests that PrefChangeRegistrar works after PrefValueStore is changed.
-TEST_F(PrefValueStoreChangeTest, PrefChangeRegistrar) {
-  MockPrefChangeCallback obs(pref_service_.get());
-  PrefChangeRegistrar registrar;
-  registrar.Init(pref_service_.get());
-  registrar.Add(kManagedPref, obs.GetCallback());
-  registrar.Add(kSupervisedPref, obs.GetCallback());
-  registrar.Add(kRecommendedPref, obs.GetCallback());
+TEST(PrefServiceTest, RegisterSetAndClearLanguageTagPref) {
+  TestingPrefServiceSimple prefs;
+  constexpr char kLanguageTagPref[] = "language_tag_pref";
 
-  base::Value expected_value(10);
-  obs.Expect(kManagedPref, &expected_value);
-  user_pref_store_->SetInteger(kManagedPref, 10);
-  Mock::VerifyAndClearExpectations(&obs);
-  expected_value = base::Value(11);
-  obs.Expect(kRecommendedPref, &expected_value);
-  user_pref_store_->SetInteger(kRecommendedPref, 11);
-  Mock::VerifyAndClearExpectations(&obs);
+  prefs.registry()->RegisterLanguageTagPref(kLanguageTagPref,
+                                            GetKnownLanguageTag("en"));
+  EXPECT_EQ(prefs.GetLanguageTag(kLanguageTagPref), GetKnownLanguageTag("en"));
 
-  // Test overriding the managed and supervised PrefStore with already set
-  // prefs.
-  scoped_refptr<TestingPrefStore> managed_pref_store =
-      base::MakeRefCounted<TestingPrefStore>();
-  scoped_refptr<TestingPrefStore> supervised_pref_store =
-      base::MakeRefCounted<TestingPrefStore>();
-  // Update |kManagedPref| before changing the PrefValueStore, the
-  // PrefChangeRegistrar should get notified on |kManagedPref| as its value
-  // changes.
-  managed_pref_store->SetInteger(kManagedPref, 20);
-  // Due to store precedence, the value of |kRecommendedPref| will not be
-  // changed so PrefChangeRegistrar will not be notified.
-  managed_pref_store->SetInteger(kRecommendedPref, 11);
-  supervised_pref_store->SetInteger(kManagedPref, 30);
-  supervised_pref_store->SetInteger(kRecommendedPref, 21);
-  expected_value = base::Value(20);
-  obs.Expect(kManagedPref, &expected_value);
-  pref_service_->ChangePrefValueStore(
-      managed_pref_store.get(), supervised_pref_store.get(),
-      nullptr /* extension_prefs */, nullptr /* recommended_prefs */);
-  Mock::VerifyAndClearExpectations(&obs);
+  prefs.SetLanguageTag(kLanguageTagPref, GetKnownLanguageTag("fr"));
+  EXPECT_EQ(prefs.GetLanguageTag(kLanguageTagPref), GetKnownLanguageTag("fr"));
 
-  // Update a pref value after PrefValueStore change, it should also work.
-  expected_value = base::Value(31);
-  obs.Expect(kSupervisedPref, &expected_value);
-  supervised_pref_store->SetInteger(kSupervisedPref, 31);
-  Mock::VerifyAndClearExpectations(&obs);
+  prefs.ClearPref(kLanguageTagPref);
+  EXPECT_EQ(prefs.GetLanguageTag(kLanguageTagPref), GetKnownLanguageTag("en"));
+}
+
+TEST(PrefServiceTest, GetLanguageTagFallback) {
+  TestingPrefServiceSimple prefs;
+  constexpr char kIntPref[] = "int_pref";
+  constexpr char kStringPref[] = "string_pref";
+
+  // Fallback to "und" when pref path holds an unexpected value type.
+  prefs.registry()->RegisterIntegerPref(kIntPref, 42);
+  EXPECT_EQ(prefs.GetLanguageTag(kIntPref), GetKnownLanguageTag("und"));
+
+  // Fallback to "und" when pref path holds an invalid language tag string.
+  prefs.registry()->RegisterStringPref(kStringPref, "invalid---tag");
+  EXPECT_EQ(prefs.GetLanguageTag(kStringPref), GetKnownLanguageTag("und"));
 }

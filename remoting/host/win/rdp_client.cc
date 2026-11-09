@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,24 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/single_thread_task_runner.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "remoting/base/typed_buffer.h"
-#include "remoting/host/screen_resolution.h"
+#include "remoting/base/util.h"
+#include "remoting/host/base/screen_resolution.h"
 #include "remoting/host/win/rdp_client_window.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 
 namespace remoting {
 
@@ -28,21 +31,85 @@ namespace {
 
 // 127.0.0.1 is explicitly blocked by the RDP ActiveX control, so we use
 // 127.0.0.2 instead.
-const unsigned char kRdpLoopbackAddress[] = { 127, 0, 0, 2 };
+const unsigned char kRdpLoopbackAddress[] = {127, 0, 0, 2};
+
+// The minimum effective screen dimensions supported by Windows are 800x600.
+constexpr int kMinRdpScreenWidth = 800;
+constexpr int kMinRdpScreenHeight = 600;
+
+// Limit the RDP virtual display to 4K UHD (3840x2160 in landscape or
+// 2160x3840 in portrait). Higher resolutions (e.g., 5K/6K from high-DPI
+// clients) can cause Windows' indirect display driver (rdpidd.dll) to crash
+// with protocol error 0x112f.
+constexpr int kMaxRdpScreenWidth = 3840;
+constexpr int kMaxRdpScreenHeight = 2160;
+
+// Default dots per inch used by RDP is 96 DPI (100% scale, the minimum scale
+// factor supported by the RDP ActiveX control's UpdateSessionDisplaySettings()
+// API).
+constexpr int kDefaultRdpDpi = 96;
 
 }  // namespace
+
+webrtc::DesktopSize GetBoundedRdpDesktopSize(int width, int height) {
+  if (width <= 0 || height <= 0) {
+    return webrtc::DesktopSize(kMinRdpScreenWidth, kMinRdpScreenHeight);
+  }
+
+  const webrtc::DesktopSize max_size =
+      width >= height
+          ? webrtc::DesktopSize(kMaxRdpScreenWidth, kMaxRdpScreenHeight)
+          : webrtc::DesktopSize(kMaxRdpScreenHeight, kMaxRdpScreenWidth);
+  webrtc::DesktopSize bounded_size =
+      ScaleSizeToFit(webrtc::DesktopSize(width, height), max_size);
+
+  // Ensure dimensions meet Windows' minimum effective desktop size (800x600)
+  // and align to multiples of 2 (the RDP ActiveX control requires width to be
+  // even, and I420 video codecs prefer even dimensions).
+  return webrtc::DesktopSize(
+      RoundToTwosMultiple(std::max(bounded_size.width(), kMinRdpScreenWidth)),
+      RoundToTwosMultiple(
+          std::max(bounded_size.height(), kMinRdpScreenHeight)));
+}
+
+ScreenResolution GetBoundedRdpResolution(const ScreenResolution& resolution) {
+  // The RDP ActiveX control (IMsRdpClient8::UpdateSessionDisplaySettings) only
+  // supports a single display with a uniform scale factor, and
+  // RdpClientWindow::UpdateDesktopResolution() requires dpi.x() == dpi.y().
+  int dpi = std::max(resolution.dpi().x(), kDefaultRdpDpi);
+
+  const int width = resolution.dimensions().width();
+  const int height = resolution.dimensions().height();
+  const int max_width =
+      width >= height ? kMaxRdpScreenWidth : kMaxRdpScreenHeight;
+  const int max_height =
+      width >= height ? kMaxRdpScreenHeight : kMaxRdpScreenWidth;
+  if (width > max_width || height > max_height) {
+    // Scale DPI down by the same factor used to fit `dimensions` into the 4K
+    // limit so the effective logical desktop size is preserved, clamped to the
+    // minimum 96 DPI (100% scale) supported by the RDP ActiveX control.
+    int scaled_dpi = int64_t{max_width} * height <= int64_t{max_height} * width
+                         ? MulDiv(dpi, max_width, width)
+                         : MulDiv(dpi, max_height, height);
+    dpi = std::max(kDefaultRdpDpi, scaled_dpi);
+  }
+
+  return ScreenResolution(GetBoundedRdpDesktopSize(width, height),
+                          webrtc::DesktopVector(dpi, dpi));
+}
 
 // The core of RdpClient is ref-counted since it services calls and notifies
 // events on the caller task runner, but runs the ActiveX control on the UI
 // task runner.
-class RdpClient::Core
-    : public base::RefCountedThreadSafe<Core>,
-      public RdpClientWindow::EventHandler {
+class RdpClient::Core : public base::RefCountedThreadSafe<Core>,
+                        public RdpClientWindow::EventHandler {
  public:
-  Core(
-      scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-      RdpClient::EventHandler* event_handler);
+  Core(scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
+       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+       RdpClient::EventHandler* event_handler);
+
+  Core(const Core&) = delete;
+  Core& operator=(const Core&) = delete;
 
   // Initiates a loopback RDP connection.
   void Connect(const ScreenResolution& resolution,
@@ -79,15 +146,13 @@ class RdpClient::Core
 
   // Event handler receiving notification about connection state. The pointer is
   // cleared when Disconnect() methods is called, stopping any further updates.
-  RdpClient::EventHandler* event_handler_;
+  raw_ptr<RdpClient::EventHandler> event_handler_;
 
   // Hosts the RDP ActiveX control.
   std::unique_ptr<RdpClientWindow> rdp_client_window_;
 
   // A self-reference to keep the object alive during connection shutdown.
   scoped_refptr<Core> self_;
-
-  DISALLOW_COPY_AND_ASSIGN(Core);
 };
 
 RdpClient::RdpClient(
@@ -127,8 +192,7 @@ RdpClient::Core::Core(
     RdpClient::EventHandler* event_handler)
     : caller_task_runner_(caller_task_runner),
       ui_task_runner_(ui_task_runner),
-      event_handler_(event_handler) {
-}
+      event_handler_(event_handler) {}
 
 void RdpClient::Core::Connect(const ScreenResolution& resolution,
                               const std::string& terminal_id,
@@ -230,8 +294,9 @@ void RdpClient::Core::NotifyConnected() {
     return;
   }
 
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnRdpConnected();
+  }
 }
 
 void RdpClient::Core::NotifyClosed() {

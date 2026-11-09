@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include <memory>
 #include <set>
 
-#include "base/callback.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -47,32 +47,16 @@ QUIRKS_EXPORT std::string IdToFileName(int64_t product_id);
 // blocking pool, etc), and owns clients and manages their life cycles.
 class QUIRKS_EXPORT QuirksManager {
  public:
-  // Delegate class, so implementation can access browser functionality.
-  class Delegate {
-   public:
-    virtual ~Delegate() = default;
-
-    // Provides Chrome API key for quirks server.
-    virtual std::string GetApiKey() const = 0;
-
-    // Returns the path to the writable display profile directory.
-    // This directory must already exist.
-    virtual base::FilePath GetDisplayProfileDirectory() const = 0;
-
-    // Whether downloads are allowed by enterprise device policy.
-    virtual bool DevicePolicyEnabled() const = 0;
-
-   private:
-    DISALLOW_ASSIGN(Delegate);
-  };
-
   static void Initialize(
-      std::unique_ptr<Delegate> delegate,
+      std::string api_key,
       PrefService* local_state,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
   static void Shutdown();
   static QuirksManager* Get();
   static bool HasInstance();
+
+  QuirksManager(const QuirksManager&) = delete;
+  QuirksManager& operator=(const QuirksManager&) = delete;
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -86,11 +70,15 @@ class QUIRKS_EXPORT QuirksManager {
 
   void ClientFinished(QuirksClient* client);
 
-  Delegate* delegate() { return delegate_.get(); }
   base::TaskRunner* task_runner() { return task_runner_.get(); }
   network::mojom::URLLoaderFactory* url_loader_factory() {
     return url_loader_factory_.get();
   }
+  const base::FilePath& display_profile_path() const {
+    return display_profile_path_;
+  }
+
+  void SetEnabled(bool enabled);
 
  protected:
   friend class QuirksBrowserTest;
@@ -102,7 +90,7 @@ class QUIRKS_EXPORT QuirksManager {
 
  private:
   QuirksManager(
-      std::unique_ptr<Delegate> delegate,
+      std::string api_key,
       PrefService* local_state,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
   ~QuirksManager();
@@ -129,16 +117,21 @@ class QUIRKS_EXPORT QuirksManager {
   // Ensure this class runs on a single thread.
   base::ThreadChecker thread_checker_;
 
+  // Path to the display_profiles directory.
+  const base::FilePath display_profile_path_;
+
+  // Google API key.
+  const std::string api_key_;
+
   // These objects provide resources from the browser.
-  std::unique_ptr<Delegate> delegate_;  // Impl runs from chrome/browser.
   scoped_refptr<base::TaskRunner> task_runner_;
-  PrefService* local_state_;  // For local prefs.
+  raw_ptr<PrefService> local_state_;  // For local prefs.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+
+  bool enabled_ = true;
 
   // Factory for callbacks.
   base::WeakPtrFactory<QuirksManager> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(QuirksManager);
 };
 
 }  // namespace quirks

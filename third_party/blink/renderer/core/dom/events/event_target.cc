@@ -32,22 +32,32 @@
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/format_macros.h"
-#include "third_party/blink/public/web/web_settings.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/time/time.h"
 #include "third_party/blink/renderer/bindings/core/v8/js_based_event_listener.h"
 #include "third_party/blink/renderer/bindings/core/v8/js_event_listener.h"
-#include "third_party/blink/renderer/bindings/core/v8/source_location.h"
+#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_add_event_listener_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_observable_event_listener_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_addeventlisteneroptions_boolean.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_boolean_eventlisteneroptions.h"
 #include "third_party/blink/renderer/core/dom/abort_signal.h"
+#include "third_party/blink/renderer/core/dom/abort_signal_registry.h"
 #include "third_party/blink/renderer/core/dom/events/add_event_listener_options_resolved.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
 #include "third_party/blink/renderer/core/dom/events/event_target_impl.h"
+#include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
+#include "third_party/blink/renderer/core/dom/observable.h"
+#include "third_party/blink/renderer/core/dom/subscriber.h"
 #include "third_party/blink/renderer/core/editing/editor.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/events/event_util.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
+#include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/performance_monitor.h"
@@ -56,13 +66,21 @@
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/pointer_type_names.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/core/scheduler/task_attribution_util.h"
+#include "third_party/blink/renderer/core/timing/event_timing.h"
+#include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
+#include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/bindings/v8_dom_activity_logger.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -104,11 +122,6 @@ bool IsScrollBlockingEvent(const AtomicString& event_type) {
          IsWheelScrollBlockingEvent(event_type);
 }
 
-bool IsInstrumentedForAsyncStack(const AtomicString& event_type) {
-  return event_type == event_type_names::kLoad ||
-         event_type == event_type_names::kError;
-}
-
 base::TimeDelta BlockedEventsWarningThreshold(ExecutionContext* context,
                                               const Event& event) {
   if (!event.cancelable())
@@ -128,12 +141,11 @@ void ReportBlockedEvent(EventTarget& target,
   if (!listener)
     return;
 
-  String message_text = String::Format(
-      "Handling of '%s' input event was delayed for %" PRId64
-      " ms due to main thread being busy. "
-      "Consider marking event handler as 'passive' to make the page more "
-      "responsive.",
-      event.type().GetString().Utf8().c_str(), delayed.InMilliseconds());
+  String message_text = Format(
+      "Handling of '{}' input event was delayed for {} ms due to main thread "
+      "being busy. Consider marking event handler as 'passive' to make the "
+      "page more responsive.",
+      event.type(), delayed.InMilliseconds());
   PerformanceMonitor::ReportGenericViolation(
       target.GetExecutionContext(), PerformanceMonitor::kBlockedEvent,
       message_text, delayed, listener->GetSourceLocation(target));
@@ -182,7 +194,8 @@ void CountFiringEventListeners(const Event& event,
   }
 
   struct CountedEvent {
-    const AtomicString& event_type;
+    // RAW_PTR_EXCLUSION: #global-scope
+    RAW_PTR_EXCLUSION const AtomicString& event_type;
     const WebFeature feature;
   };
   static const CountedEvent counted_events[] = {
@@ -209,10 +222,177 @@ void CountFiringEventListeners(const Event& event,
   }
 }
 
-void RegisterWithScheduler(ExecutionContext* execution_context,
-                           const AtomicString& event_type) {
-  if (!execution_context || !execution_context->GetScheduler())
+// See documentation for `ObservableSubscribeDelegate` below.
+class ObservableEventListener final : public NativeEventListener {
+ public:
+  ObservableEventListener(Subscriber*,
+                          ScriptState*,
+                          const AtomicString&,
+                          EventTarget*,
+                          const ObservableEventListenerOptions*);
+
+  // NativeEventListener overrides:
+  void Invoke(ExecutionContext*, Event*) final;
+
+  void Trace(Visitor*) const override;
+
+ private:
+  // The `Subscriber` that `this` forwards events to when `Invoke()` is called.
+  const Member<Subscriber> subscriber_;
+  // This is the `ScriptState` associated with the subscription. We store it
+  // here so that asynchronously later, when `Invoke()` is called (i.e., when
+  // the `EventTarget` that `this` is listening to starts firing events), we can
+  // transform the events into `ScriptValue` objects (which requires a
+  // `ScriptState`) and forward them to `subscriber_` above.
+  const Member<ScriptState> script_state_;
+};
+
+ObservableEventListener::ObservableEventListener(
+    Subscriber* subscriber,
+    ScriptState* script_state,
+    const AtomicString& event_type,
+    EventTarget* event_target,
+    const ObservableEventListenerOptions* options)
+    : subscriber_(subscriber), script_state_(script_state) {
+  // `event_target_` is non-null here. If the event target were null (i.e.,
+  // garbage collected before this gets called), then this constructor would not
+  // be invoked with it.
+  CHECK(event_target);
+
+  // `this` only gets constructed if `subscriber_` is active. If the subscriber
+  // becomes inactive immediately upon subscription (i.e., an already-aborted
+  // signal is passed into `Observable::subscribe()`, then `this` does not even
+  // get constructed, since we must not add an event listener to `event_target`
+  // in that case.
+  CHECK(subscriber_->active());
+
+  AddEventListenerOptionsResolved options_resolved;
+  if (options->hasCapture()) {
+    options_resolved.SetCapture(options->capture());
+  }
+  if (options->hasPassive()) {
+    options_resolved.SetPassive(options->passive());
+  }
+  options_resolved.SetSignal(subscriber->signal());
+
+  event_target->addEventListener(event_type, this, options_resolved);
+}
+
+void ObservableEventListener::Invoke(ExecutionContext* execution_context,
+                                     Event* event) {
+  // The `script_state_` will always be valid here, because
+  // `EventTarget::FireEventListeners()` early-returns if its `ExecutionContext`
+  // is detached.
+  DCHECK(script_state_->ContextIsValid());
+
+  // Some events are bound to the `DOMWrapperWorld` they were created in (see
+  // `Event::CanBeDispatchedInWorld()`), and must not be surfaced to script in
+  // any other world. Ordinary event listeners enforce this in
+  // `JSBasedEventListener::Invoke()`; since `this` is a `NativeEventListener`,
+  // it does not go through that path and must perform the same check itself.
+  //
+  // This must happen before `ScriptValue::From()` below: creating the wrapper
+  // in the subscriber's world is itself the leak, not merely invoking the
+  // subscriber. Note that this filters in both directions, since
+  // `script_state_` is the *subscriber's* script state.
+  if (!event->CanBeDispatchedInWorld(script_state_->World())) {
     return;
+  }
+
+  ScriptState::Scope scope(script_state_);
+  ScriptValue script_value = ScriptValue::From(script_state_, event);
+
+  subscriber_->next(script_value);
+}
+
+void ObservableEventListener::Trace(Visitor* visitor) const {
+  visitor->Trace(subscriber_);
+  visitor->Trace(script_state_);
+
+  NativeEventListener::Trace(visitor);
+}
+
+// This is the synthetic subscribe callback that we construct `Observable`s with
+// that are created by `EventTarget#when()`. `OnSubscribe()` adds a brand new
+// `ObservableEventListener` as a new event listener for events named
+// `event_type_`. When events are received, they are propagated directly to
+// `Subscriber`.
+class ObservableSubscribeDelegate final : public Observable::SubscribeDelegate {
+ public:
+  ObservableSubscribeDelegate(EventTarget*,
+                              const AtomicString&,
+                              const ObservableEventListenerOptions*);
+
+  // Observable::SubscribeDelegate overrides:
+  void OnSubscribe(Subscriber*, ScriptState*) final;
+
+  void Trace(Visitor*) const override;
+
+ private:
+  // This is the event target for which we will vend per-subscriber event
+  // listeners. The typical flow here looks like this:
+  //   1.) `EventTarget::when()` is called, returning an observable whose
+  //       subscribe callback is `this` (instead of a JS-provided v8
+  //       callback).
+  //   2.) `Observable::subscribe()` is called by JS, and thus `OnSubscribe()`
+  //       is invoked on `this`.
+  //   3.) `OnSubscribe()` creates a new `ObservableEventListener` just for
+  //       the new subscriber, listening for events named `event_type_` from
+  //       `event_target_`.
+  //   4.) The `ObservableEventListener` keeps a pointer to the subscriber,
+  //       and when events are dispatched to the listener, they are forwarded
+  //       to `Subscriber::next()`.
+  const WeakMember<EventTarget> event_target_;
+  AtomicString event_type_;
+  const Member<const ObservableEventListenerOptions> options_;
+};
+
+ObservableSubscribeDelegate::ObservableSubscribeDelegate(
+    EventTarget* event_target,
+    const AtomicString& event_type,
+    const ObservableEventListenerOptions* options)
+    : event_target_(event_target), event_type_(event_type), options_(options) {}
+
+void ObservableSubscribeDelegate::OnSubscribe(Subscriber* subscriber,
+                                              ScriptState* script_state) {
+  // This should have already been checked by `Observable::subscribe()` before
+  // getting here.
+  CHECK(script_state->ContextIsValid());
+
+  // The weak `event_target_` could be null at this point, if the target has
+  // been garbage collected by the time `this`'s associated Observable has been
+  // subscribed to. We early return in this case, as to avoid setting up the
+  // entire event listener / abort signal mechanism.
+  //
+  // "If event target is null, abort these steps."
+  if (!event_target_) {
+    return;
+  }
+
+  // If the subscriber is already aborted, early return because there is no use
+  // in adding the event listener, since it will never be able to removed again.
+  // It is possible for the subscriber to be aborted at this point if
+  // `Observable#subscribe()` is called with an already-aborted signal in
+  // `SubscribeOptions`.
+  //
+  // "If subscriber's subscription controller's signal is aborted, abort these
+  // steps."
+  if (subscriber->signal()->aborted()) {
+    return;
+  }
+
+  // This freshly-created event listener immediately gets owned by
+  // `event_target_`'s event listener vector. `this` does not need to hold onto
+  // any of the event listeners created here.
+  MakeGarbageCollected<ObservableEventListener>(
+      subscriber, script_state, event_type_, event_target_, options_);
+}
+
+void ObservableSubscribeDelegate::Trace(Visitor* visitor) const {
+  visitor->Trace(event_target_);
+  visitor->Trace(options_);
+
+  Observable::SubscribeDelegate::Trace(visitor);
 }
 
 }  // namespace
@@ -253,9 +433,7 @@ ServiceWorker* EventTarget::ToServiceWorker() {
   return nullptr;
 }
 
-PortalHost* EventTarget::ToPortalHost() {
-  return nullptr;
-}
+void EventTarget::ResetEventQueueStatus(const AtomicString& event_type) {}
 
 // An instance of EventTargetImpl is returned because EventTarget
 // is an abstract class, and making it non-abstract is unfavorable
@@ -293,105 +471,77 @@ bool EventTarget::IsTopLevelNode() {
 void EventTarget::SetDefaultAddEventListenerOptions(
     const AtomicString& event_type,
     EventListener* event_listener,
-    AddEventListenerOptionsResolved* options) {
-  options->SetPassiveSpecified(options->hasPassive());
+    AddEventListenerOptionsResolved& options) {
+  options.SetPassiveSpecified(options.HasPassive());
 
   if (!IsScrollBlockingEvent(event_type)) {
-    if (!options->hasPassive())
-      options->setPassive(false);
+    if (!options.HasPassive()) {
+      options.SetPassive(false);
+    }
     return;
   }
 
   LocalDOMWindow* executing_window = ExecutingWindow();
   if (executing_window) {
-    if (options->hasPassive()) {
+    if (options.HasPassive()) {
       UseCounter::Count(executing_window->document(),
-                        options->passive()
+                        options.Passive()
                             ? WebFeature::kAddEventListenerPassiveTrue
                             : WebFeature::kAddEventListenerPassiveFalse);
     }
   }
 
   if (IsTouchScrollBlockingEvent(event_type)) {
-    if (!options->hasPassive() && IsTopLevelNode()) {
-      options->setPassive(true);
-      options->SetPassiveForcedForDocumentTarget(true);
+    if (!options.HasPassive() && IsTopLevelNode()) {
+      options.SetPassive(true);
+      options.SetPassiveForcedForDocumentTarget(true);
       return;
     }
   }
 
   if (IsWheelScrollBlockingEvent(event_type) && IsTopLevelNode()) {
-    if (options->hasPassive()) {
+    if (options.HasPassive()) {
       if (executing_window) {
         UseCounter::Count(
             executing_window->document(),
-            options->passive()
+            options.Passive()
                 ? WebFeature::kAddDocumentLevelPassiveTrueWheelEventListener
                 : WebFeature::kAddDocumentLevelPassiveFalseWheelEventListener);
       }
-    } else {  // !options->hasPassive()
+    } else {  // !options.HasPassive()
       if (executing_window) {
         UseCounter::Count(
             executing_window->document(),
             WebFeature::kAddDocumentLevelPassiveDefaultWheelEventListener);
       }
-      options->setPassive(true);
-      options->SetPassiveForcedForDocumentTarget(true);
+      options.SetPassive(true);
+      options.SetPassiveForcedForDocumentTarget(true);
       return;
     }
   }
 
-  // For mousewheel event listeners that have the target as the window and
-  // a bound function name of "ssc_wheel" treat and no passive value default
-  // passive to true. See crbug.com/501568.
-  if (event_type == event_type_names::kMousewheel && ToLocalDOMWindow() &&
-      event_listener && !options->hasPassive()) {
-    JSBasedEventListener* v8_listener =
-        DynamicTo<JSBasedEventListener>(event_listener);
-    if (!v8_listener)
-      return;
-    v8::Local<v8::Value> callback_object =
-        v8_listener->GetListenerObject(*this);
-    if (!callback_object.IsEmpty() && callback_object->IsFunction() &&
-        strcmp(
-            "ssc_wheel",
-            *v8::String::Utf8Value(
-                v8::Isolate::GetCurrent(),
-                v8::Local<v8::Function>::Cast(callback_object)->GetName())) ==
-            0) {
-      options->setPassive(true);
-      if (executing_window) {
-        UseCounter::Count(executing_window->document(),
-                          WebFeature::kSmoothScrollJSInterventionActivated);
-
-        executing_window->GetFrame()->Console().AddMessage(
-            MakeGarbageCollected<ConsoleMessage>(
-                mojom::ConsoleMessageSource::kIntervention,
-                mojom::ConsoleMessageLevel::kWarning,
-                "Registering mousewheel event as passive due to "
-                "smoothscroll.js usage. The smoothscroll.js library is "
-                "buggy, no longer necessary and degrades performance. See "
-                "https://www.chromestatus.com/feature/5749447073988608"));
-      }
-      return;
-    }
+  if (!options.HasPassive()) {
+    options.SetPassive(false);
   }
 
-  if (!options->hasPassive())
-    options->setPassive(false);
-
-  if (!options->passive() && !options->PassiveSpecified()) {
-    String message_text = String::Format(
-        "Added non-passive event listener to a scroll-blocking '%s' event. "
-        "Consider marking event handler as 'passive' to make the page more "
-        "responsive. See "
-        "https://www.chromestatus.com/feature/5745543795965952",
-        event_type.GetString().Utf8().c_str());
+  if (!options.Passive() && !options.PassiveSpecified()) {
+    String message_text = StrCat(
+        {"Added non-passive event listener to a scroll-blocking '", event_type,
+         "' event. Consider marking event handler as 'passive' to make the "
+         "page more responsive. See "
+         "https://www.chromestatus.com/feature/5745543795965952"});
 
     PerformanceMonitor::ReportGenericViolation(
         GetExecutionContext(), PerformanceMonitor::kDiscouragedAPIUse,
         message_text, base::TimeDelta(), nullptr);
   }
+}
+
+Observable* EventTarget::when(const AtomicString& event_type,
+                              const ObservableEventListenerOptions* options) {
+  return MakeGarbageCollected<Observable>(
+      GetExecutionContext(), MakeGarbageCollected<ObservableSubscribeDelegate>(
+                                 this, event_type, options));
 }
 
 bool EventTarget::addEventListener(const AtomicString& event_type,
@@ -414,38 +564,36 @@ bool EventTarget::addEventListener(
                               bool_or_options->GetAsBoolean());
     case V8UnionAddEventListenerOptionsOrBoolean::ContentType::
         kAddEventListenerOptions: {
-      auto* options_resolved =
-          MakeGarbageCollected<AddEventListenerOptionsResolved>();
+      AddEventListenerOptionsResolved options_resolved;
       AddEventListenerOptions* options =
           bool_or_options->GetAsAddEventListenerOptions();
       if (options->hasPassive())
-        options_resolved->setPassive(options->passive());
+        options_resolved.SetPassive(options->passive());
       if (options->hasOnce())
-        options_resolved->setOnce(options->once());
+        options_resolved.SetOnce(options->once());
       if (options->hasCapture())
-        options_resolved->setCapture(options->capture());
+        options_resolved.SetCapture(options->capture());
       if (options->hasSignal())
-        options_resolved->setSignal(options->signal());
+        options_resolved.SetSignal(options->signal());
       return addEventListener(event_type, event_listener, options_resolved);
     }
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool EventTarget::addEventListener(const AtomicString& event_type,
                                    EventListener* listener,
                                    bool use_capture) {
-  auto* options = MakeGarbageCollected<AddEventListenerOptionsResolved>();
-  options->setCapture(use_capture);
+  AddEventListenerOptionsResolved options;
+  options.SetCapture(use_capture);
   SetDefaultAddEventListenerOptions(event_type, listener, options);
   return AddEventListenerInternal(event_type, listener, options);
 }
 
 bool EventTarget::addEventListener(const AtomicString& event_type,
                                    EventListener* listener,
-                                   AddEventListenerOptionsResolved* options) {
+                                   AddEventListenerOptionsResolved& options) {
   SetDefaultAddEventListenerOptions(event_type, listener, options);
   return AddEventListenerInternal(event_type, listener, options);
 }
@@ -453,12 +601,44 @@ bool EventTarget::addEventListener(const AtomicString& event_type,
 bool EventTarget::AddEventListenerInternal(
     const AtomicString& event_type,
     EventListener* listener,
-    const AddEventListenerOptionsResolved* options) {
+    const AddEventListenerOptionsResolved& options) {
   if (!listener)
     return false;
 
-  if (options->hasSignal() && options->signal()->aborted())
+  if (options.HasSignal() && options.Signal()->aborted()) {
     return false;
+  }
+
+  // It doesn't make sense to add an event listener without an ExecutionContext
+  // and some code below here assumes we have one.
+  auto* execution_context = GetExecutionContext();
+  if (!execution_context)
+    return false;
+
+  // Unload/Beforeunload handlers are not allowed in fenced frames.
+  if (event_type == event_type_names::kUnload ||
+      event_type == event_type_names::kBeforeunload) {
+    if (const LocalDOMWindow* window = ExecutingWindow()) {
+      if (const LocalFrame* frame = window->GetFrame()) {
+        if (frame->IsInFencedFrameTree()) {
+          window->PrintErrorMessage(
+              "unload/beforeunload handlers are prohibited in fenced frames.");
+          return false;
+        }
+      }
+    }
+  }
+
+  // Consider `Permissions-Policy: unload` unless the deprecation trial is in
+  // effect.
+  if (event_type == event_type_names::kUnload &&
+      !RuntimeEnabledFeatures::DeprecateUnloadOptOutEnabled(
+          execution_context) &&
+      !execution_context->IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kUnload,
+          ReportOptions::kReportOnFailure)) {
+    return false;
+  }
 
   if (event_type == event_type_names::kTouchcancel ||
       event_type == event_type_names::kTouchend ||
@@ -466,7 +646,7 @@ bool EventTarget::AddEventListenerInternal(
       event_type == event_type_names::kTouchstart) {
     if (const LocalDOMWindow* executing_window = ExecutingWindow()) {
       if (const Document* document = executing_window->document()) {
-        document->CountUse(options->passive()
+        document->CountUse(options.Passive()
                                ? WebFeature::kPassiveTouchEventListener
                                : WebFeature::kNonPassiveTouchEventListener);
       }
@@ -474,32 +654,36 @@ bool EventTarget::AddEventListenerInternal(
   }
 
   V8DOMActivityLogger* activity_logger =
-      V8DOMActivityLogger::CurrentActivityLoggerIfIsolatedWorld();
+      V8DOMActivityLogger::CurrentActivityLoggerIfIsolatedWorld(
+          execution_context->GetIsolate());
   if (activity_logger) {
     Vector<String> argv;
     argv.push_back(ToNode() ? ToNode()->nodeName() : InterfaceName());
     argv.push_back(event_type);
-    activity_logger->LogEvent("blinkAddEventListener", argv.size(),
-                              argv.data());
+    activity_logger->LogEvent(execution_context, "blinkAddEventListener", argv);
   }
 
-  RegisteredEventListener registered_listener;
+  RegisteredEventListener* registered_listener = nullptr;
   bool added = EnsureEventTargetData().event_listener_map.Add(
       event_type, listener, options, &registered_listener);
   if (added) {
-    if (options->hasSignal()) {
-      // Instead of passing the entire |options| here, which could create a
-      // circular reference due to |options| holding a Member<AbortSignal>, just
-      // pass the |options->capture()| boolean, which is the only thing
-      // removeEventListener actually uses to find and remove the event
-      // listener.
-      options->signal()->AddAlgorithm(WTF::Bind(
-          [](EventTarget* event_target, const AtomicString& event_type,
-             const EventListener* listener, bool capture) {
-            event_target->removeEventListener(event_type, listener, capture);
-          },
-          WrapWeakPersistent(this), event_type, WrapWeakPersistent(listener),
-          options->capture()));
+    CHECK(registered_listener);
+    if (options.HasSignal()) {
+      // Capture only the boolean that removeEventListener uses instead of the
+      // temporary options object.
+      AbortSignal::AlgorithmHandle* handle =
+          options.Signal()->AddAlgorithm(BindOnce(
+              [](EventTarget* event_target, const AtomicString& event_type,
+                 const EventListener* listener, bool capture) {
+                if (event_target) {
+                  event_target->removeEventListener(event_type, listener,
+                                                    capture);
+                }
+              },
+              WrapWeakPersistent(this), event_type,
+              WrapWeakPersistent(listener), options.Capture()));
+      AbortSignalRegistry::From(*execution_context)
+          ->RegisterAbortAlgorithm(listener, handle);
       if (const LocalDOMWindow* executing_window = ExecutingWindow()) {
         if (const Document* document = executing_window->document()) {
           document->CountUse(WebFeature::kAddEventListenerWithAbortSignal);
@@ -507,12 +691,7 @@ bool EventTarget::AddEventListenerInternal(
       }
     }
 
-    AddedEventListener(event_type, registered_listener);
-    if (IsA<JSBasedEventListener>(listener) &&
-        IsInstrumentedForAsyncStack(event_type)) {
-      probe::AsyncTaskScheduled(GetExecutionContext(), event_type,
-                                listener->async_task_id());
-    }
+    AddedEventListener(event_type, *registered_listener);
   }
   return added;
 }
@@ -520,33 +699,48 @@ bool EventTarget::AddEventListenerInternal(
 void EventTarget::AddedEventListener(
     const AtomicString& event_type,
     RegisteredEventListener& registered_listener) {
-  if (const LocalDOMWindow* executing_window = ExecutingWindow()) {
-    if (Document* document = executing_window->document()) {
-      if (event_type == event_type_names::kAuxclick) {
-        UseCounter::Count(*document, WebFeature::kAuxclickAddListenerCount);
-      } else if (event_type == event_type_names::kAppinstalled) {
-        UseCounter::Count(*document, WebFeature::kAppInstalledEventAddListener);
-      } else if (event_util::IsPointerEventType(event_type)) {
-        UseCounter::Count(*document, WebFeature::kPointerEventAddListenerCount);
-      } else if (event_type == event_type_names::kSlotchange) {
-        UseCounter::Count(*document, WebFeature::kSlotChangeEventAddListener);
-      } else if (event_type == event_type_names::kBeforematch) {
-        UseCounter::Count(*document, WebFeature::kBeforematchHandlerRegistered);
-      }
+  const LocalDOMWindow* executing_window = ExecutingWindow();
+  Document* document =
+      executing_window ? executing_window->document() : nullptr;
+  if (document) {
+    if (event_type == event_type_names::kAuxclick) {
+      UseCounter::Count(*document, WebFeature::kAuxclickAddListenerCount);
+    } else if (event_type == event_type_names::kAppinstalled) {
+      UseCounter::Count(*document, WebFeature::kAppInstalledEventAddListener);
+    } else if (event_util::IsPointerEventType(event_type)) {
+      UseCounter::Count(*document, WebFeature::kPointerEventAddListenerCount);
+    } else if (event_type == event_type_names::kSlotchange) {
+      UseCounter::Count(*document, WebFeature::kSlotChangeEventAddListener);
+    } else if (event_type == event_type_names::kBeforematch) {
+      UseCounter::Count(*document, WebFeature::kBeforematchHandlerRegistered);
+    } else if (event_type ==
+               event_type_names::kContentvisibilityautostatechange) {
+      UseCounter::Count(
+          *document,
+          WebFeature::kContentVisibilityAutoStateChangeHandlerRegistered);
+    } else if (event_type == event_type_names::kScrollend) {
+      UseCounter::Count(*document, WebFeature::kScrollend);
+    } else if (event_util::IsSnapEventType(event_type)) {
+      UseCounter::Count(*document, WebFeature::kSnapEvent);
+    } else if (RuntimeEnabledFeatures::
+                   DesktopPWAsAdditionalWindowingControlsOnMoveEnabled() &&
+               (event_type == event_type_names::kMove)) {
+      UseCounter::Count(*document, WebFeature::kMoveEvent);
+    } else if (event_type == event_type_names::kUareplacestart) {
+      UseCounter::Count(*document, WebFeature::kUAReplaceStartAddListener);
+    } else if (event_type == event_type_names::kUareplaceend) {
+      UseCounter::Count(*document, WebFeature::kUAReplaceEndAddListener);
     }
   }
 
-  RegisterWithScheduler(GetExecutionContext(), event_type);
-
-  if (event_util::IsDOMMutationEventType(event_type)) {
-    if (ExecutionContext* context = GetExecutionContext()) {
-      String message_text = String::Format(
-          "Added synchronous DOM mutation listener to a '%s' event. "
-          "Consider using MutationObserver to make the page more responsive.",
-          event_type.GetString().Utf8().c_str());
-      PerformanceMonitor::ReportGenericViolation(
-          context, PerformanceMonitor::kDiscouragedAPIUse, message_text,
-          base::TimeDelta(), nullptr);
+  if (WorkerOrWorkletGlobalScope* worker =
+          DynamicTo<WorkerOrWorkletGlobalScope>(GetExecutionContext())) {
+    if (event_type == event_type_names::kPush) {
+      UseCounter::Count(*worker, WebFeature::kServiceWorkerPushEventListener);
+    } else if (event_type == event_type_names::kPushsubscriptionchange) {
+      UseCounter::Count(
+          *worker,
+          WebFeature::kServiceWorkerPushSubscriptionChangeEventListener);
     }
   }
 }
@@ -554,7 +748,7 @@ void EventTarget::AddedEventListener(
 bool EventTarget::removeEventListener(const AtomicString& event_type,
                                       V8EventListener* listener) {
   EventListener* event_listener = JSEventListener::CreateOrNull(listener);
-  return removeEventListener(event_type, event_listener);
+  return removeEventListener(event_type, event_listener, /*use_capture=*/false);
 }
 
 bool EventTarget::removeEventListener(
@@ -578,27 +772,26 @@ bool EventTarget::removeEventListener(
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool EventTarget::removeEventListener(const AtomicString& event_type,
                                       const EventListener* listener,
                                       bool use_capture) {
-  EventListenerOptions* options = EventListenerOptions::Create();
-  options->setCapture(use_capture);
+  RegisteredEventListener::OptionsForMatching options(use_capture);
   return RemoveEventListenerInternal(event_type, listener, options);
 }
 
 bool EventTarget::removeEventListener(const AtomicString& event_type,
                                       const EventListener* listener,
                                       EventListenerOptions* options) {
-  return RemoveEventListenerInternal(event_type, listener, options);
+  RegisteredEventListener::OptionsForMatching match_options(options->capture());
+  return RemoveEventListenerInternal(event_type, listener, match_options);
 }
 
 bool EventTarget::RemoveEventListenerInternal(
     const AtomicString& event_type,
     const EventListener* listener,
-    const EventListenerOptions* options) {
+    const RegisteredEventListener::OptionsForMatching& options) {
   if (!listener)
     return false;
 
@@ -606,34 +799,15 @@ bool EventTarget::RemoveEventListenerInternal(
   if (!d)
     return false;
 
-  wtf_size_t index_of_removed_listener;
-  RegisteredEventListener registered_listener;
+  RegisteredEventListener* registered_listener;
 
   if (!d->event_listener_map.Remove(event_type, listener, options,
-                                    &index_of_removed_listener,
-                                    &registered_listener))
+                                    &registered_listener)) {
     return false;
-
-  // Notify firing events planning to invoke the listener at 'index' that
-  // they have one less listener to invoke.
-  if (d->firing_event_iterators) {
-    for (const auto& firing_iterator : *d->firing_event_iterators) {
-      if (event_type != firing_iterator.event_type)
-        continue;
-
-      if (index_of_removed_listener >= firing_iterator.end)
-        continue;
-
-      --firing_iterator.end;
-      // Note that when firing an event listener,
-      // firingIterator.iterator indicates the next event listener
-      // that would fire, not the currently firing event
-      // listener. See EventTarget::fireEventListeners.
-      if (index_of_removed_listener < firing_iterator.iterator)
-        --firing_iterator.iterator;
-    }
   }
-  RemovedEventListener(event_type, registered_listener);
+
+  CHECK(registered_listener);
+  RemovedEventListener(event_type, *registered_listener);
   return true;
 }
 
@@ -647,11 +821,11 @@ RegisteredEventListener* EventTarget::GetAttributeRegisteredEventListener(
   if (!listener_vector)
     return nullptr;
 
-  for (auto& event_listener : *listener_vector) {
-    EventListener* listener = event_listener.Callback();
+  for (auto& registered_listener : *listener_vector) {
+    EventListener* listener = registered_listener->Callback();
     if (GetExecutionContext() && listener->IsEventHandler() &&
         listener->BelongsToTheCurrentWorld(GetExecutionContext()))
-      return &event_listener;
+      return registered_listener.Get();
   }
   return nullptr;
 }
@@ -666,11 +840,6 @@ bool EventTarget::SetAttributeEventListener(const AtomicString& event_type,
     return false;
   }
   if (registered_listener) {
-    if (IsA<JSBasedEventListener>(listener) &&
-        IsInstrumentedForAsyncStack(event_type)) {
-      probe::AsyncTaskScheduled(GetExecutionContext(), event_type,
-                                listener->async_task_id());
-    }
     registered_listener->SetCallback(listener);
     return true;
   }
@@ -721,10 +890,20 @@ DispatchEventResult EventTarget::DispatchEvent(Event& event) {
 DispatchEventResult EventTarget::DispatchEventInternal(Event& event) {
   event.SetTarget(this);
   event.SetCurrentTarget(this);
-  event.SetEventPhase(Event::kAtTarget);
+  event.SetEventPhase(Event::PhaseType::kAtTarget);
   DispatchEventResult dispatch_result = FireEventListeners(event);
-  event.SetEventPhase(0);
+  if (RuntimeEnabledFeatures::ClearCurrentTargetAfterDispatchEnabled()) {
+    event.SetCurrentTarget(nullptr);
+  }
+  event.SetEventPhase(Event::PhaseType::kNone);
   return dispatch_result;
+}
+
+EventTargetData& EventTarget::EnsureEventTargetData() {
+  if (!data_) {
+    data_ = MakeGarbageCollected<EventTargetData>();
+  }
+  return *data_;
 }
 
 static const AtomicString& LegacyType(const Event& event) {
@@ -807,7 +986,7 @@ DispatchEventResult EventTarget::FireEventListeners(Event& event) {
 
   EventListenerVector* legacy_listeners_vector = nullptr;
   AtomicString legacy_type_name = LegacyType(event);
-  if (!legacy_type_name.IsEmpty())
+  if (!legacy_type_name.empty())
     legacy_listeners_vector = d->event_listener_map.Find(legacy_type_name);
 
   EventListenerVector* listeners_vector =
@@ -815,12 +994,15 @@ DispatchEventResult EventTarget::FireEventListeners(Event& event) {
 
   bool fired_event_listeners = false;
   if (listeners_vector) {
-    fired_event_listeners = FireEventListeners(event, d, *listeners_vector);
+    // Calling `FireEventListener` causes a clone of `listeners_vector`.
+    fired_event_listeners = FireEventListeners(
+        event, d, EventListenerVectorSnapshot(*listeners_vector));
   } else if (event.isTrusted() && legacy_listeners_vector) {
     AtomicString unprefixed_type_name = event.type();
     event.SetType(legacy_type_name);
-    fired_event_listeners =
-        FireEventListeners(event, d, *legacy_listeners_vector);
+    // Calling `FireEventListener` causes a clone of `legacy_listeners_vector`.
+    fired_event_listeners = FireEventListeners(
+        event, d, EventListenerVectorSnapshot(*legacy_listeners_vector));
     event.SetType(unprefixed_type_name);
   }
 
@@ -836,9 +1018,10 @@ DispatchEventResult EventTarget::FireEventListeners(Event& event) {
   return GetDispatchEventResult(event);
 }
 
+// Fire event listeners, creates a copy of EventListenerVector on being called.
 bool EventTarget::FireEventListeners(Event& event,
                                      EventTargetData* d,
-                                     EventListenerVector& entry) {
+                                     EventListenerVectorSnapshot entry) {
   // Fire all listeners registered for this event. Don't fire listeners removed
   // during event dispatch. Also, don't fire event listeners added during event
   // dispatch. Conveniently, all new event listeners will be added after or at
@@ -851,13 +1034,6 @@ bool EventTarget::FireEventListeners(Event& event,
 
   CountFiringEventListeners(event, ExecutingWindow());
 
-  wtf_size_t i = 0;
-  wtf_size_t size = entry.size();
-  if (!d->firing_event_iterators)
-    d->firing_event_iterators = std::make_unique<FiringEventIteratorVector>();
-  d->firing_event_iterators->push_back(
-      FiringEventIterator(event.type(), i, size));
-
   base::TimeDelta blocked_event_threshold =
       BlockedEventsWarningThreshold(context, event);
   base::TimeTicks now;
@@ -869,35 +1045,52 @@ bool EventTarget::FireEventListeners(Event& event,
   }
   bool fired_listener = false;
 
-  while (i < size) {
+  // Animation triggers are processed first
+  {
+    ScriptForbiddenScope no_script;
+    for (auto& registered_listener : entry) {
+      if (registered_listener->IsAnimationTrigger() &&
+          registered_listener->ShouldFire(event)) {
+        EventListener* listener = registered_listener->Callback();
+        if (registered_listener->Once()) {
+          removeEventListener(event.type(), listener,
+                              registered_listener->Capture());
+        }
+        listener->Invoke(context, &event);
+      }
+    }
+  }
+
+  for (auto& registered_listener : entry) {
+    if (registered_listener->IsAnimationTrigger()) {
+      continue;
+    }
+
+    if (registered_listener->Removed()) [[unlikely]] {
+      continue;
+    }
+
     // If stopImmediatePropagation has been called, we just break out
     // immediately, without handling any more events on this target.
-    if (event.ImmediatePropagationStopped())
+    if (event.ImmediatePropagationStopped()) {
       break;
+    }
 
-    RegisteredEventListener registered_listener = entry[i];
-
-    // Move the iterator past this event listener. This must match
-    // the handling of the FiringEventIterator::iterator in
-    // EventTarget::removeEventListener.
-    ++i;
-
-    if (!registered_listener.ShouldFire(event))
+    if (!registered_listener->ShouldFire(event)) {
       continue;
+    }
 
-    EventListener* listener = registered_listener.Callback();
+    EventListener* listener = registered_listener->Callback();
     // The listener will be retained by Member<EventListener> in the
     // registeredListener, i and size are updated with the firing event iterator
     // in case the listener is removed from the listener vector below.
-    if (registered_listener.Once())
+    if (registered_listener->Once()) {
       removeEventListener(event.type(), listener,
-                          registered_listener.Capture());
-
-    event.SetHandlingPassive(EventPassiveMode(registered_listener));
+                          registered_listener->Capture());
+    }
+    event.SetHandlingPassive(EventPassiveMode(*registered_listener));
 
     probe::UserCallback probe(context, nullptr, event.type(), false, this);
-    probe::AsyncTask async_task(context, listener->async_task_id(), "event",
-                                IsInstrumentedForAsyncStack(event.type()));
 
     // To match Mozilla, the AT_TARGET phase fires both capturing and bubbling
     // event listeners, even though that violates some versions of the DOM spec.
@@ -906,19 +1099,16 @@ bool EventTarget::FireEventListeners(Event& event,
 
     // If we're about to report this event listener as blocking, make sure it
     // wasn't removed while handling the event.
-    if (should_report_blocked_event && i > 0 &&
-        entry[i - 1].Callback() == listener && !entry[i - 1].Passive() &&
-        !entry[i - 1].BlockedEventWarningEmitted() &&
+    if (should_report_blocked_event && !registered_listener->Removed() &&
+        !registered_listener->Passive() &&
+        !registered_listener->BlockedEventWarningEmitted() &&
         !event.defaultPrevented()) {
-      ReportBlockedEvent(*this, event, &entry[i - 1],
+      ReportBlockedEvent(*this, event, registered_listener,
                          now - event.PlatformTimeStamp());
     }
 
     event.SetHandlingPassive(Event::PassiveMode::kNotPassive);
-
-    CHECK_LE(i, size);
   }
-  d->firing_event_iterators->pop_back();
   return fired_listener;
 }
 
@@ -938,30 +1128,27 @@ EventListenerVector* EventTarget::GetEventListeners(
   return data->event_listener_map.Find(event_type);
 }
 
+const EventListenerVector* EventTarget::GetEventListeners(
+    const AtomicString& event_type) const {
+  if (const EventTargetData* data = GetEventTargetData()) {
+    return data->event_listener_map.Find(event_type);
+  }
+  return nullptr;
+}
+
 int EventTarget::NumberOfEventListeners(const AtomicString& event_type) const {
-  EventListenerVector* listeners =
-      const_cast<EventTarget*>(this)->GetEventListeners(event_type);
+  const EventListenerVector* listeners = GetEventListeners(event_type);
   return listeners ? listeners->size() : 0;
 }
 
-Vector<AtomicString> EventTarget::EventTypes() {
-  EventTargetData* d = GetEventTargetData();
+Vector<AtomicString> EventTarget::EventTypes() const {
+  const EventTargetData* d = GetEventTargetData();
   return d ? d->event_listener_map.EventTypes() : Vector<AtomicString>();
 }
 
 void EventTarget::RemoveAllEventListeners() {
-  EventTargetData* d = GetEventTargetData();
-  if (!d)
-    return;
-  d->event_listener_map.Clear();
-
-  // Notify firing events planning to invoke the listener at 'index' that
-  // they have one less listener to invoke.
-  if (d->firing_event_iterators) {
-    for (const auto& iterator : *d->firing_event_iterators) {
-      iterator.iterator = 0;
-      iterator.end = 0;
-    }
+  if (auto* d = GetEventTargetData()) {
+    d->event_listener_map.Clear();
   }
 }
 
@@ -969,28 +1156,38 @@ void EventTarget::EnqueueEvent(Event& event, TaskType task_type) {
   ExecutionContext* context = GetExecutionContext();
   if (!context)
     return;
-  probe::AsyncTaskScheduled(context, event.type(), event.async_task_id());
+  event.async_task_context()->Schedule(context, event.type());
   context->GetTaskRunner(task_type)->PostTask(
       FROM_HERE,
-      WTF::Bind(&EventTarget::DispatchEnqueuedEvent, WrapPersistent(this),
-                WrapPersistent(&event), WrapPersistent(context)));
+      BindOnce(&EventTarget::DispatchEnqueuedEvent, WrapPersistent(this),
+               WrapPersistent(&event), WrapPersistent(context),
+               WrapPersistent(CaptureCurrentTaskState(context))));
 }
 
-void EventTarget::DispatchEnqueuedEvent(Event* event,
-                                        ExecutionContext* context) {
+void EventTarget::DispatchEnqueuedEvent(
+    Event* event,
+    ExecutionContext* context,
+    scheduler::TaskAttributionInfo* task_state) {
   if (!GetExecutionContext()) {
-    probe::AsyncTaskCanceled(context, event->async_task_id());
+    event->async_task_context()->Cancel();
     return;
   }
-  probe::AsyncTask async_task(context, event->async_task_id());
+  this->ResetEventQueueStatus(event->type());
+  probe::AsyncTask async_task(context, event->async_task_context());
+  std::optional<scheduler::TaskAttributionTracker::TaskScope> task_scope(
+      SetCurrentTaskStateIfTopLevel(task_state, GetExecutionContext(),
+                                    TaskScopeType::kMiscEvent));
+  // Wrap enqueued events in NavigationEventTiming. This is needed for
+  // hashchange (and has no effect for other enqueued events that are not
+  // navigation events).
+  NavigationEventTiming event_timing_scope(
+      ExecutingWindow() ? ExecutingWindow()->GetFrame() : nullptr, *event);
   DispatchEvent(*event);
 }
 
-STATIC_ASSERT_ENUM(WebSettings::PassiveEventListenerDefault::kFalse,
-                   PassiveListenerDefault::kFalse);
-STATIC_ASSERT_ENUM(WebSettings::PassiveEventListenerDefault::kTrue,
-                   PassiveListenerDefault::kTrue);
-STATIC_ASSERT_ENUM(WebSettings::PassiveEventListenerDefault::kForceAllTrue,
-                   PassiveListenerDefault::kForceAllTrue);
+void EventTarget::Trace(Visitor* visitor) const {
+  ScriptWrappable::Trace(visitor);
+  visitor->Trace(data_);
+}
 
 }  // namespace blink

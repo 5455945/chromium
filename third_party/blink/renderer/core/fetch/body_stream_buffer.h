@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,30 +6,35 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FETCH_BODY_STREAM_BUFFER_H_
 
 #include "base/types/pass_key.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom-blink.h"
+#include "third_party/blink/public/platform/scheduler/web_scoped_virtual_time_pauser.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/abort_signal.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
+#include "third_party/blink/renderer/core/fetch/bytes_uploader.h"
 #include "third_party/blink/renderer/core/fetch/fetch_data_loader.h"
-#include "third_party/blink/renderer/core/streams/underlying_source_base.h"
+#include "third_party/blink/renderer/core/streams/underlying_byte_source_base.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
 #include "third_party/blink/renderer/platform/loader/fetch/bytes_consumer.h"
 
 namespace blink {
 
-class BytesUploader;
 class EncodedFormData;
 class ExceptionState;
 class ReadableStream;
 class ScriptState;
-class ScriptCachedMetadataHandler;
+class CachedMetadataHandler;
 
-class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
-                                           public BytesConsumer::Client {
+class CORE_EXPORT BodyStreamBuffer final
+    : public UnderlyingByteSourceBase,
+      public ExecutionContextLifecycleObserver,
+      public BytesConsumer::Client {
  public:
   using PassKey = base::PassKey<BodyStreamBuffer>;
 
@@ -42,7 +47,7 @@ class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
       ScriptState*,
       BytesConsumer* consumer,
       AbortSignal* signal,
-      ScriptCachedMetadataHandler* cached_metadata_handler,
+      CachedMetadataHandler* cached_metadata_handler,
       scoped_refptr<BlobDataHandle> side_data_blob = nullptr);
 
   // Create() should be used instead of calling this constructor directly.
@@ -50,35 +55,53 @@ class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
                    ScriptState*,
                    BytesConsumer* consumer,
                    AbortSignal* signal,
-                   ScriptCachedMetadataHandler* cached_metadata_handler,
+                   CachedMetadataHandler* cached_metadata_handler,
                    scoped_refptr<BlobDataHandle> side_data_blob);
 
   BodyStreamBuffer(ScriptState*,
                    ReadableStream* stream,
-                   ScriptCachedMetadataHandler* cached_metadata_handler,
+                   CachedMetadataHandler* cached_metadata_handler,
                    scoped_refptr<BlobDataHandle> side_data_blob = nullptr);
 
   BodyStreamBuffer(const BodyStreamBuffer&) = delete;
   BodyStreamBuffer& operator=(const BodyStreamBuffer&) = delete;
 
-  ReadableStream* Stream() { return stream_; }
+  ReadableStream* Stream() { return stream_.Get(); }
 
   // Callable only when neither locked nor disturbed.
   scoped_refptr<BlobDataHandle> DrainAsBlobDataHandle(
-      BytesConsumer::BlobSizePolicy);
-  scoped_refptr<EncodedFormData> DrainAsFormData();
+      BytesConsumer::BlobSizePolicy,
+      ExceptionState&);
+  scoped_refptr<EncodedFormData> DrainAsFormData(ExceptionState&);
   void DrainAsChunkedDataPipeGetter(
       ScriptState*,
-      mojo::PendingReceiver<network::mojom::blink::ChunkedDataPipeGetter>);
+      mojo::PendingReceiver<network::mojom::blink::ChunkedDataPipeGetter>,
+      BytesUploader::Client* client);
+  // While loading is in progress, a SelfKeepAlive is used to prevent this
+  // object from being garbage collected. If the context is destroyed, the
+  // SelfKeepAlive is cleared. See https://crbug.com/1292744 for details.
   void StartLoading(FetchDataLoader*,
                     FetchDataLoader::Client* /* client */,
                     ExceptionState&);
   void Tee(BodyStreamBuffer**, BodyStreamBuffer**, ExceptionState&);
 
-  // UnderlyingSourceBase
-  ScriptPromise pull(ScriptState*) override;
-  ScriptPromise Cancel(ScriptState*, ScriptValue reason) override;
-  bool HasPendingActivity() const override;
+  // Implements the Streams standard's "create a proxy" operation for this
+  // body: returns a new BodyStreamBuffer drawing from the same underlying
+  // data, while *this* buffer's stream stays in place and becomes locked and
+  // disturbed. The proxy is made from a ReadableStream exactly when this buffer
+  // is.
+  // https://streams.spec.whatwg.org/#readablestream-create-a-proxy
+  // Callable only when neither locked nor disturbed.
+  BodyStreamBuffer* CreateProxy(ExceptionState&);
+
+  // UnderlyingByteSourceBase
+  ScriptPromise<IDLUndefined> Pull(ReadableByteStreamController* controller,
+                                   ExceptionState&) override;
+  ScriptPromise<IDLUndefined> Cancel() override;
+  ScriptPromise<IDLUndefined> Cancel(v8::Local<v8::Value> reason) override;
+  ScriptState* GetScriptState() override;
+
+  // ExecutionContextLifecycleObserver
   void ContextDestroyed() override;
 
   // BytesConsumer::Client
@@ -93,19 +116,17 @@ class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
 
   // Closes the stream if necessary, and then locks and disturbs it. Should not
   // be called if |stream_broken_| is true.
-  void CloseAndLockAndDisturb();
-
-  ScriptState* GetScriptState() { return script_state_; }
+  void CloseAndLockAndDisturb(ExceptionState&);
 
   bool IsAborted();
 
-  // Returns the ScriptCachedMetadataHandler associated with the contents of
-  // this stream. This can return nullptr. Streams' ownership model applies, so
-  // this function is expected to be called by the owner of this stream.
-  ScriptCachedMetadataHandler* GetCachedMetadataHandler() {
+  // Returns the CachedMetadataHandler associated with the contents of this
+  // stream. This can return nullptr. Streams' ownership model applies, so this
+  // function is expected to be called by the owner of this stream.
+  CachedMetadataHandler* GetCachedMetadataHandler() {
     DCHECK(!IsStreamLocked());
     DCHECK(!IsStreamDisturbed());
-    return cached_metadata_handler_;
+    return cached_metadata_handler_.Get();
   }
 
   // Take the blob representing any side data associated with this body
@@ -121,6 +142,7 @@ class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
   void Trace(Visitor*) const override;
 
  private:
+
   class LoaderClient;
 
   // This method exists to avoid re-entrancy inside the BodyStreamBuffer
@@ -130,10 +152,12 @@ class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
 
   BytesConsumer* ReleaseHandle(ExceptionState&);
   void Abort();
-  void Close();
+  void AbortLoader(FetchDataLoader::Client*);
+  void Close(ExceptionState&);
   void GetError();
+  void RaiseOOMError();
   void CancelConsumer();
-  void ProcessData();
+  void ProcessData(ExceptionState&);
   void EndLoading();
   void StopLoading();
 
@@ -146,18 +170,25 @@ class CORE_EXPORT BodyStreamBuffer final : public UnderlyingSourceBase,
   // We need this to ensure that we detect that abort has been signalled
   // correctly.
   Member<AbortSignal> signal_;
+  // We need to keep the abort algorithms alive for the duration of the load.
+  Member<AbortSignal::AlgorithmHandle> stream_buffer_abort_handle_;
+  Member<AbortSignal::AlgorithmHandle> loader_client_abort_handle_;
   // CachedMetadata handler used for loading compiled WASM code.
-  Member<ScriptCachedMetadataHandler> cached_metadata_handler_;
+  Member<CachedMetadataHandler> cached_metadata_handler_;
   // Additional side data associated with this body stream.  It should only be
   // retained until the body is drained or starts loading.  Client code, such
   // as service workers, can call TakeSideDataBlob() prior to consumption.
   scoped_refptr<BlobDataHandle> side_data_blob_;
+  WebScopedVirtualTimePauser virtual_time_pauser_;
   bool stream_needs_more_ = false;
   bool made_from_readable_stream_;
   bool in_process_data_ = false;
 
   // TODO(ricea): Remove remaining uses of |stream_broken_|.
   bool stream_broken_ = false;
+
+  // Used to remain alive when there's a loader_.
+  SelfKeepAlive<BodyStreamBuffer> keep_alive_{{}};
 };
 
 }  // namespace blink

@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/task_manager/mock_web_contents_task_manager.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "build/build_config.h"
 
 namespace task_manager {
@@ -14,15 +15,16 @@ MockWebContentsTaskManager::MockWebContentsTaskManager() = default;
 MockWebContentsTaskManager::~MockWebContentsTaskManager() = default;
 
 void MockWebContentsTaskManager::TaskAdded(Task* task) {
-  DCHECK(task);
-  DCHECK(!base::Contains(tasks_, task));
+  CHECK(task, base::NotFatalUntil::M162);
+  CHECK(!std::ranges::contains(tasks_, task), base::NotFatalUntil::M162);
   tasks_.push_back(task);
 }
 
 void MockWebContentsTaskManager::TaskRemoved(Task* task) {
-  DCHECK(task);
-  DCHECK(base::Contains(tasks_, task));
-  tasks_.erase(std::find(tasks_.begin(), tasks_.end(), task));
+  CHECK(task, base::NotFatalUntil::M162);
+  const auto it = std::ranges::find(tasks_, task);
+  CHECK(it != tasks_.end());
+  tasks_.erase(it);
 }
 
 void MockWebContentsTaskManager::StartObserving() {

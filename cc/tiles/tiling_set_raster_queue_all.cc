@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 
 #include <utility>
 
+#include "base/notreached.h"
+#include "cc/base/features.h"
 #include "cc/tiles/picture_layer_tiling_set.h"
 #include "cc/tiles/tile.h"
 #include "cc/tiles/tile_priority.h"
@@ -20,35 +22,37 @@ TilingSetRasterQueueAll::IterationStage::IterationStage(
     : iterator_type(type), tile_type(bin) {
 }
 
-TilingSetRasterQueueAll::TilingSetRasterQueueAll(
+// static
+std::unique_ptr<TilingSetRasterQueueAll> TilingSetRasterQueueAll::Create(
     PictureLayerTilingSet* tiling_set,
-    bool prioritize_low_res,
-    bool is_drawing_layer)
-    : tiling_set_(tiling_set),
-      current_stage_(0),
-      is_drawing_layer_(is_drawing_layer) {
-  DCHECK(tiling_set_);
+    bool is_drawing_layer) {
+  DCHECK(tiling_set);
 
-  // Early out if the tiling set has no tilings.
-  if (!tiling_set_->num_tilings())
-    return;
+  // Early out if the tiling set has no tiles needing raster.
+  if (features::IsCCSlimmingEnabled()) {
+    if (tiling_set->all_tiles_done()) {
+      return nullptr;
+    }
+  } else {
+    if (!tiling_set->num_tilings()) {
+      return base::WrapUnique(
+          new TilingSetRasterQueueAll(nullptr, nullptr, is_drawing_layer));
+    }
+  }
 
   const PictureLayerTilingClient* client = tiling_set->client();
   WhichTree tree = tiling_set->tree();
-  // Find high and low res tilings and initialize the iterators.
+  // Find high res tiling and initialize the iterator.
   PictureLayerTiling* high_res_tiling = nullptr;
-  PictureLayerTiling* low_res_tiling = nullptr;
-  // This variable would point to a tiling that has a NON_IDEAL_RESOLUTION or
-  // LOW_RESOLUTION on the active tree, but HIGH_RESOLUTION on the pending tree.
+  // This variable would point to a tiling that has a NON_IDEAL_RESOLUTION on
+  // the active tree, but HIGH_RESOLUTION on the pending tree.
   // These tilings are the only non-high res tilings that could have required
   // for activation tiles, so they need to be considered for rasterization.
   PictureLayerTiling* active_non_ideal_pending_high_res_tiling = nullptr;
-  for (size_t i = 0; i < tiling_set_->num_tilings(); ++i) {
-    PictureLayerTiling* tiling = tiling_set_->tiling_at(i);
+  for (size_t i = 0; i < tiling_set->num_tilings(); ++i) {
+    PictureLayerTiling* tiling = tiling_set->tiling_at(i);
     if (tiling->resolution() == HIGH_RESOLUTION)
       high_res_tiling = tiling;
-    if (prioritize_low_res && tiling->resolution() == LOW_RESOLUTION)
-      low_res_tiling = tiling;
     if (tree == ACTIVE_TREE && tiling->resolution() != HIGH_RESOLUTION) {
       const PictureLayerTiling* twin =
           client->GetPendingOrActiveTwinTiling(tiling);
@@ -57,8 +61,6 @@ TilingSetRasterQueueAll::TilingSetRasterQueueAll(
     }
   }
 
-  bool use_low_res_tiling = low_res_tiling && low_res_tiling->has_tiles() &&
-                            !low_res_tiling->all_tiles_done();
   bool use_high_res_tiling = high_res_tiling && high_res_tiling->has_tiles() &&
                              !high_res_tiling->all_tiles_done();
   bool use_active_non_ideal_pending_high_res_tiling =
@@ -66,50 +68,75 @@ TilingSetRasterQueueAll::TilingSetRasterQueueAll(
       active_non_ideal_pending_high_res_tiling->has_tiles() &&
       !active_non_ideal_pending_high_res_tiling->all_tiles_done();
 
+  if (!use_high_res_tiling && !use_active_non_ideal_pending_high_res_tiling &&
+      features::IsCCSlimmingEnabled()) {
+    return nullptr;
+  }
+
+  return base::WrapUnique(new TilingSetRasterQueueAll(
+      use_high_res_tiling ? high_res_tiling : nullptr,
+      use_active_non_ideal_pending_high_res_tiling
+          ? active_non_ideal_pending_high_res_tiling
+          : nullptr,
+      is_drawing_layer));
+}
+
+TilingSetRasterQueueAll::TilingSetRasterQueueAll(
+    PictureLayerTiling* high_res_tiling,
+    PictureLayerTiling* active_non_ideal_pending_high_res_tiling,
+    bool is_drawing_layer)
+    : current_stage_(0), is_drawing_layer_(is_drawing_layer) {
+  if (!high_res_tiling && !active_non_ideal_pending_high_res_tiling) {
+    DCHECK(!features::IsCCSlimmingEnabled());
+    return;
+  }
+
   // Make the tiling iterators.
-  if (use_low_res_tiling)
-    MakeTilingIterator(LOW_RES, low_res_tiling);
-  if (use_high_res_tiling)
+  if (high_res_tiling) {
     MakeTilingIterator(HIGH_RES, high_res_tiling);
-  if (use_active_non_ideal_pending_high_res_tiling) {
+  } else if (!features::IsCCSlimmingEnabled()) {
+    iterators_[HIGH_RES].emplace();
+  }
+  if (active_non_ideal_pending_high_res_tiling) {
     MakeTilingIterator(ACTIVE_NON_IDEAL_PENDING_HIGH_RES,
                        active_non_ideal_pending_high_res_tiling);
+  } else if (!features::IsCCSlimmingEnabled()) {
+    iterators_[ACTIVE_NON_IDEAL_PENDING_HIGH_RES].emplace();
   }
 
   // Set up the stages.
-  if (use_low_res_tiling)
-    stages_->push_back(IterationStage(LOW_RES, TilePriority::NOW));
+  if (high_res_tiling) {
+    stages_.push_back(IterationStage(HIGH_RES, TilePriority::NOW));
+  }
 
-  if (use_high_res_tiling)
-    stages_->push_back(IterationStage(HIGH_RES, TilePriority::NOW));
-
-  if (use_active_non_ideal_pending_high_res_tiling) {
-    stages_->push_back(
+  if (active_non_ideal_pending_high_res_tiling) {
+    stages_.push_back(
         IterationStage(ACTIVE_NON_IDEAL_PENDING_HIGH_RES, TilePriority::NOW));
-    stages_->push_back(
+    stages_.push_back(
         IterationStage(ACTIVE_NON_IDEAL_PENDING_HIGH_RES, TilePriority::SOON));
   }
 
-  if (use_high_res_tiling) {
-    stages_->push_back(IterationStage(HIGH_RES, TilePriority::SOON));
-    stages_->push_back(IterationStage(HIGH_RES, TilePriority::EVENTUALLY));
+  if (high_res_tiling) {
+    stages_.push_back(IterationStage(HIGH_RES, TilePriority::SOON));
+    stages_.push_back(IterationStage(HIGH_RES, TilePriority::EVENTUALLY));
   }
 
-  if (stages_->empty())
-    return;
+  DCHECK(!stages_.empty());
 
   IteratorType index = stages_[current_stage_].iterator_type;
   TilePriority::PriorityBin tile_type = stages_[current_stage_].tile_type;
-  if (iterators_[index].done() || iterators_[index].type() != tile_type)
+  if (!iterators_[index] || iterators_[index]->done() ||
+      iterators_[index]->type() != tile_type) {
     AdvanceToNextStage();
+  }
 }
 
 TilingSetRasterQueueAll::~TilingSetRasterQueueAll() = default;
 
 void TilingSetRasterQueueAll::MakeTilingIterator(IteratorType type,
                                                  PictureLayerTiling* tiling) {
-  iterators_[type] = TilingIterator(tiling, &tiling->tiling_data_);
-  if (iterators_[type].done()) {
+  iterators_[type].emplace(tiling, &tiling->tiling_data_);
+  if (iterators_[type]->done()) {
     tiling->set_all_tiles_done(true);
     // If we've marked the tiling as done, make sure we're actually done.
     tiling->VerifyNoTileNeedsRaster();
@@ -117,7 +144,7 @@ void TilingSetRasterQueueAll::MakeTilingIterator(IteratorType type,
 }
 
 bool TilingSetRasterQueueAll::IsEmpty() const {
-  return current_stage_ >= stages_->size();
+  return current_stage_ >= stages_.size();
 }
 
 void TilingSetRasterQueueAll::Pop() {
@@ -125,33 +152,39 @@ void TilingSetRasterQueueAll::Pop() {
   TilePriority::PriorityBin tile_type = stages_[current_stage_].tile_type;
 
   // First advance the iterator.
-  DCHECK(!iterators_[index].done());
-  DCHECK(iterators_[index].type() == tile_type);
-  ++iterators_[index];
+  DCHECK(iterators_[index]);
+  DCHECK(!iterators_[index]->done());
+  DCHECK(iterators_[index]->type() == tile_type);
+  ++(*iterators_[index]);
 
-  if (iterators_[index].done() || iterators_[index].type() != tile_type)
+  if (!iterators_[index] || iterators_[index]->done() ||
+      iterators_[index]->type() != tile_type) {
     AdvanceToNextStage();
+  }
 }
 
 const PrioritizedTile& TilingSetRasterQueueAll::Top() const {
   DCHECK(!IsEmpty());
 
   IteratorType index = stages_[current_stage_].iterator_type;
-  DCHECK(!iterators_[index].done());
-  DCHECK(iterators_[index].type() == stages_[current_stage_].tile_type);
+  DCHECK(iterators_[index]);
+  DCHECK(!iterators_[index]->done());
+  DCHECK(iterators_[index]->type() == stages_[current_stage_].tile_type);
 
-  return *iterators_[index];
+  return **iterators_[index];
 }
 
 void TilingSetRasterQueueAll::AdvanceToNextStage() {
-  DCHECK_LT(current_stage_, stages_->size());
+  DCHECK_LT(current_stage_, stages_.size());
   ++current_stage_;
-  while (current_stage_ < stages_->size()) {
+  while (current_stage_ < stages_.size()) {
     IteratorType index = stages_[current_stage_].iterator_type;
     TilePriority::PriorityBin tile_type = stages_[current_stage_].tile_type;
 
-    if (!iterators_[index].done() && iterators_[index].type() == tile_type)
+    if (iterators_[index] && !iterators_[index]->done() &&
+        iterators_[index]->type() == tile_type) {
       break;
+    }
     ++current_stage_;
   }
 }
@@ -181,10 +214,15 @@ void TilingSetRasterQueueAll::OnePriorityRectIterator::AdvanceToNextTile(
       break;
     }
     Tile* tile = tiling_->TileAt(iterator->index_x(), iterator->index_y());
-    if (IsTileValid(tile)) {
-      current_tile_ = tiling_->MakePrioritizedTile(tile, priority_rect_type_);
-      break;
-    }
+    auto result = IsTileValid(tile);
+    if (result == kTileNotValid)
+      continue;
+
+    bool is_tile_occluded =
+        result != kTileNeedsRaster && tiling_->IsTileOccluded(tile);
+    current_tile_ = tiling_->MakePrioritizedTile(tile, priority_rect_type_,
+                                                 is_tile_occluded);
+    break;
   }
 }
 
@@ -192,18 +230,24 @@ template <typename TilingIteratorType>
 bool TilingSetRasterQueueAll::OnePriorityRectIterator::
     GetFirstTileAndCheckIfValid(TilingIteratorType* iterator) {
   Tile* tile = tiling_->TileAt(iterator->index_x(), iterator->index_y());
-  if (!IsTileValid(tile)) {
+  auto result = IsTileValid(tile);
+  if (result == kTileNotValid) {
     current_tile_ = PrioritizedTile();
     return false;
   }
-  current_tile_ = tiling_->MakePrioritizedTile(tile, priority_rect_type_);
+  // Note that if tile needs raster then by definition it is not occluded.
+  bool is_tile_occluded =
+      result != kTileNeedsRaster && tiling_->IsTileOccluded(tile);
+  current_tile_ =
+      tiling_->MakePrioritizedTile(tile, priority_rect_type_, is_tile_occluded);
   return true;
 }
 
-bool TilingSetRasterQueueAll::OnePriorityRectIterator::IsTileValid(
+TilingSetRasterQueueAll::OnePriorityRectIterator::IsTileValidResult
+TilingSetRasterQueueAll::OnePriorityRectIterator::IsTileValid(
     const Tile* tile) const {
   if (!tile)
-    return false;
+    return kTileNotValid;
 
   // A tile is valid for raster if it needs raster and is unoccluded.
   bool tile_is_valid_for_raster =
@@ -211,12 +255,15 @@ bool TilingSetRasterQueueAll::OnePriorityRectIterator::IsTileValid(
 
   // A tile is not valid for the raster queue if it is not valid for raster or
   // processing for checker-images.
+  IsTileValidResult result = kTileNeedsRaster;
   if (!tile_is_valid_for_raster) {
+    // Note that we might need to re-raster the tile if it was checker imaged.
     bool tile_is_valid_for_checker_images =
         tile->draw_info().is_checker_imaged() &&
         tiling_->ShouldDecodeCheckeredImagesForTile(tile);
     if (!tile_is_valid_for_checker_images)
-      return false;
+      return kTileNotValid;
+    result = kTileNeedsCheckerImageReraster;
   }
 
   // After the pending visible rect has been processed, we must return false
@@ -226,9 +273,9 @@ bool TilingSetRasterQueueAll::OnePriorityRectIterator::IsTileValid(
     gfx::Rect tile_bounds = tiling_data_->TileBounds(tile->tiling_i_index(),
                                                      tile->tiling_j_index());
     if (pending_visible_rect_.Intersects(tile_bounds))
-      return false;
+      return kTileNotValid;
   }
-  return true;
+  return result;
 }
 
 // VisibleTilingIterator.
@@ -386,7 +433,6 @@ void TilingSetRasterQueueAll::TilingIterator::AdvancePhase() {
     switch (phase_) {
       case Phase::VISIBLE_RECT:
         NOTREACHED();
-        return;
       case Phase::PENDING_VISIBLE_RECT:
         pending_visible_iterator_ =
             PendingVisibleTilingIterator(tiling_, tiling_data_);

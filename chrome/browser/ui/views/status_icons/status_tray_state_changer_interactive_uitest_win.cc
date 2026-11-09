@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/win/scoped_com_initializer.h"
 #include "chrome/browser/status_icons/status_icon.h"
 #include "chrome/browser/ui/views/status_icons/status_icon_win.h"
@@ -20,7 +20,11 @@
 
 class StatusTrayStateChangerWinTest : public testing::Test {
  public:
-  StatusTrayStateChangerWinTest() {}
+  StatusTrayStateChangerWinTest() = default;
+
+  StatusTrayStateChangerWinTest(const StatusTrayStateChangerWinTest&) = delete;
+  StatusTrayStateChangerWinTest& operator=(
+      const StatusTrayStateChangerWinTest&) = delete;
 
   void SetUp() override {
     testing::Test::SetUp();
@@ -56,8 +60,8 @@ class StatusTrayStateChangerWinTest : public testing::Test {
 
     std::unique_ptr<NOTIFYITEM> notify_item = GetNotifyItem();
     EXPECT_TRUE(notify_item.get() != NULL);
-    DCHECK_EQ(notify_item->hwnd, icon_window());
-    DCHECK_EQ(notify_item->id, icon_id());
+    CHECK_EQ(notify_item->hwnd, icon_window(), base::NotFatalUntil::M162);
+    CHECK_EQ(notify_item->id, icon_id(), base::NotFatalUntil::M162);
 
     return notify_item;
   }
@@ -81,13 +85,11 @@ class StatusTrayStateChangerWinTest : public testing::Test {
   std::unique_ptr<StatusTrayWin> status_tray_;
   Microsoft::WRL::ComPtr<StatusTrayStateChangerWin> tray_watcher_;
 
-  StatusIconWin* status_icon_win_;
-
-  DISALLOW_COPY_AND_ASSIGN(StatusTrayStateChangerWinTest);
+  raw_ptr<StatusIconWin> status_icon_win_;
 };
 
 // Test is disabled due to multiple COM initialization errors.  See
-// https://crbug.com/367199 for details.
+// https://crbug.com/41103706 for details.
 TEST_F(StatusTrayStateChangerWinTest, DISABLED_Setup) {
   // This tests the code path that will read the NOTIFYITEM data structure for
   // use in future tests.
@@ -96,9 +98,8 @@ TEST_F(StatusTrayStateChangerWinTest, DISABLED_Setup) {
 }
 
 // Test is disabled due to multiple COM initialization errors.  See
-// https://crbug.com/367199 for details.
+// https://crbug.com/41103706 for details.
 TEST_F(StatusTrayStateChangerWinTest, DISABLED_ComApiTest) {
-
   // Setup code to read the current preference.
   std::unique_ptr<NOTIFYITEM> notify_item = SetupAndGetCurrentNotifyItem();
   ASSERT_TRUE(notify_item.get() != NULL);
@@ -125,19 +126,21 @@ TEST_F(StatusTrayStateChangerWinTest, DISABLED_ComApiTest) {
 }
 
 // Disabled due to racy final expectation, and possibly no longer needed;
-// see https://crbug.com/347693.
+// see https://crbug.com/40353554.
 TEST_F(StatusTrayStateChangerWinTest, DISABLED_TraySizeApiTest) {
   // Used to reset operating system state afterwards.
   std::unique_ptr<NOTIFYITEM> notify_item = SetupAndGetCurrentNotifyItem();
   // We can't actually run this test if we're already showing the icon.
-  if (notify_item->preference == PREFERENCE_SHOW_ALWAYS)
+  if (notify_item->preference == PREFERENCE_SHOW_ALWAYS) {
     return;
+  }
 
   // This test can only run if the tray window structure conforms to what I've
   // seen in Win7 and Win8.
   HWND shell_tray_hwnd = ::FindWindow(L"Shell_TrayWnd", NULL);
-  if (shell_tray_hwnd == NULL)
+  if (shell_tray_hwnd == NULL) {
     return;
+  }
 
   HWND tray_notify_hwnd =
       ::FindWindowEx(shell_tray_hwnd, NULL, L"TrayNotifyWnd", NULL);

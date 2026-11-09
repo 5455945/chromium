@@ -1,15 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/audio/stereo_panner.h"
 
-#include <algorithm>
-#include <memory>
-
-#include "base/memory/ptr_util.h"
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+#include "third_party/blink/renderer/platform/audio/vector_math.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/fdlibm/ieee754.h"
 
@@ -20,62 +18,63 @@ namespace blink {
 
 StereoPanner::StereoPanner(float sample_rate) {}
 
-void StereoPanner::PanWithSampleAccurateValues(const AudioBus* input_bus,
-                                               AudioBus* output_bus,
-                                               const float* pan_values,
-                                               uint32_t frames_to_process) {
+void StereoPanner::PanWithSampleAccurateValues(
+    const AudioBus* input_bus,
+    AudioBus* output_bus,
+    base::span<const float> pan_values) {
+  const size_t frames_to_process = pan_values.size();
   DCHECK(input_bus);
   DCHECK_LE(frames_to_process, input_bus->length());
   DCHECK_GE(input_bus->NumberOfChannels(), 1u);
   DCHECK_LE(input_bus->NumberOfChannels(), 2u);
 
-  unsigned number_of_input_channels = input_bus->NumberOfChannels();
+  const unsigned number_of_input_channels = input_bus->NumberOfChannels();
 
   DCHECK(output_bus);
   DCHECK_EQ(output_bus->NumberOfChannels(), 2u);
   DCHECK_LE(frames_to_process, output_bus->length());
 
-  const float* source_l = input_bus->Channel(0)->Data();
-  const float* source_r =
-      number_of_input_channels > 1 ? input_bus->Channel(1)->Data() : source_l;
-  float* destination_l =
-      output_bus->ChannelByType(AudioBus::kChannelLeft)->MutableData();
-  float* destination_r =
-      output_bus->ChannelByType(AudioBus::kChannelRight)->MutableData();
-
-  if (!source_l || !source_r || !destination_l || !destination_r)
-    return;
-
-  double gain_l, gain_r, pan_radian;
-
-  int n = frames_to_process;
+  base::span<const float> source_l =
+      input_bus->Channel(0)->Span().first(frames_to_process);
+  base::span<const float> source_r =
+      (number_of_input_channels > 1 ? input_bus->Channel(1)->Span()
+                                    : input_bus->Channel(0)->Span())
+          .first(frames_to_process);
+  base::span<float> destination_l =
+      output_bus->ChannelByType(AudioBus::kChannelLeft)
+          ->MutableSpan()
+          .first(frames_to_process);
+  base::span<float> destination_r =
+      output_bus->ChannelByType(AudioBus::kChannelRight)
+          ->MutableSpan()
+          .first(frames_to_process);
 
   if (number_of_input_channels == 1) {  // For mono source case.
-    while (n--) {
-      float input_l = *source_l++;
-      double pan = clampTo(*pan_values++, -1.0, 1.0);
+    for (size_t i = 0; i < frames_to_process; ++i) {
+      const float input_l = source_l[i];
+      const double pan = ClampTo(pan_values[i], -1.0, 1.0);
       // Pan from left to right [-1; 1] will be normalized as [0; 1].
-      pan_radian = (pan * 0.5 + 0.5) * kPiOverTwoDouble;
-      gain_l = fdlibm::cos(pan_radian);
-      gain_r = fdlibm::sin(pan_radian);
-      *destination_l++ = static_cast<float>(input_l * gain_l);
-      *destination_r++ = static_cast<float>(input_l * gain_r);
+      const double pan_radian = (pan * 0.5 + 0.5) * kPiOverTwoDouble;
+      const double gain_l = fdlibm::cos(pan_radian);
+      const double gain_r = fdlibm::sin(pan_radian);
+      destination_l[i] = static_cast<float>(input_l * gain_l);
+      destination_r[i] = static_cast<float>(input_l * gain_r);
     }
   } else {  // For stereo source case.
-    while (n--) {
-      float input_l = *source_l++;
-      float input_r = *source_r++;
-      double pan = clampTo(*pan_values++, -1.0, 1.0);
+    for (size_t i = 0; i < frames_to_process; ++i) {
+      const float input_l = source_l[i];
+      const float input_r = source_r[i];
+      const double pan = ClampTo(pan_values[i], -1.0, 1.0);
       // Normalize [-1; 0] to [0; 1]. Do nothing when [0; 1].
-      pan_radian = (pan <= 0 ? pan + 1 : pan) * kPiOverTwoDouble;
-      gain_l = fdlibm::cos(pan_radian);
-      gain_r = fdlibm::sin(pan_radian);
+      const double pan_radian = (pan <= 0 ? pan + 1 : pan) * kPiOverTwoDouble;
+      const double gain_l = fdlibm::cos(pan_radian);
+      const double gain_r = fdlibm::sin(pan_radian);
       if (pan <= 0) {
-        *destination_l++ = static_cast<float>(input_l + input_r * gain_l);
-        *destination_r++ = static_cast<float>(input_r * gain_r);
+        destination_l[i] = static_cast<float>(input_l + input_r * gain_l);
+        destination_r[i] = static_cast<float>(input_r * gain_r);
       } else {
-        *destination_l++ = static_cast<float>(input_l * gain_l);
-        *destination_r++ = static_cast<float>(input_r + input_l * gain_r);
+        destination_l[i] = static_cast<float>(input_l * gain_l);
+        destination_r[i] = static_cast<float>(input_r + input_l * gain_r);
       }
     }
   }
@@ -84,71 +83,71 @@ void StereoPanner::PanWithSampleAccurateValues(const AudioBus* input_bus,
 void StereoPanner::PanToTargetValue(const AudioBus* input_bus,
                                     AudioBus* output_bus,
                                     float pan_value,
-                                    uint32_t frames_to_process) {
+                                    size_t frames_to_process) {
   DCHECK(input_bus);
   DCHECK_LE(frames_to_process, input_bus->length());
   DCHECK_GE(input_bus->NumberOfChannels(), 1u);
   DCHECK_LE(input_bus->NumberOfChannels(), 2u);
 
-  unsigned number_of_input_channels = input_bus->NumberOfChannels();
+  const unsigned number_of_input_channels = input_bus->NumberOfChannels();
 
   DCHECK(output_bus);
   DCHECK_EQ(output_bus->NumberOfChannels(), 2u);
   DCHECK_LE(frames_to_process, output_bus->length());
 
-  const float* source_l = input_bus->Channel(0)->Data();
-  const float* source_r =
-      number_of_input_channels > 1 ? input_bus->Channel(1)->Data() : source_l;
-  float* destination_l =
-      output_bus->ChannelByType(AudioBus::kChannelLeft)->MutableData();
-  float* destination_r =
-      output_bus->ChannelByType(AudioBus::kChannelRight)->MutableData();
+  base::span<const float> source_l =
+      input_bus->Channel(0)->Span().first(frames_to_process);
+  base::span<const float> source_r =
+      (number_of_input_channels > 1 ? input_bus->Channel(1)->Span()
+                                    : input_bus->Channel(0)->Span())
+          .first(frames_to_process);
+  base::span<float> destination_l =
+      output_bus->ChannelByType(AudioBus::kChannelLeft)
+          ->MutableSpan()
+          .first(frames_to_process);
+  base::span<float> destination_r =
+      output_bus->ChannelByType(AudioBus::kChannelRight)
+          ->MutableSpan()
+          .first(frames_to_process);
 
-  if (!source_l || !source_r || !destination_l || !destination_r)
-    return;
-
-  float target_pan = clampTo(pan_value, -1.0, 1.0);
-
-  int n = frames_to_process;
+  const float target_pan = ClampTo(pan_value, -1.0, 1.0);
 
   if (number_of_input_channels == 1) {  // For mono source case.
     // Pan from left to right [-1; 1] will be normalized as [0; 1].
-    double pan_radian = (target_pan * 0.5 + 0.5) * kPiOverTwoDouble;
+    const double pan_radian = (target_pan * 0.5 + 0.5) * kPiOverTwoDouble;
 
-    double gain_l = fdlibm::cos(pan_radian);
-    double gain_r = fdlibm::sin(pan_radian);
+    const float gain_l = static_cast<float>(fdlibm::cos(pan_radian));
+    const float gain_r = static_cast<float>(fdlibm::sin(pan_radian));
 
-    // TODO(rtoy): This can be vectorized using vector_math::Vsmul
-    while (n--) {
-      float input_l = *source_l++;
-      *destination_l++ = static_cast<float>(input_l * gain_l);
-      *destination_r++ = static_cast<float>(input_l * gain_r);
-    }
+    // Compute destination_r first in case destination_l aliases with source_l
+    // during in-place processing.
+    vector_math::Vsmul(source_l, gain_r, destination_r);
+    vector_math::Vsmul(source_l, gain_l, destination_l);
   } else {  // For stereo source case.
     // Normalize [-1; 0] to [0; 1] for the left pan position (<= 0), and
     // do nothing when [0; 1].
-    double pan_radian =
+    const double pan_radian =
         (target_pan <= 0 ? target_pan + 1 : target_pan) * kPiOverTwoDouble;
 
-    double gain_l = fdlibm::cos(pan_radian);
-    double gain_r = fdlibm::sin(pan_radian);
+    const float gain_l = static_cast<float>(fdlibm::cos(pan_radian));
+    const float gain_r = static_cast<float>(fdlibm::sin(pan_radian));
 
-    // TODO(rtoy): Consider moving the if statement outside the loop
-    // since |target_pan| is constant inside the loop.
-    while (n--) {
-      float input_l = *source_l++;
-      float input_r = *source_r++;
-      if (target_pan <= 0) {
-        // When [-1; 0], keep left channel intact and equal-power pan the
-        // right channel only.
-        *destination_l++ = static_cast<float>(input_l + input_r * gain_l);
-        *destination_r++ = static_cast<float>(input_r * gain_r);
-      } else {
-        // When [0; 1], keep right channel intact and equal-power pan the
-        // left channel only.
-        *destination_l++ = static_cast<float>(input_l * gain_l);
-        *destination_r++ = static_cast<float>(input_r + input_l * gain_r);
+    if (target_pan <= 0) {
+      // When [-1; 0], keep left channel intact and equal-power pan the
+      // right channel only.
+      if (destination_l.data() != source_l.data()) {
+        destination_l.copy_from(source_l);
       }
+      vector_math::Vsma(source_r, gain_l, destination_l);
+      vector_math::Vsmul(source_r, gain_r, destination_r);
+    } else {
+      // When [0; 1], keep right channel intact and equal-power pan the
+      // left channel only.
+      if (destination_r.data() != source_r.data()) {
+        destination_r.copy_from(source_r);
+      }
+      vector_math::Vsma(source_l, gain_r, destination_r);
+      vector_math::Vsmul(source_l, gain_l, destination_l);
     }
   }
 }

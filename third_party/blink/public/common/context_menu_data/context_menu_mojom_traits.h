@@ -1,19 +1,25 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_CONTEXT_MENU_DATA_CONTEXT_MENU_MOJOM_TRAITS_H_
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_CONTEXT_MENU_DATA_CONTEXT_MENU_MOJOM_TRAITS_H_
 
+#include <optional>
+
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/common/context_menu_data/untrustworthy_context_menu_params.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
+#include "third_party/blink/public/mojom/forms/form_control_type.mojom-shared.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "url/mojom/url_gurl_mojom_traits.h"
 
 namespace mojo {
+
+
 
 template <>
 struct BLINK_COMMON_EXPORT
@@ -28,26 +34,21 @@ struct BLINK_COMMON_EXPORT
 
   static int y(const blink::UntrustworthyContextMenuParams& r) { return r.y; }
 
-  static const GURL link_url(const blink::UntrustworthyContextMenuParams& r) {
+  static const GURL& link_url(const blink::UntrustworthyContextMenuParams& r) {
     return r.link_url;
   }
 
-  static std::u16string link_text(
+  static const std::u16string& link_text(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.link_text;
   }
 
-  static absl::optional<blink::Impression> impression(
-      const blink::UntrustworthyContextMenuParams& r) {
-    return r.impression;
-  }
-
-  static const GURL unfiltered_link_url(
+  static const GURL& unfiltered_link_url(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.unfiltered_link_url;
   }
 
-  static const GURL src_url(const blink::UntrustworthyContextMenuParams& r) {
+  static const GURL& src_url(const blink::UntrustworthyContextMenuParams& r) {
     return r.src_url;
   }
 
@@ -56,36 +57,51 @@ struct BLINK_COMMON_EXPORT
     return r.has_image_contents;
   }
 
+  static const gfx::Rect& image_bounds(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.image_bounds;
+  }
+
+  static const std::optional<blink::FrameToken>& image_replacement_frame_token(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.image_replacement_frame_token;
+  }
+
+  static bool is_image_media_plugin_document(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.is_image_media_plugin_document;
+  }
+
   static int media_flags(const blink::UntrustworthyContextMenuParams& r) {
     return r.media_flags;
   }
 
-  static std::u16string selection_text(
+  static const std::u16string& selection_text(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.selection_text;
   }
 
-  static std::u16string title_text(
+  static const std::u16string& title_text(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.title_text;
   }
 
-  static std::u16string alt_text(
+  static const std::u16string& alt_text(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.alt_text;
   }
 
-  static std::u16string suggested_filename(
+  static const std::u16string& suggested_filename(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.suggested_filename;
   }
 
-  static std::u16string misspelled_word(
+  static const std::u16string& misspelled_word(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.misspelled_word;
   }
 
-  static std::vector<std::u16string> dictionary_suggestions(
+  static const std::vector<std::u16string>& dictionary_suggestions(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.dictionary_suggestions;
   }
@@ -118,7 +134,7 @@ struct BLINK_COMMON_EXPORT
     return r.edit_flags;
   }
 
-  static std::string frame_charset(
+  static const std::string& frame_charset(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.frame_charset;
   }
@@ -138,17 +154,12 @@ struct BLINK_COMMON_EXPORT
     return r.custom_items;
   }
 
-  static ui::MenuSourceType source_type(
+  static ui::mojom::MenuSourceType source_type(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.source_type;
   }
 
-  static blink::mojom::ContextMenuDataInputFieldType input_field_type(
-      const blink::UntrustworthyContextMenuParams& r) {
-    return r.input_field_type;
-  }
-
-  static gfx::Rect selection_rect(
+  static const gfx::Rect& selection_rect(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.selection_rect;
   }
@@ -158,9 +169,39 @@ struct BLINK_COMMON_EXPORT
     return r.selection_start_offset;
   }
 
-  static bool opened_from_highlight(
+  static std::optional<blink::mojom::AnnotationType> annotation_type(
       const blink::UntrustworthyContextMenuParams& r) {
-    return r.opened_from_highlight;
+    return r.annotation_type;
+  }
+
+  static bool opened_from_interest_for(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.opened_from_interest_for;
+  }
+
+  static int interest_for_node_id(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.interest_for_node_id;
+  }
+
+  static std::optional<blink::mojom::FormControlType> form_control_type(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.form_control_type;
+  }
+
+  static bool is_content_editable_for_autofill(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.is_content_editable_for_autofill;
+  }
+
+  static blink::DOMNodeIdType field_renderer_id(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.field_renderer_id;
+  }
+
+  static blink::DOMNodeIdType form_renderer_id(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.form_renderer_id;
   }
 
   static bool Read(blink::mojom::UntrustworthyContextMenuParamsDataView r,

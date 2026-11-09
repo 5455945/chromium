@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -30,7 +30,8 @@ import time
 
 _GETHASH_HOST = 'safebrowsing.clients.google.com'
 _GETHASH_REQUEST = (
-    '/safebrowsing/gethash?client=googleclient&appver=1.0&pver=2.1')
+  '/safebrowsing/gethash?client=googleclient&appver=1.0&pver=2.1'
+)
 
 # Global logging file handle.
 g_file_handle = None
@@ -123,9 +124,9 @@ def main():
   period = 10
   samples = None
 
-  options, args = getopt.getopt(sys.argv[1:],
-                                's:p:o:',
-                                ['samples=', 'period=', 'output='])
+  options, args = getopt.getopt(
+    sys.argv[1:], 's:p:o:', ['samples=', 'period=', 'output=']
+  )
   for option, value in options:
     if option == '-s' or option == '--samples':
       samples = int(value)

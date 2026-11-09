@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,8 @@
 #ifndef CHROME_COMMON_CHROME_CONSTANTS_H_
 #define CHROME_COMMON_CHROME_CONSTANTS_H_
 
-#include <stddef.h>
-
 #include "base/files/file_path.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
 namespace chrome {
 
@@ -20,99 +17,155 @@ extern const base::FilePath::CharType kBrowserProcessExecutableName[];
 extern const base::FilePath::CharType kHelperProcessExecutableName[];
 extern const base::FilePath::CharType kBrowserProcessExecutablePath[];
 extern const base::FilePath::CharType kHelperProcessExecutablePath[];
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
+extern const base::FilePath::CharType
+    kGoogleChromeForTestingBrowserProcessExecutablePath[];
+extern const base::FilePath::CharType
+    kGoogleChromeBrowserProcessExecutablePath[];
+extern const base::FilePath::CharType kChromiumBrowserProcessExecutablePath[];
 // NOTE: if you change the value of kFrameworkName, please don't forget to
 // update components/test/run_all_unittests.cc as well.
 // TODO(tfarina): Remove the comment above, when you fix components to use plist
 // on Mac.
 extern const base::FilePath::CharType kFrameworkName[];
 extern const base::FilePath::CharType kFrameworkExecutableName[];
-#endif  // OS_MAC
-#if defined(OS_WIN)
-extern const base::FilePath::CharType kBrowserResourcesDll[];
-extern const base::FilePath::CharType kElfDll[];
-extern const base::FilePath::CharType kStatusTrayWindowClass[];
-#endif  // defined(OS_WIN)
+// Suffix added to the helper app name to display alert notifications. Must be
+// kept in sync with the value in alert_helper_params (//chrome/BUILD.gn).
+extern const char kMacHelperSuffixAlerts[];
+#endif  // BUILDFLAG(IS_MAC)
 
-extern const char kInitialProfile[];
-extern const char kMultiProfileDirPrefix[];
-extern const char kEphemeralGuestProfileDirPrefix[];
-extern const base::FilePath::CharType kGuestProfileDir[];
-extern const base::FilePath::CharType kSystemProfileDir[];
+#if BUILDFLAG(IS_WIN)
+inline constexpr base::FilePath::CharType kBrowserResourcesDll[] =
+    FILE_PATH_LITERAL("chrome.dll");
+inline constexpr base::FilePath::CharType kElfDll[] =
+    FILE_PATH_LITERAL("chrome_elf.dll");
+inline constexpr base::FilePath::CharType kRendererDll[] =
+    FILE_PATH_LITERAL("chrome_renderer.dll");
+inline constexpr base::FilePath::CharType kStatusTrayWindowClass[] =
+    FILE_PATH_LITERAL("Chrome_StatusTrayWindow");
+#else
+inline constexpr base::FilePath::CharType kRendererProcessExecutableName[] =
+    FILE_PATH_LITERAL("chrome_renderer");
+#endif  // BUILDFLAG(IS_WIN)
+
+inline constexpr char kInitialProfile[] = "Default";
+inline constexpr char kMultiProfileDirPrefix[] = "Profile ";
+inline constexpr base::FilePath::CharType kGuestProfileDir[] =
+    FILE_PATH_LITERAL("Guest Profile");
+inline constexpr base::FilePath::CharType kSystemProfileDir[] =
+    FILE_PATH_LITERAL("System Profile");
 
 // filenames
-extern const base::FilePath::CharType kCacheDirname[];
-extern const base::FilePath::CharType kCookieFilename[];
-extern const base::FilePath::CharType kCRLSetFilename[];
-extern const base::FilePath::CharType kCustomDictionaryFileName[];
-extern const base::FilePath::CharType kDownloadServiceStorageDirname[];
-extern const base::FilePath::CharType kExtensionActivityLogFilename[];
-extern const base::FilePath::CharType kExtensionsCookieFilename[];
-extern const base::FilePath::CharType kFeatureEngagementTrackerStorageDirname[];
-extern const base::FilePath::CharType kFirstRunSentinel[];
-extern const base::FilePath::CharType kGCMStoreDirname[];
-extern const base::FilePath::CharType kLocalStateFilename[];
-extern const base::FilePath::CharType kMediaCacheDirname[];
-extern const base::FilePath::CharType kNetworkPersistentStateFilename[];
-extern const base::FilePath::CharType kNotificationSchedulerStorageDirname[];
-extern const base::FilePath::CharType kOfflinePageArchivesDirname[];
-extern const base::FilePath::CharType kOfflinePageMetadataDirname[];
-extern const base::FilePath::CharType kOfflinePagePrefetchStoreDirname[];
-extern const base::FilePath::CharType kOfflinePageRequestQueueDirname[];
-extern const base::FilePath::CharType kPreferencesFilename[];
-extern const base::FilePath::CharType kPreviewsOptOutDBFilename[];
-extern const base::FilePath::CharType kQueryTileStorageDirname[];
-extern const base::FilePath::CharType kReadmeFilename[];
-extern const base::FilePath::CharType kReportingAndNelStoreFilename[];
-extern const base::FilePath::CharType kSecurePreferencesFilename[];
-extern const base::FilePath::CharType kSegmentationPlatformStorageDirName[];
-extern const base::FilePath::CharType kServiceStateFileName[];
-extern const base::FilePath::CharType kSingletonCookieFilename[];
-extern const base::FilePath::CharType kSingletonLockFilename[];
-extern const base::FilePath::CharType kSingletonSocketFilename[];
-extern const base::FilePath::CharType kSupervisedUserSettingsFilename[];
-extern const base::FilePath::CharType kThemePackFilename[];
-extern const base::FilePath::CharType kTrustTokenFilename[];
-extern const base::FilePath::CharType kVideoTutorialsStorageDirname[];
-extern const base::FilePath::CharType kWebAppDirname[];
+inline constexpr base::FilePath::CharType kAccountPreferencesFilename[] =
+    FILE_PATH_LITERAL("AccountPreferences");
+inline constexpr base::FilePath::CharType kCacheDirname[] =
+    FILE_PATH_LITERAL("Cache");
+inline constexpr base::FilePath::CharType kCookieFilename[] =
+    FILE_PATH_LITERAL("Cookies");
+inline constexpr base::FilePath::CharType kCRLSetFilename[] =
+    FILE_PATH_LITERAL("Certificate Revocation Lists");
+inline constexpr base::FilePath::CharType kCustomDictionaryFileName[] =
+    FILE_PATH_LITERAL("Custom Dictionary.txt");
+inline constexpr base::FilePath::CharType kDeviceBoundSessionsFilename[] =
+    FILE_PATH_LITERAL("Device Bound Sessions");
+inline constexpr base::FilePath::CharType kDownloadServiceStorageDirname[] =
+    FILE_PATH_LITERAL("Download Service");
+inline constexpr base::FilePath::CharType kExtensionActivityLogFilename[] =
+    FILE_PATH_LITERAL("Extension Activity");
+inline constexpr base::FilePath::CharType kExtensionsCookieFilename[] =
+    FILE_PATH_LITERAL("Extension Cookies");
+inline constexpr base::FilePath::CharType
+    kFeatureEngagementTrackerStorageDirname[] =
+        FILE_PATH_LITERAL("Feature Engagement Tracker");
+inline constexpr base::FilePath::CharType kFirstRunSentinel[] =
+    FILE_PATH_LITERAL("First Run");
+inline constexpr base::FilePath::CharType kGCMStoreDirname[] =
+    FILE_PATH_LITERAL("GCM Store");
+inline constexpr base::FilePath::CharType kLocalStateFilename[] =
+    FILE_PATH_LITERAL("Local State");
+inline constexpr base::FilePath::CharType kMediaCacheDirname[] =
+    FILE_PATH_LITERAL("Media Cache");
+inline constexpr base::FilePath::CharType kNetworkPersistentStateFilename[] =
+    FILE_PATH_LITERAL("Network Persistent State");
+inline constexpr base::FilePath::CharType kNetworkDataDirname[] =
+    FILE_PATH_LITERAL("Network");
+inline constexpr base::FilePath::CharType
+    kNotificationSchedulerStorageDirname[] =
+        FILE_PATH_LITERAL("Notification Scheduler");
+inline constexpr base::FilePath::CharType kOfflinePageArchivesDirname[] =
+    FILE_PATH_LITERAL("Offline Pages/archives");
+inline constexpr base::FilePath::CharType kOfflinePageMetadataDirname[] =
+    FILE_PATH_LITERAL("Offline Pages/metadata");
+inline constexpr base::FilePath::CharType kOfflinePagePrefetchStoreDirname[] =
+    FILE_PATH_LITERAL("Offline Pages/prefech_store");
+inline constexpr base::FilePath::CharType kOfflinePageRequestQueueDirname[] =
+    FILE_PATH_LITERAL("Offline Pages/request_queue");
+inline constexpr base::FilePath::CharType kPreferencesFilename[] =
+    FILE_PATH_LITERAL("Preferences");
+inline constexpr base::FilePath::CharType kPreviewsOptOutDBFilename[] =
+    FILE_PATH_LITERAL("previews_opt_out.db");
+inline constexpr base::FilePath::CharType kQueryTileStorageDirname[] =
+    FILE_PATH_LITERAL("Query Tiles");
+inline constexpr base::FilePath::CharType kReadmeFilename[] =
+    FILE_PATH_LITERAL("README");
+inline constexpr base::FilePath::CharType kSCTAuditingPendingReportsFileName[] =
+    FILE_PATH_LITERAL("SCT Auditing Pending Reports");
+inline constexpr base::FilePath::CharType kSecurePreferencesFilename[] =
+    FILE_PATH_LITERAL("Secure Preferences");
+inline constexpr base::FilePath::CharType kServiceStateFileName[] =
+    FILE_PATH_LITERAL("Service State");
+inline constexpr base::FilePath::CharType
+    kSegmentationPlatformStorageDirName[] =
+        FILE_PATH_LITERAL("Segmentation Platform");
+inline constexpr base::FilePath::CharType kSingletonCookieFilename[] =
+    FILE_PATH_LITERAL("SingletonCookie");
+inline constexpr base::FilePath::CharType kSingletonLockFilename[] =
+    FILE_PATH_LITERAL("SingletonLock");
+inline constexpr base::FilePath::CharType kSingletonSocketFilename[] =
+    FILE_PATH_LITERAL("SingletonSocket");
+inline constexpr base::FilePath::CharType kThemePackFilename[] =
+    FILE_PATH_LITERAL("Cached Theme.pak");
+inline constexpr base::FilePath::CharType
+    kTransportSecurityPersisterFilename[] =
+        FILE_PATH_LITERAL("TransportSecurity");
+inline constexpr base::FilePath::CharType kTrustTokenFilename[] =
+    FILE_PATH_LITERAL("Trust Tokens");
+inline constexpr base::FilePath::CharType kVideoTutorialsStorageDirname[] =
+    FILE_PATH_LITERAL("Video Tutorials");
+inline constexpr base::FilePath::CharType kWebAppDirname[] =
+    FILE_PATH_LITERAL("Web Applications");
+// Only use if the ENABLE_REPORTING build flag is true
+inline constexpr base::FilePath::CharType kReportingAndNelStoreFilename[] =
+    FILE_PATH_LITERAL("Reporting and NEL");
 
-#if defined(OS_WIN)
-extern const base::FilePath::CharType kJumpListIconDirname[];
+#if BUILDFLAG(IS_WIN)
+inline constexpr base::FilePath::CharType kJumpListIconDirname[] =
+    FILE_PATH_LITERAL("JumpListIcons");
 #endif
 
 // directory names
-#if defined(OS_WIN)
-extern const wchar_t kUserDataDirname[];
+#if BUILDFLAG(IS_WIN)
+inline constexpr wchar_t kUserDataDirname[] = L"User Data";
+#elif BUILDFLAG(IS_ANDROID)
+inline constexpr base::FilePath::CharType kOTRTempStateDirname[] =
+    FILE_PATH_LITERAL("OTRTempState");
 #endif
 
-// Fraction of the total number of processes to be used for hosting
-// extensions. If we have more extensions than this percentage, we will start
-// combining extensions in existing processes. This allows web pages to have
-// enough render processes and not be starved when a lot of extensions are
-// installed.
-extern const float kMaxShareOfExtensionProcesses;
+// Fraction of the soft process limit that can be consumed by extensions, before
+// additional extension processes are ignored. By allowing this many extension
+// processes to count toward the limit, Chrome takes steps to limit the process
+// count (e.g., using same-site process sharing) when there are many tabs and
+// extensions. By ignoring extensions beyond this fraction, Chrome ensures that
+// a very large number of extensions cannot immediately force the user into a
+// one-process-per-site mode for all tabs (with poor responsiveness), while
+// still securely isolating each extension in its own process.
+inline constexpr float kMaxShareOfExtensionProcesses = 0.30f;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-// Chrome OS profile directories have custom prefix.
-// Profile path format: [user_data_dir]/u-[$hash]
-// Ex.: /home/chronos/u-0123456789
-extern const char kProfileDirPrefix[];
-
-// Legacy profile dir that was used when only one cryptohome has been mounted.
-extern const char kLegacyProfileDir[];
-
-// This must be kept in sync with TestingProfile::kTestUserProfileDir.
-extern const char kTestUserProfileDir[];
-
-// An anonymous profile that is used for lock screen apps.
-extern const char kLockScreenAppProfile[];
-
-// An incognito profile that is used for user authentication on lock screen.
-extern const char kLockScreenProfile[];
-#endif
-
-// Used to identify the application to the system AV function in Windows.
-extern const char kApplicationClientIDStringForAVScanning[];
+// This GUID is associated with any 'don't ask me again' settings that the
+// user can select for different file types.
+// {2676A9A2-D919-4FEE-9187-152100393AB2}
+inline constexpr char kApplicationClientIDStringForAVScanning[] =
+    "2676A9A2-D919-4FEE-9187-152100393AB2";
 
 }  // namespace chrome
 

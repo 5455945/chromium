@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,13 @@
 
 #include <unordered_set>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
+#include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool/test_utils.h"
-#include "base/task_runner.h"
 #include "base/threading/thread_checker_impl.h"
 
 namespace base {
@@ -27,8 +27,8 @@ namespace test {
 // - The RunsTasksInCurrentSequence() method of the SequencedTaskRunner
 //   (kSequenced or kSingleThread modes) returns false on a thread on which a
 //   Task is run.
-// - The TaskRunnerHandles set in the context of the task don't match what's
-//   expected for the tested TaskSourceExecutionMode.
+// - The task runner CurrentDefaultHandles set in the context of the task don't
+//   match what's expected for the tested TaskSourceExecutionMode.
 // - The TaskSourceExecutionMode of the TaskRunner is kSequenced or
 //   kSingleThread and Tasks don't run in posting order.
 // - The TaskSourceExecutionMode of the TaskRunner is kSingleThread and Tasks

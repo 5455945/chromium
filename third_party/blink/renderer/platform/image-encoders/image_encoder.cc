@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 #include "base/notreached.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <basetsd.h>  // Included before jpeglib.h because of INT32 clash
-#endif                // OS_WIN
-#include <stdio.h>    // Needed by jpeglib.h
+#endif
+#include <stdio.h>  // Needed by jpeglib.h
 
 #include "jpeglib.h"  // for JPEG_MAX_DIMENSION
-
-#include "third_party/libwebp/src/webp/encode.h"  // for WEBP_MAX_DIMENSION
+#include "third_party/libwebp/src/src/webp/encode.h"  // for WEBP_MAX_DIMENSION
 
 namespace blink {
 
@@ -27,9 +26,18 @@ bool ImageEncoder::Encode(Vector<unsigned char>* dst,
 
 bool ImageEncoder::Encode(Vector<unsigned char>* dst,
                           const SkPixmap& src,
-                          const SkPngEncoder::Options& options) {
+                          const SkPngRustEncoder::Options& options) {
   VectorWStream dst_stream(dst);
-  return SkPngEncoder::Encode(&dst_stream, src, options);
+  return SkPngRustEncoder::Encode(&dst_stream, src, options);
+}
+
+bool ImageEncoder::Encode(
+    Vector<unsigned char>* dst,
+    const SkPixmap& src,
+    SkPngRustEncoder::CompressionLevel compression_level) {
+  VectorWStream dst_stream(dst);
+  SkPngRustEncoder::Options options = {.fCompressionLevel = compression_level};
+  return SkPngRustEncoder::Encode(&dst_stream, src, options);
 }
 
 bool ImageEncoder::Encode(Vector<unsigned char>* dst,
@@ -37,6 +45,36 @@ bool ImageEncoder::Encode(Vector<unsigned char>* dst,
                           const SkWebpEncoder::Options& options) {
   VectorWStream dst_stream(dst);
   return SkWebpEncoder::Encode(&dst_stream, src, options);
+}
+
+bool ImageEncoder::Encode(Vector<unsigned char>* dst,
+                          const SkPixmap& src,
+                          const skhdr::Metadata* hdr_metadata,
+                          ImageEncodingMimeType mime_type,
+                          double quality) {
+  switch (mime_type) {
+    case kMimeTypeJpeg: {
+      SkJpegEncoder::Options options;
+      options.fQuality = ComputeJpegQuality(quality);
+      options.fAlphaOption = SkJpegEncoder::AlphaOption::kBlendOnBlack;
+      options.fHdrMetadata = hdr_metadata;
+      if (options.fQuality == 100) {
+        options.fDownsample = SkJpegEncoder::Downsample::k444;
+      }
+      return Encode(dst, src, options);
+    }
+    case kMimeTypeWebp: {
+      SkWebpEncoder::Options options = ComputeWebpOptions(quality);
+      options.fHdrMetadata = hdr_metadata;
+      return Encode(dst, src, options);
+    }
+    case kMimeTypePng: {
+      SkPngRustEncoder::Options options;
+      options.fCompressionLevel = SkPngRustEncoder::CompressionLevel::kLow;
+      options.fHdrMetadata = hdr_metadata;
+      return Encode(dst, src, options);
+    }
+  }
 }
 
 std::unique_ptr<ImageEncoder> ImageEncoder::Create(
@@ -56,10 +94,10 @@ std::unique_ptr<ImageEncoder> ImageEncoder::Create(
 std::unique_ptr<ImageEncoder> ImageEncoder::Create(
     Vector<unsigned char>* dst,
     const SkPixmap& src,
-    const SkPngEncoder::Options& options) {
+    const SkPngRustEncoder::Options& options) {
   std::unique_ptr<ImageEncoder> image_encoder(new ImageEncoder(dst));
   image_encoder->encoder_ =
-      SkPngEncoder::Make(&image_encoder->dst_, src, options);
+      SkPngRustEncoder::Make(&image_encoder->dst_, src, options);
   if (!image_encoder->encoder_) {
     return nullptr;
   }
@@ -78,7 +116,6 @@ int ImageEncoder::MaxDimension(ImageEncodingMimeType mime_type) {
     default:
       NOTREACHED();
   }
-  return -1;
 }
 
 int ImageEncoder::ComputeJpegQuality(double quality) {

@@ -5,120 +5,315 @@
 
 [TOC]
 
-Changes that only modify files in //infra/config, which do not change any build
-outputs, only require the chromium_presubmit builder to pass before landing.
-
-Each builder name links to that builder on Milo. The "matching builders" links
-point to the file used to determine which configurations a builder should copy
-when running. These links might 404 or error; they are hard-coded right now,
-using common assumptions about how builders are configured.
+Each builder name links to that builder on Milo.
 
 ## Required builders
 These builders must pass before a CL may land that affects files outside of
-//infra/config.
+//docs and //infra/config.
 
-* [android-binary-size](https://ci.chromium.org/p/chromium/builders/try/android-binary-size) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-binary-size)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-binary-size))
+### chrome
+* [chromeos-betty-chrome-gtest](https://ci.chromium.org/p/chrome/builders/try/chromeos-betty-chrome-gtest) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""chromeos-betty-chrome-gtest""))
 
-* [android-lollipop-arm-rel](https://ci.chromium.org/p/chromium/builders/try/android-lollipop-arm-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-lollipop-arm-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-lollipop-arm-rel))
+    * Replaced with builder: [chromeos-betty-chrome-gtest-and-cqtast](https://ci.chromium.org/p/chrome/builders/try/chromeos-betty-chrome-gtest-and-cqtast) when CL owner is in group [google/chromeos-pa@google.com](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/chromeos-pa@google.com)
 
-* [android-marshmallow-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/android-marshmallow-arm64-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-marshmallow-arm64-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-marshmallow-arm64-rel))
+* [chromeos-betty-compile-chrome](https://ci.chromium.org/p/chrome/builders/try/chromeos-betty-compile-chrome) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""chromeos-betty-compile-chrome""))
 
-* [android-marshmallow-x86-rel](https://ci.chromium.org/p/chromium/builders/try/android-marshmallow-x86-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-marshmallow-x86-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-marshmallow-x86-rel))
+    * Replaced with builder: [chromeos-betty-chrome-noop](https://ci.chromium.org/p/chrome/builders/try/chromeos-betty-chrome-noop) when CL owner is in group [googlers](https://chrome-infra-auth.appspot.com/auth/lookup?p=googlers)
 
-* [android-pie-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/android-pie-arm64-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-pie-arm64-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-pie-arm64-rel))
+* [linux-chromeos-compile-chrome](https://ci.chromium.org/p/chrome/builders/try/linux-chromeos-compile-chrome) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""linux-chromeos-compile-chrome""))
 
-* [android_compile_dbg](https://ci.chromium.org/p/chromium/builders/try/android_compile_dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android_compile_dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android_compile_dbg))
+* [win-branded-compile-rel](https://ci.chromium.org/p/chrome/builders/try/win-branded-compile-rel) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""win-branded-compile-rel""))
 
-* [android_cronet](https://ci.chromium.org/p/chromium/builders/try/android_cronet) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android_cronet)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android_cronet))
+### chromium
+* [android-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/android-arm64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-arm64-rel""))
 
-* [cast_shell_android](https://ci.chromium.org/p/chromium/builders/try/cast_shell_android) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+cast_shell_android)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+cast_shell_android))
+* [android-binary-size](https://ci.chromium.org/p/chromium/builders/try/android-binary-size) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-binary-size""))
 
-* [cast_shell_linux](https://ci.chromium.org/p/chromium/builders/try/cast_shell_linux) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+cast_shell_linux)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+cast_shell_linux))
+* [android-cronet-arm-rel](https://ci.chromium.org/p/chromium/builders/try/android-cronet-arm-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cronet-arm-rel""))
 
-* [chromeos-amd64-generic-rel](https://ci.chromium.org/p/chromium/builders/try/chromeos-amd64-generic-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+chromeos-amd64-generic-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+chromeos-amd64-generic-rel))
+* [android-desktop-x64-rel](https://ci.chromium.org/p/chromium/builders/try/android-desktop-x64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-desktop-x64-rel""))
 
-* [chromeos-arm-generic-rel](https://ci.chromium.org/p/chromium/builders/try/chromeos-arm-generic-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+chromeos-arm-generic-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+chromeos-arm-generic-rel))
+    * Replaced with builder: [android-internal-desktop-x64-rel](https://ci.chromium.org/p/chrome/builders/try/android-internal-desktop-x64-rel) when CL owner is in group [google/chrome-al-eng@google.com](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/chrome-al-eng@google.com)
 
-* [chromium_presubmit](https://ci.chromium.org/p/chromium/builders/try/chromium_presubmit) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+chromium_presubmit)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+chromium_presubmit))
+* [android-x64-rel](https://ci.chromium.org/p/chromium/builders/try/android-x64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-x64-rel""))
 
-* [fuchsia-x64-cast](https://ci.chromium.org/p/chromium/builders/try/fuchsia-x64-cast) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+fuchsia-x64-cast)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+fuchsia-x64-cast))
+* [android-x86-rel](https://ci.chromium.org/p/chromium/builders/try/android-x86-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-x86-rel""))
 
-* [fuchsia_arm64](https://ci.chromium.org/p/chromium/builders/try/fuchsia_arm64) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+fuchsia_arm64)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+fuchsia_arm64))
+* [android_compile_dbg](https://ci.chromium.org/p/chromium/builders/try/android_compile_dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android_compile_dbg""))
 
-* [fuchsia_x64](https://ci.chromium.org/p/chromium/builders/try/fuchsia_x64) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+fuchsia_x64)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+fuchsia_x64))
+* [chromeos-arm64-generic-rel](https://ci.chromium.org/p/chromium/builders/try/chromeos-arm64-generic-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""chromeos-arm64-generic-rel""))
 
-* [ios-simulator](https://ci.chromium.org/p/chromium/builders/try/ios-simulator) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+ios-simulator)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+ios-simulator))
+* [compile-size](https://ci.chromium.org/p/chromium/builders/try/compile-size) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""compile-size""))
 
-* [lacros-amd64-generic-rel](https://ci.chromium.org/p/chromium/builders/try/lacros-amd64-generic-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+lacros-amd64-generic-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+lacros-amd64-generic-rel))
+* [fuchsia-binary-size](https://ci.chromium.org/p/chromium/builders/try/fuchsia-binary-size) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""fuchsia-binary-size""))
 
-* [linux-chromeos-compile-dbg](https://ci.chromium.org/p/chromium/builders/try/linux-chromeos-compile-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-chromeos-compile-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-chromeos-compile-dbg))
+* [fuchsia-x64-cast-receiver-rel](https://ci.chromium.org/p/chromium/builders/try/fuchsia-x64-cast-receiver-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""fuchsia-x64-cast-receiver-rel""))
 
-* [linux-chromeos-rel](https://ci.chromium.org/p/chromium/builders/try/linux-chromeos-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-chromeos-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-chromeos-rel))
+* [ios-simulator](https://ci.chromium.org/p/chromium/builders/try/ios-simulator) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""ios-simulator""))
 
-* [linux-lacros-rel](https://ci.chromium.org/p/chromium/builders/try/linux-lacros-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-lacros-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-lacros-rel))
+* [linux-chromeos-compile-dbg](https://ci.chromium.org/p/chromium/builders/try/linux-chromeos-compile-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-chromeos-compile-dbg""))
 
-* [linux-libfuzzer-asan-rel](https://ci.chromium.org/p/chromium/builders/try/linux-libfuzzer-asan-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-libfuzzer-asan-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-libfuzzer-asan-rel))
+* [linux-chromeos-rel](https://ci.chromium.org/p/chromium/builders/try/linux-chromeos-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-chromeos-rel""))
 
-* [linux-ozone-rel](https://ci.chromium.org/p/chromium/builders/try/linux-ozone-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-ozone-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-ozone-rel))
+* [linux-libfuzzer-asan-rel](https://ci.chromium.org/p/chromium/builders/try/linux-libfuzzer-asan-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-libfuzzer-asan-rel""))
 
-* [linux-rel](https://ci.chromium.org/p/chromium/builders/try/linux-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-rel))
+* [linux-presubmit](https://ci.chromium.org/p/chromium/builders/try/linux-presubmit) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-presubmit""))
 
-* [linux_chromium_asan_rel_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_asan_rel_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_chromium_asan_rel_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_chromium_asan_rel_ng))
+* [linux-rel](https://ci.chromium.org/p/chromium/builders/try/linux-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-rel""))
 
-* [linux_chromium_compile_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_compile_dbg_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_chromium_compile_dbg_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_chromium_compile_dbg_ng))
+* [linux_chromium_asan_rel_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_asan_rel_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux_chromium_asan_rel_ng""))
 
-* [linux_chromium_tsan_rel_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_tsan_rel_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_chromium_tsan_rel_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_chromium_tsan_rel_ng))
+* [linux_chromium_compile_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_compile_dbg_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux_chromium_compile_dbg_ng""))
 
-* [mac-rel](https://ci.chromium.org/p/chromium/builders/try/mac-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+mac-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+mac-rel))
+* [linux_chromium_tsan_rel_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_tsan_rel_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux_chromium_tsan_rel_ng""))
 
-* [mac_chromium_compile_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/mac_chromium_compile_dbg_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+mac_chromium_compile_dbg_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+mac_chromium_compile_dbg_ng))
+* [mac-gpu-rel](https://ci.chromium.org/p/chromium/builders/try/mac-gpu-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-gpu-rel""))
 
-* [win-libfuzzer-asan-rel](https://ci.chromium.org/p/chromium/builders/try/win-libfuzzer-asan-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win-libfuzzer-asan-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win-libfuzzer-asan-rel))
+* [mac-rel](https://ci.chromium.org/p/chromium/builders/try/mac-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-rel""))
 
-* [win10_chromium_x64_rel_ng](https://ci.chromium.org/p/chromium/builders/try/win10_chromium_x64_rel_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win10_chromium_x64_rel_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win10_chromium_x64_rel_ng))
+* [mac_chromium_compile_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/mac_chromium_compile_dbg_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac_chromium_compile_dbg_ng""))
 
-* [win_chromium_compile_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/win_chromium_compile_dbg_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win_chromium_compile_dbg_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win_chromium_compile_dbg_ng))
+* [win-arm64-compile-dbg](https://ci.chromium.org/p/chromium/builders/try/win-arm64-compile-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-arm64-compile-dbg""))
+
+* [win-libfuzzer-asan-rel](https://ci.chromium.org/p/chromium/builders/try/win-libfuzzer-asan-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-libfuzzer-asan-rel""))
+
+* [win-presubmit](https://ci.chromium.org/p/chromium/builders/try/win-presubmit) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-presubmit""))
+
+* [win-rel](https://ci.chromium.org/p/chromium/builders/try/win-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-rel""))
+
+* [win_chromium_compile_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/win_chromium_compile_dbg_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win_chromium_compile_dbg_ng""))
 
 
 ## Optional builders
 These builders optionally run, depending on the files in a CL. For example, a CL
 which touches `//gpu/BUILD.gn` would trigger the builder
-`android_optional_gpu_tests_rel`, due to the `location_regexp` values for that
+`android_optional_gpu_tests_rel`, due to the `location_filters` values for that
 builder.
 
-* [3pp-linux-amd64-packager](https://ci.chromium.org/p/chromium/builders/try/3pp-linux-amd64-packager) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+3pp-linux-amd64-packager)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+3pp-linux-amd64-packager))
+### chrome
+* [cronet-arm64-gn2bp-debug](https://ci.chromium.org/p/chrome/builders/try/cronet-arm64-gn2bp-debug) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""cronet-arm64-gn2bp-debug""))
 
-  Path regular expressions:
-  * [`//.+/3pp/.+`](https://cs.chromium.org/search?q=package:%5Echromium$+file:.+/3pp/)
-
-* [android-cronet-arm-dbg](https://ci.chromium.org/p/chromium/builders/try/android-cronet-arm-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-cronet-arm-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-cronet-arm-dbg))
-
-  Path regular expressions:
+  Location filters:
   * [`//components/cronet/.+`](https://cs.chromium.org/chromium/src/components/cronet/)
-  * [`//components/grpc_support/.+`](https://cs.chromium.org/chromium/src/components/grpc_support/)
-  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
-  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//third_party/protobuf/.+`](https://cs.chromium.org/chromium/src/third_party/protobuf/)
 
-  Path exclude regular expressions:
-  * [`//components/cronet/ios/.+`](https://cs.chromium.org/chromium/src/components/cronet/ios/)
+* [internal-cq-builder-verifier](https://ci.chromium.org/p/chrome/builders/try/internal-cq-builder-verifier) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""internal-cq-builder-verifier""))
 
-* [android-pie-arm64-dbg](https://ci.chromium.org/p/chromium/builders/try/android-pie-arm64-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-pie-arm64-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-pie-arm64-dbg))
+  Location filters:
+  * [`//infra/config/generated/cq-usage/full.cfg`](https://cs.chromium.org/search?q=+file:infra/config/generated/cq-usage/full.cfg)
 
-  Path regular expressions:
+* [optimization_guide-linux](https://ci.chromium.org/p/chrome/builders/try/optimization_guide-linux) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""optimization_guide-linux""))
+
+  Location filters:
+  * [`//chrome/browser/ai/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ai/)
+  * [`//components/on_device_translation/.+`](https://cs.chromium.org/chromium/src/components/on_device_translation/)
+  * [`//components/optimization_guide/.+`](https://cs.chromium.org/chromium/src/components/optimization_guide/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//testing/buildbot/internal.optimization_guide.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/internal.optimization_guide.json)
+  * [`//third_party/blink/web_tests/external/wpt/ai/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/ai/)
+  * [`//third_party/blink/web_tests/AIExpectations.*`](https://cs.chromium.org/search?q=+file:third_party/blink/web_tests/AIExpectations.*)
+
+  This builder is only run when the CL owner is in the group:
+  * [`google/optimization-guide-try-opt-in@google.com`](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/optimization-guide-try-opt-in@google.com)
+
+* [optimization_guide-mac-arm64](https://ci.chromium.org/p/chrome/builders/try/optimization_guide-mac-arm64) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""optimization_guide-mac-arm64""))
+
+  Location filters:
+  * [`//chrome/browser/ai/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ai/)
+  * [`//components/on_device_translation/.+`](https://cs.chromium.org/chromium/src/components/on_device_translation/)
+  * [`//components/optimization_guide/.+`](https://cs.chromium.org/chromium/src/components/optimization_guide/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//testing/buildbot/internal.optimization_guide.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/internal.optimization_guide.json)
+  * [`//third_party/blink/web_tests/external/wpt/ai/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/ai/)
+  * [`//third_party/blink/web_tests/AIExpectations.*`](https://cs.chromium.org/search?q=+file:third_party/blink/web_tests/AIExpectations.*)
+
+  This builder is only run when the CL owner is in the group:
+  * [`google/optimization-guide-try-opt-in@google.com`](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/optimization-guide-try-opt-in@google.com)
+
+* [optimization_guide-mac-x64](https://ci.chromium.org/p/chrome/builders/try/optimization_guide-mac-x64) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""optimization_guide-mac-x64""))
+
+  Location filters:
+  * [`//chrome/browser/ai/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ai/)
+  * [`//components/on_device_translation/.+`](https://cs.chromium.org/chromium/src/components/on_device_translation/)
+  * [`//components/optimization_guide/.+`](https://cs.chromium.org/chromium/src/components/optimization_guide/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//testing/buildbot/internal.optimization_guide.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/internal.optimization_guide.json)
+  * [`//third_party/blink/web_tests/external/wpt/ai/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/ai/)
+  * [`//third_party/blink/web_tests/AIExpectations.*`](https://cs.chromium.org/search?q=+file:third_party/blink/web_tests/AIExpectations.*)
+
+  This builder is only run when the CL owner is in the group:
+  * [`google/optimization-guide-try-opt-in@google.com`](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/optimization-guide-try-opt-in@google.com)
+
+* [optimization_guide-win-arm64](https://ci.chromium.org/p/chrome/builders/try/optimization_guide-win-arm64) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""optimization_guide-win-arm64""))
+
+  Location filters:
+  * [`//chrome/browser/ai/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ai/)
+  * [`//components/on_device_translation/.+`](https://cs.chromium.org/chromium/src/components/on_device_translation/)
+  * [`//components/optimization_guide/.+`](https://cs.chromium.org/chromium/src/components/optimization_guide/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//testing/buildbot/internal.optimization_guide.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/internal.optimization_guide.json)
+  * [`//third_party/blink/web_tests/external/wpt/ai/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/ai/)
+  * [`//third_party/blink/web_tests/AIExpectations.*`](https://cs.chromium.org/search?q=+file:third_party/blink/web_tests/AIExpectations.*)
+
+  This builder is only run when the CL owner is in the group:
+  * [`google/optimization-guide-try-opt-in@google.com`](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/optimization-guide-try-opt-in@google.com)
+
+* [optimization_guide-win64](https://ci.chromium.org/p/chrome/builders/try/optimization_guide-win64) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""optimization_guide-win64""))
+
+  Location filters:
+  * [`//chrome/browser/ai/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ai/)
+  * [`//components/on_device_translation/.+`](https://cs.chromium.org/chromium/src/components/on_device_translation/)
+  * [`//components/optimization_guide/.+`](https://cs.chromium.org/chromium/src/components/optimization_guide/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//testing/buildbot/internal.optimization_guide.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/internal.optimization_guide.json)
+  * [`//third_party/blink/web_tests/external/wpt/ai/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/ai/)
+  * [`//third_party/blink/web_tests/AIExpectations.*`](https://cs.chromium.org/search?q=+file:third_party/blink/web_tests/AIExpectations.*)
+
+  This builder is only run when the CL owner is in the group:
+  * [`google/optimization-guide-try-opt-in@google.com`](https://chrome-infra-auth.appspot.com/auth/lookup?p=google/optimization-guide-try-opt-in@google.com)
+
+### chromium
+* [3pp-linux-amd64-packager](https://ci.chromium.org/p/chromium/builders/try/3pp-linux-amd64-packager) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""3pp-linux-amd64-packager""))
+
+  Location filters:
+  * [`//.+/3pp/.+`](https://cs.chromium.org/search?q=+file:.+/3pp/)
+
+* [android-10-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/android-10-arm64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-10-arm64-rel""))
+
+  Location filters:
   * [`//chrome/android/features/vr/.+`](https://cs.chromium.org/chromium/src/chrome/android/features/vr/)
   * [`//chrome/android/java/src/org/chromium/chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/android/java/src/org/chromium/chrome/browser/vr/)
   * [`//chrome/android/javatests/src/org/chromium/chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/android/javatests/src/org/chromium/chrome/browser/vr/)
   * [`//chrome/browser/android/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/android/vr/)
   * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//components/webxr/.+`](https://cs.chromium.org/chromium/src/components/webxr/)
   * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
-  * [`//device/vr/android/.+`](https://cs.chromium.org/chromium/src/device/vr/android/)
+  * [`//device/vr/.+`](https://cs.chromium.org/chromium/src/device/vr/)
+  * [`//third_party/cardboard/.+`](https://cs.chromium.org/chromium/src/third_party/cardboard/)
+  * [`//third_party/openxr/.+`](https://cs.chromium.org/chromium/src/third_party/openxr/)
   * [`//third_party/gvr-android-sdk/.+`](https://cs.chromium.org/chromium/src/third_party/gvr-android-sdk/)
   * [`//third_party/arcore-android-sdk/.+`](https://cs.chromium.org/chromium/src/third_party/arcore-android-sdk/)
   * [`//third_party/arcore-android-sdk-client/.+`](https://cs.chromium.org/chromium/src/third_party/arcore-android-sdk-client/)
 
-* [android_compile_x64_dbg](https://ci.chromium.org/p/chromium/builders/try/android_compile_x64_dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android_compile_x64_dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android_compile_x64_dbg))
+* [android-cast-arm-dbg](https://ci.chromium.org/p/chromium/builders/try/android-cast-arm-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cast-arm-dbg""))
 
-  Path regular expressions:
+  Location filters:
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//chrome/browser/safe_browsing/BUILD.gn`](https://cs.chromium.org/search?q=+file:chrome/browser/safe_browsing/BUILD.gn)
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [android-cast-arm-rel](https://ci.chromium.org/p/chromium/builders/try/android-cast-arm-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cast-arm-rel""))
+
+  Location filters:
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//chrome/browser/safe_browsing/BUILD.gn`](https://cs.chromium.org/search?q=+file:chrome/browser/safe_browsing/BUILD.gn)
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [android-cast-arm64-dbg](https://ci.chromium.org/p/chromium/builders/try/android-cast-arm64-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cast-arm64-dbg""))
+
+  Location filters:
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//chrome/browser/safe_browsing/BUILD.gn`](https://cs.chromium.org/search?q=+file:chrome/browser/safe_browsing/BUILD.gn)
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/jni_zero/.+`](https://cs.chromium.org/chromium/src/third_party/jni_zero/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [android-cast-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/android-cast-arm64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cast-arm64-rel""))
+
+  Location filters:
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//chrome/browser/safe_browsing/BUILD.gn`](https://cs.chromium.org/search?q=+file:chrome/browser/safe_browsing/BUILD.gn)
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/jni_zero/.+`](https://cs.chromium.org/chromium/src/third_party/jni_zero/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [android-cronet-arm-dbg](https://ci.chromium.org/p/chromium/builders/try/android-cronet-arm-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cronet-arm-dbg""))
+
+  Location filters:
+  * [`//components/cronet/.+`](https://cs.chromium.org/chromium/src/components/cronet/)
+  * [`//components/grpc_support/.+`](https://cs.chromium.org/chromium/src/components/grpc_support/)
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//third_party/jni_zero/.+`](https://cs.chromium.org/chromium/src/third_party/jni_zero/)
+
+* [android-cronet-x64-dbg-16-tests](https://ci.chromium.org/p/chromium/builders/try/android-cronet-x64-dbg-16-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cronet-x64-dbg-16-tests""))
+
+  Location filters:
+  * [`//components/cronet/.+`](https://cs.chromium.org/chromium/src/components/cronet/)
+  * [`//components/grpc_support/.+`](https://cs.chromium.org/chromium/src/components/grpc_support/)
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+
+* [android-cronet-x64-rel](https://ci.chromium.org/p/chromium/builders/try/android-cronet-x64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cronet-x64-rel""))
+
+  Location filters:
+  * [`//components/cronet/.+`](https://cs.chromium.org/chromium/src/components/cronet/)
+  * [`//components/grpc_support/.+`](https://cs.chromium.org/chromium/src/components/grpc_support/)
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+  * [`//third_party/jni_zero/.+`](https://cs.chromium.org/chromium/src/third_party/jni_zero/)
+
+* [android-cronet-x86-dbg](https://ci.chromium.org/p/chromium/builders/try/android-cronet-x86-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cronet-x86-dbg""))
+
+  Location filters:
+  * [`//net/.+`](https://cs.chromium.org/chromium/src/net/)
+
+* [android-cronet-x86-dbg-nougat-tests](https://ci.chromium.org/p/chromium/builders/try/android-cronet-x86-dbg-nougat-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android-cronet-x86-dbg-nougat-tests""))
+
+  Location filters:
+  * [`//components/cronet/.+`](https://cs.chromium.org/chromium/src/components/cronet/)
+  * [`//components/grpc_support/.+`](https://cs.chromium.org/chromium/src/components/grpc_support/)
+  * [`//build/android/.+`](https://cs.chromium.org/chromium/src/build/android/)
+  * [`//build/config/android/.+`](https://cs.chromium.org/chromium/src/build/config/android/)
+
+* [android_compile_x64_dbg](https://ci.chromium.org/p/chromium/builders/try/android_compile_x64_dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android_compile_x64_dbg""))
+
+  Location filters:
+  * [`//chrome/android/java/src/org/chromium/chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/android/java/src/org/chromium/chrome/browser/vr/)
+  * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//sandbox/linux/seccomp-bpf/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/seccomp-bpf/)
+  * [`//sandbox/linux/seccomp-bpf-helpers/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/seccomp-bpf-helpers/)
+  * [`//sandbox/linux/system_headers/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/system_headers/)
+  * [`//sandbox/linux/tests/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/tests/)
+  * [`//third_party/eigen3/.+`](https://cs.chromium.org/chromium/src/third_party/eigen3/)
+  * [`//third_party/farmhash/.+`](https://cs.chromium.org/chromium/src/third_party/farmhash/)
+  * [`//third_party/fft2d/.+`](https://cs.chromium.org/chromium/src/third_party/fft2d/)
+  * [`//third_party/flatbuffers/.+`](https://cs.chromium.org/chromium/src/third_party/flatbuffers/)
+  * [`//third_party/fp16/.+`](https://cs.chromium.org/chromium/src/third_party/fp16/)
+  * [`//third_party/fxdiv/.+`](https://cs.chromium.org/chromium/src/third_party/fxdiv/)
+  * [`//third_party/gemmlowp/.+`](https://cs.chromium.org/chromium/src/third_party/gemmlowp/)
+  * [`//third_party/gvr-android-sdk/.+`](https://cs.chromium.org/chromium/src/third_party/gvr-android-sdk/)
+  * [`//third_party/pthreadpool/.+`](https://cs.chromium.org/chromium/src/third_party/pthreadpool/)
+  * [`//third_party/ruy/.+`](https://cs.chromium.org/chromium/src/third_party/ruy/)
+  * [`//third_party/tflite/.+`](https://cs.chromium.org/chromium/src/third_party/tflite/)
+  * [`//third_party/xnnpack/.+`](https://cs.chromium.org/chromium/src/third_party/xnnpack/)
+
+* [android_compile_x86_dbg](https://ci.chromium.org/p/chromium/builders/try/android_compile_x86_dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android_compile_x86_dbg""))
+
+  Location filters:
   * [`//chrome/android/java/src/org/chromium/chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/android/java/src/org/chromium/chrome/browser/vr/)
   * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
   * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
@@ -128,25 +323,14 @@ builder.
   * [`//sandbox/linux/tests/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/tests/)
   * [`//third_party/gvr-android-sdk/.+`](https://cs.chromium.org/chromium/src/third_party/gvr-android-sdk/)
 
-* [android_compile_x86_dbg](https://ci.chromium.org/p/chromium/builders/try/android_compile_x86_dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android_compile_x86_dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android_compile_x86_dbg))
+* [android_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/android_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""android_optional_gpu_tests_rel""))
 
-  Path regular expressions:
-  * [`//chrome/android/java/src/org/chromium/chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/android/java/src/org/chromium/chrome/browser/vr/)
-  * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
-  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
-  * [`//sandbox/linux/seccomp-bpf/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/seccomp-bpf/)
-  * [`//sandbox/linux/seccomp-bpf-helpers/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/seccomp-bpf-helpers/)
-  * [`//sandbox/linux/system_headers/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/system_headers/)
-  * [`//sandbox/linux/tests/.+`](https://cs.chromium.org/chromium/src/sandbox/linux/tests/)
-  * [`//third_party/gvr-android-sdk/.+`](https://cs.chromium.org/chromium/src/third_party/gvr-android-sdk/)
-
-* [android_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/android_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android_optional_gpu_tests_rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android_optional_gpu_tests_rel))
-
-  Path regular expressions:
+  Location filters:
   * [`//cc/.+`](https://cs.chromium.org/chromium/src/cc/)
   * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
-  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
   * [`//components/viz/.+`](https://cs.chromium.org/chromium/src/components/viz/)
+  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
   * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
   * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
@@ -162,161 +346,201 @@ builder.
   * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
   * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
   * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
   * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
   * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
 
-* [branch-config-verifier](https://ci.chromium.org/p/chromium/builders/try/branch-config-verifier) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+branch-config-verifier)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+branch-config-verifier))
+* [branch-config-verifier](https://ci.chromium.org/p/chromium/builders/try/branch-config-verifier) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""branch-config-verifier""))
 
-  Path regular expressions:
+  Location filters:
   * [`//infra/config/.+`](https://cs.chromium.org/chromium/src/infra/config/)
 
-* [cast_shell_linux_dbg](https://ci.chromium.org/p/chromium/builders/try/cast_shell_linux_dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+cast_shell_linux_dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+cast_shell_linux_dbg))
+* [builder-config-verifier](https://ci.chromium.org/p/chromium/builders/try/builder-config-verifier) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""builder-config-verifier""))
 
-  Path regular expressions:
-  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  Location filters:
+  * [`//infra/config/generated/builders[^/]+/[^/]+/properties\.json`](https://cs.chromium.org/search?q=+file:infra/config/generated/builders[^/]+/[^/]+/properties\.json)
 
-* [chromeos-amd64-generic-dbg](https://ci.chromium.org/p/chromium/builders/try/chromeos-amd64-generic-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+chromeos-amd64-generic-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+chromeos-amd64-generic-dbg))
+* [chromeos-amd64-generic-dbg](https://ci.chromium.org/p/chromium/builders/try/chromeos-amd64-generic-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""chromeos-amd64-generic-dbg""))
 
-  Path regular expressions:
+  Location filters:
   * [`//content/gpu/.+`](https://cs.chromium.org/chromium/src/content/gpu/)
   * [`//media/.+`](https://cs.chromium.org/chromium/src/media/)
 
-* [chromeos-kevin-rel](https://ci.chromium.org/p/chromium/builders/try/chromeos-kevin-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+chromeos-kevin-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+chromeos-kevin-rel))
+* [chromeos-x64-libfuzzer-asan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/chromeos-x64-libfuzzer-asan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""chromeos-x64-libfuzzer-asan-rel-tests""))
 
-  Path regular expressions:
-  * [`//build/chromeos/.+`](https://cs.chromium.org/chromium/src/build/chromeos/)
-  * [`//build/config/chromeos/.*`](https://cs.chromium.org/search?q=package:%5Echromium$+file:build/config/chromeos/.*)
-  * [`//chromeos/CHROMEOS_LKGM`](https://cs.chromium.org/chromium/src/chromeos/CHROMEOS_LKGM)
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
 
-* [dawn-linux-x64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-linux-x64-deps-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+dawn-linux-x64-deps-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+dawn-linux-x64-deps-rel))
+* [dawn-android-arm-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-android-arm-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-android-arm-deps-rel""))
 
-  Path regular expressions:
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
-  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.dawn.json)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
   * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
   * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
   * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
   * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
   * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
   * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
-  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=package:%5Echromium$+file:ui/gl/features.gni)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
 
-* [dawn-mac-x64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-mac-x64-deps-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+dawn-mac-x64-deps-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+dawn-mac-x64-deps-rel))
+* [dawn-android-arm64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-android-arm64-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-android-arm64-deps-rel""))
 
-  Path regular expressions:
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
-  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.dawn.json)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
   * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
   * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
   * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
   * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
   * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
   * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
-  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=package:%5Echromium$+file:ui/gl/features.gni)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
 
-* [dawn-win10-x64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-win10-x64-deps-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+dawn-win10-x64-deps-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+dawn-win10-x64-deps-rel))
+* [dawn-linux-x64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-linux-x64-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-linux-x64-deps-rel""))
 
-  Path regular expressions:
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
-  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.dawn.json)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
   * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
   * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
   * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
   * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
   * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
   * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
-  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=package:%5Echromium$+file:ui/gl/features.gni)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
 
-* [dawn-win10-x86-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-win10-x86-deps-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+dawn-win10-x86-deps-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+dawn-win10-x86-deps-rel))
+* [dawn-mac-arm64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-mac-arm64-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-mac-arm64-deps-rel""))
 
-  Path regular expressions:
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
-  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.dawn.json)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
   * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
   * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
   * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
   * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
   * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
   * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
-  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=package:%5Echromium$+file:ui/gl/features.gni)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
 
-* [fuchsia-arm64-cast](https://ci.chromium.org/p/chromium/builders/try/fuchsia-arm64-cast) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+fuchsia-arm64-cast)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+fuchsia-arm64-cast))
+* [dawn-mac-x64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-mac-x64-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-mac-x64-deps-rel""))
 
-  Path regular expressions:
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
+  * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
+  * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
+  * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
+  * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
+
+* [dawn-win10-x64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-win10-x64-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-win10-x64-deps-rel""))
+
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
+  * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
+  * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
+  * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
+  * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
+
+* [dawn-win10-x86-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-win10-x86-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-win10-x86-deps-rel""))
+
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
+  * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
+  * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
+  * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
+  * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
+
+* [dawn-win11-arm64-deps-rel](https://ci.chromium.org/p/chromium/builders/try/dawn-win11-arm64-deps-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""dawn-win11-arm64-deps-rel""))
+
+  Location filters:
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//testing/buildbot/chromium.dawn.json`](https://cs.chromium.org/search?q=+file:testing/buildbot/chromium.dawn.json)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//third_party/blink/web_tests/external/wpt/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/external/wpt/webgpu/)
+  * [`//third_party/blink/web_tests/wpt_internal/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/wpt_internal/webgpu/)
+  * [`//third_party/blink/web_tests/WebGPUExpectations`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/WebGPUExpectations)
+  * [`//third_party/dawn/.+`](https://cs.chromium.org/chromium/src/third_party/dawn/)
+  * [`//third_party/webgpu-cts/.+`](https://cs.chromium.org/chromium/src/third_party/webgpu-cts/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/features.gni`](https://cs.chromium.org/search?q=+file:ui/gl/features.gni)
+
+* [fuchsia-arm64-cast-receiver-rel](https://ci.chromium.org/p/chromium/builders/try/fuchsia-arm64-cast-receiver-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""fuchsia-arm64-cast-receiver-rel""))
+
+  Location filters:
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//build/fuchsia/sdk_override.txt`](https://cs.chromium.org/search?q=+file:build/fuchsia/sdk_override.txt)
+
+* [fuchsia-x64-accessibility-rel](https://ci.chromium.org/p/chromium/builders/try/fuchsia-x64-accessibility-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""fuchsia-x64-accessibility-rel""))
+
+  Location filters:
+  * [`//third_party/blink/renderer/modules/accessibility/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/accessibility/)
+  * [`//content/renderer/accessibility/.+`](https://cs.chromium.org/chromium/src/content/renderer/accessibility/)
+  * [`//content/browser/accessibility/.+`](https://cs.chromium.org/chromium/src/content/browser/accessibility/)
+  * [`//ui/accessibility/.+`](https://cs.chromium.org/chromium/src/ui/accessibility/)
+
+* [fuchsia-x64-cast-receiver-dbg](https://ci.chromium.org/p/chromium/builders/try/fuchsia-x64-cast-receiver-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""fuchsia-x64-cast-receiver-dbg""))
+
+  Location filters:
   * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
 
-* [fuchsia-compile-x64-dbg](https://ci.chromium.org/p/chromium/builders/try/fuchsia-compile-x64-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+fuchsia-compile-x64-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+fuchsia-compile-x64-dbg))
+* [fuchsia-x64-cast-receiver-dbg-compile](https://ci.chromium.org/p/chromium/builders/try/fuchsia-x64-cast-receiver-dbg-compile) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""fuchsia-x64-cast-receiver-dbg-compile""))
 
-  Path regular expressions:
-  * [`//base/fuchsia/.+`](https://cs.chromium.org/chromium/src/base/fuchsia/)
-  * [`//fuchsia/.+`](https://cs.chromium.org/chromium/src/fuchsia/)
-  * [`//media/fuchsia/.+`](https://cs.chromium.org/chromium/src/media/fuchsia/)
+  Location filters:
+  * [`//.*fuchsia.+`](https://cs.chromium.org/search?q=+file:.*fuchsia)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
 
-* [ios-simulator-cronet](https://ci.chromium.org/p/chromium/builders/try/ios-simulator-cronet) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+ios-simulator-cronet)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+ios-simulator-cronet))
+* [gn-args-verifier](https://ci.chromium.org/p/chromium/builders/try/gn-args-verifier) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""gn-args-verifier""))
 
-  Path regular expressions:
-  * [`//components/cronet/.+`](https://cs.chromium.org/chromium/src/components/cronet/)
-  * [`//components/grpc_support/.+`](https://cs.chromium.org/chromium/src/components/grpc_support/)
-  * [`//ios/.+`](https://cs.chromium.org/chromium/src/ios/)
+  Location filters:
+  * [`//infra/config/generated/builders/[^/]+/[^/]+/gn-args\.json`](https://cs.chromium.org/search?q=+file:infra/config/generated/builders/[^/]+/[^/]+/gn-args\.json)
 
-  Path exclude regular expressions:
-  * [`//components/cronet/android/.+`](https://cs.chromium.org/chromium/src/components/cronet/android/)
+* [gpu-fyi-cq-android-arm64](https://ci.chromium.org/p/chromium/builders/try/gpu-fyi-cq-android-arm64) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""gpu-fyi-cq-android-arm64""))
 
-* [ios-simulator-full-configs](https://ci.chromium.org/p/chromium/builders/try/ios-simulator-full-configs) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+ios-simulator-full-configs)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+ios-simulator-full-configs))
-
-  Path regular expressions:
-  * [`//ios/.+`](https://cs.chromium.org/chromium/src/ios/)
-
-* [linux-blink-rel](https://ci.chromium.org/p/chromium/builders/try/linux-blink-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-blink-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-blink-rel))
-
-  Path regular expressions:
+  Location filters:
   * [`//cc/.+`](https://cs.chromium.org/chromium/src/cc/)
-  * [`//third_party/blink/renderer/core/paint/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/paint/)
-  * [`//third_party/blink/renderer/core/svg/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/svg/)
-  * [`//third_party/blink/renderer/platform/graphics/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/)
-
-* [linux-cfm-rel](https://ci.chromium.org/p/chromium/builders/try/linux-cfm-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-cfm-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-cfm-rel))
-
-  Path regular expressions:
-  * [`//chromeos/components/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chromeos/components/chromebox_for_meetings/)
-  * [`//chromeos/dbus/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chromeos/dbus/chromebox_for_meetings/)
-  * [`//chromeos/services/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chromeos/services/chromebox_for_meetings/)
-  * [`//chrome/browser/chromeos/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chrome/browser/chromeos/chromebox_for_meetings/)
-
-* [linux_chromium_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_dbg_ng) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_chromium_dbg_ng)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_chromium_dbg_ng))
-
-  Path regular expressions:
-  * [`//build/.*check_gn_headers.*`](https://cs.chromium.org/search?q=package:%5Echromium$+file:build/.*check_gn_headers.*)
-
-* [linux_layout_tests_composite_after_paint](https://ci.chromium.org/p/chromium/builders/try/linux_layout_tests_composite_after_paint) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_layout_tests_composite_after_paint)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_layout_tests_composite_after_paint))
-
-  Path regular expressions:
-  * [`//third_party/blink/renderer/core/paint/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/paint/)
-  * [`//third_party/blink/renderer/core/svg/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/svg/)
-  * [`//third_party/blink/renderer/platform/graphics/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/)
-  * [`//third_party/blink/web_tests/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/)
-
-* [linux_layout_tests_layout_ng_disabled](https://ci.chromium.org/p/chromium/builders/try/linux_layout_tests_layout_ng_disabled) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_layout_tests_layout_ng_disabled)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_layout_tests_layout_ng_disabled))
-
-  Path regular expressions:
-  * [`//third_party/blink/renderer/core/editing/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/editing/)
-  * [`//third_party/blink/renderer/core/layout/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/layout/)
-  * [`//third_party/blink/renderer/core/paint/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/paint/)
-  * [`//third_party/blink/renderer/core/svg/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/core/svg/)
-  * [`//third_party/blink/renderer/platform/fonts/shaping/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/fonts/shaping/)
-  * [`//third_party/blink/renderer/platform/graphics/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/)
-  * [`//third_party/blink/web_tests/.+`](https://cs.chromium.org/chromium/src/third_party/blink/web_tests/)
-
-* [linux_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/linux_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_optional_gpu_tests_rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_optional_gpu_tests_rel))
-
-  Path regular expressions:
   * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//components/viz/.+`](https://cs.chromium.org/chromium/src/components/viz/)
   * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
   * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
   * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
@@ -327,36 +551,24 @@ builder.
   * [`//media/mojo/.+`](https://cs.chromium.org/chromium/src/media/mojo/)
   * [`//media/renderers/.+`](https://cs.chromium.org/chromium/src/media/renderers/)
   * [`//media/video/.+`](https://cs.chromium.org/chromium/src/media/video/)
-  * [`//testing/buildbot/chromium.gpu.fyi.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.gpu.fyi.json)
+  * [`//services/viz/.+`](https://cs.chromium.org/chromium/src/services/viz/)
   * [`//testing/trigger_scripts/.+`](https://cs.chromium.org/chromium/src/testing/trigger_scripts/)
   * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
   * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
   * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
   * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
   * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
 
-* [linux_vr](https://ci.chromium.org/p/chromium/builders/try/linux_vr) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux_vr)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux_vr))
+* [gpu-fyi-cq-mac-arm64](https://ci.chromium.org/p/chromium/builders/try/gpu-fyi-cq-mac-arm64) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""gpu-fyi-cq-mac-arm64""))
 
-  Path regular expressions:
+  Location filters:
   * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//content/browser/media/capture/.+`](https://cs.chromium.org/chromium/src/content/browser/media/capture/)
   * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
-
-* [mac-updater-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/mac-updater-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+mac-updater-try-builder-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+mac-updater-try-builder-dbg))
-
-  Path regular expressions:
-  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
-
-* [mac-updater-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/mac-updater-try-builder-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+mac-updater-try-builder-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+mac-updater-try-builder-rel))
-
-  Path regular expressions:
-  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
-
-* [mac_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/mac_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+mac_optional_gpu_tests_rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+mac_optional_gpu_tests_rel))
-
-  Path regular expressions:
-  * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
-  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
   * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
   * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
@@ -368,37 +580,319 @@ builder.
   * [`//media/renderers/.+`](https://cs.chromium.org/chromium/src/media/renderers/)
   * [`//media/video/.+`](https://cs.chromium.org/chromium/src/media/video/)
   * [`//services/shape_detection/.+`](https://cs.chromium.org/chromium/src/services/shape_detection/)
-  * [`//testing/buildbot/chromium.gpu.fyi.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.gpu.fyi.json)
   * [`//testing/trigger_scripts/.+`](https://cs.chromium.org/chromium/src/testing/trigger_scripts/)
   * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
   * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
   * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
   * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
   * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
 
-* [win-updater-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/win-updater-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win-updater-try-builder-dbg)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win-updater-try-builder-dbg))
+* [gpu-fyi-cq-win-arm64](https://ci.chromium.org/p/chromium/builders/try/gpu-fyi-cq-win-arm64) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""gpu-fyi-cq-win-arm64""))
 
-  Path regular expressions:
-  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
-
-* [win-updater-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/win-updater-try-builder-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win-updater-try-builder-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win-updater-try-builder-rel))
-
-  Path regular expressions:
-  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
-
-* [win7-rel](https://ci.chromium.org/p/chromium/builders/try/win7-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win7-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win7-rel))
-
-  Path regular expressions:
-  * [`//sandbox/win/.+`](https://cs.chromium.org/chromium/src/sandbox/win/)
-
-* [win_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/win_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win_optional_gpu_tests_rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win_optional_gpu_tests_rel))
-
-  Path regular expressions:
+  Location filters:
+  * [`//chrome/browser/media/.+`](https://cs.chromium.org/chromium/src/chrome/browser/media/)
   * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//components/cdm/renderer/.+`](https://cs.chromium.org/chromium/src/components/cdm/renderer/)
   * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
   * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//device/vr/.+`](https://cs.chromium.org/chromium/src/device/vr/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
+  * [`//media/base/.+`](https://cs.chromium.org/chromium/src/media/base/)
+  * [`//media/capture/.+`](https://cs.chromium.org/chromium/src/media/capture/)
+  * [`//media/cdm/.+`](https://cs.chromium.org/chromium/src/media/cdm/)
+  * [`//media/filters/.+`](https://cs.chromium.org/chromium/src/media/filters/)
+  * [`//media/gpu/.+`](https://cs.chromium.org/chromium/src/media/gpu/)
+  * [`//media/mojo/.+`](https://cs.chromium.org/chromium/src/media/mojo/)
+  * [`//media/renderers/.+`](https://cs.chromium.org/chromium/src/media/renderers/)
+  * [`//media/video/.+`](https://cs.chromium.org/chromium/src/media/video/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//services/webnn/.+`](https://cs.chromium.org/chromium/src/services/webnn/)
+  * [`//testing/trigger_scripts/.+`](https://cs.chromium.org/chromium/src/testing/trigger_scripts/)
+  * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
+  * [`//third_party/blink/renderer/modules/vr/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/vr/)
+  * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
+  * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/modules/xr/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/xr/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
+
+* [ios-simulator-full-configs](https://ci.chromium.org/p/chromium/builders/try/ios-simulator-full-configs) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""ios-simulator-full-configs""))
+
+  Location filters:
+  * [`//ios/.+`](https://cs.chromium.org/chromium/src/ios/)
+
+* [ios-simulator-noncq](https://ci.chromium.org/p/chromium/builders/try/ios-simulator-noncq) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""ios-simulator-noncq""))
+
+  Location filters:
+  * [`//third_party/crashpad/crashpad/.+`](https://cs.chromium.org/chromium/src/third_party/crashpad/crashpad/)
+
+* [linux-blink-web-tests-force-accessibility-rel](https://ci.chromium.org/p/chromium/builders/try/linux-blink-web-tests-force-accessibility-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-blink-web-tests-force-accessibility-rel""))
+
+  Location filters:
+  * [`//third_party/blink/renderer/modules/accessibility/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/accessibility/)
+  * [`//content/renderer/accessibility/.+`](https://cs.chromium.org/chromium/src/content/renderer/accessibility/)
+  * [`//content/browser/accessibility/.+`](https://cs.chromium.org/chromium/src/content/browser/accessibility/)
+  * [`//ui/accessibility/.+`](https://cs.chromium.org/chromium/src/ui/accessibility/)
+  * [`//ui/views/accessibility/.+`](https://cs.chromium.org/chromium/src/ui/views/accessibility/)
+
+* [linux-cast-arm-rel](https://ci.chromium.org/p/chromium/builders/try/linux-cast-arm-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-cast-arm-rel""))
+
+  Location filters:
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [linux-cast-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/linux-cast-arm64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-cast-arm64-rel""))
+
+  Location filters:
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//components/viz/common/display/overlay_strategy\.h`](https://cs.chromium.org/search?q=+file:components/viz/common/display/overlay_strategy\.h)
+  * [`//components/viz/service/display/overlay_strategy_underlay\.h`](https://cs.chromium.org/search?q=+file:components/viz/service/display/overlay_strategy_underlay\.h)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+  * [`//ui/events/platform/platform_event_dispatcher\.h`](https://cs.chromium.org/search?q=+file:ui/events/platform/platform_event_dispatcher\.h)
+  * [`//ui/gfx/client_native_pixmap\.h`](https://cs.chromium.org/search?q=+file:ui/gfx/client_native_pixmap\.h)
+  * [`//ui/gfx/client_native_pixmap_factory\.h`](https://cs.chromium.org/search?q=+file:ui/gfx/client_native_pixmap_factory\.h)
+  * [`//ui/gfx/native_pixmap\.h`](https://cs.chromium.org/search?q=+file:ui/gfx/native_pixmap\.h)
+  * [`//ui/gl/gl_surface_egl\.h`](https://cs.chromium.org/search?q=+file:ui/gl/gl_surface_egl\.h)
+  * [`//ui/ozone/common/gl_ozone_egl\.h`](https://cs.chromium.org/search?q=+file:ui/ozone/common/gl_ozone_egl\.h)
+  * [`//ui/ozone/platform/cast/.+`](https://cs.chromium.org/chromium/src/ui/ozone/platform/cast/)
+  * [`//ui/platform_window/stub/stub_window\.h`](https://cs.chromium.org/search?q=+file:ui/platform_window/stub/stub_window\.h)
+  * [`//ui/ozone/public/overlay_manager_ozone\.h`](https://cs.chromium.org/search?q=+file:ui/ozone/public/overlay_manager_ozone\.h)
+  * [`//ui/ozone/public/ozone_platform\.h`](https://cs.chromium.org/search?q=+file:ui/ozone/public/ozone_platform\.h)
+  * [`//ui/ozone/public/surface_factory_ozone\.h`](https://cs.chromium.org/search?q=+file:ui/ozone/public/surface_factory_ozone\.h)
+
+* [linux-cast-x64-dbg](https://ci.chromium.org/p/chromium/builders/try/linux-cast-x64-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-cast-x64-dbg""))
+
+  Location filters:
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [linux-cast-x64-rel](https://ci.chromium.org/p/chromium/builders/try/linux-cast-x64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-cast-x64-rel""))
+
+  Location filters:
+  * [`//chromecast/.+`](https://cs.chromium.org/chromium/src/chromecast/)
+  * [`//components/cast/.+`](https://cs.chromium.org/chromium/src/components/cast/)
+  * [`//components/cast_receiver/.+`](https://cs.chromium.org/chromium/src/components/cast_receiver/)
+  * [`//components/cast_streaming/.+`](https://cs.chromium.org/chromium/src/components/cast_streaming/)
+  * [`//third_party/cast_core/.+`](https://cs.chromium.org/chromium/src/third_party/cast_core/)
+  * [`//third_party/openscreen/.+`](https://cs.chromium.org/chromium/src/third_party/openscreen/)
+
+* [linux-cfm-rel](https://ci.chromium.org/p/chromium/builders/try/linux-cfm-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-cfm-rel""))
+
+  Location filters:
+  * [`//chromeos/ash/components/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chromeos/ash/components/chromebox_for_meetings/)
+  * [`//chromeos/ash/components/dbus/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chromeos/ash/components/dbus/chromebox_for_meetings/)
+  * [`//chromeos/services/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chromeos/services/chromebox_for_meetings/)
+  * [`//chrome/browser/ash/chromebox_for_meetings/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ash/chromebox_for_meetings/)
+
+* [linux-crossbench](https://ci.chromium.org/p/chromium/builders/try/linux-crossbench) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-crossbench""))
+
+  Location filters:
+  * [`//third_party/crossbench`](https://cs.chromium.org/chromium/src/third_party/crossbench)
+  * [`//third_party/speedometer/.+`](https://cs.chromium.org/chromium/src/third_party/speedometer/)
+
+* [linux-enterprise-companion-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/linux-enterprise-companion-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-enterprise-companion-try-builder-dbg""))
+
+  Location filters:
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [linux-enterprise-companion-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/linux-enterprise-companion-try-builder-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-enterprise-companion-try-builder-rel""))
+
+  Location filters:
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [linux-full-remote-rel](https://ci.chromium.org/p/chromium/builders/try/linux-full-remote-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-full-remote-rel""))
+
+  Location filters:
+  * [`//build/conifg/siso/.+`](https://cs.chromium.org/chromium/src/build/conifg/siso/)
+
+* [linux-headless-shell-rel](https://ci.chromium.org/p/chromium/builders/try/linux-headless-shell-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-headless-shell-rel""))
+
+  Location filters:
+  * [`//components/headless/.+`](https://cs.chromium.org/chromium/src/components/headless/)
+  * [`//dbus/.+`](https://cs.chromium.org/chromium/src/dbus/)
+  * [`//headless/.+`](https://cs.chromium.org/chromium/src/headless/)
+
+* [linux-js-coverage-rel](https://ci.chromium.org/p/chromium/builders/try/linux-js-coverage-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-js-coverage-rel""))
+
+  Location filters:
+  * [`//.*\.(js|ts)`](https://cs.chromium.org/search?q=+file:.*\.(js|ts))
+
+* [linux-metadata-validator](https://ci.chromium.org/p/chromium/builders/try/linux-metadata-validator) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-metadata-validator""))
+
+  Location filters:
+  * [`//.*/README\.(chromium|angle|pdfium|crashpad|skia|swarming|v8|webrtc|google|libaom)`](https://cs.chromium.org/search?q=+file:.*/README\.(chromium|angle|pdfium|crashpad|skia|swarming|v8|webrtc|google|libaom))
+
+* [linux-oi-rel](https://ci.chromium.org/p/chromium/builders/try/linux-oi-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-oi-rel""))
+
+  Location filters:
+  * [`//chrome/browser/renderer_host/javascript_optimizer_feature_browsertest\.cc$`](https://cs.chromium.org/search?q=+file:chrome/browser/renderer_host/javascript_optimizer_feature_browsertest\.cc$)
+  * [`//chrome/browser/policy/test/v8_optimizer_policy_browsertest\.cc$`](https://cs.chromium.org/search?q=+file:chrome/browser/policy/test/v8_optimizer_policy_browsertest\.cc$)
+  * [`//chrome/browser/site_protection/.*\.(cc|h)$`](https://cs.chromium.org/search?q=+file:chrome/browser/site_protection/.*\.(cc|h)$)
+  * [`//content/browser/agent_cluster_key.+`](https://cs.chromium.org/chromium/src/content/browser/agent_cluster_key)
+  * [`//content/browser/child_process_security_policy.+`](https://cs.chromium.org/chromium/src/content/browser/child_process_security_policy)
+  * [`//content/browser/process_lock.+`](https://cs.chromium.org/chromium/src/content/browser/process_lock)
+  * [`//content/browser/renderer_host/render_frame_host_manager.+`](https://cs.chromium.org/chromium/src/content/browser/renderer_host/render_frame_host_manager)
+  * [`//content/browser/site_info\.(cc|h)$`](https://cs.chromium.org/search?q=+file:content/browser/site_info\.(cc|h)$)
+  * [`//content/browser/site_instance.*\.(cc|h)$`](https://cs.chromium.org/search?q=+file:content/browser/site_instance.*\.(cc|h)$)
+  * [`//content/public/browser/site_instance.*\.(cc|h)$`](https://cs.chromium.org/search?q=+file:content/public/browser/site_instance.*\.(cc|h)$)
+
+* [linux-perfetto-rel](https://ci.chromium.org/p/chromium/builders/try/linux-perfetto-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-perfetto-rel""))
+
+  Location filters:
+  * [`//base/trace_event/.+`](https://cs.chromium.org/chromium/src/base/trace_event/)
+  * [`//base/tracing/.+`](https://cs.chromium.org/chromium/src/base/tracing/)
+  * [`//components/tracing/.+`](https://cs.chromium.org/chromium/src/components/tracing/)
+  * [`//content/browser/tracing/.+`](https://cs.chromium.org/chromium/src/content/browser/tracing/)
+  * [`//services/tracing/.+`](https://cs.chromium.org/chromium/src/services/tracing/)
+
+* [linux-rel-cft](https://ci.chromium.org/p/chromium/builders/try/linux-rel-cft) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-rel-cft""))
+
+  Location filters:
+  * [`//.*chrome_for_testing.*`](https://cs.chromium.org/search?q=+file:.*chrome_for_testing.*)
+
+* [linux-updater-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/linux-updater-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-updater-try-builder-dbg""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [linux-updater-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/linux-updater-try-builder-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-updater-try-builder-rel""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [linux-utr-tester](https://ci.chromium.org/p/chromium/builders/try/linux-utr-tester) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-utr-tester""))
+
+  Location filters:
+  * [`//third_party/depot_tools/.+`](https://cs.chromium.org/chromium/src/third_party/depot_tools/)
+  * [`//tools/utr/.+`](https://cs.chromium.org/chromium/src/tools/utr/)
+  * [`//tools/mb/.+`](https://cs.chromium.org/chromium/src/tools/mb/)
+
+* [linux-v4l2-codec-rel](https://ci.chromium.org/p/chromium/builders/try/linux-v4l2-codec-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-v4l2-codec-rel""))
+
+  Location filters:
+  * [`//media/gpu/chromeos/.+`](https://cs.chromium.org/chromium/src/media/gpu/chromeos/)
+  * [`//media/gpu/v4l2/.+`](https://cs.chromium.org/chromium/src/media/gpu/v4l2/)
+
+* [linux-wayland-mutter-rel](https://ci.chromium.org/p/chromium/builders/try/linux-wayland-mutter-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-wayland-mutter-rel""))
+
+  Location filters:
+  * [`//chrome/browser/.+uitest.+`](https://cs.chromium.org/search?q=+file:chrome/browser/.+uitest)
+  * [`//chrome/browser/ui/views/.+test.+`](https://cs.chromium.org/search?q=+file:chrome/browser/ui/views/.+test)
+  * [`//chrome/browser/ui/views/tabs/.+`](https://cs.chromium.org/chromium/src/chrome/browser/ui/views/tabs/)
+  * [`//testing/xvfb\.py`](https://cs.chromium.org/search?q=+file:testing/xvfb\.py)
+  * [`//third_party/glib/.+`](https://cs.chromium.org/chromium/src/third_party/glib/)
+  * [`//third_party/gvdb/.+`](https://cs.chromium.org/chromium/src/third_party/gvdb/)
+  * [`//third_party/libdisplay-info/.+`](https://cs.chromium.org/chromium/src/third_party/libdisplay-info/)
+  * [`//third_party/libgudev/.+`](https://cs.chromium.org/chromium/src/third_party/libgudev/)
+  * [`//third_party/libinput/.+`](https://cs.chromium.org/chromium/src/third_party/libinput/)
+  * [`//third_party/mutter/.+`](https://cs.chromium.org/chromium/src/third_party/mutter/)
+  * [`//third_party/wayland/.+`](https://cs.chromium.org/chromium/src/third_party/wayland/)
+  * [`//third_party/wayland-protocols/.+`](https://cs.chromium.org/chromium/src/third_party/wayland-protocols/)
+  * [`//ui/ozone/platform/wayland/.+`](https://cs.chromium.org/chromium/src/ui/ozone/platform/wayland/)
+  * [`//ui/views/widget/.+test.+`](https://cs.chromium.org/search?q=+file:ui/views/widget/.+test)
+
+* [linux-wayland-weston-rel](https://ci.chromium.org/p/chromium/builders/try/linux-wayland-weston-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-wayland-weston-rel""))
+
+  Location filters:
+  * [`//third_party/weston/.+`](https://cs.chromium.org/chromium/src/third_party/weston/)
+
+* [linux-webdriver-bidi-rel](https://ci.chromium.org/p/chromium/builders/try/linux-webdriver-bidi-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-webdriver-bidi-rel""))
+
+  Location filters:
+  * [`//third_party/chromium-bidi/.+`](https://cs.chromium.org/chromium/src/third_party/chromium-bidi/)
+
+* [linux-x64-centipede-asan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/linux-x64-centipede-asan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-x64-centipede-asan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [linux-x64-libfuzzer-asan-dbg-tests](https://ci.chromium.org/p/chromium/builders/try/linux-x64-libfuzzer-asan-dbg-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-x64-libfuzzer-asan-dbg-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [linux-x64-libfuzzer-asan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/linux-x64-libfuzzer-asan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-x64-libfuzzer-asan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [linux-x64-libfuzzer-msan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/linux-x64-libfuzzer-msan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-x64-libfuzzer-msan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [linux-x64-libfuzzer-ubsan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/linux-x64-libfuzzer-ubsan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-x64-libfuzzer-ubsan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [linux-x86-libfuzzer-asan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/linux-x86-libfuzzer-asan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux-x86-libfuzzer-asan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [linux_chromium_cfi_rel_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_cfi_rel_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux_chromium_cfi_rel_ng""))
+
+  Location filters:
+  * [`//third_party/eigen3/.+`](https://cs.chromium.org/chromium/src/third_party/eigen3/)
+  * [`//third_party/farmhash/.+`](https://cs.chromium.org/chromium/src/third_party/farmhash/)
+  * [`//third_party/fft2d/.+`](https://cs.chromium.org/chromium/src/third_party/fft2d/)
+  * [`//third_party/flatbuffers/.+`](https://cs.chromium.org/chromium/src/third_party/flatbuffers/)
+  * [`//third_party/fp16/.+`](https://cs.chromium.org/chromium/src/third_party/fp16/)
+  * [`//third_party/fxdiv/.+`](https://cs.chromium.org/chromium/src/third_party/fxdiv/)
+  * [`//third_party/gemmlowp/.+`](https://cs.chromium.org/chromium/src/third_party/gemmlowp/)
+  * [`//third_party/pthreadpool/.+`](https://cs.chromium.org/chromium/src/third_party/pthreadpool/)
+  * [`//third_party/ruy/.+`](https://cs.chromium.org/chromium/src/third_party/ruy/)
+  * [`//third_party/tflite/.+`](https://cs.chromium.org/chromium/src/third_party/tflite/)
+  * [`//third_party/xnnpack/.+`](https://cs.chromium.org/chromium/src/third_party/xnnpack/)
+  * [`//third_party/protobuf/src/.+`](https://cs.chromium.org/chromium/src/third_party/protobuf/src/)
+
+* [linux_chromium_dbg_ng](https://ci.chromium.org/p/chromium/builders/try/linux_chromium_dbg_ng) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux_chromium_dbg_ng""))
+
+  Location filters:
+  * [`//build/.*check_gn_headers.*`](https://cs.chromium.org/search?q=+file:build/.*check_gn_headers.*)
+
+* [linux_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/linux_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""linux_optional_gpu_tests_rel""))
+
+  Location filters:
+  * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
   * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
   * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
   * [`//media/base/.+`](https://cs.chromium.org/chromium/src/media/base/)
@@ -408,16 +902,197 @@ builder.
   * [`//media/mojo/.+`](https://cs.chromium.org/chromium/src/media/mojo/)
   * [`//media/renderers/.+`](https://cs.chromium.org/chromium/src/media/renderers/)
   * [`//media/video/.+`](https://cs.chromium.org/chromium/src/media/video/)
-  * [`//testing/buildbot/chromium.gpu.fyi.json`](https://cs.chromium.org/search?q=package:%5Echromium$+file:testing/buildbot/chromium.gpu.fyi.json)
   * [`//testing/trigger_scripts/.+`](https://cs.chromium.org/chromium/src/testing/trigger_scripts/)
-  * [`//third_party/blink/renderer/modules/vr/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/vr/)
   * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
   * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
   * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
+
+* [mac-arm64-libfuzzer-asan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/mac-arm64-libfuzzer-asan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-arm64-libfuzzer-asan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [mac-enterprise-companion-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/mac-enterprise-companion-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-enterprise-companion-try-builder-dbg""))
+
+  Location filters:
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [mac-enterprise-companion-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/mac-enterprise-companion-try-builder-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-enterprise-companion-try-builder-rel""))
+
+  Location filters:
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [mac-official](https://ci.chromium.org/p/chromium/builders/try/mac-official) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-official""))
+
+  Location filters:
+  * [`//chrome/build/mac-arm.pgo.txt`](https://cs.chromium.org/search?q=+file:chrome/build/mac-arm.pgo.txt)
+
+* [mac-rel-cft](https://ci.chromium.org/p/chromium/builders/try/mac-rel-cft) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-rel-cft""))
+
+  Location filters:
+  * [`//.*chrome_for_testing.*`](https://cs.chromium.org/search?q=+file:.*chrome_for_testing.*)
+
+* [mac-updater-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/mac-updater-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-updater-try-builder-dbg""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [mac-updater-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/mac-updater-try-builder-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-updater-try-builder-rel""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [mac-webdriver-bidi-rel](https://ci.chromium.org/p/chromium/builders/try/mac-webdriver-bidi-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac-webdriver-bidi-rel""))
+
+  Location filters:
+  * [`//third_party/chromium-bidi/.+`](https://cs.chromium.org/chromium/src/third_party/chromium-bidi/)
+
+* [mac_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/mac_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mac_optional_gpu_tests_rel""))
+
+  Location filters:
+  * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//content/browser/media/capture/.+`](https://cs.chromium.org/chromium/src/content/browser/media/capture/)
+  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
+  * [`//media/base/.+`](https://cs.chromium.org/chromium/src/media/base/)
+  * [`//media/capture/.+`](https://cs.chromium.org/chromium/src/media/capture/)
+  * [`//media/filters/.+`](https://cs.chromium.org/chromium/src/media/filters/)
+  * [`//media/gpu/.+`](https://cs.chromium.org/chromium/src/media/gpu/)
+  * [`//media/mojo/.+`](https://cs.chromium.org/chromium/src/media/mojo/)
+  * [`//media/renderers/.+`](https://cs.chromium.org/chromium/src/media/renderers/)
+  * [`//media/video/.+`](https://cs.chromium.org/chromium/src/media/video/)
+  * [`//services/shape_detection/.+`](https://cs.chromium.org/chromium/src/services/shape_detection/)
+  * [`//testing/trigger_scripts/.+`](https://cs.chromium.org/chromium/src/testing/trigger_scripts/)
+  * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
+  * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
+  * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
+  * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
+
+* [reclient-config-deployment-verifier](https://ci.chromium.org/p/chromium/builders/try/reclient-config-deployment-verifier) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""reclient-config-deployment-verifier""))
+
+  Location filters:
+  * [`//buildtools/reclient_cfgs/.+`](https://cs.chromium.org/chromium/src/buildtools/reclient_cfgs/)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
+  * [`//DEPS`](https://cs.chromium.org/chromium/src/DEPS)
+
+* [targets-config-verifier](https://ci.chromium.org/p/chromium/builders/try/targets-config-verifier) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""targets-config-verifier""))
+
+  Location filters:
+  * [`//infra/config/generated/builders/[^/]+/[^/]+/targets/.+\.json`](https://cs.chromium.org/search?q=+file:infra/config/generated/builders/[^/]+/[^/]+/targets/.+\.json)
+
+* [targets-config-verifier-dev](https://ci.chromium.org/p/chromium/builders/try/targets-config-verifier-dev) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""targets-config-verifier-dev""))
+
+  Location filters:
+  * [`//infra/config/generated/builders-dev/[^/]+/[^/]+/targets/.+\.json`](https://cs.chromium.org/search?q=+file:infra/config/generated/builders-dev/[^/]+/[^/]+/targets/.+\.json)
+
+* [win-arm64-rel](https://ci.chromium.org/p/chromium/builders/try/win-arm64-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-arm64-rel""))
+
+  Location filters:
+  * [`//sandbox/win/.+`](https://cs.chromium.org/chromium/src/sandbox/win/)
+  * [`//sandbox/policy/win/.+`](https://cs.chromium.org/chromium/src/sandbox/policy/win/)
+
+* [win-arm64-updater-rel](https://ci.chromium.org/p/chromium/builders/try/win-arm64-updater-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-arm64-updater-rel""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [win-enterprise-companion-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/win-enterprise-companion-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-enterprise-companion-try-builder-dbg""))
+
+  Location filters:
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [win-enterprise-companion-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/win-enterprise-companion-try-builder-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-enterprise-companion-try-builder-rel""))
+
+  Location filters:
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [win-rel-cft](https://ci.chromium.org/p/chromium/builders/try/win-rel-cft) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-rel-cft""))
+
+  Location filters:
+  * [`//.*chrome_for_testing.*`](https://cs.chromium.org/search?q=+file:.*chrome_for_testing.*)
+
+* [win-updater-try-builder-dbg](https://ci.chromium.org/p/chromium/builders/try/win-updater-try-builder-dbg) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-updater-try-builder-dbg""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [win-updater-try-builder-rel](https://ci.chromium.org/p/chromium/builders/try/win-updater-try-builder-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-updater-try-builder-rel""))
+
+  Location filters:
+  * [`//chrome/updater/.+`](https://cs.chromium.org/chromium/src/chrome/updater/)
+  * [`//chrome/enterprise_companion/.+`](https://cs.chromium.org/chromium/src/chrome/enterprise_companion/)
+
+* [win-utr-tester](https://ci.chromium.org/p/chromium/builders/try/win-utr-tester) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-utr-tester""))
+
+  Location filters:
+  * [`//third_party/depot_tools/.+`](https://cs.chromium.org/chromium/src/third_party/depot_tools/)
+  * [`//tools/utr/.+`](https://cs.chromium.org/chromium/src/tools/utr/)
+  * [`//tools/mb/.+`](https://cs.chromium.org/chromium/src/tools/mb/)
+
+* [win-x64-libfuzzer-asan-rel-tests](https://ci.chromium.org/p/chromium/builders/try/win-x64-libfuzzer-asan-rel-tests) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win-x64-libfuzzer-asan-rel-tests""))
+
+  Location filters:
+  * [`//testing/libfuzzer/.+`](https://cs.chromium.org/chromium/src/testing/libfuzzer/)
+  * [`//third_party/fuzztest/.+`](https://cs.chromium.org/chromium/src/third_party/fuzztest/)
+  * [`//third_party/libFuzzer/.+`](https://cs.chromium.org/chromium/src/third_party/libFuzzer/)
+
+* [win11-rel](https://ci.chromium.org/p/chromium/builders/try/win11-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win11-rel""))
+
+  Location filters:
+  * [`//sandbox/win/.+`](https://cs.chromium.org/chromium/src/sandbox/win/)
+  * [`//sandbox/policy/win/.+`](https://cs.chromium.org/chromium/src/sandbox/policy/win/)
+
+* [win_optional_gpu_tests_rel](https://ci.chromium.org/p/chromium/builders/try/win_optional_gpu_tests_rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""win_optional_gpu_tests_rel""))
+
+  Location filters:
+  * [`//chrome/browser/media/.+`](https://cs.chromium.org/chromium/src/chrome/browser/media/)
+  * [`//chrome/browser/vr/.+`](https://cs.chromium.org/chromium/src/chrome/browser/vr/)
+  * [`//components/cdm/renderer/.+`](https://cs.chromium.org/chromium/src/components/cdm/renderer/)
+  * [`//content/browser/xr/.+`](https://cs.chromium.org/chromium/src/content/browser/xr/)
+  * [`//content/test/data/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/data/gpu/)
+  * [`//content/test/gpu/.+`](https://cs.chromium.org/chromium/src/content/test/gpu/)
+  * [`//device/vr/.+`](https://cs.chromium.org/chromium/src/device/vr/)
+  * [`//gpu/.+`](https://cs.chromium.org/chromium/src/gpu/)
+  * [`//media/audio/.+`](https://cs.chromium.org/chromium/src/media/audio/)
+  * [`//media/base/.+`](https://cs.chromium.org/chromium/src/media/base/)
+  * [`//media/capture/.+`](https://cs.chromium.org/chromium/src/media/capture/)
+  * [`//media/cdm/.+`](https://cs.chromium.org/chromium/src/media/cdm/)
+  * [`//media/filters/.+`](https://cs.chromium.org/chromium/src/media/filters/)
+  * [`//media/gpu/.+`](https://cs.chromium.org/chromium/src/media/gpu/)
+  * [`//media/mojo/.+`](https://cs.chromium.org/chromium/src/media/mojo/)
+  * [`//media/renderers/.+`](https://cs.chromium.org/chromium/src/media/renderers/)
+  * [`//media/video/.+`](https://cs.chromium.org/chromium/src/media/video/)
+  * [`//services/on_device_model/.+`](https://cs.chromium.org/chromium/src/services/on_device_model/)
+  * [`//services/webnn/.+`](https://cs.chromium.org/chromium/src/services/webnn/)
+  * [`//testing/trigger_scripts/.+`](https://cs.chromium.org/chromium/src/testing/trigger_scripts/)
+  * [`//third_party/blink/renderer/modules/mediastream/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/mediastream/)
+  * [`//third_party/blink/renderer/modules/vr/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/vr/)
+  * [`//third_party/blink/renderer/modules/webcodecs/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webcodecs/)
+  * [`//third_party/blink/renderer/modules/webgl/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgl/)
+  * [`//third_party/blink/renderer/modules/webgpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/webgpu/)
   * [`//third_party/blink/renderer/modules/xr/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/xr/)
   * [`//third_party/blink/renderer/platform/graphics/gpu/.+`](https://cs.chromium.org/chromium/src/third_party/blink/renderer/platform/graphics/gpu/)
-  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=package:%5Echromium$+file:tools/clang/scripts/update.py)
+  * [`//tools/clang/scripts/update.py`](https://cs.chromium.org/search?q=+file:tools/clang/scripts/update.py)
   * [`//ui/gl/.+`](https://cs.chromium.org/chromium/src/ui/gl/)
+  * exclude: [`//.*\.md`](https://cs.chromium.org/search?q=+file:.*\.md)
 
 
 ## Experimental builders
@@ -425,52 +1100,52 @@ These builders are run on some percentage of builds. Their results are ignored
 by CQ. These are often used to test new configurations before they are added
 as required builders.
 
-* [android-marshmallow-arm64-rel-dual-coverage](https://ci.chromium.org/p/chromium/builders/try/android-marshmallow-arm64-rel-dual-coverage) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-marshmallow-arm64-rel-dual-coverage)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-marshmallow-arm64-rel-dual-coverage))
-  * Experiment percentage: 3.0
+### chrome
+* [vuln-scan-dispatcher](https://ci.chromium.org/p/chrome/builders/try.security/vuln-scan-dispatcher) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""vuln-scan-dispatcher""))
+  * Experiment percentage: 25.0
 
-* [android-marshmallow-x86-rel-rts](https://ci.chromium.org/p/chromium/builders/try/android-marshmallow-x86-rel-rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-marshmallow-x86-rel-rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-marshmallow-x86-rel-rts))
-  * Experiment percentage: 5.0
-
-* [android-pie-arm64-coverage-experimental-rel](https://ci.chromium.org/p/chromium/builders/try/android-pie-arm64-coverage-experimental-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+android-pie-arm64-coverage-experimental-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+android-pie-arm64-coverage-experimental-rel))
-  * Experiment percentage: 3.0
-
-* [chromeos-amd64-generic-rel-rts](https://ci.chromium.org/p/chromium/builders/try/chromeos-amd64-generic-rel-rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+chromeos-amd64-generic-rel-rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+chromeos-amd64-generic-rel-rts))
-  * Experiment percentage: 5.0
-
-* [fuchsia_x64_rts](https://ci.chromium.org/p/chromium/builders/try/fuchsia_x64_rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+fuchsia_x64_rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+fuchsia_x64_rts))
-  * Experiment percentage: 5.0
-
-* [ios-simulator-rts](https://ci.chromium.org/p/chromium/builders/try/ios-simulator-rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+ios-simulator-rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+ios-simulator-rts))
-  * Experiment percentage: 1.0
-
-* [lacros-arm-generic-rel](https://ci.chromium.org/p/chromium/builders/try/lacros-arm-generic-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+lacros-arm-generic-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+lacros-arm-generic-rel))
-  * Experiment percentage: 20.0
-
-* [linux-1mbu-compile-fyi-rel](https://ci.chromium.org/p/chromium/builders/try/linux-1mbu-compile-fyi-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-1mbu-compile-fyi-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-1mbu-compile-fyi-rel))
-  * Experiment percentage: 5.0
-
-* [linux-perfetto-rel](https://ci.chromium.org/p/chromium/builders/try/linux-perfetto-rel) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-perfetto-rel)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-perfetto-rel))
+* [linux-perf-trigger](https://ci.chromium.org/p/chrome/builders/try/linux-perf-trigger) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""linux-perf-trigger""))
   * Experiment percentage: 100.0
 
-  Path regular expressions:
-  * [`//base/trace_event/.+`](https://cs.chromium.org/chromium/src/base/trace_event/)
-  * [`//base/tracing/.+`](https://cs.chromium.org/chromium/src/base/tracing/)
-  * [`//components/tracing/.+`](https://cs.chromium.org/chromium/src/components/tracing/)
-  * [`//content/browser/tracing/.+`](https://cs.chromium.org/chromium/src/content/browser/tracing/)
-  * [`//services/tracing/.+`](https://cs.chromium.org/chromium/src/services/tracing/)
+* [win-perf-trigger](https://ci.chromium.org/p/chrome/builders/try/win-perf-trigger) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""win-perf-trigger""))
+  * Experiment percentage: 100.0
 
-* [linux-rel-orchestrator](https://ci.chromium.org/p/chromium/builders/try/linux-rel-orchestrator) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-rel-orchestrator)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-rel-orchestrator))
-  * Experiment percentage: 20.0
-
-* [linux-rel-reclient](https://ci.chromium.org/p/chromium/builders/try/linux-rel-reclient) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-rel-reclient)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-rel-reclient))
-  * Experiment percentage: 10.0
-
-* [linux-rel-rts](https://ci.chromium.org/p/chromium/builders/try/linux-rel-rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+linux-rel-rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+linux-rel-rts))
+### chromium
+* [chromeos-js-coverage-rel](https://ci.chromium.org/p/chromium/builders/try/chromeos-js-coverage-rel) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""chromeos-js-coverage-rel""))
   * Experiment percentage: 5.0
 
-* [mac-rel-rts](https://ci.chromium.org/p/chromium/builders/try/mac-rel-rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+mac-rel-rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+mac-rel-rts))
-  * Experiment percentage: 1.0
+  Location filters:
+  * [`//.*\.(js|ts)`](https://cs.chromium.org/search?q=+file:.*\.(js|ts))
 
-* [win10_chromium_x64_rel_ng_rts](https://ci.chromium.org/p/chromium/builders/try/win10_chromium_x64_rel_ng_rts) ([definition](https://cs.chromium.org/search?q=package:%5Echromium$+file:/cq.star$+-file:/beta/+-file:/stable/+win10_chromium_x64_rel_ng_rts)) ([matching builders](https://cs.chromium.org/search?q=+file:trybots.py+win10_chromium_x64_rel_ng_rts))
+* [ios-simulator-exp](https://ci.chromium.org/p/chromium/builders/try/ios-simulator-exp) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""ios-simulator-exp""))
   * Experiment percentage: 5.0
+
+* [tricium-clang-tidy](https://ci.chromium.org/p/chromium/builders/try/tricium-clang-tidy) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""tricium-clang-tidy""))
+  * Experiment percentage: 100.0
+
+  Location filters:
+  * [`//.*\.(c|cc|cpp|h)`](https://cs.chromium.org/search?q=+file:.*\.(c|cc|cpp|h))
+
+* [tricium-metrics-analysis](https://ci.chromium.org/p/chromium/builders/try/tricium-metrics-analysis) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""tricium-metrics-analysis""))
+  * Experiment percentage: 100.0
+
+  Location filters:
+  * [`//.*\.(json|xml)`](https://cs.chromium.org/search?q=+file:.*\.(json|xml))
+
+* [tricium-oilpan-analysis](https://ci.chromium.org/p/chromium/builders/try/tricium-oilpan-analysis) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""tricium-oilpan-analysis""))
+  * Experiment percentage: 100.0
+
+  Location filters:
+  * [`//.*\.(c|cc|cpp|h)`](https://cs.chromium.org/search?q=+file:.*\.(c|cc|cpp|h))
+
+
+## Mega CQ builders
+These builders run when the "Mega" CQ mode is triggered. This mode runs all the
+builders required in the standard CQ, plus a large amount of optional builders.
+
+### chrome
+* [mega-cq-launcher](https://ci.chromium.org/p/chrome/builders/try/mega-cq-launcher) ([definition](https://source.corp.google.com/search?q=+file:/try/.*\.star$+""mega-cq-launcher""))
+
+### chromium
+* [mega-cq-launcher](https://ci.chromium.org/p/chromium/builders/try/mega-cq-launcher) ([definition](https://cs.chromium.org/search?q=+file:/try/.*\.star$+""mega-cq-launcher""))
 

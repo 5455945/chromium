@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/memory/ptr_util.h"
+#include "base/byte_size.h"
+#include "base/functional/bind.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/types/expected.h"
+#include "base/types/pass_key.h"
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -25,6 +28,12 @@ const int kCreateFlagsForWrite =
 const int kCreateFlagsForWriteAlways = base::File::FLAG_CREATE_ALWAYS |
                                        base::File::FLAG_WRITE |
                                        base::File::FLAG_ASYNC;
+#if BUILDFLAG(IS_ANDROID)
+// Android always opens Content-URI files for write with truncate for security.
+const int kOpenFlagsForWriteContentUri = base::File::FLAG_CREATE_ALWAYS |
+                                         base::File::FLAG_WRITE |
+                                         base::File::FLAG_ASYNC;
+#endif
 
 }  // namespace
 
@@ -33,8 +42,9 @@ std::unique_ptr<FileStreamWriter> FileStreamWriter::CreateForLocalFile(
     const base::FilePath& file_path,
     int64_t initial_offset,
     OpenOrCreate open_or_create) {
-  return base::WrapUnique(new LocalFileStreamWriter(
-      task_runner, file_path, initial_offset, open_or_create));
+  return std::make_unique<LocalFileStreamWriter>(
+      task_runner, file_path, initial_offset, open_or_create,
+      base::PassKey<FileStreamWriter>());
 }
 
 LocalFileStreamWriter::~LocalFileStreamWriter() {
@@ -76,7 +86,8 @@ int LocalFileStreamWriter::Cancel(net::CompletionOnceCallback callback) {
   return net::ERR_IO_PENDING;
 }
 
-int LocalFileStreamWriter::Flush(net::CompletionOnceCallback callback) {
+int LocalFileStreamWriter::Flush(FlushMode /*flush_mode*/,
+                                 net::CompletionOnceCallback callback) {
   DCHECK(!has_pending_operation_);
   DCHECK(cancel_callback_.is_null());
 
@@ -91,10 +102,12 @@ int LocalFileStreamWriter::Flush(net::CompletionOnceCallback callback) {
   return result;
 }
 
-LocalFileStreamWriter::LocalFileStreamWriter(base::TaskRunner* task_runner,
-                                             const base::FilePath& file_path,
-                                             int64_t initial_offset,
-                                             OpenOrCreate open_or_create)
+LocalFileStreamWriter::LocalFileStreamWriter(
+    base::TaskRunner* task_runner,
+    const base::FilePath& file_path,
+    int64_t initial_offset,
+    OpenOrCreate open_or_create,
+    base::PassKey<FileStreamWriter> /*pass_key*/)
     : file_path_(file_path),
       open_or_create_(open_or_create),
       initial_offset_(initial_offset),
@@ -111,6 +124,11 @@ int LocalFileStreamWriter::InitiateOpen(base::OnceClosure main_operation) {
   switch (open_or_create_) {
     case OPEN_EXISTING_FILE:
       open_flags = kOpenFlagsForWrite;
+#if BUILDFLAG(IS_ANDROID)
+      if (file_path_.IsContentUri() || file_path_.IsVirtualDocumentPath()) {
+        open_flags = kOpenFlagsForWriteContentUri;
+      }
+#endif
       break;
     case CREATE_NEW_FILE:
       open_flags = kCreateFlagsForWrite;
@@ -127,7 +145,7 @@ int LocalFileStreamWriter::InitiateOpen(base::OnceClosure main_operation) {
 }
 
 void LocalFileStreamWriter::DidOpen(base::OnceClosure main_operation,
-                                    int result) {
+                                    net::Error result) {
   DCHECK(has_pending_operation_);
   DCHECK(stream_impl_.get());
 
@@ -164,21 +182,24 @@ void LocalFileStreamWriter::InitiateSeek(base::OnceClosure main_operation) {
   }
 }
 
-void LocalFileStreamWriter::DidSeek(base::OnceClosure main_operation,
-                                    int64_t result) {
+void LocalFileStreamWriter::DidSeek(
+    base::OnceClosure main_operation,
+    base::expected<int64_t, net::Error> result) {
   DCHECK(has_pending_operation_);
 
   if (CancelIfRequested())
     return;
 
-  if (result != initial_offset_) {
-    // TODO(kinaba) add a more specific error code.
-    result = net::ERR_FAILED;
+  if (!result.has_value()) {
+    has_pending_operation_ = false;
+    std::move(write_callback_).Run(result.error());
+    return;
   }
 
-  if (result < 0) {
+  if (result.value() != initial_offset_) {
+    // TODO(kinaba) add a more specific error code.
     has_pending_operation_ = false;
-    std::move(write_callback_).Run(static_cast<int>(result));
+    std::move(write_callback_).Run(net::ERR_FAILED);
     return;
   }
 
@@ -199,18 +220,24 @@ int LocalFileStreamWriter::InitiateWrite(net::IOBuffer* buf, int buf_len) {
   DCHECK(has_pending_operation_);
   DCHECK(stream_impl_.get());
 
-  return stream_impl_->Write(buf, buf_len,
-                             base::BindOnce(&LocalFileStreamWriter::DidWrite,
-                                            weak_factory_.GetWeakPtr()));
+  auto result =
+      stream_impl_->Write(buf, buf_len,
+                          base::BindOnce(&LocalFileStreamWriter::DidWrite,
+                                         weak_factory_.GetWeakPtr()));
+  return result.has_value() ? base::checked_cast<int>(result->InBytes())
+                            : result.error();
 }
 
-void LocalFileStreamWriter::DidWrite(int result) {
+void LocalFileStreamWriter::DidWrite(
+    base::expected<base::ByteSize, net::Error> result) {
   DCHECK(has_pending_operation_);
 
   if (CancelIfRequested())
     return;
   has_pending_operation_ = false;
-  std::move(write_callback_).Run(result);
+  std::move(write_callback_)
+      .Run(result.has_value() ? base::checked_cast<int>(result->InBytes())
+                              : result.error());
 }
 
 int LocalFileStreamWriter::InitiateFlush(net::CompletionOnceCallback callback) {
@@ -223,7 +250,7 @@ int LocalFileStreamWriter::InitiateFlush(net::CompletionOnceCallback callback) {
 }
 
 void LocalFileStreamWriter::DidFlush(net::CompletionOnceCallback callback,
-                                     int result) {
+                                     net::Error result) {
   DCHECK(has_pending_operation_);
 
   if (CancelIfRequested())

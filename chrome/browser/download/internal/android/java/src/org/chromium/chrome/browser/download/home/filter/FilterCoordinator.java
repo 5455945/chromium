@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,21 @@ import android.view.View;
 
 import androidx.annotation.IntDef;
 
-import org.chromium.base.Callback;
 import org.chromium.base.ObserverList;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.download.home.DownloadManagerUiConfig;
 import org.chromium.chrome.browser.download.home.filter.Filters.FilterType;
+import org.chromium.chrome.browser.download.internal.R;
 import org.chromium.components.browser_ui.widget.chips.ChipsCoordinator;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.function.Supplier;
 
 /** A Coordinator responsible for showing the tab filter selection UI for downloads home. */
+@NullMarked
 public class FilterCoordinator {
     @IntDef({TabType.FILES, TabType.PREFETCH})
     @Retention(RetentionPolicy.SOURCE)
@@ -41,23 +44,30 @@ public class FilterCoordinator {
 
     private final ChipsCoordinator mChipsCoordinator;
     private final FilterChipsProvider mChipsProvider;
-    private final ObservableSupplier<Boolean> mIsPrefetchEnabledSupplier;
+    private final Supplier<Boolean> mExploreOfflineTabVisibilitySupplier;
 
-    private final Callback<Boolean> mIsPrefetchEnabledObserver = this::onPrefetchEnabledChanged;
     /**
      * Builds a new FilterCoordinator.
+     *
      * @param context The context to build the views and pull parameters from.
      * @param chipFilterSource The list of OfflineItems to use to generate the set of available
-     *         filters.
-     * @param isPrefetchEnabledSupplier A supplier that indicates whether or not prefetch is
-     *         enabled.
+     *     filters.
+     * @param exploreOfflineTabVisibilitySupplier A supplier that indicates whether or not explore
+     *     offline tab is shown.
+     * @param config The configuration of download page UI
      */
-    public FilterCoordinator(Context context, OfflineItemFilterSource chipFilterSource,
-            ObservableSupplier<Boolean> isPrefetchEnabledSupplier) {
+    public FilterCoordinator(
+            Context context,
+            OfflineItemFilterSource chipFilterSource,
+            Supplier<Boolean> exploreOfflineTabVisibilitySupplier,
+            DownloadManagerUiConfig config) {
         mChipsProvider =
                 new FilterChipsProvider(context, type -> handleChipSelected(), chipFilterSource);
-        mChipsCoordinator = new ChipsCoordinator(context, mChipsProvider);
-        mIsPrefetchEnabledSupplier = isPrefetchEnabledSupplier;
+        mChipsCoordinator = new ChipsCoordinator(context, mChipsProvider.getChips());
+        mChipsCoordinator.setSpaceItemDecoration(
+                context.getResources().getDimensionPixelSize(R.dimen.chip_list_chip_spacing),
+                context.getResources().getDimensionPixelSize(R.dimen.chip_list_side_padding));
+        mExploreOfflineTabVisibilitySupplier = exploreOfflineTabVisibilitySupplier;
 
         mView = new FilterView(context);
         PropertyModelChangeProcessor.create(mModel, mView, new FilterViewBinder());
@@ -65,15 +75,11 @@ public class FilterCoordinator {
         mModel.set(FilterProperties.CHANGE_LISTENER, this::handleTabSelected);
         selectTab(TabType.FILES);
 
-        mModel.set(FilterProperties.SHOW_TABS, mIsPrefetchEnabledSupplier.get());
-
-        mIsPrefetchEnabledSupplier.addObserver(mIsPrefetchEnabledObserver);
+        mModel.set(FilterProperties.SHOW_TABS, mExploreOfflineTabVisibilitySupplier.get());
     }
 
     /** Tears down this coordinator. */
-    public void destroy() {
-        mIsPrefetchEnabledSupplier.removeObserver(mIsPrefetchEnabledObserver);
-    }
+    public void destroy() {}
 
     /** @return The {@link View} representing this widget. */
     public View getView() {
@@ -95,9 +101,8 @@ public class FilterCoordinator {
      * components might need to update the UI state.
      */
     public void setSelectedFilter(@FilterType int filter) {
-        @TabType
-        int tabSelected;
-        if (filter == Filters.FilterType.PREFETCHED && mIsPrefetchEnabledSupplier.get()) {
+        @TabType int tabSelected;
+        if (filter == Filters.FilterType.PREFETCHED && mExploreOfflineTabVisibilitySupplier.get()) {
             tabSelected = TabType.PREFETCH;
         } else {
             mChipsProvider.setFilterSelected(filter);
@@ -129,8 +134,7 @@ public class FilterCoordinator {
     private void handleTabSelected(@TabType int selectedTab) {
         selectTab(selectedTab);
 
-        @FilterType
-        int filterType;
+        @FilterType int filterType;
         if (selectedTab == TabType.FILES) {
             filterType = mChipsProvider.getSelectedFilter();
         } else {
@@ -148,10 +152,8 @@ public class FilterCoordinator {
         handleTabSelected(mModel.get(FilterProperties.SELECTED_TAB));
     }
 
-    private void onPrefetchEnabledChanged(Boolean enabled) {
-        mModel.set(FilterProperties.SHOW_TABS, enabled);
-        int selectedTab = mModel.get(FilterProperties.SELECTED_TAB);
-        if (!enabled) selectedTab = TabType.FILES;
-        handleTabSelected(selectedTab);
+    /** Sets whether or not the divider is shown below the tabs. */
+    public void setShowDivider(boolean show) {
+        mView.setShowDivider(show);
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,16 @@
 
 #include <stddef.h>
 
-#include <map>
 #include <memory>
 #include <set>
 
-#include "base/callback.h"
+#include "base/byte_size.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
 #include "content/common/content_export.h"
+#include "crypto/hash.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -37,6 +39,16 @@ namespace content {
 class CONTENT_EXPORT ServiceWorkerCacheWriter {
  public:
   using OnWriteCompleteCallback = base::OnceCallback<void(net::Error)>;
+
+  // These values indicates the timing when the checksum update happens. As the
+  // sha256 checksum is a hash string calculated from script data, basically
+  // |kCacheMismatch| is preferable in terms of the efficiency.
+  //
+  // kCacheMismatch: Update the checksum when a cache mismatch and write data
+  // back to the cache.
+  // kAlways: Update the checksum regardless of whether there is a cache
+  // mismatch or not.
+  enum class ChecksumUpdateTiming { kCacheMismatch, kAlways };
 
   // This class defines the interfaces of observer that observes write
   // operations. The observer is notified when response head or data
@@ -88,47 +100,49 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
       mojo::Remote<storage::mojom::ServiceWorkerResourceReader> copy_reader,
       mojo::Remote<storage::mojom::ServiceWorkerResourceWriter> writer,
       int64_t writer_resource_id,
-      bool pause_when_not_identical);
+      bool pause_when_not_identical,
+      ChecksumUpdateTiming checksum_update_timing);
 
   ~ServiceWorkerCacheWriter();
 
-  // Writes the supplied |response_head| back to the cache. Returns
-  // ERR_IO_PENDING if the write will complete asynchronously, in which case
-  // |callback| will be called when it completes. Otherwise, returns a code
-  // other than ERR_IO_PENDING and does not invoke |callback|. Note that this
-  // method will not necessarily write data back to the cache if the incoming
-  // data is equivalent to the existing cached data. See the source of this
-  // function for details about how this function drives the state machine.
-  net::Error MaybeWriteHeaders(network::mojom::URLResponseHeadPtr response_head,
-                               OnWriteCompleteCallback callback);
+  // Writes the supplied |response_head| back to the cache. The callback is
+  // always invoked (synchronously if the operation completes immediately,
+  // asynchronously otherwise). Note that this method will not necessarily write
+  // data back to the cache if the incoming data is equivalent to the existing
+  // cached data. See the source of this function for details about how this
+  // function drives the state machine.
+  void MaybeWriteHeaders(network::mojom::URLResponseHeadPtr response_head,
+                         OnWriteCompleteCallback callback);
 
-  // Writes the supplied body data |data| back to the cache. Returns
-  // ERR_IO_PENDING if the write will complete asynchronously, in which case
-  // |callback| will be called when it completes. Otherwise, returns a code
-  // other than ERR_IO_PENDING and does not invoke |callback|. Note that this
-  // method will not necessarily write data back to the cache if the incoming
-  // data is equivalent to the existing cached data. See the source of this
-  // function for details about how this function drives the state machine.
-  net::Error MaybeWriteData(net::IOBuffer* buf,
-                            size_t buf_size,
-                            OnWriteCompleteCallback callback);
+  // Writes the supplied body data |data| back to the cache. The callback is
+  // always invoked (synchronously if the operation completes immediately,
+  // asynchronously otherwise). Note that this method will not necessarily write
+  // data back to the cache if the incoming data is equivalent to the existing
+  // cached data. See the source of this function for details about how this
+  // function drives the state machine.
+  void MaybeWriteData(net::IOBuffer* buf,
+                      size_t buf_size,
+                      OnWriteCompleteCallback callback);
 
   // Returns a count of bytes written back to the cache.
-  size_t bytes_written() const { return bytes_written_; }
+  base::ByteSize bytes_written() const { return bytes_written_; }
   bool did_replace() const { return did_replace_; }
   bool is_pausing() const { return state_ == STATE_PAUSING; }
 
   // Resumes a cache writer which were paused when a block of data from the
   // network wasn't identical to the data in the storage. It is valid to call
   // this method only when |pause_when_not_identical| is true in the constructor
-  // and |state_| is STATE_PAUSING.
-  net::Error Resume(OnWriteCompleteCallback callback);
+  // and |state_| is STATE_PAUSING. The callback is always invoked
+  // (synchronously if the operation completes immediately, asynchronously
+  // otherwise).
+  void Resume(OnWriteCompleteCallback callback);
 
   // Start to copy a script in storage to a new position. |callback| is
   // called when the work is done. This is used when an installed script
   // is used by a new service worker with no content change, thus downloading
-  // could be avoided.
-  net::Error StartCopy(OnWriteCompleteCallback callback);
+  // could be avoided. The callback is always invoked (synchronously if the
+  // operation completes immediately, asynchronously otherwise).
+  void StartCopy(OnWriteCompleteCallback callback);
 
   // Returns true when the cache writer is created by CreateForCopy().
   bool IsCopying() const;
@@ -141,6 +155,15 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   }
 
   void FlushRemotesForTesting();
+
+  // Gets the hex-encoded checksum hash string calculated from the script body.
+  // This function should be called only once as it destroys the underlying data
+  // of the checksum. It resets |checksum_| not to be called multiple times.
+  std::string GetSha256Checksum();
+
+  ChecksumUpdateTiming checksum_update_timing() const {
+    return checksum_update_timing_;
+  }
 
  private:
   class ReadResponseHeadCallbackAdapter;
@@ -210,7 +233,8 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
       mojo::Remote<storage::mojom::ServiceWorkerResourceReader> copy_reader,
       mojo::Remote<storage::mojom::ServiceWorkerResourceWriter> writer,
       int64_t writer_resource_id,
-      bool pause_when_not_identical);
+      bool pause_when_not_identical,
+      ChecksumUpdateTiming checksum_update_timing);
 
   // Drives this class's state machine. This function steps the state machine
   // until one of:
@@ -251,7 +275,7 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   int ReadResponseHead(storage::mojom::ServiceWorkerResourceReader* reader);
   int ReadDataHelper(storage::mojom::ServiceWorkerResourceReader* reader,
                      std::unique_ptr<DataPipeReader>& data_pipe_reader,
-                     net::IOBuffer* buf,
+                     scoped_refptr<net::IOBuffer> buf,
                      int buf_len);
 
   // If no write observer is set through set_write_observer(),
@@ -262,14 +286,15 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   // to observer then WriteResponseHeadToResponseWriter() or
   // WriteDataToResponseWriter() is called.
   int WriteResponseHead(network::mojom::URLResponseHeadPtr response_head);
-  int WriteData(scoped_refptr<net::IOBuffer> data, int length);
+  int WriteData(scoped_refptr<net::IOBuffer> data, size_t length);
   int WriteResponseHeadToResponseWriter(
       network::mojom::URLResponseHeadPtr response_head);
-  int WriteDataToResponseWriter(scoped_refptr<net::IOBuffer> data, int length);
+  int WriteDataToResponseWriter(scoped_refptr<net::IOBuffer> data,
+                                size_t length);
 
   // Called when |write_observer_| finishes its WillWriteData() operation.
   void OnWillWriteDataCompleted(scoped_refptr<net::IOBuffer> data,
-                                int length,
+                                size_t length,
                                 net::Error error);
 
   void OnRemoteDisconnected();
@@ -290,34 +315,34 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   network::mojom::URLResponseHeadPtr response_head_to_read_;
   network::mojom::URLResponseHeadPtr response_head_to_write_;
   scoped_refptr<net::IOBuffer> data_to_read_;
-  int len_to_read_;
+  base::ByteSize len_to_read_;
   scoped_refptr<net::IOBuffer> data_to_copy_;
   scoped_refptr<net::IOBuffer> data_to_write_;
-  int len_to_write_;
+  base::ByteSize len_to_write_;
   OnWriteCompleteCallback pending_callback_;
 
-  size_t cached_length_;
+  base::ByteSize cached_length_;
 
   // The amount of data from the network (|data_to_write_|) which has already
   // been compared with data from storage (|data_to_read_|). This is
   // initialized to 0 for every new arrival of network data.
-  size_t compare_offset_;
+  base::ByteSize compare_offset_;
 
   // Count of bytes which has been read from the network for comparison, and
   // known as identical with the stored scripts. It is incremented only when a
   // full block of network data is compared, to avoid having to use only
   // fragments of the buffered network data.
-  size_t bytes_compared_;
+  base::ByteSize bytes_compared_;
 
   // The total size of the body for copying. Used only when IsCopying() returns
   // true.
-  size_t bytes_to_copy_ = 0;
+  base::ByteSize bytes_to_copy_;
 
   // Count of bytes copied from |copy_reader_| to |writer_|.
-  size_t bytes_copied_;
+  base::ByteSize bytes_copied_;
 
   // Count of bytes written back to |writer_|.
-  size_t bytes_written_;
+  base::ByteSize bytes_written_;
 
   bool did_replace_ = false;
 
@@ -326,7 +351,7 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   // cache writer pauses immediately.
   const bool pause_when_not_identical_;
 
-  WriteObserver* write_observer_ = nullptr;
+  raw_ptr<WriteObserver, DanglingUntriaged> write_observer_ = nullptr;
 
   mojo::Remote<storage::mojom::ServiceWorkerResourceReader> compare_reader_;
   std::unique_ptr<DataPipeReader> compare_data_pipe_reader_;
@@ -336,6 +361,16 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   mojo::Remote<storage::mojom::ServiceWorkerResourceWriter> writer_;
   const int64_t writer_resource_id_ =
       blink::mojom::kInvalidServiceWorkerResourceId;
+
+  // Normally, the sha256 hash string is calculated only when there is an update
+  // on the script. But if |checksum_update_timing_| is kAlways, the hash
+  // string is calculated even when there is no update in the script.
+  const ChecksumUpdateTiming checksum_update_timing_;
+
+  // Calculate the hash string for the written bytes. This will be used for the
+  // experiment which needs to identify some specific service worker scripts
+  // (crbug.com/1371756).
+  crypto::hash::Hasher checksum_{crypto::hash::kSha256};
 
   base::WeakPtrFactory<ServiceWorkerCacheWriter> weak_factory_{this};
 };

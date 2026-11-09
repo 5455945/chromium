@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,8 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "chromecast/browser/cast_content_window.h"
-
-namespace content {
-class WebContents;
-}  // namespace content
+#include "content/public/browser/web_contents.h"
 
 namespace chromecast {
 
@@ -21,8 +17,11 @@ namespace chromecast {
 // CastWebContentsActivity.
 class CastContentWindowAndroid : public CastContentWindow {
  public:
-  explicit CastContentWindowAndroid(
-      const CastContentWindow::CreateParams& params);
+  explicit CastContentWindowAndroid(mojom::CastWebViewParamsPtr params);
+
+  CastContentWindowAndroid(const CastContentWindowAndroid&) = delete;
+  CastContentWindowAndroid& operator=(const CastContentWindowAndroid&) = delete;
+
   ~CastContentWindowAndroid() override;
 
   // CastContentWindow implementation:
@@ -32,28 +31,16 @@ class CastContentWindowAndroid : public CastContentWindow {
   void RevokeScreenAccess() override;
   void EnableTouchInput(bool enabled) override;
   void RequestVisibility(VisibilityPriority visibility_priority) override;
-  void SetActivityContext(base::Value activity_context) override;
-  void SetHostContext(base::Value host_context) override;
-  void NotifyVisibilityChange(VisibilityType visibility_type) override;
-  void RequestMoveOut() override;
+  bool HandlesBackPress() const override;
 
   // Called through JNI.
-  void OnActivityStopped(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& jcaller);
-  void ConsumeGesture(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller,
-      int gesture_type,
-      const base::android::JavaParamRef<jobject>& handled_callback);
+  void OnActivityStopped(JNIEnv* env);
   void OnVisibilityChange(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& jcaller,
                           int visibility_type);
 
  private:
   bool web_contents_attached_;
   base::android::ScopedJavaGlobalRef<jobject> java_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastContentWindowAndroid);
 };
 
 }  // namespace chromecast

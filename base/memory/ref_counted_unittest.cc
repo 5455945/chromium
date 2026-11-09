@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 #include <type_traits>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/gtest_util.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace subtle {
+namespace base::subtle {
 namespace {
 
 class SelfAssign : public base::RefCounted<SelfAssign> {
@@ -173,16 +173,7 @@ class CheckRefptrNull : public base::RefCounted<CheckRefptrNull> {
  private:
   friend class base::RefCounted<CheckRefptrNull>;
 
-  scoped_refptr<CheckRefptrNull>* ptr_ = nullptr;
-};
-
-class Overflow : public base::RefCounted<Overflow> {
- public:
-  Overflow() = default;
-
- private:
-  friend class base::RefCounted<Overflow>;
-  ~Overflow() = default;
+  raw_ptr<scoped_refptr<CheckRefptrNull>> ptr_ = nullptr;
 };
 
 }  // namespace
@@ -258,10 +249,38 @@ TEST(RefCountedUnitTest, Equality) {
   scoped_refptr<SelfAssign> p2(new SelfAssign);
 
   EXPECT_EQ(p1, p1);
+  EXPECT_EQ(p1.get(), p1);
+  EXPECT_EQ(p1, p1.get());
+
   EXPECT_EQ(p2, p2);
+  EXPECT_EQ(p2.get(), p2);
+  EXPECT_EQ(p2, p2.get());
 
   EXPECT_NE(p1, p2);
+  EXPECT_NE(p1.get(), p2);
+  EXPECT_NE(p1, p2.get());
+
   EXPECT_NE(p2, p1);
+  EXPECT_NE(p2.get(), p1);
+  EXPECT_NE(p2, p1.get());
+}
+
+TEST(RefCountedUnitTest, Ordering) {
+  scoped_refptr<SelfAssign> p1(new SelfAssign);
+  scoped_refptr<SelfAssign> p2(new SelfAssign);
+  EXPECT_NE(p1, p2);
+
+  if (p1.get() > p2.get()) {
+    p1.swap(p2);
+  }
+
+  EXPECT_LT(p1, p2);
+  EXPECT_LT(p1.get(), p2);
+  EXPECT_LT(p1, p2.get());
+
+  EXPECT_GT(p2, p1);
+  EXPECT_GT(p2.get(), p1);
+  EXPECT_GT(p2, p1.get());
 }
 
 TEST(RefCountedUnitTest, NullptrEquality) {
@@ -274,24 +293,52 @@ TEST(RefCountedUnitTest, NullptrEquality) {
   EXPECT_EQ(ptr_to_nullptr, nullptr);
 }
 
+TEST(RefCountedUnitTest, NullptrOrdering) {
+  scoped_refptr<SelfAssign> ptr_to_an_instance(new SelfAssign);
+
+  EXPECT_LT(nullptr, ptr_to_an_instance);
+  EXPECT_GT(ptr_to_an_instance, nullptr);
+}
+
 TEST(RefCountedUnitTest, ConvertibleEquality) {
   scoped_refptr<Derived> p1(new Derived);
   scoped_refptr<SelfAssign> p2;
 
   EXPECT_NE(p1, p2);
+  EXPECT_NE(p1.get(), p2);
+  EXPECT_NE(p1, p2.get());
   EXPECT_NE(p2, p1);
+  EXPECT_NE(p2.get(), p1);
+  EXPECT_NE(p2, p1.get());
 
   p2 = p1;
 
   EXPECT_EQ(p1, p2);
+  EXPECT_EQ(p1.get(), p2);
+  EXPECT_EQ(p1, p2.get());
   EXPECT_EQ(p2, p1);
+  EXPECT_EQ(p2.get(), p1);
+  EXPECT_EQ(p2, p1.get());
+}
+
+TEST(RefCountedUnitTest, ConvertibleOrdering) {
+  scoped_refptr<Derived> p1(new Derived);
+  scoped_refptr<SelfAssign> p2;
+
+  EXPECT_LT(p2, p1);
+  EXPECT_LT(p2.get(), p1);
+  EXPECT_LT(p2, p1.get());
+
+  EXPECT_GT(p1, p2);
+  EXPECT_GT(p1.get(), p2);
+  EXPECT_GT(p1, p2.get());
 }
 
 TEST(RefCountedUnitTest, MoveAssignment1) {
   ScopedRefPtrCountBase::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1(raw);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -302,7 +349,7 @@ TEST(RefCountedUnitTest, MoveAssignment1) {
       p2 = std::move(p1);
       EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
-      EXPECT_EQ(nullptr, p1.get());
+      EXPECT_EQ(nullptr, p1.get());  // NOLINT(bugprone-use-after-move)
       EXPECT_EQ(raw, p2.get());
 
       // p2 goes out of scope.
@@ -320,7 +367,7 @@ TEST(RefCountedUnitTest, MoveAssignment2) {
   ScopedRefPtrCountBase::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1;
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -334,7 +381,7 @@ TEST(RefCountedUnitTest, MoveAssignment2) {
       EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
       EXPECT_EQ(raw, p1.get());
-      EXPECT_EQ(nullptr, p2.get());
+      EXPECT_EQ(nullptr, p2.get());  // NOLINT(bugprone-use-after-move)
 
       // p2 goes out of scope.
     }
@@ -351,7 +398,7 @@ TEST(RefCountedUnitTest, MoveAssignmentSameInstance1) {
   ScopedRefPtrCountBase::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1(raw);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -365,7 +412,7 @@ TEST(RefCountedUnitTest, MoveAssignmentSameInstance1) {
       EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
       EXPECT_EQ(raw, p1.get());
-      EXPECT_EQ(nullptr, p2.get());
+      EXPECT_EQ(nullptr, p2.get());  // NOLINT(bugprone-use-after-move)
 
       // p2 goes out of scope.
     }
@@ -382,7 +429,7 @@ TEST(RefCountedUnitTest, MoveAssignmentSameInstance2) {
   ScopedRefPtrCountBase::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1(raw);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -395,7 +442,7 @@ TEST(RefCountedUnitTest, MoveAssignmentSameInstance2) {
       p2 = std::move(p1);
       EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
-      EXPECT_EQ(nullptr, p1.get());
+      EXPECT_EQ(nullptr, p1.get());  // NOLINT(bugprone-use-after-move)
       EXPECT_EQ(raw, p2.get());
 
       // p2 goes out of scope.
@@ -413,13 +460,13 @@ TEST(RefCountedUnitTest, MoveAssignmentDifferentInstances) {
   ScopedRefPtrCountBase::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw1 = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw1 = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1(raw1);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
 
     {
-      ScopedRefPtrCountBase *raw2 = new ScopedRefPtrCountBase();
+      ScopedRefPtrCountBase* raw2 = new ScopedRefPtrCountBase();
       scoped_refptr<ScopedRefPtrCountBase> p2(raw2);
       EXPECT_EQ(2, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -428,7 +475,7 @@ TEST(RefCountedUnitTest, MoveAssignmentDifferentInstances) {
       EXPECT_EQ(2, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(1, ScopedRefPtrCountBase::destructor_count());
       EXPECT_EQ(raw2, p1.get());
-      EXPECT_EQ(nullptr, p2.get());
+      EXPECT_EQ(nullptr, p2.get());  // NOLINT(bugprone-use-after-move)
 
       // p2 goes out of scope.
     }
@@ -467,7 +514,7 @@ TEST(RefCountedUnitTest, MoveAssignmentDerived) {
   ScopedRefPtrCountDerived::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw1 = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw1 = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1(raw1);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -475,7 +522,7 @@ TEST(RefCountedUnitTest, MoveAssignmentDerived) {
     EXPECT_EQ(0, ScopedRefPtrCountDerived::destructor_count());
 
     {
-      ScopedRefPtrCountDerived *raw2 = new ScopedRefPtrCountDerived();
+      ScopedRefPtrCountDerived* raw2 = new ScopedRefPtrCountDerived();
       scoped_refptr<ScopedRefPtrCountDerived> p2(raw2);
       EXPECT_EQ(2, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -488,7 +535,7 @@ TEST(RefCountedUnitTest, MoveAssignmentDerived) {
       EXPECT_EQ(1, ScopedRefPtrCountDerived::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountDerived::destructor_count());
       EXPECT_EQ(raw2, p1.get());
-      EXPECT_EQ(nullptr, p2.get());
+      EXPECT_EQ(nullptr, p2.get());  // NOLINT(bugprone-use-after-move)
 
       // p2 goes out of scope.
     }
@@ -509,7 +556,7 @@ TEST(RefCountedUnitTest, MoveConstructor) {
   ScopedRefPtrCountBase::reset_count();
 
   {
-    ScopedRefPtrCountBase *raw = new ScopedRefPtrCountBase();
+    ScopedRefPtrCountBase* raw = new ScopedRefPtrCountBase();
     scoped_refptr<ScopedRefPtrCountBase> p1(raw);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -518,7 +565,7 @@ TEST(RefCountedUnitTest, MoveConstructor) {
       scoped_refptr<ScopedRefPtrCountBase> p2(std::move(p1));
       EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
-      EXPECT_EQ(nullptr, p1.get());
+      EXPECT_EQ(nullptr, p1.get());  // NOLINT(bugprone-use-after-move)
       EXPECT_EQ(raw, p2.get());
 
       // p2 goes out of scope.
@@ -537,7 +584,7 @@ TEST(RefCountedUnitTest, MoveConstructorDerived) {
   ScopedRefPtrCountDerived::reset_count();
 
   {
-    ScopedRefPtrCountDerived *raw1 = new ScopedRefPtrCountDerived();
+    ScopedRefPtrCountDerived* raw1 = new ScopedRefPtrCountDerived();
     scoped_refptr<ScopedRefPtrCountDerived> p1(raw1);
     EXPECT_EQ(1, ScopedRefPtrCountBase::constructor_count());
     EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
@@ -550,7 +597,7 @@ TEST(RefCountedUnitTest, MoveConstructorDerived) {
       EXPECT_EQ(0, ScopedRefPtrCountBase::destructor_count());
       EXPECT_EQ(1, ScopedRefPtrCountDerived::constructor_count());
       EXPECT_EQ(0, ScopedRefPtrCountDerived::destructor_count());
-      EXPECT_EQ(nullptr, p1.get());
+      EXPECT_EQ(nullptr, p1.get());  // NOLINT(bugprone-use-after-move)
       EXPECT_EQ(raw1, p2.get());
 
       // p2 goes out of scope.
@@ -692,14 +739,89 @@ TEST(RefCountedDeathTest, TestAdoptRef) {
 }
 
 #if defined(ARCH_CPU_64_BITS)
-TEST(RefCountedDeathTest, TestOverflowCheck) {
+class RefCountedOverflowTest : public ::testing::Test {
+ public:
+  static uint32_t& GetMutableRefCount(RefCountedBase* ref_counted) {
+    return ref_counted->ref_count_;
+  }
+
+  static std::atomic_int& GetMutableRefCount(
+      RefCountedThreadSafeBase* ref_counted) {
+    return ref_counted->ref_count_.ref_count_;
+  }
+};
+
+TEST_F(RefCountedOverflowTest, NonThreadSafeStartFromZero) {
+  class Overflow : public base::RefCounted<Overflow> {
+   public:
+    Overflow() { EXPECT_FALSE(HasOneRef()); }
+
+   private:
+    friend class base::RefCounted<Overflow>;
+    ~Overflow() = default;
+  };
+
   auto p = base::MakeRefCounted<Overflow>();
-  p->ref_count_ = std::numeric_limits<uint32_t>::max();
+  GetMutableRefCount(p.get()) = std::numeric_limits<uint32_t>::max();
   EXPECT_CHECK_DEATH(p->AddRef());
   // Ensure `p` doesn't leak and fail lsan builds.
-  p->ref_count_ = 1;
+  GetMutableRefCount(p.get()) = 1;
+}
+
+TEST_F(RefCountedOverflowTest, NonThreadSafeStartFromOne) {
+  class Overflow : public base::RefCounted<Overflow> {
+   public:
+    REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
+    Overflow() { EXPECT_TRUE(HasOneRef()); }
+
+   private:
+    friend class base::RefCounted<Overflow>;
+    ~Overflow() = default;
+  };
+
+  auto p = base::MakeRefCounted<Overflow>();
+  GetMutableRefCount(p.get()) = std::numeric_limits<uint32_t>::max();
+  EXPECT_CHECK_DEATH(p->AddRef());
+  // Ensure `p` doesn't leak and fail lsan builds.
+  GetMutableRefCount(p.get()) = 1;
+}
+
+TEST_F(RefCountedOverflowTest, ThreadSafeStartFromZero) {
+  class Overflow : public base::RefCountedThreadSafe<Overflow> {
+   public:
+    Overflow() { EXPECT_FALSE(HasOneRef()); }
+
+   private:
+    friend class base::RefCountedThreadSafe<Overflow>;
+    ~Overflow() = default;
+  };
+
+  auto p = base::MakeRefCounted<Overflow>();
+  GetMutableRefCount(p.get()) = std::numeric_limits<int>::max();
+  EXPECT_CHECK_DEATH(p->AddRef());
+  // Ensure `p` doesn't leak and fail lsan builds.
+  GetMutableRefCount(p.get()) = 1;
+}
+
+TEST_F(RefCountedOverflowTest, ThreadSafeStartFromOne) {
+  class Overflow : public base::RefCountedThreadSafe<Overflow> {
+   public:
+    REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
+    Overflow() { EXPECT_TRUE(HasOneRef()); }
+
+   private:
+    friend class base::RefCountedThreadSafe<Overflow>;
+    ~Overflow() = default;
+  };
+
+  auto p = base::MakeRefCounted<Overflow>();
+  GetMutableRefCount(p.get()) = std::numeric_limits<int>::max();
+  EXPECT_CHECK_DEATH(p->AddRef());
+  // Ensure `p` doesn't leak and fail lsan builds.
+  GetMutableRefCount(p.get()) = 1;
 }
 #endif
 
-}  // namespace subtle
-}  // namespace base
+}  // namespace base::subtle

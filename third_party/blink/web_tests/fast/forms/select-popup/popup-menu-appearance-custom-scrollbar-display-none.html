@@ -1,14 +1,13 @@
 <!DOCTYPE html>
-<html>
-<head>
-<script>
-  window.enablePixelTesting = true;
-</script>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-100">
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src="../../resources/ahem.js"></script>
 <script src="../resources/picker-common.js"></script>
+
 <style>
   select:focus {
-    outline-width: 0;
+    outline: none;
   }
   select {
     width: 200px;
@@ -21,9 +20,7 @@
     width: 15px;
   }
 </style>
-</head>
-<body>
-<select id='menu'>
+<select>
   <option>This is an option</option>
   <option>This is an option</option>
   <option>This is an option</option>
@@ -49,8 +46,7 @@
   <option>This is an option</option>
   <option>This is an option</option >
 </select>
+
 <script>
-   openPickerAppearanceOnly(document.getElementById('menu'), () => testRunner.notifyDone());
+  window.onload = openPickerAppearanceOnly(document.querySelector('select'));
 </script>
-</body>
-</html>

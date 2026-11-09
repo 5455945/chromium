@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 #define EXTENSIONS_COMMON_COMMON_MANIFEST_HANDLERS_H_
 
 namespace extensions {
+class ManifestHandlerRegistry;
 
 // Registers manifest handlers used by all embedders of the extensions system.
 // Should be called once in each process. Embedders may also wish to register
 // their own set of manifest handlers, such as chrome_manifest_handlers.cc.
-void RegisterCommonManifestHandlers();
+void RegisterCommonManifestHandlers(ManifestHandlerRegistry* registry);
 
 }  // namespace extensions
 

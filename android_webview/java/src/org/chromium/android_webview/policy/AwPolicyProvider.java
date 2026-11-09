@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,7 @@ import org.chromium.components.policy.AppRestrictionsProvider;
  */
 @VisibleForTesting
 public class AwPolicyProvider extends AppRestrictionsProvider {
-    /** Policies targeted to WebView should be prefixed by this string.*/
+    /** Policies targeted to WebView should be prefixed by this string. */
     public static final String POLICY_PREFIX = "com.android.browser:";
 
     public AwPolicyProvider(Context context) {
@@ -33,7 +33,8 @@ public class AwPolicyProvider extends AppRestrictionsProvider {
             for (String key : newAppRestrictions.keySet()) {
                 if (!key.startsWith(POLICY_PREFIX)) continue;
 
-                filteredRestrictions.putSerializable(key.substring(POLICY_PREFIX.length()),
+                filteredRestrictions.putSerializable(
+                        key.substring(POLICY_PREFIX.length()),
                         newAppRestrictions.getSerializable(key));
             }
         }

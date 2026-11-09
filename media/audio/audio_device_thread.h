@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,13 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
+#include <atomic>
+
+#include "base/memory/raw_ptr.h"
 #include "base/sync_socket.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_checker.h"
+#include "build/buildflag.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
 
@@ -32,6 +35,9 @@ class MEDIA_EXPORT AudioDeviceThread : public base::PlatformThread::Delegate {
              uint32_t segment_length,
              uint32_t total_segments);
 
+    Callback(const Callback&) = delete;
+    Callback& operator=(const Callback&) = delete;
+
     // One time initialization for the callback object on the audio thread.
     void InitializeOnAudioThread();
 
@@ -41,6 +47,11 @@ class MEDIA_EXPORT AudioDeviceThread : public base::PlatformThread::Delegate {
 
     // Called whenever we receive notifications about pending input data.
     virtual void Process(uint32_t pending_data) = 0;
+
+    // Called if the socket closes outside of destruction.
+    virtual void OnSocketError() = 0;
+
+    virtual bool WillConfirmReadsViaShmem() const;
 
     base::TimeDelta buffer_duration() const {
       return audio_parameters_.GetBufferDuration();
@@ -62,16 +73,16 @@ class MEDIA_EXPORT AudioDeviceThread : public base::PlatformThread::Delegate {
     // is called on the audio device thread. Sub-classes can then use it for
     // various thread checking purposes.
     base::ThreadChecker thread_checker_;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Callback);
   };
 
   // Creates and automatically starts the audio thread.
   AudioDeviceThread(Callback* callback,
                     base::SyncSocket::ScopedHandle socket,
                     const char* thread_name,
-                    base::ThreadPriority thread_priority);
+                    base::ThreadType thread_type);
+
+  AudioDeviceThread(const AudioDeviceThread&) = delete;
+  AudioDeviceThread& operator=(const AudioDeviceThread&) = delete;
 
   // This tells the audio thread to stop and clean up the data; this is a
   // synchronous process and the thread will stop before the method returns.
@@ -79,17 +90,23 @@ class MEDIA_EXPORT AudioDeviceThread : public base::PlatformThread::Delegate {
   ~AudioDeviceThread() override;
 
  private:
+#if BUILDFLAG(IS_APPLE)
   base::TimeDelta GetRealtimePeriod() final;
+#endif
   void ThreadMain() final;
 
-  Callback* const callback_;
+  // Set to true in destruction, but before closing the socket.
+  std::atomic<bool> in_shutdown_ = false;
+
+  const raw_ptr<Callback> callback_;
   const char* thread_name_;
   base::CancelableSyncSocket socket_;
   base::PlatformThreadHandle thread_handle_;
 
-  DISALLOW_COPY_AND_ASSIGN(AudioDeviceThread);
+  // False if callback_->WillConfirmReadsViaShmem() returned true.
+  const bool send_socket_messages_;
 };
 
-}  // namespace media.
+}  // namespace media
 
 #endif  // MEDIA_AUDIO_AUDIO_DEVICE_THREAD_H_

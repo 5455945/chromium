@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "components/device_event_log/device_event_log.h"
 #include "device/fido/hid/fido_hid_device.h"
@@ -80,7 +79,7 @@ void FidoHidDiscovery::DeviceAdded(
   }
 
   const VidPid vid_pid{device_info->vendor_id, device_info->product_id};
-  if (base::Contains(ignore_list_, vid_pid)) {
+  if (ignore_list_.contains(vid_pid)) {
     FIDO_LOG(EVENT) << "Ignoring HID device " << vid_pid.vid << ":"
                     << vid_pid.pid;
     return;

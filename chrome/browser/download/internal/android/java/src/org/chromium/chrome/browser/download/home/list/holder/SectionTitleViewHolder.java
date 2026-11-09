@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.list.ListItem;
 import org.chromium.chrome.browser.download.home.list.ListItem.SectionHeaderListItem;
 import org.chromium.chrome.browser.download.home.list.ListItem.SectionHeaderType;
@@ -17,23 +19,21 @@ import org.chromium.chrome.browser.download.internal.R;
 import org.chromium.components.browser_ui.util.date.StringUtils;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * A {@link ViewHolder} specifically meant to display a section header.
- */
+/** A {@link ViewHolder} specifically meant to display a section header. */
+@NullMarked
 public class SectionTitleViewHolder extends ListItemViewHolder {
-    private final View mTopDivider;
     private final TextView mTitle;
 
     /** Create a new {@link SectionTitleViewHolder} instance. */
     public static SectionTitleViewHolder create(ViewGroup parent) {
-        View view = LayoutInflater.from(parent.getContext())
-                            .inflate(R.layout.download_manager_section_header, null);
+        View view =
+                LayoutInflater.from(parent.getContext())
+                        .inflate(R.layout.download_manager_section_header, null);
         return new SectionTitleViewHolder(view);
     }
 
     private SectionTitleViewHolder(View view) {
         super(view);
-        mTopDivider = view.findViewById(R.id.divider);
         mTitle = (TextView) view.findViewById(R.id.date);
     }
 
@@ -42,18 +42,15 @@ public class SectionTitleViewHolder extends ListItemViewHolder {
     public void bind(PropertyModel properties, ListItem item) {
         SectionHeaderListItem sectionItem = (SectionHeaderListItem) item;
         mTitle.setText(getSectionTitle(sectionItem, itemView.getContext()));
-        mTopDivider.setVisibility(sectionItem.showTopDivider ? ViewGroup.VISIBLE : ViewGroup.GONE);
     }
 
-    private static CharSequence getSectionTitle(
+    private static @Nullable CharSequence getSectionTitle(
             SectionHeaderListItem sectionItem, Context context) {
         switch (sectionItem.type) {
             case SectionHeaderType.DATE:
                 return StringUtils.dateToHeaderString(sectionItem.date);
             case SectionHeaderType.JUST_NOW:
-                return context.getResources().getString(R.string.download_manager_just_now);
-            case SectionHeaderType.SCHEDULED_LATER:
-                return context.getResources().getString(R.string.download_manager_scheduled_later);
+                return context.getString(R.string.download_manager_just_now);
         }
         assert false : "Unknown section header type.";
         return null;

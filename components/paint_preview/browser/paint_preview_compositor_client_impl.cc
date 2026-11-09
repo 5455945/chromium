@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <utility>
 
-#include "base/bind_post_task.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 
@@ -17,7 +18,7 @@ PaintPreviewCompositorClientImpl::PaintPreviewCompositorClientImpl(
     scoped_refptr<base::SequencedTaskRunner> compositor_task_runner,
     base::WeakPtr<PaintPreviewCompositorServiceImpl> service)
     : compositor_task_runner_(compositor_task_runner),
-      default_task_runner_(base::SequencedTaskRunnerHandle::Get()),
+      default_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
       service_(service),
       compositor_(new mojo::Remote<mojom::PaintPreviewCompositor>(),
                   base::OnTaskRunnerDeleter(compositor_task_runner_)) {}
@@ -27,7 +28,7 @@ PaintPreviewCompositorClientImpl::~PaintPreviewCompositorClientImpl() {
   NotifyServiceOfInvalidation();
 }
 
-const absl::optional<base::UnguessableToken>&
+const std::optional<base::UnguessableToken>&
 PaintPreviewCompositorClientImpl::Token() const {
   DCHECK(default_task_runner_->RunsTasksInCurrentSequence());
   return token_;
@@ -67,9 +68,14 @@ void PaintPreviewCompositorClientImpl::BitmapForSeparatedFrame(
     const base::UnguessableToken& frame_guid,
     const gfx::Rect& clip_rect,
     float scale_factor,
-    mojom::PaintPreviewCompositor::BitmapForSeparatedFrameCallback callback) {
+    mojom::PaintPreviewCompositor::BitmapForSeparatedFrameCallback callback,
+    bool run_callback_on_default_task_runner) {
   DCHECK(default_task_runner_->RunsTasksInCurrentSequence());
 
+  auto task_runner_specified_callback =
+      run_callback_on_default_task_runner
+          ? base::BindPostTask(default_task_runner_, std::move(callback))
+          : std::move(callback);
   auto validate_bitmap = base::BindOnce(
       [](mojom::PaintPreviewCompositor::BitmapForSeparatedFrameCallback
              callback,
@@ -84,7 +90,7 @@ void PaintPreviewCompositorClientImpl::BitmapForSeparatedFrame(
         CHECK_EQ(bitmap.colorType(), kN32_SkColorType);
         std::move(callback).Run(status, bitmap);
       },
-      base::BindPostTask(default_task_runner_, std::move(callback)));
+      std::move(task_runner_specified_callback));
 
   compositor_task_runner_->PostTask(
       FROM_HERE,
@@ -108,14 +114,19 @@ void PaintPreviewCompositorClientImpl::BeginMainFrameComposite(
 void PaintPreviewCompositorClientImpl::BitmapForMainFrame(
     const gfx::Rect& clip_rect,
     float scale_factor,
-    mojom::PaintPreviewCompositor::BitmapForMainFrameCallback callback) {
+    mojom::PaintPreviewCompositor::BitmapForMainFrameCallback callback,
+    bool run_callback_on_default_task_runner) {
   DCHECK(default_task_runner_->RunsTasksInCurrentSequence());
+
+  auto task_runner_specified_callback =
+      run_callback_on_default_task_runner
+          ? base::BindPostTask(default_task_runner_, std::move(callback))
+          : std::move(callback);
   compositor_task_runner_->PostTask(
       FROM_HERE,
-      base::BindOnce(
-          &mojom::PaintPreviewCompositor::BitmapForMainFrame,
-          base::Unretained(compositor_.get()->get()), clip_rect, scale_factor,
-          base::BindPostTask(default_task_runner_, std::move(callback))));
+      base::BindOnce(&mojom::PaintPreviewCompositor::BitmapForMainFrame,
+                     base::Unretained(compositor_.get()->get()), clip_rect,
+                     scale_factor, std::move(task_runner_specified_callback)));
 }
 
 void PaintPreviewCompositorClientImpl::SetRootFrameUrl(const GURL& url) {

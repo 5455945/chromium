@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 
 #include <limits>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/byte_size.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_file_util.h"
 #include "build/build_config.h"
 #include "components/performance_manager/persistence/site_data/site_data.pb.h"
@@ -48,9 +48,9 @@ ScopedReadOnlyDirectory::ScopedReadOnlyDirectory(
       root_dir, FILE_PATH_LITERAL("read_only_path"), &read_only_path_));
   permission_restorer_ =
       std::make_unique<base::FilePermissionRestorer>(read_only_path_);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::DenyFilePermission(read_only_path_, GENERIC_WRITE);
-#else  // defined(OS_WIN)
+#else  // BUILDFLAG(IS_WIN)
   EXPECT_TRUE(base::MakeFileUnwritable(read_only_path_));
 #endif
   EXPECT_FALSE(base::PathIsWritable(read_only_path_));
@@ -58,8 +58,7 @@ ScopedReadOnlyDirectory::ScopedReadOnlyDirectory(
 
 // Initialize a SiteDataProto object with a test value (the same
 // value is used to initialize all fields).
-void InitSiteDataProto(SiteDataProto* proto,
-                       ::google::protobuf::int64 test_value) {
+void InitSiteDataProto(SiteDataProto* proto, int64_t test_value) {
   proto->set_last_loaded(test_value);
 
   SiteDataFeatureProto feature_proto;
@@ -124,7 +123,7 @@ class LevelDBSiteDataStoreTest : public ::testing::Test {
     bool success = false;
     auto init_callback = base::BindOnce(
         [](SiteDataProto* receiving_proto, bool* success,
-           absl::optional<SiteDataProto> proto_opt) {
+           std::optional<SiteDataProto> proto_opt) {
           *success = proto_opt.has_value();
           if (proto_opt)
             receiving_proto->CopyFrom(proto_opt.value());
@@ -141,7 +140,7 @@ class LevelDBSiteDataStoreTest : public ::testing::Test {
     for (size_t i = 0; i < num_entries; ++i) {
       SiteDataProto proto_temp;
       std::string origin_str = base::StringPrintf("http://%zu.com", i);
-      InitSiteDataProto(&proto_temp, static_cast<::google::protobuf::int64>(i));
+      InitSiteDataProto(&proto_temp, static_cast<int64_t>(i));
       EXPECT_TRUE(proto_temp.IsInitialized());
       url::Origin origin = url::Origin::Create(GURL(origin_str));
       db_->WriteSiteDataIntoStore(origin, proto_temp);
@@ -167,7 +166,7 @@ TEST_F(LevelDBSiteDataStoreTest, InitAndStoreSiteData) {
   EXPECT_FALSE(ReadFromDB(kDummyOrigin, &early_read_proto));
 
   // Add an entry to the data store and make sure that we can read it back.
-  ::google::protobuf::int64 test_value = 42;
+  int64_t test_value = 42;
   SiteDataProto stored_proto;
   InitSiteDataProto(&stored_proto, test_value);
   db_->WriteSiteDataIntoStore(kDummyOrigin, stored_proto);
@@ -210,16 +209,16 @@ TEST_F(LevelDBSiteDataStoreTest, RemoveEntries) {
 TEST_F(LevelDBSiteDataStoreTest, GetDatabaseSize) {
   std::vector<url::Origin> site_origins = AddDummyEntriesToDB(200);
 
-  auto size_callback =
-      base::BindLambdaForTesting([&](absl::optional<int64_t> num_rows,
-                                     absl::optional<int64_t> on_disk_size_kb) {
+  auto size_callback = base::BindLambdaForTesting(
+      [&](std::optional<int64_t> num_rows,
+          std::optional<base::ByteSize> on_disk_size) {
         EXPECT_TRUE(num_rows);
         // The DB contains an extra row for metadata.
         int64_t expected_rows = site_origins.size() + 1;
         EXPECT_EQ(expected_rows, num_rows.value());
 
-        EXPECT_TRUE(on_disk_size_kb);
-        EXPECT_LT(0, on_disk_size_kb.value());
+        EXPECT_TRUE(on_disk_size);
+        EXPECT_TRUE(on_disk_size.value().is_positive());
       });
 
   db_->GetStoreSize(std::move(size_callback));
@@ -233,33 +232,30 @@ TEST_F(LevelDBSiteDataStoreTest, GetDatabaseSize) {
 }
 
 TEST_F(LevelDBSiteDataStoreTest, DatabaseRecoveryTest) {
-  std::vector<url::Origin> site_origins = AddDummyEntriesToDB(10);
+  AddDummyEntriesToDB(10);
 
   db_.reset();
 
   EXPECT_TRUE(leveldb_chrome::CorruptClosedDBForTesting(GetDBPath()));
 
-  base::HistogramTester histogram_tester;
-  histogram_tester.ExpectTotalCount("ResourceCoordinator.LocalDB.DatabaseInit",
-                                    0);
-  // Open the corrupt DB and ensure that the appropriate histograms gets
-  // updated.
+  // Open the corrupt DB.
   OpenDB();
   EXPECT_TRUE(DbIsInitialized());
-  histogram_tester.ExpectUniqueSample(
-      "ResourceCoordinator.LocalDB.DatabaseInit", 1 /* kInitStatusCorruption */,
-      1);
-  histogram_tester.ExpectUniqueSample(
-      "ResourceCoordinator.LocalDB.DatabaseInitAfterRepair",
-      0 /* kInitStatusOk */, 1);
 
   // TODO(sebmarchand): try to induce an I/O error by deleting one of the
   // manifest files.
 }
 
+#if BUILDFLAG(IS_FUCHSIA)
+// TODO(crbug.com/40221281): Re-enable when DatabaseOpeningFailure works on
+// Fuchsia.
+#define MAYBE_DatabaseOpeningFailure DISABLED_DatabaseOpeningFailure
+#else
+#define MAYBE_DatabaseOpeningFailure DatabaseOpeningFailure
+#endif
 // Ensure that there's no fatal failures if we try using the data store after
 // failing to open it (all the events will be ignored).
-TEST_F(LevelDBSiteDataStoreTest, DatabaseOpeningFailure) {
+TEST_F(LevelDBSiteDataStoreTest, MAYBE_DatabaseOpeningFailure) {
   db_.reset();
   ScopedReadOnlyDirectory read_only_dir(GetTempPath());
 
@@ -296,7 +292,7 @@ TEST_F(LevelDBSiteDataStoreTest, DBGetsClearedOnVersionUpgrade) {
 
   // Add some dummy data to the data store to ensure the data store gets cleared
   // when upgrading it to the new version.
-  ::google::protobuf::int64 test_value = 42;
+  int64_t test_value = 42;
   SiteDataProto stored_proto;
   InitSiteDataProto(&stored_proto, test_value);
   db_->WriteSiteDataIntoStore(kDummyOrigin, stored_proto);

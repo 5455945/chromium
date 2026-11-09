@@ -1,13 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/thread_watcher_report_hang.h"
 
-#include "base/debug/activity_tracker.h"
+#include "base/debug/alias.h"
 #include "base/debug/debugger.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 
 namespace metrics {
 
@@ -16,17 +17,13 @@ namespace metrics {
 // thread was unresponsive. Inhibiting tail calls to this function ensures that
 // the caller will appear on the call stack.
 NOINLINE NOT_TAIL_CALLED void ReportThreadHang() {
-  volatile const char* inhibit_comdat = __func__;
-  ALLOW_UNUSED_LOCAL(inhibit_comdat);
+  [[maybe_unused]] volatile const char* inhibit_comdat = __func__;
 
-  // The first 8 characters of sha1 of "ReportThreadHang".
-  // echo -n "ReportThreadHang" | sha1sum
-  static constexpr uint32_t kActivityTrackerId = 0xceec103d;
-
-  base::debug::ScopedActivity scoped_activity(0, kActivityTrackerId, 0);
-  auto& user_data = scoped_activity.user_data();
-  const base::TimeTicks now = base::TimeTicks::Now();
-  user_data.SetUint("timestamp_us", now.since_origin().InMicroseconds());
+  // Record the time of the hang in convenient units. This can be compared to
+  // times stored in places like TaskAnnotator::RunTaskImpl() and BrowserMain()
+  // when analyzing hangs.
+  const int64_t hang_time = base::TimeTicks::Now().since_origin().InSeconds();
+  base::debug::Alias(&hang_time);
 
 #if defined(NDEBUG)
   base::debug::DumpWithoutCrashing();
@@ -35,48 +32,13 @@ NOINLINE NOT_TAIL_CALLED void ReportThreadHang() {
 #endif
 }
 
-#if !defined(OS_ANDROID)
-
-NOINLINE void StartupHang() {
-  // TODO(rtenneti): http://crbug.com/440885 enable crashing after fixing false
-  // positive startup hang data.
-  // ReportThreadHang();
-  volatile int inhibit_comdat = __LINE__;
-  ALLOW_UNUSED_LOCAL(inhibit_comdat);
-}
+#if !BUILDFLAG(IS_ANDROID)
 
 NOINLINE void ShutdownHang() {
   ReportThreadHang();
-  volatile int inhibit_comdat = __LINE__;
-  ALLOW_UNUSED_LOCAL(inhibit_comdat);
+  [[maybe_unused]] volatile int inhibit_comdat = __LINE__;
 }
 
-#endif  // !defined(OS_ANDROID)
-
-NOINLINE void ThreadUnresponsive_UI() {
-  ReportThreadHang();
-  volatile int inhibit_comdat = __LINE__;
-  ALLOW_UNUSED_LOCAL(inhibit_comdat);
-}
-
-NOINLINE void ThreadUnresponsive_IO() {
-  ReportThreadHang();
-  volatile int inhibit_comdat = __LINE__;
-  ALLOW_UNUSED_LOCAL(inhibit_comdat);
-}
-
-NOINLINE void CrashBecauseThreadWasUnresponsive(
-    content::BrowserThread::ID thread_id) {
-  switch (thread_id) {
-    case content::BrowserThread::UI:
-      return ThreadUnresponsive_UI();
-    case content::BrowserThread::IO:
-      return ThreadUnresponsive_IO();
-    case content::BrowserThread::ID_COUNT:
-      NOTREACHED();
-      break;
-  }
-}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace metrics
-

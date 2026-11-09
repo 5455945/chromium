@@ -1,57 +1,76 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_NETWORK_ISOLATION_KEY_H_
 #define NET_BASE_NETWORK_ISOLATION_KEY_H_
 
+#include <optional>
 #include <string>
+#include <tuple>
 
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/values.h"
+#include "base/memory/ref_counted.h"
+#include "base/types/pass_key.h"
+#include "base/unguessable_token.h"
 #include "net/base/net_export.h"
+#include "net/base/network_isolation_partition.h"
 #include "net/base/schemeful_site.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace network {
-namespace mojom {
-class NetworkIsolationKeyDataView;
-}  // namespace mojom
-}  // namespace network
+namespace network::mojom {
+class NonEmptyNetworkIsolationKeyDataView;
+}
 
-namespace mojo {
-template <typename DataViewType, typename T>
-struct StructTraits;
-}  // namespace mojo
-
-namespace url {
-class Origin;
+namespace net {
+class CookiePartitionKey;
+class NetworkAnonymizationKey;
 }
 
 namespace net {
 
-// Key used to isolate shared network stack resources used by requests based on
-// the context on which they were made.
+// NetworkIsolationKey (NIK) is used to partition shared network state based on
+// the context in which the requests were made. It is used to divide the HTTP
+// cache, while the NetworkAnonymizationKey is used for most other network
+// state.
+//
+// The NetworkIsolationKey uses the "triple-key" scheme to partition the HTTP
+// cache. The key has the following properties:
+// `top_frame_site` -> the schemeful site of the top level page.
+// `frame_site ` -> the schemeful site of the frame.
+// `network_isolation_partition` -> an extra partition for the HTTP cache for
+// special use cases.
+//
+// An empty NetworkIsolationKey (one where the `top_frame_site` is empty) can be
+// used for transient network requests where the responses should not be written
+// to disk. Note that empty NetworkAnonymizationKeys can still have different
+// NetworkIsolationPartition values. Also note that although a given
+// NetworkIsolationKey may be empty, the corresponding NetworkAnonymizationKey
+// (also empty) may still result in metadata such as HttpServerProperties being
+// written to disk.
 class NET_EXPORT NetworkIsolationKey {
  public:
   // Full constructor.  When a request is initiated by the top frame, it must
   // also populate the |frame_site| parameter when calling this constructor.
-  NetworkIsolationKey(const SchemefulSite& top_frame_site,
-                      const SchemefulSite& frame_site);
+  NetworkIsolationKey(
+      const SchemefulSite& top_frame_site,
+      const SchemefulSite& frame_site,
+      const std::optional<base::UnguessableToken>& nonce = std::nullopt,
+      NetworkIsolationPartition network_isolation_partition =
+          NetworkIsolationPartition::kGeneral);
 
   // Alternative constructor that takes ownership of arguments, to save copies.
-  NetworkIsolationKey(SchemefulSite&& top_frame_site,
-                      SchemefulSite&& frame_site);
-
-  // Legacy constructor.
-  // TODO(https://crbug.com/1145294):  Remove this in favor of above
-  // constructor.
-  NetworkIsolationKey(const url::Origin& top_frame_origin,
-                      const url::Origin& frame_origin);
+  NetworkIsolationKey(
+      SchemefulSite&& top_frame_site,
+      SchemefulSite&& frame_site,
+      std::optional<base::UnguessableToken>&& nonce = std::nullopt,
+      NetworkIsolationPartition network_isolation_partition =
+          NetworkIsolationPartition::kGeneral);
 
   // Construct an empty key.
   NetworkIsolationKey();
+
+  // Create an empty NetworkIsolationKey with a partition.
+  static NetworkIsolationKey CreateEmptyWithPartition(
+      NetworkIsolationPartition network_isolation_partition);
 
   NetworkIsolationKey(const NetworkIsolationKey& network_isolation_key);
   NetworkIsolationKey(NetworkIsolationKey&& network_isolation_key);
@@ -66,128 +85,185 @@ class NET_EXPORT NetworkIsolationKey {
   // origin. This prevents the NetworkIsolationKey from sharing data with other
   // NetworkIsolationKeys. Data for transient NetworkIsolationKeys is not
   // persisted to disk.
-  static NetworkIsolationKey CreateTransient();
-
-  // Creates a non-empty NetworkIsolationKey with an opaque origin that is not
-  // considered transient. The returned NetworkIsolationKey will be cross-origin
-  // with all other keys and associated data is able to be persisted to disk.
-  static NetworkIsolationKey CreateOpaqueAndNonTransient();
+  static NetworkIsolationKey CreateTransientForTesting();
 
   // Creates a new key using |top_frame_site_| and |new_frame_site|.
   NetworkIsolationKey CreateWithNewFrameSite(
       const SchemefulSite& new_frame_site) const;
 
-  // Creates a new key using |top_frame_site_| and |new_frame_origin|.
-  // TODO(https://crbug.com/1145294):  Remove this in favor of above method.
-  NetworkIsolationKey CreateWithNewFrameOrigin(
-      const url::Origin& new_frame_origin) const;
-
-  // Intended for temporary use in locations that should be using a non-empty
-  // NetworkIsolationKey(), but are not yet. This both reduces the chance of
-  // accidentally copying the lack of a NIK where one should be used, and
-  // provides a reasonable way of locating callsites that need to have their
-  // NetworkIsolationKey filled in.
-  static NetworkIsolationKey Todo() { return NetworkIsolationKey(); }
-
-  // Intended for temporary use in locations that should be using main frame and
-  // frame origin, but are currently only using frame origin, because the
-  // creating object may be shared across main frame objects. Having a special
-  // constructor for these methods makes it easier to keep track of locating
-  // callsites that need to have their NetworkIsolationKey filled in.
-  static NetworkIsolationKey ToDoUseTopFrameOriginAsWell(
-      const url::Origin& incorrectly_used_frame_origin) {
-    return NetworkIsolationKey(incorrectly_used_frame_origin,
-                               incorrectly_used_frame_origin);
-  }
-
-  // Compare keys for equality, true if all enabled fields are equal.
-  bool operator==(const NetworkIsolationKey& other) const {
-    return std::tie(top_frame_site_, frame_site_, opaque_and_non_transient_) ==
-           std::tie(other.top_frame_site_, other.frame_site_,
-                    other.opaque_and_non_transient_);
-  }
-
-  // Compare keys for inequality, true if any enabled field varies.
-  bool operator!=(const NetworkIsolationKey& other) const {
-    return !(*this == other);
-  }
-
-  // Provide an ordering for keys based on all enabled fields.
-  bool operator<(const NetworkIsolationKey& other) const {
-    return std::tie(top_frame_site_, frame_site_, opaque_and_non_transient_) <
-           std::tie(other.top_frame_site_, other.frame_site_,
-                    other.opaque_and_non_transient_);
-  }
-
-  // Returns the string representation of the key, which is the string
-  // representation of each piece of the key separated by spaces.
-  std::string ToString() const;
+  // Returns the string representation of the key for use in string-keyed disk
+  // cache. This is the string representation of each piece of the key separated
+  // by spaces. Returns nullopt if the network isolation key is transient, in
+  // which case, nothing should typically be saved to disk using the key.
+  std::optional<std::string> ToCacheKeyString() const;
 
   // Returns string for debugging. Difference from ToString() is that transient
   // entries may be distinguishable from each other.
   std::string ToDebugString() const;
 
-  // Returns true if all parts of the key are non-empty.
-  bool IsFullyPopulated() const;
-
-  // Returns true if this key's lifetime is short-lived, or if
-  // IsFullyPopulated() returns true. It may not make sense to persist state to
-  // disk related to it (e.g., disk cache).
+  // Returns true if this key's lifetime is short-lived, or if !IsEmpty()
+  // returns true. It may not make sense to persist state to disk related to it
+  // (e.g., disk cache). See the note in the class comment about empty
+  // NetworkIsolationKeys, though, and how certain data associated with requests
+  // using them may still be persisted to disk.
   bool IsTransient() const;
 
   // Getters for the top frame and frame sites. These accessors are primarily
   // intended for IPC calls, and to be able to create an IsolationInfo from a
   // NetworkIsolationKey.
-  const absl::optional<SchemefulSite>& GetTopFrameSite() const {
-    return top_frame_site_;
-  }
-  const absl::optional<SchemefulSite>& GetFrameSite() const {
-    return frame_site_;
+  const std::optional<SchemefulSite>& GetTopFrameSite() const {
+    return data_->top_frame_site();
   }
 
-  // Returns true if all parts of the key are empty.
+  // Do not use outside of testing. Returns the `frame_site_`.
+  const std::optional<SchemefulSite> GetFrameSiteForTesting() const {
+    return GetFrameSite();
+  }
+
+  // When serializing a NIK for sending via mojo we want to access the frame
+  // site directly. We don't want to expose this broadly, though, hence the
+  // passkey.
+  using SerializationPassKey = base::PassKey<struct mojo::StructTraits<
+      network::mojom::NonEmptyNetworkIsolationKeyDataView,
+      NetworkIsolationKey>>;
+  const std::optional<SchemefulSite>& GetFrameSiteForSerialization(
+      SerializationPassKey) const {
+    CHECK(!IsEmpty());
+    return data_->frame_site();
+  }
+  // We also need to access the frame site directly when constructing
+  // CookiePartitionKey for nonced partitions. We also use a passkey for this
+  // case.
+  using CookiePartitionKeyPassKey = base::PassKey<CookiePartitionKey>;
+  const std::optional<SchemefulSite>& GetFrameSiteForCookiePartitionKey(
+      CookiePartitionKeyPassKey) const {
+    CHECK(!IsEmpty());
+    return data_->frame_site();
+  }
+  // Same as above but for constructing a `NetworkAnonymizationKey()` from this
+  // NIK.
+  using NetworkAnonymizationKeyPassKey = base::PassKey<NetworkAnonymizationKey>;
+  const std::optional<SchemefulSite>& GetFrameSiteForNetworkAnonymizationKey(
+      NetworkAnonymizationKeyPassKey) const {
+    return data_->frame_site();
+  }
+
+  // Getter for the nonce.
+  const std::optional<base::UnguessableToken>& GetNonce() const {
+    return data_->nonce();
+  }
+
+  NetworkIsolationPartition GetNetworkIsolationPartition() const {
+    return data_->network_isolation_partition();
+  }
+
+  // Returns true if this is an empty key (i.e. `top_frame_site`, `frame_site`,
+  // and `nonce` are empty). See the note in the class comment regarding empty
+  // NetworkIsolationKeys.
   bool IsEmpty() const;
 
-  // Returns a representation of |this| as a base::Value. Returns false on
-  // failure. Succeeds if either IsEmpty() or !IsTransient().
-  bool ToValue(base::Value* out_value) const WARN_UNUSED_RESULT;
+ private:
+  // Holds all the data of a NetworkIsolationKey. This is ref-counted to make
+  // copying NetworkIsolationKey objects cheaper.
+  class Data : public base::RefCountedThreadSafe<Data> {
+   public:
+    static scoped_refptr<Data> GetEmptyData();
 
-  // Inverse of ToValue(). Writes the result to |network_isolation_key|. Returns
-  // false on failure. Fails on values that could not have been produced by
-  // ToValue(), like transient origins. If the value of
-  // net::features::kAppendFrameOriginToNetworkIsolationKey has changed between
-  // saving and loading the data, fails.
-  static bool FromValue(const base::Value& value,
-                        NetworkIsolationKey* out_network_isolation_key)
-      WARN_UNUSED_RESULT;
+    // Construct an empty data.
+    explicit Data(base::PassKey<Data>);
+
+    Data(std::optional<SchemefulSite>&& top_frame_site,
+         std::optional<SchemefulSite>&& frame_site,
+         std::optional<base::UnguessableToken>&& nonce,
+         NetworkIsolationPartition network_isolation_partition);
+
+    // The origin/etld+1 of the top frame of the page making the request.
+    const std::optional<SchemefulSite>& top_frame_site() const {
+      return top_frame_site_;
+    }
+
+    // The origin/etld+1 of the frame that initiates the request.
+    const std::optional<SchemefulSite>& frame_site() const {
+      return frame_site_;
+    }
+
+    // Having a nonce is a way to force a transient opaque `NetworkIsolationKey`
+    // for non-opaque origins.
+    const std::optional<base::UnguessableToken>& nonce() const {
+      return nonce_;
+    }
+
+    // The network isolation partition for this NIK. This will be kGeneral
+    // except for specific use cases that require isolation from all other
+    // use cases.
+    NetworkIsolationPartition network_isolation_partition() const {
+      return network_isolation_partition_;
+    }
+
+    bool is_empty() const { return !top_frame_site_.has_value(); }
+
+    // Compare keys for equality, true if all enabled fields are equal.
+    friend bool operator==(const Data& a, const Data& b) {
+      return std::tie(a.top_frame_site_, a.frame_site_, a.nonce_,
+                      a.network_isolation_partition_) ==
+             std::tie(b.top_frame_site_, b.frame_site_, b.nonce_,
+                      b.network_isolation_partition_);
+    }
+
+    // Provide an ordering for keys based on all enabled fields.
+    friend auto operator<=>(const Data& a, const Data& b) {
+      return std::tie(a.top_frame_site_, a.frame_site_, a.nonce_,
+                      a.network_isolation_partition_) <=>
+             std::tie(b.top_frame_site_, b.frame_site_, b.nonce_,
+                      b.network_isolation_partition_);
+    }
+
+   private:
+    friend class base::RefCountedThreadSafe<Data>;
+    ~Data();
+
+    const std::optional<SchemefulSite> top_frame_site_;
+    const std::optional<SchemefulSite> frame_site_;
+    const std::optional<base::UnguessableToken> nonce_;
+    const NetworkIsolationPartition network_isolation_partition_;
+  };
+
+ public:
+  // Compare keys for equality, true if all enabled fields are equal.
+  friend bool operator==(const NetworkIsolationKey& a,
+                         const NetworkIsolationKey& b) {
+    return *a.data_ == *b.data_;
+  }
+
+  // Provide an ordering for keys based on all enabled fields.
+  friend auto operator<=>(const NetworkIsolationKey& a,
+                          const NetworkIsolationKey& b) {
+    return *a.data_ <=> *b.data_;
+  }
 
  private:
-  // These classes need to be able to set |opaque_and_non_transient_|
-  friend class IsolationInfo;
-  friend struct mojo::StructTraits<network::mojom::NetworkIsolationKeyDataView,
-                                   net::NetworkIsolationKey>;
+  // Construct a key using the NetworkIsolationKey::Data.
+  explicit NetworkIsolationKey(const scoped_refptr<const Data>& data);
 
-  NetworkIsolationKey(SchemefulSite&& top_frame_site,
-                      SchemefulSite&& frame_site,
-                      bool opaque_and_non_transient);
+  template <typename H>
+  friend H AbslHashValue(H h, const NetworkIsolationKey& key) {
+    return H::combine(std::move(h), key.GetTopFrameSite(), key.GetFrameSite(),
+                      key.GetNonce(), key.GetNetworkIsolationPartition());
+  }
 
+  // Whether this key has opaque origins or a nonce.
   bool IsOpaque() const;
 
-  // SchemefulSite::Serialize() is not const, as it may initialize the nonce.
-  // Need this to call it on a const |site|.
-  static absl::optional<std::string> SerializeSiteWithNonce(
-      const SchemefulSite& site);
+  const std::optional<SchemefulSite>& GetFrameSite() const {
+    return data_->frame_site();
+  }
 
-  // Whether opaque origins cause the key to be transient. Always false, unless
-  // created with |CreateOpaqueAndNonTransient|.
-  bool opaque_and_non_transient_ = false;
-
-  // The origin/etld+1 of the top frame of the page making the request.
-  absl::optional<SchemefulSite> top_frame_site_;
-
-  // The origin/etld+1 of the frame that initiates the request.
-  absl::optional<SchemefulSite> frame_site_;
+  // A non-null Data.
+  scoped_refptr<const Data> data_;
 };
+
+NET_EXPORT std::ostream& operator<<(std::ostream& os,
+                                    const NetworkIsolationKey& nak);
 
 }  // namespace net
 

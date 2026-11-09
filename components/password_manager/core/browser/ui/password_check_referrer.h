@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,17 +12,22 @@ namespace password_manager {
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 //
-// Needs to stay in sync with PasswordCheckReferrer in enums.xml and
-// password_manager_proxy.js.
+// LINT.IfChange(PasswordCheckReferrer)
 enum class PasswordCheckReferrer {
-  kSafetyCheck = 0,           // Web UI, recorded in JavaScript.
-  kPasswordSettings = 1,      // Web UI, recorded in JavaScript.
-  kPhishGuardDialog = 2,      // Native UI, recorded in C++.
-  kPasswordBreachDialog = 3,  // Native UI, recorded in C++.
-  kMoreToFixBubble = 4,       // Native UI, recorded in C++.
-  // kUnsafeStateBubble = 5,  // obsolete.
-  kMaxValue = kMoreToFixBubble,
+  kSafetyCheck = 0,               // Web UI, recorded in JavaScript.
+  kPasswordSettings = 1,          // Web UI, recorded in JavaScript.
+  kPhishGuardDialog = 2,          // Native UI, recorded in C++.
+  kPasswordBreachDialog = 3,      // Native UI, recorded in C++.
+  kMoreToFixBubble = 4,           // Native UI, recorded in C++.
+  // kUnsafeStateBubble = 5,      // Obsolete.
+  kSafetyCheckMagicStack = 6,     // Native UI, recorded in C++.
+  kSafetyCheckNotification = 7,   // Native UI, recorded in C++.
+  kMaxValue = kSafetyCheckNotification,
 };
+// LINT.ThenChange(
+//     //chrome/browser/resources/password_manager/side_bar.ts:PasswordCheckReferrer,
+//     //tools/metrics/histograms/metadata/password/enums.xml:PasswordCheckReferrer
+// )
 
 // Name of the corresponding Password Check referrer histogram.
 extern const char kPasswordCheckReferrerHistogram[];

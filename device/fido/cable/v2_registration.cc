@@ -1,9 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/fido/cable/v2_registration.h"
 
+#include "base/compiler_specific.h"
+#include "base/containers/span_reader.h"
+#include "base/containers/span_writer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "components/cbor/reader.h"
@@ -13,9 +18,6 @@
 #include "components/gcm_driver/gcm_driver.h"
 #include "components/gcm_driver/instance_id/instance_id.h"
 #include "components/gcm_driver/instance_id/instance_id_driver.h"
-#include "device/fido/fido_parsing_utils.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
-#include "third_party/boringssl/src/include/openssl/mem.h"
 
 namespace device {
 namespace cablev2 {
@@ -44,13 +46,13 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
     // number of new registrations with the FCM service. Thus this code does not
     // compile on other platforms. Check with //components/gcm_driver owners
     // before changing this.
-#if !defined(OS_ANDROID)
-    CHECK(false) << "Do not use outside of Android.";
-#endif
-
+#if BUILDFLAG(IS_ANDROID)
     gcm::GCMDriver* const gcm_driver = instance_id_->gcm_driver();
     CHECK(gcm_driver->GetAppHandler(app_id()) == nullptr);
     instance_id_->gcm_driver()->AddAppHandler(app_id(), this);
+#else
+    NOTREACHED() << "Do not use outside of Android.";
+#endif
   }
 
   ~FCMHandler() override {
@@ -73,7 +75,9 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
     instance_id_->GetToken(
         kFCMSenderId, instance_id::kGCMScope,
         /*time_to_live=*/base::TimeDelta(),
-        /*flags=*/{},
+        // This flag causes high-priority messages to be processed immediately
+        // rather than deferred until the device is not dozing.
+        {instance_id::InstanceID::Flags::kBypassScheduler},
         base::BindOnce(&FCMHandler::GetTokenComplete, base::Unretained(this)));
   }
 
@@ -86,11 +90,11 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
                                              base::Unretained(this)));
   }
 
-  absl::optional<std::vector<uint8_t>> contact_id() const override {
+  std::optional<std::vector<uint8_t>> contact_id() const override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     if (!registration_token_) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     return std::vector<uint8_t>(registration_token_->begin(),
                                 registration_token_->end());
@@ -109,7 +113,7 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
       return;
     }
 
-    absl::optional<std::unique_ptr<Registration::Event>> event =
+    std::optional<std::unique_ptr<Registration::Event>> event =
         MessageToEvent(message.data, type_);
     if (!event) {
       FIDO_LOG(ERROR) << "Failed to decode FCM message. Ignoring.";
@@ -128,8 +132,6 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
   void OnSendError(
       const std::string& app_id,
       const gcm::GCMClient::SendErrorDetails& send_error_details) override {}
-  void OnSendAcknowledged(const std::string& app_id,
-                          const std::string& message_id) override {}
   void OnMessageDecryptionFailed(const std::string& app_id,
                                  const std::string& message_id,
                                  const std::string& error_message) override {}
@@ -175,7 +177,7 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
     PrepareContactID();
   }
 
-  static absl::optional<std::unique_ptr<Registration::Event>> MessageToEvent(
+  static std::optional<std::unique_ptr<Registration::Event>> MessageToEvent(
       const gcm::MessageData& data,
       Type source) {
     auto event = std::make_unique<Registration::Event>();
@@ -184,46 +186,49 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
     gcm::MessageData::const_iterator it = data.find("caBLE.tunnelID");
     if (it == data.end() ||
         !base::HexStringToSpan(it->second, event->tunnel_id)) {
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     it = data.find("caBLE.routingID");
     if (it == data.end() ||
         !base::HexStringToSpan(it->second, event->routing_id)) {
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     std::vector<uint8_t> payload_bytes;
     it = data.find("caBLE.clientPayload");
     if (it == data.end() ||
         !base::HexStringToBytes(it->second, &payload_bytes)) {
-      return absl::nullopt;
+      return std::nullopt;
     }
 
-    absl::optional<cbor::Value> payload = cbor::Reader::Read(payload_bytes);
+    std::optional<cbor::Value> payload = cbor::Reader::Read(payload_bytes);
     if (!payload || !payload->is_map()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     const cbor::Value::MapValue& map = payload->GetMap();
     cbor::Value::MapValue::const_iterator cbor_it = map.find(cbor::Value(1));
     if (cbor_it == map.end() || !cbor_it->second.is_bytestring()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     const std::vector<uint8_t>& pairing_id = cbor_it->second.GetBytestring();
     if (pairing_id.size() != event->pairing_id.size()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
-    memcpy(event->pairing_id.data(), pairing_id.data(),
-           event->pairing_id.size());
+    base::span(event->pairing_id).copy_from(pairing_id);
 
-    if (!fido_parsing_utils::CopyCBORBytestring(&event->client_nonce, map, 2)) {
-      return absl::nullopt;
+    cbor_it = map.find(cbor::Value(2));
+    if (cbor_it == map.end() || !cbor_it->second.is_bytestring() ||
+        cbor_it->second.GetBytestring().size() != event->client_nonce.size()) {
+      return std::nullopt;
     }
+    std::ranges::copy(cbor_it->second.GetBytestring(),
+                      event->client_nonce.begin());
 
     cbor_it = map.find(cbor::Value(3));
     if (cbor_it == map.end() || !cbor_it->second.is_string()) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     const std::string& request_type_str = cbor_it->second.GetString();
     if (request_type_str == "mc") {
@@ -231,7 +236,7 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
     } else if (request_type_str == "ga") {
       event->request_type = FidoRequestType::kGetAssertion;
     } else {
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     return event;
@@ -241,10 +246,10 @@ class FCMHandler : public gcm::GCMAppHandler, public Registration {
   base::OnceCallback<void()> ready_callback_;
   base::RepeatingCallback<void(std::unique_ptr<Registration::Event>)>
       event_callback_;
-  instance_id::InstanceIDDriver* const instance_id_driver_;
-  instance_id::InstanceID* const instance_id_;
+  const raw_ptr<instance_id::InstanceIDDriver> instance_id_driver_;
+  const raw_ptr<instance_id::InstanceID> instance_id_;
   bool registration_token_pending_ = false;
-  absl::optional<std::string> registration_token_;
+  std::optional<std::string> registration_token_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };
@@ -260,14 +265,12 @@ std::unique_ptr<Registration::Event> Registration::Event::FromSerialized(
     base::span<const uint8_t> in) {
   auto e = std::make_unique<Event>();
   uint8_t source, request_type;
-  CBS cbs;
-  CBS_init(&cbs, in.data(), in.size());
+  base::SpanReader reader(in);
 
-  if (!CBS_get_u8(&cbs, &source) || !CBS_get_u8(&cbs, &request_type) ||
-      !CBS_copy_bytes(&cbs, e->tunnel_id.data(), e->tunnel_id.size()) ||
-      !CBS_copy_bytes(&cbs, e->routing_id.data(), e->routing_id.size()) ||
-      !CBS_copy_bytes(&cbs, e->pairing_id.data(), e->pairing_id.size()) ||
-      !CBS_copy_bytes(&cbs, e->client_nonce.data(), e->client_nonce.size())) {
+  if (!reader.ReadU8BigEndian(source) ||
+      !reader.ReadU8BigEndian(request_type) || !reader.ReadCopy(e->tunnel_id) ||
+      !reader.ReadCopy(e->routing_id) || !reader.ReadCopy(e->pairing_id) ||
+      !reader.ReadCopy(e->client_nonce)) {
     return nullptr;
   }
 
@@ -297,42 +300,30 @@ std::unique_ptr<Registration::Event> Registration::Event::FromSerialized(
       break;
   }
 
-  if (CBS_len(&cbs) > 0) {
+  if (reader.remaining() > 0) {
     if (e->source == Type::SYNC) {
       return nullptr;
     }
-    e->contact_id.emplace(CBS_data(&cbs), CBS_data(&cbs) + CBS_len(&cbs));
+    e->contact_id.emplace(reader.remaining_span().begin(),
+                          reader.remaining_span().end());
   }
 
   return e;
 }
 
-absl::optional<std::vector<uint8_t>> Registration::Event::Serialize() {
-  bssl::ScopedCBB cbb;
-  if (!CBB_init(cbb.get(), /*initial_capacity=*/512) ||
-      !CBB_add_u8(cbb.get(), static_cast<uint8_t>(this->source)) ||
-      !CBB_add_u8(cbb.get(), static_cast<uint8_t>(this->request_type)) ||
-      !CBB_add_bytes(cbb.get(), this->tunnel_id.data(),
-                     this->tunnel_id.size()) ||
-      !CBB_add_bytes(cbb.get(), this->routing_id.data(),
-                     this->routing_id.size()) ||
-      !CBB_add_bytes(cbb.get(), this->pairing_id.data(),
-                     this->pairing_id.size()) ||
-      !CBB_add_bytes(cbb.get(), this->client_nonce.data(),
-                     this->client_nonce.size()) ||
-      (this->contact_id && !CBB_add_bytes(cbb.get(), this->contact_id->data(),
-                                          this->contact_id->size()))) {
-    return absl::nullopt;
+std::optional<std::vector<uint8_t>> Registration::Event::Serialize() {
+  const size_t len = 1 + 1 + this->tunnel_id.size() + this->routing_id.size() +
+                     this->pairing_id.size() + this->client_nonce.size() +
+                     (this->contact_id ? this->contact_id->size() : 0);
+  std::vector<uint8_t> ret(len);
+  base::SpanWriter writer(base::span{ret});
+  if (!writer.WriteU8BigEndian(static_cast<uint8_t>(this->source)) ||
+      !writer.WriteU8BigEndian(static_cast<uint8_t>(this->request_type)) ||
+      !writer.Write(this->tunnel_id) || !writer.Write(this->routing_id) ||
+      !writer.Write(this->pairing_id) || !writer.Write(this->client_nonce) ||
+      (this->contact_id && !writer.Write(*this->contact_id))) {
+    return std::nullopt;
   }
-
-  uint8_t* serialized_bytes;
-  size_t serialized_bytes_len;
-  if (!CBB_finish(cbb.get(), &serialized_bytes, &serialized_bytes_len)) {
-    return absl::nullopt;
-  }
-  const std::vector<uint8_t> ret(serialized_bytes,
-                                 serialized_bytes + serialized_bytes_len);
-  OPENSSL_free(serialized_bytes);
 
   return ret;
 }

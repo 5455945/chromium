@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 namespace device {
 
-// Return a null ptr. Link this when there is no suitable BluetoothAdapter for
-// a particular platform.
+// Callers assume CreateAdapter() does not return null and is not called
+// when Bluetooth is not supported, so crash right away if we get here.
 // static
 scoped_refptr<BluetoothAdapter> BluetoothAdapter::CreateAdapter() {
-  return nullptr;
+  NOTREACHED();
 }
 
 }  // namespace device

@@ -1,9 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/views/animation/animation_delegate_views.h"
 
+#include <memory>
 #include <utility>
 
 #include "ui/gfx/animation/animation_container.h"
@@ -12,33 +13,55 @@
 
 namespace views {
 
-AnimationDelegateViews::AnimationDelegateViews(View* view) : view_(view) {
-  if (view)
+AnimationDelegateViews::AnimationDelegateViews(View* view,
+                                               const base::Location& location)
+    : view_(view), location_(location) {
+  if (view) {
     scoped_observation_.Observe(view);
+  }
 }
+
+AnimationDelegateViews::AnimationDelegateViews(Widget* widget,
+                                               const base::Location& location)
+    : AnimationDelegateViews(widget->GetRootView(), location) {}
 
 AnimationDelegateViews::~AnimationDelegateViews() {
   // Reset the delegate so that we don't attempt to notify our observer from
   // the destructor.
-  if (container_)
+  if (container_) {
     container_->set_observer(nullptr);
+  }
+}
+
+void AnimationDelegateViews::SetView(View* view) {
+  if (view_ == view) {
+    return;
+  }
+  scoped_observation_.Reset();
+  view_ = view;
+  if (view_) {
+    scoped_observation_.Observe(view_);
+  }
+  UpdateAnimationRunner(location_);
 }
 
 void AnimationDelegateViews::AnimationContainerWasSet(
     gfx::AnimationContainer* container) {
-  if (container_ == container)
+  if (container_ == container) {
     return;
+  }
 
-  if (container_)
+  if (container_) {
     container_->set_observer(nullptr);
+  }
 
   container_ = container;
   container_->set_observer(this);
-  UpdateAnimationRunner();
+  UpdateAnimationRunner(location_);
 }
 
 void AnimationDelegateViews::OnViewAddedToWidget(View* observed_view) {
-  UpdateAnimationRunner();
+  UpdateAnimationRunner(location_);
 }
 
 void AnimationDelegateViews::OnViewRemovedFromWidget(View* observed_view) {
@@ -46,10 +69,11 @@ void AnimationDelegateViews::OnViewRemovedFromWidget(View* observed_view) {
 }
 
 void AnimationDelegateViews::OnViewIsDeleting(View* observed_view) {
-  DCHECK(scoped_observation_.IsObservingSource(view_));
+  CHECK(scoped_observation_.IsObservingSource(view_.get()),
+        base::NotFatalUntil::M163);
   scoped_observation_.Reset();
   view_ = nullptr;
-  UpdateAnimationRunner();
+  UpdateAnimationRunner(location_);
 }
 
 void AnimationDelegateViews::AnimationContainerShuttingDown(
@@ -63,27 +87,33 @@ base::TimeDelta AnimationDelegateViews::GetAnimationDurationForReporting()
   return base::TimeDelta();
 }
 
-void AnimationDelegateViews::UpdateAnimationRunner() {
+void AnimationDelegateViews::UpdateAnimationRunner(
+    const base::Location& location) {
   if (!view_ || !view_->GetWidget() || !view_->GetWidget()->GetCompositor()) {
     ClearAnimationRunner();
     return;
   }
 
-  if (!container_ || container_->has_custom_animation_runner())
+  if (!container_ || container_->has_custom_animation_runner()) {
     return;
+  }
 
   auto compositor_animation_runner =
-      std::make_unique<CompositorAnimationRunner>(view_->GetWidget());
+      std::make_unique<CompositorAnimationRunner>(view_->GetWidget(), location);
   compositor_animation_runner_ = compositor_animation_runner.get();
   container_->SetAnimationRunner(std::move(compositor_animation_runner));
 }
 
 void AnimationDelegateViews::ClearAnimationRunner() {
-  // TODO(https://crbug.com/960621): make sure the container has a correct
-  // compositor-assisted runner.
-  if (container_)
-    container_->SetAnimationRunner(nullptr);
+  // `compositor_animation_runner_` holds a pointer owned by `container_`, so
+  // we need to release it before `container_` actually releases the memory it
+  // points to.
   compositor_animation_runner_ = nullptr;
+  // TODO(crbug.com/41457352): make sure the container has a correct
+  // compositor-assisted runner.
+  if (container_) {
+    container_->SetAnimationRunner(nullptr);
+  }
 }
 
 }  // namespace views

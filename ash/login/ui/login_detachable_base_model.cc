@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include "ash/login/ui/login_data_dispatcher.h"
 #include "ash/public/cpp/session/user_info.h"
 #include "ash/shell.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 
 namespace ash {
@@ -26,6 +26,10 @@ class LoginDetachableBaseModelImpl : public LoginDetachableBaseModel,
       : detachable_base_handler_(detachable_base_handler) {
     detachable_base_observation_.Observe(detachable_base_handler);
   }
+
+  LoginDetachableBaseModelImpl(const LoginDetachableBaseModelImpl&) = delete;
+  LoginDetachableBaseModelImpl& operator=(const LoginDetachableBaseModelImpl&) =
+      delete;
 
   ~LoginDetachableBaseModelImpl() override = default;
 
@@ -51,11 +55,13 @@ class LoginDetachableBaseModelImpl : public LoginDetachableBaseModel,
   void OnDetachableBaseRequiresUpdateChanged(bool requires_update) override {}
 
  private:
-  DetachableBaseHandler* detachable_base_handler_;
-  base::ScopedObservation<DetachableBaseHandler, DetachableBaseObserver>
+  raw_ptr<DetachableBaseHandler, LeakedDanglingUntriaged>
+      detachable_base_handler_;
+  // TODO(crbug.com/498575974): remove when the LoginDetachableBaseModelImpl is
+  // no longer outliving the DetachableBaseHandler it observes.
+  base::ScopedObservation<DetachableBaseHandler,
+                          DetachableBaseObserver>::LeakedDanglingUntriaged
       detachable_base_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LoginDetachableBaseModelImpl);
 };
 
 }  // namespace

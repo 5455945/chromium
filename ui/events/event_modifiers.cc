@@ -1,16 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/events/event_modifiers.h"
 
+#include <array>
+
+#include "base/compiler_specific.h"
 #include "ui/events/event.h"
+#include "ui/events/event_constants.h"
 
 namespace ui {
 
 namespace {
 
-static const int kEventFlagFromModifiers[] = {
+constexpr auto kEventFlagFromModifiers = std::to_array<int>({
     EF_NONE,                  // MODIFIER_NONE,
     EF_SHIFT_DOWN,            // MODIFIER_SHIFT
     EF_CONTROL_DOWN,          // MODIFIER_CONTROL
@@ -24,17 +28,17 @@ static const int kEventFlagFromModifiers[] = {
     EF_RIGHT_MOUSE_BUTTON,    // MODIFIER_RIGHT_MOUSE_BUTTON
     EF_BACK_MOUSE_BUTTON,     // MODIFIER_BACK_MOUSE_BUTTON
     EF_FORWARD_MOUSE_BUTTON,  // MODIFIER_FORWARD_MOUSE_BUTTON
-};
+    EF_FUNCTION_DOWN,         // MODIFIER_FUNCTION
+});
 
 }  // namespace
 
-EventModifiers::EventModifiers() {
-  memset(modifiers_down_, 0, sizeof(modifiers_down_));
-}
-EventModifiers::~EventModifiers() {}
+EventModifiers::EventModifiers() = default;
+EventModifiers::~EventModifiers() = default;
 
 void EventModifiers::UpdateModifier(unsigned int modifier, bool down) {
-  DCHECK_LT(modifier, static_cast<unsigned int>(MODIFIER_NUM_MODIFIERS));
+  CHECK_LT(modifier, static_cast<unsigned int>(MODIFIER_NUM_MODIFIERS),
+           base::NotFatalUntil::M163);
 
   if (down) {
     modifiers_down_[modifier]++;
@@ -49,7 +53,8 @@ void EventModifiers::UpdateModifier(unsigned int modifier, bool down) {
 }
 
 void EventModifiers::UpdateModifierLock(unsigned int modifier, bool down) {
-  DCHECK_LT(modifier, static_cast<unsigned int>(MODIFIER_NUM_MODIFIERS));
+  CHECK_LT(modifier, static_cast<unsigned int>(MODIFIER_NUM_MODIFIERS),
+           base::NotFatalUntil::M163);
 
   if (down)
     modifier_flags_locked_ ^= kEventFlagFromModifiers[modifier];
@@ -58,7 +63,8 @@ void EventModifiers::UpdateModifierLock(unsigned int modifier, bool down) {
 }
 
 void EventModifiers::SetModifierLock(unsigned int modifier, bool locked) {
-  DCHECK_LT(modifier, static_cast<unsigned int>(MODIFIER_NUM_MODIFIERS));
+  CHECK_LT(modifier, static_cast<unsigned int>(MODIFIER_NUM_MODIFIERS),
+           base::NotFatalUntil::M163);
 
   if (locked)
     modifier_flags_locked_ |= kEventFlagFromModifiers[modifier];
@@ -112,6 +118,8 @@ int EventModifiers::GetModifierFromEventFlag(int flag) {
       return MODIFIER_ALTGR;
     case EF_MOD3_DOWN:
       return MODIFIER_MOD3;
+    case EF_FUNCTION_DOWN:
+      return MODIFIER_FUNCTION;
     case EF_CAPS_LOCK_ON:
       return MODIFIER_CAPS_LOCK;
     case EF_LEFT_MOUSE_BUTTON:

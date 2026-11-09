@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,7 +6,9 @@ import logging
 import os
 from absl import flags
 
-from chrome_ent_test.infra.core import environment, before_all, test
+from chrome_ent_test.infra.core import before_all
+from chrome_ent_test.infra.core import environment
+from chrome_ent_test.infra.core import test
 from infra import ChromeEnterpriseTestCase
 
 FLAGS = flags.FLAGS
@@ -16,21 +18,22 @@ FLAGS = flags.FLAGS
 class BookmarkBarEnabledTest(ChromeEnterpriseTestCase):
   """Test the BookmarkBarEnabled
 
-    https://cloud.google.com/docs/chrome-enterprise/policies/?policy=BookmarkBarEnabled.
+  https://chromeenterprise.google/policies/?policy=BookmarkBarEnabled.
 
-    If this setting is left not set the user can decide to use this function
-    or not.
-    """
+  If this setting is left not set the user can decide to use this function
+  or not.
+  """
 
   @before_all
   def setup(self):
-    self.InstallChrome(self.win_config['client'])
     self.EnableUITest(self.win_config['client'])
+    self.InstallChrome(self.win_config['client'])
 
   def _getUIStructure(self, instance_name):
     local_dir = os.path.dirname(os.path.abspath(__file__))
-    output = self.RunUITest(instance_name,
-                            os.path.join(local_dir, 'bookmarkbar_webdriver.py'))
+    output = self.RunUITest(
+      instance_name, os.path.join(local_dir, 'bookmarkbar_webdriver.py')
+    )
     return output
 
   @test

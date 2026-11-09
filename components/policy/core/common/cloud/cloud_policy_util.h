@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,30 @@
 #include <memory>
 #include <string>
 
+#include "build/build_config.h"
 #include "components/policy/policy_export.h"
-#include "components/policy/proto/device_management_backend.pb.h"
 #include "components/version_info/channel.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/feature_list.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include "base/functional/callback_forward.h"
+#endif
+
+namespace enterprise_management {
+class BrowserDeviceIdentifier;
+enum Channel : int;
+}  // namespace enterprise_management
 
 namespace policy {
 
-// Returns the model of the device. This function is platform specific.
-POLICY_EXPORT std::string GetDeviceModel();
-
-// Returns the brand/manufacturer of the device. This function is platform
-// specific.
-POLICY_EXPORT std::string GetDeviceManufacturer();
+#if BUILDFLAG(IS_ANDROID)
+// Enables reporting the Android device name (falling back to the hardware model
+// name when unset) in `policy::GetMachineName()`. Used as a kill switch.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kReportAndroidMachineName);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // Returns the name of the machine. This function is platform specific.
 POLICY_EXPORT std::string GetMachineName();
@@ -51,13 +63,45 @@ POLICY_EXPORT std::string GetDeviceName();
 POLICY_EXPORT std::unique_ptr<enterprise_management::BrowserDeviceIdentifier>
 GetBrowserDeviceIdentifier();
 
+// Returns the fully qualified domain name of the device.
+POLICY_EXPORT std::string GetDeviceFqdn();
+
+// Returns the name of the network the device is connected to.
+POLICY_EXPORT std::string GetNetworkName();
+
+#if BUILDFLAG(IS_WIN)
+// Get browser device identifier for non-CrOS platforms, in a background thread.
+// It includes several identifiers we collect from the device.
+POLICY_EXPORT void GetBrowserDeviceIdentifierAsync(
+    base::OnceCallback<
+        void(std::unique_ptr<enterprise_management::BrowserDeviceIdentifier>)>
+        callback);
+#endif  // BUILDFLAG(IS_WIN)
+
 // Returns true if the given policy type corresponds to the machine-level user
 // cloud policy type of the current platform.
 POLICY_EXPORT bool IsMachineLevelUserCloudPolicyType(const std::string& type);
 
-// Returns the machine-level user cloud policy type for the current platform.
-POLICY_EXPORT std::string GetMachineLevelUserCloudPolicyTypeForCurrentOS();
+// Returns true if the extension install policy is supported on this version of
+// Chrome.
+POLICY_EXPORT bool IsExtensionInstallPolicySupportedOnThisVersion();
 
+// Returns true if the given policy type is an extension install policy type.
+POLICY_EXPORT bool IsExtensionInstallPolicyType(const std::string& policy_type);
+
+// Returns true if the given policy type is a Chrome policy type.
+POLICY_EXPORT bool IsChromePolicyType(const std::string& policy_type);
+
+// Returns true if the given policy type is a machine-level policy type.
+POLICY_EXPORT bool IsMachineLevelPolicyType(const std::string& policy_type);
+
+// Returns true if the given policy type is a user-level policy type.
+POLICY_EXPORT bool IsUserLevelPolicyType(const std::string& policy_type);
+
+// Returns a log prefix for the given policy type and settings entity id. This is
+// used for logging purposes only.
+POLICY_EXPORT std::string PolicyTypeLogPrefix(std::string_view policy_type,
+                                              std::string_view settings_entity_id);
 }  // namespace policy
 
 #endif  // COMPONENTS_POLICY_CORE_COMMON_CLOUD_CLOUD_POLICY_UTIL_H_

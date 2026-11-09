@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/platform_file.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
-#include "mojo/public/c/system/types.h"
 
 namespace arc {
 
@@ -21,17 +21,15 @@ void DeletePrintDocument(const base::FilePath& file_path) {
     LOG(ERROR) << "Failed to delete print document.";
 }
 
-base::FilePath SavePrintDocument(mojo::ScopedHandle scoped_handle) {
-  base::ScopedPlatformFile platform_file;
-  if (mojo::UnwrapPlatformFile(std::move(scoped_handle), &platform_file) !=
-      MOJO_RESULT_OK) {
-    PLOG(ERROR) << "UnwrapPlatformFile failed.";
+base::FilePath SavePrintDocument(mojo::PlatformHandle scoped_handle) {
+  if (!scoped_handle.is_valid_platform_file()) {
+    LOG(ERROR) << "Platform handle is invalid.";
     return base::FilePath();
   }
 
-  base::File src_file(std::move(platform_file));
+  base::File src_file(scoped_handle.TakePlatformFile());
   if (!src_file.IsValid()) {
-    PLOG(ERROR) << "Source file is invalid.";
+    LOG(ERROR) << "Source file is invalid.";
     return base::FilePath();
   }
 
@@ -43,21 +41,25 @@ base::FilePath SavePrintDocument(mojo::ScopedHandle scoped_handle) {
 
   base::File temp(temp_path, base::File::FLAG_OPEN | base::File::FLAG_WRITE);
   char buf[4096];
-  int bytes;
-  while ((bytes = src_file.ReadAtCurrentPos(buf, sizeof(buf))) > 0) {
-    if (!temp.WriteAtCurrentPosAndCheck(
-            base::as_bytes(base::make_span(buf, bytes)))) {
+  const base::span<uint8_t> buf_span = base::as_writable_byte_span(buf);
+  while (true) {
+    std::optional<size_t> bytes_read = src_file.ReadAtCurrentPos(buf_span);
+    if (!bytes_read) {
+      PLOG(ERROR) << "Error reading PDF.";
+      return base::FilePath();
+    }
+
+    if (*bytes_read == 0) {
+      break;
+    }
+
+    if (!temp.WriteAtCurrentPosAndCheck(buf_span.first(*bytes_read))) {
       PLOG(ERROR) << "Error while saving PDF to disk.";
       return base::FilePath();
     }
   }
 
-  if (bytes < 0) {
-    PLOG(ERROR) << "Error reading PDF.";
-    return base::FilePath();
-  }
-
-  return temp_path;
+  return base::MakeAbsoluteFilePath(temp_path);
 }
 
 }  // namespace arc

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,7 +32,7 @@ class ViewTreeHostWidget : public views::Widget {
 
 views::Widget* CreateViewTreeHostWidget(views::Widget::InitParams params) {
   views::Widget* widget = new ViewTreeHostWidget();
-  params.layer_type = ui::LAYER_SOLID_COLOR;
+  params.layer_type = ui::LAYER_SURFACE;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   // ViewTreeHostWidget shouldn't use shadow.
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;

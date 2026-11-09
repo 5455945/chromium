@@ -32,16 +32,17 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/page/frame_tree.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scoped_page_pauser.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "ui/display/screen_info.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace blink {
 
@@ -51,76 +52,6 @@ void ChromeClient::Trace(Visitor* visitor) const {
 
 void ChromeClient::InstallSupplements(LocalFrame& frame) {
   CoreInitializer::GetInstance().InstallSupplements(frame);
-}
-
-IntRect ChromeClient::CalculateWindowRectWithAdjustment(
-    const IntRect& pending_rect,
-    LocalFrame& frame,
-    LocalFrame& requesting_frame) {
-  IntRect screen(GetScreenInfo(frame).available_rect);
-  IntRect window = pending_rect;
-
-  IntSize minimum_size = MinimumWindowSize();
-  IntSize size_for_constraining_move = minimum_size;
-  // Let size 0 pass through, since that indicates default size, not minimum
-  // size.
-  if (window.Width()) {
-    int width = std::max(minimum_size.Width(), window.Width());
-    // If the Window Placement experiment is enabled, the window could be placed
-    // on another screen, and so it should not be limited by the current screen.
-    // This relies on the embedder clamping bounds to the target screen for now.
-    // TODO(http://crbug.com/897300): Implement multi-screen clamping in Blink.
-    if (!RuntimeEnabledFeatures::WindowPlacementEnabled(
-            requesting_frame.DomWindow())) {
-      width = std::min(width, screen.Width());
-    }
-    window.SetWidth(width);
-    size_for_constraining_move.SetWidth(window.Width());
-  }
-  if (window.Height()) {
-    int height = std::max(minimum_size.Height(), window.Height());
-    // If the Window Placement experiment is enabled, the window could be placed
-    // on another screen, and so it should not be limited by the current screen.
-    // This relies on the embedder clamping bounds to the target screen for now.
-    // TODO(http://crbug.com/897300): Implement multi-screen clamping in Blink.
-    if (!RuntimeEnabledFeatures::WindowPlacementEnabled(
-            requesting_frame.DomWindow())) {
-      height = std::min(height, screen.Height());
-    }
-    window.SetHeight(height);
-    size_for_constraining_move.SetHeight(window.Height());
-  }
-
-  // If the Window Placement experiment is enabled, the window could be placed
-  // on another screen, and so it should not be limited by the current screen.
-  // This relies on the embedder clamping bounds to the target screen for now.
-  // TODO(http://crbug.com/897300): Implement multi-screen clamping in Blink.
-  if (!RuntimeEnabledFeatures::WindowPlacementEnabled(
-          requesting_frame.DomWindow())) {
-    // Constrain the window position within the valid screen area.
-    window.SetX(
-        std::max(screen.X(),
-                 std::min(window.X(),
-                          screen.MaxX() - size_for_constraining_move.Width())));
-    window.SetY(std::max(
-        screen.Y(),
-        std::min(window.Y(),
-                 screen.MaxY() - size_for_constraining_move.Height())));
-  }
-
-  // Coarsely measure whether coordinates may be requesting another screen.
-  if (!screen.Contains(window)) {
-    UseCounter::Count(frame.DomWindow(),
-                      WebFeature::kDOMWindowSetWindowRectCrossScreen);
-  }
-
-  return window;
-}
-
-void ChromeClient::SetWindowRectWithAdjustment(const IntRect& pending_rect,
-                                               LocalFrame& frame) {
-  IntRect rect = CalculateWindowRectWithAdjustment(pending_rect, frame, frame);
-  SetWindowRect(rect, frame);
 }
 
 bool ChromeClient::CanOpenUIElementIfDuringPageDismissal(
@@ -164,6 +95,7 @@ template <typename Delegate>
 static bool OpenJavaScriptDialog(LocalFrame* frame,
                                  const String& message,
                                  const Delegate& delegate) {
+  DOMWindowPerformance::performance(*frame->DomWindow())->WillShowModalDialog();
   // Suspend pages in case the client method runs a new event loop that would
   // otherwise cause the load to continue while we're in the middle of
   // executing JavaScript.
@@ -226,12 +158,15 @@ bool ChromeClient::OpenJavaScriptPrompt(LocalFrame* frame,
 void ChromeClient::MouseDidMoveOverElement(LocalFrame& frame,
                                            const HitTestLocation& location,
                                            const HitTestResult& result) {
-  if (!result.GetScrollbar() && result.InnerNode() &&
-      result.InnerNode()->GetDocument().IsDNSPrefetchEnabled()) {
+  LocalFrame* hovered_frame = result.InnerNodeFrame();
+  if (!result.GetScrollbar() && hovered_frame &&
+      hovered_frame->GetDocument()->IsDNSPrefetchEnabled()) {
+    // The hovered node may belong to a descendant frame with different network
+    // restrictions from the frame handling the mouse event.
     WebPrescientNetworking* web_prescient_networking =
-        frame.PrescientNetworking();
+        hovered_frame->PrescientNetworking();
     if (web_prescient_networking) {
-      web_prescient_networking->PrefetchDNS(result.AbsoluteLinkURL().Host());
+      web_prescient_networking->PrefetchDNS(result.AbsoluteLinkURL());
     }
   }
 
@@ -276,7 +211,7 @@ void ChromeClient::UpdateTooltipUnderCursor(LocalFrame& frame,
   // The ::UpdateTooltipUnderCursor overload, which is be called down the road,
   // ensures a new tooltip to be displayed with the new context.
   if (result.InnerNodeOrImageMapImage() != last_mouse_over_node_ &&
-      !last_tool_tip_text_.IsEmpty() && tool_tip == last_tool_tip_text_)
+      !last_tool_tip_text_.empty() && tool_tip == last_tool_tip_text_)
     ClearToolTip(frame);
 
   last_tool_tip_point_ = location.Point();
@@ -293,10 +228,10 @@ void ChromeClient::ElementFocusedFromKeypress(LocalFrame& frame,
     tooltip_text = element->DefaultToolTip();
 
   LayoutObject* layout_object = element->GetLayoutObject();
-  if (!tooltip_text.IsNull() && layout_object) {
-    TextDirection tooltip_direction = layout_object->StyleRef().Direction();
+  if (layout_object) {
+    TextDirection tooltip_direction = layout_object->Style().Direction();
     UpdateTooltipFromKeyboard(frame, tooltip_text, tooltip_direction,
-                              element->BoundsInViewport());
+                              element->BoundsInWidget());
   }
 }
 
@@ -319,15 +254,18 @@ bool ChromeClient::Print(LocalFrame* frame) {
     UseCounter::Count(frame->DomWindow(),
                       WebFeature::kDialogInSandboxedContext);
     frame->Console().AddMessage(MakeGarbageCollected<ConsoleMessage>(
-        mojom::ConsoleMessageSource::kSecurity,
-        mojom::ConsoleMessageLevel::kError,
-        "Ignored call to 'print()'. The document is sandboxed, and the "
-        "'allow-modals' keyword is not set."));
+        mojom::blink::ConsoleMessageSource::kSecurity,
+        mojom::blink::ConsoleMessageLevel::kError,
+        frame->IsInFencedFrameTree()
+            ? "Ignored call to 'print()'. The document is in a fenced frame "
+              "tree."
+            : "Ignored call to 'print()'. The document is sandboxed, and the "
+              "'allow-modals' keyword is not set."));
     return false;
   }
 
   // print() returns quietly during prerendering.
-  // https://jeremyroman.github.io/alternate-loading-modes/#patch-modals
+  // https://wicg.github.io/nav-speculation/prerendering.html#patch-modals
   if (frame->GetDocument()->IsPrerendering()) {
     frame->Console().AddMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kJavaScript,
@@ -335,6 +273,8 @@ bool ChromeClient::Print(LocalFrame* frame) {
         "Ignored call to 'print()' during prerendering."));
     return false;
   }
+
+  DOMWindowPerformance::performance(*frame->DomWindow())->WillShowModalDialog();
 
   // Suspend pages in case the client method runs a new event loop that would
   // otherwise cause the load to continue while we're in the middle of

@@ -1,26 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_ENTERPRISE_BROWSER_REPORTING_REPORT_UPLOADER_H_
 #define COMPONENTS_ENTERPRISE_BROWSER_REPORTING_REPORT_UPLOADER_H_
 
-#include <memory>
-#include <queue>
-
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
-#include "components/enterprise/browser/reporting/report_request_definition.h"
+#include "base/types/expected.h"
+#include "components/enterprise/browser/reporting/report_generation_config.h"
+#include "components/enterprise/browser/reporting/report_generator.h"
+#include "components/enterprise/browser/reporting/report_request.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "net/base/backoff_entry.h"
 
 namespace base {
 class OneShotTimer;
 }  // namespace base
-
-namespace policy {
-class CloudPolicyClient;
-}  // namespace policy
 
 namespace net {
 class BackoffEntry;
@@ -43,19 +40,43 @@ class ReportUploader {
                        // invalid dm token.
   };
 
-  using ReportRequest = definition::ReportRequest;
-  using ReportRequests = std::queue<std::unique_ptr<ReportRequest>>;
   // A callback to notify the upload result.
   using ReportCallback = base::OnceCallback<void(ReportStatus status)>;
 
   ReportUploader(policy::CloudPolicyClient* client,
                  int maximum_number_of_retries);
+
+  ReportUploader(const ReportUploader&) = delete;
+  ReportUploader& operator=(const ReportUploader&) = delete;
+
   virtual ~ReportUploader();
 
   // Sets a list of requests and upload it. Request will be uploaded one after
   // another.
-  virtual void SetRequestAndUpload(ReportRequests requests,
+  virtual void SetRequestAndUpload(const ReportGenerationConfig& config,
+                                   ReportRequestQueue requests,
                                    ReportCallback callback);
+
+  class Listener {
+   public:
+    virtual ~Listener() = default;
+
+    // Called right before ReportUploader retries an upload attempt.
+    // The listener is responsible for resending the request by calling
+    // `SetRequestAndUpload` again.
+    virtual void OnReportWillRetry(const ReportGenerationConfig& config) = 0;
+  };
+
+  void SetListener(Listener* listener);
+  void RemoveListener(Listener* listener);
+  bool HasListener(Listener* listener) const;
+
+  void NotifyReportWillRetry(const ReportGenerationConfig& config);
+
+  // Overrides the backoff policy used for retrying requests. If nullptr is
+  // passed, the default policy is restored.
+  static void SetBackoffPolicyForTesting(
+      const net::BackoffEntry::Policy* backoff_policy);
 
  private:
   // Uploads the first request in the queue.
@@ -63,10 +84,11 @@ class ReportUploader {
 
   // Decides retry behavior based on CloudPolicyClient's status for the current
   // request. Or move to the next request.
-  void OnRequestFinished(bool status);
+  void OnRequestFinished(policy::CloudPolicyClient::Result result);
 
   // Retries the first request in the queue.
   void Retry();
+  void OnRetryTimerFired();
   bool HasRetriedTooOften();
 
   // Notifies the upload result.
@@ -75,16 +97,17 @@ class ReportUploader {
   // Moves to the next request if exist, or notifies the accomplishments.
   void NextRequest();
 
-  policy::CloudPolicyClient* client_;
+  raw_ptr<policy::CloudPolicyClient> client_;
   ReportCallback callback_;
-  ReportRequests requests_;
+  ReportRequestQueue requests_;
+  ReportGenerationConfig config_;
 
   net::BackoffEntry backoff_entry_;
   base::OneShotTimer backoff_request_timer_;
   const int maximum_number_of_retries_;
+  raw_ptr<Listener> listener_ = nullptr;
 
   base::WeakPtrFactory<ReportUploader> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(ReportUploader);
 };
 
 enum ReportResponseMetricsStatus {

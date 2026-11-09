@@ -1,10 +1,9 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 module device.mojom;
 
-[Stable, Extensible]
 enum WakeLockType {
     // Prevent the application from being suspended. On some platforms, apps may
     // be suspended when they are not visible to the user. This type of block
@@ -25,7 +24,6 @@ enum WakeLockType {
     kPreventDisplaySleepAllowDimming = 2,
 };
 
-[Stable, Extensible]
 enum WakeLockReason {
     // Audio is being played.
     kAudioPlayback = 0,
@@ -55,7 +53,8 @@ interface WakeLock {
   AddClient(pending_receiver<WakeLock> wake_lock);
 
   // Change the wake lock type. Has no effect if the current wakelock is shared
-  // by more than one client (by AddClient()). Has no effect on Android.
+  // by more than one client (by AddClient()). On Android, has no effect if the
+  // wake lock is associated with a WakeLockContext.
   // If the wake lock is in "active" state (by RequestWakeLock()), it requests
   // a wakelock with new type first before cancels the old one to ensure that
   // there isn't a brief period where the old wake lock is cancelled while the

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,11 +14,28 @@ class WebContents;
 
 namespace chrome_browser_interstitials {
 
+enum class HFMInterstitialType {
+  // No HFM interstitial is being displayed.
+  kNone,
+  // The standard, non-heuristic and non-incognito interstitial is being
+  // displayed.
+  kStandard,
+  // The incognito interstitial is being displayed.
+  kIncognito,
+  // The Enterprise Isolated Mode interstitial is being displayed.
+  kIsolatedMode,
+  // The interstitial is being displayed due to the Typically Secure User
+  // heuristic.
+  kTypicallySecure,
+  // The interstitial is being displayed due to the Site Engagement heuristic.
+  kSiteEngagement,
+};
+
 // Looks for text in the |textContent| of |interstitial_frame|'s body and
 // returns true if found. This can be used for either transient or committed
 // interstitials. For the former, pass
-// web_contents->GetInterstitialPage()->GetMainFrame() as the first argument,
-// and for the latter, just pass web_contents->GetMainFrame().
+// web_contents->GetInterstitialPage()->GetPrimaryMainFrame() as the first
+// argument, and for the latter, just pass web_contents->GetPrimaryMainFrame().
 bool IsInterstitialDisplayingText(content::RenderFrameHost* interstitial_frame,
                                   const std::string& text);
 
@@ -52,8 +69,19 @@ bool IsShowingBadClockInterstitial(content::WebContents* tab);
 // Returns true if |tab| is displaying a known-interception interstitial.
 bool IsShowingBlockedInterceptionInterstitial(content::WebContents* tab);
 
-// Returns true if |tab| is displaying a legacy TLS interstitial.
-bool IsShowingLegacyTLSInterstitial(content::WebContents* tab);
+// Returns true if `tab` is displaying any variant of the HTTPS-First Mode
+// interstitial, including those that can be shown due to HFM heuristics.
+bool IsShowingHttpsFirstModeInterstitial(content::WebContents* tab);
+
+// Returns the type of the HTTPS-First Mode interstitial being displayed in
+// `tab`. If no HFM interstitial is being displayed, returns kNone.
+HFMInterstitialType GetHFMInterstitialType(content::WebContents* tab);
+
+// Simulates the user proceeding through an HFM interstitial.
+void ProceedThroughHttpsFirstModeInterstitial(content::WebContents* tab);
+
+// Simulates the user not proceeding through an HFM interstitial.
+void DontProceedThroughHttpsFirstModeInterstitial(content::WebContents* tab);
 
 }  // namespace chrome_browser_interstitials
 

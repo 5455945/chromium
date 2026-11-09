@@ -1,80 +1,76 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/test/result_catcher.h"
 
+#include "base/logging.h"
 #include "base/run_loop.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
-#include "extensions/browser/notification_types.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
 
-ResultCatcher::ResultCatcher() : browser_context_restriction_(nullptr) {
-  registrar_.Add(this,
-                 extensions::NOTIFICATION_EXTENSION_TEST_PASSED,
-                 content::NotificationService::AllSources());
-  registrar_.Add(this,
-                 extensions::NOTIFICATION_EXTENSION_TEST_FAILED,
-                 content::NotificationService::AllSources());
+ResultCatcher::ResultCatcher() {
+  test_api_observation_.Observe(TestApiObserverRegistry::GetInstance());
 }
 
-ResultCatcher::~ResultCatcher() {
-}
+ResultCatcher::~ResultCatcher() = default;
 
 bool ResultCatcher::GetNextResult() {
-  // Depending on the tests, multiple results can come in from a single call
-  // to RunMessageLoop(), so we maintain a queue of results and just pull them
-  // off as the test calls this, going to the run loop only when the queue is
-  // empty.
+  // Depending on the tests, multiple results can come in from a single call to
+  // RunLoop::Run() so we maintain a queue of results and just pull them off as
+  // the test calls this, going to the run loop only when the queue is empty.
   if (results_.empty()) {
-    base::RunLoop run_loop;
+    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
     quit_closure_ = content::GetDeferredQuitTaskForRunLoop(&run_loop);
-    content::RunThisRunLoop(&run_loop);
+    run_loop.Run();
   }
 
-  if (!results_.empty()) {
-    bool ret = results_.front();
-    results_.pop_front();
-    message_ = messages_.front();
-    messages_.pop_front();
-    return ret;
+  // Can happen if the test timed out and never produced a result.
+  if (results_.empty()) {
+    ADD_FAILURE() << "ResultCatcher never received a result.";
+    return false;
   }
 
-  NOTREACHED();
-  return false;
+  bool ret = results_.front();
+  results_.pop_front();
+  message_ = messages_.front();
+  messages_.pop_front();
+  return ret;
 }
 
-void ResultCatcher::Observe(int type,
-                            const content::NotificationSource& source,
-                            const content::NotificationDetails& details) {
-  if (browser_context_restriction_ &&
-      content::Source<content::BrowserContext>(source).ptr() !=
-          browser_context_restriction_) {
+void ResultCatcher::OnTestPassed(content::BrowserContext* browser_context) {
+  if (IsRelevantBrowserContext(browser_context)) {
     return;
   }
 
-  switch (type) {
-    case extensions::NOTIFICATION_EXTENSION_TEST_PASSED:
-      VLOG(1) << "Got EXTENSION_TEST_PASSED notification.";
-      results_.push_back(true);
-      messages_.push_back(std::string());
-      if (!quit_closure_.is_null())
-        std::move(quit_closure_).Run();
-      break;
-
-    case extensions::NOTIFICATION_EXTENSION_TEST_FAILED:
-      VLOG(1) << "Got EXTENSION_TEST_FAILED notification.";
-      results_.push_back(false);
-      messages_.push_back(*(content::Details<std::string>(details).ptr()));
-      if (!quit_closure_.is_null())
-        std::move(quit_closure_).Run();
-      break;
-
-    default:
-      NOTREACHED();
+  VLOG(1) << "Got chrome.test.notifyPass notification.";
+  results_.push_back(true);
+  messages_.push_back(std::string());
+  if (quit_closure_) {
+    std::move(quit_closure_).Run();
   }
+}
+
+void ResultCatcher::OnTestFailed(content::BrowserContext* browser_context,
+                                 const std::string& message) {
+  if (IsRelevantBrowserContext(browser_context)) {
+    return;
+  }
+
+  VLOG(1) << "Got chrome.test.notifyFail notification.";
+  results_.push_back(false);
+  messages_.push_back(message);
+  if (quit_closure_) {
+    std::move(quit_closure_).Run();
+  }
+}
+
+bool ResultCatcher::IsRelevantBrowserContext(
+    content::BrowserContext* browser_context) const {
+  return browser_context_restriction_ &&
+         browser_context != browser_context_restriction_;
 }
 
 }  // namespace extensions

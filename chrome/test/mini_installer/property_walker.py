@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -27,9 +27,12 @@ def Verify(property_dict, variable_expander):
         {
             'Files': file_operations.VerifyFileExpectation,
             'Processes': process_operations.VerifyProcessExpectation,
-            'RegistryEntries':
-            registry_operations.VerifyRegistryEntryExpectation,
-        }, False, property_dict, variable_expander)
+            'RegistryEntries': registry_operations.VerifyRegistryEntryExpectation,
+        },
+        False,
+        property_dict,
+        variable_expander,
+    )
 
 
 def Clean(property_dict, variable_expander):
@@ -44,7 +47,11 @@ def Clean(property_dict, variable_expander):
             'Files': file_operations.CleanFile,
             'Processes': process_operations.CleanProcess,
             'RegistryEntries': registry_operations.CleanRegistryEntry,
-        }, True, property_dict, variable_expander)
+        },
+        True,
+        property_dict,
+        variable_expander,
+    )
 
 
 def _Walk(operations, continue_on_error, property_dict, variable_expander):
@@ -57,23 +64,25 @@ def _Walk(operations, continue_on_error, property_dict, variable_expander):
         property_dict: A property dictionary mapping type names to expectations.
         variable_expander: A VariableExpander.
     """
-    for type_name, expectations in property_dict.iteritems():
+    for type_name, expectations in property_dict.items():
         operation = operations[type_name]
-        for expectation_name, expectation_dict in expectations.iteritems():
+        for expectation_name, expectation_dict in expectations.items():
             # Skip over expectations with conditions that aren't satisfied.
             if 'condition' in expectation_dict:
                 condition = variable_expander.Expand(
-                    expectation_dict['condition'])
+                    expectation_dict['condition']
+                )
                 if not _EvaluateCondition(condition):
                     continue
             try:
-                operation(expectation_name, expectation_dict,
-                          variable_expander)
-            except:  # pylint: disable=bare-except
+                operation(expectation_name, expectation_dict, variable_expander)
+            except:  # noqa: E722
                 if not continue_on_error:
                     raise
-                LOGGER.error('Error while processing expectation %s: %s' %
-                             (expectation_name, sys.exc_info()[1]))
+                LOGGER.error(
+                    'Error while processing expectation %s: %s'
+                    % (expectation_name, sys.exc_info()[1])
+                )
 
 
 def _EvaluateCondition(condition):

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,7 @@
 #include "services/media_session/public/cpp/features.h"
 #include "services/media_session/public/cpp/test/mock_media_session.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/mediasession/media_session.mojom.h"
 
 namespace content {
@@ -29,33 +30,26 @@ std::set<media_session::mojom::MediaSessionAction> GetDefaultActions() {
           media_session::mojom::MediaSessionAction::kPause,
           media_session::mojom::MediaSessionAction::kStop,
           media_session::mojom::MediaSessionAction::kSeekTo,
-          media_session::mojom::MediaSessionAction::kScrubTo};
-}
-
-std::set<media_session::mojom::MediaSessionAction>
-AppendPictureInPictureActionsTo(
-    std::set<media_session::mojom::MediaSessionAction> actions) {
-  actions.insert(
-      {media_session::mojom::MediaSessionAction::kEnterPictureInPicture,
-       media_session::mojom::MediaSessionAction::kExitPictureInPicture});
-  return actions;
+          media_session::mojom::MediaSessionAction::kScrubTo,
+          media_session::mojom::MediaSessionAction::kSeekForward,
+          media_session::mojom::MediaSessionAction::kSeekBackward};
 }
 
 }  // namespace
 
 class MediaSessionControllersManagerTest
     : public RenderViewHostImplTestHarness,
-      public ::testing::WithParamInterface<std::tuple<bool, bool>> {
+      public ::testing::WithParamInterface<std::tuple<bool, bool, bool, bool>> {
  public:
   // Indices of the tuple parameters.
   static const int kIsInternalMediaSessionEnabled = 0;
   static const int kIsAudioFocusEnabled = 1;
+  static const int kIsBrowserInitiatedAutoPipEnabled = 2;
+  static const int kIsBrowserInitiatedAutoPipDryRunEnabled = 3;
 
   void SetUp() override {
-    std::vector<base::Feature> enabled_features;
-    std::vector<base::Feature> disabled_features;
-
-    enabled_features.push_back(media::kGlobalMediaControlsPictureInPicture);
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
 
     // Based on the parameters, switch them on.
     if (IsInternalMediaSessionEnabled()) {
@@ -75,12 +69,28 @@ class MediaSessionControllersManagerTest
           media_session::features::kAudioFocusEnforcement);
     }
 
+    if (IsBrowserInitiatedAutoPipEnabled()) {
+      enabled_features.push_back(
+          blink::features::kBrowserInitiatedAutomaticPictureInPicture);
+    } else {
+      disabled_features.push_back(
+          blink::features::kBrowserInitiatedAutomaticPictureInPicture);
+    }
+
+    if (IsBrowserInitiatedAutoPipDryRunEnabled()) {
+      enabled_features.push_back(
+          media::kBrowserInitiatedAutomaticPictureInPictureDryRun);
+    } else {
+      disabled_features.push_back(
+          media::kBrowserInitiatedAutomaticPictureInPictureDryRun);
+    }
+
     scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
 
     RenderViewHostImplTestHarness::SetUp();
 
     GlobalRenderFrameHostId frame_routing_id =
-        contents()->GetMainFrame()->GetGlobalId();
+        contents()->GetPrimaryMainFrame()->GetGlobalId();
     media_player_id_ = MediaPlayerId(frame_routing_id, 1);
     media_player_id2_ = MediaPlayerId(frame_routing_id, 2);
     manager_ = std::make_unique<MediaSessionControllersManager>(contents());
@@ -102,12 +112,34 @@ class MediaSessionControllersManagerTest
     return IsInternalMediaSessionEnabled() || IsAudioFocusEnabled();
   }
 
+  bool IsBrowserInitiatedAutoPipEnabled() const {
+    return std::get<kIsBrowserInitiatedAutoPipEnabled>(GetParam());
+  }
+
+  bool IsBrowserInitiatedAutoPipDryRunEnabled() const {
+    return std::get<kIsBrowserInitiatedAutoPipDryRunEnabled>(GetParam());
+  }
+
   void TearDown() override {
     manager_.reset();
     RenderViewHostImplTestHarness::TearDown();
   }
 
  protected:
+  std::set<media_session::mojom::MediaSessionAction>
+  AppendPictureInPictureActionsTo(
+      std::set<media_session::mojom::MediaSessionAction> actions) {
+    actions.insert(
+        {media_session::mojom::MediaSessionAction::kEnterPictureInPicture,
+         media_session::mojom::MediaSessionAction::kExitPictureInPicture});
+    if (IsBrowserInitiatedAutoPipEnabled() ||
+        IsBrowserInitiatedAutoPipDryRunEnabled()) {
+      actions.insert(
+          media_session::mojom::MediaSessionAction::kEnterAutoPictureInPicture);
+    }
+    return actions;
+  }
+
   MediaPlayerId media_player_id_ = MediaPlayerId::CreateMediaPlayerIdForTests();
   MediaPlayerId media_player_id2_ =
       MediaPlayerId::CreateMediaPlayerIdForTests();
@@ -121,9 +153,9 @@ TEST_P(MediaSessionControllersManagerTest, ActivateDeactivateSession) {
   ASSERT_FALSE(media_session()->IsActive());
 
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
   manager_->OnMetadata(media_player_id2_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
   EXPECT_FALSE(media_session()->IsActive());
 
   EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
@@ -147,17 +179,17 @@ TEST_P(MediaSessionControllersManagerTest, ActivateDeactivateSession) {
 
 TEST_P(MediaSessionControllersManagerTest, RenderFrameDeletedRemovesHost) {
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
   EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
   ASSERT_EQ(media_session()->IsActive(), IsMediaSessionEnabled());
 
-  manager_->RenderFrameDeleted(contents()->GetMainFrame());
+  manager_->RenderFrameDeleted(contents()->GetPrimaryMainFrame());
   EXPECT_FALSE(media_session()->IsActive());
 }
 
 TEST_P(MediaSessionControllersManagerTest, OnPauseSuspends) {
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
   EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
   ASSERT_FALSE(media_session()->IsSuspended());
 
@@ -167,7 +199,7 @@ TEST_P(MediaSessionControllersManagerTest, OnPauseSuspends) {
 
 TEST_P(MediaSessionControllersManagerTest, OnPauseIdNotFound) {
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
   EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
   ASSERT_FALSE(media_session()->IsSuspended());
 
@@ -181,7 +213,7 @@ TEST_P(MediaSessionControllersManagerTest, PositionState) {
     return;
 
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
 
   {
     media_session::test::MockMediaSessionMojoObserver observer(
@@ -206,7 +238,7 @@ TEST_P(MediaSessionControllersManagerTest, PositionState) {
             *media_session());
 
     media_session::MediaPosition expected_position(
-        /*playback_rate=*/0.0, /*duration=*/base::TimeDelta::FromSeconds(10),
+        /*playback_rate=*/0.0, /*duration=*/base::Seconds(10),
         /*position=*/base::TimeDelta(), /*end_of_media=*/false);
 
     manager_->OnMediaPositionStateChanged(media_player_id_, expected_position);
@@ -233,15 +265,15 @@ TEST_P(MediaSessionControllersManagerTest, MultiplePlayersWithPositionState) {
     return;
 
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
   manager_->OnMetadata(media_player_id2_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
 
   media_session::MediaPosition expected_position1(
       /*playback_rate=*/1.0, /*duration=*/base::TimeDelta(),
       /*position=*/base::TimeDelta(), /*end_of_media=*/false);
   media_session::MediaPosition expected_position2(
-      /*playback_rate=*/0.0, /*duration=*/base::TimeDelta::FromSeconds(10),
+      /*playback_rate=*/0.0, /*duration=*/base::Seconds(10),
       /*position=*/base::TimeDelta(), /*end_of_media=*/false);
 
   media_session::test::MockMediaSessionMojoObserver observer(*media_session());
@@ -260,7 +292,7 @@ TEST_P(MediaSessionControllersManagerTest, MultiplePlayersWithPositionState) {
 
   // Change the position of the second player.
   media_session::MediaPosition new_position(
-      /*playback_rate=*/0.0, /*duration=*/base::TimeDelta::FromSeconds(20),
+      /*playback_rate=*/0.0, /*duration=*/base::Seconds(20),
       /*position=*/base::TimeDelta(), /*end_of_media=*/false);
   manager_->OnMediaPositionStateChanged(media_player_id2_, new_position);
 
@@ -277,7 +309,7 @@ TEST_P(MediaSessionControllersManagerTest, PictureInPictureAvailability) {
     return;
 
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Transient);
+                       media::MediaContentType::kTransient);
 
   media_session::test::MockMediaSessionMojoObserver observer(*media_session());
 
@@ -297,9 +329,9 @@ TEST_P(MediaSessionControllersManagerTest,
     return;
 
   manager_->OnMetadata(media_player_id_, true, false,
-                       media::MediaContentType::Persistent);
+                       media::MediaContentType::kPersistent);
   manager_->OnMetadata(media_player_id2_, true, false,
-                       media::MediaContentType::Persistent);
+                       media::MediaContentType::kPersistent);
 
   media_session::test::MockMediaSessionMojoObserver observer(*media_session());
 
@@ -328,10 +360,111 @@ TEST_P(MediaSessionControllersManagerTest,
   observer.WaitForExpectedActions(GetDefaultActions());
 }
 
+TEST_P(MediaSessionControllersManagerTest,
+       PictureInPictureStateChangedOnlyAffectsTargetPlayer) {
+  if (!IsMediaSessionEnabled()) {
+    return;
+  }
+
+  // Player 1 is paused in the main frame.
+  manager_->OnMetadata(media_player_id_, /*has_audio=*/true, /*has_video=*/true,
+                       media::MediaContentType::kPersistent);
+  EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
+  manager_->OnPause(media_player_id_, /*reached_end_of_stream=*/false);
+  ASSERT_FALSE(media_session()->IsActive());
+
+  // Player 2 is playing without audio. It should not activate the session.
+  manager_->OnMetadata(media_player_id2_, /*has_audio=*/false,
+                       /*has_video=*/true,
+                       media::MediaContentType::kPersistent);
+  EXPECT_TRUE(manager_->RequestPlay(media_player_id2_));
+  EXPECT_FALSE(media_session()->IsActive());
+
+  // Player 1 enters Picture-in-Picture while still paused. Player 2 must not be
+  // added to the MediaSession, so the session remains inactive (paused).
+  manager_->PictureInPictureStateChanged(media_player_id_, true);
+  EXPECT_FALSE(media_session()->IsActive());
+  EXPECT_TRUE(media_session()->IsControllable());
+
+  // Player 2 entering Picture-in-Picture while playing activates the session.
+  manager_->PictureInPictureStateChanged(media_player_id_, false);
+  manager_->PictureInPictureStateChanged(media_player_id2_, true);
+  EXPECT_TRUE(media_session()->IsActive());
+
+  manager_->PictureInPictureStateChanged(media_player_id2_, false);
+  EXPECT_FALSE(media_session()->IsActive());
+}
+
+TEST_P(MediaSessionControllersManagerTest, SufficientlyVisibleVideo) {
+  if (!IsMediaSessionEnabled()) {
+    return;
+  }
+
+  manager_->OnMetadata(media_player_id_, true, true,
+                       media::MediaContentType::kTransient);
+
+  media_session::test::MockMediaSessionMojoObserver observer(*media_session());
+
+  manager_->OnVideoVisibilityChanged(media_player_id_, true);
+  EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
+
+  // Verify that media session reports video is sufficiently visible.
+  EXPECT_TRUE(observer.WaitForMeetsVisibilityThreshold(true));
+
+  // Update video visibility to not sufficiently visible, and verify that media
+  // session reports video is not sufficiently visible.
+  manager_->OnVideoVisibilityChanged(media_player_id_, false);
+  EXPECT_FALSE(observer.WaitForMeetsVisibilityThreshold(false));
+}
+
+TEST_P(MediaSessionControllersManagerTest,
+       SufficientlyVisibleVideoMultiplePlayers) {
+  if (!IsMediaSessionEnabled()) {
+    return;
+  }
+
+  manager_->OnMetadata(media_player_id_, true, true,
+                       media::MediaContentType::kPersistent);
+  manager_->OnMetadata(media_player_id2_, true, true,
+                       media::MediaContentType::kPersistent);
+
+  media_session::test::MockMediaSessionMojoObserver observer(*media_session());
+
+  manager_->OnVideoVisibilityChanged(media_player_id_, true);
+  manager_->OnVideoVisibilityChanged(media_player_id2_, true);
+
+  // If there is exactly one player, media session reports its video visibility.
+  EXPECT_TRUE(manager_->RequestPlay(media_player_id_));
+  EXPECT_TRUE(observer.WaitForMeetsVisibilityThreshold(true));
+
+  // Change the video visibility of the first player's video.
+  manager_->OnVideoVisibilityChanged(media_player_id_, false);
+
+  // Stop the second player.
+  manager_->OnPause(media_player_id2_, true);
+
+  // There is exactly one player again (the second one). Media session should
+  // use its updated video visibility.
+  EXPECT_TRUE(observer.WaitForMeetsVisibilityThreshold(true));
+
+  // Stop the first player.
+  manager_->OnPause(media_player_id_, true);
+
+  // There are no remaining players. Media session should report there are no
+  // visible videos.
+  EXPECT_FALSE(observer.WaitForMeetsVisibilityThreshold(false));
+}
+
 // First bool is to indicate whether InternalMediaSession is enabled.
 // Second bool is to indicate whether AudioFocus is enabled.
+// Third bool is to indicate whether BrowserInitiatedAutomaticPictureInPicture
+// is enabled.
+// Fourth bool is to indicate whether
+// BrowserInitiatedAutomaticPictureInPictureDryRun is enabled.
 INSTANTIATE_TEST_SUITE_P(MediaSessionEnabledTestInstances,
                          MediaSessionControllersManagerTest,
                          ::testing::Combine(::testing::Bool(),
+                                            ::testing::Bool(),
+                                            ::testing::Bool(),
                                             ::testing::Bool()));
 }  // namespace content

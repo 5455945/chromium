@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,33 @@ namespace media {
 WaitAndReplaceSyncTokenClient::WaitAndReplaceSyncTokenClient(
     gpu::InterfaceBase* ib)
     : ib_(ib) {}
+WaitAndReplaceSyncTokenClient::WaitAndReplaceSyncTokenClient(
+    gpu::InterfaceBase* ib,
+    std::unique_ptr<gpu::RasterScopedAccess> ri_access)
+    : WaitAndReplaceSyncTokenClient(
+          ib,
+          base::BindOnce(
+              [](std::unique_ptr<gpu::RasterScopedAccess> ri_access) {
+                CHECK(ri_access);
+                return gpu::RasterScopedAccess::EndAccess(std::move(ri_access));
+              },
+              std::move(ri_access))) {}
+WaitAndReplaceSyncTokenClient::WaitAndReplaceSyncTokenClient(
+    gpu::InterfaceBase* ib,
+    GetSyncTokenCallback sync_callback)
+    : ib_(ib), sync_callback_(std::move(sync_callback)) {}
+
+WaitAndReplaceSyncTokenClient::~WaitAndReplaceSyncTokenClient() = default;
 
 void WaitAndReplaceSyncTokenClient::GenerateSyncToken(
     gpu::SyncToken* sync_token) {
-  ib_->GenSyncTokenCHROMIUM(sync_token->GetData());
+  if (!sync_callback_.is_null()) {
+    *sync_token = std::move(sync_callback_).Run();
+    int8_t* sync_token_data = sync_token->GetData();
+    ib_->VerifySyncTokensCHROMIUM(&sync_token_data, 1);
+  } else {
+    ib_->GenSyncTokenCHROMIUM(sync_token->GetData());
+  }
 }
 
 void WaitAndReplaceSyncTokenClient::WaitSyncToken(

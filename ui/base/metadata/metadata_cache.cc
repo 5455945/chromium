@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "ui/base/metadata/metadata_types.h"
 
@@ -24,20 +25,14 @@ MetaDataCache* MetaDataCache::GetInstance() {
 
 void MetaDataCache::AddClassMetaData(
     std::unique_ptr<ClassMetaData> class_data) {
-#if DCHECK_IS_ON()
-  const std::vector<ClassMetaData*>::const_reverse_iterator existing_data =
-      std::find_if(class_data_cache_.rbegin(), class_data_cache_.rend(),
-                   [&class_data](ClassMetaData* comp_data) {
-                     return comp_data->type_name() == class_data->type_name();
-                   });
-
-  DCHECK(existing_data == class_data_cache_.rend());
-#endif
-
+  CHECK(!std::ranges::contains(class_data_cache_, class_data->GetUniqueName(),
+                               &ClassMetaData::GetUniqueName),
+        base::NotFatalUntil::M163);
   class_data_cache_.push_back(class_data.release());
 }
 
-std::vector<ClassMetaData*>& MetaDataCache::GetCachedTypes() {
+std::vector<raw_ptr<ClassMetaData, VectorExperimental>>&
+MetaDataCache::GetCachedTypes() {
   return class_data_cache_;
 }
 

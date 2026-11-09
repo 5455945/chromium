@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,17 @@
 #define COMPONENTS_SAFE_BROWSING_CORE_BROWSER_PASSWORD_PROTECTION_PASSWORD_PROTECTION_REQUEST_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
@@ -53,9 +58,10 @@ using password_manager::metrics_util::PasswordType;
 //     |        | On deletion of |password_protection_service_|, cancel request.
 class PasswordProtectionRequest
     : public CancelableRequest,
-      public base::RefCountedDeleteOnSequence<PasswordProtectionRequest>,
-      public base::SupportsWeakPtr<PasswordProtectionRequest> {
+      public base::RefCountedDeleteOnSequence<PasswordProtectionRequest> {
  public:
+  using OtpPhishingVerdictCallback = base::OnceCallback<void(bool)>;
+
   // Not copyable or movable
   PasswordProtectionRequest(const PasswordProtectionRequest&) = delete;
   PasswordProtectionRequest& operator=(const PasswordProtectionRequest&) =
@@ -69,7 +75,7 @@ class PasswordProtectionRequest
   void Cancel(bool timed_out) override;
 
   // Processes the received response.
-  void OnURLLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnURLLoaderComplete(std::optional<std::string> response_body);
 
   GURL main_frame_url() const { return main_frame_url_; }
 
@@ -106,6 +112,29 @@ class PasswordProtectionRequest
     request_outcome_ = request_outcome;
   }
 
+  void finish_for_testing(
+      RequestOutcome outcome,
+      std::unique_ptr<LoginReputationClientResponse> response) {
+    Finish(outcome, std::move(response));
+  }
+
+  virtual base::WeakPtr<PasswordProtectionRequest> AsWeakPtr() = 0;
+
+  // Returns true if this request has an OTP phishing verdict callback.
+  bool HasOtpPhishingVerdictCallback() const {
+    return otp_phishing_verdict_callback_.has_value();
+  }
+
+  // Moves and returns the OTP phishing verdict callback.
+  // HasOtpPhishingVerdictCallback should be called before this to ensure
+  // callback is valid.
+  OtpPhishingVerdictCallback TakeOtpPhishingVerdictCallback() {
+    CHECK(otp_phishing_verdict_callback_.has_value());
+    auto callback = std::move(otp_phishing_verdict_callback_.value());
+    otp_phishing_verdict_callback_.reset();
+    return callback;
+  }
+
  protected:
   friend class base::RefCountedThreadSafe<PasswordProtectionRequest>;
 
@@ -123,7 +152,8 @@ class PasswordProtectionRequest
       LoginReputationClientRequest::TriggerType type,
       bool password_field_exists,
       PasswordProtectionServiceBase* pps,
-      int request_timeout_in_ms);
+      int request_timeout_in_ms,
+      std::optional<OtpPhishingVerdictCallback> otp_phishing_verdict_callback);
 
   ~PasswordProtectionRequest() override;
 
@@ -155,17 +185,16 @@ class PasswordProtectionRequest
 
   std::unique_ptr<LoginReputationClientRequest> request_proto_;
 
+  // Used in tests to avoid dispatching a real request. Tests using this must
+  // manually finish the request.
+  bool prevent_initiating_url_loader_for_testing_ = false;
+
  private:
   friend base::RefCountedDeleteOnSequence<PasswordProtectionRequest>;
   friend base::DeleteHelper<PasswordProtectionRequest>;
 
   // Start checking the allowlist.
   void CheckAllowlist();
-
-  static void OnAllowlistCheckDoneOnIO(
-      scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
-      base::WeakPtr<PasswordProtectionRequest> weak_request,
-      bool match_allowlist);
 
   // If |main_frame_url_| matches allowlist, call Finish() immediately;
   // otherwise call CheckCachedVerdicts().
@@ -182,8 +211,8 @@ class PasswordProtectionRequest
   // Returns whether client side detection feature collection is available.
   virtual bool IsClientSideDetectionEnabled();
 
-  // Extracts DOM features.
-  virtual void GetDomFeatures() = 0;
+  // Add debugging metadata from CSD feature cache.
+  virtual void AddDebuggingMetadata() = 0;
 
   // Returns whether visual feature collection is available.
   virtual bool IsVisualFeaturesEnabled();
@@ -192,10 +221,10 @@ class PasswordProtectionRequest
   virtual void MaybeCollectVisualFeatures() = 0;
 #endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Sets the referring app info.
   virtual void SetReferringAppInfo() = 0;
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Start a timer to cancel the request if it takes too long.
   void StartTimeout();
@@ -224,7 +253,7 @@ class PasswordProtectionRequest
   const GURL password_form_frame_url_;
 
   // The contents MIME type.
-  const std::string& mime_type_;
+  const raw_ref<const std::string, DanglingUntriaged> mime_type_;
 
   // The username of the reused password hash. The username can be an email or
   // a username for a non-GAIA or saved-password reuse. No validation has been
@@ -259,10 +288,11 @@ class PasswordProtectionRequest
 
   // The PasswordProtectionServiceBase instance owns |this|.
   // Can only be accessed on UI thread.
-  PasswordProtectionServiceBase* password_protection_service_;
+  raw_ptr<PasswordProtectionServiceBase, DanglingUntriaged>
+      password_protection_service_;
 
   // The outcome of the password protection request.
-  RequestOutcome request_outcome_;
+  RequestOutcome request_outcome_ = RequestOutcome::UNKNOWN;
 
   // If we haven't receive response after this period of time, we cancel this
   // request.
@@ -274,7 +304,9 @@ class PasswordProtectionRequest
   // Whether there is a modal warning triggered by this request.
   bool is_modal_warning_showing_;
 
-  base::WeakPtrFactory<PasswordProtectionRequest> weak_factory_{this};
+  // Callback for otp phishing verdict. Only set if trigger_type_ is
+  // ONE_TIME_PASSWORD_FIELD_DETECTED.
+  std::optional<OtpPhishingVerdictCallback> otp_phishing_verdict_callback_;
 };
 
 }  // namespace safe_browsing

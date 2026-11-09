@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 
 #include <algorithm>
 #include <utility>
+#include "media/base/audio_parameters.h"
+#include "media/base/channel_layout.h"
 
 namespace media {
 
 namespace {
 
-const int kDefaultInputBufferSize = 1024;
-const int kDefaultSampleRate = 48000;
+constexpr int kDefaultInputBufferSize = 1024;
+constexpr int kDefaultSampleRate = 48000;
 
 }  // namespace
 
@@ -27,7 +29,7 @@ bool FakeAudioManager::HasAudioOutputDevices() { return false; }
 
 bool FakeAudioManager::HasAudioInputDevices() { return false; }
 
-const char* FakeAudioManager::GetName() {
+const std::string_view FakeAudioManager::GetName() {
   return "Fake";
 }
 
@@ -62,25 +64,24 @@ AudioInputStream* FakeAudioManager::MakeLowLatencyInputStream(
 AudioParameters FakeAudioManager::GetPreferredOutputStreamParameters(
     const std::string& output_device_id,
     const AudioParameters& input_params) {
-  static const int kDefaultOutputBufferSize = 2048;
-  static const int kDefaultSampleRate = 48000;
-  ChannelLayout channel_layout = CHANNEL_LAYOUT_STEREO;
+  constexpr int kDefaultOutputBufferSize = 2048;
+  ChannelLayoutConfig channel_layout_config = ChannelLayoutConfig::Stereo();
   int sample_rate = kDefaultSampleRate;
   int buffer_size = kDefaultOutputBufferSize;
   if (input_params.IsValid()) {
     sample_rate = input_params.sample_rate();
-    channel_layout = input_params.channel_layout();
+    channel_layout_config = input_params.channel_layout_config();
     buffer_size = std::min(input_params.frames_per_buffer(), buffer_size);
   }
 
-  return AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY, channel_layout,
-                         sample_rate, buffer_size);
+  return AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                         channel_layout_config, sample_rate, buffer_size);
 }
 
 AudioParameters FakeAudioManager::GetInputStreamParameters(
     const std::string& device_id) {
   return AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                         CHANNEL_LAYOUT_STEREO, kDefaultSampleRate,
+                         ChannelLayoutConfig::Stereo(), kDefaultSampleRate,
                          kDefaultInputBufferSize);
 }
 

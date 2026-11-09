@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/thumbnails/thumbnail_capture_driver.h"
 
 #include "base/check_op.h"
+#include "base/time/time.h"
 
 // static
 constexpr base::TimeDelta ThumbnailCaptureDriver::kCooldownDelay;
@@ -28,11 +29,6 @@ void ThumbnailCaptureDriver::UpdatePageReadiness(PageReadiness page_readiness) {
   UpdateCaptureState();
 }
 
-void ThumbnailCaptureDriver::UpdatePageVisibility(bool page_visible) {
-  page_visible_ = page_visible;
-  UpdateSchedulingPriority();
-}
-
 void ThumbnailCaptureDriver::UpdateThumbnailVisibility(bool thumbnail_visible) {
   thumbnail_visible_ = thumbnail_visible;
   UpdateSchedulingPriority();
@@ -44,8 +40,9 @@ void ThumbnailCaptureDriver::SetCanCapture(bool can_capture) {
 }
 
 void ThumbnailCaptureDriver::GotFrame() {
-  if (capture_state_ == CaptureState::kCooldown)
+  if (capture_state_ == CaptureState::kCooldown) {
     captured_cooldown_frame_ = true;
+  }
 }
 
 void ThumbnailCaptureDriver::SetCapturePermittedByScheduler(bool scheduled) {
@@ -66,8 +63,9 @@ void ThumbnailCaptureDriver::UpdateCaptureState() {
   if (!scheduled_) {
     client_->StopCapture();
 
-    if (capture_state_ < CaptureState::kHaveFinalCapture)
+    if (capture_state_ < CaptureState::kHaveFinalCapture) {
       capture_state_ = CaptureState::kNoCapture;
+    }
 
     return;
   }
@@ -84,7 +82,7 @@ void ThumbnailCaptureDriver::UpdateCaptureState() {
     // it can no longer capture. Reset our state to re-request capture
     // later.
     capture_state_ = CaptureState::kCaptureRequested;
-    cooldown_timer_.AbandonAndStop();
+    cooldown_timer_.Stop();
     return;
   }
 
@@ -129,7 +127,7 @@ void ThumbnailCaptureDriver::UpdateSchedulingPriority() {
   // touch/tablet tabstrip more responsive by pre-loading thumbnails from those
   // pages. However, this currently results in a number of test failures and a
   // possible violation of an assumption made by the renderer.
-  // TODO(crbug.com/1073141): Figure out how to force-render background tabs.
+  // TODO(crbug.com/40686155): Figure out how to force-render background tabs.
   // This bug has detailed descriptions of steps we might take to make capture
   // more flexible in this area.
   if (!thumbnail_visible_) {
@@ -153,14 +151,16 @@ void ThumbnailCaptureDriver::UpdateSchedulingPriority() {
     return;
   }
 
-  DCHECK_EQ(page_readiness_, PageReadiness::kReadyForFinalCapture);
+  CHECK_EQ(page_readiness_, PageReadiness::kReadyForFinalCapture,
+           base::NotFatalUntil::M162);
   scheduler_->SetTabCapturePriority(
       this, ThumbnailScheduler::TabCapturePriority::kHigh);
 }
 
 void ThumbnailCaptureDriver::StartCooldown() {
-  DCHECK_EQ(page_readiness_, PageReadiness::kReadyForFinalCapture);
-  DCHECK_EQ(capture_state_, CaptureState::kCapturing);
+  CHECK_EQ(page_readiness_, PageReadiness::kReadyForFinalCapture,
+           base::NotFatalUntil::M162);
+  CHECK_EQ(capture_state_, CaptureState::kCapturing, base::NotFatalUntil::M162);
 
   capture_state_ = CaptureState::kCooldown;
   captured_cooldown_frame_ = false;
@@ -177,8 +177,9 @@ void ThumbnailCaptureDriver::StartCooldown() {
 }
 
 void ThumbnailCaptureDriver::OnCooldownEnded() {
-  if (capture_state_ < CaptureState::kCooldown)
+  if (capture_state_ < CaptureState::kCooldown) {
     return;
+  }
 
   if (!captured_cooldown_frame_ &&
       cooldown_retry_count_ < kMaxCooldownRetries) {

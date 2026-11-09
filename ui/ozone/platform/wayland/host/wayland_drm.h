@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,13 @@
 #include <vector>
 
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
 
 struct wl_drm;
 
 namespace gfx {
-enum class BufferFormat;
 class Size;
 }  // namespace gfx
 
@@ -27,19 +26,31 @@ class WaylandConnection;
 
 // Wrapper around |wl_drm| Wayland factory, which creates
 // |wl_buffer|s backed by dmabuf prime file descriptors.
-class WaylandDrm {
+class WaylandDrm : public wl::GlobalObjectRegistrar<WaylandDrm> {
  public:
+  static constexpr char kInterfaceName[] = "wl_drm";
+
+  static void Instantiate(WaylandConnection* connection,
+                          wl_registry* registry,
+                          uint32_t name,
+                          const std::string& interface,
+                          uint32_t version);
+
   WaylandDrm(wl_drm* drm, WaylandConnection* connection);
+
+  WaylandDrm(const WaylandDrm&) = delete;
+  WaylandDrm& operator=(const WaylandDrm&) = delete;
+
   ~WaylandDrm();
 
   // Says if can create dmabuf based wl_buffers.
   bool SupportsDrmPrime() const;
 
-  // Requests to create a wl_buffer backed by the dmabuf prime |fd| descriptor.
-  // The result is sent back via the |callback|. If buffer creation failed,
-  // nullptr is sent back via the callback. Otherwise, a pointer to the
-  // |wl_buffer| is sent.
-  void CreateBuffer(base::ScopedFD fd,
+  // Requests to create a wl_buffer backed by the dmabuf prime |fds|
+  // descriptors, one per plane. The result is sent back via the |callback|. If
+  // buffer creation failed, nullptr is sent back via the callback. Otherwise, a
+  // pointer to the |wl_buffer| is sent.
+  void CreateBuffer(const std::vector<base::ScopedFD>& fds,
                     const gfx::Size& size,
                     const std::vector<uint32_t>& strides,
                     const std::vector<uint32_t>& offsets,
@@ -48,10 +59,13 @@ class WaylandDrm {
                     uint32_t planes_count,
                     wl::OnRequestBufferCallback callback);
 
-  // Returns supported buffer formats received from the Wayland compositor.
-  wl::BufferFormatsWithModifiersMap supported_buffer_formats() const {
-    return supported_buffer_formats_;
+  // Returns supported formats received from the Wayland compositor.
+  wl::SharedImageFormatsWithModifiersMap supported_formats() const {
+    return supported_formats_;
   }
+
+  // Says if a new buffer can be created immediately.
+  bool CanCreateBufferImmed() const;
 
  private:
   // Resets the |wl_drm| and prints the error.
@@ -64,35 +78,31 @@ class WaylandDrm {
   void Authenticate(const char* drm_device_path);
 
   // Completes the drm device authentication.
-  void DrmDeviceAuthenticated(struct wl_drm* wl_drm);
+  void DrmDeviceAuthenticated(wl_drm* wl_drm);
 
   // Checks the capabilities of the drm device.
   void HandleCapabilities(uint32_t value);
 
-  // wl_drm_listener:
-  static void Device(void* data,
-                     struct wl_drm* wl_drm,
-                     const char* drm_device_path);
-  static void Format(void* data, struct wl_drm* wl_drm, uint32_t format);
-  static void Authenticated(void* data, struct wl_drm* wl_drm);
-  static void Capabilities(void* data, struct wl_drm* wl_drm, uint32_t value);
+  // wl_drm_listener callbacks:
+  static void OnDevice(void* data, wl_drm* drm, const char* drm_device_path);
+  static void OnFormat(void* data, wl_drm* drm, uint32_t format);
+  static void OnAuthenticated(void* data, wl_drm* drm);
+  static void OnCapabilities(void* data, wl_drm* drm, uint32_t value);
 
   // Holds pointer to the wl_drm Wayland factory.
   wl::Object<wl_drm> wl_drm_;
 
   // Non-owned.
-  WaylandConnection* const connection_;
+  const raw_ptr<WaylandConnection> connection_;
 
-  // Holds supported DRM formats translated to gfx::BufferFormat. Note that
+  // Holds supported DRM formats translated to viz::SharedImageFormat. Note that
   // |wl_drm| neither announces modifiers nor allows to create buffers with
   // modifiers. Thus, they are always empty.
-  wl::BufferFormatsWithModifiersMap supported_buffer_formats_;
+  wl::SharedImageFormatsWithModifiersMap supported_formats_;
 
   // Says if the drm device passed by the Wayland compositor authenticates this
   // client.
   bool authenticated_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(WaylandDrm);
 };
 
 }  // namespace ui

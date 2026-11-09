@@ -1,27 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "chrome/browser/media/webrtc/webrtc_rtp_dump_handler.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/media/webrtc/webrtc_rtp_dump_writer.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -41,11 +42,10 @@ class FakeDumpWriter : public WebRtcRtpDumpWriter {
         max_size_reached_callback_(max_size_reached_callback),
         end_dump_success_(end_dump_success) {}
 
-  void WriteRtpPacket(const uint8_t* packet_header,
-                      size_t header_length,
+  void WriteRtpPacket(base::span<const uint8_t> packet_header,
                       size_t packet_length,
                       bool incoming) override {
-    current_dump_size_ += header_length;
+    current_dump_size_ += packet_header.size();
     if (current_dump_size_ > max_dump_size_)
       max_size_reached_callback_.Run();
   }
@@ -59,7 +59,7 @@ class FakeDumpWriter : public WebRtcRtpDumpWriter {
     else if (type == RTP_DUMP_OUTGOING)
       incoming_success = false;
 
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(finished_callback),
                                   incoming_success, outgoing_success));
   }
@@ -99,8 +99,10 @@ class WebRtcRtpDumpHandlerTest : public testing::Test {
     *incoming_dump = dir.AppendASCII("recv");
     *outgoing_dump = dir.AppendASCII("send");
     const char dummy[] = "dummy";
-    EXPECT_GT(base::WriteFile(*incoming_dump, dummy, base::size(dummy)), 0);
-    EXPECT_GT(base::WriteFile(*outgoing_dump, dummy, base::size(dummy)), 0);
+    EXPECT_TRUE(base::WriteFile(*incoming_dump,
+                                std::string_view(dummy, std::size(dummy))));
+    EXPECT_TRUE(base::WriteFile(*outgoing_dump,
+                                std::string_view(dummy, std::size(dummy))));
   }
 
   void FlushTaskRunners() {
@@ -121,12 +123,12 @@ class WebRtcRtpDumpHandlerTest : public testing::Test {
 TEST_F(WebRtcRtpDumpHandlerTest, StateTransition) {
   std::string error;
 
-  RtpDumpType types[3];
+  std::array<RtpDumpType, 3> types;
   types[0] = RTP_DUMP_INCOMING;
   types[1] = RTP_DUMP_OUTGOING;
   types[2] = RTP_DUMP_BOTH;
 
-  for (size_t i = 0; i < base::size(types); ++i) {
+  for (size_t i = 0; i < std::size(types); ++i) {
     DVLOG(2) << "Verifying state transition: type = " << types[i];
 
     // Only StartDump is allowed in STATE_NONE.
@@ -178,7 +180,7 @@ TEST_F(WebRtcRtpDumpHandlerTest, StoppedWhenMaxSizeReached) {
   EXPECT_TRUE(handler_->StartDump(RTP_DUMP_INCOMING, &error));
 
   std::vector<uint8_t> buffer(100, 0);
-  handler_->OnRtpPacket(&buffer[0], buffer.size(), buffer.size(), true);
+  handler_->OnRtpPacket(buffer, buffer.size(), true);
   base::RunLoop().RunUntilIdle();
 
   // Dumping should have been stopped, so ready to release.
@@ -188,8 +190,8 @@ TEST_F(WebRtcRtpDumpHandlerTest, StoppedWhenMaxSizeReached) {
 
 TEST_F(WebRtcRtpDumpHandlerTest, PacketIgnoredIfDumpingNotStarted) {
   std::vector<uint8_t> buffer(100, 0);
-  handler_->OnRtpPacket(&buffer[0], buffer.size(), buffer.size(), true);
-  handler_->OnRtpPacket(&buffer[0], buffer.size(), buffer.size(), false);
+  handler_->OnRtpPacket(buffer, buffer.size(), true);
+  handler_->OnRtpPacket(buffer, buffer.size(), false);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -205,7 +207,7 @@ TEST_F(WebRtcRtpDumpHandlerTest, PacketIgnoredIfDumpingStopped) {
                      base::Unretained(this)));
 
   std::vector<uint8_t> buffer(100, 0);
-  handler_->OnRtpPacket(&buffer[0], buffer.size(), buffer.size(), true);
+  handler_->OnRtpPacket(buffer, buffer.size(), true);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -214,12 +216,12 @@ TEST_F(WebRtcRtpDumpHandlerTest, CannotStartMoreThanFiveDumps) {
 
   handler_.reset();
 
-  std::unique_ptr<WebRtcRtpDumpHandler> handlers[6];
+  std::array<std::unique_ptr<WebRtcRtpDumpHandler>, 6> handlers;
 
-  for (size_t i = 0; i < base::size(handlers); ++i) {
+  for (size_t i = 0; i < std::size(handlers); ++i) {
     handlers[i] = std::make_unique<WebRtcRtpDumpHandler>(base::FilePath());
 
-    if (i < base::size(handlers) - 1) {
+    if (i < std::size(handlers) - 1) {
       EXPECT_TRUE(handlers[i]->StartDump(RTP_DUMP_INCOMING, &error));
     } else {
       EXPECT_FALSE(handlers[i]->StartDump(RTP_DUMP_INCOMING, &error));

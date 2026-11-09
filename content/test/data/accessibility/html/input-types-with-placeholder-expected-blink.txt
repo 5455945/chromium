@@ -13,9 +13,7 @@ rootWebArea
 ++++++++spinButton editable name='Number:' placeholder='3'
 ++++++++++genericContainer ignored
 ++++++++++genericContainer ignored
-++++++++++++genericContainer ignored
-++++++++++++++genericContainer editable
-++++++++++++genericContainer ignored
+++++++++++++genericContainer editable
 ++++++labelText
 ++++++++staticText name='Password: '
 ++++++++++inlineTextBox name='Password: '
@@ -28,9 +26,7 @@ rootWebArea
 ++++++++searchBox editable name='Search:' placeholder='search'
 ++++++++++genericContainer ignored
 ++++++++++genericContainer ignored
-++++++++++++genericContainer ignored
-++++++++++++++genericContainer editable
-++++++++++++genericContainer ignored
+++++++++++++genericContainer editable
 ++++++labelText
 ++++++++staticText name='Tel: '
 ++++++++++inlineTextBox name='Tel: '

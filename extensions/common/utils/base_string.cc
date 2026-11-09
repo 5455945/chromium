@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,9 @@ namespace extensions {
 
 bool ContainsStringIgnoreCaseASCII(const std::set<std::string>& collection,
                                    const std::string& value) {
-  return std::find_if(std::begin(collection), std::end(collection),
-                      [&value](const std::string& s) -> bool {
-                        return base::EqualsCaseInsensitiveASCII(s, value);
-                      }) != std::end(collection);
+  return std::ranges::any_of(collection, [&value](const std::string& s) {
+    return base::EqualsCaseInsensitiveASCII(s, value);
+  });
 }
 
 }  // namespace extensions

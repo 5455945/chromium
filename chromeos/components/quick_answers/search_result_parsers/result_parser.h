@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,9 @@
 #include <memory>
 #include <string>
 
+#include "base/values.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 
-namespace base {
-class Value;
-}
-
-namespace chromeos {
 namespace quick_answers {
 
 // Parser interface.
@@ -22,13 +18,34 @@ class ResultParser {
  public:
   virtual ~ResultParser() = default;
 
-  // Parse the result into |quick_answer|.
-  virtual bool Parse(const base::Value* result, QuickAnswer* quick_answer) = 0;
+  // Helper parser function to get the first element in a value list, which is
+  // expected to be a dictionary.
+  static const base::DictValue* GetFirstDictElementFromList(
+      const base::DictValue& dict,
+      const std::string& path);
 
- protected:
-  // Helper function to get the first element in a value list.
-  const base::Value* GetFirstListElement(const base::Value& value,
-                                         const std::string& path);
+  // Helper parser function to remove known HTML tags from a std::string.
+  static std::string RemoveKnownHtmlTags(const std::string& input);
+
+  // Parse the result into `quick_answer`. All `ResultParser`s must support this
+  // for now for backward compatibility reason. `Parse` method would be deleted
+  // after we migrate interfaces of all parsers.
+  virtual bool Parse(const base::DictValue& result,
+                     QuickAnswer* quick_answer) = 0;
+
+  // Interfaces for supporting Rich Answers.
+  virtual std::unique_ptr<StructuredResult> ParseInStructuredResult(
+      const base::DictValue& result);
+
+  // `quick_answer` can be modified even if `PopulateQuickAnswer` returns false,
+  // i.e. do not assume that `quick_answer` is un-modified if this method
+  // returns false.
+  virtual bool PopulateQuickAnswer(const StructuredResult& structured_result,
+                                   QuickAnswer* quick_answer);
+
+  // Returns true if this parser supports the new interfaces. Note that all
+  // parsers must support old interfaces even if it supports new interfaces.
+  virtual bool SupportsNewInterface() const;
 };
 
 // A factory class for creating ResultParser based on the |one_namespace_type|.
@@ -41,5 +58,5 @@ class ResultParserFactory {
 };
 
 }  // namespace quick_answers
-}  // namespace chromeos
+
 #endif  // CHROMEOS_COMPONENTS_QUICK_ANSWERS_SEARCH_RESULT_PARSERS_RESULT_PARSER_H_

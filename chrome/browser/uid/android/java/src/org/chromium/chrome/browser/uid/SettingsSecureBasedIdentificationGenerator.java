@@ -1,32 +1,29 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.uid;
 
 import android.annotation.SuppressLint;
-import android.content.Context;
 import android.provider.Settings;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.ContextUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.util.HashUtil;
 
 /**
  * Unique identificator implementation that uses the Settings.Secure.ANDROID_ID field and MD5
  * hashing.
  */
+@NullMarked
 public class SettingsSecureBasedIdentificationGenerator implements UniqueIdentificationGenerator {
     public static final String GENERATOR_ID = "SETTINGS_SECURE_ANDROID_ID";
-    private final Context mContext;
 
     @VisibleForTesting
-    public SettingsSecureBasedIdentificationGenerator(Context context) {
-        // Since we do not know the lifetime of the given context, we get the application context
-        // to ensure it is always possible to use it.
-        mContext = context.getApplicationContext();
-    }
+    public SettingsSecureBasedIdentificationGenerator() {}
 
     @Override
     public String getUniqueId(@Nullable String salt) {
@@ -42,6 +39,8 @@ public class SettingsSecureBasedIdentificationGenerator implements UniqueIdentif
     @SuppressLint("HardwareIds")
     @VisibleForTesting
     String getAndroidId() {
-        return Settings.Secure.getString(mContext.getContentResolver(), Settings.Secure.ANDROID_ID);
+        return Settings.Secure.getString(
+                ContextUtils.getApplicationContext().getContentResolver(),
+                Settings.Secure.ANDROID_ID);
     }
 }

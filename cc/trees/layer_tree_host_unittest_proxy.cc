@@ -1,15 +1,18 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/test/scoped_feature_list.h"
+#include "cc/base/features.h"
 #include "cc/test/fake_content_layer_client.h"
 #include "cc/test/fake_picture_layer.h"
 #include "cc/test/layer_tree_test.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "cc/trees/proxy_impl.h"
 #include "cc/trees/proxy_main.h"
+#include "cc/trees/single_thread_proxy.h"
 
 namespace cc {
 
@@ -72,6 +75,120 @@ class LayerTreeHostProxyTestSetNeedsCommit : public LayerTreeHostProxyTest {
 };
 
 MULTI_THREAD_TEST_F(LayerTreeHostProxyTestSetNeedsCommit);
+
+class LayerTreeHostProxyTestSetNeedsCommitUrgent
+    : public LayerTreeHostProxyTest {
+ protected:
+  LayerTreeHostProxyTestSetNeedsCommitUrgent() = default;
+  LayerTreeHostProxyTestSetNeedsCommitUrgent(
+      const LayerTreeHostProxyTestSetNeedsCommitUrgent&) = delete;
+  ~LayerTreeHostProxyTestSetNeedsCommitUrgent() override {
+    features::SetIsEligibleForThrottleMainFrameTo60Hz(false);
+  }
+
+  LayerTreeHostProxyTestSetNeedsCommitUrgent& operator=(
+      const LayerTreeHostProxyTestSetNeedsCommitUrgent&) = delete;
+
+  void InitializeSettings(LayerTreeSettings* settings) override {
+    LayerTreeHostProxyTest::InitializeSettings(settings);
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kThrottleMainFrameTo60Hz);
+  }
+
+  void BeginTest() override {
+    features::SetIsEligibleForThrottleMainFrameTo60Hz(false);
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    EXPECT_FALSE(GetProxyMain()->has_sent_urgent_commit_request());
+
+    proxy()->SetNeedsCommit(/*urgent=*/false);
+    EXPECT_EQ(ProxyMain::COMMIT_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    // When not eligible for 60Hz main frame throttling, urgent requests do not
+    // post a second commit request.
+    proxy()->SetNeedsCommit(/*urgent=*/true);
+    EXPECT_FALSE(GetProxyMain()->has_sent_urgent_commit_request());
+
+    features::SetIsEligibleForThrottleMainFrameTo60Hz(true);
+    proxy()->SetNeedsCommit(/*urgent=*/true);
+    EXPECT_TRUE(GetProxyMain()->has_sent_urgent_commit_request());
+  }
+
+  void DidBeginMainFrame() override {
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->current_pipeline_stage());
+  }
+
+  void DidCommit() override {
+    EXPECT_EQ(1, update_check_layer()->update_count());
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->current_pipeline_stage());
+    EndTest();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+MULTI_THREAD_TEST_F(LayerTreeHostProxyTestSetNeedsCommitUrgent);
+
+class LayerTreeHostProxyTestSetNeedsCommitUnthrottled
+    : public LayerTreeHostProxyTest {
+ public:
+  LayerTreeHostProxyTestSetNeedsCommitUnthrottled() = default;
+  LayerTreeHostProxyTestSetNeedsCommitUnthrottled(
+      const LayerTreeHostProxyTestSetNeedsCommitUnthrottled&) = delete;
+  ~LayerTreeHostProxyTestSetNeedsCommitUnthrottled() override = default;
+
+  LayerTreeHostProxyTestSetNeedsCommitUnthrottled& operator=(
+      const LayerTreeHostProxyTestSetNeedsCommitUnthrottled&) = delete;
+
+ protected:
+  void InitializeSettings(LayerTreeSettings* settings) override {
+    LayerTreeHostProxyTest::InitializeSettings(settings);
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kThrottleRepeatedNoDamageFrames);
+  }
+
+  void BeginTest() override {
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    EXPECT_FALSE(GetProxyMain()->has_sent_unthrottled_commit_request());
+
+    // Simulate being in throttled state.
+    GetProxyMain()->set_consecutive_no_damage_main_frames_for_testing(360);
+
+    // Requesting a rAF commit should NOT set
+    // has_sent_unthrottled_commit_request.
+    proxy()->SetNeedsAnimate(BeginMainFrameReason::kRAF);
+    EXPECT_EQ(ProxyMain::ANIMATE_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    EXPECT_FALSE(GetProxyMain()->has_sent_unthrottled_commit_request());
+
+    // Requesting a non-rAF commit while throttled SHOULD set
+    // has_sent_unthrottled_commit_request.
+    proxy()->SetNeedsCommit();
+    EXPECT_EQ(ProxyMain::COMMIT_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    EXPECT_TRUE(GetProxyMain()->has_sent_unthrottled_commit_request());
+  }
+
+  void DidBeginMainFrame() override {
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->max_requested_pipeline_stage());
+    EXPECT_EQ(ProxyMain::NO_PIPELINE_STAGE,
+              GetProxyMain()->current_pipeline_stage());
+  }
+
+  void DidCommit() override { EndTest(); }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+MULTI_THREAD_TEST_F(LayerTreeHostProxyTestSetNeedsCommitUnthrottled);
 
 class LayerTreeHostProxyTestSetNeedsAnimate : public LayerTreeHostProxyTest {
  protected:
@@ -276,7 +393,7 @@ class LayerTreeHostProxyTestCommitWaitsForActivation
   void BeginTest() override { PostSetNeedsCommitToMainThread(); }
 
   void BeginCommitOnThread(LayerTreeHostImpl* impl) override {
-    if (impl->sync_tree()->source_frame_number() < 0)
+    if (impl->sync_tree()->source_frame_number() == 0)
       return;  // The initial commit, don't do anything here.
 
     // The main thread will request a commit, and may request that it does
@@ -288,7 +405,7 @@ class LayerTreeHostProxyTestCommitWaitsForActivation
       activate_blocked_ = true;
     }
     switch (impl->sync_tree()->source_frame_number()) {
-      case 0: {
+      case 1: {
         // This is for case 1 in DidCommit.
         auto unblock = base::BindOnce(
             &LayerTreeHostProxyTestCommitWaitsForActivation::UnblockActivation,
@@ -298,10 +415,10 @@ class LayerTreeHostProxyTestCommitWaitsForActivation
             // Use a delay to allow the main frame to start if it would. This
             // should cause failures (or flakiness) if we fail to wait for the
             // activation before starting the main frame.
-            base::TimeDelta::FromMilliseconds(16 * 4));
+            base::Milliseconds(16 * 4));
         break;
       }
-      case 1:
+      case 2:
         // This is for case 2 in DidCommit.
         // Here we don't ever unblock activation. Since the commit hasn't
         // requested to wait, we can verify that activation is blocked when the
@@ -386,7 +503,7 @@ class LayerTreeHostProxyTestCommitWaitsForActivationMFBA
         // case above). We unblock activate to allow this main frame to commit.
         auto unblock = base::BindOnce(
             &LayerTreeHostImpl::BlockNotifyReadyToActivateForTesting,
-            base::Unretained(impl), false);
+            base::Unretained(impl), false, true);
         // Post the unblock instead of doing it immediately so that the main
         // frame is fully processed by the compositor thread, and it has a full
         // opportunity to wrongly unblock the main thread.
@@ -415,9 +532,8 @@ class LayerTreeHostProxyTestCommitWaitsForActivationMFBA
           base::BindOnce(&LayerTreeHostProxyTestCommitWaitsForActivationMFBA::
                              UnblockActivation,
                          base::Unretained(this), impl);
-      ImplThreadTaskRunner()->PostDelayedTask(
-          FROM_HERE, std::move(unblock),
-          base::TimeDelta::FromMilliseconds(16 * 4));
+      ImplThreadTaskRunner()->PostDelayedTask(FROM_HERE, std::move(unblock),
+                                              base::Milliseconds(16 * 4));
     }
   }
 
@@ -472,18 +588,29 @@ class LayerTreeHostProxyTestImplFrameCausesAnimatePending
   void CommitCompleteOnThread(LayerTreeHostImpl* host_impl) override {
     switch (host_impl->sync_tree()->source_frame_number()) {
       case 0: {
-        EXPECT_FALSE(proxy()->RequestedAnimatePending());
+        {
+          DebugScopedSetMainThread main(host_impl->task_runner_provider());
+          EXPECT_FALSE(proxy()->RequestedAnimatePending());
+        }
         host_impl->SetNeedsOneBeginImplFrame();
-        EXPECT_TRUE(proxy()->RequestedAnimatePending());
+        {
+          DebugScopedSetMainThread main(host_impl->task_runner_provider());
+          EXPECT_TRUE(proxy()->RequestedAnimatePending());
+        }
         PostSetNeedsCommitToMainThread();
         break;
       }
       case 1: {
-        EXPECT_FALSE(proxy()->RequestedAnimatePending());
+        {
+          DebugScopedSetMainThread main(host_impl->task_runner_provider());
+          EXPECT_FALSE(proxy()->RequestedAnimatePending());
+        }
         EndTest();
         break;
       }
-      default: { NOTREACHED(); }
+      default: {
+        NOTREACHED();
+      }
     }
   }
 };
@@ -522,7 +649,9 @@ class LayerTreeHostProxyTestNeedsCommitFromImpl
                            base::Unretained(this)));
         break;
       }
-      default: { NOTREACHED(); }
+      default: {
+        NOTREACHED();
+      }
     }
   }
 
@@ -559,9 +688,11 @@ class LayerTreeHostProxyTestDelayedCommitDueToVisibility
     }
   }
 
-  void BeginMainFrameAbortedOnThread(LayerTreeHostImpl*,
-                                     CommitEarlyOutReason reason) override {
-    EXPECT_EQ(CommitEarlyOutReason::ABORTED_NOT_VISIBLE, reason);
+  void BeginMainFrameAbortedOnThread(
+      LayerTreeHostImpl*,
+      CommitEarlyOutReason reason,
+      bool /* did_sync_scroll_and_viewport */) override {
+    EXPECT_EQ(CommitEarlyOutReason::kAbortedNotVisible, reason);
     PostSetVisibleToMainThread(true);
   }
 
@@ -573,5 +704,184 @@ class LayerTreeHostProxyTestDelayedCommitDueToVisibility
 
 SINGLE_AND_MULTI_THREAD_TEST_F(
     LayerTreeHostProxyTestDelayedCommitDueToVisibility);
+
+class LayerTreeHostProxyTestRequestImmediateBeginMainFrame
+    : public LayerTreeHostProxyTest {
+ protected:
+  LayerTreeHostProxyTestRequestImmediateBeginMainFrame() = default;
+  ~LayerTreeHostProxyTestRequestImmediateBeginMainFrame() override = default;
+
+  void BeginTest() override { PostSetNeedsCommitToMainThread(); }
+
+  void WillSendBeginMainFrameOnThread(LayerTreeHostImpl* host_impl) override {
+    if (!requested_) {
+      requested_ = true;
+      MainThreadTaskRunner()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&LayerTreeHost::RequestImmediateBeginMainFrame,
+                         base::Unretained(layer_tree_host())));
+    }
+  }
+
+  void DidSendEarlyFinalBeginMainFrameOnThread(
+      LayerTreeHostImpl* host_impl) override {
+    received_ = true;
+  }
+
+  void DidCommit() override {
+    if (received_) {
+      EndTest();
+    }
+  }
+
+  void AfterTest() override { EXPECT_TRUE(received_); }
+
+ private:
+  bool requested_ = false;
+  bool received_ = false;
+};
+
+MULTI_THREAD_TEST_F(LayerTreeHostProxyTestRequestImmediateBeginMainFrame);
+
+// Tests killswitch disables RequestImmediateBeginMainFrame.
+class LayerTreeHostProxyTestRequestImmediateBeginMainFrameDisabled
+    : public LayerTreeHostProxyTest {
+ protected:
+  LayerTreeHostProxyTestRequestImmediateBeginMainFrameDisabled() {
+    feature_list_.InitAndDisableFeature(
+        features::kSendEarlyFinalBeginMainFrame);
+  }
+  ~LayerTreeHostProxyTestRequestImmediateBeginMainFrameDisabled() override =
+      default;
+
+  void BeginTest() override { PostSetNeedsCommitToMainThread(); }
+
+  void WillSendBeginMainFrameOnThread(LayerTreeHostImpl* host_impl) override {
+    if (!requested_) {
+      requested_ = true;
+      MainThreadTaskRunner()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&LayerTreeHost::RequestImmediateBeginMainFrame,
+                         base::Unretained(layer_tree_host())));
+    }
+  }
+
+  void DidSendEarlyFinalBeginMainFrameOnThread(
+      LayerTreeHostImpl* host_impl) override {
+    received_ = true;
+  }
+
+  void DidCommit() override { EndTest(); }
+
+  void AfterTest() override { EXPECT_FALSE(received_); }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+  bool requested_ = false;
+  bool received_ = false;
+};
+
+MULTI_THREAD_TEST_F(
+    LayerTreeHostProxyTestRequestImmediateBeginMainFrameDisabled);
+
+// Verify that when a primary BeginMainFrame is READY_TO_COMMIT but blocked from
+// committing by an unactivated impl-side pending tree, a secondary
+// BeginMainFrame is not sent (which would block the main thread in
+// LayerTreeHost::AnimateLayers() waiting for the primary commit to complete).
+class LayerTreeHostProxyTestMainFrameBeforeCommitBlockedByImplSidePendingTree
+    : public LayerTreeHostProxyTest {
+ protected:
+  void BeginTest() override { PostSetNeedsCommitToMainThread(); }
+
+  void DidActivateTreeOnThread(LayerTreeHostImpl* host_impl) override {
+    if (host_impl->active_tree()->source_frame_number() == 0 &&
+        !invalidated_once_) {
+      invalidated_once_ = true;
+      // Block activation of the pending tree created by impl-side invalidation
+      // so that the next main-thread commit cannot finish committing yet.
+      host_impl->BlockNotifyReadyToActivateForTesting(true);
+      host_impl->RequestImplSideInvalidationForRerasterTiling();
+    }
+  }
+
+  void DidInvalidateContentOnImplSide(LayerTreeHostImpl* host_impl) override {
+    // Now has_pending_tree_ is true and current_pending_tree_is_impl_side_ is
+    // true. Start main frame 1.
+    PostSetNeedsCommitToMainThread();
+  }
+
+  void DidBeginMainFrame() override {
+    if (layer_tree_host()->SourceFrameNumber() == 2) {
+      // Request another main frame (frame 2) so needs_begin_main_frame_ is true
+      // when frame 1 becomes READY_TO_COMMIT.
+      proxy()->SetNeedsCommit();
+    }
+  }
+
+  void ReadyToCommitOnThread(LayerTreeHostImpl* host_impl) override {
+    if (host_impl->active_tree()->source_frame_number() == 0 &&
+        !ready_to_commit_frame_1_) {
+      ready_to_commit_frame_1_ = true;
+      // Request another impl frame while frame 1 is READY_TO_COMMIT and
+      // blocked by the impl-side pending tree.
+      host_impl->SetNeedsOneBeginImplFrame();
+    }
+  }
+
+  void WillBeginImplFrameOnThread(LayerTreeHostImpl* host_impl,
+                                  const viz::BeginFrameArgs& args,
+                                  bool has_damage) override {
+    if (ready_to_commit_frame_1_ && !unblock_posted_) {
+      unblock_posted_ = true;
+      // Post a task to the main thread after this impl frame processes
+      // scheduled actions. If a secondary BeginMainFrame were sent while frame
+      // 1 is stuck in READY_TO_COMMIT, the main thread would block inside
+      // LayerTreeHost::AnimateLayers() -> WaitForCommitCompletion() and never
+      // run this task to unblock activation.
+      ImplThreadTaskRunner()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &LayerTreeHostProxyTestMainFrameBeforeCommitBlockedByImplSidePendingTree::
+                  PostMainThreadCheckBeforeUnblock,
+              base::Unretained(this), host_impl));
+    }
+  }
+
+  void PostMainThreadCheckBeforeUnblock(LayerTreeHostImpl* host_impl) {
+    MainThreadTaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &LayerTreeHostProxyTestMainFrameBeforeCommitBlockedByImplSidePendingTree::
+                VerifyMainThreadNotBlockedAndUnblockActivation,
+            base::Unretained(this), host_impl));
+  }
+
+  void VerifyMainThreadNotBlockedAndUnblockActivation(
+      LayerTreeHostImpl* host_impl) {
+    // Frame 1's commit is still in flight on the impl thread (WillCommit() has
+    // already incremented SourceFrameNumber() to 2), and the main thread is
+    // responsive (not blocked inside AnimateLayers() for frame 2).
+    EXPECT_TRUE(layer_tree_host()->in_commit());
+    EXPECT_EQ(2, layer_tree_host()->SourceFrameNumber());
+    ImplThreadTaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&LayerTreeHostImpl::BlockNotifyReadyToActivateForTesting,
+                       base::Unretained(host_impl), false, true));
+  }
+
+  void DidCommit() override {
+    if (layer_tree_host()->SourceFrameNumber() == 3) {
+      EndTest();
+    }
+  }
+
+ private:
+  bool invalidated_once_ = false;
+  bool ready_to_commit_frame_1_ = false;
+  bool unblock_posted_ = false;
+};
+
+MULTI_THREAD_TEST_F(
+    LayerTreeHostProxyTestMainFrameBeforeCommitBlockedByImplSidePendingTree);
 
 }  // namespace cc

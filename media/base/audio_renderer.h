@@ -1,17 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_BASE_AUDIO_RENDERER_H_
 #define MEDIA_BASE_AUDIO_RENDERER_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include <optional>
+
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "media/base/buffering_state.h"
 #include "media/base/media_export.h"
 #include "media/base/pipeline_status.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -23,6 +23,9 @@ class TimeSource;
 class MEDIA_EXPORT AudioRenderer {
  public:
   AudioRenderer();
+
+  AudioRenderer(const AudioRenderer&) = delete;
+  AudioRenderer& operator=(const AudioRenderer&) = delete;
 
   // Stop all operations and fire all pending callbacks.
   virtual ~AudioRenderer();
@@ -63,17 +66,20 @@ class MEDIA_EXPORT AudioRenderer {
   // Set a hint indicating target latency. See comment in renderer.h.
   // |latency_hint| may be nullopt to indicate the hint has been cleared
   // (restore UA default).
-  virtual void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) = 0;
+  virtual void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) = 0;
 
   // Sets a flag indicating that the AudioRenderer should use or avoid pitch
   // preservation when playing back at speeds other than 1.0.
   virtual void SetPreservesPitch(bool preserves_pitch) = 0;
 
-  // Sets a flag indicating whether the audio stream was initiated by autoplay.
-  virtual void SetAutoplayInitiated(bool autoplay_initiated) = 0;
+  // Sets a flag indicating whether to render muted audio to the active sink or
+  // switch to a null sink.
+  virtual void SetRenderMutedAudio(bool render_muted_audio) {}
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(AudioRenderer);
+  // Sets a flag indicating whether the audio stream was played with user
+  // activation and high media engagement.
+  virtual void SetWasPlayedWithUserActivationAndHighMediaEngagement(
+      bool was_played_with_user_activation_and_high_media_engagement) = 0;
 };
 
 }  // namespace media

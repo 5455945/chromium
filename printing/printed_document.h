@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,12 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "build/build_config.h"
-#include "printing/native_drawing_context.h"
+#include "printing/mojom/print.mojom.h"
 #include "printing/print_settings.h"
 
 namespace base {
@@ -35,6 +37,11 @@ class PrintingContext;
 class COMPONENT_EXPORT(PRINTING) PrintedDocument
     : public base::RefCountedThreadSafe<PrintedDocument> {
  public:
+  struct DocumentData {
+    base::ReadOnlySharedMemoryRegion data;
+    mojom::MetafileDataType data_type;
+  };
+
   // The cookie shall be unique and has a specific relationship with its
   // originating source and settings.
   PrintedDocument(std::unique_ptr<PrintSettings> settings,
@@ -43,7 +50,7 @@ class COMPONENT_EXPORT(PRINTING) PrintedDocument
   PrintedDocument(const PrintedDocument&) = delete;
   PrintedDocument& operator=(const PrintedDocument&) = delete;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Indicates that the PDF has been generated and the document is waiting for
   // conversion for printing. This is needed on Windows so that the print job
   // is not cancelled if the web contents dies before PDF conversion finishes.
@@ -62,29 +69,40 @@ class COMPONENT_EXPORT(PRINTING) PrintedDocument
   // Note: locks for a short amount of time.
   scoped_refptr<PrintedPage> GetPage(uint32_t page_number);
 
-  // Drop the specified page's reference for the particular page number.
+  // Removes reference to a particular `page` based on its page number.
   // Note: locks for a short amount of time.
-  void DropPage(const PrintedPage* page);
-#endif  // defined(OS_WIN)
+  void RemovePage(const PrintedPage* page);
+#endif  // BUILDFLAG(IS_WIN)
 
-  // Sets the document data. Note: locks for a short amount of time.
+  // Sets the document data.
+  // Note: locks for a short amount of time.
   void SetDocument(std::unique_ptr<MetafilePlayer> metafile);
 
-  // Retrieves the metafile with the data to print. Lock must be held when
-  // calling this function
-  const MetafilePlayer* GetMetafile();
+  // Returns where there is a document to print.
+  // Note: locks for a short amount of time.
+  bool HasDocument() const;
 
-// Draws the page in the context.
-// Note: locks for a short amount of time in debug only.
-#if defined(OS_WIN)
+  // Retrieves the document data to print.
+  // Note: locks for a short amount of time.
+  DocumentData GetDocumentData() const;
+
+#if BUILDFLAG(IS_WIN)
+  // Draws the page in the context.
+  // Note: locks for a short amount of time in debug only.
   // This is applicable when using the Windows GDI print API.
-  void RenderPrintedPage(const PrintedPage& page,
-                         printing::NativeDrawingContext context) const;
-#endif
+  mojom::ResultCode RenderPrintedPage(const PrintedPage& page,
+                                      PrintingContext* context) const;
 
-  // Draws the document in the context. Returns true on success and false on
-  // failure. Fails if context->NewPage() or context->PageDone() fails.
-  bool RenderPrintedDocument(PrintingContext* context);
+#if !defined(NDEBUG)
+  // Verifies that the page is intended to be printed for the document.
+  // Note: locks for a short amount of time.
+  bool IsPageInList(const PrintedPage& page) const;
+#endif  // !defined(NDEBUG)
+#endif  // BUILDFLAG(IS_WIN)
+
+  // Draws the document in the context.  Fails if context->NewPage() or
+  // context->PageDone() fails.
+  mojom::ResultCode RenderPrintedDocument(PrintingContext* context);
 
   // Returns true if all the necessary pages for the settings are already
   // rendered.
@@ -125,14 +143,6 @@ class COMPONENT_EXPORT(PRINTING) PrintedDocument
       const std::u16string& document_name,
       const base::FilePath::StringType& extension);
 
-#if defined(OS_WIN)
-  // Get page content rect adjusted based on
-  // http://dev.w3.org/csswg/css3-page/#positioning-page-box
-  static gfx::Rect GetCenteredPageContentRect(const gfx::Size& paper_size,
-                                              const gfx::Size& page_size,
-                                              const gfx::Rect& content_rect);
-#endif
-
   // Dump data on blocking task runner.
   // Should only be called when debug dumps are enabled.
   void DebugDumpData(const base::RefCountedMemory* data,
@@ -161,7 +171,7 @@ class COMPONENT_EXPORT(PRINTING) PrintedDocument
 
     std::unique_ptr<MetafilePlayer> metafile_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // Contains the pages' representation. This is a collection of PrintedPage.
     // Warning: Lock must be held when accessing this member.
     // This is applicable when using the Windows GDI print API which has the
@@ -203,7 +213,7 @@ class COMPONENT_EXPORT(PRINTING) PrintedDocument
   mutable base::Lock lock_;
 
   // All the mutable members.
-  Mutable mutable_;
+  Mutable mutable_ GUARDED_BY(lock_);
 
   // All the immutable members.
   const Immutable immutable_;

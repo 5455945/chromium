@@ -1,14 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/api/declarative_net_request/dnr_manifest_handler.h"
 
 #include <set>
+#include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
@@ -31,24 +31,30 @@ DNRManifestHandler::DNRManifestHandler() = default;
 DNRManifestHandler::~DNRManifestHandler() = default;
 
 bool DNRManifestHandler::Parse(Extension* extension, std::u16string* error) {
-  DCHECK(extension->manifest()->HasKey(
+  DCHECK(extension->manifest()->FindKey(
       dnr_api::ManifestKeys::kDeclarativeNetRequest));
 
-  if (!PermissionsParser::HasAPIPermission(
-          extension, mojom::APIPermissionID::kDeclarativeNetRequest)) {
+  bool has_permission =
+      PermissionsParser::HasAPIPermission(
+          extension, mojom::APIPermissionID::kDeclarativeNetRequest) ||
+      PermissionsParser::HasAPIPermission(
+          extension,
+          mojom::APIPermissionID::kDeclarativeNetRequestWithHostAccess);
+  if (!has_permission) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
-        errors::kDeclarativeNetRequestPermissionNeeded, kAPIPermission,
+        errors::kDeclarativeNetRequestPermissionNeeded,
         dnr_api::ManifestKeys::kDeclarativeNetRequest);
     return false;
   }
 
   dnr_api::ManifestKeys manifest_keys;
   if (!dnr_api::ManifestKeys::ParseFromDictionary(
-          extension->manifest()->available_values(), &manifest_keys, error)) {
+          extension->manifest()->available_values(), manifest_keys, *error)) {
     return false;
   }
+  CHECK(manifest_keys.declarative_net_request.has_value());
   std::vector<dnr_api::Ruleset> rulesets =
-      std::move(manifest_keys.declarative_net_request.rule_resources);
+      std::move(manifest_keys.declarative_net_request->rule_resources);
 
   if (rulesets.size() >
       static_cast<size_t>(dnr_api::MAX_NUMBER_OF_STATIC_RULESETS)) {
@@ -60,7 +66,7 @@ bool DNRManifestHandler::Parse(Extension* extension, std::u16string* error) {
     return false;
   }
 
-  std::set<base::StringPiece> ruleset_ids;
+  std::set<std::string_view> ruleset_ids;
 
   // Validates the ruleset at the given |index|. On success, returns true and
   // populates |info|. On failure, returns false and populates |error|.
@@ -104,6 +110,11 @@ bool DNRManifestHandler::Parse(Extension* extension, std::u16string* error) {
   std::vector<DNRManifestData::RulesetInfo> rulesets_info;
   rulesets_info.reserve(rulesets.size());
 
+  int enabled_ruleset_count = 0;
+
+  std::set<base::FilePath> unique_paths;
+  bool unique_paths_warning = false;
+
   // Note: the static_cast<int> below is safe because we did already verify that
   // |rulesets.size()| <= dnr_api::MAX_NUMBER_OF_STATIC_RULESETS, which is an
   // integer.
@@ -112,29 +123,50 @@ bool DNRManifestHandler::Parse(Extension* extension, std::u16string* error) {
     if (!get_ruleset_info(i, &info))
       return false;
 
+    if (info.enabled)
+      enabled_ruleset_count++;
+
+    // The DNR system can support assigning different IDs to a ruleset, but this
+    // is likely a developers' mistake since two declarations of the same rule
+    // consume twice the amount of resources.
+    if (!unique_paths_warning) {
+      if (unique_paths.contains(info.relative_path)) {
+        unique_paths_warning = true;
+        extension->AddInstallWarning(
+            InstallWarning(errors::kDeclarativeNetRequestPathDuplicates,
+                           dnr_api::ManifestKeys::kDeclarativeNetRequest));
+      } else {
+        unique_paths.insert(info.relative_path);
+      }
+    }
+
     rulesets_info.push_back(std::move(info));
   }
 
+  if (enabled_ruleset_count > dnr_api::MAX_NUMBER_OF_ENABLED_STATIC_RULESETS) {
+    *error = ErrorUtils::FormatErrorMessageUTF16(
+        errors::kEnabledRulesetCountExceeded,
+        dnr_api::ManifestKeys::kDeclarativeNetRequest,
+        dnr_api::DNRInfo::kRuleResources,
+        base::NumberToString(dnr_api::MAX_NUMBER_OF_ENABLED_STATIC_RULESETS));
+    return false;
+  }
+
   extension->SetManifestData(
-      dnr_api::ManifestKeys::kDeclarativeNetRequest,
       std::make_unique<DNRManifestData>(std::move(rulesets_info)));
   return true;
 }
 
-bool DNRManifestHandler::Validate(const Extension* extension,
+bool DNRManifestHandler::Validate(const Extension& extension,
                                   std::string* error,
                                   std::vector<InstallWarning>* warnings) const {
-  DNRManifestData* data =
-      static_cast<DNRManifestData*>(extension->GetManifestData(
-          dnr_api::ManifestKeys::kDeclarativeNetRequest));
-  DCHECK(data);
-
-  for (const DNRManifestData::RulesetInfo& info : data->rulesets) {
+  for (const DNRManifestData::RulesetInfo& info :
+       DNRManifestData::GetRulesets(extension)) {
     // Check file path validity. We don't use Extension::GetResource since it
     // returns a failure if the relative path contains Windows path separators
     // and we have already normalized the path separators.
     if (ExtensionResource::GetFilePath(
-            extension->path(), info.relative_path,
+            extension.path(), info.relative_path,
             ExtensionResource::SYMLINKS_MUST_RESOLVE_WITHIN_ROOT)
             .empty()) {
       *error = ErrorUtils::FormatErrorMessage(

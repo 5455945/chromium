@@ -1,15 +1,15 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/common/audio_decoder_software_wrapper.h"
 
+#include <algorithm>
 #include <ostream>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/common/base/decoder_config_logging.h"
 
@@ -36,10 +36,7 @@ bool IsChannelLayoutSupported(AudioConfig config) {
 
 // Codecs that cannot be decoded on the device and must be passed through.
 constexpr media::AudioCodec kPassthroughCodecs[] = {
-    kCodecEAC3,
-    kCodecAC3,
-    kCodecDTS,
-    kCodecMpegHAudio,
+    kCodecEAC3, kCodecAC3, kCodecDTS, kCodecDTSXP2, kCodecMpegHAudio,
 };
 
 }  // namespace
@@ -49,14 +46,14 @@ AudioDecoderSoftwareWrapper::AudioDecoderSoftwareWrapper(
     : backend_decoder_(backend_decoder),
       delegate_(nullptr),
       decoder_error_(false) {
-  DCHECK(backend_decoder_);
+  CHECK(backend_decoder_, base::NotFatalUntil::M163);
   backend_decoder_->SetDelegate(this);
 }
 
 AudioDecoderSoftwareWrapper::~AudioDecoderSoftwareWrapper() {}
 
 void AudioDecoderSoftwareWrapper::SetDelegate(DecoderDelegate* delegate) {
-  DCHECK(delegate);
+  CHECK(delegate, base::NotFatalUntil::M163);
   delegate_ = delegate;
   if (decoder_error_) {
     delegate_->OnDecoderError();
@@ -65,7 +62,7 @@ void AudioDecoderSoftwareWrapper::SetDelegate(DecoderDelegate* delegate) {
 
 MediaPipelineBackend::BufferStatus AudioDecoderSoftwareWrapper::PushBuffer(
     CastDecoderBuffer* buffer) {
-  DCHECK(buffer);
+  CHECK(buffer, base::NotFatalUntil::M163);
   if (!software_decoder_)
     return backend_decoder_->PushBuffer(buffer);
 
@@ -73,17 +70,17 @@ MediaPipelineBackend::BufferStatus AudioDecoderSoftwareWrapper::PushBuffer(
   software_decoder_->Decode(
       base::WrapRefCounted(buffer_base),
       base::BindOnce(&AudioDecoderSoftwareWrapper::OnDecodedBuffer,
-                     base::Unretained(this)));
+                     weak_factory_.GetWeakPtr()));
   return MediaPipelineBackend::kBufferPending;
 }
 
 void AudioDecoderSoftwareWrapper::GetStatistics(Statistics* statistics) {
-  DCHECK(statistics);
+  CHECK(statistics, base::NotFatalUntil::M163);
   return backend_decoder_->GetStatistics(statistics);
 }
 
 bool AudioDecoderSoftwareWrapper::SetConfig(const AudioConfig& config) {
-  DCHECK(IsValidConfig(config));
+  CHECK(IsValidConfig(config), base::NotFatalUntil::M163);
 
   if (backend_decoder_->SetConfig(config)) {
     LOG(INFO) << "Using backend decoder for " << config.codec;
@@ -92,7 +89,7 @@ bool AudioDecoderSoftwareWrapper::SetConfig(const AudioConfig& config) {
     return true;
   }
 
-  if (base::Contains(kPassthroughCodecs, config.codec)) {
+  if (std::ranges::contains(kPassthroughCodecs, config.codec)) {
     LOG(INFO) << "Cannot use software decoder for " << config.codec;
     return false;
   }
@@ -117,6 +114,15 @@ AudioDecoderSoftwareWrapper::GetRenderingDelay() {
   return backend_decoder_->GetRenderingDelay();
 }
 
+AudioDecoderSoftwareWrapper::AudioTrackTimestamp
+AudioDecoderSoftwareWrapper::GetAudioTrackTimestamp() {
+  return backend_decoder_->GetAudioTrackTimestamp();
+}
+
+int AudioDecoderSoftwareWrapper::GetStartThresholdInFrames() {
+  return backend_decoder_->GetStartThresholdInFrames();
+}
+
 bool AudioDecoderSoftwareWrapper::IsUsingSoftwareDecoder() {
   return software_decoder_.get() != nullptr;
 }
@@ -130,7 +136,7 @@ bool AudioDecoderSoftwareWrapper::CreateSoftwareDecoder(
   }
   // TODO(kmackay) Consider using planar float instead.
   software_decoder_ = media::CastAudioDecoder::Create(
-      base::ThreadTaskRunnerHandle::Get(), config,
+      base::SingleThreadTaskRunner::GetCurrentDefault(), config,
       media::CastAudioDecoder::kOutputSigned16);
   if (!software_decoder_) {
     decoder_error_ = true;
@@ -144,7 +150,7 @@ void AudioDecoderSoftwareWrapper::OnDecodedBuffer(
     CastAudioDecoder::Status status,
     const media::AudioConfig& config,
     scoped_refptr<DecoderBufferBase> decoded) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M163);
   if (status != CastAudioDecoder::kDecodeOk) {
     delegate_->OnPushBufferComplete(MediaPipelineBackend::kBufferFailed);
     return;
@@ -170,24 +176,24 @@ void AudioDecoderSoftwareWrapper::OnDecodedBuffer(
 
 void AudioDecoderSoftwareWrapper::OnPushBufferComplete(
     MediaPipelineBackend::BufferStatus status) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M163);
   delegate_->OnPushBufferComplete(status);
 }
 
 void AudioDecoderSoftwareWrapper::OnEndOfStream() {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M163);
   delegate_->OnEndOfStream();
 }
 
 void AudioDecoderSoftwareWrapper::OnDecoderError() {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M163);
   delegate_->OnDecoderError();
 }
 
 void AudioDecoderSoftwareWrapper::OnKeyStatusChanged(const std::string& key_id,
                                                      CastKeyStatus key_status,
                                                      uint32_t system_code) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M163);
   delegate_->OnKeyStatusChanged(key_id, key_status, system_code);
 }
 

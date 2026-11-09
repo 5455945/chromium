@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,46 +6,45 @@ package org.chromium.content_public.browser;
 
 import android.os.Handler;
 
-import org.chromium.base.annotations.UsedByReflection;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.build.annotations.UsedByReflection;
 import org.chromium.content.browser.AppWebMessagePort;
-import org.chromium.content.browser.AppWebMessagePortDescriptor;
 
-/**
- * Interface for message ports that handle postMessage requests.
- */
+/** Interface for message ports that handle postMessage requests. */
 @UsedByReflection("")
+@NullMarked
 public interface MessagePort {
-    /**
-     * The message callback for receiving messages.
-     */
-    public interface MessageCallback {
+    /** The message callback for receiving messages. */
+    interface MessageCallback {
         /**
          * Sent when the associated {@link MessagePort} gets a postMessage.
-         * @param message   The message that was received.
+         *
+         * @param messagePayload The message payload that was received.
          * @param sentPorts The {@link MessagePort}s that were sent if any.
+         * @param senderOrigin The ASCII-serialized origin of the message sender per RFC 6454 /
+         *     WHATWG URL (e.g., standard {@code scheme://host[:port]} without a trailing slash, or
+         *     {@code "null"} for opaque origins), or {@code null} if unknown. Represented as a
+         *     {@link String} rather than {@code org.chromium.url.Origin} to avoid object allocation
+         *     churn on high-frequency {@code postMessage} streams and to align directly with Web
+         *     IDL's {@code DOMString origin} and Custom Tabs bundle extras.
          */
-        void onMessage(String message, MessagePort[] sentPorts);
+        void onMessage(
+                MessagePayload messagePayload,
+                MessagePort @Nullable [] sentPorts,
+                @Nullable String senderOrigin);
     }
 
     /**
      * Called to create an entangled pair of ports.
+     *
      * @return An array of a pair of{@link MessagePort} instances.
      */
-    public static MessagePort[] createPair() {
+    static MessagePort[] createPair() {
         return AppWebMessagePort.createPair();
     }
 
-    /**
-     * Called to create a port from {@link AppWebMessagePortDescriptor}.
-     * @return A {@link MessagePort} instance.
-     */
-    public static MessagePort create(AppWebMessagePortDescriptor descriptor) {
-        return AppWebMessagePort.create(descriptor);
-    }
-
-    /**
-     * Close the port for use.
-     */
+    /** Close the port for use. */
     void close();
 
     /**
@@ -55,7 +54,7 @@ public interface MessagePort {
 
     /**
      * @return Whether the port has been transferred using
-     *         {@link MessagePort#postMessage(String, MessagePort[])} before.
+     *         {@link MessagePort#postMessage(MessagePayload, MessagePort[])} before.
      */
     boolean isTransferred();
 
@@ -71,12 +70,12 @@ public interface MessagePort {
      *
      * See {@link MessagePort.MessageCallback}
      */
-    void setMessageCallback(MessageCallback messageCallback, Handler handler);
+    void setMessageCallback(MessageCallback messageCallback, @Nullable Handler handler);
 
     /**
      * Send a postMessage request through this port to its designated receiving end.
-     * @param message   The message to be sent.
+     * @param messagePayload   The message payload to be sent.
      * @param sentPorts The ports to be transferred.
      */
-    void postMessage(String message, MessagePort[] sentPorts);
+    void postMessage(MessagePayload messagePayload, MessagePort @Nullable [] sentPorts);
 }

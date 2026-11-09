@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#import "base/memory/raw_ptr.h"
+#include "base/observer_list_types.h"
 #include "ui/base/page_transition_types.h"
-#include "url/gurl.h"
 
 namespace web {
 
@@ -18,7 +18,7 @@ class WebState;
 class FakeWebState;
 
 // Decides the navigation policy for a web state.
-class WebStatePolicyDecider {
+class WebStatePolicyDecider : public base::CheckedObserver {
  public:
   // Specifies a navigation decision. Used as a return value by
   // WebStatePolicyDecider::ShouldAllowRequest(), and used by
@@ -31,8 +31,8 @@ class WebStatePolicyDecider {
     // A policy decision which cancels the navigation.
     static PolicyDecision Cancel();
 
-    // A policy decision which cancels the navigation and displays |error|.
-    // NOTE: The |error| will only be displayed if the associated navigation is
+    // A policy decision which cancels the navigation and displays `error`.
+    // NOTE: The `error` will only be displayed if the associated navigation is
     // being loaded in the main frame.
     static PolicyDecision CancelAndDisplayError(NSError* error);
 
@@ -43,13 +43,13 @@ class WebStatePolicyDecider {
     bool ShouldCancelNavigation() const;
 
     // Whether or not an error should be displayed. Always returns false if
-    // |ShouldAllowNavigation| is true.
+    // `ShouldAllowNavigation` is true.
     // NOTE: Will return true when the receiver is created with
-    // |CancelAndDisplayError| even though an error will only end up being
+    // `CancelAndDisplayError` even though an error will only end up being
     // displayed if the associated navigation is occurring in the main frame.
     bool ShouldDisplayError() const;
 
-    // The error to display when |ShouldDisplayError| is true.
+    // The error to display when `ShouldDisplayError` is true.
     NSError* GetDisplayError() const;
 
    private:
@@ -72,7 +72,7 @@ class WebStatePolicyDecider {
     Decision decision = Decision::kAllow;
 
     // An error associated with the navigation. This error will be displayed if
-    // |decision| is |kCancelAndDisplayError|.
+    // `decision` is `kCancelAndDisplayError`.
     NSError* error = nil;
   };
 
@@ -85,11 +85,15 @@ class WebStatePolicyDecider {
     RequestInfo(ui::PageTransition transition_type,
                 bool target_frame_is_main,
                 bool target_frame_is_cross_origin,
-                bool has_user_gesture)
+                bool target_window_is_cross_origin,
+                bool is_user_initiated,
+                bool user_tapped_recently)
         : transition_type(transition_type),
           target_frame_is_main(target_frame_is_main),
           target_frame_is_cross_origin(target_frame_is_cross_origin),
-          has_user_gesture(has_user_gesture) {}
+          target_window_is_cross_origin(target_window_is_cross_origin),
+          is_user_initiated(is_user_initiated),
+          user_tapped_recently(user_tapped_recently) {}
     // The navigation page transition type.
     ui::PageTransition transition_type =
         ui::PageTransition::PAGE_TRANSITION_FIRST;
@@ -98,42 +102,51 @@ class WebStatePolicyDecider {
     // Indicates whether the navigation target frame is cross-origin with
     // respect to the the navigation source frame.
     bool target_frame_is_cross_origin = false;
-    // Indicates if there was a recent user interaction with the request frame.
-    bool has_user_gesture = false;
+    // Indicates whether the navigation target frame is in another window and is
+    // cross-origin with respect to the the navigation source frame.
+    bool target_window_is_cross_origin = false;
+    // Indicates if the request is user initiated (to the best of our
+    // knowledge).
+    bool is_user_initiated = false;
+    // Indicates if there was a recent user interaction with the web view (not
+    // necessarily on the page).
+    bool user_tapped_recently = false;
   };
 
-  // Removes self as a policy decider of |web_state_|.
-  virtual ~WebStatePolicyDecider();
+  // Data Transfer Object for the additional information about response
+  // request passed to WebStatePolicyDecider::ShouldAllowResponse().
+  struct ResponseInfo {
+    explicit ResponseInfo(bool for_main_frame)
+        : for_main_frame(for_main_frame) {}
+    // Indicates whether the response target frame is the main frame.
+    bool for_main_frame = false;
+  };
 
-  // Asks the decider whether the navigation corresponding to |request| should
+  WebStatePolicyDecider(const WebStatePolicyDecider&) = delete;
+  WebStatePolicyDecider& operator=(const WebStatePolicyDecider&) = delete;
+
+  // Removes self as a policy decider of `web_state_`.
+  ~WebStatePolicyDecider() override;
+
+  // Asks the decider whether the navigation corresponding to `request` should
   // be allowed to continue. Defaults to PolicyDecision::Allow() if not
   // overridden. Called before WebStateObserver::DidStartNavigation. Calls
-  // |callback| with the decision. Never called in the following cases:
+  // `callback` with the decision. Never called in the following cases:
   //  - same-document back-forward and state change navigations
   virtual void ShouldAllowRequest(NSURLRequest* request,
-                                  const RequestInfo& request_info,
+                                  RequestInfo request_info,
                                   PolicyDecisionCallback callback);
 
-  // Asks the decider whether the navigation corresponding to |response| should
-  // be allowed to display an error page if an error occurs. Defaults to
-  // true if not overridden. This can be used to suppress error pages in certain
-  // cases such as attempting to upgrade an omnibox navigation to HTTPS. In that
-  // scenario, failed upgrade attempts (e.g. due to SSL or DNS resolution
-  // errors) should immediately fall back to HTTP without showing an error page.
-  virtual bool ShouldAllowErrorPageToBeDisplayed(NSURLResponse* response,
-                                                 bool for_main_frame);
-
-  // Asks the decider whether the navigation corresponding to |response| should
+  // Asks the decider whether the navigation corresponding to `response` should
   // be allowed to continue. Defaults to PolicyDecision::Allow() if not
-  // overridden. |for_main_frame| indicates whether the frame being navigated is
-  // the main frame. Called before WebStateObserver::DidFinishNavigation. Calls
-  // |callback| with the decision.
+  // overridden. Called before WebStateObserver::DidFinishNavigation. Calls
+  // `callback` with the decision.
   // Never called in the following cases:
-  //  - same-document navigations (unless ititiated via LoadURLWithParams)
+  //  - same-document navigations (unless initiated via LoadURLWithParams)
   //  - going back after form submission navigation
   //  - user-initiated POST navigation on iOS 10
   virtual void ShouldAllowResponse(NSURLResponse* response,
-                                   bool for_main_frame,
+                                   ResponseInfo response_info,
                                    PolicyDecisionCallback callback);
 
   // Notifies the policy decider that the web state is being destroyed.
@@ -145,20 +158,19 @@ class WebStatePolicyDecider {
   WebState* web_state() const { return web_state_; }
 
  protected:
-  // Designated constructor. Subscribes to |web_state|.
+  // Designated constructor. Subscribes to `web_state`.
   explicit WebStatePolicyDecider(WebState* web_state);
 
  private:
-  friend class WebStateImpl;
+  friend class ContentWebState;
   friend class FakeWebState;
+  friend class WebStateImpl;
 
   // Resets the current web state.
   void ResetWebState();
 
   // The web state to decide navigation policy for.
-  WebState* web_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebStatePolicyDecider);
+  raw_ptr<WebState> web_state_;
 };
 }  // namespace web
 

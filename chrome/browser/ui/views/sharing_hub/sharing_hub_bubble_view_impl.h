@@ -1,21 +1,16 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_SHARING_HUB_SHARING_HUB_BUBBLE_VIEW_IMPL_H_
 #define CHROME_BROWSER_UI_VIEWS_SHARING_HUB_SHARING_HUB_BUBBLE_VIEW_IMPL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/share/share_attempt.h"
 #include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
-
-namespace gfx {
-class Canvas;
-}  // namespace gfx
-
-namespace content {
-class WebContents;
-}  // namespace content
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace sharing_hub {
 
@@ -24,34 +19,28 @@ class SharingHubBubbleActionButton;
 struct SharingHubAction;
 
 // View component of the Sharing Hub bubble that allows users to share/save the
-// current page.
+// current page. The sharing hub bubble also optionally contains a preview of
+// the content being shared.
 class SharingHubBubbleViewImpl : public SharingHubBubbleView,
                                  public LocationBarBubbleDelegateView {
+  METADATA_HEADER(SharingHubBubbleViewImpl, LocationBarBubbleDelegateView)
+
  public:
-  // Bubble will be anchored to |anchor_view|.
-  SharingHubBubbleViewImpl(views::View* anchor_view,
-                           content::WebContents* web_contents,
+  // Bubble will be anchored to `anchor`.
+  SharingHubBubbleViewImpl(views::BubbleAnchor anchor,
+                           share::ShareAttempt attempt,
                            SharingHubBubbleController* controller);
+
+  SharingHubBubbleViewImpl(const SharingHubBubbleViewImpl&) = delete;
+  SharingHubBubbleViewImpl& operator=(const SharingHubBubbleViewImpl&) = delete;
 
   ~SharingHubBubbleViewImpl() override;
 
   // SharingHubBubbleView:
   void Hide() override;
 
-  // views::WidgetDelegateView:
-  bool ShouldShowCloseButton() const override;
-  bool ShouldShowWindowTitle() const override;
-  void WindowClosing() override;
-
-  // LocationBarBubbleDelegateView:
-  void OnPaint(gfx::Canvas* canvas) override;
-
-  // Shows the bubble view.
-  void Show(DisplayReason reason);
-
+  // Public for testing.
   void OnActionSelected(SharingHubBubbleActionButton* button);
-
-  const views::View* GetButtonContainerForTesting() const;
 
  private:
   // views::BubbleDialogDelegateView:
@@ -62,23 +51,25 @@ class SharingHubBubbleViewImpl : public SharingHubBubbleView,
 
   // Populates the scroll view containing sharing actions.
   void PopulateScrollView(
-      const std::vector<SharingHubAction>& first_party_actions,
-      const std::vector<SharingHubAction>& third_party_actions);
+      const std::vector<SharingHubAction>& first_party_actions);
 
-  // Resizes and potentially moves the bubble to fit the content's preferred
-  // size.
-  void MaybeSizeToContents();
+  // Callback when the window is about to close, either from external causes
+  // (parent window closed) or because the web contents requested it.
+  void OnWindowClosing();
 
-  // A raw pointer is safe since our controller will outlive us (the bubble is
-  // lazily created with the controller).
-  SharingHubBubbleController* controller_;
+  // A raw pointer is *not* safe here; the controller can be torn down before
+  // the bubble during the window close path, since the bubble will be closed
+  // asynchronously during browser window teardown but the controller will be
+  // destroyed synchronously.
+  base::WeakPtr<SharingHubBubbleController> controller_;
 
   // ScrollView containing the list of share/save actions.
-  views::ScrollView* scroll_view_ = nullptr;
+  raw_ptr<views::ScrollView> scroll_view_ = nullptr;
+
+  // The share attempt this bubble was opened for.
+  const share::ShareAttempt attempt_;
 
   base::WeakPtrFactory<SharingHubBubbleViewImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SharingHubBubbleViewImpl);
 };
 
 }  // namespace sharing_hub

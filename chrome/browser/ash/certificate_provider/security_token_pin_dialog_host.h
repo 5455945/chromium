@@ -1,18 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_SECURITY_TOKEN_PIN_DIALOG_HOST_H_
 #define CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_SECURITY_TOKEN_PIN_DIALOG_HOST_H_
 
+#include <optional>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "chromeos/components/security_token_pin/constants.h"
 #include "components/account_id/account_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace ash {
+namespace chromeos {
 
 // The interface that allows showing a PIN dialog requested by a certificate
 // provider extension (see the chrome.certificateProvider API).
@@ -57,7 +57,7 @@ class SecurityTokenPinDialogHost {
       bool enable_user_input,
       security_token_pin::ErrorLabel error_label,
       int attempts_left,
-      const absl::optional<AccountId>& authenticating_user_account_id,
+      const std::optional<AccountId>& authenticating_user_account_id,
       SecurityTokenPinEnteredCallback pin_entered_callback,
       SecurityTokenPinDialogClosedCallback pin_dialog_closed_callback) = 0;
 
@@ -66,12 +66,6 @@ class SecurityTokenPinDialogHost {
   virtual void CloseSecurityTokenPinDialog() = 0;
 };
 
-}  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-using ::ash::SecurityTokenPinDialogHost;
-}
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_SECURITY_TOKEN_PIN_DIALOG_HOST_H_

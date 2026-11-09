@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
+#include "extensions/common/extension_id.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/origin.h"
 
@@ -31,8 +32,7 @@ class TabUsageScenarioTrackerBrowserTest;
 //
 // The interval's length needs to be enforced by the owner of this class, it
 // should call ResetIntervalData regularly to get the usage data and reset it.
-class UsageScenarioDataStore
-    : public base::SupportsWeakPtr<UsageScenarioDataStore> {
+class UsageScenarioDataStore {
  public:
   UsageScenarioDataStore();
   UsageScenarioDataStore(const UsageScenarioDataStore& rhs) = delete;
@@ -42,7 +42,8 @@ class UsageScenarioDataStore
   // Used to store data between 2 calls to ResetIntervalData.
   struct IntervalData {
     IntervalData();
-    IntervalData(const IntervalData& rhs);
+    IntervalData(const IntervalData&);
+    IntervalData& operator=(const IntervalData&);
 
     // The uptime at the end of the interval.
     base::TimeDelta uptime_at_interval_end;
@@ -60,7 +61,7 @@ class UsageScenarioDataStore
     base::TimeDelta time_playing_video_full_screen_single_monitor;
     // The time spent with at least one opened WebRTC connection.
     base::TimeDelta time_with_open_webrtc_connection;
-    // The time spent with at least one tab capturing video.
+    // The time spent with at least one WebContents capturing video.
     base::TimeDelta time_capturing_video;
     // The time spent playing video in at least one visible tab.
     base::TimeDelta time_playing_video_in_visible_tab;
@@ -92,6 +93,12 @@ class UsageScenarioDataStore
     // |source_id_for_longest_visible_origin_duration| if there's multiple tabs
     // for the longest visible origin visible during the interval.
     base::TimeDelta longest_visible_origin_duration;
+
+    // The number of times the system has been put to sleep during the interval.
+    uint8_t sleep_events = 0;
+
+    // The number of extensions that ran content scripts during the interval.
+    size_t num_extensions_with_content_scripts = 0;
   };
 
   // Reset the interval data with the current state information and returns the
@@ -137,6 +144,7 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   void OnIsCapturingVideoEnded();
   void OnAudioStarts();
   void OnAudioStops();
+  void OnSleepEvent();
 
   // Should be called when a video starts in a visible tab or when a non visible
   // tab playing video becomes visible.
@@ -146,14 +154,12 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   // tab playing video becomes non visible.
   void OnVideoStopsInVisibleTab();
 
-  void OnUkmSourceBecameVisible(const ukm::SourceId& source,
-                                const url::Origin& origin);
+  void OnUkmSourceBecameVisible(
+      const ukm::SourceId& source,
+      const url::Origin& origin,
+      extensions::ExtensionIdSet extensions_with_content_scripts);
   void OnUkmSourceBecameHidden(const ukm::SourceId& source,
                                const url::Origin& origin);
-
-  base::TimeTicks is_playing_full_screen_video_single_monitor_since() {
-    return is_playing_full_screen_video_single_monitor_since_;
-  }
 
   const IntervalData& GetIntervalDataForTesting() { return interval_data_; }
 
@@ -163,6 +169,9 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   }
 
   base::flat_set<ukm::SourceId> GetVisibleSourceIdsForTesting();
+
+  bool TrackingPlayingVideoInActiveTabForTesting() const;
+  bool TrackingPlayingFullScreenVideoSingleMonitorForTesting() const;
 
  private:
   friend class metrics::TabUsageScenarioTrackerBrowserTest;
@@ -187,7 +196,7 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   void FinalizeIntervalData(base::TimeTicks now);
 
   // The clock used by this class.
-  const base::TickClock* tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   // The current tab count.
   uint16_t current_tab_count_ = 0;
@@ -208,12 +217,13 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   // ends (when ResetIntervalData is called).
   base::TimeTicks has_opened_webrtc_connection_since_;
 
-  // The number of tabs capturing video (e.g. webcam).
-  uint16_t tabs_capturing_video_ = 0;
+  // The number of WebContents capturing video (e.g. webcam). Usually a tab, but
+  // some exceptions exist (e.g. OOBE WebUI on ChromeOS).
+  uint16_t web_contents_capturing_video_ = 0;
 
   // The timestamp of the beginning of a video capture session that has caused
-  // |tabs_capturing_video_| to increase to 1. Reset to |now| when an internal
-  // ends (when ResetIntervalData is called).
+  // |web_contents_capturing_video_| to increase to 1. Reset to |now| when an
+  // internal ends (when ResetIntervalData is called).
   base::TimeTicks capturing_video_since_;
 
   // The number of tabs playing audio.
@@ -240,6 +250,9 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
 
   // Information about the origins that have been visible during the interval.
   OriginInfoMap origin_info_map_;
+
+  // Extensions that ran content scripts on visible origins during the interval.
+  extensions::ExtensionIdSet extensions_with_content_scripts_;
 
   IntervalData interval_data_;
 

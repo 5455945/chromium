@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/sqlite_proto/table_manager.h"
 #include "url/gurl.h"
 
@@ -38,7 +38,7 @@ class AutocompleteActionPredictorTable : public sqlite_proto::TableManager {
     // TODO(dominich): Make this 64-bit integer as an optimization. This
     // requires some investigation into how to make sure the id is unique for
     // each user_text/url pair.
-    // http://crbug.com/102020
+    // http://crbug.com/40105662
     typedef std::string Id;
 
     Row();
@@ -61,6 +61,11 @@ class AutocompleteActionPredictorTable : public sqlite_proto::TableManager {
 
   typedef std::vector<Row> Rows;
 
+  AutocompleteActionPredictorTable(const AutocompleteActionPredictorTable&) =
+      delete;
+  AutocompleteActionPredictorTable& operator=(
+      const AutocompleteActionPredictorTable&) = delete;
+
   // DB sequence functions.
   void GetRow(const Row::Id& id, Row* row);
   void GetAllRows(Rows* row_buffer);
@@ -78,10 +83,8 @@ class AutocompleteActionPredictorTable : public sqlite_proto::TableManager {
   ~AutocompleteActionPredictorTable() override;
 
   // TableManager methods (DB sequence).
-  void CreateTablesIfNonExistent() override;
+  void CreateOrClearTablesIfNecessary() override;
   void LogDatabaseStats() override;
-
-  DISALLOW_COPY_AND_ASSIGN(AutocompleteActionPredictorTable);
 };
 
 }  // namespace predictors

@@ -1,22 +1,34 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/services/mojo_cdm_helper.h"
 
-#include "base/containers/cxx20_erase.h"
-#include "base/macros.h"
+#include <tuple>
+
+#include "base/logging.h"
+#include "build/build_config.h"
 #include "media/base/cdm_context.h"
 #include "media/cdm/cdm_helpers.h"
 #include "media/mojo/services/mojo_cdm_allocator.h"
 #include "media/mojo/services/mojo_cdm_file_io.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/metrics/public/cpp/mojo_ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace media {
 
 MojoCdmHelper::MojoCdmHelper(mojom::FrameInterfaceFactory* frame_interfaces)
-    : frame_interfaces_(frame_interfaces) {}
+    : frame_interfaces_(frame_interfaces) {
+  // Retrieve the Ukm recording objects in the constructor of MojoCdmHelper
+  // because the connection to the renderer frame host might be disconnected at
+  // any time and we record the Ukm in the destructor of CdmAdapter, so we
+  // should store the objects as early as possible.
+  RetrieveUkmRecordingObjects();
+}
 
 MojoCdmHelper::~MojoCdmHelper() = default;
 
@@ -43,18 +55,29 @@ cdm::FileIO* MojoCdmHelper::CreateCdmFileIO(cdm::FileIOClient* client) {
 url::Origin MojoCdmHelper::GetCdmOrigin() {
   url::Origin cdm_origin;
   // Since the CDM is created asynchronously, by the time this function is
-  // called, the render frame host in the browser process may already be gone.
+  // called, the RenderFrameHost in the browser process may already be gone.
   // It's safe to ignore the error since the origin is used for crash reporting.
-  ignore_result(frame_interfaces_->GetCdmOrigin(&cdm_origin));
+  std::ignore = frame_interfaces_->GetCdmOrigin(&cdm_origin);
   return cdm_origin;
 }
 
-#if defined(OS_WIN)
-void MojoCdmHelper::GetCdmOriginId(GetCdmOriginIdCB callback) {
+#if BUILDFLAG(IS_WIN)
+void MojoCdmHelper::GetMediaFoundationCdmData(
+    GetMediaFoundationCdmDataCB callback) {
   ConnectToCdmDocumentService();
-  cdm_document_service_->GetCdmOriginId(std::move(callback));
+  cdm_document_service_->GetMediaFoundationCdmData(std::move(callback));
 }
-#endif  // defined(OS_WIN)
+
+void MojoCdmHelper::OnCdmEvent(CdmEvent event, HRESULT hresult) {
+  ConnectToCdmDocumentService();
+  cdm_document_service_->OnCdmEvent(event, hresult);
+}
+
+void MojoCdmHelper::GetContentProtectionWindow(
+    GetContentProtectionWindowCB callback) {
+  frame_interfaces_->GetContentProtectionWindow(std::move(callback));
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 cdm::Buffer* MojoCdmHelper::CreateCdmBuffer(size_t capacity) {
   return GetAllocator()->CreateCdmBuffer(capacity);
@@ -80,6 +103,7 @@ void MojoCdmHelper::EnableProtection(uint32_t desired_protection_mask,
                                        std::move(scoped_callback));
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 void MojoCdmHelper::ChallengePlatform(const std::string& service_id,
                                       const std::string& challenge,
                                       ChallengePlatformCB callback) {
@@ -90,17 +114,20 @@ void MojoCdmHelper::ChallengePlatform(const std::string& service_id,
   cdm_document_service_->ChallengePlatform(service_id, challenge,
                                            std::move(scoped_callback));
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 void MojoCdmHelper::GetStorageId(uint32_t version, StorageIdCB callback) {
   StorageIdCB scoped_callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
       std::move(callback), version, std::vector<uint8_t>());
   ConnectToCdmDocumentService();
   cdm_document_service_->GetStorageId(version, std::move(scoped_callback));
 }
+#endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 
 void MojoCdmHelper::CloseCdmFileIO(MojoCdmFileIO* cdm_file_io) {
   DVLOG(3) << __func__ << ": cdm_file_io = " << cdm_file_io;
-  base::EraseIf(cdm_file_io_set_,
+  std::erase_if(cdm_file_io_set_,
                 [cdm_file_io](const std::unique_ptr<MojoCdmFileIO>& ptr) {
                   return ptr.get() == cdm_file_io;
                 });
@@ -110,6 +137,85 @@ void MojoCdmHelper::ReportFileReadSize(int file_size_bytes) {
   DVLOG(3) << __func__ << ": file_size_bytes = " << file_size_bytes;
   if (file_read_cb_)
     file_read_cb_.Run(file_size_bytes);
+}
+
+void MojoCdmHelper::RecordUkm(const CdmMetricsData& cdm_metrics_data) {
+  ukm::SourceId source_id = ukm::ConvertToSourceId(ukm::AssignNewSourceId(),
+                                                   ukm::SourceIdType::CDM_ID);
+  ukm_recorder_->UpdateSourceURL(source_id,
+                                 cdm_metrics_data.cdm_origin.GetURL());
+
+  auto ukm_builder = ukm::builders::Media_EME_CdmMetrics(source_id);
+
+  if (cdm_metrics_data.license_sdk_version.has_value()) {
+    ukm_builder.SetLicenseSdkVersion(
+        cdm_metrics_data.license_sdk_version.value());
+  }
+
+  ukm_builder.SetNumberOfUpdateCalls(cdm_metrics_data.number_of_update_calls);
+
+  ukm_builder.SetNumberOfOnMessageEvents(
+      cdm_metrics_data.number_of_on_message_events);
+
+  if (cdm_metrics_data.certificate_serial_number.has_value()) {
+    ukm_builder.SetCertificateSerialNumber(
+        cdm_metrics_data.certificate_serial_number.value());
+  }
+
+  if (cdm_metrics_data.decoder_bypass_block_count.has_value()) {
+    ukm_builder.SetDecoderBypassBlockCount(
+        cdm_metrics_data.decoder_bypass_block_count.value());
+  }
+
+  if (cdm_metrics_data.decoder_check1_success_count.has_value()) {
+    ukm_builder.SetDecoderCheck1SuccessCount(
+        cdm_metrics_data.decoder_check1_success_count.value());
+  }
+
+  if (cdm_metrics_data.decoder_check1_warning_count.has_value()) {
+    ukm_builder.SetDecoderCheck1WarningCount(
+        cdm_metrics_data.decoder_check1_warning_count.value());
+  }
+
+  if (cdm_metrics_data.decoder_check1_error_count.has_value()) {
+    ukm_builder.SetDecoderCheck1ErrorCount(
+        cdm_metrics_data.decoder_check1_error_count.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_time1.has_value()) {
+    ukm_builder.SetKeySystemDataTime1(
+        cdm_metrics_data.key_system_data_time1.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_time2.has_value()) {
+    ukm_builder.SetKeySystemDataTime2(
+        cdm_metrics_data.key_system_data_time2.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_time3.has_value()) {
+    ukm_builder.SetKeySystemDataTime3(
+        cdm_metrics_data.key_system_data_time3.value());
+  }
+
+  if (cdm_metrics_data.key_system_data_bool1.has_value()) {
+    ukm_builder.SetKeySystemDataBool1(
+        cdm_metrics_data.key_system_data_bool1.value());
+  }
+
+  if (cdm_metrics_data.session_init_data_type.has_value()) {
+    ukm_builder.SetSessionInitDataType(
+        cdm_metrics_data.session_init_data_type.value());
+  }
+
+  ukm_builder.SetNumberOfVideoFrames(cdm_metrics_data.video_frames_processed);
+
+  ukm_builder.Record(ukm_recorder_.get());
+}
+
+void MojoCdmHelper::RetrieveUkmRecordingObjects() {
+  ConnectToUkmRecorderFactory();
+
+  ukm_recorder_ = ukm::MojoUkmRecorder::Create(*ukm_recorder_factory_);
 }
 
 void MojoCdmHelper::ConnectToOutputProtection() {
@@ -127,6 +233,16 @@ void MojoCdmHelper::ConnectToCdmDocumentService() {
     DVLOG(2) << "Connect to mojom::CdmDocumentService";
     frame_interfaces_->BindEmbedderReceiver(
         cdm_document_service_.BindNewPipeAndPassReceiver());
+    // No reset_on_disconnect() since MediaInterfaceProxy should be destroyed
+    // when document is destroyed, which will destroy MojoCdmHelper as well.
+  }
+}
+
+void MojoCdmHelper::ConnectToUkmRecorderFactory() {
+  if (!ukm_recorder_factory_) {
+    DVLOG(2) << "Connect to ukm::mojom::UkmRecorderFactory";
+    frame_interfaces_->BindEmbedderReceiver(
+        ukm_recorder_factory_.BindNewPipeAndPassReceiver());
     // No reset_on_disconnect() since MediaInterfaceProxy should be destroyed
     // when document is destroyed, which will destroy MojoCdmHelper as well.
   }

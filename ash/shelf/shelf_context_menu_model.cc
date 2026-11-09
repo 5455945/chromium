@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,11 @@
 
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/app_list/app_list_metrics.h"
+#include "ash/app_list/app_list_model_provider.h"
+#include "ash/app_list/model/app_list_model.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/app_menu_constants.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/public/cpp/new_window_delegate.h"
 #include "ash/public/cpp/shelf_item_delegate.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_prefs.h"
@@ -19,13 +22,14 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller_impl.h"
+#include "ash/shelf/shelf_metrics.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/wallpaper/wallpaper_controller_impl.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/numerics/safe_conversions.h"
 #include "components/prefs/pref_service.h"
+#include "components/vector_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
 
 namespace ash {
@@ -48,8 +52,12 @@ bool IsFullScreenMode(int64_t display_id) {
 }  // namespace
 
 ShelfContextMenuModel::ShelfContextMenuModel(ShelfItemDelegate* delegate,
-                                             int64_t display_id)
-    : ui::SimpleMenuModel(this), delegate_(delegate), display_id_(display_id) {
+                                             int64_t display_id,
+                                             bool menu_in_shelf)
+    : ui::SimpleMenuModel(this),
+      delegate_(delegate),
+      display_id_(display_id),
+      menu_in_shelf_(menu_in_shelf) {
   // Add shelf and wallpaper items if ShelfView or HomeButton are selected.
   if (!delegate)
     AddShelfAndWallpaperItems();
@@ -85,9 +93,8 @@ void ShelfContextMenuModel::ExecuteCommand(int command_id, int event_flags) {
   if (!prefs)  // Null during startup.
     return;
 
-  UserMetricsRecorder* metrics = shell->metrics();
   // Clamshell mode only options should not activate in tablet mode.
-  const bool is_tablet_mode = shell->tablet_mode_controller()->InTabletMode();
+  const bool is_tablet_mode = display::Screen::Get()->InTabletMode();
   switch (command_id) {
     case MENU_AUTO_HIDE:
       SetShelfAutoHideBehaviorPref(
@@ -99,21 +106,51 @@ void ShelfContextMenuModel::ExecuteCommand(int command_id, int event_flags) {
       break;
     case MENU_ALIGNMENT_LEFT:
       DCHECK(!is_tablet_mode);
-      metrics->RecordUserMetricsAction(UMA_SHELF_ALIGNMENT_SET_LEFT);
+      base::RecordAction(base::UserMetricsAction("Shelf_AlignmentSetLeft"));
       SetShelfAlignmentPref(prefs, display_id_, ShelfAlignment::kLeft);
       break;
     case MENU_ALIGNMENT_RIGHT:
       DCHECK(!is_tablet_mode);
-      metrics->RecordUserMetricsAction(UMA_SHELF_ALIGNMENT_SET_RIGHT);
+      base::RecordAction(base::UserMetricsAction("Shelf_AlignmentSetRight"));
       SetShelfAlignmentPref(prefs, display_id_, ShelfAlignment::kRight);
       break;
     case MENU_ALIGNMENT_BOTTOM:
       DCHECK(!is_tablet_mode);
-      metrics->RecordUserMetricsAction(UMA_SHELF_ALIGNMENT_SET_BOTTOM);
+      base::RecordAction(base::UserMetricsAction("Shelf_AlignmentSetBottom"));
       SetShelfAlignmentPref(prefs, display_id_, ShelfAlignment::kBottom);
       break;
-    case MENU_CHANGE_WALLPAPER:
-      shell->wallpaper_controller()->OpenWallpaperPickerIfAllowed();
+    case MENU_PERSONALIZATION_HUB:
+      NewWindowDelegate::GetInstance()->OpenPersonalizationHub();
+      break;
+    case MENU_HIDE_CONTINUE_SECTION:
+      DCHECK(is_tablet_mode);
+      shell->app_list_controller()->SetHideContinueSection(true);
+      break;
+    case MENU_SHOW_CONTINUE_SECTION:
+      DCHECK(is_tablet_mode);
+      shell->app_list_controller()->SetHideContinueSection(false);
+      break;
+    case MENU_HIDE_DESK_NAME:
+      base::UmaHistogramBoolean(kDeskButtonHiddenHistogramName, true);
+      SetShowDeskButtonInShelfPref(prefs, false);
+      break;
+    case MENU_SHOW_DESK_NAME:
+      SetShowDeskButtonInShelfPref(prefs, true);
+      break;
+    case MENU_TASK_MANAGER:
+      base::RecordAction(
+          base::UserMetricsAction("Shelf_ContextMenu_Task_Manager"));
+      NewWindowDelegate::GetInstance()->ShowTaskManager(
+          /*from_context_menu=*/true);
+      break;
+    // Using reorder CommandId in ash/public/cpp/app_menu_constants.h
+    case REORDER_BY_NAME_ALPHABETICAL:
+      AppListModelProvider::Get()->model()->delegate()->RequestAppListSort(
+          AppListSortOrder::kNameAlphabetical);
+      break;
+    case REORDER_BY_COLOR:
+      AppListModelProvider::Get()->model()->delegate()->RequestAppListSort(
+          AppListSortOrder::kColor);
       break;
     default:
       if (delegate_) {
@@ -136,7 +173,8 @@ void ShelfContextMenuModel::AddShelfAndWallpaperItems() {
   // In fullscreen, the shelf is either hidden or auto-hidden, depending on the
   // type of fullscreen. Do not show the auto-hide menu item while in fullscreen
   // because it is confusing when the preference appears not to apply.
-  if (CanUserModifyShelfAutoHide(prefs) && !IsFullScreenMode(display_id_)) {
+  const bool is_fullscreen = IsFullScreenMode(display_id_);
+  if (CanUserModifyShelfAutoHide(prefs) && !is_fullscreen) {
     const bool is_autohide_set =
         GetShelfAutoHideBehaviorPref(prefs, display_id_) ==
         ShelfAutoHideBehavior::kAlways;
@@ -145,16 +183,18 @@ void ShelfContextMenuModel::AddShelfAndWallpaperItems() {
                          : IDS_ASH_SHELF_CONTEXT_MENU_AUTO_HIDE;
     AddItemWithStringIdAndIcon(
         MENU_AUTO_HIDE, string_id,
-        ui::ImageModel::FromVectorIcon(is_autohide_set ? kAlwaysShowShelfIcon
-                                                       : kAutoHideIcon));
+        ui::ImageModel::FromVectorIcon(
+            is_autohide_set ? kAlwaysShowShelfIcon : kAutoHideIcon,
+            ui::kColorAshSystemUIMenuIcon));
   }
 
   // Only allow shelf alignment modifications by the logged in Gaia users
   // (regular or Family Link user). In tablet mode, the shelf alignment option
   // is not shown.
   LoginStatus status = Shell::Get()->session_controller()->login_status();
+  const bool in_tablet_mode = display::Screen::Get()->InTabletMode();
   if ((status == LoginStatus::USER || status == LoginStatus::CHILD) &&
-      !Shell::Get()->tablet_mode_controller()->InTabletMode() &&
+      !in_tablet_mode &&
       prefs->FindPreference(prefs::kShelfAlignmentLocal)->IsUserModifiable()) {
     alignment_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
 
@@ -169,14 +209,38 @@ void ShelfContextMenuModel::AddShelfAndWallpaperItems() {
     AddSubMenuWithStringIdAndIcon(
         MENU_ALIGNMENT_MENU, IDS_ASH_SHELF_CONTEXT_MENU_POSITION,
         alignment_submenu_.get(),
-        ui::ImageModel::FromVectorIcon(kShelfPositionIcon));
+        ui::ImageModel::FromVectorIcon(kShelfPositionIcon,
+                                       ui::kColorAshSystemUIMenuIcon));
   }
 
-  if (Shell::Get()->wallpaper_controller()->CanOpenWallpaperPicker()) {
-    AddItemWithStringIdAndIcon(MENU_CHANGE_WALLPAPER,
-                               IDS_AURA_SET_DESKTOP_WALLPAPER,
-                               ui::ImageModel::FromVectorIcon(kWallpaperIcon));
+  AddItemWithStringIdAndIcon(
+      MENU_PERSONALIZATION_HUB, IDS_AURA_OPEN_PERSONALIZATION_HUB,
+      ui::ImageModel::FromVectorIcon(kPaintBrushIcon,
+                                     ui::kColorAshSystemUIMenuIcon));
+
+  // Only add the desk button items if the context menu was spawned on the
+  // shelf, tablet mode is not enabled, and full screen is not enabled.
+  if (!in_tablet_mode && menu_in_shelf_ && !is_fullscreen) {
+    // If the button is visible for any reason, show the option to hide it
+    // manually. If it isn't visible show the option to show it.
+    if (GetDeskButtonVisibility(prefs)) {
+      AddItemWithStringIdAndIcon(
+          MENU_HIDE_DESK_NAME, IDS_ASH_SHELF_CONTEXT_MENU_HIDE_DESK_NAME,
+          ui::ImageModel::FromVectorIcon(kDeskButtonVisibilityOffIcon,
+                                         ui::kColorAshSystemUIMenuIcon));
+    } else {
+      AddItemWithStringIdAndIcon(
+          MENU_SHOW_DESK_NAME, IDS_ASH_SHELF_CONTEXT_MENU_SHOW_DESK_NAME,
+          ui::ImageModel::FromVectorIcon(kDeskButtonVisibilityOnIcon,
+                                         ui::kColorAshSystemUIMenuIcon));
+    }
   }
+
+  AddItemWithStringIdAndIcon(
+      MENU_TASK_MANAGER, IDS_ASH_SHELF_CONTEXT_MENU_TASK_MANAGER,
+      ui::ImageModel::FromVectorIcon(vector_icons::kTableChartIcon,
+                                     ui::kColorAshSystemUIMenuIcon,
+                                     kAppContextMenuIconSize));
 }
 
 }  // namespace ash

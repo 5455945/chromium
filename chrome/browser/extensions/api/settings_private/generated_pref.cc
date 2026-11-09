@@ -1,10 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/settings_private/generated_pref.h"
 
+#include "base/observer_list.h"
 #include "chrome/common/extensions/api/settings_private.h"
+#include "components/content_settings/core/common/content_settings.h"
 
 namespace settings_api = extensions::api::settings_private;
 
@@ -26,8 +28,9 @@ void GeneratedPref::RemoveObserver(Observer* observer) {
 }
 
 void GeneratedPref::NotifyObservers(const std::string& pref_name) {
-  for (Observer& observer : observers_)
+  for (Observer& observer : observers_) {
     observer.OnGeneratedPrefChanged(pref_name);
+  }
 }
 
 /* static */
@@ -35,20 +38,17 @@ void GeneratedPref::ApplyControlledByFromPref(
     api::settings_private::PrefObject* pref_object,
     const PrefService::Preference* pref) {
   if (pref->IsManaged()) {
-    pref_object->controlled_by =
-        settings_api::ControlledBy::CONTROLLED_BY_DEVICE_POLICY;
+    pref_object->controlled_by = settings_api::ControlledBy::kDevicePolicy;
     return;
   }
 
   if (pref->IsExtensionControlled()) {
-    pref_object->controlled_by =
-        settings_api::ControlledBy::CONTROLLED_BY_EXTENSION;
+    pref_object->controlled_by = settings_api::ControlledBy::kExtension;
     return;
   }
 
   if (pref->IsManagedByCustodian()) {
-    pref_object->controlled_by =
-        settings_api::ControlledBy::CONTROLLED_BY_CHILD_RESTRICTION;
+    pref_object->controlled_by = settings_api::ControlledBy::kChildRestriction;
     return;
   }
 
@@ -60,17 +60,15 @@ void GeneratedPref::ApplyControlledByFromContentSettingSource(
     api::settings_private::PrefObject* pref_object,
     content_settings::SettingSource setting_source) {
   switch (setting_source) {
-    case content_settings::SETTING_SOURCE_POLICY:
-      pref_object->controlled_by =
-          settings_api::ControlledBy::CONTROLLED_BY_DEVICE_POLICY;
+    case content_settings::SettingSource::kPolicy:
+      pref_object->controlled_by = settings_api::ControlledBy::kDevicePolicy;
       break;
-    case content_settings::SETTING_SOURCE_EXTENSION:
-      pref_object->controlled_by =
-          settings_api::ControlledBy::CONTROLLED_BY_EXTENSION;
+    case content_settings::SettingSource::kExtension:
+      pref_object->controlled_by = settings_api::ControlledBy::kExtension;
       break;
-    case content_settings::SETTING_SOURCE_SUPERVISED:
+    case content_settings::SettingSource::kSupervised:
       pref_object->controlled_by =
-          settings_api::ControlledBy::CONTROLLED_BY_CHILD_RESTRICTION;
+          settings_api::ControlledBy::kChildRestriction;
       break;
     default:
       NOTREACHED();
@@ -82,11 +80,9 @@ void GeneratedPref::AddUserSelectableValue(
     settings_api::PrefObject* pref_object,
     int value) {
   if (!pref_object->user_selectable_values) {
-    pref_object->user_selectable_values =
-        std::make_unique<std::vector<std::unique_ptr<base::Value>>>();
+    pref_object->user_selectable_values.emplace();
   }
-  pref_object->user_selectable_values->push_back(
-      std::make_unique<base::Value>(static_cast<int>(value)));
+  pref_object->user_selectable_values->Append(value);
 }
 
 }  // namespace settings_private

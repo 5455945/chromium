@@ -1,11 +1,9 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_VIZ_COMMON_QUADS_SELECTION_H_
 #define COMPONENTS_VIZ_COMMON_QUADS_SELECTION_H_
-
-#include "base/strings/stringprintf.h"
 
 namespace viz {
 
@@ -14,25 +12,12 @@ struct Selection {
   Selection() = default;
   ~Selection() = default;
 
-  BoundType start, end;
+  BoundType start;
+  BoundType end;
 
-  std::string ToString() const {
-    return base::StringPrintf("Selection(%s, %s)", start.ToString().c_str(),
-                              end.ToString().c_str());
-  }
+  friend bool operator==(const Selection<BoundType>&,
+                         const Selection<BoundType>&) = default;
 };
-
-template <typename BoundType>
-inline bool operator==(const Selection<BoundType>& lhs,
-                       const Selection<BoundType>& rhs) {
-  return lhs.start == rhs.start && lhs.end == rhs.end;
-}
-
-template <typename BoundType>
-inline bool operator!=(const Selection<BoundType>& lhs,
-                       const Selection<BoundType>& rhs) {
-  return !(lhs == rhs);
-}
 
 }  // namespace viz
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,36 @@
 
 #include <memory>
 
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
-#if BUILDFLAG(ENABLE_OPENXR)
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
 #include "components/viz/common/gpu/context_provider.h"
 #include "device/vr/openxr/context_provider_callbacks.h"
+#include "device/vr/openxr/openxr_platform_helper.h"
 #include "services/viz/public/cpp/gpu/gpu.h"
-#endif
 
 namespace device {
 class OpenXrDevice;
-class OpenXrStatics;
 }  // namespace device
 
 namespace viz {
 class Gpu;
 }  // namespace viz
+#endif
 
-class IsolatedXRRuntimeProvider
+class IsolatedXRRuntimeProvider final
     : public device::mojom::IsolatedXRRuntimeProvider {
  public:
   explicit IsolatedXRRuntimeProvider(
       mojo::PendingRemote<device::mojom::XRDeviceServiceHost>
           device_service_host,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
-  ~IsolatedXRRuntimeProvider() final;
+  ~IsolatedXRRuntimeProvider() override;
 
   void RequestDevices(
       mojo::PendingRemote<device::mojom::IsolatedXRRuntimeProviderClient>
@@ -46,26 +48,17 @@ class IsolatedXRRuntimeProvider
   void PollForDeviceChanges();
   void SetupPollingForDeviceChanges();
 
-#if BUILDFLAG(ENABLE_OPENXR)
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
   bool IsOpenXrHardwareAvailable();
   void SetOpenXrRuntimeStatus(RuntimeStatus status);
   void CreateContextProviderAsync(
-      VizContextProviderCallback viz_context_provider_callback,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      VizContextProviderCallback viz_context_provider_callback);
 
   bool should_check_openxr_ = false;
 
-  // We need to make sure openxr_device is destroyed before openxr_statics
-  // because there might be an active render-loop thread that is owned by
-  // openxr_device that has an active xr session,
-  // which get into a race condition if:
-  // - openxr_statics is destroyed due to a tab closing (or refresh),
-  //     triggering xrDestroyInstance on the XrInstance owned by OpenXRStatics
-  // - At the same time, the session is being ended on the renderloop thread,
-  //     and xrDestroySession could be running at the same time.
-  // Note that: Destructors for nonstatic member objects are called in the
-  // reverse order in which they appear in the class declaration.
-  std::unique_ptr<device::OpenXrStatics> openxr_statics_;
+  // Must outlive OpenXrDevice.
+  std::unique_ptr<device::OpenXrPlatformHelper> openxr_platform_helper_;
+
   std::unique_ptr<device::OpenXrDevice> openxr_device_;
 
   std::unique_ptr<viz::Gpu> viz_gpu_;

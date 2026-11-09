@@ -1,17 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_PROTOCOL_PAIRING_AUTHENTICATOR_BASE_H_
 #define REMOTING_PROTOCOL_PAIRING_AUTHENTICATOR_BASE_H_
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "remoting/protocol/authenticator.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // The pairing authenticator builds on top of V2Authenticator to add
 // support for PIN-less authentication via device pairing:
@@ -40,18 +37,24 @@ namespace protocol {
 class PairingAuthenticatorBase : public Authenticator {
  public:
   PairingAuthenticatorBase();
+
+  PairingAuthenticatorBase(const PairingAuthenticatorBase&) = delete;
+  PairingAuthenticatorBase& operator=(const PairingAuthenticatorBase&) = delete;
+
   ~PairingAuthenticatorBase() override;
 
   // Authenticator interface.
+  CredentialsType credentials_type() const override;
+  const Authenticator& implementing_authenticator() const override;
   State state() const override;
   bool started() const override;
   RejectionReason rejection_reason() const override;
-  void ProcessMessage(const jingle_xmpp::XmlElement* message,
+  RejectionDetails rejection_details() const override;
+  void ProcessMessage(const JingleAuthentication& message,
                       base::OnceClosure resume_callback) override;
-  std::unique_ptr<jingle_xmpp::XmlElement> GetNextMessage() override;
+  JingleAuthentication GetNextMessage() override;
   const std::string& GetAuthKey() const override;
-  std::unique_ptr<ChannelAuthenticator> CreateChannelAuthenticator()
-      const override;
+  const SessionPolicies* GetSessionPolicies() const override;
 
  protected:
   // Create a Spake2 authenticator in the specified state, prompting the user
@@ -76,16 +79,13 @@ class PairingAuthenticatorBase : public Authenticator {
 
  private:
   // Helper methods for ProcessMessage() and GetNextMessage().
-  void MaybeAddErrorMessage(jingle_xmpp::XmlElement* message);
-  bool HasErrorMessage(const jingle_xmpp::XmlElement* message) const;
+  void MaybeAddErrorMessage(JingleAuthentication& message);
+  bool HasErrorMessage(const JingleAuthentication& message) const;
   void CheckForFailedSpakeExchange(base::OnceClosure resume_callback);
 
   base::WeakPtrFactory<PairingAuthenticatorBase> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PairingAuthenticatorBase);
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_PAIRING_AUTHENTICATOR_BASE_H_

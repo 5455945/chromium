@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "third_party/khronos/EGL/egl.h"
+#include "third_party/angle/include/EGL/egl.h"
 
 namespace ui {
 
@@ -18,9 +18,6 @@ void GetPlatformExtraDisplayAttribs(EGLenum platform_type,
 // Sets custom alpha and buffer size.
 void ChoosePlatformCustomAlphaAndBufferSize(EGLint* alpha_size,
                                             EGLint* buffer_size);
-
-// Returns whether transparent background is suppored.
-bool IsTransparentBackgroundSupported();
 
 }  // namespace ui
 

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,28 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/account_id/account_id.h"
+#include "chromeos/ash/components/osauth/impl/auth_factor_configuration_helper.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "net/base/backoff_entry.h"
 
+class PrefService;
 class Profile;
+
+namespace signin {
+class IdentityManager;
+}
 
 namespace user_manager {
 class User;
 }
 
-namespace chromeos {
+namespace ash {
 
 // Verifies local copy of the password sync token by executing API call. If
 // token is invalid calls InSessionPasswordSyncManager to request online re-auth
@@ -34,7 +41,11 @@ class PasswordSyncTokenVerifier : public KeyedService,
   // returned invalid data.
   static const net::BackoffEntry::Policy kFetchTokenRetryBackoffPolicy;
 
-  explicit PasswordSyncTokenVerifier(Profile* primary_profile);
+  // `local_state` and `identity_manager` must be non-null and must outlive
+  // `this`.
+  PasswordSyncTokenVerifier(PrefService* local_state,
+                            Profile* primary_profile,
+                            signin::IdentityManager* identity_manager);
   ~PasswordSyncTokenVerifier() override;
 
   PasswordSyncTokenVerifier(const PasswordSyncTokenVerifier&) = delete;
@@ -64,23 +75,26 @@ class PasswordSyncTokenVerifier : public KeyedService,
   void RecheckAfter(base::TimeDelta delay);
   // Init sync token.
   void CreateTokenAsync();
+  // Perform the actual token check.
+  void PerformTokenCheck();
+  // Perform the actual token fetch.
+  void PerformFetchToken();
 
-  Profile* const primary_profile_;
-  const user_manager::User* const primary_user_;
+  const raw_ref<PrefService> local_state_;
+
+  const raw_ptr<Profile> primary_profile_;
+  const raw_ptr<const user_manager::User> primary_user_;
+  const raw_ref<signin::IdentityManager> identity_manager_;
   std::unique_ptr<PasswordSyncTokenFetcher> password_sync_token_fetcher_;
   net::BackoffEntry retry_backoff_;
+
+  AuthFactorConfigurationHelper auth_factor_configuration_helper_;
 
   base::WeakPtrFactory<PasswordSyncTokenVerifier> weak_ptr_factory_{this};
 
   friend class PasswordSyncTokenVerifierTest;
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::PasswordSyncTokenVerifier;
-}
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SAML_PASSWORD_SYNC_TOKEN_VERIFIER_H_

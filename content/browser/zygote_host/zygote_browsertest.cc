@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@
 #include "content/shell/browser/shell.h"
 #include "sandbox/policy/linux/sandbox_linux.h"
 #include "sandbox/policy/switches.h"
-#if BUILDFLAG(USE_ZYGOTE_HANDLE)
+#if BUILDFLAG(USE_ZYGOTE)
 #include "content/browser/zygote_host/zygote_host_impl_linux.h"
 #include "content/common/zygote/zygote_communication_linux.h"
 #include "content/common/zygote/zygote_handle_impl_linux.h"
@@ -27,10 +27,11 @@ namespace content {
 class LinuxZygoteBrowserTest : public ContentBrowserTest {
  public:
   LinuxZygoteBrowserTest() = default;
-  ~LinuxZygoteBrowserTest() override = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(LinuxZygoteBrowserTest);
+  LinuxZygoteBrowserTest(const LinuxZygoteBrowserTest&) = delete;
+  LinuxZygoteBrowserTest& operator=(const LinuxZygoteBrowserTest&) = delete;
+
+  ~LinuxZygoteBrowserTest() override = default;
 };
 
 // https://crbug.com/638303
@@ -46,7 +47,7 @@ IN_PROC_BROWSER_TEST_F(LinuxZygoteBrowserTest, GetLocalTimeHasTimeZone) {
   EXPECT_TRUE(parts[2].empty());
 }
 
-#if BUILDFLAG(USE_ZYGOTE_HANDLE)
+#if BUILDFLAG(USE_ZYGOTE)
 IN_PROC_BROWSER_TEST_F(LinuxZygoteBrowserTest, ZygoteSandboxes) {
   // We need zygotes and the standard sandbox config to run this test.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kNoZygote) ||
@@ -69,17 +70,19 @@ IN_PROC_BROWSER_TEST_F(LinuxZygoteBrowserTest, ZygoteSandboxes) {
 class LinuxZygoteDisabledBrowserTest : public ContentBrowserTest {
  public:
   LinuxZygoteDisabledBrowserTest() = default;
+
+  LinuxZygoteDisabledBrowserTest(const LinuxZygoteDisabledBrowserTest&) =
+      delete;
+  LinuxZygoteDisabledBrowserTest& operator=(
+      const LinuxZygoteDisabledBrowserTest&) = delete;
+
   ~LinuxZygoteDisabledBrowserTest() override = default;
 
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kNoZygote);
     command_line->AppendSwitch(sandbox::policy::switches::kNoSandbox);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LinuxZygoteDisabledBrowserTest);
 };
 
 // https://crbug.com/712779
@@ -91,7 +94,7 @@ IN_PROC_BROWSER_TEST_F(LinuxZygoteDisabledBrowserTest,
 }
 #endif
 
-#if BUILDFLAG(USE_ZYGOTE_HANDLE)
+#if BUILDFLAG(USE_ZYGOTE)
 IN_PROC_BROWSER_TEST_F(LinuxZygoteDisabledBrowserTest,
                        NoZygoteWhenZygoteDisabled) {
   EXPECT_TRUE(NavigateToURL(shell(), GURL("data:text/html,start page")));

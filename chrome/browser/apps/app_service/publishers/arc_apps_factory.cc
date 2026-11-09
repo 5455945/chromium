@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 #include "base/feature_list.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/publishers/arc_apps.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs_factory.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
 
 namespace apps {
 
@@ -23,7 +22,8 @@ ArcApps* ArcAppsFactory::GetForProfile(Profile* profile) {
 
 // static
 ArcAppsFactory* ArcAppsFactory::GetInstance() {
-  return base::Singleton<ArcAppsFactory>::get();
+  static base::NoDestructor<ArcAppsFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -34,17 +34,27 @@ void ArcAppsFactory::ShutDownForTesting(content::BrowserContext* context) {
 }
 
 ArcAppsFactory::ArcAppsFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "ArcApps",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .Build()) {
+  DependsOn(AppServiceProxyFactory::GetInstance());
   DependsOn(ArcAppListPrefsFactory::GetInstance());
   DependsOn(arc::ArcIntentHelperBridge::GetFactory());
-  DependsOn(apps::AppServiceProxyFactory::GetInstance());
 }
 
-KeyedService* ArcAppsFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+ArcAppsFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new ArcApps(Profile::FromBrowserContext(context));
+  return std::make_unique<ArcApps>(AppServiceProxyFactory::GetForProfile(
+      Profile::FromBrowserContext(context)));
 }
 
 }  // namespace apps

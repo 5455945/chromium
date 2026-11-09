@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 
 #include <stddef.h>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/nix/xdg_util.h"
 #include "base/process/launch.h"
 #include "base/task/thread_pool.h"
@@ -21,6 +24,8 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 
 using content::BrowserThread;
 using content::OpenURLParams;
@@ -28,42 +33,55 @@ using content::Referrer;
 
 namespace {
 
+const char* const kCinnamonProxyConfigCommand[] = {"cinnamon-settings",
+                                                   "network"};
 // Command used to configure GNOME 2 proxy settings.
-const char* const kGNOME2ProxyConfigCommand[] = {"gnome-network-properties",
-                                                 nullptr};
+const char* const kGNOME2ProxyConfigCommand[] = {"gnome-network-properties"};
 // In GNOME 3, we might need to run gnome-control-center instead. We try this
 // only after gnome-network-properties is not found, because older GNOME also
 // has this but it doesn't do the same thing. See below where we use it.
 const char* const kGNOME3ProxyConfigCommand[] = {"gnome-control-center",
-                                                 "network", nullptr};
+                                                 "network"};
 // KDE3, 4, and 5 are only slightly different, but incompatible. Go figure.
-const char* const kKDE3ProxyConfigCommand[] = {"kcmshell", "proxy", nullptr};
-const char* const kKDE4ProxyConfigCommand[] = {"kcmshell4", "proxy", nullptr};
-const char* const kKDE5ProxyConfigCommand[] = {"kcmshell5", "proxy", nullptr};
+const char* const kKDE3ProxyConfigCommand[] = {"kcmshell", "proxy"};
+const char* const kKDE4ProxyConfigCommand[] = {"kcmshell4", "proxy"};
+const char* const kKDE5ProxyConfigCommand[] = {"kcmshell5", "proxy"};
+const char* const kKDE6ProxyConfigCommand[] = {"kcmshell6", "kcm_proxy"};
+
+// In Deepin OS, we might need to run dde-control-center instead.
+const char* const kDeepinProxyConfigCommand[] = {"dde-control-center", "-m",
+                                                 "network"};
+
+const char* const kCosmicProxyConfigCommand[] = {"cosmic-settings", "network"};
 
 // The URL for Linux proxy configuration help when not running under a
 // supported desktop environment.
 constexpr char kLinuxProxyConfigUrl[] = "chrome://linux-proxy-config";
 
 // Show the proxy config URL in the given tab.
-void ShowLinuxProxyConfigUrl(int render_process_id, int render_view_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ShowLinuxProxyConfigUrl(base::WeakPtr<content::WebContents> web_contents,
+                             bool launched) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  if (launched) {
+    return;
+  }
   std::unique_ptr<base::Environment> env(base::Environment::Create());
   const char* name = base::nix::GetDesktopEnvironmentName(env.get());
-  if (name)
+  if (name) {
     LOG(ERROR) << "Could not find " << name << " network settings in $PATH";
-  OpenURLParams params(GURL(kLinuxProxyConfigUrl), Referrer(),
-                       WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                       ui::PAGE_TRANSITION_LINK, false);
+  }
+  OpenURLParams params = OpenURLParams::CreateBrowserInitiated(
+      GURL(kLinuxProxyConfigUrl),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+      ui::PAGE_TRANSITION_LINK);
 
-  content::WebContents* web_contents =
-      tab_util::GetWebContentsByID(render_process_id, render_view_id);
-  if (web_contents)
-    web_contents->OpenURL(params);
+  if (web_contents) {
+    web_contents->OpenURL(params, /*navigation_handle_callback=*/{});
+  }
 }
 
 // Start the given proxy configuration utility.
-bool StartProxyConfigUtil(const char* const command[]) {
+bool StartProxyConfigUtil(base::span<const char* const> command) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
   // base::LaunchProcess() returns true ("success") if the fork()
@@ -72,12 +90,14 @@ bool StartProxyConfigUtil(const char* const command[]) {
   // success, so we search $PATH first to predict whether the exec is
   // expected to succeed.
   std::unique_ptr<base::Environment> env(base::Environment::Create());
-  if (!base::ExecutableExistsInPath(env.get(), command[0]))
+  if (!base::ExecutableExistsInPath(env.get(), command[0])) {
     return false;
+  }
 
   std::vector<std::string> argv;
-  for (size_t i = 0; command[i]; ++i)
-    argv.push_back(command[i]);
+  for (const char* arg : command) {
+    argv.push_back(arg);
+  }
   base::Process process = base::LaunchProcess(argv, base::LaunchOptions());
   if (!process.IsValid()) {
     LOG(ERROR) << "StartProxyConfigUtil failed to start " << command[0];
@@ -89,7 +109,7 @@ bool StartProxyConfigUtil(const char* const command[]) {
 
 // Detect, and if possible, start the appropriate proxy config utility. On
 // failure to do so, show the Linux proxy config URL in a new tab instead.
-void DetectAndStartProxyConfigUtil(int render_process_id, int render_view_id) {
+bool DetectAndStartProxyConfigUtil() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
   std::unique_ptr<base::Environment> env(base::Environment::Create());
@@ -97,8 +117,14 @@ void DetectAndStartProxyConfigUtil(int render_process_id, int render_view_id) {
   bool launched = false;
   switch (base::nix::GetDesktopEnvironment(env.get())) {
     case base::nix::DESKTOP_ENVIRONMENT_CINNAMON:
+      launched = StartProxyConfigUtil(kCinnamonProxyConfigCommand);
+      break;
+    case base::nix::DESKTOP_ENVIRONMENT_DEEPIN:
+      launched = StartProxyConfigUtil(kDeepinProxyConfigCommand);
+      break;
     case base::nix::DESKTOP_ENVIRONMENT_GNOME:
     case base::nix::DESKTOP_ENVIRONMENT_PANTHEON:
+    case base::nix::DESKTOP_ENVIRONMENT_UKUI:
     case base::nix::DESKTOP_ENVIRONMENT_UNITY: {
       launched = StartProxyConfigUtil(kGNOME2ProxyConfigCommand);
       if (!launched) {
@@ -125,16 +151,21 @@ void DetectAndStartProxyConfigUtil(int render_process_id, int render_view_id) {
       launched = StartProxyConfigUtil(kKDE5ProxyConfigCommand);
       break;
 
+    case base::nix::DESKTOP_ENVIRONMENT_KDE6:
+      launched = StartProxyConfigUtil(kKDE6ProxyConfigCommand);
+      break;
+
+    case base::nix::DESKTOP_ENVIRONMENT_COSMIC:
+      launched = StartProxyConfigUtil(kCosmicProxyConfigCommand);
+      break;
+
     case base::nix::DESKTOP_ENVIRONMENT_XFCE:
+    case base::nix::DESKTOP_ENVIRONMENT_LXQT:
     case base::nix::DESKTOP_ENVIRONMENT_OTHER:
       break;
   }
 
-  if (launched)
-    return;
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(&ShowLinuxProxyConfigUrl, render_process_id,
-                                render_view_id));
+  return launched;
 }
 
 }  // namespace
@@ -142,15 +173,10 @@ void DetectAndStartProxyConfigUtil(int render_process_id, int render_view_id) {
 namespace settings_utils {
 
 void ShowNetworkProxySettings(content::WebContents* web_contents) {
-  base::ThreadPool::PostTask(
+  base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(
-          &DetectAndStartProxyConfigUtil,
-          web_contents->GetMainFrame()
-              ->GetRenderViewHost()
-              ->GetProcess()
-              ->GetID(),
-          web_contents->GetMainFrame()->GetRenderViewHost()->GetRoutingID()));
+      base::BindOnce(&DetectAndStartProxyConfigUtil),
+      base::BindOnce(&ShowLinuxProxyConfigUrl, web_contents->GetWeakPtr()));
 }
 
 }  // namespace settings_utils

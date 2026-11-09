@@ -1,214 +1,248 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/in_session_auth/in_session_auth_dialog_controller_impl.h"
 
-#include "ash/in_session_auth/auth_dialog_contents_view.h"
-#include "ash/in_session_auth/webauthn_request_registrar_impl.h"
-#include "ash/public/cpp/in_session_auth_dialog_client.h"
+#include <memory>
+#include <optional>
+#include <utility>
+
+#include "ash/constants/ash_features.h"
+#include "ash/in_session_auth/in_session_auth_dialog_contents_view.h"
+#include "ash/public/cpp/auth/active_session_auth_controller.h"
+#include "ash/public/cpp/in_session_auth_dialog_controller.h"
+#include "ash/public/cpp/in_session_auth_token_provider.h"
+#include "ash/public/cpp/webauthn_dialog_controller.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/strings/string_util.h"
-#include "components/user_manager/known_user.h"
-#include "ui/aura/window.h"
-#include "ui/views/widget/widget.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/notimplemented.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "chromeos/ash/components/auth_panel/impl/auth_factor_store.h"
+#include "chromeos/ash/components/auth_panel/impl/auth_panel.h"
+#include "chromeos/ash/components/auth_panel/public/shared_types.h"
+#include "chromeos/ash/components/cryptohome/constants.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
+#include "chromeos/ash/components/login/auth/auth_performer.h"
+#include "chromeos/ash/components/osauth/impl/legacy_auth_surface_registry.h"
+#include "chromeos/ash/components/osauth/impl/request/password_manager_auth_request.h"
+#include "chromeos/ash/components/osauth/impl/request/payments_autofill_auth_request.h"
+#include "chromeos/ash/components/osauth/impl/request/settings_auth_request.h"
+#include "chromeos/ash/components/osauth/public/auth_factor_status_consumer.h"
+#include "chromeos/ash/components/osauth/public/auth_hub.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
+#include "chromeos/components/webauthn/webauthn_request_registrar.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/base/ui_base_types.h"
+#include "ui/views/view.h"
+#include "ui/views/widget/widget_delegate.h"
 
 namespace ash {
+namespace {
 
-InSessionAuthDialogControllerImpl::InSessionAuthDialogControllerImpl()
-    : webauthn_request_registrar_(
-          std::make_unique<WebAuthnRequestRegistrarImpl>()) {}
+AuthPurpose InSessionAuthReasonToAuthPurpose(
+    InSessionAuthDialogController::Reason reason) {
+  switch (reason) {
+    case InSessionAuthDialogController::Reason::kAccessPasswordManager:
+    case InSessionAuthDialogController::Reason::kAccessMultideviceSettings:
+    case InSessionAuthDialogController::Reason::kAccessAutofillPayments:
+      return AuthPurpose::kUserVerification;
+    case InSessionAuthDialogController::Reason::kAccessAuthenticationSettings:
+      return AuthPurpose::kAuthSettings;
+  }
+}
+
+// TODO(b/271248452): Subscribe to primary display changes, so that the
+// authentication dialog correctly changes its location to center on new
+// primary displays. We will need to also listen to `work_area` changes and
+// reposition the dialog accordingly when that changes.
+void CenterWidgetOnPrimaryDisplay(views::Widget* widget) {
+  auto bounds = display::Screen::Get()->GetPrimaryDisplay().work_area();
+  bounds.ClampToCenteredSize(widget->GetContentsView()->GetPreferredSize());
+  widget->SetBounds(bounds);
+}
+
+}  // namespace
+
+InSessionAuthDialogControllerImpl::InSessionAuthDialogControllerImpl() =
+    default;
 
 InSessionAuthDialogControllerImpl::~InSessionAuthDialogControllerImpl() =
     default;
 
-void InSessionAuthDialogControllerImpl::SetClient(
-    InSessionAuthDialogClient* client) {
-  client_ = client;
+void InSessionAuthDialogControllerImpl::CreateAndShowAuthPanel(
+    const std::optional<std::string>& prompt,
+    auth_panel::AuthCompletionCallback on_auth_complete,
+    Reason reason,
+    const AccountId& account_id) {
+  state_ = State::kShowing;
+  on_auth_complete_ = std::move(on_auth_complete);
+  prompt_ = prompt;
+
+  auto* auth_hub = AuthHub::Get();
+
+  auto continuation = base::BindOnce(
+      &AuthHub::StartAuthentication, base::Unretained(auth_hub), account_id,
+      InSessionAuthReasonToAuthPurpose(reason), this);
+
+  auth_hub->EnsureInitialized(std::move(continuation));
 }
 
-void InSessionAuthDialogControllerImpl::ShowAuthenticationDialog(
-    aura::Window* source_window,
-    const std::string& origin_name,
-    FinishCallback finish_callback) {
-  DCHECK(client_);
-  // Concurrent requests are not supported.
-  DCHECK(!dialog_);
-
-  source_window_tracker_.Add(source_window);
-  finish_callback_ = std::move(finish_callback);
-
-  AccountId account_id =
-      Shell::Get()->session_controller()->GetActiveAccountId();
-  // GAIA password option is not offered.
-  uint32_t auth_methods = 0;
-
-  if (client_->IsFingerprintAuthAvailable(account_id)) {
-    client_->StartFingerprintAuthSession(
-        account_id,
-        base::BindOnce(
-            &InSessionAuthDialogControllerImpl::OnStartFingerprintAuthSession,
-            weak_factory_.GetWeakPtr(), account_id, auth_methods, source_window,
-            origin_name));
-    // OnStartFingerprintAuthSession checks PIN availability.
+void InSessionAuthDialogControllerImpl::ShowAuthDialog(
+    Reason reason,
+    const std::optional<std::string>& prompt,
+    auth_panel::AuthCompletionCallback on_auth_complete) {
+  if (state_ != State::kNotShown) {
+    LOG(ERROR) << "Trying to show authentication dialog in session while "
+                  "another is currently active, returning";
+    std::move(on_auth_complete)
+        .Run(false, ash::AuthProofToken{}, base::TimeDelta{});
     return;
   }
 
-  client_->CheckPinAuthAvailability(
-      account_id,
-      base::BindOnce(&InSessionAuthDialogControllerImpl::OnPinCanAuthenticate,
-                     weak_factory_.GetWeakPtr(), auth_methods, source_window,
-                     origin_name));
+  auto account_id = Shell::Get()->session_controller()->GetActiveAccountId();
+  DCHECK(account_id.is_valid());
+  DCHECK_NE(auth_token_provider_, nullptr);
+
+  if (reason == Reason::kAccessPasswordManager) {
+    Shell::Get()->active_session_auth_controller()->ShowAuthDialog(
+        std::make_unique<PasswordManagerAuthRequest>(
+            base::UTF8ToUTF16(prompt.value_or("")),
+            std::move(on_auth_complete)));
+  } else if (reason == Reason::kAccessAuthenticationSettings) {
+    Shell::Get()->active_session_auth_controller()->ShowAuthDialog(
+        std::make_unique<SettingsAuthRequest>(std::move(on_auth_complete)));
+  } else if (reason == Reason::kAccessAutofillPayments) {
+    CHECK(prompt.has_value());
+    Shell::Get()->active_session_auth_controller()->ShowAuthDialog(
+        std::make_unique<PaymentsAutofillAuthRequest>(
+            base::UTF8ToUTF16(prompt.value()), std::move(on_auth_complete)));
+  }
 }
 
-void InSessionAuthDialogControllerImpl::OnStartFingerprintAuthSession(
-    AccountId account_id,
-    uint32_t auth_methods,
-    aura::Window* source_window,
-    const std::string& origin_name,
-    bool success) {
-  if (success)
-    auth_methods |= AuthDialogContentsView::kAuthFingerprint;
-
-  client_->CheckPinAuthAvailability(
-      account_id,
-      base::BindOnce(&InSessionAuthDialogControllerImpl::OnPinCanAuthenticate,
-                     weak_factory_.GetWeakPtr(), auth_methods, source_window,
-                     origin_name));
+void InSessionAuthDialogControllerImpl::ShowLegacyWebAuthnDialog(
+    const std::string& rp_id,
+    const std::string& window_id,
+    WebAuthNDialogController::FinishCallback on_auth_complete) {
+  aura::Window* source_window =
+      chromeos::webauthn::WebAuthnRequestRegistrar::Get()
+          ->GetWindowForRequestId(window_id);
+  if (!source_window) {
+    LOG(ERROR) << "Can't find the window for the given window id.";
+    std::move(on_auth_complete).Run(false);
+    return;
+  }
+  WebAuthNDialogController::Get()->ShowAuthenticationDialog(
+      source_window, rp_id, std::move(on_auth_complete));
 }
 
-void InSessionAuthDialogControllerImpl::OnPinCanAuthenticate(
-    uint32_t auth_methods,
-    aura::Window* source_window,
-    const std::string& origin_name,
-    bool pin_auth_available) {
-  if (pin_auth_available)
-    auth_methods |= AuthDialogContentsView::kAuthPin;
+void InSessionAuthDialogControllerImpl::SetTokenProvider(
+    InSessionAuthTokenProvider* auth_token_provider) {
+  auth_token_provider_ = auth_token_provider;
+}
 
-  if (auth_methods == 0) {
-    // If neither fingerprint nor PIN is available, we shouldn't receive the
-    // request.
-    LOG(ERROR) << "Neither fingerprint nor PIN is available.";
-    Cancel();
+void InSessionAuthDialogControllerImpl::OnUserAuthAttemptRejected() {
+  NOTIMPLEMENTED();
+}
+
+void InSessionAuthDialogControllerImpl::OnUserAuthAttemptConfirmed(
+    AuthHubConnector* connector,
+    raw_ptr<AuthFactorStatusConsumer>& out_consumer) {
+  CHECK_EQ(state_, State::kShowing);
+  CHECK_EQ(contents_view_, nullptr);
+
+  auto contents_view = std::make_unique<InSessionAuthDialogContentsView>(
+      prompt_,
+      base::BindOnce(&InSessionAuthDialogControllerImpl::OnEndAuthentication,
+                     weak_factory_.GetWeakPtr()),
+      base::BindRepeating(
+          &InSessionAuthDialogControllerImpl::OnAuthPanelPreferredSizeChanged,
+          weak_factory_.GetWeakPtr()),
+      connector, AuthHub::Get());
+
+  contents_view_ = contents_view.get();
+  out_consumer = contents_view->GetAuthPanel();
+
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+  params.delegate = new views::WidgetDelegate();
+  params.show_state = ui::mojom::WindowShowState::kNormal;
+  params.parent = nullptr;
+  params.name = "AuthDialogWidget";
+
+  params.delegate->SetInitiallyFocusedView(contents_view.get());
+  params.delegate->SetModalType(ui::mojom::ModalType::kSystem);
+  params.delegate->SetOwnedByWidget(
+      views::WidgetDelegate::OwnedByWidgetPassKey());
+
+  dialog_ = std::make_unique<views::Widget>();
+  dialog_->Init(std::move(params));
+  dialog_->SetVisibilityAnimationTransition(views::Widget::ANIMATE_NONE);
+  dialog_->SetContentsView(std::move(contents_view));
+  dialog_->Show();
+
+  state_ = State::kShown;
+  AuthParts::Get()
+      ->GetLegacyAuthSurfaceRegistry()
+      ->NotifyInSessionAuthDialogShown(connector);
+}
+
+void InSessionAuthDialogControllerImpl::OnAuthPanelPreferredSizeChanged() {
+  CenterWidgetOnPrimaryDisplay(dialog_.get());
+}
+
+void InSessionAuthDialogControllerImpl::OnAccountNotFound() {
+  NOTIMPLEMENTED();
+}
+
+void InSessionAuthDialogControllerImpl::OnUserAuthAttemptCancelled() {
+  NotifyFailure();
+  OnEndAuthentication();
+}
+
+void InSessionAuthDialogControllerImpl::OnFactorAttemptFailed(
+    AshAuthFactor factor) {
+  contents_view_->ShowAuthError(factor);
+}
+
+void InSessionAuthDialogControllerImpl::NotifySuccess(
+    const AuthProofToken& token) {
+  if (!on_auth_complete_) {
+    LOG(ERROR) << "Encountered null auth completion callback, possible double "
+                  "invocation?";
     return;
   }
 
-  if (!source_window_tracker_.Contains(source_window)) {
-    LOG(ERROR) << "Source window is no longer available.";
-    Cancel();
-    return;
-  }
-
-  AccountId account_id =
-      Shell::Get()->session_controller()->GetActiveAccountId();
-  const UserSession* session =
-      Shell::Get()->session_controller()->GetUserSessionByAccountId(account_id);
-  DCHECK(session);
-  UserAvatar avatar = session->user_info.avatar;
-
-  // TODO(b/156258540): move UserSelectionScreen::BuildAshUserAvatarForUser to
-  // somewhere that UserToUserSession could call, to support animated avatars.
-
-  AuthDialogContentsView::AuthMethodsMetadata auth_metadata;
-  auth_metadata.autosubmit_pin_length =
-      user_manager::known_user::GetUserPinLength(account_id);
-  source_window_tracker_.Remove(source_window);
-  dialog_ = std::make_unique<InSessionAuthDialog>(
-      auth_methods, source_window, origin_name, auth_metadata, avatar);
+  std::move(on_auth_complete_)
+      .Run(true, token, cryptohome::kAuthsessionInitialLifetime);
 }
 
-void InSessionAuthDialogControllerImpl::DestroyAuthenticationDialog() {
-  DCHECK(client_);
-  if (!dialog_)
-    return;
+void InSessionAuthDialogControllerImpl::NotifyFailure() {
+  if (on_auth_complete_) {
+    std::move(on_auth_complete_)
+        .Run(false, /*token=*/{},
+             /*timeout=*/{});
+  }
+}
 
-  if (dialog_->GetAuthMethods() & AuthDialogContentsView::kAuthFingerprint)
-    client_->EndFingerprintAuthSession();
+void InSessionAuthDialogControllerImpl::OnUserAuthSuccess(
+    AshAuthFactor factor,
+    const AuthProofToken& token) {
+  NotifySuccess(token);
+}
 
+void InSessionAuthDialogControllerImpl::OnEndAuthentication() {
+  contents_view_ = nullptr;
   dialog_.reset();
-  source_window_tracker_.RemoveAll();
-}
-
-void InSessionAuthDialogControllerImpl::AuthenticateUserWithPin(
-    const std::string& pin,
-    OnAuthenticateCallback callback) {
-  DCHECK(client_);
-
-  // TODO(b/156258540): Check that PIN is enabled / set up for this user.
-
-  if (!base::ContainsOnlyChars(pin, "0123456789")) {
-    OnAuthenticateComplete(std::move(callback), false);
-    return;
-  }
-
-  client_->AuthenticateUserWithPasswordOrPin(
-      pin, true,
-      base::BindOnce(&InSessionAuthDialogControllerImpl::OnAuthenticateComplete,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void InSessionAuthDialogControllerImpl::AuthenticateUserWithFingerprint(
-    base::OnceCallback<void(bool, FingerprintState)> views_callback) {
-  DCHECK(client_);
-
-  client_->AuthenticateUserWithFingerprint(base::BindOnce(
-      &InSessionAuthDialogControllerImpl::OnFingerprintAuthComplete,
-      weak_factory_.GetWeakPtr(), std::move(views_callback)));
-}
-
-void InSessionAuthDialogControllerImpl::OnAuthenticateComplete(
-    OnAuthenticateCallback callback,
-    bool success) {
-  std::move(callback).Run(success);
-  if (success)
-    OnAuthSuccess();
-}
-
-void InSessionAuthDialogControllerImpl::OnFingerprintAuthComplete(
-    base::OnceCallback<void(bool, FingerprintState)> views_callback,
-    bool success,
-    FingerprintState fingerprint_state) {
-  // If success is false and retry is allowed, the view will start another
-  // fingerprint check.
-  std::move(views_callback).Run(success, fingerprint_state);
-
-  if (success)
-    OnAuthSuccess();
-}
-
-void InSessionAuthDialogControllerImpl::OnAuthSuccess() {
-  DestroyAuthenticationDialog();
-  if (finish_callback_)
-    std::move(finish_callback_).Run(true);
-}
-
-void InSessionAuthDialogControllerImpl::Cancel() {
-  DestroyAuthenticationDialog();
-  if (finish_callback_)
-    std::move(finish_callback_).Run(false);
-}
-
-void InSessionAuthDialogControllerImpl::OpenInSessionAuthHelpPage() {
-  DCHECK(client_);
-  client_->OpenInSessionAuthHelpPage();
-}
-
-void InSessionAuthDialogControllerImpl::CheckAvailability(
-    FinishCallback on_availability_checked) const {
-  // Assumes the requests are for the active user (no teleported window).
-  AccountId account_id =
-      Shell::Get()->session_controller()->GetActiveAccountId();
-
-  if (client_->IsFingerprintAuthAvailable(account_id)) {
-    std::move(on_availability_checked).Run(true);
-    return;
-  }
-
-  client_->CheckPinAuthAvailability(account_id,
-                                    std::move(on_availability_checked));
+  state_ = State::kNotShown;
 }
 
 }  // namespace ash

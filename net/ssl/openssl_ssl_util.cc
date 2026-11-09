@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <errno.h>
 
+#include <type_traits>
 #include <utility>
 
-#include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -24,24 +24,11 @@
 
 namespace net {
 
-SslSetClearMask::SslSetClearMask()
-    : set_mask(0),
-      clear_mask(0) {
-}
-
-void SslSetClearMask::ConfigureFlag(long flag, bool state) {
-  (state ? set_mask : clear_mask) |= flag;
-  // Make sure we haven't got any intersection in the set & clear options.
-  DCHECK_EQ(0, set_mask & clear_mask) << flag << ":" << state;
-}
-
 namespace {
 
 class OpenSSLNetErrorLibSingleton {
  public:
   OpenSSLNetErrorLibSingleton() {
-    crypto::EnsureOpenSSLInit();
-
     // Allocate a new error library value for inserting net errors into
     // OpenSSL. This does not register any ERR_STRING_DATA for the errors, so
     // stringifying error codes through OpenSSL will return NULL.
@@ -54,11 +41,11 @@ class OpenSSLNetErrorLibSingleton {
   int net_error_lib_;
 };
 
-base::LazyInstance<OpenSSLNetErrorLibSingleton>::Leaky g_openssl_net_error_lib =
-    LAZY_INSTANCE_INITIALIZER;
-
 int OpenSSLNetErrorLib() {
-  return g_openssl_net_error_lib.Get().net_error_lib();
+  static_assert(
+      std::is_trivially_destructible<OpenSSLNetErrorLibSingleton>::value);
+  static OpenSSLNetErrorLibSingleton instance;
+  return instance.net_error_lib();
 }
 
 int MapOpenSSLErrorSSL(uint32_t error_code) {
@@ -108,6 +95,8 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
       return ERR_WRONG_VERSION_ON_EARLY_DATA;
     case SSL_R_TLS13_DOWNGRADE:
       return ERR_TLS13_DOWNGRADE_DETECTED;
+    case SSL_R_ECH_REJECTED:
+      return ERR_ECH_NOT_NEGOTIATED;
     // SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE may be returned from the server after
     // receiving ClientHello if there's no common supported cipher. Map that
     // specific case to ERR_SSL_VERSION_OR_CIPHER_MISMATCH to match the NSS
@@ -127,21 +116,21 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
   }
 }
 
-base::Value NetLogOpenSSLErrorParams(int net_error,
-                                     int ssl_error,
-                                     const OpenSSLErrorInfo& error_info) {
-  base::DictionaryValue dict;
-  dict.SetInteger("net_error", net_error);
-  dict.SetInteger("ssl_error", ssl_error);
+base::DictValue NetLogOpenSSLErrorParams(int net_error,
+                                         int ssl_error,
+                                         const OpenSSLErrorInfo& error_info) {
+  base::DictValue dict;
+  dict.Set("net_error", net_error);
+  dict.Set("ssl_error", ssl_error);
   if (error_info.error_code != 0) {
-    dict.SetInteger("error_lib", ERR_GET_LIB(error_info.error_code));
-    dict.SetInteger("error_reason", ERR_GET_REASON(error_info.error_code));
+    dict.Set("error_lib", ERR_GET_LIB(error_info.error_code));
+    dict.Set("error_reason", ERR_GET_REASON(error_info.error_code));
   }
   if (error_info.file != nullptr)
-    dict.SetString("file", error_info.file);
+    dict.Set("file", error_info.file);
   if (error_info.line != 0)
-    dict.SetInteger("line", error_info.line);
-  return std::move(dict);
+    dict.Set("line", error_info.line);
+  return dict;
 }
 
 }  // namespace
@@ -152,7 +141,6 @@ void OpenSSLPutNetError(const base::Location& location, int err) {
   if (err < 0 || err > 0xfff) {
     // OpenSSL reserves 12 bits for the reason code.
     NOTREACHED();
-    err = ERR_INVALID_ARGUMENT;
   }
   ERR_put_error(OpenSSLNetErrorLib(), 0 /* unused */, err, location.file_name(),
                 location.line_number());
@@ -230,23 +218,91 @@ int GetNetSSLVersion(SSL* ssl) {
       return SSL_CONNECTION_VERSION_TLS1_3;
     default:
       NOTREACHED();
-      return SSL_CONNECTION_VERSION_UNKNOWN;
   }
 }
 
-bool SetSSLChainAndKey(SSL* ssl,
-                       X509Certificate* cert,
-                       EVP_PKEY* pkey,
-                       const SSL_PRIVATE_KEY_METHOD* custom_key) {
+std::vector<CRYPTO_BUFFER*> GetCertChainRawVector(X509Certificate& cert) {
   std::vector<CRYPTO_BUFFER*> chain_raw;
-  chain_raw.reserve(1 + cert->intermediate_buffers().size());
-  chain_raw.push_back(cert->cert_buffer());
-  for (const auto& handle : cert->intermediate_buffers())
+  chain_raw.reserve(cert.cert_buffers().size());
+  for (const auto& handle : cert.cert_buffers()) {
     chain_raw.push_back(handle.get());
+  }
+  return chain_raw;
+}
 
-  if (!SSL_set_chain_and_key(ssl, chain_raw.data(), chain_raw.size(), pkey,
-                             custom_key)) {
-    LOG(WARNING) << "Failed to set client certificate";
+std::vector<CRYPTO_BUFFER*> GetCertChainRawVector(
+    const std::vector<bssl::UniquePtr<CRYPTO_BUFFER>>& cert_chain) {
+  std::vector<CRYPTO_BUFFER*> chain_raw;
+  chain_raw.reserve(cert_chain.size());
+  for (const auto& handle : cert_chain) {
+    chain_raw.push_back(handle.get());
+  }
+  return chain_raw;
+}
+
+bool ConfigureSSLCredential(SSL* ssl, ConfigureSSLCredentialParams params) {
+  bssl::UniquePtr<SSL_CREDENTIAL> credential(SSL_CREDENTIAL_new_x509());
+  if (!credential) {
+    return false;
+  }
+
+  if (!SSL_CREDENTIAL_set1_cert_chain(credential.get(),
+                                      params.cert_chain.data(),
+                                      params.cert_chain.size())) {
+    return false;
+  }
+  if (!params.signing_algorithm_prefs.empty()) {
+    if (!SSL_CREDENTIAL_set1_signing_algorithm_prefs(
+            credential.get(), params.signing_algorithm_prefs.data(),
+            params.signing_algorithm_prefs.size())) {
+      return false;
+    }
+  }
+
+  if (std::holds_alternative<EVP_PKEY*>(params.private_key)) {
+    EVP_PKEY* pkey = std::get<EVP_PKEY*>(params.private_key);
+    CHECK(pkey);
+    if (!SSL_CREDENTIAL_set1_private_key(credential.get(), pkey)) {
+      return false;
+    }
+  } else {
+    const SSL_PRIVATE_KEY_METHOD* custom_key =
+        std::get<const SSL_PRIVATE_KEY_METHOD*>(params.private_key);
+    CHECK(custom_key);
+    if (!SSL_CREDENTIAL_set_private_key_method(credential.get(), custom_key)) {
+      return false;
+    }
+  }
+
+  if (!params.ocsp_response.empty()) {
+    bssl::UniquePtr<CRYPTO_BUFFER> buf(CRYPTO_BUFFER_new(
+        params.ocsp_response.data(), params.ocsp_response.size(), nullptr));
+    if (!SSL_CREDENTIAL_set1_ocsp_response(credential.get(), buf.get())) {
+      return false;
+    }
+  }
+
+  if (!params.signed_cert_timestamp_list.empty()) {
+    bssl::UniquePtr<CRYPTO_BUFFER> buf(
+        CRYPTO_BUFFER_new(params.signed_cert_timestamp_list.data(),
+                          params.signed_cert_timestamp_list.size(), nullptr));
+    if (!SSL_CREDENTIAL_set1_signed_cert_timestamp_list(credential.get(),
+                                                        buf.get())) {
+      return false;
+    }
+  }
+
+  if (!params.trust_anchor_id.empty()) {
+    if (!SSL_CREDENTIAL_set1_trust_anchor_id(credential.get(),
+                                             params.trust_anchor_id.data(),
+                                             params.trust_anchor_id.size())) {
+      return false;
+    }
+    SSL_CREDENTIAL_set_must_match_issuer(credential.get(), 1);
+  }
+
+  if (!SSL_add1_credential(ssl, credential.get())) {
+    LOG(WARNING) << "Failed to set certificate";
     return false;
   }
 

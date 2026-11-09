@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -15,7 +16,6 @@
 
 using testing::_;
 using testing::InSequence;
-using testing::Invoke;
 
 namespace notifications {
 namespace {
@@ -69,7 +69,7 @@ class InitAwareNotificationSchedulerTest : public testing::Test {
 
  private:
   base::test::TaskEnvironment task_environment_;
-  MockNotificationScheduler* scheduler_impl_;
+  raw_ptr<MockNotificationScheduler, DanglingUntriaged> scheduler_impl_;
   std::unique_ptr<NotificationScheduler> init_aware_scheduler_;
 };
 
@@ -86,9 +86,9 @@ TEST_F(InitAwareNotificationSchedulerTest, FlushCachedCalls) {
   {
     InSequence sequence;
     EXPECT_CALL(*scheduler_impl(), Init(_))
-        .WillOnce(Invoke([](NotificationScheduler::InitCallback cb) {
+        .WillOnce([](NotificationScheduler::InitCallback cb) {
           std::move(cb).Run(true /*success*/);
-        }));
+        });
     EXPECT_CALL(*scheduler_impl(), Schedule(GuidIs(guid)));
 
     // Schedule() call before Init() will be cached.
@@ -106,9 +106,9 @@ TEST_F(InitAwareNotificationSchedulerTest, CallAfterInitSuccess) {
   {
     InSequence sequence;
     EXPECT_CALL(*scheduler_impl(), Init(_))
-        .WillOnce(Invoke([](NotificationScheduler::InitCallback cb) {
+        .WillOnce([](NotificationScheduler::InitCallback cb) {
           std::move(cb).Run(true /*success*/);
-        }));
+        });
     EXPECT_CALL(*scheduler_impl(), Schedule(GuidIs(guid)));
 
     // Schedule() call after Init().
@@ -124,9 +124,9 @@ TEST_F(InitAwareNotificationSchedulerTest, NoFlushOnInitFailure) {
   auto params2 = BuildParams();
 
   EXPECT_CALL(*scheduler_impl(), Init(_))
-      .WillOnce(Invoke([](NotificationScheduler::InitCallback cb) {
+      .WillOnce([](NotificationScheduler::InitCallback cb) {
         std::move(cb).Run(false /*success*/);
-      }));
+      });
   EXPECT_CALL(*scheduler_impl(), Schedule(_)).Times(0);
 
   init_aware_scheduler()->Schedule(std::move(params1));

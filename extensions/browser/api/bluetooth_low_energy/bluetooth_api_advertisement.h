@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "content/public/browser/browser_thread.h"
 #include "device/bluetooth/bluetooth_advertisement.h"
 #include "extensions/browser/api/api_resource.h"
@@ -22,18 +21,23 @@ namespace extensions {
 
 // Representation of advertisement instances from the "bluetooth" namespace,
 // abstracting the underlying BluetoothAdvertisementXxx class. All methods
-// must be called on the |kThreadId| thread.
+// must be called on the `kThreadId` thread.
 class BluetoothApiAdvertisement : public ApiResource {
  public:
   BluetoothApiAdvertisement(const std::string& owner_extension_id,
                             scoped_refptr<device::BluetoothAdvertisement>);
+
+  BluetoothApiAdvertisement(const BluetoothApiAdvertisement&) = delete;
+  BluetoothApiAdvertisement& operator=(const BluetoothApiAdvertisement&) =
+      delete;
+
   ~BluetoothApiAdvertisement() override;
 
   device::BluetoothAdvertisement* advertisement() {
     return advertisement_.get();
   }
 
-  // Implementations of |BluetoothAdvertisement| require being called on the
+  // Implementations of `BluetoothAdvertisement` require being called on the
   // UI thread.
   static const content::BrowserThread::ID kThreadId =
       content::BrowserThread::UI;
@@ -47,9 +51,11 @@ class BluetoothApiAdvertisement : public ApiResource {
 
   // The underlying advertisement instance.
   scoped_refptr<device::BluetoothAdvertisement> advertisement_;
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothApiAdvertisement);
 };
+
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<
+    BluetoothApiAdvertisement>>::ServiceIsCreatedWithBrowserContext() const;
 
 }  // namespace extensions
 

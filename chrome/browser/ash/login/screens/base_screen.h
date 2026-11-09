@@ -1,22 +1,19 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_BASE_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_BASE_SCREEN_H_
 
-#include <string>
-
 #include "ash/public/cpp/login_accelerators.h"
-#include "base/compiler_specific.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
-// TODO(https://crbug.com/1164001): move to forward declaration.
-#include "chrome/browser/ash/login/wizard_context.h"
 #include "components/login/base_screen_handler_utils.h"
 
 namespace ash {
+
+class WizardContext;
 
 // Base class for the all OOBE/login/before-session screens.
 // Screens are identified by ID, screen and it's JS counterpart must have same
@@ -30,6 +27,10 @@ class BaseScreen {
   constexpr static const char kNotApplicable[] = "NotApplicable";
 
   BaseScreen(OobeScreenId screen_id, OobeScreenPriority screen_priority);
+
+  BaseScreen(const BaseScreen&) = delete;
+  BaseScreen& operator=(const BaseScreen&) = delete;
+
   virtual ~BaseScreen();
 
   // Makes wizard screen visible.
@@ -38,12 +39,19 @@ class BaseScreen {
   // Makes wizard screen invisible.
   void Hide();
 
-  // Returns whether the screen should be skipped i. e. should be exited due to
-  // specific unmet conditions. Returns true if skips the screen.
-  virtual bool MaybeSkip(WizardContext* context) WARN_UNUSED_RESULT;
+  // Returns whether the screen should be skipped i.e. should be exited due to
+  // specific unmet conditions.
+  // If the screen should be skipped, the method runs the exit callback with the
+  // kNotApplicable exit code.
+  [[nodiscard]] virtual bool MaybeSkip(WizardContext& context);
+
+  // Returns whether the screen should be skipped i.e. should be exited due to
+  // specific unmet conditions, without running the exit callback.
+  [[nodiscard]] virtual bool ShouldBeSkipped(
+      const WizardContext& context) const;
 
   // Forwards user action if screen is shown.
-  void HandleUserAction(const std::string& action_id);
+  void HandleUserAction(const base::ListValue& args);
 
   // Returns `true` if `action` was handled by the screen.
   virtual bool HandleAccelerator(LoginAcceleratorAction action);
@@ -56,49 +64,30 @@ class BaseScreen {
 
   bool is_hidden() { return is_hidden_; }
 
+  virtual ScreenSummary GetScreenSummary();
+
  protected:
   virtual void ShowImpl() = 0;
   virtual void HideImpl() = 0;
 
-  // Called when user action event with `event_id`
-  // happened. Notification about this event comes from the JS
-  // counterpart. Not called if the screen is hidden
-  virtual void OnUserAction(const std::string& action_id);
+  // Called when user action event with happened. Notification about this event
+  // comes from the JS counterpart. Not called if the screen is hidden
+  virtual void OnUserAction(const base::ListValue& args);
 
-  WizardContext* context() { return wizard_context_; }
+  WizardContext* context() const { return wizard_context_; }
 
  private:
   bool is_hidden_ = true;
 
   // Wizard context itself is owned by WizardController and is accessible
   // to screen only between OnShow / OnHide calls.
-  WizardContext* wizard_context_ = nullptr;
+  raw_ptr<WizardContext, DanglingUntriaged> wizard_context_ = nullptr;
 
   const OobeScreenId screen_id_;
 
   const OobeScreenPriority screen_priority_;
-
-  DISALLOW_COPY_AND_ASSIGN(BaseScreen);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::BaseScreen;
-}
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::BaseScreen;
-}
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::BaseScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_BASE_SCREEN_H_

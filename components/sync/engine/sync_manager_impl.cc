@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,29 +8,32 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
+#include "base/observer_list.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
-#include "components/sync/base/invalidation_interface.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
+#include "components/sync/base/sync_invalidation.h"
 #include "components/sync/engine/cancelation_signal.h"
 #include "components/sync/engine/configure_reason.h"
+#include "components/sync/engine/cryptographer.h"
+#include "components/sync/engine/data_type_connector_proxy.h"
+#include "components/sync/engine/data_type_worker.h"
 #include "components/sync/engine/engine_components_factory.h"
-#include "components/sync/engine/loopback_server/loopback_connection_manager.h"
-#include "components/sync/engine/model_type_connector_proxy.h"
-#include "components/sync/engine/net/http_post_provider_factory.h"
-#include "components/sync/engine/net/sync_server_connection_manager.h"
-#include "components/sync/engine/net/url_translator.h"
-#include "components/sync/engine/nigori/cryptographer.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/keystore_keys_handler.h"
+#include "components/sync/engine/keystore_keys_handler.h"
+#include "components/sync/engine/net/server_connection_manager.h"
 #include "components/sync/engine/polling_constants.h"
+#include "components/sync/engine/required_passphrase_verifier.h"
 #include "components/sync/engine/sync_scheduler.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/engine/update_handler.h"
+#include "components/sync/protocol/sync_enums.pb.h"
 
 namespace syncer {
 namespace {
@@ -38,43 +41,26 @@ namespace {
 sync_pb::SyncEnums::GetUpdatesOrigin GetOriginFromReason(
     ConfigureReason reason) {
   switch (reason) {
-    case CONFIGURE_REASON_RECONFIGURATION:
+    case ConfigureReason::kReconfiguration:
       return sync_pb::SyncEnums::RECONFIGURATION;
-    case CONFIGURE_REASON_MIGRATION:
+    case ConfigureReason::kMigration:
       return sync_pb::SyncEnums::MIGRATION;
-    case CONFIGURE_REASON_NEW_CLIENT:
+    case ConfigureReason::kNewClient:
       return sync_pb::SyncEnums::NEW_CLIENT;
-    case CONFIGURE_REASON_NEWLY_ENABLED_DATA_TYPE:
-    case CONFIGURE_REASON_CRYPTO:
+    case ConfigureReason::kExistingClientRestart:
+    case ConfigureReason::kCrypto:
+      // Mapping these cases to NEWLY_SUPPORTED_DATATYPE is rather wrong, as it
+      // includes common cases like sync being unpaused or a crypto error having
+      // been resolved, if initial sync didn't complete earlier (or data was
+      // cleared while paused). The legacy behavior is kept until a better
+      // solution is found.
       return sync_pb::SyncEnums::NEWLY_SUPPORTED_DATATYPE;
-    case CONFIGURE_REASON_PROGRAMMATIC:
+    case ConfigureReason::kProgrammatic:
       return sync_pb::SyncEnums::PROGRAMMATIC;
-    case CONFIGURE_REASON_UNKNOWN:
+    case ConfigureReason::kUnknown:
       NOTREACHED();
   }
   return sync_pb::SyncEnums::UNKNOWN_ORIGIN;
-}
-
-const char kSyncServerSyncPath[] = "/command/";
-
-std::string StripTrailingSlash(const std::string& s) {
-  int stripped_end_pos = s.size();
-  if (s.at(stripped_end_pos - 1) == '/') {
-    stripped_end_pos = stripped_end_pos - 1;
-  }
-
-  return s.substr(0, stripped_end_pos);
-}
-
-GURL MakeConnectionURL(const GURL& sync_server, const std::string& client_id) {
-  DCHECK_EQ(kSyncServerSyncPath[0], '/');
-  std::string full_path =
-      StripTrailingSlash(sync_server.path()) + kSyncServerSyncPath;
-
-  GURL::Replacements path_replacement;
-  path_replacement.SetPathStr(full_path);
-  return AppendSyncQueryString(sync_server.ReplaceComponents(path_replacement),
-                               client_id);
 }
 
 }  // namespace
@@ -82,38 +68,33 @@ GURL MakeConnectionURL(const GURL& sync_server, const std::string& client_id) {
 SyncManagerImpl::SyncManagerImpl(
     const std::string& name,
     network::NetworkConnectionTracker* network_connection_tracker)
-    : name_(name),
-      network_connection_tracker_(network_connection_tracker),
-      initialized_(false),
-      observing_network_connectivity_changes_(false),
-      sync_encryption_handler_(nullptr) {}
+    : name_(name), network_connection_tracker_(network_connection_tracker) {}
 
 SyncManagerImpl::~SyncManagerImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!initialized_);
 }
 
-ModelTypeSet SyncManagerImpl::InitialSyncEndedTypes() {
+DataTypeSet SyncManagerImpl::InitialSyncEndedTypes() {
   DCHECK(initialized_);
-  return model_type_registry_->GetInitialSyncEndedTypes();
+  return data_type_registry_->GetInitialSyncEndedTypes();
 }
 
-ModelTypeSet SyncManagerImpl::GetEnabledTypes() {
+DataTypeSet SyncManagerImpl::GetConnectedTypes() {
   DCHECK(initialized_);
-  return model_type_registry_->GetEnabledDataTypes();
+  return data_type_registry_->GetConnectedTypes();
 }
 
 void SyncManagerImpl::ConfigureSyncer(ConfigureReason reason,
-                                      ModelTypeSet to_download,
+                                      DataTypeSet to_download,
                                       SyncFeatureState sync_feature_state,
                                       base::OnceClosure ready_task) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!ready_task.is_null());
   DCHECK(initialized_);
 
-  DVLOG(1) << "Configuring -"
-           << "\n\t"
-           << "types to download: " << ModelTypeSetToString(to_download);
+  DVLOG(1) << "Configuring -" << "\n\t"
+           << "types to download: " << DataTypeSetToDebugString(to_download);
 
   scheduler_->Start(SyncScheduler::CONFIGURATION_MODE, base::Time());
   scheduler_->ScheduleConfiguration(GetOriginFromReason(reason), to_download,
@@ -128,7 +109,6 @@ void SyncManagerImpl::Init(InitArgs* args) {
   DCHECK(!initialized_);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!args->cache_guid.empty());
-  DCHECK(args->post_factory);
   DCHECK(!args->poll_interval.is_zero());
   DCHECK(args->cancelation_signal);
   DVLOG(1) << "SyncManager starting Init...";
@@ -157,25 +137,14 @@ void SyncManagerImpl::Init(InitArgs* args) {
   sync_status_tracker_->SetHasKeystoreKey(
       !sync_encryption_handler_->GetKeystoreKeysHandler()->NeedKeystoreKey());
 
-  if (args->enable_local_sync_backend) {
-    VLOG(1) << "Running against local sync backend.";
-    sync_status_tracker_->SetLocalBackendFolder(
-        args->local_sync_backend_folder.AsUTF8Unsafe());
-    connection_manager_ = std::make_unique<LoopbackConnectionManager>(
-        args->local_sync_backend_folder);
-  } else {
-    connection_manager_ = std::make_unique<SyncServerConnectionManager>(
-        MakeConnectionURL(args->service_url, args->cache_guid),
-        std::move(args->post_factory), args->cancelation_signal);
-  }
+  connection_manager_ = args->engine_components_factory->BuildConnectionManager(
+      args->cache_guid, args->cancelation_signal);
   connection_manager_->AddListener(this);
 
   DVLOG(1) << "Setting sync client ID: " << args->cache_guid;
   sync_status_tracker_->SetCacheGuid(args->cache_guid);
-  DVLOG(1) << "Setting invalidator client ID: " << args->invalidator_client_id;
-  sync_status_tracker_->SetInvalidatorClientId(args->invalidator_client_id);
 
-  model_type_registry_ = std::make_unique<ModelTypeRegistry>(
+  data_type_registry_ = std::make_unique<DataTypeRegistry>(
       this, args->cancelation_signal, sync_encryption_handler_);
 
   // Build a SyncCycleContext and store the worker in it.
@@ -184,33 +153,28 @@ void SyncManagerImpl::Init(InitArgs* args) {
       this, sync_status_tracker_.get()};
   cycle_context_ = args->engine_components_factory->BuildContext(
       connection_manager_.get(), args->extensions_activity, listeners,
-      &debug_info_event_listener_, model_type_registry_.get(),
-      args->invalidator_client_id, args->cache_guid, args->birthday,
-      args->bag_of_chips, args->poll_interval);
+      &debug_info_event_listener_, data_type_registry_.get(), args->cache_guid,
+      args->birthday, args->bag_of_chips, args->poll_interval,
+      args->account_email, args->sync_access_token_fetcher);
   scheduler_ = args->engine_components_factory->BuildScheduler(
-      name_, cycle_context_.get(), args->cancelation_signal,
-      args->enable_local_sync_backend);
+      name_, cycle_context_.get(), args->cancelation_signal);
 
   scheduler_->Start(SyncScheduler::CONFIGURATION_MODE, base::Time());
 
   initialized_ = true;
 
-  if (!args->enable_local_sync_backend) {
-    network_connection_tracker_->AddNetworkConnectionObserver(this);
-  } else {
-    scheduler_->OnCredentialsUpdated();
-  }
+  network_connection_tracker_->AddNetworkConnectionObserver(this);
 
   debug_info_event_listener_.InitializationComplete();
 }
 
 void SyncManagerImpl::OnPassphraseRequired(
-    const KeyDerivationParams& key_derivation_params,
-    const sync_pb::EncryptedData& pending_keys) {
+    std::unique_ptr<RequiredPassphraseVerifier> verifier) {
   // Does nothing.
 }
 
-void SyncManagerImpl::OnPassphraseAccepted() {
+void SyncManagerImpl::OnPassphraseAccepted(
+    const CustomPassphraseBootstrapToken& bootstrap_token) {
   // Does nothing.
 }
 
@@ -222,14 +186,15 @@ void SyncManagerImpl::OnTrustedVaultKeyAccepted() {
   // Does nothing.
 }
 
-void SyncManagerImpl::OnBootstrapTokenUpdated(
-    const std::string& bootstrap_token,
-    BootstrapTokenType type) {
-  if (type == KEYSTORE_BOOTSTRAP_TOKEN)
-    sync_status_tracker_->SetHasKeystoreKey(true);
+void SyncManagerImpl::OnKeystoreKeysRequired() {
+  // Does nothing.
 }
 
-void SyncManagerImpl::OnEncryptedTypesChanged(ModelTypeSet encrypted_types,
+void SyncManagerImpl::OnKeystoreKeysAccepted() {
+  // Does nothing.
+}
+
+void SyncManagerImpl::OnEncryptedTypesChanged(DataTypeSet encrypted_types,
                                               bool encrypt_everything) {
   sync_status_tracker_->SetEncryptedTypes(encrypted_types);
 }
@@ -242,6 +207,8 @@ void SyncManagerImpl::OnCryptographerStateChanged(Cryptographer* cryptographer,
       sync_encryption_handler_->GetKeystoreMigrationTime());
   sync_status_tracker_->SetTrustedVaultDebugInfo(
       sync_encryption_handler_->GetTrustedVaultDebugInfo());
+  sync_status_tracker_->SetHasKeystoreKey(
+      !sync_encryption_handler_->GetKeystoreKeysHandler()->NeedKeystoreKey());
 }
 
 void SyncManagerImpl::OnPassphraseTypeChanged(
@@ -265,13 +232,13 @@ void SyncManagerImpl::StartConfiguration() {
 
 void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
   DCHECK(initialized_);
 
-  cycle_context_->set_account_name(credentials.email);
-
   observing_network_connectivity_changes_ = true;
-  if (!connection_manager_->SetAccessToken(credentials.access_token))
+  if (!connection_manager_->SetAccessTokenInfo(credentials.access_token_info)) {
     return;  // Auth token is known to be invalid, so exit early.
+  }
 
   scheduler_->OnCredentialsUpdated();
 
@@ -280,7 +247,14 @@ void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
 
 void SyncManagerImpl::InvalidateCredentials() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  connection_manager_->SetAccessToken(std::string());
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
+  connection_manager_->SetAccessTokenInfo(signin::AccessTokenInfo());
+}
+
+void SyncManagerImpl::OnCredentialsChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
+  scheduler_->OnCredentialsUpdated();
 }
 
 void SyncManagerImpl::AddObserver(SyncManager::Observer* observer) {
@@ -302,21 +276,23 @@ void SyncManagerImpl::ShutdownOnSyncThread() {
   scheduler_.reset();
   cycle_context_.reset();
 
-  model_type_registry_.reset();
+  data_type_registry_.reset();
 
   if (sync_encryption_handler_) {
     sync_encryption_handler_->RemoveObserver(&debug_info_event_listener_);
     sync_encryption_handler_->RemoveObserver(this);
+    sync_encryption_handler_->RemoveObserver(encryption_observer_proxy_.get());
   }
 
   RemoveObserver(&debug_info_event_listener_);
 
-  // |connection_manager_| may end up being null here in tests (in synchronous
+  // `connection_manager_` may end up being null here in tests (in synchronous
   // initialization mode).
   //
   // TODO(akalin): Fix this behavior.
-  if (connection_manager_)
+  if (connection_manager_) {
     connection_manager_->RemoveListener(this);
+  }
   connection_manager_.reset();
 
   network_connection_tracker_->RemoveNetworkConnectionObserver(this);
@@ -325,9 +301,17 @@ void SyncManagerImpl::ShutdownOnSyncThread() {
   initialized_ = false;
 }
 
-void SyncManagerImpl::OnConnectionChanged(network::mojom::ConnectionType type) {
+void SyncManagerImpl::OnConnectionChanged(
+    net::NetworkChangeNotifier::ConnectionType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!observing_network_connectivity_changes_) {
+  // In the legacy model (without token propagation), observing network
+  // connectivity changes is paused after an auth error to prevent running a
+  // sync cycle with stale/missing cached credentials down to the network layer.
+  // With kSyncUsePropagatedAccessToken enabled, the scheduler fetches an
+  // access token on demand and waits for it asynchronously before running the
+  // cycle, so network changes can be safely forwarded to trigger retry.
+  if (!observing_network_connectivity_changes_ &&
+      !base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken)) {
     DVLOG(1) << "Network change dropped.";
     return;
   }
@@ -339,38 +323,47 @@ void SyncManagerImpl::OnServerConnectionEvent(
     const ServerConnectionEvent& event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (event.connection_code == HttpResponse::SERVER_CONNECTION_OK) {
-    for (auto& observer : observers_) {
+    for (SyncManager::Observer& observer : observers_) {
       observer.OnConnectionStatusChange(CONNECTION_OK);
     }
   }
 
   if (event.connection_code == HttpResponse::SYNC_AUTH_ERROR) {
     observing_network_connectivity_changes_ = false;
-    for (auto& observer : observers_) {
+    for (SyncManager::Observer& observer : observers_) {
       observer.OnConnectionStatusChange(CONNECTION_AUTH_ERROR);
     }
   }
 
   if (event.connection_code == HttpResponse::SYNC_SERVER_ERROR) {
-    for (auto& observer : observers_) {
+    for (SyncManager::Observer& observer : observers_) {
       observer.OnConnectionStatusChange(CONNECTION_SERVER_ERROR);
     }
   }
 }
 
-void SyncManagerImpl::NudgeForInitialDownload(ModelType type) {
+void SyncManagerImpl::NudgeForInitialDownload(DataType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   scheduler_->ScheduleInitialSyncNudge(type);
 }
 
-void SyncManagerImpl::NudgeForCommit(ModelType type) {
+void SyncManagerImpl::NudgeForCommit(DataType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   debug_info_event_listener_.OnNudgeFromDatatype(type);
   scheduler_->ScheduleLocalNudge(type);
 }
 
+void SyncManagerImpl::SetHasPendingInvalidations(
+    DataType type,
+    bool has_pending_invalidations) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  scheduler_->SetHasPendingInvalidations(type, has_pending_invalidations);
+  sync_status_tracker_->SetHasPendingInvalidations(type,
+                                                   has_pending_invalidations);
+}
+
 void SyncManagerImpl::NotifySyncStatusChanged(const SyncStatus& status) {
-  for (auto& observer : observers_) {
+  for (SyncManager::Observer& observer : observers_) {
     observer.OnSyncStatusChanged(status);
   }
 }
@@ -392,33 +385,34 @@ void SyncManagerImpl::OnSyncCycleEvent(const SyncCycleEvent& event) {
     }
 
     DVLOG(1) << "Sending OnSyncCycleCompleted";
-    for (auto& observer : observers_) {
+    for (SyncManager::Observer& observer : observers_) {
       observer.OnSyncCycleCompleted(event.snapshot);
     }
   }
 }
 
-void SyncManagerImpl::OnActionableError(const SyncProtocolError& error) {
-  for (auto& observer : observers_) {
-    observer.OnActionableError(error);
+void SyncManagerImpl::OnActionableProtocolError(
+    const SyncProtocolError& error) {
+  for (SyncManager::Observer& observer : observers_) {
+    observer.OnActionableProtocolError(error);
   }
 }
 
 void SyncManagerImpl::OnRetryTimeChanged(base::Time) {}
 
-void SyncManagerImpl::OnThrottledTypesChanged(ModelTypeSet) {}
+void SyncManagerImpl::OnThrottledTypesChanged(DataTypeSet) {}
 
-void SyncManagerImpl::OnBackedOffTypesChanged(ModelTypeSet) {}
+void SyncManagerImpl::OnBackedOffTypesChanged(DataTypeSet) {}
 
-void SyncManagerImpl::OnMigrationRequested(ModelTypeSet types) {
-  for (auto& observer : observers_) {
+void SyncManagerImpl::OnMigrationRequested(DataTypeSet types) {
+  for (SyncManager::Observer& observer : observers_) {
     observer.OnMigrationRequested(types);
   }
 }
 
 void SyncManagerImpl::OnProtocolEvent(const ProtocolEvent& event) {
   protocol_event_buffer_.RecordProtocolEvent(event);
-  for (auto& observer : observers_) {
+  for (SyncManager::Observer& observer : observers_) {
     observer.OnProtocolEvent(event);
   }
 }
@@ -432,38 +426,42 @@ void SyncManagerImpl::SetInvalidatorEnabled(bool invalidator_enabled) {
 }
 
 void SyncManagerImpl::OnIncomingInvalidation(
-    ModelType type,
-    std::unique_ptr<InvalidationInterface> invalidation) {
+    DataType type,
+    std::unique_ptr<SyncInvalidation> invalidation) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
+  UpdateHandler* handler = data_type_registry_->GetMutableUpdateHandler(type);
+  if (handler) {
+    handler->RecordRemoteInvalidation(std::move(invalidation));
+  } else {
+    DataTypeWorker::LogPendingInvalidationStatus(
+        PendingInvalidationStatus::kDataTypeNotConnected);
+  }
   sync_status_tracker_->IncrementNotificationsReceived();
-  scheduler_->ScheduleInvalidationNudge(type, std::move(invalidation));
+  scheduler_->ScheduleInvalidationNudge(type);
 }
 
-void SyncManagerImpl::RefreshTypes(ModelTypeSet types) {
+void SyncManagerImpl::RefreshTypes(DataTypeSet types) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (types.Empty()) {
-    LOG(WARNING) << "Sync received refresh request with no types specified.";
-  } else {
-    scheduler_->ScheduleLocalRefreshRequest(types);
+
+  const DataTypeSet types_to_refresh =
+      Intersection(types, data_type_registry_->GetConnectedTypes());
+
+  if (!types_to_refresh.empty()) {
+    scheduler_->ScheduleLocalRefreshRequest(types_to_refresh);
   }
 }
 
-ModelTypeConnector* SyncManagerImpl::GetModelTypeConnector() {
+DataTypeConnector* SyncManagerImpl::GetDataTypeConnector() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return model_type_registry_.get();
+  return data_type_registry_.get();
 }
 
-std::unique_ptr<ModelTypeConnector>
-SyncManagerImpl::GetModelTypeConnectorProxy() {
+std::unique_ptr<DataTypeConnector>
+SyncManagerImpl::GetDataTypeConnectorProxy() {
   DCHECK(initialized_);
-  return std::make_unique<ModelTypeConnectorProxy>(
-      base::SequencedTaskRunnerHandle::Get(),
-      model_type_registry_->AsWeakPtr());
-}
-
-WeakHandle<DataTypeDebugInfoListener> SyncManagerImpl::GetDebugInfoListener() {
-  return MakeWeakHandle(debug_info_event_listener_.GetWeakPtr());
+  return std::make_unique<DataTypeConnectorProxy>(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      data_type_registry_->AsWeakPtr());
 }
 
 std::string SyncManagerImpl::cache_guid() {
@@ -484,7 +482,7 @@ std::string SyncManagerImpl::bag_of_chips() {
 }
 
 bool SyncManagerImpl::HasUnsyncedItemsForTest() {
-  return model_type_registry_->HasUnsyncedItems();
+  return data_type_registry_->HasUnsyncedItems();
 }
 
 SyncEncryptionHandler* SyncManagerImpl::GetEncryptionHandler() {
@@ -502,20 +500,10 @@ void SyncManagerImpl::OnCookieJarChanged(bool account_mismatch) {
   cycle_context_->set_cookie_jar_mismatch(account_mismatch);
 }
 
-void SyncManagerImpl::UpdateInvalidationClientId(const std::string& client_id) {
-  DVLOG(1) << "Setting invalidator client ID: " << client_id;
-  sync_status_tracker_->SetInvalidatorClientId(client_id);
-  cycle_context_->set_invalidator_client_id(client_id);
-}
-
-void SyncManagerImpl::UpdateSingleClientStatus(bool single_client) {
-  cycle_context_->set_single_client(single_client);
-}
-
-void SyncManagerImpl::UpdateActiveDeviceFCMRegistrationTokens(
-    std::vector<std::string> fcm_registration_tokens) {
-  cycle_context_->set_active_device_fcm_registration_tokens(
-      std::move(fcm_registration_tokens));
+void SyncManagerImpl::UpdateActiveDevicesInvalidationInfo(
+    ActiveDevicesInvalidationInfo active_devices_invalidation_info) {
+  cycle_context_->set_active_devices_invalidation_info(
+      std::move(active_devices_invalidation_info));
 }
 
 }  // namespace syncer

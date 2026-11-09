@@ -1,16 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/ukm_background_recorder_service.h"
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/history/core/browser/history_service.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "url/origin.h"
@@ -21,7 +20,7 @@ UkmBackgroundRecorderService::UkmBackgroundRecorderService(Profile* profile)
     : history_service_(HistoryServiceFactory::GetForProfile(
           profile,
           ServiceAccessType::EXPLICIT_ACCESS)) {
-  DCHECK(history_service_);
+  CHECK(history_service_, base::NotFatalUntil::M161);
 }
 
 UkmBackgroundRecorderService::~UkmBackgroundRecorderService() = default;
@@ -46,14 +45,14 @@ void UkmBackgroundRecorderService::DidGetVisibleVisitCount(
     GetBackgroundSourceIdCallback callback,
     history::VisibleVisitCountToHostResult result) {
   if (!result.success || !result.count) {
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
   ukm::SourceId source_id = ukm::ConvertToSourceId(
       ukm::AssignNewSourceId(), ukm::SourceIdType::HISTORY_ID);
   ukm::UkmRecorder* recorder = ukm::UkmRecorder::Get();
-  DCHECK(recorder);
+  CHECK(recorder, base::NotFatalUntil::M161);
   recorder->UpdateSourceURL(source_id, origin.GetURL());
 
   std::move(callback).Run(source_id);
@@ -61,7 +60,8 @@ void UkmBackgroundRecorderService::DidGetVisibleVisitCount(
 
 // static
 UkmBackgroundRecorderFactory* UkmBackgroundRecorderFactory::GetInstance() {
-  return base::Singleton<UkmBackgroundRecorderFactory>::get();
+  static base::NoDestructor<UkmBackgroundRecorderFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -72,22 +72,27 @@ UkmBackgroundRecorderService* UkmBackgroundRecorderFactory::GetForProfile(
 }
 
 UkmBackgroundRecorderFactory::UkmBackgroundRecorderFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "UkmBackgroundRecorderService",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
+              .Build()) {
   DependsOn(HistoryServiceFactory::GetInstance());
 }
 
 UkmBackgroundRecorderFactory::~UkmBackgroundRecorderFactory() = default;
 
-KeyedService* UkmBackgroundRecorderFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+UkmBackgroundRecorderFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new UkmBackgroundRecorderService(Profile::FromBrowserContext(context));
-}
-
-content::BrowserContext* UkmBackgroundRecorderFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+  return std::make_unique<UkmBackgroundRecorderService>(
+      Profile::FromBrowserContext(context));
 }
 
 }  // namespace ukm

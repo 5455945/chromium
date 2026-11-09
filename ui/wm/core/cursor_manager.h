@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,23 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/wm/core/native_cursor_manager_delegate.h"
-#include "ui/wm/core/wm_core_export.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/callback_list.h"
+#endif
 
 namespace ui {
 class KeyEvent;
+class TouchEvent;
 enum class CursorSize;
 }
 
@@ -34,10 +39,15 @@ class NativeCursorManager;
 // requests to queue any further changes until a later time. It sends changes
 // to the NativeCursorManager, which communicates back to us when these changes
 // were made through the NativeCursorManagerDelegate interface.
-class WM_CORE_EXPORT CursorManager : public aura::client::CursorClient,
-                                     public NativeCursorManagerDelegate {
+class COMPONENT_EXPORT(UI_WM) CursorManager
+    : public aura::client::CursorClient,
+      public NativeCursorManagerDelegate {
  public:
   explicit CursorManager(std::unique_ptr<NativeCursorManager> delegate);
+
+  CursorManager(const CursorManager&) = delete;
+  CursorManager& operator=(const CursorManager&) = delete;
+
   ~CursorManager() override;
 
   // Resets the last visibility state, etc. Currently only called by tests.
@@ -52,6 +62,10 @@ class WM_CORE_EXPORT CursorManager : public aura::client::CursorClient,
   bool IsCursorVisible() const override;
   void SetCursorSize(ui::CursorSize cursor_size) override;
   ui::CursorSize GetCursorSize() const override;
+  void SetLargeCursorSizeInDip(int large_cursor_size_in_dip) override;
+  int GetLargeCursorSizeInDip() const override;
+  void SetCursorColor(SkColor color) override;
+  SkColor GetCursorColor() const override;
   void EnableMouseEvents() override;
   void DisableMouseEvents() override;
   bool IsMouseEventsEnabled() const override;
@@ -63,15 +77,36 @@ class WM_CORE_EXPORT CursorManager : public aura::client::CursorClient,
   void AddObserver(aura::client::CursorClientObserver* observer) override;
   void RemoveObserver(aura::client::CursorClientObserver* observer) override;
   bool ShouldHideCursorOnKeyEvent(const ui::KeyEvent& event) const override;
+  bool ShouldHideCursorOnTouchEvent(const ui::TouchEvent& event) const override;
+  gfx::Size GetSystemCursorSize() const override;
+#if BUILDFLAG(IS_WIN)
+  void UpdateSystemCursorVisibilityForTest(bool visible) override;
+  void SetMouseVanishEnabledForTesting(bool enabled);
+#endif
 
  private:
   // Overridden from NativeCursorManagerDelegate:
   void CommitCursor(gfx::NativeCursor cursor) override;
   void CommitVisibility(bool visible) override;
   void CommitCursorSize(ui::CursorSize cursor_size) override;
+  void CommitLargeCursorSizeInDip(int large_cursor_size_in_dip) override;
+  void CommitCursorColor(SkColor color) override;
   void CommitMouseEventsEnabled(bool enabled) override;
+  void CommitSystemCursorSize(const gfx::Size& cursor_size) override;
+  void CommitSystemCursorVisibility(bool visible) override;
 
   void SetCursorImpl(gfx::NativeCursor cursor, bool forced);
+  void UpdateSystemCursorVisibility(bool visible);
+
+  // Holds one LockCursor request if this object exists.
+  class ScopedCursorLock {
+   public:
+    explicit ScopedCursorLock(CursorManager* cursor_manager);
+    ~ScopedCursorLock();
+
+   private:
+    raw_ptr<CursorManager> cursor_manager_;
+  };
 
   std::unique_ptr<NativeCursorManager> delegate_;
 
@@ -88,7 +123,11 @@ class WM_CORE_EXPORT CursorManager : public aura::client::CursorClient,
   // The cursor state to restore when the cursor is unlocked.
   std::unique_ptr<internal::CursorState> state_on_unlock_;
 
-  base::ObserverList<aura::client::CursorClientObserver>::Unchecked observers_;
+  base::ObserverList<aura::client::CursorClientObserver>::
+      UncheckedAndDanglingUntriaged observers_;
+
+  // This is used for lock cursor during system cursor is invisible.
+  std::optional<ScopedCursorLock> scoped_cursor_lock_;
 
   // This flag holds the cursor visibility state for the duration of the
   // process. Defaults to true. This flag helps ensure that when a
@@ -96,7 +135,14 @@ class WM_CORE_EXPORT CursorManager : public aura::client::CursorClient,
   // cursor visibility state.
   static bool last_cursor_visibility_state_;
 
-  DISALLOW_COPY_AND_ASSIGN(CursorManager);
+#if BUILDFLAG(IS_WIN)
+  // TODO(oshima): Move Windows-specific cursor handling to subclass.
+  // Cached value of the Windows "Hide pointer while typing" setting.
+  bool mouse_vanish_enabled_ = false;
+
+  // Subscription for WM_SETTINGCHANGE.
+  base::CallbackListSubscription setting_change_subscription_;
+#endif
 };
 
 }  // namespace wm

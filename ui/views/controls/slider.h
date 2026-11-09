@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,14 @@
 #include <memory>
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/views/view.h"
 #include "ui/views/views_export.h"
+#include "ui/views/widget/widget_observer.h"
 
 namespace views {
 
@@ -45,10 +48,12 @@ class VIEWS_EXPORT SliderListener {
 
 // Slider operates in interval [0,1] by default, but can also switch between a
 // predefined set of values, see SetAllowedValues method below.
-class VIEWS_EXPORT Slider : public View, public gfx::AnimationDelegate {
- public:
-  METADATA_HEADER(Slider);
+class VIEWS_EXPORT Slider : public View,
+                            public gfx::AnimationDelegate,
+                            public views::WidgetObserver {
+  METADATA_HEADER(Slider, View)
 
+ public:
   explicit Slider(SliderListener* listener = nullptr);
   Slider(const Slider&) = delete;
   Slider& operator=(const Slider&) = delete;
@@ -56,6 +61,10 @@ class VIEWS_EXPORT Slider : public View, public gfx::AnimationDelegate {
 
   float GetValue() const;
   void SetValue(float value);
+
+  // Getter and Setter of `value_indicator_radius_`.
+  float GetValueIndicatorRadius() const;
+  void SetValueIndicatorRadius(float radius);
 
   bool GetEnableAccessibilityEvents() const;
   void SetEnableAccessibilityEvents(bool enabled);
@@ -81,6 +90,12 @@ class VIEWS_EXPORT Slider : public View, public gfx::AnimationDelegate {
     return allowed_values_;
   }
 
+  // The radius of the thumb.
+  static constexpr float kThumbRadius = 4.f;
+
+  // views::WidgetObserver:
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
+
  protected:
   // Returns the current position of the thumb on the slider.
   float GetAnimatingValue() const;
@@ -95,6 +110,9 @@ class VIEWS_EXPORT Slider : public View, public gfx::AnimationDelegate {
 
   // views::View:
   void OnPaint(gfx::Canvas* canvas) override;
+
+  void AddedToWidget() override;
+  void RemovedFromWidget() override;
 
  private:
   friend class test::SliderTestApi;
@@ -116,30 +134,32 @@ class VIEWS_EXPORT Slider : public View, public gfx::AnimationDelegate {
   void OnSliderDragEnded();
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   void OnFocus() override;
   void OnBlur() override;
   void VisibilityChanged(View* starting_from, bool is_visible) override;
-  void AddedToWidget() override;
 
   // ui::EventHandler:
   void OnGestureEvent(ui::GestureEvent* event) override;
 
   void set_listener(SliderListener* listener) { listener_ = listener; }
 
-  void NotifyPendingAccessibilityValueChanged();
+  void ApplyPendingAccessibleValueUpdate();
 
   virtual SkColor GetThumbColor() const;
   virtual SkColor GetTroughColor() const;
   int GetSliderExtraPadding() const;
 
-  SliderListener* listener_;
+  // Derived classes can override this method to update the accessible value.
+  virtual void UpdateAccessibleValue();
+
+  raw_ptr<SliderListener, AcrossTasksDanglingUntriaged> listener_;
 
   std::unique_ptr<gfx::SlideAnimation> move_animation_;
 
@@ -152,9 +172,15 @@ class VIEWS_EXPORT Slider : public View, public gfx::AnimationDelegate {
   bool value_is_valid_ = false;
   bool accessibility_events_enabled_ = true;
 
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      widget_observation_{this};
+
   // Relative position of the mouse cursor (or the touch point) on the slider's
   // button.
   int initial_button_offset_ = 0;
+
+  // The radius of the value indicator.
+  float value_indicator_radius_ = kThumbRadius;
 
   RenderingStyle style_ = RenderingStyle::kDefaultStyle;
 

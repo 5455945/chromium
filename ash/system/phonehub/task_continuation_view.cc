@@ -1,24 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/phonehub/task_continuation_view.h"
 
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/typography.h"
 #include "ash/system/phonehub/continue_browsing_chip.h"
 #include "ash/system/phonehub/phone_hub_view_ids.h"
 #include "ash/system/phonehub/ui_constants.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 
 namespace ash {
-
-using BrowserTabsModel = chromeos::phonehub::BrowserTabsModel;
 
 namespace {
 
@@ -30,9 +31,6 @@ constexpr int kTaskContinuationChipHorizontalSidePadding = 4;
 constexpr int kTaskContinuationChipVerticalPadding = 4;
 constexpr int kHeaderLabelLineHeight = 48;
 
-// Typography.
-constexpr int kHeaderTextFontSizeDip = 15;
-
 gfx::Size GetTaskContinuationChipSize() {
   int width =
       (kTrayMenuWidth - kBubbleHorizontalSidePaddingDip * 2 -
@@ -43,36 +41,35 @@ gfx::Size GetTaskContinuationChipSize() {
 }
 
 class HeaderView : public views::Label {
+  METADATA_HEADER(HeaderView, views::Label)
+
  public:
   HeaderView() {
     SetText(
         l10n_util::GetStringUTF16(IDS_ASH_PHONE_HUB_TASK_CONTINUATION_TITLE));
-    SetLineHeight(kHeaderLabelLineHeight);
-    SetFontList(font_list()
-                    .DeriveWithSizeDelta(kHeaderTextFontSizeDip -
-                                         font_list().GetFontSize())
-                    .DeriveWithWeight(gfx::Font::Weight::MEDIUM));
     SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
     SetVerticalAlignment(gfx::VerticalAlignment::ALIGN_MIDDLE);
     SetAutoColorReadabilityEnabled(false);
     SetSubpixelRenderingEnabled(false);
-    SetEnabledColor(AshColorProvider::Get()->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kTextColorPrimary));
+    SetEnabledColor(cros_tokens::kTextColorPrimary);
+    TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosButton1,
+                                          *this);
+    SetLineHeight(kHeaderLabelLineHeight);
   }
 
   ~HeaderView() override = default;
   HeaderView(HeaderView&) = delete;
   HeaderView operator=(HeaderView&) = delete;
-
-  // views::View:
-  const char* GetClassName() const override { return "HeaderView"; }
 };
+
+BEGIN_METADATA(HeaderView)
+END_METADATA
 
 }  // namespace
 
 TaskContinuationView::TaskContinuationView(
-    chromeos::phonehub::PhoneModel* phone_model,
-    chromeos::phonehub::UserActionRecorder* user_action_recorder)
+    phonehub::PhoneModel* phone_model,
+    phonehub::UserActionRecorder* user_action_recorder)
     : phone_model_(phone_model), user_action_recorder_(user_action_recorder) {
   SetID(PhoneHubViewID::kTaskContinuationView);
 
@@ -97,22 +94,19 @@ void TaskContinuationView::OnModelChanged() {
   Update();
 }
 
-const char* TaskContinuationView::GetClassName() const {
-  return "TaskContinuationView";
-}
-
 TaskContinuationView::TaskChipsView::TaskChipsView() = default;
 
 TaskContinuationView::TaskChipsView::~TaskChipsView() = default;
 
 void TaskContinuationView::TaskChipsView::AddTaskChip(views::View* task_chip) {
-  int view_size = task_chips_.view_size();
+  size_t view_size = task_chips_.view_size();
   task_chips_.Add(task_chip, view_size);
-  AddChildView(task_chip);
+  AddChildViewRaw(task_chip);
 }
 
 // views::View:
-gfx::Size TaskContinuationView::TaskChipsView::CalculatePreferredSize() const {
+gfx::Size TaskContinuationView::TaskChipsView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   auto chip_size = GetTaskContinuationChipSize();
   int width = chip_size.width() * kTaskContinuationChipsInRow +
               kTaskContinuationChipSpacing +
@@ -126,22 +120,18 @@ gfx::Size TaskContinuationView::TaskChipsView::CalculatePreferredSize() const {
   return gfx::Size(width, height);
 }
 
-void TaskContinuationView::TaskChipsView::Layout() {
-  views::View::Layout();
+void TaskContinuationView::TaskChipsView::Layout(PassKey) {
+  LayoutSuperclass<views::View>(this);
   CalculateIdealBounds();
-  for (int i = 0; i < task_chips_.view_size(); ++i) {
+  for (size_t i = 0; i < task_chips_.view_size(); ++i) {
     auto* button = task_chips_.view_at(i);
     button->SetBoundsRect(task_chips_.ideal_bounds(i));
   }
 }
 
-const char* TaskContinuationView::TaskChipsView::GetClassName() const {
-  return "TaskChipsView";
-}
-
 void TaskContinuationView::TaskChipsView::Reset() {
   task_chips_.Clear();
-  RemoveAllChildViews(true /* delete_children */);
+  RemoveAllChildViews();
 }
 
 gfx::Point TaskContinuationView::TaskChipsView::GetButtonPosition(int index) {
@@ -156,12 +146,15 @@ gfx::Point TaskContinuationView::TaskChipsView::GetButtonPosition(int index) {
 }
 
 void TaskContinuationView::TaskChipsView::CalculateIdealBounds() {
-  for (int i = 0; i < task_chips_.view_size(); ++i) {
+  for (size_t i = 0; i < task_chips_.view_size(); ++i) {
     gfx::Rect tile_bounds =
         gfx::Rect(GetButtonPosition(i), GetTaskContinuationChipSize());
     task_chips_.set_ideal_bounds(i, tile_bounds);
   }
 }
+
+BEGIN_METADATA(TaskContinuationView, TaskChipsView)
+END_METADATA
 
 void TaskContinuationView::Update() {
   chips_view_->Reset();
@@ -171,7 +164,7 @@ void TaskContinuationView::Update() {
     return;
   }
 
-  const BrowserTabsModel& browser_tabs =
+  const phonehub::BrowserTabsModel& browser_tabs =
       phone_model_->browser_tabs_model().value();
 
   if (!browser_tabs.is_tab_sync_enabled() ||
@@ -181,7 +174,7 @@ void TaskContinuationView::Update() {
   }
 
   int index = 0;
-  for (const BrowserTabsModel::BrowserTabMetadata& metadata :
+  for (const phonehub::BrowserTabsModel::BrowserTabMetadata& metadata :
        browser_tabs.most_recent_tabs()) {
     chips_view_->AddTaskChip(new ContinueBrowsingChip(
         metadata, index, browser_tabs.most_recent_tabs().size(),
@@ -192,5 +185,8 @@ void TaskContinuationView::Update() {
   PreferredSizeChanged();
   SetVisible(true);
 }
+
+BEGIN_METADATA(TaskContinuationView)
+END_METADATA
 
 }  // namespace ash

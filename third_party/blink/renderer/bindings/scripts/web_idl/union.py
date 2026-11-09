@@ -1,6 +1,8 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+
+import functools
 
 from .code_generator_info import CodeGeneratorInfoMutable
 from .composition_parts import Identifier
@@ -8,12 +10,11 @@ from .composition_parts import WithCodeGeneratorInfo
 from .composition_parts import WithComponent
 from .composition_parts import WithDebugInfo
 from .composition_parts import WithIdentifier
-from .idl_type import IdlType
-from .typedef import Typedef
 
 
-class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
-            WithDebugInfo):
+class Union(
+    WithIdentifier, WithCodeGeneratorInfo, WithComponent, WithDebugInfo
+):
     """
     Union class makes a group of union types with the same flattened member
     types and the same result whether it includes a nullable type or not.
@@ -53,7 +54,8 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
                 # Typename is not guaranteed to be unique, however it's
                 # unlikely that a conflict happens.
                 token_pieces.append(
-                    idl_type.type_name_with_extended_attribute_key_values)
+                    idl_type.type_name_with_extended_attribute_key_values
+                )
 
         collect_token_pieces(union_type)
         token_pieces.sort()
@@ -75,6 +77,9 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
             self.typedefs = []
             self.sub_union_irs = []
             self.public_object = None
+            self.usage = functools.reduce(
+                lambda usage, u: usage | u.usage, union_types, 0
+            )
 
         def __lt__(self, other):
             if len(self.token) == len(other.token):
@@ -84,8 +89,9 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
 
         def contains(self, other):
             assert isinstance(other, Union.IR)
-            return (self.token != other.token
-                    and self._member_set.issuperset(other._member_set))
+            return self.token != other.token and self._member_set.issuperset(
+                other._member_set
+            )
 
     def __init__(self, ir):
         assert isinstance(ir, Union.IR)
@@ -95,15 +101,16 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
         union_type = ir.union_types[0]
         flattened_member_types = union_type.flattened_member_types
         does_include_nullable_type = union_type.does_include_nullable_type
-        does_include_nullable_or_dict = (
-            union_type.does_include_nullable_or_dict)
+        does_include_nullable_or_dict = union_type.does_include_nullable_or_dict
 
         typedef_members = set()
         union_members = set()
         for union_type in ir.union_types:
             assert union_type.flattened_member_types == flattened_member_types
-            assert (union_type.does_include_nullable_type ==
-                    does_include_nullable_type)
+            assert (
+                union_type.does_include_nullable_type
+                == does_include_nullable_type
+            )
             for member_type in union_type.member_types:
                 if member_type.is_typedef:
                     typedef_members.add(member_type.typedef_object)
@@ -119,8 +126,10 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
             type_definition_object = idl_type.type_definition_object
             if type_definition_object and type_definition_object.components:
                 components.add(type_definition_object.components[0])
-            if (type_definition_object and
-                    type_definition_object.code_generator_info.for_testing):
+            if (
+                type_definition_object
+                and type_definition_object.code_generator_info.for_testing
+            ):
                 for_testing[0] = True
 
         for idl_type in flattened_member_types:
@@ -129,33 +138,34 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
         code_generator_info.set_for_testing(for_testing[0])
 
         WithIdentifier.__init__(self, identifier)
-        WithCodeGeneratorInfo.__init__(self,
-                                       code_generator_info,
-                                       readonly=True)
+        WithCodeGeneratorInfo.__init__(self, code_generator_info, readonly=True)
         WithComponent.__init__(self, sorted(components), readonly=True)
         WithDebugInfo.__init__(self)
 
-        sort_key_typename = lambda idl_type: (
-            idl_type.type_name_with_extended_attribute_key_values)
-        sort_key_identifier = lambda x: x.identifier
+        sort_key_typename = lambda idl_type: (  # noqa: E731
+            idl_type.type_name_with_extended_attribute_key_values
+        )
+        sort_key_identifier = lambda x: x.identifier  # noqa: E731
 
         self._idl_types = tuple(ir.union_types)
         self._member_tokens = ir.token
         self._flattened_member_types = tuple(
-            sorted(flattened_member_types, key=sort_key_typename))
+            sorted(flattened_member_types, key=sort_key_typename)
+        )
         self._does_include_nullable_type = does_include_nullable_type
         self._does_include_nullable_or_dict = does_include_nullable_or_dict
         self._typedef_members = tuple(
-            sorted(typedef_members, key=sort_key_identifier))
+            sorted(typedef_members, key=sort_key_identifier)
+        )
         self._union_members = tuple(
-            sorted(union_members, key=sort_key_identifier))
+            sorted(union_members, key=sort_key_identifier)
+        )
         self._aliasing_typedefs = tuple(
-            sorted(ir.typedefs, key=sort_key_identifier))
+            sorted(ir.typedefs, key=sort_key_identifier)
+        )
+        self._usage = ir.usage
 
         ir.public_object = self
-
-        for idl_type in self._idl_types:
-            idl_type.set_union_definition_object(self)
 
     @property
     def idl_types(self):
@@ -227,3 +237,7 @@ class Union(WithIdentifier, WithCodeGeneratorInfo, WithComponent,
         aliasing_typedefs returns a list of IdlType(T1) and IdlType(T2).
         """
         return self._aliasing_typedefs
+
+    @property
+    def usage(self):
+        return self._usage

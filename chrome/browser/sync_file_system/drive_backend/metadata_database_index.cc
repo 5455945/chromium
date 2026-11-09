@@ -1,15 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database_index.h"
 
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_restrictions.h"
@@ -19,6 +18,7 @@
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.pb.h"
 #include "chrome/browser/sync_file_system/logger.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/leveldatabase/src/include/leveldb/db.h"
 #include "third_party/leveldatabase/src/include/leveldb/write_batch.h"
 
@@ -64,9 +64,9 @@ bool operator<(const ParentIDAndTitle& left, const ParentIDAndTitle& right) {
          std::tie(right.parent_id, right.title);
 }
 
-DatabaseContents::DatabaseContents() {}
+DatabaseContents::DatabaseContents() = default;
 
-DatabaseContents::~DatabaseContents() {}
+DatabaseContents::~DatabaseContents() = default;
 
 namespace {
 
@@ -81,19 +81,18 @@ typename Container::mapped_type FindItem(
 }
 
 void ReadDatabaseContents(LevelDBWrapper* db, DatabaseContents* contents) {
-  DCHECK(db);
-  DCHECK(contents);
+  CHECK(db, base::NotFatalUntil::M162);
+  CHECK(contents, base::NotFatalUntil::M162);
 
   std::unique_ptr<LevelDBWrapper::Iterator> itr(db->NewIterator());
   for (itr->SeekToFirst(); itr->Valid(); itr->Next()) {
     std::string key = itr->key().ToString();
-    std::string value = itr->value().ToString();
 
     std::string file_id;
     if (RemovePrefix(key, kFileMetadataKeyPrefix, &file_id)) {
       std::unique_ptr<FileMetadata> metadata(new FileMetadata);
       if (!metadata->ParseFromString(itr->value().ToString())) {
-        util::Log(logging::LOG_WARNING, FROM_HERE,
+        util::Log(logging::LOGGING_WARNING, FROM_HERE,
                   "Failed to parse a FileMetadata");
         continue;
       }
@@ -106,14 +105,14 @@ void ReadDatabaseContents(LevelDBWrapper* db, DatabaseContents* contents) {
     if (RemovePrefix(key, kFileTrackerKeyPrefix, &tracker_id_str)) {
       int64_t tracker_id = 0;
       if (!base::StringToInt64(tracker_id_str, &tracker_id)) {
-        util::Log(logging::LOG_WARNING, FROM_HERE,
+        util::Log(logging::LOGGING_WARNING, FROM_HERE,
                   "Failed to parse TrackerID");
         continue;
       }
 
       std::unique_ptr<FileTracker> tracker(new FileTracker);
       if (!tracker->ParseFromString(itr->value().ToString())) {
-        util::Log(logging::LOG_WARNING, FROM_HERE,
+        util::Log(logging::LOGGING_WARNING, FROM_HERE,
                   "Failed to parse a Tracker");
         continue;
       }
@@ -130,8 +129,8 @@ void RemoveUnreachableItemsFromDB(DatabaseContents* contents,
   ChildTrackersByParent trackers_by_parent;
 
   // Set up links from parent tracker to child trackers.
-  for (size_t i = 0; i < contents->file_trackers.size(); ++i) {
-    const FileTracker& tracker = *contents->file_trackers[i];
+  for (const auto& file_tracker : contents->file_trackers) {
+    const FileTracker& tracker = *file_tracker;
     int64_t parent_tracker_id = tracker.parent_tracker_id();
     int64_t tracker_id = tracker.tracker_id();
 
@@ -139,8 +138,8 @@ void RemoveUnreachableItemsFromDB(DatabaseContents* contents,
   }
 
   // Drop links from inactive trackers.
-  for (size_t i = 0; i < contents->file_trackers.size(); ++i) {
-    const FileTracker& tracker = *contents->file_trackers[i];
+  for (const auto& file_tracker : contents->file_trackers) {
+    const FileTracker& tracker = *file_tracker;
 
     if (!tracker.active())
       trackers_by_parent.erase(tracker.tracker_id());
@@ -151,15 +150,14 @@ void RemoveUnreachableItemsFromDB(DatabaseContents* contents,
     pending.push_back(sync_root_tracker_id);
 
   // Traverse tracker tree from sync-root.
-  std::set<int64_t> visited_trackers;
+  absl::flat_hash_set<int64_t> visited_trackers;
   while (!pending.empty()) {
     int64_t tracker_id = pending.back();
-    DCHECK_NE(kInvalidTrackerID, tracker_id);
+    CHECK_NE(kInvalidTrackerID, tracker_id, base::NotFatalUntil::M162);
     pending.pop_back();
 
     if (!visited_trackers.insert(tracker_id).second) {
       NOTREACHED();
-      continue;
     }
 
     AppendContents(
@@ -169,9 +167,8 @@ void RemoveUnreachableItemsFromDB(DatabaseContents* contents,
 
   // Delete all unreachable trackers.
   std::vector<std::unique_ptr<FileTracker>> reachable_trackers;
-  for (size_t i = 0; i < contents->file_trackers.size(); ++i) {
-    std::unique_ptr<FileTracker>& tracker = contents->file_trackers[i];
-    if (base::Contains(visited_trackers, tracker->tracker_id())) {
+  for (auto& tracker : contents->file_trackers) {
+    if (visited_trackers.contains(tracker->tracker_id())) {
       reachable_trackers.push_back(std::move(tracker));
     } else {
       PutFileTrackerDeletionToDB(tracker->tracker_id(), db);
@@ -180,15 +177,16 @@ void RemoveUnreachableItemsFromDB(DatabaseContents* contents,
   contents->file_trackers = std::move(reachable_trackers);
 
   // List all |file_id| referred by a tracker.
-  std::unordered_set<std::string> referred_file_ids;
-  for (size_t i = 0; i < contents->file_trackers.size(); ++i)
-    referred_file_ids.insert(contents->file_trackers[i]->file_id());
+  absl::flat_hash_set<std::string> referred_file_ids;
+  referred_file_ids.reserve(contents->file_trackers.size());
+  for (const auto& file_tracker : contents->file_trackers) {
+    referred_file_ids.insert(file_tracker->file_id());
+  }
 
   // Delete all unreferred metadata.
   std::vector<std::unique_ptr<FileMetadata>> referred_file_metadata;
-  for (size_t i = 0; i < contents->file_metadata.size(); ++i) {
-    std::unique_ptr<FileMetadata>& metadata = contents->file_metadata[i];
-    if (base::Contains(referred_file_ids, metadata->file_id())) {
+  for (auto& metadata : contents->file_metadata) {
+    if (referred_file_ids.contains(metadata->file_id())) {
       referred_file_metadata.push_back(std::move(metadata));
     } else {
       PutFileMetadataDeletionToDB(metadata->file_id(), db);
@@ -202,7 +200,7 @@ void RemoveUnreachableItemsFromDB(DatabaseContents* contents,
 // static
 std::unique_ptr<MetadataDatabaseIndex> MetadataDatabaseIndex::Create(
     LevelDBWrapper* db) {
-  DCHECK(db);
+  CHECK(db, base::NotFatalUntil::M162);
 
   std::unique_ptr<ServiceMetadata> service_metadata =
       InitializeServiceMetadata(db);
@@ -245,12 +243,12 @@ void MetadataDatabaseIndex::Initialize(
 }
 
 MetadataDatabaseIndex::MetadataDatabaseIndex(LevelDBWrapper* db) : db_(db) {}
-MetadataDatabaseIndex::~MetadataDatabaseIndex() {}
+MetadataDatabaseIndex::~MetadataDatabaseIndex() = default;
 
 void MetadataDatabaseIndex::RemoveUnreachableItems() {
   // Do nothing. MetadataDatabaseIndex is behind a private flag and will be
   // removed soon.
-  // TODO(crbug.com/568008): Remove MetadataDatabaseIndex.
+  // TODO(crbug.com/40448384): Remove MetadataDatabaseIndex.
 }
 
 bool MetadataDatabaseIndex::GetFileMetadata(
@@ -280,7 +278,6 @@ void MetadataDatabaseIndex::StoreFileMetadata(
   PutFileMetadataToDB(*metadata.get(), db_);
   if (!metadata) {
     NOTREACHED();
-    return;
   }
 
   std::string file_id = metadata->file_id();
@@ -292,7 +289,6 @@ void MetadataDatabaseIndex::StoreFileTracker(
   PutFileTrackerToDB(*tracker.get(), db_);
   if (!tracker) {
     NOTREACHED();
-    return;
   }
 
   int64_t tracker_id = tracker->tracker_id();
@@ -331,7 +327,6 @@ void MetadataDatabaseIndex::RemoveFileTracker(int64_t tracker_id) {
   auto tracker_it = tracker_by_id_.find(tracker_id);
   if (tracker_it == tracker_by_id_.end()) {
     NOTREACHED();
-    return;
   }
   FileTracker* tracker = tracker_it->second.get();
 
@@ -406,11 +401,6 @@ bool MetadataDatabaseIndex::HasDemotedDirtyTracker() const {
   return !demoted_dirty_trackers_.empty();
 }
 
-bool MetadataDatabaseIndex::IsDemotedDirtyTracker(int64_t tracker_id) const {
-  return demoted_dirty_trackers_.find(tracker_id) !=
-      demoted_dirty_trackers_.end();
-}
-
 void MetadataDatabaseIndex::PromoteDemotedDirtyTracker(int64_t tracker_id) {
   if (demoted_dirty_trackers_.erase(tracker_id) == 1)
     dirty_trackers_.insert(tracker_id);
@@ -477,7 +467,6 @@ int64_t MetadataDatabaseIndex::GetLargestChangeID() const {
 int64_t MetadataDatabaseIndex::GetNextTrackerID() const {
   if (!service_metadata_->has_next_tracker_id()) {
     NOTREACHED();
-    return kInvalidTrackerID;
   }
   return service_metadata_->next_tracker_id();
 }
@@ -490,20 +479,6 @@ std::vector<std::string> MetadataDatabaseIndex::GetRegisteredAppIDs() const {
   return result;
 }
 
-std::vector<int64_t> MetadataDatabaseIndex::GetAllTrackerIDs() const {
-  std::vector<int64_t> result;
-  for (const auto& pair : tracker_by_id_)
-    result.push_back(pair.first);
-  return result;
-}
-
-std::vector<std::string> MetadataDatabaseIndex::GetAllMetadataIDs() const {
-  std::vector<std::string> result;
-  for (const auto& pair : metadata_by_id_)
-    result.push_back(pair.first);
-  return result;
-}
-
 void MetadataDatabaseIndex::AddToAppIDIndex(
     const FileTracker& new_tracker) {
   if (!IsAppRoot(new_tracker))
@@ -511,28 +486,32 @@ void MetadataDatabaseIndex::AddToAppIDIndex(
 
   DVLOG(3) << "  Add to app_root_by_app_id_: " << new_tracker.app_id();
 
-  DCHECK(new_tracker.active());
-  DCHECK(!base::Contains(app_root_by_app_id_, new_tracker.app_id()));
+  CHECK(new_tracker.active(), base::NotFatalUntil::M162);
+  CHECK(!app_root_by_app_id_.contains(new_tracker.app_id()),
+        base::NotFatalUntil::M162);
   app_root_by_app_id_[new_tracker.app_id()] = new_tracker.tracker_id();
 }
 
 void MetadataDatabaseIndex::UpdateInAppIDIndex(
     const FileTracker& old_tracker,
     const FileTracker& new_tracker) {
-  DCHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id());
+  CHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id(),
+           base::NotFatalUntil::M162);
 
   if (IsAppRoot(old_tracker) && !IsAppRoot(new_tracker)) {
-    DCHECK(old_tracker.active());
-    DCHECK(!new_tracker.active());
-    DCHECK(base::Contains(app_root_by_app_id_, old_tracker.app_id()));
+    CHECK(old_tracker.active(), base::NotFatalUntil::M162);
+    CHECK(!new_tracker.active(), base::NotFatalUntil::M162);
+    CHECK(app_root_by_app_id_.contains(old_tracker.app_id()),
+          base::NotFatalUntil::M162);
 
     DVLOG(3) << "  Remove from app_root_by_app_id_: " << old_tracker.app_id();
 
     app_root_by_app_id_.erase(old_tracker.app_id());
   } else if (!IsAppRoot(old_tracker) && IsAppRoot(new_tracker)) {
-    DCHECK(!old_tracker.active());
-    DCHECK(new_tracker.active());
-    DCHECK(!base::Contains(app_root_by_app_id_, new_tracker.app_id()));
+    CHECK(!old_tracker.active(), base::NotFatalUntil::M162);
+    CHECK(new_tracker.active(), base::NotFatalUntil::M162);
+    CHECK(!app_root_by_app_id_.contains(new_tracker.app_id()),
+          base::NotFatalUntil::M162);
 
     DVLOG(3) << "  Add to app_root_by_app_id_: " << new_tracker.app_id();
 
@@ -543,8 +522,9 @@ void MetadataDatabaseIndex::UpdateInAppIDIndex(
 void MetadataDatabaseIndex::RemoveFromAppIDIndex(
     const FileTracker& tracker) {
   if (IsAppRoot(tracker)) {
-    DCHECK(tracker.active());
-    DCHECK(base::Contains(app_root_by_app_id_, tracker.app_id()));
+    CHECK(tracker.active(), base::NotFatalUntil::M162);
+    CHECK(app_root_by_app_id_.contains(tracker.app_id()),
+          base::NotFatalUntil::M162);
 
     DVLOG(3) << "  Remove from app_root_by_app_id_: " << tracker.app_id();
 
@@ -559,7 +539,7 @@ void MetadataDatabaseIndex::AddToFileIDIndexes(
   trackers_by_file_id_[new_tracker.file_id()].Insert(new_tracker);
 
   if (trackers_by_file_id_[new_tracker.file_id()].size() > 1) {
-    DVLOG_IF(3, !base::Contains(multi_tracker_file_ids_, new_tracker.file_id()))
+    DVLOG_IF(3, !multi_tracker_file_ids_.contains(new_tracker.file_id()))
         << "  Add to multi_tracker_file_ids_: " << new_tracker.file_id();
     multi_tracker_file_ids_.insert(new_tracker.file_id());
   }
@@ -568,11 +548,13 @@ void MetadataDatabaseIndex::AddToFileIDIndexes(
 void MetadataDatabaseIndex::UpdateInFileIDIndexes(
     const FileTracker& old_tracker,
     const FileTracker& new_tracker) {
-  DCHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id());
-  DCHECK_EQ(old_tracker.file_id(), new_tracker.file_id());
+  CHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id(),
+           base::NotFatalUntil::M162);
+  CHECK_EQ(old_tracker.file_id(), new_tracker.file_id(),
+           base::NotFatalUntil::M162);
 
   std::string file_id = new_tracker.file_id();
-  DCHECK(base::Contains(trackers_by_file_id_, file_id));
+  CHECK(trackers_by_file_id_.contains(file_id), base::NotFatalUntil::M162);
 
   if (old_tracker.active() && !new_tracker.active())
     trackers_by_file_id_[file_id].Deactivate(new_tracker.tracker_id());
@@ -585,7 +567,6 @@ void MetadataDatabaseIndex::RemoveFromFileIDIndexes(
   auto found = trackers_by_file_id_.find(tracker.file_id());
   if (found == trackers_by_file_id_.end()) {
     NOTREACHED();
-    return;
   }
 
   DVLOG(3) << "  Remove from trackers_by_file_id_: "
@@ -593,7 +574,7 @@ void MetadataDatabaseIndex::RemoveFromFileIDIndexes(
   found->second.Erase(tracker.tracker_id());
 
   if (trackers_by_file_id_[tracker.file_id()].size() <= 1) {
-    DVLOG_IF(3, base::Contains(multi_tracker_file_ids_, tracker.file_id()))
+    DVLOG_IF(3, multi_tracker_file_ids_.contains(tracker.file_id()))
         << "  Remove from multi_tracker_file_ids_: " << tracker.file_id();
     multi_tracker_file_ids_.erase(tracker.file_id());
   }
@@ -614,8 +595,8 @@ void MetadataDatabaseIndex::AddToPathIndexes(
 
   if (trackers_by_parent_and_title_[parent][title].size() > 1 &&
       !title.empty()) {
-    DVLOG_IF(3, !base::Contains(multi_backing_file_paths_,
-                                ParentIDAndTitle(parent, title)))
+    DVLOG_IF(
+        3, !multi_backing_file_paths_.contains(ParentIDAndTitle(parent, title)))
         << "  Add to multi_backing_file_paths_: " << parent << " " << title;
     multi_backing_file_paths_.insert(ParentIDAndTitle(parent, title));
   }
@@ -624,10 +605,13 @@ void MetadataDatabaseIndex::AddToPathIndexes(
 void MetadataDatabaseIndex::UpdateInPathIndexes(
     const FileTracker& old_tracker,
     const FileTracker& new_tracker) {
-  DCHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id());
-  DCHECK_EQ(old_tracker.parent_tracker_id(), new_tracker.parent_tracker_id());
-  DCHECK(GetTrackerTitle(old_tracker) == GetTrackerTitle(new_tracker) ||
-         !old_tracker.has_synced_details());
+  CHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id(),
+           base::NotFatalUntil::M162);
+  CHECK_EQ(old_tracker.parent_tracker_id(), new_tracker.parent_tracker_id(),
+           base::NotFatalUntil::M162);
+  CHECK(GetTrackerTitle(old_tracker) == GetTrackerTitle(new_tracker) ||
+            !old_tracker.has_synced_details(),
+        base::NotFatalUntil::M162);
 
   int64_t tracker_id = new_tracker.tracker_id();
   int64_t parent = new_tracker.parent_tracker_id();
@@ -656,8 +640,8 @@ void MetadataDatabaseIndex::UpdateInPathIndexes(
 
     if (trackers_by_parent_and_title_[parent][old_title].size() <= 1 &&
         !old_title.empty()) {
-      DVLOG_IF(3, base::Contains(multi_backing_file_paths_,
-                                 ParentIDAndTitle(parent, old_title)))
+      DVLOG_IF(3, multi_backing_file_paths_.contains(
+                      ParentIDAndTitle(parent, old_title)))
           << "  Remove from multi_backing_file_paths_: " << parent << " "
           << old_title;
       multi_backing_file_paths_.erase(ParentIDAndTitle(parent, old_title));
@@ -665,8 +649,8 @@ void MetadataDatabaseIndex::UpdateInPathIndexes(
 
     if (trackers_by_parent_and_title_[parent][title].size() > 1 &&
         !title.empty()) {
-      DVLOG_IF(3, !base::Contains(multi_backing_file_paths_,
-                                  ParentIDAndTitle(parent, title)))
+      DVLOG_IF(3, !multi_backing_file_paths_.contains(
+                      ParentIDAndTitle(parent, title)))
           << "  Add to multi_backing_file_paths_: " << parent << " " << title;
       multi_backing_file_paths_.insert(ParentIDAndTitle(parent, title));
     }
@@ -686,8 +670,10 @@ void MetadataDatabaseIndex::RemoveFromPathIndexes(
   int64_t parent = tracker.parent_tracker_id();
   std::string title = GetTrackerTitle(tracker);
 
-  DCHECK(base::Contains(trackers_by_parent_and_title_, parent));
-  DCHECK(base::Contains(trackers_by_parent_and_title_[parent], title));
+  CHECK(trackers_by_parent_and_title_.contains(parent),
+        base::NotFatalUntil::M162);
+  CHECK(trackers_by_parent_and_title_[parent].contains(title),
+        base::NotFatalUntil::M162);
 
   DVLOG(3) << "  Remove from trackers_by_parent_and_title_: "
            << parent << " " << title;
@@ -696,8 +682,8 @@ void MetadataDatabaseIndex::RemoveFromPathIndexes(
 
   if (trackers_by_parent_and_title_[parent][title].size() <= 1 &&
       !title.empty()) {
-    DVLOG_IF(3, base::Contains(multi_backing_file_paths_,
-                               ParentIDAndTitle(parent, title)))
+    DVLOG_IF(
+        3, multi_backing_file_paths_.contains(ParentIDAndTitle(parent, title)))
         << "  Remove from multi_backing_file_paths_: " << parent << " "
         << title;
     multi_backing_file_paths_.erase(ParentIDAndTitle(parent, title));
@@ -712,8 +698,10 @@ void MetadataDatabaseIndex::RemoveFromPathIndexes(
 
 void MetadataDatabaseIndex::AddToDirtyTrackerIndexes(
     const FileTracker& new_tracker) {
-  DCHECK(!base::Contains(dirty_trackers_, new_tracker.tracker_id()));
-  DCHECK(!base::Contains(demoted_dirty_trackers_, new_tracker.tracker_id()));
+  CHECK(!dirty_trackers_.contains(new_tracker.tracker_id()),
+        base::NotFatalUntil::M162);
+  CHECK(!demoted_dirty_trackers_.contains(new_tracker.tracker_id()),
+        base::NotFatalUntil::M162);
 
   if (new_tracker.dirty()) {
     DVLOG(3) << "  Add to dirty_trackers_: " << new_tracker.tracker_id();
@@ -724,20 +712,23 @@ void MetadataDatabaseIndex::AddToDirtyTrackerIndexes(
 void MetadataDatabaseIndex::UpdateInDirtyTrackerIndexes(
     const FileTracker& old_tracker,
     const FileTracker& new_tracker) {
-  DCHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id());
+  CHECK_EQ(old_tracker.tracker_id(), new_tracker.tracker_id(),
+           base::NotFatalUntil::M162);
 
   int64_t tracker_id = new_tracker.tracker_id();
   if (old_tracker.dirty() && !new_tracker.dirty()) {
-    DCHECK(base::Contains(dirty_trackers_, tracker_id) ||
-           base::Contains(demoted_dirty_trackers_, tracker_id));
+    CHECK(dirty_trackers_.contains(tracker_id) ||
+              demoted_dirty_trackers_.contains(tracker_id),
+          base::NotFatalUntil::M162);
 
     DVLOG(3) << "  Remove from dirty_trackers_: " << tracker_id;
 
     dirty_trackers_.erase(tracker_id);
     demoted_dirty_trackers_.erase(tracker_id);
   } else if (!old_tracker.dirty() && new_tracker.dirty()) {
-    DCHECK(!base::Contains(dirty_trackers_, tracker_id));
-    DCHECK(!base::Contains(demoted_dirty_trackers_, tracker_id));
+    CHECK(!dirty_trackers_.contains(tracker_id), base::NotFatalUntil::M162);
+    CHECK(!demoted_dirty_trackers_.contains(tracker_id),
+          base::NotFatalUntil::M162);
 
     DVLOG(3) << "  Add to dirty_trackers_: " << tracker_id;
 
@@ -749,8 +740,9 @@ void MetadataDatabaseIndex::RemoveFromDirtyTrackerIndexes(
     const FileTracker& tracker) {
   if (tracker.dirty()) {
     int64_t tracker_id = tracker.tracker_id();
-    DCHECK(base::Contains(dirty_trackers_, tracker_id) ||
-           base::Contains(demoted_dirty_trackers_, tracker_id));
+    CHECK(dirty_trackers_.contains(tracker_id) ||
+              demoted_dirty_trackers_.contains(tracker_id),
+          base::NotFatalUntil::M162);
 
     DVLOG(3) << "  Remove from dirty_trackers_: " << tracker_id;
     dirty_trackers_.erase(tracker_id);

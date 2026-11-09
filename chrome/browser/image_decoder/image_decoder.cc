@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,21 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
-#include "ipc/ipc_channel.h"
+#include "ipc/constants.mojom.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/data_decoder/public/cpp/decode_image.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/gfx/geometry/size.h"
 
 namespace {
 
 const int64_t kMaxImageSizeInBytes =
-    static_cast<int64_t>(IPC::Channel::kMaximumMessageSize);
+    static_cast<int64_t>(IPC::mojom::kChannelMaximumMessageSize);
 
 // Note that this is always called on the thread which initiated the
 // corresponding data_decoder::DecodeImage request.
@@ -38,31 +36,31 @@ void OnDecodeImageDone(
 }
 
 void RunDecodeCallbackOnTaskRunner(
-    data_decoder::mojom::ImageDecoder::DecodeImageCallback callback,
+    data_decoder::DecodeImageCallback callback,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     const SkBitmap& image) {
   task_runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback), image));
 }
 
-void DecodeImage(
-    std::vector<uint8_t> image_data,
-    data_decoder::mojom::ImageCodec codec,
-    bool shrink_to_fit,
-    const gfx::Size& desired_image_frame_size,
-    data_decoder::mojom::ImageDecoder::DecodeImageCallback callback,
-    scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
-    data_decoder::DataDecoder* data_decoder) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+template <typename ImageDataType>
+void DecodeImage(ImageDataType image_data,
+                 data_decoder::mojom::ImageCodec codec,
+                 bool shrink_to_fit,
+                 const gfx::Size& desired_image_frame_size,
+                 data_decoder::DecodeImageCallback callback,
+                 scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
+                 data_decoder::DataDecoder* data_decoder) {
+  base::span<const uint8_t> image_data_span(base::as_byte_span(image_data));
 
   if (data_decoder) {
     data_decoder::DecodeImage(
-        data_decoder, image_data, codec, shrink_to_fit, kMaxImageSizeInBytes,
-        desired_image_frame_size,
+        data_decoder, image_data_span, codec, shrink_to_fit,
+        kMaxImageSizeInBytes, desired_image_frame_size,
         base::BindOnce(&RunDecodeCallbackOnTaskRunner, std::move(callback),
                        std::move(callback_task_runner)));
   } else {
     data_decoder::DecodeImageIsolated(
-        image_data, codec, shrink_to_fit, kMaxImageSizeInBytes,
+        image_data_span, codec, shrink_to_fit, kMaxImageSizeInBytes,
         desired_image_frame_size,
         base::BindOnce(&RunDecodeCallbackOnTaskRunner, std::move(callback),
                        std::move(callback_task_runner)));
@@ -72,7 +70,7 @@ void DecodeImage(
 }  // namespace
 
 ImageDecoder::ImageRequest::ImageRequest()
-    : task_runner_(base::ThreadTaskRunnerHandle::Get()) {
+    : task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
@@ -84,7 +82,7 @@ ImageDecoder::ImageRequest::ImageRequest(
 
 ImageDecoder::ImageRequest::ImageRequest(
     data_decoder::DataDecoder* data_decoder)
-    : task_runner_(base::ThreadTaskRunnerHandle::Get()),
+    : task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       data_decoder_(data_decoder) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
@@ -96,27 +94,24 @@ ImageDecoder::ImageRequest::~ImageRequest() {
 
 // static
 ImageDecoder* ImageDecoder::GetInstance() {
-  static auto* image_decoder = new ImageDecoder();
-  return image_decoder;
+  static base::NoDestructor<ImageDecoder> image_decoder;
+  return image_decoder.get();
 }
 
 // static
+template <typename ImageDataType>
 void ImageDecoder::Start(ImageRequest* image_request,
-                         std::vector<uint8_t> image_data) {
-  StartWithOptions(image_request, std::move(image_data), DEFAULT_CODEC, false,
-                   gfx::Size());
+                         ImageDataType image_data) {
+  StartWithOptions(image_request, std::move(image_data));
 }
 
-// static
-void ImageDecoder::Start(ImageRequest* image_request,
-                         const std::string& image_data) {
-  Start(image_request,
-        std::vector<uint8_t>(image_data.begin(), image_data.end()));
-}
+template void ImageDecoder::Start(ImageRequest*, std::vector<uint8_t>);
+template void ImageDecoder::Start(ImageRequest*, std::string);
 
 // static
+template <typename ImageDataType>
 void ImageDecoder::StartWithOptions(ImageRequest* image_request,
-                                    std::vector<uint8_t> image_data,
+                                    ImageDataType image_data,
                                     ImageCodec image_codec,
                                     bool shrink_to_fit,
                                     const gfx::Size& desired_image_frame_size) {
@@ -125,26 +120,28 @@ void ImageDecoder::StartWithOptions(ImageRequest* image_request,
       desired_image_frame_size);
 }
 
-// static
-void ImageDecoder::StartWithOptions(ImageRequest* image_request,
-                                    const std::string& image_data,
-                                    ImageCodec image_codec,
-                                    bool shrink_to_fit) {
-  StartWithOptions(image_request,
-                   std::vector<uint8_t>(image_data.begin(), image_data.end()),
-                   image_codec, shrink_to_fit, gfx::Size());
-}
+template void ImageDecoder::StartWithOptions(ImageRequest*,
+                                             std::vector<uint8_t>,
+                                             ImageCodec,
+                                             bool,
+                                             const gfx::Size&);
+template void ImageDecoder::StartWithOptions(ImageRequest*,
+                                             std::string,
+                                             ImageCodec,
+                                             bool,
+                                             const gfx::Size&);
 
 ImageDecoder::ImageDecoder() : image_request_id_counter_(0) {}
 
+template <typename ImageDataType>
 void ImageDecoder::StartWithOptionsImpl(
     ImageRequest* image_request,
-    std::vector<uint8_t> image_data,
+    ImageDataType image_data,
     ImageCodec image_codec,
     bool shrink_to_fit,
     const gfx::Size& desired_image_frame_size) {
-  DCHECK(image_request);
-  DCHECK(image_request->task_runner());
+  CHECK(image_request, base::NotFatalUntil::M161);
+  CHECK(image_request->task_runner(), base::NotFatalUntil::M161);
 
   int request_id;
   {
@@ -155,10 +152,10 @@ void ImageDecoder::StartWithOptionsImpl(
 
   data_decoder::mojom::ImageCodec codec =
       data_decoder::mojom::ImageCodec::kDefault;
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
   if (image_codec == PNG_CODEC)
     codec = data_decoder::mojom::ImageCodec::kPng;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   auto callback =
       base::BindOnce(&OnDecodeImageDone,
@@ -168,21 +165,26 @@ void ImageDecoder::StartWithOptionsImpl(
                                     base::Unretained(this)),
                      request_id);
 
-  // NOTE: There exist ImageDecoder consumers which implicitly rely on this
-  // operation happening on a thread which always has a ThreadTaskRunnerHandle.
-  // We arbitrarily use the IO thread here to match details of the legacy
-  // implementation.
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&DecodeImage, std::move(image_data), codec, shrink_to_fit,
-                     desired_image_frame_size, std::move(callback),
-                     base::WrapRefCounted(image_request->task_runner()),
-                     image_request->data_decoder()));
+  DecodeImage<ImageDataType>(std::move(image_data), codec, shrink_to_fit,
+                             desired_image_frame_size, std::move(callback),
+                             image_request->task_runner(),
+                             image_request->data_decoder());
 }
+
+template void ImageDecoder::StartWithOptionsImpl(ImageRequest*,
+                                                 std::vector<uint8_t>,
+                                                 ImageCodec,
+                                                 bool,
+                                                 const gfx::Size&);
+template void ImageDecoder::StartWithOptionsImpl(ImageRequest*,
+                                                 std::string,
+                                                 ImageCodec,
+                                                 bool,
+                                                 const gfx::Size&);
 
 // static
 void ImageDecoder::Cancel(ImageRequest* image_request) {
-  DCHECK(image_request);
+  CHECK(image_request, base::NotFatalUntil::M161);
   ImageDecoder::GetInstance()->CancelImpl(image_request);
 }
 
@@ -210,7 +212,8 @@ void ImageDecoder::OnDecodeImageSucceeded(const SkBitmap& decoded_image,
     image_request_id_map_.erase(it);
   }
 
-  DCHECK(image_request->task_runner()->RunsTasksInCurrentSequence());
+  CHECK(image_request->task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   image_request->OnImageDecoded(decoded_image);
 }
 
@@ -225,6 +228,7 @@ void ImageDecoder::OnDecodeImageFailed(int request_id) {
     image_request_id_map_.erase(it);
   }
 
-  DCHECK(image_request->task_runner()->RunsTasksInCurrentSequence());
+  CHECK(image_request->task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   image_request->OnDecodeImageFailed();
 }

@@ -1,12 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/media_keys_listener_manager_impl.h"
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/media/active_media_session_controller.h"
 #include "content/public/test/browser_test.h"
@@ -17,9 +17,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/media_keys_listener.h"
-
-// Disable on CrOS because MediaKeysListenerManager is disabled.
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 namespace content {
 
@@ -35,6 +32,10 @@ class MockMediaKeysListener : public ui::MediaKeysListener {
  public:
   explicit MockMediaKeysListener(ui::MediaKeysListener::Delegate* delegate)
       : delegate_(delegate) {}
+
+  MockMediaKeysListener(const MockMediaKeysListener&) = delete;
+  MockMediaKeysListener& operator=(const MockMediaKeysListener&) = delete;
+
   ~MockMediaKeysListener() override = default;
 
   // MediaKeysListener implementation.
@@ -56,15 +57,18 @@ class MockMediaKeysListener : public ui::MediaKeysListener {
   }
 
  private:
-  ui::MediaKeysListener::Delegate* delegate_;
+  raw_ptr<ui::MediaKeysListener::Delegate> delegate_;
   base::flat_set<ui::KeyboardCode> key_codes_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockMediaKeysListener);
 };
 
 class MockMediaKeysListenerDelegate : public ui::MediaKeysListener::Delegate {
  public:
   MockMediaKeysListenerDelegate() = default;
+
+  MockMediaKeysListenerDelegate(const MockMediaKeysListenerDelegate&) = delete;
+  MockMediaKeysListenerDelegate& operator=(
+      const MockMediaKeysListenerDelegate&) = delete;
+
   ~MockMediaKeysListenerDelegate() override = default;
 
   // MediaKeysListener::Delegate implementation.
@@ -85,8 +89,6 @@ class MockMediaKeysListenerDelegate : public ui::MediaKeysListener::Delegate {
 
  private:
   std::vector<ui::KeyboardCode> received_keys_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockMediaKeysListenerDelegate);
 };
 
 }  // anonymous namespace
@@ -94,11 +96,16 @@ class MockMediaKeysListenerDelegate : public ui::MediaKeysListener::Delegate {
 class MediaKeysListenerManagerImplTest : public ContentBrowserTest {
  public:
   MediaKeysListenerManagerImplTest() = default;
+
+  MediaKeysListenerManagerImplTest(const MediaKeysListenerManagerImplTest&) =
+      delete;
+  MediaKeysListenerManagerImplTest& operator=(
+      const MediaKeysListenerManagerImplTest&) = delete;
+
   ~MediaKeysListenerManagerImplTest() override = default;
 
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     scoped_feature_list_.InitAndEnableFeature(media::kHardwareMediaKeyHandling);
   }
 
@@ -118,6 +125,12 @@ class MediaKeysListenerManagerImplTest : public ContentBrowserTest {
             media_controller_->CreateMediaControllerRemote());
 
     ContentBrowserTest::SetUpOnMainThread();
+  }
+
+  void TearDownOnMainThread() override {
+    media_keys_listener_manager_ = nullptr;
+    media_keys_listener_ = nullptr;
+    ContentBrowserTest::TearDownOnMainThread();
   }
 
   void SetMediaSessionInfo(MediaSessionInfoPtr session_info) {
@@ -142,11 +155,9 @@ class MediaKeysListenerManagerImplTest : public ContentBrowserTest {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-  MediaKeysListenerManagerImpl* media_keys_listener_manager_;
-  MockMediaKeysListener* media_keys_listener_;
+  raw_ptr<MediaKeysListenerManagerImpl> media_keys_listener_manager_;
+  raw_ptr<MockMediaKeysListener> media_keys_listener_;
   std::unique_ptr<TestMediaController> media_controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaKeysListenerManagerImplTest);
 };
 
 IN_PROC_BROWSER_TEST_F(MediaKeysListenerManagerImplTest, PressPlayPauseKey) {
@@ -336,6 +347,43 @@ IN_PROC_BROWSER_TEST_F(MediaKeysListenerManagerImplTest,
   delegate.ExpectReceivedKeysCount(1);
 }
 
-}  // namespace content
+IN_PROC_BROWSER_TEST_F(MediaKeysListenerManagerImplTest, IgnoreZeroSeek) {
+  ActiveMediaSessionController* controller =
+      media_keys_listener_manager()
+          ->active_media_session_controller_for_testing();
 
-#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
+  // A zero relative seek should be ignored rather than sent to the
+  // MediaController (which disallows zero seek times).
+  controller->OnSeek(base::TimeDelta());
+  FlushForTesting();
+  EXPECT_EQ(0, media_controller()->seek_forward_count());
+  EXPECT_EQ(0, media_controller()->seek_backward_count());
+
+  // A non-zero relative seek should be forwarded.
+  controller->OnSeek(base::Seconds(5));
+  FlushForTesting();
+  EXPECT_EQ(1, media_controller()->seek_forward_count());
+  EXPECT_EQ(0, media_controller()->seek_backward_count());
+
+  // When `kSeekTo` is not supported, `OnSeekTo` falls back to relative `Seek`
+  // using the difference from `position_`. If the target time matches the
+  // current position (so `time_diff` is zero), it should be ignored.
+  controller->MediaSessionPositionChanged(media_session::MediaPosition(
+      /*playback_rate=*/0.0, /*duration=*/base::Seconds(10),
+      /*position=*/base::Seconds(5), /*end_of_media=*/false));
+  controller->OnSeekTo(base::Seconds(5));
+  FlushForTesting();
+  EXPECT_EQ(1, media_controller()->seek_forward_count());
+  EXPECT_EQ(0, media_controller()->seek_backward_count());
+  EXPECT_EQ(0, media_controller()->seek_to_count());
+
+  // Seeking to a different position when `kSeekTo` is not supported should
+  // forward the non-zero difference via `Seek`.
+  controller->OnSeekTo(base::Seconds(3));
+  FlushForTesting();
+  EXPECT_EQ(1, media_controller()->seek_forward_count());
+  EXPECT_EQ(1, media_controller()->seek_backward_count());
+  EXPECT_EQ(0, media_controller()->seek_to_count());
+}
+
+}  // namespace content

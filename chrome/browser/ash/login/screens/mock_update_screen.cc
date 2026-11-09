@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,34 +10,20 @@ using ::testing::AtLeast;
 using ::testing::_;
 
 MockUpdateScreen::MockUpdateScreen(
-    UpdateView* view,
+    PrefService* local_state,
+    base::WeakPtr<UpdateView> view,
     ErrorScreen* error_screen,
     const UpdateScreen::ScreenExitCallback& exit_callback)
-    : UpdateScreen(view, error_screen, exit_callback) {}
+    : UpdateScreen(local_state, std::move(view), error_screen, exit_callback) {}
 
-MockUpdateScreen::~MockUpdateScreen() {}
+MockUpdateScreen::~MockUpdateScreen() = default;
 
 void MockUpdateScreen::RunExit(UpdateScreen::Result result) {
   ExitUpdate(result);
 }
 
-MockUpdateView::MockUpdateView() {
-  EXPECT_CALL(*this, MockBind(_)).Times(AtLeast(1));
-}
+MockUpdateView::MockUpdateView() = default;
 
-MockUpdateView::~MockUpdateView() {
-  if (screen_)
-    screen_->OnViewDestroyed(this);
-}
-
-void MockUpdateView::Bind(UpdateScreen* screen) {
-  screen_ = screen;
-  MockBind(screen);
-}
-
-void MockUpdateView::Unbind() {
-  screen_ = nullptr;
-  MockUnbind();
-}
+MockUpdateView::~MockUpdateView() = default;
 
 }  // namespace ash

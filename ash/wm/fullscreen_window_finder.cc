@@ -1,15 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/wm/fullscreen_window_finder.h"
+
+#include <ranges>
 
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/switchable_windows.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
-#include "base/containers/adapters.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
 #include "ui/wm/core/window_util.h"
@@ -40,8 +41,11 @@ aura::Window* GetTopMostWindowInContainer(aura::Window* container) {
   DCHECK(container);
   DCHECK(IsSwitchableContainer(container));
 
-  for (auto* child : base::Reversed(container->children())) {
-    if (WindowState::Get(child)->IsUserPositionable() &&
+  for (aura::Window* child : std::views::reverse(container->children())) {
+    // `child` may be type `aura::client::WINDOW_TYPE_CONTROL` which has no
+    // WindowState.
+    if (WindowState::Get(child) &&
+        WindowState::Get(child)->IsUserPositionable() &&
         child->layer()->GetTargetVisibility()) {
       return child;
     }

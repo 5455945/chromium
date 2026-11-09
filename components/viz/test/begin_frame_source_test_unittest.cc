@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -57,7 +57,7 @@ TEST(MockBeginFrameObserverTest, ExpectOnBeginFrame) {
   EXPECT_BEGIN_FRAME_USED(obs, 0, 3, 700, 900, 300);
 
   EXPECT_EQ(obs.LastUsedBeginFrameArgs(),
-            MockBeginFrameObserver::kDefaultBeginFrameArgs);
+            MockBeginFrameObserver::GetDefaultBeginFrameArgs());
 
   obs.OnBeginFrame(CreateBeginFrameArgsForTesting(
       BEGINFRAME_FROM_HERE, 0, 1, 100, 200,
@@ -89,7 +89,7 @@ TEST(MockBeginFrameObserverTest, ExpectOnBeginFrameStatus) {
   EXPECT_BEGIN_FRAME_USED(obs, 0, 4, 700, 900, 300);
 
   EXPECT_EQ(obs.LastUsedBeginFrameArgs(),
-            MockBeginFrameObserver::kDefaultBeginFrameArgs);
+            MockBeginFrameObserver::GetDefaultBeginFrameArgs());
 
   // Used
   obs.OnBeginFrame(CreateBeginFrameArgsForTesting(BEGINFRAME_FROM_HERE, 0, 1,

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,10 @@
 #include <stdint.h>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "components/web_cache/public/mojom/web_cache.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace web_cache {
 
@@ -22,6 +20,10 @@ namespace web_cache {
 class WebCacheImpl : public mojom::WebCache {
  public:
   WebCacheImpl();
+
+  WebCacheImpl(const WebCacheImpl&) = delete;
+  WebCacheImpl& operator=(const WebCacheImpl&) = delete;
+
   ~WebCacheImpl() override;
 
   void BindReceiver(mojo::PendingReceiver<mojom::WebCache> web_cache_receiver);
@@ -38,7 +40,6 @@ class WebCacheImpl : public mojom::WebCache {
   };
 
   // mojom::WebCache methods:
-  void SetCacheCapacity(uint64_t capacity) override;
   // If |on_navigation| is true, the clearing is delayed until the next
   // navigation event.
   void ClearCache(bool on_navigation) override;
@@ -49,10 +50,6 @@ class WebCacheImpl : public mojom::WebCache {
   State clear_cache_state_ = kInit;
 
   mojo::ReceiverSet<mojom::WebCache> receivers_;
-
-  absl::optional<base::MemoryPressureListener> memory_pressure_listener_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebCacheImpl);
 };
 
 }  // namespace web_cache

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,11 @@
 
 #include <set>
 #include <string>
+#include <string_view>
+#include <vector>
 
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/i18n/language_tag.h"
+#include "base/memory/raw_ptr.h"
 #include "components/prefs/pref_change_registrar.h"
 
 class PrefService;
@@ -26,30 +28,19 @@ class PrefService;
 
 namespace language {
 
-extern const char kFallbackInputMethodLocale[];
+inline constexpr char kFallbackInputMethodLocale[] = "en-US";
 
 class LanguagePrefs {
  public:
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   explicit LanguagePrefs(PrefService* user_prefs);
+
+  LanguagePrefs(const LanguagePrefs&) = delete;
+  LanguagePrefs& operator=(const LanguagePrefs&) = delete;
+
   ~LanguagePrefs();
 
-  // Return true iff the user is fluent in the given |language|.
-  bool IsFluent(base::StringPiece language) const;
-  // Mark that the user is fluent in the given |language|.
-  void SetFluent(base::StringPiece language);
-  // Remove the given |language| from the user's fluent languages.
-  void ClearFluent(base::StringPiece language);
-  // Reset the fluent languages to their defaults.
-  void ResetFluentLanguagesToDefaults();
-  // Get the default fluent languages for the user.
-  static base::Value GetDefaultFluentLanguages();
-  // Get the current list of fluent languages for the user formatted as Chrome
-  // language codes.
-  std::vector<std::string> GetFluentLanguages() const;
-  // If the list of fluent languages is empty, reset it to defaults.
-  void ResetEmptyFluentLanguagesToDefault();
   // Gets the language settings list containing combination of policy-forced and
   // user-selected languages. Language settings list follows the Chrome internal
   // format.
@@ -61,7 +52,16 @@ class LanguagePrefs {
   // be in the Chrome internal format.
   void SetUserSelectedLanguagesList(const std::vector<std::string>& languages);
   // Returns true if the target language is forced through policy.
-  bool IsForcedLanguage(const std::string& language);
+  bool IsForcedLanguage(std::string_view language);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Get the ULP languages from a preference. This is an unfiltered list of
+  // languages and may contain country specific language locales. If you do not
+  // need specific locals always compare base languages from the list.
+  std::vector<std::string> GetULPLanguages();
+  // Clear the previous ULP language pref and set to the new list of languages.
+  void SetULPLanguages(std::vector<base::i18n::LanguageTag> ulp_languages);
+#endif
 
  private:
   // Updates the language list containing combination of policy-forced and
@@ -78,21 +78,27 @@ class LanguagePrefs {
   // compatibility.
   void InitializeSelectedLanguagesPref();
 
-  size_t NumFluentLanguages() const;
-
   // Used for deduplication and reordering of languages.
-  std::set<std::string> forced_languages_set_;
+  std::set<std::string, std::less<>> forced_languages_set_;
 
-  PrefService* prefs_;  // Weak.
+  raw_ptr<PrefService> prefs_;  // Weak.
   PrefChangeRegistrar pref_change_registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(LanguagePrefs);
 };
 
 void ResetLanguagePrefs(PrefService* prefs);
 
 // Given a comma separated list of locales, return the first.
-std::string GetFirstLanguage(base::StringPiece language_list);
+std::string GetFirstLanguage(std::string_view language_list);
+
+// Given a comma separated list of locales, return the top number of languages
+// based on the setting.
+std::string GetLanguagesWithMaxCount(std::string_view language_list);
+
+// Given a comma separated list of language tags, return a new list which keeps
+// the same first language tag but otherwise matches one of Chrome's standard
+// default configurations. This is to reduce the identifiability when incognito
+// of users who've configured unusual language preferences.
+std::string GetIncognitoLanguageList(std::string_view language_list);
 
 }  // namespace language
 

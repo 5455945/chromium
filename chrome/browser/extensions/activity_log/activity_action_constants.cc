@@ -1,10 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // String constants used when logging data in the extension activity log.
 
 #include "chrome/browser/extensions/activity_log/activity_action_constants.h"
+
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace activity_log_constants {
 

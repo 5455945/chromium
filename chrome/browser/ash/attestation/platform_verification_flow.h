@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,14 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-// TODO(https://crbug.com/1164001): forward declare AttestatoinFlow
-// after //chromeos/attestation is moved to ash.
-#include "chromeos/attestation/attestation_flow.h"
-// TODO(https://crbug.com/1164001): forward declare AttestatoinClient
-// before ChromeOS source migration.
-#include "chromeos/dbus/attestation/attestation_client.h"
-#include "chromeos/dbus/attestation/interface.pb.h"
-#include "chromeos/dbus/constants/attestation_constants.h"
+#include "chromeos/ash/components/dbus/attestation/interface.pb.h"
+#include "chromeos/ash/components/dbus/constants/attestation_constants.h"
 #include "components/account_id/account_id.h"
-#include "url/gurl.h"
 
 class AccountId;
 
@@ -36,8 +29,12 @@ class User;
 }  // namespace user_manager
 
 namespace ash {
+
+class AttestationClient;
+
 namespace attestation {
 
+class AttestationFlow;
 class PlatformVerificationFlowTest;
 
 // This class allows platform verification for the content protection use case.
@@ -57,7 +54,8 @@ class PlatformVerificationFlowTest;
 // attestation flow is aborted at any stage, it will need to start over.  If we
 // use weak pointers, the attestation flow will stop when the next callback is
 // run.  So we need the instance to stay alive until the platform key is fully
-// certified so the next time ChallegePlatformKey() is invoked it will be quick.
+// certified so the next time ChallengePlatformKey() is invoked it will be
+// quick.
 class PlatformVerificationFlow
     : public base::RefCountedThreadSafe<PlatformVerificationFlow> {
  public:
@@ -87,7 +85,7 @@ class PlatformVerificationFlow
   // purposes.  For normal operation the default implementation should be used.
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     // Returns true iff the device is in a mode that supports platform
     // verification. For example, platform verification is not supported in dev
@@ -118,6 +116,9 @@ class PlatformVerificationFlow
   PlatformVerificationFlow(AttestationFlow* attestation_flow,
                            AttestationClient* attestation_client,
                            Delegate* delegate);
+
+  PlatformVerificationFlow(const PlatformVerificationFlow&) = delete;
+  PlatformVerificationFlow& operator=(const PlatformVerificationFlow&) = delete;
 
   // Invokes an asynchronous operation to challenge a platform key.  Any user
   // interaction will be associated with |web_contents|.  The |service_id| is an
@@ -231,15 +232,13 @@ class PlatformVerificationFlow
                                 AttestationStatus operation_status,
                                 const std::string& certificate_chain);
 
-  AttestationFlow* attestation_flow_;
+  raw_ptr<AttestationFlow> attestation_flow_;
   std::unique_ptr<AttestationFlow> default_attestation_flow_;
-  AttestationClient* const attestation_client_;
-  Delegate* delegate_;
+  const raw_ptr<AttestationClient, DanglingUntriaged> attestation_client_;
+  raw_ptr<Delegate> delegate_;
   std::unique_ptr<Delegate> default_delegate_;
   base::TimeDelta timeout_delay_;
   std::set<std::string> renewals_in_progress_;
-
-  DISALLOW_COPY_AND_ASSIGN(PlatformVerificationFlow);
 };
 
 }  // namespace attestation

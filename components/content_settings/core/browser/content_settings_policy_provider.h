@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 // A content settings provider that takes its settings out of policies.
 
-#include <vector>
-
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "components/content_settings/core/browser/content_settings_observable_provider.h"
-#include "components/content_settings/core/browser/content_settings_origin_identifier_value_map.h"
+#include "components/content_settings/core/browser/content_settings_origin_value_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/prefs/pref_change_registrar.h"
 
 class PrefService;
@@ -27,6 +27,10 @@ namespace content_settings {
 class PolicyProvider : public ObservableProvider {
  public:
   explicit PolicyProvider(PrefService* prefs);
+
+  PolicyProvider(const PolicyProvider&) = delete;
+  PolicyProvider& operator=(const PolicyProvider&) = delete;
+
   ~PolicyProvider() override;
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
@@ -34,13 +38,16 @@ class PolicyProvider : public ObservableProvider {
   std::unique_ptr<RuleIterator> GetRuleIterator(
       ContentSettingsType content_type,
       bool incognito) const override;
+  std::unique_ptr<Rule> GetRule(const GURL& primary_url,
+                                const GURL& secondary_url,
+                                ContentSettingsType content_type,
+                                bool off_the_record) const override;
 
-  bool SetWebsiteSetting(
-      const ContentSettingsPattern& primary_pattern,
-      const ContentSettingsPattern& secondary_pattern,
-      ContentSettingsType content_type,
-      std::unique_ptr<base::Value>&& value,
-      const ContentSettingConstraints& constraint = {}) override;
+  bool SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
+                         const ContentSettingsPattern& secondary_pattern,
+                         ContentSettingsType content_type,
+                         const base::Value& value,
+                         const ContentSettingConstraints& constraints) override;
 
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
 
@@ -62,24 +69,23 @@ class PolicyProvider : public ObservableProvider {
 
   void ReadManagedContentSettings(bool overwrite);
 
-  void GetContentSettingsFromPreferences(OriginIdentifierValueMap* rules);
+  void SetDefaultValue(ContentSettingsType type,
+                       std::optional<PermissionSetting> setting)
+      EXCLUSIVE_LOCKS_REQUIRED(value_map_.GetLock());
 
-  void GetAutoSelectCertificateSettingsFromPreferences(
-      OriginIdentifierValueMap* value_map);
+  void GetContentSettingsFromPreferences()
+      EXCLUSIVE_LOCKS_REQUIRED(value_map_.GetLock());
+
+  void GetAutoSelectCertificateSettingsFromPreferences()
+      EXCLUSIVE_LOCKS_REQUIRED(value_map_.GetLock());
 
   void ReadManagedContentSettingsTypes(ContentSettingsType content_type);
 
-  OriginIdentifierValueMap value_map_;
+  OriginValueMap value_map_;
 
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
 
   PrefChangeRegistrar pref_change_registrar_;
-
-  // Used around accesses to the |value_map_| object to guarantee
-  // thread safety.
-  mutable base::Lock lock_;
-
-  DISALLOW_COPY_AND_ASSIGN(PolicyProvider);
 };
 
 }  // namespace content_settings

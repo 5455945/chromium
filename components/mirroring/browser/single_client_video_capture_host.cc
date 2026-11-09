@@ -1,11 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/mirroring/browser/single_client_video_capture_host.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
+#include "base/token.h"
 #include "content/public/browser/web_contents_media_capture_id.h"
 #include "media/capture/video/video_capture_buffer_pool.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -23,29 +26,33 @@ class DeviceLauncherCallbacks final
       base::WeakPtr<SingleClientVideoCaptureHost> host)
       : video_capture_host_(host) {}
 
-  ~DeviceLauncherCallbacks() override {}
+  DeviceLauncherCallbacks(const DeviceLauncherCallbacks&) = delete;
+  DeviceLauncherCallbacks& operator=(const DeviceLauncherCallbacks&) = delete;
+
+  ~DeviceLauncherCallbacks() override = default;
 
   // content::VideoCaptureDeviceLauncher::Callbacks implementations
   void OnDeviceLaunched(
       std::unique_ptr<content::LaunchedVideoCaptureDevice> device) override {
-    if (video_capture_host_)
+    if (video_capture_host_) {
       video_capture_host_->OnDeviceLaunched(std::move(device));
+    }
   }
 
   void OnDeviceLaunchFailed(media::VideoCaptureError error) override {
-    if (video_capture_host_)
+    if (video_capture_host_) {
       video_capture_host_->OnDeviceLaunchFailed(error);
+    }
   }
 
   void OnDeviceLaunchAborted() override {
-    if (video_capture_host_)
+    if (video_capture_host_) {
       video_capture_host_->OnDeviceLaunchAborted();
+    }
   }
 
  private:
   base::WeakPtr<SingleClientVideoCaptureHost> video_capture_host_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceLauncherCallbacks);
 };
 
 }  // namespace
@@ -104,19 +111,22 @@ void SingleClientVideoCaptureHost::Stop(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(1) << __func__;
 
-  if (!observer_)
+  if (!observer_) {
     return;
+  }
 
   // Returns all the buffers.
   std::vector<int> buffers_in_use;
   buffers_in_use.reserve(buffer_context_map_.size());
-  for (const auto& entry : buffer_context_map_)
+  for (const auto& entry : buffer_context_map_) {
     buffers_in_use.push_back(entry.first);
+  }
   for (int buffer_id : buffers_in_use) {
     OnFinishedConsumingBuffer(buffer_id, media::VideoCaptureFeedback());
   }
   DCHECK(buffer_context_map_.empty());
-  observer_->OnStateChanged(media::mojom::VideoCaptureState::ENDED);
+  observer_->OnStateChanged(media::mojom::VideoCaptureResult::NewState(
+      media::mojom::VideoCaptureState::ENDED));
   observer_.reset();
   weak_factory_.InvalidateWeakPtrs();
   launched_device_ = nullptr;
@@ -127,8 +137,9 @@ void SingleClientVideoCaptureHost::Stop(
 void SingleClientVideoCaptureHost::Pause(
     const base::UnguessableToken& device_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (launched_device_)
+  if (launched_device_) {
     launched_device_->MaybeSuspendDevice();
+  }
 }
 
 void SingleClientVideoCaptureHost::Resume(
@@ -136,15 +147,17 @@ void SingleClientVideoCaptureHost::Resume(
     const base::UnguessableToken& session_id,
     const VideoCaptureParams& params) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (launched_device_)
+  if (launched_device_) {
     launched_device_->ResumeDevice();
+  }
 }
 
 void SingleClientVideoCaptureHost::RequestRefreshFrame(
     const base::UnguessableToken& device_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (launched_device_)
+  if (launched_device_) {
     launched_device_->RequestRefreshFrame();
+  }
 }
 
 void SingleClientVideoCaptureHost::ReleaseBuffer(
@@ -175,9 +188,18 @@ void SingleClientVideoCaptureHost::GetDeviceFormatsInUse(
   std::move(callback).Run(media::VideoCaptureFormats());
 }
 
-void SingleClientVideoCaptureHost::OnFrameDropped(
-    const base::UnguessableToken& device_id,
-    media::VideoCaptureFrameDropReason reason) {
+void SingleClientVideoCaptureHost::OnCaptureConfigurationChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Ignore this call.
+}
+
+void SingleClientVideoCaptureHost::OnNewCaptureVersion(
+    media::CaptureVersion capture_version) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Ignore this call.
+}
+
+void SingleClientVideoCaptureHost::OnFrameWithEmptyRegionCapture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Ignore this call.
 }
@@ -203,13 +225,12 @@ void SingleClientVideoCaptureHost::OnNewBuffer(
 }
 
 void SingleClientVideoCaptureHost::OnFrameReadyInBuffer(
-    media::ReadyFrameInBuffer frame,
-    std::vector<media::ReadyFrameInBuffer> scaled_frames) {
+    media::ReadyFrameInBuffer frame) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(3) << __func__ << ": buffer_id=" << frame.buffer_id;
   DCHECK(observer_);
   const auto id_iter = id_map_.find(frame.buffer_id);
-  DCHECK(id_iter != id_map_.end());
+  CHECK(id_iter != id_map_.end());
   const int buffer_context_id = id_iter->second;
   const auto insert_result = buffer_context_map_.emplace(
       std::make_pair(buffer_context_id,
@@ -218,8 +239,7 @@ void SingleClientVideoCaptureHost::OnFrameReadyInBuffer(
   DCHECK(insert_result.second);
   // This implementation does not forward scaled frames.
   observer_->OnBufferReady(media::mojom::ReadyBuffer::New(
-                               buffer_context_id, std::move(frame.frame_info)),
-                           {});
+      buffer_context_id, std::move(frame.frame_info)));
 }
 
 void SingleClientVideoCaptureHost::OnBufferRetired(int buffer_id) {
@@ -227,7 +247,7 @@ void SingleClientVideoCaptureHost::OnBufferRetired(int buffer_id) {
   DVLOG(3) << __func__ << ": buffer_id=" << buffer_id;
 
   const auto id_iter = id_map_.find(buffer_id);
-  DCHECK(id_iter != id_map_.end());
+  CHECK(id_iter != id_map_.end());
   const int buffer_context_id = id_iter->second;
   id_map_.erase(id_iter);
   if (buffer_context_map_.find(buffer_context_id) ==
@@ -242,11 +262,13 @@ void SingleClientVideoCaptureHost::OnBufferRetired(int buffer_id) {
   }
 }
 
-void SingleClientVideoCaptureHost::OnError(media::VideoCaptureError) {
+void SingleClientVideoCaptureHost::OnError(media::VideoCaptureError error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   VLOG(1) << __func__;
-  if (observer_)
-    observer_->OnStateChanged(media::mojom::VideoCaptureState::FAILED);
+  if (observer_) {
+    observer_->OnStateChanged(
+        media::mojom::VideoCaptureResult::NewErrorCode(error));
+  }
 }
 
 void SingleClientVideoCaptureHost::OnFrameDropped(
@@ -263,7 +285,8 @@ void SingleClientVideoCaptureHost::OnStarted() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(2) << __func__;
   DCHECK(observer_);
-  observer_->OnStateChanged(media::mojom::VideoCaptureState::STARTED);
+  observer_->OnStateChanged(media::mojom::VideoCaptureResult::NewState(
+      media::mojom::VideoCaptureState::STARTED));
 }
 
 void SingleClientVideoCaptureHost::OnStartedUsingGpuDecode() {
@@ -297,7 +320,7 @@ void SingleClientVideoCaptureHost::OnDeviceLaunchAborted() {
 
 void SingleClientVideoCaptureHost::OnFinishedConsumingBuffer(
     int buffer_context_id,
-    const media::VideoCaptureFeedback& feedback) {
+    media::VideoCaptureFeedback feedback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(observer_);
   const auto buffer_context_iter = buffer_context_map_.find(buffer_context_id);
@@ -309,8 +332,8 @@ void SingleClientVideoCaptureHost::OnFinishedConsumingBuffer(
   VideoFrameConsumerFeedbackObserver* feedback_observer =
       launched_device_.get();
   if (feedback_observer && !feedback.Empty()) {
-    feedback_observer->OnUtilizationReport(buffer_context_iter->second.first,
-                                           feedback);
+    feedback.frame_id = buffer_context_iter->second.first;
+    feedback_observer->OnUtilizationReport(feedback);
   }
   buffer_context_map_.erase(buffer_context_iter);
   const auto retired_iter = retired_buffers_.find(buffer_context_id);

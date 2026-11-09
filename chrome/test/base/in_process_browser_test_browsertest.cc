@@ -1,18 +1,21 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/test/base/in_process_browser_test.h"
 
 #include <stddef.h>
 #include <string.h>
 
-#include "base/cxx17_backports.h"
-#include "base/files/file_util.h"
+#include <array>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/path_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/after_startup_task_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_view_host.h"
@@ -27,26 +30,14 @@
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/view.h"
 #endif
 
 namespace {
-
-class InProcessBrowserTestP
-    : public InProcessBrowserTest,
-      public ::testing::WithParamInterface<const char*> {
-};
-
-IN_PROC_BROWSER_TEST_P(InProcessBrowserTestP, TestP) {
-  EXPECT_EQ(0, strcmp("foo", GetParam()));
-}
-
-INSTANTIATE_TEST_SUITE_P(IPBTP,
-                         InProcessBrowserTestP,
-                         ::testing::Values("foo"));
 
 // WebContents observer that can detect provisional load failures.
 class LoadFailObserver : public content::WebContentsObserver {
@@ -58,8 +49,9 @@ class LoadFailObserver : public content::WebContentsObserver {
 
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override {
-    if (navigation_handle->GetNetErrorCode() == net::OK)
+    if (navigation_handle->GetNetErrorCode() == net::OK) {
       return;
+    }
 
     failed_load_ = true;
     error_code_ = navigation_handle->GetNetErrorCode();
@@ -81,24 +73,45 @@ class LoadFailObserver : public content::WebContentsObserver {
   GURL validated_url_;
 };
 
+}  // namespace
+
+class InProcessBrowserTestP
+    : public InProcessBrowserTest,
+      public ::testing::WithParamInterface<std::string_view> {};
+
+IN_PROC_BROWSER_TEST_P(InProcessBrowserTestP, TestP) {
+  EXPECT_EQ(GetParam(), "foo");
+}
+
+INSTANTIATE_TEST_SUITE_P(IPBTP,
+                         InProcessBrowserTestP,
+                         ::testing::Values("foo"));
+
+class InProcessBrowserTestExternalConnectionFail : public InProcessBrowserTest {
+ private:
+  // Without this, prewarming fetches https://www.google.com/warmup.html which
+  // leads to flakiness in the test.
+  test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kEnabledWithNoTrigger};
+};
+
 // Tests that InProcessBrowserTest cannot resolve external host, in this case
 // "google.com" and "cnn.com". Using external resources is disabled by default
 // in InProcessBrowserTest because it causes flakiness.
-IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, ExternalConnectionFail) {
+IN_PROC_BROWSER_TEST_F(InProcessBrowserTestExternalConnectionFail,
+                       ExternalConnectionFail) {
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
 
-  const char* const kURLs[] = {
-    "http://www.google.com/",
-    "http://www.cnn.com/"
-  };
-  for (size_t i = 0; i < base::size(kURLs); ++i) {
+  const auto kURLs = std::to_array<const char*>(
+      {"https://www.google.com/", "https://www.cnn.com/"});
+  for (size_t i = 0; i < std::size(kURLs); ++i) {
     GURL url(kURLs[i]);
     LoadFailObserver observer(contents);
-    ui_test_utils::NavigateToURL(browser(), url);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
     EXPECT_TRUE(observer.failed_load());
-    EXPECT_EQ(net::ERR_NOT_IMPLEMENTED, observer.error_code());
-    EXPECT_EQ(net::ERR_NOT_IMPLEMENTED, observer.resolve_error_info().error);
+    EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, observer.error_code());
+    EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, observer.resolve_error_info().error);
     EXPECT_EQ(url, observer.validated_url());
   }
 }
@@ -111,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, AfterStartupTaskUtils) {
 
 // On Mac this crashes inside cc::SingleThreadProxy::SetNeedsCommit. See
 // https://ci.chromium.org/b/8923336499994443392
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
 class SingleProcessBrowserTest : public InProcessBrowserTest {
  public:
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -119,7 +132,13 @@ class SingleProcessBrowserTest : public InProcessBrowserTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(SingleProcessBrowserTest, Test) {
+// TODO(crbug.com/40190525): Flaky / times out on many bots.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_Test DISABLED_Test
+#else
+#define MAYBE_Test Test
+#endif
+IN_PROC_BROWSER_TEST_F(SingleProcessBrowserTest, MAYBE_Test) {
   // Should not crash.
 }
 
@@ -130,6 +149,8 @@ IN_PROC_BROWSER_TEST_F(SingleProcessBrowserTest, Test) {
 namespace {
 
 class LayoutTrackingView : public views::View {
+  METADATA_HEADER(LayoutTrackingView, views::View)
+
  public:
   LayoutTrackingView() = default;
   ~LayoutTrackingView() override = default;
@@ -138,28 +159,30 @@ class LayoutTrackingView : public views::View {
   int layout_count() const { return layout_count_; }
 
   // views::View:
-  void Layout() override {
+  void Layout(PassKey) override {
     ++layout_count_;
-    views::View::Layout();
+    LayoutSuperclass<views::View>(this);
   }
 
  private:
   int layout_count_ = 0;
 };
 
+BEGIN_METADATA(LayoutTrackingView)
+END_METADATA
+
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(InProcessBrowserTest,
                        RunsScheduledLayoutOnAnchoredBubbles) {
   views::View* const anchor_view =
-      BrowserView::GetBrowserViewForBrowser(browser())
-          ->toolbar()
-          ->app_menu_button();
+      BrowserView::GetBrowserViewForBrowser(browser())->toolbar();
 
   // Temporarily owned.
   views::BubbleDialogDelegateView* const bubble =
-      new views::BubbleDialogDelegateView(anchor_view,
-                                          views::BubbleBorder::TOP_RIGHT);
+      new views::BubbleDialogDelegateView(
+          views::BubbleDialogDelegateView::CreatePassKey(), anchor_view,
+          views::BubbleBorder::TOP_RIGHT);
   LayoutTrackingView* layout_tracker =
       bubble->AddChildView(std::make_unique<LayoutTrackingView>());
 
@@ -177,5 +200,3 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest,
 }
 
 #endif  // defined(TOOLKIT_VIEWS)
-
-}  // namespace

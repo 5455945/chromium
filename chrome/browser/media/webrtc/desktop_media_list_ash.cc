@@ -1,15 +1,18 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/webrtc/desktop_media_list_ash.h"
 
+#include <ranges>
 #include <utility>
 
 #include "ash/public/cpp/shell_window_ids.h"
+#include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/desks_util.h"
-#include "base/bind.h"
+#include "ash/wm/window_properties.h"
+#include "base/functional/bind.h"
 #include "chrome/grit/generated_resources.h"
 #include "media/base/video_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -26,10 +29,11 @@ const int kDefaultDesktopMediaListUpdatePeriod = 500;
 }  // namespace
 
 DesktopMediaListAsh::DesktopMediaListAsh(DesktopMediaList::Type type)
-    : DesktopMediaListBase(base::TimeDelta::FromMilliseconds(
-          kDefaultDesktopMediaListUpdatePeriod)) {
-  DCHECK(type == DesktopMediaList::Type::kScreen ||
-         type == DesktopMediaList::Type::kWindow);
+    : DesktopMediaListBase(
+          base::Milliseconds(kDefaultDesktopMediaListUpdatePeriod)) {
+  CHECK(type == DesktopMediaList::Type::kScreen ||
+            type == DesktopMediaList::Type::kWindow,
+        base::NotFatalUntil::M161);
   type_ = type;
 }
 
@@ -37,50 +41,57 @@ DesktopMediaListAsh::~DesktopMediaListAsh() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-void DesktopMediaListAsh::Refresh(bool update_thumnails) {
-  DCHECK(can_refresh());
+void DesktopMediaListAsh::Refresh(bool update_thumbnails) {
+  CHECK(can_refresh(), base::NotFatalUntil::M161);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(pending_window_capture_requests_, 0);
+  CHECK_EQ(pending_window_capture_requests_, 0, base::NotFatalUntil::M161);
 
   std::vector<SourceDescription> new_sources;
-  EnumerateSources(&new_sources, update_thumnails);
+  EnumerateSources(&new_sources, update_thumbnails);
   UpdateSourcesList(new_sources);
   OnRefreshMaybeComplete();
 }
 
 void DesktopMediaListAsh::EnumerateWindowsForRoot(
     std::vector<DesktopMediaListAsh::SourceDescription>* sources,
-    bool update_thumnails,
+    bool update_thumbnails,
     aura::Window* root_window,
     int container_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   aura::Window* container = ash::Shell::GetContainer(root_window, container_id);
-  if (!container)
+  if (!container) {
     return;
+  }
+
   // The |container| has all the top-level windows in reverse order, e.g. the
   // most top-level window is at the end. So iterate children reversely to make
   // sure |sources| is in the expected order.
-  for (aura::Window::Windows::const_reverse_iterator it =
-           container->children().rbegin();
-       it != container->children().rend(); ++it) {
-    if (!(*it)->IsVisible() || !(*it)->CanFocus())
+  for (aura::Window* window : std::views::reverse(container->children())) {
+    if (!window->IsVisible() || !window->CanFocus() ||
+        window->GetProperty(ash::kOverviewUiKey) ||
+        window->GetProperty(ash::kExcludeInMruKey)) {
       continue;
+    }
+
     content::DesktopMediaID id = content::DesktopMediaID::RegisterNativeWindow(
-        content::DesktopMediaID::TYPE_WINDOW, *it);
-    if (id.window_id == view_dialog_id_.window_id)
+        content::DesktopMediaID::TYPE_WINDOW, window);
+    if (id.window_id == view_dialog_id_.window_id) {
       continue;
-    SourceDescription window_source(id, (*it)->GetTitle());
+    }
+
+    SourceDescription window_source(id, window->GetTitle());
     sources->push_back(window_source);
 
-    if (update_thumnails)
-      CaptureThumbnail(window_source.id, *it);
+    if (update_thumbnails) {
+      CaptureThumbnail(window_source.id, window);
+    }
   }
 }
 
 void DesktopMediaListAsh::EnumerateSources(
     std::vector<DesktopMediaListAsh::SourceDescription>* sources,
-    bool update_thumnails) {
+    bool update_thumbnails) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   aura::Window::Windows root_windows = ash::Shell::GetAllRootWindows();
@@ -113,19 +124,20 @@ void DesktopMediaListAsh::EnumerateSources(
         }
       }
 
-      if (update_thumnails)
+      if (update_thumbnails)
         CaptureThumbnail(screen_source.id, root_windows[i]);
     } else {
-      // The list of desks containers depends on whether the Virtual Desks
-      // feature is enabled or not.
-      for (int desk_id : ash::desks_util::GetDesksContainersIds())
-        EnumerateWindowsForRoot(sources, update_thumnails, root_windows[i],
+      for (int desk_id : ash::desks_util::GetDesksContainersIds()) {
+        EnumerateWindowsForRoot(sources, update_thumbnails, root_windows[i],
                                 desk_id);
+      }
 
-      EnumerateWindowsForRoot(sources, update_thumnails, root_windows[i],
+      EnumerateWindowsForRoot(sources, update_thumbnails, root_windows[i],
                               ash::kShellWindowId_AlwaysOnTopContainer);
-      EnumerateWindowsForRoot(sources, update_thumnails, root_windows[i],
+      EnumerateWindowsForRoot(sources, update_thumbnails, root_windows[i],
                               ash::kShellWindowId_PipContainer);
+      EnumerateWindowsForRoot(sources, update_thumbnails, root_windows[i],
+                              ash::kShellWindowId_FloatContainer);
     }
   }
 }
@@ -137,7 +149,7 @@ void DesktopMediaListAsh::CaptureThumbnail(content::DesktopMediaID id,
       gfx::Rect(thumbnail_size_), window_rect.size());
 
   ++pending_window_capture_requests_;
-  ui::GrabWindowSnapshotAndScaleAsync(
+  ui::GrabWindowSnapshotAndScale(
       window, window_rect, scaled_rect.size(),
       base::BindOnce(&DesktopMediaListAsh::OnThumbnailCaptured,
                      weak_factory_.GetWeakPtr(), id));
@@ -150,7 +162,7 @@ void DesktopMediaListAsh::OnThumbnailCaptured(content::DesktopMediaID id,
   UpdateSourceThumbnail(id, image.AsImageSkia());
 
   --pending_window_capture_requests_;
-  DCHECK_GE(pending_window_capture_requests_, 0);
+  CHECK_GE(pending_window_capture_requests_, 0, base::NotFatalUntil::M161);
 
   OnRefreshMaybeComplete();
 }

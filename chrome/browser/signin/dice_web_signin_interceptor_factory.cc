@@ -1,14 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/signin/dice_web_signin_interceptor_factory.h"
 
+#include "chrome/browser/metrics/profile_metrics_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/dice_web_signin_interceptor.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/signin/dice_web_signin_interceptor_delegate.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 
 // static
 DiceWebSigninInterceptor* DiceWebSigninInterceptorFactory::GetForProfile(
@@ -20,14 +20,14 @@ DiceWebSigninInterceptor* DiceWebSigninInterceptorFactory::GetForProfile(
 //  static
 DiceWebSigninInterceptorFactory*
 DiceWebSigninInterceptorFactory::GetInstance() {
-  return base::Singleton<DiceWebSigninInterceptorFactory>::get();
+  static base::NoDestructor<DiceWebSigninInterceptorFactory> instance;
+  return instance.get();
 }
 
 DiceWebSigninInterceptorFactory::DiceWebSigninInterceptorFactory()
-    : BrowserContextKeyedServiceFactory(
-          "DiceWebSigninInterceptor",
-          BrowserContextDependencyManager::GetInstance()) {
+    : ProfileKeyedServiceFactory("DiceWebSigninInterceptor") {
   DependsOn(IdentityManagerFactory::GetInstance());
+  DependsOn(ProfileMetricsServiceFactory::GetInstance());
 }
 
 DiceWebSigninInterceptorFactory::~DiceWebSigninInterceptorFactory() = default;
@@ -37,9 +37,11 @@ void DiceWebSigninInterceptorFactory::RegisterProfilePrefs(
   DiceWebSigninInterceptor::RegisterProfilePrefs(registry);
 }
 
-KeyedService* DiceWebSigninInterceptorFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+DiceWebSigninInterceptorFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new DiceWebSigninInterceptor(
-      Profile::FromBrowserContext(context),
-      std::make_unique<DiceWebSigninInterceptorDelegate>());
+  Profile* profile = Profile::FromBrowserContext(context);
+  return std::make_unique<DiceWebSigninInterceptor>(
+      profile, std::make_unique<DiceWebSigninInterceptorDelegate>(),
+      ProfileMetricsServiceFactory::GetForProfile(profile));
 }

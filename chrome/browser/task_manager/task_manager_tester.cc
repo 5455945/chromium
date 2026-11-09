@@ -1,19 +1,22 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/task_manager/task_manager_tester.h"
 
 #include <memory>
+#include <string_view>
 
+#include "base/byte_size.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/task_manager_interface.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/task_manager/task_manager_table_model.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/sessions/core/session_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/models/table_model_observer.h"
 
@@ -42,22 +45,22 @@ class ScopedInterceptTableModelObserver : public ui::TableModelObserver {
     real_table_model_observer_->OnModelChanged();
     callback_.Run();
   }
-  void OnItemsChanged(int start, int length) override {
+  void OnItemsChanged(size_t start, size_t length) override {
     real_table_model_observer_->OnItemsChanged(start, length);
     callback_.Run();
   }
-  void OnItemsAdded(int start, int length) override {
+  void OnItemsAdded(size_t start, size_t length) override {
     real_table_model_observer_->OnItemsAdded(start, length);
     callback_.Run();
   }
-  void OnItemsRemoved(int start, int length) override {
+  void OnItemsRemoved(size_t start, size_t length) override {
     real_table_model_observer_->OnItemsRemoved(start, length);
     callback_.Run();
   }
 
  private:
-  ui::TableModel* model_to_intercept_;
-  ui::TableModelObserver* real_table_model_observer_;
+  raw_ptr<ui::TableModel> model_to_intercept_;
+  raw_ptr<ui::TableModelObserver> real_table_model_observer_;
   base::RepeatingClosure callback_;
 };
 
@@ -88,11 +91,11 @@ TaskManagerTester::~TaskManagerTester() {
 }
 
 // TaskManagerTester:
-int TaskManagerTester::GetRowCount() {
+size_t TaskManagerTester::GetRowCount() {
   return model_->RowCount();
 }
 
-std::u16string TaskManagerTester::GetRowTitle(int row) {
+std::u16string TaskManagerTester::GetRowTitle(size_t row) {
   return model_->GetText(row, IDS_TASK_MANAGER_TASK_COLUMN);
 }
 
@@ -110,6 +113,10 @@ void TaskManagerTester::ToggleColumnVisibility(ColumnSpecifier column) {
     case ColumnSpecifier::SQLITE_MEMORY_USED:
       column_id = IDS_TASK_MANAGER_SQLITE_MEMORY_USED_COLUMN;
       break;
+    case ColumnSpecifier::CPPGC_MEMORY_USED:
+    case ColumnSpecifier::CPPGC_MEMORY:
+      column_id = IDS_TASK_MANAGER_CPPGC_MEMORY_ALLOCATED_COLUMN;
+      break;
     case ColumnSpecifier::V8_MEMORY_USED:
     case ColumnSpecifier::V8_MEMORY:
       column_id = IDS_TASK_MANAGER_JAVASCRIPT_MEMORY_ALLOCATED_COLUMN;
@@ -125,64 +132,87 @@ void TaskManagerTester::ToggleColumnVisibility(ColumnSpecifier column) {
   model_->ToggleColumnVisibility(column_id);
 }
 
-int64_t TaskManagerTester::GetColumnValue(ColumnSpecifier column, int row) {
+int64_t TaskManagerTester::GetColumnValue(ColumnSpecifier column, size_t row) {
   TaskId task_id = model_->tasks_[row];
-  int64_t value = 0;
-  int64_t ignored = 0;
-  bool success = false;
-
   switch (column) {
     case ColumnSpecifier::COLUMN_NONE:
-      break;
-    case ColumnSpecifier::MEMORY_FOOTPRINT:
-      value = task_manager()->GetMemoryFootprintUsage(task_id);
-      success = true;
-      break;
+      return 0;
+    case ColumnSpecifier::MEMORY_FOOTPRINT: {
+      std::optional<base::ByteSize> usage =
+          task_manager()->GetMemoryFootprintUsage(task_id);
+      return usage ? usage->InBytes() : -1;
+    }
     case ColumnSpecifier::PROCESS_ID:
-      value = static_cast<int64_t>(task_manager()->GetProcessId(task_id));
-      success = true;
-      break;
+      return task_manager()->GetProcessId(task_id);
     case ColumnSpecifier::V8_MEMORY:
-      success = task_manager()->GetV8Memory(task_id, &value, &ignored);
-      break;
-    case ColumnSpecifier::V8_MEMORY_USED:
-      success = task_manager()->GetV8Memory(task_id, &ignored, &value);
-      break;
-    case ColumnSpecifier::SQLITE_MEMORY_USED:
-      value = task_manager()->GetSqliteMemoryUsed(task_id);
-      success = true;
-      break;
+    case ColumnSpecifier::V8_MEMORY_USED: {
+      base::ByteSize allocated;
+      base::ByteSize used;
+      bool success = task_manager()->GetV8Memory(task_id, &allocated, &used);
+      if (!success) {
+        return -1;
+      }
+      return column == ColumnSpecifier::V8_MEMORY ? allocated.InBytes()
+                                                  : used.InBytes();
+    }
+    case ColumnSpecifier::CPPGC_MEMORY:
+    case ColumnSpecifier::CPPGC_MEMORY_USED: {
+      base::ByteSize allocated;
+      base::ByteSize used;
+      bool success = task_manager()->GetCppGCMemory(task_id, &allocated, &used);
+      if (!success) {
+        return -1;
+      }
+      return column == ColumnSpecifier::CPPGC_MEMORY ? allocated.InBytes()
+                                                     : used.InBytes();
+    }
+    case ColumnSpecifier::SQLITE_MEMORY_USED: {
+      std::optional<base::ByteSize> usage =
+          task_manager()->GetSqliteMemoryUsed(task_id);
+      return usage ? usage->InBytes() : -1;
+    }
     case ColumnSpecifier::IDLE_WAKEUPS:
-      value = task_manager()->GetIdleWakeupsPerSecond(task_id);
-      success = true;
-      break;
+      return task_manager()->GetIdleWakeupsPerSecond(task_id);
     case ColumnSpecifier::NETWORK_USE:
-      value = task_manager()->GetNetworkUsage(task_id);
-      success = true;
-      break;
+      return task_manager()->GetNetworkUsage(task_id).InBytes();
     case ColumnSpecifier::TOTAL_NETWORK_USE:
-      value = task_manager()->GetCumulativeNetworkUsage(task_id);
-      success = true;
-      break;
+      return task_manager()->GetCumulativeNetworkUsage(task_id).InBytes();
   }
-  if (!success)
-    return 0;
-  return value;
 }
 
-SessionID TaskManagerTester::GetTabId(int row) {
+SessionID TaskManagerTester::GetTabId(size_t row) {
   TaskId task_id = model_->tasks_[row];
   return task_manager()->GetTabId(task_id);
 }
 
-void TaskManagerTester::Kill(int row) {
+void TaskManagerTester::Kill(size_t row) {
   model_->KillTask(row);
 }
 
-void TaskManagerTester::GetRowsGroupRange(int row,
-                                          int* out_start,
-                                          int* out_length) {
+void TaskManagerTester::Activate(size_t row) {
+  model_->ActivateTask(row);
+}
+
+void TaskManagerTester::GetRowsGroupRange(size_t row,
+                                          size_t* out_start,
+                                          size_t* out_length) {
   return model_->GetRowsGroupRange(row, out_start, out_length);
+}
+
+std::vector<std::u16string> TaskManagerTester::GetWebContentsTaskTitles() {
+  std::vector<std::u16string> titles;
+  titles.reserve(GetRowCount());
+  for (size_t row = 0; row < GetRowCount(); row++) {
+    // Exclude tasks which are not associated with a WebContents.
+    if (GetTabId(row) != SessionID::InvalidValue())
+      titles.push_back(GetRowTitle(row));
+  }
+  return titles;
+}
+
+bool TaskManagerTester::UpdateModel(const DisplayCategory display_category,
+                                    std::u16string_view search_term) {
+  return model_->UpdateModel(display_category, search_term);
 }
 
 TaskManagerInterface* TaskManagerTester::task_manager() {

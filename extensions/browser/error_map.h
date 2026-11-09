@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,8 @@
 #include <string>
 
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
 #include "extensions/browser/extension_error.h"
+#include "extensions/common/extension_id.h"
 
 namespace extensions {
 
@@ -25,10 +25,14 @@ using ErrorList = base::circular_deque<std::unique_ptr<ExtensionError>>;
 class ErrorMap {
  public:
   ErrorMap();
+
+  ErrorMap(const ErrorMap&) = delete;
+  ErrorMap& operator=(const ErrorMap&) = delete;
+
   ~ErrorMap();
 
   struct Filter {
-    Filter(const std::string& restrict_to_extension_id,
+    Filter(const ExtensionId& restrict_to_extension_id,
            int restrict_to_type,
            const std::set<int>& restrict_to_ids,
            bool restrict_to_incognito);
@@ -37,35 +41,35 @@ class ErrorMap {
 
     // Convenience methods to get a specific type of filter. Prefer these over
     // the constructor when possible.
-    static Filter ErrorsForExtension(const std::string& extension_id);
-    static Filter ErrorsForExtensionWithType(const std::string& extension_id,
+    static Filter ErrorsForExtension(const ExtensionId& extension_id);
+    static Filter ErrorsForExtensionWithType(const ExtensionId& extension_id,
                                              ExtensionError::Type type);
-    static Filter ErrorsForExtensionWithIds(const std::string& extension_id,
+    static Filter ErrorsForExtensionWithIds(const ExtensionId& extension_id,
                                             const std::set<int>& ids);
     static Filter ErrorsForExtensionWithTypeAndIds(
-        const std::string& extension_id,
+        const ExtensionId& extension_id,
         ExtensionError::Type type,
         const std::set<int>& ids);
     static Filter IncognitoErrors();
 
     bool Matches(const ExtensionError* error) const;
 
-    const std::string restrict_to_extension_id;
+    const ExtensionId restrict_to_extension_id;
     const int restrict_to_type;
     const std::set<int> restrict_to_ids;
     const bool restrict_to_incognito;
   };
 
   // Return the list of all errors associated with the given extension.
-  const ErrorList& GetErrorsForExtension(const std::string& extension_id) const;
+  const ErrorList& GetErrorsForExtension(const ExtensionId& extension_id) const;
 
-  // Add the |error| to the ErrorMap.
+  // Add the `error` to the ErrorMap.
   const ExtensionError* AddError(std::unique_ptr<ExtensionError> error);
 
-  // Removes errors that match the given |filter| from the map. If non-null,
-  // |affected_ids| will be populated with the set of extension ids that were
+  // Removes errors that match the given `filter` from the map. If non-null,
+  // `affected_ids` will be populated with the set of extension ids that were
   // affected by this removal.
-  void RemoveErrors(const Filter& filter, std::set<std::string>* affected_ids);
+  void RemoveErrors(const Filter& filter, std::set<ExtensionId>* affected_ids);
 
   // Remove all errors for all extensions, and clear the map.
   void RemoveAllErrors();
@@ -78,9 +82,7 @@ class ErrorMap {
   class ExtensionEntry;
 
   // The mapping between Extension IDs and their corresponding Entries.
-  std::map<std::string, std::unique_ptr<ExtensionEntry>> map_;
-
-  DISALLOW_COPY_AND_ASSIGN(ErrorMap);
+  std::map<ExtensionId, std::unique_ptr<ExtensionEntry>> map_;
 };
 
 }  // namespace extensions

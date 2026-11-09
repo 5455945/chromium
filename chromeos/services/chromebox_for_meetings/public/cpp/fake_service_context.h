@@ -1,24 +1,23 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMEOS_SERVICES_CHROMEBOX_FOR_MEETINGS_PUBLIC_CPP_FAKE_SERVICE_CONTEXT_H_
 #define CHROMEOS_SERVICES_CHROMEBOX_FOR_MEETINGS_PUBLIC_CPP_FAKE_SERVICE_CONTEXT_H_
 
-#include "base/bind.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
-
+#include "base/functional/bind.h"
 #include "chromeos/services/chromebox_for_meetings/public/mojom/cfm_service_manager.mojom.h"
 
 namespace chromeos {
 namespace cfm {
 
-class FakeCfmServiceContext : public mojom::CfmServiceContext {
+class FakeCfmServiceContext
+    : public mojom::CfmServiceContext {
  public:
   using FakeProvideAdaptorCallback = base::OnceCallback<void(
       const std::string& interface_name,
-      mojo::PendingRemote<mojom::CfmServiceAdaptor> adaptor_remote,
+      mojo::PendingRemote<mojom::CfmServiceAdaptor>
+          adaptor_remote,
       ProvideAdaptorCallback callback)>;
 
   using FakeRequestBindServiceCallback =
@@ -33,7 +32,8 @@ class FakeCfmServiceContext : public mojom::CfmServiceContext {
 
   void ProvideAdaptor(
       const std::string& interface_name,
-      mojo::PendingRemote<mojom::CfmServiceAdaptor> adaptor_remote,
+      mojo::PendingRemote<mojom::CfmServiceAdaptor>
+          adaptor_remote,
       ProvideAdaptorCallback callback) override;
 
   void RequestBindService(const std::string& interface_name,

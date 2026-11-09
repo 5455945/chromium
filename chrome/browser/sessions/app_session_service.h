@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,12 +32,13 @@ class AppSessionService : public SessionServiceBase {
   ~AppSessionService() override;
 
   // SessionServiceBase:
-  void TabClosed(const SessionID& window_id, const SessionID& tab_id) override;
-  void WindowOpened(Browser* browser) override;
-  void WindowClosing(const SessionID& window_id) override;
-  void WindowClosed(const SessionID& window_id) override;
-  void SetWindowType(const SessionID& window_id, Browser::Type type) override;
-  Browser::Type GetDesiredBrowserTypeForWebContents() override;
+  void TabClosed(SessionID window_id, SessionID tab_id) override;
+  void WindowOpened(BrowserWindowInterface* browser) override;
+  void WindowClosing(SessionID window_id) override;
+  void WindowClosed(SessionID window_id) override;
+  void SetWindowType(SessionID window_id,
+                     BrowserWindowInterface::Type type) override;
+  BrowserWindowInterface::Type GetDesiredBrowserTypeForWebContents() override;
   bool ShouldRestoreWindowOfType(
       sessions::SessionWindow::WindowType window_type) const override;
   void ScheduleResetCommands() override;

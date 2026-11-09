@@ -1,23 +1,32 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/signin/dice_intercepted_session_startup_helper.h"
 
 #include <algorithm>
+#include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/check_op.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/notreached.h"
+#include "base/strings/strcat.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/signin/account_reconcilor_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/webui_url_constants.h"
+#include "components/google/core/common/google_util.h"
 #include "components/signin/public/base/multilogin_parameters.h"
+#include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/accounts_cookie_mutator.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "components/signin/public/identity_manager/set_accounts_in_cookie_result.h"
@@ -25,26 +34,90 @@
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "net/base/url_util.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace {
+
+using NewProfileOAuthMultiLoginResult =
+    DiceInterceptedSessionStartupHelper::NewProfileOAuthMultiLoginResult;
+
+// Returns true for an HTTPS google.<TLD> or youtube.<TLD> URL without
+// credentials that isn't on the Gaia origin.
+bool IsAllowedContinueURL(const GURL& continue_url) {
+  return continue_url.is_valid() && continue_url.SchemeIs(url::kHttpsScheme) &&
+         !continue_url.has_username() && !continue_url.has_password() &&
+         !gaia::HasGaiaSchemeHostPort(continue_url) &&
+         (google_util::IsGoogleDomainUrl(
+              continue_url, google_util::ALLOW_SUBDOMAIN,
+              google_util::DISALLOW_NON_STANDARD_PORTS) ||
+          google_util::IsYoutubeDomainUrl(
+              continue_url, google_util::ALLOW_SUBDOMAIN,
+              google_util::DISALLOW_NON_STANDARD_PORTS));
+}
 
 // Returns true if |account_id| is signed in the cookies.
 bool CookieInfoContains(const signin::AccountsInCookieJarInfo& cookie_info,
                         const CoreAccountId& account_id) {
   const std::vector<gaia::ListedAccount>& accounts =
-      cookie_info.signed_in_accounts;
-  return std::find_if(accounts.begin(), accounts.end(),
-                      [&account_id](const gaia::ListedAccount& account) {
-                        return account.id == account_id;
-                      }) != accounts.end();
+      cookie_info.GetPotentiallyInvalidSignedInAccounts();
+  return std::ranges::contains(accounts, account_id, &gaia::ListedAccount::id);
 }
 
-void RecordSessionStartupDuration(const std::string& histogram_name,
-                                  base::TimeDelta duration) {
-  base::UmaHistogramCustomTimes(histogram_name, duration,
-                                /*min=*/base::TimeDelta::FromMilliseconds(1),
-                                /*max=*/base::TimeDelta::FromSeconds(30), 50);
+// Returns the accounts to add to the cookies with multilogin: `account_id`
+// first, followed by all other accounts in the profile.
+std::vector<CoreAccountId> GetAccountsToSend(
+    signin::IdentityManager* identity_manager,
+    const CoreAccountId& account_id) {
+  std::vector<CoreAccountId> accounts_to_send = {account_id};
+  for (const auto& account_info :
+       identity_manager->GetAccountsWithRefreshTokens()) {
+    if (account_info.account_id != account_id) {
+      accounts_to_send.push_back(account_info.account_id);
+    }
+  }
+  return accounts_to_send;
+}
+
+// Returns the histogram suffix for the number of accounts sent to multilogin.
+// Must only be called with more than one account.
+// LINT.IfChange(GetAccountCountSuffix)
+std::string_view GetAccountCountSuffix(size_t num_accounts) {
+  CHECK_GT(num_accounts, 1u);
+  if (num_accounts == 2) {
+    return ".2Accounts";
+  }
+  if (num_accounts == 3) {
+    return ".3Accounts";
+  }
+  return ".4PlusAccounts";
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/signin/histograms.xml:NewProfileOAuthMultiLoginAccountCount)
+
+NewProfileOAuthMultiLoginResult ToNewProfileOAuthMultiLoginResult(
+    signin::SetAccountsInCookieResult result) {
+  switch (result) {
+    case signin::SetAccountsInCookieResult::kSuccess:
+      return NewProfileOAuthMultiLoginResult::kSuccess;
+    case signin::SetAccountsInCookieResult::kTransientError:
+      return NewProfileOAuthMultiLoginResult::kTransientError;
+    case signin::SetAccountsInCookieResult::kPersistentError:
+      return NewProfileOAuthMultiLoginResult::kPersistentError;
+  }
+  NOTREACHED();
+}
+
+void RecordNewProfileOAuthMultiLoginResult(
+    NewProfileOAuthMultiLoginResult result,
+    size_t num_accounts) {
+  base::UmaHistogramEnumeration(
+      kDiceLinkedAccountsNewProfileOAuthMultiLoginResult, result);
+  base::UmaHistogramEnumeration(
+      base::StrCat({kDiceLinkedAccountsNewProfileOAuthMultiLoginResult,
+                    GetAccountCountSuffix(num_accounts)}),
+      result);
 }
 
 }  // namespace
@@ -57,7 +130,8 @@ DiceInterceptedSessionStartupHelper::DiceInterceptedSessionStartupHelper(
     : profile_(profile),
       use_multilogin_(is_new_profile),
       account_id_(account_id) {
-  Observe(tab_to_move);
+  if (tab_to_move)
+    web_contents_ = tab_to_move->GetWeakPtr();
 }
 
 DiceInterceptedSessionStartupHelper::~DiceInterceptedSessionStartupHelper() =
@@ -65,7 +139,6 @@ DiceInterceptedSessionStartupHelper::~DiceInterceptedSessionStartupHelper() =
 
 void DiceInterceptedSessionStartupHelper::Startup(base::OnceClosure callback) {
   callback_ = std::move(callback);
-  session_startup_time_ = base::TimeTicks::Now();
 
   // Wait until the account is set in cookies of the newly created profile
   // before opening the URL, so that the user is signed-in in content area. If
@@ -75,29 +148,64 @@ void DiceInterceptedSessionStartupHelper::Startup(base::OnceClosure callback) {
       IdentityManagerFactory::GetForProfile(profile_);
   signin::AccountsInCookieJarInfo cookie_info =
       identity_manager->GetAccountsInCookieJar();
-  if (cookie_info.accounts_are_fresh &&
+  if (cookie_info.AreAccountsFresh() &&
       CookieInfoContains(cookie_info, account_id_)) {
-    MoveTab(use_multilogin_ ? Result::kMultiloginNothingToDo
-                            : Result::kReconcilorNothingToDo);
-  } else {
-    // Set the timeout.
-    on_cookie_update_timeout_.Reset(base::BindOnce(
-        &DiceInterceptedSessionStartupHelper::MoveTab, base::Unretained(this),
-        use_multilogin_ ? Result::kMultiloginTimeout
-                        : Result::kReconcilorTimeout));
-    // Adding accounts to the cookies can be an expensive operation. In
-    // particular the ExternalCCResult fetch may time out after multiple seconds
-    // (see kExternalCCResultTimeoutSeconds and https://crbug.com/750316#c37).
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, on_cookie_update_timeout_.callback(),
-        base::TimeDelta::FromSeconds(12));
-
-    accounts_in_cookie_observer_.Observe(identity_manager);
-    if (use_multilogin_)
-      StartupMultilogin(identity_manager);
-    else
-      StartupReconcilor(identity_manager);
+    MoveTab();
+    return;
   }
+
+  std::vector<CoreAccountId> accounts_to_send;
+  if (use_multilogin_) {
+    accounts_to_send = GetAccountsToSend(identity_manager, account_id_);
+  }
+
+  // Set the timeout.
+  on_cookie_update_timeout_.Reset(base::BindOnce(
+      &DiceInterceptedSessionStartupHelper::OnCookieUpdateTimeout,
+      base::Unretained(this), accounts_to_send.size()));
+  // Adding accounts to the cookies can be an expensive operation. In
+  // particular the ExternalCCResult fetch may time out after multiple seconds
+  // (see kExternalCCResultTimeoutSeconds and
+  // https://crbug.com/40532442#comment38).
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, on_cookie_update_timeout_.callback(), base::Seconds(12));
+
+  accounts_in_cookie_observer_.Observe(identity_manager);
+  if (use_multilogin_) {
+    StartupMultilogin(identity_manager, std::move(accounts_to_send));
+  } else {
+    StartupReconcilor(identity_manager);
+  }
+}
+
+// static
+GURL DiceInterceptedSessionStartupHelper::GetDestinationURLForInterceptedTab(
+    const GURL& intercepted_url) {
+  if (!intercepted_url.is_valid()) {
+    return chrome::ChromeUINewTabURLAsGURL();
+  }
+  if (!base::FeatureList::IsEnabled(switches::kDiceInterceptSanitizeGaiaUrl)) {
+    return intercepted_url;
+  }
+  if (!gaia::HasGaiaSchemeHostPort(intercepted_url)) {
+    // Only standard HTTP(S) web navigations represent external web sessions
+    // intended to be transferred across profile boundaries. Non-HTTP(S) schemes
+    // (such as chrome:// internal pages, data:, or javascript:) can carry
+    // profile-specific internal state or script execution across the profile
+    // boundary, so they fall back to the New Tab Page in the destination
+    // profile.
+    return intercepted_url.SchemeIsHTTPOrHTTPS()
+               ? intercepted_url
+               : chrome::ChromeUINewTabURLAsGURL();
+  }
+  std::string continue_spec;
+  if (!net::GetValueForKeyInQuery(intercepted_url, "continue",
+                                  &continue_spec)) {
+    return chrome::ChromeUINewTabURLAsGURL();
+  }
+  GURL continue_url(continue_spec);
+  return IsAllowedContinueURL(continue_url) ? continue_url
+                                            : chrome::ChromeUINewTabURLAsGURL();
 }
 
 void DiceInterceptedSessionStartupHelper::OnAccountsInCookieUpdated(
@@ -105,26 +213,26 @@ void DiceInterceptedSessionStartupHelper::OnAccountsInCookieUpdated(
     const GoogleServiceAuthError& error) {
   if (error != GoogleServiceAuthError::AuthErrorNone())
     return;
-  if (!accounts_in_cookie_jar_info.accounts_are_fresh)
+  if (!accounts_in_cookie_jar_info.AreAccountsFresh()) {
     return;
+  }
   if (!CookieInfoContains(accounts_in_cookie_jar_info, account_id_))
     return;
 
-  MoveTab(use_multilogin_ ? Result::kMultiloginOtherSuccess
-                          : Result::kReconcilorSuccess);
+  MoveTab();
 }
 
 void DiceInterceptedSessionStartupHelper::OnStateChanged(
     signin_metrics::AccountReconcilorState state) {
-  DCHECK(!use_multilogin_);
-  if (state == signin_metrics::ACCOUNT_RECONCILOR_ERROR) {
+  CHECK(!use_multilogin_, base::NotFatalUntil::M162);
+  if (state == signin_metrics::AccountReconcilorState::kError) {
     reconcile_error_encountered_ = true;
     return;
   }
 
-  // TODO(https://crbug.com/1051864): remove this when the cookie updates are
+  // TODO(crbug.com/40673982): remove this when the cookie updates are
   // correctly sent after reconciliation.
-  if (state == signin_metrics::ACCOUNT_RECONCILOR_OK) {
+  if (state == signin_metrics::AccountReconcilorState::kOk) {
     signin::IdentityManager* identity_manager =
         IdentityManagerFactory::GetForProfile(profile_);
     // GetAccountsInCookieJar() automatically re-schedules a /ListAccounts call
@@ -137,25 +245,28 @@ void DiceInterceptedSessionStartupHelper::OnStateChanged(
 }
 
 void DiceInterceptedSessionStartupHelper::StartupMultilogin(
-    signin::IdentityManager* identity_manager) {
+    signin::IdentityManager* identity_manager,
+    std::vector<CoreAccountId> accounts_to_send) {
   // Lock the reconcilor to avoid making multiple multilogin calls.
   reconcilor_lock_ = std::make_unique<AccountReconcilor::Lock>(
       AccountReconcilorFactory::GetForProfile(profile_));
 
+  const size_t num_accounts = accounts_to_send.size();
+
   // Start the multilogin call.
   signin::MultiloginParameters params = {
       /*mode=*/gaia::MultiloginMode::MULTILOGIN_UPDATE_COOKIE_ACCOUNTS_ORDER,
-      /*accounts_to_send=*/{account_id_}};
+      /*accounts_to_send=*/std::move(accounts_to_send)};
   identity_manager->GetAccountsCookieMutator()->SetAccountsInCookie(
       params, gaia::GaiaSource::kChrome,
       base::BindOnce(
           &DiceInterceptedSessionStartupHelper::OnSetAccountInCookieCompleted,
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), base::ElapsedTimer(), num_accounts));
 }
 
 void DiceInterceptedSessionStartupHelper::StartupReconcilor(
     signin::IdentityManager* identity_manager) {
-  // TODO(https://crbug.com/1051864): cookie notifications are not triggered
+  // TODO(crbug.com/40673982): cookie notifications are not triggered
   // when the account is added by the reconcilor. Observe the reconcilor and
   // re-trigger the cookie update when it completes.
   reconcilor_observer_.Observe(
@@ -164,35 +275,58 @@ void DiceInterceptedSessionStartupHelper::StartupReconcilor(
 }
 
 void DiceInterceptedSessionStartupHelper::OnSetAccountInCookieCompleted(
+    base::ElapsedTimer timer,
+    size_t num_accounts,
     signin::SetAccountsInCookieResult result) {
-  DCHECK(use_multilogin_);
-  Result session_startup_result = Result::kMultiloginOtherSuccess;
-  switch (result) {
-    case signin::SetAccountsInCookieResult::kSuccess:
-      session_startup_result = Result::kMultiloginSuccess;
-      break;
-    case signin::SetAccountsInCookieResult::kTransientError:
-      session_startup_result = Result::kMultiloginTransientError;
-      break;
-    case signin::SetAccountsInCookieResult::kPersistentError:
-      session_startup_result = Result::kMultiloginPersistentError;
-      break;
+  CHECK(use_multilogin_, base::NotFatalUntil::M162);
+  if (num_accounts > 1) {
+    const base::TimeDelta duration = timer.Elapsed();
+    base::UmaHistogramTimes(kDiceLinkedAccountsLatencyNewProfileOAuthMultiLogin,
+                            duration);
+    base::UmaHistogramTimes(
+        base::StrCat({kDiceLinkedAccountsLatencyNewProfileOAuthMultiLogin,
+                      GetAccountCountSuffix(num_accounts)}),
+        duration);
+    RecordNewProfileOAuthMultiLoginResult(
+        ToNewProfileOAuthMultiLoginResult(result), num_accounts);
   }
-
-  MoveTab(session_startup_result);
+  MoveTab();
 }
 
-void DiceInterceptedSessionStartupHelper::MoveTab(Result result) {
+void DiceInterceptedSessionStartupHelper::OnCookieUpdateTimeout(
+    size_t num_accounts) {
+  if (use_multilogin_ && num_accounts > 1) {
+    RecordNewProfileOAuthMultiLoginResult(
+        NewProfileOAuthMultiLoginResult::kTimedOut, num_accounts);
+  }
+  MoveTab();
+}
+
+void DiceInterceptedSessionStartupHelper::MoveTab() {
   accounts_in_cookie_observer_.Reset();
   reconcilor_observer_.Reset();
   on_cookie_update_timeout_.Cancel();
+
+  // Defer the actual tab movement asynchronously to avoid observer reentrancy
+  // issues in AccountReconcilor. This method is called inside the reconcilor's
+  // notification loop (OnStateChanged), and navigating synchronously would
+  // trigger request throttling which attempts to lock/block the reconcilor
+  // synchronously, starting a second nested notification loop.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&DiceInterceptedSessionStartupHelper::PerformMoveTab,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void DiceInterceptedSessionStartupHelper::PerformMoveTab() {
   reconcilor_lock_.reset();
 
-  GURL url_to_open = GURL(chrome::kChromeUINewTabURL);
+  GURL url_to_open = chrome::ChromeUINewTabURLAsGURL();
   // If the intercepted web contents is still alive, close it now.
-  if (web_contents()) {
-    url_to_open = web_contents()->GetURL();
-    web_contents()->Close();
+  if (web_contents_) {
+    url_to_open = GetDestinationURLForInterceptedTab(
+        web_contents_->GetLastCommittedURL());
+    web_contents_->Close();
   }
 
   // Open a new browser.
@@ -200,21 +334,7 @@ void DiceInterceptedSessionStartupHelper::MoveTab(Result result) {
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK);
   Navigate(&params);
 
-  base::UmaHistogramEnumeration("Signin.Intercept.SessionStartupResult",
-                                result);
-  base::TimeDelta duration = base::TimeTicks::Now() - session_startup_time_;
-  if (use_multilogin_) {
-    RecordSessionStartupDuration(
-        "Signin.Intercept.SessionStartupDuration.Multilogin", duration);
-  } else {
-    RecordSessionStartupDuration(
-        "Signin.Intercept.SessionStartupDuration.Reconcilor", duration);
-    // TODO(https://crbug.com/1151313): Remove this histogram when the cause
-    // for the timeouts is understood.
-    base::UmaHistogramBoolean("Signin.Intercept.SessionStartupReconcileError",
-                              reconcile_error_encountered_);
-  }
-
-  if (callback_)
+  if (callback_) {
     std::move(callback_).Run();
+  }
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,9 +35,7 @@ TEST(DownloadServiceClientSetTest, TestGetRegisteredClients) {
                                            DownloadClient::DEBUGGING};
   std::set<DownloadClient> actual_set = clients.GetRegisteredClients();
 
-  EXPECT_EQ(expected_set.size(), actual_set.size());
-  EXPECT_TRUE(
-      std::equal(expected_set.begin(), expected_set.end(), actual_set.begin()));
+  EXPECT_TRUE(std::ranges::equal(expected_set, actual_set));
 }
 
 }  // namespace download

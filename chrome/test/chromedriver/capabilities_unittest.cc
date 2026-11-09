@@ -1,18 +1,115 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/test/chromedriver/capabilities.h"
 
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "base/containers/contains.h"
+#include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/strings/pattern.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "chrome/test/chromedriver/chrome/client_hints.h"
 #include "chrome/test/chromedriver/chrome/log.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/logging.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using testing::Eq;
+using testing::Pointee;
+
+namespace {
+
+template <int Code>
+testing::AssertionResult StatusCodeIs(const Status& status) {
+  if (status.code() == Code) {
+    return testing::AssertionSuccess();
+  } else {
+    return testing::AssertionFailure() << status.message();
+  }
+}
+
+testing::AssertionResult StatusOk(const Status& status) {
+  return StatusCodeIs<kOk>(status);
+}
+
+void CheckDefaults(const ClientHints& client_hints) {
+  EXPECT_EQ("", client_hints.architecture);
+  EXPECT_EQ(std::nullopt, client_hints.brands);
+  EXPECT_EQ("", client_hints.bitness);
+  EXPECT_EQ(std::nullopt, client_hints.full_version_list);
+  EXPECT_EQ("", client_hints.model);
+  EXPECT_EQ("", client_hints.platform_version);
+  EXPECT_FALSE(client_hints.wow64);
+}
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentChromeOnWindows[] =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
+    "Gecko) "
+    "Chrome/114.0.0.0 Safari/537.36";
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentChromeOnMacOS[] =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) "
+    "Chrome/114.0.0.0 Safari/537.36";
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentChromeOnLinux[] =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/114.0.0.0 Safari/537.36";
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentChromeOnChromeOS[] =
+    "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like "
+    "Gecko) "
+    "Chrome/114.0.0.0 Safari/537.36";
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentChromeOnFuchsia[] =
+    "Mozilla/5.0 (Fuchsia) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/114.0.0.0 Safari/537.36";
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentMobileChromeOnAndroid[] =
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/114.0.0.0 Mobile Safari/537.36";
+
+// Source: https://www.chromium.org/updates/ua-reduction/
+const char kUserAgentNonMobileChromeOnAndroid[] =
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/114.0.0.0 Safari/537.36";
+
+// Source: docs/ios/user_agent.md
+const char kUserAgentMobileChromeOnIOS[] =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 10_3 like Mac OS X) "
+    "AppleWebKit/602.1.50 (KHTML, like Gecko) CriOS/56.0.2924.75 "
+    "Mobile/14E5239e Safari/602.1";
+
+// UA used when Request Desktop Site features is enabled.
+// Source: docs/ios/user_agent.md
+const char kUserAgentNonMobileChromeOnIOS[] =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/85 "
+    "Version/11.1.1 Safari/605.1.15";
+
+const std::vector<std::string> kNonMobileUserAgents = {
+    kUserAgentNonMobileChromeOnAndroid,
+    kUserAgentNonMobileChromeOnIOS,
+    kUserAgentChromeOnChromeOS,
+    kUserAgentChromeOnFuchsia,
+    kUserAgentChromeOnLinux,
+    kUserAgentChromeOnMacOS,
+    kUserAgentChromeOnWindows,
+};
+
+}  // namespace
 
 TEST(Switches, Empty) {
   Switches switches;
@@ -50,6 +147,20 @@ TEST(Switches, Value) {
   ASSERT_EQ("--hello=there", switches.ToString());
 }
 
+TEST(Switches, Multivalued) {
+  Switches switches;
+  switches.SetMultivaluedSwitch("my-switch", "value1", ",");
+  ASSERT_EQ("value1", switches.GetSwitchValue("my-switch"));
+  switches.SetMultivaluedSwitch("my-switch", "value2", ",");
+  ASSERT_EQ("value1,value2", switches.GetSwitchValue("my-switch"));
+  // Test that trailing commas are removed.
+  switches.SetMultivaluedSwitch("my-switch", "value3,", ",");
+  ASSERT_EQ("value1,value2,value3,", switches.GetSwitchValue("my-switch"));
+  switches.SetMultivaluedSwitch("my-switch", "value4", ",");
+  ASSERT_EQ("value1,value2,value3,value4",
+            switches.GetSwitchValue("my-switch"));
+}
+
 TEST(Switches, FromOther) {
   Switches switches;
   switches.SetSwitch("a", "1");
@@ -61,6 +172,20 @@ TEST(Switches, FromOther) {
 
   switches.SetFromSwitches(switches2);
   ASSERT_EQ("--a=1 --b=2 --c=2", switches.ToString());
+}
+
+TEST(Switches, FromOtherMultivalued) {
+  Switches switches;
+  switches.SetSwitch("enable-features", "one");
+
+  Switches switches2;
+  switches2.SetSwitch("enable-features", "two");
+
+  switches.SetFromSwitches(switches2);
+
+  // `enable-features` is a multivalued switch, so the values should be
+  // joined with commas.
+  ASSERT_EQ("one,two", switches.GetSwitchValue("enable-features"));
 }
 
 TEST(Switches, Remove) {
@@ -102,11 +227,26 @@ TEST(Switches, Unparsed) {
   ASSERT_EQ("---e=--1=1 --a --b --c=1 --d=1", switches.ToString());
 }
 
+TEST(Switches, UnparsedInvalidName) {
+  Switches switches;
+  switches.SetUnparsedSwitch("--a b");
+  switches.SetUnparsedSwitch("c\"d");
+  switches.SetUnparsedSwitch("e\'f");
+  switches.SetUnparsedSwitch("g\th");
+  switches.SetUnparsedSwitch("i\nj");
+  switches.SetUnparsedSwitch("k\rl");
+  switches.SetUnparsedSwitch("m=1");
+  switches.SetUnparsedSwitch("--n o=1");
+  switches.SetUnparsedSwitch("/c echo NOT_CHROME > capture.txt");
+
+  ASSERT_EQ("--m=1", switches.ToString());
+}
+
 TEST(ParseCapabilities, UnknownCapabilityLegacy) {
   // In legacy mode, unknown capabilities are ignored.
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("foo", "bar");
+  base::DictValue caps;
+  caps.Set("foo", "bar");
   Status status = capabilities.Parse(caps, false);
   ASSERT_TRUE(status.IsOk());
 }
@@ -114,42 +254,282 @@ TEST(ParseCapabilities, UnknownCapabilityLegacy) {
 TEST(ParseCapabilities, UnknownCapabilityW3c) {
   // In W3C mode, unknown capabilities results in error.
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("foo", "bar");
+  base::DictValue caps;
+  caps.Set("foo", "bar");
   Status status = capabilities.Parse(caps);
   ASSERT_EQ(status.code(), kInvalidArgument);
 }
 
 TEST(ParseCapabilities, WithAndroidPackage) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.androidPackage", "abc");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_TRUE(capabilities.IsAndroid());
-  ASSERT_EQ("abc", capabilities.android_package);
+  ASSERT_EQ("com.example.app", capabilities.android_package);
 }
 
 TEST(ParseCapabilities, EmptyAndroidPackage) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.androidPackage", std::string());
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", std::string());
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
-TEST(ParseCapabilities, IllegalAndroidPackage) {
+TEST(ParseCapabilities, IllegalAndroidPackageType) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetInteger("goog:chromeOptions.androidPackage", 123);
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", 123);
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
+}
+
+TEST(ParseCapabilities, InvalidAndroidPackageName) {
+  Capabilities capabilities;
+  base::DictValue caps;
+
+  // Single segment
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "abc");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  // Ends with dot
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  // Starts with dot
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", ".com.example");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  // Contains invalid characters (command injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage",
+                       "com.example space");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidGrantPermissionsDefault) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_FALSE(capabilities.android_grant_permissions.has_value());
+}
+
+TEST(ParseCapabilities, AndroidGrantPermissions) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+  base::ListValue permissions;
+  permissions.Append("ACCESS_LOCAL_NETWORK");
+  permissions.Append("android.permission.CAMERA");
+  permissions.Append("com.example.permission.FOO_BAR");
+  caps.SetByDottedPath("goog:chromeOptions.androidGrantPermissions",
+                       std::move(permissions));
+  Status status = capabilities.Parse(caps);
+  ASSERT_TRUE(status.IsOk()) << status.message();
+  ASSERT_TRUE(capabilities.android_grant_permissions.has_value());
+  EXPECT_EQ((std::vector<std::string>{"android.permission.ACCESS_LOCAL_NETWORK",
+                                      "android.permission.CAMERA",
+                                      "com.example.permission.FOO_BAR"}),
+            *capabilities.android_grant_permissions);
+}
+
+TEST(ParseCapabilities, AndroidGrantPermissionsEmpty) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+  caps.SetByDottedPath("goog:chromeOptions.androidGrantPermissions",
+                       base::ListValue());
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_TRUE(capabilities.android_grant_permissions.has_value());
+  EXPECT_TRUE(capabilities.android_grant_permissions->empty());
+}
+
+TEST(ParseCapabilities, InvalidAndroidGrantPermissions) {
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Not a list.
+  {
+    Capabilities capabilities;
+    caps.SetByDottedPath("goog:chromeOptions.androidGrantPermissions",
+                         "ACCESS_LOCAL_NETWORK");
+    EXPECT_EQ(kInvalidArgument, capabilities.Parse(caps).code());
+  }
+
+  // Not a list of strings.
+  {
+    Capabilities capabilities;
+    base::ListValue permissions;
+    permissions.Append(123);
+    caps.SetByDottedPath("goog:chromeOptions.androidGrantPermissions",
+                         std::move(permissions));
+    EXPECT_EQ(kInvalidArgument, capabilities.Parse(caps).code());
+  }
+
+  // Invalid characters (command injection attempts) and empty names.
+  for (const char* name : {"FOO;rm -rf /", "FOO|sh", "FOO BAR", "$(reboot)",
+                           "FOO&&reboot", "android.permission.FOO`id`", ""}) {
+    Capabilities capabilities;
+    base::ListValue permissions;
+    permissions.Append(name);
+    caps.SetByDottedPath("goog:chromeOptions.androidGrantPermissions",
+                         std::move(permissions));
+    EXPECT_EQ(kInvalidArgument, capabilities.Parse(caps).code()) << name;
+  }
+}
+
+TEST(ParseCapabilities, AndroidActivity) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid relative activity
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity", ".MainActivity");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ(".MainActivity", capabilities.android_activity);
+
+  // Valid fully qualified activity
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity",
+                       "com.example.app.MainActivity");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("com.example.app.MainActivity", capabilities.android_activity);
+
+  // Valid with colon
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity", ":MainActivity");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+
+  // Invalid characters (command injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity",
+                       ".MainActivity;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity",
+                       ".MainActivity|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidProcess) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid process name
+  caps.SetByDottedPath("goog:chromeOptions.androidProcess",
+                       "com.example.app:remote");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("com.example.app:remote", capabilities.android_process);
+
+  // Invalid process name (injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidProcess",
+                       "com.example.app;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidDeviceSocket) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid socket name
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSocket",
+                       "@webview_devtools_remote_123");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("@webview_devtools_remote_123", capabilities.android_device_socket);
+
+  // Invalid socket name (injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSocket", "webview;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidDeviceSerial) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid device serials
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial",
+                       "192.168.1.100:5555");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("192.168.1.100:5555", capabilities.android_device_serial);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial",
+                       "HT4CTSK00123");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("HT4CTSK00123", capabilities.android_device_serial);
+
+  // Invalid device serial (injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial", "serial;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial", "serial|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidExecName) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid executable names (alphanumeric, /, ., _, -)
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome123");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome123", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "content_shell");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("content_shell", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome-shell");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome-shell", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome.bin");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome.bin", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName",
+                       "/system/bin/chrome");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("/system/bin/chrome", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName",
+                       "./chrome_shell-123.bin");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("./chrome_shell-123.bin", capabilities.android_exec_name);
+
+  // Invalid executable names (shell injection attempts and metadata)
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome&sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome$(rm)");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome `rm`");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
 }
 
 TEST(ParseCapabilities, LogPath) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.logPath", "path/to/logfile");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.logPath", "path/to/logfile");
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_STREQ("path/to/logfile", capabilities.log_path.c_str());
@@ -157,53 +537,64 @@ TEST(ParseCapabilities, LogPath) {
 
 TEST(ParseCapabilities, Args) {
   Capabilities capabilities;
-  base::Value::ListStorage args;
-  args.emplace_back("arg1");
-  args.emplace_back("arg2=val");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "args"}, base::Value(args));
+  base::ListValue args;
+  args.Append("arg1");
+  args.Append("arg2=invalid");
+  args.Append("arg2=val");
+  args.Append("enable-blink-features=val1");
+  args.Append("enable-blink-features=val2,");
+  args.Append("--enable-blink-features=val3");
+  args.Append("js-flags=--flag1");
+  args.Append("--js-flags=--flag2");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.args", std::move(args));
 
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
 
-  ASSERT_EQ(2u, capabilities.switches.GetSize());
+  ASSERT_EQ(4u, capabilities.switches.GetSize());
   ASSERT_TRUE(capabilities.switches.HasSwitch("arg1"));
   ASSERT_TRUE(capabilities.switches.HasSwitch("arg2"));
   ASSERT_EQ("", capabilities.switches.GetSwitchValue("arg1"));
   ASSERT_EQ("val", capabilities.switches.GetSwitchValue("arg2"));
+  ASSERT_EQ("val1,val2,val3",
+            capabilities.switches.GetSwitchValue("enable-blink-features"));
+  ASSERT_EQ("--flag1 --flag2",
+            capabilities.switches.GetSwitchValue("js-flags"));
 }
 
 TEST(ParseCapabilities, Prefs) {
   Capabilities capabilities;
-  base::DictionaryValue prefs;
-  prefs.SetString("key1", "value1");
-  prefs.SetString("key2.k", "value2");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "prefs"}, prefs.Clone());
+  base::DictValue prefs;
+  prefs.Set("key1", "value1");
+  prefs.SetByDottedPath("key2.k", "value2");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.prefs", prefs.Clone());
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
-  ASSERT_TRUE(capabilities.prefs->Equals(&prefs));
+  ASSERT_TRUE(*capabilities.prefs == prefs);
 }
 
 TEST(ParseCapabilities, LocalState) {
   Capabilities capabilities;
-  base::DictionaryValue local_state;
-  local_state.SetString("s1", "v1");
-  local_state.SetString("s2.s", "v2");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "localState"}, local_state.Clone());
+  base::DictValue local_state;
+  local_state.Set("s1", "v1");
+  local_state.SetByDottedPath("s2.s", "v2");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.localState", local_state.Clone());
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
-  ASSERT_TRUE(capabilities.local_state->Equals(&local_state));
+  ASSERT_TRUE(*capabilities.local_state == local_state);
 }
 
 TEST(ParseCapabilities, Extensions) {
   Capabilities capabilities;
-  base::Value::ListStorage extensions;
-  extensions.emplace_back("ext1");
-  extensions.emplace_back("ext2");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "extensions"}, base::Value(extensions));
+  base::ListValue extensions;
+  extensions.Append("ext1");
+  extensions.Append("ext2");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.extensions",
+                       base::Value(std::move(extensions)));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(2u, capabilities.extensions.size());
@@ -213,30 +604,30 @@ TEST(ParseCapabilities, Extensions) {
 
 TEST(ParseCapabilities, UnrecognizedProxyType) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "unknown proxy type");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "unknown proxy type");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, IllegalProxyType) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetInteger("proxyType", 123);
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", 123);
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, DirectProxy) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "direct");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "direct");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(1u, capabilities.switches.GetSize());
@@ -245,10 +636,10 @@ TEST(ParseCapabilities, DirectProxy) {
 
 TEST(ParseCapabilities, SystemProxy) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "system");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "system");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(0u, capabilities.switches.GetSize());
@@ -256,11 +647,11 @@ TEST(ParseCapabilities, SystemProxy) {
 
 TEST(ParseCapabilities, PacProxy) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "pac");
-  proxy.SetString("proxyAutoconfigUrl", "test.wpad");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "pac");
+  proxy.Set("proxyAutoconfigUrl", "test.wpad");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(1u, capabilities.switches.GetSize());
@@ -269,21 +660,21 @@ TEST(ParseCapabilities, PacProxy) {
 
 TEST(ParseCapabilities, MissingProxyAutoconfigUrl) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "pac");
-  proxy.SetString("httpProxy", "http://localhost:8001");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "pac");
+  proxy.Set("httpProxy", "http://localhost:8001");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, AutodetectProxy) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "autodetect");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "autodetect");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(1u, capabilities.switches.GetSize());
@@ -292,19 +683,19 @@ TEST(ParseCapabilities, AutodetectProxy) {
 
 TEST(ParseCapabilities, ManualProxy) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "manual");
-  proxy.SetString("ftpProxy", "localhost:9001");
-  proxy.SetString("httpProxy", "localhost:8001");
-  proxy.SetString("sslProxy", "localhost:10001");
-  proxy.SetString("socksProxy", "localhost:12345");
-  proxy.SetInteger("socksVersion", 5);
-  std::unique_ptr<base::ListValue> bypass = std::make_unique<base::ListValue>();
-  bypass->AppendString("google.com");
-  bypass->AppendString("youtube.com");
-  proxy.SetList("noProxy", std::move(bypass));
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "manual");
+  proxy.Set("ftpProxy", "localhost:9001");
+  proxy.Set("httpProxy", "localhost:8001");
+  proxy.Set("sslProxy", "localhost:10001");
+  proxy.Set("socksProxy", "localhost:12345");
+  proxy.Set("socksVersion", 5);
+  base::ListValue bypass;
+  bypass.Append("google.com");
+  bypass.Append("youtube.com");
+  proxy.Set("noProxy", std::move(bypass));
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(2u, capabilities.switches.GetSize());
@@ -319,13 +710,13 @@ TEST(ParseCapabilities, ManualProxy) {
 
 TEST(ParseCapabilities, IgnoreNullValueForManualProxy) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "manual");
-  proxy.SetString("ftpProxy", "localhost:9001");
-  proxy.SetKey("sslProxy", base::Value());
-  proxy.SetKey("noProxy", base::Value());
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "manual");
+  proxy.Set("ftpProxy", "localhost:9001");
+  proxy.Set("sslProxy", base::Value());
+  proxy.Set("noProxy", base::Value());
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(1u, capabilities.switches.GetSize());
@@ -337,30 +728,30 @@ TEST(ParseCapabilities, IgnoreNullValueForManualProxy) {
 
 TEST(ParseCapabilities, MissingSocksVersion) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "manual");
-  proxy.SetString("socksProxy", "localhost:6000");
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "manual");
+  proxy.Set("socksProxy", "localhost:6000");
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, BadSocksVersion) {
   Capabilities capabilities;
-  base::DictionaryValue proxy;
-  proxy.SetString("proxyType", "manual");
-  proxy.SetString("socksProxy", "localhost:6000");
-  proxy.SetInteger("socksVersion", 256);
-  base::DictionaryValue caps;
-  caps.SetKey("proxy", std::move(proxy));
+  base::DictValue proxy;
+  proxy.Set("proxyType", "manual");
+  proxy.Set("socksProxy", "localhost:6000");
+  proxy.Set("socksVersion", 256);
+  base::DictValue caps;
+  caps.Set("proxy", std::move(proxy));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, AcceptInsecureCertsDisabledByDefault) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
+  base::DictValue caps;
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_FALSE(capabilities.accept_insecure_certs);
@@ -368,8 +759,8 @@ TEST(ParseCapabilities, AcceptInsecureCertsDisabledByDefault) {
 
 TEST(ParseCapabilities, EnableAcceptInsecureCerts) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetBoolean("acceptInsecureCerts", true);
+  base::DictValue caps;
+  caps.Set("acceptInsecureCerts", true);
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_TRUE(capabilities.accept_insecure_certs);
@@ -377,10 +768,10 @@ TEST(ParseCapabilities, EnableAcceptInsecureCerts) {
 
 TEST(ParseCapabilities, LoggingPrefsOk) {
   Capabilities capabilities;
-  base::DictionaryValue logging_prefs;
-  logging_prefs.SetString("Network", "INFO");
-  base::DictionaryValue caps;
-  caps.SetKey("goog:loggingPrefs", std::move(logging_prefs));
+  base::DictValue logging_prefs;
+  logging_prefs.Set("Network", "INFO");
+  base::DictValue caps;
+  caps.Set("goog:loggingPrefs", std::move(logging_prefs));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(1u, capabilities.logging_prefs.size());
@@ -389,8 +780,8 @@ TEST(ParseCapabilities, LoggingPrefsOk) {
 
 TEST(ParseCapabilities, LoggingPrefsNotDict) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:loggingPrefs", "INFO");
+  base::DictValue caps;
+  caps.Set("goog:loggingPrefs", "INFO");
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
@@ -398,19 +789,19 @@ TEST(ParseCapabilities, LoggingPrefsNotDict) {
 TEST(ParseCapabilities, PerfLoggingPrefsInspectorDomainStatus) {
   Capabilities capabilities;
   // Perf log must be enabled if performance log preferences are specified.
-  base::DictionaryValue logging_prefs;
-  logging_prefs.SetString(WebDriverLog::kPerformanceType, "INFO");
-  base::DictionaryValue desired_caps;
-  desired_caps.SetKey("goog:loggingPrefs", std::move(logging_prefs));
+  base::DictValue logging_prefs;
+  logging_prefs.Set(WebDriverLog::kPerformanceType, "INFO");
+  base::DictValue desired_caps;
+  desired_caps.Set("goog:loggingPrefs", std::move(logging_prefs));
   ASSERT_EQ(PerfLoggingPrefs::InspectorDomainStatus::kDefaultEnabled,
             capabilities.perf_logging_prefs.network);
   ASSERT_EQ(PerfLoggingPrefs::InspectorDomainStatus::kDefaultEnabled,
             capabilities.perf_logging_prefs.page);
-  base::DictionaryValue perf_logging_prefs;
-  perf_logging_prefs.SetBoolean("enableNetwork", true);
-  perf_logging_prefs.SetBoolean("enablePage", false);
-  desired_caps.SetPath({"goog:chromeOptions", "perfLoggingPrefs"},
-                       std::move(perf_logging_prefs));
+  base::DictValue perf_logging_prefs;
+  perf_logging_prefs.Set("enableNetwork", true);
+  perf_logging_prefs.Set("enablePage", false);
+  desired_caps.SetByDottedPath("goog:chromeOptions.perfLoggingPrefs",
+                               std::move(perf_logging_prefs));
   Status status = capabilities.Parse(desired_caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(PerfLoggingPrefs::InspectorDomainStatus::kExplicitlyEnabled,
@@ -422,16 +813,16 @@ TEST(ParseCapabilities, PerfLoggingPrefsInspectorDomainStatus) {
 TEST(ParseCapabilities, PerfLoggingPrefsTracing) {
   Capabilities capabilities;
   // Perf log must be enabled if performance log preferences are specified.
-  base::DictionaryValue logging_prefs;
-  logging_prefs.SetString(WebDriverLog::kPerformanceType, "INFO");
-  base::DictionaryValue desired_caps;
-  desired_caps.SetKey("goog:loggingPrefs", std::move(logging_prefs));
+  base::DictValue logging_prefs;
+  logging_prefs.Set(WebDriverLog::kPerformanceType, "INFO");
+  base::DictValue desired_caps;
+  desired_caps.Set("goog:loggingPrefs", std::move(logging_prefs));
   ASSERT_EQ("", capabilities.perf_logging_prefs.trace_categories);
-  base::DictionaryValue perf_logging_prefs;
-  perf_logging_prefs.SetString("traceCategories", "benchmark,blink.console");
-  perf_logging_prefs.SetInteger("bufferUsageReportingInterval", 1234);
-  desired_caps.SetPath({"goog:chromeOptions", "perfLoggingPrefs"},
-                       std::move(perf_logging_prefs));
+  base::DictValue perf_logging_prefs;
+  perf_logging_prefs.Set("traceCategories", "benchmark,blink.console");
+  perf_logging_prefs.Set("bufferUsageReportingInterval", 1234);
+  desired_caps.SetByDottedPath("goog:chromeOptions.perfLoggingPrefs",
+                               std::move(perf_logging_prefs));
   Status status = capabilities.Parse(desired_caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ("benchmark,blink.console",
@@ -443,15 +834,15 @@ TEST(ParseCapabilities, PerfLoggingPrefsTracing) {
 TEST(ParseCapabilities, PerfLoggingPrefsInvalidInterval) {
   Capabilities capabilities;
   // Perf log must be enabled if performance log preferences are specified.
-  base::DictionaryValue logging_prefs;
-  logging_prefs.SetString(WebDriverLog::kPerformanceType, "INFO");
-  base::DictionaryValue desired_caps;
-  desired_caps.SetKey("goog:loggingPrefs", std::move(logging_prefs));
-  base::DictionaryValue perf_logging_prefs;
+  base::DictValue logging_prefs;
+  logging_prefs.Set(WebDriverLog::kPerformanceType, "INFO");
+  base::DictValue desired_caps;
+  desired_caps.Set("goog:loggingPrefs", std::move(logging_prefs));
+  base::DictValue perf_logging_prefs;
   // A bufferUsageReportingInterval interval <= 0 will cause DevTools errors.
-  perf_logging_prefs.SetInteger("bufferUsageReportingInterval", 0);
-  desired_caps.SetPath({"goog:chromeOptions", "perfLoggingPrefs"},
-                       std::move(perf_logging_prefs));
+  perf_logging_prefs.Set("bufferUsageReportingInterval", 0);
+  desired_caps.SetByDottedPath("goog:chromeOptions.perfLoggingPrefs",
+                               std::move(perf_logging_prefs));
   Status status = capabilities.Parse(desired_caps);
   ASSERT_FALSE(status.IsOk());
 }
@@ -459,23 +850,23 @@ TEST(ParseCapabilities, PerfLoggingPrefsInvalidInterval) {
 TEST(ParseCapabilities, PerfLoggingPrefsNotDict) {
   Capabilities capabilities;
   // Perf log must be enabled if performance log preferences are specified.
-  base::DictionaryValue logging_prefs;
-  logging_prefs.SetString(WebDriverLog::kPerformanceType, "INFO");
-  base::DictionaryValue desired_caps;
-  desired_caps.SetKey("goog:loggingPrefs", std::move(logging_prefs));
-  desired_caps.SetString("goog:chromeOptions.perfLoggingPrefs",
-                         "traceCategories");
+  base::DictValue logging_prefs;
+  logging_prefs.Set(WebDriverLog::kPerformanceType, "INFO");
+  base::DictValue desired_caps;
+  desired_caps.Set("goog:loggingPrefs", std::move(logging_prefs));
+  desired_caps.SetByDottedPath("goog:chromeOptions.perfLoggingPrefs",
+                               "traceCategories");
   Status status = capabilities.Parse(desired_caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, PerfLoggingPrefsNoPerfLogLevel) {
   Capabilities capabilities;
-  base::DictionaryValue desired_caps;
-  base::DictionaryValue perf_logging_prefs;
-  perf_logging_prefs.SetBoolean("enableNetwork", true);
-  desired_caps.SetPath({"goog:chromeOptions", "perfLoggingPrefs"},
-                       std::move(perf_logging_prefs));
+  base::DictValue desired_caps;
+  base::DictValue perf_logging_prefs;
+  perf_logging_prefs.Set("enableNetwork", true);
+  desired_caps.SetByDottedPath("goog:chromeOptions.perfLoggingPrefs",
+                               std::move(perf_logging_prefs));
   // Should fail because perf log must be enabled if perf log prefs specified.
   Status status = capabilities.Parse(desired_caps);
   ASSERT_FALSE(status.IsOk());
@@ -483,15 +874,15 @@ TEST(ParseCapabilities, PerfLoggingPrefsNoPerfLogLevel) {
 
 TEST(ParseCapabilities, PerfLoggingPrefsPerfLogOff) {
   Capabilities capabilities;
-  base::DictionaryValue logging_prefs;
+  base::DictValue logging_prefs;
   // Disable performance log by setting logging level to OFF.
-  logging_prefs.SetString(WebDriverLog::kPerformanceType, "OFF");
-  base::DictionaryValue desired_caps;
-  desired_caps.SetKey("goog:loggingPrefs", std::move(logging_prefs));
-  base::DictionaryValue perf_logging_prefs;
-  perf_logging_prefs.SetBoolean("enableNetwork", true);
-  desired_caps.SetPath({"goog:chromeOptions", "perfLoggingPrefs"},
-                       std::move(perf_logging_prefs));
+  logging_prefs.Set(WebDriverLog::kPerformanceType, "OFF");
+  base::DictValue desired_caps;
+  desired_caps.Set("goog:loggingPrefs", std::move(logging_prefs));
+  base::DictValue perf_logging_prefs;
+  perf_logging_prefs.Set("enableNetwork", true);
+  desired_caps.SetByDottedPath("goog:chromeOptions.perfLoggingPrefs",
+                               std::move(perf_logging_prefs));
   // Should fail because perf log must be enabled if perf log prefs specified.
   Status status = capabilities.Parse(desired_caps);
   ASSERT_FALSE(status.IsOk());
@@ -499,24 +890,24 @@ TEST(ParseCapabilities, PerfLoggingPrefsPerfLogOff) {
 
 TEST(ParseCapabilities, ExcludeSwitches) {
   Capabilities capabilities;
-  base::Value::ListStorage exclude_switches;
-  exclude_switches.emplace_back("switch1");
-  exclude_switches.emplace_back("switch2");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "excludeSwitches"},
-               base::Value(exclude_switches));
+  base::ListValue exclude_switches;
+  exclude_switches.Append("switch1");
+  exclude_switches.Append("switch2");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.excludeSwitches",
+                       base::Value(std::move(exclude_switches)));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(2u, capabilities.exclude_switches.size());
   const std::set<std::string>& switches = capabilities.exclude_switches;
-  ASSERT_TRUE(base::Contains(switches, "switch1"));
-  ASSERT_TRUE(base::Contains(switches, "switch2"));
+  ASSERT_TRUE(switches.contains("switch1"));
+  ASSERT_TRUE(switches.contains("switch2"));
 }
 
 TEST(ParseCapabilities, UseRemoteBrowserHostName) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.debuggerAddress", "abc:123");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.debuggerAddress", "abc:123");
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_TRUE(capabilities.IsRemoteBrowser());
@@ -526,8 +917,8 @@ TEST(ParseCapabilities, UseRemoteBrowserHostName) {
 
 TEST(ParseCapabilities, UseRemoteBrowserIpv4) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.debuggerAddress", "127.0.0.1:456");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.debuggerAddress", "127.0.0.1:456");
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_TRUE(capabilities.IsRemoteBrowser());
@@ -537,9 +928,9 @@ TEST(ParseCapabilities, UseRemoteBrowserIpv4) {
 
 TEST(ParseCapabilities, UseRemoteBrowserIpv6) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.debuggerAddress",
-                 "[fe80::f2ef:86ff:fe69:cafe]:789");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.debuggerAddress",
+                       "[fe80::f2ef:86ff:fe69:cafe]:789");
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_TRUE(capabilities.IsRemoteBrowser());
@@ -550,135 +941,892 @@ TEST(ParseCapabilities, UseRemoteBrowserIpv6) {
 
 TEST(ParseCapabilities, MobileEmulationUserAgent) {
   Capabilities capabilities;
-  base::DictionaryValue mobile_emulation;
-  mobile_emulation.SetString("userAgent", "Agent Smith");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "mobileEmulation"},
-               std::move(mobile_emulation));
+  base::DictValue mobile_emulation;
+  mobile_emulation.Set("userAgent", "Agent Smith");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                       std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
 
-  ASSERT_EQ(1u, capabilities.switches.GetSize());
-  ASSERT_TRUE(capabilities.switches.HasSwitch("user-agent"));
-  ASSERT_EQ("Agent Smith", capabilities.switches.GetSwitchValue("user-agent"));
+  ASSERT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ("Agent Smith", capabilities.mobile_device->user_agent.value());
 }
 
 TEST(ParseCapabilities, MobileEmulationDeviceMetrics) {
   Capabilities capabilities;
-  base::DictionaryValue mobile_emulation;
-  mobile_emulation.SetInteger("deviceMetrics.width", 360);
-  mobile_emulation.SetInteger("deviceMetrics.height", 640);
-  mobile_emulation.SetDouble("deviceMetrics.pixelRatio", 3.0);
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "mobileEmulation"},
-               std::move(mobile_emulation));
+  base::DictValue mobile_emulation;
+  mobile_emulation.SetByDottedPath("deviceMetrics.width", 360);
+  mobile_emulation.SetByDottedPath("deviceMetrics.height", 640);
+  mobile_emulation.SetByDottedPath("deviceMetrics.pixelRatio", 3.0);
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                       std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
 
-  ASSERT_EQ(360, capabilities.device_metrics->width);
-  ASSERT_EQ(640, capabilities.device_metrics->height);
-  ASSERT_EQ(3.0, capabilities.device_metrics->device_scale_factor);
+  ASSERT_EQ(360, capabilities.mobile_device->device_metrics->width);
+  ASSERT_EQ(640, capabilities.mobile_device->device_metrics->height);
+  ASSERT_EQ(3.0,
+            capabilities.mobile_device->device_metrics->device_scale_factor);
 }
 
 TEST(ParseCapabilities, MobileEmulationDeviceName) {
   Capabilities capabilities;
-  base::DictionaryValue mobile_emulation;
-  mobile_emulation.SetString("deviceName", "Nexus 5");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "mobileEmulation"},
-               std::move(mobile_emulation));
+  base::DictValue mobile_emulation;
+  mobile_emulation.Set("deviceName", "Pixel 10");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                       std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
 
-  ASSERT_EQ(1u, capabilities.switches.GetSize());
-  ASSERT_TRUE(capabilities.switches.HasSwitch("user-agent"));
+  ASSERT_TRUE(capabilities.mobile_device->user_agent.has_value());
   ASSERT_TRUE(base::MatchPattern(
-      capabilities.switches.GetSwitchValue("user-agent"),
-      "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) "
-      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/*.*.*.* Mobile "
-      "Safari/537.36"));
+      capabilities.mobile_device->user_agent.value(),
+      "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 (KHTML, "
+      "like Gecko) Chrome/%s Mobile Safari/537.36"));
 
-  ASSERT_EQ(360, capabilities.device_metrics->width);
-  ASSERT_EQ(640, capabilities.device_metrics->height);
-  ASSERT_EQ(3.0, capabilities.device_metrics->device_scale_factor);
+  ASSERT_EQ(412, capabilities.mobile_device->device_metrics->width);
+  ASSERT_EQ(924, capabilities.mobile_device->device_metrics->height);
+  ASSERT_EQ(2.625,
+            capabilities.mobile_device->device_metrics->device_scale_factor);
 }
 
 TEST(ParseCapabilities, MobileEmulationNotDict) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetString("goog:chromeOptions.mobileEmulation", "Google Nexus 5");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation", "Google Nexus 5");
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, MobileEmulationDeviceMetricsNotDict) {
   Capabilities capabilities;
-  base::DictionaryValue mobile_emulation;
-  mobile_emulation.SetInteger("deviceMetrics", 360);
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "mobileEmulation"},
-               std::move(mobile_emulation));
+  base::DictValue mobile_emulation;
+  mobile_emulation.Set("deviceMetrics", 360);
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                       std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, MobileEmulationDeviceMetricsNotNumbers) {
   Capabilities capabilities;
-  base::DictionaryValue mobile_emulation;
-  mobile_emulation.SetString("deviceMetrics.width", "360");
-  mobile_emulation.SetString("deviceMetrics.height", "640");
-  mobile_emulation.SetString("deviceMetrics.pixelRatio", "3.0");
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "mobileEmulation"},
-               std::move(mobile_emulation));
+  base::DictValue mobile_emulation;
+  mobile_emulation.SetByDottedPath("deviceMetrics.width", "360");
+  mobile_emulation.SetByDottedPath("deviceMetrics.height", "640");
+  mobile_emulation.SetByDottedPath("deviceMetrics.pixelRatio", "3.0");
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                       std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, MobileEmulationBadDict) {
   Capabilities capabilities;
-  base::DictionaryValue mobile_emulation;
-  mobile_emulation.SetString("deviceName", "Google Nexus 5");
-  mobile_emulation.SetInteger("deviceMetrics.width", 360);
-  mobile_emulation.SetInteger("deviceMetrics.height", 640);
-  mobile_emulation.SetDouble("deviceMetrics.pixelRatio", 3.0);
-  base::DictionaryValue caps;
-  caps.SetPath({"goog:chromeOptions", "mobileEmulation"},
-               std::move(mobile_emulation));
+  base::DictValue mobile_emulation;
+  mobile_emulation.Set("deviceName", "Google Nexus 5");
+  mobile_emulation.SetByDottedPath("deviceMetrics.width", 360);
+  mobile_emulation.SetByDottedPath("deviceMetrics.height", 640);
+  mobile_emulation.SetByDottedPath("deviceMetrics.pixelRatio", 3.0);
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                       std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
 }
 
 TEST(ParseCapabilities, VirtualAuthenticatorsBool) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetBoolKey("webauthn:virtualAuthenticators", true);
+  base::DictValue caps;
+  caps.Set("webauthn:virtualAuthenticators", true);
   EXPECT_TRUE(capabilities.Parse(caps).IsOk());
 
-  caps.SetBoolKey("webauthn:virtualAuthenticators", false);
+  caps.Set("webauthn:virtualAuthenticators", false);
   EXPECT_TRUE(capabilities.Parse(caps).IsOk());
 }
 
 TEST(ParseCapabilities, VirtualAuthenticatorsNotBool) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetStringKey("webauthn:virtualAuthenticators", "not a bool");
+  base::DictValue caps;
+  caps.Set("webauthn:virtualAuthenticators", "not a bool");
   EXPECT_FALSE(capabilities.Parse(caps).IsOk());
 }
 
 TEST(ParseCapabilities, VirtualAuthenticatorsLargeBlobBool) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetBoolKey("webauthn:extension:largeBlob", true);
+  base::DictValue caps;
+  caps.Set("webauthn:extension:largeBlob", true);
   EXPECT_TRUE(capabilities.Parse(caps).IsOk());
 
-  caps.SetBoolKey("webauthn:extension:largeBlob", false);
+  caps.Set("webauthn:extension:largeBlob", false);
   EXPECT_TRUE(capabilities.Parse(caps).IsOk());
 }
 
 TEST(ParseCapabilities, VirtualAuthenticatorsLargeBlobNotBool) {
   Capabilities capabilities;
-  base::DictionaryValue caps;
-  caps.SetStringKey("webauthn:extension:largeBlob", "not a bool");
+  base::DictValue caps;
+  caps.Set("webauthn:extension:largeBlob", "not a bool");
   EXPECT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, VirtualAuthenticatorsCmtgKeyBool) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.Set("webauthn:extension:cmtgKey", true);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+
+  caps.Set("webauthn:extension:cmtgKey", false);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, VirtualAuthenticatorsCmtgKeyNotBool) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.Set("webauthn:extension:cmtgKey", "not a bool");
+  EXPECT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, FedcmAccountsBool) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.Set("fedcm:accounts", true);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+
+  caps.Set("fedcm:accounts", false);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, FedcmAccountsNotBool) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.Set("fedcm:accounts", "not a bool");
+  EXPECT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, MigrateChromeExtensionWindowType) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  base::ListValue window_types;
+  window_types.Append("background_page");
+  caps.SetByDottedPath("goog:chromeOptions.windowTypes",
+                       base::Value(std::move(window_types)));
+  EXPECT_EQ(kOk, capabilities.Parse(caps).code());
+  EXPECT_TRUE(capabilities.enable_extension_targets);
+  EXPECT_TRUE(capabilities.window_types.find(WebViewInfo::kBackgroundPage) ==
+              capabilities.window_types.end());
+}
+
+namespace {
+
+base::DictValue CreateCapabilitiesDict(const std::string& mobile_emulation) {
+  base::DictValue result;
+  std::optional<base::Value> maybe_mobile_emulation = base::JSONReader::Read(
+      mobile_emulation, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  EXPECT_TRUE(maybe_mobile_emulation.has_value() &&
+              maybe_mobile_emulation->is_dict());
+  if (!maybe_mobile_emulation.has_value() ||
+      !maybe_mobile_emulation->is_dict()) {
+    return result;
+  }
+  result.SetByDottedPath("goog:chromeOptions.mobileEmulation",
+                         std::move(maybe_mobile_emulation->GetDict()));
+  return result;
+}
+
+}  //  namespace
+
+TEST(ParseClientHints, MinimalistMobileAndroid) {
+  Capabilities capabilities;
+  const std::string mobile_emulation =
+      "{\"deviceMetrics\": {}, \"clientHints\": {\"platform\": \"Android\", "
+      "\"mobile\": true}}";
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  ASSERT_FALSE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ("Android", client_hints.platform);
+  EXPECT_EQ(true, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(kUserAgentMobileChromeOnAndroid, reduced_user_agent);
+}
+
+TEST(ParseClientHints, MinimalistTabletAndroid) {
+  Capabilities capabilities;
+  const std::string mobile_emulation =
+      "{\"deviceMetrics\": {},"
+      "\"clientHints\": {\"platform\": \"Android\", \"mobile\": false}}";
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  ASSERT_FALSE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ("Android", client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(kUserAgentNonMobileChromeOnAndroid, reduced_user_agent);
+}
+
+class ParseClientHintsPerPlatform
+    : public testing::TestWithParam<std::pair<std::string, std::string>> {};
+
+TEST_P(ParseClientHintsPerPlatform, MinimalistDesktop) {
+  const std::string expected_platform = GetParam().first;
+  const std::string expected_user_agent = GetParam().second;
+  Capabilities capabilities;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"clientHints\": {\"platform\": \"%s\"}}", expected_platform.c_str());
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  ASSERT_FALSE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ(expected_platform, client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(expected_user_agent, reduced_user_agent);
+}
+
+TEST_P(ParseClientHintsPerPlatform, MobileDeviceMetrics) {
+  const std::string expected_platform = GetParam().first;
+  const std::string expected_user_agent = GetParam().second;
+  Capabilities capabilities;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"deviceMetrics\": {},"
+      "\"clientHints\": {\"platform\": \"%s\", \"mobile\": true}}",
+      expected_platform.c_str());
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  ASSERT_FALSE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ(expected_platform, client_hints.platform);
+  EXPECT_EQ(true, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(expected_user_agent, reduced_user_agent);
+}
+
+TEST_P(ParseClientHintsPerPlatform, TabletDeviceMetrics) {
+  const std::string expected_platform = GetParam().first;
+  const std::string expected_user_agent = GetParam().second;
+  Capabilities capabilities;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"deviceMetrics\": {},"
+      "\"clientHints\": {\"platform\": \"%s\", \"mobile\": false}}",
+      expected_platform.c_str());
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  ASSERT_FALSE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ(expected_platform, client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(expected_user_agent, reduced_user_agent);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Parsing,
+    ParseClientHintsPerPlatform,
+    testing::Values(std::make_pair("Chrome OS", kUserAgentChromeOnChromeOS),
+                    std::make_pair("Chromium OS", kUserAgentChromeOnChromeOS),
+                    std::make_pair("Fuchsia", kUserAgentChromeOnFuchsia),
+                    std::make_pair("Linux", kUserAgentChromeOnLinux),
+                    std::make_pair("macOS", kUserAgentChromeOnMacOS),
+                    std::make_pair("Windows", kUserAgentChromeOnWindows)));
+
+TEST(ParseClientHints, MinimalistCustomMobile) {
+  Capabilities capabilities;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\", \"deviceMetrics\": {},"
+      "\"clientHints\": {\"platform\": \"Custom\", \"mobile\": true}}",
+      kUserAgentMobileChromeOnIOS);
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_EQ("Custom", client_hints.platform);
+  EXPECT_EQ(true, client_hints.mobile);
+  ASSERT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ(kUserAgentMobileChromeOnIOS,
+            capabilities.mobile_device->user_agent.value());
+  std::string reduced_user_agent;
+  EXPECT_TRUE(capabilities.mobile_device
+                  ->GetReducedUserAgent("114", &reduced_user_agent)
+                  .IsError());
+  EXPECT_TRUE(reduced_user_agent.empty());
+}
+
+TEST(ParseClientHints, MinimalistCustomTablet) {
+  Capabilities capabilities;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\", \"deviceMetrics\": {},"
+      "\"clientHints\": {\"platform\": \"Custom\", \"mobile\": false}}",
+      kUserAgentNonMobileChromeOnIOS);
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_EQ("Custom", client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  ASSERT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  EXPECT_EQ(kUserAgentNonMobileChromeOnIOS,
+            capabilities.mobile_device->user_agent.value());
+  std::string reduced_user_agent;
+  EXPECT_TRUE(capabilities.mobile_device
+                  ->GetReducedUserAgent("114", &reduced_user_agent)
+                  .IsError());
+  EXPECT_TRUE(reduced_user_agent.empty());
+}
+
+class InferClientHintsOnAndroid
+    : public testing::TestWithParam<std::pair<std::string, bool>> {};
+
+TEST_P(InferClientHintsOnAndroid, NoDeviceMetrics) {
+  const std::string input_user_agent = GetParam().first;
+  const bool expected_is_mobile = GetParam().second;
+  const std::string mobile_emulation =
+      base::StringPrintf("{\"userAgent\": \"%s\"}", input_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(input_user_agent, capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("Android", client_hints.platform);
+  EXPECT_EQ(expected_is_mobile, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(input_user_agent, reduced_user_agent);
+}
+
+TEST_P(InferClientHintsOnAndroid, MobileDeviceMetrics) {
+  const std::string input_user_agent = GetParam().first;
+  const bool expected_is_mobile = GetParam().second;
+  const std::string mobile_emulation =
+      base::StringPrintf("{\"userAgent\": \"%s\", \"deviceMetrics\": {}}",
+                         input_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(input_user_agent, capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("Android", client_hints.platform);
+  EXPECT_EQ(expected_is_mobile, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(input_user_agent, reduced_user_agent);
+}
+
+TEST_P(InferClientHintsOnAndroid, TabletDeviceMetrics) {
+  const std::string input_user_agent = GetParam().first;
+  const bool expected_is_mobile = GetParam().second;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\", \"deviceMetrics\": {\"mobile\": false}}",
+      input_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(input_user_agent, capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("Android", client_hints.platform);
+  // Deriverd from deviceMetrics.mobile
+  EXPECT_EQ(expected_is_mobile, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(input_user_agent, reduced_user_agent);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Inference,
+    InferClientHintsOnAndroid,
+    testing::Values(std::make_pair(kUserAgentMobileChromeOnAndroid, true),
+                    std::make_pair(kUserAgentNonMobileChromeOnAndroid, false)));
+
+class InferClientHintsPerPlatform
+    : public testing::TestWithParam<std::pair<std::string, std::string>> {};
+
+TEST_P(InferClientHintsPerPlatform, NoDeviceMetrics) {
+  const std::string expected_platform = GetParam().first;
+  const std::string expected_user_agent = GetParam().second;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\"}", expected_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(expected_user_agent,
+            capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ(expected_platform, client_hints.platform);
+  // Inferred as non-mobile due to the lack of device metrics
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(expected_user_agent, reduced_user_agent);
+}
+
+TEST_P(InferClientHintsPerPlatform, MobileDeviceMetrics) {
+  const std::string expected_platform = GetParam().first;
+  const std::string expected_user_agent = GetParam().second;
+  const std::string mobile_emulation =
+      base::StringPrintf("{\"userAgent\": \"%s\", \"deviceMetrics\": {}}",
+                         expected_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(expected_user_agent,
+            capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ(expected_platform, client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(expected_user_agent, reduced_user_agent);
+}
+
+TEST_P(InferClientHintsPerPlatform, TabletDeviceMetrics) {
+  const std::string expected_platform = GetParam().first;
+  const std::string expected_user_agent = GetParam().second;
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\", \"deviceMetrics\": {\"mobile\": false}}",
+      expected_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(expected_user_agent,
+            capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ(expected_platform, client_hints.platform);
+  // Deriverd from deviceMetrics.mobile
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(StatusOk(capabilities.mobile_device->GetReducedUserAgent(
+      "114", &reduced_user_agent)));
+  EXPECT_EQ(expected_user_agent, reduced_user_agent);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Legacy,
+    InferClientHintsPerPlatform,
+    testing::Values(std::make_pair("Chrome OS", kUserAgentChromeOnChromeOS),
+                    std::make_pair("Fuchsia", kUserAgentChromeOnFuchsia),
+                    std::make_pair("Linux", kUserAgentChromeOnLinux),
+                    std::make_pair("macOS", kUserAgentChromeOnMacOS),
+                    std::make_pair("Windows", kUserAgentChromeOnWindows)));
+
+class InferClientHintsOnCustomPlatform
+    : public testing::TestWithParam<std::string> {};
+
+TEST_P(InferClientHintsOnCustomPlatform, NoDeviceMetrics) {
+  const std::string input_user_agent = GetParam();
+  const std::string mobile_emulation =
+      base::StringPrintf("{\"userAgent\": \"%s\"}", input_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(input_user_agent, capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("", client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(capabilities.mobile_device
+                  ->GetReducedUserAgent("114", &reduced_user_agent)
+                  .IsError());
+  EXPECT_EQ("", reduced_user_agent);
+}
+
+TEST_P(InferClientHintsOnCustomPlatform, MobileDeviceMetrics) {
+  const std::string input_user_agent = GetParam();
+  const std::string mobile_emulation =
+      base::StringPrintf("{\"userAgent\": \"%s\", \"deviceMetrics\": {}}",
+                         input_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(input_user_agent, capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("", client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(capabilities.mobile_device
+                  ->GetReducedUserAgent("114", &reduced_user_agent)
+                  .IsError());
+  EXPECT_EQ("", reduced_user_agent);
+}
+
+TEST_P(InferClientHintsOnCustomPlatform, TabletDeviceMetrics) {
+  const std::string input_user_agent = GetParam();
+  const std::string mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\", \"deviceMetrics\": {\"mobile\": false}}",
+      input_user_agent.c_str());
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  const ClientHints& client_hints =
+      capabilities.mobile_device->client_hints.value();
+  CheckDefaults(client_hints);
+  EXPECT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_EQ(input_user_agent, capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("", client_hints.platform);
+  EXPECT_EQ(false, client_hints.mobile);
+  std::string reduced_user_agent;
+  EXPECT_TRUE(capabilities.mobile_device
+                  ->GetReducedUserAgent("114", &reduced_user_agent)
+                  .IsError());
+  EXPECT_EQ("", reduced_user_agent);
+}
+
+INSTANTIATE_TEST_SUITE_P(Inference,
+                         InferClientHintsOnCustomPlatform,
+                         testing::Values(kUserAgentMobileChromeOnIOS,
+                                         "Custom User Agent"));
+
+TEST(ParseClientHints, NoUserAgentNoClientHints) {
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict("{\"deviceMetrics\": {}}");
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  EXPECT_FALSE(capabilities.mobile_device->client_hints.has_value());
+}
+
+TEST(ParseClientHints, EmptyClientHints) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  std::string mobile_emulation;
+
+  caps = CreateCapabilitiesDict("{\"clientHints\": {}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  mobile_emulation =
+      base::StringPrintf("{\"userAgent\": \"%s\", \"clientHints\": {}}",
+                         kUserAgentMobileChromeOnAndroid);
+  caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict("{\"deviceMetrics\": {}, \"clientHints\": {}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  mobile_emulation = base::StringPrintf(
+      "{\"userAgent\": \"%s\", \"deviceMetrics\": {}, \"clientHints\": {}}",
+      kUserAgentMobileChromeOnAndroid);
+  caps = CreateCapabilitiesDict(mobile_emulation);
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+}
+
+TEST(ParseClientHints, RequireUserAgentForCustomPlatform) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps =
+      CreateCapabilitiesDict("{\"clientHints\": {\"platform\": \"Custom\"}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Custom\", \"mobile\": false}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Custom\", \"mobile\": true}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+  caps = CreateCapabilitiesDict(
+      "{\"deviceMetrics\": {}, \"clientHints\": {\"platform\": \"Custom\"}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+  caps = CreateCapabilitiesDict(
+      "{\"deviceMetrics\": {\"mobile\": false}, \"clientHints\": "
+      "{\"platform\": \"Custom\"}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+  caps = CreateCapabilitiesDict(
+      "{\"deviceMetrics\": {\"mobile\": true}, \"clientHints\": {\"platform\": "
+      "\"Custom\"}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+}
+
+TEST(ParseClientHints, WrongClientHintsType) {
+  Capabilities capabilities;
+  base::DictValue caps = CreateCapabilitiesDict("{\"clientHints\": \"wrong\"}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+}
+
+TEST(ParseClientHints, WrongClientHintsProperties) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": 1, \"mobile\": true}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Linux\", \"mobile\": {}}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Linux\", \"mobile\": false, "
+      "\"architecture\": 3}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Linux\", \"mobile\": false, "
+      "\"platformVersion\": 3}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Linux\", \"mobile\": false, "
+      "\"bitness\": 3}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Linux\", \"mobile\": false, "
+      "\"wow64\": 3}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{\"clientHints\": {\"platform\": \"Linux\", \"mobile\": false, "
+      "\"model\": 3}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+}
+
+TEST(ParseClientHints, CustomClientHints) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"platformVersion\": \"11\","
+      "\"architecture\": \"Custom Architecture\","
+      "\"model\": \"Custom Model\","
+      "\"bitness\": \"14\","
+      "\"wow64\": true,"
+      "\"brands\": ["
+      "{\"brand\": \"Ax\", \"version\": \"33\"},"
+      "{\"brand\": \"Bx\", \"version\": \"41\"}"
+      "],"
+      "\"fullVersionList\": ["
+      "{\"brand\": \"Aex\", \"version\": \"33.3.1\"},"
+      "{\"brand\": \"Bex\", \"version\": \"41.2.1\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(StatusOk(capabilities.Parse(caps)));
+  ASSERT_TRUE(capabilities.mobile_device.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->user_agent.has_value());
+  ASSERT_TRUE(capabilities.mobile_device->client_hints.has_value());
+  EXPECT_EQ("Custom Mobile User Agent",
+            capabilities.mobile_device->user_agent.value());
+  EXPECT_EQ("Custom Platform",
+            capabilities.mobile_device->client_hints->platform);
+  EXPECT_EQ(true, capabilities.mobile_device->client_hints->mobile);
+  EXPECT_EQ("11", capabilities.mobile_device->client_hints->platform_version);
+  EXPECT_EQ("Custom Architecture",
+            capabilities.mobile_device->client_hints->architecture);
+  EXPECT_EQ("Custom Model", capabilities.mobile_device->client_hints->model);
+  EXPECT_EQ("14", capabilities.mobile_device->client_hints->bitness);
+  EXPECT_EQ(true, capabilities.mobile_device->client_hints->wow64);
+  ASSERT_TRUE(capabilities.mobile_device->client_hints->brands.has_value());
+  ASSERT_TRUE(
+      capabilities.mobile_device->client_hints->full_version_list.has_value());
+  auto brands = capabilities.mobile_device->client_hints->brands.value();
+  auto full_version_list =
+      capabilities.mobile_device->client_hints->full_version_list.value();
+  ASSERT_EQ(2u, brands.size());
+  ASSERT_EQ(2u, full_version_list.size());
+  EXPECT_EQ("Ax", brands[0].brand);
+  EXPECT_EQ("33", brands[0].version);
+  EXPECT_EQ("Bx", brands[1].brand);
+  EXPECT_EQ("41", brands[1].version);
+  EXPECT_EQ("Aex", full_version_list[0].brand);
+  EXPECT_EQ("33.3.1", full_version_list[0].version);
+  EXPECT_EQ("Bex", full_version_list[1].brand);
+  EXPECT_EQ("41.2.1", full_version_list[1].version);
+}
+
+TEST(ParseClientHints, MalformedBrands) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"brands\": ["
+      "{\"brand\": 3, \"version\": \"33\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"brands\": ["
+      "{\"brand\": \"3\", \"version\": 33}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"brands\": ["
+      "{\"brand\": \"3\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"brands\": ["
+      "{\"version\": \"3\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+}
+
+TEST(ParseClientHints, MalformedFullVersionList) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"fullVersionList\": ["
+      "{\"brand\": 3, \"version\": \"33\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"fullVersionList\": ["
+      "{\"brand\": \"3\", \"version\": 33}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"fullVersionList\": ["
+      "{\"brand\": \"3\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
+
+  caps = CreateCapabilitiesDict(
+      "{"
+      "\"userAgent\": \"Custom Mobile User Agent\","
+      "\"deviceMetrics\": {},"
+      "\"clientHints\":{"
+      "\"platform\": \"Custom Platform\","
+      "\"mobile\": true,"
+      "\"fullVersionList\": ["
+      "{\"version\": \"3\"}"
+      "]"
+      "}}");
+  EXPECT_TRUE(capabilities.Parse(caps).IsError());
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,19 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "components/update_client/update_client.h"
 #include "components/update_client/update_client_errors.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extensions_test.h"
 #include "extensions/browser/updater/extension_installer.h"
+#include "extensions/common/extension_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
@@ -35,6 +35,10 @@ class ExtensionInstallerTest : public ExtensionsTest {
   using InstallError = update_client::InstallError;
 
   ExtensionInstallerTest();
+
+  ExtensionInstallerTest(const ExtensionInstallerTest&) = delete;
+  ExtensionInstallerTest& operator=(const ExtensionInstallerTest&) = delete;
+
   ~ExtensionInstallerTest() override;
 
   void InstallCompleteCallback(const Result& result);
@@ -53,8 +57,6 @@ class ExtensionInstallerTest : public ExtensionsTest {
   base::RunLoop run_loop_;
   Result result_;
   bool executed_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionInstallerTest);
 };
 
 ExtensionInstallerTest::ExtensionInstallerTest()
@@ -75,42 +77,10 @@ void ExtensionInstallerTest::RunThreads() {
 TEST_F(ExtensionInstallerTest, GetInstalledFile) {
   base::ScopedTempDir root_dir;
   ASSERT_TRUE(root_dir.CreateUniqueTempDir());
-  ASSERT_TRUE(base::PathExists(root_dir.GetPath()));
-  scoped_refptr<ExtensionInstaller> installer =
-      base::MakeRefCounted<ExtensionInstaller>(kExtensionId, root_dir.GetPath(),
-                                               false /*install_immediately*/,
-                                               ExtensionInstallerCallback());
-
-  base::FilePath installed_file;
-
-#ifdef FILE_PATH_USES_DRIVE_LETTERS
-  const std::string absolute_path = "C:\\abc\\def";
-  const std::string relative_path = "abc\\..\\def\\ghi";
-#else
-  const std::string absolute_path = "/abc/def";
-  const std::string relative_path = "/abc/../def/ghi";
-#endif
-
-  installed_file.clear();
-  EXPECT_FALSE(installer->GetInstalledFile(absolute_path, &installed_file));
-  installed_file.clear();
-  EXPECT_FALSE(installer->GetInstalledFile(relative_path, &installed_file));
-  installed_file.clear();
-  EXPECT_FALSE(installer->GetInstalledFile("extension", &installed_file));
-
-  installed_file.clear();
-  base::FilePath temp_file;
-  ASSERT_TRUE(base::CreateTemporaryFileInDir(root_dir.GetPath(), &temp_file));
-  base::FilePath base_temp_file = temp_file.BaseName();
-  EXPECT_TRUE(installer->GetInstalledFile(
-      std::string(base_temp_file.value().begin(), base_temp_file.value().end()),
-      &installed_file));
-#ifndef FILE_PATH_USES_DRIVE_LETTERS
-  // On some Win*, this test is flaky because of the way Win* constructs path.
-  // For example,
-  // "C:\Users\chrome-bot\AppData" is the same as "C:\Users\CHROME~1\AppData"
-  EXPECT_EQ(temp_file, installed_file);
-#endif
+  ASSERT_FALSE(base::MakeRefCounted<ExtensionInstaller>(
+                   kExtensionId, false /*install_immediately*/,
+                   ExtensionInstallerCallback())
+                   ->GetInstalledFile("f"));
 }
 
 TEST_F(ExtensionInstallerTest, Install_InvalidUnpackedDir) {
@@ -120,9 +90,9 @@ TEST_F(ExtensionInstallerTest, Install_InvalidUnpackedDir) {
   ASSERT_TRUE(base::PathExists(root_dir.GetPath()));
   scoped_refptr<ExtensionInstaller> installer =
       base::MakeRefCounted<ExtensionInstaller>(
-          kExtensionId, root_dir.GetPath(), true /*install_immediately*/,
+          kExtensionId, true /*install_immediately*/,
           base::BindRepeating(
-              [](const std::string& extension_id, const std::string& public_key,
+              [](const ExtensionId& extension_id, const std::string& public_key,
                  const base::FilePath& unpacked_dir, bool install_immediately,
                  UpdateClientCallback update_client_callback) {
                 // This function should never be executed.
@@ -143,7 +113,7 @@ TEST_F(ExtensionInstallerTest, Install_InvalidUnpackedDir) {
   RunThreads();
 
   EXPECT_TRUE(executed_);
-  EXPECT_EQ(static_cast<int>(InstallError::GENERIC_ERROR), result_.error);
+  EXPECT_EQ(static_cast<int>(InstallError::GENERIC_ERROR), result_.result.code);
 }
 
 TEST_F(ExtensionInstallerTest, Install_BasicInstallOperation_Error) {
@@ -152,8 +122,8 @@ TEST_F(ExtensionInstallerTest, Install_BasicInstallOperation_Error) {
   ASSERT_TRUE(base::PathExists(root_dir.GetPath()));
   scoped_refptr<ExtensionInstaller> installer =
       base::MakeRefCounted<ExtensionInstaller>(
-          kExtensionId, root_dir.GetPath(), false /*install_immediately*/,
-          base::BindRepeating([](const std::string& extension_id,
+          kExtensionId, false /*install_immediately*/,
+          base::BindRepeating([](const ExtensionId& extension_id,
                                  const std::string& public_key,
                                  const base::FilePath& unpacked_dir,
                                  bool install_immediately,
@@ -175,7 +145,7 @@ TEST_F(ExtensionInstallerTest, Install_BasicInstallOperation_Error) {
   RunThreads();
 
   EXPECT_TRUE(executed_);
-  EXPECT_EQ(static_cast<int>(InstallError::GENERIC_ERROR), result_.error);
+  EXPECT_EQ(static_cast<int>(InstallError::GENERIC_ERROR), result_.result.code);
 }
 
 TEST_F(ExtensionInstallerTest, Install_BasicInstallOperation_Success) {
@@ -184,8 +154,8 @@ TEST_F(ExtensionInstallerTest, Install_BasicInstallOperation_Success) {
   ASSERT_TRUE(base::PathExists(root_dir.GetPath()));
   scoped_refptr<ExtensionInstaller> installer =
       base::MakeRefCounted<ExtensionInstaller>(
-          kExtensionId, root_dir.GetPath(), true /*install_immediately*/,
-          base::BindRepeating([](const std::string& extension_id,
+          kExtensionId, true /*install_immediately*/,
+          base::BindRepeating([](const ExtensionId& extension_id,
                                  const std::string& public_key,
                                  const base::FilePath& unpacked_dir,
                                  bool install_immediately,
@@ -206,7 +176,7 @@ TEST_F(ExtensionInstallerTest, Install_BasicInstallOperation_Success) {
   RunThreads();
 
   EXPECT_TRUE(executed_);
-  EXPECT_EQ(static_cast<int>(InstallError::NONE), result_.error);
+  EXPECT_EQ(static_cast<int>(InstallError::NONE), result_.result.code);
 }
 
 }  // namespace

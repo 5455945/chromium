@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@ namespace ash {
 namespace power {
 namespace auto_screen_brightness {
 
-FakeBrightnessMonitor::FakeBrightnessMonitor() {}
+FakeBrightnessMonitor::FakeBrightnessMonitor() = default;
 
 FakeBrightnessMonitor::~FakeBrightnessMonitor() = default;
 
 void FakeBrightnessMonitor::ReportBrightnessMonitorInitialized() const {
-  DCHECK_NE(brightness_monitor_status_, Status::kInitializing);
+  CHECK_NE(brightness_monitor_status_, Status::kInitializing,
+           base::NotFatalUntil::M160);
   const bool success = brightness_monitor_status_ == Status::kSuccess;
   for (auto& observer : observers_)
     observer.OnBrightnessMonitorInitialized(success);
@@ -33,7 +34,7 @@ void FakeBrightnessMonitor::ReportUserBrightnessChangeRequested() const {
 }
 
 void FakeBrightnessMonitor::AddObserver(Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.AddObserver(observer);
   if (brightness_monitor_status_ != Status::kInitializing) {
     observer->OnBrightnessMonitorInitialized(brightness_monitor_status_ ==
@@ -42,7 +43,7 @@ void FakeBrightnessMonitor::AddObserver(Observer* const observer) {
 }
 
 void FakeBrightnessMonitor::RemoveObserver(Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.RemoveObserver(observer);
 }
 

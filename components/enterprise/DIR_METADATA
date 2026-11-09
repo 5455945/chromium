@@ -1,3 +1,2 @@
-monorail {
-  component: "Enterprise"
-}
+mixins: "//components/policy/COMMON_METADATA"
+agentic_review: {}

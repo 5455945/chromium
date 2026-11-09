@@ -1,12 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/silent_sink_suspender.h"
 
-#include "base/bind.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/trace_event.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
 
 namespace media {
 
@@ -19,7 +21,7 @@ SilentSinkSuspender::SilentSinkSuspender(
     : callback_(callback),
       params_(params),
       sink_(std::move(sink)),
-      task_runner_(base::ThreadTaskRunnerHandle::Get()),
+      task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       silence_timeout_(silence_timeout),
       fake_sink_(std::move(worker), params_),
       sink_transition_callback_(
@@ -38,7 +40,7 @@ SilentSinkSuspender::~SilentSinkSuspender() {
 
 int SilentSinkSuspender::Render(base::TimeDelta delay,
                                 base::TimeTicks delay_timestamp,
-                                int prior_frames_skipped,
+                                const AudioGlitchInfo& glitch_info,
                                 AudioBus* dest) {
   // Lock required since AudioRendererSink::Pause() is not synchronous, we need
   // to discard these calls during the transition to the fake sink.
@@ -54,7 +56,6 @@ int SilentSinkSuspender::Render(base::TimeDelta delay,
   // the audio data for a future transition out of silence.
   if (!dest) {
     DCHECK(is_using_fake_sink_);
-    DCHECK_EQ(prior_frames_skipped, 0);
     // |delay_timestamp| contains the value cached at
     // |latest_output_delay_timestamp_|
     // so we simulate the real sink output, promoting |delay_timestamp| with
@@ -81,7 +82,7 @@ int SilentSinkSuspender::Render(base::TimeDelta delay,
   }
 
   // Pass-through to client and request rendering.
-  callback_->Render(delay, delay_timestamp, prior_frames_skipped, dest);
+  callback_->Render(delay, delay_timestamp, glitch_info, dest);
 
   // Check for silence or real audio data and transition if necessary.
   if (!dest->AreFramesZero() || !detect_silence_) {
@@ -118,6 +119,10 @@ void SilentSinkSuspender::OnRenderError() {
 void SilentSinkSuspender::OnPaused() {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
+  // This is a no-op if the sink isn't running, but must be executed without the
+  // |transition_lock_| being held to avoid possible deadlock.
+  fake_sink_.Stop();
+
   base::AutoLock al(transition_lock_);
 
   // Nothing to do if we haven't touched the sink.
@@ -128,12 +133,7 @@ void SilentSinkSuspender::OnPaused() {
 
   // If we've moved over to the fake sink, we just need to stop it and cancel
   // any pending transitions.
-  if (is_using_fake_sink_) {
-    is_using_fake_sink_ = false;
-    fake_sink_.Stop();
-  }
-
-  // Cancel any pending transitions.
+  is_using_fake_sink_ = false;
   is_transition_pending_ = false;
   first_silence_time_ = base::TimeTicks();
   sink_transition_callback_.Reset(base::BindRepeating(
@@ -178,7 +178,7 @@ void SilentSinkSuspender::TransitionSinks(bool use_fake_sink) {
   }
 
   if (use_fake_sink) {
-    sink_->Pause();
+    sink_->Pause(AudioRendererSink::PauseReason::kPlaybackPaused);
 
     // |sink_| may still be executing Render() at this point or even sometime
     // after this point, so we must acquire the lock to make sure we don't have
@@ -189,6 +189,9 @@ void SilentSinkSuspender::TransitionSinks(bool use_fake_sink) {
       is_transition_pending_ = false;
       is_using_fake_sink_ = true;
     }
+
+    TRACE_EVENT_INSTANT(
+        "audio", "SilentSinkSuspender::TransitionSinks - fake_sink_.Start()");
     fake_sink_.Start(base::BindRepeating(
         [](SilentSinkSuspender* suspender, base::TimeDelta frozen_delay,
            base::TimeTicks frozen_delay_timestamp, base::TimeTicks ideal_time,
@@ -197,10 +200,12 @@ void SilentSinkSuspender::TransitionSinks(bool use_fake_sink) {
           // new timestamps being provided by FakeAudioWorker, in that it's call
           // to base::TimeTicks::Now() can be eliminated (use |now| instead),
           // along with its custom delay timestamp calculations.
-          suspender->Render(frozen_delay, frozen_delay_timestamp, 0, nullptr);
+          suspender->Render(frozen_delay, frozen_delay_timestamp, {}, nullptr);
         },
         this, latest_output_delay_, latest_output_delay_timestamp_));
   } else {
+    TRACE_EVENT_INSTANT(
+        "audio", "SilentSinkSuspender::TransitionSinks - fake_sink_.Stop()");
     fake_sink_.Stop();
 
     // Despite the fake sink having a synchronous Stop(), if this transition

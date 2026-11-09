@@ -1,42 +1,27 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/system/platform_handle.h"
 
-#include "base/check_op.h"
+#include <stdint.h>
+
+#include "base/logging.h"
 #include "base/memory/platform_shared_memory_region.h"
+#include "base/memory/read_only_shared_memory_region.h"
+#include "base/memory/unsafe_shared_memory_region.h"
+#include "base/memory/writable_shared_memory_region.h"
 #include "base/notreached.h"
-#include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
+#include "mojo/public/cpp/platform/platform_handle_internal.h"
 
 namespace mojo {
 
-namespace {
-
-uint64_t ReleasePlatformHandleValueFromPlatformFile(
-    base::ScopedPlatformFile file) {
-#if defined(OS_WIN)
-  return reinterpret_cast<uint64_t>(file.Take());
-#else
-  return static_cast<uint64_t>(file.release());
-#endif
-}
-
-base::ScopedPlatformFile PlatformFileFromPlatformHandleValue(uint64_t value) {
-#if defined(OS_WIN)
-  return base::ScopedPlatformFile(reinterpret_cast<base::PlatformFile>(value));
-#else
-  return base::ScopedPlatformFile(static_cast<base::PlatformFile>(value));
-#endif
-}
-
-}  // namespace
-
 ScopedSharedBufferHandle WrapPlatformSharedMemoryRegion(
     base::subtle::PlatformSharedMemoryRegion region) {
-  if (!region.IsValid())
+  if (!region.IsValid()) {
     return ScopedSharedBufferHandle();
+  }
 
   MojoPlatformSharedMemoryRegionAccessMode access_mode;
   switch (region.GetMode()) {
@@ -51,24 +36,23 @@ ScopedSharedBufferHandle WrapPlatformSharedMemoryRegion(
       break;
     default:
       NOTREACHED();
-      return ScopedSharedBufferHandle();
   }
 
-  base::subtle::PlatformSharedMemoryRegion::ScopedPlatformHandle handle =
+  base::subtle::ScopedPlatformSharedMemoryHandle handle =
       region.PassPlatformHandle();
   MojoPlatformHandle platform_handles[2];
   uint32_t num_platform_handles = 1;
   platform_handles[0].struct_size = sizeof(platform_handles[0]);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   platform_handles[0].type = MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE;
   platform_handles[0].value = reinterpret_cast<uint64_t>(handle.Take());
-#elif defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_FUCHSIA)
   platform_handles[0].type = MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE;
   platform_handles[0].value = static_cast<uint64_t>(handle.release());
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_APPLE)
   platform_handles[0].type = MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT;
   platform_handles[0].value = static_cast<uint64_t>(handle.release());
-#elif defined(OS_ANDROID)
+#elif BUILDFLAG(IS_ANDROID)
   platform_handles[0].type = MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR;
   platform_handles[0].value = static_cast<uint64_t>(handle.release());
 #else
@@ -84,22 +68,24 @@ ScopedSharedBufferHandle WrapPlatformSharedMemoryRegion(
         static_cast<uint64_t>(handle.readonly_fd.release());
   }
 #endif
-  const auto& guid = region.GetGUID();
-  MojoSharedBufferGuid mojo_guid = {guid.GetHighForSerialization(),
-                                    guid.GetLowForSerialization()};
+  MojoSharedBufferGuid mojo_guid =
+      mojo::internal::PlatformHandleInternal::MarshalUnguessableToken(
+          region.GetGUID());
   MojoHandle mojo_handle;
   MojoResult result = MojoWrapPlatformSharedMemoryRegion(
       platform_handles, num_platform_handles, region.GetSize(), &mojo_guid,
       access_mode, nullptr, &mojo_handle);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return ScopedSharedBufferHandle();
+  }
   return ScopedSharedBufferHandle(SharedBufferHandle(mojo_handle));
 }
 
 base::subtle::PlatformSharedMemoryRegion UnwrapPlatformSharedMemoryRegion(
     ScopedSharedBufferHandle mojo_handle) {
-  if (!mojo_handle.is_valid())
+  if (!mojo_handle.is_valid()) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
 
   MojoPlatformHandle platform_handles[2];
   platform_handles[0].struct_size = sizeof(platform_handles[0]);
@@ -111,47 +97,59 @@ base::subtle::PlatformSharedMemoryRegion UnwrapPlatformSharedMemoryRegion(
   MojoResult result = MojoUnwrapPlatformSharedMemoryRegion(
       mojo_handle.release().value(), nullptr, platform_handles,
       &num_platform_handles, &size, &mojo_guid, &access_mode);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
 
-  base::subtle::PlatformSharedMemoryRegion::ScopedPlatformHandle region_handle;
-#if defined(OS_WIN)
-  if (num_platform_handles != 1)
+  base::subtle::ScopedPlatformSharedMemoryHandle region_handle;
+#if BUILDFLAG(IS_WIN)
+  if (num_platform_handles != 1) {
     return base::subtle::PlatformSharedMemoryRegion();
-  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE)
+  }
+  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
   region_handle.Set(reinterpret_cast<HANDLE>(platform_handles[0].value));
-#elif defined(OS_FUCHSIA)
-  if (num_platform_handles != 1)
+#elif BUILDFLAG(IS_FUCHSIA)
+  if (num_platform_handles != 1) {
     return base::subtle::PlatformSharedMemoryRegion();
-  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE)
+  }
+  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
   region_handle.reset(static_cast<zx_handle_t>(platform_handles[0].value));
-#elif defined(OS_MAC)
-  if (num_platform_handles != 1)
+#elif BUILDFLAG(IS_APPLE)
+  if (num_platform_handles != 1) {
     return base::subtle::PlatformSharedMemoryRegion();
-  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT)
+  }
+  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
   region_handle.reset(static_cast<mach_port_t>(platform_handles[0].value));
-#elif defined(OS_ANDROID)
-  if (num_platform_handles != 1)
+#elif BUILDFLAG(IS_ANDROID)
+  if (num_platform_handles != 1) {
     return base::subtle::PlatformSharedMemoryRegion();
-  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR)
+  }
+  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
   region_handle.reset(static_cast<int>(platform_handles[0].value));
 #else
   if (access_mode == MOJO_PLATFORM_SHARED_MEMORY_REGION_ACCESS_MODE_WRITABLE) {
-    if (num_platform_handles != 2)
+    if (num_platform_handles != 2) {
       return base::subtle::PlatformSharedMemoryRegion();
+    }
   } else if (num_platform_handles != 1) {
     return base::subtle::PlatformSharedMemoryRegion();
   }
-  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR)
+  if (platform_handles[0].type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR) {
     return base::subtle::PlatformSharedMemoryRegion();
+  }
   region_handle.fd.reset(static_cast<int>(platform_handles[0].value));
   if (num_platform_handles == 2) {
-    if (platform_handles[1].type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR)
+    if (platform_handles[1].type != MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR) {
       return base::subtle::PlatformSharedMemoryRegion();
+    }
     region_handle.readonly_fd.reset(
         static_cast<int>(platform_handles[1].value));
   }
@@ -172,65 +170,52 @@ base::subtle::PlatformSharedMemoryRegion UnwrapPlatformSharedMemoryRegion(
       return base::subtle::PlatformSharedMemoryRegion();
   }
 
-  return base::subtle::PlatformSharedMemoryRegion::Take(
-      std::move(region_handle), mode, size,
-      base::UnguessableToken::Deserialize(mojo_guid.high, mojo_guid.low));
+  std::optional<base::UnguessableToken> guid =
+      internal::PlatformHandleInternal::UnmarshalUnguessableToken(&mojo_guid);
+  if (!guid.has_value()) {
+    return base::subtle::PlatformSharedMemoryRegion();
+  }
+
+  auto maybe_region = base::subtle::PlatformSharedMemoryRegion::TakeOrFail(
+      std::move(region_handle), mode, size, guid.value());
+  if (!maybe_region.has_value()) {
+    LOG(ERROR) << "Failed to deserialize platform shared memory region: "
+               << static_cast<int>(maybe_region.error());
+    return base::subtle::PlatformSharedMemoryRegion();
+  }
+  return *std::move(maybe_region);
 }
 
 ScopedHandle WrapPlatformHandle(PlatformHandle handle) {
+  if (!handle.is_valid()) {
+    return ScopedHandle();
+  }
+
   MojoPlatformHandle platform_handle;
   PlatformHandle::ToMojoPlatformHandle(std::move(handle), &platform_handle);
 
   MojoHandle wrapped_handle;
   MojoResult result =
       MojoWrapPlatformHandle(&platform_handle, nullptr, &wrapped_handle);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return ScopedHandle();
+  }
   return ScopedHandle(Handle(wrapped_handle));
 }
 
 PlatformHandle UnwrapPlatformHandle(ScopedHandle handle) {
+  if (!handle.is_valid()) {
+    return PlatformHandle();
+  }
+
   MojoPlatformHandle platform_handle;
   platform_handle.struct_size = sizeof(platform_handle);
   MojoResult result = MojoUnwrapPlatformHandle(handle.release().value(),
                                                nullptr, &platform_handle);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return PlatformHandle();
-  return PlatformHandle::FromMojoPlatformHandle(&platform_handle);
-}
-
-ScopedHandle WrapPlatformFile(base::ScopedPlatformFile platform_file) {
-  MojoPlatformHandle platform_handle;
-  platform_handle.struct_size = sizeof(MojoPlatformHandle);
-  platform_handle.type = kPlatformFileHandleType;
-  platform_handle.value =
-      ReleasePlatformHandleValueFromPlatformFile(std::move(platform_file));
-
-  MojoHandle mojo_handle;
-  MojoResult result =
-      MojoWrapPlatformHandle(&platform_handle, nullptr, &mojo_handle);
-  CHECK_EQ(result, MOJO_RESULT_OK);
-
-  return ScopedHandle(Handle(mojo_handle));
-}
-
-MojoResult UnwrapPlatformFile(ScopedHandle handle,
-                              base::ScopedPlatformFile* file) {
-  MojoPlatformHandle platform_handle;
-  platform_handle.struct_size = sizeof(MojoPlatformHandle);
-  MojoResult result = MojoUnwrapPlatformHandle(handle.release().value(),
-                                               nullptr, &platform_handle);
-  if (result != MOJO_RESULT_OK)
-    return result;
-
-  if (platform_handle.type == MOJO_PLATFORM_HANDLE_TYPE_INVALID) {
-    *file = base::ScopedPlatformFile();
-  } else {
-    CHECK_EQ(platform_handle.type, kPlatformFileHandleType);
-    *file = PlatformFileFromPlatformHandleValue(platform_handle.value);
   }
-
-  return MOJO_RESULT_OK;
+  return PlatformHandle::FromMojoPlatformHandle(&platform_handle);
 }
 
 ScopedSharedBufferHandle WrapReadOnlySharedMemoryRegion(
@@ -256,20 +241,35 @@ ScopedSharedBufferHandle WrapWritableSharedMemoryRegion(
 
 base::ReadOnlySharedMemoryRegion UnwrapReadOnlySharedMemoryRegion(
     ScopedSharedBufferHandle handle) {
-  return base::ReadOnlySharedMemoryRegion::Deserialize(
-      UnwrapPlatformSharedMemoryRegion(std::move(handle)));
+  auto region = UnwrapPlatformSharedMemoryRegion(std::move(handle));
+  if (!region.IsValid() ||
+      region.GetMode() !=
+          base::subtle::PlatformSharedMemoryRegion::Mode::kReadOnly) {
+    return base::ReadOnlySharedMemoryRegion();
+  }
+  return base::ReadOnlySharedMemoryRegion::Deserialize(std::move(region));
 }
 
 base::UnsafeSharedMemoryRegion UnwrapUnsafeSharedMemoryRegion(
     ScopedSharedBufferHandle handle) {
-  return base::UnsafeSharedMemoryRegion::Deserialize(
-      UnwrapPlatformSharedMemoryRegion(std::move(handle)));
+  auto region = UnwrapPlatformSharedMemoryRegion(std::move(handle));
+  if (!region.IsValid() ||
+      region.GetMode() !=
+          base::subtle::PlatformSharedMemoryRegion::Mode::kUnsafe) {
+    return base::UnsafeSharedMemoryRegion();
+  }
+  return base::UnsafeSharedMemoryRegion::Deserialize(std::move(region));
 }
 
 base::WritableSharedMemoryRegion UnwrapWritableSharedMemoryRegion(
     ScopedSharedBufferHandle handle) {
-  return base::WritableSharedMemoryRegion::Deserialize(
-      UnwrapPlatformSharedMemoryRegion(std::move(handle)));
+  auto region = UnwrapPlatformSharedMemoryRegion(std::move(handle));
+  if (!region.IsValid() ||
+      region.GetMode() !=
+          base::subtle::PlatformSharedMemoryRegion::Mode::kWritable) {
+    return base::WritableSharedMemoryRegion();
+  }
+  return base::WritableSharedMemoryRegion::Deserialize(std::move(region));
 }
 
 }  // namespace mojo

@@ -1,73 +1,114 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox.suggestions.basic;
 
+import android.text.Spanned;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.TextView;
 
-import androidx.annotation.ColorRes;
+import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
-import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
-import org.chromium.chrome.browser.omnibox.suggestions.base.SuggestionSpannable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
+import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewBinder;
+import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
+import java.util.function.Supplier;
+
 /** Properties associated with the basic suggestion view. */
-public class SuggestionViewViewBinder {
-    /** @see PropertyModelChangeProcessor.ViewBinder#bind(Object, Object, Object) */
-    public static void bind(PropertyModel model, View view, PropertyKey propertyKey) {
-        if (propertyKey == SuggestionViewProperties.TEXT_LINE_1_TEXT) {
-            TextView tv = view.findViewById(R.id.line_1);
-            tv.setText(model.get(SuggestionViewProperties.TEXT_LINE_1_TEXT));
-        } else if (propertyKey == SuggestionCommonProperties.OMNIBOX_THEME) {
-            updateSuggestionTextColor(view, model);
+@NullMarked
+public class SuggestionViewViewBinder extends BaseSuggestionViewBinder<TwoLineSuggestionView> {
+    /**
+     * @see PropertyModelChangeProcessor.ViewBinder#bind(Object, Object, Object)
+     */
+    @Override
+    protected void bindContent(
+            PropertyModel model, TwoLineSuggestionView view, PropertyKey propertyKey) {
+        if (propertyKey == SuggestionViewProperties.CONTENT_DESCRIPTION_SUPPLIER) {
+            view.setContentDescription(resolveContentDescription(model));
         } else if (propertyKey == SuggestionViewProperties.IS_SEARCH_SUGGESTION) {
-            updateSuggestionTextColor(view, model);
-            // https://crbug.com/609680: ensure URLs are always composed LTR and that their
+            // https://crbug.com/40084252: ensure URLs are always composed LTR and that their
             // components are not re-ordered.
             final boolean isSearch = model.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION);
-            final TextView tv = view.findViewById(R.id.line_2);
-            tv.setTextDirection(
-                    isSearch ? TextView.TEXT_DIRECTION_INHERIT : TextView.TEXT_DIRECTION_LTR);
+            view.getLine2()
+                    .setTextDirection(
+                            isSearch
+                                    ? TextView.TEXT_DIRECTION_INHERIT
+                                    : TextView.TEXT_DIRECTION_LTR);
+        } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_1_TEXT) {
+            setTextIfChanged(view.getLine1(), model.get(SuggestionViewProperties.TEXT_LINE_1_TEXT));
+        } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_1_WRAP) {
+            updateMaxLines(view.getLine1(), model.get(SuggestionViewProperties.TEXT_LINE_1_WRAP));
         } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_2_TEXT) {
-            TextView tv = view.findViewById(R.id.line_2);
-            final SuggestionSpannable span = model.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-            if (!TextUtils.isEmpty(span)) {
-                tv.setText(span);
-                tv.setVisibility(View.VISIBLE);
-            } else {
-                tv.setVisibility(View.GONE);
-            }
-        } else if (propertyKey == SuggestionViewProperties.ALLOW_WRAP_AROUND) {
-            final boolean allowWrapAround = model.get(SuggestionViewProperties.ALLOW_WRAP_AROUND);
-            TextView tv = view.findViewById(R.id.line_1);
-            tv.setMaxLines(allowWrapAround ? 2 : 1);
+            bindTextLine2Text(model, view);
+        } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_2_WRAP) {
+            updateMaxLines(view.getLine2(), model.get(SuggestionViewProperties.TEXT_LINE_2_WRAP));
         }
     }
 
-    private static void updateSuggestionTextColor(View view, PropertyModel model) {
-        final boolean isSearch = model.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION);
-        final boolean useDarkMode = !OmniboxResourceProvider.isDarkMode(
-                model.get(SuggestionCommonProperties.OMNIBOX_THEME));
-        final TextView line1 = view.findViewById(R.id.line_1);
-        final TextView line2 = view.findViewById(R.id.line_2);
+    private void bindTextLine2Text(PropertyModel model, TwoLineSuggestionView view) {
+        TextView line2 = view.getLine2();
+        final SuggestionSpannable span = model.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
+        final int minHeight;
+        if (!TextUtils.isEmpty(span)) {
+            setTextIfChanged(line2, span);
+            line2.setVisibility(View.VISIBLE);
+            minHeight = getResourceProvider(model).getSuggestionMinHeight(2);
+        } else {
+            line2.setVisibility(View.GONE);
+            minHeight = getResourceProvider(model).getSuggestionMinHeight(1);
+        }
+        if (view.getMinimumHeight() != minHeight) {
+            view.setMinimumHeight(minHeight);
+        }
+    }
 
-        @ColorRes
-        final int color1 =
-                useDarkMode ? R.color.default_text_color_dark : R.color.default_text_color_light;
-        line1.setTextColor(ApiCompatibilityUtils.getColor(view.getResources(), color1));
+    /**
+     * Apply {@code text} to {@code tv} unless the view already shows it. TextView never
+     * short-circuits identical text (every setText copies the spannable and re-measures), and the
+     * suggestion list is currently rebuilt wholesale several times per keystroke, so most rebinds
+     * of a recycled view carry the same text it already displays. The comparison is against the
+     * TextView's own copy of the previous text (which preserves span order), so there is no cached
+     * state that could go stale.
+     *
+     * @param tv The TextView being bound.
+     * @param text The text to show; null clears the view.
+     */
+    @VisibleForTesting
+    static void setTextIfChanged(TextView tv, @Nullable SuggestionSpannable text) {
+        if (text != null
+                && tv.getText() instanceof Spanned shown
+                && SuggestionSpannable.contentEquals(shown, text)) {
+            return;
+        }
+        tv.setText(text);
+    }
 
-        @ColorRes
-        final int color2 = isSearch ? (useDarkMode ? R.color.default_text_color_secondary_dark
-                                                   : R.color.default_text_color_secondary_light)
-                                    : (useDarkMode ? R.color.suggestion_url_dark_modern
-                                                   : R.color.suggestion_url_light_modern);
-        line2.setTextColor(ApiCompatibilityUtils.getColor(view.getResources(), color2));
+    /**
+     * Returns the content description for the suggestion, or {@code null} when it is not needed.
+     *
+     * <p>Content descriptions are only ever read by accessibility services, and formatting them is
+     * comparatively expensive, so the supplier is resolved only while such a service is running.
+     * Suggestion rows are rebuilt on every keystroke, so a service enabled mid-session picks up
+     * descriptions on the next suggestion update.
+     */
+    private static @Nullable String resolveContentDescription(PropertyModel model) {
+        Supplier<String> supplier =
+                model.get(SuggestionViewProperties.CONTENT_DESCRIPTION_SUPPLIER);
+        if (supplier == null || !AccessibilityState.isAccessibilityManagerEnabled()) return null;
+        return supplier.get();
+    }
+
+    private void updateMaxLines(TextView tv, boolean allowWrapAround) {
+        int maxLines = allowWrapAround ? 2 : 1;
+        if (tv.getMaxLines() != maxLines) {
+            tv.setMaxLines(maxLines);
+        }
     }
 }

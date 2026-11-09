@@ -1,19 +1,25 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/vr/windows/d3d11_texture_helper.h"
-#include "base/cxx17_backports.h"
+
+#include "base/check_op.h"
+#include "base/logging.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/gpu/context_provider.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/client/gles2_interface.h"
+#include "gpu/command_buffer/common/constants.h"
 #include "mojo/public/c/system/platform_handle.h"
 
 namespace {
+// These headers declare global variables representing the contained shaders, so
+// they are defined in the anonymous namespace to ensure that they don't leak.
 #include "device/vr/windows/flip_pixel_shader.h"
 #include "device/vr/windows/geometry_shader.h"
 #include "device/vr/windows/vertex_shader.h"
-
-constexpr int kAcquireWaitMS = 2000;
 
 struct Vertex2D {
   float x;
@@ -30,9 +36,6 @@ constexpr size_t kSizeOfVertex = sizeof(Vertex2D);
 
 // 2 triangles per eye
 constexpr size_t kNumVerticesPerLayer = 12;
-}
-
-namespace {
 
 // This enum is used in TRACE_EVENTs.  Try to keep enum values the same to make
 // analysis easier across builds.
@@ -57,8 +60,8 @@ enum ErrorLocation {
 };
 
 void TraceDXError(ErrorLocation location, HRESULT hr) {
-  TRACE_EVENT_INSTANT2("xr", "TraceDXError", TRACE_EVENT_SCOPE_THREAD,
-                       "ErrorLocation", location, "hr", hr);
+  TRACE_EVENT_INSTANT("xr", "TraceDXError", "ErrorLocation", location, "hr",
+                      hr);
 }
 
 }  // namespace
@@ -71,33 +74,30 @@ D3D11TextureHelper::RenderState::~RenderState() {}
 D3D11TextureHelper::LayerData::LayerData() = default;
 D3D11TextureHelper::LayerData::~LayerData() = default;
 
-D3D11TextureHelper::D3D11TextureHelper() {}
+D3D11TextureHelper::D3D11TextureHelper() = default;
 
-D3D11TextureHelper::~D3D11TextureHelper() {}
-
-void D3D11TextureHelper::Reset() {
-  render_state_ = {};
-}
+D3D11TextureHelper::~D3D11TextureHelper() = default;
 
 void D3D11TextureHelper::SetSourceAndOverlayVisible(bool source_visible,
                                                     bool overlay_visible) {
   source_visible_ = source_visible;
   overlay_visible_ = overlay_visible;
-  TRACE_EVENT_INSTANT2("xr", "TextureHelper SetSourceAndOverlayVisible",
-                       TRACE_EVENT_SCOPE_THREAD, "source", source_visible,
-                       "overlay", overlay_visible);
+  TRACE_EVENT_INSTANT("xr", "TextureHelper SetSourceAndOverlayVisible",
+                      "source", source_visible, "overlay", overlay_visible);
 
   if (!source_visible_) {
     render_state_.source_.keyed_mutex_ = nullptr;
     render_state_.source_.source_texture_ = nullptr;
     render_state_.source_.shader_resource_ = nullptr;
     render_state_.source_.sampler_ = nullptr;
+    render_state_.source_.shared_image_ = nullptr;
   }
   if (!overlay_visible_) {
     render_state_.overlay_.keyed_mutex_ = nullptr;
     render_state_.overlay_.source_texture_ = nullptr;
     render_state_.overlay_.shader_resource_ = nullptr;
     render_state_.overlay_.sampler_ = nullptr;
+    render_state_.overlay_.shared_image_ = nullptr;
   }
 }
 
@@ -106,11 +106,13 @@ void D3D11TextureHelper::CleanupNoSubmit() {
   render_state_.source_.source_texture_ = nullptr;
   render_state_.source_.shader_resource_ = nullptr;
   render_state_.source_.sampler_ = nullptr;
+  render_state_.source_.shared_image_ = nullptr;
 
   render_state_.overlay_.keyed_mutex_ = nullptr;
   render_state_.overlay_.source_texture_ = nullptr;
   render_state_.overlay_.shader_resource_ = nullptr;
   render_state_.overlay_.sampler_ = nullptr;
+  render_state_.overlay_.shared_image_ = nullptr;
 }
 
 void D3D11TextureHelper::CleanupLayerData(LayerData& layer) {
@@ -119,6 +121,7 @@ void D3D11TextureHelper::CleanupLayerData(LayerData& layer) {
     layer.sampler_ = nullptr;
     layer.shader_resource_ = nullptr;
     layer.source_texture_ = nullptr;
+    layer.shared_image_ = nullptr;
   }
 
   // Set up for the next frame so we know if we submitted again.
@@ -177,7 +180,56 @@ bool D3D11TextureHelper::EnsureContentBlendState() {
   return true;
 }
 
-bool D3D11TextureHelper::CompositeToBackBuffer() {
+bool D3D11TextureHelper::CopyToBackBuffer(
+    const scoped_refptr<viz::ContextProvider>& context_provider,
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> source) {
+  EnsureInitialized();
+
+  gpu::gles2::GLES2Interface* gl = context_provider->ContextGL();
+  if (!gl) {
+    return false;
+  }
+
+  // TODO(crbug.com/359418629): Access to the texture needs be by synchronized
+  // before proceeding.
+  gl->Finish();
+
+  Microsoft::WRL::ComPtr<ID3D11Device1> d3d11_device;
+  HRESULT hr = render_state_.d3d11_device_.As(&d3d11_device);
+  CHECK_EQ(hr, S_OK);
+
+  Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_resource;
+  hr = source->QueryInterface(IID_PPV_ARGS(&dxgi_resource));
+  CHECK_EQ(hr, S_OK);
+
+  Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyed_mutex;
+  hr = dxgi_resource.As(&(keyed_mutex));
+  if (FAILED(hr)) {
+    DLOG(ERROR) << "Failed to get Keyed Mutex.";
+    return false;
+  }
+
+  hr = keyed_mutex->AcquireSync(gpu::kDXGIKeyedMutexAcquireKey, INFINITE);
+  if (FAILED(hr) || hr == WAIT_TIMEOUT || hr == WAIT_ABANDONED) {
+    // We failed to acquire the lock.  We'll drop this frame, but subsequent
+    // frames won't be affected.
+    DLOG(ERROR) << "Failed to AcquireSync with shared texture.";
+    return false;
+  }
+
+  render_state_.d3d11_device_context_->CopyResource(
+      /*destination=*/render_state_.target_texture_.Get(),
+      /*source=*/source.Get());
+
+  keyed_mutex->ReleaseSync(0);
+
+  backbuffer_contains_source_ = true;
+
+  return true;
+}
+
+bool D3D11TextureHelper::CompositeToBackBuffer(
+    const scoped_refptr<viz::ContextProvider>& context_provider) {
   if (!EnsureInitialized())
     return false;
 
@@ -192,13 +244,30 @@ bool D3D11TextureHelper::CompositeToBackBuffer() {
 
   // Source texture is optional depending on whether we're using
   // shared images for the destination.
-  if (!render_state_.source_.source_texture_ &&
-      !render_state_.overlay_.source_texture_)
+  if ((backbuffer_contains_source_ || !render_state_.source_.source_texture_) &&
+      !render_state_.overlay_.source_texture_) {
     return true;
+  }
+
+  gpu::gles2::GLES2Interface* gl = context_provider->ContextGL();
+  if (!gl) {
+    return false;
+  }
 
   HRESULT hr = S_OK;
   if (render_state_.source_.keyed_mutex_) {
-    hr = render_state_.source_.keyed_mutex_->AcquireSync(1, kAcquireWaitMS);
+    if (render_state_.source_.shared_image_) {
+      // Ensure work has been issused to write to source texture by blocking
+      // until GPU process has passed the sync token. This must happen before
+      // AcquireSync(0) below otherwise the GPU process will be unable to
+      // acquire the mutex and work will happen out of order.
+      render_state_.source_.shared_image_->WaitSyncTokenAndFinish(
+          gl, render_state_.source_.sync_token_);
+      render_state_.source_.sync_token_.Clear();
+    }
+
+    hr = render_state_.source_.keyed_mutex_->AcquireSync(
+        gpu::kDXGIKeyedMutexAcquireKey, INFINITE);
     if (FAILED(hr) || hr == WAIT_TIMEOUT || hr == WAIT_ABANDONED) {
       // We failed to acquire the lock.  We'll drop this frame, but subsequent
       // frames won't be affected.
@@ -208,7 +277,18 @@ bool D3D11TextureHelper::CompositeToBackBuffer() {
   }
 
   if (render_state_.overlay_.keyed_mutex_) {
-    hr = render_state_.overlay_.keyed_mutex_->AcquireSync(1, kAcquireWaitMS);
+    if (render_state_.overlay_.shared_image_) {
+      // Ensure work has been issused to write to overlay texture by blocking
+      // until GPU process has passed the sync token. This must happen before
+      // AcquireSync(0) below otherwise the GPU process will be unable to
+      // acquire the mutex and work will happen out of order.
+      render_state_.overlay_.shared_image_->WaitSyncTokenAndFinish(
+          gl, render_state_.overlay_.sync_token_);
+      render_state_.overlay_.sync_token_.Clear();
+    }
+
+    hr = render_state_.overlay_.keyed_mutex_->AcquireSync(
+        gpu::kDXGIKeyedMutexAcquireKey, INFINITE);
     if (FAILED(hr) || hr == WAIT_TIMEOUT || hr == WAIT_ABANDONED) {
       // We failed to acquire the lock.  We'll drop this frame, but subsequent
       // frames won't be affected.
@@ -226,7 +306,9 @@ bool D3D11TextureHelper::CompositeToBackBuffer() {
   }
 
   if (render_state_.overlay_.source_texture_ &&
-      (!render_state_.source_.source_texture_ || !source_visible_)) {
+      ((!backbuffer_contains_source_ &&
+        !render_state_.source_.source_texture_) ||
+       !source_visible_)) {
     // If we have an overlay, but no WebXR texture under it, clear the target
     // first, since overlay may assume transparency.
     float color_rgba[4] = {0, 0, 0, 1};
@@ -330,7 +412,7 @@ bool D3D11TextureHelper::EnsureInputLayout() {
          D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
     HRESULT hr = render_state_.d3d11_device_->CreateInputLayout(
-        vertex_desc, base::size(vertex_desc), g_vertex, _countof(g_vertex),
+        vertex_desc, std::size(vertex_desc), g_vertex, _countof(g_vertex),
         &render_state_.input_layout_);
     if (FAILED(hr)) {
       TraceDXError(ErrorLocation::InputLayout, hr);
@@ -384,51 +466,59 @@ bool D3D11TextureHelper::BindTarget() {
 void PushVertRect(std::vector<Vertex2D>& data,
                   const gfx::RectF& rect,
                   const gfx::RectF& uv,
-                  int target) {
+                  int target,
+                  bool y_flip) {
   Vertex2D vert;
   vert.target = target;
 
+  // If the texture is being flipped, the top and bottom Y UV coordinates need
+  // to be swapped.
+  float y_top = y_flip ? uv.y() + uv.height() : uv.y();
+  float y_bottom = y_flip ? uv.y() : uv.y() + uv.height();
+
   vert.x = rect.x() * 2 - 1;
   vert.y = rect.y() * 2 - 1;
   vert.u = uv.x();
-  vert.v = uv.y();
+  vert.v = y_top;
   data.push_back(vert);
 
   vert.x = rect.x() * 2 - 1;
   vert.y = (rect.y() + rect.height()) * 2 - 1;
   vert.u = uv.x();
-  vert.v = uv.y() + uv.height();
+  vert.v = y_bottom;
   data.push_back(vert);
 
   vert.x = (rect.x() + rect.width()) * 2 - 1;
   vert.y = (rect.y() + rect.height()) * 2 - 1;
   vert.u = uv.x() + uv.width();
-  vert.v = uv.y() + uv.height();
+  vert.v = y_bottom;
   data.push_back(vert);
 
   vert.x = rect.x() * 2 - 1;
   vert.y = rect.y() * 2 - 1;
   vert.u = uv.x();
-  vert.v = uv.y();
+  vert.v = y_top;
   data.push_back(vert);
 
   vert.x = (rect.x() + rect.width()) * 2 - 1;
   vert.y = (rect.y() + rect.height()) * 2 - 1;
   vert.u = uv.x() + uv.width();
-  vert.v = uv.y() + uv.height();
+  vert.v = y_bottom;
   data.push_back(vert);
 
   vert.x = (rect.x() + rect.width()) * 2 - 1;
   vert.y = rect.y() * 2 - 1;
   vert.u = uv.x() + uv.width();
-  vert.v = uv.y();
+  vert.v = y_top;
   data.push_back(vert);
 }
 
 bool D3D11TextureHelper::UpdateVertexBuffer(LayerData& layer) {
   std::vector<Vertex2D> vertex_data;
-  PushVertRect(vertex_data, target_left_, layer.left_, 0);
-  PushVertRect(vertex_data, target_right_, layer.right_, 1);
+  PushVertRect(vertex_data, target_left_, layer.left_, 0,
+               backbuffer_y_flipped_);
+  PushVertRect(vertex_data, target_right_, layer.right_, 1,
+               backbuffer_y_flipped_);
   render_state_.d3d11_device_context_->UpdateSubresource(
       render_state_.vertex_buffer_.Get(), 0, nullptr, vertex_data.data(),
       sizeof(Vertex2D), vertex_data.size());
@@ -490,17 +580,27 @@ bool D3D11TextureHelper::CompositeLayer(LayerData& layer) {
 }
 
 void D3D11TextureHelper::SetSourceTexture(
-    base::win::ScopedHandle texture_handle,
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    const gpu::SyncToken& sync_token,
     gfx::RectF left,
     gfx::RectF right) {
   TRACE_EVENT0("xr", "SetSourceTexture");
   render_state_.source_.source_texture_ = nullptr;
   render_state_.source_.keyed_mutex_ = nullptr;
+  render_state_.source_.shared_image_ = nullptr;
+  render_state_.source_.sync_token_.Clear();
   render_state_.source_.left_ = left;
   render_state_.source_.right_ = right;
   render_state_.source_.submitted_this_frame_ = true;
 
-  if (!texture_handle.IsValid()) {
+  if (!shared_image) {
+    return;
+  }
+  base::win::ScopedHandle texture_handle =
+      shared_image->CloneGpuMemoryBufferHandle()
+          .dxgi_handle()
+          .TakeBufferHandle();
+  if (!texture_handle.is_valid()) {
     return;
   }
 
@@ -520,17 +620,33 @@ void D3D11TextureHelper::SetSourceTexture(
     render_state_.source_.keyed_mutex_ = nullptr;
     return;
   }
+  render_state_.source_.shared_image_ = std::move(shared_image);
+  render_state_.source_.sync_token_ = sync_token;
 }
 
 bool D3D11TextureHelper::SetOverlayTexture(
-    base::win::ScopedHandle texture_handle,
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    const gpu::SyncToken& sync_token,
     gfx::RectF left,
     gfx::RectF right) {
   render_state_.overlay_.source_texture_ = nullptr;
   render_state_.overlay_.keyed_mutex_ = nullptr;
+  render_state_.overlay_.shared_image_ = nullptr;
+  render_state_.overlay_.sync_token_.Clear();
   render_state_.overlay_.left_ = left;
   render_state_.overlay_.right_ = right;
   render_state_.overlay_.submitted_this_frame_ = true;
+
+  if (!shared_image) {
+    return false;
+  }
+  base::win::ScopedHandle texture_handle =
+      shared_image->CloneGpuMemoryBufferHandle()
+          .dxgi_handle()
+          .TakeBufferHandle();
+  if (!texture_handle.is_valid()) {
+    return false;
+  }
 
   if (!EnsureInitialized())
     return false;
@@ -547,6 +663,8 @@ bool D3D11TextureHelper::SetOverlayTexture(
     render_state_.overlay_.keyed_mutex_ = nullptr;
     return false;
   }
+  render_state_.overlay_.shared_image_ = std::move(shared_image);
+  render_state_.overlay_.sync_token_ = sync_token;
 
   return true;
 }
@@ -587,11 +705,15 @@ bool D3D11TextureHelper::UpdateBackbufferSizes() {
 }
 
 void D3D11TextureHelper::SetBackbuffer(
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> back_buffer) {
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> back_buffer,
+    bool contains_source,
+    bool y_flipped) {
   if (render_state_.target_texture_ != back_buffer) {
     render_state_.render_target_view_ = nullptr;
   }
   render_state_.target_texture_ = back_buffer;
+  backbuffer_contains_source_ = contains_source;
+  backbuffer_y_flipped_ = y_flipped;
 }
 
 Microsoft::WRL::ComPtr<IDXGIAdapter> D3D11TextureHelper::GetAdapter() {
@@ -612,6 +734,12 @@ Microsoft::WRL::ComPtr<IDXGIAdapter> D3D11TextureHelper::GetAdapter() {
 Microsoft::WRL::ComPtr<ID3D11Device> D3D11TextureHelper::GetDevice() {
   EnsureInitialized();
   return render_state_.d3d11_device_;
+}
+
+Microsoft::WRL::ComPtr<ID3D11DeviceContext>
+D3D11TextureHelper::GetDeviceContext() {
+  EnsureInitialized();
+  return render_state_.d3d11_device_context_;
 }
 
 bool D3D11TextureHelper::EnsureInitialized() {
@@ -635,7 +763,7 @@ bool D3D11TextureHelper::EnsureInitialized() {
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
   HRESULT hr = D3D11CreateDevice(
       adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, NULL, flags, feature_levels,
-      base::size(feature_levels), D3D11_SDK_VERSION, &d3d11_device,
+      std::size(feature_levels), D3D11_SDK_VERSION, &d3d11_device,
       &feature_level_out, &(render_state_.d3d11_device_context_));
   if (SUCCEEDED(hr)) {
     hr = d3d11_device.As(&render_state_.d3d11_device_);

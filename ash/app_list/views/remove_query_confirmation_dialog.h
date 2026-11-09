@@ -1,18 +1,23 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_APP_LIST_VIEWS_REMOVE_QUERY_CONFIRMATION_DIALOG_H_
 #define ASH_APP_LIST_VIEWS_REMOVE_QUERY_CONFIRMATION_DIALOG_H_
 
-#include "base/callback.h"
-#include "ui/views/window/dialog_delegate.h"
+#include <string>
+
+#include "ash/style/system_dialog_delegate_view.h"
+#include "base/functional/callback.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace ash {
 
 // RemoveQueryConfirmationDialog displays the confirmation dialog for removing
 // a recent query suggestion.
-class RemoveQueryConfirmationDialog : public views::DialogDelegateView {
+class RemoveQueryConfirmationDialog : public ash::SystemDialogDelegateView {
+  METADATA_HEADER(RemoveQueryConfirmationDialog, ash::SystemDialogDelegateView)
+
  public:
   // Callback to notify user's confirmation for removing the zero state
   // suggestion query. Invoked with true if user confirms removing query
@@ -21,18 +26,17 @@ class RemoveQueryConfirmationDialog : public views::DialogDelegateView {
   // associated result.
   using RemovalConfirmationCallback = base::OnceCallback<void(bool)>;
 
-  RemoveQueryConfirmationDialog(const std::u16string& query,
-                                RemovalConfirmationCallback callback);
-  ~RemoveQueryConfirmationDialog() override;
+  RemoveQueryConfirmationDialog(RemovalConfirmationCallback callback,
+                                const std::u16string& result_title);
 
-  // views::View:
-  const char* GetClassName() const override;
-  gfx::Size CalculatePreferredSize() const override;
+  RemoveQueryConfirmationDialog(const RemoveQueryConfirmationDialog&) = delete;
+  RemoveQueryConfirmationDialog& operator=(
+      const RemoveQueryConfirmationDialog&) = delete;
+
+  ~RemoveQueryConfirmationDialog() override;
 
  private:
   RemovalConfirmationCallback confirm_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(RemoveQueryConfirmationDialog);
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -20,20 +20,20 @@ source_set("printer_provider") {
     "printer_provider_print_job.h",
   ]
 
-  configs += [
-    # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
-  ]
-
-  deps = [
+  public_deps = [
+    "//base",
     "//components/keyed_service/content",
-    "//content/public/browser",
-    "//extensions/browser/api",
+    "//components/keyed_service/core",
+    "//extensions/browser:browser_sources",
     "//extensions/common",
     "//extensions/common/api",
-    "//services/device/public/cpp/usb",
     "//services/device/public/mojom:usb",
   ]
 
-  public_deps = [ "//extensions/browser:browser_sources" ]
+  deps = [
+    "//base:i18n",
+    "//components/device_event_log",
+    "//content/public/browser",
+    "//extensions/common:mojom",
+  ]
 }

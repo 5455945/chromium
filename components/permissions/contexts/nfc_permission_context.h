@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,18 @@
 #define COMPONENTS_PERMISSIONS_CONTEXTS_NFC_PERMISSION_CONTEXT_H_
 
 #include "build/build_config.h"
-#include "components/permissions/permission_context_base.h"
+#include "components/permissions/content_setting_permission_context_base.h"
 
 namespace permissions {
 
-class NfcPermissionContext : public PermissionContextBase {
+class NfcPermissionContext : public ContentSettingPermissionContextBase {
  public:
   // The delegate allows embedders to modify the permission context logic.
   class Delegate {
    public:
     virtual ~Delegate() = default;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // Returns whether or not this |web_contents| is interactable.
     virtual bool IsInteractable(content::WebContents* web_contents) = 0;
 #endif
@@ -35,23 +35,16 @@ class NfcPermissionContext : public PermissionContextBase {
   std::unique_ptr<Delegate> delegate_;
 
  private:
-  // PermissionContextBase:
-#if !defined(OS_ANDROID)
-  ContentSetting GetPermissionStatusInternal(
+  ContentSetting GetContentSettingStatusInternal(
       content::RenderFrameHost* render_frame_host,
       const GURL& requesting_origin,
       const GURL& embedding_origin) const override;
-#endif
-  void DecidePermission(content::WebContents* web_contents,
-                        const PermissionRequestID& id,
-                        const GURL& requesting_origin,
-                        const GURL& embedding_origin,
-                        bool user_gesture,
+
+  // PermissionContextBase:
+  void DecidePermission(std::unique_ptr<PermissionRequestData> request_data,
                         BrowserPermissionCallback callback) override;
-  void UpdateTabContext(const PermissionRequestID& id,
-                        const GURL& requesting_frame,
+  void UpdateTabContext(const PermissionRequestData& request_data,
                         bool allowed) override;
-  bool IsRestrictedToSecureOrigins() const override;
 };
 
 }  // namespace permissions

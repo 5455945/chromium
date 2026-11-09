@@ -23,28 +23,66 @@
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_gradient.h"
 
 #include <memory>
+#include <utility>
 
-#include "third_party/blink/renderer/platform/graphics/gradient.h"
+#include "base/check.h"
+#include "third_party/blink/renderer/core/svg/gradient_attributes.h"
+#include "third_party/blink/renderer/core/svg/svg_length.h"
+#include "third_party/blink/renderer/core/svg/svg_length_context.h"
+#include "third_party/blink/renderer/core/svg/svg_length_functions.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
+#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 
 namespace blink {
+
+namespace {
+
+gfx::SizeF MakeViewport(const SVGViewportResolver& viewport_resolver,
+                        const LengthPoint& point,
+                        SVGUnitTypes::SVGUnitType type) {
+  if (!point.X().HasPercent() && !point.Y().HasPercent()) {
+    return gfx::SizeF(0, 0);
+  }
+  if (type == SVGUnitTypes::kSvgUnitTypeObjectboundingbox) {
+    return gfx::SizeF(1, 1);
+  }
+  return viewport_resolver.ResolveViewport();
+}
+
+float MakeViewportDimension(const SVGViewportResolver& viewport_resolver,
+                            const Length& radius,
+                            SVGUnitTypes::SVGUnitType type) {
+  if (!radius.HasPercent()) {
+    return 0;
+  }
+  if (type == SVGUnitTypes::kSvgUnitTypeObjectboundingbox) {
+    return 1;
+  }
+  return viewport_resolver.ViewportDimension(SVGLengthMode::kOther);
+}
+
+}  // unnamed namespace
 
 struct GradientData {
   USING_FAST_MALLOC(GradientData);
 
  public:
-  scoped_refptr<Gradient> gradient;
+  std::unique_ptr<Gradient> gradient;
   AffineTransform userspace_transform;
 };
 
 LayoutSVGResourceGradient::LayoutSVGResourceGradient(SVGGradientElement* node)
-    : LayoutSVGResourcePaintServer(node),
-      should_collect_gradient_attributes_(true),
-      gradient_map_(MakeGarbageCollected<GradientMap>()) {}
+    : LayoutSVGResourcePaintServer(node) {}
+
+void LayoutSVGResourceGradient::Trace(Visitor* visitor) const {
+  visitor->Trace(gradient_map_);
+  LayoutSVGResourcePaintServer::Trace(visitor);
+}
 
 void LayoutSVGResourceGradient::RemoveAllClientsFromCache() {
   NOT_DESTROYED();
-  gradient_map_->clear();
+  gradient_map_.clear();
   should_collect_gradient_attributes_ = true;
   To<SVGGradientElement>(*GetElement()).InvalidateDependentGradients();
   MarkAllClientsForInvalidation(kPaintInvalidation);
@@ -53,15 +91,23 @@ void LayoutSVGResourceGradient::RemoveAllClientsFromCache() {
 bool LayoutSVGResourceGradient::RemoveClientFromCache(
     SVGResourceClient& client) {
   NOT_DESTROYED();
-  auto entry = gradient_map_->find(&client);
-  if (entry == gradient_map_->end())
+  auto entry = gradient_map_.find(&client);
+  if (entry == gradient_map_.end()) {
     return false;
-  gradient_map_->erase(entry);
+  }
+  gradient_map_.erase(entry);
   return true;
 }
 
+void LayoutSVGResourceGradient::LastClientRemoved() {
+  NOT_DESTROYED();
+  // Reset cached attributes so a collected `LocalSVGResource` cannot leave
+  // stale `href` attributes cached across a display-lock change.
+  should_collect_gradient_attributes_ = true;
+}
+
 std::unique_ptr<GradientData> LayoutSVGResourceGradient::BuildGradientData(
-    const FloatRect& object_bounding_box) {
+    const gfx::RectF& object_bounding_box) const {
   NOT_DESTROYED();
   // Create gradient object
   auto gradient_data = std::make_unique<GradientData>();
@@ -70,46 +116,60 @@ std::unique_ptr<GradientData> LayoutSVGResourceGradient::BuildGradientData(
   // gradient. This should avoid tearing down the gradient we're
   // currently working on. Preferably the state validation should have
   // no side-effects though.
-  if (should_collect_gradient_attributes_) {
-    CollectGradientAttributes();
-    should_collect_gradient_attributes_ = false;
-  }
+  const GradientAttributes& attributes = EnsureAttributes();
 
   // We want the text bounding box applied to the gradient space transform
   // now, so the gradient shader can use it.
-  if (GradientUnits() == SVGUnitTypes::kSvgUnitTypeObjectboundingbox) {
+  if (attributes.GradientUnits() ==
+      SVGUnitTypes::kSvgUnitTypeObjectboundingbox) {
     // Spec: When the geometry of the applicable element has no width or height
     // and objectBoundingBox is specified, then the given effect (e.g. a
     // gradient or a filter) will be ignored.
     if (object_bounding_box.IsEmpty())
       return gradient_data;
-    gradient_data->userspace_transform.Translate(object_bounding_box.X(),
-                                                 object_bounding_box.Y());
+    gradient_data->userspace_transform.Translate(object_bounding_box.x(),
+                                                 object_bounding_box.y());
     gradient_data->userspace_transform.ScaleNonUniform(
-        object_bounding_box.Width(), object_bounding_box.Height());
+        object_bounding_box.width(), object_bounding_box.height());
+  }
+
+  if (!attributes.GradientTransform().IsInvertible()) {
+    return gradient_data;
   }
 
   // Create gradient object
   gradient_data->gradient = BuildGradient();
+  gradient_data->gradient->SetColorInterpolationSpace(
+      Style().ColorInterpolation() == EColorInterpolation::kLinearrgb
+          ? Color::ColorSpace::kSRGBLinear
+          : Color::ColorSpace::kNone,
+      Color::HueInterpolationMethod::kShorter);
+  gradient_data->gradient->AddColorStops(attributes.Stops());
 
-  AffineTransform gradient_transform = CalculateGradientTransform();
-  gradient_data->userspace_transform *= gradient_transform;
+  gradient_data->userspace_transform *= attributes.GradientTransform();
 
   return gradient_data;
 }
 
 bool LayoutSVGResourceGradient::ApplyShader(
     const SVGResourceClient& client,
-    const FloatRect& reference_box,
+    const gfx::RectF& reference_box,
     const AffineTransform* additional_transform,
-    PaintFlags& flags) {
+    const AutoDarkMode& auto_dark_mode,
+    cc::PaintFlags& flags,
+    PaintFlags /* paint_flags */) {
   NOT_DESTROYED();
   ClearInvalidationMask();
 
-  std::unique_ptr<GradientData>& gradient_data =
-      gradient_map_->insert(&client, nullptr).stored_value->value;
-  if (!gradient_data)
-    gradient_data = BuildGradientData(reference_box);
+  auto iter = gradient_map_.find(&client);
+  GradientData* gradient_data =
+      (iter == gradient_map_.end() ? nullptr : iter->value.get());
+  if (!gradient_data) {
+    auto new_gradient_data = BuildGradientData(reference_box);
+    gradient_data = new_gradient_data.get();
+    CHECK(gradient_data);
+    gradient_map_.Set(&client, std::move(new_gradient_data));
+  }
 
   if (!gradient_data->gradient)
     return false;
@@ -117,8 +177,10 @@ bool LayoutSVGResourceGradient::ApplyShader(
   AffineTransform transform = gradient_data->userspace_transform;
   if (additional_transform)
     transform = *additional_transform * transform;
-  gradient_data->gradient->ApplyToFlags(flags,
-                                        AffineTransformToSkMatrix(transform));
+  ImageDrawOptions draw_options;
+  draw_options.apply_dark_mode = auto_dark_mode.enabled && Style().ForceDark();
+  gradient_data->gradient->ApplyToFlags(flags, transform.ToSkMatrix(),
+                                        draw_options);
   return true;
 }
 
@@ -131,20 +193,43 @@ bool LayoutSVGResourceGradient::IsChildAllowed(LayoutObject* child,
   return To<LayoutSVGResourceContainer>(child)->IsSVGPaintServer();
 }
 
-GradientSpreadMethod LayoutSVGResourceGradient::PlatformSpreadMethodFromSVGType(
+gfx::PointF LayoutSVGResourceGradient::ResolvePoint(
+    SVGUnitTypes::SVGUnitType type,
+    const SVGLength& x,
+    const SVGLength& y) const {
+  NOT_DESTROYED();
+  const SVGViewportResolver viewport_resolver(*this);
+  const SVGLengthConversionData conversion_data(*this);
+  const LengthPoint point(x.ConvertToLength(conversion_data),
+                          y.ConvertToLength(conversion_data));
+  return PointForLengthPoint(point,
+                             MakeViewport(viewport_resolver, point, type));
+}
+
+float LayoutSVGResourceGradient::ResolveRadius(SVGUnitTypes::SVGUnitType type,
+                                               const SVGLength& r) const {
+  NOT_DESTROYED();
+  const SVGViewportResolver viewport_resolver(*this);
+  const SVGLengthConversionData conversion_data(*this);
+  const Length& radius = r.ConvertToLength(conversion_data);
+  return FloatValueForLength(
+      radius, MakeViewportDimension(viewport_resolver, radius, type));
+}
+
+Gradient::SpreadMethod
+LayoutSVGResourceGradient::PlatformSpreadMethodFromSVGType(
     SVGSpreadMethodType method) {
   switch (method) {
     case kSVGSpreadMethodUnknown:
     case kSVGSpreadMethodPad:
-      return kSpreadMethodPad;
+      return Gradient::SpreadMethod::kPad;
     case kSVGSpreadMethodReflect:
-      return kSpreadMethodReflect;
+      return Gradient::SpreadMethod::kReflect;
     case kSVGSpreadMethodRepeat:
-      return kSpreadMethodRepeat;
+      return Gradient::SpreadMethod::kRepeat;
   }
 
   NOTREACHED();
-  return kSpreadMethodPad;
 }
 
 }  // namespace blink

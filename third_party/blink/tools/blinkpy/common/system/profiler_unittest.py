@@ -37,29 +37,31 @@ from .profiler import ProfilerFactory, GooglePProf
 class ProfilerFactoryTest(unittest.TestCase):
     def _assert_default_profiler_name(self, os_name, expected_profiler_name):
         profiler_name = ProfilerFactory.default_profiler_name(
-            MockPlatformInfo(os_name))
+            MockPlatformInfo(os_name)
+        )
         self.assertEqual(profiler_name, expected_profiler_name)
 
     def test_default_profilers(self):
         self._assert_default_profiler_name('mac', 'iprofiler')
         self._assert_default_profiler_name('linux', 'perf')
         self._assert_default_profiler_name('win32', None)
-        self._assert_default_profiler_name('freebsd', None)
 
     def test_default_profiler_output(self):
         host = MockSystemHost()
         self.assertFalse(host.filesystem.exists("/tmp/output"))
 
         # Default mocks are Mac, so iprofile should be default.
-        profiler = ProfilerFactory.create_profiler(host, '/bin/executable',
-                                                   '/tmp/output')
+        profiler = ProfilerFactory.create_profiler(
+            host, '/bin/executable', '/tmp/output'
+        )
         self.assertTrue(host.filesystem.exists("/tmp/output"))
         self.assertEqual(profiler._output_path, "/tmp/output/test.dtps")
 
         # Linux defaults to perf.
         host.platform.os_name = 'linux'
-        profiler = ProfilerFactory.create_profiler(host, '/bin/executable',
-                                                   '/tmp/output')
+        profiler = ProfilerFactory.create_profiler(
+            host, '/bin/executable', '/tmp/output'
+        )
         self.assertEqual(profiler._output_path, "/tmp/output/test.data")
 
 
@@ -105,4 +107,5 @@ Total: 3770 samples
         profiler = GooglePProf(host, '/bin/executable', '/tmp/output')
         self.assertEqual(
             profiler._first_ten_lines_of_profile(pprof_output),
-            expected_first_ten_lines)
+            expected_first_ten_lines,
+        )

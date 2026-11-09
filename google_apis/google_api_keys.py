@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,7 +14,7 @@ from __future__ import print_function
 
 import os
 import re
-import sys
+import sys  # noqa: F401
 
 
 # The token returned when an API key is unset.
@@ -23,13 +23,15 @@ DUMMY_TOKEN = 'dummytoken'
 
 def _GetTokenFromOfficialFile(token_name):
   """Parses the token from the official file if it exists, else returns None."""
-  official_path = os.path.join(os.path.dirname(__file__),
-                               'internal/google_chrome_api_keys.h')
+  official_path = os.path.join(
+    os.path.dirname(__file__), 'internal/google_chrome_api_keys.h'
+  )
   if not os.path.isfile(official_path):
     return None
 
-  line_regexp = '^#define\s*%s\s*"([^"]+)"' % token_name
+  line_regexp = r'^#define\s*%s\s*"([^"]+)"' % token_name
   line_pattern = re.compile(line_regexp)
+
   def ParseLine(current_line):
     result = line_pattern.match(current_line)
     if result:
@@ -50,7 +52,8 @@ def _GetTokenFromOfficialFile(token_name):
         if token:
           if current_line.count('"') != 2:
             raise Exception(
-              'Embedded quotes and multi-line strings are not supported.')
+              'Embedded quotes and multi-line strings are not supported.'
+            )
           return token
         current_line = ''
     return None
@@ -72,9 +75,9 @@ def GetAPIKey():
   return _GetToken('GOOGLE_API_KEY')
 
 
-def GetAPIKeyPhysicalWebTest():
-  """Returns the API key to test Physical Web service."""
-  return _GetToken('GOOGLE_API_KEY_PHYSICAL_WEB_TEST')
+def GetAPIKeyAndroidNonStable():
+  """Returns the API key for android non-stable channel."""
+  return _GetToken('GOOGLE_API_KEY_ANDROID_NON_STABLE')
 
 
 def GetClientID(client_name):
@@ -91,12 +94,9 @@ if __name__ == "__main__":
   print('GOOGLE_API_KEY=%s' % GetAPIKey())
   print('GOOGLE_CLIENT_ID_MAIN=%s' % GetClientID('MAIN'))
   print('GOOGLE_CLIENT_SECRET_MAIN=%s' % GetClientSecret('MAIN'))
-  print('GOOGLE_CLIENT_ID_CLOUD_PRINT=%s' % GetClientID('CLOUD_PRINT'))
-  print('GOOGLE_CLIENT_SECRET_CLOUD_PRINT=%s' % GetClientSecret('CLOUD_PRINT'))
   print('GOOGLE_CLIENT_ID_REMOTING=%s' % GetClientID('REMOTING'))
   print('GOOGLE_CLIENT_SECRET_REMOTING=%s' % GetClientSecret('REMOTING'))
   print('GOOGLE_CLIENT_ID_REMOTING_HOST=%s' % GetClientID('REMOTING_HOST'))
-  print('GOOGLE_CLIENT_SECRET_REMOTING_HOST=%s' % GetClientSecret(
-      'REMOTING_HOST'))
-  print('GOOGLE_CLIENT_ID_REMOTING_IDENTITY_API=%s' %GetClientID(
-      'REMOTING_IDENTITY_API'))
+  print(
+    'GOOGLE_CLIENT_SECRET_REMOTING_HOST=%s' % GetClientSecret('REMOTING_HOST')
+  )

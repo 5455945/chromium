@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -17,6 +17,8 @@
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/site_engagement/core/mojom/site_engagement_details.mojom.h"
+#include "components/site_engagement/core/site_engagement_score_provider.h"
+#include "components/webapps/common/web_app_id.h"
 #include "third_party/blink/public/mojom/site_engagement/site_engagement.mojom.h"
 #include "ui/base/page_transition_types.h"
 
@@ -40,6 +42,7 @@ class WebAppEngagementBrowserTest;
 class GURL;
 class HostContentSettingsMap;
 class PrefRegistrySimple;
+class SafetyHubHatsServiceTest;
 
 namespace site_engagement {
 
@@ -47,19 +50,9 @@ enum class EngagementType;
 class SiteEngagementObserver;
 class SiteEngagementScore;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 class SiteEngagementServiceAndroid;
 #endif
-
-class SiteEngagementScoreProvider {
- public:
-  // Returns a non-negative integer representing the engagement score of the
-  // origin for this URL.
-  virtual double GetScore(const GURL& url) const = 0;
-
-  // Returns the sum of engagement points awarded to all sites.
-  virtual double GetTotalEngagementPoints() const = 0;
-};
 
 // Stores and retrieves the engagement score of an origin.
 //
@@ -79,6 +72,16 @@ class SiteEngagementScoreProvider {
 class SiteEngagementService : public KeyedService,
                               public SiteEngagementScoreProvider {
  public:
+  // Sets of URLs that are used to filter engagement details.
+  class URLSets {
+   public:
+    using Type = uint32_t;
+    // Includes http:// and https:// sites.
+    static constexpr Type HTTP = 1 << 0;
+    // Includes chrome:// and chrome-untrusted:// sites.
+    static constexpr Type WEB_UI = 1 << 1;
+  };
+
   // The provider allows code agnostic to the embedder (e.g. in
   // //components) to retrieve the SiteEngagementService. It should be set by
   // each embedder that uses the SiteEngagementService, via SetServiceProvider.
@@ -130,34 +133,40 @@ class SiteEngagementService : public KeyedService,
   static double GetScoreFromSettings(HostContentSettingsMap* settings,
                                      const GURL& origin);
 
-  // Retrieves all details. Can be called from a background thread. |now| must
-  // be the current timestamp. Takes a scoped_refptr to keep
-  // HostContentSettingsMap alive. See crbug.com/901287.
+  // Retrieves all details for origins within `url_set` and with minimum total
+  // engagement level greater than `minimum_engagement`. Can be called
+  // from a background thread. `now` must be the current timestamp. Takes a
+  // scoped_refptr to keep HostContentSettingsMap alive. See crbug.com/901287.
   static std::vector<mojom::SiteEngagementDetails> GetAllDetailsInBackground(
       base::Time now,
-      scoped_refptr<HostContentSettingsMap> map);
+      scoped_refptr<HostContentSettingsMap> map,
+      URLSets::Type url_set = URLSets::HTTP,
+      blink::mojom::EngagementLevel minimum_engagement =
+          blink::mojom::EngagementLevel::NONE);
+
+  // Returns whether |score| is at least the given |level| of engagement.
+  static bool IsEngagementAtLeast(double score,
+                                  blink::mojom::EngagementLevel level);
 
   explicit SiteEngagementService(content::BrowserContext* browser_context);
+
+  SiteEngagementService(const SiteEngagementService&) = delete;
+  SiteEngagementService& operator=(const SiteEngagementService&) = delete;
+
   ~SiteEngagementService() override;
 
   // Returns the engagement level of |url|.
   blink::mojom::EngagementLevel GetEngagementLevel(const GURL& url) const;
 
-  // Returns an array of engagement score details for all origins which have
-  // a score, whether due to direct engagement, or other factors that cause
-  // an engagement bonus to be applied.
+  // Returns an array of engagement score details for all origins that are
+  // in `url_set` and have a score. A origin can have a score due to
+  // direct engagement, or other factors that cause an engagement bonus to
+  // be applied.
   //
   // Note that this method is quite expensive, so try to avoid calling it in
   // performance-critical code.
-  std::vector<mojom::SiteEngagementDetails> GetAllDetails() const;
-
-  // Return an array of engagement score details for all origins which have
-  // had engagement since the specified time.
-  //
-  // Note that this method is quite expensive, so try to avoid calling it in
-  // performance-critical code.
-  std::vector<mojom::SiteEngagementDetails> GetAllDetailsEngagedInTimePeriod(
-      browsing_data::TimePeriod time_period) const;
+  std::vector<mojom::SiteEngagementDetails> GetAllDetails(
+      URLSets::Type url_set = URLSets::HTTP) const;
 
   // Update the engagement score of |url| for a notification interaction.
   void HandleNotificationInteraction(const GURL& url);
@@ -167,10 +176,6 @@ class SiteEngagementService : public KeyedService,
   // this is true.
   bool IsBootstrapped() const;
 
-  // Returns whether |url| has at least the given |level| of engagement.
-  bool IsEngagementAtLeast(const GURL& url,
-                           blink::mojom::EngagementLevel level) const;
-
   // Resets the base engagement for |url| to |score|, clearing daily limits. Any
   // bonus engagement that |url| has acquired is not affected by this method, so
   // the result of GetScore(|url|) may not be the same as |score|.
@@ -179,6 +184,9 @@ class SiteEngagementService : public KeyedService,
   // Update the last time |url| was opened from an installed shortcut (hosted in
   // |web_contents|) to be clock_->Now().
   void SetLastShortcutLaunchTime(content::WebContents* web_contents,
+#if !BUILDFLAG(IS_ANDROID)
+                                 const webapps::AppId& app_id,
+#endif
                                  const GURL& url);
 
   // Returns the site engagement details for the specified |url|.
@@ -196,6 +204,7 @@ class SiteEngagementService : public KeyedService,
  protected:
   // Retrieves the SiteEngagementScore object for |origin|.
   SiteEngagementScore CreateEngagementScore(const GURL& origin) const;
+
   void SetLastEngagementTime(base::Time last_engagement_time) const;
 
   content::BrowserContext* browser_context() { return browser_context_; }
@@ -205,6 +214,7 @@ class SiteEngagementService : public KeyedService,
   friend class SiteEngagementObserver;
   friend class SiteEngagementServiceTest;
   friend class web_app::WebAppEngagementBrowserTest;
+  friend class ::SafetyHubHatsServiceTest;
   FRIEND_TEST_ALL_PREFIXES(SiteEngagementServiceTest, CheckHistograms);
   FRIEND_TEST_ALL_PREFIXES(SiteEngagementServiceTest, CleanupEngagementScores);
   FRIEND_TEST_ALL_PREFIXES(SiteEngagementServiceTest,
@@ -225,7 +235,7 @@ class SiteEngagementService : public KeyedService,
   FRIEND_TEST_ALL_PREFIXES(AppBannerSettingsHelperTest, SiteEngagementTrigger);
   FRIEND_TEST_ALL_PREFIXES(HostedAppPWAOnlyTest, EngagementHistogram);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Shim class to expose the service to Java.
   friend class SiteEngagementServiceAndroid;
   SiteEngagementServiceAndroid* GetAndroidService() const;
@@ -293,9 +303,12 @@ class SiteEngagementService : public KeyedService,
   // |web_contents| may be null if the engagement has increased when |url| is
   // not in a tab, e.g. from a notification interaction. Also records
   // engagement-type metrics.
-  void OnEngagementEvent(content::WebContents* web_contents,
-                         const GURL& url,
-                         EngagementType type);
+  void OnEngagementEvent(
+      content::WebContents* web_contents,
+      const GURL& url,
+      EngagementType type,
+      double old_score,
+      const std::optional<webapps::AppId>& app_id_override = std::nullopt);
 
   // Returns true if the last engagement increasing event seen by the site
   // engagement service was sufficiently long ago that we need to reset all
@@ -303,20 +316,17 @@ class SiteEngagementService : public KeyedService,
   // browser for an extended period of time do not have their engagement decay.
   bool IsLastEngagementStale() const;
 
-  // Returns the number of origins with maximum daily and total engagement
-  // respectively.
-  int OriginsWithMaxDailyEngagement() const;
-
   // Add and remove observers of this service.
   void AddObserver(SiteEngagementObserver* observer);
   void RemoveObserver(SiteEngagementObserver* observer);
 
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext, AcrossTasksDanglingUntriaged>
+      browser_context_;
 
   // The clock used to vend times.
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<SiteEngagementServiceAndroid> android_service_;
 #endif
 
@@ -332,8 +342,6 @@ class SiteEngagementService : public KeyedService,
   base::ObserverList<SiteEngagementObserver>::Unchecked observer_list_;
 
   base::WeakPtrFactory<SiteEngagementService> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SiteEngagementService);
 };
 
 }  // namespace site_engagement

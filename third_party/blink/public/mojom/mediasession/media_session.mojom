@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,25 @@ module blink.mojom;
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/string16.mojom";
 import "services/media_session/public/mojom/media_session.mojom";
-import "ui/gfx/geometry/mojom/geometry.mojom";
-import "url/mojom/url.mojom";
 
 enum MediaSessionPlaybackState {
      NONE,
      PAUSED,
      PLAYING,
+};
+
+enum MediaSessionEnterPictureInPictureReason {
+  // `enterpictureinpicture` has been triggered due to a reason not already
+  // covered by another option (e.g. the user has started a screenshare).
+  kOther,
+
+  // `enterpictureinpicture` has been triggered due to an explicit user action
+  // (e.g. due to the user clicking on an "Enter picture-in-picture" button.
+  kUserAction,
+
+  // `enterpictureinpicture` has been triggered due to the page being occluded
+  // (e.g. due to the user switching to a different tab).
+  kContentOccluded,
 };
 
 interface MediaSessionClient {
@@ -31,8 +43,13 @@ struct MediaSessionSeekToDetails {
   bool fast_seek;
 };
 
+struct MediaSessionEnterPictureInPictureDetails {
+  MediaSessionEnterPictureInPictureReason reason;
+};
+
 union MediaSessionActionDetails {
   MediaSessionSeekToDetails seek_to;
+  MediaSessionEnterPictureInPictureDetails enter_picture_in_picture;
 };
 
 // MediaMetadata
@@ -42,6 +59,7 @@ struct SpecMediaMetadata {
   mojo_base.mojom.String16 artist;
   mojo_base.mojom.String16 album;
   array<media_session.mojom.MediaImage> artwork;
+  array<media_session.mojom.ChapterInformation> chapterInfo;
 };
 
 interface MediaSessionService {

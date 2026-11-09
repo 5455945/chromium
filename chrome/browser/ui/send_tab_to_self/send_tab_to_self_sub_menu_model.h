@@ -1,23 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_SEND_TAB_TO_SELF_SEND_TAB_TO_SELF_SUB_MENU_MODEL_H_
 #define CHROME_BROWSER_UI_SEND_TAB_TO_SELF_SEND_TAB_TO_SELF_SUB_MENU_MODEL_H_
 
-// This is the secondary menu model of send tab to self context menu item. This
-// menu contains the imformation of valid devices, getting form
-// SendTabToSelfModel. Every item of this menu is a valid device.
-
+#include <memory>
+#include <string>
 #include <vector>
 
-#include "base/macros.h"
-#include "chrome/browser/send_tab_to_self/send_tab_to_self_desktop_util.h"
-#include "content/public/browser/web_contents_observer.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "base/containers/span.h"
+#include "base/memory/weak_ptr.h"
+#include "chrome/app/chrome_command_ids.h"
+#include "components/send_tab_to_self/entry_point_display_reason.h"
+#include "components/send_tab_to_self/metrics_util.h"
+#include "components/sync_device_info/remote_device_info.h"
+#include "ui/menus/simple_menu_model.h"
 #include "url/gurl.h"
-
-class Profile;
 
 namespace content {
 class WebContents;
@@ -25,45 +24,65 @@ class WebContents;
 
 namespace send_tab_to_self {
 
+// The maximum number of target devices to show.
+inline constexpr size_t kMaxDevices = 5;
+inline constexpr int IDC_CONTENT_CONTEXT_SEND_TAB_TO_SELF_DEVICE_LAST =
+    IDC_CONTENT_CONTEXT_SEND_TAB_TO_SELF_DEVICE1 + kMaxDevices - 1;
+
+// A submenu model that builds and handles Send Tab to Self items in menus.
 class SendTabToSelfSubMenuModel : public ui::SimpleMenuModel,
-                                  public ui::SimpleMenuModel::Delegate,
-                                  public content::WebContentsObserver {
+                                  public ui::SimpleMenuModel::Delegate {
  public:
-  static const int kMinCommandId = 2000;
-  static const int kMaxCommandId = 2020;
+  // Single-tab flow (e.g., page or hyperlink context menu, or Save and Share
+  // app menu). Accepts optional `target_url` and `target_title` (e.g., link
+  // anchor text). Returns nullptr if the preconditions for showing the submenu
+  // are not met.
+  static std::unique_ptr<SendTabToSelfSubMenuModel> MaybeCreateForTab(
+      content::WebContents* web_contents,
+      ShareEntryPoint entry_point,
+      const GURL& target_url = GURL(),
+      const std::string& target_title = std::string());
 
-  struct ValidDeviceItem;
+  // Multi-tab flow (e.g., tab strip context menu for multiple selected tabs).
+  // Target URL/title are not applicable here as each tab resolves its own
+  // URL/title. Returns nullptr if the preconditions for showing the submenu are
+  // not met.
+  static std::unique_ptr<SendTabToSelfSubMenuModel> MaybeCreateForMultipleTabs(
+      content::WebContents* primary_web_contents,
+      base::span<content::WebContents* const> web_contents_list,
+      ShareEntryPoint entry_point);
 
-  SendTabToSelfSubMenuModel(content::WebContents* tab,
-                            SendTabToSelfMenuType menu_type);
-  SendTabToSelfSubMenuModel(content::WebContents* tab,
-                            SendTabToSelfMenuType menu_type,
-                            const GURL& link_url);
+  SendTabToSelfSubMenuModel(const SendTabToSelfSubMenuModel&) = delete;
+  SendTabToSelfSubMenuModel& operator=(const SendTabToSelfSubMenuModel&) =
+      delete;
+
   ~SendTabToSelfSubMenuModel() override;
 
-  // Overridden from ui::SimpleMenuModel::Delegate:
+  // ui::SimpleMenuModel::Delegate:
   bool IsCommandIdEnabled(int command_id) const override;
   void ExecuteCommand(int command_id, int event_flags) override;
-
-  // Overridden from content::WebContentsObserver:
-  void WebContentsDestroyed() override;
+  void OnMenuWillShow(ui::SimpleMenuModel* source) override;
 
  private:
-  void Build(Profile* profile);
-  void BuildDeviceItem(const std::string& device_name,
-                       const std::string& guid,
-                       int index);
+  SendTabToSelfSubMenuModel(content::WebContents* primary_web_contents,
+                            EntryPointDisplayReason display_reason,
+                            std::vector<syncer::RemoteDeviceInfo> devices,
+                            ShareEntryPoint entry_point,
+                            const GURL& target_url,
+                            const std::string& target_title);
 
-  // Injected on construction and set to null if the WebContents is being
-  // destroyed.
-  content::WebContents* tab_;
-  const SendTabToSelfMenuType menu_type_;
-  const GURL link_url_;
-  std::vector<ValidDeviceItem> valid_device_items_;
+  // Populates the submenu items appropriate for `display_reason_`.
+  void BuildMenu();
 
-  DISALLOW_COPY_AND_ASSIGN(SendTabToSelfSubMenuModel);
+  base::WeakPtr<content::WebContents> primary_web_contents_;
+  std::vector<base::WeakPtr<content::WebContents>> web_contents_list_;
+  const EntryPointDisplayReason display_reason_;
+  const std::vector<syncer::RemoteDeviceInfo> devices_;
+  const ShareEntryPoint entry_point_;
+  const GURL target_url_;
+  const std::string target_title_;
 };
 
-}  //  namespace send_tab_to_self
+}  // namespace send_tab_to_self
 
 #endif  // CHROME_BROWSER_UI_SEND_TAB_TO_SELF_SEND_TAB_TO_SELF_SUB_MENU_MODEL_H_

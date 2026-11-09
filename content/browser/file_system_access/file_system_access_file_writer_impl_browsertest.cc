@@ -1,58 +1,47 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/services/quarantine/test_support.h"
-#include "content/browser/file_system_access/file_system_access_manager_impl.h"
-#include "content/browser/file_system_access/file_system_chooser_test_helpers.h"
+#include "content/browser/file_system_access/file_system_access_handle_impl_browsertest_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/file_system_chooser_test_helpers.h"
 #include "content/shell/browser/shell.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/select_file_dialog_factory.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
+
 namespace content {
 
-// This browser test implements end-to-end tests for
-// FileSystemAccessFileWriterImpl.
-class FileSystemAccessFileWriterBrowserTest : public ContentBrowserTest {
+using testing::_;
+
+class FileSystemAccessFileWriterBrowserTestBase
+    : public FileSystemAccessHandleImplPermissionBrowserTestBase {
  public:
-  void SetUp() override {
-    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-
-    ASSERT_TRUE(embedded_test_server()->Start());
-    test_url_ = embedded_test_server()->GetURL("/title1.html");
-
-    ContentBrowserTest::SetUp();
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    // Enable experimental web platform features to enable write access.
-    command_line->AppendSwitch(
-        switches::kEnableExperimentalWebPlatformFeatures);
-  }
-
-  void TearDown() override {
-    ContentBrowserTest::TearDown();
-    ASSERT_TRUE(temp_dir_.Delete());
-    ui::SelectFileDialog::SetFactory(nullptr);
-  }
-
   std::pair<base::FilePath, base::FilePath> CreateTestFilesAndEntry(
       const std::string& contents) {
     base::ScopedAllowBlockingForTesting allow_blocking;
@@ -62,7 +51,8 @@ class FileSystemAccessFileWriterBrowserTest : public ContentBrowserTest {
     EXPECT_TRUE(base::WriteFile(test_file, contents));
 
     ui::SelectFileDialog::SetFactory(
-        new FakeSelectFileDialogFactory({test_file}));
+        std::make_unique<FakeSelectFileDialogFactory>(
+            std::vector<base::FilePath>{test_file}));
     EXPECT_TRUE(NavigateToURL(shell(), test_url_));
     EXPECT_EQ(test_file.BaseName().AsUTF8Unsafe(),
               EvalJs(shell(),
@@ -86,7 +76,8 @@ class FileSystemAccessFileWriterBrowserTest : public ContentBrowserTest {
     EXPECT_TRUE(base::WriteFile(test_file, file_data));
 
     ui::SelectFileDialog::SetFactory(
-        new FakeSelectFileDialogFactory({test_file}));
+        std::make_unique<FakeSelectFileDialogFactory>(
+            std::vector<base::FilePath>{test_file}));
     EXPECT_TRUE(NavigateToURL(shell(), test_url_));
     EXPECT_EQ(test_file.BaseName().AsUTF8Unsafe(),
               EvalJs(shell(),
@@ -100,16 +91,16 @@ class FileSystemAccessFileWriterBrowserTest : public ContentBrowserTest {
         base::FilePath(test_file).AddExtensionASCII(".crswap");
     return std::make_pair(test_file, swap_file);
   }
-
- protected:
-  base::ScopedTempDir temp_dir_;
-  GURL test_url_;
 };
+
+// This browser test implements end-to-end tests for
+// FileSystemAccessFileWriterImpl.
+class FileSystemAccessFileWriterBrowserTest
+    : public FileSystemAccessFileWriterBrowserTestBase {};
 
 IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
                        ContentsWrittenToSwapFileFirst) {
-  base::FilePath test_file, swap_file;
-  std::tie(test_file, swap_file) = CreateTestFilesAndEntry("");
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
   const std::string file_contents = "file contents to write";
 
   EXPECT_EQ(0,
@@ -151,15 +142,15 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
                        KeepExistingDataHasPreviousContent) {
   const std::string initial_contents = "fooks";
   const std::string expected_contents = "barks";
-  base::FilePath test_file, swap_file;
-  std::tie(test_file, swap_file) = CreateTestFilesAndEntry(initial_contents);
+  auto [test_file, swap_file] = CreateTestFilesAndEntry(initial_contents);
 
-  EXPECT_EQ(nullptr, EvalJs(shell(),
-                            "(async () => {"
-                            "    const w = await self.entry.createWritable({"
-                            "      keepExistingData: true });"
-                            "    self.writer = w;"
-                            "})()"));
+  EXPECT_EQ(base::Value(),
+            EvalJs(shell(),
+                   "(async () => {"
+                   "    const w = await self.entry.createWritable({"
+                   "      keepExistingData: true });"
+                   "    self.writer = w;"
+                   "})()"));
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
     EXPECT_TRUE(base::PathExists(swap_file));
@@ -186,15 +177,15 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
                        CreateWriterNoKeepExistingWithEmptyFile) {
   const std::string initial_contents = "very long string";
   const std::string expected_contents = "bar";
-  base::FilePath test_file, swap_file;
-  std::tie(test_file, swap_file) = CreateTestFilesAndEntry(initial_contents);
+  auto [test_file, swap_file] = CreateTestFilesAndEntry(initial_contents);
 
-  EXPECT_EQ(nullptr, EvalJs(shell(),
-                            "(async () => {"
-                            "  const w = await self.entry.createWritable({"
-                            "    keepExistingData: false });"
-                            "  self.writer = w;"
-                            "})()"));
+  EXPECT_EQ(base::Value(),
+            EvalJs(shell(),
+                   "(async () => {"
+                   "  const w = await self.entry.createWritable({"
+                   "    keepExistingData: false });"
+                   "  self.writer = w;"
+                   "})()"));
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
     EXPECT_TRUE(base::PathExists(swap_file));
@@ -219,16 +210,16 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
                        EachWriterHasUniqueSwapFile) {
-  base::FilePath test_file, base_swap_file;
-  std::tie(test_file, base_swap_file) = CreateTestFilesAndEntry("");
+  auto [test_file, base_swap_file] = CreateTestFilesAndEntry("");
 
   int num_writers = 5;
   for (int index = 0; index < num_writers; index++) {
-    EXPECT_EQ(nullptr, EvalJs(shell(),
-                              "(async () => {"
-                              "  const w = await self.entry.createWritable();"
-                              "  self.writers.push(w);"
-                              "})()"));
+    EXPECT_EQ(base::Value(),
+              EvalJs(shell(),
+                     "(async () => {"
+                     "  const w = await self.entry.createWritable();"
+                     "  self.writers.push(w);"
+                     "})()"));
   }
 
   {
@@ -246,13 +237,12 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
                        EachWriterHasUniqueSwapFileRacy) {
-  base::FilePath test_file, base_swap_file;
-  std::tie(test_file, base_swap_file) = CreateTestFilesAndEntry("");
+  auto [test_file, base_swap_file] = CreateTestFilesAndEntry("");
 
   int num_writers = 5;
   for (int index = 0; index < num_writers; index++) {
     EXPECT_EQ(
-        nullptr,
+        base::Value(),
         EvalJs(shell(),
                JsReplace("(async () => {"
                          "  for(let i = 0; i < $1; i++ ) {"
@@ -276,27 +266,119 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
   }
 }
 
-// TODO(https://crbug.com/992089): Files are only quarantined on windows in
+IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
+                       EachWriterHasUniqueSwapFileRacyKeepExistingData) {
+  auto [test_file, base_swap_file] = CreateTestFilesAndEntry("");
+
+  int num_writers = 5;
+  for (int index = 0; index < num_writers; index++) {
+    EXPECT_EQ(
+        base::Value(),
+        EvalJs(shell(), JsReplace("(async () => {"
+                                  "  for(let i = 0; i < $1; i++ ) {"
+                                  "self.writers.push(self.entry.createWritable("
+                                  "{keepExistingData: true}));"
+                                  "  }"
+                                  "  await Promise.all(self.writers);"
+                                  "})()",
+                                  num_writers)));
+  }
+
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    for (int index = 0; index < num_writers; index++) {
+      base::FilePath swap_file = base_swap_file;
+      if (index != 0) {
+        swap_file = base::FilePath(test_file).AddExtensionASCII(
+            base::StringPrintf(".%d.crswap", index));
+      }
+      EXPECT_TRUE(base::PathExists(swap_file));
+    }
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
+                       WriteOffsetAndSeekInSameWritable) {
+  // Performing a second write operation with a valid offset, after performing
+  // a seek operation occurs at the expected index (https://crbug.com/1427819).
+  auto [test_file, base_swap_file] = CreateTestFilesAndEntry("");
+  EXPECT_EQ("abc1234h",
+            EvalJs(shell(),
+                   "(async () => {"
+                   "const w = await self.entry.createWritable();"
+                   "await w.write('abcdefgh');"
+                   "await w.seek(0);"
+                   "await w.write({type:'write',data:'123',position:3});"
+                   "await w.write('4');"
+                   "await w.close();"
+                   "return (await (await self.entry.getFile()).text());"
+                   "})()"));
+}
+
+// Ideally this would be tested by WPTs, but the location of the swap file is
+// not specified and not easily accessible.
+IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
+                       CannotCreateWritableToSwapFile) {
+  {
+    base::FilePath test_dir;
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    EXPECT_TRUE(base::CreateTemporaryDirInDir(
+        temp_dir_.GetPath(), FILE_PATH_LITERAL("parent"), &test_dir));
+
+    ui::SelectFileDialog::SetFactory(
+        std::make_unique<FakeSelectFileDialogFactory>(
+            std::vector<base::FilePath>{test_dir}));
+    EXPECT_TRUE(NavigateToURL(shell(), test_url_));
+    EXPECT_EQ(test_dir.BaseName().AsUTF8Unsafe(),
+              EvalJs(shell(),
+                     "(async () => {"
+                     "  let dir = await self.showDirectoryPicker();"
+                     "  self.parent = dir;"
+                     "  return dir.name; })()"));
+  }
+
+  // Unsuccessfully attempt to create a writer to the swap file, which is
+  // locked.
+  auto result = EvalJs(
+      shell(),
+      "(async () => {"
+      "const file = await self.parent.getFileHandle('file.txt', {create:true});"
+      "self.writer = await file.createWritable();"
+      "await self.writer.write('abcdefgh');"
+      "self.swapFile = await self.parent.getFileHandle('file.txt.crswap', "
+      "{create:false});"
+      "return (await self.swapFile.createWritable());"
+      "})()");
+  EXPECT_THAT(result, EvalJsResult::ErrorIs(
+                          testing::HasSubstr("modifications are not allowed.")))
+      << result;
+
+  auto close_result = EvalJs(shell(),
+                             "(async () => {"
+                             "await self.writer.close();"
+                             "})()");
+  EXPECT_TRUE(close_result.is_ok()) << close_result;
+}
+
+// TODO(crbug.com/40639570): Files are only quarantined on windows in
 // browsertests unfortunately. Change this when more platforms are enabled.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #define MAYBE_FileAnnotated FileAnnotated
 #else
 #define MAYBE_FileAnnotated DISABLED_FileAnnotated
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
                        MAYBE_FileAnnotated) {
-  base::FilePath test_file, swap_file, lib_file;
+  auto [test_file, swap_file] = CreateQuarantineTestFilesAndEntry();
 
-  std::tie(test_file, swap_file) = CreateQuarantineTestFilesAndEntry();
-
-  EXPECT_EQ(nullptr, EvalJs(shell(),
-                            "(async () => {"
-                            "  const w = await self.entry.createWritable("
-                            "    {keepExistingData: true},"
-                            "  );"
-                            "  self.writer = w;"
-                            "  await self.writer.close();"
-                            "})()"));
+  EXPECT_EQ(base::Value(), EvalJs(shell(),
+                                  "(async () => {"
+                                  "  const w = await self.entry.createWritable("
+                                  "    {keepExistingData: true},"
+                                  "  );"
+                                  "  self.writer = w;"
+                                  "  await self.writer.close();"
+                                  "})()"));
 
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
@@ -304,5 +386,154 @@ IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
     EXPECT_TRUE(quarantine::IsFileQuarantined(test_file, GURL(), test_url_));
   }
 }
+
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
+IN_PROC_BROWSER_TEST_F(FileSystemAccessFileWriterBrowserTest,
+                       RespectOSPermissions) {
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
+
+  // Make the file read-only.
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+#if BUILDFLAG(IS_POSIX)
+    int mode = 0444;
+    EXPECT_TRUE(base::SetPosixFilePermissions(test_file, mode));
+#elif BUILDFLAG(IS_WIN)
+    DWORD attributes = ::GetFileAttributes(test_file.value().c_str());
+    ASSERT_NE(attributes, INVALID_FILE_ATTRIBUTES);
+    attributes |= FILE_ATTRIBUTE_READONLY;
+    EXPECT_TRUE(::SetFileAttributes(test_file.value().c_str(), attributes));
+#endif  // BUILDFLAG(IS_POSIX)
+  }
+
+  auto result = EvalJs(shell(),
+                       "(async () => {"
+                       "  return (await self.entry.createWritable()); })()");
+  EXPECT_THAT(result, EvalJsResult::ErrorIs(testing::HasSubstr(
+                          "Cannot write to a read-only file.")))
+      << result;
+}
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
+
+struct WriteModeTestParams {
+  // The test name suffix.
+  const char* test_name_suffix;
+  // Whether the kFileSystemAccessWriteMode feature is enabled.
+  bool is_feature_enabled;
+  // The expected permission mode to be requested.
+  blink::mojom::FileSystemAccessPermissionMode expected_mode;
+};
+
+class FileSystemAccessFileWriterImplWriteModeBrowserTest
+    : public FileSystemAccessFileWriterBrowserTestBase,
+      public testing::WithParamInterface<WriteModeTestParams> {
+ public:
+  FileSystemAccessFileWriterImplWriteModeBrowserTest() {
+    if (GetParam().is_feature_enabled) {
+      scoped_feature_list_.InitAndEnableFeature(
+          blink::features::kFileSystemAccessWriteMode);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          blink::features::kFileSystemAccessWriteMode);
+    }
+  }
+
+ protected:
+  // Creates a writer and expects that the correct permission is granted.
+  void CreateWriterAndExpectPermission() {
+    ExpectGetPermissionStatusAndReturnGranted(GetParam().expected_mode);
+    EXPECT_TRUE(ExecJs(shell(), R"(
+        (async () => { self.writer = await self.entry.createWritable(); })()
+    )"));
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Verifies that `createWritable()` on a local FS requests the correct
+// permission mode depending on whether the `kFileSystemAccessWriteMode`
+// feature is enabled.
+IN_PROC_BROWSER_TEST_P(FileSystemAccessFileWriterImplWriteModeBrowserTest,
+                       CreateWritable_RequestsCorrectPermissions) {
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
+  ExpectGetPermissionStatusAndReturnGranted(GetParam().expected_mode);
+  EXPECT_TRUE(ExecJs(shell(),
+                     "(async () => { await self.entry.createWritable(); })()"));
+}
+
+// Verifies that `write()` on a local FS requests the correct
+// permission mode depending on whether the `kFileSystemAccessWriteMode`
+// feature is enabled.
+IN_PROC_BROWSER_TEST_P(FileSystemAccessFileWriterImplWriteModeBrowserTest,
+                       Write_RequestsCorrectPermissions) {
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
+  CreateWriterAndExpectPermission();
+
+  // Call write(). This should request the effective write permission.
+  ExpectGetPermissionStatusAndReturnGranted(GetParam().expected_mode);
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      (async () => { await self.writer.write('foo'); })()
+  )"));
+}
+
+// Verifies that `truncate()` on a local FS requests the correct
+// permission mode depending on whether the `kFileSystemAccessWriteMode`
+// feature is enabled.
+IN_PROC_BROWSER_TEST_P(FileSystemAccessFileWriterImplWriteModeBrowserTest,
+                       Truncate_RequestsCorrectPermissions) {
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
+  CreateWriterAndExpectPermission();
+
+  // Call truncate(). This should request the effective write permission.
+  ExpectGetPermissionStatusAndReturnGranted(GetParam().expected_mode);
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      (async () => { await self.writer.truncate(0); })()
+  )"));
+}
+
+// Verifies that `close()` on a local FS requests the correct
+// permission mode depending on whether the `kFileSystemAccessWriteMode`
+// feature is enabled.
+IN_PROC_BROWSER_TEST_P(FileSystemAccessFileWriterImplWriteModeBrowserTest,
+                       Close_RequestsCorrectPermissions) {
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
+  CreateWriterAndExpectPermission();
+
+  // Call close(). This should request the effective write permission.
+  ExpectGetPermissionStatusAndReturnGranted(GetParam().expected_mode);
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      (async () => { await self.writer.close(); })()
+  )"));
+}
+
+// Verifies that `abort()` on a local FS requests the correct
+// permission mode depending on whether the `kFileSystemAccessWriteMode`
+// feature is enabled.
+IN_PROC_BROWSER_TEST_P(FileSystemAccessFileWriterImplWriteModeBrowserTest,
+                       AbortRequestsCorrectPermissions) {
+  auto [test_file, swap_file] = CreateTestFilesAndEntry("");
+  CreateWriterAndExpectPermission();
+
+  // Call abort(). This should request the effective write permission.
+  ExpectGetPermissionStatusAndReturnGranted(GetParam().expected_mode);
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      (async () => { await self.writer.abort(); })()
+  )"));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    FileSystemAccessFileWriterImplWriteModeBrowserTest,
+    testing::Values(
+        WriteModeTestParams{
+            "WriteModeDisabled", false,
+            blink::mojom::FileSystemAccessPermissionMode::kReadWrite},
+        WriteModeTestParams{
+            "WriteModeEnabled", true,
+            blink::mojom::FileSystemAccessPermissionMode::kWrite}),
+    [](const testing::TestParamInfo<WriteModeTestParams>& info) {
+      return info.param.test_name_suffix;
+    });
 
 }  // namespace content

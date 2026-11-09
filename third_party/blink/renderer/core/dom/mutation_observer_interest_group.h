@@ -35,8 +35,8 @@
 #include "third_party/blink/renderer/core/dom/mutation_observer.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -45,7 +45,7 @@ class MutationObserverInterestGroup final
  public:
   static MutationObserverInterestGroup* CreateForChildListMutation(
       Node& target) {
-    if (!target.GetDocument().HasMutationObserversOfType(
+    if (!target.GetDocument().MayHaveMutationObserversOfType(
             kMutationTypeChildList))
       return nullptr;
 
@@ -55,7 +55,7 @@ class MutationObserverInterestGroup final
 
   static MutationObserverInterestGroup* CreateForCharacterDataMutation(
       Node& target) {
-    if (!target.GetDocument().HasMutationObserversOfType(
+    if (!target.GetDocument().MayHaveMutationObserversOfType(
             kMutationTypeCharacterData))
       return nullptr;
 
@@ -66,7 +66,7 @@ class MutationObserverInterestGroup final
   static MutationObserverInterestGroup* CreateForAttributesMutation(
       Node& target,
       const QualifiedName& attribute_name) {
-    if (!target.GetDocument().HasMutationObserversOfType(
+    if (!target.GetDocument().MayHaveMutationObserversOfType(
             kMutationTypeAttributes))
       return nullptr;
 

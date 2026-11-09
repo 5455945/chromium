@@ -1,50 +1,51 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "media/gpu/v4l2/v4l2_vda_helpers.h"
 
-#include "base/bind.h"
+#include <algorithm>
+
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/types/to_address.h"
 #include "media/base/color_plane_layout.h"
 #include "media/base/video_codecs.h"
 #include "media/gpu/chromeos/fourcc.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/v4l2/v4l2_device.h"
 #include "media/gpu/v4l2/v4l2_image_processor_backend.h"
-#include "media/video/h264_parser.h"
+#include "media/parsers/h264_parser.h"
 
 namespace media {
 namespace v4l2_vda_helpers {
 
-absl::optional<Fourcc> FindImageProcessorInputFormat(V4L2Device* vda_device) {
+std::optional<Fourcc> FindImageProcessorInputFormat(V4L2Device* vda_device) {
   std::vector<uint32_t> processor_input_formats =
       V4L2ImageProcessorBackend::GetSupportedInputFormats();
 
-  struct v4l2_fmtdesc fmtdesc;
-  memset(&fmtdesc, 0, sizeof(fmtdesc));
+  struct v4l2_fmtdesc fmtdesc = {};
   fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   while (vda_device->Ioctl(VIDIOC_ENUM_FMT, &fmtdesc) == 0) {
-    if (std::find(processor_input_formats.begin(),
-                  processor_input_formats.end(),
-                  fmtdesc.pixelformat) != processor_input_formats.end()) {
+    if (std::ranges::contains(processor_input_formats, fmtdesc.pixelformat)) {
       DVLOGF(3) << "Image processor input format=" << fmtdesc.description;
       return Fourcc::FromV4L2PixFmt(fmtdesc.pixelformat);
     }
     ++fmtdesc.index;
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-absl::optional<Fourcc> FindImageProcessorOutputFormat(V4L2Device* ip_device) {
+std::optional<Fourcc> FindImageProcessorOutputFormat(V4L2Device* ip_device) {
   // Prefer YVU420 and NV12 because ArcGpuVideoDecodeAccelerator only supports
   // single physical plane.
   static constexpr uint32_t kPreferredFormats[] = {V4L2_PIX_FMT_NV12,
                                                    V4L2_PIX_FMT_YVU420};
   auto preferred_formats_first = [](uint32_t a, uint32_t b) -> bool {
-    auto* iter_a = std::find(std::begin(kPreferredFormats),
-                             std::end(kPreferredFormats), a);
-    auto* iter_b = std::find(std::begin(kPreferredFormats),
-                             std::end(kPreferredFormats), b);
+    auto* iter_a = std::ranges::find(kPreferredFormats, a);
+    auto* iter_b = std::ranges::find(kPreferredFormats, b);
     return iter_a < iter_b;
   };
 
@@ -63,7 +64,7 @@ absl::optional<Fourcc> FindImageProcessorOutputFormat(V4L2Device* ip_device) {
     }
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 std::unique_ptr<ImageProcessor> CreateImageProcessor(
@@ -71,25 +72,26 @@ std::unique_ptr<ImageProcessor> CreateImageProcessor(
     const Fourcc ip_output_format,
     const gfx::Size& vda_output_coded_size,
     const gfx::Size& ip_output_coded_size,
-    const gfx::Size& visible_size,
+    const gfx::Rect& visible_rect,
     VideoFrame::StorageType output_storage_type,
     size_t nb_buffers,
     scoped_refptr<V4L2Device> image_processor_device,
     ImageProcessor::OutputMode image_processor_output_mode,
     scoped_refptr<base::SequencedTaskRunner> client_task_runner,
     ImageProcessor::ErrorCB error_cb) {
+  DCHECK_EQ(vda_output_coded_size, ip_output_coded_size);
+  DCHECK(gfx::Rect(ip_output_coded_size).Contains(visible_rect));
+
   // TODO(crbug.com/917798): Use ImageProcessorFactory::Create() once we remove
   //     |image_processor_device_| from V4L2VideoDecodeAccelerator.
   auto image_processor = ImageProcessor::Create(
       base::BindRepeating(&V4L2ImageProcessorBackend::Create,
                           image_processor_device, nb_buffers),
       ImageProcessor::PortConfig(vda_output_format, vda_output_coded_size, {},
-                                 gfx::Rect(visible_size),
-                                 {VideoFrame::STORAGE_DMABUFS}),
+                                 visible_rect, VideoFrame::STORAGE_DMABUFS),
       ImageProcessor::PortConfig(ip_output_format, ip_output_coded_size, {},
-                                 gfx::Rect(visible_size),
-                                 {output_storage_type}),
-      {image_processor_output_mode}, VIDEO_ROTATION_0, std::move(error_cb),
+                                 visible_rect, output_storage_type),
+      image_processor_output_mode, std::move(error_cb),
       std::move(client_task_runner));
   if (!image_processor)
     return nullptr;
@@ -147,11 +149,11 @@ std::unique_ptr<InputBufferFragmentSplitter>
 InputBufferFragmentSplitter::CreateFromProfile(
     media::VideoCodecProfile profile) {
   switch (VideoCodecProfileToVideoCodec(profile)) {
-    case kCodecH264:
+    case VideoCodec::kH264:
       return std::make_unique<
           v4l2_vda_helpers::H264InputBufferFragmentSplitter>();
-    case kCodecVP8:
-    case kCodecVP9:
+    case VideoCodec::kVP8:
+    case VideoCodec::kVP9:
       // VP8/VP9 don't need any frame splitting, use the default implementation.
       return std::make_unique<v4l2_vda_helpers::InputBufferFragmentSplitter>();
     default:
@@ -210,8 +212,9 @@ bool H264InputBufferFragmentSplitter::AdvanceFrameFragment(const uint8_t* data,
     switch (nalu.nal_unit_type) {
       case H264NALU::kNonIDRSlice:
       case H264NALU::kIDRSlice:
-        if (nalu.size < 1)
+        if (nalu.data.size() < 1) {
           return false;
+        }
 
         has_frame_data = true;
 
@@ -220,7 +223,7 @@ bool H264InputBufferFragmentSplitter::AdvanceFrameFragment(const uint8_t* data,
         // the eighth data bit of the NAL; a zero value is encoded with a
         // leading '1' bit in the byte, which we can detect as the byte being
         // (unsigned) greater than or equal to 0x80.
-        if (nalu.data[1] >= 0x80) {
+        if (UNSAFE_TODO(nalu.data[1]) >= 0x80) {
           end_of_frame = true;
           break;
         }
@@ -233,9 +236,9 @@ bool H264InputBufferFragmentSplitter::AdvanceFrameFragment(const uint8_t* data,
       case H264NALU::kEOStream:
       case H264NALU::kFiller:
       case H264NALU::kSPSExt:
-      case H264NALU::kReserved14:
-      case H264NALU::kReserved15:
-      case H264NALU::kReserved16:
+      case H264NALU::kPrefix:
+      case H264NALU::kSubsetSPS:
+      case H264NALU::kDPS:
       case H264NALU::kReserved17:
       case H264NALU::kReserved18:
         // These unconditionally signal a frame boundary.
@@ -258,10 +261,9 @@ bool H264InputBufferFragmentSplitter::AdvanceFrameFragment(const uint8_t* data,
         return true;
       }
     }
-    *endpos = (nalu.data + nalu.size) - data;
+    *endpos = base::to_address(nalu.data.end()) - data;
   }
   NOTREACHED();
-  return false;
 }
 
 void H264InputBufferFragmentSplitter::Reset() {

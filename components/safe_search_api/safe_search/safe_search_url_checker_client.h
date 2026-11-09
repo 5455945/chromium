@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 
 #include <list>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "components/safe_search_api/url_checker_client.h"
 #include "google_apis/google_api_keys.h"
@@ -31,6 +31,10 @@ class SafeSearchURLCheckerClient : public URLCheckerClient {
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
       const std::string& api_key = google_apis::GetAPIKey());
 
+  SafeSearchURLCheckerClient(const SafeSearchURLCheckerClient&) = delete;
+  SafeSearchURLCheckerClient& operator=(const SafeSearchURLCheckerClient&) =
+      delete;
+
   ~SafeSearchURLCheckerClient() override;
 
   // Checks whether an |url| is restricted according to SafeSearch.
@@ -45,15 +49,13 @@ class SafeSearchURLCheckerClient : public URLCheckerClient {
   using CheckList = std::list<std::unique_ptr<Check>>;
 
   void OnSimpleLoaderComplete(CheckList::iterator it,
-                              std::unique_ptr<std::string> response_body);
+                              std::optional<std::string> response_body);
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   const net::NetworkTrafficAnnotationTag traffic_annotation_;
   const std::string api_key_;
 
   CheckList checks_in_progress_;
-
-  DISALLOW_COPY_AND_ASSIGN(SafeSearchURLCheckerClient);
 };
 
 }  // namespace safe_search_api

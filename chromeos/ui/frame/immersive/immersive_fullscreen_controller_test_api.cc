@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,6 +38,24 @@ void ImmersiveFullscreenControllerTestApi::SetupForTest() {
 
 bool ImmersiveFullscreenControllerTestApi::IsTopEdgeHoverTimerRunning() const {
   return immersive_fullscreen_controller_->top_edge_hover_timer_.IsRunning();
+}
+
+bool ImmersiveFullscreenControllerTestApi::IsRevealLocked() const {
+  return immersive_fullscreen_controller_->revealed_lock_count_ > 0;
+}
+
+bool ImmersiveFullscreenControllerTestApi::IsTopContainerPaintLocked() const {
+  return immersive_fullscreen_controller_->top_container_paint_lock_
+      .has_value();
+}
+
+void ImmersiveFullscreenControllerTestApi::EndAnimation() {
+  immersive_fullscreen_controller_->animation_->End();
+}
+
+const gfx::SlideAnimation* ImmersiveFullscreenControllerTestApi::GetAnimation()
+    const {
+  return immersive_fullscreen_controller_->animation_.get();
 }
 
 ImmersiveFullscreenControllerTestApi::GlobalAnimationDisabler::

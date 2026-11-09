@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
 #include "chrome/test/base/testing_profile.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,8 +22,17 @@ class CrostiniThrottleTest : public testing::Test {
         std::make_unique<TestDelegateImpl>(this));
   }
 
+  CrostiniThrottleTest(const CrostiniThrottleTest&) = delete;
+  CrostiniThrottleTest& operator=(const CrostiniThrottleTest&) = delete;
+
  protected:
   CrostiniThrottle* crostini_throttle() { return &crostini_throttle_; }
+
+  ash::ThrottleObserver* GetThrottleObserver() {
+    const auto& observers = crostini_throttle()->observers_for_testing();
+    DCHECK(!observers.empty());
+    return observers[0].get();
+  }
 
   size_t disable_cpu_restriction_counter() const {
     return disable_cpu_restriction_counter_;
@@ -38,17 +46,21 @@ class CrostiniThrottleTest : public testing::Test {
   class TestDelegateImpl : public CrostiniThrottle::Delegate {
    public:
     explicit TestDelegateImpl(CrostiniThrottleTest* test) : test_(test) {}
+
+    TestDelegateImpl(const TestDelegateImpl&) = delete;
+    TestDelegateImpl& operator=(const TestDelegateImpl&) = delete;
+
     ~TestDelegateImpl() override = default;
 
     void SetCpuRestriction(bool restrict) override {
-      if (restrict)
+      if (restrict) {
         ++(test_->enable_cpu_restriction_counter_);
-      else
+      } else {
         ++(test_->disable_cpu_restriction_counter_);
+      }
     }
 
-    CrostiniThrottleTest* test_;
-    DISALLOW_COPY_AND_ASSIGN(TestDelegateImpl);
+    raw_ptr<CrostiniThrottleTest> test_;
   };
 
   content::BrowserTaskEnvironment task_environment_;
@@ -57,8 +69,6 @@ class CrostiniThrottleTest : public testing::Test {
   CrostiniThrottle crostini_throttle_;
   size_t disable_cpu_restriction_counter_{0};
   size_t enable_cpu_restriction_counter_{0};
-
-  DISALLOW_COPY_AND_ASSIGN(CrostiniThrottleTest);
 };
 
 // Tests that CrostiniThrottle can be constructed and destructed.
@@ -67,24 +77,20 @@ TEST_F(CrostiniThrottleTest, TestConstructDestruct) {}
 // Tests that CrostiniThrottle adjusts CPU restriction
 // when ThrottleInstance is called.
 TEST_F(CrostiniThrottleTest, TestThrottleInstance) {
-  crostini_throttle()->set_level_for_testing(
-      chromeos::ThrottleObserver::PriorityLevel::LOW);
+  GetThrottleObserver()->SetActive(false);
   EXPECT_EQ(1U, enable_cpu_restriction_counter());
   EXPECT_EQ(0U, disable_cpu_restriction_counter());
 
-  // CrostiniThrottle level is already LOW, expect no change
-  crostini_throttle()->set_level_for_testing(
-      chromeos::ThrottleObserver::PriorityLevel::LOW);
+  // CrostiniThrottle is already inactive, expect no change
+  GetThrottleObserver()->SetActive(false);
   EXPECT_EQ(1U, enable_cpu_restriction_counter());
   EXPECT_EQ(0U, disable_cpu_restriction_counter());
 
-  crostini_throttle()->set_level_for_testing(
-      chromeos::ThrottleObserver::PriorityLevel::CRITICAL);
+  GetThrottleObserver()->SetActive(true);
   EXPECT_EQ(1U, enable_cpu_restriction_counter());
   EXPECT_EQ(1U, disable_cpu_restriction_counter());
 
-  crostini_throttle()->set_level_for_testing(
-      chromeos::ThrottleObserver::PriorityLevel::LOW);
+  GetThrottleObserver()->SetActive(false);
   EXPECT_EQ(2U, enable_cpu_restriction_counter());
   EXPECT_EQ(1U, disable_cpu_restriction_counter());
 }

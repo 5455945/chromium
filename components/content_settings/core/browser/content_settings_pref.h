@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,31 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/content_settings/core/browser/content_settings_origin_identifier_value_map.h"
+#include "components/content_settings/core/browser/content_settings_origin_value_map.h"
 #include "components/content_settings/core/browser/content_settings_provider.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 
 class PrefService;
 class PrefChangeRegistrar;
+
+namespace base {
+class Clock;
+}
+
+namespace prefs {
+class ScopedDictionaryPrefUpdate;
+}  // namespace prefs
 
 namespace content_settings {
 
@@ -42,36 +52,49 @@ class ContentSettingsPref {
                       bool off_the_record,
                       bool restore_session,
                       NotifyObserversCallback notify_callback);
+
+  ContentSettingsPref(const ContentSettingsPref&) = delete;
+  ContentSettingsPref& operator=(const ContentSettingsPref&) = delete;
+
   ~ContentSettingsPref();
 
   // Returns nullptr to indicate the RuleIterator is empty.
-  std::unique_ptr<RuleIterator> GetRuleIterator(
-      bool off_the_record) const;
+  std::unique_ptr<RuleIterator> GetRuleIterator(bool off_the_record) const;
 
-  bool SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
+  std::unique_ptr<Rule> GetRule(const GURL& primary_url,
+                                const GURL& secondary_url,
+                                bool off_the_record) const;
+
+  void SetWebsiteSetting(const ContentSettingsPattern& primary_pattern,
                          const ContentSettingsPattern& secondary_pattern,
-                         base::Time modified_time,
-                         std::unique_ptr<base::Value>&& value,
-                         const ContentSettingConstraints& constraints);
-
-  // Returns the |last_modified| date of a setting.
-  base::Time GetWebsiteSettingLastModified(
-      const ContentSettingsPattern& primary_pattern,
-      const ContentSettingsPattern& secondary_pattern);
-
-  void ClearPref();
+                         base::Value value,
+                         RuleMetaData metadata);
 
   void ClearAllContentSettingsRules();
+
+  // Resets pointers that should be released in ShutdownOnUIThread().
+  void OnShutdown();
 
   size_t GetNumExceptions();
 
   // Tries to lock |lock_|. If successful, returns true and releases the lock.
   bool TryLockForTesting() const;
 
+  void SetClockForTesting(const base::Clock* clock);
+
  private:
   // Reads all content settings exceptions from the preference and loads them
   // into the |value_map_|. The |value_map_| is cleared first.
   void ReadContentSettingsFromPref();
+  // A helper function to read settings from a dictionary.
+  void ReadSettingsFromDictionary(
+      const base::DictValue& all_settings_dictionary,
+      std::unique_ptr<prefs::ScopedDictionaryPrefUpdate>& update)
+      EXCLUSIVE_LOCKS_REQUIRED(value_map_.GetLock());
+  // Helper function to determine if the setting should be removed.
+  bool ShouldRemoveSetting(
+      base::Time expiration,
+      std::optional<content_settings::mojom::SessionModel> session_model);
 
   // Callback for changes in the pref with the same name.
   void OnPrefChanged();
@@ -82,9 +105,8 @@ class ContentSettingsPref {
   // preference changes.
   void UpdatePref(const ContentSettingsPattern& primary_pattern,
                   const ContentSettingsPattern& secondary_pattern,
-                  const base::Time last_modified,
-                  const base::Value* value,
-                  const ContentSettingConstraints& constraints);
+                  base::Value value,
+                  const RuleMetaData& metadata);
 
   // In the debug mode, asserts that |lock_| is not held by this thread. It's
   // ok if some other thread holds |lock_|, as long as it will eventually
@@ -95,13 +117,12 @@ class ContentSettingsPref {
   ContentSettingsType content_type_;
 
   // Weak; owned by the Profile and reset in ShutdownOnUIThread.
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
 
   // Owned by the PrefProvider.
-  PrefChangeRegistrar* registrar_;
+  raw_ptr<PrefChangeRegistrar> registrar_;
 
-  // Name of the dictionary preference managed by this class.
-  const std::string& pref_name_;
+  const std::string pref_name_;
 
   bool off_the_record_;
 
@@ -111,18 +132,15 @@ class ContentSettingsPref {
   // notifications from the preferences service that we triggered ourself.
   bool updating_preferences_;
 
-  OriginIdentifierValueMap value_map_;
+  OriginValueMap value_map_;
 
-  OriginIdentifierValueMap off_the_record_value_map_;
+  OriginValueMap off_the_record_value_map_;
 
   NotifyObserversCallback notify_callback_;
 
-  // Used around accesses to the value map objects to guarantee thread safety.
-  mutable base::Lock lock_;
-
   base::ThreadChecker thread_checker_;
 
-  DISALLOW_COPY_AND_ASSIGN(ContentSettingsPref);
+  raw_ptr<const base::Clock> clock_;
 };
 
 }  // namespace content_settings

@@ -26,17 +26,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_V8_SCRIPT_RUNNER_H_
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_V8_SCRIPT_RUNNER_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "v8/include/v8.h"
-
-namespace WTF {
-class TextPosition;
-}
 
 namespace blink {
 
@@ -46,7 +43,6 @@ class ModuleScript;
 class ModuleScriptCreationParams;
 class ReferrerScriptInfo;
 class ScriptEvaluationResult;
-class ScriptSourceCode;
 class ScriptState;
 
 enum class ExecuteScriptPolicy {
@@ -75,7 +71,7 @@ class CORE_EXPORT V8ScriptRunner final {
 
     // Rethrow errors flag is false.
     static RethrowErrorsOption DoNotRethrow() {
-      return RethrowErrorsOption(absl::nullopt);
+      return RethrowErrorsOption(std::nullopt);
     }
 
     // Rethrow errors flag is true.
@@ -100,26 +96,26 @@ class CORE_EXPORT V8ScriptRunner final {
     String Message() const { return *message_; }
 
    private:
-    explicit RethrowErrorsOption(absl::optional<String> message)
+    explicit RethrowErrorsOption(std::optional<String> message)
         : message_(std::move(message)) {}
 
     // `nullopt` <=> rethrow errors is false.
-    absl::optional<String> message_;
+    std::optional<String> message_;
   };
 
   // For the following methods, the caller sites have to hold
   // a HandleScope and a ContextScope.
   static v8::MaybeLocal<v8::Script> CompileScript(
       ScriptState*,
-      const ScriptSourceCode&,
-      SanitizeScriptErrors,
+      const ClassicScript&,
+      v8::ScriptOrigin,
       v8::ScriptCompiler::CompileOptions,
       v8::ScriptCompiler::NoCacheReason,
-      const ReferrerScriptInfo&);
+      bool can_use_crowdsourced_compile_hints = false);
   static v8::MaybeLocal<v8::Module> CompileModule(
       v8::Isolate*,
       const ModuleScriptCreationParams&,
-      const WTF::TextPosition&,
+      const TextPosition&,
       v8::ScriptCompiler::CompileOptions,
       v8::ScriptCompiler::NoCacheReason,
       const ReferrerScriptInfo&);
@@ -127,10 +123,6 @@ class CORE_EXPORT V8ScriptRunner final {
                                                     ClassicScript*,
                                                     ExecuteScriptPolicy,
                                                     RethrowErrorsOption);
-  static v8::MaybeLocal<v8::Value> CompileAndRunInternalScript(
-      v8::Isolate*,
-      ScriptState*,
-      const ScriptSourceCode&);
   static v8::MaybeLocal<v8::Value> CallAsConstructor(
       v8::Isolate*,
       v8::Local<v8::Object>,
@@ -149,13 +141,14 @@ class CORE_EXPORT V8ScriptRunner final {
   // See the class comments of RethrowErrorsOption and ScriptEvaluationResult
   // for exception handling and return value semantics.
   static ScriptEvaluationResult EvaluateModule(ModuleScript*,
-                                               RethrowErrorsOption);
+                                               RethrowErrorsOption,
+                                               v8::ModuleImportPhase phase);
 
   // Only to be used from ModuleRecord::ReportException().
   static void ReportExceptionForModule(v8::Isolate*,
                                        v8::Local<v8::Value> exception,
                                        const String& file_name,
-                                       const WTF::TextPosition&);
+                                       const TextPosition&);
 
   // Reports an exception to the message handler, as if it were an uncaught
   // exception. Can only be called on the main thread.
@@ -165,9 +158,10 @@ class CORE_EXPORT V8ScriptRunner final {
   static void ReportException(v8::Isolate*, v8::Local<v8::Value> exception);
 
  private:
-  static v8::MaybeLocal<v8::Value> RunCompiledScript(v8::Isolate*,
-                                                     v8::Local<v8::Script>,
-                                                     ExecutionContext*);
+  static v8::MaybeLocal<v8::Value> RunCompiledScript(
+      ScriptState*,
+      v8::Local<v8::Script>,
+      v8::Local<v8::Data> host_defined_options);
 };
 
 }  // namespace blink

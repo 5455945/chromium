@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,8 +19,7 @@ constexpr const char* kBitmapGlyphsBlockList[] = {"Calibri", "Courier New"};
 
 }  // namespace
 
-bool BitmapGlyphsBlockList::ShouldAvoidEmbeddedBitmapsForTypeface(
-    const SkTypeface& typeface) {
+bool ShouldAvoidEmbeddedBitmapsForTypeface(const SkTypeface& typeface) {
   SkString font_family_name;
   typeface.getFamilyName(&font_family_name);
   return font_family_name.equals(kBitmapGlyphsBlockList[0]) ||

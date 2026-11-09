@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,19 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/base64.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/variations/active_field_trials.h"
-#include "components/version_ui/version_handler_helper.h"
-#include "components/version_ui/version_ui_constants.h"
+#include "components/variations/net/variations_command_line.h"
+#include "components/webui/version/version_handler_helper.h"
+#include "components/webui/version/version_ui_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -39,23 +39,29 @@ void GetFilePaths(const base::FilePath& profile_path,
 
   base::FilePath executable_path = base::MakeAbsoluteFilePath(
       base::CommandLine::ForCurrentProcess()->GetProgram());
-  if (!executable_path.empty())
+  if (!executable_path.empty()) {
     *exec_path_out = executable_path.LossyDisplayName();
-  else
+  } else {
     *exec_path_out = l10n_util::GetStringUTF16(IDS_VERSION_UI_PATH_NOTFOUND);
+  }
 
   base::FilePath profile_path_copy(base::MakeAbsoluteFilePath(profile_path));
-  if (!profile_path.empty() && !profile_path_copy.empty())
+  if (!profile_path.empty() && !profile_path_copy.empty()) {
     *profile_path_out = profile_path.LossyDisplayName();
-  else
+  } else {
     *profile_path_out = l10n_util::GetStringUTF16(IDS_VERSION_UI_PATH_NOTFOUND);
+  }
 }
 
 }  // namespace
 
-VersionHandler::VersionHandler() {}
+VersionHandler::VersionHandler() = default;
 
-VersionHandler::~VersionHandler() {}
+VersionHandler::~VersionHandler() = default;
+
+void VersionHandler::OnJavascriptDisallowed() {
+  weak_ptr_factory_.InvalidateWeakPtrs();
+}
 
 void VersionHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -72,7 +78,7 @@ void VersionHandler::RegisterMessages() {
                           base::Unretained(this)));
 }
 
-void VersionHandler::HandleRequestVersionInfo(const base::ListValue* args) {
+void VersionHandler::HandleRequestVersionInfo(const base::ListValue& args) {
   // This method is overridden by platform-specific handlers which may still
   // use |CallJavascriptFunction|. Main version info is returned by promise
   // using handlers below.
@@ -82,31 +88,35 @@ void VersionHandler::HandleRequestVersionInfo(const base::ListValue* args) {
   AllowJavascript();
 }
 
-void VersionHandler::HandleRequestVariationInfo(const base::ListValue* args) {
+void VersionHandler::HandleRequestVariationInfo(const base::ListValue& args) {
   AllowJavascript();
 
-  std::string callback_id;
-  bool include_variations_cmd;
-  CHECK_EQ(2U, args->GetSize());
-  CHECK(args->GetString(0, &callback_id));
-  CHECK(args->GetBoolean(1, &include_variations_cmd));
+  CHECK_EQ(2U, args.size());
+  const std::string& callback_id = args[0].GetString();
+  const bool return_raw_variations_cmd = args[1].GetBool();
 
-  base::Value response(base::Value::Type::DICTIONARY);
-  response.SetKey(version_ui::kKeyVariationsList,
-                  std::move(*version_ui::GetVariationsList()));
-  if (include_variations_cmd) {
-    response.SetKey(version_ui::kKeyVariationsCmd,
-                    version_ui::GetVariationsCommandLineAsValue());
+  base::DictValue response;
+  response.Set(version_ui::kKeyVariationsList, version_ui::GetVariationsList());
+  if (return_raw_variations_cmd) {
+    response.Set(version_ui::kKeyVariationsCmd,
+                 version_ui::GetVariationsCommandLine());
+  } else {
+    std::string content;
+    bool success =
+        variations::VariationsCommandLine::GetForCurrentProcess().WriteToString(
+            &content);
+    if (success) {
+      response.Set(version_ui::kKeyVariationsCmd, base::Base64Encode(content));
+    }
   }
   ResolveJavascriptCallback(base::Value(callback_id), response);
 }
 
-void VersionHandler::HandleRequestPathInfo(const base::ListValue* args) {
+void VersionHandler::HandleRequestPathInfo(const base::ListValue& args) {
   AllowJavascript();
 
-  std::string callback_id;
-  CHECK_EQ(1U, args->GetSize());
-  CHECK(args->GetString(0, &callback_id));
+  CHECK_EQ(1U, args.size());
+  const std::string& callback_id = args[0].GetString();
 
   // Grab the executable path on the FILE thread. It is returned in
   // OnGotFilePaths.
@@ -126,9 +136,9 @@ void VersionHandler::HandleRequestPathInfo(const base::ListValue* args) {
 void VersionHandler::OnGotFilePaths(std::string callback_id,
                                     std::u16string* executable_path_data,
                                     std::u16string* profile_path_data) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  base::Value response(base::Value::Type::DICTIONARY);
-  response.SetKey(version_ui::kKeyExecPath, base::Value(*executable_path_data));
-  response.SetKey(version_ui::kKeyProfilePath, base::Value(*profile_path_data));
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  base::DictValue response;
+  response.Set(version_ui::kKeyExecPath, *executable_path_data);
+  response.Set(version_ui::kKeyProfilePath, *profile_path_data);
   ResolveJavascriptCallback(base::Value(callback_id), response);
 }

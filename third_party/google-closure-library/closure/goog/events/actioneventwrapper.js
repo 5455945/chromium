@@ -1,16 +1,8 @@
-// Copyright 2009 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview Action event wrapper implementation.
@@ -46,10 +38,10 @@ goog.events.ActionEventWrapper_ = function() {};
  */
 goog.events.ActionEventWrapper_.FunctionExtension_ = function() {};
 
-/** @type {!Object|undefined} */
+/** @private {!Object|undefined} */
 goog.events.ActionEventWrapper_.FunctionExtension_.prototype.scope_;
 
-/** @type {function(?):?|{handleEvent:function(?):?}|null} */
+/** @private {function(?):?|{handleEvent:function(?):?}|null} */
 goog.events.ActionEventWrapper_.FunctionExtension_.prototype.listener_;
 
 
@@ -89,7 +81,9 @@ goog.events.ActionEventWrapper_.EVENT_TYPES_ = [
  */
 goog.events.ActionEventWrapper_.prototype.listen = function(
     target, listener, opt_capt, opt_scope, opt_eventHandler) {
+  'use strict';
   var callback = function(e) {
+    'use strict';
     var listenerFn = goog.events.wrapListener(listener);
     var role = goog.dom.isElement(e.target) ?
         goog.a11y.aria.getRole(/** @type {!Element} */ (e.target)) :
@@ -105,10 +99,14 @@ goog.events.ActionEventWrapper_.prototype.listen = function(
       listenerFn.call(opt_scope, e);
     } else if (
         e.keyCode == goog.events.KeyCodes.SPACE &&
-        e.type == goog.events.EventType.KEYUP &&
         (role == goog.a11y.aria.Role.BUTTON ||
-         role == goog.a11y.aria.Role.TAB)) {
-      listenerFn.call(opt_scope, e);
+         role == goog.a11y.aria.Role.TAB ||
+         role == goog.a11y.aria.Role.RADIO)) {
+      if (e.type == goog.events.EventType.KEYUP) {
+        listenerFn.call(opt_scope, e);
+      }
+      // prevent the browser from scrolling the page down when space is pressed
+      // on an interactive element.
       e.preventDefault();
     }
   };
@@ -142,6 +140,7 @@ goog.events.ActionEventWrapper_.prototype.listen = function(
  */
 goog.events.ActionEventWrapper_.prototype.unlisten = function(
     target, listener, opt_capt, opt_scope, opt_eventHandler) {
+  'use strict';
   for (var type, j = 0; type = goog.events.ActionEventWrapper_.EVENT_TYPES_[j];
        j++) {
     var listeners = goog.events.getListeners(target, type, !!opt_capt);

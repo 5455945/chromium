@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,12 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 
+import org.jni_zero.CalledByNative;
+
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.PackageUtils;
-import org.chromium.base.annotations.CalledByNative;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 
@@ -19,6 +21,7 @@ import org.chromium.ui.base.WindowAndroid;
  * Provides functionality related to native Android apps for its C++ counterpart,
  * add_to_homescreen_installer.cc.
  */
+@NullMarked
 class AddToHomescreenInstaller {
     private static final String TAG = "AddToHomescreen";
 
@@ -26,7 +29,7 @@ class AddToHomescreenInstaller {
     private static boolean installOrOpenNativeApp(WebContents webContents, AppData appData) {
         Context context = ContextUtils.getApplicationContext();
         Intent launchIntent;
-        if (PackageUtils.isPackageInstalled(context, appData.packageName())) {
+        if (PackageUtils.isPackageInstalled(appData.packageName())) {
             launchIntent =
                     context.getPackageManager().getLaunchIntentForPackage(appData.packageName());
         } else {

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/macros.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "net/disk_cache/blockfile/addr.h"
 #include "net/disk_cache/blockfile/mapped_file.h"
 
@@ -35,22 +37,25 @@ template<typename T>
 class StorageBlock : public FileBlock {
  public:
   StorageBlock(MappedFile* file, Addr address);
-  virtual ~StorageBlock();
+
+  StorageBlock(const StorageBlock&) = delete;
+  StorageBlock& operator=(const StorageBlock&) = delete;
+
+  ~StorageBlock() override;
 
   // Deeps copies from another block. Neither this nor |other| should be
   // |modified|.
   void CopyFrom(StorageBlock<T>* other);
 
   // FileBlock interface.
-  void* buffer() const override;
-  size_t size() const override;
+  base::span<uint8_t> as_span() const override;
   int offset() const override;
 
   // Allows the overide of dummy values passed on the constructor.
   bool LazyInit(MappedFile* file, Addr address);
 
   // Sets the internal storage to share the memory provided by other instance.
-  void SetData(T* other);
+  void SetData(base::span<T> other);
 
   // Deletes the data, even if it was modified and not saved. This object must
   // own the memory buffer (it cannot be shared).
@@ -67,6 +72,10 @@ class StorageBlock : public FileBlock {
 
   // Gets a pointer to the internal storage (allocates storage if needed).
   T* Data();
+
+  // Gets a span containing all data stored. This can have multiple `T` if
+  // the address for the entry requests multiple blocks.
+  base::span<T> AllData() { return data_; }
 
   // Returns true if there is data associated with this object.
   bool HasData() const;
@@ -90,14 +99,15 @@ class StorageBlock : public FileBlock {
   void DeleteData();
   uint32_t CalculateHash() const;
 
-  T* data_;
-  MappedFile* file_;
-  Addr address_;
-  bool modified_;
-  bool own_data_;  // Is data_ owned by this object or shared with someone else.
-  bool extended_;  // Used to store an entry of more than one block.
+  base::HeapArray<T> owned_data_;
+  // This can point to either `owned_data_`, or externally.
+  base::raw_span<T> data_;
 
-  DISALLOW_COPY_AND_ASSIGN(StorageBlock);
+  // DanglingUntriaged is largely needed for when this class is owned by an
+  // EntryImpl that is deleted after the Backend.
+  raw_ptr<MappedFile, AcrossTasksDanglingUntriaged> file_;
+  Addr address_;
+  bool modified_ = false;
 };
 
 }  // namespace disk_cache

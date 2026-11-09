@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "content/browser/sms/sms_provider.h"
 #include "content/common/content_export.h"
 
@@ -25,13 +24,19 @@ class RenderFrameHost;
 class CONTENT_EXPORT SmsProviderGms : public SmsProvider {
  public:
   SmsProviderGms();
+
+  SmsProviderGms(const SmsProviderGms&) = delete;
+  SmsProviderGms& operator=(const SmsProviderGms&) = delete;
+
   ~SmsProviderGms() override;
 
   void Retrieve(RenderFrameHost* rfh, SmsFetchType fetch_type) override;
 
   // Implementation of corresponding JNI methods in SmsProviderGms.Natives.*
 
-  void OnReceive(JNIEnv*, jstring message, jint backend);
+  void OnReceive(JNIEnv*,
+                 const base::android::JavaRef<jstring>& message,
+                 int32_t backend);
   void OnTimeout(JNIEnv* env);
   void OnCancel(JNIEnv* env);
   void OnNotAvailable(JNIEnv* env);
@@ -42,8 +47,6 @@ class CONTENT_EXPORT SmsProviderGms : public SmsProvider {
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> j_sms_provider_;
-
-  DISALLOW_COPY_AND_ASSIGN(SmsProviderGms);
 };
 
 }  // namespace content

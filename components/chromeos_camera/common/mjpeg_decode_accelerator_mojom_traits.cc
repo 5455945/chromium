@@ -1,11 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/chromeos_camera/common/mjpeg_decode_accelerator_mojom_traits.h"
 
 #include "base/check.h"
+#include "base/memory/platform_shared_memory_region.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/notreached.h"
+#include "base/numerics/checked_math.h"
+#include "base/time/time.h"
 #include "media/base/ipc/media_param_traits_macros.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/system/platform_handle.h"
@@ -32,46 +36,40 @@ EnumTraits<chromeos_camera::mojom::DecodeError,
       return chromeos_camera::mojom::DecodeError::PLATFORM_FAILURE;
   }
   NOTREACHED();
-  return chromeos_camera::mojom::DecodeError::NO_ERRORS;
 }
 
 // static
-bool EnumTraits<chromeos_camera::mojom::DecodeError,
-                chromeos_camera::MjpegDecodeAccelerator::Error>::
-    FromMojom(chromeos_camera::mojom::DecodeError error,
-              chromeos_camera::MjpegDecodeAccelerator::Error* out) {
+chromeos_camera::MjpegDecodeAccelerator::Error
+EnumTraits<chromeos_camera::mojom::DecodeError,
+           chromeos_camera::MjpegDecodeAccelerator::Error>::
+    FromMojom(chromeos_camera::mojom::DecodeError error) {
   switch (error) {
     case chromeos_camera::mojom::DecodeError::NO_ERRORS:
-      *out = chromeos_camera::MjpegDecodeAccelerator::Error::NO_ERRORS;
-      return true;
+      return chromeos_camera::MjpegDecodeAccelerator::Error::NO_ERRORS;
     case chromeos_camera::mojom::DecodeError::INVALID_ARGUMENT:
-      *out = chromeos_camera::MjpegDecodeAccelerator::Error::INVALID_ARGUMENT;
-      return true;
+      return chromeos_camera::MjpegDecodeAccelerator::Error::INVALID_ARGUMENT;
     case chromeos_camera::mojom::DecodeError::UNREADABLE_INPUT:
-      *out = chromeos_camera::MjpegDecodeAccelerator::Error::UNREADABLE_INPUT;
-      return true;
+      return chromeos_camera::MjpegDecodeAccelerator::Error::UNREADABLE_INPUT;
     case chromeos_camera::mojom::DecodeError::PARSE_JPEG_FAILED:
-      *out = chromeos_camera::MjpegDecodeAccelerator::Error::PARSE_JPEG_FAILED;
-      return true;
+      return chromeos_camera::MjpegDecodeAccelerator::Error::PARSE_JPEG_FAILED;
     case chromeos_camera::mojom::DecodeError::UNSUPPORTED_JPEG:
-      *out = chromeos_camera::MjpegDecodeAccelerator::Error::UNSUPPORTED_JPEG;
-      return true;
+      return chromeos_camera::MjpegDecodeAccelerator::Error::UNSUPPORTED_JPEG;
     case chromeos_camera::mojom::DecodeError::PLATFORM_FAILURE:
-      *out = chromeos_camera::MjpegDecodeAccelerator::Error::PLATFORM_FAILURE;
-      return true;
+      return chromeos_camera::MjpegDecodeAccelerator::Error::PLATFORM_FAILURE;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
 mojo::ScopedSharedBufferHandle StructTraits<
     chromeos_camera::mojom::BitstreamBufferDataView,
     media::BitstreamBuffer>::memory_handle(media::BitstreamBuffer& input) {
-  base::subtle::PlatformSharedMemoryRegion input_region = input.TakeRegion();
+  base::subtle::PlatformSharedMemoryRegion input_region =
+      base::UnsafeSharedMemoryRegion::TakeHandleForSerialization(
+          input.TakeRegion());
   DCHECK(input_region.IsValid()) << "Bad BitstreamBuffer handle";
 
-  // TODO(https://crbug.com/793446): Split BitstreamBuffers into ReadOnly and
+  // TODO(crbug.com/40553989): Split BitstreamBuffers into ReadOnly and
   // Unsafe versions corresponding to usage, eg video encode accelerators will
   // use writable mappings but audio uses are readonly (see
   // android_video_encode_accelerator.cc and
@@ -104,14 +102,18 @@ bool StructTraits<chromeos_camera::mojom::BitstreamBufferDataView,
   if (!handle.is_valid())
     return false;
 
-  auto memory_region =
-      mojo::UnwrapPlatformSharedMemoryRegion(std::move(handle));
-  if (!memory_region.IsValid())
+  auto region = base::UnsafeSharedMemoryRegion::Deserialize(
+      mojo::UnwrapPlatformSharedMemoryRegion(std::move(handle)));
+  if (!region.IsValid())
     return false;
 
-  media::BitstreamBuffer bitstream_buffer(
-      input.id(), std::move(memory_region), input.size(),
-      base::checked_cast<off_t>(input.offset()), timestamp);
+  auto offset = base::CheckedNumeric(input.offset()).Cast<uint64_t>();
+  if (!offset.IsValid())
+    return false;
+
+  media::BitstreamBuffer bitstream_buffer(input.id(), std::move(region),
+                                          input.size(), offset.ValueOrDie(),
+                                          timestamp);
   if (key_id.size()) {
     // Note that BitstreamBuffer currently ignores how each buffer is
     // encrypted and uses the settings from the Audio/VideoDecoderConfig.

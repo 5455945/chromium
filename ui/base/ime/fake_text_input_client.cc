@@ -1,11 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/ime/fake_text_input_client.h"
 
 #include "base/check_op.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
+#include "ui/base/ime/input_method.h"
 #include "ui/events/event_constants.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -14,7 +15,22 @@ namespace ui {
 FakeTextInputClient::FakeTextInputClient(TextInputType text_input_type)
     : text_input_type_(text_input_type) {}
 
-FakeTextInputClient::~FakeTextInputClient() = default;
+FakeTextInputClient::FakeTextInputClient(Options options)
+    : FakeTextInputClient(/*input_method=*/nullptr, std::move(options)) {}
+
+FakeTextInputClient::FakeTextInputClient(InputMethod* input_method,
+                                         Options options)
+    : input_method_(input_method),
+      text_input_type_(options.type),
+      mode_(options.mode),
+      flags_(options.flags),
+      can_insert_image_(options.can_insert_image),
+      caret_bounds_(options.caret_bounds),
+      should_do_learning_(options.should_do_learning) {}
+
+FakeTextInputClient::~FakeTextInputClient() {
+  Blur();
+}
 
 void FakeTextInputClient::set_text_input_type(TextInputType text_input_type) {
   text_input_type_ = text_input_type;
@@ -26,9 +42,25 @@ void FakeTextInputClient::set_source_id(ukm::SourceId source_id) {
 
 void FakeTextInputClient::SetTextAndSelection(const std::u16string& text,
                                               gfx::Range selection) {
-  DCHECK_LE(selection_.end(), text.length());
+  CHECK_LE(selection_.end(), text.length(), base::NotFatalUntil::M163);
   text_ = text;
   selection_ = selection;
+}
+
+void FakeTextInputClient::Focus() {
+  if (input_method_ != nullptr) {
+    input_method_->SetFocusedTextInputClient(this);
+  }
+}
+
+void FakeTextInputClient::Blur() {
+  if (input_method_ != nullptr) {
+    input_method_->SetFocusedTextInputClient(nullptr);
+  }
+}
+
+base::WeakPtr<ui::TextInputClient> FakeTextInputClient::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void FakeTextInputClient::SetCompositionText(
@@ -39,8 +71,8 @@ void FakeTextInputClient::SetCompositionText(
   selection_ = gfx::Range(new_cursor, new_cursor);
 }
 
-uint32_t FakeTextInputClient::ConfirmCompositionText(bool keep_selection) {
-  return UINT32_MAX;
+size_t FakeTextInputClient::ConfirmCompositionText(bool keep_selection) {
+  return std::numeric_limits<size_t>::max();
 }
 
 void FakeTextInputClient::ClearCompositionText() {}
@@ -64,12 +96,20 @@ void FakeTextInputClient::InsertText(
 
 void FakeTextInputClient::InsertChar(const KeyEvent& event) {}
 
+bool FakeTextInputClient::CanInsertImage() {
+  return can_insert_image_;
+}
+
+void FakeTextInputClient::InsertImage(const GURL& src) {
+  last_inserted_image_url_ = src;
+}
+
 TextInputType FakeTextInputClient::GetTextInputType() const {
   return text_input_type_;
 }
 
 TextInputMode FakeTextInputClient::GetTextInputMode() const {
-  return TEXT_INPUT_MODE_NONE;
+  return mode_;
 }
 
 base::i18n::TextDirection FakeTextInputClient::GetTextDirection() const {
@@ -77,7 +117,15 @@ base::i18n::TextDirection FakeTextInputClient::GetTextDirection() const {
 }
 
 int FakeTextInputClient::GetTextInputFlags() const {
-  return EF_NONE;
+  return flags_;
+}
+
+void FakeTextInputClient::SetFlags(const int flags) {
+  flags_ = flags;
+}
+
+void FakeTextInputClient::SetUrl(const GURL& url) {
+  url_ = url;
 }
 
 bool FakeTextInputClient::CanComposeInline() const {
@@ -85,14 +133,27 @@ bool FakeTextInputClient::CanComposeInline() const {
 }
 
 gfx::Rect FakeTextInputClient::GetCaretBounds() const {
-  return {};
+  return caret_bounds_;
 }
 
 gfx::Rect FakeTextInputClient::GetSelectionBoundingBox() const {
   return {};
 }
 
-bool FakeTextInputClient::GetCompositionCharacterBounds(uint32_t index,
+#if BUILDFLAG(IS_WIN)
+std::optional<gfx::Rect> FakeTextInputClient::GetProximateCharacterBounds(
+    const gfx::Range& range) const {
+  return std::nullopt;
+}
+
+std::optional<size_t> FakeTextInputClient::GetProximateCharacterIndexFromPoint(
+    const gfx::Point& screen_point_in_dips,
+    IndexFromPointFlags flags) const {
+  return std::nullopt;
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+bool FakeTextInputClient::GetCompositionCharacterBounds(size_t index,
                                                         gfx::Rect* rect) const {
   return false;
 }
@@ -102,7 +163,7 @@ bool FakeTextInputClient::HasCompositionText() const {
 }
 
 ui::TextInputClient::FocusReason FakeTextInputClient::GetFocusReason() const {
-  return ui::TextInputClient::FOCUS_REASON_NONE;
+  return ui::TextInputClient::FOCUS_REASON_MOUSE;
 }
 
 bool FakeTextInputClient::GetTextRange(gfx::Range* range) const {
@@ -123,12 +184,18 @@ bool FakeTextInputClient::SetEditableSelectionRange(const gfx::Range& range) {
   return false;
 }
 
+#if BUILDFLAG(IS_MAC)
 bool FakeTextInputClient::DeleteRange(const gfx::Range& range) {
   return false;
 }
+#endif
 
 bool FakeTextInputClient::GetTextFromRange(const gfx::Range& range,
                                            std::u16string* text) const {
+  if (range.GetMax() <= text_.length()) {
+    *text = text_.substr(range.GetMin(), range.length());
+    return true;
+  }
   return false;
 }
 
@@ -157,10 +224,10 @@ ukm::SourceId FakeTextInputClient::GetClientSourceForMetrics() const {
 }
 
 bool FakeTextInputClient::ShouldDoLearning() {
-  return false;
+  return should_do_learning_;
 }
 
-#if defined(OS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 bool FakeTextInputClient::SetCompositionFromExistingText(
     const gfx::Range& range,
     const std::vector<ui::ImeTextSpan>& ui_ime_text_spans) {
@@ -173,7 +240,7 @@ bool FakeTextInputClient::SetCompositionFromExistingText(
 }
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 gfx::Range FakeTextInputClient::GetAutocorrectRange() const {
   return autocorrect_range_;
 }
@@ -188,15 +255,20 @@ bool FakeTextInputClient::SetAutocorrectRange(const gfx::Range& range) {
 }
 #endif
 
-#if defined(OS_WIN)
 void FakeTextInputClient::GetActiveTextInputControlLayoutBounds(
-    absl::optional<gfx::Rect>* control_bounds,
-    absl::optional<gfx::Rect>* selection_bounds) {}
+    std::optional<gfx::Rect>* control_bounds,
+    std::optional<gfx::Rect>* selection_bounds) {}
+
+#if BUILDFLAG(IS_WIN)
+ui::TextInputClient::EditingContext
+FakeTextInputClient::GetTextEditingContext() {
+  return EditingContext{.page_url = url_};
+}
 
 void FakeTextInputClient::SetActiveCompositionForAccessibility(
     const gfx::Range& range,
     const std::u16string& active_composition_text,
     bool is_composition_committed) {}
-#endif
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace ui

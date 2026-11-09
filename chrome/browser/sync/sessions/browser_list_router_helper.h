@@ -1,15 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_BROWSER_LIST_ROUTER_HELPER_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_BROWSER_LIST_ROUTER_HELPER_H_
 
-#include <set>
-
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/sync/sessions/sync_sessions_web_contents_router.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+
+class GlobalBrowserCollection;
 
 namespace sync_sessions {
 
@@ -17,17 +19,20 @@ namespace sync_sessions {
 // multi-window scenarios(e.g. tab movement between windows). Android doesn't
 // have a BrowserList or TabStrip, so it doesn't compile the needed
 // dependencies, nor would it benefit from the added tracking.
-class BrowserListRouterHelper : public BrowserListObserver,
+class BrowserListRouterHelper : public BrowserCollectionObserver,
                                 public TabStripModelObserver {
  public:
   explicit BrowserListRouterHelper(SyncSessionsWebContentsRouter* router,
                                    Profile* profile);
+
+  BrowserListRouterHelper(const BrowserListRouterHelper&) = delete;
+  BrowserListRouterHelper& operator=(const BrowserListRouterHelper&) = delete;
+
   ~BrowserListRouterHelper() override;
 
  private:
-  // BrowserListObserver implementation.
-  void OnBrowserAdded(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  // BrowserCollectionObserver implementation.
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
   // TabStripModelObserver implementation.
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
@@ -35,13 +40,12 @@ class BrowserListRouterHelper : public BrowserListObserver,
       const TabStripSelectionChange& selection) override;
 
   // |router_| owns |this|.
-  SyncSessionsWebContentsRouter* router_;
+  const raw_ptr<SyncSessionsWebContentsRouter> router_;
 
-  Profile* profile_;
+  const raw_ptr<Profile> profile_;
 
-  std::set<Browser*> attached_browsers_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserListRouterHelper);
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 };
 
 }  // namespace sync_sessions

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,15 @@
 #include <vector>
 
 #include "base/containers/span.h"
-#include "base/macros.h"
 #include "base/observer_list_types.h"
-#include "components/autofill/core/common/gaia_id_hash.h"
-#include "components/password_manager/core/browser/insecure_credentials_table.h"
+#include "components/password_manager/core/browser/password_form_metrics_recorder.h"
+#include "components/password_manager/core/browser/password_store/password_store_util.h"
+#include "components/signin/public/base/gaia_id_hash.h"
 
 namespace password_manager {
 
 struct InteractionsStats;
-struct PasswordForm;
+struct StoredCredential;
 
 // This is an API for providing stored credentials to PasswordFormManager (PFM),
 // so that PFM instances do not have to talk to PasswordStore directly. This
@@ -41,6 +41,9 @@ class FormFetcher {
   };
 
   FormFetcher() = default;
+
+  FormFetcher(const FormFetcher&) = delete;
+  FormFetcher& operator=(const FormFetcher&) = delete;
 
   virtual ~FormFetcher() = default;
 
@@ -65,17 +68,14 @@ class FormFetcher {
   virtual const std::vector<InteractionsStats>& GetInteractionsStats()
       const = 0;
 
-  // Insecure credentials records for the current site.
-  virtual base::span<const InsecureCredential> GetInsecureCredentials()
-      const = 0;
+  // Returns all StoredCredential entries that have insecure features.
+  virtual base::span<const StoredCredential> GetInsecureCredentials() const = 0;
 
-  // Non-federated matches obtained from the backend. Valid only if GetState()
-  // returns NOT_WAITING.
-  virtual std::vector<const PasswordForm*> GetNonFederatedMatches() const = 0;
+  // Non-federated matches obtained from the backend.
+  virtual base::span<const StoredCredential> GetNonFederatedMatches() const = 0;
 
-  // Federated matches obtained from the backend. Valid only if GetState()
-  // returns NOT_WAITING.
-  virtual std::vector<const PasswordForm*> GetFederatedMatches() const = 0;
+  // Federated matches obtained from the backend.
+  virtual base::span<const StoredCredential> GetFederatedMatches() const = 0;
 
   // Whether there are blocklisted matches in the backend. Valid only if
   // GetState() returns NOT_WAITING.
@@ -85,26 +85,41 @@ class FormFetcher {
   // local store to the account store for the user with
   // |destination| GaiaIdHash is blocked. This is relevant only for account
   // store users.
-  virtual bool IsMovingBlocked(const autofill::GaiaIdHash& destination,
+  virtual bool IsMovingBlocked(const signin::GaiaIdHash& destination,
                                const std::u16string& username) const = 0;
 
   // Non-federated matches obtained from the backend that have the same scheme
   // of this form.
-  virtual const std::vector<const PasswordForm*>& GetAllRelevantMatches()
-      const = 0;
+  virtual base::span<const StoredCredential> GetAllRelevantMatches() const = 0;
 
   // Nonblocklisted matches obtained from the backend.
-  virtual const std::vector<const PasswordForm*>& GetBestMatches() const = 0;
+  virtual base::span<const StoredCredential> GetBestMatches() const = 0;
 
   // Pointer to a preferred entry in the vector returned by GetBestMatches().
-  virtual const PasswordForm* GetPreferredMatch() const = 0;
+  virtual const StoredCredential* GetPreferredMatch() const = 0;
+
+  // If prefferred match exists, returns its form type. Please note, that
+  // `FormFetcher` ignored grouped credentials by default. However, if any
+  // grouped credentials are available, this function will return the form type
+  // of the potential grouped credential. `GetPreferredMatch` will still return
+  // `nullptr` in this case.
+  // Returns `std::nullopt` if no credentials were available.
+  virtual std::optional<PasswordFormMetricsRecorder::MatchedFormType>
+  GetPreferredOrPotentialMatchedFormType() const = 0;
 
   // Creates a copy of |*this| with contains the same credentials without the
   // need for calling Fetch().
   virtual std::unique_ptr<FormFetcher> Clone() = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(FormFetcher);
+  // Returns an error if it occurred during login retrieval from the
+  // profile store.
+  virtual std::optional<PasswordStoreBackendError> GetProfileStoreBackendError()
+      const = 0;
+
+  // Returns an error if it occurred during login retrieval from the
+  // account store.
+  virtual std::optional<PasswordStoreBackendError> GetAccountStoreBackendError()
+      const = 0;
 };
 
 }  // namespace password_manager

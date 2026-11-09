@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.filter;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor.ViewBinder;
@@ -12,6 +13,7 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor.ViewBinder;
  * A helper {@link ViewBinder} responsible for gluing {@link FilterProperties} to
  * {@link FilterView}.
  */
+@NullMarked
 class FilterViewBinder implements ViewBinder<PropertyModel, FilterView, PropertyKey> {
     @Override
     public void bind(PropertyModel model, FilterView view, PropertyKey propertyKey) {

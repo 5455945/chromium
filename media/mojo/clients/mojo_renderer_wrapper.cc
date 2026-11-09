@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,12 +42,20 @@ void MojoRendererWrapper::SetCdm(CdmContext* cdm_context,
 }
 
 void MojoRendererWrapper::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {
+    std::optional<base::TimeDelta> latency_hint) {
   mojo_renderer_->SetLatencyHint(latency_hint);
 }
 
 base::TimeDelta MojoRendererWrapper::GetMediaTime() {
   return mojo_renderer_->GetMediaTime();
+}
+
+void MojoRendererWrapper::OnTracksChanged(
+    DemuxerStream::Type track_type,
+    DemuxerStream* enabled_track,
+    base::OnceClosure change_completed_cb) {
+  mojo_renderer_->OnTracksChanged(track_type, enabled_track,
+                                  std::move(change_completed_cb));
 }
 
 }  // namespace media

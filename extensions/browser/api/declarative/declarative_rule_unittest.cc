@@ -1,20 +1,25 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/declarative/declarative_rule.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include <memory>
+#include <optional>
+
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "components/url_matcher/url_matcher_constants.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::test::ParseJson;
-using base::test::ParseJsonDeprecated;
+using base::test::ParseJsonDict;
 using url_matcher::URLMatcher;
 using url_matcher::URLMatcherConditionFactory;
 using url_matcher::URLMatcherConditionSet;
@@ -23,21 +28,20 @@ namespace extensions {
 
 namespace {
 
-std::unique_ptr<base::DictionaryValue> SimpleManifest() {
-  return DictionaryBuilder()
+base::DictValue SimpleManifest() {
+  return base::DictValue()
       .Set("name", "extension")
       .Set("manifest_version", 2)
-      .Set("version", "1.0")
-      .Build();
+      .Set("version", "1.0");
 }
 
 }  // namespace
 
 struct RecordingCondition {
-  typedef int MatchData;
+  using MatchData = int;
 
-  URLMatcherConditionFactory* factory;
-  std::unique_ptr<base::Value> value;
+  raw_ptr<URLMatcherConditionFactory> factory;
+  base::Value value;
 
   void GetURLMatcherConditionSets(
       URLMatcherConditionSet::Vector* condition_sets) const {
@@ -49,25 +53,24 @@ struct RecordingCondition {
       URLMatcherConditionFactory* url_matcher_condition_factory,
       const base::Value& condition,
       std::string* error) {
-    const base::DictionaryValue* dict = nullptr;
-    if (condition.GetAsDictionary(&dict) && dict->HasKey("bad_key")) {
+    if (condition.is_dict() && condition.GetDict().Find("bad_key")) {
       *error = "Found error key";
       return nullptr;
     }
 
-    std::unique_ptr<RecordingCondition> result(new RecordingCondition());
+    auto result = std::make_unique<RecordingCondition>();
     result->factory = url_matcher_condition_factory;
-    result->value.reset(condition.DeepCopy());
+    result->value = condition.Clone();
     return result;
   }
 };
-typedef DeclarativeConditionSet<RecordingCondition> RecordingConditionSet;
+using RecordingConditionSet = DeclarativeConditionSet<RecordingCondition>;
 
 TEST(DeclarativeConditionTest, ErrorConditionSet) {
   URLMatcher matcher;
-  RecordingConditionSet::Values conditions;
-  conditions.push_back(ParseJsonDeprecated("{\"key\": 1}"));
-  conditions.push_back(ParseJsonDeprecated("{\"bad_key\": 2}"));
+  base::ListValue conditions;
+  conditions.Append(ParseJson("{\"key\": 1}"));
+  conditions.Append(ParseJson("{\"bad_key\": 2}"));
 
   std::string error;
   std::unique_ptr<RecordingConditionSet> result = RecordingConditionSet::Create(
@@ -78,9 +81,9 @@ TEST(DeclarativeConditionTest, ErrorConditionSet) {
 
 TEST(DeclarativeConditionTest, CreateConditionSet) {
   URLMatcher matcher;
-  RecordingConditionSet::Values conditions;
-  conditions.push_back(ParseJsonDeprecated("{\"key\": 1}"));
-  conditions.push_back(ParseJsonDeprecated("[\"val1\", 2]"));
+  base::ListValue conditions;
+  conditions.Append(ParseJson("{\"key\": 1}"));
+  conditions.Append(ParseJson("[\"val1\", 2]"));
 
   // Test insertion
   std::string error;
@@ -91,21 +94,20 @@ TEST(DeclarativeConditionTest, CreateConditionSet) {
   EXPECT_EQ(2u, result->conditions().size());
 
   EXPECT_EQ(matcher.condition_factory(), result->conditions()[0]->factory);
-  EXPECT_TRUE(ParseJsonDeprecated("{\"key\": 1}")
-                  ->Equals(result->conditions()[0]->value.get()));
+  EXPECT_EQ(ParseJson("{\"key\": 1}"), result->conditions()[0]->value);
 }
 
 struct FulfillableCondition {
   struct MatchData {
     int value;
-    const std::set<URLMatcherConditionSet::ID>& url_matches;
+    const raw_ref<const std::set<base::MatcherStringPattern::ID>> url_matches;
   };
 
   scoped_refptr<URLMatcherConditionSet> condition_set;
-  int condition_set_id;
+  base::MatcherStringPattern::ID condition_set_id;
   int max_value;
 
-  URLMatcherConditionSet::ID url_matcher_condition_set_id() const {
+  base::MatcherStringPattern::ID url_matcher_condition_set_id() const {
     return condition_set_id;
   }
 
@@ -115,13 +117,14 @@ struct FulfillableCondition {
 
   void GetURLMatcherConditionSets(
       URLMatcherConditionSet::Vector* condition_sets) const {
-    if (condition_set.get())
+    if (condition_set.get()) {
       condition_sets->push_back(condition_set);
+    }
   }
 
   bool IsFulfilled(const MatchData& match_data) const {
-    if (condition_set_id != -1 &&
-        !base::Contains(match_data.url_matches, condition_set_id))
+    if (condition_set_id != base::MatcherStringPattern::kInvalidId &&
+        !match_data.url_matches->contains(condition_set_id))
       return false;
     return match_data.value <= max_value;
   }
@@ -131,17 +134,22 @@ struct FulfillableCondition {
       URLMatcherConditionFactory* url_matcher_condition_factory,
       const base::Value& condition,
       std::string* error) {
-    std::unique_ptr<FulfillableCondition> result(new FulfillableCondition());
-    const base::DictionaryValue* dict;
-    if (!condition.GetAsDictionary(&dict)) {
+    auto result = std::make_unique<FulfillableCondition>();
+    if (!condition.is_dict()) {
       *error = "Expected dict";
       return result;
     }
-    if (!dict->GetInteger("url_id", &result->condition_set_id))
-      result->condition_set_id = -1;
-    if (!dict->GetInteger("max", &result->max_value))
+    const base::DictValue& dict = condition.GetDict();
+    const auto id = dict.FindInt("url_id");
+    result->condition_set_id =
+        id.has_value() ? static_cast<base::MatcherStringPattern::ID>(id.value())
+                       : base::MatcherStringPattern::kInvalidId;
+    if (std::optional<int> max_value_int = dict.FindInt("max")) {
+      result->max_value = *max_value_int;
+    } else {
       *error = "Expected integer at ['max']";
-    if (result->condition_set_id != -1) {
+    }
+    if (result->condition_set_id != base::MatcherStringPattern::kInvalidId) {
       result->condition_set = new URLMatcherConditionSet(
           result->condition_set_id,
           URLMatcherConditionSet::Conditions());
@@ -151,12 +159,12 @@ struct FulfillableCondition {
 };
 
 TEST(DeclarativeConditionTest, FulfillConditionSet) {
-  typedef DeclarativeConditionSet<FulfillableCondition> FulfillableConditionSet;
-  FulfillableConditionSet::Values conditions;
-  conditions.push_back(ParseJsonDeprecated("{\"url_id\": 1, \"max\": 3}"));
-  conditions.push_back(ParseJsonDeprecated("{\"url_id\": 2, \"max\": 5}"));
-  conditions.push_back(ParseJsonDeprecated("{\"url_id\": 3, \"max\": 1}"));
-  conditions.push_back(ParseJsonDeprecated("{\"max\": -5}"));  // No url.
+  using FulfillableConditionSet = DeclarativeConditionSet<FulfillableCondition>;
+  base::ListValue conditions;
+  conditions.Append(ParseJson("{\"url_id\": 1, \"max\": 3}"));
+  conditions.Append(ParseJson("{\"url_id\": 2, \"max\": 5}"));
+  conditions.Append(ParseJson("{\"url_id\": 3, \"max\": 1}"));
+  conditions.Append(ParseJson("{\"max\": -5}"));  // No url.
 
   // Test insertion
   std::string error;
@@ -166,8 +174,8 @@ TEST(DeclarativeConditionTest, FulfillConditionSet) {
   ASSERT_TRUE(result);
   EXPECT_EQ(4u, result->conditions().size());
 
-  std::set<URLMatcherConditionSet::ID> url_matches;
-  FulfillableCondition::MatchData match_data = { 0, url_matches };
+  std::set<base::MatcherStringPattern::ID> url_matches;
+  FulfillableCondition::MatchData match_data = {0, raw_ref(url_matches)};
   EXPECT_FALSE(result->IsFulfilled(1, match_data))
       << "Testing an ID that's not in url_matches forwards to the Condition, "
       << "which doesn't match.";
@@ -195,16 +203,16 @@ TEST(DeclarativeConditionTest, FulfillConditionSet) {
   URLMatcherConditionSet::Vector condition_sets;
   result->GetURLMatcherConditionSets(&condition_sets);
   ASSERT_EQ(3U, condition_sets.size());
-  EXPECT_EQ(1, condition_sets[0]->id());
-  EXPECT_EQ(2, condition_sets[1]->id());
-  EXPECT_EQ(3, condition_sets[2]->id());
+  EXPECT_EQ(1U, condition_sets[0]->id());
+  EXPECT_EQ(2U, condition_sets[1]->id());
+  EXPECT_EQ(3U, condition_sets[2]->id());
 }
 
 // DeclarativeAction
 
 class SummingAction : public base::RefCounted<SummingAction> {
  public:
-  typedef int ApplyInfo;
+  using ApplyInfo = int;
 
   SummingAction(int increment, int min_priority)
       : increment_(increment), min_priority_(min_priority) {}
@@ -212,29 +220,27 @@ class SummingAction : public base::RefCounted<SummingAction> {
   static scoped_refptr<const SummingAction> Create(
       content::BrowserContext* browser_context,
       const Extension* extension,
-      const base::Value& action,
+      const base::DictValue& dict,
       std::string* error,
       bool* bad_message) {
-    int increment = 0;
-    int min_priority = 0;
-    const base::DictionaryValue* dict = nullptr;
-    EXPECT_TRUE(action.GetAsDictionary(&dict));
-    if (dict->HasKey("error")) {
-      EXPECT_TRUE(dict->GetString("error", error));
+    if (const base::Value* value = dict.Find("error")) {
+      EXPECT_TRUE(value->is_string());
+      *error = value->GetString();
       return nullptr;
     }
-    if (dict->HasKey("bad")) {
+    if (dict.Find("bad")) {
       *bad_message = true;
       return nullptr;
     }
 
-    EXPECT_TRUE(dict->GetInteger("value", &increment));
-    dict->GetInteger("priority", &min_priority);
+    std::optional<int> increment = dict.FindInt("value");
+    EXPECT_TRUE(increment);
+    int min_priority = dict.FindInt("priority").value_or(0);
     return scoped_refptr<const SummingAction>(
-        new SummingAction(increment, min_priority));
+        new SummingAction(*increment, min_priority));
   }
 
-  void Apply(const std::string& extension_id,
+  void Apply(const ExtensionId& extension_id,
              const base::Time& install_time,
              int* sum) const {
     *sum += increment_;
@@ -252,12 +258,12 @@ class SummingAction : public base::RefCounted<SummingAction> {
   int increment_;
   int min_priority_;
 };
-typedef DeclarativeActionSet<SummingAction> SummingActionSet;
+using SummingActionSet = DeclarativeActionSet<SummingAction>;
 
 TEST(DeclarativeActionTest, ErrorActionSet) {
-  SummingActionSet::Values actions;
-  actions.push_back(ParseJsonDeprecated("{\"value\": 1}"));
-  actions.push_back(ParseJsonDeprecated("{\"error\": \"the error\"}"));
+  base::ListValue actions;
+  actions.Append(ParseJson("{\"value\": 1}"));
+  actions.Append(ParseJson("{\"error\": \"the error\"}"));
 
   std::string error;
   bool bad = false;
@@ -268,8 +274,8 @@ TEST(DeclarativeActionTest, ErrorActionSet) {
   EXPECT_FALSE(result);
 
   actions.clear();
-  actions.push_back(ParseJsonDeprecated("{\"value\": 1}"));
-  actions.push_back(ParseJsonDeprecated("{\"bad\": 3}"));
+  actions.Append(ParseJson("{\"value\": 1}"));
+  actions.Append(ParseJson("{\"bad\": 3}"));
   result = SummingActionSet::Create(nullptr, nullptr, actions, &error, &bad);
   EXPECT_EQ("", error);
   EXPECT_TRUE(bad);
@@ -277,11 +283,9 @@ TEST(DeclarativeActionTest, ErrorActionSet) {
 }
 
 TEST(DeclarativeActionTest, ApplyActionSet) {
-  SummingActionSet::Values actions;
-  actions.push_back(
-      ParseJsonDeprecated("{\"value\": 1,"
-                          " \"priority\": 5}"));
-  actions.push_back(ParseJsonDeprecated("{\"value\": 2}"));
+  base::ListValue actions;
+  actions.Append(ParseJson("{\"value\": 1, \"priority\": 5}"));
+  actions.Append(ParseJson("{\"value\": 2}"));
 
   // Test insertion
   std::string error;
@@ -300,9 +304,8 @@ TEST(DeclarativeActionTest, ApplyActionSet) {
 }
 
 TEST(DeclarativeRuleTest, Create) {
-  typedef DeclarativeRule<FulfillableCondition, SummingAction> Rule;
-  Rule::JsonRule json_rule;
-  ASSERT_TRUE(Rule::JsonRule::Populate(ParseJson(R"(
+  using Rule = DeclarativeRule<FulfillableCondition, SummingAction>;
+  auto json_rule = Rule::JsonRule::FromValue(ParseJsonDict(R"(
       {
         "id": "rule1",
         "conditions": [
@@ -315,8 +318,8 @@ TEST(DeclarativeRuleTest, Create) {
           }
         ],
         "priority": 200
-      })"),
-                                       &json_rule));
+      })"));
+  ASSERT_TRUE(json_rule);
 
   const char kExtensionId[] = "ext1";
   scoped_refptr<const Extension> extension = ExtensionBuilder()
@@ -330,7 +333,7 @@ TEST(DeclarativeRuleTest, Create) {
   std::string error;
   std::unique_ptr<Rule> rule(Rule::Create(
       matcher.condition_factory(), nullptr, extension.get(), install_time,
-      json_rule, Rule::ConsistencyChecker(), &error));
+      *json_rule, Rule::ConsistencyChecker(), &error));
   EXPECT_EQ("", error);
   ASSERT_TRUE(rule.get());
 
@@ -368,17 +371,16 @@ bool AtLeastOneCondition(
 }
 
 TEST(DeclarativeRuleTest, CheckConsistency) {
-  typedef DeclarativeRule<FulfillableCondition, SummingAction> Rule;
+  using Rule = DeclarativeRule<FulfillableCondition, SummingAction>;
   URLMatcher matcher;
   std::string error;
-  Rule::JsonRule json_rule;
   const char kExtensionId[] = "ext1";
   scoped_refptr<const Extension> extension = ExtensionBuilder()
                                                  .SetManifest(SimpleManifest())
                                                  .SetID(kExtensionId)
                                                  .Build();
 
-  ASSERT_TRUE(Rule::JsonRule::Populate(ParseJson(R"(
+  auto json_rule = Rule::JsonRule::FromValue(ParseJsonDict(R"(
       {
         "id": "rule1",
         "conditions": [
@@ -391,15 +393,15 @@ TEST(DeclarativeRuleTest, CheckConsistency) {
           }
         ],
         "priority": 200
-      })"),
-                                       &json_rule));
+      })"));
+  ASSERT_TRUE(json_rule);
   std::unique_ptr<Rule> rule(Rule::Create(
       matcher.condition_factory(), nullptr, extension.get(), base::Time(),
-      json_rule, base::BindOnce(AtLeastOneCondition), &error));
+      *json_rule, base::BindOnce(AtLeastOneCondition), &error));
   EXPECT_TRUE(rule);
   EXPECT_EQ("", error);
 
-  ASSERT_TRUE(Rule::JsonRule::Populate(ParseJson(R"({
+  json_rule = Rule::JsonRule::FromValue(ParseJsonDict(R"({
                                                    "id": "rule1",
                                                    "conditions": [
                                                    ],
@@ -409,10 +411,10 @@ TEST(DeclarativeRuleTest, CheckConsistency) {
                                                      }
                                                    ],
                                                    "priority": 200
-                                                 })"),
-                                       &json_rule));
+                                                 })"));
+  ASSERT_TRUE(json_rule);
   rule = Rule::Create(matcher.condition_factory(), nullptr, extension.get(),
-                      base::Time(), json_rule,
+                      base::Time(), *json_rule,
                       base::BindOnce(AtLeastOneCondition), &error);
   EXPECT_FALSE(rule);
   EXPECT_EQ("No conditions", error);

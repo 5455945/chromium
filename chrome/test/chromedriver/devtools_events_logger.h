@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <string>
 #include <unordered_set>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_event_listener.h"
 #include "chrome/test/chromedriver/chrome/log.h"
@@ -27,21 +27,22 @@ class DevToolsEventsLogger : public DevToolsEventListener {
   // Creates a |DevToolsEventsLogger| with specific preferences.
   DevToolsEventsLogger(Log* log, const base::Value& prefs);
 
+  DevToolsEventsLogger(const DevToolsEventsLogger&) = delete;
+  DevToolsEventsLogger& operator=(const DevToolsEventsLogger&) = delete;
+
   ~DevToolsEventsLogger() override;
 
   Status OnConnected(DevToolsClient* client) override;
 
   Status OnEvent(DevToolsClient* client,
                  const std::string& method,
-                 const base::DictionaryValue& params) override;
+                 const base::DictValue& params) override;
 
  private:
-  Log* log_;  // The log where to create entries.
+  raw_ptr<Log> log_;  // The log where to create entries.
 
-  const base::Value& prefs_;
+  const raw_ref<const base::Value> prefs_;
   std::unordered_set<std::string> events_;
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsEventsLogger);
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_DEVTOOLS_EVENTS_LOGGER_H_

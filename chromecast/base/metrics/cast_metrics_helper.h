@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/values.h"
 
@@ -31,7 +31,8 @@ namespace metrics {
 // Currently, browser startup code should instantiate this once; it can be
 // accessed thereafter through GetInstance. It's not deleted since it may be
 // called during teardown of other global objects.
-// TODO(halliwell): convert to mojo service, eliminate singleton pattern.
+// TODO(halliwell,guohuideng): convert to mojo service, eliminate singleton
+// pattern.
 class CastMetricsHelper {
  public:
   enum BufferingType {
@@ -60,14 +61,16 @@ class CastMetricsHelper {
   // Decodes action_name/app_id/session_id/sdk_version from metrics name.
   // Return false if the metrics name is not generated from
   // EncodeAppInfoIntoMetricsName() with correct format.
-  static bool DecodeAppInfoFromMetricsName(
-      const std::string& metrics_name,
-      std::string* action_name,
-      std::string* app_id,
-      std::string* session_id,
-      std::string* sdk_version);
+  static bool DecodeAppInfoFromMetricsName(std::string_view metrics_name,
+                                           std::string* action_name,
+                                           std::string* app_id,
+                                           std::string* session_id,
+                                           std::string* sdk_version);
 
   static CastMetricsHelper* GetInstance();
+
+  CastMetricsHelper(const CastMetricsHelper&) = delete;
+  CastMetricsHelper& operator=(const CastMetricsHelper&) = delete;
 
   // This records the startup time of an app load (note: another app
   // may be running and still collecting metrics).
@@ -98,6 +101,11 @@ class CastMetricsHelper {
                                       const std::string& event);
   virtual void RecordApplicationEventWithValue(const std::string& event,
                                                int value);
+  virtual void RecordApplicationEventWithValue(const std::string& app_id,
+                                               const std::string& session_id,
+                                               const std::string& sdk_version,
+                                               const std::string& event,
+                                               int value);
 
   // Logs UMA record of the time the app made its first paint.
   virtual void LogTimeToFirstPaint();
@@ -110,9 +118,8 @@ class CastMetricsHelper {
                                  base::TimeDelta time);
 
   // Returns metrics name with app name between prefix and suffix.
-  virtual std::string GetMetricsNameWithAppName(
-      const std::string& prefix,
-      const std::string& suffix) const;
+  virtual std::string GetMetricsNameWithAppName(std::string_view prefix,
+                                                std::string_view suffix) const;
 
   // Provides a MetricsSink instance to delegate UMA event logging.
   // Once the delegate interface is set, CastMetricsHelper will not log UMA
@@ -130,11 +137,10 @@ class CastMetricsHelper {
   void SetDummySessionIdForTesting();
 
  private:
-  static std::string EncodeAppInfoIntoMetricsName(
-      const std::string& action_name,
-      const std::string& app_id,
-      const std::string& session_id,
-      const std::string& sdk_version);
+  static std::string EncodeAppInfoIntoMetricsName(std::string_view action_name,
+                                                  std::string_view app_id,
+                                                  std::string_view session_id,
+                                                  std::string_view sdk_version);
 
   friend class base::NoDestructor<CastMetricsHelper>;
   friend class CastMetricsHelperTest;
@@ -143,7 +149,7 @@ class CastMetricsHelper {
   // |tick_clock| just provided for unit test to construct; normally it should
   // be nullptr when accessed through GetInstance.
   CastMetricsHelper(scoped_refptr<base::SequencedTaskRunner> task_runner =
-                        base::SequencedTaskRunnerHandle::Get(),
+                        base::SequencedTaskRunner::GetCurrentDefault(),
                     const base::TickClock* tick_clock = nullptr);
   virtual ~CastMetricsHelper();
 
@@ -156,11 +162,11 @@ class CastMetricsHelper {
                              int num_buckets);
   void LogMediumTimeHistogramEvent(const std::string& name,
                                    base::TimeDelta value);
-  base::Value CreateEventBase(const std::string& name);
+  base::DictValue CreateEventBase(const std::string& name);
   base::TimeTicks Now();
 
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
-  const base::TickClock* const tick_clock_;
+  const raw_ptr<const base::TickClock> tick_clock_;
 
   // Start times for loading the next apps.
   base::flat_map<std::string /* app_id */, base::TimeTicks>
@@ -174,14 +180,12 @@ class CastMetricsHelper {
   std::string session_id_;
   std::string sdk_version_;
 
-  MetricsSink* metrics_sink_;
+  raw_ptr<MetricsSink> metrics_sink_;
 
   bool logged_first_audio_;
 
   // Default RecordAction callback when metrics_sink_ is not set.
   RecordActionCallback record_action_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastMetricsHelper);
 };
 
 }  // namespace metrics

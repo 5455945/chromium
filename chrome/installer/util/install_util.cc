@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,16 +7,19 @@
 
 #include "chrome/installer/util/install_util.h"
 
+#include <windows.h>
+
 #include <shellapi.h>
 #include <shlobj.h>
 
 #include <algorithm>
 #include <iterator>
+#include <string_view>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
@@ -243,10 +246,10 @@ base::Version InstallUtil::GetCriticalUpdateVersion() {
 }
 
 bool InstallUtil::IsOSSupported() {
-  // We do not support anything prior to Windows 7.
+  // We do not support anything prior to Windows 10.
   VLOG(1) << base::SysInfo::OperatingSystemName() << ' '
           << base::SysInfo::OperatingSystemVersion();
-  return base::win::GetVersion() >= base::win::Version::WIN7;
+  return base::win::GetVersion() >= base::win::Version::WIN10;
 }
 
 void InstallUtil::AddInstallerResultItems(bool system_install,
@@ -335,6 +338,27 @@ bool InstallUtil::IsStartMenuShortcutWithActivatorGuidInstalled() {
 }
 
 // static
+bool InstallUtil::IsRunningAsInteractiveUser() {
+  // Get the SID for interactive user.
+  DWORD sid_size = SECURITY_MAX_SID_SIZE;
+  uint8_t sid_bytes[SECURITY_MAX_SID_SIZE] = {};
+  SID* interactive_sid = reinterpret_cast<SID*>(sid_bytes);
+  if (!::CreateWellKnownSid(WinInteractiveSid, nullptr, interactive_sid,
+                            &sid_size)) {
+    PLOG(ERROR) << "Failed to create well known SID";
+    return false;
+  }
+
+  BOOL is_member = FALSE;
+  if (!::CheckTokenMembership(nullptr, interactive_sid, &is_member)) {
+    PLOG(ERROR) << "Failed to check token membership for WinInteractiveSid";
+    return false;
+  }
+
+  return is_member;
+}
+
+// static
 std::wstring InstallUtil::GetToastActivatorRegistryPath() {
   return L"Software\\Classes\\CLSID\\" +
          base::win::WStringFromGUID(install_static::GetToastActivatorClsid());
@@ -347,110 +371,6 @@ bool InstallUtil::GetEulaSentinelFilePath(base::FilePath* path) {
     return false;
   *path = user_data_dir.Append(installer::kEulaSentinelFile);
   return true;
-}
-
-// This method tries to delete a registry key and logs an error message
-// in case of failure. It returns true if deletion is successful (or the key did
-// not exist), otherwise false.
-bool InstallUtil::DeleteRegistryKey(HKEY root_key,
-                                    const std::wstring& key_path,
-                                    REGSAM wow64_access) {
-  VLOG(1) << "Deleting registry key " << key_path;
-  RegKey target_key;
-  LONG result =
-      target_key.Open(root_key, key_path.c_str(), DELETE | wow64_access);
-
-  if (result == ERROR_FILE_NOT_FOUND)
-    return true;
-
-  if (result == ERROR_SUCCESS)
-    result = target_key.DeleteKey(L"");
-
-  if (result != ERROR_SUCCESS) {
-    LOG(ERROR) << "Failed to delete registry key: " << key_path
-               << " error: " << result;
-    return false;
-  }
-  return true;
-}
-
-// This method tries to delete a registry value and logs an error message
-// in case of failure. It returns true if deletion is successful (or the key did
-// not exist), otherwise false.
-bool InstallUtil::DeleteRegistryValue(HKEY reg_root,
-                                      const std::wstring& key_path,
-                                      REGSAM wow64_access,
-                                      const std::wstring& value_name) {
-  RegKey key;
-  LONG result =
-      key.Open(reg_root, key_path.c_str(), KEY_SET_VALUE | wow64_access);
-  if (result == ERROR_SUCCESS)
-    result = key.DeleteValue(value_name.c_str());
-  if (result != ERROR_SUCCESS && result != ERROR_FILE_NOT_FOUND) {
-    LOG(ERROR) << "Failed to delete registry value: " << value_name
-               << " error: " << result;
-    return false;
-  }
-  return true;
-}
-
-// static
-InstallUtil::ConditionalDeleteResult InstallUtil::DeleteRegistryKeyIf(
-    HKEY root_key,
-    const std::wstring& key_to_delete_path,
-    const std::wstring& key_to_test_path,
-    const REGSAM wow64_access,
-    const wchar_t* value_name,
-    const RegistryValuePredicate& predicate) {
-  DCHECK(root_key);
-  ConditionalDeleteResult delete_result = NOT_FOUND;
-  RegKey key;
-  std::wstring actual_value;
-  if (key.Open(root_key, key_to_test_path.c_str(),
-               KEY_QUERY_VALUE | wow64_access) == ERROR_SUCCESS &&
-      key.ReadValue(value_name, &actual_value) == ERROR_SUCCESS &&
-      predicate.Evaluate(actual_value)) {
-    key.Close();
-    delete_result =
-        DeleteRegistryKey(root_key, key_to_delete_path, wow64_access)
-            ? DELETED
-            : DELETE_FAILED;
-  }
-  return delete_result;
-}
-
-// static
-InstallUtil::ConditionalDeleteResult InstallUtil::DeleteRegistryValueIf(
-    HKEY root_key,
-    const wchar_t* key_path,
-    REGSAM wow64_access,
-    const wchar_t* value_name,
-    const RegistryValuePredicate& predicate) {
-  DCHECK(root_key);
-  DCHECK(key_path);
-  ConditionalDeleteResult delete_result = NOT_FOUND;
-  RegKey key;
-  std::wstring actual_value;
-  if (key.Open(root_key, key_path,
-               KEY_QUERY_VALUE | KEY_SET_VALUE | wow64_access) ==
-          ERROR_SUCCESS &&
-      key.ReadValue(value_name, &actual_value) == ERROR_SUCCESS &&
-      predicate.Evaluate(actual_value)) {
-    LONG result = key.DeleteValue(value_name);
-    if (result != ERROR_SUCCESS) {
-      LOG(ERROR) << "Failed to delete registry value: "
-                 << (value_name ? value_name : L"(Default)")
-                 << " error: " << result;
-      delete_result = DELETE_FAILED;
-    } else {
-      delete_result = DELETED;
-    }
-  }
-  return delete_result;
-}
-
-bool InstallUtil::ValueEquals::Evaluate(const std::wstring& value) const {
-  return value == value_to_match_;
 }
 
 // static
@@ -494,9 +414,9 @@ void InstallUtil::AppendModeAndChannelSwitches(
 // static
 std::wstring InstallUtil::GetCurrentDate() {
   static const wchar_t kDateFormat[] = L"yyyyMMdd";
-  wchar_t date_str[base::size(kDateFormat)] = {0};
+  wchar_t date_str[std::size(kDateFormat)] = {};
   int len = GetDateFormatW(LOCALE_INVARIANT, 0, nullptr, kDateFormat, date_str,
-                           base::size(date_str));
+                           std::size(date_str));
   if (len) {
     --len;  // Subtract terminating \0.
   } else {
@@ -506,26 +426,8 @@ std::wstring InstallUtil::GetCurrentDate() {
   return std::wstring(date_str, len);
 }
 
-// Open |path| with minimal access to obtain information about it, returning
-// true and populating |file| on success.
 // static
-bool InstallUtil::ProgramCompare::OpenForInfo(const base::FilePath& path,
-                                              base::File* file) {
-  DCHECK(file);
-  file->Initialize(path, base::File::FLAG_OPEN | base::File::FLAG_SHARE_DELETE);
-  return file->IsValid();
-}
-
-// Populate |info| for |file|, returning true on success.
-// static
-bool InstallUtil::ProgramCompare::GetInfo(const base::File& file,
-                                          BY_HANDLE_FILE_INFORMATION* info) {
-  DCHECK(file.IsValid());
-  return GetFileInformationByHandle(file.GetPlatformFile(), info) != 0;
-}
-
-// static
-absl::optional<base::Version> InstallUtil::GetDowngradeVersion() {
+std::optional<base::Version> InstallUtil::GetDowngradeVersion() {
   RegKey key;
   std::wstring downgrade_version;
   if (key.Open(install_static::IsSystemInstall() ? HKEY_LOCAL_MACHINE
@@ -535,11 +437,11 @@ absl::optional<base::Version> InstallUtil::GetDowngradeVersion() {
       key.ReadValue(installer::kRegDowngradeVersion, &downgrade_version) !=
           ERROR_SUCCESS ||
       downgrade_version.empty()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   base::Version version(base::WideToASCII(downgrade_version));
   if (!version.IsValid())
-    return absl::nullopt;
+    return std::nullopt;
   return version;
 }
 
@@ -557,28 +459,34 @@ InstallUtil::GetCloudManagementEnrollmentTokenRegistryPaths() {
 }
 
 // static
-std::pair<base::win::RegKey, std::wstring>
-InstallUtil::GetCloudManagementDmTokenLocation(
-    ReadOnly read_only,
-    BrowserLocation browser_location) {
-  // The location dictates the path and WoW bit.
-  REGSAM wow_access = 0;
-  std::wstring key_path(L"SOFTWARE\\");
+std::pair<std::wstring, std::wstring>
+InstallUtil::GetCloudManagementDmTokenPath(BrowserLocation browser_location) {
+  std::wstring key_path = L"SOFTWARE\\";
   if (browser_location) {
-    wow_access |= KEY_WOW64_64KEY;
     install_static::AppendChromeInstallSubDirectory(
         install_static::InstallDetails::Get().mode(), /*include_suffix=*/false,
         &key_path);
   } else {
-    wow_access |= KEY_WOW64_32KEY;
     key_path.append(install_static::kCompanyPathName);
   }
   key_path.append(L"\\Enrollment");
 
+  return {key_path, L"dmtoken"};
+}
+
+// static
+std::pair<base::win::RegKey, std::wstring>
+InstallUtil::GetCloudManagementDmTokenLocation(
+    ReadOnly read_only,
+    BrowserLocation browser_location) {
+  // The location dictates the WoW bit.
+  REGSAM wow_access = browser_location ? KEY_WOW64_64KEY : KEY_WOW64_32KEY;
+  auto [key_path, value_name] = GetCloudManagementDmTokenPath(browser_location);
+
   base::win::RegKey key;
   if (read_only) {
-    key.Open(HKEY_LOCAL_MACHINE, key_path.c_str(),
-             KEY_QUERY_VALUE | wow_access);
+    (void)key.Open(HKEY_LOCAL_MACHINE, key_path.c_str(),
+                   KEY_QUERY_VALUE | wow_access);
   } else {
     auto result = key.Create(HKEY_LOCAL_MACHINE, key_path.c_str(),
                              KEY_SET_VALUE | wow_access);
@@ -589,7 +497,33 @@ InstallUtil::GetCloudManagementDmTokenLocation(
     }
   }
 
-  return {std::move(key), L"dmtoken"};
+  return {std::move(key), value_name};
+}
+
+// static
+std::tuple<base::win::RegKey, std::wstring, std::wstring>
+InstallUtil::GetDeviceTrustSigningKeyLocation(ReadOnly read_only) {
+  // The location dictates the path and WoW bit.
+  std::wstring key_path = L"SOFTWARE\\";
+  install_static::AppendChromeInstallSubDirectory(
+      install_static::InstallDetails::Get().mode(), /*include_suffix=*/false,
+      &key_path)
+      .append(L"\\DeviceTrust");
+  base::win::RegKey key;
+  if (read_only) {
+    (void)key.Open(HKEY_LOCAL_MACHINE, key_path.c_str(),
+                   KEY_QUERY_VALUE | KEY_WOW64_64KEY);
+  } else {
+    auto result = key.Create(HKEY_LOCAL_MACHINE, key_path.c_str(),
+                             KEY_SET_VALUE | KEY_WOW64_64KEY);
+    if (result != ERROR_SUCCESS) {
+      ::SetLastError(result);
+      PLOG(ERROR) << "Failed to create/open registry key HKLM\\" << key_path
+                  << " for writing";
+    }
+  }
+
+  return {std::move(key), L"signing_key", L"trust_level"};
 }
 
 // static
@@ -602,7 +536,7 @@ std::wstring InstallUtil::GetCloudManagementEnrollmentToken() {
   // way for administrators to enroll chrome throughout their fleet by pushing
   // this token via SCCM.
   // TODO(rogerta): This may not be the best place for the helpers dealing with
-  // the enrollment and/or DM tokens.  See crbug.com/823852 for details.
+  // the enrollment and/or DM tokens.  See crbug.com/41377717 for details.
   RegKey key;
   std::wstring value;
   for (const auto& key_and_value :
@@ -653,11 +587,6 @@ std::wstring InstallUtil::GetShortcutName() {
 }
 
 // static
-std::wstring InstallUtil::GetChromeShortcutDirNameDeprecated() {
-  return GetShortcutName();
-}
-
-// static
 std::wstring InstallUtil::GetChromeAppsShortcutDirName() {
   // IDS_APP_SHORTCUTS_SUBDIR_NAME is automatically mapped to the mode-specific
   // dir name; see MODE_SPECIFIC_STRINGS in prebuild/create_string_rc.py.
@@ -669,62 +598,11 @@ std::wstring InstallUtil::GetLongAppDescription() {
   return installer::GetLocalizedString(IDS_PRODUCT_DESCRIPTION_BASE);
 }
 
-InstallUtil::ProgramCompare::ProgramCompare(const base::FilePath& path_to_match)
-    : path_to_match_(path_to_match), file_info_() {
-  DCHECK(!path_to_match_.empty());
-  if (!OpenForInfo(path_to_match_, &file_)) {
-    PLOG(WARNING) << "Failed opening " << path_to_match_.value()
-                  << "; falling back to path string comparisons.";
-  } else if (!GetInfo(file_, &file_info_)) {
-    PLOG(WARNING) << "Failed getting information for " << path_to_match_.value()
-                  << "; falling back to path string comparisons.";
-    file_.Close();
-  }
-}
-
-InstallUtil::ProgramCompare::~ProgramCompare() {}
-
-bool InstallUtil::ProgramCompare::Evaluate(const std::wstring& value) const {
-  // Suss out the exe portion of the value, which is expected to be a command
-  // line kinda (or exactly) like:
-  // "c:\foo\bar\chrome.exe" -- "%1"
-  base::FilePath program(base::CommandLine::FromString(value).GetProgram());
-  if (program.empty()) {
-    LOG(WARNING) << "Failed to parse an executable name from command line: \""
-                 << value << "\"";
-    return false;
-  }
-
-  return EvaluatePath(program);
-}
-
-bool InstallUtil::ProgramCompare::EvaluatePath(
-    const base::FilePath& path) const {
-  // Try the simple thing first: do the paths happen to match?
-  if (base::FilePath::CompareEqualIgnoreCase(path_to_match_.value(),
-                                             path.value()))
-    return true;
-
-  // If the paths don't match and we couldn't open the expected file, we've done
-  // our best.
-  if (!file_.IsValid())
-    return false;
-
-  // Open the program and see if it references the expected file.
-  base::File file;
-  BY_HANDLE_FILE_INFORMATION info = {};
-
-  return (OpenForInfo(path, &file) && GetInfo(file, &info) &&
-          info.dwVolumeSerialNumber == file_info_.dwVolumeSerialNumber &&
-          info.nFileIndexHigh == file_info_.nFileIndexHigh &&
-          info.nFileIndexLow == file_info_.nFileIndexLow);
-}
-
 // static
-std::wstring InstallUtil::GuidToSquid(base::WStringPiece guid) {
+std::wstring InstallUtil::GuidToSquid(std::wstring_view guid) {
   std::wstring squid;
   squid.reserve(32);
-  auto* input = guid.begin();
+  auto input = guid.begin();
   auto output = std::back_inserter(squid);
 
   // Reverse-copy relevant characters, skipping separators.
@@ -740,4 +618,40 @@ std::wstring InstallUtil::GuidToSquid(base::WStringPiece guid) {
   std::reverse_copy(input + 32, input + 34, output);
   std::reverse_copy(input + 34, input + 36, output);
   return squid;
+}
+
+// static
+base::FilePath InstallUtil::GetLatestInstalledComponentDir(
+    const base::FilePath& application_dir,
+    std::string_view crx_id,
+    base::Version* version) {
+  if (application_dir.empty() || crx_id.empty()) {
+    return base::FilePath();
+  }
+  base::FilePath component_root = application_dir.AppendASCII(crx_id);
+  base::Version highest_version;
+  base::FilePath latest_dir;
+
+  base::FileEnumerator file_enumerator(component_root, /*recursive=*/false,
+                                       base::FileEnumerator::DIRECTORIES);
+  file_enumerator.ForEach([&highest_version,
+                           &latest_dir](const base::FilePath& path) {
+    base::Version dir_version(path.BaseName().MaybeAsASCII());
+    if (!dir_version.IsValid()) {
+      return;
+    }
+    // Manifest.json must be present to be considered valid.
+    if (!base::PathExists(path.Append(FILE_PATH_LITERAL("manifest.json")))) {
+      return;
+    }
+    if (!highest_version.IsValid() || dir_version > highest_version) {
+      highest_version = std::move(dir_version);
+      latest_dir = path;
+    }
+  });
+
+  if (version && highest_version.IsValid()) {
+    *version = std::move(highest_version);
+  }
+  return latest_dir;
 }

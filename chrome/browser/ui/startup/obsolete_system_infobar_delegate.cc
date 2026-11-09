@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
 #include "chrome/browser/obsolete_system/obsolete_system.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -16,14 +17,13 @@
 // static
 void ObsoleteSystemInfoBarDelegate::Create(
     infobars::ContentInfoBarManager* infobar_manager) {
-  infobar_manager->AddInfoBar(
-      CreateConfirmInfoBar(std::unique_ptr<ConfirmInfoBarDelegate>(
+  infobar_manager->AddInfoBar(CreateConfirmInfoBar(
+      ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(),
+      base::WrapUnique<ConfirmInfoBarDelegate>(
           new ObsoleteSystemInfoBarDelegate())));
 }
 
-ObsoleteSystemInfoBarDelegate::ObsoleteSystemInfoBarDelegate()
-    : ConfirmInfoBarDelegate() {
-}
+ObsoleteSystemInfoBarDelegate::ObsoleteSystemInfoBarDelegate() = default;
 
 infobars::InfoBarDelegate::InfoBarIdentifier
 ObsoleteSystemInfoBarDelegate::GetIdentifier() const {

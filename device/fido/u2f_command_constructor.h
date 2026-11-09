@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,17 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/ctap_make_credential_request.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
+
+struct AuthenticatorGetInfoResponse;
 
 // Checks whether the request can be translated to valid U2F request
 // parameter. Namely, U2F request does not support resident key and
@@ -29,9 +31,16 @@ bool IsConvertibleToU2fRegisterCommand(
 // ShouldPreferCTAP2 returns true if the given request should be routed over
 // CTAP2, if the authenticator supports it, even if we might want to route it
 // over U2F to avoid a PIN prompt to create the credential.
+//
+// This includes the case where routing over U2F would change the credential
+// algorithm: U2F always creates ES256 credentials, so CTAP2 is preferred unless
+// ES256 is the first algorithm in the request's pubKeyCredParams that the
+// authenticator described by |device_info| supports. If the authenticator
+// doesn't advertise its algorithms, this condition is ignored.
 COMPONENT_EXPORT(DEVICE_FIDO)
 bool ShouldPreferCTAP2EvenIfItNeedsAPIN(
-    const CtapMakeCredentialRequest& request);
+    const CtapMakeCredentialRequest& request,
+    const AuthenticatorGetInfoResponse& device_info);
 
 // Checks whether user verification is not required and that allow list is
 // not empty.
@@ -41,19 +50,19 @@ bool IsConvertibleToU2fSignCommand(const CtapGetAssertionRequest& request);
 
 // Extracts APDU encoded U2F register command from CtapMakeCredentialRequest.
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
+std::optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
     const CtapMakeCredentialRequest& request);
 
 // Turns a CtapMakeCredentialRequest into an APDU encoded U2F sign command
 // for the same RP and key handle, but a bogus challenge.
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<std::vector<uint8_t>> ConvertToU2fSignCommandWithBogusChallenge(
+std::optional<std::vector<uint8_t>> ConvertToU2fSignCommandWithBogusChallenge(
     const CtapMakeCredentialRequest& request,
     base::span<const uint8_t> key_handle);
 
 // Extracts APDU encoded U2F sign command from CtapGetAssertionRequest.
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
+std::optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
     const CtapGetAssertionRequest& request,
     ApplicationParameterType application_parameter_type,
     base::span<const uint8_t> key_handle);
@@ -69,7 +78,7 @@ std::vector<uint8_t> ConstructU2fRegisterCommand(
 // TODO(hongjunchoi): Move this logic inside ConvertToU2fSignCommand() once
 // U2fSign is deleted.
 COMPONENT_EXPORT(DEVICE_FIDO)
-absl::optional<std::vector<uint8_t>> ConstructU2fSignCommand(
+std::optional<std::vector<uint8_t>> ConstructU2fSignCommand(
     base::span<const uint8_t, kU2fApplicationParamLength> application_parameter,
     base::span<const uint8_t, kU2fChallengeParamLength> challenge_parameter,
     base::span<const uint8_t> key_handle);

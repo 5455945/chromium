@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <pk11pub.h>
 #include <stddef.h>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -17,7 +17,7 @@ namespace {
 
 bool ShouldShowDialog(PK11SlotInfo* slot) {
   // The wincx arg is unused since we don't call PK11_SetIsLoggedInFunc.
-  return (PK11_NeedLogin(slot) && !PK11_IsLoggedIn(slot, NULL /* wincx */));
+  return (PK11_NeedLogin(slot) && !PK11_IsLoggedIn(slot, nullptr /* wincx */));
 }
 
 // Basically an asynchronous implementation of NSS's PK11_DoPassword.
@@ -37,13 +37,13 @@ class SlotUnlocker {
   void GotPassword(const std::string& password);
   void Done();
 
-  size_t current_;
+  size_t current_ = 0;
   std::vector<crypto::ScopedPK11Slot> modules_;
   CryptoModulePasswordReason reason_;
   net::HostPortPair server_;
   gfx::NativeWindow parent_;
   base::OnceClosure callback_;
-  PRBool retry_;
+  PRBool retry_ = PR_FALSE;
 };
 
 SlotUnlocker::SlotUnlocker(std::vector<crypto::ScopedPK11Slot> modules,
@@ -51,18 +51,16 @@ SlotUnlocker::SlotUnlocker(std::vector<crypto::ScopedPK11Slot> modules,
                            const net::HostPortPair& server,
                            gfx::NativeWindow parent,
                            base::OnceClosure callback)
-    : current_(0),
-      modules_(std::move(modules)),
+    : modules_(std::move(modules)),
       reason_(reason),
       server_(server),
       parent_(parent),
-      callback_(std::move(callback)),
-      retry_(PR_FALSE) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+      callback_(std::move(callback)) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 void SlotUnlocker::Start() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   for (; current_ < modules_.size(); ++current_) {
     if (ShouldShowDialog(modules_[current_].get())) {
@@ -108,7 +106,7 @@ void SlotUnlocker::GotPassword(const std::string& password) {
 }
 
 void SlotUnlocker::Done() {
-  DCHECK_EQ(current_, modules_.size());
+  CHECK_EQ(current_, modules_.size(), base::NotFatalUntil::M162);
   std::move(callback_).Run();
   delete this;
 }
@@ -122,7 +120,7 @@ void UnlockSlotsIfNecessary(std::vector<crypto::ScopedPK11Slot> modules,
                             const net::HostPortPair& server,
                             gfx::NativeWindow parent,
                             base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   for (size_t i = 0; i < modules.size(); ++i) {
     if (ShouldShowDialog(modules[i].get())) {
       (new SlotUnlocker(std::move(modules), reason, server, parent,

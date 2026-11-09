@@ -1,19 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/metrics/public/cpp/ukm_recorder.h"
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
+#include "net/base/url_util.h"
 #include "services/metrics/public/cpp/delegating_ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_entry_builder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace ukm {
 
-const base::Feature kUkmFeature = {"Ukm", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kUkmFeature, "Ukm", base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUkmReduceAddEntryIPC, base::FEATURE_DISABLED_BY_DEFAULT);
 
 UkmRecorder::UkmRecorder() = default;
 
@@ -34,35 +37,197 @@ ukm::SourceId UkmRecorder::GetNewSourceID() {
 
 // static
 ukm::SourceId UkmRecorder::GetSourceIdForPaymentAppFromScope(
+    base::PassKey<content::PaymentAppProviderUtil>,
     const GURL& service_worker_scope) {
-  ukm::SourceId source_id = ukm::SourceIdObj::FromOtherId(
-                                GetNewSourceID(), SourceIdType::PAYMENT_APP_ID)
-                                .ToInt64();
-  ukm::UkmRecorder::Get()->UpdateSourceURL(source_id, service_worker_scope);
-  return source_id;
+  return UkmRecorder::GetSourceIdFromScopeImpl(service_worker_scope,
+                                               SourceIdType::PAYMENT_APP_ID);
 }
 
 // static
-ukm::SourceId UkmRecorder::GetSourceIdForWebApkManifestUrl(
-    const GURL& manifest_url) {
-  ukm::SourceId source_id =
-      ukm::SourceIdObj::FromOtherId(GetNewSourceID(), SourceIdType::WEBAPK_ID)
-          .ToInt64();
-  ukm::UkmRecorder* ukm_recorder = ukm::UkmRecorder::Get();
-  ukm_recorder->UpdateSourceURL(source_id, manifest_url);
-  return source_id;
+ukm::SourceId UkmRecorder::GetSourceIdForWebIdentityFromScope(
+    base::PassKey<content::webid::Metrics>,
+    const GURL& provider_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(provider_url,
+                                               SourceIdType::WEB_IDENTITY_ID);
 }
 
 // static
-ukm::SourceId UkmRecorder::GetSourceIdForDesktopWebAppStartUrl(
-    const GURL& start_url) {
-  ukm::SourceId source_id =
-      ukm::SourceIdObj::FromOtherId(GetNewSourceID(),
-                                    SourceIdType::DESKTOP_WEB_APP_ID)
-          .ToInt64();
-  ukm::UkmRecorder* ukm_recorder = ukm::UkmRecorder::Get();
-  ukm_recorder->UpdateSourceURL(source_id, start_url);
-  return source_id;
+ukm::SourceId UkmRecorder::GetSourceIdForWebIdentityFromScope(
+    base::PassKey<login_detection::IdentityProviderMetrics>,
+    const GURL& provider_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(provider_url,
+                                               SourceIdType::WEB_IDENTITY_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForRedirectUrl(
+    base::PassKey<content::BtmNavigationHandle>,
+    const GURL& redirect_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(redirect_url,
+                                               SourceIdType::REDIRECT_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForRedirectUrl(
+    base::PassKey<extensions::declarative_net_request::RulesetManager>,
+    const GURL& redirect_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(redirect_url,
+                                               SourceIdType::REDIRECT_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForRedirectUrl(
+    base::PassKey<extensions::TabsUpdateFunction>,
+    const GURL& redirect_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(redirect_url,
+                                               SourceIdType::REDIRECT_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForBtmSite(
+    base::PassKey<content::BtmServiceImpl>,
+    const std::string& site) {
+  // Use REDIRECT_ID because BTM sites are bounce trackers that redirected the
+  // user (see go/btm-dd). This method is used for background reporting of such
+  // sites, so there's no RenderFrameHost to get a SourceId from, or even a full
+  // URL to report on -- only the eTLD+1 stored by the BTM Service.
+  DCHECK(net::IsCanonicalizedHostCompliant(site)) << "Invalid site: " << site;
+  return UkmRecorder::GetSourceIdFromScopeImpl(GURL("http://" + site),
+                                               SourceIdType::REDIRECT_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForChromeOSWebsiteURL(
+    base::PassKey<apps::WebsiteMetrics>,
+    const GURL& redirect_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(
+      redirect_url, SourceIdType::CHROMEOS_WEBSITE_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForIwaUrl(
+    base::PassKey<IwaSourceUrlRecorder>,
+    const GURL& iwa_url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(iwa_url,
+                                               SourceIdType::IWA_BUNDLE_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::ManifestV2Handler>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::ExtensionContextMenuModel>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::MetricsPrivateRecordExtensionUsageUkmFunction>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::declarative_net_request::RulesetManager>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::TabsUpdateFunction>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::TabsRemoveFunction>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForExtensionUrl(
+    base::PassKey<extensions::TabHelper>,
+    const GURL& extension_url) {
+  // UkmRecorderImpl will verify the extension URL (and the corresponding
+  // extension) prior to emitting the record.
+  return UkmRecorder::GetSourceIdFromScopeImpl(extension_url,
+                                               SourceIdType::EXTENSION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForNotificationPermission(
+    base::PassKey<ChromePermissionsClient>,
+    const GURL& url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(url,
+                                               SourceIdType::NOTIFICATION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForNotificationEvent(
+    base::PassKey<PlatformNotificationServiceImpl>,
+    const GURL& url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(url,
+                                               SourceIdType::NOTIFICATION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForNotificationEvent(
+    base::PassKey<PersistentNotificationHandler>,
+    const GURL& url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(url,
+                                               SourceIdType::NOTIFICATION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForNotificationEvent(
+    base::PassKey<NonPersistentNotificationHandler>,
+    const GURL& url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(url,
+                                               SourceIdType::NOTIFICATION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForNotificationEvent(
+    base::PassKey<safe_browsing::NotificationContentDetectionUkmUtil>,
+    const GURL& url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(url,
+                                               SourceIdType::NOTIFICATION_ID);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdForNotificationEvent(
+    base::PassKey<AbusiveNotificationPermissionsManager>,
+    const GURL& url) {
+  return UkmRecorder::GetSourceIdFromScopeImpl(url,
+                                               SourceIdType::NOTIFICATION_ID);
 }
 
 void UkmRecorder::RecordOtherURL(ukm::SourceIdObj source_id, const GURL& url) {
@@ -73,6 +238,29 @@ void UkmRecorder::RecordAppURL(ukm::SourceIdObj source_id,
                                const GURL& url,
                                const AppType app_type) {
   UpdateAppURL(source_id.ToInt64(), url, app_type);
+}
+
+// static
+ukm::SourceId UkmRecorder::GetSourceIdFromScopeImpl(const GURL& scope_url,
+                                                    SourceIdType type) {
+  SourceId source_id =
+      SourceIdObj::FromOtherId(GetNewSourceID(), type).ToInt64();
+  UkmRecorder::Get()->UpdateSourceURL(source_id, scope_url);
+  return source_id;
+}
+
+void UkmRecorder::NotifyStartShutdown() {
+  for (auto& observer : observers_) {
+    observer.OnStartingShutdown();
+  }
+}
+
+void UkmRecorder::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void UkmRecorder::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 }  // namespace ukm

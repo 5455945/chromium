@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,28 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 
-#include "base/containers/id_map.h"
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
+#include "components/origin_matcher/origin_matcher.h"
 #include "content/common/android/gin_java_bridge_errors.h"
+#include "content/common/gin_java_bridge.mojom.h"
 #include "content/public/renderer/render_frame_observer.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "v8/include/cppgc/persistent.h"
 
 namespace content {
 
 class GinJavaBridgeObject;
+
+struct NamedObject {
+  using ObjectID = int32_t;
+
+  ObjectID object_id;
+  origin_matcher::OriginMatcher matcher;
+};
 
 // This class handles injecting Java objects into the main frame of a
 // RenderView. The 'add' and 'remove' messages received from the browser
@@ -26,48 +37,52 @@ class GinJavaBridgeObject;
 // bound to the window object of the main frame when that window object is next
 // cleared. These objects remain bound until the window object is cleared
 // again.
-class GinJavaBridgeDispatcher
-    : public base::SupportsWeakPtr<GinJavaBridgeDispatcher>,
-      public RenderFrameObserver {
+class GinJavaBridgeDispatcher final : public mojom::GinJavaBridge,
+                                      public RenderFrameObserver {
  public:
   // GinJavaBridgeObjects are managed by gin. An object gets destroyed
   // when it is no more referenced from JS. As GinJavaBridgeObject reports
   // deletion of self to GinJavaBridgeDispatcher, we would not have stale
   // pointers here.
-  using ObjectMap = base::IDMap<GinJavaBridgeObject*>;
-  using ObjectID = ObjectMap::KeyType;
+  using ObjectID = int32_t;
+  using ObjectMap =
+      base::flat_map<ObjectID, cppgc::WeakPersistent<GinJavaBridgeObject>>;
 
   explicit GinJavaBridgeDispatcher(RenderFrame* render_frame);
+
+  GinJavaBridgeDispatcher(const GinJavaBridgeDispatcher&) = delete;
+  GinJavaBridgeDispatcher& operator=(const GinJavaBridgeDispatcher&) = delete;
+
   ~GinJavaBridgeDispatcher() override;
 
   // RenderFrameObserver override:
-  bool OnMessageReceived(const IPC::Message& message) override;
   void DidClearWindowObject() override;
+  void WillReleaseScriptContext(v8::Local<v8::Context> context,
+                                int32_t world_id) override;
 
-  void GetJavaMethods(ObjectID object_id, std::set<std::string>* methods);
-  bool HasJavaMethod(ObjectID object_id, const std::string& method_name);
-  std::unique_ptr<base::Value> InvokeJavaMethod(
-      ObjectID object_id,
-      const std::string& method_name,
-      const base::ListValue& arguments,
-      GinJavaBridgeError* error);
   GinJavaBridgeObject* GetObject(ObjectID object_id);
   void OnGinJavaBridgeObjectDeleted(GinJavaBridgeObject* object);
+
+  void AddNamedObject(const std::string& name,
+                      ObjectID object_id,
+                      const origin_matcher::OriginMatcher& matcher) override;
+  void RemoveNamedObject(const std::string& name) override;
+  void SetHost(mojo::PendingRemote<mojom::GinJavaBridgeHost> host) override;
+
+  mojom::GinJavaBridgeHost* GetRemoteObjectHost();
 
  private:
   // RenderFrameObserver implementation.
   void OnDestruct() override;
 
-  void OnAddNamedObject(const std::string& name,
-                        ObjectID object_id);
-  void OnRemoveNamedObject(const std::string& name);
-
-  typedef std::map<std::string, ObjectID> NamedObjectMap;
+  typedef std::map<std::string, NamedObject> NamedObjectMap;
   NamedObjectMap named_objects_;
   ObjectMap objects_;
-  bool inside_did_clear_window_object_;
+  bool inside_did_clear_window_object_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(GinJavaBridgeDispatcher);
+  mojo::Remote<mojom::GinJavaBridgeHost> remote_;
+
+  base::WeakPtrFactory<GinJavaBridgeDispatcher> weak_ptr_factory_{this};
 };
 
 }  // namespace content

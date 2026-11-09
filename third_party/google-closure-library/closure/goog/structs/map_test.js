@@ -1,16 +1,8 @@
-// Copyright 2006 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.structs.MapTest');
 goog.setTestOnly();
@@ -46,10 +38,24 @@ testSuite({
     assertEquals('count, should be 3', m.getCount(), 3);
   },
 
+  testSize() {
+    const m = getMap();
+    assertEquals('size, should be 4', m.size, 4);
+    m.delete('d');
+    assertEquals('size, should be 3', m.size, 3);
+  },
+
   testKeys() {
     const m = getMap();
     assertEquals(
         'getKeys, The keys should be a,b,c', m.getKeys().join(','), 'a,b,c,d');
+  },
+
+  testKeysIterator() {
+    const m = getMap();
+    assertEquals(
+        'keys, The keys should be a,b,c', Array.from(m.keys()).join(','),
+        'a,b,c,d');
   },
 
   testValues() {
@@ -59,11 +65,31 @@ testSuite({
         '0,1,2,3');
   },
 
+  testValuesIterator() {
+    const m = getMap();
+    assertEquals(
+        'values, The values should be 0,1,2', Array.from(m.values()).join(','),
+        '0,1,2,3');
+  },
+
+  testEntriesIterator() {
+    const m = getMap();
+    assertElementsEquals(
+        'entries, The values should be 0,1,2', Array.from(m.entries()).flat(),
+        [['a', 0], ['b', 1], ['c', 2], ['d', 3]].flat());
+  },
+
   testContainsKey() {
     const m = getMap();
     assertTrue('containsKey, Should contain the \'a\' key', m.containsKey('a'));
     assertFalse(
         'containsKey, Should not contain the \'e\' key', m.containsKey('e'));
+  },
+
+  testHas() {
+    const m = getMap();
+    assertTrue('has, Should contain the \'a\' key', m.has('a'));
+    assertFalse('has, Should not contain the \'e\' key', m.has('e'));
   },
 
   testClear() {
@@ -118,6 +144,7 @@ testSuite({
     assertTrue('clone so it should contain \'c\' key', m2.containsKey('c'));
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   testRemove() {
     const m = new StructsMap();
     for (let i = 0; i < 1000; i++) {
@@ -130,6 +157,24 @@ testSuite({
     }
     assertTrue(m.isEmpty());
     assertEquals('', m.getKeys().join(''));
+  },
+
+  /**
+   * @suppress {visibility} checking private keys_ array shrinks as elements
+   * are removed from the map.
+   */
+  testDelete() {
+    const m = new StructsMap();
+    for (let i = 0; i < 1000; i++) {
+      m.set(i, 'foo');
+    }
+
+    for (let i = 0; i < 1000; i++) {
+      assertTrue(m.keys_.length <= 2 * m.size);
+      m.delete(i);
+    }
+    assertEquals(0, m.size);
+    assertEquals('', Array.from(m.keys()).join(''));
   },
 
   testForEach() {
@@ -314,44 +359,49 @@ testSuite({
         'Should not contain the removed keys', '135', googIter.join(m, ''));
   },
 
-  testMutatedIterator() {
+  testMutatedIteratorSetChange() {
     const message = 'The map has changed since the iterator was created';
 
-    let m = new StructsMap;
-    m.set('a', 1);
-    m.set('b', 2);
-    m.set('c', 3);
-    m.set('d', 4);
-
-    let iter = m.getValueIterator();
-    m.set('e', 5);
-    let ex =
+    const map = new StructsMap();
+    map.set('a', 1);
+    map.set('b', 2);
+    map.set('c', 3);
+    map.set('d', 4);
+    const iter = map.getValueIterator();
+    map.set('e', 5);
+    const ex =
         assertThrows('Expected an exception since the map has changed', () => {
           iter.next();
         });
     assertEquals(message, ex.message);
+  },
 
-    m = new StructsMap;
-    m.set('a', 1);
-    m.set('b', 2);
-    m.set('c', 3);
-    m.set('d', 4);
+  testMutatedIteratorRemovalChange() {
+    const message = 'The map has changed since the iterator was created';
+    const map = new StructsMap();
+    map.set('a', 1);
+    map.set('b', 2);
+    map.set('c', 3);
+    map.set('d', 4);
 
-    iter = m.getValueIterator();
-    m.remove('d');
-    ex = assertThrows('Expected an exception since the map has changed', () => {
-      iter.next();
-    });
+    const iter = map.getValueIterator();
+    map.remove('d');
+    const ex =
+        assertThrows('Expected an exception since the map has changed', () => {
+          iter.next();
+        });
     assertEquals(message, ex.message);
+  },
 
-    m = new StructsMap;
-    m.set('a', 1);
-    m.set('b', 2);
-    m.set('c', 3);
-    m.set('d', 4);
+  testMutatedIteratorChangeExistingKeyOk() {
+    const map = new StructsMap();
+    map.set('a', 1);
+    map.set('b', 2);
+    map.set('c', 3);
+    map.set('d', 4);
 
-    iter = m.getValueIterator();
-    m.set('d', 5);
+    const iter = map.getValueIterator();
+    map.set('d', 5);
     iter.next();
     // Changing an existing value is OK.
     iter.next();
@@ -367,7 +417,11 @@ testSuite({
 
     const transposed = m.transpose();
     assertEquals(
-        'Should contain the keys', 'abcde', googIter.join(transposed, ''));
+        'Should contain the keys from the original map as values', 'abcde',
+        googIter.join(transposed, ''));
+    assertEquals(
+        'Should contain the values from the original map as keys', '12345',
+        Array.from(transposed.keys()).join(''));
   },
 
   testToObject() {

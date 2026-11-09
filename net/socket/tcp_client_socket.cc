@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
@@ -18,6 +18,7 @@
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
+#include "net/base/port_util.h"
 #include "net/nqe/network_quality_estimator.h"
 #include "net/socket/socket_performance_watcher.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -35,15 +36,16 @@ TCPClientSocket::TCPClientSocket(
     std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
     NetworkQualityEstimator* network_quality_estimator,
     net::NetLog* net_log,
-    const net::NetLogSource& source)
-    : TCPClientSocket(
-          std::make_unique<TCPSocket>(std::move(socket_performance_watcher),
-                                      net_log,
-                                      source),
-          addresses,
-          -1 /* current_address_index */,
-          nullptr /* bind_address */,
-          network_quality_estimator) {}
+    const net::NetLogSource& source,
+    handles::NetworkHandle network)
+    : TCPClientSocket(TCPSocket::Create(std::move(socket_performance_watcher),
+                                        net_log,
+                                        source),
+                      addresses,
+                      -1 /* current_address_index */,
+                      nullptr /* bind_address */,
+                      network_quality_estimator,
+                      network) {}
 
 TCPClientSocket::TCPClientSocket(std::unique_ptr<TCPSocket> connected_socket,
                                  const IPEndPoint& peer_address)
@@ -53,12 +55,25 @@ TCPClientSocket::TCPClientSocket(std::unique_ptr<TCPSocket> connected_socket,
                       nullptr /* bind_address */,
                       // TODO(https://crbug.com/1123197: Pass non-null
                       // NetworkQualityEstimator
-                      nullptr /* network_quality_estimator */) {}
+                      nullptr /* network_quality_estimator */,
+                      handles::kInvalidNetworkHandle) {}
+
+TCPClientSocket::TCPClientSocket(
+    std::unique_ptr<TCPSocket> unconnected_socket,
+    const AddressList& addresses,
+    std::unique_ptr<IPEndPoint> bound_address,
+    NetworkQualityEstimator* network_quality_estimator)
+    : TCPClientSocket(std::move(unconnected_socket),
+                      addresses,
+                      -1 /* current_address_index */,
+                      std::move(bound_address),
+                      network_quality_estimator,
+                      handles::kInvalidNetworkHandle) {}
 
 TCPClientSocket::~TCPClientSocket() {
   Disconnect();
 #if defined(TCP_CLIENT_SOCKET_OBSERVES_SUSPEND)
-  base::PowerMonitor::RemovePowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->RemovePowerSuspendObserver(this);
 #endif  // defined(TCP_CLIENT_SOCKET_OBSERVES_SUSPEND)
 }
 
@@ -69,14 +84,14 @@ std::unique_ptr<TCPClientSocket> TCPClientSocket::CreateFromBoundSocket(
     NetworkQualityEstimator* network_quality_estimator) {
   return base::WrapUnique(new TCPClientSocket(
       std::move(bound_socket), addresses, -1 /* current_address_index */,
-      std::make_unique<IPEndPoint>(bound_address), network_quality_estimator));
+      std::make_unique<IPEndPoint>(bound_address), network_quality_estimator,
+      handles::kInvalidNetworkHandle));
 }
 
 int TCPClientSocket::Bind(const IPEndPoint& address) {
   if (current_address_index_ >= 0 || bind_address_) {
     // Cannot bind the socket if we are already connected or connecting.
     NOTREACHED();
-    return ERR_UNEXPECTED;
   }
 
   int result = OK;
@@ -145,22 +160,19 @@ TCPClientSocket::TCPClientSocket(
     const AddressList& addresses,
     int current_address_index,
     std::unique_ptr<IPEndPoint> bind_address,
-    NetworkQualityEstimator* network_quality_estimator)
+    NetworkQualityEstimator* network_quality_estimator,
+    handles::NetworkHandle network)
     : socket_(std::move(socket)),
       bind_address_(std::move(bind_address)),
       addresses_(addresses),
-      current_address_index_(-1),
-      next_connect_state_(CONNECT_STATE_NONE),
-      previously_disconnected_(false),
-      total_received_bytes_(0),
-      was_ever_used_(false),
-      was_disconnected_on_suspend_(false),
-      network_quality_estimator_(network_quality_estimator) {
+      current_address_index_(current_address_index),
+      network_quality_estimator_(network_quality_estimator),
+      network_(network) {
   DCHECK(socket_);
   if (socket_->IsValid())
     socket_->SetDefaultOptionsForClient();
 #if defined(TCP_CLIENT_SOCKET_OBSERVES_SUSPEND)
-  base::PowerMonitor::AddPowerSuspendObserver(this);
+  base::PowerMonitor::GetInstance()->AddPowerSuspendObserver(this);
 #endif  // defined(TCP_CLIENT_SOCKET_OBSERVES_SUSPEND)
 }
 
@@ -210,8 +222,6 @@ int TCPClientSocket::DoConnectLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state " << state;
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_connect_state_ != CONNECT_STATE_NONE);
 
@@ -226,15 +236,16 @@ int TCPClientSocket::DoConnect() {
 
   if (previously_disconnected_) {
     was_ever_used_ = false;
-    connection_attempts_.clear();
     previously_disconnected_ = false;
   }
 
   next_connect_state_ = CONNECT_STATE_CONNECT_COMPLETE;
 
-  if (socket_->IsValid()) {
-    DCHECK(bind_address_);
-  } else {
+  if (!IsPortAllowedForIpEndpoint(endpoint)) {
+    return ERR_UNSAFE_PORT;
+  }
+
+  if (!socket_->IsValid()) {
     int result = OpenSocket(endpoint.GetFamily());
     if (result != OK)
       return result;
@@ -278,15 +289,12 @@ int TCPClientSocket::DoConnect() {
 int TCPClientSocket::DoConnectComplete(int result) {
   if (start_connect_attempt_) {
     EmitConnectAttemptHistograms(result);
-    start_connect_attempt_ = absl::nullopt;
+    start_connect_attempt_ = std::nullopt;
     connect_attempt_timer_.Stop();
   }
 
   if (result == OK)
     return OK;  // Done!
-
-  connection_attempts_.push_back(
-      ConnectionAttempt(addresses_[current_address_index_], result));
 
   // Don't try the next address if entering suspend mode.
   if (result == ERR_NETWORK_IO_SUSPENDED)
@@ -335,12 +343,11 @@ void TCPClientSocket::Disconnect() {
 void TCPClientSocket::DoDisconnect() {
   if (start_connect_attempt_) {
     EmitConnectAttemptHistograms(ERR_ABORTED);
-    start_connect_attempt_ = absl::nullopt;
+    start_connect_attempt_ = std::nullopt;
     connect_attempt_timer_.Stop();
   }
 
   total_received_bytes_ = 0;
-  EmitTCPMetricsHistogramsOnDisconnect();
 
   // If connecting or already connected, record that the socket has been
   // disconnected.
@@ -386,12 +393,8 @@ bool TCPClientSocket::WasEverUsed() const {
   return was_ever_used_;
 }
 
-bool TCPClientSocket::WasAlpnNegotiated() const {
-  return false;
-}
-
 NextProto TCPClientSocket::GetNegotiatedProtocol() const {
-  return kProtoUnknown;
+  return NextProto::kProtoUnknown;
 }
 
 bool TCPClientSocket::GetSSLInfo(SSLInfo* ssl_info) {
@@ -452,20 +455,6 @@ int TCPClientSocket::SetSendBufferSize(int32_t size) {
 
 SocketDescriptor TCPClientSocket::SocketDescriptorForTesting() const {
   return socket_->SocketDescriptorForTesting();
-}
-
-void TCPClientSocket::GetConnectionAttempts(ConnectionAttempts* out) const {
-  *out = connection_attempts_;
-}
-
-void TCPClientSocket::ClearConnectionAttempts() {
-  connection_attempts_.clear();
-}
-
-void TCPClientSocket::AddConnectionAttempts(
-    const ConnectionAttempts& attempts) {
-  connection_attempts_.insert(connection_attempts_.begin(), attempts.begin(),
-                              attempts.end());
 }
 
 int64_t TCPClientSocket::GetTotalReceivedBytes() const {
@@ -558,18 +547,17 @@ int TCPClientSocket::OpenSocket(AddressFamily family) {
   if (result != OK)
     return result;
 
+  if (network_ != handles::kInvalidNetworkHandle) {
+    result = socket_->BindToNetwork(network_);
+    if (result != OK) {
+      socket_->Close();
+      return result;
+    }
+  }
+
   socket_->SetDefaultOptionsForClient();
 
   return OK;
-}
-
-void TCPClientSocket::EmitTCPMetricsHistogramsOnDisconnect() {
-  base::TimeDelta rtt;
-  if (socket_->GetEstimatedRoundTripTime(&rtt)) {
-    UMA_HISTOGRAM_CUSTOM_TIMES("Net.TcpRtt.AtDisconnect", rtt,
-                               base::TimeDelta::FromMilliseconds(1),
-                               base::TimeDelta::FromMinutes(10), 100);
-  }
 }
 
 void TCPClientSocket::EmitConnectAttemptHistograms(int result) {
@@ -583,41 +571,11 @@ void TCPClientSocket::EmitConnectAttemptHistograms(int result) {
   // failure. Note that failures also include cases when the connect attempt
   // was cancelled by the client before the handshake completed.
   if (result == OK) {
-    UMA_HISTOGRAM_MEDIUM_TIMES("Net.TcpConnectAttempt.Latency.Success",
-                               duration);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+        "Net.TcpConnectAttempt.Latency.Success", duration);
   } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES("Net.TcpConnectAttempt.Latency.Error", duration);
-  }
-
-  absl::optional<base::TimeDelta> transport_rtt = absl::nullopt;
-  if (network_quality_estimator_)
-    transport_rtt = network_quality_estimator_->GetTransportRTT();
-
-  // In cases where there is an estimated transport RTT, histogram the attempt
-  // duration as a percentage of the transport RTT. The histogram range can
-  // record fractions up to 1,000x RTT.
-  if (transport_rtt) {
-    int percent_rtt = 0;
-
-    if (transport_rtt.value().InMilliseconds() != 0) {
-      // Convert the percentage to an int, saturating to 100000.
-      float percent_rtt_float =
-          100.f * (duration.InMillisecondsF() /
-                   transport_rtt.value().InMillisecondsF());
-      if (percent_rtt_float > 100000) {
-        percent_rtt = 100000;
-      } else if (percent_rtt_float > 0) {
-        percent_rtt = static_cast<int>(percent_rtt_float);
-      }
-    }
-
-    if (result == OK) {
-      UMA_HISTOGRAM_COUNTS_100000(
-          "Net.TcpConnectAttempt.LatencyPercentRTT.Success", percent_rtt);
-    } else {
-      UMA_HISTOGRAM_COUNTS_100000(
-          "Net.TcpConnectAttempt.LatencyPercentRTT.Error", percent_rtt);
-    }
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Net.TcpConnectAttempt.Latency.Error",
+                                          duration);
   }
 }
 
@@ -625,7 +583,7 @@ base::TimeDelta TCPClientSocket::GetConnectAttemptTimeout() {
   if (!base::FeatureList::IsEnabled(features::kTimeoutTcpConnectAttempt))
     return base::TimeDelta::Max();
 
-  absl::optional<base::TimeDelta> transport_rtt = absl::nullopt;
+  std::optional<base::TimeDelta> transport_rtt = std::nullopt;
   if (network_quality_estimator_)
     transport_rtt = network_quality_estimator_->GetTransportRTT();
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
 #include "base/bit_cast.h"
 #include "base/command_line.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "chrome/browser/task_manager/sampling/shared_sampler_win_defines.h"
 #include "chrome/browser/task_manager/task_manager_observer.h"
@@ -30,7 +33,7 @@ static SharedSampler::QuerySystemInformationForTest
     g_query_system_information_for_test = nullptr;
 
 // static
-void SharedSampler::SetQuerySystemInformationForTest(
+void SharedSampler::SetQuerySystemInformationForTesting(
     QuerySystemInformationForTest query_system_information) {
   g_query_system_information_for_test = query_system_information;
 }
@@ -41,72 +44,56 @@ namespace {
 // QuerySystemProcessInformation.
 class ByteBuffer {
  public:
-  explicit ByteBuffer(size_t capacity)
-      : size_(0), capacity_(0) {
-    if (capacity > 0)
+  explicit ByteBuffer(size_t capacity) {
+    if (capacity > 0) {
       grow(capacity);
+    }
   }
 
   ByteBuffer(const ByteBuffer&) = delete;
   ByteBuffer& operator=(const ByteBuffer&) = delete;
 
-  ~ByteBuffer() {}
+  ~ByteBuffer() = default;
 
-  BYTE* data() { return data_.get(); }
+  base::span<BYTE> span() { return data_.as_span(); }
 
-  size_t size() { return size_; }
+  base::span<const BYTE> data_span() const { return data_.first(size_); }
 
   void set_size(size_t new_size) {
-    DCHECK_LE(new_size, capacity_);
+    CHECK_LE(new_size, data_.size(), base::NotFatalUntil::M162);
     size_ = new_size;
   }
 
-  size_t capacity() { return capacity_; }
-
   void grow(size_t new_capacity) {
-    DCHECK_GT(new_capacity, capacity_);
-    capacity_ = new_capacity;
-    data_.reset(new BYTE[new_capacity]);
+    CHECK_GT(new_capacity, data_.size(), base::NotFatalUntil::M162);
+    auto new_data = base::HeapArray<BYTE>::Uninit(new_capacity);
+    new_data.copy_prefix_from(span());
+    data_ = std::move(new_data);
   }
 
  private:
-  std::unique_ptr<BYTE[]> data_;
-  size_t size_;
-  size_t capacity_;
+  base::HeapArray<BYTE> data_;
+  size_t size_ = 0;
 };
 
 // Wrapper for NtQuerySystemProcessInformation with buffer reallocation logic.
 bool QuerySystemProcessInformation(ByteBuffer* buffer) {
-  HMODULE ntdll = ::GetModuleHandle(L"ntdll.dll");
-  if (!ntdll) {
-    NOTREACHED();
-    return false;
-  }
-
-  NTQUERYSYSTEMINFORMATION nt_query_system_information_ptr =
-      reinterpret_cast<NTQUERYSYSTEMINFORMATION>(
-          ::GetProcAddress(ntdll, "NtQuerySystemInformation"));
-  if (!nt_query_system_information_ptr) {
-    NOTREACHED();
-    return false;
-  }
-
   NTSTATUS result;
 
   // There is a potential race condition between growing the buffer and new
   // processes being created. Try a few times before giving up.
   for (int i = 0; i < 10; i++) {
     ULONG data_size = 0;
-    ULONG buffer_size = static_cast<ULONG>(buffer->capacity());
+    base::span<BYTE> span = buffer->span();
+    const ULONG buffer_size = static_cast<ULONG>(span.size());
 
     if (g_query_system_information_for_test) {
-      data_size =
-          g_query_system_information_for_test(buffer->data(), buffer_size);
+      data_size = g_query_system_information_for_test(span);  // IN-TEST
       result =
           (data_size > buffer_size) ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
     } else {
-      result = nt_query_system_information_ptr(
-          SystemProcessInformation, buffer->data(), buffer_size, &data_size);
+      result = ::NtQuerySystemInformation(SystemProcessInformation, span.data(),
+                                          buffer_size, &data_size);
     }
 
     if (result == STATUS_SUCCESS) {
@@ -118,7 +105,7 @@ bool QuerySystemProcessInformation(ByteBuffer* buffer) {
         result == STATUS_BUFFER_TOO_SMALL) {
       // Insufficient buffer. Grow to the returned |data_size| plus 10% extra
       // to avoid frequent reallocations and try again.
-      DCHECK_GT(data_size, buffer_size);
+      CHECK_GT(data_size, buffer_size, base::NotFatalUntil::M162);
       buffer->grow(static_cast<ULONG>(data_size * 1.1));
     } else {
       // An error other than the two above.
@@ -132,7 +119,9 @@ bool QuerySystemProcessInformation(ByteBuffer* buffer) {
 // Per-thread data extracted from SYSTEM_THREAD_INFORMATION and stored in a
 // snapshot. This structure is accessed only on the worker thread.
 struct ThreadData {
-  base::PlatformThreadId thread_id;
+  // Don't use base::PlatformThreadId for thread id, because
+  // SYSTEM_THREAD_INFORMATION uses a HANDLE for the utid.
+  HANDLE thread_id;
   ULONG context_switches;
 };
 
@@ -210,13 +199,13 @@ const ProcessData* SeekInPreviousSnapshot(
 
 // A wrapper function converting ticks (in units of 100 ns) to Time.
 base::Time ConvertTicksToTime(uint64_t ticks) {
-  FILETIME ft = bit_cast<FILETIME, uint64_t>(ticks);
+  FILETIME ft = base::bit_cast<FILETIME, uint64_t>(ticks);
   return base::Time::FromFileTime(ft);
 }
 
 // A wrapper function converting ticks (in units of 100 ns) to TimeDelta.
 base::TimeDelta ConvertTicksToTimeDelta(uint64_t ticks) {
-  return base::TimeDelta::FromMicroseconds(ticks / 10);
+  return base::Microseconds(ticks / 10);
 }
 
 }  // namespace
@@ -236,16 +225,16 @@ SharedSampler::SharedSampler(
     : refresh_flags_(0), previous_buffer_size_(0),
       supported_image_names_(GetSupportedImageNames()),
       blocking_pool_runner_(blocking_pool_runner) {
-  DCHECK(blocking_pool_runner.get());
+  CHECK(blocking_pool_runner.get(), base::NotFatalUntil::M162);
 
   // This object will be created on the UI thread, however the sequenced checker
   // will be used to assert we're running the expensive operations on one of the
   // blocking pool threads.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  worker_pool_sequenced_checker_.DetachFromSequence();
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  DETACH_FROM_SEQUENCE(worker_pool_sequenced_checker_);
 }
 
-SharedSampler::~SharedSampler() {}
+SharedSampler::~SharedSampler() = default;
 
 int64_t SharedSampler::GetSupportedFlags() const {
   return REFRESH_TYPE_IDLE_WAKEUPS | REFRESH_TYPE_START_TIME |
@@ -255,7 +244,7 @@ int64_t SharedSampler::GetSupportedFlags() const {
 void SharedSampler::RegisterCallback(
     base::ProcessId process_id,
     OnSamplingCompleteCallback on_sampling_complete) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (process_id == 0)
     return;
@@ -263,11 +252,11 @@ void SharedSampler::RegisterCallback(
   bool result =
       callbacks_map_.emplace(process_id, std::move(on_sampling_complete))
           .second;
-  DCHECK(result);
+  CHECK(result, base::NotFatalUntil::M162);
 }
 
 void SharedSampler::UnregisterCallback(base::ProcessId process_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (process_id == 0)
     return;
@@ -279,21 +268,21 @@ void SharedSampler::UnregisterCallback(base::ProcessId process_id) {
 }
 
 void SharedSampler::Refresh(base::ProcessId process_id, int64_t refresh_flags) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_NE(0, refresh_flags & GetSupportedFlags());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK_NE(0, refresh_flags & GetSupportedFlags(), base::NotFatalUntil::M162);
 
   if (process_id == 0)
     return;
 
-  DCHECK(callbacks_map_.find(process_id) != callbacks_map_.end());
+  CHECK(callbacks_map_.find(process_id) != callbacks_map_.end(),
+        base::NotFatalUntil::M162);
 
   if (refresh_flags_ == 0) {
-    base::PostTaskAndReplyWithResult(
-        blocking_pool_runner_.get(), FROM_HERE,
-        base::BindOnce(&SharedSampler::RefreshOnWorkerThread, this),
+    blocking_pool_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE, base::BindOnce(&SharedSampler::RefreshOnWorkerThread, this),
         base::BindOnce(&SharedSampler::OnRefreshDone, this));
   } else {
-    // http://crbug.com/678471
+    // http://crbug.com/40500128
     // A group of consecutive Refresh calls should all specify the same refresh
     // flags. Rarely RefreshOnWorkerThread could take a long time (> 1 sec),
     // long enough for a next refresh cycle to start before results are ready
@@ -312,7 +301,7 @@ void SharedSampler::ClearState() {
 }
 
 SharedSampler::AllSamplingResults SharedSampler::RefreshOnWorkerThread() {
-  DCHECK(worker_pool_sequenced_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(worker_pool_sequenced_checker_);
 
   AllSamplingResults results;
 
@@ -335,8 +324,6 @@ SharedSampler::AllSamplingResults SharedSampler::RefreshOnWorkerThread() {
 
 /* static */
 std::vector<base::FilePath> SharedSampler::GetSupportedImageNames() {
-  const wchar_t kNacl64Exe[] = L"nacl64.exe";
-
   std::vector<base::FilePath> supported_names;
 
   base::FilePath current_exe;
@@ -345,13 +332,12 @@ std::vector<base::FilePath> SharedSampler::GetSupportedImageNames() {
 
   supported_names.push_back(
       base::FilePath(chrome::kBrowserProcessExecutableName));
-  supported_names.push_back(base::FilePath(kNacl64Exe));
 
   return supported_names;
 }
 
 bool SharedSampler::IsSupportedImageName(
-    base::FilePath::StringPieceType image_name) const {
+    base::FilePath::StringViewType image_name) const {
   for (const base::FilePath& supported_name : supported_image_names_) {
     if (base::FilePath::CompareEqualIgnoreCase(image_name,
                                                supported_name.value()))
@@ -362,33 +348,36 @@ bool SharedSampler::IsSupportedImageName(
 }
 
 std::unique_ptr<ProcessDataSnapshot> SharedSampler::CaptureSnapshot() {
-  DCHECK(worker_pool_sequenced_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(worker_pool_sequenced_checker_);
 
   // Preallocate the buffer with the size determined on the previous call to
   // QuerySystemProcessInformation. This should be sufficient most of the time.
   // QuerySystemProcessInformation will grow the buffer if necessary.
   ByteBuffer data_buffer(previous_buffer_size_);
 
-  if (!QuerySystemProcessInformation(&data_buffer))
+  if (!QuerySystemProcessInformation(&data_buffer)) {
     return nullptr;
+  }
 
-  previous_buffer_size_ = data_buffer.capacity();
+  previous_buffer_size_ = data_buffer.span().size();
 
   std::unique_ptr<ProcessDataSnapshot> snapshot(new ProcessDataSnapshot);
   snapshot->timestamp = base::TimeTicks::Now();
 
-  for (size_t offset = 0; offset < data_buffer.size(); ) {
-    const auto* pi = reinterpret_cast<const SYSTEM_PROCESS_INFORMATION*>(
-        data_buffer.data() + offset);
-
-    // Validate that the offset is valid and all needed data is within
-    // the buffer boundary.
-    if (offset + sizeof(SYSTEM_PROCESS_INFORMATION) > data_buffer.size())
+  base::span<const BYTE> data_span = data_buffer.data_span();
+  for (size_t offset = 0; offset < data_span.size();) {
+    // Validate the offset is valid.
+    if (offset + sizeof(SYSTEM_PROCESS_INFORMATION) > data_span.size()) {
       break;
+    }
+
+    // Validate all needed data is within the buffer boundary.
+    const auto* pi = reinterpret_cast<const SYSTEM_PROCESS_INFORMATION*>(
+        data_span.subspan(offset).data());
     if (pi->NumberOfThreads > 0 &&
         (offset + sizeof(SYSTEM_PROCESS_INFORMATION) +
              (pi->NumberOfThreads - 1) * sizeof(SYSTEM_THREAD_INFORMATION) >
-         data_buffer.size())) {
+         data_span.size())) {
       break;
     }
 
@@ -396,9 +385,10 @@ std::unique_ptr<ProcessDataSnapshot> SharedSampler::CaptureSnapshot() {
       // Validate that the image name is within the buffer boundary.
       // ImageName.Length seems to be in bytes rather than characters.
       ULONG image_name_offset =
-          reinterpret_cast<BYTE*>(pi->ImageName.Buffer) - data_buffer.data();
-      if (image_name_offset + pi->ImageName.Length > data_buffer.size())
+          reinterpret_cast<BYTE*>(pi->ImageName.Buffer) - data_span.data();
+      if (image_name_offset + pi->ImageName.Length > data_span.size()) {
         break;
+      }
 
       // Check if this is a chrome process. Ignore all other processes.
       if (IsSupportedImageName(pi->ImageName.Buffer)) {
@@ -418,16 +408,18 @@ std::unique_ptr<ProcessDataSnapshot> SharedSampler::CaptureSnapshot() {
 
         // Iterate over threads and store each thread's ID and number of context
         // switches.
-        for (ULONG thread_index = 0; thread_index < pi->NumberOfThreads;
-             ++thread_index) {
-          const SYSTEM_THREAD_INFORMATION* ti = &pi->Threads[thread_index];
-          if (ti->ClientId.UniqueProcess != pi->ProcessId)
+        // SAFETY: Already validated `data_span` has room for this many threads
+        // above.
+        auto threads_span =
+            UNSAFE_BUFFERS(base::span(pi->Threads, pi->NumberOfThreads));
+        for (const SYSTEM_THREAD_INFORMATION& thread : threads_span) {
+          if (thread.ClientId.UniqueProcess != pi->ProcessId) {
             continue;
+          }
 
           ThreadData thread_data;
-          thread_data.thread_id = static_cast<base::PlatformThreadId>(
-              reinterpret_cast<uintptr_t>(ti->ClientId.UniqueThread));
-          thread_data.context_switches = ti->ContextSwitchCount;
+          thread_data.thread_id = thread.ClientId.UniqueThread;
+          thread_data.context_switches = thread.ContextSwitchCount;
           process_data.threads.push_back(thread_data);
         }
 
@@ -441,13 +433,14 @@ std::unique_ptr<ProcessDataSnapshot> SharedSampler::CaptureSnapshot() {
             reinterpret_cast<uintptr_t>(pi->ProcessId));
         bool inserted = snapshot->processes.insert(
             std::make_pair(process_id, std::move(process_data))).second;
-        DCHECK(inserted);
+        CHECK(inserted, base::NotFatalUntil::M162);
       }
     }
 
     // Check for end of the list.
-    if (!pi->NextEntryOffset)
+    if (!pi->NextEntryOffset) {
       break;
+    }
 
     // Jump to the next entry.
     offset += pi->NextEntryOffset;
@@ -525,8 +518,8 @@ SharedSampler::AllSamplingResults SharedSampler::MakeResultsFromSnapshot(
 }
 
 void SharedSampler::OnRefreshDone(AllSamplingResults refresh_results) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_NE(0, refresh_flags_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK_NE(0, refresh_flags_, base::NotFatalUntil::M162);
 
   size_t result_index = 0;
 

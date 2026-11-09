@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,12 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "extensions/renderer/bindings/argument_spec.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/wrappable.h"
-#include "v8/include/v8.h"
-
-namespace base {
-class DictionaryValue;
-class ListValue;
-}
+#include "v8/include/v8-forward.h"
 
 namespace gin {
 class Arguments;
@@ -30,6 +27,19 @@ class BindingAccessChecker;
 // to APIs.
 class ContentSetting final : public gin::Wrappable<ContentSetting> {
  public:
+  static constexpr gin::WrapperInfo kWrapperInfo = {{gin::kEmbedderNativeGin},
+                                                    gin::kContentSetting};
+
+  ContentSetting(const ContentSetting&) = delete;
+
+  ContentSetting& operator=(const ContentSetting&) = delete;
+
+  ContentSetting(APIRequestHandler* request_handler,
+                 const APITypeReferenceMap* type_refs,
+                 const BindingAccessChecker* access_checker,
+                 const std::string& pref_name,
+                 const base::DictValue& argument_spec);
+
   ~ContentSetting() override;
 
   // Creates a ContentSetting object for the given property.
@@ -42,18 +52,14 @@ class ContentSetting final : public gin::Wrappable<ContentSetting> {
       APITypeReferenceMap* type_refs,
       const BindingAccessChecker* access_checker);
 
-  static gin::WrapperInfo kWrapperInfo;
-
-  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
-      v8::Isolate* isolate) override;
-  const char* GetTypeName() override;
-
  private:
-  ContentSetting(APIRequestHandler* request_handler,
-                 const APITypeReferenceMap* type_refs,
-                 const BindingAccessChecker* access_checker,
-                 const std::string& pref_name,
-                 const base::DictionaryValue& argument_spec);
+  // gin::Wrappable:
+  gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
+      v8::Isolate* isolate) final;
+
+  const char* GetHumanReadableName() const override;
+
+  const gin::WrapperInfo* wrapper_info() const override;
 
   // JS function handlers:
   void Get(gin::Arguments* arguments);
@@ -65,11 +71,11 @@ class ContentSetting final : public gin::Wrappable<ContentSetting> {
   void HandleFunction(const std::string& function_name,
                       gin::Arguments* arguments);
 
-  APIRequestHandler* request_handler_;
+  raw_ptr<APIRequestHandler, DanglingUntriaged> request_handler_;
 
-  const APITypeReferenceMap* type_refs_;
+  raw_ptr<const APITypeReferenceMap, DanglingUntriaged> type_refs_;
 
-  const BindingAccessChecker* const access_checker_;
+  const raw_ptr<const BindingAccessChecker, DanglingUntriaged> access_checker_;
 
   // The name of the preference this ContentSetting is managing.
   std::string pref_name_;
@@ -78,8 +84,6 @@ class ContentSetting final : public gin::Wrappable<ContentSetting> {
   // (since different settings can take a different type of argument depending
   // on the preference it manages).
   ArgumentSpec argument_spec_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentSetting);
 };
 
 }  // namespace extensions

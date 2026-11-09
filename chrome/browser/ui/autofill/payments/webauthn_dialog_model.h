@@ -1,14 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_AUTOFILL_PAYMENTS_WEBAUTHN_DIALOG_MODEL_H_
 #define CHROME_BROWSER_UI_AUTOFILL_PAYMENTS_WEBAUTHN_DIALOG_MODEL_H_
 
-#include "base/macros.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ui/webauthn/authenticator_request_sheet_model.h"
-#include "ui/gfx/vector_icon_types.h"
 
 namespace autofill {
 
@@ -20,6 +18,8 @@ enum class WebauthnDialogState;
 class WebauthnDialogModel : public AuthenticatorRequestSheetModel {
  public:
   explicit WebauthnDialogModel(WebauthnDialogState dialog_state);
+  WebauthnDialogModel(const WebauthnDialogModel&) = delete;
+  WebauthnDialogModel& operator=(const WebauthnDialogModel&) = delete;
   ~WebauthnDialogModel() override;
 
   // Update the current state the dialog should be. When the state is changed,
@@ -33,14 +33,10 @@ class WebauthnDialogModel : public AuthenticatorRequestSheetModel {
 
   // AuthenticatorRequestSheetModel:
   bool IsActivityIndicatorVisible() const override;
-  bool IsBackButtonVisible() const override;
   bool IsCancelButtonVisible() const override;
   std::u16string GetCancelButtonLabel() const override;
-  bool IsAcceptButtonVisible() const override;
-  bool IsAcceptButtonEnabled() const override;
+  AcceptButtonState GetAcceptButtonState() const override;
   std::u16string GetAcceptButtonLabel() const override;
-  const gfx::VectorIcon& GetStepIllustration(
-      ImageColorScheme color_scheme) const override;
   std::u16string GetStepTitle() const override;
   std::u16string GetStepDescription() const override;
   // Event handling is handed over to the controller.
@@ -49,11 +45,11 @@ class WebauthnDialogModel : public AuthenticatorRequestSheetModel {
   void OnCancel() override {}
 
  private:
+  void SetIllustrationsFromState();
+
   WebauthnDialogState state_;
 
   base::ObserverList<WebauthnDialogModelObserver> observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebauthnDialogModel);
 };
 
 }  // namespace autofill

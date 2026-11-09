@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -32,11 +32,13 @@ def build_database(filepaths, report_error):
         filepaths=filepaths,
         register_ir=ir_map.register,
         create_ref_to_idl_def=ref_to_idl_def_factory.create,
-        idl_type_factory=idl_type_factory)
+        idl_type_factory=idl_type_factory,
+    )
 
     compiler = IdlCompiler(
         ir_map=ir_map,
         ref_to_idl_def_factory=ref_to_idl_def_factory,
         idl_type_factory=idl_type_factory,
-        report_error=report_error)
+        report_error=report_error,
+    )
     return compiler.build_database()

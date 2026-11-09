@@ -31,8 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_PAGE_POPUP_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_PAGE_POPUP_H_
 
-#include "third_party/blink/public/mojom/page/widget.mojom-shared.h"
-#include "third_party/blink/public/platform/cross_variant_mojo_util.h"
+#include "base/types/id_type.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/web/web_widget.h"
 
@@ -42,23 +41,16 @@ class WebDocument;
 
 class WebPagePopup : public WebWidget {
  public:
-  // Returns a WebPagePopup which is self-referencing. It's self-reference will
-  // be released when the popup is closed via Close().
-  BLINK_EXPORT static WebPagePopup* Create(
-      CrossVariantMojoAssociatedRemote<mojom::PopupWidgetHostInterfaceBase>
-          popup_widget_host,
-      CrossVariantMojoAssociatedRemote<mojom::WidgetHostInterfaceBase>
-          widget_host,
-      CrossVariantMojoAssociatedReceiver<mojom::WidgetInterfaceBase> widget,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
-
-  // This method closes and deletes the WebPagePopup.
-  virtual void Close() {}
-
   // The popup's accessibility tree is connected to the main document's
   // accessibility tree. Access to the popup document is needed to ensure the
   // popup's layout is clean before serializing the combined tree.
   virtual WebDocument GetDocument() = 0;
+
+  using Handle = base::IdTypeU32<WebPagePopup>;
+
+  // Returns a handle that can be used to uniquely (within this process)
+  // identify this given instance of a popup.
+  virtual Handle GetHandle() const = 0;
 };
 
 }  // namespace blink

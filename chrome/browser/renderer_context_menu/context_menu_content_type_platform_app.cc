@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,17 +17,16 @@ using extensions::ProcessManager;
 ContextMenuContentTypePlatformApp::ContextMenuContentTypePlatformApp(
     content::WebContents* web_contents,
     const content::ContextMenuParams& params)
-    : ContextMenuContentType(web_contents, params, false) {
-}
+    : ContextMenuContentType(params, false),
+      source_web_contents_(web_contents) {}
 
-ContextMenuContentTypePlatformApp::~ContextMenuContentTypePlatformApp() {
-}
+ContextMenuContentTypePlatformApp::~ContextMenuContentTypePlatformApp() =
+    default;
 
 const Extension* ContextMenuContentTypePlatformApp::GetExtension() {
   ProcessManager* process_manager =
-      ProcessManager::Get(source_web_contents()->GetBrowserContext());
-  return process_manager->GetExtensionForWebContents(
-      source_web_contents());
+      ProcessManager::Get(source_web_contents_->GetBrowserContext());
+  return process_manager->GetExtensionForWebContents(source_web_contents_);
 }
 
 bool ContextMenuContentTypePlatformApp::SupportsGroup(int group) {
@@ -37,7 +36,7 @@ bool ContextMenuContentTypePlatformApp::SupportsGroup(int group) {
   if (!platform_app)
     return false;
 
-  DCHECK(platform_app->is_platform_app());
+  CHECK(platform_app->is_platform_app(), base::NotFatalUntil::M163);
 
   switch (group) {
     // Add undo/redo, cut/copy/paste etc for text fields.
@@ -45,7 +44,6 @@ bool ContextMenuContentTypePlatformApp::SupportsGroup(int group) {
     case ITEM_GROUP_COPY:
       return ContextMenuContentType::SupportsGroup(group);
     case ITEM_GROUP_CURRENT_EXTENSION:
-    case ITEM_GROUP_LENS_REGION_SEARCH:
       return true;
     case ITEM_GROUP_DEVTOOLS_UNPACKED_EXT:
       // Add dev tools for unpacked extensions.

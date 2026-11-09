@@ -1,38 +1,35 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.suggestions.tile;
 
-import android.graphics.Bitmap;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import android.graphics.drawable.Drawable;
+import android.text.TextUtils;
 import android.util.SparseArray;
-import android.view.ContextMenu;
-import android.view.ContextMenu.ContextMenuInfo;
 import android.view.View;
-import android.view.View.OnClickListener;
-import android.view.View.OnCreateContextMenuListener;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.Callback;
-import org.chromium.chrome.browser.explore_sites.ExploreSitesBridge;
-import org.chromium.chrome.browser.explore_sites.ExploreSitesCatalogUpdateRequestSource;
+import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
-import org.chromium.chrome.browser.native_page.ContextMenuManager.ContextMenuItemId;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.offlinepages.OfflinePageItem;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.preloading.AndroidPrerenderManager;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
-import org.chromium.chrome.browser.suggestions.SuggestionsConfig;
-import org.chromium.chrome.browser.suggestions.SuggestionsMetrics;
 import org.chromium.chrome.browser.suggestions.SuggestionsOfflineModelObserver;
 import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegate;
+import org.chromium.chrome.browser.suggestions.mostvisited.CustomLinkOperations;
 import org.chromium.chrome.browser.suggestions.mostvisited.MostVisitedSites;
-import org.chromium.components.favicon.IconType;
-import org.chromium.components.favicon.LargeIconBridge;
-import org.chromium.ui.mojom.WindowOpenDisposition;
+import org.chromium.chrome.browser.suggestions.tile.tile_edit_dialog.CustomTileEditCoordinator;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
@@ -41,20 +38,35 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-/**
- * The model and controller for a group of site suggestion tiles.
- */
+/** The model and controller for a group of site suggestion tiles. */
+@NullMarked
 public class TileGroup implements MostVisitedSites.Observer {
+
+    /**
+     * This class marshals data involving deferred updates or actions involving suggestion tiles.
+     *
+     * <p>Suggestions data changes can be caused by (1) the current NTP, or (2) another NTP. This
+     * leads to {@link onSiteSuggestionsAvailable()} call with suggestions passed. Render
+     * suggestions we'd call {@link loadTiles()}. This call may be deferred as an optimization to
+     * avoid useless rendering (e.g., when an NTP is not visible).
+     */
+    public static class PendingChanges {
+        /** Most recently received tile data pending displayed (eager or deferred). */
+        public @Nullable List<SiteSuggestion> siteSuggestions;
+
+        /** List of tasks to run after tiles are reloaded and re-rendered. */
+        public final List<Runnable> taskToRunAfterTileReload = new ArrayList<>();
+    }
+
     /**
      * Performs work in other parts of the system that the {@link TileGroup} should not know about.
      */
-    public interface Delegate {
+    public interface Delegate extends CustomLinkOperations {
+
         /**
          * @param tile The tile corresponding to the most visited item to remove.
-         * @param removalUndoneCallback The callback to invoke if the removal is reverted. The
-         *                              callback's argument is the URL being restored.
          */
-        void removeMostVisitedItem(Tile tile, Callback<GURL> removalUndoneCallback);
+        void removeMostVisitedItem(Tile tile);
 
         void openMostVisitedItem(int windowDisposition, Tile tile);
 
@@ -62,6 +74,7 @@ public class TileGroup implements MostVisitedSites.Observer {
 
         /**
          * Gets the list of most visited sites.
+         *
          * @param observer The observer to be notified with the list of sites.
          * @param maxResults The maximum number of sites to retrieve.
          */
@@ -70,9 +83,57 @@ public class TileGroup implements MostVisitedSites.Observer {
         /**
          * Called when the tile group has completely finished loading (all views will be inflated
          * and any dependent resources will have been loaded).
+         *
          * @param tiles The tiles owned by the {@link TileGroup}. Used to record metrics.
          */
         void onLoadingComplete(List<Tile> tiles);
+
+        /** Initialize AndroidPrerenderManager JNI interface. */
+        void initAndroidPrerenderManager(AndroidPrerenderManager androidPrerenderManager);
+
+        /**
+         * @return Localized title for the AI Mode tile, or null if unavailable.
+         */
+        @Nullable String getAiModeTileTitle();
+
+        /**
+         * @return URL for the AI Mode tile, or null if unavailable.
+         */
+        @Nullable GURL getAiModeTileUrl();
+
+        /**
+         * @return Content description for the AI Mode tile, or null if unavailable.
+         */
+        @Nullable String getAiModeTileContentDescription();
+
+        /**
+         * @return Icon drawable for the AI Mode tile, or null if unavailable.
+         */
+        @Nullable Drawable getAiModeTileIconDrawable();
+
+        /**
+         * @param originalTile The tile to edit, or null to add a new tile.
+         * @return A new CustomTileEditCoordinator instance.
+         */
+        CustomTileEditCoordinator createCustomTileEditCoordinator(@Nullable Tile originalTile);
+
+        /**
+         * Displays the snackbar to inform the user that a tile was unpinned and to offer the
+         * opportunity to undo the operation.
+         */
+        void showTileUnpinSnackbar(Runnable undoHandler);
+
+        /**
+         * Displays the snackbar to inform the user that a tile was removed and to offer the
+         * opportunity to undo the operation.
+         */
+        void showTileRemovedSnackbar(Runnable undoHandler);
+
+        /**
+         * Returns the score of a recent suggestion identified by {@code url}, or {@link
+         * MostVisitedSites.INVALID_SUGGESTION_SCORE} if not found.
+         */
+        double getSuggestionScore(GURL url);
 
         /**
          * To be called before this instance is abandoned to the garbage collector so it can do any
@@ -81,9 +142,7 @@ public class TileGroup implements MostVisitedSites.Observer {
         void destroy();
     }
 
-    /**
-     * An observer for events in the {@link TileGroup}.
-     */
+    /** An observer for events in the {@link TileGroup}. */
     public interface Observer {
         /**
          * Called when the tile group is initialised and when any of the tile data has changed,
@@ -91,22 +150,36 @@ public class TileGroup implements MostVisitedSites.Observer {
          */
         void onTileDataChanged();
 
-        /**
-         * Called when the number of tiles has changed.
-         */
+        /** Called when the number of tiles has changed. */
         void onTileCountChanged();
 
         /**
          * Called when a tile icon has changed.
+         *
          * @param tile The tile for which the icon has changed.
          */
         void onTileIconChanged(Tile tile);
 
         /**
          * Called when the visibility of a tile's offline badge has changed.
+         *
          * @param tile The tile for which the visibility of the offline badge has changed.
          */
         void onTileOfflineBadgeVisibilityChanged(Tile tile);
+
+        /**
+         * Called on Custom Tile add, pin, unpin-undo.
+         *
+         * @param tile The Custom Tile that was created.
+         */
+        void onCustomTileCreation(Tile tile);
+
+        /**
+         * Called on Custom Tile reorder.
+         *
+         * @param newPos The new position of the selected tile that was moved.
+         */
+        void onCustomTileReorder(int newPos);
     }
 
     /**
@@ -117,25 +190,93 @@ public class TileGroup implements MostVisitedSites.Observer {
         /**
          * Returns a delegate that will handle user interactions with the view created for the tile.
          */
-        TileInteractionDelegate createInteractionDelegate(Tile tile);
+        TileInteractionDelegate createInteractionDelegate(Tile tile, View view);
+
+        /** Returns a delegate to handle Custom Tile modifications. */
+        CustomTileModificationDelegate getCustomTileModificationDelegate();
 
         /**
          * Returns a callback to be invoked when the icon for the provided tile is loaded. It will
-         * be responsible for updating the tile data and triggering the visual refresh.
+         * be responsible for triggering the visual refresh.
          */
-        LargeIconBridge.LargeIconCallback createIconLoadCallback(Tile tile);
+        Runnable createIconLoadCallback(Tile tile);
+
+        /**
+         * @return Content description for the AI Mode tile, or null if unavailable.
+         */
+        @Nullable String getAiModeTileContentDescription();
+
+        /**
+         * @return Icon drawable for the AI Mode tile, or null if unavailable.
+         */
+        @Nullable Drawable getAiModeTileIconDrawable();
     }
 
-    /**
-     * Delegate for handling interactions with tiles.
-     */
-    public interface TileInteractionDelegate extends OnClickListener, OnCreateContextMenuListener {
+    /** Delegate for handling interactions with tiles. */
+    public interface TileInteractionDelegate
+            extends View.OnClickListener,
+                    View.OnKeyListener,
+                    View.OnLongClickListener,
+                    View.OnTouchListener,
+                    View.OnGenericMotionListener {
         /**
          * Set a runnable for click events on the tile. This is primarily used to track interaction
          * with the tile used by feature engagement purposes.
+         *
          * @param clickRunnable The {@link Runnable} to be executed when tile is clicked.
          */
         void setOnClickRunnable(Runnable clickRunnable);
+
+        /**
+         * Set a runnable for remove events on the tile. Similarly to setOnClickRunnable, this is
+         * primarily used to track interaction with the tile used by feature engagement purposes.
+         *
+         * @param removeRunnable The {@link Runnable} to be executed when tile is removed.
+         */
+        void setOnRemoveRunnable(Runnable removeRunnable);
+    }
+
+    /** Delegate for handling interactions with custom tiles. Not tied to a particular Tile. */
+    public interface CustomTileModificationDelegate {
+        /**
+         * Opens the Custom Tile Edit Dialog (as "Add shortcut") to add a new Custom Tile. If add
+         * proceeds and is successful, refreshes the MVT.
+         */
+        void add();
+
+        /**
+         * Searches for an existing Most Visited Tile matching {@code suggestion}. If found,
+         * attempts to creates a Custom Tile from it. If successful, refreshes the MVT.
+         */
+        void convert(@Nullable SiteSuggestion suggestion);
+
+        /**
+         * Searches for an existing Custom Tile or AI Mode tile matching {@code suggestion}. If
+         * found, attempts to remove it. If successful, refreshes the MVT.
+         */
+        void remove(SiteSuggestion suggestion);
+
+        /**
+         * Searches for an existing Custom Tile matching {@code suggestion}. If found, opens the
+         * Custom Tile Edit Dialog (as "Edit shortcut"). If edit proceeds and is successful,
+         * refreshes the MVT.
+         */
+        void edit(SiteSuggestion suggestion);
+
+        /**
+         * Searches for existing "from" and "to" Custom Tiles matching {@code fromSuggestion} and
+         * {@code toSuggestion}. If both are found, attempt to move "from" tile to position of the
+         * "to" tile, and shift everything between. If successful, refreshes the MVT.
+         *
+         * @return Whether the operation successfully ran.
+         */
+        boolean reorder(
+                SiteSuggestion fromSuggestion,
+                SiteSuggestion toSuggestion,
+                Runnable onSuccessCallback);
+
+        /** Returns whether there exists space for new Custom Tiles. */
+        boolean hasSpace();
     }
 
     /**
@@ -170,13 +311,15 @@ public class TileGroup implements MostVisitedSites.Observer {
     private final SuggestionsUiDelegate mUiDelegate;
     private final ContextMenuManager mContextMenuManager;
     private final Delegate mTileGroupDelegate;
+    private final TileDragDelegate mTileDragDelegate;
     private final Observer mObserver;
     private final TileRenderer mTileRenderer;
+    private final CustomTileModificationDelegate mCustomTileModificationDelegate;
 
     /**
      * Tracks the tasks currently in flight.
      *
-     * We only care about which ones are pending, not their order, and we can have multiple tasks
+     * <p>We only care about which ones are pending, not their order, and we can have multiple tasks
      * pending of the same type. Hence exposing the type as Collection rather than List or Set.
      */
     private final Collection<Integer> mPendingTasks = new ArrayList<>();
@@ -188,50 +331,63 @@ public class TileGroup implements MostVisitedSites.Observer {
      * Source of truth for the tile data. Avoid keeping a reference to a tile in long running
      * callbacks, as it might be thrown out before it is called. Use URL or site data to look it up
      * at the right time instead.
+     *
      * @see #findTile(SiteSuggestion)
      * @see #findTilesForUrl(String)
      */
     private SparseArray<List<Tile>> mTileSections = createEmptyTileData();
 
-    /** Most recently received tile data that has not been displayed yet. */
-    @Nullable
-    private List<SiteSuggestion> mPendingTiles;
+    private final PendingChanges mPendingChanges = new PendingChanges();
 
-    /**
-     * URL of the most recently removed tile. Used to identify when a tile removal is confirmed by
-     * the tile backend.
-     */
-    @Nullable
-    private GURL mPendingRemovalUrl;
-
-    /**
-     * URL of the most recently added tile. Used to identify when a given tile's insertion is
-     * confirmed by the tile backend. This is relevant when a previously existing tile is removed,
-     * then the user undoes the action and wants that tile back.
-     */
-    @Nullable
-    private GURL mPendingInsertionUrl;
+    private boolean mCustomTileCountIsUnderLimit;
 
     private boolean mHasReceivedData;
-    private boolean mExploreSitesLoaded;
+
+    private @Nullable List<SiteSuggestion> mCurrentSiteSuggestions;
 
     // TODO(dgn): Attempt to avoid cycling dependencies with TileRenderer. Is there a better way?
-    private final TileSetupDelegate mTileSetupDelegate = new TileSetupDelegate() {
-        @Override
-        public TileInteractionDelegate createInteractionDelegate(Tile tile) {
-            return new TileInteractionDelegateImpl(tile.getData());
-        }
+    private final TileSetupDelegate mTileSetupDelegate =
+            new TileSetupDelegate() {
+                @Override
+                public TileInteractionDelegate createInteractionDelegate(Tile tile, View view) {
+                    return new TileInteractionDelegateImpl(
+                            mContextMenuManager,
+                            mTileGroupDelegate,
+                            mTileDragDelegate,
+                            mCustomTileModificationDelegate,
+                            tile,
+                            view);
+                }
 
-        @Override
-        public LargeIconBridge.LargeIconCallback createIconLoadCallback(Tile tile) {
-            // TODO(dgn): We could save on fetches by avoiding a new one when there is one pending
-            // for the same URL, and applying the result to all matched URLs.
-            boolean trackLoad =
-                    isLoadTracked() && tile.getSectionType() == TileSectionType.PERSONALIZED;
-            if (trackLoad) addTask(TileTask.FETCH_ICON);
-            return new LargeIconCallbackImpl(tile.getData(), trackLoad);
-        }
-    };
+                @Override
+                public CustomTileModificationDelegate getCustomTileModificationDelegate() {
+                    return mCustomTileModificationDelegate;
+                }
+
+                @Override
+                public Runnable createIconLoadCallback(Tile tile) {
+                    // TODO(dgn): We could save on fetches by avoiding a new one when there is one
+                    // pending for the same URL, and applying the result to all matched URLs.
+                    boolean trackLoad =
+                            isLoadTracked()
+                                    && tile.getSectionType() == TileSectionType.PERSONALIZED;
+                    if (trackLoad) addTask(TileTask.FETCH_ICON);
+                    return () -> {
+                        mObserver.onTileIconChanged(tile);
+                        if (trackLoad) removeTask(TileTask.FETCH_ICON);
+                    };
+                }
+
+                @Override
+                public @Nullable String getAiModeTileContentDescription() {
+                    return mTileGroupDelegate.getAiModeTileContentDescription();
+                }
+
+                @Override
+                public @Nullable Drawable getAiModeTileIconDrawable() {
+                    return mTileGroupDelegate.getAiModeTileIconDrawable();
+                }
+            };
 
     /**
      * @param tileRenderer Used to render icons.
@@ -241,60 +397,59 @@ public class TileGroup implements MostVisitedSites.Observer {
      * @param observer Will be notified of changes to the tile data.
      * @param offlinePageBridge Used to update the offline badge of the tiles.
      */
-    public TileGroup(TileRenderer tileRenderer, SuggestionsUiDelegate uiDelegate,
-            ContextMenuManager contextMenuManager, Delegate tileGroupDelegate, Observer observer,
+    public TileGroup(
+            TileRenderer tileRenderer,
+            SuggestionsUiDelegate uiDelegate,
+            ContextMenuManager contextMenuManager,
+            Delegate tileGroupDelegate,
+            TileDragDelegate tileDragDelegate,
+            Observer observer,
             OfflinePageBridge offlinePageBridge) {
         mUiDelegate = uiDelegate;
         mContextMenuManager = contextMenuManager;
         mTileGroupDelegate = tileGroupDelegate;
+        mTileDragDelegate = tileDragDelegate;
         mObserver = observer;
         mTileRenderer = tileRenderer;
         mOfflineModelObserver = new OfflineModelObserver(offlinePageBridge);
-        mUiDelegate.addDestructionObserver(mOfflineModelObserver);
+        mCustomTileModificationDelegate = new CustomTileModificationDelegateImpl();
     }
 
     @Override
-    public void onSiteSuggestionsAvailable(List<SiteSuggestion> siteSuggestions) {
-        // Only transforms the incoming tiles and stores them in a buffer for when we decide to
-        // refresh the tiles in the UI.
-
-        boolean removalCompleted = mPendingRemovalUrl != null;
-        boolean insertionCompleted = mPendingInsertionUrl == null;
-
-        mPendingTiles = new ArrayList<>();
-        for (SiteSuggestion suggestion : siteSuggestions) {
-            mPendingTiles.add(suggestion);
-
-            // Only tiles in the personal section can be modified.
-            if (suggestion.sectionType != TileSectionType.PERSONALIZED) continue;
-            if (suggestion.url.equals(mPendingRemovalUrl)) removalCompleted = false;
-            if (suggestion.url.equals(mPendingInsertionUrl)) insertionCompleted = true;
-            if (suggestion.source == TileSource.EXPLORE && !mExploreSitesLoaded) {
-                mExploreSitesLoaded = true;
-                ExploreSitesBridge.initializeCatalog(Profile.getLastUsedRegularProfile(),
-                        ExploreSitesCatalogUpdateRequestSource.NEW_TAB_PAGE);
-            }
+    public void onSiteSuggestionsAvailable(
+            boolean isUserTriggered, List<SiteSuggestion> siteSuggestions) {
+        // Store incoming suggestions for later usage by loadTiles(). This may happen eagerly below
+        // if conditions are met, or deferred to onSwitchToForeground().
+        mPendingChanges.siteSuggestions = new ArrayList<>(siteSuggestions);
+        if (!mHasReceivedData || !mUiDelegate.isVisible() || isUserTriggered) {
+            loadTiles(); // Eager update.
         }
-
-        boolean expectedChangeCompleted = false;
-        if (mPendingRemovalUrl != null && removalCompleted) {
-            mPendingRemovalUrl = null;
-            expectedChangeCompleted = true;
-        }
-        if (mPendingInsertionUrl != null && insertionCompleted) {
-            mPendingInsertionUrl = null;
-            expectedChangeCompleted = true;
-        }
-
-        if (!mHasReceivedData || !mUiDelegate.isVisible() || expectedChangeCompleted) loadTiles();
     }
 
     @Override
     public void onIconMadeAvailable(GURL siteUrl) {
         for (Tile tile : findTilesForUrl(siteUrl)) {
-            mTileRenderer.updateIcon(tile.getData(),
-                    new LargeIconCallbackImpl(tile.getData(), /* trackLoadTask = */ false));
+            mTileRenderer.updateIcon(tile, mTileSetupDelegate);
         }
+    }
+
+    @Override
+    public void onAiModeTileConfigChanged() {
+        reloadTilesFromCurrentSuggestions();
+    }
+
+    /**
+     * Re-runs {@link #loadTiles()} on the most recently loaded suggestions so the AI Mode tile is
+     * re-evaluated (shown, updated, or hidden) without a new native suggestion delivery. Any
+     * suggestions deferred to {@link #onSwitchToForeground(boolean)} are preserved.
+     */
+    private void reloadTilesFromCurrentSuggestions() {
+        if (mCurrentSiteSuggestions == null) return;
+
+        @Nullable List<SiteSuggestion> deferredSuggestions = mPendingChanges.siteSuggestions;
+        mPendingChanges.siteSuggestions = new ArrayList<>(mCurrentSiteSuggestions);
+        loadTiles();
+        mPendingChanges.siteSuggestions = deferredSuggestions;
     }
 
     /**
@@ -336,12 +491,15 @@ public class TileGroup implements MostVisitedSites.Observer {
 
     /**
      * To be called when the view displaying the tile group becomes visible.
+     *
      * @param trackLoadTask whether the delegate should be notified that the load is completed
-     *      through {@link Delegate#onLoadingComplete(List)}.
+     *     through {@link Delegate#onLoadingComplete(List)}.
      */
     public void onSwitchToForeground(boolean trackLoadTask) {
         if (trackLoadTask) addTask(TileTask.FETCH_DATA);
-        if (mPendingTiles != null) loadTiles();
+        if (mPendingChanges.siteSuggestions != null) {
+            loadTiles(); // Deferred update.
+        }
         if (trackLoadTask) removeTask(TileTask.FETCH_DATA);
     }
 
@@ -349,66 +507,92 @@ public class TileGroup implements MostVisitedSites.Observer {
         return mTileSetupDelegate;
     }
 
-    /** Loads tile data from {@link #mPendingTiles} and clears it afterwards. */
+    /**
+     * Returns the score of a recent suggestion identified by {@code url}, or {@link
+     * MostVisitedSites.INVALID_SUGGESTION_SCORE} if not found.
+     */
+    double getSuggestionScore(GURL url) {
+        return mTileGroupDelegate.getSuggestionScore(url);
+    }
+
+    /**
+     * Kills drag session if any is active, to prevent conflicts between a suggestion update and an
+     * active drag session that's based on stale data.
+     */
+    private void maybeKillDragSession() {
+        mTileDragDelegate.cancelActiveSession();
+    }
+
+    /**
+     * Applies a reorder that was computed in Java without triggering C++ {@link #loadTiles()},
+     * refreshing tile views and reporting success.
+     *
+     * @param visualPos The screen position that the reordered tile ends up in.
+     * @param onSuccessCallback Callback to run once the reorder is applied.
+     */
+    private void applyFrontEndOnlyReorder(int visualPos, Runnable onSuccessCallback) {
+        mObserver.onTileDataChanged();
+        mObserver.onCustomTileReorder(visualPos);
+        onSuccessCallback.run();
+    }
+
+    /** Loads tile data from {@link #mPendingChanges.siteSuggestions} and clears it afterwards. */
     private void loadTiles() {
-        assert mPendingTiles != null;
+        assert mPendingChanges.siteSuggestions != null;
 
         boolean isInitialLoad = !mHasReceivedData;
         mHasReceivedData = true;
 
-        boolean dataChanged = isInitialLoad;
-        List<Tile> personalisedTiles = mTileSections.get(TileSectionType.PERSONALIZED);
-        int oldPersonalisedTilesCount = personalisedTiles == null ? 0 : personalisedTiles.size();
+        List<Tile> oldPersonalizedTiles = mTileSections.get(TileSectionType.PERSONALIZED);
 
-        SparseArray<List<Tile>> newSites = createEmptyTileData();
-        for (int i = 0; i < mPendingTiles.size(); ++i) {
-            SiteSuggestion suggestion = mPendingTiles.get(i);
-            Tile tile = findTile(suggestion);
-            if (tile == null) {
-                dataChanged = true;
-                tile = new Tile(suggestion, i);
+        mTileSections = createTileData(mPendingChanges.siteSuggestions);
+
+        if (NewTabPageUtils.isAiModeTileInsideMvt()) {
+            String aiModeTileTitle = mTileGroupDelegate.getAiModeTileTitle();
+            GURL aiModeTileUrl = mTileGroupDelegate.getAiModeTileUrl();
+            if (!TextUtils.isEmpty(aiModeTileTitle) && !GURL.isEmptyOrInvalid(aiModeTileUrl)) {
+                injectAiModeTile(mTileSections, aiModeTileTitle, aiModeTileUrl);
             }
-
-            List<Tile> sectionTiles = newSites.get(suggestion.sectionType);
-            if (sectionTiles == null) {
-                sectionTiles = new ArrayList<>();
-                newSites.append(suggestion.sectionType, sectionTiles);
-            }
-
-            // This is not supposed to happen but does. See https://crbug.com/703628
-            if (findTile(suggestion.url, sectionTiles) != null) continue;
-
-            sectionTiles.add(tile);
         }
 
-        mTileSections = newSites;
-        mPendingTiles = null;
+        mCurrentSiteSuggestions = mPendingChanges.siteSuggestions;
+        mPendingChanges.siteSuggestions = null;
 
-        // TODO(dgn): change these events, maybe introduce new ones or just change semantics? This
-        // will depend on the UI to be implemented and the desired refresh behaviour.
-        List<Tile> personalizedTiles = mTileSections.get(TileSectionType.PERSONALIZED);
-        int numberOfPersonalizedTiles = personalizedTiles == null ? 0 : personalizedTiles.size();
-        boolean countChanged =
-                isInitialLoad || numberOfPersonalizedTiles != oldPersonalisedTilesCount;
-        dataChanged = dataChanged || countChanged;
+        List<Tile> newPersonalizedTiles = mTileSections.get(TileSectionType.PERSONALIZED);
+        assumeNonNull(newPersonalizedTiles);
+        boolean dataChanged =
+                isInitialLoad || !tileListAreEqual(oldPersonalizedTiles, newPersonalizedTiles);
 
-        if (!dataChanged) return;
+        if (dataChanged) {
+            maybeKillDragSession();
 
-        mOfflineModelObserver.updateAllSuggestionsOfflineAvailability(
-                /* reportPrefetchedSuggestionsCount = */ false);
+            mCustomTileCountIsUnderLimit =
+                    TileUtils.customTileCountIsUnderLimit(newPersonalizedTiles);
 
-        if (countChanged) mObserver.onTileCountChanged();
+            mOfflineModelObserver.updateAllSuggestionsOfflineAvailability();
 
-        if (isLoadTracked()) addTask(TileTask.SCHEDULE_ICON_FETCH);
-        mObserver.onTileDataChanged();
+            assumeNonNull(oldPersonalizedTiles);
+            if (isInitialLoad || oldPersonalizedTiles.size() != newPersonalizedTiles.size()) {
+                mObserver.onTileCountChanged();
+            }
 
-        if (isInitialLoad) removeTask(TileTask.FETCH_DATA);
+            if (isLoadTracked()) addTask(TileTask.SCHEDULE_ICON_FETCH);
+            mObserver.onTileDataChanged();
+
+            if (isInitialLoad) removeTask(TileTask.FETCH_DATA);
+        }
+
+        for (Runnable task : mPendingChanges.taskToRunAfterTileReload) {
+            task.run();
+        }
+        mPendingChanges.taskToRunAfterTileReload.clear();
     }
 
-    @Nullable
-    private Tile findTile(SiteSuggestion suggestion) {
-        if (mTileSections.get(suggestion.sectionType) == null) return null;
-        for (Tile tile : mTileSections.get(suggestion.sectionType)) {
+    protected @Nullable Tile findTile(@Nullable SiteSuggestion suggestion) {
+        if (suggestion == null) return null;
+        var tiles = mTileSections.get(suggestion.sectionType);
+        if (tiles == null) return null;
+        for (Tile tile : tiles) {
             if (tile.getData().equals(suggestion)) return tile;
         }
         return null;
@@ -419,7 +603,7 @@ public class TileGroup implements MostVisitedSites.Observer {
      * @param tiles The section to search in, represented by the contained list of tiles.
      * @return A tile matching the provided URL and section, or {@code null} if none is found.
      */
-    private Tile findTile(GURL url, @Nullable List<Tile> tiles) {
+    private static @Nullable Tile findTileByUrl(GURL url, @Nullable List<Tile> tiles) {
         if (tiles == null) return null;
         for (Tile tile : tiles) {
             if (tile.getUrl().equals(url)) return tile;
@@ -427,7 +611,19 @@ public class TileGroup implements MostVisitedSites.Observer {
         return null;
     }
 
-    /** @return All tiles matching the provided URL, or an empty list if none is found. */
+    /**
+     * @param url The URL to search for within PERSONALIZED tiles.
+     * @return A tile matching the provided URL and section, or {@code null} if none is found.
+     */
+    private @Nullable Tile findPersonalTileByUrl(GURL url) {
+        List<Tile> personalTiles = mTileSections.get(TileSectionType.PERSONALIZED);
+        assert personalTiles != null;
+        return findTileByUrl(url, personalTiles);
+    }
+
+    /**
+     * @return All tiles matching the provided URL, or an empty list if none is found.
+     */
     private List<Tile> findTilesForUrl(GURL url) {
         List<Tile> tiles = new ArrayList<>();
         for (int i = 0; i < mTileSections.size(); ++i) {
@@ -472,9 +668,9 @@ public class TileGroup implements MostVisitedSites.Observer {
         return mPendingTasks.contains(task);
     }
 
-    @Nullable
-    public SiteSuggestion getHomepageTileData() {
-        for (Tile tile : mTileSections.get(TileSectionType.PERSONALIZED)) {
+    public @Nullable SiteSuggestion getHomepageTileData() {
+        var tiles = assumeNonNull(mTileSections.get(TileSectionType.PERSONALIZED));
+        for (Tile tile : tiles) {
             if (tile.getSource() == TileSource.HOMEPAGE) {
                 return tile.getData();
             }
@@ -494,127 +690,454 @@ public class TileGroup implements MostVisitedSites.Observer {
         return newTileData;
     }
 
-    // TODO(dgn): I would like to move that to TileRenderer, but setting the data on the tile,
-    // notifying the observer and updating the tasks make it awkward.
-    private class LargeIconCallbackImpl implements LargeIconBridge.LargeIconCallback {
-        private final SiteSuggestion mSiteData;
-        private final boolean mTrackLoadTask;
+    private static SparseArray<List<Tile>> createTileData(List<SiteSuggestion> suggestions) {
+        SparseArray<List<Tile>> newTileData = createEmptyTileData();
+        for (int i = 0; i < suggestions.size(); ++i) {
+            SiteSuggestion suggestion = suggestions.get(i);
 
-        private LargeIconCallbackImpl(SiteSuggestion suggestion, boolean trackLoadTask) {
-            mSiteData = suggestion;
-            mTrackLoadTask = trackLoadTask;
-        }
-
-        @Override
-        public void onLargeIconAvailable(@Nullable Bitmap icon, int fallbackColor,
-                boolean isFallbackColorDefault, @IconType int iconType) {
-            Tile tile = findTile(mSiteData);
-            if (tile != null) { // Do nothing if the tile was removed.
-                tile.setIconType(iconType);
-                if (icon == null) {
-                    mTileRenderer.setTileIconFromColor(tile, fallbackColor, isFallbackColorDefault);
-                } else {
-                    mTileRenderer.setTileIconFromBitmap(tile, icon);
-                }
-
-                mObserver.onTileIconChanged(tile);
+            List<Tile> sectionTiles = newTileData.get(suggestion.sectionType);
+            if (sectionTiles == null) {
+                sectionTiles = new ArrayList<>();
+                newTileData.append(suggestion.sectionType, sectionTiles);
             }
 
-            // This call needs to be made after the tiles are completely initialised, for UMA.
-            if (mTrackLoadTask) removeTask(TileTask.FETCH_ICON);
+            // Duplicate should not exist but they may. See https://crbug.com/40511776
+            if (findTileByUrl(suggestion.url, sectionTiles) != null) continue;
+
+            sectionTiles.add(new Tile(suggestion, i));
+        }
+
+        return newTileData;
+    }
+
+    private static void injectAiModeTile(
+            SparseArray<List<Tile>> tileSections, String aiModeTileTitle, GURL aiModeTileUrl) {
+        int savedIndex =
+                ChromeSharedPreferences.getInstance()
+                        .readInt(ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, 0);
+        if (savedIndex < 0) {
+            return;
+        }
+
+        // createTileData() always starts from createEmptyTileData(), which unconditionally seeds
+        // the PERSONALIZED section. It is therefore an empty list, never null, even when the user
+        // has no top sites and no custom links.
+        List<Tile> sectionTiles = assumeNonNull(tileSections.get(TileSectionType.PERSONALIZED));
+
+        Tile existingTile = findTileByUrl(aiModeTileUrl, sectionTiles);
+        if (existingTile != null) {
+            if (existingTile.isCustomLink()) {
+                // CT > AIT: Custom link takes precedence. Suppress AI Mode tile.
+                return;
+            }
+            // AIT > TST: Replace organic top site with AI Mode tile.
+            sectionTiles.remove(existingTile);
+        }
+
+        SiteSuggestion aiModeSuggestion =
+                new SiteSuggestion(
+                        aiModeTileTitle,
+                        aiModeTileUrl,
+                        TileTitleSource.TITLE_TAG,
+                        TileSource.AI_MODE,
+                        TileSectionType.PERSONALIZED);
+        int maxInsertIndex = countCustomLinksBeforeIndex(sectionTiles, sectionTiles.size());
+        int insertIndex = Math.max(0, Math.min(savedIndex, maxInsertIndex));
+        // If `insertIndex < savedIndex`, we deliberately *not* try to "fix" the stored value, to
+        // avoid churn.
+        sectionTiles.add(insertIndex, new Tile(aiModeSuggestion, insertIndex));
+        reindexTiles(sectionTiles);
+    }
+
+    private static void reindexTiles(List<Tile> tiles) {
+        for (int i = 0; i < tiles.size(); ++i) {
+            tiles.get(i).setIndex(i);
         }
     }
 
-    private class TileInteractionDelegateImpl
-            implements TileInteractionDelegate, ContextMenuManager.Delegate {
-        private final SiteSuggestion mSuggestion;
-        private Runnable mOnClickRunnable;
+    private static int findAiModeTile(List<Tile> tiles) {
+        for (int i = 0; i < tiles.size(); ++i) {
+            if (tiles.get(i).isAiMode()) {
+                return i;
+            }
+        }
+        return -1;
+    }
 
-        public TileInteractionDelegateImpl(SiteSuggestion suggestion) {
-            mSuggestion = suggestion;
+    private static void moveTile(List<Tile> tiles, Tile tile, int toIndex) {
+        tiles.remove(tile);
+        tiles.add(toIndex, tile);
+        reindexTiles(tiles);
+    }
+
+    private boolean tileListAreEqual(
+            @Nullable List<Tile> tileList1, @Nullable List<Tile> tileList2) {
+        if (tileList1 == null) return tileList2 == null || tileList2.isEmpty();
+        if (tileList2 == null) return tileList1.isEmpty();
+        int n = tileList1.size();
+        if (tileList2.size() != n) return false;
+        for (int i = 0; i < n; ++i) {
+            Tile tile1 = tileList1.get(i);
+            Tile tile2 = tileList2.get(i);
+            if (!tile1.getData().equals(tile2.getData())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Counts the number of custom links in {@code tiles} that appear before the given {@code
+     * screenIndex}. Used to translate visual screen positions [0..8] to native custom link indices
+     * [0..7] expected by C++ CustomLinksManager.
+     *
+     * @param tiles The list of tiles to inspect.
+     * @param screenIndex The visual screen position threshold.
+     * @return The number of custom links before {@code screenIndex}.
+     */
+    public static int countCustomLinksBeforeIndex(List<Tile> tiles, int screenIndex) {
+        int count = 0;
+        int limit = Math.max(0, Math.min(screenIndex, tiles.size()));
+        for (int i = 0; i < limit; ++i) {
+            Tile tile = tiles.get(i);
+            if (tile.isCustomLink()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Called before this instance is abandoned to the garbage collector. */
+    public void destroy() {
+        // The mOfflineModelObserver which implements SuggestionsOfflineModelObserver adds itself
+        // as the offlinePageBridge's observer. Calling onDestroy() removes itself from subscribers.
+        mOfflineModelObserver.onDestroy();
+    }
+
+    private class CustomTileModificationDelegateImpl implements CustomTileModificationDelegate {
+        CustomTileModificationDelegateImpl() {}
+
+        // CustomTileModificationDelegate implementation.
+        @Override
+        public void add() {
+            CustomTileEditCoordinator customTileEditCoordinator =
+                    mTileGroupDelegate.createCustomTileEditCoordinator(/* originalTile= */ null);
+            customTileEditCoordinator.show(
+                    (String name, GURL url) -> {
+                        return addCustomLinkAndUpdateOnSuccess(name, url, /* pos= */ null);
+                    },
+                    mTileGroupDelegate::hasCustomLink);
         }
 
         @Override
-        public void onClick(View view) {
-            Tile tile = findTile(mSuggestion);
+        public void convert(@Nullable SiteSuggestion suggestion) {
+            @Nullable Tile tile = findTile(suggestion);
             if (tile == null) return;
 
-            SuggestionsMetrics.recordTileTapped();
-            if (mOnClickRunnable != null) mOnClickRunnable.run();
-            mTileGroupDelegate.openMostVisitedItem(WindowOpenDisposition.CURRENT_TAB, tile);
+            GURL url = tile.getUrl();
+            String name = TileUtils.formatCustomTileName(tile.getTitle(), url);
+            assignCustomLinkAndUpdateOnSuccess(url, name, url);
         }
 
         @Override
-        public void openItem(int windowDisposition) {
-            Tile tile = findTile(mSuggestion);
+        public void remove(SiteSuggestion suggestion) {
+            @Nullable Tile tile = findTile(suggestion);
             if (tile == null) return;
 
-            mTileGroupDelegate.openMostVisitedItem(windowDisposition, tile);
+            if (tile.isAiMode()) {
+                deleteAiModeTileAndUpdateOnSuccess();
+                return;
+            }
+
+            deleteCustomLinkAndUpdateOnSuccess(tile);
         }
 
         @Override
-        public void openItemInGroup(int windowDisposition) {
-            Tile tile = findTile(mSuggestion);
-            if (tile == null) return;
+        public void edit(SiteSuggestion suggestion) {
+            @Nullable Tile tile = findTile(suggestion);
+            // tile.isAiMode() is a defensive guard to protect edit() from modifying the AI Mode
+            // tile
+            if (tile == null || tile.isAiMode()) return;
 
-            mTileGroupDelegate.openMostVisitedItemInGroup(windowDisposition, tile);
+            CustomTileEditCoordinator customTileEditCoordinator =
+                    mTileGroupDelegate.createCustomTileEditCoordinator(tile);
+            customTileEditCoordinator.show(
+                    (String name, GURL url) -> {
+                        return assignCustomLinkAndUpdateOnSuccess(tile.getUrl(), name, url);
+                    },
+                    mTileGroupDelegate::hasCustomLink);
+        }
+
+        /**
+         * Reorders {@code fromSuggestion} to {@code toSuggestion}'s position in 4 steps:
+         *
+         * <ol>
+         *   <li>If no AI Mode tile is present, delegates directly to C++ {@code
+         *       CustomLinksManager}.
+         *   <li>Computes the AI Mode tile's new screen index after the move and persists it to
+         *       {@code SharedPreferences} (saving the previous preference value for undo).
+         *   <li>If the C++ Custom Links order did not change (moving the AI Mode tile itself, or
+         *       swapping an adjacent Custom Link with the AI Mode tile), updates the tile list and
+         *       refreshes the UI locally in Java.
+         *   <li>Otherwise, translates the visual target index to a C++ Custom Link index, delegates
+         *       to C++, and restores the saved AI Mode index if the native reorder fails.
+         * </ol>
+         */
+        @Override
+        public boolean reorder(
+                SiteSuggestion fromSuggestion,
+                SiteSuggestion toSuggestion,
+                Runnable onSuccessCallback) {
+            @Nullable Tile fromTile = findTile(fromSuggestion);
+            @Nullable Tile toTile = findTile(toSuggestion);
+            if (fromTile == null || toTile == null) return false;
+
+            List<Tile> personalTiles =
+                    assumeNonNull(mTileSections.get(TileSectionType.PERSONALIZED));
+            int fromIndex = fromTile.getIndex();
+            int toIndex = toTile.getIndex();
+
+            // Reads the AI Mode tile's actual rendered position from personalTiles rather than
+            // SharedPreferences: injectAiModeTile() clamps savedIndex without writing it back
+            // (e.g., SharedPreferences can still store 5 after custom links are deleted and the
+            // tile is clamped to slot 2).
+            int oldAiIndex = findAiModeTile(personalTiles);
+            if (oldAiIndex < 0) {
+                return reorderCustomLinkAndUpdateOnSuccess(
+                        /* url= */ fromTile.getUrl(),
+                        /* newPos= */ toIndex,
+                        /* visualPos= */ toIndex,
+                        onSuccessCallback);
+            }
+
+            int newAiIndex = oldAiIndex;
+            if (fromIndex == oldAiIndex) {
+                newAiIndex = toIndex;
+            } else if (fromIndex < oldAiIndex && toIndex >= oldAiIndex) {
+                newAiIndex = oldAiIndex - 1;
+            } else if (fromIndex > oldAiIndex && toIndex <= oldAiIndex) {
+                newAiIndex = oldAiIndex + 1;
+            }
+
+            // Persist newAiIndex before calling native: mTileGroupDelegate.reorderCustomLink
+            // synchronously triggers loadTiles() -> injectAiModeTile(), which reads this
+            // preference before reorderCustomLinkAndUpdateOnSuccess() returns.
+            @Nullable Integer savedAiIndex = null;
+            if (newAiIndex != oldAiIndex) {
+                savedAiIndex =
+                        ChromeSharedPreferences.getInstance()
+                                .readInt(
+                                        ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX,
+                                        /* defaultValue= */ 0);
+                ChromeSharedPreferences.getInstance()
+                        .writeInt(ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, newAiIndex);
+            }
+
+            // If the moved tile is (1) the AI Mode tile, or (2) a Custom Link that performed an
+            // adjacent swap with the AI Mode tile, then the relative order of Custom Links in C++
+            // has not changed. Calling native reorderCustomLink would fail as a no-op and return
+            // false without rebuilding tiles, so update the UI in Java.
+            if (fromIndex == oldAiIndex
+                    || (toIndex == oldAiIndex && Math.abs(fromIndex - toIndex) == 1)) {
+                moveTile(personalTiles, fromTile, toIndex);
+                // Kill other drag sessions in flight to prevent race condition.
+                maybeKillDragSession();
+                applyFrontEndOnlyReorder(toIndex, onSuccessCallback);
+                return true;
+            }
+
+            int toCustomLinkIndex = (newAiIndex < toIndex) ? toIndex - 1 : toIndex;
+            boolean success =
+                    reorderCustomLinkAndUpdateOnSuccess(
+                            /* url= */ fromTile.getUrl(),
+                            /* newPos= */ toCustomLinkIndex,
+                            /* visualPos= */ toIndex,
+                            onSuccessCallback);
+            if (!success && savedAiIndex != null) {
+                ChromeSharedPreferences.getInstance()
+                        .writeInt(ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, savedAiIndex);
+            }
+            return success;
         }
 
         @Override
-        public void removeItem() {
-            Tile tile = findTile(mSuggestion);
-            if (tile == null) return;
-
-            // Note: This does not track all the removals, but will track the most recent one. If
-            // that removal is committed, it's good enough for change detection.
-            mPendingRemovalUrl = mSuggestion.url;
-            mTileGroupDelegate.removeMostVisitedItem(tile, url -> mPendingInsertionUrl = url);
+        public boolean hasSpace() {
+            return mCustomTileCountIsUnderLimit;
         }
 
-        @Override
-        public GURL getUrl() {
-            return mSuggestion.url;
-        }
-
-        @Override
-        public String getContextMenuTitle() {
-            return null;
-        }
-
-        @Override
-        public boolean isItemSupported(@ContextMenuItemId int menuItemId) {
-            switch (menuItemId) {
-                // Personalized tiles are the only tiles that can be removed.  Additionally, the
-                // Explore tile counts as a personalized tile but cannot be removed.
-                case ContextMenuItemId.REMOVE:
-                    return mSuggestion.sectionType == TileSectionType.PERSONALIZED
-                            && mSuggestion.source != TileSource.EXPLORE;
-                case ContextMenuItemId.LEARN_MORE:
-                    return SuggestionsConfig.scrollToLoad();
-                case ContextMenuItemId.OPEN_IN_INCOGNITO_TAB:
-                    return mSuggestion.source != TileSource.EXPLORE;
-                default:
-                    return true;
+        private void handleCustomTileAdd(GURL url) {
+            @Nullable Tile tile = findPersonalTileByUrl(url);
+            if (tile != null) {
+                mObserver.onCustomTileCreation(tile);
             }
         }
 
-        @Override
-        public void onContextMenuCreated() {}
+        private boolean addCustomLinkAndUpdateOnSuccess(
+                String name, GURL url, @Nullable Integer pos) {
+            if (!TileUtils.isValidCustomTileName(name) || !TileUtils.isValidCustomTileUrl(url)) {
+                return false;
+            }
 
-        @Override
-        public void onCreateContextMenu(
-                ContextMenu contextMenu, View view, ContextMenuInfo contextMenuInfo) {
-            mContextMenuManager.createContextMenu(contextMenu, view, this);
+            // On success, onSiteSuggestionsAvailable() triggers.
+            Runnable onSuccessCallback = () -> handleCustomTileAdd(url);
+            mPendingChanges.taskToRunAfterTileReload.add(onSuccessCallback);
+            boolean success = mTileGroupDelegate.addCustomLink(name, url, pos);
+            if (!success) {
+                mPendingChanges.taskToRunAfterTileReload.remove(onSuccessCallback);
+            }
+            return success;
         }
 
-        @Override
-        public void setOnClickRunnable(Runnable clickRunnable) {
-            mOnClickRunnable = clickRunnable;
+        private boolean assignCustomLinkAndUpdateOnSuccess(GURL keyUrl, String name, GURL url) {
+            if (!TileUtils.isValidCustomTileName(name)
+                    || (url != null && !TileUtils.isValidCustomTileUrl(url))) {
+                return false;
+            }
+
+            // On success, onSiteSuggestionsAvailable() triggers.
+            Runnable onSuccessCallback = () -> handleCustomTileAdd(url);
+            mPendingChanges.taskToRunAfterTileReload.add(onSuccessCallback);
+            boolean success = mTileGroupDelegate.assignCustomLink(keyUrl, name, url);
+            if (!success) {
+                mPendingChanges.taskToRunAfterTileReload.remove(onSuccessCallback);
+            }
+            return success;
+        }
+
+        /**
+         * Unpins {@code tile} in native {@code CustomLinksManager}, shifts the AI Mode tile index
+         * if needed, and shows an Undo snackbar.
+         */
+        private void deleteCustomLinkAndUpdateOnSuccess(Tile tile) {
+            List<Tile> personalTiles =
+                    assumeNonNull(mTileSections.get(TileSectionType.PERSONALIZED));
+            int oldAiIndex = findAiModeTile(personalTiles);
+
+            // 1. Classic path: no AI Mode tile, so the screen index equals the native index.
+            if (oldAiIndex < 0) {
+                // On success, onSiteSuggestionsAvailable() triggers.
+                boolean success = mTileGroupDelegate.deleteCustomLink(tile.getUrl());
+                if (success) {
+                    mTileGroupDelegate.showTileUnpinSnackbar(
+                            () -> {
+                                // Performs undo by adding the tile back at its original index.
+                                addCustomLinkAndUpdateOnSuccess(
+                                        tile.getTitle(), tile.getUrl(), tile.getIndex());
+                            });
+                }
+                return;
+            }
+
+            // 2. Aurora V2 path: translates the screen index to the C++ custom-link index
+            // (excluding the AI Mode tile) for the Undo action. Computes it now because
+            // mTileGroupDelegate.deleteCustomLink() below synchronously triggers loadTiles(),
+            // which rebuilds mTileSections, so personalTiles is stale by the time Undo runs.
+            int customLinkIndexForUndo =
+                    countCustomLinksBeforeIndex(personalTiles, tile.getIndex());
+            var prefs = ChromeSharedPreferences.getInstance();
+
+            // Non-null only when the AI Mode tile sits to the right of the unpinned custom link,
+            // so its stored index goes stale and needs to shift left by 1. Reads the stored index
+            // rather than oldAiIndex: injectAiModeTile() clamps the stored index without writing
+            // it back. Null means the stored index stays fresh and no change is needed.
+            @Nullable Integer staleAiIndex =
+                    (oldAiIndex > tile.getIndex())
+                            ? prefs.readInt(
+                                    ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX,
+                                    /* defaultValue= */ 0)
+                            : null;
+            if (staleAiIndex != null) {
+                // Saves the new index now: mTileGroupDelegate.deleteCustomLink() below
+                // synchronously triggers loadTiles() -> injectAiModeTile(), which reads this
+                // preference to place the AI Mode tile.
+                prefs.writeInt(ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, staleAiIndex - 1);
+            }
+
+            // 3. Deletes the custom link in C++; onSiteSuggestionsAvailable() triggers on success.
+            boolean success = mTileGroupDelegate.deleteCustomLink(tile.getUrl());
+            if (!success) {
+                // Rolls back the AI Mode index if deleting the custom link in C++ failed.
+                if (staleAiIndex != null) {
+                    prefs.writeInt(ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, staleAiIndex);
+                }
+                return;
+            }
+
+            // 4. Shows the Undo snackbar to restore the AI Mode index and the custom link.
+            mTileGroupDelegate.showTileUnpinSnackbar(
+                    () -> {
+                        if (staleAiIndex != null) {
+                            prefs.writeInt(
+                                    ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, staleAiIndex);
+                        }
+                        // Performs undo by adding the tile back at its original C++ index.
+                        boolean undoSuccess =
+                                addCustomLinkAndUpdateOnSuccess(
+                                        tile.getTitle(), tile.getUrl(), customLinkIndexForUndo);
+                        // Rolls back if re-inserting the custom link in C++ failed.
+                        if (!undoSuccess && staleAiIndex != null) {
+                            prefs.writeInt(
+                                    ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX,
+                                    staleAiIndex - 1);
+                        }
+                    });
+        }
+
+        /** Hides the AI Mode tile by resetting its stored index and shows an Undo snackbar. */
+        private void deleteAiModeTileAndUpdateOnSuccess() {
+            var prefs = ChromeSharedPreferences.getInstance();
+            int savedAiIndex =
+                    prefs.readInt(
+                            ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, /* defaultValue= */ 0);
+            prefs.writeInt(ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, /* value= */ -1);
+            RecordUserAction.record("Suggestions.AIM.Unpinned");
+
+            // Writing the preference alone does not reload tiles (there is no native call here to
+            // trigger loadTiles()), so re-run loadTiles() on the cached suggestions to drop the
+            // AI Mode tile from the UI.
+            reloadTilesFromCurrentSuggestions();
+
+            mTileGroupDelegate.showTileRemovedSnackbar(
+                    () -> {
+                        prefs.writeInt(
+                                ChromePreferenceKeys.NTP_MVT_AI_MODE_TILE_INDEX, savedAiIndex);
+                        RecordUserAction.record("Suggestions.AIM.UndoUnpin");
+                        reloadTilesFromCurrentSuggestions();
+                    });
+        }
+
+        /**
+         * Reorders a custom link in native {@code CustomLinksManager} and schedules UI updates to
+         * run once the resulting tile reload completes.
+         *
+         * @param url The URL of the custom link being moved.
+         * @param newPos The target 0-based index among custom links only, for C++ {@code
+         *     CustomLinksManager::ReorderLink}.
+         * @param visualPos The target 0-based visual index across all rendered tiles (including the
+         *     AI Mode tile), passed to {@link Observer#onCustomTileReorder(int)} to scroll the
+         *     moved tile into view.
+         * @param onSuccessCallback Callback invoked after the reload to finalize drag/swap visuals.
+         * @return True if the native reorder succeeded.
+         */
+        private boolean reorderCustomLinkAndUpdateOnSuccess(
+                GURL url, int newPos, int visualPos, Runnable onSuccessCallback) {
+            // On success, onSiteSuggestionsAvailable() triggers.
+            Runnable newOnSuccessCallback =
+                    () -> {
+                        onSuccessCallback.run();
+                        mObserver.onCustomTileReorder(visualPos);
+                    };
+            mPendingChanges.taskToRunAfterTileReload.add(newOnSuccessCallback);
+            boolean success = mTileGroupDelegate.reorderCustomLink(url, newPos);
+            if (!success) {
+                mPendingChanges.taskToRunAfterTileReload.remove(newOnSuccessCallback);
+            }
+            return success;
         }
     }
 
     private class OfflineModelObserver extends SuggestionsOfflineModelObserver<Tile> {
-        public OfflineModelObserver(OfflinePageBridge bridge) {
+        OfflineModelObserver(OfflinePageBridge bridge) {
             super(bridge);
         }
 

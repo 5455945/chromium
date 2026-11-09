@@ -2,7 +2,7 @@
 
 This README serves as an documentation entry point of Blink's text stack.
 
-It can be viewed in formatted form [here](https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/platform/fonts/README.md).
+It can be viewed in formatted form [here](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/platform/fonts/README.md).
 
 ## Overview ##
 
@@ -328,7 +328,7 @@ Glyph:    a ◌̄ a A (with glyph coordinates placing the ◌̄ above the first 
 ```
 
 Now this sub run is successfully processed and can be appended to
-`ShapeResult`. A new `ShapeResult::RunInfo` is created. The logic in
+`ShapeResult`. A new `ShapeResultRun` is created. The logic in
 `ShapeResult::insertRun` then takes care of merging the shape result into the
 right position the vector of `RunInfo`s in `ShapeResult`.
 
@@ -361,7 +361,7 @@ the
 [CSS Fonts specification](https://drafts.csswg.org/css-fonts/#font-style-matching),
 which mandates to prioritize web fonts over system fonts. Some additional
 details can be found in
-[LocaleInFonts.md](https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/platform/fonts/LocaleInFonts.md#Installed-Font-Fallback).
+[LocaleInFonts.md](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/platform/fonts/LocaleInFonts.md#Installed-Font-Fallback).
 
 `FontFallbackIterator` is intialized with a `FontFallbackList` and starts
 retrieving fonts from this list as its first source for fonts. If during shaping

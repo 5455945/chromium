@@ -1,13 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/cert/merkle_tree_leaf.h"
 
-#include <string.h>
-
+#include <algorithm>
 #include <string>
+#include <vector>
 
+#include "base/containers/span.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "net/cert/x509_certificate.h"
 #include "net/test/cert_test_util.h"
@@ -16,9 +18,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace net {
-
-namespace ct {
+namespace net::ct {
 
 namespace {
 
@@ -40,16 +40,17 @@ MATCHER_P(HexEq, hexStr, "") {
     return true;
 
   // Print hex string (easier to read than default GTest representation)
-  *result_listener << "a.k.a. 0x" << base::HexEncode(arg.data(), arg.size());
-  return memcmp(arg.data(), bytes.data(), bytes.size()) == 0;
+  *result_listener << "a.k.a. 0x" << base::HexEncode(base::as_byte_span(arg));
+  return std::ranges::equal(base::as_byte_span(arg),
+                            base::span<const uint8_t>(bytes));
 }
 
 class MerkleTreeLeafTest : public ::testing::Test {
  public:
   void SetUp() override {
     std::string der_test_cert(ct::GetDerEncodedX509Cert());
-    test_cert_ = X509Certificate::CreateFromBytes(
-        base::as_bytes(base::make_span(der_test_cert)));
+    test_cert_ =
+        X509Certificate::CreateFromBytes(base::as_byte_span(der_test_cert));
     ASSERT_TRUE(test_cert_);
 
     GetX509CertSCT(&x509_sct_);
@@ -129,6 +130,4 @@ TEST_F(MerkleTreeLeafTest, HashForPrecert) {
 
 }  // namespace
 
-}  // namespace ct
-
-}  // namespace net
+}  // namespace net::ct

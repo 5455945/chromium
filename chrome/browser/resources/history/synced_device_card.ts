@@ -1,111 +1,115 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
-import 'chrome://resources/cr_elements/icons.m.js';
-import 'chrome://resources/cr_elements/shared_vars_css.m.js';
-import 'chrome://resources/polymer/v3_0/iron-collapse/iron-collapse.js';
-import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
+import 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import 'chrome://resources/cr_elements/icons.html.js';
 import './searched_label.js';
-import './shared_style.js';
-import './strings.m.js';
+import './shared_icons.html.js';
+import '/strings.m.js';
 
-import {FocusRow} from 'chrome://resources/js/cr/ui/focus_row.m.js';
-import {getFaviconForPageURL} from 'chrome://resources/js/icon.m.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-import {IronCollapseElement} from 'chrome://resources/polymer/v3_0/iron-collapse/iron-collapse.js';
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {browserProxyFactory} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
+import type {ForeignSessionWindow} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
+import type {CrCollapseElement} from 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
+import {FocusRow} from 'chrome://resources/js/focus_row.js';
+import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {ClickModifiers} from 'chrome://resources/mojo/ui/base/mojom/window_open_disposition.mojom-webui.js';
 
-import {BrowserService} from './browser_service.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 import {SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram} from './constants.js';
-import {ForeignSessionTab} from './externs.js';
-
-type OpenTabEvent = {
-  model: {tab: ForeignSessionTab},
-};
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'history-synced-device-card': HistorySyncedDeviceCardElement;
-  }
-}
+import {getCss} from './synced_device_card.css.js';
+import {getHtml} from './synced_device_card.html.js';
 
 export interface HistorySyncedDeviceCardElement {
   $: {
-    'card-heading': HTMLDivElement,
-    'collapse': IronCollapseElement,
+    cardHeading: HTMLElement,
+    collapseButton: HTMLElement,
+    collapse: CrCollapseElement,
+    menuButton: HTMLElement,
   };
 }
 
-export class HistorySyncedDeviceCardElement extends PolymerElement {
+export class HistorySyncedDeviceCardElement extends CrLitElement {
   static get is() {
     return 'history-synced-device-card';
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
       /**
-       * The list of tabs open for this device.
+       * The list of windows open for this device.
        */
-      tabs: {type: Array, observer: 'updateIcons_'},
+      windows: {type: Array},
 
       // Name of the synced device.
-      device: String,
+      device: {type: String},
 
       // When the device information was last updated.
-      lastUpdateTime: String,
+      lastUpdateTime: {type: String},
 
       // Whether the card is open.
-      opened: Boolean,
+      opened: {
+        type: Boolean,
+        notify: true,
+      },
 
-      searchTerm: String,
-
-      /**
-       * The indexes where a window separator should be shown. The use of a
-       * separate array here is necessary for window separators to appear
-       * correctly in search. See http://crrev.com/2022003002 for more details.
-       */
-      separatorIndexes: Array,
+      searchTerm: {type: String},
 
       // Internal identifier for the device.
-      sessionTag: String,
+      sessionTag: {type: String},
     };
   }
 
-  tabs: Array<ForeignSessionTab> = [];
-  opened: boolean;
-  separatorIndexes: Array<number>;
-  sessionTag: string;
+  accessor device: string = '';
+  accessor lastUpdateTime: string = '';
+  accessor windows: ForeignSessionWindow[] = [];
+  accessor opened: boolean = true;
+  accessor searchTerm: string = '';
+  accessor sessionTag: string = '';
 
-  ready() {
-    super.ready();
-    this.addEventListener('dom-change', this.notifyFocusUpdate_);
-  }
-
-  private fire_(eventName: string, detail?: any) {
-    this.dispatchEvent(
-        new CustomEvent(eventName, {bubbles: true, composed: true, detail}));
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+    if (changedProperties.has('windows') ||
+        changedProperties.has('searchTerm')) {
+      this.notifyFocusUpdate_();
+    }
+    if (changedProperties.has('windows')) {
+      this.updateIcons_();
+    }
   }
 
   /**
    * Create FocusRows for this card. One is always made for the card heading and
-   * one for each result if the card is open.
+   * one for each window header and result if the card is open.
    */
-  createFocusRows(): Array<FocusRow> {
-    const titleRow = new FocusRow(this.$['card-heading'], null);
-    titleRow.addItem('menu', '#menu-button');
-    titleRow.addItem('collapse', '#collapse-button');
+  createFocusRows(): FocusRow[] {
+    const titleRow = new FocusRow(this.$.cardHeading, null);
+    titleRow.addItem('menu', '#menuButton');
+    titleRow.addItem('collapse', '#collapseButton');
     const rows = [titleRow];
     if (this.opened) {
-      this.shadowRoot!.querySelectorAll('.item-container')
+      this.shadowRoot
+          .querySelectorAll<HTMLElement>('.window-header, .item-container')
           .forEach(function(el) {
             const row = new FocusRow(el, null);
-            row.addItem('link', '.website-link');
+            if (el.classList.contains('window-header')) {
+              row.addItem('open-window', '.open-window-button');
+            } else {
+              row.addItem('link', '.website-link');
+            }
             rows.push(row);
           });
     }
@@ -113,37 +117,62 @@ export class HistorySyncedDeviceCardElement extends PolymerElement {
   }
 
   /** Open a single synced tab. */
-  private openTab_(e: MouseEvent) {
-    const model = (e as unknown as OpenTabEvent).model;
-    const tab = model.tab;
-    const browserService = BrowserService.getInstance();
-    browserService.recordHistogram(
+  protected onLinkClick_(e: MouseEvent) {
+    BrowserProxyImpl.getInstance().recordHistogram(
         SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.LINK_CLICKED,
         SyncedTabsHistogram.LIMIT);
-    browserService.openForeignSessionTab(
-        this.sessionTag, tab.windowId, tab.sessionId, e);
+    const modifiers: ClickModifiers = {
+      middleButton: e.button === 1,
+      altKey: e.altKey,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      shiftKey: e.shiftKey,
+    };
+    browserProxyFactory.getInstance().handler.openForeignSessionTab(
+        this.sessionTag,
+        Number((e.currentTarget as HTMLElement).dataset['sessionId']),
+        modifiers);
     e.preventDefault();
+  }
+
+  protected onOpenWindowClick_(e: Event) {
+    BrowserProxyImpl.getInstance().recordHistogram(
+        SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.OPEN_WINDOW,
+        SyncedTabsHistogram.LIMIT);
+    browserProxyFactory.getInstance().handler.openForeignSessionWindow(
+        this.sessionTag,
+        Number((e.currentTarget as HTMLElement).dataset['windowId']));
+  }
+
+  protected onLinkAuxclick_(e: MouseEvent) {
+    if (e.button === 1) {
+      this.onLinkClick_(e);
+    }
+  }
+
+  protected onCardHeadingClick_() {
+    this.toggleTabCard();
   }
 
   /**
    * Toggles the dropdown display of synced tabs for each device card.
    */
-  toggleTabCard() {
-    const histogramValue = this.$.collapse.opened ?
-        SyncedTabsHistogram.COLLAPSE_SESSION :
-        SyncedTabsHistogram.EXPAND_SESSION;
+  async toggleTabCard() {
+    const histogramValue = this.opened ? SyncedTabsHistogram.COLLAPSE_SESSION :
+                                         SyncedTabsHistogram.EXPAND_SESSION;
 
-    BrowserService.getInstance().recordHistogram(
+    BrowserProxyImpl.getInstance().recordHistogram(
         SYNCED_TABS_HISTOGRAM_NAME, histogramValue, SyncedTabsHistogram.LIMIT);
 
-    this.$.collapse.toggle();
+    this.opened = !this.opened;
 
-    this.fire_('update-focus-grid');
+    await this.updateComplete;  // Wait until focusable elements are updated.
+    this.fire('update-focus-grid');
   }
 
   private notifyFocusUpdate_() {
     // Refresh focus after all rows are rendered.
-    this.fire_('update-focus-grid');
+    this.fire('update-focus-grid');
   }
 
   /**
@@ -153,42 +182,71 @@ export class HistorySyncedDeviceCardElement extends PolymerElement {
   private updateIcons_() {
     setTimeout(() => {
       const icons =
-          this.shadowRoot!.querySelectorAll<HTMLDivElement>('.website-icon');
+          this.shadowRoot.querySelectorAll<HTMLElement>('.website-icon');
 
-      for (let i = 0; i < this.tabs.length; i++) {
-        // Entries on this UI are coming strictly from sync, so we can set
-        // |isSyncedUrlForHistoryUi| to true on the getFavicon call below.
-        icons[i].style.backgroundImage = getFaviconForPageURL(
-            this.tabs[i].url, true, this.tabs[i].remoteIconUrlForUma);
+      let i = 0;
+      for (const win of this.windows) {
+        for (const tab of win.tabs) {
+          // Entries on this UI are coming strictly from sync, so we can set
+          // |isSyncedUrlForHistoryUi| to true on the getFavicon call below.
+          icons[i]!.style.backgroundImage =
+              getFaviconForPageURL(tab.url, true, tab.remoteIconUrlForUma);
+          i++;
+        }
       }
     }, 0);
   }
 
-  private isWindowSeparatorIndex_(index: number): boolean {
-    return this.separatorIndexes.indexOf(index) !== -1;
+  protected getWindowTitle_(windowIndex: number): string {
+    const numTabs = this.windows[windowIndex]!.tabs.length;
+    return numTabs === 1 ?
+        loadTimeData.getStringF(
+            'syncedTabsWindowHeaderSingular', windowIndex + 1) :
+        loadTimeData.getStringF(
+            'syncedTabsWindowHeaderPlural', windowIndex + 1, numTabs);
   }
 
-  private getCollapseIcon_(opened: boolean): string {
-    return opened ? 'cr:expand-less' : 'cr:expand-more';
+  protected getOpenWindowTitle_(windowIndex: number): string {
+    const numTabs = this.windows[windowIndex]!.tabs.length;
+    return numTabs === 1 ?
+        loadTimeData.getStringF('openWindowSingular', windowIndex + 1) :
+        loadTimeData.getStringF('openWindowPlural', windowIndex + 1, numTabs);
   }
 
-  private getCollapseTitle_(opened: boolean): string {
-    return opened ? loadTimeData.getString('collapseSessionButton') :
-                    loadTimeData.getString('expandSessionButton');
+  protected getCollapseIcon_(): string {
+    return this.opened ? 'cr:keyboard-arrow-up' : 'cr:keyboard-arrow-down';
   }
 
-  private onMenuButtonTap_(e: Event) {
-    this.fire_('synced-device-card-open-menu', {
+  protected getCollapseTitle_(): string {
+    return this.opened ? loadTimeData.getString('collapseSessionButton') :
+                         loadTimeData.getString('expandSessionButton');
+  }
+
+  protected onMenuButtonClick_(e: Event) {
+    this.fire('synced-device-card-open-menu', {
       target: e.target,
       tag: this.sessionTag,
     });
-    e.stopPropagation();  // Prevent iron-collapse.
+    e.stopPropagation();  // Prevent cr-collapse.
   }
 
-  private onLinkRightClick_() {
-    BrowserService.getInstance().recordHistogram(
+  protected onLinkContextmenu_() {
+    BrowserProxyImpl.getInstance().recordHistogram(
         SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram.LINK_RIGHT_CLICKED,
         SyncedTabsHistogram.LIMIT);
+  }
+
+  protected onOpenedChanged_(e: CustomEvent<{value: boolean}>) {
+    this.opened = e.detail.value;
+  }
+}
+
+// Exported to be used in the autogenerated Lit template file
+export type SyncedDeviceCardElement = HistorySyncedDeviceCardElement;
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'history-synced-device-card': HistorySyncedDeviceCardElement;
   }
 }
 

@@ -32,17 +32,25 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_WORKERS_SHARED_WORKER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_WORKERS_SHARED_WORKER_H_
 
+#include <optional>
+
+#include "base/types/pass_key.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_features_bitset.h"
+#include "third_party/blink/public/mojom/worker/shared_worker_connector.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/workers/abstract_worker.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_or_worker_scheduler.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 
 namespace blink {
 
 class ExceptionState;
-class V8UnionStringOrWorkerOptions;
+class StorageAccessHandle;
+class V8UnionSharedWorkerOptionsOrString;
+class V8UnionTrustedScriptURLOrUSVString;
 
 class CORE_EXPORT SharedWorker final
     : public AbstractWorker,
@@ -51,11 +59,27 @@ class CORE_EXPORT SharedWorker final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  // Creates and binds a shared worker for the given `context` using `url` and
+  // `name_or_options` for the initialization. Any reportable errors are
+  // recorded in `exception_state`.
   static SharedWorker* Create(
       ExecutionContext* context,
-      const String& url,
-      const V8UnionStringOrWorkerOptions* name_or_options,
+      const V8UnionTrustedScriptURLOrUSVString* url,
+      const V8UnionSharedWorkerOptionsOrString* name_or_options,
       ExceptionState& exception_state);
+
+  // Like the above, but allows the use of a custom PublicURLManager and
+  // SharedWorkerConnector. This is useful when trying to load blobs and create
+  // workers in some non-default storage partition.
+  static SharedWorker* Create(
+      base::PassKey<StorageAccessHandle>,
+      ExecutionContext* context,
+      const String& url,
+      const V8UnionSharedWorkerOptionsOrString* name_or_options,
+      ExceptionState& exception_state,
+      PublicURLManager* public_url_manager,
+      const HeapMojoRemote<mojom::blink::SharedWorkerConnector>*
+          connector_override);
 
   explicit SharedWorker(ExecutionContext*);
   ~SharedWorker() override;
@@ -73,6 +97,23 @@ class CORE_EXPORT SharedWorker final
   void Trace(Visitor*) const override;
 
  private:
+  friend class SharedWorkerPermissionsPolicyTest;
+
+  static SharedWorker* CreateImpl(
+      ExecutionContext* context,
+      const String& url,
+      const V8UnionSharedWorkerOptionsOrString* name_or_options,
+      ExceptionState& exception_state,
+      PublicURLManager* public_url_manager,
+      const HeapMojoRemote<mojom::blink::SharedWorkerConnector>*
+          connector_override);
+
+  // Parses the `allow` parameter as a PermissionsPolicyFeatureBitset and
+  // validates it against the parent context Permissions Policy. Schedules an
+  // error and returns `std::nullopt` if validation failed.
+  std::optional<network::PermissionsPolicyFeaturesBitset>
+  ParsePermissionsPolicy(const KURL& script_request_url, const String& allow);
+
   Member<MessagePort> port_;
   bool is_being_connected_;
   FrameOrWorkerScheduler::SchedulingAffectingFeatureHandle

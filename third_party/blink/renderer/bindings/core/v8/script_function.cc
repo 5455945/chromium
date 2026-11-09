@@ -1,112 +1,102 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/bindings/core/v8/script_function.h"
 
-#include "third_party/blink/renderer/platform/bindings/v8_binding.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_set_return_value_for_core.h"
+#include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 
 namespace blink {
 
 namespace {
 
-class CallableHolder final : public CustomWrappableAdapter {
- public:
-  explicit CallableHolder(NewScriptFunction::Callable* callable)
-      : callable_(callable) {}
-  const char* NameInHeapSnapshot() const final {
-    return "ScriptFunction::Callable";
-  }
-  NewScriptFunction::Callable* GetCallable() { return callable_; }
+void InstallFunctionHolderTemplate(v8::Isolate*,
+                                   const DOMWrapperWorld&,
+                                   v8::Local<v8::Template> interface_template) {
+}
 
-  void Trace(Visitor* visitor) const override {
-    visitor->Trace(callable_);
-    CustomWrappableAdapter::Trace(visitor);
-  }
-
- private:
-  const Member<NewScriptFunction::Callable> callable_;
+const WrapperTypeInfo function_holder_info = {
+    {gin::kEmbedderBlink},
+    InstallFunctionHolderTemplate,
+    nullptr,
+    "ScriptFunctionHolder",
+    nullptr,
+    static_cast<v8::CppHeapPointerTag>(
+        CppHeapPointerTag::kScriptFunctionHolderTag),
+    static_cast<v8::CppHeapPointerTag>(
+        CppHeapPointerTag::kScriptFunctionHolderTag),
+    WrapperTypeInfo::kWrapperTypeNoPrototype,
+    WrapperTypeInfo::kCustomWrappableId,
+    WrapperTypeInfo::kIdlOtherType,
 };
 
 }  // namespace
 
-void ScriptFunction::Trace(Visitor* visitor) const {
-  visitor->Trace(script_state_);
-  CustomWrappableAdapter::Trace(visitor);
-}
+class CORE_EXPORT FunctionHolder final : public ScriptWrappable {
+  DEFINE_WRAPPERTYPEINFO();
 
-v8::Local<v8::Function> ScriptFunction::BindToV8Function(int length) {
-#if DCHECK_IS_ON()
-  DCHECK(!bind_to_v8_function_already_called_);
-  bind_to_v8_function_already_called_ = true;
-#endif
+ public:
+  static v8::Local<v8::Function> Create(ScriptState* script_state,
+                                        ScriptFunction* function) {
+    CHECK(function);
+    FunctionHolder* holder = MakeGarbageCollected<FunctionHolder>(function);
+    // The wrapper is held alive by the CallHandlerInfo internally in V8 as long
+    // as the function is alive.
+    return v8::Function::New(script_state->GetContext(), CallCallback,
+                             holder->Wrap(script_state), function->Length(),
+                             v8::ConstructorBehavior::kThrow)
+        .ToLocalChecked();
+  }
 
-  v8::Local<v8::Object> wrapper = CreateAndInitializeWrapper(script_state_);
-  // The wrapper is held alive by the CallHandlerInfo internally in V8 as long
-  // as the function is alive.
-  return v8::Function::New(script_state_->GetContext(), CallCallback, wrapper,
-                           length, v8::ConstructorBehavior::kThrow)
-      .ToLocalChecked();
-}
+  static void CallCallback(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    RUNTIME_CALL_TIMER_SCOPE_DISABLED_BY_DEFAULT(args.GetIsolate(),
+                                                 "Blink_CallCallback");
+    v8::Local<v8::Object> data = args.DataV2().As<v8::Value>().As<v8::Object>();
+    v8::Isolate* isolate = args.GetIsolate();
+    auto* holder = ToScriptWrappable<FunctionHolder>(isolate, data);
+    ScriptState* script_state = ScriptState::ForCurrentRealm(isolate);
+    holder->function_->CallRaw(script_state, args);
+  }
 
-ScriptValue ScriptFunction::Call(ScriptValue) {
+  explicit FunctionHolder(ScriptFunction* function) : function_(function) {}
+
+  const char* GetHumanReadableName() const final { return "ScriptFunction"; }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(function_);
+    ScriptWrappable::Trace(visitor);
+  }
+
+ private:
+  const Member<ScriptFunction> function_;
+};
+
+// The generated bindings normally take care of initializing
+// `wrappable_type_info_`, but FunctionHolder doesn't have generated bindings,
+// so this has to be done manually.
+const WrapperTypeInfo& FunctionHolder::wrapper_type_info_ =
+    function_holder_info;
+
+ScriptValue ScriptFunction::Call(ScriptState*, ScriptValue) {
   NOTREACHED();
-  return ScriptValue();
 }
 
-void ScriptFunction::CallRaw(const v8::FunctionCallbackInfo<v8::Value>& args) {
-  ScriptValue result =
-      Call(ScriptValue(GetScriptState()->GetIsolate(), args[0]));
-  V8SetReturnValue(args, result.V8Value());
-}
-
-void ScriptFunction::CallCallback(
-    const v8::FunctionCallbackInfo<v8::Value>& args) {
-  RUNTIME_CALL_TIMER_SCOPE_DISABLED_BY_DEFAULT(args.GetIsolate(),
-                                               "Blink_CallCallback");
-  ScriptFunction* script_function = static_cast<ScriptFunction*>(
-      ToCustomWrappable(v8::Local<v8::Object>::Cast(args.Data())));
-  script_function->CallRaw(args);
-}
-
-ScriptValue NewScriptFunction::Callable::Call(ScriptState*, ScriptValue) {
-  NOTREACHED();
-  return ScriptValue();
-}
-
-void NewScriptFunction::Callable::CallRaw(
-    ScriptState* script_state,
-    const v8::FunctionCallbackInfo<v8::Value>& args) {
+void ScriptFunction::CallRaw(ScriptState* script_state,
+                             const v8::FunctionCallbackInfo<v8::Value>& args) {
   ScriptValue result =
       Call(script_state, ScriptValue(script_state->GetIsolate(), args[0]));
-  V8SetReturnValue(args, result.V8Value());
+  bindings::V8SetReturnValue(args, result);
 }
 
-v8::Local<v8::Function> NewScriptFunction::BindToV8Function(
-    ScriptState* script_state,
-    Callable* callable) {
-  DCHECK(callable);
-  v8::Local<v8::Object> wrapper =
-      MakeGarbageCollected<CallableHolder>(callable)
-          ->CreateAndInitializeWrapper(script_state);
-
-  // The wrapper is held alive by the CallHandlerInfo internally in V8 as long
-  // as the function is alive.
-  return v8::Function::New(script_state->GetContext(), CallCallback, wrapper,
-                           callable->Length(), v8::ConstructorBehavior::kThrow)
-      .ToLocalChecked();
-}
-
-void NewScriptFunction::CallCallback(
-    const v8::FunctionCallbackInfo<v8::Value>& args) {
-  RUNTIME_CALL_TIMER_SCOPE_DISABLED_BY_DEFAULT(args.GetIsolate(),
-                                               "Blink_CallCallback");
-  v8::Local<v8::Object> data = v8::Local<v8::Object>::Cast(args.Data());
-  auto* holder = static_cast<CallableHolder*>(ToCustomWrappable(data));
-  ScriptState* script_state =
-      ScriptState::From(args.GetIsolate()->GetCurrentContext());
-
-  holder->GetCallable()->CallRaw(script_state, args);
+v8::Local<v8::Function> ScriptFunction::ToV8Function(
+    ScriptState* script_state) {
+  v8::Isolate* isolate = script_state->GetIsolate();
+  if (function_.IsEmpty()) {
+    function_.Reset(isolate, FunctionHolder::Create(script_state, this));
+  }
+  return function_.Get(isolate);
 }
 
 }  // namespace blink

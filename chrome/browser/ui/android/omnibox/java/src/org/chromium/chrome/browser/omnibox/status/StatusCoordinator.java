@@ -1,217 +1,280 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox.status;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
+import android.app.Activity;
 import android.content.res.Resources;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
+import android.view.View.OnClickListener;
 
 import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
+import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.SearchEngineLogoUtils;
-import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxLayoutMode;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxState;
+import org.chromium.chrome.browser.omnibox.status.StatusView.IconTransitionType;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
-import org.chromium.components.content_settings.ContentSettingsType;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.permissions.PermissionDialogController;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.ui.base.WindowAndroid;
-import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+
+import java.util.function.Supplier;
 
 /**
  * A component for displaying a status icon (e.g. security icon or navigation icon) and optional
  * verbose status text.
  */
-public class StatusCoordinator implements View.OnClickListener, LocationBarDataProvider.Observer {
+@NullMarked
+public class StatusCoordinator implements LocationBarDataProvider.Observer {
+
     /** Interface for displaying page info popup on omnibox. */
     public interface PageInfoAction {
         /**
          * @param tab Tab containing the content to show page info for.
-         * @param highlightedPermission The ContentSettingsType to be highlighted on the page.
+         * @param pageInfoHighlight Providing the highlight row info related to this dialog.
          */
-        void show(Tab tab, @ContentSettingsType int highlightedPermission);
+        void show(Tab tab, ChromePageInfoHighlight pageInfoHighlight);
     }
 
-    // TODO(crbug.com/1109369): Do not store the StatusView
+    // TODO(crbug.com/40707964): Do not store the StatusView
     private final StatusView mStatusView;
     private final StatusMediator mMediator;
     private final PropertyModel mModel;
     private final boolean mIsTablet;
-    private final Supplier<ModalDialogManager> mModalDialogManagerSupplier;
-    private final PageInfoAction mPageInfoAction;
     private LocationBarDataProvider mLocationBarDataProvider;
-    private boolean mUrlHasFocus;
 
     /**
      * Creates a new {@link StatusCoordinator}.
      *
+     * @param resourceProvider Provides omnibox-specific resources.
      * @param isTablet Whether the UI is shown on a tablet.
      * @param statusView The status view, used to supply and manipulate child views.
-     * @param urlBarEditingTextStateProvider The url coordinator.
-     * @param incognitoStateProvider Provider of incocognito-ness for the active TabModel.
-     * @param modalDialogManagerSupplier A supplier for {@link ModalDialogManager} used to display a
-     *         dialog.
-     * @param templateUrlServiceSupplier A supplier for {@link TemplateUrlService} used to query
-     *         the default search engine.
-     * @param searchEngineLogoUtils Utils to query the state of the search engine logos feature.
+     * @param locationBarDataProvider Provider for location bar and page state.
+     * @param templateUrlServiceSupplier A supplier for {@link TemplateUrlService} used to query the
+     *     default search engine.
+     * @param profileSupplier Supplier providing the active user Profile.
      * @param windowAndroid The {@link WindowAndroid} that is used by the owning {@link Activity}.
      * @param pageInfoAction Displays page info popup.
+     * @param browserControlsVisibilityDelegate Delegate interface allowing control of the
+     *     visibility of the browser controls (i.e. toolbar).
+     * @param fuseboxStateSupplier Used to decide if an plus button for fusebox should be shown.
+     * @param fuseboxLayoutModeSupplier Used to decide if the plus button should be hidden (AL).
+     * @param onPlusButtonClicked Toggle the fusebox attachments menu when plus button used.
      */
-    public StatusCoordinator(boolean isTablet, StatusView statusView,
-            UrlBarEditingTextStateProvider urlBarEditingTextStateProvider,
-            IncognitoStateProvider incognitoStateProvider,
-            Supplier<ModalDialogManager> modalDialogManagerSupplier,
+    public StatusCoordinator(
+            OmniboxResourceProvider resourceProvider,
+            boolean isTablet,
+            StatusView statusView,
             LocationBarDataProvider locationBarDataProvider,
             OneshotSupplier<TemplateUrlService> templateUrlServiceSupplier,
-            SearchEngineLogoUtils searchEngineLogoUtils, Supplier<Profile> profileSupplier,
-            WindowAndroid windowAndroid, PageInfoAction pageInfoAction) {
+            MonotonicObservableSupplier<Profile> profileSupplier,
+            WindowAndroid windowAndroid,
+            PageInfoAction pageInfoAction,
+            @Nullable BrowserStateBrowserControlsVisibilityDelegate
+                    browserControlsVisibilityDelegate,
+            NonNullObservableSupplier<@FuseboxState Integer> fuseboxStateSupplier,
+            NonNullObservableSupplier<@FuseboxLayoutMode Integer> fuseboxLayoutModeSupplier,
+            Runnable onPlusButtonClicked) {
         mIsTablet = isTablet;
         mStatusView = statusView;
-        mModalDialogManagerSupplier = modalDialogManagerSupplier;
         mLocationBarDataProvider = locationBarDataProvider;
-        mPageInfoAction = pageInfoAction;
 
-        mModel = new PropertyModel(StatusProperties.ALL_KEYS);
+        mModel =
+                new PropertyModel.Builder(StatusProperties.ALL_KEYS)
+                        .with(StatusProperties.RESOURCE_PROVIDER, resourceProvider)
+                        .build();
 
         PropertyModelChangeProcessor.create(mModel, mStatusView, new StatusViewBinder());
 
-        PageInfoIPHController pageInfoIPHController = new PageInfoIPHController(
-                ContextUtils.activityFromContext(mStatusView.getContext()), getSecurityIconView());
+        Activity activity =
+                assertNonNull(ContextUtils.activityFromContext(mStatusView.getContext()));
+        PageInfoIphController pageInfoIphController =
+                new PageInfoIphController(
+                        new UserEducationHelper(
+                                activity,
+                                (Supplier<@Nullable Profile>) profileSupplier,
+                                new Handler(Looper.getMainLooper())),
+                        getSecurityIconView());
 
-        mMediator = new StatusMediator(mModel, mStatusView.getResources(), mStatusView.getContext(),
-                urlBarEditingTextStateProvider, isTablet, locationBarDataProvider,
-                PermissionDialogController.getInstance(), searchEngineLogoUtils,
-                templateUrlServiceSupplier, profileSupplier, pageInfoIPHController, windowAndroid);
+        mMediator =
+                new StatusMediator(
+                        resourceProvider,
+                        mModel,
+                        mStatusView.getContext(),
+                        locationBarDataProvider,
+                        PermissionDialogController.getInstance(),
+                        templateUrlServiceSupplier,
+                        profileSupplier,
+                        pageInfoIphController,
+                        windowAndroid,
+                        pageInfoAction,
+                        fuseboxStateSupplier,
+                        fuseboxLayoutModeSupplier,
+                        onPlusButtonClicked);
 
         Resources res = mStatusView.getResources();
-        mMediator.setUrlMinWidth(res.getDimensionPixelSize(R.dimen.location_bar_min_url_width)
-                + res.getDimensionPixelSize(R.dimen.location_bar_icon_width)
-                + (res.getDimensionPixelSize(R.dimen.location_bar_lateral_padding) * 2));
+        int statusIconWidth = resourceProvider.getStatusIconSize();
+        mMediator.setUrlMinWidth(
+                res.getDimensionPixelSize(R.dimen.location_bar_min_url_width)
+                        + statusIconWidth
+                        + res.getDimensionPixelSize(R.dimen.location_bar_start_padding)
+                        + res.getDimensionPixelSize(R.dimen.location_bar_end_padding));
 
         mMediator.setSeparatorFieldMinWidth(
                 res.getDimensionPixelSize(R.dimen.location_bar_status_separator_width)
-                + res.getDimensionPixelSize(R.dimen.location_bar_status_separator_spacer));
+                        + res.getDimensionPixelSize(R.dimen.location_bar_status_separator_spacer));
 
         mMediator.setVerboseStatusTextMinWidth(
                 res.getDimensionPixelSize(R.dimen.location_bar_min_verbose_status_text_width));
 
-        mStatusView.setLocationBarDataProvider(mLocationBarDataProvider);
-        mStatusView.setSearchEngineLogoUtils(searchEngineLogoUtils);
         // Update status immediately after receiving the data provider to avoid initial presence
         // glitch on tablet devices. This glitch would be typically seen upon launch of app, right
         // before the landing page is presented to the user.
-        updateStatusIcon();
+        updateSecurityIcon();
         updateVerboseStatusVisibility();
         mLocationBarDataProvider.addObserver(this);
+        mStatusView.setBrowserControlsVisibilityDelegate(browserControlsVisibilityDelegate);
+
+        setBackground();
     }
 
     /** Signals that native initialization has completed. */
     public void onNativeInitialized() {
-        mMediator.updateLocationBarIcon(StatusView.IconTransitionType.CROSSFADE);
-        mMediator.setStatusClickListener(this);
-        mMediator.updateStatusVisibility();
-    }
-
-    /** @param urlHasFocus Whether the url currently has focus. */
-    public void onUrlFocusChange(boolean urlHasFocus) {
-        mMediator.setUrlHasFocus(urlHasFocus);
-        mUrlHasFocus = urlHasFocus;
-        updateVerboseStatusVisibility();
-    }
-
-    /** @param show Whether the status icon should be VISIBLE, otherwise GONE. */
-    public void setStatusIconShown(boolean show) {
-        mMediator.setStatusIconShown(show);
+        updateSecurityIcon();
+        mMediator.updateLocationBarIcon(IconTransitionType.CROSSFADE);
     }
 
     /**
-     * Set the url focus change percent.
+     * Signals that the Omnibox input session has begun.
      *
-     * @param percent The current focus percent.
+     * @param sessionState The state of the current input session.
      */
-    public void setUrlFocusChangePercent(float percent) {
-        mMediator.setUrlFocusChangePercent(percent);
+    public void beginInput(FuseboxSessionState sessionState) {
+        mMediator.beginInput(sessionState);
     }
 
-    /**  @param useDarkColors Whether dark colors should be for the status icon and text. */
-    public void setUseDarkColors(boolean useDarkColors) {
-        mMediator.setUseDarkColors(useDarkColors);
+    /** Signals that the Omnibox input session has ended. */
+    public void endInput() {
+        mMediator.endInput();
+    }
+
+    /**
+     * @param listener The custom listener that will execute when the status view is clicked.
+     */
+    public void setOnStatusIconNavigateBackButtonPress(OnClickListener listener) {
+        mMediator.setOnStatusIconNavigateBackButtonPress(listener);
+    }
+
+    /** Toggle whether the status icon should be hidden for secure origins. */
+    public void setShowStatusIconForSecureOrigins(boolean showStatusIconForSecureOrigins) {
+        mMediator.setShowStatusIconForSecureOrigins(showStatusIconForSecureOrigins);
+    }
+
+    /** Set the highlight background of the status view. */
+    public void setBackground() {
+        mMediator.setBackground();
+    }
+
+    /**
+     * @param brandedColorScheme The {@link BrandedColorScheme} to use for the status icon and text.
+     */
+    public void setBrandedColorScheme(@BrandedColorScheme int brandedColorScheme) {
+        mMediator.setBrandedColorScheme(brandedColorScheme);
 
         // TODO(ender): remove this once icon selection has complete set of
         // corresponding properties (for tinting etc).
-        updateStatusIcon();
+        updateSecurityIcon();
     }
 
-    // LocationBarData.Observer implementation
-    // Using the default empty onPrimaryColorChanged.
-    // Using the default empty onTitleChanged.
-    // Using the default empty onUrlChanged.
-
+    // LocationBarDataProvider.Observer implementation.
     @Override
-    public void onNtpStartedLoading() {
-        mMediator.updateStatusVisibility();
-    }
-
-    @Override
-    public void onIncognitoStateChanged() {
-        mMediator.onIncognitoStateChanged();
-    }
+    public void onNtpStartedLoading() {}
 
     @Override
     public void onSecurityStateChanged() {
-        updateStatusIcon();
+        updateSecurityIcon();
         updateVerboseStatusVisibility();
     }
 
+    @Override
+    public void onUrlChanged(boolean isTabChanging) {
+        mMediator.onUrlChanged();
+    }
+
+    @Override
+    public void onTabCrashed() {
+        mMediator.onTabCrashed();
+    }
+
+    public void setUseSmallWidget(boolean useSmallWidget) {
+        mMediator.setUseSmallWidget(useSmallWidget);
+    }
+
+    /**
+     * Sets an icon override resource ID to replace the default status icon. For each {@link
+     * PageClassification} type, a status icon for the location bar is set up within the status
+     * mediator via #updateLocationBarIcon(), which is considered to be the default status icon. At
+     * runtime, this helper can replace that default status icon for edge cases which require the
+     * functionality of the used page classification with a different icon.
+     *
+     * @param iconOverrideResId The resource ID of the override icon, or {@link Resources#ID_NULL}
+     *     to clear.
+     */
+    public void setDefaultStatusIconOverrideResId(@DrawableRes int iconOverrideResId) {
+        mMediator.setDefaultStatusIconOverrideResId(iconOverrideResId);
+    }
+
+    /** Returns the resource identifier of the current security icon drawable. */
+    public @DrawableRes int getSecurityIconResource() {
+        return mMediator.getSecurityIconResource();
+    }
+
     /** Updates the security icon displayed in the LocationBar. */
-    private void updateStatusIcon() {
-        mMediator.setSecurityIconResource(
-                mLocationBarDataProvider.getSecurityIconResource(mIsTablet));
-        mMediator.setSecurityIconTint(mLocationBarDataProvider.getSecurityIconColorStateList());
-        mMediator.setSecurityIconDescription(
+    private void updateSecurityIcon() {
+        mMediator.updateSecurityIcon(
+                mLocationBarDataProvider.getSecurityIconResource(mIsTablet),
+                mLocationBarDataProvider.getSecurityIconColorStateList(),
                 mLocationBarDataProvider.getSecurityIconContentDescriptionResourceId());
     }
 
     /** Returns the view displaying the security icon. */
-    public View getSecurityIconView() {
-        return mStatusView.getSecurityButton();
+    private View getSecurityIconView() {
+        return mStatusView.getSecurityView();
     }
 
     /** Returns {@code true} if the security button is currently being displayed. */
     @VisibleForTesting
-    public boolean isSecurityButtonShown() {
-        return mMediator.isSecurityButtonShown();
+    public boolean isSecurityViewShown() {
+        return mMediator.isSecurityViewShown();
     }
 
     /** Returns {@code true} if the search engine status is currently being displayed. */
     public boolean isSearchEngineStatusIconVisible() {
-        // TODO(crbug.com/1109369): try to hide this method
+        // TODO(crbug.com/40707964): try to hide this method
         return mStatusView.isSearchEngineStatusIconVisible();
-    }
-
-    /** Returns the ID of the drawable currently shown in the security icon. */
-    @DrawableRes
-    public int getSecurityIconResourceIdForTesting() {
-        return mModel.get(StatusProperties.STATUS_ICON_RESOURCE) == null
-                ? 0
-                : mModel.get(StatusProperties.STATUS_ICON_RESOURCE).getIconResForTesting();
-    }
-
-    /** Returns the icon identifier used for custom resources. */
-    public String getSecurityIconIdentifierForTesting() {
-        return mModel.get(StatusProperties.STATUS_ICON_RESOURCE) == null
-                ? null
-                : mModel.get(StatusProperties.STATUS_ICON_RESOURCE).getIconIdentifierForTesting();
     }
 
     /**
@@ -219,31 +282,15 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
      * omnibox.
      */
     private void updateVerboseStatusVisibility() {
-        mMediator.setPageSecurityLevel(mLocationBarDataProvider.getSecurityLevel());
-        mMediator.setPageIsOffline(mLocationBarDataProvider.isOfflinePage());
-        mMediator.setPageIsPaintPreview(mLocationBarDataProvider.isPaintPreview());
-    }
-
-    @Override
-    public void onClick(View view) {
-        if (mUrlHasFocus) return;
-
-        // If isInOverviewAndShowingOmnibox is true, getTab isn't correct for PageInfo; if it's not
-        // null, it reflects a web page that the user isn't currently looking at.
-        // TODO(https://crbug.com/1150289): Add a particular page icon for start surface.
-        if (!mLocationBarDataProvider.hasTab()
-                || mLocationBarDataProvider.getTab().getWebContents() == null
-                || mLocationBarDataProvider.isInOverviewAndShowingOmnibox()) {
-            return;
-        }
-
-        mPageInfoAction.show(mLocationBarDataProvider.getTab(), mMediator.getLastPermission());
-        mMediator.onPageInfoOpened();
+        mMediator.updateVerboseStatus(
+                mLocationBarDataProvider.getSecurityLevel(),
+                mLocationBarDataProvider.isOfflinePage(),
+                mLocationBarDataProvider.isPaintPreview());
     }
 
     /**
-     * Called to set the width of the location bar when the url bar is not focused.
-     * This value is used to determine whether the verbose status text should be visible.
+     * Called to set the width of the location bar when the url bar is not focused. This value is
+     * used to determine whether the verbose status text should be visible.
      *
      * @param width The unfocused location bar width.
      */
@@ -256,48 +303,47 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
         mMediator.setAnimationsEnabled(shouldAnimate);
     }
 
-    /** Specify whether URL should present icons when focused. */
-    public void setShowIconsWhenUrlFocused(boolean showIconsWithUrlFocused) {
-        mMediator.setShowIconsWhenUrlFocused(showIconsWithUrlFocused);
-    }
-
     /** Returns width of the status icon including start/end margins. */
     public int getStatusIconWidth() {
-        // TODO(crbug.com/1109369): try to hide this method
+        // TODO(crbug.com/40707964): try to hide this method
         return mStatusView.getStatusIconWidth();
     }
 
-    /** @see View#getMeasuredWidth() */
-    public int getMeasuredWidth() {
-        // TODO(crbug.com/1109369): try to hide this method
-        return mStatusView.getMeasuredWidth();
-    }
-
-    /** Returns the increase in StatusView end padding, when the Url bar is focused. */
-    public int getEndPaddingPixelSizeOnFocusDelta() {
-        return mMediator.getEndPaddingPixelSizeOnFocusDelta();
-    }
-
     /**
-     * Notifies StatusCoordinator that the default match for the currently entered autocomplete text
-     * has been classified, indicating whether the default match is a search.
+     * Sets the callback to be executed when the status view is hidden due to the Page Info removal
+     * feature.
      *
-     * @param defaultMatchIsSearch Whether the default match is a search.
+     * @param runnable The callback to run.
      */
-    public void onDefaultMatchClassified(boolean defaultMatchIsSearch) {
-        mMediator.updateLocationBarIconForDefaultMatchCategory(defaultMatchIsSearch);
+    public void setOnStatusViewHiddenForPageInfoRemoval(Runnable runnable) {
+        mMediator.setOnStatusViewHiddenForPageInfoRemoval(runnable);
     }
 
-    /** Returns the additional end margin for the url container. */
-    public int getAdditionalUrlContainerMarginEnd() {
-        return mMediator.shouldDisplaySearchEngineIcon() && isSearchEngineStatusIconVisible()
-                ? getEndPaddingPixelSizeOnFocusDelta()
-                : 0;
-    }
-
+    @SuppressWarnings("NullAway")
     public void destroy() {
         mMediator.destroy();
         mLocationBarDataProvider.removeObserver(this);
         mLocationBarDataProvider = null;
+    }
+
+    /** Returns whether the status view is currently in the process of animating a change. */
+    public boolean isStatusIconAnimating() {
+        return mStatusView.isStatusIconAnimating();
+    }
+
+    public long getAnimationStartTimeMs() {
+        return mStatusView.getAnimationStartTimeMs();
+    }
+
+    /** Returns the ID of the drawable currently shown in the security icon. */
+    public @DrawableRes int getSecurityIconResourceIdForTesting() {
+        return mModel.get(StatusProperties.STATUS_ICON_RESOURCE) == null
+                ? 0
+                : mModel.get(StatusProperties.STATUS_ICON_RESOURCE).getIconRes();
+    }
+
+    @SuppressWarnings("NullAway")
+    public StatusMediator getMediatorForTesting() {
+        return mMediator;
     }
 }

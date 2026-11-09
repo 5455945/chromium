@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,16 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "media/base/overlay_info.h"
+#include "media/base/supported_audio_decoder_config.h"
 #include "media/base/supported_video_decoder_config.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/buildflags.h"
+#include "media/mojo/mojom/audio_decoder.mojom.h"
 #include "media/mojo/mojom/frame_interface_factory.mojom.h"
 #include "media/mojo/mojom/renderer_extensions.mojom.h"
 #include "media/mojo/mojom/video_decoder.mojom.h"
@@ -31,6 +35,7 @@ class ColorSpace;
 namespace media {
 
 class AudioDecoder;
+class AudioEncoder;
 class CdmFactory;
 class MediaLog;
 class Renderer;
@@ -51,17 +56,42 @@ class MEDIA_MOJO_EXPORT MojoMediaClient {
   virtual void Initialize();
 
   virtual std::unique_ptr<AudioDecoder> CreateAudioDecoder(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
+      std::unique_ptr<MediaLog> media_log);
+
+  virtual std::unique_ptr<AudioEncoder> CreateAudioEncoder(
+      scoped_refptr<base::SequencedTaskRunner> task_runner);
+
+  virtual SupportedAudioDecoderConfigs GetSupportedAudioDecoderConfigs();
 
   virtual std::vector<SupportedVideoDecoderConfig>
   GetSupportedVideoDecoderConfigs();
 
+  virtual VideoDecoderType GetDecoderImplementationType();
+
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+  // Ensures that the video decoder supported configurations are known. When
+  // they are, |cb| is called with a PendingRemote that corresponds to the same
+  // connection as |oop_video_decoder| (which may be |oop_video_decoder|
+  // itself). |oop_video_decoder| may be used internally to query the supported
+  // configurations of an out-of-process video decoder.
+  //
+  // |cb| is called with |oop_video_decoder| before NotifyDecoderSupportKnown()
+  // returns if the supported configurations are already known.
+  //
+  // |cb| is always called on the same sequence as NotifyDecoderSupportKnown().
+  virtual void NotifyDecoderSupportKnown(
+      mojo::PendingRemote<mojom::VideoDecoder> oop_video_decoder,
+      base::OnceCallback<void(mojo::PendingRemote<mojom::VideoDecoder>)> cb);
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+
   virtual std::unique_ptr<VideoDecoder> CreateVideoDecoder(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
       MediaLog* media_log,
       mojom::CommandBufferIdPtr command_buffer_id,
       RequestOverlayInfoCB request_overlay_info_cb,
-      const gfx::ColorSpace& target_color_space);
+      const gfx::ColorSpace& target_color_space,
+      mojo::PendingRemote<mojom::VideoDecoder> oop_video_decoder);
 
   // Returns the Renderer to be used by MojoRendererService.
   // TODO(hubbe): Find out whether we should pass in |target_color_space| here.
@@ -85,13 +115,14 @@ class MEDIA_MOJO_EXPORT MojoMediaClient {
       const base::UnguessableToken& overlay_plane_id);
 #endif  // BUILDFLAG(ENABLE_CAST_RENDERER)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   virtual std::unique_ptr<Renderer> CreateMediaFoundationRenderer(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       mojom::FrameInterfaceFactory* frame_interfaces,
+      mojo::PendingRemote<mojom::MediaLog> media_log_remote,
       mojo::PendingReceiver<mojom::MediaFoundationRendererExtension>
           renderer_extension_receiver);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
   // Returns the CdmFactory to be used by MojoCdmService. |frame_interfaces|
   // can be used to request interfaces provided remotely by the host. It may

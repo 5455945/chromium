@@ -1,39 +1,31 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_browsing/core/common/visual_utils.h"
 
+#include <array>
+#include <limits>
+
+#include "base/containers/span.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_discardable_memory_allocator.h"
+#include "build/build_config.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/skia/include/core/SkColorPriv.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/private/chromium/SkPMColor.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/image/image.h"
 
-namespace safe_browsing {
-namespace visual_utils {
+namespace safe_browsing::visual_utils {
 
 namespace {
 
-const SkPMColor kSkPMRed = SkPackARGB32(255, 255, 0, 0);
-const SkPMColor kSkPMGreen = SkPackARGB32(255, 0, 255, 0);
-const SkPMColor kSkPMBlue = SkPackARGB32(255, 0, 0, 255);
-
-// Use to add noise to the 5 lower bits of each color component. Use to
-// introduce values directly into an N32 bitmap's memory. Use to diversify input
-// in tests that cover function that will only look at the most significant
-// three bits of each component. |i| is used to get different noise that changes
-// in sequence. Any number can be provided. Noise applied can be identical for
-// two different values of |i|.
-SkPMColor AddNoiseToLowerBits(SkColor color, unsigned int i) {
-  // Get a mask between 00000 and 11111 from index.
-  unsigned int mask = i % 0x1f;
-
-  // Apply noise to each color component separately.
-  color = SkColorSetARGB(SkColorGetA(color) | mask, SkColorGetR(color) | mask,
-                         SkColorGetG(color) | mask, SkColorGetB(color) | mask);
-
-  return color;
-}
+const SkPMColor kSkPMRed = SkPMColorSetARGB(255, 255, 0, 0);
+const SkPMColor kSkPMGreen = SkPMColorSetARGB(255, 0, 255, 0);
+const SkPMColor kSkPMBlue = SkPMColorSetARGB(255, 0, 0, 255);
 
 }  // namespace
 
@@ -57,18 +49,52 @@ class VisualUtilsTest : public testing::Test {
     base::DiscardableMemoryAllocator::SetInstance(nullptr);
   }
 
-  std::string GetBlurredBitmapHash() {
-    VisualFeatures::BlurredImage blurred_image;
-    EXPECT_TRUE(visual_utils::GetBlurredImage(bitmap_, &blurred_image));
-    std::string blurred_image_hash =
-        visual_utils::GetHashFromBlurredImage(blurred_image);
-    return blurred_image_hash;
+  void ExpectBlurredImageOneColor(SkColor expected_color,
+                                  const VisualFeatures::BlurredImage& image) {
+    ExpectBlurredImagePixels(expected_color, image,
+                             gfx::Rect(image.width(), image.height()));
   }
 
-  VisualFeatures::ColorHistogram GetBitmapHistogram() {
-    VisualFeatures::ColorHistogram histogram;
-    EXPECT_TRUE(GetHistogramForImage(bitmap_, &histogram));
-    return histogram;
+  void ExpectBlurredImagePixels(SkColor expected_color,
+                                const VisualFeatures::BlurredImage& image,
+                                gfx::Rect area) {
+    ExpectPixels(expected_color, image.data(), area, image.width());
+  }
+
+  void ExpectPixels(SkColor expected_color,
+                    const std::string& data_to_check,
+                    gfx::Rect area,
+                    int width) {
+    ASSERT_LE(area.right(), width);
+    size_t bottom_right_index =
+        ((area.bottom() - 1) * width + area.right() - 1) * 3;
+    ASSERT_LT(bottom_right_index, data_to_check.size());
+    for (int x = area.x(); x < area.right(); ++x) {
+      for (int y = area.y(); y < area.bottom(); ++y) {
+        size_t index = (y * width + x) * 3;
+        ExpectPixel(expected_color, data_to_check, x, y, index);
+      }
+    }
+  }
+
+  void ExpectPixel(SkColor expected_color,
+                   const std::string& data_to_check,
+                   size_t x,
+                   size_t y,
+                   size_t index) {
+    ASSERT_LT(index + 2, data_to_check.size());
+    EXPECT_EQ(SkColorGetR(expected_color),
+              static_cast<unsigned char>(data_to_check[index]))
+        << "R component of pixel at x " << x << " and y " << y
+        << " is incorrect.";
+    EXPECT_EQ(SkColorGetG(expected_color),
+              static_cast<unsigned char>(data_to_check[index + 1]))
+        << "G component of pixel at x " << x << " and y " << y
+        << " is incorrect.";
+    EXPECT_EQ(SkColorGetB(expected_color),
+              static_cast<unsigned char>(data_to_check[index + 2]))
+        << "B component of pixel at x " << x << " and y " << y
+        << " is incorrect.";
   }
 
   // A test bitmap to work with. Initialized to be 1000x1000 in the Rec 2020
@@ -80,97 +106,6 @@ class VisualUtilsTest : public testing::Test {
   base::TestDiscardableMemoryAllocator test_allocator_;
 };
 
-TEST_F(VisualUtilsTest, TestkColorToQuantizedColor) {
-  // Test quantization
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 0, 31)), 0u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 0, 32)), 1u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 31, 0)), 0u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 32, 0)), 8u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(31, 0, 0)), 0u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(32, 0, 0)), 64u);
-
-  // Test composition of RGB quantized values
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 0, 0)), 0u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 0, 255)), 7u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(0, 255, 255)), 63u);
-  EXPECT_EQ(SkColorToQuantizedColor(SkColorSetRGB(255, 255, 255)), 511u);
-}
-
-TEST_F(VisualUtilsTest, GetQuantizedR) {
-  EXPECT_EQ(GetQuantizedR(0), 0);
-  EXPECT_EQ(GetQuantizedR(64), 1);
-  EXPECT_EQ(GetQuantizedR(448), 7);
-}
-
-TEST_F(VisualUtilsTest, GetQuantizedG) {
-  EXPECT_EQ(GetQuantizedG(0), 0);
-  EXPECT_EQ(GetQuantizedG(8), 1);
-  EXPECT_EQ(GetQuantizedG(56), 7);
-}
-
-TEST_F(VisualUtilsTest, GetQuantizedB) {
-  EXPECT_EQ(GetQuantizedB(0), 0);
-  EXPECT_EQ(GetQuantizedB(1), 1);
-  EXPECT_EQ(GetQuantizedB(7), 7);
-}
-
-TEST_F(VisualUtilsTest, GetHistogramForImageWhite) {
-  VisualFeatures::ColorHistogram histogram;
-
-  // Draw white over half the image
-  for (int x = 0; x < 1000; x++)
-    for (int y = 0; y < 1000; y++)
-      // NOTE: getAddr32 used since byte ordering does not matter for white and
-      // repeated erase() calls might make tests time out.
-      *bitmap_.getAddr32(x, y) = AddNoiseToLowerBits(SK_ColorWHITE, x + y);
-
-  ASSERT_TRUE(GetHistogramForImage(bitmap_, &histogram));
-  ASSERT_EQ(histogram.bins_size(), 1);
-  EXPECT_THAT(histogram.bins(0).centroid_x(),
-              FloatEq(0.4995));  // All pixels are the same color, so centroid_x
-                                 // is (0+1+...+999)/1000/1000 = 0.4995
-  EXPECT_THAT(histogram.bins(0).centroid_y(), FloatEq(0.4995));
-  EXPECT_EQ(histogram.bins(0).quantized_r(), 7);
-  EXPECT_EQ(histogram.bins(0).quantized_g(), 7);
-  EXPECT_EQ(histogram.bins(0).quantized_b(), 7);
-  EXPECT_THAT(histogram.bins(0).weight(), FloatEq(1.0));
-}
-
-TEST_F(VisualUtilsTest, GetHistogramForImageHalfWhiteHalfBlack) {
-  VisualFeatures::ColorHistogram histogram;
-
-  // Draw white over half the image
-  for (int x = 0; x < 1000; x++)
-    for (int y = 0; y < 500; y++)
-      // NOTE: getAddr32 used since byte ordering does not matter for white and
-      // repeated erase() calls might make tests time out.
-      *bitmap_.getAddr32(x, y) = AddNoiseToLowerBits(SK_ColorWHITE, x + y);
-
-  // Draw black over half the image.
-  for (int x = 0; x < 1000; x++)
-    for (int y = 500; y < 1000; y++)
-      // NOTE: getAddr32 used since byte ordering does not matter for black and
-      // repeated erase() calls might make tests time out.
-      *bitmap_.getAddr32(x, y) = AddNoiseToLowerBits(SK_ColorBLACK, x + y);
-
-  ASSERT_TRUE(GetHistogramForImage(bitmap_, &histogram));
-  ASSERT_EQ(histogram.bins_size(), 2);
-
-  EXPECT_THAT(histogram.bins(0).centroid_x(), FloatEq(0.4995));
-  EXPECT_THAT(histogram.bins(0).centroid_y(), FloatEq(0.7495));
-  EXPECT_EQ(histogram.bins(0).quantized_r(), 0);
-  EXPECT_EQ(histogram.bins(0).quantized_g(), 0);
-  EXPECT_EQ(histogram.bins(0).quantized_b(), 0);
-  EXPECT_THAT(histogram.bins(0).weight(), FloatEq(0.5));
-
-  EXPECT_THAT(histogram.bins(1).centroid_x(), FloatEq(0.4995));
-  EXPECT_THAT(histogram.bins(1).centroid_y(), FloatEq(0.2495));
-  EXPECT_EQ(histogram.bins(1).quantized_r(), 7);
-  EXPECT_EQ(histogram.bins(1).quantized_g(), 7);
-  EXPECT_EQ(histogram.bins(1).quantized_b(), 7);
-  EXPECT_THAT(histogram.bins(1).weight(), FloatEq(0.5));
-}
-
 TEST_F(VisualUtilsTest, BlurImageWhite) {
   VisualFeatures::BlurredImage blurred;
 
@@ -178,33 +113,44 @@ TEST_F(VisualUtilsTest, BlurImageWhite) {
   bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1000, 1000));
 
   ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
-  ASSERT_EQ(48, blurred.width());
-  ASSERT_EQ(48, blurred.height());
-  ASSERT_EQ(3u * 48u * 48u, blurred.data().size());
-  for (size_t i = 0; i < 48u * 48u; i++) {
-    EXPECT_EQ('\xff', blurred.data()[3 * i]);
-    EXPECT_EQ('\xff', blurred.data()[3 * i + 1]);
-    EXPECT_EQ('\xff', blurred.data()[3 * i + 2]);
-  }
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  const int kExpectedBlurredWidth = 18;
+  const int kExpectedBlurredHeight = 32;
+#else
+  const int kExpectedBlurredWidth = 48;
+  const int kExpectedBlurredHeight = 48;
+#endif
+  ASSERT_EQ(kExpectedBlurredWidth, blurred.width());
+  ASSERT_EQ(kExpectedBlurredHeight, blurred.height());
+  ASSERT_EQ(3u * kExpectedBlurredWidth * kExpectedBlurredHeight,
+            blurred.data().size());
+  ExpectBlurredImageOneColor(SK_ColorWHITE, blurred);
 }
 
 TEST_F(VisualUtilsTest, BlurImageRed) {
   VisualFeatures::BlurredImage blurred;
 
   // Draw red over the image.
-  for (int x = 0; x < 1000; x++)
-    for (int y = 0; y < 1000; y++)
+  for (int x = 0; x < 1000; x++) {
+    for (int y = 0; y < 1000; y++) {
       *bitmap_.getAddr32(x, y) = kSkPMRed;
+    }
+  }
 
   ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
-  ASSERT_EQ(48, blurred.width());
-  ASSERT_EQ(48, blurred.height());
-  ASSERT_EQ(3u * 48u * 48u, blurred.data().size());
-  for (size_t i = 0; i < 48u * 48u; i++) {
-    EXPECT_EQ('\xff', blurred.data()[3 * i]);
-    EXPECT_EQ('\x00', blurred.data()[3 * i + 1]);
-    EXPECT_EQ('\x00', blurred.data()[3 * i + 2]);
-  }
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  const int kExpectedBlurredWidth = 18;
+  const int kExpectedBlurredHeight = 32;
+#else
+  const int kExpectedBlurredWidth = 48;
+  const int kExpectedBlurredHeight = 48;
+#endif
+  ASSERT_EQ(kExpectedBlurredWidth, blurred.width());
+  ASSERT_EQ(kExpectedBlurredHeight, blurred.height());
+  ASSERT_EQ(3u * kExpectedBlurredWidth * kExpectedBlurredHeight,
+            blurred.data().size());
+  ExpectBlurredImageOneColor(SK_ColorRED, blurred);
 }
 
 TEST_F(VisualUtilsTest, BlurImageHalfWhiteHalfBlack) {
@@ -217,22 +163,23 @@ TEST_F(VisualUtilsTest, BlurImageHalfWhiteHalfBlack) {
   bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 500, 1000, 1000));
 
   ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  ASSERT_EQ(18, blurred.width());
+  ASSERT_EQ(32, blurred.height());
+  ASSERT_EQ(3u * 18u * 32u, blurred.data().size());
+  // The middle blocks may have been blurred to something between white and
+  // black, so only verify the first 14 and last 14 rows.
+  ExpectBlurredImagePixels(SK_ColorBLACK, blurred, gfx::Rect(18, 14));
+  ExpectBlurredImagePixels(SK_ColorWHITE, blurred, gfx::Rect(0, 18, 18, 14));
+#else
   ASSERT_EQ(48, blurred.width());
   ASSERT_EQ(48, blurred.height());
   ASSERT_EQ(3u * 48u * 48u, blurred.data().size());
   // The middle blocks may have been blurred to something between white and
   // black, so only verify the first 22 and last 22 rows.
-  for (size_t i = 0; i < 22u * 48u; i++) {
-    EXPECT_EQ('\x00', blurred.data()[3 * i]);
-    EXPECT_EQ('\x00', blurred.data()[3 * i + 1]);
-    EXPECT_EQ('\x00', blurred.data()[3 * i + 2]);
-  }
-
-  for (size_t i = 26u * 48u; i < 48u * 48u; i++) {
-    EXPECT_EQ('\xff', blurred.data()[3 * i]);
-    EXPECT_EQ('\xff', blurred.data()[3 * i + 1]);
-    EXPECT_EQ('\xff', blurred.data()[3 * i + 2]);
-  }
+  ExpectBlurredImagePixels(SK_ColorBLACK, blurred, gfx::Rect(48, 22));
+  ExpectBlurredImagePixels(SK_ColorWHITE, blurred, gfx::Rect(0, 26, 48, 22));
+#endif
 }
 
 TEST_F(VisualUtilsTest, BlockMeanAverageOneBlock) {
@@ -252,17 +199,23 @@ TEST_F(VisualUtilsTest, BlockMeanAveragePartialBlocks) {
   // Draw a white, red, green, and blue box with the expected block sizes.
   bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 600, 600));
 
-  for (int x = 600; x < 1000; x++)
-    for (int y = 0; y < 600; y++)
+  for (int x = 600; x < 1000; x++) {
+    for (int y = 0; y < 600; y++) {
       *bitmap_.getAddr32(x, y) = kSkPMRed;
+    }
+  }
 
-  for (int x = 0; x < 600; x++)
-    for (int y = 600; y < 1000; y++)
+  for (int x = 0; x < 600; x++) {
+    for (int y = 600; y < 1000; y++) {
       *bitmap_.getAddr32(x, y) = kSkPMGreen;
+    }
+  }
 
-  for (int x = 600; x < 1000; x++)
-    for (int y = 600; y < 1000; y++)
+  for (int x = 600; x < 1000; x++) {
+    for (int y = 600; y < 1000; y++) {
       *bitmap_.getAddr32(x, y) = kSkPMBlue;
+    }
+  }
 
   std::unique_ptr<SkBitmap> blocks = BlockMeanAverage(bitmap_, 600);
   ASSERT_EQ(2, blocks->width());
@@ -274,388 +227,237 @@ TEST_F(VisualUtilsTest, BlockMeanAveragePartialBlocks) {
   EXPECT_EQ(*blocks->getAddr32(1, 1), kSkPMBlue);
 }
 
-TEST_F(VisualUtilsTest, IsVisualMatchHash) {
-  {
-    // An all-white image should hash to all 1-bits.
-    bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1000, 1000));
+TEST_F(VisualUtilsTest, NonSquareBlurredImage) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      kVisualFeaturesSizes, {{"phash_width", "108"}, {"phash_height", "192"}});
 
-    std::vector<unsigned char> target_hash;
-    target_hash.push_back('\x30');
-    for (int i = 0; i < 288; i++)
-      target_hash.push_back('\xff');
+  VisualFeatures::BlurredImage blurred;
 
-    VisualTarget target;
-    target.set_hash(target_hash.data(), target_hash.size());
-    target.mutable_match_config()->add_match_rule()->set_hash_distance(0.0);
-    EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                              GetBitmapHistogram(), target)
-                    .has_value());
-  }
-
-  {
-    // Make the top quarter black, and the corresponding bits of the hash should
-    // be 0.
-    bitmap_.erase(SK_ColorBLACK, SkIRect::MakeXYWH(0, 0, 1000, 250));
-
-    std::vector<unsigned char> target_hash;
-    target_hash.push_back('\x30');
-    for (int i = 0; i < 72; i++)
-      target_hash.push_back('\x00');
-    for (int i = 0; i < 216; i++)
-      target_hash.push_back('\xff');
-    VisualTarget target;
-    target.set_hash(target_hash.data(), target_hash.size());
-
-    target.mutable_match_config()->add_match_rule()->set_hash_distance(0.0);
-    EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                              GetBitmapHistogram(), target)
-                    .has_value());
-  }
-}
-
-TEST_F(VisualUtilsTest, IsVisualMatchHashPartialMatch) {
-  // Make the top quarter black, and the corresponding bits of the hash should
-  // be 0.
-  bitmap_.erase(SK_ColorBLACK, SkIRect::MakeXYWH(0, 0, 1000, 250));
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 250, 1000, 1000));
-
-  std::vector<unsigned char> target_hash;
-  target_hash.push_back('\x30');
-  for (int i = 0; i < 75; i++)
-    target_hash.push_back('\x00');
-  for (int i = 0; i < 213; i++)
-    target_hash.push_back('\xff');
-
-  VisualTarget target;
-  target.set_hash(target_hash.data(), target_hash.size());
-  target.mutable_match_config()->add_match_rule()->set_hash_distance(23.0);
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-  target.mutable_match_config()->add_match_rule()->set_hash_distance(24.0);
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-}
-
-TEST_F(VisualUtilsTest, IsVisualMatchHashStrideComparison) {
+  // Draw white over the image
   bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1000, 1000));
 
-  std::vector<unsigned char> target_hash;
-  target_hash.push_back('\x30');
-  for (int i = 0; i < 288; i++)
-    target_hash.push_back('\xff');
-
-  VisualTarget target;
-  target.set_hash(target_hash.data(), target_hash.size());
-  target.mutable_match_config()->add_match_rule()->set_hash_distance(0.0);
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-
-  target_hash[0] = '\x00';
-  target.set_hash(target_hash.data(), target_hash.size());
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-}
-
-TEST_F(VisualUtilsTest, IsVisualMatchHistogramOnly) {
-  for (int x = 0; x < 1000; x++)
-    for (int y = 0; y < 1000; y++)
-      // NOTE: getAddr32 used since byte ordering does not matter for white and
-      // repeated erase calls might make tests time out.
-      *bitmap_.getAddr32(x, y) = AddNoiseToLowerBits(SK_ColorWHITE, x + y);
-
-  {
-    VisualTarget target;
-    VisualFeatures::ColorHistogramBin* bin = target.add_bins();
-    // Our coordinates range from 0 to 999, giving an average of 0.4995 instead
-    // of 0.5.
-    bin->set_centroid_x(0.4995);
-    bin->set_centroid_y(0.4995);
-    bin->set_quantized_r(7);
-    bin->set_quantized_g(7);
-    bin->set_quantized_b(7);
-    bin->set_weight(1.0);
-    target.mutable_match_config()->add_match_rule()->set_color_distance(0.0);
-    EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                              GetBitmapHistogram(), target)
-                    .has_value());
-  }
-
-  {
-    // Move the target histogram to have centroid 0,0. This leads to a distance
-    // just under 0.5 between the actual and target histograms.
-    VisualTarget target;
-    VisualFeatures::ColorHistogramBin* bin = target.add_bins();
-    bin->set_centroid_x(0);
-    bin->set_centroid_y(0);
-    bin->set_quantized_r(7);
-    bin->set_quantized_g(7);
-    bin->set_quantized_b(7);
-    bin->set_weight(1.0);
-
-    MatchRule* match_rule = target.mutable_match_config()->add_match_rule();
-    match_rule->set_color_distance(0.5);
-    EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                              GetBitmapHistogram(), target)
-                    .has_value());
-
-    match_rule->set_color_distance(0.4);
-    EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                               GetBitmapHistogram(), target)
-                     .has_value());
-  }
-
-  {
-    // Change the target histogram color slightly. This leads to a distance
-    // of roughly 0.12 between the actual and target histogram.
-    VisualTarget target;
-    VisualFeatures::ColorHistogramBin* bin = target.add_bins();
-    bin->set_centroid_x(0.4995);
-    bin->set_centroid_y(0.4995);
-    bin->set_quantized_r(6);
-    bin->set_quantized_g(6);
-    bin->set_quantized_b(6);
-    bin->set_weight(1.0);
-
-    MatchRule* match_rule = target.mutable_match_config()->add_match_rule();
-    match_rule->set_color_distance(0.2);
-    EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                              GetBitmapHistogram(), target)
-                    .has_value());
-
-    match_rule->set_color_distance(0.1);
-    EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                               GetBitmapHistogram(), target)
-                     .has_value());
+  ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
+  ASSERT_EQ(18, blurred.width());
+  ASSERT_EQ(32, blurred.height());
+  ASSERT_EQ(3u * 18u * 32u, blurred.data().size());
+  for (size_t i = 0; i < 18u * 32u; i++) {
+    EXPECT_EQ('\xff', blurred.data()[3 * i]);
+    EXPECT_EQ('\xff', blurred.data()[3 * i + 1]);
+    EXPECT_EQ('\xff', blurred.data()[3 * i + 2]);
   }
 }
 
-TEST_F(VisualUtilsTest, IsVisualMatchColorRange) {
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1000, 1000));
+// Tests that `GetBitmapForVisualFeatures()` downsamples the image to pHash
+// dimensions on iOS and preserves the original dimensions on non-iOS platforms.
+TEST_F(VisualUtilsTest, GetBitmapForVisualFeatures) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      kVisualFeaturesSizes, {{"phash_width", "108"}, {"phash_height", "192"}});
 
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(1000, 1000);
+  bitmap.eraseColor(SK_ColorWHITE);
+  gfx::Image image = gfx::Image::CreateFrom1xBitmap(bitmap);
 
-  SkScalar hsv[3];
-  SkColorToHSV(bitmap_.getColor(0, 0), hsv);
-  SkScalar target_hue = hsv[0];
-  VisualTarget target;
-  MatchRule::ColorRange* color_range =
-      target.mutable_match_config()->add_match_rule()->add_color_range();
-  color_range->set_low(target_hue);
-  color_range->set_high(target_hue);
+  SkBitmap prepared_bitmap = GetBitmapForVisualFeatures(image);
+#if BUILDFLAG(IS_IOS)
+  // `GetBitmapForVisualFeatures()` should shrink the image to the phash width
+  // and height on iOS.
+  EXPECT_EQ(108, prepared_bitmap.width());
+  EXPECT_EQ(192, prepared_bitmap.height());
+#else
+  // `GetBitmapForVisualFeatures()` should not modify the dimensions on non-iOS
+  // platforms.
+  EXPECT_EQ(1000, prepared_bitmap.width());
+  EXPECT_EQ(1000, prepared_bitmap.height());
+#endif
 
-  // Blue hue present
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
+  // Prepared bitmap can be passed to GetBlurredImage successfully.
+  VisualFeatures::BlurredImage blurred;
+  EXPECT_TRUE(GetBlurredImage(prepared_bitmap, &blurred));
 
-  // Color range too high
-  color_range->set_low(target_hue + 1);
-  color_range->set_high(target_hue + 1);
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // Color range too low
-  color_range->set_low(target_hue - 1);
-  color_range->set_high(target_hue - 1);
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // No blue hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
+  // Empty image should return empty bitmap.
+  gfx::Image empty_image;
+  SkBitmap empty_bitmap = GetBitmapForVisualFeatures(empty_image);
+  EXPECT_TRUE(empty_bitmap.drawsNothing());
 }
 
-TEST_F(VisualUtilsTest, IsVisualMatchMultipleColorRanges) {
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1000, 1000));
+#if BUILDFLAG(IS_IOS)
+// Tests that `GetResizedImageAsSkBitmap()` returns an empty bitmap
+// for invalid inputs.
+TEST_F(VisualUtilsTest, GetResizedImageAsSkBitmapEmptyInputs) {
+  static constexpr int kTargetWidth = 108;
+  static constexpr int kTargetHeight = 192;
 
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
-  *bitmap_.getAddr32(1, 0) = kSkPMGreen;
+  // Empty input image.
+  EXPECT_TRUE(GetResizedImageAsSkBitmap(gfx::Image(),
+                                        gfx::Size(kTargetWidth, kTargetHeight))
+                  .drawsNothing());
 
-  SkScalar hsv[3];
-  SkColorToHSV(bitmap_.getColor(0, 0), hsv);
-  SkScalar blue_hue = hsv[0];
-  VisualTarget target;
-  MatchRule* match_rule = target.mutable_match_config()->add_match_rule();
-  MatchRule::ColorRange* color_range = match_rule->add_color_range();
-  color_range->set_low(blue_hue);
-  color_range->set_high(blue_hue);
+  // Non-empty input image.
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(kTargetWidth, kTargetHeight);
+  bitmap.eraseColor(SK_ColorWHITE);
+  gfx::Image image = gfx::Image::CreateFrom1xBitmap(bitmap);
 
-  SkColorToHSV(bitmap_.getColor(1, 0), hsv);
-  SkScalar green_hue = hsv[0];
-  color_range = match_rule->add_color_range();
-  color_range->set_low(green_hue);
-  color_range->set_high(green_hue);
-
-  // Both hues present
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-
-  // No blue hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // No green hue present
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(1, 0, 1, 1));
-
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // Neither hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
+  // Zero-width or zero-height target size.
+  EXPECT_TRUE(GetResizedImageAsSkBitmap(image, gfx::Size(0, kTargetHeight))
+                  .drawsNothing());
+  EXPECT_TRUE(GetResizedImageAsSkBitmap(image, gfx::Size(kTargetWidth, 0))
+                  .drawsNothing());
 }
 
-TEST_F(VisualUtilsTest, IsVisualMatchMultipleMatchRules) {
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
+// Tests that `GetResizedImageAsSkBitmap()` resizes images directly to target
+// pixel dimensions without bleeding detail across block boundaries.
+TEST_F(VisualUtilsTest, GetResizedImageAsSkBitmap) {
+  static constexpr int kTargetWidth = 108;
+  static constexpr int kTargetHeight = 192;
+  static constexpr int kScaleFactor = 3;
+  static constexpr int kSourceWidth = kTargetWidth * kScaleFactor;
+  static constexpr int kSourceHeight = kTargetHeight * kScaleFactor;
 
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
-  *bitmap_.getAddr32(1, 0) = kSkPMGreen;
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(kSourceWidth, kSourceHeight);
+  bitmap.erase(SK_ColorBLACK,
+               SkIRect::MakeXYWH(0, 0, kSourceWidth, kSourceHeight / 2));
+  bitmap.erase(
+      SK_ColorWHITE,
+      SkIRect::MakeXYWH(0, kSourceHeight / 2, kSourceWidth, kSourceHeight / 2));
+  gfx::Image image = gfx::Image::CreateFrom1xBitmap(bitmap);
 
-  // Create a target with two match rules, one matching blue pixels and one
-  // matching green.
-  VisualTarget target;
-  MatchRule* match_rule_blue = target.mutable_match_config()->add_match_rule();
-  MatchRule::ColorRange* color_range = match_rule_blue->add_color_range();
-  SkScalar hsv[3];
-  SkColorToHSV(bitmap_.getColor(0, 0), hsv);
-  SkScalar blue_hue = hsv[0];
-  color_range->set_low(blue_hue);
-  color_range->set_high(blue_hue);
+  SkBitmap resized =
+      GetResizedImageAsSkBitmap(image, gfx::Size(kTargetWidth, kTargetHeight));
+  ASSERT_FALSE(resized.drawsNothing());
+  ASSERT_EQ(kTargetWidth, resized.width());
+  ASSERT_EQ(kTargetHeight, resized.height());
 
-  MatchRule* match_rule_green = target.mutable_match_config()->add_match_rule();
-  color_range = match_rule_green->add_color_range();
-  SkColorToHSV(bitmap_.getColor(1, 0), hsv);
-  SkScalar green_hue = hsv[0];
-  color_range->set_low(green_hue);
-  color_range->set_high(green_hue);
+  // Verify that the direct resize preserves the sharp horizontal boundary
+  // between the top (black) and bottom (white) halves without upsample bleed.
+  EXPECT_EQ(SK_ColorBLACK, resized.getColor(kTargetWidth / 2, 0));
+  EXPECT_EQ(SK_ColorBLACK,
+            resized.getColor(kTargetWidth / 2, kTargetHeight / 2 - 1));
+  EXPECT_EQ(SK_ColorWHITE,
+            resized.getColor(kTargetWidth / 2, kTargetHeight / 2));
+  EXPECT_EQ(SK_ColorWHITE,
+            resized.getColor(kTargetWidth / 2, kTargetHeight - 1));
+}
+#endif  // BUILDFLAG(IS_IOS)
 
-  // Both hues present
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
+TEST_F(VisualUtilsTest, EncodeScreenshot) {
+  const int kBitmapWidth = 40;
+  const int kBitmapHeight = 40;
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(kBitmapWidth, kBitmapHeight);
+  bitmap.eraseColor(SK_ColorWHITE);
+  bitmap.erase(SK_ColorRED, SkIRect::MakeXYWH(0, 0, 20, 10));
+  bitmap.erase(SK_ColorBLUE, SkIRect::MakeXYWH(20, 0, 20, 10));
 
-  // No blue hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-
-  // No green hue present
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(1, 0, 1, 1));
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-
-  // Neither hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
+  VisualFeatures::Screenshot encoded_screenshot;
+  EncodeScreenshot(bitmap, &encoded_screenshot);
+  EXPECT_EQ(kBitmapWidth, encoded_screenshot.width());
+  EXPECT_EQ(kBitmapHeight, encoded_screenshot.height());
+  ExpectPixels(SK_ColorRED, encoded_screenshot.data(), gfx::Rect(20, 10),
+               kBitmapWidth);
+  ExpectPixels(SK_ColorBLUE, encoded_screenshot.data(),
+               gfx::Rect(20, 0, 20, 10), kBitmapWidth);
+  ExpectPixels(SK_ColorWHITE, encoded_screenshot.data(),
+               gfx::Rect(0, 10, 40, 30), kBitmapWidth);
 }
 
-TEST_F(VisualUtilsTest, IsVisualMatchFloatColorRange) {
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
+TEST_F(VisualUtilsTest, IsUniformImageSolidColors) {
+  VisualFeatures::BlurredImage blurred;
 
-  // Adding a little noise in the red component makes the target_hue not an
-  // integer. Testing for this color requires float ranges.
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue | 0x0f;
+  // Solid white.
+  bitmap_.eraseColor(SK_ColorWHITE);
+  ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
+  EXPECT_TRUE(IsUniformImage(blurred));
 
-  SkScalar hsv[3];
-  SkColorToHSV(bitmap_.getColor(0, 0), hsv);
-  SkScalar target_hue = hsv[0];
-  VisualTarget target;
-  MatchRule::FloatColorRange* color_range =
-      target.mutable_match_config()->add_match_rule()->add_float_color_range();
-  color_range->set_low(target_hue);
-  color_range->set_high(target_hue);
+  // Solid black.
+  blurred.Clear();
+  bitmap_.eraseColor(SK_ColorBLACK);
+  ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
+  EXPECT_TRUE(IsUniformImage(blurred));
 
-  // Blue hue present
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-
-  // Color range too high
-  color_range->set_low(target_hue + 0.1);
-  color_range->set_high(target_hue + 0.1);
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // Color range too low
-  color_range->set_low(target_hue - 0.1);
-  color_range->set_high(target_hue - 0.1);
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // No blue hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
+  // Solid grey.
+  blurred.Clear();
+  bitmap_.eraseColor(SkColorSetRGB(128, 128, 128));
+  ASSERT_TRUE(GetBlurredImage(bitmap_, &blurred));
+  EXPECT_TRUE(IsUniformImage(blurred));
 }
 
-TEST_F(VisualUtilsTest, IsVisualMatchMultipleFloatColorRanges) {
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
+TEST_F(VisualUtilsTest, IsUniformImageToleranceAndNonUniform) {
+  VisualFeatures::BlurredImage blurred;
+  blurred.set_width(2);
+  blurred.set_height(2);
+  // 4 pixels: (100, 100, 100), (105, 100, 95), (110, 105, 100), (100, 95, 105)
+  // Channel ranges: R=[100,110] (10), G=[95,105] (10), B=[95,105] (10).
+  const std::array<uint8_t, 12> kWithinTolerance = {
+      100, 100, 100, 105, 100, 95, 110, 105, 100, 100, 95, 105};
+  blurred.set_data(reinterpret_cast<const char*>(kWithinTolerance.data()),
+                   kWithinTolerance.size());
+  EXPECT_TRUE(IsUniformImage(blurred));
+  EXPECT_TRUE(IsUniformImage(blurred, /*max_color_range=*/10));
+  EXPECT_FALSE(IsUniformImage(blurred, /*max_color_range=*/9));
 
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
-  *bitmap_.getAddr32(1, 0) = kSkPMGreen;
+  // Change one pixel's B channel to 94 so B range is [94, 105] (11 > 10).
+  (*blurred.mutable_data())[5] = static_cast<char>(94);
+  EXPECT_FALSE(IsUniformImage(blurred));
 
-  SkScalar hsv[3];
-  SkColorToHSV(bitmap_.getColor(0, 0), hsv);
-  SkScalar blue_hue = hsv[0];
-  VisualTarget target;
-  MatchRule* match_rule = target.mutable_match_config()->add_match_rule();
-  MatchRule::FloatColorRange* color_range = match_rule->add_float_color_range();
-  color_range->set_low(blue_hue);
-  color_range->set_high(blue_hue);
-
-  SkColorToHSV(bitmap_.getColor(1, 0), hsv);
-  SkScalar green_hue = hsv[0];
-  color_range = match_rule->add_float_color_range();
-  color_range->set_low(green_hue);
-  color_range->set_high(green_hue);
-
-  // Both hues present
-  EXPECT_TRUE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                            GetBitmapHistogram(), target)
-                  .has_value());
-
-  // No blue hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // No green hue present
-  *bitmap_.getAddr32(0, 0) = kSkPMBlue;
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(1, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
-
-  // Neither hue present
-  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 0, 1, 1));
-  EXPECT_FALSE(IsVisualMatch(bitmap_, GetBlurredBitmapHash(),
-                             GetBitmapHistogram(), target)
-                   .has_value());
+  // Half white, half black full bitmap -> not uniform.
+  VisualFeatures::BlurredImage half_blurred;
+  bitmap_.erase(SK_ColorBLACK, SkIRect::MakeXYWH(0, 0, 1000, 500));
+  bitmap_.erase(SK_ColorWHITE, SkIRect::MakeXYWH(0, 500, 1000, 500));
+  ASSERT_TRUE(GetBlurredImage(bitmap_, &half_blurred));
+  EXPECT_FALSE(IsUniformImage(half_blurred));
 }
 
-}  // namespace visual_utils
-}  // namespace safe_browsing
+TEST_F(VisualUtilsTest, IsUniformImageOutlierTolerance) {
+  // For a 48x48 (2304-pixel) blurred image, 0.5% tail trim ignores
+  // floor(2304 * 0.005) = 11 outlier pixels at each tail.
+  VisualFeatures::BlurredImage blurred;
+  blurred.set_width(48);
+  blurred.set_height(48);
+  std::string data(48 * 48 * 3, '\xff');
+
+  // Set 11 pixels (0.48% <= 0.5%) to black (0, 0, 0): still uniform.
+  for (int i = 0; i < 11; ++i) {
+    data[i * 3] = '\x00';
+    data[i * 3 + 1] = '\x00';
+    data[i * 3 + 2] = '\x00';
+  }
+  blurred.set_data(data);
+  EXPECT_TRUE(IsUniformImage(blurred));
+
+  // Setting a 12th pixel (0.52% > 0.5%) to black exceeds the 0.5% lower tail
+  // trim, making the 0.5th percentile 0 and range 255 > 10.
+  data[11 * 3] = '\x00';
+  data[11 * 3 + 1] = '\x00';
+  data[11 * 3 + 2] = '\x00';
+  blurred.set_data(data);
+  EXPECT_FALSE(IsUniformImage(blurred));
+}
+
+TEST_F(VisualUtilsTest, IsUniformImageInvalidInputs) {
+  VisualFeatures::BlurredImage empty_blurred;
+  EXPECT_FALSE(IsUniformImage(empty_blurred));
+
+  VisualFeatures::BlurredImage mismatched_blurred;
+  mismatched_blurred.set_width(2);
+  mismatched_blurred.set_height(2);
+  mismatched_blurred.set_data("short");
+  EXPECT_FALSE(IsUniformImage(mismatched_blurred));
+
+  VisualFeatures::BlurredImage valid_blurred;
+  valid_blurred.set_width(1);
+  valid_blurred.set_height(1);
+  valid_blurred.set_data("\x00\x00\x00", 3);
+  EXPECT_FALSE(IsUniformImage(valid_blurred, /*max_color_range=*/-1));
+
+  VisualFeatures::BlurredImage overflow_blurred;
+  overflow_blurred.set_width(std::numeric_limits<int>::max());
+  overflow_blurred.set_height(std::numeric_limits<int>::max());
+  EXPECT_FALSE(IsUniformImage(overflow_blurred));
+}
+
+}  // namespace safe_browsing::visual_utils

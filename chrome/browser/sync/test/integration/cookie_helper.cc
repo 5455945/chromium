@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,19 +25,21 @@ const char kSigninCookieName[] = "SAPISID";
 }  // namespace
 
 void AddSigninCookie(Profile* profile) {
-  DCHECK(profile);
-  auto cookie = net::CanonicalCookie::CreateUnsafeCookieForTesting(
-      kSigninCookieName, std::string(), ".google.com", "/",
-      /*creation=*/base::Time(),
-      /*expires=*/base::Time(), /*last_access=*/base::Time(), /*secure=*/true,
-      /*httponly=*/false, net::CookieSameSite::NO_RESTRICTION,
-      net::COOKIE_PRIORITY_DEFAULT,
-      /*same_party=*/false);
+  CHECK(profile, base::NotFatalUntil::M163);
+  std::unique_ptr<net::CanonicalCookie> cookie =
+      net::CanonicalCookie::CreateUnsafeCookieForTesting(
+          kSigninCookieName, std::string(), ".google.com", "/",
+          /*creation=*/base::Time(),
+          /*expiration=*/base::Time(), /*last_access=*/base::Time(),
+          /*last_update=*/base::Time(),
+          /*secure=*/true,
+          /*httponly=*/false, net::CookieSameSite::NO_RESTRICTION,
+          net::COOKIE_PRIORITY_DEFAULT, net::CookieSourceType::kOther);
 
   network::mojom::CookieManager* cookie_manager =
       profile->GetDefaultStoragePartition()
           ->GetCookieManagerForBrowserProcess();
-  DCHECK(cookie_manager);
+  CHECK(cookie_manager, base::NotFatalUntil::M163);
 
   base::RunLoop run_loop;
   cookie_manager->SetCanonicalCookie(
@@ -49,11 +51,11 @@ void AddSigninCookie(Profile* profile) {
 }
 
 void DeleteSigninCookies(Profile* profile) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M163);
   network::mojom::CookieManager* cookie_manager =
       profile->GetDefaultStoragePartition()
           ->GetCookieManagerForBrowserProcess();
-  DCHECK(cookie_manager);
+  CHECK(cookie_manager, base::NotFatalUntil::M163);
 
   base::RunLoop run_loop;
   network::mojom::CookieDeletionFilterPtr filter =

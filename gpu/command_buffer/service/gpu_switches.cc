@@ -1,10 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/command_buffer/service/gpu_switches.h"
-
-#include "base/macros.h"
 
 namespace switches {
 
@@ -34,14 +32,8 @@ const char kEnableGPUServiceLoggingGPU[]    = "enable-gpu-service-logging";
 // Enable logging of GPU driver debug messages.
 const char kEnableGPUDriverDebugLogging[] = "enable-gpu-driver-debug-logging";
 
-// Turn off gpu program caching
-const char kDisableGpuProgramCache[]        = "disable-gpu-program-cache";
-
 // Enforce GL minimums.
 const char kEnforceGLMinimums[]             = "enforce-gl-minimums";
-
-// Sets the total amount of memory that may be allocated for GPU resources
-const char kForceGpuMemAvailableMb[]        = "force-gpu-mem-available-mb";
 
 // Sets the maximum GPU memory to use for discardable caches.
 const char kForceGpuMemDiscardableLimitMb[] =
@@ -53,9 +45,6 @@ const char kForceMaxTextureSize[] = "force-max-texture-size";
 // Sets the maximum size of the in-memory gpu program cache, in kb
 const char kGpuProgramCacheSizeKb[]         = "gpu-program-cache-size-kb";
 
-// Disables the GPU shader on disk cache.
-const char kDisableGpuShaderDiskCache[]     = "disable-gpu-shader-disk-cache";
-
 // Simulates shared textures when share groups are not available. Not available
 // everywhere.
 const char kEnableThreadedTextureMailboxes[] =
@@ -64,10 +53,6 @@ const char kEnableThreadedTextureMailboxes[] =
 // Include ANGLE's intermediate representation (AST) output in shader
 // compilation info logs.
 const char kGLShaderIntermOutput[] = "gl-shader-interm-output";
-
-// Emulate ESSL lowp and mediump float precisions by mutating the shaders to
-// round intermediate values in ANGLE.
-const char kEmulateShaderPrecision[] = "emulate-shader-precision";
 
 // Enable Vulkan support and select Vulkan implementation, must also have
 // ENABLE_VULKAN defined. This only initializes Vulkan, the flag
@@ -80,5 +65,10 @@ const char kVulkanImplementationNameSwiftshader[] = "swiftshader";
 // Disables VK_KHR_surface extension. Instead of using swapchain, bitblt will be
 // used for present render result on screen.
 const char kDisableVulkanSurface[] = "disable-vulkan-surface";
+
+// Disable DumpWithoutCrashing on ANGLE portability messages.
+// This should be used by GPU integration tests to avoid failures on bots.
+const char kDisableDumpWithoutCrashingOnAnglePortabilityMessages[] =
+    "disable-dump-without-crashing-on-angle-portability-messages";
 
 }  // namespace switches

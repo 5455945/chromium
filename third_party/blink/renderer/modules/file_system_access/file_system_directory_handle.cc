@@ -1,32 +1,133 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/file_system_access/file_system_directory_handle.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_cloud_identifier.mojom-blink.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_directory_handle.mojom-blink.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom-blink.h"
-#include "third_party/blink/public/mojom/file_system_access/file_system_access_manager.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_file_system_directory_handle.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_file_system_get_directory_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_file_system_get_file_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_file_system_remove_options.h"
-#include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/execution_context/security_context.h"
-#include "third_party/blink/renderer/core/fileapi/file_error.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_access_error.h"
-#include "third_party/blink/renderer/modules/file_system_access/file_system_directory_iterator.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_file_handle.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
+#include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+
+namespace {
+
+constexpr char kContextDestroyedErrorMessage[] =
+    "The directory handle is no longer associated with an active execution "
+    "context.";
+
+}  // namespace
+
+class FileSystemDirectoryHandle::IterationSource final
+    : public PairAsyncIterable<FileSystemDirectoryHandle>::IterationSource,
+      public ExecutionContextClient,
+      public mojom::blink::FileSystemAccessDirectoryEntriesListener {
+ public:
+  IterationSource(ScriptState* script_state,
+                  ExecutionContext* execution_context,
+                  Kind kind,
+                  FileSystemDirectoryHandle* directory)
+      : PairAsyncIterable<FileSystemDirectoryHandle>::IterationSource(
+            script_state,
+            kind),
+        ExecutionContextClient(execution_context),
+        directory_(directory),
+        receiver_(this, execution_context),
+        keep_alive_({}, this) {
+    directory_->MojoHandle()->GetEntries(receiver_.BindNewPipeAndPassRemote(
+        execution_context->GetTaskRunner(TaskType::kStorage)));
+  }
+
+  void DidReadDirectory(mojom::blink::FileSystemAccessErrorPtr result,
+                        Vector<mojom::blink::FileSystemAccessEntryPtr> entries,
+                        bool has_more_entries) override {
+    is_waiting_for_more_entries_ = has_more_entries;
+    ExecutionContext* const execution_context = GetExecutionContext();
+    if (!has_more_entries || !execution_context) {
+      keep_alive_.Clear();
+    }
+    if (!execution_context) {
+      return;
+    }
+    if (result->status == mojom::blink::FileSystemAccessStatus::kOk) {
+      for (auto& entry : entries) {
+        file_system_handle_queue_.push_back(
+            FileSystemHandle::CreateFromMojoEntry(std::move(entry),
+                                                  execution_context));
+      }
+    } else {
+      CHECK(!has_more_entries);
+      error_ = std::move(result);
+    }
+    ScriptState::Scope script_state_scope(GetScriptState());
+    TryResolvePromise();
+  }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(directory_);
+    visitor->Trace(receiver_);
+    visitor->Trace(file_system_handle_queue_);
+    PairAsyncIterable<FileSystemDirectoryHandle>::IterationSource::Trace(
+        visitor);
+    ExecutionContextClient::Trace(visitor);
+  }
+
+ protected:
+  void GetNextIterationResult() override { TryResolvePromise(); }
+
+ private:
+  void TryResolvePromise() {
+    if (!HasPendingPromise()) {
+      return;
+    }
+
+    if (!file_system_handle_queue_.empty()) {
+      FileSystemHandle* handle = file_system_handle_queue_.TakeFirst();
+      TakePendingPromiseResolver()->Resolve(
+          MakeIterationResult(handle->name(), handle));
+      return;
+    }
+
+    if (error_) {
+      file_system_access_error::Reject(TakePendingPromiseResolver(), *error_);
+      return;
+    }
+
+    if (!is_waiting_for_more_entries_) {
+      TakePendingPromiseResolver()->Resolve(MakeEndOfIteration());
+      return;
+    }
+  }
+
+  Member<FileSystemDirectoryHandle> directory_;
+  HeapMojoReceiver<mojom::blink::FileSystemAccessDirectoryEntriesListener,
+                   IterationSource>
+      receiver_;
+  // Queue of the successful results.
+  HeapDeque<Member<FileSystemHandle>> file_system_handle_queue_;
+  mojom::blink::FileSystemAccessErrorPtr error_;
+  bool is_waiting_for_more_entries_ = true;
+  // HeapMojoReceived won't retain us, so maintain a keepalive while
+  // waiting for the browser to send all entries.
+  SelfKeepAlive<IterationSource> keep_alive_;
+};
 
 using mojom::blink::FileSystemAccessErrorPtr;
 
@@ -36,43 +137,40 @@ FileSystemDirectoryHandle::FileSystemDirectoryHandle(
     mojo::PendingRemote<mojom::blink::FileSystemAccessDirectoryHandle> mojo_ptr)
     : FileSystemHandle(context, name), mojo_ptr_(context) {
   mojo_ptr_.Bind(std::move(mojo_ptr),
-                 context->GetTaskRunner(TaskType::kMiscPlatformAPI));
+                 context->GetTaskRunner(TaskType::kStorage));
   DCHECK(mojo_ptr_.is_bound());
 }
 
-FileSystemDirectoryIterator* FileSystemDirectoryHandle::entries() {
-  return MakeGarbageCollected<FileSystemDirectoryIterator>(
-      this, FileSystemDirectoryIterator::Mode::kKeyValue,
-      GetExecutionContext());
-}
-
-FileSystemDirectoryIterator* FileSystemDirectoryHandle::keys() {
-  return MakeGarbageCollected<FileSystemDirectoryIterator>(
-      this, FileSystemDirectoryIterator::Mode::kKey, GetExecutionContext());
-}
-
-FileSystemDirectoryIterator* FileSystemDirectoryHandle::values() {
-  return MakeGarbageCollected<FileSystemDirectoryIterator>(
-      this, FileSystemDirectoryIterator::Mode::kValue, GetExecutionContext());
-}
-
-ScriptPromise FileSystemDirectoryHandle::getFileHandle(
+ScriptPromise<FileSystemFileHandle> FileSystemDirectoryHandle::getFileHandle(
     ScriptState* script_state,
     const String& name,
-    const FileSystemGetFileOptions* options) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise result = resolver->Promise();
+    const FileSystemGetFileOptions* options,
+    ExceptionState& exception_state) {
+  if (!mojo_ptr_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      kContextDestroyedErrorMessage);
+    return EmptyPromise();
+  }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<FileSystemFileHandle>>(
+          script_state, exception_state.GetContext());
+  auto result = resolver->Promise();
 
   mojo_ptr_->GetFile(
       name, options->create(),
-      WTF::Bind(
-          [](ScriptPromiseResolver* resolver, const String& name,
-             FileSystemAccessErrorPtr result,
+      BindOnce(
+          [](FileSystemDirectoryHandle*,
+             ScriptPromiseResolver<FileSystemFileHandle>* resolver,
+             const String& name, FileSystemAccessErrorPtr result,
              mojo::PendingRemote<mojom::blink::FileSystemAccessFileHandle>
                  handle) {
+            // Keep `this` alive so the handle will not be garbage-collected
+            // before the promise is resolved.
             ExecutionContext* context = resolver->GetExecutionContext();
-            if (!context)
+            if (!context) {
               return;
+            }
             if (result->status != mojom::blink::FileSystemAccessStatus::kOk) {
               file_system_access_error::Reject(resolver, *result);
               return;
@@ -80,34 +178,42 @@ ScriptPromise FileSystemDirectoryHandle::getFileHandle(
             resolver->Resolve(MakeGarbageCollected<FileSystemFileHandle>(
                 context, name, std::move(handle)));
           },
-          WrapPersistent(resolver), name));
+          WrapPersistent(this), WrapPersistent(resolver), name));
 
   return result;
 }
 
-ScriptPromise FileSystemDirectoryHandle::getDirectoryHandle(
+ScriptPromise<FileSystemDirectoryHandle>
+FileSystemDirectoryHandle::getDirectoryHandle(
     ScriptState* script_state,
     const String& name,
-    const FileSystemGetDirectoryOptions* options) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise result = resolver->Promise();
-
+    const FileSystemGetDirectoryOptions* options,
+    ExceptionState& exception_state) {
   if (!mojo_ptr_.is_bound()) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kInvalidStateError));
-    return result;
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      kContextDestroyedErrorMessage);
+    return EmptyPromise();
   }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<FileSystemDirectoryHandle>>(
+          script_state, exception_state.GetContext());
+  auto result = resolver->Promise();
 
   mojo_ptr_->GetDirectory(
       name, options->create(),
-      WTF::Bind(
-          [](ScriptPromiseResolver* resolver, const String& name,
-             FileSystemAccessErrorPtr result,
+      BindOnce(
+          [](FileSystemDirectoryHandle*,
+             ScriptPromiseResolver<FileSystemDirectoryHandle>* resolver,
+             const String& name, FileSystemAccessErrorPtr result,
              mojo::PendingRemote<mojom::blink::FileSystemAccessDirectoryHandle>
                  handle) {
+            // Keep `this` alive so the handle will not be garbage-collected
+            // before the promise is resolved.
             ExecutionContext* context = resolver->GetExecutionContext();
-            if (!context)
+            if (!context) {
               return;
+            }
             if (result->status != mojom::blink::FileSystemAccessStatus::kOk) {
               file_system_access_error::Reject(resolver, *result);
               return;
@@ -115,89 +221,78 @@ ScriptPromise FileSystemDirectoryHandle::getDirectoryHandle(
             resolver->Resolve(MakeGarbageCollected<FileSystemDirectoryHandle>(
                 context, name, std::move(handle)));
           },
-          WrapPersistent(resolver), name));
+          WrapPersistent(this), WrapPersistent(resolver), name));
 
   return result;
 }
 
-namespace {
-
-void ReturnDataFunction(const v8::FunctionCallbackInfo<v8::Value>& info) {
-  V8SetReturnValue(info, info.Data());
-}
-
-}  // namespace
-
-ScriptValue FileSystemDirectoryHandle::getEntries(ScriptState* script_state) {
-  auto* iterator = MakeGarbageCollected<FileSystemDirectoryIterator>(
-      this, FileSystemDirectoryIterator::Mode::kValue,
-      ExecutionContext::From(script_state));
-  auto* isolate = script_state->GetIsolate();
-  auto context = script_state->GetContext();
-  v8::Local<v8::Object> result = v8::Object::New(isolate);
-  if (!result
-           ->Set(context, v8::Symbol::GetAsyncIterator(isolate),
-                 v8::Function::New(context, &ReturnDataFunction,
-                                   ToV8(iterator, script_state))
-                     .ToLocalChecked())
-           .ToChecked()) {
-    return ScriptValue();
-  }
-  return ScriptValue(script_state->GetIsolate(), result);
-}
-
-ScriptPromise FileSystemDirectoryHandle::removeEntry(
+ScriptPromise<IDLUndefined> FileSystemDirectoryHandle::removeEntry(
     ScriptState* script_state,
     const String& name,
-    const FileSystemRemoveOptions* options) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise result = resolver->Promise();
-
+    const FileSystemRemoveOptions* options,
+    ExceptionState& exception_state) {
   if (!mojo_ptr_.is_bound()) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kInvalidStateError));
-    return result;
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      kContextDestroyedErrorMessage);
+    return EmptyPromise();
   }
 
-  mojo_ptr_->RemoveEntry(
-      name, options->recursive(),
-      WTF::Bind(
-          [](ScriptPromiseResolver* resolver, FileSystemAccessErrorPtr result) {
-            file_system_access_error::ResolveOrReject(resolver, *result);
-          },
-          WrapPersistent(resolver)));
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto result = resolver->Promise();
+
+  mojo_ptr_->RemoveEntry(name, options->recursive(),
+                         BindOnce(
+                             [](FileSystemDirectoryHandle*,
+                                ScriptPromiseResolver<IDLUndefined>* resolver,
+                                FileSystemAccessErrorPtr result) {
+                               // Keep `this` alive so the handle will not be
+                               // garbage-collected before the promise is
+                               // resolved.
+                               file_system_access_error::ResolveOrReject(
+                                   resolver, *result);
+                             },
+                             WrapPersistent(this), WrapPersistent(resolver)));
 
   return result;
 }
 
-ScriptPromise FileSystemDirectoryHandle::resolve(
-    ScriptState* script_state,
-    FileSystemHandle* possible_child) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise result = resolver->Promise();
-
+ScriptPromise<IDLNullable<IDLSequence<IDLUSVString>>>
+FileSystemDirectoryHandle::resolve(ScriptState* script_state,
+                                   FileSystemHandle* possible_child,
+                                   ExceptionState& exception_state) {
   if (!mojo_ptr_.is_bound()) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kInvalidStateError));
-    return result;
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      kContextDestroyedErrorMessage);
+    return ScriptPromise<IDLNullable<IDLSequence<IDLUSVString>>>();
   }
+
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLNullable<IDLSequence<IDLUSVString>>>>(
+      script_state, exception_state.GetContext());
+  auto result = resolver->Promise();
 
   mojo_ptr_->Resolve(
       possible_child->Transfer(),
-      WTF::Bind(
-          [](ScriptPromiseResolver* resolver, FileSystemAccessErrorPtr result,
-             const absl::optional<Vector<String>>& path) {
+      BindOnce(
+          [](FileSystemDirectoryHandle*,
+             ScriptPromiseResolver<IDLNullable<IDLSequence<IDLUSVString>>>*
+                 resolver,
+             FileSystemAccessErrorPtr result,
+             const std::optional<Vector<String>>& path) {
+            // Keep `this` alive so the handle will not be garbage-collected
+            // before the promise is resolved.
             if (result->status != mojom::blink::FileSystemAccessStatus::kOk) {
               file_system_access_error::Reject(resolver, *result);
               return;
             }
             if (!path.has_value()) {
-              resolver->Resolve(static_cast<ScriptWrappable*>(nullptr));
+              resolver->Resolve(std::nullopt);
               return;
             }
             resolver->Resolve(*path);
           },
-          WrapPersistent(resolver)));
+          WrapPersistent(this), WrapPersistent(resolver)));
 
   return result;
 }
@@ -205,8 +300,9 @@ ScriptPromise FileSystemDirectoryHandle::resolve(
 mojo::PendingRemote<mojom::blink::FileSystemAccessTransferToken>
 FileSystemDirectoryHandle::Transfer() {
   mojo::PendingRemote<mojom::blink::FileSystemAccessTransferToken> result;
-  if (mojo_ptr_.is_bound())
+  if (mojo_ptr_.is_bound()) {
     mojo_ptr_->Transfer(result.InitWithNewPipeAndPassReceiver());
+  }
   return result;
 }
 
@@ -216,17 +312,17 @@ void FileSystemDirectoryHandle::Trace(Visitor* visitor) const {
 }
 
 void FileSystemDirectoryHandle::QueryPermissionImpl(
-    bool writable,
+    mojom::blink::FileSystemAccessPermissionMode mode,
     base::OnceCallback<void(mojom::blink::PermissionStatus)> callback) {
   if (!mojo_ptr_.is_bound()) {
     std::move(callback).Run(mojom::blink::PermissionStatus::DENIED);
     return;
   }
-  mojo_ptr_->GetPermissionStatus(writable, std::move(callback));
+  mojo_ptr_->GetPermissionStatus(mode, std::move(callback));
 }
 
 void FileSystemDirectoryHandle::RequestPermissionImpl(
-    bool writable,
+    mojom::blink::FileSystemAccessPermissionMode mode,
     base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr,
                             mojom::blink::PermissionStatus)> callback) {
   if (!mojo_ptr_.is_bound()) {
@@ -238,7 +334,25 @@ void FileSystemDirectoryHandle::RequestPermissionImpl(
     return;
   }
 
-  mojo_ptr_->RequestPermission(writable, std::move(callback));
+  mojo_ptr_->RequestPermission(mode, std::move(callback));
+}
+
+void FileSystemDirectoryHandle::MoveImpl(
+    mojo::PendingRemote<mojom::blink::FileSystemAccessTransferToken> dest,
+    const String& new_entry_name,
+    base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr)> callback) {
+  if (!mojo_ptr_.is_bound()) {
+    std::move(callback).Run(mojom::blink::FileSystemAccessError::New(
+        mojom::blink::FileSystemAccessStatus::kInvalidState,
+        base::File::Error::FILE_ERROR_FAILED, "Context Destroyed"));
+    return;
+  }
+
+  if (dest.is_valid()) {
+    mojo_ptr_->Move(std::move(dest), new_entry_name, std::move(callback));
+  } else {
+    mojo_ptr_->Rename(new_entry_name, std::move(callback));
+  }
 }
 
 void FileSystemDirectoryHandle::RemoveImpl(
@@ -269,15 +383,60 @@ void FileSystemDirectoryHandle::IsSameEntryImpl(
 
   mojo_ptr_->Resolve(
       std::move(other),
-      WTF::Bind(
+      blink::BindOnce(
           [](base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr,
                                      bool)> callback,
              FileSystemAccessErrorPtr result,
-             const absl::optional<Vector<String>>& path) {
+             const std::optional<Vector<String>>& path) {
             std::move(callback).Run(std::move(result),
-                                    path.has_value() && path->IsEmpty());
+                                    path.has_value() && path->empty());
           },
           std::move(callback)));
+}
+
+void FileSystemDirectoryHandle::GetUniqueIdImpl(
+    base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr,
+                            const String&)> callback) {
+  if (!mojo_ptr_.is_bound()) {
+    std::move(callback).Run(
+        mojom::blink::FileSystemAccessError::New(
+            mojom::blink::FileSystemAccessStatus::kInvalidState,
+            base::File::Error::FILE_ERROR_FAILED, "Context Destroyed"),
+        "");
+    return;
+  }
+  mojo_ptr_->GetUniqueId(std::move(callback));
+}
+
+void FileSystemDirectoryHandle::GetCloudIdentifiersImpl(
+    base::OnceCallback<void(
+        mojom::blink::FileSystemAccessErrorPtr,
+        Vector<mojom::blink::FileSystemAccessCloudIdentifierPtr>)> callback) {
+  if (!mojo_ptr_.is_bound()) {
+    std::move(callback).Run(
+        mojom::blink::FileSystemAccessError::New(
+            mojom::blink::FileSystemAccessStatus::kInvalidState,
+            base::File::Error::FILE_ERROR_FAILED, "Context Destroyed"),
+        {});
+    return;
+  }
+  mojo_ptr_->GetCloudIdentifiers(std::move(callback));
+}
+
+PairAsyncIterable<FileSystemDirectoryHandle>::IterationSource*
+FileSystemDirectoryHandle::CreateIterationSource(
+    ScriptState* script_state,
+    PairAsyncIterable<FileSystemDirectoryHandle>::IterationSource::Kind kind,
+    ExceptionState& exception_state) {
+  ExecutionContext* execution_context = GetExecutionContext();
+  if (!execution_context) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "The window is detached.");
+    return nullptr;
+  }
+
+  return MakeGarbageCollected<IterationSource>(script_state, execution_context,
+                                               kind, this);
 }
 
 }  // namespace blink

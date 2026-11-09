@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,15 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <string_view>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/build_config.h"
-#include "net/base/escape.h"
 #include "net/base/net_errors.h"
 #include "storage/common/database/database_identifier.h"
 #include "url/gurl.h"
@@ -119,11 +119,10 @@ std::vector<std::string> VirtualPath::GetComponentsUTF8Unsafe(
 base::FilePath::StringType VirtualPath::GetNormalizedFilePath(
     const base::FilePath& path) {
   base::FilePath::StringType normalized_path = path.value();
-  const size_t num_separators =
-      base::FilePath::StringType(base::FilePath::kSeparators).length();
-  for (size_t i = 0; i < num_separators; ++i) {
-    std::replace(normalized_path.begin(), normalized_path.end(),
-                 base::FilePath::kSeparators[i], kSeparator);
+  const base::FilePath::StringType separators = base::FilePath::kSeparators;
+  for (const auto separator : separators) {
+    std::replace(normalized_path.begin(), normalized_path.end(), separator,
+                 kSeparator);
   }
 
   return (IsAbsolute(normalized_path))
@@ -165,7 +164,7 @@ bool ParseFileSystemSchemeURL(const GURL& url,
 
   // A path of the inner_url contains only mount type part (e.g. "/temporary").
   DCHECK(url.inner_url());
-  std::string inner_path = url.inner_url()->path();
+  std::string inner_path = url.inner_url()->GetPath();
   for (const auto& valid_type : kValidTypes) {
     if (inner_path == valid_type.dir) {
       file_system_type = valid_type.type;
@@ -176,7 +175,7 @@ bool ParseFileSystemSchemeURL(const GURL& url,
   if (file_system_type == kFileSystemTypeUnknown)
     return false;
 
-  std::string path = net::UnescapeBinaryURLComponent(url.path_piece());
+  std::string path = base::UnescapeBinaryURLComponent(url.path());
 
   // Ensure the path is relative.
   while (!path.empty() && path[0] == '/')
@@ -189,7 +188,7 @@ bool ParseFileSystemSchemeURL(const GURL& url,
     return false;
 
   if (origin_url)
-    *origin_url = url.GetOrigin();
+    *origin_url = url.DeprecatedGetOriginAsURL();
   if (type)
     *type = file_system_type;
   if (virtual_path)
@@ -204,29 +203,33 @@ GURL GetFileSystemRootURI(const GURL& origin_url, FileSystemType type) {
   // instead of the corresponding filesystem URL.
   DCHECK(!origin_url.SchemeIsFileSystem());
 
+  const auto without_leading_slash = [](std::string_view dir) {
+    DCHECK(!dir.empty());
+    DCHECK_EQ(dir.front(), '/');
+    return dir.substr(1);
+  };
+
   std::string url = "filesystem:" + origin_url.GetWithEmptyPath().spec();
   switch (type) {
     case kFileSystemTypeTemporary:
-      url += (kTemporaryDir + 1);  // We don't want the leading slash.
+      url += without_leading_slash(kTemporaryDir);
       return GURL(url + "/");
     case kFileSystemTypePersistent:
-      url += (kPersistentDir + 1);  // We don't want the leading slash.
+      url += without_leading_slash(kPersistentDir);
       return GURL(url + "/");
     case kFileSystemTypeExternal:
-      url += (kExternalDir + 1);  // We don't want the leading slash.
+      url += without_leading_slash(kExternalDir);
       return GURL(url + "/");
     case kFileSystemTypeIsolated:
-      url += (kIsolatedDir + 1);  // We don't want the leading slash.
+      url += without_leading_slash(kIsolatedDir);
       return GURL(url + "/");
     case kFileSystemTypeTest:
-      url += (kTestDir + 1);  // We don't want the leading slash.
+      url += without_leading_slash(kTestDir);
       return GURL(url + "/");
       // Internal types are always pointed via isolated or external URLs.
     default:
       NOTREACHED();
   }
-  NOTREACHED();
-  return GURL();
 }
 
 std::string GetFileSystemName(const GURL& origin_url, FileSystemType type) {
@@ -234,23 +237,6 @@ std::string GetFileSystemName(const GURL& origin_url, FileSystemType type) {
   std::string type_string = GetFileSystemTypeString(type);
   DCHECK(!type_string.empty());
   return origin_identifier + ":" + type_string;
-}
-
-blink::mojom::StorageType FileSystemTypeToQuotaStorageType(
-    FileSystemType type) {
-  switch (type) {
-    case kFileSystemTypeTemporary:
-      return blink::mojom::StorageType::kTemporary;
-    case kFileSystemTypePersistent:
-      return blink::mojom::StorageType::kPersistent;
-    case kFileSystemTypeSyncable:
-    case kFileSystemTypeSyncableForInternalSync:
-      return blink::mojom::StorageType::kSyncable;
-    case kFileSystemTypePluginPrivate:
-      return blink::mojom::StorageType::kQuotaNotManaged;
-    default:
-      return blink::mojom::StorageType::kUnknown;
-  }
 }
 
 std::string GetFileSystemTypeString(FileSystemType type) {
@@ -267,8 +253,6 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "Test";
     case kFileSystemTypeLocal:
       return "Local";
-    case kFileSystemTypeRestrictedLocal:
-      return "RestrictedLocal";
     case kFileSystemTypeDragged:
       return "Dragged";
     case kFileSystemTypeLocalMedia:
@@ -280,12 +264,6 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "Syncable";
     case kFileSystemTypeLocalForPlatformApp:
       return "LocalForPlatformApp";
-    case kFileSystemTypeForTransientFile:
-      return "TransientFile";
-    case kFileSystemTypePluginPrivate:
-      return "PluginPrivate";
-    case kFileSystemTypeCloudDevice:
-      return "CloudDevice";
     case kFileSystemTypeProvided:
       return "Provided";
     case kFileSystemTypeDeviceMediaAsFileStorage:
@@ -298,36 +276,38 @@ std::string GetFileSystemTypeString(FileSystemType type) {
       return "DriveFs";
     case kFileSystemTypeSmbFs:
       return "SmbFs";
+    case kFileSystemTypeFuseBox:
+      return "FuseBox";
+    case kFileSystemTypeInMemory:
+      return "InMemory";
     case kFileSystemInternalTypeEnumStart:
     case kFileSystemInternalTypeEnumEnd:
       NOTREACHED();
-      FALLTHROUGH;
     case kFileSystemTypeUnknown:
       return "Unknown";
   }
   NOTREACHED();
-  return std::string();
 }
 
 std::string FilePathToString(const base::FilePath& file_path) {
   // TODO(pkasting): Probably this should use AsUTF8Unsafe() across platforms.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return file_path.AsUTF8Unsafe();
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   return file_path.value();
 #endif
 }
 
 base::FilePath StringToFilePath(const std::string& file_path_string) {
   // TODO(pkasting): Probably this should use FromUTF8Unsafe() across platforms.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return base::FilePath::FromUTF8Unsafe(file_path_string);
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   return base::FilePath(file_path_string);
 #endif
 }
 
-bool GetFileSystemPublicType(const std::string type_string,
+bool GetFileSystemPublicType(const std::string& type_string,
                              blink::WebFileSystemType* type) {
   DCHECK(type);
   if (type_string == "Temporary") {
@@ -347,7 +327,6 @@ bool GetFileSystemPublicType(const std::string type_string,
     return true;
   }
   NOTREACHED();
-  return false;
 }
 
 std::string GetIsolatedFileSystemName(const GURL& origin_url,
@@ -390,10 +369,8 @@ bool CrackIsolatedFileSystemName(const std::string& filesystem_name,
 
 bool ValidateIsolatedFileSystemId(const std::string& filesystem_id) {
   const size_t kExpectedFileSystemIdSize = 32;
-  if (filesystem_id.size() != kExpectedFileSystemIdSize)
-    return false;
-  const std::string kExpectedChars("ABCDEF0123456789");
-  return base::ContainsOnlyChars(filesystem_id, kExpectedChars);
+  return (filesystem_id.size() == kExpectedFileSystemIdSize) &&
+         base::ContainsOnlyChars(filesystem_id, "ABCDEF0123456789");
 }
 
 std::string GetIsolatedFileSystemRootURIString(
@@ -404,12 +381,12 @@ std::string GetIsolatedFileSystemRootURIString(
       GetFileSystemRootURI(origin_url, kFileSystemTypeIsolated).spec();
   if (base::FilePath::FromUTF8Unsafe(filesystem_id).ReferencesParent())
     return std::string();
-  root.append(net::EscapePath(filesystem_id));
+  root.append(base::EscapePath(filesystem_id));
   root.append("/");
   if (!optional_root_name.empty()) {
     if (base::FilePath::FromUTF8Unsafe(optional_root_name).ReferencesParent())
       return std::string();
-    root.append(net::EscapePath(optional_root_name));
+    root.append(base::EscapePath(optional_root_name));
     root.append("/");
   }
   return root;
@@ -421,7 +398,7 @@ std::string GetExternalFileSystemRootURIString(const GURL& origin_url,
       GetFileSystemRootURI(origin_url, kFileSystemTypeExternal).spec();
   if (base::FilePath::FromUTF8Unsafe(mount_name).ReferencesParent())
     return std::string();
-  root.append(net::EscapePath(mount_name));
+  root.append(base::EscapePath(mount_name));
   root.append("/");
   return root;
 }
@@ -438,6 +415,8 @@ base::File::Error NetErrorToFileError(int error) {
       return base::File::FILE_ERROR_NOT_FOUND;
     case net::ERR_ACCESS_DENIED:
       return base::File::FILE_ERROR_ACCESS_DENIED;
+    case net::ERR_INSUFFICIENT_RESOURCES:
+      return base::File::FILE_ERROR_TOO_MANY_OPENED;
     case net::ERR_OUT_OF_MEMORY:
       return base::File::FILE_ERROR_NO_MEMORY;
     case net::ERR_FILE_NO_SPACE:

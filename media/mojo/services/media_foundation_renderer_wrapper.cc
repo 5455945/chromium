@@ -1,21 +1,25 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/services/media_foundation_renderer_wrapper.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/sequenced_task_runner.h"
+#include "media/base/media_switches.h"
 #include "media/base/win/mf_helpers.h"
 #include "media/mojo/mojom/renderer_extensions.mojom.h"
+#include "media/mojo/services/media_foundation_gpu_info_monitor.h"
+#include "media/mojo/services/mojo_media_log.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 
 namespace media {
 
 namespace {
 
 bool HasAudio(MediaResource* media_resource) {
-  DCHECK(media_resource->GetType() == MediaResource::Type::STREAM);
-
   const auto media_streams = media_resource->GetAllStreams();
   for (const media::DemuxerStream* stream : media_streams) {
     if (stream->type() == media::DemuxerStream::Type::AUDIO)
@@ -25,27 +29,43 @@ bool HasAudio(MediaResource* media_resource) {
   return false;
 }
 
+LUID ChromeLuidToLuid(const CHROME_LUID& chrome_luid) {
+  LUID luid;
+  luid.LowPart = chrome_luid.LowPart;
+  luid.HighPart = chrome_luid.HighPart;
+  return luid;
+}
+
 }  // namespace
 
-// TODO(xhwang): Remove `force_dcomp_mode_for_testing=true` after composition is
-// working by default.
 MediaFoundationRendererWrapper::MediaFoundationRendererWrapper(
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     mojom::FrameInterfaceFactory* frame_interfaces,
+    mojo::PendingRemote<mojom::MediaLog> media_log_remote,
     mojo::PendingReceiver<RendererExtension> renderer_extension_receiver)
     : frame_interfaces_(frame_interfaces),
-      renderer_(std::make_unique<MediaFoundationRenderer>(
-          std::move(task_runner),
-          /*force_dcomp_mode_for_testing=*/true)),
       renderer_extension_receiver_(this,
                                    std::move(renderer_extension_receiver)),
       site_mute_observer_(this) {
   DVLOG_FUNC(1);
-  DCHECK(frame_interfaces_);
+  CHECK(frame_interfaces_, base::NotFatalUntil::M163);
+
+  renderer_ = std::make_unique<MediaFoundationRenderer>(
+      task_runner,
+      std::make_unique<MojoMediaLog>(std::move(media_log_remote), task_runner),
+      ChromeLuidToLuid(
+          MediaFoundationGpuInfoMonitor::GetInstance()->gpu_luid()));
+
+  luid_update_subscription_ =
+      MediaFoundationGpuInfoMonitor::GetInstance()->AddLuidObserver(
+          base::BindRepeating(&MediaFoundationRendererWrapper::OnGpuLuidChange,
+                              weak_factory_.GetWeakPtr()));
 }
 
 MediaFoundationRendererWrapper::~MediaFoundationRendererWrapper() {
   DVLOG_FUNC(1);
+  if (!dcomp_surface_token_.is_empty())
+    dcomp_surface_registry_->UnregisterDCOMPSurfaceHandle(dcomp_surface_token_);
 }
 
 void MediaFoundationRendererWrapper::Initialize(
@@ -57,6 +77,25 @@ void MediaFoundationRendererWrapper::Initialize(
         site_mute_observer_.BindNewPipeAndPassRemote());
   }
 
+  if (base::FeatureList::IsEnabled(kMediaFoundationMultiGpuAdapterSelection)) {
+    // Asynchronously fetch the frame's screen rect from the browser process
+    // for GPU adapter selection on multi-GPU systems.
+    frame_interfaces_->GetFrameScreenRect(
+        base::BindOnce(&MediaFoundationRendererWrapper::InitializeRenderer,
+                       weak_factory_.GetWeakPtr(), media_resource, client,
+                       std::move(init_cb)));
+    return;
+  }
+
+  InitializeRenderer(media_resource, client, std::move(init_cb), gfx::Rect());
+}
+
+void MediaFoundationRendererWrapper::InitializeRenderer(
+    MediaResource* media_resource,
+    RendererClient* client,
+    PipelineStatusCallback init_cb,
+    const gfx::Rect& target_window_rect) {
+  renderer_->SetTargetWindowRect(target_window_rect);
   renderer_->Initialize(media_resource, client, std::move(init_cb));
 }
 
@@ -66,7 +105,7 @@ void MediaFoundationRendererWrapper::SetCdm(CdmContext* cdm_context,
 }
 
 void MediaFoundationRendererWrapper::SetLatencyHint(
-    absl::optional<base::TimeDelta> latency_hint) {
+    std::optional<base::TimeDelta> latency_hint) {
   renderer_->SetLatencyHint(latency_hint);
 }
 
@@ -83,6 +122,7 @@ void MediaFoundationRendererWrapper::SetPlaybackRate(double playback_rate) {
 }
 
 void MediaFoundationRendererWrapper::SetVolume(float volume) {
+  volume_ = volume;
   renderer_->SetVolume(muted_ ? 0 : volume_);
 }
 
@@ -90,27 +130,32 @@ base::TimeDelta MediaFoundationRendererWrapper::GetMediaTime() {
   return renderer_->GetMediaTime();
 }
 
-void MediaFoundationRendererWrapper::SetDCOMPMode(
-    bool enabled,
-    SetDCOMPModeCallback callback) {
-  renderer_->SetDCompMode(enabled, std::move(callback));
+RendererType MediaFoundationRendererWrapper::GetRendererType() {
+  return RendererType::kMediaFoundation;
 }
 
 void MediaFoundationRendererWrapper::GetDCOMPSurface(
     GetDCOMPSurfaceCallback callback) {
-  get_decomp_surface_cb_ = std::move(callback);
+  if (has_get_dcomp_surface_called_) {
+    renderer_extension_receiver_.ReportBadMessage(
+        "GetDCOMPSurface should only be called once!");
+    return;
+  }
+
+  has_get_dcomp_surface_called_ = true;
   renderer_->GetDCompSurface(
       base::BindOnce(&MediaFoundationRendererWrapper::OnReceiveDCOMPSurface,
-                     weak_factory_.GetWeakPtr()));
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MediaFoundationRendererWrapper::SetVideoStreamEnabled(bool enabled) {
   renderer_->SetVideoStreamEnabled(enabled);
 }
 
-void MediaFoundationRendererWrapper::SetOutputParams(
-    const gfx::Rect& output_rect) {
-  renderer_->SetOutputParams(output_rect);
+void MediaFoundationRendererWrapper::SetOutputRect(
+    const gfx::Rect& output_rect,
+    SetOutputRectCallback callback) {
+  renderer_->SetOutputRect(output_rect, std::move(callback));
 }
 
 void MediaFoundationRendererWrapper::OnMuteStateChange(bool muted) {
@@ -123,15 +168,46 @@ void MediaFoundationRendererWrapper::OnMuteStateChange(bool muted) {
   renderer_->SetVolume(muted_ ? 0 : volume_);
 }
 
-void MediaFoundationRendererWrapper::OnReceiveDCOMPSurface(HANDLE handle) {
-  base::win::ScopedHandle local_surface_handle;
-  local_surface_handle.Set(handle);
-  if (get_decomp_surface_cb_) {
-    mojo::ScopedHandle surface_handle;
-    surface_handle = mojo::WrapPlatformHandle(
-        mojo::PlatformHandle(std::move(local_surface_handle)));
-    std::move(get_decomp_surface_cb_).Run(std::move(surface_handle));
-  }
+void MediaFoundationRendererWrapper::OnGpuLuidChange(
+    const CHROME_LUID& adapter_luid) {
+  renderer_->SetGpuProcessAdapterLuid(ChromeLuidToLuid(adapter_luid));
 }
 
+void MediaFoundationRendererWrapper::OnReceiveDCOMPSurface(
+    GetDCOMPSurfaceCallback callback,
+    base::win::ScopedHandle handle,
+    const std::string& error) {
+  if (!handle.is_valid()) {
+    std::move(callback).Run(std::nullopt, "invalid handle: " + error);
+    return;
+  }
+
+  if (!dcomp_surface_registry_) {
+    frame_interfaces_->CreateDCOMPSurfaceRegistry(
+        dcomp_surface_registry_.BindNewPipeAndPassReceiver());
+  }
+
+  auto register_cb = base::BindOnce(
+      &MediaFoundationRendererWrapper::OnDCOMPSurfaceHandleRegistered,
+      weak_factory_.GetWeakPtr(), std::move(callback));
+
+  dcomp_surface_registry_->RegisterDCOMPSurfaceHandle(
+      mojo::PlatformHandle(std::move(handle)),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(register_cb),
+                                                  std::nullopt));
+}
+
+void MediaFoundationRendererWrapper::OnDCOMPSurfaceHandleRegistered(
+    GetDCOMPSurfaceCallback callback,
+    const std::optional<base::UnguessableToken>& token) {
+  std::string error;
+  if (token) {
+    CHECK(dcomp_surface_token_.is_empty(), base::NotFatalUntil::M163);
+    dcomp_surface_token_ = token.value();
+  } else {
+    error = "dcomp surface handle registration failed";
+  }
+
+  std::move(callback).Run(token, error);
+}
 }  // namespace media

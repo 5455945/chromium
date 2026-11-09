@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Internal-only target, do not depend on directly.
 absl_cc_library(
   NAME
     cleanup_internal
@@ -20,8 +21,8 @@ absl_cc_library(
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
-    absl::base_internal
     absl::core_headers
+    absl::hardening
     absl::utility
   PUBLIC
 )
@@ -37,6 +38,7 @@ absl_cc_library(
     absl::cleanup_internal
     absl::config
     absl::core_headers
+    absl::hardening
   PUBLIC
 )
 

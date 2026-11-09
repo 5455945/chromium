@@ -1,13 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_PUBLIC_CPP_ASH_TYPOGRAPHY_H_
 #define ASH_PUBLIC_CPP_ASH_TYPOGRAPHY_H_
 
+#include <optional>
+
 #include "ash/public/cpp/ash_public_export.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/font.h"
 #include "ui/views/style/typography.h"
 
 namespace ash {
@@ -18,8 +19,8 @@ enum AshTextContext {
   // A button that appears in the launcher's status area.
   CONTEXT_LAUNCHER_BUTTON = ASH_TEXT_CONTEXT_START,
 
-  // Buttons and labels that appear in the fullscreen toast overlay UI.
-  CONTEXT_TOAST_OVERLAY,
+  // Text label that used in launcher nudge label. Medium weight. 13pt size.
+  CONTEXT_LAUNCHER_NUDGE_LABEL,
 
   // A button that appears within a row of the tray popup.
   CONTEXT_TRAY_POPUP_BUTTON,
@@ -37,28 +38,71 @@ enum AshTextContext {
   // text. Usually 13pt.
   CONTEXT_SHARESHEET_BUBBLE_BODY_SECONDARY,
 
+  // Text label in the Sharesheet bubble for small text. Medium weight.
+  // Usually 10pt.
+  CONTEXT_SHARESHEET_BUBBLE_SMALL,
+
+  // A month label that appears in the Calendar view.
+  CONTEXT_CALENDAR_LABEL,
+
+  // Date text in the Calendar view.
+  CONTEXT_CALENDAR_DATE,
+
+  // Title and details text label used in search result view. Usually 14 pt.
+  CONTEXT_SEARCH_RESULT_VIEW,
+
+  // Big title text label used in search result view. Usually 36 pt.
+  CONTEXT_SEARCH_RESULT_BIG_TITLE,
+
+  // Big title superscript text label used in search result view. Usually 18 pt.
+  CONTEXT_SEARCH_RESULT_BIG_TITLE_SUPERSCRIPT,
+
+  // Details text label used for inline answer search result view. Usually 12pt.
+  CONTEXT_SEARCH_RESULT_VIEW_INLINE_ANSWER_DETAILS,
+
+  // Label text for search result view categories. Usually 13 pt. Appears above
+  // one or more search result views.
+  CONTEXT_SEARCH_RESULT_CATEGORY_LABEL,
+
+  // Headline text. Usually 20pt. Never multi-line.
+  CONTEXT_HEADLINE,
+
   ASH_TEXT_CONTEXT_END
 };
 
 enum AshTextStyle {
   ASH_TEXT_STYLE_START = views::style::VIEWS_TEXT_STYLE_END,
 
-  // Used to draw attention to a section of body text such as a matched search
-  // string.
-  STYLE_EMPHASIZED = ASH_TEXT_STYLE_START,
+  // Used to strongly draw attention to a section or body of text such as a
+  // matched search string.
+  STYLE_HIGHLIGHT = ASH_TEXT_STYLE_START,
 
   // Text styling specifically for the Chrome OS sharesheet.
   STYLE_SHARESHEET,
 
+  // Text styling for launcher's search result view.
+  STYLE_LAUNCHER,
+
+  // Text styling for alert message.
+  STYLE_ALERT,
+
   ASH_TEXT_STYLE_END
 };
 
-// Sets the |details| for ash-specific text contexts. Values are only set for
+// Sets the `details` for ash-specific text contexts. Values are only set for
 // contexts specific to ash.
 void ASH_PUBLIC_EXPORT
 ApplyAshFontStyles(int context,
                    int style,
                    ui::ResourceBundle::FontDetails& details);
+
+// Returns line height if the given `context` is ash typography Returns nullopt
+// if not.
+std::optional<int> ASH_PUBLIC_EXPORT GetLineHeight(int context);
+
+// Returns specific color id if the given `style` has ash typography specific
+// settings. Otherwise, returns nullopt.
+std::optional<ui::ColorId> ASH_PUBLIC_EXPORT GetColorId(int style);
 
 }  // namespace ash
 

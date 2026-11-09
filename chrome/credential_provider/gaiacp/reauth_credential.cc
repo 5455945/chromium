@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@
 
 namespace credential_provider {
 
-// TODO(crbug.com/1111561): Change it back to emdedded/reauth/windows
+// TODO(crbug.com/40142636): Change it back to emdedded/reauth/windows
 // once reauth flow latency issue is resolved.
 constexpr char kGaiaReauthPath[] = "embedded/setup/windows";
 
@@ -38,7 +38,7 @@ bool CReauthCredential::CheckIfTosAccepted() {
   DCHECK(os_user_sid_.Length());
 
   DWORD acceptTos = 0;
-  HRESULT hr = GetUserProperty(OLE2W(os_user_sid_), kKeyAcceptTos, &acceptTos);
+  HRESULT hr = GetUserProperty(os_user_sid_.Get(), kKeyAcceptTos, &acceptTos);
   if (FAILED(hr))
     LOGFN(ERROR) << "Failed getting accept_tos. hr = " << putHR(hr);
   return acceptTos == 1;
@@ -66,12 +66,11 @@ HRESULT CReauthCredential::GetUserGlsCommandline(
   // If this is an existing user with an SID, try to get its gaia id and pass
   // it to the GLS for verification.
   std::wstring gaia_id;
-  if (GetIdFromSid(OLE2CW(os_user_sid_), &gaia_id) == S_OK &&
-      !gaia_id.empty()) {
+  if (GetIdFromSid(os_user_sid_.Get(), &gaia_id) == S_OK && !gaia_id.empty()) {
     command_line->AppendSwitchNative(kGaiaIdSwitch, gaia_id);
     get_cmd_line_status = true;
   } else if (CGaiaCredentialBase::IsCloudAssociationEnabled() &&
-             OSUserManager::Get()->IsUserDomainJoined(OLE2CW(os_user_sid_))) {
+             OSUserManager::Get()->IsUserDomainJoined(os_user_sid_.Get())) {
     // Note that if ADAssociationIsEnabled and the reauth credential is an AD
     // user account, then fallback to the GaiaCredentialBase for loading Gls.
     get_cmd_line_status = true;
@@ -83,7 +82,7 @@ HRESULT CReauthCredential::GetUserGlsCommandline(
   if (email_for_reauth_.Length()) {
     get_cmd_line_status = true;
     command_line->AppendSwitchNative(kPrefillEmailSwitch,
-                                     OLE2CW(email_for_reauth_));
+                                     email_for_reauth_.Get());
     // Use kGaiaReauthPath when there is no email_for_reauth_ field set.
     hr = SetGaiaEndpointCommandLineIfNeeded(L"ep_reauth_url", kGaiaReauthPath,
                                             IsGemEnabled(), show_tos,
@@ -97,14 +96,14 @@ HRESULT CReauthCredential::GetUserGlsCommandline(
 
   if (FAILED(hr)) {
     LOGFN(ERROR) << "Setting gaia url for reauth credential on user="
-                 << os_username_ << " failed";
+                 << os_username_.Get() << " failed";
     return E_FAIL;
   }
 
   if (get_cmd_line_status) {
     return CGaiaCredentialBase::GetUserGlsCommandline(command_line);
   } else {
-    LOGFN(ERROR) << "Reauth credential on user=" << os_username_
+    LOGFN(ERROR) << "Reauth credential on user=" << os_username_.Get()
                  << " does not have an associated Gaia id or Email address";
     return E_UNEXPECTED;
   }
@@ -119,13 +118,13 @@ HRESULT CReauthCredential::ValidateExistingUser(const std::wstring& username,
 
   // SID, domain and username found must match what is stored in this
   // credential.
-  if ((os_username_ != W2COLE(username.c_str())) ||
-      (os_user_domain_.Length() && os_user_domain_ != W2COLE(domain.c_str())) ||
-      (os_user_sid_.Length() && os_user_sid_ != W2COLE(sid.c_str()))) {
+  if (os_username_.Get() != username ||
+      (os_user_domain_.Length() && os_user_domain_.Get() != domain) ||
+      (os_user_sid_.Length() && os_user_sid_.Get() != sid)) {
     LOGFN(ERROR) << "Username '" << domain << "\\" << username << "' or SID '"
                  << sid << "' does not match the username '"
-                 << OLE2CW(os_user_domain_) << "\\" << OLE2CW(os_username_)
-                 << "' or SID '" << OLE2CW(os_user_sid_)
+                 << os_user_domain_.Get() << "\\" << os_username_.Get()
+                 << "' or SID '" << os_user_sid_.Get()
                  << "' for this credential";
     *error_text = AllocErrorString(IDS_ACCOUNT_IN_USE_BASE);
     return E_UNEXPECTED;
@@ -135,9 +134,12 @@ HRESULT CReauthCredential::ValidateExistingUser(const std::wstring& username,
 }
 
 HRESULT CReauthCredential::GetStringValueImpl(DWORD field_id, wchar_t** value) {
+  LOGFN(VERBOSE) << "field_id=" << field_id;
+
   if (field_id == FID_PROVIDER_LABEL) {
     std::wstring label(
         GetStringResource(IDS_EXISTING_AUTH_FID_PROVIDER_LABEL_BASE));
+    LOGFN(VERBOSE) << "label=" << label;
     return ::SHStrDupW(label.c_str(), value);
   } else if (field_id == FID_DESCRIPTION) {
     wchar_t* sid_buffer = nullptr;
@@ -190,6 +192,8 @@ HRESULT CReauthCredential::GetStringValueImpl(DWORD field_id, wchar_t** value) {
     }
 
     std::wstring label(GetStringResource(description_label_id));
+    LOGFN(VERBOSE) << "field_id=" << field_id << " label=" << label;
+
     return ::SHStrDupW(label.c_str(), value);
   }
 
@@ -199,11 +203,10 @@ HRESULT CReauthCredential::GetStringValueImpl(DWORD field_id, wchar_t** value) {
 // ICredentialProviderCredential2 //////////////////////////////////////////////
 
 HRESULT CReauthCredential::GetUserSid(wchar_t** sid) {
-  USES_CONVERSION;
   DCHECK(sid);
-  LOGFN(VERBOSE) << "sid=" << OLE2CW(get_os_user_sid());
+  LOGFN(VERBOSE) << "sid=" << get_os_user_sid().Get();
 
-  HRESULT hr = ::SHStrDupW(OLE2CW(get_os_user_sid()), sid);
+  HRESULT hr = ::SHStrDupW(get_os_user_sid().Get(), sid);
   if (FAILED(hr))
     LOGFN(ERROR) << "SHStrDupW hr=" << putHR(hr);
 
@@ -216,14 +219,15 @@ HRESULT CReauthCredential::SetOSUserInfo(BSTR sid, BSTR domain, BSTR username) {
   DCHECK(sid);
   DCHECK(domain);
   DCHECK(username);
+  LOGFN(VERBOSE);
 
-  os_user_domain_ = domain;
-  os_user_sid_ = sid;
-  os_username_ = username;
+  os_user_domain_.Reset(::SysAllocString(domain));
+  os_user_sid_.Reset(::SysAllocString(sid));
+  os_username_.Reset(::SysAllocString(username));
 
   // Set the default credential provider for this tile.
   HRESULT hr =
-      SetLogonUiUserTileEntry(OLE2W(sid), CLSID_GaiaCredentialProvider);
+      SetLogonUiUserTileEntry(os_user_sid_.Get(), CLSID_GaiaCredentialProvider);
   if (FAILED(hr))
     LOGFN(ERROR) << "SetLogonUIUserTileEntry hr=" << putHR(hr);
 
@@ -232,8 +236,9 @@ HRESULT CReauthCredential::SetOSUserInfo(BSTR sid, BSTR domain, BSTR username) {
 
 HRESULT CReauthCredential::SetEmailForReauth(BSTR email) {
   DCHECK(email);
+  LOGFN(VERBOSE) << "email=" << email;
 
-  email_for_reauth_ = email;
+  email_for_reauth_.Reset(::SysAllocString(email));
   return S_OK;
 }
 

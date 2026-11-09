@@ -1,8 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       'Tests that disposing Emulation agent before virtual time expires ' +
       'doesn\'t cause a crash');
@@ -15,7 +15,7 @@
       target => target.url.endsWith('inspector-protocol-page.html'));
   const sessionId = (await bp.Target.attachToTarget({
       targetId: pageTarget.targetId, flatten: true})).result.sessionId;
-  const session2 = new TestRunner.Session(testRunner, sessionId);
+  const session2 = testRunner.createSessionFor(sessionId);
   const dp2 = session2.protocol;
 
   const FetchHelper = await testRunner.loadScriptAbsolute(
@@ -28,11 +28,9 @@
 
   // Enable virtual time through the second session.
   await dp2.Emulation.setVirtualTimePolicy({policy: 'pause'});
-  await dp2.Emulation.setVirtualTimePolicy({
-      policy: 'pauseIfNetworkFetchesPending', budget: 5000,
-      waitForNavigation: true});
-
   await dp.Page.navigate({url: 'https://test.com/index.html'});
+  dp2.Emulation.setVirtualTimePolicy({
+    policy: 'pauseIfNetworkFetchesPending', budget: 5000});
 
   // Pause page with VT paused using request interception, then detach
   // session, then let the time expire.

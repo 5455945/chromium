@@ -1,20 +1,33 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_PAGE_DISCARDING_HELPER_H_
 #define CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_PAGE_DISCARDING_HELPER_H_
 
-#include "base/callback_forward.h"
-#include "base/containers/flat_map.h"
-#include "base/memory/weak_ptr.h"
+#include <optional>
+#include <string_view>
+
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "components/performance_manager/public/decorators/page_live_state_decorator.h"
+#include "base/unguessable_token.h"
+#include "chrome/browser/performance_manager/mechanisms/page_discarder.h"
+#include "chrome/browser/performance_manager/policies/cannot_discard_reason.h"
+#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
+#include "components/memory_pressure/reclaim_target.h"
+#include "components/memory_pressure/unnecessary_discard_monitor.h"
 #include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/graph_registered.h"
 #include "components/performance_manager/public/graph/node_data_describer.h"
 #include "components/performance_manager/public/graph/page_node.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 namespace performance_manager {
 
@@ -28,73 +41,93 @@ namespace policies {
 //
 // This is a GraphRegistered object and should be accessed via
 // PageDiscardingHelper::GetFromGraph(graph()).
-class PageDiscardingHelper : public GraphOwned,
-                             public PageNode::ObserverDefaultImpl,
-                             public GraphRegisteredImpl<PageDiscardingHelper>,
-                             public NodeDataDescriberDefaultImpl {
+//
+// This requires DiscardEligibilityPolicy to be registered in the graph.
+class PageDiscardingHelper
+    : public GraphOwnedAndRegistered<PageDiscardingHelper>,
+      public NodeDataDescriberDefaultImpl,
+      public PageNodeObserver {
  public:
+  // The result of page discard. The WebContents pointer is for
+  // TabManager::DiscardTabByExtension.
+  struct DiscardResult {
+    // Time of the first successful discard, or nullopt if no successful
+    // discard occurred.
+    std::optional<base::TimeTicks> first_discard_time;
+    // The WebContents of the first discarded tab after discard.
+    raw_ptr<content::WebContents> first_content_after_discard = nullptr;
+  };
+
   PageDiscardingHelper();
   ~PageDiscardingHelper() override;
   PageDiscardingHelper(const PageDiscardingHelper& other) = delete;
   PageDiscardingHelper& operator=(const PageDiscardingHelper&) = delete;
 
-  // Selects a tab to discard based on |strategy| and posts to the UI thread to
-  // discard it. This will try to discard a tab until there's been a successful
-  // discard or until there's no more discard candidate.
-  void UrgentlyDiscardAPage(features::DiscardStrategy discard_strategy,
-                            base::OnceCallback<void(bool)> post_discard_cb);
+  // Selects and discards a tab. This will try to discard a tab until there's
+  // been a successful discard or until there's no more discard candidate.
+  DiscardResult DiscardAPage(
+      DiscardEligibilityPolicy::DiscardReason discard_reason,
+      bool ignore_recent_visibility = false,
+      std::optional<absl::flat_hash_set<base::UnguessableToken>>
+          allowed_browser_context_ids = std::nullopt);
 
-  // PageNodeObserver:
-  void OnBeforePageNodeRemoved(const PageNode* page_node) override;
-  void OnIsAudibleChanged(const PageNode* page_node) override;
+  // Selects and discards multiple tabs to meet the reclaim target. This will
+  // keep trying again until there's been at least a single successful discard
+  // or until there's no more discard candidate. If |reclaim_target_kb| is
+  // nullopt, only discard one tab. If |discard_protected_tabs| is true,
+  // protected tabs (CanDiscard() returns kProtected) can also be discarded.
+  // Returns a time taken shortly after the first successful discard, or
+  // nullopt if no successful discard occurred.
+  std::optional<base::TimeTicks> DiscardMultiplePages(
+      std::optional<memory_pressure::ReclaimTarget> reclaim_target,
+      bool discard_protected_tabs,
+      DiscardEligibilityPolicy::DiscardReason discard_reason,
+      bool ignore_recent_visibility = false);
+
+  // Immediately discards as many pages as possible in `page_nodes`.
+  // Returns true if at least one page was successfully discarded.
+  bool ImmediatelyDiscardMultiplePages(
+      const std::vector<const PageNode*>& page_nodes,
+      DiscardEligibilityPolicy::DiscardReason discard_reason,
+      bool ignore_recent_visibility = true);
+
+  // Same as above, but uses `eligibility_policy` to check whether each page in
+  // `page_nodes` can be discarded. If `eligibility_policy` is null, the caller
+  // MUST have already validated that all pages in `page_nodes` can be
+  // discarded.
+  bool ImmediatelyDiscardMultiplePages(
+      const std::vector<const PageNode*>& page_nodes,
+      DiscardEligibilityPolicy::DiscardReason discard_reason,
+      bool ignore_recent_visibility,
+      DiscardEligibilityPolicy* eligibility_policy);
 
   void SetMockDiscarderForTesting(
       std::unique_ptr<mechanism::PageDiscarder> discarder);
-  bool CanUrgentlyDiscardForTesting(const PageNode* page_node) const {
-    return CanUrgentlyDiscard(page_node);
-  }
-  void SetGraphForTesting(Graph* graph) { graph_ = graph; }
-  static void AddDiscardAttemptMarkerForTesting(PageNode* page_node);
-  static void RemovesDiscardAttemptMarkerForTesting(PageNode* page_node);
 
  protected:
   void OnPassedToGraph(Graph* graph) override;
   void OnTakenFromGraph(Graph* graph) override;
 
-  // Returns the PageLiveStateDecorator::Data associated with a PageNode.
-  // Exposed and made virtual to allowed injecting some fake data in tests.
-  virtual const PageLiveStateDecorator::Data* GetPageNodeLiveStateData(
-      const PageNode* page_node) const;
-
  private:
-  // Indicates if a PageNode can be urgently discarded.
-  bool CanUrgentlyDiscard(const PageNode* page_node) const;
-
   // NodeDataDescriber implementation:
-  base::Value DescribePageNodeData(const PageNode* node) const override;
+  base::DictValue DescribePageNodeData(const PageNode* node) const override;
 
-  // Called after each discard attempt. |success| will indicate whether or not
-  // the attempt has been successful. |post_discard_cb| will be called once
-  // there's been a successful discard or if there's no more discard candidates.
-  void PostDiscardAttemptCallback(
-      features::DiscardStrategy discard_strategy,
-      base::OnceCallback<void(bool)> post_discard_cb,
-      bool success);
-
-  // Map that associates a PageNode with the last time it became non audible.
-  // PageNodes that have never been audible are not present in this map.
-  base::flat_map<const PageNode*, base::TimeTicks>
-      last_change_to_non_audible_time_;
+  // Helper function so DiscardMultiplePages doesn't have to return the unused
+  // WebContents pointer.
+  DiscardResult DiscardMultiplePagesImpl(
+      std::optional<memory_pressure::ReclaimTarget> reclaim_target,
+      bool discard_protected_tabs,
+      DiscardEligibilityPolicy::DiscardReason discard_reason,
+      bool ignore_recent_visibility = false,
+      std::optional<absl::flat_hash_set<base::UnguessableToken>>
+          allowed_browser_context_ids = std::nullopt);
 
   // The mechanism used to do the actual discarding.
-  std::unique_ptr<performance_manager::mechanism::PageDiscarder>
-      page_discarder_;
+  std::unique_ptr<mechanism::PageDiscarder> page_discarder_;
 
-  Graph* graph_ = nullptr;
+  memory_pressure::UnnecessaryDiscardMonitor unnecessary_discard_monitor_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  base::WeakPtrFactory<PageDiscardingHelper> weak_factory_{this};
 };
 
 }  // namespace policies

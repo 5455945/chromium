@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 
 #import <Foundation/Foundation.h>
 
-#include "ios/web/common/features.h"
-#include "ios/web/public/init/web_main_parts.h"
+#import <string_view>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/memory/ref_counted_memory.h"
+#import "base/notimplemented.h"
+#import "ios/web/common/features.h"
+#import "ios/web/public/init/web_main_parts.h"
+#import "url/gurl.h"
 
 namespace web {
 
@@ -44,11 +45,11 @@ bool WebClient::IsAppSpecificURL(const GURL& url) const {
   return false;
 }
 
-std::u16string WebClient::GetPluginNotSupportedText() const {
-  return std::u16string();
+std::string WebClient::GetUserAgent(UserAgentType type) const {
+  return std::string();
 }
 
-std::string WebClient::GetUserAgent(UserAgentType type) const {
+std::string WebClient::GetMainThreadName() const {
   return std::string();
 }
 
@@ -56,13 +57,14 @@ std::u16string WebClient::GetLocalizedString(int message_id) const {
   return std::u16string();
 }
 
-base::StringPiece WebClient::GetDataResource(
+std::string_view WebClient::GetDataResource(
     int resource_id,
     ui::ResourceScaleFactor scale_factor) const {
-  return base::StringPiece();
+  return std::string_view();
 }
 
-base::RefCountedMemory* WebClient::GetDataResourceBytes(int resource_id) const {
+scoped_refptr<base::RefCountedMemory> WebClient::GetDataResourceBytes(
+    int resource_id) const {
   return nullptr;
 }
 
@@ -71,27 +73,12 @@ std::vector<JavaScriptFeature*> WebClient::GetJavaScriptFeatures(
   return std::vector<JavaScriptFeature*>();
 }
 
-NSString* WebClient::GetDocumentStartScriptForAllFrames(
-    BrowserState* browser_state) const {
-  return @"";
-}
-
-NSString* WebClient::GetDocumentStartScriptForMainFrame(
-    BrowserState* browser_state) const {
-  return @"";
-}
-
-bool WebClient::IsLegacyTLSAllowedForHost(WebState* web_state,
-                                          const std::string& hostname) {
-  return false;
-}
-
 void WebClient::PrepareErrorPage(WebState* web_state,
                                  const GURL& url,
                                  NSError* error,
                                  bool is_post,
                                  bool is_off_the_record,
-                                 const absl::optional<net::SSLInfo>& info,
+                                 const std::optional<net::SSLInfo>& info,
                                  int64_t navigation_id,
                                  base::OnceCallback<void(NSString*)> callback) {
   DCHECK(error);
@@ -102,25 +89,93 @@ UIView* WebClient::GetWindowedContainer() {
   return nullptr;
 }
 
-bool WebClient::EnableLongPressAndForceTouchHandling() const {
-  return true;
+bool WebClient::EnableFullscreenAPI() const {
+  return false;
 }
 
 bool WebClient::EnableLongPressUIContextMenu() const {
   return false;
 }
 
-bool WebClient::ForceMobileVersionByDefault(const GURL&) {
+bool WebClient::EnableWebInspector(BrowserState* browser_state) const {
   return false;
 }
 
-bool WebClient::RestoreSessionFromCache(web::WebState* web_state) const {
-  return false;
-}
+void WebClient::CleanupNativeRestoreURLs(web::WebState* web_state) const {}
 
-UserAgentType WebClient::GetDefaultUserAgent(id<UITraitEnvironment> web_view,
-                                             const GURL& url) {
+void WebClient::WillDisplayMediaCapturePermissionPrompt(
+    web::WebState* web_state) const {}
+
+UserAgentType WebClient::GetDefaultUserAgent(web::WebState* web_state,
+                                             const GURL& url) const {
   return UserAgentType::MOBILE;
+}
+
+void WebClient::LogDefaultUserAgent(web::WebState* web_state,
+                                    const GURL& url) const {}
+
+bool WebClient::IsPointingToSameDocument(const GURL& url1,
+                                         const GURL& url2) const {
+  return url1 == url2;
+}
+
+bool WebClient::IsBrowserLockdownModeEnabled() {
+  return false;
+}
+
+void WebClient::SetOSLockdownModeEnabled(bool enabled) {}
+
+bool WebClient::IsInsecureFormWarningEnabled(
+    web::BrowserState* browser_state) const {
+  return true;
+}
+
+void WebClient::BuildEditMenu(web::WebState* web_state,
+                              id<UIMenuBuilder>) const {}
+
+bool WebClient::CanRunOpenPanel(web::WebState* web_state) const
+    API_AVAILABLE(ios(18.4)) {
+  return false;
+}
+
+void WebClient::RunOpenPanel(
+    web::WebState* web_state,
+    WKOpenPanelParameters* parameters,
+    WKFrameInfo* frame,
+    base::OnceCallback<void(NSArray<NSURL*>*)> completion) const
+    API_AVAILABLE(ios(18.4)) {
+  NOTIMPLEMENTED() << "WebClient::RunOpenPanel() is not implemented.\n"
+                      "If a subclass returns true from CanRunOpenPanel(),"
+                      "then it must override RunOpenPanel().";
+}
+
+JSErrorReportLoggingLevel WebClient::GetJSErrorReportLoggingLevel(
+    BrowserState* browser_state) const {
+  return JSErrorReportLoggingLevel::NONE;
+}
+
+CobaltController* WebClient::GetCobaltController(
+    BrowserState* browser_state) const {
+  return nullptr;
+}
+
+ExtensionController* WebClient::GetExtensionController(
+    BrowserState* browser_state) const {
+  return nullptr;
+}
+
+bool WebClient::IsSmoothScrollingSupported() const {
+  return false;
+}
+
+UniversalOptOutState WebClient::GetUniversalOptOutState(
+    BrowserState* browser_state) const {
+  return UniversalOptOutState::kNotEligible;
+}
+
+bool WebClient::ShouldBlockUniversalLinksForURL(BrowserState* browser_state,
+                                                const GURL& url) const {
+  return false;
 }
 
 }  // namespace web

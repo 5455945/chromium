@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "crypto/evp.h"
+#include "crypto/keypair.h"
+#include "crypto/subtle_passkey.h"
+#include "net/ssl/crypto_private_key.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/ssl/test_ssl_private_key.h"
 #include "net/test/cert_test_util.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
 
 namespace net {
@@ -35,18 +38,20 @@ FakeClientCertIdentity::CreateFromCertAndKeyFiles(
   if (!cert)
     return nullptr;
 
-  std::string pkcs8;
-  if (!base::ReadFileToString(dir.AppendASCII(key_filename), &pkcs8))
+  std::optional<std::vector<uint8_t>> pkcs8 =
+      base::ReadFileToBytes(dir.AppendASCII(key_filename));
+  if (!pkcs8) {
     return nullptr;
+  }
 
-  CBS cbs;
-  CBS_init(&cbs, reinterpret_cast<const uint8_t*>(pkcs8.data()), pkcs8.size());
-  bssl::UniquePtr<EVP_PKEY> pkey(EVP_parse_private_key(&cbs));
-  if (!pkey || CBS_len(&cbs) != 0)
+  bssl::UniquePtr<EVP_PKEY> pkey = crypto::evp::PrivateKeyFromBytes(*pkcs8);
+  if (!pkey) {
     return nullptr;
+  }
 
   scoped_refptr<SSLPrivateKey> ssl_private_key =
-      WrapOpenSSLPrivateKey(std::move(pkey));
+      WrapCryptoPrivateKey(crypto::keypair::PrivateKey(
+          std::move(pkey), crypto::SubtlePassKey::ForTesting()));
   if (!ssl_private_key)
     return nullptr;
 
@@ -76,15 +81,6 @@ void FakeClientCertIdentity::AcquirePrivateKey(
         private_key_callback) {
   std::move(private_key_callback).Run(key_);
 }
-
-#if defined(OS_APPLE)
-SecIdentityRef FakeClientCertIdentity::sec_identity_ref() const {
-  // Any tests that depend on having a real SecIdentityRef should use a real
-  // ClientCertIdentityMac.
-  NOTREACHED();
-  return nullptr;
-}
-#endif
 
 ClientCertIdentityList FakeClientCertIdentityListFromCertificateList(
     const CertificateList& certs) {

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,13 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "components/messages/android/message_enums.h"
+#include "components/messages/android/message_wrapper.h"
 #include "content/public/browser/xr_install_helper.h"
 
 namespace webxr {
-class XrInstallHelperDelegate;
 
 // Equivalent of ArCoreApk.Availability enum.
 // For detailed description, please see:
@@ -36,32 +37,30 @@ enum class ArCoreAvailability : int {
 // XrIntegrationClient.
 class ArCoreInstallHelper : public content::XrInstallHelper {
  public:
-  explicit ArCoreInstallHelper(
-      std::unique_ptr<XrInstallHelperDelegate> install_delegate);
+  explicit ArCoreInstallHelper();
   ~ArCoreInstallHelper() override;
 
   ArCoreInstallHelper(const ArCoreInstallHelper&) = delete;
   ArCoreInstallHelper& operator=(const ArCoreInstallHelper&) = delete;
 
   // content::XrInstallHelper implementation.
-  void EnsureInstalled(
-      int render_process_id,
-      int render_frame_id,
-      base::OnceCallback<void(bool)> install_callback) override;
+  void EnsureInstalled(const content::GlobalRenderFrameHostId& frame_id,
+                       base::OnceCallback<void(content::XrInstallResult)>
+                           install_callback) override;
 
   // Called from Java end.
   void OnRequestInstallSupportedArCoreResult(JNIEnv* env, bool success);
 
  private:
-  void ShowInfoBar(int render_process_id, int render_frame_id);
-  void OnInfoBarResponse(int render_process_id,
-                         int render_frame_id,
-                         bool try_install);
-  void RunInstallFinishedCallback(bool succeeded);
+  void ShowMessage(const content::GlobalRenderFrameHostId& frame_id);
+  void HandleMessagePrimaryAction(
+      const content::GlobalRenderFrameHostId& frame_id);
+  void HandleMessageDismissed(messages::DismissReason dismiss_reason);
+  void RunInstallFinishedCallback(content::XrInstallResult result);
 
-  base::OnceCallback<void(bool)> install_finished_callback_;
+  base::OnceCallback<void(content::XrInstallResult)> install_finished_callback_;
   base::android::ScopedJavaGlobalRef<jobject> java_install_utils_;
-  std::unique_ptr<XrInstallHelperDelegate> install_delegate_;
+  std::unique_ptr<messages::MessageWrapper> message_;
 
   // Must be last.
   base::WeakPtrFactory<ArCoreInstallHelper> weak_ptr_factory_{this};

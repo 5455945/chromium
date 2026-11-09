@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -65,10 +65,6 @@ struct ContentCaptureFrame {
   std::string favicon;
 
   bool operator==(const ContentCaptureFrame& other) const;
-
-  bool operator!=(const ContentCaptureFrame& other) const {
-    return !(*this == other);
-  }
 };
 
 // This defines a session, is a list of frames from current frame to root.

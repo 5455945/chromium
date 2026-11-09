@@ -1,34 +1,43 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/settings/browser_lifetime_handler.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/grit/branded_strings.h"
+#include "components/policy/core/common/management/management_service.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
+#include "chrome/browser/ash/tpm/tpm_firmware_update.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/tpm_firmware_update.h"
-#include "chrome/browser/ui/webui/webui_util.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#include "ui/webui/webui_util.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/grit/generated_resources.h"
+#include "ui/base/l10n/l10n_util.h"
+#endif
 
 namespace settings {
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Triggers a TPM firmware update using the least destructive mode from
 // |available_modes|.
 void TriggerTPMFirmwareUpdate(
-    const std::set<chromeos::tpm_firmware_update::Mode>& available_modes) {
-  using chromeos::tpm_firmware_update::Mode;
+    const std::set<ash::tpm_firmware_update::Mode>& available_modes) {
+  using ::ash::tpm_firmware_update::Mode;
 
   // Decide which update mode to use.
   for (Mode mode :
@@ -40,21 +49,21 @@ void TriggerTPMFirmwareUpdate(
     // Save a TPM firmware update request in local state, which
     // will trigger the reset screen to appear on reboot.
     PrefService* prefs = g_browser_process->local_state();
-    prefs->SetBoolean(prefs::kFactoryResetRequested, true);
-    prefs->SetInteger(prefs::kFactoryResetTPMFirmwareUpdateMode,
+    prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
+    prefs->SetInteger(ash::prefs::kFactoryResetTPMFirmwareUpdateMode,
                       static_cast<int>(mode));
     prefs->CommitPendingWrite();
     chrome::AttemptRelaunch();
     return;
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace
 
-BrowserLifetimeHandler::BrowserLifetimeHandler() {}
+BrowserLifetimeHandler::BrowserLifetimeHandler() = default;
 
-BrowserLifetimeHandler::~BrowserLifetimeHandler() {}
+BrowserLifetimeHandler::~BrowserLifetimeHandler() = default;
 
 void BrowserLifetimeHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -63,7 +72,7 @@ void BrowserLifetimeHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
       "relaunch", base::BindRepeating(&BrowserLifetimeHandler::HandleRelaunch,
                                       base::Unretained(this)));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   web_ui()->RegisterMessageCallback(
       "signOutAndRestart",
       base::BindRepeating(&BrowserLifetimeHandler::HandleSignOutAndRestart,
@@ -72,54 +81,127 @@ void BrowserLifetimeHandler::RegisterMessages() {
       "factoryReset",
       base::BindRepeating(&BrowserLifetimeHandler::HandleFactoryReset,
                           base::Unretained(this)));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  web_ui()->RegisterMessageCallback(
+      "shouldShowRelaunchConfirmationDialog",
+      base::BindRepeating(
+          &BrowserLifetimeHandler::HandleShouldShowRelaunchConfirmationDialog,
+          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "getRelaunchConfirmationDialogDescription",
+      base::BindRepeating(&BrowserLifetimeHandler::
+                              HandleGetRelaunchConfirmationDialogDescription,
+                          base::Unretained(this)));
+#endif
 }
 
-void BrowserLifetimeHandler::HandleRestart(
-    const base::ListValue* args) {
+void BrowserLifetimeHandler::HandleRestart(const base::ListValue& args) {
   chrome::AttemptRestart();
 }
 
-void BrowserLifetimeHandler::HandleRelaunch(
-    const base::ListValue* args) {
+void BrowserLifetimeHandler::HandleRelaunch(const base::ListValue& args) {
   chrome::AttemptRelaunch();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void BrowserLifetimeHandler::HandleSignOutAndRestart(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   chrome::AttemptUserExit();
 }
 
-void BrowserLifetimeHandler::HandleFactoryReset(
-    const base::ListValue* args) {
-  base::Value::ConstListView args_list = args->GetList();
-  CHECK_EQ(1U, args_list.size());
-  bool tpm_firmware_update_requested = args_list[0].GetBool();
+void BrowserLifetimeHandler::HandleFactoryReset(const base::ListValue& args) {
+  CHECK_EQ(1U, args.size());
+  bool tpm_firmware_update_requested = args[0].GetBool();
 
   if (tpm_firmware_update_requested) {
-    chromeos::tpm_firmware_update::GetAvailableUpdateModes(
+    ash::tpm_firmware_update::GetAvailableUpdateModes(
         base::BindOnce(&TriggerTPMFirmwareUpdate), base::TimeDelta());
     return;
   }
 
-  // TODO(crbug.com/891905): Centralize powerwash restriction checks.
+  // TODO(crbug.com/40596547): Centralize powerwash restriction checks.
   bool allow_powerwash =
-      !webui::IsEnterpriseManaged() &&
+      !policy::ManagementServiceFactory::GetForPlatform()->IsManaged() &&
       !user_manager::UserManager::Get()->IsLoggedInAsGuest() &&
       !user_manager::UserManager::Get()->IsLoggedInAsChildUser();
 
-  if (!allow_powerwash)
+  if (!allow_powerwash) {
     return;
+  }
 
   PrefService* prefs = g_browser_process->local_state();
-  prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   prefs->CommitPendingWrite();
 
   // Perform sign out. Current chrome process will then terminate, new one will
   // be launched (as if it was a restart).
   chrome::AttemptRelaunch();
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_CHROMEOS)
+void BrowserLifetimeHandler::HandleGetRelaunchConfirmationDialogDescription(
+    const base::ListValue& args) {
+  AllowJavascript();
+  CHECK_EQ(2U, args.size());
+  const base::Value& callback_id = args[0];
+  CHECK(args[1].is_bool());
+  const bool is_version_update = args[1].GetBool();
+
+  size_t incognito_and_isolated_count =
+      GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount() +
+      GlobalBrowserCollection::GetInstance()->GetIsolatedBrowserCount();
+  base::Value description;
+
+  // The caller can specify if this is a confirmation dialog for browser version
+  // update relaunch.
+  if (is_version_update) {
+    // The dialog description informs about a browser update after relaunch and
+    // warns about incognito windows closure if any is open.
+    description = base::Value(
+        GlobalBrowserCollection::GetInstance()
+            ->GetDialogWithIncognitoAndIsolatedVariants(
+                IDS_UPDATE_RECOMMENDED, IDS_UPDATE_RECOMMENDED_ISOLATED,
+                IDS_UPDATE_RECOMMENDED_INCOGNITO_AND_ISOLATED));
+  } else if (incognito_and_isolated_count > 0) {
+    // The dialog description warns about incognito windows being closed after
+    // relaunch.
+    description = base::Value(
+        GlobalBrowserCollection::GetInstance()
+            ->GetDialogWithIncognitoAndIsolatedVariants(
+                IDS_RELAUNCH_CONFIRMATION_DIALOG_BODY,
+                IDS_RELAUNCH_CONFIRMATION_DIALOG_BODY_ISOLATED,
+                IDS_RELAUNCH_CONFIRMATION_DIALOG_BODY_INCOGNITO_AND_ISOLATED));
+  }
+
+  ResolveJavascriptCallback(callback_id, description);
+}
+
+void BrowserLifetimeHandler::HandleShouldShowRelaunchConfirmationDialog(
+    const base::ListValue& args) {
+  AllowJavascript();
+  CHECK_EQ(2U, args.size());
+  const base::Value& callback_id = args[0];
+  CHECK(args[1].is_bool());
+  const bool alwaysShowDialog = args[1].GetBool();
+
+  // The caller can specify if the dialog should always be shown for a given
+  // case by passing alwaysShowDialog parameter.
+  if (alwaysShowDialog) {
+    // Always show a confirmation dialog before the restart.
+    ResolveJavascriptCallback(callback_id, true);
+  } else {
+    // Show a confirmation dialog before the restart if there is an incognito
+    // and isolated window open.
+    size_t incognito_and_isolated_count =
+        GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount() +
+        GlobalBrowserCollection::GetInstance()->GetIsolatedBrowserCount();
+    base::Value result = base::Value(incognito_and_isolated_count > 0);
+    ResolveJavascriptCallback(callback_id, result);
+  }
+}
+#endif
 
 }  // namespace settings

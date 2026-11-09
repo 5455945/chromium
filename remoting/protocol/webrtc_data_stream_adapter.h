@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,27 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "remoting/protocol/message_pipe.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/rtc_base/ref_count.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // WebrtcDataStreamAdapter implements MessagePipe for WebRTC data channels.
 class WebrtcDataStreamAdapter : public MessagePipe,
                                 public webrtc::DataChannelObserver {
  public:
   explicit WebrtcDataStreamAdapter(
-      rtc::scoped_refptr<webrtc::DataChannelInterface> channel);
+      webrtc::scoped_refptr<webrtc::DataChannelInterface> channel);
+
+  WebrtcDataStreamAdapter(const WebrtcDataStreamAdapter&) = delete;
+  WebrtcDataStreamAdapter& operator=(const WebrtcDataStreamAdapter&) = delete;
+
   ~WebrtcDataStreamAdapter() override;
 
   std::string name() { return channel_->label(); }
@@ -53,6 +57,7 @@ class WebrtcDataStreamAdapter : public MessagePipe,
   void OnStateChange() override;
   void OnMessage(const webrtc::DataBuffer& buffer) override;
   void OnBufferedAmountChange(uint64_t previous_amount) override;
+  bool IsOkToCallOnTheNetworkThread() override;
 
   // Helpers for calling EventHandler methods asynchronously.
   // webrtc::DataChannelObserver can be called synchronously mid-operation
@@ -63,22 +68,25 @@ class WebrtcDataStreamAdapter : public MessagePipe,
   void InvokeOpenEvent();
   void InvokeClosedEvent();
   void InvokeMessageEvent(std::unique_ptr<CompoundBuffer> buffer);
+  void HandleIncomingMessages();
 
-  rtc::scoped_refptr<webrtc::DataChannelInterface> channel_;
+  webrtc::scoped_refptr<webrtc::DataChannelInterface> channel_;
 
-  EventHandler* event_handler_ = nullptr;
+  raw_ptr<EventHandler> event_handler_ = nullptr;
 
   State state_ = State::CONNECTING;
 
+  // Queue for unhandled incoming messages.
+  base::queue<std::unique_ptr<CompoundBuffer>> pending_incoming_messages_;
+
   // The data and done callbacks for queued but not yet sent messages.
-  base::queue<PendingMessage> pending_messages_;
+  base::queue<PendingMessage> pending_outgoing_messages_;
+
+  base::OnceClosure pending_open_callback_;
 
   base::WeakPtrFactory<WebrtcDataStreamAdapter> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WebrtcDataStreamAdapter);
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_WEBRTC_DATA_STREAM_ADAPTER_H_

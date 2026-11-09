@@ -1,21 +1,23 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/command_line.h"
-#include "third_party/blink/renderer/platform/fonts/font.h"
-#include "third_party/blink/renderer/platform/fonts/font_cache.h"
-#include "third_party/blink/renderer/platform/fonts/ng_text_fragment_paint_info.h"
-#include "third_party/blink/renderer/platform/fonts/shaping/caching_word_shaper.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_shaper.h"
-#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_bloberizer.h"
-#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
-#include "third_party/blink/renderer/platform/fonts/text_run_paint_info.h"
-#include "third_party/blink/renderer/platform/testing/blink_fuzzer_test_support.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <unicode/ustring.h>
+
+#include "base/command_line.h"
+#include "base/logging/logging_settings.h"
+#include "third_party/blink/renderer/platform/fonts/font.h"
+#include "third_party/blink/renderer/platform/fonts/plain_text_node.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_bloberizer.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
+#include "third_party/blink/renderer/platform/fonts/text_fragment_paint_info.h"
+#include "third_party/blink/renderer/platform/testing/blink_fuzzer_test_support.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/text/text_run.h"
 
 namespace blink {
 
@@ -25,6 +27,7 @@ constexpr size_t kMaxInputLength = 256;
 // custom fontconfig configuration that we use for content_shell.
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   static BlinkFuzzerTestSupport fuzzer_support = BlinkFuzzerTestSupport();
+  test::TaskEnvironment task_environment;
 
   if ((false)) {  // Add extra parenthesis to disable dead code warning.
     // The fuzzer driver does not pass along command line arguments, so add any
@@ -36,7 +39,6 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     }
   }
 
-  FontCachePurgePreventer font_cache_purge_preventer;
   FontDescription font_description;
   Font font(font_description);
   // Set font size to something other than the default 0 size in
@@ -44,44 +46,52 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // We don't use a FontSelector here. Only look for system fonts for now.
   font_description.SetComputedSize(16.0f);
 
-  String string(reinterpret_cast<const UChar*>(data),
-                std::min(kMaxInputLength, size / sizeof(UChar)));
+  // SAFETY: Just make a span from the function arguments provided by libfuzzer.
+  String string(UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<const UChar*>(data),
+                 std::min(kMaxInputLength, size / sizeof(UChar)))));
   HarfBuzzShaper shaper(string);
-  scoped_refptr<ShapeResult> result = shaper.Shape(&font, TextDirection::kLtr);
+  const ShapeResult* result = shaper.Shape(&font, TextDirection::kLtr);
 
-  // BloberizeNG
-  scoped_refptr<ShapeResultView> result_view =
-      ShapeResultView::Create(result.get());
-  NGTextFragmentPaintInfo text_info{StringView(string), 0, string.length(),
-                                    result_view.get()};
-  ShapeResultBloberizer::FillGlyphsNG bloberizer_ng(
-      font.GetFontDescription(), 1, text_info.text, text_info.from,
-      text_info.to, text_info.shape_result,
-      ShapeResultBloberizer::Type::kEmitText);
-  bloberizer_ng.Blobs();
+  // Bloberize ShapeResultView
+  ShapeResultView* result_view = ShapeResultView::Create(result);
+  TextFragmentPaintInfo text_info{StringView(string), 0, string.length(),
+                                  result_view};
+  ShapeResultBloberizer bloberizer = ShapeResultBloberizer::FillGlyphs(
+      font.GetFontDescription(), text_info.text, text_info.from, text_info.to,
+      text_info.shape_result, ShapeResultBloberizer::Type::kEmitText);
+  bloberizer.Blobs();
 
-  // Bloberize
-  CachingWordShaper word_shaper(font);
-  TextRun text_run(string);
-  constexpr unsigned word_length = 7;
-  unsigned state = 0;
-  for (unsigned from = 0; from < text_run.length(); from += word_length) {
-    unsigned to = std::min(from + word_length, text_run.length());
+  // Bloberize PlainTextNode
+  constexpr wtf_size_t word_length = 7;
+  uint32_t state = 0;
+  for (wtf_size_t from = 0; from < string.length(); from += word_length) {
+    wtf_size_t to = std::min(from + word_length, string.length());
     bool is_rtl = state & 0x2;
     bool is_override = state & 0x4;
     ++state;
 
-    TextRun subrun = text_run.SubRun(from, to - from);
-    subrun.SetDirection(is_rtl ? TextDirection::kRtl : TextDirection::kLtr);
-    subrun.SetDirectionalOverride(is_override);
+    TextRun subrun(StringView(string, from, to - from),
+                   is_rtl ? TextDirection::kRtl : TextDirection::kLtr,
+                   is_override);
 
-    TextRunPaintInfo subrun_info(subrun);
-    ShapeResultBuffer buffer;
-    word_shaper.FillResultBuffer(subrun_info, &buffer);
-    ShapeResultBloberizer::FillGlyphs bloberizer(
-        font.GetFontDescription(), 1, subrun_info, buffer,
-        ShapeResultBloberizer::Type::kEmitText);
-    bloberizer.Blobs();
+    PlainTextNode* node = MakeGarbageCollected<PlainTextNode>(
+        subrun, /* normalize_space */ false, font, /* supports_bidi */ true,
+        nullptr);
+    if (!node->ContainsRtlItems()) {
+      ShapeResultBloberizer node_bloberizer = ShapeResultBloberizer::FillGlyphs(
+          font.GetFontDescription(), *node,
+          ShapeResultBloberizer::Type::kEmitText);
+      node_bloberizer.Blobs();
+    } else {
+      for (const PlainTextItem& item : node->ItemList()) {
+        ShapeResultBloberizer item_bloberizer =
+            ShapeResultBloberizer::FillGlyphs(
+                font.GetFontDescription(), item.Text(), 0, item.Length(),
+                item.EnsureView(), ShapeResultBloberizer::Type::kEmitText);
+        item_bloberizer.Blobs();
+      }
+    }
   }
 
   return 0;

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "components/zucchini/buffer_view.h"
 #include "components/zucchini/image_utils.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace zucchini {
 
@@ -29,30 +28,35 @@ std::unique_ptr<Disassembler> MakeDisassemblerWithoutFallback(
 std::unique_ptr<Disassembler> MakeDisassemblerOfType(ConstBufferView image,
                                                      ExecutableType exe_type);
 
+// Returns the version associated with disassembler of type |exe_type|.
+uint16_t DisassemblerVersionOfType(ExecutableType exe_type);
+
 // Attempts to detect an element associated with |image| and returns it, or
 // returns nullopt if no element is detected.
 using ElementDetector =
-    base::RepeatingCallback<absl::optional<Element>(ConstBufferView image)>;
+    base::RepeatingCallback<std::optional<Element>(ConstBufferView image)>;
 
 // Implementation of ElementDetector using disassemblers.
-absl::optional<Element> DetectElementFromDisassembler(ConstBufferView image);
+std::optional<Element> DetectElementFromDisassembler(ConstBufferView image);
 
 // A class to scan through an image and iteratively detect elements.
 class ElementFinder {
  public:
-  ElementFinder(ConstBufferView image, ElementDetector&& detector);
+  ElementFinder(ConstBufferView image,
+                ElementDetector&& detector,
+                offset_t init_pos);
+  ElementFinder(const ElementFinder&) = delete;
+  const ElementFinder& operator=(const ElementFinder&) = delete;
   ~ElementFinder();
 
-  // Scans for the next executable using |detector|. Returns the next element
+  // Scans for the next executable using |detector_|. Returns the next element
   // found, or nullopt if no more element can be found.
-  absl::optional<Element> GetNext();
+  std::optional<Element> GetNext();
 
  private:
   ConstBufferView image_;
   ElementDetector detector_;
   offset_t pos_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(ElementFinder);
 };
 
 }  // namespace zucchini

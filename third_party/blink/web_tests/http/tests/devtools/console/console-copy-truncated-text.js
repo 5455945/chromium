@@ -1,11 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as Console from 'devtools/panels/console/console.js';
 
 (async function() {
   TestRunner.addResult(`Tests that console copies truncated text in messages properly.\n`);
 
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
 
   var longUrl = 'www.' + 'z123456789'.repeat(15) + '.com';
@@ -27,8 +31,8 @@
     `;
 
   var expectedMessageCount = 8;
-  var consoleView = Console.ConsoleView.instance();
-  var viewport = Console.ConsoleView.instance()._viewport;
+  var consoleView = Console.ConsoleView.ConsoleView.instance();
+  var viewport = Console.ConsoleView.ConsoleView.instance().viewport;
   var maxLength;
   var halfMaxLength;
   var secondLongUrlIndexInMixedUrl;
@@ -157,7 +161,7 @@
   ConsoleTestRunner.evaluateInConsole(prepareCode);
 
   function consoleMessageText(index) {
-    var messageElement = consoleView._visibleViewMessages[index].element();
+    var messageElement = consoleView.visibleViewMessages[index].element();
     return messageElement.querySelector('.console-message-text').deepTextContent();
   }
 
@@ -176,7 +180,7 @@
     fromTextOffset += fromAnchor ? fromAnchor.deepTextContent().length : 0;
     toTextOffset += toAnchor ? toAnchor.deepTextContent().length : 0;
     await ConsoleTestRunner.selectConsoleMessages(fromMessage, fromTextOffset, toMessage, toTextOffset);
-    var selectedText = viewport._selectedText();
+    var selectedText = viewport.selectedText();
     if (selectedText) {
       selectedText = selectedText.replace(/\bVM\d+/g, 'VM');
       TestRunner.addResult('Selection length: ' + selectedText.length + ', text: ' + selectedText);
@@ -188,9 +192,9 @@
   function testHighlightedUrlWithSearchQuery(query, next) {
     // Clear any existing ranges to avoid using them as the query.
     window.getSelection().removeAllRanges();
-    TestRunner.addSniffer(consoleView, '_searchFinishedForTests', onSearch);
-    consoleView._searchableView._searchInputElement.value = query;
-    consoleView._searchableView.showSearchField();
+    TestRunner.addSniffer(consoleView, 'searchFinishedForTests', onSearch);
+    consoleView.searchableView().contentElement.querySelector('#search-input-field').value = query;
+    consoleView.searchableView().showSearchField();
     TestRunner.addResult('Searching for text: ' + query);
 
     async function onSearch() {

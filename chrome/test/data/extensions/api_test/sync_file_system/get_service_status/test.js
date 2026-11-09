@@ -1,21 +1,23 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var testSteps = [
-  function () {
+const testSteps = [
+  function() {
     chrome.syncFileSystem.requestFileSystem(
         chrome.test.callbackPass(testSteps.shift()));
   },
-  function () {
+  function() {
     chrome.syncFileSystem.getServiceStatus(
         chrome.test.callbackPass(testSteps.shift()));
   },
-  function (status) {
-    chrome.test.assertEq('authentication_required', status);
-  }
+  function(status) {
+    chrome.test.getConfig(function(config) {
+      chrome.test.assertEq('disabled', status);
+    });
+  },
 ];
 
 chrome.test.runTests([
-  testSteps.shift()
+  testSteps.shift(),
 ]);

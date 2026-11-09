@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "extensions/browser/api/socket/socket_api.h"
 #include "extensions/common/api/sockets_tcp_server.h"
 
@@ -90,8 +91,8 @@ class SocketsTcpServerListenFunction : public TCPServerSocketApiFunction {
  private:
   void OnCompleted(int result, const std::string& error_msg);
 
-  std::unique_ptr<sockets_tcp_server::Listen::Params> params_;
-  TCPServerSocketEventDispatcher* socket_event_dispatcher_;
+  std::optional<sockets_tcp_server::Listen::Params> params_;
+  raw_ptr<TCPServerSocketEventDispatcher> socket_event_dispatcher_;
 };
 
 class SocketsTcpServerDisconnectFunction : public TCPServerSocketApiFunction {
@@ -134,9 +135,6 @@ class SocketsTcpServerGetInfoFunction : public TCPServerSocketApiFunction {
 
   // SocketApiFunction:
   ResponseAction Work() override;
-
- private:
-  std::unique_ptr<sockets_tcp_server::GetInfo::Params> params_;
 };
 
 class SocketsTcpServerGetSocketsFunction : public TCPServerSocketApiFunction {

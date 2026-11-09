@@ -1,6 +1,8 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {DataSeries} from './line_chart/data_series.js';
 
 /**
  * @fileoverview Typedef use by chrome://sys-internals.
@@ -14,9 +16,8 @@
  *   kernel: number,
  *   usage: number,
  *   user: number,
- * }}
+ * }} GeneralCpuType
  */
-var GeneralCpuType;
 
 /**
  * For info page.
@@ -25,9 +26,8 @@ var GeneralCpuType;
  *   swapUsed: number,
  *   total: number,
  *   used: number,
- * }}
+ * }} GeneralMemoryType
  */
-var GeneralMemoryType;
 
 /**
  * For info page.
@@ -36,55 +36,64 @@ var GeneralMemoryType;
  *   comprRatio: number,
  *   orig: number,
  *   total: number,
- * }}
+ * }} GeneralZramType
  */
-var GeneralZramType;
+
+/**
+ * For info page.
+ * @typedef {{
+ *   usage: number,
+ * }} GeneralGpuType
+ */
+
+/**
+ * For info page.
+ * @typedef {{
+ *   usage: number,
+ * }} GeneralNpuType
+ */
 
 /**
  * @typedef {{
- *   cpu: GeneralCpuType,
- *   memory: GeneralMemoryType,
- *   zram: GeneralZramType,
- * }}
+ *   cpu: !GeneralCpuType,
+ *   memory: !GeneralMemoryType,
+ *   zram: !GeneralZramType,
+ *   gpu: ?GeneralGpuType,
+ *   npu: ?GeneralNpuType,
+ * }} GeneralInfoType
  */
-var GeneralInfoType;
 
 /**
- * @typedef {Array<!LineChart.DataSeries>|null}
+ * @typedef {Array<!DataSeries>|null} CpuDataSeriesSet
  */
-var CpuDataSeriesSet;
-
-/**
- * @typedef {{
- *   memUsed: !LineChart.DataSeries,
- *   swapUsed: !LineChart.DataSeries,
- *   pswpin: !LineChart.DataSeries,
- *   pswpout: !LineChart.DataSeries
- * }}
- */
-var MemoryDataSeriesSet;
 
 /**
  * @typedef {{
- *   origDataSize: !LineChart.DataSeries,
- *   comprDataSize: !LineChart.DataSeries,
- *   memUsedTotal: !LineChart.DataSeries,
- *   numReads: !LineChart.DataSeries,
- *   numWrites: !LineChart.DataSeries
- * }}
+ *   memUsed: !DataSeries,
+ *   swapUsed: !DataSeries,
+ *   pswpin: !DataSeries,
+ *   pswpout: !DataSeries
+ * }} MemoryDataSeriesSet
  */
-var ZramDataSeriesSet;
+
+/**
+ * @typedef {{
+ *   origDataSize: !DataSeries,
+ *   comprDataSize: !DataSeries,
+ *   memUsedTotal: !DataSeries,
+ *   numReads: !DataSeries,
+ *   numWrites: !DataSeries
+ * }} ZramDataSeriesSet
+ */
 
 /**
  * @typedef {{
  *   cpus: CpuDataSeriesSet,
  *   memory: MemoryDataSeriesSet,
  *   zram: ZramDataSeriesSet,
- * }}
+ * }} DataSeriesSet
  */
-var DataSeriesSet;
 
 /**
- * @typedef {{value: number, timestamp: number}}
+ * @typedef {{value: number, timestamp: number}} CounterType
  */
-var CounterType;

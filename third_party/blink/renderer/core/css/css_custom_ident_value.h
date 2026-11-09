@@ -1,10 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_CUSTOM_IDENT_VALUE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_CUSTOM_IDENT_VALUE_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
@@ -12,15 +13,34 @@
 
 namespace blink {
 
+class CSSFunctionValue;
+class CSSLengthResolver;
+class ScopedCSSName;
+class TreeScope;
+
 class CORE_EXPORT CSSCustomIdentValue : public CSSValue {
  public:
   explicit CSSCustomIdentValue(const AtomicString&);
   explicit CSSCustomIdentValue(CSSPropertyID);
+  explicit CSSCustomIdentValue(const ScopedCSSName&);
+  explicit CSSCustomIdentValue(const CSSFunctionValue& ident_function);
 
-  AtomicString Value() const {
+  const TreeScope* GetTreeScope() const { return tree_scope_.Get(); }
+  const TreeScope* GetPopulatedTreeScope() const {
+    CHECK(IsScopedValue());
+    return GetTreeScope();
+  }
+  const AtomicString& Value() const {
     DCHECK(!IsKnownPropertyID());
     return string_;
   }
+  AtomicString ComputeIdent(const CSSLengthResolver&) const;
+  static AtomicString ComputeIdent(const CSSFunctionValue&,
+                                   const CSSLengthResolver&);
+  // If `this` contains any ident() functions, resolves those functions
+  // a returns a new literal CSSCustomIdentValue with the result.
+  // Otherwise, returns `this`.
+  const CSSCustomIdentValue* Resolve(const CSSLengthResolver&) const;
   bool IsKnownPropertyID() const {
     return property_id_ != CSSPropertyID::kInvalid;
   }
@@ -30,17 +50,21 @@ class CORE_EXPORT CSSCustomIdentValue : public CSSValue {
   }
 
   String CustomCSSText() const;
+  uint32_t CustomHash() const;
 
-  bool Equals(const CSSCustomIdentValue& other) const {
-    return IsKnownPropertyID() ? property_id_ == other.property_id_
-                               : string_ == other.string_;
-  }
+  const CSSCustomIdentValue& PopulateWithTreeScope(const TreeScope*) const;
+
+  bool Equals(const CSSCustomIdentValue& other) const;
+
+  bool HasRandomFunctions() const;
 
   void TraceAfterDispatch(blink::Visitor*) const;
 
  private:
-  AtomicString string_;
+  WeakMember<const TreeScope> tree_scope_;
+  Member<const CSSFunctionValue> ident_function_;
   CSSPropertyID property_id_;
+  AtomicString string_;
 };
 
 template <>

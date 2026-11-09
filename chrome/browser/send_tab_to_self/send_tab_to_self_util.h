@@ -1,40 +1,63 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SEND_TAB_TO_SELF_SEND_TAB_TO_SELF_UTIL_H_
 #define CHROME_BROWSER_SEND_TAB_TO_SELF_SEND_TAB_TO_SELF_UTIL_H_
 
-class GURL;
-class Profile;
+#include <iosfwd>
+#include <optional>
+#include <string>
+
+#include "components/send_tab_to_self/entry_point_display_reason.h"
+#include "components/send_tab_to_self/page_context.h"
+#include "url/gurl.h"
 
 namespace content {
 class WebContents;
-}
+}  // namespace content
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace send_tab_to_self {
 
-// Returns true if the SendTabToSelf sync datatype is active.
-bool IsUserSyncTypeActive(Profile* profile);
+class SendTabToSelfEntry;
 
-// Returns true if the user has one or more valid device to share to.
-bool HasValidTargetDevice(Profile* profile);
+// `web_contents` can be null. If `url` is not provided, defaults to
+// `web_contents->GetLastCommittedURL()`.
+std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
+    content::WebContents* web_contents,
+    const std::optional<GURL>& url = std::nullopt);
 
-// Returns true if the tab and web content requirements are met:
-//  User is viewing an HTTP or HTTPS page.
-//  User is not on a native page.
-//  User is not in Incongnito mode.
-bool AreContentRequirementsMet(const GURL& gurl, Profile* profile);
+// Returns true if the entry point should be shown. If `url` is not provided,
+// defaults to `web_contents->GetLastCommittedURL()`.
+bool ShouldDisplayEntryPoint(content::WebContents* web_contents,
+                             const std::optional<GURL>& url = std::nullopt);
 
-// Returns true if the feature should be offered in menus.
-bool ShouldOfferFeature(content::WebContents* web_contents);
+// Creates a PageContext::FormFieldInfo for the given `web_contents` by
+// extracting form data from all frames.
+PageContext::FormFieldInfo ExtractFormFieldsFromWebContents(
+    content::WebContents* web_contents);
 
-// Returns true if the feature should be offered in link context menus.
-bool ShouldOfferFeatureForLink(content::WebContents* web_contents,
-                               const GURL& link_url);
+// Similar to ExtractFormFieldsFromWebContents, but allows injecting an ostream
+// for detailed insights of the extraction process.
+PageContext::FormFieldInfo ExtractFormFieldsFromWebContentsForTesting(
+    content::WebContents* web_contents,
+    std::ostream& os);
 
-// Returns true if the omnibox icon for the feature should be offered.
-bool ShouldOfferOmniboxIcon(content::WebContents* web_contents);
+// Fills form fields in `web_contents` from `page_context` if the field's origin
+// matches `origin`.
+void FillWebContents(content::WebContents* web_contents,
+                     const url::Origin& origin,
+                     const PageContext& page_context);
+
+// Returns the scroll position from `entry` as a text fragment string if `entry`
+// has a scroll position.
+// See https://wicg.github.io/scroll-to-text-fragment/
+std::optional<std::string> GetScrollPositionAsTextFragment(
+    const SendTabToSelfEntry* entry);
 
 }  // namespace send_tab_to_self
 

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,29 +10,20 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "cc/test/layer_tree_test.h"
 #include "cc/trees/clip_node.h"
 #include "cc/trees/effect_node.h"
 #include "cc/trees/scroll_node.h"
 #include "cc/trees/transform_node.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gl/gl_implementation.h"
-
-class SkBitmap;
-
-namespace base {
-namespace test {
-class ScopedFeatureList;
-}
-}  // namespace base
-
-namespace gfx {
-class ColorSpace;
-}
 
 namespace viz {
 class CopyOutputRequest;
 class CopyOutputResult;
+class TestInProcessContextProvider;
 }
 
 namespace cc {
@@ -49,16 +40,15 @@ class LayerTreePixelTest : public LayerTreeTest {
   std::unique_ptr<TestLayerTreeFrameSink> CreateLayerTreeFrameSink(
       const viz::RendererSettings& renderer_settings,
       double refresh_rate,
-      scoped_refptr<viz::ContextProvider> compositor_context_provider,
+      scoped_refptr<viz::RasterContextProvider> compositor_context_provider,
       scoped_refptr<viz::RasterContextProvider> worker_context_provider)
       override;
   std::unique_ptr<viz::DisplayCompositorMemoryAndTaskController>
   CreateDisplayControllerOnThread() override;
-  std::unique_ptr<viz::SkiaOutputSurface>
-  CreateDisplaySkiaOutputSurfaceOnThread(
+  std::unique_ptr<viz::SkiaOutputSurface> CreateSkiaOutputSurfaceOnThread(
       viz::DisplayCompositorMemoryAndTaskController*) override;
-  std::unique_ptr<viz::OutputSurface> CreateDisplayOutputSurfaceOnThread(
-      scoped_refptr<viz::ContextProvider> compositor_context_provider) override;
+  std::unique_ptr<viz::OutputSurface> CreateSoftwareOutputSurfaceOnThread()
+      override;
   void DrawLayersOnThread(LayerTreeHostImpl* host_impl) override;
   void InitializeSettings(LayerTreeSettings* settings) override;
 
@@ -103,13 +93,6 @@ class LayerTreePixelTest : public LayerTreeTest {
                                       Layer* target,
                                       base::FilePath file_name);
 
-  SkBitmap CopyMailboxToBitmap(const gfx::Size& size,
-                               const gpu::Mailbox& mailbox,
-                               const gpu::SyncToken& sync_token,
-                               const gfx::ColorSpace& color_space);
-
-  void Finish();
-
   // Allow tests to enlarge the backing texture for a non-root render pass, to
   // simulate reusing a larger texture from a previous frame for a new
   // render pass. This should be called before the output surface is bound.
@@ -126,8 +109,7 @@ class LayerTreePixelTest : public LayerTreeTest {
 
   TestRasterType raster_type() const { return raster_type_; }
   bool use_accelerated_raster() const {
-    return raster_type_ == TestRasterType::kGpu ||
-           raster_type_ == TestRasterType::kOop;
+    return raster_type_ == TestRasterType::kGpu;
   }
 
   // Common CSS colors defined for tests to use.
@@ -141,16 +123,15 @@ class LayerTreePixelTest : public LayerTreeTest {
   gl::DisableNullDrawGLBindings enable_pixel_output_;
   std::unique_ptr<PixelComparator> pixel_comparator_;
   scoped_refptr<Layer> content_root_;  // Not used in layer list mode.
-  Layer* readback_target_;
+  raw_ptr<Layer> readback_target_;
   base::FilePath ref_file_;
   SkBitmap expected_bitmap_;
   std::unique_ptr<SkBitmap> result_bitmap_;
   std::vector<scoped_refptr<TextureLayer>> texture_layers_;
   int pending_texture_mailbox_callbacks_;
   gfx::Size enlarge_texture_amount_;
-
-  // Used to create SkiaOutputSurfaceImpl.
-  std::unique_ptr<base::test::ScopedFeatureList> scoped_feature_list_;
+  int max_texture_size_ = 0;
+  scoped_refptr<viz::TestInProcessContextProvider> context_provider_sw_;
 };
 
 }  // namespace cc

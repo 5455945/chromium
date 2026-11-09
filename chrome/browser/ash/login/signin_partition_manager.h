@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,10 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/singleton.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "services/network/public/cpp/network_context_getter.h"
 
 namespace content {
 class BrowserContext;
@@ -20,13 +18,7 @@ class StoragePartition;
 class WebContents;
 }  // namespace content
 
-namespace network {
-namespace mojom {
-class NetworkContext;
-}  // namespace mojom
-}  // namespace network
-
-namespace chromeos {
+namespace ash {
 namespace login {
 
 // Manages storage partitions for sign-in attempts on the sign-in screen and
@@ -37,16 +29,21 @@ class SigninPartitionManager : public KeyedService {
       base::RepeatingCallback<void(content::StoragePartition* storage_partition,
                                    base::OnceClosure data_cleared)>;
 
-  using GetSystemNetworkContextTask =
-      base::RepeatingCallback<network::mojom::NetworkContext*()>;
-
   using OnCreateNewStoragePartition =
       base::RepeatingCallback<void(content::StoragePartition*)>;
 
   using StartSigninSessionDoneCallback =
       base::OnceCallback<void(const std::string& partition_name)>;
 
-  explicit SigninPartitionManager(content::BrowserContext* browser_context);
+  // `system_network_context_getter` should return the network context that is
+  // associated with the browser process.
+  SigninPartitionManager(
+      network::NetworkContextGetter system_network_context_getter,
+      content::BrowserContext* browser_context);
+
+  SigninPartitionManager(const SigninPartitionManager&) = delete;
+  SigninPartitionManager& operator=(const SigninPartitionManager&) = delete;
+
   ~SigninPartitionManager() override;
 
   // Creates a new StoragePartition for a sign-in attempt. If a previous
@@ -87,37 +84,15 @@ class SigninPartitionManager : public KeyedService {
   void SetClearStoragePartitionTaskForTesting(
       ClearStoragePartitionTask clear_storage_partition_task);
   void SetGetSystemNetworkContextForTesting(
-      GetSystemNetworkContextTask get_system_network_context_task);
+      network::NetworkContextGetter get_system_network_context_task);
   void SetOnCreateNewStoragePartitionForTesting(
       OnCreateNewStoragePartition on_create_new_storage_partition);
 
-  class Factory : public BrowserContextKeyedServiceFactory {
-   public:
-    static SigninPartitionManager* GetForBrowserContext(
-        content::BrowserContext* browser_context);
-
-    static Factory* GetInstance();
-
-   private:
-    friend struct base::DefaultSingletonTraits<Factory>;
-
-    Factory();
-    ~Factory() override;
-
-    // BrowserContextKeyedServiceFactory:
-    KeyedService* BuildServiceInstanceFor(
-        content::BrowserContext* context) const override;
-    content::BrowserContext* GetBrowserContextToUse(
-        content::BrowserContext* context) const override;
-
-    DISALLOW_COPY_AND_ASSIGN(Factory);
-  };
-
  private:
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::BrowserContext> browser_context_;
 
   ClearStoragePartitionTask clear_storage_partition_task_;
-  GetSystemNetworkContextTask get_system_network_context_task_;
+  network::NetworkContextGetter get_system_network_context_task_;
   OnCreateNewStoragePartition on_create_new_storage_partition_;
 
   // GuestView StoragePartitions use the host of the embedder site's URL as the
@@ -128,12 +103,10 @@ class SigninPartitionManager : public KeyedService {
   std::string current_storage_partition_name_;
   // The StoragePartition identified by `storage_partition_domain_` and
   // `current_storage_partition_name_`.
-  content::StoragePartition* current_storage_partition_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(SigninPartitionManager);
+  raw_ptr<content::StoragePartition> current_storage_partition_ = nullptr;
 };
 
 }  // namespace login
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SIGNIN_PARTITION_MANAGER_H_

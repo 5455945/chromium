@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/timer/timer.h"
 #include "net/base/backoff_entry.h"
 
@@ -18,6 +17,10 @@ namespace remoting {
 class BackoffTimer {
  public:
   BackoffTimer();
+
+  BackoffTimer(const BackoffTimer&) = delete;
+  BackoffTimer& operator=(const BackoffTimer&) = delete;
+
   ~BackoffTimer();
 
   // Invokes |user_task| at intervals specified by |delay|, and
@@ -43,8 +46,6 @@ class BackoffTimer {
   base::Location posted_from_;
   net::BackoffEntry::Policy backoff_policy_ = {};
   std::unique_ptr<net::BackoffEntry> backoff_entry_;
-
-  DISALLOW_COPY_AND_ASSIGN(BackoffTimer);
 };
 
 }  // namespace remoting

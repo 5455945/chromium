@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,22 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
+#include <utility>
 #include <vector>
 
+#include "base/apple/bridging.h"
+#include "base/apple/bundle_locations.h"
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_mach_port.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
-#include "base/mac/bundle_locations.h"
-#include "base/mac/foundation_util.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/branding_buildflags.h"
 #include "components/crash/core/app/crash_reporter_client.h"
+#include "components/crash/core/app/shared_memory_user_stream_mach_port.h"
 #include "third_party/crashpad/crashpad/client/crash_report_database.h"
 #include "third_party/crashpad/crashpad/client/crashpad_client.h"
 #include "third_party/crashpad/crashpad/client/crashpad_info.h"
@@ -34,15 +39,16 @@ namespace crash_reporter {
 namespace {
 
 std::map<std::string, std::string> GetProcessSimpleAnnotations() {
-  static std::map<std::string, std::string> annotations = []() -> auto {
+  auto build_annotations = []() {
     std::map<std::string, std::string> process_annotations;
     @autoreleasepool {
-      NSBundle* outer_bundle = base::mac::OuterBundle();
+      NSBundle* outer_bundle = base::apple::OuterBundle();
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       process_annotations["prod"] = "Chrome_Mac";
 #else
-      NSString* product = base::mac::ObjCCast<NSString>([outer_bundle
-          objectForInfoDictionaryKey:base::mac::CFToNSCast(kCFBundleNameKey)]);
+      NSString* product = base::apple::ObjCCast<NSString>(
+          [outer_bundle objectForInfoDictionaryKey:base::apple::CFToNSPtrCast(
+                                                       kCFBundleNameKey)]);
       process_annotations["prod"] =
           base::SysNSStringToUTF8(product).append("_Mac");
 #endif
@@ -53,7 +59,7 @@ std::map<std::string, std::string> GetProcessSimpleAnnotations() {
 #else
       const bool allow_empty_channel = false;
 #endif
-      NSString* channel = base::mac::ObjCCast<NSString>(
+      NSString* channel = base::apple::ObjCCast<NSString>(
           [outer_bundle objectForInfoDictionaryKey:@"KSChannelID"]);
       if (!channel || [channel isEqual:@"arm64"] ||
           [channel isEqual:@"universal"]) {
@@ -77,15 +83,21 @@ std::map<std::string, std::string> GetProcessSimpleAnnotations() {
       }
 
       NSString* version =
-          base::mac::ObjCCast<NSString>([base::mac::FrameworkBundle()
+          base::apple::ObjCCast<NSString>([base::apple::FrameworkBundle()
               objectForInfoDictionaryKey:@"CFBundleShortVersionString"]);
       process_annotations["ver"] = base::SysNSStringToUTF8(version);
 
       process_annotations["plat"] = std::string("OS X");
     }  // @autoreleasepool
+    for (auto& [key, value] :
+         GetCrashReporterClient()->GetExtraProcessAnnotations()) {
+      process_annotations.insert_or_assign(key, std::move(value));
+    }
     return process_annotations;
-  }();
-  return annotations;
+  };
+  static const base::NoDestructor<std::map<std::string, std::string>>
+      annotations(build_annotations());
+  return *annotations;
 }
 
 }  // namespace
@@ -126,29 +138,32 @@ void DumpProcessWithoutCrashing(task_t task_port) {
 
 namespace internal {
 
-base::FilePath PlatformCrashpadInitialization(
+bool PlatformCrashpadInitialization(
     bool initial_client,
     bool browser_process,
     bool embedded_handler,
     const std::string& user_data_dir,
     const base::FilePath& exe_path,
-    const std::vector<std::string>& initial_arguments) {
-  base::FilePath database_path;  // Only valid in the browser process.
+    const std::vector<std::string>& initial_arguments,
+    const std::vector<base::FilePath>& attachments,
+    base::FilePath* database_path) {
   base::FilePath metrics_path;  // Only valid in the browser process.
-  DCHECK(!embedded_handler);  // This is not used on Mac.
-  DCHECK(exe_path.empty());   // This is not used on Mac.
+  // These are not used on Mac.
+  DCHECK(!embedded_handler);
+  DCHECK(exe_path.empty());
   DCHECK(initial_arguments.empty());
+  DCHECK(attachments.empty());
 
   if (initial_client) {
     @autoreleasepool {
-      base::FilePath framework_bundle_path = base::mac::FrameworkBundlePath();
+      base::FilePath framework_bundle_path = base::apple::FrameworkBundlePath();
       base::FilePath handler_path =
           framework_bundle_path.Append("Helpers").Append(
               "chrome_crashpad_handler");
 
       // Is there a way to recover if this fails?
       CrashReporterClient* crash_reporter_client = GetCrashReporterClient();
-      crash_reporter_client->GetCrashDumpLocation(&database_path);
+      crash_reporter_client->GetCrashDumpLocation(database_path);
       crash_reporter_client->GetCrashMetricsLocation(&metrics_path);
 
       std::string url = crash_reporter_client->GetUploadUrl();
@@ -157,6 +172,12 @@ base::FilePath PlatformCrashpadInitialization(
 
       if (crash_reporter_client->ShouldMonitorCrashHandlerExpensively()) {
         arguments.push_back("--monitor-self");
+      }
+      if (!crash_reporter_client->ShouldRateLimitUploads()) {
+        arguments.push_back("--no-rate-limit");
+      }
+      if (!crash_reporter_client->ShouldCompressUploads()) {
+        arguments.push_back("--no-upload-gzip");
       }
 
       // Set up --monitor-self-annotation even in the absence of --monitor-self
@@ -173,9 +194,16 @@ base::FilePath PlatformCrashpadInitialization(
             "--reset-own-crash-exception-port-to-system-default");
       }
 
+      base::apple::ScopedMachReceiveRight embedder_port;
+      if (browser_process) {
+        embedder_port = SendSharedMemoryUserStreamsToPort(
+            crash_reporter_client->GetUserStreamSharedMemoryRegions());
+      }
+
       bool result = GetCrashpadClient().StartHandler(
-          handler_path, database_path, metrics_path, url,
-          GetProcessSimpleAnnotations(), arguments, true, false);
+          handler_path, *database_path, metrics_path, url,
+          GetProcessSimpleAnnotations(), arguments, true, false, {}, {},
+          std::move(embedder_port));
 
       // If this is an initial client that's not the browser process, it's
       // important to sever the connection to any existing handler. If
@@ -183,11 +211,12 @@ base::FilePath PlatformCrashpadInitialization(
       // to the existing handler.
       if (!result && !browser_process) {
         crashpad::CrashpadClient::UseSystemDefaultHandler();
+        return false;
       }
     }  // @autoreleasepool
   }
 
-  return database_path;
+  return true;
 }
 
 }  // namespace internal

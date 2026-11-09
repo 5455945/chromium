@@ -1,15 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/desktop_session_duration/desktop_profile_session_durations_service_factory.h"
 
 #include "chrome/browser/metrics/desktop_session_duration/desktop_profile_session_durations_service.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/metrics/profile_metrics_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_context.h"
 
 namespace metrics {
@@ -25,58 +24,62 @@ DesktopProfileSessionDurationsServiceFactory::GetForBrowserContext(
 // static
 DesktopProfileSessionDurationsServiceFactory*
 DesktopProfileSessionDurationsServiceFactory::GetInstance() {
-  return base::Singleton<DesktopProfileSessionDurationsServiceFactory>::get();
+  static base::NoDestructor<DesktopProfileSessionDurationsServiceFactory>
+      instance;
+  return instance.get();
 }
 
 DesktopProfileSessionDurationsServiceFactory::
     DesktopProfileSessionDurationsServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "DesktopProfileSessionDurationsService",
-          BrowserContextDependencyManager::GetInstance()) {
+          // Guest and system profiles are excluded from session metrics.
+          //
+          // Session time in incognito is counted towards the session time in
+          // the regular profile. That means that for a user that is signed in
+          // and syncing in their regular profile and that is browsing in
+          // incognito profile, Chromium will record the session time as being
+          // signed in and syncing.
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .Build()) {
   DependsOn(SyncServiceFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
+  DependsOn(ProfileMetricsServiceFactory::GetInstance());
 }
 
 DesktopProfileSessionDurationsServiceFactory::
     ~DesktopProfileSessionDurationsServiceFactory() = default;
 
-KeyedService*
-DesktopProfileSessionDurationsServiceFactory::BuildServiceInstanceFor(
-    content::BrowserContext* context) const {
+std::unique_ptr<KeyedService> DesktopProfileSessionDurationsServiceFactory::
+    BuildServiceInstanceForBrowserContext(
+        content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
 
-  DCHECK(!profile->IsSystemProfile());
-  DCHECK(!profile->IsGuestSession());
-  DCHECK(!profile->IsEphemeralGuestProfile());
+// On ChromeOS, IsGuestSession and IsRegularProfile() are not mutually
+// exclusive, which breaks `ProfileKeyedServiceFactory` logic. Therefore the
+// below check is still needed despite the proper filter already set.
+#if BUILDFLAG(IS_CHROMEOS)
+  if (profile->IsGuestSession())
+    return nullptr;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  CHECK(!profile->IsSystemProfile(), base::NotFatalUntil::M161);
+  CHECK(!profile->IsGuestSession(), base::NotFatalUntil::M161);
 
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile);
   DesktopSessionDurationTracker* tracker = DesktopSessionDurationTracker::Get();
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
-  return new DesktopProfileSessionDurationsService(
-      profile->GetPrefs(), sync_service, identity_manager, tracker);
-}
-
-content::BrowserContext*
-DesktopProfileSessionDurationsServiceFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  // Avoid counting session duration metrics for System and Guest profiles.
-  //
-  // Guest profiles are also excluded from session metrics because they are
-  // created when presenting the profile picker (per crbug.com/1150326) and this
-  // would skew the metrics.
-  Profile* profile = Profile::FromBrowserContext(context);
-  if (profile->IsSystemProfile() || profile->IsGuestSession() ||
-      profile->IsEphemeralGuestProfile()) {
-    return nullptr;
-  }
-
-  // Session time in incognito is counted towards the session time in the
-  // regular profile. That means that for a user that is signed in and syncing
-  // in their regular profile and that is browsing in incognito profile,
-  // Chromium will record the session time as being signed in and syncing.
-  return chrome::GetBrowserContextRedirectedInIncognito(context);
+  metrics::ProfileMetricsService* profile_metrics_service =
+      ProfileMetricsServiceFactory::GetForProfile(profile);
+  return std::make_unique<DesktopProfileSessionDurationsService>(
+      profile->GetPrefs(), sync_service, identity_manager,
+      profile_metrics_service, tracker);
 }
 
 }  // namespace metrics

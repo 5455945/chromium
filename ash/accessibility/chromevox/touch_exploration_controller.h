@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,13 @@
 
 #include <map>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/events/event.h"
@@ -189,6 +191,11 @@ class ASH_EXPORT TouchExplorationController
       aura::Window* root_window,
       TouchExplorationControllerDelegate* delegate,
       base::WeakPtr<TouchAccessibilityEnabler> touch_accessibility_enabler);
+
+  TouchExplorationController(const TouchExplorationController&) = delete;
+  TouchExplorationController& operator=(const TouchExplorationController&) =
+      delete;
+
   ~TouchExplorationController() override;
 
   // Make synthesized touch events are anchored at this point. This is
@@ -272,6 +279,10 @@ class ASH_EXPORT TouchExplorationController
   void OnGestureEvent(ui::GestureConsumer* raw_input_consumer,
                       ui::GestureEvent* gesture) override;
 
+  // ui::GestureConsumer:
+  std::string_view GetName() const override;
+  base::WeakPtr<ui::GestureConsumer> GetWeakPtr() override;
+
   // Process the gesture events that have been created.
   void ProcessGestureEvents();
 
@@ -283,10 +294,6 @@ class ASH_EXPORT TouchExplorationController
   void DispatchKeyWithFlags(const ui::KeyboardCode key,
                             int flags,
                             const Continuation continuation);
-
-  std::unique_ptr<ui::MouseEvent> CreateMouseMoveEvent(
-      const gfx::PointF& location,
-      int flags);
 
   void EnterTouchToMouseMode();
 
@@ -454,10 +461,10 @@ class ASH_EXPORT TouchExplorationController
 
   void SetAnchorPointInternal(const gfx::PointF& anchor_point);
 
-  aura::Window* root_window_;
+  raw_ptr<aura::Window> root_window_;
 
   // Handles volume control. Not owned.
-  TouchExplorationControllerDelegate* delegate_;
+  raw_ptr<TouchExplorationControllerDelegate> delegate_;
 
   // A set of touch ids for fingers currently touching the screen.
   std::vector<int> current_touch_ids_;
@@ -532,8 +539,6 @@ class ASH_EXPORT TouchExplorationController
   bool VLOG_on_;
 
   // LocatedEvents within this area should be left alone.
-  // TODO(crbug.com/616793): Multi display support. With this implementation, we
-  // cannot specify display.
   gfx::Rect exclude_bounds_;
 
   // Code that detects a touch-screen gesture to enable or disable
@@ -545,8 +550,6 @@ class ASH_EXPORT TouchExplorationController
   // Any touch exploration that both starts and ends (touch pressed, and
   // released) within this rectangle, triggers a simulated single finger tap at
   // the anchor point on release.
-  // TODO(crbug.com/616793): Multi display support. With this implementation, we
-  // cannot specify display.
   gfx::Rect lift_activation_bounds_;
 
   // Whether or not we've seen a touch press event yet.
@@ -555,7 +558,9 @@ class ASH_EXPORT TouchExplorationController
   // The maximum touch points seen in the current gesture.
   size_t max_gesture_touch_points_ = 0;
 
-  DISALLOW_COPY_AND_ASSIGN(TouchExplorationController);
+  static constexpr std::string_view kName = "TouchExplorationController";
+
+  base::WeakPtrFactory<TouchExplorationController> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

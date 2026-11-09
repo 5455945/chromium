@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/memory/structured_shared_memory.h"
+#include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-#include "third_party/blink/public/mojom/frame/frame_owner_element_type.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -21,14 +21,14 @@
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
-#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
-#include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 using performance_manager::mojom::blink::IframeAttributionData;
 using performance_manager::mojom::blink::IframeAttributionDataPtr;
@@ -37,30 +37,7 @@ using performance_manager::mojom::blink::V8ContextDescription;
 using performance_manager::mojom::blink::V8ContextDescriptionPtr;
 using performance_manager::mojom::blink::V8ContextWorldType;
 
-namespace WTF {
-
-// Copies the data by move.
-template <>
-struct CrossThreadCopier<V8ContextDescriptionPtr>
-    : public WTF::CrossThreadCopierByValuePassThrough<V8ContextDescriptionPtr> {
-};
-
-// Copies the data by move.
-template <>
-struct CrossThreadCopier<IframeAttributionDataPtr>
-    : public WTF::CrossThreadCopierByValuePassThrough<
-          IframeAttributionDataPtr> {};
-
-// Copies the data using the copy constructor.
-template <>
-struct CrossThreadCopier<blink::V8ContextToken>
-    : public WTF::CrossThreadCopierPassThrough<blink::V8ContextToken> {};
-
-}  // namespace WTF
-
 namespace blink {
-
-using mojom::blink::FrameOwnerElementType;
 
 namespace {
 
@@ -70,11 +47,11 @@ namespace {
 // TODO(chrisha): Lift this somewhere public and common in components/extensions
 // and reuse it from there.
 bool IsExtensionStableWorldId(const String& stable_world_id) {
-  if (stable_world_id.IsNull() || stable_world_id.IsEmpty())
+  if (stable_world_id.IsNull() || stable_world_id.empty())
     return false;
   if (stable_world_id.length() != 32)
     return false;
-  for (size_t i = 0; i < stable_world_id.length(); ++i) {
+  for (unsigned i = 0; i < stable_world_id.length(); ++i) {
     if (stable_world_id[i] < 'a' || stable_world_id[i] > 'p')
       return false;
   }
@@ -135,8 +112,7 @@ void RendererResourceCoordinatorImpl::SetMainThreadTaskLoadIsLow(
 }
 
 void RendererResourceCoordinatorImpl::OnScriptStateCreated(
-    ScriptState* script_state,
-    ExecutionContext* execution_context) {
+    ScriptState* script_state) {
   DCHECK(script_state);
   DCHECK(service_);
 
@@ -165,22 +141,19 @@ void RendererResourceCoordinatorImpl::OnScriptStateCreated(
     case DOMWrapperWorld::WorldType::kInspectorIsolated: {
       v8_desc->world_type = V8ContextWorldType::kInspector;
     } break;
-    case DOMWrapperWorld::WorldType::kRegExp: {
-      v8_desc->world_type = V8ContextWorldType::kRegExp;
-    } break;
     case DOMWrapperWorld::WorldType::kForV8ContextSnapshotNonMain: {
       // This should not happen in the production browser.
       NOTREACHED();
-    } break;
-    case DOMWrapperWorld::WorldType::kWorker: {
+    }
+    case DOMWrapperWorld::WorldType::kWorkerOrWorklet: {
       v8_desc->world_type = V8ContextWorldType::kWorkerOrWorklet;
+    } break;
+    case DOMWrapperWorld::WorldType::kShadowRealm: {
+      v8_desc->world_type = V8ContextWorldType::kShadowRealm;
     } break;
   }
 
-  if (execution_context) {
-    // This should never happen for a regexp world.
-    DCHECK_NE(DOMWrapperWorld::WorldType::kRegExp, dom_wrapper.GetWorldType());
-
+  if (auto* execution_context = ExecutionContext::From(script_state)) {
     v8_desc->execution_context_token =
         execution_context->GetExecutionContextToken();
 
@@ -249,13 +222,10 @@ void RendererResourceCoordinatorImpl::OnBeforeContentFrameDetached(
       frame.GetFrameToken().GetAs<RemoteFrameToken>());
 }
 
-void RendererResourceCoordinatorImpl::FireBackgroundTracingTrigger(
-    const String& trigger_name) {
-  DispatchFireBackgroundTracingTrigger(trigger_name);
-}
-
 RendererResourceCoordinatorImpl::RendererResourceCoordinatorImpl(
     mojo::PendingRemote<ProcessCoordinationUnit> remote) {
+  service_task_runner_ =
+      Thread::MainThread()->GetTaskRunner(MainThreadTaskRunnerRestricted());
   service_.Bind(std::move(remote));
 }
 
@@ -268,12 +238,13 @@ void RendererResourceCoordinatorImpl::DispatchOnV8ContextCreated(
   // collated the necessary data we bounce over to the main thread. Note that
   // posting "this" unretained is safe because the renderer resource coordinator
   // is a singleton that leaks at process shutdown.
-  if (!IsMainThread()) {
+
+  if (!service_task_runner_->RunsTasksInCurrentSequence()) {
     blink::PostCrossThreadTask(
-        *Thread::MainThread()->GetTaskRunner(), FROM_HERE,
-        WTF::CrossThreadBindOnce(
+        *service_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(
             &RendererResourceCoordinatorImpl::DispatchOnV8ContextCreated,
-            WTF::CrossThreadUnretained(this), std::move(v8_desc),
+            CrossThreadUnretained(this), std::move(v8_desc),
             std::move(iframe_attribution_data)));
   } else {
     service_->OnV8ContextCreated(std::move(v8_desc),
@@ -285,12 +256,12 @@ void RendererResourceCoordinatorImpl::DispatchOnV8ContextDetached(
     const blink::V8ContextToken& token) {
   DCHECK(service_);
   // See DispatchOnV8ContextCreated for why this is both needed and safe.
-  if (!IsMainThread()) {
+  if (!service_task_runner_->RunsTasksInCurrentSequence()) {
     blink::PostCrossThreadTask(
-        *Thread::MainThread()->GetTaskRunner(), FROM_HERE,
-        WTF::CrossThreadBindOnce(
+        *service_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(
             &RendererResourceCoordinatorImpl::DispatchOnV8ContextDetached,
-            WTF::CrossThreadUnretained(this), token));
+            CrossThreadUnretained(this), token));
   } else {
     service_->OnV8ContextDetached(token);
   }
@@ -299,29 +270,14 @@ void RendererResourceCoordinatorImpl::DispatchOnV8ContextDestroyed(
     const blink::V8ContextToken& token) {
   DCHECK(service_);
   // See DispatchOnV8ContextCreated for why this is both needed and safe.
-  if (!IsMainThread()) {
+  if (!service_task_runner_->RunsTasksInCurrentSequence()) {
     blink::PostCrossThreadTask(
-        *Thread::MainThread()->GetTaskRunner(), FROM_HERE,
-        WTF::CrossThreadBindOnce(
+        *service_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(
             &RendererResourceCoordinatorImpl::DispatchOnV8ContextDestroyed,
-            WTF::CrossThreadUnretained(this), token));
+            CrossThreadUnretained(this), token));
   } else {
     service_->OnV8ContextDestroyed(token);
-  }
-}
-
-void RendererResourceCoordinatorImpl::DispatchFireBackgroundTracingTrigger(
-    const String& trigger_name) {
-  DCHECK(service_);
-  if (!IsMainThread()) {
-    blink::PostCrossThreadTask(
-        *Thread::MainThread()->GetTaskRunner(), FROM_HERE,
-        WTF::CrossThreadBindOnce(&RendererResourceCoordinatorImpl::
-                                     DispatchFireBackgroundTracingTrigger,
-                                 WTF::CrossThreadUnretained(this),
-                                 trigger_name));
-  } else {
-    service_->FireBackgroundTracingTrigger(trigger_name);
   }
 }
 

@@ -28,9 +28,11 @@
 #include "third_party/blink/renderer/core/css/css_keyframes_rule.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/css/keyframe_style_rule_css_style_declaration.h"
+#include "third_party/blink/renderer/core/css/style_rule_keyframe.h"
+#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -42,17 +44,23 @@ CSSKeyframeRule::CSSKeyframeRule(StyleRuleKeyframe* keyframe,
 
 CSSKeyframeRule::~CSSKeyframeRule() = default;
 
-void CSSKeyframeRule::setKeyText(const String& key_text,
+void CSSKeyframeRule::setKeyText(const ExecutionContext* execution_context,
+                                 const String& key_text,
                                  ExceptionState& exception_state) {
   CSSStyleSheet::RuleMutationScope rule_mutation_scope(this);
 
-  if (!keyframe_->SetKeyText(key_text))
+  if (!keyframe_->SetKeyText(execution_context, key_text)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The key '" + key_text + "' is invalid and cannot be parsed");
+        StrCat({"The key '", key_text, "' is invalid and cannot be parsed"}));
+  }
 
-  if (auto* parent = To<CSSKeyframesRule>(parentRule()))
+  if (auto* parent = To<CSSKeyframesRule>(parentRule())) {
+    if (parentRule()->parentStyleSheet()) {
+      parentRule()->parentStyleSheet()->Contents()->NotifyDiffUnrepresentable();
+    }
     parent->StyleChanged();
+  }
 }
 
 CSSStyleDeclaration* CSSKeyframeRule::style() const {
@@ -64,9 +72,11 @@ CSSStyleDeclaration* CSSKeyframeRule::style() const {
   return properties_cssom_wrapper_.Get();
 }
 
-void CSSKeyframeRule::Reattach(StyleRuleBase*) {
-  // No need to reattach, the underlying data is shareable on mutation.
-  NOTREACHED();
+void CSSKeyframeRule::Reattach(StyleRuleBase* rule) {
+  keyframe_ = To<StyleRuleKeyframe>(rule);
+  if (properties_cssom_wrapper_) {
+    properties_cssom_wrapper_->Reattach(keyframe_->MutableProperties());
+  }
 }
 
 void CSSKeyframeRule::Trace(Visitor* visitor) const {

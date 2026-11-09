@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,18 @@
 
 #include <stdint.h>
 
-#include <iosfwd>
+#include <array>
 #include <string>
-#include <vector>
 
+#include "base/containers/span.h"
 #include "base/time/time.h"
 #include "net/base/hash_value.h"
 #include "net/base/net_export.h"
 #include "net/cert/signed_certificate_timestamp.h"
 
-namespace net {
+namespace net::ct {
 
-namespace ct {
-
-static const uint8_t kSthRootHashLength = 32;
+static constexpr uint8_t kSthRootHashLength = 32;
 
 // Signed Tree Head as defined in section 3.5. of RFC6962
 struct NET_EXPORT SignedTreeHead {
@@ -31,9 +29,9 @@ struct NET_EXPORT SignedTreeHead {
 
   SignedTreeHead();
   SignedTreeHead(Version version,
-                 const base::Time& timestamp,
+                 base::Time timestamp,
                  uint64_t tree_size,
-                 const char sha256_root_hash[kSthRootHashLength],
+                 base::span<const uint8_t, kSthRootHashLength> sha256_root_hash,
                  const DigitallySigned& signature,
                  const std::string& log_id);
   SignedTreeHead(const SignedTreeHead& other);
@@ -42,7 +40,7 @@ struct NET_EXPORT SignedTreeHead {
   Version version;
   base::Time timestamp;
   uint64_t tree_size;
-  char sha256_root_hash[kSthRootHashLength];
+  std::array<uint8_t, kSthRootHashLength> sha256_root_hash;
   DigitallySigned signature;
 
   // Added in RFC6962-bis, Appendix A. Needed to identify which log
@@ -54,11 +52,7 @@ NET_EXPORT void PrintTo(const SignedTreeHead& sth, std::ostream* os);
 
 NET_EXPORT bool operator==(const SignedTreeHead& lhs,
                            const SignedTreeHead& rhs);
-NET_EXPORT bool operator!=(const SignedTreeHead& lhs,
-                           const SignedTreeHead& rhs);
 
-}  // namespace ct
-
-}  // namespace net
+}  // namespace net::ct
 
 #endif  // NET_CERT_SIGNED_TREE_HEAD_H_

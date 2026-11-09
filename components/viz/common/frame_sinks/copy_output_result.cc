@@ -1,46 +1,68 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 
+#include <cstddef>
+#include <string>
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "third_party/libyuv/include/libyuv.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkPixelRef.h"
 #include "ui/gfx/color_space.h"
 
 namespace viz {
 
 CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
+                                   Error error)
+    : CopyOutputResult(format,
+                       destination,
+                       gfx::Rect(),
+                       /*needs_lock_for_bitmap=*/false,
+                       error) {}
+
+CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
                                    const gfx::Rect& rect,
                                    bool needs_lock_for_bitmap)
+    : CopyOutputResult(format,
+                       destination,
+                       rect,
+                       needs_lock_for_bitmap,
+                       Error::kNone) {}
+
+CopyOutputResult::CopyOutputResult(Format format,
+                                   Destination destination,
+                                   const gfx::Rect& rect,
+                                   bool needs_lock_for_bitmap,
+                                   Error error)
     : format_(format),
+      destination_(destination),
       rect_(rect),
-      needs_lock_for_bitmap_(needs_lock_for_bitmap) {
-  DCHECK(format_ == Format::RGBA_BITMAP || format_ == Format::RGBA_TEXTURE ||
-         format_ == Format::I420_PLANES);
+      needs_lock_for_bitmap_(needs_lock_for_bitmap),
+      error_(error) {
+  DCHECK(format_ == Format::RGBA || format_ == Format::RGBAF16 ||
+         format_ == Format::I420_PLANES || format == Format::NV12);
+  DCHECK(destination_ == Destination::kSystemMemory ||
+         destination_ == Destination::kSharedImage);
 }
 
 CopyOutputResult::~CopyOutputResult() = default;
 
 bool CopyOutputResult::IsEmpty() const {
-  if (rect_.IsEmpty())
-    return true;
-  switch (format_) {
-    case Format::RGBA_BITMAP:
-    case Format::I420_PLANES:
-      return false;
-    case Format::RGBA_TEXTURE:
-      if (const TextureResult* result = GetTextureResult())
-        return result->mailbox.IsZero();
-      else
-        return true;
-  }
-  NOTREACHED();
-  return true;
+  return rect_.IsEmpty();
 }
 
 bool CopyOutputResult::LockSkBitmap() const {
@@ -59,59 +81,97 @@ CopyOutputResult::ScopedSkBitmap CopyOutputResult::ScopedAccessSkBitmap()
   return ScopedSkBitmap(this);
 }
 
-const CopyOutputResult::TextureResult* CopyOutputResult::GetTextureResult()
-    const {
+ReleaseCallback CopyOutputResult::TakeSharedImageOwnership() {
+  return {};
+}
+
+scoped_refptr<gpu::ClientSharedImage> CopyOutputResult::GetSharedImage() {
   return nullptr;
 }
 
-ReleaseCallback CopyOutputResult::TakeTextureOwnership() {
-  return ReleaseCallback();
-}
-
-bool CopyOutputResult::ReadI420Planes(uint8_t* y_out,
+bool CopyOutputResult::ReadI420Planes(base::span<uint8_t> y_out,
                                       int y_out_stride,
-                                      uint8_t* u_out,
+                                      base::span<uint8_t> u_out,
                                       int u_out_stride,
-                                      uint8_t* v_out,
+                                      base::span<uint8_t> v_out,
                                       int v_out_stride) const {
   auto scoped_sk_bitmap = ScopedAccessSkBitmap();
   const SkBitmap& bitmap = scoped_sk_bitmap.bitmap();
   if (!bitmap.readyToDraw())
     return false;
+
   const uint8_t* pixels = static_cast<uint8_t*>(bitmap.getPixels());
   // The conversion below ignores color space completely, and it's not even
   // sRGB→Rec.709. Unfortunately, hand-optimized routines are not available, and
   // a perfect conversion using gfx::ColorTransform would execute way too
   // slowly. See SoftwareRenderer for related comments on its lack of color
   // space management (due to performance concerns).
+  // TODO(crbug.com/384959115): Verify span size before calling into libyuv.
   if (bitmap.colorType() == kBGRA_8888_SkColorType) {
-    return 0 == libyuv::ARGBToI420(pixels, bitmap.rowBytes(), y_out,
-                                   y_out_stride, u_out, u_out_stride, v_out,
-                                   v_out_stride, bitmap.width(),
+    return 0 == libyuv::ARGBToI420(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, u_out.data(), u_out_stride,
+                                   v_out.data(), v_out_stride, bitmap.width(),
                                    bitmap.height());
   } else if (bitmap.colorType() == kRGBA_8888_SkColorType) {
-    return 0 == libyuv::ABGRToI420(pixels, bitmap.rowBytes(), y_out,
-                                   y_out_stride, u_out, u_out_stride, v_out,
-                                   v_out_stride, bitmap.width(),
+    return 0 == libyuv::ABGRToI420(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, u_out.data(), u_out_stride,
+                                   v_out.data(), v_out_stride, bitmap.width(),
                                    bitmap.height());
   }
 
   // Other SkBitmap color types could be supported, but are currently never
   // being used.
-  NOTIMPLEMENTED();
+  NOTIMPLEMENTED() << "Unsupported format, bitmap.colorType()="
+                   << bitmap.colorType();
   return false;
 }
 
-bool CopyOutputResult::ReadRGBAPlane(uint8_t* dest, int stride) const {
+bool CopyOutputResult::ReadNV12Planes(base::span<uint8_t> y_out,
+                                      int y_out_stride,
+                                      base::span<uint8_t> uv_out,
+                                      int uv_out_stride) const {
   auto scoped_sk_bitmap = ScopedAccessSkBitmap();
   const SkBitmap& bitmap = scoped_sk_bitmap.bitmap();
   if (!bitmap.readyToDraw())
     return false;
+
+  const uint8_t* pixels = static_cast<uint8_t*>(bitmap.getPixels());
+  // The conversion below ignores color space completely, and it's not even
+  // sRGB→Rec.709. Unfortunately, hand-optimized routines are not available, and
+  // a perfect conversion using gfx::ColorTransform would execute way too
+  // slowly. See SoftwareRenderer for related comments on its lack of color
+  // space management (due to performance concerns).
+  // TODO(crbug.com/384959115): Verify span size before calling into libyuv.
+  if (bitmap.colorType() == kBGRA_8888_SkColorType) {
+    return 0 == libyuv::ARGBToNV12(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, uv_out.data(), uv_out_stride,
+                                   bitmap.width(), bitmap.height());
+  } else if (bitmap.colorType() == kRGBA_8888_SkColorType) {
+    return 0 == libyuv::ABGRToNV12(pixels, bitmap.rowBytes(), y_out.data(),
+                                   y_out_stride, uv_out.data(), uv_out_stride,
+                                   bitmap.width(), bitmap.height());
+  }
+
+  // Other SkBitmap color types could be supported, but are currently never
+  // being used.
+  NOTIMPLEMENTED() << "Unsupported format, bitmap.colorType()="
+                   << bitmap.colorType();
+  return false;
+}
+
+bool CopyOutputResult::ReadRGBAPlane(base::span<uint8_t> dest,
+                                     int stride) const {
+  auto scoped_sk_bitmap = ScopedAccessSkBitmap();
+  const SkBitmap& bitmap = scoped_sk_bitmap.bitmap();
+  if (!bitmap.readyToDraw())
+    return false;
+
   DCHECK(bitmap.colorSpace());
   SkImageInfo image_info =
       SkImageInfo::MakeN32(bitmap.width(), bitmap.height(), kPremul_SkAlphaType,
                            bitmap.refColorSpace());
-  bitmap.readPixels(image_info, dest, stride, 0, 0);
+  CHECK_GE(dest.size(), image_info.computeByteSize(stride));
+  bitmap.readPixels(image_info, dest.data(), stride, 0, 0);
   return true;
 }
 
@@ -121,19 +181,17 @@ gfx::ColorSpace CopyOutputResult::GetRGBAColorSpace() const {
   if (!bitmap.readyToDraw())
     return gfx::ColorSpace();
   DCHECK(bitmap.colorSpace());
-  return gfx::ColorSpace(*(bitmap.colorSpace()));
+  return gfx::ColorSpace(bitmap.colorSpace());
 }
 
 CopyOutputSkBitmapResult::CopyOutputSkBitmapResult(const gfx::Rect& rect,
                                                    SkBitmap bitmap)
-    : CopyOutputSkBitmapResult(Format::RGBA_BITMAP, rect, std::move(bitmap)) {}
+    : CopyOutputSkBitmapResult(Format::RGBA, rect, std::move(bitmap)) {}
 
-CopyOutputSkBitmapResult::CopyOutputSkBitmapResult(
-    CopyOutputResult::Format format,
-    const gfx::Rect& rect,
-    SkBitmap bitmap)
-    : CopyOutputResult(format, rect, false) {
-  DCHECK(format == Format::RGBA_BITMAP || format == Format::I420_PLANES);
+CopyOutputSkBitmapResult::CopyOutputSkBitmapResult(Format format,
+                                                   const gfx::Rect& rect,
+                                                   SkBitmap bitmap)
+    : CopyOutputResult(format, Destination::kSystemMemory, rect, false) {
   if (!rect.IsEmpty()) {
     DCHECK(!bitmap.pixelRef() || bitmap.pixelRef()->unique());
     DCHECK(!bitmap.readyToDraw() || bitmap.colorSpace());
@@ -171,37 +229,89 @@ const SkBitmap& CopyOutputSkBitmapResult::AsSkBitmap() const {
 
 CopyOutputSkBitmapResult::~CopyOutputSkBitmapResult() = default;
 
-CopyOutputTextureResult::CopyOutputTextureResult(
+// static
+scoped_refptr<gpu::ClientSharedImage>
+CopyOutputSharedImageResult::CreateUnownedSharedImage(
+    Format format,
+    const gfx::Size& size,
+    const gpu::Mailbox& mailbox,
+    const gfx::ColorSpace& color_space,
+    std::string_view debug_label) {
+  return base::WrapRefCounted(new gpu::ClientSharedImage(
+      mailbox,
+      gpu::SharedImageInfo{GetSharedImageFormatFor(format), size, color_space,
+                           kDefaultSharedImageUsage, debug_label}));
+}
+
+CopyOutputSharedImageResult::CopyOutputSharedImageResult(
+    Format format,
     const gfx::Rect& rect,
     const gpu::Mailbox& mailbox,
-    const gpu::SyncToken& sync_token,
     const gfx::ColorSpace& color_space,
+    std::string_view debug_label,
     ReleaseCallback release_callback)
-    : CopyOutputResult(Format::RGBA_TEXTURE, rect, false),
-      texture_result_(mailbox, sync_token, color_space),
+    : CopyOutputSharedImageResult(format,
+                                  rect,
+                                  CreateUnownedSharedImage(format,
+                                                           rect.size(),
+                                                           mailbox,
+                                                           color_space,
+                                                           debug_label),
+                                  std::move(release_callback)) {}
+
+CopyOutputSharedImageResult::CopyOutputSharedImageResult(
+    Format format,
+    const gfx::Rect& rect,
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    ReleaseCallback release_callback)
+    : CopyOutputResult(format, Destination::kSharedImage, rect, false),
+      shared_image_(std::move(shared_image)),
       release_callback_(std::move(release_callback)) {
-  DCHECK_EQ(rect.IsEmpty(), mailbox.IsZero());
-  DCHECK_EQ(!release_callback_, mailbox.IsZero());
-  DCHECK(texture_result_.mailbox.IsZero() ||
-         texture_result_.color_space.IsValid());
+  // check non-null `shared_image_`
+  DCHECK(shared_image_);
+  // If we're constructing empty result, all shared image mailboxes must be
+  // zero. Otherwise, the first mailbox must be non-zero.
+  DCHECK_EQ(rect.IsEmpty(), shared_image_->mailbox().IsZero());
+  // If we're constructing empty result, the callbacks must be empty.
+  // From definition of implication: p => q  <=>  !p || q.
+  DCHECK(!rect.IsEmpty() || release_callback_.is_null());
+  // Color space must be valid for non-empty results.
+  DCHECK(rect.IsEmpty() || shared_image_->color_space().IsValid());
 }
 
-CopyOutputTextureResult::~CopyOutputTextureResult() {
-  if (release_callback_)
+CopyOutputSharedImageResult::~CopyOutputSharedImageResult() {
+  if (release_callback_) {
     std::move(release_callback_).Run(gpu::SyncToken(), false);
+  }
 }
 
-const CopyOutputResult::TextureResult*
-CopyOutputTextureResult::GetTextureResult() const {
-  return &texture_result_;
+scoped_refptr<gpu::ClientSharedImage>
+CopyOutputSharedImageResult::GetSharedImage() {
+  return shared_image_;
 }
 
-ReleaseCallback CopyOutputTextureResult::TakeTextureOwnership() {
-  texture_result_.mailbox = gpu::Mailbox();
-  texture_result_.sync_token = gpu::SyncToken();
-  texture_result_.color_space = gfx::ColorSpace();
+ReleaseCallback CopyOutputSharedImageResult::TakeSharedImageOwnership() {
   return std::move(release_callback_);
 }
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata() = default;
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata(SkBitmap bitmap)
+    : CopyOutputBitmapWithMetadata(std::move(bitmap), TrackedElementRects()) {}
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata(
+    SkBitmap bitmap,
+    TrackedElementRects tracked_element_rects)
+    : bitmap(std::move(bitmap)),
+      tracked_element_rects(std::move(tracked_element_rects)) {}
+
+CopyOutputBitmapWithMetadata::CopyOutputBitmapWithMetadata(
+    const CopyOutputBitmapWithMetadata& other) = default;
+
+CopyOutputBitmapWithMetadata& CopyOutputBitmapWithMetadata::operator=(
+    const CopyOutputBitmapWithMetadata& other) = default;
+
+CopyOutputBitmapWithMetadata::~CopyOutputBitmapWithMetadata() = default;
 
 CopyOutputResult::ScopedSkBitmap::ScopedSkBitmap() = default;
 
@@ -263,6 +373,36 @@ SkBitmap CopyOutputResult::ScopedSkBitmap::GetOutScopedBitmap() const {
     bitmap.readPixels(bitmap_copy.pixmap(), 0, 0);
   }
   return bitmap_copy;
+}
+
+base::expected<CopyOutputBitmapWithMetadata, CopyOutputResult::Error>
+CopyOutputResult::ScopedSkBitmap::GetOutScopedBitmapAndMetadata() const {
+  SkBitmap bitmap = GetOutScopedBitmap();
+  if (bitmap.drawsNothing()) {
+    if (result_) {
+      return base::unexpected<CopyOutputResult::Error>(result_->error());
+    }
+    return base::unexpected<CopyOutputResult::Error>(
+        CopyOutputResult::Error::kUnknown);
+  }
+
+  return CopyOutputBitmapWithMetadata(
+      std::move(bitmap),
+      result_ ? result_->tracked_element_rects_ : TrackedElementRects());
+}
+
+VIZ_COMMON_EXPORT SharedImageFormat
+GetSharedImageFormatFor(CopyOutputResult::Format format) {
+  switch (format) {
+    case CopyOutputResult::Format::RGBA:
+      return SinglePlaneFormat::kRGBA_8888;
+    case CopyOutputResult::Format::RGBAF16:
+      return SinglePlaneFormat::kRGBA_F16;
+    case CopyOutputResult::Format::I420_PLANES:
+      return MultiPlaneFormat::kI420;
+    case CopyOutputResult::Format::NV12:
+      return MultiPlaneFormat::kNV12;
+  }
 }
 
 }  // namespace viz

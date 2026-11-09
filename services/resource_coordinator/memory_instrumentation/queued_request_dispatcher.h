@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,15 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/trace_event/memory_dump_request_args.h"
 #include "services/resource_coordinator/memory_instrumentation/coordinator_impl.h"
 #include "services/resource_coordinator/memory_instrumentation/queued_request.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/perfetto/include/perfetto/ext/trace_processor/importers/memory_tracker/graph.h"
 
 namespace memory_instrumentation {
@@ -28,27 +29,24 @@ class QueuedRequestDispatcher {
       void(bool, uint64_t, memory_instrumentation::mojom::GlobalMemoryDumpPtr)>;
   using ChromeCallback = base::RepeatingCallback<void(
       base::ProcessId,
-      bool,
+      mojom::RequestOutcome,
       uint64_t,
       std::unique_ptr<base::trace_event::ProcessMemoryDump>)>;
-  using OsCallback =
-      base::RepeatingCallback<void(base::ProcessId, bool, OSMemDumpMap)>;
-  using VmRegions =
-      base::flat_map<base::ProcessId,
-                     std::vector<memory_instrumentation::mojom::VmRegionPtr>>;
+  using OsCallback = base::RepeatingCallback<
+      void(base::ProcessId, mojom::RequestOutcome, OSMemDumpMap)>;
 
   struct ClientInfo {
     ClientInfo(mojom::ClientProcess* client,
                base::ProcessId pid,
                mojom::ProcessType process_type,
-               absl::optional<std::string> service_name);
+               std::optional<std::string> service_name);
     ClientInfo(ClientInfo&& other);
     ~ClientInfo();
 
-    mojom::ClientProcess* const client;
+    const raw_ptr<mojom::ClientProcess> client;
     const base::ProcessId pid;
     const mojom::ProcessType process_type;
-    const absl::optional<std::string> service_name;
+    const std::optional<std::string> service_name;
   };
 
   // Sets up the parameters of the queued |request| using |clients| and then
@@ -62,25 +60,14 @@ class QueuedRequestDispatcher {
   // dispatching to the appropriate callback. Also adds to tracing using
   // |tracing_observer| if the |request| requires it.
   static void Finalize(QueuedRequest* request,
-                       TracingObserver* tracing_observer,
-                       bool use_proto_writer);
-
-  static void SetUpAndDispatchVmRegionRequest(
-      QueuedVmRegionRequest* request,
-      const std::vector<ClientInfo>& clients,
-      const std::vector<base::ProcessId>& desired_pids,
-      const OsCallback& os_callback);
-  static VmRegions FinalizeVmRegionRequest(QueuedVmRegionRequest* request);
+                       TracingObserver* tracing_observer);
 
  private:
   static bool AddChromeMemoryDumpToTrace(
       const base::trace_event::MemoryDumpRequestArgs& args,
       base::ProcessId pid,
       const base::trace_event::ProcessMemoryDump& raw_chrome_dump,
-      const perfetto::trace_processor::GlobalNodeGraph& global_graph,
-      const std::map<base::ProcessId, mojom::ProcessType>& pid_to_process_type,
       TracingObserver* tracing_observer,
-      bool use_proto_writer,
       const base::TimeTicks& timestamp);
 };
 

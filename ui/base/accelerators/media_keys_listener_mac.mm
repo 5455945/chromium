@@ -1,17 +1,21 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/accelerators/media_keys_listener.h"
 
-#include <ApplicationServices/ApplicationServices.h>
 #include <Carbon/Carbon.h>
 #import <Cocoa/Cocoa.h>
-#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/hidsystem/IOHIDLib.h>
 #include <IOKit/hidsystem/ev_keymap.h>
 
+#include "base/apple/scoped_cftyperef.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/thread_pool.h"
 #include "ui/base/accelerators/accelerator.h"
 
 namespace ui {
@@ -21,6 +25,10 @@ namespace {
 // The media keys subtype. No official docs found, but widely known.
 // http://lists.apple.com/archives/cocoa-dev/2007/Aug/msg00499.html
 const int kSystemDefinedEventMediaKeysSubtype = 8;
+
+IOHIDAccessType CheckPostEventAccess() {
+  return IOHIDCheckAccess(kIOHIDRequestTypePostEvent);
+}
 
 KeyboardCode MediaKeyCodeToKeyboardCode(int key_code) {
   switch (key_code) {
@@ -39,6 +47,9 @@ KeyboardCode MediaKeyCodeToKeyboardCode(int key_code) {
 class MediaKeysListenerImpl : public MediaKeysListener {
  public:
   MediaKeysListenerImpl(MediaKeysListener::Delegate* delegate, Scope scope);
+
+  MediaKeysListenerImpl(const MediaKeysListenerImpl&) = delete;
+  MediaKeysListenerImpl& operator=(const MediaKeysListenerImpl&) = delete;
 
   ~MediaKeysListenerImpl() override;
 
@@ -59,15 +70,19 @@ class MediaKeysListenerImpl : public MediaKeysListener {
   // Internal methods to create or remove the event tap.
   void StartEventTapIfNecessary();
   void StopEventTapIfNecessary();
+  void ScheduleEventTapPermissionCheck();
+  void OnEventTapPermissionCheckCompleted(IOHIDAccessType access);
 
-  MediaKeysListener::Delegate* delegate_;
+  raw_ptr<MediaKeysListener::Delegate> delegate_;
   const Scope scope_;
   // Event tap for intercepting mac media keys.
-  CFMachPortRef event_tap_ = nullptr;
-  CFRunLoopSourceRef event_tap_source_ = nullptr;
+  base::apple::ScopedCFTypeRef<CFMachPortRef> event_tap_;
+  base::apple::ScopedCFTypeRef<CFRunLoopSourceRef> event_tap_source_;
+  // Throttles permission checks so bursts of input events only keep one
+  // IOHIDCheckAccess() task in flight.
+  bool event_tap_permission_check_pending_ = false;
   base::flat_set<KeyboardCode> key_codes_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaKeysListenerImpl);
+  base::WeakPtrFactory<MediaKeysListenerImpl> weak_factory_{this};
 };
 
 MediaKeysListenerImpl::MediaKeysListenerImpl(
@@ -99,47 +114,81 @@ void MediaKeysListenerImpl::StartEventTapIfNecessary() {
   if (event_tap_) {
     return;
   }
-  DCHECK_EQ(event_tap_, nullptr);
-  DCHECK_EQ(event_tap_source_, nullptr);
+  CHECK(!event_tap_, base::NotFatalUntil::M163);
+  CHECK(!event_tap_source_, base::NotFatalUntil::M163);
 
   // Add an event tap to intercept the system defined media key events.
-  event_tap_ = CGEventTapCreate(
+  event_tap_.reset(CGEventTapCreate(
       kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
-      CGEventMaskBit(NX_SYSDEFINED), EventTapCallback, this);
-  if (event_tap_ == nullptr) {
+      CGEventMaskBit(NX_SYSDEFINED), EventTapCallback, /*userInfo=*/this));
+  if (!event_tap_) {
     LOG(ERROR) << "Error: failed to create event tap.";
     return;
   }
 
-  event_tap_source_ =
-      CFMachPortCreateRunLoopSource(kCFAllocatorSystemDefault, event_tap_, 0);
-  if (event_tap_source_ == nullptr) {
+  event_tap_source_.reset(CFMachPortCreateRunLoopSource(
+      kCFAllocatorDefault, event_tap_.get(), /*order=*/0));
+  if (!event_tap_source_) {
     LOG(ERROR) << "Error: failed to create new run loop source.";
+    event_tap_.reset();
     return;
   }
 
-  CFRunLoopAddSource(CFRunLoopGetCurrent(), event_tap_source_,
+  CFRunLoopAddSource(CFRunLoopGetCurrent(), event_tap_source_.get(),
                      kCFRunLoopCommonModes);
 }
 
 void MediaKeysListenerImpl::StopEventTapIfNecessary() {
+  event_tap_permission_check_pending_ = false;
+  weak_factory_.InvalidateWeakPtrs();
+
   if (!event_tap_) {
     return;
   }
-  CFRunLoopRemoveSource(CFRunLoopGetCurrent(), event_tap_source_,
+  CFRunLoopRemoveSource(CFRunLoopGetCurrent(), event_tap_source_.get(),
                         kCFRunLoopCommonModes);
   // Ensure both event tap and source are initialized.
-  DCHECK_NE(event_tap_, nullptr);
-  DCHECK_NE(event_tap_source_, nullptr);
+  CHECK(event_tap_, base::NotFatalUntil::M163);
+  CHECK(event_tap_source_, base::NotFatalUntil::M163);
 
   // Invalidate the event tap.
-  CFMachPortInvalidate(event_tap_);
-  CFRelease(event_tap_);
-  event_tap_ = nullptr;
+  CFMachPortInvalidate(event_tap_.get());
+  event_tap_.reset();
 
   // Release the event tap source.
-  CFRelease(event_tap_source_);
-  event_tap_source_ = nullptr;
+  event_tap_source_.reset();
+}
+
+void MediaKeysListenerImpl::ScheduleEventTapPermissionCheck() {
+  if (!event_tap_ || event_tap_permission_check_pending_) {
+    return;
+  }
+
+  event_tap_permission_check_pending_ =
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, {base::MayBlock()}, base::BindOnce(&CheckPostEventAccess),
+          base::BindOnce(
+              &MediaKeysListenerImpl::OnEventTapPermissionCheckCompleted,
+              weak_factory_.GetWeakPtr()));
+}
+
+void MediaKeysListenerImpl::OnEventTapPermissionCheckCompleted(
+    IOHIDAccessType access) {
+  event_tap_permission_check_pending_ = false;
+
+  if (!event_tap_) {
+    return;
+  }
+
+  if (access == kIOHIDAccessTypeGranted) {
+    return;
+  }
+
+  LOG(WARNING) << "Accessibility permission unavailable while media key "
+               << "event tap is running, stopping tap. IOHID access="
+               << static_cast<int>(access);
+
+  StopEventTapIfNecessary();
 }
 
 void MediaKeysListenerImpl::OnMediaKeyEvent(KeyboardCode key_code) {
@@ -161,6 +210,12 @@ CGEventRef MediaKeysListenerImpl::EventTapCallback(CGEventTapProxy proxy,
   MediaKeysListenerImpl* shortcut_listener =
       static_cast<MediaKeysListenerImpl*>(refcon);
 
+  // IOHIDCheckAccess() may block while TCC/IOHID state is being updated, so do
+  // the actual permission check on a worker thread and handle the result back
+  // on this sequence. Only keep one in-flight check to avoid queueing work for
+  // bursts of input events.
+  shortcut_listener->ScheduleEventTapPermissionCheck();
+
   const bool is_active = [NSApp isActive];
 
   if (shortcut_listener->scope_ == Scope::kFocused && !is_active) {
@@ -169,7 +224,7 @@ CGEventRef MediaKeysListenerImpl::EventTapCallback(CGEventTapProxy proxy,
 
   // Handle the timeout case by re-enabling the tap.
   if (type == kCGEventTapDisabledByTimeout) {
-    CGEventTapEnable(shortcut_listener->event_tap_, true);
+    CGEventTapEnable(shortcut_listener->event_tap_.get(), true);
     return event;
   }
 
@@ -180,7 +235,7 @@ CGEventRef MediaKeysListenerImpl::EventTapCallback(CGEventTapProxy proxy,
   }
 
   // Ignore events that are not system defined media keys.
-  if (type != NX_SYSDEFINED || [ns_event type] != NSSystemDefined ||
+  if (type != NX_SYSDEFINED || [ns_event type] != NSEventTypeSystemDefined ||
       [ns_event subtype] != kSystemDefinedEventMediaKeysSubtype) {
     return event;
   }

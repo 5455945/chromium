@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,29 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
-#include "base/macros.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
 #include "content/browser/media/audio_muting_session.h"
-#include "content/browser/media/audio_stream_broker.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/audio_stream_broker.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "media/mojo/mojom/audio_output_stream.mojom.h"
+#include "media/mojo/mojom/audio_processing.mojom-forward.h"
 #include "media/mojo/mojom/audio_stream_factory.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/media/renderer_audio_input_stream_factory.mojom.h"
 
 namespace media {
 class AudioParameters;
-class UserInputMonitorBase;
 }
 
 namespace content {
@@ -56,23 +58,28 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
   class CONTENT_EXPORT Core final : public AudioStreamBroker::LoopbackSource {
    public:
     Core(base::WeakPtr<ForwardingAudioStreamFactory> owner,
-         media::UserInputMonitorBase* user_input_monitor,
          std::unique_ptr<AudioStreamBrokerFactory> factory);
+
+    Core(const Core&) = delete;
+    Core& operator=(const Core&) = delete;
+
     ~Core() final;
 
     const base::UnguessableToken& group_id() const { return group_id_; }
 
     base::WeakPtr<ForwardingAudioStreamFactory::Core> AsWeakPtr();
 
-    // TODO(https://crbug.com/787806): Automatically restore streams on audio
+    // TODO(crbug.com/40551225): Automatically restore streams on audio
     // service restart.
     void CreateInputStream(
         int render_process_id,
         int render_frame_id,
+        const base::UnguessableToken& session_id,
         const std::string& device_id,
         const media::AudioParameters& params,
         uint32_t shared_memory_count,
         bool enable_agc,
+        media::mojom::AudioProcessingConfigPtr processing_config,
         mojo::PendingRemote<blink::mojom::RendererAudioInputStreamFactoryClient>
             renderer_factory_client);
 
@@ -83,6 +90,7 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
     void CreateOutputStream(
         int render_process_id,
         int render_frame_id,
+        const GlobalRenderFrameHostToken& main_frame_token,
         const std::string& device_id,
         const media::AudioParameters& params,
         mojo::PendingRemote<media::mojom::AudioOutputStreamProviderClient>
@@ -91,12 +99,16 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
     void CreateLoopbackStream(
         int render_process_id,
         int render_frame_id,
+        const base::UnguessableToken& session_id,
         AudioStreamBroker::LoopbackSource* loopback_source,
         const media::AudioParameters& params,
         uint32_t shared_memory_count,
         bool mute_source,
         mojo::PendingRemote<blink::mojom::RendererAudioInputStreamFactoryClient>
             renderer_factory_client);
+
+    // Closes all active input and loopback streams created for |session_id|.
+    void CloseInputStreamsForSession(const base::UnguessableToken& session_id);
 
     // Sets the muting state for all output streams created through this
     // factory.
@@ -108,13 +120,25 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
     const base::UnguessableToken& GetGroupID() final;  // Actually const.
 
    private:
-    // For CleanupStreamsBelongingTo.
+    // For CleanupOrReparentStreamsBelongingTo.
     friend class ForwardingAudioStreamFactory;
 
+    using InputStreamBrokerMap =
+        base::flat_map<std::unique_ptr<AudioStreamBroker>,
+                       base::UnguessableToken,
+                       base::UniquePtrComparator>;
     using StreamBrokerSet = base::flat_set<std::unique_ptr<AudioStreamBroker>,
                                            base::UniquePtrComparator>;
 
-    void CleanupStreamsBelongingTo(int render_process_id, int render_frame_id);
+    // Cleans up streams belonging to the specified frame. If
+    // `fallback_render_frame_id` is provided, output streams that support
+    // reparenting (such as default-device output streams that may be shared
+    // across same-process frames) are reparented to `*fallback_render_frame_id`
+    // instead of being destroyed.
+    void CleanupOrReparentStreamsBelongingTo(
+        int render_process_id,
+        int render_frame_id,
+        std::optional<int> fallback_render_frame_id = std::nullopt);
 
     void RemoveInput(AudioStreamBroker* handle);
     void RemoveOutput(AudioStreamBroker* handle);
@@ -122,8 +146,6 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
     media::mojom::AudioStreamFactory* GetFactory();
     void ResetRemoteFactoryPtrIfIdle();
     void ResetRemoteFactoryPtr();
-
-    media::UserInputMonitorBase* const user_input_monitor_;
 
     // Used for posting tasks the UI thread to communicate when a loopback
     // stream is started/stopped. Weak since |this| on the IO thread outlives
@@ -145,21 +167,20 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
 
     // Running id used for tracking audible streams. We keep count here to avoid
     // collisions.
-    // TODO(https://crbug.com/830494): Refactor to make this unnecessary and
+    // TODO(crbug.com/40570752): Refactor to make this unnecessary and
     // remove it.
     int stream_id_counter_ = 0;
 
     // Instantiated when |outputs_| should be muted, empty otherwise.
-    absl::optional<AudioMutingSession> muter_;
+    std::optional<AudioMutingSession> muter_;
 
-    StreamBrokerSet inputs_;
+    InputStreamBrokerMap inputs_;
     StreamBrokerSet outputs_;
-    base::flat_set<AudioStreamBroker::LoopbackSink*> loopback_sinks_;
+    base::flat_set<raw_ptr<AudioStreamBroker::LoopbackSink, CtnExperimental>>
+        loopback_sinks_;
 
     base::WeakPtrFactory<ForwardingAudioStreamFactory::Core> weak_ptr_factory_{
         this};
-
-    DISALLOW_COPY_AND_ASSIGN(Core);
   };
 
   // Returns the ForwardingAudioStreamFactory which takes care of stream
@@ -177,8 +198,11 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
   // the streams created with this factory will not be consumed by a renderer.
   ForwardingAudioStreamFactory(
       WebContents* web_contents,
-      media::UserInputMonitorBase* user_input_monitor,
       std::unique_ptr<AudioStreamBrokerFactory> factory);
+
+  ForwardingAudioStreamFactory(const ForwardingAudioStreamFactory&) = delete;
+  ForwardingAudioStreamFactory& operator=(const ForwardingAudioStreamFactory&) =
+      delete;
 
   ~ForwardingAudioStreamFactory() final;
 
@@ -217,8 +241,6 @@ class CONTENT_EXPORT ForwardingAudioStreamFactory final
   base::ScopedClosureRunner capture_handle_;
 
   base::WeakPtrFactory<ForwardingAudioStreamFactory> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ForwardingAudioStreamFactory);
 };
 
 }  // namespace content

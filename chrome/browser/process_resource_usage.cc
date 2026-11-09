@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/common/resource_usage_reporter_type_converters.h"
 
 ProcessResourceUsage::ProcessResourceUsage(
@@ -22,12 +21,12 @@ ProcessResourceUsage::ProcessResourceUsage(
 }
 
 ProcessResourceUsage::~ProcessResourceUsage() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
 }
 
 void ProcessResourceUsage::RunPendingRefreshCallbacks() {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  auto task_runner = base::ThreadTaskRunnerHandle::Get();
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
+  auto task_runner = base::SingleThreadTaskRunner::GetCurrentDefault();
   base::circular_deque<base::OnceClosure> callbacks;
   std::swap(callbacks, refresh_callbacks_);
   for (auto& callback : callbacks)
@@ -35,11 +34,11 @@ void ProcessResourceUsage::RunPendingRefreshCallbacks() {
 }
 
 void ProcessResourceUsage::Refresh(base::OnceClosure callback) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
   if (!service_ || !service_.is_connected()) {
     if (!callback.is_null())
-      base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                    std::move(callback));
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(callback));
     return;
   }
 
@@ -55,28 +54,21 @@ void ProcessResourceUsage::Refresh(base::OnceClosure callback) {
 
 void ProcessResourceUsage::OnRefreshDone(
     content::mojom::ResourceUsageDataPtr data) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
   update_in_progress_ = false;
   stats_ = std::move(data);
   RunPendingRefreshCallbacks();
 }
 
-bool ProcessResourceUsage::ReportsV8MemoryStats() const {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  if (stats_)
-    return stats_->reports_v8_stats;
-  return false;
-}
-
 size_t ProcessResourceUsage::GetV8MemoryAllocated() const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
   if (stats_ && stats_->reports_v8_stats)
     return stats_->v8_bytes_allocated;
   return 0;
 }
 
 size_t ProcessResourceUsage::GetV8MemoryUsed() const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
   if (stats_ && stats_->reports_v8_stats)
     return stats_->v8_bytes_used;
   return 0;
@@ -84,8 +76,24 @@ size_t ProcessResourceUsage::GetV8MemoryUsed() const {
 
 blink::WebCacheResourceTypeStats
 ProcessResourceUsage::GetBlinkMemoryCacheStats() const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
   if (stats_ && stats_->web_cache_stats)
     return stats_->web_cache_stats->To<blink::WebCacheResourceTypeStats>();
   return {};
+}
+
+size_t ProcessResourceUsage::GetCppGCMemoryAllocated() const {
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
+  if (stats_ && stats_->reports_cppgc_stats) {
+    return stats_->cppgc_bytes_allocated;
+  }
+  return 0;
+}
+
+size_t ProcessResourceUsage::GetCppGCMemoryUsed() const {
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M162);
+  if (stats_ && stats_->reports_cppgc_stats) {
+    return stats_->cppgc_bytes_used;
+  }
+  return 0;
 }

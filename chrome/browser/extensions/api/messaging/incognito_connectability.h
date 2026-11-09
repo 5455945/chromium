@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,14 @@
 
 #include <set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -55,17 +60,21 @@ class IncognitoConnectability : public BrowserContextKeyedAPI {
     int last_checked_invocation_count_;
   };
 
-  // Returns the IncognitoConnectability object for |context|. |context| must
+  explicit IncognitoConnectability(content::BrowserContext* context);
+  ~IncognitoConnectability() override;
+  // Returns the IncognitoConnectability object for `context`. `context` must
   // be off-the-record.
   static IncognitoConnectability* Get(content::BrowserContext* context);
 
-  // Passes true to the provided callback if |url| is allowed to connect from
+  // Passes true to the provided callback if `url` is allowed to connect from
   // this profile, false otherwise. If unknown, the user will be prompted before
   // an answer is returned.
   void Query(const Extension* extension,
              content::WebContents* web_contents,
              const GURL& url,
              base::OnceCallback<void(bool)> callback);
+
+  static void EnsureFactoryBuilt();
 
  private:
   struct TabContext {
@@ -79,31 +88,37 @@ class IncognitoConnectability : public BrowserContextKeyedAPI {
 
     // The infobar being shown in a given tab. The
     // infobars::ContentInfoBarManager maintains ownership of this object. This
-    // struct must always be destroyed before the infobar it tracks.
-    infobars::InfoBar* infobar;
+    // struct must always be destroyed before the infobar it tracks. Null if no
+    // infobar is on screen.
+    raw_ptr<infobars::InfoBar> infobar = nullptr;
+    // Whether this tab has an unanswered prompt. Can be true while `infobar`
+    // is null, e.g. when the infobar could not be shown and the unanswered
+    // result is delivered asynchronously.
+    bool prompt_pending = false;
+    // Whether `infobar` was created by infobars::BrowserInfoBarManager rather
+    // than IncognitoConnectabilityInfoBarDelegate. Their delegates are
+    // unrelated types and are taken down differently.
+    bool is_migrated = false;
     // Connectability queries outstanding on this infobar.
     std::vector<base::OnceCallback<void(bool)>> callbacks;
   };
 
   friend class BrowserContextKeyedAPIFactory<IncognitoConnectability>;
 
-  explicit IncognitoConnectability(content::BrowserContext* context);
-  ~IncognitoConnectability() override;
-
-  using ExtensionToOriginsMap = std::map<std::string, std::set<GURL>>;
-  using ExtensionOriginPair = std::pair<std::string, GURL>;
+  using ExtensionToOriginsMap = std::map<ExtensionId, std::set<GURL>>;
+  using ExtensionOriginPair = std::pair<ExtensionId, GURL>;
   using PendingOrigin = std::map<infobars::ContentInfoBarManager*, TabContext>;
   using PendingOriginMap = std::map<ExtensionOriginPair, PendingOrigin>;
 
   // Called with the user's selection from the infobar.
   // |response == INTERACTIVE| indicates that the user closed the infobar
   // without selecting allow or deny.
-  void OnInteractiveResponse(const std::string& extension_id,
+  void OnInteractiveResponse(const ExtensionId& extension_id,
                              const GURL& origin,
                              infobars::ContentInfoBarManager* infobar_manager,
                              ScopedAlertTracker::Mode response);
 
-  // Returns true if the (|extension|, |origin|) pair appears in the map.
+  // Returns true if the (`extension`, `origin`) pair appears in the map.
   bool IsInMap(const Extension* extension,
                const GURL& origin,
                const ExtensionToOriginsMap& map);

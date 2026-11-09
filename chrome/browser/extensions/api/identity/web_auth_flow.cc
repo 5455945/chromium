@@ -1,219 +1,426 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/identity/web_auth_flow.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "base/base64.h"
-#include "base/location.h"
-#include "base/notreached.h"
-#include "base/single_thread_task_runner.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/extensions/component_loader.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/api/identity/web_auth_flow_info_bar_delegate.h"
+#include "chrome/browser/extensions/browser_window_util.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
+#include "chrome/browser/infobars/infobar_spec.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/extensions/api/identity_private.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/grit/browser_resources.h"
-#include "components/guest_view/browser/guest_view_base.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_source.h"
-#include "content/public/browser/notification_types.h"
-#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "crypto/random.h"
-#include "extensions/browser/app_window/app_window.h"
-#include "extensions/browser/event_router.h"
-#include "extensions/browser/extension_system.h"
-#include "extensions/browser/guest_view/web_view/web_view_guest.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "extensions/browser/ui_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "ui/base/base_window.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 #include "url/url_constants.h"
 
-using content::RenderViewHost;
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 using content::WebContents;
 using content::WebContentsObserver;
-using guest_view::GuestViewBase;
 
 namespace extensions {
 
-namespace {
-std::string GetPartitionName(WebAuthFlow::Partition partition) {
-  switch (partition) {
-    case WebAuthFlow::LAUNCH_WEB_AUTH_FLOW:
-      return "launchWebAuthFlow";
-    case WebAuthFlow::GET_AUTH_TOKEN:
-      return "getAuthFlow";
-  }
-
-  NOTREACHED() << "Unexpected partition value " << partition;
-  return std::string();
-}
-}  // namespace
-
-namespace identity_private = api::identity_private;
-
-WebAuthFlow::WebAuthFlow(Delegate* delegate,
-                         Profile* profile,
-                         const GURL& provider_url,
-                         Mode mode,
-                         Partition partition)
+WebAuthFlow::WebAuthFlow(
+    Delegate* delegate,
+    Profile* profile,
+    const GURL& provider_url,
+    Mode mode,
+    bool user_gesture,
+    std::optional<url::Origin> initiator_origin,
+    AbortOnLoad abort_on_load_for_non_interactive,
+    std::optional<base::TimeDelta> timeout_for_non_interactive,
+    std::optional<gfx::Rect> popup_bounds)
     : delegate_(delegate),
       profile_(profile),
       provider_url_(provider_url),
       mode_(mode),
-      partition_(partition),
-      embedded_window_created_(false) {
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("identity", "WebAuthFlow", this);
+      user_gesture_(user_gesture),
+      initiator_origin_(std::move(initiator_origin)),
+      abort_on_load_for_non_interactive_(abort_on_load_for_non_interactive),
+      timeout_for_non_interactive_(timeout_for_non_interactive),
+      non_interactive_timeout_timer_(std::make_unique<base::OneShotTimer>()),
+      popup_bounds_(popup_bounds) {
+  TRACE_EVENT_BEGIN(
+      "identity", "WebAuthFlow",
+      perfetto::NamedTrack::FromPointer("extensions::WebAuthFlow", this));
+  if (timeout_for_non_interactive_) {
+    CHECK_GE(*timeout_for_non_interactive_, base::TimeDelta(),
+             base::NotFatalUntil::M161);
+    CHECK_LE(*timeout_for_non_interactive_, base::Minutes(1),
+             base::NotFatalUntil::M161);
+  }
+
+  // profile_ can be null in unit tests.
+  if (profile_ != nullptr) {
+    profile_observation_.Observe(profile_);
+  }
 }
 
 WebAuthFlow::~WebAuthFlow() {
-  DCHECK(!delegate_);
+  CHECK(!delegate_, base::NotFatalUntil::M161);
+  BrowserWindowInterface* popup_browser =
+      web_contents()
+          ? browser_window_util::GetBrowserForTabContents(*web_contents())
+          : nullptr;
+  if (popup_browser) {
+    popup_browser->GetWindow()->Close();
+  }
+
+  CloseInfoBar();
 
   // Stop listening to notifications first since some of the code
   // below may generate notifications.
   WebContentsObserver::Observe(nullptr);
 
-  if (!app_window_key_.empty()) {
-    AppWindowRegistry::Get(profile_)->RemoveObserver(this);
+  TRACE_EVENT_END("identity", perfetto::NamedTrack::FromPointer(
+                                  "extensions::WebAuthFlow", this));
+}
 
-    if (app_window_ && app_window_->web_contents())
-      app_window_->web_contents()->Close();
-  }
-  TRACE_EVENT_NESTABLE_ASYNC_END0("identity", "WebAuthFlow", this);
+void WebAuthFlow::SetClockForTesting(
+    const base::TickClock* tick_clock,
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
+  non_interactive_timeout_timer_ =
+      std::make_unique<base::OneShotTimer>(tick_clock);
+  non_interactive_timeout_timer_->SetTaskRunner(task_runner);
 }
 
 void WebAuthFlow::Start() {
-  AppWindowRegistry::Get(profile_)->AddObserver(this);
+  CHECK(profile_, base::NotFatalUntil::M161);
+  CHECK(!profile_->IsOffTheRecord(), base::NotFatalUntil::M161);
+  CHECK(!profile_->ShutdownStarted(), base::NotFatalUntil::M161);
 
-  // Attach a random ID string to the window so we can recognize it
-  // in OnAppWindowAdded.
-  std::string random_bytes;
-  crypto::RandBytes(base::WriteInto(&random_bytes, 33), 32);
-  base::Base64Encode(random_bytes, &app_window_key_);
+  content::WebContents::CreateParams params(profile_);
+  web_contents_ = content::WebContents::Create(params);
+  WebContentsObserver::Observe(web_contents_.get());
 
-  // identityPrivate.onWebFlowRequest(app_window_key, provider_url_, mode_)
-  std::unique_ptr<base::ListValue> args(new base::ListValue());
-  args->AppendString(app_window_key_);
-  args->AppendString(provider_url_.spec());
-  if (mode_ == WebAuthFlow::INTERACTIVE)
-    args->AppendString("interactive");
-  else
-    args->AppendString("silent");
-  args->AppendString(GetPartitionName(partition_));
+  content::NavigationController::LoadURLParams load_params(provider_url_);
 
-  auto event =
-      std::make_unique<Event>(events::IDENTITY_PRIVATE_ON_WEB_FLOW_REQUEST,
-                              identity_private::OnWebFlowRequest::kEventName,
-                              std::move(*args).TakeList(), profile_);
-  ExtensionSystem* system = ExtensionSystem::Get(profile_);
-
-  extensions::ComponentLoader* component_loader =
-      system->extension_service()->component_loader();
-  if (!component_loader->Exists(extension_misc::kIdentityApiUiAppId)) {
-    component_loader->Add(
-        IDR_IDENTITY_API_SCOPE_APPROVAL_MANIFEST,
-        base::FilePath(FILE_PATH_LITERAL("identity_scope_approval_dialog")));
+  if (initiator_origin_) {
+    // `provider_url_` was supplied by an extension, so the navigation must be
+    // attributed to it. Otherwise the network stack treats it as a trusted
+    // top-level navigation initiated by the user, see
+    // https://crbug.com/523264945.
+    load_params.is_renderer_initiated = true;
+    load_params.initiator_origin = initiator_origin_;
+    // `source_site_instance` needs to be set so that a renderer process
+    // compatible with `initiator_origin` is picked by Site Isolation.
+    load_params.source_site_instance = content::SiteInstance::CreateForURL(
+        profile_, initiator_origin_->GetURL());
   }
 
-  EventRouter::Get(profile_)->DispatchEventWithLazyListener(
-      extension_misc::kIdentityApiUiAppId, std::move(event));
+  web_contents_->GetController().LoadURLWithParams(load_params);
+
+  MaybeStartTimeout();
 }
 
 void WebAuthFlow::DetachDelegateAndDelete() {
   delegate_ = nullptr;
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
-}
 
-content::StoragePartition* WebAuthFlow::GetGuestPartition() {
-  return profile_->GetStoragePartition(
-      GetWebViewPartitionConfig(partition_, profile_));
-}
-
-const std::string& WebAuthFlow::GetAppWindowKey() const {
-  return app_window_key_;
+  // WebAuthFlow must be destroyed asynchronously to avoid reentrancy issues.
+  //
+  // WebAuthFlow observes WebContents and notifies its delegate from within
+  // WebContentsObserver callbacks. The delegate may call
+  // DetachDelegateAndDelete() in response.
+  //
+  // If WebAuthFlow is destroyed synchronously during such a callback, it would
+  // synchronously destroy its owned WebContents. However, WebContents cannot be
+  // destroyed while it's in the middle of notifying observers — doing so
+  // triggers a CHECK().
+  //
+  // Therefore, destruction of WebAuthFlow must be deferred to avoid violating
+  // this constraint. If the Profile is destroyed before the async destruction
+  // runs, WebAuthFlow will be notified via OnProfileWillBeDestroyed, and the
+  // WebContents will be explicitly destroyed at that point, ensuring they do
+  // not outlive the Profile.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
+                                                                this);
 }
 
 // static
-content::StoragePartitionConfig WebAuthFlow::GetWebViewPartitionConfig(
-    Partition partition,
-    content::BrowserContext* browser_context) {
-  // This has to mirror the logic in WebViewGuest::CreateWebContents for
-  // creating the correct StoragePartitionConfig.
-  auto result = content::StoragePartitionConfig::Create(
-      browser_context, extension_misc::kIdentityApiUiAppId,
-      GetPartitionName(partition),
-      /*in_memory=*/true);
-  result.set_fallback_to_partition_domain_for_blob_urls(
-      browser_context->IsOffTheRecord()
-          ? content::StoragePartitionConfig::FallbackMode::
-                kFallbackPartitionInMemory
-          : content::StoragePartitionConfig::FallbackMode::
-                kFallbackPartitionOnDisk);
-  return result;
+void WebAuthFlow::RegisterInfoBar(
+    infobars::BrowserInfoBarManager& infobar_manager) {
+  auto spec =
+      infobars::InfoBarSpec::Builder(
+          infobars::InfoBarDelegate::EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE)
+          .SetMessageTextTemplate(l10n_util::GetStringUTF16(
+              IDS_EXTENSION_LAUNCH_WEB_AUTH_FLOW_TAB_INFO_BAR_TEXT))
+          .SetScope(infobars::InfoBarScope::kTab)
+          .SetExpireOnNavigation(false)
+          .Build();
+  infobar_manager.Register(std::move(spec));
 }
 
-void WebAuthFlow::OnAppWindowAdded(AppWindow* app_window) {
-  if (app_window->window_key() == app_window_key_ &&
-      app_window->extension_id() == extension_misc::kIdentityApiUiAppId) {
-    app_window_ = app_window;
-    WebContentsObserver::Observe(app_window->web_contents());
+void WebAuthFlow::DisplayInfoBar() {
+  CHECK(web_contents(), base::NotFatalUntil::M161);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::
+              EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE)) {
+    auto* browser_infobar_manager =
+        infobars::BrowserInfoBarManager::From(g_browser_process);
+    CHECK(browser_infobar_manager);
+    auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents());
+    if (tab) {
+      infobars::InfoBarShowParams params;
+      params.substitutions = {MessageSubstitution(
+          ui_util::GetFixupExtensionNameForUIDisplay(
+              info_bar_parameters_.extension_display_name),
+          /*is_link=*/false, /*accessible_name=*/std::nullopt)};
+      browser_infobar_manager->Show(
+          tab,
+          infobars::InfoBarDelegate::EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE,
+          std::move(params));
+    }
+    return;
+  }
+#endif
+
+  info_bar_delegate_ = WebAuthFlowInfoBarDelegate::Create(
+      web_contents(), info_bar_parameters_.extension_display_name);
+}
+
+void WebAuthFlow::CloseInfoBar() {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::
+              EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE)) {
+    if (web_contents()) {
+      auto* browser_infobar_manager =
+          infobars::BrowserInfoBarManager::From(g_browser_process);
+      CHECK(browser_infobar_manager);
+      browser_infobar_manager->Hide(
+          web_contents(),
+          infobars::InfoBarDelegate::EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE);
+    }
+    return;
+  }
+#endif
+
+  if (info_bar_delegate_) {
+    info_bar_delegate_->CloseInfoBar();
   }
 }
 
-void WebAuthFlow::OnAppWindowRemoved(AppWindow* app_window) {
-  if (app_window->window_key() == app_window_key_ &&
-      app_window->extension_id() == extension_misc::kIdentityApiUiAppId) {
-    app_window_ = nullptr;
+#if BUILDFLAG(IS_ANDROID)
+void WebAuthFlow::OnBrowserWindowInterfaceInitialized(
+    BrowserWindowInterface* browser) {
+  window_creation_pending_ = false;
+  if (!browser) {
+    if (delegate_) {
+      std::exchange(delegate_, nullptr)
+          ->OnAuthFlowFailure(WebAuthFlow::Failure::CANNOT_CREATE_WINDOW);
+    }
+    return;
+  }
+
+  if (popup_displayed_callback_for_testing_) {
+    std::move(popup_displayed_callback_for_testing_).Run();
+  }
+}
+
+void WebAuthFlow::CreatePopupWindow() {
+  if (!delegate_ || profile_->ShutdownStarted()) {
+    // The flow was abandoned while the launch was queued. Destroy the
+    // WebContents here, outside any observer notification.
     WebContentsObserver::Observe(nullptr);
-
-    if (delegate_)
-      delegate_->OnAuthFlowFailure(WebAuthFlow::WINDOW_CLOSED);
+    web_contents_.reset();
+    return;
   }
+  BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_POPUP,
+                                   *profile_, user_gesture_);
+  if (popup_bounds_.has_value()) {
+    params.initial_bounds = popup_bounds_.value();
+  }
+  params.web_contents = std::move(web_contents_);
+  CreateBrowserWindow(
+      std::move(params),
+      base::BindOnce(&WebAuthFlow::OnBrowserWindowInterfaceInitialized,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void WebAuthFlow::SetPopupDisplayedCallbackForTesting(
+    base::OnceClosure callback) {
+  popup_displayed_callback_for_testing_ = std::move(callback);
+}
+#endif
+
+bool WebAuthFlow::DisplayAuthPageInPopupWindow() {
+  if (GetBrowserWindowCreationStatusForProfile(*profile_) !=
+      BrowserWindowInterface::CreationStatus::kOk) {
+    return false;
+  }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  BrowserWindowCreateParams browser_params(BrowserWindowInterface::TYPE_POPUP,
+                                           profile_, user_gesture_);
+  browser_params.omit_from_session_restore = true;
+  browser_params.should_trigger_session_restore = false;
+  if (popup_bounds_.has_value()) {
+    browser_params.initial_bounds = popup_bounds_.value();
+  }
+
+  BrowserWindowInterface* browser =
+      CreateBrowserWindow(std::move(browser_params));
+  browser->GetTabStripModel()->AddWebContents(
+      std::move(web_contents_), /*index=*/0,
+      ui::PageTransition::PAGE_TRANSITION_AUTO_TOPLEVEL,
+      AddTabTypes::ADD_ACTIVE);
+
+  browser->GetWindow()->Show();
+#else
+  static_assert(BUILDFLAG(IS_ANDROID));
+  // Post the launch: Java destroys the WebContents synchronously on failure,
+  // which must not happen inside the DidStopLoading notification that got us
+  // here.
+  window_creation_pending_ = true;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&WebAuthFlow::CreatePopupWindow,
+                                weak_factory_.GetWeakPtr()));
+#endif
+
+  return true;
 }
 
 void WebAuthFlow::BeforeUrlLoaded(const GURL& url) {
-  if (delegate_ && embedded_window_created_)
+  if (delegate_) {
     delegate_->OnAuthFlowURLChange(url);
+  }
 }
 
 void WebAuthFlow::AfterUrlLoaded() {
-  if (delegate_ && embedded_window_created_ && mode_ == WebAuthFlow::SILENT)
-    delegate_->OnAuthFlowFailure(WebAuthFlow::INTERACTION_REQUIRED);
-}
-
-void WebAuthFlow::InnerWebContentsCreated(
-    content::WebContents* inner_web_contents) {
-  DCHECK(app_window_);
-
-  if (!delegate_ || embedded_window_created_)
+  CHECK(profile_);
+  if (profile_->ShutdownStarted()) {
+    // Don't process further if the profile is being deleted. The pending
+    // extension functions will be aborted during KeyedService shutdown.
     return;
+  }
 
-  // Switch from watching the app window to the guest inside it.
-  embedded_window_created_ = true;
-  WebContentsObserver::Observe(inner_web_contents);
+  initial_url_loaded_ = true;
+  if (delegate_ && mode_ == WebAuthFlow::SILENT) {
+    if (abort_on_load_for_non_interactive_ == AbortOnLoad::kYes) {
+      non_interactive_timeout_timer_->Stop();
+      delegate_->OnAuthFlowFailure(WebAuthFlow::INTERACTION_REQUIRED);
+    } else {
+      // Wait for timeout.
+    }
+    return;
+  }
+
+#if BUILDFLAG(IS_ANDROID)
+  if (window_creation_pending_) {
+    // The popup launch posted by a previous load has not run yet.
+    return;
+  }
+#endif
+
+  // If `web_contents_` is nullptr, this means that the interactive tab has
+  // already been opened once.
+  if (delegate_ && web_contents_ && mode_ == WebAuthFlow::INTERACTIVE) {
+    bool is_auth_page_displayed = DisplayAuthPageInPopupWindow();
+    if (!is_auth_page_displayed) {
+      delegate_->OnAuthFlowFailure(WebAuthFlow::Failure::CANNOT_CREATE_WINDOW);
+      return;
+    }
+
+    if (info_bar_parameters_.should_show) {
+      DisplayInfoBar();
+    }
+  }
 }
 
-void WebAuthFlow::RenderProcessGone(base::TerminationStatus status) {
-  if (delegate_)
+void WebAuthFlow::MaybeStartTimeout() {
+  if (mode_ != WebAuthFlow::SILENT) {
+    // Only applies to non-interactive flows.
+    return;
+  }
+  if (abort_on_load_for_non_interactive_ == AbortOnLoad::kYes &&
+      !timeout_for_non_interactive_) {
+    // Preserve previous behaviour: no timeout if aborting on load and timeout
+    // value is not specified.
+    return;
+  }
+  // `base::Unretained(this)` is safe because `this` owns
+  // `non_interactive_timeout_timer_`.
+  non_interactive_timeout_timer_->Start(
+      FROM_HERE,
+      timeout_for_non_interactive_.value_or(kNonInteractiveMaxTimeout),
+      base::BindOnce(&WebAuthFlow::OnTimeout, base::Unretained(this)));
+}
+
+void WebAuthFlow::OnTimeout() {
+  if (delegate_) {
+    delegate_->OnAuthFlowFailure(initial_url_loaded_
+                                     ? WebAuthFlow::INTERACTION_REQUIRED
+                                     : WebAuthFlow::TIMED_OUT);
+  }
+}
+
+void WebAuthFlow::WebContentsDestroyed() {
+  WebContentsObserver::Observe(nullptr);
+#if BUILDFLAG(IS_ANDROID)
+  if (window_creation_pending_) {
+    window_creation_pending_ = false;
+    // Java destroys the WebContents before calling back with nullptr; clear
+    // the delegate so the failure is reported once.
+    if (delegate_) {
+      std::exchange(delegate_, nullptr)
+          ->OnAuthFlowFailure(WebAuthFlow::Failure::CANNOT_CREATE_WINDOW);
+    }
+    return;
+  }
+#endif
+  if (delegate_) {
     delegate_->OnAuthFlowFailure(WebAuthFlow::WINDOW_CLOSED);
+  }
 }
 
 void WebAuthFlow::TitleWasSet(content::NavigationEntry* entry) {
-  if (delegate_)
+  if (delegate_) {
     delegate_->OnAuthFlowTitleChange(base::UTF16ToUTF8(entry->GetTitle()));
+  }
 }
 
 void WebAuthFlow::DidStopLoading() {
@@ -222,28 +429,37 @@ void WebAuthFlow::DidStopLoading() {
 
 void WebAuthFlow::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (navigation_handle->IsInPrimaryMainFrame())
+  if (navigation_handle->IsInPrimaryMainFrame()) {
     BeforeUrlLoaded(navigation_handle->GetURL());
+  }
 }
 
 void WebAuthFlow::DidRedirectNavigation(
     content::NavigationHandle* navigation_handle) {
-  BeforeUrlLoaded(navigation_handle->GetURL());
+  if (navigation_handle->IsInPrimaryMainFrame()) {
+    BeforeUrlLoaded(navigation_handle->GetURL());
+  }
 }
 
 void WebAuthFlow::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
+  CHECK(profile_);
+  if (profile_->ShutdownStarted()) {
+    // Don't process further if the profile is being deleted. The pending
+    // extension functions will be aborted during KeyedService shutdown.
+    return;
+  }
+
   // Websites may create and remove <iframe> during the auth flow. In
   // particular, to integrate CAPTCHA tests. Chrome shouldn't abort the auth
-  // flow if a navigation failed in a sub-frame. https://crbug.com/1049565.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (!navigation_handle->IsInPrimaryMainFrame())
+  // flow if a navigation failed in a sub-frame. https://crbug.com/40672617.
+  if (!navigation_handle->IsInPrimaryMainFrame()) {
     return;
+  }
+
+  if (delegate_) {
+    delegate_->OnNavigationFinished(navigation_handle);
+  }
 
   bool failed = false;
   if (navigation_handle->GetNetErrorCode() != net::OK) {
@@ -263,8 +479,8 @@ void WebAuthFlow::DidFinishNavigation(
       // then the Identity Scope Approval Dialog extension fails to load it.
       // Failing to load |about:blank| must not be treated as a failure of
       // the web auth flow.
-      DCHECK_EQ(net::ERR_UNKNOWN_URL_SCHEME,
-                navigation_handle->GetNetErrorCode());
+      CHECK_EQ(net::ERR_UNKNOWN_URL_SCHEME,
+               navigation_handle->GetNetErrorCode(), base::NotFatalUntil::M161);
     } else if (navigation_handle->GetResponseHeaders() &&
                navigation_handle->GetResponseHeaders()->response_code() ==
                    net::HTTP_NO_CONTENT) {
@@ -274,20 +490,53 @@ void WebAuthFlow::DidFinishNavigation(
       // response headers.
     } else {
       failed = true;
-      TRACE_EVENT_NESTABLE_ASYNC_INSTANT1(
-          "identity", "DidFinishNavigationFailure", this, "error_code",
-          navigation_handle->GetNetErrorCode());
+      TRACE_EVENT_INSTANT(
+          "identity", "DidFinishNavigationFailure",
+          perfetto::NamedTrack::FromPointer("extensions::WebAuthFlow", this),
+          "error_code", navigation_handle->GetNetErrorCode());
     }
   } else if (navigation_handle->GetResponseHeaders() &&
              navigation_handle->GetResponseHeaders()->response_code() >= 400) {
     failed = true;
-    TRACE_EVENT_NESTABLE_ASYNC_INSTANT1(
-        "identity", "DidFinishNavigationFailure", this, "response_code",
+    TRACE_EVENT_INSTANT(
+        "identity", "DidFinishNavigationFailure",
+        perfetto::NamedTrack::FromPointer("extensions::WebAuthFlow", this),
+        "response_code",
         navigation_handle->GetResponseHeaders()->response_code());
   }
 
-  if (failed && delegate_)
+  if (failed && delegate_) {
     delegate_->OnAuthFlowFailure(LOAD_FAILED);
+  }
+}
+
+void WebAuthFlow::OnProfileWillBeDestroyed(Profile* profile) {
+  CHECK_EQ(profile, profile_);
+  profile_observation_.Reset();
+
+  // Null out the delegate early so that we do not call into it while
+  // WebContents are being destroyed. It would be cleaner to send a "profile
+  // destroyed" notification to the delegate, but all the current delegates
+  // already observe Profile destruction, so we can just be silent here.
+  delegate_ = nullptr;
+
+  BrowserWindowInterface* popup_browser =
+      web_contents()
+          ? browser_window_util::GetBrowserForTabContents(*web_contents())
+          : nullptr;
+  if (popup_browser) {
+    popup_browser->GetWindow()->Close();
+  }
+
+  WebContentsObserver::Observe(nullptr);
+  web_contents_.reset();
+  profile_ = nullptr;
+}
+
+void WebAuthFlow::SetShouldShowInfoBar(
+    const std::string& extension_display_name) {
+  info_bar_parameters_.should_show = true;
+  info_bar_parameters_.extension_display_name = extension_display_name;
 }
 
 }  // namespace extensions

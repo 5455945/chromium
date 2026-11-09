@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,61 @@
 
 #include <sstream>
 
+#include "base/check_op.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_latency.h"
+#include "media/base/channel_layout.h"
 #include "media/base/limits.h"
 
 namespace media {
+
+AudioOutputBufferParametersHelper::AudioOutputBufferParametersHelper() =
+    default;
+AudioOutputBufferParametersHelper::~AudioOutputBufferParametersHelper() =
+    default;
+AudioGlitchInfo
+AudioOutputBufferParametersHelper::GetGlitchIncrementSinceLastCall(
+    AudioOutputBufferParameters& params) {
+  base::TimeDelta current_glitch_duration = base::Microseconds(
+      std::atomic_ref<int64_t>(params.cumulative_glitch_duration_us)
+          .load(std::memory_order_relaxed));
+  uint64_t current_glitch_count =
+      std::atomic_ref<uint64_t>(params.cumulative_glitch_count)
+          .load(std::memory_order_relaxed);
+
+  DCHECK_GE(current_glitch_duration, previous_glitch_duration_);
+  DCHECK_GE(current_glitch_count, previous_glitch_count_);
+
+  media::AudioGlitchInfo glitch_info{
+      .duration = current_glitch_duration - previous_glitch_duration_,
+      .count = base::saturated_cast<uint32_t>(current_glitch_count -
+                                              previous_glitch_count_)};
+  previous_glitch_duration_ = current_glitch_duration;
+  previous_glitch_count_ = current_glitch_count;
+  return glitch_info;
+}
+
+// static
+void AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(
+    AudioOutputBufferParameters& params,
+    AudioGlitchInfo glitch_info) {
+  std::atomic_ref<int64_t>(params.cumulative_glitch_duration_us)
+      .fetch_add(glitch_info.duration.InMicroseconds(),
+                 std::memory_order_relaxed);
+  std::atomic_ref<uint64_t>(params.cumulative_glitch_count)
+      .fetch_add(glitch_info.count, std::memory_order_relaxed);
+}
+
+static_assert(AudioBus::kChannelAlignment == kParametersAlignment,
+              "Audio buffer parameters struct alignment not same as AudioBus");
+static_assert(sizeof(AudioInputBufferParameters) %
+                      AudioBus::kChannelAlignment ==
+                  0,
+              "AudioInputBufferParameters not aligned");
+static_assert(sizeof(AudioOutputBufferParameters) %
+                      AudioBus::kChannelAlignment ==
+                  0,
+              "AudioOutputBufferParameters not aligned");
 
 const char* FormatToString(AudioParameters::Format format) {
   switch (format) {
@@ -20,10 +72,19 @@ const char* FormatToString(AudioParameters::Format format) {
       return "BITSTREAM_AC3";
     case AudioParameters::AUDIO_BITSTREAM_EAC3:
       return "BITSTREAM_EAC3";
+    case AudioParameters::AUDIO_BITSTREAM_DTS:
+      return "BITSTREAM_DTS";
+    case AudioParameters::AUDIO_BITSTREAM_DTS_HD:
+      return "BITSTREAM_DTS_HD";
+    case AudioParameters::AUDIO_BITSTREAM_DTSX_P2:
+      return "BITSTREAM_DTSX_P2";
+    case AudioParameters::AUDIO_BITSTREAM_IEC61937:
+      return "BITSTREAM_IEC61937";
+    case AudioParameters::AUDIO_BITSTREAM_DTS_HD_MA:
+      return "BITSTREAM_DTS_HD_MA";
     case AudioParameters::AUDIO_FAKE:
       return "FAKE";
   }
-  return "INVALID";
 }
 
 base::CheckedNumeric<uint32_t> ComputeAudioInputBufferSizeChecked(
@@ -72,26 +133,116 @@ uint32_t ComputeAudioOutputBufferSize(int channels, int frames) {
   return result.ValueOrDie();
 }
 
+static auto FuchsiaRenderUsageToString(int usage) {
+  switch (usage) {
+    case AudioParameters::FUCHSIA_RENDER_USAGE_UNKNOWN:
+      return "FUCHSIA_RENDER_USAGE_UNKNOWN";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND:
+      return "FUCHSIA_RENDER_USAGE_BACKGROUND";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_MEDIA:
+      return "FUCHSIA_RENDER_USAGE_MEDIA";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION:
+      return "FUCHSIA_RENDER_USAGE_INTERRUPTION";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_SYSTEM_AGENT:
+      return "FUCHSIA_RENDER_USAGE_SYSTEM_AGENT";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION:
+      return "FUCHSIA_RENDER_USAGE_COMMUNICATION";
+    case AudioParameters::FUCHSIA_RENDER_USAGE_ACCESSIBILITY:
+      return "FUCHSIA_RENDER_USAGE_ACCESSIBILITY";
+    default:
+      return "FUCHSIA_RENDER_USAGE_INVALID";
+  }
+}
+
+// static
+std::string AudioParameters::EffectsMaskToString(int mask) {
+  if (mask == AudioParameters::NO_EFFECTS) {
+    return "NONE";
+  }
+
+  std::vector<std::string> effects;
+  if (mask & AudioParameters::ECHO_CANCELLER) {
+    effects.push_back("ECHO_CANCELLER");
+  }
+  if (mask & AudioParameters::DUCKING) {
+    effects.push_back("DUCKING");
+  }
+  if (mask & AudioParameters::HOTWORD) {
+    effects.push_back("HOTWORD");
+  }
+  if (mask & AudioParameters::NOISE_SUPPRESSION) {
+    effects.push_back("NOISE_SUPPRESSION");
+  }
+  if (mask & AudioParameters::AUTOMATIC_GAIN_CONTROL) {
+    effects.push_back("AUTOMATIC_GAIN_CONTROL");
+  }
+  if (mask & AudioParameters::MULTIZONE) {
+    effects.push_back("MULTIZONE");
+  }
+  if (mask & AudioParameters::AUDIO_PREFETCH) {
+    effects.push_back("AUDIO_PREFETCH");
+  }
+  if (mask & AudioParameters::ALLOW_DSP_ECHO_CANCELLER) {
+    effects.push_back("ALLOW_DSP_ECHO_CANCELLER");
+  }
+  if (mask & AudioParameters::ALLOW_DSP_NOISE_SUPPRESSION) {
+    effects.push_back("ALLOW_DSP_NOISE_SUPPRESSION");
+  }
+  if (mask & AudioParameters::ALLOW_DSP_AUTOMATIC_GAIN_CONTROL) {
+    effects.push_back("ALLOW_DSP_AUTOMATIC_GAIN_CONTROL");
+  }
+  if (auto fuchsia_usage = mask & AudioParameters::FUCHSIA_RENDER_USAGE_MASK) {
+    effects.push_back(FuchsiaRenderUsageToString(fuchsia_usage));
+  }
+  if (mask & AudioParameters::IGNORE_UI_GAINS) {
+    effects.push_back("IGNORE_UI_GAINS");
+  }
+  if (mask & AudioParameters::VOICE_ISOLATION_SUPPORTED) {
+    effects.push_back("VOICE_ISOLATION_SUPPORTED");
+  }
+  if (mask & AudioParameters::CLIENT_CONTROLLED_VOICE_ISOLATION) {
+    effects.push_back("CLIENT_CONTROLLED_VOICE_ISOLATION");
+  }
+  if (mask & AudioParameters::VOICE_ISOLATION) {
+    effects.push_back("VOICE_ISOLATION");
+  }
+  if (mask & AudioParameters::DEEP_NOISE_SUPPRESSION) {
+    effects.push_back("WINDOWS_DEEP_NOISE_SUPPRESSION");
+  }
+
+  std::string result;
+  for (size_t i = 0; i < effects.size(); ++i) {
+    if (i > 0) {
+      result += " | ";
+    }
+    result += effects[i];
+  }
+  return result;
+}
+
 AudioParameters::AudioParameters()
-    : AudioParameters(AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_NONE, 0, 0) {}
+    : AudioParameters(AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_NONE>(),
+                      0,
+                      0) {}
 
 AudioParameters::AudioParameters(Format format,
-                                 ChannelLayout channel_layout,
+                                 ChannelLayoutConfig channel_layout_config,
                                  int sample_rate,
                                  int frames_per_buffer)
-    : latency_tag_(AudioLatency::LATENCY_COUNT) {
-  Reset(format, channel_layout, sample_rate, frames_per_buffer);
+    : latency_tag_(AudioLatency::Type::kUnknown) {
+  Reset(format, channel_layout_config, sample_rate, frames_per_buffer);
 }
 
 AudioParameters::AudioParameters(
     Format format,
-    ChannelLayout channel_layout,
+    ChannelLayoutConfig channel_layout_config,
     int sample_rate,
     int frames_per_buffer,
     const HardwareCapabilities& hardware_capabilities)
-    : latency_tag_(AudioLatency::LATENCY_COUNT),
+    : latency_tag_(AudioLatency::Type::kUnknown),
       hardware_capabilities_(hardware_capabilities) {
-  Reset(format, channel_layout, sample_rate, frames_per_buffer);
+  Reset(format, channel_layout_config, sample_rate, frames_per_buffer);
 }
 
 AudioParameters::~AudioParameters() = default;
@@ -100,12 +251,11 @@ AudioParameters::AudioParameters(const AudioParameters&) = default;
 AudioParameters& AudioParameters::operator=(const AudioParameters&) = default;
 
 void AudioParameters::Reset(Format format,
-                            ChannelLayout channel_layout,
+                            ChannelLayoutConfig channel_layout_config,
                             int sample_rate,
                             int frames_per_buffer) {
   format_ = format;
-  channel_layout_ = channel_layout;
-  channels_ = ChannelLayoutToChannelCount(channel_layout);
+  channel_layout_config_ = channel_layout_config;
   sample_rate_ = sample_rate;
   frames_per_buffer_ = frames_per_buffer;
   effects_ = NO_EFFECTS;
@@ -113,8 +263,8 @@ void AudioParameters::Reset(Format format,
 }
 
 bool AudioParameters::IsValid() const {
-  return (channels_ > 0) && (channels_ <= media::limits::kMaxChannels) &&
-         (channel_layout_ > CHANNEL_LAYOUT_UNSUPPORTED) &&
+  return (channels() > 0) && (channels() <= media::limits::kMaxChannels) &&
+         (channel_layout() > CHANNEL_LAYOUT_UNSUPPORTED) &&
          (sample_rate_ >= media::limits::kMinSampleRate) &&
          (sample_rate_ <= media::limits::kMaxSampleRate) &&
          (frames_per_buffer_ > 0) &&
@@ -127,9 +277,13 @@ bool AudioParameters::IsValid() const {
            (hardware_capabilities_->max_frames_per_buffer <=
             media::limits::kMaxSamplesPerPacket) &&
            (hardware_capabilities_->max_frames_per_buffer >=
-            hardware_capabilities_->min_frames_per_buffer))) &&
-         (channel_layout_ == CHANNEL_LAYOUT_DISCRETE ||
-          channels_ == ChannelLayoutToChannelCount(channel_layout_));
+            hardware_capabilities_->min_frames_per_buffer) &&
+           (hardware_capabilities_->total_channels >= 0) &&
+           (hardware_capabilities_->total_channels <=
+            media::limits::kMaxChannels))) &&
+         (channel_layout() == CHANNEL_LAYOUT_DISCRETE ||
+          channel_layout() == CHANNEL_LAYOUT_5_1_4_DOWNMIX ||
+          channels() == ChannelLayoutToChannelCount(channel_layout()));
 }
 
 std::string AudioParameters::AsHumanReadableString() const {
@@ -138,45 +292,74 @@ std::string AudioParameters::AsHumanReadableString() const {
     << ", channel_layout: " << channel_layout() << ", channels: " << channels()
     << ", sample_rate: " << sample_rate()
     << ", frames_per_buffer: " << frames_per_buffer()
-    << ", effects: " << effects()
-    << ", mic_positions: " << PointsToString(mic_positions_);
-  if (hardware_capabilities_) {
-    s << ", hw_cap.min_frames_per_buffer: "
+    << ", effects: " << AudioParameters::EffectsMaskToString(effects())
+    << ", mic_positions: " << PointsToString(mic_positions_)
+    << ", latency_tag: " << AudioLatency::ToString(latency_tag());
+  if (hardware_capabilities_.has_value()) {
+    s << ", hw_capabilities: min_frames_per_buffer: "
       << hardware_capabilities_->min_frames_per_buffer
-      << ", hw_cap.max_frames_per_buffer: "
-      << hardware_capabilities_->max_frames_per_buffer;
+      << ", max_frames_per_buffer: "
+      << hardware_capabilities_->max_frames_per_buffer
+      << ", bitstream_formats:" << hardware_capabilities_->bitstream_formats
+      << ", require_encapsulation:"
+      << hardware_capabilities_->require_encapsulation
+      << ", require_audio_offload:"
+      << hardware_capabilities_->require_audio_offload
+      << ", total_channels:" << hardware_capabilities_->total_channels;
   }
   return s.str();
 }
 
 int AudioParameters::GetBytesPerBuffer(SampleFormat fmt) const {
-  return GetBytesPerFrame(fmt) * frames_per_buffer_;
+  return base::CheckMul(GetBytesPerFrame(fmt), frames_per_buffer_)
+      .ValueOrDie<int>();
 }
 
 int AudioParameters::GetBytesPerFrame(SampleFormat fmt) const {
-  return channels_ * SampleFormatToBytesPerChannel(fmt);
-}
-
-double AudioParameters::GetMicrosecondsPerFrame() const {
-  return static_cast<double>(base::Time::kMicrosecondsPerSecond) / sample_rate_;
+  return channels() * SampleFormatToBytesPerChannel(fmt);
 }
 
 base::TimeDelta AudioParameters::GetBufferDuration() const {
-  return base::TimeDelta::FromMicroseconds(static_cast<int64_t>(
+  return base::Microseconds(static_cast<int64_t>(
       frames_per_buffer_ * base::Time::kMicrosecondsPerSecond /
       static_cast<float>(sample_rate_)));
 }
 
 bool AudioParameters::Equals(const AudioParameters& other) const {
   return format_ == other.format() && sample_rate_ == other.sample_rate() &&
-         channel_layout_ == other.channel_layout() &&
-         channels_ == other.channels() &&
+         channel_layout() == other.channel_layout() &&
+         channels() == other.channels() &&
          frames_per_buffer_ == other.frames_per_buffer() &&
          effects_ == other.effects() && mic_positions_ == other.mic_positions_;
 }
 
 bool AudioParameters::IsBitstreamFormat() const {
-  return format_ == AUDIO_BITSTREAM_AC3 || format_ == AUDIO_BITSTREAM_EAC3;
+  switch (format_) {
+    case AUDIO_BITSTREAM_AC3:
+    case AUDIO_BITSTREAM_EAC3:
+    case AUDIO_BITSTREAM_DTS:
+    case AUDIO_BITSTREAM_DTS_HD:
+    case AUDIO_BITSTREAM_DTSX_P2:
+    case AUDIO_BITSTREAM_IEC61937:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool AudioParameters::IsFormatSupportedByHardware(Format format) const {
+  return hardware_capabilities_.has_value() &&
+         (hardware_capabilities_->bitstream_formats & format);
+}
+
+bool AudioParameters::RequireEncapsulation() const {
+  return hardware_capabilities_.has_value() &&
+         hardware_capabilities_->require_encapsulation;
+}
+
+bool AudioParameters::RequireOffload() const {
+  return hardware_capabilities_.has_value() &&
+         hardware_capabilities_->require_audio_offload;
 }
 
 // static
@@ -185,7 +368,7 @@ AudioParameters AudioParameters::UnavailableDeviceParams() {
   // deals incorrectly with reference time calculation if output buffer size
   // significantly differs from 10 ms used there, see http://crbug/701000.
   return media::AudioParameters(
-      media::AudioParameters::AUDIO_FAKE, media::CHANNEL_LAYOUT_STEREO,
+      media::AudioParameters::AUDIO_FAKE, ChannelLayoutConfig::Stereo(),
       media::AudioParameters::kAudioCDSampleRate,
       media::AudioParameters::kAudioCDSampleRate / 100);
 }

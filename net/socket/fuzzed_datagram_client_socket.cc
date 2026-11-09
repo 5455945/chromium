@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,12 @@
 #include <algorithm>
 #include <string>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/strings/string_piece.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/notimplemented.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_errors.h"
@@ -50,7 +51,7 @@ int FuzzedDatagramClientSocket::Connect(const IPEndPoint& address) {
 }
 
 int FuzzedDatagramClientSocket::ConnectUsingNetwork(
-    NetworkChangeNotifier::NetworkHandle network,
+    handles::NetworkHandle network,
     const IPEndPoint& address) {
   CHECK(!connected_);
   return ERR_NOT_IMPLEMENTED;
@@ -62,9 +63,36 @@ int FuzzedDatagramClientSocket::FuzzedDatagramClientSocket::
   return ERR_NOT_IMPLEMENTED;
 }
 
-NetworkChangeNotifier::NetworkHandle
-FuzzedDatagramClientSocket::GetBoundNetwork() const {
-  return NetworkChangeNotifier::kInvalidNetworkHandle;
+int FuzzedDatagramClientSocket::ConnectAsync(const IPEndPoint& address,
+                                             CompletionOnceCallback callback) {
+  CHECK(!connected_);
+  int rv = Connect(address);
+  DCHECK_NE(rv, ERR_IO_PENDING);
+  if (data_provider_->ConsumeBool()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), rv));
+    return ERR_IO_PENDING;
+  }
+  return rv;
+}
+
+int FuzzedDatagramClientSocket::ConnectUsingNetworkAsync(
+    handles::NetworkHandle network,
+    const IPEndPoint& address,
+    CompletionOnceCallback callback) {
+  CHECK(!connected_);
+  return ERR_NOT_IMPLEMENTED;
+}
+
+int FuzzedDatagramClientSocket::ConnectUsingDefaultNetworkAsync(
+    const IPEndPoint& address,
+    CompletionOnceCallback callback) {
+  CHECK(!connected_);
+  return ERR_NOT_IMPLEMENTED;
+}
+
+handles::NetworkHandle FuzzedDatagramClientSocket::GetBoundNetwork() const {
+  return handles::kInvalidNetworkHandle;
 }
 
 void FuzzedDatagramClientSocket::ApplySocketTag(const SocketTag& tag) {}
@@ -93,34 +121,6 @@ int FuzzedDatagramClientSocket::GetLocalAddress(IPEndPoint* address) const {
 
 void FuzzedDatagramClientSocket::UseNonBlockingIO() {}
 
-int FuzzedDatagramClientSocket::WriteAsync(
-    DatagramBuffers buffers,
-    CompletionOnceCallback callback,
-    const NetworkTrafficAnnotationTag& traffic_annotation) {
-  return -1;
-}
-
-int FuzzedDatagramClientSocket::WriteAsync(
-    const char* buffer,
-    size_t buf_len,
-    CompletionOnceCallback callback,
-    const NetworkTrafficAnnotationTag& traffic_annotation) {
-  return -1;
-}
-
-DatagramBuffers FuzzedDatagramClientSocket::GetUnwrittenBuffers() {
-  DatagramBuffers result;
-  return result;
-}
-
-void FuzzedDatagramClientSocket::SetWriteAsyncEnabled(bool enabled) {}
-bool FuzzedDatagramClientSocket::WriteAsyncEnabled() {
-  return false;
-}
-void FuzzedDatagramClientSocket::SetMaxPacketSize(size_t max_packet_size) {}
-void FuzzedDatagramClientSocket::SetWriteMultiCoreEnabled(bool enabled) {}
-void FuzzedDatagramClientSocket::SetSendmmsgEnabled(bool enabled) {}
-void FuzzedDatagramClientSocket::SetWriteBatchingActive(bool active) {}
 int FuzzedDatagramClientSocket::SetMulticastInterface(
     uint32_t interface_index) {
   return ERR_NOT_IMPLEMENTED;
@@ -128,6 +128,20 @@ int FuzzedDatagramClientSocket::SetMulticastInterface(
 
 const NetLogWithSource& FuzzedDatagramClientSocket::NetLog() const {
   return net_log_;
+}
+
+base::expected<DatagramsMetadata, Error>
+FuzzedDatagramClientSocket::ReadMultiple(
+    IOBuffer* buf,
+    size_t buf_len,
+    size_t maximum_packet_size,
+    base::OnceCallback<void(base::expected<DatagramsMetadata, Error>)>
+        callback) {
+  // TODO(crbug.com/515333601): This is a temporary delegation to Read() to
+  // avoid crashes when QuicUseReadMultiple is enabled. Implement a proper
+  // ReadMultiple() in a follow-up CL.
+  return read_multiple_emulator_.ReadMultiple(buf, buf_len, maximum_packet_size,
+                                              std::move(callback));
 }
 
 int FuzzedDatagramClientSocket::Read(IOBuffer* buf,
@@ -148,10 +162,10 @@ int FuzzedDatagramClientSocket::Read(IOBuffer* buf,
       data_provider_->ConsumeIntegralInRange(0, buf_len));
 
   int result;
-  if (data.size() > 0) {
+  if (!data.empty()) {
     // If the response is not empty, consider it a successful read.
     result = data.size();
-    std::copy(data.begin(), data.end(), buf->data());
+    std::ranges::copy(data, buf->data());
   } else {
     // If the response is empty, pick a random read error.
     result = data_provider_->PickValueInArray(kReadErrors);
@@ -162,7 +176,7 @@ int FuzzedDatagramClientSocket::Read(IOBuffer* buf,
     return result;
 
   read_pending_ = true;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FuzzedDatagramClientSocket::OnReadComplete,
                      weak_factory_.GetWeakPtr(), std::move(callback), result));
@@ -196,7 +210,7 @@ int FuzzedDatagramClientSocket::Write(
     return result;
 
   write_pending_ = true;
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FuzzedDatagramClientSocket::OnWriteComplete,
                      weak_factory_.GetWeakPtr(), std::move(callback), result));
@@ -212,6 +226,15 @@ int FuzzedDatagramClientSocket::SetSendBufferSize(int32_t size) {
 }
 
 int FuzzedDatagramClientSocket::SetDoNotFragment() {
+  return OK;
+}
+
+int FuzzedDatagramClientSocket::SetRecvTos() {
+  return OK;
+}
+
+int FuzzedDatagramClientSocket::SetTos(DiffServCodePoint dscp,
+                                       EcnCodePoint ecn) {
   return OK;
 }
 
@@ -233,6 +256,10 @@ void FuzzedDatagramClientSocket::OnWriteComplete(
 
   write_pending_ = false;
   std::move(callback).Run(result);
+}
+
+DscpAndEcn FuzzedDatagramClientSocket::GetLastTos() const {
+  return TosToDscpAndEcn(data_provider_->ConsumeIntegral<uint8_t>());
 }
 
 }  // namespace net

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,11 +17,11 @@
 //    has no logic in the getter except threading stuff, which we don't want
 //    to run.
 
-#include "components/history/core/browser/history_backend.h"
-
 #include <stddef.h>
 
-#include "base/cxx17_backports.h"
+#include <array>
+
+#include "components/history/core/browser/history_backend.h"
 #include "components/history/core/test/history_backend_db_base_test.h"
 
 namespace history {
@@ -31,8 +31,8 @@ namespace {
 // HistoryBackend to work.
 class ContentHistoryBackendDBTest : public HistoryBackendDBBaseTest {
  public:
-  ContentHistoryBackendDBTest() {}
-  ~ContentHistoryBackendDBTest() override {}
+  ContentHistoryBackendDBTest() = default;
+  ~ContentHistoryBackendDBTest() override = default;
 };
 
 struct InterruptReasonAssociation {
@@ -42,15 +42,15 @@ struct InterruptReasonAssociation {
 
 // Test is dependent on interrupt reasons being listed in header file
 // in order.
-const InterruptReasonAssociation current_reasons[] = {
+const auto current_reasons = std::to_array<InterruptReasonAssociation>({
 #define INTERRUPT_REASON(a, b) { #a, b },
 #include "components/download/public/common/download_interrupt_reason_values.h"
 #undef INTERRUPT_REASON
-};
+});
 
 // This represents a list of all reasons we've previously used;
 // Do Not Remove Any Entries From This List.
-const InterruptReasonAssociation historical_reasons[] = {
+const auto historical_reasons = std::to_array<InterruptReasonAssociation>({
     {"FILE_FAILED", 1},
     {"FILE_ACCESS_DENIED", 2},
     {"FILE_NO_SPACE", 3},
@@ -81,7 +81,8 @@ const InterruptReasonAssociation historical_reasons[] = {
     {"USER_CANCELED", 40},
     {"USER_SHUTDOWN", 41},
     {"CRASH", 50},
-};
+    {"LOCAL_DOWNLOAD_BLOCKED", 51},
+});
 
 // Make sure no one has changed a DownloadInterruptReason we've previously
 // persisted.
@@ -89,11 +90,11 @@ TEST_F(ContentHistoryBackendDBTest,
        ConfirmDownloadInterruptReasonBackwardsCompatible) {
   // Are there any cases in which a historical number has been repurposed
   // for an error other than it's original?
-  for (size_t i = 0; i < base::size(current_reasons); i++) {
+  for (size_t i = 0; i < std::size(current_reasons); i++) {
     const InterruptReasonAssociation& cur_reason(current_reasons[i]);
     bool found = false;
 
-    for (size_t j = 0; j < base::size(historical_reasons); ++j) {
+    for (size_t j = 0; j < std::size(historical_reasons); ++j) {
       const InterruptReasonAssociation& hist_reason(historical_reasons[j]);
 
       if (hist_reason.value == cur_reason.value) {

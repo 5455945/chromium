@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,19 +13,23 @@ bool StructTraits<display::mojom::ScreenInfoDataView, display::ScreenInfo>::
     Read(display::mojom::ScreenInfoDataView data, display::ScreenInfo* out) {
   if (!data.ReadDisplayColorSpaces(&out->display_color_spaces) ||
       !data.ReadRect(&out->rect) ||
-      !data.ReadAvailableRect(&out->available_rect))
+      !data.ReadAvailableRect(&out->available_rect) ||
+      !data.ReadLabel(&out->label)) {
     return false;
+  }
 
   out->device_scale_factor = data.device_scale_factor();
+  out->text_scale_multiplier = data.text_scale_multiplier();
   out->depth = data.depth();
+  out->handwriting_radius = data.handwriting_radius();
   out->depth_per_component = data.depth_per_component();
   out->is_monochrome = data.is_monochrome();
-  out->display_frequency = data.display_frequency();
   out->orientation_type = data.orientation_type();
   out->orientation_angle = data.orientation_angle();
   out->is_extended = data.is_extended();
   out->is_primary = data.is_primary();
   out->is_internal = data.is_internal();
+  out->display_frequency = data.display_frequency();
   out->display_id = data.display_id();
   return true;
 }

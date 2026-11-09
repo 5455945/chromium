@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,12 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "gpu/config/gpu_config_export.h"
 #include "gpu/config/gpu_test_config.h"
-#include "gpu/gpu_export.h"
 
 namespace gpu {
 
-class GPU_EXPORT GPUTestExpectationsParser {
+class GPU_CONFIG_EXPORT GPUTestExpectationsParser {
  public:
   enum GPUTestExpectation {
     kGpuTestPass = 1 << 0,

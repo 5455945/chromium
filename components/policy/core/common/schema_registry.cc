@@ -1,24 +1,27 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "components/policy/core/common/schema_registry.h"
 
 #include "base/check_op.h"
 #include "base/notreached.h"
+#include "base/observer_list.h"
 #include "extensions/buildflags/buildflags.h"
 
 namespace policy {
 
-SchemaRegistry::Observer::~Observer() {}
+SchemaRegistry::Observer::~Observer() = default;
 
-SchemaRegistry::InternalObserver::~InternalObserver() {}
+SchemaRegistry::InternalObserver::~InternalObserver() = default;
 
 SchemaRegistry::SchemaRegistry() : schema_map_(new SchemaMap) {
   for (int i = 0; i < POLICY_DOMAIN_SIZE; ++i)
     domains_ready_[i] = false;
-#if !BUILDFLAG(ENABLE_EXTENSIONS)
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   SetExtensionsDomainsReady();
+  SetDomainReady(POLICY_DOMAIN_EXTENSION_INSTALL);
 #endif
 }
 
@@ -47,7 +50,7 @@ void SchemaRegistry::RegisterComponents(PolicyDomain domain,
   DomainMap map(schema_map_->GetDomains());
   for (auto it = components.begin(); it != components.end(); ++it)
     map[domain][it->first] = it->second;
-  schema_map_ = new SchemaMap(map);
+  schema_map_ = new SchemaMap(std::move(map));
   Notify(true);
 }
 
@@ -55,7 +58,7 @@ void SchemaRegistry::UnregisterComponent(const PolicyNamespace& ns) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DomainMap map(schema_map_->GetDomains());
   if (map[ns.domain].erase(ns.component_id) != 0) {
-    schema_map_ = new SchemaMap(map);
+    schema_map_ = new SchemaMap(std::move(map));
     Notify(false);
   } else {
     // Extension might be uninstalled before install so the associated policies
@@ -131,7 +134,13 @@ CombinedSchemaRegistry::CombinedSchemaRegistry()
   SetAllDomainsReady();
 }
 
-CombinedSchemaRegistry::~CombinedSchemaRegistry() {}
+CombinedSchemaRegistry::~CombinedSchemaRegistry() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (auto registry : registries_) {
+    registry->RemoveObserver(this);
+    registry->RemoveInternalObserver(this);
+  }
+}
 
 void CombinedSchemaRegistry::Track(SchemaRegistry* registry) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -151,7 +160,7 @@ void CombinedSchemaRegistry::RegisterComponents(
   DomainMap map(own_schema_map_->GetDomains());
   for (auto it = components.begin(); it != components.end(); ++it)
     map[domain][it->first] = it->second;
-  own_schema_map_ = new SchemaMap(map);
+  own_schema_map_ = new SchemaMap(std::move(map));
   Combine(true);
 }
 
@@ -159,7 +168,7 @@ void CombinedSchemaRegistry::UnregisterComponent(const PolicyNamespace& ns) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DomainMap map(own_schema_map_->GetDomains());
   if (map[ns.domain].erase(ns.component_id) != 0) {
-    own_schema_map_ = new SchemaMap(map);
+    own_schema_map_ = new SchemaMap(std::move(map));
     Combine(false);
   } else {
     NOTREACHED();
@@ -210,7 +219,7 @@ void CombinedSchemaRegistry::Combine(bool has_new_schemas) {
       }
     }
   }
-  schema_map_ = new SchemaMap(map);
+  schema_map_ = new SchemaMap(std::move(map));
   Notify(has_new_schemas);
 }
 

@@ -1,27 +1,26 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/content_settings/chrome_content_settings_utils.h"
 
 #include "base/metrics/histogram_macros.h"
+#include "build/build_config.h"
 
-#if !defined(OS_ANDROID)
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/location_bar/location_bar_override_data.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_applications/components/web_app_utils.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view.h"
+#include "chrome/browser/ui/views/picture_in_picture/document_pip_host.h"
 #include "content/public/browser/web_contents.h"
 #endif
 
 namespace content_settings {
-
-void RecordPluginsAction(PluginsAction action) {
-  UMA_HISTOGRAM_ENUMERATION("ContentSettings.Plugins", action,
-                            PLUGINS_ACTION_COUNT);
-}
 
 void RecordPopupsAction(PopupsAction action) {
   UMA_HISTOGRAM_ENUMERATION("ContentSettings.Popups", action,
@@ -29,30 +28,57 @@ void RecordPopupsAction(PopupsAction action) {
 }
 
 void UpdateLocationBarUiForWebContents(content::WebContents* web_contents) {
-#if !defined(OS_ANDROID)
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
-  if (!browser)
+#if !BUILDFLAG(IS_ANDROID)
+  if (!web_contents) {
     return;
+  }
 
-  if (browser->tab_strip_model()->GetActiveWebContents() != web_contents)
+  // Secondary UI surfaces (e.g. the Contextual Tasks side panel) host a
+  // `WebContents` that is not backed by a tab, so the browser/tab-strip lookup
+  // below would not find them. They register their own `LocationBar` via
+  // `LocationBarOverrideData`; route the refresh straight to it.
+  if (auto* override_data =
+          location_bar::LocationBarOverrideData::FromWebContents(
+              web_contents)) {
+    LocationBar* location_bar = override_data->GetLocationBar();
+    if (location_bar && location_bar->GetWebContents() == web_contents) {
+      location_bar->UpdateContentSettingsIcons();
+    }
     return;
+  }
 
-  LocationBar* location_bar = browser->window()->GetLocationBar();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
+  if (!browser) {
+    // Standalone Document PiP windows are not Browser-backed. The captured
+    // child WebContents holds a back-pointer to its DocumentPipHost, which
+    // forwards the refresh to the PiP frame view's content-setting icons.
+    if (DocumentPipHost* pip_host =
+            DocumentPipHost::FromChildWebContents(web_contents)) {
+      pip_host->UpdateContentSettingsIcons();
+    }
+    return;
+  }
+
+  if (browser->GetTabStripModel()->GetActiveWebContents() != web_contents) {
+    return;
+  }
+
+  LocationBar* location_bar =
+      BrowserWindow::FromBrowser(browser)->GetLocationBar();
   if (location_bar)
     location_bar->UpdateContentSettingsIcons();
+
+  // Floating windows (such as document PiP and always-on-top popups) do not
+  // have a location bar, but have some content setting views that need to be
+  // updated too.
+  if (browser->GetType() == BrowserWindowInterface::Type::TYPE_FLOATING) {
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    auto* frame_view = static_cast<PictureInPictureBrowserFrameView*>(
+        browser_view->browser_widget()->GetFrameView());
+    frame_view->UpdateContentSettingsIcons();
+  }
 #endif
 }
-
-#if !defined(OS_ANDROID)
-std::u16string GetPermissionDetailString(Profile* profile,
-                                         ContentSettingsType content_type,
-                                         const GURL& url) {
-  if (content_type != ContentSettingsType::FILE_HANDLING || !url.is_valid())
-    return {};
-
-  return web_app::GetFileTypeAssociationsHandledByWebAppsForDisplay(profile,
-                                                                    url);
-}
-#endif
 
 }  // namespace content_settings

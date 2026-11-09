@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,21 +13,7 @@
 
 namespace content {
 
-StoragePartitionId::StoragePartitionId(BrowserContext* browser_context)
-    : config_(StoragePartitionConfig::CreateDefault(browser_context)) {}
-
-StoragePartitionId::StoragePartitionId(const std::string& partition_id,
-                                       const StoragePartitionConfig& config)
-    : id_(partition_id), config_(config) {
-  DCHECK(id_.empty() || GURL(id_).is_valid());
-}
-
-std::string StoragePartitionId::ToString() const {
-  std::stringstream ss;
-  ss << "id='" << id_ << "' config=" << config_;
-  return ss.str();
-}
-
+StoragePartitionConfig::StoragePartitionConfig() = default;
 StoragePartitionConfig::StoragePartitionConfig(const StoragePartitionConfig&) =
     default;
 StoragePartitionConfig& StoragePartitionConfig::operator=(
@@ -42,8 +28,8 @@ StoragePartitionConfig StoragePartitionConfig::CreateDefault(
 // static
 StoragePartitionConfig StoragePartitionConfig::Create(
     BrowserContext* browser_context,
-    const std::string& partition_domain,
-    const std::string& partition_name,
+    std::string_view partition_domain,
+    std::string_view partition_name,
     bool in_memory) {
   // If a caller tries to pass an empty partition_domain something is seriously
   // wrong or the calling code is not explicitly signalling its desire to create
@@ -54,56 +40,22 @@ StoragePartitionConfig StoragePartitionConfig::Create(
 }
 
 StoragePartitionConfig::StoragePartitionConfig(
-    const std::string& partition_domain,
-    const std::string& partition_name,
+    std::string_view partition_domain,
+    std::string_view partition_name,
     bool in_memory)
     : partition_domain_(partition_domain),
       partition_name_(partition_name),
       in_memory_(in_memory) {}
 
-absl::optional<StoragePartitionConfig>
+std::optional<StoragePartitionConfig>
 StoragePartitionConfig::GetFallbackForBlobUrls() const {
   if (fallback_to_partition_domain_for_blob_urls_ == FallbackMode::kNone)
-    return absl::nullopt;
+    return std::nullopt;
 
   return StoragePartitionConfig(
       partition_domain_, "",
       /*in_memory=*/fallback_to_partition_domain_for_blob_urls_ ==
           FallbackMode::kFallbackPartitionInMemory);
-}
-
-bool StoragePartitionConfig::operator<(
-    const StoragePartitionConfig& rhs) const {
-  if (partition_domain_ != rhs.partition_domain_)
-    return partition_domain_ < rhs.partition_domain_;
-
-  if (partition_name_ != rhs.partition_name_)
-    return partition_name_ < rhs.partition_name_;
-
-  if (in_memory_ != rhs.in_memory_)
-    return in_memory_ < rhs.in_memory_;
-
-  if (fallback_to_partition_domain_for_blob_urls_ !=
-      rhs.fallback_to_partition_domain_for_blob_urls_) {
-    return fallback_to_partition_domain_for_blob_urls_ <
-           rhs.fallback_to_partition_domain_for_blob_urls_;
-  }
-
-  return false;
-}
-
-bool StoragePartitionConfig::operator==(
-    const StoragePartitionConfig& rhs) const {
-  return partition_domain_ == rhs.partition_domain_ &&
-         partition_name_ == rhs.partition_name_ &&
-         in_memory_ == rhs.in_memory_ &&
-         fallback_to_partition_domain_for_blob_urls_ ==
-             rhs.fallback_to_partition_domain_for_blob_urls_;
-}
-
-bool StoragePartitionConfig::operator!=(
-    const StoragePartitionConfig& rhs) const {
-  return !(*this == rhs);
 }
 
 std::ostream& operator<<(std::ostream& out,

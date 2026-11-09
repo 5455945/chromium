@@ -1,12 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gfx/favicon_size.h"
 
 namespace gfx {
-
-const int kFaviconSize = 16;
 
 void CalculateFaviconTargetSize(int* width, int* height) {
   if (*width > kFaviconSize || *height > kFaviconSize) {

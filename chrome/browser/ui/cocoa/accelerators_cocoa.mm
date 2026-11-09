@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,23 @@
 #import <Cocoa/Cocoa.h>
 #include <stddef.h>
 
+#include <algorithm>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/i18n/rtl.h"
+#include "base/mac/mac_util.h"
 #include "base/memory/singleton.h"
-#include "base/stl_util.h"
 #include "build/branding_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/commander/commander.h"
 #include "printing/buildflags/buildflags.h"
 #import "ui/base/accelerators/platform_accelerator_cocoa.h"
 #import "ui/events/cocoa/cocoa_event_utils.h"
 #import "ui/events/keycodes/keyboard_code_conversion_mac.h"
 
 namespace {
+
+bool is_for_pwa = false;
+bool singleton_exists = false;
 
 const struct AcceleratorMapping {
   int command_id;
@@ -36,7 +39,6 @@ const struct AcceleratorMapping {
     {IDC_DEV_TOOLS_CONSOLE, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_J},
     {IDC_DEV_TOOLS_INSPECT, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_C},
     {IDC_FIND, ui::EF_COMMAND_DOWN, ui::VKEY_F},
-    {IDC_FULLSCREEN, ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN, ui::VKEY_F},
     {IDC_NEW_INCOGNITO_WINDOW, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
      ui::VKEY_N},
     {IDC_NEW_TAB, ui::EF_COMMAND_DOWN, ui::VKEY_T},
@@ -54,10 +56,13 @@ const struct AcceleratorMapping {
     {IDC_SHOW_HISTORY, ui::EF_COMMAND_DOWN, ui::VKEY_Y},
     {IDC_VIEW_SOURCE, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_U},
     {IDC_ZOOM_MINUS, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_MINUS},
+    // The following entry also enables "Cmd =" on US keyboards to invoke View
+    // -> Zoom In.
     {IDC_ZOOM_PLUS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_OEM_PLUS},
 
     // Accelerators used in the Main Menu, but not the toolbar menu.
     {IDC_OPTIONS, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_COMMA},
+    {IDC_WEB_APP_SETTINGS, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_COMMA},
     {IDC_HIDE_APP, ui::EF_COMMAND_DOWN, ui::VKEY_H},
     {IDC_EXIT, ui::EF_COMMAND_DOWN, ui::VKEY_Q},
     {IDC_OPEN_FILE, ui::EF_COMMAND_DOWN, ui::VKEY_O},
@@ -65,8 +70,9 @@ const struct AcceleratorMapping {
 
     // The key combinations for IDC_CLOSE_WINDOW and IDC_CLOSE_TAB are context
     // dependent. A static mapping doesn't make sense. :(
+    // We used to define IDC_CLOSE_WINDOW here. Instead, see
+    // AcceleratorForCloseWindow().
     {IDC_CLOSE_TAB, ui::EF_COMMAND_DOWN, ui::VKEY_W},
-    {IDC_CLOSE_WINDOW, ui::EF_COMMAND_DOWN, ui::VKEY_W},
 
     {IDC_EMAIL_PAGE_LOCATION, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
      ui::VKEY_I},
@@ -85,8 +91,6 @@ const struct AcceleratorMapping {
     {IDC_FOCUS_SEARCH, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_F},
     {IDC_FIND_NEXT, ui::EF_COMMAND_DOWN, ui::VKEY_G},
     {IDC_FIND_PREVIOUS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_G},
-    {IDC_ZOOM_PLUS, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_PLUS},
-    {IDC_ZOOM_MINUS, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_MINUS},
     {IDC_STOP, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_PERIOD},
     {IDC_RELOAD, ui::EF_COMMAND_DOWN, ui::VKEY_R},
     {IDC_RELOAD_BYPASSING_CACHE, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
@@ -98,8 +102,8 @@ const struct AcceleratorMapping {
     {IDC_BOOKMARK_ALL_TABS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
      ui::VKEY_D},
     {IDC_MINIMIZE_WINDOW, ui::EF_COMMAND_DOWN, ui::VKEY_M},
-    {IDC_SELECT_NEXT_TAB, ui::EF_CONTROL_DOWN, ui::VKEY_TAB},
-    {IDC_SELECT_PREVIOUS_TAB, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN,
+    {IDC_CYCLE_TO_NEXT_TAB, ui::EF_CONTROL_DOWN, ui::VKEY_TAB},
+    {IDC_CYCLE_TO_PREV_TAB, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN,
      ui::VKEY_TAB},
     {IDC_HELP_PAGE_VIA_MENU, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
      ui::VKEY_OEM_2},
@@ -109,34 +113,77 @@ const struct AcceleratorMapping {
     {IDC_FEEDBACK, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN,
      ui::VKEY_I},
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+    {IDC_TAB_SEARCH, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_A},
+    {IDC_TOGGLE_VERTICAL_TABS_COLLAPSE, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+     ui::VKEY_L},
+    {IDC_NEW_SPLIT_TAB, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_N},
 };
+
+ui::Accelerator AcceleratorForCloseWindow() {
+  int modifiers = ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN;
+
+  if (is_for_pwa) {
+    modifiers = ui::EF_COMMAND_DOWN;
+  }
+
+  return ui::Accelerator(ui::VKEY_W, modifiers);
+}
+
+ui::Accelerator AcceleratorForEnterFullscreen() {
+  return ui::Accelerator(ui::VKEY_F, ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN |
+                                         ui::EF_FUNCTION_DOWN);
+}
 
 }  // namespace
 
 AcceleratorsCocoa::AcceleratorsCocoa() {
-  for (size_t i = 0; i < base::size(kAcceleratorMap); ++i) {
-    const AcceleratorMapping& entry = kAcceleratorMap[i];
+  for (const AcceleratorMapping& entry : kAcceleratorMap) {
     ui::Accelerator accelerator(entry.key_code, entry.modifiers);
-    accelerators_.insert(std::make_pair(entry.command_id, accelerator));
+
+    auto result =
+        accelerators_.insert(std::make_pair(entry.command_id, accelerator));
+    CHECK(result.second, base::NotFatalUntil::M162);
   }
-  if (commander::IsEnabled()) {
-    accelerators_.insert(
-        std::make_pair(IDC_TOGGLE_COMMANDER,
-                       ui::Accelerator(ui::VKEY_SPACE, ui::EF_CONTROL_DOWN)));
+
+  accelerators_[IDC_CLOSE_WINDOW] = AcceleratorForCloseWindow();
+
+  auto result = accelerators_.insert(
+      std::make_pair(IDC_FULLSCREEN, AcceleratorForEnterFullscreen()));
+  CHECK(result.second, base::NotFatalUntil::M162);
+
+  if (!base::i18n::IsRTL()) {
+    return;
   }
+
+  // If running in RTL, swap the keyboard shortcuts for History -> Forward
+  // and Back.
+  ui::Accelerator history_forward = accelerators_[IDC_FORWARD];
+  ui::Accelerator history_back = accelerators_[IDC_BACK];
+
+  accelerators_[IDC_FORWARD] = history_back;
+  accelerators_[IDC_BACK] = history_forward;
 }
 
 AcceleratorsCocoa::~AcceleratorsCocoa() {}
 
 // static
+void AcceleratorsCocoa::CreateForPWA(bool flag) {
+  is_for_pwa = flag;
+
+  if (singleton_exists) {
+    GetInstance()->accelerators_[IDC_CLOSE_WINDOW] =
+        AcceleratorForCloseWindow();
+  }
+}
+
 AcceleratorsCocoa* AcceleratorsCocoa::GetInstance() {
+  singleton_exists = true;
+
   return base::Singleton<AcceleratorsCocoa>::get();
 }
 
 const ui::Accelerator* AcceleratorsCocoa::GetAcceleratorForCommand(
     int command_id) {
   AcceleratorMap::iterator it = accelerators_.find(command_id);
-  if (it == accelerators_.end())
-    return NULL;
-  return &it->second;
+  return it != accelerators_.end() ? &it->second : NULL;
 }

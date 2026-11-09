@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,30 @@
 
 #include <algorithm>
 #include <memory>
+#include <string_view>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
-#include "base/macros.h"
 #include "base/notreached.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task_runner_util.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/win/registry.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/base_shell_dialog_win.h"
 #include "ui/shell_dialogs/execute_select_file_win.h"
 #include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/select_file_utils_win.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "url/gurl.h"
 
 namespace ui {
 
@@ -40,7 +41,7 @@ namespace {
 // found. 'file_ext' must be in form ".txt".
 bool GetRegistryDescriptionFromExtension(const std::u16string& file_ext,
                                          std::u16string* reg_description) {
-  DCHECK(reg_description);
+  CHECK(reg_description, base::NotFatalUntil::M163);
   base::win::RegKey reg_ext(HKEY_CLASSES_ROOT, base::as_wcstr(file_ext),
                             KEY_READ);
   std::wstring reg_app;
@@ -75,7 +76,7 @@ std::vector<FileFilterSpec> FormatFilterForExtensions(
   const std::u16string all_desc =
       l10n_util::GetStringUTF16(IDS_APP_SAVEAS_ALL_FILES);
 
-  DCHECK(file_ext.size() >= ext_desc.size());
+  CHECK(file_ext.size() >= ext_desc.size(), base::NotFatalUntil::M163);
 
   if (file_ext.empty())
     include_all_files = true;
@@ -84,7 +85,8 @@ std::vector<FileFilterSpec> FormatFilterForExtensions(
   result.reserve(file_ext.size() + 1);
 
   for (size_t i = 0; i < file_ext.size(); ++i) {
-    std::u16string ext = file_ext[i];
+    std::u16string ext =
+        RemoveEnvVarFromFileName<char16_t>(file_ext[i], std::u16string(u"%"));
     std::u16string desc;
     if (i < ext_desc.size())
       desc = ext_desc[i];
@@ -97,7 +99,7 @@ std::vector<FileFilterSpec> FormatFilterForExtensions(
     }
 
     if (desc.empty()) {
-      DCHECK(ext.find(u'.') != std::u16string::npos);
+      CHECK(ext.find(u'.') != std::u16string::npos, base::NotFatalUntil::M163);
       std::u16string first_extension = ext.substr(ext.find(u'.'));
       size_t first_separator_index = first_extension.find(u';');
       if (first_separator_index != std::u16string::npos)
@@ -123,7 +125,7 @@ std::vector<FileFilterSpec> FormatFilterForExtensions(
       // Having '*' in the description could cause the windows file dialog to
       // not include the file extension in the file dialog. So strip out any '*'
       // characters if `keep_extension_visible` is set.
-      base::ReplaceChars(desc, u"*", base::StringPiece16(), &desc);
+      base::ReplaceChars(desc, u"*", std::u16string_view(), &desc);
     }
 
     result.push_back({desc, ext});
@@ -157,6 +159,9 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
       std::unique_ptr<ui::SelectFilePolicy> policy,
       const ExecuteSelectFileCallback& execute_select_file_callback);
 
+  SelectFileDialogImpl(const SelectFileDialogImpl&) = delete;
+  SelectFileDialogImpl& operator=(const SelectFileDialogImpl&) = delete;
+
   // BaseShellDialog implementation:
   bool IsRunning(gfx::NativeWindow owning_window) const override;
   void ListenerDestroyed() override;
@@ -170,7 +175,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
                       int file_type_index,
                       const base::FilePath::StringType& default_extension,
                       gfx::NativeWindow owning_window,
-                      void* params) override;
+                      const GURL* caller) override;
 
  private:
   ~SelectFileDialogImpl() override;
@@ -183,7 +188,6 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
   // Returns the result of the select file operation to the listener.
   void OnSelectFileExecuted(Type type,
                             std::unique_ptr<RunState> run_state,
-                            void* params,
                             const std::vector<base::FilePath>& paths,
                             int index);
 
@@ -197,8 +201,6 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
 
   bool has_multiple_file_type_choices_;
   ExecuteSelectFileCallback execute_select_file_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(SelectFileDialogImpl);
 };
 
 SelectFileDialogImpl::SelectFileDialogImpl(
@@ -240,7 +242,7 @@ void SelectFileDialogImpl::SelectFileImpl(
     int file_type_index,
     const base::FilePath::StringType& default_extension,
     gfx::NativeWindow owning_window,
-    void* params) {
+    const GURL* caller) {
   has_multiple_file_type_choices_ =
       file_types ? file_types->extensions.size() > 1 : true;
 
@@ -258,9 +260,9 @@ void SelectFileDialogImpl::SelectFileImpl(
       base::BindOnce(&DoSelectFileOnDialogTaskRunner,
                      execute_select_file_callback_, type, title, default_path,
                      filter, file_type_index, default_extension, owner,
-                     base::ThreadTaskRunnerHandle::Get(),
+                     base::SingleThreadTaskRunner::GetCurrentDefault(),
                      base::BindOnce(&SelectFileDialogImpl::OnSelectFileExecuted,
-                                    this, type, std::move(run_state), params)));
+                                    this, type, std::move(run_state))));
 }
 
 bool SelectFileDialogImpl::HasMultipleFileTypeChoicesImpl() {
@@ -283,13 +285,12 @@ void SelectFileDialogImpl::ListenerDestroyed() {
 void SelectFileDialogImpl::OnSelectFileExecuted(
     Type type,
     std::unique_ptr<RunState> run_state,
-    void* params,
     const std::vector<base::FilePath>& paths,
     int index) {
   if (listener_) {
     // The paths vector is empty when the user cancels the dialog.
     if (paths.empty()) {
-      listener_->FileSelectionCanceled(params);
+      listener_->FileSelectionCanceled();
     } else {
       switch (type) {
         case SELECT_FOLDER:
@@ -297,11 +298,12 @@ void SelectFileDialogImpl::OnSelectFileExecuted(
         case SELECT_EXISTING_FOLDER:
         case SELECT_SAVEAS_FILE:
         case SELECT_OPEN_FILE:
-          DCHECK_EQ(paths.size(), 1u);
-          listener_->FileSelected(paths[0], index, params);
+          CHECK_EQ(paths.size(), 1u, base::NotFatalUntil::M163);
+          listener_->FileSelected(SelectedFileInfo(paths[0]), index);
           break;
         case SELECT_OPEN_MULTI_FILE:
-          listener_->MultiFilesSelected(paths, params);
+          listener_->MultiFilesSelected(
+              FilePathListToSelectedFileInfoList(paths));
           break;
         case SELECT_NONE:
           NOTREACHED();

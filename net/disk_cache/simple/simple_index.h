@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,16 @@
 
 #include <list>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
@@ -27,8 +26,11 @@
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
+#include "net/disk_cache/disk_cache.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/application_status_listener.h"
 #endif
 
@@ -48,35 +50,35 @@ class NET_EXPORT_PRIVATE EntryMetadata {
  public:
   EntryMetadata();
   EntryMetadata(base::Time last_used_time,
-                base::StrictNumeric<uint32_t> entry_size);
-  EntryMetadata(int32_t trailer_prefetch_size,
-                base::StrictNumeric<uint32_t> entry_size);
+                base::StrictNumeric<uint64_t> entry_size);
+  EntryMetadata(uint32_t trailer_prefetch_size,
+                base::StrictNumeric<uint64_t> entry_size);
 
   base::Time GetLastUsedTime() const;
-  void SetLastUsedTime(const base::Time& last_used_time);
+  void SetLastUsedTime(base::Time last_used_time);
 
-  int32_t GetTrailerPrefetchSize() const;
-  void SetTrailerPrefetchSize(int32_t size);
+  uint32_t GetTrailerPrefetchSize() const;
+  void SetTrailerPrefetchSize(uint32_t size);
 
   uint32_t RawTimeForSorting() const {
     return last_used_time_seconds_since_epoch_;
   }
 
-  uint32_t GetEntrySize() const;
-  void SetEntrySize(base::StrictNumeric<uint32_t> entry_size);
+  uint64_t GetEntrySize() const;
+  // Return false if `entry_size` is too large.
+  bool SetEntrySize(base::StrictNumeric<uint64_t> entry_size);
 
-  uint8_t GetInMemoryData() const { return in_memory_data_; }
-  void SetInMemoryData(uint8_t val) { in_memory_data_ = val; }
+  uint8_t GetInMemoryData() const;
+  void SetInMemoryData(uint8_t val);
 
   // Serialize the data into the provided pickle.
   void Serialize(net::CacheType cache_type, base::Pickle* pickle) const;
   bool Deserialize(net::CacheType cache_type,
                    base::PickleIterator* it,
-                   bool has_entry_in_memory_data,
                    bool app_cache_has_trailer_prefetch_size);
 
   static base::TimeDelta GetLowerEpsilonForTimeComparisons() {
-    return base::TimeDelta::FromSeconds(1);
+    return base::Seconds(1);
   }
   static base::TimeDelta GetUpperEpsilonForTimeComparisons() {
     return base::TimeDelta();
@@ -89,10 +91,11 @@ class NET_EXPORT_PRIVATE EntryMetadata {
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexFileTest, ReadV8Format);
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexFileTest, ReadV8FormatAppCache);
 
-  // There are tens of thousands of instances of EntryMetadata in memory, so the
-  // size of each entry matters.  Even when the values used to set these members
-  // are originally calculated as >32-bit types, the actual necessary size for
-  // each shouldn't exceed 32 bits, so we use 32-bit types here.
+  // The size of each entry matters. Even when the values used to set these
+  // members are originally calculated as >38-bit types, the actual necessary
+  // size of each shouldn't exceed 38 bits (256GB - 256 B) for entry size and
+  // not exceed 32 bits for prefetch size, so we use 38-bit and 32-bit types for
+  // each.
 
   // In most modes we track the last access time in order to support automatic
   // eviction. In APP_CACHE mode, however, eviction is disabled. Instead of
@@ -100,17 +103,24 @@ class NET_EXPORT_PRIVATE EntryMetadata {
   // how much entry file trailer should be prefetched when its opened.
   union {
     uint32_t last_used_time_seconds_since_epoch_;
-    int32_t trailer_prefetch_size_;  // in bytes
+    uint32_t trailer_prefetch_size_;  // in bytes
   };
 
-  uint32_t entry_size_256b_chunks_ : 24;  // in 256-byte blocks, rounded up.
-  uint32_t in_memory_data_ : 8;
+  uint32_t entry_size_256b_chunks_ : 30;  // in 256-byte blocks, rounded up.
+
+  // `in_memory_data_` only uses 2 bits enough to describe
+  // `MemoryEntryDataHintBits`.
+  uint32_t in_memory_data_ : 2;
+
+  // Note: `entry_size_256b_chunks_` and `in_memory_data_` will be written to
+  // the disk but the format is different from EntryMetadata. See the comment in
+  // EntryMetadata::Serialize for the details.
 };
+
 static_assert(sizeof(EntryMetadata) == 8, "incorrect metadata size");
 
 // This class is not Thread-safe.
-class NET_EXPORT_PRIVATE SimpleIndex
-    : public base::SupportsWeakPtr<SimpleIndex> {
+class NET_EXPORT_PRIVATE SimpleIndex final {
  public:
   // Used in histograms. Please only add entries at the end.
   enum IndexInitMethod {
@@ -120,7 +130,7 @@ class NET_EXPORT_PRIVATE SimpleIndex
     INITIALIZE_METHOD_MAX = 3,
   };
   // Used in histograms. Please only add entries at the end.
-  enum IndexWriteToDiskReason {
+  enum IndexWriteToDiskReason : uint32_t {
     INDEX_WRITE_REASON_SHUTDOWN = 0,
     INDEX_WRITE_REASON_STARTUP_MERGE = 1,
     INDEX_WRITE_REASON_IDLE = 2,
@@ -136,7 +146,7 @@ class NET_EXPORT_PRIVATE SimpleIndex
               net::CacheType cache_type,
               std::unique_ptr<SimpleIndexFile> simple_index_file);
 
-  virtual ~SimpleIndex();
+  ~SimpleIndex();
 
   void Initialize(base::Time cache_mtime);
 
@@ -165,9 +175,9 @@ class NET_EXPORT_PRIVATE SimpleIndex
   // index. This should be the total disk-file size including all streams of the
   // entry.
   bool UpdateEntrySize(uint64_t entry_hash,
-                       base::StrictNumeric<uint32_t> entry_size);
+                       base::StrictNumeric<uint64_t> entry_size);
 
-  using EntrySet = std::unordered_map<uint64_t, EntryMetadata>;
+  using EntrySet = absl::flat_hash_map<uint64_t, EntryMetadata>;
 
   // Insert an entry in the given set if there is not already entry present.
   // Returns true if the set was modified.
@@ -216,17 +226,14 @@ class NET_EXPORT_PRIVATE SimpleIndex
 
   IndexInitMethod init_method() const { return init_method_; }
 
-  // Returns the estimate of dynamically allocated memory in bytes.
-  size_t EstimateMemoryUsage() const;
-
   // Returns base::Time() if hash not known.
   base::Time GetLastUsedTime(uint64_t entry_hash);
   void SetLastUsedTimeForTest(uint64_t entry_hash, const base::Time last_used);
 
-#if defined(OS_ANDROID)
-  void set_app_status_listener(
-      base::android::ApplicationStatusListener* app_status_listener) {
-    app_status_listener_ = app_status_listener;
+#if BUILDFLAG(IS_ANDROID)
+  void set_app_status_listener_getter(
+      ApplicationStatusListenerGetter app_status_listener_getter) {
+    app_status_listener_getter_ = app_status_listener_getter;
   }
 #endif
 
@@ -252,23 +259,23 @@ class NET_EXPORT_PRIVATE SimpleIndex
   // Update the size of the entry pointed to by the given iterator.  Return
   // true if the new size actually results in a change.
   bool UpdateEntryIteratorSize(EntrySet::iterator* it,
-                               base::StrictNumeric<uint32_t> entry_size);
+                               base::StrictNumeric<uint64_t> entry_size);
 
   // Must run on IO Thread.
   void MergeInitializingSet(std::unique_ptr<SimpleIndexLoadResult> load_result);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void OnApplicationStateChange(base::android::ApplicationState state);
 
   std::unique_ptr<base::android::ApplicationStatusListener>
       owned_app_status_listener_;
-  base::android::ApplicationStatusListener* app_status_listener_ = nullptr;
+  ApplicationStatusListenerGetter app_status_listener_getter_;
 #endif
 
   scoped_refptr<BackendCleanupTracker> cleanup_tracker_;
 
   // The owner of |this| must ensure the |delegate_| outlives |this|.
-  SimpleIndexDelegate* delegate_;
+  raw_ptr<SimpleIndexDelegate> delegate_;
 
   EntrySet entries_set_;
 
@@ -282,7 +289,7 @@ class NET_EXPORT_PRIVATE SimpleIndex
 
   // This stores all the entry_hash of entries that are removed during
   // initialization.
-  std::unordered_set<uint64_t> removed_entries_;
+  absl::flat_hash_set<uint64_t> removed_entries_;
   bool initialized_ = false;
   IndexInitMethod init_method_ = INITIALIZE_METHOD_MAX;
 
@@ -305,6 +312,13 @@ class NET_EXPORT_PRIVATE SimpleIndex
   // background we can write the index much more frequently, to insure fresh
   // index on next startup.
   bool app_on_background_ = false;
+
+  // Flag and params for SimpleCachePrioritizedCaching feature.
+  const bool prioritized_caching_enabled_;
+  const int caching_prioritization_factor_;
+  const uint64_t caching_prioritization_period_in_seconds_;
+
+  base::WeakPtrFactory<SimpleIndex> weak_ptr_factory_{this};
 };
 
 }  // namespace disk_cache

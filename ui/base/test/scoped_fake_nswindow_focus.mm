@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/mac/foundation_util.h"
-#import "base/mac/scoped_objc_class_swizzler.h"
+#import "base/apple/foundation_util.h"
+#import "base/apple/scoped_objc_class_swizzler.h"
 
-using base::mac::ScopedObjCClassSwizzler;
+using base::apple::ScopedObjCClassSwizzler;
 
 namespace {
 
 NSWindow* g_fake_focused_window = nil;
-base::mac::ScopedObjCClassSwizzler* g_order_out_swizzler = nullptr;
+base::apple::ScopedObjCClassSwizzler* g_order_out_swizzler = nullptr;
 
 void SetFocus(NSWindow* window) {
   g_fake_focused_window = window;
@@ -29,6 +29,14 @@ void SetFocus(NSWindow* window) {
 void ClearFocus() {
   NSWindow* window = g_fake_focused_window;
   g_fake_focused_window = nil;
+
+  // Some observers of these notifications (e.g. NSRemoteView) expect a
+  // non-nil window, and throw an exception otherwise. When the window's
+  // nil, just skip posting the notification.
+  if (window == nil) {
+    return;
+  }
+
   [[NSNotificationCenter defaultCenter]
       postNotificationName:NSWindowDidResignKeyNotification
                     object:window];
@@ -47,17 +55,17 @@ void ClearFocus() {
 @implementation FakeNSWindowFocusDonor
 
 - (BOOL)isKeyWindow {
-  NSWindow* selfAsWindow = base::mac::ObjCCastStrict<NSWindow>(self);
+  NSWindow* selfAsWindow = base::apple::ObjCCastStrict<NSWindow>(self);
   return selfAsWindow == g_fake_focused_window;
 }
 
 - (BOOL)isMainWindow {
-  NSWindow* selfAsWindow = base::mac::ObjCCastStrict<NSWindow>(self);
+  NSWindow* selfAsWindow = base::apple::ObjCCastStrict<NSWindow>(self);
   return selfAsWindow == g_fake_focused_window;
 }
 
 - (void)makeKeyWindow {
-  NSWindow* selfAsWindow = base::mac::ObjCCastStrict<NSWindow>(self);
+  NSWindow* selfAsWindow = base::apple::ObjCCastStrict<NSWindow>(self);
   if (selfAsWindow == g_fake_focused_window ||
       ![selfAsWindow canBecomeKeyWindow])
     return;
@@ -71,10 +79,22 @@ void ClearFocus() {
 }
 
 - (void)orderOut:(id)sender {
-  NSWindow* selfAsWindow = base::mac::ObjCCastStrict<NSWindow>(self);
-  if (selfAsWindow == g_fake_focused_window)
+  NSWindow* selfAsWindow = base::apple::ObjCCastStrict<NSWindow>(self);
+  const bool was_focused = selfAsWindow == g_fake_focused_window;
+  // Grab the parent first, since ordering out a child window detaches it.
+  NSWindow* parent = selfAsWindow.parentWindow;
+  if (was_focused) {
     ClearFocus();
+  }
   g_order_out_swizzler->InvokeOriginal<void, id>(self, _cmd, sender);
+
+  // AppKit makes the window behind the key window key when the key window is
+  // ordered out. For child windows (e.g. tab-modal dialogs), that's usually the
+  // parent window, so emulate that.
+  if (was_focused && !g_fake_focused_window && parent.visible &&
+      parent.canBecomeKeyWindow) {
+    SetFocus(parent);
+  }
 }
 
 - (void)resignKeyWindow {
@@ -85,8 +105,23 @@ void ClearFocus() {
 
 @end
 
-namespace ui {
-namespace test {
+// Donates testing implementations of NSApplication methods.
+@interface FakeNSApplicationFocusDonor : NSObject
+@end
+
+@implementation FakeNSApplicationFocusDonor
+
+- (NSWindow*)keyWindow {
+  return g_fake_focused_window;
+}
+
+- (NSWindow*)mainWindow {
+  return g_fake_focused_window;
+}
+
+@end
+
+namespace ui::test {
 
 ScopedFakeNSWindowFocus::ScopedFakeNSWindowFocus()
     : is_main_swizzler_(
@@ -116,7 +151,15 @@ ScopedFakeNSWindowFocus::ScopedFakeNSWindowFocus()
       order_out_swizzler_(
           new ScopedObjCClassSwizzler([NSWindow class],
                                       [FakeNSWindowFocusDonor class],
-                                      @selector(orderOut:))) {
+                                      @selector(orderOut:))),
+      app_key_window_swizzler_(
+          new ScopedObjCClassSwizzler([NSApplication class],
+                                      [FakeNSApplicationFocusDonor class],
+                                      @selector(keyWindow))),
+      app_main_window_swizzler_(
+          new ScopedObjCClassSwizzler([NSApplication class],
+                                      [FakeNSApplicationFocusDonor class],
+                                      @selector(mainWindow))) {
   g_order_out_swizzler = order_out_swizzler_.get();
 }
 
@@ -125,5 +168,4 @@ ScopedFakeNSWindowFocus::~ScopedFakeNSWindowFocus() {
   ClearFocus();
 }
 
-}  // namespace test
-}  // namespace ui
+}  // namespace ui::test

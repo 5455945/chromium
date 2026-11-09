@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -27,13 +27,13 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "components/prefs/pref_observer.h"
 #include "components/prefs/prefs_export.h"
@@ -47,6 +47,8 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
   // Type of callback you can register if you need to know the name of
   // the pref that is changing.
   using NamedChangeCallback = base::RepeatingCallback<void(const std::string&)>;
+  using NamedChangeAsViewCallback =
+      base::RepeatingCallback<void(std::string_view)>;
 
   PrefService* prefs() { return prefs_; }
   const PrefService* prefs() const { return prefs_; }
@@ -56,6 +58,9 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
       : public base::RefCountedThreadSafe<Internal> {
    public:
     Internal();
+
+    Internal(const Internal&) = delete;
+    Internal& operator=(const Internal&) = delete;
 
     // Update the value, either by calling |UpdateValueInternal| directly
     // or by dispatching to the right sequence.
@@ -90,18 +95,19 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
     mutable bool is_managed_ = false;
     mutable bool is_user_modifiable_ = false;
     mutable bool is_default_value_ = false;
-
-    DISALLOW_COPY_AND_ASSIGN(Internal);
   };
 
   PrefMemberBase();
-  virtual ~PrefMemberBase();
+  ~PrefMemberBase() override;
 
   // See PrefMember<> for description.
-  void Init(const std::string& pref_name,
+  void Init(std::string pref_name,
             PrefService* prefs,
-            const NamedChangeCallback& observer);
-  void Init(const std::string& pref_name, PrefService* prefs);
+            NamedChangeCallback observer);
+  void Init(std::string pref_name,
+            PrefService* prefs,
+            NamedChangeAsViewCallback observer);
+  void Init(std::string pref_name, PrefService* prefs);
 
   virtual void CreateInternal() const = 0;
 
@@ -110,9 +116,10 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
 
   void MoveToSequence(scoped_refptr<base::SequencedTaskRunner> task_runner);
 
-  // PrefObserver
+  // PrefObserver:
+  void OnServiceDestroyed(PrefService* service) override;
   void OnPreferenceChanged(PrefService* service,
-                           const std::string& pref_name) override;
+                           std::string_view pref_name) override;
 
   void VerifyValuePrefName() const {
     DCHECK(!pref_name_.empty());
@@ -138,8 +145,8 @@ class COMPONENTS_PREFS_EXPORT PrefMemberBase : public PrefObserver {
  private:
   // Ordered the members to compact the class instance.
   std::string pref_name_;
-  NamedChangeCallback observer_;
-  PrefService* prefs_;
+  NamedChangeAsViewCallback observer_;
+  raw_ptr<PrefService> prefs_;
 
  protected:
   bool setting_value_;
@@ -158,8 +165,12 @@ class PrefMember : public subtle::PrefMemberBase {
  public:
   // Defer initialization to an Init method so it's easy to make this class be
   // a member variable.
-  PrefMember() {}
-  virtual ~PrefMember() {}
+  PrefMember() = default;
+
+  PrefMember(const PrefMember&) = delete;
+  PrefMember& operator=(const PrefMember&) = delete;
+
+  ~PrefMember() override = default;
 
   // Do the actual initialization of the class.  Use the two-parameter
   // version if you don't want any notifications of changes.  This
@@ -260,13 +271,16 @@ class PrefMember : public subtle::PrefMemberBase {
    public:
     Internal() : value_(ValueType()) {}
 
+    Internal(const Internal&) = delete;
+    Internal& operator=(const Internal&) = delete;
+
     ValueType value() {
       CheckOnCorrectSequence();
       return value_;
     }
 
    protected:
-    ~Internal() override {}
+    ~Internal() override = default;
 
     COMPONENTS_PREFS_EXPORT bool UpdateValueInternal(
         const base::Value& value) const override;
@@ -274,9 +288,6 @@ class PrefMember : public subtle::PrefMemberBase {
     // We cache the value of the pref so we don't have to keep walking the pref
     // tree.
     mutable ValueType value_;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Internal);
   };
 
   Internal* internal() const override { return internal_.get(); }
@@ -286,8 +297,6 @@ class PrefMember : public subtle::PrefMemberBase {
   void COMPONENTS_PREFS_EXPORT UpdatePref(const ValueType& value);
 
   mutable scoped_refptr<Internal> internal_;
-
-  DISALLOW_COPY_AND_ASSIGN(PrefMember);
 };
 
 // Declaration of template specialization need to be repeated here
@@ -299,7 +308,7 @@ class PrefMember : public subtle::PrefMemberBase {
 //
 // FEATURES="noclean nostrip" USE="-chrome_debug -chrome_remoting
 // -chrome_internal -chrome_pdf component_build"
-// ~/trunk/goma/goma-wrapper cros_chrome_make --board=${BOARD}
+// cros_chrome_make --board=${BOARD}
 // --install --runhooks
 
 template <>
@@ -356,6 +365,10 @@ typedef PrefMember<int> IntegerPrefMember;
 typedef PrefMember<double> DoublePrefMember;
 typedef PrefMember<std::string> StringPrefMember;
 typedef PrefMember<base::FilePath> FilePathPrefMember;
+
+// This typedef is in pref_member_language_tag.h to keep pref_member.h smaller.
+// typedef PrefMember<base::i18n::LanguageTag> LanguageTagPrefMember;
+
 // This preference member is expensive for large string arrays.
 typedef PrefMember<std::vector<std::string>> StringListPrefMember;
 

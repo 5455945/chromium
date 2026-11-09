@@ -1,6 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include <utility>
 
 #include "cc/layers/mirror_layer.h"
 
@@ -9,15 +11,19 @@
 namespace cc {
 
 std::unique_ptr<LayerImpl> MirrorLayer::CreateLayerImpl(
-    LayerTreeImpl* tree_impl) {
+    LayerTreeImpl* tree_impl) const {
   return MirrorLayerImpl::Create(tree_impl, id());
 }
 
-void MirrorLayer::PushPropertiesTo(LayerImpl* layer) {
-  Layer::PushPropertiesTo(layer);
+void MirrorLayer::PushDirtyPropertiesTo(LayerImpl* layer,
+                                        uint8_t dirty_flag,
+                                        CommitState& commit_state) {
+  Layer::PushDirtyPropertiesTo(layer, dirty_flag, commit_state);
 
-  auto* mirror_layer = static_cast<MirrorLayerImpl*>(layer);
-  mirror_layer->SetMirroredLayerId(mirrored_layer_->id());
+  if (dirty_flag & kChangedGeneralProperty) {
+    auto* mirror_layer = static_cast<MirrorLayerImpl*>(layer);
+    mirror_layer->SetMirroredLayerId(mirrored_layer_->id());
+  }
 }
 
 void MirrorLayer::SetLayerTreeHost(LayerTreeHost* host) {

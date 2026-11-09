@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,23 @@
 
 #include <windows.media.protection.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include <memory>
+#include <vector>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/strings/strcat.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/win/scoped_com_initializer.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/demuxer_stream.h"
+#include "media/base/media_switches.h"
+#include "media/base/media_util.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_helpers.h"
 #include "media/base/win/test_utils.h"
@@ -26,36 +34,21 @@ using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::StrictMock;
 
+#include "media/base/win/mf_mocks.h"
+
 namespace media {
 
 using ABI::Windows::Media::Protection::IMediaProtectionPMPServer;
 using Microsoft::WRL::ComPtr;
 
-class MockMediaFoundationCdmProxy : public MediaFoundationCdmProxy {
- public:
-  MockMediaFoundationCdmProxy();
-
-  // MediaFoundationCdmProxy.
-  MOCK_METHOD2(GetPMPServer, HRESULT(REFIID riid, void** object_result));
-  MOCK_METHOD6(GetInputTrustAuthority,
-               HRESULT(uint32_t stream_id,
-                       uint32_t stream_count,
-                       const uint8_t* content_init_data,
-                       uint32_t content_init_data_size,
-                       REFIID riid,
-                       IUnknown** object_result));
-  MOCK_METHOD2(SetLastKeyId, HRESULT(uint32_t stream_id, REFGUID key_id));
-  MOCK_METHOD0(RefreshTrustedInput, HRESULT());
-  MOCK_METHOD2(ProcessContentEnabler,
-               HRESULT(IUnknown* request, IMFAsyncResult* result));
-  MOCK_METHOD0(OnHardwareContextReset, void());
-
- protected:
-  ~MockMediaFoundationCdmProxy() override;
-};
-
-MockMediaFoundationCdmProxy::MockMediaFoundationCdmProxy() = default;
-MockMediaFoundationCdmProxy::~MockMediaFoundationCdmProxy() = default;
+constexpr char kSubsequentErrorUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentError";
+constexpr char kSubsequentEventUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentEvent";
+constexpr char kSubsequentEventOrErrorReportedUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentEventOrErrorReported";
+constexpr char kMFSeekRequestedUmaName[] =
+    "Media.MediaFoundationRenderer.MFSeekRequested";
 
 class MockMediaProtectionPMPServer
     : public Microsoft::WRL::RuntimeClass<
@@ -64,7 +57,7 @@ class MockMediaProtectionPMPServer
           IMediaProtectionPMPServer> {
  public:
   MockMediaProtectionPMPServer() = default;
-  virtual ~MockMediaProtectionPMPServer() = default;
+  ~MockMediaProtectionPMPServer() override = default;
 
   static HRESULT MakeMockMediaProtectionPMPServer(
       IMediaProtectionPMPServer** pmp_server) {
@@ -89,9 +82,6 @@ class MockMediaProtectionPMPServer
 class MediaFoundationRendererTest : public testing::Test {
  public:
   MediaFoundationRendererTest() {
-    if (!MediaFoundationRenderer::IsSupported())
-      return;
-
     mf_cdm_proxy_ =
         base::MakeRefCounted<NiceMock<MockMediaFoundationCdmProxy>>();
 
@@ -102,13 +92,14 @@ class MediaFoundationRendererTest : public testing::Test {
     MockMediaProtectionPMPServer::MakeMockMediaProtectionPMPServer(
         &pmp_server_);
 
+    LUID empty_luid{0, 0};
     mf_renderer_ = std::make_unique<MediaFoundationRenderer>(
-        task_environment_.GetMainThreadTaskRunner());
+        task_environment_.GetMainThreadTaskRunner(),
+        std::make_unique<NullMediaLog>(), empty_luid);
 
     // Some default actions.
-    ON_CALL(cdm_context_, GetMediaFoundationCdmProxy(_))
-        .WillByDefault(Invoke(
-            this, &MediaFoundationRendererTest::GetMediaFoundationCdmProxy));
+    ON_CALL(cdm_context_, GetMediaFoundationCdmProxy())
+        .WillByDefault(Return(mf_cdm_proxy_));
     ON_CALL(*mf_cdm_proxy_, GetPMPServer(_, _))
         .WillByDefault(
             Invoke(this, &MediaFoundationRendererTest::GetPMPServer));
@@ -117,8 +108,6 @@ class MediaFoundationRendererTest : public testing::Test {
     EXPECT_CALL(media_resource_, GetAllStreams())
         .WillRepeatedly(
             Invoke(this, &MediaFoundationRendererTest::GetAllStreams));
-    EXPECT_CALL(media_resource_, GetType())
-        .WillRepeatedly(Return(MediaResource::STREAM));
   }
 
   ~MediaFoundationRendererTest() override { mf_renderer_.reset(); }
@@ -127,21 +116,14 @@ class MediaFoundationRendererTest : public testing::Test {
     streams_.push_back(CreateMockDemuxerStream(type, encrypted));
   }
 
-  std::vector<DemuxerStream*> GetAllStreams() {
-    std::vector<DemuxerStream*> streams;
+  std::vector<raw_ptr<DemuxerStream>> GetAllStreams() {
+    std::vector<raw_ptr<DemuxerStream>> streams;
 
     for (auto& stream : streams_) {
       streams.push_back(stream.get());
     }
 
     return streams;
-  }
-
-  bool GetMediaFoundationCdmProxy(
-      CdmContext::GetMediaFoundationCdmProxyCB get_mf_cdm_proxy_cb) {
-    // Call the callback asynchronously per API contract.
-    BindToCurrentLoop(std::move(get_mf_cdm_proxy_cb)).Run(mf_cdm_proxy_);
-    return true;
   }
 
   HRESULT GetPMPServer(REFIID riid, LPVOID* object_result) {
@@ -155,7 +137,11 @@ class MediaFoundationRendererTest : public testing::Test {
   }
 
  protected:
-  base::win::ScopedCOMInitializer com_initializer_;
+  // IMF* interfaces (e.g. IMediaProtectionPMPServer or
+  // IMFContentDecryptionModule) may require an MTA to run successfully.
+  base::win::ScopedCOMInitializer com_initializer_{
+      base::win::ScopedCOMInitializer::kMTA};
+
   base::test::TaskEnvironment task_environment_;
   base::MockOnceCallback<void(bool)> set_cdm_cb_;
   base::MockOnceCallback<void(PipelineStatus)> renderer_init_cb_;
@@ -169,13 +155,10 @@ class MediaFoundationRendererTest : public testing::Test {
 };
 
 TEST_F(MediaFoundationRendererTest, VerifyInitWithoutSetCdm) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
-  EXPECT_CALL(renderer_init_cb_, Run(PIPELINE_OK));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
 
   mf_renderer_->Initialize(&media_resource_, &renderer_client_,
                            renderer_init_cb_.Get());
@@ -184,14 +167,11 @@ TEST_F(MediaFoundationRendererTest, VerifyInitWithoutSetCdm) {
 }
 
 TEST_F(MediaFoundationRendererTest, SetCdmThenInit) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
   EXPECT_CALL(set_cdm_cb_, Run(true));
-  EXPECT_CALL(renderer_init_cb_, Run(PIPELINE_OK));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
 
   mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
   mf_renderer_->Initialize(&media_resource_, &renderer_client_,
@@ -201,48 +181,426 @@ TEST_F(MediaFoundationRendererTest, SetCdmThenInit) {
 }
 
 TEST_F(MediaFoundationRendererTest, InitThenSetCdm) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
   EXPECT_CALL(set_cdm_cb_, Run(true));
-  EXPECT_CALL(renderer_init_cb_, Run(PIPELINE_OK));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
 
   mf_renderer_->Initialize(&media_resource_, &renderer_client_,
                            renderer_init_cb_.Get());
+  mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
+
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(MediaFoundationRendererTest, ClearStreamWithCdmSetsUpProtectionManager) {
+  LUID empty_luid{0, 0};
+  mf_renderer_ = std::make_unique<MediaFoundationRenderer>(
+      task_environment_.GetMainThreadTaskRunner(),
+      std::make_unique<NullMediaLog>(), empty_luid,
+      /*is_testing=*/false);
+
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/false);
+
+  EXPECT_CALL(set_cdm_cb_, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  // Expect the CDM proxy to be queried for the PMP server, proving that
+  // MediaFoundationProtectionManager is initialized despite the clear streams
+  // because a CDM was explicitly attached prior to initialization.
+  EXPECT_CALL(*mf_cdm_proxy_, GetPMPServer(_, _)).Times(1);
+
+  // In production, SetCdm() is strictly guaranteed to be called before
+  // Initialize(). Attach the CDM first.
+  mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
+
+  // Initialize the renderer. Because has_cdm is true, it should setup the
+  // protection manager rather than early-outing into clear playback.
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(MediaFoundationRendererTest,
+       ClearStreamInitThenSetCdmDoesNotSetUpProtectionManager) {
+  LUID empty_luid{0, 0};
+  mf_renderer_ = std::make_unique<MediaFoundationRenderer>(
+      task_environment_.GetMainThreadTaskRunner(),
+      std::make_unique<NullMediaLog>(), empty_luid,
+      /*is_testing=*/false);
+
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/false);
+
+  EXPECT_CALL(set_cdm_cb_, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  // Expect the CDM proxy to NOT be queried for the PMP server, proving that
+  // MediaFoundationProtectionManager is NOT initialized because the CDM was
+  // not attached prior to initialization and the streams are clear.
+  EXPECT_CALL(*mf_cdm_proxy_, GetPMPServer(_, _)).Times(0);
+
+  // Initialize the renderer first. Because has_cdm is false and streams are
+  // clear, it should early-out to clear playback.
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  // Attach the CDM second. This should still succeed, but won't trigger
+  // protection manager setup.
   mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
 
   task_environment_.RunUntilIdle();
 }
 
 TEST_F(MediaFoundationRendererTest, DirectCompositionHandle) {
-  if (!MediaFoundationRenderer::IsSupported())
-    return;
-
-  base::MockCallback<MediaFoundationRendererExtension::SetDCompModeCB>
-      set_dcomp_mode_cb;
   base::MockCallback<MediaFoundationRendererExtension::GetDCompSurfaceCB>
-      get_dcomp_cb;
+      get_dcomp_surface_cb;
 
   AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
   AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
 
   EXPECT_CALL(set_cdm_cb_, Run(true));
-  EXPECT_CALL(renderer_init_cb_, Run(PIPELINE_OK));
-  EXPECT_CALL(set_dcomp_mode_cb, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
   // Ignore the DirectComposition handle value returned as our |pmp_server_|
   // has no real implementation.
-  EXPECT_CALL(get_dcomp_cb, Run(_));
+  EXPECT_CALL(get_dcomp_surface_cb, Run(_, _));
 
   mf_renderer_->Initialize(&media_resource_, &renderer_client_,
                            renderer_init_cb_.Get());
   mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
-  mf_renderer_->SetDCompMode(true, set_dcomp_mode_cb.Get());
-  mf_renderer_->GetDCompSurface(get_dcomp_cb.Get());
+  mf_renderer_->GetDCompSurface(get_dcomp_surface_cb.Get());
 
   task_environment_.RunUntilIdle();
 }
 
+TEST_F(MediaFoundationRendererTest, SetOutputRect_ErrorCases) {
+  base::HistogramTester histogram_tester;
+  base::MockCallback<MediaFoundationRendererExtension::SetOutputRectCB>
+      set_output_rect_cb;
+
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(set_cdm_cb_, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(set_output_rect_cb, Run(true));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+  mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
+  mf_renderer_->SetOutputRect(gfx::Rect(0, 0, 100, 100),
+                              set_output_rect_cb.Get());
+
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectBucketCount(
+      "Media.MediaFoundationRenderer.SetOutputRect.Hresult", S_OK, 1);
+}
+
+TEST_F(MediaFoundationRendererTest, IgnoreSubsequentErrorsAfterFirstError) {
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  testing::InSequence s;
+
+  // We only expect one error to be reported.
+  EXPECT_CALL(renderer_client_, OnError(_)).Times(1);
+
+  // After the error, no other event calls to the client should be made.
+  EXPECT_CALL(renderer_client_, OnWaiting(_)).Times(0);
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+
+  // Simulate the first error event.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR,
+                                   MF_MEDIA_ENGINE_ERR_DECODE, E_FAIL);
+  task_environment_.RunUntilIdle();
+
+  // Simulate a subsequent error. This should be ignored because the renderer
+  // is already in an error state.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR,
+                                   MF_MEDIA_ENGINE_ERR_DECODE, E_UNEXPECTED);
+  task_environment_.RunUntilIdle();
+
+  // Simulate a subsequent event. This should be ignored because the renderer
+  // is already in an error state.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_WAITING, 0L, 0L);
+  task_environment_.RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(&renderer_client_);
+}
+
+// No error reported.
+TEST_F(MediaFoundationRendererTest, SubsequentEventOrError_NoError) {
+  base::HistogramTester histogram_tester;
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(set_cdm_cb_, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+  mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
+
+  task_environment_.RunUntilIdle();
+
+  // Destroy the renderer to trigger MediaEngineNotifyImpl's destructor
+  mf_renderer_.reset();
+
+  // Process any pending tasks (like histogram recording)
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectTotalCount(kSubsequentEventOrErrorReportedUmaName, 0);
+  histogram_tester.ExpectTotalCount(kSubsequentErrorUmaName, 0);
+  histogram_tester.ExpectTotalCount(kSubsequentEventUmaName, 0);
+}
+
+// One error but not subsequent event or error reported.
+TEST_F(MediaFoundationRendererTest, SubsequentEventOrError_OneError) {
+  base::HistogramTester histogram_tester;
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  testing::InSequence s;
+
+  // We only expect one error to be reported.
+  EXPECT_CALL(renderer_client_, OnError(_)).Times(1);
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+
+  // Simulate the first error event.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR,
+                                   MF_MEDIA_ENGINE_ERR_DECODE, E_FAIL);
+  task_environment_.RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(&renderer_client_);
+
+  // Destroy the renderer to trigger MediaEngineNotifyImpl's destructor
+  mf_renderer_.reset();
+
+  // Process any pending tasks (like histogram recording)
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectBucketCount(
+      base::StrCat(
+          {kSubsequentErrorUmaName, ".MF_MEDIA_ENGINE_ERR_DECODE.Hresult"}),
+      E_FAIL, 0);
+  histogram_tester.ExpectBucketCount(kSubsequentErrorUmaName,
+                                     MF_MEDIA_ENGINE_ERR_DECODE, 0);
+  histogram_tester.ExpectTotalCount(kSubsequentEventUmaName, 0);
+  histogram_tester.ExpectBucketCount(kSubsequentEventOrErrorReportedUmaName,
+                                     false, 1);
+}
+
+// One error and then a subsequent error reported.
+TEST_F(MediaFoundationRendererTest, SubsequentEventOrError_TwoErrors) {
+  base::HistogramTester histogram_tester;
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  testing::InSequence s;
+
+  // We only expect one error to be reported.
+  EXPECT_CALL(renderer_client_, OnError(_)).Times(1);
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+
+  // Simulate the first error event.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR,
+                                   MF_MEDIA_ENGINE_ERR_DECODE, E_UNEXPECTED);
+  task_environment_.RunUntilIdle();
+
+  // Simulate a subsequent error. This should be ignored because the renderer
+  // is already in an error state.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR,
+                                   MF_MEDIA_ENGINE_ERR_DECODE, E_FAIL);
+  task_environment_.RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(&renderer_client_);
+
+  // Destroy the renderer to trigger MediaEngineNotifyImpl's destructor
+  mf_renderer_.reset();
+
+  // Process any pending tasks (like histogram recording)
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectBucketCount(
+      base::StrCat(
+          {kSubsequentErrorUmaName, ".MF_MEDIA_ENGINE_ERR_DECODE.Hresult"}),
+      E_FAIL, 1);
+  histogram_tester.ExpectBucketCount(kSubsequentErrorUmaName,
+                                     MF_MEDIA_ENGINE_ERR_DECODE, 1);
+  histogram_tester.ExpectTotalCount(kSubsequentEventUmaName, 0);
+  histogram_tester.ExpectBucketCount(kSubsequentEventOrErrorReportedUmaName,
+                                     true, 1);
+}
+
+// One error and then a subsequent event reported.
+TEST_F(MediaFoundationRendererTest,
+       SubsequentEventOrError_OneErrorThenOneEvent) {
+  base::HistogramTester histogram_tester;
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  testing::InSequence s;
+
+  // We only expect one error to be reported.
+  EXPECT_CALL(renderer_client_, OnError(_)).Times(1);
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+
+  // Simulate the first error event.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR,
+                                   MF_MEDIA_ENGINE_ERR_DECODE, E_UNEXPECTED);
+  task_environment_.RunUntilIdle();
+
+  // Simulate a subsequent event. This should be ignored because the renderer
+  // is already in an error state.
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ENDED, 0L, 0L);
+  task_environment_.RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(&renderer_client_);
+
+  // Destroy the renderer to trigger MediaEngineNotifyImpl's destructor
+  mf_renderer_.reset();
+
+  // Process any pending tasks (like histogram recording)
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectBucketCount(
+      base::StrCat(
+          {kSubsequentErrorUmaName, ".MF_MEDIA_ENGINE_ERR_DECODE.Hresult"}),
+      E_UNEXPECTED, 0);
+  histogram_tester.ExpectBucketCount(kSubsequentErrorUmaName,
+                                     MF_MEDIA_ENGINE_ERR_DECODE, 0);
+  histogram_tester.ExpectBucketCount(kSubsequentEventUmaName,
+                                     MF_MEDIA_ENGINE_EVENT_ENDED, 1);
+  histogram_tester.ExpectBucketCount(kSubsequentEventOrErrorReportedUmaName,
+                                     true, 1);
+}
+
+// A frame step completing during a seek must leave the Media Engine paused for
+// StartPlayingFrom().
+TEST_F(MediaFoundationRendererTest,
+       FrameStepCompletedDuringFlushDoesNotResume) {
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+  task_environment_.RunUntilIdle();
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+  IMFMediaEngine* media_engine = mf_renderer_->GetMediaEngineForTesting();
+  ASSERT_TRUE(media_engine);
+
+  // Flush() pauses the Media Engine for the seek.
+  base::MockOnceClosure flush_cb;
+  EXPECT_CALL(flush_cb, Run());
+  mf_renderer_->Flush(flush_cb.Get());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_TRUE(media_engine->IsPaused());
+
+  // The frame step completes before StartPlayingFrom().
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_FRAMESTEPCOMPLETED, 0L,
+                                   0L);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_TRUE(media_engine->IsPaused());
+}
+
+// The Media Engine asks Chromium to seek instead of seeking on its own, so
+// each request should be forwarded to the pipeline as a lost decoder state.
+TEST_F(MediaFoundationRendererTest,
+       EngineSeekRequestedReportsDecoderStateLost) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kMediaFoundationChromiumCompatibilityMode);
+  base::HistogramTester histogram_tester;
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+  task_environment_.RunUntilIdle();
+
+  EXPECT_CALL(renderer_client_, OnWaiting(WaitingReason::kDecoderStateLost))
+      .Times(2);
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED,
+                                   0L, 0L);
+  task_environment_.RunUntilIdle();
+
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED,
+                                   0L, 0L);
+  task_environment_.RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(&renderer_client_);
+
+  // The number of requests is reported when the renderer is destroyed.
+  mf_renderer_.reset();
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectUniqueSample(kMFSeekRequestedUmaName, 2, 1);
+}
 }  // namespace media

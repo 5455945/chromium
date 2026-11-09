@@ -1,33 +1,39 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/extensions/api/notifications/extension_notification_handler.h"
+
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "chrome/browser/extensions/api/notifications/extension_notification_handler.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/event_args.h"
+#include "extensions/common/extension_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace {
 
-static const char kChromeExtensionOrigin[] =
+constexpr char kChromeExtensionOrigin[] =
     "chrome-extension://gclcddgeeaknflkijpcbplmhbkonmlij/";
-static const char kChromeExtensionId[] = "gclcddgeeaknflkijpcbplmhbkonmlij";
-static const char kChromeNotificationId[] =
-    "gclcddgeeaknflkijpcbplmhbkonmlij-id1";
+constexpr char kChromeExtensionId[] = "gclcddgeeaknflkijpcbplmhbkonmlij";
+constexpr char kChromeNotificationId[] = "gclcddgeeaknflkijpcbplmhbkonmlij-id1";
 
 class TestExtensionNotificationHandler : public ExtensionNotificationHandler {
  public:
   // Set expected arguments for this test handler.
-  void SetTestExpectations(const std::string& extension_id,
+  void SetTestExpectations(const ExtensionId& extension_id,
                            const std::string& event_name,
                            size_t param_count) {
     extension_id_ = extension_id;
@@ -37,33 +43,31 @@ class TestExtensionNotificationHandler : public ExtensionNotificationHandler {
 
  protected:
   void SendEvent(Profile* profile,
-                 const std::string& extension_id,
+                 const ExtensionId& extension_id,
                  events::HistogramValue histogram_value,
                  const std::string& event_name,
                  EventRouter::UserGestureState user_gesture,
-                 std::unique_ptr<base::ListValue> args) final {
+                 scoped_refptr<const EventArgs> args) final {
     EXPECT_EQ(event_name_, event_name);
     EXPECT_EQ(extension_id_, extension_id);
-    EXPECT_EQ(param_count_, args->GetSize());
+    EXPECT_EQ(param_count_, args ? args->data.size() : 0);
   }
 
  private:
-  std::string extension_id_;
+  ExtensionId extension_id_;
   std::string event_name_;
-  size_t param_count_;
+  size_t param_count_ = 0;
 };
-}  // namespace
 
 class ExtensionNotificationHandlerTest : public testing::Test {
  public:
-  ExtensionNotificationHandlerTest() {}
+  ExtensionNotificationHandlerTest() = default;
 
  private:
   content::BrowserTaskEnvironment task_environment_;
 };
 
 TEST_F(ExtensionNotificationHandlerTest, CloseHandler) {
-  EXPECT_TRUE(true);
   TestingProfile::Builder builder;
   std::unique_ptr<TestingProfile> profile = builder.Build();
 
@@ -75,19 +79,17 @@ TEST_F(ExtensionNotificationHandlerTest, CloseHandler) {
 }
 
 TEST_F(ExtensionNotificationHandlerTest, ClickHandler) {
-  EXPECT_TRUE(true);
   TestingProfile::Builder builder;
   std::unique_ptr<TestingProfile> profile = builder.Build();
 
   TestExtensionNotificationHandler handler;
   handler.SetTestExpectations(kChromeExtensionId, "notifications.onClicked", 1);
   handler.OnClick(profile.get(), GURL(kChromeExtensionOrigin),
-                  kChromeNotificationId, absl::nullopt /* action_index */,
-                  absl::nullopt /* reply */, base::DoNothing());
+                  kChromeNotificationId, std::nullopt /* action_index */,
+                  std::nullopt /* reply */, base::DoNothing());
 }
 
 TEST_F(ExtensionNotificationHandlerTest, ClickHandlerButton) {
-  EXPECT_TRUE(true);
   TestingProfile::Builder builder;
   std::unique_ptr<TestingProfile> profile = builder.Build();
 
@@ -96,7 +98,8 @@ TEST_F(ExtensionNotificationHandlerTest, ClickHandlerButton) {
                               "notifications.onButtonClicked", 2);
   handler.OnClick(profile.get(), GURL(kChromeExtensionOrigin),
                   kChromeNotificationId, 1 /* action_index */,
-                  absl::nullopt /* reply */, base::DoNothing());
+                  std::nullopt /* reply */, base::DoNothing());
 }
 
+}  // namespace
 }  // namespace extensions

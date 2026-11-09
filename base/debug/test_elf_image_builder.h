@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 #include <elf.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
 
 #if __SIZEOF_POINTER__ == 4
 using Addr = Elf32_Addr;
@@ -49,7 +50,7 @@ class TestElfImage {
 
  private:
   std::vector<uint8_t> buffer_;
-  const void* elf_start_;
+  raw_ptr<const void> elf_start_;
 };
 
 // Builds an in-memory image of an ELF file for testing.
@@ -78,12 +79,12 @@ class TestElfImageBuilder {
 
   // Add a PT_NOTE segment with the specified state.
   TestElfImageBuilder& AddNoteSegment(Word type,
-                                      StringPiece name,
+                                      std::string_view name,
                                       span<const uint8_t> desc);
 
   // Adds a DT_SONAME dynamic section and the necessary state to support it. May
   // be invoked at most once.
-  TestElfImageBuilder& AddSoName(StringPiece soname);
+  TestElfImageBuilder& AddSoName(std::string_view soname);
 
   TestElfImage Build();
 
@@ -120,7 +121,7 @@ class TestElfImageBuilder {
   const MappingType mapping_type_;
   std::vector<std::vector<uint8_t>> note_contents_;
   std::vector<LoadSegment> load_segments_;
-  absl::optional<std::string> soname_;
+  std::optional<std::string> soname_;
 };
 
 }  // namespace base

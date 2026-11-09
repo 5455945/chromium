@@ -1,9 +1,8 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//build/buildflag_header.gni")
-import("//build/config/features.gni")
 import("//testing/test.gni")
 
 declare_args() {
@@ -37,6 +36,20 @@ source_set("message_port") {
   }
 }
 
+source_set("blink_message_port_adapter") {
+  public = [ "blink_message_port_adapter.h" ]
+  sources = [ "blink_message_port_adapter.cc" ]
+
+  public_deps = [
+    ":message_port",
+    "//third_party/blink/public/common",
+  ]
+  deps = [
+    ":message_port_cast",
+    "//base",
+  ]
+}
+
 source_set("public") {
   sources = [
     "message_port.cc",
@@ -53,19 +66,24 @@ source_set("public") {
 
 if (is_fuchsia) {
   source_set("message_port_fuchsia") {
-    public = [ "fuchsia/message_port_fuchsia.h" ]
+    public = [
+      "fuchsia/create_web_message.h",
+      "fuchsia/message_port_fuchsia.h",
+    ]
 
-    sources = [ "fuchsia/message_port_fuchsia.cc" ]
+    sources = [
+      "fuchsia/create_web_message.cc",
+      "fuchsia/message_port_fuchsia.cc",
+    ]
 
     public_deps = [
       ":public",
-
-      # TODO(crbug.com/1120731): Remove dependencies on //fuchsia.
-      "//fuchsia/base",
-      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.web",
+      "//base",
+      "//third_party/abseil-cpp:absl",
+      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.web:fuchsia.web_hlcpp",
     ]
 
-    deps = [ "//base" ]
+    deps = [ "//third_party/fuchsia-sdk/sdk/pkg/fit-promise" ]
   }
 }
 
@@ -113,6 +131,7 @@ source_set("message_port_unittest") {
   testonly = true
   sources = [ "message_port_unittest.cc" ]
   deps = [
+    ":blink_message_port_adapter",
     ":message_port",
     ":message_port_buildflags",
     ":message_port_cast",

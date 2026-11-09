@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,31 +6,27 @@
 #define CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_TEST_CERTIFICATE_PROVIDER_EXTENSION_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "crypto/keypair.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/test/extension_test_message_listener.h"
 #include "net/cert/x509_certificate.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/boringssl/src/include/openssl/base.h"
 
 namespace base {
 class FilePath;
-class Value;
-}
+}  // namespace base
 
 namespace content {
 class BrowserContext;
 }
 
-namespace crypto {
-class RSAPrivateKey;
-}
+namespace ash {
 
 // This class provides the C++ side of the test certificate provider extension's
 // implementation (the JavaScript side is in
@@ -41,8 +37,7 @@ class RSAPrivateKey;
 // certificate and private key (see src/net/data/ssl/certificates). The
 // supported signature algorithms are currently hardcoded to PKCS #1 v1.5 with
 // SHA-1 and SHA-256.
-class TestCertificateProviderExtension final
-    : public content::NotificationObserver {
+class TestCertificateProviderExtension final {
  public:
   static extensions::ExtensionId extension_id();
   static base::FilePath GetExtensionSourcePath();
@@ -53,7 +48,13 @@ class TestCertificateProviderExtension final
 
   explicit TestCertificateProviderExtension(
       content::BrowserContext* browser_context);
-  ~TestCertificateProviderExtension() override;
+
+  TestCertificateProviderExtension(const TestCertificateProviderExtension&) =
+      delete;
+  TestCertificateProviderExtension& operator=(
+      const TestCertificateProviderExtension&) = delete;
+
+  ~TestCertificateProviderExtension();
 
   // Causes the extension to call chrome.certificateProvider.setCertificates,
   // providing the certificates that are currently available.
@@ -90,10 +91,7 @@ class TestCertificateProviderExtension final
   using ReplyToJsCallback =
       base::OnceCallback<void(const base::Value& response)>;
 
-  // content::NotificationObserver implementation:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  void HandleMessage(const std::string& message);
 
   void HandleCertificatesRequest(ReplyToJsCallback callback);
   void HandleSignatureRequest(const base::Value& sign_request,
@@ -101,22 +99,22 @@ class TestCertificateProviderExtension final
                               const base::Value& pin,
                               ReplyToJsCallback callback);
 
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::BrowserContext> browser_context_;
   const scoped_refptr<net::X509Certificate> certificate_;
-  std::unique_ptr<crypto::RSAPrivateKey> private_key_;
+  crypto::keypair::PrivateKey private_key_;
   int certificate_request_count_ = 0;
   // When non-empty, contains the expected PIN; the implementation will request
   // the PIN on every signature request in this case.
-  absl::optional<std::string> required_pin_;
+  std::optional<std::string> required_pin_;
   // The number of remaining PIN attempts.
   // When equal to zero, signature requests will be failed immediately; when is
   // negative, infinite number of attempts is allowed.
   int remaining_pin_attempts_ = -1;
   bool should_provide_certificates_ = true;
   bool should_fail_sign_digest_requests_ = false;
-  content::NotificationRegistrar notification_registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestCertificateProviderExtension);
+  ExtensionTestMessageListener message_listener_;
 };
+
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_TEST_CERTIFICATE_PROVIDER_EXTENSION_H_

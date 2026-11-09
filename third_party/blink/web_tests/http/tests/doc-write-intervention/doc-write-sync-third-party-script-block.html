@@ -65,9 +65,7 @@
             if (window.internals) {
                 header = internals.getResourceHeader(src, 'Intervention',
                                                      document);
-                assert_equals(header,
-                    '<https://www.chromestatus.com/feature/5718547946799104>; level="warning"',
-                    'Intervention header');
+                assert_equals(header, '', 'Intervention header');
             }
 
             t.step_timeout(testNonCachedCrossOriginScriptBlocked.bind(undefined, t), 0);
@@ -79,7 +77,7 @@
         t.step_timeout(function() {
             document.write('<scr' + 'ipt src="' + src +
                 '" onload="onload1()" onerror="onerror1()"></scr' + 'ipt>');
-        }, 0);
+        }, 1);
     }
 
     var onload2;
@@ -90,9 +88,9 @@
         var filePath = '/loading/resources/js-loaded.js?cross-origin2';
         var src = crossOrigin + filePath;
         if (window.internals) {
-            var originalPriority = internals.getResourcePriority(src, document);
-            var interventionPriority = originalPriority.then(() =>
-                                  internals.getResourcePriority(src, document));
+          var originalPriority = internals.getInitialResourcePriorityOfNewLoad(src, document);
+          var interventionPriority = originalPriority.then(() =>
+            internals.getInitialResourcePriorityOfNewLoad(src, document));
         }
 
         onload2 = t.unreached_func(

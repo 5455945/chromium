@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,9 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/time/time.h"
 #include "chrome/browser/ash/power/cpu_data_collector.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-using base::TimeDelta;
 
 namespace ash {
 namespace {
@@ -66,12 +65,15 @@ class CpuDataCollectorTest : public testing::Test {
  public:
   CpuDataCollectorTest()
       : kExpectedCpuFreqStateNames({"20", "60", "100"}),
-        kExpectedTimeInStateCpu0({TimeDelta::FromMilliseconds(300000000),
-                                  TimeDelta::FromMilliseconds(900000),
-                                  TimeDelta::FromMilliseconds(500000)}),
-        kExpectedTimeInStateCpu1({TimeDelta::FromMilliseconds(310000000),
-                                  TimeDelta::FromMilliseconds(910000),
-                                  TimeDelta::FromMilliseconds(510000)}) {}
+        kExpectedTimeInStateCpu0({base::Milliseconds(300000000),
+                                  base::Milliseconds(900000),
+                                  base::Milliseconds(500000)}),
+        kExpectedTimeInStateCpu1({base::Milliseconds(310000000),
+                                  base::Milliseconds(910000),
+                                  base::Milliseconds(510000)}) {}
+
+  CpuDataCollectorTest(const CpuDataCollectorTest&) = delete;
+  CpuDataCollectorTest& operator=(const CpuDataCollectorTest&) = delete;
 
   // testing::Test:
   void SetUp() override {
@@ -91,29 +93,24 @@ class CpuDataCollectorTest : public testing::Test {
   const std::vector<std::string> kExpectedCpuFreqStateNames;
 
   // Expected time_in_state of sample for cpu0.
-  const std::vector<TimeDelta> kExpectedTimeInStateCpu0;
+  const std::vector<base::TimeDelta> kExpectedTimeInStateCpu0;
 
   // Expected time_in_state of sample for cpu1.
-  const std::vector<TimeDelta> kExpectedTimeInStateCpu1;
+  const std::vector<base::TimeDelta> kExpectedTimeInStateCpu1;
 
   base::ScopedTempDir temp_dir_;
   base::FilePath time_in_state_path_cpu0_;
   base::FilePath time_in_state_path_cpu1_;
   base::FilePath all_time_in_state_path_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CpuDataCollectorTest);
 };
 
 TEST_F(CpuDataCollectorTest, ReadCpuFreqTimeInState) {
   ASSERT_TRUE(base::CreateTemporaryFile(&time_in_state_path_cpu0_));
   ASSERT_TRUE(base::CreateTemporaryFile(&time_in_state_path_cpu1_));
   ASSERT_TRUE(
-      base::WriteFile(time_in_state_path_cpu0_, kTimeInStateContentCpu0,
-                      static_cast<int>(strlen(kTimeInStateContentCpu0))) != -1);
+      base::WriteFile(time_in_state_path_cpu0_, kTimeInStateContentCpu0));
   ASSERT_TRUE(
-      base::WriteFile(time_in_state_path_cpu1_, kTimeInStateContentCpu1,
-                      static_cast<int>(strlen(kTimeInStateContentCpu1))) != -1);
+      base::WriteFile(time_in_state_path_cpu1_, kTimeInStateContentCpu1));
 
   std::vector<std::string> cpu_freq_state_names;
   CpuDataCollector::StateOccupancySample freq_sample_cpu0;
@@ -133,9 +130,7 @@ TEST_F(CpuDataCollectorTest, ReadCpuFreqTimeInState) {
 
 TEST_F(CpuDataCollectorTest, ReadCpuFreqAllTimeInState) {
   ASSERT_TRUE(base::CreateTemporaryFile(&all_time_in_state_path_));
-  ASSERT_TRUE(
-      base::WriteFile(all_time_in_state_path_, kAllTimeInStateContent,
-                      static_cast<int>(strlen(kAllTimeInStateContent))) != -1);
+  ASSERT_TRUE(base::WriteFile(all_time_in_state_path_, kAllTimeInStateContent));
 
   std::vector<std::string> cpu_freq_state_names;
   std::vector<CpuDataCollector::StateOccupancySample> freq_samples;
@@ -156,9 +151,8 @@ TEST_F(CpuDataCollectorTest, ReadCpuFreqAllTimeInState) {
 
 TEST_F(CpuDataCollectorTest, ReadCpuFreqAllTimeInStateNA) {
   ASSERT_TRUE(base::CreateTemporaryFile(&all_time_in_state_path_));
-  ASSERT_TRUE(base::WriteFile(
-                  all_time_in_state_path_, kAllTimeInStateContentNA,
-                  static_cast<int>(strlen(kAllTimeInStateContentNA))) != -1);
+  ASSERT_TRUE(
+      base::WriteFile(all_time_in_state_path_, kAllTimeInStateContentNA));
 
   std::vector<std::string> cpu_freq_state_names;
   std::vector<CpuDataCollector::StateOccupancySample> freq_samples;
@@ -183,9 +177,8 @@ TEST_F(CpuDataCollectorTest, ReadCpuFreqAllTimeInStateNA) {
 
 TEST_F(CpuDataCollectorTest, ReadCpuFreqAllTimeInStateOff) {
   ASSERT_TRUE(base::CreateTemporaryFile(&all_time_in_state_path_));
-  ASSERT_TRUE(base::WriteFile(
-                  all_time_in_state_path_, kAllTimeInStateContentOff,
-                  static_cast<int>(strlen(kAllTimeInStateContentOff))) != -1);
+  ASSERT_TRUE(
+      base::WriteFile(all_time_in_state_path_, kAllTimeInStateContentOff));
 
   std::vector<std::string> cpu_freq_state_names;
   std::vector<CpuDataCollector::StateOccupancySample> freq_samples;

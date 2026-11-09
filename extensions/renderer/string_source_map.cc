@@ -1,35 +1,38 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/string_source_map.h"
 
+#include <ostream>
+
+#include "base/check_op.h"
 #include "gin/converter.h"
 #include "third_party/zlib/google/compression_utils.h"
 
 namespace extensions {
 
-StringSourceMap::StringSourceMap() {}
-StringSourceMap::~StringSourceMap() {}
+StringSourceMap::StringSourceMap() = default;
+StringSourceMap::~StringSourceMap() = default;
 
-v8::Local<v8::String> StringSourceMap::GetSource(
-    v8::Isolate* isolate,
-    const std::string& name) const {
+v8::Local<v8::String> StringSourceMap::GetSource(v8::Isolate* isolate,
+                                                 std::string_view name) const {
   const auto& iter = sources_.find(name);
-  if (iter == sources_.end())
+  if (iter == sources_.end()) {
     return v8::Local<v8::String>();
+  }
   return gin::StringToV8(isolate, iter->second);
 }
 
-bool StringSourceMap::Contains(const std::string& name) const {
-  return sources_.find(name) != sources_.end();
+bool StringSourceMap::Contains(std::string_view name) const {
+  return sources_.contains(name);
 }
 
 void StringSourceMap::RegisterModule(const std::string& name,
                                      const std::string& source,
                                      bool gzipped) {
-  CHECK_EQ(0u, sources_.count(name)) << "A module for '" << name
-                                     << "' already exists.";
+  CHECK(!sources_.contains(name))
+      << "A module for '" << name << "' already exists.";
   if (!gzipped) {
     sources_[name] = source;
     return;

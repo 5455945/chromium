@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,15 +18,17 @@ class UkmRotationScheduler : public metrics::MetricsRotationScheduler {
   // to determine the interval between rotations in steady state.
   UkmRotationScheduler(
       const base::RepeatingClosure& rotation_callback,
-      bool fast_startup_for_testing,
+      bool fast_startup,
       const base::RepeatingCallback<base::TimeDelta(void)>& interval_callback);
+
+  UkmRotationScheduler(const UkmRotationScheduler&) = delete;
+  UkmRotationScheduler& operator=(const UkmRotationScheduler&) = delete;
+
   ~UkmRotationScheduler() override;
 
  private:
   // Record the init sequence order histogram.
   void LogMetricsInitSequence(InitSequence sequence) override;
-
-  DISALLOW_COPY_AND_ASSIGN(UkmRotationScheduler);
 };
 
 }  // namespace ukm

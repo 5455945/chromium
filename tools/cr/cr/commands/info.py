@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -19,9 +19,12 @@ class InfoCommand(cr.Command):
   def AddArguments(self, subparsers):
     parser = super(InfoCommand, self).AddArguments(subparsers)
     parser.add_argument(
-        '-s', '--short', dest='_short',
-        action='store_true', default=False,
-        help='Short form results, useful for scripting.'
+      '-s',
+      '--short',
+      dest='_short',
+      action='store_true',
+      default=False,
+      help='Short form results, useful for scripting.',
     )
     self.ConsumeArgs(parser, 'the environment')
     return parser

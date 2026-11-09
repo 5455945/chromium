@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,6 @@ class BluetoothTestFuchsia : public BluetoothTestBase {
  public:
   BluetoothTestFuchsia();
   ~BluetoothTestFuchsia() override;
-
-  // BluetoothTestBase overrides:
-  bool PlatformSupportsLowEnergy() override;
 };
 
 // Defines common test fixture name. Use TEST_F(BluetoothTest, YourTestName).

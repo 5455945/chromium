@@ -3,18 +3,30 @@
 This directory contains the `fieldtrial_testing_config.json` configuration file,
 which is used to ensure test coverage of active field trials.
 
-For each study, the first available experiment after platform filtering is used
-as the default experiment for Chromium builds. This experiment is also used for
-perf bots and various browser tests in the waterfall (e.g. browser_tests,
-components_browsertests, content_browsertests, extensions_browsertests, interactive_ui_tests and
-sync_integration_tests). It is not used by unit test targets.
+For each study, the configuration most likely to launch should be listed and
+will be used as the default for Chromium builds. This configuration is also used
+for perf bots and various tests in the waterfall (browser tests, including those
+in browser_tests, components_browsertests, content_browsertests,
+interactive_ui_tests, and sync_integration_tests, and
+[web platform tests](/docs/testing/web_platform_tests.md)). It is not used by
+unit test targets.
 
-> Note: This configuration applies specifically to Chromium developer builds.
-> Chrome branded / official builds do not use these definitions.
+> Note: This configuration applies specifically to Chromium developer and
+> [Chrome for Testing branded](https://goo.gle/chrome-for-testing) builds.
+> Chrome branded builds do not use these definitions by default. They can, however,
+> be enabled with the `--enable-field-trial-config` switch.
+> For Chrome branded Android builds, due to binary size constraints, the
+> configuration cannot be applied by this switch.
 
 > Note: Non-developer builds of Chromium (for example, non-Chrome browsers,
 > or Chromium builds provided by Linux distros) should disable the testing
-> config via the GN flag `fieldtrial_testing_like_official_build=true`.
+> config by either (1) specifying the GN flag `disable_fieldtrial_testing_config=true`,
+> (2) specifying the `--disable-field-trial-config` switch or (3) specifying a
+> custom variations server URL using the `--variations-server-url` switch.
+
+> Note: An experiment in the testing configuration file that enables/disables a
+> feature that is explicitly overridden (e.g. using the `--enable-features` or
+> `--disable-features` switches) will be skipped.
 
 ## Config File Format
 
@@ -30,8 +42,7 @@ sync_integration_tests). It is not used by unit test targets.
                     "params": {Dictionary of Params},
                     "enable_features": [Array of Strings of Features],
                     "disable_features": [Array of Strings of Features]
-                },
-                ...
+                }
             ]
         },
         ...
@@ -39,6 +50,11 @@ sync_integration_tests). It is not used by unit test targets.
     ...
 }
 ```
+
+`experiments` above is an array for historical reasons: the original goal was
+for CI to run multiple configurations of the same study. But in the end infra
+didn't have enough capacity for that and this only caused confusion
+(https://crbug.com/570488175).
 
 The config file is a dictionary at the top level mapping a study name to an
 array of *study configurations*. The study name in the configuration file
@@ -48,42 +64,21 @@ array of *study configurations*. The study name in the configuration file
 > rely on the [Feature List API][FeatureListAPI] instead. Nonetheless, if a
 > study has a server-side configuration, the study `name` specified here
 > must still match the name specified in the server-side configuration; this is
-> used to implement sanity-checks on the server.
+> used to implement consistency checks on the server.
 
 ### Study Configurations
 
 Each *study configuration* is a dictionary containing `platforms` and
 `experiments`.
 
-`platforms` is an array of strings, indicating the targetted platforms. The
-strings may be `android`, `android_webview`, `chromeos`, `ios`, `linux`, `mac`,
-or `windows`.
+`platforms` is an array of strings, indicating the targeted platforms. The
+strings may be `android`, `android_desktop`, `android_webview`, `chromeos`,
+`ios`, `linux`, `mac`, or `windows`.
 
-`experiments` is an array containing the *experiments*.
-
-The converter uses the `platforms` array to determine which experiment to use
-for the study. The first experiment matching the active platform will be used.
-
-> Note: While `experiments` is defined as an array, currently only the first
-> entry is used*\**. We would love to be able to test all possible study
-> configurations, but don't currently have the buildbot resources to do so.
-> Hence, the current best-practice is to identify which experiment group is the
-> most likely candidate for ultimate launch, and to test that configuration. If
-> there is a server-side configuration for this study, it's typically
-> appropriate to copy/paste one of the experiment definitions into this file.
->
-> *\**
-> <small>
->   Technically, there is one exception: If there's a forcing_flag group
->   specified in the config, that group will be used if there's a corresponding
->   forcing_flag specified on the command line. You, dear reader, should
->   probably not use this fancy mechanism unless you're <em>quite</em> sure you
->   know what you're doing =)
-> </small>
-
-### Experiments (Groups)
-Each *experiment* is a dictionary that must contain the `name` key, identifying
-the experiment group name.
+`experiments` is a single-element array containing the most likely
+configuration for launch (see historical note in previous section). That element
+is a dictionary that must contain the `name` key, identifying the experiment
+group name.
 
 > Note: Studies should typically use the [Feature List API][FeatureListAPI]. For
 > such studies, the experiment `name` specified in the testing config is still
@@ -96,7 +91,8 @@ the experiment group name.
 > config.
 
 The remaining keys -- `enable_features`, `disable_features`, `min_os_version`,
-and `params` -- are optional.
+`disable_benchmarking`, `params`, `hardware_classes`, and
+`exclude_hardware_classes` -- are optional.
 
 `enable_features` and `disable_features` indicate which features should be
 enabled and disabled, respectively, through the
@@ -107,7 +103,22 @@ the experiment. This string is decoded as a `base::Version`. The same version is
 applied to all platforms. If you need different versions for different
 platforms, you will need to use different studies.
 
+`disable_benchmarking` indicates that when the flag
+`--enable-benchmarking` is passed at start up this experiment should not be
+enabled. This should be used extremely sparingly.
+
+> Warning: `disable_benchmarking` works as described above on most platforms
+> however when using the
+> [fieldtrial_util.py](https://source.chromium.org/chromium/chromium/src/+/main:tools/variations/fieldtrial_util.py)
+> script we will always exclude `disable_benchmarking` experiments. This is
+> due to this script being primarily used for benchmarking, and because it
+> generates command lines flags to set state we don't know if
+> `--enable-benchmarking` will be passed or not.
+
 `params` is a dictionary mapping parameter name to parameter value.
+
+`hardware_classes` and `exclude_hardware_classes` indicate which hardware
+classes to include or exclude respectively when applying the experiment.
 
 > Reminder: The variations framework does not actually fetch any field trial
 > definitions from the server for Chromium builds, so any feature enabling or
@@ -155,6 +166,14 @@ Simply specify two different study configurations in the study:
 }
 ```
 
-## Presubmit
-The presubmit tool will ensure that your changes follow the correct ordering and
-format.
+## Formatting
+
+Run the following command to auto-format the `fieldtrial_testing_config.json`
+configuration file:
+
+```shell
+python3 testing/variations/PRESUBMIT.py testing/variations/fieldtrial_testing_config.json
+```
+
+The presubmit tool will also ensure that your changes follow the correct
+ordering and format.

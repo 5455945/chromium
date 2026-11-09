@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/html/forms/date_time_symbolic_field_element.h"
 
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
+#include "third_party/blink/renderer/core/layout/text_utils.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/text/text_break_iterator.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
@@ -60,17 +61,18 @@ DateTimeSymbolicFieldElement::DateTimeSymbolicFieldElement(
       type_ahead_(this),
       minimum_index_(minimum),
       maximum_index_(maximum) {
-  DCHECK(!symbols.IsEmpty());
+  DCHECK(!symbols.empty());
   DCHECK_GE(minimum_index_, 0);
   SECURITY_DCHECK(maximum_index_ < static_cast<int>(symbols_.size()));
   DCHECK_LE(minimum_index_, maximum_index_);
 }
 
 float DateTimeSymbolicFieldElement::MaximumWidth(const ComputedStyle& style) {
-  float maximum_width = ComputeTextWidth(style, VisibleEmptyValue());
-  for (unsigned index = 0; index < symbols_.size(); ++index)
+  float maximum_width = ComputeTextWidth(VisibleEmptyValue(), style);
+  for (unsigned index = 0; index < symbols_.size(); ++index) {
     maximum_width =
-        std::max(maximum_width, ComputeTextWidth(style, symbols_[index]));
+        std::max(maximum_width, ComputeTextWidth(symbols_[index], style));
+  }
   return maximum_width + DateTimeFieldElement::MaximumWidth(style);
 }
 
@@ -79,15 +81,22 @@ void DateTimeSymbolicFieldElement::HandleKeyboardEvent(
   if (keyboard_event.type() != event_type_names::kKeypress)
     return;
 
-  const UChar char_code = WTF::unicode::ToLower(keyboard_event.charCode());
+  const UChar char_code = unicode::ToLower(keyboard_event.charCode());
   if (char_code < ' ')
     return;
 
   keyboard_event.SetDefaultHandled();
 
-  int index = type_ahead_.HandleEvent(
-      keyboard_event, TypeAhead::kMatchPrefix | TypeAhead::kCycleFirstChar |
-                          TypeAhead::kMatchIndex);
+  if (Type() == DateTimeField::kAMPM) {
+    // Since AM/PM field has only 2 options, the type_ahead session should be
+    // reset to enable fast toggling between the options.
+    type_ahead_.ResetSession();
+  }
+
+  int index = type_ahead_.HandleEvent(keyboard_event, keyboard_event.charCode(),
+                                      TypeAhead::kMatchPrefix |
+                                          TypeAhead::kCycleFirstChar |
+                                          TypeAhead::kMatchIndex);
   if (index < 0)
     return;
   SetValueAsInteger(index, kDispatchEvent);
@@ -109,8 +118,23 @@ void DateTimeSymbolicFieldElement::Initialize(const AtomicString& pseudo,
 void DateTimeSymbolicFieldElement::SetEmptyValue(EventBehavior event_behavior) {
   if (IsDisabled())
     return;
+  type_ahead_.ResetSession();
   selected_index_ = kInvalidIndex;
   UpdateVisibleValue(event_behavior);
+}
+
+void DateTimeSymbolicFieldElement::ResetTypeAhead() {
+  type_ahead_.ResetSession();
+}
+
+void DateTimeSymbolicFieldElement::SetFocused(
+    bool value,
+    mojom::blink::FocusType focus_type,
+    BlurEventBehavior blur_event_behavior) {
+  if (!value) {
+    type_ahead_.ResetSession();
+  }
+  DateTimeFieldElement::SetFocused(value, focus_type, blur_event_behavior);
 }
 
 void DateTimeSymbolicFieldElement::SetValueAsInteger(
@@ -176,6 +200,12 @@ int DateTimeSymbolicFieldElement::OptionCount() const {
 
 String DateTimeSymbolicFieldElement::OptionAtIndex(int index) const {
   return symbols_[index];
+}
+
+void DateTimeSymbolicFieldElement::Trace(Visitor* visitor) const {
+  visitor->Trace(type_ahead_);
+  DateTimeFieldElement::Trace(visitor);
+  TypeAheadDataSource::Trace(visitor);
 }
 
 }  // namespace blink

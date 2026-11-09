@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "components/download/public/common/download_source.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 
 namespace download {
 
@@ -27,9 +28,7 @@ struct DownloadEntry {
       int64_t ukm_id);
   ~DownloadEntry();
 
-  bool operator==(const DownloadEntry& other) const;
-
-  bool operator!=(const DownloadEntry& other) const;
+  friend bool operator==(const DownloadEntry&, const DownloadEntry&) = default;
 
   // A unique GUID that represents this download.
   std::string guid;
@@ -50,6 +49,17 @@ struct DownloadEntry {
   // If the entity body of unsuccessful HTTP response, like HTTP 404, will be
   // downloaded.
   bool fetch_error_body = false;
+
+  // True if a Service Worker fetch handler produced the original response.
+  bool fetched_via_service_worker = false;
+
+  // The credentials mode of the request.
+  ::network::mojom::CredentialsMode credentials_mode =
+      ::network::mojom::CredentialsMode::kInclude;
+
+  // The fetch request mode of the request.
+  ::network::mojom::RequestMode fetch_request_mode =
+      ::network::mojom::RequestMode::kNavigate;
 
   // Request header key/value pairs that will be added to the download HTTP
   // request.

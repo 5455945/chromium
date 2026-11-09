@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "chrome/installer/util/advanced_firewall_manager_win.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/installer_util_strings.h"
@@ -24,8 +23,13 @@ const uint16_t kDefaultMdnsPort = 5353;
 
 class FirewallManagerAdvancedImpl : public FirewallManager {
  public:
-  FirewallManagerAdvancedImpl() {}
-  ~FirewallManagerAdvancedImpl() override {}
+  FirewallManagerAdvancedImpl() = default;
+
+  FirewallManagerAdvancedImpl(const FirewallManagerAdvancedImpl&) = delete;
+  FirewallManagerAdvancedImpl& operator=(const FirewallManagerAdvancedImpl&) =
+      delete;
+
+  ~FirewallManagerAdvancedImpl() override = default;
 
   bool Init(const std::wstring& app_name, const base::FilePath& app_path) {
     return manager_.Init(app_name, app_path);
@@ -53,13 +57,11 @@ class FirewallManagerAdvancedImpl : public FirewallManager {
   }
 
   AdvancedFirewallManager manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(FirewallManagerAdvancedImpl);
 };
 
 }  // namespace
 
-FirewallManager::~FirewallManager() {}
+FirewallManager::~FirewallManager() = default;
 
 // static
 std::unique_ptr<FirewallManager> FirewallManager::Create(
@@ -72,6 +74,6 @@ std::unique_ptr<FirewallManager> FirewallManager::Create(
   return nullptr;
 }
 
-FirewallManager::FirewallManager() {}
+FirewallManager::FirewallManager() = default;
 
 }  // namespace installer

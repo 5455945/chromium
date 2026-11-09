@@ -1,8 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/mac_notifications/public/mojom/mac_notifications_mojom_traits.h"
+
+#include "base/notreached.h"
 
 namespace mojo {
 
@@ -11,38 +13,37 @@ mac_notifications::mojom::NotificationOperation
 EnumTraits<mac_notifications::mojom::NotificationOperation,
            NotificationOperation>::ToMojom(NotificationOperation input) {
   switch (input) {
-    case NotificationOperation::NOTIFICATION_CLICK:
+    case NotificationOperation::kClick:
       return mac_notifications::mojom::NotificationOperation::kClick;
-    case NotificationOperation::NOTIFICATION_CLOSE:
+    case NotificationOperation::kClose:
       return mac_notifications::mojom::NotificationOperation::kClose;
-    case NotificationOperation::NOTIFICATION_SETTINGS:
+    case NotificationOperation::kSettings:
       return mac_notifications::mojom::NotificationOperation::kSettings;
-    case NotificationOperation::NOTIFICATION_DISABLE_PERMISSION:
+    case NotificationOperation::kDisablePermission:
+    case NotificationOperation::kReportAsSafe:
+    case NotificationOperation::kReportWarnedAsSpam:
+    case NotificationOperation::kReportUnwarnedAsSpam:
+    case NotificationOperation::kShowOriginalNotification:
       // This is not supported in macOS notifications.
       break;
   }
   NOTREACHED();
-  return mac_notifications::mojom::NotificationOperation::kClick;
 }
 
 // static
-bool EnumTraits<mac_notifications::mojom::NotificationOperation,
-                NotificationOperation>::
-    FromMojom(mac_notifications::mojom::NotificationOperation input,
-              NotificationOperation* output) {
+NotificationOperation
+EnumTraits<mac_notifications::mojom::NotificationOperation,
+           NotificationOperation>::
+    FromMojom(mac_notifications::mojom::NotificationOperation input) {
   switch (input) {
     case mac_notifications::mojom::NotificationOperation::kClick:
-      *output = NotificationOperation::NOTIFICATION_CLICK;
-      return true;
+      return NotificationOperation::kClick;
     case mac_notifications::mojom::NotificationOperation::kClose:
-      *output = NotificationOperation::NOTIFICATION_CLOSE;
-      return true;
+      return NotificationOperation::kClose;
     case mac_notifications::mojom::NotificationOperation::kSettings:
-      *output = NotificationOperation::NOTIFICATION_SETTINGS;
-      return true;
+      return NotificationOperation::kSettings;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace mojo

@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">ရွေ့လျားမှုရုပ်ပုံများ အားလုံးကိုပိတ်မည်။</translation>
 <translation id="1703735871906654364">Caret ဖြင့် ရှာကြည့်မှု</translation>
 <translation id="1791496371305830581">ရွှေ့လျားရုပ်ပုံများအားလုံး ခွင့်ပြုမည်။</translation>
+<translation id="1974060860693918893">အဆင့်မြင့်</translation>
 <translation id="1996252509865389616">ဖွင့်မည်လား?</translation>
 <translation id="2079545284768500474">တစ်ဆင့်နောက်ပြန်ရန်</translation>
 <translation id="2179565792157161713">ရှည်လျားသည့် ဖေါ်ပြချက်ကို တဘ် အသစ်ထဲမှာ ဖွင့်ရန်</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">ပုံ Alt စာသား ကြည့်ရှုသူ</translation>
 <translation id="381767806621926835">"longdesc" သို့မဟုတ် "aria-describedat" ဂုဏ်ရည်ပါဝင်သော မည်သည့်အရာကိုမဆို ၄င်း၏ ရှည်လျားသော ဖော်ပြချက်ကို ရရှိရန် ညာကလစ်ခေါက်ပါ။</translation>
 <translation id="4023902424053835668">ဝဘ် စာမျက်နှာများကို မြားကီးများကို သုံးပြီး ကြည့်ရှုပါ။</translation>
+<translation id="4384008284958619421">ခေတ်မီ ဖန်သားပြင်ဖတ်အက်ပ်များနှင့် Google Chrome တို့သည် အသုံးပြုနိုင်သော အစိတ်အပိုင်း ဖော်ပြချက်များနှင့် ARIA စံနှုန်းများကို မူရင်းအတိုင်း ပံ့ပိုးပေးနေပါပြီ။</translation>
 <translation id="4388820049312272371">ညွှန်မြား နေရာကို မြန်သည့် ဖလက်ရှမီးဖြင့် ခွဲခြားဖေါ်ပြပါ။</translation>
 <translation id="4394049700291259645">ပိတ်ထားရန်</translation>
 <translation id="4769065380738716500">ရုပ်ပုံများအား ၄င်းတို့၏ alt စာသားများဖြင့် အစားထိုးထားသည်</translation>
@@ -44,13 +46,14 @@
 <translation id="5631241868147802353">ပုံသေ အရောင် ဇယား:</translation>
 <translation id="5650358096585648000">မြင်ရသည့် အကြံပြုချက်</translation>
 <translation id="5710185147685935461">ဝက်ဘ်စာမျက်နှာများကို ဖတ်လွယ်အောင် အရောင်ဇယားကို ပြောင်းလဲပါ သို့မဟုတ် ပြောင်းပြန် လှန်လိုက်ပါ။</translation>
-<translation id="5939518447894949180">ပြန်ညှိ</translation>
+<translation id="5939518447894949180">ပြင်ဆင်သတ်မှတ်ရန်</translation>
 <translation id="595639123821853262">ပြောင်းပြန်လှန်ထားသည့် ဖြူမဲစကေး</translation>
 <translation id="6017514345406065928">အစိမ်းရောင်</translation>
 <translation id="6050189528197190982">ဖြူမဲစကေး</translation>
 <translation id="6170146920149900756">အရောင် အရည်အသွေး မြှင့်တင်မှု</translation>
 <translation id="633394792577263429">စာလုံးများ အလိုက် ရွေ့ရှားရန် &lt;span class='key'&gt;ထိန်းချုပ်မှုl&lt;/span&gt; ကို စွဲကိုင်ထားပါ။</translation>
 <translation id="6550675742724504774">ရွေးစရာများ</translation>
+<translation id="6699630355767768222">အဆင့် ၃- အမှန်ပြင်ရန် အရောင်ဝင်ရိုးကို အစားထိုးပါ။</translation>
 <translation id="6838518108677880446">တပ်ဆင်ရန်:</translation>
 <translation id="690628312087070417">ညွှန်းမြားက ကြီးမားသည့် အကွာအဝေးသို့ ခုန်သွားခဲ့လျှင်:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -60,9 +63,11 @@
 <translation id="7658239707568436148">မလုပ်တော့</translation>
 <translation id="786423340267544509">aria-describedat or longdesc ဂုဏ်ရည်များပါသော အရာများသို့ ဘောင်ကန့်သတ်ချက်များထည့်သွင်းပါ။</translation>
 <translation id="7942349550061667556">အနီရောင်</translation>
+<translation id="8081200409424070383">‘အကျယ်ရှင်းလင်းချက်များ’ ကို ၂၀၂၆ နိုဝင်ဘာ ၂၀ တွင် ရပ်ဆိုင်းပါမည်။</translation>
 <translation id="8260673944985561857">Caret ဖြင့် ရှာကြည့်မှု ရွေးစရာများ</translation>
 <translation id="8321034316479930120">ရွှေ့လျားရုပ်ပုံ မူဝါဒ</translation>
 <translation id="8480209185614411573">မြင့်မားသည့် ဖြူမည်းခြားနားချက်</translation>
 <translation id="8609925175482059018">Caret ဖြင့် ရှာကြည့်မှုကို ဖွင့်ပေးရန်  &lt;span class='key'&gt;F7&lt;/span&gt;ကို နှိပ်ပါ။ ၎င်းကို ပိတ်ရန် ထပ်နှိပ်ပါ။</translation>
+<translation id="8798099450830957504">ပုံသေ</translation>
 <translation id="894241283505723656">ဆက်စပ်မီးနူးထဲက ရှည်လျားသည့် ဖေါ်ပြချက်ကို</translation>
 </translationbundle>

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,15 @@
 
 #include <algorithm>
 
+#include "base/i18n/rtl.h"
 #include "base/notreached.h"
+#include "ui/base/models/table_model.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/text_utils.h"
 #include "ui/views/controls/table/table_view.h"
 
 namespace views {
-
-const int kUnspecifiedColumnWidth = 90;
 
 int WidthForContent(const gfx::FontList& header_font_list,
                     const gfx::FontList& content_font_list,
@@ -25,11 +25,12 @@ int WidthForContent(const gfx::FontList& header_font_list,
                     const ui::TableColumn& column,
                     ui::TableModel* model) {
   int width = header_padding;
-  if (!column.title.empty())
+  if (!column.title.empty()) {
     width =
         gfx::GetStringWidth(column.title, header_font_list) + header_padding;
+  }
 
-  for (int i = 0, row_count = model->RowCount(); i < row_count; ++i) {
+  for (size_t i = 0, row_count = model->RowCount(); i < row_count; ++i) {
     const int cell_width =
         gfx::GetStringWidth(model->GetText(i, column.id), content_font_list);
     width = std::max(width, cell_width);
@@ -62,8 +63,9 @@ std::vector<int> CalculateTableColumnSizes(
         content_widths[i] =
             WidthForContent(header_font_list, content_font_list, padding,
                             header_padding, column, model);
-        if (i == 0)
+        if (i == 0) {
           content_widths[i] += first_column_padding;
+        }
       }
       non_percent_width += content_widths[i];
     } else {
@@ -106,17 +108,36 @@ int TableColumnAlignmentToCanvasAlignment(
       return gfx::Canvas::TEXT_ALIGN_RIGHT;
   }
   NOTREACHED();
-  return gfx::Canvas::TEXT_ALIGN_LEFT;
 }
 
-int GetClosestVisibleColumnIndex(const TableView* table, int x) {
-  const std::vector<TableView::VisibleColumn>& columns(
-      table->visible_columns());
-  for (size_t i = 0; i < columns.size(); ++i) {
-    if (x <= columns[i].x + columns[i].width)
-      return static_cast<int>(i);
+std::optional<size_t> GetClosestVisibleColumnIndex(const TableView& table,
+                                                   int x) {
+  const std::vector<TableView::VisibleColumn>& columns(table.visible_columns());
+  if (columns.empty()) {
+    return std::nullopt;
   }
-  return static_cast<int>(columns.size()) - 1;
+  for (size_t i = 0; i < columns.size(); ++i) {
+    if (x <= columns[i].x + columns[i].width) {
+      return i;
+    }
+  }
+  return columns.size() - 1;
+}
+
+ui::TableColumn::Alignment GetMirroredTableColumnAlignment(
+    ui::TableColumn::Alignment alignment) {
+  if (!base::i18n::IsRTL()) {
+    return alignment;
+  }
+
+  switch (alignment) {
+    case ui::TableColumn::LEFT:
+      return ui::TableColumn::RIGHT;
+    case ui::TableColumn::RIGHT:
+      return ui::TableColumn::LEFT;
+    case ui::TableColumn::CENTER:
+      return ui::TableColumn::CENTER;
+  }
 }
 
 }  // namespace views

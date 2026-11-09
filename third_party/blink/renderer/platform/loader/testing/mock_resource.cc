@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,11 @@ class MockResourceFactory final : public NonTextResourceFactory {
 
   Resource* Create(const ResourceRequest& request,
                    const ResourceLoaderOptions& options) const override {
-    return MakeGarbageCollected<MockResource>(request, options);
+    Resource* resource = MakeGarbageCollected<MockResource>(request, options);
+    if ((request.GetKnownTransparentPlaceholderImageIndex() != kNotFound)) {
+      resource->SetStatus(ResourceStatus::kCached);
+    }
+    return resource;
   }
 };
 

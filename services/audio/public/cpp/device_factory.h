@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 #define SERVICES_AUDIO_PUBLIC_CPP_DEVICE_FACTORY_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "base/component_export.h"
 #include "media/audio/audio_input_device.h"
+#include "media/base/audio_processing.h"
 #include "media/mojo/mojom/audio_stream_factory.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 
@@ -16,16 +19,22 @@ namespace audio {
 
 using DeadStreamDetection = media::AudioInputDevice::DeadStreamDetection;
 
-scoped_refptr<media::AudioCapturerSource> CreateInputDevice(
-    mojo::PendingRemote<media::mojom::AudioStreamFactory> stream_factory,
-    const std::string& device_id,
-    DeadStreamDetection detect_dead_stream);
-
+COMPONENT_EXPORT(AUDIO_PUBLIC_CPP)
 scoped_refptr<media::AudioCapturerSource> CreateInputDevice(
     mojo::PendingRemote<media::mojom::AudioStreamFactory> stream_factory,
     const std::string& device_id,
     DeadStreamDetection detect_dead_stream,
-    mojo::PendingRemote<media::mojom::AudioLog>);
+    std::optional<media::AudioProcessingSettings> processing_settings =
+        std::nullopt);
+
+COMPONENT_EXPORT(AUDIO_PUBLIC_CPP)
+scoped_refptr<media::AudioCapturerSource> CreateInputDevice(
+    mojo::PendingRemote<media::mojom::AudioStreamFactory> stream_factory,
+    const std::string& device_id,
+    DeadStreamDetection detect_dead_stream,
+    mojo::PendingRemote<media::mojom::AudioLog> log,
+    std::optional<media::AudioProcessingSettings> processing_settings =
+        std::nullopt);
 
 }  // namespace audio
 

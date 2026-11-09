@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 
 namespace arc {
@@ -31,8 +30,7 @@ namespace arc {
 // mode detector skips kWarmUp and kRateDetection and always watches for janks.
 class ArcGraphicsJankDetector {
  public:
-  using JankCallback =
-      base::RepeatingCallback<void(const base::Time& timestamp)>;
+  using JankCallback = base::RepeatingCallback<void(base::Time timestamp)>;
 
   enum class Stage {
     kWarmUp,         // ignore any update
@@ -49,14 +47,17 @@ class ArcGraphicsJankDetector {
   // Constant to detect pause to reduce the chance of triggering jank detection
   // in case Android app just not producing the samples due to inactivity.
   static constexpr base::TimeDelta kPauseDetectionThreshold =
-      base::TimeDelta::FromSecondsD(0.25);
-
-  // Threshold relative to the normal rate to consider the current frame as a
-  // jank if its duration longer than this threshold.
-  static constexpr int kJankDetectionThresholdPercent = 190;
+      base::Seconds(0.25);
 
   explicit ArcGraphicsJankDetector(const JankCallback& callback);
+
+  ArcGraphicsJankDetector(const ArcGraphicsJankDetector&) = delete;
+  ArcGraphicsJankDetector& operator=(const ArcGraphicsJankDetector&) = delete;
+
   ~ArcGraphicsJankDetector();
+
+  // Returns whether there are enough samples to run detector.
+  static bool IsEnoughSamplesToDetect(size_t num_samples);
 
   // Resets detector to its initial state, stage is set to |Stage::kWarmUp| with
   // the initial number of warm up samples. Fixed period is discarded if it was
@@ -68,12 +69,8 @@ class ArcGraphicsJankDetector {
   // stage.
   void SetPeriodFixed(const base::TimeDelta& period);
 
-  // Notifies about the next sample. Used in runtime and timestamp is considered
-  // as now time.
-  void OnSample();
-  // Notifies about the next sample with corresponding timestamp. Used in tests
-  // off-line processing.
-  void OnSample(const base::Time& timestamp);
+  // Notifies about the next sample with corresponding timestamp.
+  void OnSample(base::Time timestamp);
 
   Stage stage() const { return stage_; }
   base::TimeDelta period() const { return period_; }
@@ -90,8 +87,6 @@ class ArcGraphicsJankDetector {
   base::TimeDelta period_;
   // Period fixed.
   bool period_fixed_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcGraphicsJankDetector);
 };
 
 }  // namespace arc

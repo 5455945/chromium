@@ -1,20 +1,23 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/discardable_memory/common/discardable_shared_memory_heap.h"
 
 #include <stddef.h>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/discardable_shared_memory.h"
 #include "base/memory/page_size.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 
@@ -48,8 +51,8 @@ TEST(DiscardableSharedMemoryHeapTest, SearchFreeLists) {
   srand(kSeed);
 
   // Pre-compute random values.
-  int random_span[kTimeCheckInterval];
-  size_t random_blocks[kTimeCheckInterval];
+  std::array<int, kTimeCheckInterval> random_span;
+  std::array<size_t, kTimeCheckInterval> random_blocks;
   for (int i = 0; i < kTimeCheckInterval; ++i) {
     random_span[i] = std::rand();
     // Exponentially distributed block size.
@@ -61,7 +64,7 @@ TEST(DiscardableSharedMemoryHeapTest, SearchFreeLists) {
   std::vector<std::unique_ptr<base::ScopedClosureRunner>> spans;
 
   base::TimeTicks start = base::TimeTicks::Now();
-  base::TimeTicks end = start + base::TimeDelta::FromMilliseconds(kTimeLimitMs);
+  base::TimeTicks end = start + base::Milliseconds(kTimeLimitMs);
   base::TimeDelta accumulator;
   int count = 0;
   while (start < end) {

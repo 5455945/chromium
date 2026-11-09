@@ -1,27 +1,33 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/proxy_resolution/win/proxy_resolver_winhttp.h"
 
 #include <windows.h>
+
 #include <winhttp.h>
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "net/base/net_errors.h"
+#include "net/base/url_util.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "net/proxy_resolution/proxy_resolver.h"
+#include "net/proxy_resolution/win/proxy_resolver_winhttp_test_hooks.h"
 #include "url/gurl.h"
 
-using base::TimeDelta;
 using base::TimeTicks;
 
 namespace net {
 namespace {
+
+// The WinHttpGetProxyForUrl implementation used by ProxyResolverWinHttp. May be
+// overridden by tests via ScopedWinHttpGetProxyForUrlOverride.
+WinHttpGetProxyForUrlFunc g_winhttp_get_proxy_for_url =
+    &::WinHttpGetProxyForUrl;
 
 static void FreeInfo(WINHTTP_PROXY_INFO* info) {
   if (info->lpszProxy)
@@ -55,11 +61,15 @@ static Error WinHttpErrorToNetError(DWORD win_http_error) {
 class ProxyResolverWinHttp : public ProxyResolver {
  public:
   ProxyResolverWinHttp(const scoped_refptr<PacFileData>& script_data);
+
+  ProxyResolverWinHttp(const ProxyResolverWinHttp&) = delete;
+  ProxyResolverWinHttp& operator=(const ProxyResolverWinHttp&) = delete;
+
   ~ProxyResolverWinHttp() override;
 
   // ProxyResolver implementation:
   int GetProxyForURL(const GURL& url,
-                     const NetworkIsolationKey& network_isolation_key,
+                     const NetworkAnonymizationKey& network_anymization_key,
                      ProxyInfo* results,
                      CompletionOnceCallback /*callback*/,
                      std::unique_ptr<Request>* /*request*/,
@@ -70,17 +80,14 @@ class ProxyResolverWinHttp : public ProxyResolver {
   void CloseWinHttpSession();
 
   // Proxy configuration is cached on the session handle.
-  HINTERNET session_handle_;
+  HINTERNET session_handle_ = nullptr;
 
   const GURL pac_url_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyResolverWinHttp);
 };
 
 ProxyResolverWinHttp::ProxyResolverWinHttp(
     const scoped_refptr<PacFileData>& script_data)
-    : session_handle_(nullptr),
-      pac_url_(script_data->type() == PacFileData::TYPE_AUTO_DETECT
+    : pac_url_(script_data->type() == PacFileData::TYPE_AUTO_DETECT
                    ? GURL("http://wpad/wpad.dat")
                    : script_data->url()) {}
 
@@ -90,7 +97,7 @@ ProxyResolverWinHttp::~ProxyResolverWinHttp() {
 
 int ProxyResolverWinHttp::GetProxyForURL(
     const GURL& query_url,
-    const NetworkIsolationKey& network_isolation_key,
+    const NetworkAnonymizationKey& network_anonymization_key,
     ProxyInfo* results,
     CompletionOnceCallback /*callback*/,
     std::unique_ptr<Request>* /*request*/,
@@ -105,13 +112,10 @@ int ProxyResolverWinHttp::GetProxyForURL(
   // documentation at
   // https://docs.microsoft.com/en-us/windows/desktop/api/winhttp/nf-winhttp-winhttpgetproxyforurl.
   // See https://crbug.com/862121.
-  GURL mutable_query_url = query_url;
-  if (query_url.SchemeIsWSOrWSS()) {
-    GURL::Replacements replacements;
-    replacements.SetSchemeStr(query_url.SchemeIsCryptographic() ? "https"
-                                                                : "http");
-    mutable_query_url = query_url.ReplaceComponents(replacements);
-  }
+  GURL mutable_query_url =
+      query_url.SchemeIsWSOrWSS()
+          ? net::ChangeWebSocketSchemeToHttpScheme(query_url)
+          : query_url;
 
   // If we have been given an empty PAC url, then use auto-detection.
   //
@@ -119,6 +123,12 @@ int ProxyResolverWinHttp::GetProxyForURL(
   // to avoid WinHTTP's auto-detection code, which while more featureful (it
   // supports DHCP based auto-detection) also appears to have issues.
   //
+  // The fAutoLogonIfChallenged option has been deprecated and should always be
+  // set to FALSE throughout Windows 10+. Even in earlier versions of the OS,
+  // this feature did not work particularly well (see MS16-077:
+  // https://support.microsoft.com/en-us/help/3161949/ms16-077-description-of-the-security-update-for-wpad-june-14-2016).
+  // PAC file fetches must not automatically provide default credentials if
+  // challenged.
   WINHTTP_AUTOPROXY_OPTIONS options = {0};
   options.fAutoLogonIfChallenged = FALSE;
   options.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL;
@@ -128,33 +138,19 @@ int ProxyResolverWinHttp::GetProxyForURL(
   WINHTTP_PROXY_INFO info = {0};
   DCHECK(session_handle_);
 
-  // Per http://msdn.microsoft.com/en-us/library/aa383153(VS.85).aspx, it is
-  // necessary to first try resolving with fAutoLogonIfChallenged set to false.
-  // Otherwise, we fail over to trying it with a value of true.  This way we
-  // get good performance in the case where WinHTTP uses an out-of-process
-  // resolver.  This is important for Vista and Win2k3.
-  BOOL ok = WinHttpGetProxyForUrl(
+  BOOL ok = g_winhttp_get_proxy_for_url(
       session_handle_,
       base::as_wcstr(base::ASCIIToUTF16(mutable_query_url.spec())), &options,
       &info);
   if (!ok) {
-    if (ERROR_WINHTTP_LOGIN_FAILURE == GetLastError()) {
-      options.fAutoLogonIfChallenged = TRUE;
-      ok = WinHttpGetProxyForUrl(
-          session_handle_,
-          base::as_wcstr(base::ASCIIToUTF16(mutable_query_url.spec())),
-          &options, &info);
+    DWORD error = GetLastError();
+    // If we got here because of RPC timeout during out of process PAC
+    // resolution, no further requests on this session are going to work.
+    if (ERROR_WINHTTP_TIMEOUT == error ||
+        ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR == error) {
+      CloseWinHttpSession();
     }
-    if (!ok) {
-      DWORD error = GetLastError();
-      // If we got here because of RPC timeout during out of process PAC
-      // resolution, no further requests on this session are going to work.
-      if (ERROR_WINHTTP_TIMEOUT == error ||
-          ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR == error) {
-        CloseWinHttpSession();
-      }
-      return WinHttpErrorToNetError(error);
-    }
+    return WinHttpErrorToNetError(error);
   }
 
   int rv = OK;
@@ -182,7 +178,6 @@ int ProxyResolverWinHttp::GetProxyForURL(
       break;
     default:
       NOTREACHED();
-      rv = ERR_FAILED;
   }
 
   FreeInfo(&info);
@@ -227,6 +222,16 @@ int ProxyResolverFactoryWinHttp::CreateProxyResolver(
     std::unique_ptr<Request>* request) {
   *resolver = std::make_unique<ProxyResolverWinHttp>(pac_script);
   return OK;
+}
+
+ScopedWinHttpGetProxyForUrlOverride::ScopedWinHttpGetProxyForUrlOverride(
+    WinHttpGetProxyForUrlFunc func)
+    : previous_func_(g_winhttp_get_proxy_for_url) {
+  g_winhttp_get_proxy_for_url = func ? func : &::WinHttpGetProxyForUrl;
+}
+
+ScopedWinHttpGetProxyForUrlOverride::~ScopedWinHttpGetProxyForUrlOverride() {
+  g_winhttp_get_proxy_for_url = previous_func_;
 }
 
 }  // namespace net

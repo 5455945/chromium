@@ -1,25 +1,28 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/ime/win/on_screen_keyboard_display_manager_tab_tip.h"
 
+#include <shobjidl.h>
 #include <windows.h>
 
 #include <shellapi.h>
 #include <shlobj.h>
-#include <shobjidl.h>  // Must be before propkey.
 
-#include "base/bind.h"
+#include "base/base_switches.h"
+#include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/win_util.h"
-#include "base/win/windows_version.h"
 #include "ui/base/ime/virtual_keyboard_controller_observer.h"
 #include "ui/base/win/hidden_window.h"
 #include "ui/display/win/screen_win.h"
@@ -27,10 +30,9 @@
 
 namespace {
 
-constexpr base::TimeDelta kCheckOSKDelay =
-    base::TimeDelta::FromMilliseconds(1000);
+constexpr base::TimeDelta kCheckOSKDelay = base::Milliseconds(1000);
 constexpr base::TimeDelta kDismissKeyboardRetryTimeout =
-    base::TimeDelta::FromMilliseconds(100);
+    base::Milliseconds(100);
 constexpr int kDismissKeyboardMaxRetries = 5;
 
 constexpr wchar_t kOSKClassName[] = L"IPTip_Main_Window";
@@ -49,6 +51,10 @@ class OnScreenKeyboardDetector {
  public:
   OnScreenKeyboardDetector(
       OnScreenKeyboardDisplayManagerTabTip* display_manager);
+
+  OnScreenKeyboardDetector(const OnScreenKeyboardDetector&) = delete;
+  OnScreenKeyboardDetector& operator=(const OnScreenKeyboardDetector&) = delete;
+
   ~OnScreenKeyboardDetector();
 
   // Schedules a delayed task which detects if the on screen keyboard was
@@ -85,7 +91,7 @@ class OnScreenKeyboardDetector {
   // The observer list is cleared out after this notification.
   void HandleKeyboardHidden();
 
-  OnScreenKeyboardDisplayManagerTabTip* display_manager_;
+  raw_ptr<OnScreenKeyboardDisplayManagerTabTip> display_manager_;
 
   // The main window which displays the on screen keyboard.
   HWND main_window_ = nullptr;
@@ -104,8 +110,6 @@ class OnScreenKeyboardDetector {
   // by this class instance are canceled when it is destroyed.
   base::WeakPtrFactory<OnScreenKeyboardDetector> keyboard_detector_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(OnScreenKeyboardDetector);
 };
 
 // OnScreenKeyboardDetector member definitions.
@@ -123,7 +127,7 @@ void OnScreenKeyboardDetector::DetectKeyboard(HWND main_window) {
   // OnScreenKeyboardDisplayManager::DisplayVirtualKeyboard() function. We use
   // a delayed task to check if the keyboard is visible because of the possible
   // delay between the ShellExecute call and the keyboard becoming visible.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&OnScreenKeyboardDetector::CheckIfKeyboardVisible,
                      keyboard_detector_factory_.GetWeakPtr()),
@@ -146,7 +150,7 @@ void OnScreenKeyboardDetector::DismissKeyboard() {
       keyboard_dismiss_retry_count_++;
       // Please refer to the comments in the DetectKeyboard() function for more
       // information as to why we need a delayed task here.
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
           FROM_HERE,
           base::BindOnce(
               base::IgnoreResult(&OnScreenKeyboardDetector::DismissKeyboard),
@@ -184,7 +188,8 @@ gfx::Rect OnScreenKeyboardDetector::GetOccludedRect() {
 
   gfx_osk_rect.Intersect(gfx_main_window_rect);
 
-  return display::win::ScreenWin::ScreenToDIPRect(main_window_, gfx_osk_rect);
+  return display::win::GetScreenWin()->ScreenToDIPRect(main_window_,
+                                                       gfx_osk_rect);
 }
 
 void OnScreenKeyboardDetector::CheckIfKeyboardVisible() {
@@ -223,7 +228,7 @@ void OnScreenKeyboardDetector::HideIfNecessary() {
       DismissKeyboard();
     }
   } else {
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&OnScreenKeyboardDetector::HideIfNecessary,
                        keyboard_detector_factory_.GetWeakPtr()),
@@ -233,13 +238,13 @@ void OnScreenKeyboardDetector::HideIfNecessary() {
 
 void OnScreenKeyboardDetector::HandleKeyboardVisible(
     const gfx::Rect& occluded_rect) {
-  DCHECK(!osk_visible_notification_received_);
+  CHECK(!osk_visible_notification_received_, base::NotFatalUntil::M163);
   osk_visible_notification_received_ = true;
 
   display_manager_->NotifyKeyboardVisible(occluded_rect);
 
   // Now that the keyboard is visible, run the task to detect if it was hidden.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&OnScreenKeyboardDetector::HideIfNecessary,
                      keyboard_detector_factory_.GetWeakPtr()),
@@ -254,15 +259,14 @@ void OnScreenKeyboardDetector::HandleKeyboardHidden() {
 // OnScreenKeyboardDisplayManagerTabTip member definitions.
 OnScreenKeyboardDisplayManagerTabTip::OnScreenKeyboardDisplayManagerTabTip(
     HWND hwnd)
-    : hwnd_(hwnd) {
-  DCHECK_GE(base::win::GetVersion(), base::win::Version::WIN8);
-}
+    : hwnd_(hwnd) {}
 
 OnScreenKeyboardDisplayManagerTabTip::~OnScreenKeyboardDisplayManagerTabTip() {}
 
 bool OnScreenKeyboardDisplayManagerTabTip::DisplayVirtualKeyboard() {
-  if (base::win::IsKeyboardPresentOnSlate(ui::GetHiddenWindow(), nullptr))
+  if (IsKeyboardAttachedToDevice(ui::GetHiddenWindow())) {
     return false;
+  }
 
   if (osk_path_.empty() && !GetOSKPath(&osk_path_)) {
     DLOG(WARNING) << "Failed to get on screen keyboard path from registry";
@@ -298,7 +302,7 @@ void OnScreenKeyboardDisplayManagerTabTip::RemoveObserver(
 }
 
 bool OnScreenKeyboardDisplayManagerTabTip::GetOSKPath(std::wstring* osk_path) {
-  DCHECK(osk_path);
+  CHECK(osk_path, base::NotFatalUntil::M163);
 
   // We need to launch TabTip.exe from the location specified under the
   // LocalServer32 key for the {{054AAE20-4BEA-4347-8A35-64A533254A9D}}
@@ -316,7 +320,7 @@ bool OnScreenKeyboardDisplayManagerTabTip::GetOSKPath(std::wstring* osk_path) {
     return false;
   }
 
-  osk_path->resize(wcslen(osk_path->c_str()));
+  osk_path->resize(wcsnlen_s(osk_path->c_str(), osk_path->size()));
 
   *osk_path = base::ToLowerASCII(*osk_path);
 
@@ -347,7 +351,7 @@ bool OnScreenKeyboardDisplayManagerTabTip::GetOSKPath(std::wstring* osk_path) {
           L"CommonProgramW6432",
           base::WriteInto(&common_program_files_path, buffer_size),
           buffer_size);
-      DCHECK(!common_program_files_path.empty());
+      CHECK(!common_program_files_path.empty(), base::NotFatalUntil::M163);
     } else {
       base::win::ScopedCoMem<wchar_t> common_program_files;
       if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramFilesCommon, 0, nullptr,
@@ -361,19 +365,39 @@ bool OnScreenKeyboardDisplayManagerTabTip::GetOSKPath(std::wstring* osk_path) {
   return !osk_path->empty();
 }
 
+bool OnScreenKeyboardDisplayManagerTabTip::IsKeyboardAttachedToDevice(
+    HWND hwnd) {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableUsbKeyboardDetect)) {
+    return false;
+  }
+  // If no touch screen detected, assume keyboard attached.
+  // TODO(crbug.com/383267933) If the device is mouse only with no touch screen,
+  // this will determine that the device has a keyboard.
+  if ((GetSystemMetrics(SM_DIGITIZER) & NID_INTEGRATED_TOUCH) !=
+      NID_INTEGRATED_TOUCH) {
+    return true;
+  }
+  // If it is a tablet device we assume that there is no keyboard attached.
+  if (base::win::IsWindows10TabletMode(hwnd) ||
+      base::win::IsDeviceUsedAsATablet(/*reason=*/nullptr)) {
+    return false;
+  }
+  return true;
+}
+
 bool OnScreenKeyboardDisplayManagerTabTip::IsKeyboardVisible() {
   return OnScreenKeyboardDetector::IsKeyboardVisible();
 }
 
 void OnScreenKeyboardDisplayManagerTabTip::NotifyKeyboardVisible(
     const gfx::Rect& occluded_rect) {
-  for (VirtualKeyboardControllerObserver& observer : observers_)
-    observer.OnKeyboardVisible(occluded_rect);
+  observers_.Notify(&VirtualKeyboardControllerObserver::OnKeyboardVisible,
+                    occluded_rect);
 }
 
 void OnScreenKeyboardDisplayManagerTabTip::NotifyKeyboardHidden() {
-  for (VirtualKeyboardControllerObserver& observer : observers_)
-    observer.OnKeyboardHidden();
+  observers_.Notify(&VirtualKeyboardControllerObserver::OnKeyboardHidden);
 }
 
 }  // namespace ui

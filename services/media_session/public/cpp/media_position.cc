@@ -1,10 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/media_session/public/cpp/media_position.h"
 
+#include "base/check.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 
 namespace media_session {
 
@@ -19,8 +21,8 @@ MediaPosition::MediaPosition(double playback_rate,
       position_(position),
       last_updated_time_(base::TimeTicks::Now()),
       end_of_media_(end_of_media) {
-  DCHECK(duration_ >= base::TimeDelta::FromSeconds(0));
-  DCHECK(position_ >= base::TimeDelta::FromSeconds(0));
+  DCHECK(duration_ >= base::Seconds(0));
+  DCHECK(position_ >= base::Seconds(0));
   DCHECK(position_ <= duration_);
 }
 
@@ -43,13 +45,31 @@ base::TimeDelta MediaPosition::GetPosition() const {
 }
 
 base::TimeDelta MediaPosition::GetPositionAtTime(base::TimeTicks time) const {
-  DCHECK(time >= last_updated_time_);
+  base::TimeDelta delta = time - last_updated_time_;
 
-  base::TimeDelta elapsed_time = playback_rate_ * (time - last_updated_time_);
+  // It's possible to get a time query that is *before* the last updated time
+  // since |time| and |last_updated_time| generally come from different
+  // processes. When we get a negative value, just assume effectively no time
+  // has passed.
+  if (delta.is_negative()) {
+    DCHECK(!base::TimeTicks::IsConsistentAcrossProcesses());
+    delta = base::Microseconds(0);
+  }
+
+  base::TimeDelta start = base::Seconds(0);
+
+  base::TimeDelta elapsed_time = playback_rate_ * delta;
+  if (elapsed_time.is_min()) {
+    // If the elapsed time is negative infinity, then assume we made it to the
+    // start.
+    return start;
+  } else if (elapsed_time.is_max()) {
+    // If the elapsed time is positive infinity, then assume we made it to the
+    // end.
+    return duration_;
+  }
+
   base::TimeDelta updated_position = position_ + elapsed_time;
-
-  base::TimeDelta start = base::TimeDelta::FromSeconds(0);
-
   if (updated_position <= start)
     return start;
   else if (updated_position >= duration_)
@@ -68,15 +88,11 @@ bool MediaPosition::operator==(const MediaPosition& other) const {
   return GetPositionAtTime(now) == other.GetPositionAtTime(now);
 }
 
-bool MediaPosition::operator!=(const MediaPosition& other) const {
-  return !(*this == other);
-}
-
 std::string MediaPosition::ToString() const {
   return base::StringPrintf(
       "playback_rate=%f duration=%f current_time=%f end_of_media=%s",
       playback_rate_, duration_.InSecondsF(), position_.InSecondsF(),
-      end_of_media_ ? "true" : "false");
+      base::ToString(end_of_media_));
 }
 
 }  // namespace media_session

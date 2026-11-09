@@ -1,17 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/heavy_ad_intervention/heavy_ad_helper.h"
 
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/heavy_ad_intervention/heavy_ad_service_factory.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -37,8 +37,8 @@ bool IsContentInDocument(content::RenderFrameHost* rfh, std::string content) {
 
 class HeavyAdHelperBrowserTest : public InProcessBrowserTest {
  public:
-  HeavyAdHelperBrowserTest() {}
-  ~HeavyAdHelperBrowserTest() override {}
+  HeavyAdHelperBrowserTest() = default;
+  ~HeavyAdHelperBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -59,16 +59,15 @@ IN_PROC_BROWSER_TEST_F(HeavyAdHelperBrowserTest,
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::RenderFrameHost* child =
-      ChildFrameAt(web_contents->GetMainFrame(), 0);
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
 
   content::WebContentsConsoleObserver console_observer(web_contents);
 
   content::TestNavigationObserver error_observer(web_contents);
-  controller.LoadPostCommitErrorPage(
+  controller.NavigateFrameToErrorPage(
       child, url,
       heavy_ad_intervention::PrepareHeavyAdPage(
-          g_browser_process->GetApplicationLocale()),
-      net::ERR_BLOCKED_BY_CLIENT);
+          g_browser_process->GetApplicationLocale()));
   error_observer.Wait();
 
   for (const auto& message : console_observer.messages()) {
@@ -90,23 +89,16 @@ IN_PROC_BROWSER_TEST_F(HeavyAdHelperBrowserTest,
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::RenderFrameHost* child =
-      ChildFrameAt(web_contents->GetMainFrame(), 0);
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
 
   content::TestNavigationObserver error_observer(web_contents);
-  controller.LoadPostCommitErrorPage(
+  controller.NavigateFrameToErrorPage(
       child, url,
       heavy_ad_intervention::PrepareHeavyAdPage(
-          g_browser_process->GetApplicationLocale()),
-      net::ERR_BLOCKED_BY_CLIENT);
+          g_browser_process->GetApplicationLocale()));
   error_observer.Wait();
 
-  // With error page isolation, the error page will be loaded in the error
-  // page process, therefore it will have a different RenderFrameHost
-  // instance.
-  if (content::SiteIsolationPolicy::IsErrorPageIsolationEnabled(
-          /* in_main_frame = */ false)) {
-    child = ChildFrameAt(web_contents->GetMainFrame(), 0);
-  }
+  child = ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
 
   EXPECT_TRUE(IsContentInDocument(
       child,

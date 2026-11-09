@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,31 +6,30 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_EPHEMERAL_RANGE_H_
 
 #include "base/dcheck_is_on.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 
 namespace blink {
 
 class Document;
-class AbstractRange;
+class NodeRange;
 class Range;
 
-// We should restrict access to the unwanted version of |TraversalRange::end()|
-// function.
 template <class Iterator>
-class TraversalRangeNodes : private TraversalRange<Iterator> {
+class TraversalRangeNodes {
   STACK_ALLOCATED();
 
  public:
   using StartNodeType = typename TraversalRange<Iterator>::StartNodeType;
   TraversalRangeNodes(const StartNodeType* start,
                       const StartNodeType* past_end_node)
-      : TraversalRange<Iterator>(start), past_end_node_(past_end_node) {}
+      : range_(start), past_end_node_(past_end_node) {}
 
-  using TraversalRange<Iterator>::begin;
-
+  Iterator begin() { return range_.begin(); }
   Iterator end() { return Iterator(past_end_node_); }
 
  private:
+  TraversalRange<Iterator> range_;
   const StartNodeType* const past_end_node_;
 };
 
@@ -92,7 +91,7 @@ class EphemeralRangeTemplate final {
   // |position| should be |Position::isNull()| or in-document.
   explicit EphemeralRangeTemplate(
       const PositionTemplate<Strategy>& /* position */);
-  explicit EphemeralRangeTemplate(const AbstractRange*);
+  explicit EphemeralRangeTemplate(const NodeRange*);
   // When |range| is nullptr, |EphemeralRangeTemplate| is |isNull()|.
   explicit EphemeralRangeTemplate(const Range* /* range */);
   EphemeralRangeTemplate();
@@ -102,7 +101,6 @@ class EphemeralRangeTemplate final {
       const EphemeralRangeTemplate<Strategy>& other);
 
   bool operator==(const EphemeralRangeTemplate<Strategy>& other) const;
-  bool operator!=(const EphemeralRangeTemplate<Strategy>& other) const;
 
   Document& GetDocument() const;
   PositionTemplate<Strategy> StartPosition() const;
@@ -135,7 +133,7 @@ class EphemeralRangeTemplate final {
   PositionTemplate<Strategy> start_position_;
   PositionTemplate<Strategy> end_position_;
 #if DCHECK_IS_ON()
-  uint64_t dom_tree_version_;
+  uint64_t dom_tree_version_ = 0;
 #endif
 };
 

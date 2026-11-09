@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -71,7 +71,6 @@ TEST(DocumentPolicyViolationReportBodyMatchIdTest,
 
 TEST(DocumentPolicyViolationReportBodyMatchIdTest,
      MatchIdGeneratedShouldNotBeZero) {
-  std::vector<unsigned> match_ids;
   for (const auto& input : kDocumentPolicyViolationReportBodyInputs) {
     EXPECT_NE(
         DocumentPolicyViolationReportBody(input.feature_id, input.message,

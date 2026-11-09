@@ -1,13 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_SUBKEY_REQUESTER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_SUBKEY_REQUESTER_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "base/functional/callback.h"
+#include "build/build_config.h"
 #include "third_party/libaddressinput/chromium/chrome_address_validator.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/scoped_java_ref.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace autofill {
 
@@ -26,11 +35,16 @@ class SubKeyRequester : public LoadRulesListener {
   class Request {
    public:
     virtual void OnRulesLoaded() = 0;
-    virtual ~Request() {}
+    virtual ~Request() = default;
   };
 
   SubKeyRequester(std::unique_ptr<::i18n::addressinput::Source> source,
-                  std::unique_ptr<::i18n::addressinput::Storage> storage);
+                  std::unique_ptr<::i18n::addressinput::Storage> storage,
+                  std::string_view language);
+
+  SubKeyRequester(const SubKeyRequester&) = delete;
+  SubKeyRequester& operator=(const SubKeyRequester&) = delete;
+
   ~SubKeyRequester() override;
 
   // If the rules for |region_code| are loaded, this gets the subkeys for the
@@ -40,9 +54,8 @@ class SubKeyRequester : public LoadRulesListener {
   // |region_code|. The received subkeys will be returned to the |requester|. If
   // the subkeys are not received in |timeout_seconds|, then the requester will
   // be informed and the request will be canceled. |requester| should never be
-  // null. The requesting device language is set to |language|, ex:"fr".
+  // null.
   void StartRegionSubKeysRequest(const std::string& region_code,
-                                 const std::string& language,
                                  int timeout_seconds,
                                  SubKeyReceiverCallback cb);
 
@@ -55,6 +68,21 @@ class SubKeyRequester : public LoadRulesListener {
 
   // Cancels the pending subkey request task.
   void CancelPendingGetSubKeys();
+
+#if BUILDFLAG(IS_ANDROID)
+  jni_zero::ScopedJavaLocalRef<jobject> GetJavaObject();
+
+  // Starts loading the rules for the specified |region_code| for the further
+  // subkey request.
+  void LoadRulesForSubKeys(const std::string& region_code);
+
+  // Gets the subkeys for the region with |region_code| code, if the
+  // |region_code| rules have finished loading. Otherwise, sets up a task to
+  // get the subkeys, when the rules are loaded.
+  void StartRegionSubKeysRequest(const std::string& region_code,
+                                 int32_t jtimeout_seconds,
+                                 const jni_zero::JavaRef<jobject>& jdelegate);
+#endif  // BUILDFLAG(IS_ANDROID)
 
  private:
   // Called when the address rules for the |region_code| have finished
@@ -69,7 +97,12 @@ class SubKeyRequester : public LoadRulesListener {
   // The address validator used to load subkeys.
   AddressValidator address_validator_;
 
-  DISALLOW_COPY_AND_ASSIGN(SubKeyRequester);
+  const std::string language_;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Java-side version of the SubKeyRequester.
+  jni_zero::ScopedJavaGlobalRef<jobject> java_ref_;
+#endif  // BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace autofill

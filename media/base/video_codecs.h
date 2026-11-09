@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,45 +6,49 @@
 #define MEDIA_BASE_VIDEO_CODECS_H_
 
 #include <stdint.h>
+
 #include <string>
+
 #include "media/base/media_export.h"
-#include "media/media_buildflags.h"
-#include "ui/gfx/color_space.h"
 
 namespace media {
 
-class VideoColorSpace;
-
+// Video codecs.
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(VideoCodec)
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
-enum VideoCodec {
-  // These values are histogrammed over time; do not change their ordinal
-  // values.  When deleting a codec replace it with a dummy value; when adding a
-  // codec, do so at the bottom (and update kVideoCodecMax).
-  kUnknownVideoCodec = 0,
-  kCodecH264,
-  kCodecVC1,
-  kCodecMPEG2,
-  kCodecMPEG4,
-  kCodecTheora,
-  kCodecVP8,
-  kCodecVP9,
-  kCodecHEVC,
-  kCodecDolbyVision,
-  kCodecAV1,
+enum class VideoCodec {
+  kUnknown = 0,
+  kH264 = 1,
+  kVC1 = 2,
+  kMPEG2 = 3,
+  kMPEG4 = 4,
+  kTheora = 5,
+  kVP8 = 6,
+  kVP9 = 7,
+  kHEVC = 8,
+  kDolbyVision = 9,
+  kAV1 = 10,
+  kAV2 = 11,
   // DO NOT ADD RANDOM VIDEO CODECS!
   //
   // The only acceptable time to add a new codec is if there is production code
   // that uses said codec in the same CL.
 
-  kVideoCodecMax = kCodecAV1,  // Must equal the last "real" codec above.
+  kMaxValue = kAV2,  // Must equal the last "real" codec above.
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:VideoCodec)
 
-// Video codec profiles. Keep in sync with mojo::VideoCodecProfile (see
-// media/mojo/mojom/media_types.mojom), gpu::VideoCodecProfile (see
-// gpu/config/gpu_info.h), and PP_VideoDecoder_Profile (translation is performed
-// in content/renderer/pepper/ppb_video_decoder_impl.cc).
-// NOTE: These values are histogrammed over time in UMA so the values must never
-// ever change (add new values to tools/metrics/histograms/histograms.xml)
+// Video codec profiles. Mirrored by gpu::VideoCodecProfile (see
+// gpu/config/gpu_info.h).
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(VideoCodecProfile)
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
 enum VideoCodecProfile {
   // Keep the values in this enum unique, as they imply format (h.264 vs. VP8,
@@ -80,7 +84,7 @@ enum VideoCodecProfile {
   HEVCPROFILE_MAIN_STILL_PICTURE = 18,
   HEVCPROFILE_MAX = HEVCPROFILE_MAIN_STILL_PICTURE,
   DOLBYVISION_PROFILE0 = 19,
-  DOLBYVISION_PROFILE4 = 20,
+  // Deprecated: DOLBYVISION_PROFILE4 = 20,
   DOLBYVISION_PROFILE5 = 21,
   DOLBYVISION_PROFILE7 = 22,
   THEORAPROFILE_MIN = 23,
@@ -93,8 +97,32 @@ enum VideoCodecProfile {
   AV1PROFILE_MAX = AV1PROFILE_PROFILE_PRO,
   DOLBYVISION_PROFILE8 = 27,
   DOLBYVISION_PROFILE9 = 28,
-  VIDEO_CODEC_PROFILE_MAX = DOLBYVISION_PROFILE9,
+  HEVCPROFILE_EXT_MIN = 29,
+  HEVCPROFILE_REXT = HEVCPROFILE_EXT_MIN,
+  HEVCPROFILE_HIGH_THROUGHPUT = 30,
+  HEVCPROFILE_MULTIVIEW_MAIN = 31,
+  HEVCPROFILE_SCALABLE_MAIN = 32,
+  HEVCPROFILE_3D_MAIN = 33,
+  HEVCPROFILE_SCREEN_EXTENDED = 34,
+  HEVCPROFILE_SCALABLE_REXT = 35,
+  HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED = 36,
+  HEVCPROFILE_EXT_MAX = HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED,
+  DOLBYVISION_PROFILE10 = 37,
+  DOLBYVISION_PROFILE20 = 38,
+  AV2PROFILE_MIN = 39,
+  AV2PROFILE_MAIN_420_10_IP0 = AV2PROFILE_MIN,
+  AV2PROFILE_MAIN_420_10_IP1 = 40,
+  AV2PROFILE_MAIN_420_10_IP2 = 41,
+  AV2PROFILE_MAIN_422_10_IP1 = 42,
+  AV2PROFILE_MAIN_444_10_IP1 = 43,
+  AV2PROFILE_MAIN_444C_12_IP2 = 44,
+  AV2PROFILE_CONFIGURABLE = 45,
+  AV2PROFILE_MAX = AV2PROFILE_CONFIGURABLE,
+  VIDEO_CODEC_PROFILE_MAX = AV2PROFILE_MAX,
 };
+// clang-format off
+// LINT.ThenChange(//gpu/config/gpu_info.h:VideoCodecProfile, //tools/metrics/histograms/enums.xml:VideoCodecProfile)
+// clang-format on
 
 using VideoCodecLevel = uint32_t;
 constexpr VideoCodecLevel kNoVideoCodecLevel = 0;
@@ -105,66 +133,22 @@ struct CodecProfileLevel {
   VideoCodecLevel level;
 };
 
-std::string MEDIA_EXPORT GetCodecName(VideoCodec codec);
-std::string MEDIA_EXPORT GetProfileName(VideoCodecProfile profile);
-std::string MEDIA_EXPORT BuildH264MimeSuffix(VideoCodecProfile profile,
+// Returns a name for `codec` for logging and display purposes.
+MEDIA_EXPORT std::string GetCodecName(VideoCodec codec);
+
+// Returns a name for `codec` to be used for UMA reporting.
+MEDIA_EXPORT std::string GetCodecNameForUMA(VideoCodec codec);
+
+MEDIA_EXPORT std::string GetProfileName(VideoCodecProfile profile);
+
+MEDIA_EXPORT std::string BuildH264MimeSuffix(VideoCodecProfile profile,
                                              uint8_t level);
-
-// ParseNewStyleVp9CodecID handles parsing of new style vp9 codec IDs per
-// proposed VP Codec ISO Media File Format Binding specification:
-// https://storage.googleapis.com/downloads.webmproject.org/docs/vp9/vp-codec-iso-media-file-format-binding-20160516-draft.pdf
-// ParseLegacyVp9CodecID handles parsing of legacy VP9 codec strings defined
-// for WebM.
-// TODO(kqyang): Consolidate the two functions once we address crbug.com/667834
-MEDIA_EXPORT bool ParseNewStyleVp9CodecID(const std::string& codec_id,
-                                          VideoCodecProfile* profile,
-                                          uint8_t* level_idc,
-                                          VideoColorSpace* color_space);
-
-MEDIA_EXPORT bool ParseLegacyVp9CodecID(const std::string& codec_id,
-                                        VideoCodecProfile* profile,
-                                        uint8_t* level_idc);
-
-#if BUILDFLAG(ENABLE_AV1_DECODER)
-MEDIA_EXPORT bool ParseAv1CodecId(const std::string& codec_id,
-                                  VideoCodecProfile* profile,
-                                  uint8_t* level_idc,
-                                  VideoColorSpace* color_space);
-#endif
-
-// Handle parsing AVC/H.264 codec ids as outlined in RFC 6381 and ISO-14496-10.
-MEDIA_EXPORT bool ParseAVCCodecId(const std::string& codec_id,
-                                  VideoCodecProfile* profile,
-                                  uint8_t* level_idc);
-
-#if BUILDFLAG(ENABLE_PLATFORM_HEVC)
-MEDIA_EXPORT bool ParseHEVCCodecId(const std::string& codec_id,
-                                   VideoCodecProfile* profile,
-                                   uint8_t* level_idc);
-#endif
-
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
-MEDIA_EXPORT bool ParseDolbyVisionCodecId(const std::string& codec_id,
-                                          VideoCodecProfile* profile,
-                                          uint8_t* level_id);
-#endif
-
-MEDIA_EXPORT void ParseCodec(const std::string& codec_id,
-                             VideoCodec& codec,
-                             VideoCodecProfile& profile,
-                             uint8_t& level,
-                             VideoColorSpace& color_space);
-MEDIA_EXPORT VideoCodec StringToVideoCodec(const std::string& codec_id);
 
 MEDIA_EXPORT VideoCodec
 VideoCodecProfileToVideoCodec(VideoCodecProfile profile);
 
-#if BUILDFLAG(ENABLE_MSE_MPEG2TS_STREAM_PARSER)
-// Translate legacy avc1 codec ids (like avc1.66.30 or avc1.77.31) into a new
-// style standard avc1 codec ids like avc1.4D002F. If the input codec is not
-// recognized as a legacy codec id, then returns the input string unchanged.
-std::string TranslateLegacyAvc1CodecIds(const std::string& codec_id);
-#endif
+MEDIA_EXPORT std::ostream& operator<<(std::ostream& os,
+                                      const VideoCodec& codec);
 
 }  // namespace media
 

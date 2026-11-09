@@ -1,18 +1,22 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_FIND_REQUEST_MANAGER_H_
 #define CONTENT_BROWSER_FIND_REQUEST_MANAGER_H_
 
+#include <cfloat>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "base/cancelable_callback.h"
 #include "base/containers/queue.h"
+#include "base/functional/function_ref.h"
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "content/common/content_export.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/stop_find_action.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
@@ -32,16 +36,53 @@ class WebContentsImpl;
 // results from each frame, and facilitates active match traversal. It is
 // instantiated once per top-level WebContents, and is owned by that
 // WebContents.
-class CONTENT_EXPORT FindRequestManager {
+//
+// Every call to `Find()` is a "find request" identified by its own request ID
+// that is allocated internally and handed back synchronously via Find()'s
+// `on_request_id` callback. A request with `options.new_session` set to true
+// starts a new "find session", which is a sequence of one or more requests
+// searching for the same text. The session is identified by the ID of the first
+// request. Later requests ("find next"/"find previous") continue that session
+// as long as their search text still matches the one the session started with.
+// Each request gets its own, distinct request ID, but they are not independent
+// of each other and logically belong to the session.
+//
+// A new session fans out its initial request to every eligible frame via
+// `AddFrame()` and `SendFindRequest()`, and tracks which of them have yet to
+// reply in `pending_initial_replies_`. Each frame's match count is aggregated
+// into `number_of_matches_` as replies come in; once every frame has replied,
+// the session is done unless it still needs to resolve which match is "active"
+// (highlighted), in which case `FinalUpdateReceived()` dispatches further
+// requests across frames (tracked via `pending_find_next_reply_`) until it
+// finds one.
+//
+// Only one session (and one "current" request within it) is tracked at a time.
+// However, as this request manager can be accessed by any entity that has a
+// reference to the WebContents, it is possible that `Find()` is called by more
+// than one client, e.g. the user's Ctrl+F alongside a DevTools or
+// extension-driven search. Every time a client starts a new session, it
+// supersedes whatever was previously in flight, including any of that session's
+// own find-next requests still queued but not yet dispatched. A superseded
+// request is guaranteed to receive its final update via
+// `WebContentsObserver::DidReceiveFindReply()`.
+class FindRequestManager {
  public:
   explicit FindRequestManager(WebContentsImpl* web_contents);
+
+  FindRequestManager(const FindRequestManager&) = delete;
+  FindRequestManager& operator=(const FindRequestManager&) = delete;
+
   ~FindRequestManager();
 
   // Initiates a find operation for |search_text| with the options specified in
-  // |options|. |request_id| uniquely identifies the find request.
-  void Find(int request_id,
-            const std::u16string& search_text,
-            blink::mojom::FindOptionsPtr options);
+  // |options|. Allocates the request ID for this request and invokes
+  // |on_request_id| with that ID before doing anything that could synchronously
+  // reenter the caller. Callers that need to correlate a later reply with this
+  // specific request must record the ID from within |on_request_id|.
+  void Find(const std::u16string& search_text,
+            blink::mojom::FindOptionsPtr options,
+            bool skip_delay,
+            base::FunctionRef<void(int request_id)> on_request_id);
 
   // Stops the active find session and clears the general highlighting of the
   // matches. |action| determines whether the last active match (if any) will be
@@ -79,7 +120,11 @@ class CONTENT_EXPORT FindRequestManager {
   // Tells active frame to clear the active match highlighting.
   void ClearActiveFindMatch();
 
-#if defined(OS_ANDROID)
+  // Runs the delayed find task if present. Returns true if there was a task
+  // which got run. Returns false if there was no delayed task.
+  bool CONTENT_EXPORT RunDelayedFindTaskForTesting();
+
+#if BUILDFLAG(IS_ANDROID)
   // Selects and zooms to the find result nearest to the point (x, y), defined
   // in find-in-page coordinates.
   void ActivateNearestFindResult(float x, float y);
@@ -101,14 +146,24 @@ class CONTENT_EXPORT FindRequestManager {
                              const gfx::RectF& active_rect);
 #endif
 
-  const std::unordered_set<RenderFrameHost*>
+  const std::unordered_set<raw_ptr<RenderFrameHost, CtnExperimental>>
   render_frame_hosts_pending_initial_reply_for_testing() const {
     return pending_initial_replies_;
   }
 
   gfx::Rect GetSelectionRectForTesting() { return selection_rect_; }
 
+  using CreateFindInPageClientFunction = std::unique_ptr<FindInPageClient> (*)(
+      FindRequestManager* find_request_manager,
+      RenderFrameHostImpl* rfh);
+  void SetCreateFindInPageClientFunctionForTesting(
+      CreateFindInPageClientFunction create_func) {
+    create_find_in_page_client_for_testing_ = create_func;
+  }
+
  private:
+  friend class FindRequestManagerFencedFrameTest;
+
   // An invalid ID. This value is invalid for any render process ID, render
   // frame ID, find request ID, or find match rects version number.
   static const int kInvalidId;
@@ -178,7 +233,7 @@ class CONTENT_EXPORT FindRequestManager {
 
   // Returns whether |rfh| is in the set of frames being searched in the current
   // find session.
-  bool CheckFrame(RenderFrameHost* rfh) const;
+  CONTENT_EXPORT bool CheckFrame(RenderFrameHost* rfh) const;
 
   // Computes and updates |active_match_ordinal_| based on |active_frame_| and
   // |relative_active_match_ordinal_|.
@@ -193,7 +248,19 @@ class CONTENT_EXPORT FindRequestManager {
   // from this function will not be marked final.
   void FinalUpdateReceived(int request_id, RenderFrameHost* rfh);
 
-#if defined(OS_ANDROID)
+  std::unique_ptr<FindInPageClient> CreateFindInPageClient(
+      RenderFrameHostImpl* rfh);
+
+  // Traverses all RenderFrameHosts added for find-in-page and invokes the
+  // callback if the each RenderFrameHost is alive and active.
+  void ForEachAddedFindInPageRenderFrameHost(
+      base::FunctionRef<void(RenderFrameHostImpl*)> func_ref);
+
+  void EmitFindRequest(int request_id,
+                       const std::u16string& search_text,
+                       blink::mojom::FindOptionsPtr options);
+
+#if BUILDFLAG(IS_ANDROID)
   // Called when a nearest find result reply is no longer pending for a frame.
   void RemoveNearestFindResultPendingReply(RenderFrameHost* rfh);
 
@@ -212,19 +279,18 @@ class CONTENT_EXPORT FindRequestManager {
     float nearest_distance = FLT_MAX;
 
     // The frame containing the nearest result found so far.
-    RenderFrameHostImpl* nearest_frame = nullptr;
+    raw_ptr<RenderFrameHostImpl> nearest_frame = nullptr;
 
     // Nearest find result replies are still pending for these frames.
-    std::unordered_set<RenderFrameHost*> pending_replies;
+    std::unordered_set<raw_ptr<RenderFrameHost, CtnExperimental>>
+        pending_replies;
 
     ActivateNearestFindResultState();
     ActivateNearestFindResultState(float x, float y);
     ~ActivateNearestFindResultState();
 
-    static int GetNextID() {
-      static int next_id = 0;
-      return next_id++;
-    }
+    static int GetNextID();
+
   } activate_;
 
   // Data for find match rects in a single frame.
@@ -261,7 +327,8 @@ class CONTENT_EXPORT FindRequestManager {
     gfx::RectF active_rect;
 
     // Find match rects replies are still pending for these frames.
-    std::unordered_set<RenderFrameHost*> pending_replies;
+    std::unordered_set<raw_ptr<RenderFrameHost, CtnExperimental>>
+        pending_replies;
 
     FindMatchRectsState();
     ~FindMatchRectsState();
@@ -271,7 +338,10 @@ class CONTENT_EXPORT FindRequestManager {
   // The WebContents that owns this FindRequestManager. This also defines the
   // scope of all find sessions. Only frames in |contents_| and any inner
   // WebContentses within it will be searched.
-  WebContentsImpl* const contents_;
+  const raw_ptr<WebContentsImpl> contents_;
+
+  // Identifies the current find session.
+  int last_request_id_ = kInvalidId;
 
   // The request ID of the initial find request in the current find-in-page
   // session, which uniquely identifies this session. Request IDs are included
@@ -287,11 +357,12 @@ class CONTENT_EXPORT FindRequestManager {
   // find request. Frames are removed from |pending_initial_replies_| when their
   // reply to the initial find request is received with |final_update| set to
   // true.
-  std::unordered_set<RenderFrameHost*> pending_initial_replies_;
+  std::unordered_set<raw_ptr<RenderFrameHost, CtnExperimental>>
+      pending_initial_replies_;
 
   // The frame (if any) that is still expected to reply to the last pending
   // "find next" request.
-  RenderFrameHost* pending_find_next_reply_ = nullptr;
+  raw_ptr<RenderFrameHost> pending_find_next_reply_ = nullptr;
 
   // Indicates whether an update to the active match ordinal is expected. Once
   // set, |pending_active_match_ordinal_| will not reset until an update to the
@@ -311,7 +382,7 @@ class CONTENT_EXPORT FindRequestManager {
   int number_of_matches_ = 0;
 
   // The frame containing the active match, if one exists, or nullptr otherwise.
-  RenderFrameHostImpl* active_frame_ = nullptr;
+  raw_ptr<RenderFrameHostImpl> active_frame_ = nullptr;
 
   // The active match ordinal relative to the matches found in its own frame.
   int relative_active_match_ordinal_ = 0;
@@ -334,7 +405,15 @@ class CONTENT_EXPORT FindRequestManager {
   // WebContentses.
   std::vector<std::unique_ptr<FrameObserver>> frame_observers_;
 
-  DISALLOW_COPY_AND_ASSIGN(FindRequestManager);
+  base::CancelableOnceClosure delayed_find_task_;
+
+  // The request ID bound into |delayed_find_task_|, if it is not cancelled.
+  int delayed_request_id_ = kInvalidId;
+
+  CreateFindInPageClientFunction create_find_in_page_client_for_testing_ =
+      nullptr;
+
+  base::WeakPtrFactory<FindRequestManager> weak_factory_{this};
 };
 
 }  // namespace content

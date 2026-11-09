@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,18 @@
 
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/unguessable_token.h"
-#include "base/util/memory_pressure/fake_memory_pressure_monitor.h"
 #include "components/paint_preview/browser/directory_key.h"
 #include "components/paint_preview/browser/file_manager.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
@@ -29,7 +31,8 @@ namespace paint_preview {
 
 namespace {
 
-constexpr size_t kMaxParallelRequests = 1;
+constexpr int kMaxParallelRequests = 1;
+constexpr float kDefaultScaleFactor = 0.75;
 
 class FakePaintPreviewCompositorClient : public PaintPreviewCompositorClient {
  public:
@@ -46,7 +49,7 @@ class FakePaintPreviewCompositorClient : public PaintPreviewCompositorClient {
   FakePaintPreviewCompositorClient& operator=(
       const FakePaintPreviewCompositorClient&) = delete;
 
-  const absl::optional<base::UnguessableToken>& Token() const override {
+  const std::optional<base::UnguessableToken>& Token() const override {
     return token_;
   }
 
@@ -69,16 +72,17 @@ class FakePaintPreviewCompositorClient : public PaintPreviewCompositorClient {
       const base::UnguessableToken& frame_guid,
       const gfx::Rect& clip_rect,
       float scale_factor,
-      mojom::PaintPreviewCompositor::BitmapForSeparatedFrameCallback callback)
-      override {
+      mojom::PaintPreviewCompositor::BitmapForSeparatedFrameCallback callback,
+      bool run_task_on_default_task_runner = true) override {
     SkBitmap bitmap;
     bitmap.allocPixels(
         SkImageInfo::MakeN32Premul(clip_rect.width(), clip_rect.height()));
-    task_runner_->PostTask(
+    task_runner_->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
                        mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
-                       bitmap));
+                       bitmap),
+        base::Seconds(1));
   }
 
   void BeginMainFrameComposite(
@@ -95,16 +99,17 @@ class FakePaintPreviewCompositorClient : public PaintPreviewCompositorClient {
   void BitmapForMainFrame(
       const gfx::Rect& clip_rect,
       float scale_factor,
-      mojom::PaintPreviewCompositor::BitmapForMainFrameCallback callback)
-      override {
+      mojom::PaintPreviewCompositor::BitmapForMainFrameCallback callback,
+      bool run_task_on_default_task_runner = true) override {
     SkBitmap bitmap;
     bitmap.allocPixels(
         SkImageInfo::MakeN32Premul(clip_rect.width(), clip_rect.height()));
-    task_runner_->PostTask(
+    task_runner_->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
                        mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
-                       bitmap));
+                       bitmap),
+        base::Seconds(1));
   }
 
   void SetRootFrameUrl(const GURL& url) override {
@@ -123,7 +128,7 @@ class FakePaintPreviewCompositorClient : public PaintPreviewCompositorClient {
 
  private:
   mojom::PaintPreviewCompositor::BeginCompositeStatus response_status_;
-  absl::optional<base::UnguessableToken> token_;
+  std::optional<base::UnguessableToken> token_;
   base::OnceClosure disconnect_handler_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 };
@@ -152,10 +157,7 @@ class FakePaintPreviewCompositorService : public PaintPreviewCompositorService {
 
   void SetTimeout() { timeout_ = true; }
 
-  bool HasActiveClients() const override {
-    NOTREACHED();
-    return false;
-  }
+  bool HasActiveClients() const override { NOTREACHED(); }
 
   void SetDisconnectHandler(base::OnceClosure disconnect_handler) override {
     disconnect_handler_ = std::move(disconnect_handler);
@@ -191,13 +193,10 @@ class PlayerCompositorDelegateImpl : public PlayerCompositorDelegate {
   PlayerCompositorDelegateImpl& operator=(const PlayerCompositorDelegateImpl&) =
       delete;
 
-  void SetExpectedStatus(CompositorStatus status) {
+  void SetExpected(CompositorStatus status, float scale_factor) {
     expected_status_ = status;
+    expected_scale_factor_ = scale_factor;
     status_checked_ = false;
-  }
-
-  void SetFakeMemoryPressureMonitor(base::MemoryPressureMonitor* monitor) {
-    memory_pressure_monitor_ = monitor;
   }
 
   bool WasStatusChecked() const { return status_checked_; }
@@ -205,25 +204,19 @@ class PlayerCompositorDelegateImpl : public PlayerCompositorDelegate {
   void OnCompositorReady(
       CompositorStatus compositor_status,
       mojom::PaintPreviewBeginCompositeResponsePtr composite_response,
+      float scale_factor,
       std::unique_ptr<ui::AXTreeUpdate> update) override {
+    EXPECT_FLOAT_EQ(expected_scale_factor_, scale_factor);
     // Cast to int for easier debugging.
     EXPECT_EQ(static_cast<int>(expected_status_),
               static_cast<int>(compositor_status));
     status_checked_ = true;
   }
 
- protected:
-  base::MemoryPressureMonitor* memory_pressure_monitor() override {
-    if (memory_pressure_monitor_)
-      return memory_pressure_monitor_;
-
-    return PlayerCompositorDelegate::memory_pressure_monitor();
-  }
-
  private:
-  base::MemoryPressureMonitor* memory_pressure_monitor_{nullptr};
   CompositorStatus expected_status_{CompositorStatus::OK};
   bool status_checked_{false};
+  float expected_scale_factor_{0.0};
 };
 
 }  // namespace
@@ -252,6 +245,7 @@ class PlayerCompositorDelegateTest : public testing::Test {
     auto* metadata = proto.mutable_metadata();
     metadata->set_url(url.spec());
     metadata->set_version(kPaintPreviewVersion);
+    metadata->set_page_scale_factor(kDefaultScaleFactor);
 
     auto root_frame_id = base::UnguessableToken::Create();
     auto* root_frame = proto.mutable_root_frame();
@@ -269,26 +263,19 @@ class PlayerCompositorDelegateTest : public testing::Test {
     auto file_manager = GetBaseService()->GetFileMixin()->GetFileManager();
     base::RunLoop loop;
     file_manager->GetTaskRunner()->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](base::OnceClosure quit, scoped_refptr<FileManager> file_manager,
-               PaintPreviewProto* proto, const DirectoryKey& key,
-               bool skip_proto_serialization) {
-              auto directory = file_manager->CreateOrGetDirectory(key, true);
+        FROM_HERE, base::BindLambdaForTesting([&]() {
+          auto directory = file_manager->CreateOrGetDirectory(key, true);
 
-              std::string fake_data = "Hello World!";
-              auto root_file = directory->AppendASCII("0.skp");
-              proto->mutable_root_frame()->set_file_path(
-                  root_file.AsUTF8Unsafe());
-              base::WriteFile(root_file, fake_data.data(), fake_data.size());
+          std::string fake_data = "Hello World!";
+          auto root_file = directory->AppendASCII("0.skp");
+          proto->mutable_root_frame()->set_file_path(root_file.AsUTF8Unsafe());
+          base::WriteFile(root_file, fake_data);
 
-              if (!skip_proto_serialization) {
-                file_manager->SerializePaintPreviewProto(key, *proto, false);
-              }
-              std::move(quit).Run();
-            },
-            loop.QuitClosure(), file_manager, proto, key,
-            skip_proto_serialization));
+          if (!skip_proto_serialization) {
+            file_manager->SerializePaintPreviewProto(key, *proto, false);
+          }
+          loop.Quit();
+        }));
     loop.Run();
   }
 
@@ -339,32 +326,27 @@ TEST_F(PlayerCompositorDelegateTest, OnClick) {
 
   base::RunLoop loop;
   file_manager->GetTaskRunner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::OnceClosure quit, scoped_refptr<FileManager> file_manager,
-             PaintPreviewProto* proto, const DirectoryKey& key) {
-            auto directory = file_manager->CreateOrGetDirectory(key, true);
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        auto directory = file_manager->CreateOrGetDirectory(key, true);
 
-            std::string fake_data = "Hello World!";
-            auto root_file = directory->AppendASCII("0.skp");
-            proto->mutable_root_frame()->set_file_path(
-                root_file.AsUTF8Unsafe());
-            base::WriteFile(root_file, fake_data.data(), fake_data.size());
+        std::string fake_data = "Hello World!";
+        auto root_file = directory->AppendASCII("0.skp");
+        proto.mutable_root_frame()->set_file_path(root_file.AsUTF8Unsafe());
+        base::WriteFile(root_file, fake_data);
 
-            auto subframe_file = directory->AppendASCII("1.skp");
-            proto->mutable_subframes(0)->set_file_path(
-                subframe_file.AsUTF8Unsafe());
-            base::WriteFile(subframe_file, fake_data.data(), fake_data.size());
+        auto subframe_file = directory->AppendASCII("1.skp");
+        proto.mutable_subframes(0)->set_file_path(subframe_file.AsUTF8Unsafe());
+        base::WriteFile(subframe_file, fake_data);
 
-            file_manager->SerializePaintPreviewProto(key, *proto, false);
-            std::move(quit).Run();
-          },
-          loop.QuitClosure(), file_manager, &proto, key));
+        file_manager->SerializePaintPreviewProto(key, proto, false);
+        loop.Quit();
+      }));
   loop.Run();
 
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::OK);
+    player_compositor_delegate.SetExpected(CompositorStatus::OK,
+                                           kDefaultScaleFactor);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -395,21 +377,17 @@ TEST_F(PlayerCompositorDelegateTest, BadProto) {
   auto key = file_manager->CreateKey(1U);
   base::RunLoop loop;
   file_manager->GetTaskRunner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::OnceClosure quit, scoped_refptr<FileManager> file_manager,
-             const DirectoryKey& key) {
-            auto directory = file_manager->CreateOrGetDirectory(key, true);
-            std::string fake_data = "Hello World!";
-            auto proto_file = directory->AppendASCII("proto.pb");
-            base::WriteFile(proto_file, fake_data.data(), fake_data.size());
-          },
-          loop.QuitClosure(), file_manager, key));
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        auto directory = file_manager->CreateOrGetDirectory(key, true);
+        std::string fake_data = "Hello World!";
+        auto proto_file = directory->AppendASCII("proto.pb");
+        base::WriteFile(proto_file, fake_data);
+      }));
 
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(
-        CompositorStatus::PROTOBUF_DESERIALIZATION_ERROR);
+    player_compositor_delegate.SetExpected(
+        CompositorStatus::PROTOBUF_DESERIALIZATION_ERROR, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -430,7 +408,7 @@ TEST_F(PlayerCompositorDelegateTest, OldVersion) {
   SerializeProtoAndCreateRootSkp(&proto, key);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::OLD_VERSION);
+    player_compositor_delegate.SetExpected(CompositorStatus::OLD_VERSION, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -451,9 +429,12 @@ TEST_F(PlayerCompositorDelegateTest, InMemoryProto) {
   SerializeProtoAndCreateRootSkp(&proto, key, true);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetProto(
-        std::make_unique<PaintPreviewProto>(proto));
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::OK);
+    auto capture_result =
+        std::make_unique<CaptureResult>(RecordingPersistence::kFileSystem);
+    capture_result->proto = std::move(proto);
+    player_compositor_delegate.SetCaptureResult(std::move(capture_result));
+    player_compositor_delegate.SetExpected(CompositorStatus::OK,
+                                           kDefaultScaleFactor);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -474,8 +455,7 @@ TEST_F(PlayerCompositorDelegateTest, URLMismatch) {
   SerializeProtoAndCreateRootSkp(&proto, key);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(
-        CompositorStatus::URL_MISMATCH);
+    player_compositor_delegate.SetExpected(CompositorStatus::URL_MISMATCH, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -495,18 +475,17 @@ TEST_F(PlayerCompositorDelegateTest, ServiceDisconnect) {
   SerializeProtoAndCreateRootSkp(&proto, key);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::OK);
+    player_compositor_delegate.SetExpected(CompositorStatus::OK,
+                                           kDefaultScaleFactor);
     bool called = false;
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false,
-        base::BindOnce(
-            [](bool* called, int status) {
-              EXPECT_EQ(static_cast<int>(
-                            CompositorStatus::COMPOSITOR_SERVICE_DISCONNECT),
-                        status);
-              *called = true;
-            },
-            &called),
+        base::BindLambdaForTesting([&](int status) {
+          EXPECT_EQ(
+              static_cast<int>(CompositorStatus::COMPOSITOR_SERVICE_DISCONNECT),
+              status);
+          called = true;
+        }),
         base::TimeDelta::Max(), kMaxParallelRequests,
         CreateCompositorService());
     env.RunUntilIdle();
@@ -527,18 +506,17 @@ TEST_F(PlayerCompositorDelegateTest, ClientDisconnect) {
   SerializeProtoAndCreateRootSkp(&proto, key);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::OK);
+    player_compositor_delegate.SetExpected(CompositorStatus::OK,
+                                           kDefaultScaleFactor);
     bool called = false;
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false,
-        base::BindOnce(
-            [](bool* called, int status) {
-              EXPECT_EQ(static_cast<int>(
-                            CompositorStatus::COMPOSITOR_CLIENT_DISCONNECT),
-                        status);
-              *called = true;
-            },
-            &called),
+        base::BindLambdaForTesting([&](int status) {
+          EXPECT_EQ(
+              static_cast<int>(CompositorStatus::COMPOSITOR_CLIENT_DISCONNECT),
+              status);
+          called = true;
+        }),
         base::TimeDelta::Max(), kMaxParallelRequests,
         CreateCompositorService());
     env.RunUntilIdle();
@@ -557,20 +535,16 @@ TEST_F(PlayerCompositorDelegateTest, InvalidCompositeRequest) {
   auto proto = CreateValidProto(url);
   base::RunLoop loop;
   file_manager->GetTaskRunner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::OnceClosure quit, scoped_refptr<FileManager> file_manager,
-             PaintPreviewProto* proto, const DirectoryKey& key) {
-            file_manager->CreateOrGetDirectory(key, true);
-            file_manager->SerializePaintPreviewProto(key, *proto, false);
-            std::move(quit).Run();
-          },
-          loop.QuitClosure(), file_manager, &proto, key));
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        file_manager->CreateOrGetDirectory(key, true);
+        file_manager->SerializePaintPreviewProto(key, proto, false);
+        loop.Quit();
+      }));
   loop.Run();
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(
-        CompositorStatus::INVALID_REQUEST);
+    player_compositor_delegate.SetExpected(CompositorStatus::INVALID_REQUEST,
+                                           0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -590,8 +564,8 @@ TEST_F(PlayerCompositorDelegateTest, CompositorDeserializationError) {
   SerializeProtoAndCreateRootSkp(&proto, key);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(
-        CompositorStatus::COMPOSITOR_DESERIALIZATION_ERROR);
+    player_compositor_delegate.SetExpected(
+        CompositorStatus::COMPOSITOR_DESERIALIZATION_ERROR, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -615,8 +589,8 @@ TEST_F(PlayerCompositorDelegateTest, InvalidRootSkp) {
   SerializeProtoAndCreateRootSkp(&proto, key);
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(
-        CompositorStatus::INVALID_ROOT_FRAME_SKP);
+    player_compositor_delegate.SetExpected(
+        CompositorStatus::INVALID_ROOT_FRAME_SKP, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -640,19 +614,16 @@ TEST_F(PlayerCompositorDelegateTest, CompressOnClose) {
       FROM_HERE,
       base::BindOnce(&FileManager::CreateOrGetDirectory, file_manager, key,
                      false),
-      base::BindOnce(
-          [](base::FilePath* out,
-             const absl::optional<base::FilePath>& file_path) {
-            *out = file_path.value();
-          },
-          base::Unretained(&dir)));
+      base::BindLambdaForTesting(
+          [&](const std::optional<base::FilePath>& file_path) {
+            dir = file_path.value();
+          }));
   env.RunUntilIdle();
   std::string data = "foo";
-  EXPECT_TRUE(
-      base::WriteFile(dir.AppendASCII("test_file"), data.data(), data.size()));
+  EXPECT_TRUE(base::WriteFile(dir.AppendASCII("test_file"), data));
   {
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::NO_CAPTURE);
+    player_compositor_delegate.SetExpected(CompositorStatus::NO_CAPTURE, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -673,7 +644,7 @@ TEST_F(PlayerCompositorDelegateTest, RequestBitmapWithCancel) {
     // execution the files are required by the service or no bitmap will be
     // created.
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::NO_CAPTURE);
+    player_compositor_delegate.SetExpected(CompositorStatus::NO_CAPTURE, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -684,41 +655,35 @@ TEST_F(PlayerCompositorDelegateTest, RequestBitmapWithCancel) {
     base::RunLoop loop0;
     int request_0 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](base::OnceClosure quit,
-               mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) {
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) {
               EXPECT_EQ(mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
                         status);
-              std::move(quit).Run();
-            },
-            loop0.QuitClosure()));
+              loop0.Quit();
+            }));
     bool request_1_called = false;
     int request_1 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](bool* called, mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) { *called = true; },
-            &request_1_called));
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) { request_1_called = true; }));
     base::RunLoop loop2;
     int request_2 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](base::OnceClosure quit,
-               mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) {
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) {
               EXPECT_EQ(mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
                         status);
-              std::move(quit).Run();
-            },
-            loop2.QuitClosure()));
+              loop2.Quit();
+            }));
     bool request_3_called = false;
     int request_3 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](bool* called, mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) { *called = true; },
-            &request_3_called));
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) { request_3_called = true; }));
     EXPECT_EQ(
         std::set<int>({request_0, request_1, request_2, request_3}).size(), 4U);
 
@@ -745,7 +710,7 @@ TEST_F(PlayerCompositorDelegateTest, RequestBitmapWithCancelAll) {
     // execution the files are required by the service or no bitmap will be
     // created.
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::NO_CAPTURE);
+    player_compositor_delegate.SetExpected(CompositorStatus::NO_CAPTURE, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -756,29 +721,25 @@ TEST_F(PlayerCompositorDelegateTest, RequestBitmapWithCancelAll) {
     base::RunLoop loop0;
     int request_0 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](base::OnceClosure quit,
-               mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) {
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) {
               EXPECT_EQ(mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
                         status);
-              std::move(quit).Run();
-            },
-            loop0.QuitClosure()));
+              loop0.Quit();
+            }));
     bool request_1_called = false;
     int request_1 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](bool* called, mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) { *called = true; },
-            &request_1_called));
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) { request_1_called = true; }));
     bool request_2_called = false;
     int request_2 = player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](bool* called, mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) { *called = true; },
-            &request_2_called));
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) { request_2_called = true; }));
     EXPECT_EQ(std::set<int>({request_0, request_1, request_2}).size(), 3U);
     player_compositor_delegate.CancelAllBitmapRequests();
     loop0.Run();
@@ -798,7 +759,7 @@ TEST_F(PlayerCompositorDelegateTest, RequestBitmapSuccessQueued) {
     // execution the files are required by the service or no bitmap will be
     // created.
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::NO_CAPTURE);
+    player_compositor_delegate.SetExpected(CompositorStatus::NO_CAPTURE, 0.0);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -806,19 +767,28 @@ TEST_F(PlayerCompositorDelegateTest, RequestBitmapSuccessQueued) {
     env.RunUntilIdle();
     EXPECT_TRUE(player_compositor_delegate.WasStatusChecked());
 
-    base::RunLoop loop;
+    base::RunLoop loop_1;
+    base::RunLoop loop_2;
     player_compositor_delegate.RequestBitmap(
         base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](base::OnceClosure quit,
-               mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) {
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) {
               EXPECT_EQ(mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
                         status);
-              std::move(quit).Run();
-            },
-            loop.QuitClosure()));
-    loop.Run();
+              loop_1.Quit();
+            }));
+    player_compositor_delegate.RequestBitmap(
+        base::UnguessableToken::Create(), gfx::Rect(10, 20, 30, 40), 1.0,
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) {
+              EXPECT_EQ(mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
+                        status);
+              loop_2.Quit();
+            }));
+    loop_1.Run();
+    loop_2.Run();
   }
   env.RunUntilIdle();
 }
@@ -835,7 +805,8 @@ TEST_F(PlayerCompositorDelegateTest, RequestMainFrameBitmapSuccess) {
     // execution the files are required by the service or no bitmap will be
     // created.
     PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::OK);
+    player_compositor_delegate.SetExpected(CompositorStatus::OK,
+                                           kDefaultScaleFactor);
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, url, key, /*main_frame_mode=*/true, base::DoNothing(),
         base::TimeDelta::Max(), kMaxParallelRequests,
@@ -845,16 +816,14 @@ TEST_F(PlayerCompositorDelegateTest, RequestMainFrameBitmapSuccess) {
 
     base::RunLoop loop;
     player_compositor_delegate.RequestBitmap(
-        absl::nullopt, gfx::Rect(10, 20, 30, 40), 1.0,
-        base::BindOnce(
-            [](base::OnceClosure quit,
-               mojom::PaintPreviewCompositor::BitmapStatus status,
-               const SkBitmap& bitmap) {
+        std::nullopt, gfx::Rect(10, 20, 30, 40), 1.0,
+        base::BindLambdaForTesting(
+            [&](mojom::PaintPreviewCompositor::BitmapStatus status,
+                const SkBitmap& bitmap) {
               EXPECT_EQ(mojom::PaintPreviewCompositor::BitmapStatus::kSuccess,
                         status);
-              std::move(quit).Run();
-            },
-            loop.QuitClosure()));
+              loop.Quit();
+            }));
     loop.Run();
   }
   env.RunUntilIdle();
@@ -871,84 +840,13 @@ TEST_F(PlayerCompositorDelegateTest, Timeout) {
     base::RunLoop loop;
     player_compositor_delegate.InitializeWithFakeServiceForTest(
         service, GURL(), key, /*main_frame_mode=*/false,
-        base::BindOnce(
-            [](base::OnceClosure quit, int status) {
-              EXPECT_EQ(static_cast<CompositorStatus>(status),
-                        CompositorStatus::TIMED_OUT);
-              std::move(quit).Run();
-            },
-            loop.QuitClosure()),
-        base::TimeDelta::FromSeconds(1), kMaxParallelRequests,
-        std::move(compositor_service));
-    env.FastForwardBy(base::TimeDelta::FromSeconds(5));
-    loop.Run();
-  }
-  env.RunUntilIdle();
-}
-
-TEST_F(PlayerCompositorDelegateTest, CriticalMemoryPressure) {
-  auto* service = GetBaseService();
-  auto file_manager = service->GetFileMixin()->GetFileManager();
-  auto key = file_manager->CreateKey(1U);
-  {
-    // This test skips setting up files as the fakes don't use them. In normal
-    // execution the files are required by the service or no bitmap will be
-    // created.
-    base::RunLoop loop;
-    PlayerCompositorDelegateImpl player_compositor_delegate;
-    player_compositor_delegate.SetExpectedStatus(CompositorStatus::NO_CAPTURE);
-    player_compositor_delegate.InitializeWithFakeServiceForTest(
-        service, GURL(), key, /*main_frame_mode=*/false,
-        base::BindOnce(
-            [](base::OnceClosure quit, int compositor_status) {
-              EXPECT_EQ(compositor_status,
-                        static_cast<int>(
-                            CompositorStatus::STOPPED_DUE_TO_MEMORY_PRESSURE));
-              std::move(quit).Run();
-            },
-            loop.QuitClosure()),
-        base::TimeDelta::Max(), kMaxParallelRequests,
-        CreateCompositorService());
-    env.RunUntilIdle();
-    EXPECT_TRUE(player_compositor_delegate.WasStatusChecked());
-
-    player_compositor_delegate.OnMemoryPressure(
-        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
-    loop.Run();
-  }
-  env.RunUntilIdle();
-}
-
-TEST_F(PlayerCompositorDelegateTest, CriticalMemoryPressureBeforeStart) {
-  auto* service = GetBaseService();
-  auto file_manager = service->GetFileMixin()->GetFileManager();
-  auto key = file_manager->CreateKey(1U);
-  {
-    // This test skips setting up files as the fakes don't use them. In normal
-    // execution the files are required by the service or no bitmap will be
-    // created.
-    base::RunLoop loop;
-    PlayerCompositorDelegateImpl player_compositor_delegate;
-    util::test::FakeMemoryPressureMonitor memory_pressure_monitor;
-    memory_pressure_monitor.SetAndNotifyMemoryPressure(
-        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
-    player_compositor_delegate.SetFakeMemoryPressureMonitor(
-        &memory_pressure_monitor);
-    player_compositor_delegate.Initialize(
-        service, GURL(), key, /*main_frame_mode=*/false,
-        base::BindOnce(
-            [](base::OnceClosure quit, int compositor_status) {
-              EXPECT_EQ(compositor_status,
-                        static_cast<int>(
-                            CompositorStatus::SKIPPED_DUE_TO_MEMORY_PRESSURE));
-              std::move(quit).Run();
-            },
-            loop.QuitClosure()),
-        base::TimeDelta::Max(), kMaxParallelRequests);
-    env.RunUntilIdle();
-
-    player_compositor_delegate.OnMemoryPressure(
-        base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+        base::BindLambdaForTesting([&](int status) {
+          EXPECT_EQ(static_cast<CompositorStatus>(status),
+                    CompositorStatus::TIMED_OUT);
+          loop.Quit();
+        }),
+        base::Seconds(1), kMaxParallelRequests, std::move(compositor_service));
+    env.FastForwardBy(base::Seconds(5));
     loop.Run();
   }
   env.RunUntilIdle();

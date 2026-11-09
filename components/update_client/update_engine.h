@@ -1,32 +1,34 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_UPDATE_CLIENT_UPDATE_ENGINE_H_
 #define COMPONENTS_UPDATE_CLIENT_UPDATE_ENGINE_H_
 
-#include <list>
+#include <stdint.h>
+
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
+#include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "components/update_client/component.h"
+#include "components/update_client/crx_cache.h"
 #include "components/update_client/crx_downloader.h"
 #include "components/update_client/crx_update_item.h"
 #include "components/update_client/ping_manager.h"
 #include "components/update_client/update_checker.h"
 #include "components/update_client/update_client.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace base {
-class TimeTicks;
-}  // namespace base
 
 namespace update_client {
 
@@ -40,15 +42,13 @@ struct UpdateContext;
 class UpdateEngine : public base::RefCountedThreadSafe<UpdateEngine> {
  public:
   using Callback = base::OnceCallback<void(Error error)>;
-  using NotifyObserversCallback =
-      base::RepeatingCallback<void(UpdateClient::Observer::Events event,
-                                   const std::string& id)>;
   using CrxDataCallback = UpdateClient::CrxDataCallback;
 
-  UpdateEngine(scoped_refptr<Configurator> config,
-               UpdateChecker::Factory update_checker_factory,
-               scoped_refptr<PingManager> ping_manager,
-               const NotifyObserversCallback& notify_observers_callback);
+  UpdateEngine(
+      scoped_refptr<Configurator> config,
+      UpdateChecker::Factory update_checker_factory,
+      scoped_refptr<PingManager> ping_manager,
+      const UpdateClient::CrxStateChangeCallback& notify_observers_callback);
   UpdateEngine(const UpdateEngine&) = delete;
   UpdateEngine& operator=(const UpdateEngine&) = delete;
 
@@ -57,33 +57,59 @@ class UpdateEngine : public base::RefCountedThreadSafe<UpdateEngine> {
   // is not found.
   bool GetUpdateState(const std::string& id, CrxUpdateItem* update_state);
 
-  void Update(bool is_foreground,
-              const std::vector<std::string>& ids,
-              UpdateClient::CrxDataCallback crx_data_callback,
-              UpdateClient::CrxStateChangeCallback crx_state_change_callback,
-              Callback update_callback);
+  // Does an update check for `id` but stops after receiving the update check
+  // response.
+  void CheckForUpdate(
+      bool is_foreground,
+      const std::string& id,
+      UpdateClient::CrxDataCallback crx_data_callback,
+      UpdateClient::CrxStateChangeCallback crx_state_change_callback,
+      Callback update_callback);
 
-  void SendUninstallPing(const std::string& id,
-                         const base::Version& version,
-                         int reason,
-                         Callback update_callback);
+  // Updates the given app ids. Returns a closure that can be called to trigger
+  // cancellation of the operation. `update_callback` is called when the
+  // operation is complete (even if cancelled). The cancellation callback
+  // must be called only on the main sequence.
+  base::RepeatingClosure Update(
+      bool is_foreground,
+      bool is_install,
+      const std::vector<std::string>& ids,
+      UpdateClient::CrxDataCallback crx_data_callback,
+      UpdateClient::CrxStateChangeCallback crx_state_change_callback,
+      Callback update_callback);
 
-  void SendRegistrationPing(const std::string& id,
-                            const base::Version& version,
-                            Callback update_callback);
+  void SendPing(const CrxComponent& crx_component,
+                UpdateClient::PingParams ping_params,
+                Callback update_callback);
+
+  // Cancels the in-progress update of the CRX with `id` in every active update
+  // context. Other CRXs in those contexts are not affected.
+  void Cancel(const std::string& id);
 
  private:
   friend class base::RefCountedThreadSafe<UpdateEngine>;
   ~UpdateEngine();
 
+  // Maps a session id to an update context.
   using UpdateContexts = std::map<std::string, scoped_refptr<UpdateContext>>;
 
+  base::RepeatingClosure InvokeOperation(
+      bool is_foreground,
+      bool is_update_check_only,
+      bool is_install,
+      const std::vector<std::string>& ids,
+      UpdateClient::CrxDataCallback crx_data_callback,
+      UpdateClient::CrxStateChangeCallback crx_state_change_callback,
+      Callback update_callback);
+  void StartOperation(
+      scoped_refptr<UpdateContext> update_context,
+      const std::vector<std::optional<CrxComponent>>& crx_components);
   void UpdateComplete(scoped_refptr<UpdateContext> update_context, Error error);
 
   void DoUpdateCheck(scoped_refptr<UpdateContext> update_context);
   void UpdateCheckResultsAvailable(
       scoped_refptr<UpdateContext> update_context,
-      const absl::optional<ProtocolParser::Results>& results,
+      std::optional<ProtocolParser::Results> results,
       ErrorCategory error_category,
       int error,
       int retry_after_sec);
@@ -96,23 +122,16 @@ class UpdateEngine : public base::RefCountedThreadSafe<UpdateEngine> {
   // occurs too soon.
   bool IsThrottled(bool is_foreground) const;
 
-  base::ThreadChecker thread_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
   scoped_refptr<Configurator> config_;
   UpdateChecker::Factory update_checker_factory_;
   scoped_refptr<PingManager> ping_manager_;
-  std::unique_ptr<PersistedData> metadata_;
 
   // Called when CRX state changes occur.
-  const NotifyObserversCallback notify_observers_callback_;
+  const UpdateClient::CrxStateChangeCallback notify_observers_callback_;
 
   // Contains the contexts associated with each update in progress.
   UpdateContexts update_contexts_;
-
-  // Implements a rate limiting mechanism for background update checks. Has the
-  // effect of rejecting the update call if the update call occurs before
-  // a certain time, which is negotiated with the server as part of the
-  // update protocol. See the comments for X-Retry-After header.
-  base::TimeTicks throttle_updates_until_;
 };
 
 // Describes a group of components which are installed or updated together.
@@ -120,11 +139,17 @@ struct UpdateContext : public base::RefCountedThreadSafe<UpdateContext> {
   UpdateContext(
       scoped_refptr<Configurator> config,
       bool is_foreground,
+      bool is_install,
       const std::vector<std::string>& ids,
       UpdateClient::CrxStateChangeCallback crx_state_change_callback,
-      const UpdateEngine::NotifyObserversCallback& notify_observers_callback,
       UpdateEngine::Callback callback,
-      PersistedData* persisted_data);
+      PersistedData* persisted_data,
+      bool is_update_check_only,
+      base::RepeatingCallback<int64_t(const base::FilePath&)>
+          get_available_space =
+              base::BindRepeating([](const base::FilePath& dir) {
+                return base::SysInfo::AmountOfFreeDiskSpace(dir).value_or(-1);
+              }));
   UpdateContext(const UpdateContext&) = delete;
   UpdateContext& operator=(const UpdateContext&) = delete;
 
@@ -133,8 +158,11 @@ struct UpdateContext : public base::RefCountedThreadSafe<UpdateContext> {
   // True if the component is updated as a result of user interaction.
   bool is_foreground = false;
 
-  // True if the component updates are enabled in this context.
-  const bool enabled_component_updates;
+  // True if the component is updating in an installation flow.
+  bool is_install = false;
+
+  // True if and only if this operation has been canceled.
+  bool is_cancelled = false;
 
   // Contains the ids of all CRXs in this context in the order specified
   // by the caller of |UpdateClient::Update| or |UpdateClient:Install|.
@@ -145,9 +173,6 @@ struct UpdateContext : public base::RefCountedThreadSafe<UpdateContext> {
 
   // Called when the observable state of the CRX component has changed.
   UpdateClient::CrxStateChangeCallback crx_state_change_callback;
-
-  // Called when there is a state change for any update in this context.
-  const UpdateEngine::NotifyObserversCallback notify_observers_callback;
 
   // Called when the all updates associated with this context have completed.
   UpdateEngine::Callback callback;
@@ -182,8 +207,13 @@ struct UpdateContext : public base::RefCountedThreadSafe<UpdateContext> {
   // to uniquely identify an update context.
   const std::string session_id;
 
-  // Persists data using the prefs service. Not owned by this class.
-  PersistedData* persisted_data = nullptr;
+  // Persists data using the prefs service.
+  raw_ptr<PersistedData> persisted_data = nullptr;
+
+  // True if this context is for an update check operation.
+  bool is_update_check_only = false;
+
+  base::RepeatingCallback<int64_t(const base::FilePath&)> get_available_space;
 
  private:
   friend class base::RefCountedThreadSafe<UpdateContext>;

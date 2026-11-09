@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,8 +8,6 @@ A tool to generate a predetermined resource ids file that can be used as an
 input to grit via the -p option. This is meant to be run manually every once in
 a while and its output checked in. See tools/gritsettings/README.md for details.
 """
-
-from __future__ import print_function
 
 import os
 import re
@@ -55,7 +53,7 @@ def _ReadOrderedResourceIds(path):
     An array of ordered resource ids.
   """
   ordered_resource_ids = []
-  with open(path, "r") as f:
+  with open(path) as f:
     for match in ORDERED_RESOURCE_IDS_REGEX.finditer(f.read()):
       ordered_resource_ids.append(int(match.group(1)))
   return ordered_resource_ids
@@ -108,8 +106,10 @@ def _ReadOriginalResourceIds(out_dir):
   original_resources = {}
   for root, dirnames, filenames in os.walk(out_dir + '/gen'):
     for filename in filenames:
-      if filename.endswith(('_resources.h', '_settings.h', '_strings.h')):
-        with open(os.path.join(root, filename), "r") as f:
+      if filename.endswith(
+        ('_resources.h', '_settings.h', '_strings.h', '_synonyms.h')
+      ):
+        with open(os.path.join(root, filename)) as f:
           ReadResourceIdsFromFile(f, original_resources)
   return original_resources
 
@@ -126,8 +126,9 @@ def _GeneratePredeterminedIdsFile(ordered_resources_file, out_dir):
   """
   original_resources = _ReadOriginalResourceIds(out_dir)
   ordered_resource_ids = _ReadOrderedResourceIds(ordered_resources_file)
-  output_resource_map = GenerateResourceMapping(original_resources,
-                                                ordered_resource_ids)
+  output_resource_map = GenerateResourceMapping(
+    original_resources, ordered_resource_ids
+  )
   for res_id in sorted(output_resource_map.keys()):
     print(output_resource_map[res_id], res_id)
 

@@ -1,107 +1,180 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import androidx.annotation.IntDef;
+import android.view.View;
 
-import org.chromium.base.ObserverList;
+import androidx.annotation.CallSuper;
+import androidx.annotation.LayoutRes;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
+import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.modelutil.PropertyModelChangeProcessor.ViewBinder;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
 
 /**
- * Ideally, for each of the {@link MessageType} requires a MessageService class. This is the
- * base class. All the concrete subclass should contain logic that convert the data from the
- * corresponding external service to a data structure that the TabGridMessageCardProvider
- * understands.
+ * Ideally, each message type, <MessageT>, requires a MessageService class. This is the base class.
+ * All the concrete subclass should contain logic that convert the data from the corresponding
+ * external service to a data structure that the TabGridMessageCardProvider understands.
+ *
+ * @param <MessageT> The message type.
+ * @param <UiT> The UI type.
  */
-public class MessageService {
-    @IntDef({MessageType.TAB_SUGGESTION, MessageType.IPH, MessageType.PRICE_MESSAGE,
-            MessageType.ALL})
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface MessageType {
-        int FOR_TESTING = 0;
-        int TAB_SUGGESTION = 1;
-        int IPH = 2;
-        int PRICE_MESSAGE = 3;
-        int ALL = 4;
+@NullMarked
+public class MessageService<MessageT, UiT> {
+    /**
+     * A class represents a Message.
+     *
+     * @param <MessageType> The message type.
+     */
+    public static class Message<MessageType> {
+        public final MessageType type;
+        public final PropertyModel model;
+
+        Message(MessageType type, PropertyModel model) {
+            this.type = type;
+            this.model = model;
+        }
     }
 
-    // This identifier is used to serve messages that have no subtype, such as IPH. If one message
-    // type has multiple subtypes such as PRICE_MESSAGE, its service needs to define its own
-    // identifiers which should be used when creating the message card view model.
     public static final int DEFAULT_MESSAGE_IDENTIFIER = -1;
 
     /**
-     * This is a data wrapper. Implement this interface to send notification with data to all the
-     * observers.
+     * Used to build the property model for a message.
      *
-     * @see #sendAvailabilityNotification(MessageData).
+     * @param <MessageT> The message type.
      */
-    public interface MessageData {}
-
-    /**
-     * An interface to be notified about changes to a Message.
-     * TODO(meiliang): Need to define this interface in more detail.
-     */
-    public interface MessageObserver {
+    @FunctionalInterface
+    public interface MessageModelFactory<MessageT> {
         /**
-         * Called when a message is available.
-         * TODO(meiliang): message data is needed.
-         * @param type The type of the message.
-         * @param data {@link MessageData} associated with the message.
+         * Builds the property model for the message.
+         *
+         * @param msgServiceDismissRunnable To be called when the message is dismissed to inform the
+         *     message service.
          */
-        void messageReady(@MessageType int type, MessageData data);
-
-        /**
-         * Called when a message is invalidated.
-         * @param type The type of the message.
-         */
-        void messageInvalidate(@MessageType int type);
+        PropertyModel build(ServiceDismissActionProvider<MessageT> msgServiceDismissRunnable);
     }
 
-    ObserverList<MessageObserver> mObservers = new ObserverList<>();
-    @MessageType
-    int mMessageType;
+    private final MessageT mMessageType;
+    private final UiT mUiType;
+    private final @LayoutRes int mLayoutRes;
+    private final ViewBinder<PropertyModel, ? extends View, PropertyKey> mBinder;
+    private final Deque<Message<MessageT>> mMessageItems = new ArrayDeque<>();
+    private @Nullable Message<MessageT> mShownMessage;
+    @MonotonicNonNull private ServiceDismissActionProvider<MessageT> mServiceDismissActionProvider;
 
-    MessageService(@MessageType int mMessageType) {
-        this.mMessageType = mMessageType;
-    }
-
-    /**
-     * Add a {@link MessageObserver} to be notified when message from external service is changes.
-     * @param observer a {@link MessageObserver} to add.
-     */
-    public void addObserver(MessageObserver observer) {
-        mObservers.addObserver(observer);
+    MessageService(
+            MessageT messageType,
+            UiT uiType,
+            @LayoutRes int layoutRes,
+            ViewBinder<PropertyModel, ? extends View, PropertyKey> binder) {
+        mMessageType = messageType;
+        mUiType = uiType;
+        mLayoutRes = layoutRes;
+        mBinder = binder;
     }
 
     /**
-     * Remove a {@link MessageObserver}.
-     * @param observer The {@link MessageObserver} to remove.
+     * Initializes the service and sets the service dismiss runnable.
+     *
+     * @param serviceDismissActionProvider Performs a cleanup operations to remove a given message
+     *     from the UI.
      */
-    public void removeObserver(MessageObserver observer) {
-        mObservers.removeObserver(observer);
+    @Initializer
+    @CallSuper
+    public void initialize(ServiceDismissActionProvider<MessageT> serviceDismissActionProvider) {
+        assert mServiceDismissActionProvider == null;
+        mServiceDismissActionProvider = serviceDismissActionProvider;
     }
 
     /**
-     * Notifies all {@link MessageObserver} that a message is available.
-     * @param data {@link MessageData} to send to all the observers.
+     * Queues a message item, allowing it to be shown at the next {@link #getNextMessageItem()}
+     * call.
      */
-    public void sendAvailabilityNotification(MessageData data) {
-        for (MessageObserver observer : mObservers) {
-            observer.messageReady(mMessageType, data);
+    public void queueMessage(MessageModelFactory<MessageT> data) {
+        assert mServiceDismissActionProvider != null;
+
+        PropertyModel model = data.build(mServiceDismissActionProvider);
+        mMessageItems.add(new Message<>(mMessageType, model));
+    }
+
+    /**
+     * Invalidate all messages, including the one currently shown. This will remove all messages
+     * from the queue.
+     */
+    public void invalidateMessages() {
+        mMessageItems.clear();
+        dismissShownMessage();
+    }
+
+    /**
+     * Invalidates the currently shown message and removes it from the UI. Used when it is not
+     * required to clear the entire message queue.
+     */
+    public void dismissShownMessage() {
+        assert mServiceDismissActionProvider != null;
+
+        mShownMessage = null;
+        mServiceDismissActionProvider.dismiss(mMessageType);
+    }
+
+    /**
+     * Returns the next {@link Message} to be shown, if there is any. If a message is already shown,
+     * it will be returned. If not, the next message in the queue will be returned and set as shown.
+     */
+    public @Nullable Message<MessageT> getNextMessageItem() {
+        if (mShownMessage == null && !mMessageItems.isEmpty()) {
+            mShownMessage = mMessageItems.removeFirst();
         }
+        return mShownMessage;
     }
 
     /**
-     * Notifies all {@link MessageObserver} that a message is became invalid.
+     * Checks if the message with the given identifier is currently shown.
+     *
+     * @param identifier The identifier of the message.
      */
-    public void sendInvalidNotification() {
-        for (MessageObserver observer : mObservers) {
-            observer.messageInvalidate(mMessageType);
-        }
+    public boolean isMessageShown(int identifier) {
+        if (mShownMessage == null) return false;
+        return mShownMessage.model.get(MessageCardViewProperties.MESSAGE_IDENTIFIER) == identifier;
+    }
+
+    /** Returns the message type of this service. */
+    public MessageT getMessageType() {
+        return mMessageType;
+    }
+
+    /** Returns the UI type of the messages created by this service. */
+    public UiT getUiType() {
+        return mUiType;
+    }
+
+    /** Returns the layout resource for the message's UI. */
+    public @LayoutRes int getLayout() {
+        return mLayoutRes;
+    }
+
+    /** Returns the {@link ViewBinder} for the message's UI. */
+    public ViewBinder<PropertyModel, ? extends View, PropertyKey> getBinder() {
+        return mBinder;
+    }
+
+    List<Message<MessageT>> getMessageItemsForTesting() {
+        return new ArrayList<>(mMessageItems);
+    }
+
+    @Nullable Message<MessageT> getShownMessageForTesting() {
+        return mShownMessage;
     }
 }

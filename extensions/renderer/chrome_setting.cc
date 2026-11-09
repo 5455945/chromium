@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,9 @@
 #include "gin/arguments.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
+#include "v8/include/v8-object.h"
 
 namespace extensions {
 
@@ -27,15 +30,15 @@ v8::Local<v8::Object> ChromeSetting::Create(
     APIEventHandler* event_handler,
     APITypeReferenceMap* type_refs,
     const BindingAccessChecker* access_checker) {
-  std::string pref_name;
-  CHECK(property_values->GetString(0u, &pref_name));
-  const base::DictionaryValue* value_spec = nullptr;
-  CHECK(property_values->GetDictionary(1u, &value_spec));
+  CHECK_GE(property_values->size(), 2u);
+  CHECK((*property_values)[1u].is_dict());
+  const std::string& pref_name = (*property_values)[0u].GetString();
+  const base::DictValue& value_spec = (*property_values)[1u].GetDict();
 
-  gin::Handle<ChromeSetting> handle = gin::CreateHandle(
-      isolate, new ChromeSetting(request_handler, event_handler, type_refs,
-                                 access_checker, pref_name, *value_spec));
-  return handle.ToV8().As<v8::Object>();
+  auto* setting = cppgc::MakeGarbageCollected<ChromeSetting>(
+      isolate->GetCppHeap()->GetAllocationHandle(), request_handler,
+      event_handler, type_refs, access_checker, pref_name, value_spec);
+  return setting->GetWrapper(isolate).ToLocalChecked();
 }
 
 ChromeSetting::ChromeSetting(APIRequestHandler* request_handler,
@@ -43,7 +46,7 @@ ChromeSetting::ChromeSetting(APIRequestHandler* request_handler,
                              const APITypeReferenceMap* type_refs,
                              const BindingAccessChecker* access_checker,
                              const std::string& pref_name,
-                             const base::DictionaryValue& set_value_spec)
+                             const base::DictValue& set_value_spec)
     : request_handler_(request_handler),
       event_handler_(event_handler),
       type_refs_(type_refs),
@@ -65,19 +68,21 @@ ChromeSetting::ChromeSetting(APIRequestHandler* request_handler,
 
 ChromeSetting::~ChromeSetting() = default;
 
-gin::WrapperInfo ChromeSetting::kWrapperInfo = {gin::kEmbedderNativeGin};
-
 gin::ObjectTemplateBuilder ChromeSetting::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
   return Wrappable<ChromeSetting>::GetObjectTemplateBuilder(isolate)
-      .SetMethod("get", &ChromeSetting::Get)
-      .SetMethod("set", &ChromeSetting::Set)
-      .SetMethod("clear", &ChromeSetting::Clear)
-      .SetProperty("onChange", &ChromeSetting::GetOnChangeEvent);
+      .SetMethod<&ChromeSetting::Get>("get")
+      .SetMethod<&ChromeSetting::Set>("set")
+      .SetMethod<&ChromeSetting::Clear>("clear")
+      .SetProperty<&ChromeSetting::GetOnChangeEvent>("onChange");
 }
 
-const char* ChromeSetting::GetTypeName() {
+const char* ChromeSetting::GetHumanReadableName() const {
   return "ChromeSetting";
+}
+
+const gin::WrapperInfo* ChromeSetting::wrapper_info() const {
+  return &kWrapperInfo;
 }
 
 void ChromeSetting::Get(gin::Arguments* arguments) {
@@ -124,7 +129,6 @@ v8::Local<v8::Value> ChromeSetting::GetOnChangeEvent(
   v8::Local<v8::Value> event;
   if (!wrapper->GetPrivate(context, key).ToLocal(&event)) {
     NOTREACHED();
-    return v8::Local<v8::Value>();
   }
 
   DCHECK(!event.IsEmpty());
@@ -139,7 +143,6 @@ v8::Local<v8::Value> ChromeSetting::GetOnChangeEvent(
     v8::Maybe<bool> set_result = wrapper->SetPrivate(context, key, event);
     if (!set_result.IsJust() || !set_result.FromJust()) {
       NOTREACHED();
-      return v8::Local<v8::Value>();
     }
   }
   return event;
@@ -154,15 +157,13 @@ void ChromeSetting::HandleFunction(const std::string& method_name,
   if (!binding::IsContextValidOrThrowError(context))
     return;
 
-  std::vector<v8::Local<v8::Value>> argument_list = arguments->GetAll();
+  v8::LocalVector<v8::Value> argument_list = arguments->GetAll();
 
   std::string full_name = "types.ChromeSetting." + method_name;
 
   if (!access_checker_->HasAccessOrThrowError(context, full_name))
     return;
 
-  std::unique_ptr<base::ListValue> converted_arguments;
-  v8::Local<v8::Function> callback;
   std::string error;
   const APISignature* signature = type_refs_->GetTypeMethodSignature(full_name);
   APISignature::JSONParseResult parse_result =
@@ -173,11 +174,15 @@ void ChromeSetting::HandleFunction(const std::string& method_name,
     return;
   }
 
-  parse_result.arguments_list->Insert(
-      parse_result.arguments_list->GetList().begin(), base::Value(pref_name_));
-  request_handler_->StartRequest(
-      context, full_name, std::move(parse_result.arguments_list),
-      parse_result.callback, v8::Local<v8::Function>());
+  parse_result.arguments_list->Insert(parse_result.arguments_list->begin(),
+                                      base::Value(pref_name_));
+
+  v8::Local<v8::Promise> promise = request_handler_->StartRequest(
+      context, full_name, std::move(*parse_result.arguments_list),
+      parse_result.async_type, parse_result.callback, v8::Local<v8::Function>(),
+      binding::ResultModifierFunction());
+  if (!promise.IsEmpty())
+    arguments->Return(promise);
 }
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,14 @@
 #define COMPONENTS_PASSWORD_MANAGER_IOS_PASSWORD_MANAGER_CLIENT_BRIDGE_H_
 
 #import <Foundation/Foundation.h>
-#include <memory>
 
-#include "components/password_manager/core/browser/leak_detection_dialog_utils.h"
+#import <memory>
+#import <string>
+
+#import "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 
 class GURL;
+enum class CredentialProviderPromoTrigger;
 
 namespace password_manager {
 class PasswordFormManagerForUI;
@@ -49,19 +52,32 @@ using password_manager::CredentialLeakType;
                 formToUpdate
                            manual:(BOOL)manual;
 
+// Shows UI confirming to the user that the password was saved.
+- (void)showPasswordSavedInfoBar:
+    (std::unique_ptr<password_manager::PasswordFormManagerForUI>)formToSave;
+
 // Removes the saving/updating password Infobar from the InfobarManager.
 // This also causes the UI to be dismissed.
 - (void)removePasswordInfoBarManualFallback:(BOOL)manual;
 
-// Shows Password Breach for |URL| and |leakType|.
+// Shows Password Breach for |URL|, |leakType|, and |username|.
 - (void)showPasswordBreachForLeakType:(CredentialLeakType)leakType
-                                  URL:(const GURL&)URL;
+                                  URL:(const GURL&)URL
+                             username:(const std::u16string&)username;
 
 // Shows Password Protection warning with |warningText|. |completion| should be
 // called when the UI is dismissed with the user's |action|.
 - (void)showPasswordProtectionWarning:(NSString*)warningText
                            completion:(void (^)(safe_browsing::WarningAction))
                                           completion;
+
+// Shows Credential Provider Promo with |trigger|.
+- (void)showCredentialProviderPromo:(CredentialProviderPromoTrigger)trigger;
+
+// Shows a message informing that the user has successfully signed in with a
+// saved credential.
+@optional
+- (void)showSignedInWithSavedCredentialMessage;
 
 @end
 

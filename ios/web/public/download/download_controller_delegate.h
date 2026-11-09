@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "ios/web/public/download/download_task.h"
 
 namespace web {
@@ -20,14 +19,13 @@ class DownloadControllerDelegate {
  public:
   // Called when renderer-initiated download was created or when client is
   // resuming after the application relaunch by calling
-  // DownloadController::CreateDownloadTask().
+  // `DownloadController::CreateNativeDownloadTask` or
+  // `DownloadController::CreateWebStateDownloadTask`.
   //
-  // Renderer-initiated download or download created with
-  // DownloadController::CreateDownloadTask() call does not start automatically.
-  // If the client wants to start the download it should call
-  // DownloadTask::Start().
-  // Clients may call DownloadTask::GetSuggestedFilename() to get the filename
-  // for the download and DownloadTask::GetTotalBytes() to get the estimated
+  // Downloads do not start automatically. If the client wants to start the
+  // download it should call `DownloadTask::Start`.
+  // Clients may call `DownloadTask::GetSuggestedFilename` to get the filename
+  // for the download and `DownloadTask::GetTotalBytes` to get the estimated
   // size.
   virtual void OnDownloadCreated(DownloadController* download_controller,
                                  WebState* web_state,
@@ -41,10 +39,12 @@ class DownloadControllerDelegate {
       DownloadController* download_controller) {}
 
   DownloadControllerDelegate() = default;
-  virtual ~DownloadControllerDelegate() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadControllerDelegate);
+  DownloadControllerDelegate(const DownloadControllerDelegate&) = delete;
+  DownloadControllerDelegate& operator=(const DownloadControllerDelegate&) =
+      delete;
+
+  virtual ~DownloadControllerDelegate() = default;
 };
 
 }  // namespace web

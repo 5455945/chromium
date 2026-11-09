@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,21 +10,21 @@ import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.ViewGroup;
 
+import androidx.annotation.CallSuper;
 import androidx.annotation.IntDef;
-import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
-import org.chromium.chrome.browser.compositor.LayerTitleCache;
 import org.chromium.chrome.browser.compositor.layouts.components.LayoutTab;
-import org.chromium.chrome.browser.compositor.layouts.content.TabContentManager;
 import org.chromium.chrome.browser.layouts.EventFilter;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
 import org.chromium.chrome.browser.layouts.scene_layer.SceneLayer;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.resources.ResourceManager;
 
@@ -37,12 +37,9 @@ import java.util.List;
  * alternative to the Android UI for lower level hardware accelerated rendering.
  * This layout also pass through all the events that may happen.
  */
-
-public abstract class Layout implements TabContentManager.ThumbnailChangeListener {
-
-    /**
-     * The orientation of the device.
-     */
+@NullMarked
+public abstract class Layout {
+    /** The orientation of the device. */
     @IntDef({Orientation.UNSET, Orientation.PORTRAIT, Orientation.LANDSCAPE})
     @Retention(RetentionPolicy.SOURCE)
     public @interface Orientation {
@@ -52,28 +49,49 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /** The possible variations of the visible viewport that different layouts may need. */
-    @IntDef({ViewportMode.ALWAYS_FULLSCREEN, ViewportMode.ALWAYS_SHOWING_BROWSER_CONTROLS,
-            ViewportMode.DYNAMIC_BROWSER_CONTROLS,
-            ViewportMode.USE_PREVIOUS_BROWSER_CONTROLS_STATE})
+    @IntDef({
+        ViewportMode.ALWAYS_FULLSCREEN,
+        ViewportMode.ALWAYS_SHOWING_BROWSER_CONTROLS,
+        ViewportMode.DYNAMIC_BROWSER_CONTROLS,
+        ViewportMode.USE_PREVIOUS_BROWSER_CONTROLS_STATE
+    })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ViewportMode {
         /** The viewport is assumed to be always fullscreen. */
         int ALWAYS_FULLSCREEN = 0;
+
         /** The viewport is assuming that browser controls are permanently shown. */
         int ALWAYS_SHOWING_BROWSER_CONTROLS = 1;
+
         /** The viewport will account for animating browser controls (both shown and hidden). */
         int DYNAMIC_BROWSER_CONTROLS = 2;
+
         /** Use a viewport that accounts for the browser controls state in the previous layout. */
         int USE_PREVIOUS_BROWSER_CONTROLS_STATE = 3;
     }
 
-    // Defines to make the code easier to read.
-    public static final boolean NEED_TITLE = true;
-    public static final boolean NO_TITLE = false;
-    public static final boolean SHOW_CLOSE_BUTTON = true;
-    public static final boolean NO_CLOSE_BUTTON = false;
+    @IntDef({
+        LayoutState.STARTING_TO_SHOW,
+        LayoutState.SHOWING,
+        LayoutState.STARTING_TO_HIDE,
+        LayoutState.HIDDEN
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface LayoutState {
+        /** The layout is going to hide as soon as the animation finishes. */
+        int STARTING_TO_SHOW = 0;
 
-    /** Length of the unstalling animation. **/
+        /** Actively being showed, no ongoing animation. */
+        int SHOWING = 1;
+
+        /** The layout is going to show as soon as the animation finishes. */
+        int STARTING_TO_HIDE = 2;
+
+        /** Not currently showed, and no ongoing animation. */
+        int HIDDEN = 3;
+    }
+
+    /** Length of the unstalling animation. */
     public static final long UNSTALLED_ANIMATION_DURATION_MS = 500;
 
     private static final float SNAP_SPEED = 1.0f; // dp per second
@@ -81,8 +99,6 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     // Drawing area properties.
     private float mWidthDp;
     private float mHeightDp;
-    private float mTopBrowserControlsHeightDp;
-    private float mBottomBrowserControlsHeightDp;
 
     /** A {@link Context} instance. */
     private Context mContext;
@@ -91,8 +107,8 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     private @Orientation int mCurrentOrientation;
 
     // Tabs
-    protected TabModelSelector mTabModelSelector;
-    protected TabContentManager mTabContentManager;
+    protected @Nullable TabModelSelector mTabModelSelector;
+    protected @Nullable TabContentManager mTabContentManager;
 
     // Helpers
     private final LayoutUpdateHost mUpdateHost;
@@ -100,27 +116,25 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
 
     /** The tabs currently being rendered as part of this layout. The tabs are
      * drawn using the same ordering as this array. */
-    protected LayoutTab[] mLayoutTabs;
+    protected LayoutTab @Nullable [] mLayoutTabs;
 
-    // True means that the layout is going to hide as soon as the animation finishes.
-    private boolean mIsStartingToHide;
-
-    // True means that the layout is going to show as soon as the animation finishes.
-    private boolean mIsStartingToShow;
-
-    // The next id to show when the layout is hidden, or TabBase#INVALID_TAB_ID if no change.
-    protected int mNextTabId = Tab.INVALID_TAB_ID;
+    // Current state of the Layout.
+    private @LayoutState int mLayoutState;
 
     // The ratio of dp to px.
     protected final float mDpToPx;
     protected final float mPxToDp;
 
+    // Whether the {@link Layout} is currently active.
+    private boolean mIsActive;
+
     /**
-     * The {@link Layout} is not usable until sizeChanged is called.
-     * This is convenient this way so we can pre-create the layout before the host is fully defined.
-     * @param context      The current Android's context.
-     * @param updateHost   The parent {@link LayoutUpdateHost}.
-     * @param renderHost   The parent {@link LayoutRenderHost}.
+     * The {@link Layout} is not usable until sizeChanged is called. This is convenient this way so
+     * we can pre-create the layout before the host is fully defined.
+     *
+     * @param context The current Android's context.
+     * @param updateHost The parent {@link LayoutUpdateHost}.
+     * @param renderHost The parent {@link LayoutRenderHost}.
      */
     public Layout(Context context, LayoutUpdateHost updateHost, LayoutRenderHost renderHost) {
         mContext = context;
@@ -130,12 +144,12 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
         // Invalid sizes
         mWidthDp = -1;
         mHeightDp = -1;
-        mTopBrowserControlsHeightDp = -1;
-        mBottomBrowserControlsHeightDp = -1;
 
         mCurrentOrientation = Orientation.UNSET;
         mDpToPx = context.getResources().getDisplayMetrics().density;
         mPxToDp = 1 / mDpToPx;
+
+        mLayoutState = LayoutState.HIDDEN;
     }
 
     /**
@@ -145,16 +159,11 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
         return mUpdateHost.getAnimationHandler();
     }
 
-    /**
-     * Called when native initialization is completed.
-     */
+    /** Called when native initialization is completed. */
     public void onFinishNativeInitialization() {}
 
-    /**
-     * Cleans up any internal state.  This object should not be used after this call.
-     */
-    public void destroy() {
-    }
+    /** Cleans up any internal state. This object should not be used after this call. */
+    public void destroy() {}
 
     /**
      * @return The current {@link Context} instance associated with this {@link Layout}.
@@ -163,42 +172,26 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
         return mContext;
     }
 
+    protected void setIsActive(boolean active) {
+        mIsActive = active;
+    }
+
     /**
      * @return Whether the {@link Layout} is currently active.
      */
     public boolean isActive() {
-        return mUpdateHost.isActiveLayout(this);
+        return mIsActive;
     }
 
     /**
      * Creates a {@link LayoutTab}.
-     * @param id              The id of the reference {@link Tab} in the {@link TabModel}.
-     * @param isIncognito     Whether the new tab is incognito.
-     * @param showCloseButton True to show and activate a close button on the border.
-     * @param isTitleNeeded   Whether a title will be shown.
-     * @return                The newly created {@link LayoutTab}.
+     *
+     * @param id The id of the reference {@link Tab} in the {@link TabModel}.
+     * @param isIncognito Whether the new tab is incognito.
+     * @return The newly created {@link LayoutTab}.
      */
-    public LayoutTab createLayoutTab(
-            int id, boolean isIncognito, boolean showCloseButton, boolean isTitleNeeded) {
-        return createLayoutTab(id, isIncognito, showCloseButton, isTitleNeeded, -1.f, -1.f);
-    }
-
-    /**
-     * Creates a {@link LayoutTab}.
-     * @param id               The id of the reference {@link Tab} in the {@link TabModel}.
-     * @param isIncognito      Whether the new tab is incognito.
-     * @param showCloseButton  True to show and activate a close button on the border.
-     * @param isTitleNeeded    Whether a title will be shown.
-     * @param maxContentWidth  The max content width of the tab.  Negative numbers will use the
-     *                         original content width.
-     * @param maxContentHeight The max content height of the tab.  Negative numbers will use the
-     *                         original content height.
-     * @return                 The newly created {@link LayoutTab}.
-     */
-    public LayoutTab createLayoutTab(int id, boolean isIncognito, boolean showCloseButton,
-            boolean isTitleNeeded, float maxContentWidth, float maxContentHeight) {
-        LayoutTab layoutTab = mUpdateHost.createLayoutTab(
-                id, isIncognito, showCloseButton, isTitleNeeded, maxContentWidth, maxContentHeight);
+    public LayoutTab createLayoutTab(int id, boolean isIncognito) {
+        LayoutTab layoutTab = mUpdateHost.createLayoutTab(id, isIncognito);
         initLayoutTabFromHost(layoutTab);
         return layoutTab;
     }
@@ -229,7 +222,7 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
         final boolean doneAnimating = onUpdateAnimation(time, false);
 
         // Don't update the layout if onUpdateAnimation ended up making a new layout active.
-        if (mUpdateHost.isActiveLayout(this)) updateLayout(time, dt);
+        if (mIsActive) updateLayout(time, dt);
 
         return doneAnimating;
     }
@@ -244,12 +237,12 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     /**
      * Update snapping to pixel. To be called once every frame.
      *
-     * TODO(crbug.com/1070281): Temporary placement. This is some Mediator logic and should move to
-     * the appropriate location when doing MVC. Maybe move to {@link LayoutMediator}.
+     * <p>TODO(crbug.com/40126259): Temporary placement. This is some Mediator logic and should move
+     * to the appropriate location when doing MVC. Maybe move to {@link LayoutMediator}.
      *
      * @param dt The delta time between update frames in ms.
      * @param layoutTab The {@link LayoutTab} that needs to be updating.
-     * @return   True if the snapping requests to render at least one more frame.
+     * @return True if the snapping requests to render at least one more frame.
      */
     protected boolean updateSnap(long dt, PropertyModel layoutTab) {
         final float step = dt * SNAP_SPEED / 1000.0f;
@@ -295,8 +288,9 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     /**
      * Called when the context and size of the view has changed.
      *
-     * @param context     The current Android's context.
+     * @param context The current Android's context.
      */
+    @CallSuper
     public void contextChanged(Context context) {
         mContext = context;
         LayoutTab.resetDimensionConstants(context);
@@ -304,76 +298,36 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
 
     /**
      * Called when the size of the viewport has changed.
-     * @param visibleViewportPx             The visible viewport that represents the area on the
-     *                                      screen this {@link Layout} gets to draw to in px
-     *                                      (potentially takes into account browser controls).
-     * @param screenViewportPx              The viewport of the screen in px.
-     * @param topBrowserControlsHeightPx    The top browser controls height in px.
-     * @param bottomBrowserControlsHeightPx The bottom browser controls height in px.
-     * @param orientation                   The new orientation.  Valid values are defined by
-     *                                      {@link Orientation}.
+     *
+     * @param screenViewportPx The viewport of the screen in px.
+     * @param orientation The new orientation. Valid values are defined by {@link Orientation}.
      */
-    final void sizeChanged(RectF visibleViewportPx, RectF screenViewportPx,
-            int topBrowserControlsHeightPx, int bottomBrowserControlsHeightPx,
-            @Orientation int orientation) {
-        // 1. Pull out this Layout's width and height properties based on the viewport.
-        float width = screenViewportPx.width() / mDpToPx;
-        float height = screenViewportPx.height() / mDpToPx;
-        float topBrowserControlsHeightDp = topBrowserControlsHeightPx / mDpToPx;
-        float bottomBrowserControlsHeightDp = bottomBrowserControlsHeightPx / mDpToPx;
-
-        // 2. Check if any Layout-specific properties have changed.
-        boolean layoutPropertiesChanged = Float.compare(mWidthDp, width) != 0
-                || Float.compare(mHeightDp, height) != 0
-                || Float.compare(mTopBrowserControlsHeightDp, topBrowserControlsHeightDp) != 0
-                || Float.compare(mBottomBrowserControlsHeightDp, bottomBrowserControlsHeightDp) != 0
-                || mCurrentOrientation != orientation;
-
-        // 3. Update the internal sizing properties.
-        mWidthDp = width;
-        mHeightDp = height;
-        mTopBrowserControlsHeightDp = topBrowserControlsHeightDp;
-        mBottomBrowserControlsHeightDp = bottomBrowserControlsHeightDp;
+    final void sizeChanged(RectF screenViewportPx, @Orientation int orientation) {
+        mWidthDp = screenViewportPx.width() / mDpToPx;
+        mHeightDp = screenViewportPx.height() / mDpToPx;
         mCurrentOrientation = orientation;
-
-        // 4. Notify the actual Layout if necessary.
-        if (layoutPropertiesChanged) {
-            notifySizeChanged(width, height, orientation);
-        }
     }
 
     /**
-     * Notifies when the size or the orientation of the view has actually changed.
-     *
-     * @param width       The new width in dp.
-     * @param height      The new height in dp.
-     * @param orientation The new orientation.
-     */
-    protected void notifySizeChanged(float width, float height, @Orientation int orientation) {}
-
-    /**
-     * Sets the managers needed to for the layout to get information from outside. The managers
-     * are tailored to be called from the GL thread.
+     * Sets the the {@link TabModelSelector} for the layout.
      *
      * @param modelSelector The {@link TabModelSelector} to be set on the layout.
-     * @param manager       The {@link TabContentManager} to get tab display content.
      */
-    public void setTabModelSelector(TabModelSelector modelSelector, TabContentManager manager) {
+    @CallSuper
+    public void setTabModelSelector(TabModelSelector modelSelector) {
         mTabModelSelector = modelSelector;
-        setTabContentManager(manager);
     }
 
     /**
-     * Sets the manager needed for the layout to get thumbnails.
+     * Sets the {@link TabContentManager} needed for the layout to get thumbnails.
      *
      * @param manager The {@link TabContentManager} to get tab display content.
      */
+    @CallSuper
     protected void setTabContentManager(TabContentManager manager) {
         if (manager == null) return;
 
-        if (mTabContentManager != null) mTabContentManager.removeThumbnailChangeListener(this);
         mTabContentManager = manager;
-        mTabContentManager.addThumbnailChangeListener(this);
     }
 
     /**
@@ -396,68 +350,47 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
      * is no primary screen-filling tab.
      */
     protected void updateCacheVisibleIds(List<Integer> visible) {
-        if (mTabContentManager != null) mTabContentManager.updateVisibleIds(visible, -1);
+        updateCacheVisibleIdsAndPrimary(visible, Tab.INVALID_TAB_ID);
     }
 
-    /**
-     * To be called when the layout is starting a transition out of the view mode.
-     * @param nextTabId          The id of the next tab.
-     * @param hintAtTabSelection Whether or not the new tab selection should be broadcast as a hint
-     *                           potentially before this {@link Layout} is done hiding and the
-     *                           selection occurs.
-     */
-    public void startHiding(int nextTabId, boolean hintAtTabSelection) {
-        mUpdateHost.startHiding(nextTabId, hintAtTabSelection);
-        mIsStartingToHide = true;
-        mNextTabId = nextTabId;
+    /** To be called when the layout is starting a transition out of the view mode. */
+    public void startHiding() {
+        mUpdateHost.startHiding();
+        mLayoutState = LayoutState.STARTING_TO_HIDE;
     }
 
     /**
      * @return True is the layout is in the process of hiding itself.
      */
     public boolean isStartingToHide() {
-        return mIsStartingToHide;
+        return mLayoutState == LayoutState.STARTING_TO_HIDE;
     }
 
     /**
      * @return True is the layout is in the process of showing itself.
      */
     public boolean isStartingToShow() {
-        return mIsStartingToShow;
+        return mLayoutState == LayoutState.STARTING_TO_SHOW;
     }
 
-    /**
-     * @return The incognito state of the layout.
-     */
-    public boolean isIncognito() {
-        return mTabModelSelector.isIncognitoSelected();
-    }
-
-    /**
-     * To be called when the transition into the layout is done.
-     */
+    /** To be called when the transition into the layout is done. */
+    @CallSuper
     public void doneShowing() {
-        if (!mIsStartingToShow) return;
+        if (mLayoutState != LayoutState.STARTING_TO_SHOW) return;
 
-        mIsStartingToShow = false;
+        mLayoutState = LayoutState.SHOWING;
         mUpdateHost.doneShowing();
     }
 
     /**
-     * To be called when the transition out of the view mode is done.
-     * This is currently called by the renderer when all the animation are done while hiding.
+     * To be called when the transition out of the view mode is done. This is currently called by
+     * the renderer when all the animation are done while hiding.
      */
+    @CallSuper
     public void doneHiding() {
-        if (!mIsStartingToHide) return;
+        if (mLayoutState != LayoutState.STARTING_TO_HIDE) return;
 
-        mIsStartingToHide = false;
-        if (mNextTabId != Tab.INVALID_TAB_ID) {
-            TabModel model = mTabModelSelector.getModelForTabId(mNextTabId);
-            if (model != null) {
-                TabModelUtils.setIndex(model, TabModelUtils.getTabIndexById(model, mNextTabId));
-            }
-            mNextTabId = Tab.INVALID_TAB_ID;
-        }
+        mLayoutState = LayoutState.HIDDEN;
         mUpdateHost.doneHiding();
         if (mRenderHost != null && mRenderHost.getResourceManager() != null) {
             mRenderHost.getResourceManager().clearTintedResourceCache();
@@ -467,40 +400,27 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /**
-     * Called when a tab is getting selected. Typically when exiting the overview mode.
-     * @param time  The current time of the app in ms.
-     * @param tabId The id of the selected tab.
-     */
-    public void onTabSelecting(long time, int tabId) {
-        startHiding(tabId, true);
-    }
-
-    /**
      * Initialize the layout to be shown.
-     * @param time   The current time of the app in ms.
+     *
+     * @param time The current time of the app in ms.
      * @param animate Whether to play an entry animation.
      */
+    @CallSuper
     public void show(long time, boolean animate) {
-        // TODO(crbug.com/1108496): Remove after LayoutManager explicitly hide the old layout.
-        mIsStartingToHide = false;
-        mIsStartingToShow = true;
-        mNextTabId = Tab.INVALID_TAB_ID;
+        // TODO(crbug.com/40141330): Remove after LayoutManager explicitly hide the old layout.
+        mLayoutState = LayoutState.STARTING_TO_SHOW;
     }
 
     /**
      * Hands the layout an Android view to attach it's views to.
      * @param container The Android View to attach the layout's views to.
      */
-    public void attachViews(ViewGroup container) { }
+    public void attachViews(ViewGroup container) {}
 
-    /**
-     * Signal to the Layout to detach it's views from the container.
-     */
-    public void detachViews() { }
+    /** Signal to the Layout to detach it's views from the container. */
+    public void detachViews() {}
 
-    /**
-     * Forces the current animation to finish and broadcasts the proper event.
-     */
+    /** Forces the current animation to finish and broadcasts the proper event. */
     protected void forceAnimationToFinish() {}
 
     /**
@@ -515,13 +435,6 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
      */
     public float getHeight() {
         return mHeightDp;
-    }
-
-    /**
-     * @return The height of the bottom browser controls in dp.
-     */
-    public float getBottomBrowserControlsHeight() {
-        return mBottomBrowserControlsHeightDp;
     }
 
     /**
@@ -551,17 +464,6 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /**
-     * Called by the LayoutManager when an animation should be killed.
-     */
-    public void unstallImmediately() { }
-
-    /**
-     * Called by the LayoutManager when an animation should be killed.
-     * @param tabId The tab that the kill signal is associated with
-     */
-    public void unstallImmediately(int tabId) { }
-
-    /**
      * Called by the LayoutManager when they system back button is pressed.
      * @return Whether or not the layout consumed the event.
      */
@@ -570,51 +472,11 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /**
-     * Called when a tab get selected. Typically when a tab get closed and the new current tab get
-     * selected.
-     * @param time      The current time of the app in ms.
-     * @param tabId     The id of the selected tab.
-     * @param prevId    The id of the previously selected tab.
-     * @param incognito Whether or not the affected model was incognito.
-     */
-    public void onTabSelected(long time, int tabId, int prevId, boolean incognito) {
-    }
-
-    /**
-     * Called when a tab is about to be closed. When called, the closing tab will still
-     * be part of the model.
-     * @param time  The current time of the app in ms.
-     * @param tabId The id of the tab being closed
-     */
-    public void onTabClosing(long time, int tabId) {
-    }
-
-    /**
-     * Called when a tab is being closed. When called, the closing tab will not
-     * be part of the model.
-     * @param time      The current time of the app in ms.
-     * @param tabId     The id of the tab being closed.
-     * @param nextTabId The id if the tab that is being switched to.
-     * @param incognito Whether or not the affected model was incognito.
-     */
-    public void onTabClosed(long time, int tabId, int nextTabId, boolean incognito) {
-    }
-
-    /**
-     * Called when all the tabs in the current stack need to be closed.
-     * When called, the tabs will still be part of the model.
-     * @param time      The current time of the app in ms.
-     * @param incognito True if this the incognito tab model should close all tabs, false otherwise.
-     */
-    public void onTabsAllClosing(long time, boolean incognito) {
-    }
-
-    /**
      * Called before a tab is created from the top left button.
      *
      * @param sourceTabId The id of the source tab.
      */
-    public void onTabCreating(int sourceTabId) { }
+    public void onTabCreating(int sourceTabId) {}
 
     /**
      * Called when a tab is created from the top left button.
@@ -629,37 +491,15 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
      * @param originY        The Y screen coordinate in dp of the last touch down event that spawned
      *                       this tab.
      */
-    public void onTabCreated(long time, int tabId, int tabIndex, int sourceTabId,
-            boolean newIsIncognito, boolean background, float originX, float originY) {
-    }
-
-    /**
-     * Called when a tab is restored (created FROM_RESTORE).
-     * @param time  The current time of the app in ms.
-     * @param tabId The id of the restored tab.
-     */
-    public void onTabRestored(long time, int tabId) { }
-
-    /**
-     * Called when the current tabModel switched (e.g. standard -> incognito).
-     *
-     * @param incognito True if the new model is incognito.
-     */
-    public void onTabModelSwitched(boolean incognito) {
-    }
-
-    /**
-     * Called when a tab is finally closed if the action was previously undoable.
-     * @param time      The current time of the app in ms.
-     * @param id        The id of the Tab.
-     * @param incognito True if the tab is incognito
-     */
-    public void onTabClosureCommitted(long time, int id, boolean incognito) { }
-
-    @Override
-    public void onThumbnailChange(int id) {
-        requestUpdate();
-    }
+    public void onTabCreated(
+            long time,
+            int tabId,
+            int tabIndex,
+            int sourceTabId,
+            boolean newIsIncognito,
+            boolean background,
+            float originX,
+            float originY) {}
 
     /**
      * Steps the animation forward and updates all the animated values.
@@ -672,31 +512,10 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /**
-     * @return Whether or not there is an animation currently being driven by this {@link Layout}.
-     */
-    @VisibleForTesting
-    public boolean isLayoutAnimating() {
-        return false;
-    }
-
-    /**
      * @return The {@link LayoutTab}s to be drawn.
      */
-    public LayoutTab[] getLayoutTabsToRender() {
+    public LayoutTab @Nullable [] getLayoutTabsToRender() {
         return mLayoutTabs;
-    }
-
-    /**
-     * @param id The id of the {@link LayoutTab} to search for.
-     * @return   A {@link LayoutTab} represented by a {@link Tab} with an id of {@code id}.
-     */
-    public LayoutTab getLayoutTab(int id) {
-        if (mLayoutTabs != null) {
-            for (int i = 0; i < mLayoutTabs.length; i++) {
-                if (mLayoutTabs[i].getId() == id) return mLayoutTabs[i];
-            }
-        }
-        return null;
     }
 
     /**
@@ -715,21 +534,6 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /**
-     * @return Whether the layout is handling the model updates when closing all the tabs.
-     */
-    public boolean handlesCloseAll() {
-        return false;
-    }
-
-    /**
-     * Whether or not the toolbar IncognitoToggleButton (if present) should be enabled. E.g., it can
-     * be disabled while animating a tab selection to avoid odd behavior.
-     */
-    public boolean shouldAllowIncognitoSwitching() {
-        return true;
-    }
-
-    /**
      * @return True if the content decoration layer should be shown.
      */
     public boolean shouldDisplayContentOverlay() {
@@ -745,20 +549,22 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     }
 
     /**
-     * @param e                 The {@link MotionEvent} to consider.
-     * @param offsets           The current touch offsets that should be applied to the
-     *                          {@link EventFilter}s.
+     * @param e The {@link MotionEvent} to consider.
+     * @param offsets The current motion offsets that should be applied to the {@link EventFilter}s.
      * @param isKeyboardShowing Whether or not the keyboard is showing.
      * @return The {@link EventFilter} the {@link Layout} is listening to.
      */
-    public EventFilter findInterceptingEventFilter(
-            MotionEvent e, PointF offsets, boolean isKeyboardShowing) {
+    public @Nullable EventFilter findInterceptingEventFilter(
+            MotionEvent e, @Nullable PointF offsets, boolean isKeyboardShowing) {
         EventFilter layoutEventFilter = getEventFilter();
         if (layoutEventFilter != null) {
             if (offsets != null) {
                 layoutEventFilter.setCurrentMotionEventOffsets(offsets.x, offsets.y);
             }
             if (layoutEventFilter.onInterceptTouchEvent(e, isKeyboardShowing)) {
+                return layoutEventFilter;
+            }
+            if (layoutEventFilter.onInterceptHoverEvent(e)) {
                 return layoutEventFilter;
             }
         }
@@ -770,18 +576,20 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
      *
      * @param viewport          A viewport in which to display content in px.
      * @param visibleViewport   The visible section of the viewport in px.
-     * @param layerTitleCache   A layer title cache.
      * @param tabContentManager A tab content manager.
      * @param resourceManager   A resource manager.
      * @param browserControls   A browser controls state provider.
      * @return                  A {@link SceneLayer} that represents the content for this
      *                          {@link Layout}.
      */
-    public final SceneLayer getUpdatedSceneLayer(RectF viewport, RectF visibleViewport,
-            LayerTitleCache layerTitleCache, TabContentManager tabContentManager,
-            ResourceManager resourceManager, BrowserControlsStateProvider browserControls) {
-        updateSceneLayer(viewport, visibleViewport, layerTitleCache, tabContentManager,
-                resourceManager, browserControls);
+    public final @Nullable SceneLayer getUpdatedSceneLayer(
+            RectF viewport,
+            RectF visibleViewport,
+            TabContentManager tabContentManager,
+            ResourceManager resourceManager,
+            BrowserControlsStateProvider browserControls) {
+        updateSceneLayer(
+                viewport, visibleViewport, tabContentManager, resourceManager, browserControls);
         return getSceneLayer();
     }
 
@@ -802,7 +610,7 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
     /**
      * @return The EventFilter to use for processing events for this Layout.
      */
-    protected abstract EventFilter getEventFilter();
+    protected abstract @Nullable EventFilter getEventFilter();
 
     /**
      * Get an instance of {@link SceneLayer}. Any class inheriting {@link Layout}
@@ -810,19 +618,26 @@ public abstract class Layout implements TabContentManager.ThumbnailChangeListene
      *
      * @return The scene layer for this {@link Layout}.
      */
-    protected abstract SceneLayer getSceneLayer();
+    protected abstract @Nullable SceneLayer getSceneLayer();
 
     /**
      * Update {@link SceneLayer} instance this layout holds. Any class inheriting {@link Layout}
      * should override this function in order for other functions to work.
      */
-    protected void updateSceneLayer(RectF viewport, RectF contentViewport,
-            LayerTitleCache layerTitleCache, TabContentManager tabContentManager,
-            ResourceManager resourceManager, BrowserControlsStateProvider browserControls) {}
+    protected void updateSceneLayer(
+            RectF viewport,
+            RectF contentViewport,
+            TabContentManager tabContentManager,
+            ResourceManager resourceManager,
+            BrowserControlsStateProvider browserControls) {}
 
     /**
      * @return The {@link LayoutType}.
      */
-    @LayoutType
-    public abstract int getLayoutType();
+    public abstract @LayoutType int getLayoutType();
+
+    /** Returns whether the layout is currently running animations. */
+    public boolean isRunningAnimations() {
+        return false;
+    }
 }

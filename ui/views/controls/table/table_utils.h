@@ -1,10 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_TABLE_TABLE_UTILS_H_
 #define UI_VIEWS_CONTROLS_TABLE_TABLE_UTILS_H_
 
+#include <optional>
 #include <vector>
 
 #include "ui/base/models/table_model.h"
@@ -18,7 +19,7 @@ namespace views {
 
 class TableView;
 
-VIEWS_EXPORT extern const int kUnspecifiedColumnWidth;
+inline constexpr int kUnspecifiedColumnWidth = 90;
 
 // Returns the width needed to display the contents of the specified column.
 // This is used internally by CalculateTableColumnSizes() and generally not
@@ -48,9 +49,17 @@ VIEWS_EXPORT std::vector<int> CalculateTableColumnSizes(
 // Converts a TableColumn::Alignment to the alignment for drawing the string.
 int TableColumnAlignmentToCanvasAlignment(ui::TableColumn::Alignment alignment);
 
-// Returns the index of the closest visible column index to |x|. Return value is
-// in terms of table->visible_columns().
-int GetClosestVisibleColumnIndex(const TableView* table, int x);
+// Returns the index of the closest visible column index to `x`. Return value is
+// in terms of `table.visible_columns()`. Returns nullopt if there are no
+// visible columns.
+std::optional<size_t> GetClosestVisibleColumnIndex(const TableView& table,
+                                                   int x);
+
+// Returns the mirror of the table column alignment if the layout is
+// right-to-left. If the layout is left-to-right, the same alignment is
+// returned.
+ui::TableColumn::Alignment GetMirroredTableColumnAlignment(
+    ui::TableColumn::Alignment alignment);
 
 }  // namespace views
 

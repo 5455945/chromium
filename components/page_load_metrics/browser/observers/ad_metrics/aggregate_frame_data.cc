@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_data_utils.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
+#include "content/public/browser/auction_result.h"
 
 namespace page_load_metrics {
 
@@ -14,9 +15,16 @@ AggregateFrameData::~AggregateFrameData() = default;
 
 void AggregateFrameData::UpdateCpuUsage(base::TimeTicks update_time,
                                         base::TimeDelta update,
+                                        base::TimeDelta ad_update,
                                         bool is_ad) {
   // Update the overall usage for all of the relevant buckets.
   cpu_usage_ += update;
+  if (is_ad) {
+    live_ad_cpu_usage_ += update;
+  } else {
+    live_ad_cpu_usage_ += ad_update;
+    non_ad_frame_ad_cpu_usage_ += ad_update;
+  }
 
   // Update the peak usage.
   total_peak_cpu_.UpdatePeakWindowedPercent(update, update_time);
@@ -24,20 +32,33 @@ void AggregateFrameData::UpdateCpuUsage(base::TimeTicks update_time,
     non_ad_peak_cpu_.UpdatePeakWindowedPercent(update, update_time);
 }
 
-void AggregateFrameData::ProcessResourceLoadInFrame(
-    const mojom::ResourceDataUpdatePtr& resource,
-    bool is_main_frame) {
-  resource_data_.ProcessResourceLoad(resource);
-  if (is_main_frame)
-    main_frame_resource_data_.ProcessResourceLoad(resource);
+void AggregateFrameData::UpdateFirstAdFCPSinceNavStart(
+    base::TimeDelta time_since_nav_start) {
+  if (!first_ad_fcp_after_main_nav_start_ ||
+      time_since_nav_start < first_ad_fcp_after_main_nav_start_.value()) {
+    first_ad_fcp_after_main_nav_start_ = time_since_nav_start;
+  }
 }
 
-void AggregateFrameData::AdjustAdBytes(int64_t unaccounted_ad_bytes,
+void AggregateFrameData::ProcessResourceLoadInFrame(
+    const mojom::ResourceDataUpdatePtr& resource,
+    bool is_outermost_main_frame) {
+  resource_data_.ProcessResourceLoad(resource);
+  if (is_outermost_main_frame) {
+    outermost_main_frame_resource_data_.ProcessResourceLoad(resource);
+  }
+}
+
+void AggregateFrameData::AdjustAdBytes(base::ByteSize unaccounted_ad_bytes,
                                        ResourceMimeType mime_type,
-                                       bool is_main_frame) {
+                                       bool is_outermost_main_frame) {
+  // TODO(crbug.com/40216775): Test coverage isn't enough for this
+  // method. Add more tests.
   resource_data_.AdjustAdBytes(unaccounted_ad_bytes, mime_type);
-  if (is_main_frame)
-    main_frame_resource_data_.AdjustAdBytes(unaccounted_ad_bytes, mime_type);
+  if (is_outermost_main_frame) {
+    outermost_main_frame_resource_data_.AdjustAdBytes(unaccounted_ad_bytes,
+                                                      mime_type);
+  }
 }
 
 }  // namespace page_load_metrics

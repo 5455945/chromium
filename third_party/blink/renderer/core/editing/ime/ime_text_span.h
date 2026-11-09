@@ -46,11 +46,12 @@ class CORE_EXPORT ImeTextSpan {
     kMisspellingSuggestion,
     kAutocorrect,
     kGrammarSuggestion,
+    kPreviewStylusGesture,
   };
 
   ImeTextSpan(Type,
-              unsigned start_offset,
-              unsigned end_offset,
+              wtf_size_t start_offset,
+              wtf_size_t end_offset,
               const Color& underline_color,
               ui::mojom::ImeTextSpanThickness,
               ui::mojom::ImeTextSpanUnderlineStyle,
@@ -59,13 +60,14 @@ class CORE_EXPORT ImeTextSpan {
               const Color& suggestion_highlight_color = Color::kTransparent,
               bool remove_on_finish_composing = false,
               bool interim_char_selection_ = false,
-              const Vector<String>& suggestions = Vector<String>());
+              const Vector<String>& suggestions = Vector<String>(),
+              bool should_hide_suggestion_menu = false);
 
   explicit ImeTextSpan(const ui::ImeTextSpan&);
 
   Type GetType() const { return type_; }
-  unsigned StartOffset() const { return start_offset_; }
-  unsigned EndOffset() const { return end_offset_; }
+  wtf_size_t StartOffset() const { return start_offset_; }
+  wtf_size_t EndOffset() const { return end_offset_; }
   const Color& UnderlineColor() const { return underline_color_; }
   ui::mojom::ImeTextSpanThickness Thickness() const { return thickness_; }
   ui::mojom::ImeTextSpanUnderlineStyle UnderlineStyle() const {
@@ -80,14 +82,15 @@ class CORE_EXPORT ImeTextSpan {
     return remove_on_finish_composing_;
   }
   bool InterimCharSelection() const { return interim_char_selection_; }
+  bool ShouldHideSuggestionMenu() const { return should_hide_suggestion_menu_; }
   const Vector<String>& Suggestions() const { return suggestions_; }
 
   ui::ImeTextSpan ToUiImeTextSpan();
 
  private:
   Type type_;
-  unsigned start_offset_;
-  unsigned end_offset_;
+  wtf_size_t start_offset_;
+  wtf_size_t end_offset_;
   Color underline_color_;
   ui::mojom::ImeTextSpanThickness thickness_;
   ui::mojom::ImeTextSpanUnderlineStyle underline_style_;
@@ -97,6 +100,7 @@ class CORE_EXPORT ImeTextSpan {
   bool remove_on_finish_composing_;
   bool interim_char_selection_;
   Vector<String> suggestions_;
+  bool should_hide_suggestion_menu_;
 };
 
 ImeTextSpan::Type ConvertUiTypeToType(ui::ImeTextSpan::Type type);

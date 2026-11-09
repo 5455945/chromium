@@ -1,25 +1,25 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_FAVICON_CONTENT_CONTENT_FAVICON_DRIVER_H_
 #define COMPONENTS_FAVICON_CONTENT_CONTENT_FAVICON_DRIVER_H_
 
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
 #include "components/favicon/core/favicon_driver_impl.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/navigation_handle_user_data.h"
 #include "content/public/browser/reload_type.h"
-#include "content/public/browser/render_document_host_user_data.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 #include "url/gurl.h"
 
 namespace blink {
-struct Manifest;
+class Manifest;
 }  // namespace blink
 
 namespace favicon {
@@ -34,6 +34,9 @@ class ContentFaviconDriver
       public content::WebContentsUserData<ContentFaviconDriver>,
       public FaviconDriverImpl {
  public:
+  ContentFaviconDriver(const ContentFaviconDriver&) = delete;
+  ContentFaviconDriver& operator=(const ContentFaviconDriver&) = delete;
+
   ~ContentFaviconDriver() override;
 
   // FaviconDriver implementation.
@@ -50,13 +53,13 @@ class ContentFaviconDriver
  private:
   friend class content::WebContentsUserData<ContentFaviconDriver>;
 
-  // TODO(crbug.com/1205018): these two classes are current used to ensure that
+  // TODO(crbug.com/40180290): these two classes are current used to ensure that
   // we disregard manifest URL updates that arrive prior to onload firing.
   struct DocumentManifestData
-      : public content::RenderDocumentHostUserData<DocumentManifestData> {
+      : public content::DocumentUserData<DocumentManifestData> {
     explicit DocumentManifestData(content::RenderFrameHost* rfh);
     ~DocumentManifestData() override;
-    RENDER_DOCUMENT_HOST_USER_DATA_KEY_DECL();
+    DOCUMENT_USER_DATA_KEY_DECL();
     bool has_manifest_url = false;
   };
 
@@ -71,8 +74,9 @@ class ContentFaviconDriver
 
   // Callback when a manifest is downloaded.
   void OnDidDownloadManifest(ManifestDownloadCallback callback,
+                             blink::mojom::ManifestRequestResult result,
                              const GURL& manifest_url,
-                             const blink::Manifest& manifest);
+                             std::optional<blink::Manifest> manifest);
 
   // FaviconHandler::Delegate implementation.
   int DownloadImage(const GURL& url,
@@ -93,7 +97,8 @@ class ContentFaviconDriver
   // content::WebContentsObserver implementation.
   void DidUpdateFaviconURL(
       content::RenderFrameHost* rfh,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
   void DidUpdateWebManifestURL(content::RenderFrameHost* rfh,
                                const GURL& manifest_url) override;
   void DidStartNavigation(
@@ -103,9 +108,12 @@ class ContentFaviconDriver
 
   GURL bypass_cache_page_url_;
 
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+  // Whether INVALIDATE_TYPE_ICON has been sent for the current page.
+  bool notified_icon_available_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(ContentFaviconDriver);
+  base::WeakPtrFactory<ContentFaviconDriver> weak_ptr_factory_{this};
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 }  // namespace favicon

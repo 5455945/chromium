@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,14 @@
 
 #include <unordered_map>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_throttler.h"
+#include "components/safe_browsing/content/browser/web_contents_key.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/security_interstitials/core/base_safe_browsing_error_ui.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
 
 class PrefService;
 
@@ -38,21 +37,22 @@ class ThreatDetails;
 struct DataCollectorsContainer {
  public:
   DataCollectorsContainer();
+
+  DataCollectorsContainer(const DataCollectorsContainer&) = delete;
+  DataCollectorsContainer& operator=(const DataCollectorsContainer&) = delete;
+
   ~DataCollectorsContainer();
 
   // Note: new data collection types should be added below as additional fields.
 
   // Collects ThreatDetails which contains resource URLs and partial DOM.
   std::unique_ptr<ThreatDetails> threat_details;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DataCollectorsContainer);
 };
 
 // Stores the data collectors that are active on each WebContents (ie: browser
-// tab).
+// tab). Keys are derived from WebContents* but should not be dereferenced.
 using DataCollectorsMap =
-    std::unordered_map<content::WebContents*, DataCollectorsContainer>;
+    std::unordered_map<WebContentsKey, DataCollectorsContainer>;
 
 using SBErrorOptions =
     security_interstitials::BaseSafeBrowsingErrorUI::SBErrorDisplayOptions;
@@ -87,35 +87,59 @@ enum class TriggerManagerReason {
 // tracking how often triggers fire and throttling them when necessary.
 class TriggerManager {
  public:
+  struct FinishCollectingThreatDetailsResult {
+    FinishCollectingThreatDetailsResult(bool should_send_report,
+                                        bool are_threat_details_available);
+    bool IsReportSent();
+    bool should_send_report;
+    bool are_threat_details_available;
+  };
+
+  struct DataCollectionPermissions {
+    DataCollectionPermissions(bool is_extended_reporting_opt_in_allowed,
+                              bool is_off_the_record,
+                              bool is_extended_reporting_enabled);
+    explicit DataCollectionPermissions(
+        const SBErrorOptions& error_display_options);
+    bool is_extended_reporting_opt_in_allowed;
+    bool is_off_the_record;
+    bool is_extended_reporting_enabled;
+  };
+
   TriggerManager(BaseUIManager* ui_manager, PrefService* local_state_prefs);
+
+  TriggerManager(const TriggerManager&) = delete;
+  TriggerManager& operator=(const TriggerManager&) = delete;
+
   virtual ~TriggerManager();
 
-  // Returns a SBErrorDisplayOptions struct containing user state that is
+  // Returns a DataCollectionPermissions struct containing user state that is
   // relevant for TriggerManager to decide whether to start/finish data
   // collection. Looks at incognito state from |web_contents|, and opt-ins from
   // |pref_service|. Only the fields needed by TriggerManager will be set.
-  static SBErrorOptions GetSBErrorDisplayOptions(
+  static DataCollectionPermissions GetDataCollectionPermissions(
       const PrefService& pref_service,
       content::WebContents* web_contents);
 
   // Returns whether data collection can be started for the |trigger_type| based
-  // on the settings specified in |error_display_options| as well as quota.
-  // If false is returned, |out_reason| will be specify the reason.
+  // on the settings specified in |data_collection_permissions| as well as
+  // quota. If false is returned, |out_reason| will be specify the reason.
   bool CanStartDataCollectionWithReason(
-      const SBErrorOptions& error_display_options,
+      const DataCollectionPermissions& data_collection_permissions,
       const TriggerType trigger_type,
       TriggerManagerReason* out_reason);
 
   // Simplified signature for |CanStartDataCollectionWithReason| for callers
   // that don't care about the reason.
-  bool CanStartDataCollection(const SBErrorOptions& error_display_options,
-                              const TriggerType trigger_type);
+  bool CanStartDataCollection(
+      const DataCollectionPermissions& data_collection_permissions,
+      const TriggerType trigger_type);
 
   // Begins collecting a ThreatDetails report on the specified |web_contents|.
   // |resource| is the unsafe resource that cause the collection to occur.
   // |url_loader_factory| is used to retrieve data from the HTTP cache.
   // |history_service| is used to get data about redirects.
-  // |error_display_options| contains the current state of relevant user
+  // |data_collection_permissions| contains the current state of relevant user
   // preferences. We use this object for interop with WebView, in Chrome it
   // should be created by TriggerManager::GetSBErrorDisplayOptions().
   // Returns true if the collection began, or false if it didn't.
@@ -128,7 +152,7 @@ class TriggerManager {
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       history::HistoryService* history_service,
       ReferrerChainProvider* referrer_chain_provider,
-      const SBErrorOptions& error_display_options,
+      const DataCollectionPermissions& data_collection_permissions,
       TriggerManagerReason* out_reason);
 
   // Simplified signature for |StartCollectingThreatDetailsWithReason| for
@@ -140,32 +164,44 @@ class TriggerManager {
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       history::HistoryService* history_service,
       ReferrerChainProvider* referrer_chain_provider,
-      const SBErrorOptions& error_display_options);
+      const DataCollectionPermissions& data_collection_permissions);
 
-  // Completes the collection of a ThreatDetails report on the specified
-  // |web_contents| and sends the report. |delay| can be used to wait a period
-  // of time before finishing the report. |did_proceed| indicates whether the
-  // user proceeded through the security interstitial associated with this
-  // report. |num_visits| is how many times the user has visited the site
-  // before. |error_display_options| contains the current state of relevant user
-  // preferences. We use this object for interop with WebView, in Chrome it
-  // should be created by TriggerManager::GetSBErrorDisplayOptions().
-  // Returns true if the report was completed and sent, or false otherwise (eg:
-  // the user was not opted-in to extended reporting after collection began).
-  virtual bool FinishCollectingThreatDetails(
+  // Store map of security interstitial interactions that should be sent in the
+  // threat report.
+  void SetInterstitialInteractions(
+      std::unique_ptr<security_interstitials::InterstitialInteractionMap>
+          interstitial_interactions);
+
+  // Completes the collection of a ThreatDetails report for the specified
+  // |web_contents_key| (derived from a WebContents*) and sends the
+  // report. |delay| can be used to wait a period of time before finishing the
+  // report. |did_proceed| indicates whether the user proceeded through the
+  // security interstitial associated with this report. |num_visits| is how many
+  // times the user has visited the site before. |data_collection_permissions|
+  // contains the current state of relevant user preferences.
+  // We use this object for interop with WebView, in Chrome it should be
+  // created by TriggerManager::GetSBErrorDisplayOptions(). |is_hats_candidate|
+  // indicates whether the user is a candidate for a HaTS survey, in which case
+  // this method will trigger launching it and attaching ThreatDetails report
+  // information to it. Returns whether the report is supposed to be sent (eg:
+  // is user  opted-in to extended reporting after collection began) and
+  // whether the threat details were available to send.
+  virtual FinishCollectingThreatDetailsResult FinishCollectingThreatDetails(
       TriggerType trigger_type,
-      content::WebContents* web_contents,
+      WebContentsKey web_contents_key,
       const base::TimeDelta& delay,
       bool did_proceed,
       int num_visits,
-      const SBErrorOptions& error_display_options);
+      const DataCollectionPermissions& data_collection_permissions,
+      std::optional<int64_t> warning_shown_ts = std::nullopt,
+      bool is_hats_candidate = false);
 
   // Called when a ThreatDetails report finishes for the specified
   // |web_contents|.
-  void ThreatDetailsDone(content::WebContents* web_contents);
+  void ThreatDetailsDone(WebContentsKey web_contents_key);
 
   // Called when the specified |web_contents| is being destroyed. Used to clean
-  // up our map.
+  // up our map by removing the corresponding WebContentsKey from the map.
   void WebContentsDestroyed(content::WebContents* web_contents);
 
  private:
@@ -176,7 +212,7 @@ class TriggerManager {
 
   // The UI manager is used to send reports to Google. Not owned.
   // TODO(lpz): we may only need a the PingManager here.
-  BaseUIManager* ui_manager_;
+  raw_ptr<BaseUIManager> ui_manager_;
 
   // Map of the data collectors running on each tabs. New keys are added the
   // first time any trigger tries to collect data on a tab and are removed when
@@ -187,31 +223,31 @@ class TriggerManager {
   // Keeps track of how often triggers fire and throttles them when needed.
   std::unique_ptr<TriggerThrottler> trigger_throttler_;
 
+  // Keeps track of user interactions with a security interstitial.
+  std::unique_ptr<security_interstitials::InterstitialInteractionMap>
+      interstitial_interactions_;
+
   base::WeakPtrFactory<TriggerManager> weak_factory_{this};
   // WeakPtrFactory should be last, don't add any members below it.
-  DISALLOW_COPY_AND_ASSIGN(TriggerManager);
 };
 
-// A helper class that listens for events happening on a WebContents and can
-// notify TriggerManager of any that are relevant.
-class TriggerManagerWebContentsHelper
-    : public content::WebContentsObserver,
-      public content::WebContentsUserData<TriggerManagerWebContentsHelper> {
+// A helper class that notifies TriggerManager when a WebContents is being
+// detached or destroyed.
+class TriggerManagerWebContentsHelper {
  public:
-  ~TriggerManagerWebContentsHelper() override;
-
-  // WebContentsObserver implementation.
-  void WebContentsDestroyed() override;
-
- private:
-  friend class content::WebContentsUserData<TriggerManagerWebContentsHelper>;
-
   TriggerManagerWebContentsHelper(content::WebContents* web_contents,
                                   TriggerManager* trigger_manager);
+  TriggerManagerWebContentsHelper(const TriggerManagerWebContentsHelper&) =
+      delete;
+  TriggerManagerWebContentsHelper& operator=(
+      const TriggerManagerWebContentsHelper&) = delete;
+  ~TriggerManagerWebContentsHelper();
 
-  // Trigger Manager will be notified of any relevant WebContents events.
-  TriggerManager* trigger_manager_;
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+ private:
+  raw_ptr<content::WebContents> web_contents_;
+  // Trigger Manager will be notified when the tab's WebContents is detached or
+  // destroyed.
+  raw_ptr<TriggerManager> trigger_manager_;
 };
 
 }  // namespace safe_browsing

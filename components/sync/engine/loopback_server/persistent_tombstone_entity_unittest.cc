@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/sync/engine/loopback_server/persistent_tombstone_entity.h"
 
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/base/client_tag_hash.h"
+#include "components/sync/protocol/sync_entity.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
@@ -20,10 +21,10 @@ TEST(PersistentTombstoneEntityTest, CreateFromEntity) {
 }
 
 TEST(PersistentTombstoneEntityTest, CreateNew) {
-  ASSERT_FALSE(PersistentTombstoneEntity::CreateNew(
-      "invalid_id", "client_defined_unique_tag"));
-  ASSERT_TRUE(PersistentTombstoneEntity::CreateNew(
-      "37702_id", "client_defined_unique_tag"));
+  ASSERT_FALSE(PersistentTombstoneEntity::CreateNewForTest(
+      "invalid_id", ClientTagHash::FromHashed("client_tag_hash")));
+  ASSERT_TRUE(PersistentTombstoneEntity::CreateNewForTest(
+      "37702_id", ClientTagHash::FromHashed("client_tag_hash")));
 }
 
 }  // namespace

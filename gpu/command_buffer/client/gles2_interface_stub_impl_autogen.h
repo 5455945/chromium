@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -274,9 +274,6 @@ GLint GLES2InterfaceStub::GetAttribLocation(GLuint /* program */,
 }
 void GLES2InterfaceStub::GetBooleanv(GLenum /* pname */,
                                      GLboolean* /* params */) {}
-void GLES2InterfaceStub::GetBooleani_v(GLenum /* pname */,
-                                       GLuint /* index */,
-                                       GLboolean* /* data */) {}
 void GLES2InterfaceStub::GetBufferParameteri64v(GLenum /* target */,
                                                 GLenum /* pname */,
                                                 GLint64* /* params */) {}
@@ -493,7 +490,6 @@ void GLES2InterfaceStub::ShaderSource(GLuint /* shader */,
                                       GLsizei /* count */,
                                       const GLchar* const* /* str */,
                                       const GLint* /* length */) {}
-void GLES2InterfaceStub::ShallowFinishCHROMIUM() {}
 void GLES2InterfaceStub::OrderingBarrierCHROMIUM() {}
 void GLES2InterfaceStub::MultiDrawArraysWEBGL(GLenum /* mode */,
                                               const GLint* /* firsts */,
@@ -867,63 +863,10 @@ void GLES2InterfaceStub::BindVertexArrayOES(GLuint /* array */) {}
 void GLES2InterfaceStub::FramebufferParameteri(GLenum /* target */,
                                                GLenum /* pname */,
                                                GLint /* param */) {}
-void GLES2InterfaceStub::BindImageTexture(GLuint /* unit */,
-                                          GLuint /* texture */,
-                                          GLint /* level */,
-                                          GLboolean /* layered */,
-                                          GLint /* layer */,
-                                          GLenum /* access */,
-                                          GLenum /* format */) {}
-void GLES2InterfaceStub::DispatchCompute(GLuint /* num_groups_x */,
-                                         GLuint /* num_groups_y */,
-                                         GLuint /* num_groups_z */) {}
-void GLES2InterfaceStub::DispatchComputeIndirect(GLintptr /* offset */) {}
-void GLES2InterfaceStub::DrawArraysIndirect(GLenum /* mode */,
-                                            const void* /* offset */) {}
-void GLES2InterfaceStub::DrawElementsIndirect(GLenum /* mode */,
-                                              GLenum /* type */,
-                                              const void* /* offset */) {}
-void GLES2InterfaceStub::GetProgramInterfaceiv(GLuint /* program */,
-                                               GLenum /* program_interface */,
-                                               GLenum /* pname */,
-                                               GLint* /* params */) {}
-GLuint GLES2InterfaceStub::GetProgramResourceIndex(
-    GLuint /* program */,
-    GLenum /* program_interface */,
-    const char* /* name */) {
-  return 0;
-}
-void GLES2InterfaceStub::GetProgramResourceName(GLuint /* program */,
-                                                GLenum /* program_interface */,
-                                                GLuint /* index */,
-                                                GLsizei /* bufsize */,
-                                                GLsizei* /* length */,
-                                                char* /* name */) {}
-void GLES2InterfaceStub::GetProgramResourceiv(GLuint /* program */,
-                                              GLenum /* program_interface */,
-                                              GLuint /* index */,
-                                              GLsizei /* prop_count */,
-                                              const GLenum* /* props */,
-                                              GLsizei /* bufsize */,
-                                              GLsizei* /* length */,
-                                              GLint* /* params */) {}
-GLint GLES2InterfaceStub::GetProgramResourceLocation(
-    GLuint /* program */,
-    GLenum /* program_interface */,
-    const char* /* name */) {
-  return 0;
-}
-void GLES2InterfaceStub::MemoryBarrierEXT(GLbitfield /* barriers */) {}
-void GLES2InterfaceStub::MemoryBarrierByRegion(GLbitfield /* barriers */) {}
-void GLES2InterfaceStub::SwapBuffers(GLuint64 /* swap_id */,
-                                     GLbitfield /* flags */) {}
 GLuint GLES2InterfaceStub::GetMaxValueInBufferCHROMIUM(GLuint /* buffer_id */,
                                                        GLsizei /* count */,
                                                        GLenum /* type */,
                                                        GLuint /* offset */) {
-  return 0;
-}
-GLboolean GLES2InterfaceStub::EnableFeatureCHROMIUM(const char* /* feature */) {
   return 0;
 }
 void* GLES2InterfaceStub::MapBufferCHROMIUM(GLuint /* target */,
@@ -940,18 +883,6 @@ void* GLES2InterfaceStub::MapBufferSubDataCHROMIUM(GLuint /* target */,
   return 0;
 }
 void GLES2InterfaceStub::UnmapBufferSubDataCHROMIUM(const void* /* mem */) {}
-void* GLES2InterfaceStub::MapBufferRange(GLenum /* target */,
-                                         GLintptr /* offset */,
-                                         GLsizeiptr /* size */,
-                                         GLbitfield /* access */) {
-  return 0;
-}
-GLboolean GLES2InterfaceStub::UnmapBuffer(GLenum /* target */) {
-  return 0;
-}
-void GLES2InterfaceStub::FlushMappedBufferRange(GLenum /* target */,
-                                                GLintptr /* offset */,
-                                                GLsizeiptr /* size */) {}
 void* GLES2InterfaceStub::MapTexSubImage2DCHROMIUM(GLenum /* target */,
                                                    GLint /* level */,
                                                    GLint /* xoffset */,
@@ -964,11 +895,6 @@ void* GLES2InterfaceStub::MapTexSubImage2DCHROMIUM(GLenum /* target */,
   return 0;
 }
 void GLES2InterfaceStub::UnmapTexSubImage2DCHROMIUM(const void* /* mem */) {}
-void GLES2InterfaceStub::ResizeCHROMIUM(GLuint /* width */,
-                                        GLuint /* height */,
-                                        GLfloat /* scale_factor */,
-                                        GLcolorSpace /* color_space */,
-                                        GLboolean /* alpha */) {}
 const GLchar* GLES2InterfaceStub::GetRequestableExtensionsCHROMIUM() {
   return 0;
 }
@@ -991,24 +917,11 @@ void GLES2InterfaceStub::GetUniformsES3CHROMIUM(GLuint /* program */,
                                                 GLsizei /* bufsize */,
                                                 GLsizei* /* size */,
                                                 void* /* info */) {}
-GLuint GLES2InterfaceStub::CreateImageCHROMIUM(ClientBuffer /* buffer */,
-                                               GLsizei /* width */,
-                                               GLsizei /* height */,
-                                               GLenum /* internalformat */) {
-  return 0;
-}
-void GLES2InterfaceStub::DestroyImageCHROMIUM(GLuint /* image_id */) {}
 void GLES2InterfaceStub::DescheduleUntilFinishedCHROMIUM() {}
 void GLES2InterfaceStub::GetTranslatedShaderSourceANGLE(GLuint /* shader */,
                                                         GLsizei /* bufsize */,
                                                         GLsizei* /* length */,
                                                         char* /* source */) {}
-void GLES2InterfaceStub::PostSubBufferCHROMIUM(GLuint64 /* swap_id */,
-                                               GLint /* x */,
-                                               GLint /* y */,
-                                               GLint /* width */,
-                                               GLint /* height */,
-                                               GLbitfield /* flags */) {}
 void GLES2InterfaceStub::CopyTextureCHROMIUM(
     GLuint /* source_id */,
     GLint /* source_level */,
@@ -1060,23 +973,9 @@ void GLES2InterfaceStub::DrawElementsInstancedBaseVertexBaseInstanceANGLE(
     GLuint /* baseinstance */) {}
 void GLES2InterfaceStub::VertexAttribDivisorANGLE(GLuint /* index */,
                                                   GLuint /* divisor */) {}
-void GLES2InterfaceStub::ProduceTextureDirectCHROMIUM(GLuint /* texture */,
-                                                      GLbyte* /* mailbox */) {}
-GLuint GLES2InterfaceStub::CreateAndConsumeTextureCHROMIUM(
-    const GLbyte* /* mailbox */) {
-  return 0;
-}
 void GLES2InterfaceStub::BindUniformLocationCHROMIUM(GLuint /* program */,
                                                      GLint /* location */,
                                                      const char* /* name */) {}
-void GLES2InterfaceStub::BindTexImage2DCHROMIUM(GLenum /* target */,
-                                                GLint /* imageId */) {}
-void GLES2InterfaceStub::BindTexImage2DWithInternalformatCHROMIUM(
-    GLenum /* target */,
-    GLenum /* internalformat */,
-    GLint /* imageId */) {}
-void GLES2InterfaceStub::ReleaseTexImage2DCHROMIUM(GLenum /* target */,
-                                                   GLint /* imageId */) {}
 void GLES2InterfaceStub::TraceBeginCHROMIUM(const char* /* category_name */,
                                             const char* /* trace_name */) {}
 void GLES2InterfaceStub::TraceEndCHROMIUM() {}
@@ -1086,81 +985,19 @@ void GLES2InterfaceStub::DiscardFramebufferEXT(
     const GLenum* /* attachments */) {}
 void GLES2InterfaceStub::LoseContextCHROMIUM(GLenum /* current */,
                                              GLenum /* other */) {}
-void GLES2InterfaceStub::UnpremultiplyAndDitherCopyCHROMIUM(
-    GLuint /* source_id */,
-    GLuint /* dest_id */,
-    GLint /* x */,
-    GLint /* y */,
-    GLsizei /* width */,
-    GLsizei /* height */) {}
 void GLES2InterfaceStub::DrawBuffersEXT(GLsizei /* count */,
                                         const GLenum* /* bufs */) {}
-void GLES2InterfaceStub::DiscardBackbufferCHROMIUM() {}
-void GLES2InterfaceStub::ScheduleOverlayPlaneCHROMIUM(
-    GLint /* plane_z_order */,
-    GLenum /* plane_transform */,
-    GLuint /* overlay_texture_id */,
-    GLint /* bounds_x */,
-    GLint /* bounds_y */,
-    GLint /* bounds_width */,
-    GLint /* bounds_height */,
-    GLfloat /* uv_x */,
-    GLfloat /* uv_y */,
-    GLfloat /* uv_width */,
-    GLfloat /* uv_height */,
-    GLboolean /* enable_blend */,
-    GLuint /* gpu_fence_id */) {}
-void GLES2InterfaceStub::ScheduleCALayerSharedStateCHROMIUM(
-    GLfloat /* opacity */,
-    GLboolean /* is_clipped */,
-    const GLfloat* /* clip_rect */,
-    const GLfloat* /* rounded_corner_bounds */,
-    GLint /* sorting_context_id */,
-    const GLfloat* /* transform */) {}
-void GLES2InterfaceStub::ScheduleCALayerCHROMIUM(
-    GLuint /* contents_texture_id */,
-    const GLfloat* /* contents_rect */,
-    GLuint /* background_color */,
-    GLuint /* edge_aa_mask */,
-    const GLfloat* /* bounds_rect */,
-    GLuint /* filter */) {}
-void GLES2InterfaceStub::ScheduleCALayerInUseQueryCHROMIUM(
-    GLsizei /* count */,
-    const GLuint* /* textures */) {}
-void GLES2InterfaceStub::CommitOverlayPlanesCHROMIUM(GLuint64 /* swap_id */,
-                                                     GLbitfield /* flags */) {}
 void GLES2InterfaceStub::FlushDriverCachesCHROMIUM() {}
 GLuint GLES2InterfaceStub::GetLastFlushIdCHROMIUM() {
   return 0;
 }
-void GLES2InterfaceStub::ScheduleDCLayerCHROMIUM(
-    GLuint /* texture_0 */,
-    GLuint /* texture_1 */,
-    GLint /* z_order */,
-    GLint /* content_x */,
-    GLint /* content_y */,
-    GLint /* content_width */,
-    GLint /* content_height */,
-    GLint /* quad_x */,
-    GLint /* quad_y */,
-    GLint /* quad_width */,
-    GLint /* quad_height */,
-    GLfloat /* transform_c1r1 */,
-    GLfloat /* transform_c2r1 */,
-    GLfloat /* transform_c1r2 */,
-    GLfloat /* transform_c2r2 */,
-    GLfloat /* transform_tx */,
-    GLfloat /* transform_ty */,
-    GLboolean /* is_clipped */,
-    GLint /* clip_x */,
-    GLint /* clip_y */,
-    GLint /* clip_width */,
-    GLint /* clip_height */,
-    GLuint /* protected_video_type */) {}
 void GLES2InterfaceStub::SetActiveURLCHROMIUM(const char* /* url */) {}
+void GLES2InterfaceStub::GetBufferSubDataCHROMIUM(GLenum /* target */,
+                                                  GLintptr /* offset */,
+                                                  GLsizeiptr /* size */,
+                                                  void* /* data */) {}
 void GLES2InterfaceStub::ContextVisibilityHintCHROMIUM(
     GLboolean /* visibility */) {}
-void GLES2InterfaceStub::CoverageModulationCHROMIUM(GLenum /* components */) {}
 GLenum GLES2InterfaceStub::GetGraphicsResetStatusKHR() {
   return 0;
 }
@@ -1177,32 +1014,6 @@ GLint GLES2InterfaceStub::GetFragDataIndexEXT(GLuint /* program */,
                                               const char* /* name */) {
   return 0;
 }
-void GLES2InterfaceStub::SwapBuffersWithBoundsCHROMIUM(GLuint64 /* swap_id */,
-                                                       GLsizei /* count */,
-                                                       const GLint* /* rects */,
-                                                       GLbitfield /* flags */) {
-}
-void GLES2InterfaceStub::SetDrawRectangleCHROMIUM(GLint /* x */,
-                                                  GLint /* y */,
-                                                  GLint /* width */,
-                                                  GLint /* height */) {}
-void GLES2InterfaceStub::SetEnableDCLayersCHROMIUM(GLboolean /* enabled */) {}
-void GLES2InterfaceStub::InitializeDiscardableTextureCHROMIUM(
-    GLuint /* texture_id */) {}
-void GLES2InterfaceStub::UnlockDiscardableTextureCHROMIUM(
-    GLuint /* texture_id */) {}
-bool GLES2InterfaceStub::LockDiscardableTextureCHROMIUM(
-    GLuint /* texture_id */) {
-  return 0;
-}
-void GLES2InterfaceStub::TexStorage2DImageCHROMIUM(GLenum /* target */,
-                                                   GLenum /* internalFormat */,
-                                                   GLenum /* bufferUsage */,
-                                                   GLsizei /* width */,
-                                                   GLsizei /* height */) {}
-void GLES2InterfaceStub::SetColorSpaceMetadataCHROMIUM(
-    GLuint /* texture_id */,
-    GLcolorSpace /* color_space */) {}
 void GLES2InterfaceStub::WindowRectanglesEXT(GLenum /* mode */,
                                              GLsizei /* count */,
                                              const GLint* /* box */) {}
@@ -1229,19 +1040,65 @@ GLuint GLES2InterfaceStub::CreateAndTexStorage2DSharedImageCHROMIUM(
     const GLbyte* /* mailbox */) {
   return 0;
 }
-GLuint
-GLES2InterfaceStub::CreateAndTexStorage2DSharedImageWithInternalFormatCHROMIUM(
-    const GLbyte* /* mailbox */,
-    GLenum /* internalformat */) {
-  return 0;
-}
 void GLES2InterfaceStub::BeginSharedImageAccessDirectCHROMIUM(
     GLuint /* texture */,
     GLenum /* mode */) {}
 void GLES2InterfaceStub::EndSharedImageAccessDirectCHROMIUM(
     GLuint /* texture */) {}
-void GLES2InterfaceStub::BeginBatchReadAccessSharedImageCHROMIUM() {}
-void GLES2InterfaceStub::EndBatchReadAccessSharedImageCHROMIUM() {}
+void GLES2InterfaceStub::CopySharedImageINTERNAL(
+    GLint /* xoffset */,
+    GLint /* yoffset */,
+    GLint /* x */,
+    GLint /* y */,
+    GLsizei /* width */,
+    GLsizei /* height */,
+    const GLbyte* /* mailboxes */) {}
+void GLES2InterfaceStub::CopySharedImageToTextureINTERNAL(
+    GLuint /* texture */,
+    GLenum /* target */,
+    GLuint /* internal_format */,
+    GLenum /* type */,
+    GLint /* src_x */,
+    GLint /* src_y */,
+    GLsizei /* width */,
+    GLsizei /* height */,
+    GLboolean /* is_dst_origin_top_left */,
+    const GLbyte* /* src_mailbox */) {}
+GLboolean GLES2InterfaceStub::ReadbackARGBImagePixelsINTERNAL(
+    const GLbyte* /* mailbox */,
+    const void* /* dst_color_space */,
+    GLuint /* dst_color_space_size */,
+    GLuint /* dst_size */,
+    GLuint /* dst_width */,
+    GLuint /* dst_height */,
+    GLuint /* dst_color_type */,
+    GLuint /* dst_alpha_type */,
+    GLuint /* dst_row_bytes */,
+    GLint /* src_x */,
+    GLint /* src_y */,
+    GLint /* plane_index */,
+    void* /* pixels */) {
+  return 0;
+}
+void GLES2InterfaceStub::WritePixelsYUVINTERNAL(
+    const GLbyte* /* mailbox */,
+    GLuint /* src_size_plane1 */,
+    GLuint /* src_size_plane2 */,
+    GLuint /* src_size_plane3 */,
+    GLuint /* src_size_plane4 */,
+    GLuint /* src_width */,
+    GLuint /* src_height */,
+    GLuint /* src_plane_config */,
+    GLuint /* src_subsampling */,
+    GLuint /* src_datatype */,
+    GLuint /* src_row_bytes_plane1 */,
+    GLuint /* src_row_bytes_plane2 */,
+    GLuint /* src_row_bytes_plane3 */,
+    GLuint /* src_row_bytes_plane4 */,
+    const void* /* src_pixels_plane1 */,
+    const void* /* src_pixels_plane2 */,
+    const void* /* src_pixels_plane3 */,
+    const void* /* src_pixels_plane4 */) {}
 void GLES2InterfaceStub::EnableiOES(GLenum /* target */, GLuint /* index */) {}
 void GLES2InterfaceStub::DisableiOES(GLenum /* target */, GLuint /* index */) {}
 void GLES2InterfaceStub::BlendEquationiOES(GLuint /* buf */,
@@ -1266,4 +1123,53 @@ GLboolean GLES2InterfaceStub::IsEnablediOES(GLenum /* target */,
                                             GLuint /* index */) {
   return 0;
 }
+void GLES2InterfaceStub::ProvokingVertexANGLE(GLenum /* provokeMode */) {}
+void GLES2InterfaceStub::FramebufferMemorylessPixelLocalStorageANGLE(
+    GLint /* plane */,
+    GLenum /* internalformat */,
+    GLbitfield /* usage */) {}
+void GLES2InterfaceStub::FramebufferTexturePixelLocalStorageANGLE(
+    GLint /* plane */,
+    GLuint /* backingtexture */,
+    GLint /* level */,
+    GLint /* layer */,
+    GLbitfield /* usage */) {}
+void GLES2InterfaceStub::FramebufferPixelLocalClearValuefvANGLE(
+    GLint /* plane */,
+    const GLfloat* /* value */) {}
+void GLES2InterfaceStub::FramebufferPixelLocalClearValueivANGLE(
+    GLint /* plane */,
+    const GLint* /* value */) {}
+void GLES2InterfaceStub::FramebufferPixelLocalClearValueuivANGLE(
+    GLint /* plane */,
+    const GLuint* /* value */) {}
+void GLES2InterfaceStub::BeginPixelLocalStorageANGLE(
+    GLsizei /* count */,
+    const GLenum* /* loadops */) {}
+void GLES2InterfaceStub::EndPixelLocalStorageANGLE(
+    GLsizei /* count */,
+    const GLenum* /* storeops */) {}
+void GLES2InterfaceStub::EndPixelLocalStorageImplicitANGLE() {}
+void GLES2InterfaceStub::PixelLocalStorageBarrierANGLE() {}
+void GLES2InterfaceStub::FramebufferPixelLocalStorageInterruptANGLE() {}
+void GLES2InterfaceStub::FramebufferPixelLocalStorageRestoreANGLE() {}
+void GLES2InterfaceStub::GetFramebufferPixelLocalStorageParameterfvANGLE(
+    GLint /* plane */,
+    GLenum /* pname */,
+    GLfloat* /* params */) {}
+void GLES2InterfaceStub::GetFramebufferPixelLocalStorageParameterivANGLE(
+    GLint /* plane */,
+    GLenum /* pname */,
+    GLint* /* params */) {}
+void GLES2InterfaceStub::GetFramebufferPixelLocalStorageParameteruivANGLE(
+    GLint /* plane */,
+    GLenum /* pname */,
+    GLuint* /* params */) {}
+void GLES2InterfaceStub::ClipControlEXT(GLenum /* origin */,
+                                        GLenum /* depth */) {}
+void GLES2InterfaceStub::PolygonModeANGLE(GLenum /* face */,
+                                          GLenum /* mode */) {}
+void GLES2InterfaceStub::PolygonOffsetClampEXT(GLfloat /* factor */,
+                                               GLfloat /* units */,
+                                               GLfloat /* clamp */) {}
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_INTERFACE_STUB_IMPL_AUTOGEN_H_

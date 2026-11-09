@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,16 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 
-#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
@@ -46,8 +45,7 @@ class ExtensionCreatorFilterTest : public PlatformTest {
     EXPECT_TRUE(base::CreateDirectory(path.DirName()));
 
     std::string contents = "test";
-    EXPECT_EQ(static_cast<int>(contents.size()),
-              base::WriteFile(path, contents.c_str(), contents.size()));
+    EXPECT_TRUE(base::WriteFile(path, contents));
     return path;
   }
 
@@ -70,7 +68,7 @@ struct UnaryBooleanTestData {
 };
 
 TEST_F(ExtensionCreatorFilterTest, NormalCases) {
-  const struct UnaryBooleanTestData cases[] = {
+  const auto cases = std::to_array<UnaryBooleanTestData>({
       {FILE_PATH_LITERAL("foo"), true},
       {FILE_PATH_LITERAL(".foo"), false},
       {FILE_PATH_LITERAL("~foo"), true},
@@ -83,9 +81,9 @@ TEST_F(ExtensionCreatorFilterTest, NormalCases) {
       {FILE_PATH_LITERAL(".DS_Store"), false},
       {FILE_PATH_LITERAL("desktop.ini"), false},
       {FILE_PATH_LITERAL("Thumbs.db"), false},
-  };
+  });
 
-  for (size_t i = 0; i < base::size(cases); ++i) {
+  for (size_t i = 0; i < std::size(cases); ++i) {
     base::FilePath input(cases[i].input);
     base::FilePath test_file(CreateTestFile(input));
     bool observed = filter_->ShouldPackageFile(test_file);
@@ -96,16 +94,16 @@ TEST_F(ExtensionCreatorFilterTest, NormalCases) {
 }
 
 TEST_F(ExtensionCreatorFilterTest, MetadataFolderExcluded) {
-  const struct UnaryBooleanTestData cases[] = {
+  const auto cases = std::to_array<UnaryBooleanTestData>({
       {FILE_PATH_LITERAL("_metadata/foo"), false},
       {FILE_PATH_LITERAL("_metadata/abc/foo"), false},
       {FILE_PATH_LITERAL("_metadata/abc/xyz/foo"), false},
       {FILE_PATH_LITERAL("abc/_metadata/xyz"), true},
       {FILE_PATH_LITERAL("xyz/_metadata"), true},
-  };
+  });
 
   // Create and test the filepaths.
-  for (size_t i = 0; i < base::size(cases); ++i) {
+  for (size_t i = 0; i < std::size(cases); ++i) {
     base::FilePath test_file =
         CreateRelativeFilePath(base::FilePath(cases[i].input));
     bool observed = filter_->ShouldPackageFile(test_file);
@@ -115,15 +113,15 @@ TEST_F(ExtensionCreatorFilterTest, MetadataFolderExcluded) {
   }
 
   // Also test directories.
-  const struct UnaryBooleanTestData directory_cases[] = {
+  const auto directory_cases = std::to_array<UnaryBooleanTestData>({
       {FILE_PATH_LITERAL("_metadata"), false},
       {FILE_PATH_LITERAL("_metadata/abc"), false},
       {FILE_PATH_LITERAL("_metadata/abc/xyz"), false},
       {FILE_PATH_LITERAL("abc"), true},
       {FILE_PATH_LITERAL("abc/_metadata"), true},
       {FILE_PATH_LITERAL("xyz"), true},
-  };
-  for (size_t i = 0; i < base::size(directory_cases); ++i) {
+  });
+  for (size_t i = 0; i < std::size(directory_cases); ++i) {
     base::FilePath directory = extension_dir_.Append(directory_cases[i].input);
     bool observed = filter_->ShouldPackageFile(directory);
 
@@ -141,15 +139,15 @@ struct StringStringWithBooleanTestData {
 // Ignore the files in special directories, including ".git", ".svn",
 // "__MACOSX".
 TEST_F(ExtensionCreatorFilterTest, IgnoreFilesInSpecialDir) {
-  const struct StringStringWithBooleanTestData cases[] = {
+  const auto cases = std::to_array<StringStringWithBooleanTestData>({
       {FILE_PATH_LITERAL("foo"), FILE_PATH_LITERAL(".git"), false},
       {FILE_PATH_LITERAL("goo"), FILE_PATH_LITERAL(".svn"), false},
       {FILE_PATH_LITERAL("foo"), FILE_PATH_LITERAL("__MACOSX"), false},
       {FILE_PATH_LITERAL("foo"), FILE_PATH_LITERAL("foo"), true},
       {FILE_PATH_LITERAL("index.js"), FILE_PATH_LITERAL("scripts"), true},
-  };
+  });
 
-  for (size_t i = 0; i < base::size(cases); ++i) {
+  for (size_t i = 0; i < std::size(cases); ++i) {
     base::FilePath test_file(
         CreateTestFileInDir(cases[i].file_name, cases[i].dir));
     bool observed = filter_->ShouldPackageFile(test_file);
@@ -158,7 +156,7 @@ TEST_F(ExtensionCreatorFilterTest, IgnoreFilesInSpecialDir) {
   }
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 struct StringBooleanWithBooleanTestData {
   const base::FilePath::CharType* input_char;
   bool input_bool;
@@ -166,16 +164,16 @@ struct StringBooleanWithBooleanTestData {
 };
 
 TEST_F(ExtensionCreatorFilterTest, WindowsHiddenFiles) {
-  const struct StringBooleanWithBooleanTestData cases[] = {
+  const auto cases = std::to_array<StringBooleanWithBooleanTestData>({
       {FILE_PATH_LITERAL("a-normal-file"), false, true},
       {FILE_PATH_LITERAL(".a-dot-file"), false, false},
       {FILE_PATH_LITERAL(".a-dot-file-that-we-have-set-to-hidden"), true,
        false},
       {FILE_PATH_LITERAL("a-file-that-we-have-set-to-hidden"), true, false},
       {FILE_PATH_LITERAL("a-file-that-we-have-not-set-to-hidden"), false, true},
-  };
+  });
 
-  for (size_t i = 0; i < base::size(cases); ++i) {
+  for (size_t i = 0; i < std::size(cases); ++i) {
     base::FilePath input(cases[i].input_char);
     bool should_hide = cases[i].input_bool;
     base::FilePath test_file(CreateTestFile(input));

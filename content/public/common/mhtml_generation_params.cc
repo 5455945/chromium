@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,5 +12,19 @@ namespace content {
 
 MHTMLGenerationParams::MHTMLGenerationParams(const base::FilePath& file_path)
     : file_path(file_path) {}
+
+MHTMLGenerationParams::MHTMLGenerationParams(
+    const MHTMLGenerationParams& other) = default;
+
+MHTMLGenerationParams& MHTMLGenerationParams::operator=(
+    const MHTMLGenerationParams& other) = default;
+
+MHTMLGenerationParams::MHTMLGenerationParams(MHTMLGenerationParams&& other) =
+    default;
+
+MHTMLGenerationParams& MHTMLGenerationParams::operator=(
+    MHTMLGenerationParams&& other) = default;
+
+MHTMLGenerationParams::~MHTMLGenerationParams() = default;
 
 }  // namespace content

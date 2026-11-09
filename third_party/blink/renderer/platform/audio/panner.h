@@ -31,6 +31,7 @@
 
 #include <memory>
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -68,8 +69,8 @@ class PLATFORM_EXPORT Panner {
                    AudioBus* output_bus,
                    uint32_t frames_to_process,
                    AudioBus::ChannelInterpretation) = 0;
-  virtual void PanWithSampleAccurateValues(double* azimuth,
-                                           double* elevation,
+  virtual void PanWithSampleAccurateValues(base::span<double> azimuth,
+                                           base::span<double> elevation,
                                            const AudioBus* input_bus,
                                            AudioBus* output_bus,
                                            uint32_t frames_to_process,

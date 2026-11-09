@@ -1,13 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/test/fake_surface_observer.h"
 
+#include "components/viz/service/surfaces/surface_manager.h"
+#include "ui/latency/latency_info.h"
+
 namespace viz {
 
-FakeSurfaceObserver::FakeSurfaceObserver(bool damage_display)
-    : damage_display_(damage_display) {}
+FakeSurfaceObserver::FakeSurfaceObserver(SurfaceManager* manager,
+                                         bool damage_display)
+    : damage_display_(damage_display) {
+  observer_registration_.Observe(manager);
+}
 
 FakeSurfaceObserver::~FakeSurfaceObserver() = default;
 
@@ -23,8 +29,11 @@ bool FakeSurfaceObserver::IsSurfaceDamaged(const SurfaceId& surface_id) const {
   return damaged_surfaces_.count(surface_id) > 0;
 }
 
-bool FakeSurfaceObserver::OnSurfaceDamaged(const SurfaceId& surface_id,
-                                           const BeginFrameAck& ack) {
+bool FakeSurfaceObserver::OnSurfaceDamaged(
+    const SurfaceId& surface_id,
+    const BeginFrameAck& ack,
+    HandleInteraction handle_interaction,
+    const std::vector<ui::LatencyInfo>& latency_info) {
   if (ack.has_damage)
     damaged_surfaces_.insert(surface_id);
   last_ack_ = ack;

@@ -29,50 +29,54 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_MEDIA_QUERY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_MEDIA_QUERY_H_
 
-#include <memory>
-#include <utility>
-
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
+
+class ConditionalExpNode;
 class MediaQueryExp;
 
-using ExpressionHeapVector = Vector<MediaQueryExp>;
-
-class CORE_EXPORT MediaQuery {
-  USING_FAST_MALLOC(MediaQuery);
-
+class CORE_EXPORT MediaQuery : public GarbageCollected<MediaQuery> {
  public:
-  enum RestrictorType { kOnly, kNot, kNone };
+  enum class RestrictorType : uint8_t { kOnly, kNot, kNone };
 
-  static std::unique_ptr<MediaQuery> CreateNotAll();
+  static MediaQuery* CreateNotAll();
 
-  MediaQuery(RestrictorType, String media_type, ExpressionHeapVector);
+  MediaQuery(RestrictorType, String media_type, const ConditionalExpNode*);
   MediaQuery(const MediaQuery&);
+  MediaQuery& operator=(const MediaQuery&) = delete;
   ~MediaQuery();
+  void Trace(Visitor*) const;
 
-  RestrictorType Restrictor() const { return restrictor_; }
-  const ExpressionHeapVector& Expressions() const { return expressions_; }
-  const String& MediaType() const { return media_type_; }
+  static void CollectExpressions(const ConditionalExpNode& root,
+                                 HeapVector<MediaQueryExp>&);
+  void CollectExpressions(HeapVector<MediaQueryExp>& expressions) const {
+    if (exp_node_) {
+      CollectExpressions(*exp_node_, expressions);
+    }
+  }
+
+  RestrictorType Restrictor() const;
+  const ConditionalExpNode* ExpNode() const;
+  const String& MediaType() const;
   bool operator==(const MediaQuery& other) const;
   String CssText() const;
 
-  std::unique_ptr<MediaQuery> Copy() const {
-    return std::make_unique<MediaQuery>(*this);
-  }
-
  private:
-  MediaQuery& operator=(const MediaQuery&) = delete;
+  String media_type_;
+  String serialization_cache_;
+  Member<const ConditionalExpNode> exp_node_;
 
   RestrictorType restrictor_;
-  String media_type_;
-  ExpressionHeapVector expressions_;
-  String serialization_cache_;
 
   String Serialize() const;
 };

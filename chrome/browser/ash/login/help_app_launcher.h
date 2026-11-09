@@ -1,18 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_HELP_APP_LAUNCHER_H_
 #define CHROME_BROWSER_ASH_LOGIN_HELP_APP_LAUNCHER_H_
 
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class GURL;
 class Profile;
 
-namespace chromeos {
+namespace ash {
 
 // Provides help content during OOBE / login.
 // Based on connectivity state (offline/online) shows help topic dialog
@@ -43,6 +42,9 @@ class HelpAppLauncher : public base::RefCountedThreadSafe<HelpAppLauncher> {
     // Shown as "Learn more" for ADB sideloading dialog. The original URL is
     // https://support.google.com/chromebook/?p=develop_android_apps
     HELP_ADB_SIDELOADING = 9770692,
+    // Shown as "Learn more" for the languages section in OOBE about language
+    // packs.
+    HELP_LANGUAGE_PACKS = 11383012,
   };
 
   // The dialog is shown as a child of `parent_window`. If `parent_window` is
@@ -50,11 +52,11 @@ class HelpAppLauncher : public base::RefCountedThreadSafe<HelpAppLauncher> {
   // display.
   explicit HelpAppLauncher(gfx::NativeWindow parent_window);
 
+  HelpAppLauncher(const HelpAppLauncher&) = delete;
+  HelpAppLauncher& operator=(const HelpAppLauncher&) = delete;
+
   // Shows specified help topic.
   void ShowHelpTopic(HelpTopic help_topic_id);
-
-  // Allows tests to specify a different extension id to connect to.
-  static void SetExtensionIdForTest(const char* extension_id);
 
  protected:
   virtual ~HelpAppLauncher();
@@ -67,16 +69,8 @@ class HelpAppLauncher : public base::RefCountedThreadSafe<HelpAppLauncher> {
 
   // Parent window which is passed to help dialog.
   gfx::NativeWindow parent_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(HelpAppLauncher);
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove when //ch/br/ash/login is moved to
-// ash
-namespace ash {
-using ::chromeos::HelpAppLauncher;
 }  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_HELP_APP_LAUNCHER_H_

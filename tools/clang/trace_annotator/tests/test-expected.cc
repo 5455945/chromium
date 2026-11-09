@@ -1,11 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <algorithm>
 #include <vector>
 
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_event.h"
 
 int no_body(int);  // No annotation
 

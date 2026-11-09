@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,18 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <variant>
 
 #include "ash/public/cpp/session/session_controller_client.h"
 #include "ash/public/cpp/session/session_types.h"
-#include "base/macros.h"
+#include "ash/test/login_info.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/token.h"
+#include "components/prefs/pref_service.h"
 #include "components/user_manager/user_type.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace views {
 class Widget;
@@ -38,13 +41,17 @@ class TestPrefServiceProvider;
 // SessionControllerClient created, e.g. InProcessBrowserTest based tests. On
 // the other hand, tests code in chrome can use this class as long as it does
 // not run BrowserMain, e.g. testing::Test based test.
-class TestSessionControllerClient : public SessionControllerClient {
+class TestSessionControllerClient final : public SessionControllerClient {
  public:
   TestSessionControllerClient(SessionControllerImpl* controller,
-                              TestPrefServiceProvider* prefs_provider);
-  ~TestSessionControllerClient() override;
+                              TestPrefServiceProvider* prefs_provider,
+                              bool create_signin_pref_service);
 
-  static void DisableAutomaticallyProvideSigninPref();
+  TestSessionControllerClient(const TestSessionControllerClient&) = delete;
+  TestSessionControllerClient& operator=(const TestSessionControllerClient&) =
+      delete;
+
+  ~TestSessionControllerClient() override;
 
   // Initialize using existing info in |controller| and set as its client.
   void InitializeAndSetClient();
@@ -52,14 +59,13 @@ class TestSessionControllerClient : public SessionControllerClient {
   // Sets up the default state of SessionController.
   void Reset();
 
-  void set_use_lower_case_user_id(bool value) {
-    use_lower_case_user_id_ = value;
-  }
-
   int attempt_restart_chrome_count() const {
     return attempt_restart_chrome_count_;
   }
   int request_sign_out_count() const { return request_sign_out_count_; }
+  int request_restart_for_update_count() const {
+    return request_restart_for_update_count_;
+  }
 
   // Helpers to set SessionController state.
   void SetCanLockScreen(bool can_lock);
@@ -69,26 +75,19 @@ class TestSessionControllerClient : public SessionControllerClient {
   void SetIsRunningInAppMode(bool app_mode);
   void SetIsDemoSession();
 
-  // Creates the |count| pre-defined user sessions. The users are named by
-  // numbers using "user%d@tray" template. The first user is set as active user
-  // to be consistent with crash-and-restore scenario.  Note that existing user
-  // sessions prior this call will be removed without sending out notifications.
-  void CreatePredefinedUserSessions(int count);
-
-  // Adds a user session from a given display email. The display email will be
-  // canonicalized and used to construct an AccountId. |enable_settings| sets
-  // whether web UI settings are allowed. If |provide_pref_service| is true,
-  // eagerly inject a PrefService for this user. |is_new_profile| indicates
-  // whether the user has a newly created profile on the device.
-  void AddUserSession(
-      const std::string& display_email,
-      user_manager::UserType user_type = user_manager::USER_TYPE_REGULAR,
-      bool provide_pref_service = true,
-      bool is_new_profile = false,
-      const std::string& given_name = std::string());
-
-  // Creates a test PrefService and associates it with the user.
-  void ProvidePrefServiceForUser(const AccountId& account_id);
+  // Adds a user session from a given `login_info`.
+  // If `login_info.account_id` is not provided, a default `AccountId` is used.
+  // Note that if a test refers to a user or session by `AccountId`, the test
+  // must explicitly provide `login_info.account_id` rather than relying on the
+  // implicit default `AccountId` chosen by `TestSessionControllerClient`.
+  // If `login_info.display_email` is not provided, it is derived from
+  // `account_id.GetUserEmail()`.
+  //
+  // It will create a new PrefService (initialized with
+  // `login_info.init_pref_service_value` if provided). However, if
+  // `pref_service_must_exist_` is set to true, the PrefService for the account
+  // must already exist, or it will result in CHECK failure.
+  AccountId AddUserSession(const LoginInfo& login_info);
 
   // Synchronously lock screen by requesting screen lock and waiting for the
   // request to complete.
@@ -97,7 +96,7 @@ class TestSessionControllerClient : public SessionControllerClient {
   // Simulates screen unlocking. It is virtual so that test cases can override
   // it. The default implementation sets the session state of SessionController
   // to be ACTIVE.
-  virtual void UnlockScreen();
+  void UnlockScreen();
 
   // Spins message loop to finish pending lock screen request if any.
   void FlushForTest();
@@ -106,19 +105,23 @@ class TestSessionControllerClient : public SessionControllerClient {
   void SetSigninScreenPrefService(std::unique_ptr<PrefService> pref_service);
 
   // Use |pref_service| for the user identified by |account_id|.
-  void SetUserPrefService(const AccountId& account_id,
-                          std::unique_ptr<PrefService> pref_service);
+  void SetUnownedUserPrefService(const AccountId& account_id,
+                                 raw_ptr<PrefService> unowned_pref_service);
 
   // ash::SessionControllerClient:
   void RequestLockScreen() override;
   void RequestSignOut() override;
+  void RequestRestartForUpdate() override;
   void AttemptRestartChrome() override;
   void SwitchActiveUser(const AccountId& account_id) override;
   void CycleActiveUser(CycleUserDirection direction) override;
   void ShowMultiProfileLogin() override;
-  void EmitAshInitialized() override;
   PrefService* GetSigninScreenPrefService() override;
   PrefService* GetUserPrefService(const AccountId& account_id) override;
+  base::FilePath GetProfilePath(const AccountId& account_id) override;
+  std::tuple<bool, bool> IsEligibleForSeaPen(
+      const AccountId& account_id) override;
+  std::optional<int> GetExistingUsersCount() const override;
 
   // By default `LockScreen()` only changes the session state but no UI views
   // will be created.  If your tests requires the lock screen to be created,
@@ -127,26 +130,53 @@ class TestSessionControllerClient : public SessionControllerClient {
     should_show_lock_screen_ = should_show;
   }
 
+  void set_is_eligible_for_background_replace(
+      const std::tuple<bool, bool>& is_eligible_for_background_replace) {
+    is_eligible_for_background_replace_ = is_eligible_for_background_replace;
+  }
+
+  void set_existing_users_count(int existing_users_count) {
+    existing_users_count_ = existing_users_count;
+  }
+
+  void set_pref_service_must_exist(bool pref_service_must_exist) {
+    pref_service_must_exist_ = pref_service_must_exist;
+  }
+
+  int NumberOfLoggedInUsers() const;
+
  private:
   void DoSwitchUser(const AccountId& account_id, bool switch_user);
 
-  SessionControllerImpl* const controller_;
-  TestPrefServiceProvider* const prefs_provider_;
+  // Notify first session ready if the notification has not sent, there
+  // is at least one user session created, and session state is ACTIVE.
+  void MaybeNotifyFirstSessionReady();
+
+  const raw_ptr<SessionControllerImpl> controller_;
+  const raw_ptr<TestPrefServiceProvider> prefs_provider_;
 
   int fake_session_id_ = 0;
   SessionInfo session_info_;
+  bool first_session_ready_fired_ = false;
 
-  bool use_lower_case_user_id_ = true;
+  // If true, pref service must exist when adding a session, or fail with CHECK.
+  bool pref_service_must_exist_ = false;
+
   int request_sign_out_count_ = 0;
+  int request_restart_for_update_count_ = 0;
   int attempt_restart_chrome_count_ = 0;
 
   bool should_show_lock_screen_ = false;
 
+  std::tuple<bool, bool> is_eligible_for_background_replace_ = {true, true};
+
+  int existing_users_count_ = 0;
+
+  bool reuse_pref_service_ = false;
+
   std::unique_ptr<views::Widget> multi_profile_login_widget_;
 
   base::WeakPtrFactory<TestSessionControllerClient> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TestSessionControllerClient);
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@
 
 namespace web_app {
 
-const base::FilePath::StringPieceType kLastBrowserFilename =
+const base::FilePath::StringViewType kLastBrowserFilename =
     FILE_PATH_LITERAL("Last Browser");
 
 base::FilePath ReadChromePathFromLastBrowserFile(
@@ -25,26 +25,26 @@ base::FilePath ReadChromePathFromLastBrowserFile(
     return base::FilePath();
   }
 
+  // TODO(crbug.com/428945428): Fix unsafe uses of std::string::data().
   base::FilePath::StringType chrome_path(
-      reinterpret_cast<const base::FilePath::CharType*>(
-          last_browser_file_data.data()),
+      UNSAFE_TODO(reinterpret_cast<const base::FilePath::CharType*>(
+          last_browser_file_data.data())),
       last_browser_file_data.size() / sizeof(base::FilePath::CharType));
-  const base::FilePath::StringPieceType chrome_path_trimmed =
+  const base::FilePath::StringViewType chrome_path_trimmed =
       base::TrimString(chrome_path, FILE_PATH_LITERAL(" \n"), base::TRIM_ALL);
   return base::FilePath(chrome_path_trimmed);
 }
 
 void WriteChromePathToLastBrowserFile(const base::FilePath& user_data_dir) {
-  DCHECK(!user_data_dir.empty());
+  CHECK(!user_data_dir.empty(), base::NotFatalUntil::M162);
   base::FilePath chrome_path;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_path))
     return;
 
   const base::FilePath::StringType& chrome_path_str = chrome_path.value();
-  DCHECK(!chrome_path_str.empty());
+  CHECK(!chrome_path_str.empty(), base::NotFatalUntil::M162);
   base::WriteFile(user_data_dir.Append(kLastBrowserFilename),
-                  reinterpret_cast<const char*>(chrome_path_str.data()),
-                  chrome_path_str.size() * sizeof(base::FilePath::CharType));
+                  base::as_byte_span(chrome_path_str));
 }
 
 base::FilePath GetLastBrowserFileFromWebAppDir(

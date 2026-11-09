@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,9 @@
 
 #include "third_party/blink/public/mojom/idle/idle_manager.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
@@ -15,12 +18,11 @@ namespace blink {
 
 class ExceptionState;
 class ExecutionContext;
-class ScriptPromise;
-class ScriptPromiseResolver;
 class ScriptState;
+class V8PermissionState;
 
-class IdleManager final : public GarbageCollected<IdleManager>,
-                          public Supplement<ExecutionContext> {
+class MODULES_EXPORT IdleManager final : public GarbageCollected<IdleManager>,
+                                         public Supplement<ExecutionContext> {
  public:
   static const char kSupplementName[];
 
@@ -29,16 +31,20 @@ class IdleManager final : public GarbageCollected<IdleManager>,
   explicit IdleManager(ExecutionContext*);
   ~IdleManager();
 
-  ScriptPromise RequestPermission(ScriptState*, ExceptionState&);
-  void AddMonitor(base::TimeDelta threshold,
-                  mojo::PendingRemote<mojom::blink::IdleMonitor>,
+  ScriptPromise<V8PermissionState> RequestPermission(ScriptState*,
+                                                     ExceptionState&);
+  void AddMonitor(mojo::PendingRemote<mojom::blink::IdleMonitor>,
                   mojom::blink::IdleManager::AddMonitorCallback);
 
   void Trace(Visitor*) const override;
 
+  void InitForTesting(
+      mojo::PendingRemote<mojom::blink::IdleManager> idle_service);
+
  private:
-  void OnPermissionRequestComplete(ScriptPromiseResolver*,
-                                   mojom::blink::PermissionStatus);
+  void OnPermissionRequestComplete(
+      ScriptPromiseResolver<V8PermissionState>*,
+      mojom::blink::PermissionStatusWithDetailsPtr);
 
   HeapMojoRemote<mojom::blink::IdleManager> idle_service_;
   HeapMojoRemote<mojom::blink::PermissionService> permission_service_;

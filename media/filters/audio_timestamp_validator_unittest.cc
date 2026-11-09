@@ -1,14 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/filters/audio_timestamp_validator.h"
 
+#include <array>
 #include <tuple>
 
-#include "base/cxx17_backports.h"
 #include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
+#include "media/base/channel_layout.h"
 #include "media/base/media_util.h"
 #include "media/base/mock_media_log.h"
 #include "media/base/test_helpers.h"
@@ -19,15 +20,15 @@ using ::testing::HasSubstr;
 namespace media {
 
 // Constants to specify the type of audio data used.
-static const AudioCodec kCodec = kCodecVorbis;
+static const AudioCodec kCodec = AudioCodec::kVorbis;
 static const SampleFormat kSampleFormat = kSampleFormatPlanarF32;
 static const base::TimeDelta kSeekPreroll;
 static const int kSamplesPerSecond = 10000;
-static const base::TimeDelta kBufferDuration =
-    base::TimeDelta::FromMilliseconds(20);
+static const base::TimeDelta kBufferDuration = base::Milliseconds(20);
 static const ChannelLayout kChannelLayout = CHANNEL_LAYOUT_STEREO;
+static constexpr ChannelLayoutConfig kChannelLayoutConfig =
+    ChannelLayoutConfig::Stereo();
 static const int kChannelCount = 2;
-static const int kChannels = ChannelLayoutToChannelCount(kChannelLayout);
 static const int kFramesPerBuffer = kBufferDuration.InMicroseconds() *
                                     kSamplesPerSecond /
                                     base::Time::kMicrosecondsPerSecond;
@@ -62,7 +63,7 @@ class AudioTimestampValidatorTest
 
 TEST_P(AudioTimestampValidatorTest, WarnForEraticTimes) {
   AudioDecoderConfig decoder_config;
-  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayout,
+  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayoutConfig,
                             kSamplesPerSecond, EmptyExtraData(),
                             EncryptionScheme::kUnencrypted, kSeekPreroll,
                             codec_delay_);
@@ -78,18 +79,17 @@ TEST_P(AudioTimestampValidatorTest, WarnForEraticTimes) {
 
   AudioTimestampValidator validator(decoder_config, &media_log_);
 
-  const base::TimeDelta kRandomOffsets[] = {
-      base::TimeDelta::FromMilliseconds(100),
-      base::TimeDelta::FromMilliseconds(350)};
+  const auto kRandomOffsets = std::to_array<base::TimeDelta>(
+      {base::Milliseconds(100), base::Milliseconds(350)});
 
   for (int i = 0; i < 100; ++i) {
     // Each buffer's timestamp is kBufferDuration from the previous buffer.
-    scoped_refptr<DecoderBuffer> encoded_buffer = new DecoderBuffer(0);
+    auto encoded_buffer = base::MakeRefCounted<DecoderBuffer>(0);
 
     // Ping-pong between two random offsets to prevent validator from
     // stabilizing timestamp pattern.
     base::TimeDelta randomOffset =
-        kRandomOffsets[i % base::size(kRandomOffsets)];
+        kRandomOffsets[i % std::size(kRandomOffsets)];
     encoded_buffer->set_timestamp(i * kBufferDuration + randomOffset);
 
     if (i == 0) {
@@ -112,7 +112,7 @@ TEST_P(AudioTimestampValidatorTest, WarnForEraticTimes) {
 
 TEST_P(AudioTimestampValidatorTest, NoWarningForValidTimes) {
   AudioDecoderConfig decoder_config;
-  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayout,
+  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayoutConfig,
                             kSamplesPerSecond, EmptyExtraData(),
                             EncryptionScheme::kUnencrypted, kSeekPreroll,
                             codec_delay_);
@@ -129,7 +129,7 @@ TEST_P(AudioTimestampValidatorTest, NoWarningForValidTimes) {
 
   for (int i = 0; i < 100; ++i) {
     // Each buffer's timestamp is kBufferDuration from the previous buffer.
-    scoped_refptr<DecoderBuffer> encoded_buffer = new DecoderBuffer(0);
+    auto encoded_buffer = base::MakeRefCounted<DecoderBuffer>(0);
     encoded_buffer->set_timestamp(i * kBufferDuration);
 
     if (i == 0) {
@@ -152,7 +152,7 @@ TEST_P(AudioTimestampValidatorTest, NoWarningForValidTimes) {
 
 TEST_P(AudioTimestampValidatorTest, SingleWarnForSingleLargeGap) {
   AudioDecoderConfig decoder_config;
-  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayout,
+  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayoutConfig,
                             kSamplesPerSecond, EmptyExtraData(),
                             EncryptionScheme::kUnencrypted, kSeekPreroll,
                             codec_delay_);
@@ -168,14 +168,14 @@ TEST_P(AudioTimestampValidatorTest, SingleWarnForSingleLargeGap) {
     // Halfway through the stream, introduce sudden gap of 50 milliseconds.
     base::TimeDelta offset;
     if (i >= 50)
-      offset = base::TimeDelta::FromMilliseconds(100);
+      offset = base::Milliseconds(100);
 
     // This gap never widens, so expect only a single warning when its first
     // introduced.
     if (i == 50)
       EXPECT_MEDIA_LOG(HasSubstr("timestamp gap detected"));
 
-    scoped_refptr<DecoderBuffer> encoded_buffer = new DecoderBuffer(0);
+    auto encoded_buffer = base::MakeRefCounted<DecoderBuffer>(0);
     encoded_buffer->set_timestamp(i * kBufferDuration + offset);
 
     if (i == 0) {
@@ -198,7 +198,7 @@ TEST_P(AudioTimestampValidatorTest, SingleWarnForSingleLargeGap) {
 
 TEST_P(AudioTimestampValidatorTest, RepeatedWarnForSlowAccumulatingDrift) {
   AudioDecoderConfig decoder_config;
-  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayout,
+  decoder_config.Initialize(kCodec, kSampleFormat, kChannelLayoutConfig,
                             kSamplesPerSecond, EmptyExtraData(),
                             EncryptionScheme::kUnencrypted, kSeekPreroll,
                             codec_delay_);
@@ -220,15 +220,15 @@ TEST_P(AudioTimestampValidatorTest, RepeatedWarnForSlowAccumulatingDrift) {
     // iteration.
     base::TimeDelta offset;
     if (i >= output_delay_ + 2)
-      offset = i * base::TimeDelta::FromMilliseconds(1);
+      offset = i * base::Milliseconds(1);
 
-    scoped_refptr<DecoderBuffer> encoded_buffer = new DecoderBuffer(0);
+    auto encoded_buffer = base::MakeRefCounted<DecoderBuffer>(0);
     encoded_buffer->set_timestamp((i * kBufferDuration) + offset);
 
     // Expect gap warnings to start when drift hits 50 milliseconds. Warnings
     // should continue as the gap widens until log limit is hit.
 
-    if (offset > base::TimeDelta::FromMilliseconds(50)) {
+    if (offset > base::Milliseconds(50)) {
       EXPECT_LIMITED_MEDIA_LOG(HasSubstr("timestamp gap detected"),
                                num_timestamp_gap_warnings,
                                kMaxTimestampGapWarnings);
@@ -253,10 +253,9 @@ TEST_P(AudioTimestampValidatorTest, RepeatedWarnForSlowAccumulatingDrift) {
 INSTANTIATE_TEST_SUITE_P(
     All,
     AudioTimestampValidatorTest,
-    ::testing::Combine(
-        ::testing::Values(0, 10),             // output delay
-        ::testing::Values(0, 512),            // codec delay
-        ::testing::Values(base::TimeDelta(),  // front discard
-                          base::TimeDelta::FromMilliseconds(65))));
+    ::testing::Combine(::testing::Values(0, 10),             // output delay
+                       ::testing::Values(0, 512),            // codec delay
+                       ::testing::Values(base::TimeDelta(),  // front discard
+                                         base::Milliseconds(65))));
 
 }  // namespace media

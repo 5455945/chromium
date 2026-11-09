@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/stl_util.h"
-#include "content/browser/service_worker/embedded_worker_status.h"
+#include "base/functional/bind.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/service_worker/service_worker_version.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/console_message.h"
+#include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
@@ -25,7 +24,7 @@ namespace content {
 namespace {
 
 bool IsStoppedAndRedundant(const ServiceWorkerVersionInfo& version_info) {
-  return version_info.running_status == EmbeddedWorkerStatus::STOPPED &&
+  return version_info.running_status == blink::EmbeddedWorkerStatus::kStopped &&
          version_info.status == content::ServiceWorkerVersion::REDUNDANT;
 }
 
@@ -40,11 +39,11 @@ ServiceWorkerContextWatcher::ServiceWorkerContextWatcher(
       registration_callback_(std::move(registration_callback)),
       version_callback_(std::move(version_callback)),
       error_callback_(std::move(error_callback)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 }
 
 void ServiceWorkerContextWatcher::Start() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (is_stopped_)
     return;
   context_->GetAllRegistrations(base::BindOnce(
@@ -52,7 +51,7 @@ void ServiceWorkerContextWatcher::Start() {
 }
 
 void ServiceWorkerContextWatcher::Stop() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   stop_called_ = true;
   context_->RemoveObserver(this);
   is_stopped_ = true;
@@ -61,7 +60,7 @@ void ServiceWorkerContextWatcher::Stop() {
 void ServiceWorkerContextWatcher::OnStoredRegistrations(
     blink::ServiceWorkerStatusCode status,
     const std::vector<ServiceWorkerRegistrationInfo>& stored_registrations) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (is_stopped_)
     return;
   context_->AddObserver(this);
@@ -112,7 +111,7 @@ void ServiceWorkerContextWatcher::StoreRegistrationInfo(
     const ServiceWorkerRegistrationInfo& registration_info,
     std::unordered_map<int64_t, std::unique_ptr<ServiceWorkerRegistrationInfo>>*
         info_map) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (registration_info.registration_id ==
       blink::mojom::kInvalidServiceWorkerRegistrationId)
     return;
@@ -125,7 +124,7 @@ void ServiceWorkerContextWatcher::StoreRegistrationInfo(
 
 void ServiceWorkerContextWatcher::StoreVersionInfo(
     const ServiceWorkerVersionInfo& version_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (version_info.version_id == blink::mojom::kInvalidServiceWorkerVersionId)
     return;
   version_info_map_[version_info.version_id] =
@@ -137,7 +136,7 @@ void ServiceWorkerContextWatcher::SendRegistrationInfo(
     const GURL& scope,
     const blink::StorageKey& key,
     ServiceWorkerRegistrationInfo::DeleteFlag delete_flag) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   std::unique_ptr<std::vector<ServiceWorkerRegistrationInfo>> registrations =
       std::make_unique<std::vector<ServiceWorkerRegistrationInfo>>();
   scoped_refptr<ServiceWorkerRegistration> registration =
@@ -157,7 +156,7 @@ void ServiceWorkerContextWatcher::SendRegistrationInfo(
 
 void ServiceWorkerContextWatcher::SendVersionInfo(
     const ServiceWorkerVersionInfo& version_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   std::unique_ptr<std::vector<ServiceWorkerVersionInfo>> versions =
       std::make_unique<std::vector<ServiceWorkerVersionInfo>>();
   versions->push_back(version_info);
@@ -170,7 +169,7 @@ void ServiceWorkerContextWatcher::SendVersionInfo(
 
 void ServiceWorkerContextWatcher::RunWorkerRegistrationUpdatedCallback(
     std::unique_ptr<std::vector<ServiceWorkerRegistrationInfo>> registrations) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (stop_called_)
     return;
   registration_callback_.Run(*registrations.get());
@@ -178,7 +177,7 @@ void ServiceWorkerContextWatcher::RunWorkerRegistrationUpdatedCallback(
 
 void ServiceWorkerContextWatcher::RunWorkerVersionUpdatedCallback(
     std::unique_ptr<std::vector<ServiceWorkerVersionInfo>> versions) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (stop_called_)
     return;
   version_callback_.Run(*versions.get());
@@ -188,29 +187,31 @@ void ServiceWorkerContextWatcher::RunWorkerErrorReportedCallback(
     int64_t registration_id,
     int64_t version_id,
     std::unique_ptr<ServiceWorkerContextObserver::ErrorInfo> error_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (stop_called_)
     return;
   error_callback_.Run(registration_id, version_id, *error_info.get());
 }
 
-void ServiceWorkerContextWatcher::OnNewLiveRegistration(int64_t registration_id,
-                                                        const GURL& scope) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  // TODO(crbug.com/1199077): Pipe in StorageKey when it's available in this
-  // function.
-  SendRegistrationInfo(registration_id, scope,
-                       blink::StorageKey(url::Origin::Create(scope)),
+void ServiceWorkerContextWatcher::OnNewLiveRegistration(
+    int64_t registration_id,
+    const GURL& scope,
+    const blink::StorageKey& key) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  SendRegistrationInfo(registration_id, scope, key,
                        ServiceWorkerRegistrationInfo::IS_NOT_DELETED);
 }
 
 void ServiceWorkerContextWatcher::OnNewLiveVersion(
     const ServiceWorkerVersionInfo& version_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   int64_t version_id = version_info.version_id;
   auto it = version_info_map_.find(version_id);
   if (it != version_info_map_.end()) {
-    DCHECK_EQ(it->second->registration_id, version_info.registration_id);
+    CHECK_EQ(it->second->registration_id, version_info.registration_id,
+             base::NotFatalUntil::M159);
+    // TODO(crbug.com/564870546): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK_EQ(it->second->script_url, version_info.script_url);
     return;
   }
@@ -223,31 +224,33 @@ void ServiceWorkerContextWatcher::OnNewLiveVersion(
 }
 
 void ServiceWorkerContextWatcher::OnStarting(int64_t version_id) {
-  OnRunningStateChanged(version_id, EmbeddedWorkerStatus::STARTING);
+  OnRunningStateChanged(version_id, blink::EmbeddedWorkerStatus::kStarting);
 }
 
 void ServiceWorkerContextWatcher::OnStarted(
     int64_t version_id,
     const GURL& scope,
-    int process_id,
+    ChildProcessId process_id,
     const GURL& script_url,
-    const blink::ServiceWorkerToken& token) {
-  OnRunningStateChanged(version_id, EmbeddedWorkerStatus::RUNNING);
+    const blink::ServiceWorkerToken& token,
+    const blink::StorageKey& key) {
+  OnRunningStateChanged(version_id, blink::EmbeddedWorkerStatus::kRunning);
 }
 
 void ServiceWorkerContextWatcher::OnStopping(int64_t version_id) {
-  OnRunningStateChanged(version_id, EmbeddedWorkerStatus::STOPPING);
+  OnRunningStateChanged(version_id, blink::EmbeddedWorkerStatus::kStopping);
 }
 
 void ServiceWorkerContextWatcher::OnStopped(int64_t version_id) {
-  OnRunningStateChanged(version_id, EmbeddedWorkerStatus::STOPPED);
+  OnRunningStateChanged(version_id, blink::EmbeddedWorkerStatus::kStopped);
 }
 
 void ServiceWorkerContextWatcher::OnVersionStateChanged(
     int64_t version_id,
     const GURL& scope,
+    const blink::StorageKey& key,
     content::ServiceWorkerVersion::Status status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end())
     return;
@@ -260,11 +263,25 @@ void ServiceWorkerContextWatcher::OnVersionStateChanged(
     version_info_map_.erase(version_id);
 }
 
+void ServiceWorkerContextWatcher::OnVersionRouterRulesChanged(
+    int64_t version_id,
+    const ServiceWorkerVersion::RouterRulesForDevTools& router_rules) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  auto it = version_info_map_.find(version_id);
+  if (it == version_info_map_.end()) {
+    return;
+  }
+  ServiceWorkerVersionInfo* version = it->second.get();
+  version->router_rules = router_rules.legacy_rules;
+  version->typed_router_rules = router_rules.typed_rules;
+  SendVersionInfo(*version);
+}
+
 void ServiceWorkerContextWatcher::OnVersionDevToolsRoutingIdChanged(
     int64_t version_id,
-    int process_id,
+    ChildProcessId process_id,
     int devtools_agent_route_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end())
     return;
@@ -284,7 +301,7 @@ void ServiceWorkerContextWatcher::OnMainScriptResponseSet(
     int64_t version_id,
     base::Time script_response_time,
     base::Time script_last_modified) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end())
     return;
@@ -297,8 +314,9 @@ void ServiceWorkerContextWatcher::OnMainScriptResponseSet(
 void ServiceWorkerContextWatcher::OnErrorReported(
     int64_t version_id,
     const GURL& scope,
+    const blink::StorageKey& key,
     const ServiceWorkerContextObserver::ErrorInfo& info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   int64_t registration_id = blink::mojom::kInvalidServiceWorkerRegistrationId;
   auto it = version_info_map_.find(version_id);
   if (it != version_info_map_.end())
@@ -314,8 +332,9 @@ void ServiceWorkerContextWatcher::OnErrorReported(
 void ServiceWorkerContextWatcher::OnReportConsoleMessage(
     int64_t version_id,
     const GURL& scope,
+    const blink::StorageKey& key,
     const ConsoleMessage& message) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (message.message_level != blink::mojom::ConsoleMessageLevel::kError)
     return;
   int64_t registration_id = blink::mojom::kInvalidServiceWorkerRegistrationId;
@@ -336,20 +355,20 @@ void ServiceWorkerContextWatcher::OnControlleeAdded(
     int64_t version_id,
     const std::string& uuid,
     const ServiceWorkerClientInfo& info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end())
     return;
   ServiceWorkerVersionInfo* version = it->second.get();
 
-  base::InsertOrAssign(version->clients, uuid, info);
+  version->clients.insert_or_assign(uuid, info);
 
   SendVersionInfo(*version);
 }
 
 void ServiceWorkerContextWatcher::OnControlleeRemoved(int64_t version_id,
                                                       const std::string& uuid) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end())
     return;
@@ -360,29 +379,26 @@ void ServiceWorkerContextWatcher::OnControlleeRemoved(int64_t version_id,
 
 void ServiceWorkerContextWatcher::OnRegistrationCompleted(
     int64_t registration_id,
-    const GURL& scope) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  // TODO(crbug.com/1199077): Pipe in StorageKey when it's available in this
-  // function.
-  SendRegistrationInfo(registration_id, scope,
-                       blink::StorageKey(url::Origin::Create(scope)),
+    const GURL& scope,
+    const blink::StorageKey& key) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  SendRegistrationInfo(registration_id, scope, key,
                        ServiceWorkerRegistrationInfo::IS_NOT_DELETED);
 }
 
-void ServiceWorkerContextWatcher::OnRegistrationDeleted(int64_t registration_id,
-                                                        const GURL& scope) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  // TODO(crbug.com/1199077): Pipe in StorageKey when it's available in this
-  // function.
-  SendRegistrationInfo(registration_id, scope,
-                       blink::StorageKey(url::Origin::Create(scope)),
+void ServiceWorkerContextWatcher::OnRegistrationDeleted(
+    int64_t registration_id,
+    const GURL& scope,
+    const blink::StorageKey& key) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  SendRegistrationInfo(registration_id, scope, key,
                        ServiceWorkerRegistrationInfo::IS_DELETED);
 }
 
 void ServiceWorkerContextWatcher::OnRunningStateChanged(
     int64_t version_id,
-    EmbeddedWorkerStatus running_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    blink::EmbeddedWorkerStatus running_status) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto it = version_info_map_.find(version_id);
   if (it == version_info_map_.end())
     return;

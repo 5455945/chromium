@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,7 +11,9 @@ import build_gn_editor
 class BuildTargetTest(unittest.TestCase):
   def test_get_variable_considers_whole_variable_name(self):
     build_target = build_gn_editor.BuildTarget(
-        'type', 'name', '''
+      'type',
+      'name',
+      '''
         type(name) {
           srcjar_deps = [
             "hi",
@@ -21,7 +23,8 @@ class BuildTargetTest(unittest.TestCase):
             "bye",
           ]
         }
-    ''')
+    ''',
+    )
 
     variable = build_target.get_variable('deps')
     assert variable is not None

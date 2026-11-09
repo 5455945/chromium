@@ -1,11 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/mediasource/same_thread_media_source_attachment.h"
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
+#include "third_party/blink/renderer/core/html/track/audio_track_list.h"
+#include "third_party/blink/renderer/core/html/track/video_track_list.h"
+#include "third_party/blink/renderer/modules/mediasource/attachment_creation_pass_key_provider.h"
 #include "third_party/blink/renderer/modules/mediasource/media_source.h"
 #include "third_party/blink/renderer/modules/mediasource/same_thread_media_source_tracer.h"
 
@@ -33,7 +35,7 @@ namespace blink {
 
 SameThreadMediaSourceAttachment::SameThreadMediaSourceAttachment(
     MediaSource* media_source,
-    base::PassKey<URLMediaSource> /* passkey */)
+    AttachmentCreationPassKeyProvider::PassKey /* passkey */)
     : registered_media_source_(media_source),
       recent_element_time_(0.0),
       element_has_error_(false),
@@ -66,14 +68,14 @@ void SameThreadMediaSourceAttachment::NotifyDurationChanged(
   element->DurationChanged(duration, request_seek);
 }
 
-double SameThreadMediaSourceAttachment::GetRecentMediaTime(
+base::TimeDelta SameThreadMediaSourceAttachment::GetRecentMediaTime(
     MediaSourceTracer* tracer) {
   DVLOG(1) << __func__ << " this=" << this;
 
   VerifyCalledWhileContextsAliveForDebugging();
 
   HTMLMediaElement* element = GetMediaElement(tracer);
-  double result = element->currentTime();
+  base::TimeDelta result = base::Seconds(element->currentTime());
 
   DVLOG(2) << __func__ << " this=" << this
            << " -> recent time=" << recent_element_time_
@@ -152,7 +154,14 @@ void SameThreadMediaSourceAttachment::RemoveAudioTracksFromMediaElement(
 
   HTMLMediaElement* element = GetMediaElement(tracer);
   for (auto& audio_id : audio_ids) {
-    element->audioTracks().Remove(audio_id);
+    if (element->audioTracks().getTrackById(audio_id)) {
+      element->audioTracks().Remove(audio_id);
+    } else {
+      // This case can happen on element noneSupported() after MSE had added
+      // some track(s). See https://crbug.com/1204656.
+      DVLOG(3) << __func__ << " this=" << this
+               << ", skipping removal of missing audio track id " << audio_id;
+    }
   }
 
   if (enqueue_change_event) {
@@ -177,7 +186,14 @@ void SameThreadMediaSourceAttachment::RemoveVideoTracksFromMediaElement(
 
   HTMLMediaElement* element = GetMediaElement(tracer);
   for (auto& video_id : video_ids) {
-    element->videoTracks().Remove(video_id);
+    if (element->videoTracks().getTrackById(video_id)) {
+      element->videoTracks().Remove(video_id);
+    } else {
+      // This case can happen on element noneSupported() after MSE had added
+      // some track(s). See https://crbug.com/1204656.
+      DVLOG(3) << __func__ << " this=" << this
+               << ", skipping removal of missing video track id " << video_id;
+    }
   }
 
   if (enqueue_change_event) {
@@ -235,6 +251,16 @@ SameThreadMediaSourceAttachment::StartAttachingToMediaElement(
 void SameThreadMediaSourceAttachment::CompleteAttachingToMediaElement(
     MediaSourceTracer* tracer,
     std::unique_ptr<WebMediaSource> web_media_source) {
+  // The MediaSource's context (e.g. a since-detached iframe) may have been
+  // destroyed after attachment started, but before the media element's player
+  // opened its demuxer. The MediaSource closed itself upon that context
+  // destruction, and Close() will not be called on it again, so it must not be
+  // opened now: nothing would then release |web_media_source| before the
+  // player destroys the demuxer which |web_media_source| references.
+  if (media_source_context_destroyed_) {
+    return;
+  }
+
   VerifyCalledWhileContextsAliveForDebugging();
 
   GetMediaSource(tracer)->CompleteAttachingToMediaElement(
@@ -258,7 +284,11 @@ void SameThreadMediaSourceAttachment::Close(MediaSourceTracer* tracer) {
 
 WebTimeRanges SameThreadMediaSourceAttachment::BufferedInternal(
     MediaSourceTracer* tracer) const {
-  VerifyCalledWhileContextsAliveForDebugging();
+  // The ordering of MediaSource versus HTMLMediaElement context destruction
+  // notification is nondeterminate.
+  if (media_source_context_destroyed_) {
+    return {};
+  }
 
   // Since the attached MediaSource, HTMLMediaElement and the element's player's
   // underlying demuxer are all owned by the main thread in this SameThread
@@ -270,6 +300,10 @@ WebTimeRanges SameThreadMediaSourceAttachment::BufferedInternal(
 
 WebTimeRanges SameThreadMediaSourceAttachment::SeekableInternal(
     MediaSourceTracer* tracer) const {
+  if (media_source_context_destroyed_) {
+    return {};
+  }
+
   VerifyCalledWhileContextsAliveForDebugging();
 
   // Since the attached MediaSource, HTMLMediaElement and the element's player's
@@ -282,6 +316,10 @@ WebTimeRanges SameThreadMediaSourceAttachment::SeekableInternal(
 
 void SameThreadMediaSourceAttachment::OnTrackChanged(MediaSourceTracer* tracer,
                                                      TrackBase* track) {
+  if (media_source_context_destroyed_) {
+    return;
+  }
+
   // In this same thread implementation, the MSE side of the attachment can loop
   // back into this from SourceBuffer's initialization segment received
   // algorithm notifying the element, which then calls this. Regardless, we are
@@ -295,13 +333,21 @@ void SameThreadMediaSourceAttachment::OnTrackChanged(MediaSourceTracer* tracer,
 void SameThreadMediaSourceAttachment::OnElementTimeUpdate(double time) {
   DVLOG(3) << __func__ << " this=" << this << ", time=" << time;
 
-  VerifyCalledWhileContextsAliveForDebugging();
+  // The ordering of MediaSource versus HTMLMediaElement context destruction
+  // notification is nondeterminate.
+  if (media_source_context_destroyed_) {
+    return;
+  }
 
   recent_element_time_ = time;
 }
 
 void SameThreadMediaSourceAttachment::OnElementError() {
   DVLOG(3) << __func__ << " this=" << this;
+
+  if (media_source_context_destroyed_) {
+    return;
+  }
 
   VerifyCalledWhileContextsAliveForDebugging();
 

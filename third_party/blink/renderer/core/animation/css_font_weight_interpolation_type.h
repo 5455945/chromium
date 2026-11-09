@@ -1,17 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_FONT_WEIGHT_INTERPOLATION_TYPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_FONT_WEIGHT_INTERPOLATION_TYPE_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/animation/css_interpolation_type.h"
 
 namespace blink {
 
 class CSSFontWeightInterpolationType : public CSSInterpolationType {
  public:
-  CSSFontWeightInterpolationType(PropertyHandle property)
+  explicit CSSFontWeightInterpolationType(PropertyHandle property)
       : CSSInterpolationType(property) {
     DCHECK_EQ(CssProperty().PropertyID(), CSSPropertyID::kFontWeight);
   }
@@ -31,7 +32,7 @@ class CSSFontWeightInterpolationType : public CSSInterpolationType {
   InterpolationValue MaybeConvertInherit(const StyleResolverState&,
                                          ConversionCheckers&) const final;
   InterpolationValue MaybeConvertValue(const CSSValue&,
-                                       const StyleResolverState*,
+                                       const StyleResolverState&,
                                        ConversionCheckers&) const final;
 };
 

@@ -1,18 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.webapps;
 
 import android.content.Context;
-import android.text.format.DateUtils;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.FileUtils;
 import org.chromium.base.PathUtils;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.base.task.BackgroundOnlyAsyncTask;
-import org.chromium.chrome.browser.metrics.WebApkUma;
+import org.chromium.build.annotations.NullMarked;
 
 import java.io.File;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -20,9 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Manages directories created to store data for WebAPK updates, and cleans up stale state
  * directories left behind under app_WebappActivity/.
- *
- * Also records metrics about files in the "WebAPK update" directory.
  */
+@NullMarked
 public class WebappDirectoryManager {
     protected static final String DEPRECATED_WEBAPP_DIRECTORY_NAME = "WebappActivity";
 
@@ -32,16 +30,13 @@ public class WebappDirectoryManager {
     /** Whether or not the class has already started trying to clean up obsolete directories. */
     private static final AtomicBoolean sMustCleanUpOldDirectories = new AtomicBoolean(true);
 
-    /**
-     * Deletes web app directories with stale data.
-     */
+    /** Deletes web app directories with stale data. */
     public static void cleanUpDirectories() {
         if (!sMustCleanUpOldDirectories.getAndSet(false)) return;
 
-        new BackgroundOnlyAsyncTask<Void>() {
+        new BackgroundOnlyAsyncTask<>() {
             @Override
-            protected final Void doInBackground() {
-                recordNumberOfStaleWebApkUpdateRequestFiles();
+            protected Void doInBackground() {
                 FileUtils.recursivelyDeleteFile(
                         getBaseWebappDirectory(ContextUtils.getApplicationContext()),
                         FileUtils.DELETE_ALL);
@@ -53,29 +48,6 @@ public class WebappDirectoryManager {
     /** Resets class' static state */
     public static void resetForTesting() {
         sMustCleanUpOldDirectories.set(true);
-    }
-
-    /** Records to UMA the count of old "WebAPK update request" files. */
-    private static void recordNumberOfStaleWebApkUpdateRequestFiles() {
-        File updateDirectory = getWebApkUpdateDirectory();
-        int count = 0;
-        File[] children = updateDirectory.listFiles();
-        if (children != null) {
-            for (File child : children) {
-                WebappDataStorage storage =
-                        WebappRegistry.getInstance().getWebappDataStorage(child.getName());
-                if (storage == null) {
-                    ++count;
-                    continue;
-                }
-
-                if (!storage.wasCheckForUpdatesDoneInLastMs(DateUtils.DAY_IN_MILLIS)) {
-                    ++count;
-                }
-            }
-        }
-
-        WebApkUma.recordNumberOfStaleWebApkUpdateRequestFiles(count);
     }
 
     /** Returns the directory containing all of Chrome's web app data, creating it if needed. */

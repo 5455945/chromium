@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
 #include "dbus/mock_bus.h"
@@ -56,7 +57,7 @@ class TpmManagerClientTest : public testing::Test {
   void SetUp() override {
     dbus::Bus::Options options;
     options.bus_type = dbus::Bus::SYSTEM;
-    bus_ = new dbus::MockBus(options);
+    bus_ = new dbus::MockBus(std::move(options));
 
     dbus::ObjectPath tpm_manager_object_path =
         dbus::ObjectPath(::tpm_manager::kTpmManagerServicePath);
@@ -71,12 +72,12 @@ class TpmManagerClientTest : public testing::Test {
                                tpm_manager_object_path))
         .WillRepeatedly(Return(proxy_.get()));
 
-    EXPECT_CALL(*proxy_.get(), DoCallMethod(_, _, _))
+    EXPECT_CALL(*proxy_.get(), CallMethod(_, _, _))
         .WillRepeatedly(Invoke(this, &TpmManagerClientTest::OnCallMethod));
 
     EXPECT_CALL(*proxy_,
-                DoConnectToSignal(::tpm_manager::kTpmManagerInterface,
-                                  ::tpm_manager::kOwnershipTakenSignal, _, _))
+                ConnectToSignal(::tpm_manager::kTpmManagerInterface,
+                                ::tpm_manager::kOwnershipTakenSignal, _, _))
         .WillOnce(SaveArg<2>(&ownership_taken_signal_callback_));
     TpmManagerClient::Initialize(bus_.get());
 
@@ -108,14 +109,16 @@ class TpmManagerClientTest : public testing::Test {
   scoped_refptr<dbus::MockObjectProxy> proxy_;
 
   // Convenience pointer to the global instance.
-  TpmManagerClient* client_;
+  raw_ptr<TpmManagerClient, DanglingUntriaged> client_;
 
   // The expected replies to the respective D-Bus calls.
   ::tpm_manager::GetTpmNonsensitiveStatusReply expected_status_reply_;
   ::tpm_manager::GetVersionInfoReply expected_version_info_reply_;
+  ::tpm_manager::GetSupportedFeaturesReply expected_supported_features_reply_;
   ::tpm_manager::GetDictionaryAttackInfoReply expected_get_da_info_reply_;
   ::tpm_manager::TakeOwnershipReply expected_take_ownership_reply_;
   ::tpm_manager::ClearStoredOwnerPasswordReply expected_clear_password_reply_;
+  ::tpm_manager::ClearTpmReply expected_clear_tpm_reply_;
 
   // When it is set `true`, the parsing failure is expected to be translated by
   // proxy to status `STATUS_DBUS_ERROR`.
@@ -125,7 +128,7 @@ class TpmManagerClientTest : public testing::Test {
   // Handles calls to |proxy_|'s `CallMethod()`.
   void OnCallMethod(dbus::MethodCall* method_call,
                     int timeout_ms,
-                    dbus::ObjectProxy::ResponseCallback* callback) {
+                    dbus::ObjectProxy::ResponseCallback callback) {
     std::unique_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
     dbus::MessageWriter writer(response.get());
     if (shall_message_parsing_fail_) {
@@ -140,6 +143,9 @@ class TpmManagerClientTest : public testing::Test {
     } else if (method_call->GetMember() == ::tpm_manager::kGetVersionInfo) {
       writer.AppendProtoAsArrayOfBytes(expected_version_info_reply_);
     } else if (method_call->GetMember() ==
+               ::tpm_manager::kGetSupportedFeatures) {
+      writer.AppendProtoAsArrayOfBytes(expected_supported_features_reply_);
+    } else if (method_call->GetMember() ==
                ::tpm_manager::kGetDictionaryAttackInfo) {
       writer.AppendProtoAsArrayOfBytes(expected_get_da_info_reply_);
     } else if (method_call->GetMember() == ::tpm_manager::kTakeOwnership) {
@@ -147,11 +153,13 @@ class TpmManagerClientTest : public testing::Test {
     } else if (method_call->GetMember() ==
                ::tpm_manager::kClearStoredOwnerPassword) {
       writer.AppendProtoAsArrayOfBytes(expected_clear_password_reply_);
+    } else if (method_call->GetMember() == ::tpm_manager::kClearTpm) {
+      writer.AppendProtoAsArrayOfBytes(expected_clear_tpm_reply_);
     } else {
       ASSERT_FALSE(true) << "Unrecognized member: " << method_call->GetMember();
     }
     task_environment_.GetMainThreadTaskRunner()->PostTask(
-        FROM_HERE, base::BindOnce(RunResponseCallback, std::move(*callback),
+        FROM_HERE, base::BindOnce(RunResponseCallback, std::move(callback),
                                   std::move(response)));
   }
 
@@ -222,6 +230,39 @@ TEST_F(TpmManagerClientTest, GetVersionInfoDBusFailure) {
       &result_reply);
   client_->GetVersionInfo(::tpm_manager::GetVersionInfoRequest(),
                           std::move(callback));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(::tpm_manager::STATUS_DBUS_ERROR, result_reply.status());
+}
+
+TEST_F(TpmManagerClientTest, GetSupportedFeatures) {
+  expected_supported_features_reply_.set_status(::tpm_manager::STATUS_SUCCESS);
+  expected_supported_features_reply_.set_support_u2f(true);
+  ::tpm_manager::GetSupportedFeaturesReply result_reply;
+  auto callback = base::BindOnce(
+      [](::tpm_manager::GetSupportedFeaturesReply* result_reply,
+         const ::tpm_manager::GetSupportedFeaturesReply& reply) {
+        *result_reply = reply;
+      },
+      &result_reply);
+  client_->GetSupportedFeatures(::tpm_manager::GetSupportedFeaturesRequest(),
+                                std::move(callback));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(expected_supported_features_reply_.status(), result_reply.status());
+  EXPECT_EQ(expected_supported_features_reply_.support_u2f(),
+            result_reply.support_u2f());
+}
+
+TEST_F(TpmManagerClientTest, GetSupportedFeaturesDBusFailure) {
+  shall_message_parsing_fail_ = true;
+  ::tpm_manager::GetSupportedFeaturesReply result_reply;
+  auto callback = base::BindOnce(
+      [](::tpm_manager::GetSupportedFeaturesReply* result_reply,
+         const ::tpm_manager::GetSupportedFeaturesReply& reply) {
+        *result_reply = reply;
+      },
+      &result_reply);
+  client_->GetSupportedFeatures(::tpm_manager::GetSupportedFeaturesRequest(),
+                                std::move(callback));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(::tpm_manager::STATUS_DBUS_ERROR, result_reply.status());
 }
@@ -307,6 +348,19 @@ TEST_F(TpmManagerClientTest, ClearStoredOwnerPassword) {
       ::tpm_manager::ClearStoredOwnerPasswordRequest(), std::move(callback));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(expected_clear_password_reply_.status(), result_reply.status());
+}
+
+TEST_F(TpmManagerClientTest, ClearTpm) {
+  // Use a non-zero status value to make sure the value is correctly set.
+  expected_clear_password_reply_.set_status(::tpm_manager::STATUS_DEVICE_ERROR);
+  ::tpm_manager::ClearTpmReply result_reply;
+  auto callback = base::BindOnce(
+      [](::tpm_manager::ClearTpmReply* result_reply,
+         const ::tpm_manager::ClearTpmReply& reply) { *result_reply = reply; },
+      &result_reply);
+  client_->ClearTpm(::tpm_manager::ClearTpmRequest(), std::move(callback));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(expected_clear_tpm_reply_.status(), result_reply.status());
 }
 
 TEST_F(TpmManagerClientTest, OnwershipTakenSignal) {

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,16 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/device/public/mojom/wake_lock.mojom.h"
-#include "services/device/public/mojom/wake_lock_context.mojom.h"
 #include "services/device/wake_lock/power_save_blocker/power_save_blocker.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace device {
 
@@ -47,8 +47,7 @@ class WakeLock : public mojom::WakeLock {
                                    mojom::WakeLockType new_type) {}
 
     // Called when |WakeLock| has no bindings left.
-    virtual void OnConnectionError(mojom::WakeLockType type,
-                                   WakeLock* wake_lock) {}
+    virtual void OnConnectionError(WakeLock* wake_lock) {}
   };
 
   // |observer| must outlive this WakeLock instance.
@@ -58,8 +57,11 @@ class WakeLock : public mojom::WakeLock {
            const std::string& description,
            int context_id,
            WakeLockContextCallback native_view_getter,
-           scoped_refptr<base::SingleThreadTaskRunner> file_task_runner,
            Observer* observer);
+
+  WakeLock(const WakeLock&) = delete;
+  WakeLock& operator=(const WakeLock&) = delete;
+
   ~WakeLock() override;
 
   // mojom::WakeLock implementation.
@@ -78,6 +80,9 @@ class WakeLock : public mojom::WakeLock {
   virtual void CreateWakeLock();
   virtual void RemoveWakeLock();
   virtual void SwapWakeLock();
+#if BUILDFLAG(IS_ANDROID)
+  void InitAndroidWakeLock();
+#endif
 
   void OnConnectionError();
 
@@ -85,19 +90,18 @@ class WakeLock : public mojom::WakeLock {
   mojom::WakeLockReason reason_;
   std::unique_ptr<std::string> description_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   int context_id_;
   WakeLockContextCallback native_view_getter_;
 #endif
 
   scoped_refptr<base::SequencedTaskRunner> main_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> file_task_runner_;
 
   // The actual power save blocker for screen.
   std::unique_ptr<PowerSaveBlocker> wake_lock_;
 
   // Not owned. |observer_| must outlive this instance of WakeLock.
-  Observer* const observer_;
+  const raw_ptr<Observer> observer_;
 
   // Multiple clients that associate to the same WebContents share the same one
   // WakeLock instance. Two consecutive |RequestWakeLock| requests
@@ -105,8 +109,6 @@ class WakeLock : public mojom::WakeLock {
   // client is being added into the ReceiverSet, we create an unique_ptr<bool>
   // as its context, which records this client's request status.
   mojo::ReceiverSet<mojom::WakeLock, std::unique_ptr<bool>> receiver_set_;
-
-  DISALLOW_COPY_AND_ASSIGN(WakeLock);
 };
 
 }  // namespace device

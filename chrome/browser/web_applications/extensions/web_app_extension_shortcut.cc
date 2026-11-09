@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,40 +7,43 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_ui_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/web_applications/components/app_registrar.h"
-#include "chrome/browser/web_applications/components/os_integration_manager.h"
-#include "chrome/browser/web_applications/components/web_app_id.h"
-#include "chrome/browser/web_applications/components/web_app_provider_base.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_sub_manager.h"
+#include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/services/app_service/public/cpp/file_handler.h"
+#include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/manifest_handlers/file_handler_info.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
+#include "ui/base/resource/resource_scale_factor.h"
 #include "ui/gfx/image/image_skia.h"
 
-#if defined(OS_WIN)
-#include "chrome/browser/web_applications/components/web_app_shortcut_win.h"
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/web_applications/os_integration/web_app_shortcut_win.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "chrome/common/chrome_switches.h"
 #endif
 
@@ -68,14 +71,34 @@ void OnImageLoaded(std::unique_ptr<ShortcutInfo> shortcut_info,
 
 void UpdateAllShortcutsForShortcutInfo(
     const std::u16string& old_app_title,
-    base::OnceClosure callback,
+    ResultCallback callback,
     std::unique_ptr<ShortcutInfo> shortcut_info) {
   base::FilePath shortcut_data_dir =
       internals::GetShortcutDataDir(*shortcut_info);
-  internals::PostShortcutIOTaskAndReply(
-      base::BindOnce(&internals::UpdatePlatformShortcuts,
-                     std::move(shortcut_data_dir), old_app_title),
-      std::move(shortcut_info), std::move(callback));
+  internals::ScheduleUpdatePlatformShortcuts(
+      std::move(shortcut_data_dir), old_app_title,
+      /*user_specified_locations=*/std::nullopt, std::move(callback),
+      std::move(shortcut_info));
+}
+
+using AppCallbackMap =
+    base::flat_map<webapps::AppId, std::vector<base::OnceClosure>>;
+AppCallbackMap& GetShortcutsDeletedCallbackMap() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  static base::NoDestructor<AppCallbackMap> map;
+  return *map;
+}
+
+void ShortcutsDeleted(const webapps::AppId& app_id, bool /*shortcut_deleted*/) {
+  auto& map = GetShortcutsDeletedCallbackMap();
+  auto it = map.find(app_id);
+  if (it == map.end())
+    return;
+  std::vector<base::OnceClosure> callbacks = std::move(it->second);
+  map.erase(it);
+  for (base::OnceClosure& callback : callbacks) {
+    std::move(callback).Run();
+  }
 }
 
 }  // namespace
@@ -84,7 +107,7 @@ void CreateShortcutsWithInfo(ShortcutCreationReason reason,
                              const ShortcutLocations& locations,
                              CreateShortcutsCallback callback,
                              std::unique_ptr<ShortcutInfo> shortcut_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (shortcut_info == nullptr) {
     std::move(callback).Run(/*created_shortcut=*/false);
     return;
@@ -92,7 +115,7 @@ void CreateShortcutsWithInfo(ShortcutCreationReason reason,
 
   // If the shortcut is for an application shortcut with the new bookmark app
   // flow disabled, there will be no corresponding extension.
-  if (!shortcut_info->extension_id.empty()) {
+  if (!shortcut_info->app_id.empty()) {
     // The profile manager does not exist in some unit tests.
     if (!g_browser_process->profile_manager()) {
       std::move(callback).Run(false /* created_shortcut */);
@@ -112,11 +135,12 @@ void CreateShortcutsWithInfo(ShortcutCreationReason reason,
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile);
     const extensions::Extension* extension = registry->GetExtensionById(
-        shortcut_info->extension_id, extensions::ExtensionRegistry::EVERYTHING);
+        shortcut_info->app_id, extensions::ExtensionRegistry::EVERYTHING);
     bool is_app_installed = false;
-    auto* app_provider = WebAppProviderBase::GetProviderBase(profile);
+    auto* app_provider = WebAppProvider::GetForWebApps(profile);
     if (app_provider &&
-        app_provider->registrar().IsInstalled(shortcut_info->extension_id)) {
+        app_provider->registrar_unsafe().AppMatches(
+            shortcut_info->app_id, WebAppFilter::IsAppSurfaceableToUser())) {
       is_app_installed = true;
     }
 
@@ -143,13 +167,13 @@ void GetShortcutInfoForApp(const extensions::Extension* extension,
 
   for (int size : GetDesiredIconSizesForShortcut()) {
     extensions::ExtensionResource resource =
-        extensions::IconsInfo::GetIconResource(extension, size,
-                                               ExtensionIconSet::MATCH_EXACTLY);
+        extensions::IconsInfo::GetIconResource(
+            extension, size, ExtensionIconSet::Match::kExactly);
     if (!resource.empty()) {
-      info_list.push_back(extensions::ImageLoader::ImageRepresentation(
+      info_list.emplace_back(
           resource, extensions::ImageLoader::ImageRepresentation::ALWAYS_RESIZE,
           gfx::Size(size, size),
-          GetScaleForResourceScaleFactor(ui::SCALE_FACTOR_100P)));
+          ui::GetScaleForResourceScaleFactor(ui::k100Percent));
     }
   }
 
@@ -158,18 +182,19 @@ void GetShortcutInfoForApp(const extensions::Extension* extension,
 
     // If there is no icon at the desired sizes, we will resize what we can get.
     // Making a large icon smaller is preferred to making a small icon larger,
-    // so look for a larger icon first:
+    // so look for a larger icon first.
+    // TODO(crbug.com/329953472): Use a predefined threshold.
     extensions::ExtensionResource resource =
-        extensions::IconsInfo::GetIconResource(extension, size,
-                                               ExtensionIconSet::MATCH_BIGGER);
+        extensions::IconsInfo::GetIconResource(
+            extension, size, ExtensionIconSet::Match::kBigger);
     if (resource.empty()) {
       resource = extensions::IconsInfo::GetIconResource(
-          extension, size, ExtensionIconSet::MATCH_SMALLER);
+          extension, size, ExtensionIconSet::Match::kSmaller);
     }
-    info_list.push_back(extensions::ImageLoader::ImageRepresentation(
+    info_list.emplace_back(
         resource, extensions::ImageLoader::ImageRepresentation::ALWAYS_RESIZE,
         gfx::Size(size, size),
-        GetScaleForResourceScaleFactor(ui::SCALE_FACTOR_100P)));
+        ui::GetScaleForResourceScaleFactor(ui::k100Percent));
   }
 
   // |info_list| may still be empty at this point, in which case
@@ -186,28 +211,15 @@ std::unique_ptr<ShortcutInfo> ShortcutInfoForExtensionAndProfile(
     Profile* profile) {
   auto shortcut_info = std::make_unique<ShortcutInfo>();
 
-  shortcut_info->extension_id = app->id();
+  shortcut_info->app_id = app->id();
   shortcut_info->url = extensions::AppLaunchInfo::GetLaunchWebURL(app);
   shortcut_info->title = base::UTF8ToUTF16(app->name());
-  shortcut_info->description = base::UTF8ToUTF16(app->description());
+  shortcut_info->description =
+      base::UTF8ToUTF16(extensions::DescriptionInfo::GetDescription(*app));
   shortcut_info->profile_path = profile->GetPath();
   shortcut_info->profile_name =
       profile->GetPrefs()->GetString(prefs::kProfileName);
   shortcut_info->version_for_display = app->GetVersionForDisplay();
-
-  // File Handlers should only be included in bookmark apps.
-  if (app->from_bookmark()) {
-    shortcut_info->is_multi_profile = true;
-    OsIntegrationManager& os_integration_manager =
-        WebAppProviderBase::GetProviderBase(profile)->os_integration_manager();
-    if (const auto* file_handlers =
-            os_integration_manager.GetEnabledFileHandlers(app->id())) {
-      shortcut_info->file_handler_extensions =
-          apps::GetFileExtensionsFromFileHandlers(*file_handlers);
-      shortcut_info->file_handler_mime_types =
-          apps::GetMimeTypesFromFileHandlers(*file_handlers);
-    }
-  }
 
   return shortcut_info;
 }
@@ -227,14 +239,6 @@ bool ShouldCreateShortcutFor(ShortcutCreationReason reason,
   if (extension->is_platform_app())
     return true;
 
-#if defined(OS_MAC)
-  if (extension->is_hosted_app() &&
-      base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableHostedAppShimCreation)) {
-    return false;
-  }
-#endif
-
   // Allow shortcut creation if it was explicitly requested by the user (i.e. is
   // not automatic).
   return reason == SHORTCUT_CREATION_BY_USER;
@@ -245,7 +249,7 @@ void CreateShortcuts(ShortcutCreationReason reason,
                      Profile* profile,
                      const extensions::Extension* app,
                      CreateShortcutsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (!ShouldCreateShortcutFor(reason, profile, app)) {
     std::move(callback).Run(false /* created_shortcut */);
@@ -257,49 +261,49 @@ void CreateShortcuts(ShortcutCreationReason reason,
                                        locations, std::move(callback)));
 }
 
-void CreateShortcutsForWebApp(ShortcutCreationReason reason,
-                              const ShortcutLocations& locations,
-                              Profile* profile,
-                              const std::string& app_id,
-                              CreateShortcutsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  WebAppProviderBase::GetProviderBase(profile)
-      ->os_integration_manager()
-      .GetShortcutInfoForApp(
-          app_id, base::BindOnce(&CreateShortcutsWithInfo, reason, locations,
-                                 std::move(callback)));
-}
-
 void DeleteAllShortcuts(Profile* profile, const extensions::Extension* app) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   std::unique_ptr<ShortcutInfo> shortcut_info(
       ShortcutInfoForExtensionAndProfile(app, profile));
   base::FilePath shortcut_data_dir =
       internals::GetShortcutDataDir(*shortcut_info);
   internals::ScheduleDeletePlatformShortcuts(
-      shortcut_data_dir, std::move(shortcut_info), base::DoNothing());
+      shortcut_data_dir, std::move(shortcut_info),
+      base::BindOnce(ShortcutsDeleted, app->id()));
+}
+
+void WaitForExtensionShortcutsDeleted(const webapps::AppId& app_id,
+                                      base::OnceClosure callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  GetShortcutsDeletedCallbackMap()[app_id].push_back(std::move(callback));
 }
 
 void UpdateAllShortcuts(const std::u16string& old_app_title,
                         Profile* profile,
                         const extensions::Extension* app,
                         base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
-  GetShortcutInfoForApp(app, profile,
-                        base::BindOnce(&UpdateAllShortcutsForShortcutInfo,
-                                       old_app_title, std::move(callback)));
+  ResultCallback metrics_callback =
+      base::BindOnce([](Result result) {
+        base::UmaHistogramBoolean("WebApp.Shortcuts.Update.Result",
+                                  (result == Result::kOk));
+      }).Then(std::move(callback));
+
+  GetShortcutInfoForApp(
+      app, profile,
+      base::BindOnce(&UpdateAllShortcutsForShortcutInfo, old_app_title,
+                     std::move(metrics_callback)));
 }
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
 void UpdateShortcutsForAllApps(Profile* profile, base::OnceClosure callback) {
   std::move(callback).Run();
 }
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void UpdateRelaunchDetailsForApp(Profile* profile,
                                  const extensions::Extension* extension,
                                  HWND hwnd) {
@@ -309,5 +313,20 @@ void UpdateRelaunchDetailsForApp(Profile* profile,
                      hwnd));
 }
 #endif
+
+SynchronizeOsOptions ConvertShortcutLocationsToSynchronizeOptions(
+    const ShortcutLocations& locations,
+    ShortcutCreationReason reason) {
+  SynchronizeOsOptions options;
+  options.reason = reason;
+  options.add_shortcut_to_desktop = locations.on_desktop;
+  options.add_to_quick_launch_bar = locations.in_quick_launch_bar;
+  // Since shortcuts can be manually deleted by thd end user, there
+  // is no way to listen to that information and update that in the
+  // web_app DB. Setting this flag allows shortcuts to always
+  // be force created.
+  options.force_create_shortcuts = true;
+  return options;
+}
 
 }  // namespace web_app

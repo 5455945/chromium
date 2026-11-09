@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,29 @@
 #include "third_party/blink/renderer/core/display_lock/display_lock_document_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/range.h"
-#include "third_party/blink/renderer/core/dom/scripted_idle_task_controller.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/finder/find_buffer.h"
 #include "third_party/blink/renderer/core/editing/finder/find_options.h"
+#include "third_party/blink/renderer/core/editing/finder/find_results.h"
 #include "third_party/blink/renderer/core/editing/finder/text_finder.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/core/scheduler/scripted_idle_task_controller.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace blink {
 
 namespace {
-constexpr base::TimeDelta kFindTaskTimeAllotment =
-    base::TimeDelta::FromMilliseconds(10);
+constexpr base::TimeDelta kFindTaskTimeAllotment = base::Milliseconds(10);
+
+// Check if we need to yield after this many matches have been found. We start
+// with Start matches and double them every time we yield until we are
+// processing Limit matches per yield check.
+constexpr int kMatchYieldCheckIntervalStart = 100;
+constexpr int kMatchYieldCheckIntervalLimit = 6400;
+
 }  // namespace
 
 class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
@@ -31,7 +39,7 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
   FindTask(FindTaskController* controller,
            Document* document,
            int identifier,
-           const WebString& search_text,
+           const String& search_text,
            const mojom::blink::FindOptions& options)
       : document_(document),
         controller_(controller),
@@ -45,7 +53,7 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
       controller_->GetLocalFrame()
           ->GetTaskRunner(blink::TaskType::kInternalFindInPage)
           ->PostTask(FROM_HERE,
-                     WTF::Bind(&FindTask::Invoke, WrapWeakPersistent(this)));
+                     BindOnce(&FindTask::Invoke, WrapWeakPersistent(this)));
     }
   }
 
@@ -89,7 +97,7 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
       // This is a continuation of a finding operation that timed out and didn't
       // complete last time around, so we should start from where we left off.
       DCHECK(resume_from_range->collapsed());
-      search_start = FromPositionInDOMTree<EditingInFlatTreeStrategy>(
+      search_start = FromPositionInDomTree<EditingInFlatTreeStrategy>(
           resume_from_range->EndPosition());
       if (search_start.GetDocument() != search_end.GetDocument())
         return;
@@ -102,25 +110,34 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
     bool full_range_searched = true;
     PositionInFlatTree next_task_start_position;
 
-    blink::FindOptions find_options =
-        (options_->forward ? 0 : kBackwards) |
-        (options_->match_case ? 0 : kCaseInsensitive) |
-        (options_->new_session ? kStartInSelection : 0);
-    auto start_time = base::TimeTicks::Now();
+    auto find_options = FindOptions()
+                            .SetBackwards(!options_->forward)
+                            .SetCaseInsensitive(!options_->match_case)
+                            .SetStartingInSelection(options_->new_session);
+    const auto start_time = base::TimeTicks::Now();
+
+    auto time_allotment_expired = [start_time]() {
+      auto time_elapsed = base::TimeTicks::Now() - start_time;
+      return time_elapsed > kFindTaskTimeAllotment;
+    };
+
+    int match_yield_check_interval = controller_->GetMatchYieldCheckInterval();
 
     while (search_start < search_end) {
       // Find in the whole block.
-      FindBuffer buffer(EphemeralRangeInFlatTree(search_start, search_end));
-      FindBuffer::Results match_results =
+      FindBuffer buffer(EphemeralRangeInFlatTree(search_start, search_end),
+                        RubySupport::kEnabledIfNecessary);
+      FindResults match_results =
           buffer.FindMatches(search_text_, find_options);
-      for (FindBuffer::BufferMatchResult match : match_results) {
+      bool yielded_while_iterating_results = false;
+      for (MatchResultIcu match : match_results) {
         const EphemeralRangeInFlatTree ephemeral_match_range =
             buffer.RangeFromBufferIndex(match.start,
                                         match.start + match.length);
         auto* const match_range = MakeGarbageCollected<Range>(
             ephemeral_match_range.GetDocument(),
-            ToPositionInDOMTree(ephemeral_match_range.StartPosition()),
-            ToPositionInDOMTree(ephemeral_match_range.EndPosition()));
+            ToPositionInDomTree(ephemeral_match_range.StartPosition()),
+            ToPositionInDomTree(ephemeral_match_range.EndPosition()));
         if (match_range->collapsed()) {
           // resultRange will be collapsed if the matched text spans over
           // multiple TreeScopes.  TODO(rakina): Show such matches to users.
@@ -129,7 +146,29 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
         }
         ++match_count;
         controller_->DidFindMatch(identifier_, match_range);
+
+        // Check if we should yield. Since we accumulate text on block
+        // boundaries, if a lot of the text is in a single block, then we may
+        // get stuck in there processing all of the matches. It's not so bad per
+        // se, but when coupled with updating painting of said matches and the
+        // scrollbar ticks, then we can block the main thread for quite some
+        // time.
+        if ((match_count % match_yield_check_interval) == 0 &&
+            time_allotment_expired()) {
+          // Next time we should start at the end of the current match.
+          next_task_start_position = ephemeral_match_range.EndPosition();
+          yielded_while_iterating_results = true;
+          break;
+        }
       }
+
+      // If we have yielded from the inner loop, then just break out of the
+      // loop, since we already updated the next_task_start_position.
+      if (yielded_while_iterating_results) {
+        full_range_searched = false;
+        break;
+      }
+
       // At this point, all text in the block collected above has been
       // processed. Now we move to the next block if there's any,
       // otherwise we should stop.
@@ -138,11 +177,18 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
         full_range_searched = true;
         break;
       }
-      full_range_searched = false;
-      next_task_start_position = search_start;
-      auto time_elapsed = base::TimeTicks::Now() - start_time;
-      if (time_elapsed > kFindTaskTimeAllotment)
+
+      // We should also check if we should yield after every block search, since
+      // it's a nice natural boundary. Note that if we yielded out of the inner
+      // loop, then we should exit before updating the search_start position to
+      // the PositionAfterBlock. Otherwise, we may miss the matches that happen
+      // in the same block. This block updates next_task_start_position to be
+      // the updated search_start.
+      if (time_allotment_expired()) {
+        next_task_start_position = search_start;
+        full_range_searched = false;
         break;
+      }
     }
     controller_->DidFinishTask(identifier_, search_text_, *options_,
                                full_range_searched, next_task_start_position,
@@ -153,7 +199,7 @@ class FindTaskController::FindTask final : public GarbageCollected<FindTask> {
   Member<Document> document_;
   Member<FindTaskController> controller_;
   const int identifier_;
-  const WebString search_text_;
+  const String search_text_;
   mojom::blink::FindOptionsPtr options_;
 };
 
@@ -161,22 +207,23 @@ FindTaskController::FindTaskController(WebLocalFrameImpl& owner_frame,
                                        TextFinder& text_finder)
     : owner_frame_(owner_frame),
       text_finder_(text_finder),
-      resume_finding_from_range_(nullptr) {}
+      match_yield_check_interval_(kMatchYieldCheckIntervalStart) {}
+
+int FindTaskController::GetMatchYieldCheckInterval() const {
+  return match_yield_check_interval_;
+}
 
 void FindTaskController::StartRequest(
     int identifier,
-    const WebString& search_text,
+    const String& search_text,
     const mojom::blink::FindOptions& options) {
-  TRACE_EVENT_ASYNC_BEGIN0("blink", "FindInPageRequest", identifier);
-  current_request_start_time_ = base::TimeTicks::Now();
-  total_task_duration_for_current_request_ = base::TimeDelta();
-  task_count_for_current_request_ = 0;
   DCHECK(!finding_in_progress_);
   DCHECK_EQ(current_find_identifier_, kInvalidFindIdentifier);
   // This is a brand new search, so we need to reset everything.
   finding_in_progress_ = true;
   current_match_count_ = 0;
   current_find_identifier_ = identifier;
+  match_yield_check_interval_ = kMatchYieldCheckIntervalStart;
   RequestFindTask(identifier, search_text, options);
 }
 
@@ -184,7 +231,6 @@ void FindTaskController::CancelPendingRequest() {
   if (find_task_)
     find_task_.Clear();
   if (finding_in_progress_) {
-    RecordRequestMetrics(RequestEndState::ABORTED);
     last_find_request_completed_with_no_matches_ = false;
   }
   finding_in_progress_ = false;
@@ -194,18 +240,17 @@ void FindTaskController::CancelPendingRequest() {
 
 void FindTaskController::RequestFindTask(
     int identifier,
-    const WebString& search_text,
+    const String& search_text,
     const mojom::blink::FindOptions& options) {
   DCHECK_EQ(find_task_, nullptr);
   DCHECK_EQ(identifier, current_find_identifier_);
-  task_count_for_current_request_++;
   find_task_ = MakeGarbageCollected<FindTask>(
       this, GetLocalFrame()->GetDocument(), identifier, search_text, options);
 }
 
 void FindTaskController::DidFinishTask(
     int identifier,
-    const WebString& search_text,
+    const String& search_text,
     const mojom::blink::FindOptions& options,
     bool finished_whole_request,
     PositionInFlatTree next_starting_position,
@@ -214,8 +259,6 @@ void FindTaskController::DidFinishTask(
     base::TimeTicks task_start_time) {
   if (current_find_identifier_ != identifier)
     return;
-  total_task_duration_for_current_request_ +=
-      base::TimeTicks::Now() - task_start_time;
   if (find_task_)
     find_task_.Clear();
   // Remember what we search for last time, so we can skip searching if more
@@ -225,8 +268,8 @@ void FindTaskController::DidFinishTask(
   if (next_starting_position.IsNotNull()) {
     resume_finding_from_range_ = MakeGarbageCollected<Range>(
         *next_starting_position.GetDocument(),
-        ToPositionInDOMTree(next_starting_position),
-        ToPositionInDOMTree(next_starting_position));
+        ToPositionInDomTree(next_starting_position),
+        ToPositionInDomTree(next_starting_position));
   }
 
   if (match_count > 0) {
@@ -235,6 +278,8 @@ void FindTaskController::DidFinishTask(
   }
 
   if (!finished_whole_request) {
+    match_yield_check_interval_ = std::min(kMatchYieldCheckIntervalLimit,
+                                           2 * match_yield_check_interval_);
     // Task ran out of time, request for another one.
     RequestFindTask(identifier, search_text, options);
     return;  // Done for now, resume work later.
@@ -242,37 +287,10 @@ void FindTaskController::DidFinishTask(
 
   text_finder_->FinishCurrentScopingEffort(identifier);
 
-  RecordRequestMetrics(RequestEndState::ABORTED);
   last_find_request_completed_with_no_matches_ =
       !aborted && !current_match_count_;
   finding_in_progress_ = false;
   current_find_identifier_ = kInvalidFindIdentifier;
-}
-
-void FindTaskController::RecordRequestMetrics(
-    RequestEndState request_end_state) {
-  bool aborted = (request_end_state == RequestEndState::ABORTED);
-  TRACE_EVENT_ASYNC_END1("blink", "FindInPageRequest", current_find_identifier_,
-                         "aborted", aborted);
-  if (aborted) {
-    UMA_HISTOGRAM_MEDIUM_TIMES("WebCore.FindInPage.TotalTaskDuration.Aborted",
-                               total_task_duration_for_current_request_);
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "WebCore.FindInPage.RequestDuration.Aborted",
-        base::TimeTicks::Now() - current_request_start_time_);
-    UMA_HISTOGRAM_COUNTS_1000(
-        "WebCore.FindInPage.NumberOfTasksPerRequest.Aborted",
-        task_count_for_current_request_);
-  } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES("WebCore.FindInPage.TotalTaskDuration.Finished",
-                               total_task_duration_for_current_request_);
-    UMA_HISTOGRAM_MEDIUM_TIMES(
-        "WebCore.FindInPage.RequestDuration.Finished",
-        base::TimeTicks::Now() - current_request_start_time_);
-    UMA_HISTOGRAM_COUNTS_1000(
-        "WebCore.FindInPage.NumberOfTasksPerRequest.Finished",
-        task_count_for_current_request_);
-  }
 }
 
 LocalFrame* FindTaskController::GetLocalFrame() const {
@@ -304,13 +322,11 @@ bool FindTaskController::ShouldFindMatches(
   // time it was searched, then we don't have to search it again if the user is
   // just adding to the search string or sending the same search string again.
   if (last_find_request_completed_with_no_matches_ &&
-      !last_search_string_.IsEmpty()) {
+      !last_search_string_.empty()) {
     // Check to see if the search string prefixes match.
-    String previous_search_prefix =
-        search_text.Substring(0, last_search_string_.length());
-
-    if (previous_search_prefix == last_search_string_)
+    if (search_text.starts_with(last_search_string_)) {
       return false;  // Don't search this frame, it will be fruitless.
+    }
   }
 
   return true;

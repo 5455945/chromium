@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,21 @@
 
 #import <Foundation/Foundation.h>
 
+#import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/main_controller.h"
-#include "ios/chrome/browser/chrome_url_constants.h"
-#import "ios/chrome/browser/main/browser.h"
-#import "ios/chrome/browser/ui/commands/browser_commands.h"
-#import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/ui/main/browser_interface_provider.h"
-#import "ios/chrome/browser/ui/main/scene_controller.h"
-#import "ios/chrome/browser/ui/main/scene_controller_testing.h"
-#import "ios/chrome/browser/ui/main/scene_state.h"
-#import "ios/chrome/browser/ui/tab_switcher/tab_grid/tab_grid_coordinator.h"
-#import "ios/chrome/browser/url_loading/url_loading_params.h"
-#import "ios/chrome/browser/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/scene/coordinator/scene_coordinator.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_controller_testing.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
+#import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/shared/public/commands/browser_commands.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 
 namespace chrome_test_util {
@@ -38,15 +41,10 @@ SceneState* GetSceneStateForWindowWithNumber(int windowNumber) {
   return nil;
 }
 
-id<BrowserInterfaceProvider> GetInterfaceProviderForWindowWithNumber(
+id<BrowserProviderInterface> GetBrowserProviderInterfaceForWindowWithNumber(
     int windowNumber) {
-  return GetSceneStateForWindowWithNumber(windowNumber).interfaceProvider;
-}
-
-// Returns the browser for the current mode.
-Browser* GetCurrentBrowserForWindowWithNumber(int windowNumber) {
-  return GetInterfaceProviderForWindowWithNumber(windowNumber)
-      .currentInterface.browser;
+  return GetSceneStateForWindowWithNumber(windowNumber)
+      .browserProviderInterface;
 }
 
 // Returns the WebStateList for the current mode. Or nullptr of there is no
@@ -58,6 +56,11 @@ WebStateList* GetCurrentWebStateListForWindowWithNumber(int windowNumber) {
 
 }  // namespace
 
+Browser* GetCurrentBrowserForWindowWithNumber(int windowNumber) {
+  return GetBrowserProviderInterfaceForWindowWithNumber(windowNumber)
+      .currentBrowser;
+}
+
 web::WebState* GetCurrentWebStateForWindowWithNumber(int windowNumber) {
   WebStateList* web_state_list =
       GetCurrentWebStateListForWindowWithNumber(windowNumber);
@@ -65,14 +68,14 @@ web::WebState* GetCurrentWebStateForWindowWithNumber(int windowNumber) {
 }
 
 NSUInteger GetMainTabCountForWindowWithNumber(int windowNumber) {
-  return GetInterfaceProviderForWindowWithNumber(windowNumber)
-      .mainInterface.browser->GetWebStateList()
+  return GetBrowserProviderInterfaceForWindowWithNumber(windowNumber)
+      .mainBrowser->GetWebStateList()
       ->count();
 }
 
 NSUInteger GetIncognitoTabCountForWindowWithNumber(int windowNumber) {
-  return GetInterfaceProviderForWindowWithNumber(windowNumber)
-      .incognitoInterface.browser->GetWebStateList()
+  return GetBrowserProviderInterfaceForWindowWithNumber(windowNumber)
+      .incognitoBrowser->GetWebStateList()
       ->count();
 }
 
@@ -88,10 +91,10 @@ void OpenNewTabInWindowWithNumber(int windowNumber) {
       [controller addANewTabAndPresentBrowser:browser withURLLoadParams:params];
       return;
     }
-    id<ApplicationCommands, BrowserCommands> handler =
-        static_cast<id<ApplicationCommands, BrowserCommands>>(
-            GetCurrentBrowserForWindowWithNumber(windowNumber)
-                ->GetCommandDispatcher());
+    CommandDispatcher* dispatcher =
+        GetCurrentBrowserForWindowWithNumber(windowNumber)
+            ->GetCommandDispatcher();
+    id<SceneCommands> handler = HandlerForProtocol(dispatcher, SceneCommands);
     [handler openURLInNewTab:command];
   }
 }

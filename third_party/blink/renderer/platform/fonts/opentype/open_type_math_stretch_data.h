@@ -1,11 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_OPENTYPE_OPEN_TYPE_MATH_STRETCH_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_OPENTYPE_OPEN_TYPE_MATH_STRETCH_DATA_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/fonts/glyph.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -23,18 +22,18 @@ class PLATFORM_EXPORT OpenTypeMathStretchData {
 
   // https://docs.microsoft.com/en-us/typography/opentype/spec/math#glyphPartRecord
   struct GlyphPartRecord {
-    Glyph glyph;
-    float start_connector_length;
-    float end_connector_length;
-    float full_advance;
-    bool is_extender;
+    Glyph glyph = 0;
+    float start_connector_length = 0;
+    float end_connector_length = 0;
+    float full_advance = 0;
+    bool is_extender = false;
   };
 
-  // https://mathml-refresh.github.io/mathml-core/#the-glyphassembly-table
+  // https://w3c.github.io/mathml-core/#the-glyphassembly-table
   struct AssemblyParameters {
     float connector_overlap{0};
-    unsigned repetition_count{0};
-    unsigned glyph_count{0};
+    wtf_size_t repetition_count{0};
+    wtf_size_t glyph_count{0};
     float stretch_size{0};
     Vector<GlyphPartRecord> parts;
   };

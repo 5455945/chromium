@@ -1,21 +1,22 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+#include <tuple>
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "content/browser/renderer_host/input/synthetic_smooth_scroll_gesture.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/input/synthetic_smooth_scroll_gesture.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/common/content_switches.h"
@@ -75,12 +76,18 @@ namespace content {
 class MainThreadEventQueueBrowserTest : public ContentBrowserTest {
  public:
   MainThreadEventQueueBrowserTest() {}
+
+  MainThreadEventQueueBrowserTest(const MainThreadEventQueueBrowserTest&) =
+      delete;
+  MainThreadEventQueueBrowserTest& operator=(
+      const MainThreadEventQueueBrowserTest&) = delete;
+
   ~MainThreadEventQueueBrowserTest() override {}
 
   RenderWidgetHostImpl* GetWidgetHost() {
     return RenderWidgetHostImpl::From(shell()
                                           ->web_contents()
-                                          ->GetMainFrame()
+                                          ->GetPrimaryMainFrame()
                                           ->GetRenderViewHost()
                                           ->GetWidget());
   }
@@ -99,19 +106,15 @@ class MainThreadEventQueueBrowserTest : public ContentBrowserTest {
 
     std::u16string ready_title(u"ready");
     TitleWatcher watcher(shell()->web_contents(), ready_title);
-    ignore_result(watcher.WaitAndGetTitle());
+    std::ignore = watcher.WaitAndGetTitle();
 
     HitTestRegionObserver observer(host->GetFrameSinkId());
     observer.WaitForHitTestData();
   }
 
-  int ExecuteScriptAndExtractInt(const std::string& script) {
-    return EvalJs(shell(), script).ExtractInt();
-  }
-
   void DoMouseMove() {
     // Send a click event to cause some jankiness. This is done via a click
-    // event as ExecuteScript is synchronous.
+    // event as ExecJs is synchronous.
     SimulateMouseClick(shell()->web_contents(), 0,
                        blink::WebPointerProperties::Button::kLeft);
     auto input_msg_watcher = std::make_unique<InputMsgWatcher>(
@@ -135,19 +138,15 @@ class MainThreadEventQueueBrowserTest : public ContentBrowserTest {
 
     int mouse_move_count = 0;
     while (mouse_move_count <= 0)
-      mouse_move_count = ExecuteScriptAndExtractInt("window.mouseMoveCount");
+      mouse_move_count = EvalJs(shell(), "window.mouseMoveCount").ExtractInt();
     EXPECT_EQ(1, mouse_move_count);
 
-    int last_mouse_x =
-        ExecuteScriptAndExtractInt("window.lastMouseMoveEvent.x");
-    int last_mouse_y =
-        ExecuteScriptAndExtractInt("window.lastMouseMoveEvent.y");
-    EXPECT_EQ(20, last_mouse_x);
-    EXPECT_EQ(25, last_mouse_y);
+    EXPECT_EQ(20, EvalJs(shell(), "window.lastMouseMoveEvent.x"));
+    EXPECT_EQ(25, EvalJs(shell(), "window.lastMouseMoveEvent.y"));
   }
 
   void DoTouchMove() {
-    blink::SyntheticWebTouchEvent events[4];
+    std::array<blink::SyntheticWebTouchEvent, 4> events;
     events[0].PressPoint(10, 10);
     events[1].PressPoint(10, 10);
     events[1].MovePoint(0, 20, 20);
@@ -157,15 +156,14 @@ class MainThreadEventQueueBrowserTest : public ContentBrowserTest {
     events[3].MovePoint(0, 35, 40);
 
     // Send a click event to cause some jankiness. This is done via a click
-    // event as ExecuteScript is synchronous.
+    // event as ExecJs is synchronous.
     SimulateMouseClick(shell()->web_contents(), 0,
                        blink::WebPointerProperties::Button::kLeft);
     auto input_msg_watcher = std::make_unique<InputMsgWatcher>(
         GetWidgetHost(), blink::WebInputEvent::Type::kTouchMove);
 
     auto* root_view = GetWidgetHost()->GetView();
-    auto* input_event_router =
-        GetWidgetHost()->delegate()->GetInputEventRouter();
+    auto* input_event_router = GetWidgetHost()->GetInputEventRouter();
     for (auto& event : events)
       input_event_router->RouteTouchEvent(root_view, &event, ui::LatencyInfo());
 
@@ -178,23 +176,19 @@ class MainThreadEventQueueBrowserTest : public ContentBrowserTest {
 
     int touch_move_count = 0;
     while (touch_move_count <= 0)
-      touch_move_count = ExecuteScriptAndExtractInt("window.touchMoveCount");
+      touch_move_count = EvalJs(shell(), "window.touchMoveCount").ExtractInt();
     EXPECT_EQ(1, touch_move_count);
 
-    int last_touch_x = ExecuteScriptAndExtractInt(
-        "window.lastTouchMoveEvent.touches[0].pageX");
-    int last_touch_y = ExecuteScriptAndExtractInt(
-        "window.lastTouchMoveEvent.touches[0].pageY");
-    EXPECT_EQ(35, last_touch_x);
-    EXPECT_EQ(40, last_touch_y);
+    EXPECT_EQ(35,
+              EvalJs(shell(), "window.lastTouchMoveEvent.touches[0].pageX"));
+    EXPECT_EQ(40,
+              EvalJs(shell(), "window.lastTouchMoveEvent.touches[0].pageY"));
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MainThreadEventQueueBrowserTest);
 };
 
-// Disabled due to flaky test results: crbug.com/805666.
-#if defined(OS_WIN)
+// Disabled due to flaky test results on Windows (https://crbug.com/805666) and
+// Linux (https://crbug.com/1406591).
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #define MAYBE_MouseMove DISABLED_MouseMove
 #else
 #define MAYBE_MouseMove MouseMove
@@ -205,7 +199,7 @@ IN_PROC_BROWSER_TEST_F(MainThreadEventQueueBrowserTest, MAYBE_MouseMove) {
 }
 
 // Disabled on MacOS because it doesn't support touch input.
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #define MAYBE_TouchMove DISABLED_TouchMove
 #else
 #define MAYBE_TouchMove TouchMove

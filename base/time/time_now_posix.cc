@@ -1,27 +1,28 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "base/time/time.h"
 
 #include <stdint.h>
 #include <sys/time.h>
 #include <time.h>
-#if defined(OS_ANDROID) && !defined(__LP64__)
-#include <time64.h>
-#endif
 #include <unistd.h>
+
+#include <optional>
 
 #include "base/check.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_math.h"
+#include "base/time/time.h"
 #include "base/time/time_override.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+#if BUILDFLAG(IS_ANDROID) && !defined(__LP64__)
+#include <time64.h>
+#endif
 
 // Ensure the Fuchsia and Mac builds do not include this module. Instead,
 // non-POSIX implementation is used for sampling the system clocks.
-#if defined(OS_FUCHSIA) || defined(OS_APPLE)
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_APPLE)
 #error "This implementation is for POSIX platforms other than Fuchsia or Mac."
 #endif
 
@@ -46,21 +47,22 @@ int64_t ConvertTimespecToMicros(const struct timespec& ts) {
 // microsecond timebase. Minimum requirement is MONOTONIC_CLOCK to be supported
 // on the system. FreeBSD 6 has CLOCK_MONOTONIC but defines
 // _POSIX_MONOTONIC_CLOCK to -1.
-#if (defined(OS_POSIX) && defined(_POSIX_MONOTONIC_CLOCK) && \
-     _POSIX_MONOTONIC_CLOCK >= 0) ||                         \
-    defined(OS_BSD) || defined(OS_ANDROID)
+#if (BUILDFLAG(IS_POSIX) && defined(_POSIX_MONOTONIC_CLOCK) && \
+     _POSIX_MONOTONIC_CLOCK >= 0) ||                           \
+    BUILDFLAG(IS_BSD) || BUILDFLAG(IS_ANDROID)
 int64_t ClockNow(clockid_t clk_id) {
   struct timespec ts;
   CHECK(clock_gettime(clk_id, &ts) == 0);
   return ConvertTimespecToMicros(ts);
 }
 
-absl::optional<int64_t> MaybeClockNow(clockid_t clk_id) {
+std::optional<int64_t> MaybeClockNow(clockid_t clk_id) {
   struct timespec ts;
   int res = clock_gettime(clk_id, &ts);
-  if (res == 0)
+  if (res == 0) {
     return ConvertTimespecToMicros(ts);
-  return absl::nullopt;
+  }
+  return std::nullopt;
 }
 
 #else  // _POSIX_MONOTONIC_CLOCK
@@ -81,9 +83,9 @@ Time TimeNowIgnoringOverride() {
   // Combine seconds and microseconds in a 64-bit field containing microseconds
   // since the epoch.  That's enough for nearly 600 centuries.  Adjust from
   // Unix (1970) to Windows (1601) epoch.
-  return Time() + TimeDelta::FromMicroseconds(
-                      (tv.tv_sec * Time::kMicrosecondsPerSecond + tv.tv_usec) +
-                      Time::kTimeTToMicrosecondsOffset);
+  return Time() +
+         Microseconds((tv.tv_sec * Time::kMicrosecondsPerSecond + tv.tv_usec) +
+                      Time::kMicrosecondsFromWindowsToUnixEpoch);
 }
 
 Time TimeNowFromSystemTimeIgnoringOverride() {
@@ -96,14 +98,19 @@ Time TimeNowFromSystemTimeIgnoringOverride() {
 
 namespace subtle {
 TimeTicks TimeTicksNowIgnoringOverride() {
-  return TimeTicks() + TimeDelta::FromMicroseconds(ClockNow(CLOCK_MONOTONIC));
+  return TimeTicks() + Microseconds(ClockNow(CLOCK_MONOTONIC));
 }
 
-absl::optional<TimeTicks> MaybeTimeTicksNowIgnoringOverride() {
-  absl::optional<int64_t> now = MaybeClockNow(CLOCK_MONOTONIC);
-  if (now.has_value())
-    return TimeTicks() + TimeDelta::FromMicroseconds(now.value());
-  return absl::nullopt;
+std::optional<TimeTicks> MaybeTimeTicksNowIgnoringOverride() {
+  std::optional<int64_t> now = MaybeClockNow(CLOCK_MONOTONIC);
+  if (now.has_value()) {
+    return TimeTicks() + Microseconds(now.value());
+  }
+  return std::nullopt;
+}
+
+TimeTicks TimeTicksLowResolutionNowIgnoringOverride() {
+  return TimeTicks() + Microseconds(ClockNow(CLOCK_MONOTONIC_COARSE));
 }
 }  // namespace subtle
 
@@ -122,17 +129,37 @@ bool TimeTicks::IsConsistentAcrossProcesses() {
   return true;
 }
 
+// RealTicks ------------------------------------------------------------------
+
+namespace subtle {
+// In Linux and Android, `CLOCK_BOOTTIME` is identical to `CLOCK_MONOTONIC`
+// (which backs `TimeTicks` and `LiveTicks`), except that it includes time spent
+// in system suspension. Both clocks are derived from the same kernel timekeeper
+// and frequency adjustments (NTP), differing only by `offs_boot` which is
+// updated solely when resuming from suspend. Therefore, `CLOCK_BOOTTIME` is
+// guaranteed to advance in exact lockstep with `CLOCK_MONOTONIC` while awake.
+// See:
+// https://man7.org/linux/man-pages/man2/clock_gettime.2.html
+// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping.c
+//
+// Note: `CLOCK_BOOTTIME` is not available or equivalent on all POSIX systems,
+// but it is consistent for all platforms that use this implementation (Linux,
+// ChromeOS, and Android). Apple platforms use an alternate implementation in
+// time_apple.mm.
+time_internal::RealTicks RealTicksNowIgnoringOverride() {
+  return time_internal::RealTicks() + Microseconds(ClockNow(CLOCK_BOOTTIME));
+}
+}  // namespace subtle
+
 // ThreadTicks ----------------------------------------------------------------
 
 namespace subtle {
 ThreadTicks ThreadTicksNowIgnoringOverride() {
 #if (defined(_POSIX_THREAD_CPUTIME) && (_POSIX_THREAD_CPUTIME >= 0)) || \
-    defined(OS_ANDROID)
-  return ThreadTicks() +
-         TimeDelta::FromMicroseconds(ClockNow(CLOCK_THREAD_CPUTIME_ID));
+    BUILDFLAG(IS_ANDROID)
+  return ThreadTicks() + Microseconds(ClockNow(CLOCK_THREAD_CPUTIME_ID));
 #else
   NOTREACHED();
-  return ThreadTicks();
 #endif
 }
 }  // namespace subtle

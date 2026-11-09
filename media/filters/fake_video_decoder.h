@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,9 @@
 
 #include <list>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "media/base/callback_holder.h"
@@ -39,10 +38,17 @@ class FakeVideoDecoder : public VideoDecoder {
                    int max_parallel_decoding_requests,
                    const BytesDecodedCB& bytes_decoded_cb);
 
+  FakeVideoDecoder(const FakeVideoDecoder&) = delete;
+  FakeVideoDecoder& operator=(const FakeVideoDecoder&) = delete;
+
   ~FakeVideoDecoder() override;
 
   // Enables encrypted config supported. Must be called before Initialize().
   void EnableEncryptedConfigSupport();
+
+  // Enables returning kElidedEndOfStreamForConfigChange for config changes.
+  // Must be called before Initialize().
+  void enable_eliding_eos() { enable_eliding_eos_ = true; }
 
   // Sets whether this decoder is a platform decoder. Must be called before
   // Initialize().
@@ -87,6 +93,10 @@ class FakeVideoDecoder : public VideoDecoder {
 
   int total_bytes_decoded() const { return total_bytes_decoded_; }
 
+  int total_decoded_frames() const { return total_decoded_frames_; }
+
+  auto eos_next_configs() const { return eos_next_configs_; }
+
  protected:
   enum State {
     STATE_UNINITIALIZED,
@@ -99,7 +109,9 @@ class FakeVideoDecoder : public VideoDecoder {
   virtual scoped_refptr<VideoFrame> MakeVideoFrame(const DecoderBuffer& buffer);
 
   // Callback for updating |total_bytes_decoded_|.
-  void OnFrameDecoded(int buffer_size, DecodeCB decode_cb, Status status);
+  void OnFrameDecoded(int buffer_size,
+                      DecodeCB decode_cb,
+                      DecoderStatus status);
 
   // Runs |decode_cb| or puts it to |held_decode_callbacks_| depending on
   // current value of |hold_decode_|.
@@ -138,10 +150,14 @@ class FakeVideoDecoder : public VideoDecoder {
 
   bool fail_to_initialize_;
 
+  int total_decoded_frames_ = 0;
+
+  std::vector<VideoDecoderConfig> eos_next_configs_;
+
+  bool enable_eliding_eos_ = false;
+
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<FakeVideoDecoder> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeVideoDecoder);
 };
 
 }  // namespace media

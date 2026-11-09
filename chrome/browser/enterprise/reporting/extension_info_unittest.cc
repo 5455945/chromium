@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/test/base/testing_profile.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_constants.h"
-#include "extensions/common/value_builder.h"
 
 using extensions::mojom::ManifestLocation;
 
@@ -24,10 +24,13 @@ const char kId2[] = "abcdefghijklmnoabcdefghijklmnoac";
 const char kVersion[] = "1.0.0";
 const char kDescription[] = "an extension description.";
 const char kHomepage[] = "https://foo.com/extension";
-const char kPermission1[] = "alarms";
-const char kPermission2[] = "idle";
-const char kPermission3[] = "*://*.example.com/*";
+const char kAPIPermission1[] = "alarms";
+const char kAPIPermission2[] = "idle";
+const char kHostPermission[] = "*://*.example.com/*";
+const char kAPIPermissionOptional[] = "storage";
+const char kHostPermissionOptional[] = "https://www.example2.com/*";
 const char kAppLaunchUrl[] = "https://www.example.com/";
+const int kManifestVersion = 2;
 
 }  // namespace
 
@@ -49,21 +52,23 @@ class ExtensionInfoTest : public extensions::ExtensionServiceTestBase {
                        : extensions::ExtensionBuilder::Type::EXTENSION));
     extensionBuilder.SetID(id)
         .SetVersion(kVersion)
+        .SetManifestVersion(kManifestVersion)
         .SetManifestKey(extensions::manifest_keys::kDescription, kDescription)
         .SetManifestKey(extensions::manifest_keys::kHomepageURL, kHomepage)
         .SetLocation(location)
-        .AddPermission(kPermission1)
-        .AddPermission(kPermission2)
-        .AddPermission(kPermission3);
+        .AddAPIPermission(kAPIPermission1)
+        .AddAPIPermission(kAPIPermission2)
+        .AddHostPermission(kHostPermission)
+        .AddOptionalAPIPermission(kAPIPermissionOptional)
+        .AddOptionalHostPermission(kHostPermissionOptional);
     if (is_app) {
-      extensionBuilder.SetManifestPath({"app", "launch", "web_url"},
-                                       kAppLaunchUrl);
+      extensionBuilder.SetManifestPath("app.launch.web_url", kAppLaunchUrl);
     }
     if (from_webstore) {
       extensionBuilder.AddFlags(extensions::Extension::FROM_WEBSTORE);
     }
     auto extension = extensionBuilder.Build();
-    service()->AddExtension(extension.get());
+    registrar()->AddExtension(extension);
     return extension;
   }
 };
@@ -81,6 +86,7 @@ TEST_F(ExtensionInfoTest, ExtensionReport) {
   EXPECT_EQ(kName, actual_extension_report.name());
   EXPECT_EQ(kVersion, actual_extension_report.version());
   EXPECT_EQ(kDescription, actual_extension_report.description());
+  EXPECT_EQ(kManifestVersion, actual_extension_report.manifest_version());
 
   EXPECT_EQ(em::Extension_ExtensionType_TYPE_EXTENSION,
             actual_extension_report.app_type());
@@ -92,11 +98,14 @@ TEST_F(ExtensionInfoTest, ExtensionReport) {
   EXPECT_TRUE(actual_extension_report.enabled());
   EXPECT_FALSE(actual_extension_report.from_webstore());
 
-  EXPECT_EQ(2, actual_extension_report.permissions_size());
-  EXPECT_EQ(kPermission1, actual_extension_report.permissions(0));
-  EXPECT_EQ(kPermission2, actual_extension_report.permissions(1));
-  EXPECT_EQ(1, actual_extension_report.host_permissions_size());
-  EXPECT_EQ(kPermission3, actual_extension_report.host_permissions(0));
+  EXPECT_EQ(3, actual_extension_report.permissions_size());
+  EXPECT_EQ(kAPIPermission1, actual_extension_report.permissions(0));
+  EXPECT_EQ(kAPIPermission2, actual_extension_report.permissions(1));
+  EXPECT_EQ(kAPIPermissionOptional, actual_extension_report.permissions(2));
+  EXPECT_EQ(2, actual_extension_report.host_permissions_size());
+  EXPECT_EQ(kHostPermission, actual_extension_report.host_permissions(0));
+  EXPECT_EQ(kHostPermissionOptional,
+            actual_extension_report.host_permissions(1));
 }
 
 TEST_F(ExtensionInfoTest, MultipleExtensions) {
@@ -113,8 +122,8 @@ TEST_F(ExtensionInfoTest, MultipleExtensions) {
 
 TEST_F(ExtensionInfoTest, ExtensionDisabled) {
   auto extension = BuildExtension();
-  service()->DisableExtension(kId,
-                              extensions::disable_reason::DISABLE_USER_ACTION);
+  registrar()->DisableExtension(
+      kId, {extensions::disable_reason::DISABLE_USER_ACTION});
 
   em::ChromeUserProfileInfo info;
   AppendExtensionInfoIntoProfileReport(profile(), &info);
@@ -126,7 +135,7 @@ TEST_F(ExtensionInfoTest, ExtensionDisabled) {
 
 TEST_F(ExtensionInfoTest, ExtensionTerminated) {
   auto extension = BuildExtension();
-  service()->TerminateExtension(kId);
+  registrar()->TerminateExtension(kId);
 
   em::ChromeUserProfileInfo info;
   AppendExtensionInfoIntoProfileReport(profile(), &info);
@@ -138,7 +147,7 @@ TEST_F(ExtensionInfoTest, ExtensionTerminated) {
 
 TEST_F(ExtensionInfoTest, ExtensionBlocked) {
   auto extension = BuildExtension();
-  service()->BlockAllExtensions();
+  registrar()->BlockAllExtensions();
 
   em::ChromeUserProfileInfo info;
   AppendExtensionInfoIntoProfileReport(profile(), &info);
@@ -146,7 +155,7 @@ TEST_F(ExtensionInfoTest, ExtensionBlocked) {
   EXPECT_EQ(0, info.extensions_size());
 }
 
-TEST_F(ExtensionInfoTest, ExtensionBlacklisted) {
+TEST_F(ExtensionInfoTest, ExtensionBlocklisted) {
   auto extension = BuildExtension();
   service()->BlocklistExtensionForTest(kId);
 

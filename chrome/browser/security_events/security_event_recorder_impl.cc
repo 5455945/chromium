@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,20 @@
 #include <memory>
 #include <utility>
 
-using sync_pb::SecurityEventSpecifics;
+#include "base/time/time.h"
+#include "components/sync/protocol/gaia_password_reuse.pb.h"
+#include "components/sync/protocol/security_event_specifics.pb.h"
 
 SecurityEventRecorderImpl::SecurityEventRecorderImpl(
     std::unique_ptr<SecurityEventSyncBridge> security_event_sync_bridge,
     base::Clock* clock)
     : security_event_sync_bridge_(std::move(security_event_sync_bridge)),
       clock_(clock) {
-  DCHECK(security_event_sync_bridge_);
-  DCHECK(clock_);
+  CHECK(security_event_sync_bridge_, base::NotFatalUntil::M163);
+  CHECK(clock_, base::NotFatalUntil::M163);
 }
 
-SecurityEventRecorderImpl::~SecurityEventRecorderImpl() {}
+SecurityEventRecorderImpl::~SecurityEventRecorderImpl() = default;
 
 void SecurityEventRecorderImpl::RecordGaiaPasswordReuse(
     const sync_pb::GaiaPasswordReuse& event) {
@@ -31,12 +33,12 @@ void SecurityEventRecorderImpl::RecordGaiaPasswordReuse(
   security_event_sync_bridge_->RecordSecurityEvent(std::move(specifics));
 }
 
-base::WeakPtr<syncer::ModelTypeControllerDelegate>
+base::WeakPtr<syncer::DataTypeControllerDelegate>
 SecurityEventRecorderImpl::GetControllerDelegate() {
   if (security_event_sync_bridge_) {
     return security_event_sync_bridge_->GetControllerDelegate();
   }
-  return base::WeakPtr<syncer::ModelTypeControllerDelegate>();
+  return base::WeakPtr<syncer::DataTypeControllerDelegate>();
 }
 
 void SecurityEventRecorderImpl::Shutdown() {}

@@ -30,19 +30,23 @@
 import fnmatch
 import optparse
 import re
-import sys
+import sys  # noqa: F401
+from copy import deepcopy
 
 from blinkpy.common.path_finder import PathFinder
 
 
-class PortFactory(object):
+class PortFactory:
     PORT_CLASSES = (
         'android.AndroidPort',
         'fuchsia.FuchsiaPort',
+        'ios.IOSPort',
+        'tvos.TVOSPort',
         'linux.LinuxPort',
         'mac.MacPort',
         'mock_drt.MockDRTPort',
         'test.TestPort',
+        'webview.WebviewPort',
         'win.WinPort',
     )
 
@@ -51,7 +55,7 @@ class PortFactory(object):
 
     def _default_port(self):
         platform = self._host.platform
-        if platform.is_linux() or platform.is_freebsd():
+        if platform.is_linux():
             return 'linux'
         elif platform.is_mac():
             return 'mac'
@@ -66,49 +70,35 @@ class PortFactory(object):
         appropriate port on this platform.
         """
         port_name = port_name or self._default_port()
+        port_options = deepcopy(options) or optparse.Values()
 
-        _check_configuration_and_target(self._host.filesystem, options)
+        _update_configuration_and_target(self._host.filesystem, port_options)
 
         port_class, class_name = self.get_port_class(port_name)
         if port_class is None:
             raise NotImplementedError('unsupported platform: "%s"' % port_name)
 
         full_port_name = port_class.determine_full_port_name(
-            self._host, options,
-            class_name if 'browser_test' in port_name else port_name)
-        return port_class(self._host,
-                          full_port_name,
-                          options=options,
-                          **kwargs)
+            self._host, port_options, port_name
+        )
+        return port_class(
+            self._host, full_port_name, options=port_options, **kwargs
+        )
 
     @classmethod
     def get_port_class(cls, port_name):
         """Returns a Port subclass and its name for the given port_name."""
-        if 'browser_test' in port_name:
-            module_name, class_name = port_name.rsplit('.', 1)
+        for port_class in cls.PORT_CLASSES:
+            module_name, class_name = port_class.rsplit('.', 1)
             try:
                 module = __import__(module_name, globals(), locals(), [], -1)
             except ValueError:
-                # Python3 doesn't allow the level param to be -1. Setting it to
-                # 1 searches for modules in 1 parent directory.
+                # Python3 doesn't allow the level param to be -1. Setting it
+                # to 1 searches for modules in 1 parent directory.
                 module = __import__(module_name, globals(), locals(), [], 1)
-            port_class_name = module.get_port_class_name(class_name)
-            if port_class_name is not None:
-                return module.__dict__[port_class_name], class_name
-        else:
-            for port_class in cls.PORT_CLASSES:
-                module_name, class_name = port_class.rsplit('.', 1)
-                try:
-                    module = __import__(module_name, globals(), locals(), [],
-                                        -1)
-                except ValueError:
-                    # Python3 doesn't allow the level param to be -1. Setting it
-                    # to 1 searches for modules in 1 parent directory.
-                    module = __import__(module_name, globals(), locals(), [],
-                                        1)
-                port_class = module.__dict__[class_name]
-                if port_name.startswith(port_class.port_name):
-                    return port_class, class_name
+            port_class = module.__dict__[class_name]
+            if port_name.startswith(port_class.port_name):
+                return port_class, class_name
         return None, None
 
     def all_port_names(self, platform=None):
@@ -125,108 +115,41 @@ class PortFactory(object):
         return fnmatch.filter(self._host.builders.all_port_names(), platform)
 
     def get_from_builder_name(self, builder_name):
-        port_name = self._host.builders.port_name_for_builder_name(
-            builder_name)
+        port_name = self._host.builders.port_name_for_builder_name(builder_name)
         assert port_name, 'unrecognized builder name: "%s"' % builder_name
         return self.get(port_name, options=_builder_options(builder_name))
 
 
-def platform_options(use_globs=False):
-    return [
-        optparse.make_option(
-            '--android',
-            action='store_const',
-            dest='platform',
-            const=('android*' if use_globs else 'android'),
-            help=('Alias for --platform=android*'
-                  if use_globs else 'Alias for --platform=android')),
-        optparse.make_option(
-            '--platform',
-            action='store',
-            help=('Glob-style list of platform/ports to use (e.g., "mac*")'
-                  if use_globs else 'Platform to use (e.g., "mac-lion")')),
-    ]
-
-
-def configuration_options():
-    return [
-        optparse.make_option(
-            '--debug',
-            action='store_const',
-            const='Debug',
-            dest='configuration',
-            help='Set the configuration to Debug'),
-        optparse.make_option(
-            '-t',
-            '--target',
-            dest='target',
-            help='Specify the target build subdirectory under src/out/'),
-        optparse.make_option(
-            '--release',
-            action='store_const',
-            const='Release',
-            dest='configuration',
-            help='Set the configuration to Release'),
-        optparse.make_option(
-            '--no-xvfb',
-            action='store_false',
-            dest='use_xvfb',
-            default=True,
-            help='Do not run tests with Xvfb'),
-    ]
-
-
-def wpt_options():
-    return [
-        optparse.make_option(
-            '--no-manifest-update',
-            dest='manifest_update',
-            action='store_false',
-            default=True,
-            help=('Do not update the web-platform-tests '
-                  'MANIFEST.json unless it does not exist.')),
-    ]
-
-
-def python_server_options():
-    # TODO(suzukikeita): Remove this once all the servers run on python3 everywhere.
-    return [
-        optparse.make_option(
-            '--python-executable',
-            default=sys.executable,
-            help=('The path to the python executable to run the server in. '
-                  'Use this to run servers on the speicifed python version. '
-                  'For example, use this to run the server on python 3 while '
-                  'other components (such as python scripts) run on python 2. '
-                  'Currently, only pywebsocket supports this option. '
-                  'Default is set to sys.executable')),
-    ]
-
-
 def _builder_options(builder_name):
-    return optparse.Values({
-        'builder_name':
-        builder_name,
-        'configuration':
-        'Debug' if re.search(r'[d|D](ebu|b)g', builder_name) else 'Release',
-        'target':
-        None,
-    })
+    return optparse.Values(
+        {
+            'builder_name': builder_name,
+            'configuration': 'Debug'
+            if re.search(r'[d|D](ebu|b)g', builder_name)
+            else 'Release',
+            'target': None,
+        }
+    )
 
 
-def _check_configuration_and_target(host, options):
-    """Updates options.configuration based on options.target."""
-    if not options or not getattr(options, 'target', None):
-        return
+def _update_configuration_and_target(host, options):
+    """Updates options.configuration and options.target based on a best guess."""
+    if not getattr(options, 'target', None):
+        options.target = getattr(options, 'configuration', None) or 'Release'
 
     gn_configuration = _read_configuration_from_gn(host, options)
     if gn_configuration:
-        expected_configuration = getattr(options, 'configuration')
+        expected_configuration = getattr(options, 'configuration', None)
         if expected_configuration not in (None, gn_configuration):
-            raise ValueError('Configuration does not match the GN build args. '
-                             'Expected "%s" but got "%s".' %
-                             (expected_configuration, gn_configuration))
+            raise ValueError(
+                'Configuration does not match the GN build args. '
+                'Expected "%s" but got "%s".'
+                % (expected_configuration, gn_configuration)
+            )
         options.configuration = gn_configuration
+        return
+
+    if getattr(options, 'configuration', None):
         return
 
     if options.target in ('Debug', 'Debug_x64'):
@@ -238,18 +161,19 @@ def _check_configuration_and_target(host, options):
             'Could not determine build configuration type.\n'
             'Either switch to one of the default target directories,\n'
             'use args.gn, or specify --debug or --release explicitly.\n'
-            'If the directory is out/<dir>, then pass -t <dir>.')
+            'If the directory is out/<dir>, then pass -t <dir>.'
+        )
 
 
 def _read_configuration_from_gn(fs, options):
     """Returns the configuration to used based on args.gn, if possible."""
-    build_directory = getattr(options, 'build_directory', 'out')
-    target = options.target
+    build_directory = getattr(options, 'build_directory', None)
     finder = PathFinder(fs)
-    path = fs.join(finder.chromium_base(), build_directory, target, 'args.gn')
+    if not build_directory:
+        build_directory = fs.join(finder.chromium_base(), 'out', options.target)
+    path = fs.join(build_directory, 'args.gn')
     if not fs.exists(path):
-        path = fs.join(finder.chromium_base(), build_directory, target,
-                       'toolchain.ninja')
+        path = fs.join(build_directory, 'toolchain.ninja')
         if not fs.exists(path):
             # This does not appear to be a GN-based build directory, so we don't know
             # how to interpret it.
@@ -262,6 +186,12 @@ def _read_configuration_from_gn(fs, options):
     args = fs.read_text_file(path)
     for line in args.splitlines():
         if re.match(r'^\s*is_debug\s*=\s*false(\s*$|\s*#.*$)', line):
+            return 'Release'
+
+    # If is_debug is not set, the default is based on if is_official_build
+    # is set to true.
+    for line in args.splitlines():
+        if re.match(r'^\s*is_official_build\s*=\s*true(\s*$|\s*#.*$)', line):
             return 'Release'
 
     # If is_debug is set to anything other than false, or if it

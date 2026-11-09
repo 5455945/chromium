@@ -34,7 +34,8 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/mutation_observer.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
@@ -59,7 +60,7 @@ class CORE_EXPORT MutationObserverRegistration final
   void ClearTransientRegistrations();
   bool HasTransientRegistrations() const {
     return transient_registration_nodes_ &&
-           !transient_registration_nodes_->IsEmpty();
+           !transient_registration_nodes_->empty();
   }
   void Unregister();
 
@@ -77,12 +78,10 @@ class CORE_EXPORT MutationObserverRegistration final
     return static_cast<MutationType>(options_ & kMutationTypeAll);
   }
 
-  void AddRegistrationNodesToSet(HeapHashSet<Member<Node>>&) const;
-
   void Dispose();
 
   void Trace(Visitor*) const;
-  const char* NameInHeapSnapshot() const override {
+  const char* GetHumanReadableName() const override {
     return "MutationObserverRegistration";
   }
 
@@ -90,7 +89,7 @@ class CORE_EXPORT MutationObserverRegistration final
   Member<MutationObserver> observer_;
   WeakMember<Node> registration_node_;
   Member<Node> registration_node_keep_alive_;
-  typedef HeapHashSet<Member<Node>> NodeHashSet;
+  using NodeHashSet = GCedHeapHashSet<Member<Node>>;
   Member<NodeHashSet> transient_registration_nodes_;
 
   MutationObserverOptions options_;

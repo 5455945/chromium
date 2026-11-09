@@ -4,163 +4,367 @@
 
 ## tl;dr
 
-* After branch point, all merges will be closely reviewed (either manually or
-  automatically) by TPMs and release owners.
-* Requirements for approving merges are becoming more
-  stringent and scrutiny of merges gets higher as we get closer to the
-  stable launch date. Any necessary merges should be requested as early as
-  possible.
-* All merge candidates should have full automated unit test coverage, have been deployed in Canary
-  for at least 24 hours, and full developer confidence that change will be
-  safe.
-* When requesting merge review, please provide clear explanation for why a merge
-  is required, the criticality and impact of the issue, and ensure that
-  bug is correctly labeled for all impacted OS's.
+*   Release managers (and delegates like the security team) must review all
+    merges made to release branches
+*   Merge criteria become more strict as the stable release date approaches; use
+    Chromium Dash's [Branches page](https://chromiumdash.appspot.com/branches)
+    to understand which branches are active and what merges are acceptable for
+    each branch
+*   Ensure your change is [safe to merge](#verifying-eligibility-and-safety)
+    before initiating the merge review process unless it's time-sensitive
+*   Use Chromium Issue Tracker's [project queries](#monitoring-merge-requests) to
+    track your approved merges as well as your pending requests
+*   Use Gerrit or git to land your merge only after it's been approved
 
 ## Introduction
 
-Chrome ships across multiple channels which are built from different release
-branches. In general, changes should first land on trunk, be shipped and
-verified in a canary release, and then promoted to our Dev, Beta, and Stable
-channels overtime. However, due to many reasons and scenarios, it’s
-possible that changes may miss branch date and require a merge post branch.
+Chromium is a main-first development team; generally, all code should land on
+main then roll out to stable users only after the milestone containing the code
+is branched, stabilized and shipped to the stable channel (to learn more about
+the release cycle, click
+[here](https://chromium.googlesource.com/chromium/src.git/+/main/docs/process/release_cycle.md)).
+This is because merging (also known as cherry-picking) code to an older release
+branch introduces risk and costs time across the team. However, there are times
+when the benefits outweigh the costs and a merge might be appropriate, e.g. to
+fix a web platform regression, address a crash or patch a security
+vulnerability.
 
-**Merge**: any change that is cherry picked from trunk to a release branch.
+To ensure we make the right decisions, release managers leverage a merge review
+process to evaluate each request. They'll ask questions about the reason you
+would like to merge a change and the risk of the merge itself, and you'll work
+together to make a judgement call on whether or not the merge should be approved
+or rejected.
 
-Please read overview of [Chrome Release
-Cycle](https://chromium.googlesource.com/chromium/src.git/+/main/docs/process/release_cycle.md)
-to understand in detail how the Chrome release cycle works and understand key
-release concepts and terminology. Please read [Defining Release
-Blockers](https://chromium.googlesource.com/chromium/src.git/+/main/docs/process/release_blockers.md)
-to understand how issues/bugs are categorized as release blocking.
-List of schedule and release owners can be found at [Chrome
-Calendar](https://chromepmo.appspot.com/calendar) (Googlers only, opening to all in the near future).
+Generally, merges follow these high-level steps:
 
-## When to Request a Merge?
+*   Developers update bug with relevant details and request a merge by updating
+    the *Merge-Request* field with the requested milestones, then wait for
+    review.
+*   Release managers and automation review and approve, reject, or ask questions
+    about the merge within two business days.
+*   Developers wait for review and, if approved, land the merge ASAP.
 
-This section will discuss when and what type of bugs can be merged based on
-criticality of the issue. Please note that the scrutiny of merges
-gets higher as we get closer to the stable launch date. Merges post
-stable-rollout have a higher bar than merges prior to Stable.
+For details on each step, see below.
 
-![Chrome Merge Schedule](images/chrome_merge_schedule.png)
+**NOTE:** Because security issues (identified with *Type=Vulnerability*) follow
+a more complex flow, you may simply mark security issues as *Fixed* in the Issue
+Tracker and [automation](#security-merge-triage) will handle the remainder of
+the merge request process flow for you; simply process the merge if it is
+requested and approved.
 
-**Phase 1: First Two Weeks After Branch (two weeks before beta promotion)**
+## Requesting a merge
 
-There are bugs and polish fixes that may not necessarily be considered
-critical but help with the overall quality of the product. There are also
-scenarios where dependent CL’s are missed by hours or days. To accommodate
-these scenarios, merges will be considered for all polish bugs, regressions,
-and release blocking bugs for the first two weeks after branch point.
-Please note that merges will not be accepted for
-implementing or enabling brand new features or functionality. Features
-should already be complete. Merges will be reviewed manually and
-automatically, depending on the type of change.
+### Verifying eligibility and safety
 
-GRD file changes are allowed only during this phase. If you have a critical
-string change needed after this phase, please reach out to release owner or
-Chrome TPMs.
+Before requesting a merge, first ensure your change is a good merge candidate:
 
-**Phase 2: First Four Weeks of Beta Rollout**
+*   Ensure it meets the merge criteria (via
+    [Chromium Dash](https://chromiumdash.appspot.com/branches)) of the
+    branch(es) you'd like to merge to; merge criteria become more strict the
+    older the branch is, more details on criteria
+    [below](#merge-criteria-phases)
+*   Verify merging the change to an older branch would be safe, e.g. unlikely to
+    introduce new regressions, no major merge conflicts, automated test coverage
+    present, etc; consider adding a kill-switch & chat with your TL
+    for input if you're not sure
+*   Confirm your change fixes the issue at hand, preferably by testing on and
+    monitoring the canary channel for 24 hours post-release (see
+    [Chromium Dash](https://chromiumdash.appspot.com/commits) to determine if
+    your change has shipped)
 
-During the first four weeks of Beta, merges should only be requested if:
+    *   You may skip this step if a release manager or security team member has
+        told you that the merge is urgent, e.g. is actively blocking a release
 
-* The bug is considered either release blocking or
-  considered a high-impact regression
-* The merge is related to a feature which (1) is entirely gated behind
-  a flag and (2) does not change user functionality in a substantial way
-  (e.g. minor tweaks and metrics code are OK, workflow changes are not)
+### Updating Chromium Issue Tracker
 
-Security bugs should be consulted with
-[chrome-security@google.com](chrome-security@google.com) to
-determine criticality. If your issue does not meet the above criteria
-but you would still like to consider this merge, please reach out to
-release owner or TPMs with a detailed justification.
+Next, update the bug (generally the bug being fixed by the merge) with the
+following information present and accurate:
 
-**Phase 3: Last Two Weeks of Beta and Post Stable**
+*   Title and description clearly describing the bug being fixed
+*   Priority (*Priority*), OS (*OS*) and target milestone(s) (*Milestone*)
+    fields are set
+    *   Consider all available data when setting the priority, such as existing
+        metrics for usage of a broken feature, to ensure important merges are
+        not missed. Consider collecting new data, such as by landing new metrics
+        and estimating severity with pre-stable data. For Web Platform changes,
+        [compat
+        tools](https://www.chromium.org/blink/platform-predictability/compat-tools/)
+        such as
+        [UseCounters](https://www.chromium.org/blink/platform-predictability/compat-tools/#usecounter)
+        , [Cluster
+        Telemetry](https://www.chromium.org/blink/platform-predictability/compat-tools/#on-demand-crawl)
+        , and
+        [HTTPArchive](https://www.chromium.org/blink/platform-predictability/compat-tools/#the-http-archive)
+        may be useful.
 
-During the last 2 weeks of Beta and after stable promotion, merges
-should only be requested for critical, release blocking issues where the
-fix is low complexity.
+*   Owner, generally the person requesting / performing the merge
+*   [Release block label](./release_blockers.md) if applicable (*ReleaseBlock*
+    field*)
+*   Issue status:
 
-Security bugs should be consulted with [chrome-security@](chrome-security@google.com)
-to determine criticality.
+    *   Fixed: You're confident the issue is fixed on main, e.g. you've locally
+        built and tested the issue, no additional crash reports are generated
+        after the fix was released, etc (most issues)
+    *   In Progress (Accepted): Diagnostic merges only, e.g. to merge code to
+        track down the root cause of an issue that only exists on branch
 
-If it is unclear whether the severity of the issue meets the bar for merging
-consult with the [TPM](https://chromiumdash.appspot.com/schedule) and your
-manager.
+### Setting the Merge-Request field
 
-This table below provides key dates and phases as an example, for M61 release.
+Once you've verified all the above, you're ready to request a merge! Simply
+update the issue's *Merge-Request* field with the milestone(s) you'd like to
+merge to. Within the next hour, automation will create a new Merge Request
+issue, link it to the original (parent) issue, copy relevant metadata, and
+assign the issue to you.
 
-Key Event  | Date
-------- | --------
-Feature Freeze | June 23rd, 2017
-Branch Date | July 20th, 2017
-Branch Stabilization Period | July 20th to August 3rd, 2017
-Merge Reviews Phase 1 | July 20th to August 3rd, 2017
-Beta Rollout | August 3rd to September 12th 2017
-Merge Reviews Phase 2 | August 3rd to August 31st 2017
-Merge Reviews Phase 3 | August 31st 2017 and post Stable release
-Stable Release | September 6th, 2017 + rollout schedule
+If you don't have an existing Chromium Tracker issue, you can request a merge by
+filling out the bug template at
+[crbug.com/merge-request](https://crbug.com/merge-request).
 
-## Merge Requirements
+### Submitting the Merge Request
 
-Before requesting a merge, please ensure following conditions are met:
-*   **Full automated unit test coverage:** please add unit tests or
-    functional tests before requesting a merge.
-*   **Deployed in Canary for at least 24 hours:** change has to
-    be tested and verified in Canary or Dev, before requesting a
-    merge. Fix should be tested by either test engineering or the
-    original reporter of the bug.
-*   **Safe Merge:** Need full developer confidence that the
-    change will be a safe merge. Safe merge means that your
-    change will not introduce new regressions, or break
-    anything existing. If you are not confident that your
-    merge is fully safe, then reach out to TL or TPMs for
-    guidance.
+Follow the instruction in the new Merge Request issue. You will be asked to
+update a number of custom fields (found in the issue's sidebar) and provide a
+rationale for the merge request. After you have updated and verified the
+request, you can submit the request for review by assigning the issue to
+*merges@chromium.org*.
 
-## Merge Request
-If the merge review requirements are met (listed in
-section above) and your change fits one of the timelines
-above, please go ahead and apply the
-Merge-Request-[Milestone Number] label on the bug and
-please provide clear justification in the bug.
+## Monitoring merge requests
 
-Please provide clear explanation for why a merge is required, what is the
-criticality and impact of the issue, and ensure that bug is correctly
-labeled for all impacted OS's.
+After assigning the issue to *merges@chromium.org*, automation will evaluate
+your request and either approve it or pass it along to a release manager for
+manual evaluation; see [here](#merge-request-triage) to learn more about this
+automation. If manual review is required, release managers strive to answer all
+merge requests within two business days, but extenuating circumstances may cause
+delays.
 
-Approved merge requests in Phase 2 and Phase 3 will require a post mortem.
+At this point, following along via bug comments sent by email will always keep
+you in the loop, but you can also use the following queries in the Issue Tracker
+to track your merges:
 
-Once Merge is approved, the bug will be marked with
-Merge-Approved-[Milestone-Number] label. Please merge
-**immediately after**. Please note that if change is not
-merged in time after approval, it can be rejected.
+*   [Approved and TBD merges](https://issues.chromium.org/issues?q=assignee:me%20customfield1223087:(Approved%20%7C%20TBD)):
+    Merges that require your follow-up, either by landing the relevant merge (if
+    approved) or determining whether or not a merge is actually required and if
+    so, requesting it (if TBD)
+*   [Pending merges](https://g-issues.chromium.org/issues?q=assignee:me%20customfield1223087:Pending):
+    Merges that are pending review by automation and need additional action from
+    you. Frequently, issues remain in the state because developers have failed
+    to update the merge request issue with all required information, or the
+    request was not assigned to **merges@chromium.org**. Please follow the
+    instructions in the issue to complete the merge request, and reach out to
+    a release manager if you have any questions.
+*   [Requested
+    merges](https://issues.chromium.org/issues?q=assignee:me%20(-customfield1223134:none%20%7C%20customfield1223087:Review)):
+    Merges that are waiting for input from release managers or automation; feel
+    free to ping bugs that sit in this queue for two business days (assuming you
+    verified that the change was already deployed to canary ahead of requesting
+    a merge)
+*   [Rejected and NA merges](https://issues.chromium.org/issues?q=assignee:me%20customfield1223087:(Rejected%20%7C%20NA)):
+    Merges that were either rejected by release managers, or not applicable to
+    be merged; generally, no action is needed for these items unless you
+    disagree with a merge's rejection and wish to escalate
+*   [All merges](https://issues.chromium.org/issues?q=assignee:me%20(-customfield1223087:none%20%7C%20-customfield1223134:none)):
+    Includes every possible merge state, useful when wanting to find an item you
+    considered for merging but can't recall the state it was last in.
 
-To perform the merge see [How to merge a change to a release
-branch](https://www.chromium.org/developers/how-tos/drover).
+For a description of each label used to track the merge process, see the
+appendix [below](#merge-states-and-labels).
 
-If merge is rejected, “Merge-Rejected” label will be
-applied. If you think it’s important to consider the
-change for merge and does not meet the criteria above,
-please reach out to the release owners, TPMs or TLs for
-guidance.
+## Landing an approved merge
 
-## Merge Reviews
+Once your merge has been approved for a given milestone (via the release manager
+or automation updating the *Merge* field with *Approved-###*), you have two
+options to land the merge:
 
-The release team has an automated process that helps
-with the merge evaluation process. It will enforce many
-of the rules listed in sections above. If the rules
-above don’t pass, it will either auto-reject or flag
-for manual review. Please allow up to 24 hours for the
-automated process to take effect.
+*   Gerrit UI, easiest for clean cherry-picks or those requiring only minor
+    changes
+*   git cl cherry-pick, for more complex cherry-picks and / or when local
+    verification may be beneficial
+*   If neither of the above work, use git directly via the manual process
 
-Manual merge reviews will be performed by release
-owners and TPMs.
+Regardless of which method you choose, please ensure you land your cherry-pick
+ASAP so that it can be included in the next release built from the branch; if
+you don't merge your cherry-pick soon after approval, it will eventually be
+rejected for merge.
 
-## Merge Process
+**NOTE:**  Ensure you link to the bug that has merge approval for the relevant
+milestone. Not linking to a bug that has approval can cause delay to your CL
+landing. If the merge request is for a single change, add `Fixed: <bug number>`
+to the change description. If the merge request is for multiple changes, add
+`Fixed: <bug number>` to the final change description, `Bug: <bug number>`
+to all other change descriptions.
 
-Once the merge has been approved, please see
-[How to merge a change to a release
-branch](https://sites.google.com/a/chromium.org/dev/developers/how-tos/drover)
-for technical details on performing the merge.
+Once the cherry-pick has landed, a bot will update the *Merge* field with
+*Merged-###* label. If `Fixed:` was used, the bug will be closed.
+
+### Using Gerrit UI
+
+Select the "..." button in the Gerrit UI, then choose "Cherry Pick". When
+prompted for a branch, enter *refs/branch-heads/####*, where #### corresponds to
+the release branch you are merging to (available on
+[Chromium Dash](https://chromiumdash.appspot.com/branches) in the "Chromium"
+column).
+
+Once the cherry-pick CL is prepared, you can bypass code review (but not OWNERS
+approval) within 14 days of the original change by adding the Rubber Stamper bot
+(rubber-stamper@appspot.gserviceaccount.com) as a reviewer. If the CL meets the
+[Rubber Stamper criteria](https://chromium.googlesource.com/infra/infra/+/refs/heads/main/go/src/infra/appengine/rubber-stamper/README.md),
+the bot will vote *Bot-Commit+1* to bypass code review. If the CL is marked
+*Auto-Submit+1*, the bot will also submit the CL to the CQ on your behalf.
+
+### Using git cl
+
+Basic:
+
+```
+git cl cherry-pick --branch=refs/branch-heads/#### --bug=######### \
+  <commit hash>
+```
+
+Creating a chain of cherry-picked CLs:
+
+```
+git cl cherry-pick --branch=refs/branch-heads/7727 --bug=40186427 \
+  <first commit hash> \
+  <second commit hash> \
+  ...
+```
+
+On success, you'll see something like this:
+
+```
+Creating chain of 2 cherry pick(s)...
+Attempting cherry-pick of original commit dd649e9e2adbbc9edc41ae3e3158772bc18a411f ("Rewrite test for crbug.com/40095159 to work with navigation queueing") onto base refs/branch-heads/7727 tip...
+Created cherry pick of "Rewrite test for crbug.com/40095159 to work with navigation queueing": https://chromium-review.googlesource.com/#/c/7695354/
+Using base commit 9f80fa4f23359851564b0c1e260b570581d09720 from parent CL 7695354.
+Attempting cherry-pick of original commit 369b2d9004d1c2c65efa0829407f77bc7bc47450 ("Clean up code for the launched navigation queueing feature") onto base 9f80fa4f23359851564b0c1e260b570581d09720...
+Created cherry pick of "Clean up code for the launched navigation queueing feature": https://chromium-review.googlesource.com/#/c/7695217/
+```
+
+If you suspect a cherry-pick may have conflicts, use `--allow-conflicts` to
+generate a cherry-pick with conflict markers. Once the change is created, patch
+it in locally to fix the conflicts and verify it works:
+
+```
+git cl patch -f <CL / gerrit URL> -b <new branch name>
+gclient sync
+```
+
+If cherry-picking a chain of CLs breaks in the middle for some reason, you can
+resume where you left off using `--parent-change-num=<last CL created
+successfully>`. For example, suppose the previous cherry-pick chain only
+successfully created the first CL. After making any local fixes and uploading,
+you can resume with:
+
+```
+git cl cherry-pick --branch=refs/branch-heads/7727 \
+  --parent-change-num 7695354 \
+  369b2d9004d1c2c65efa0829407f77bc7bc47450
+```
+
+### Using git (manual)
+
+The commands below should set up your environment to be able to successfully
+upload a cherry-pick to a release branch, where *####* corresponds to the
+release branch you are merging to (available on
+[Chromium Dash](https://chromiumdash.appspot.com/branches) in the "Chromium"
+column):
+
+```
+$ gclient sync --with_branch_heads
+$ git fetch
+$ git checkout -b BRANCH_NAME refs/remotes/branch-heads/####
+$ git cl upstream branch-heads/####
+$ git cherry-pick -x COMMIT_HASH_MAIN
+$ gclient sync
+```
+
+From here, your environment should be ready to adjust the change as required;
+use ninja to build and test your changes, and when ready upload for review:
+
+```
+$ git cl upload
+```
+
+**Adjust the change description** to omit the "Change-Id: ..." line from
+original patch, otherwise you may experience issues when uploading the change to
+Gerrit. Once complete, use Gerrit to initiate review and approval of the merge
+as TBR has been discontinued.
+
+Other tips & tricks when merging with git via release branches: * Consider using
+multiple working directories when creating the release branch * Editing the
+change description to denote this is a merge (e.g. "Merge to release branch" at
+the top) will help reviewers distinguish between the cherry-pick and the
+original change
+
+## Merge automation
+
+The Chrome team has built automation via
+[Blintz](https://www.chromium.org/issue-tracking/autotriage), formerly known as
+Sheriffbot, to assist in several merge flows: security merge triage, general
+merge request triage, and preventing missed merges.
+
+### Security merge triage
+
+Given the additional complexity inherent in security merges, the security team
+has built custom automation to handle this flow end to end; simply mark any
+security issue as *Fixed* and Blintz will evaluate applicable milestones,
+determine if merges are required and automatically request them if need be.
+
+### Merge request triage
+
+To reduce release manager toil, Blintz performs the first pass review of all
+merge requests; it may auto-approve the issue if it can detect the issue meets
+the right criteria for the current merge phase (e.g. a ReleaseBlock-Dev issue
+requesting a merge before beta promotion). If it cannot decide, it will pass the
+issue to a release manager for manual review.
+
+Blintz only takes action on merge requests when the merge request issue (not the
+original issue) is assigned to *merges@chromium.org*.
+
+### Preventing missed merges
+
+To avoid the situation where a critical issue is present on a release branch
+but the fix isn't merged, Blintz evaluates all release-blocking issues
+targeting a milestone that has already branched and updates the *Merge* field
+with *TBD-##* if the issue was marked as fixed after branch day but hasn't been
+merged. When this occurs, developers should evaluate the issue and either
+request a merge if required (e.g. the fix did miss the release branch point) by
+updating the *Merge-Request* field, or update the *Merge* field with *NA-###*
+(e.g. the fix is present in the release branch already or the merge is
+unnecessary for other reasons).
+
+## Appendix
+
+### Merge criteria phases
+
+The table below describes the different phases that each milestone progresses
+through during its release cycle; this data is available via the Chromium Dash
+[front-end](https://chromiumdash.appspot.com/branches) and
+[API](https://chromiumdash.appspot.com/fetch_milestones).
+
+| Branch Phase | Period Begins | Period Ends | Acceptable Merges Include Fixes For: |
+| --- | --- | --- | --- |
+| beta | M(X) Branch | M(X) Stable Cut | Non-functional issues for Finch-gated features (e.g. add metrics, fix crash), noticeable new regressions, any release blockers, any security issues, emergency string issues (.GRD changes) |
+| stable | M(X) Stable Cut | M(X+1) Stable | Urgent new regressions (especially user reports), urgent release blockers, important security issues (medium severity or higher) requested by the security team |
+| extended (if applicable) | M(X+1) Stable | M(X+2) Stable | Important security issues (medium severity or higher) applicable to any platform supported by Chrome Browser requested by the security team |
+
+**NOTE:** Merge requests for changes introducing or modifying flag definitions will not be accepted for release branches; all flag changes must land before the branch cut date.
+
+### Merge states and labels
+
+The table below describes the different merge states applied via a bug's
+metadata fields. All merge states (except *Pending*) follow the form
+*[State]-###*, where ### corresponds to the applicable milestone. If multiple
+merges are required, these labels may appear multiple times on the same bug in
+different states.
+
+| Field | Value | Step Owner | Next Steps |
+| --- | --- | --- | --- |
+| Merge-Request | ### | Release manager | Automation will review and either approve / reject directly, or pass the review to a release manager for manual evaluation |
+| Merge | Pending | Issue owner | Issue owner should follow the instructions in the merge request and assign it to *merges@chromium.org* to begin review |
+| Merge | Review-### | Release manager | Release manager will evaluate and either approve, reject, or request additional information within two business days |
+| Merge | Approved-### | Issue owner | Issue owner should cherry-pick the fix to the appropriate release branch ASAP |
+| Merge | Merged-### | None | N/A; merge has already been landed, no further work required for given milestone |
+| Merge | Rejected-### | Issue owner | Issue owner should re-request a merge to escalate if they feel the merge was erroneously rejected and should be re-evaluated |
+| Merge | TBD-### | Issue owner | Issue owner should evaluate if a merge is required, then remove *TBD-##* and replace it with *NA-##* (if no merge needed) or re-request a merge (if needed) |
+| Merge | NA-### | None | N/A; merge is not required to the relevant milestone, no further work required for given milestone |

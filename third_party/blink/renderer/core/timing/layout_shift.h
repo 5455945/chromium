@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
 #include "third_party/blink/renderer/core/timing/layout_shift_attribution.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
@@ -22,6 +23,9 @@ class CORE_EXPORT LayoutShift final : public PerformanceEntry {
   // Maximum number of attributions (shifted elements) to record in any single
   // animation frame.
   static constexpr int kMaxAttributions = 5;
+  // AttributionList contains up to kMaxAttributions elements, sorted by
+  // impact area in descending order (largest first). Impact area is the
+  // union of previousRect and currentRect for each attribution.
   typedef HeapVector<Member<LayoutShiftAttribution>, kMaxAttributions>
       AttributionList;
 
@@ -29,17 +33,21 @@ class CORE_EXPORT LayoutShift final : public PerformanceEntry {
                              double value,
                              bool input_detected,
                              double input_timestamp,
-                             AttributionList sources);
+                             AttributionList sources,
+                             DOMWindow* source,
+                             uint64_t navigation_id);
 
   explicit LayoutShift(double start_time,
                        double value,
                        bool input_detected,
                        double input_timestamp,
-                       AttributionList sources);
+                       AttributionList sources,
+                       DOMWindow* source,
+                       uint64_t navigation_id);
 
   ~LayoutShift() override;
 
-  AtomicString entryType() const override;
+  const AtomicString& entryType() const override;
   PerformanceEntryType EntryTypeEnum() const override;
 
   double value() const { return value_; }

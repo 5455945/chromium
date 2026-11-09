@@ -1,12 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef PDF_DOCUMENT_METADATA_H_
 #define PDF_DOCUMENT_METADATA_H_
 
+#include <optional>
 #include <string>
 
+#include "base/i18n/language_tag.h"
 #include "base/time/time.h"
 
 namespace chrome_pdf {
@@ -40,11 +42,11 @@ enum class FormType {
 
 // Document properties, including those specified in the document information
 // dictionary (see section 14.3.3 "Document Information Dictionary" of the ISO
-// 32000-1 standard).
+// 32000-1:2008 spec).
 struct DocumentMetadata {
   DocumentMetadata();
-  DocumentMetadata(const DocumentMetadata&) = delete;
-  DocumentMetadata& operator=(const DocumentMetadata&) = delete;
+  DocumentMetadata(DocumentMetadata&&) noexcept;
+  DocumentMetadata& operator=(DocumentMetadata&& other) noexcept;
   ~DocumentMetadata();
 
   // Version of the document.
@@ -57,16 +59,12 @@ struct DocumentMetadata {
   size_t page_count = 0;
 
   // Whether the document is optimized by linearization (see annex F "Linearized
-  // PDF" of the ISO 32000-1 standard).
+  // PDF" of the ISO 32000-1:2008 spec).
   bool linearized = false;
 
   // Whether the document contains file attachments (see section 12.5.6.15 "File
-  // Attachment Annotations" of the ISO 32000-1 standard).
+  // Attachment Annotations" of the ISO 32000-1:2008 spec).
   bool has_attachments = false;
-
-  // Whether the document is tagged (see section 14.8 "Tagged PDF" of the ISO
-  // 32000-1 standard).
-  bool tagged = false;
 
   // The type of form contained in the document.
   FormType form_type = FormType::kNone;
@@ -95,6 +93,9 @@ struct DocumentMetadata {
 
   // The date and time the document was most recently modified.
   base::Time mod_date;
+
+  // The document's language tag.
+  std::optional<base::i18n::LanguageTag> language_tag;
 };
 
 }  // namespace chrome_pdf

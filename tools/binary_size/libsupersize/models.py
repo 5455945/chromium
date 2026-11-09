@@ -1,34 +1,9 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Classes that comprise the data model for binary size analysis.
 
-The primary classes are Symbol, and SymbolGroup.
-
-Description of common properties:
-  * address: The start address of the symbol.
-        May be 0 (e.g. for .bss or for SymbolGroups).
-  * size: The number of bytes this symbol takes up, including padding that comes
-        before |address|.
-  * aliases: List of symbols that represent the same bytes. The |aliases| of
-        each symbol in this list points to the same list instance.
-  * num_aliases: The number of symbols with the same address (including self).
-  * pss: size / num_aliases.
-  * padding: The number of bytes of padding before |address| due to this symbol.
-  * padding_pss: padding / num_aliases.
-  * name: Names with templates and parameter list removed.
-        Never None, but will be '' for anonymous symbols.
-  * template_name: Name with parameter list removed (but templates left in).
-        Never None, but will be '' for anonymous symbols.
-  * full_name: Name with template and parameter list left in.
-        Never None, but will be '' for anonymous symbols.
-  * is_anonymous: True when the symbol exists in an anonymous namespace (which
-        are removed from both full_name and name during normalization).
-  * container: A (shared) Container instance.
-  * section_name: E.g. ".text", ".rodata", ".data.rel.local"
-  * section: The second character of |section_name|. E.g. "t", "r", "d".
-  * component: The team that owns this feature.
-        Never None, but will be '' when no component exists.
+See docs/data_model.md for an explanation of what fields do.
 """
 
 import collections
@@ -42,29 +17,30 @@ import match_util
 
 BUILD_CONFIG_GIT_REVISION = 'git_revision'
 BUILD_CONFIG_GN_ARGS = 'gn_args'
-BUILD_CONFIG_LINKER_NAME = 'linker_name'
-BUILD_CONFIG_TOOL_PREFIX = 'tool_prefix'  # Path relative to SRC_ROOT.
+BUILD_CONFIG_TITLE = 'title'
+BUILD_CONFIG_URL = 'url'
+BUILD_CONFIG_OUT_DIRECTORY = 'out_directory'
 
-BUILD_CONFIG_KEYS = (
-    BUILD_CONFIG_GIT_REVISION,
-    BUILD_CONFIG_GN_ARGS,
-    BUILD_CONFIG_LINKER_NAME,
-    BUILD_CONFIG_TOOL_PREFIX,
-)
+METRICS_COUNT = 'COUNT'
+METRICS_COUNT_RELOCATIONS = 'Relocations'
+METRICS_SIZE = 'SIZE'
+METRICS_SIZE_APK_FILE = 'APK File'
 
 METADATA_APK_FILENAME = 'apk_file_name'  # Path relative to output_directory.
-METADATA_APK_SIZE = 'apk_size'  # File size of apk in bytes.
 METADATA_APK_SPLIT_NAME = 'apk_split_name'  # Name of the split if applicable.
 METADATA_ZIPALIGN_OVERHEAD = 'zipalign_padding'  # Overhead from zipalign.
 METADATA_SIGNING_BLOCK_SIZE = 'apk_signature_block_size'  # Size in bytes.
 METADATA_MAP_FILENAME = 'map_file_name'  # Path relative to output_directory.
-METADATA_ELF_ARCHITECTURE = 'elf_arch'  # "Machine" field from readelf -h
+METADATA_ELF_ALGORITHM = 'elf_algorithm'  # linker_map / dwarf / sections.
+METADATA_ELF_APK_PATH = 'elf_apk_path'  # Path of the .so within the .apk.
+METADATA_ELF_ARCHITECTURE = 'elf_arch'  # "arm", "arm64", "x86", or "x64".
 METADATA_ELF_FILENAME = 'elf_file_name'  # Path relative to output_directory.
 METADATA_ELF_MTIME = 'elf_mtime'  # int timestamp in utc.
 METADATA_ELF_BUILD_ID = 'elf_build_id'
-METADATA_ELF_RELOCATIONS_COUNT = 'elf_relocations_count'
+METADATA_PROGUARD_MAPPING_FILENAME = 'proguard_mapping_file_name'
 
 # New sections should also be added to the SuperSize UI.
+SECTION_ARSC = '.arsc'
 SECTION_BSS = '.bss'
 SECTION_BSS_REL_RO = '.bss.rel.ro'
 SECTION_DATA = '.data'
@@ -76,57 +52,72 @@ SECTION_OTHER = '.other'
 SECTION_PAK_NONTRANSLATED = '.pak.nontranslated'
 SECTION_PAK_TRANSLATIONS = '.pak.translations'
 SECTION_PART_END = '.part.end'
+SECTION_RELRO_PADDING = '.relro_padding'
 SECTION_RODATA = '.rodata'
+SECTION_TBSS = '.tbss'
+SECTION_TDATA = '.tdata'
+SECTION_TDATA_REL_RO = '.tdata.rel.ro'
 SECTION_TEXT = '.text'
 # Used by SymbolGroup when they contain a mix of sections.
 SECTION_MULTIPLE = '.*'
 
 APK_PREFIX_PATH = '$APK'
+OUTLINES_PREFIX_PATH = '$APK/$OUTLINES'
+NATIVE_PREFIX_PATH = '$NATIVE'
+SYSTEM_PREFIX_PATH = '$SYSTEM'
 
 DEX_SECTIONS = (
-    SECTION_DEX,
-    SECTION_DEX_METHOD,
-)
-NATIVE_SECTIONS = (
-    SECTION_BSS,
-    SECTION_BSS_REL_RO,
-    SECTION_DATA,
-    SECTION_DATA_REL_RO,
-    SECTION_DATA_REL_RO_LOCAL,
-    SECTION_PART_END,
-    SECTION_RODATA,
-    SECTION_TEXT,
+  SECTION_DEX,
+  SECTION_DEX_METHOD,
 )
 BSS_SECTIONS = (
-    SECTION_BSS,
-    SECTION_BSS_REL_RO,
-    SECTION_PART_END,
+  SECTION_BSS,
+  SECTION_BSS_REL_RO,
+  SECTION_PART_END,
+  SECTION_RELRO_PADDING,
+  SECTION_TBSS,
+  'google_malloc_bss',
+)
+NATIVE_SECTIONS = BSS_SECTIONS + (
+  SECTION_DATA,
+  SECTION_DATA_REL_RO,
+  SECTION_DATA_REL_RO_LOCAL,
+  SECTION_RODATA,
+  SECTION_TDATA,
+  SECTION_TDATA_REL_RO,
+  SECTION_TEXT,
 )
 PAK_SECTIONS = (
-    SECTION_PAK_NONTRANSLATED,
-    SECTION_PAK_TRANSLATIONS,
+  SECTION_PAK_NONTRANSLATED,
+  SECTION_PAK_TRANSLATIONS,
 )
 
 CONTAINER_MULTIPLE = '*'
+CONTAINER_NAME_EMPTY = '(empty)'
 
-SECTION_NAME_TO_SECTION = {
-    SECTION_BSS: 'b',
-    SECTION_BSS_REL_RO: 'b',
-    SECTION_DATA: 'd',
-    SECTION_DATA_REL_RO_LOCAL: 'R',
-    SECTION_DATA_REL_RO: 'R',
-    SECTION_DEX: 'x',
-    SECTION_DEX_METHOD: 'm',
-    SECTION_OTHER: 'o',
-    SECTION_PART_END: 'b',
-    SECTION_PAK_NONTRANSLATED: 'P',
-    SECTION_PAK_TRANSLATIONS: 'p',
-    SECTION_RODATA: 'r',
-    SECTION_TEXT: 't',
-    SECTION_MULTIPLE: '*',
+# Never remove from this map. It needs historic entries to diff against
+# old .size files.
+SECTION_NAME_TO_SECTION = {n: 'b' for n in BSS_SECTIONS} | {
+  SECTION_ARSC: 'a',
+  SECTION_DATA: 'd',
+  SECTION_DATA_REL_RO_LOCAL: 'R',
+  SECTION_DATA_REL_RO: 'R',
+  SECTION_DEX_METHOD: 'm',
+  SECTION_DEX: 'x',
+  SECTION_MULTIPLE: '*',
+  SECTION_OTHER: 'o',
+  SECTION_PAK_NONTRANSLATED: 'P',
+  SECTION_PAK_TRANSLATIONS: 'p',
+  SECTION_PART_END: 'b',
+  SECTION_RODATA: 'r',
+  SECTION_TDATA: 'd',
+  SECTION_TDATA_REL_RO: 'R',
+  SECTION_TEXT: 't',
 }
 
-SECTION_TO_SECTION_NAME = collections.OrderedDict((
+SECTION_TO_SECTION_NAME = collections.OrderedDict(
+  (
+    ('a', SECTION_ARSC),
     ('t', SECTION_TEXT),
     ('r', SECTION_RODATA),
     ('R', SECTION_DATA_REL_RO),
@@ -137,7 +128,8 @@ SECTION_TO_SECTION_NAME = collections.OrderedDict((
     ('p', SECTION_PAK_TRANSLATIONS),
     ('P', SECTION_PAK_NONTRANSLATED),
     ('o', SECTION_OTHER),
-))
+  )
+)
 
 
 # Relevant for native symbols. All anonymous:: namespaces are removed during
@@ -174,6 +166,9 @@ FLAG_COVERED = 256
 # Relevant for non-locale .pak symbols. Indicates a pak entry is stored
 # uncompressed.
 FLAG_UNCOMPRESSED = 512
+# Relevant for .data, .data.rel.ro & .rodata symbols. Indicates the symbol is a
+# Feature flag placed in a section with the .cr_features suffix.
+FLAG_FEATURE = 1024
 
 
 DIFF_STATUS_UNCHANGED = 0
@@ -200,34 +195,42 @@ def ClassifySections(section_names):
     *implicitly* contribute to binary size -- these get lumped into the .other
     section.
   """
-  unsummed_sections = set(name for name in section_names
-                          if name in BSS_SECTIONS or '(' in name)
-  summed_sections = (set(section_names)
-                     & set(SECTION_NAME_TO_SECTION.keys()) - unsummed_sections)
+  unsummed_sections = set(
+    name for name in section_names if name in BSS_SECTIONS or '(' in name
+  )
+  summed_sections = (
+    set(section_names) & set(SECTION_NAME_TO_SECTION.keys()) - unsummed_sections
+  )
   return frozenset(unsummed_sections), frozenset(summed_sections)
 
 
-class BaseContainer(object):
+class BaseContainer:
   """Base class for BaseContainer and DeltaContainer.
 
   Fields:
-    name: Container name. Must be unique among (non-Diff) Containers.
     short_name: Short container name for compact display. This, also needs to be
         unique among containers in the same SizeInfo, and can be ''.
     classified_sections: Cache for ClassifySections().
   """
+
   __slots__ = (
-      'name',
-      'short_name',
-      '_classified_sections',
+    'short_name',
+    '_classified_sections',
   )
 
-  def __init__(self, name):
+  def __init__(self):
     # name == '' hints that only one container exists, and there's no need to
     # distinguish them. This can affect console output.
-    self.name = name
     self.short_name = None  # Assigned by AssignShortNames().
     self._classified_sections = None
+
+  def __str__(self):
+    return self.name
+
+  def __repr__(self):
+    return '{}(name={}, short_name={})'.format(
+      self.__class__.__name__, self.name, self.short_name
+    )
 
   def ClassifySections(self):
     if self._classified_sections is None:
@@ -239,23 +242,40 @@ class BaseContainer(object):
     for i, c in enumerate(containers):
       c.short_name = str(i) if c.name else ''
 
+  @property
+  def name(self):
+    pass
+
+  @property
+  def section_sizes(self):
+    pass
+
 
 class Container(BaseContainer):
   """Info for a single SuperSize input file (e.g., APK file).
 
   Fields:
     metadata: A dict.
+    name: Container name. Must be unique among (non-Diff) Containers.
     section_sizes: A dict of section_name -> size.
   """
+
   __slots__ = (
-      'metadata',
-      'section_sizes',
+    'metadata',
+    'name',
+    'section_sizes',
+    'metrics_by_file',
   )
 
-  def __init__(self, name, metadata, section_sizes):
-    super(Container, self).__init__(name)
+  def __init__(self, name, metadata, section_sizes, metrics_by_file):
+    super().__init__()
+    self.name = name
     self.metadata = metadata or {}
     self.section_sizes = section_sizes  # E.g. {SECTION_TEXT: 0}
+    self.metrics_by_file = metrics_by_file
+
+  def IsEmpty(self):
+    return self.name == CONTAINER_NAME_EMPTY
 
   @staticmethod
   def Empty():
@@ -265,20 +285,30 @@ class Container(BaseContainer):
     exist, unfortunately). Creating a new instance instead of using a global
     singleton for robustness.
     """
-    return Container(name='(empty)', metadata={}, section_sizes={})
+    return Container(
+      name=CONTAINER_NAME_EMPTY,
+      metadata={},
+      section_sizes={},
+      metrics_by_file={},
+    )
 
 
 class DeltaContainer(BaseContainer):
   """Delta version of Container."""
+
   __slots__ = (
-      'before',
-      'after',
+    'before',
+    'after',
   )
 
-  def __init__(self, name, before, after):
-    super(DeltaContainer, self).__init__(name)
+  def __init__(self, before, after):
+    super().__init__()
     self.before = before
     self.after = after
+
+  @property
+  def name(self):
+    return self.after.name if self.before.IsEmpty() else self.before.name
 
   @property
   def section_sizes(self):
@@ -286,12 +316,25 @@ class DeltaContainer(BaseContainer):
     ret.update({k: -v for k, v in self.before.section_sizes.items()})
     return dict(ret)
 
+  @property
+  def metrics_by_file(self):
+    keys = set(self.before.metrics_by_file.keys()) | set(
+      self.after.metrics_by_file.keys()
+    )
+    ret = {}
+    for key in keys:
+      before_contents = self.before.metrics_by_file.get(key, {})
+      after_contents = self.after.metrics_by_file.get(key, {})
+      delta_contents = collections.Counter(after_contents)
+      delta_contents.update({k: -v for k, v in before_contents.items()})
+      ret[key] = dict(delta_contents)
+    return ret
 
-class BaseSizeInfo(object):
+
+class BaseSizeInfo:
   """Base class for SizeInfo and DeltaSizeInfo.
 
   Fields:
-    build_config: A dict of build configurations.
     containers: A list of Containers.
     raw_symbols: A SymbolGroup containing all top-level symbols (no groups).
     symbols: A SymbolGroup of all symbols, where symbols have been
@@ -300,19 +343,18 @@ class BaseSizeInfo(object):
     native_symbols: Subset of |symbols| that are from native code.
     pak_symbols: Subset of |symbols| that are from pak files.
   """
+
   __slots__ = (
-      'build_config',
-      'containers',
-      'raw_symbols',
-      '_symbols',
-      '_native_symbols',
-      '_pak_symbols',
+    'containers',
+    'raw_symbols',
+    '_symbols',
+    '_native_symbols',
+    '_pak_symbols',
   )
 
-  def __init__(self, build_config, containers, raw_symbols, symbols=None):
+  def __init__(self, containers, raw_symbols, symbols=None):
     if isinstance(raw_symbols, list):
       raw_symbols = SymbolGroup(raw_symbols)
-    self.build_config = build_config
     self.containers = containers
     self.raw_symbols = raw_symbols
     self._symbols = symbols
@@ -362,22 +404,29 @@ class SizeInfo(BaseSizeInfo):
 
   Fields:
     size_path: Path to .size file this was loaded from (or None).
+    is_sparse: Whether the list of symbols is sparse.
+    build_config: A dict of build configurations.
   """
+
   __slots__ = (
-      'size_path',
+    'build_config',
+    'size_path',
+    'is_sparse',
   )
 
-  def __init__(self,
-               build_config,
-               containers,
-               raw_symbols,
-               symbols=None,
-               size_path=None):
-    super(SizeInfo, self).__init__(build_config,
-                                   containers,
-                                   raw_symbols,
-                                   symbols=symbols)
+  def __init__(
+    self,
+    build_config,
+    containers,
+    raw_symbols,
+    symbols=None,
+    size_path=None,
+    is_sparse=False,
+  ):
+    super().__init__(containers, raw_symbols, symbols=symbols)
+    self.build_config = build_config
     self.size_path = size_path
+    self.is_sparse = is_sparse
 
   @property
   def metadata_legacy(self):
@@ -392,6 +441,31 @@ class SizeInfo(BaseSizeInfo):
       metadata[k] = v
     return metadata
 
+  def MakeSparse(self, filtered_symbols):
+    """Make this SizeInfo contain only a subset of symbols.
+
+    Args:
+      filtered_symbols: Which symbols to include.
+    """
+    self.is_sparse = True
+
+    # Any aliases of sparse symbols must also be included, or else file
+    # parsing will attribute symbols that happen to follow an incomplete alias
+    # group to that alias group.
+    representative_symbols = set()
+    raw_symbols = []
+    logging.debug('Expanding filtered_symbols aliases')
+    for sym in filtered_symbols:
+      if sym.aliases:
+        num_syms = len(representative_symbols)
+        representative_symbols.add(sym.aliases[0])
+        if num_syms < len(representative_symbols):
+          raw_symbols.extend(sym.aliases)
+      else:
+        raw_symbols.append(sym)
+    logging.debug('Done expanding filtered_symbols')
+    self.raw_symbols = SymbolGroup(raw_symbols)
+
 
 class DeltaSizeInfo(BaseSizeInfo):
   """What you get when you Diff() two SizeInfo objects.
@@ -399,24 +473,165 @@ class DeltaSizeInfo(BaseSizeInfo):
   Fields:
     before: SizeInfo for "before".
     after: SizeInfo for "after".
+    removed_sources: List of removed source files from "before".
+    added_sources: List of added source files from "after".
   """
+
   __slots__ = (
-      'before',
-      'after',
+    'before',
+    'after',
+    'removed_sources',
+    'added_sources',
+    '_sort_symbols',
   )
 
-  def __init__(self, before, after, containers, raw_symbols):
-    super(DeltaSizeInfo, self).__init__(None, containers, raw_symbols)
+  def __init__(
+    self,
+    before,
+    after,
+    containers,
+    raw_symbols,
+    removed_sources=None,
+    added_sources=None,
+    sort=False,
+  ):
+    super().__init__(containers, raw_symbols)
     self.before = before
     self.after = after
+    self.removed_sources = removed_sources or []
+    self.added_sources = added_sources or []
+    self._sort_symbols = sort
+
+  @property
+  def symbols(self):
+    if self._symbols is None:
+      syms = super().symbols
+      if self._sort_symbols:
+        logging.debug('Grouping')
+        # Group path aliases so that functions defined in headers will be sorted
+        # by their actual size rather than shown as many small symbols.
+        # Grouping these is nice since adding or remove just one path alias
+        # changes the PSS of all symbols (a lot of noise).
+        syms = syms.GroupedByAliases(same_name_only=True)
+        logging.debug('Sorting')
+        self._symbols = syms.Sorted()
+    return self._symbols
+
+  @property
+  def is_sparse(self):
+    return self.before.is_sparse or self.after.is_sparse
+
+  def MergeDeltaSizeInfo(self, other):
+    assert isinstance(other, DeltaSizeInfo), 'Found ' + type(other)
+    # The list of adds/removes might not be accurate anymore, so remove them.
+    # They could be re-computed if the need arises.
+    self.removed_sources = []
+    self.added_sources = []
+    self._symbols = None
+
+    # Assumes BUILD_CONFIG_GIT_REVISION is always present.
+    i = 1
+    while f'Merged{i}_{BUILD_CONFIG_GIT_REVISION}' in self.after.build_config:
+      i += 1
+    prefix = f'Merged{i}'
+
+    # TODO(agrieve): Merge container metadata & metrics_by_file.
+    for k, v in other.before.build_config.items():
+      self.before.build_config[f'{prefix}_{k}'] = v
+    for k, v in other.after.build_config.items():
+      self.after.build_config[f'{prefix}_{k}'] = v
+
+    for other_c in other.containers:
+      match = self.ContainerForName(other_c.name)
+      if match is None:
+        match = other_c
+        self.containers.append(other_c)
+      else:
+        if match.before.IsEmpty() and not other_c.before.IsEmpty():
+          match.before = other_c.before
+        if match.after.IsEmpty() and not other_c.after.IsEmpty():
+          match.after = other_c.after
+      if match.before not in self.before.containers:
+        self.before.containers.append(match.before)
+      if match.after and match.after not in self.after.containers:
+        self.after.containers.append(match.after)
+
+    BaseContainer.AssignShortNames(self.before.containers)
+    BaseContainer.AssignShortNames(self.after.containers)
+    BaseContainer.AssignShortNames(self.containers)
+
+    # Not updating symbol container references because doing so is not currently
+    # necessary.
+
+    self.raw_symbols += other.raw_symbols
+    self.before.raw_symbols += other.before.raw_symbols
+    self.after.raw_symbols += other.after.raw_symbols
+
+  def MakeSparse(self, filtered_symbols=None):
+    """Make this DeltaSizeInfo contain only a subset of symbols.
+
+    Args:
+      filtered_symbols: Which symbols to include. Defaults to changed symbols.
+    """
+    logging.info('Converting to sparse diff')
+    if filtered_symbols is None:
+      filtered_symbols = self.raw_symbols.WhereDiffStatusIs(
+        DIFF_STATUS_UNCHANGED
+      ).Inverted()
+    self.raw_symbols = filtered_symbols
+    self._symbols = None
+    self.before.MakeSparse(
+      SymbolGroup(
+        [sym.before_symbol for sym in filtered_symbols if sym.before_symbol]
+      )
+    )
+    self.after.MakeSparse(
+      SymbolGroup(
+        [sym.after_symbol for sym in filtered_symbols if sym.after_symbol]
+      )
+    )
 
 
-class BaseSymbol(object):
-  """Base class for Symbol and SymbolGroup.
+class BaseSymbol:
+  """Base class for Symbol and SymbolGroup."""
 
-  Refer to module docs for field descriptions.
-  """
   __slots__ = ()
+
+  @property
+  def container(self):
+    pass
+
+  @property
+  def section_name(self):
+    pass
+
+  @property
+  def size(self):
+    pass
+
+  @property
+  def padding(self):
+    pass
+
+  @property
+  def address(self):
+    pass
+
+  @property
+  def flags(self):
+    pass
+
+  @property
+  def aliases(self):
+    pass
+
+  @property
+  def full_name(self):
+    pass
+
+  @property
+  def name(self):
+    pass
 
   @property
   def container_name(self):
@@ -455,6 +670,10 @@ class BaseSymbol(object):
       self.flags &= ~FLAG_GENERATED_SOURCE
 
   @property
+  def is_feature(self):
+    return bool(self.flags & FLAG_FEATURE)
+
+  @property
   def num_aliases(self):
     return len(self.aliases) if self.aliases else 1
 
@@ -484,7 +703,12 @@ class BaseSymbol(object):
       parts.append('covered')
     if flags & FLAG_UNCOMPRESSED:
       parts.append('uncompressed')
+    if flags & FLAG_FEATURE:
+      parts.append('feature')
     return '{%s}' % ','.join(parts)
+
+  def IsArsc(self):
+    return self.section_name == SECTION_ARSC
 
   def IsBss(self):
     return self.section_name in BSS_SECTIONS
@@ -512,59 +736,64 @@ class BaseSymbol(object):
 
   def IsGeneratedByToolchain(self):
     return '.' in self.name or (
-        self.name.endswith(']') and not self.name.endswith('[]'))
+      self.name.endswith(']') and not self.name.endswith('[]')
+    )
 
   def IsStringLiteral(self):
     # String literals have names like "string" or "very_long_str[...]", while
     # non-ASCII strings are named STRING_LITERAL_NAME.
-    return self.full_name.startswith(
-        '"') or self.full_name == STRING_LITERAL_NAME
+    return (
+      self.full_name.startswith('"') or self.full_name == STRING_LITERAL_NAME
+    )
 
   # Used for diffs to know whether or not it is accurate to consider two symbols
   # with the same name as being the same.
   def IsNameUnique(self):
-    return not (self.IsStringLiteral() or  # "string literal"
-                self.IsOverhead() or  # "Overhead: APK File"
-                self.full_name.startswith('*') or  # "** outlined symbol"
-                (self.IsNative() and '.' in self.full_name))  # ".L__unnamed_11"
+    return not (
+      self.IsStringLiteral()  # "string literal"
+      or self.IsOverhead()  # "Overhead: APK File"
+      or self.full_name.startswith('*')  # "** outlined symbol"
+      or (self.IsNative() and '.' in self.full_name)
+    )  # ".L__unnamed_11"
 
   def IterLeafSymbols(self):
     yield self
 
 
 class Symbol(BaseSymbol):
-  """Represents a single symbol within a binary.
-
-  Refer to module docs for field descriptions.
-  """
+  """Represents a single symbol within a binary."""
 
   __slots__ = (
-      'address',
-      'full_name',
-      'template_name',
-      'name',
-      'flags',
-      'object_path',
-      'aliases',
-      'padding',
-      'container',
-      'section_name',
-      'source_path',
-      'size',
-      'component',
+    'address',
+    'full_name',
+    'template_name',
+    'name',
+    'flags',
+    'object_path',
+    'aliases',
+    'padding',
+    'container',
+    'section_name',
+    'source_path',
+    'size',
+    'component',
+    'disassembly',
   )
 
-  def __init__(self,
-               section_name,
-               size_without_padding,
-               address=None,
-               full_name=None,
-               template_name=None,
-               name=None,
-               source_path=None,
-               object_path=None,
-               flags=0,
-               aliases=None):
+  def __init__(
+    self,
+    section_name,
+    size_without_padding,
+    address=None,
+    full_name=None,
+    template_name=None,
+    name=None,
+    source_path=None,
+    object_path=None,
+    flags=0,
+    aliases=None,
+    disassembly=None,
+  ):
     self.section_name = section_name
     self.address = address or 0
     self.full_name = full_name or ''
@@ -578,19 +807,31 @@ class Symbol(BaseSymbol):
     self.padding = 0
     self.container = None
     self.component = ''
+    self.disassembly = disassembly or ''
 
   def __repr__(self):
-    if self.container and self.container.name:
-      container_str = '<{}>'.format(self.container.name)
+    if self.container_name:
+      container_str = '<{}>'.format(self.container_name)
     else:
       container_str = ''
-    template = ('{}{}@{:x}(size_without_padding={},padding={},full_name={},'
-                'object_path={},source_path={},flags={},num_aliases={},'
-                'component={})')
-    return template.format(container_str, self.section_name, self.address,
-                           self.size_without_padding, self.padding,
-                           self.full_name, self.object_path, self.source_path,
-                           self.FlagsString(), self.num_aliases, self.component)
+    template = (
+      '{}{}@{:x}(size_without_padding={},padding={},full_name={},'
+      'object_path={},source_path={},flags={},num_aliases={},'
+      'component={})'
+    )
+    return template.format(
+      container_str,
+      self.section_name,
+      self.address,
+      self.size_without_padding,
+      self.padding,
+      self.full_name,
+      self.object_path,
+      self.source_path,
+      self.FlagsString(),
+      self.num_aliases,
+      self.component,
+    )
 
   def SetName(self, full_name, template_name=None, name=None):
     # Note that _NormalizeNames() will clobber these values.
@@ -598,17 +839,22 @@ class Symbol(BaseSymbol):
     self.template_name = full_name if template_name is None else template_name
     self.name = full_name if name is None else name
 
+  # The pss properties are hot, so avoid calling other properties.
   @property
   def pss(self):
-    return float(self.size) / self.num_aliases
+    aliases = self.aliases
+    return self.size / len(aliases) if aliases else float(self.size)
 
   @property
   def pss_without_padding(self):
-    return float(self.size_without_padding) / self.num_aliases
+    aliases = self.aliases
+    size = self.size - self.padding
+    return size / len(aliases) if aliases else float(size)
 
   @property
   def padding_pss(self):
-    return float(self.padding) / self.num_aliases
+    aliases = self.aliases
+    return self.padding / len(aliases) if aliases else float(self.padding)
 
 
 class DeltaSymbol(BaseSymbol):
@@ -619,20 +865,20 @@ class DeltaSymbol(BaseSymbol):
   to one symbol in the |before|, and then be an alias to another in |after|.
   """
 
-  __slots__ = (
-      'before_symbol',
-      'after_symbol',
-  )
+  __slots__ = ('before_symbol', 'after_symbol', '_diff_status')
 
   def __init__(self, before_symbol, after_symbol):
     self.before_symbol = before_symbol
     self.after_symbol = after_symbol
+    self._diff_status = None
 
   def __repr__(self):
-    before_container_name = (self.before_symbol.container_name
-                             if self.before_symbol else None)
-    after_container_name = (self.after_symbol.container_name
-                            if self.after_symbol else None)
+    before_container_name = (
+      self.before_symbol.container_name if self.before_symbol else None
+    )
+    after_container_name = (
+      self.after_symbol.container_name if self.after_symbol else None
+    )
     if after_container_name:
       if before_container_name != after_container_name:
         container_str = '<~{}>'.format(after_container_name)
@@ -640,19 +886,38 @@ class DeltaSymbol(BaseSymbol):
         container_str = '<{}>'.format(after_container_name)
     else:  # None or ''.
       container_str = ''
-    template = ('{}{}{}@{:x}(size_without_padding={},padding={},full_name={},'
-                'object_path={},source_path={},flags={})')
-    return template.format(DIFF_PREFIX_BY_STATUS[self.diff_status],
-                           container_str, self.section_name, self.address,
-                           self.size_without_padding, self.padding,
-                           self.full_name, self.object_path, self.source_path,
-                           self.FlagsString())
+    template = (
+      '{}{}{}@{:x}(size_without_padding={},padding={},full_name={},'
+      'object_path={},source_path={},flags={})'
+    )
+    return template.format(
+      DIFF_PREFIX_BY_STATUS[self.diff_status],
+      container_str,
+      self.section_name,
+      self.address,
+      self.size_without_padding,
+      self.padding,
+      self.full_name,
+      self.object_path,
+      self.source_path,
+      self.FlagsString(),
+    )
 
   def IsDelta(self):
     return True
 
   @property
   def diff_status(self):
+    # Cached since it is queried many times per symbol (e.g. clustering,
+    # filtering, and describing), and is expensive to compute. Assumes that
+    # before_symbol and after_symbol are not modified after diffing.
+    ret = self._diff_status
+    if ret is None:
+      ret = self._ComputeDiffStatus()
+      self._diff_status = ret
+    return ret
+
+  def _ComputeDiffStatus(self):
     if self.before_symbol is None:
       return DIFF_STATUS_ADDED
     if self.after_symbol is None:
@@ -664,7 +929,14 @@ class DeltaSymbol(BaseSymbol):
     #     symbols all happen the same size (hence delta size = 0).
     # The purpose of checking PSS is to account for (2). However, this means (1)
     # would produce much more diffs than before!
-    if self.size != 0 or self.pss != 0:
+    # When neither symbol has aliases (and |before_symbol| is not
+    # padding-only), delta PSS == delta size, so skip computing PSS.
+    before = self.before_symbol
+    after = self.after_symbol
+    if self.size != 0 or (
+      (before.aliases or after.aliases or before.size == before.padding)
+      and self.pss != 0
+    ):
       return DIFF_STATUS_CHANGED
     return DIFF_STATUS_UNCHANGED
 
@@ -686,9 +958,11 @@ class DeltaSymbol(BaseSymbol):
 
   @property
   def flags(self):
+    # Compute the union of flags (|) instead of symmetric difference (^), as
+    # that is more useful when querying for symbols with flags.
     before_flags = self.before_symbol.flags if self.before_symbol else 0
     after_flags = self.after_symbol.flags if self.after_symbol else 0
-    return before_flags ^ after_flags
+    return before_flags | after_flags
 
   @property
   def object_path(self):
@@ -716,49 +990,55 @@ class DeltaSymbol(BaseSymbol):
 
   @property
   def padding_pss(self):
-    if self.after_symbol is None:
-      return -self.before_symbol.padding_pss
-    if self.before_symbol is None:
-      return self.after_symbol.padding_pss
+    before = self.before_symbol
+    after = self.after_symbol
+    if after is None:
+      return -before.padding_pss
+    if before is None:
+      return after.padding_pss
     # Padding tracked in aggregate, except for padding-only symbols.
-    if self.before_symbol.size_without_padding == 0:
-      return self.after_symbol.padding_pss - self.before_symbol.padding_pss
+    if before.size == before.padding:
+      return after.padding_pss - before.padding_pss
     return 0
 
   @property
   def padding(self):
-    if self.after_symbol is None:
-      return -self.before_symbol.padding
-    if self.before_symbol is None:
-      return self.after_symbol.padding
+    before = self.before_symbol
+    after = self.after_symbol
+    if after is None:
+      return -before.padding
+    if before is None:
+      return after.padding
     # Padding tracked in aggregate, except for padding-only symbols.
-    if self.before_symbol.size_without_padding == 0:
-      return self.after_symbol.padding - self.before_symbol.padding
+    if before.size == before.padding:
+      return after.padding - before.padding
     return 0
 
   @property
   def pss(self):
-    if self.after_symbol is None:
-      return -self.before_symbol.pss
-    if self.before_symbol is None:
-      return self.after_symbol.pss
+    before = self.before_symbol
+    after = self.after_symbol
+    if after is None:
+      return -before.pss
+    if before is None:
+      return after.pss
     # Padding tracked in aggregate, except for padding-only symbols.
-    if self.before_symbol.size_without_padding == 0:
-      return self.after_symbol.pss - self.before_symbol.pss
-    return (self.after_symbol.pss_without_padding -
-            self.before_symbol.pss_without_padding)
+    if before.size == before.padding:
+      return after.pss - before.pss
+    return after.pss_without_padding - before.pss_without_padding
 
   @property
   def size(self):
-    if self.after_symbol is None:
-      return -self.before_symbol.size
-    if self.before_symbol is None:
-      return self.after_symbol.size
+    before = self.before_symbol
+    after = self.after_symbol
+    if after is None:
+      return -before.size
+    if before is None:
+      return after.size
     # Padding tracked in aggregate, except for padding-only symbols.
-    if self.before_symbol.size_without_padding == 0:
-      return self.after_symbol.padding - self.before_symbol.padding
-    return (self.after_symbol.size_without_padding -
-            self.before_symbol.size_without_padding)
+    if before.size == before.padding:
+      return after.padding - before.padding
+    return (after.size - after.padding) - (before.size - before.padding)
 
   @property
   def pss_without_padding(self):
@@ -781,28 +1061,29 @@ class SymbolGroup(BaseSymbol):
   """
 
   __slots__ = (
-      '_padding',
-      '_size',
-      '_pss',
-      '_symbols',
-      '_filtered_symbols',
-      'full_name',
-      'template_name',
-      'name',
-      'section_name',
-      'is_default_sorted',  # True for groups created by Sorted()
+    '_padding',
+    '_size',
+    '_pss',
+    '_symbols',
+    '_filtered_symbols',
+    'full_name',
+    'template_name',
+    'name',
+    'section_name',
+    'is_default_sorted',  # True for groups created by Sorted()
   )
 
-
   # template_name and full_name are useful when clustering symbol clones.
-  def __init__(self,
-               symbols,
-               filtered_symbols=None,
-               full_name=None,
-               template_name=None,
-               name='',
-               section_name=None,
-               is_default_sorted=False):
+  def __init__(
+    self,
+    symbols,
+    filtered_symbols=None,
+    full_name=None,
+    template_name=None,
+    name='',
+    section_name=None,
+    is_default_sorted=False,
+  ):
     assert isinstance(symbols, list)  # Rejects non-reusable generators.
     self._padding = None
     self._size = None
@@ -817,7 +1098,10 @@ class SymbolGroup(BaseSymbol):
 
   def __repr__(self):
     return 'Group(full_name=%s,count=%d,size=%d)' % (
-        self.full_name, len(self), self.size)
+      self.full_name,
+      len(self),
+      self.size,
+    )
 
   def __iter__(self):
     return iter(self._symbols)
@@ -901,7 +1185,8 @@ class SymbolGroup(BaseSymbol):
         self._size = sum(s.size for s in self.IterUniqueSymbols())
       else:
         self._size = sum(
-            s.size for s in self.IterUniqueSymbols() if not s.IsBss())
+          s.size for s in self.IterUniqueSymbols() if not s.IsBss()
+        )
     return self._size
 
   @property
@@ -959,25 +1244,29 @@ class SymbolGroup(BaseSymbol):
   def CountUniqueSymbols(self):
     return sum(1 for s in self.IterUniqueSymbols())
 
-  def _CreateTransformed(self,
-                         symbols,
-                         filtered_symbols=None,
-                         full_name=None,
-                         template_name=None,
-                         name=None,
-                         section_name=None,
-                         is_default_sorted=None):
+  def _CreateTransformed(
+    self,
+    symbols,
+    filtered_symbols=None,
+    full_name=None,
+    template_name=None,
+    name=None,
+    section_name=None,
+    is_default_sorted=None,
+  ):
     if is_default_sorted is None:
       is_default_sorted = self.is_default_sorted
     if section_name is None:
       section_name = self.section_name
-    return self.__class__(symbols,
-                          filtered_symbols=filtered_symbols,
-                          full_name=full_name,
-                          template_name=template_name,
-                          name=name,
-                          section_name=section_name,
-                          is_default_sorted=is_default_sorted)
+    return self.__class__(
+      symbols,
+      filtered_symbols=filtered_symbols,
+      full_name=full_name,
+      template_name=template_name,
+      name=name,
+      section_name=section_name,
+      is_default_sorted=is_default_sorted,
+    )
 
   def Sorted(self, cmp_func=None, key=None, reverse=False):
     """Sorts by abs(PSS)."""
@@ -991,19 +1280,23 @@ class SymbolGroup(BaseSymbol):
 
     after_symbols = sorted(self._symbols, key=key, reverse=reverse)
     return self._CreateTransformed(
-        after_symbols, filtered_symbols=self._filtered_symbols,
-        is_default_sorted=is_default_sorted)
+      after_symbols,
+      filtered_symbols=self._filtered_symbols,
+      is_default_sorted=is_default_sorted,
+    )
 
   def SortedByName(self, reverse=False):
-    return self.Sorted(key=(lambda s:s.name), reverse=reverse)
+    return self.Sorted(key=(lambda s: s.name), reverse=reverse)
 
   def SortedByAddress(self, reverse=False):
-    return self.Sorted(key=(lambda s:(s.address, s.object_path, s.name)),
-                       reverse=reverse)
+    return self.Sorted(
+      key=(lambda s: (s.address, s.object_path, s.name)), reverse=reverse
+    )
 
   def SortedByCount(self, reverse=False):
-    return self.Sorted(key=(lambda s:len(s) if s.IsGroup() else 1),
-                       reverse=not reverse)
+    return self.Sorted(
+      key=(lambda s: len(s) if s.IsGroup() else 1), reverse=not reverse
+    )
 
   def Filter(self, func):
     filtered_and_kept = ([], [])
@@ -1015,8 +1308,9 @@ class SymbolGroup(BaseSymbol):
       logging.warning('Filter failed on symbol %r', symbol)
       raise
 
-    return self._CreateTransformed(filtered_and_kept[1],
-                                   filtered_symbols=filtered_and_kept[0])
+    return self._CreateTransformed(
+      filtered_and_kept[1], filtered_symbols=filtered_and_kept[0]
+    )
 
   def WhereIsGroup(self):
     return self.Filter(lambda s: s.IsGroup())
@@ -1033,21 +1327,36 @@ class SymbolGroup(BaseSymbol):
       ret = ret.Inverted()
     return ret
 
+  def WhereInContainer(self, container):
+    """|container| can be name, short_name, or container instance."""
+    container = str(container)  # Allow int to be used for short names.
+    if isinstance(container, str):
+      if container.isdigit():
+        return self.Filter(lambda s: s.container_short_name == container)
+      return self.Filter(lambda s: s.container_name == container)
+    return self.Filter(lambda s: s.container == container)
+
   def WhereInSection(self, section, container=None):
     """|section| can be section_name ('.bss'), or section chars ('bdr')."""
     if section.startswith('.'):
       if container:
         short_name = container.short_name
-        ret = self.Filter(lambda s: (s.container.short_name == short_name and s.
-                                     section_name == section))
+        ret = self.Filter(
+          lambda s: (
+            s.container_short_name == short_name and s.section_name == section
+          )
+        )
       else:
         ret = self.Filter(lambda s: s.section_name == section)
       ret.section_name = section
     else:
       if container:
         short_name = container.short_name
-        ret = self.Filter(lambda s: (s.container.short_name == short_name and s.
-                                     section in section))
+        ret = self.Filter(
+          lambda s: (
+            s.container_short_name == short_name and s.section in section
+          )
+        )
       else:
         ret = self.Filter(lambda s: s.section in section)
       if section in SECTION_TO_SECTION_NAME:
@@ -1056,18 +1365,27 @@ class SymbolGroup(BaseSymbol):
 
   def WhereIsDex(self):
     return self.WhereInSection(
-        ''.join(SECTION_NAME_TO_SECTION[s] for s in DEX_SECTIONS))
+      ''.join(SECTION_NAME_TO_SECTION[s] for s in DEX_SECTIONS)
+    )
 
   def WhereIsNative(self):
     return self.WhereInSection(
-        ''.join(SECTION_NAME_TO_SECTION[s] for s in NATIVE_SECTIONS))
+      ''.join(SECTION_NAME_TO_SECTION[s] for s in NATIVE_SECTIONS)
+    )
 
   def WhereIsPak(self):
     return self.WhereInSection(
-        ''.join(SECTION_NAME_TO_SECTION[s] for s in PAK_SECTIONS))
+      ''.join(SECTION_NAME_TO_SECTION[s] for s in PAK_SECTIONS)
+    )
+
+  def WhereIsPlaceholder(self):
+    return self.Filter(lambda s: s.full_name.startswith('*'))
 
   def WhereIsTemplate(self):
     return self.Filter(lambda s: s.template_name is not s.name)
+
+  def WhereIsFeature(self):
+    return self.Filter(lambda s: s.is_feature)
 
   def WhereHasFlag(self, flag):
     return self.Filter(lambda s: s.flags & flag)
@@ -1103,8 +1421,9 @@ class SymbolGroup(BaseSymbol):
 
   def WherePathMatches(self, pattern):
     regex = re.compile(match_util.ExpandRegexIdentifierPlaceholder(pattern))
-    return self.Filter(lambda s: (regex.search(s.source_path) or
-                                  regex.search(s.object_path)))
+    return self.Filter(
+      lambda s: regex.search(s.source_path) or regex.search(s.object_path)
+    )
 
   def WhereComponentMatches(self, pattern):
     regex = re.compile(match_util.ExpandRegexIdentifierPlaceholder(pattern))
@@ -1113,12 +1432,17 @@ class SymbolGroup(BaseSymbol):
   def WhereMatches(self, pattern):
     """Looks for |pattern| within all paths & names."""
     regex = re.compile(match_util.ExpandRegexIdentifierPlaceholder(pattern))
-    return self.Filter(lambda s: (
-        regex.search(s.source_path) or
-        regex.search(s.object_path) or
-        regex.search(s.full_name) or
-        s.full_name is not s.template_name and regex.search(s.template_name) or
-        s.full_name is not s.name and regex.search(s.name)))
+    return self.Filter(
+      lambda s: (
+        regex.search(s.source_path)
+        or regex.search(s.object_path)
+        or regex.search(s.full_name)
+        or s.full_name is not s.template_name
+        and regex.search(s.template_name)
+        or s.full_name is not s.name
+        and regex.search(s.name)
+      )
+    )
 
   def WhereAddressInRange(self, start, end=None):
     """Searches for addesses within [start, end).
@@ -1148,9 +1472,11 @@ class SymbolGroup(BaseSymbol):
         # Symbols within third_party that do not contain the string "foo".
         symbols.WherePathMatches(r'third_party').WhereMatches('foo').Inverted()
     """
-    return self._CreateTransformed(self._filtered_symbols,
-                                   filtered_symbols=self._symbols,
-                                   section_name=SECTION_MULTIPLE)
+    return self._CreateTransformed(
+      self._filtered_symbols,
+      filtered_symbols=self._symbols,
+      section_name=SECTION_MULTIPLE,
+    )
 
   def GroupedBy(self, func, min_count=0, group_factory=None):
     """Returns a SymbolGroup of SymbolGroups, indexed by |func|.
@@ -1172,7 +1498,8 @@ class SymbolGroup(BaseSymbol):
     """
     if group_factory is None:
       group_factory = lambda token, symbols: self._CreateTransformed(
-            symbols, full_name=token, template_name=token, name=token)
+        symbols, full_name=token, template_name=token, name=token
+      )
 
     after_syms = []
     filtered_symbols = []
@@ -1211,7 +1538,8 @@ class SymbolGroup(BaseSymbol):
           target_list.extend(symbol_or_list)
 
     return self._CreateTransformed(
-        after_syms, filtered_symbols=filtered_symbols)
+      after_syms, filtered_symbols=filtered_symbols
+    )
 
   def _Clustered(self):
     """Returns a new SymbolGroup with some symbols moved into subgroups.
@@ -1229,6 +1557,7 @@ class SymbolGroup(BaseSymbol):
     To view created groups:
       Print(size_info.symbols.WhereIsGroup())
     """
+
     def cluster_func(symbol):
       name = symbol.full_name
       if not name or symbol.IsStringLiteral():
@@ -1252,23 +1581,30 @@ class SymbolGroup(BaseSymbol):
       full_name = token[1]
       sym = symbols[0]
       if token[1].startswith('*'):
-        return self._CreateTransformed(symbols,
-                                       full_name=full_name,
-                                       template_name=full_name,
-                                       name=full_name,
-                                       section_name=sym.section_name)
-      return self._CreateTransformed(symbols,
-                                     full_name=full_name,
-                                     template_name=sym.template_name,
-                                     name=sym.name,
-                                     section_name=sym.section_name)
+        return self._CreateTransformed(
+          symbols,
+          full_name=full_name,
+          template_name=full_name,
+          name=full_name,
+          section_name=sym.section_name,
+        )
+      return self._CreateTransformed(
+        symbols,
+        full_name=full_name,
+        template_name=sym.template_name,
+        name=sym.name,
+        section_name=sym.section_name,
+      )
 
     # A full second faster to cluster per-section. Plus, don't need create
     # (section_name, name) tuples in cluster_func.
     ret = []
     for section in self.GroupedByContainerAndSectionName():
-      ret.extend(section.GroupedBy(
-          cluster_func, min_count=2, group_factory=group_factory))
+      ret.extend(
+        section.GroupedBy(
+          cluster_func, min_count=2, group_factory=group_factory
+        )
+      )
 
     return self._CreateTransformed(ret)
 
@@ -1286,17 +1622,22 @@ class SymbolGroup(BaseSymbol):
                  Use a negative value to omit symbols entirely rather than
                  include them outside of a group.
     """
+
     def group_factory(_, symbols):
       sym = symbols[0]
-      return self._CreateTransformed(symbols,
-                                     full_name=sym.full_name,
-                                     template_name=sym.template_name,
-                                     name=sym.name,
-                                     section_name=sym.section_name)
+      return self._CreateTransformed(
+        symbols,
+        full_name=sym.full_name,
+        template_name=sym.template_name,
+        name=sym.name,
+        section_name=sym.section_name,
+      )
 
     return self.GroupedBy(
-        lambda s: (same_name_only and s.full_name, id(s.aliases or s)),
-        min_count=min_count, group_factory=group_factory)
+      lambda s: (same_name_only and s.full_name, id(s.aliases or s)),
+      min_count=min_count,
+      group_factory=group_factory,
+    )
 
   def GroupedByContainerAndSectionName(self):
     return self.GroupedBy(lambda s: (s.container_name, s.section_name))
@@ -1340,16 +1681,23 @@ class SymbolGroup(BaseSymbol):
                  include them outside of a group.
     """
     if depth >= 0:
-      extract_namespace = (
-          lambda s: _ExtractPrefixBeforeSeparator(s.name, '::', depth))
+      extract_namespace = lambda s: _ExtractPrefixBeforeSeparator(
+        s.name, '::', depth
+      )
     else:
       depth = -depth
-      extract_namespace = (
-          lambda s: _ExtractSuffixAfterSeparator(s.name, '::', depth))
+      extract_namespace = lambda s: _ExtractSuffixAfterSeparator(
+        s.name, '::', depth
+      )
     return self.GroupedBy(extract_namespace, min_count=min_count)
 
-  def GroupedByPath(self, depth=0, fallback='{no path}',
-                    fallback_to_object_path=True, min_count=0):
+  def GroupedByPath(
+    self,
+    depth=0,
+    fallback='{no path}',
+    fallback_to_object_path=True,
+    min_count=0,
+  ):
     """Groups by source_path.
 
     Due to path sharing (symbols where path looks like foo/bar/{shared}/3),
@@ -1367,6 +1715,7 @@ class SymbolGroup(BaseSymbol):
                  Use a negative value to omit symbols entirely rather than
                  include them outside of a group.
     """
+
     def extract_path(symbol):
       path = symbol.source_path
       if fallback_to_object_path and not path:
@@ -1377,8 +1726,9 @@ class SymbolGroup(BaseSymbol):
       # Group by base of foo/bar/{shared}/2
       shared_idx = path.find('{shared}')
       if shared_idx != -1:
-        path = path[:shared_idx + 8]
+        path = path[: shared_idx + 8]
       return _ExtractPrefixBeforeSeparator(path, os.path.sep, depth)
+
     return self.GroupedBy(extract_path, min_count=min_count)
 
 
@@ -1387,14 +1737,19 @@ class DeltaSymbolGroup(SymbolGroup):
 
   Contains a list of DeltaSymbols.
   """
+
   __slots__ = ()
 
   def __repr__(self):
     counts = self.CountsByDiffStatus()
     return '%s(%d added, %d removed, %d changed, %d unchanged, size=%d)' % (
-        'DeltaSymbolGroup', counts[DIFF_STATUS_ADDED],
-        counts[DIFF_STATUS_REMOVED], counts[DIFF_STATUS_CHANGED],
-        counts[DIFF_STATUS_UNCHANGED], self.size)
+      'DeltaSymbolGroup',
+      counts[DIFF_STATUS_ADDED],
+      counts[DIFF_STATUS_REMOVED],
+      counts[DIFF_STATUS_CHANGED],
+      counts[DIFF_STATUS_UNCHANGED],
+      self.size,
+    )
 
   def IsDelta(self):
     return True
@@ -1406,13 +1761,18 @@ class DeltaSymbolGroup(SymbolGroup):
       ret[sym.diff_status] += 1
     return tuple(ret)
 
+  def GroupedByDiffStatus(self):
+    return self.GroupedBy(lambda s: s.diff_status)
+
   def CountUniqueSymbols(self):
     """Returns (num_unique_before_symbols, num_unique_after_symbols)."""
-    syms_iter = (s.before_symbol for s in self.IterLeafSymbols()
-                 if s.before_symbol)
+    syms_iter = (
+      s.before_symbol for s in self.IterLeafSymbols() if s.before_symbol
+    )
     before_count = sum(1 for _ in SymbolGroup._IterUnique(syms_iter))
-    syms_iter = (s.after_symbol for s in self.IterLeafSymbols()
-                 if s.after_symbol)
+    syms_iter = (
+      s.after_symbol for s in self.IterLeafSymbols() if s.after_symbol
+    )
     after_count = sum(1 for _ in SymbolGroup._IterUnique(syms_iter))
     return before_count, after_count
 
@@ -1428,6 +1788,18 @@ class DeltaSymbolGroup(SymbolGroup):
 
   def WhereDiffStatusIs(self, diff_status):
     return self.Filter(lambda s: s.diff_status == diff_status)
+
+  def GetEntireAddOrRemoveSources(self):
+    """Return source paths with entirely added or removed symbols."""
+    source_flags = collections.defaultdict(int)
+    for sym in self:
+      source_flags[sym.source_path] |= 1 << sym.diff_status
+    add_flag = 1 << DIFF_STATUS_ADDED
+    remove_flag = 1 << DIFF_STATUS_REMOVED
+    return (
+      sorted(k for k, v in source_flags.items() if v == remove_flag),
+      sorted(k for k, v in source_flags.items() if v == add_flag),
+    )
 
 
 def _ExtractPrefixBeforeSeparator(string, separator, count):

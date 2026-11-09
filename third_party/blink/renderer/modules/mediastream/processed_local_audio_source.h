@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <string>
 
-#include "base/atomicops.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/base/audio_capturer_source.h"
+#include "media/base/audio_glitch_info.h"
+#include "third_party/blink/renderer/modules/mediastream/media_constraints.h"
+#include "third_party/blink/renderer/modules/mediastream/media_stream_audio_processing_layout.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/mediastream/media_constraints.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_level_calculator.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_processor_options.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_source.h"
@@ -26,9 +27,11 @@ class AudioProcessorControls;
 
 namespace blink {
 
+class AudioServiceAudioProcessorProxy;
 class LocalFrame;
 class MediaStreamAudioProcessor;
 class PeerConnectionDependencyFactory;
+class WebRtcAudioDeviceImpl;
 
 // Represents a local source of audio data that is routed through the WebRTC
 // audio pipeline for post-processing (e.g., for echo cancellation during a
@@ -47,12 +50,18 @@ class MODULES_EXPORT ProcessedLocalAudioSource final
       LocalFrame& frame,
       const MediaStreamDevice& device,
       bool disable_local_echo,
-      const AudioProcessingProperties& audio_processing_properties,
-      int num_requested_channels,
-      ConstraintsOnceCallback started_callback,
+      const MediaStreamAudioProcessingLayout& processing_layout,
+      ConstraintsRepeatingCallback started_callback,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
+  ProcessedLocalAudioSource(const ProcessedLocalAudioSource&) = delete;
+  ProcessedLocalAudioSource& operator=(const ProcessedLocalAudioSource&) =
+      delete;
+
   ~ProcessedLocalAudioSource() final;
+
+  // MediaStreamAudioSource implementation.
+  void ChangeSourceImpl(const MediaStreamDevice& new_device) final;
 
   // If |source| is an instance of ProcessedLocalAudioSource, return a
   // type-casted pointer to it. Otherwise, return null.
@@ -65,33 +74,27 @@ class MODULES_EXPORT ProcessedLocalAudioSource final
     allow_invalid_render_frame_id_for_testing_ = allowed;
   }
 
-  const blink::AudioProcessingProperties& audio_processing_properties() const {
-    return audio_processing_properties_;
+  std::optional<blink::AudioProcessingProperties>
+  GetInitialAudioProcessingProperties() const final;
+  std::optional<blink::AudioProcessingProperties> GetAudioProcessingProperties()
+      const final;
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  void SetVoiceIsolation(bool enabled) final;
+#endif
+  bool IsProcessedSource() const final { return true; }
+  bool IsApmProcessedSource() const final {
+    return processing_layout_.NeedWebrtcAudioProcessing();
   }
 
-  absl::optional<blink::AudioProcessingProperties>
-  GetAudioProcessingProperties() const final;
-
-  // The following accessors are valid after the source is started (when the
-  // first track is connected).
+  // Valid after the source is started (when the first track is connected). Will
+  // return nullptr if WebRTC stats are no available for the current
+  // configuration.
   scoped_refptr<webrtc::AudioProcessorInterface> GetAudioProcessor() const;
-
-  bool HasAudioProcessing() const;
-
-  // Instructs the Audio Processing Module (APM) to reduce its complexity when
-  // |muted| is true. This mode is triggered when all audio tracks are disabled.
-  // The default APM complexity mode is restored when |muted| is set to false.
-  void SetOutputWillBeMuted(bool muted);
 
   const scoped_refptr<blink::MediaStreamAudioLevelCalculator::Level>&
   audio_level() const {
     return level_calculator_.level();
   }
-
-  // Thread-safe volume accessors used by WebRtcAudioDeviceImpl.
-  void SetVolume(int volume);
-  int Volume() const;
-  int MaxVolume() const;
 
   void SetOutputDeviceForAec(const std::string& output_device_id);
 
@@ -106,8 +109,8 @@ class MODULES_EXPORT ProcessedLocalAudioSource final
   void OnCaptureStarted() override;
   void Capture(const media::AudioBus* audio_source,
                base::TimeTicks audio_capture_time,
-               double volume,
-               bool key_pressed) override;
+               const media::AudioGlitchInfo& glitch_info,
+               double volume) override;
   void OnCaptureError(media::AudioCapturerSource::ErrorCode code,
                       const std::string& message) override;
   void OnCaptureMuted(bool is_muted) override;
@@ -115,15 +118,14 @@ class MODULES_EXPORT ProcessedLocalAudioSource final
       media::AudioProcessorControls* controls) override;
 
  private:
-  // Runs the audio through |audio_processor_| before sending it along.
-  void CaptureUsingProcessor(const media::AudioBus* audio_source,
+  // Receive and forward processed capture audio. Called on the same thread as
+  // Capture().
+  void DeliverProcessedAudio(const media::AudioBus& processed_audio,
                              base::TimeTicks audio_capture_time,
-                             double volume,
-                             bool key_pressed);
+                             std::optional<double> new_volume);
 
-  // Helper function to get the source buffer size based on whether audio
-  // processing will take place.
-  int GetBufferSize(int sample_rate) const;
+  // Update the device (source) mic volume.
+  void SetVolume(double volume);
 
   // Helper method which sends the log |message| to a native WebRTC log and
   // adds the current session ID (from the associated media stream device) to
@@ -138,32 +140,43 @@ class MODULES_EXPORT ProcessedLocalAudioSource final
   WeakPersistent<LocalFrame> consumer_frame_;
   WeakPersistent<PeerConnectionDependencyFactory> dependency_factory_;
 
-  blink::AudioProcessingProperties audio_processing_properties_;
-  int num_requested_channels_;
+  blink::MediaStreamAudioProcessingLayout processing_layout_;
 
   // Callback that's called when the audio source has been initialized.
-  ConstraintsOnceCallback started_callback_;
+  ConstraintsRepeatingCallback started_callback_;
 
-  // Audio processor doing processing like FIFO, AGC, AEC and NS. Its output
-  // data is in a unit of 10 ms data chunk.
-  scoped_refptr<MediaStreamAudioProcessor> audio_processor_;
+  // At most one of |audio_processor_| and |audio_processor_proxy_| can be set.
+
+  // Audio processor doing software processing like FIFO, AGC, AEC and NS. Its
+  // output data is in a unit of up to 10 ms data chunk.
+  scoped_refptr<MediaStreamAudioProcessor> media_stream_audio_processor_;
+
+  // Proxy for the audio processor when it's run in the Audio Service process,
+  scoped_refptr<AudioServiceAudioProcessorProxy> audio_processor_proxy_;
 
   // The device created by the AudioDeviceFactory in EnsureSourceIsStarted().
   scoped_refptr<media::AudioCapturerSource> source_;
 
-  // Stores latest microphone volume received in a CaptureData() callback.
-  // Range is [0, 255].
-  base::subtle::Atomic32 volume_;
+  // The WebRtcAudioDeviceImpl that this source is registered with while
+  // started. Retained to guarantee RemoveAudioCapturer() is called in
+  // EnsureSourceIsStopped() even if |dependency_factory_| has already been
+  // garbage-collected.
+  scoped_refptr<WebRtcAudioDeviceImpl> rtc_audio_device_;
 
   // Used to calculate the signal level that shows in the UI.
   blink::MediaStreamAudioLevelCalculator level_calculator_;
 
+  // Used to signal non-silent mic input to the level calculator, when there is
+  // a risk that the audio processor will zero it out.
+  // Is only accessed on the audio capture thread.
+  bool force_report_nonzero_energy_ = false;
+
   bool allow_invalid_render_frame_id_for_testing_;
+
+  media::AudioGlitchInfo::Accumulator glitch_info_accumulator_;
 
   // Provides weak pointers for tasks posted by this instance.
   base::WeakPtrFactory<ProcessedLocalAudioSource> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ProcessedLocalAudioSource);
 };
 
 }  // namespace blink

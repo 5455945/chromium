@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
 #include "components/metrics/reporting_service.h"
 #include "components/metrics/unsent_log_store.h"
 #include "third_party/metrics_proto/ukm/report.pb.h"
@@ -20,6 +20,7 @@ class PrefService;
 class PrefRegistrySimple;
 
 namespace metrics {
+class MetricsLogsEventManager;
 class MetricsServiceClient;
 }
 
@@ -32,8 +33,14 @@ class UkmReportingService : public metrics::ReportingService {
   // |local_state|.  Does not take ownership of the paramaters; instead stores
   // a weak pointer to each. Caller should ensure that the parameters are valid
   // for the lifetime of this class.
-  UkmReportingService(metrics::MetricsServiceClient* client,
-                      PrefService* local_state);
+  UkmReportingService(
+      metrics::MetricsServiceClient* client,
+      PrefService* local_state,
+      metrics::MetricsLogsEventManager* logs_event_manager = nullptr);
+
+  UkmReportingService(const UkmReportingService&) = delete;
+  UkmReportingService& operator=(const UkmReportingService&) = delete;
+
   ~UkmReportingService() override;
 
   // At startup, prefs needs to be called with a list of all the pref names and
@@ -51,7 +58,7 @@ class UkmReportingService : public metrics::ReportingService {
   GURL GetUploadUrl() const override;
   // Returns an empty string since retrying over HTTP is not enabled for UKM
   GURL GetInsecureUploadUrl() const override;
-  base::StringPiece upload_mime_type() const override;
+  std::string_view upload_mime_type() const override;
   metrics::MetricsLogUploader::MetricServiceType service_type() const override;
   void LogCellularConstraint(bool upload_canceled) override;
   void LogResponseOrErrorCode(int response_code,
@@ -60,10 +67,9 @@ class UkmReportingService : public metrics::ReportingService {
   void LogSuccessLogSize(size_t log_size) override;
   void LogSuccessMetadata(const std::string& staged_log) override;
   void LogLargeRejection(size_t log_size) override;
+  void LogBackgroundUploadTaskPendingTime(base::TimeDelta time) override;
 
   metrics::UnsentLogStore unsent_log_store_;
-
-  DISALLOW_COPY_AND_ASSIGN(UkmReportingService);
 };
 
 }  // namespace ukm

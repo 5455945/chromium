@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,24 @@
 #define CHROME_BROWSER_UI_VIEWS_CHROME_BROWSER_MAIN_EXTRA_PARTS_VIEWS_LINUX_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "build/build_config.h"
+#include "build/config/linux/dbus/buildflags.h"
 #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h"
+#include "printing/buildflags/buildflags.h"
 #include "ui/display/display_observer.h"
+
+#if BUILDFLAG(ENABLE_PRINTING)
+#include "printing/printing_context_linux.h"
+#endif
+
+namespace ui {
+class LinuxUiGetter;
+#if BUILDFLAG(USE_DBUS)
+class PortalSettingsLinux;
+#endif
+}  // namespace ui
 
 // Extra parts, which are used by both Ozone/X11/Wayland and inherited by the
 // non-ozone X11 extra parts.
@@ -20,17 +32,33 @@ class ChromeBrowserMainExtraPartsViewsLinux
       public display::DisplayObserver {
  public:
   ChromeBrowserMainExtraPartsViewsLinux();
+
+  ChromeBrowserMainExtraPartsViewsLinux(
+      const ChromeBrowserMainExtraPartsViewsLinux&) = delete;
+  ChromeBrowserMainExtraPartsViewsLinux& operator=(
+      const ChromeBrowserMainExtraPartsViewsLinux&) = delete;
+
   ~ChromeBrowserMainExtraPartsViewsLinux() override;
 
   // Overridden from ChromeBrowserMainExtraParts:
   void ToolkitInitialized() override;
+  void PostCreateMainMessageLoop() override;
   void PreCreateThreads() override;
 
  private:
   // display::DisplayObserver:
   void OnCurrentWorkspaceChanged(const std::string& new_workspace) override;
 
-  DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainExtraPartsViewsLinux);
+  std::optional<display::ScopedDisplayObserver> display_observer_;
+
+  std::unique_ptr<ui::LinuxUiGetter> linux_ui_getter_;
+#if BUILDFLAG(USE_DBUS)
+  std::unique_ptr<ui::PortalSettingsLinux> portal_settings_;
+#endif
+#if BUILDFLAG(ENABLE_PRINTING)
+  std::unique_ptr<printing::PrintingContextLinux::PrintDialogFactory>
+      print_dialog_factory_;
+#endif
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_CHROME_BROWSER_MAIN_EXTRA_PARTS_VIEWS_LINUX_H_

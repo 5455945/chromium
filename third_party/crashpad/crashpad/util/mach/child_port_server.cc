@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,8 @@
 
 #include "util/mach/child_port_server.h"
 
-#include "base/cxx17_backports.h"
+#include <iterator>
+
 #include "util/mach/child_portServer.h"
 #include "util/mach/mach_message.h"
 
@@ -69,13 +70,14 @@ bool ChildPortServer::MachMessageServerFunction(
 
       using Reply = __Reply__child_port_check_in_t;
       Reply* out_reply = reinterpret_cast<Reply*>(out_header);
-      out_reply->RetCode =
-          interface_->HandleChildPortCheckIn(in_header->msgh_local_port,
-                                             in_request->token,
-                                             in_request->port.name,
-                                             in_request->port.disposition,
-                                             in_trailer,
-                                             destroy_complex_request);
+      out_reply->RetCode = interface_->HandleChildPortCheckIn(
+          in_header->msgh_local_port,
+          in_request->token,
+          in_request->port.name,
+          in_request->port.disposition,
+          in_request->embedder_port.name,
+          in_trailer,
+          destroy_complex_request);
       return true;
     }
 
@@ -90,7 +92,7 @@ std::set<mach_msg_id_t> ChildPortServer::MachMessageServerRequestIDs() {
   static constexpr mach_msg_id_t request_ids[] =
       {kMachMessageIDChildPortCheckIn};
   return std::set<mach_msg_id_t>(&request_ids[0],
-                                 &request_ids[base::size(request_ids)]);
+                                 &request_ids[std::size(request_ids)]);
 }
 
 mach_msg_size_t ChildPortServer::MachMessageServerRequestSize() {

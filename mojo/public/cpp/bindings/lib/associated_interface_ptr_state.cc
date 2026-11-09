@@ -1,9 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/bindings/lib/associated_interface_ptr_state.h"
 
+#include <stdint.h>
+
+#include <string_view>
+#include <utility>
+
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 #include "mojo/public/cpp/bindings/lib/task_runner_helper.h"
 
 namespace mojo {
@@ -23,8 +32,9 @@ void AssociatedInterfacePtrStateBase::QueryVersion(
 }
 
 void AssociatedInterfacePtrStateBase::RequireVersion(uint32_t version) {
-  if (version <= version_)
+  if (version <= version_) {
     return;
+  }
 
   version_ = version;
   endpoint_client_->RequireVersion(version);
@@ -43,8 +53,44 @@ void AssociatedInterfacePtrStateBase::FlushForTesting() {
 
 void AssociatedInterfacePtrStateBase::CloseWithReason(
     uint32_t custom_reason,
-    const std::string& description) {
+    std::string_view description) {
   endpoint_client_->CloseWithReason(custom_reason, description);
+}
+
+bool AssociatedInterfacePtrStateBase::encountered_error() const {
+  return endpoint_client_ ? endpoint_client_->encountered_error() : false;
+}
+
+void AssociatedInterfacePtrStateBase::set_connection_error_handler(
+    base::OnceClosure error_handler) {
+  DCHECK(endpoint_client_);
+  endpoint_client_->set_connection_error_handler(std::move(error_handler));
+}
+
+void AssociatedInterfacePtrStateBase::set_connection_error_with_reason_handler(
+    ConnectionErrorWithReasonCallback error_handler) {
+  DCHECK(endpoint_client_);
+  endpoint_client_->set_connection_error_with_reason_handler(
+      std::move(error_handler));
+}
+
+bool AssociatedInterfacePtrStateBase::has_pending_callbacks() const {
+  return endpoint_client_ && endpoint_client_->has_pending_responders();
+}
+
+AssociatedGroup* AssociatedInterfacePtrStateBase::associated_group() {
+  return endpoint_client_ ? endpoint_client_->associated_group() : nullptr;
+}
+
+void AssociatedInterfacePtrStateBase::ForwardMessage(Message message) {
+  endpoint_client_->Accept(&message);
+}
+
+scoped_refptr<ThreadSafeProxy>
+AssociatedInterfacePtrStateBase::CreateThreadSafeProxy(
+    scoped_refptr<ThreadSafeProxy::Target> target,
+    const base::Location& location) {
+  return endpoint_client_->CreateThreadSafeProxy(std::move(target), location);
 }
 
 void AssociatedInterfacePtrStateBase::Swap(
@@ -54,12 +100,14 @@ void AssociatedInterfacePtrStateBase::Swap(
   swap(other->version_, version_);
 }
 
-void AssociatedInterfacePtrStateBase::Bind(
-    ScopedInterfaceEndpointHandle handle,
+MessageReceiverWithResponder* AssociatedInterfacePtrStateBase::Bind(
+    ScopedInterfaceEndpointHandle&& handle,
     uint32_t version,
-    std::unique_ptr<MessageReceiver> validator,
-    scoped_refptr<base::SequencedTaskRunner> runner,
-    const char* interface_name) {
+    MessageValidatorFunc validator,
+    scoped_refptr<base::SequencedTaskRunner>&& runner,
+    const char* interface_name,
+    MessageToMethodInfoCallback method_info_callback,
+    MessageToMethodNameCallback method_name_callback) {
   DCHECK(!endpoint_client_);
   DCHECK_EQ(0u, version_);
   DCHECK(handle.is_valid());
@@ -68,15 +116,15 @@ void AssociatedInterfacePtrStateBase::Bind(
   // The version is only queried from the client so the value passed here
   // will not be used.
   endpoint_client_ = std::make_unique<InterfaceEndpointClient>(
-      std::move(handle), nullptr, std::move(validator), false,
+      std::move(handle), nullptr, validator,
+      /*sync_method_ordinals=*/base::span<const uint32_t>(),
       GetTaskRunnerToUseFromUserProvidedTaskRunner(std::move(runner)), 0u,
-      interface_name);
+      interface_name, method_info_callback, method_name_callback);
+  return endpoint_client_.get();
 }
 
 ScopedInterfaceEndpointHandle AssociatedInterfacePtrStateBase::PassHandle() {
-  auto handle = endpoint_client_->PassHandle();
-  endpoint_client_.reset();
-  return handle;
+  return std::exchange(endpoint_client_, nullptr)->PassHandle();
 }
 
 }  // namespace internal

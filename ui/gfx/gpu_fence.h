@@ -1,13 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_GPU_FENCE_H_
 #define UI_GFX_GPU_FENCE_H_
 
-#include "base/macros.h"
+#include "base/component_export.h"
 #include "build/build_config.h"
-#include "ui/gfx/gfx_export.h"
 #include "ui/gfx/gpu_fence_handle.h"
 
 extern "C" typedef struct _ClientGpuFence* ClientGpuFence;
@@ -20,13 +19,17 @@ namespace gfx {
 
 // GpuFence objects own a GpuFenceHandle and release the resources in it when
 // going out of scope as appropriate.
-class GFX_EXPORT GpuFence {
+class COMPONENT_EXPORT(GFX) GpuFence {
  public:
   // Constructor takes ownership of the source handle's resources.
   explicit GpuFence(GpuFenceHandle handle);
   GpuFence() = delete;
   GpuFence(GpuFence&& other);
   GpuFence& operator=(GpuFence&& other);
+
+  GpuFence(const GpuFence&) = delete;
+  GpuFence& operator=(const GpuFence&) = delete;
+
   ~GpuFence();
 
   // Returns a const reference to the underlying GpuFenceHandle
@@ -48,8 +51,6 @@ class GFX_EXPORT GpuFence {
 
  private:
   gfx::GpuFenceHandle fence_handle_;
-
-  DISALLOW_COPY_AND_ASSIGN(GpuFence);
 };
 
 }  // namespace gfx

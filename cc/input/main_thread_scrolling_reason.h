@@ -1,12 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_INPUT_MAIN_THREAD_SCROLLING_REASON_H_
 #define CC_INPUT_MAIN_THREAD_SCROLLING_REASON_H_
 
+#include <stdint.h>
+
+#include <iosfwd>
 #include <memory>
 #include <string>
+
+#include "base/containers/enum_set.h"
 #include "cc/cc_export.h"
 
 namespace base {
@@ -17,76 +22,76 @@ class TracedValue;
 
 namespace cc {
 
-// Ensure this stays in sync with MainThreadScrollingReason in
-// tools/metrics/enums.xml. When adding a new MainThreadScrollingReason, make
-// sure the corresponding [MainThread/Compositor]CanSetScrollReasons function
-// is also updated.
-struct CC_EXPORT MainThreadScrollingReason {
-  enum : uint32_t {
-    kNotScrollingOnMain = 0,
+enum class MainThreadRepaintReason {
+  kMinValue,
+  // See InputHandler::ScrollStatus::main_thread_repaint_reasons.
+  // They are set in ScrollNode::main_thread_scrolling_reasons, or
+  // kNoScrollingLayer is used for a ScrollNode that doesn't have
+  // main_thread_scrolling_reasons but is_composited is false.
+  kHasBackgroundAttachmentFixedObjects = kMinValue,
+  // Subpixel (LCD) text rendering requires blending glyphs with an opaque
+  // background.
+  kNotOpaqueForTextAndLCDText,
+  kPreferNonCompositedScrolling,
+  kBackgroundNeedsRepaintOnScroll,
+  kMaxValue = kBackgroundNeedsRepaintOnScroll,
+};
 
-    // This enum simultaneously defines actual bitmask values and indices into
-    // the bitmask, but kNotScrollingMain is recorded in the histograms as
-    // value 0, so the 0th bit should never be used.
-    // See also blink::RecordScrollReasonsMetric().
+using MainThreadRepaintReasons = base::EnumSet<MainThreadRepaintReason>;
 
-    // Non-transient scrolling reasons.
-    kHasBackgroundAttachmentFixedObjects = 1 << 1,
-    kThreadedScrollingDisabled = 1 << 3,
+// See InputHandler::ScrollStatus::main_thread_hit_test_reasons.
+enum class MainThreadHitTestReason {
+  kMinValue,
+  kScrollbarScrolling = kMinValue,
+  kMainThreadScrollHitTestRegion,
+  kFailedHitTest,
+  kMaxValue = kFailedHitTest,
+};
 
-    // Style-related scrolling on main reasons.
-    // These *AndLCDText reasons are due to subpixel text rendering which can
-    // only be applied by blending glyphs with the background at a specific
-    // screen position; transparency and transforms break this.
-    kNonCompositedReasonsFirst = 18,
-    kNotOpaqueForTextAndLCDText = 1 << 19,
-    kCantPaintScrollingBackgroundAndLCDText = 1 << 20,
-    kNonCompositedReasonsLast = 23,
+using MainThreadHitTestReasons = base::EnumSet<MainThreadHitTestReason>;
 
-    // Transient scrolling reasons. These are computed for each scroll begin.
-    kScrollbarScrolling = 1 << 4,
-    kNonFastScrollableRegion = 1 << 6,
-    kFailedHitTest = 1 << 8,
-    kNoScrollingLayer = 1 << 9,
-    kNotScrollable = 1 << 10,
-    kNonInvertibleTransform = 1 << 12,
-    kWheelEventHandlerRegion = 1 << 24,
-    kTouchEventHandlerRegion = 1 << 25,
+// The following reasons are neither repaint reasons nor hit-test reasons.
+// They don't go through InputHandler::ScrollBegin() or set in
+// InputHandler::ScrollStatus.
+enum class MainThreadScrollingOtherReason {
+  kMinValue,
+  // We need main thread scrolling in a popup because it doesn't have a
+  // threaded input handler. This flag is for metrics only, see
+  // blink::WebPagePopupImpl::HandleGestureEvent.
+  kPopupNoThreadedInput = kMinValue,
 
-    kMainThreadScrollingReasonLast = 25,
-  };
+  // Scrolling can be handled on the compositor thread but it might be
+  // blocked on the main thread waiting for non-passive event handlers to
+  // process the wheel/touch events (i.e. were they preventDefaulted?).
+  kWheelEventHandlerRegion,
+  kTouchEventHandlerRegion,
+  kMaxValue = kTouchEventHandlerRegion,
+};
 
-  static const uint32_t kNonCompositedReasons =
-      kNotOpaqueForTextAndLCDText | kCantPaintScrollingBackgroundAndLCDText;
+using MainThreadScrollingOtherReasons =
+    base::EnumSet<MainThreadScrollingOtherReason>;
 
-  // Returns true if the given MainThreadScrollingReason can be set by the main
-  // thread.
-  static bool MainThreadCanSetScrollReasons(uint32_t reasons) {
-    constexpr uint32_t reasons_set_by_main_thread =
-        kHasBackgroundAttachmentFixedObjects | kThreadedScrollingDisabled;
-    return (reasons & reasons_set_by_main_thread) == reasons;
-  }
+// Utility functions.
+class CC_EXPORT MainThreadScrollingReason {
+ public:
+  MainThreadScrollingReason() = delete;
 
-  // Returns true if the given MainThreadScrollingReason can be set by the
-  // compositor.
-  static bool CompositorCanSetScrollReasons(uint32_t reasons) {
-    constexpr uint32_t reasons_set_by_compositor =
-        kNonFastScrollableRegion | kFailedHitTest | kNoScrollingLayer |
-        kNotScrollable | kNonInvertibleTransform | kWheelEventHandlerRegion |
-        kTouchEventHandlerRegion;
-    return (reasons & reasons_set_by_compositor) == reasons;
-  }
-
-  // Returns true if there are any reasons that prevented the scroller
-  // from being composited.
-  static bool HasNonCompositedScrollReasons(uint32_t reasons) {
-    return (reasons & kNonCompositedReasons) != 0;
-  }
-
-  static std::string AsText(uint32_t reasons);
-  static void AddToTracedValue(uint32_t reasons,
+  static std::string AsText(MainThreadRepaintReasons);
+  static std::string AsText(MainThreadHitTestReasons);
+  static std::string AsText(MainThreadScrollingOtherReasons);
+  static void AddToTracedValue(MainThreadRepaintReasons,
+                               base::trace_event::TracedValue&);
+  static void AddToTracedValue(MainThreadHitTestReasons,
+                               base::trace_event::TracedValue&);
+  static void AddToTracedValue(MainThreadScrollingOtherReasons,
                                base::trace_event::TracedValue&);
 };
+
+// These are declared here for use in gtest-based unit tests but are defined in
+// the //cc:test_support target. Depend on that to use them in a unit test.
+void PrintTo(MainThreadRepaintReasons, std::ostream*);
+void PrintTo(MainThreadHitTestReasons, std::ostream*);
+void PrintTo(MainThreadScrollingOtherReasons, std::ostream*);
 
 }  // namespace cc
 

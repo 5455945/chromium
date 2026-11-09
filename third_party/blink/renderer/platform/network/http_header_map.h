@@ -56,7 +56,10 @@ class PLATFORM_EXPORT HTTPHeaderMap final {
 
   void Adopt(std::unique_ptr<CrossThreadHTTPHeaderMapData>);
 
-  typedef HashMap<AtomicString, AtomicString, CaseFoldingHash> MapType;
+  typedef HashMap<AtomicString,
+                  AtomicString,
+                  DeprecatedCaseFoldingHashTraits<AtomicString>>
+      MapType;
   typedef MapType::AddResult AddResult;
   typedef MapType::const_iterator const_iterator;
 
@@ -67,28 +70,30 @@ class PLATFORM_EXPORT HTTPHeaderMap final {
   void Clear() { headers_.clear(); }
   bool Contains(const AtomicString& k) const { return headers_.Contains(k); }
   const AtomicString& Get(const AtomicString& k) const {
-    return headers_.at(k);
+    const auto it = headers_.find(k);
+    if (it == headers_.end())
+      return g_null_atom;
+    return it->value;
   }
   AddResult Set(const AtomicString& k, const AtomicString& v) {
-    SECURITY_DCHECK(!k.Contains('\n') && !k.Contains('\r'));
-    SECURITY_DCHECK(!v.Contains('\n') && !v.Contains('\r'));
+    SECURITY_DCHECK(!k.contains('\n') && !k.contains('\r'));
+    SECURITY_DCHECK(!v.contains('\n') && !v.contains('\r'));
     return headers_.Set(k, v);
   }
   AddResult Add(const AtomicString& k, const AtomicString& v) {
-    SECURITY_DCHECK(!k.Contains('\n') && !k.Contains('\r'));
-    SECURITY_DCHECK(!v.Contains('\n') && !v.Contains('\r'));
+    SECURITY_DCHECK(!k.contains('\n') && !k.contains('\r'));
+    SECURITY_DCHECK(!v.contains('\n') && !v.contains('\r'));
     return headers_.insert(k, v);
   }
   void Remove(const AtomicString& k) { headers_.erase(k); }
-  bool operator!=(const HTTPHeaderMap& rhs) const {
-    return headers_ != rhs.headers_;
-  }
   bool operator==(const HTTPHeaderMap& rhs) const {
     return headers_ == rhs.headers_;
   }
 
+  String GetAsRawString(int status_code, String status_message) const;
+
  private:
-  HashMap<AtomicString, AtomicString, CaseFoldingHash> headers_;
+  MapType headers_;
 };
 
 }  // namespace blink

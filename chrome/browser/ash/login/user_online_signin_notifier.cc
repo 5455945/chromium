@@ -1,36 +1,40 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/user_online_signin_notifier.h"
 
+#include "base/check_deref.h"
 #include "chrome/browser/ash/login/helper.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
 
-namespace chromeos {
+namespace ash {
 
 UserOnlineSigninNotifier::UserOnlineSigninNotifier(
+    PrefService* local_state,
     const user_manager::UserList& users)
-    : users_(users),
+    : local_state_(CHECK_DEREF(local_state)),
+      users_(users),
       online_login_refresh_timer_(std::make_unique<base::OneShotTimer>()) {}
 
 UserOnlineSigninNotifier::~UserOnlineSigninNotifier() = default;
 
 void UserOnlineSigninNotifier::CheckForPolicyEnforcedOnlineSignin() {
   base::TimeDelta min_delta = base::TimeDelta::Max();
-  for (auto* user : users_) {
-    const absl::optional<base::TimeDelta> offline_signin_limit =
-        user_manager::known_user::GetOfflineSigninLimit(user->GetAccountId());
+  user_manager::KnownUser known_user(&local_state_.get());
+  for (user_manager::User* user : users_) {
+    const std::optional<base::TimeDelta> offline_signin_limit =
+        known_user.GetOfflineSigninLimit(user->GetAccountId());
     if (!offline_signin_limit) {
       continue;
     }
 
     const base::Time last_online_signin =
-        user_manager::known_user::GetLastOnlineSignin(user->GetAccountId());
+        known_user.GetLastOnlineSignin(user->GetAccountId());
     base::TimeDelta time_to_next_online_signin = login::TimeToOnlineSignIn(
         last_online_signin, offline_signin_limit.value());
-    if (time_to_next_online_signin > base::TimeDelta() &&
+    if (time_to_next_online_signin.is_positive() &&
         time_to_next_online_signin < min_delta) {
       min_delta = time_to_next_online_signin;
     }
@@ -65,4 +69,4 @@ void UserOnlineSigninNotifier::NotifyObservers(const AccountId& account_id) {
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

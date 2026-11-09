@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_DELEGATED_INK_HANDLER_H_
 
 #include <memory>
-
-#include "third_party/abseil-cpp/absl/types/variant.h"
+#include <variant>
 
 namespace gfx {
 class DelegatedInkMetadata;
@@ -36,7 +35,7 @@ class DelegatedInkHandler {
 
  private:
   const bool use_delegated_ink_renderer_;
-  absl::variant<MetadataUniquePtr, RendererUniquePtr> ink_data_;
+  std::variant<MetadataUniquePtr, RendererUniquePtr> ink_data_;
 };
 
 }  // namespace viz

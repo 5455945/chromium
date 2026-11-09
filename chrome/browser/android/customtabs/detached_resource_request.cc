@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,20 @@
 #include <cstdlib>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/referrer.h"
+#include "net/cookies/site_for_cookies.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_request_job.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
-#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
-#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace customtabs {
@@ -29,27 +28,7 @@ namespace customtabs {
 namespace {
 
 void RecordParallelRequestHistograms(const std::string& suffix,
-                                     int redirects,
-                                     base::TimeDelta duration,
                                      int net_error) {
-  bool success = net_error == net::OK;
-  if (success) {
-    // Max 20 redirects, 21 would be a bug.
-    base::UmaHistogramCustomCounts(
-        "CustomTabs.DetachedResourceRequest.RedirectsCount.Success" + suffix,
-        redirects, 1, 21, 21);
-    base::UmaHistogramMediumTimes(
-        "CustomTabs.DetachedResourceRequest.Duration.Success" + suffix,
-        duration);
-  } else {
-    base::UmaHistogramCustomCounts(
-        "CustomTabs.DetachedResourceRequest.RedirectsCount.Failure" + suffix,
-        redirects, 1, 21, 21);
-    base::UmaHistogramMediumTimes(
-        "CustomTabs.DetachedResourceRequest.Duration.Failure" + suffix,
-        duration);
-  }
-
   base::UmaHistogramSparse(
       "CustomTabs.DetachedResourceRequest.FinalStatus" + suffix, net_error);
 }
@@ -60,14 +39,14 @@ void RecordParallelRequestHistograms(const std::string& suffix,
 void DetachedResourceRequest::CreateAndStart(
     content::BrowserContext* browser_context,
     const GURL& url,
-    const GURL& site_for_cookies,
+    const GURL& site_for_referrer,
     const net::ReferrerPolicy referrer_policy,
     Motivation motivation,
     const std::string& package_name,
     DetachedResourceRequest::OnResultCallback cb) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   std::unique_ptr<DetachedResourceRequest> detached_request(
-      new DetachedResourceRequest(url, site_for_cookies, referrer_policy,
+      new DetachedResourceRequest(url, site_for_referrer, referrer_policy,
                                   motivation, package_name, std::move(cb)));
   Start(std::move(detached_request), browser_context);
 }
@@ -76,16 +55,15 @@ DetachedResourceRequest::~DetachedResourceRequest() = default;
 
 DetachedResourceRequest::DetachedResourceRequest(
     const GURL& url,
-    const GURL& site_for_cookies,
+    const GURL& site_for_referrer,
     net::ReferrerPolicy referrer_policy,
     Motivation motivation,
     const std::string& package_name,
     DetachedResourceRequest::OnResultCallback cb)
     : url_(url),
-      site_for_cookies_(site_for_cookies),
+      site_for_referrer_(site_for_referrer),
       motivation_(motivation),
-      cb_(std::move(cb)),
-      redirects_(0) {
+      cb_(std::move(cb)) {
   is_from_aga_ = package_name == "com.google.android.googlequicksearchbox";
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("customtabs_parallel_request",
@@ -104,7 +82,7 @@ DetachedResourceRequest::DetachedResourceRequest(
             }
             policy {
               cookies_allowed: YES
-              cookie_store: "user"
+              cookies_store: "user"
               policy_exception_justification: "Identical to a resource fetch."
             })");
 
@@ -113,28 +91,28 @@ DetachedResourceRequest::DetachedResourceRequest(
   resource_request->url = url_;
   // The referrer is stripped if it's not set properly initially.
   resource_request->referrer = net::URLRequestJob::ComputeReferrerForPolicy(
-      referrer_policy, site_for_cookies_, url_);
+      referrer_policy, site_for_referrer_, url_);
   resource_request->referrer_policy = referrer_policy;
   resource_request->site_for_cookies =
-      net::SiteForCookies::FromUrl(site_for_cookies_);
+      net::SiteForCookies::FromUrl(site_for_referrer_);
 
-  url::Origin site_for_cookies_origin = url::Origin::Create(site_for_cookies_);
-  resource_request->request_initiator = site_for_cookies_origin;
+  url::Origin site_for_referrer_origin =
+      url::Origin::Create(site_for_referrer_);
+  resource_request->request_initiator = site_for_referrer_origin;
 
-  // Since |site_for_cookies_| has gone through digital asset links
+  // Since `site_for_referrer_` has gone through digital asset links
   // verification, it should be ok to use it to compute the network isolation
   // key.
   resource_request->trusted_params = network::ResourceRequest::TrustedParams();
   resource_request->trusted_params->isolation_info = net::IsolationInfo::Create(
-      net::IsolationInfo::RequestType::kOther, site_for_cookies_origin,
-      site_for_cookies_origin,
-      net::SiteForCookies::FromOrigin(site_for_cookies_origin));
+      net::IsolationInfo::RequestType::kOther, site_for_referrer_origin,
+      site_for_referrer_origin,
+      net::SiteForCookies::FromOrigin(site_for_referrer_origin));
 
   resource_request->resource_type =
       static_cast<int>(blink::mojom::ResourceType::kSubResource);
   resource_request->do_not_prompt_for_login = true;
   resource_request->enable_load_timing = false;
-  resource_request->report_raw_headers = false;
 
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  traffic_annotation);
@@ -144,12 +122,7 @@ DetachedResourceRequest::DetachedResourceRequest(
 void DetachedResourceRequest::Start(
     std::unique_ptr<DetachedResourceRequest> request,
     content::BrowserContext* browser_context) {
-  request->start_time_ = base::TimeTicks::Now();
   auto* storage_partition = browser_context->GetStoragePartition(nullptr);
-
-  request->url_loader_->SetOnRedirectCallback(
-      base::BindRepeating(&DetachedResourceRequest::OnRedirectCallback,
-                          base::Unretained(request.get())));
 
   // Retry for client-side transient failures: DNS resolution errors and network
   // configuration changes. Server HTTP 5xx errors are not retried.
@@ -167,7 +140,7 @@ void DetachedResourceRequest::Start(
   // DNS error, not a network configuration change. This is visible in
   // metrics. As a consequence, retry the request on DNS errors as well. Note
   // that this is harmless, since the request cannot have server-side
-  // side-effects if the DNS resolution failed. See crbug.com/1078350 for
+  // side-effects if the DNS resolution failed. See crbug.com/40689293 for
   // details.
   int retry_mode = network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE |
                    network::SimpleURLLoader::RETRY_ON_NAME_NOT_RESOLVED;
@@ -187,41 +160,16 @@ void DetachedResourceRequest::Start(
       kMaxResponseSize);
 }
 
-void DetachedResourceRequest::OnRedirectCallback(
-    const net::RedirectInfo& redirect_info,
-    const network::mojom::URLResponseHead& response_head,
-    std::vector<std::string>* to_be_removed_headers) {
-  redirects_++;
-}
-
 void DetachedResourceRequest::OnResponseCallback(
-    std::unique_ptr<std::string> response_body) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    std::optional<std::string> response_body) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   int net_error = url_loader_->NetError();
   net_error = std::abs(net_error);
-  auto duration = base::TimeTicks::Now() - start_time_;
 
-  switch (motivation_) {
-    case Motivation::kParallelRequest: {
-      RecordParallelRequestHistograms("", redirects_, duration, net_error);
-      if (is_from_aga_) {
-        RecordParallelRequestHistograms(".FromAga", redirects_, duration,
-                                        net_error);
-      }
-      break;
-    }
-    case Motivation::kResourcePrefetch: {
-      if (net_error == net::OK) {
-        UMA_HISTOGRAM_MEDIUM_TIMES(
-            "CustomTabs.ResourcePrefetch.Duration.Success", duration);
-      } else {
-        UMA_HISTOGRAM_MEDIUM_TIMES(
-            "CustomTabs.ResourcePrefetch.Duration.Failure", duration);
-      }
-
-      base::UmaHistogramSparse("CustomTabs.ResourcePrefetch.FinalStatus",
-                               net_error);
-      break;
+  if (motivation_ == Motivation::kParallelRequest) {
+    RecordParallelRequestHistograms("", net_error);
+    if (is_from_aga_) {
+      RecordParallelRequestHistograms(".FromAga", net_error);
     }
   }
 

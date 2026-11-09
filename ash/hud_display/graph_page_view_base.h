@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include "ash/hud_display/data_source.h"
 #include "ash/hud_display/legend.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "ui/views/view.h"
 
@@ -17,14 +18,14 @@ class ImageButton;
 namespace ash {
 namespace hud_display {
 
-class Grid;
 class Legend;
+class ReferenceLines;
 
 // Interface for a single graph page.
 class GraphPageViewBase : public views::View {
- public:
-  METADATA_HEADER(GraphPageViewBase);
+  METADATA_HEADER(GraphPageViewBase, views::View)
 
+ public:
   GraphPageViewBase();
   GraphPageViewBase(const GraphPageViewBase&) = delete;
   GraphPageViewBase& operator=(const GraphPageViewBase&) = delete;
@@ -36,16 +37,17 @@ class GraphPageViewBase : public views::View {
   // Adds default legend.
   void CreateLegend(const std::vector<Legend::Entry>& entries);
 
-  // Put grid in its dedicated container. See Grid class for details.
-  Grid* CreateGrid(float left,
-                   float top,
-                   float right,
-                   float bottom,
-                   const std::u16string& x_unit,
-                   const std::u16string& y_unit,
-                   int horizontal_points_number,
-                   int horizontal_ticks_interval,
-                   float vertical_ticks_interval);
+  // Put the |ReferenceLines| object in its dedicated container. See
+  // |ReferenceLines| for details.
+  ReferenceLines* CreateReferenceLines(float left,
+                                       float top,
+                                       float right,
+                                       float bottom,
+                                       const std::u16string& x_unit,
+                                       const std::u16string& y_unit,
+                                       int horizontal_points_number,
+                                       int horizontal_ticks_interval,
+                                       float vertical_ticks_interval);
 
  protected:
   void RefreshLegendValues();
@@ -53,13 +55,13 @@ class GraphPageViewBase : public views::View {
  private:
   void OnButtonPressed();
 
-  // Container for the Grid object.
-  views::View* grid_container_ = nullptr;  // not owned
+  // Container for the |ReferenceLines| object.
+  raw_ptr<views::View> reference_lines_container_ = nullptr;  // not owned
 
   // Container for the legend object.
-  views::View* legend_container_ = nullptr;              // not owned
-  views::ImageButton* legend_min_max_button_ = nullptr;  // not owned
-  Legend* legend_ = nullptr;                             // not owned
+  raw_ptr<views::View> legend_container_ = nullptr;              // not owned
+  raw_ptr<views::ImageButton> legend_min_max_button_ = nullptr;  // not owned
+  raw_ptr<Legend> legend_ = nullptr;                             // not owned
 
   SEQUENCE_CHECKER(ui_sequence_checker_);
 };

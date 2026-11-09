@@ -1,8 +1,8 @@
 import re
 import struct
-from mod_pywebsocket import common
-from mod_pywebsocket import msgutil
-from mod_pywebsocket import util
+from pywebsocket3 import common
+from pywebsocket3 import msgutil
+from pywebsocket3 import util
 
 
 def web_socket_do_extra_handshake(request):
@@ -12,8 +12,9 @@ def web_socket_do_extra_handshake(request):
 def web_socket_transfer_data(request):
     match = re.search(r'\?case=(\d+_\d+)$', request.ws_resource)
     if match is None:
-        msgutil.send_message(request,
-                             'FAIL: Query value is incorrect or missing')
+        msgutil.send_message(
+            request, 'FAIL: Query value is incorrect or missing'
+        )
         return
 
     payload_length, extended_length = (match.group(1)).split('_', 1)
@@ -30,8 +31,9 @@ def web_socket_transfer_data(request):
     elif payload_length == 127:
         header += struct.pack('!Q', extended_length)
     else:
-        msgutil.send_message(request,
-                             'FAIL: Query value is incorrect or missing')
+        msgutil.send_message(
+            request, 'FAIL: Query value is incorrect or missing'
+        )
         return
     request.connection.write(header)
     request.connection.write(b'X' * extended_length)

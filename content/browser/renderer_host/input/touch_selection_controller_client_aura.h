@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,18 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/timer/timer.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/touch_selection_controller_client_manager.h"
 #include "ui/touch_selection/touch_selection_controller.h"
 #include "ui/touch_selection/touch_selection_menu_runner.h"
+
+namespace ui {
+class TouchSelectionMagnifierAura;
+}
 
 namespace content {
 struct ContextMenuParams;
@@ -27,7 +32,15 @@ class CONTENT_EXPORT TouchSelectionControllerClientAura
       public TouchSelectionControllerClientManager {
  public:
   explicit TouchSelectionControllerClientAura(RenderWidgetHostViewAura* rwhva);
+
+  TouchSelectionControllerClientAura(
+      const TouchSelectionControllerClientAura&) = delete;
+  TouchSelectionControllerClientAura& operator=(
+      const TouchSelectionControllerClientAura&) = delete;
+
   ~TouchSelectionControllerClientAura() override;
+
+  void Detach();
 
   // Called when |rwhva_|'s window is moved, to update the quick menu's
   // position.
@@ -49,13 +62,18 @@ class CONTENT_EXPORT TouchSelectionControllerClientAura
   // better not to send context menu request from the renderer in this case and
   // instead decide in the client about showing the quick menu in response to
   // selection events. (http://crbug.com/548245)
-  bool HandleContextMenu(const ContextMenuParams& params);
+  virtual bool HandleContextMenu(const ContextMenuParams& params,
+                                 bool can_paste);
 
-  void UpdateClientSelectionBounds(const gfx::SelectionBound& start,
-                                   const gfx::SelectionBound& end);
+  virtual void UpdateClientSelectionBounds(const gfx::SelectionBound& start,
+                                           const gfx::SelectionBound& end);
 
   // TouchSelectionControllerClientManager.
   void DidStopFlinging() override;
+  void OnSwipeToMoveCursorBegin() override;
+  void OnSwipeToMoveCursorEnd() override;
+  void OnClientHitTestRegionUpdated(
+      ui::TouchSelectionControllerClient* client) override;
   void UpdateClientSelectionBounds(
       const gfx::SelectionBound& start,
       const gfx::SelectionBound& end,
@@ -73,9 +91,11 @@ class CONTENT_EXPORT TouchSelectionControllerClientAura
   class EnvEventObserver;
   class EnvPreTargetHandler;
 
-  bool IsQuickMenuAvailable() const;
+  bool IsQuickMenuAvailable(bool can_paste) const;
   void ShowQuickMenu();
   void UpdateQuickMenu();
+  void ShowMagnifier();
+  void HideMagnifier();
 
   // ui::TouchSelectionControllerClient:
   bool SupportsAnimation() const override;
@@ -91,19 +111,22 @@ class CONTENT_EXPORT TouchSelectionControllerClientAura
   void DidScroll() override;
 
   // ui::TouchSelectionMenuClient:
-  bool IsCommandIdEnabled(int command_id) const override;
+  bool IsCommandIdEnabled(int command_id, bool can_paste) const override;
   void ExecuteCommand(int command_id, int event_flags) override;
   void RunContextMenu() override;
-  bool ShouldShowQuickMenu() override;
+  bool ShouldShowQuickMenu(bool can_paste) override;
   std::u16string GetSelectedText() override;
 
-  // Not owned, non-null for the lifetime of this object.
-  RenderWidgetHostViewAura* rwhva_;
+  // Not owned. Non-null until `Detach()` is called when the owning
+  // RenderWidgetHostViewAura tears down; null afterwards.
+  raw_ptr<RenderWidgetHostViewAura> rwhva_;
 
   class InternalClient final : public TouchSelectionControllerClient {
    public:
     explicit InternalClient(RenderWidgetHostViewAura* rwhva) : rwhva_(rwhva) {}
     ~InternalClient() final {}
+
+    void Detach() { rwhva_ = nullptr; }
 
     bool SupportsAnimation() const final;
     void SetNeedsAnimate() final;
@@ -118,12 +141,14 @@ class CONTENT_EXPORT TouchSelectionControllerClientAura
     void DidScroll() override;
 
    private:
-    RenderWidgetHostViewAura* rwhva_;
+    // Cleared by `Detach()` when the owning RenderWidgetHostViewAura tears
+    // down, so it never dangles. All dereferences below are null-guarded.
+    raw_ptr<RenderWidgetHostViewAura> rwhva_;
   } internal_client_;
 
   // Keep track of which client interface to use.
-  TouchSelectionControllerClient* active_client_;
-  TouchSelectionMenuClient* active_menu_client_;
+  raw_ptr<TouchSelectionControllerClient> active_client_;
+  raw_ptr<TouchSelectionMenuClient> active_menu_client_;
   gfx::SelectionBound manager_selection_start_;
   gfx::SelectionBound manager_selection_end_;
 
@@ -141,7 +166,12 @@ class CONTENT_EXPORT TouchSelectionControllerClientAura
   // An event observer that deactivates touch selection on certain input events.
   std::unique_ptr<EnvEventObserver> env_event_observer_;
 
-  DISALLOW_COPY_AND_ASSIGN(TouchSelectionControllerClientAura);
+  // Magnifier which is shown when touch dragging to adjust the selection.
+  std::unique_ptr<ui::TouchSelectionMagnifierAura> touch_selection_magnifier_;
+
+  // Factory used for cancelling in-flight OpenMenu requests.
+  base::WeakPtrFactory<TouchSelectionControllerClientAura>
+      menu_request_weak_ptr_factory_{this};
 };
 
 }  // namespace content

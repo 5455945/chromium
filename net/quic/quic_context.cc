@@ -1,13 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/quic/quic_context.h"
 
+#include "net/base/features.h"
 #include "net/quic/platform/impl/quic_chromium_clock.h"
 #include "net/quic/quic_chromium_connection_helper.h"
-#include "net/third_party/quiche/src/quic/core/crypto/quic_random.h"
-#include "net/third_party/quiche/src/quic/core/quic_constants.h"
+#include "net/ssl/cert_compression.h"
+#include "net/ssl/ssl_key_logger.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_protocol.h"
+#include "net/third_party/quiche/src/quiche/quic/core/crypto/quic_random.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_constants.h"
 
 namespace net {
 
@@ -19,6 +23,20 @@ const int32_t kQuicStreamMaxRecvWindowSize = 6 * 1024 * 1024;    // 6 MB
 
 // Set the maximum number of undecryptable packets the connection will store.
 const int32_t kMaxUndecryptablePackets = 100;
+
+base::TimeDelta GetQuicHandshakeTimeout(const QuicParams& params) {
+  if (base::FeatureList::IsEnabled(features::kExtendQuicHandshakeTimeout)) {
+    return features::kQuicHandshakeTimeout.Get();
+  }
+  return params.max_time_before_crypto_handshake;
+}
+
+base::TimeDelta GetMaxIdleTimeBeforeCryptoHandshake(const QuicParams& params) {
+  if (base::FeatureList::IsEnabled(features::kExtendQuicHandshakeTimeout)) {
+    return features::kMaxIdleTimeBeforeCryptoHandshake.Get();
+  }
+  return params.max_idle_time_before_crypto_handshake;
+}
 
 }  // namespace
 
@@ -39,6 +57,26 @@ QuicContext::QuicContext(
 
 QuicContext::~QuicContext() = default;
 
+quic::ParsedQuicVersion QuicContext::SelectQuicVersion(
+    const quic::ParsedQuicVersionVector& advertised_versions) {
+  const quic::ParsedQuicVersionVector& supported_versions =
+      params()->supported_versions;
+  if (advertised_versions.empty()) {
+    return supported_versions[0];
+  }
+
+  for (const quic::ParsedQuicVersion& advertised : advertised_versions) {
+    for (const quic::ParsedQuicVersion& supported : supported_versions) {
+      if (supported == advertised) {
+        DCHECK_NE(quic::ParsedQuicVersion::Unsupported(), supported);
+        return supported;
+      }
+    }
+  }
+
+  return quic::ParsedQuicVersion::Unsupported();
+}
+
 quic::QuicConfig InitializeQuicConfig(const QuicParams& params) {
   DCHECK_GT(params.idle_connection_timeout, base::TimeDelta());
   quic::QuicConfig config;
@@ -47,10 +85,10 @@ quic::QuicConfig InitializeQuicConfig(const QuicParams& params) {
           params.idle_connection_timeout.InMicroseconds()));
   config.set_max_time_before_crypto_handshake(
       quic::QuicTime::Delta::FromMicroseconds(
-          params.max_time_before_crypto_handshake.InMicroseconds()));
+          GetQuicHandshakeTimeout(params).InMicroseconds()));
   config.set_max_idle_time_before_crypto_handshake(
       quic::QuicTime::Delta::FromMicroseconds(
-          params.max_idle_time_before_crypto_handshake.InMicroseconds()));
+          GetMaxIdleTimeBeforeCryptoHandshake(params).InMicroseconds()));
   config.SetConnectionOptionsToSend(params.connection_options);
   config.SetClientConnectionOptions(params.client_connection_options);
   config.set_max_undecryptable_packets(kMaxUndecryptablePackets);
@@ -59,6 +97,15 @@ quic::QuicConfig InitializeQuicConfig(const QuicParams& params) {
   config.SetInitialStreamFlowControlWindowToSend(kQuicStreamMaxRecvWindowSize);
   config.SetBytesForConnectionIdToSend(0);
   return config;
+}
+
+void ConfigureQuicCryptoClientConfig(
+    quic::QuicCryptoClientConfig& crypto_config) {
+  if (SSLKeyLoggerManager::IsActive()) {
+    SSL_CTX_set_keylog_callback(crypto_config.ssl_ctx(),
+                                SSLKeyLoggerManager::KeyLogCallback);
+  }
+  ConfigureCertificateCompression(crypto_config.ssl_ctx());
 }
 
 }  // namespace net

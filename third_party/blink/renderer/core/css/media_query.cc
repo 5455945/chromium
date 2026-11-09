@@ -30,9 +30,12 @@
 
 #include <algorithm>
 #include <memory>
+
+#include "third_party/blink/renderer/core/css/css_markup.h"
 #include "third_party/blink/renderer/core/css/media_query_exp.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/media_type_names.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -40,57 +43,95 @@ namespace blink {
 // https://drafts.csswg.org/cssom/#serialize-a-media-query
 String MediaQuery::Serialize() const {
   StringBuilder result;
-  switch (restrictor_) {
-    case MediaQuery::kOnly:
+  switch (Restrictor()) {
+    case RestrictorType::kOnly:
       result.Append("only ");
       break;
-    case MediaQuery::kNot:
+    case RestrictorType::kNot:
       result.Append("not ");
       break;
-    case MediaQuery::kNone:
+    case RestrictorType::kNone:
       break;
   }
 
-  if (expressions_.IsEmpty()) {
-    result.Append(media_type_);
-    return result.ToString();
+  const ConditionalExpNode* exp_node = ExpNode();
+
+  if (!exp_node) {
+    SerializeIdentifier(MediaType(), result);
+    return result.ReleaseString();
   }
 
-  if (media_type_ != media_type_names::kAll || restrictor_ != kNone) {
-    result.Append(media_type_);
+  if (MediaType() != media_type_names::kAll ||
+      Restrictor() != RestrictorType::kNone) {
+    SerializeIdentifier(MediaType(), result);
     result.Append(" and ");
   }
 
-  result.Append(expressions_.at(0).Serialize());
-  for (wtf_size_t i = 1; i < expressions_.size(); ++i) {
-    result.Append(" and ");
-    result.Append(expressions_.at(i).Serialize());
+  if (exp_node) {
+    result.Append(exp_node->Serialize());
   }
-  return result.ToString();
+
+  return result.ReleaseString();
 }
 
-std::unique_ptr<MediaQuery> MediaQuery::CreateNotAll() {
-  return std::make_unique<MediaQuery>(MediaQuery::kNot, media_type_names::kAll,
-                                      ExpressionHeapVector());
+MediaQuery* MediaQuery::CreateNotAll() {
+  return MakeGarbageCollected<MediaQuery>(
+      RestrictorType::kNot, media_type_names::kAll, nullptr /* exp_node */);
 }
 
 MediaQuery::MediaQuery(RestrictorType restrictor,
                        String media_type,
-                       ExpressionHeapVector expressions)
-    : restrictor_(restrictor),
-      media_type_(AttemptStaticStringCreation(media_type.LowerASCII())),
-      expressions_(std::move(expressions)) {}
+                       const ConditionalExpNode* exp_node)
+    : media_type_(AttemptStaticStringCreation(media_type.ToAsciiLower())),
+      exp_node_(exp_node),
+      restrictor_(restrictor) {}
 
 MediaQuery::MediaQuery(const MediaQuery& o)
-    : restrictor_(o.restrictor_),
-      media_type_(o.media_type_),
-      serialization_cache_(o.serialization_cache_) {
-  expressions_.ReserveInitialCapacity(o.expressions_.size());
-  for (unsigned i = 0; i < o.expressions_.size(); ++i)
-    expressions_.push_back(o.expressions_[i]);
-}
+    : media_type_(o.media_type_),
+      serialization_cache_(o.serialization_cache_),
+      exp_node_(o.exp_node_),
+      restrictor_(o.restrictor_) {}
 
 MediaQuery::~MediaQuery() = default;
+
+void MediaQuery::Trace(Visitor* visitor) const {
+  visitor->Trace(exp_node_);
+}
+
+void MediaQuery::CollectExpressions(const ConditionalExpNode& root,
+                                    HeapVector<MediaQueryExp>& expressions) {
+  class ExpressionCollector : public ConditionalExpNodeVisitor {
+    STACK_ALLOCATED();
+
+   public:
+    explicit ExpressionCollector(HeapVector<MediaQueryExp>& expressions)
+        : expressions_(expressions) {}
+
+   private:
+    KleeneValue EvaluateMediaQueryFeatureExpNode(
+        const MediaQueryFeatureExpNode& node) override {
+      expressions_.push_back(node.GetMediaQueryExp());
+      return KleeneValue::kUnknown;
+    }
+
+    HeapVector<MediaQueryExp>& expressions_;
+  };
+
+  ExpressionCollector collector(expressions);
+  root.Evaluate(collector);
+}
+
+MediaQuery::RestrictorType MediaQuery::Restrictor() const {
+  return restrictor_;
+}
+
+const ConditionalExpNode* MediaQuery::ExpNode() const {
+  return exp_node_.Get();
+}
+
+const String& MediaQuery::MediaType() const {
+  return media_type_;
+}
 
 // https://drafts.csswg.org/cssom/#compare-media-queries
 bool MediaQuery::operator==(const MediaQuery& other) const {
@@ -99,8 +140,9 @@ bool MediaQuery::operator==(const MediaQuery& other) const {
 
 // https://drafts.csswg.org/cssom/#serialize-a-list-of-media-queries
 String MediaQuery::CssText() const {
-  if (serialization_cache_.IsNull())
+  if (serialization_cache_.IsNull()) {
     const_cast<MediaQuery*>(this)->serialization_cache_ = Serialize();
+  }
 
   return serialization_cache_;
 }

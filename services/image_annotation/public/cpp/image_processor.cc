@@ -1,13 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/image_annotation/public/cpp/image_processor.h"
 
-#include "base/bind.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "services/image_annotation/image_annotation_metrics.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkImage.h"
@@ -56,8 +55,9 @@ void ScaleAndEncodeImage(scoped_refptr<base::SequencedTaskRunner> task_runner,
           ? image
           : ScaleImage(image, std::sqrt(1.0 * max_pixels / num_pixels));
 
-  std::vector<uint8_t> encoded;
-  if (!gfx::JPEGCodec::Encode(scaled_image, jpg_quality, &encoded)) {
+  std::optional<std::vector<uint8_t>> encoded =
+      gfx::JPEGCodec::Encode(scaled_image, jpg_quality);
+  if (!encoded) {
     ReportEncodedJpegSize(0u);
     task_runner->PostTask(
         FROM_HERE,
@@ -65,9 +65,9 @@ void ScaleAndEncodeImage(scoped_refptr<base::SequencedTaskRunner> task_runner,
     return;
   }
 
-  ReportEncodedJpegSize(encoded.size());
+  ReportEncodedJpegSize(encoded->size());
   task_runner->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), std::move(encoded),
+      FROM_HERE, base::BindOnce(std::move(callback), std::move(encoded).value(),
                                 scaled_image.width(), scaled_image.height()));
 }
 
@@ -92,11 +92,11 @@ mojo::PendingRemote<mojom::ImageProcessor> ImageProcessor::GetPendingRemote() {
 }
 
 void ImageProcessor::GetJpgImageData(GetJpgImageDataCallback callback) {
-  DCHECK(base::SequencedTaskRunnerHandle::IsSet());
+  DCHECK(base::SequencedTaskRunner::HasCurrentDefault());
 
   background_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&ScaleAndEncodeImage,
-                                base::SequencedTaskRunnerHandle::Get(),
+                                base::SequencedTaskRunner::GetCurrentDefault(),
                                 std::move(callback), get_pixels_.Run(),
                                 kMaxPixels, kJpgQuality));
 }

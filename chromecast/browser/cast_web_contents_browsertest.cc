@@ -1,41 +1,46 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#ifndef CHROMECAST_BROWSER_CAST_WEB_CONTENTS_BROWSERTEST_H_
-#define CHROMECAST_BROWSER_CAST_WEB_CONTENTS_BROWSERTEST_H_
 
 #include <algorithm>
 #include <memory>
 #include <string>
 
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
-#include "base/files/file_util.h"
-#include "base/macros.h"
+#include "base/files/file_path.h"
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "chromecast/base/chromecast_switches.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
 #include "chromecast/browser/cast_browser_context.h"
 #include "chromecast/browser/cast_browser_process.h"
+#include "chromecast/browser/cast_content_window.h"
 #include "chromecast/browser/cast_web_contents_impl.h"
+#include "chromecast/browser/cast_web_contents_observer.h"
+#include "chromecast/browser/cast_web_service.h"
+#include "chromecast/browser/cast_web_view_default.h"
+#include "chromecast/browser/mojom/cast_web_service.mojom.h"
+#include "chromecast/browser/test/cast_browser_test.h"
 #include "chromecast/browser/test_interfaces.test-mojom.h"
+#include "chromecast/common/feature_constants.h"
+#include "chromecast/common/mojom/activity_window.mojom.h"
+#include "chromecast/common/mojom/cast_demo.mojom.h"
+#include "chromecast/common/mojom/gesture.mojom.h"
+#include "chromecast/common/mojom/settings_ui.mojom.h"
+#include "chromecast/mojo/interface_bundle.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -50,6 +55,8 @@
 #include "services/service_manager/public/mojom/interface_provider.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "url/gurl.h"
 
 using ::testing::_;
@@ -59,8 +66,6 @@ using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Expectation;
 using ::testing::InSequence;
-using ::testing::Invoke;
-using ::testing::InvokeWithoutArgs;
 using ::testing::Mock;
 using ::testing::NiceMock;
 using ::testing::Property;
@@ -83,7 +88,7 @@ base::FilePath GetTestDataPath() {
 
 base::FilePath GetTestDataFilePath(const std::string& name) {
   base::FilePath file_path;
-  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &file_path));
+  CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &file_path));
   return file_path.Append(GetTestDataPath()).AppendASCII(name);
 }
 
@@ -98,40 +103,23 @@ std::unique_ptr<net::test_server::HttpResponse> DefaultHandler(
 // =============================================================================
 // Mocks
 // =============================================================================
-class MockCastWebContentsDelegate
-    : public base::SupportsWeakPtr<MockCastWebContentsDelegate>,
-      public CastWebContents::Delegate {
- public:
-  MockCastWebContentsDelegate() {}
-  ~MockCastWebContentsDelegate() override = default;
-
-  MOCK_METHOD2(InnerContentsCreated,
-               void(CastWebContents* inner_contents,
-                    CastWebContents* outer_contents));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockCastWebContentsDelegate);
-};
-
-class MockCastWebContentsObserver : public CastWebContents::Observer {
+class MockCastWebContentsObserver : public CastWebContentsObserver {
  public:
   MockCastWebContentsObserver() {}
+
+  MockCastWebContentsObserver(const MockCastWebContentsObserver&) = delete;
+  MockCastWebContentsObserver& operator=(const MockCastWebContentsObserver&) =
+      delete;
+
   ~MockCastWebContentsObserver() override = default;
 
-  MOCK_METHOD1(OnPageStateChanged, void(CastWebContents* cast_web_contents));
-  MOCK_METHOD2(OnPageStopped,
-               void(CastWebContents* cast_web_contents, int error_code));
-  MOCK_METHOD4(
-      RenderFrameCreated,
-      void(int render_process_id,
-           int render_frame_id,
-           service_manager::InterfaceProvider* frame_interfaces,
-           blink::AssociatedInterfaceProvider* frame_associated_interfaces));
-  MOCK_METHOD1(ResourceLoadFailed, void(CastWebContents* cast_web_contents));
-  MOCK_METHOD1(UpdateTitle, void(const std::u16string& title));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockCastWebContentsObserver);
+  MOCK_METHOD1(PageStateChanged, void(PageState page_state));
+  MOCK_METHOD2(PageStopped, void(PageState page_state, int error_code));
+  MOCK_METHOD2(RenderFrameCreated,
+               void(network::RendererProcessId render_process_id,
+                    int render_frame_id));
+  MOCK_METHOD0(ResourceLoadFailed, void());
+  MOCK_METHOD1(UpdateTitle, void(const std::string& title));
 };
 
 class MockWebContentsDelegate : public content::WebContentsDelegate {
@@ -142,14 +130,18 @@ class MockWebContentsDelegate : public content::WebContentsDelegate {
   MOCK_METHOD1(CloseContents, void(content::WebContents* source));
 };
 
-class TitleChangeObserver : public CastWebContents::Observer {
+class TitleChangeObserver : public CastWebContentsObserver {
  public:
   TitleChangeObserver() = default;
+
+  TitleChangeObserver(const TitleChangeObserver&) = delete;
+  TitleChangeObserver& operator=(const TitleChangeObserver&) = delete;
+
   ~TitleChangeObserver() override = default;
 
   // Spins a Runloop until the title of the page matches the |expected_title|
   // that have been set.
-  void RunUntilTitleEquals(const std::u16string& expected_title) {
+  void RunUntilTitleEquals(const std::string& expected_title) {
     expected_title_ = expected_title;
     // Spin the runloop until the expected conditions are met.
     if (current_title_ != expected_title_) {
@@ -160,8 +152,8 @@ class TitleChangeObserver : public CastWebContents::Observer {
     }
   }
 
-  // CastWebContents::Observer implementation:
-  void UpdateTitle(const std::u16string& title) override {
+  // CastWebContentsObserver implementation:
+  void UpdateTitle(const std::string& title) override {
     // Resumes execution of RunUntilTitleEquals() if |title| matches
     // expectations.
     current_title_ = title;
@@ -172,22 +164,24 @@ class TitleChangeObserver : public CastWebContents::Observer {
   }
 
  private:
-  std::u16string current_title_;
-  std::u16string expected_title_;
+  std::string current_title_;
+  std::string expected_title_;
 
   base::OnceClosure quit_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(TitleChangeObserver);
 };
 
 class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
  public:
   TestMessageReceiver() = default;
+
+  TestMessageReceiver(const TestMessageReceiver&) = delete;
+  TestMessageReceiver& operator=(const TestMessageReceiver&) = delete;
+
   ~TestMessageReceiver() override = default;
 
   void WaitForNextIncomingMessage(
-      base::OnceCallback<
-          void(std::string, absl::optional<blink::WebMessagePort>)> callback) {
+      base::OnceCallback<void(std::string,
+                              std::optional<blink::WebMessagePort>)> callback) {
     DCHECK(message_received_callback_.is_null())
         << "Only one waiting event is allowed.";
     message_received_callback_ = std::move(callback);
@@ -205,12 +199,12 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
       return false;
     }
 
-    absl::optional<blink::WebMessagePort> incoming_port = absl::nullopt;
+    std::optional<blink::WebMessagePort> incoming_port = std::nullopt;
     // Only one MessagePort should be sent to here.
     if (!message.ports.empty()) {
       DCHECK(message.ports.size() == 1)
           << "Only one control port can be provided";
-      incoming_port = absl::make_optional<blink::WebMessagePort>(
+      incoming_port = std::make_optional<blink::WebMessagePort>(
           std::move(message.ports[0]));
     }
 
@@ -222,17 +216,16 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
   }
 
   void OnPipeError() override {
-    if (on_pipe_error_callback_)
+    if (on_pipe_error_callback_) {
       std::move(on_pipe_error_callback_).Run();
+    }
   }
 
   base::OnceCallback<void(std::string,
-                          absl::optional<blink::WebMessagePort> incoming_port)>
+                          std::optional<blink::WebMessagePort> incoming_port)>
       message_received_callback_;
 
   base::OnceCallback<void()> on_pipe_error_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestMessageReceiver);
 };
 
 }  // namespace
@@ -240,20 +233,14 @@ class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
 // =============================================================================
 // Test class
 // =============================================================================
-class CastWebContentsBrowserTest : public content::BrowserTestBase,
+class CastWebContentsBrowserTest : public shell::CastBrowserTest,
                                    public content::WebContentsObserver {
  protected:
-  CastWebContentsBrowserTest() = default;
-  ~CastWebContentsBrowserTest() override = default;
-
-  void SetUp() final {
-    SetUpCommandLine(base::CommandLine::ForCurrentProcess());
-    BrowserTestBase::SetUp();
-  }
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitchASCII(switches::kTestType, "browser");
+    CastBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures, "MojoJS");
   }
+
   void PreRunTestOnMainThread() override {
     // Pump startup related events.
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -265,18 +252,19 @@ class CastWebContentsBrowserTest : public content::BrowserTestBase,
     web_contents_ = content::WebContents::Create(create_params);
     web_contents_->SetDelegate(&mock_wc_delegate_);
 
-    CastWebContents::InitParams init_params;
-    init_params.delegate = mock_cast_wc_delegate_.AsWeakPtr();
-    init_params.is_root_window = true;
-
-    cast_web_contents_ =
-        std::make_unique<CastWebContentsImpl>(web_contents_.get(), init_params);
+    mojom::CastWebViewParamsPtr params = mojom::CastWebViewParams::New();
+    params->is_root_window = true;
+    cast_web_contents_ = std::make_unique<CastWebContentsImpl>(
+        web_contents_.get(), std::move(params));
     mock_cast_wc_observer_.Observe(cast_web_contents_.get());
     title_change_observer_.Observe(cast_web_contents_.get());
 
     render_frames_.clear();
     content::WebContentsObserver::Observe(web_contents_.get());
+
+    run_loop_ = std::make_unique<base::RunLoop>();
   }
+
   void PostRunTestOnMainThread() override {
     cast_web_contents_.reset();
     web_contents_.reset();
@@ -292,22 +280,27 @@ class CastWebContentsBrowserTest : public content::BrowserTestBase,
     embedded_test_server()->StartAcceptingConnections();
   }
 
+  void QuitRunLoop() {
+    DCHECK(run_loop_);
+    if (run_loop_->running()) {
+      run_loop_->QuitWhenIdle();
+    }
+  }
+
   MockWebContentsDelegate mock_wc_delegate_;
-  MockCastWebContentsDelegate mock_cast_wc_delegate_;
   NiceMock<MockCastWebContentsObserver> mock_cast_wc_observer_;
   TitleChangeObserver title_change_observer_;
   std::unique_ptr<content::WebContents> web_contents_;
   std::unique_ptr<CastWebContentsImpl> cast_web_contents_;
+  std::unique_ptr<base::RunLoop> run_loop_;
 
   base::flat_set<content::RenderFrameHost*> render_frames_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CastWebContentsBrowserTest);
 };
 
 MATCHER_P2(CheckPageState, cwc_ptr, expected_state, "") {
-  if (arg != cwc_ptr)
+  if (arg != cwc_ptr) {
     return false;
+  }
   return arg->page_state() == expected_state;
 }
 
@@ -315,59 +308,41 @@ MATCHER_P2(CheckPageState, cwc_ptr, expected_state, "") {
 // Test cases
 // =============================================================================
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: Load a blank page successfully, verify LOADED state.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
-  run_loop->Run();
+  run_loop_->Run();
 
   // ===========================================================================
   // Test: Load a blank page via WebContents API, verify LOADED state.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
-  run_loop = std::make_unique<base::RunLoop>();
   web_contents_->GetController().LoadURL(GURL(url::kAboutBlankURL),
                                          content::Referrer(),
                                          ui::PAGE_TRANSITION_TYPED, "");
-  run_loop->Run();
+  run_loop_->Run();
 
   // ===========================================================================
   // Test: Inject an iframe, verify no events are received for the frame.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStopped(_, _)).Times(0);
   std::string script =
       "var iframe = document.createElement('iframe');"
       "document.body.appendChild(iframe);"
@@ -377,8 +352,8 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   // ===========================================================================
   // Test: Inject an iframe and navigate it to an error page. Verify no events.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStopped(_, _)).Times(0);
   script = "iframe.src = 'https://www.fake-non-existent-cast-page.com';";
   ASSERT_TRUE(ExecJs(web_contents_.get(), script));
 
@@ -387,168 +362,116 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   // the page, and then after the timeout elapses CWC will enter the CLOSED
   // state and notify that the page has stopped.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   EXPECT_CALL(mock_wc_delegate_, CloseContents(web_contents_.get()))
       .Times(AtLeast(1));
-  EXPECT_CALL(mock_cast_wc_observer_,
-              OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                           CastWebContents::PageState::CLOSED),
-                            net::OK))
-      .WillOnce(InvokeWithoutArgs(quit_closure));
-  run_loop = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(mock_cast_wc_observer_, PageStopped(PageState::CLOSED, net::OK))
+      .WillOnce([&]() { QuitRunLoop(); });
   cast_web_contents_->ClosePage();
-  run_loop->Run();
+  run_loop_->Run();
 
   // ===========================================================================
   // Test: Destroy the underlying WebContents. Verify DESTROYED state.
   // ===========================================================================
-  EXPECT_CALL(
-      mock_cast_wc_observer_,
-      OnPageStateChanged(CheckPageState(
-          cast_web_contents_.get(), CastWebContents::PageState::DESTROYED)));
+  run_loop_ = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::DESTROYED))
+      .WillOnce([&]() { QuitRunLoop(); });
   web_contents_.reset();
+  run_loop_->Run();
   cast_web_contents_.reset();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, WebContentsDestroyed) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
-  run_loop->Run();
+  run_loop_->Run();
 
   // ===========================================================================
-  // Test: Destroy the WebContents. Verify OnPageStopped(DESTROYED, net::OK).
+  // Test: Destroy the WebContents. Verify PageStopped(DESTROYED, net::OK).
   // ===========================================================================
-  EXPECT_CALL(
-      mock_cast_wc_observer_,
-      OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                   CastWebContents::PageState::DESTROYED),
-                    net::OK));
+  run_loop_ = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(mock_cast_wc_observer_,
+              PageStopped(PageState::DESTROYED, net::OK))
+      .WillOnce([&]() { QuitRunLoop(); });
   web_contents_.reset();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorPageCrash) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: If the page's main render process crashes, enter ERROR state.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
-  run_loop->Run();
+  run_loop_->Run();
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   EXPECT_CALL(mock_cast_wc_observer_,
-              OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                           CastWebContents::PageState::ERROR),
-                            net::ERR_UNEXPECTED));
+              PageStopped(PageState::ERROR, net::ERR_UNEXPECTED))
+      .WillOnce([&]() { QuitRunLoop(); });
   CrashTab(web_contents_.get());
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLocalFileMissing) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: Loading a page with an HTTP error should enter ERROR state.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(mock_cast_wc_observer_,
-                OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                             CastWebContents::PageState::ERROR),
-                              _))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStopped(PageState::ERROR, _))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   base::FilePath path = GetTestDataFilePath("this_file_does_not_exist.html");
   cast_web_contents_->LoadUrl(content::GetFileUrlWithQuery(path, ""));
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailSubFrames) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: Ignore load errors in sub-frames.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
-  run_loop->Run();
+  run_loop_->Run();
 
   // Create a sub-frame.
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStopped(_, _)).Times(0);
   std::string script =
       "var iframe = document.createElement('iframe');"
       "document.body.appendChild(iframe);"
       "iframe.src = 'about:blank';";
   ASSERT_TRUE(ExecJs(web_contents_.get(), script));
 
-  ASSERT_EQ(2, (int)render_frames_.size());
+  ASSERT_EQ(2u, render_frames_.size());
   auto it =
-      std::find_if(render_frames_.begin(), render_frames_.end(),
-                   [this](content::RenderFrameHost* frame) {
-                     return frame->GetParent() == web_contents_->GetMainFrame();
-                   });
+      std::ranges::find(render_frames_, web_contents_->GetPrimaryMainFrame(),
+                        &content::RenderFrameHost::GetParent);
   ASSERT_NE(render_frames_.end(), it);
   content::RenderFrameHost* sub_frame = *it;
   ASSERT_NE(nullptr, sub_frame);
@@ -558,32 +481,28 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailSubFrames) {
   // ===========================================================================
   // Test: Ignore main frame load failures with net::ERR_ABORTED.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, PageStopped(_, _)).Times(0);
   cast_web_contents_->DidFailLoad(
-      web_contents_->GetMainFrame(),
-      web_contents_->GetMainFrame()->GetLastCommittedURL(), net::ERR_ABORTED);
+      web_contents_->GetPrimaryMainFrame(),
+      web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL(),
+      net::ERR_ABORTED);
 
   // ===========================================================================
   // Test: If main frame fails to load, page should enter ERROR state.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   EXPECT_CALL(mock_cast_wc_observer_,
-              OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                           CastWebContents::PageState::ERROR),
-                            net::ERR_FAILED));
+              PageStopped(PageState::ERROR, net::ERR_FAILED))
+      .WillOnce([&]() { QuitRunLoop(); });
   cast_web_contents_->DidFailLoad(
-      web_contents_->GetMainFrame(),
-      web_contents_->GetMainFrame()->GetLastCommittedURL(), net::ERR_FAILED);
+      web_contents_->GetPrimaryMainFrame(),
+      web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL(),
+      net::ERR_FAILED);
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorHttp4XX) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: If a server responds with an HTTP 4XX error, page should enter ERROR
   // state.
@@ -592,31 +511,21 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorHttp4XX) {
       base::BindRepeating(&DefaultHandler, net::HTTP_NOT_FOUND));
   StartTestServer();
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
     EXPECT_CALL(
         mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(mock_cast_wc_observer_,
-                OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                             CastWebContents::PageState::ERROR),
-                              net::ERR_HTTP_RESPONSE_CODE_FAILURE))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+        PageStopped(PageState::ERROR, net::ERR_HTTP_RESPONSE_CODE_FAILURE))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(embedded_test_server()->GetURL("/dummy.html"));
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailed) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: When main frame load fails, enter ERROR state. This test simulates a
   // load error by intercepting the URL request and failing it with an arbitrary
@@ -627,8 +536,9 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailed) {
   content::URLLoaderInterceptor url_interceptor(base::BindRepeating(
       [](const GURL& url,
          content::URLLoaderInterceptor::RequestParams* params) {
-        if (params->url_request.url != url)
+        if (params->url_request.url != url) {
           return false;
+        }
         network::URLLoaderCompletionStatus status;
         status.error_code = net::ERR_ADDRESS_UNREACHABLE;
         params->client->OnComplete(status);
@@ -636,31 +546,20 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailed) {
       },
       gurl));
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
     EXPECT_CALL(mock_cast_wc_observer_,
-                OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                             CastWebContents::PageState::ERROR),
-                              net::ERR_ADDRESS_UNREACHABLE))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+                PageStopped(PageState::ERROR, net::ERR_ADDRESS_UNREACHABLE))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(gurl);
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LoadCanceledByApp) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: When the app calls window.stop(), the page should not enter the ERROR
   // state. Instead, we treat it as LOADED. This is a historical behavior for
@@ -669,32 +568,20 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LoadCanceledByApp) {
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(
       embedded_test_server()->GetURL("/load_cancel.html"));
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LocationRedirectLifecycle) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: When the app redirects to another url via window.location. Another
   // navigation will be committed. LOADING -> LOADED -> LOADING -> LOADED state
@@ -703,70 +590,46 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LocationRedirectLifecycle) {
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   cast_web_contents_->LoadUrl(
       embedded_test_server()->GetURL("/location_redirect.html"));
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, NotifyMissingResource) {
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
-
   // ===========================================================================
   // Test: Loading a page with a missing resource should notify observers.
   // ===========================================================================
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
-  EXPECT_CALL(mock_cast_wc_observer_,
-              ResourceLoadFailed(cast_web_contents_.get()));
+  EXPECT_CALL(mock_cast_wc_observer_, ResourceLoadFailed());
 
   base::FilePath path = GetTestDataFilePath("missing_resource.html");
   cast_web_contents_->LoadUrl(content::GetFileUrlWithQuery(path, ""));
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ExecuteJavaScriptOnLoad) {
   // ===========================================================================
   // Test: Injecting script to change title should work.
   // ===========================================================================
-  const std::u16string kExpectedTitle = u"hello";
-  const std::u16string kOriginalTitle =
-      u"Welcome to Stan the Offline Dino's Homepage";
+  const std::string kExpectedTitle = "hello";
+  const std::string kOriginalTitle =
+      "Welcome to Stan the Offline Dino's Homepage";
 
   // The script should be able to run before HTML <script> tag starts running.
   // The original title will be loaded first and then the injected script. Other
@@ -792,9 +655,9 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // binding id, as opposed to being injected alongside it. (The latter would
   // result in the title being "helloclobber").
   // ===========================================================================
-  const std::u16string kReplaceTitle = u"clobber";
-  const std::u16string kOriginalTitle =
-      u"Welcome to Stan the Offline Dino's Homepage";
+  const std::string kReplaceTitle = "clobber";
+  const std::string kOriginalTitle =
+      "Welcome to Stan the Offline Dino's Homepage";
 
   // The script should be able to run before HTML <script> tag starts running.
   EXPECT_CALL(mock_cast_wc_observer_, UpdateTitle(kReplaceTitle));
@@ -821,9 +684,9 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // Test: Verifies that bindings are injected in order by producing a
   // cumulative, non-commutative result.
   // ===========================================================================
-  const std::u16string kExpectedTitle = u"hello there";
-  const std::u16string kOriginalTitle =
-      u"Welcome to Stan the Offline Dino's Homepage";
+  const std::string kExpectedTitle = "hello there";
+  const std::string kOriginalTitle =
+      "Welcome to Stan the Offline Dino's Homepage";
   constexpr int64_t kBindingsId1 = 1234;
   constexpr int64_t kBindingsId2 = 5678;
 
@@ -852,10 +715,10 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // Test: Tests that we can inject scripts before and after RenderFrame
   // creation.
   // ===========================================================================
-  const std::u16string kExpectedTitle1 = u"foo";
-  const std::u16string kExpectedTitle2 = u"foo bar";
-  const std::u16string kOriginalTitle =
-      u"Welcome to Stan the Offline Dino's Homepage";
+  const std::string kExpectedTitle1 = "foo";
+  const std::string kExpectedTitle2 = "foo bar";
+  const std::string kOriginalTitle =
+      "Welcome to Stan the Offline Dino's Homepage";
   constexpr int64_t kBindingsId1 = 1234;
   constexpr int64_t kBindingsId2 = 5678;
 
@@ -891,16 +754,12 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessageToMainFrame) {
   // Test: Tests that we can trigger onmessage event on a web page. This test
   // would post a message to the test page to redirect it to |title1.html|.
   // ===========================================================================
-  const std::u16string kOriginalTitle = u"postmessage";
-  constexpr char16_t kOriginalTitle16[] = u"postmessage";
-  const std::u16string kPage1Path = u"title1.html";
-  const std::u16string kPage1Title = u"title 1";
-  constexpr char16_t kPage1Title16[] = u"title 1";
+  constexpr char kOriginalTitle[] = "postmessage";
+  constexpr char kPage1Path[] = "title1.html";
+  constexpr char kPage1Title[] = "title 1";
 
-  EXPECT_CALL(mock_cast_wc_observer_,
-              UpdateTitle(std::u16string(kPage1Title16)));
-  EXPECT_CALL(mock_cast_wc_observer_,
-              UpdateTitle(std::u16string(kOriginalTitle16)));
+  EXPECT_CALL(mock_cast_wc_observer_, UpdateTitle(kPage1Title));
+  EXPECT_CALL(mock_cast_wc_observer_, UpdateTitle(kOriginalTitle));
 
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
@@ -910,7 +769,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessageToMainFrame) {
   title_change_observer_.RunUntilTitleEquals(kOriginalTitle);
 
   cast_web_contents_->PostMessageToMainFrame(
-      gurl.GetOrigin().spec(), base::UTF16ToUTF8(kPage1Path),
+      gurl.DeprecatedGetOriginAsURL().spec(), kPage1Path,
       std::vector<blink::WebMessagePort>());
   title_change_observer_.RunUntilTitleEquals(kPage1Title);
 }
@@ -920,13 +779,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
   // Test: Send a MessagePort to the page, then perform bidirectional messaging
   // through the port.
   // ===========================================================================
-  const std::u16string kOriginalTitle = u"messageport";
-  constexpr char16_t kOriginalTitle16[] = u"messageport";
+  constexpr char kOriginalTitle[] = "messageport";
   constexpr char kHelloMsg[] = "hi";
   constexpr char16_t kPingMsg[] = u"ping";
 
-  EXPECT_CALL(mock_cast_wc_observer_,
-              UpdateTitle(std::u16string(kOriginalTitle16)));
+  EXPECT_CALL(mock_cast_wc_observer_, UpdateTitle(kOriginalTitle));
 
   // Load test page.
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
@@ -941,7 +798,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
 
   TestMessageReceiver message_receiver;
   platform_port.SetReceiver(&message_receiver,
-                            base::ThreadTaskRunnerHandle::Get());
+                            base::SingleThreadTaskRunner::GetCurrentDefault());
 
   // Make sure we could send a MessagePort (ScopedMessagePipeHandle) to the
   // page.
@@ -950,7 +807,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
     auto quit_closure = run_loop.QuitClosure();
     auto received_message_callback = base::BindOnce(
         [](base::OnceClosure loop_quit_closure, std::string port_msg,
-           absl::optional<blink::WebMessagePort> incoming_port) {
+           std::optional<blink::WebMessagePort> incoming_port) {
           EXPECT_EQ("got_port", port_msg);
           std::move(loop_quit_closure).Run();
         },
@@ -960,7 +817,8 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
     std::vector<blink::WebMessagePort> message_ports;
     message_ports.push_back(std::move(page_port));
     cast_web_contents_->PostMessageToMainFrame(
-        gurl.GetOrigin().spec(), kHelloMsg, std::move(message_ports));
+        gurl.DeprecatedGetOriginAsURL().spec(), kHelloMsg,
+        std::move(message_ports));
     run_loop.Run();
   }
   // Test whether we could receive the right response from the page after we
@@ -970,7 +828,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
     auto quit_closure = run_loop.QuitClosure();
     auto received_message_callback = base::BindOnce(
         [](base::OnceClosure loop_quit_closure, std::string port_msg,
-           absl::optional<blink::WebMessagePort> incoming_port) {
+           std::optional<blink::WebMessagePort> incoming_port) {
           EXPECT_EQ("ack ping", port_msg);
           std::move(loop_quit_closure).Run();
         },
@@ -989,12 +847,10 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // through the port. Make sure mojo counterpart pipe handle could receive the
   // MessagePort disconnection event.
   // ===========================================================================
-  const std::u16string kOriginalTitle = u"messageport";
-  constexpr char16_t kOriginalTitle16[] = u"messageport";
+  constexpr char kOriginalTitle[] = "messageport";
   constexpr char kHelloMsg[] = "hi";
 
-  EXPECT_CALL(mock_cast_wc_observer_,
-              UpdateTitle(std::u16string(kOriginalTitle16)));
+  EXPECT_CALL(mock_cast_wc_observer_, UpdateTitle(kOriginalTitle));
   // Load test page.
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
@@ -1009,7 +865,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // Bind platform side port
   TestMessageReceiver message_receiver;
   platform_port.SetReceiver(&message_receiver,
-                            base::ThreadTaskRunnerHandle::Get());
+                            base::SingleThreadTaskRunner::GetCurrentDefault());
 
   // Make sure we could post a MessagePort (ScopedMessagePipeHandle) to
   // the page.
@@ -1018,7 +874,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
     auto quit_closure = run_loop.QuitClosure();
     auto received_message_callback = base::BindOnce(
         [](base::OnceClosure loop_quit_closure, std::string port_msg,
-           absl::optional<blink::WebMessagePort> incoming_port) {
+           std::optional<blink::WebMessagePort> incoming_port) {
           EXPECT_EQ("got_port", port_msg);
           std::move(loop_quit_closure).Run();
         },
@@ -1028,7 +884,8 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
     std::vector<blink::WebMessagePort> message_ports;
     message_ports.push_back(std::move(page_port));
     cast_web_contents_->PostMessageToMainFrame(
-        gurl.GetOrigin().spec(), kHelloMsg, std::move(message_ports));
+        gurl.DeprecatedGetOriginAsURL().spec(), kHelloMsg,
+        std::move(message_ports));
     run_loop.Run();
   }
   // Navigating off-page should tear down the MessageChannel, native side
@@ -1047,12 +904,6 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ExecuteJavaScript) {
   // Start test server for hosting test HTML pages.
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
 
   // ===========================================================================
   // Test: Set a value using ExecuteJavaScript with empty callback, and then use
@@ -1063,20 +914,15 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ExecuteJavaScript) {
 
   // Load page with title "hello":
   GURL gurl{embedded_test_server()->GetURL("/title1.html")};
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
   cast_web_contents_->LoadUrl(gurl);
-  run_loop->Run();
+  run_loop_->Run();
 
   // Execute with empty callback.
   cast_web_contents_->ExecuteJavaScript(
@@ -1126,12 +972,6 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // Start test server for hosting test HTML pages.
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
 
   // ===========================================================================
   // Test: Inject a set of scripts to eval an result. Retrieve that value and
@@ -1140,40 +980,34 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   MockApiBindings mock_api_bindings;
   EXPECT_CALL(mock_api_bindings, GetAll(_))
       .Times(1)
-      .WillOnce(
-          WithArgs<0>(Invoke([](MockApiBindings::GetAllCallback callback) {
-            std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
-            bindings_vector.emplace_back(
-                chromecast::mojom::ApiBinding::New("let res = 0;"));
-            bindings_vector.emplace_back(
-                chromecast::mojom::ApiBinding::New("res += 1;"));
-            bindings_vector.emplace_back(
-                chromecast::mojom::ApiBinding::New("res += 2;"));
-            bindings_vector.emplace_back(
-                chromecast::mojom::ApiBinding::New("res += 3;"));
-            std::move(callback).Run(std::move(bindings_vector));
-          })));
+      .WillOnce(WithArgs<0>([](MockApiBindings::GetAllCallback callback) {
+        std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
+        bindings_vector.emplace_back(
+            chromecast::mojom::ApiBinding::New("let res = 0;"));
+        bindings_vector.emplace_back(
+            chromecast::mojom::ApiBinding::New("res += 1;"));
+        bindings_vector.emplace_back(
+            chromecast::mojom::ApiBinding::New("res += 2;"));
+        bindings_vector.emplace_back(
+            chromecast::mojom::ApiBinding::New("res += 3;"));
+        std::move(callback).Run(std::move(bindings_vector));
+      }));
 
   // Binds mocked |mojom::ApiBindings|.
   cast_web_contents_->ConnectToBindingsService(
       mock_api_bindings.CreateRemote());
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   // Loads a blank page.
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
-  run_loop->Run();
+  run_loop_->Run();
 
   // Evaluates the value of |res|.
   EXPECT_EQ(6, content::EvalJs(cast_web_contents_->web_contents(), "res;"));
@@ -1184,12 +1018,6 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   // Start test server for hosting test HTML pages.
   embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
   StartTestServer();
-  auto run_loop = std::make_unique<base::RunLoop>();
-  auto quit_closure = [&run_loop]() {
-    if (run_loop->running()) {
-      run_loop->QuitWhenIdle();
-    }
-  };
 
   // ===========================================================================
   // Test: Sending empty set of bindings should result in error page state.
@@ -1197,59 +1025,41 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
   MockApiBindings mock_api_bindings;
   EXPECT_CALL(mock_api_bindings, GetAll(_))
       .Times(1)
-      .WillOnce(
-          WithArgs<0>(Invoke([](MockApiBindings::GetAllCallback callback) {
-            std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
-            std::move(callback).Run(std::move(bindings_vector));
-          })));
+      .WillOnce(WithArgs<0>([](MockApiBindings::GetAllCallback callback) {
+        std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
+        std::move(callback).Run(std::move(bindings_vector));
+      }));
 
   // Binds mocked |mojom::ApiBindings|.
   cast_web_contents_->ConnectToBindingsService(
       mock_api_bindings.CreateRemote());
 
+  run_loop_ = std::make_unique<base::RunLoop>();
   {
     InSequence seq;
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(
-            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(
-        mock_cast_wc_observer_,
-        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
-                                          CastWebContents::PageState::LOADED)))
-        .WillOnce(InvokeWithoutArgs(quit_closure));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
   }
 
   EXPECT_CALL(mock_cast_wc_observer_,
-              OnPageStopped(CheckPageState(cast_web_contents_.get(),
-                                           CastWebContents::PageState::ERROR),
-                            net::ERR_UNEXPECTED));
+              PageStopped(PageState::ERROR, net::ERR_UNEXPECTED));
 
   // Loads a blank page.
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
-  run_loop->Run();
+  run_loop_->Run();
 }
 
 // Helper for the test below. This exposes two interfaces, TestAdder and
-// TestDoubler. TestAdder is exposed only through a binder (see MakeAdderBinder)
-// which the test will register in the CastWebContents' binder_registry().
-// TestDoubler is exposed only through an InterfaceProvider, registered with the
-// CastWebContents using RegisterInterfaceProvider.
-class TestInterfaceProvider : public service_manager::mojom::InterfaceProvider,
-                              public mojom::TestAdder,
+// TestDoubler.
+class TestInterfaceProvider : public mojom::TestAdder,
                               public mojom::TestDoubler {
  public:
-  TestInterfaceProvider()
-      : provider_(receiver_.BindNewPipeAndPassRemote(),
-                  base::SequencedTaskRunnerHandle::Get()) {}
+  TestInterfaceProvider() = default;
   ~TestInterfaceProvider() override = default;
 
   size_t num_adders() const { return adders_.size(); }
   size_t num_doublers() const { return doublers_.size(); }
-
-  service_manager::InterfaceProvider* interface_provider() {
-    return &provider_;
-  }
 
   base::RepeatingCallback<void(mojo::PendingReceiver<mojom::TestAdder>)>
   MakeAdderBinder() {
@@ -1260,21 +1070,20 @@ class TestInterfaceProvider : public service_manager::mojom::InterfaceProvider,
         });
   }
 
+  base::RepeatingCallback<void(mojo::PendingReceiver<mojom::TestDoubler>)>
+  MakeDoublerBinder() {
+    return base::BindLambdaForTesting(
+        [this](mojo::PendingReceiver<mojom::TestDoubler> receiver) {
+          doublers_.Add(this, std::move(receiver));
+          OnRequestHandled();
+        });
+  }
+
   // Waits for some number of new interface binding requests to be dispatched
   // and then invokes `callback`.
   void WaitForRequests(size_t n, base::OnceClosure callback) {
     wait_callback_ = std::move(callback);
     num_requests_to_wait_for_ = n;
-  }
-
-  // service_manager::mojom::InterfaceProvider:
-  void GetInterface(const std::string& interface_name,
-                    mojo::ScopedMessagePipeHandle interface_pipe) override {
-    if (interface_name == mojom::TestDoubler::Name_) {
-      doublers_.Add(this, mojo::PendingReceiver<mojom::TestDoubler>(
-                              std::move(interface_pipe)));
-      OnRequestHandled();
-    }
   }
 
   // mojom::TestAdder:
@@ -1289,15 +1098,15 @@ class TestInterfaceProvider : public service_manager::mojom::InterfaceProvider,
 
  private:
   void OnRequestHandled() {
-    if (num_requests_to_wait_for_ == 0)
+    if (num_requests_to_wait_for_ == 0) {
       return;
+    }
     DCHECK(wait_callback_);
-    if (--num_requests_to_wait_for_ == 0)
+    if (--num_requests_to_wait_for_ == 0) {
       std::move(wait_callback_).Run();
+    }
   }
 
-  mojo::Receiver<service_manager::mojom::InterfaceProvider> receiver_{this};
-  service_manager::InterfaceProvider provider_;
   mojo::ReceiverSet<mojom::TestAdder> adders_;
   mojo::ReceiverSet<mojom::TestDoubler> doublers_;
   size_t num_requests_to_wait_for_ = 0;
@@ -1312,29 +1121,25 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, InterfaceBinding) {
   // on the WebContents) or the newer BrowserInterfaceBroker API which is used
   // in most other places (including from Mojo JS).
   TestInterfaceProvider provider;
-  cast_web_contents_->binder_registry()->AddInterface(
-      provider.MakeAdderBinder());
-  cast_web_contents_->RegisterInterfaceProvider(
-      CastWebContents::InterfaceSet{mojom::TestDoubler::Name_},
-      provider.interface_provider());
+  InterfaceBundle bundle_;
+  bundle_.AddBinder(provider.MakeAdderBinder());
+  bundle_.AddBinder(provider.MakeDoublerBinder());
+  cast_web_contents_->SetInterfacesForRenderer(bundle_.CreateRemote());
 
   // First verify that both interfaces are reachable using the deprecated
   // WebContents path, which is triggered only by renderer-side use of
   // RenderFrame::GetRemoteInterfaces(). Since poking renderer state in browser
   // tests is challenging, we simply simulate the resulting WebContentsObbserver
   // calls here instead and verify end-to-end connection for each interface.
-  content::RenderFrameHost* main_frame =
-      cast_web_contents_->web_contents()->GetMainFrame();
   mojo::Remote<mojom::TestAdder> adder;
-  mojo::ScopedMessagePipeHandle adder_receiver_pipe =
-      adder.BindNewPipeAndPassReceiver().PassPipe();
-  cast_web_contents_->OnInterfaceRequestFromFrame(
-      main_frame, mojom::TestAdder::Name_, &adder_receiver_pipe);
+  mojo::GenericPendingReceiver adder_receiver(
+      adder.BindNewPipeAndPassReceiver());
+  EXPECT_TRUE(cast_web_contents_->TryBindReceiver(adder_receiver));
+
   mojo::Remote<mojom::TestDoubler> doubler;
-  mojo::ScopedMessagePipeHandle doubler_receiver_pipe =
-      doubler.BindNewPipeAndPassReceiver().PassPipe();
-  cast_web_contents_->OnInterfaceRequestFromFrame(
-      main_frame, mojom::TestDoubler::Name_, &doubler_receiver_pipe);
+  mojo::GenericPendingReceiver doubler_receiver(
+      doubler.BindNewPipeAndPassReceiver());
+  EXPECT_TRUE(cast_web_contents_->TryBindReceiver(doubler_receiver));
 
   base::RunLoop add_loop;
   adder->Add(37, 5, base::BindLambdaForTesting([&](int32_t result) {
@@ -1371,6 +1176,422 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, InterfaceBinding) {
   EXPECT_EQ(2u, provider.num_doublers());
 }
 
-}  // namespace chromecast
+// Browser-side mojom::GestureSource which captures the renderer's
+// GestureHandler so the test can dispatch gesture events directly.
+class TestGestureSource : public mojom::GestureSource {
+ public:
+  TestGestureSource() = default;
+  ~TestGestureSource() override = default;
 
-#endif  // CHROMECAST_BROWSER_CAST_WEB_CONTENTS_BROWSERTEST_H_
+  void Bind(mojo::PendingReceiver<mojom::GestureSource> receiver) {
+    receivers_.Add(this, std::move(receiver));
+  }
+
+  void WaitForSubscribe() {
+    if (handler_) {
+      return;
+    }
+    base::RunLoop run_loop;
+    subscribed_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+  mojo::Remote<mojom::GestureHandler>& handler() { return handler_; }
+
+  // mojom::GestureSource:
+  void Subscribe(mojo::PendingRemote<mojom::GestureHandler> handler) override {
+    handler_.reset();
+    handler_.Bind(std::move(handler));
+    if (subscribed_closure_) {
+      std::move(subscribed_closure_).Run();
+    }
+  }
+  void SetCanGoBack(bool can_go_back) override {}
+  void SetCanTopDrag(bool can_top_drag) override {}
+  void SetCanRightDrag(bool can_right_drag) override {}
+
+ private:
+  mojo::ReceiverSet<mojom::GestureSource> receivers_;
+  mojo::Remote<mojom::GestureHandler> handler_;
+  base::OnceClosure subscribed_closure_;
+};
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       WindowManagerGestureCallbackDetachesFrame) {
+  // ===========================================================================
+  // Test: A page-supplied gesture callback may detach its own frame while it is
+  // running. The renderer must remain in a consistent state once the callback
+  // returns.
+  // ===========================================================================
+  TestGestureSource gesture_source;
+  cast_web_contents_->local_interfaces()->AddBinder(base::BindRepeating(
+      &TestGestureSource::Bind, base::Unretained(&gesture_source)));
+
+  base::DictValue features;
+  features.Set(feature::kEnableSystemGestures, base::DictValue());
+  cast_web_contents_->AddRendererFeatures(std::move(features));
+
+  run_loop_ = std::make_unique<base::RunLoop>();
+  {
+    InSequence seq;
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
+  }
+  cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
+  run_loop_->Run();
+
+  ASSERT_TRUE(ExecJs(web_contents_.get(),
+                     "var ifr = document.createElement('iframe');"
+                     "document.body.appendChild(ifr);"));
+  content::RenderFrameHost* child =
+      content::ChildFrameAt(web_contents_.get(), 0);
+  ASSERT_TRUE(child);
+
+  // Wait for the cast.__platform__.windowManager bindings to be installed in
+  // the subframe, register a tap callback that removes the frame and bind the
+  // GestureHandler to the browser-side source.
+  ASSERT_TRUE(ExecJs(child,
+                     "(async () => {"
+                     "  while (!self.cast || !cast.__platform__ ||"
+                     "         !cast.__platform__.windowManager) {"
+                     "    await new Promise(r => setTimeout(r, 0));"
+                     "  }"
+                     "  cast.__platform__.windowManager.onTapGesture("
+                     "      () => { frameElement.remove(); });"
+                     "  cast.__platform__.windowManager.canGoBack(true);"
+                     "})();"));
+  gesture_source.WaitForSubscribe();
+  ASSERT_TRUE(gesture_source.handler().is_bound());
+
+  // Dispatch the gesture; the JS callback synchronously detaches the frame.
+  base::RunLoop disconnect_loop;
+  gesture_source.handler().set_disconnect_handler(
+      disconnect_loop.QuitClosure());
+  gesture_source.handler()->OnTapGesture();
+  disconnect_loop.Run();
+
+  // The main frame's renderer must still be responsive.
+  EXPECT_EQ(true, content::EvalJs(web_contents_.get(),
+                                  "document.querySelector('iframe') === null"));
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       FeatureGatedInterfacesRequireRendererFeature) {
+  // ===========================================================================
+  // Test: PopulateCastFrameBinders() registers several interfaces behind a
+  // renderer feature. The browser must drop incoming receivers for those
+  // interfaces unless the corresponding feature was configured via
+  // AddRendererFeatures(), mirroring the renderer-side checks in
+  // FeatureManager and CastWindowManagerBindings.
+  //
+  // Requests are issued from the page through Mojo JS so that they travel the
+  // real frame binder map. Calling TryBindReceiver() directly would bypass the
+  // feature gate entirely and pass regardless of this CL.
+  // ===========================================================================
+  int num_activity_window = 0;
+  int num_gesture_source = 0;
+  int num_settings_platform = 0;
+  int num_cast_demo = 0;
+
+  auto* bundle = cast_web_contents_->local_interfaces();
+  bundle->AddBinder<::chromecast::mojom::ActivityWindow>(
+      base::BindLambdaForTesting(
+          [&](mojo::PendingReceiver<::chromecast::mojom::ActivityWindow>) {
+            ++num_activity_window;
+          }));
+  bundle->AddBinder<::chromecast::mojom::GestureSource>(
+      base::BindLambdaForTesting(
+          [&](mojo::PendingReceiver<::chromecast::mojom::GestureSource>) {
+            ++num_gesture_source;
+          }));
+  bundle->AddBinder<::chromecast::mojom::SettingsPlatform>(
+      base::BindLambdaForTesting(
+          [&](mojo::PendingReceiver<::chromecast::mojom::SettingsPlatform>) {
+            ++num_settings_platform;
+          }));
+  bundle->AddBinder<::chromecast::shell::mojom::CastDemo>(
+      base::BindLambdaForTesting(
+          [&](mojo::PendingReceiver<::chromecast::shell::mojom::CastDemo>) {
+            ++num_cast_demo;
+          }));
+
+  // TestAdder is not in PopulateCastFrameBinders(), so it reaches the bundle
+  // through the ungated default binder. It is requested last and serves as a
+  // barrier: frame interface requests share one pipe and are dispatched in
+  // order, so once it arrives every gated request before it has been handled.
+  base::RunLoop canary_loop;
+  bundle->AddBinder<mojom::TestAdder>(base::BindLambdaForTesting(
+      [&](mojo::PendingReceiver<mojom::TestAdder>) { canary_loop.Quit(); }));
+
+  run_loop_ = std::make_unique<base::RunLoop>();
+  {
+    InSequence seq;
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADING));
+    EXPECT_CALL(mock_cast_wc_observer_, PageStateChanged(PageState::LOADED))
+        .WillOnce([&]() { QuitRunLoop(); });
+  }
+  cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
+  run_loop_->Run();
+
+  constexpr const char* kGatedInterfaces[] = {
+      "chromecast.mojom.ActivityWindow",
+      "chromecast.mojom.GestureSource",
+      "chromecast.mojom.SettingsPlatform",
+      "chromecast.shell.mojom.CastDemo",
+  };
+
+  // No renderer features are configured yet, so every receiver must be
+  // dropped by BindFromCastWebContentsWithFeature().
+  for (const char* interface_name : kGatedInterfaces) {
+    ASSERT_TRUE(
+        ExecJs(web_contents_.get(),
+               content::JsReplace(
+                   "Mojo.bindInterface($1, Mojo.createMessagePipe().handle0);",
+                   interface_name)));
+  }
+
+  // Enable all four features, then request each interface again.
+  base::DictValue features;
+  features.Set(feature::kEnableWindowControls, base::DictValue());
+  features.Set(feature::kEnableSystemGestures, base::DictValue());
+  features.Set(feature::kEnableSettingsUiMojo, base::DictValue());
+  features.Set(feature::kEnableDemoStandaloneMode, base::DictValue());
+  cast_web_contents_->AddRendererFeatures(std::move(features));
+
+  for (const char* interface_name : kGatedInterfaces) {
+    ASSERT_TRUE(
+        ExecJs(web_contents_.get(),
+               content::JsReplace(
+                   "Mojo.bindInterface($1, Mojo.createMessagePipe().handle0);",
+                   interface_name)));
+  }
+
+  // Wait for the canary rather than for the gated binds themselves. Waiting
+  // for four binds could be satisfied by the first batch alone if the gate were
+  // broken, letting the assertions below run before the second batch arrives.
+  ASSERT_TRUE(ExecJs(web_contents_.get(),
+                     "Mojo.bindInterface('chromecast.mojom.TestAdder', "
+                     "Mojo.createMessagePipe().handle0);"));
+  canary_loop.Run();
+
+  // Exactly one bind per interface: the gated request was dropped, the enabled
+  // one was routed. A broken gate yields 2, an over-eager one yields 0.
+  EXPECT_EQ(1, num_activity_window);
+  EXPECT_EQ(1, num_gesture_source);
+  EXPECT_EQ(1, num_settings_platform);
+  EXPECT_EQ(1, num_cast_demo);
+}
+
+namespace {
+
+class BrowserTestCastContentWindow : public CastContentWindow {
+ public:
+  explicit BrowserTestCastContentWindow(mojom::CastWebViewParamsPtr params)
+      : CastContentWindow(std::move(params)) {}
+  ~BrowserTestCastContentWindow() override = default;
+
+  void CreateWindow(mojom::ZOrder z_order,
+                    VisibilityPriority visibility_priority) override {}
+  void GrantScreenAccess() override {}
+  void RevokeScreenAccess() override {}
+  void RequestVisibility(VisibilityPriority visibility_priority) override {}
+  void EnableTouchInput(bool enabled) override {}
+};
+
+class WindowDestroyWaiter : public CastContentWindow::Observer {
+ public:
+  explicit WindowDestroyWaiter(CastContentWindow* window) : window_(window) {
+    window_->AddObserver(this);
+  }
+
+  ~WindowDestroyWaiter() override {
+    if (window_) {
+      window_->RemoveObserver(this);
+    }
+  }
+
+  void OnVisibilityChange(VisibilityType visibility_type) override {}
+
+  void OnWindowDestroyed() override {
+    destroyed_ = true;
+    if (window_) {
+      window_->RemoveObserver(this);
+      window_ = nullptr;
+    }
+    run_loop_.Quit();
+  }
+
+  void Wait() {
+    if (!destroyed_) {
+      run_loop_.Run();
+    }
+  }
+
+  bool destroyed() const { return destroyed_; }
+
+ private:
+  raw_ptr<CastContentWindow> window_;
+  bool destroyed_ = false;
+  base::RunLoop run_loop_;
+};
+
+}  // namespace
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       BackPressConsumedByActiveShadowElementThenExits) {
+  content::BrowserContext* browser_context =
+      shell::CastBrowserProcess::GetInstance()->browser_context();
+  auto web_service = std::make_unique<CastWebService>(browser_context, nullptr);
+  mojom::CastWebViewParamsPtr params = mojom::CastWebViewParams::New();
+  auto window = std::make_unique<BrowserTestCastContentWindow>(params->Clone());
+  auto web_view = std::make_unique<CastWebViewDefault>(
+      std::move(params), web_service.get(), browser_context, std::move(window));
+
+  WindowDestroyWaiter destroy_waiter(web_view->window());
+  MockCastWebContentsObserver observer;
+  observer.Observe(web_view->cast_web_contents());
+
+  auto load_loop = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(observer, PageStateChanged(PageState::LOADING));
+  EXPECT_CALL(observer, PageStateChanged(PageState::LOADED)).WillOnce([&]() {
+    load_loop->Quit();
+  });
+
+  web_view->cast_web_contents()->LoadUrl(GURL(url::kAboutBlankURL));
+  load_loop->Run();
+
+  // Set up an element with an open shadowRoot whose host unconditionally calls
+  // preventDefault() (matching CAF's <touch-controls> KeyEventHandler) and a
+  // focused inner element whose keydown listener consumes BrowserBack only
+  // while controlsActive is true.
+  ASSERT_TRUE(content::ExecJs(web_view->web_contents(), R"(
+    window.controlsActive = true;
+    window.hideCount = 0;
+    const host = document.createElement('div');
+    host.tabIndex = 0;
+    host.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    const sr = host.attachShadow({mode: 'open'});
+    const layer = document.createElement('div');
+    layer.tabIndex = 0;
+    layer.addEventListener('keydown', (e) => {
+      if (e.key === 'BrowserBack' && window.controlsActive) {
+        window.controlsActive = false;
+        window.hideCount++;
+        e.preventDefault();
+      }
+    });
+    sr.appendChild(layer);
+    document.body.appendChild(host);
+    host.focus();
+    layer.focus();
+  )"));
+
+  content::WebContentsDelegate* delegate =
+      web_view->web_contents()->GetDelegate();
+  input::NativeWebKeyboardEvent back_event(
+      blink::WebInputEvent::Type::kRawKeyDown,
+      blink::WebInputEvent::kNoModifiers, base::TimeTicks::Now());
+  back_event.windows_key_code = ui::VKEY_ESCAPE;
+
+  // First Back press while controlsActive is true: consumed by the shadow DOM
+  // listener without closing the window.
+  EXPECT_EQ(
+      delegate->PreHandleKeyboardEvent(web_view->web_contents(), back_event),
+      content::KeyboardEventProcessingResult::HANDLED);
+  EXPECT_EQ(true, content::EvalJs(web_view->web_contents(),
+                                  "window.controlsActive === false && "
+                                  "window.hideCount === 1"));
+  EXPECT_FALSE(destroy_waiter.destroyed());
+  EXPECT_NE(web_view->window(), nullptr);
+
+  // Second Back press while controlsActive is false: defaultPrevented is false,
+  // closing the window.
+  auto stop_loop = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(observer, PageStopped(PageState::CLOSED, net::OK))
+      .WillOnce([&]() { stop_loop->Quit(); });
+  EXPECT_EQ(
+      delegate->PreHandleKeyboardEvent(web_view->web_contents(), back_event),
+      content::KeyboardEventProcessingResult::HANDLED);
+  destroy_waiter.Wait();
+  stop_loop->Run();
+  EXPECT_TRUE(destroy_waiter.destroyed());
+  EXPECT_EQ(web_view->window(), nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       BackPressHandledByWindowListenerThenExits) {
+  content::BrowserContext* browser_context =
+      shell::CastBrowserProcess::GetInstance()->browser_context();
+  auto web_service = std::make_unique<CastWebService>(browser_context, nullptr);
+  mojom::CastWebViewParamsPtr params = mojom::CastWebViewParams::New();
+  auto window = std::make_unique<BrowserTestCastContentWindow>(params->Clone());
+  auto web_view = std::make_unique<CastWebViewDefault>(
+      std::move(params), web_service.get(), browser_context, std::move(window));
+
+  WindowDestroyWaiter destroy_waiter(web_view->window());
+  MockCastWebContentsObserver observer;
+  observer.Observe(web_view->cast_web_contents());
+
+  auto load_loop = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(observer, PageStateChanged(PageState::LOADING));
+  EXPECT_CALL(observer, PageStateChanged(PageState::LOADED)).WillOnce([&]() {
+    load_loop->Quit();
+  });
+
+  web_view->cast_web_contents()->LoadUrl(GURL(url::kAboutBlankURL));
+  load_loop->Run();
+
+  ASSERT_TRUE(content::ExecJs(web_view->web_contents(), R"(
+    window.shouldConsumeBack = true;
+    window.backEventsReceived = 0;
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'BrowserBack') {
+        window.backEventsReceived++;
+        if (window.shouldConsumeBack) {
+          window.shouldConsumeBack = false;
+          e.preventDefault();
+        }
+      }
+    });
+  )"));
+
+  content::WebContentsDelegate* delegate =
+      web_view->web_contents()->GetDelegate();
+  input::NativeWebKeyboardEvent browser_back_event(
+      blink::WebInputEvent::Type::kRawKeyDown,
+      blink::WebInputEvent::kNoModifiers, base::TimeTicks::Now());
+  browser_back_event.windows_key_code = ui::VKEY_BROWSER_BACK;
+
+  // First Back press (VKEY_BROWSER_BACK): bubbles to window listener, which
+  // calls preventDefault() and keeps the window open.
+  EXPECT_EQ(delegate->PreHandleKeyboardEvent(web_view->web_contents(),
+                                             browser_back_event),
+            content::KeyboardEventProcessingResult::HANDLED);
+  EXPECT_EQ(1, content::EvalJs(web_view->web_contents(),
+                               "window.backEventsReceived"));
+  EXPECT_FALSE(destroy_waiter.destroyed());
+
+  // Second Back press (VKEY_ESCAPE): window listener does not call
+  // preventDefault(), closing the window cleanly.
+  input::NativeWebKeyboardEvent back_key_event(
+      blink::WebInputEvent::Type::kRawKeyDown,
+      blink::WebInputEvent::kNoModifiers, base::TimeTicks::Now());
+  back_key_event.windows_key_code = ui::VKEY_ESCAPE;
+
+  auto stop_loop = std::make_unique<base::RunLoop>();
+  EXPECT_CALL(observer, PageStopped(PageState::CLOSED, net::OK))
+      .WillOnce([&]() { stop_loop->Quit(); });
+  EXPECT_EQ(delegate->PreHandleKeyboardEvent(web_view->web_contents(),
+                                             back_key_event),
+            content::KeyboardEventProcessingResult::HANDLED);
+  destroy_waiter.Wait();
+  stop_loop->Run();
+  EXPECT_TRUE(destroy_waiter.destroyed());
+  EXPECT_EQ(web_view->window(), nullptr);
+}
+
+}  // namespace chromecast

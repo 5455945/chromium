@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,87 +12,92 @@ import android.net.Uri;
 import android.text.TextUtils;
 import android.widget.RemoteViews;
 
-import androidx.annotation.Nullable;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.browser.customtabs.CustomTabsService;
-import androidx.browser.customtabs.CustomTabsSessionToken;
 
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.SessionDataHolder;
 import org.chromium.chrome.browser.browserservices.SessionHandler;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.CustomButtonParams;
-import org.chromium.chrome.browser.browserservices.verification.OriginVerifier;
+import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
+import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifier;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
 import org.chromium.chrome.browser.customtabs.content.CustomTabIntentHandler;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbarCoordinator;
-import org.chromium.chrome.browser.dependency_injection.ActivityScope;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.StartStopWithNativeObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.content_public.browser.NavigationEntry;
 
-import javax.inject.Inject;
-
-import dagger.Lazy;
+import java.util.function.Supplier;
 
 /**
  * Implements {@link SessionHandler} for the given instance of Custom Tab activity; registers and
  * unregisters itself in {@link SessionDataHolder}.
  */
-@ActivityScope
-public class CustomTabSessionHandler implements SessionHandler, StartStopWithNativeObserver {
+@NullMarked
+public class CustomTabSessionHandler
+        implements SessionHandler, StartStopWithNativeObserver, DestroyObserver {
 
     private static final String TAG = "CctSessionHandler";
 
     private final BrowserServicesIntentDataProvider mIntentDataProvider;
     private final CustomTabActivityTabProvider mTabProvider;
-    private final Lazy<CustomTabToolbarCoordinator> mToolbarCoordinator;
-    private final Lazy<CustomTabBottomBarDelegate> mBottomBarDelegate;
+    private final Supplier<CustomTabToolbarCoordinator> mToolbarCoordinator;
+    private final Supplier<CustomTabBottomBarDelegate> mBottomBarDelegate;
     private final CustomTabIntentHandler mIntentHandler;
-    private final CustomTabsConnection mConnection;
-    private final SessionDataHolder mSessionDataHolder;
     private final Activity mActivity;
 
-    @Inject
-    public CustomTabSessionHandler(BrowserServicesIntentDataProvider intentDataProvider,
+    public CustomTabSessionHandler(
+            BrowserServicesIntentDataProvider intentDataProvider,
             CustomTabActivityTabProvider tabProvider,
-            Lazy<CustomTabToolbarCoordinator> toolbarCoordinator,
-            Lazy<CustomTabBottomBarDelegate> bottomBarDelegate,
+            Supplier<CustomTabToolbarCoordinator> toolbarCoordinator,
+            Supplier<CustomTabBottomBarDelegate> bottomBarDelegate,
             CustomTabIntentHandler intentHandler,
-            CustomTabsConnection connection,
             Activity activity,
-            ActivityLifecycleDispatcher lifecycleDispatcher,
-            SessionDataHolder sessionDataHolder) {
+            ActivityLifecycleDispatcher lifecycleDispatcher) {
         mIntentDataProvider = intentDataProvider;
         mTabProvider = tabProvider;
         mToolbarCoordinator = toolbarCoordinator;
         mBottomBarDelegate = bottomBarDelegate;
         mIntentHandler = intentHandler;
-        mConnection = connection;
         mActivity = activity;
-        mSessionDataHolder = sessionDataHolder;
         lifecycleDispatcher.register(this);
 
         // The active handler will also get set in onStartWithNative, but since native may take some
         // time to initialize, we eagerly set it here to catch any messages the Custom Tabs Client
         // sends our way before that triggers.
-        mSessionDataHolder.setActiveHandler(this);
+        SessionDataHolder.getInstance().setActiveHandler(this);
     }
 
     @Override
     public void onStartWithNative() {
-        mSessionDataHolder.setActiveHandler(this);
+        SessionDataHolder.getInstance().setActiveHandler(this);
     }
 
     @Override
     public void onStopWithNative() {
-        mSessionDataHolder.removeActiveHandler(this);
+        SessionDataHolder.getInstance().removeActiveHandler(this);
+    }
+
+    // SessionDataHolder stores a weak reference to this handler per task, and weak references are
+    // not cleared until garbage collection. Clear it explicitly on destruction so cross-task
+    // routing cannot dispatch to a destroyed activity. The task's session entry and activity class
+    // are kept so CLEAR_TOP routing still works if Android later recreates this activity (see
+    // SessionDataHolder#removeHandlerFromTask). Complemented by handleIntent(), which returns false
+    // for a finishing or destroyed activity so LaunchIntentDispatcher launches a new one instead.
+    @Override
+    public void onDestroy() {
+        SessionDataHolder.getInstance().removeHandlerFromTask(this);
     }
 
     @Override
-    public CustomTabsSessionToken getSession() {
+    public @Nullable SessionHolder getSession() {
         return mIntentDataProvider.getSession();
     }
 
@@ -113,26 +118,35 @@ public class CustomTabSessionHandler implements SessionHandler, StartStopWithNat
     }
 
     @Override
-    public boolean updateRemoteViews(RemoteViews remoteViews, int[] clickableIDs,
-            PendingIntent pendingIntent) {
+    public boolean updateRemoteViews(
+            @Nullable RemoteViews remoteViews,
+            int @Nullable [] clickableIDs,
+            @Nullable PendingIntent pendingIntent) {
         return mBottomBarDelegate.get().updateRemoteViews(remoteViews, clickableIDs, pendingIntent);
     }
 
     @Override
-    @Nullable
-    public String getCurrentUrl() {
+    public boolean updateSecondaryToolbarSwipeUpPendingIntent(PendingIntent pendingIntent) {
+        return mBottomBarDelegate.get().updateSwipeUpPendingIntent(pendingIntent);
+    }
+
+    @Override
+    public @Nullable Tab getCurrentTab() {
+        return mTabProvider.getTab();
+    }
+
+    @Override
+    public @Nullable String getCurrentUrl() {
         Tab tab = mTabProvider.getTab();
         return tab == null ? null : tab.getUrl().getSpec();
     }
 
     @Override
-    @Nullable
-    public String getPendingUrl() {
+    public @Nullable String getPendingUrl() {
         Tab tab = mTabProvider.getTab();
         if (tab == null || tab.getWebContents() == null) return null;
 
-        NavigationEntry entry = tab.getWebContents().getNavigationController()
-                .getPendingEntry();
+        NavigationEntry entry = tab.getWebContents().getNavigationController().getPendingEntry();
         return entry != null ? entry.getUrl().getSpec() : null;
     }
 
@@ -148,22 +162,26 @@ public class CustomTabSessionHandler implements SessionHandler, StartStopWithNat
 
     @Override
     public boolean handleIntent(Intent intent) {
-        // This method exists only for legacy reasons, see LaunchIntentDispatcher#
-        // clearTopIntentsForCustomTabsEnabled.
-        CustomTabIntentDataProvider dataProvider = new CustomTabIntentDataProvider(intent,
-                mActivity, CustomTabsIntent.COLOR_SCHEME_LIGHT);
+        if (mActivity.isFinishing() || mActivity.isDestroyed()) return false;
+        // This method is used for legacy non-clearTop intent delivery as well as
+        // cross-task TWA shortcut intent routing (see
+        // LaunchIntentDispatcher#launchCustomTabActivity).
+        CustomTabIntentDataProvider dataProvider =
+                new CustomTabIntentDataProvider(
+                        intent, mActivity, CustomTabsIntent.COLOR_SCHEME_LIGHT);
 
         return mIntentHandler.onNewIntent(dataProvider);
     }
 
     @Override
     public boolean canUseReferrer(Uri referrer) {
-        CustomTabsSessionToken session = mIntentDataProvider.getSession();
-        String packageName = mConnection.getClientPackageNameForSession(session);
+        SessionHolder session = mIntentDataProvider.getSession();
+        String packageName =
+                CustomTabsConnection.getInstance().getClientPackageNameForSession(session);
         if (TextUtils.isEmpty(packageName)) return false;
         Origin origin = Origin.create(referrer);
         if (origin == null) return false;
-        return OriginVerifier.wasPreviouslyVerified(
+        return ChromeOriginVerifier.wasPreviouslyVerified(
                 packageName, origin, CustomTabsService.RELATION_USE_AS_ORIGIN);
     }
 }

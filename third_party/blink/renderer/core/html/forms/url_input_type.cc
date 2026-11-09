@@ -36,6 +36,7 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
 
@@ -43,16 +44,12 @@ void URLInputType::CountUsage() {
   CountUsageIfVisible(WebFeature::kInputTypeURL);
 }
 
-const AtomicString& URLInputType::FormControlType() const {
-  return input_type_names::kUrl;
-}
-
 bool URLInputType::TypeMismatchFor(const String& value) const {
-  return !value.IsEmpty() && !KURL(NullURL(), value).IsValid();
+  return !value.empty() && !KURL(NullUrl(), value).IsValid();
 }
 
 bool URLInputType::TypeMismatch() const {
-  return TypeMismatchFor(GetElement().value());
+  return TypeMismatchFor(GetElement().Value());
 }
 
 String URLInputType::TypeMismatchText() const {
@@ -61,7 +58,7 @@ String URLInputType::TypeMismatchText() const {
 
 String URLInputType::SanitizeValue(const String& proposed_value) const {
   return BaseTextInputType::SanitizeValue(
-      StripLeadingAndTrailingHTMLSpaces(proposed_value));
+      StripLeadingAndTrailingHtmlSpaces(proposed_value).ToString());
 }
 
 String URLInputType::SanitizeUserInputValue(

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,20 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chrome/services/sharing/nearby/test_support/fake_adapter.h"
+#include "components/cross_device/nearby/nearby_features.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
 const char kDeviceAddress1[] = "DeviceAddress1";
@@ -26,9 +27,8 @@ const char kDeviceAddress2[] = "DeviceAddress2";
 const char kDeviceName1[] = "DeviceName1";
 const char kDeviceName2[] = "DeviceName2";
 const char kNearbySharingServiceName[] = "NearbySharing";
-const device::BluetoothUUID kNearbySharingServiceUuid =
-    device::BluetoothUUID("a82efa21-ae5c-3dde-9bbc-f16da7b16c5a");
-const base::TimeDelta kStaleDeviceTimeout = base::TimeDelta::FromSeconds(20);
+const base::TimeDelta kStaleDeviceTimeout = base::Seconds(20);
+
 }  // namespace
 
 class BluetoothClassicMediumTest : public testing::Test {
@@ -76,7 +76,8 @@ class BluetoothClassicMediumTest : public testing::Test {
  protected:
   void StartDiscovery() {
     EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
-    EXPECT_TRUE(bluetooth_classic_medium_->StartDiscovery(discovery_callback_));
+    EXPECT_TRUE(bluetooth_classic_medium_->StartDiscovery(
+        std::move(discovery_callback_)));
     EXPECT_TRUE(fake_adapter_->IsDiscoverySessionActive());
   }
 
@@ -112,14 +113,20 @@ class BluetoothClassicMediumTest : public testing::Test {
     run_loop.Run();
   }
 
-  bluetooth::FakeAdapter* fake_adapter_;
+  const device::BluetoothUUID nearby_sharing_service_uuid_ =
+      device::BluetoothUUID("a82efa21-ae5c-3dde-9bbc-f16da7b16c5a");
+
+  raw_ptr<bluetooth::FakeAdapter> fake_adapter_;
   mojo::SharedRemote<bluetooth::mojom::Adapter> remote_adapter_;
   std::unique_ptr<BluetoothClassicMedium> bluetooth_classic_medium_;
   BluetoothClassicMedium::DiscoveryCallback discovery_callback_;
 
-  api::BluetoothDevice* last_device_discovered_ = nullptr;
-  api::BluetoothDevice* last_device_name_changed_ = nullptr;
-  api::BluetoothDevice* expected_last_device_lost_ = nullptr;
+  raw_ptr<api::BluetoothDevice, DanglingUntriaged> last_device_discovered_ =
+      nullptr;
+  raw_ptr<api::BluetoothDevice, DanglingUntriaged> last_device_name_changed_ =
+      nullptr;
+  raw_ptr<api::BluetoothDevice, DanglingUntriaged> expected_last_device_lost_ =
+      nullptr;
 
   base::OnceClosure on_device_discovered_callback_;
   base::OnceClosure on_device_name_changed_callback_;
@@ -138,22 +145,49 @@ class BluetoothClassicMediumTest : public testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
 
-TEST_F(BluetoothClassicMediumTest, TestDiscovery_StartDiscoveryIsIdempotent) {
-  EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
-  EXPECT_TRUE(bluetooth_classic_medium_->StartDiscovery(discovery_callback_));
-  EXPECT_TRUE(fake_adapter_->IsDiscoverySessionActive());
-
-  EXPECT_TRUE(bluetooth_classic_medium_->StartDiscovery(discovery_callback_));
-  EXPECT_TRUE(fake_adapter_->IsDiscoverySessionActive());
-
-  StopDiscovery();
-}
-
 TEST_F(BluetoothClassicMediumTest, TestDiscovery_StartDiscoveryError) {
   fake_adapter_->SetShouldDiscoverySucceed(false);
   EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
-  EXPECT_FALSE(bluetooth_classic_medium_->StartDiscovery(discovery_callback_));
+  EXPECT_FALSE(bluetooth_classic_medium_->StartDiscovery(
+      std::move(discovery_callback_)));
   EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
+}
+
+TEST_F(BluetoothClassicMediumTest,
+       TestDiscovery_BluetoothClassicScanningFlagDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{},
+      /*disabled_features=*/{
+          ::features::kEnableNearbyBluetoothClassicScanning});
+
+  // When classic scanning flag is disabled, Discovery will fail.
+  fake_adapter_->SetShouldDiscoverySucceed(true);
+  EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
+  EXPECT_FALSE(bluetooth_classic_medium_->StartDiscovery(
+      std::move(discovery_callback_)));
+  EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
+}
+
+TEST_F(BluetoothClassicMediumTest,
+       TestDiscovery_BluetoothClassicScanningFlagEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{::features::kEnableNearbyBluetoothClassicScanning},
+      /*disabled_features=*/{});
+
+  // When classic scanning flag is enabled, normal Discovery operation is not
+  // impacted.
+  fake_adapter_->SetShouldDiscoverySucceed(false);
+  EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
+  EXPECT_FALSE(bluetooth_classic_medium_->StartDiscovery(
+      std::move(discovery_callback_)));
+  EXPECT_FALSE(fake_adapter_->IsDiscoverySessionActive());
+
+  fake_adapter_->SetShouldDiscoverySucceed(true);
+  EXPECT_TRUE(bluetooth_classic_medium_->StartDiscovery(
+      std::move(discovery_callback_)));
+  EXPECT_TRUE(fake_adapter_->IsDiscoverySessionActive());
 }
 
 TEST_F(BluetoothClassicMediumTest,
@@ -175,7 +209,7 @@ TEST_F(BluetoothClassicMediumTest,
             bluetooth_classic_medium_->GetRemoteDevice(kDeviceAddress1));
   EXPECT_EQ(kDeviceName1, last_device_discovered_->GetName());
 
-  auto* first_device_discovered = last_device_discovered_;
+  auto* first_device_discovered = last_device_discovered_.get();
 
   NotifyDeviceAdded(kDeviceAddress2, kDeviceName2);
   EXPECT_TRUE(bluetooth_classic_medium_->GetRemoteDevice(kDeviceAddress2));
@@ -260,7 +294,7 @@ TEST_F(BluetoothClassicMediumTest, TestDiscovery_DeviceNameChanged) {
   fake_adapter_->NotifyDeviceChanged(
       CreateDeviceInfo(kDeviceAddress1, kDeviceName2));
   run_loop.RunUntilIdle();
-  EXPECT_EQ(nullptr, last_device_name_changed_);
+  EXPECT_EQ(nullptr, last_device_name_changed_.get());
 
   StopDiscovery();
 }
@@ -283,13 +317,32 @@ TEST_F(BluetoothClassicMediumTest, TestConnectToService_Success) {
   StopDiscovery();
 
   fake_adapter_->AllowConnectionForAddressAndUuidPair(
-      kDeviceAddress1, kNearbySharingServiceUuid);
+      kDeviceAddress1, nearby_sharing_service_uuid_);
 
+  auto cancellation_flag = std::make_unique<CancellationFlag>();
   auto bluetooth_socket = bluetooth_classic_medium_->ConnectToService(
-      *last_device_discovered_, kNearbySharingServiceUuid.value(), nullptr);
+      *last_device_discovered_, nearby_sharing_service_uuid_.value(),
+      cancellation_flag.get());
   EXPECT_EQ(last_device_discovered_, bluetooth_socket->GetRemoteDevice());
 
   EXPECT_TRUE(bluetooth_socket->Close().Ok());
+}
+
+TEST_F(BluetoothClassicMediumTest,
+       TestConnectToService_CancelledByCancellationFlag) {
+  StartDiscovery();
+  NotifyDeviceAdded(kDeviceAddress1, kDeviceName1);
+  StopDiscovery();
+
+  fake_adapter_->AllowConnectionForAddressAndUuidPair(
+      kDeviceAddress1, nearby_sharing_service_uuid_);
+
+  auto cancellation_flag = std::make_unique<CancellationFlag>();
+  cancellation_flag->Cancel();
+
+  EXPECT_FALSE(bluetooth_classic_medium_->ConnectToService(
+      *last_device_discovered_, nearby_sharing_service_uuid_.value(),
+      cancellation_flag.get()));
 }
 
 TEST_F(BluetoothClassicMediumTest, TestConnectToService_Failure) {
@@ -300,30 +353,28 @@ TEST_F(BluetoothClassicMediumTest, TestConnectToService_Failure) {
 
   // Do not allow "Device 2".
   fake_adapter_->AllowConnectionForAddressAndUuidPair(
-      kDeviceAddress1, kNearbySharingServiceUuid);
+      kDeviceAddress1, nearby_sharing_service_uuid_);
 
   EXPECT_FALSE(bluetooth_classic_medium_->ConnectToService(
-      *last_device_discovered_, kNearbySharingServiceUuid.value(), nullptr));
+      *last_device_discovered_, nearby_sharing_service_uuid_.value(), nullptr));
 }
 
 TEST_F(BluetoothClassicMediumTest, TestListenForService_Success) {
   fake_adapter_->AllowIncomingConnectionForServiceNameAndUuidPair(
-      kNearbySharingServiceName, kNearbySharingServiceUuid);
+      kNearbySharingServiceName, nearby_sharing_service_uuid_);
 
   EXPECT_TRUE(bluetooth_classic_medium_->ListenForService(
-      kNearbySharingServiceName, kNearbySharingServiceUuid.value()));
+      kNearbySharingServiceName, nearby_sharing_service_uuid_.value()));
 }
 
 TEST_F(BluetoothClassicMediumTest, TestListenForService_Failure) {
   fake_adapter_->AllowIncomingConnectionForServiceNameAndUuidPair(
-      "DifferentServiceName", kNearbySharingServiceUuid);
+      "DifferentServiceName", nearby_sharing_service_uuid_);
   fake_adapter_->AllowIncomingConnectionForServiceNameAndUuidPair(
       kNearbySharingServiceName, device::BluetoothUUID("DifferentServiceId"));
 
   EXPECT_FALSE(bluetooth_classic_medium_->ListenForService(
-      kNearbySharingServiceName, kNearbySharingServiceUuid.value()));
+      kNearbySharingServiceName, nearby_sharing_service_uuid_.value()));
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,21 @@
 #define MOJO_PUBLIC_CPP_BINDINGS_SHARED_REMOTE_H_
 
 #include <memory>
+#include <tuple>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner_helpers.h"
+#include "base/task/task_runner.h"
 #include "mojo/public/cpp/bindings/associated_group.h"
 #include "mojo/public/cpp/bindings/lib/thread_safe_forwarder_base.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
-#include "mojo/public/cpp/bindings/sync_event_watcher.h"
+#include "mojo/public/cpp/bindings/runtime_features.h"
 
 namespace mojo {
 
@@ -31,7 +32,7 @@ struct SharedRemoteTraits;
 template <typename Interface>
 struct SharedRemoteTraits<Remote<Interface>> {
   static void BindDisconnected(Remote<Interface>& remote) {
-    ignore_result(remote.BindNewPipeAndPassReceiver());
+    std::ignore = remote.BindNewPipeAndPassReceiver();
   }
 };
 
@@ -54,14 +55,16 @@ class ThreadSafeForwarder : public internal::ThreadSafeForwarderBase {
   // method.
   explicit ThreadSafeForwarder(scoped_refptr<ThreadSafeProxy> thread_safe_proxy)
       : ThreadSafeForwarderBase(std::move(thread_safe_proxy)), proxy_(this) {}
+
+  ThreadSafeForwarder(const ThreadSafeForwarder&) = delete;
+  ThreadSafeForwarder& operator=(const ThreadSafeForwarder&) = delete;
+
   ~ThreadSafeForwarder() override = default;
 
   ProxyType& proxy() { return proxy_; }
 
  private:
   ProxyType proxy_;
-
-  DISALLOW_COPY_AND_ASSIGN(ThreadSafeForwarder);
 };
 
 template <typename Interface>
@@ -73,6 +76,9 @@ class SharedRemoteBase
  public:
   using InterfaceType = typename RemoteType::InterfaceType;
   using PendingType = typename RemoteType::PendingType;
+
+  SharedRemoteBase(const SharedRemoteBase&) = delete;
+  SharedRemoteBase& operator=(const SharedRemoteBase&) = delete;
 
   InterfaceType* get() { return &forwarder_->proxy(); }
   InterfaceType* operator->() { return get(); }
@@ -108,10 +114,14 @@ class SharedRemoteBase
           remote_(std::move(remote), task_runner_),
           associated_group_(*remote_.internal_state()->associated_group()) {}
 
-    std::unique_ptr<ThreadSafeForwarder<InterfaceType>> CreateForwarder() {
+    RemoteWrapper(const RemoteWrapper&) = delete;
+    RemoteWrapper& operator=(const RemoteWrapper&) = delete;
+
+    std::unique_ptr<ThreadSafeForwarder<InterfaceType>> CreateForwarder(
+        const base::Location& location) {
       return std::make_unique<ThreadSafeForwarder<InterfaceType>>(
           remote_.internal_state()->CreateThreadSafeProxy(
-              base::MakeRefCounted<ProxyTarget>(this)));
+              base::MakeRefCounted<ProxyTarget>(this), location));
     }
 
     void set_disconnect_handler(
@@ -156,6 +166,7 @@ class SharedRemoteBase
 
    private:
     friend struct RemoteWrapperDeleter;
+    friend class base::DeleteHelper<RemoteWrapper>;
 
     ~RemoteWrapper() = default;
 
@@ -178,9 +189,7 @@ class SharedRemoteBase
       if (!task_runner_->RunsTasksInCurrentSequence()) {
         // NOTE: This is only called when there are no more references to
         // |this|, so binding it unretained is both safe and necessary.
-        task_runner_->PostTask(
-            FROM_HERE, base::BindOnce(&RemoteWrapper::DeleteOnCorrectThread,
-                                      base::Unretained(this)));
+        task_runner_->DeleteSoon(FROM_HERE, this);
       } else {
         delete this;
       }
@@ -189,8 +198,6 @@ class SharedRemoteBase
     const scoped_refptr<base::SequencedTaskRunner> task_runner_;
     RemoteType remote_;
     AssociatedGroup associated_group_;
-
-    DISALLOW_COPY_AND_ASSIGN(RemoteWrapper);
   };
 
   struct RemoteWrapperDeleter {
@@ -199,30 +206,34 @@ class SharedRemoteBase
     }
   };
 
-  explicit SharedRemoteBase(scoped_refptr<RemoteWrapper> wrapper)
-      : wrapper_(std::move(wrapper)), forwarder_(wrapper_->CreateForwarder()) {}
+  explicit SharedRemoteBase(scoped_refptr<RemoteWrapper> wrapper,
+                            const base::Location& location)
+      : wrapper_(std::move(wrapper)),
+        forwarder_(wrapper_->CreateForwarder(location)) {}
 
   // Creates a SharedRemoteBase bound to `pending_remote`. All messages sent
   // through the SharedRemote will first bounce through `task_runner`.
   static scoped_refptr<SharedRemoteBase> Create(
       PendingType pending_remote,
-      scoped_refptr<base::SequencedTaskRunner> task_runner) {
-    return new SharedRemoteBase(base::MakeRefCounted<RemoteWrapper>(
-        std::move(pending_remote), std::move(task_runner)));
+      scoped_refptr<base::SequencedTaskRunner> task_runner,
+      const base::Location& location) {
+    return new SharedRemoteBase(
+        base::MakeRefCounted<RemoteWrapper>(std::move(pending_remote),
+                                            std::move(task_runner)),
+        location);
   }
 
   ~SharedRemoteBase() = default;
 
   const scoped_refptr<RemoteWrapper> wrapper_;
   const std::unique_ptr<ThreadSafeForwarder<InterfaceType>> forwarder_;
-
-  DISALLOW_COPY_AND_ASSIGN(SharedRemoteBase);
 };
 
-// SharedRemote wraps a non-thread-safe Remote and proxies messages to it.
-// Unlike normal Remote objects, SharedRemote is copyable and usable from any
-// thread, but has some additional overhead and latency in message transmission
-// as a trade-off.
+// SharedRemote wraps a non-thread-safe Remote and proxies messages to it. Note
+// that SharedRemote itself is also NOT THREAD-SAFE, but unlike Remote it IS
+// copyable cross-thread, and each copy is usable from its own thread. The
+// trade-off compared to a Remote is some additional overhead and latency in
+// message transmission, as sending a message usually incurs a task hop.
 //
 // Async calls are posted to the bound sequence (the sequence that the
 // underlying Remote is bound to, i.e. |bind_task_runner| below), and responses
@@ -244,15 +255,18 @@ class SharedRemote {
 
   // Constructs a SharedRemote bound to `pending_remote` on the calling
   // sequence. See `Bind()` below for more details.
-  explicit SharedRemote(PendingRemote<Interface> pending_remote) {
-    Bind(std::move(pending_remote), nullptr);
+  explicit SharedRemote(
+      PendingRemote<Interface> pending_remote,
+      const base::Location& location = base::Location::Current()) {
+    Bind(std::move(pending_remote), nullptr, location);
   }
 
   // Constructs a SharedRemote bound to `pending_remote` on the sequence given
   // by `bind_task_runner`. See `Bind()` below for more details.
   SharedRemote(PendingRemote<Interface> pending_remote,
-               scoped_refptr<base::SequencedTaskRunner> bind_task_runner) {
-    Bind(std::move(pending_remote), std::move(bind_task_runner));
+               scoped_refptr<base::SequencedTaskRunner> bind_task_runner,
+               const base::Location& location = base::Location::Current()) {
+    Bind(std::move(pending_remote), std::move(bind_task_runner), location);
   }
 
   // SharedRemote supports both copy and move construction and assignment. These
@@ -307,23 +321,33 @@ class SharedRemote {
   // this call and re-bound to `pending_remote`. Any prior copies made are NOT
   // affected and will retain their reference to the original Remote.
   void Bind(PendingRemote<Interface> pending_remote,
-            scoped_refptr<base::SequencedTaskRunner> bind_task_runner) {
+            scoped_refptr<base::SequencedTaskRunner> bind_task_runner,
+            const base::Location& location = base::Location::Current()) {
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      remote_.reset();
+      return;
+    }
     if (bind_task_runner && pending_remote) {
       remote_ = SharedRemoteBase<Remote<Interface>>::Create(
-          std::move(pending_remote), std::move(bind_task_runner));
+          std::move(pending_remote), std::move(bind_task_runner), location);
     } else if (pending_remote) {
       remote_ = SharedRemoteBase<Remote<Interface>>::Create(
-          std::move(pending_remote), base::SequencedTaskRunnerHandle::Get());
+          std::move(pending_remote),
+          base::SequencedTaskRunner::GetCurrentDefault(), location);
     }
   }
 
   // Creates a new pipe, binding this SharedRemote to one end on
   // `bind_task_runner` and returning the other end as a PendingReceiver.
   PendingReceiver<Interface> BindNewPipeAndPassReceiver(
-      scoped_refptr<base::SequencedTaskRunner> bind_task_runner = nullptr) {
+      scoped_refptr<base::SequencedTaskRunner> bind_task_runner = nullptr,
+      const base::Location& location = base::Location::Current()) {
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      return PendingReceiver<Interface>();
+    }
     PendingRemote<Interface> remote;
     auto receiver = remote.InitWithNewPipeAndPassReceiver();
-    Bind(std::move(remote), std::move(bind_task_runner));
+    Bind(std::move(remote), std::move(bind_task_runner), location);
     return receiver;
   }
 

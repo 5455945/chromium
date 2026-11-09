@@ -1,9 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/did_commit_navigation_interceptor.h"
 
+#include "base/memory/raw_ptr.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/frame.mojom-test-utils.h"
 #include "content/public/browser/render_frame_host.h"
@@ -22,6 +23,9 @@ class DidCommitNavigationInterceptor::FrameAgent
     rfhi_->SetCommitCallbackInterceptorForTesting(this);
   }
 
+  FrameAgent(const FrameAgent&) = delete;
+  FrameAgent& operator=(const FrameAgent&) = delete;
+
   ~FrameAgent() override {
     rfhi_->SetCommitCallbackInterceptorForTesting(nullptr);
   }
@@ -36,20 +40,19 @@ class DidCommitNavigationInterceptor::FrameAgent
   }
 
  private:
-  DidCommitNavigationInterceptor* interceptor_;
+  raw_ptr<DidCommitNavigationInterceptor> interceptor_;
 
-  RenderFrameHostImpl* rfhi_;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameAgent);
+  raw_ptr<RenderFrameHostImpl> rfhi_;
 };
 
 DidCommitNavigationInterceptor::DidCommitNavigationInterceptor(
     WebContents* web_contents)
     : WebContentsObserver(web_contents) {
-  for (auto* rfh : web_contents->GetAllFrames()) {
-    if (rfh->IsRenderFrameLive())
-      RenderFrameCreated(rfh);
-  }
+  web_contents->ForEachRenderFrameHost(
+      [this](RenderFrameHost* render_frame_host) {
+        if (render_frame_host->IsRenderFrameLive())
+          RenderFrameCreated(render_frame_host);
+      });
 }
 
 DidCommitNavigationInterceptor::~DidCommitNavigationInterceptor() = default;
@@ -64,8 +67,11 @@ void DidCommitNavigationInterceptor::RenderFrameCreated(
 
 void DidCommitNavigationInterceptor::RenderFrameDeleted(
     RenderFrameHost* render_frame_host) {
-  bool did_remove = !!frame_agents_.erase(render_frame_host);
-  DCHECK(did_remove);
+  // We might observe deletions of RenderFrameHosts that were not observed in
+  // RenderFrameCreated() because some RenderFrameHost destructions are async
+  // and might correspond to RenderFrameHosts created before we attach to the
+  // observer.
+  frame_agents_.erase(render_frame_host);
 }
 
 }  // namespace content

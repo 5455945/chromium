@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,7 +29,7 @@ struct MEDIA_EXPORT AudioDeviceName {
   std::string unique_id;    // Unique identifier for the device.
 };
 
-typedef std::list<AudioDeviceName> AudioDeviceNames;
+using AudioDeviceNames = std::list<AudioDeviceName>;
 
 }  // namespace media
 

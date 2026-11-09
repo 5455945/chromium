@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_MODULES_MEDIASTREAM_MEDIA_STREAM_VIDEO_SINK_H_
 
 #include "media/capture/video_capture_types.h"
-#include "third_party/blink/public/common/media/video_capture.h"
+#include "third_party/blink/public/platform/media/video_capture.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_sink.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_track.h"
 #include "third_party/blink/public/platform/web_common.h"
@@ -28,18 +28,6 @@ class BLINK_MODULES_EXPORT MediaStreamVideoSink : public WebMediaStreamSink {
   // Required minimum frames per second needed for the sink. Default is zero
   // unless overridden.
   virtual double GetRequiredMinFramesPerSec() const;
-
-  // IsSecure indicates if this MediaStreamVideoSink is secure (i.e. meets
-  // output protection requirement). Generally, this should be kNo unless you
-  // know what you are doing. Encoded sinks are never secure.
-  enum class IsSecure { kNo, kYes };
-
-  // UsesAlpha indicates if this MediaStreamVideoSink might use its source's
-  // alpha channel (if the source has one). This should be kDefault unless it is
-  // guaranteed that the alpha channel of |track| will be ignored. If
-  // kDependsOnOtherSinks is used, the sink will not receive alpha if all other
-  // sinks do not use alpha.
-  enum class UsesAlpha { kDefault, kDependsOnOtherSinks, kNo };
 
  protected:
   MediaStreamVideoSink();

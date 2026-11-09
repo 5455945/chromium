@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 #include <wrl/implements.h>
 #include <wrl/module.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/win/com_init_util.h"
 #include "base/win/core_winrt_util.h"
@@ -40,13 +40,7 @@ class ShowShareUIForWindowOperationTest : public ::testing::Test {
  protected:
   enum TestCallbackState { NotRun = 0, RunWithoutValue, RunWithValue };
 
-  bool IsSupportedEnvironment() {
-    return ScopedFakeDataTransferManagerInterop::IsSupportedEnvironment();
-  }
-
   void SetUp() override {
-    if (!IsSupportedEnvironment())
-      return;
     ASSERT_NO_FATAL_FAILURE(scoped_interop_.SetUp());
     operation_ = std::make_unique<ShowShareUIForWindowOperation>(hwnd_);
     auto weak_ptr = weak_factory_.GetWeakPtr();
@@ -68,7 +62,7 @@ class ShowShareUIForWindowOperationTest : public ::testing::Test {
   }
 
   void TearDown() override {
-    if (!IsSupportedEnvironment())
+    if (IsSkipped())
       return;
     ASSERT_FALSE(fake_interop().HasDataRequestedListener(hwnd_));
   }
@@ -88,9 +82,6 @@ class ShowShareUIForWindowOperationTest : public ::testing::Test {
 };
 
 TEST_F(ShowShareUIForWindowOperationTest, AsyncSuccess) {
-  if (!IsSupportedEnvironment())
-    return;
-
   fake_interop().SetShowShareUIForWindowBehavior(
       ShowShareUIForWindowBehavior::SucceedWithoutAction);
 
@@ -103,16 +94,13 @@ TEST_F(ShowShareUIForWindowOperationTest, AsyncSuccess) {
 }
 
 TEST_F(ShowShareUIForWindowOperationTest, AsyncFailure) {
-  if (!IsSupportedEnvironment())
-    return;
-
   fake_interop().SetShowShareUIForWindowBehavior(
       ShowShareUIForWindowBehavior::SucceedWithoutAction);
 
   operation_->Run(std::move(test_callback_));
   ASSERT_EQ(test_callback_state_, TestCallbackState::NotRun);
 
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(1));
+  task_environment_.FastForwardBy(base::Seconds(1));
   ASSERT_EQ(test_callback_state_, TestCallbackState::NotRun);
 
   task_environment_.FastForwardBy(
@@ -121,9 +109,6 @@ TEST_F(ShowShareUIForWindowOperationTest, AsyncFailure) {
 }
 
 TEST_F(ShowShareUIForWindowOperationTest, AsyncEarlyDestruction) {
-  if (!IsSupportedEnvironment())
-    return;
-
   fake_interop().SetShowShareUIForWindowBehavior(
       ShowShareUIForWindowBehavior::SucceedWithoutAction);
 
@@ -137,9 +122,6 @@ TEST_F(ShowShareUIForWindowOperationTest, AsyncEarlyDestruction) {
 }
 
 TEST_F(ShowShareUIForWindowOperationTest, SyncSuccess) {
-  if (!IsSupportedEnvironment())
-    return;
-
   fake_interop().SetShowShareUIForWindowBehavior(
       ShowShareUIForWindowBehavior::InvokeEventSynchronously);
 
@@ -148,20 +130,14 @@ TEST_F(ShowShareUIForWindowOperationTest, SyncSuccess) {
 }
 
 TEST_F(ShowShareUIForWindowOperationTest, SyncEarlyFailure) {
-  if (!IsSupportedEnvironment())
-    return;
-
   fake_interop().SetShowShareUIForWindowBehavior(
       ShowShareUIForWindowBehavior::FailImmediately);
 
   operation_->Run(std::move(test_callback_));
-  ASSERT_EQ(test_callback_state_, TestCallbackState::NotRun);
+  ASSERT_EQ(test_callback_state_, TestCallbackState::RunWithoutValue);
 }
 
 TEST_F(ShowShareUIForWindowOperationTest, SyncLateFailure) {
-  if (!IsSupportedEnvironment())
-    return;
-
   fake_interop().SetShowShareUIForWindowBehavior(
       ShowShareUIForWindowBehavior::InvokeEventSynchronouslyAndReturnFailure);
 
@@ -170,9 +146,6 @@ TEST_F(ShowShareUIForWindowOperationTest, SyncLateFailure) {
 }
 
 TEST_F(ShowShareUIForWindowOperationTest, DestructionWithoutRun) {
-  if (!IsSupportedEnvironment())
-    return;
-
   ASSERT_NO_FATAL_FAILURE(operation_.reset());
 }
 

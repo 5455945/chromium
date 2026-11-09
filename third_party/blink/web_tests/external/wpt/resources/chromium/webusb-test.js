@@ -186,7 +186,7 @@ class FakeDevice {
   open() {
     assert_false(this.opened_);
     this.opened_ = true;
-    return Promise.resolve({error: mojom.UsbOpenDeviceError.OK});
+    return Promise.resolve({result: {success: mojom.UsbOpenDeviceSuccess.OK}});
   }
 
   close() {
@@ -283,10 +283,12 @@ class FakeDevice {
 
     return {
       status: mojom.UsbTransferStatus.OK,
-      data: [
-        length >> 8, length & 0xff, params.request, params.value >> 8,
-        params.value & 0xff, params.index >> 8, params.index & 0xff
-      ]
+      data: {
+        buffer: [
+          length >> 8, length & 0xff, params.request, params.value >> 8,
+          params.value & 0xff, params.index >> 8, params.index & 0xff
+        ]
+      }
     };
   }
 
@@ -311,7 +313,8 @@ class FakeDevice {
     let data = new Array(length);
     for (let i = 0; i < length; ++i)
       data[i] = i & 0xff;
-    return Promise.resolve({status: mojom.UsbTransferStatus.OK, data: data});
+    return Promise.resolve(
+        {status: mojom.UsbTransferStatus.OK, data: {buffer: data}});
   }
 
   genericTransferOut(endpointNumber, data, timeout) {
@@ -338,7 +341,7 @@ class FakeDevice {
         status: mojom.UsbTransferStatus.OK
       };
     }
-    return Promise.resolve({ data: data, packets: packets });
+    return Promise.resolve({data: {buffer: data}, packets: packets});
   }
 
   isochronousTransferOut(endpointNumber, data, packetLengths, timeout) {
@@ -381,6 +384,10 @@ class FakeWebUsbService {
     this.devicesByGuid_.set(device.guid, device);
     if (this.client_)
       this.client_.onDeviceAdded(fakeDeviceInitToDeviceInfo(device.guid, info));
+  }
+
+  async forgetDevice(guid) {
+    // Permissions are currently untestable through WPT.
   }
 
   removeDevice(fakeDevice) {
@@ -433,11 +440,11 @@ class FakeWebUsbService {
     }
   }
 
-  getPermission(deviceFilters) {
+  getPermission(options) {
     return new Promise(resolve => {
       if (navigator.usb.test.onrequestdevice) {
         navigator.usb.test.onrequestdevice(
-            new USBDeviceRequestEvent(deviceFilters, resolve));
+            new USBDeviceRequestEvent(options, resolve));
       } else {
         resolve({ result: null });
       }
@@ -450,8 +457,9 @@ class FakeWebUsbService {
 }
 
 class USBDeviceRequestEvent {
-  constructor(deviceFilters, resolve) {
-    this.filters = convertMojoDeviceFilters(deviceFilters);
+  constructor(options, resolve) {
+    this.filters = convertMojoDeviceFilters(options.filters);
+    this.exclusionFilters = convertMojoDeviceFilters(options.exclusionFilters);
     this.resolveFunc_ = resolve;
   }
 

@@ -1,26 +1,32 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/device_orientation/device_motion_controller.h"
 
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_permission_state.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/frame/deprecation.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_motion_data.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_motion_event.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_motion_event_pump.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_controller.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
+#include "third_party/blink/renderer/modules/permissions/permission_utils.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
 DeviceMotionController::DeviceMotionController(LocalDOMWindow& window)
     : DeviceSingleWindowEventController(window),
-      Supplement<LocalDOMWindow>(window) {}
+      Supplement<LocalDOMWindow>(window),
+      permission_service_(&window) {}
 
 DeviceMotionController::~DeviceMotionController() = default;
 
@@ -59,10 +65,15 @@ void DeviceMotionController::DidAddEventListener(
 
   UseCounter::Count(GetWindow(), WebFeature::kDeviceMotionSecureOrigin);
 
+  if (!has_requested_permission_) {
+    UseCounter::Count(GetWindow(),
+                      WebFeature::kDeviceMotionUsedWithoutPermissionRequest);
+  }
+
   if (!has_event_listener_) {
     if (!CheckPolicyFeatures(
-            {mojom::blink::PermissionsPolicyFeature::kAccelerometer,
-             mojom::blink::PermissionsPolicyFeature::kGyroscope})) {
+            {network::mojom::PermissionsPolicyFeature::kAccelerometer,
+             network::mojom::PermissionsPolicyFeature::kGyroscope})) {
       DeviceOrientationController::LogToConsolePolicyFeaturesDisabled(
           *GetWindow().GetFrame(), EventTypeName());
       return;
@@ -110,7 +121,37 @@ const AtomicString& DeviceMotionController::EventTypeName() const {
 void DeviceMotionController::Trace(Visitor* visitor) const {
   DeviceSingleWindowEventController::Trace(visitor);
   visitor->Trace(motion_event_pump_);
+  visitor->Trace(permission_service_);
   Supplement<LocalDOMWindow>::Trace(visitor);
+}
+
+ScriptPromise<V8PermissionState> DeviceMotionController::RequestPermission(
+    ScriptState* script_state) {
+  ExecutionContext* context = GetSupplementable();
+  DCHECK_EQ(context, ExecutionContext::From(script_state));
+
+  has_requested_permission_ = true;
+
+  if (!permission_service_.is_bound()) {
+    ConnectToPermissionService(context,
+                               permission_service_.BindNewPipeAndPassReceiver(
+                                   context->GetTaskRunner(TaskType::kSensor)));
+  }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<V8PermissionState>>(
+          script_state);
+  auto promise = resolver->Promise();
+
+  permission_service_->RequestPermission(
+      CreatePermissionDescriptor(mojom::blink::PermissionName::SENSORS),
+      resolver->WrapCallbackInScriptScope(
+          BindOnce([](ScriptPromiseResolver<V8PermissionState>* resolver,
+                      mojom::blink::PermissionStatusWithDetailsPtr status) {
+            resolver->Resolve(ToV8PermissionState(status->status));
+          })));
+
+  return promise;
 }
 
 }  // namespace blink

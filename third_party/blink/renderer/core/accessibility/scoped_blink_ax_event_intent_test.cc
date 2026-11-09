@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,7 +19,7 @@ namespace blink {
 using ScopedBlinkAXEventIntentTest = RenderingTest;
 
 TEST_F(ScopedBlinkAXEventIntentTest, SingleIntent) {
-  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
+  AXContext ax_context(GetDocument(), ui::kAXModeDefaultForTests);
   AXObjectCache* cache = GetDocument().ExistingAXObjectCache();
   ASSERT_NE(nullptr, cache);
 
@@ -35,11 +35,11 @@ TEST_F(ScopedBlinkAXEventIntentTest, SingleIntent) {
     EXPECT_EQ(1u, cache->ActiveEventIntents().size());
   }
 
-  EXPECT_TRUE(cache->ActiveEventIntents().IsEmpty());
+  EXPECT_TRUE(cache->ActiveEventIntents().empty());
 }
 
 TEST_F(ScopedBlinkAXEventIntentTest, MultipleIdenticalIntents) {
-  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
+  AXContext ax_context(GetDocument(), ui::kAXModeDefaultForTests);
   AXObjectCache* cache = GetDocument().ExistingAXObjectCache();
   ASSERT_NE(nullptr, cache);
 
@@ -60,11 +60,11 @@ TEST_F(ScopedBlinkAXEventIntentTest, MultipleIdenticalIntents) {
     EXPECT_EQ(1u, cache->ActiveEventIntents().size());
   }
 
-  EXPECT_TRUE(cache->ActiveEventIntents().IsEmpty());
+  EXPECT_TRUE(cache->ActiveEventIntents().empty());
 }
 
 TEST_F(ScopedBlinkAXEventIntentTest, NestedIndividualIntents) {
-  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
+  AXContext ax_context(GetDocument(), ui::kAXModeDefaultForTests);
   AXObjectCache* cache = GetDocument().ExistingAXObjectCache();
   ASSERT_NE(nullptr, cache);
 
@@ -98,11 +98,11 @@ TEST_F(ScopedBlinkAXEventIntentTest, NestedIndividualIntents) {
     EXPECT_EQ(1u, cache->ActiveEventIntents().size());
   }
 
-  EXPECT_TRUE(cache->ActiveEventIntents().IsEmpty());
+  EXPECT_TRUE(cache->ActiveEventIntents().empty());
 }
 
 TEST_F(ScopedBlinkAXEventIntentTest, NestedMultipleIntents) {
-  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
+  AXContext ax_context(GetDocument(), ui::kAXModeDefaultForTests);
   AXObjectCache* cache = GetDocument().ExistingAXObjectCache();
   ASSERT_NE(nullptr, cache);
 
@@ -152,11 +152,11 @@ TEST_F(ScopedBlinkAXEventIntentTest, NestedMultipleIntents) {
     EXPECT_EQ(2u, cache->ActiveEventIntents().size());
   }
 
-  EXPECT_TRUE(cache->ActiveEventIntents().IsEmpty());
+  EXPECT_TRUE(cache->ActiveEventIntents().empty());
 }
 
 TEST_F(ScopedBlinkAXEventIntentTest, NestedIdenticalIntents) {
-  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
+  AXContext ax_context(GetDocument(), ui::kAXModeDefaultForTests);
   AXObjectCache* cache = GetDocument().ExistingAXObjectCache();
   ASSERT_NE(nullptr, cache);
 
@@ -187,7 +187,7 @@ TEST_F(ScopedBlinkAXEventIntentTest, NestedIdenticalIntents) {
     EXPECT_EQ(1u, cache->ActiveEventIntents().size());
   }
 
-  EXPECT_TRUE(cache->ActiveEventIntents().IsEmpty());
+  EXPECT_TRUE(cache->ActiveEventIntents().empty());
 }
 
 }  // namespace blink

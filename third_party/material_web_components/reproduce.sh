@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+
+set -eu
 
 # - Downloads all dependencies listed in package.json
 # - Makes Chromium specific modifications.
@@ -17,24 +19,19 @@ check_dep() {
   fi
 }
 
+replace_section() {
+  start_tag="# TAG(reproduce.sh) START_$1"
+  end_tag="# TAG(reproduce.sh) END_$1"
+  new_text=$2
+  file=$3
+
+  sed -e "/${start_tag}/,/${end_tag}/c\\${start_tag}\n${new_text}${end_tag}" $file > /tmp/reproduce_replace_section_output
+  mv /tmp/reproduce_replace_section_output $file
+}
+
 check_dep "which npm" "npm" "visiting https://nodejs.org/en/"
 check_dep "which rsync" "rsync" "installing rsync"
 check_dep "which egrep" "egrep" "installing egrep"
-
-INSTALLED_PACKAGES=`npm ls -g`
-
-check_npm_dep() {
-  echo "$INSTALLED_PACKAGES" | grep " $1@" > /dev/null
-  if [ $? -ne 0 ]; then
-    echo >&2 "This script requires $1."
-    echo >&2 "Have you tried sudo npm install -g $1?"
-    echo >&2 "You will also need to set your NODE_PATH"
-    exit 1
-  fi
-}
-
-check_npm_dep "resolve"
-check_npm_dep "argparse"
 
 pushd "$(dirname "$0")" > /dev/null
 
@@ -43,15 +40,19 @@ rm -rf node_modules
 npm install --only=prod
 
 rsync -c --delete --delete-excluded -r -v --prune-empty-dirs \
-    --include-from="rsync_include.txt" \
     --exclude-from="rsync_exclude.txt" \
     "node_modules/" \
     "components-chromium/node_modules/"
 
-# Rewrite imports to relative paths for rollup.
+npm install
+
+# Replace tslib.js with its ES6 version.
+mv components-chromium/node_modules/tslib/tslib.{es6.,}js
+
+# Resolve imports as relative paths so we can load them in chrome://resources/.
 find components-chromium/ \
-   \( -name "*.js" -or -name "*.d.ts" \) \
-   -exec node rewrite_imports.js {} +
+   \( -name "*.js"  \) -type f \
+   -exec node resolve_imports.js {} +
 
 new=$(git status --porcelain components-chromium | grep '^??' | \
       cut -d' ' -f2 | egrep '\.(js|css)$' || true)
@@ -67,7 +68,7 @@ deleted=$(git status --porcelain components-chromium | grep '^.D' | \
 
 if [[ ! -z "${deleted}" ]]; then
   echo
-  echo 'These files appear to have been removed:'
+  echo 'INFO (no action needed): These files appear to have been removed:'
   echo "${deleted}" | sed 's/^/  /'
 fi
 
@@ -75,4 +76,28 @@ if [[ ! -z "${new}${deleted}" ]]; then
   echo
 fi
 
+echo "Updating build.gn ..."
+
+# In our BUILD file we have a ts_library rule which exposes all lit type
+# definitions, update these.
+new_text=""
+for x in `find components-chromium/node_modules -type f  | grep d.ts$`; do
+  new_text+="  \"$x\",\n"
+done
+replace_section DEFINITIONS "${new_text}" BUILD.gn
+
+# Also update the list of material files.
+new_text=""
+cd components-chromium/node_modules
+for x in `find @material/ \( -name "*.js"  \) -type f`; do
+  new_text+="  \"$x\",\n"
+done
+cd ../..
+replace_section MATERIAL_FILES "${new_text}" BUILD.gn
+
+echo "Cleaning up ..."
+
+rm -r "node_modules/"
 popd > /dev/null
+
+echo "Done! Thanks for using me :)"

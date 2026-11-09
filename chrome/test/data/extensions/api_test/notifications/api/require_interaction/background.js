@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@ const options = {
   title: 'hello',
   message: 'world',
   type: 'basic',
-  requireInteraction: true
+  requireInteraction: true,
 };
 
 chrome.notifications.create('test', options, () => chrome.test.sendMessage(''));

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@ package org.chromium.chrome.browser.base;
 import android.content.Context;
 import android.os.PersistableBundle;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.minidump_uploader.MinidumpUploadJob;
 import org.chromium.components.minidump_uploader.MinidumpUploadJobService;
 
@@ -14,8 +16,9 @@ import org.chromium.components.minidump_uploader.MinidumpUploadJobService;
  * MinidumpUploadJobService base class which will call through to the given {@link Impl}. This class
  * must be present in the base module, while the Impl can be in the chrome module.
  */
+@NullMarked
 public class SplitCompatMinidumpUploadJobService extends MinidumpUploadJobService {
-    private String mServiceClassName;
+    private final String mServiceClassName;
     private Impl mImpl;
 
     public SplitCompatMinidumpUploadJobService(String serviceClassName) {
@@ -23,11 +26,13 @@ public class SplitCompatMinidumpUploadJobService extends MinidumpUploadJobServic
     }
 
     @Override
-    protected void attachBaseContext(Context context) {
-        context = SplitCompatUtils.createChromeContext(context);
-        mImpl = (Impl) SplitCompatUtils.newInstance(context, mServiceClassName);
+    protected void attachBaseContext(Context baseContext) {
+        mImpl =
+                (Impl)
+                        SplitCompatUtils.loadClassAndAdjustContextChrome(
+                                baseContext, mServiceClassName);
         mImpl.setService(this);
-        super.attachBaseContext(context);
+        super.attachBaseContext(baseContext);
     }
 
     @Override
@@ -40,13 +45,13 @@ public class SplitCompatMinidumpUploadJobService extends MinidumpUploadJobServic
      * SplitCompatMinidumpUploadJobService}.
      */
     public abstract static class Impl {
-        private SplitCompatMinidumpUploadJobService mService;
+        private @Nullable SplitCompatMinidumpUploadJobService mService;
 
         protected final void setService(SplitCompatMinidumpUploadJobService service) {
             mService = service;
         }
 
-        protected final MinidumpUploadJobService getService() {
+        protected final @Nullable MinidumpUploadJobService getService() {
             return mService;
         }
 

@@ -1,25 +1,27 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/extensions/api/image_writer_private/operation.h"
+
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/bind.h"
-#include "chrome/browser/extensions/api/image_writer_private/error_messages.h"
-#include "chrome/browser/extensions/api/image_writer_private/operation.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/image_burner_client.h"
-#include "chromeos/disks/disk.h"
-#include "chromeos/disks/disk_mount_manager.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "chrome/browser/extensions/api/image_writer_private/error_constants.h"
+#include "chromeos/ash/components/dbus/image_burner/image_burner_client.h"
+#include "chromeos/ash/components/disks/disk.h"
+#include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace extensions {
 namespace image_writer {
 
-using chromeos::disks::DiskMountManager;
-using chromeos::ImageBurnerClient;
+using ::ash::ImageBurnerClient;
+using ::ash::disks::DiskMountManager;
 using content::BrowserThread;
 
 namespace {
@@ -31,16 +33,14 @@ void ClearImageBurner() {
     return;
   }
 
-  chromeos::DBusThreadManager::Get()->
-      GetImageBurnerClient()->
-      ResetEventHandlers();
+  ImageBurnerClient::Get()->ResetEventHandlers();
 }
 
 }  // namespace
 
 void Operation::Write(base::OnceClosure continuation) {
-  DCHECK(IsRunningInCorrectSequence());
-  SetStage(image_writer_api::STAGE_WRITE);
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
+  SetStage(image_writer_api::Stage::kWrite);
 
   // Note this has to be run on the FILE thread to avoid concurrent access.
   AddCleanUpFunction(base::BindOnce(&ClearImageBurner));
@@ -51,33 +51,33 @@ void Operation::Write(base::OnceClosure continuation) {
 }
 
 void Operation::VerifyWrite(base::OnceClosure continuation) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
 
   // No verification is available in Chrome OS currently.
   std::move(continuation).Run();
 }
 
 void Operation::UnmountVolumes(base::OnceClosure continuation) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   DiskMountManager::GetInstance()->UnmountDeviceRecursively(
       device_path_.value(), base::BindOnce(&Operation::UnmountVolumesCallback,
                                            this, std::move(continuation)));
 }
 
 void Operation::UnmountVolumesCallback(base::OnceClosure continuation,
-                                       chromeos::MountError error_code) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+                                       ash::MountError error_code) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
 
-  if (error_code != chromeos::MOUNT_ERROR_NONE) {
+  if (error_code != ash::MountError::kSuccess) {
     LOG(ERROR) << "Volume unmounting failed with error code " << error_code;
     PostTask(
         base::BindOnce(&Operation::Error, this, error::kUnmountVolumesError));
     return;
   }
 
-  const DiskMountManager::DiskMap& disks =
+  const DiskMountManager::Disks& disks =
       DiskMountManager::GetInstance()->disks();
-  DiskMountManager::DiskMap::const_iterator iter =
+  DiskMountManager::Disks::const_iterator iter =
       disks.find(device_path_.value());
 
   if (iter == disks.end()) {
@@ -87,16 +87,15 @@ void Operation::UnmountVolumesCallback(base::OnceClosure continuation,
     return;
   }
 
-  StartWriteOnUIThread(iter->second->file_path(), std::move(continuation));
+  StartWriteOnUIThread(iter->get()->file_path(), std::move(continuation));
 }
 
 void Operation::StartWriteOnUIThread(const std::string& target_path,
                                      base::OnceClosure continuation) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
 
-  // TODO(haven): Image Burner cannot handle multiple burns. crbug.com/373575
-  ImageBurnerClient* burner =
-      chromeos::DBusThreadManager::Get()->GetImageBurnerClient();
+  // TODO(haven): Image Burner cannot handle multiple burns. crbug.com/41107511
+  ImageBurnerClient* burner = ImageBurnerClient::Get();
 
   burner->SetEventHandlers(
       base::BindOnce(&Operation::OnBurnFinished, this, std::move(continuation)),

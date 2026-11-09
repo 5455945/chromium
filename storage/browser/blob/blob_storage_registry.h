@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/memory/scoped_refptr.h"
 #include "storage/browser/blob/blob_storage_constants.h"
 
 namespace storage {
@@ -27,33 +27,38 @@ class BlobEntry;
 class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageRegistry {
  public:
   BlobStorageRegistry();
+
+  BlobStorageRegistry(const BlobStorageRegistry&) = delete;
+  BlobStorageRegistry& operator=(const BlobStorageRegistry&) = delete;
+
   ~BlobStorageRegistry();
 
-  // Creates the blob entry with a refcount of 1 and a state of PENDING. If
-  // the blob is already in use, we return null.
-  BlobEntry* CreateEntry(const std::string& uuid,
-                         const std::string& content_type,
-                         const std::string& content_disposition);
+  // Creates the blob entry with a handle count of 0 and a state of PENDING.
+  // It's an error to supply an already-used UUID.
+  scoped_refptr<BlobEntry> CreateEntry(const std::string& uuid,
+                                       const std::string& content_type);
 
   // Removes the blob entry with the given uuid. This does not unmap any
-  // URLs that are pointing to this uuid. Returns if the entry existed.
-  bool DeleteEntry(const std::string& uuid);
+  // URLs that are pointing to this uuid.
+  void ReleaseEntry(const std::string& uuid);
 
   bool HasEntry(const std::string& uuid) const;
 
   // Gets the blob entry for the given uuid. Returns nullptr if the entry
   // does not exist.
-  BlobEntry* GetEntry(const std::string& uuid);
-  const BlobEntry* GetEntry(const std::string& uuid) const;
+  scoped_refptr<BlobEntry> GetEntry(const std::string& uuid);
+  scoped_refptr<const BlobEntry> GetEntry(const std::string& uuid) const;
 
   size_t blob_count() const { return blob_map_.size(); }
 
  private:
   friend class ViewBlobInternalsJob;
 
-  std::unordered_map<std::string, std::unique_ptr<BlobEntry>> blob_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(BlobStorageRegistry);
+  // The `BlobEntry`s are ref counted because many different error conditions
+  // can lead to dropping the last `BlobDataHandle` for an entry, leading to
+  // `ReleaseEntry` being called. This frequently happens in the middle of
+  // operating on said `BlobEntry`. See crbug.com/572193211
+  std::unordered_map<std::string, scoped_refptr<BlobEntry>> blob_map_;
 };
 
 }  // namespace storage

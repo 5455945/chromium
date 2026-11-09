@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,12 @@
 //
 // Relationship of classes:
 //
-//  AudioInputController                 AudioInputDevice
+//  audio::InputController                 AudioInputDevice
 //           ^                                  ^
 //           |                                  |
 //           v                  IPC             v
-// MojoAudioInputStream    <----------->  AudioInputIPC
-//           ^                            (MojoAudioInputIPC)
-//           |
-//           v
-// AudioInputDeviceManager
+// audio::mojom::AudioInputStream    <----------->  AudioInputIPC
+//                                       (MojoAudioInputIPC)
 //
 // Transportation of audio samples from the browser to the render process
 // is done by using shared memory in combination with a SyncSocket.
@@ -46,10 +43,11 @@
 #define MEDIA_AUDIO_AUDIO_INPUT_DEVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/sequence_checker.h"
 #include "base/threading/platform_thread.h"
@@ -59,7 +57,6 @@
 #include "media/base/audio_capturer_source.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -69,6 +66,8 @@ class MEDIA_EXPORT AudioInputDevice : public AudioCapturerSource,
   enum Purpose : int8_t { kUserInput, kLoopback };
   enum class DeadStreamDetection : bool { kDisabled = false, kEnabled = true };
 
+  AudioInputDevice() = delete;
+
   // NOTE: Clients must call Initialize() before using.
   // |enable_uma| controls logging of UMA stats. It is used to ensure that
   // stats are not logged for mirroring service streams.
@@ -76,6 +75,9 @@ class MEDIA_EXPORT AudioInputDevice : public AudioCapturerSource,
   AudioInputDevice(std::unique_ptr<AudioInputIPC> ipc,
                    Purpose purpose,
                    DeadStreamDetection detect_dead_stream);
+
+  AudioInputDevice(const AudioInputDevice&) = delete;
+  AudioInputDevice& operator=(const AudioInputDevice&) = delete;
 
   // AudioCapturerSource implementation.
   void Initialize(const AudioParameters& params,
@@ -87,7 +89,7 @@ class MEDIA_EXPORT AudioInputDevice : public AudioCapturerSource,
   void SetOutputDeviceForAec(const std::string& output_device_id) override;
 
  private:
-  friend class base::RefCountedThreadSafe<AudioInputDevice>;
+  ~AudioInputDevice() override;
 
   // Our audio thread callback class.  See source file for details.
   class AudioThreadCallback;
@@ -103,17 +105,17 @@ class MEDIA_EXPORT AudioInputDevice : public AudioCapturerSource,
   // This enum is used for UMA, so the only allowed operation on this definition
   // is to add new states to the bottom, update kMaxValue, and update the
   // histogram "Media.Audio.Capture.StreamCallbackError2".
+  // LINT.IfChange(Error)
   enum Error {
     kNoError = 0,
     kErrorDuringCreation = 1,
     kErrorDuringCapture = 2,
     kMaxValue = kErrorDuringCapture
   };
-
-  ~AudioInputDevice() override;
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:AudioCaptureDeviceError)
 
   // AudioInputIPCDelegate implementation.
-  void OnStreamCreated(base::ReadOnlySharedMemoryRegion shared_memory_region,
+  void OnStreamCreated(base::UnsafeSharedMemoryRegion shared_memory_region,
                        base::SyncSocket::ScopedHandle socket_handle,
                        bool initially_muted) override;
   void OnError(AudioCapturerSource::ErrorCode code) override;
@@ -126,11 +128,11 @@ class MEDIA_EXPORT AudioInputDevice : public AudioCapturerSource,
 
   AudioParameters audio_parameters_;
 
-  const base::ThreadPriority thread_priority_;
+  const base::ThreadType thread_type_;
 
   const bool enable_uma_;
 
-  CaptureCallback* callback_;
+  raw_ptr<CaptureCallback> callback_;
 
   // A pointer to the IPC layer that takes care of sending requests over to
   // the stream implementation.  Only valid when state_ != IPC_CLOSED.
@@ -160,9 +162,7 @@ class MEDIA_EXPORT AudioInputDevice : public AudioCapturerSource,
 
   // Cache the output device used for AEC in case it's called before the stream
   // is created.
-  absl::optional<std::string> output_device_id_for_aec_;
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(AudioInputDevice);
+  std::optional<std::string> output_device_id_for_aec_;
 };
 
 }  // namespace media

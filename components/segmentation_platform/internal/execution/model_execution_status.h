@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,18 @@
 namespace segmentation_platform {
 
 // Success or failure states resulting from the model execution.
-enum ModelExecutionStatus {
-  SUCCESS = 0,
-  EXECUTION_ERROR = 1,
-  INVALID_METADATA = 2,
+// Keep up to date with SegmentationPlatformModelExecutionStatus in
+// //tools/metrics/histograms/enums.xml.
+enum class ModelExecutionStatus {
+  kSuccess = 0,
+  kExecutionError = 1,
+  kSkippedInvalidMetadata = 2,
+  kSkippedModelNotReady = 3,
+  kSkippedHasFreshResults = 4,
+  kSkippedNotEnoughSignals = 5,
+  kSkippedResultNotExpired = 6,
+  kFailedToSaveResultAfterSuccess = 7,
+  kMaxValue = kFailedToSaveResultAfterSuccess,
 };
 
 }  // namespace segmentation_platform

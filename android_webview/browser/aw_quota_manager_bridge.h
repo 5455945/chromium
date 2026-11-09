@@ -1,18 +1,19 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_BROWSER_AW_QUOTA_MANAGER_BRIDGE_H_
 #define ANDROID_WEBVIEW_BROWSER_AW_QUOTA_MANAGER_BRIDGE_H_
 
+#include <jni.h>
 #include <stdint.h>
 
 #include <string>
 #include <vector>
 
-#include "base/android/jni_weak_ref.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/android/scoped_java_ref.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 
@@ -21,44 +22,52 @@ class StoragePartition;
 }
 
 namespace storage {
-class QuotaManager;
+class QuotaManagerProxy;
 }  // namespace storage
 
 namespace android_webview {
 
 class AwBrowserContext;
 
-// TODO(crbug.com/1215208): Change the functions in this class to reference
+// TODO(crbug.com/40184305): Change the functions in this class to reference
 // StorageKey instead of Origin.
+//
+// This object is owned by the native AwBrowserContext, and the Java peer is
+// owned by the Java AwBrowserContext.
+//
+// Lifetime: Profile
 class AwQuotaManagerBridge
     : public base::RefCountedThreadSafe<AwQuotaManagerBridge> {
  public:
+  AwQuotaManagerBridge(const AwQuotaManagerBridge&) = delete;
+  AwQuotaManagerBridge& operator=(const AwQuotaManagerBridge&) = delete;
+
   static scoped_refptr<AwQuotaManagerBridge> Create(
       AwBrowserContext* browser_context);
 
-  // Called by Java.
-  void Init(JNIEnv* env, const base::android::JavaParamRef<jobject>& object);
-  void DeleteAllData(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& object);
-  void DeleteOrigin(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& object,
-                    const base::android::JavaParamRef<jstring>& origin);
-  void GetOrigins(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& object,
-                  jint callback_id);
-  void GetUsageAndQuotaForOrigin(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& object,
-      const base::android::JavaParamRef<jstring>& origin,
-      jint callback_id,
-      bool is_quota);
+  // Delete all browsing data stored by the profile this bridge is attached to.
+  void DeleteBrowsingData(const base::android::JavaRef<jobject>& callback);
+  // Delete all browsing data stored by the profile this bridge is attached to,
+  // for the specified eTLD+1 (site). The `domain` parameter can contain a
+  // subdomain. Any subdomains will be ignored, and the actual site domain used
+  // for deletion is returned.
+  std::string DeleteBrowsingDataForSite(
+      const std::string& domain,
+      const base::android::JavaRef<jobject>& callback);
 
-  using GetOriginsCallback =
-      base::OnceCallback<void(const std::vector<std::string>& /* origin */,
-                              const std::vector<int64_t>& /* usaoge */,
-                              const std::vector<int64_t>& /* quota */)>;
-  using QuotaUsageCallback =
-      base::OnceCallback<void(int64_t /* usage */, int64_t /* quota */)>;
+  // http://crbug.com/373826557 does not actually delete all data, preserved for
+  // Android Framework implementation.
+  void DeleteAllDataFramework();
+  // http://crbug.com/373826557 does not actually delete all data, preserved for
+  // Android Framework implementation.
+  void DeleteOriginFramework(const std::u16string& origin);
+  void GetOrigins(JNIEnv* env,
+                  const base::android::JavaRef<jobject>& object,
+                  const base::android::JavaRef<jobject>& callback);
+  void GetUsageAndQuotaForOrigin(
+      const std::u16string& origin,
+      const base::android::JavaRef<jobject>& callback,
+      bool is_quota);
 
  private:
   friend class base::RefCountedThreadSafe<AwQuotaManagerBridge>;
@@ -67,30 +76,11 @@ class AwQuotaManagerBridge
 
   content::StoragePartition* GetStoragePartition() const;
 
-  storage::QuotaManager* GetQuotaManager() const;
+  scoped_refptr<storage::QuotaManagerProxy> GetQuotaManagerProxy() const;
 
-  void DeleteAllDataOnUiThread();
-  void DeleteOriginOnUiThread(const std::u16string& origin);
-  void GetOriginsOnUiThread(jint callback_id);
-  void GetUsageAndQuotaForOriginOnUiThread(const std::u16string& origin,
-                                           jint callback_id,
-                                           bool is_quota);
-
-  void GetOriginsCallbackImpl(int jcallback_id,
-                              const std::vector<std::string>& origin,
-                              const std::vector<int64_t>& usage,
-                              const std::vector<int64_t>& quota);
-  void QuotaUsageCallbackImpl(int jcallback_id,
-                              bool is_quota,
-                              int64_t usage,
-                              int64_t quota);
-
-  AwBrowserContext* browser_context_;
-  JavaObjectWeakGlobalRef java_ref_;
+  raw_ptr<AwBrowserContext> browser_context_;
 
   base::WeakPtrFactory<AwQuotaManagerBridge> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AwQuotaManagerBridge);
 };
 
 }  // namespace android_webview

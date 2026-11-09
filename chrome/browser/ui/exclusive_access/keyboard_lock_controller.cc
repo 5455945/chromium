@@ -1,45 +1,50 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/exclusive_access/keyboard_lock_controller.h"
 
-#include "base/bind.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/metrics/user_metrics.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_hide_callback.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_permission_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
-#include "content/public/browser/native_web_keyboard_event.h"
-#include "content/public/browser/notification_service.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/permissions/features.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
-using base::TimeDelta;
 using base::TimeTicks;
 using content::WebContents;
 
 namespace {
 
-const char kBubbleReshowsHistogramName[] =
-    "ExclusiveAccess.BubbleReshowsPerSession.KeyboardLock";
-
-const char kForcedBubbleReshowsHistogramName[] =
-    "ExclusiveAccess.BubbleReshowsPerSession.KeyboardLockForced";
-
 // Amount of time the user must hold ESC to exit full screen.
-constexpr TimeDelta kHoldEscapeTime = TimeDelta::FromMilliseconds(1500);
+constexpr base::TimeDelta kHoldEscapeTime = base::Milliseconds(1500);
 
 // Amount of time to look for ESC key presses to reshow the exit instructions.
-constexpr TimeDelta kDefaultEscRepeatWindow = TimeDelta::FromSeconds(1);
+constexpr base::TimeDelta kDefaultEscRepeatWindow = base::Seconds(1);
 
 // Number of times ESC must be pressed within |kDefaultEscRepeatWindow| to
 // trigger the exit instructions to be shown again.
 constexpr int kEscRepeatCountToTriggerUiReshow = 3;
+
+// Check whether `event` is a kRawKeyDown type and doesn't have non-stateful
+// modifiers (i.e. shift, ctrl etc.).
+bool IsUnmodifiedEscKeyDownEvent(const input::NativeWebKeyboardEvent& event) {
+  if (event.GetType() != input::NativeWebKeyboardEvent::Type::kRawKeyDown) {
+    return false;
+  }
+  if (event.GetModifiers() & blink::WebInputEvent::kKeyModifiers) {
+    return false;
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -51,11 +56,55 @@ KeyboardLockController::KeyboardLockController(ExclusiveAccessManager* manager)
 KeyboardLockController::~KeyboardLockController() = default;
 
 bool KeyboardLockController::HandleUserPressedEscape() {
-  if (!IsKeyboardLockActive())
+  if (!IsKeyboardLockActive() || RequiresPressAndHoldEscToExit()) {
     return false;
+  }
 
+  base::RecordAction(base::UserMetricsAction("UnlockKeyboard_PressEsc"));
   UnlockKeyboard();
   return true;
+}
+
+void KeyboardLockController::HandleUserHeldEscape() {
+  if (!IsKeyboardLockActive()) {
+    return;
+  }
+
+  base::RecordAction(base::UserMetricsAction("UnlockKeyboard_PressAndHoldEsc"));
+  UnlockKeyboard();
+  // A held Esc key must exit tab fullscreen now. Otherwise it would only exit
+  // on the next Esc key event (an auto-repeat keydown or the keyup), which may
+  // not arrive before the OS acts on the held key, e.g. Android may terminate
+  // an app that captures the keyboard while Esc is held.
+  // Guarded by the kKeyboardLockHeldEscExitsTabFullscreen kill switch.
+  //
+  // Skip this when the browser window itself is fullscreen (e.g. F11), with or
+  // without tab fullscreen on top of it. In that case the same held Esc key is
+  // handled by FullscreenController::HandleUserHeldEscape(), which exits both
+  // browser and tab fullscreen (or deliberately stays fullscreen, e.g. locked
+  // fullscreen). Calling HandleUserPressedEscape() as well would start a
+  // second exit while the first may still be in progress.
+  // If the behavior in fullscreen_controller changes this will silently break.
+  if (base::FeatureList::IsEnabled(
+          features::kKeyboardLockHeldEscExitsTabFullscreen)) {
+    FullscreenController* const fullscreen_controller =
+        exclusive_access_manager()->fullscreen_controller();
+    if (!fullscreen_controller->IsFullscreenForBrowser()) {
+      fullscreen_controller->HandleUserPressedEscape();
+    }
+  }
+}
+
+void KeyboardLockController::HandleUserReleasedEscapeEarly() {
+  if (RequiresPressAndHoldEscToExit()) {
+    ReShowExitBubbleIfNeeded();
+  }
+}
+
+bool KeyboardLockController::RequiresPressAndHoldEscToExit() const {
+  CHECK_EQ(keyboard_lock_state_ == KeyboardLockState::kUnlocked,
+           exclusive_access_tab() == nullptr, base::NotFatalUntil::M162);
+  return keyboard_lock_state_ == KeyboardLockState::kLockedWithEsc;
 }
 
 void KeyboardLockController::ExitExclusiveAccessToPreviousState() {
@@ -70,70 +119,65 @@ void KeyboardLockController::NotifyTabExclusiveAccessLost() {
   UnlockKeyboard();
 }
 
-void KeyboardLockController::RecordBubbleReshowsHistogram(int reshow_count) {
-  UMA_HISTOGRAM_COUNTS_100(kBubbleReshowsHistogramName, reshow_count);
-}
-
-void KeyboardLockController::RecordForcedBubbleReshowsHistogram() {
-  UMA_HISTOGRAM_COUNTS_100(kForcedBubbleReshowsHistogramName,
-                           forced_reshow_count_);
-  forced_reshow_count_ = 0;
-}
-
 bool KeyboardLockController::IsKeyboardLockActive() const {
-  DCHECK_EQ(keyboard_lock_state_ == KeyboardLockState::kUnlocked,
-            exclusive_access_tab() == nullptr);
+  CHECK_EQ(keyboard_lock_state_ == KeyboardLockState::kUnlocked,
+           exclusive_access_tab() == nullptr, base::NotFatalUntil::M162);
   return keyboard_lock_state_ != KeyboardLockState::kUnlocked;
-}
-
-bool KeyboardLockController::RequiresPressAndHoldEscToExit() const {
-  DCHECK_EQ(keyboard_lock_state_ == KeyboardLockState::kUnlocked,
-            exclusive_access_tab() == nullptr);
-  return keyboard_lock_state_ == KeyboardLockState::kLockedWithEsc;
 }
 
 void KeyboardLockController::RequestKeyboardLock(WebContents* web_contents,
                                                  bool esc_key_locked) {
-  if (!exclusive_access_manager()
-           ->fullscreen_controller()
-           ->IsFullscreenForTabOrPending(web_contents)) {
+  CHECK(!exclusive_access_tab() || exclusive_access_tab() == web_contents,
+        base::NotFatalUntil::M162);
+  if (!base::FeatureList::IsEnabled(
+          permissions::features::kKeyboardLockPrompt)) {
+    LockKeyboard(web_contents->GetWeakPtr(), esc_key_locked);
     return;
   }
-
-  DCHECK(!exclusive_access_tab() || exclusive_access_tab() == web_contents);
-
-  LockKeyboard(web_contents, esc_key_locked);
+  exclusive_access_manager()->permission_manager().QueuePermissionRequest(
+      blink::PermissionType::KEYBOARD_LOCK,
+      base::BindOnce(&KeyboardLockController::LockKeyboard,
+                     weak_ptr_factory_.GetWeakPtr(), web_contents->GetWeakPtr(),
+                     esc_key_locked),
+      base::BindOnce(&KeyboardLockController::OnKeyboardLockPermissionDenied,
+                     weak_ptr_factory_.GetWeakPtr(),
+                     web_contents->GetWeakPtr()),
+      web_contents);
 }
 
 bool KeyboardLockController::HandleKeyEvent(
-    const content::NativeWebKeyboardEvent& event) {
-  DCHECK_EQ(ui::VKEY_ESCAPE, event.windows_key_code);
+    const input::NativeWebKeyboardEvent& event) {
+  if (base::FeatureList::IsEnabled(
+          features::kPressAndHoldEscToExitBrowserFullscreen)) {
+    return false;
+  }
+
+  CHECK_EQ(ui::VKEY_ESCAPE, event.windows_key_code, base::NotFatalUntil::M162);
   // This method handles the press and hold gesture used for exiting fullscreen.
   // If we don't have a feature which requires press and hold, or there isn't an
   // active keyboard lock request which requires press and hold, then we just
   // return as the simple 'press esc to exit' case is handled by the caller
   // (which is the ExclusiveAccessManager in this case).
-  if (!RequiresPressAndHoldEscToExit())
+  if (!RequiresPressAndHoldEscToExit()) {
     return false;
+  }
 
   // Note: This logic handles exiting fullscreen but the UI feedback element is
   // created and managed by the FullscreenControlHost class.
-  if (event.GetType() == content::NativeWebKeyboardEvent::Type::kKeyUp &&
+  if (event.GetType() == input::NativeWebKeyboardEvent::Type::kKeyUp &&
       hold_timer_.IsRunning()) {
     // Seeing a key up event on Esc with the hold timer running cancels the
     // timer and doesn't exit. This means the user pressed Esc, but not long
     // enough to trigger an exit
     hold_timer_.Stop();
     ReShowExitBubbleIfNeeded();
-  } else if (event.GetType() ==
-                 content::NativeWebKeyboardEvent::Type::kRawKeyDown &&
-             !hold_timer_.IsRunning()) {
+  } else if (IsUnmodifiedEscKeyDownEvent(event) && !hold_timer_.IsRunning()) {
     // Seeing a key down event on Esc when the hold timer is stopped starts
     // the timer. When the timer fires, the callback will trigger an exit from
-    // fullscreen/mouselock/keyboardlock.
+    // fullscreen/pointerlock/keyboardlock.
     hold_timer_.Start(
         FROM_HERE, kHoldEscapeTime,
-        base::BindOnce(&KeyboardLockController::HandleUserHeldEscape,
+        base::BindOnce(&KeyboardLockController::HandleUserHeldEscapeDeprecated,
                        base::Unretained(this)));
   }
 
@@ -141,56 +185,85 @@ bool KeyboardLockController::HandleKeyEvent(
 }
 
 void KeyboardLockController::CancelKeyboardLockRequest(WebContents* tab) {
-  if (tab == exclusive_access_tab())
-    UnlockKeyboard();
-}
-
-void KeyboardLockController::LostKeyboardLock() {
-  UnlockKeyboard();
-}
-
-void KeyboardLockController::LockKeyboard(content::WebContents* web_contents,
-                                          bool esc_key_locked) {
-  if (web_contents->GotResponseToKeyboardLockRequest(true)) {
-    KeyboardLockState new_lock_state =
-        esc_key_locked ? KeyboardLockState::kLockedWithEsc
-                       : KeyboardLockState::kLockedWithoutEsc;
-    // Only re-show the exit bubble if the requesting web_contents has changed
-    // (or is new) or if the esc key lock state has changed.
-    bool reshow_exit_bubble = exclusive_access_tab() != web_contents ||
-                              new_lock_state != keyboard_lock_state_;
-    keyboard_lock_state_ = new_lock_state;
-    SetTabWithExclusiveAccess(web_contents);
-    if (reshow_exit_bubble) {
-      exclusive_access_manager()->UpdateExclusiveAccessExitBubbleContent(
-          bubble_hide_callback_for_test_
-              ? base::BindOnce(bubble_hide_callback_for_test_)
-              : ExclusiveAccessBubbleHideCallback());
-    }
-  } else {
+  if (tab == exclusive_access_tab()) {
     UnlockKeyboard();
   }
 }
 
-void KeyboardLockController::UnlockKeyboard() {
-  if (!exclusive_access_tab())
+void KeyboardLockController::LockKeyboard(
+    base::WeakPtr<content::WebContents> web_contents,
+    bool esc_key_locked) {
+  if (!web_contents) {
+    NotifyLockRequestResult();
     return;
-
-  RecordExitingUMA();
-  RecordForcedBubbleReshowsHistogram();
-  keyboard_lock_state_ = KeyboardLockState::kUnlocked;
-
-  exclusive_access_tab()->GotResponseToKeyboardLockRequest(false);
-  SetTabWithExclusiveAccess(nullptr);
-  exclusive_access_manager()->UpdateExclusiveAccessExitBubbleContent(
-      ExclusiveAccessBubbleHideCallback());
+  }
+  // Call GotResponseToKeyboardLockRequest() to notify `web_contents` of the
+  // result, regardless of the fullscreen state.
+  if (!web_contents->GotResponseToKeyboardLockRequest(true) ||
+      !web_contents->IsFullscreen()) {
+    UnlockKeyboard();
+    return;
+  }
+  KeyboardLockState new_lock_state = esc_key_locked
+                                         ? KeyboardLockState::kLockedWithEsc
+                                         : KeyboardLockState::kLockedWithoutEsc;
+  // Only re-show the exit bubble if the requesting web_contents has changed
+  // (or is new) or if the esc key lock state has changed.
+  bool reshow_exit_bubble = exclusive_access_tab() != web_contents.get() ||
+                            new_lock_state != keyboard_lock_state_;
+  keyboard_lock_state_ = new_lock_state;
+  SetTabWithExclusiveAccess(web_contents.get());
+  if (reshow_exit_bubble) {
+    exclusive_access_manager()->UpdateBubble(
+        bubble_hide_callback_for_test_
+            ? base::BindOnce(bubble_hide_callback_for_test_)
+            : base::NullCallback());
+  }
+  NotifyLockRequestResult();
 }
 
-void KeyboardLockController::HandleUserHeldEscape() {
+void KeyboardLockController::UnlockKeyboard() {
+  UnlockKeyboardForWebContents(
+      exclusive_access_tab() ? exclusive_access_tab()->GetWeakPtr() : nullptr);
+}
+
+void KeyboardLockController::UnlockKeyboardForWebContents(
+    base::WeakPtr<content::WebContents> web_contents) {
+  if (!web_contents) {
+    return;
+  }
+
+  keyboard_lock_state_ = KeyboardLockState::kUnlocked;
+
+  web_contents->GotResponseToKeyboardLockRequest(false);
+  SetTabWithExclusiveAccess(nullptr);
+  exclusive_access_manager()->UpdateBubble(base::NullCallback());
+  NotifyLockRequestResult();
+}
+
+void KeyboardLockController::OnKeyboardLockPermissionDenied(
+    base::WeakPtr<content::WebContents> web_contents) {
+  if (!web_contents) {
+    return;
+  }
+  UnlockKeyboardForWebContents(web_contents);
+  // Unlike an unlock from Esc or a fullscreen exit, a denied or dismissed
+  // prompt must not be shown again when the page re-enters fullscreen, so
+  // drop the request too. See crbug.com/379954091.
+  web_contents->DiscardKeyboardLockRequest();
+}
+
+void KeyboardLockController::HandleUserHeldEscapeDeprecated() {
+  if (base::FeatureList::IsEnabled(
+          features::kPressAndHoldEscToExitBrowserFullscreen)) {
+    return;
+  }
+
   ExclusiveAccessManager* const manager = exclusive_access_manager();
   manager->fullscreen_controller()->HandleUserPressedEscape();
-  manager->mouse_lock_controller()->HandleUserPressedEscape();
+  manager->pointer_lock_controller()->HandleUserPressedEscape();
   HandleUserPressedEscape();
+  base::RecordAction(base::UserMetricsAction("UnlockKeyboard_PressAndHoldEsc"));
 }
 
 void KeyboardLockController::ReShowExitBubbleIfNeeded() {
@@ -204,12 +277,18 @@ void KeyboardLockController::ReShowExitBubbleIfNeeded() {
 
   esc_keypress_tracker_.push_back(now);
   if (esc_keypress_tracker_.size() >= kEscRepeatCountToTriggerUiReshow) {
-    exclusive_access_manager()->UpdateExclusiveAccessExitBubbleContent(
-        ExclusiveAccessBubbleHideCallback(), /*force_update=*/true);
-    forced_reshow_count_++;
+    exclusive_access_manager()->UpdateBubble(base::NullCallback(),
+                                             /*force_update=*/true);
     esc_keypress_tracker_.clear();
 
-    if (esc_repeat_triggered_for_test_)
+    if (esc_repeat_triggered_for_test_) {
       std::move(esc_repeat_triggered_for_test_).Run();
+    }
+  }
+}
+
+void KeyboardLockController::NotifyLockRequestResult() {
+  if (lock_state_callback_for_test_) {
+    std::move(lock_state_callback_for_test_).Run();
   }
 }

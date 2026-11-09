@@ -1,19 +1,21 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_COMMANDS_GLOBAL_REGISTRY_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_COMMANDS_GLOBAL_REGISTRY_H_
 
-#include <map>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/extensions/extension_keybinding_registry.h"
-#include "chrome/browser/extensions/global_shortcut_listener.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -32,17 +34,23 @@ class Extension;
 class ExtensionCommandsGlobalRegistry
     : public BrowserContextKeyedAPI,
       public ExtensionKeybindingRegistry,
-      public GlobalShortcutListener::Observer {
+      public ui::GlobalAcceleratorListener::Observer {
  public:
   // BrowserContextKeyedAPI implementation.
   static BrowserContextKeyedAPIFactory<ExtensionCommandsGlobalRegistry>*
-      GetFactoryInstance();
+  GetFactoryInstance();
 
   // Convenience method to get the ExtensionCommandsGlobalRegistry for a
   // profile.
   static ExtensionCommandsGlobalRegistry* Get(content::BrowserContext* context);
 
   explicit ExtensionCommandsGlobalRegistry(content::BrowserContext* context);
+
+  ExtensionCommandsGlobalRegistry(const ExtensionCommandsGlobalRegistry&) =
+      delete;
+  ExtensionCommandsGlobalRegistry& operator=(
+      const ExtensionCommandsGlobalRegistry&) = delete;
+
   ~ExtensionCommandsGlobalRegistry() override;
 
   // Returns which non-global command registry is active (belonging to the
@@ -55,9 +63,13 @@ class ExtensionCommandsGlobalRegistry
     registry_for_active_window_ = registry;
   }
 
-  // Returns whether |accelerator| is registered on the registry for the active
+  // Returns whether `accelerator` is registered on the registry for the active
   // window or on the global registry.
   bool IsRegistered(const ui::Accelerator& accelerator);
+
+ protected:
+  // Overridable in tests to inject a fake global accelerator listener.
+  virtual ui::GlobalAcceleratorListener* GetGlobalAcceleratorListener() const;
 
  private:
   friend class BrowserContextKeyedAPIFactory<ExtensionCommandsGlobalRegistry>;
@@ -69,27 +81,52 @@ class ExtensionCommandsGlobalRegistry
   static const bool kServiceRedirectedInIncognito = true;
 
   // Overridden from ExtensionKeybindingRegistry:
-  void AddExtensionKeybindings(const Extension* extension,
-                               const std::string& command_name) override;
-  void RemoveExtensionKeybindingImpl(const ui::Accelerator& accelerator,
-                                     const std::string& command_name) override;
+  bool PopulateCommands(const Extension* extension,
+                        ui::CommandMap* commands) override;
+  bool RegisterAccelerator(const ui::Accelerator& accelerator,
+                           const ExtensionId& extension_id,
+                           const std::string& command_name) override;
+  void UnregisterAccelerator(const ui::Accelerator& accelerator) override;
   void OnShortcutHandlingSuspended(bool suspended) override;
+
+  // Overridden from ExtensionRegistryObserver:
+  void OnExtensionUninstalled(content::BrowserContext* browser_context,
+                              const Extension* extension,
+                              UninstallReason reason) override;
+
+  // Returns the ID that distinguishes the global shortcuts of this profile
+  // from those of other profiles, creating it if needed.
+  std::string GetOrCreateProfileId();
+
+  // Passes a StateStore to `instance` if this hasn't been done yet. Must be
+  // called before passing commands to `instance`.
+  void EnsureStateStore(ui::GlobalAcceleratorListener* instance);
+
+  // Tells `instance` to forget the shortcuts of `extension_id` in this
+  // profile, e.g. because the extension was uninstalled.
+  void ForgetCommands(ui::GlobalAcceleratorListener* instance,
+                      const ExtensionId& extension_id);
 
   // Called by the GlobalShortcutListener object when a shortcut this class has
   // registered for has been pressed.
   void OnKeyPressed(const ui::Accelerator& accelerator) override;
+  void ExecuteCommand(const ExtensionId& extension_id,
+                      const std::string& command_id) override;
 
   // Weak pointer to our browser context. Not owned by us.
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext> browser_context_;
 
   // The global commands registry not only keeps track of global commands
   // registered, but also of which non-global command registry is active
   // (belonging to the currently active window). Only valid for TOOLKIT_VIEWS
-  // and
-  // NULL otherwise.
-  ExtensionKeybindingRegistry* registry_for_active_window_;
+  // and NULL otherwise.
+  raw_ptr<ExtensionKeybindingRegistry> registry_for_active_window_;
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionCommandsGlobalRegistry);
+  // Whether a StateStore has been passed to the global accelerator listener.
+  bool state_store_set_ = false;
+
+  // Must be last.
+  base::WeakPtrFactory<ExtensionCommandsGlobalRegistry> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

@@ -1,16 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/content_capture/renderer/content_capture_sender.h"
 
-#include "base/metrics/histogram_macros.h"
+#include <vector>
+
+#include "base/task/single_thread_task_runner.h"
 #include "components/content_capture/common/content_capture_data.h"
 #include "components/content_capture/common/content_capture_features.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_content_holder.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -21,11 +22,11 @@ ContentCaptureSender::ContentCaptureSender(
     content::RenderFrame* render_frame,
     blink::AssociatedInterfaceRegistry* registry)
     : content::RenderFrameObserver(render_frame) {
-  registry->AddInterface(base::BindRepeating(
+  registry->AddInterface<mojom::ContentCaptureSender>(base::BindRepeating(
       &ContentCaptureSender::BindPendingReceiver, base::Unretained(this)));
 }
 
-ContentCaptureSender::~ContentCaptureSender() {}
+ContentCaptureSender::~ContentCaptureSender() = default;
 
 void ContentCaptureSender::BindPendingReceiver(
     mojo::PendingAssociatedReceiver<mojom::ContentCaptureSender>
@@ -34,12 +35,15 @@ void ContentCaptureSender::BindPendingReceiver(
 }
 
 base::TimeDelta ContentCaptureSender::GetTaskInitialDelay() const {
-  return base::TimeDelta::FromMilliseconds(
-      features::TaskInitialDelayInMilliseconds());
+  return base::Milliseconds(features::TaskInitialDelayInMilliseconds());
+}
+
+void ContentCaptureSender::DidCompleteBatchCaptureContent() {
+  GetContentCaptureReceiver()->DidCompleteBatchCaptureContent();
 }
 
 void ContentCaptureSender::DidCaptureContent(
-    const blink::WebVector<blink::WebContentHolder>& data,
+    const std::vector<blink::WebContentHolder>& data,
     bool first_data) {
   ContentCaptureData frame_data;
   FillContentCaptureData(data, &frame_data, first_data /* set_url */);
@@ -47,14 +51,14 @@ void ContentCaptureSender::DidCaptureContent(
 }
 
 void ContentCaptureSender::DidUpdateContent(
-    const blink::WebVector<blink::WebContentHolder>& data) {
+    const std::vector<blink::WebContentHolder>& data) {
   ContentCaptureData frame_data;
   FillContentCaptureData(data, &frame_data, false /* set_url */);
   GetContentCaptureReceiver()->DidUpdateContent(frame_data);
 }
 
-void ContentCaptureSender::DidRemoveContent(blink::WebVector<int64_t> data) {
-  GetContentCaptureReceiver()->DidRemoveContent(data.ReleaseVector());
+void ContentCaptureSender::DidRemoveContent(std::vector<int64_t> data) {
+  GetContentCaptureReceiver()->DidRemoveContent(std::move(data));
 }
 
 void ContentCaptureSender::StartCapture() {
@@ -77,11 +81,12 @@ void ContentCaptureSender::StopCapture() {
 }
 
 void ContentCaptureSender::OnDestruct() {
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
+                                                                this);
 }
 
 void ContentCaptureSender::FillContentCaptureData(
-    const blink::WebVector<blink::WebContentHolder>& node_holders,
+    const std::vector<blink::WebContentHolder>& node_holders,
     ContentCaptureData* data,
     bool set_url) {
   data->bounds = render_frame()->GetWebFrame()->VisibleContentRect();
@@ -90,7 +95,6 @@ void ContentCaptureSender::FillContentCaptureData(
         render_frame()->GetWebFrame()->GetDocument().Url().GetString().Utf16();
   }
   data->children.reserve(node_holders.size());
-  base::TimeTicks start = base::TimeTicks::Now();
   for (auto& holder : node_holders) {
     ContentCaptureData child;
     child.id = holder.GetId();
@@ -98,10 +102,6 @@ void ContentCaptureSender::FillContentCaptureData(
     child.bounds = holder.GetBoundingBox();
     data->children.push_back(child);
   }
-  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-      "ContentCapture.GetBoundingBox", base::TimeTicks::Now() - start,
-      base::TimeDelta::FromMicroseconds(1),
-      base::TimeDelta::FromMilliseconds(10), 50);
 }
 
 const mojo::AssociatedRemote<mojom::ContentCaptureReceiver>&

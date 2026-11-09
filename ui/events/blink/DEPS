@@ -5,7 +5,6 @@ include_rules = [
   "+cc/input/scroll_elasticity_helper.h",
   "+cc/input/snap_fling_controller.h",
   "+cc/metrics/event_metrics.h",
-  "+cc/trees/swap_promise_monitor.h",
 
   "+third_party/blink/public/common/features.h",
   "+third_party/blink/public/common/input/web_gesture_device.h",
@@ -24,7 +23,7 @@ include_rules = [
   "+ui/gfx",
   "+ui/gfx/geometry",
 
-  "+third_party/one_euro_filter/src/one_euro_filter.h",
+  "+third_party/one_euro_filter/src/OneEuroFilter.h",
 
   "+services/tracing/public/cpp",
 ]

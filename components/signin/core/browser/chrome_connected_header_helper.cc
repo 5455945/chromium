@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,21 @@
 
 #include <vector>
 
-#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/google/core/common/google_util.h"
 #include "components/signin/core/browser/cookie_settings_util.h"
+#include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "url/gurl.h"
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/crosapi/mojom/crosapi.mojom.h"
-#include "chromeos/lacros/lacros_chrome_service_impl.h"
-#endif
 
 namespace signin {
 
@@ -33,6 +31,7 @@ const char kConsistencyEnabledByDefaultAttrName[] =
 const char kContinueUrlAttrName[] = "continue_url";
 const char kEmailAttrName[] = "email";
 const char kEnableAccountConsistencyAttrName[] = "enable_account_consistency";
+const char kGaiaOriginAttrName[] = "gaia_origin";
 const char kGaiaIdAttrName[] = "id";
 const char kIsSameTabAttrName[] = "is_same_tab";
 const char kIsSamlAttrName[] = "is_saml";
@@ -40,25 +39,26 @@ const char kProfileModeAttrName[] = "mode";
 const char kServiceTypeAttrName[] = "action";
 const char kSupervisedAttrName[] = "supervised";
 const char kSourceAttrName[] = "source";
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 const char kEligibleForConsistency[] = "eligible_for_consistency";
 const char kShowConsistencyPromo[] = "show_consistency_promo";
 #endif
 
 // Determines the service type that has been passed from Gaia in the header.
 GAIAServiceType GetGAIAServiceTypeFromHeader(const std::string& header_value) {
-  if (header_value == "SIGNOUT")
+  if (header_value == "SIGNOUT") {
     return GAIA_SERVICE_TYPE_SIGNOUT;
-  else if (header_value == "INCOGNITO")
+  } else if (header_value == "INCOGNITO") {
     return GAIA_SERVICE_TYPE_INCOGNITO;
-  else if (header_value == "ADDSESSION")
+  } else if (header_value == "ADDSESSION") {
     return GAIA_SERVICE_TYPE_ADDSESSION;
-  else if (header_value == "SIGNUP")
+  } else if (header_value == "SIGNUP") {
     return GAIA_SERVICE_TYPE_SIGNUP;
-  else if (header_value == "DEFAULT")
+  } else if (header_value == "DEFAULT") {
     return GAIA_SERVICE_TYPE_DEFAULT;
-  else
+  } else {
     return GAIA_SERVICE_TYPE_NONE;
+  }
 }
 
 }  // namespace
@@ -72,20 +72,25 @@ ChromeConnectedHeaderHelper::ChromeConnectedHeaderHelper(
 // static
 std::string ChromeConnectedHeaderHelper::BuildRequestCookieIfPossible(
     const GURL& url,
-    const std::string& gaia_id,
+    const GaiaId& gaia_id,
     AccountConsistencyMethod account_consistency,
     const content_settings::CookieSettings* cookie_settings,
     int profile_mode_mask) {
   ChromeConnectedHeaderHelper chrome_connected_helper(account_consistency);
-  if (!chrome_connected_helper.ShouldBuildRequestHeader(url, cookie_settings))
+  if (!chrome_connected_helper.ShouldBuildRequestHeader(
+          url, MakeCookieSettingsCallback(cookie_settings),
+          /*check_only_gaia_url=*/false)) {
     return "";
+  }
 
-  // Child accounts are not supported on iOS, so it is preferred to not include
-  // this information in the ChromeConnected cookie.
+  // The `CHROME_CONNECTED` cookie is only used on iOS, and even then
+  // `is_child_account` is not needed on iOS because supervised-user
+  // restrictions (such as disabling Incognito) are already conveyed via
+  // `profile_mode_mask`.
   return chrome_connected_helper.BuildRequestHeader(
-      false /* is_header_request */, url, gaia_id,
-      absl::nullopt /* is_child_account */, profile_mode_mask, "" /* source */,
-      false /* force_account_consistency */);
+      /*is_header_request=*/false, url, gaia_id,
+      /*is_child_account=*/Tribool::kUnknown, profile_mode_mask,
+      /*source=*/std::string(), /*force_account_consistency=*/false);
 }
 
 // static
@@ -109,7 +114,7 @@ ManageAccountsParams ChromeConnectedHeaderHelper::BuildManageAccountsParams(
       params.continue_url = value;
     } else if (key_name == kIsSameTabAttrName) {
       params.is_same_tab = value == "true";
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     } else if (key_name == kShowConsistencyPromo) {
       params.show_consistency_promo = value == "true";
 #endif
@@ -122,16 +127,16 @@ ManageAccountsParams ChromeConnectedHeaderHelper::BuildManageAccountsParams(
 
 bool ChromeConnectedHeaderHelper::ShouldBuildRequestHeader(
     const GURL& url,
-    const content_settings::CookieSettings* cookie_settings) {
-  // If signin cookies are not allowed, don't add the header.
-  if (!SettingsAllowSigninCookies(cookie_settings))
-    return false;
-
+    const CookieSettingsCallback& cookie_settings_callback,
+    bool check_only_gaia_url) {
   // Check if url is eligible for the header.
-  if (!IsUrlEligibleForRequestHeader(url))
+  if (!IsUrlEligibleForRequestHeader(url)) {
     return false;
+  }
 
-  return true;
+  // If signin cookies are not allowed, don't add the header.
+  return SettingsAllowSigninCookies(cookie_settings_callback,
+                                    check_only_gaia_url);
 }
 
 bool ChromeConnectedHeaderHelper::IsUrlEligibleToIncludeGaiaId(
@@ -142,12 +147,13 @@ bool ChromeConnectedHeaderHelper::IsUrlEligibleToIncludeGaiaId(
   // usage:
   // * Avoid sending it in the cookie as not needed on iOS.
   // * Only send it in the header to Drive URLs.
-  return is_header_request ? IsDriveOrigin(url.GetOrigin()) : false;
+  return is_header_request && IsDriveOrigin(url.DeprecatedGetOriginAsURL());
 }
 
 bool ChromeConnectedHeaderHelper::IsDriveOrigin(const GURL& url) {
-  if (!url.SchemeIsCryptographic())
+  if (!url.SchemeIsCryptographic()) {
     return false;
+  }
 
   const GURL kGoogleDriveURL("https://drive.google.com");
   const GURL kGoogleDocsURL("https://docs.google.com");
@@ -157,8 +163,9 @@ bool ChromeConnectedHeaderHelper::IsDriveOrigin(const GURL& url) {
 bool ChromeConnectedHeaderHelper::IsUrlEligibleForRequestHeader(
     const GURL& url) {
   // Consider the account ID sensitive and limit it to secure domains.
-  if (!url.SchemeIsCryptographic())
+  if (!url.SchemeIsCryptographic()) {
     return false;
+  }
 
   switch (account_consistency_) {
     case AccountConsistencyMethod::kDisabled:
@@ -167,7 +174,7 @@ bool ChromeConnectedHeaderHelper::IsUrlEligibleForRequestHeader(
       // Google Drive uses the sync account ID present in the X-Chrome-Connected
       // header to automatically turn on offline mode. So Chrome needs to send
       // this header to Google Drive when Dice is enabled.
-      return IsDriveOrigin(url.GetOrigin());
+      return IsDriveOrigin(url.DeprecatedGetOriginAsURL());
     case AccountConsistencyMethod::kMirror: {
       // Set the X-Chrome-Connected header for all Google web properties if
       // Mirror account consistency is enabled. Vasquette, which is integrated
@@ -179,7 +186,7 @@ bool ChromeConnectedHeaderHelper::IsUrlEligibleForRequestHeader(
              google_util::IsYoutubeDomainUrl(
                  url, google_util::ALLOW_SUBDOMAIN,
                  google_util::DISALLOW_NON_STANDARD_PORTS) ||
-             gaia::IsGaiaSignonRealm(url.GetOrigin());
+             gaia::HasGaiaSchemeHostPort(url);
     }
   }
 }
@@ -187,8 +194,8 @@ bool ChromeConnectedHeaderHelper::IsUrlEligibleForRequestHeader(
 std::string ChromeConnectedHeaderHelper::BuildRequestHeader(
     bool is_header_request,
     const GURL& url,
-    const std::string& gaia_id,
-    const absl::optional<bool>& is_child_account,
+    const GaiaId& gaia_id,
+    Tribool is_child_account,
     int profile_mode_mask,
     const std::string& source,
     bool force_account_consistency) {
@@ -197,6 +204,13 @@ std::string ChromeConnectedHeaderHelper::BuildRequestHeader(
     parts.push_back(
         base::StringPrintf("%s=%s", kSourceAttrName, source.c_str()));
   }
+
+  if (base::FeatureList::IsEnabled(switches::kNonDefaultGaiaOriginCheck) &&
+      !GaiaUrls::GetInstance()->IsUsingDefaultGaiaOrigin()) {
+    parts.push_back(
+        base::StringPrintf("%s=%s", kGaiaOriginAttrName,
+                           GaiaUrls::GetInstance()->gaia_origin().host()));
+  }
 // If we are on mobile or desktop, an empty |account_id| corresponds to the user
 // not signed into Sync. Do not enforce account consistency, unless Mice is
 // enabled on mobile (Android or iOS).
@@ -204,39 +218,48 @@ std::string ChromeConnectedHeaderHelper::BuildRequestHeader(
 // Sessions and Active Directory logins. Guest Sessions have already been
 // filtered upstream and we want to enforce account consistency in Public
 // Sessions and Active Directory logins.
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
   force_account_consistency = true;
 #endif
 
   if (!force_account_consistency && gaia_id.empty()) {
-#if defined(OS_ANDROID)
-    if (gaia::IsGaiaSignonRealm(url.GetOrigin())) {
+#if BUILDFLAG(IS_ANDROID)
+    if (gaia::HasGaiaSchemeHostPort(url)) {
       parts.push_back(
           base::StringPrintf("%s=%s", kEligibleForConsistency, "true"));
       return base::JoinString(parts, is_header_request ? "," : ":");
     }
-#endif  // defined(OS_ANDROID) || defined(OS_IOS)
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     return std::string();
   }
 
   if (!gaia_id.empty() &&
       IsUrlEligibleToIncludeGaiaId(url, is_header_request)) {
     // Only set the Gaia ID on domains that actually require it.
-    parts.push_back(
-        base::StringPrintf("%s=%s", kGaiaIdAttrName, gaia_id.c_str()));
+    parts.push_back(base::StringPrintf("%s=%s", kGaiaIdAttrName,
+                                       gaia_id.ToString().c_str()));
   }
   parts.push_back(
       base::StringPrintf("%s=%s", kProfileModeAttrName,
                          base::NumberToString(profile_mode_mask).c_str()));
   bool is_mirror_enabled =
       account_consistency_ == AccountConsistencyMethod::kMirror;
-  parts.push_back(base::StringPrintf("%s=%s", kEnableAccountConsistencyAttrName,
-                                     is_mirror_enabled ? "true" : "false"));
-  if (is_child_account.has_value()) {
-    parts.push_back(
-        base::StringPrintf("%s=%s", kSupervisedAttrName,
-                           is_child_account.value() ? "true" : "false"));
+  parts.push_back(
+      base::StringPrintf("%s=%s", kEnableAccountConsistencyAttrName,
+                         base::ToString(is_mirror_enabled).c_str()));
+  switch (is_child_account) {
+    case Tribool::kTrue:
+      parts.push_back(base::StringPrintf("%s=%s", kSupervisedAttrName, "true"));
+      break;
+    case Tribool::kFalse:
+      parts.push_back(
+          base::StringPrintf("%s=%s", kSupervisedAttrName, "false"));
+      break;
+    case Tribool::kUnknown:
+      // Do not add the supervised parameter.
+      break;
   }
+
   parts.push_back(base::StringPrintf(
       "%s=%s", kConsistencyEnabledByDefaultAttrName, "false"));
 

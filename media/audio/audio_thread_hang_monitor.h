@@ -1,26 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_AUDIO_AUDIO_THREAD_HANG_MONITOR_H_
 #define MEDIA_AUDIO_AUDIO_THREAD_HANG_MONITOR_H_
 
-#include "media/audio/audio_manager.h"
-
 #include <atomic>
 #include <memory>
+#include <optional>
 
-#include "base/callback_forward.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "media/audio/audio_manager.h"
 #include "media/base/media_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class TickClock;
@@ -42,6 +40,7 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
 
   // These values are histogrammed over time; do not change their ordinal
   // values.
+  // LINT.IfChange(ThreadStatus)
   enum class ThreadStatus {
     // kNone = 0, obsolete.
     kStarted = 1,
@@ -49,6 +48,7 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
     kRecovered,
     kMaxValue = kRecovered
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:AudioThreadStatus)
 
   enum class HangAction {
     // Do nothing. (UMA logging is always done.)
@@ -68,10 +68,13 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
   // zero, a default value is used.
   static Ptr Create(
       HangAction hang_action,
-      absl::optional<base::TimeDelta> hang_deadline,
+      std::optional<base::TimeDelta> hang_deadline,
       const base::TickClock* clock,
       scoped_refptr<base::SingleThreadTaskRunner> audio_thread_task_runner,
       scoped_refptr<base::SequencedTaskRunner> monitor_task_runner = nullptr);
+
+  AudioThreadHangMonitor(const AudioThreadHangMonitor&) = delete;
+  AudioThreadHangMonitor& operator=(const AudioThreadHangMonitor&) = delete;
 
   ~AudioThreadHangMonitor();
 
@@ -84,6 +87,8 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
   class SharedAtomicFlag final
       : public base::RefCountedThreadSafe<SharedAtomicFlag> {
    public:
+    REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
     SharedAtomicFlag();
 
     std::atomic_bool flag_ = {false};
@@ -95,7 +100,7 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
 
   AudioThreadHangMonitor(
       HangAction hang_action,
-      absl::optional<base::TimeDelta> hang_deadline,
+      std::optional<base::TimeDelta> hang_deadline,
       const base::TickClock* clock,
       scoped_refptr<base::SingleThreadTaskRunner> audio_thread_task_runner);
 
@@ -111,6 +116,11 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
   // its value to a histogram.
   void CheckIfAudioThreadIsAlive();
 
+  // Updates |last_check_time_| and, if |alive_flag_| was set, clears it and
+  // posts a task to the audio thread that sets |alive_flag_| again. The next
+  // CheckIfAudioThreadIsAlive() call checks whether that task has run.
+  void PingAudioThread();
+
   // LogHistogramThreadStatus logs |thread_status_| to a histogram.
   void LogHistogramThreadStatus();
 
@@ -124,7 +134,7 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
   void DumpWithoutCrashing();
   void TerminateCurrentProcess();
 
-  const base::TickClock* const clock_;
+  const raw_ptr<const base::TickClock> clock_;
 
   // This flag is set to false on the monitor sequence and then set to true on
   // the audio thread to indicate that the audio thread is alive.
@@ -138,6 +148,12 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
 
   // At which interval to ping and see if the thread is running.
   const base::TimeDelta ping_interval_;
+
+  // Whether CheckIfAudioThreadIsAlive() keeps checking after a late check and
+  // PingAudioThread() keeps at most one ping in flight. Read once from
+  // kAudioThreadHangMonitorRearmAfterLateCheck.
+  // TODO(crbug.com/572682743): Remove with the feature.
+  const bool rearm_after_late_check_;
 
   // For testing. See DumpWithoutCrashing() and TerminateCurrentProcess().
   base::RepeatingClosure dump_callback_;
@@ -162,8 +178,6 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
   // successive successful pings. If the most recent ping was failed, the number
   // is the negative of the number of successive failed pings.
   int recent_ping_state_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioThreadHangMonitor);
 };
 
 }  // namespace media

@@ -1,16 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_CAPTURE_VIDEO_CHROMEOS_CAMERA_3A_CONTROLLER_H_
 #define MEDIA_CAPTURE_VIDEO_CHROMEOS_CAMERA_3A_CONTROLLER_H_
 
-#include <unordered_set>
-
 #include "base/cancelable_callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "media/base/media_export.h"
+#include "media/capture/video/chromeos/capture_metadata_dispatcher.h"
 #include "media/capture/video/chromeos/mojom/camera3.mojom.h"
-#include "media/capture/video/chromeos/request_manager.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#include "ui/gfx/geometry/point.h"
 
 namespace media {
 
@@ -21,9 +25,15 @@ namespace media {
 class CAPTURE_EXPORT Camera3AController final
     : public CaptureMetadataDispatcher::ResultMetadataObserver {
  public:
+  Camera3AController() = delete;
+
   Camera3AController(const cros::mojom::CameraMetadataPtr& static_metadata,
                      CaptureMetadataDispatcher* capture_metadata_dispatcher,
                      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+
+  Camera3AController(const Camera3AController&) = delete;
+  Camera3AController& operator=(const Camera3AController&) = delete;
+
   ~Camera3AController() final;
 
   // Trigger the camera to start exposure, focus, and white-balance metering and
@@ -95,30 +105,30 @@ class CAPTURE_EXPORT Camera3AController final
 
   void ClearRepeatingCaptureMetadata();
 
-  const cros::mojom::CameraMetadataPtr& static_metadata_;
+  const raw_ref<const cros::mojom::CameraMetadataPtr> static_metadata_;
   bool ae_region_supported_;
   bool af_region_supported_;
   bool point_of_interest_supported_;
   bool zero_shutter_lag_supported_;
 
-  CaptureMetadataDispatcher* capture_metadata_dispatcher_;
+  raw_ptr<CaptureMetadataDispatcher> capture_metadata_dispatcher_;
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
-  std::unordered_set<cros::mojom::AndroidControlAfMode> available_af_modes_;
+  absl::flat_hash_set<cros::mojom::AndroidControlAfMode> available_af_modes_;
   cros::mojom::AndroidControlAfMode af_mode_;
   cros::mojom::AndroidControlAfState af_state_;
   // |af_mode_set_| is set to true when the AF mode is synchronized between
   // the HAL and the Camera3AController.
   bool af_mode_set_;
 
-  std::unordered_set<cros::mojom::AndroidControlAeMode> available_ae_modes_;
+  absl::flat_hash_set<cros::mojom::AndroidControlAeMode> available_ae_modes_;
   cros::mojom::AndroidControlAeMode ae_mode_;
   cros::mojom::AndroidControlAeState ae_state_;
   // |ae_mode_set_| is set to true when the AE mode is synchronized between
   // the HAL and the Camera3AController.
   bool ae_mode_set_;
 
-  std::unordered_set<cros::mojom::AndroidControlAwbMode> available_awb_modes_;
+  absl::flat_hash_set<cros::mojom::AndroidControlAwbMode> available_awb_modes_;
   cros::mojom::AndroidControlAwbMode awb_mode_;
   cros::mojom::AndroidControlAwbState awb_state_;
   // |awb_mode_set_| is set to true when the AWB mode is synchronized between
@@ -129,9 +139,11 @@ class CAPTURE_EXPORT Camera3AController final
 
   bool ae_locked_for_point_of_interest_;
 
+  int32_t request_id_ = 0;
+
   base::TimeDelta latest_sensor_timestamp_;
 
-  std::unordered_set<cros::mojom::CameraMetadataTag> repeating_metadata_tags_;
+  absl::flat_hash_set<cros::mojom::CameraMetadataTag> repeating_metadata_tags_;
 
   // TODO(shik): There are potential races in |on.*callback_| due to processing
   // pipeline.  Here are some possible solutions/mitgations used in GCA:
@@ -150,8 +162,6 @@ class CAPTURE_EXPORT Camera3AController final
   base::CancelableOnceClosure delayed_ae_unlock_callback_;
 
   base::WeakPtrFactory<Camera3AController> weak_ptr_factory_{this};
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(Camera3AController);
 };
 
 }  // namespace media

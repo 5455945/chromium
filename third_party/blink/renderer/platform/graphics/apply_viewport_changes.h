@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_APPLY_VIEWPORT_CHANGES_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_APPLY_VIEWPORT_CHANGES_H_
 
-#include "cc/trees/layer_tree_host_client.h"
+#include "cc/trees/layer_tree_host_delegate.h"
 
 namespace blink {
 

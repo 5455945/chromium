@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include "base/component_export.h"
 #include "base/files/platform_file.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
 
 struct iovec;  // Declared in <sys/uio.h>
 
@@ -29,17 +28,13 @@ constexpr size_t kMaxSendmsgHandles = 128;
 // and there wasn't a much better home for them. Consider moving them to
 // src/base or something.
 
-// Like |write()| but handles |EINTR| and never raises |SIGPIPE|.
+// Like |write()| but handles |EINTR| and never raises |SIGPIPE|. |flags| are
+// passed to |send()| along with |MSG_NOSIGNAL|.
 COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
 ssize_t SocketWrite(base::PlatformFile socket,
                     const void* bytes,
-                    size_t num_bytes);
-
-// Like |writev()| but handles |EINTR| and never raises |SIGPIPE|.
-COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
-ssize_t SocketWritev(base::PlatformFile socket,
-                     struct iovec* iov,
-                     size_t num_iov);
+                    size_t num_bytes,
+                    int flags = 0);
 
 // Wrapper around |sendmsg()| which makes it convenient to send attached file
 // descriptors. All entries in |descriptors| must be valid and |descriptors|
@@ -51,13 +46,18 @@ ssize_t SocketWritev(base::PlatformFile socket,
 //
 // Note that regardless of success or failure, descriptors in |descriptors| are
 // not closed.
+//
+// |flags| are passed to |sendmsg()| along with |MSG_NOSIGNAL|.
 COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
 ssize_t SendmsgWithHandles(base::PlatformFile socket,
                            struct iovec* iov,
                            size_t num_iov,
-                           const std::vector<base::ScopedFD>& descriptors);
+                           const std::vector<base::ScopedFD>& descriptors,
+                           int flags = 0);
 
-// Like |recvmsg()|, but handles |EINTR|.
+// Like |recvmsg()|, but handles |EINTR|. Returns 0 if some file descriptors
+// failed to be received, -1 for other errors (in which case, refer to `errno`),
+// and a positive number if bytes were successfully received.
 COMPONENT_EXPORT(MOJO_CPP_PLATFORM)
 ssize_t SocketRecvmsg(base::PlatformFile socket,
                       void* buf,

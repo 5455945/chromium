@@ -1,54 +1,61 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_THEMES_THEME_SERVICE_FACTORY_H_
 #define CHROME_BROWSER_THEMES_THEME_SERVICE_FACTORY_H_
 
-#include "base/macros.h"
-#include "base/memory/singleton.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "base/no_destructor.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "extensions/buildflags/buildflags.h"
 
 class Profile;
 class ThemeService;
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 namespace extensions {
 class Extension;
 }
+#endif
 
 // Singleton that owns all ThemeServices and associates them with
 // Profiles. Listens for the Profile's destruction notification and cleans up
 // the associated ThemeService.
-class ThemeServiceFactory : public BrowserContextKeyedServiceFactory {
+class ThemeServiceFactory : public ProfileKeyedServiceFactory {
  public:
   // Returns the ThemeService that provides theming resources for
   // |profile|. Note that even if a Profile doesn't have a theme installed, it
   // still needs a ThemeService to hand back the default theme images.
   static ThemeService* GetForProfile(Profile* profile);
 
+  // Same as GetForProfile(), but returns nullptr if the service does not
+  // already exist.
+  static ThemeService* GetForProfileIfExists(Profile* profile);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Returns the Extension that implements the theme associated with
   // |profile|. Returns NULL if the theme is no longer installed, if there is
   // no installed theme, or the theme was cleared.
   static const extensions::Extension* GetThemeForProfile(Profile* profile);
+#endif
 
   static ThemeServiceFactory* GetInstance();
 
+  ThemeServiceFactory(const ThemeServiceFactory&) = delete;
+  ThemeServiceFactory& operator=(const ThemeServiceFactory&) = delete;
+
  private:
-  friend struct base::DefaultSingletonTraits<ThemeServiceFactory>;
+  friend base::NoDestructor<ThemeServiceFactory>;
 
   ThemeServiceFactory();
   ~ThemeServiceFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
-  void RegisterProfilePrefs(
-      user_prefs::PrefRegistrySyncable* registry) override;
-  content::BrowserContext* GetBrowserContextToUse(
-      content::BrowserContext* context) const override;
   bool ServiceIsCreatedWithBrowserContext() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(ThemeServiceFactory);
+  void BrowserContextDestroyed(
+      content::BrowserContext* browser_context) override;
 };
 
 #endif  // CHROME_BROWSER_THEMES_THEME_SERVICE_FACTORY_H_

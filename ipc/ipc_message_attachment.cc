@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,27 @@
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
 #include "base/notreached.h"
+#include "build/build_config.h"
 #include "ipc/ipc_mojo_handle_attachment.h"
+#include "mojo/public/cpp/platform/platform_handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+#include <unistd.h>
+
 #include "base/posix/eintr_wrapper.h"
 #include "ipc/ipc_platform_file_attachment_posix.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "ipc/mach_port_attachment_mac.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ipc/handle_attachment_win.h"
 #endif
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
 #include "ipc/handle_attachment_fuchsia.h"
 #endif
 
@@ -31,13 +35,13 @@ namespace IPC {
 
 namespace {
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 base::ScopedFD TakeOrDupFile(internal::PlatformFileAttachment* attachment) {
   return attachment->Owns()
              ? base::ScopedFD(attachment->TakePlatformFile())
              : base::ScopedFD(HANDLE_EINTR(dup(attachment->file())));
 }
-#endif  // defined(OS_POSIX) || defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
 }  // namespace
 
@@ -50,7 +54,7 @@ mojo::ScopedHandle MessageAttachment::TakeMojoHandle() {
     case Type::MOJO_HANDLE:
       return static_cast<internal::MojoHandleAttachment*>(this)->TakeHandle();
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
     case Type::PLATFORM_FILE: {
       // We dup() the handles in IPC::Message to transmit.
       // IPC::MessageAttachmentSet has intricate lifetime semantics for FDs, so
@@ -61,11 +65,11 @@ mojo::ScopedHandle MessageAttachment::TakeMojoHandle() {
         DPLOG(WARNING) << "Failed to dup FD to transmit.";
         return mojo::ScopedHandle();
       }
-      return mojo::WrapPlatformFile(std::move(file));
+      return mojo::WrapPlatformHandle(mojo::PlatformHandle(std::move(file)));
     }
-#endif  // defined(OS_POSIX) || defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
     case Type::MACH_PORT: {
       auto* attachment = static_cast<internal::MachPortAttachmentMac*>(this);
       MojoPlatformHandle platform_handle = {
@@ -79,7 +83,7 @@ mojo::ScopedHandle MessageAttachment::TakeMojoHandle() {
       attachment->reset_mach_port_ownership();
       return mojo::MakeScopedHandle(mojo::Handle(wrapped_handle));
     }
-#elif defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_FUCHSIA)
     case Type::FUCHSIA_HANDLE: {
       auto* attachment = static_cast<internal::HandleAttachmentFuchsia*>(this);
       MojoPlatformHandle platform_handle = {
@@ -92,16 +96,16 @@ mojo::ScopedHandle MessageAttachment::TakeMojoHandle() {
       }
       return mojo::MakeScopedHandle(mojo::Handle(wrapped_handle));
     }
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
     case Type::WIN_HANDLE:
-      return mojo::WrapPlatformFile(base::win::ScopedHandle(
-          static_cast<internal::HandleAttachmentWin*>(this)->Take()));
+      return mojo::WrapPlatformHandle(
+          mojo::PlatformHandle(base::win::ScopedHandle(
+              static_cast<internal::HandleAttachmentWin*>(this)->Take())));
 #endif
     default:
       break;
   }
   NOTREACHED();
-  return mojo::ScopedHandle();
 }
 
 // static
@@ -117,16 +121,16 @@ scoped_refptr<MessageAttachment> MessageAttachment::CreateFromMojoHandle(
   if (unwrap_result != MOJO_RESULT_OK)
     return nullptr;
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   if (type == Type::PLATFORM_FILE) {
     base::PlatformFile file = base::kInvalidPlatformFile;
     if (platform_handle.type == MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR)
       file = static_cast<base::PlatformFile>(platform_handle.value);
     return new internal::PlatformFileAttachment(file);
   }
-#endif  // defined(OS_POSIX) || defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   if (type == Type::MACH_PORT) {
     mach_port_t mach_port = MACH_PORT_NULL;
     if (platform_handle.type == MOJO_PLATFORM_HANDLE_TYPE_MACH_PORT)
@@ -134,24 +138,25 @@ scoped_refptr<MessageAttachment> MessageAttachment::CreateFromMojoHandle(
     return new internal::MachPortAttachmentMac(
         mach_port, internal::MachPortAttachmentMac::FROM_WIRE);
   }
-#elif defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_FUCHSIA)
   if (type == Type::FUCHSIA_HANDLE) {
-    zx::handle handle;
+    zx::handle zx_handle;
     if (platform_handle.type == MOJO_PLATFORM_HANDLE_TYPE_FUCHSIA_HANDLE)
-      handle.reset(static_cast<zx_handle_t>(platform_handle.value));
-    return new internal::HandleAttachmentFuchsia(std::move(handle));
+      zx_handle.reset(static_cast<zx_handle_t>(platform_handle.value));
+    return new internal::HandleAttachmentFuchsia(std::move(zx_handle));
   }
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   if (type == Type::WIN_HANDLE) {
-    base::PlatformFile handle = base::kInvalidPlatformFile;
-    if (platform_handle.type == MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE)
-      handle = reinterpret_cast<base::PlatformFile>(platform_handle.value);
+    base::PlatformFile platform_file = base::kInvalidPlatformFile;
+    if (platform_handle.type == MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE) {
+      platform_file =
+          reinterpret_cast<base::PlatformFile>(platform_handle.value);
+    }
     return new internal::HandleAttachmentWin(
-        handle, internal::HandleAttachmentWin::FROM_WIRE);
+        platform_file, internal::HandleAttachmentWin::FROM_WIRE);
   }
 #endif
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace IPC

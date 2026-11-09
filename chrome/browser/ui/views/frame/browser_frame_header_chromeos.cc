@@ -1,29 +1,33 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/frame/browser_frame_header_chromeos.h"
 
 #include "base/check.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chromeos/ui/base/chromeos_ui_constants.h"
-#include "chromeos/ui/base/tablet_state.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view_chromeos.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
 #include "chromeos/ui/base/window_properties.h"
-#include "chromeos/ui/base/window_state_type.h"
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/frame_utils.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_id.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/scoped_canvas.h"
-#include "ui/gfx/skia_util.h"
 #include "ui/views/view.h"
-#include "ui/views/widget/native_widget_aura.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/caption_button_layout_constants.h"
@@ -67,29 +71,20 @@ void PaintThemedFrame(gfx::Canvas* canvas,
                          bounds.width(), bounds.height(), 1.0f,
                          SkTileMode::kRepeat, SkTileMode::kMirror);
   }
-  if (!frame_overlay_image.isNull())
+  if (!frame_overlay_image.isNull()) {
     canvas->DrawImageInt(frame_overlay_image, 0, 0);
+  }
 
-  if (blending_required)
+  if (blending_required) {
     canvas->Restore();
+  }
 }
 
 // Returns the frame path with the given |bounds| and |corner_radius|
 // for the rounded corner of the frame header.
 SkPath GetFrameHeaderPath(const gfx::Rect& bounds, int corner_radius) {
-  const SkScalar sk_corner_radius = SkIntToScalar(corner_radius);
-  const SkScalar radii[8] = {sk_corner_radius,
-                             sk_corner_radius,  // top-left
-                             sk_corner_radius,
-                             sk_corner_radius,  // top-right
-                             0,
-                             0,  // bottom-right
-                             0,
-                             0};  // bottom-left
-  SkPath frame_path;
-  frame_path.addRoundRect(gfx::RectToSkRect(bounds), radii,
-                          SkPathDirection::kCW);
-  return frame_path;
+  return SkPath::RRect(gfx::RoundedRectToSkRRect(
+      bounds, gfx::RoundedCornersF(corner_radius, corner_radius, 0, 0)));
 }
 
 // Tiles |frame_image| and |frame_overlay_image| into an area, rounding the top
@@ -111,12 +106,6 @@ void PaintFrameImagesInRoundRect(gfx::Canvas* canvas,
                    bounds, image_inset_x, image_inset_y);
 }
 
-int GetCornerRadius(chromeos::WindowStateType state_type) {
-  return chromeos::IsNormalWindowStateType(state_type)
-             ? chromeos::kTopCornerRadiusWhenRestored
-             : 0;
-}
-
 }  // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -128,25 +117,14 @@ BrowserFrameHeaderChromeOS::BrowserFrameHeaderChromeOS(
     AppearanceProvider* appearance_provider,
     chromeos::FrameCaptionButtonContainerView* caption_button_container)
     : FrameHeader(target_widget, view) {
-  DCHECK(appearance_provider);
-  DCHECK(caption_button_container);
+  CHECK(appearance_provider, base::NotFatalUntil::M162);
+  CHECK(caption_button_container, base::NotFatalUntil::M162);
   appearance_provider_ = appearance_provider;
 
   SetCaptionButtonContainer(caption_button_container);
 }
 
 BrowserFrameHeaderChromeOS::~BrowserFrameHeaderChromeOS() = default;
-
-// static
-int BrowserFrameHeaderChromeOS::GetThemeBackgroundXInset() {
-  // In the pre-Ash era the web content area had a frame along the left edge, so
-  // user-generated theme images for the new tab page assume they are shifted
-  // right relative to the header.  Now that we have removed the left edge frame
-  // we need to copy the theme image for the window header from a few pixels
-  // inset to preserve alignment with the NTP image, or else we'll break a bunch
-  // of existing themes.  We do something similar on OS X for the same reason.
-  return 5;
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // BrowserFrameHeaderChromeOS, protected:
@@ -158,9 +136,9 @@ void BrowserFrameHeaderChromeOS::DoPaintHeader(gfx::Canvas* canvas) {
 
 views::CaptionButtonLayoutSize BrowserFrameHeaderChromeOS::GetButtonLayoutSize()
     const {
-  if (chromeos::TabletState::Get() &&
-      chromeos::TabletState::Get()->InTabletMode())
+  if (display::Screen::Get()->InTabletMode()) {
     return views::CaptionButtonLayoutSize::kBrowserCaptionMaximized;
+  }
 
   return chromeos::ShouldUseRestoreFrame(target_widget())
              ? views::CaptionButtonLayoutSize::kBrowserCaptionRestored
@@ -176,16 +154,33 @@ SkColor BrowserFrameHeaderChromeOS::GetCurrentFrameColor() const {
 }
 
 void BrowserFrameHeaderChromeOS::UpdateFrameColors() {
-  UpdateCaptionButtonColors();
-  view()->SchedulePaint();
-}
+  SetPaintAsActive(target_widget()->ShouldPaintAsActive());
+  std::optional<ui::ColorId> button_colors;
 
-SkPath BrowserFrameHeaderChromeOS::GetWindowMaskForFrameHeader(
-    const gfx::Size& size) {
-  chromeos::WindowStateType state_type =
-      target_widget()->GetNativeWindow()->GetProperty(
-          chromeos::kWindowStateTypeKey);
-  return GetFrameHeaderPath(gfx::Rect(size), GetCornerRadius(state_type));
+  auto* browser_frame_view = static_cast<BrowserFrameViewChromeOS*>(view());
+
+  web_app::AppBrowserController* app_browser_controller =
+      web_app::AppBrowserController::From(
+          browser_frame_view->GetBrowserView()->browser());
+
+  // Please note, `app_browser_controller` may be null for non-PWA windows.
+  if (!app_browser_controller ||
+      SafeInvoke(app_browser_controller->system_app())
+          .Then(&ash::SystemWebAppDelegate::UseSystemThemeColor)
+          .value_or(false)) {
+    button_colors = mode() == MODE_ACTIVE
+                        ? ui::kColorSysPrimary
+                        : ui::kColorFrameCaptionButtonUnfocused;
+  }
+
+  if (browser_frame_view->GetBrowserView()->ShouldDrawVerticalTabStrip()) {
+    button_colors = mode() == MODE_ACTIVE
+                        ? kColorVerticalTabsCaptionButtonForegroundActive
+                        : kColorVerticalTabsCaptionButtonForegroundInactive;
+  }
+
+  UpdateCaptionButtonColors(button_colors);
+  view()->SchedulePaint();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -199,13 +194,9 @@ void BrowserFrameHeaderChromeOS::PaintFrameImages(gfx::Canvas* canvas) {
   gfx::ImageSkia frame_overlay_image =
       appearance_provider_->GetFrameHeaderOverlayImage(active);
 
-  chromeos::WindowStateType state_type =
-      target_widget()->GetNativeWindow()->GetProperty(
-          chromeos::kWindowStateTypeKey);
-
   PaintFrameImagesInRoundRect(canvas, frame_image, frame_overlay_image,
                               appearance_provider_->GetFrameHeaderColor(active),
-                              GetPaintedBounds(), GetThemeBackgroundXInset(),
+                              GetPaintedBounds(), /*image_inset_x=*/0,
                               appearance_provider_->GetFrameHeaderImageYInset(),
-                              GetCornerRadius(state_type));
+                              header_corner_radius());
 }

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "components/webcrypto/algorithms/secret_key_util.h"
 #include "components/webcrypto/algorithms/util.h"
 #include "components/webcrypto/blink_key_handle.h"
-#include "components/webcrypto/crypto_data.h"
 #include "components/webcrypto/status.h"
 #include "crypto/openssl_util.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
@@ -27,23 +26,24 @@ const blink::WebCryptoKeyUsageMask kValidUsages =
 
 class HkdfImplementation : public AlgorithmImplementation {
  public:
-  HkdfImplementation() {}
+  HkdfImplementation() = default;
 
   Status ImportKey(blink::WebCryptoKeyFormat format,
-                   const CryptoData& key_data,
+                   base::span<const uint8_t> key_data,
                    const blink::WebCryptoAlgorithm& algorithm,
                    bool extractable,
                    blink::WebCryptoKeyUsageMask usages,
                    blink::WebCryptoKey* key) const override {
     switch (format) {
       case blink::kWebCryptoKeyFormatRaw:
+      case blink::kWebCryptoKeyFormatRawSecret:
         return ImportKeyRaw(key_data, algorithm, extractable, usages, key);
       default:
         return Status::ErrorUnsupportedImportKeyFormat();
     }
   }
 
-  Status ImportKeyRaw(const CryptoData& key_data,
+  Status ImportKeyRaw(base::span<const uint8_t> key_data,
                       const blink::WebCryptoAlgorithm& algorithm,
                       bool extractable,
                       blink::WebCryptoKeyUsageMask usages,
@@ -64,15 +64,16 @@ class HkdfImplementation : public AlgorithmImplementation {
 
   Status DeriveBits(const blink::WebCryptoAlgorithm& algorithm,
                     const blink::WebCryptoKey& base_key,
-                    bool has_optional_length_bits,
-                    unsigned int optional_length_bits,
+                    std::optional<unsigned int> length_bits,
                     std::vector<uint8_t>* derived_bytes) const override {
     crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
-    if (!has_optional_length_bits)
+    if (!length_bits.has_value()) {
       return Status::ErrorHkdfDeriveBitsLengthNotSpecified();
+    }
 
-    if (optional_length_bits % 8)
+    if (*length_bits % 8) {
       return Status::ErrorHkdfLengthNotWholeByte();
+    }
 
     const blink::WebCryptoHkdfParams* params = algorithm.HkdfParams();
 
@@ -81,15 +82,15 @@ class HkdfImplementation : public AlgorithmImplementation {
       return Status::ErrorUnsupported();
 
     // Size output to fit length
-    unsigned int derived_bytes_len = optional_length_bits / 8;
+    unsigned int derived_bytes_len = *length_bits / 8;
     derived_bytes->resize(derived_bytes_len);
 
     // Algorithm dispatch checks that the algorithm in |base_key| matches
     // |algorithm|.
     const std::vector<uint8_t>& raw_key = GetSymmetricKeyData(base_key);
     if (!HKDF(derived_bytes->data(), derived_bytes_len, digest_algorithm,
-              raw_key.data(), raw_key.size(), params->Salt().Data(),
-              params->Salt().size(), params->Info().Data(),
+              raw_key.data(), raw_key.size(), params->Salt().data(),
+              params->Salt().size(), params->Info().data(),
               params->Info().size())) {
       uint32_t error = ERR_get_error();
       if (ERR_GET_LIB(error) == ERR_LIB_HKDF &&
@@ -102,11 +103,21 @@ class HkdfImplementation : public AlgorithmImplementation {
     return Status::Success();
   }
 
+  bool Supports(blink::WebCryptoOperation op,
+                const blink::WebCryptoAlgorithm& algorithm,
+                std::optional<unsigned int> length_bits) const override {
+    if (op == blink::kWebCryptoOperationDeriveBits) {
+      return length_bits.has_value() && (length_bits.value() % 8 == 0);
+    } else {
+      return true;
+    }
+  }
+
   Status DeserializeKeyForClone(const blink::WebCryptoKeyAlgorithm& algorithm,
                                 blink::WebCryptoKeyType type,
                                 bool extractable,
                                 blink::WebCryptoKeyUsageMask usages,
-                                const CryptoData& key_data,
+                                base::span<const uint8_t> key_data,
                                 blink::WebCryptoKey* key) const override {
     if (algorithm.ParamsType() != blink::kWebCryptoKeyAlgorithmParamsTypeNone ||
         type != blink::kWebCryptoKeyTypeSecret)
@@ -121,9 +132,8 @@ class HkdfImplementation : public AlgorithmImplementation {
   }
 
   Status GetKeyLength(const blink::WebCryptoAlgorithm& key_length_algorithm,
-                      bool* has_length_bits,
-                      unsigned int* length_bits) const override {
-    *has_length_bits = false;
+                      std::optional<unsigned int>* length_bits) const override {
+    *length_bits = std::nullopt;
     return Status::Success();
   }
 };

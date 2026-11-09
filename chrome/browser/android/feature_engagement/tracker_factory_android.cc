@@ -1,14 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/android/scoped_java_ref.h"
-#include "chrome/browser/feature_engagement/jni_headers/TrackerFactory_jni.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "components/feature_engagement/public/android/wrapping_test_tracker.h"
 #include "components/feature_engagement/public/tracker.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/feature_engagement/jni_headers/TrackerFactory_jni.h"
 
 namespace {
 
@@ -22,11 +23,8 @@ std::unique_ptr<KeyedService> CreateWrapperTrackerFactory(
 }  // namespace
 
 static base::android::ScopedJavaLocalRef<jobject>
-JNI_TrackerFactory_GetTrackerForProfile(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jprofile) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(jprofile);
-  DCHECK(profile);
+JNI_TrackerFactory_GetTrackerForProfile(JNIEnv* env, Profile* profile) {
+  CHECK(profile, base::NotFatalUntil::M161);
   return feature_engagement::Tracker::GetJavaObject(
       feature_engagement::TrackerFactory::GetInstance()->GetForBrowserContext(
           profile));
@@ -34,13 +32,14 @@ JNI_TrackerFactory_GetTrackerForProfile(
 
 static void JNI_TrackerFactory_SetTestingFactory(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jprofile,
-    const base::android::JavaParamRef<jobject>& jtracker) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(jprofile);
-  DCHECK(profile);
+    Profile* profile,
+    const base::android::JavaRef<jobject>& jtracker) {
+  CHECK(profile, base::NotFatalUntil::M161);
 
   feature_engagement::TrackerFactory::GetInstance()->SetTestingFactory(
       profile, base::BindRepeating(
                    &CreateWrapperTrackerFactory,
                    base::android::ScopedJavaGlobalRef<jobject>(jtracker)));
 }
+
+DEFINE_JNI(TrackerFactory)

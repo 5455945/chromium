@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright 2006-2008 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,12 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include <array>
+
 #include "base/at_exit.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/i18n/icu_util.h"
@@ -34,31 +38,30 @@ namespace {
 bool VerifyWords(const convert_dict::DicReader::WordList& org_words,
                  const std::string& serialized) {
   hunspell::BDictReader reader;
-  if (!reader.Init(reinterpret_cast<const unsigned char*>(serialized.data()),
-                   serialized.size())) {
+  if (!reader.Init(base::as_byte_span(serialized))) {
     printf("BDict is invalid\n");
     return false;
   }
   hunspell::WordIterator iter = reader.GetAllWordIterator();
 
-  int affix_ids[hunspell::BDict::MAX_AFFIXES_PER_WORD];
+  std::array<int, hunspell::BDict::MAX_AFFIXES_PER_WORD> affix_ids;
 
   static const int buf_size = 128;
   char buf[buf_size];
   for (size_t i = 0; i < org_words.size(); i++) {
-    int affix_matches = iter.Advance(buf, buf_size, affix_ids);
+    int affix_matches = iter.Advance(buf, affix_ids.data());
     if (affix_matches == 0) {
       printf("Found the end before we expected\n");
       return false;
     }
 
     if (org_words[i].first != buf) {
-      printf("Word doesn't match, word #%s\n", buf);
+      UNSAFE_TODO(printf("Word doesn't match, word #%s\n", buf));
       return false;
     }
 
     if (affix_matches != static_cast<int>(org_words[i].second.size())) {
-      printf("Different number of affix indices, word #%s\n", buf);
+      UNSAFE_TODO(printf("Different number of affix indices, word #%s\n", buf));
       return false;
     }
 
@@ -66,7 +69,7 @@ bool VerifyWords(const convert_dict::DicReader::WordList& org_words,
     for (size_t affix_index = 0; affix_index < org_words[i].second.size();
          affix_index++) {
       if (affix_ids[affix_index] != org_words[i].second[affix_index]) {
-        printf("Index doesn't match, word #%s\n", buf);
+        UNSAFE_TODO(printf("Index doesn't match, word #%s\n", buf));
         return false;
       }
     }
@@ -85,7 +88,7 @@ int PrintHelp() {
 
 }  // namespace
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 int wmain(int argc, wchar_t* argv[]) {
 #else
 int main(int argc, char* argv[]) {
@@ -97,7 +100,7 @@ int main(int argc, char* argv[]) {
   base::AtExitManager exit_manager;
   base::i18n::InitializeICU();
 
-  base::FilePath file_base = base::FilePath(argv[1]);
+  base::FilePath file_base = base::FilePath(UNSAFE_TODO(argv[1]));
 
   base::FilePath aff_path =
       file_base.ReplaceExtension(FILE_PATH_LITERAL(".aff"));
@@ -143,7 +146,8 @@ int main(int argc, char* argv[]) {
     printf("ERROR writing file\n");
     return 1;
   }
-  size_t written = fwrite(&serialized[0], 1, serialized.size(), out_file);
+  size_t written =
+      UNSAFE_TODO(fwrite(&serialized[0], 1, serialized.size(), out_file));
   CHECK(written == serialized.size());
   base::CloseFile(out_file);
 

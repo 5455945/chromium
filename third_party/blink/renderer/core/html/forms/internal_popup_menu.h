@@ -1,19 +1,22 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_INTERNAL_POPUP_MENU_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_INTERNAL_POPUP_MENU_H_
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/html/forms/popup_menu.h"
 #include "third_party/blink/renderer/core/page/page_popup_client.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 
 namespace blink {
 
 class AXObject;
 class ChromeClient;
+class ComputedStyle;
 class CSSFontSelector;
 class PagePopup;
 class HTMLElement;
@@ -37,7 +40,8 @@ class CORE_EXPORT InternalPopupMenu final : public PopupMenu,
 
  private:
   FRIEND_TEST_ALL_PREFIXES(InternalPopupMenuTest, ShowSelectDisplayNone);
-
+  FRIEND_TEST_ALL_PREFIXES(InternalPopupMenuTest,
+                           MediaFeatureOverridesPropagation);
   class ItemIterationContext;
   void AddOption(ItemIterationContext&, HTMLOptionElement&);
   void AddOptGroup(ItemIterationContext&, HTMLOptGroupElement&);
@@ -45,20 +49,22 @@ class CORE_EXPORT InternalPopupMenu final : public PopupMenu,
   void AddElementStyle(ItemIterationContext&, HTMLElement&);
 
   void AppendOwnerElementPseudoStyles(const String&,
-                                      SharedBuffer*,
+                                      SegmentedBuffer&,
                                       const ComputedStyle&);
 
   // PopupMenu functions:
-  void Show() override;
+  void Show(ShowEventType type) override;
   void Hide() override;
   void DisconnectClient() override;
   void UpdateFromElement(UpdateReason) override;
   AXObject* PopupRootAXObject() const override;
 
   // PagePopupClient functions:
-  void WriteDocument(SharedBuffer*) override;
+  void WriteDocument(SegmentedBuffer&) override;
   CSSFontSelector* CreateCSSFontSelector(Document& popup_document) override;
-  void SetValueAndClosePopup(int, const String&) override;
+  void SetValueAndClosePopup(int,
+                             const String&,
+                             bool is_keyboard_event) override;
   void SetValue(const String&) override;
   void CancelPopup() override;
   Element& OwnerElement() override;
@@ -66,10 +72,12 @@ class CORE_EXPORT InternalPopupMenu final : public PopupMenu,
   float ZoomFactor() override { return 1.0; }
   Locale& GetLocale() override;
   void DidClosePopup() override;
+  void SetMenuListOptionsBoundsInAXTree(Vector<gfx::Rect>&,
+                                        gfx::Point) override;
 
   Member<ChromeClient> chrome_client_;
   Member<HTMLSelectElement> owner_element_;
-  PagePopup* popup_;
+  raw_ptr<PagePopup, UnprotectedInRelease | DanglingUntriaged> popup_;
   bool needs_update_;
 };
 

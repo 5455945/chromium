@@ -1,54 +1,95 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/policy/profile_policy_connector.h"
 
+#include <algorithm>
 #include <memory>
+#include <optional>
+#include <ranges>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_switcher/browser_switcher_policy_migrator.h"
+#include "chrome/browser/enterprise/util/affiliation.h"
+#include "chrome/browser/infobars/confirm_infobar_creation_allowlist.h"
+#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#endif
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
+#include "components/infobars/content/content_infobar_manager.h"
+#include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
+#include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
-#include "components/policy/core/common/legacy_chrome_policy_migrator.h"
+#include "components/policy/core/common/local_test_policy_provider.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_service_impl.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/policy/core/common/proxy_policy_provider.h"
 #include "components/policy/core/common/schema_registry_tracking_policy_provider.h"
 #include "components/policy/policy_constants.h"
+#include "components/strings/grit/components_strings.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/web_contents.h"
+#include "ui/base/l10n/l10n_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/policy/active_directory/active_directory_policy_manager.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
-#include "chrome/browser/ash/policy/core/device_cloud_policy_manager_chromeos.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#include "base/hash/hash.h"
+#include "base/location.h"
+#include "base/strings/strcat.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+#include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_provider.h"
+#include "chrome/browser/ash/policy/login/login_profile_policy_provider.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/policy/login/login_profile_policy_provider.h"
-#include "components/policy/core/common/proxy_policy_provider.h"
+#include "chrome/browser/policy/restricted_mgs_policy_provider.h"
+#include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_type.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/tab_android.h"
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#else
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
 namespace policy {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 namespace internal {
-
+#if BUILDFLAG(IS_CHROMEOS)
 // This class allows observing a |device_wide_policy_service| for policy updates
 // during which the |source_policy_provider| has already been initialized.
 // It is used to know when propagation of primary user policies proxied to the
@@ -68,9 +109,7 @@ class ProxiedPoliciesPropagatedWatcher : PolicyService::ProviderUpdateObserver {
     device_wide_policy_service->AddProviderUpdateObserver(this);
 
     timeout_timer_.Start(
-        FROM_HERE,
-        base::TimeDelta::FromSeconds(
-            kProxiedPoliciesPropagationTimeoutInSeconds),
+        FROM_HERE, base::Seconds(kProxiedPoliciesPropagationTimeoutInSeconds),
         this,
         &ProxiedPoliciesPropagatedWatcher::OnProviderUpdatePropagationTimedOut);
   }
@@ -109,37 +148,347 @@ class ProxiedPoliciesPropagatedWatcher : PolicyService::ProviderUpdateObserver {
  private:
   static constexpr int kProxiedPoliciesPropagationTimeoutInSeconds = 5;
 
-  PolicyService* const device_wide_policy_service_;
-  const ProxyPolicyProvider* const proxy_policy_provider_;
-  const ConfigurationPolicyProvider* const source_policy_provider_;
+  const raw_ptr<PolicyService> device_wide_policy_service_;
+  const raw_ptr<const ProxyPolicyProvider> proxy_policy_provider_;
+  const raw_ptr<const ConfigurationPolicyProvider> source_policy_provider_;
   base::OnceClosure proxied_policies_propagated_callback_;
   base::OneShotTimer timeout_timer_;
 };
+#endif
+// Class responsible for showing infobar when test policies are set from
+// the chrome://policy/test page
+class LocalTestInfoBarVisibilityManager :
+#if BUILDFLAG(IS_ANDROID)
+    public TabModelObserver
+#else
+    public BrowserCollectionObserver,
+    public TabStripModelObserver
+#endif  // BUILDFLAG(IS_ANDROID)
+{
+ public:
+  LocalTestInfoBarVisibilityManager() = default;
 
+  LocalTestInfoBarVisibilityManager(const LocalTestInfoBarVisibilityManager&) =
+      delete;
+  LocalTestInfoBarVisibilityManager& operator=(
+      const LocalTestInfoBarVisibilityManager&) = delete;
+
+  ~LocalTestInfoBarVisibilityManager() override {
+    if (infobar_active_) {
+      DismissInfobarsForActiveLocalTestPoliciesAllTabs();
+    }
+  }
+
+#if BUILDFLAG(IS_ANDROID)
+  // TabModelObserver
+  void DidAddTab(TabAndroid* tab, TabModel::TabLaunchType type) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+    if (tab && tab->web_contents()) {
+      EnsureInfobarForActiveLocalTestPolicies(tab->web_contents());
+    }
+  }
+
+  // TabModelObserver
+  void DidSelectTab(TabAndroid* tab) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+    if (tab && tab->web_contents()) {
+      EnsureInfobarForActiveLocalTestPolicies(tab->web_contents());
+    }
+  }
+#else
+  void OnBrowserCreated(BrowserWindowInterface* browser) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+    CHECK(browser);
+
+    // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
+    browser->GetTabStripModel()->AddObserver(this);
+  }
+
+  void OnBrowserClosed(BrowserWindowInterface* browser) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+    CHECK(browser);
+
+    if (GlobalBrowserCollection::GetInstance()->IsEmpty()) {
+      browser_collection_observation_.Reset();
+    }
+  }
+
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+    if (change.type() == TabStripModelChange::kInserted) {
+      for (const auto& contents : change.GetInsert()->contents) {
+        EnsureInfobarForActiveLocalTestPolicies(contents.contents);
+      }
+    } else if (change.type() == TabStripModelChange::kRemoved &&
+               tab_strip_model->empty()) {
+      tab_strip_model->RemoveObserver(this);
+    }
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  void AddInfobarsForActiveLocalTestPoliciesAllTabs() {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+#if BUILDFLAG(IS_ANDROID)
+    TabModelList::ForEachAll([this](TabModel* model) {
+      for (int index = 0; index < model->GetTabCount(); ++index) {
+        TabAndroid* tab = model->GetTabAt(index);
+        if (tab && tab->web_contents()) {
+          EnsureInfobarForActiveLocalTestPolicies(tab->web_contents());
+        }
+      }
+      model->AddObserver(this);
+      return true;
+    });
+#else
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [this](BrowserWindowInterface* browser) {
+          CHECK(browser);
+
+          OnBrowserCreated(browser);
+
+          TabStripModel* const tab_strip_model = browser->GetTabStripModel();
+          for (int i = 0; i < tab_strip_model->count(); i++) {
+            EnsureInfobarForActiveLocalTestPolicies(
+                tab_strip_model->GetWebContentsAt(i));
+          }
+          return true;
+        });
+    browser_collection_observation_.Observe(
+        GlobalBrowserCollection::GetInstance());
+#endif  // BUILDFLAG(IS_ANDROID)
+    infobar_active_ = true;
+  }
+
+  void EnsureInfobarForActiveLocalTestPolicies(
+      content::WebContents* web_contents) {
+    infobars::ContentInfoBarManager::CreateForWebContents(web_contents);
+    auto* infobar_manager =
+        infobars::ContentInfoBarManager::FromWebContents(web_contents);
+    if (std::ranges::contains(
+        infobar_manager->infobars(),
+        infobars::InfoBarDelegate::LOCAL_TEST_POLICIES_APPLIED_INFOBAR,
+        &infobars::InfoBar::GetIdentifier)) {
+      return;
+    }
+    CreateSimpleAlertInfoBar(
+        ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(),
+        infobar_manager,
+        infobars::InfoBarDelegate::LOCAL_TEST_POLICIES_APPLIED_INFOBAR, nullptr,
+        l10n_util::GetStringUTF16(IDS_LOCAL_TEST_POLICIES_ENABLED),
+        /*auto_expire=*/false, /*should_animate=*/false, /*closeable=*/false,
+        /*infobar_priority=*/
+        infobars::InfoBarDelegate::InfobarPriority::kLow);
+  }
+
+  void DismissInfobarsForActiveLocalTestPoliciesAllTabs() {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+#if BUILDFLAG(IS_ANDROID)
+    TabModelList::ForEachAll([this](TabModel* model) {
+      for (int index = 0; index < model->GetTabCount(); ++index) {
+        TabAndroid* tab = model->GetTabAt(index);
+        if (tab) {
+          DismissInfobarForActiveLocalTestPolicies(tab->web_contents());
+        }
+      }
+      model->RemoveObserver(this);
+      return true;
+    });
+#else
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [this](BrowserWindowInterface* browser) {
+          CHECK(browser);
+
+          browser->GetTabStripModel()->RemoveObserver(this);
+
+          TabStripModel* const tab_strip_model = browser->GetTabStripModel();
+          for (int i = 0; i < tab_strip_model->count(); i++) {
+            DismissInfobarForActiveLocalTestPolicies(
+                tab_strip_model->GetWebContentsAt(i));
+          }
+          return true;
+        });
+    browser_collection_observation_.Reset();
+#endif  // BUILDFLAG(IS_ANDROID)
+    infobar_active_ = false;
+  }
+
+  void DismissInfobarForActiveLocalTestPolicies(
+      content::WebContents* web_contents) {
+    infobars::ContentInfoBarManager::CreateForWebContents(web_contents);
+    auto* infobar_manager =
+        infobars::ContentInfoBarManager::FromWebContents(web_contents);
+    const auto it = std::ranges::find(
+        infobar_manager->infobars(),
+        infobars::InfoBarDelegate::LOCAL_TEST_POLICIES_APPLIED_INFOBAR,
+        &infobars::InfoBar::GetIdentifier);
+    if (it != infobar_manager->infobars().cend()) {
+      infobar_manager->RemoveInfoBar(*it);
+    }
+  }
+
+  bool infobar_active() { return infobar_active_; }
+
+  base::WeakPtr<LocalTestInfoBarVisibilityManager> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  bool infobar_active_ = false;
+#if !BUILDFLAG(IS_ANDROID)
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
+#endif  // !BUILDFLAG(IS_ANDROID)
+  base::WeakPtrFactory<LocalTestInfoBarVisibilityManager> weak_ptr_factory_{
+      this};
+};
 }  // namespace internal
 
 namespace {
+
+// Runs a task on the UI thread, eagerly if currently on the UI thread (to
+// reduce the risk for potential race conditions), else posted to the UI thread.
+void RunNowOnOrPostToUIThread(base::OnceClosure task) {
+  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+    std::move(task).Run();
+  } else {
+    content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(task));
+  }
+}
+
+}  // namespace
+
+#if BUILDFLAG(IS_CHROMEOS)
+namespace {
 // Returns the PolicyService that holds device-wide policies.
 PolicyService* GetDeviceWidePolicyService() {
-  BrowserPolicyConnectorChromeOS* browser_policy_connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
+  BrowserPolicyConnectorAsh* browser_policy_connector =
+      g_browser_process->platform_part()->browser_policy_connector_ash();
   return browser_policy_connector->GetPolicyService();
 }
 
 // Returns the ProxyPolicyProvider which is used to forward primary Profile
 // policies into the device-wide PolicyService.
 ProxyPolicyProvider* GetProxyPolicyProvider() {
-  BrowserPolicyConnectorChromeOS* browser_policy_connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
+  BrowserPolicyConnectorAsh* browser_policy_connector =
+      g_browser_process->platform_part()->browser_policy_connector_ash();
   return browser_policy_connector->GetGlobalUserCloudPolicyProvider();
 }
-}  // namespace
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+// Returns the hash to identify the caller for investigation.
+// To stabilize against unrelated line edits in the file, we drop line number
+// from the source of the hash.
+uint32_t LocationHash(const base::Location& location) {
+  if (!location.has_source_info()) {
+    // Use 0 to indicate "missing source info" error.
+    return 0;
+  }
+  return base::PersistentHash(
+      base::StrCat({location.function_name(), location.file_name()}));
+}
+
+// ProfilePolicyConnector::IsManaged() is equivalent to
+// user_manager::User::is_managed().value_or(false) for most cases. This
+// function records UMA metrics on other unexpected situations.
+void RecordIsManagedCallerForChromeOS(
+    const user_manager::User* user,
+    const CloudPolicyStore* actual_policy_store,
+    base::Location original_caller) {
+  if (!user) {
+    // This case cannot be replaced with user_->is_managed() and we need to
+    // address case-by-case.
+    base::UmaHistogramSparse(
+        "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged.NonUserProfile",
+        LocationHash(original_caller));
+    return;
+  }
+
+  if (user->IsDeviceLocalAccount()) {
+    CHECK(user->is_managed().has_value() && user->is_managed().value());
+
+    // `actual_policy_store` should be non-null.
+    // TODO(crbug.com/489635809): Put CHECK(actual_policy_store).
+    if (!actual_policy_store || !actual_policy_store->is_managed()) {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged."
+          "DeviceLocalAccountUnexpected",
+          LocationHash(original_caller));
+    } else {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged.Consistent",
+          LocationHash(original_caller));
+    }
+    return;
+  }
+
+  // Regular users (UserType::kRegular or UserType::kChild)
+
+  if (!user->is_managed().has_value()) {
+    if (!actual_policy_store) {
+      // Null actual_policy_store means, the user should be unmanaged and
+      // user->is_managed() should have false, which is set on OnProfileAdded().
+      // !has_value() means that the call is too early, i.e. before
+      // ProfileManagerObserver::OnProfileAdedd().
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged."
+          "RegularUserEarlyCallUnmanaged",
+          LocationHash(original_caller));
+    } else if (actual_policy_store->is_managed()) {
+      // User should be managed, but User::is_managed_ has not been updated yet.
+      // !has_value() means that the call is in between when the policy is set
+      // and when UserManager::SetUserPolicyStatus() is called.
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged."
+          "RegularUserEarlyCallManaged",
+          LocationHash(original_caller));
+    } else {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged.Consistent",
+          LocationHash(original_caller));
+    }
+    return;
+  }
+
+  if (user->is_managed().value()) {
+    // `actual_policy_store` should be non-null.
+    // TODO(crbug.com/489635809): Put CHECK(actual_policy_store).
+    if (!actual_policy_store || !actual_policy_store->is_managed()) {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged."
+          "RegularUserUnexpectedUserIsManaged",
+          LocationHash(original_caller));
+    } else {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged.Consistent",
+          LocationHash(original_caller));
+    }
+  } else {
+    if (actual_policy_store && actual_policy_store->is_managed()) {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged."
+          "RegularUserUnexpectedProfileIsManaged",
+          LocationHash(original_caller));
+    } else {
+      base::UmaHistogramSparse(
+          "Ash.RefactoringHint.ProfilePolicyConnectorIsManaged.Consistent",
+          LocationHash(original_caller));
+    }
+  }
+}
+
+}  // namespace
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 ProfilePolicyConnector::ProfilePolicyConnector() = default;
 
-ProfilePolicyConnector::~ProfilePolicyConnector() = default;
+ProfilePolicyConnector::~ProfilePolicyConnector() {
+  if (policy_service_) {
+    // We should've subscribed by this point, but in case not that's a no-op.
+    policy_service_->RemoveObserver(POLICY_DOMAIN_CHROME, this);
+  }
+}
 
 void ProfilePolicyConnector::Init(
     const user_manager::User* user,
@@ -148,93 +497,101 @@ void ProfilePolicyConnector::Init(
     const CloudPolicyStore* policy_store,
     policy::ChromeBrowserPolicyConnector* connector,
     bool force_immediate_load) {
+  CHECK(!configuration_policy_provider_, base::NotFatalUntil::M162);
+  CHECK(!policy_store_, base::NotFatalUntil::M162);
+  CHECK(!policy_service_, base::NotFatalUntil::M162);
+
   configuration_policy_provider_ = configuration_policy_provider;
   policy_store_ = policy_store;
+  local_test_infobar_visibility_manager_ =
+      std::make_unique<internal::LocalTestInfoBarVisibilityManager>();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  user_ = user;
   auto* browser_policy_connector =
-      static_cast<BrowserPolicyConnectorChromeOS*>(connector);
+      static_cast<BrowserPolicyConnectorAsh*>(connector);
 #else
-  DCHECK_EQ(nullptr, user);
+  CHECK_EQ(nullptr, user, base::NotFatalUntil::M162);
 #endif
 
   ConfigurationPolicyProvider* platform_provider =
-      GetPlatformProvider(connector);
+      connector->GetPlatformProvider();
   if (platform_provider) {
-    wrapped_platform_policy_provider_ =
-        std::make_unique<SchemaRegistryTrackingPolicyProvider>(
-            platform_provider);
-    wrapped_platform_policy_provider_->Init(schema_registry);
-    policy_providers_.push_back(wrapped_platform_policy_provider_.get());
+    AppendPolicyProviderWithSchemaTracking(platform_provider, schema_registry);
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (browser_policy_connector->GetDeviceCloudPolicyManager()) {
     policy_providers_.push_back(
         browser_policy_connector->GetDeviceCloudPolicyManager());
   }
-  if (browser_policy_connector->GetDeviceActiveDirectoryPolicyManager()) {
-    policy_providers_.push_back(
-        browser_policy_connector->GetDeviceActiveDirectoryPolicyManager());
-  }
 #else
-  for (auto* provider : connector->GetPolicyProviders()) {
-    // Skip the platform provider since it was already handled above.  The
-    // platform provider should be first in the list so that it always takes
-    // precedence.
-    if (provider == platform_provider) {
-      continue;
-    } else {
-      // TODO(zmin): In the future, we may want to have special handling for
-      // the other providers too.
-      policy_providers_.push_back(provider);
-    }
+  ConfigurationPolicyProvider* machine_level_user_cloud_policy_provider =
+      connector->proxy_policy_provider();
+  if (machine_level_user_cloud_policy_provider) {
+    policy_providers_.push_back(machine_level_user_cloud_policy_provider);
+  }
+
+  if (connector->command_line_policy_provider()) {
+    policy_providers_.push_back(connector->command_line_policy_provider());
   }
 #endif
 
-  if (configuration_policy_provider)
-    policy_providers_.push_back(configuration_policy_provider);
+    local_test_policy_provider_ = connector->local_test_policy_provider();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (configuration_policy_provider) {
+    policy_providers_.push_back(configuration_policy_provider);
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
   if (!user) {
-    DCHECK(schema_registry);
+    CHECK(schema_registry, base::NotFatalUntil::M162);
     // This case occurs for the signin and the lock screen app profiles.
     special_user_policy_provider_ =
         std::make_unique<LoginProfilePolicyProvider>(
             browser_policy_connector->GetPolicyService());
   } else {
+    auto* const manager = user_manager::UserManager::Get();
     // |user| should never be nullptr except for the signin and the lock screen
     // app profile.
-    is_primary_user_ =
-        user == user_manager::UserManager::Get()->GetPrimaryUser();
+    is_primary_user_ = user == manager->GetPrimaryUser();
+    is_user_new_ =
+        user == manager->GetActiveUser() && manager->IsCurrentUserNew();
     // Note that |DeviceLocalAccountPolicyProvider::Create| returns nullptr when
-    // the user supplied is not a device-local account user.
+    // the user supplied is not a device-local account user or not in demo mode.
+    std::string user_id = user->GetAccountId().GetUserEmail();
+    if (ash::demo_mode::IsDemoAccountSignInEnabled()) {
+      std::vector<DeviceLocalAccount> device_local_accounts =
+          GetDeviceLocalAccounts(ash::CrosSettings::Get());
+      CHECK_EQ(device_local_accounts.size(), 1u);
+      user_id = device_local_accounts[0].user_id;
+    }
+
     special_user_policy_provider_ = DeviceLocalAccountPolicyProvider::Create(
-        user->GetAccountId().GetUserEmail(),
-        browser_policy_connector->GetDeviceLocalAccountPolicyService(),
+        user_id, browser_policy_connector->GetDeviceLocalAccountPolicyService(),
         force_immediate_load);
   }
   if (special_user_policy_provider_) {
     special_user_policy_provider_->Init(schema_registry);
     policy_providers_.push_back(special_user_policy_provider_.get());
   }
+
+  // `RestrictedMGSPolicyProvider::Create()` returns a nullptr when we are not
+  // in a Managed Guest Session.
+  restricted_mgs_policy_provider = RestrictedMGSPolicyProvider::Create();
+  if (restricted_mgs_policy_provider) {
+    restricted_mgs_policy_provider->Init(schema_registry);
+    policy_providers_.push_back(restricted_mgs_policy_provider.get());
+  }
 #endif
 
   std::vector<std::unique_ptr<PolicyMigrator>> migrators;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   migrators.push_back(
       std::make_unique<browser_switcher::BrowserSwitcherPolicyMigrator>());
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  migrators.push_back(std::make_unique<LegacyChromePolicyMigrator>(
-      policy::key::kDeviceNativePrinters, policy::key::kDevicePrinters));
-  migrators.push_back(std::make_unique<LegacyChromePolicyMigrator>(
-      policy::key::kDeviceUserWhitelist, policy::key::kDeviceUserAllowlist));
-  migrators.push_back(std::make_unique<LegacyChromePolicyMigrator>(
-      policy::key::kNativePrintersBulkConfiguration,
-      policy::key::kPrintersBulkConfiguration));
-
+#if BUILDFLAG(IS_CHROMEOS)
   ConfigurationPolicyProvider* user_policy_delegate_candidate =
       configuration_policy_provider ? configuration_policy_provider
                                     : special_user_policy_provider_.get();
@@ -246,10 +603,11 @@ void ProfilePolicyConnector::Init(
   //     users, |user_policy_delegate_candidate| will be nullptr.
   // (*) The ProxyPolicyProvider is actually used by the device-wide policy
   //     service. This may not be the case  e.g. in tests that use
-  //     bBrowserPolicyConnectorBase::SetPolicyProviderForTesting.
+  //     BrowserPolicyConnectorBase::SetPolicyProviderForTesting.
   if (is_primary_user_ && user_policy_delegate_candidate &&
       GetDeviceWidePolicyService()->HasProvider(GetProxyPolicyProvider())) {
-    GetProxyPolicyProvider()->SetDelegate(user_policy_delegate_candidate);
+    GetProxyPolicyProvider()->SetUnownedDelegate(
+        user_policy_delegate_candidate);
 
     // When proxying primary user policies to the device-wide PolicyService,
     // delay signaling that initialization is complete until the policies have
@@ -259,47 +617,64 @@ void ProfilePolicyConnector::Init(
         policy_providers_, std::move(migrators),
         user_policy_delegate_candidate);
   } else {
-    policy_service_ = std::make_unique<PolicyServiceImpl>(policy_providers_,
-                                                          std::move(migrators));
+    policy_service_ = std::make_unique<PolicyServiceImpl>(
+        policy_providers_, PolicyServiceImpl::ScopeForMetrics::kUser,
+        std::move(migrators));
   }
-#else   // BUILDFLAG(IS_CHROMEOS_ASH)
-  policy_service_ = std::make_unique<PolicyServiceImpl>(policy_providers_,
-                                                        std::move(migrators));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#else   // BUILDFLAG(IS_CHROMEOS)
+  policy_service_ = std::make_unique<PolicyServiceImpl>(
+      policy_providers_, PolicyServiceImpl::ScopeForMetrics::kUser,
+      std::move(migrators));
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  if (local_test_policy_provider_ && local_test_policy_provider_->is_active()) {
+    UseLocalTestPolicyProvider();
+  }
+  DoPostInit();
 }
 
 void ProfilePolicyConnector::InitForTesting(
     std::unique_ptr<PolicyService> service) {
-  DCHECK(!policy_service_);
+  CHECK(!policy_service_, base::NotFatalUntil::M162);
   policy_service_ = std::move(service);
+  DoPostInit();
 }
 
 void ProfilePolicyConnector::OverrideIsManagedForTesting(bool is_managed) {
   is_managed_override_ = std::make_unique<bool>(is_managed);
 }
 
-void ProfilePolicyConnector::SetPlatformPolicyProviderForTesting(
-    ConfigurationPolicyProvider* platform_policy_provider_for_testing) {
-  platform_policy_provider_for_testing_ = platform_policy_provider_for_testing;
-}
-
 void ProfilePolicyConnector::Shutdown() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (is_primary_user_)
-    GetProxyPolicyProvider()->SetDelegate(nullptr);
+    GetProxyPolicyProvider()->SetUnownedDelegate(nullptr);
 
   if (special_user_policy_provider_)
     special_user_policy_provider_->Shutdown();
 #endif
 
-  if (wrapped_platform_policy_provider_)
-    wrapped_platform_policy_provider_->Shutdown();
+#if BUILDFLAG(IS_CHROMEOS)
+  if (restricted_mgs_policy_provider)
+    restricted_mgs_policy_provider->Shutdown();
+#endif
+
+  for (auto& wrapped_policy_provider : wrapped_policy_providers_) {
+    wrapped_policy_provider->Shutdown();
+  }
 }
 
-bool ProfilePolicyConnector::IsManaged() const {
+bool ProfilePolicyConnector::IsManaged(
+#if BUILDFLAG(IS_CHROMEOS)
+    base::Location caller_location
+#endif  // BUILDFLAG(IS_CHROMEOS)
+) const {
   if (is_managed_override_)
     return *is_managed_override_;
   const CloudPolicyStore* actual_policy_store = GetActualPolicyStore();
+#if BUILDFLAG(IS_CHROMEOS)
+  RecordIsManagedCallerForChromeOS(user_.get(), actual_policy_store,
+                                   caller_location);
+#endif  // BUILDFLAG(IS_CHROMEOS)
   if (actual_policy_store)
     return actual_policy_store->is_managed();
   return false;
@@ -311,15 +686,18 @@ bool ProfilePolicyConnector::IsProfilePolicy(const char* policy_key) const {
   return provider == configuration_policy_provider_;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void ProfilePolicyConnector::TriggerProxiedPoliciesWaitTimeoutForTesting() {
   CHECK(proxied_policies_propagated_watcher_);
   proxied_policies_propagated_watcher_->OnProviderUpdatePropagationTimedOut();
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 base::flat_set<std::string> ProfilePolicyConnector::user_affiliation_ids()
     const {
+  if (!user_affiliation_ids_for_testing_.empty()) {
+    return user_affiliation_ids_for_testing_;
+  }
   auto* store = GetActualPolicyStore();
   if (!store || !store->has_policy())
     return {};
@@ -327,16 +705,31 @@ base::flat_set<std::string> ProfilePolicyConnector::user_affiliation_ids()
   return {ids.begin(), ids.end()};
 }
 
+void ProfilePolicyConnector::SetUserAffiliationIdsForTesting(
+    const base::flat_set<std::string>& user_affiliation_ids) {
+  user_affiliation_ids_for_testing_ = user_affiliation_ids;
+}
+
+void ProfilePolicyConnector::OnPolicyServiceInitialized(PolicyDomain domain) {
+  CHECK_EQ(domain, POLICY_DOMAIN_CHROME, base::NotFatalUntil::M162);
+  RecordAffiliationMetrics();
+}
+
+void ProfilePolicyConnector::DoPostInit() {
+  CHECK(policy_service_, base::NotFatalUntil::M162);
+  policy_service_->AddObserver(POLICY_DOMAIN_CHROME, this);
+}
+
 const CloudPolicyStore* ProfilePolicyConnector::GetActualPolicyStore() const {
   if (policy_store_)
     return policy_store_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (special_user_policy_provider_) {
     // |special_user_policy_provider_| is non-null for device-local accounts,
     // for the login profile, and the lock screen app profile.
-    const DeviceCloudPolicyManagerChromeOS* const device_cloud_policy_manager =
+    const DeviceCloudPolicyManagerAsh* const device_cloud_policy_manager =
         g_browser_process->platform_part()
-            ->browser_policy_connector_chromeos()
+            ->browser_policy_connector_ash()
             ->GetDeviceCloudPolicyManager();
     // The device_cloud_policy_manager can be a nullptr in unit tests.
     if (device_cloud_policy_manager)
@@ -357,23 +750,154 @@ ProfilePolicyConnector::DeterminePolicyProviderForPolicy(
   return nullptr;
 }
 
-ConfigurationPolicyProvider* ProfilePolicyConnector::GetPlatformProvider(
-    policy::ChromeBrowserPolicyConnector* browser_policy_connector) {
-  if (platform_policy_provider_for_testing_)
-    return platform_policy_provider_for_testing_;
-  return browser_policy_connector->GetPlatformProvider();
+void ProfilePolicyConnector::AppendPolicyProviderWithSchemaTracking(
+    ConfigurationPolicyProvider* policy_provider,
+    SchemaRegistry* schema_registry) {
+  auto wrapped_policy_provider =
+      std::make_unique<SchemaRegistryTrackingPolicyProvider>(policy_provider);
+  wrapped_policy_provider->Init(schema_registry);
+  policy_providers_.push_back(wrapped_policy_provider.get());
+  wrapped_policy_providers_.push_back(std::move(wrapped_policy_provider));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+std::string ProfilePolicyConnector::GetTimeToFirstPolicyLoadMetricSuffix()
+    const {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!is_primary_user_) {
+    // Don't report the metric for secondary users: we're only interested in the
+    // delay during the initial load as it blocks any other UX.
+    return "";
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  if (!IsManaged()) {
+    return "Unmanaged";
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  CHECK(user_, base::NotFatalUntil::M162);
+  switch (user_->GetType()) {
+    case user_manager::UserType::kRegular:
+      if (user_manager::UserManager::Get()->IsUserCryptohomeDataEphemeral(
+              user_->GetAccountId())) {
+        return "Managed.Ephemeral";
+      }
+      return is_user_new_ ? "Managed.NewPersistent" : "Managed.Existing";
+    case user_manager::UserType::kChild:
+      return "Child";
+    case user_manager::UserType::kPublicAccount:
+      return "ManagedGuestSession";
+    case user_manager::UserType::kKioskChromeApp:
+    case user_manager::UserType::kKioskWebApp:
+    case user_manager::UserType::kKioskIWA:
+    case user_manager::UserType::kKioskArcvmApp:
+      return "Kiosk";
+    case user_manager::UserType::kGuest:
+      // Don't report the metric in uninteresting or unreachable cases.
+      return "";
+  }
+#else   // BUILDFLAG(IS_CHROMEOS)
+  return "Managed";
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
+
+void ProfilePolicyConnector::UseLocalTestPolicyProvider() {
+  if (IsManaged()) {
+    return;
+  }
+  local_test_policy_provider_->set_active(true);
+  policy_service_->UseLocalTestPolicyProvider(local_test_policy_provider_);
+  policy_service()->RefreshPolicies(base::DoNothing(),
+                                    PolicyFetchReason::kTest);
+  UpdateLocalTestInfoBar(/*show=*/true);
+}
+
+void ProfilePolicyConnector::RevertUseLocalTestPolicyProvider() {
+  local_test_policy_provider_->set_active(false);
+  policy_service_->UseLocalTestPolicyProvider(nullptr);
+  static_cast<LocalTestPolicyProvider*>(local_test_policy_provider_)
+      ->ClearPolicies();
+  policy_service()->RefreshPolicies(base::DoNothing(),
+                                    PolicyFetchReason::kTest);
+  UpdateLocalTestInfoBar(/*show=*/false);
+}
+
+bool ProfilePolicyConnector::IsUsingLocalTestPolicyProvider() const {
+  return local_test_policy_provider_ &&
+         local_test_policy_provider_->is_active();
+}
+
+void ProfilePolicyConnector::UpdateLocalTestInfoBar(bool show) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::LOCAL_TEST_POLICIES_APPLIED_INFOBAR)) {
+    RunNowOnOrPostToUIThread(base::BindOnce(
+        [](bool show) {
+          if (auto* manager =
+                  infobars::BrowserInfoBarManager::From(g_browser_process)) {
+            if (show) {
+              manager->ShowGlobally(infobars::InfoBarDelegate::
+                                        LOCAL_TEST_POLICIES_APPLIED_INFOBAR);
+            } else {
+              manager->Hide(infobars::InfoBarDelegate::
+                                LOCAL_TEST_POLICIES_APPLIED_INFOBAR);
+            }
+          }
+        },
+        show));
+    return;
+  }
+#endif
+
+  if (show) {
+    if (!local_test_infobar_visibility_manager_->infobar_active()) {
+      RunNowOnOrPostToUIThread(
+          base::BindOnce(&internal::LocalTestInfoBarVisibilityManager::
+                             AddInfobarsForActiveLocalTestPoliciesAllTabs,
+                         local_test_infobar_visibility_manager_->GetWeakPtr()));
+    }
+  } else {
+    if (local_test_infobar_visibility_manager_->infobar_active()) {
+      RunNowOnOrPostToUIThread(
+          base::BindOnce(&internal::LocalTestInfoBarVisibilityManager::
+                             DismissInfobarsForActiveLocalTestPoliciesAllTabs,
+                         local_test_infobar_visibility_manager_->GetWeakPtr()));
+    }
+  }
+}
+
+void ProfilePolicyConnector::RecordAffiliationMetrics() {
+  const PolicyMap& chrome_policies = policy_service()->GetPolicies(
+      policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME, std::string()));
+
+  base::UmaHistogramBoolean("Enterprise.ProfileAffiliation.IsAffiliated",
+                            chrome_policies.IsUserAffiliated());
+
+  if (!chrome_policies.IsUserAffiliated()) {
+    const auto reason = enterprise_util::GetUnaffiliatedReason(this);
+    base::UmaHistogramEnumeration(
+        "Enterprise.ProfileAffiliation.UnaffiliatedReason", reason);
+  }
+
+  // base::Unretained is safe because `this` owns the timer.
+  management_status_metrics_timer_.Start(
+      FROM_HERE, base::Days(7),
+      base::BindRepeating(&ProfilePolicyConnector::RecordAffiliationMetrics,
+                          base::Unretained(this)));
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
 std::unique_ptr<PolicyService>
 ProfilePolicyConnector::CreatePolicyServiceWithInitializationThrottled(
-    const std::vector<ConfigurationPolicyProvider*>& policy_providers,
+    const std::vector<raw_ptr<ConfigurationPolicyProvider, VectorExperimental>>&
+        policy_providers,
     std::vector<std::unique_ptr<PolicyMigrator>> migrators,
     ConfigurationPolicyProvider* user_policy_delegate) {
-  DCHECK(user_policy_delegate);
+  CHECK(user_policy_delegate, base::NotFatalUntil::M162);
 
   auto policy_service = PolicyServiceImpl::CreateWithThrottledInitialization(
-      policy_providers, std::move(migrators));
+      policy_providers, PolicyServiceImpl::ScopeForMetrics::kUser,
+      std::move(migrators));
 
   // base::Unretained is OK for |this| because
   // |proxied_policies_propagated_watcher_| is guaranteed not to call its
@@ -396,7 +920,7 @@ void ProfilePolicyConnector::OnProxiedPoliciesPropagated(
   // Do not delete |proxied_policies_propagated_watcher_| synchronously, as the
   // PolicyService it is observing is expected to be iterating its observer
   // list.
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
       FROM_HERE, std::move(proxied_policies_propagated_watcher_));
 }
 #endif

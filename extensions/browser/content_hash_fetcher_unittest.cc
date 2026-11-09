@@ -1,16 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
 #include "base/version.h"
@@ -45,6 +44,10 @@ class ContentHashFetcherTest : public ExtensionsTest {
         test_shared_loader_factory_(
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &test_url_loader_factory_)) {}
+
+  ContentHashFetcherTest(const ContentHashFetcherTest&) = delete;
+  ContentHashFetcherTest& operator=(const ContentHashFetcherTest&) = delete;
+
   ~ContentHashFetcherTest() override {}
 
   bool LoadTestExtension() {
@@ -57,8 +60,9 @@ class ContentHashFetcherTest : public ExtensionsTest {
     // fetched verified_contents.json file there.
     extension_ =
         UnzipToTempDirAndLoad(test_dir_base_.AppendASCII("source.zip"));
-    if (!extension_.get())
+    if (!extension_.get()) {
       return false;
+    }
 
     // Make sure there isn't already a verified_contents.json file there.
     EXPECT_FALSE(VerifiedContentsFileExists());
@@ -142,9 +146,12 @@ class ContentHashFetcherTest : public ExtensionsTest {
     base::FilePath destination = temp_dir_.GetPath();
     EXPECT_TRUE(zip::Unzip(extension_zip, destination));
 
-    std::string error;
+    std::u16string error;
+    static constexpr char kTestExtensionId[] =
+        "jmllhlobpjcnnomjlipadejplhmheiif";
     scoped_refptr<Extension> extension = file_util::LoadExtension(
-        destination, mojom::ManifestLocation::kInternal, 0 /* flags */, &error);
+        destination, kTestExtensionId, mojom::ManifestLocation::kInternal,
+        0 /* flags */, &error);
     EXPECT_NE(nullptr, extension.get()) << " error:'" << error << "'";
     return extension;
   }
@@ -158,8 +165,6 @@ class ContentHashFetcherTest : public ExtensionsTest {
   base::FilePath test_dir_base_;
   std::unique_ptr<MockContentVerifierDelegate> delegate_;
   scoped_refptr<Extension> extension_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentHashFetcherTest);
 };
 
 // This tests our ability to successfully fetch, parse, and validate a missing
@@ -243,7 +248,7 @@ TEST_F(ContentHashFetcherTest, MissingVerifiedContentsAndCorrupt) {
   ASSERT_NE(nullptr, result.get());
   EXPECT_TRUE(result->success);
   EXPECT_FALSE(result->was_cancelled);
-  EXPECT_TRUE(base::Contains(result->mismatch_paths, script_path.BaseName()));
+  EXPECT_TRUE(result->mismatch_paths.contains(script_path.BaseName()));
 
   // Make sure the verified_contents.json file was written into the extension's
   // install dir.

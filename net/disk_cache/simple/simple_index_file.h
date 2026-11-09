@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/pickle.h"
 #include "net/base/cache_type.h"
 #include "net/base/net_export.h"
@@ -21,10 +20,11 @@
 
 namespace base {
 class SequencedTaskRunner;
-class TaskRunner;
 }
 
 namespace disk_cache {
+class BackendFileOperations;
+class BackendFileOperationsFactory;
 
 const uint64_t kSimpleIndexMagicNumber = UINT64_C(0x656e74657220796f);
 
@@ -33,11 +33,12 @@ struct NET_EXPORT_PRIVATE SimpleIndexLoadResult {
   ~SimpleIndexLoadResult();
   void Reset();
 
-  bool did_load;
+  bool did_load = false;
   SimpleIndex::EntrySet entries;
-  SimpleIndex::IndexWriteToDiskReason index_write_reason;
+  SimpleIndex::IndexWriteToDiskReason index_write_reason =
+      SimpleIndex::INDEX_WRITE_REASON_MAX;
   SimpleIndex::IndexInitMethod init_method;
-  bool flush_required;
+  bool flush_required = false;
 };
 
 // Simple Index File format is a pickle of IndexMetadata and EntryMetadata
@@ -66,31 +67,31 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
 
     SimpleIndex::IndexWriteToDiskReason reason() const { return reason_; }
     uint64_t entry_count() const { return entry_count_; }
-    bool has_entry_in_memory_data() const { return version_ >= 8; }
     bool app_cache_has_trailer_prefetch_size() const { return version_ >= 9; }
 
    private:
     FRIEND_TEST_ALL_PREFIXES(IndexMetadataTest, Basics);
     FRIEND_TEST_ALL_PREFIXES(IndexMetadataTest, Serialize);
-    FRIEND_TEST_ALL_PREFIXES(IndexMetadataTest, ReadV6Format);
-    FRIEND_TEST_ALL_PREFIXES(SimpleIndexFileTest, ReadV7Format);
     FRIEND_TEST_ALL_PREFIXES(SimpleIndexFileTest, ReadV8Format);
     FRIEND_TEST_ALL_PREFIXES(SimpleIndexFileTest, ReadV8FormatAppCache);
-    friend class V6IndexMetadataForTest;
-    friend class V7IndexMetadataForTest;
     friend class V8IndexMetadataForTest;
 
     uint64_t magic_number_ = kSimpleIndexMagicNumber;
-    uint32_t version_ = kSimpleVersion;
+    uint32_t version_ = kSimpleIndexFileVersion;
     SimpleIndex::IndexWriteToDiskReason reason_;
     uint64_t entry_count_;
     uint64_t cache_size_;  // Total cache storage size in bytes.
   };
 
-  SimpleIndexFile(const scoped_refptr<base::SequencedTaskRunner>& cache_runner,
-                  const scoped_refptr<base::TaskRunner>& worker_pool,
-                  net::CacheType cache_type,
-                  const base::FilePath& cache_directory);
+  SimpleIndexFile(
+      scoped_refptr<base::SequencedTaskRunner> cache_runner,
+      scoped_refptr<BackendFileOperationsFactory> file_operations_factory,
+      net::CacheType cache_type,
+      const base::FilePath& cache_directory);
+
+  SimpleIndexFile(const SimpleIndexFile&) = delete;
+  SimpleIndexFile& operator=(const SimpleIndexFile&) = delete;
+
   virtual ~SimpleIndexFile();
 
   // Gets index entries based on current disk context. On error it may leave
@@ -123,14 +124,17 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
   static const int kExtraSizeForMerge = 512;
 
   // Synchronous (IO performing) implementation of LoadIndexEntries.
-  static void SyncLoadIndexEntries(net::CacheType cache_type,
-                                   base::Time cache_last_modified,
-                                   const base::FilePath& cache_directory,
-                                   const base::FilePath& index_file_path,
-                                   SimpleIndexLoadResult* out_result);
+  static void SyncLoadIndexEntries(
+      std::unique_ptr<BackendFileOperations> file_operations,
+      net::CacheType cache_type,
+      base::Time cache_last_modified,
+      const base::FilePath& cache_directory,
+      const base::FilePath& index_file_path,
+      SimpleIndexLoadResult* out_result);
 
   // Load the index file from disk returning an EntrySet.
-  static void SyncLoadFromDisk(net::CacheType cache_type,
+  static void SyncLoadFromDisk(BackendFileOperations* file_operations,
+                               net::CacheType cache_type,
                                const base::FilePath& index_filename,
                                base::Time* out_last_cache_seen_by_index,
                                SimpleIndexLoadResult* out_result);
@@ -152,33 +156,45 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
   static void SerializeFinalData(base::Time cache_modified,
                                  base::Pickle* pickle);
 
-  // Given the contents of an index file |data| of length |data_len|, returns
-  // the corresponding EntrySet. Returns NULL on error.
+  // Given the contents of an index file `data`, returns the corresponding
+  // EntrySet and associated metadata. `out_result->did_load` will return
+  // whether successful or not.
   static void Deserialize(net::CacheType cache_type,
-                          const char* data,
-                          int data_len,
+                          base::span<const uint8_t> data,
                           base::Time* out_cache_last_modified,
                           SimpleIndexLoadResult* out_result);
 
-  // Implemented either in simple_index_file_posix.cc or
-  // simple_index_file_win.cc. base::FileEnumerator turned out to be very
-  // expensive in terms of memory usage therefore it's used only on non-POSIX
-  // environments for convenience (for now). Returns whether the traversal
-  // succeeded.
-  static bool TraverseCacheDirectory(
-      const base::FilePath& cache_path,
-      const EntryFileCallback& entry_file_callback);
+  enum class IndexWriteResult {
+    kSuccess = 0,
+    kFailedToCreateDir = 1,
+    kFailedToGetFileInfo = 2,
+    kFailedToWritePickle = 3,
+    kFailedToReplaceFile = 4,
+    kMaxValue = kFailedToReplaceFile,
+  };
 
-  // Writes the index file to disk atomically.
-  static void SyncWriteToDisk(net::CacheType cache_type,
-                              const base::FilePath& cache_directory,
-                              const base::FilePath& index_filename,
-                              const base::FilePath& temp_index_filename,
-                              std::unique_ptr<base::Pickle> pickle);
+  // Writes the index file to disk atomically. Returns the result.
+  static IndexWriteResult SyncWriteToDiskInternal(
+      std::unique_ptr<BackendFileOperations> file_operations,
+      net::CacheType cache_type,
+      const base::FilePath& cache_directory,
+      const base::FilePath& index_filename,
+      const base::FilePath& temp_index_filename,
+      std::unique_ptr<base::Pickle> pickle);
+
+  // Writes the index file to disk atomically and records UMA.
+  static void SyncWriteToDisk(
+      std::unique_ptr<BackendFileOperations> file_operations,
+      net::CacheType cache_type,
+      const base::FilePath& cache_directory,
+      const base::FilePath& index_filename,
+      const base::FilePath& temp_index_filename,
+      std::unique_ptr<base::Pickle> pickle);
 
   // Scan the index directory for entries, returning an EntrySet of all entries
   // found.
-  static void SyncRestoreFromDisk(net::CacheType cache_type,
+  static void SyncRestoreFromDisk(BackendFileOperations* file_operations,
+                                  net::CacheType cache_type,
                                   const base::FilePath& cache_directory,
                                   const base::FilePath& index_file_path,
                                   SimpleIndexLoadResult* out_result);
@@ -187,11 +203,12 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
   // modification of the cache directory. Obsolete, used only for a histogram to
   // compare with the new method.
   // TODO(pasko): remove this method after getting enough data.
-  static bool LegacyIsIndexFileStale(base::Time cache_last_modified,
+  static bool LegacyIsIndexFileStale(BackendFileOperations* file_operations,
+                                     base::Time cache_last_modified,
                                      const base::FilePath& index_file_path);
 
   const scoped_refptr<base::SequencedTaskRunner> cache_runner_;
-  const scoped_refptr<base::TaskRunner> worker_pool_;
+  const scoped_refptr<BackendFileOperationsFactory> file_operations_factory_;
   const net::CacheType cache_type_;
   const base::FilePath cache_directory_;
   const base::FilePath index_file_;
@@ -200,8 +217,6 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
   static const char kIndexDirectory[];
   static const char kIndexFileName[];
   static const char kTempIndexFileName[];
-
-  DISALLOW_COPY_AND_ASSIGN(SimpleIndexFile);
 };
 
 }  // namespace disk_cache

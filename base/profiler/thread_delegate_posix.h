@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define BASE_PROFILER_THREAD_DELEGATE_POSIX_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/base_export.h"
 #include "base/profiler/sampling_profiler_thread_token.h"
@@ -19,7 +20,7 @@ namespace base {
 class BASE_EXPORT ThreadDelegatePosix : public ThreadDelegate {
  public:
   static std::unique_ptr<ThreadDelegatePosix> Create(
-      SamplingProfilerThreadToken thread_token);
+      const SamplingProfilerThreadToken& thread_token);
 
   ~ThreadDelegatePosix() override;
 
@@ -29,8 +30,9 @@ class BASE_EXPORT ThreadDelegatePosix : public ThreadDelegate {
   // ThreadDelegate
   PlatformThreadId GetThreadId() const override;
   uintptr_t GetStackBaseAddress() const override;
-  std::vector<uintptr_t*> GetRegistersToRewrite(
-      RegisterContext* thread_context) override;
+  std::vector<uintptr_t> GetRegisters(RegisterContext* thread_context) override;
+  void SetRegisters(RegisterContext* thread_context,
+                    const std::vector<uintptr_t>& registers) override;
 
  private:
   ThreadDelegatePosix(PlatformThreadId id, uintptr_t base_address);

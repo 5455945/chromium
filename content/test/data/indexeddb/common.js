@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -132,13 +132,19 @@ function shouldBeEqualToString(a, b)
 }
 
 function indexedDBTest(upgradeCallback, optionalOpenCallback) {
+  indexedDBTestWithIdb(indexedDB, upgradeCallback, optionalOpenCallback);
+}
+
+// This version takes the indexeddb object as a parameter to support bucket
+// idbs.
+function indexedDBTestWithIdb(idb, upgradeCallback, optionalOpenCallback) {
   dbname = self.location.pathname.substring(
     1 + self.location.pathname.lastIndexOf("/"));
-  var deleteRequest = indexedDB.deleteDatabase(dbname);
+  var deleteRequest = idb.deleteDatabase(dbname);
   deleteRequest.onerror = unexpectedErrorCallback;
   deleteRequest.onblocked = unexpectedBlockedCallback;
   deleteRequest.onsuccess = function() {
-    var openRequest = indexedDB.open(dbname);
+    var openRequest = idb.open(dbname);
     openRequest.onerror = unexpectedErrorCallback;
     openRequest.onupgradeneeded = upgradeCallback;
     openRequest.onblocked = unexpectedBlockedCallback;
@@ -171,26 +177,28 @@ function promiseDeleteThenOpenDb(dbName, upgradeCallback) {
   });
 }
 
-function promiseOpenDb(dbName, optionalUpgradeCallback) {
+function promiseOpenDb(
+    dbName, optionalUpgradeCallback, optionalVersion = undefined) {
   return new Promise((resolve, reject) => {
-    const openRequest = indexedDB.open(dbName);
-    openRequest.onerror = () => {
-      const e = new Error('Error opening database ${dbName}');
-      unexepectedErrorCallback(e);
+    const openRequest = optionalVersion !== undefined ?
+        indexedDB.open(dbName, optionalVersion) :
+        indexedDB.open(dbName);
+    openRequest.onerror = (e) => {
+      unexpectedErrorCallback(e);
       reject(e);
     };
-    openRequest.onblocked = () => {
-      const e = new Error('Opening database ${dbName}');
+    openRequest.onblocked = (e) => {
       unexpectedBlockedCallback(e);
       reject(e);
     };
     if (optionalUpgradeCallback) {
       openRequest.onupgradeneeded = (event) => {
         const db = event.target.result;
-        optionalUpgradeCallback(db);
+        const txn = event.target.transaction;
+        optionalUpgradeCallback(db, txn);
       };
     }
-    openRequest.onsuccess = () => {
+    openRequest.onsuccess = (event) => {
       db = event.target.result;
       resolve(db);
     };
@@ -220,4 +228,13 @@ if (typeof String.prototype.startsWith !== 'function') {
   String.prototype.startsWith = function (str) {
     return this.indexOf(str) === 0;
   };
+}
+
+// Generates a pseudorandom string of the given length.
+function generateRandomString(sizeInKb) {
+  let output = '';
+  for (let i = 0; i < sizeInKb * 1024 / 8 + 1; i++) {
+    output += Math.random().toString(36).slice(2, 10);
+  }
+  return output;
 }

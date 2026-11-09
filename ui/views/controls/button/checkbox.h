@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 #define UI_VIEWS_CONTROLS_BUTTON_CHECKBOX_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "cc/paint/paint_flags.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/focus_ring.h"
@@ -24,38 +23,41 @@ namespace views {
 // A native themed class representing a checkbox.  This class does not use
 // platform specific objects to replicate the native platforms looks and feel.
 class VIEWS_EXPORT Checkbox : public LabelButton {
- public:
-  METADATA_HEADER(Checkbox);
+  METADATA_HEADER(Checkbox, LabelButton)
 
+ public:
   explicit Checkbox(const std::u16string& label = std::u16string(),
                     PressedCallback callback = PressedCallback(),
                     int button_context = style::CONTEXT_BUTTON);
+
+  Checkbox(const Checkbox&) = delete;
+  Checkbox& operator=(const Checkbox&) = delete;
+
   ~Checkbox() override;
 
   // Sets/Gets whether or not the checkbox is checked.
   virtual void SetChecked(bool checked);
   bool GetChecked() const;
 
-  base::CallbackListSubscription AddCheckedChangedCallback(
-      PropertyChangedCallback callback) WARN_UNUSED_RESULT;
+  [[nodiscard]] base::CallbackListSubscription AddCheckedChangedCallback(
+      PropertyChangedCallback callback);
 
   void SetMultiLine(bool multi_line);
   bool GetMultiLine() const;
 
-  // If the accessible name should be the same as the labelling view's text,
-  // use this. It will set the accessible label relationship and copy the
-  // accessible name from the labelling views's accessible name. Any view with
-  // an accessible name can be used, e.g. a Label, StyledLabel or Link.
-  void SetAssociatedLabel(View* labelling_view);
+  void SetCheckedIconImageColor(SkColor color);
 
   // LabelButton:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   gfx::ImageSkia GetImage(ButtonState for_state) const override;
   std::unique_ptr<LabelButtonBorder> CreateDefaultBorder() const override;
+  std::unique_ptr<ActionViewInterface> GetActionViewInterface() override;
 
  protected:
   // Bitmask constants for GetIconImageColor.
   enum IconState { CHECKED = 0b1, ENABLED = 0b10 };
+
+  // Button:
+  void UpdateAccessibleCheckedState() override;
 
   // LabelButton:
   void OnThemeChanged() override;
@@ -64,7 +66,13 @@ class VIEWS_EXPORT Checkbox : public LabelButton {
   virtual SkPath GetFocusRingPath() const;
 
   // |icon_state| is a bitmask using the IconState enum.
+  // Returns a color for the container portion of the icon.
   virtual SkColor GetIconImageColor(int icon_state) const;
+  // Returns a color for the check portion of the icon.
+  virtual SkColor GetIconCheckColor(int icon_state) const;
+
+  // Returns a bitmask using the IconState enum.
+  int GetIconState(ButtonState for_state) const;
 
   // Gets the vector icon to use based on the current state of |checked_|.
   virtual const gfx::VectorIcon& GetVectorIcon() const;
@@ -78,10 +86,26 @@ class VIEWS_EXPORT Checkbox : public LabelButton {
   ui::NativeTheme::Part GetThemePart() const override;
   void GetExtraParams(ui::NativeTheme::ExtraParams* params) const override;
 
+  void SetAndUpdateAccessibleDefaultActionVerb();
+
   // True if the checkbox is checked.
   bool checked_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(Checkbox);
+  std::optional<SkColor> checked_icon_image_color_;
+};
+
+class VIEWS_EXPORT CheckboxActionViewInterface
+    : public LabelButtonActionViewInterface {
+ public:
+  explicit CheckboxActionViewInterface(Checkbox* action_view);
+  ~CheckboxActionViewInterface() override = default;
+
+  // LabelButtonActionViewInterface:
+  void ActionItemChangedImpl(actions::ActionItem* action_item) override;
+  void OnViewChangedImpl(actions::ActionItem* action_item) override;
+
+ private:
+  raw_ptr<Checkbox> action_view_;
 };
 
 BEGIN_VIEW_BUILDER(VIEWS_EXPORT, Checkbox, LabelButton)

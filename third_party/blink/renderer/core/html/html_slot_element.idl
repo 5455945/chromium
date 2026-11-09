@@ -26,11 +26,11 @@
 
 // https://html.spec.whatwg.org/C/#the-slot-element
 [
-    Exposed=Window,
-    HTMLConstructor
+    Exposed=Window
 ] interface HTMLSlotElement : HTMLElement {
+    [HTMLConstructor] constructor();
     [CEReactions, Reflect] attribute DOMString name;
     [ImplementedAs=AssignedNodesForBinding] sequence<Node> assignedNodes(optional AssignedNodesOptions options = {});
     [ImplementedAs=AssignedElementsForBinding] sequence<Element> assignedElements(optional AssignedNodesOptions options = {});
-    [RaisesException] void assign(Node... nodes);
+    [RaisesException] void assign((Element or Text)... nodes);
 };

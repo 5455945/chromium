@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,10 @@
 #include "chrome/browser/sync/glue/synced_tab_delegate_android.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/web_contents.h"
 
 using sync_sessions::SyncedTabDelegate;
-
-namespace browser_sync {
 
 // SyncedWindowDelegateAndroid implementations
 
@@ -22,7 +21,7 @@ SyncedWindowDelegateAndroid::SyncedWindowDelegateAndroid(
     bool is_tabbed_activity)
     : tab_model_(tab_model), is_tabbed_activity_(is_tabbed_activity) {}
 
-SyncedWindowDelegateAndroid::~SyncedWindowDelegateAndroid() {}
+SyncedWindowDelegateAndroid::~SyncedWindowDelegateAndroid() = default;
 
 bool SyncedWindowDelegateAndroid::HasWindow() const {
   return !tab_model_->IsOffTheRecord();
@@ -34,10 +33,6 @@ SessionID SyncedWindowDelegateAndroid::GetSessionId() const {
 
 int SyncedWindowDelegateAndroid::GetTabCount() const {
   return tab_model_->GetTabCount();
-}
-
-int SyncedWindowDelegateAndroid::GetActiveIndex() const {
-  return tab_model_->GetActiveIndex();
 }
 
 bool SyncedWindowDelegateAndroid::IsTypeNormal() const {
@@ -81,5 +76,3 @@ bool SyncedWindowDelegateAndroid::ShouldSync() const {
   }
   return true;
 }
-
-}  // namespace browser_sync

@@ -27,10 +27,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_STD_LIB_EXTRAS_H_
 
 #include <cstddef>
+#include <cstdint>
 
+#include "base/check.h"
 #include "base/dcheck_is_on.h"
-#include "base/logging.h"
-#include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
 #include "third_party/blink/renderer/platform/wtf/sanitizers.h"
@@ -40,12 +40,14 @@
 #include "third_party/blink/renderer/platform/wtf/threading.h"
 #endif
 
-#define DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, allow_cross_thread)    \
-  static WTF::StaticSingleton<Type> s_##Name(                                  \
-      [&]() { return new WTF::StaticSingleton<Type>::WrapperType Arguments; }, \
-      [&](void* leaked_ptr) {                                                  \
-        new (leaked_ptr) WTF::StaticSingleton<Type>::WrapperType Arguments;    \
-      });                                                                      \
+#define DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, allow_cross_thread)   \
+  static blink::StaticSingleton<Type> s_##Name(                               \
+      [&]() {                                                                 \
+        return new blink::StaticSingleton<Type>::WrapperType Arguments;       \
+      },                                                                      \
+      [&](void* leaked_ptr) {                                                 \
+        new (leaked_ptr) blink::StaticSingleton<Type>::WrapperType Arguments; \
+      });                                                                     \
   Type& Name = s_##Name.Get(allow_cross_thread)
 
 // Use |DEFINE_STATIC_LOCAL()| to declare and define a static local variable
@@ -58,15 +60,16 @@
 #define DEFINE_STATIC_LOCAL(Type, Name, Arguments) \
   DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, false)
 
-// |DEFINE_THREAD_SAFE_STATIC_LOCAL()| is the cross-thread accessible variant
-// of |DEFINE_STATIC_LOCAL()|; use it if the singleton can be accessed by
+// |DEFINE_THREAD_SAFE_STATIC_LOCAL()| doesn't provide additional thread-safety,
+// but it effectively bypasses the `IsNotRacy` DCHECK present in
+// |DEFINE_STATIC_LOCAL()|; use it if the singleton can be accessed by
 // multiple threads.
 //
 // TODO: rename as DEFINE_CROSS_THREAD_STATIC_LOCAL() ?
 #define DEFINE_THREAD_SAFE_STATIC_LOCAL(Type, Name, Arguments) \
   DEFINE_STATIC_LOCAL_IMPL(Type, Name, Arguments, true)
 
-namespace WTF {
+namespace blink {
 
 template <typename Type>
 class StaticSingleton final {
@@ -85,11 +88,11 @@ class StaticSingleton final {
       : instance_(heap_new, placement_new)
 #if DCHECK_IS_ON()
         ,
-        safely_initialized_(WTF::IsBeforeThreadCreated()),
-        thread_(WTF::CurrentThread())
+        safely_initialized_(IsBeforeThreadCreated()),
+        thread_(CurrentThread())
 #endif
   {
-    static_assert(!WTF::IsGarbageCollectedType<Type>::value,
+    static_assert(!IsGarbageCollectedTypeV<Type>,
                   "Garbage collected objects must be wrapped in a Persistent");
     LEAK_SANITIZER_IGNORE_OBJECT(instance_.Get());
   }
@@ -97,11 +100,10 @@ class StaticSingleton final {
   StaticSingleton(const StaticSingleton&) = delete;
   StaticSingleton& operator=(const StaticSingleton&) = delete;
 
-  Type& Get(bool allow_cross_thread_use) {
+  Type& Get([[maybe_unused]] bool allow_cross_thread_use) {
 #if DCHECK_IS_ON()
     DCHECK(IsNotRacy(allow_cross_thread_use));
 #endif
-    ALLOW_UNUSED_LOCAL(allow_cross_thread_use);
     return Wrapper<Type>::Unwrap(instance_.Get());
   }
 
@@ -115,7 +117,7 @@ class StaticSingleton final {
     // keeps being called on the same thread if cross-thread
     // use is not permitted.
     return allow_cross_thread_use || safely_initialized_ ||
-           thread_ == WTF::CurrentThread();
+           thread_ == CurrentThread();
   }
 #endif
   template <typename T, bool is_small = sizeof(T) <= 32>
@@ -150,119 +152,6 @@ class StaticSingleton final {
 #endif
 };
 
-}  // namespace WTF
-
-// Use this to declare and define a static local pointer to a ref-counted object
-// so that it is leaked so that the object's destructors are not called at
-// exit.  This macro should be used with ref-counted objects rather than
-// DEFINE_STATIC_LOCAL macro, as this macro does not lead to an extra memory
-// allocation.
-#define DEFINE_STATIC_REF(type, name, arguments)  \
-  static type* name = [](scoped_refptr<type> o) { \
-    if (o)                                        \
-      o->AddRef();                                \
-    return o.get();                               \
-  }(arguments);
-
-/*
- * The reinterpret_cast<Type1*>([pointer to Type2]) expressions - where
- * sizeof(Type1) > sizeof(Type2) - cause the following warning on ARM with GCC:
- * increases required alignment of target type.
- *
- * An implicit or an extra static_cast<void*> bypasses the warning.
- * For more info see the following bugzilla entries:
- * - https://bugs.webkit.org/show_bug.cgi?id=38045
- * - http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43976
- */
-#if defined(ARCH_CPU_ARMEL) && defined(COMPILER_GCC)
-template <typename Type>
-bool isPointerTypeAlignmentOkay(Type* ptr) {
-  return !(reinterpret_cast<intptr_t>(ptr) % __alignof__(Type));
-}
-
-template <typename TypePtr>
-TypePtr reinterpret_cast_ptr(void* ptr) {
-  DCHECK(isPointerTypeAlignmentOkay(reinterpret_cast<TypePtr>(ptr)));
-  return reinterpret_cast<TypePtr>(ptr);
-}
-
-template <typename TypePtr>
-TypePtr reinterpret_cast_ptr(const void* ptr) {
-  DCHECK(isPointerTypeAlignmentOkay(reinterpret_cast<TypePtr>(ptr)));
-  return reinterpret_cast<TypePtr>(ptr);
-}
-#else
-template <typename Type>
-bool isPointerTypeAlignmentOkay(Type*) {
-  return true;
-}
-#define reinterpret_cast_ptr reinterpret_cast
-#endif
-
-template <typename TypePtr>
-NO_SANITIZE_UNRELATED_CAST
-TypePtr unsafe_reinterpret_cast_ptr(void* ptr) {
-#if defined(ARCH_CPU_ARMEL) && defined(COMPILER_GCC)
-  DCHECK(isPointerTypeAlignmentOkay(reinterpret_cast<TypePtr>(ptr)));
-#endif
-  return reinterpret_cast<TypePtr>(ptr);
-}
-
-template <typename TypePtr>
-NO_SANITIZE_UNRELATED_CAST
-TypePtr unsafe_reinterpret_cast_ptr(const void* ptr) {
-#if defined(ARCH_CPU_ARMEL) && defined(COMPILER_GCC)
-  DCHECK(isPointerTypeAlignmentOkay(reinterpret_cast<TypePtr>(ptr)));
-#endif
-  return reinterpret_cast<TypePtr>(ptr);
-}
-
-namespace WTF {
-
-template <typename To, typename From>
-inline To SafeCast(From value) {
-  return base::checked_cast<To>(value);
-}
-
-// Use the following macros to prevent errors caused by accidental
-// implicit casting of function arguments.  For example, this can
-// be used to prevent overflows from non-promoting conversions.
-//
-// Example:
-//
-// HAS_STRICTLY_TYPED_ARG
-// void sendData(void* data, STRICTLY_TYPED_ARG(size))
-// {
-//    ALLOW_NUMERIC_ARG_TYPES_PROMOTABLE_TO(size_t);
-//    ...
-// }
-//
-// The previous example will prevent callers from passing, for example, an
-// 'int'. On a 32-bit build, it will prevent use of an 'unsigned long long'.
-#define HAS_STRICTLY_TYPED_ARG template <typename ActualArgType>
-#define STRICTLY_TYPED_ARG(argName) ActualArgType argName
-#define STRICT_ARG_TYPE(ExpectedArgType)                                     \
-  static_assert(std::is_same<ActualArgType, ExpectedArgType>::value,         \
-                "Strictly typed argument must be of type '" #ExpectedArgType \
-                "'.")
-#define ALLOW_NUMERIC_ARG_TYPES_PROMOTABLE_TO(ExpectedArgType)              \
-  static_assert(                                                            \
-      std::numeric_limits<ExpectedArgType>::is_integer ==                   \
-          std::numeric_limits<ActualArgType>::is_integer,                   \
-      "Conversion between integer and non-integer types not allowed.");     \
-  static_assert(sizeof(ExpectedArgType) >= sizeof(ActualArgType),           \
-                "Truncating conversions not allowed.");                     \
-  static_assert(!std::numeric_limits<ActualArgType>::is_signed ||           \
-                    std::numeric_limits<ExpectedArgType>::is_signed,        \
-                "Signed to unsigned conversion not allowed.");              \
-  static_assert((sizeof(ExpectedArgType) != sizeof(ActualArgType)) ||       \
-                    (std::numeric_limits<ActualArgType>::is_signed ==       \
-                     std::numeric_limits<ExpectedArgType>::is_signed),      \
-                "Unsigned to signed conversion not allowed for types with " \
-                "identical size (could overflow).");
-
-}  // namespace WTF
-
-using WTF::SafeCast;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_STD_LIB_EXTRAS_H_

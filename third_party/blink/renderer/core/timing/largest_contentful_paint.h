@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,23 +18,28 @@ class CORE_EXPORT LargestContentfulPaint final : public PerformanceEntry {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  LargestContentfulPaint(double start_time,
-                         base::TimeDelta render_time,
-                         uint64_t size,
-                         base::TimeDelta load_time,
+  LargestContentfulPaint(uint64_t size,
+                         DOMHighResTimeStamp load_time,
                          const AtomicString& id,
                          const String& url,
-                         Element*);
+                         Element* element,
+                         DOMWindow* source);
   ~LargestContentfulPaint() override;
 
-  AtomicString entryType() const override;
+  const AtomicString& entryType() const override;
   PerformanceEntryType EntryTypeEnum() const override;
+  DOMHighResTimeStamp startTime() const override { return renderTime(); }
+  bool IsReadyForReporting() const override;
+  void FinalizeEntry(const DOMPaintTimingInfo&,
+                     uint64_t navigation_id) override;
 
   uint64_t size() const { return size_; }
+  // "The renderTime attribute must return the default paint timestamp given
+  // this’s paint timing info."
   DOMHighResTimeStamp renderTime() const {
-    return render_time_.InMillisecondsF();
+    return GetPaintTimingInfo().presentation_time;
   }
-  DOMHighResTimeStamp loadTime() const { return load_time_.InMillisecondsF(); }
+  DOMHighResTimeStamp loadTime() const { return load_time_; }
   const AtomicString& id() const { return id_; }
   const String& url() const { return url_; }
   Element* element() const;
@@ -45,8 +50,7 @@ class CORE_EXPORT LargestContentfulPaint final : public PerformanceEntry {
   void BuildJSONValue(V8ObjectBuilder&) const override;
 
   uint64_t size_;
-  base::TimeDelta render_time_;
-  base::TimeDelta load_time_;
+  DOMHighResTimeStamp load_time_;
   AtomicString id_;
   String url_;
   WeakMember<Element> element_;

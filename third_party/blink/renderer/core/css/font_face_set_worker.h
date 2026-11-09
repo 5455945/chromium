@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,18 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/iterable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
-#include "third_party/blink/renderer/core/css/font_face.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/font_face_set.h"
 #include "third_party/blink/renderer/core/css/offscreen_font_selector.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
 class Font;
+class FontFace;
 
 class CORE_EXPORT FontFaceSetWorker final
     : public FontFaceSet,
@@ -30,9 +31,7 @@ class CORE_EXPORT FontFaceSetWorker final
   FontFaceSetWorker& operator=(const FontFaceSetWorker&) = delete;
   ~FontFaceSetWorker() override;
 
-  ScriptPromise ready(ScriptState*) override;
-
-  AtomicString status() const override;
+  ScriptPromise<FontFaceSet> ready(ScriptState*) override;
 
   WorkerGlobalScope* GetWorker() const;
 
@@ -47,7 +46,9 @@ class CORE_EXPORT FontFaceSetWorker final
   void Trace(Visitor*) const override;
 
  protected:
-  bool InActiveContext() const override { return true; }
+  bool InActiveContext() const override {
+    return GetExecutionContext() != nullptr;
+  }
   FontSelector* GetFontSelector() const override {
     // TODO(Fserb): tracking down crbug.com/988125, can be DCHECK later.
     CHECK(GetWorker()->GetThread()->IsCurrentThread());
@@ -62,7 +63,7 @@ class CORE_EXPORT FontFaceSetWorker final
     return GetFontSelector()->GetFontFaceCache()->CssConnectedFontFaces();
   }
 
-  bool ResolveFontStyle(const String&, Font&) override;
+  const Font* ResolveFontStyle(const String&) override;
 
  private:
   void FireDoneEventIfPossible() override;

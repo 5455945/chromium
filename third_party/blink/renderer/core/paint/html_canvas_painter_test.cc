@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,37 +9,46 @@
 
 #include "cc/layers/layer.h"
 #include "components/viz/test/test_context_provider.h"
+#include "components/viz/test/test_raster_interface.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_context_creation_attributes_core.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/paint/paint_controller_paint_test.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_2d_layer_bridge.h"
+#include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/test/gpu_test_utils.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
-#include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
-
-// Integration tests of canvas painting code (in CAP mode).
+// Integration tests of canvas painting code.
 
 namespace blink {
 
-class HTMLCanvasPainterTestForCAP : public PaintControllerPaintTest {
- public:
-  HTMLCanvasPainterTestForCAP() {}
+namespace {
 
+class AcceleratedCompositingTestPlatform
+    : public blink::TestingPlatformSupport {
+ public:
+  bool IsGpuCompositingDisabled() const override { return false; }
+};
+
+}  // namespace
+
+class HTMLCanvasPainterTest : public PaintControllerPaintTestBase {
  protected:
   void SetUp() override {
-    test_context_provider_ = viz::TestContextProvider::Create();
+    accelerated_compositing_scope_ = std::make_unique<
+        ScopedTestingPlatformSupport<AcceleratedCompositingTestPlatform>>();
+    test_context_provider_ = viz::TestContextProvider::CreateRaster();
     InitializeSharedGpuContext(test_context_provider_.get());
-    PaintControllerPaintTest::SetUp();
+    PaintControllerPaintTestBase::SetUp();
   }
 
   void TearDown() override {
-    SharedGpuContext::ResetForTesting();
-    PaintControllerPaintTest::TearDown();
+    PaintControllerPaintTestBase::TearDown();
+    SharedGpuContext::Reset();
+    accelerated_compositing_scope_ = nullptr;
+    CanvasRenderingContext::GetCanvasPerformanceMonitor().ResetForTesting();
   }
 
   FrameSettingOverrideFunction SettingOverrider() const override {
@@ -53,47 +62,45 @@ class HTMLCanvasPainterTestForCAP : public PaintControllerPaintTest {
     return GetChromeClient().HasLayer(layer);
   }
 
-  std::unique_ptr<Canvas2DLayerBridge> MakeCanvas2DLayerBridge(
-      const IntSize& size) {
-    return std::make_unique<Canvas2DLayerBridge>(size, RasterMode::kGPU,
-                                                 CanvasColorParams());
-  }
-
  private:
   scoped_refptr<viz::TestContextProvider> test_context_provider_;
+  std::unique_ptr<
+      ScopedTestingPlatformSupport<AcceleratedCompositingTestPlatform>>
+      accelerated_compositing_scope_;
 };
 
-INSTANTIATE_CAP_TEST_SUITE_P(HTMLCanvasPainterTestForCAP);
+TEST_F(HTMLCanvasPainterTest, Canvas2DLayerAppearsInLayerTree) {
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+  SetBodyInnerHTML("<canvas id='c' width='10' height='20'></canvas>");
 
-TEST_P(HTMLCanvasPainterTestForCAP, Canvas2DLayerAppearsInLayerTree) {
-  // Insert a <canvas> and force it into accelerated mode.
-  // Not using SetBodyInnerHTML() because we need to test before document
-  // lifecyle update.
-  GetDocument().body()->setInnerHTML("<canvas width=300 height=200>");
+  Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
+  script->setTextContent(R"JS(
+    var canvas = document.getElementById('c');
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 10, 10);
+    ctx.getImageData(0, 0, 1, 1);  // Force a frame to be rendered.
+
+    canvas.width = 10;
+
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(0, 0, 5, 5);
+  )JS");
+  GetDocument().body()->appendChild(script);
+  RunDocumentLifecycle();
+
   auto* element = To<HTMLCanvasElement>(GetDocument().body()->firstChild());
-  CanvasContextCreationAttributesCore attributes;
-  attributes.alpha = true;
-  CanvasRenderingContext* context =
-      element->GetCanvasRenderingContext("2d", attributes);
-  IntSize size(300, 200);
-  std::unique_ptr<Canvas2DLayerBridge> bridge = MakeCanvas2DLayerBridge(size);
-  element->SetResourceProviderForTesting(nullptr, std::move(bridge), size);
-  ASSERT_EQ(context, element->RenderingContext());
+  CanvasRenderingContext* context = element->RenderingContext();
+
   ASSERT_TRUE(context->IsComposited());
   ASSERT_TRUE(element->IsAccelerated());
-
-  // Force the page to paint.
-  element->PreFinalizeFrame();
-  context->FinalizeFrame();
-  element->PostFinalizeFrame();
-  UpdateAllLifecyclePhasesForTest();
 
   // Fetch the layer associated with the <canvas>, and check that it was
   // correctly configured in the layer tree.
   const cc::Layer* layer = context->CcLayer();
   ASSERT_TRUE(layer);
   EXPECT_TRUE(HasLayerAttached(*layer));
-  EXPECT_EQ(gfx::Size(300, 200), layer->bounds());
+  EXPECT_EQ(gfx::Size(10, 20), layer->bounds());
 }
 
 }  // namespace blink

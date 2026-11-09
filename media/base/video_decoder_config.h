@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,21 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/no_destructor.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/media_export.h"
 #include "media/base/video_aspect_ratio.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_color_space.h"
+#include "media/base/video_spatial_format.h"
 #include "media/base/video_transformation.h"
 #include "media/base/video_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/hdr_metadata.h"
@@ -47,7 +50,11 @@ class MEDIA_EXPORT VideoDecoderConfig {
                      const gfx::Size& natural_size,
                      const std::vector<uint8_t>& extra_data,
                      EncryptionScheme encryption_scheme);
+
   VideoDecoderConfig(const VideoDecoderConfig& other);
+  VideoDecoderConfig(VideoDecoderConfig&& other);
+  VideoDecoderConfig& operator=(const VideoDecoderConfig& other);
+  VideoDecoderConfig& operator=(VideoDecoderConfig&& other);
 
   ~VideoDecoderConfig();
 
@@ -99,13 +106,19 @@ class MEDIA_EXPORT VideoDecoderConfig {
   // Region of coded_size() that contains image data, also known as the clean
   // aperture. Usually, but not always, origin-aligned (top-left).
   const gfx::Rect& visible_rect() const { return visible_rect_; }
+  void set_visible_rect(const gfx::Rect& visible_rect) {
+    visible_rect_ = visible_rect;
+  }
 
   // DEPRECATED: Use aspect_ratio().GetNaturalSize().
-  // TODO(crbug.com/1214061): Remove.
+  // TODO(crbug.com/40769111): Remove.
   // Final visible width and height of a video frame with aspect ratio taken
   // into account. Image data in the visible_rect() should be scaled to this
   // size for display.
   const gfx::Size& natural_size() const { return natural_size_; }
+  void set_natural_size(const gfx::Size& natural_size) {
+    natural_size_ = natural_size;
+  }
 
   // The aspect ratio parsed from the container. Decoders may override using
   // in-band metadata only if !aspect_ratio().IsValid().
@@ -143,9 +156,7 @@ class MEDIA_EXPORT VideoDecoderConfig {
   void set_hdr_metadata(const gfx::HDRMetadata& hdr_metadata) {
     hdr_metadata_ = hdr_metadata;
   }
-  const absl::optional<gfx::HDRMetadata>& hdr_metadata() const {
-    return hdr_metadata_;
-  }
+  const gfx::HDRMetadata& hdr_metadata() const { return hdr_metadata_; }
 
   // Codec level.
   void set_level(VideoCodecLevel level) { level_ = level; }
@@ -155,12 +166,13 @@ class MEDIA_EXPORT VideoDecoderConfig {
   // useful for decryptors that decrypts an encrypted stream to a clear stream.
   void SetIsEncrypted(bool is_encrypted);
 
-  // Sets whether this config is for WebRTC or not.
-  void set_is_rtc(bool is_rtc) { is_rtc_ = is_rtc; }
-  bool is_rtc() const { return is_rtc_; }
+  void set_spatial_format(const VideoSpatialFormat& spatial_format) {
+    spatial_format_ = spatial_format;
+  }
+  const VideoSpatialFormat& spatial_format() const { return spatial_format_; }
 
  private:
-  VideoCodec codec_ = kUnknownVideoCodec;
+  VideoCodec codec_ = VideoCodec::kUnknown;
   VideoCodecProfile profile_ = VIDEO_CODEC_PROFILE_UNKNOWN;
 
   // Optional video codec level. kNoVideoCodecLevel means the field is not
@@ -183,8 +195,9 @@ class MEDIA_EXPORT VideoDecoderConfig {
   EncryptionScheme encryption_scheme_ = EncryptionScheme::kUnencrypted;
 
   VideoColorSpace color_space_info_;
-  absl::optional<gfx::HDRMetadata> hdr_metadata_;
-  bool is_rtc_ = false;
+  gfx::HDRMetadata hdr_metadata_;
+
+  VideoSpatialFormat spatial_format_;
 
   // Not using DISALLOW_COPY_AND_ASSIGN here intentionally to allow the compiler
   // generated copy constructor and assignment operator. Since the extra data is

@@ -1,21 +1,21 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/base/auto_thread.h"
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/scoped_native_library.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <objbase.h>
 #endif
 
@@ -27,16 +27,14 @@ void SetFlagTask(bool* success) {
   *success = true;
 }
 
-void PostSetFlagTask(
-    scoped_refptr<base::TaskRunner> task_runner,
-    bool* success) {
+void PostSetFlagTask(scoped_refptr<base::TaskRunner> task_runner,
+                     bool* success) {
   task_runner->PostTask(FROM_HERE, base::BindOnce(&SetFlagTask, success));
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void CheckComAptTypeTask(APTTYPE* apt_type_out, HRESULT* hresult) {
-  typedef HRESULT (WINAPI * CoGetApartmentTypeFunc)
-      (APTTYPE*, APTTYPEQUALIFIER*);
+  typedef HRESULT(WINAPI * CoGetApartmentTypeFunc)(APTTYPE*, APTTYPEQUALIFIER*);
 
   // Dynamic link to the API so the same test binary can run on older systems.
   base::ScopedNativeLibrary com_library(base::FilePath(L"ole32.dll"));
@@ -65,7 +63,7 @@ class AutoThreadTest : public testing::Test {
     base::RunLoop run_loop;
     quit_closure_ = run_loop.QuitClosure();
     task_environment_.GetMainThreadTaskRunner()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(), base::TimeDelta::FromSeconds(5));
+        FROM_HERE, run_loop.QuitClosure(), base::Seconds(5));
     run_loop.Run();
   }
 
@@ -136,7 +134,7 @@ TEST_F(AutoThreadTest, ThreadDependency) {
   EXPECT_TRUE(success);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 TEST_F(AutoThreadTest, ThreadWithComMta) {
   scoped_refptr<base::TaskRunner> task_runner =
       AutoThread::CreateWithLoopAndComInitTypes(kThreadName, main_task_runner_,
@@ -153,8 +151,8 @@ TEST_F(AutoThreadTest, ThreadWithComMta) {
   task_runner.reset();
   RunMessageLoop();
 
-  EXPECT_EQ(S_OK, hresult);
-  EXPECT_EQ(APTTYPE_MTA, apt_type);
+  EXPECT_EQ(hresult, S_OK);
+  EXPECT_EQ(apt_type, APTTYPE_MTA);
 }
 
 TEST_F(AutoThreadTest, ThreadWithComSta) {
@@ -173,11 +171,11 @@ TEST_F(AutoThreadTest, ThreadWithComSta) {
   task_runner.reset();
   RunMessageLoop();
 
-  EXPECT_EQ(S_OK, hresult);
+  EXPECT_EQ(hresult, S_OK);
   // Whether the thread is the "main" STA apartment depends upon previous
   // COM activity in this test process, so allow both types here.
   EXPECT_TRUE(apt_type == APTTYPE_MAINSTA || apt_type == APTTYPE_STA);
 }
-#endif // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace remoting

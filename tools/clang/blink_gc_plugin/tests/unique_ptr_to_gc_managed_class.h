@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,8 @@ class HeapObject : public GarbageCollected<HeapObject> {
  private:
   Vector<std::unique_ptr<HeapObject>> m_objs;
   std::unique_ptr<HeapVector<Member<HeapObject>>> m_objs2;
+  std::unique_ptr<GCedHeapVector<Member<HeapObject>>> m_objs3;
 };
 }
 
-#endif
+#endif  // OWN_PTR_TO_GC_MANAGED_CLASS_H_

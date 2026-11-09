@@ -1,34 +1,27 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // Custom binding for the browserAction API.
 
-var setIcon = require('setIcon').setIcon;
-var getExtensionViews = requireNative('runtime').GetExtensionViews;
+const getSetIconHandler = require('setIcon').getSetIconHandler;
+const getExtensionViews = requireNative('runtime').GetExtensionViews;
 
 apiBridge.registerCustomHook(function(bindingsAPI) {
-  var apiFunctions = bindingsAPI.apiFunctions;
+  const apiFunctions = bindingsAPI.apiFunctions;
 
-  apiFunctions.setHandleRequest('setIcon', function(details, callback) {
-    setIcon(details, function(args) {
-      bindingUtil.sendRequest(
-          'browserAction.setIcon', [args, callback], undefined);
-    }.bind(this), function (errorMessage) {
-      // Propagate the error message.
-      bindingUtil.runCallbackWithLastError(errorMessage, callback);
-    }.bind(this));
-  });
+  apiFunctions.setHandleRequest(
+      'setIcon', getSetIconHandler('browserAction.setIcon'));
 
-  apiFunctions.setCustomCallback('openPopup',
-      function(name, request, callback, response) {
-    if (!callback)
+  apiFunctions.setCustomCallback('openPopup', function(callback, response) {
+    if (!callback) {
       return;
+    }
 
     if (bindingUtil.hasLastError()) {
       callback();
     } else {
-      var views = getExtensionViews(-1, -1, 'POPUP');
+      const views = getExtensionViews(-1, -1, 'POPUP');
       callback(views.length > 0 ? views[0] : null);
     }
   });

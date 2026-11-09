@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,14 @@
 
 #include <memory>
 
-#include "base/macros.h"
-// TODO(https://crbug.com/1164001): forward declare SystemSettingsProvider when
-// moved to ash.
-#include "chromeos/settings/system_settings_provider.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ash {
 
 class CrosSettings;
 class StubCrosSettingsProvider;
+class SystemSettingsProvider;
+class UserLoginPermissionTracker;
 
 // Helper class which calls CrosSettings::SetForTesting when it is constructed,
 // and calls CrosSettings::ShutdownForTesting when it goes out of scope,
@@ -37,6 +36,10 @@ class ScopedTestingCrosSettings {
   // for testing.
   ScopedTestingCrosSettings();
 
+  ScopedTestingCrosSettings(const ScopedTestingCrosSettings&) = delete;
+  ScopedTestingCrosSettings& operator=(const ScopedTestingCrosSettings&) =
+      delete;
+
   ~ScopedTestingCrosSettings();
 
   StubCrosSettingsProvider* device_settings() { return device_settings_ptr_; }
@@ -45,20 +48,13 @@ class ScopedTestingCrosSettings {
 
  private:
   std::unique_ptr<CrosSettings> test_instance_;
+  std::unique_ptr<UserLoginPermissionTracker> user_login_permission_tracker_;
 
   // These are raw pointers since these objects are owned by |test_instance_|.
-  StubCrosSettingsProvider* device_settings_ptr_;
-  SystemSettingsProvider* system_settings_ptr_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedTestingCrosSettings);
+  raw_ptr<StubCrosSettingsProvider> device_settings_ptr_;
+  raw_ptr<SystemSettingsProvider> system_settings_ptr_;
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-using ::ash::ScopedTestingCrosSettings;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SETTINGS_SCOPED_TESTING_CROS_SETTINGS_H_

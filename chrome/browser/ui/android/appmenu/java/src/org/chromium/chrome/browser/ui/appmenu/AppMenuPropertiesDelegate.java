@@ -1,129 +1,90 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.ui.appmenu;
 
+import android.content.Context;
 import android.os.Bundle;
-import android.view.Menu;
-import android.view.MenuItem;
+import android.util.SparseArray;
 import android.view.View;
 
-import androidx.annotation.IdRes;
-import androidx.annotation.Nullable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.modelutil.ModelListAdapter;
+import org.chromium.ui.modelutil.PropertyModel;
 
-import java.util.List;
+import java.util.function.BiFunction;
 
-/**
- * App Menu helper that handles hiding and showing menu items based on activity state.
- */
+/** App Menu helper that handles hiding and showing menu items based on activity state. */
+@NullMarked
 public interface AppMenuPropertiesDelegate {
-    /**
-     * Called when the containing activity is being destroyed.
-     */
+    /** Called when the containing activity is being destroyed. */
     void destroy();
 
     /**
-     * @return The resource id for the menu to use in {@link AppMenu}.
+     * Registers additional view binders and sizing providers for sub-class specific menu item
+     * types.
+     *
+     * @param modelListAdapter The adapter that additional view binders should be registered to.
+     * @param customSizingSuppliers The list of sizing providers that allow specific custom item
+     *     types to specify their default height if it differs from the standard menu item height.
      */
-    int getAppMenuLayoutId();
+    default void registerCustomViewBinders(
+            ModelListAdapter modelListAdapter,
+            SparseArray<BiFunction<Context, PropertyModel, Integer>> customSizingSuppliers) {}
 
     /**
-     * @return A list of {@link CustomViewBinder}s to use for binding specific menu items or null if
-     *         there are no custom binders for this delegate.
+     * Gets the menu items for app menu.
+     *
+     * @return The {@link ModelList} which contains the menu items for app menu.
      */
-    @Nullable
-    List<CustomViewBinder> getCustomViewBinders();
-
-    /**
-     * Allows the delegate to show and hide items before the App Menu is shown. It is called every
-     * time the menu is shown. This assumes that the provided menu contains all the items expected
-     * in the application menu (i.e. that the main menu has been inflated into it).
-     * @param menu Menu that will be used as the source for the App Menu pop up.
-     * @param handler The {@link AppMenuHandler} associated with {@code menu}.
-     */
-    void prepareMenu(Menu menu, AppMenuHandler handler);
+    ModelList getMenuItems();
 
     /**
      * Gets a bundle of (optional) extra data associated with the provided MenuItem.
      *
-     * @param item The {@link MenuItem} for which to return the Bundle.
+     * @param model The {@link PropertyModel} of the menu item for which to return the Bundle.
      * @return A {@link Bundle} for the provided MenuItem containing extra data, if any.
      */
-    Bundle getBundleForMenuItem(MenuItem item);
+    @Nullable Bundle getBundleForMenuItem(PropertyModel model);
 
     /**
      * Notify the delegate that the load state changed.
+     *
      * @param isLoading Whether the page is currently loading.
      */
     void loadingStateChanged(boolean isLoading);
 
-    /**
-     * Notify the delegate that menu was dismissed.
-     */
+    /** Notify the delegate that menu was shown. */
+    void onMenuShown();
+
+    /** Notify the delegate that menu was dismissed. */
     void onMenuDismissed();
 
-    /**
-     * @return Resource layout id for the footer if there should be one. O otherwise. The footer
-     *         is shown at a fixed position at the bottom the app menu. It is always visible and
-     *         overlays other app menu items if necessary.
-     */
-    int getFooterResourceId();
+    /** Returns a footer view for the menu, or null if no footer should be shown. */
+    @Nullable View buildFooterView(AppMenuHandler appMenuHandler);
 
-    /**
-     * @return The resource ID for a layout the be used as the app menu header if there should be
-     *         one. 0 otherwise. The header will be displayed as the first item in the app menu. It
-     *         will be scrolled off as the menu scrolls.
-     */
-    int getHeaderResourceId();
-
-    /**
-     * @return The resource ID for a layout the be used as the app menu divider. The divider will be
-     *         displayed as a line between menu item groups.
-     */
-    int getGroupDividerId();
-
-    /**
-     * Determines whether the footer should be shown based on the maximum available menu height.
-     * @param maxMenuHeight The maximum available height for the menu to draw.
-     * @return Whether the footer, as specified in {@link #getFooterResourceId()}, should be shown.
-     */
-    boolean shouldShowFooter(int maxMenuHeight);
-
-    /**
-     * Determines whether the header should be shown based on the maximum available menu height.
-     * @param maxMenuHeight The maximum available height for the menu to draw.
-     * @return Whether the header, as specified in {@link #getHeaderResourceId()}, should be shown.
-     */
-    boolean shouldShowHeader(int maxMenuHeight);
-
-    /**
-     * A notification that the footer view has finished inflating.
-     * @param appMenuHandler The handler for the menu the view is inside of.
-     * @param view The view that was inflated.
-     */
-    void onFooterViewInflated(AppMenuHandler appMenuHandler, View view);
-
-    /**
-     * A notification that the header view has finished inflating.
-     * @param appMenuHandler The handler for the menu the view is inside of.
-     * @param view The view that was inflated.
-     */
-    void onHeaderViewInflated(AppMenuHandler appMenuHandler, View view);
+    /** Returns a header view for the menu, or null if no header should be shown. */
+    @Nullable View buildHeaderView();
 
     /**
      * @return For items with both a text label and a non-interactive icon, whether the app menu
-     *         should show the icon before the text.
+     *     should show the icon before the text.
      */
     boolean shouldShowIconBeforeItem();
 
-    /**
-     * Called to record that the menu item {@code menuItemId} was highlighted.
-     */
-    void recordHighlightedMenuItemShown(@Nullable @IdRes Integer menuItemId);
+    /** Returns whether the menu icon is positioned at the start. */
+    boolean isMenuIconAtStart();
+
+    /** Returns whether the icon row is showing. */
+    boolean shouldShowIconRow();
 
     /**
-     * Called to record that user clicked on highlighted menu item {@code menuItemId}.
+     * Returns whether the app menu should avoid growing over the top browser controls. False on the
+     * NTP, regular and incognito, where the omnibox shows no URL. Only consulted when the menu is
+     * anchored to the bottom bar and the controls are at the top.
      */
-    void recordHighlightedMenuItemClicked(@Nullable @IdRes Integer menuItemId);
+    boolean shouldKeepMenuBelowTopControls();
 }

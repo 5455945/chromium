@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/favicon/core/large_icon_service.h"
@@ -16,18 +17,21 @@
 
 namespace favicon {
 
-class LargeFaviconProvider;
+class FaviconService;
 
 // Processes the png data returned from the FaviconService as part of a
 // LargeIconService request (resizing and decoding from PNG format).
 class LargeIconWorker : public base::RefCountedThreadSafe<LargeIconWorker> {
  public:
   // Exactly one of the callbacks is expected to be non-null.
-  LargeIconWorker(int min_source_size_in_pixel,
-                  int desired_size_in_pixel,
-                  favicon_base::LargeIconCallback raw_bitmap_callback,
-                  favicon_base::LargeIconImageCallback image_callback,
-                  base::CancelableTaskTracker* tracker);
+  LargeIconWorker(
+      int min_source_size_in_pixel,
+      int size_in_pixel_to_resize_to,
+      LargeIconService::NoBigEnoughIconBehavior no_big_enough_icon_behavior,
+      LargeIconService::NonSquareIconBehavior non_square_icon_behavior,
+      favicon_base::LargeIconCallback raw_bitmap_callback,
+      favicon_base::LargeIconImageCallback image_callback,
+      base::CancelableTaskTracker* tracker);
   LargeIconWorker(const LargeIconWorker& worker) = delete;
   LargeIconWorker& operator=(const LargeIconWorker& worker) = delete;
 
@@ -39,10 +43,12 @@ class LargeIconWorker : public base::RefCountedThreadSafe<LargeIconWorker> {
       const favicon_base::FaviconRawBitmapResult& db_result);
 
   static base::CancelableTaskTracker::TaskId GetLargeIconRawBitmap(
-      LargeFaviconProvider* provider,
+      FaviconService* favicon_service,
       const GURL& page_url,
       int min_source_size_in_pixel,
-      int desired_size_in_pixel,
+      int size_in_pixel_to_resize_to,
+      LargeIconService::NoBigEnoughIconBehavior no_big_enough_icon_behavior,
+      LargeIconService::NonSquareIconBehavior non_square_icon_behavior,
       favicon_base::LargeIconCallback raw_bitmap_callback,
       favicon_base::LargeIconImageCallback image_callback,
       base::CancelableTaskTracker* tracker);
@@ -52,21 +58,34 @@ class LargeIconWorker : public base::RefCountedThreadSafe<LargeIconWorker> {
 
   ~LargeIconWorker();
 
+  // Resizes `db_result` and writes the result of the resizing into
+  // `raw_bitmap_result_` or `bitmap_result_` based on which of
+  // `raw_bitmap_callback_` and `image_callback_` is set.
+  void ResizeAndEncodeOnBackgroundThread(
+      const favicon_base::FaviconRawBitmapResult& db_result);
+
+  // Computes the dominant color of `favicon_bytes` on a background thread.
+  void ComputeDominantColorOnBackgroundThread(
+      scoped_refptr<base::RefCountedMemory> favicon_bytes);
+
   // Must run on the owner (UI) thread in production.
   // Invoked when ProcessIconOnBackgroundThread() is done.
   void OnIconProcessingComplete();
 
   int min_source_size_in_pixel_;
-  int desired_size_in_pixel_;
+  int size_in_pixel_to_resize_to_;
+  LargeIconService::NoBigEnoughIconBehavior no_big_enough_icon_behavior_;
+  LargeIconService::NonSquareIconBehavior non_square_icon_behavior_;
   favicon_base::LargeIconCallback raw_bitmap_callback_;
   favicon_base::LargeIconImageCallback image_callback_;
   scoped_refptr<base::TaskRunner> background_task_runner_;
-  base::CancelableTaskTracker* tracker_;
+  raw_ptr<base::CancelableTaskTracker, DanglingUntriaged> tracker_;
 
   favicon_base::FaviconRawBitmapResult raw_bitmap_result_;
   SkBitmap bitmap_result_;
   GURL icon_url_;
   std::unique_ptr<favicon_base::FallbackIconStyle> fallback_icon_style_;
+  int favicon_width_according_to_database_ = 0;
 };
 
 }  // namespace favicon

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/certificate_provider/security_token_pin_dialog_host.h"
 
@@ -15,9 +16,9 @@ namespace views {
 class Widget;
 }  // namespace views
 
-namespace ash {
-
 class RequestPinView;
+
+namespace chromeos {
 
 // The default implementation of the PIN dialog host. It renders the PIN dialog
 // as a popup with the RequestPinView view.
@@ -38,7 +39,7 @@ class SecurityTokenPinDialogHostPopupImpl final
       bool enable_user_input,
       security_token_pin::ErrorLabel error_label,
       int attempts_left,
-      const absl::optional<AccountId>& authenticating_user_account_id,
+      const std::optional<AccountId>& authenticating_user_account_id,
       SecurityTokenPinEnteredCallback pin_entered_callback,
       SecurityTokenPinDialogClosedCallback pin_dialog_closed_callback) override;
   void CloseSecurityTokenPinDialog() override;
@@ -56,14 +57,14 @@ class SecurityTokenPinDialogHostPopupImpl final
   SecurityTokenPinDialogClosedCallback pin_dialog_closed_callback_;
 
   // Owned by |active_window_|.
-  RequestPinView* active_pin_dialog_ = nullptr;
+  raw_ptr<RequestPinView> active_pin_dialog_ = nullptr;
   // Owned by the UI code (NativeWidget).
-  views::Widget* active_window_ = nullptr;
+  raw_ptr<views::Widget> active_window_ = nullptr;
 
   base::WeakPtrFactory<SecurityTokenPinDialogHostPopupImpl> weak_ptr_factory_{
       this};
 };
 
-}  // namespace ash
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_SECURITY_TOKEN_PIN_DIALOG_HOST_POPUP_IMPL_H_

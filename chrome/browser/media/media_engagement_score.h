@@ -1,14 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_MEDIA_MEDIA_ENGAGEMENT_SCORE_H_
 #define CHROME_BROWSER_MEDIA_MEDIA_ENGAGEMENT_SCORE_H_
 
-#include <memory>
-
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/clock.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/media/media_engagement_score_details.mojom.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -29,7 +28,7 @@ class MediaEngagementScore final {
   static const char kLastMediaPlaybackTimeKey[];
   static const char kHasHighScoreKey[];
 
-  // Origins with a number of visits less than this number will recieve
+  // Origins with a number of visits less than this number will receive
   // a score of zero.
   static int GetScoreMinVisits();
 
@@ -41,6 +40,10 @@ class MediaEngagementScore final {
   MediaEngagementScore(base::Clock* clock,
                        const url::Origin& origin,
                        HostContentSettingsMap* settings);
+
+  MediaEngagementScore(const MediaEngagementScore&) = delete;
+  MediaEngagementScore& operator=(const MediaEngagementScore&) = delete;
+
   ~MediaEngagementScore();
 
   MediaEngagementScore(MediaEngagementScore&&);
@@ -57,8 +60,9 @@ class MediaEngagementScore final {
 
   // Writes the values in this score into |settings_map_|. If there are multiple
   // instances of a score object for an origin, this could result in stale data
-  // being stored.
-  void Commit();
+  // being stored. Takes in a boolean indicating whether to force an update
+  // even if properties of the score are unchanged.
+  void Commit(bool force_update = false);
 
   // Get/increment the number of visits this origin has had.
   int visits() const { return visits_; }
@@ -82,13 +86,14 @@ class MediaEngagementScore final {
  protected:
   friend class MediaEngagementAutoplayBrowserTest;
   friend class MediaEngagementContentsObserverTest;
+  friend class MediaEngagementContentsObserverMPArchBrowserTest;
   friend class MediaEngagementSessionTest;
   friend class MediaEngagementService;
 
   // Only used by the Media Engagement service when bulk loading data.
   MediaEngagementScore(base::Clock* clock,
                        const url::Origin& origin,
-                       std::unique_ptr<base::DictionaryValue> score_dict,
+                       base::DictValue score_dict,
                        HostContentSettingsMap* settings);
 
   static const char kScoreMinVisitsParamName[];
@@ -101,11 +106,13 @@ class MediaEngagementScore final {
  private:
   friend class MediaEngagementServiceTest;
   friend class MediaEngagementScoreTest;
+  friend class MediaEngagementScoreWithOverrideFieldTrialsTest;
 
   // Update the dictionary continaing the latest score values and return whether
   // they have changed or not (since what was last retrieved from content
-  // settings).
-  bool UpdateScoreDict();
+  // settings). Takes in a boolean indicating whether to force an update
+  // even if properties of the score are unchanged.
+  bool UpdateScoreDict(bool force_update = false);
 
   // If the number of playbacks or visits is updated then this will recalculate
   // the total score and whether the score is considered high.
@@ -130,16 +137,14 @@ class MediaEngagementScore final {
   url::Origin origin_;
 
   // A clock that can be used for testing, owned by the service.
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 
   // The dictionary that represents this engagement score.
-  std::unique_ptr<base::DictionaryValue> score_dict_;
+  base::DictValue score_dict_;
 
   // The content settings map that will persist the score,
   // has a lifetime of the Profile like the service which owns |this|.
-  HostContentSettingsMap* settings_map_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaEngagementScore);
+  raw_ptr<HostContentSettingsMap> settings_map_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_MEDIA_MEDIA_ENGAGEMENT_SCORE_H_

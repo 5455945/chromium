@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,18 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/version.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/update_service.h"
+#include "components/policy/core/common/policy_types.h"
 
 namespace updater {
 
@@ -24,39 +29,120 @@ class UpdateServiceImplInactive : public UpdateService {
 
   // Overrides for updater::UpdateService.
   void GetVersion(
-      base::OnceCallback<void(const base::Version&)> callback) const override {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+      base::OnceCallback<void(const base::Version&)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), base::Version()));
   }
 
-  void RegisterApp(
-      const RegistrationRequest& request,
-      base::OnceCallback<void(const RegistrationResponse&)> callback) override {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+  void FetchPolicies(policy::PolicyFetchReason reason,
+                     base::OnceCallback<void(int)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    std::move(callback).Run(-1);
+  }
+
+  void RegisterApp(const RegistrationRequest& /*request*/,
+                   base::OnceCallback<void(int)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), -1));
+  }
+
+  void GetAppStates(base::OnceCallback<void(const std::vector<AppState>&)>
+                        callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(std::move(callback), RegistrationResponse(-1)));
+        base::BindOnce(std::move(callback), std::vector<AppState>()));
   }
 
   void RunPeriodicTasks(base::OnceClosure callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
     std::move(callback).Run();
   }
 
-  void UpdateAll(StateChangeCallback state_update, Callback callback) override {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+  void CheckForUpdate(
+      const std::string& /*app_id*/,
+      Priority /*priority*/,
+      PolicySameVersionUpdate /*policy_same_version_update*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
   }
 
-  void Update(const std::string& app_id,
-              Priority priority,
-              StateChangeCallback state_update,
-              Callback callback) override {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+  void Update(
+      const std::string& /*app_id*/,
+      const std::string& /*install_data_index*/,
+      Priority /*priority*/,
+      PolicySameVersionUpdate /*policy_same_version_update*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
   }
 
-  void Uninitialize() override {}
+  void UpdateAll(
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
+  }
+
+  void Install(
+      const RegistrationRequest& /*registration*/,
+      const std::string& /*client_install_data*/,
+      const std::string& /*install_data_index*/,
+      Priority /*priority*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
+  }
+
+  void CancelInstalls(const std::string& /*app_id*/) override {
+    VLOG(1) << __func__ << " (Inactive)";
+  }
+
+  void RunInstaller(
+      const std::string& /*app_id*/,
+      const base::FilePath& /*installer_path*/,
+      const std::string& /*install_args*/,
+      const std::string& /*install_data*/,
+      const std::string& /*install_settings*/,
+      const std::string& /*language*/,
+      base::RepeatingCallback<void(const UpdateState&)> /*state_update*/,
+      base::OnceCallback<void(Result)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), UpdateService::Result::kInactive));
+  }
+
+  void GetUpdaterState(
+      base::OnceCallback<void(const UpdaterState&)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), UpdaterState()));
+  }
+
+  void GetPoliciesJson(
+      base::OnceCallback<void(const std::string&)> callback) override {
+    VLOG(1) << __func__ << " (Inactive)";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::string()));
+  }
 
  private:
   ~UpdateServiceImplInactive() override = default;

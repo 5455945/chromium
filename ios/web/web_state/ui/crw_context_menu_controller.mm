@@ -1,59 +1,80 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/web_state/ui/crw_context_menu_controller.h"
 
+#import "base/auto_reset.h"
+#import "base/feature_list.h"
+#import "base/memory/weak_ptr.h"
+#import "base/values.h"
+#import "ios/web/common/crw_viewport_adjustment.h"
+#import "ios/web/common/crw_viewport_adjustment_container.h"
+#import "ios/web/common/features.h"
 #import "ios/web/js_features/context_menu/context_menu_params_utils.h"
 #import "ios/web/public/ui/context_menu_params.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_delegate.h"
+#import "ios/web/web_state/ui/buildflags.h"
 #import "ios/web/web_state/ui/crw_context_menu_element_fetcher.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ui/gfx/geometry/rect_f.h"
+#import "ui/gfx/image/image.h"
 
 namespace {
-const CGFloat kJavaScriptTimeout = 1;
+
+const CGFloat kJavaScriptTimeout = 0.5;
+
+// Wrapper around CFRunLoop() to help crash server put all crashes happening
+// while the loop is executed in the same bucket. Marked as `noinline` to
+// prevent clang from optimising the function out in official builds.
+void __attribute__((noinline)) ContextMenuNestedCFRunLoop() {
+  CFRunLoopRun();
+}
+
 }  // namespace
 
 @interface CRWContextMenuController () <UIContextMenuInteractionDelegate>
 
-@property(nonatomic, assign) web::ContextMenuParams params;
-
 // The context menu responsible for the interaction.
 @property(nonatomic, strong) UIContextMenuInteraction* contextMenu;
 
-// Views used to do the highlight/dismiss animation. Those view are empty and
-// are used to override the default animation which is to focus the whole
-// WebView (as the interaction is used on the whole WebView).
-@property(nonatomic, strong, readonly) UIView* highlightView;
-@property(nonatomic, strong, readonly) UIView* dismissView;
+// View used to do the highlight/dismiss animation.
+@property(nonatomic, strong) UIImageView* screenshotView;
 
 @property(nonatomic, strong) WKWebView* webView;
 
-@property(nonatomic, assign) web::WebState* webState;
+@property(nonatomic) base::WeakPtr<web::WebState> webState;
 
 @property(nonatomic, strong) CRWContextMenuElementFetcher* elementFetcher;
 
+- (UIContextMenuConfiguration*)
+    contextMenuConfigurationWithParams:(web::ContextMenuParams)params
+                              location:(CGPoint)location
+                           interaction:(UIContextMenuInteraction*)interaction;
+
 @end
 
-@implementation CRWContextMenuController
+@implementation CRWContextMenuController {
+  // Whether params are already being fetched.
+  BOOL _fetchingParams;
+}
 
-@synthesize highlightView = _highlightView;
-@synthesize dismissView = _dismissView;
+@synthesize screenshotView = _screenshotView;
 
 - (instancetype)initWithWebView:(WKWebView*)webView
-                       webState:(web::WebState*)webState {
+                       webState:(web::WebState*)webState
+                  containerView:(UIView*)containerView {
   self = [super init];
   if (self) {
     _contextMenu = [[UIContextMenuInteraction alloc] initWithDelegate:self];
 
     _webView = webView;
-    [webView addInteraction:_contextMenu];
 
-    _webState = webState;
+    // Do not add the interaction to the WKWebView itself as this may interfer
+    // with the JS touch event. see crbug/351696381.
+    [containerView addInteraction:_contextMenu];
+
+    _webState = webState ? webState->GetWeakPtr() : nullptr;
 
     _elementFetcher =
         [[CRWContextMenuElementFetcher alloc] initWithWebView:webView
@@ -64,24 +85,21 @@ const CGFloat kJavaScriptTimeout = 1;
 
 #pragma mark - Property
 
-- (UIView*)highlightView {
-  if (!_highlightView) {
+- (UIImageView*)screenshotView {
+  if (!_screenshotView) {
     // If the views have a CGRectZero size, it is not taken into account.
     CGRect rectSizedOne = CGRectMake(0, 0, 1, 1);
-    _highlightView = [[UIView alloc] initWithFrame:rectSizedOne];
-    _highlightView.backgroundColor = UIColor.clearColor;
+    _screenshotView = [[UIImageView alloc] initWithFrame:rectSizedOne];
+    _screenshotView.backgroundColor = UIColor.clearColor;
   }
-  return _highlightView;
+  return _screenshotView;
 }
 
-- (UIView*)dismissView {
-  if (!_dismissView) {
-    // If the views have a CGRectZero size, it is not taken into account.
-    CGRect rectSizedOne = CGRectMake(0, 0, 1, 1);
-    _dismissView = [[UIView alloc] initWithFrame:rectSizedOne];
-    _dismissView.backgroundColor = UIColor.clearColor;
+- (void)setScreenshotView:(UIImageView*)screenshotView {
+  if (_screenshotView.superview) {
+    [_screenshotView removeFromSuperview];
   }
-  return _dismissView;
+  _screenshotView = screenshotView;
 }
 
 #pragma mark - UIContextMenuInteractionDelegate
@@ -92,6 +110,175 @@ const CGFloat kJavaScriptTimeout = 1;
   CGPoint locationInWebView =
       [self.webView.scrollView convertPoint:location fromView:interaction.view];
 
+  locationInWebView.x /= self.webView.scrollView.zoomScale;
+  locationInWebView.y /= self.webView.scrollView.zoomScale;
+
+#if BUILDFLAG(IOS_USE_BE_DEFERRED_CONTEXT_MENU)
+  if (@available(iOS 17.4, *)) {
+    if (base::FeatureList::IsEnabled(
+            web::features::kEnableBEContextMenuConfiguration) &&
+        self.webState && self.webState->GetDelegate()) {
+      UIContextMenuConfiguration* config =
+          self.webState->GetDelegate()->GetCustomContextMenuConfiguration();
+      if (config) {
+        __weak __typeof(self) weakSelf = self;
+        [self.elementFetcher
+            fetchDOMElementAtPoint:locationInWebView
+                 completionHandler:^(const web::ContextMenuParams& params) {
+                   CRWContextMenuController* strongSelf = weakSelf;
+                   if (!strongSelf) {
+                     return;
+                   }
+                   UIContextMenuConfiguration* innerConfig = [strongSelf
+                       contextMenuConfigurationWithParams:params
+                                                 location:location
+                                              interaction:interaction];
+
+                   if (!strongSelf.webState) {
+                     return;
+                   }
+
+                   strongSelf.webState->GetDelegate()
+                       ->ContextMenuConfigurationLoaded(config, innerConfig);
+                 }];
+        return config;
+      }
+    }
+  }
+#endif
+
+  std::optional<web::ContextMenuParams> optionalParams =
+      [self fetchContextMenuParamsAtLocation:locationInWebView];
+
+  if (!optionalParams.has_value()) {
+    return nil;
+  }
+  web::ContextMenuParams params = optionalParams.value();
+
+  return [self contextMenuConfigurationWithParams:params
+                                         location:location
+                                      interaction:interaction];
+}
+
+- (UITargetedPreview*)contextMenuInteraction:
+                          (UIContextMenuInteraction*)interaction
+    previewForHighlightingMenuWithConfiguration:
+        (UIContextMenuConfiguration*)configuration {
+  UIPreviewParameters* previewParameters = [[UIPreviewParameters alloc] init];
+  previewParameters.backgroundColor = UIColor.clearColor;
+
+  // If the preview view is not attached to the view hierarchy, fallback to nil
+  // to prevent app crashing. See crbug.com/1351669.
+  UITargetedPreview* targetPreview =
+      self.screenshotView.window
+          ? [[UITargetedPreview alloc] initWithView:self.screenshotView
+                                         parameters:previewParameters]
+          : nil;
+  return targetPreview;
+}
+
+- (UITargetedPreview*)contextMenuInteraction:
+                          (UIContextMenuInteraction*)interaction
+    previewForDismissingMenuWithConfiguration:
+        (UIContextMenuConfiguration*)configuration {
+  UIPreviewParameters* previewParameters = [[UIPreviewParameters alloc] init];
+  previewParameters.backgroundColor = UIColor.clearColor;
+
+  // If the dismiss view is not attached to the view hierarchy, fallback to nil
+  // to prevent app crashing. See crbug.com/1231888.
+  UITargetedPreview* targetPreview =
+      self.screenshotView.window
+          ? [[UITargetedPreview alloc] initWithView:self.screenshotView
+                                         parameters:previewParameters]
+          : nil;
+  self.screenshotView = nil;
+  return targetPreview;
+}
+
+- (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
+    willPerformPreviewActionForMenuWithConfiguration:
+        (UIContextMenuConfiguration*)configuration
+                                            animator:
+                                                (id<UIContextMenuInteractionCommitAnimating>)
+                                                    animator {
+  if (self.webState && self.webState->GetDelegate()) {
+    self.webState->GetDelegate()->ContextMenuWillCommitWithAnimator(
+        self.webState.get(), animator);
+  }
+}
+
+- (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
+       willEndForConfiguration:(UIContextMenuConfiguration*)configuration
+                      animator:(id<UIContextMenuInteractionAnimating>)animator {
+  __weak UIView* weakScreenshotView = self.screenshotView;
+  [animator addCompletion:^{
+    // Check if `self.screenshotView` has already been replaced and removed.
+    if (self.screenshotView && self.screenshotView == weakScreenshotView) {
+      [self.screenshotView removeFromSuperview];
+    }
+  }];
+}
+
+#pragma mark - Private
+
+- (UIContextMenuConfiguration*)
+    contextMenuConfigurationWithParams:(web::ContextMenuParams)params
+                              location:(CGPoint)location
+                           interaction:(UIContextMenuInteraction*)interaction {
+  self.screenshotView.center = location;
+
+  // Adding the screenshotView here so they can be used in the
+  // delegate's methods. Will be removed if no menu is presented.
+  [interaction.view addSubview:self.screenshotView];
+
+  params.location = [self.webView convertPoint:location
+                                      fromView:interaction.view];
+
+  __block UIContextMenuConfiguration* configuration = nil;
+  if (self.webState && self.webState->GetDelegate()) {
+    self.webState->GetDelegate()->ContextMenuConfiguration(
+        self.webState.get(), params, ^(UIContextMenuConfiguration* conf) {
+          configuration = conf;
+        });
+  }
+
+  if (configuration) {
+    // User long pressed on a link or an image. Cancelling all touches will
+    // intentionally suppress system context menu UI. See crbug.com/1250352.
+    [self cancelAllTouches];
+  } else {
+    [self.screenshotView removeFromSuperview];
+  }
+
+  return configuration;
+}
+
+// Prevents the web view gesture recognizer to get the touch events.
+- (void)cancelAllTouches {
+  // All user gestures are handled by a subview of web view scroll view
+  // (WKContentView).
+  for (UIView* subview in self.webView.scrollView.subviews) {
+    for (UIGestureRecognizer* recognizer in subview.gestureRecognizers) {
+      if (recognizer.enabled) {
+        recognizer.enabled = NO;
+        recognizer.enabled = YES;
+      }
+    }
+  }
+}
+
+// Fetches the context menu params for the element at `locationInWebView`. The
+// returned params can be empty.
+- (std::optional<web::ContextMenuParams>)fetchContextMenuParamsAtLocation:
+    (CGPoint)locationInWebView {
+  if (_fetchingParams) {
+    // Fetching params is done synchronously and spins the runloop, so it is
+    // possible that a second context menu is triggered.
+    // Add a guard to avoid this.
+    return std::nullopt;
+  }
+  base::AutoReset<BOOL> reentrancyGuard(&_fetchingParams, YES);
+
   // While traditionally using dispatch_async would be used here, we have to
   // instead use CFRunLoop because dispatch_async blocks the thread. As this
   // function is called by iOS when it detects the user's force touch, it is on
@@ -101,13 +288,14 @@ const CGFloat kJavaScriptTimeout = 1;
   __block BOOL javascriptEvaluationComplete = NO;
   __block BOOL isRunLoopComplete = NO;
 
+  __block std::optional<web::ContextMenuParams> resultParams;
+
   __weak __typeof(self) weakSelf = self;
   [self.elementFetcher
       fetchDOMElementAtPoint:locationInWebView
            completionHandler:^(const web::ContextMenuParams& params) {
-             __typeof(self) strongSelf = weakSelf;
              javascriptEvaluationComplete = YES;
-             strongSelf.params = params;
+             resultParams = params;
              if (isRunLoopNested) {
                CFRunLoopStop(CFRunLoopGetCurrent());
              }
@@ -133,47 +321,17 @@ const CGFloat kJavaScriptTimeout = 1;
   // time we reach this line.
   if (!javascriptEvaluationComplete) {
     isRunLoopNested = YES;
-    CFRunLoopRun();
+    ContextMenuNestedCFRunLoop();
     isRunLoopNested = NO;
   }
 
   isRunLoopComplete = YES;
 
-  if (!web::CanShowContextMenuForParams(self.params))
-    return nil;
+  if (!self.webState) {
+    return std::nullopt;
+  }
 
-  // Adding the highlight/dismiss view here so they can be used in the
-  // delegate's methods.
-  [interaction.view addSubview:self.highlightView];
-  [interaction.view addSubview:self.dismissView];
-  self.highlightView.center = location;
-  self.dismissView.center = location;
-
-  self.params.location = [self.webView convertPoint:location
-                                           fromView:interaction.view];
-
-  __block UIContextMenuConfiguration* configuration;
-  self.webState->GetDelegate()->ContextMenuConfiguration(
-      self.webState, self.params, /*preview_provider=*/nil,
-      ^(UIContextMenuConfiguration* conf) {
-        configuration = conf;
-      });
-
-  return configuration;
-}
-
-- (UITargetedPreview*)contextMenuInteraction:
-                          (UIContextMenuInteraction*)interaction
-    previewForHighlightingMenuWithConfiguration:
-        (UIContextMenuConfiguration*)configuration {
-  return [[UITargetedPreview alloc] initWithView:self.highlightView];
-}
-
-- (UITargetedPreview*)contextMenuInteraction:
-                          (UIContextMenuInteraction*)interaction
-    previewForDismissingMenuWithConfiguration:
-        (UIContextMenuConfiguration*)configuration {
-  return [[UITargetedPreview alloc] initWithView:self.dismissView];
+  return resultParams;
 }
 
 @end

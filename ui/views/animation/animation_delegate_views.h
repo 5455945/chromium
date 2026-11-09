@@ -1,11 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_ANIMATION_ANIMATION_DELEGATE_VIEWS_H_
 #define UI_VIEWS_ANIMATION_ANIMATION_DELEGATE_VIEWS_H_
 
-
+#include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "ui/gfx/animation/animation_container_observer.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -15,6 +16,7 @@
 
 namespace views {
 class CompositorAnimationRunner;
+class Widget;
 
 // Provides default implementation to adapt CompositorAnimationRunner for
 // Animation. Falls back to the default animation runner when |view| is nullptr.
@@ -23,8 +25,13 @@ class VIEWS_EXPORT AnimationDelegateViews
       public ViewObserver,
       public gfx::AnimationContainerObserver {
  public:
-  explicit AnimationDelegateViews(View* view);
+  explicit AnimationDelegateViews(View* view,
+                                  const base::Location& location = FROM_HERE);
+  explicit AnimationDelegateViews(Widget* widget,
+                                  const base::Location& location = FROM_HERE);
   ~AnimationDelegateViews() override;
+
+  void SetView(View* view);
 
   // gfx::AnimationDelegate:
   void AnimationContainerWasSet(gfx::AnimationContainer* container) override;
@@ -48,17 +55,22 @@ class VIEWS_EXPORT AnimationDelegateViews
 
   gfx::AnimationContainer* container() { return container_; }
 
+  const base::Location& location_for_test() const { return location_; }
+
  private:
   // Sets CompositorAnimationRunner to |container_| if possible. Otherwise,
   // clears AnimationRunner of |container_|.
-  void UpdateAnimationRunner();
+  void UpdateAnimationRunner(const base::Location& location);
   void ClearAnimationRunner();
 
-  View* view_;
-  gfx::AnimationContainer* container_ = nullptr;
+  raw_ptr<View> view_;
+  raw_ptr<gfx::AnimationContainer> container_ = nullptr;
+
+  // Code location of where this is created.
+  const base::Location location_;
 
   // The animation runner that |container_| uses.
-  CompositorAnimationRunner* compositor_animation_runner_ = nullptr;
+  raw_ptr<CompositorAnimationRunner> compositor_animation_runner_ = nullptr;
 
   base::ScopedObservation<View, ViewObserver> scoped_observation_{this};
 };

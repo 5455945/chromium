@@ -1,8 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/win/foreground_helper.h"
+
+#include <ostream>
 
 #include "base/logging.h"
 #include "ui/gfx/win/window_impl.h"
@@ -14,7 +16,7 @@ ForegroundHelper::~ForegroundHelper() = default;
 
 // static
 HRESULT ForegroundHelper::SetForeground(HWND window) {
-  DCHECK(::IsWindow(window));
+  CHECK(::IsWindow(window), base::NotFatalUntil::M163);
   ForegroundHelper foreground_helper;
   return foreground_helper.ForegroundHotKey(window);
 }
@@ -41,11 +43,17 @@ HRESULT ForegroundHelper::ForegroundHotKey(HWND window) {
   MSG msg = {0};
   PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
 
-  // Send the Hotkey.
-  INPUT hotkey = {0};
-  hotkey.type = INPUT_KEYBOARD;
-  hotkey.ki.wVk =  VK_F22;
-  if (1 != SendInput(1, &hotkey, sizeof(hotkey))) {
+  // Send both key down and up events.
+  INPUT inputs[2] = {};
+
+  inputs[0].type = INPUT_KEYBOARD;
+  inputs[0].ki.wVk = VK_F22;
+
+  inputs[1].type = INPUT_KEYBOARD;
+  inputs[1].ki.wVk = VK_F22;
+  inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+  if (2 != SendInput(2, inputs, sizeof(*inputs))) {
     LOG(WARNING) << "Failed to send input; GetLastError(): " << GetLastError();
     return E_FAIL;
   }

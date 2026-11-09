@@ -1,19 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chromeos/printing/ppd_cache.h"
+
 #include <utility>
 
-#include "base/bind.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/hash/hash.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "chromeos/printing/ppd_cache.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos {
@@ -93,7 +92,7 @@ TEST_F(PpdCacheTest, MissThenHit) {
   EXPECT_EQ(captured_find_results_, 2);
   EXPECT_TRUE(find_result_.success);
   EXPECT_EQ(find_result_.contents, kTestContents);
-  EXPECT_LT(find_result_.age, base::TimeDelta::FromMinutes(5));
+  EXPECT_LT(find_result_.age, base::Minutes(5));
 
   cache->Find(kTestKey2, base::BindOnce(&PpdCacheTest::CaptureFindResult,
                                         base::Unretained(this)));
@@ -115,7 +114,7 @@ TEST_F(PpdCacheTest, HitAge) {
   task_environment_.RunUntilIdle();
   EXPECT_EQ(captured_find_results_, 1);
   // The age should be well under a second, but accept anything under an hour.
-  EXPECT_LT(find_result_.age, base::TimeDelta::FromHours(1));
+  EXPECT_LT(find_result_.age, base::Hours(1));
 }
 
 }  // namespace

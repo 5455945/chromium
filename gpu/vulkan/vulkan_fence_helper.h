@@ -1,21 +1,21 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_VULKAN_VULKAN_FENCE_HELPER_H_
 #define GPU_VULKAN_VULKAN_FENCE_HELPER_H_
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/component_export.h"
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "gpu/vulkan/vma_wrapper.h"
 
@@ -26,6 +26,10 @@ class VulkanDeviceQueue;
 class COMPONENT_EXPORT(VULKAN) VulkanFenceHelper {
  public:
   explicit VulkanFenceHelper(VulkanDeviceQueue* device_queue);
+
+  VulkanFenceHelper(const VulkanFenceHelper&) = delete;
+  VulkanFenceHelper& operator=(const VulkanFenceHelper&) = delete;
+
   ~VulkanFenceHelper();
 
   // Destroy the fence helper.
@@ -107,9 +111,11 @@ class COMPONENT_EXPORT(VULKAN) VulkanFenceHelper {
   // Processes CleanupTasks for which a fence has passed.
   void ProcessCleanupTasks(uint64_t retired_generation_id = 0);
   // Helpers for common types:
-  void EnqueueSemaphoreCleanupForSubmittedWork(VkSemaphore semaphore);
+  void EnqueueSemaphoreCleanupForSubmittedWork(
+      base::RawPtrIfPtrT<VkSemaphore, DanglingUntriaged> semaphore);
   void EnqueueSemaphoresCleanupForSubmittedWork(
-      std::vector<VkSemaphore> semaphores);
+      std::vector<base::RawPtrIfPtrT<VkSemaphore, DanglingUntriaged>>
+          semaphores);
   void EnqueueImageCleanupForSubmittedWork(VkImage image,
                                            VkDeviceMemory memory);
   void EnqueueBufferCleanupForSubmittedWork(VkBuffer buffer,
@@ -118,10 +124,13 @@ class COMPONENT_EXPORT(VULKAN) VulkanFenceHelper {
   template <typename T>
   void EnqueueVulkanObjectCleanupForSubmittedWork(std::unique_ptr<T> obj);
 
- private:
+  // Careful: this may be very slow, because it synchronizes everything. It is
+  // intended for cleanup prior to destruction, or when latency is not a concern
+  // (e.g. when the whole application is backgrounded on Android).
   void PerformImmediateCleanup();
 
-  VulkanDeviceQueue* const device_queue_;
+ private:
+  const raw_ptr<VulkanDeviceQueue> device_queue_;
 
   std::vector<CleanupTask> tasks_pending_fence_;
   uint64_t next_generation_ = 1;
@@ -146,13 +155,13 @@ class COMPONENT_EXPORT(VULKAN) VulkanFenceHelper {
   base::circular_deque<TasksForFence> cleanup_tasks_;
 
   base::WeakPtrFactory<VulkanFenceHelper> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(VulkanFenceHelper);
 };
 
 template <typename T>
 void VulkanFenceHelper::EnqueueVulkanObjectCleanupForSubmittedWork(
     std::unique_ptr<T> obj) {
+  if (!obj)
+    return;
   EnqueueCleanupTaskForSubmittedWork(
       base::BindOnce([](std::unique_ptr<T> obj, VulkanDeviceQueue* device_queue,
                         bool device_lost) { obj->Destroy(); },

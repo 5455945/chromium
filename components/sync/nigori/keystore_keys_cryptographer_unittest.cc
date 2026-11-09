@@ -1,12 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/sync/nigori/keystore_keys_cryptographer.h"
 
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/nigori/cryptographer_impl.h"
-#include "components/sync/nigori/nigori.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -15,14 +14,14 @@ namespace syncer {
 namespace {
 
 using testing::Eq;
+using testing::IsEmpty;
 using testing::NotNull;
 
 std::string ComputeKeystoreKeyName(const std::string& keystore_key) {
-  std::string key_name;
-  Nigori::CreateByDerivation(KeyDerivationParams::CreateForPbkdf2(),
-                             keystore_key)
-      ->Permute(Nigori::Password, kNigoriKeyName, &key_name);
-  return key_name;
+  return Nigori::CreateByDerivation(NigoriPassKey::ForTesting(),
+                                    KeyDerivationParams::CreateForPbkdf2(),
+                                    keystore_key)
+      ->GetKeyName();
 }
 
 TEST(KeystoreKeysCryptographerTest, ShouldCreateEmpty) {
@@ -31,12 +30,19 @@ TEST(KeystoreKeysCryptographerTest, ShouldCreateEmpty) {
 
   EXPECT_TRUE(keystore_keys_cryptographer->IsEmpty());
   EXPECT_TRUE(keystore_keys_cryptographer->keystore_keys().empty());
-  EXPECT_TRUE(keystore_keys_cryptographer->GetLastKeystoreKeyName().empty());
+  EXPECT_THAT(keystore_keys_cryptographer->GetLastKeystoreKeyName(), IsEmpty());
+  EXPECT_EQ(keystore_keys_cryptographer->GetKeystoreKeybag().size(), 0u);
+}
 
-  std::unique_ptr<CryptographerImpl> underlying_cryptographer =
-      keystore_keys_cryptographer->ToCryptographerImpl();
-  ASSERT_THAT(underlying_cryptographer, NotNull());
-  EXPECT_FALSE(underlying_cryptographer->CanEncrypt());
+// Verifies that `FromKeystoreKeys()` returns a non-null empty cryptographer
+// when given an empty vector of keystore keys.
+TEST(KeystoreKeysCryptographerTest, ShouldCreateEmptyFromEmptyKeystoreKeys) {
+  std::unique_ptr<KeystoreKeysCryptographer> keystore_keys_cryptographer =
+      KeystoreKeysCryptographer::FromKeystoreKeys({});
+
+  ASSERT_THAT(keystore_keys_cryptographer, NotNull());
+  EXPECT_TRUE(keystore_keys_cryptographer->IsEmpty());
+  EXPECT_TRUE(keystore_keys_cryptographer->keystore_keys().empty());
 }
 
 TEST(KeystoreKeysCryptographerTest, ShouldCreateNonEmpty) {
@@ -52,14 +58,10 @@ TEST(KeystoreKeysCryptographerTest, ShouldCreateNonEmpty) {
   EXPECT_THAT(keystore_keys_cryptographer->keystore_keys(), Eq(kKeystoreKeys));
   EXPECT_THAT(keystore_keys_cryptographer->GetLastKeystoreKeyName(),
               Eq(keystore_key_name2));
-
-  std::unique_ptr<CryptographerImpl> underlying_cryptographer =
-      keystore_keys_cryptographer->ToCryptographerImpl();
-  ASSERT_THAT(underlying_cryptographer, NotNull());
-  EXPECT_TRUE(underlying_cryptographer->CanEncrypt());
-  EXPECT_TRUE(underlying_cryptographer->HasKey(keystore_key_name1));
-  EXPECT_THAT(underlying_cryptographer->GetDefaultEncryptionKeyName(),
-              Eq(keystore_key_name2));
+  EXPECT_TRUE(keystore_keys_cryptographer->GetKeystoreKeybag().HasKey(
+      keystore_key_name1));
+  EXPECT_TRUE(keystore_keys_cryptographer->GetKeystoreKeybag().HasKey(
+      keystore_key_name2));
 }
 
 }  // namespace

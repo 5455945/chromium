@@ -1,19 +1,28 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_FEED_CORE_V2_TEST_TEST_UTIL_H_
 #define COMPONENTS_FEED_CORE_V2_TEST_TEST_UTIL_H_
 
-#include "base/callback.h"
+#include <string>
+#include <string_view>
+
+#include "base/functional/callback.h"
+#include "base/test/protobuf_matchers.h"
 #include "base/time/time.h"
+#include "components/feed/core/v2/test/proto_printer.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 // Some functionality shared among feed tests.
 namespace feed {
 
+using base::test::EqualsProto;
+
 // Although time is mocked through TaskEnvironment, it does drift by small
 // amounts.
-const base::TimeDelta kEpsilon = base::TimeDelta::FromMilliseconds(5);
+const base::TimeDelta kEpsilon = base::Milliseconds(5);
 #define EXPECT_TIME_EQ(WANT, GOT)                    \
   {                                                  \
     base::Time want___ = (WANT), got___ = (GOT);     \
@@ -32,8 +41,29 @@ const base::TimeDelta kEpsilon = base::TimeDelta::FromMilliseconds(5);
                                << got___;                   \
   }
 
-// Execute a runloop until `criteria` is true.
-void RunLoopUntil(base::RepeatingCallback<bool()> criteria);
+// Trims whitespace from begin and end of all lines of text.
+std::string TrimLines(std::string_view text);
+
+// Does the protobuf argument's ToTextProto() output match message? Allows some
+// whitespace differences.
+MATCHER_P(EqualsTextProto, message, message) {
+  std::string actual_string = ToTextProto(arg);
+  if (TrimLines(actual_string) != TrimLines(message)) {
+    return testing::ExplainMatchResult(testing::Eq(message), ToTextProto(arg),
+                                       result_listener);
+  } else {
+    return true;
+  }
+}
+
+// Execute a runloop until `criteria` is true. If the criteria are not true
+// after 1000 iterations, ASSERT with the content of
+// `failure_message_callback.Run()`.
+void RunLoopUntil(base::RepeatingCallback<bool()> criteria,
+                  base::OnceCallback<std::string()> failure_message_callback);
+
+void RunLoopUntil(base::RepeatingCallback<bool()> criteria,
+                  const std::string& failure_message);
 
 }  // namespace feed
 

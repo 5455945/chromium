@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,41 +9,38 @@ import android.os.SystemClock;
 import org.hamcrest.Matchers;
 import org.junit.Assert;
 
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.test.ChromeActivityTestRule;
-import org.chromium.content_public.browser.GestureListenerManager;
-import org.chromium.content_public.browser.GestureStateListener;
 import org.chromium.content_public.browser.RenderCoordinates;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
-import org.chromium.content_public.browser.WebContents;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.content_public.browser.test.util.TouchCommon;
-import org.chromium.content_public.browser.test.util.WebContentsUtils;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Utility methods for testing the {@link BrowserControlsManager}.
- */
+/** Utility methods for testing the {@link BrowserControlsManager}. */
 public class FullscreenManagerTestUtils {
     /**
      * Scrolls the underlying web page to show or hide the browser controls.
-     * @param testRule The test rule for the currently running test.
+     *
+     * @param activity The ChromeActivity.
      * @param show Whether the browser controls should be shown.
      */
-    public static void scrollBrowserControls(ChromeActivityTestRule testRule, boolean show) {
+    public static void scrollBrowserControls(ChromeActivity activity, boolean show) {
         BrowserControlsStateProvider browserControlsStateProvider =
-                testRule.getActivity().getBrowserControlsManager();
+                activity.getBrowserControlsManager();
         int browserControlsHeight = browserControlsStateProvider.getTopControlsHeight();
 
-        waitForPageToBeScrollable(testRule.getActivity().getActivityTab());
+        waitForPageToBeScrollable(
+                ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab()));
 
         float dragX = 50f;
         // Use a larger scroll range than the height of the browser controls to ensure we overcome
@@ -51,159 +48,149 @@ public class FullscreenManagerTestUtils {
         float dragStartY = browserControlsHeight * 3;
         float dragEndY = dragStartY - browserControlsHeight * 2;
         int expectedPosition = -browserControlsHeight;
+
+        // The top back button toolbar will still be shown on automotive, even in fullscreen mode.
         if (show) {
-            expectedPosition = 0;
-            float tempDragStartY = dragStartY;
-            dragStartY = dragEndY;
-            dragEndY = tempDragStartY;
+            if (!DeviceInfo.isAutomotive()) {
+                expectedPosition = 0;
+                float tempDragStartY = dragStartY;
+                dragStartY = dragEndY;
+                dragEndY = tempDragStartY;
+            }
         }
         long downTime = SystemClock.uptimeMillis();
-        TouchCommon.dragStart(testRule.getActivity(), dragX, dragStartY, downTime);
-        TouchCommon.dragTo(
-                testRule.getActivity(), dragX, dragX, dragStartY, dragEndY, 100, downTime);
-        TouchCommon.dragEnd(testRule.getActivity(), dragX, dragEndY, downTime);
-        waitForBrowserControlsPosition(testRule, expectedPosition);
+        TouchCommon.performDragNoFling(activity, dragX, dragX, dragStartY, dragEndY, 100, downTime);
+        waitForBrowserControlsPosition(activity, expectedPosition);
     }
 
     /**
      * Waits for the browser controls to reach the specified position.
-     * @param testRule The test rule for the currently running test.
+     *
+     * @param activity The ChromeActivity.
      * @param position The desired top controls offset.
      */
-    public static void waitForBrowserControlsPosition(
-            ChromeActivityTestRule testRule, int position) {
+    public static void waitForBrowserControlsPosition(ChromeActivity activity, int position) {
         final BrowserControlsStateProvider browserControlsStateProvider =
-                testRule.getActivity().getBrowserControlsManager();
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(
-                    browserControlsStateProvider.getTopControlOffset(), Matchers.is(position));
-        });
+                activity.getBrowserControlsManager();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            browserControlsStateProvider.getTopControlOffset(),
+                            Matchers.is(position));
+                });
+    }
+
+    /**
+     * Waits for the bottom browser controls min-height offset to match the current bottom controls
+     * min height.
+     *
+     * @param activity The ChromeActivity.
+     */
+    public static void waitForBottomControlsMinHeightOffset(ChromeActivity activity) {
+        final BrowserControlsStateProvider browserControlsStateProvider =
+                activity.getBrowserControlsManager();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            browserControlsStateProvider.getBottomControlsMinHeightOffset(),
+                            Matchers.is(browserControlsStateProvider.getBottomControlsMinHeight()));
+                });
     }
 
     /**
      * Waits for the base page to be scrollable.
+     *
      * @param tab The current activity tab.
      */
     public static void waitForPageToBeScrollable(final Tab tab) {
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(RenderCoordinates.fromWebContents(tab.getWebContents())
-                                       .getContentHeightPixInt(),
-                    Matchers.greaterThan(tab.getContentView().getHeight()));
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            RenderCoordinates.fromWebContents(tab.getWebContents())
+                                    .getContentHeightPixInt(),
+                            Matchers.greaterThan(tab.getContentView().getHeight()));
+                });
     }
 
     /**
      * Waits for the browser controls to be moveable by user gesture.
      *
-     * This function requires the browser controls to start fully visible. Then it ensures that
-     * at some point the controls can be moved by user gesture.  It will then fully cycle the top
+     * <p>This function requires the browser controls to start fully visible. Then it ensures that
+     * at some point the controls can be moved by user gesture. It will then fully cycle the top
      * controls to entirely hidden and back to fully shown.
      *
-     * @param testRule The test rule for the currently running test.
-     * @param tab The current activity tab.
+     * @param activity The ChromeActivity.
+     */
+    public static void waitForBrowserControlsToBeMoveable(ChromeActivity activity) {
+        waitForBrowserControlsToBeMoveable(activity, /* showControls= */ true);
+    }
+
+    /**
+     * Waits for the browser controls to be moveable by user gesture.
+     *
+     * <p>This function requires the browser controls to start fully visible. Then it ensures that
+     * at some point the controls can be moved by user gesture. If @param showControls is true, it
+     * will restore the controls to show fully.
+     *
+     * @param activity The ChromeActivity.
+     * @param showControls Whether to keep the controls shown at the end.
      */
     public static void waitForBrowserControlsToBeMoveable(
-            ChromeActivityTestRule testRule, final Tab tab) {
-        waitForBrowserControlsPosition(testRule, 0);
+            ChromeActivity activity, boolean showControls) {
+        waitForBrowserControlsPosition(activity, 0);
 
         final CallbackHelper contentMovedCallback = new CallbackHelper();
         final BrowserControlsStateProvider browserControlsStateProvider =
-                testRule.getActivity().getBrowserControlsManager();
+                activity.getBrowserControlsManager();
         final float initialVisibleContentOffset =
                 browserControlsStateProvider.getTopVisibleContentOffset();
 
-        browserControlsStateProvider.addObserver(new BrowserControlsStateProvider.Observer() {
-            @Override
-            public void onControlsOffsetChanged(int topOffset, int topControlsMinHeightOffset,
-                    int bottomOffset, int bottomControlsMinHeightOffset, boolean needsAnimate) {
-                if (browserControlsStateProvider.getTopVisibleContentOffset()
-                        != initialVisibleContentOffset) {
-                    contentMovedCallback.notifyCalled();
-                    browserControlsStateProvider.removeObserver(this);
-                }
-            }
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    browserControlsStateProvider.addObserver(
+                            new BrowserControlsStateProvider.Observer() {
+                                @Override
+                                public void onControlsOffsetChanged(
+                                        int topOffset,
+                                        int topControlsMinHeightOffset,
+                                        boolean topControlsMinHeightChanged,
+                                        int bottomOffset,
+                                        int bottomControlsMinHeightOffset,
+                                        boolean bottomControlsMinHeightChanged,
+                                        boolean requestNewFrame,
+                                        boolean isVisibilityForced) {
+                                    if (browserControlsStateProvider.getTopVisibleContentOffset()
+                                            != initialVisibleContentOffset) {
+                                        contentMovedCallback.notifyCalled();
+                                        browserControlsStateProvider.removeObserver(this);
+                                    }
+                                }
+                            });
+                });
 
         float dragX = 50f;
-        float dragStartY = tab.getView().getHeight() - 50f;
-
-        WebContents webContents = tab.getWebContents();
-
-        final CallbackHelper scrollEndCallback = new CallbackHelper();
-        final CallbackHelper flingEndCallback = new CallbackHelper();
-        GestureStateListener scrollEndListener = new GestureStateListener() {
-            @Override
-            public void onScrollEnded(int scrollOffsetY, int scrollExtentY) {
-                scrollEndCallback.notifyCalled();
-            }
-
-            @Override
-            public void onFlingEndGesture(int scrollOffsetY, int scrollExtentY) {
-                flingEndCallback.notifyCalled();
-            }
-
-        };
-        GestureListenerManager gestureListenerManager =
-                WebContentsUtils.getGestureListenerManager(webContents);
-        gestureListenerManager.addListener(scrollEndListener);
+        int bottomControlsHeight = browserControlsStateProvider.getBottomControlsHeight();
+        float dragStartY =
+                ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab())
+                                .getView()
+                                .getHeight()
+                        - bottomControlsHeight
+                        - 50f;
 
         for (int i = 0; i < 10; i++) {
-            int numScrollEndCalled = scrollEndCallback.getCallCount();
-            int numFlingEndCalled = flingEndCallback.getCallCount();
             float dragEndY = dragStartY - browserControlsStateProvider.getTopControlsHeight();
 
             long downTime = SystemClock.uptimeMillis();
-            TouchCommon.dragStart(testRule.getActivity(), dragX, dragStartY, downTime);
-            TouchCommon.dragTo(
-                    testRule.getActivity(), dragX, dragX, dragStartY, dragEndY, 100, downTime);
-            TouchCommon.dragEnd(testRule.getActivity(), dragX, dragEndY, downTime);
+            // Avoid fling so that the next drag has the chance to start with a non-moving content.
+            TouchCommon.performDragNoFling(
+                    activity, dragX, dragX, dragStartY, dragEndY, 100, downTime);
 
             try {
                 contentMovedCallback.waitForCallback(0, 1, 500, TimeUnit.MILLISECONDS);
-
-                try {
-                    scrollEndCallback.waitForCallback(
-                            numScrollEndCalled, 1, 5000, TimeUnit.MILLISECONDS);
-                    flingEndCallback.waitForCallback(
-                            numFlingEndCalled, 1, 5000, TimeUnit.MILLISECONDS);
-                } catch (TimeoutException e) {
-                    Assert.fail("Didn't get expected ScrollEnd gestures");
+                scrollBrowserControls(activity, false);
+                if (showControls) {
+                    scrollBrowserControls(activity, true);
                 }
-
-                try {
-                    flingEndCallback.waitForCallback(
-                            numFlingEndCalled, 1, 200, TimeUnit.MILLISECONDS);
-                } catch (TimeoutException e) {
-                    // Depending on timing - the above scroll may not have
-                    // generated a fling. If it did, it the fling end may
-                    // sometimes be called after the scroll end so wait a little
-                    // for it.
-                }
-
-                numFlingEndCalled = flingEndCallback.getCallCount();
-
-                scrollBrowserControls(testRule, false);
-                scrollBrowserControls(testRule, true);
-
-                // Make sure the gesture stream is finished before we hand back control.
-                try {
-                    scrollEndCallback.waitForCallback(
-                            numScrollEndCalled + 1, 2, 5000, TimeUnit.MILLISECONDS);
-                } catch (TimeoutException e) {
-                    Assert.fail("Didn't get expected ScrollEnd gestures");
-                }
-
-                try {
-                    flingEndCallback.waitForCallback(
-                            numFlingEndCalled, 2, 200, TimeUnit.MILLISECONDS);
-                } catch (TimeoutException e) {
-                    // Depending on timing - the above scrolls may not have
-                    // generated flings. If they did, the fling end may sometimes
-                    // be called after the scroll end so wait a little for it.
-                }
-
-                gestureListenerManager.removeListener(scrollEndListener);
-
                 return;
             } catch (TimeoutException e) {
                 // Ignore and retry
@@ -213,20 +200,31 @@ public class FullscreenManagerTestUtils {
         Assert.fail("Visible content never moved as expected.");
     }
 
-    /**
-     * Disable any browser visibility overrides for testing.
-     */
+    /** Disable any browser visibility overrides for testing. */
     public static void disableBrowserOverrides() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> BrowserStateBrowserControlsVisibilityDelegate.disableForTesting());
     }
 
-    public static void fling(ChromeActivityTestRule testRule, final int vx, final int vy) {
+    public static void fling(ChromeActivity activity, final int vx, final int vy) {
         PostTask.runOrPostTask(
-                UiThreadTaskTraits.DEFAULT, () -> {
-                    testRule.getWebContents().getEventForwarder().startFling(
-                            SystemClock.uptimeMillis(), vx, vy, /*synthetic_scroll*/ false,
-                            /*prevent_boosting*/ false);
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    activity.getActivityTab()
+                            .getWebContents()
+                            .getEventForwarder()
+                            .startFling(
+                                    SystemClock.uptimeMillis(),
+                                    /* x= */ 0f,
+                                    /* y= */ 0f,
+                                    /* rawX= */ 0f,
+                                    /* rawY= */ 0f,
+                                    vx,
+                                    vy,
+                                    /* syntheticScroll= */ false,
+                                    /* preventBoosting= */ false,
+                                    /* isTouchpadEvent= */ false,
+                                    /* targetViewport= */ true);
                 });
     }
 }

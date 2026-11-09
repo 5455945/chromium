@@ -33,8 +33,9 @@
 #include "third_party/blink/renderer/core/html/html_table_rows_collection.h"
 #include "third_party/blink/renderer/core/html/html_table_section_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -45,10 +46,6 @@ bool HTMLTableRowElement::HasLegalLinkAttribute(
     const QualifiedName& name) const {
   return name == html_names::kBackgroundAttr ||
          HTMLTablePartElement::HasLegalLinkAttribute(name);
-}
-
-const QualifiedName& HTMLTableRowElement::SubResourceAttributeName() const {
-  return html_names::kBackgroundAttr;
 }
 
 static int FindIndexInRowCollection(const HTMLCollection& rows,
@@ -94,8 +91,9 @@ HTMLElement* HTMLTableRowElement::insertCell(int index,
   if (index < -1 || index > num_cells) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "The value provided (" + String::Number(index) +
-            ") is outside the range [-1, " + String::Number(num_cells) + "].");
+        ExceptionMessages::IndexOutsideRange(
+            "value", index, -1, ExceptionMessages::kInclusiveBound, num_cells,
+            ExceptionMessages::kInclusiveBound));
     return nullptr;
   }
 
@@ -117,8 +115,9 @@ void HTMLTableRowElement::deleteCell(int index,
   if (index < -1 || index >= num_cells) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "The value provided (" + String::Number(index) +
-            ") is outside the range [0, " + String::Number(num_cells) + ").");
+        ExceptionMessages::IndexOutsideRange(
+            "value", index, 0, ExceptionMessages::kInclusiveBound, num_cells,
+            ExceptionMessages::kExclusiveBound));
     return;
   }
   // 2. If index is −1, remove the last element in the cells collection

@@ -1,29 +1,33 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/dns/host_resolver_mdns_listener_impl.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/check_op.h"
 #include "base/notreached.h"
 #include "net/base/host_port_pair.h"
-#include "net/dns/host_cache.h"
+#include "net/base/ip_endpoint.h"
+#include "net/dns/host_resolver_internal_result.h"
 #include "net/dns/host_resolver_mdns_task.h"
+#include "net/dns/public/mdns_listener_update_type.h"
 #include "net/dns/record_parsed.h"
 
 namespace net {
 
 namespace {
 
-HostResolver::MdnsListener::Delegate::UpdateType ConvertUpdateType(
-    net::MDnsListener::UpdateType type) {
+MdnsListenerUpdateType ConvertUpdateType(net::MDnsListener::UpdateType type) {
   switch (type) {
     case net::MDnsListener::RECORD_ADDED:
-      return HostResolver::MdnsListener::Delegate::UpdateType::ADDED;
+      return MdnsListenerUpdateType::kAdded;
     case net::MDnsListener::RECORD_CHANGED:
-      return HostResolver::MdnsListener::Delegate::UpdateType::CHANGED;
+      return MdnsListenerUpdateType::kChanged;
     case net::MDnsListener::RECORD_REMOVED:
-      return HostResolver::MdnsListener::Delegate::UpdateType::REMOVED;
+      return MdnsListenerUpdateType::kRemoved;
   }
 }
 
@@ -61,39 +65,45 @@ void HostResolverMdnsListenerImpl::OnRecordUpdate(
     net::MDnsListener::UpdateType update,
     const RecordParsed* record) {
   DCHECK(delegate_);
+  CHECK(record);
 
-  HostCache::Entry parsed_entry =
-      HostResolverMdnsTask::ParseResult(OK, query_type_, record,
-                                        query_host_.host())
-          .CopyWithDefaultPort(query_host_.port());
-  if (parsed_entry.error() != OK) {
+  std::unique_ptr<HostResolverInternalResult> parsed_entry =
+      HostResolverMdnsTask::ParseResult(OK, query_host_.host(), query_type_,
+                                        record);
+  if (parsed_entry->type() == HostResolverInternalResult::Type::kError) {
     delegate_->OnUnhandledResult(ConvertUpdateType(update), query_type_);
     return;
   }
+  CHECK_EQ(parsed_entry->type(), HostResolverInternalResult::Type::kData);
 
   switch (query_type_) {
     case DnsQueryType::UNSPECIFIED:
-    case DnsQueryType::INTEGRITY:
     case DnsQueryType::HTTPS:
       NOTREACHED();
-      break;
     case DnsQueryType::A:
-    case DnsQueryType::AAAA:
-      DCHECK(parsed_entry.addresses());
-      DCHECK_EQ(1u, parsed_entry.addresses().value().size());
+    case DnsQueryType::AAAA: {
+      CHECK_EQ(1u, parsed_entry->AsData().endpoints().size());
+      IPEndPoint endpoint = parsed_entry->AsData().endpoints().front();
+      if (endpoint.port() == 0) {
+        endpoint = IPEndPoint(endpoint.address(), query_host_.port());
+      }
       delegate_->OnAddressResult(ConvertUpdateType(update), query_type_,
-                                 parsed_entry.addresses().value().front());
+                                 endpoint);
       break;
+    }
     case DnsQueryType::TXT:
-      DCHECK(parsed_entry.text_records());
       delegate_->OnTextResult(ConvertUpdateType(update), query_type_,
-                              parsed_entry.text_records().value());
+                              parsed_entry->AsData().strings());
       break;
     case DnsQueryType::PTR:
     case DnsQueryType::SRV:
-      DCHECK(parsed_entry.hostnames());
+      DCHECK(!parsed_entry->AsData().hosts().empty());
+      HostPortPair host = parsed_entry->AsData().hosts().front();
+      if (host.port() == 0) {
+        host.set_port(query_host_.port());
+      }
       delegate_->OnHostnameResult(ConvertUpdateType(update), query_type_,
-                                  parsed_entry.hostnames().value().front());
+                                  std::move(host));
       break;
   }
 }

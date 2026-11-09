@@ -20,46 +20,30 @@
 
 #include "third_party/blink/renderer/core/svg/svg_transform.h"
 
-#include "base/cxx17_backports.h"
-#include "third_party/blink/renderer/platform/geometry/float_size.h"
+#include "base/numerics/angle_conversions.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace blink {
 
-SVGTransform::SVGTransform()
-    : transform_type_(SVGTransformType::kUnknown), angle_(0) {}
+SVGTransform::SVGTransform() : transform_type_(SVGTransformType::kUnknown) {}
 
 SVGTransform::SVGTransform(SVGTransformType transform_type,
                            ConstructionMode mode)
-    : transform_type_(transform_type), angle_(0) {
+    : transform_type_(transform_type) {
   if (mode == kConstructZeroTransform)
     matrix_ = AffineTransform(0, 0, 0, 0, 0, 0);
 }
 
 SVGTransform::SVGTransform(const AffineTransform& matrix)
-    : transform_type_(SVGTransformType::kMatrix), angle_(0), matrix_(matrix) {}
-
-SVGTransform::SVGTransform(SVGTransformType transform_type,
-                           float angle,
-                           const FloatPoint& center,
-                           const AffineTransform& matrix)
-    : transform_type_(transform_type),
-      angle_(angle),
-      center_(center),
-      matrix_(matrix) {}
+    : SVGTransform(SVGTransformType::kMatrix, 0, gfx::PointF(), matrix) {}
 
 SVGTransform::~SVGTransform() = default;
 
 SVGTransform* SVGTransform::Clone() const {
   return MakeGarbageCollected<SVGTransform>(transform_type_, angle_, center_,
                                             matrix_);
-}
-
-SVGPropertyBase* SVGTransform::CloneForAnimation(const String&) const {
-  // SVGTransform is never animated.
-  NOTREACHED();
-  return nullptr;
 }
 
 void SVGTransform::SetMatrix(const AffineTransform& matrix) {
@@ -80,27 +64,29 @@ void SVGTransform::SetTranslate(float tx, float ty) {
   matrix_.Translate(tx, ty);
 }
 
-FloatPoint SVGTransform::Translate() const {
-  return FloatPoint::NarrowPrecision(matrix_.E(), matrix_.F());
+gfx::Vector2dF SVGTransform::Translate() const {
+  return gfx::Vector2dF(ClampTo<float>(matrix_.E()),
+                        ClampTo<float>(matrix_.F()));
 }
 
 void SVGTransform::SetScale(float sx, float sy) {
   transform_type_ = SVGTransformType::kScale;
   angle_ = 0;
-  center_ = FloatPoint();
+  center_ = gfx::PointF();
 
   matrix_.MakeIdentity();
   matrix_.ScaleNonUniform(sx, sy);
 }
 
-FloatSize SVGTransform::Scale() const {
-  return FloatSize::NarrowPrecision(matrix_.A(), matrix_.D());
+gfx::Vector2dF SVGTransform::Scale() const {
+  return gfx::Vector2dF(ClampTo<float>(matrix_.A()),
+                        ClampTo<float>(matrix_.D()));
 }
 
 void SVGTransform::SetRotate(float angle, float cx, float cy) {
   transform_type_ = SVGTransformType::kRotate;
   angle_ = angle;
-  center_ = FloatPoint(cx, cy);
+  center_ = gfx::PointF(cx, cy);
 
   // TODO: toString() implementation, which can show cx, cy (need to be stored?)
   matrix_.MakeIdentity();
@@ -145,13 +131,33 @@ const char* TransformTypePrefixForParsing(SVGTransformType type) {
       return "skewY(";
   }
   NOTREACHED();
-  return "";
+}
+
+gfx::PointF DecomposeRotationCenter(const AffineTransform& matrix,
+                                    float angle) {
+  const double angle_in_rad = base::DegToRad(angle);
+  const double cos_angle = std::cos(angle_in_rad);
+  const double sin_angle = std::sin(angle_in_rad);
+  if (cos_angle == 1)
+    return gfx::PointF();
+  // Solve for the point <cx, cy> from a matrix on the form:
+  //
+  // [ a, c, e ] = [ cos(a), -sin(a), cx + (-cx * cos(a)) + (-cy * -sin(a)) ]
+  // [ b, d, f ]   [ sin(a),  cos(a), cy + (-cx * sin(a)) + (-cy *  cos(a)) ]
+  //
+  // => cx = (e * (1 - cos(a)) - f * sin(a)) / (1 - cos(a)) / 2
+  //    cy = (e * sin(a) / (1 - cos(a)) + f) / 2
+  const double e = matrix.E();
+  const double f = matrix.F();
+  const double cx = (e * (1 - cos_angle) - f * sin_angle) / (1 - cos_angle) / 2;
+  const double cy = (e * sin_angle / (1 - cos_angle) + f) / 2;
+  return gfx::PointF(ClampTo<float>(cx), ClampTo<float>(cy));
 }
 
 }  // namespace
 
 String SVGTransform::ValueAsString() const {
-  double arguments[6];
+  std::array<double, 6> arguments;
   size_t argument_count = 0;
   switch (transform_type_) {
     case SVGTransformType::kUnknown:
@@ -178,21 +184,10 @@ String SVGTransform::ValueAsString() const {
     case SVGTransformType::kRotate: {
       arguments[argument_count++] = angle_;
 
-      double angle_in_rad = deg2rad(angle_);
-      double cos_angle = cos(angle_in_rad);
-      double sin_angle = sin(angle_in_rad);
-      float cx = clampTo<float>(
-          cos_angle != 1
-              ? (matrix_.E() * (1 - cos_angle) - matrix_.F() * sin_angle) /
-                    (1 - cos_angle) / 2
-              : 0);
-      float cy = clampTo<float>(
-          cos_angle != 1
-              ? (matrix_.E() * sin_angle / (1 - cos_angle) + matrix_.F()) / 2
-              : 0);
-      if (cx || cy) {
-        arguments[argument_count++] = cx;
-        arguments[argument_count++] = cy;
+      const gfx::PointF center = DecomposeRotationCenter(matrix_, angle_);
+      if (!center.IsOrigin()) {
+        arguments[argument_count++] = center.x();
+        arguments[argument_count++] = center.y();
       }
       break;
     }
@@ -203,21 +198,16 @@ String SVGTransform::ValueAsString() const {
       arguments[argument_count++] = angle_;
       break;
   }
-  DCHECK_LE(argument_count, base::size(arguments));
+  DCHECK_LE(argument_count, std::size(arguments));
 
   StringBuilder builder;
   builder.Append(TransformTypePrefixForParsing(transform_type_));
-
-  for (size_t i = 0; i < argument_count; ++i) {
-    if (i)
-      builder.Append(' ');
-    builder.AppendNumber(arguments[i]);
-  }
+  builder.AppendRange(base::span(arguments).first(argument_count), " ");
   builder.Append(')');
-  return builder.ToString();
+  return builder.ReleaseString();
 }
 
-void SVGTransform::Add(const SVGPropertyBase*, const SVGElement*) {
+bool SVGTransform::Add(const SVGPropertyBase*, const SVGElement*) {
   // SVGTransform is not animated by itself.
   NOTREACHED();
 }
@@ -237,8 +227,6 @@ float SVGTransform::CalculateDistance(const SVGPropertyBase*,
                                       const SVGElement*) const {
   // SVGTransform is not animated by itself.
   NOTREACHED();
-
-  return -1;
 }
 
 }  // namespace blink

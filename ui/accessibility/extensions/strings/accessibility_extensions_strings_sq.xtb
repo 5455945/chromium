@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Çaktivizo të gjithë animacionin e imazheve.</translation>
 <translation id="1703735871906654364">Shfletimi me kursorin e tekstit</translation>
 <translation id="1791496371305830581">Lejo të gjitha imazhet e animuara.</translation>
+<translation id="1974060860693918893">Të përparuara</translation>
 <translation id="1996252509865389616">Të aktivizohet?</translation>
 <translation id="2079545284768500474">Zhbëj</translation>
 <translation id="2179565792157161713">Hap përshkrimin e gjatë në skedën e re</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Paraqitësi i tekstit alternativ të imazhit</translation>
 <translation id="381767806621926835">Kliko me të djathtë te çdo gjë me një atribut "longdesc" ose "aria-describedat" për t'u qasur te përshkrimi i gjatë i saj.</translation>
 <translation id="4023902424053835668">Shfleto në tekstin e faqeve të uebit duke përdorur tastet e shigjetave.</translation>
+<translation id="4384008284958619421">Lexuesit modernë të ekranit dhe Google Chrome tani mbështesin përshkrimet e qasshme të elementeve dhe standardet ARIA në mënyrë origjinale.</translation>
 <translation id="4388820049312272371">Thekso pozicionin e kursorit me një blic të shpejtë.</translation>
 <translation id="4394049700291259645">Çaktivizo</translation>
 <translation id="4769065380738716500">Imazhet janë zëvendësuar me tekstet e tyre alternative.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Përforcuesi i ngjyrës</translation>
 <translation id="633394792577263429">Mbaj shtypur poshtë &lt;span class='key'&gt;Kontrollo&lt;/span&gt; për të lëvizur sipas fjalëve.</translation>
 <translation id="6550675742724504774">Opsionet</translation>
+<translation id="6699630355767768222">Hapi 3: Anulo boshtin e ngjyrës për korrigjimin.</translation>
 <translation id="6838518108677880446">Konfigurimi:</translation>
 <translation id="690628312087070417">Kur kursori i tekstit kërcen me një distancë të madhe:</translation>
 <translation id="6965382102122355670">Në rregull</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Anulo</translation>
 <translation id="786423340267544509">Shto bordurë te elementët me atribute "aria-describedat" ose "longdesc".</translation>
 <translation id="7942349550061667556">E kuqe</translation>
+<translation id="8081200409424070383">Long Descriptions do të zhvlerësohet më 20 nëntor 2026.</translation>
 <translation id="8260673944985561857">Opsionet e shfletimit me kursorin e tekstit</translation>
 <translation id="8321034316479930120">Politika e animacioneve</translation>
 <translation id="8480209185614411573">Kontrast i lartë</translation>
 <translation id="8609925175482059018">Shtyp &lt;span class='key'&gt;F7&lt;/span&gt; për të aktivizuar shfletimin me kursorin e tekstit. Shtype sërish për ta çaktivizuar.</translation>
+<translation id="8798099450830957504">I parazgjedhur</translation>
 <translation id="894241283505723656">Përshkrimet e gjata në menynë kontekstuale</translation>
 </translationbundle>

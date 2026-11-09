@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <vector>
 
-#include "base/macros.h"
 #include "content/public/browser/child_process_security_policy.h"
 
 class GURL;
 
 namespace content {
+enum class SiteIsolationMode;
 class BrowserContext;
 }
 
@@ -29,6 +29,10 @@ namespace site_isolation {
 // These methods can be called from any thread.
 class SiteIsolationPolicy {
  public:
+  SiteIsolationPolicy() = delete;
+  SiteIsolationPolicy(const SiteIsolationPolicy&) = delete;
+  SiteIsolationPolicy& operator=(const SiteIsolationPolicy&) = delete;
+
   // Returns true if the site isolation mode for isolating sites where users
   // enter passwords is enabled.
   static bool IsIsolationForPasswordSitesEnabled();
@@ -36,6 +40,23 @@ class SiteIsolationPolicy {
   // Returns true if the site isolation mode for isolating sites where users
   // log in via OAuth, as determined by runtime heuristics.
   static bool IsIsolationForOAuthSitesEnabled();
+
+  // Returns true if the isolation mode for isolating origins that match
+  // Jitless policy exceptions is enabled.
+  static bool IsOriginIsolationForJitlessExceptionsEnabled(
+      content::BrowserContext* browser_context);
+
+  // Returns true if the isolation mode for isolating origins that match
+  // JavaScript optimizer exceptions is enabled. This is different than
+  // IsOriginIsolationForJsOptExceptionsSupported() because
+  // IsOriginIsolationForJsOptExceptionsEnabled() returns false if the
+  // feature is unneeded due to strict origin isolation being enabled.
+  static bool IsOriginIsolationForJsOptExceptionsEnabled(
+      content::BrowserContext* browser_context);
+
+  // Returns whether isolating origins that match JavaScript optimizer
+  // exceptions is supported.
+  static bool IsOriginIsolationForJsOptExceptionsSupported();
 
   // Returns true if Site Isolation related enterprise policies should take
   // effect (e.g. such policies might not be applicable to low-end Android
@@ -74,17 +95,26 @@ class SiteIsolationPolicy {
                                  const GURL& signed_in_url);
 
   // Determines whether Site Isolation should be disabled because the device
+  // does not have the minimum required amount of memory. `site_isolation_mode`
+  // determines the type of memory threshold to apply; for example, strict site
+  // isolation on Android might require a higher memory threshold than partial
+  // site isolation.
+  static bool ShouldDisableSiteIsolationDueToMemoryThreshold(
+      content::SiteIsolationMode site_isolation_mode);
+
+  // Determines whether Origin Isolation should be disabled because the device
   // does not have the minimum required amount of memory.
-  //
-  // TODO(alexmos): Currently, the memory threshold is shared for all site
-  // isolation modes, including strict site isolation and password site
-  // isolation.  In the future, some site isolation modes may require their own
-  // memory threshold.
-  static bool ShouldDisableSiteIsolationDueToMemoryThreshold();
+  static bool ShouldDisableOriginIsolationDueToMemoryThreshold();
 
   // Returns true if the PDF compositor should be enabled to allow out-of-
   // process iframes (OOPIF's) to print properly.
   static bool ShouldPdfCompositorBeEnabledForOopifs();
+
+  // When set to true bypasses the caching of the results of
+  // ShouldDisableSiteIsolationDueToMemoryThreshold(). Setting to false allows
+  // caching.
+  static void SetDisallowMemoryThresholdCachingForTesting(
+      bool disallow_caching);
 
  private:
   // Helpers for implementing PersistIsolatedOrigin().
@@ -94,8 +124,6 @@ class SiteIsolationPolicy {
   static void PersistWebTriggeredIsolatedOrigin(
       content::BrowserContext* context,
       const url::Origin& origin);
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(SiteIsolationPolicy);
 };
 
 }  // namespace site_isolation

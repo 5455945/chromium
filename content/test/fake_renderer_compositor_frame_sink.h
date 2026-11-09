@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,12 @@ class FakeRendererCompositorFrameSink
   FakeRendererCompositorFrameSink(
       mojo::PendingRemote<viz::mojom::CompositorFrameSink> sink,
       mojo::PendingReceiver<viz::mojom::CompositorFrameSinkClient> receiver);
+
+  FakeRendererCompositorFrameSink(const FakeRendererCompositorFrameSink&) =
+      delete;
+  FakeRendererCompositorFrameSink& operator=(
+      const FakeRendererCompositorFrameSink&) = delete;
+
   ~FakeRendererCompositorFrameSink() override;
 
   bool did_receive_ack() { return did_receive_ack_; }
@@ -33,8 +39,8 @@ class FakeRendererCompositorFrameSink
   void DidReceiveCompositorFrameAck(
       std::vector<viz::ReturnedResource> resources) override;
   void OnBeginFrame(const viz::BeginFrameArgs& args,
-                    const viz::FrameTimingDetailsMap& timing_details) override {
-  }
+                    const viz::FrameTimingDetailsMap& timing_details,
+                    std::vector<viz::ReturnedResource> resources) override {}
   void OnBeginFramePausedChanged(bool paused) override {}
   void ReclaimResources(std::vector<viz::ReturnedResource> resources) override;
   void OnCompositorFrameTransitionDirectiveProcessed(
@@ -51,8 +57,6 @@ class FakeRendererCompositorFrameSink
   mojo::Remote<viz::mojom::CompositorFrameSink> sink_;
   bool did_receive_ack_ = false;
   std::vector<viz::ReturnedResource> last_reclaimed_resources_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeRendererCompositorFrameSink);
 };
 
 }  // namespace content

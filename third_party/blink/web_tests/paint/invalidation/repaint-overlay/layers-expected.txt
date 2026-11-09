@@ -1,14 +1,14 @@
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 2016],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF",
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV id='container'",
+      "name": "LayoutBlockFlow (positioned) DIV id='container'",
       "bounds": [100, 100],
       "backgroundColor": "#0000FF80",
       "invalidations": [
@@ -17,24 +17,26 @@
       "transform": 2
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV id='scrollable'",
+      "name": "LayoutBlockFlow (relative positioned, relayout-boundary) DIV id='scrollable'",
       "bounds": [302, 302],
       "transform": 3
     },
     {
-      "name": "Horizontal Scrollbar Layer",
-      "position": [1, 301],
-      "bounds": [300, 0],
+      "name": "LayoutBlockFlow (relative positioned, relayout-boundary) DIV id='scrollable'",
+      "position": [1, 1],
+      "bounds": [300, 300],
+      "drawsContent": false,
       "transform": 3
     },
     {
-      "name": "Vertical Scrollbar Layer",
-      "position": [301, 1],
-      "bounds": [0, 300],
-      "transform": 3
+      "name": "LayoutBlockFlow (relative positioned, relayout-boundary) DIV id='scrollable'",
+      "position": [1, 1],
+      "bounds": [795, 1491],
+      "drawsContent": false,
+      "transform": 4
     },
     {
-      "name": "LayoutNGBlockFlow (relative positioned) DIV id='transform'",
+      "name": "LayoutBlockFlow (relative positioned) DIV id='transform'",
       "bounds": [200, 200],
       "contentsOpaque": true,
       "backgroundColor": "#FFFF00",
@@ -42,11 +44,6 @@
         [20, 20, 10, 10]
       ],
       "transform": 6
-    },
-    {
-      "name": "Vertical Scrollbar Layer",
-      "position": [800, 0],
-      "bounds": [0, 600]
     }
   ],
   "transforms": [

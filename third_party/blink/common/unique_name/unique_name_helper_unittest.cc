@@ -1,18 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/unique_name/unique_name_helper.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/auto_reset.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/page_state/page_state_serialization.h"
 
 namespace blink {
@@ -41,14 +43,13 @@ class TestFrameAdapter : public UniqueNameHelper::FrameAdapter {
 
   ~TestFrameAdapter() override {
     if (parent_) {
-      parent_->children_.erase(std::find(parent_->children_.begin(),
-                                         parent_->children_.end(), this));
+      parent_->children_.erase(std::ranges::find(parent_->children_, this));
     }
   }
 
   bool IsMainFrame() const override { return !parent_; }
 
-  bool IsCandidateUnique(base::StringPiece name) const override {
+  bool IsCandidateUnique(std::string_view name) const override {
     auto* top = this;
     while (top->parent_)
       top = top->parent_;
@@ -65,10 +66,10 @@ class TestFrameAdapter : public UniqueNameHelper::FrameAdapter {
 
   std::vector<std::string> CollectAncestorNames(
       BeginPoint begin_point,
-      bool (*should_stop)(base::StringPiece)) const override {
+      bool (*should_stop)(std::string_view)) const override {
     EXPECT_EQ(BeginPoint::kParentFrame, begin_point);
     std::vector<std::string> result;
-    for (auto* adapter = parent_; adapter; adapter = adapter->parent_) {
+    for (auto* adapter = parent_.get(); adapter; adapter = adapter->parent_) {
       result.push_back(adapter->GetNameForCurrentMode());
       if (should_stop(result.back()))
         break;
@@ -140,18 +141,18 @@ class TestFrameAdapter : public UniqueNameHelper::FrameAdapter {
     }
   }
 
-  bool CheckUniqueness(base::StringPiece name) const {
+  bool CheckUniqueness(std::string_view name) const {
     if (name == GetNameForCurrentMode())
       return false;
-    for (auto* child : children_) {
+    for (TestFrameAdapter* child : children_) {
       if (!child->CheckUniqueness(name))
         return false;
     }
     return true;
   }
 
-  TestFrameAdapter* const parent_;
-  std::vector<TestFrameAdapter*> children_;
+  const raw_ptr<TestFrameAdapter> parent_;
+  std::vector<raw_ptr<TestFrameAdapter, VectorExperimental>> children_;
   const int virtual_index_in_parent_;
   UniqueNameHelper unique_name_helper_;
   std::string legacy_name_;

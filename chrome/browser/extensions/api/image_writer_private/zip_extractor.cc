@@ -1,42 +1,45 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/image_writer_private/zip_extractor.h"
 
+#include <algorithm>
+#include <array>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/files/file_util.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/extensions/api/image_writer_private/error_messages.h"
+#include "chrome/browser/extensions/api/image_writer_private/error_constants.h"
 
-namespace extensions {
-namespace image_writer {
+namespace extensions::image_writer {
 
 namespace {
 
 // https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
-constexpr char kExpectedMagic[4] = {'P', 'K', 0x03, 0x04};
+constexpr unsigned char kExpectedMagic[4] = {'P', 'K', 0x03, 0x04};
 
 }  // namespace
 
 // static
 bool ZipExtractor::IsZipFile(const base::FilePath& image_path) {
   base::File infile(image_path, base::File::FLAG_OPEN | base::File::FLAG_READ |
-                                    base::File::FLAG_EXCLUSIVE_WRITE |
-                                    base::File::FLAG_SHARE_DELETE);
-  if (!infile.IsValid())
+                                    base::File::FLAG_WIN_EXCLUSIVE_WRITE |
+                                    base::File::FLAG_WIN_SHARE_DELETE);
+  if (!infile.IsValid()) {
     return false;
+  }
 
   constexpr size_t kExpectedSize = sizeof(kExpectedMagic);
-  char actual_magic[kExpectedSize] = {};
-  if (infile.ReadAtCurrentPos(actual_magic, kExpectedSize) != kExpectedSize)
+  std::array<unsigned char, kExpectedSize> actual_magic = {};
+  if (infile.ReadAtCurrentPos(actual_magic).value_or(0) != kExpectedSize) {
     return false;
+  }
 
-  return std::equal(kExpectedMagic, kExpectedMagic + kExpectedSize,
-                    actual_magic);
+  return std::equal(std::begin(kExpectedMagic), std::end(kExpectedMagic),
+                    actual_magic.begin());
 }
 
 // static
@@ -53,15 +56,16 @@ ZipExtractor::ZipExtractor(ExtractionProperties properties)
 ZipExtractor::~ZipExtractor() = default;
 
 void ZipExtractor::ExtractImpl() {
-  if (!zip_reader_.Open(properties_.image_path) ||
-      !zip_reader_.AdvanceToNextEntry() ||
-      !zip_reader_.OpenCurrentEntryInZip()) {
+  if (!zip_reader_.Open(properties_.image_path)) {
     // |this| will be deleted inside.
     OnError(error::kUnzipGenericError);
     return;
   }
 
-  if (zip_reader_.HasMore()) {
+  // If the ZIP can be opened, it shouldn't be empty.
+  CHECK_GT(zip_reader_.num_entries(), 0, base::NotFatalUntil::M161);
+
+  if (zip_reader_.num_entries() != 1) {
     // |this| will be deleted inside.
     OnError(error::kUnzipInvalidArchive);
     return;
@@ -69,17 +73,25 @@ void ZipExtractor::ExtractImpl() {
 
   // Create a new target to unzip to.  The original file is opened by
   // |zip_reader_|.
-  zip::ZipReader::EntryInfo* entry_info = zip_reader_.current_entry_info();
+  const zip::ZipReader::Entry* const entry = zip_reader_.Next();
 
-  if (!entry_info) {
+  if (!entry) {
     // |this| will be deleted inside.
     OnError(error::kTempDirError);
     return;
   }
 
   base::FilePath out_image_path =
-      properties_.temp_dir_path.Append(entry_info->file_path().BaseName());
+      properties_.temp_dir_path.Append(entry->path.BaseName());
   std::move(properties_.open_callback).Run(out_image_path);
+
+  // Avoid division by zero in the progress callback handler by not reporting
+  // progress for 0-byte files.
+  auto progress_callback =
+      entry->original_size > 0
+          ? base::BindRepeating(properties_.progress_callback,
+                                entry->original_size)
+          : base::DoNothing();
 
   // |this| will be deleted when OnComplete or OnError is called.
   zip_reader_.ExtractCurrentEntryToFilePathAsync(
@@ -87,8 +99,7 @@ void ZipExtractor::ExtractImpl() {
       base::BindOnce(&ZipExtractor::OnComplete, weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&ZipExtractor::OnError, weak_ptr_factory_.GetWeakPtr(),
                      error::kUnzipGenericError),
-      base::BindRepeating(properties_.progress_callback,
-                          entry_info->original_size()));
+      std::move(progress_callback));
 }
 
 void ZipExtractor::OnError(const std::string& error) {
@@ -101,5 +112,4 @@ void ZipExtractor::OnComplete() {
   delete this;
 }
 
-}  // namespace image_writer
-}  // namespace extensions
+}  // namespace extensions::image_writer

@@ -1,12 +1,16 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_TABS_APP_BASE_WINDOW_H_
 #define CHROME_BROWSER_EXTENSIONS_API_TABS_APP_BASE_WINDOW_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/base_window.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
+
+static_assert(BUILDFLAG(ENABLE_PLATFORM_APPS));
 
 namespace extensions {
 
@@ -19,6 +23,10 @@ class NativeAppWindow;
 class AppBaseWindow : public ui::BaseWindow {
  public:
   explicit AppBaseWindow(AppWindow* app_window);
+
+  AppBaseWindow(const AppBaseWindow&) = delete;
+  AppBaseWindow& operator=(const AppBaseWindow&) = delete;
+
   virtual ~AppBaseWindow();
 
  private:
@@ -29,7 +37,7 @@ class AppBaseWindow : public ui::BaseWindow {
   bool IsFullscreen() const override;
   gfx::NativeWindow GetNativeWindow() const override;
   gfx::Rect GetRestoredBounds() const override;
-  ui::WindowShowState GetRestoredState() const override;
+  ui::mojom::WindowShowState GetRestoredState() const override;
   gfx::Rect GetBounds() const override;
   void Show() override;
   void Hide() override;
@@ -48,9 +56,7 @@ class AppBaseWindow : public ui::BaseWindow {
 
   NativeAppWindow* GetBaseWindow() const;
 
-  AppWindow* app_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(AppBaseWindow);
+  raw_ptr<AppWindow> app_window_;
 };
 
 }  // namespace extensions

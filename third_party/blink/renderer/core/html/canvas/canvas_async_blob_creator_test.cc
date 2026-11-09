@@ -1,23 +1,22 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/canvas/canvas_async_blob_creator.h"
 
+#include <utility>
+
+#include "base/run_loop.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/html/canvas/image_data.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
-#include "third_party/blink/renderer/platform/graphics/color_correction_test_utils.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkSurface.h"
 
 namespace blink {
@@ -37,23 +36,26 @@ class MockCanvasAsyncBlobCreator : public CanvasAsyncBlobCreator {
             nullptr,
             base::TimeTicks(),
             document->GetExecutionContext(),
-            0,
             nullptr) {
     if (fail_encoder_initialization)
       fail_encoder_initialization_for_test_ = true;
     enforce_idle_encoding_for_test_ = true;
   }
-
+  void Run() { loop_.Run(); }
   CanvasAsyncBlobCreator::IdleTaskStatus GetIdleTaskStatus() {
     return idle_task_status_;
   }
 
   MOCK_METHOD0(SignalTaskSwitchInStartTimeoutEventForTesting, void());
   MOCK_METHOD0(SignalTaskSwitchInCompleteTimeoutEventForTesting, void());
+  MOCK_METHOD(void, CreateNullAndReturnResult, (), (override));
+
+ private:
+  base::RunLoop loop_;
 
  protected:
-  void CreateBlobAndReturnResult() override {}
-  void CreateNullAndReturnResult() override {}
+  void CreateBlobAndReturnResult(Vector<unsigned char> encoded_image) override {
+  }
   void SignalAlternativeCodePathFinishedForTesting() override;
   void PostDelayedTaskToCurrentThread(const base::Location&,
                                       base::OnceClosure,
@@ -61,15 +63,17 @@ class MockCanvasAsyncBlobCreator : public CanvasAsyncBlobCreator {
 };
 
 void MockCanvasAsyncBlobCreator::SignalAlternativeCodePathFinishedForTesting() {
-  test::ExitRunLoop();
+  loop_.Quit();
 }
 
 void MockCanvasAsyncBlobCreator::PostDelayedTaskToCurrentThread(
     const base::Location& location,
     base::OnceClosure task,
     double delay_ms) {
-  DCHECK(IsMainThread());
-  Thread::Current()->GetTaskRunner()->PostTask(location, std::move(task));
+  // override delay to 0.
+  CanvasAsyncBlobCreator::PostDelayedTaskToCurrentThread(location,
+                                                         std::move(task),
+                                                         /*delay_ms=*/0);
 }
 
 //==============================================================================
@@ -104,10 +108,12 @@ class MockCanvasAsyncBlobCreatorWithoutComplete
 
  protected:
   void ScheduleInitiateEncoding(double quality) override {
-    Thread::Current()->GetTaskRunner()->PostTask(
+    PostDelayedTaskToCurrentThread(
         FROM_HERE,
-        WTF::Bind(&MockCanvasAsyncBlobCreatorWithoutComplete::InitiateEncoding,
-                  WrapPersistent(this), quality, base::TimeTicks::Max()));
+        blink::BindOnce(
+            &MockCanvasAsyncBlobCreatorWithoutComplete::InitiateEncoding,
+            WrapPersistent(this), quality, base::TimeTicks::Max()),
+        /*delay_ms=*/0);
   }
 
   void IdleEncodeRows(base::TimeTicks deadline) override {
@@ -126,8 +132,13 @@ class CanvasAsyncBlobCreatorTest : public PageTestBase {
 
  protected:
   CanvasAsyncBlobCreatorTest();
+  void TestStartTimeoutFailure();
+  void TestIdleTaskAfterFailure();
   MockCanvasAsyncBlobCreator* AsyncBlobCreator() {
     return async_blob_creator_.Get();
+  }
+  sk_sp<SkImage> GetSkiaImage(CanvasAsyncBlobCreator* creator) {
+    return creator->skia_image_;
   }
   ukm::UkmRecorder* UkmRecorder() { return &ukm_recorder_; }
   void TearDown() override;
@@ -140,7 +151,8 @@ class CanvasAsyncBlobCreatorTest : public PageTestBase {
 CanvasAsyncBlobCreatorTest::CanvasAsyncBlobCreatorTest() = default;
 
 scoped_refptr<StaticBitmapImage> CreateTransparentImage(int width, int height) {
-  sk_sp<SkSurface> surface = SkSurface::MakeRasterN32Premul(width, height);
+  sk_sp<SkSurface> surface =
+      SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
   if (!surface)
     return nullptr;
   return UnacceleratedStaticBitmapImage::Create(surface->makeImageSnapshot());
@@ -169,8 +181,45 @@ void CanvasAsyncBlobCreatorTest::PrepareMockCanvasAsyncBlobCreatorFail() {
           CreateTransparentImage(20, 20), &GetDocument(), true);
 }
 
+void CanvasAsyncBlobCreatorTest::TestStartTimeoutFailure() {
+  PrepareMockCanvasAsyncBlobCreatorWithoutStart();
+  AsyncBlobCreator()->fail_encoder_initialization_for_test_ = true;
+  EXPECT_CALL(*AsyncBlobCreator(),
+              SignalTaskSwitchInStartTimeoutEventForTesting());
+  EXPECT_CALL(*AsyncBlobCreator(), CreateNullAndReturnResult())
+      .WillOnce([this] { AsyncBlobCreator()->Dispose(); });
+  AsyncBlobCreator()->ScheduleAsyncBlobCreation(1.0);
+  AsyncBlobCreator()->Run();
+
+  testing::Mock::VerifyAndClearExpectations(AsyncBlobCreator());
+  ASSERT_EQ(IdleTaskStatus::kIdleTaskFailed,
+            AsyncBlobCreator()->GetIdleTaskStatus());
+
+  // The original idle task may run after the fallback has released its state.
+  EXPECT_CALL(*AsyncBlobCreator(), CreateNullAndReturnResult()).Times(0);
+  AsyncBlobCreator()->InitiateEncoding(1.0, base::TimeTicks::Max());
+  EXPECT_EQ(IdleTaskStatus::kIdleTaskFailed,
+            AsyncBlobCreator()->GetIdleTaskStatus());
+  testing::Mock::VerifyAndClearExpectations(AsyncBlobCreator());
+}
+
+void CanvasAsyncBlobCreatorTest::TestIdleTaskAfterFailure() {
+  PrepareMockCanvasAsyncBlobCreatorWithoutComplete();
+  // A queued idle task may run after forced encoding has failed.
+  AsyncBlobCreator()->idle_task_status_ = IdleTaskStatus::kIdleTaskFailed;
+  AsyncBlobCreator()->Dispose();
+
+  EXPECT_CALL(*AsyncBlobCreator(), CreateNullAndReturnResult()).Times(0);
+  AsyncBlobCreator()->CanvasAsyncBlobCreator::IdleEncodeRows(
+      base::TimeTicks::Max());
+  EXPECT_EQ(IdleTaskStatus::kIdleTaskFailed,
+            AsyncBlobCreator()->GetIdleTaskStatus());
+  testing::Mock::VerifyAndClearExpectations(AsyncBlobCreator());
+}
+
 void CanvasAsyncBlobCreatorTest::TearDown() {
   async_blob_creator_ = nullptr;
+  PageTestBase::TearDown();
 }
 
 //==============================================================================
@@ -186,7 +235,7 @@ TEST_F(CanvasAsyncBlobCreatorTest,
               SignalTaskSwitchInStartTimeoutEventForTesting());
 
   AsyncBlobCreator()->ScheduleAsyncBlobCreation(1.0);
-  test::EnterRunLoop();
+  AsyncBlobCreator()->Run();
 
   testing::Mock::VerifyAndClearExpectations(AsyncBlobCreator());
   EXPECT_EQ(IdleTaskStatus::kIdleTaskSwitchedToImmediateTask,
@@ -202,9 +251,8 @@ TEST_F(CanvasAsyncBlobCreatorTest,
   PrepareMockCanvasAsyncBlobCreatorWithoutComplete();
   EXPECT_CALL(*(AsyncBlobCreator()),
               SignalTaskSwitchInCompleteTimeoutEventForTesting());
-
   AsyncBlobCreator()->ScheduleAsyncBlobCreation(1.0);
-  test::EnterRunLoop();
+  AsyncBlobCreator()->Run();
 
   testing::Mock::VerifyAndClearExpectations(AsyncBlobCreator());
   EXPECT_EQ(IdleTaskStatus::kIdleTaskSwitchedToImmediateTask,
@@ -212,123 +260,34 @@ TEST_F(CanvasAsyncBlobCreatorTest,
 }
 
 TEST_F(CanvasAsyncBlobCreatorTest, IdleTaskFailedWhenStartTimeoutEventHappens) {
-  // This test mocks the scenario when idle task is not failed during when
-  // either the StartTimeoutEvent or the CompleteTimeoutEvent is inspecting
-  // the idle task status.
+  // Initialization fails before the start timeout checks the idle task status.
   PrepareMockCanvasAsyncBlobCreatorFail();
-
+  EXPECT_CALL(*AsyncBlobCreator(), CreateNullAndReturnResult());
   AsyncBlobCreator()->ScheduleAsyncBlobCreation(1.0);
-  test::EnterRunLoop();
+  AsyncBlobCreator()->Run();
 
+  testing::Mock::VerifyAndClearExpectations(AsyncBlobCreator());
   EXPECT_EQ(IdleTaskStatus::kIdleTaskFailed,
             AsyncBlobCreator()->GetIdleTaskStatus());
 }
 
-static sk_sp<SkImage> DrawAndReturnImage(
-    const std::pair<sk_sp<SkColorSpace>, SkColorType>& color_space_param) {
-  SkPaint transparentRed, transparentGreen, transparentBlue, transparentBlack;
-  transparentRed.setARGB(128, 155, 27, 27);
-  transparentGreen.setARGB(128, 27, 155, 27);
-  transparentBlue.setARGB(128, 27, 27, 155);
-  transparentBlack.setARGB(128, 27, 27, 27);
-
-  SkImageInfo info = SkImageInfo::Make(2, 2, color_space_param.second,
-                                       SkAlphaType::kPremul_SkAlphaType,
-                                       color_space_param.first);
-  sk_sp<SkSurface> surface = SkSurface::MakeRaster(info);
-  surface->getCanvas()->drawRect(SkRect::MakeXYWH(0, 0, 1, 1), transparentRed);
-  surface->getCanvas()->drawRect(SkRect::MakeXYWH(1, 0, 1, 1),
-                                 transparentGreen);
-  surface->getCanvas()->drawRect(SkRect::MakeXYWH(0, 1, 1, 1), transparentBlue);
-  surface->getCanvas()->drawRect(SkRect::MakeXYWH(1, 1, 1, 1),
-                                 transparentBlack);
-  return surface->makeImageSnapshot();
+TEST_F(CanvasAsyncBlobCreatorTest,
+       EncoderInitializationFailsAfterStartTimeout) {
+  TestStartTimeoutFailure();
 }
 
-TEST_F(CanvasAsyncBlobCreatorTest, ColorManagedConvertToBlob) {
-  std::list<std::pair<sk_sp<SkColorSpace>, SkColorType>> color_space_params;
-  color_space_params.push_back(std::pair<sk_sp<SkColorSpace>, SkColorType>(
-      SkColorSpace::MakeSRGB(), kN32_SkColorType));
-  color_space_params.push_back(std::pair<sk_sp<SkColorSpace>, SkColorType>(
-      SkColorSpace::MakeSRGBLinear(), kRGBA_F16_SkColorType));
-  color_space_params.push_back(std::pair<sk_sp<SkColorSpace>, SkColorType>(
-      SkColorSpace::MakeRGB(SkNamedTransferFn::kLinear,
-                            SkNamedGamut::kDisplayP3),
-      kRGBA_F16_SkColorType));
-  color_space_params.push_back(std::pair<sk_sp<SkColorSpace>, SkColorType>(
-      SkColorSpace::MakeRGB(SkNamedTransferFn::kLinear, SkNamedGamut::kRec2020),
-      kRGBA_F16_SkColorType));
-  color_space_params.push_back(std::pair<sk_sp<SkColorSpace>, SkColorType>(
-      nullptr, kRGBA_F16_SkColorType));
-  color_space_params.push_back(
-      std::pair<sk_sp<SkColorSpace>, SkColorType>(nullptr, kN32_SkColorType));
-
-  std::list<String> blob_mime_types = {"image/png", "image/webp", "image/jpeg"};
-  std::list<String> blob_color_spaces = {kSRGBImageColorSpaceName,
-                                         kDisplayP3ImageColorSpaceName,
-                                         kRec2020ImageColorSpaceName};
-  std::list<String> blob_pixel_formats = {
-      kRGBA8ImagePixelFormatName,
-      kRGBA16ImagePixelFormatName,
-  };
-
-  // Maximum differences are both observed locally with
-  // kRGBA16ImagePixelFormatName, kSRGBImageColorSpaceName and nil input color
-  // space
-  const unsigned uint8_color_tolerance = 3;
-  const float f16_color_tolerance = 0.015;
-
-  for (auto color_space_param : color_space_params) {
-    for (auto blob_mime_type : blob_mime_types) {
-      for (auto blob_color_space : blob_color_spaces) {
-        for (auto blob_pixel_format : blob_pixel_formats) {
-          // Create the StaticBitmapImage in canvas_color_space
-          sk_sp<SkImage> source_image = DrawAndReturnImage(color_space_param);
-          scoped_refptr<StaticBitmapImage> source_bitmap_image =
-              UnacceleratedStaticBitmapImage::Create(source_image);
-
-          // Prepare encoding options
-          ImageEncodeOptions* options = ImageEncodeOptions::Create();
-          options->setQuality(1);
-          options->setType(blob_mime_type);
-          options->setColorSpace(blob_color_space);
-          options->setPixelFormat(blob_pixel_format);
-
-          // Encode the image using CanvasAsyncBlobCreator
-          auto* async_blob_creator =
-              MakeGarbageCollected<CanvasAsyncBlobCreator>(
-                  source_bitmap_image, options,
-                  CanvasAsyncBlobCreator::ToBlobFunctionType::
-                      kHTMLCanvasConvertToBlobPromise,
-                  base::TimeTicks(), GetFrame().DomWindow(), 0, nullptr);
-          ASSERT_TRUE(async_blob_creator->EncodeImageForConvertToBlobTest());
-
-          sk_sp<SkData> sk_data = SkData::MakeWithCopy(
-              async_blob_creator->GetEncodedImageForConvertToBlobTest().data(),
-              async_blob_creator->GetEncodedImageForConvertToBlobTest().size());
-          sk_sp<SkImage> decoded_img = SkImage::MakeFromEncoded(sk_data);
-
-          sk_sp<SkColorSpace> expected_color_space =
-              CanvasAsyncBlobCreator::BlobColorSpaceToSkColorSpace(
-                  blob_color_space);
-          SkColorType expected_color_type =
-              (blob_pixel_format == kRGBA8ImagePixelFormatName)
-                  ? kN32_SkColorType
-                  : kRGBA_F16_SkColorType;
-          scoped_refptr<StaticBitmapImage> ref_bitmap =
-              source_bitmap_image->ConvertToColorSpace(expected_color_space,
-                                                       expected_color_type);
-          sk_sp<SkImage> ref_image =
-              ref_bitmap->PaintImageForCurrentFrame().GetSwSkImage();
-
-          // Jpeg does not support transparent images.
-          bool compare_alpha = (blob_mime_type != "image/jpeg");
-          ASSERT_TRUE(ColorCorrectionTestUtils::MatchSkImages(
-              ref_image, decoded_img, uint8_color_tolerance,
-              f16_color_tolerance, compare_alpha));
-        }
-      }
-    }
-  }
+TEST_F(CanvasAsyncBlobCreatorTest, IdleTaskDoesNotResumeAfterFailure) {
+  TestIdleTaskAfterFailure();
 }
+
+TEST_F(CanvasAsyncBlobCreatorTest, NoConversionForSrgbPremul) {
+  scoped_refptr<StaticBitmapImage> image = CreateTransparentImage(20, 20);
+  sk_sp<SkImage> original_sk_image =
+      image->PaintImageForCurrentFrame().GetSwSkImage();
+  auto* async_blob_creator = MakeGarbageCollected<MockCanvasAsyncBlobCreator>(
+      image, kMimeTypePng, &GetDocument());
+  // The SkImage should not have been reallocated or converted.
+  EXPECT_EQ(GetSkiaImage(async_blob_creator), original_sk_image);
+}
+
 }  // namespace blink

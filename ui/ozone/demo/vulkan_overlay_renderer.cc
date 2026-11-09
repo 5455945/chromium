@@ -1,6 +1,7 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "ui/ozone/demo/vulkan_overlay_renderer.h"
 
@@ -8,10 +9,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/vulkan/init/vulkan_factory.h"
 #include "gpu/vulkan/vulkan_command_buffer.h"
@@ -90,7 +91,7 @@ bool VulkanOverlayRenderer::Initialize() {
       /* .pipelineBindPoint = */ VK_PIPELINE_BIND_POINT_GRAPHICS,
       /* .inputAttachmentCount = */ 0,
       /* .pInputAttachments = */ nullptr,
-      /* .colorAttachmentCount = */ base::size(color_attachment_references),
+      /* .colorAttachmentCount = */ std::size(color_attachment_references),
       /* .pColorAttachments = */ color_attachment_references,
       /* .pResolveAttachments = */ nullptr,
       /* .pDepthStencilAttachment = */ nullptr,
@@ -102,9 +103,9 @@ bool VulkanOverlayRenderer::Initialize() {
       /* .sType = */ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
       /* .pNext = */ nullptr,
       /* .flags = */ 0,
-      /* .attachmentCount = */ base::size(render_pass_attachments),
+      /* .attachmentCount = */ std::size(render_pass_attachments),
       /* .pAttachments = */ render_pass_attachments,
-      /* .subpassCount = */ base::size(render_pass_subpasses),
+      /* .subpassCount = */ std::size(render_pass_subpasses),
       /* .pSubpasses = */ render_pass_subpasses,
       /* .dependencyCount = */ 0,
       /* .pDependencies = */ nullptr,
@@ -173,9 +174,9 @@ void VulkanOverlayRenderer::RenderFrame() {
 
   const Buffer& buffer = *buffers_[next_buffer_];
   next_buffer_++;
-  next_buffer_ %= base::size(buffers_);
+  next_buffer_ %= std::size(buffers_);
   ++in_use_buffers_;
-  DCHECK_LE(in_use_buffers_, base::size(buffers_));
+  CHECK_LE(in_use_buffers_, std::size(buffers_), base::NotFatalUntil::M163);
 
   gpu::VulkanCommandBuffer& command_buffer = *buffer.command_buffer();
 
@@ -218,7 +219,7 @@ std::unique_ptr<gfx::GpuFence> VulkanOverlayRenderer::SubmitFence(
     VkFence fence) {
   VkResult result;
   VkFence fences[] = {fence};
-  result = vkResetFences(device_queue_->GetVulkanDevice(), base::size(fences),
+  result = vkResetFences(device_queue_->GetVulkanDevice(), std::size(fences),
                          fences);
   CHECK_EQ(result, VK_SUCCESS);
 
@@ -240,7 +241,8 @@ void VulkanOverlayRenderer::SubmitFrame(
 
   ui::OverlayPlane primary_plane;
   primary_plane.pixmap = buffer->native_pixmap();
-  primary_plane.display_bounds = gfx::Rect(buffer->size());
+  primary_plane.overlay_plane_data.display_bounds =
+      gfx::RectF(buffer->size().width(), buffer->size().height());
   primary_plane.gpu_fence = std::move(gpu_fence);
 
   std::vector<ui::OverlayPlane> overlay_planes;
@@ -259,7 +261,7 @@ void VulkanOverlayRenderer::SubmitFrame(
 }
 
 void VulkanOverlayRenderer::PostRenderFrameTask() {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&VulkanOverlayRenderer::RenderFrame,
                                 weak_ptr_factory_.GetWeakPtr()));
 }
@@ -323,15 +325,13 @@ VulkanOverlayRenderer::Buffer::Create(
     VkRenderPass vk_render_pass,
     gfx::AcceleratedWidget widget,
     const gfx::Size& size) {
-  gfx::BufferFormat format = gfx::BufferFormat::BGRA_8888;
-
   VkDevice vk_device = vulkan_device_queue->GetVulkanDevice();
   VkImage vk_image = VK_NULL_HANDLE;
   VkDeviceMemory vk_device_memory = VK_NULL_HANDLE;
   scoped_refptr<gfx::NativePixmap> native_pixmap =
       surface_factory_ozone->CreateNativePixmapForVulkan(
-          widget, size, format, gfx::BufferUsage::SCANOUT, vk_device,
-          &vk_device_memory, &vk_image);
+          widget, size, gfx::BufferUsage::SCANOUT, vk_device, &vk_device_memory,
+          &vk_image);
   if (!native_pixmap) {
     LOG(FATAL)
         << "Failed to create a presentable buffer for rendering with vulkan";

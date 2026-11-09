@@ -1,10 +1,8 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.firstrun;
-
-import android.os.Bundle;
 
 import org.chromium.base.test.util.CallbackHelper;
 
@@ -22,7 +20,6 @@ public class FirstRunActivityTestObserver implements FirstRunActivity.FirstRunAc
         public final CallbackHelper updateCachedEngineCallback = new CallbackHelper();
         public final CallbackHelper abortFirstRunExperienceCallback = new CallbackHelper();
         public final CallbackHelper exitFirstRunCallback = new CallbackHelper();
-        public Bundle freProperties;
     }
 
     private final Map<FirstRunActivity, ScopedObserverData> mScopeObserverDataMap = new HashMap<>();
@@ -35,11 +32,10 @@ public class FirstRunActivityTestObserver implements FirstRunActivity.FirstRunAc
     }
 
     @Override
-    public void onCreatePostNativeAndPoliciesPageSequence(
-            FirstRunActivity caller, Bundle freProperties) {
-        ScopedObserverData scopedObserverData = getScopedObserverData(caller);
-        scopedObserverData.freProperties = freProperties;
-        scopedObserverData.createPostNativeAndPoliciesPageSequenceCallback.notifyCalled();
+    public void onCreatePostNativeAndPoliciesPageSequence(FirstRunActivity caller) {
+        getScopedObserverData(caller)
+                .createPostNativeAndPoliciesPageSequenceCallback
+                .notifyCalled();
     }
 
     @Override

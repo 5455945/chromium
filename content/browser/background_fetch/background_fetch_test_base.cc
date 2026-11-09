@@ -1,31 +1,34 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/background_fetch/background_fetch_test_base.h"
 
 #include <stdint.h>
+
 #include <map>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
-#include "base/files/file_util.h"
+#include "base/check_deref.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "content/browser/background_fetch/background_fetch_registration_id.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
+#include "content/browser/service_worker/service_worker_context_wrapper_test_api.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/browser/storage_partition_impl.h"
-#include "content/common/service_worker/service_worker_utils.h"
 #include "content/public/browser/browser_thread.h"
+#include "services/network/public/mojom/fetch_api.mojom.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/blink/public/mojom/frame/policy_container.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "url/gurl.h"
 
@@ -81,8 +84,10 @@ BackgroundFetchTestBase::BackgroundFetchTestBase()
     : task_environment_(BrowserTaskEnvironment::IO_MAINLOOP),
       delegate_(browser_context_.GetBackgroundFetchDelegate()),
       embedded_worker_test_helper_(base::FilePath()),
-      storage_key_(blink::StorageKey(url::Origin::Create(GURL(kTestOrigin)))),
-      storage_partition_(browser_context()->GetDefaultStoragePartition()) {}
+      storage_key_(blink::StorageKey::CreateFirstParty(
+          url::Origin::Create(GURL(kTestOrigin)))),
+      storage_partition_factory_(static_cast<StoragePartitionImpl*>(
+          browser_context()->GetDefaultStoragePartition())) {}
 
 BackgroundFetchTestBase::~BackgroundFetchTestBase() {
   DCHECK(set_up_called_);
@@ -91,9 +96,15 @@ BackgroundFetchTestBase::~BackgroundFetchTestBase() {
 
 void BackgroundFetchTestBase::SetUp() {
   set_up_called_ = true;
+  ServiceWorkerContextWrapperTestApi(
+      embedded_worker_test_helper_.context_wrapper())
+      .set_storage_partition(storage_partition_factory_.GetWeakPtr().get());
 }
 
 void BackgroundFetchTestBase::TearDown() {
+  ServiceWorkerContextWrapperTestApi(
+      embedded_worker_test_helper_.context_wrapper())
+      .set_storage_partition(nullptr);
   service_worker_registrations_.clear();
   tear_down_called_ = true;
 }
@@ -108,18 +119,22 @@ int64_t BackgroundFetchTestBase::RegisterServiceWorkerForOrigin(
   int64_t service_worker_registration_id =
       blink::mojom::kInvalidServiceWorkerRegistrationId;
 
-  const blink::StorageKey key(origin);
+  const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin);
 
   {
+    auto fetch_client_settings_object =
+        blink::mojom::FetchClientSettingsObject::New();
+    fetch_client_settings_object->policy_container_policies =
+        blink::mojom::PolicyContainerPolicies::New();
     blink::mojom::ServiceWorkerRegistrationOptions options;
     options.scope = GetScopeForId(origin.GetURL().spec(), next_pattern_id_++);
     base::RunLoop run_loop;
     embedded_worker_test_helper_.context()->RegisterServiceWorker(
-        script_url, key, options,
-        blink::mojom::FetchClientSettingsObject::New(),
+        script_url, key, options, std::move(fetch_client_settings_object),
         base::BindOnce(&DidRegisterServiceWorker,
                        &service_worker_registration_id, run_loop.QuitClosure()),
-        /*requesting_frame_id=*/GlobalRenderFrameHostId());
+        /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+        PolicyContainerPolicies());
 
     run_loop.Run();
   }
@@ -134,7 +149,7 @@ int64_t BackgroundFetchTestBase::RegisterServiceWorkerForOrigin(
 
   {
     base::RunLoop run_loop;
-    embedded_worker_test_helper_.context()->registry()->FindRegistrationForId(
+    embedded_worker_test_helper_.context()->registry().FindRegistrationForId(
         service_worker_registration_id, key,
         base::BindOnce(&DidFindServiceWorkerRegistration,
                        &service_worker_registration, run_loop.QuitClosure()));
@@ -160,11 +175,9 @@ void BackgroundFetchTestBase::UnregisterServiceWorker(
     int64_t service_worker_registration_id) {
   base::RunLoop run_loop;
   const GURL scope = GetScopeForId(kTestOrigin, service_worker_registration_id);
-  // TODO(crbug.com/1199077): Update this when background fetch implements
-  // StorageKey.
   embedded_worker_test_helper_.context()->UnregisterServiceWorker(
-      scope, blink::StorageKey(url::Origin::Create(scope)),
-      /*is_immediate=*/false,
+      scope, blink::StorageKey::CreateFirstParty(url::Origin::Create(scope)),
+      /*is_immediate=*/false, ServiceWorkerRegistration::DeleteInitiator::kTest,
       base::BindOnce(&DidUnregisterServiceWorker, run_loop.QuitClosure()));
   run_loop.Run();
 }
@@ -182,6 +195,7 @@ BackgroundFetchTestBase::CreateRequestWithProvidedResponse(
   auto request = blink::mojom::FetchAPIRequest::New();
   request->url = url;
   request->method = method;
+  request->mode = network::mojom::RequestMode::kCors;
   request->is_reload = false;
   request->referrer = blink::mojom::Referrer::New();
   request->headers = {};
@@ -198,11 +212,10 @@ BackgroundFetchTestBase::CreateBackgroundFetchRegistrationData(
       /* download_total= */ 0, /* downloaded= */ 0, result, failure_reason);
 }
 
-scoped_refptr<DevToolsBackgroundServicesContextImpl>
-BackgroundFetchTestBase::devtools_context() const {
-  DCHECK(storage_partition_);
-  return static_cast<StoragePartitionImpl*>(storage_partition_)
-      ->GetDevToolsBackgroundServicesContext();
+DevToolsBackgroundServicesContextImpl&
+BackgroundFetchTestBase::devtools_context() {
+  return CHECK_DEREF(static_cast<DevToolsBackgroundServicesContextImpl*>(
+      storage_partition()->GetDevToolsBackgroundServicesContext()));
 }
 
 }  // namespace content

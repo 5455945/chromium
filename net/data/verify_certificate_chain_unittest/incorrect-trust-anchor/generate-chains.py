@@ -1,15 +1,16 @@
 #!/usr/bin/env python
-# Copyright (c) 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Certificate chain where the supposed root certificate is wrong:
 
-  * The intermediate's "issuer" does not match the root's "subject"
-  * The intermediate's signature was not generated using the root's key
+* The intermediate's "issuer" does not match the root's "subject"
+* The intermediate's signature was not generated using the root's key
 """
 
 import sys
+
 sys.path += ['../..']
 
 import gencerts

@@ -35,9 +35,9 @@ HTMLTableCaptionElement::HTMLTableCaptionElement(Document& document)
 void HTMLTableCaptionElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kAlignAttr) {
-    if (!value.IsEmpty()) {
+    if (!value.empty()) {
       AddPropertyToPresentationAttributeStyle(
           style, CSSPropertyID::kCaptionSide, value);
     }

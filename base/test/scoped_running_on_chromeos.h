@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,4 +22,4 @@ class ScopedRunningOnChromeOS {
 }  // namespace test
 }  // namespace base
 
-#endif  //  BASE_TEST_SCOPED_RUNNING_ON_CHROMEOS_H_
+#endif  // BASE_TEST_SCOPED_RUNNING_ON_CHROMEOS_H_

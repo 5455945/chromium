@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,19 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chromecast/public/cast_sys_info.h"
 #include "components/metrics/enabled_state_provider.h"
 #include "components/metrics/metrics_log_store.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_service_client.h"
+#include "components/metrics/persistent_synthetic_trial_observer.h"
+#include "components/variations/synthetic_trial_registry.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -84,10 +88,12 @@ class CastMetricsServiceClient : public ::metrics::MetricsServiceClient,
   void Finalize();
 
   // ::metrics::MetricsServiceClient:
+  variations::SyntheticTrialRegistry* GetSyntheticTrialRegistry() override;
   ::metrics::MetricsService* GetMetricsService() override;
   void SetMetricsClientId(const std::string& client_id) override;
   int32_t GetProduct() override;
   std::string GetApplicationLocale() override;
+  const network_time::NetworkTimeTracker* GetNetworkTimeTracker() override;
   bool GetBrand(std::string* brand_code) override;
   ::metrics::SystemProfileProto::Channel GetChannel() override;
   bool IsExtendedStableChannel() override;
@@ -97,7 +103,7 @@ class CastMetricsServiceClient : public ::metrics::MetricsServiceClient,
   std::unique_ptr<::metrics::MetricsLogUploader> CreateUploader(
       const GURL& server_url,
       const GURL& insecure_server_url,
-      base::StringPiece mime_type,
+      std::string_view mime_type,
       ::metrics::MetricsLogUploader::MetricServiceType service_type,
       const ::metrics::MetricsLogUploader::UploadCallback& on_upload_complete)
       override;
@@ -106,9 +112,11 @@ class CastMetricsServiceClient : public ::metrics::MetricsServiceClient,
 
   // ::metrics::EnabledStateProvider:
   bool IsConsentGiven() const override;
+  bool IsReportingEnabled() const override;
 
   // Starts/stops the metrics service.
-  void EnableMetricsService(bool enabled);
+  void UpdateMetricsServiceState();
+  void DisableMetricsService();
 
   std::string client_id() const { return client_id_; }
 
@@ -121,14 +129,19 @@ class CastMetricsServiceClient : public ::metrics::MetricsServiceClient,
   std::unique_ptr<::metrics::ClientInfo> LoadClientInfo();
   void StoreClientInfo(const ::metrics::ClientInfo& client_info);
 
-  CastMetricsServiceDelegate* const delegate_;
-  PrefService* const pref_service_;
+  const raw_ptr<CastMetricsServiceDelegate> delegate_;
+  const raw_ptr<PrefService> pref_service_;
   std::string client_id_;
   std::string force_client_id_;
   bool client_info_loaded_;
 
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   std::unique_ptr<::metrics::MetricsStateManager> metrics_state_manager_;
+  std::unique_ptr<variations::SyntheticTrialRegistry> synthetic_trial_registry_;
+  ::metrics::PersistentSyntheticTrialObserver synthetic_trial_observer_;
+  base::ScopedObservation<variations::SyntheticTrialRegistry,
+                          variations::SyntheticTrialObserver>
+      synthetic_trial_observation_{&synthetic_trial_observer_};
   std::unique_ptr<::metrics::MetricsService> metrics_service_;
   std::unique_ptr<::metrics::EnabledStateProvider> enabled_state_provider_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;

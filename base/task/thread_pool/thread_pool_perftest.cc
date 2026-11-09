@@ -1,27 +1,30 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/task/thread_pool.h"
+
 #include <stddef.h>
+
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task/thread_pool.h"
+#include "base/task/execution_fence.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/simple_thread.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 
@@ -83,7 +86,7 @@ class PostingThread : public SimpleThread {
   }
 
  private:
-  WaitableEvent* const start_event_;
+  const raw_ptr<WaitableEvent> start_event_;
   base::OnceClosure action_;
   base::OnceClosure completion_;
 };
@@ -147,7 +150,7 @@ class ThreadPoolPerfTest : public testing::Test {
   void StartThreadPool(size_t num_running_threads,
                        size_t num_posting_threads,
                        base::RepeatingClosure post_action) {
-    ThreadPoolInstance::Get()->Start({static_cast<int>(num_running_threads)});
+    ThreadPoolInstance::Get()->Start({num_running_threads});
 
     base::RepeatingClosure done = BarrierClosure(
         num_posting_threads,
@@ -163,7 +166,7 @@ class ThreadPoolPerfTest : public testing::Test {
   void OnCompletePostingTasks() { complete_posting_tasks_.Signal(); }
 
   void Benchmark(const std::string& story_name, ExecutionMode execution_mode) {
-    absl::optional<ThreadPoolInstance::ScopedExecutionFence> execution_fence;
+    std::optional<ScopedThreadPoolExecutionFence> execution_fence;
     if (execution_mode == ExecutionMode::kPostThenRun) {
       execution_fence.emplace();
     }
@@ -182,8 +185,9 @@ class ThreadPoolPerfTest : public testing::Test {
     tasks_run_duration_ = TimeTicks::Now() - tasks_run_start;
     ASSERT_EQ(0U, num_tasks_pending_);
 
-    for (auto& thread : threads_)
+    for (auto& thread : threads_) {
       thread->Join();
+    }
     ThreadPoolInstance::Get()->JoinForTesting();
 
     auto reporter = SetUpReporter(story_name);
@@ -261,10 +265,8 @@ TEST_F(ThreadPoolPerfTest, PostRunBusyTasksManyThreads) {
   StartThreadPool(
       4, 4,
       BindRepeating(&ThreadPoolPerfTest::ContinuouslyPostBusyWaitTasks,
-                    Unretained(this), 10000,
-                    base::TimeDelta::FromMicroseconds(200)));
+                    Unretained(this), 10000, base::Microseconds(200)));
   Benchmark(kStoryPostRunBusyManyThreads, ExecutionMode::kPostAndRun);
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

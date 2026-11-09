@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,13 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "build/build_config.h"
-#include "components/services/filesystem/file_impl.h"
-#include "components/services/filesystem/lock_table.h"
 #include "components/services/filesystem/util.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 
@@ -23,72 +23,40 @@ namespace filesystem {
 
 DirectoryImpl::DirectoryImpl(base::FilePath directory_path,
                              scoped_refptr<SharedTempDir> temp_dir,
-                             scoped_refptr<LockTable> lock_table)
+                             AccessMode access_mode)
     : directory_path_(directory_path),
       temp_dir_(std::move(temp_dir)),
-      lock_table_(std::move(lock_table)) {}
+      access_mode_(access_mode) {}
 
-DirectoryImpl::~DirectoryImpl() {}
+DirectoryImpl::~DirectoryImpl() = default;
 
 void DirectoryImpl::Read(ReadCallback callback) {
   std::vector<mojom::DirectoryEntryPtr> entries;
   base::FileEnumerator directory_enumerator(
       directory_path_, false,
       base::FileEnumerator::DIRECTORIES | base::FileEnumerator::FILES);
-  for (base::FilePath name = directory_enumerator.Next(); !name.empty();
-       name = directory_enumerator.Next()) {
+  for (base::FilePath path = directory_enumerator.Next(); !path.empty();
+       path = directory_enumerator.Next()) {
     base::FileEnumerator::FileInfo info = directory_enumerator.GetInfo();
     mojom::DirectoryEntryPtr entry = mojom::DirectoryEntry::New();
     entry->type = info.IsDirectory() ? mojom::FsFileType::DIRECTORY
                                      : mojom::FsFileType::REGULAR_FILE;
-    entry->name = info.GetName();
+    auto name = base::SafeBaseName::Create(path);
+    CHECK(name) << path;
+    entry->name = *name;
+    entry->display_name = info.GetName().AsUTF8Unsafe();
+
     entries.push_back(std::move(entry));
   }
 
-  std::move(callback).Run(base::File::Error::FILE_OK,
-                          entries.empty()
-                              ? absl::nullopt
-                              : absl::make_optional(std::move(entries)));
+  std::move(callback).Run(
+      base::File::Error::FILE_OK,
+      entries.empty() ? std::nullopt : std::make_optional(std::move(entries)));
 }
 
 // TODO(erg): Consider adding an implementation of Stat()/Touch() to the
 // directory, too. Right now, the base::File abstractions do not really deal
 // with directories properly, so these are broken for now.
-
-// TODO(vtl): Move the implementation to a thread pool.
-void DirectoryImpl::OpenFile(const std::string& raw_path,
-                             mojo::PendingReceiver<mojom::File> receiver,
-                             uint32_t open_flags,
-                             OpenFileCallback callback) {
-  base::FilePath path;
-  base::File::Error error = ValidatePath(raw_path, directory_path_, &path);
-  if (error != base::File::Error::FILE_OK) {
-    std::move(callback).Run(error);
-    return;
-  }
-
-  if (base::DirectoryExists(path)) {
-    // We must not return directories as files. In the file abstraction, we can
-    // fetch raw file descriptors over mojo pipes, and passing a file
-    // descriptor to a directory is a sandbox escape on Windows.
-    std::move(callback).Run(base::File::Error::FILE_ERROR_NOT_A_FILE);
-    return;
-  }
-
-  base::File base_file(path, open_flags);
-  if (!base_file.IsValid()) {
-    std::move(callback).Run(GetError(base_file));
-    return;
-  }
-
-  if (receiver) {
-    mojo::MakeSelfOwnedReceiver(
-        std::make_unique<FileImpl>(path, std::move(base_file), temp_dir_,
-                                   lock_table_),
-        std::move(receiver));
-  }
-  std::move(callback).Run(base::File::Error::FILE_OK);
-}
 
 void DirectoryImpl::OpenFileHandle(const std::string& raw_path,
                                    uint32_t open_flags,
@@ -118,6 +86,12 @@ void DirectoryImpl::OpenDirectory(
     mojo::PendingReceiver<mojom::Directory> receiver,
     uint32_t open_flags,
     OpenDirectoryCallback callback) {
+  if (access_mode_ == AccessMode::kReadOnly &&
+      (open_flags & ~(mojom::kFlagOpen | mojom::kFlagRead)) != 0) {
+    std::move(callback).Run(base::File::Error::FILE_ERROR_SECURITY);
+    return;
+  }
+
   base::FilePath path;
   base::File::Error error = ValidatePath(raw_path, directory_path_, &path);
   if (error != base::File::Error::FILE_OK) {
@@ -139,7 +113,6 @@ void DirectoryImpl::OpenDirectory(
       return;
     }
 
-    base::File::Error error;
     if (!base::CreateDirectoryAndGetError(path, &error)) {
       std::move(callback).Run(error);
       return;
@@ -148,7 +121,7 @@ void DirectoryImpl::OpenDirectory(
 
   if (receiver) {
     mojo::MakeSelfOwnedReceiver(
-        std::make_unique<DirectoryImpl>(path, temp_dir_, lock_table_),
+        std::make_unique<DirectoryImpl>(path, temp_dir_, access_mode_),
         std::move(receiver));
   }
 
@@ -158,6 +131,11 @@ void DirectoryImpl::OpenDirectory(
 void DirectoryImpl::Rename(const std::string& raw_old_path,
                            const std::string& raw_new_path,
                            RenameCallback callback) {
+  if (access_mode_ == AccessMode::kReadOnly) {
+    std::move(callback).Run(base::File::Error::FILE_ERROR_SECURITY);
+    return;
+  }
+
   base::FilePath old_path;
   base::File::Error error =
       ValidatePath(raw_old_path, directory_path_, &old_path);
@@ -184,6 +162,11 @@ void DirectoryImpl::Rename(const std::string& raw_old_path,
 void DirectoryImpl::Replace(const std::string& raw_old_path,
                             const std::string& raw_new_path,
                             ReplaceCallback callback) {
+  if (access_mode_ == AccessMode::kReadOnly) {
+    std::move(callback).Run(base::File::Error::FILE_ERROR_SECURITY);
+    return;
+  }
+
   base::FilePath old_path;
   base::File::Error error =
       ValidatePath(raw_old_path, directory_path_, &old_path);
@@ -211,6 +194,11 @@ void DirectoryImpl::Replace(const std::string& raw_old_path,
 void DirectoryImpl::Delete(const std::string& raw_path,
                            uint32_t delete_flags,
                            DeleteCallback callback) {
+  if (access_mode_ == AccessMode::kReadOnly) {
+    std::move(callback).Run(base::File::Error::FILE_ERROR_SECURITY);
+    return;
+  }
+
   base::FilePath path;
   base::File::Error error = ValidatePath(raw_path, directory_path_, &path);
   if (error != base::File::Error::FILE_OK) {
@@ -253,6 +241,11 @@ void DirectoryImpl::IsWritable(const std::string& raw_path,
     return;
   }
 
+  if (access_mode_ == AccessMode::kReadOnly) {
+    std::move(callback).Run(base::File::Error::FILE_OK, false);
+    return;
+  }
+
   std::move(callback).Run(base::File::Error::FILE_OK,
                           base::PathIsWritable(path));
 }
@@ -260,7 +253,7 @@ void DirectoryImpl::IsWritable(const std::string& raw_path,
 void DirectoryImpl::Flush(FlushCallback callback) {
 // On Windows no need to sync directories. Their metadata will be updated when
 // files are created, without an explicit sync.
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
   base::File file(directory_path_,
                   base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!file.IsValid()) {
@@ -303,7 +296,7 @@ void DirectoryImpl::StatFile(const std::string& raw_path,
 
 void DirectoryImpl::Clone(mojo::PendingReceiver<mojom::Directory> receiver) {
   mojo::MakeSelfOwnedReceiver(
-      std::make_unique<DirectoryImpl>(directory_path_, temp_dir_, lock_table_),
+      std::make_unique<DirectoryImpl>(directory_path_, temp_dir_, access_mode_),
       std::move(receiver));
 }
 
@@ -329,11 +322,17 @@ void DirectoryImpl::ReadEntireFile(const std::string& raw_path,
   }
 
   std::vector<uint8_t> contents;
-  const int kBufferSize = 1 << 16;
-  std::unique_ptr<char[]> buf(new char[kBufferSize]);
-  int len;
-  while ((len = base_file.ReadAtCurrentPos(buf.get(), kBufferSize)) > 0)
-    contents.insert(contents.end(), buf.get(), buf.get() + len);
+  constexpr int kBufferSize = 1 << 16;
+  auto buf = base::HeapArray<uint8_t>::Uninit(kBufferSize);
+  while (true) {
+    std::optional<size_t> bytes_read =
+        base_file.ReadAtCurrentPos(buf.as_span());
+    if (bytes_read.value_or(0) == 0) {
+      break;
+    }
+    base::span<const uint8_t> bytes = buf.first(bytes_read.value());
+    contents.insert(contents.end(), bytes.begin(), bytes.end());
+  }
 
   std::move(callback).Run(base::File::Error::FILE_OK, contents);
 }
@@ -341,6 +340,11 @@ void DirectoryImpl::ReadEntireFile(const std::string& raw_path,
 void DirectoryImpl::WriteFile(const std::string& raw_path,
                               const std::vector<uint8_t>& data,
                               WriteFileCallback callback) {
+  if (access_mode_ == AccessMode::kReadOnly) {
+    std::move(callback).Run(base::File::Error::FILE_ERROR_SECURITY);
+    return;
+  }
+
   base::FilePath path;
   base::File::Error error = ValidatePath(raw_path, directory_path_, &path);
   if (error != base::File::Error::FILE_OK) {
@@ -361,10 +365,8 @@ void DirectoryImpl::WriteFile(const std::string& raw_path,
   }
 
   // If we're given empty data, we don't write and just truncate the file.
-  if (data.size()) {
-    const int data_size = static_cast<int>(data.size());
-    if (base_file.Write(0, reinterpret_cast<const char*>(&data.front()),
-                        data_size) == -1) {
+  if (!data.empty()) {
+    if (!base_file.Write(0, data)) {
       std::move(callback).Run(GetError(base_file));
       return;
     }
@@ -375,6 +377,11 @@ void DirectoryImpl::WriteFile(const std::string& raw_path,
 
 base::File DirectoryImpl::OpenFileHandleImpl(const std::string& raw_path,
                                              uint32_t open_flags) {
+  if (access_mode_ == AccessMode::kReadOnly &&
+      (open_flags & ~(mojom::kFlagOpen | mojom::kFlagRead)) != 0) {
+    return base::File(base::File::FILE_ERROR_SECURITY);
+  }
+
   base::FilePath path;
   base::File::Error error = ValidatePath(raw_path, directory_path_, &path);
   if (error != base::File::Error::FILE_OK)

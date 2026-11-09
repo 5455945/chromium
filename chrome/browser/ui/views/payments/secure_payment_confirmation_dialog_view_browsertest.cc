@@ -1,72 +1,132 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/payments/secure_payment_confirmation_dialog_view.h"
+
+#include <optional>
+#include <utility>
+
+#include "base/functional/callback.h"
+#include "base/run_loop.h"
+#include "base/strings/string_util.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "cc/test/pixel_comparator.h"
+#include "cc/test/pixel_test_utils.h"
+#include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "chrome/browser/ui/views/payments/secure_payment_confirmation_views_util.h"
 #include "chrome/browser/ui/views/payments/test_secure_payment_confirmation_payment_request_delegate.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/autofill/core/browser/test_event_waiter.h"
+#include "components/payments/content/secure_payment_confirmation_model.h"
+#include "components/payments/core/sizes.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/vector_icons/vector_icons.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/controls/styled_label.h"
+#include "ui/views/test/mock_input_event_activation_protector.h"
+#include "ui/views/window/dialog_client_view.h"
 
 namespace payments {
 namespace {
 
-constexpr int kInstrumentIconWidth = 32;
-constexpr int kInstrumentIconHeight = 20;
-
-const SkBitmap CreateInstrumentIcon(SkColor color) {
+const SkBitmap CreateIcon(SkColor color, int width, int height) {
   SkBitmap bitmap;
-  bitmap.allocN32Pixels(kInstrumentIconWidth, kInstrumentIconHeight);
+  bitmap.allocN32Pixels(width, height);
   bitmap.eraseColor(color);
   return bitmap;
+}
+
+const SkBitmap CreateMaxSizeIcon(SkColor color) {
+  return CreateIcon(color, kSecurePaymentConfirmationIconMaximumWidthPx,
+                    kSecurePaymentConfirmationIconHeightPx);
 }
 
 }  // namespace
 
 class SecurePaymentConfirmationDialogViewTest
-    : public InProcessBrowserTest,
+    : public DialogBrowserTest,
       public SecurePaymentConfirmationDialogView::ObserverForTest {
  public:
-  enum DialogEvent : int {
-    DIALOG_OPENED,
-    DIALOG_CLOSED,
-  };
+  SecurePaymentConfirmationDialogViewTest() = default;
 
-  content::WebContents* GetActiveWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+  // UiBrowserTest:
+  void ShowUi(const std::string& name) override {
+    content::WebContents* web_contents = GetActiveWebContents();
+    CreateModel();
+
+    test_delegate_ =
+        std::make_unique<TestSecurePaymentConfirmationPaymentRequestDelegate>(
+            web_contents->GetPrimaryMainFrame(), model_.GetWeakPtr(),
+            GetWeakPtr());
+
+    // TODO(crbug.com/40863331): Ideally, we'd expect the browser window to be
+    // active here and could check that |IsBrowserWindowActivate()| returned
+    // true, but on wayland, windows cannot be activated as they are on other
+    // platforms.
+    EXPECT_EQ(browser()->GetWindow()->IsActive(),
+              test_delegate_->IsBrowserWindowActive());
+
+    test_delegate_->ShowDialog(nullptr);
   }
 
-  void CreateModel() {
-    model_.set_title(l10n_util::GetStringUTF16(
-        IDS_SECURE_PAYMENT_CONFIRMATION_VERIFY_PURCHASE));
+  content::WebContents* GetActiveWebContents() {
+    return browser()->GetTabStripModel()->GetActiveWebContents();
+  }
 
-    model_.set_merchant_label(
-        l10n_util::GetStringUTF16(IDS_SECURE_PAYMENT_CONFIRMATION_STORE_LABEL));
-    model_.set_merchant_value(u"merchant.com");
+  base::WeakPtr<SecurePaymentConfirmationDialogViewTest> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
-    model_.set_instrument_label(l10n_util::GetStringUTF16(
-        IDS_PAYMENT_REQUEST_PAYMENT_METHOD_SECTION_NAME));
-    model_.set_instrument_value(u"Mastercard ****4444");
+  virtual void CreateModel() {
+    model_.set_merchant_name(std::optional<std::u16string>(u"Test Merchant"));
+    model_.set_merchant_origin(std::optional<std::u16string>(u"merchant1.com"));
+
+    model_.set_instrument_value(u"Test Network");
+    model_.set_instrument_details_value(u"****4444");
     instrument_icon_ =
-        std::make_unique<SkBitmap>(CreateInstrumentIcon(SK_ColorBLUE));
+        std::make_unique<SkBitmap>(CreateMaxSizeIcon(SK_ColorBLUE));
     model_.set_instrument_icon(instrument_icon_.get());
 
-    model_.set_total_label(
-        l10n_util::GetStringUTF16(IDS_SECURE_PAYMENT_CONFIRMATION_TOTAL_LABEL));
     model_.set_total_value(u"$20.00 USD");
 
+    model_.set_opt_out_visible(false);
+    model_.set_opt_out_label(l10n_util::GetStringUTF16(
+        IDS_SECURE_PAYMENT_CONFIRMATION_OPT_OUT_TEXT));
+    model_.set_opt_out_authenticator_label(l10n_util::GetStringUTF16(
+        IDS_SECURE_PAYMENT_CONFIRMATION_OPT_OUT_AUTHENTICATOR_TEXT));
+    model_.set_opt_out_link_label(l10n_util::GetStringUTF16(
+        IDS_SECURE_PAYMENT_CONFIRMATION_OPT_OUT_LINK_TEXT));
+    model_.set_relying_party_id(u"relyingparty.com");
+
+    model_.set_cancel_button_label(l10n_util::GetStringUTF16(IDS_CANCEL));
+
+    model_.set_footer_label(l10n_util::GetStringUTF16(
+        IDS_SECURE_PAYMENT_CONFIRMATION_FOOTNOTE_TEXT));
+    model_.set_footer_link_label(l10n_util::GetStringUTF16(
+        IDS_SECURE_PAYMENT_CONFIRMATION_FOOTNOTE_LINK_TEXT));
+
+    model_.set_title(
+        l10n_util::GetStringUTF16(IDS_SECURE_PAYMENT_CONFIRMATION_TITLE));
+    model_.set_footer_visible(true);
     model_.set_verify_button_label(l10n_util::GetStringUTF16(
         IDS_SECURE_PAYMENT_CONFIRMATION_VERIFY_BUTTON_LABEL));
-    model_.set_cancel_button_label(l10n_util::GetStringUTF16(IDS_CANCEL));
   }
 
   void InvokeSecurePaymentConfirmationUI() {
@@ -74,11 +134,10 @@ class SecurePaymentConfirmationDialogViewTest
 
     test_delegate_ =
         std::make_unique<TestSecurePaymentConfirmationPaymentRequestDelegate>(
-            web_contents->GetMainFrame(), model_.GetWeakPtr(), this);
+            web_contents->GetPrimaryMainFrame(), model_.GetWeakPtr(),
+            GetWeakPtr());
 
-    ResetEventWaiter(DialogEvent::DIALOG_OPENED);
     test_delegate_->ShowDialog(nullptr);
-    event_waiter_->Wait();
 
     // The web-modal dialog should be open.
     web_modal::WebContentsModalDialogManager*
@@ -86,252 +145,335 @@ class SecurePaymentConfirmationDialogViewTest
             web_modal::WebContentsModalDialogManager::FromWebContents(
                 web_contents);
     EXPECT_TRUE(web_contents_modal_dialog_manager->IsDialogActive());
+
+    // By default, disable the input event protector for testing purposes.
+    // However, see the AcceptButtonIgnoresAccidentalInputs test, which
+    // explicitly checks that the protector is able to block unintended inputs.
+    auto mock_input_protector =
+        std::make_unique<views::MockInputEventActivationProtector>();
+    EXPECT_CALL(*mock_input_protector, IsPossiblyUnintendedInteraction)
+        .WillRepeatedly(testing::Return(false));
+    test_delegate_->dialog_view()
+        ->GetDialogClientView()
+        ->SetInputProtectorForTesting(std::move(mock_input_protector));
+  }
+
+  views::View* GetViewByID(
+      SecurePaymentConfirmationDialogView::DialogViewID view_id) {
+    return test_delegate_->dialog_view()->GetViewByID(
+        static_cast<int>(view_id));
   }
 
   void ExpectLabelText(
       const std::u16string& text,
       SecurePaymentConfirmationDialogView::DialogViewID view_id) {
-    EXPECT_EQ(text, static_cast<views::Label*>(
-                        test_delegate_->dialog_view()->GetViewByID(
-                            static_cast<int>(view_id)))
-                        ->GetText());
+    EXPECT_EQ(text,
+              static_cast<views::Label*>(GetViewByID(view_id))->GetText());
   }
 
+  void ExpectIcon(const SkBitmap& expected_icon,
+                  SecurePaymentConfirmationDialogView::DialogViewID view_id) {
+    const SkBitmap& actual_icon =
+        *(static_cast<views::ImageView*>(GetViewByID(view_id))
+              ->GetImage()
+              .bitmap());
+    EXPECT_TRUE(cc::MatchesBitmap(expected_icon, actual_icon,
+                                  cc::ExactPixelComparator()));
+  }
+
+  void ExpectOptOutText(views::View* view,
+                        const std::u16string& opt_out_label,
+                        const std::u16string& authenticator,
+                        const std::u16string& relying_party_id,
+                        const std::u16string& link_label) {
+    std::u16string text = base::ReplaceStringPlaceholders(
+        opt_out_label, {authenticator, relying_party_id, link_label}, nullptr);
+    EXPECT_EQ(text, static_cast<views::StyledLabel*>(view)->GetText());
+  }
+
+  void ExpectFooterText(views::View* view,
+                        const std::u16string& footer_label,
+                        const std::u16string& link_label) {
+    std::u16string text =
+        base::ReplaceStringPlaceholders(footer_label, link_label, nullptr);
+    EXPECT_EQ(text, static_cast<views::StyledLabel*>(view)->GetText());
+  }
+
+  // Verify that the data displayed on the view matches what is expected given
+  // the current `model_` state.
   void ExpectViewMatchesModel() {
     ASSERT_NE(test_delegate_->dialog_view(), nullptr);
 
     EXPECT_EQ(model_.verify_button_label(),
               test_delegate_->dialog_view()->GetDialogButtonLabel(
-                  ui::DIALOG_BUTTON_OK));
+                  ui::mojom::DialogButton::kOk));
 
     EXPECT_EQ(model_.cancel_button_label(),
               test_delegate_->dialog_view()->GetDialogButtonLabel(
-                  ui::DIALOG_BUTTON_CANCEL));
+                  ui::mojom::DialogButton::kCancel));
 
-    EXPECT_TRUE(test_delegate_->dialog_view()->GetViewByID(static_cast<int>(
-        SecurePaymentConfirmationDialogView::DialogViewID::HEADER_ICON)));
+    EXPECT_TRUE(GetViewByID(
+        SecurePaymentConfirmationDialogView::DialogViewID::HEADER_ICON));
 
-    EXPECT_EQ(
-        model_.progress_bar_visible(),
-        test_delegate_->dialog_view()
-            ->GetViewByID(static_cast<int>(SecurePaymentConfirmationDialogView::
-                                               DialogViewID::PROGRESS_BAR))
-            ->GetVisible());
+    ASSERT_TRUE(test_delegate_->dialog_view()->GetBubbleFrameView());
+    std::optional<double> progress =
+        test_delegate_->dialog_view()->GetBubbleFrameView()->GetProgress();
+    ASSERT_EQ(model_.progress_bar_visible(), progress.has_value());
 
     ExpectLabelText(model_.title(),
                     SecurePaymentConfirmationDialogView::DialogViewID::TITLE);
 
-    ExpectLabelText(
-        model_.merchant_label(),
-        SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_LABEL);
-    ExpectLabelText(
-        model_.merchant_value(),
-        SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_VALUE);
+    if (model_.merchant_name().has_value() &&
+        model_.merchant_origin().has_value()) {
+      ExpectLabelText(
+          model_.merchant_name().value(),
+          SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_VALUE);
+      ExpectLabelText(model_.merchant_origin().value(),
+                      SecurePaymentConfirmationDialogView::DialogViewID::
+                          MERCHANT_SECONDARY_VALUE);
+    } else {
+      std::u16string expected_merchant = model_.merchant_name().value_or(
+          model_.merchant_origin().value_or(u""));
+      ExpectLabelText(
+          expected_merchant,
+          SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_VALUE);
+      EXPECT_FALSE(GetViewByID(SecurePaymentConfirmationDialogView::
+                                   DialogViewID::MERCHANT_SECONDARY_VALUE)
+                       ->GetVisible());
+    }
 
-    ExpectLabelText(
-        model_.instrument_label(),
-        SecurePaymentConfirmationDialogView::DialogViewID::INSTRUMENT_LABEL);
+    const SkBitmap* merchant_icon =
+        gfx::CreateVectorIcon(
+            features::IsRoundedIconsEnabled()
+                ? vector_icons::kStorefrontIcon
+                : vector_icons::kStorefrontOldIcon,
+            kSecurePaymentConfirmationIconDefaultWidthPx,
+            test_delegate_->dialog_view()->GetColorProvider()->GetColor(
+                ui::kColorSysOnSurfaceSubtle))
+            .bitmap();
+    ExpectIcon(
+        *merchant_icon,
+        SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_ICON);
+
     ExpectLabelText(
         model_.instrument_value(),
         SecurePaymentConfirmationDialogView::DialogViewID::INSTRUMENT_VALUE);
+    if (!model_.instrument_details_value().empty()) {
+      EXPECT_TRUE(GetViewByID(SecurePaymentConfirmationDialogView::
+                                  DialogViewID::INSTRUMENT_SECONDARY_VALUE)
+                      ->GetVisible());
+      ExpectLabelText(model_.instrument_details_value(),
+                      SecurePaymentConfirmationDialogView::DialogViewID::
+                          INSTRUMENT_SECONDARY_VALUE);
+    } else {
+      EXPECT_FALSE(GetViewByID(SecurePaymentConfirmationDialogView::
+                                   DialogViewID::INSTRUMENT_SECONDARY_VALUE)
+                       ->GetVisible());
+    }
 
     ASSERT_EQ(instrument_icon_.get(), model_.instrument_icon());
-    EXPECT_TRUE(cc::MatchesBitmap(
-        *model_.instrument_icon(),
-        *(static_cast<views::ImageView*>(
-              test_delegate_->dialog_view()->GetViewByID(
-                  static_cast<int>(SecurePaymentConfirmationDialogView::
-                                       DialogViewID::INSTRUMENT_ICON)))
-              ->GetImage()
-              .bitmap()),
-        cc::ExactPixelComparator(/*discard_alpha=*/false)));
+    const SkBitmap* instrument_icon =
+        instrument_icon_->drawsNothing()
+            ? gfx::CreateVectorIcon(
+                  features::IsRoundedIconsEnabled() ? kCreditCardIcon
+                                                    : kCreditCardOldIcon,
+                  kSecurePaymentConfirmationIconDefaultWidthPx,
+                  test_delegate_->dialog_view()->GetColorProvider()->GetColor(
+                      ui::kColorSysOnSurfaceSubtle))
+                  .bitmap()
+            : model_.instrument_icon();
+    ExpectIcon(
+        *instrument_icon,
+        SecurePaymentConfirmationDialogView::DialogViewID::INSTRUMENT_ICON);
 
-    ExpectLabelText(
-        model_.total_label(),
-        SecurePaymentConfirmationDialogView::DialogViewID::TOTAL_LABEL);
     ExpectLabelText(
         model_.total_value(),
         SecurePaymentConfirmationDialogView::DialogViewID::TOTAL_VALUE);
+
+    const SkBitmap* total_icon =
+        gfx::CreateVectorIcon(
+            features::IsRoundedIconsEnabled() ? vector_icons::kPaymentsIcon
+                                              : vector_icons::kPaymentsOldIcon,
+            kSecurePaymentConfirmationIconDefaultWidthPx,
+            test_delegate_->dialog_view()->GetColorProvider()->GetColor(
+                ui::kColorSysOnSurfaceSubtle))
+            .bitmap();
+    ExpectIcon(*total_icon,
+               SecurePaymentConfirmationDialogView::DialogViewID::TOTAL_ICON);
+
+    // The Opt Out link always exists, but should only be visible if requested.
+    views::View* opt_out_view =
+        test_delegate_->dialog_view()->GetOptOutViewForTesting();
+    EXPECT_NE(opt_out_view, nullptr);
+    EXPECT_EQ(opt_out_view->GetVisible(), model_.opt_out_visible());
+    ExpectOptOutText(opt_out_view, model_.opt_out_label(),
+                     model_.opt_out_authenticator_label(),
+                     model_.relying_party_id(), model_.opt_out_link_label());
+
+    views::View* footer_view =
+        test_delegate_->dialog_view()->GetFooterViewForTesting();
+    EXPECT_NE(footer_view, nullptr);
+    EXPECT_EQ(footer_view->GetVisible(), model_.footer_visible());
+    ExpectFooterText(footer_view, model_.footer_label(),
+                     model_.footer_link_label());
   }
 
-  void ClickAcceptAndWait() {
-    ResetEventWaiter(DialogEvent::DIALOG_CLOSED);
-
-    test_delegate_->dialog_view()->AcceptDialog();
-    event_waiter_->Wait();
-
-    EXPECT_TRUE(confirm_pressed_);
-    EXPECT_FALSE(cancel_pressed_);
-
-    histogram_tester_.ExpectTotalCount(
-        "PaymentRequest.SecurePaymentConfirmation.Funnel."
-        "AuthenticationDialogResult",
-        1);
-    histogram_tester_.ExpectBucketCount(
-        "PaymentRequest.SecurePaymentConfirmation.Funnel."
-        "AuthenticationDialogResult",
-        SecurePaymentConfirmationAuthenticationDialogResult::kAccepted, 1);
-  }
-
-  void ClickCancelAndWait() {
-    ResetEventWaiter(DialogEvent::DIALOG_CLOSED);
-
-    test_delegate_->dialog_view()->CancelDialog();
-    event_waiter_->Wait();
-
-    EXPECT_TRUE(cancel_pressed_);
-    EXPECT_FALSE(confirm_pressed_);
-
-    histogram_tester_.ExpectTotalCount(
-        "PaymentRequest.SecurePaymentConfirmation.Funnel."
-        "AuthenticationDialogResult",
-        1);
-    histogram_tester_.ExpectBucketCount(
-        "PaymentRequest.SecurePaymentConfirmation.Funnel."
-        "AuthenticationDialogResult",
-        SecurePaymentConfirmationAuthenticationDialogResult::kCanceled, 1);
-  }
-
-  void CloseDialogAndWait() {
-    ResetEventWaiter(DialogEvent::DIALOG_CLOSED);
-
-    test_delegate_->CloseDialog();
-    event_waiter_->Wait();
-
-    EXPECT_FALSE(cancel_pressed_);
-    EXPECT_FALSE(confirm_pressed_);
-
-    histogram_tester_.ExpectTotalCount(
-        "PaymentRequest.SecurePaymentConfirmation.Funnel."
-        "AuthenticationDialogResult",
-        1);
-    histogram_tester_.ExpectBucketCount(
-        "PaymentRequest.SecurePaymentConfirmation.Funnel."
-        "AuthenticationDialogResult",
-        SecurePaymentConfirmationAuthenticationDialogResult::kClosed, 1);
-  }
-
-  void ResetEventWaiter(DialogEvent event) {
-    event_waiter_ = std::make_unique<autofill::EventWaiter<DialogEvent>>(
-        std::list<DialogEvent>{event});
+  void ClickButton(views::View* button) {
+    gfx::Point center(button->width() / 2, button->height() / 2);
+    const ui::MouseEvent event(ui::EventType::kMousePressed, center, center,
+                               ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+                               ui::EF_LEFT_MOUSE_BUTTON);
+    button->OnMousePressed(event);
+    button->OnMouseReleased(event);
   }
 
   // SecurePaymentConfirmationDialogView::ObserverForTest:
-  void OnDialogOpened() override {
-    if (event_waiter_)
-      event_waiter_->OnEvent(DialogEvent::DIALOG_OPENED);
-  }
-
   void OnDialogClosed() override {
-    if (event_waiter_)
-      event_waiter_->OnEvent(DialogEvent::DIALOG_CLOSED);
+    dialog_closed_ = true;
+    if (dialog_closed_callback_) {
+      std::move(dialog_closed_callback_).Run();
+    }
   }
 
+  // SecurePaymentConfirmationDialogView::ObserverForTest:
   void OnConfirmButtonPressed() override { confirm_pressed_ = true; }
-
   void OnCancelButtonPressed() override { cancel_pressed_ = true; }
+  void OnOptOutClicked() override { opt_out_clicked_ = true; }
 
  protected:
-  std::unique_ptr<autofill::EventWaiter<DialogEvent>> event_waiter_;
+  std::unique_ptr<SkBitmap> instrument_icon_;
 
   SecurePaymentConfirmationModel model_;
   std::unique_ptr<TestSecurePaymentConfirmationPaymentRequestDelegate>
       test_delegate_;
 
-  std::unique_ptr<SkBitmap> instrument_icon_;
-
+  bool dialog_closed_ = false;
   bool confirm_pressed_ = false;
   bool cancel_pressed_ = false;
+  bool opt_out_clicked_ = false;
 
   base::HistogramTester histogram_tester_;
+  base::OnceClosure dialog_closed_callback_;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+
+  base::WeakPtrFactory<SecurePaymentConfirmationDialogViewTest>
+      weak_ptr_factory_{this};
 };
 
+// Basic test that the view matches the model state.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       ViewMatchesModel) {
+  CreateModel();
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+}
+
+// Test that clicking the 'Accept' button triggers the expected path and closes
+// the dialog.
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        AcceptButtonTest) {
   CreateModel();
-
   InvokeSecurePaymentConfirmationUI();
 
-  ExpectViewMatchesModel();
+  ClickButton(test_delegate_->dialog_view()->GetOkButton());
 
-  ClickAcceptAndWait();
+  EXPECT_TRUE(confirm_pressed_);
+  EXPECT_FALSE(cancel_pressed_);
+  EXPECT_FALSE(opt_out_clicked_);
 }
 
+// Test that the 'Accept' button is protected against accidental inputs.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       AcceptButtonIgnoresAccidentalInputs) {
+  CreateModel();
+  InvokeSecurePaymentConfirmationUI();
+
+  // Insert a mock input protector that will ignore the first input and then
+  // accepts all subsequent inputs.
+  auto mock_input_protector =
+      std::make_unique<views::MockInputEventActivationProtector>();
+  EXPECT_CALL(*mock_input_protector,
+              IsPossiblyUnintendedInteraction(
+                  testing::_, /*allow_key_events=*/false, testing::_))
+      .WillOnce(testing::Return(true))
+      .WillRepeatedly(testing::Return(false));
+  test_delegate_->dialog_view()
+      ->GetDialogClientView()
+      ->SetInputProtectorForTesting(std::move(mock_input_protector));
+
+  // Because of the input protector, the first press of the button should be
+  // ignored.
+  ClickButton(test_delegate_->dialog_view()->GetOkButton());
+  EXPECT_FALSE(confirm_pressed_);
+
+  // However a subsequent press should be accepted.
+  ClickButton(test_delegate_->dialog_view()->GetOkButton());
+  EXPECT_TRUE(confirm_pressed_);
+}
+
+// Test that clicking the 'Cancel' button triggers the expected path and closes
+// the dialog.
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        CancelButtonTest) {
   CreateModel();
-
   InvokeSecurePaymentConfirmationUI();
 
-  ExpectViewMatchesModel();
+  ClickButton(test_delegate_->dialog_view()->GetCancelButton());
 
-  ClickCancelAndWait();
+  EXPECT_TRUE(cancel_pressed_);
+  EXPECT_FALSE(confirm_pressed_);
+  EXPECT_FALSE(opt_out_clicked_);
 }
 
-IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
-                       CloseDialogTest) {
-  CreateModel();
-
-  InvokeSecurePaymentConfirmationUI();
-
-  ExpectViewMatchesModel();
-
-  CloseDialogAndWait();
-}
-
+// Test that the progress bar is visible in the view when requested by the
+// model.
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        ProgressBarVisible) {
   CreateModel();
   model_.set_progress_bar_visible(true);
-
   InvokeSecurePaymentConfirmationUI();
-
   ExpectViewMatchesModel();
-
-  CloseDialogAndWait();
 }
 
+// Test that the view can be updated to show the progress bar after initial
+// load.
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        ShowProgressBar) {
+  // Initially the model should be created with the progress bar hidden.
   CreateModel();
-
   ASSERT_FALSE(model_.progress_bar_visible());
 
   InvokeSecurePaymentConfirmationUI();
-
   ExpectViewMatchesModel();
 
+  // Then update the model to have the bar be visible and check that the view
+  // updates to match.
   model_.set_progress_bar_visible(true);
+  ASSERT_TRUE(model_.progress_bar_visible());
   test_delegate_->dialog_view()->OnModelUpdated();
-
   ExpectViewMatchesModel();
-
-  CloseDialogAndWait();
 }
 
+// Check that the view updates to match model updates.
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        OnModelUpdated) {
   CreateModel();
-
   InvokeSecurePaymentConfirmationUI();
-
   ExpectViewMatchesModel();
 
   model_.set_title(u"Test Title");
-  model_.set_merchant_label(u"Test merchant");
-  model_.set_merchant_value(u"Test merchant value");
-  model_.set_instrument_label(u"Test instrument");
+  model_.set_merchant_name(
+      std::optional<std::u16string>(u"Test merchant value"));
+  model_.set_merchant_origin(std::optional<std::u16string>(u"merchant2.com"));
   model_.set_instrument_value(u"Test instrument value");
-  model_.set_total_label(u"Test total");
   model_.set_total_value(u"Test total value");
   model_.set_verify_button_label(u"Test verify");
   model_.set_cancel_button_label(u"Test cancel");
 
   test_delegate_->dialog_view()->OnModelUpdated();
-
   ExpectViewMatchesModel();
-
-  CloseDialogAndWait();
 }
 
 // Test the two reasons an instrument icon is updated: The model's bitmap
@@ -339,36 +481,215 @@ IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        InstrumentIconUpdated) {
   CreateModel();
-
   InvokeSecurePaymentConfirmationUI();
-
   ExpectViewMatchesModel();
+
+  // Avoid a dangling when replacing with a different icon.
+  model_.set_instrument_icon(nullptr);
 
   // Change the bitmap pointer
   instrument_icon_ =
-      std::make_unique<SkBitmap>(CreateInstrumentIcon(SK_ColorGREEN));
+      std::make_unique<SkBitmap>(CreateMaxSizeIcon(SK_ColorGREEN));
   model_.set_instrument_icon(instrument_icon_.get());
   test_delegate_->dialog_view()->OnModelUpdated();
   ExpectViewMatchesModel();
 
   // Change the bitmap itself without touching the model's pointer
-  *instrument_icon_ = CreateInstrumentIcon(SK_ColorRED);
+  *instrument_icon_ = CreateMaxSizeIcon(SK_ColorRED);
   test_delegate_->dialog_view()->OnModelUpdated();
   ExpectViewMatchesModel();
-
-  CloseDialogAndWait();
 }
 
+// Test that the web contents can be torn down whilst the dialog is visible, and
+// that doing so should close the dialog.
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
                        WebContentsClosed) {
   CreateModel();
-
   InvokeSecurePaymentConfirmationUI();
 
-  // Test passes if there is no crash.
-  ResetEventWaiter(DialogEvent::DIALOG_CLOSED);
   GetActiveWebContents()->Close();
-  event_waiter_->Wait();
+
+  EXPECT_TRUE(dialog_closed_);
+  EXPECT_FALSE(confirm_pressed_);
+  EXPECT_FALSE(cancel_pressed_);
+  EXPECT_FALSE(opt_out_clicked_);
 }
+
+// TestBrowserUi-provided UI test.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       InvokeUi_default) {
+  ShowAndVerifyUi();
+}
+
+// Test that the visible instrument icon is set correctly to the default icon if
+// the model does not provide one.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       DefaultInstrumentIcon) {
+  CreateModel();
+
+  // Avoid a dangling when replacing with a different icon.
+  model_.set_instrument_icon(nullptr);
+
+  instrument_icon_ = std::make_unique<SkBitmap>();
+  ASSERT_TRUE(instrument_icon_->drawsNothing());
+  model_.set_instrument_icon(instrument_icon_.get());
+
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+}
+
+// Test that the merchant label is formatted correctly based on the input
+// name/origin provided in the model.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       MerchantLabelFormat) {
+  CreateModel();
+
+  // Both merchant name and origin
+  model_.set_merchant_name(std::optional<std::u16string>(u"Test Merchant"));
+  model_.set_merchant_origin(std::optional<std::u16string>(u"merchant.com"));
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+  ExpectLabelText(
+      u"Test Merchant",
+      SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_VALUE);
+  EXPECT_TRUE(test_delegate_->dialog_view()
+                  ->GetViewByID(static_cast<int>(
+                      SecurePaymentConfirmationDialogView::DialogViewID::
+                          MERCHANT_SECONDARY_VALUE))
+                  ->GetVisible());
+  ExpectLabelText(u"merchant.com", SecurePaymentConfirmationDialogView::
+                                       DialogViewID::MERCHANT_SECONDARY_VALUE);
+
+  // Only merchant name, no origin
+  model_.set_merchant_name(std::optional<std::u16string>(u"Test Merchant 2"));
+  model_.set_merchant_origin(std::optional<std::u16string>());
+  test_delegate_->dialog_view()->OnModelUpdated();
+  ExpectViewMatchesModel();
+  ExpectLabelText(
+      u"Test Merchant 2",
+      SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_VALUE);
+  EXPECT_FALSE(test_delegate_->dialog_view()
+                   ->GetViewByID(static_cast<int>(
+                       SecurePaymentConfirmationDialogView::DialogViewID::
+                           MERCHANT_SECONDARY_VALUE))
+                   ->GetVisible());
+
+  // Only merchant origin, no name
+  model_.set_merchant_name(std::optional<std::u16string>());
+  model_.set_merchant_origin(std::optional<std::u16string>(u"merchant2.com"));
+  test_delegate_->dialog_view()->OnModelUpdated();
+  ExpectViewMatchesModel();
+  ExpectLabelText(
+      u"merchant2.com",
+      SecurePaymentConfirmationDialogView::DialogViewID::MERCHANT_VALUE);
+  EXPECT_FALSE(test_delegate_->dialog_view()
+                   ->GetViewByID(static_cast<int>(
+                       SecurePaymentConfirmationDialogView::DialogViewID::
+                           MERCHANT_SECONDARY_VALUE))
+                   ->GetVisible());
+}
+
+// Test that an oversized instrument icon is resized down to the maximum size.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       OversizedInstrumentIcon) {
+  CreateModel();
+
+  *instrument_icon_ =
+      CreateIcon(SK_ColorRED, kSecurePaymentConfirmationIconMaximumWidthPx * 2,
+                 kSecurePaymentConfirmationIconHeightPx * 2);
+
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+
+  views::ImageView* image_view = static_cast<views::ImageView*>(GetViewByID(
+      SecurePaymentConfirmationDialogView::DialogViewID::INSTRUMENT_ICON));
+  EXPECT_EQ(kSecurePaymentConfirmationIconMaximumWidthPx,
+            image_view->GetImageBounds().width());
+  EXPECT_EQ(kSecurePaymentConfirmationIconHeightPx,
+            image_view->GetImageBounds().height());
+}
+
+// Test that an undersized instrument icon is resized up to the minimum size.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       UndersizedInstrumentIcon) {
+  CreateModel();
+
+  *instrument_icon_ =
+      CreateIcon(SK_ColorRED, kSecurePaymentConfirmationIconDefaultWidthPx / 2,
+                 kSecurePaymentConfirmationIconHeightPx / 2);
+
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+
+  views::ImageView* image_view = static_cast<views::ImageView*>(GetViewByID(
+      SecurePaymentConfirmationDialogView::DialogViewID::INSTRUMENT_ICON));
+  EXPECT_EQ(kSecurePaymentConfirmationIconDefaultWidthPx,
+            image_view->GetImageBounds().width());
+  EXPECT_EQ(kSecurePaymentConfirmationIconHeightPx,
+            image_view->GetImageBounds().height());
+}
+
+// Test that a midsized instrument icon is not resized.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       MidsizedInstrumentIcon) {
+  CreateModel();
+
+  int width = (kSecurePaymentConfirmationIconDefaultWidthPx +
+               kSecurePaymentConfirmationIconMaximumWidthPx) /
+              2;
+  *instrument_icon_ =
+      CreateIcon(SK_ColorRED, width, kSecurePaymentConfirmationIconHeightPx);
+
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+
+  views::ImageView* image_view = static_cast<views::ImageView*>(GetViewByID(
+      SecurePaymentConfirmationDialogView::DialogViewID::INSTRUMENT_ICON));
+  EXPECT_EQ(width, image_view->GetImageBounds().width());
+  EXPECT_EQ(kSecurePaymentConfirmationIconHeightPx,
+            image_view->GetImageBounds().height());
+}
+
+// Test that the opt-out link is only shown when explicitly requested, and that
+// clicking it causes the expected path and closes the dialog.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       OptOutShownWhenRequested) {
+  CreateModel();
+
+  // Make sure that by default, opt-out wasn't requested. This means that every
+  // other test is correctly testing the 'no opt out' path.
+  ASSERT_FALSE(model_.opt_out_visible());
+
+  model_.set_opt_out_visible(true);
+  InvokeSecurePaymentConfirmationUI();
+  ExpectViewMatchesModel();
+
+  // Now click the opt-out link, and verify that the dialog is closed via the
+  // correct path.
+  views::StyledLabel* opt_out_label = static_cast<views::StyledLabel*>(
+      test_delegate_->dialog_view()->GetOptOutViewForTesting());
+  opt_out_label->ClickFirstLinkForTesting();
+
+  EXPECT_FALSE(cancel_pressed_);
+  EXPECT_FALSE(confirm_pressed_);
+  EXPECT_TRUE(opt_out_clicked_);
+}
+
+// Occlusion by picture-in-picture video should dismiss the SPC authentication
+// dialog.
+IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
+                       PictureInPictureOcclusionClosesTheDialog) {
+  CreateModel();
+  InvokeSecurePaymentConfirmationUI();
+  base::RunLoop run_loop;
+  dialog_closed_callback_ = run_loop.QuitClosure();
+
+  static_cast<PictureInPictureOcclusionObserver*>(test_delegate_->dialog_view())
+      ->OnOcclusionStateChanged(/*occluded=*/true);
+
+  run_loop.Run();
+  EXPECT_TRUE(dialog_closed_);
+}
+
 
 }  // namespace payments

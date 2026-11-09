@@ -1,12 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/test/fake_render_widget_host.h"
 
+#include "third_party/blink/public/mojom/drag/drag.mojom.h"
 #include "third_party/blink/public/mojom/frame/intrinsic_sizing_info.mojom.h"
 #include "third_party/blink/public/mojom/input/touch_event.mojom.h"
-#include "third_party/blink/public/mojom/page/drag.mojom.h"
 
 namespace content {
 
@@ -57,6 +57,8 @@ void FakeRenderWidgetHost::UpdateTooltipFromKeyboard(
     base::i18n::TextDirection text_direction_hint,
     const gfx::Rect& bounds) {}
 
+void FakeRenderWidgetHost::ClearKeyboardTriggeredTooltip() {}
+
 void FakeRenderWidgetHost::TextInputStateChanged(
     ui::mojom::TextInputStatePtr state) {}
 
@@ -72,7 +74,9 @@ void FakeRenderWidgetHost::CreateFrameSink(
     mojo::PendingReceiver<viz::mojom::CompositorFrameSink>
         compositor_frame_sink_receiver,
     mojo::PendingRemote<viz::mojom::CompositorFrameSinkClient>
-        compositor_frame_sink_client) {}
+        compositor_frame_sink_client,
+    mojo::PendingRemote<blink::mojom::RenderInputRouterClient>
+        viz_rir_client_remote) {}
 
 void FakeRenderWidgetHost::RegisterRenderFrameMetadataObserver(
     mojo::PendingReceiver<cc::mojom::RenderFrameMetadataObserverClient>
@@ -86,10 +90,13 @@ void FakeRenderWidgetHost::SetPopupBounds(const gfx::Rect& bounds,
                                           SetPopupBoundsCallback callback) {}
 
 void FakeRenderWidgetHost::ShowPopup(const gfx::Rect& initial_rect,
+                                     const gfx::Rect& initial_anchor_rect,
                                      ShowPopupCallback callback) {}
 
 void FakeRenderWidgetHost::SetTouchActionFromMain(
     cc::TouchAction touch_action) {}
+
+void FakeRenderWidgetHost::SetPanAction(blink::mojom::PanAction pan_action) {}
 
 void FakeRenderWidgetHost::DidOverscroll(
     blink::mojom::DidOverscrollParamsPtr params) {}
@@ -100,12 +107,17 @@ void FakeRenderWidgetHost::ImeCancelComposition() {}
 
 void FakeRenderWidgetHost::ImeCompositionRangeChanged(
     const gfx::Range& range,
-    const std::vector<gfx::Rect>& bounds) {
+    const std::optional<std::vector<gfx::Rect>>& character_bounds) {
   last_composition_range_ = range;
-  last_composition_bounds_ = bounds;
+  if (character_bounds.has_value()) {
+    last_composition_bounds_ = character_bounds.value();
+  }
 }
 
 void FakeRenderWidgetHost::SetMouseCapture(bool capture) {}
+
+void FakeRenderWidgetHost::SetAutoscrollSelectionActiveInMainFrame(
+    bool autoscroll_selection) {}
 
 void FakeRenderWidgetHost::RequestMouseLock(bool from_user_gesture,
                                             bool unadjusted_movement,
@@ -118,21 +130,16 @@ void FakeRenderWidgetHost::AutoscrollFling(const gfx::Vector2dF& position) {}
 
 void FakeRenderWidgetHost::AutoscrollEnd() {}
 
-void FakeRenderWidgetHost::DidFirstVisuallyNonEmptyPaint() {}
-
-void FakeRenderWidgetHost::StartDragging(
-    blink::mojom::DragDataPtr drag_data,
-    blink::DragOperationsMask operations_allowed,
-    const SkBitmap& bitmap,
-    const gfx::Vector2d& bitmap_offset_in_dip,
-    blink::mojom::DragEventSourceInfoPtr event_info) {}
-
 blink::mojom::WidgetInputHandler*
 FakeRenderWidgetHost::GetWidgetInputHandler() {
   if (!widget_input_handler_) {
-    widget_remote_->GetWidgetInputHandler(
+    widget_remote_->SetupBrowserRenderInputRouterConnections(
+        client_remote_.BindNewPipeAndPassReceiver());
+
+    client_remote_->GetWidgetInputHandler(
         widget_input_handler_.BindNewPipeAndPassReceiver(),
-        widget_input_handler_host_.BindNewPipeAndPassRemote());
+        widget_input_handler_host_.BindNewPipeAndPassRemote(),
+        /* from_viz= */ false);
   }
   return widget_input_handler_.get();
 }

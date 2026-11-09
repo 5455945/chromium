@@ -24,22 +24,33 @@
  */
 
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+
+#include <limits>
+#include <sstream>
+
+#include "base/check_op.h"
 #include "base/notreached.h"
+#include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/fdlibm/ieee754.h"
 
-namespace blink {
+#if defined(ARCH_CPU_X86_FAMILY)
+#include <xmmintrin.h>
+#elif defined(CPU_ARM_NEON)
+#include <arm_neon.h>
+#endif
 
-namespace audio_utilities {
+namespace blink::audio_utilities {
 
 float DecibelsToLinear(float decibels) {
-  return fdlibm::powf(10, 0.05f * decibels);
+  return powf(10, 0.05f * decibels);
 }
 
 float LinearToDecibels(float linear) {
   DCHECK_GE(linear, 0);
 
-  return 20 * fdlibm::log10f(linear);
+  return 20 * log10f(linear);
 }
 
 double DiscreteTimeConstantForSampleRate(double time_constant,
@@ -85,7 +96,7 @@ size_t TimeToSampleFrame(double time,
   //
   // The oversampling factor MUST be a power of two so as not to introduce
   // additional round-off in computing the oversample frame number.
-  const double oversample_factor = 1024;
+  constexpr double oversample_factor = 1024;
   double frame =
       round(time * sample_rate * oversample_factor) / oversample_factor;
 
@@ -127,13 +138,153 @@ float MaxAudioBufferSampleRate() {
   return 768000;
 }
 
-bool IsPowerOfTwo(size_t x) {
-  // From Hacker's Delight.  x & (x - 1) turns off (zeroes) the
-  // rightmost 1-bit in the word x.  If x is a power of two, then the
-  // result is, of course, 0.
-  return x > 0 && ((x & (x - 1)) == 0);
+bool IsValidRenderQuantumSize(uint32_t render_quantum_size, float sample_rate) {
+  return render_quantum_size >= MinRenderQuantumSize() &&
+         render_quantum_size <= MaxRenderQuantumSize(sample_rate);
 }
 
-}  // namespace audio_utilities
+uint32_t MinRenderQuantumSize() {
+  return 1;
+}
 
-}  // namespace blink
+uint32_t MaxRenderQuantumSize(float sample_rate) {
+  return static_cast<uint32_t>(6 * sample_rate);
+}
+
+const std::string GetSinkIdForTracing(
+    blink::WebAudioSinkDescriptor sink_descriptor) {
+  std::string sink_id;
+  if (sink_descriptor.Type() == blink::WebAudioSinkDescriptor::kAudible) {
+    sink_id = sink_descriptor.SinkId() == "" ?
+        "DEFAULT SINK" : sink_descriptor.SinkId().Utf8();
+  } else {
+    sink_id = "SILENT SINK";
+  }
+  return sink_id;
+}
+
+const std::string GetSinkInfoForTracing(
+    blink::WebAudioSinkDescriptor sink_descriptor,
+    blink::WebAudioLatencyHint latency_hint,
+    int channel_count,
+    float sample_rate,
+    int callback_buffer_size) {
+  std::ostringstream s;
+
+  s << "sink info: " << GetSinkIdForTracing(sink_descriptor);
+
+  std::string latency_info;
+  switch (latency_hint.Category()) {
+    case WebAudioLatencyHint::kCategoryInteractive:
+      latency_info = "interactive";
+      break;
+    case WebAudioLatencyHint::kCategoryBalanced:
+      latency_info = "balanced";
+      break;
+    case WebAudioLatencyHint::kCategoryPlayback:
+      latency_info = "playback";
+      break;
+    case WebAudioLatencyHint::kCategoryExact:
+      latency_info = "exact";
+      break;
+    case WebAudioLatencyHint::kLastValue:
+      latency_info = "invalid";
+      break;
+  }
+  s << ", latency hint: " << latency_info;
+
+  if (latency_hint.Category() == WebAudioLatencyHint::kCategoryExact) {
+    s << " (" << latency_hint.Seconds() << "s)";
+  }
+
+  s << ", channel count: " << channel_count
+    << ", sample rate: " << sample_rate
+    << ", callback buffer size: " << callback_buffer_size;
+
+  return s.str();
+}
+
+const std::string GetDeviceEnumerationForTracing(
+    const Vector<WebMediaDeviceInfo>& device_infos) {
+  std::ostringstream s;
+
+  for (const auto& device_info : device_infos) {
+    s << "{ label: " << device_info.label
+      << ", device_id: " << device_info.device_id
+      << ", group_id: " << device_info.group_id << " }";
+  }
+
+  return s.str().empty() ? "EMPTY" : s.str();
+}
+
+size_t RoundUpToMultiple(size_t value, size_t modulus) {
+  CHECK_GT(modulus, 0u);
+  CHECK_LE(value, SIZE_MAX - modulus);
+  return ((value + modulus - 1) / modulus) * modulus;
+}
+
+bool HasConstantValues(base::span<const float> values) {
+  if (values.size() <= 1) {
+    return true;
+  }
+
+  // Load the initial value.
+  const float value = values[0];
+
+  // Initialize to 1 to avoid redundantly comparing the first frame in the
+  // non-SIMD path, although this will be re-initialized to 0 on platforms with
+  // SIMD enabled for byte alignment purposes so it is only an optimization on
+  // platforms without SIMD.
+  int processed_frames = 1;
+  // Due to `values_size - 3` below this value could be negative, so to save
+  // having multiple static_cast<int>, we do it once and just use that to
+  // silence warnings about comparing unsigned and signed.
+  DCHECK_LE(values.size(),
+            static_cast<size_t>(std::numeric_limits<int>::max()));
+  const int values_size = static_cast<int>(values.size());
+
+#if defined(ARCH_CPU_X86_FAMILY)
+  // Process 4 floats at a time using SIMD.
+  __m128 value_vec = _mm_set1_ps(value);
+  // Start at 0 for byte alignment.
+  for (processed_frames = 0; processed_frames < values_size - 3;
+       processed_frames += 4) {
+    // Load 4 floats from memory.
+    __m128 input_vec = _mm_loadu_ps(&values[processed_frames]);
+    // Compare the 4 floats with the value.
+    __m128 cmp_vec = _mm_cmpneq_ps(input_vec, value_vec);
+    // Check if any of the floats are not equal to the value.
+    if (_mm_movemask_ps(cmp_vec) != 0) {
+      return false;
+    }
+  }
+#elif defined(CPU_ARM_NEON)
+  // Process 4 floats at a time using SIMD.
+  float32x4_t value_vec = vdupq_n_f32(value);
+  // Start at 0 for byte alignment.
+  for (processed_frames = 0; processed_frames < values_size - 3;
+       processed_frames += 4) {
+    // Load 4 floats from memory.
+    float32x4_t input_vec = vld1q_f32(&values[processed_frames]);
+    // Compare the 4 floats with the value.
+    uint32x4_t cmp_vec = vceqq_f32(input_vec, value_vec);
+    // Accumulate the elements of the cmp_vec vector using bitwise AND.
+    uint32x2_t cmp_reduced_32 =
+        vand_u32(vget_low_u32(cmp_vec), vget_high_u32(cmp_vec));
+    // Check if any of the floats are not equal to the value.
+    if (vget_lane_u32(vpmin_u32(cmp_reduced_32, cmp_reduced_32), 0) == 0) {
+      return false;
+    }
+  }
+#endif
+  // Fallback implementation without SIMD optimization.
+  while (processed_frames < values_size) {
+    if (values[processed_frames] != value) {
+      return false;
+    }
+    processed_frames++;
+  }
+  return true;
+}
+
+}  // namespace blink::audio_utilities

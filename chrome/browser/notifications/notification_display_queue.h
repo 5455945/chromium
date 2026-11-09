@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "chrome/browser/notifications/notification_blocker.h"
 #include "chrome/browser/notifications/notification_common.h"
@@ -59,6 +59,11 @@ class NotificationDisplayQueue : public NotificationBlocker::Observer {
   // Returns a set of the currently queued notification ids.
   std::set<std::string> GetQueuedNotificationIds() const;
 
+  // Returns a set of the currently queued notification ids associated with
+  // `origin`.
+  std::set<std::string> GetQueuedNotificationIdsForOrigin(
+      const GURL& origin) const;
+
   // Sets the list of |blockers| to be used and observes their state.
   void SetNotificationBlockers(NotificationBlockers blockers);
 
@@ -95,7 +100,7 @@ class NotificationDisplayQueue : public NotificationBlocker::Observer {
   };
 
   // The |notification_display_service_| owns |this|.
-  NotificationDisplayService* notification_display_service_;
+  raw_ptr<NotificationDisplayService> notification_display_service_;
 
   // A list of notification blockers that indicate when notifications should be
   // blocked and notify when their state changes.

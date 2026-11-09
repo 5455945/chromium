@@ -1,13 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/trust_tokens/trust_token_key_commitment_controller.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
@@ -18,8 +20,8 @@
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/trust_tokens/trust_token_parameterization.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace network {
 
@@ -95,6 +97,7 @@ void TrustTokenKeyCommitmentController::StartRequest(
 }
 
 void TrustTokenKeyCommitmentController::HandleRedirect(
+    const GURL& url_before_redirect,
     const net::RedirectInfo& redirect_info,
     const network::mojom::URLResponseHead& response_head,
     std::vector<std::string>* to_be_removed_headers) {
@@ -113,7 +116,7 @@ void TrustTokenKeyCommitmentController::HandleRedirect(
 }
 
 void TrustTokenKeyCommitmentController::HandleResponseBody(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK(parser_);
 
   int error = url_loader_->NetError();

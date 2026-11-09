@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "mojo/public/cpp/system/handle.h"
 
 namespace mojo {
@@ -54,7 +54,7 @@ class StructWithTraitsImpl {
   uint64_t get_uint64() const { return uint64_; }
 
   void set_string(std::string value) { string_ = value; }
-  base::StringPiece get_string_as_string_piece() const { return string_; }
+  std::string_view get_string_as_string_piece() const { return string_; }
   const std::string& get_string() const { return string_; }
 
   const std::vector<std::string>& get_string_array() const {
@@ -62,9 +62,7 @@ class StructWithTraitsImpl {
   }
   std::vector<std::string>& get_mutable_string_array() { return string_array_; }
 
-  const std::set<std::string>& get_string_set() const {
-    return string_set_;
-  }
+  const std::set<std::string>& get_string_set() const { return string_set_; }
   std::set<std::string>& get_mutable_string_set() { return string_set_; }
 
   const NestedStructWithTraitsImpl& get_struct() const { return struct_; }
@@ -100,8 +98,7 @@ class StructWithTraitsImpl {
 
 // A type which corresponds nominally to the
 // mojo::test::StructWithUnreachableTraits mojom type. Used to test that said
-// type is never serialized, i.e. objects of this type are simply copied into
-// a message as-is when written to an intra-process interface.
+// type is never serialized when wrapped in an unserialized mojo::Message.
 struct StructWithUnreachableTraitsImpl {
   int32_t magic_number = 0;
 };
@@ -118,6 +115,11 @@ class MoveOnlyStructWithTraitsImpl {
  public:
   MoveOnlyStructWithTraitsImpl();
   MoveOnlyStructWithTraitsImpl(MoveOnlyStructWithTraitsImpl&& other);
+
+  MoveOnlyStructWithTraitsImpl(const MoveOnlyStructWithTraitsImpl&) = delete;
+  MoveOnlyStructWithTraitsImpl& operator=(const MoveOnlyStructWithTraitsImpl&) =
+      delete;
+
   ~MoveOnlyStructWithTraitsImpl();
 
   ScopedHandle& get_mutable_handle() { return handle_; }
@@ -126,7 +128,6 @@ class MoveOnlyStructWithTraitsImpl {
 
  private:
   ScopedHandle handle_;
-  DISALLOW_COPY_AND_ASSIGN(MoveOnlyStructWithTraitsImpl);
 };
 
 class UnionWithTraitsBase {
@@ -168,46 +169,6 @@ class UnionWithTraitsStruct : public UnionWithTraitsBase {
 
  private:
   NestedStructWithTraitsImpl struct_;
-};
-
-class StructForceSerializeImpl {
- public:
-  StructForceSerializeImpl();
-  ~StructForceSerializeImpl();
-
-  void set_value(int32_t value) { value_ = value; }
-  int32_t value() const { return value_; }
-
-  void set_was_serialized() const { was_serialized_ = true; }
-  bool was_serialized() const { return was_serialized_; }
-
-  void set_was_deserialized() { was_deserialized_ = true; }
-  bool was_deserialized() const { return was_deserialized_; }
-
- private:
-  int32_t value_ = 0;
-  mutable bool was_serialized_ = false;
-  bool was_deserialized_ = false;
-};
-
-class StructNestedForceSerializeImpl {
- public:
-  StructNestedForceSerializeImpl();
-  ~StructNestedForceSerializeImpl();
-
-  StructForceSerializeImpl& force() { return force_; }
-  const StructForceSerializeImpl& force() const { return force_; }
-
-  void set_was_serialized() const { was_serialized_ = true; }
-  bool was_serialized() const { return was_serialized_; }
-
-  void set_was_deserialized() { was_deserialized_ = true; }
-  bool was_deserialized() const { return was_deserialized_; }
-
- private:
-  StructForceSerializeImpl force_;
-  mutable bool was_serialized_ = false;
-  bool was_deserialized_ = false;
 };
 
 }  // namespace test

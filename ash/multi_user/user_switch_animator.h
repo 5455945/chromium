@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/account_id/account_id.h"
@@ -18,7 +18,7 @@
 
 namespace ash {
 
-class MultiUserWindowManagerImpl;
+class MultiUserWindowManager;
 
 // A class which performs transitions animations between users. Upon creation,
 // the animation gets started and upon destruction the animation gets finished
@@ -37,9 +37,13 @@ class ASH_EXPORT UserSwitchAnimator {
 
   // Creates a UserSwitchAnimator to animate between the current user and the
   // user associated with |new_account_id|.
-  UserSwitchAnimator(MultiUserWindowManagerImpl* owner,
+  UserSwitchAnimator(MultiUserWindowManager* owner,
                      const AccountId& new_account_id,
                      base::TimeDelta animation_speed);
+
+  UserSwitchAnimator(const UserSwitchAnimator&) = delete;
+  UserSwitchAnimator& operator=(const UserSwitchAnimator&) = delete;
+
   ~UserSwitchAnimator();
 
   // Check if a window is covering the entire work area of the screen it is on.
@@ -98,7 +102,7 @@ class ASH_EXPORT UserSwitchAnimator {
   void BuildUserToWindowsListMap();
 
   // The owning window manager.
-  MultiUserWindowManagerImpl* owner_;
+  raw_ptr<MultiUserWindowManager> owner_;
 
   // The new user to set.
   AccountId new_account_id_;
@@ -122,8 +126,6 @@ class ASH_EXPORT UserSwitchAnimator {
 
   // For unit tests: Check which wallpaper was set.
   std::string wallpaper_user_id_for_test_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserSwitchAnimator);
 };
 
 }  // namespace ash

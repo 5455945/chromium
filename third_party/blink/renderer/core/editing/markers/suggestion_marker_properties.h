@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,12 +22,16 @@ class CORE_EXPORT SuggestionMarkerProperties final {
  public:
   class CORE_EXPORT Builder;
 
-  SuggestionMarkerProperties(const SuggestionMarkerProperties&);
   SuggestionMarkerProperties();
+  SuggestionMarkerProperties(const SuggestionMarkerProperties&);
+  SuggestionMarkerProperties& operator=(const SuggestionMarkerProperties&);
 
   SuggestionMarker::SuggestionType Type() const { return type_; }
   SuggestionMarker::RemoveOnFinishComposing RemoveOnFinishComposing() const {
     return remove_on_finish_composing_;
+  }
+  SuggestionMarker::HideSuggestionMenu ShouldHideSuggestionMenu() const {
+    return should_hide_suggestion_menu_;
   }
   Vector<String> Suggestions() const { return suggestions_; }
   Color HighlightColor() const { return highlight_color_; }
@@ -50,6 +54,8 @@ class CORE_EXPORT SuggestionMarkerProperties final {
   ImeTextSpanUnderlineStyle underline_style_ =
       ImeTextSpanUnderlineStyle::kSolid;
   Color text_color_ = Color::kTransparent;
+  SuggestionMarker::HideSuggestionMenu should_hide_suggestion_menu_ =
+      SuggestionMarker::HideSuggestionMenu::kNo;
 };
 
 // This class is used for building SuggestionMarkerProperties objects.
@@ -73,6 +79,7 @@ class CORE_EXPORT SuggestionMarkerProperties::Builder final {
   Builder& SetThickness(ImeTextSpanThickness);
   Builder& SetUnderlineStyle(ImeTextSpanUnderlineStyle);
   Builder& SetTextColor(Color);
+  Builder& SetShouldHideSuggestionMenu(bool);
 
  private:
   SuggestionMarkerProperties data_;

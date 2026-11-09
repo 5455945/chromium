@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_util_win.h"
 #include "ui/base/accelerators/accelerator.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/views/controls/menu/menu_insertion_delegate_win.h"
 
@@ -27,10 +26,10 @@ struct NativeMenuWin::ItemData {
   std::unique_ptr<NativeMenuWin> submenu;
 
   // We need a pointer back to the containing menu in various circumstances.
-  NativeMenuWin* native_menu_win;
+  raw_ptr<NativeMenuWin> native_menu_win;
 
   // The index of the item within the menu's model.
-  int model_index;
+  size_t model_index;
 };
 
 // Returns the NativeMenuWin for a particular HMENU.
@@ -45,14 +44,8 @@ static NativeMenuWin* GetNativeMenuWinFromHMENU(HMENU hmenu) {
 ////////////////////////////////////////////////////////////////////////////////
 // NativeMenuWin, public:
 
-NativeMenuWin::NativeMenuWin(ui::MenuModel* model, HWND system_menu_for)
-    : model_(model),
-      menu_(nullptr),
-      owner_draw_(l10n_util::NeedOverrideDefaultUIFont(nullptr, nullptr) &&
-                  !system_menu_for),
-      system_menu_for_(system_menu_for),
-      first_item_index_(0),
-      parent_(nullptr) {}
+NativeMenuWin::NativeMenuWin(ui::MenuModel* model, HWND sysmenu_hwnd)
+    : model_(model->AsWeakPtr()), sysmenu_hwnd_(sysmenu_hwnd) {}
 
 NativeMenuWin::~NativeMenuWin() {
   items_.clear();
@@ -66,33 +59,33 @@ void NativeMenuWin::Rebuild(MenuInsertionDelegateWin* delegate) {
   ResetNativeMenu();
   items_.clear();
 
-  owner_draw_ = model_->HasIcons() || owner_draw_;
-  first_item_index_ = delegate ? delegate->GetInsertionIndex(menu_) : 0;
-  for (int model_index = 0; model_index < model_->GetItemCount();
+  first_item_index_ = delegate ? delegate->GetInsertionIndex(menu_) : size_t{0};
+  for (size_t model_index = 0; model_index < model_->GetItemCount();
        ++model_index) {
-    int menu_index = model_index + first_item_index_;
-    if (model_->GetTypeAt(model_index) == ui::MenuModel::TYPE_SEPARATOR)
+    size_t menu_index = model_index + first_item_index_;
+    if (model_->GetTypeAt(model_index) == ui::MenuModel::TYPE_SEPARATOR) {
       AddSeparatorItemAt(menu_index, model_index);
-    else
+    } else {
       AddMenuItemAt(menu_index, model_index);
+    }
   }
 }
 
 void NativeMenuWin::UpdateStates() {
   // A depth-first walk of the menu items, updating states.
-  int model_index = 0;
+  size_t model_index = 0;
   for (const auto& item : items_) {
-    int menu_index = model_index + first_item_index_;
+    size_t menu_index = model_index + first_item_index_;
     SetMenuItemState(menu_index, model_->IsEnabledAt(model_index),
                      model_->IsItemCheckedAt(model_index), false);
     if (model_->IsItemDynamicAt(model_index)) {
-      // TODO(atwilson): Update the icon as well (http://crbug.com/66508).
       SetMenuItemLabel(menu_index, model_index,
                        model_->GetLabelAt(model_index));
     }
     NativeMenuWin* submenu = item->submenu.get();
-    if (submenu)
+    if (submenu) {
       submenu->UpdateStates();
+    }
     ++model_index;
   }
 }
@@ -100,7 +93,7 @@ void NativeMenuWin::UpdateStates() {
 ////////////////////////////////////////////////////////////////////////////////
 // NativeMenuWin, private:
 
-bool NativeMenuWin::IsSeparatorItemAt(int menu_index) const {
+bool NativeMenuWin::IsSeparatorItemAt(size_t menu_index) const {
   MENUITEMINFO mii = {0};
   mii.cbSize = sizeof(mii);
   mii.fMask = MIIM_FTYPE;
@@ -108,14 +101,11 @@ bool NativeMenuWin::IsSeparatorItemAt(int menu_index) const {
   return !!(mii.fType & MF_SEPARATOR);
 }
 
-void NativeMenuWin::AddMenuItemAt(int menu_index, int model_index) {
+void NativeMenuWin::AddMenuItemAt(size_t menu_index, size_t model_index) {
   MENUITEMINFO mii = {0};
   mii.cbSize = sizeof(mii);
   mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA;
-  if (!owner_draw_)
-    mii.fType = MFT_STRING;
-  else
-    mii.fType = MFT_OWNERDRAW;
+  mii.fType = MFT_STRING;
 
   std::unique_ptr<ItemData> item_data = std::make_unique<ItemData>();
   item_data->label = std::u16string();
@@ -128,64 +118,71 @@ void NativeMenuWin::AddMenuItemAt(int menu_index, int model_index) {
     mii.hSubMenu = item_data->submenu->menu_;
     GetNativeMenuWinFromHMENU(mii.hSubMenu)->parent_ = this;
   } else {
-    if (type == ui::MenuModel::TYPE_RADIO)
+    if (type == ui::MenuModel::TYPE_RADIO) {
       mii.fType |= MFT_RADIOCHECK;
-    mii.wID = model_->GetCommandIdAt(model_index);
+    }
+    mii.wID = static_cast<UINT>(model_->GetCommandIdAt(model_index));
   }
   item_data->native_menu_win = this;
   item_data->model_index = model_index;
   mii.dwItemData = reinterpret_cast<ULONG_PTR>(item_data.get());
-  items_.insert(items_.begin() + model_index, std::move(item_data));
+  items_.insert(items_.begin() + static_cast<ptrdiff_t>(model_index),
+                std::move(item_data));
   UpdateMenuItemInfoForString(&mii, model_index,
                               model_->GetLabelAt(model_index));
   InsertMenuItem(menu_, menu_index, TRUE, &mii);
 }
 
-void NativeMenuWin::AddSeparatorItemAt(int menu_index, int model_index) {
+void NativeMenuWin::AddSeparatorItemAt(size_t menu_index, size_t model_index) {
   MENUITEMINFO mii = {0};
   mii.cbSize = sizeof(mii);
   mii.fMask = MIIM_FTYPE;
   mii.fType = MFT_SEPARATOR;
   // Insert a dummy entry into our label list so we can index directly into it
   // using item indices if need be.
-  items_.insert(items_.begin() + model_index, std::make_unique<ItemData>());
-  InsertMenuItem(menu_, menu_index, TRUE, &mii);
+  items_.insert(items_.begin() + static_cast<ptrdiff_t>(model_index),
+                std::make_unique<ItemData>());
+  InsertMenuItem(menu_, static_cast<UINT>(menu_index), TRUE, &mii);
 }
 
-void NativeMenuWin::SetMenuItemState(int menu_index,
+void NativeMenuWin::SetMenuItemState(size_t menu_index,
                                      bool enabled,
                                      bool checked,
                                      bool is_default) {
-  if (IsSeparatorItemAt(menu_index))
+  if (IsSeparatorItemAt(menu_index)) {
     return;
+  }
 
   UINT state = enabled ? MFS_ENABLED : MFS_DISABLED;
-  if (checked)
+  if (checked) {
     state |= MFS_CHECKED;
-  if (is_default)
+  }
+  if (is_default) {
     state |= MFS_DEFAULT;
+  }
 
   MENUITEMINFO mii = {0};
   mii.cbSize = sizeof(mii);
   mii.fMask = MIIM_STATE;
   mii.fState = state;
-  SetMenuItemInfo(menu_, menu_index, MF_BYPOSITION, &mii);
+  SetMenuItemInfo(menu_, static_cast<UINT>(menu_index), MF_BYPOSITION, &mii);
 }
 
-void NativeMenuWin::SetMenuItemLabel(int menu_index,
-                                     int model_index,
+void NativeMenuWin::SetMenuItemLabel(size_t menu_index,
+                                     size_t model_index,
                                      const std::u16string& label) {
-  if (IsSeparatorItemAt(menu_index))
+  if (IsSeparatorItemAt(menu_index)) {
     return;
+  }
 
   MENUITEMINFO mii = {0};
   mii.cbSize = sizeof(mii);
   UpdateMenuItemInfoForString(&mii, model_index, label);
-  SetMenuItemInfo(menu_, menu_index, MF_BYPOSITION, &mii);
+  SetMenuItemInfo(menu_, static_cast<UINT>(menu_index), MF_BYPOSITION, &mii);
 }
 
 void NativeMenuWin::UpdateMenuItemInfoForString(MENUITEMINFO* mii,
-                                                int model_index,
+                                                size_t model_index,
                                                 const std::u16string& label) {
   std::u16string formatted = label;
   ui::MenuModel::ItemType type = model_->GetTypeAt(model_index);
@@ -211,13 +208,15 @@ void NativeMenuWin::UpdateMenuItemInfoForString(MENUITEMINFO* mii,
 }
 
 void NativeMenuWin::ResetNativeMenu() {
-  if (IsWindow(system_menu_for_)) {
-    if (menu_)
-      GetSystemMenu(system_menu_for_, TRUE);
-    menu_ = GetSystemMenu(system_menu_for_, FALSE);
+  if (IsWindow(sysmenu_hwnd_)) {
+    if (menu_) {
+      GetSystemMenu(sysmenu_hwnd_, TRUE);
+    }
+    menu_ = GetSystemMenu(sysmenu_hwnd_, FALSE);
   } else {
-    if (menu_)
+    if (menu_) {
       DestroyMenu(menu_);
+    }
     menu_ = CreatePopupMenu();
     // Rather than relying on the return value of TrackPopupMenuEx, which is
     // always a command identifier, instead we tell the menu to notify us via

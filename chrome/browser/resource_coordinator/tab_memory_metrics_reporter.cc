@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/resource_coordinator/tab_memory_metrics_reporter.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -68,7 +69,7 @@ void TabMemoryMetricsReporter::MonitorWebContents(
   base::TimeTicks current_time = NowTicks();
   WebContentsData data;
   data.page_loaded_time = current_time;
-  data.next_emit_time = data.page_loaded_time + base::TimeDelta::FromMinutes(1);
+  data.next_emit_time = data.page_loaded_time + base::Minutes(1);
   data.state = NO_METRICS_EMITTED;
   data.web_contents = web_contents;
 
@@ -120,7 +121,7 @@ void TabMemoryMetricsReporter::UpdateTimerCallback() {
     if (data.state < EMITTED_ALL_METRICS) {
       data.next_emit_time =
           data.page_loaded_time + NextEmitTimeAfterPageLoaded(data.state);
-      DCHECK(data.next_emit_time > current_time);
+      CHECK(data.next_emit_time > current_time, base::NotFatalUntil::M163);
       monitored_contents_.insert(data);
     }
     renderers_memory_dumped.pop_front();
@@ -144,7 +145,7 @@ void TabMemoryMetricsReporter::RestartTimerIfNeeded(
 bool TabMemoryMetricsReporter::EmitMemoryMetricsAfterPageLoaded(
     const TabMemoryMetricsReporter::WebContentsData& content_data) {
   content::RenderFrameHost* render_frame_host =
-      content_data.web_contents->GetMainFrame();
+      content_data.web_contents->GetPrimaryMainFrame();
   if (!render_frame_host)
     return false;
 
@@ -161,23 +162,28 @@ bool TabMemoryMetricsReporter::EmitMemoryMetricsAfterPageLoaded(
 
 base::TimeDelta TabMemoryMetricsReporter::NextEmitTimeAfterPageLoaded(
     TabMemoryMetricsReporter::ReportState state) {
-  static constexpr base::TimeDelta next_emit_time_after_page_loaded[] = {
-      base::TimeDelta::FromMinutes(1), base::TimeDelta::FromMinutes(5),
-      base::TimeDelta::FromMinutes(10), base::TimeDelta::FromMinutes(15)};
-  DCHECK(NO_METRICS_EMITTED <= state && state < EMITTED_ALL_METRICS);
+  constexpr static const auto next_emit_time_after_page_loaded =
+      std::to_array<base::TimeDelta>({
+          base::Minutes(1),
+          base::Minutes(5),
+          base::Minutes(10),
+          base::Minutes(15),
+      });
+  CHECK(NO_METRICS_EMITTED <= state && state < EMITTED_ALL_METRICS,
+        base::NotFatalUntil::M163);
   return next_emit_time_after_page_loaded[state];
 }
 
 TabMemoryMetricsReporter::ReportState
 TabMemoryMetricsReporter::NextStateOfEmitMemoryDumpAfterPageLoaded(
     base::TimeDelta time_passed) {
-  if (time_passed >= base::TimeDelta::FromMinutes(15))
+  if (time_passed >= base::Minutes(15))
     return EMITTED_ALL_METRICS;
-  if (time_passed >= base::TimeDelta::FromMinutes(10))
+  if (time_passed >= base::Minutes(10))
     return EMITTED_10MIN_METRIC;
-  if (time_passed >= base::TimeDelta::FromMinutes(5))
+  if (time_passed >= base::Minutes(5))
     return EMITTED_5MIN_METRIC;
-  if (time_passed >= base::TimeDelta::FromMinutes(1))
+  if (time_passed >= base::Minutes(1))
     return EMITTED_1MIN_METRIC;
   return NO_METRICS_EMITTED;
 }

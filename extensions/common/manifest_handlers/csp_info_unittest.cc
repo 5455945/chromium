@@ -1,15 +1,24 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/manifest_handlers/csp_info.h"
-#include "base/cxx17_backports.h"
+
+#include <optional>
+#include <string_view>
+
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/values_test_util.h"
 #include "components/version_info/channel.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/sandboxed_page_info.h"
 #include "extensions/common/manifest_test.h"
+#include "extensions/common/switches.h"
 
 namespace extensions {
 
@@ -18,7 +27,7 @@ namespace {
 namespace errors = manifest_errors;
 namespace keys = manifest_keys;
 
-std::string GetInvalidManifestKeyError(base::StringPiece key) {
+std::string GetInvalidManifestKeyError(std::string_view key) {
   return ErrorUtils::FormatErrorMessage(errors::kInvalidManifestKey, key);
 }
 
@@ -28,7 +37,7 @@ const char kDefaultSandboxedPageCSP[] =
 const char kDefaultExtensionPagesCSP[] =
     "script-src 'self' blob: filesystem:; "
     "object-src 'self' blob: filesystem:;";
-const char kDefaultSecureCSP[] = "script-src 'self'; object-src 'self';";
+const char kDefaultSecureCSP[] = "script-src 'self';";
 
 }  // namespace
 
@@ -68,6 +77,13 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
 
   EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
                                           extension1.get(), "/test"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension1.get(), "/t%65st"));
+  EXPECT_TRUE(SandboxedPageInfo::IsSandboxedPage(extension1.get(), "/t%65st"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension1.get(), "/Test"));
+  EXPECT_TRUE(SandboxedPageInfo::IsSandboxedPage(extension1.get(), "/Test"));
+  EXPECT_TRUE(SandboxedPageInfo::IsSandboxedPage(extension1.get(), "/tEsT"));
   EXPECT_EQ(
       kDefaultExtensionPagesCSP,
       CSPInfo::GetResourceContentSecurityPolicy(extension1.get(), "/none"));
@@ -83,6 +99,17 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
                                           extension4.get(), "/test"));
   EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
                                           extension5.get(), "/path/test.ext"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP,
+            CSPInfo::GetResourceContentSecurityPolicy(extension5.get(),
+                                                      "/path/test%2Eext"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension5.get(), "/path/test%2Eext"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension5.get(), "/PATH/TEST.EXT"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension5.get(), "/PATH/TEST.EXT"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension5.get(), "/path/TEST.ext"));
   EXPECT_EQ(
       kDefaultExtensionPagesCSP,
       CSPInfo::GetResourceContentSecurityPolicy(extension5.get(), "/test"));
@@ -91,7 +118,31 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
   EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
                                           extension7.get(), "/test"));
 
-  Testcase testcases[] = {
+  static constexpr char kManifestUtf8Sandboxed[] =
+      R"({
+           "name": "UTF-8 Sandboxed Page Test",
+           "manifest_version": 3,
+           "version": "0.1",
+           "sandbox": {
+             "pages": ["café.html"]
+           }
+         })";
+  ManifestData manifest_data_utf8(
+      base::test::ParseJsonDict(kManifestUtf8Sandboxed));
+  scoped_refptr<const Extension> extension_utf8 =
+      LoadAndExpectSuccess(manifest_data_utf8);
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension_utf8.get(), "/café.html"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension_utf8.get(), "/café.html"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension_utf8.get(), "/CAFÉ.html"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension_utf8.get(), "/CAFÉ.html"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension_utf8.get(), "/Café.html"));
+
+  const Testcase testcases[] = {
       Testcase("sandboxed_pages_invalid_1.json",
                errors::kInvalidSandboxedPagesList),
       Testcase("sandboxed_pages_invalid_2.json", errors::kInvalidSandboxedPage),
@@ -101,7 +152,7 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
                GetInvalidManifestKeyError(keys::kSandboxedPagesCSP)),
       Testcase("sandboxed_pages_invalid_5.json",
                GetInvalidManifestKeyError(keys::kSandboxedPagesCSP))};
-  RunTestcases(testcases, base::size(testcases), EXPECT_TYPE_ERROR);
+  RunTestcases(testcases, ExpectType::kError);
 }
 
 TEST_F(CSPInfoUnitTest, CSPStringKey) {
@@ -112,18 +163,18 @@ TEST_F(CSPInfoUnitTest, CSPStringKey) {
             CSPInfo::GetExtensionPagesCSP(extension.get()));
 
   // Manifest V2 extensions bypass the main world CSP in their isolated worlds.
-  const std::string* isolated_world_csp =
+  std::optional<std::string> isolated_world_csp =
       CSPInfo::GetIsolatedWorldCSP(*extension);
   ASSERT_TRUE(isolated_world_csp);
   EXPECT_TRUE(isolated_world_csp->empty());
 
   RunTestcase(Testcase("csp_invalid_1.json", GetInvalidManifestKeyError(
                                                  keys::kContentSecurityPolicy)),
-              EXPECT_TYPE_ERROR);
+              ExpectType::kError);
 }
 
 TEST_F(CSPInfoUnitTest, CSPDictionary_ExtensionPages) {
-  struct {
+  static constexpr struct {
     const char* file_name;
     const char* csp;
   } cases[] = {{"csp_dictionary_valid_1.json", "default-src 'none'"},
@@ -139,7 +190,7 @@ TEST_F(CSPInfoUnitTest, CSPDictionary_ExtensionPages) {
     EXPECT_EQ(test_case.csp, CSPInfo::GetExtensionPagesCSP(extension.get()));
   }
 
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       Testcase("csp_invalid_2.json",
                GetInvalidManifestKeyError(
                    keys::kContentSecurityPolicy_ExtensionPagesPath)),
@@ -157,14 +208,165 @@ TEST_F(CSPInfoUnitTest, CSPDictionary_ExtensionPages) {
                    keys::kContentSecurityPolicy_ExtensionPagesPath,
                    "'unsafe-eval'", "worker-src")),
   };
-  RunTestcases(testcases, base::size(testcases), EXPECT_TYPE_ERROR);
+  RunTestcases(testcases, ExpectType::kError);
+}
+
+// Tests the requirements for object-src specifications.
+TEST_F(CSPInfoUnitTest, ObjectSrcRequirements) {
+  enum class ManifestVersion {
+    kMV2,
+    kMV3,
+  };
+
+  static constexpr char kManifestV3Template[] =
+      R"({
+           "name": "Test Extension",
+           "manifest_version": 3,
+           "version": "0.1",
+           "content_security_policy": {
+             "extension_pages": "%s"
+           }
+         })";
+
+  static constexpr char kManifestV2Template[] =
+      R"({
+           "name": "Test Extension",
+           "manifest_version": 2,
+           "version": "0.1",
+           "content_security_policy": "%s"
+         })";
+
+  auto get_manifest = [](ManifestVersion version, const char* input) {
+    return base::test::ParseJsonDict(
+        version == ManifestVersion::kMV2
+            ? base::StringPrintf(kManifestV2Template, input)
+            : base::StringPrintf(kManifestV3Template, input));
+  };
+
+  static constexpr struct {
+    ManifestVersion version;
+    const char* csp;
+  } kPassingTestcases[] = {
+      // object-src doesn't need to be explicitly specified in manifest V3.
+      {ManifestVersion::kMV3, "script-src 'self'"},
+      {ManifestVersion::kMV3, "default-src 'self'"},
+      // Secure object-src specifications are allowed.
+      {ManifestVersion::kMV3, "script-src 'self'; object-src 'self'"},
+      {ManifestVersion::kMV3, "script-src 'self'; object-src 'none'"},
+      {ManifestVersion::kMV3,
+       ("script-src 'self'; object-src 'self'; frame-src 'self'; default-src "
+        "https://google.com")},
+      // Even though the object-src in the example below is effectively
+      // https://google.com (because it falls back to the default-src), we
+      // still allow it so that developers don't need to explicitly specify an
+      // object-src just because they specified a default-src. The minimum CSP
+      // (which includes `object-src 'self'`) still kicks in and prevents any
+      // insecure use.
+      {ManifestVersion::kMV3,
+       "script-src 'self'; default-src https://google.com"},
+
+      // In Manifest V2, object-src must be specified (if it's omitted, we add
+      // it; see `kWarningTestcases` below).
+      // Note: in MV2, our parsing will implicitly also add a trailing semicolon
+      // if one isn't provided, so we always add one here so that the final CSP
+      // matches.
+      {ManifestVersion::kMV2, "script-src 'self'; object-src 'self';"},
+      {ManifestVersion::kMV2, "script-src 'self'; object-src 'none';"},
+      {ManifestVersion::kMV2,
+       ("script-src 'self'; object-src 'self'; frame-src 'self'; default-src "
+        "https://google.com;")},
+      // Manifest V2 allows (secure) remote object-src specifications.
+      {ManifestVersion::kMV2,
+       "script-src 'self'; object-src https://google.com;"},
+      {ManifestVersion::kMV2,
+       "script-src 'self'; default-src https://google.com;"},
+  };
+
+  for (const auto& testcase : kPassingTestcases) {
+    SCOPED_TRACE(testcase.csp);
+    ManifestData manifest_data(get_manifest(testcase.version, testcase.csp));
+    scoped_refptr<const Extension> extension =
+        LoadAndExpectSuccess(manifest_data);
+    ASSERT_TRUE(extension);
+    EXPECT_EQ(testcase.csp, CSPInfo::GetExtensionPagesCSP(extension.get()));
+  }
+
+  static constexpr struct {
+    ManifestVersion version;
+    const char* csp;
+    const char* expected_error;
+  } kFailingTestcases[] = {
+      // If an object-src *is* specified, it must be secure and must not allow
+      // remotely-hosted code (in MV3).
+      {ManifestVersion::kMV3,
+       "script-src 'self'; object-src https://google.com",
+       "*Insecure CSP value \"https://google.com\" in directive 'object-src'."},
+  };
+
+  for (const auto& testcase : kFailingTestcases) {
+    SCOPED_TRACE(testcase.csp);
+    ManifestData manifest_data(get_manifest(testcase.version, testcase.csp));
+    LoadAndExpectError(manifest_data, testcase.expected_error);
+  }
+
+  static constexpr struct {
+    ManifestVersion version;
+    const char* csp;
+    const char* expected_warning;
+    const char* effective_csp;
+  } kWarningTestcases[] = {
+      // In MV2, if an object-src is not provided, we will warn and synthesize
+      // one.
+      {ManifestVersion::kMV2, "script-src 'self'",
+       ("'content_security_policy': CSP directive 'object-src' must be "
+        "specified (either explicitly, or implicitly via 'default-src') "
+        "and must allowlist only secure resources."),
+       "script-src 'self'; object-src 'self';"},
+      // Similarly, if an insecure (e.g. http) object-src is provided, we simply
+      // ignore it.
+      {ManifestVersion::kMV2, "script-src 'self'; object-src http://google.com",
+       ("'content_security_policy': Ignored insecure CSP value "
+        "\"http://google.com\" in directive 'object-src'."),
+       "script-src 'self'; object-src;"}};
+
+  for (const auto& testcase : kWarningTestcases) {
+    // Special case: In MV2, if the developer doesn't provide an object-src, we
+    // insert one ('self') and emit a warning.
+    ManifestData manifest_data(get_manifest(testcase.version, testcase.csp));
+    scoped_refptr<const Extension> extension =
+        LoadAndExpectWarning(manifest_data, testcase.expected_warning);
+    ASSERT_TRUE(extension);
+    EXPECT_EQ(testcase.effective_csp,
+              CSPInfo::GetExtensionPagesCSP(extension.get()));
+  }
+}
+
+TEST_F(CSPInfoUnitTest, AllowWasmInMV3) {
+  struct {
+    const char* file_name;
+    const char* csp;
+  } cases[] = {{"csp_dictionary_with_wasm.json",
+                "worker-src 'self' 'wasm-unsafe-eval'; default-src 'self'"},
+               {"csp_dictionary_with_unsafe_wasm.json",
+                "worker-src 'self' 'wasm-unsafe-eval'; default-src 'self'"},
+               {"csp_dictionary_empty_v3.json", "script-src 'self';"},
+               {"csp_dictionary_valid_1.json", "default-src 'none'"},
+               {"csp_omitted_mv2.json", kDefaultExtensionPagesCSP}};
+
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(base::StringPrintf("Testing %s.", test_case.file_name));
+    scoped_refptr<Extension> extension =
+        LoadAndExpectSuccess(test_case.file_name);
+    ASSERT_TRUE(extension.get());
+    EXPECT_EQ(test_case.csp, CSPInfo::GetExtensionPagesCSP(extension.get()));
+  }
 }
 
 TEST_F(CSPInfoUnitTest, CSPDictionary_Sandbox) {
   ScopedCurrentChannel channel(version_info::Channel::UNKNOWN);
 
   const char kCustomSandboxedCSP[] =
-      "sandbox; script-src 'self'; child-src 'self';";
+      "sandbox; script-src https://www.google.com";
   const char kCustomExtensionPagesCSP[] = "script-src; object-src;";
 
   struct {
@@ -189,7 +391,7 @@ TEST_F(CSPInfoUnitTest, CSPDictionary_Sandbox) {
                   extension.get(), test_case.resource_path));
   }
 
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       {"sandbox_both_keys.json", errors::kSandboxPagesCSPKeyNotAllowed},
       {"sandbox_csp_with_dictionary.json",
        errors::kSandboxPagesCSPKeyNotAllowed},
@@ -199,7 +401,7 @@ TEST_F(CSPInfoUnitTest, CSPDictionary_Sandbox) {
       {"unsandboxed_csp.json",
        GetInvalidManifestKeyError(
            keys::kContentSecurityPolicy_SandboxedPagesPath)}};
-  RunTestcases(testcases, base::size(testcases), EXPECT_TYPE_ERROR);
+  RunTestcases(testcases, ExpectType::kError);
 }
 
 // Ensures that using a dictionary for the keys::kContentSecurityPolicy manifest
@@ -212,20 +414,58 @@ TEST_F(CSPInfoUnitTest, CSPDictionaryMandatoryForV3) {
   const char* default_case_filenames[] = {"csp_dictionary_empty_v3.json",
                                           "csp_dictionary_missing_v3.json"};
 
+  // First, run through with loading the extensions as packed extensions.
   for (const char* filename : default_case_filenames) {
     SCOPED_TRACE(filename);
-    scoped_refptr<Extension> extension = LoadAndExpectSuccess(filename);
+    scoped_refptr<Extension> extension =
+        LoadAndExpectSuccess(filename, mojom::ManifestLocation::kInternal);
     ASSERT_TRUE(extension);
 
-    const std::string* isolated_world_csp =
+    std::optional<std::string> isolated_world_csp =
         CSPInfo::GetIsolatedWorldCSP(*extension);
     ASSERT_TRUE(isolated_world_csp);
-    EXPECT_EQ(kDefaultSecureCSP, *isolated_world_csp);
+    std::string expected_csp = base::StringPrintf(
+        "script-src 'self' 'wasm-unsafe-eval' 'inline-speculation-rules' "
+        "%s; object-src 'self';",
+        extension->dynamic_url().spec().c_str());
+    EXPECT_EQ(expected_csp, *isolated_world_csp);
 
     EXPECT_EQ(kDefaultSandboxedPageCSP,
               CSPInfo::GetSandboxContentSecurityPolicy(extension.get()));
     EXPECT_EQ(kDefaultSecureCSP,
               CSPInfo::GetExtensionPagesCSP(extension.get()));
+
+    EXPECT_EQ(CSPHandler::GetMinimumMV3CSPForTesting(),
+              *CSPInfo::GetMinimumCSPToAppend(*extension, "not_sandboxed.html",
+                                              /*is_service_worker=*/false));
+  }
+
+  // Repeat the test, loading the extensions as unpacked extensions.
+  // The minimum CSP we append (and thus the isolated world CSP) should be
+  // different, while the other CSPs should remain the same.
+  for (const char* filename : default_case_filenames) {
+    SCOPED_TRACE(filename);
+    scoped_refptr<Extension> extension =
+        LoadAndExpectSuccess(filename, mojom::ManifestLocation::kUnpacked);
+    ASSERT_TRUE(extension);
+
+    std::optional<std::string> isolated_world_csp =
+        CSPInfo::GetIsolatedWorldCSP(*extension);
+    ASSERT_TRUE(isolated_world_csp);
+    std::string expected_csp = base::StringPrintf(
+        "script-src 'self' 'wasm-unsafe-eval' 'inline-speculation-rules' "
+        "http://localhost:* http://127.0.0.1:* %s; object-src 'self';",
+        extension->dynamic_url().spec().c_str());
+    EXPECT_EQ(expected_csp, *isolated_world_csp);
+
+    EXPECT_EQ(kDefaultSandboxedPageCSP,
+              CSPInfo::GetSandboxContentSecurityPolicy(extension.get()));
+    EXPECT_EQ(kDefaultSecureCSP,
+              CSPInfo::GetExtensionPagesCSP(extension.get()));
+
+    EXPECT_EQ(CSPHandler::GetMinimumUnpackedMV3CSPForTesting(),
+              *CSPInfo::GetMinimumCSPToAppend(*extension, "not_sandboxed.html",
+                                              /*is_service_worker=*/false));
   }
 }
 
@@ -233,6 +473,279 @@ TEST_F(CSPInfoUnitTest, CSPDictionaryMandatoryForV3) {
 TEST_F(CSPInfoUnitTest, CSPDictionaryDisallowedForV2) {
   LoadAndExpectError("csp_dictionary_mv2.json",
                      GetInvalidManifestKeyError(keys::kContentSecurityPolicy));
+}
+
+// Ensure that service workers ignore the sandbox.pages CSP and instead use the
+// stricter extension CSP.
+TEST_F(CSPInfoUnitTest, ServiceWorkerSandboxIgnored) {
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess("sandboxed_pages_valid_1.json");
+  ASSERT_TRUE(extension);
+
+  static constexpr char kSandboxedPath[] = "/test";
+  ASSERT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension.get(), kSandboxedPath));
+
+  // If not a service worker, the sandboxed page CSP should be returned.
+  EXPECT_EQ(kDefaultSandboxedPageCSP,
+            *CSPInfo::GetMinimumCSPToAppend(*extension, kSandboxedPath,
+                                            /*is_service_worker=*/false));
+
+  // If a service worker, the extension pages CSP should be returned (even if
+  // the path is sandboxed). For MV2, this is the default extension pages CSP.
+  EXPECT_EQ(kDefaultExtensionPagesCSP,
+            *CSPInfo::GetMinimumCSPToAppend(*extension, kSandboxedPath,
+                                            /*is_service_worker=*/true));
+}
+
+// Ensure that MV3 service workers ignore the sandbox.pages CSP even if they are
+// explicitly listed there.
+TEST_F(CSPInfoUnitTest, ServiceWorkerSandboxIgnoredMV3) {
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess("sandboxed_sw_mv3.json");
+  ASSERT_TRUE(extension);
+
+  static constexpr char kSandboxedPath[] = "/sw.js";
+  ASSERT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension.get(), kSandboxedPath));
+
+  // If not a service worker, the sandboxed page CSP should be returned.
+  EXPECT_EQ(kDefaultSandboxedPageCSP,
+            *CSPInfo::GetMinimumCSPToAppend(*extension, kSandboxedPath,
+                                            /*is_service_worker=*/false));
+
+  // If a service worker, the extension pages CSP should be returned (even if
+  // the path is sandboxed).
+  EXPECT_EQ(CSPHandler::GetMinimumMV3CSPForTesting(),
+            *CSPInfo::GetMinimumCSPToAppend(*extension, kSandboxedPath,
+                                            /*is_service_worker=*/true));
+}
+
+// Ensure that even with a custom sandbox CSP (which may be insecure), the
+// service worker still gets the strict MV3 CSP.
+TEST_F(CSPInfoUnitTest, ServiceWorkerSandboxIgnoredWithCustomCSP) {
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess("sandboxed_sw_mv3_with_csp.json");
+  ASSERT_TRUE(extension);
+
+  static constexpr char kSandboxedPath[] = "/sw.js";
+  ASSERT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension.get(), kSandboxedPath));
+
+  // If not a service worker, the sandboxed page CSP should be returned.
+  // Note: kDefaultSandboxedPageCSP is not used here because we provided a
+  // custom one.
+  const std::string& custom_sandbox_csp =
+      CSPInfo::GetSandboxContentSecurityPolicy(extension.get());
+  EXPECT_EQ(custom_sandbox_csp,
+            *CSPInfo::GetMinimumCSPToAppend(*extension, kSandboxedPath,
+                                            /*is_service_worker=*/false));
+
+  // If a service worker, the extension pages CSP should be returned (even if
+  // the path is sandboxed).
+  EXPECT_EQ(CSPHandler::GetMinimumMV3CSPForTesting(),
+            *CSPInfo::GetMinimumCSPToAppend(*extension, kSandboxedPath,
+                                            /*is_service_worker=*/true));
+}
+
+// Tests that extensions of the "user script" type also have CSP enforced for
+// Manifest V3+.
+TEST_F(CSPInfoUnitTest, UserScriptStrictCSP) {
+  ManifestData manifest_data(base::test::ParseJsonDict(R"({
+    "name": "User Script Strict",
+    "manifest_version": 3,
+    "version": "1.0",
+    "converted_from_user_script": true
+  })"));
+  scoped_refptr<const Extension> extension =
+      LoadAndExpectSuccess(manifest_data);
+  ASSERT_TRUE(extension);
+  ASSERT_EQ(Manifest::Type::kUserScript, extension->GetType());
+
+  // Should receive default secure manifest CSP.
+  EXPECT_EQ("script-src 'self';",
+            CSPInfo::GetExtensionPagesCSP(extension.get()));
+  // Like items with Manifest::Type::kExtension, TYPE_USER_SCRIPT items should
+  // also get a "minimum CSP" to append to the list of CSPs. This ensures every
+  // item has at least a minimally-strict CSP that rejects remotely-hosted
+  // code.
+  EXPECT_NE(std::nullopt,
+            CSPInfo::GetMinimumCSPToAppend(*extension, "page.html", false));
+}
+
+TEST_F(CSPInfoUnitTest, ValidateDefaultMV3ExtensionPagesCSP) {
+  static const char kDefaultMV3CSP[] = "script-src 'self';";
+
+  static constexpr char kManifestV3[] =
+      R"({
+           "name": "Test MV3 Extension",
+           "manifest_version": 3,
+           "version": "0.1"
+         })";
+
+  ManifestData manifest_data_mv3(base::test::ParseJsonDict(kManifestV3));
+  scoped_refptr<const Extension> extension_mv3 =
+      LoadAndExpectSuccess(manifest_data_mv3);
+  EXPECT_EQ(3, extension_mv3.get()->manifest_version());
+  EXPECT_EQ(Manifest::Type::kExtension, extension_mv3.get()->GetType());
+  EXPECT_EQ(kDefaultMV3CSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                extension_mv3.get(), "/test"));
+}
+
+TEST_F(CSPInfoUnitTest, ValidateDefaultMV2ExtensionPagesCSP) {
+  const char kDefaultMV2CSP[] =
+      "script-src 'self' blob: filesystem:; "
+      "object-src 'self' blob: filesystem:;";
+
+  static constexpr char kManifestV2[] =
+      R"({
+           "name": "Test MV2 Extension",
+           "manifest_version": 2,
+           "version": "0.1"
+         })";
+
+  ManifestData manifest_data_mv2(base::test::ParseJsonDict(kManifestV2));
+  scoped_refptr<const Extension> extension_mv2 =
+      LoadAndExpectSuccess(manifest_data_mv2);
+  EXPECT_EQ(2, extension_mv2.get()->manifest_version());
+  EXPECT_EQ(Manifest::Type::kExtension, extension_mv2.get()->GetType());
+  EXPECT_EQ(kDefaultMV2CSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                extension_mv2.get(), "/test"));
+}
+
+TEST_F(CSPInfoUnitTest, ValidateDefaultMV2PlatformAppPagesCSP) {
+#define PLATFORM_APP_LOCAL_CSP_SOURCES "'self' blob: filesystem: data:"
+
+  // clang-format off
+const char kDefaultPlatformAppContentSecurityPolicy[] =
+    "default-src 'self' blob: filesystem:;"
+    " connect-src * data: blob: filesystem:;"
+    " style-src " PLATFORM_APP_LOCAL_CSP_SOURCES " 'unsafe-inline';"
+    " img-src " PLATFORM_APP_LOCAL_CSP_SOURCES ";"
+    " frame-src " PLATFORM_APP_LOCAL_CSP_SOURCES ";"
+    " font-src " PLATFORM_APP_LOCAL_CSP_SOURCES ";"
+    " media-src * data: blob: filesystem:;"
+    " script-src 'self' blob: filesystem: 'wasm-unsafe-eval';";
+  // clang-format on
+
+#undef PLATFORM_APP_LOCAL_CSP_SOURCES
+
+  static constexpr char kManifestV2PlatformApp[] =
+      R"({
+           "name": "Test MV2 Platform App",
+           "manifest_version": 2,
+           "version": "0.1",
+           "app": {
+             "background": {
+               "scripts": [
+                 "script.js"
+               ]
+             }
+           }
+         })";
+
+  ManifestData manifest_data_mv2_platform_app(
+      base::test::ParseJsonDict(kManifestV2PlatformApp));
+  scoped_refptr<const Extension> extension_mv2_platform_app =
+      LoadAndExpectSuccess(manifest_data_mv2_platform_app);
+  EXPECT_EQ(2, extension_mv2_platform_app.get()->manifest_version());
+  EXPECT_EQ(Manifest::Type::kPlatformApp,
+            extension_mv2_platform_app.get()->GetType());
+  EXPECT_EQ(kDefaultPlatformAppContentSecurityPolicy,
+            CSPInfo::GetResourceContentSecurityPolicy(
+                extension_mv2_platform_app.get(), "/test"));
+}
+
+TEST_F(CSPInfoUnitTest, SandboxedPagesInvalidCharacters) {
+  // A sandboxed page CSP containing non-printable characters like DEL (0x7F)
+  // must fail manifest parsing.
+  ManifestData manifest_data(base::test::ParseJsonDict(R"({
+    "name": "Test Sandbox CSP With DEL",
+    "manifest_version": 3,
+    "version": "0.1",
+    "sandbox": {
+      "pages": ["sandboxed.html"]
+    },
+    "content_security_policy": {
+      "sandbox": "sandbox allow-scripts allow-same-origin\x7f"
+    }
+  })"));
+  LoadAndExpectError(manifest_data,
+                     GetInvalidManifestKeyError(
+                         keys::kContentSecurityPolicy_SandboxedPagesPath));
+}
+
+TEST_F(CSPInfoUnitTest, ComponentExtensionWebUITestCSP) {
+  static constexpr char kManifest[] =
+      R"({
+           "name": "Component Extension with WebUI Test CSP",
+           "manifest_version": 3,
+           "version": "0.1",
+           "content_security_policy": {
+             "extension_pages":
+                 "script-src 'self' chrome://webui-test; object-src 'self';"
+           }
+         })";
+
+  ManifestData manifest_data(base::test::ParseJsonDict(kManifest));
+  const std::string expected_error = ErrorUtils::FormatErrorMessage(
+      errors::kInvalidCSPInsecureValueError,
+      keys::kContentSecurityPolicy_ExtensionPagesPath, "chrome://webui-test",
+      "script-src");
+
+  // Listing chrome://webui-test in the manifest is not enough on its own:
+  // without the test-only switch, component extensions are rejected.
+  LoadAndExpectError(manifest_data, expected_error,
+                     mojom::ManifestLocation::kComponent);
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kAllowWebUITestInComponentExtensions);
+
+  // With the switch, component extensions can specify chrome://webui-test in
+  // extension_pages CSP.
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess(manifest_data, mojom::ManifestLocation::kComponent);
+  ASSERT_TRUE(extension);
+  EXPECT_EQ("script-src 'self' chrome://webui-test; object-src 'self';",
+            CSPInfo::GetExtensionPagesCSP(extension.get()));
+  EXPECT_EQ(
+      "script-src 'self' chrome://webui-test 'wasm-unsafe-eval' "
+      "'inline-speculation-rules'; object-src 'self';",
+      *CSPInfo::GetMinimumCSPToAppend(*extension, "/test.html",
+                                      /*is_service_worker=*/false));
+
+  // External component and non-component extensions cannot use
+  // chrome://webui-test, even with the switch.
+  LoadAndExpectError(manifest_data, expected_error,
+                     mojom::ManifestLocation::kExternalComponent);
+  LoadAndExpectError(manifest_data, expected_error,
+                     mojom::ManifestLocation::kInternal);
+
+  // Component extensions without chrome://webui-test in their manifest also
+  // automatically receive chrome://webui-test in script-src when the test-only
+  // switch is set.
+  static constexpr char kStandardComponentManifest[] =
+      R"({
+           "name": "Standard Component Extension",
+           "manifest_version": 3,
+           "version": "0.1",
+           "content_security_policy": {
+             "extension_pages": "script-src 'self'; object-src 'self';"
+           }
+         })";
+  ManifestData standard_manifest_data(
+      base::test::ParseJsonDict(kStandardComponentManifest));
+  scoped_refptr<Extension> standard_component = LoadAndExpectSuccess(
+      standard_manifest_data, mojom::ManifestLocation::kComponent);
+  ASSERT_TRUE(standard_component);
+  EXPECT_EQ("script-src 'self' chrome://webui-test; object-src 'self';",
+            CSPInfo::GetExtensionPagesCSP(standard_component.get()));
+  EXPECT_EQ(
+      "script-src 'self' chrome://webui-test 'wasm-unsafe-eval' "
+      "'inline-speculation-rules'; object-src 'self';",
+      *CSPInfo::GetMinimumCSPToAppend(*standard_component, "/test.html",
+                                      /*is_service_worker=*/false));
 }
 
 }  // namespace extensions

@@ -110,6 +110,12 @@ bool TouchEvent::IsTouchEvent() const {
 void TouchEvent::preventDefault() {
   UIEventWithKeyState::preventDefault();
 
+  if (!IsFullyTrusted()) {
+    // The messages below should only be sent for implementation-created
+    // events, not for script-created ones.
+    return;
+  }
+
   // A common developer error is to wait too long before attempting to stop
   // scrolling by consuming a touchmove event. Generate an error if this
   // event is uncancelable.
@@ -120,10 +126,10 @@ void TouchEvent::preventDefault() {
     case PassiveMode::kNotPassiveDefault:
       if (!cancelable()) {
         id = "IgnoredEventCancel";
-        message = "Ignored attempt to cancel a " + type() +
-                  " event with cancelable=false, for example "
-                  "because scrolling is in progress and "
-                  "cannot be interrupted.";
+        message =
+            StrCat({"Ignored attempt to cancel a ", type(),
+                    " event with cancelable=false, for example because "
+                    "scrolling is in progress and cannot be interrupted."});
       }
       break;
     case PassiveMode::kPassiveForcedDocumentLevel:
@@ -135,7 +141,7 @@ void TouchEvent::preventDefault() {
         message =
             "Unable to preventDefault inside passive event listener due to "
             "target being treated as passive. See "
-            "https://www.chromestatus.com/features/5093566007214080";
+            "https://www.chromestatus.com/feature/5093566007214080";
       }
       break;
     default:
@@ -143,7 +149,7 @@ void TouchEvent::preventDefault() {
   }
 
   auto* local_dom_window = DynamicTo<LocalDOMWindow>(view());
-  if (!message.IsEmpty() && local_dom_window && local_dom_window->GetFrame()) {
+  if (!message.empty() && local_dom_window && local_dom_window->GetFrame()) {
     Intervention::GenerateReport(local_dom_window->GetFrame(), id, message);
   }
 
@@ -170,12 +176,6 @@ void TouchEvent::preventDefault() {
   }
 }
 
-bool TouchEvent::IsTouchStartOrFirstTouchMove() const {
-  if (!native_event_)
-    return false;
-  return GetWebTouchEvent(*native_event_)->touch_start_or_first_touch_move;
-}
-
 void TouchEvent::Trace(Visitor* visitor) const {
   visitor->Trace(touches_);
   visitor->Trace(target_touches_);
@@ -184,7 +184,8 @@ void TouchEvent::Trace(Visitor* visitor) const {
 }
 
 DispatchEventResult TouchEvent::DispatchEvent(EventDispatcher& dispatcher) {
-  GetEventPath().AdjustForTouchEvent(*this);
+  if (isTrusted())
+    GetEventPath().AdjustForTouchEvent(*this);
   return dispatcher.Dispatch();
 }
 

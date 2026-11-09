@@ -1,13 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_POLICY_CLOUD_USER_POLICY_SIGNIN_SERVICE_FACTORY_H_
 #define CHROME_BROWSER_POLICY_CLOUD_USER_POLICY_SIGNIN_SERVICE_FACTORY_H_
 
-#include "base/macros.h"
-#include "base/memory/singleton.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "base/no_destructor.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 class Profile;
 
@@ -22,8 +21,7 @@ class UserPolicySigninService;
 
 // Singleton that owns all UserPolicySigninServices and creates/deletes them as
 // new Profiles are created/shutdown.
-class UserPolicySigninServiceFactory
-    : public BrowserContextKeyedServiceFactory {
+class UserPolicySigninServiceFactory : public ProfileKeyedServiceFactory {
  public:
   // Returns an instance of the UserPolicySigninServiceFactory singleton.
   static UserPolicySigninServiceFactory* GetInstance();
@@ -38,9 +36,14 @@ class UserPolicySigninServiceFactory
   static void SetDeviceManagementServiceForTesting(
       DeviceManagementService* device_management_service);
 
+  UserPolicySigninServiceFactory(const UserPolicySigninServiceFactory&) =
+      delete;
+  UserPolicySigninServiceFactory& operator=(
+      const UserPolicySigninServiceFactory&) = delete;
+
  protected:
   // BrowserContextKeyedServiceFactory implementation.
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
 
   // Overridden to cause this object to be created when the profile is created.
@@ -51,12 +54,10 @@ class UserPolicySigninServiceFactory
       user_prefs::PrefRegistrySyncable* registry) override;
 
  private:
-  friend struct base::DefaultSingletonTraits<UserPolicySigninServiceFactory>;
+  friend base::NoDestructor<UserPolicySigninServiceFactory>;
 
   UserPolicySigninServiceFactory();
   ~UserPolicySigninServiceFactory() override;
-
-  DISALLOW_COPY_AND_ASSIGN(UserPolicySigninServiceFactory);
 };
 
 }  // namespace policy

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,174 +6,104 @@
 
 #include <deque>
 #include <functional>
+#include <optional>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/debug/leak_annotations.h"
+#include "base/run_loop.h"
+#include "base/trace_event/trace_log.h"
+#include "services/tracing/public/cpp/tracing_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/perfetto/include/perfetto/ext/base/utils.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_writer.h"
 #include "third_party/perfetto/include/perfetto/protozero/root_message.h"
 
 namespace tracing {
 
-namespace {
-
-// For sequences/threads other than our own, we just want to ignore
-// any events coming in.
-class DummyTraceWriter : public perfetto::TraceWriter {
- public:
-  DummyTraceWriter()
-      : delegate_(perfetto::base::kPageSize), stream_(&delegate_) {}
-
-  perfetto::TraceWriter::TracePacketHandle NewTracePacket() override {
-    stream_.Reset(delegate_.GetNewBuffer());
-    trace_packet_.Reset(&stream_);
-
-    return perfetto::TraceWriter::TracePacketHandle(&trace_packet_);
-  }
-
-  void Flush(std::function<void()> callback = {}) override {}
-
-  perfetto::WriterID writer_id() const override {
-    return perfetto::WriterID(0);
-  }
-
-  uint64_t written() const override { return 0u; }
-
- private:
-  protozero::RootMessage<perfetto::protos::pbzero::TracePacket> trace_packet_;
-  protozero::ScatteredStreamWriterNullDelegate delegate_;
-  protozero::ScatteredStreamWriter stream_;
-};
-
-}  // namespace
-
-TestProducerClient::TestProducerClient(
-    std::unique_ptr<base::tracing::PerfettoTaskRunner> main_thread_task_runner,
-    bool log_only_main_thread)
-    : ProducerClient(main_thread_task_runner.get()),
-      delegate_(perfetto::base::kPageSize),
-      stream_(&delegate_),
-      main_thread_task_runner_(std::move(main_thread_task_runner)),
-      log_only_main_thread_(log_only_main_thread) {
-  trace_packet_.Reset(&stream_);
+DataSourceTester::DataSourceTester(
+    tracing::PerfettoTracedProcess::DataSourceBase* data_source) {
+  features_.InitAndDisableFeature(features::kEnablePerfettoSystemTracing);
 }
 
-TestProducerClient::~TestProducerClient() = default;
+DataSourceTester::~DataSourceTester() = default;
 
-std::unique_ptr<perfetto::TraceWriter> TestProducerClient::CreateTraceWriter(
-    perfetto::BufferID target_buffer,
-    perfetto::BufferExhaustedPolicy) {
-  // We attempt to destroy TraceWriters on thread shutdown in
-  // ThreadLocalStorage::Slot, by posting them to the ProducerClient taskrunner,
-  // but there's no guarantee that this will succeed if that taskrunner is also
-  // shut down.
-  ANNOTATE_SCOPED_MEMORY_LEAK;
-  if (!log_only_main_thread_ ||
-      main_thread_task_runner_->GetOrCreateTaskRunner()
-          ->RunsTasksInCurrentSequence()) {
-    return std::make_unique<TestTraceWriter>(this);
-  } else {
-    return std::make_unique<DummyTraceWriter>();
-  }
+void DataSourceTester::BeginTrace(
+    const base::trace_event::TraceConfig& trace_config) {
+  auto* trace_log = base::trace_event::TraceLog::GetInstance();
+  perfetto::TraceConfig perfetto_config(
+      tracing::GetDefaultPerfettoConfig(trace_config));
+  trace_log->SetEnabled(trace_config, perfetto_config);
+  base::RunLoop().RunUntilIdle();
 }
 
-void TestProducerClient::FlushPacketIfPossible() {
-  // GetNewBuffer() in ScatteredStreamWriterNullDelegate doesn't
-  // actually return a new buffer, but rather lets us access the buffer
-  // buffer already used by protozero to write the TracePacket into.
-  protozero::ContiguousMemoryRange buffer = delegate_.GetNewBuffer();
-
-  uint32_t message_size = trace_packet_.Finalize();
-  if (message_size) {
-    EXPECT_GE(buffer.size(), message_size);
-
-    auto proto = std::make_unique<perfetto::protos::TracePacket>();
-    EXPECT_TRUE(proto->ParseFromArray(buffer.begin, message_size));
-    if (proto->has_chrome_events() &&
-        proto->chrome_events().metadata().size() > 0) {
-      legacy_metadata_packets_.push_back(std::move(proto));
-    } else if (proto->has_chrome_metadata()) {
-      proto_metadata_packets_.push_back(std::move(proto));
-    } else {
-      finalized_packets_.push_back(std::move(proto));
-    }
-  }
-
-  stream_.Reset(buffer);
-  trace_packet_.Reset(&stream_);
+void DataSourceTester::EndTracing() {
+  auto* trace_log = base::trace_event::TraceLog::GetInstance();
+  base::RunLoop wait_for_end;
+  trace_log->SetDisabled();
+  trace_log->Flush(base::BindRepeating(&DataSourceTester::OnTraceData,
+                                       base::Unretained(this),
+                                       wait_for_end.QuitClosure()));
+  wait_for_end.Run();
 }
 
-perfetto::protos::pbzero::TracePacket* TestProducerClient::NewTracePacket() {
-  FlushPacketIfPossible();
-
-  return &trace_packet_;
-}
-
-size_t TestProducerClient::GetFinalizedPacketCount() {
-  FlushPacketIfPossible();
+size_t DataSourceTester::GetFinalizedPacketCount() {
   return finalized_packets_.size();
 }
 
-const perfetto::protos::TracePacket* TestProducerClient::GetFinalizedPacket(
+const perfetto::protos::TracePacket* DataSourceTester::GetFinalizedPacket(
     size_t packet_index) {
-  FlushPacketIfPossible();
-  EXPECT_GT(finalized_packets_.size(), packet_index);
   return finalized_packets_[packet_index].get();
 }
 
-const google::protobuf::RepeatedPtrField<perfetto::protos::ChromeMetadata>*
-TestProducerClient::GetChromeMetadata(size_t packet_index) {
-  FlushPacketIfPossible();
-  if (legacy_metadata_packets_.empty()) {
-    return nullptr;
+void DataSourceTester::OnTraceData(
+    base::RepeatingClosure quit_closure,
+    const scoped_refptr<base::RefCountedString>& chunk,
+    bool has_more_events) {
+  perfetto::protos::Trace trace;
+  auto chunk_data = base::span(*chunk);
+  bool ok = trace.ParseFromArray(chunk_data.data(), chunk_data.size());
+  DCHECK(ok);
+  for (const auto& packet : trace.packet()) {
+    // Filter out packets from the tracing service.
+    if (packet.trusted_packet_sequence_id() == 1)
+      continue;
+    auto proto = std::make_unique<perfetto::protos::TracePacket>();
+    *proto = packet;
+    finalized_packets_.push_back(std::move(proto));
   }
-  EXPECT_GT(legacy_metadata_packets_.size(), packet_index);
-
-  const auto& event_bundle =
-      legacy_metadata_packets_[packet_index]->chrome_events();
-  return &event_bundle.metadata();
+  if (!has_more_events)
+    std::move(quit_closure).Run();
 }
 
-const perfetto::protos::ChromeMetadataPacket*
-TestProducerClient::GetProtoChromeMetadata(size_t packet_index) {
-  FlushPacketIfPossible();
-  EXPECT_GT(proto_metadata_packets_.size(), packet_index);
-  return &proto_metadata_packets_[packet_index]->chrome_metadata();
+DummyTraceWriter::DummyTraceWriter()
+    : delegate_(kChunkSize), stream_(&delegate_) {}
+
+DummyTraceWriter::~DummyTraceWriter() = default;
+
+perfetto::TraceWriter::TracePacketHandle DummyTraceWriter::NewTracePacket() {
+  stream_.Reset(delegate_.GetNewBuffer());
+  trace_packet_.Reset(&stream_);
+
+  return perfetto::TraceWriter::TracePacketHandle(&trace_packet_);
 }
 
-TestTraceWriter::TestTraceWriter(TestProducerClient* producer_client)
-    : producer_client_(producer_client) {}
-
-perfetto::TraceWriter::TracePacketHandle TestTraceWriter::NewTracePacket() {
-  return perfetto::TraceWriter::TracePacketHandle(
-      producer_client_->NewTracePacket());
+void DummyTraceWriter::FinishTracePacket() {
+  trace_packet_.Finalize();
 }
 
-perfetto::WriterID TestTraceWriter::writer_id() const {
+void DummyTraceWriter::Flush(std::function<void()> callback) {}
+
+perfetto::WriterID DummyTraceWriter::writer_id() const {
   return perfetto::WriterID(0);
 }
 
-uint64_t TestTraceWriter::written() const {
+uint64_t DummyTraceWriter::written() const {
   return 0u;
 }
 
-DataSourceTester::DataSourceTester(
-    tracing::PerfettoTracedProcess::DataSourceBase* data_source)
-    : data_source_(data_source) {
-  tracing::PerfettoTracedProcess::ResetTaskRunnerForTesting();
-  tracing::PerfettoTracedProcess::GetTaskRunner()->GetOrCreateTaskRunner();
-  auto perfetto_wrapper = std::make_unique<base::tracing::PerfettoTaskRunner>(
-      base::ThreadTaskRunnerHandle::Get());
-
-  producer_ = std::make_unique<tracing::TestProducerClient>(
-      std::move(perfetto_wrapper));
-}
-
-DataSourceTester::~DataSourceTester() {
-  tracing::PerfettoTracedProcess::ResetTaskRunnerForTesting();
-  base::RunLoop().RunUntilIdle();
+uint64_t DummyTraceWriter::drop_count() const {
+  return 0u;
 }
 
 }  // namespace tracing

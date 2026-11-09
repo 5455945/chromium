@@ -1,10 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/ipc/gl_in_process_context.h"
 
 #include <GLES2/gl2.h>
+
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES 1
 #endif
@@ -14,20 +17,17 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/macros.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "gpu/command_buffer/client/gles2_cmd_helper.h"
+#include "gpu/command_buffer/client/gles2_implementation.h"
 #include "gpu/command_buffer/client/shared_memory_limits.h"
 #include "gpu/command_buffer/client/transfer_buffer.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "gpu/command_buffer/common/constants.h"
+#include "gpu/command_buffer/service/gpu_task_scheduler_helper.h"
 #include "gpu/config/gpu_feature_info.h"
-#include "gpu/ipc/gpu_task_scheduler_helper.h"
-#include "gpu/skia_bindings/gles2_implementation_with_grcontext_support.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gl/gl_image.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "ui/gl/android/surface_texture.h"
 #endif
 
@@ -54,43 +54,25 @@ SharedImageInterface* GLInProcessContext::GetSharedImageInterface() {
 }
 
 ContextResult GLInProcessContext::Initialize(
-    CommandBufferTaskExecutor* task_executor,
-    scoped_refptr<gl::GLSurface> surface,
-    bool is_offscreen,
-    SurfaceHandle window,
-    const ContextCreationAttribs& attribs,
-    const SharedMemoryLimits& mem_limits,
-    GpuMemoryBufferManager* gpu_memory_buffer_manager,
-    ImageFactory* image_factory,
-    GpuTaskSchedulerHelper* gpu_task_scheduler,
-    DisplayCompositorMemoryAndTaskControllerOnGpu* display_controller_on_gpu,
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
-  // If a surface is provided, we are running in a webview and should not have
-  // a task runner. We must have a task runner in all other cases.
-  DCHECK_EQ(!!surface, !task_runner);
-  if (surface) {
-    DCHECK_EQ(surface->IsOffscreen(), is_offscreen);
-    DCHECK_EQ(kNullSurfaceHandle, window);
-  }
-  DCHECK_GE(attribs.offscreen_framebuffer_size.width(), 0);
-  DCHECK_GE(attribs.offscreen_framebuffer_size.height(), 0);
+    CommandBufferTaskExecutor* task_executor) {
+  DCHECK(base::SingleThreadTaskRunner::GetCurrentDefault());
 
   command_buffer_ = std::make_unique<InProcessCommandBuffer>(
       task_executor, GURL("chrome://gpu/GLInProcessContext::Initialize"));
 
+  auto attribs =
+      mojom::ContextCreationAttribs::NewGles(mojom::GLESCreationAttribs::New());
+
   auto result = command_buffer_->Initialize(
-      surface, is_offscreen, window, attribs, gpu_memory_buffer_manager,
-      image_factory,
-      /*gpu_channel_manager_delegate=*/nullptr, std::move(task_runner),
-      /*task_sequence=*/
-      gpu_task_scheduler ? gpu_task_scheduler->GetTaskSequence() : nullptr,
-      /*display_compositor_memory_and_task_controller_on_gpu=*/
-      display_controller_on_gpu, nullptr, nullptr);
+      std::move(attribs), base::SingleThreadTaskRunner::GetCurrentDefault(),
+      /*gr_shader_cache=*/nullptr,
+      /*use_shader_cache_shm_count=*/nullptr);
   if (result != ContextResult::kSuccess) {
     DLOG(ERROR) << "Failed to initialize InProcessCommmandBuffer";
     return result;
   }
 
+  const SharedMemoryLimits mem_limits;
   // Create the GLES2 helper, which writes the command buffer protocol.
   gles2_helper_ =
       std::make_unique<gles2::GLES2CmdHelper>(command_buffer_.get());
@@ -99,23 +81,14 @@ ContextResult GLInProcessContext::Initialize(
     LOG(ERROR) << "Failed to initialize GLES2CmdHelper";
     return result;
   }
-  if (gpu_task_scheduler)
-    gpu_task_scheduler->Initialize(gles2_helper_.get());
 
   // Create a transfer buffer.
   transfer_buffer_ = std::make_unique<TransferBuffer>(gles2_helper_.get());
 
-  // Check for consistency.
-  DCHECK(!attribs.bind_generates_resource);
-  const bool bind_generates_resource = false;
-  const bool support_client_side_arrays = false;
-
   // Create the object exposing the OpenGL API.
-  gles2_implementation_ =
-      std::make_unique<skia_bindings::GLES2ImplementationWithGrContextSupport>(
-          gles2_helper_.get(), /*share_group=*/nullptr, transfer_buffer_.get(),
-          bind_generates_resource, attribs.lose_context_when_out_of_memory,
-          support_client_side_arrays, command_buffer_.get());
+  gles2_implementation_ = std::make_unique<gles2::GLES2Implementation>(
+      gles2_helper_.get(), /*share_group=*/nullptr, transfer_buffer_.get(),
+      /*lose_context_when_out_of_memory=*/true, command_buffer_.get());
 
   result = gles2_implementation_->Initialize(mem_limits);
   return result;

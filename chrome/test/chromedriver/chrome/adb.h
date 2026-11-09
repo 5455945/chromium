@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,13 @@
 #include <string>
 #include <vector>
 
+#include "base/values.h"
+
 class Status;
 
 class Adb {
  public:
-  virtual ~Adb() {}
+  virtual ~Adb() = default;
 
   virtual Status GetDevices(std::vector<std::string>* devices) = 0;
   virtual Status ForwardPort(const std::string& device_serial,
@@ -28,6 +30,13 @@ class Adb {
                                    const std::string& package) = 0;
   virtual Status ClearAppData(const std::string& device_serial,
                               const std::string& package) = 0;
+  // Grants the runtime |permission| (e.g.
+  // "android.permission.POST_NOTIFICATIONS") to |package|. Returns an error if
+  // the grant fails, e.g. because the permission is unknown on this OS version
+  // or is not requested by the package.
+  virtual Status GrantPermission(const std::string& device_serial,
+                                 const std::string& package,
+                                 const std::string& permission) = 0;
   virtual Status SetDebugApp(const std::string& device_serial,
                              const std::string& package) = 0;
   virtual Status Launch(const std::string& device_serial,
@@ -41,6 +50,12 @@ class Adb {
   virtual Status GetSocketByPattern(const std::string& device_serial,
                                     const std::string& grep_pattern,
                                     std::string* socket_name) = 0;
+  virtual Status SetPreferences(const std::string& device_serial,
+                                const std::string& path,
+                                const base::DictValue* custom_prefs) = 0;
+  virtual Status SetLocalState(const std::string& device_serial,
+                               const std::string& path,
+                               const base::DictValue* custom_local_state) = 0;
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_CHROME_ADB_H_

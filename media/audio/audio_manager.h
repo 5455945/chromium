@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 #define MEDIA_AUDIO_AUDIO_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
+#include "base/callback_list.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/observer_list_types.h"
+#include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "build/build_config.h"
 #include "media/audio/audio_device_description.h"
@@ -21,21 +23,27 @@
 
 namespace base {
 class SingleThreadTaskRunner;
-class UnguessableToken;
 }
+
+namespace audio {
+class AudioManagerPowerUser;
+}  // namespace audio
 
 namespace media {
 
+class AecdumpRecordingManager;
 class AudioDebugRecordingManager;
 class AudioInputStream;
 class AudioManager;
 class AudioOutputStream;
-class AudioSourceDiverter;
 
 // Manages all audio resources.  Provides some convenience functions that avoid
 // the need to provide iterators over the existing streams.
 class MEDIA_EXPORT AudioManager {
  public:
+  AudioManager(const AudioManager&) = delete;
+  AudioManager& operator=(const AudioManager&) = delete;
+
   virtual ~AudioManager();
 
   // Construct the audio manager; only one instance is allowed.
@@ -78,6 +86,11 @@ class MEDIA_EXPORT AudioManager {
   // AudioManager instance must not be deleted if shutdown failed.
   virtual bool Shutdown();
 
+  // Asynchronously closes all cached idle output streams on the audio thread
+  // so physical streams can be torn down before Shutdown() blocks on stopping
+  // the audio thread.
+  virtual void CloseIdleStreams() {}
+
   // Log callback used for sending log messages from a stream to the object
   // that manages the stream.
   using LogCallback = base::RepeatingCallback<void(const std::string&)>;
@@ -116,6 +129,15 @@ class MEDIA_EXPORT AudioManager {
       const AudioParameters& params,
       const std::string& device_id) = 0;
 
+  // Returns true if the output stream selected for `params` enqueues buffers
+  // into an OS-managed playback queue (for example
+  // `AVSampleBufferAudioRenderer`) instead of pulling one buffer per real-time
+  // hardware period. Such streams request data whenever their queue has room,
+  // so the playout delay cannot be predicted from the previous callback and
+  // may be non-zero when starting or resuming. Callers must use the `delay`
+  // reported by `OnMoreData()` instead of prefetching at zero delay.
+  virtual bool UsesQueuedOutputStream(const AudioParameters& params) const;
+
   // Factory to create audio recording streams.
   // |channels| can be 1 or 2.
   // |sample_rate| is in hertz and can be any value supported by the platform.
@@ -147,7 +169,7 @@ class MEDIA_EXPORT AudioManager {
   // Allows clients to listen for device state changes; e.g. preferred sample
   // rate or channel layout changes.  The typical response to receiving this
   // callback is to recreate the stream.
-  class AudioDeviceListener {
+  class AudioDeviceListener : public base::CheckedObserver {
    public:
     virtual void OnDeviceChange() = 0;
   };
@@ -155,6 +177,19 @@ class MEDIA_EXPORT AudioManager {
   virtual void AddOutputDeviceChangeListener(AudioDeviceListener* listener) = 0;
   virtual void RemoveOutputDeviceChangeListener(
       AudioDeviceListener* listener) = 0;
+
+  // Registers a callback for system microphone mute state changes. Must be
+  // called on AudioManager's thread (`GetTaskRunner()`), where the callback
+  // also runs. The callback is not invoked during registration. Returns
+  // `std::nullopt` when change notifications are not supported by the platform.
+  [[nodiscard]] virtual std::optional<base::CallbackListSubscription>
+  AddInputMuteStateChangeCallback(base::RepeatingCallback<void(bool)> callback);
+
+  // Returns the device name if it is currently cached in the enumeration
+  // snapshot. Returns an empty string if the ID is not found or the cache is
+  // empty.
+  virtual std::string GetDeviceNameFromCache(const std::string& device_id,
+                                             bool is_input) = 0;
 
   // Create a new AudioLog object for tracking the behavior for one or more
   // instances of the given component.  See AudioLogFactory for more details.
@@ -166,32 +201,31 @@ class MEDIA_EXPORT AudioManager {
   // thread (GetTaskRunner()).
   virtual AudioDebugRecordingManager* GetAudioDebugRecordingManager() = 0;
 
+  // Set aecdump recording manager. This can only be called on AudioManager's
+  // thread (GetTaskRunner()).
+  virtual void SetAecDumpRecordingManager(
+      base::WeakPtr<AecdumpRecordingManager> aecdump_recording_manager) = 0;
+
   // Gets the name of the audio manager (e.g., Windows, Mac, PulseAudio).
-  virtual const char* GetName() = 0;
+  virtual const std::string_view GetName() = 0;
 
-  // Limits the number of streams that can be created for testing purposes.
-  virtual void SetMaxStreamCountForTesting(int max_input, int max_output);
+  // Logs a message indicating that the AudioManager was created.
+  // This is used to track process restarts.
+  virtual void LogAudioManagerStartup() = 0;
 
-  // TODO(crbug/824019): The following are temporary, as a middle-ground step
-  // necessary to resolve a chicken-and-egg problem as we migrate audio
-  // mirroring into the new AudioService. Add/RemoveDiverter() allow
-  // AudioOutputController to (de)register itself as an AudioSourceDiverter,
-  // while SetDiverterCallbacks() allows the entity that is interested in such
-  // notifications to receive them.
-  using AddDiverterCallback =
-      base::RepeatingCallback<void(const base::UnguessableToken&,
-                                   media::AudioSourceDiverter*)>;
-  using RemoveDiverterCallback =
-      base::RepeatingCallback<void(media::AudioSourceDiverter*)>;
-  virtual void SetDiverterCallbacks(AddDiverterCallback add_callback,
-                                    RemoveDiverterCallback remove_callback);
-  virtual void AddDiverter(const base::UnguessableToken& group_id,
-                           media::AudioSourceDiverter* diverter);
-  virtual void RemoveDiverter(media::AudioSourceDiverter* diverter);
+  // Starts or stops tracing when a peak in Audio signal amplitude is detected.
+  // Does nothing if a call to stop tracing is made without first starting the
+  // trace. Aborts the current trace if a call to start tracing is made without
+  // stopping the existing trace.
+  // Note: tracing is intended to be started from exactly one input stream and
+  // stopped from exactly one output stream. If multiple streams are starting
+  // and stopping traces, the latency measurements will not be valid.
+  void TraceAmplitudePeak(bool trace_start);
 
  protected:
   FRIEND_TEST_ALL_PREFIXES(AudioManagerTest, AudioDebugRecording);
   friend class AudioDeviceInfoAccessorForTests;
+  friend class audio::AudioManagerPowerUser;
 
   explicit AudioManager(std::unique_ptr<AudioThread> audio_thread);
 
@@ -228,13 +262,6 @@ class MEDIA_EXPORT AudioManager {
   virtual void GetAudioOutputDeviceDescriptions(
       AudioDeviceDescriptions* device_descriptions) = 0;
 
-  // Returns the default output hardware audio parameters for opening output
-  // streams. It is a convenience interface to
-  // AudioManagerBase::GetPreferredOutputStreamParameters and each AudioManager
-  // does not need their own implementation to this interface.
-  // TODO(tommi): Remove this method and use GetOutputStreamParameteres instead.
-  virtual AudioParameters GetDefaultOutputStreamParameters() = 0;
-
   // Returns the output hardware audio parameters for a specific output device.
   virtual AudioParameters GetOutputStreamParameters(
       const std::string& device_id) = 0;
@@ -267,14 +294,14 @@ class MEDIA_EXPORT AudioManager {
  private:
   friend class AudioSystemHelper;
 
+  base::Lock tracing_lock_;
+  int current_trace_id_ GUARDED_BY(tracing_lock_) = 0;
+  bool is_trace_started_ GUARDED_BY(tracing_lock_) = false;
+
   std::unique_ptr<AudioThread> audio_thread_;
   bool shutdown_ = false;  // True after |this| has been shutdown.
 
-  AddDiverterCallback add_diverter_callback_;
-  RemoveDiverterCallback remove_diverter_callback_;
-
   THREAD_CHECKER(thread_checker_);
-  DISALLOW_COPY_AND_ASSIGN(AudioManager);
 };
 
 }  // namespace media

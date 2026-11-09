@@ -1,35 +1,37 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.suggestions.mostvisited;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNIAdditionalImport;
-import org.chromium.base.annotations.NativeMethods;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
+import org.chromium.chrome.browser.suggestions.SuggestionsConfig;
 import org.chromium.chrome.browser.suggestions.tile.Tile;
 import org.chromium.url.GURL;
 
-import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 
-/**
- * Methods to bridge into native history to provide most recent urls, titles and thumbnails.
- */
-@JNIAdditionalImport(MostVisitedSites.class) // Needed for the Observer usage in the native calls.
+/** Methods to bridge into native history to provide most recent urls, titles and thumbnails. */
+@NullMarked
 public class MostVisitedSitesBridge implements MostVisitedSites {
-    /**
-     * Maximum number of tiles that is explicitly supported. UMA relies on this value, so even if
-     * the UI supports it, getting more can raise unexpected issues.
-     */
-    public static final int MAX_TILE_COUNT = 12;
+    @JniType("::MostVisitedSitesBridge")
+    interface NativeMostVisitedSitesBridge extends JniTypeToken {}
 
-    private long mNativeMostVisitedSitesBridge;
+    private @Nullable JniUniquePtr<NativeMostVisitedSitesBridge> mNativeMostVisitedSitesBridge;
 
-    private MostVisitedSites.Observer mWrappedObserver;
+    private MostVisitedSites.@Nullable Observer mWrappedObserver;
 
     /**
      * MostVisitedSites constructor requires a valid user profile object.
@@ -37,144 +39,217 @@ public class MostVisitedSitesBridge implements MostVisitedSites {
      * @param profile The profile for which to fetch most visited sites.
      */
     public MostVisitedSitesBridge(Profile profile) {
-        mNativeMostVisitedSitesBridge =
-                MostVisitedSitesBridgeJni.get().init(MostVisitedSitesBridge.this, profile);
+        mNativeMostVisitedSitesBridge = MostVisitedSitesBridgeJni.get().init(profile);
     }
 
+    // CustomLinkOperations -> MostVisitedSites implementation.
+    @Override
+    public boolean addCustomLink(String name, @Nullable GURL url, @Nullable Integer pos) {
+        if (mNativeMostVisitedSitesBridge == null || GURL.isEmptyOrInvalid(url)) return false;
+        if (pos != null) {
+            return MostVisitedSitesBridgeJni.get()
+                    .addCustomLinkTo(mNativeMostVisitedSitesBridge, name, url, pos.intValue());
+        }
+
+        return MostVisitedSitesBridgeJni.get()
+                .addCustomLink(mNativeMostVisitedSitesBridge, name, url);
+    }
+
+    @Override
+    public boolean assignCustomLink(GURL keyUrl, String name, @Nullable GURL url) {
+        if (mNativeMostVisitedSitesBridge == null || GURL.isEmptyOrInvalid(url)) return false;
+        return MostVisitedSitesBridgeJni.get()
+                .assignCustomLink(mNativeMostVisitedSitesBridge, keyUrl, name, url);
+    }
+
+    @Override
+    public boolean deleteCustomLink(GURL keyUrl) {
+        if (mNativeMostVisitedSitesBridge == null) return false;
+        return MostVisitedSitesBridgeJni.get()
+                .deleteCustomLink(mNativeMostVisitedSitesBridge, keyUrl);
+    }
+
+    @Override
+    public boolean hasCustomLink(GURL keyUrl) {
+        if (mNativeMostVisitedSitesBridge == null) return false;
+        return MostVisitedSitesBridgeJni.get().hasCustomLink(mNativeMostVisitedSitesBridge, keyUrl);
+    }
+
+    @Override
+    public boolean reorderCustomLink(GURL keyUrl, int newPos) {
+        if (mNativeMostVisitedSitesBridge == null) return false;
+        return MostVisitedSitesBridgeJni.get()
+                .reorderCustomLink(mNativeMostVisitedSitesBridge, keyUrl, newPos);
+    }
+
+    // MostVisitedSites implementation.
     /**
      * Cleans up the C++ side of this class. This instance must not be used after calling destroy().
      */
     @Override
     public void destroy() {
         // Stop listening even if it was not started in the first place. (Handled without errors.)
-        assert mNativeMostVisitedSitesBridge != 0;
-        MostVisitedSitesBridgeJni.get().destroy(
-                mNativeMostVisitedSitesBridge, MostVisitedSitesBridge.this);
-        mNativeMostVisitedSitesBridge = 0;
+        assert mNativeMostVisitedSitesBridge != null;
+        mNativeMostVisitedSitesBridge.destroy();
+        mNativeMostVisitedSitesBridge = null;
+        mWrappedObserver = null;
     }
 
     @Override
     public void setObserver(Observer observer, int numSites) {
-        assert numSites <= MAX_TILE_COUNT;
+        assert numSites <= SuggestionsConfig.MAX_TILE_COUNT;
         mWrappedObserver = observer;
 
-        MostVisitedSitesBridgeJni.get().setObserver(
-                mNativeMostVisitedSitesBridge, MostVisitedSitesBridge.this, this, numSites);
+        MostVisitedSitesBridgeJni.get()
+                .setObserver(assumeNonNull(mNativeMostVisitedSitesBridge), this, numSites);
     }
 
     @Override
     public void addBlocklistedUrl(GURL url) {
-        if (mNativeMostVisitedSitesBridge == 0) return;
-        MostVisitedSitesBridgeJni.get().addOrRemoveBlockedUrl(
-                mNativeMostVisitedSitesBridge, MostVisitedSitesBridge.this, url, true);
+        if (mNativeMostVisitedSitesBridge == null) return;
+        MostVisitedSitesBridgeJni.get()
+                .addOrRemoveBlockedUrl(mNativeMostVisitedSitesBridge, url, true);
     }
 
     @Override
     public void removeBlocklistedUrl(GURL url) {
-        if (mNativeMostVisitedSitesBridge == 0) return;
-        MostVisitedSitesBridgeJni.get().addOrRemoveBlockedUrl(
-                mNativeMostVisitedSitesBridge, MostVisitedSitesBridge.this, url, false);
+        if (mNativeMostVisitedSitesBridge == null) return;
+        MostVisitedSitesBridgeJni.get()
+                .addOrRemoveBlockedUrl(mNativeMostVisitedSitesBridge, url, false);
     }
 
     @Override
     public void recordPageImpression(int tilesCount) {
-        if (mNativeMostVisitedSitesBridge == 0) return;
-        MostVisitedSitesBridgeJni.get().recordPageImpression(
-                mNativeMostVisitedSitesBridge, MostVisitedSitesBridge.this, tilesCount);
+        if (mNativeMostVisitedSitesBridge == null) return;
+        MostVisitedSitesBridgeJni.get().recordPageImpression(tilesCount);
     }
 
     @Override
     public void recordTileImpression(Tile tile) {
-        if (mNativeMostVisitedSitesBridge == 0) return;
-        MostVisitedSitesBridgeJni.get().recordTileImpression(mNativeMostVisitedSitesBridge,
-                MostVisitedSitesBridge.this, tile.getIndex(), tile.getType(), tile.getIconType(),
-                tile.getTitleSource(), tile.getSource(),
-                tile.getData().dataGenerationTime.getTime(), tile.getUrl());
+        if (mNativeMostVisitedSitesBridge == null) return;
+        MostVisitedSitesBridgeJni.get()
+                .recordTileImpression(
+                        tile.getIndex(),
+                        tile.getType(),
+                        tile.getIconType(),
+                        tile.getTitleSource(),
+                        tile.getSource(),
+                        tile.getUrl());
     }
 
     @Override
     public void recordOpenedMostVisitedItem(Tile tile) {
-        if (mNativeMostVisitedSitesBridge == 0) return;
-        MostVisitedSitesBridgeJni.get().recordOpenedMostVisitedItem(mNativeMostVisitedSitesBridge,
-                MostVisitedSitesBridge.this, tile.getIndex(), tile.getType(), tile.getTitleSource(),
-                tile.getSource(), tile.getData().dataGenerationTime.getTime());
+        if (mNativeMostVisitedSitesBridge == null) return;
+        MostVisitedSitesBridgeJni.get()
+                .recordOpenedMostVisitedItem(
+                        tile.getIndex(), tile.getType(), tile.getTitleSource(), tile.getSource());
     }
 
-    /**
-     * Utility function to convert JNI friendly site suggestion data to a Java friendly list of
-     * {@link SiteSuggestion}s.
-     */
-    public static List<SiteSuggestion> buildSiteSuggestions(String[] titles, GURL[] urls,
-            int[] sections, String[] allowlistIconPaths, int[] titleSources, int[] sources,
-            long[] dataGenerationTimesMs) {
-        List<SiteSuggestion> siteSuggestions = new ArrayList<>(titles.length);
-        for (int i = 0; i < titles.length; ++i) {
-            siteSuggestions.add(new SiteSuggestion(titles[i], urls[i], allowlistIconPaths[i],
-                    titleSources[i], sources[i], sections[i], new Date(dataGenerationTimesMs[i])));
-        }
-        return siteSuggestions;
+    @Override
+    public double getSuggestionScore(GURL url) {
+        if (mNativeMostVisitedSitesBridge == null) return MostVisitedSites.INVALID_SUGGESTION_SCORE;
+        return MostVisitedSitesBridgeJni.get()
+                .getSuggestionScore(mNativeMostVisitedSitesBridge, url);
+    }
+
+    @CalledByNative
+    private static SiteSuggestion makeSiteSuggestion(
+            @JniType("std::u16string") String title,
+            @JniType("GURL") GURL url,
+            int titleSource,
+            int source,
+            int section) {
+        return new SiteSuggestion(title, url, titleSource, source, section);
     }
 
     /**
      * This is called when the list of most visited URLs is initially available or updated.
      * Parameters guaranteed to be non-null.
-     *
-     * @param titles Array of most visited url page titles.
-     * @param urls Array of most visited URLs, including popular URLs if
-     *             available and necessary (i.e. there aren't enough most
-     *             visited URLs).
-     * @param allowlistIconPaths The paths to the icon image files for allowlisted tiles, empty
-     *                           strings otherwise.
-     * @param sources For each tile, the {@code TileSource} that generated the tile.
      */
     @CalledByNative
-    private void onURLsAvailable(String[] titles, GURL[] urls, int[] sections,
-            String[] allowlistIconPaths, int[] titleSources, int[] sources,
-            long[] dataGenerationTimesMs) {
+    private void onURLsAvailable(
+            boolean isUserTriggered, @JniType("std::vector") List<SiteSuggestion> suggestions) {
         // Don't notify observer if we've already been destroyed.
-        if (mNativeMostVisitedSitesBridge == 0) return;
-
-        List<SiteSuggestion> suggestions = new ArrayList<>();
-
-        suggestions.addAll(buildSiteSuggestions(titles, urls, sections, allowlistIconPaths,
-                titleSources, sources, dataGenerationTimesMs));
-
-        mWrappedObserver.onSiteSuggestionsAvailable(suggestions);
+        if (mNativeMostVisitedSitesBridge != null && mWrappedObserver != null) {
+            mWrappedObserver.onSiteSuggestionsAvailable(isUserTriggered, suggestions);
+        }
     }
 
     /**
-     * This is called when a previously uncached icon has been fetched.
-     * Parameters guaranteed to be non-null.
+     * This is called when a previously uncached icon has been fetched. Parameters guaranteed to be
+     * non-null.
      *
      * @param siteUrl URL of site with newly-cached icon.
      */
     @CalledByNative
-    private void onIconMadeAvailable(GURL siteUrl) {
+    private void onIconMadeAvailable(@JniType("GURL") GURL siteUrl) {
         // Don't notify observer if we've already been destroyed.
-        if (mNativeMostVisitedSitesBridge != 0) {
+        if (mNativeMostVisitedSitesBridge != null && mWrappedObserver != null) {
             mWrappedObserver.onIconMadeAvailable(siteUrl);
         }
     }
 
     @NativeMethods
     interface Natives {
-        long init(MostVisitedSitesBridge caller, Profile profile);
-        void destroy(long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller);
-        void onHomepageStateChanged(
-                long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller);
-        void setHomepageClient(long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller,
+        JniUniquePtr<NativeMostVisitedSitesBridge> init(@JniType("Profile*") Profile profile);
+
+        boolean addCustomLinkTo(
+                JniPtr<NativeMostVisitedSitesBridge> self,
+                @JniType("std::u16string") String name,
+                @JniType("GURL") GURL url,
+                int pos);
+
+        boolean addCustomLink(
+                JniPtr<NativeMostVisitedSitesBridge> self,
+                @JniType("std::u16string") String name,
+                @JniType("GURL") GURL url);
+
+        boolean assignCustomLink(
+                JniPtr<NativeMostVisitedSitesBridge> self,
+                @JniType("GURL") GURL keyUrl,
+                @JniType("std::u16string") String name,
+                @JniType("GURL") GURL url);
+
+        boolean deleteCustomLink(
+                JniPtr<NativeMostVisitedSitesBridge> self, @JniType("GURL") GURL keyUrl);
+
+        boolean hasCustomLink(
+                JniPtr<NativeMostVisitedSitesBridge> self, @JniType("GURL") GURL keyUrl);
+
+        boolean reorderCustomLink(
+                JniPtr<NativeMostVisitedSitesBridge> self,
+                @JniType("GURL") GURL keyUrl,
+                int newPos);
+
+        void onHomepageStateChanged(JniPtr<NativeMostVisitedSitesBridge> self);
+
+        void setHomepageClient(
+                JniPtr<NativeMostVisitedSitesBridge> self,
                 MostVisitedSites.HomepageClient homePageClient);
-        void setObserver(long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller,
-                MostVisitedSitesBridge observer, int numSites);
-        void addOrRemoveBlockedUrl(long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller,
-                GURL url, boolean addUrl);
-        void recordPageImpression(
-                long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller, int tilesCount);
-        void recordTileImpression(long nativeMostVisitedSitesBridge, MostVisitedSitesBridge caller,
-                int index, int type, int iconType, int titleSource, int source,
-                long dataGenerationTimeMs, GURL url);
-        void recordOpenedMostVisitedItem(long nativeMostVisitedSitesBridge,
-                MostVisitedSitesBridge caller, int index, int tileType, int titleSource, int source,
-                long dataGenerationTimeMs);
+
+        void setObserver(
+                JniPtr<NativeMostVisitedSitesBridge> self,
+                MostVisitedSitesBridge observer,
+                int numSites);
+
+        void addOrRemoveBlockedUrl(
+                JniPtr<NativeMostVisitedSitesBridge> self,
+                @JniType("GURL") GURL url,
+                boolean addUrl);
+
+        void recordPageImpression(int tilesCount);
+
+        void recordTileImpression(
+                int index,
+                int type,
+                int iconType,
+                int titleSource,
+                int source,
+                @JniType("GURL") GURL url);
+
+        void recordOpenedMostVisitedItem(int index, int tileType, int titleSource, int source);
+
+        double getSuggestionScore(
+                JniPtr<NativeMostVisitedSitesBridge> self, @JniType("GURL") GURL url);
     }
 }

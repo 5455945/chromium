@@ -1,18 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SHARE_SHARE_RANKING_H_
 #define CHROME_BROWSER_SHARE_SHARE_RANKING_H_
 
+#include <optional>
+
 #include "base/callback_list.h"
 #include "base/containers/flat_map.h"
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
+#include "build/build_config.h"
 #include "chrome/browser/share/proto/share_ranking_message.pb.h"
 #include "chrome/browser/share/share_history.h"
 #include "components/leveldb_proto/public/proto_database.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class Profile;
 
@@ -26,7 +28,9 @@ class ShareRanking : public base::SupportsUserData::Data {
 
   using BackingDb = leveldb_proto::ProtoDatabase<proto::ShareRanking>;
   using GetRankingCallback =
-      base::OnceCallback<void(absl::optional<Ranking> result)>;
+      base::OnceCallback<void(std::optional<Ranking> result)>;
+
+  static ShareRanking* Get(Profile* profile);
 
   explicit ShareRanking(Profile* profile,
                         std::unique_ptr<BackingDb> backing_db = nullptr);
@@ -44,14 +48,18 @@ class ShareRanking : public base::SupportsUserData::Data {
   void Rank(ShareHistory* history,
             const std::string& type,
             const std::vector<std::string>& available_on_system,
-            unsigned int fold,
+            size_t fold,
+            size_t length,
             bool persist_update,
             GetRankingCallback callback);
+
+  void Clear(const base::Time& start = base::Time(),
+             const base::Time& end = base::Time());
 
   // The core of the ranking algorithm, exposed as a pure function for ease of
   // testing and reasoning about the code. This function takes the existing
   // share history and ranking for this type, a set of all targets available on
-  // the current system, and a fold, and computes the new display ranking and
+  // the current system, and a length, and computes the new display ranking and
   // the new persistent ranking.
   //
   // TODO(ellyjones): Document (publicly) how this works and why.
@@ -60,8 +68,8 @@ class ShareRanking : public base::SupportsUserData::Data {
       const std::map<std::string, int>& recent_share_history,
       const Ranking& old_ranking,
       const std::vector<std::string>& available_on_system,
-      unsigned int fold,
-      bool fix_more,
+      size_t fold,
+      size_t length,
       Ranking* display_ranking,
       Ranking* persisted_ranking);
 
@@ -82,7 +90,8 @@ class ShareRanking : public base::SupportsUserData::Data {
     // These members mirror the parameters passed in to Rank().
     std::string type;
     std::vector<std::string> available_on_system;
-    unsigned int fold;
+    size_t fold;
+    size_t length;
     bool persist_update;
     GetRankingCallback callback;
 
@@ -116,10 +125,10 @@ class ShareRanking : public base::SupportsUserData::Data {
   void OnRankGetRecentDone(std::unique_ptr<PendingRankCall> pending,
                            std::vector<ShareHistory::Target> history);
   void OnRankGetOldRankingDone(std::unique_ptr<PendingRankCall> pending,
-                               absl::optional<Ranking> ranking);
+                               std::optional<Ranking> ranking);
 
-  // Return the default initial ranking, which depends on the locale.
-  Ranking GetDefaultInitialRanking();
+  // Return the default initial ranking, which depends on the current locale.
+  Ranking GetDefaultInitialRankingForType(const std::string& type);
 
   bool init_finished_ = false;
   leveldb_proto::Enums::InitStatus db_init_status_;
@@ -133,7 +142,7 @@ class ShareRanking : public base::SupportsUserData::Data {
   // backing database by FlushToBackingDb().
   base::flat_map<std::string, Ranking> ranking_;
 
-  absl::optional<Ranking> initial_ranking_for_test_;
+  std::optional<Ranking> initial_ranking_for_test_;
 
   base::WeakPtrFactory<ShareRanking> weak_factory_{this};
 };

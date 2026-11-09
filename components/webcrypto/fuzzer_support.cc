@@ -1,15 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/webcrypto/fuzzer_support.h"
 
 #include "base/command_line.h"
-#include "base/lazy_instance.h"
-#include "base/numerics/safe_conversions.h"
+#include "base/containers/span.h"
+#include "base/no_destructor.h"
 #include "base/task/single_thread_task_executor.h"
 #include "components/webcrypto/algorithm_dispatch.h"
-#include "components/webcrypto/crypto_data.h"
 #include "components/webcrypto/status.h"
 #include "mojo/core/embedder/embedder.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -28,16 +27,24 @@ class InitOnce : public blink::Platform {
     mojo::core::Init();
     blink::Platform::CreateMainThreadAndInitialize(this);
   }
-  ~InitOnce() override {}
+  ~InitOnce() override = default;
+
+  // Required for binders to work, to ensure deterministic operation we use a
+  // single thread.
+  scoped_refptr<base::SequencedTaskRunner> MediaThreadTaskRunner() override {
+    return main_thread_task_executor_.task_runner();
+  }
+
+  scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() const override {
+    return main_thread_task_executor_.task_runner();
+  }
 
  private:
   base::SingleThreadTaskExecutor main_thread_task_executor_;
 };
 
-base::LazyInstance<InitOnce>::Leaky g_once = LAZY_INSTANCE_INITIALIZER;
-
 void EnsureInitialized() {
-  g_once.Get();
+  static base::NoDestructor<InitOnce> init_once;
 }
 
 blink::WebCryptoAlgorithm CreateRsaHashedImportAlgorithm(
@@ -69,8 +76,7 @@ blink::WebCryptoKeyUsageMask GetCompatibleKeyUsages(
              : blink::kWebCryptoKeyUsageSign;
 }
 
-void ImportEcKeyFromDerFuzzData(const uint8_t* data,
-                                size_t size,
+void ImportEcKeyFromDerFuzzData(base::span<const uint8_t> data,
                                 blink::WebCryptoKeyFormat format) {
   DCHECK(format == blink::kWebCryptoKeyFormatSpki ||
          format == blink::kWebCryptoKeyFormatPkcs8);
@@ -90,8 +96,8 @@ void ImportEcKeyFromDerFuzzData(const uint8_t* data,
 
   blink::WebCryptoKey key;
   webcrypto::Status status = webcrypto::ImportKey(
-      format, webcrypto::CryptoData(data, base::checked_cast<uint32_t>(size)),
-      CreateEcImportAlgorithm(algorithm_id, curve), true, usages, &key);
+      format, data, CreateEcImportAlgorithm(algorithm_id, curve), true, usages,
+      &key);
 
   // These errors imply a bad setup of parameters, and means ImportKey() may not
   // be testing the actual parsing.
@@ -101,16 +107,14 @@ void ImportEcKeyFromDerFuzzData(const uint8_t* data,
             Status::ErrorCreateKeyBadUsages().error_details());
 }
 
-void ImportEcKeyFromRawFuzzData(const uint8_t* data, size_t size) {
+void ImportEcKeyFromRawFuzzData(base::span<const uint8_t> data) {
   EnsureInitialized();
 
   // There are 3 possible EC named curves. Consume the first byte to decide on
   // the curve.
   uint8_t curve_index = 0;
-  if (size > 0) {
-    curve_index = data[0];
-    data++;
-    size--;
+  if (!data.empty()) {
+    curve_index = data.take_first_elem();
   }
 
   blink::WebCryptoNamedCurve curve;
@@ -135,8 +139,7 @@ void ImportEcKeyFromRawFuzzData(const uint8_t* data, size_t size) {
 
   blink::WebCryptoKey key;
   webcrypto::Status status = webcrypto::ImportKey(
-      blink::kWebCryptoKeyFormatRaw,
-      webcrypto::CryptoData(data, base::checked_cast<uint32_t>(size)),
+      blink::kWebCryptoKeyFormatRaw, data,
       CreateEcImportAlgorithm(algorithm_id, curve), true, usages, &key);
 
   // These errors imply a bad setup of parameters, and means ImportKey() may not
@@ -147,8 +150,7 @@ void ImportEcKeyFromRawFuzzData(const uint8_t* data, size_t size) {
             Status::ErrorCreateKeyBadUsages().error_details());
 }
 
-void ImportRsaKeyFromDerFuzzData(const uint8_t* data,
-                                 size_t size,
+void ImportRsaKeyFromDerFuzzData(base::span<const uint8_t> data,
                                  blink::WebCryptoKeyFormat format) {
   DCHECK(format == blink::kWebCryptoKeyFormatSpki ||
          format == blink::kWebCryptoKeyFormatPkcs8);
@@ -169,9 +171,8 @@ void ImportRsaKeyFromDerFuzzData(const uint8_t* data,
 
   blink::WebCryptoKey key;
   webcrypto::Status status = webcrypto::ImportKey(
-      format, webcrypto::CryptoData(data, base::checked_cast<uint32_t>(size)),
-      CreateRsaHashedImportAlgorithm(algorithm_id, hash_id), true, usages,
-      &key);
+      format, data, CreateRsaHashedImportAlgorithm(algorithm_id, hash_id), true,
+      usages, &key);
 
   // These errors imply a bad setup of parameters, and means ImportKey() may not
   // be testing the actual parsing.

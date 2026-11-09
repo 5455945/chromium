@@ -1,11 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/compositor/test/test_layer_animation_delegate.h"
 
+#include <optional>
+
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/layer.h"
 
 namespace ui {
@@ -19,7 +21,7 @@ TestLayerAnimationDelegate::TestLayerAnimationDelegate()
       visibility_(true),
       brightness_(0.0f),
       grayscale_(0.0f),
-      color_(SK_ColorBLACK) {
+      color_(SkColors::kBlack) {
   CreateCcLayer();
 }
 
@@ -29,7 +31,7 @@ TestLayerAnimationDelegate::TestLayerAnimationDelegate(
       transform_(other.GetTransformForAnimation()),
       opacity_(other.GetOpacityForAnimation()),
       visibility_(other.GetVisibilityForAnimation()),
-      color_(SK_ColorBLACK) {
+      color_(SkColors::kBlack) {
   CreateCcLayer();
 }
 
@@ -48,11 +50,6 @@ void TestLayerAnimationDelegate::ExpectLastPropertyChangeReason(
   EXPECT_TRUE(last_property_change_reason_is_set_);
   EXPECT_EQ(last_property_change_reason_, reason);
   last_property_change_reason_is_set_ = false;
-}
-
-void TestLayerAnimationDelegate::SetFrameNumber(
-    absl::optional<int> frame_number) {
-  frame_number_ = frame_number;
 }
 
 void TestLayerAnimationDelegate::SetBoundsFromAnimation(
@@ -104,7 +101,7 @@ void TestLayerAnimationDelegate::SetGrayscaleFromAnimation(
 }
 
 void TestLayerAnimationDelegate::SetColorFromAnimation(
-    SkColor color,
+    SkColor4f color,
     PropertyChangeReason reason) {
   color_ = color;
   last_property_change_reason_ = reason;
@@ -123,6 +120,14 @@ void TestLayerAnimationDelegate::SetRoundedCornersFromAnimation(
     const gfx::RoundedCornersF& rounded_corners,
     PropertyChangeReason reason) {
   rounded_corners_ = rounded_corners;
+  last_property_change_reason_ = reason;
+  last_property_change_reason_is_set_ = true;
+}
+
+void TestLayerAnimationDelegate::SetGradientMaskFromAnimation(
+    const gfx::LinearGradient& gradient_mask,
+    PropertyChangeReason reason) {
+  gradient_mask_ = gradient_mask;
   last_property_change_reason_ = reason;
   last_property_change_reason_is_set_ = true;
 }
@@ -154,7 +159,7 @@ float TestLayerAnimationDelegate::GetGrayscaleForAnimation() const {
   return grayscale_;
 }
 
-SkColor TestLayerAnimationDelegate::GetColorForAnimation() const {
+SkColor4f TestLayerAnimationDelegate::GetColorForAnimation() const {
   return color_;
 }
 
@@ -165,6 +170,11 @@ gfx::Rect TestLayerAnimationDelegate::GetClipRectForAnimation() const {
 gfx::RoundedCornersF TestLayerAnimationDelegate::GetRoundedCornersForAnimation()
     const {
   return rounded_corners_;
+}
+
+const gfx::LinearGradient&
+TestLayerAnimationDelegate::GetGradientMaskForAnimation() const {
+  return gradient_mask_;
 }
 
 float TestLayerAnimationDelegate::GetDeviceScaleFactor() const {
@@ -187,10 +197,6 @@ cc::Layer* TestLayerAnimationDelegate::GetCcLayer() const {
 LayerThreadedAnimationDelegate*
 TestLayerAnimationDelegate::GetThreadedAnimationDelegate() {
   return &threaded_delegate_;
-}
-
-absl::optional<int> TestLayerAnimationDelegate::GetFrameNumber() const {
-  return frame_number_;
 }
 
 float TestLayerAnimationDelegate::GetRefreshRate() const {

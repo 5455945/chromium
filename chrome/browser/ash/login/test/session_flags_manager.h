@@ -1,25 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_TEST_SESSION_FLAGS_MANAGER_H_
 #define CHROME_BROWSER_ASH_LOGIN_TEST_SESSION_FLAGS_MANAGER_H_
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/values.h"
 
 namespace base {
 class CommandLine;
-class Value;
 }  // namespace base
 
-namespace chromeos {
-namespace test {
+namespace ash::test {
 
 // Test helper that sets up command line for login tests. By default, it
 // initializes the command line so tests start on the login manager.
@@ -36,6 +34,10 @@ class SessionFlagsManager {
   using Switch = std::pair<std::string, std::string>;
 
   SessionFlagsManager();
+
+  SessionFlagsManager(const SessionFlagsManager&) = delete;
+  SessionFlagsManager& operator=(const SessionFlagsManager&) = delete;
+
   ~SessionFlagsManager();
 
   // Sets the manager up for session restore.It should be called early in
@@ -83,7 +85,8 @@ class SessionFlagsManager {
 
   void LoadStateFromBackingFile();
   void StoreStateToBackingFile();
-  base::Value GetSwitchesValueFromArgv(const std::vector<std::string>& argv);
+  base::ListValue GetSwitchesValueFromArgv(
+      const std::vector<std::string>& argv);
 
   // The mode this manager is running in.
   Mode mode_ = Mode::LOGIN_SCREEN;
@@ -99,19 +102,16 @@ class SessionFlagsManager {
   // session restore mode), the logged in user information.
   std::string user_id_;
   std::string user_hash_;
-  absl::optional<std::vector<Switch>> user_flags_;
+  std::optional<std::vector<Switch>> user_flags_;
 
   // List of switches passed as a restart job arguments.
-  absl::optional<std::vector<Switch>> restart_job_;
+  std::optional<std::vector<Switch>> restart_job_;
 
   // If `session_restore_enabled_` is set, the path to the file where session
   // state is saved.
   base::FilePath backing_file_;
-
-  DISALLOW_COPY_AND_ASSIGN(SessionFlagsManager);
 };
 
-}  // namespace test
-}  // namespace chromeos
+}  // namespace ash::test
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_TEST_SESSION_FLAGS_MANAGER_H_

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,51 +9,50 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
-#include <unordered_set>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "content/public/browser/browser_thread.h"
+#include "content/public/common/socket_permission_request.h"
 #include "extensions/browser/api/api_resource_manager.h"
-#include "extensions/browser/api/async_api_function.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/common/api/socket.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "extensions/common/extension_id.h"
+#include "extensions/common/permissions/api_permission.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/address_list.h"
 #include "net/base/network_change_notifier.h"
+#include "net/dns/public/host_resolver_results.h"
 #include "net/socket/tcp_client_socket.h"
 #include "services/network/public/cpp/resolve_host_client_base.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
-#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/udp_socket.mojom.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "extensions/browser/api/socket/app_firewall_hole_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 namespace content {
 class BrowserContext;
-}
+}  // namespace content
 
 namespace net {
 class IOBuffer;
-}
+}  // namespace net
 
-namespace network {
-namespace mojom {
+namespace network::mojom {
 class TLSClientSocket;
 class TCPConnectedSocket;
-}  // namespace mojom
-}  // namespace network
+}  // namespace network::mojom
 
 namespace extensions {
+
+#if BUILDFLAG(IS_CHROMEOS)
+extern const char kCrOSTerminal[];
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 class Socket;
 
 // A simple interface to ApiResourceManager<Socket> or derived class. The goal
@@ -62,17 +61,17 @@ class Socket;
 // "socket" namespace vs new version in "socket.xxx" namespaces).
 class SocketResourceManagerInterface {
  public:
-  virtual ~SocketResourceManagerInterface() {}
+  virtual ~SocketResourceManagerInterface() = default;
 
   virtual bool SetBrowserContext(content::BrowserContext* context) = 0;
   virtual int Add(Socket* socket) = 0;
-  virtual Socket* Get(const std::string& extension_id, int api_resource_id) = 0;
-  virtual void Remove(const std::string& extension_id, int api_resource_id) = 0;
-  virtual void Replace(const std::string& extension_id,
+  virtual Socket* Get(const ExtensionId& extension_id, int api_resource_id) = 0;
+  virtual void Remove(const ExtensionId& extension_id, int api_resource_id) = 0;
+  virtual void Replace(const ExtensionId& extension_id,
                        int api_resource_id,
                        Socket* socket) = 0;
-  virtual std::unordered_set<int>* GetResourceIds(
-      const std::string& extension_id) = 0;
+  virtual absl::flat_hash_set<int>* GetResourceIds(
+      const ExtensionId& extension_id) = 0;
 };
 
 // Implementation of SocketResourceManagerInterface using an
@@ -97,32 +96,35 @@ class SocketResourceManager : public SocketResourceManagerInterface {
     return manager_->Add(static_cast<T*>(socket));
   }
 
-  Socket* Get(const std::string& extension_id, int api_resource_id) override {
+  Socket* Get(const ExtensionId& extension_id, int api_resource_id) override {
     return manager_->Get(extension_id, api_resource_id);
   }
 
-  void Replace(const std::string& extension_id,
+  void Replace(const ExtensionId& extension_id,
                int api_resource_id,
                Socket* socket) override {
     manager_->Replace(extension_id, api_resource_id, static_cast<T*>(socket));
   }
 
-  void Remove(const std::string& extension_id, int api_resource_id) override {
+  void Remove(const ExtensionId& extension_id, int api_resource_id) override {
     manager_->Remove(extension_id, api_resource_id);
   }
 
-  std::unordered_set<int>* GetResourceIds(
-      const std::string& extension_id) override {
+  absl::flat_hash_set<int>* GetResourceIds(
+      const ExtensionId& extension_id) override {
     return manager_->GetResourceIds(extension_id);
   }
 
  private:
-  ApiResourceManager<T>* manager_;
+  raw_ptr<ApiResourceManager<T>> manager_;
 };
 
 // Base class for socket API functions, with some helper functions.
 class SocketApiFunction : public ExtensionFunction {
  public:
+  inline static constexpr char kExceedWriteQuotaError[] =
+      "Exceeded write quota.";
+
   SocketApiFunction();
 
  protected:
@@ -134,9 +136,26 @@ class SocketApiFunction : public ExtensionFunction {
   // ExtensionFunction:
   ResponseAction Run() final;
 
-  // Convenience wrapper for ErrorWithArguments(), where the arguments are just
-  // one integer value.
+  // Convenience wrapper for ErrorWithArgumentsDoNotUse(), where the arguments
+  // are just one integer value.
   ResponseValue ErrorWithCode(int error_code, const std::string& error);
+
+  // Either extension_id() or url origin for CrOS Terminal.
+  std::string GetOriginId() const;
+
+  // Checks extension()->permissions_data(), or returns true for CrOS Terminal.
+  bool CheckPermission(const APIPermission::CheckParam& param) const;
+
+  // Checks SocketsManifestData::CheckRequest() if extension(), or returns true
+  // for CrOS Terminal.
+  bool CheckRequest(const content::SocketPermissionRequest& param) const;
+
+  // Adds `bytes_to_write` against the write quota. Returns false if it would
+  // exceed the write quota.
+  bool TakeWriteQuota(size_t bytes_to_write);
+
+  // Returns bytes taken in last `TakeWriteQuota` call to the write quota.
+  void ReturnWriteQuota();
 
   virtual std::unique_ptr<SocketResourceManagerInterface>
   CreateSocketResourceManager();
@@ -145,7 +164,7 @@ class SocketApiFunction : public ExtensionFunction {
   Socket* GetSocket(int api_resource_id);
   void ReplaceSocket(int api_resource_id, Socket* socket);
   void RemoveSocket(int api_resource_id);
-  std::unordered_set<int>* GetSocketIds();
+  absl::flat_hash_set<int>* GetSocketIds();
 
   // A no-op outside of Chrome OS. Calls Respond() with an error if it fails.
   void OpenFirewallHole(const std::string& address,
@@ -153,7 +172,20 @@ class SocketApiFunction : public ExtensionFunction {
                         Socket* socket);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(SocketApiTest, ShutdownWithLingeringWriteQuota);
+
+  class ScopedWriteQuota {
+   public:
+    ScopedWriteQuota(SocketApiFunction* owner, size_t bytes_used);
+    ~ScopedWriteQuota();
+
+   private:
+    const raw_ptr<SocketApiFunction> owner_;
+    const size_t bytes_used_;
+  };
+
   std::unique_ptr<SocketResourceManagerInterface> manager_;
+  std::optional<ScopedWriteQuota> write_quota_used_;
 };
 
 class SocketExtensionWithDnsLookupFunction
@@ -163,7 +195,8 @@ class SocketExtensionWithDnsLookupFunction
   SocketExtensionWithDnsLookupFunction();
   ~SocketExtensionWithDnsLookupFunction() override;
 
-  void StartDnsLookup(const net::HostPortPair& host_port_pair);
+  void StartDnsLookup(const net::HostPortPair& host_port_pair,
+                      net::DnsQueryType dns_query_type);
   virtual void AfterDnsLookup(int lookup_result) = 0;
 
   net::AddressList addresses_;
@@ -173,7 +206,8 @@ class SocketExtensionWithDnsLookupFunction
   void OnComplete(
       int result,
       const net::ResolveErrorInfo& resolve_error_info,
-      const absl::optional<net::AddressList>& resolved_addresses) override;
+      const net::AddressList& resolved_addresses,
+      const net::HostResolverEndpointResults& alternative_endpoints) override;
 
   mojo::PendingRemote<network::mojom::HostResolver> pending_host_resolver_;
   mojo::Remote<network::mojom::HostResolver> host_resolver_;
@@ -204,7 +238,7 @@ class SocketDestroyFunction : public SocketApiFunction {
   DECLARE_EXTENSION_FUNCTION("socket.destroy", SOCKET_DESTROY)
 
  protected:
-  ~SocketDestroyFunction() override {}
+  ~SocketDestroyFunction() override = default;
 
   // SocketApiFunction:
   ResponseAction Work() override;
@@ -239,7 +273,7 @@ class SocketDisconnectFunction : public SocketApiFunction {
   DECLARE_EXTENSION_FUNCTION("socket.disconnect", SOCKET_DISCONNECT)
 
  protected:
-  ~SocketDisconnectFunction() override {}
+  ~SocketDisconnectFunction() override = default;
 
   // SocketApiFunction:
   ResponseAction Work() override;
@@ -250,7 +284,7 @@ class SocketBindFunction : public SocketApiFunction {
   DECLARE_EXTENSION_FUNCTION("socket.bind", SOCKET_BIND)
 
  protected:
-  ~SocketBindFunction() override {}
+  ~SocketBindFunction() override = default;
 
   // SocketApiFunction:
   ResponseAction Work() override;
@@ -277,7 +311,7 @@ class SocketListenFunction : public SocketApiFunction {
 
  private:
   void OnCompleted(int result, const std::string& error_msg);
-  std::unique_ptr<api::socket::Listen::Params> params_;
+  std::optional<api::socket::Listen::Params> params_;
 };
 
 class SocketAcceptFunction : public SocketApiFunction {
@@ -295,7 +329,7 @@ class SocketAcceptFunction : public SocketApiFunction {
  private:
   void OnAccept(int result_code,
                 mojo::PendingRemote<network::mojom::TCPConnectedSocket> socket,
-                const absl::optional<net::IPEndPoint>& remote_addr,
+                const std::optional<net::IPEndPoint>& remote_addr,
                 mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
                 mojo::ScopedDataPipeProducerHandle send_pipe_handle);
 };
@@ -311,7 +345,7 @@ class SocketReadFunction : public SocketApiFunction {
 
   // SocketApiFunction:
   ResponseAction Work() override;
-  void OnCompleted(int result,
+  void OnCompleted(int bytes_read,
                    scoped_refptr<net::IOBuffer> io_buffer,
                    bool socket_destroying);
 };
@@ -405,7 +439,7 @@ class SocketSetNoDelayFunction : public SocketApiFunction {
  private:
   void OnCompleted(bool success);
 
-  std::unique_ptr<api::socket::SetNoDelay::Params> params_;
+  std::optional<api::socket::SetNoDelay::Params> params_;
 };
 
 class SocketGetInfoFunction : public SocketApiFunction {
@@ -426,14 +460,14 @@ class SocketGetNetworkListFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("socket.getNetworkList", SOCKET_GETNETWORKLIST)
 
  protected:
-  ~SocketGetNetworkListFunction() override {}
+  ~SocketGetNetworkListFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 
  private:
   void GotNetworkList(
-      const absl::optional<net::NetworkInterfaceList>& interface_list);
+      const std::optional<net::NetworkInterfaceList>& interface_list);
 };
 
 class SocketJoinGroupFunction : public SocketApiFunction {
@@ -515,6 +549,9 @@ class SocketSecureFunction : public SocketApiFunction {
   DECLARE_EXTENSION_FUNCTION("socket.secure", SOCKET_SECURE)
   SocketSecureFunction();
 
+  SocketSecureFunction(const SocketSecureFunction&) = delete;
+  SocketSecureFunction& operator=(const SocketSecureFunction&) = delete;
+
  protected:
   ~SocketSecureFunction() override;
 
@@ -530,9 +567,7 @@ class SocketSecureFunction : public SocketApiFunction {
       mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
       mojo::ScopedDataPipeProducerHandle send_pipe_handle);
 
-  std::unique_ptr<api::socket::Secure::Params> params_;
-
-  DISALLOW_COPY_AND_ASSIGN(SocketSecureFunction);
+  std::optional<api::socket::Secure::Params> params_;
 };
 
 }  // namespace extensions

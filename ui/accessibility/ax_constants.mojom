@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,3 +11,8 @@ module ax.mojom;
 // be calculated by the user agent.
 // See: AXTableInfo
 const int32 kUnknownAriaColumnOrRowCount = -1;
+
+// Pass this anchor offset to the kSetSelection action to clear the selection.
+// The magic value is -99 instead of common -1 to disambiguate from other magic
+// values, specifically BEFORE_TEXT and INVALID_INDEX offsets in AXPosition.
+const int32 kNoSelectionOffset = -99;

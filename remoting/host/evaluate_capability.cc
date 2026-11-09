@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,22 +12,22 @@
 #include "base/files/file_path.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
-#include "base/process/kill.h"
 #include "base/process/launch.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "remoting/host/host_exit_codes.h"
+#include "remoting/host/base/host_exit_codes.h"
+#include "remoting/host/base/switches.h"
 #include "remoting/host/ipc_constants.h"
-#include "remoting/host/switches.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "remoting/host/win/evaluate_3d_display_mode.h"
 #include "remoting/host/win/evaluate_d3d.h"
 #endif
 
 namespace remoting {
 
-// TODO(crbug.com/1144161): Do not perform blocking operations on the IO thread.
+// TODO(crbug.com/40155401): Do not perform blocking operations on the IO
+// thread.
 class ScopedBypassIOThreadRestrictions : public base::ScopedAllowBlocking {};
 
 namespace {
@@ -45,7 +45,7 @@ base::FilePath BuildHostBinaryPath() {
   base::FilePath directory;
   result = base::PathService::Get(base::DIR_EXE, &directory);
   DCHECK(result);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (path.BaseName().value() == FILE_PATH_LITERAL("remoting_unittests.exe")) {
     return directory.Append(FILE_PATH_LITERAL("capability_test_stub.exe"));
   }
@@ -55,7 +55,7 @@ base::FilePath BuildHostBinaryPath() {
   }
 #endif
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (path.BaseName().value() ==
       FILE_PATH_LITERAL("chrome-remote-desktop-host")) {
     return path;
@@ -65,17 +65,14 @@ base::FilePath BuildHostBinaryPath() {
   }
 
   return directory.Append(FILE_PATH_LITERAL("remoting_me2me_host"));
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_APPLE)
   if (path.BaseName().value() == FILE_PATH_LITERAL("remoting_me2me_host")) {
     return path;
   }
 
   return directory.Append(FILE_PATH_LITERAL(
       "remoting_me2me_host.app/Contents/MacOS/remoting_me2me_host"));
-#elif defined(OS_WIN)
-  if (path.BaseName().value() == FILE_PATH_LITERAL("remoting_console.exe")) {
-    return path;
-  }
+#elif BUILDFLAG(IS_WIN)
   if (path.BaseName().value() == FILE_PATH_LITERAL("remoting_desktop.exe")) {
     return path;
   }
@@ -85,14 +82,14 @@ base::FilePath BuildHostBinaryPath() {
 
   return directory.Append(FILE_PATH_LITERAL("remoting_host.exe"));
 #else
-  #error "BuildHostBinaryPath is not implemented for current platform."
+#error "BuildHostBinaryPath is not implemented for current platform."
 #endif
 }
 
 }  // namespace
 
 int EvaluateCapabilityLocally(const std::string& type) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (type == kEvaluateD3D) {
     return EvaluateD3D();
   }
@@ -111,16 +108,16 @@ int EvaluateCapability(const std::string& type,
                             kProcessTypeEvaluateCapability);
   command.AppendSwitchASCII(kEvaluateCapabilitySwitchName, type);
 
-  int exit_code;
+  int exit_code = kInitializationFailed;
   std::string dummy_output;
   if (!output) {
     output = &dummy_output;
   }
 
-  // TODO(crbug.com/1144161): Do not perform blocking operations on the IO
+  // TODO(crbug.com/40155401): Do not perform blocking operations on the IO
   // thread.
   ScopedBypassIOThreadRestrictions bypass;
-#if DCHECK_IS_ON() && !defined(OS_WIN)
+#if DCHECK_IS_ON() && !BUILDFLAG(IS_WIN)
   const bool result =
 #endif
       base::GetAppOutputWithExitCode(command, output, &exit_code);
@@ -128,7 +125,7 @@ int EvaluateCapability(const std::string& type,
 // On Windows, base::GetAppOutputWithExitCode() usually returns false when
 // receiving "unknown" exit code. See
 // https://cs.chromium.org/chromium/src/base/process/launch_win.cc?rcl=39ec40095376e8d977decbdc5d7ca28ba7d39cf2&l=130
-#if DCHECK_IS_ON() && !defined(OS_WIN)
+#if DCHECK_IS_ON() && !BUILDFLAG(IS_WIN)
   DCHECK(result) << "Failed to execute process "
                  << command.GetCommandLineString() << ", exit code "
                  << exit_code;

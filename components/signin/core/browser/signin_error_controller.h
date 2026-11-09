@@ -1,21 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_ERROR_CONTROLLER_H_
 #define COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_ERROR_CONTROLLER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "build/build_config.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
-// Keep track of auth errors and expose them to observers in the UI. Services
-// that wish to expose auth errors to the user should register an
-// AuthStatusProvider to report their current authentication state, and should
-// invoke AuthStatusChanged() when their authentication state may have changed.
+// Keeps track of auth errors and exposes them to observers in the UI.
+// Errors are discovered through `IdentityManager`, by tracking the error states
+// of either the Primary Account only, or all accounts - depending on the value
+// of `AccountMode`.
 class SigninErrorController : public KeyedService,
                               public signin::IdentityManager::Observer {
  public:
@@ -33,12 +34,16 @@ class SigninErrorController : public KeyedService,
   // observers when an error arises or changes.
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
     virtual void OnErrorChanged() = 0;
   };
 
   SigninErrorController(AccountMode mode,
                         signin::IdentityManager* identity_manager);
+
+  SigninErrorController(const SigninErrorController&) = delete;
+  SigninErrorController& operator=(const SigninErrorController&) = delete;
+
   ~SigninErrorController() override;
 
   // KeyedService implementation:
@@ -75,12 +80,14 @@ class SigninErrorController : public KeyedService,
   void OnEndBatchOfRefreshTokenStateChanges() override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
   void OnPrimaryAccountChanged(
       const signin::PrimaryAccountChangeEvent& event) override;
 
   const AccountMode account_mode_;
-  signin::IdentityManager* identity_manager_;
+  raw_ptr<signin::IdentityManager> identity_manager_;
 
   base::ScopedObservation<signin::IdentityManager,
                           signin::IdentityManager::Observer>
@@ -89,13 +96,19 @@ class SigninErrorController : public KeyedService,
   // The account that generated the last auth error.
   CoreAccountId error_account_id_;
 
-  // The auth error detected the last time AuthStatusChanged() was invoked (or
-  // NONE if AuthStatusChanged() has never been invoked).
+  // The last detected auth error.
   GoogleServiceAuthError auth_error_;
 
+#if BUILDFLAG(IS_IOS)
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observer_list_;
+#else
   base::ObserverList<Observer, false>::Unchecked observer_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(SigninErrorController);
+#endif
 };
 
 #endif  // COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_ERROR_CONTROLLER_H_

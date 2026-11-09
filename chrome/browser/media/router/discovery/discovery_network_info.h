@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,8 +19,8 @@ struct DiscoveryNetworkInfo {
   DiscoveryNetworkInfo(const DiscoveryNetworkInfo&);
   DiscoveryNetworkInfo& operator=(const DiscoveryNetworkInfo&);
 
-  bool operator==(const DiscoveryNetworkInfo&) const;
-  bool operator!=(const DiscoveryNetworkInfo&) const;
+  friend constexpr bool operator==(const DiscoveryNetworkInfo&,
+                                   const DiscoveryNetworkInfo&) = default;
 
   // The name of the network interface.  e.g. eth0, wlan0
   std::string name;

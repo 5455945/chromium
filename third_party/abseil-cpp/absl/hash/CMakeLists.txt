@@ -24,19 +24,21 @@ absl_cc_library(
     "internal/hash.h"
   COPTS
     ${ABSL_DEFAULT_COPTS}
-    DEPS
+  DEPS
+    absl::bits
     absl::city
     absl::config
     absl::core_headers
     absl::endian
     absl::fixed_array
-    absl::meta
+    absl::function_ref
     absl::int128
-    absl::strings
+    absl::meta
     absl::optional
-    absl::variant
+    absl::string_view
     absl::utility
-    absl::wyhash
+    absl::variant
+    absl::weakly_mixed_integer
   PUBLIC
 )
 
@@ -48,12 +50,13 @@ absl_cc_library(
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
-    absl::spy_hash_state
     absl::meta
+    absl::spy_hash_state
     absl::strings
     absl::variant
     GTest::gmock
   TESTONLY
+  PUBLIC
 )
 
 absl_cc_test(
@@ -61,20 +64,49 @@ absl_cc_test(
     hash_test
   SRCS
     "hash_test.cc"
+    "internal/hash_test.h"
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
+    absl::bits
     absl::cord_test_helpers
+    absl::flat_hash_map
+    absl::flat_hash_set
     absl::hash
     absl::hash_testing
-    absl::core_headers
-    absl::flat_hash_set
     absl::spy_hash_state
-    absl::meta
-    absl::int128
+    absl::string_view
+    absl::strings
+    GTest::gmock_main
+  SHARD_COUNT
+    4
+)
+
+absl_cc_test(
+  NAME
+    hash_instantiated_test
+  SRCS
+    "hash_instantiated_test.cc"
+    "internal/hash_test.h"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::btree
+    absl::config
+    absl::flat_hash_map
+    absl::flat_hash_set
+    absl::hash
+    absl::hash_testing
+    absl::node_hash_map
+    absl::node_hash_set
     GTest::gmock_main
 )
 
+# Internal-only target, do not depend on directly.
+#
+# Note: Even though external code should not depend on this target
+# directly, it must be marked PUBLIC since it is a dependency of
+# hash_testing.
 absl_cc_library(
   NAME
     spy_hash_state
@@ -84,11 +116,14 @@ absl_cc_library(
     ${ABSL_DEFAULT_COPTS}
   DEPS
     absl::hash
-    absl::strings
     absl::str_format
+    absl::strings
+    absl::weakly_mixed_integer
   TESTONLY
+  PUBLIC
 )
 
+# Internal-only target, do not depend on directly.
 absl_cc_library(
   NAME
     city
@@ -99,6 +134,7 @@ absl_cc_library(
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
+    absl::bits
     absl::config
     absl::core_headers
     absl::endian
@@ -116,30 +152,28 @@ absl_cc_test(
     GTest::gmock_main
 )
 
+# Internal-only target, do not depend on directly.
 absl_cc_library(
   NAME
-    wyhash
+    weakly_mixed_integer
   HDRS
-    "internal/wyhash.h"
-  SRCS
-    "internal/wyhash.cc"
+    "internal/weakly_mixed_integer.h"
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
     absl::config
-    absl::endian
-    absl::int128
 )
 
 absl_cc_test(
   NAME
-    wyhash_test
+    low_level_hash_test
   SRCS
-    "internal/wyhash_test.cc"
+    "internal/low_level_hash_test.cc"
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
-    absl::wyhash
+    absl::hash
+    absl::string_view
     absl::strings
     GTest::gmock_main
 )

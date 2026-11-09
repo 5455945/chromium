@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_descriptor_watcher_posix.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/posix/unix_domain_socket.h"
 #include "base/rand_util.h"
-#include "base/task_runner_util.h"
 #include "base/threading/platform_thread.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chromeos/dbus/power/power_manager_client.h"
@@ -36,8 +33,37 @@ const PowerManagerClient::TimerId kErrorId = -2;
 
 }  // namespace
 
+struct NativeTimer::StartTimerParams {
+  StartTimerParams() = default;
+  StartTimerParams(base::TimeTicks absolute_expiration_time,
+                   base::OnceClosure timer_expiration_callback,
+                   OnStartNativeTimerCallback result_callback)
+      : absolute_expiration_time(absolute_expiration_time),
+        timer_expiration_callback(std::move(timer_expiration_callback)),
+        result_callback(std::move(result_callback)) {}
+
+  StartTimerParams(const StartTimerParams&) = delete;
+  StartTimerParams& operator=(const StartTimerParams&) = delete;
+
+  StartTimerParams(StartTimerParams&&) = default;
+
+  ~StartTimerParams() = default;
+
+  base::TimeTicks absolute_expiration_time;
+  base::OnceClosure timer_expiration_callback;
+  OnStartNativeTimerCallback result_callback;
+};
+
+bool NativeTimer::simulate_timer_creation_failure_for_testing_ = false;
+
 NativeTimer::NativeTimer(const std::string& tag)
     : timer_id_(kNotCreatedId), tag_(tag) {
+  // Simulate timer creation failure for testing.
+  if (simulate_timer_creation_failure_for_testing_) {
+    timer_id_ = kErrorId;
+    return;
+  }
+
   // Create a socket pair, one end will be sent to the power daemon the other
   // socket will be used to listen for the timer firing.
   base::ScopedFD powerd_fd;
@@ -67,24 +93,6 @@ NativeTimer::~NativeTimer() {
 
   PowerManagerClient::Get()->DeleteArcTimers(tag_, base::DoNothing());
 }
-
-struct NativeTimer::StartTimerParams {
-  StartTimerParams() = default;
-  StartTimerParams(base::TimeTicks absolute_expiration_time,
-                   base::OnceClosure timer_expiration_callback,
-                   OnStartNativeTimerCallback result_callback)
-      : absolute_expiration_time(absolute_expiration_time),
-        timer_expiration_callback(std::move(timer_expiration_callback)),
-        result_callback(std::move(result_callback)) {}
-  StartTimerParams(StartTimerParams&&) = default;
-  ~StartTimerParams() = default;
-
-  base::TimeTicks absolute_expiration_time;
-  base::OnceClosure timer_expiration_callback;
-  OnStartNativeTimerCallback result_callback;
-
-  DISALLOW_COPY_AND_ASSIGN(StartTimerParams);
-};
 
 void NativeTimer::Start(base::TimeTicks absolute_expiration_time,
                         base::OnceClosure timer_expiration_callback,
@@ -124,9 +132,8 @@ void NativeTimer::Start(base::TimeTicks absolute_expiration_time,
                      std::move(result_callback)));
 }
 
-void NativeTimer::OnCreateTimer(
-    base::ScopedFD expiration_fd,
-    absl::optional<std::vector<int32_t>> timer_ids) {
+void NativeTimer::OnCreateTimer(base::ScopedFD expiration_fd,
+                                std::optional<std::vector<int32_t>> timer_ids) {
   DCHECK(expiration_fd.is_valid());
   if (!timer_ids.has_value()) {
     LOG(ERROR) << "No timers returned";
@@ -191,8 +198,8 @@ void NativeTimer::OnExpiration() {
   DCHECK(expiration_fd_.is_valid());
   uint64_t timer_data;
   std::vector<base::ScopedFD> fds;
-  if (!base::UnixDomainSocket::RecvMsg(expiration_fd_.get(), &timer_data,
-                                       sizeof(timer_data), &fds)) {
+  if (!base::UnixDomainSocket::RecvMsg(
+          expiration_fd_.get(), base::byte_span_from_ref(timer_data), &fds)) {
     PLOG(ERROR) << "Bad data in expiration fd";
   }
 
@@ -233,6 +240,16 @@ void NativeTimer::ProcessAndResetInFlightStartParams(bool result) {
 
   // This state has been processed and must be reset to indicate that.
   in_flight_start_timer_params_.reset();
+}
+
+NativeTimer::ScopedFailureSimulatorForTesting::
+    ScopedFailureSimulatorForTesting() {
+  NativeTimer::simulate_timer_creation_failure_for_testing_ = true;
+}
+
+NativeTimer::ScopedFailureSimulatorForTesting::
+    ~ScopedFailureSimulatorForTesting() {
+  NativeTimer::simulate_timer_creation_failure_for_testing_ = false;
 }
 
 }  // namespace chromeos

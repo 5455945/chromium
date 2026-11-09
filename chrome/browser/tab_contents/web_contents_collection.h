@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
 
 namespace content {
@@ -27,9 +28,10 @@ class WebContentsCollection {
     virtual void WebContentsDestroyed(content::WebContents* web_contents) {}
     virtual void RenderProcessGone(content::WebContents* web_contents,
                                    base::TerminationStatus status) {}
-    virtual void NavigationEntryCommitted(
+    virtual void DidFinishNavigation(
         content::WebContents* web_contents,
-        const content::LoadCommittedDetails& load_details) {}
+        content::NavigationHandle* navigation_handle) {}
+    virtual void DidStartLoading(content::WebContents* web_contents) {}
 
    protected:
     virtual ~Observer() = default;
@@ -53,7 +55,7 @@ class WebContentsCollection {
 
   // Observer which will receive callbacks from any of the `WebContentsObserver`
   // in `web_contents_observers_`.
-  Observer* const observer_;
+  const raw_ptr<Observer> observer_;
 
   // Map of observers for the WebContents part of this collection.
   base::flat_map<content::WebContents*,

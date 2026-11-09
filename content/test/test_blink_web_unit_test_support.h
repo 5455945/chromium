@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,11 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "cc/test/test_task_graph_runner.h"
 #include "content/child/blink_platform_impl.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 
 namespace blink {
 namespace scheduler {
@@ -33,14 +31,20 @@ class TestBlinkWebUnitTestSupport : public BlinkPlatformImpl {
     // Each test has to create base::test::TaskEnvironment manually.
     kMockScheduler,
     // Initialize blink platform with the real scheduler.
-    // Should be used only by webkit_unit_tests.
+    // Should be used only by blink_unittests.
     // Tests don't have to create base::test::TaskEnvironment, but should
     // be careful not to leak any tasks to the other tests.
     kRealScheduler,
   };
 
   explicit TestBlinkWebUnitTestSupport(
-      SchedulerType scheduler_type = SchedulerType::kMockScheduler);
+      SchedulerType scheduler_type,
+      std::string additional_v8_flags = std::string());
+
+  TestBlinkWebUnitTestSupport(const TestBlinkWebUnitTestSupport&) = delete;
+  TestBlinkWebUnitTestSupport& operator=(const TestBlinkWebUnitTestSupport&) =
+      delete;
+
   ~TestBlinkWebUnitTestSupport() override;
 
   blink::WebString UserAgent() override;
@@ -52,10 +56,11 @@ class TestBlinkWebUnitTestSupport : public BlinkPlatformImpl {
       const blink::WebString& value1,
       const blink::WebString& value2) override;
   blink::WebString DefaultLocale() override;
+  scoped_refptr<base::SequencedTaskRunner> MediaThreadTaskRunner() override;
+  scoped_refptr<base::SequencedTaskRunner>
+  GetMediaStreamVideoSourceVideoTaskRunner() const override;
   scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() const override;
   bool IsThreadedAnimationEnabled() override;
-  bool IsUseZoomForDSFEnabled() override;
-  cc::TaskGraphRunner* GetTaskGraphRunner() override;
 
   // May be called when |this| is registered as the active blink Platform
   // implementation. Overrides the result of IsThreadedAnimationEnabled() to
@@ -64,19 +69,13 @@ class TestBlinkWebUnitTestSupport : public BlinkPlatformImpl {
   // cross-test side effects.
   static bool SetThreadedAnimationEnabled(bool enabled);
 
-  static bool SetUseZoomForDsfEnabled(bool enabled);
-
  private:
   void BindClipboardHost(mojo::ScopedMessagePipeHandle handle);
 
   std::unique_ptr<blink::scheduler::WebThreadScheduler> main_thread_scheduler_;
   bool threaded_animation_ = true;
-  bool use_zoom_for_dsf_ = true;
-  cc::TestTaskGraphRunner test_task_graph_runner_;
 
   base::WeakPtrFactory<TestBlinkWebUnitTestSupport> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TestBlinkWebUnitTestSupport);
 };
 
 }  // namespace content

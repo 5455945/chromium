@@ -1,26 +1,27 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_BASE_REGION_H_
 #define CC_BASE_REGION_H_
 
+#include <iosfwd>
 #include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "cc/base/base_export.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/skia_util.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 
 class SkPath;
 
 namespace base {
-class Value;
 namespace trace_event {
 class TracedValue;
 }
-}
+}  // namespace base
 
 namespace gfx {
 class Vector2d;
@@ -34,12 +35,19 @@ class CC_BASE_EXPORT Region {
   Region();
   explicit Region(const SkRegion& region);
   Region(const Region& region);
+  Region(Region&& region);
   Region(const gfx::Rect& rect);  // NOLINT(runtime/explicit)
   ~Region();
 
   const Region& operator=(const gfx::Rect& rect);
   const Region& operator=(const Region& region);
+  Region& operator=(Region&& region);
   const Region& operator+=(const gfx::Vector2d& offset);
+
+  // Returns a reference to a global empty Region. This should only be used for
+  // functions that need to return a reference to a Region, not instead of the
+  // default constructor.
+  static const Region& Empty();
 
   void Swap(Region* region);
   void Clear();
@@ -59,6 +67,7 @@ class CC_BASE_EXPORT Region {
   void Subtract(const SimpleEnclosedRegion& region);
   void Union(const gfx::Rect& rect);
   void Union(const Region& region);
+  void Union(base::span<const SkIRect> rects);
   void Intersect(const gfx::Rect& rect);
   void Intersect(const Region& region);
 
@@ -71,7 +80,6 @@ class CC_BASE_EXPORT Region {
   }
 
   std::string ToString() const;
-  std::unique_ptr<base::Value> AsValue() const;
   void AsValueInto(base::trace_event::TracedValue* array) const;
 
   // Iterator for iterating through the gfx::Rects contained in this Region.
@@ -160,6 +168,11 @@ inline Region UnionRegions(const Region& a, const gfx::Rect& b) {
   result.Union(b);
   return result;
 }
+
+// This is declared here for use in gtest-based unit tests but is defined in
+// the //cc:test_support target. Depend on that to use this in your unit test.
+// This should not be used in production code - call ToString() instead.
+void PrintTo(const Region& region, std::ostream* os);
 
 }  // namespace cc
 

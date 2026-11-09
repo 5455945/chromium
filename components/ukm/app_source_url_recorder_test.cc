@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,16 +20,8 @@ class AppSourceUrlRecorderTest : public testing::Test {
   }
 
  protected:
-  SourceId GetSourceIdForChromeApp(const std::string& app_id) {
-    return AppSourceUrlRecorder::GetSourceIdForChromeApp(app_id);
-  }
-
   SourceId GetSourceIdForArcPackageName(const std::string& package_name) {
     return AppSourceUrlRecorder::GetSourceIdForArcPackageName(package_name);
-  }
-
-  SourceId GetSourceIdForArc(const std::string& package_name) {
-    return AppSourceUrlRecorder::GetSourceIdForArc(package_name);
   }
 
   SourceId GetSourceIdForPWA(const GURL& url) {
@@ -41,41 +33,10 @@ class AppSourceUrlRecorderTest : public testing::Test {
   TestAutoSetUkmRecorder test_ukm_recorder_;
 };
 
-TEST_F(AppSourceUrlRecorderTest, CheckChromeApp) {
-  const std::string app_id = "hhaomjibdihmijegdhdafkllkbggdgoj";
-  SourceId id = GetSourceIdForChromeApp(app_id);
-  GURL expected_url("app://" + app_id);
-
-  const auto& sources = test_ukm_recorder_.GetSources();
-  ASSERT_EQ(1ul, sources.size());
-
-  ASSERT_NE(kInvalidSourceId, id);
-  auto it = sources.find(id);
-  ASSERT_NE(sources.end(), it);
-  EXPECT_EQ(expected_url, it->second->url());
-  EXPECT_EQ(1u, it->second->urls().size());
-}
-
 TEST_F(AppSourceUrlRecorderTest, CheckArcPackageName) {
   const std::string package_name = "com.google.play";
   SourceId id = GetSourceIdForArcPackageName(package_name);
   GURL expected_url("app://" + package_name);
-
-  const auto& sources = test_ukm_recorder_.GetSources();
-  ASSERT_EQ(1ul, sources.size());
-
-  ASSERT_NE(kInvalidSourceId, id);
-  auto it = sources.find(id);
-  ASSERT_NE(sources.end(), it);
-  EXPECT_EQ(expected_url, it->second->url());
-  EXPECT_EQ(1u, it->second->urls().size());
-}
-
-TEST_F(AppSourceUrlRecorderTest, CheckArc) {
-  SourceId id = GetSourceIdForArc("com.google.play");
-
-  std::string com_google_play_hash("pjhgmeephkiehhlkfcoginnkbphkdang");
-  GURL expected_url("app://play/" + com_google_play_hash);
 
   const auto& sources = test_ukm_recorder_.GetSources();
   ASSERT_EQ(1ul, sources.size());

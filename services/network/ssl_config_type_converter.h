@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,12 @@ namespace mojo {
 
 int MojoSSLVersionToNetSSLVersion(network::mojom::SSLVersion mojo_version);
 
-// Converts a net::SSLContextConfig to network::mojom::SSLConfigPtr. Tested in
+// Converts a network::mojom::SSLConfigPtr to a net::SSLContextConfig. Tested in
 // SSLConfigServiceMojo's unittests.
+// Note: For net::SSLContextConfig::supported_named_groups, this does a little
+// more than just converting types. It translates the simplified configuration
+// surface exposed via network::mojom::{SSLConfig,SSLNamedGroupsPreset} into the
+// underlying //net representation.
 net::SSLContextConfig MojoSSLConfigToSSLContextConfig(
     const network::mojom::SSLConfigPtr& mojo_config);
 

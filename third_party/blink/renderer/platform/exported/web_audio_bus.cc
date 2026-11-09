@@ -24,30 +24,42 @@
 
 #include "third_party/blink/public/platform/web_audio_bus.h"
 
+#include "base/check_op.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/numerics/safe_conversions.h"
+#include "media/base/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 
 namespace blink {
 
-void WebAudioBus::Initialize(unsigned number_of_channels,
-                             size_t length,
-                             double sample_rate) {
+bool WebAudioBus::TryInitialize(unsigned number_of_channels,
+                                size_t length,
+                                double sample_rate) {
+  if (!base::IsValueInRangeForNumericType<wtf_size_t>(length)) {
+    return false;
+  }
+  wtf_size_t length_wtf = static_cast<wtf_size_t>(length);
   scoped_refptr<AudioBus> audio_bus =
-      AudioBus::Create(number_of_channels, length);
+      AudioBus::TryCreate(number_of_channels, length_wtf);
+  if (!audio_bus) {
+    return false;
+  }
   audio_bus->SetSampleRate(sample_rate);
 
-  if (private_)
+  if (private_) {
     private_->Release();
+  }
 
   audio_bus->AddRef();
   private_ = audio_bus.get();
+  return true;
 }
 
 void WebAudioBus::ResizeSmaller(size_t new_length) {
   DCHECK(private_);
   if (private_) {
     DCHECK_LE(new_length, length());
-    private_->ResizeSmaller(new_length);
+    private_->ResizeSmaller(static_cast<wtf_size_t>(new_length));
   }
 }
 
@@ -76,15 +88,16 @@ double WebAudioBus::SampleRate() const {
   return private_->SampleRate();
 }
 
-float* WebAudioBus::ChannelData(unsigned channel_index) {
-  if (!private_)
-    return nullptr;
-  DCHECK_LT(channel_index, NumberOfChannels());
-  return private_->Channel(channel_index)->MutableData();
+base::span<float> WebAudioBus::ChannelData(unsigned channel_index) {
+  if (!private_) {
+    return {};
+  }
+  CHECK_LT(channel_index, NumberOfChannels());
+  return private_->Channel(channel_index)->MutableSpan();
 }
 
 scoped_refptr<AudioBus> WebAudioBus::Release() {
-  scoped_refptr<AudioBus> audio_bus(private_);
+  scoped_refptr<AudioBus> audio_bus(private_.get());
   private_->Release();
   private_ = nullptr;
   return audio_bus;

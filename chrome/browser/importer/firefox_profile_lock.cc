@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,12 +54,12 @@
 * ***** END LICENSE BLOCK ***** */
 
 // static
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 const base::FilePath::CharType FirefoxProfileLock::kLockFileName[] =
     FILE_PATH_LITERAL(".parentlock");
 const base::FilePath::CharType FirefoxProfileLock::kOldLockFileName[] =
     FILE_PATH_LITERAL("parent.lock");
-#elif defined(OS_POSIX)
+#elif BUILDFLAG(IS_POSIX)
 // http://www.google.com/codesearch/p?hl=en#e_ObwTAVPyo/profile/dirserviceprovider/src/nsProfileLock.cpp&l=433
 const base::FilePath::CharType FirefoxProfileLock::kLockFileName[] =
     FILE_PATH_LITERAL(".parentlock");
@@ -79,6 +79,6 @@ FirefoxProfileLock::FirefoxProfileLock(const base::FilePath& path) {
 FirefoxProfileLock::~FirefoxProfileLock() {
   // Because this destructor happens in first run on the profile import thread,
   // with no UI to jank, it's ok to allow deletion of the lock here.
-  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  base::ScopedAllowBlocking allow_blocking;
   Unlock();
 }

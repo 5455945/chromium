@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,9 @@ package org.chromium.base;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -19,44 +17,30 @@ import java.util.List;
 
 /** Unit tests for {@link Log}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class LogTest {
-    /** Tests that the computed call origin is the correct one. */
-    @Test
-    public void callOriginTest() {
-        Log.d("Foo", "Bar");
-
-        List<ShadowLog.LogItem> logs = ShadowLog.getLogs();
-
-        assertTrue("The origin of the log message (" + logs.get(logs.size() - 1).msg
-                        + ") looks wrong.",
-                logs.get(logs.size() - 1).msg.matches("\\[LogTest.java:\\d+\\].*"));
-    }
-
     @Test
     public void normalizeTagTest() {
-        assertEquals("cr_foo", Log.normalizeTag("cr.foo"));
-        assertEquals("cr_foo", Log.normalizeTag("cr_foo"));
         assertEquals("cr_foo", Log.normalizeTag("foo"));
-        assertEquals("cr_ab_foo", Log.normalizeTag("ab_foo"));
     }
 
     /** Tests that exceptions provided to the log functions are properly recognized and printed. */
     @Test
     public void exceptionLoggingTest() {
-        Throwable t = new Throwable() {
-            @Override
-            public String toString() {
-                return "MyThrowable";
-            }
-        };
+        Throwable t =
+                new Throwable() {
+                    @Override
+                    public String toString() {
+                        return "MyThrowable";
+                    }
+                };
 
-        Throwable t2 = new Throwable() {
-            @Override
-            public String toString() {
-                return "MyOtherThrowable";
-            }
-        };
+        Throwable t2 =
+                new Throwable() {
+                    @Override
+                    public String toString() {
+                        return "MyOtherThrowable";
+                    }
+                };
 
         List<ShadowLog.LogItem> logs;
 

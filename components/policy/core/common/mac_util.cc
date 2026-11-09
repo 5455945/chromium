@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <string>
 #include <utility>
 
-#include "base/mac/foundation_util.h"
+#include "base/apple/foundation_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/values.h"
 
-using base::mac::CFCast;
+using base::apple::CFCast;
 
 namespace policy {
 
@@ -27,8 +27,9 @@ void DictionaryEntryToValue(const void* key, const void* value, void* context) {
         PropertyToValue(static_cast<CFPropertyListRef>(value));
     if (converted) {
       const std::string string = base::SysCFStringRefToUTF8(cf_key);
-      static_cast<base::DictionaryValue*>(context)->Set(string,
-                                                        std::move(converted));
+      // Policy dictionary values may contain dots in key names.
+      static_cast<base::DictValue*>(context)->Set(string,
+                                                  std::move(*converted));
     }
   }
 }
@@ -39,8 +40,10 @@ void DictionaryEntryToValue(const void* key, const void* value, void* context) {
 void ArrayEntryToValue(const void* value, void* context) {
   std::unique_ptr<base::Value> converted =
       PropertyToValue(static_cast<CFPropertyListRef>(value));
-  if (converted)
-    static_cast<base::ListValue*>(context)->Append(std::move(converted));
+  if (converted) {
+    static_cast<base::ListValue*>(context)->Append(
+        base::Value::FromUniquePtrValue(std::move(converted)));
+  }
 }
 
 }  // namespace
@@ -75,19 +78,16 @@ std::unique_ptr<base::Value> PropertyToValue(CFPropertyListRef property) {
   }
 
   if (CFDictionaryRef dict = CFCast<CFDictionaryRef>(property)) {
-    std::unique_ptr<base::DictionaryValue> dict_value(
-        new base::DictionaryValue());
-    CFDictionaryApplyFunction(dict, DictionaryEntryToValue, dict_value.get());
-    return std::move(dict_value);
+    base::DictValue dict_value;
+    CFDictionaryApplyFunction(dict, DictionaryEntryToValue, &dict_value);
+    return std::make_unique<base::Value>(std::move(dict_value));
   }
 
   if (CFArrayRef array = CFCast<CFArrayRef>(property)) {
-    std::unique_ptr<base::ListValue> list_value(new base::ListValue());
-    CFArrayApplyFunction(array,
-                         CFRangeMake(0, CFArrayGetCount(array)),
-                         ArrayEntryToValue,
-                         list_value.get());
-    return std::move(list_value);
+    base::ListValue list_value;
+    CFArrayApplyFunction(array, CFRangeMake(0, CFArrayGetCount(array)),
+                         ArrayEntryToValue, &list_value);
+    return std::make_unique<base::Value>(std::move(list_value));
   }
 
   return nullptr;

@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.filter;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.download.home.filter.Filters.FilterType;
 import org.chromium.components.offline_items_collection.OfflineItem;
 
@@ -11,6 +12,7 @@ import org.chromium.components.offline_items_collection.OfflineItem;
  * An {@link OfflineItemFilter} responsible for pruning out items based on
  * {@link OfflineItem#filter} and {@link FilterType}.
  */
+@NullMarked
 public class TypeOfflineItemFilter extends OfflineItemFilter {
     private @FilterType int mFilter = Filters.FilterType.NONE;
 
@@ -28,8 +30,7 @@ public class TypeOfflineItemFilter extends OfflineItemFilter {
     // OfflineItemFilter implementation.
     @Override
     protected boolean isFilteredOut(OfflineItem item) {
-        @Filters.FilterType
-        int type = Filters.fromOfflineItem(item);
+        @Filters.FilterType int type = Filters.fromOfflineItem(item);
 
         // Prefetched articles are not subject to the FilterType.NONE section.  We have to prune
         // those out unless the filter matches exactly.

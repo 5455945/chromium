@@ -1,21 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_DBUS_VIRTUAL_FILE_REQUEST_SERVICE_PROVIDER_H_
 #define CHROME_BROWSER_ASH_DBUS_VIRTUAL_FILE_REQUEST_SERVICE_PROVIDER_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
 
 namespace dbus {
 class MethodCall;
-}
+}  // namespace dbus
 
-namespace chromeos {
+namespace ash {
 
 // VirtualFileRequestServiceProvider exposes D-Bus methods which will be
 // called by the VirtualFileProvider service.
@@ -23,6 +22,12 @@ class VirtualFileRequestServiceProvider
     : public CrosDBusService::ServiceProviderInterface {
  public:
   VirtualFileRequestServiceProvider();
+
+  VirtualFileRequestServiceProvider(const VirtualFileRequestServiceProvider&) =
+      delete;
+  VirtualFileRequestServiceProvider& operator=(
+      const VirtualFileRequestServiceProvider&) = delete;
+
   ~VirtualFileRequestServiceProvider() override;
 
   // CrosDBusService::ServiceProviderInterface overrides:
@@ -39,10 +44,8 @@ class VirtualFileRequestServiceProvider
   // beginning of destruction.
   base::WeakPtrFactory<VirtualFileRequestServiceProvider> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(VirtualFileRequestServiceProvider);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_VIRTUAL_FILE_REQUEST_SERVICE_PROVIDER_H_

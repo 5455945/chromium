@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,19 +14,17 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/no_destructor.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "extensions/common/extension_id.h"
 #include "services/device/public/mojom/hid.mojom.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
-
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-class Value;
-}
 
 namespace content {
 class BrowserContext;
@@ -48,7 +46,6 @@ class DevicePermissionEntry : public base::RefCounted<DevicePermissionEntry> {
 
   explicit DevicePermissionEntry(const device::mojom::UsbDeviceInfo& device);
 
-  explicit DevicePermissionEntry(const device::mojom::HidDeviceInfo& device);
   DevicePermissionEntry(Type type,
                         uint16_t vendor_id,
                         uint16_t product_id,
@@ -64,7 +61,7 @@ class DevicePermissionEntry : public base::RefCounted<DevicePermissionEntry> {
 
   // Convert the device to a serializable value, returns an is_none() value
   // if the entry is not persistent.
-  base::Value ToValue() const;
+  base::DictValue ToValue() const;
 
   std::u16string GetPermissionMessageString() const;
 
@@ -106,6 +103,9 @@ class DevicePermissionEntry : public base::RefCounted<DevicePermissionEntry> {
 // Stores device permissions associated with a particular extension.
 class DevicePermissions {
  public:
+  DevicePermissions(const DevicePermissions&) = delete;
+  DevicePermissions& operator=(const DevicePermissions&) = delete;
+
   virtual ~DevicePermissions();
 
   // Attempts to find a permission entry matching the given device.
@@ -125,20 +125,24 @@ class DevicePermissions {
 
   // Reads permissions out of ExtensionPrefs.
   DevicePermissions(content::BrowserContext* context,
-                    const std::string& extension_id);
+                    const ExtensionId& extension_id);
 
   std::set<scoped_refptr<DevicePermissionEntry>> entries_;
   std::map<std::string, scoped_refptr<DevicePermissionEntry>>
       ephemeral_usb_devices_;
   std::map<std::string, scoped_refptr<DevicePermissionEntry>>
       ephemeral_hid_devices_;
-
-  DISALLOW_COPY_AND_ASSIGN(DevicePermissions);
 };
 
 // Manages saved device permissions for all extensions.
 class DevicePermissionsManager : public KeyedService {
  public:
+  explicit DevicePermissionsManager(content::BrowserContext* context);
+  ~DevicePermissionsManager() override;
+
+  DevicePermissionsManager(const DevicePermissionsManager&) = delete;
+  DevicePermissionsManager& operator=(const DevicePermissionsManager&) = delete;
+
   static DevicePermissionsManager* Get(content::BrowserContext* context);
 
   static std::u16string GetPermissionMessage(
@@ -150,25 +154,23 @@ class DevicePermissionsManager : public KeyedService {
       bool always_include_manufacturer);
 
   // The DevicePermissions object for a given extension.
-  DevicePermissions* GetForExtension(const std::string& extension_id);
+  DevicePermissions* GetForExtension(const ExtensionId& extension_id);
 
   // Equivalent to calling GetForExtension and extracting the permission string
   // for each entry.
   std::vector<std::u16string> GetPermissionMessageStrings(
-      const std::string& extension_id) const;
+      const ExtensionId& extension_id) const;
 
-  void AllowUsbDevice(const std::string& extension_id,
+  void AllowUsbDevice(const ExtensionId& extension_id,
                       const device::mojom::UsbDeviceInfo& device_info);
-  void AllowHidDevice(const std::string& extension_id,
-                      const device::mojom::HidDeviceInfo& device);
 
   // Updates the "last used" timestamp on the given device entry and writes it
   // out to ExtensionPrefs.
-  void UpdateLastUsed(const std::string& extension_id,
+  void UpdateLastUsed(const ExtensionId& extension_id,
                       scoped_refptr<DevicePermissionEntry> entry);
 
   // Revokes permission for the extension to access the given device.
-  void RemoveEntry(const std::string& extension_id,
+  void RemoveEntry(const ExtensionId& extension_id,
                    scoped_refptr<DevicePermissionEntry> entry);
 
   // Revokes permission for an ephemeral hid/USB device by its guid.
@@ -176,44 +178,43 @@ class DevicePermissionsManager : public KeyedService {
                                const std::string& guid);
 
   // Revokes permission for the extension to access all allowed devices.
-  void Clear(const std::string& extension_id);
+  void Clear(const ExtensionId& extension_id);
 
  private:
   friend class DevicePermissionsManagerFactory;
   FRIEND_TEST_ALL_PREFIXES(DevicePermissionsManagerTest, SuspendExtension);
 
-  explicit DevicePermissionsManager(content::BrowserContext* context);
-  ~DevicePermissionsManager() override;
-
-  DevicePermissions* GetInternal(const std::string& extension_id) const;
+  DevicePermissions* GetInternal(const ExtensionId& extension_id) const;
 
   base::ThreadChecker thread_checker_;
-  content::BrowserContext* context_;
-  std::map<std::string, DevicePermissions*> extension_id_to_device_permissions_;
-
-  DISALLOW_COPY_AND_ASSIGN(DevicePermissionsManager);
+  raw_ptr<content::BrowserContext> context_;
+  std::map<std::string, raw_ptr<DevicePermissions, CtnExperimental>>
+      extension_id_to_device_permissions_;
 };
 
 class DevicePermissionsManagerFactory
     : public BrowserContextKeyedServiceFactory {
  public:
+  DevicePermissionsManagerFactory(const DevicePermissionsManagerFactory&) =
+      delete;
+  DevicePermissionsManagerFactory& operator=(
+      const DevicePermissionsManagerFactory&) = delete;
+
   static DevicePermissionsManager* GetForBrowserContext(
       content::BrowserContext* context);
   static DevicePermissionsManagerFactory* GetInstance();
 
  private:
-  friend struct base::DefaultSingletonTraits<DevicePermissionsManagerFactory>;
+  friend base::NoDestructor<DevicePermissionsManagerFactory>;
 
   DevicePermissionsManagerFactory();
   ~DevicePermissionsManagerFactory() override;
 
   // BrowserContextKeyedServiceFactory implementation
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(DevicePermissionsManagerFactory);
 };
 
 }  // namespace extensions

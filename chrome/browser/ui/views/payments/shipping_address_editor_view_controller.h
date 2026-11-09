@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,15 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/payments/editor_view_controller.h"
 #include "chrome/browser/ui/views/payments/validating_textfield.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/ui/region_combobox_model.h"
 
 namespace autofill {
@@ -44,23 +46,29 @@ class ShippingAddressEditorViewController : public EditorViewController {
       base::OnceCallback<void(const autofill::AutofillProfile&)> on_added,
       autofill::AutofillProfile* profile,
       bool is_incognito);
+
+  ShippingAddressEditorViewController(
+      const ShippingAddressEditorViewController&) = delete;
+  ShippingAddressEditorViewController& operator=(
+      const ShippingAddressEditorViewController&) = delete;
+
   ~ShippingAddressEditorViewController() override;
 
   // EditorViewController:
   bool IsEditingExistingItem() override;
   std::vector<EditorField> GetFieldDefinitions() override;
-  std::u16string GetInitialValueForType(
-      autofill::ServerFieldType type) override;
+  std::u16string GetInitialValueForType(autofill::FieldType type) override;
   bool ValidateModelAndSave() override;
   std::unique_ptr<ValidationDelegate> CreateValidationDelegate(
       const EditorField& field) override;
   std::unique_ptr<ui::ComboboxModel> GetComboboxModelForType(
-      const autofill::ServerFieldType& type) override;
+      const autofill::FieldType& type) override;
   void OnPerformAction(ValidatingCombobox* combobox) override;
   void UpdateEditorView() override;
 
   // PaymentRequestSheetController:
   std::u16string GetSheetTitle() override;
+  base::WeakPtr<PaymentRequestSheetController> GetWeakPtr() override;
 
  protected:
   int GetPrimaryButtonId() override;
@@ -70,13 +78,19 @@ class ShippingAddressEditorViewController : public EditorViewController {
   class ShippingAddressValidationDelegate : public ValidationDelegate {
    public:
     ShippingAddressValidationDelegate(
-        ShippingAddressEditorViewController* parent,
+        base::WeakPtr<ShippingAddressEditorViewController> controller,
         const EditorField& field);
+
+    ShippingAddressValidationDelegate(
+        const ShippingAddressValidationDelegate&) = delete;
+    ShippingAddressValidationDelegate& operator=(
+        const ShippingAddressValidationDelegate&) = delete;
+
     ~ShippingAddressValidationDelegate() override;
 
     // ValidationDelegate:
     bool ShouldFormat() override;
-    std::u16string Format(const std::u16string& text) override;
+    std::u16string Format(std::u16string_view text) override;
     bool IsValidTextfield(views::Textfield* textfield,
                           std::u16string* error_message) override;
     bool IsValidCombobox(ValidatingCombobox* combobox,
@@ -87,19 +101,17 @@ class ShippingAddressEditorViewController : public EditorViewController {
     void ComboboxModelChanged(ValidatingCombobox* combobox) override;
 
    private:
-    bool ValidateValue(const std::u16string& value,
+    bool ValidateValue(std::u16string_view value,
                        std::u16string* error_message);
 
     EditorField field_;
 
-    // Raw pointer back to the owner of this class, therefore will not be null.
-    ShippingAddressEditorViewController* controller_;
-
-    DISALLOW_COPY_AND_ASSIGN(ShippingAddressValidationDelegate);
+    // Pointer back to the owner of this class, therefore will not be null.
+    base::WeakPtr<ShippingAddressEditorViewController> controller_;
   };
 
   std::u16string GetValueForType(const autofill::AutofillProfile& profile,
-                                 autofill::ServerFieldType type);
+                                 autofill::FieldType type);
 
   bool GetSheetId(DialogViewID* sheet_id) override;
 
@@ -131,11 +143,12 @@ class ShippingAddressEditorViewController : public EditorViewController {
 
   // If non-nullptr, a point to an object to be edited, which should outlive
   // this controller.
-  autofill::AutofillProfile* profile_to_edit_;
+  raw_ptr<autofill::AutofillProfile> profile_to_edit_;
 
   // A temporary profile to keep unsaved data in between relayout (e.g., when
   // the country is changed and fields set may be different).
-  autofill::AutofillProfile temporary_profile_;
+  autofill::AutofillProfile temporary_profile_{
+      autofill::i18n_model_definition::kLegacyHierarchyCountryCode};
 
   // List of fields, reset everytime the current country changes.
   std::vector<EditorField> editor_fields_;
@@ -161,12 +174,11 @@ class ShippingAddressEditorViewController : public EditorViewController {
   bool failed_to_load_region_data_;
 
   // Owned by the state combobox, which is owned by this object's base class.
-  autofill::RegionComboboxModel* region_model_;
+  raw_ptr<autofill::RegionComboboxModel, DanglingUntriaged> region_model_;
 
+  // Must be the last member of a leaf class.
   base::WeakPtrFactory<ShippingAddressEditorViewController> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(ShippingAddressEditorViewController);
 };
 
 }  // namespace payments

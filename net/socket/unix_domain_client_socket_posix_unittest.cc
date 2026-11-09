@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/posix/eintr_wrapper.h"
+#include "build/build_config.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/sockaddr_storage.h"
+#include "net/base/sockaddr_util_posix.h"
 #include "net/base/test_completion_callback.h"
 #include "net/socket/socket_posix.h"
 #include "net/socket/unix_domain_server_socket_posix.h"
@@ -36,7 +38,7 @@ const char kSocketFilename[] = "socket_for_testing";
 bool UserCanConnectCallback(
     bool allow_user, const UnixDomainServerSocket::Credentials& credentials) {
   // Here peers are running in same process.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(getpid(), credentials.process_id);
 #endif
   EXPECT_EQ(getuid(), credentials.user_id);
@@ -191,16 +193,15 @@ TEST_F(UnixDomainClientSocketTest, ConnectWithSocketDescriptor) {
   // Now, re-wrap client_socket_fd in a UnixDomainClientSocket and try a read
   // to be sure it hasn't gotten accidentally closed.
   SockaddrStorage addr;
-  ASSERT_TRUE(UnixDomainClientSocket::FillAddress(socket_path_, false, &addr));
-  std::unique_ptr<SocketPosix> adopter(new SocketPosix);
+  ASSERT_TRUE(FillUnixAddress(socket_path_, false, &addr));
+  auto adopter = std::make_unique<SocketPosix>();
   adopter->AdoptConnectedSocket(client_socket_fd, addr);
   UnixDomainClientSocket rewrapped_socket(std::move(adopter));
   EXPECT_TRUE(rewrapped_socket.IsConnected());
 
   // Try to read data.
   const int kReadDataSize = 10;
-  scoped_refptr<IOBuffer> read_buffer =
-      base::MakeRefCounted<IOBuffer>(kReadDataSize);
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(kReadDataSize);
   TestCompletionCallback read_callback;
   EXPECT_EQ(ERR_IO_PENDING,
             rewrapped_socket.Read(
@@ -215,7 +216,7 @@ TEST_F(UnixDomainClientSocketTest, ConnectWithAbstractNamespace) {
   UnixDomainClientSocket client_socket(socket_path_, kUseAbstractNamespace);
   EXPECT_FALSE(client_socket.IsConnected());
 
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   UnixDomainServerSocket server_socket(CreateAuthCallback(true),
                                        kUseAbstractNamespace);
   EXPECT_THAT(server_socket.BindAndListen(socket_path_, /*backlog=*/1), IsOk());
@@ -257,7 +258,7 @@ TEST_F(UnixDomainClientSocketTest,
   EXPECT_FALSE(client_socket.IsConnected());
 
   TestCompletionCallback connect_callback;
-#if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   EXPECT_THAT(ConnectSynchronously(&client_socket),
               IsError(ERR_CONNECTION_REFUSED));
 #else
@@ -282,8 +283,7 @@ TEST_F(UnixDomainClientSocketTest, DisconnectFromClient) {
 
   // Try to read data.
   const int kReadDataSize = 10;
-  scoped_refptr<IOBuffer> read_buffer =
-      base::MakeRefCounted<IOBuffer>(kReadDataSize);
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(kReadDataSize);
   TestCompletionCallback read_callback;
   EXPECT_EQ(ERR_IO_PENDING,
             accepted_socket->Read(
@@ -316,8 +316,7 @@ TEST_F(UnixDomainClientSocketTest, DisconnectFromServer) {
 
   // Try to read data.
   const int kReadDataSize = 10;
-  scoped_refptr<IOBuffer> read_buffer =
-      base::MakeRefCounted<IOBuffer>(kReadDataSize);
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(kReadDataSize);
   TestCompletionCallback read_callback;
   EXPECT_EQ(ERR_IO_PENDING,
             client_socket.Read(
@@ -349,17 +348,16 @@ TEST_F(UnixDomainClientSocketTest, ReadAfterWrite) {
   EXPECT_TRUE(client_socket.IsConnected());
 
   // Send data from client to server.
-  const int kWriteDataSize = 10;
-  scoped_refptr<IOBuffer> write_buffer =
+  const size_t kWriteDataSize = 10;
+  auto write_buffer =
       base::MakeRefCounted<StringIOBuffer>(std::string(kWriteDataSize, 'd'));
   EXPECT_EQ(
       kWriteDataSize,
       WriteSynchronously(&client_socket, write_buffer.get(), kWriteDataSize));
 
   // The buffer is bigger than write data size.
-  const int kReadBufferSize = kWriteDataSize * 2;
-  scoped_refptr<IOBuffer> read_buffer =
-      base::MakeRefCounted<IOBuffer>(kReadBufferSize);
+  const size_t kReadBufferSize = kWriteDataSize * 2;
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(kReadBufferSize);
   EXPECT_EQ(kWriteDataSize,
             ReadSynchronously(accepted_socket.get(),
                               read_buffer.get(),
@@ -374,24 +372,23 @@ TEST_F(UnixDomainClientSocketTest, ReadAfterWrite) {
                 accepted_socket.get(), write_buffer.get(), kWriteDataSize));
 
   // Read multiple times.
-  const int kSmallReadBufferSize = kWriteDataSize / 3;
+  const size_t kSmallReadBufferSize = kWriteDataSize / 3;
   EXPECT_EQ(kSmallReadBufferSize,
             ReadSynchronously(&client_socket,
                               read_buffer.get(),
                               kSmallReadBufferSize,
                               kSmallReadBufferSize));
-  EXPECT_EQ(std::string(write_buffer->data(), kSmallReadBufferSize),
-            std::string(read_buffer->data(), kSmallReadBufferSize));
+  EXPECT_EQ(write_buffer->first(kSmallReadBufferSize),
+            read_buffer->first(kSmallReadBufferSize));
 
   EXPECT_EQ(kWriteDataSize - kSmallReadBufferSize,
             ReadSynchronously(&client_socket,
                               read_buffer.get(),
                               kReadBufferSize,
                               kWriteDataSize - kSmallReadBufferSize));
-  EXPECT_EQ(std::string(write_buffer->data() + kSmallReadBufferSize,
-                        kWriteDataSize - kSmallReadBufferSize),
-            std::string(read_buffer->data(),
-                        kWriteDataSize - kSmallReadBufferSize));
+  EXPECT_EQ(write_buffer->span().subspan(kSmallReadBufferSize,
+                                         kWriteDataSize - kSmallReadBufferSize),
+            read_buffer->first(kWriteDataSize - kSmallReadBufferSize));
 
   // No more data.
   EXPECT_EQ(
@@ -423,15 +420,14 @@ TEST_F(UnixDomainClientSocketTest, ReadBeforeWrite) {
   const int kReadBufferSize = kWriteDataSize * 2;
   const int kSmallReadBufferSize = kWriteDataSize / 3;
   // Read smaller than write data size first.
-  scoped_refptr<IOBuffer> read_buffer =
-      base::MakeRefCounted<IOBuffer>(kReadBufferSize);
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(kReadBufferSize);
   TestCompletionCallback read_callback;
   EXPECT_EQ(
       ERR_IO_PENDING,
       accepted_socket->Read(
           read_buffer.get(), kSmallReadBufferSize, read_callback.callback()));
 
-  scoped_refptr<IOBuffer> write_buffer =
+  auto write_buffer =
       base::MakeRefCounted<StringIOBuffer>(std::string(kWriteDataSize, 'd'));
   EXPECT_EQ(
       kWriteDataSize,

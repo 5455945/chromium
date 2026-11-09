@@ -36,7 +36,7 @@
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/modules/webmidi/midi_port.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 
 namespace blink {
 
@@ -57,11 +57,11 @@ class MIDIOutput final : public MIDIPort {
   ~MIDIOutput() override;
 
   void send(NotShared<DOMUint8Array>, double timestamp, ExceptionState&);
-  void send(Vector<unsigned>, double timestamp, ExceptionState&);
+  void send(const Vector<unsigned>&, double timestamp, ExceptionState&);
 
   // send() without optional |timestamp|.
   void send(NotShared<DOMUint8Array>, ExceptionState&);
-  void send(Vector<unsigned>, ExceptionState&);
+  void send(const Vector<unsigned>&, ExceptionState&);
 
   void Trace(Visitor*) const override;
 

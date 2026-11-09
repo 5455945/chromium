@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,25 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_reuse_detector.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/safe_browsing/core/browser/password_protection/password_protection_request.h"
 #include "components/safe_browsing/core/browser/sync/sync_utils.h"
+#include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/utils.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/google_api_keys.h"
-#include "net/base/escape.h"
 #include "net/base/url_util.h"
 
 using password_manager::metrics_util::PasswordType;
@@ -35,11 +38,37 @@ using PasswordReuseEvent = LoginReputationClientRequest::PasswordReuseEvent;
 
 namespace {
 
-// Keys for storing password protection verdict into a DictionaryValue.
+// Keys for storing password protection verdict into a base::DictValue.
 const int kRequestTimeoutMs = 10000;
 const char kPasswordProtectionRequestUrl[] =
     "https://sb-ssl.google.com/safebrowsing/clientreport/login";
 
+// Check if the verdict makes this a security sensitive event.
+bool IsSecuritySensitiveVerdict(
+    LoginReputationClientResponse::VerdictType verdict_type) {
+  switch (verdict_type) {
+    case LoginReputationClientResponse::SAFE:
+    // UNSPECIFIED is not considered sensitive because it is the default verdict
+    // if no ping is sent (e.g. timeout, allowlist hit).
+    case LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED:
+      return false;
+    case LoginReputationClientResponse::LOW_REPUTATION:
+    case LoginReputationClientResponse::PHISHING:
+      return true;
+  }
+  NOTREACHED() << "Unexpected verdict_type: " << verdict_type;
+}
+
+// Log security sensitive event if required.
+void MaybeRecordSecuritySensitiveEvent(
+    SafeBrowsingMetricsCollector* metrics_collector,
+    LoginReputationClientResponse::VerdictType verdict_type) {
+  if (metrics_collector && IsSecuritySensitiveVerdict(verdict_type)) {
+    metrics_collector->AddSafeBrowsingEventToPref(
+        SafeBrowsingMetricsCollector::EventType::
+            SECURITY_SENSITIVE_PASSWORD_PROTECTION);
+  }
+}
 }  // namespace
 
 PasswordProtectionServiceBase::PasswordProtectionServiceBase(
@@ -50,21 +79,18 @@ PasswordProtectionServiceBase::PasswordProtectionServiceBase(
     std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
     bool is_off_the_record,
     signin::IdentityManager* identity_manager,
-    bool try_token_fetch)
+    bool try_token_fetch,
+    SafeBrowsingMetricsCollector* metrics_collector)
     : database_manager_(database_manager),
       url_loader_factory_(url_loader_factory),
       pref_service_(pref_service),
       token_fetcher_(std::move(token_fetcher)),
       is_off_the_record_(is_off_the_record),
       identity_manager_(identity_manager),
-      try_token_fetch_(try_token_fetch) {
+      try_token_fetch_(try_token_fetch),
+      metrics_collector_(metrics_collector) {
   if (history_service)
     history_service_observation_.Observe(history_service);
-
-  common_spoofed_domains_ = {"login.live.com", "facebook.com", "box.com",
-                             "google.com",     "paypal.com",   "apple.com",
-                             "yahoo.com",      "adobe.com",    "amazon.com",
-                             "linkedin.com"};
 }
 
 PasswordProtectionServiceBase::~PasswordProtectionServiceBase() {
@@ -76,6 +102,9 @@ PasswordProtectionServiceBase::~PasswordProtectionServiceBase() {
 
 // static
 bool PasswordProtectionServiceBase::CanGetReputationOfURL(const GURL& url) {
+  if (VerdictCacheManager::has_artificial_cached_url()) {
+    return true;
+  }
   if (!safe_browsing::CanGetReputationOfUrl(url)) {
     return false;
   }
@@ -119,16 +148,22 @@ bool PasswordProtectionServiceBase::CanSendPing(
     ReusedPasswordAccountType password_type) {
   return IsPingingEnabled(trigger_type, password_type) &&
          !IsURLAllowlistedForPasswordEntry(main_frame_url) &&
-         !IsInExcludedCountry();
+         !IsInExcludedCountry() &&
+         // Although we can't get the reputation of the main frame URL for
+         // password reuse on about:blank, the referrer chain still provides
+         // enough useful information that we should send the ping.
+         (main_frame_url == GURL("about:blank") ||
+          CanGetReputationOfURL(main_frame_url));
 }
 
 void PasswordProtectionServiceBase::RequestFinished(
     PasswordProtectionRequest* request,
     RequestOutcome outcome,
     std::unique_ptr<LoginReputationClientResponse> response) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(request);
 
+  bool warning_shown = false;
   if (response) {
     ReusedPasswordAccountType password_type =
         GetPasswordProtectionReusedPasswordAccountType(request->password_type(),
@@ -136,21 +171,6 @@ void PasswordProtectionServiceBase::RequestFinished(
     if (outcome != RequestOutcome::RESPONSE_ALREADY_CACHED) {
       CacheVerdict(request->main_frame_url(), request->trigger_type(),
                    password_type, *response, base::Time::Now());
-    }
-    bool enable_warning_for_non_sync_users = base::FeatureList::IsEnabled(
-        safe_browsing::kPasswordProtectionForSignedInUsers);
-    if (!enable_warning_for_non_sync_users &&
-        request->password_type() == PasswordType::OTHER_GAIA_PASSWORD) {
-      return;
-    }
-
-    // If it's password alert mode and a Gsuite/enterprise account, we do not
-    // show a modal warning.
-    if (outcome == RequestOutcome::PASSWORD_ALERT_MODE &&
-        (password_type.account_type() == ReusedPasswordAccountType::GSUITE ||
-         password_type.account_type() ==
-             ReusedPasswordAccountType::NON_GAIA_ENTERPRISE)) {
-      return;
     }
 
     if (ShouldShowModalWarning(request->trigger_type(), password_type,
@@ -161,10 +181,20 @@ void PasswordProtectionServiceBase::RequestFinished(
       ShowModalWarning(request, response->verdict_type(),
                        response->verdict_token(), password_type);
       request->set_is_modal_warning_showing(true);
+      warning_shown = true;
+    }
+
+    if (request->trigger_type() ==
+            LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED &&
+        request->HasOtpPhishingVerdictCallback()) {
+      request->TakeOtpPhishingVerdictCallback().Run(
+          response->verdict_type() == LoginReputationClientResponse::PHISHING ||
+          response->verdict_type() ==
+              LoginReputationClientResponse::LOW_REPUTATION);
     }
   }
 
-  MaybeHandleDeferredNavigations(request);
+  ResumeDeferredNavigationsIfNeeded(request);
 
   // If the request is canceled, the PasswordProtectionServiceBase is already
   // partially destroyed, and we won't be able to log accurate metrics.
@@ -173,12 +203,20 @@ void PasswordProtectionServiceBase::RequestFinished(
         response ? response->verdict_type()
                  : LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED;
 
-// Disabled on Android, because enterprise reporting extension is not supported.
-#if !defined(OS_ANDROID)
+    // If verdict declares a security sensitive event, log accordingly.
+    MaybeRecordSecuritySensitiveEvent(metrics_collector_, verdict);
+
+    ReferrerChain referrer_chain;
+    if (request->request_proto() &&
+        request->request_proto()->frames_size() > 0) {
+      referrer_chain = request->request_proto()->frames(0).referrer_chain();
+    }
+
     MaybeReportPasswordReuseDetected(
-        request, request->username(), request->password_type(),
-        verdict == LoginReputationClientResponse::PHISHING);
-#endif
+        request->main_frame_url(), request->username(),
+        request->password_type(),
+        verdict == LoginReputationClientResponse::PHISHING, warning_shown,
+        referrer_chain);
 
     // Persist a bit in CompromisedCredentials table when saved password is
     // reused on a phishing or low reputation site.
@@ -192,7 +230,7 @@ void PasswordProtectionServiceBase::RequestFinished(
   }
 
   // Remove request from |pending_requests_| list. If it triggers warning, add
-  // it into the !warning_reqeusts_| list.
+  // it into the |warning_requests_| list.
   for (auto it = pending_requests_.begin(); it != pending_requests_.end();
        it++) {
     if (it->get() == request) {
@@ -205,7 +243,7 @@ void PasswordProtectionServiceBase::RequestFinished(
 }
 
 void PasswordProtectionServiceBase::CancelPendingRequests() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   for (auto it = pending_requests_.begin(); it != pending_requests_.end();) {
     PasswordProtectionRequest* request = it->get();
     // These are the requests for whom we're still waiting for verdicts.
@@ -232,7 +270,7 @@ GURL PasswordProtectionServiceBase::GetPasswordProtectionRequestUrl() {
   GURL url(kPasswordProtectionRequestUrl);
   std::string api_key = google_apis::GetAPIKey();
   DCHECK(!api_key.empty());
-  return url.Resolve("?key=" + net::EscapeQueryParamValue(api_key, true));
+  return url.Resolve("?key=" + base::EscapeQueryParamValue(api_key, true));
 }
 
 // static
@@ -240,10 +278,10 @@ int PasswordProtectionServiceBase::GetRequestTimeoutInMS() {
   return kRequestTimeoutMs;
 }
 
-void PasswordProtectionServiceBase::OnURLsDeleted(
+void PasswordProtectionServiceBase::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindRepeating(&PasswordProtectionServiceBase::
                               RemoveUnhandledSyncPasswordReuseOnURLsDeleted,
@@ -282,7 +320,6 @@ PasswordProtectionServiceBase::GetPasswordProtectionReusedPasswordType(
       break;
   }
   NOTREACHED();
-  return PasswordReuseEvent::REUSED_PASSWORD_TYPE_UNKNOWN;
 }
 
 ReusedPasswordAccountType
@@ -301,28 +338,28 @@ PasswordProtectionServiceBase::GetPasswordProtectionReusedPasswordAccountType(
       return reused_password_account_type;
     case PasswordType::PRIMARY_ACCOUNT_PASSWORD: {
       reused_password_account_type.set_is_account_syncing(
-          IsPrimaryAccountSyncing());
+          IsPrimaryAccountSyncingHistory());
       if (!IsPrimaryAccountSignedIn()) {
         reused_password_account_type.set_account_type(
             ReusedPasswordAccountType::UNKNOWN);
         return reused_password_account_type;
       }
       reused_password_account_type.set_account_type(
-          IsPrimaryAccountGmail() ? ReusedPasswordAccountType::GMAIL
-                                  : ReusedPasswordAccountType::GSUITE);
+          IsAccountConsumer(username) ? ReusedPasswordAccountType::GMAIL
+                                      : ReusedPasswordAccountType::GSUITE);
       return reused_password_account_type;
     }
     case PasswordType::OTHER_GAIA_PASSWORD: {
-      AccountInfo account_info = GetSignedInNonSyncAccount(username);
-      if (account_info.account_id.empty()) {
+      AccountInfo account_info = GetAccountInfoForUsername(username);
+      if (account_info.GetAccountId().empty() ||
+          !account_info.GetHostedDomain().has_value()) {
         reused_password_account_type.set_account_type(
             ReusedPasswordAccountType::UNKNOWN);
         return reused_password_account_type;
       }
       reused_password_account_type.set_account_type(
-          IsOtherGaiaAccountGmail(username)
-              ? ReusedPasswordAccountType::GMAIL
-              : ReusedPasswordAccountType::GSUITE);
+          IsAccountConsumer(username) ? ReusedPasswordAccountType::GMAIL
+                                      : ReusedPasswordAccountType::GSUITE);
       return reused_password_account_type;
     }
     case PasswordType::PASSWORD_TYPE_UNKNOWN:
@@ -332,7 +369,6 @@ PasswordProtectionServiceBase::GetPasswordProtectionReusedPasswordAccountType(
       return reused_password_account_type;
   }
   NOTREACHED();
-  return reused_password_account_type;
 }
 
 // static
@@ -365,14 +401,12 @@ bool PasswordProtectionServiceBase::IsSupportedPasswordTypeForPinging(
     case PasswordType::ENTERPRISE_PASSWORD:
       return true;
     case PasswordType::OTHER_GAIA_PASSWORD:
-      return base::FeatureList::IsEnabled(
-          safe_browsing::kPasswordProtectionForSignedInUsers);
+      return true;
     case PasswordType::PASSWORD_TYPE_UNKNOWN:
     case PasswordType::PASSWORD_TYPE_COUNT:
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 bool PasswordProtectionServiceBase::IsSupportedPasswordTypeForModalWarning(
@@ -380,10 +414,10 @@ bool PasswordProtectionServiceBase::IsSupportedPasswordTypeForModalWarning(
   if (password_type.account_type() == ReusedPasswordAccountType::SAVED_PASSWORD)
     return true;
 
-// Currently password reuse warnings are only supported for saved passwords on
-// Android.
-#if defined(OS_ANDROID)
-  return false;
+// Currently password reuse warnings are only supported for saved passwords
+// and GAIA passwords on Android.
+#if BUILDFLAG(IS_ANDROID)
+  return password_type.account_type() == ReusedPasswordAccountType::GMAIL;
 #else
   if (password_type.account_type() ==
       ReusedPasswordAccountType::NON_GAIA_ENTERPRISE)
@@ -393,9 +427,7 @@ bool PasswordProtectionServiceBase::IsSupportedPasswordTypeForModalWarning(
       password_type.account_type() != ReusedPasswordAccountType::GSUITE)
     return false;
 
-  return password_type.is_account_syncing() ||
-         base::FeatureList::IsEnabled(
-             safe_browsing::kPasswordProtectionForSignedInUsers);
+  return true;
 #endif
 }
 
@@ -403,10 +435,8 @@ bool PasswordProtectionServiceBase::CanGetAccessToken() {
   if (!try_token_fetch_ || is_off_the_record_)
     return false;
 
-  // Return true if the finch feature is enabled for an ESB user, and if the
-  // primary user account is signed in.
-  return base::FeatureList::IsEnabled(kPasswordProtectionWithToken) &&
-         pref_service_ && IsEnhancedProtectionEnabled(*pref_service_) &&
+  // Return true if the primary user account of an ESB user is signed in.
+  return pref_service_ && IsEnhancedProtectionEnabled(*pref_service_) &&
          identity_manager_ &&
          safe_browsing::SyncUtils::IsPrimaryAccountSignedIn(identity_manager_);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 #define CHROME_BROWSER_ASH_POLICY_CORE_USER_CLOUD_POLICY_TOKEN_FORWARDER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/cloud/cloud_policy_service.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/backoff_entry.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class Clock;
@@ -31,13 +32,13 @@ class PrimaryAccountAccessTokenFetcher;
 
 namespace policy {
 
-class UserCloudPolicyManagerChromeOS;
+class UserCloudPolicyManagerAsh;
 
 // A PKS that observes an IdentityManager and mints the policy access
-// token for the UserCloudPolicyManagerChromeOS. First token is fetched when the
+// token for the UserCloudPolicyManagerAsh. First token is fetched when the
 // token service becomes ready. After that if needed a new token is fetched when
 // the previous one is expected to expire. This service decouples the
-// UserCloudPolicyManagerChromeOS from depending directly on the
+// UserCloudPolicyManagerAsh from depending directly on the
 // IdentityManager, since it is initialized much earlier.
 class UserCloudPolicyTokenForwarder : public KeyedService,
                                       public CloudPolicyService::Observer {
@@ -53,8 +54,13 @@ class UserCloudPolicyTokenForwarder : public KeyedService,
   // The factory of this PKS depends on the factories of these two arguments,
   // so this object will be Shutdown() first and these pointers can be used
   // until that point.
-  UserCloudPolicyTokenForwarder(UserCloudPolicyManagerChromeOS* manager,
+  UserCloudPolicyTokenForwarder(UserCloudPolicyManagerAsh* manager,
                                 signin::IdentityManager* identity_manager);
+
+  UserCloudPolicyTokenForwarder(const UserCloudPolicyTokenForwarder&) = delete;
+  UserCloudPolicyTokenForwarder& operator=(
+      const UserCloudPolicyTokenForwarder&) = delete;
+
   ~UserCloudPolicyTokenForwarder() override;
 
   // KeyedService:
@@ -70,7 +76,7 @@ class UserCloudPolicyTokenForwarder : public KeyedService,
   bool IsTokenRefreshScheduledForTesting() const;
 
   // Returns delay to next token refresh if it is scheduled.
-  absl::optional<base::TimeDelta> GetTokenRefreshDelayForTesting() const;
+  std::optional<base::TimeDelta> GetTokenRefreshDelayForTesting() const;
 
   // Overrides elements responsible for time progression to allow testing.
   // Affects time calculation and timer objects.
@@ -84,13 +90,13 @@ class UserCloudPolicyTokenForwarder : public KeyedService,
   void OnAccessTokenFetchCompleted(GoogleServiceAuthError error,
                                    signin::AccessTokenInfo token_info);
 
-  UserCloudPolicyManagerChromeOS* manager_;
-  signin::IdentityManager* identity_manager_;
+  raw_ptr<UserCloudPolicyManagerAsh> manager_;
+  raw_ptr<signin::IdentityManager, DanglingUntriaged> identity_manager_;
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher>
       access_token_fetcher_;
 
   // Last fetched OAuth token.
-  absl::optional<signin::AccessTokenInfo> oauth_token_;
+  std::optional<signin::AccessTokenInfo> oauth_token_;
 
   // Timer that measures time to the next OAuth token refresh. Not initialized
   // if token refresh is not scheduled.
@@ -100,11 +106,12 @@ class UserCloudPolicyTokenForwarder : public KeyedService,
   std::unique_ptr<net::BackoffEntry> retry_backoff_;
 
   // Points to the base::DefaultClock by default.
-  const base::Clock* clock_;
+  raw_ptr<const base::Clock> clock_;
+
+  base::ScopedObservation<CloudPolicyService, CloudPolicyService::Observer>
+      cloud_policy_service_observation_{this};
 
   base::WeakPtrFactory<UserCloudPolicyTokenForwarder> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyTokenForwarder);
 };
 
 }  // namespace policy

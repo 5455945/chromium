@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,12 @@
 #include <set>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/offline_pages/core/auto_fetch.h"
 #include "components/offline_pages/core/background/request_coordinator.h"
 #include "components/offline_pages/core/client_id.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -23,13 +24,32 @@ class NavigationHandle;
 }  // namespace content
 
 namespace offline_pages {
+class AutoFetchPageLoadWatcher;
 class SavePageRequest;
 class RequestCoordinator;
+
+// Observes a WebContents to relay navigation events to
+// AutoFetchPageLoadWatcher.
+class AutoFetchNavigationObserver : public content::WebContentsObserver {
+ public:
+  explicit AutoFetchNavigationObserver(content::WebContents* web_contents);
+  AutoFetchNavigationObserver(const AutoFetchNavigationObserver&) = delete;
+  AutoFetchNavigationObserver& operator=(const AutoFetchNavigationObserver&) =
+      delete;
+  ~AutoFetchNavigationObserver() override;
+
+  // content::WebContentsObserver implementation.
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+
+ private:
+  raw_ptr<AutoFetchPageLoadWatcher> page_load_watcher_;
+};
 
 // Manages showing the in-progress notification.
 class AutoFetchNotifier {
  public:
-  virtual ~AutoFetchNotifier() {}
+  virtual ~AutoFetchNotifier() = default;
   // Ensures that the in-progress notification is showing with the appropriate
   // request count.
   virtual void NotifyInProgress(int in_flight_count) {}
@@ -57,7 +77,7 @@ class AndroidTabFinder {
   // Returns a mapping of Android tab ID to TabInfo.
   virtual std::map<int, TabInfo> FindAndroidTabs(
       std::vector<int> android_tab_ids);
-  virtual absl::optional<TabInfo> FindNavigationTab(
+  virtual std::optional<TabInfo> FindNavigationTab(
       content::WebContents* web_contents);
 };
 
@@ -69,7 +89,7 @@ struct RequestInfo {
   auto_fetch::ClientIdMetadata metadata;
 };
 
-absl::optional<RequestInfo> MakeRequestInfo(const SavePageRequest& request);
+std::optional<RequestInfo> MakeRequestInfo(const SavePageRequest& request);
 
 // |AutoFetchPageLoadWatcher|'s more unit-testable internal implementation.
 // This class was designed to have few dependencies to make testing more
@@ -82,7 +102,7 @@ class InternalImpl {
   // We need this because we can't call these functions directly.
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
     // Sets the notification state of a request to
     // |SavePageRequest::AutoFetchNotificationState::kShown|. Results in a call
     // to |SetNotificationStateComplete|.
@@ -115,12 +135,16 @@ class InternalImpl {
     return weak_ptr_factory_.GetWeakPtr();
   }
 
+  std::vector<GURL>& pages_loaded_before_observer_ready_for_testing() {
+    return pages_loaded_before_observer_ready_;
+  }
+
  private:
   void SetNotificationStateToShown(int64_t request_id);
   void UpdateNotificationStateForAllRequests();
 
-  AutoFetchNotifier* notifier_;
-  Delegate* delegate_;
+  raw_ptr<AutoFetchNotifier> notifier_;
+  raw_ptr<Delegate> delegate_;
   std::unique_ptr<AndroidTabFinder> tab_finder_;
   std::vector<RequestInfo> requests_;
   // Tracks whether |RequestListInitialized| has been called. If false,
@@ -153,11 +177,15 @@ class AutoFetchPageLoadWatcher
  public:
   using AndroidTabFinder = auto_fetch_internal::AndroidTabFinder;
 
-  static void CreateForWebContents(content::WebContents* web_contents);
+  static std::unique_ptr<AutoFetchNavigationObserver>
+  MaybeCreateNavigationObserver(content::WebContents* web_contents);
 
   AutoFetchPageLoadWatcher(AutoFetchNotifier* notifier,
                            RequestCoordinator* request_coordinator,
                            std::unique_ptr<AndroidTabFinder> tab_finder);
+
+  AutoFetchPageLoadWatcher(const AutoFetchPageLoadWatcher&) = delete;
+  AutoFetchPageLoadWatcher& operator=(const AutoFetchPageLoadWatcher&) = delete;
 
   ~AutoFetchPageLoadWatcher() override;
 
@@ -165,8 +193,11 @@ class AutoFetchPageLoadWatcher
   // once per navigation.
   void HandleNavigation(content::NavigationHandle* navigation_handle);
 
+  std::vector<GURL>& loaded_pages_for_testing() {
+    return impl_.pages_loaded_before_observer_ready_for_testing();
+  }
+
  private:
-  class NavigationObserver;
   class TabWatcher;
   base::WeakPtr<AutoFetchPageLoadWatcher> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
@@ -187,12 +218,10 @@ class AutoFetchPageLoadWatcher
   void OnNetworkProgress(const SavePageRequest& request,
                          int64_t received_bytes) override {}
 
-  RequestCoordinator* request_coordinator_;  // Not owned.
+  raw_ptr<RequestCoordinator> request_coordinator_;  // Not owned.
   auto_fetch_internal::InternalImpl impl_;
   std::unique_ptr<TabWatcher> tab_watcher_;
   base::WeakPtrFactory<AutoFetchPageLoadWatcher> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AutoFetchPageLoadWatcher);
 };
 
 }  // namespace offline_pages

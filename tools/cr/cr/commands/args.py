@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,6 +10,7 @@ import os
 
 import cr
 
+
 class ArgsCommand(cr.Command):
   """The implementation of the args command.
 
@@ -20,10 +21,10 @@ class ArgsCommand(cr.Command):
   def __init__(self):
     super(ArgsCommand, self).__init__()
     self.help = 'Edit build configuration in a text editor'
-    self.description = ("""
+    self.description = """
         Opens the configuration for the currently selected out directory in
         a text editor.
-        """)
+        """
 
   def Run(self):
     build_config_path = cr.context.Get('CR_BUILD_CONFIG_PATH')

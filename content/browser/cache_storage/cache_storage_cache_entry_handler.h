@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 #define CONTENT_BROWSER_CACHE_STORAGE_CACHE_STORAGE_CACHE_ENTRY_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/types/pass_key.h"
 #include "components/services/storage/public/mojom/cache_storage_control.mojom.h"
 #include "content/browser/cache_storage/blob_storage_context_wrapper.h"
@@ -19,11 +21,11 @@
 #include "content/browser/cache_storage/cache_storage_cache_handle.h"
 #include "content/browser/cache_storage/cache_storage_manager.h"
 #include "content/browser/cache_storage/scoped_writable_entry.h"
-#include "content/common/content_export.h"
+#include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/disk_cache/disk_cache.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom-forward.h"
 #include "storage/browser/blob/blob_data_builder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/cache_storage/cache_storage.mojom.h"
 
 namespace storage {
@@ -43,7 +45,11 @@ struct PutContext {
              uint64_t blob_size,
              mojo::PendingRemote<blink::mojom::Blob> side_data_blob,
              uint64_t side_data_blob_size,
+             std::optional<mojo_base::BigBuffer> side_data_buffer,
              int64_t trace_id);
+
+  PutContext(const PutContext&) = delete;
+  PutContext& operator=(const PutContext&) = delete;
 
   ~PutContext();
 
@@ -52,19 +58,18 @@ struct PutContext {
   blink::mojom::FetchAPIResponsePtr response;
   mojo::PendingRemote<blink::mojom::Blob> blob;
   uint64_t blob_size;
+  // TODO(crbug.com/567175133): remove these in favor of `side_data_buffer`.
   mojo::PendingRemote<blink::mojom::Blob> side_data_blob;
   uint64_t side_data_blob_size;
+  std::optional<mojo_base::BigBuffer> side_data_buffer;
   int64_t trace_id;
 
   // Provided while writing to the cache.
   ErrorCallback callback;
   ScopedWritableEntry cache_entry;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PutContext);
 };
 
-class CONTENT_EXPORT CacheStorageCacheEntryHandler {
+class CacheStorageCacheEntryHandler {
  public:
   // The DiskCacheBlobEntry is a ref-counted object containing both
   // a disk_cache Entry and a Handle to the cache in which it lives.  This
@@ -78,13 +83,16 @@ class CONTENT_EXPORT CacheStorageCacheEntryHandler {
         CacheStorageCacheHandle cache_handle,
         disk_cache::ScopedEntryPtr disk_cache_entry);
 
+    DiskCacheBlobEntry(const DiskCacheBlobEntry&) = delete;
+    DiskCacheBlobEntry& operator=(const DiskCacheBlobEntry&) = delete;
+
     int Read(scoped_refptr<net::IOBuffer> dst_buffer,
              CacheStorageCache::EntryIndex disk_cache_index,
              uint64_t offset,
              int bytes_to_read,
              base::OnceCallback<void(int)> callback);
 
-    int GetSize(CacheStorageCache::EntryIndex disk_cache_index) const;
+    int64_t GetSize(CacheStorageCache::EntryIndex disk_cache_index) const;
 
     void Invalidate();
 
@@ -95,17 +103,19 @@ class CONTENT_EXPORT CacheStorageCacheEntryHandler {
     ~DiskCacheBlobEntry();
 
     base::WeakPtr<CacheStorageCacheEntryHandler> entry_handler_;
-    absl::optional<CacheStorageCacheHandle> cache_handle_;
+    std::optional<CacheStorageCacheHandle> cache_handle_;
     disk_cache::ScopedEntryPtr disk_cache_entry_;
 
     SEQUENCE_CHECKER(sequence_checker_);
-
-    DISALLOW_COPY_AND_ASSIGN(DiskCacheBlobEntry);
   };
 
   scoped_refptr<DiskCacheBlobEntry> CreateDiskCacheBlobEntry(
       CacheStorageCacheHandle cache_handle,
       disk_cache::ScopedEntryPtr disk_cache_entry);
+
+  CacheStorageCacheEntryHandler(const CacheStorageCacheEntryHandler&) = delete;
+  CacheStorageCacheEntryHandler& operator=(
+      const CacheStorageCacheEntryHandler&) = delete;
 
   virtual ~CacheStorageCacheEntryHandler();
 
@@ -142,6 +152,10 @@ class CONTENT_EXPORT CacheStorageCacheEntryHandler {
       CacheStorageCache::EntryIndex disk_cache_index,
       CacheStorageCache::EntryIndex side_data_disk_cache_index);
 
+  mojo::PendingRemote<network::mojom::DataPipeGetter> CreateDataPipeGetter(
+      scoped_refptr<DiskCacheBlobEntry> blob_entry,
+      CacheStorageCache::EntryIndex disk_cache_index);
+
   // Wrapper for storage::mojom::BlobStorageContext bound to this sequence.
   scoped_refptr<BlobStorageContextWrapper> blob_storage_context_;
 
@@ -153,10 +167,9 @@ class CONTENT_EXPORT CacheStorageCacheEntryHandler {
   // them if the cache has to be deleted while there are still references to
   // data in it.  DiskCacheBlobEntries are owned by EntryReaderImpl, which
   // are owned by their mojo remote (which indirectly is is owned by some blob).
-  std::set<DiskCacheBlobEntry*> blob_entries_;
+  std::set<raw_ptr<DiskCacheBlobEntry, SetExperimental>> blob_entries_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-  DISALLOW_COPY_AND_ASSIGN(CacheStorageCacheEntryHandler);
 };
 
 }  // namespace content

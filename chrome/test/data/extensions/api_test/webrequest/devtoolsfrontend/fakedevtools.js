@@ -1,12 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 window.onload = function() {
   if (location.hash) {
-    var completionUrl = new URL(location.hash.slice(1)).href;
+    const completionUrl = new URL(location.hash.slice(1)).href;
 
-    console.log(
+    console.info(
         'Fake devtools loaded. Going to notify test extension via ' +
         completionUrl);
 

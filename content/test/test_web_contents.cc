@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,9 @@
 
 #include "base/no_destructor.h"
 #include "content/browser/browser_url_handler_impl.h"
-#include "content/browser/portal/portal.h"
-#include "content/browser/prerender/prerender_host_registry.h"
+#include "content/browser/display_cutout/display_cutout_host_impl.h"
+#include "content/browser/preloading/prerender/prerender_host.h"
+#include "content/browser/preloading/prerender/prerender_host_registry.h"
 #include "content/browser/renderer_host/cross_process_frame_connector.h"
 #include "content/browser/renderer_host/debug_urls.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
@@ -22,17 +23,22 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/common/render_message_filter.mojom.h"
-#include "content/public/browser/notification_registrar.h"
-#include "content/public/browser/notification_source.h"
-#include "content/public/browser/notification_types.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/preload_pipeline_info.h"
 #include "content/public/common/referrer_type_converters.h"
 #include "content/public/common/url_utils.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/prerender_test_util.h"
 #include "content/test/navigation_simulator_impl.h"
 #include "content/test/test_render_view_host.h"
+#include "ipc/constants.mojom.h"
+#include "mojo/public/cpp/bindings/clone_traits.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom.h"
+#include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-shared.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 
 namespace content {
@@ -68,24 +74,30 @@ std::unique_ptr<TestWebContents> TestWebContents::Create(
     scoped_refptr<SiteInstance> instance) {
   std::unique_ptr<TestWebContents> test_web_contents(
       new TestWebContents(browser_context));
-  test_web_contents->Init(CreateParams(browser_context, std::move(instance)));
+  test_web_contents->Init(CreateParams(browser_context, std::move(instance)),
+                          blink::FramePolicy());
   return test_web_contents;
 }
 
 TestWebContents* TestWebContents::Create(const CreateParams& params) {
   TestWebContents* test_web_contents =
       new TestWebContents(params.browser_context);
-  test_web_contents->Init(params);
+  test_web_contents->Init(params, blink::FramePolicy());
   return test_web_contents;
 }
 
 TestWebContents::~TestWebContents() = default;
 
-TestRenderFrameHost* TestWebContents::GetMainFrame() {
-  auto* instance = WebContentsImpl::GetMainFrame();
+const TestRenderFrameHost* TestWebContents::GetPrimaryMainFrame() const {
+  const auto* const instance = WebContentsImpl::GetPrimaryMainFrame();
   DCHECK(instance->IsTestRenderFrameHost())
       << "You may want to instantiate RenderViewHostTestEnabler.";
-  return static_cast<TestRenderFrameHost*>(instance);
+  return static_cast<const TestRenderFrameHost*>(instance);
+}
+
+TestRenderFrameHost* TestWebContents::GetPrimaryMainFrame() {
+  return const_cast<TestRenderFrameHost*>(
+      std::as_const(*this).GetPrimaryMainFrame());
 }
 
 TestRenderViewHost* TestWebContents::GetRenderViewHost() {
@@ -97,12 +109,12 @@ TestRenderViewHost* TestWebContents::GetRenderViewHost() {
 
 TestRenderFrameHost* TestWebContents::GetSpeculativePrimaryMainFrame() {
   return static_cast<TestRenderFrameHost*>(
-      GetFrameTree()->root()->render_manager()->speculative_frame_host());
+      GetPrimaryFrameTree().root()->render_manager()->speculative_frame_host());
 }
 
 int TestWebContents::DownloadImage(const GURL& url,
                                    bool is_favicon,
-                                   uint32_t preferred_size,
+                                   const gfx::Size& preferred_size,
                                    uint32_t max_bitmap_size,
                                    bool bypass_cache,
                                    ImageDownloadCallback callback) {
@@ -113,7 +125,19 @@ int TestWebContents::DownloadImage(const GURL& url,
   return g_next_image_download_id;
 }
 
-const GURL& TestWebContents::GetLastCommittedURL() {
+int TestWebContents::DownloadImageInFrame(
+    const GlobalRenderFrameHostId& initiator_frame_routing_id,
+    const GURL& url,
+    bool is_favicon,
+    const gfx::Size& preferred_size,
+    uint32_t max_bitmap_size,
+    bool bypass_cache,
+    ImageDownloadCallback callback) {
+  return DownloadImage(url, is_favicon, preferred_size, max_bitmap_size,
+                       bypass_cache, std::move(callback));
+}
+
+const GURL& TestWebContents::GetLastCommittedURL() const {
   if (last_committed_url_.is_valid()) {
     return last_committed_url_;
   }
@@ -125,6 +149,21 @@ const std::u16string& TestWebContents::GetTitle() {
     return title_.value();
 
   return WebContentsImpl::GetTitle();
+}
+
+int TestWebContents::GetCurrentlyPlayingVideoCount() const {
+  return playing_video_count_.value_or(
+      WebContentsImpl::GetCurrentlyPlayingVideoCount());
+}
+
+void TestWebContents::SetTabSwitchStartTime(base::TimeTicks start_time,
+                                            bool destination_is_loaded,
+                                            bool had_saved_frame_at_start,
+                                            bool destination_is_frozen) {
+  tab_switch_start_time_ = start_time;
+  WebContentsImpl::SetTabSwitchStartTime(start_time, destination_is_loaded,
+                                         had_saved_frame_at_start,
+                                         destination_is_frozen);
 }
 
 const std::string& TestWebContents::GetSaveFrameHeaders() {
@@ -170,6 +209,28 @@ bool TestWebContents::TestDidDownloadImage(
   return true;
 }
 
+bool TestWebContents::TestDidAddMessageToConsole(
+    blink::mojom::ConsoleMessageLevel log_level,
+    const std::u16string& message,
+    int32_t line_no,
+    const std::u16string& source_id,
+    const std::optional<std::u16string>& untrusted_stack_trace) {
+  return WebContentsImpl::DidAddMessageToConsole(
+      /*source_frame=*/nullptr, log_level, message, line_no, source_id,
+      untrusted_stack_trace);
+}
+
+void TestWebContents::TestSetFaviconURL(
+    const std::vector<blink::mojom::FaviconURLPtr>& favicon_urls) {
+  GetPrimaryPage().set_favicon_urls(mojo::Clone(favicon_urls));
+}
+
+void TestWebContents::TestUpdateFaviconURL(
+    const std::vector<blink::mojom::FaviconURLPtr>& favicon_urls) {
+  GetPrimaryMainFrame()->UpdateFaviconURL(
+      mojo::Clone(favicon_urls), blink::mojom::FaviconUpdateReason::kPageLoad);
+}
+
 void TestWebContents::SetLastCommittedURL(const GURL& url) {
   last_committed_url_ = url;
 }
@@ -179,13 +240,15 @@ void TestWebContents::SetTitle(const std::u16string& title) {
 }
 
 void TestWebContents::SetMainFrameMimeType(const std::string& mime_type) {
-  static_cast<RenderViewHostImpl*>(GetRenderViewHost())
-      ->SetContentsMimeType(mime_type);
+  GetPrimaryPage().SetContentsMimeType(mime_type);
+}
+
+void TestWebContents::SetMainFrameSize(const gfx::Size& frame_size) {
+  GetPrimaryMainFrame()->FrameSizeChanged(frame_size);
 }
 
 const std::string& TestWebContents::GetContentsMimeType() {
-  return static_cast<RenderViewHostImpl*>(GetRenderViewHost())
-      ->contents_mime_type();
+  return GetPrimaryPage().GetContentsMimeType();
 }
 
 void TestWebContents::SetIsCurrentlyAudible(bool audible) {
@@ -198,20 +261,31 @@ void TestWebContents::TestDidReceiveMouseDownEvent() {
   event.SetType(blink::WebInputEvent::Type::kMouseDown);
   // Use the first RenderWidgetHost from the frame tree to make sure that the
   // interaction doesn't get ignored.
-  DCHECK(frame_tree_.Nodes().begin() != frame_tree_.Nodes().end());
-  RenderWidgetHostImpl* render_widget_host = (*frame_tree_.Nodes().begin())
-                                                 ->current_frame_host()
-                                                 ->GetRenderWidgetHost();
+  DCHECK(primary_frame_tree_.Nodes().begin() !=
+         primary_frame_tree_.Nodes().end());
+  RenderWidgetHostImpl* render_widget_host =
+      (*primary_frame_tree_.Nodes().begin())
+          ->current_frame_host()
+          ->GetRenderWidgetHost();
   DidReceiveInputEvent(render_widget_host, event);
 }
 
 void TestWebContents::TestDidFinishLoad(const GURL& url) {
-  OnDidFinishLoad(frame_tree_.root()->current_frame_host(), url);
+  OnDidFinishLoad(primary_frame_tree_.root()->current_frame_host(), url);
 }
 
 void TestWebContents::TestDidFailLoadWithError(const GURL& url,
                                                int error_code) {
-  GetMainFrame()->DidFailLoadWithError(url, error_code);
+  GetPrimaryMainFrame()->DidFailLoadWithError(url, error_code);
+}
+
+void TestWebContents::TestDidFirstVisuallyNonEmptyPaint() {
+  // Call through PageImpl::OnFirstVisuallyNonEmptyPaint() (matching
+  // RenderFrameHostImpl::DidFirstVisuallyNonEmptyPaint() in production) so
+  // `PageImpl::did_first_visually_non_empty_paint_` is set to true (updating
+  // `WebContents::CompletedFirstVisuallyNonEmptyPaint()`) before delegating
+  // to `WebContentsImpl::OnFirstVisuallyNonEmptyPaint()` to notify observers.
+  GetPrimaryPage().OnFirstVisuallyNonEmptyPaint();
 }
 
 bool TestWebContents::CrossProcessNavigationPending() {
@@ -231,13 +305,15 @@ bool TestWebContents::CrossProcessNavigationPending() {
 
 bool TestWebContents::CreateRenderViewForRenderManager(
     RenderViewHost* render_view_host,
-    const absl::optional<blink::FrameToken>& opener_frame_token,
-    RenderFrameProxyHost* proxy_host) {
+    const std::optional<blink::FrameToken>& opener_frame_token,
+    RenderFrameProxyHost* proxy_host,
+    const std::optional<base::UnguessableToken>& navigation_metrics_token) {
   const auto proxy_routing_id =
-      proxy_host ? proxy_host->GetRoutingID() : MSG_ROUTING_NONE;
+      proxy_host ? proxy_host->GetRoutingID() : IPC::mojom::kRoutingIdNone;
   // This will go to a TestRenderViewHost.
   static_cast<RenderViewHostImpl*>(render_view_host)
-      ->CreateRenderView(opener_frame_token, proxy_routing_id, false);
+      ->CreateRenderView(opener_frame_token, proxy_routing_id, false,
+                         navigation_metrics_token);
   return true;
 }
 
@@ -270,9 +346,10 @@ void TestWebContents::NavigateAndFail(const GURL& url, int error_code) {
 
 void TestWebContents::TestSetIsLoading(bool value) {
   if (value) {
-    DidStartLoading(GetMainFrame()->frame_tree_node(), true);
+    DidStartLoading(GetPrimaryMainFrame()->frame_tree_node());
+    LoadingStateChanged(LoadingState::LOADING_UI_REQUESTED);
   } else {
-    for (FrameTreeNode* node : frame_tree_.Nodes()) {
+    for (FrameTreeNode* node : primary_frame_tree_.Nodes()) {
       RenderFrameHostImpl* current_frame_host =
           node->render_manager()->current_frame_host();
       DCHECK(current_frame_host);
@@ -282,7 +359,8 @@ void TestWebContents::TestSetIsLoading(bool value) {
           node->render_manager()->speculative_frame_host();
       if (speculative_frame_host)
         speculative_frame_host->ResetLoadingState();
-      node->ResetNavigationRequest(false);
+      node->ResetNavigationRequest(
+          NavigationDiscardReason::kExplicitCancellation);
     }
   }
 }
@@ -291,7 +369,7 @@ void TestWebContents::CommitPendingNavigation() {
   NavigationEntry* entry = GetController().GetPendingEntry();
   DCHECK(entry);
 
-  auto navigation = NavigationSimulator::CreateFromPending(this);
+  auto navigation = NavigationSimulator::CreateFromPending(GetController());
   navigation->Commit();
 }
 
@@ -302,8 +380,18 @@ RenderViewHostDelegateView* TestWebContents::GetDelegateView() {
 }
 
 void TestWebContents::SetOpener(WebContents* opener) {
-  frame_tree_.root()->SetOpener(
-      static_cast<WebContentsImpl*>(opener)->GetFrameTree()->root());
+  primary_frame_tree_.root()->SetOpener(
+      static_cast<WebContentsImpl*>(opener)->GetPrimaryFrameTree().root());
+}
+
+void TestWebContents::SetOriginalOpener(WebContents* opener) {
+  primary_frame_tree_.root()->SetOriginalOpener(
+      static_cast<WebContentsImpl*>(opener)->GetPrimaryFrameTree().root());
+}
+
+void TestWebContents::SetOriginalWindowOpenDisposition(
+    ui::mojom::WindowOpenDisposition disposition) {
+  original_window_open_disposition_ = disposition;
 }
 
 void TestWebContents::SetIsCrashed(base::TerminationStatus status,
@@ -327,36 +415,42 @@ FrameTree* TestWebContents::CreateNewWindow(
     const mojom::CreateNewWindowParams& params,
     bool is_new_browsing_instance,
     bool has_user_gesture,
-    SessionStorageNamespace* session_storage_namespace) {
+    SessionStorageNamespaceHandle* session_storage_namespace) {
   return nullptr;
 }
 
 RenderWidgetHostImpl* TestWebContents::CreateNewPopupWidget(
-    AgentSchedulingGroupHost& agent_scheduling_group,
+    base::SafeRef<SiteInstanceGroup> site_instance_group,
     int32_t route_id,
     mojo::PendingAssociatedReceiver<blink::mojom::PopupWidgetHost>
         blink_popup_widget_host,
     mojo::PendingAssociatedReceiver<blink::mojom::WidgetHost> blink_widget_host,
-    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget) {
+    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget,
+    GlobalRenderFrameHostId creator_frame_id) {
   return nullptr;
 }
 
-void TestWebContents::ShowCreatedWindow(RenderFrameHostImpl* opener,
-                                        int route_id,
-                                        WindowOpenDisposition disposition,
-                                        const gfx::Rect& initial_rect,
-                                        bool user_gesture) {}
+WebContents* TestWebContents::ShowCreatedWindow(
+    RenderFrameHostImpl* opener,
+    int route_id,
+    ui::mojom::WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
+    bool user_gesture) {
+  return nullptr;
+}
 
-void TestWebContents::ShowCreatedWidget(int process_id,
+void TestWebContents::ShowCreatedWidget(ChildProcessId process_id,
                                         int route_id,
-                                        const gfx::Rect& initial_rect) {}
+                                        const gfx::Rect& initial_rect,
+                                        const gfx::Rect& initial_anchor_rect) {}
 
 void TestWebContents::SaveFrameWithHeaders(
     const GURL& url,
     const Referrer& referrer,
     const std::string& headers,
     const std::u16string& suggested_filename,
-    RenderFrameHost* rfh) {
+    RenderFrameHost* rfh,
+    bool is_subresource) {
   save_frame_headers_ = headers;
   suggested_filename_ = suggested_filename;
 }
@@ -369,8 +463,37 @@ void TestWebContents::ResetPauseSubresourceLoadingCalled() {
   pause_subresource_loading_called_ = false;
 }
 
-void TestWebContents::SetLastActiveTime(base::TimeTicks last_active_time) {
+void TestWebContents::SetLastActiveTimeTicks(
+    base::TimeTicks last_active_time_ticks) {
+  last_active_time_ticks_ = last_active_time_ticks;
+}
+
+void TestWebContents::SetLastActiveTime(base::Time last_active_time) {
   last_active_time_ = last_active_time;
+}
+
+void TestWebContents::TestIncrementUsbActiveFrameCount() {
+  IncrementUsbActiveFrameCount();
+}
+
+void TestWebContents::TestDecrementUsbActiveFrameCount() {
+  DecrementUsbActiveFrameCount();
+}
+
+void TestWebContents::TestIncrementHidActiveFrameCount() {
+  IncrementHidActiveFrameCount();
+}
+
+void TestWebContents::TestDecrementHidActiveFrameCount() {
+  DecrementHidActiveFrameCount();
+}
+
+void TestWebContents::TestIncrementSerialActiveFrameCount() {
+  IncrementSerialActiveFrameCount();
+}
+
+void TestWebContents::TestDecrementSerialActiveFrameCount() {
+  DecrementSerialActiveFrameCount();
 }
 
 void TestWebContents::TestIncrementBluetoothConnectedDeviceCount() {
@@ -385,42 +508,49 @@ base::UnguessableToken TestWebContents::GetAudioGroupId() {
   return audio_group_id_;
 }
 
-const blink::PortalToken& TestWebContents::CreatePortal(
-    std::unique_ptr<WebContents> web_contents) {
-  auto portal =
-      std::make_unique<Portal>(GetMainFrame(), std::move(web_contents));
-  const blink::PortalToken& token = portal->portal_token();
-  portal->CreateProxyAndAttachPortal();
-  GetMainFrame()->OnPortalCreatedForTesting(std::move(portal));
-  return token;
-}
-
-WebContents* TestWebContents::GetPortalContents(
-    const blink::PortalToken& portal_token) {
-  Portal* portal = GetMainFrame()->FindPortalByToken(portal_token);
-  if (!portal)
-    return nullptr;
-  return portal->GetPortalContents();
-}
-
 void TestWebContents::SetPageFrozen(bool frozen) {
   is_page_frozen_ = frozen;
+  WebContentsImpl::SetPageFrozen(frozen);
 }
 
 bool TestWebContents::IsBackForwardCacheSupported() {
   return back_forward_cache_supported_;
 }
 
-int TestWebContents::AddPrerender(const GURL& url) {
-  auto attributes = blink::mojom::PrerenderAttributes::New();
-  attributes->url = url;
-  return GetPrerenderHostRegistry()->CreateAndStartHost(std::move(attributes),
-                                                        *GetMainFrame());
+const std::optional<blink::mojom::PictureInPictureWindowOptions>&
+TestWebContents::GetPictureInPictureOptions() const {
+  if (picture_in_picture_options_.has_value()) {
+    return picture_in_picture_options_;
+  }
+  return WebContentsImpl::GetPictureInPictureOptions();
+}
+
+PrerenderHostId TestWebContents::AddPrerender(const GURL& url) {
+  DCHECK(!base::FeatureList::IsEnabled(
+      blink::features::kPrerender2MemoryControls));
+
+  TestRenderFrameHost* rfhi = GetPrimaryMainFrame();
+  return GetPrerenderHostRegistry()->CreateAndStartHost(PrerenderAttributes(
+      url, PreloadingTriggerType::kSpeculationRule,
+      /*embedder_histogram_suffix=*/"", SpeculationRulesParams(), Referrer(),
+      /*no_vary_search_hint=*/std::nullopt, rfhi, GetWeakPtr(),
+      ui::PAGE_TRANSITION_LINK,
+      /*should_warm_up_compositor=*/false,
+      /*should_prepare_paint_tree=*/false,
+      blink::mojom::SpeculationAction::kPrerender,
+      /*url_match_predicate=*/{},
+      /*prerender_navigation_handle_callback=*/{},
+      PreloadPipelineInfoImpl::Create(
+          /*planned_max_preloading_type=*/PreloadingType::kPrerender),
+      /*allow_reuse=*/false,
+      /*form_submission=*/false));
 }
 
 TestRenderFrameHost* TestWebContents::AddPrerenderAndCommitNavigation(
     const GURL& url) {
-  int host_id = AddPrerender(url);
+  PrerenderHostId host_id = AddPrerender(url);
+  DCHECK(host_id);
+
   PrerenderHost* host =
       GetPrerenderHostRegistry()->FindNonReservedHostById(host_id);
   DCHECK(host);
@@ -432,4 +562,166 @@ TestRenderFrameHost* TestWebContents::AddPrerenderAndCommitNavigation(
   }
   return static_cast<TestRenderFrameHost*>(host->GetPrerenderedMainFrameHost());
 }
+
+std::unique_ptr<NavigationSimulator>
+TestWebContents::AddPrerenderAndStartNavigation(const GURL& url) {
+  PrerenderHostId host_id = AddPrerender(url);
+  DCHECK(host_id);
+
+  PrerenderHost* host =
+      GetPrerenderHostRegistry()->FindNonReservedHostById(host_id);
+  DCHECK(host);
+
+  return NavigationSimulatorImpl::CreateFromPendingInFrame(
+      FrameTreeNode::GloballyFindByID(host->frame_tree_node_id()));
+}
+
+void TestWebContents::ActivatePrerenderedPage(const GURL& url) {
+  // Make sure the page for `url` has been prerendered.
+  PrerenderHostRegistry* registry = GetPrerenderHostRegistry();
+  PrerenderHost* prerender_host = registry->FindHostByUrlForTesting(url);
+  DCHECK(prerender_host);
+
+  // Activate the prerendered page.
+  test::PrerenderHostObserver prerender_host_observer(
+      *this, prerender_host->prerender_host_id());
+  std::unique_ptr<NavigationSimulatorImpl> navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(url,
+                                                       GetPrimaryMainFrame());
+  navigation->SetReferrer(blink::mojom::Referrer::New(
+      GetPrimaryMainFrame()->GetLastCommittedURL(),
+      network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin));
+  navigation->Commit();
+  prerender_host_observer.WaitForDestroyed();
+
+  DCHECK_EQ(GetPrimaryMainFrame()->GetLastCommittedURL(), url);
+
+  DCHECK(prerender_host_observer.was_activated());
+  DCHECK(!registry->HasReservedHost());
+}
+
+void TestWebContents::ActivatePrerenderedPageFromAddressBar(const GURL& url) {
+  // Make sure the page for `url` has been prerendered.
+  PrerenderHostRegistry* registry = GetPrerenderHostRegistry();
+  PrerenderHost* prerender_host = registry->FindHostByUrlForTesting(url);
+  DCHECK(prerender_host);
+
+  // Activate the prerendered page by navigation initiated by the address bar.
+  test::PrerenderHostObserver prerender_host_observer(
+      *this, prerender_host->prerender_host_id());
+  std::unique_ptr<NavigationSimulatorImpl> navigation =
+      NavigationSimulatorImpl::CreateBrowserInitiated(url, this);
+  navigation->SetTransition(ui::PageTransitionFromInt(
+      ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR));
+  navigation->Commit();
+  prerender_host_observer.WaitForDestroyed();
+
+  DCHECK_EQ(GetPrimaryMainFrame()->GetLastCommittedURL(), url);
+
+  DCHECK(prerender_host_observer.was_activated());
+  DCHECK(!registry->HasReservedHost());
+}
+
+base::TimeTicks TestWebContents::GetTabSwitchStartTime() {
+  return tab_switch_start_time_;
+}
+
+void TestWebContents::SetPictureInPictureOptions(
+    std::optional<blink::mojom::PictureInPictureWindowOptions> options) {
+  picture_in_picture_options_ = options;
+}
+
+void TestWebContents::SetOverscrollNavigationEnabled(bool enabled) {
+  overscroll_enabled_ = enabled;
+}
+
+bool TestWebContents::GetOverscrollNavigationEnabled() {
+  return overscroll_enabled_;
+}
+
+void TestWebContents::SetSafeAreaInsetsHost(
+    std::unique_ptr<SafeAreaInsetsHost> safe_area_insets_host) {
+  safe_area_insets_host_ = std::move(safe_area_insets_host);
+}
+
+void TestWebContents::GetMediaCaptureRawDeviceIdsOpened(
+    blink::mojom::MediaStreamType type,
+    base::OnceCallback<void(std::vector<std::string>)> callback) {
+  CHECK(media_capture_raw_device_ids_opened_.contains(type));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback),
+                                media_capture_raw_device_ids_opened_.at(type)));
+}
+
+void TestWebContents::SetMediaCaptureRawDeviceIdsOpened(
+    blink::mojom::MediaStreamType type,
+    std::vector<std::string> ids) {
+  media_capture_raw_device_ids_opened_[type] = std::move(ids);
+}
+
+void TestWebContents::SetCurrentlyPlayingVideoCount(int count) {
+  playing_video_count_ = count;
+}
+
+void TestWebContents::SetHasPictureInPictureDocument(
+    bool has_picture_in_picture_document) {
+  WebContentsImpl::SetHasPictureInPictureDocument(
+      has_picture_in_picture_document);
+}
+
+void TestWebContents::OnIgnoredUIEvent() {
+  ignored_ui_event_called_ = true;
+}
+
+bool TestWebContents::GetIgnoredUIEventCalled() const {
+  return ignored_ui_event_called_;
+}
+
+void TestWebContents::GetRenderWidgetHostAtPointAsynchronously(
+    RenderWidgetHostViewBase* root_view,
+    const gfx::PointF& point,
+    base::OnceCallback<void(base::WeakPtr<RenderWidgetHostViewBase>,
+                            std::optional<gfx::PointF>)> callback) {
+  if (!root_view) {
+    std::move(callback).Run(nullptr, std::nullopt);
+    return;
+  }
+
+  // If defer flag is disabled, call base implementation synchronously.
+  if (!defer_get_render_widget_host_at_point_) {
+    WebContentsImpl::GetRenderWidgetHostAtPointAsynchronously(
+        root_view, point, std::move(callback));
+    return;
+  }
+
+  // Post as a deferred task to better test race conditions.
+  // This ensures the base implementation is only called after RunUntilIdle.
+  auto weak_this = GetWeakPtr();
+  auto weak_root_view = root_view->GetWeakPtr();
+
+  auto task = base::BindOnce(
+      [](base::WeakPtr<WebContents> web_contents,
+         base::WeakPtr<RenderWidgetHostViewBase> view, gfx::PointF pt,
+         base::OnceCallback<void(base::WeakPtr<RenderWidgetHostViewBase>,
+                                 std::optional<gfx::PointF>)> cb) {
+        auto* impl = static_cast<WebContentsImpl*>(web_contents.get());
+        if (impl && view) {
+          impl->WebContentsImpl::GetRenderWidgetHostAtPointAsynchronously(
+              view.get(), pt, std::move(cb));
+        }
+      },
+      weak_this, weak_root_view, point, std::move(callback));
+
+  deferred_get_render_widget_host_at_point_callback_ = std::move(task);
+}
+
+void TestWebContents::
+    TriggerGetRenderWidgetHostAtPointAsynchronouslyCallback() {
+  if (deferred_get_render_widget_host_at_point_callback_) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        std::move(deferred_get_render_widget_host_at_point_callback_));
+  }
+}
+
 }  // namespace content

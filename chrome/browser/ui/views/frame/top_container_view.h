@@ -1,12 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_TOP_CONTAINER_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_TOP_CONTAINER_VIEW_H_
 
-#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/views/view.h"
 
 class BrowserView;
@@ -15,12 +16,17 @@ class BrowserView;
 // bar. In Chrome OS immersive fullscreen it stacks on top of other views in
 // order to slide in and out over the web contents.
 class TopContainerView : public views::View {
+  METADATA_HEADER(TopContainerView, views::View)
+
  public:
-  METADATA_HEADER(TopContainerView);
   explicit TopContainerView(BrowserView* browser_view);
   TopContainerView(const TopContainerView&) = delete;
   TopContainerView& operator=(const TopContainerView&) = delete;
   ~TopContainerView() override;
+
+  // When this is the top element in the browser, returns whether `test_point`
+  // is in the caption area.
+  bool IsPositionInWindowCaption(const gfx::Point& test_point) const;
 
   // views::View overrides:
   void PaintChildren(const views::PaintInfo& paint_info) override;
@@ -28,7 +34,7 @@ class TopContainerView : public views::View {
 
  private:
   // The parent of this view. Not owned.
-  BrowserView* browser_view_;
+  raw_ptr<BrowserView> browser_view_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_TOP_CONTAINER_VIEW_H_

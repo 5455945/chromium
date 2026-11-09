@@ -1,16 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/signaling/message_tracker.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <map>
+
 
 namespace remoting {
 
 // static
-const base::TimeDelta MessageTracker::kCleanupInterval =
-    base::TimeDelta::FromMinutes(2);
+const base::TimeDelta MessageTracker::kCleanupInterval = base::Minutes(2);
 
 MessageTracker::MessageTracker() = default;
 
@@ -25,12 +25,12 @@ void MessageTracker::TrackId(const std::string& id) {
 }
 
 bool MessageTracker::IsIdTracked(const std::string& id) const {
-  return tracked_ids_.find(id) != tracked_ids_.end();
+  return tracked_ids_.contains(id);
 }
 
 void MessageTracker::RemoveExpiredIds() {
   base::Time expire_time = base::Time::Now() - kCleanupInterval;
-  base::EraseIf(tracked_ids_,
+  std::erase_if(tracked_ids_,
                 [expire_time](const std::pair<std::string, base::Time>& pair) {
                   return pair.second <= expire_time;
                 });

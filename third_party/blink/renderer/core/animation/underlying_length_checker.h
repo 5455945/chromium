@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,7 @@ class UnderlyingLengthChecker : public InterpolationType::ConversionChecker {
     return To<InterpolableList>(*underlying.interpolable_value).length();
   }
 
-  bool IsValid(const InterpolationEnvironment&,
+  bool IsValid(const CSSInterpolationEnvironment&,
                const InterpolationValue& underlying) const final {
     return underlying_length_ == GetUnderlyingLength(underlying);
   }

@@ -1,3 +1,2 @@
-tikuta@google.com
-ukai@google.com
-yyanagisawa@google.com
+include ../../infra/config/groups/chrome-build/OWNERS
+include ../../infra/config/groups/foundry-x/OWNERS

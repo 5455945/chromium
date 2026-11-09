@@ -1,12 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_PROTOCOL_WEBRTC_AUDIO_MODULE_H_
 #define REMOTING_PROTOCOL_WEBRTC_AUDIO_MODULE_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
+#include "base/time/time.h"
 #include "third_party/webrtc/modules/audio_device/include/audio_device.h"
 
 namespace base {
@@ -14,8 +16,7 @@ class RepeatingTimer;
 class SingleThreadTaskRunner;
 }  // namespace base
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // Audio module passed to WebRTC. It doesn't access actual audio devices, but it
 // provides all functionality we need to ensure that audio streaming works
@@ -116,14 +117,17 @@ class WebrtcAudioModule : public webrtc::AudioDeviceModule {
 
   bool initialized_ = false;
   bool playing_ = false;
-  webrtc::AudioTransport* audio_transport_ = nullptr;
+  raw_ptr<webrtc::AudioTransport> audio_transport_ = nullptr;
 
   // Timer running on the |audio_task_runner_| that polls audio from
   // |audio_transport_|.
   std::unique_ptr<base::RepeatingTimer> poll_timer_;
+
+  // Calculated as `start_time + frames_pulled * kFrameLengthMs`. Used to
+  // determine how many frames should be pulled next.
+  base::TimeTicks last_poll_time_;
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_WEBRTC_AUDIO_MODULE_H_

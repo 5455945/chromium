@@ -1,16 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/system/simple_watcher.h"
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
 #include "base/task/common/task_annotator.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/heap_profiler.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/typed_macros.h"
@@ -54,14 +53,18 @@ class SimpleWatcher::Context : public base::RefCountedThreadSafe<Context> {
     return context;
   }
 
+  Context(const Context&) = delete;
+  Context& operator=(const Context&) = delete;
+
   static void CallNotify(const MojoTrapEvent* event) {
     auto* context = reinterpret_cast<Context*>(event->trigger_context);
     context->Notify(event->result, event->signals_state, event->flags);
 
     // The trigger was removed. We can release the ref it owned, which in turn
     // may delete the Context.
-    if (event->result == MOJO_RESULT_CANCELLED)
+    if (event->result == MOJO_RESULT_CANCELLED) {
       context->Release();
+    }
   }
 
   uintptr_t value() const { return reinterpret_cast<uintptr_t>(this); }
@@ -107,8 +110,6 @@ class SimpleWatcher::Context : public base::RefCountedThreadSafe<Context> {
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
   const int watch_id_;
   const char* handler_tag_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(Context);
 };
 
 SimpleWatcher::SimpleWatcher(const base::Location& from_here,
@@ -117,9 +118,9 @@ SimpleWatcher::SimpleWatcher(const base::Location& from_here,
                              const char* handler_tag)
     : arming_policy_(arming_policy),
       task_runner_(std::move(runner)),
-      is_default_task_runner_(base::ThreadTaskRunnerHandle::IsSet() &&
-                              task_runner_ ==
-                                  base::ThreadTaskRunnerHandle::Get()),
+      is_default_task_runner_(
+          base::SingleThreadTaskRunner::HasCurrentDefault() &&
+          task_runner_ == base::SingleThreadTaskRunner::GetCurrentDefault()),
       handler_tag_(handler_tag ? handler_tag : from_here.file_name()) {
   MojoResult rv = CreateTrap(&Context::CallNotify, &trap_handle_);
   DCHECK_EQ(MOJO_RESULT_OK, rv);
@@ -127,8 +128,9 @@ SimpleWatcher::SimpleWatcher(const base::Location& from_here,
 }
 
 SimpleWatcher::~SimpleWatcher() {
-  if (IsWatching())
+  if (IsWatching()) {
     Cancel();
+  }
 }
 
 bool SimpleWatcher::IsWatching() const {
@@ -159,8 +161,9 @@ MojoResult SimpleWatcher::Watch(Handle handle,
     return result;
   }
 
-  if (arming_policy_ == ArmingPolicy::AUTOMATIC)
+  if (arming_policy_ == ArmingPolicy::AUTOMATIC) {
     ArmOrNotify();
+  }
 
   return MOJO_RESULT_OK;
 }
@@ -169,8 +172,9 @@ void SimpleWatcher::Cancel() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // The watcher may have already been cancelled if the handle was closed.
-  if (!context_)
+  if (!context_) {
     return;
+  }
 
   handle_.set_value(kInvalidHandleValue);
   callback_.Reset();
@@ -202,8 +206,9 @@ MojoResult SimpleWatcher::Arm(MojoResult* ready_result,
     DCHECK(context_);
     DCHECK_EQ(1u, num_blocking_events);
     DCHECK_EQ(context_->value(), blocking_event.trigger_context);
-    if (ready_result)
+    if (ready_result) {
       *ready_result = blocking_event.result;
+    }
     if (ready_state) {
       *ready_state =
           HandleSignalsState(blocking_event.signals_state.satisfied_signals,
@@ -218,8 +223,9 @@ void SimpleWatcher::ArmOrNotify() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Already cancelled, nothing to do.
-  if (!IsWatching())
+  if (!IsWatching()) {
     return;
+  }
 
   MojoResult ready_result;
   HandleSignalsState ready_state;
@@ -228,8 +234,9 @@ void SimpleWatcher::ArmOrNotify() {
   // NOTE: If the watched handle has been closed, the above call will result in
   // MOJO_RESULT_NOT_FOUND. A MOJO_RESULT_CANCELLED notification will already
   // have been posted to this object as a result, so there's nothing else to do.
-  if (rv == MOJO_RESULT_OK || rv == MOJO_RESULT_NOT_FOUND)
+  if (rv == MOJO_RESULT_OK || rv == MOJO_RESULT_NOT_FOUND) {
     return;
+  }
 
   DCHECK_EQ(MOJO_RESULT_FAILED_PRECONDITION, rv);
   {
@@ -249,8 +256,9 @@ void SimpleWatcher::OnHandleReady(int watch_id,
 
   // This notification may be for a previously watched context, in which case
   // we just ignore it.
-  if (watch_id != watch_id_)
+  if (watch_id != watch_id_) {
     return;
+  }
 
   ReadyCallbackWithState callback = callback_;
   if (result == MOJO_RESULT_CANCELLED) {
@@ -276,16 +284,19 @@ void SimpleWatcher::OnHandleReady(int watch_id,
 
     base::WeakPtr<SimpleWatcher> weak_self = weak_factory_.GetWeakPtr();
     callback.Run(result, state);
-    if (!weak_self)
+    if (!weak_self) {
       return;
+    }
 
     // Prevent |MOJO_RESULT_FAILED_PRECONDITION| task spam by only notifying
     // at most once in AUTOMATIC arming mode.
-    if (result == MOJO_RESULT_FAILED_PRECONDITION)
+    if (result == MOJO_RESULT_FAILED_PRECONDITION) {
       return;
+    }
 
-    if (arming_policy_ == ArmingPolicy::AUTOMATIC && IsWatching())
+    if (arming_policy_ == ArmingPolicy::AUTOMATIC && IsWatching()) {
       ArmOrNotify();
+    }
   }
 }
 }  // namespace mojo

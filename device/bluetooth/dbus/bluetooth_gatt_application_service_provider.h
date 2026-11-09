@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <map>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "dbus/bus.h"
 #include "dbus/object_path.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -26,13 +26,19 @@ class BluetoothLocalGattServiceBlueZ;
 // hierarchies.
 class DEVICE_BLUETOOTH_EXPORT BluetoothGattApplicationServiceProvider {
  public:
+  BluetoothGattApplicationServiceProvider(
+      const BluetoothGattApplicationServiceProvider&) = delete;
+  BluetoothGattApplicationServiceProvider& operator=(
+      const BluetoothGattApplicationServiceProvider&) = delete;
+
   virtual ~BluetoothGattApplicationServiceProvider();
 
   // Creates individual service providers for all the attributes managed by the
   // object manager interface implemented by this application service provider.
   void CreateAttributeServiceProviders(
       dbus::Bus* bus,
-      const std::map<dbus::ObjectPath, BluetoothLocalGattServiceBlueZ*>&
+      const std::map<dbus::ObjectPath,
+                     raw_ptr<BluetoothLocalGattServiceBlueZ, CtnExperimental>>&
           services);
 
   // Creates the instance where |bus| is the D-Bus bus connection to export the
@@ -44,7 +50,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothGattApplicationServiceProvider {
   static std::unique_ptr<BluetoothGattApplicationServiceProvider> Create(
       dbus::Bus* bus,
       const dbus::ObjectPath& object_path,
-      const std::map<dbus::ObjectPath, BluetoothLocalGattServiceBlueZ*>&
+      const std::map<dbus::ObjectPath,
+                     raw_ptr<BluetoothLocalGattServiceBlueZ, CtnExperimental>>&
           services);
 
   void SendValueChanged(const dbus::ObjectPath& characteristic_path,
@@ -63,9 +70,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothGattApplicationServiceProvider {
   // List of GATT Descriptor service providers managed by this object manager.
   std::vector<std::unique_ptr<BluetoothGattDescriptorServiceProvider>>
       descriptor_providers_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BluetoothGattApplicationServiceProvider);
 };
 
 }  // namespace bluez

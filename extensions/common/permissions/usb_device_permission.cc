@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -109,13 +109,13 @@ UsbDevicePermission::CheckParam::CheckParam(
       interface_id(interface_id),
       interface_class_allowed(IsInterfaceClassPermissionAlowed(extension)) {}
 
-UsbDevicePermission::CheckParam::~CheckParam() {}
+UsbDevicePermission::CheckParam::~CheckParam() = default;
 
 UsbDevicePermission::UsbDevicePermission(const APIPermissionInfo* info)
     : SetDisjunctionPermission<UsbDevicePermissionData, UsbDevicePermission>(
           info) {}
 
-UsbDevicePermission::~UsbDevicePermission() {}
+UsbDevicePermission::~UsbDevicePermission() = default;
 
 bool UsbDevicePermission::FromValue(
     const base::Value* value,
@@ -143,14 +143,14 @@ PermissionIDSet UsbDevicePermission::GetPermissions() const {
     // don't include those in installation warning for now.
     if (data.interface_class() != UsbDevicePermissionData::SPECIAL_VALUE_ANY)
       continue;
-    const char* vendor = device::UsbIds::GetVendorName(data.vendor_id());
-    if (vendor) {
-      const char* product =
-          device::UsbIds::GetProductName(data.vendor_id(), data.product_id());
-      if (product) {
+    device::UsbIdNames names = device::UsbIds::GetVendorAndProductName(
+        data.vendor_id(), data.product_id());
+    if (names.vendor_name) {
+      if (names.product_name) {
         std::u16string product_name_and_vendor = l10n_util::GetStringFUTF16(
             IDS_EXTENSION_USB_DEVICE_PRODUCT_NAME_AND_VENDOR,
-            base::UTF8ToUTF16(product), base::UTF8ToUTF16(vendor));
+            base::UTF8ToUTF16(names.product_name),
+            base::UTF8ToUTF16(names.vendor_name));
         ids.insert(mojom::APIPermissionID::kUsbDevice, product_name_and_vendor);
       } else {
         unknown_product_vendors.insert(data.vendor_id());

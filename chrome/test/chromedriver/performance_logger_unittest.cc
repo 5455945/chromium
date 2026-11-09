@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,10 @@
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/json/json_reader.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/time/time.h"
+#include "base/types/expected_macros.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_client_impl.h"
 #include "chrome/test/chromedriver/chrome/log.h"
@@ -25,22 +28,22 @@
 namespace {
 
 struct DevToolsCommand {
-  DevToolsCommand(const std::string& in_method,
-                  base::DictionaryValue* in_params)
+  DevToolsCommand(const std::string& in_method, base::DictValue* in_params)
       : method(in_method) {
     params.reset(in_params);
   }
-  ~DevToolsCommand() {}
+  ~DevToolsCommand() = default;
 
   std::string method;
-  std::unique_ptr<base::DictionaryValue> params;
+  std::unique_ptr<base::DictValue> params;
 };
 
 class FakeDevToolsClient : public StubDevToolsClient {
  public:
-  explicit FakeDevToolsClient(const std::string& id)
-      : id_(id), listener_(nullptr), command_index_(0) {}
-  ~FakeDevToolsClient() override {}
+  explicit FakeDevToolsClient(const std::string& id, bool is_tab) : id_(id) {
+    is_tab_ = is_tab;
+  }
+  ~FakeDevToolsClient() override = default;
 
   bool PopSentCommand(DevToolsCommand** out_command) {
     if (sent_commands_.size() > command_index_) {
@@ -50,25 +53,23 @@ class FakeDevToolsClient : public StubDevToolsClient {
     return false;
   }
 
-  Status TriggerEvent(const std::string& method) {
-    base::DictionaryValue empty_params;
-    return listener_->OnEvent(this, method, empty_params);
-  }
+  int GetSentCommandsCount() { return sent_commands_.size(); }
 
   Status TriggerEvent(const std::string& method,
-                      const base::DictionaryValue& params) {
+                      const base::DictValue& params) {
     return listener_->OnEvent(this, method, params);
   }
 
-  // Overridden from DevToolsClient:
-  Status ConnectIfNecessary() override { return listener_->OnConnected(this); }
+  Status TriggerEvent(const std::string& method) {
+    return TriggerEvent(method, base::DictValue());
+  }
 
-  Status SendCommandAndGetResult(
-      const std::string& method,
-      const base::DictionaryValue& params,
-      std::unique_ptr<base::DictionaryValue>* result) override {
+  Status SendCommandAndGetResult(const std::string& method,
+                                 const base::DictValue& params,
+                                 base::DictValue* result) override {
+    auto dict = std::make_unique<base::DictValue>(params.Clone());
     sent_commands_.push_back(
-        std::make_unique<DevToolsCommand>(method, params.DeepCopy()));
+        std::make_unique<DevToolsCommand>(method, dict.release()));
     return Status(kOk);
   }
 
@@ -77,14 +78,20 @@ class FakeDevToolsClient : public StubDevToolsClient {
     listener_ = listener;
   }
 
+  void RemoveListener(DevToolsEventListener* listener) override {
+    CHECK(listener_ = listener);
+    listener_ = nullptr;
+  }
+
   const std::string& GetId() override { return id_; }
 
  private:
   const std::string id_;  // WebView id.
   std::vector<std::unique_ptr<DevToolsCommand>>
       sent_commands_;                // Commands that were sent.
-  DevToolsEventListener* listener_;  // The fake allows only one event listener.
-  size_t command_index_;
+  raw_ptr<DevToolsEventListener> listener_ =
+      nullptr;  // The fake allows only one event listener.
+  size_t command_index_ = 0;
 };
 
 struct LogEntry {
@@ -129,49 +136,49 @@ bool FakeLog::Emptied() const {
   return true;
 }
 
-std::unique_ptr<base::DictionaryValue> ParseDictionary(
+base::expected<base::DictValue, std::string> ParseDictionary(
     const std::string& json) {
-  base::JSONReader::ValueWithError parsed_json =
-      base::JSONReader::ReadAndReturnValueWithError(json);
-  if (!parsed_json.value) {
-    SCOPED_TRACE(json.c_str());
-    SCOPED_TRACE(parsed_json.error_message.c_str());
-    ADD_FAILURE();
-    return nullptr;
+  ASSIGN_OR_RETURN(auto parsed_json,
+                   base::JSONReader::ReadAndReturnValueWithError(
+                       json, base::JSON_PARSE_CHROMIUM_EXTENSIONS),
+                   [&](base::JSONReader::Error error) {
+                     return "Couldn't parse " + json +
+                            ", got: " + std::move(error).message;
+                   });
+
+  base::DictValue* dict = parsed_json.GetIfDict();
+  if (!dict) {
+    return base::unexpected("JSON object is not a dictionary");
   }
-  base::DictionaryValue* dict = nullptr;
-  if (!parsed_json.value->GetAsDictionary(&dict)) {
-    SCOPED_TRACE("JSON object is not a dictionary");
-    ADD_FAILURE();
-    return nullptr;
-  }
-  return std::unique_ptr<base::DictionaryValue>(dict->DeepCopy());
+
+  return std::move(*dict);
 }
 
-void ValidateLogEntry(const LogEntry *entry,
+void ValidateLogEntry(const LogEntry* entry,
                       const std::string& expected_webview,
                       const std::string& expected_method,
-                      const base::DictionaryValue& expected_params) {
+                      const base::DictValue& expected_params) {
   EXPECT_EQ(Log::kInfo, entry->level);
   EXPECT_LT(0, entry->timestamp.ToTimeT());
 
-  std::unique_ptr<base::DictionaryValue> message(
-      ParseDictionary(entry->message));
-  std::string webview;
-  EXPECT_TRUE(message->GetString("webview", &webview));
-  EXPECT_EQ(expected_webview, webview);
-  std::string method;
-  EXPECT_TRUE(message->GetString("message.method", &method));
-  EXPECT_EQ(expected_method, method);
-  base::DictionaryValue* params;
-  EXPECT_TRUE(message->GetDictionary("message.params", &params));
-  EXPECT_TRUE(params->Equals(&expected_params));
+  ASSERT_OK_AND_ASSIGN(base::DictValue message,
+                       ParseDictionary(entry->message));
+  const std::string* webview = message.FindString("webview");
+  ASSERT_TRUE(webview);
+  EXPECT_EQ(expected_webview, *webview);
+  const std::string* method = message.FindStringByDottedPath("message.method");
+  ASSERT_TRUE(method);
+  EXPECT_EQ(expected_method, *method);
+
+  base::DictValue* params = message.FindDictByDottedPath("message.params");
+  ASSERT_TRUE(params);
+  EXPECT_EQ(expected_params, *params);
 }
 
 void ValidateLogEntry(const LogEntry *entry,
                       const std::string& expected_webview,
                       const std::string& expected_method) {
-  base::DictionaryValue empty_params;
+  base::DictValue empty_params;
   ValidateLogEntry(entry, expected_webview, expected_method, empty_params);
 }
 
@@ -184,13 +191,12 @@ void ExpectCommand(FakeDevToolsClient* client, const std::string& method) {
 
 void ExpectEnableDomains(FakeDevToolsClient* client) {
   ExpectCommand(client, "Network.enable");
-  ExpectCommand(client, "Page.enable");
 }
 
 }  // namespace
 
 TEST(PerformanceLogger, OneWebView) {
-  FakeDevToolsClient client("webview-1");
+  FakeDevToolsClient client("webview-1", /*is_tab=*/false);
   FakeLog log;
   Session session("test");
   PerformanceLogger logger(&log, &session);
@@ -206,11 +212,26 @@ TEST(PerformanceLogger, OneWebView) {
   ASSERT_EQ(2u, log.GetEntries().size());
   ValidateLogEntry(log.GetEntries()[0].get(), "webview-1", "Network.gaga");
   ValidateLogEntry(log.GetEntries()[1].get(), "webview-1", "Page.ulala");
+  client.RemoveListener(&logger);
+}
+
+TEST(PerformanceLogger, TabViewGetsNoEnable) {
+  FakeDevToolsClient client("webview-1", /*is_tab=*/true);
+  FakeLog log;
+  Session session("test");
+  PerformanceLogger logger(&log, &session);
+
+  client.AddListener(&logger);
+
+  // Tab targets dont support most domains.
+  logger.OnConnected(&client);
+  ASSERT_EQ(0, client.GetSentCommandsCount());
+  client.RemoveListener(&logger);
 }
 
 TEST(PerformanceLogger, TwoWebViews) {
-  FakeDevToolsClient client1("webview-1");
-  FakeDevToolsClient client2("webview-2");
+  FakeDevToolsClient client1("webview-1", /*is_tab=*/false);
+  FakeDevToolsClient client2("webview-2", /*is_tab=*/false);
   FakeLog log;
   Session session("test");
   PerformanceLogger logger(&log, &session);
@@ -222,7 +243,7 @@ TEST(PerformanceLogger, TwoWebViews) {
   ExpectEnableDomains(&client1);
   ExpectEnableDomains(&client2);
   // OnConnected sends the enable command only to that client, not others.
-  client1.ConnectIfNecessary();
+  logger.OnConnected(&client1);
   ExpectEnableDomains(&client1);
   DevToolsCommand* cmd;
   ASSERT_FALSE(client2.PopSentCommand(&cmd));
@@ -233,10 +254,12 @@ TEST(PerformanceLogger, TwoWebViews) {
   ASSERT_EQ(2u, log.GetEntries().size());
   ValidateLogEntry(log.GetEntries()[0].get(), "webview-1", "Page.gaga1");
   ValidateLogEntry(log.GetEntries()[1].get(), "webview-2", "Network.gaga2");
+  client1.RemoveListener(&logger);
+  client2.RemoveListener(&logger);
 }
 
 TEST(PerformanceLogger, PerfLoggingPrefs) {
-  FakeDevToolsClient client("webview-1");
+  FakeDevToolsClient client("webview-1", /*is_tab=*/false);
   FakeLog log;
   Session session("test");
   PerfLoggingPrefs prefs;
@@ -248,10 +271,10 @@ TEST(PerformanceLogger, PerfLoggingPrefs) {
 
   client.AddListener(&logger);
   logger.OnConnected(&client);
-  ExpectCommand(&client, "Page.enable");
 
   DevToolsCommand* cmd;
   ASSERT_FALSE(client.PopSentCommand(&cmd));
+  client.RemoveListener(&logger);
 }
 
 namespace {
@@ -259,9 +282,9 @@ namespace {
 class FakeBrowserwideClient : public FakeDevToolsClient {
  public:
   FakeBrowserwideClient()
-      : FakeDevToolsClient(DevToolsClientImpl::kBrowserwideDevToolsClientId),
-        events_handled_(false) {}
-  ~FakeBrowserwideClient() override {}
+      : FakeDevToolsClient(DevToolsClientImpl::kBrowserwideDevToolsClientId,
+                           /*is_tab=*/false) {}
+  ~FakeBrowserwideClient() override = default;
 
   bool events_handled() const {
     return events_handled_;
@@ -276,7 +299,7 @@ class FakeBrowserwideClient : public FakeDevToolsClient {
   }
 
  private:
-  bool events_handled_;
+  bool events_handled_ = false;
 };
 
 }  // namespace
@@ -294,18 +317,16 @@ TEST(PerformanceLogger, TracingStartStop) {
   DevToolsCommand* cmd;
   ASSERT_TRUE(client.PopSentCommand(&cmd));
   EXPECT_EQ("Tracing.start", cmd->method);
-  base::ListValue* categories;
-  EXPECT_TRUE(cmd->params->GetList("traceConfig.includedCategories",
-                                   &categories));
-  EXPECT_EQ(2u, categories->GetSize());
-  std::string category;
-  EXPECT_TRUE(categories->GetString(0, &category));
-  EXPECT_EQ("benchmark", category);
-  EXPECT_TRUE(categories->GetString(1, &category));
-  EXPECT_EQ("blink.console", category);
-  int expected_interval = 0;
-  EXPECT_TRUE(cmd->params->GetInteger("bufferUsageReportingInterval",
-                                      &expected_interval));
+  const base::ListValue* categories =
+      cmd->params->FindListByDottedPath("traceConfig.includedCategories");
+  ASSERT_TRUE(categories);
+  ASSERT_EQ(2u, categories->size());
+  ASSERT_TRUE((*categories)[0].is_string());
+  EXPECT_EQ("benchmark", (*categories)[0].GetString());
+  ASSERT_TRUE((*categories)[1].is_string());
+  EXPECT_EQ("blink.console", (*categories)[1].GetString());
+  int expected_interval =
+      cmd->params->FindInt("bufferUsageReportingInterval").value_or(-1);
   EXPECT_GT(expected_interval, 0);
   ASSERT_FALSE(client.PopSentCommand(&cmd));
 
@@ -316,6 +337,7 @@ TEST(PerformanceLogger, TracingStartStop) {
   ExpectCommand(&client, "Tracing.end");
   ExpectCommand(&client, "Tracing.start");  // Tracing should re-start.
   ASSERT_FALSE(client.PopSentCommand(&cmd));
+  client.RemoveListener(&logger);
 }
 
 TEST(PerformanceLogger, RecordTraceEvents) {
@@ -328,24 +350,25 @@ TEST(PerformanceLogger, RecordTraceEvents) {
 
   client.AddListener(&logger);
   logger.OnConnected(&client);
-  base::DictionaryValue params;
+  base::DictValue params;
   base::ListValue trace_events;
-  auto event1 = std::make_unique<base::DictionaryValue>();
-  event1->SetString("cat", "foo");
-  trace_events.Append(event1->Clone());
-  auto event2 = std::make_unique<base::DictionaryValue>();
-  event2->SetString("cat", "bar");
-  trace_events.Append(event2->Clone());
-  params.SetKey("value", std::move(trace_events));
+  base::DictValue event1;
+  event1.Set("cat", "foo");
+  trace_events.Append(event1.Clone());
+  base::DictValue event2;
+  event2.Set("cat", "bar");
+  trace_events.Append(event2.Clone());
+  params.Set("value", std::move(trace_events));
   ASSERT_EQ(kOk, client.TriggerEvent("Tracing.dataCollected", params).code());
 
   ASSERT_EQ(2u, log.GetEntries().size());
   ValidateLogEntry(log.GetEntries()[0].get(),
                    DevToolsClientImpl::kBrowserwideDevToolsClientId,
-                   "Tracing.dataCollected", *event1);
+                   "Tracing.dataCollected", event1);
   ValidateLogEntry(log.GetEntries()[1].get(),
                    DevToolsClientImpl::kBrowserwideDevToolsClientId,
-                   "Tracing.dataCollected", *event2);
+                   "Tracing.dataCollected", event2);
+  client.RemoveListener(&logger);
 }
 
 TEST(PerformanceLogger, ShouldRequestTraceEvents) {
@@ -367,6 +390,7 @@ TEST(PerformanceLogger, ShouldRequestTraceEvents) {
   // Trace events should always be dumped for GetLog command.
   ASSERT_EQ(kOk, logger.BeforeCommand("GetLog").code());
   EXPECT_TRUE(client.events_handled());
+  client.RemoveListener(&logger);
 }
 
 TEST(PerformanceLogger, WarnWhenTraceBufferFull) {
@@ -379,23 +403,25 @@ TEST(PerformanceLogger, WarnWhenTraceBufferFull) {
 
   client.AddListener(&logger);
   logger.OnConnected(&client);
-  base::DictionaryValue params;
-  params.SetDouble("percentFull", 1.0);
+  base::DictValue params;
+  params.Set("percentFull", 1.0);
   ASSERT_EQ(kOk, client.TriggerEvent("Tracing.bufferUsage", params).code());
 
   ASSERT_EQ(1u, log.GetEntries().size());
   LogEntry* entry = log.GetEntries()[0].get();
   EXPECT_EQ(Log::kWarning, entry->level);
   EXPECT_LT(0, entry->timestamp.ToTimeT());
-  std::unique_ptr<base::DictionaryValue> message(
-      ParseDictionary(entry->message));
-  std::string webview;
-  EXPECT_TRUE(message->GetString("webview", &webview));
-  EXPECT_EQ(DevToolsClientImpl::kBrowserwideDevToolsClientId, webview);
-  std::string method;
-  EXPECT_TRUE(message->GetString("message.method", &method));
-  EXPECT_EQ("Tracing.bufferUsage", method);
-  base::DictionaryValue* actual_params;
-  EXPECT_TRUE(message->GetDictionary("message.params", &actual_params));
-  EXPECT_TRUE(actual_params->HasKey("error"));
+  ASSERT_OK_AND_ASSIGN(base::DictValue message,
+                       ParseDictionary(entry->message));
+  const std::string* webview = message.FindString("webview");
+  ASSERT_TRUE(webview);
+  EXPECT_EQ(DevToolsClientImpl::kBrowserwideDevToolsClientId, *webview);
+  const std::string* method = message.FindStringByDottedPath("message.method");
+  ASSERT_TRUE(method);
+  EXPECT_EQ("Tracing.bufferUsage", *method);
+  const base::DictValue* actual_params =
+      message.FindDictByDottedPath("message.params");
+  ASSERT_TRUE(actual_params);
+  EXPECT_TRUE(actual_params->contains("error"));
+  client.RemoveListener(&logger);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
     "namespace": "windows",
     "description": "Use the <code>chrome.windows</code> API to interact with browser windows. You can use this API to create, modify, and rearrange windows in the browser.",
     "compiler_options": {
-      "implemented_in": "chrome/browser/extensions/api/tabs/tabs_api.h"
+      "implemented_in": "chrome/browser/extensions/api/tabs/windows_api.h"
     },
     "types": [
       {
@@ -29,6 +29,10 @@
         }, {
           "name": "devtools",
           "description": "A Developer Tools window."
+        }, {
+          "name": "custom-tab",
+          "nodoc": true,
+          "description": "An Android custom tab browser window."
         }]
       },
       {
@@ -87,8 +91,21 @@
       {
         "id": "CreateType",
         "type": "string",
-        "description": "Specifies what type of browser window to create. 'panel' is deprecated and is available only to existing whitelisted extensions on Chrome OS.",
-        "enum": ["normal", "popup", "panel"]
+        "description": "Specifies what type of browser window to create. 'panel' is deprecated and is available only to existing allowlisted extensions on Chrome OS.",
+        "enum": [
+        {
+          "name": "normal",
+          "description": "Specifies the window as a standard window."
+        },
+        {
+          "name": "popup",
+          "description": "Specifies the window as a popup window."
+        },
+        {
+          "name": "panel",
+          "description": "Specifies the window as a panel."
+        }
+        ]
       },
       {
         "id": "QueryOptions",
@@ -102,11 +119,11 @@
     "properties": {
       "WINDOW_ID_NONE": {
         "value": -1,
-        "description": "The windowId value that represents the absence of a chrome browser window."
+        "description": "The windowId value that represents the absence of a Chrome browser window."
       },
       "WINDOW_ID_CURRENT": {
         "value": -2,
-        "description": "The windowId value that represents the <a href='windows#current-window'>current window</a>."
+        "description": "The windowId value that represents the <a href='#the_current_window'>current window</a>."
       }
     },
     "functions": [

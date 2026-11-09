@@ -1,18 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EVENTS_ANIMATION_PLAYBACK_EVENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EVENTS_ANIMATION_PLAYBACK_EVENT_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
+#include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_cssnumericvalue_double.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 
 namespace blink {
 
 class AnimationPlaybackEventInit;
 
-class AnimationPlaybackEvent final : public Event {
+class CORE_EXPORT AnimationPlaybackEvent final : public Event {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -23,22 +27,23 @@ class AnimationPlaybackEvent final : public Event {
   }
 
   AnimationPlaybackEvent(const AtomicString& type,
-                         absl::optional<double> current_time,
-                         absl::optional<double> timeline_time);
+                         V8CSSNumberish* current_time,
+                         V8CSSNumberish* timeline_time);
   AnimationPlaybackEvent(const AtomicString&,
                          const AnimationPlaybackEventInit*);
   ~AnimationPlaybackEvent() override;
 
-  absl::optional<double> currentTime() const { return current_time_; }
-  absl::optional<double> timelineTime() const { return timeline_time_; }
+  V8CSSNumberish* currentTime() const { return current_time_.Get(); }
+  V8CSSNumberish* timelineTime() const { return timeline_time_.Get(); }
+  Animation* GetAnimation() const override;
 
   const AtomicString& InterfaceName() const override;
 
   void Trace(Visitor*) const override;
 
  private:
-  absl::optional<double> current_time_;
-  absl::optional<double> timeline_time_;
+  Member<V8CSSNumberish> current_time_;
+  Member<V8CSSNumberish> timeline_time_;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-using base::TimeDelta;
-using Sample = base::HistogramBase::Sample;
+using Sample32 = base::HistogramBase::Sample32;
 
 namespace cc {
 
@@ -17,10 +16,10 @@ class ScopedUMAHistogramAreaTimerBaseTest : public ::testing::Test {
  protected:
   void ExpectValidHistogramValues(base::TimeDelta elapsed,
                                   int area,
-                                  Sample expected_time_microseconds,
-                                  Sample expected_pixels_per_ms) {
-    Sample time_microseconds;
-    Sample pixels_per_ms;
+                                  Sample32 expected_time_microseconds,
+                                  Sample32 expected_pixels_per_ms) {
+    Sample32 time_microseconds;
+    Sample32 pixels_per_ms;
     ScopedUMAHistogramAreaTimerBase::GetHistogramValues(
         elapsed, area, &time_microseconds, &pixels_per_ms);
     EXPECT_EQ(expected_time_microseconds, time_microseconds);
@@ -31,34 +30,34 @@ class ScopedUMAHistogramAreaTimerBaseTest : public ::testing::Test {
 namespace {
 
 TEST_F(ScopedUMAHistogramAreaTimerBaseTest, CommonCase) {
-  ExpectValidHistogramValues(TimeDelta::FromMicroseconds(500), 1000, 500, 2000);
-  ExpectValidHistogramValues(TimeDelta::FromMicroseconds(300), 1000, 300, 3333);
+  ExpectValidHistogramValues(base::Microseconds(500), 1000, 500, 2000);
+  ExpectValidHistogramValues(base::Microseconds(300), 1000, 300, 3333);
 }
 
 TEST_F(ScopedUMAHistogramAreaTimerBaseTest, ZeroArea) {
-  ExpectValidHistogramValues(TimeDelta::FromMicroseconds(500), 0, 500, 0);
+  ExpectValidHistogramValues(base::Microseconds(500), 0, 500, 0);
 }
 
 TEST_F(ScopedUMAHistogramAreaTimerBaseTest, ZeroTime) {
   // 1M pixels/ms, since the time is limited to at least 1us.
-  ExpectValidHistogramValues(TimeDelta(), 1000, 1, 1000000);
+  ExpectValidHistogramValues(base::TimeDelta(), 1000, 1, 1000000);
 }
 
 TEST_F(ScopedUMAHistogramAreaTimerBaseTest, ZeroTimeAndArea) {
-  ExpectValidHistogramValues(TimeDelta(), 0, 1, 0);
+  ExpectValidHistogramValues(base::TimeDelta(), 0, 1, 0);
 }
 
 TEST_F(ScopedUMAHistogramAreaTimerBaseTest, VeryLargeTime) {
-  ExpectValidHistogramValues(TimeDelta::FromHours(24), 1000,
-                             std::numeric_limits<Sample>::max(), 0);
+  ExpectValidHistogramValues(base::Hours(24), 1000,
+                             std::numeric_limits<Sample32>::max(), 0);
 }
 
 TEST_F(ScopedUMAHistogramAreaTimerBaseTest, VeryLargeArea) {
-  ExpectValidHistogramValues(TimeDelta::FromMicroseconds(500), 1000000000, 500,
+  ExpectValidHistogramValues(base::Microseconds(500), 1000000000, 500,
                              2000000000);
-  ExpectValidHistogramValues(TimeDelta::FromMicroseconds(1000),
+  ExpectValidHistogramValues(base::Microseconds(1000),
                              std::numeric_limits<int>::max(), 1000,
-                             std::numeric_limits<Sample>::max());
+                             std::numeric_limits<Sample32>::max());
 }
 
 }  // namespace

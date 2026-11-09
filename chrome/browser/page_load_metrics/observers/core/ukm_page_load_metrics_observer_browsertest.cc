@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,26 @@
 
 #include <memory>
 
-#include "base/command_line.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/page_load_metrics/chrome_navigation_initiator.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/page_load_metrics/browser/navigation_initiator.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
-#include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "net/test/embedded_test_server/embedded_test_server_connection_listener.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
-#include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
@@ -47,18 +48,19 @@ class UkmPageLoadMetricsObserverBrowserTest : public InProcessBrowserTest {
   }
 
   void NavigateTo(const GURL& url) {
-    ui_test_utils::NavigateToURL(browser(), url);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
     base::RunLoop().RunUntilIdle();
   }
 
   void NavigateToOriginPath(const std::string& path) {
-    ui_test_utils::NavigateToURL(
-        browser(), embedded_test_server()->GetURL("origin.com", path));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), embedded_test_server()->GetURL("origin.com", path)));
     base::RunLoop().RunUntilIdle();
   }
 
   void NavigateAway() {
-    ui_test_utils::NavigateToURL(browser(), GURL(url::kAboutBlankURL));
+    ASSERT_TRUE(
+        ui_test_utils::NavigateToURL(browser(), GURL(url::kAboutBlankURL)));
     base::RunLoop().RunUntilIdle();
   }
 
@@ -71,15 +73,7 @@ class UkmPageLoadMetricsObserverBrowserTest : public InProcessBrowserTest {
   std::vector<int64_t> GetUkmMetricEntryValues(
       const std::string& entry_name,
       const std::string& metric_name) const {
-    const auto metric_entries =
-        ukm_recorder_->GetMetrics(entry_name, {metric_name});
-    std::vector<int64_t> metrics;
-    for (const auto& entry : metric_entries) {
-      auto it = entry.find(metric_name);
-      if (it != entry.end())
-        metrics.push_back(it->second);
-    }
-    return metrics;
+    return ukm_recorder_->GetMetricsEntryValues(entry_name, metric_name);
   }
 
   GURL GetOriginURL(const std::string& path) {
@@ -141,7 +135,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRedirectRequest(
 }
 }  // namespace
 
-// Regression test for crbug.com/1029959.
+// Regression test for crbug.com/40661610.
 IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
                        MainFrameHadCookies_CrossOriginCookiesOnRedirect) {
   net::EmbeddedTestServer redirect_server(net::EmbeddedTestServer::TYPE_HTTP);
@@ -154,7 +148,7 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
   NavigateTo(redirect_server.GetURL("redirect.com",
                                     "/subresource_loading/redirect_me"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
   EXPECT_EQ(web_contents->GetLastCommittedURL(),
             GetOriginURL("/subresource_loading/index.html"));
@@ -176,6 +170,54 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
                   PageLoad::kEntryName,
                   PageLoad::kMainFrameResource_RequestHadCookiesName)
                   .empty());
+}
+
+IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
+                       NavigationHandleUserDataTypeMetrics_BookmarkBar) {
+  base::RepeatingCallback<void(content::NavigationHandle&)>
+      prerender_navigation_handle_callback =
+          page_load_metrics::NavigationInitiatorHolder::AttacherCallback(
+              chrome_navigation_initiator::kBookmarkBar);
+
+  browser()->GetTabStripModel()->GetActiveWebContents()->OpenURL(
+      content::OpenURLParams::CreateBrowserInitiated(
+          embedded_test_server()->GetURL("origin.com",
+                                         "/subresource_loading/index.html"),
+          ui::mojom::WindowOpenDisposition::kCurrentTab,
+          ui::PageTransitionFromInt(ui::PAGE_TRANSITION_GENERATED |
+                                    ui::PAGE_TRANSITION_FROM_ADDRESS_BAR)),
+      /*navigation_handle_callback=*/std::move(
+          prerender_navigation_handle_callback));
+  NavigateAway();
+
+  ASSERT_THAT(
+      GetUkmMetricEntryValues(PageLoad::kEntryName,
+                              PageLoad::kNavigation_InitiatorLocationName),
+      testing::ElementsAre(chrome_navigation_initiator::kBookmarkBar.id()));
+}
+
+IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
+                       NavigationHandleUserDataTypeMetrics_NewTabPage) {
+  base::RepeatingCallback<void(content::NavigationHandle&)>
+      prerender_navigation_handle_callback =
+          page_load_metrics::NavigationInitiatorHolder::AttacherCallback(
+              chrome_navigation_initiator::kNewTabPage);
+
+  browser()->GetTabStripModel()->GetActiveWebContents()->OpenURL(
+      content::OpenURLParams::CreateBrowserInitiated(
+          embedded_test_server()->GetURL("origin.com",
+                                         "/subresource_loading/index.html"),
+          ui::mojom::WindowOpenDisposition::kCurrentTab,
+          ui::PageTransitionFromInt(ui::PAGE_TRANSITION_GENERATED |
+                                    ui::PAGE_TRANSITION_FROM_ADDRESS_BAR)),
+      /*navigation_handle_callback=*/std::move(
+          prerender_navigation_handle_callback));
+  NavigateAway();
+
+  ASSERT_THAT(
+      GetUkmMetricEntryValues(PageLoad::kEntryName,
+                              PageLoad::kNavigation_InitiatorLocationName),
+      testing::ElementsAre(chrome_navigation_initiator::kNewTabPage.id()));
 }
 
 }  // namespace

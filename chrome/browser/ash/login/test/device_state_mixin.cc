@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,26 @@
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_paths.h"
-#include "base/callback.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
-#include "chrome/browser/browser_process.h"
+#include "base/threading/thread_restrictions.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/dbus/session_manager/fake_session_manager_client.h"
-#include "chromeos/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/proto/install_attributes.pb.h"
 #include "components/prefs/pref_service.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 constexpr char kFakeDomain[] = "example.com";
@@ -49,33 +50,28 @@ cryptohome::SerializedInstallAttributes BuildInstallAttributes(
   cryptohome::SerializedInstallAttributes install_attrs;
   install_attrs.set_version(1);
 
-  for (const auto& it : install_attrs_) {
-    if (it.second.empty())
+  for (const auto& [name, value] : install_attrs_) {
+    if (value.empty()) {
       continue;
+    }
     cryptohome::SerializedInstallAttributes::Attribute* attr_entry =
         install_attrs.add_attributes();
-    const std::string& name = it.first;
-    const std::string& value = it.second;
     attr_entry->set_name(name);
-    attr_entry->mutable_value()->assign(value.data(),
-                                        value.data() + value.size());
+    attr_entry->set_value(value);
   }
   return install_attrs;
 }
 
 void WriteFile(const base::FilePath& path, const std::string& blob) {
-  CHECK_EQ(base::checked_cast<int>(blob.length()),
-           base::WriteFile(path, blob.data(), blob.length()));
+  CHECK(base::WriteFile(path, blob));
 }
 
 }  // namespace
 
 DeviceStateMixin::DeviceStateMixin(InProcessBrowserTestMixinHost* host,
                                    State initial_state)
-    : InProcessBrowserTestMixin(host),
-      state_(initial_state),
-      local_state_mixin_(host, this) {
-  DCHECK(!g_instance_created);
+    : InProcessBrowserTestMixin(host), state_(initial_state) {
+  CHECK(!g_instance_created, base::NotFatalUntil::M161);
   g_instance_created = true;
 }
 
@@ -87,8 +83,8 @@ bool DeviceStateMixin::SetUpUserDataDirectory() {
 void DeviceStateMixin::SetUpInProcessBrowserTestFixture() {
   // Make sure session manager client has been initialized as in-memory. This is
   // requirement for setting policy blobs.
-  if (!chromeos::SessionManagerClient::Get())
-    chromeos::SessionManagerClient::InitializeFakeInMemory();
+  if (!SessionManagerClient::Get())
+    SessionManagerClient::InitializeFakeInMemory();
 
   session_manager_initialized_ = true;
 
@@ -104,24 +100,26 @@ void DeviceStateMixin::SetUpInProcessBrowserTestFixture() {
   }
 }
 
-void DeviceStateMixin::SetUpLocalState() {
-  PrefService* local_state = g_browser_process->local_state();
+void DeviceStateMixin::SetUpLocalStatePrefService(PrefService* local_state) {
+  InProcessBrowserTestMixin::SetUpLocalStatePrefService(local_state);
+
   switch (state_) {
     case DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED:
     case DeviceStateMixin::State::OOBE_COMPLETED_ACTIVE_DIRECTORY_ENROLLED:
     case DeviceStateMixin::State::OOBE_COMPLETED_CONSUMER_OWNED:
     case DeviceStateMixin::State::OOBE_COMPLETED_DEMO_MODE:
-      local_state->SetBoolean(prefs::kOobeComplete, true);
-      local_state->SetInteger(::prefs::kDeviceRegistered, 1);
-      local_state->SetBoolean(::prefs::kEnrollmentRecoveryRequired, false);
+      local_state->SetBoolean(ash::prefs::kOobeComplete, true);
+      local_state->SetInteger(ash::prefs::kDeviceRegistered, 1);
+      local_state->SetBoolean(ash::prefs::kEnrollmentRecoveryRequired, false);
       break;
     case DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED:
-      local_state->SetBoolean(prefs::kOobeComplete, true);
-      local_state->SetInteger(::prefs::kDeviceRegistered, 0);
-      local_state->SetBoolean(::prefs::kEnrollmentRecoveryRequired, false);
+    case DeviceStateMixin::State::OOBE_COMPLETED_PERMANENTLY_UNOWNED:
+      local_state->SetBoolean(ash::prefs::kOobeComplete, true);
+      local_state->SetInteger(ash::prefs::kDeviceRegistered, 0);
+      local_state->SetBoolean(ash::prefs::kEnrollmentRecoveryRequired, false);
       break;
     case DeviceStateMixin::State::BEFORE_OOBE:
-      local_state->SetInteger(::prefs::kDeviceRegistered, 0);
+      local_state->SetInteger(ash::prefs::kDeviceRegistered, 0);
       break;
   }
 }
@@ -156,29 +154,35 @@ void DeviceStateMixin::SetState(State state) {
 }
 
 void DeviceStateMixin::SetDeviceState() {
-  DCHECK(!is_setup_);
-  DCHECK(domain_.empty() || state_ == State::OOBE_COMPLETED_CLOUD_ENROLLED);
+  CHECK(!is_setup_, base::NotFatalUntil::M161);
+  CHECK(domain_.empty() || state_ == State::OOBE_COMPLETED_CLOUD_ENROLLED,
+        base::NotFatalUntil::M161);
   is_setup_ = true;
 
-  WriteInstallAttrFile();
+  WriteInstallAttrFile(state_);
   WriteOwnerKey();
 }
 
-void DeviceStateMixin::WriteInstallAttrFile() {
+void DeviceStateMixin::WriteInstallAttrFile(State state) {
   base::FilePath user_data_dir;
   CHECK(base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir));
   base::FilePath install_attrs_file =
       user_data_dir.Append("stub_install_attributes.pb");
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
   if (base::PathExists(install_attrs_file)) {
     return;
   }
 
   std::string device_mode, domain, realm, device_id;
-  switch (state_) {
+  switch (state) {
     case DeviceStateMixin::State::BEFORE_OOBE:
     case DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED:
       // No file at all.
       return;
+    case DeviceStateMixin::State::OOBE_COMPLETED_PERMANENTLY_UNOWNED:
+      // File with version only. This will prevent Chrome from attempting to
+      // take consumer ownership and automatically advancing to the next state.
     case DeviceStateMixin::State::OOBE_COMPLETED_CONSUMER_OWNED:
       // File with version only.
       break;
@@ -209,6 +213,7 @@ void DeviceStateMixin::WriteOwnerKey() {
   switch (state_) {
     case DeviceStateMixin::State::BEFORE_OOBE:
     case DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED:
+    case DeviceStateMixin::State::OOBE_COMPLETED_PERMANENTLY_UNOWNED:
     case DeviceStateMixin::State::OOBE_COMPLETED_ACTIVE_DIRECTORY_ENROLLED:
       return;
     case DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED:
@@ -230,6 +235,7 @@ bool DeviceStateMixin::IsEnrolledState() const {
   switch (state_) {
     case DeviceStateMixin::State::BEFORE_OOBE:
     case DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED:
+    case DeviceStateMixin::State::OOBE_COMPLETED_PERMANENTLY_UNOWNED:
     case DeviceStateMixin::State::OOBE_COMPLETED_CONSUMER_OWNED:
       return false;
     case DeviceStateMixin::State::OOBE_COMPLETED_ACTIVE_DIRECTORY_ENROLLED:
@@ -244,7 +250,7 @@ void DeviceStateMixin::SetCachedDevicePolicy() {
   if (!session_manager_initialized_)
     return;
 
-  DCHECK(IsEnrolledState());
+  CHECK(IsEnrolledState(), base::NotFatalUntil::M161);
 
   device_policy_.SetDefaultSigningKey();
   device_policy_.Build();
@@ -258,7 +264,7 @@ void DeviceStateMixin::SetCachedDeviceLocalAccountPolicy(
       !device_local_account_policies_.count(account_id))
     return;
 
-  DCHECK(IsEnrolledState());
+  CHECK(IsEnrolledState(), base::NotFatalUntil::M161);
 
   policy::UserPolicyBuilder& builder =
       device_local_account_policies_[account_id];
@@ -275,4 +281,4 @@ void DeviceStateMixin::SetCachedDeviceLocalAccountPolicy(
 
 DeviceStateMixin::~DeviceStateMixin() = default;
 
-}  // namespace chromeos
+}  // namespace ash

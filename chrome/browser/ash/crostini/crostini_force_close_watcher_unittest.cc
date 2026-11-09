@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 #include <memory>
 #include <type_traits>
 
-#include "base/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/crostini/crostini_simple_types.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/test/widget_test.h"
@@ -35,7 +34,7 @@ class MockDelegate : public ForceCloseWatcher::Delegate {
       *delete_flag = true;
     }
   }
-  bool* delete_flag = nullptr;
+  raw_ptr<bool> delete_flag = nullptr;
 };
 
 TEST_F(CrostiniForceCloseWatcherTest, CallsHideWhenWidgetIsDestroyed) {
@@ -73,12 +72,11 @@ TEST_F(CrostiniForceCloseWatcherTest, CallsForceCloseAfterSecondCloseAttempt) {
   WidgetAutoclosePtr widget(CreateTopLevelNativeWidget());
 
   EXPECT_CALL(delegate_ref, GetClosableWidget).WillOnce(Return(widget.get()));
-  EXPECT_CALL(delegate_ref, Watched)
-      .WillOnce(testing::Invoke([](ForceCloseWatcher* watcher) {
-        watcher->OverrideDelayForTesting(base::TimeDelta::FromSeconds(0));
-        watcher->OnCloseRequested();
-        watcher->OnCloseRequested();
-      }));
+  EXPECT_CALL(delegate_ref, Watched).WillOnce([](ForceCloseWatcher* watcher) {
+    watcher->OverrideDelayForTesting(base::Seconds(0));
+    watcher->OnCloseRequested();
+    watcher->OnCloseRequested();
+  });
   EXPECT_CALL(delegate_ref, Prompt).Times(1);
   EXPECT_CALL(delegate_ref, Hide).Times(1);
 
@@ -92,11 +90,10 @@ TEST_F(CrostiniForceCloseWatcherTest, NoForceCloseUntilDelayPassed) {
   WidgetAutoclosePtr widget(CreateTopLevelNativeWidget());
 
   EXPECT_CALL(delegate_ref, GetClosableWidget).WillOnce(Return(widget.get()));
-  EXPECT_CALL(delegate_ref, Watched)
-      .WillOnce(testing::Invoke([](ForceCloseWatcher* watcher) {
-        watcher->OnCloseRequested();
-        watcher->OnCloseRequested();
-      }));
+  EXPECT_CALL(delegate_ref, Watched).WillOnce([](ForceCloseWatcher* watcher) {
+    watcher->OnCloseRequested();
+    watcher->OnCloseRequested();
+  });
   EXPECT_CALL(delegate_ref, Hide).Times(1);
 
   ForceCloseWatcher::Watch(std::move(delegate));

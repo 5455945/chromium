@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,33 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/prefs/pref_registry_simple.h"
+#include "components/signin/internal/identity_manager/account_tracker_service.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
+#include "components/signin/public/base/bound_session_oauth_multilogin_delegate.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/identity_manager/accounts_cookie_mutator.h"
+#include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/backoff_entry.h"
+#include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_change_dispatcher.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 
@@ -40,56 +49,30 @@ class SimpleURLLoader;
 namespace signin {
 
 class OAuthMultiloginHelper;
-class UbertokenFetcherImpl;
 enum class SetAccountsInCookieResult;
 
 }  // namespace signin
 
-// Merges a Google account known to Chrome into the cookie jar.  When merging
-// multiple accounts, one instance of the helper is better than multiple
-// instances if there is the possibility that they run concurrently, since
-// changes to the cookie must be serialized.
+// Manages Google authentication cookies (the Gaia cookie jar) and keeps the
+// list of signed-in Gaia accounts synchronized with Chrome's identity state.
 //
-// Also checks the External CC result to ensure no services that consume the
-// GAIA cookie are blocked (such as youtube). This is executed once for the
-// lifetime of this object, when the first call is made to AddAccountToCookie.
+// See docs/gaia_cookie_manager_service.md for architectural details, server
+// endpoints, serialized request queue management, and cookie change detection.
 class GaiaCookieManagerService
     : public GaiaAuthConsumer,
       public signin::AccountsCookieMutator::PartitionDelegate,
       public network::mojom::CookieChangeListener {
  public:
-  using AccountIdGaiaIdPair = std::pair<CoreAccountId, std::string>;
+  using AccountIdGaiaIdPair = std::pair<CoreAccountId, GaiaId>;
 
-  enum GaiaCookieRequestType {
-    ADD_ACCOUNT,
-    LOG_OUT,
-    LIST_ACCOUNTS,
-    SET_ACCOUNTS
-  };
-
-  // The result of processing a request to remove an account (i.e.
-  // Google-Accounts-RemoveLocalAccount). Used as entry for histogram
-  // |Signin.RemoveLocalAccountOutcome|, hence entries should not be renumbered
-  // and numeric values should never be reused. Exposed publicly for testing
-  // purposes.
-  enum class RemoveLocalAccountOutcome {
-    kSuccess = 0,
-    kAccountsStale = 1,
-    // Missing means the account is not listed in |signed_out_accounts_|.
-    kSignedOutAccountMissing = 2,
-    kMaxValue = kSignedOutAccountMissing
-  };
+  enum GaiaCookieRequestType { LOG_OUT, LIST_ACCOUNTS, SET_ACCOUNTS };
 
   typedef base::OnceCallback<void(signin::SetAccountsInCookieResult)>
       SetAccountsInCookieCompletedCallback;
-  typedef base::OnceCallback<void(const CoreAccountId&,
-                                  const GoogleServiceAuthError&)>
-      AddAccountToCookieCompletedCallback;
   typedef base::OnceCallback<void(const GoogleServiceAuthError&)>
       LogOutFromCookieCompletedCallback;
 
-  typedef base::RepeatingCallback<void(const std::vector<gaia::ListedAccount>&,
-                                       const std::vector<gaia::ListedAccount>&,
+  typedef base::RepeatingCallback<void(const signin::AccountsInCookieJarInfo&,
                                        const GoogleServiceAuthError&)>
       GaiaAccountsInCookieUpdatedCallback;
   typedef base::RepeatingCallback<void()> GaiaCookieDeletedByUserActionCallback;
@@ -97,6 +80,9 @@ class GaiaCookieManagerService
   // Contains the information and parameters for any request.
   class GaiaCookieRequest {
    public:
+    GaiaCookieRequest(const GaiaCookieRequest&) = delete;
+    GaiaCookieRequest& operator=(const GaiaCookieRequest&) = delete;
+
     ~GaiaCookieRequest();
     GaiaCookieRequest(GaiaCookieRequest&&);
     GaiaCookieRequest& operator=(GaiaCookieRequest&&);
@@ -107,25 +93,15 @@ class GaiaCookieManagerService
     const std::vector<AccountIdGaiaIdPair>& GetAccounts() const;
     gaia::MultiloginMode GetMultiloginMode() const;
 
-    // For use in the Request of type ADD_ACCOUNT which must have exactly one
-    // account_id.
-    const CoreAccountId GetAccountID();
     gaia::GaiaSource source() const { return source_; }
     // Sets GaiaSource suffix.
     void SetSourceSuffix(std::string suffix);
 
     void RunSetAccountsInCookieCompletedCallback(
         signin::SetAccountsInCookieResult result);
-    void RunAddAccountToCookieCompletedCallback(
-        const CoreAccountId& account_id,
-        const GoogleServiceAuthError& error);
     void RunLogOutFromCookieCompletedCallback(
         const GoogleServiceAuthError& error);
 
-    static GaiaCookieRequest CreateAddAccountRequest(
-        const CoreAccountId& account_id,
-        gaia::GaiaSource source,
-        AddAccountToCookieCompletedCallback callback);
     static GaiaCookieRequest CreateLogOutRequest(
         gaia::GaiaSource source,
         LogOutFromCookieCompletedCallback callback);
@@ -151,8 +127,6 @@ class GaiaCookieManagerService
                       gaia::GaiaSource source);
 
     GaiaCookieRequestType request_type_;
-    // For use in the request of type ADD_ACCOUNT.
-    CoreAccountId account_id_;
     // For use in the request of type SET_ACCOUNT.
     SetAccountsParams set_accounts_params_;
 
@@ -160,11 +134,7 @@ class GaiaCookieManagerService
 
     SetAccountsInCookieCompletedCallback
         set_accounts_in_cookie_completed_callback_;
-    AddAccountToCookieCompletedCallback
-        add_account_to_cookie_completed_callback_;
     LogOutFromCookieCompletedCallback log_out_from_cookie_completed_callback_;
-
-    DISALLOW_COPY_AND_ASSIGN(GaiaCookieRequest);
   };
 
   // Class to retrieve the external connection check results from gaia.
@@ -179,6 +149,10 @@ class GaiaCookieManagerService
     typedef std::map<std::string, std::string> ResultMap;
 
     explicit ExternalCcResultFetcher(GaiaCookieManagerService* helper);
+
+    ExternalCcResultFetcher(const ExternalCcResultFetcher&) = delete;
+    ExternalCcResultFetcher& operator=(const ExternalCcResultFetcher&) = delete;
+
     ~ExternalCcResultFetcher() override;
 
     // Gets the current value of the external connection check result string.
@@ -209,7 +183,7 @@ class GaiaCookieManagerService
 
     // Called back from SimpleURLLoader.
     void OnURLLoadComplete(const network::SimpleURLLoader* source,
-                           std::unique_ptr<std::string> body);
+                           std::optional<std::string> body);
 
     // Any fetches still ongoing after this call are considered timed out.
     void Timeout();
@@ -218,32 +192,24 @@ class GaiaCookieManagerService
 
     void GetCheckConnectionInfoCompleted(bool succeeded);
 
-    GaiaCookieManagerService* helper_;
+    raw_ptr<GaiaCookieManagerService> helper_;
     base::OneShotTimer timer_;
     LoaderToToken loaders_;
     ResultMap results_;
     base::Time m_external_cc_result_start_time_;
     base::OnceClosure callback_;
-
-    DISALLOW_COPY_AND_ASSIGN(ExternalCcResultFetcher);
   };
 
-  GaiaCookieManagerService(ProfileOAuth2TokenService* token_service,
+  GaiaCookieManagerService(AccountTrackerService* account_tracker_service_,
+                           ProfileOAuth2TokenService* token_service,
                            SigninClient* signin_client);
+
+  GaiaCookieManagerService(const GaiaCookieManagerService&) = delete;
+  GaiaCookieManagerService& operator=(const GaiaCookieManagerService&) = delete;
 
   ~GaiaCookieManagerService() override;
 
   void InitCookieListener();
-
-  void AddAccountToCookie(
-      const CoreAccountId& account_id,
-      gaia::GaiaSource source,
-      AddAccountToCookieCompletedCallback completion_callback);
-  void AddAccountToCookieWithToken(
-      const CoreAccountId& account_id,
-      const std::string& access_token,
-      gaia::GaiaSource source,
-      AddAccountToCookieCompletedCallback completion_callback);
 
   // Takes list of account_ids and sets the cookie for these accounts regardless
   // of the current cookie state. Removes the accounts that are not in
@@ -254,14 +220,14 @@ class GaiaCookieManagerService
                            SetAccountsInCookieCompletedCallback
                                set_accounts_in_cookies_completed_callback);
 
-  // Returns if the listed accounts are up to date or not. The out parameter
-  // will be assigned the current cached accounts (whether they are not up to
-  // date or not). If the accounts are not up to date, a ListAccounts fetch is
-  // sent GAIA and Observer::OnGaiaAccountsInCookieUpdated will be called.  If
-  // either of |accounts| or |signed_out_accounts| is null, the corresponding
-  // accounts returned from /ListAccounts are ignored.
-  bool ListAccounts(std::vector<gaia::ListedAccount>* accounts,
-                    std::vector<gaia::ListedAccount>* signed_out_accounts);
+  // Returns an object that has methods to get listed accounts and check whether
+  // they are up to date or not. If the accounts are not up to date, a
+  // ListAccounts fetch is sent GAIA and Observer::OnGaiaAccountsInCookieUpdated
+  // will be called.
+  signin::AccountsInCookieJarInfo ListAccounts();
+
+  // Returns the cached list of accounts.
+  signin::AccountsInCookieJarInfo GetCachedListAccounts();
 
   // Triggers a ListAccounts fetch. This is public so that callers that know
   // that a check which GAIA should be done can force it.
@@ -285,7 +251,7 @@ class GaiaCookieManagerService
   // Indicates that an account previously listed via ListAccounts should now
   // be removed. Does not trigger a ListAccounts request and does not change the
   // staleness of the account information.
-  void RemoveLoggedOutAccountByGaiaId(const std::string& gaia_id);
+  void RemoveLoggedOutAccountByGaiaId(const GaiaId& gaia_id);
 
   // Call observers when setting accounts in cookie completes.
   void SignalSetAccountsComplete(signin::SetAccountsInCookieResult result);
@@ -302,6 +268,11 @@ class GaiaCookieManagerService
     list_accounts_stale_ = stale;
   }
 
+  // Sends /ListAccounts even if there are no Gaia cookies, for tests that fake
+  // the response without setting cookies. Also discards the result of an
+  // earlier request that was skipped because there were no Gaia cookies.
+  void set_ignore_missing_gaia_cookies_for_testing(bool ignore);
+
   // If set, this callback will be invoked whenever the
   // GaiaCookieManagerService's list of GAIA accounts is updated. The GCMS
   // monitors the SAPISID cookie and triggers a /ListAccounts call on change.
@@ -314,7 +285,7 @@ class GaiaCookieManagerService
   void SetGaiaAccountsInCookieUpdatedCallback(
       GaiaAccountsInCookieUpdatedCallback callback);
 
-  // If set, this callback will be invoked whenever the Gaia cookie has
+  // If set, this callback will be invoked whenever one of the Gaia cookies has
   // been deleted explicitly by a user action, e.g. from the settings or by an
   // extension.
   // This method can only be called once.
@@ -324,10 +295,6 @@ class GaiaCookieManagerService
   // Returns a non-null pointer to its instance of net::BackoffEntry
   const net::BackoffEntry* GetBackoffEntry() { return &fetcher_backoff_; }
 
-  // Ubertoken fetch completion callback. Called by unittests directly.
-  void OnUbertokenFetchComplete(GoogleServiceAuthError error,
-                                const std::string& uber_token);
-
   // Final call in the Setting accounts in cookie procedure. Public for testing.
   void OnSetAccountsFinished(signin::SetAccountsInCookieResult result);
 
@@ -335,12 +302,11 @@ class GaiaCookieManagerService
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(GaiaCookieManagerServiceCookieTest, CookieChange);
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory();
 
-  // Calls the AddAccountToCookie completion callback.
-  void SignalAddToCookieComplete(
-      const base::circular_deque<GaiaCookieRequest>::iterator& request,
-      const GoogleServiceAuthError& error);
+  // Calls ListAccounts() and ignores the result. Used for posting async tasks.
+  void TriggerListAccountsIfStale();
 
   // Calls the LogOutFromCookie completion callback.
   void SignalLogOutComplete(const GoogleServiceAuthError& error);
@@ -356,8 +322,6 @@ class GaiaCookieManagerService
   void OnCookieListenerConnectionError();
 
   // Overridden from GaiaAuthConsumer.
-  void OnMergeSessionSuccess(const std::string& data) override;
-  void OnMergeSessionFailure(const GoogleServiceAuthError& error) override;
   void OnListAccountsSuccess(const std::string& data) override;
   void OnListAccountsFailure(const GoogleServiceAuthError& error) override;
   void OnLogOutSuccess() override;
@@ -368,45 +332,60 @@ class GaiaCookieManagerService
       GaiaAuthConsumer* consumer,
       const gaia::GaiaSource& source) override;
   network::mojom::CookieManager* GetCookieManagerForPartition() override;
+  signin::PartitionSuffix GetPartitionSuffix() const override;
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
+  CreateBoundSessionOAuthMultiLoginDelegateForPartition() override;
+  network::mojom::DeviceBoundSessionManager*
+  GetDeviceBoundSessionManagerForPartition() override;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Helper method to initialize listed accounts ids.
   void InitializeListedAccountsIds();
 
-  // Helper method for AddAccountToCookie* methods.
-  void AddAccountToCookieInternal(
-      const CoreAccountId& account_id,
-      gaia::GaiaSource source,
-      AddAccountToCookieCompletedCallback completion_callback);
-
-  // Starts the proess of fetching the uber token and performing a merge session
-  // for the next account.  Virtual so that it can be overriden in tests.
-  virtual void StartFetchingUbertoken();
-
-  // Virtual for testing purposes.
-  virtual void StartFetchingMergeSession();
+  // Starts /ListAccounts unless there are no Gaia cookies, in which case the
+  // request completes with no accounts.
+  void MaybeStartFetchingListAccounts();
+  void OnGaiaCookiesForListAccounts(
+      const net::CookieAccessResultList& cookies,
+      const net::CookieAccessResultList& excluded_cookies);
 
   // Virtual for testing purposes.
   virtual void StartFetchingListAccounts();
+
+  // Updates the state and notifies observers once the accounts are known.
+  void HandleListAccountsSuccess(std::vector<gaia::ListedAccount> accounts);
 
   // Prepare for logout and then starts fetching logout request.
   // Virtual for testing purpose.
   virtual void StartGaiaLogOut();
 
   // Starts setting account using multilogin endpoint.
-  void StartSetAccounts();
+  virtual void StartSetAccounts();
 
   // Start the next request, if needed.
   void HandleNextRequest();
+  // Deduplicate list accounts requests.
+  // If logout or set accounts operation is in the requests queue, it moves list
+  // accounts request to the end of the queue.
+  // This function should be called before the front of the queue is in
+  // execution.
+  void OptimizeListAccounts();
 
-  ProfileOAuth2TokenService* token_service_;
-  SigninClient* signin_client_;
+  // Helper method to construct `AccountsInCookieJarInfo` from
+  // `list_accounts_stale_` and `accounts_`. Similar to `ListAccounts`, but
+  // doesn't trigger the actual request to refresh the list.
+  signin::AccountsInCookieJarInfo CreateAccountsInCookieJarInfo();
+
+  const raw_ptr<AccountTrackerService> account_tracker_service_ = nullptr;
+  raw_ptr<ProfileOAuth2TokenService> token_service_;
+  raw_ptr<SigninClient> signin_client_;
 
   GaiaAccountsInCookieUpdatedCallback gaia_accounts_updated_in_cookie_callback_;
   GaiaCookieDeletedByUserActionCallback
       gaia_cookie_deleted_by_user_action_callback_;
 
   std::unique_ptr<GaiaAuthFetcher> gaia_auth_fetcher_;
-  std::unique_ptr<signin::UbertokenFetcherImpl> uber_token_fetcher_;
   ExternalCcResultFetcher external_cc_result_fetcher_;
   std::unique_ptr<signin::OAuthMultiloginHelper> oauth_multilogin_helper_;
 
@@ -420,12 +399,6 @@ class GaiaCookieManagerService
   // service response.
   bool listAccountsUnexpectedServerResponseRetried_;
 
-  // The last fetched ubertoken, for use in MergeSession retries.
-  std::string uber_token_;
-
-  // The access token that can be used to prime the UberToken fetch.
-  std::string access_token_;
-
   // Connection to the CookieManager that signals when the GAIA cookies change.
   mojo::Receiver<network::mojom::CookieChangeListener>
       cookie_listener_receiver_{this};
@@ -438,14 +411,17 @@ class GaiaCookieManagerService
   // True once the ExternalCCResultFetcher has completed once.
   bool external_cc_result_fetched_;
 
-  std::vector<gaia::ListedAccount> listed_accounts_;
-  std::vector<gaia::ListedAccount> signed_out_accounts_;
+  std::vector<gaia::ListedAccount> accounts_;
 
   bool list_accounts_stale_;
 
-  base::WeakPtrFactory<GaiaCookieManagerService> weak_ptr_factory_{this};
+  // True if `accounts_` comes from a request that was skipped because there
+  // were no Gaia cookies.
+  bool list_accounts_skipped_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(GaiaCookieManagerService);
+  bool ignore_missing_gaia_cookies_for_testing_ = false;
+
+  base::WeakPtrFactory<GaiaCookieManagerService> weak_ptr_factory_{this};
 };
 
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_GAIA_COOKIE_MANAGER_SERVICE_H_

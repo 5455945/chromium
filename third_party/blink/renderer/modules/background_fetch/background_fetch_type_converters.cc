@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_background_fetch_options.h"
 #include "third_party/blink/renderer/modules/background_fetch/background_fetch_registration.h"
 #include "third_party/blink/renderer/modules/manifest/image_resource_type_converters.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 
 namespace mojo {
 
@@ -20,7 +19,7 @@ TypeConverter<blink::mojom::blink::BackgroundFetchOptionsPtr,
   blink::mojom::blink::BackgroundFetchOptionsPtr mojo_options =
       blink::mojom::blink::BackgroundFetchOptions::New();
 
-  WTF::Vector<blink::mojom::blink::ManifestImageResourcePtr> mojo_icons;
+  blink::Vector<blink::mojom::blink::ManifestImageResourcePtr> mojo_icons;
   mojo_icons.ReserveInitialCapacity(options->icons().size());
 
   for (auto& icon : options->icons()) {

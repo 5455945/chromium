@@ -1,135 +1,46 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "printing/backend/mojom/print_backend.mojom.h"
 #include "printing/backend/print_backend.h"
+#include "printing/backend/print_backend_test_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/size.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "testing/gmock/include/gmock/gmock.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 namespace printing {
 
-namespace {
+#if BUILDFLAG(IS_CHROMEOS)
+using ::testing::UnorderedElementsAreArray;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-const PrinterSemanticCapsAndDefaults::Paper kPaperA3{
-    /*display_name=*/"A3", /*vendor_id=*/"67",
-    /*size_um=*/gfx::Size(7016, 9921)};
-const PrinterSemanticCapsAndDefaults::Paper kPaperA4{
-    /*display_name=*/"A4", /*vendor_id=*/"12",
-    /*size_um=*/gfx::Size(4961, 7016)};
-const PrinterSemanticCapsAndDefaults::Paper kPaperLetter{
-    /*display_name=*/"Letter", /*vendor_id=*/"45",
-    /*size_um=*/gfx::Size(5100, 6600)};
-const PrinterSemanticCapsAndDefaults::Paper kPaperLedger{
-    /*display_name=*/"Ledger", /*vendor_id=*/"89",
-    /*size_um=*/gfx::Size(6600, 10200)};
-
-#if defined(OS_CHROMEOS)
-const AdvancedCapability kAdvancedCapability1(
-    /*name=*/"advanced_cap_bool",
-    /*display_name=*/"Advanced Capability #1 (bool)",
-    /*type=*/AdvancedCapability::Type::kBoolean,
-    /*default_value=*/"true",
-    /*values=*/{});
-const AdvancedCapability kAdvancedCapability2(
-    /*name=*/"advanced_cap_double",
-    /*display_name=*/"Advanced Capability #2 (double)",
-    /*type=*/AdvancedCapability::Type::kFloat,
-    /*default_value=*/"3.14159",
-    /*values=*/
-    {
-        AdvancedCapabilityValue(
-            /*name=*/"adv_cap_val_1",
-            /*display_name=*/"Advanced Capability #1"),
-        AdvancedCapabilityValue(
-            /*name=*/"adv_cap_val_2",
-            /*display_name=*/"Advanced Capability #2"),
-        AdvancedCapabilityValue(
-            /*name=*/"adv_cap_val_3",
-            /*display_name=*/"Advanced Capability #3"),
-    });
-const AdvancedCapabilities kAdvancedCapabilities{kAdvancedCapability1,
-                                                 kAdvancedCapability2};
-#endif  // defined(OS_CHROMEOS)
-
-constexpr bool kCollateCapable = true;
-constexpr bool kCollateDefault = true;
-constexpr int kCopiesMax = 123;
-const std::vector<mojom::DuplexMode> kDuplexModes{
-    mojom::DuplexMode::kSimplex, mojom::DuplexMode::kLongEdge,
-    mojom::DuplexMode::kShortEdge};
-constexpr mojom::DuplexMode kDuplexDefault = mojom::DuplexMode::kSimplex;
-constexpr bool kColorChangeable = true;
-constexpr bool kColorDefault = true;
-constexpr mojom::ColorModel kColorModel = mojom::ColorModel::kRGB;
-constexpr mojom::ColorModel kBwModel = mojom::ColorModel::kGrayscale;
-const PrinterSemanticCapsAndDefaults::Papers kPapers{kPaperA4, kPaperLetter};
-const PrinterSemanticCapsAndDefaults::Papers kUserDefinedPapers{kPaperA3,
-                                                                kPaperLedger};
-const PrinterSemanticCapsAndDefaults::Paper kDefaultPaper = kPaperLetter;
-constexpr gfx::Size kDpi600(600, 600);
-constexpr gfx::Size kDpi1200(1200, 1200);
-constexpr gfx::Size kDpi1200x600(1200, 600);
-const std::vector<gfx::Size> kDpis{kDpi600, kDpi1200, kDpi1200x600};
-constexpr gfx::Size kDefaultDpi = kDpi600;
-#if defined(OS_CHROMEOS)
-constexpr bool kPinSupported = true;
-#endif
-
-PrinterSemanticCapsAndDefaults GenerateSamplePrinterSemanticCapsAndDefaults() {
-  PrinterSemanticCapsAndDefaults caps;
-
-  caps.collate_capable = kCollateCapable;
-  caps.collate_default = kCollateDefault;
-  caps.copies_max = kCopiesMax;
-  caps.duplex_modes = kDuplexModes;
-  caps.duplex_default = kDuplexDefault;
-  caps.color_changeable = kColorChangeable;
-  caps.color_default = kColorDefault;
-  caps.color_model = kColorModel;
-  caps.bw_model = kBwModel;
-  caps.papers = kPapers;
-  caps.user_defined_papers = kUserDefinedPapers;
-  caps.default_paper = kPaperLetter;
-  caps.dpis = kDpis;
-  caps.default_dpi = kDefaultDpi;
-#if defined(OS_CHROMEOS)
-  caps.pin_supported = kPinSupported;
-  caps.advanced_capabilities = kAdvancedCapabilities;
-#endif  // defined(OS_CHROMEOS)
-
-  return caps;
-}
-
-}  // namespace
-
-TEST(PrintBackendMojomTraitsTest, TestSerializeAndDeserializePrinterBasicInfo) {
+TEST(PrintBackendMojomTraitsTest, PrinterBasicInfo) {
   static const PrinterBasicInfo kPrinterBasicInfo1(
       /*printer_name=*/"test printer name 1",
       /*display_name=*/"test display name 1",
       /*printer_description=*/"This is printer #1 for unit testing.",
-      /*printer_status=*/0,
-      /*is_default=*/true,
       /*options=*/{{"opt1", "123"}, {"opt2", "456"}});
   static const PrinterBasicInfo kPrinterBasicInfo2(
       /*printer_name=*/"test printer name 2",
       /*display_name=*/"test display name 2",
       /*printer_description=*/"This is printer #2 for unit testing.",
-      /*printer_status=*/1,
-      /*is_default=*/false,
       /*options=*/{});
   static const PrinterBasicInfo kPrinterBasicInfo3(
       /*printer_name=*/"test printer name 2",
       /*display_name=*/"test display name 2",
       /*printer_description=*/"",
-      /*printer_status=*/9,
-      /*is_default=*/false,
       /*options=*/{});
   static const PrinterList kPrinterList{kPrinterBasicInfo1, kPrinterBasicInfo2,
                                         kPrinterBasicInfo3};
@@ -143,21 +54,16 @@ TEST(PrintBackendMojomTraitsTest, TestSerializeAndDeserializePrinterBasicInfo) {
   }
 }
 
-TEST(PrintBackendMojomTraitsTest,
-     TestSerializeAndDeserializePrinterBasicInfoEmptyNames) {
+TEST(PrintBackendMojomTraitsTest, PrinterBasicInfoEmptyNames) {
   static const PrinterBasicInfo kPrinterBasicInfoEmptyPrinterName(
       /*printer_name=*/"",
       /*display_name=*/"test display name",
       /*printer_description=*/"",
-      /*printer_status=*/0,
-      /*is_default=*/true,
       /*options=*/{});
   static const PrinterBasicInfo kPrinterBasicInfoEmptyDisplayName(
       /*printer_name=*/"test printer name",
       /*display_name=*/"",
       /*printer_description=*/"",
-      /*printer_status=*/0,
-      /*is_default=*/true,
       /*options=*/{});
   static const PrinterList kPrinterList{kPrinterBasicInfoEmptyPrinterName,
                                         kPrinterBasicInfoEmptyDisplayName};
@@ -170,8 +76,11 @@ TEST(PrintBackendMojomTraitsTest,
   }
 }
 
-TEST(PrintBackendMojomTraitsTest, TestSerializeAndDeserializePaper) {
-  for (const auto& paper : kPapers) {
+TEST(PrintBackendMojomTraitsTest, Paper) {
+  PrinterSemanticCapsAndDefaults::Papers test_papers = kPapers;
+  test_papers.push_back(kPaperCustom);
+
+  for (const auto& paper : test_papers) {
     PrinterSemanticCapsAndDefaults::Paper input = paper;
     PrinterSemanticCapsAndDefaults::Paper output;
     EXPECT_TRUE(
@@ -180,9 +89,175 @@ TEST(PrintBackendMojomTraitsTest, TestSerializeAndDeserializePaper) {
   }
 }
 
-#if defined(OS_CHROMEOS)
-TEST(PrintBackendMojomTraitsTest,
-     TestSerializeAndDeserializeAdvancedCapability) {
+TEST(PrintBackendMojomTraitsTest, PaperCtors) {
+  // All constructors should be able to generate valid papers.
+  constexpr gfx::Size kNonEmptySize(100, 200);
+  constexpr gfx::Rect kNonEmptyPrintableArea(kNonEmptySize);
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  PrinterSemanticCapsAndDefaults::Paper input;
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+  input = PrinterSemanticCapsAndDefaults::Paper("display_name", "vendor_id",
+                                                kNonEmptySize);
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+  input = PrinterSemanticCapsAndDefaults::Paper(
+      "display_name", "vendor_id", kNonEmptySize, kNonEmptyPrintableArea);
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+  input = PrinterSemanticCapsAndDefaults::Paper(
+      "display_name", "vendor_id", kNonEmptySize, kNonEmptyPrintableArea,
+      /*max_height_um=*/200);
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+  input = PrinterSemanticCapsAndDefaults::Paper(
+      "display_name", "vendor_id", kNonEmptySize, kNonEmptyPrintableArea,
+      /*max_height_um=*/200, /*has_borderless_variant=*/true);
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+#if BUILDFLAG(IS_CHROMEOS)
+  input = PrinterSemanticCapsAndDefaults::Paper(
+      "display_name", "vendor_id", kNonEmptySize, kNonEmptyPrintableArea,
+      /*max_height_um=*/200, /*has_borderless_variant=*/true,
+      /*supported_margins_um=*/PaperMargins(100, 200, 300, 400));
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+  input = PrinterSemanticCapsAndDefaults::Paper(
+      "display_name", "vendor_id", kNonEmptySize, kNonEmptyPrintableArea,
+      /*max_height_um=*/200, /*has_borderless_variant=*/true, std::nullopt);
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+
+  input = PrinterSemanticCapsAndDefaults::Paper(
+      "display_name", "vendor_id", kNonEmptySize, kNonEmptyPrintableArea,
+      /*max_height_um=*/200, /*has_borderless_variant=*/true,
+      /*supported_margins_um=*/PaperMargins(100, -200, 300, 400));
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperEmpty) {
+  // Empty Papers should be valid.
+  PrinterSemanticCapsAndDefaults::Paper input;
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+  EXPECT_EQ(input, output);
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperInvalidCustomSize) {
+  // The min height is larger than the max height, so it should be invalid.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name",
+      /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(0, 0, 4000, 7000),
+      /*max_height_um=*/6000,
+      /*has_borderless_variant=*/true};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperEmptyPrintableArea) {
+  // The printable area is empty, but the other fields are not, so it should be
+  // invalid.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name", /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(0, 100, 0, 0)};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperPrintableAreaLargerThanSize) {
+  // The printable area is larger than the size, so it should be invalid.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name", /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(0, 100, 4100, 7200)};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperPrintableAreaLargerThanCustomSize) {
+  // The printable area is larger than the custom size, so it should be invalid.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name",
+      /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(0, 100, 4100, 7200),
+      /*max_height_um=*/8000};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperPrintableAreaOutOfBounds) {
+  // The printable area is out of bounds of the size, so it should be invalid.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name", /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(4050, 6950, 100, 100)};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, PaperNegativePrintableArea) {
+  // The printable area has negative x and y values, so it should be invalid.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name", /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(-10, -10, 2800, 6000)};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST(PrintBackendMojomTraitsTest, ValidMargins) {
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name",
+      /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(10, 10, 3500, 6000),
+      /*max_height_um=*/0,
+      /*has_borderless_variant=*/false,
+      /*supported_margins_um=*/PaperMargins(100, 300, 400, 50)};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, InvalidMargins) {
+  // The printable area is valid, but the margins are invalid, so it should be
+  // invalid. The margins are invalid because content width and the top margins
+  // are negative.
+  PrinterSemanticCapsAndDefaults::Paper input{
+      /*display_name=*/"display_name",
+      /*vendor_id=*/"vendor_id",
+      /*size_um=*/gfx::Size(4000, 7000),
+      /*printable_area_um=*/gfx::Rect(10, 10, 3500, 6000),
+      /*max_height_um=*/0,
+      /*has_borderless_variant=*/false,
+      /*supported_margins_um=*/PaperMargins(-10, 10, 10, 10)};
+  PrinterSemanticCapsAndDefaults::Paper output;
+
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::Paper>(input, output));
+}
+
+TEST(PrintBackendMojomTraitsTest, AdvancedCapability) {
   for (const auto& advanced_capability : kAdvancedCapabilities) {
     AdvancedCapability input = advanced_capability;
     AdvancedCapability output;
@@ -191,12 +266,77 @@ TEST(PrintBackendMojomTraitsTest,
     EXPECT_EQ(advanced_capability, output);
   }
 }
-#endif  // defined(OS_CHROMEOS)
 
 TEST(PrintBackendMojomTraitsTest,
-     TestSerializeAndDeserializePrinterSemanticCapsAndDefaults) {
+     PrinterSemanticCapsAndDefaultsPrintScalingTypes) {
+  // Normal scenario: valid types and default value
+  {
+    PrinterSemanticCapsAndDefaults input =
+        GenerateSamplePrinterSemanticCapsAndDefaults(
+            SampleWithScaleAndPinAndAdvancedCapabilities());
+    PrinterSemanticCapsAndDefaults output;
+    EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
+                mojom::PrinterSemanticCapsAndDefaults>(input, output));
+    EXPECT_THAT(output.print_scaling_types,
+                UnorderedElementsAreArray(kPrintScalingTypes));
+    EXPECT_EQ(kPrintScalingTypeDefault, output.print_scaling_type_default);
+  }
+
+  // Empty print_scaling_types (should be valid)
+  {
+    PrinterSemanticCapsAndDefaults input =
+        GenerateSamplePrinterSemanticCapsAndDefaults(
+            SampleWithScaleAndPinAndAdvancedCapabilities());
+    input.print_scaling_types.clear();
+    PrinterSemanticCapsAndDefaults output;
+    EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
+                mojom::PrinterSemanticCapsAndDefaults>(input, output));
+    EXPECT_TRUE(output.print_scaling_types.empty());
+    EXPECT_EQ(kPrintScalingTypeDefault, output.print_scaling_type_default);
+  }
+
+  // Unknown default type (should be valid)
+  {
+    PrinterSemanticCapsAndDefaults input =
+        GenerateSamplePrinterSemanticCapsAndDefaults(
+            SampleWithScaleAndPinAndAdvancedCapabilities());
+    input.print_scaling_type_default =
+        mojom::PrintScalingType::kUnknownPrintScalingType;
+    PrinterSemanticCapsAndDefaults output;
+    EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
+                mojom::PrinterSemanticCapsAndDefaults>(input, output));
+    EXPECT_THAT(output.print_scaling_types,
+                UnorderedElementsAreArray(kPrintScalingTypes));
+    EXPECT_EQ(mojom::PrintScalingType::kUnknownPrintScalingType,
+              output.print_scaling_type_default);
+  }
+}
+
+TEST(PrintBackendMojomTraitsTest,
+     PrinterSemanticCapsAndDefaultsPrintScalingTypesDuplicate) {
+  // Duplicates in print_scaling_types (should be invalid)
   PrinterSemanticCapsAndDefaults input =
-      GenerateSamplePrinterSemanticCapsAndDefaults();
+      GenerateSamplePrinterSemanticCapsAndDefaults(
+          SampleWithScaleAndPinAndAdvancedCapabilities());
+  input.print_scaling_types = {
+      mojom::PrintScalingType::kAuto,
+      mojom::PrintScalingType::kFit,
+      mojom::PrintScalingType::kAuto,  // Duplicate
+      mojom::PrintScalingType::kNone,
+  };
+  PrinterSemanticCapsAndDefaults output;
+  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<
+               mojom::PrinterSemanticCapsAndDefaults>(input, output));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+TEST(PrintBackendMojomTraitsTest, PrinterSemanticCapsAndDefaults) {
+  OptionalSampleCapabilities caps;
+#if BUILDFLAG(IS_CHROMEOS)
+  caps = SampleWithScaleAndPinAndAdvancedCapabilities();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  PrinterSemanticCapsAndDefaults input =
+      GenerateSamplePrinterSemanticCapsAndDefaults(std::move(caps));
   PrinterSemanticCapsAndDefaults output;
 
   EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
@@ -216,16 +356,20 @@ TEST(PrintBackendMojomTraitsTest,
   EXPECT_TRUE(kDefaultPaper == output.default_paper);
   EXPECT_EQ(kDpis, output.dpis);
   EXPECT_EQ(kDefaultDpi, output.default_dpi);
-#if defined(OS_CHROMEOS)
+  EXPECT_EQ(kMediaTypes, output.media_types);
+  EXPECT_EQ(kDefaultMediaType, output.default_media_type);
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_EQ(kPinSupported, output.pin_supported);
   EXPECT_EQ(kAdvancedCapabilities, output.advanced_capabilities);
-#endif  // defined(OS_CHROMEOS)
+  EXPECT_THAT(output.print_scaling_types,
+              UnorderedElementsAreArray(kPrintScalingTypes));
+  EXPECT_EQ(kPrintScalingTypeDefault, output.print_scaling_type_default);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-TEST(PrintBackendMojomTraitsTest,
-     TestSerializeAndDeserializePrinterSemanticCapsAndDefaultsCopiesMax) {
+TEST(PrintBackendMojomTraitsTest, PrinterSemanticCapsAndDefaultsCopiesMax) {
   PrinterSemanticCapsAndDefaults input =
-      GenerateSamplePrinterSemanticCapsAndDefaults();
+      GenerateSamplePrinterSemanticCapsAndDefaults({});
   PrinterSemanticCapsAndDefaults output;
 
   // Override sample with no copies.
@@ -235,11 +379,10 @@ TEST(PrintBackendMojomTraitsTest,
                mojom::PrinterSemanticCapsAndDefaults>(input, output));
 }
 
-TEST(
-    PrintBackendMojomTraitsTest,
-    TestSerializeAndDeserializePrinterSemanticCapsAndDefaultsAllowableEmptyArrays) {
+TEST(PrintBackendMojomTraitsTest,
+     PrinterSemanticCapsAndDefaultsAllowableEmptyArrays) {
   PrinterSemanticCapsAndDefaults input =
-      GenerateSamplePrinterSemanticCapsAndDefaults();
+      GenerateSamplePrinterSemanticCapsAndDefaults({});
   PrinterSemanticCapsAndDefaults output;
 
   // Override sample with arrays which are allowed to be empty:
@@ -247,14 +390,14 @@ TEST(
   const std::vector<mojom::DuplexMode> kEmptyDuplexModes;
   const PrinterSemanticCapsAndDefaults::Papers kEmptyUserDefinedPapers;
   const std::vector<gfx::Size> kEmptyDpis;
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   const AdvancedCapabilities kEmptyAdvancedCapabilities;
 #endif
 
   input.duplex_modes = kEmptyDuplexModes;
   input.user_defined_papers = kEmptyUserDefinedPapers;
   input.dpis = kEmptyDpis;
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   input.advanced_capabilities = kEmptyAdvancedCapabilities;
 #endif
 
@@ -264,29 +407,47 @@ TEST(
   EXPECT_EQ(kEmptyDuplexModes, output.duplex_modes);
   EXPECT_EQ(kEmptyUserDefinedPapers, output.user_defined_papers);
   EXPECT_EQ(kEmptyDpis, output.dpis);
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_EQ(kEmptyAdvancedCapabilities, output.advanced_capabilities);
 #endif
 }
 
-TEST(PrintBackendMojomTraitsTest,
-     TestSerializeAndDeserializePrinterSemanticCapsAndDefaultsEmptyPapers) {
+TEST(PrintBackendMojomTraitsTest, PrinterSemanticCapsAndDefaultsEmptyPapers) {
   PrinterSemanticCapsAndDefaults input =
-      GenerateSamplePrinterSemanticCapsAndDefaults();
+      GenerateSamplePrinterSemanticCapsAndDefaults({});
   PrinterSemanticCapsAndDefaults output;
 
-  // Override sample with empty `papers`, which is not allowed.
+  // Override sample with empty `papers`.  This is known to be possible, seen
+  // with Epson PX660 series driver.
+  const PrinterSemanticCapsAndDefaults::Papers kEmptyPapers;
   input.papers.clear();
 
-  EXPECT_FALSE(mojo::test::SerializeAndDeserialize<
-               mojom::PrinterSemanticCapsAndDefaults>(input, output));
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
+              mojom::PrinterSemanticCapsAndDefaults>(input, output));
+
+  EXPECT_EQ(kEmptyPapers, output.papers);
 }
 
-TEST(
-    PrintBackendMojomTraitsTest,
-    TestSerializeAndDeserializePrinterSemanticCapsAndDefaultsNoDuplicatesInArrays) {
+TEST(PrintBackendMojomTraitsTest,
+     PrinterSemanticCapsAndDefaultsEmptyMediaTypes) {
   PrinterSemanticCapsAndDefaults input =
-      GenerateSamplePrinterSemanticCapsAndDefaults();
+      GenerateSamplePrinterSemanticCapsAndDefaults({});
+  PrinterSemanticCapsAndDefaults output;
+
+  // Override sample with empty `media_types`.
+  const PrinterSemanticCapsAndDefaults::MediaTypes kEmptyMediaTypes;
+  input.media_types.clear();
+
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
+              mojom::PrinterSemanticCapsAndDefaults>(input, output));
+
+  EXPECT_EQ(kEmptyMediaTypes, output.media_types);
+}
+
+TEST(PrintBackendMojomTraitsTest,
+     PrinterSemanticCapsAndDefaultsNoDuplicatesInArrays) {
+  PrinterSemanticCapsAndDefaults input =
+      GenerateSamplePrinterSemanticCapsAndDefaults({});
   PrinterSemanticCapsAndDefaults output;
 
   // Override sample with arrays containing duplicates, which is not allowed.
@@ -297,18 +458,18 @@ TEST(
   EXPECT_FALSE(mojo::test::SerializeAndDeserialize<
                mojom::PrinterSemanticCapsAndDefaults>(input, output));
 
-  input = GenerateSamplePrinterSemanticCapsAndDefaults();
+  input = GenerateSamplePrinterSemanticCapsAndDefaults({});
   input.user_defined_papers = {kPaperLetter, kPaperLetter};
 
   EXPECT_FALSE(mojo::test::SerializeAndDeserialize<
                mojom::PrinterSemanticCapsAndDefaults>(input, output));
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   // Use an advanced capability with same name but different other fields.
   AdvancedCapability advanced_capability1_prime = kAdvancedCapability1;
   advanced_capability1_prime.type = AdvancedCapability::Type::kInteger;
   advanced_capability1_prime.default_value = "42";
-  input = GenerateSamplePrinterSemanticCapsAndDefaults();
+  input = GenerateSamplePrinterSemanticCapsAndDefaults({});
   input.advanced_capabilities = {kAdvancedCapability1,
                                  advanced_capability1_prime};
 
@@ -317,11 +478,10 @@ TEST(
 #endif
 }
 
-TEST(
-    PrintBackendMojomTraitsTest,
-    TestSerializeAndDeserializePrinterSemanticCapsAndDefaultsAllowedDuplicatesInArrays) {
+TEST(PrintBackendMojomTraitsTest,
+     PrinterSemanticCapsAndDefaultsAllowedDuplicatesInArrays) {
   PrinterSemanticCapsAndDefaults input =
-      GenerateSamplePrinterSemanticCapsAndDefaults();
+      GenerateSamplePrinterSemanticCapsAndDefaults({});
   PrinterSemanticCapsAndDefaults output;
 
   // Override sample with arrays containing duplicates where it is allowed.
@@ -337,9 +497,10 @@ TEST(
   // Duplicate papers are known to be possible, seen with the Konica Minolta
   // 4750 Series PS driver.
   // Use a paper with same name but different size.
-  PrinterSemanticCapsAndDefaults::Paper paper_a4_prime = kPaperA4;
-  paper_a4_prime.size_um = kPaperLetter.size_um;
-  input = GenerateSamplePrinterSemanticCapsAndDefaults();
+  PrinterSemanticCapsAndDefaults::Paper paper_a4_prime(
+      kPaperA4.display_name(), kPaperA4.vendor_id(), kPaperLetter.size_um(),
+      kPaperA4.printable_area_um());
+  input = GenerateSamplePrinterSemanticCapsAndDefaults({});
   const PrinterSemanticCapsAndDefaults::Papers kDuplicatePapers{
       kPaperA4, kPaperLetter, kPaperLedger, paper_a4_prime};
   input.papers = kDuplicatePapers;

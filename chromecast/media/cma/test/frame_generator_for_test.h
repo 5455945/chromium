@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 
 namespace chromecast {
@@ -34,6 +33,10 @@ class FrameGeneratorForTest {
   };
 
   explicit FrameGeneratorForTest(const std::vector<FrameSpec> frame_specs);
+
+  FrameGeneratorForTest(const FrameGeneratorForTest&) = delete;
+  FrameGeneratorForTest& operator=(const FrameGeneratorForTest&) = delete;
+
   ~FrameGeneratorForTest();
 
   // Indicates whether the next frame should come with a new decoder config.
@@ -52,8 +55,6 @@ class FrameGeneratorForTest {
 
   // Total size of A/V buffers generated so far.
   size_t total_buffer_size_;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameGeneratorForTest);
 };
 
 }  // namespace media

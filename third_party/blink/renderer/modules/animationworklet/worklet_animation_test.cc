@@ -1,20 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/animationworklet/worklet_animation.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/time/time_delta_from_string.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_scroll_timeline_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_animationeffect_animationeffectsequence.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_documenttimeline_scrolltimeline.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_union_double_scrolltimelineautokeyword.h"
+#include "third_party/blink/renderer/core/animation/animation_clock.h"
 #include "third_party/blink/renderer/core/animation/document_timeline.h"
 #include "third_party/blink/renderer/core/animation/element_animations.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
@@ -23,10 +23,12 @@
 #include "third_party/blink/renderer/core/animation/worklet_animation_controller.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -58,7 +60,7 @@ KeyframeEffectModelBase* CreateEffectModel() {
 
 KeyframeEffect* CreateKeyframeEffect(Element* element) {
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(30);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(30);
   return MakeGarbageCollected<KeyframeEffect>(element, CreateEffectModel(),
                                               timing);
 }
@@ -84,7 +86,7 @@ WorkletAnimation* CreateWorkletAnimation(
 }
 
 base::TimeDelta ToTimeDelta(double milliseconds) {
-  return base::TimeDelta::FromMillisecondsD(milliseconds);
+  return base::Milliseconds(milliseconds);
 }
 
 }  // namespace
@@ -96,7 +98,7 @@ class WorkletAnimationTest : public RenderingTest {
 
   void SetUp() override {
     RenderingTest::SetUp();
-    element_ = GetDocument().CreateElementForBinding("test");
+    element_ = GetDocument().CreateElementForBinding(AtomicString("test"));
     GetDocument().body()->appendChild(element_);
     // Animator has to be registered before constructing WorkletAnimation. For
     // unit test this is faked by adding the animator name to
@@ -139,24 +141,27 @@ TEST_F(WorkletAnimationTest, WorkletAnimationInElementAnimations) {
             element_->EnsureElementAnimations().GetWorkletAnimations().size());
 }
 
+TEST_F(WorkletAnimationTest, ElementHasWorkletAnimation) {
+  EXPECT_FALSE(element_->HasAnimations());
+  worklet_animation_->play(ASSERT_NO_EXCEPTION);
+  EXPECT_TRUE(element_->HasAnimations());
+}
+
 // Regression test for crbug.com/1136120, pass if there is no crash.
 TEST_F(WorkletAnimationTest, SetCurrentTimeInfNotCrash) {
-  absl::optional<base::TimeDelta> seek_time = base::TimeDeltaFromString("inf");
-  worklet_animation_->SetPlayState(Animation::kRunning);
+  worklet_animation_->SetPlayState(V8AnimationPlayState::Enum::kRunning);
   GetDocument().GetAnimationClock().UpdateTime(base::TimeTicks::Max());
-  worklet_animation_->SetCurrentTime(seek_time);
+  worklet_animation_->SetCurrentTime(/*current_time=*/base::TimeDelta::Max());
 }
 
 TEST_F(WorkletAnimationTest, StyleHasCurrentAnimation) {
-  scoped_refptr<ComputedStyle> style =
-      GetDocument()
-          .GetStyleResolver()
-          .ResolveStyle(element_, StyleRecalcContext())
-          .get();
-  EXPECT_EQ(false, style->HasCurrentOpacityAnimation());
+  const ComputedStyle* style1 = GetDocument().GetStyleResolver().ResolveStyle(
+      element_, StyleRecalcContext());
+  EXPECT_FALSE(style1->HasCurrentOpacityAnimation());
   worklet_animation_->play(ASSERT_NO_EXCEPTION);
-  element_->EnsureElementAnimations().UpdateAnimationFlags(*style);
-  EXPECT_EQ(true, style->HasCurrentOpacityAnimation());
+  const ComputedStyle* style2 = GetDocument().GetStyleResolver().ResolveStyle(
+      element_, StyleRecalcContext());
+  EXPECT_TRUE(style2->HasCurrentOpacityAnimation());
 }
 
 TEST_F(WorkletAnimationTest,
@@ -183,7 +188,7 @@ TEST_F(WorkletAnimationTest,
 }
 
 TEST_F(WorkletAnimationTest,
-       CurrentTimeFromScrollTimelineNotOffsetByStartTime) {
+       DISABLED_CurrentTimeFromScrollTimelineNotOffsetByStartTime) {
   SetBodyInnerHTML(R"HTML(
     <style>
       #scroller { overflow: scroll; width: 100px; height: 100px; }
@@ -201,12 +206,10 @@ TEST_F(WorkletAnimationTest,
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
   scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
+  options->setSource(GetElementById("scroller"));
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
   WorkletAnimation* worklet_animation = CreateWorkletAnimation(
@@ -216,7 +219,8 @@ TEST_F(WorkletAnimationTest,
   worklet_animation->UpdateCompositingState();
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 40),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
 
   // Simulate a new animation frame  which allows the timeline to compute new
   // current time.
@@ -225,7 +229,8 @@ TEST_F(WorkletAnimationTest,
   EXPECT_TIME_NEAR(40, worklet_animation->currentTime().value());
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 70),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
   ASSERT_TRUE(worklet_animation->currentTime().has_value());
   EXPECT_TIME_NEAR(70, worklet_animation->currentTime().value());
@@ -274,33 +279,40 @@ TEST_F(WorkletAnimationTest, DocumentTimelineSetPlaybackRateWhilePlaying) {
 TEST_F(WorkletAnimationTest, PausePlay) {
   SimulateFrame(0);
   worklet_animation_->play(ASSERT_NO_EXCEPTION);
-  EXPECT_EQ(Animation::kPending, worklet_animation_->PlayState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kPending,
+            worklet_animation_->PlayState());
   SimulateFrame(0);
-  EXPECT_EQ(Animation::kRunning, worklet_animation_->PlayState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kRunning,
+            worklet_animation_->PlayState());
   EXPECT_TRUE(worklet_animation_->Playing());
   EXPECT_TIME_NEAR(0, worklet_animation_->currentTime().value());
   SimulateFrame(10);
-  worklet_animation_->pause(ASSERT_NO_EXCEPTION);
-  EXPECT_EQ(Animation::kPaused, worklet_animation_->PlayState());
+  worklet_animation_->pause();
+  EXPECT_EQ(V8AnimationPlayState::Enum::kPaused,
+            worklet_animation_->PlayState());
   EXPECT_FALSE(worklet_animation_->Playing());
   EXPECT_TIME_NEAR(10, worklet_animation_->currentTime().value());
   SimulateFrame(20);
-  EXPECT_EQ(Animation::kPaused, worklet_animation_->PlayState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kPaused,
+            worklet_animation_->PlayState());
   EXPECT_TIME_NEAR(10, worklet_animation_->currentTime().value());
   worklet_animation_->play(ASSERT_NO_EXCEPTION);
-  EXPECT_EQ(Animation::kPending, worklet_animation_->PlayState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kPending,
+            worklet_animation_->PlayState());
   SimulateFrame(20);
-  EXPECT_EQ(Animation::kRunning, worklet_animation_->PlayState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kRunning,
+            worklet_animation_->PlayState());
   EXPECT_TRUE(worklet_animation_->Playing());
   EXPECT_TIME_NEAR(10, worklet_animation_->currentTime().value());
   SimulateFrame(30);
-  EXPECT_EQ(Animation::kRunning, worklet_animation_->PlayState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kRunning,
+            worklet_animation_->PlayState());
   EXPECT_TIME_NEAR(20, worklet_animation_->currentTime().value());
 }
 
 // Verifies correctness of current time when playback rate is set while
 // scroll-linked animation is in idle state.
-TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRate) {
+TEST_F(WorkletAnimationTest, DISABLED_ScrollTimelineSetPlaybackRate) {
   SetBodyInnerHTML(R"HTML(
     <style>
       #scroller { overflow: scroll; width: 100px; height: 100px; }
@@ -318,12 +330,10 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRate) {
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
   scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
+  options->setSource(GetElementById("scroller"));
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
   WorkletAnimation* worklet_animation = CreateWorkletAnimation(
@@ -343,7 +353,8 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRate) {
 
   // Update scroll offset.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 40),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // Simulate a new animation frame  which allows the timeline to compute new
   // current time.
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
@@ -356,7 +367,8 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRate) {
 
 // Verifies correctness of current time when playback rate is set while the
 // scroll-linked animation is playing.
-TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRateWhilePlaying) {
+TEST_F(WorkletAnimationTest,
+       DISABLED_ScrollTimelineSetPlaybackRateWhilePlaying) {
   SetBodyInnerHTML(R"HTML(
     <style>
       #scroller { overflow: scroll; width: 100px; height: 100px; }
@@ -374,10 +386,7 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRateWhilePlaying) {
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
+  options->setSource(GetElementById("scroller"));
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
   WorkletAnimation* worklet_animation = CreateWorkletAnimation(
@@ -392,7 +401,8 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRateWhilePlaying) {
 
   // Update scroll offset and playback rate.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 40),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // Simulate a new animation frame  which allows the timeline to compute new
   // current time.
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
@@ -400,7 +410,8 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRateWhilePlaying) {
 
   // Verify the current time after another scroll offset update.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 80),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
   ASSERT_TRUE(worklet_animation->currentTime().has_value());
   EXPECT_TIME_NEAR(40 + 40 * playback_rate,
@@ -409,7 +420,7 @@ TEST_F(WorkletAnimationTest, ScrollTimelineSetPlaybackRateWhilePlaying) {
 
 // Verifies correcteness of worklet animation start and current time when
 // inactive timeline becomes active.
-TEST_F(WorkletAnimationTest, ScrollTimelineNewlyActive) {
+TEST_F(WorkletAnimationTest, DISABLED_ScrollTimelineNewlyActive) {
   SetBodyInnerHTML(R"HTML(
     <style>
       #scroller { overflow: visible; width: 100px; height: 100px; }
@@ -423,10 +434,7 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyActive) {
   Element* scroller_element = GetElementById("scroller");
 
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(scroller_element);
+  options->setSource(scroller_element);
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
   ASSERT_FALSE(scroll_timeline->IsActive());
@@ -446,8 +454,9 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyActive) {
   ASSERT_FALSE(worklet_animation->startTime().has_value());
 
   // Make the timeline active.
-  scroller_element->setAttribute(html_names::kStyleAttr,
-                                 "overflow:scroll;width:100px;height:100px;");
+  scroller_element->setAttribute(
+      html_names::kStyleAttr,
+      AtomicString("overflow:scroll;width:100px;height:100px;"));
   UpdateAllLifecyclePhasesForTest();
   // Simulate a new animation frame  which allows the timeline to compute new
   // current time.
@@ -466,7 +475,7 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyActive) {
 
 // Verifies correcteness of worklet animation start and current time when
 // active timeline becomes inactive and then active again.
-TEST_F(WorkletAnimationTest, ScrollTimelineNewlyInactive) {
+TEST_F(WorkletAnimationTest, DISABLED_ScrollTimelineNewlyInactive) {
   SetBodyInnerHTML(R"HTML(
     <style>
       #scroller { overflow: scroll; width: 100px; height: 100px; }
@@ -480,10 +489,7 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyInactive) {
   Element* scroller_element = GetElementById("scroller");
 
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(scroller_element);
+  options->setSource(scroller_element);
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
   ASSERT_TRUE(scroll_timeline->IsActive());
@@ -495,7 +501,8 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyInactive) {
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
   scrollable_area->SetScrollOffset(ScrollOffset(0, 40),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // Simulate a new animation frame  which allows the timeline to compute new
   // current time.
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
@@ -517,8 +524,9 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyInactive) {
   EXPECT_TIME_NEAR(0, start_time.value());
 
   // Make the timeline inactive.
-  scroller_element->setAttribute(html_names::kStyleAttr,
-                                 "overflow:visible;width:100px;height:100px;");
+  scroller_element->setAttribute(
+      html_names::kStyleAttr,
+      AtomicString("overflow:visible;width:100px;height:100px;"));
   UpdateAllLifecyclePhasesForTest();
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
   ASSERT_FALSE(scroll_timeline->IsActive());
@@ -532,8 +540,9 @@ TEST_F(WorkletAnimationTest, ScrollTimelineNewlyInactive) {
   EXPECT_TIME_NEAR(40, current_time.value());
 
   // Make the timeline active again.
-  scroller_element->setAttribute(html_names::kStyleAttr,
-                                 "overflow:scroll;width:100px;height:100px;");
+  scroller_element->setAttribute(
+      html_names::kStyleAttr,
+      AtomicString("overflow:scroll;width:100px;height:100px;"));
   UpdateAllLifecyclePhasesForTest();
   GetPage().Animator().ServiceScriptedAnimations(base::TimeTicks::Now());
   ASSERT_TRUE(scroll_timeline->IsActive());

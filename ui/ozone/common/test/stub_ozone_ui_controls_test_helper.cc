@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,32 +9,20 @@
 
 namespace ui {
 
-namespace {
-OzoneUIControlsTestHelper* PrintErrorAndReturnNullptr() {
-  NOTREACHED()
-      << "Notimplemented or not supported by the underlaying platform.";
-  return nullptr;
-}
-}  // namespace
-
-OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperWindows() {
-  return PrintErrorAndReturnNullptr();
-}
-
 OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperDrm() {
-  return PrintErrorAndReturnNullptr();
+  NOTREACHED();
 }
 
-OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperScenic() {
-  return PrintErrorAndReturnNullptr();
+OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperFlatland() {
+  NOTREACHED();
 }
 
 OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperHeadless() {
-  return PrintErrorAndReturnNullptr();
+  NOTREACHED();
 }
 
 OzoneUIControlsTestHelper* CreateOzoneUIControlsTestHelperCast() {
-  return PrintErrorAndReturnNullptr();
+  NOTREACHED();
 }
 
 }  // namespace ui

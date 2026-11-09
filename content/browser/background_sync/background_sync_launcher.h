@@ -1,17 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_BACKGROUND_SYNC_BACKGROUND_SYNC_LAUNCHER_H_
 #define CONTENT_BROWSER_BACKGROUND_SYNC_BACKGROUND_SYNC_LAUNCHER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/lazy_instance.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #endif
@@ -26,14 +26,18 @@ class StoragePartition;
 class CONTENT_EXPORT BackgroundSyncLauncher {
  public:
   static BackgroundSyncLauncher* Get();
+
+  BackgroundSyncLauncher(const BackgroundSyncLauncher&) = delete;
+  BackgroundSyncLauncher& operator=(const BackgroundSyncLauncher&) = delete;
+
   static base::TimeDelta GetSoonestWakeupDelta(
       blink::mojom::BackgroundSyncType sync_type,
       BrowserContext* browser_context);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   static void FireBackgroundSyncEvents(
       BrowserContext* browser_context,
       blink::mojom::BackgroundSyncType sync_type,
-      const base::android::JavaParamRef<jobject>& j_runnable);
+      const base::android::JavaRef<jobject>& j_runnable);
   base::TimeDelta TimeSinceLastBrowserWakeUpForPeriodicSync();
 #endif
 
@@ -49,11 +53,11 @@ class CONTENT_EXPORT BackgroundSyncLauncher {
   base::TimeDelta GetSoonestWakeupDeltaImpl(
       blink::mojom::BackgroundSyncType sync_type,
       BrowserContext* browser_context);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void FireBackgroundSyncEventsImpl(
       BrowserContext* browser_context,
       blink::mojom::BackgroundSyncType sync_type,
-      const base::android::JavaParamRef<jobject>& j_runnable);
+      const base::android::JavaRef<jobject>& j_runnable);
 #endif
   void GetSoonestWakeupDeltaForStoragePartition(
       blink::mojom::BackgroundSyncType sync_type,
@@ -72,7 +76,6 @@ class CONTENT_EXPORT BackgroundSyncLauncher {
   base::TimeDelta soonest_wakeup_delta_one_shot_ = base::TimeDelta::Max();
   base::TimeDelta soonest_wakeup_delta_periodic_ = base::TimeDelta::Max();
   base::Time last_browser_wakeup_for_periodic_sync_;
-  DISALLOW_COPY_AND_ASSIGN(BackgroundSyncLauncher);
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,8 +22,8 @@ class RectChromium {
         y_(other.y_),
         width_(other.width_),
         height_(other.height_) {}
-  RectChromium(int x, int y, int width, int height) :
-      x_(x), y_(y), width_(width), height_(height) {
+  RectChromium(int x, int y, int width, int height)
+      : x_(x), y_(y), width_(width), height_(height) {
     DCHECK_GE(width_, 0);
     DCHECK_GE(height_, 0);
   }

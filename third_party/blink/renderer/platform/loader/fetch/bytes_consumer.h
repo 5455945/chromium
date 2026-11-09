@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <ostream>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/loader/fetch/drained_data_pipe_client.h"
 #include "third_party/blink/renderer/platform/network/encoded_form_data.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -78,7 +80,7 @@ class PLATFORM_EXPORT BytesConsumer : public GarbageCollected<BytesConsumer> {
   virtual ~BytesConsumer() {}
 
   // Begins a two-phase read. On success, the function stores a buffer
-  // that contains the read data of length |*available| into |*buffer|.
+  // that contains the read data of length `buffer`.
   // Returns Ok when readable.
   // Returns ShouldWait when it's waiting.
   // Returns Done when it's closed.
@@ -86,20 +88,18 @@ class PLATFORM_EXPORT BytesConsumer : public GarbageCollected<BytesConsumer> {
   // When not readable, the caller doesn't have to (and must not) call
   // EndRead, because the read session implicitly ends in that case.
   //
-  // |*buffer| will become invalid when this object becomes unreachable,
+  // `buffer` will become invalid when this object becomes unreachable,
   // even if EndRead is not called.
   //
-  // |*buffer| will be set to null and |*available| will be set to 0 if not
-  // readable.
-  virtual Result BeginRead(const char** buffer,
-                           size_t* available) WARN_UNUSED_RESULT = 0;
+  // `buffer` will be set to empty if not readable.
+  [[nodiscard]] virtual Result BeginRead(base::span<const char>& buffer) = 0;
 
   // Ends a two-phase read.
   // This function can modify this BytesConsumer's state.
   // Returns Ok when the consumer stays readable or waiting.
   // Returns Done when it's closed.
   // Returns Error when it's errored.
-  virtual Result EndRead(size_t read_size) WARN_UNUSED_RESULT = 0;
+  [[nodiscard]] virtual Result EndRead(size_t read_size) = 0;
 
   // Drains the data as a BlobDataHandle.
   // When this function returns a non-null value, the returned blob handle
@@ -135,7 +135,15 @@ class PLATFORM_EXPORT BytesConsumer : public GarbageCollected<BytesConsumer> {
   // call GetPublicState() to check if draining closed the consumer.
   //
   // When this function returns an invalid handle, this function does nothing.
-  virtual mojo::ScopedDataPipeConsumerHandle DrainAsDataPipe() {
+  //
+  // `client` may be null. Otherwise `*client` is set to the object that the
+  // caller must tell what it does with the pipe contents, or to null when the
+  // consumer has no such object or no handle is returned.
+  virtual mojo::ScopedDataPipeConsumerHandle DrainAsDataPipe(
+      DrainedDataPipeClient** client) {
+    if (client) {
+      *client = nullptr;
+    }
     return mojo::ScopedDataPipeConsumerHandle();
   }
 
@@ -175,7 +183,6 @@ class PLATFORM_EXPORT BytesConsumer : public GarbageCollected<BytesConsumer> {
   // This InternalState directly corresponds to the states in the class
   // comments. This enum is defined here for subclasses.
   enum class InternalState {
-    kReadable,
     kWaiting,
     kClosed,
     kErrored,
@@ -183,7 +190,6 @@ class PLATFORM_EXPORT BytesConsumer : public GarbageCollected<BytesConsumer> {
 
   static PublicState GetPublicStateFromInternalState(InternalState state) {
     switch (state) {
-      case InternalState::kReadable:
       case InternalState::kWaiting:
         return PublicState::kReadableOrWaiting;
       case InternalState::kClosed:
@@ -192,7 +198,6 @@ class PLATFORM_EXPORT BytesConsumer : public GarbageCollected<BytesConsumer> {
         return PublicState::kErrored;
     }
     NOTREACHED();
-    return PublicState::kReadableOrWaiting;
   }
 };
 

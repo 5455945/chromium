@@ -1,17 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/test/user_adding_screen_utils.h"
 
 #include "base/run_loop.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
-#include "chrome/browser/ui/ash/login_screen_client_impl.h"
-#include "chrome/browser/ui/ash/login_screen_shown_observer.h"
+#include "chrome/browser/ui/ash/login/login_screen_client_impl.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
+#include "chromeos/ash/experiences/login/login_screen_shown_observer.h"
 
-namespace chromeos {
+namespace ash {
 namespace test {
-
 namespace {
 
 // A waiter that blocks until the target login screen is reached.
@@ -44,4 +43,4 @@ void ShowUserAddingScreen() {
 }
 
 }  // namespace test
-}  // namespace chromeos
+}  // namespace ash

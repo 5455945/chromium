@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/bind_post_task.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/cma/base/buffering_state.h"
-#include "media/base/bind_to_current_loop.h"
 
 namespace chromecast {
 namespace media {
@@ -42,20 +42,20 @@ BufferingFrameProvider::BufferingFrameProvider(
       max_frame_size_(max_frame_size),
       frame_buffered_cb_(frame_buffered_cb),
       weak_factory_(this) {
-  DCHECK_LE(max_frame_size, max_buffer_size);
+  CHECK_LE(max_frame_size, max_buffer_size, base::NotFatalUntil::M163);
   weak_this_ = weak_factory_.GetWeakPtr();
   thread_checker_.DetachFromThread();
 }
 
 BufferingFrameProvider::~BufferingFrameProvider() {
   // Required since some weak pointers might be released in the destructor.
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 }
 
 void BufferingFrameProvider::Read(ReadCB read_cb) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 
-  DCHECK(!read_cb.is_null());
+  CHECK(!read_cb.is_null(), base::NotFatalUntil::M163);
   read_cb_ = std::move(read_cb);
 
   CompleteReadIfNeeded();
@@ -64,7 +64,7 @@ void BufferingFrameProvider::Read(ReadCB read_cb) {
 }
 
 void BufferingFrameProvider::Flush(base::OnceClosure flush_cb) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 
   // Invalidate all the buffers that belong to this media timeline.
   // This is needed since, even though |coded_frame_provider_| is flushed later
@@ -117,7 +117,7 @@ void BufferingFrameProvider::RequestBufferIfNeeded() {
     return;
 
   is_pending_request_ = true;
-  coded_frame_provider_->Read(::media::BindToCurrentLoop(
+  coded_frame_provider_->Read(base::BindPostTaskToCurrentDefault(
       base::BindOnce(&BufferingFrameProvider::OnNewBuffer, weak_this_)));
 }
 

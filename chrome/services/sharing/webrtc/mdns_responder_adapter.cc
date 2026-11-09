@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "jingle/glue/utils.h"
+#include "base/functional/bind.h"
+#include "components/webrtc/net_address_utils.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/ip_address.h"
 #include "third_party/webrtc/rtc_base/ip_address.h"
@@ -18,7 +18,7 @@ namespace {
 
 void OnNameCreatedForAddress(
     webrtc::MdnsResponderInterface::NameCreatedCallback callback,
-    const rtc::IPAddress& addr,
+    const webrtc::IPAddress& addr,
     const std::string& name,
     bool announcement_scheduled) {
   // We currently ignore whether there is an announcement sent for the name.
@@ -43,7 +43,7 @@ MdnsResponderAdapter::MdnsResponderAdapter(
 
 MdnsResponderAdapter::~MdnsResponderAdapter() = default;
 
-void MdnsResponderAdapter::CreateNameForAddress(const rtc::IPAddress& addr,
+void MdnsResponderAdapter::CreateNameForAddress(const webrtc::IPAddress& addr,
                                                 NameCreatedCallback callback) {
   if (!mdns_responder_ || !mdns_responder_.is_connected()) {
     LOG(ERROR) << "MdnsResponderAdapter::" << __func__ << ": mDNS responder"
@@ -55,11 +55,11 @@ void MdnsResponderAdapter::CreateNameForAddress(const rtc::IPAddress& addr,
   }
 
   mdns_responder_->CreateNameForAddress(
-      jingle_glue::RtcIPAddressToNetIPAddress(addr),
+      webrtc::RtcIPAddressToNetIPAddress(addr),
       base::BindOnce(&OnNameCreatedForAddress, callback, addr));
 }
 
-void MdnsResponderAdapter::RemoveNameForAddress(const rtc::IPAddress& addr,
+void MdnsResponderAdapter::RemoveNameForAddress(const webrtc::IPAddress& addr,
                                                 NameRemovedCallback callback) {
   if (!mdns_responder_ || !mdns_responder_.is_connected()) {
     LOG(ERROR) << "MdnsResponderAdapter::" << __func__ << ": mDNS responder"
@@ -70,7 +70,7 @@ void MdnsResponderAdapter::RemoveNameForAddress(const rtc::IPAddress& addr,
   }
 
   mdns_responder_->RemoveNameForAddress(
-      jingle_glue::RtcIPAddressToNetIPAddress(addr),
+      webrtc::RtcIPAddressToNetIPAddress(addr),
       base::BindOnce(&OnNameRemovedForAddress, callback));
 }
 

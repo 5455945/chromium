@@ -1,92 +1,169 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_BREAKOUT_BOX_FRAME_QUEUE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_BREAKOUT_BOX_FRAME_QUEUE_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
+#include "base/synchronization/lock.h"
+#include "base/trace_event/trace_event.h"
+#include "third_party/blink/renderer/platform/scheduler/common/tracing_helper.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
 namespace blink {
 
 // Implements a thread-safe circular queue.
 template <typename NativeFrameType>
-class FrameQueue
-    : public WTF::ThreadSafeRefCounted<FrameQueue<NativeFrameType>> {
+class FrameQueue : public ThreadSafeRefCounted<FrameQueue<NativeFrameType>> {
  public:
   explicit FrameQueue(wtf_size_t max_size)
       : max_size_(std::max(1u, max_size)) {}
 
-  void Push(NativeFrameType frame) {
-    MutexLocker locker_(lock_);
-    if (queue_.size() == max_size_)
-      queue_.pop_front();
-    queue_.push_back(std::move(frame));
+  base::Lock& GetLock() const { return lock_; }
+
+  std::optional<NativeFrameType> Push(NativeFrameType frame) {
+    TRACE_EVENT_INSTANT("mediastream", "FrameQueue::Push", "this",
+                        static_cast<void*>(this));
+    base::AutoLock locker(GetLock());
+    return PushLocked(std::move(frame));
   }
 
-  absl::optional<NativeFrameType> Pop() {
-    MutexLocker locker_(lock_);
+  std::optional<NativeFrameType> PushLocked(NativeFrameType frame)
+      EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    total_frames_++;
+    std::optional<NativeFrameType> ret;
+    if (queue_.size() == max_size_) {
+      TRACE_EVENT_INSTANT("mediastream", "FrameQueue::Push no space left",
+                          "max_size_", max_size_);
+      ret = queue_.TakeFirst();
+      discarded_frames_++;
+    }
+    queue_.push_back(std::move(frame));
+    TRACE_COUNTER("mediastream",
+                  scheduler::MakeCounterTrack("FrameQueue", this),
+                  queue_.size());
+    return ret;
+  }
+
+  std::optional<NativeFrameType> Pop() {
+    TRACE_EVENT_INSTANT("mediastream", "FrameQueue::Pop", "this",
+                        static_cast<void*>(this));
+    base::AutoLock locker(GetLock());
+    return PopLocked();
+  }
+
+  std::optional<NativeFrameType> PopLocked()
+      EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
     if (queue_.empty())
-      return absl::nullopt;
+      return std::nullopt;
     return queue_.TakeFirst();
   }
 
+  std::optional<NativeFrameType> PeekLocked()
+      EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    if (queue_.empty())
+      return std::nullopt;
+    return queue_.front();
+  }
+
   bool IsEmpty() {
-    MutexLocker locker_(lock_);
+    base::AutoLock locker(GetLock());
+    return IsEmptyLocked();
+  }
+
+  bool IsEmptyLocked() EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
     return queue_.empty();
+  }
+
+  wtf_size_t SizeLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    return queue_.size();
   }
 
   wtf_size_t MaxSize() const { return max_size_; }
 
+  void IncrementTotalFramesLocked() EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    total_frames_++;
+  }
+
+  void IncrementDiscardedFramesLocked(size_t count = 1)
+      EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    discarded_frames_ += count;
+  }
+
+  uint64_t TotalFrames() const {
+    base::AutoLock locker(GetLock());
+    return TotalFramesLocked();
+  }
+
+  uint64_t TotalFramesLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    return total_frames_;
+  }
+
+  uint64_t DiscardedFrames() const {
+    base::AutoLock locker(GetLock());
+    return DiscardedFramesLocked();
+  }
+
+  uint64_t DiscardedFramesLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    return discarded_frames_;
+  }
+
   void Clear() {
-    MutexLocker locker_(lock_);
+    base::AutoLock locker(GetLock());
     queue_.clear();
   }
 
+  // Pending pulls track how many frames the current consumer of this queue has
+  // requested but not yet received. The queue may be shared by multiple
+  // sources (e.g., when a stream is transferred to a worker), but only one of
+  // them consumes frames at any given time, so a single shared counter is
+  // sufficient and avoids cross-thread reads of the consumer's state.
+  void IncrementPendingPulls() {
+    base::AutoLock locker(GetLock());
+    num_pending_pulls_++;
+  }
+
+  // Decrements the number of pending pulls, if any. Returns true if there are
+  // still pending pulls after the decrement.
+  bool DecrementPendingPulls() {
+    base::AutoLock locker(GetLock());
+    if (num_pending_pulls_ > 0) {
+      num_pending_pulls_--;
+    }
+    return num_pending_pulls_ > 0;
+  }
+
+  void ResetPendingPulls() {
+    base::AutoLock locker(GetLock());
+    ResetPendingPullsLocked();
+  }
+
+  void ResetPendingPullsLocked() EXCLUSIVE_LOCKS_REQUIRED(GetLock()) {
+    num_pending_pulls_ = 0;
+  }
+
+  bool HasPendingPulls() const {
+    base::AutoLock locker(GetLock());
+    return num_pending_pulls_ > 0;
+  }
+
+  int NumPendingPulls() const {
+    base::AutoLock locker(GetLock());
+    return num_pending_pulls_;
+  }
+
  private:
-  Mutex lock_;
-  Deque<NativeFrameType> queue_ GUARDED_BY(lock_);
+  mutable base::Lock lock_;
+  Deque<NativeFrameType> queue_ GUARDED_BY(GetLock());
   const wtf_size_t max_size_;
-};
-
-// Wrapper that allows sharing a single FrameQueue reference across multiple
-// threads.
-template <typename NativeFrameType>
-class FrameQueueHandle {
- public:
-  explicit FrameQueueHandle(
-      scoped_refptr<FrameQueue<NativeFrameType>> frame_queue)
-      : queue_(std::move(frame_queue)) {
-    DCHECK(queue_);
-  }
-  FrameQueueHandle(const FrameQueueHandle&) = delete;
-  FrameQueueHandle& operator=(const FrameQueueHandle&) = delete;
-
-  ~FrameQueueHandle() { Invalidate(); }
-
-  // Returns a copy of |queue_|, which should be checked for nullity and
-  // re-used throughout the scope of a function call, instead of calling
-  // Queue() multiple times.  Otherwise the queue could be destroyed
-  // between calls.
-  scoped_refptr<FrameQueue<NativeFrameType>> Queue() const {
-    MutexLocker locker(mutex_);
-    return queue_;
-  }
-
-  // Releases the internal FrameQueue reference.
-  void Invalidate() {
-    MutexLocker locker(mutex_);
-    queue_.reset();
-  }
-
- private:
-  mutable Mutex mutex_;
-  scoped_refptr<FrameQueue<NativeFrameType>> queue_ GUARDED_BY(mutex_);
+  uint64_t total_frames_ GUARDED_BY(GetLock()) = 0;
+  uint64_t discarded_frames_ GUARDED_BY(GetLock()) = 0;
+  int num_pending_pulls_ GUARDED_BY(GetLock()) = 0;
 };
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_BREAKOUT_BOX_STREAM_TEST_UTILS_H_
+#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_BREAKOUT_BOX_FRAME_QUEUE_H_

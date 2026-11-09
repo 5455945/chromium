@@ -1,10 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cma/base/decoder_config_adapter.h"
 
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "chromecast/media/base/media_codec_support.h"
 #include "media/base/channel_layout.h"
@@ -21,26 +22,32 @@ namespace {
 // unsupported codec will be converted to chromecast::media::kCodecUnknown.
 AudioCodec ToAudioCodec(const ::media::AudioCodec audio_codec) {
   switch (audio_codec) {
-    case ::media::kCodecAAC:
+    case ::media::AudioCodec::kAAC:
       return kCodecAAC;
-    case ::media::kCodecMP3:
+    case ::media::AudioCodec::kMP3:
       return kCodecMP3;
-    case ::media::kCodecPCM:
+    case ::media::AudioCodec::kPCM:
       return kCodecPCM;
-    case ::media::kCodecPCM_S16BE:
+    case ::media::AudioCodec::kPCM_S16BE:
       return kCodecPCM_S16BE;
-    case ::media::kCodecVorbis:
+    case ::media::AudioCodec::kVorbis:
       return kCodecVorbis;
-    case ::media::kCodecOpus:
+    case ::media::AudioCodec::kOpus:
       return kCodecOpus;
-    case ::media::kCodecFLAC:
+    case ::media::AudioCodec::kFLAC:
       return kCodecFLAC;
-    case ::media::kCodecEAC3:
+    case ::media::AudioCodec::kEAC3:
       return kCodecEAC3;
-    case ::media::kCodecAC3:
+    case ::media::AudioCodec::kAC3:
       return kCodecAC3;
-    case ::media::kCodecMpegHAudio:
+    case ::media::AudioCodec::kMpegHAudio:
       return kCodecMpegHAudio;
+    case ::media::AudioCodec::kDTS:
+      return kCodecDTS;
+    case ::media::AudioCodec::kDTSXP2:
+      return kCodecDTSXP2;
+    case ::media::AudioCodec::kDTSE:
+      return kCodecDTSE;
     default:
       LOG(ERROR) << "Unsupported audio codec " << audio_codec;
   }
@@ -52,7 +59,11 @@ SampleFormat ToSampleFormat(const ::media::SampleFormat sample_format) {
     case ::media::kUnknownSampleFormat:
     case ::media::kSampleFormatAc3:
     case ::media::kSampleFormatEac3:
+    case ::media::kSampleFormatDts:
+    case ::media::kSampleFormatDtsxP2:
     case ::media::kSampleFormatMpegHAudio:
+    case ::media::kSampleFormatIECDts:
+    case ::media::kSampleFormatDtse:
       return kUnknownSampleFormat;
     case ::media::kSampleFormatU8:
       return kSampleFormatU8;
@@ -64,6 +75,8 @@ SampleFormat ToSampleFormat(const ::media::SampleFormat sample_format) {
       return kSampleFormatS32;
     case ::media::kSampleFormatF32:
       return kSampleFormatF32;
+    case ::media::kSampleFormatPlanarU8:
+      return kSampleFormatPlanarU8;
     case ::media::kSampleFormatPlanarS16:
       return kSampleFormatPlanarS16;
     case ::media::kSampleFormatPlanarF32:
@@ -72,7 +85,6 @@ SampleFormat ToSampleFormat(const ::media::SampleFormat sample_format) {
       return kSampleFormatPlanarS32;
   }
   NOTREACHED();
-  return kUnknownSampleFormat;
 }
 
 ::media::SampleFormat ToMediaSampleFormat(const SampleFormat sample_format) {
@@ -89,6 +101,8 @@ SampleFormat ToSampleFormat(const ::media::SampleFormat sample_format) {
       return ::media::kSampleFormatS32;
     case kSampleFormatF32:
       return ::media::kSampleFormatF32;
+    case kSampleFormatPlanarU8:
+      return ::media::kSampleFormatPlanarU8;
     case kSampleFormatPlanarS16:
       return ::media::kSampleFormatPlanarS16;
     case kSampleFormatPlanarF32:
@@ -97,7 +111,6 @@ SampleFormat ToSampleFormat(const ::media::SampleFormat sample_format) {
       return ::media::kSampleFormatPlanarS32;
     default:
       NOTREACHED();
-      return ::media::kUnknownSampleFormat;
   }
 }
 
@@ -105,29 +118,35 @@ SampleFormat ToSampleFormat(const ::media::SampleFormat sample_format) {
     const chromecast::media::AudioCodec codec) {
   switch (codec) {
     case kAudioCodecUnknown:
-      return ::media::kUnknownAudioCodec;
+      return ::media::AudioCodec::kUnknown;
     case kCodecAAC:
-      return ::media::kCodecAAC;
+      return ::media::AudioCodec::kAAC;
     case kCodecMP3:
-      return ::media::kCodecMP3;
+      return ::media::AudioCodec::kMP3;
     case kCodecPCM:
-      return ::media::kCodecPCM;
+      return ::media::AudioCodec::kPCM;
     case kCodecPCM_S16BE:
-      return ::media::kCodecPCM_S16BE;
+      return ::media::AudioCodec::kPCM_S16BE;
     case kCodecVorbis:
-      return ::media::kCodecVorbis;
+      return ::media::AudioCodec::kVorbis;
     case kCodecOpus:
-      return ::media::kCodecOpus;
+      return ::media::AudioCodec::kOpus;
     case kCodecFLAC:
-      return ::media::kCodecFLAC;
+      return ::media::AudioCodec::kFLAC;
     case kCodecEAC3:
-      return ::media::kCodecEAC3;
+      return ::media::AudioCodec::kEAC3;
     case kCodecAC3:
-      return ::media::kCodecAC3;
+      return ::media::AudioCodec::kAC3;
     case kCodecMpegHAudio:
-      return ::media::kCodecMpegHAudio;
+      return ::media::AudioCodec::kMpegHAudio;
+    case kCodecDTS:
+      return ::media::AudioCodec::kDTS;
+    case kCodecDTSXP2:
+      return ::media::AudioCodec::kDTSXP2;
+    case kCodecDTSE:
+      return ::media::AudioCodec::kDTSE;
     default:
-      return ::media::kUnknownAudioCodec;
+      return ::media::AudioCodec::kUnknown;
   }
 }
 
@@ -141,7 +160,6 @@ EncryptionScheme ToEncryptionScheme(::media::EncryptionScheme scheme) {
       return EncryptionScheme::kAesCbc;
     default:
       NOTREACHED();
-      return EncryptionScheme::kUnencrypted;
   }
 }
 
@@ -155,7 +173,6 @@ EncryptionScheme ToEncryptionScheme(::media::EncryptionScheme scheme) {
       return ::media::EncryptionScheme::kCbcs;
     default:
       NOTREACHED();
-      return ::media::EncryptionScheme::kUnencrypted;
   }
 }
 
@@ -165,11 +182,13 @@ EncryptionScheme ToEncryptionScheme(::media::EncryptionScheme scheme) {
 ChannelLayout DecoderConfigAdapter::ToChannelLayout(
     ::media::ChannelLayout channel_layout) {
   switch (channel_layout) {
+    case ::media::ChannelLayout::CHANNEL_LAYOUT_NONE:
     case ::media::ChannelLayout::CHANNEL_LAYOUT_UNSUPPORTED:
       return ChannelLayout::UNSUPPORTED;
     case ::media::ChannelLayout::CHANNEL_LAYOUT_MONO:
       return ChannelLayout::MONO;
     case ::media::ChannelLayout::CHANNEL_LAYOUT_STEREO:
+    case ::media::ChannelLayout::CHANNEL_LAYOUT_STEREO_DOWNMIX:
       return ChannelLayout::STEREO;
     case ::media::ChannelLayout::CHANNEL_LAYOUT_5_1:
     case ::media::ChannelLayout::CHANNEL_LAYOUT_5_1_BACK:
@@ -180,8 +199,7 @@ ChannelLayout DecoderConfigAdapter::ToChannelLayout(
       return ChannelLayout::DISCRETE;
 
     default:
-      NOTREACHED();
-      return ChannelLayout::UNSUPPORTED;
+      return ChannelLayout::DISCRETE;
   }
 }
 
@@ -203,7 +221,6 @@ ChannelLayout DecoderConfigAdapter::ToChannelLayout(
       return ::media::ChannelLayout::CHANNEL_LAYOUT_DISCRETE;
 
     default:
-      NOTREACHED();
       return ::media::ChannelLayout::CHANNEL_LAYOUT_UNSUPPORTED;
   }
 }
@@ -213,8 +230,9 @@ AudioConfig DecoderConfigAdapter::ToCastAudioConfig(
     StreamId id,
     const ::media::AudioDecoderConfig& config) {
   AudioConfig audio_config;
-  if (!config.IsValidConfig())
+  if (!config.IsValidConfig()) {
     return audio_config;
+  }
 
   audio_config.id = id;
   audio_config.codec = ToAudioCodec(config.codec());
@@ -227,12 +245,13 @@ AudioConfig DecoderConfigAdapter::ToCastAudioConfig(
   audio_config.encryption_scheme =
       ToEncryptionScheme(config.encryption_scheme());
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // On Android, Chromium's mp4 parser adds extra data for AAC, but we don't
   // need this with CMA.
-  if (audio_config.codec == kCodecAAC)
+  if (audio_config.codec == kCodecAAC) {
     audio_config.extra_data.clear();
-#endif  // defined(OS_ANDROID)
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 
   return audio_config;
 }
@@ -243,11 +262,9 @@ AudioConfig DecoderConfigAdapter::ToCastAudioConfig(
   ::media::AudioDecoderConfig audio_decoder_config(
       ToMediaAudioCodec(config.codec),
       ToMediaSampleFormat(config.sample_format),
-      ToMediaChannelLayout(config.channel_layout), config.samples_per_second,
-      config.extra_data, ToMediaEncryptionScheme(config.encryption_scheme));
-  if (config.channel_layout == ChannelLayout::DISCRETE) {
-    audio_decoder_config.SetChannelsForDiscrete(config.channel_number);
-  }
+      {ToMediaChannelLayout(config.channel_layout), config.channel_number},
+      config.samples_per_second, config.extra_data,
+      ToMediaEncryptionScheme(config.encryption_scheme));
   return audio_decoder_config;
 }
 
@@ -299,16 +316,18 @@ STATIC_ASSERT_MATCHING_ENUM(MatrixID::YCOCG, MatrixID::YCOCG);
 STATIC_ASSERT_MATCHING_ENUM(MatrixID::BT2020_NCL, MatrixID::BT2020_NCL);
 STATIC_ASSERT_MATCHING_ENUM(MatrixID::BT2020_CL, MatrixID::BT2020_CL);
 STATIC_ASSERT_MATCHING_ENUM(MatrixID::YDZDX, MatrixID::YDZDX);
+#undef STATIC_ASSERT_MATCHING_ENUM
 
-#define STATIC_ASSERT_MATCHING_ENUM2(chromium_name, chromecast_name)        \
+#define STATIC_ASSERT_MATCHING_ENUM(chromium_name, chromecast_name)        \
   static_assert(static_cast<int>(::gfx::ColorSpace::chromium_name) ==       \
                     static_cast<int>(::chromecast::media::chromecast_name), \
                 "mismatching status enum values: " #chromium_name)
 
-STATIC_ASSERT_MATCHING_ENUM2(RangeID::INVALID, RangeID::INVALID);
-STATIC_ASSERT_MATCHING_ENUM2(RangeID::LIMITED, RangeID::LIMITED);
-STATIC_ASSERT_MATCHING_ENUM2(RangeID::FULL, RangeID::FULL);
-STATIC_ASSERT_MATCHING_ENUM2(RangeID::DERIVED, RangeID::DERIVED);
+STATIC_ASSERT_MATCHING_ENUM(RangeID::INVALID, RangeID::INVALID);
+STATIC_ASSERT_MATCHING_ENUM(RangeID::LIMITED, RangeID::LIMITED);
+STATIC_ASSERT_MATCHING_ENUM(RangeID::FULL, RangeID::FULL);
+STATIC_ASSERT_MATCHING_ENUM(RangeID::DERIVED, RangeID::DERIVED);
+#undef STATIC_ASSERT_MATCHING_ENUM
 
 VideoConfig DecoderConfigAdapter::ToCastVideoConfig(
     StreamId id,
@@ -321,38 +340,49 @@ VideoConfig DecoderConfigAdapter::ToCastVideoConfig(
   video_config.id = id;
   video_config.codec = ToCastVideoCodec(config.codec(), config.profile());
   video_config.profile = ToCastVideoProfile(config.profile());
+  video_config.codec_profile_level = config.level();
   video_config.extra_data = config.extra_data();
-  video_config.encryption_scheme = ToEncryptionScheme(
-      config.encryption_scheme());
+  video_config.encryption_scheme =
+      ToEncryptionScheme(config.encryption_scheme());
 
   video_config.primaries =
-      static_cast<PrimaryID>(config.color_space_info().primaries);
+      static_cast<PrimaryID>(config.color_space_info().primaries());
   video_config.transfer =
-      static_cast<TransferID>(config.color_space_info().transfer);
-  video_config.matrix = static_cast<MatrixID>(config.color_space_info().matrix);
-  video_config.range = static_cast<RangeID>(config.color_space_info().range);
+      static_cast<TransferID>(config.color_space_info().transfer());
+  video_config.matrix =
+      static_cast<MatrixID>(config.color_space_info().matrix());
+  video_config.range = static_cast<RangeID>(config.color_space_info().range());
 
-  absl::optional<::gfx::HDRMetadata> hdr_metadata = config.hdr_metadata();
+  std::optional<::gfx::HDRMetadata> hdr_metadata = config.hdr_metadata();
   if (hdr_metadata) {
     video_config.have_hdr_metadata = true;
-    video_config.hdr_metadata.max_content_light_level =
-        hdr_metadata->max_content_light_level;
-    video_config.hdr_metadata.max_frame_average_light_level =
-        hdr_metadata->max_frame_average_light_level;
 
-    const auto& mm1 = hdr_metadata->mastering_metadata;
-    auto& mm2 = video_config.hdr_metadata.mastering_metadata;
-    mm2.primary_r_chromaticity_x = mm1.primary_r.x();
-    mm2.primary_r_chromaticity_y = mm1.primary_r.y();
-    mm2.primary_g_chromaticity_x = mm1.primary_g.x();
-    mm2.primary_g_chromaticity_y = mm1.primary_g.y();
-    mm2.primary_b_chromaticity_x = mm1.primary_b.x();
-    mm2.primary_b_chromaticity_y = mm1.primary_b.y();
-    mm2.white_point_chromaticity_x = mm1.white_point.x();
-    mm2.white_point_chromaticity_y = mm1.white_point.y();
-    mm2.luminance_max = mm1.luminance_max;
-    mm2.luminance_min = mm1.luminance_min;
+    if (hdr_metadata->HasCLLI()) {
+      const auto& cta_861_3 = hdr_metadata->GetCLLI();
+      video_config.hdr_metadata.max_content_light_level = cta_861_3.fMaxCLL;
+      video_config.hdr_metadata.max_frame_average_light_level =
+          cta_861_3.fMaxFALL;
+    }
+
+    if (hdr_metadata->HasMDCV()) {
+      const auto& mm1 = hdr_metadata->GetMDCV();
+      auto& mm2 = video_config.hdr_metadata.color_volume_metadata;
+      mm2.primary_r_chromaticity_x = mm1.fDisplayPrimaries.fRX;
+      mm2.primary_r_chromaticity_y = mm1.fDisplayPrimaries.fRY;
+      mm2.primary_g_chromaticity_x = mm1.fDisplayPrimaries.fGX;
+      mm2.primary_g_chromaticity_y = mm1.fDisplayPrimaries.fGY;
+      mm2.primary_b_chromaticity_x = mm1.fDisplayPrimaries.fBX;
+      mm2.primary_b_chromaticity_y = mm1.fDisplayPrimaries.fBY;
+      mm2.white_point_chromaticity_x = mm1.fDisplayPrimaries.fWX;
+      mm2.white_point_chromaticity_y = mm1.fDisplayPrimaries.fWY;
+      mm2.luminance_max = mm1.fMaximumDisplayMasteringLuminance;
+      mm2.luminance_min = mm1.fMinimumDisplayMasteringLuminance;
+    }
   }
+
+  const gfx::Size aspect_ratio = config.coded_size();
+  video_config.width = aspect_ratio.width();
+  video_config.height = aspect_ratio.height();
 
   return video_config;
 }

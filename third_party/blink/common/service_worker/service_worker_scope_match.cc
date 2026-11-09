@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,44 @@
 
 namespace blink {
 
+namespace {
+
+bool PathContainsDisallowedCharacter(const GURL& url) {
+  std::string path = url.GetPath();
+  DCHECK(base::IsStringUTF8(path));
+
+  // We should avoid these escaped characters in the path component because
+  // these can be handled differently depending on server implementation.
+  if (path.contains("%2f") || path.contains("%2F")) {
+    return true;
+  }
+  if (path.contains("%5c") || path.contains("%5C")) {
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+bool ServiceWorkerScopeOrScriptUrlContainsDisallowedCharacter(
+    const GURL& scope,
+    const GURL& script_url,
+    std::string* error_message) {
+  if (PathContainsDisallowedCharacter(scope) ||
+      PathContainsDisallowedCharacter(script_url)) {
+    *error_message = "The provided scope ('";
+    error_message->append(scope.spec());
+    error_message->append("') or scriptURL ('");
+    error_message->append(script_url.spec());
+    error_message->append("') includes a disallowed escape character.");
+    return true;
+  }
+  return false;
+}
+
 bool ServiceWorkerScopeMatches(const GURL& scope, const GURL& url) {
   DCHECK(!scope.has_ref());
-  return base::StartsWith(url.spec(), scope.spec(),
-                          base::CompareCase::SENSITIVE);
+  return url.spec().starts_with(scope.spec());
 }
 
 ServiceWorkerLongestScopeMatcher::ServiceWorkerLongestScopeMatcher(

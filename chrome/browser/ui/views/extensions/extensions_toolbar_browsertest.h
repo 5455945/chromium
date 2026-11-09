@@ -1,85 +1,213 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_TOOLBAR_BROWSERTEST_H_
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_TOOLBAR_BROWSERTEST_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "base/auto_reset.h"
+#include "base/check.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/test/base/in_process_browser_test.h"
+#include "components/tabs/public/tab_interface.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/permissions/site_permissions_helper.h"
+#include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
-
-class ExtensionsToolbarContainer;
-class ToolbarActionView;
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 
 namespace extensions {
-class Extension;
-}
+class ExtensionService;
+}  // namespace extensions
 
-// Base class for browser tests that use the toolbar area. This is used for
-// browser test fixtures that are generally related to the
-// ExtensionsToolbarContainer in the ToolbarView area.
-// At the point of writing this is intended for use by browser tests for
-// ExtensionsToolbarContainer and ExtensionsMenuView which which is triggered
-// from the former container.
-// Separating those test suites is done to clarify what the suite is primarily
-// trying to test.
-class ExtensionsToolbarBrowserTest : public DialogBrowserTest {
+class ExtensionsMenuCoordinator;
+class ExtensionsRequestAccessButton;
+class ExtensionsToolbarButton;
+class ToolbarActionView;
+
+// Base class for browser tests that test the extensions toolbar and menu views.
+class ExtensionsToolbarBrowserTest : public InProcessBrowserTest {
  public:
-  ExtensionsToolbarBrowserTest(const ExtensionsToolbarBrowserTest&) = delete;
-  ExtensionsToolbarBrowserTest& operator=(const ExtensionsToolbarBrowserTest&) =
-      delete;
-
- protected:
   ExtensionsToolbarBrowserTest();
+  ExtensionsToolbarBrowserTest(
+      const std::vector<base::test::FeatureRef>& enabled_features,
+      const std::vector<base::test::FeatureRef>& disabled_features);
   ~ExtensionsToolbarBrowserTest() override;
+  ExtensionsToolbarBrowserTest(const ExtensionsToolbarBrowserTest&) = delete;
+  const ExtensionsToolbarBrowserTest& operator=(
+      const ExtensionsToolbarBrowserTest&) = delete;
 
-  void SetUpOnMainThread() override;
+  Profile* profile() { return browser()->GetProfile(); }
 
-  Profile* profile();
-
-  Browser* incognito_browser() { return incognito_browser_; }
-
-  const std::vector<scoped_refptr<const extensions::Extension>>& extensions() {
-    return extensions_;
+  extensions::ExtensionService* extension_service() {
+    return extension_service_;
   }
 
-  // Loads and returns a test extension from |chrome::DIR_TEST_DATA|.
-  // |allow_incognito| is used to declare whether the extension is allowed to
-  // run in incognito.
-  scoped_refptr<const extensions::Extension> LoadTestExtension(
-      const std::string& path,
-      bool allow_incognito = false);
+  extensions::ExtensionRegistrar* extension_registrar() {
+    return extensions::ExtensionRegistrar::Get(profile());
+  }
 
-  // Adds |extension| to the back of |extensions_|.
-  void AppendExtension(scoped_refptr<const extensions::Extension> extension);
+  BrowserView* browser_view() {
+    return BrowserView::GetBrowserViewForBrowser(browser());
+  }
 
-  // Sets up |incognito_browser_|.
-  void SetUpIncognitoBrowser();
+  // Returns the Views extensions container, or null if the toolbar doesn't
+  // create one (e.g. when features::IsWebUIExtensionsContainerEnabled()).
+  // Accessors below that return container children require it to be non-null.
+  ExtensionsToolbarDesktop* extensions_container() {
+    return browser_view()->toolbar()->extensions_container_for_testing();
+  }
 
-  // Gets the extensions toolbar container from the browser() toolbar.
-  ExtensionsToolbarContainer* GetExtensionsToolbarContainer() const;
-  // Returns the extensions toolbar container for the given `browser`.
-  ExtensionsToolbarContainer* GetExtensionsToolbarContainerForBrowser(
-      Browser* browser) const;
+  ExtensionsToolbarButton* extensions_button() {
+    CHECK(extensions_container())
+        << "ExtensionsToolbarDesktop is null (WebUIExtensionsContainer may be "
+           "enabled).";
+    return extensions_container()->GetExtensionsButton();
+  }
 
-  // Gets the ToolbarActionView instances inside
-  // GetExtensionsToolbarContainer().
-  std::vector<ToolbarActionView*> GetToolbarActionViews() const;
-  // Returns the ToolbarActionView instances within the extensions toolbar for
-  // the given `browser`.
-  std::vector<ToolbarActionView*> GetToolbarActionViewsForBrowser(
-      Browser* browser) const;
+  ExtensionsRequestAccessButton* request_access_button() {
+    CHECK(extensions_container())
+        << "ExtensionsToolbarDesktop is null (WebUIExtensionsContainer may be "
+           "enabled).";
+    return extensions_container()->GetRequestAccessButton();
+  }
 
-  // Gets only the visible ToolbarActionView instances from
-  // GetToolbarActionViews().
-  std::vector<ToolbarActionView*> GetVisibleToolbarActionViews() const;
+  ExtensionsMenuCoordinator* menu_coordinator() {
+    CHECK(extensions_container())
+        << "ExtensionsToolbarDesktop is null (WebUIExtensionsContainer may be "
+           "enabled).";
+    return extensions_container()->GetExtensionsMenuCoordinatorForTesting();
+  }
+
+  content::WebContents* web_contents() const {
+    return browser()->GetActiveTabInterface()->GetContents();
+  }
+
+  // Adds the specified `extension`.
+  scoped_refptr<const extensions::Extension> InstallExtension(
+      const std::string& name);
+
+  // Adds the specified `extension` with the given `host_permissions`.
+  scoped_refptr<const extensions::Extension>
+  InstallExtensionWithHostPermissions(
+      const std::string& name,
+      const std::vector<std::string>& host_permissions);
+
+  // Adds the specified `extension` with the given `permissions`.
+  scoped_refptr<const extensions::Extension> InstallExtensionWithPermissions(
+      const std::string& name,
+      const std::vector<std::string>& permissions);
+
+  scoped_refptr<const extensions::Extension> InstallEnterpriseExtension(
+      const std::string& name,
+      const std::vector<std::string>& host_permissions);
+
+  // Adds the specified `extension` with the given `host_permissions`,
+  // `permissions` and `location`.
+  scoped_refptr<const extensions::Extension> InstallExtension(
+      const std::string& name,
+      const std::vector<std::string>& permissions,
+      const std::vector<std::string>& host_permissions,
+      extensions::mojom::ManifestLocation location =
+          extensions::mojom::ManifestLocation::kUnpacked);
+
+  // Reloads the extension of the given `extension_id`.
+  void ReloadExtension(const extensions::ExtensionId& extension_id);
+
+  // Uninstalls the extensions of the given `extension_id`.
+  void UninstallExtension(const extensions::ExtensionId& extension_id);
+
+  // Enables the extension of the given `extension_id`.
+  void EnableExtension(const extensions::ExtensionId& extension_id);
+
+  // Disables the extension of the given `extension_id`.
+  void DisableExtension(const extensions::ExtensionId& extension_id);
+
+  // Withhold all host permissions of the given `extension`.
+  void WithholdHostPermissions(const extensions::Extension* extension);
+
+  // Triggers the press and release event of the given `button`.
+  void ClickButton(views::Button* button) const;
+
+  // Updates the user's site access for `extension` on `web_contents` to
+  // `site_access`.
+  void UpdateUserSiteAccess(
+      const extensions::Extension& extension,
+      content::WebContents* web_contents,
+      extensions::PermissionsManager::UserSiteAccess site_access);
+
+  // Updates the user's site setting to `site_setting` for `url`.
+  void UpdateUserSiteSetting(
+      extensions::PermissionsManager::UserSiteSetting site_setting,
+      const GURL& url);
+
+  // Adds a site access request with an optional `filter` for `extension` in
+  // `web_contents`.
+  void AddHostAccessRequest(
+      const extensions::Extension& extension,
+      content::WebContents* web_contents,
+      const std::optional<URLPattern>& filter = std::nullopt);
+
+  // Removes the site access request for `extension` in `web_contents`, if
+  // existent.
+  void RemoveHostAccessRequest(const extensions::Extension& extension,
+                               content::WebContents* web_contents);
+
+  // Returns the user's site setting for `url`.
+  extensions::PermissionsManager::UserSiteSetting GetUserSiteSetting(
+      const GURL& url);
+
+  // Returns the user's `extension` site access for `url`.
+  extensions::PermissionsManager::UserSiteAccess GetUserSiteAccess(
+      const extensions::Extension& extension,
+      const GURL& url) const;
+
+  // Returns the `extension` site interaction on `web_contents`.
+  extensions::SitePermissionsHelper::SiteInteraction GetSiteInteraction(
+      const extensions::Extension& extension,
+      content::WebContents* web_contents) const;
+
+  // Returns a list of the views of the currently pinned extensions, in order
+  // from left to right.
+  std::vector<ToolbarActionView*> GetPinnedExtensionViews();
+
+  // Returns a list of the names of the currently pinned extensions, in order
+  // from left to right.
+  std::vector<std::string> GetPinnedExtensionNames();
+
+  // Waits for the extensions container to animate (on pin, unpin, pop-out,
+  // etc.)
+  void WaitForAnimation();
+
+  // Navigates the active tab to `url` and waits for animation.
+  void NavigateAndCommit(const GURL& url);
+
+  // Since this is a test, the ExtensionsToolbarDesktop sometimes needs a
+  // nudge to re-layout the views.
+  void LayoutContainerIfNecessary();
+
+  // InProcessBrowserTest:
+  void SetUpOnMainThread() override;
+  void TearDownOnMainThread() override;
 
  private:
-  Browser* incognito_browser_ = nullptr;
-  std::vector<scoped_refptr<const extensions::Extension>> extensions_;
+  base::test::ScopedFeatureList scoped_feature_list_;
+  raw_ptr<extensions::ExtensionService> extension_service_ = nullptr;
+  raw_ptr<extensions::PermissionsManager> permissions_manager_ = nullptr;
+  std::unique_ptr<extensions::SitePermissionsHelper> permissions_helper_;
+  std::optional<base::AutoReset<base::TimeDelta>> cooldown_reset_;
+  std::optional<base::AutoReset<std::optional<bool>>>
+      accept_reload_dialog_reset_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_TOOLBAR_BROWSERTEST_H_

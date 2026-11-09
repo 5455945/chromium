@@ -23,7 +23,7 @@
 #include "third_party/blink/renderer/core/svg/svg_animated_enumeration.h"
 #include "third_party/blink/renderer/core/svg/svg_filter_primitive_standard_attributes.h"
 #include "third_party/blink/renderer/platform/graphics/filters/fe_convolve_matrix.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -42,6 +42,9 @@ class SVGFEConvolveMatrixElement final
 
  public:
   explicit SVGFEConvolveMatrixElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGFEConvolveMatrixElement;
+  }
 
   SVGAnimatedBoolean* preserveAlpha() { return preserve_alpha_.Get(); }
   SVGAnimatedNumber* divisor() { return divisor_.Get(); }
@@ -61,14 +64,18 @@ class SVGFEConvolveMatrixElement final
   void Trace(Visitor*) const override;
 
  private:
-  IntSize MatrixOrder() const;
-  IntPoint TargetPoint() const;
+  gfx::Size MatrixOrder() const;
+  gfx::Point TargetPoint() const;
   float ComputeDivisor() const;
 
   bool SetFilterEffectAttribute(FilterEffect*, const QualifiedName&) override;
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
   FilterEffect* Build(SVGFilterBuilder*, Filter*) override;
   bool TaintsOrigin() const override { return false; }
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
   Member<SVGAnimatedNumber> bias_;
   Member<SVGAnimatedNumber> divisor_;

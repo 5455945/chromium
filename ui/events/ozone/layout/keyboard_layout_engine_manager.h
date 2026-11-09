@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 
 #include "base/check.h"
 #include "base/component_export.h"
-#include "base/macros.h"
 
 namespace ui {
 
@@ -16,6 +15,10 @@ class KeyboardLayoutEngine;
 
 class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) KeyboardLayoutEngineManager {
  public:
+  KeyboardLayoutEngineManager(const KeyboardLayoutEngineManager&) = delete;
+  KeyboardLayoutEngineManager& operator=(const KeyboardLayoutEngineManager&) =
+      delete;
+
   virtual ~KeyboardLayoutEngineManager();
 
   static void SetKeyboardLayoutEngine(
@@ -24,6 +27,8 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) KeyboardLayoutEngineManager {
   static void ResetKeyboardLayoutEngine();
 
   static KeyboardLayoutEngine* GetKeyboardLayoutEngine() {
+    // CHECK-exclusion: the callers allows `GetKeyboardLayoutEngine()`
+    // to return `nullptr`.
     // Must run in a context with a KeyboardLayoutEngine.
     // Hint: Tests can use ui::ScopedKeyboardLayout to create one.
     // (production code should instead call InitializeForUI).
@@ -33,8 +38,6 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) KeyboardLayoutEngineManager {
 
  private:
   static KeyboardLayoutEngine* keyboard_layout_engine_;
-
-  DISALLOW_COPY_AND_ASSIGN(KeyboardLayoutEngineManager);
 };
 
 }  // namespace ui

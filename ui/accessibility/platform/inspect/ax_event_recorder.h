@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/synchronization/lock.h"
-#include "ui/accessibility/ax_export.h"
+#include "ui/accessibility/platform/inspect/ax_inspect.h"
 
 namespace ui {
 
@@ -31,14 +32,25 @@ using AXEventCallback = base::RepeatingCallback<void(const std::string&)>;
 // each platform does most of the work.
 //
 // As currently designed, there should only be one instance of this class.
-class AX_EXPORT AXEventRecorder {
+class COMPONENT_EXPORT(AX_PLATFORM) AXEventRecorder {
  public:
   AXEventRecorder();
+
+  AXEventRecorder(const AXEventRecorder&) = delete;
+  AXEventRecorder& operator=(const AXEventRecorder&) = delete;
+
   virtual ~AXEventRecorder();
 
   // Scopes/unscopes events to a web area.
   void SetOnlyWebEvents(bool only_web_events) {
     only_web_events_ = only_web_events;
+  }
+
+  // Set filters that specify which properties of event targets should be
+  // dumped.
+  void SetPropertyFilters(
+      const std::vector<AXPropertyFilter>& property_filters) {
+    property_filters_ = property_filters;
   }
 
   // Sets a callback which will be called on every event fired.
@@ -53,12 +65,7 @@ class AX_EXPORT AXEventRecorder {
   virtual void WaitForDoneRecording() {}
 
   // Access the vector of human-readable event logs, one string per event.
-  std::vector<std::string> GetEventLogs() const;
-
-  // Returns true if the @*-RUN-UNTIL-EVENT directive is satisfied by the
-  // currently recorded events for the events in |run_until|.
-  bool IsRunUntilEventSatisfied(
-      const std::vector<std::string>& run_until) const;
+  const std::vector<std::string> GetEventLogs() const;
 
  protected:
   // Called by a derived class which implements platform event handling on
@@ -66,13 +73,12 @@ class AX_EXPORT AXEventRecorder {
   void OnEvent(const std::string& event);
 
   bool only_web_events_ = false;
+  std::vector<AXPropertyFilter> property_filters_;
 
  private:
   mutable base::Lock on_event_lock_;
   std::vector<std::string> event_logs_;
   AXEventCallback callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(AXEventRecorder);
 };
 
 }  // namespace ui

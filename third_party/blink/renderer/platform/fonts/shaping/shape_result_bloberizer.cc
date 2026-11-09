@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,35 +6,60 @@
 
 #include <hb.h>
 
+#include <algorithm>
+#include <ranges>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/numerics/checked_math.h"
+#include "base/strings/to_string.h"
+#include "cc/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
-#include "third_party/blink/renderer/platform/fonts/shaping/caching_word_shaper.h"
+#include "third_party/blink/renderer/platform/fonts/plain_text_node.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
-#include "third_party/blink/renderer/platform/fonts/text_run_paint_info.h"
 #include "third_party/blink/renderer/platform/text/text_break_iterator.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
 
 namespace blink {
 
 namespace {
-template <typename T, size_t E>
-std::ostream& operator<<(std::ostream& out, const base::span<T, E>& c) {
-#if DCHECK_IS_ON()
-  for (auto&& e : c)
-    out << e << " ";
-#endif
-  return out;
+
+using CommitTextRunCallback = void (*)(void* context,
+                                       const ShapeResultBloberizer& bloberizer,
+                                       size_t blob_index,
+                                       size_t run_index,
+                                       std::string_view utf8,
+                                       base::span<const uint32_t> clusters);
+
+// Test-only hook used by `ShapeResultBloberizerTest` to inspect the UTF-8 text
+// and cluster indices passed to `SkTextBlobBuilder` (which `SkTextBlob` does
+// not expose publicly). Stored as globals rather than `ShapeResultBloberizer`
+// data members to avoid increasing `ShapeResultBloberizer`'s stack footprint or
+// adding per-instance initialization overhead on the text-painting hot path.
+CommitTextRunCallback g_commit_text_run_callback = nullptr;
+void* g_commit_text_run_context = nullptr;
+
+// A helper for FillGlyphsSlow().
+inline const ShapeResult* GetShapeResult(const PlainTextItem& item) {
+  return item.GetShapeResult();
 }
+
 }  // namespace
+
+// static
+void ShapeResultBloberizer::SetCommitTextRunCallback(
+    CommitTextRunCallback callback,
+    void* context) {
+  g_commit_text_run_callback = callback;
+  g_commit_text_run_context = context;
+}
 
 ShapeResultBloberizer::ShapeResultBloberizer(
     const FontDescription& font_description,
-    float device_scale_factor,
     Type type)
-    : font_description_(font_description),
-      device_scale_factor_(device_scale_factor),
-      type_(type) {}
+    : font_description_(font_description), type_(type) {}
 
 bool ShapeResultBloberizer::HasPendingVerticalOffsets() const {
   // We exclusively store either horizontal/x-only offsets -- in which case
@@ -45,15 +70,16 @@ bool ShapeResultBloberizer::HasPendingVerticalOffsets() const {
   return pending_glyphs_.size() != pending_offsets_.size();
 }
 
-void ShapeResultBloberizer::SetText(const StringView& text,
-                                    unsigned from,
-                                    unsigned to,
-                                    base::span<const unsigned> cluster_starts) {
+void ShapeResultBloberizer::SetText(
+    const StringView& text,
+    wtf_size_t from,
+    wtf_size_t to,
+    base::span<const wtf_size_t> cluster_starts) {
   if (current_text_.IsNull())
     CommitPendingRun();
 
   // Any outstanding 'current' state should have been moved to 'pending'.
-  DCHECK(current_character_indexes_.IsEmpty());
+  DCHECK(current_character_indexes_.empty());
 
   DVLOG(4) << "   SetText from: " << from << " to: " << to;
 
@@ -70,20 +96,20 @@ void ShapeResultBloberizer::SetText(const StringView& text,
     cluster_ends_.Shrink(0);
   }
 
-  DVLOG(4) << "   Cluster ends: " << base::make_span(cluster_ends_);
+  DVLOG(4) << "   Cluster ends: " << base::ToString(base::span(cluster_ends_));
 
   cluster_ends_offset_ = from;
   current_text_ = text;
 }
 
 void ShapeResultBloberizer::CommitText() {
-  if (current_character_indexes_.IsEmpty())
+  if (current_character_indexes_.empty())
     return;
 
-  unsigned from = current_character_indexes_[0];
-  unsigned to = current_character_indexes_[0];
-  for (unsigned character_index : current_character_indexes_) {
-    unsigned character_index_end =
+  wtf_size_t from = current_character_indexes_[0];
+  wtf_size_t to = current_character_indexes_[0];
+  for (wtf_size_t character_index : current_character_indexes_) {
+    wtf_size_t character_index_end =
         cluster_ends_[character_index - cluster_ends_offset_];
     from = std::min(from, character_index);
     to = std::max(to, character_index_end);
@@ -93,49 +119,54 @@ void ShapeResultBloberizer::CommitText() {
 
   DVLOG(4) << "   CommitText from: " << from << " to: " << to;
   DVLOG(4) << "   CommitText glyphs: "
-           << base::make_span(
-                  pending_glyphs_.end() - current_character_indexes_.size(),
-                  pending_glyphs_.end());
+           << base::ToString(base::span(pending_glyphs_)
+                                 .last(current_character_indexes_.size()));
   DVLOG(4) << "   CommitText cluster starts: "
-           << base::make_span(current_character_indexes_);
+           << base::ToString(base::span(current_character_indexes_));
 
-  size_t pending_utf8_original_size = pending_utf8_.size();
-  size_t pending_utf8_character_indexes_original_size =
+  wtf_size_t pending_utf8_original_size = pending_utf8_.size();
+  wtf_size_t pending_utf8_character_indexes_original_size =
       pending_utf8_character_indexes_.size();
 
   // Do the UTF-8 conversion here.
   // For each input code point track the location of output UTF-8 code point.
 
-  unsigned current_text_length = current_text_.length();
+  wtf_size_t current_text_length = current_text_.length();
   DCHECK_LE(to, current_text_length);
 
-  unsigned size = to - from;
+  wtf_size_t size = to - from;
   Vector<uint32_t, 256> pending_utf8_character_index_from_character_index(size);
+  wtf_size_t utf8_size = pending_utf8_.size();
   if (current_text_.Is8Bit()) {
-    const LChar* latin1 = current_text_.Characters8();
-    wtf_size_t utf8_size = pending_utf8_.size();
-    for (size_t i = from; i < to;) {
-      pending_utf8_character_index_from_character_index[i - from] = utf8_size;
-
-      LChar cp = latin1[i++];
-      pending_utf8_.Grow(utf8_size + U8_LENGTH(cp));
-      U8_APPEND_UNSAFE(pending_utf8_.begin(), utf8_size, cp);
+    const base::span<const LChar> latin1 =
+        current_text_.Span8().subspan(from, size);
+    // Each Latin-1 (U+0000..U+00FF) code point takes at most 2 UTF-8 bytes.
+    pending_utf8_.Grow(
+        base::CheckAdd(utf8_size, base::CheckMul(size, 2u)).ValueOrDie());
+    base::span<uint8_t> dst(pending_utf8_);
+    for (wtf_size_t i = 0; i < size; ++i) {
+      pending_utf8_character_index_from_character_index[i] = utf8_size;
+      U8_APPEND_UNSAFE(dst, utf8_size, latin1[i]);
     }
   } else {
-    const UChar* utf16 = current_text_.Characters16();
-    wtf_size_t utf8_size = pending_utf8_.size();
-    for (size_t i = from; i < to;) {
+    const base::span<const UChar> utf16 = current_text_.Span16();
+    // +1 because a leading surrogate at `to - 1` paired with a trailing
+    // surrogate at `to` produces 4 UTF-8 bytes instead of at most 3.
+    pending_utf8_.Grow(
+        base::CheckAdd(utf8_size, base::CheckMul(size, 3u), 1u).ValueOrDie());
+    base::span<uint8_t> dst(pending_utf8_);
+    for (wtf_size_t i = from; i < to;) {
       pending_utf8_character_index_from_character_index[i - from] = utf8_size;
 
       UChar32 cp;
       U16_NEXT_OR_FFFD(utf16, i, current_text_length, cp);
-      pending_utf8_.Grow(utf8_size + U8_LENGTH(cp));
-      U8_APPEND_UNSAFE(pending_utf8_.begin(), utf8_size, cp);
+      U8_APPEND_UNSAFE(dst, utf8_size, cp);
     }
   }
+  pending_utf8_.Shrink(utf8_size);
 
-  for (unsigned character_index : current_character_indexes_) {
-    unsigned index = character_index - from;
+  for (wtf_size_t character_index : current_character_indexes_) {
+    wtf_size_t index = character_index - from;
     pending_utf8_character_indexes_.push_back(
         pending_utf8_character_index_from_character_index[index]);
   }
@@ -143,18 +174,17 @@ void ShapeResultBloberizer::CommitText() {
   current_character_indexes_.Shrink(0);
 
   DVLOG(4) << "  CommitText appended UTF-8: \""
-           << std::string(&pending_utf8_[pending_utf8_original_size],
-                          pending_utf8_.end())
+           << std::string_view(base::as_chars(base::span(pending_utf8_))
+                                   .subspan(pending_utf8_original_size))
            << "\"";
   DVLOG(4) << "  CommitText UTF-8 indexes: "
-           << base::make_span(
-                  &pending_utf8_character_indexes_
-                      [pending_utf8_character_indexes_original_size],
-                  pending_utf8_character_indexes_.end());
+           << base::ToString(
+                  base::span(pending_utf8_character_indexes_)
+                      .subspan(pending_utf8_character_indexes_original_size));
 }
 
 void ShapeResultBloberizer::CommitPendingRun() {
-  if (pending_glyphs_.IsEmpty())
+  if (pending_glyphs_.empty())
     return;
 
   if (pending_canvas_rotation_ != builder_rotation_) {
@@ -164,12 +194,12 @@ void ShapeResultBloberizer::CommitPendingRun() {
     builder_rotation_ = pending_canvas_rotation_;
   }
 
-  if (UNLIKELY(!current_character_indexes_.IsEmpty()))
+  if (!current_character_indexes_.empty()) [[unlikely]] {
     CommitText();
+  }
 
-  SkFont run_font;
-  pending_font_data_->PlatformData().SetupSkFont(
-      &run_font, device_scale_factor_, &font_description_);
+  SkFont run_font =
+      pending_font_data_->PlatformData().CreateSkFont(&font_description_);
 
   const auto run_size = pending_glyphs_.size();
   const auto text_size = pending_utf8_.size();
@@ -192,20 +222,26 @@ void ShapeResultBloberizer::CommitPendingRun() {
     DVLOG(4) << "  CommitPendingRun text: \""
              << std::string(pending_utf8_.begin(), pending_utf8_.end()) << "\"";
     DVLOG(4) << "  CommitPendingRun glyphs: "
-             << base::make_span(pending_glyphs_);
+             << base::ToString(base::span(pending_glyphs_));
     DVLOG(4) << "  CommitPendingRun indexes: "
-             << base::make_span(pending_utf8_character_indexes_);
+             << base::ToString(base::span(pending_utf8_character_indexes_));
     DCHECK_EQ(pending_utf8_character_indexes_.size(), run_size);
-    std::copy(pending_utf8_character_indexes_.begin(),
-              pending_utf8_character_indexes_.end(), buffer.clusters);
-    std::copy(pending_utf8_.begin(), pending_utf8_.end(), buffer.utf8text);
+    if (g_commit_text_run_callback) [[unlikely]] {
+      g_commit_text_run_callback(
+          g_commit_text_run_context, *this, blobs_.size(),
+          builder_run_count_ - 1,
+          std::string_view(base::as_chars(base::span(pending_utf8_))),
+          pending_utf8_character_indexes_);
+    }
+    std::ranges::copy(pending_utf8_character_indexes_, buffer.clusters);
+    std::ranges::copy(pending_utf8_, buffer.utf8text);
 
     pending_utf8_.Shrink(0);
     pending_utf8_character_indexes_.Shrink(0);
   }
 
-  std::copy(pending_glyphs_.begin(), pending_glyphs_.end(), buffer.glyphs);
-  std::copy(pending_offsets_.begin(), pending_offsets_.end(), buffer.pos);
+  std::ranges::copy(pending_glyphs_, buffer.glyphs);
+  std::ranges::copy(pending_offsets_, buffer.pos);
   pending_glyphs_.Shrink(0);
   pending_offsets_.Shrink(0);
 }
@@ -221,7 +257,7 @@ void ShapeResultBloberizer::CommitPendingBlob() {
 const ShapeResultBloberizer::BlobBuffer& ShapeResultBloberizer::Blobs() {
   CommitPendingRun();
   CommitPendingBlob();
-  DCHECK(pending_glyphs_.IsEmpty());
+  DCHECK(pending_glyphs_.empty());
   DCHECK_EQ(builder_run_count_, 0u);
 
   return blobs_;
@@ -229,19 +265,18 @@ const ShapeResultBloberizer::BlobBuffer& ShapeResultBloberizer::Blobs() {
 
 inline bool ShapeResultBloberizer::IsSkipInkException(
     const StringView& text,
-    unsigned character_index) {
-  // We want to skip descenders in general, but it is undesirable renderings for
-  // CJK characters.
+    wtf_size_t character_index) {
+  // For skip-ink: auto, skip CJK characters. For skip-ink: all, include all.
   return type_ == ShapeResultBloberizer::Type::kTextIntercepts &&
-         !Character::CanTextDecorationSkipInk(
-             text.CodepointAt(character_index));
+         !unicode::CanTextDecorationSkipInk(text.CodePointAt(character_index));
 }
 
 inline void ShapeResultBloberizer::AddEmphasisMark(
     const GlyphData& emphasis_data,
     CanvasRotationInVertical canvas_rotation,
-    FloatPoint glyph_center,
-    float mid_glyph_offset) {
+    gfx::PointF glyph_center,
+    float mid_glyph_offset,
+    float letter_spacing) {
   const SimpleFontData* emphasis_font_data = emphasis_data.font_data;
   DCHECK(emphasis_font_data);
 
@@ -251,11 +286,12 @@ inline void ShapeResultBloberizer::AddEmphasisMark(
 
   if (!is_vertical) {
     Add(emphasis_data.glyph, emphasis_font_data,
-        CanvasRotationInVertical::kRegular, mid_glyph_offset - glyph_center.X(),
-        0);
+        CanvasRotationInVertical::kRegular,
+        mid_glyph_offset - glyph_center.x() - letter_spacing / 2, 0);
   } else {
     Add(emphasis_data.glyph, emphasis_font_data, emphasis_data.canvas_rotation,
-        FloatPoint(-glyph_center.X(), mid_glyph_offset - glyph_center.Y()), 0);
+        gfx::Vector2dF(-glyph_center.x(), mid_glyph_offset - glyph_center.y()),
+        0);
   }
 }
 
@@ -264,6 +300,9 @@ class GlyphCallbackContext {
   STACK_ALLOCATED();
 
  public:
+  GlyphCallbackContext(ShapeResultBloberizer* bloberizer,
+                       const StringView& text)
+      : bloberizer(bloberizer), text(text) {}
   GlyphCallbackContext(const GlyphCallbackContext&) = delete;
   GlyphCallbackContext& operator=(const GlyphCallbackContext&) = delete;
 
@@ -274,9 +313,9 @@ class GlyphCallbackContext {
 
 /*static*/ void ShapeResultBloberizer::AddGlyphToBloberizer(
     void* context,
-    unsigned character_index,
+    wtf_size_t character_index,
     Glyph glyph,
-    FloatSize glyph_offset,
+    gfx::Vector2dF glyph_offset,
     float advance,
     bool is_horizontal,
     CanvasRotationInVertical rotation,
@@ -288,35 +327,35 @@ class GlyphCallbackContext {
 
   if (bloberizer->IsSkipInkException(text, character_index))
     return;
-  FloatPoint start_offset =
-      is_horizontal ? FloatPoint(advance, 0) : FloatPoint(0, advance);
+  gfx::Vector2dF start_offset =
+      is_horizontal ? gfx::Vector2dF(advance, 0) : gfx::Vector2dF(0, advance);
   bloberizer->Add(glyph, font_data, rotation, start_offset + glyph_offset,
                   character_index);
 }
 
 /*static*/ void ShapeResultBloberizer::AddFastHorizontalGlyphToBloberizer(
     void* context,
-    unsigned character_index,
+    wtf_size_t character_index,
     Glyph glyph,
-    FloatSize glyph_offset,
+    gfx::Vector2dF glyph_offset,
     float advance,
     bool is_horizontal,
     CanvasRotationInVertical canvas_rotation,
     const SimpleFontData* font_data) {
   ShapeResultBloberizer* bloberizer =
       static_cast<ShapeResultBloberizer*>(context);
-  DCHECK(!glyph_offset.Height());
+  DCHECK(!glyph_offset.y());
   DCHECK(is_horizontal);
-  bloberizer->Add(glyph, font_data, canvas_rotation,
-                  advance + glyph_offset.Width(), character_index);
+  bloberizer->Add(glyph, font_data, canvas_rotation, advance + glyph_offset.x(),
+                  character_index);
 }
 
 float ShapeResultBloberizer::FillGlyphsForResult(const ShapeResult* result,
                                                  const StringView& text,
-                                                 unsigned from,
-                                                 unsigned to,
+                                                 wtf_size_t from,
+                                                 wtf_size_t to,
                                                  float initial_advance,
-                                                 unsigned run_offset) {
+                                                 wtf_size_t run_offset) {
   GlyphCallbackContext context = {this, text};
   return result->ForEachGlyph(initial_advance, from, to, run_offset,
                               AddGlyphToBloberizer,
@@ -328,21 +367,32 @@ class ClusterCallbackContext {
   STACK_ALLOCATED();
 
  public:
+  ClusterCallbackContext(ShapeResultBloberizer* bloberizer,
+                         const StringView& text,
+                         const GlyphData& emphasis_data,
+                         gfx::PointF glyph_center,
+                         float letter_spacing)
+      : bloberizer(bloberizer),
+        text(text),
+        emphasis_data(emphasis_data),
+        glyph_center(std::move(glyph_center)),
+        letter_spacing(letter_spacing) {}
   ClusterCallbackContext(const ClusterCallbackContext&) = delete;
   ClusterCallbackContext& operator=(const ClusterCallbackContext&) = delete;
 
   ShapeResultBloberizer* bloberizer;
   const StringView& text;
   const GlyphData& emphasis_data;
-  FloatPoint glyph_center;
+  gfx::PointF glyph_center;
+  float letter_spacing;
 };
 }  // namespace
 
 /*static*/ void ShapeResultBloberizer::AddEmphasisMarkToBloberizer(
     void* context,
-    unsigned character_index,
+    wtf_size_t character_index,
     float advance_so_far,
-    unsigned graphemes_in_cluster,
+    wtf_size_t graphemes_in_cluster,
     float cluster_advance,
     CanvasRotationInVertical canvas_rotation) {
   ClusterCallbackContext* parsed_context =
@@ -350,22 +400,24 @@ class ClusterCallbackContext {
   ShapeResultBloberizer* bloberizer = parsed_context->bloberizer;
   const StringView& text = parsed_context->text;
   const GlyphData& emphasis_data = parsed_context->emphasis_data;
-  FloatPoint glyph_center = parsed_context->glyph_center;
+  gfx::PointF glyph_center = parsed_context->glyph_center;
 
   if (text.Is8Bit()) {
-    if (Character::CanReceiveTextEmphasis(text[character_index])) {
+    if (unicode::CanReceiveTextEmphasis(UNSAFE_TODO(text[character_index]))) {
       bloberizer->AddEmphasisMark(emphasis_data, canvas_rotation, glyph_center,
-                                  advance_so_far + cluster_advance / 2);
+                                  advance_so_far + cluster_advance / 2,
+                                  parsed_context->letter_spacing);
     }
   } else {
     float glyph_advance_x = cluster_advance / graphemes_in_cluster;
-    for (unsigned j = 0; j < graphemes_in_cluster; ++j) {
+    for (wtf_size_t j = 0; j < graphemes_in_cluster; ++j) {
       // Do not put emphasis marks on space, separator, and control
       // characters.
-      if (Character::CanReceiveTextEmphasis(text[character_index])) {
+      if (unicode::CanReceiveTextEmphasis(text.CodePointAt(character_index))) {
         bloberizer->AddEmphasisMark(emphasis_data, canvas_rotation,
                                     glyph_center,
-                                    advance_so_far + glyph_advance_x / 2);
+                                    advance_so_far + glyph_advance_x / 2,
+                                    parsed_context->letter_spacing);
       }
       advance_so_far += glyph_advance_x;
     }
@@ -382,130 +434,132 @@ class ClusterStarts {
   ClusterStarts& operator=(const ClusterStarts&) = delete;
 
   static void Accumulate(void* context,
-                         unsigned character_index,
+                         wtf_size_t character_index,
                          Glyph,
-                         FloatSize,
+                         gfx::Vector2dF,
                          float,
                          bool,
                          CanvasRotationInVertical,
                          const SimpleFontData*) {
     ClusterStarts* self = static_cast<ClusterStarts*>(context);
 
-    if (self->cluster_starts_.IsEmpty() ||
+    if (self->cluster_starts_.empty() ||
         self->last_seen_character_index_ != character_index) {
       self->cluster_starts_.push_back(character_index);
       self->last_seen_character_index_ = character_index;
     }
   }
 
-  void Finish(unsigned from, unsigned to) {
+  void Finish(wtf_size_t from, wtf_size_t to) {
     std::sort(cluster_starts_.begin(), cluster_starts_.end());
-    DCHECK_EQ(
-        std::adjacent_find(cluster_starts_.begin(), cluster_starts_.end()),
-        cluster_starts_.end());
-    DVLOG(4) << "  Cluster starts: " << base::make_span(cluster_starts_);
-    if (!cluster_starts_.IsEmpty()) {
+    DCHECK_EQ(std::ranges::adjacent_find(cluster_starts_),
+              cluster_starts_.end());
+    DVLOG(4) << "  Cluster starts: "
+             << base::ToString(base::span(cluster_starts_));
+    if (!cluster_starts_.empty()) {
       // 'from' may point inside a cluster; the least seen index may be larger.
       DCHECK_LE(from, *cluster_starts_.begin());
-      DCHECK_LT(*(cluster_starts_.end() - 1), to);
+      DCHECK_LT(*(UNSAFE_TODO(cluster_starts_.end() - 1)), to);
     }
     cluster_starts_.push_back(to);
   }
 
-  base::span<const unsigned> Data() { return cluster_starts_; }
+  base::span<const wtf_size_t> Data() { return cluster_starts_; }
 
  private:
-  Vector<unsigned, 256> cluster_starts_;
-  unsigned last_seen_character_index_ = 0;
+  Vector<wtf_size_t, 256> cluster_starts_;
+  wtf_size_t last_seen_character_index_ = 0;
 };
 }  // namespace
 
-ShapeResultBloberizer::FillGlyphs::FillGlyphs(
+ShapeResultBloberizer::ShapeResultBloberizer(
     const FontDescription& font_description,
-    float device_scale_factor,
-    const TextRunPaintInfo& run_info,
-    const ShapeResultBuffer& result_buffer,
+    const PlainTextNode& node,
     const Type type)
-    : ShapeResultBloberizer(font_description, device_scale_factor, type) {
-  if (CanUseFastPath(run_info.from, run_info.to, run_info.run.length(),
-                     result_buffer.HasVerticalOffsets())) {
+    : ShapeResultBloberizer(font_description, type) {
+  DCHECK(!node.ContainsRtlItems());
+  const wtf_size_t to = node.TextContent().length();
+  if (CanUseFastPath(0, to, to, node.HasVerticalOffsets())) {
     DVLOG(4) << "FillGlyphs fast path";
-    DCHECK(!result_buffer.HasVerticalOffsets());
     DCHECK_NE(type_, ShapeResultBloberizer::Type::kTextIntercepts);
     DCHECK_NE(type_, ShapeResultBloberizer::Type::kEmitText);
-    advance_ =
-        FillFastHorizontalGlyphs(result_buffer, run_info.run.Direction());
+    float advance = 0;
+    for (const auto& item : node.ItemList()) {
+      advance = FillFastHorizontalGlyphs(item.GetShapeResult(), advance);
+    }
+    advance_ = advance;
     return;
   }
 
-  DVLOG(4) << "FillGlyphs slow path";
+  FillGlyphsSlow(node.TextContent(), node.BaseDirection(), node.ItemList(), 0,
+                 to);
+}
 
-  float advance = 0;
-  auto results = result_buffer.results_;
-
-  if (UNLIKELY(type_ == Type::kEmitText)) {
-    unsigned word_offset = 0;
+template <typename ShapeList>
+void ShapeResultBloberizer::FillGlyphsSlow(StringView text,
+                                           TextDirection direction,
+                                           const ShapeList& list,
+                                           wtf_size_t from,
+                                           wtf_size_t to) {
+  if (type_ == Type::kEmitText) [[unlikely]] {
+    wtf_size_t word_offset = 0;
     ClusterStarts cluster_starts;
-    for (const auto& word_result : results) {
-      word_result->ForEachGlyph(advance, run_info.from, run_info.to,
-                                word_offset, ClusterStarts::Accumulate,
+    for (const auto& item : list) {
+      const ShapeResult* word_result = GetShapeResult(item);
+      word_result->ForEachGlyph(0, from, to, word_offset,
+                                ClusterStarts::Accumulate,
                                 static_cast<void*>(&cluster_starts));
       word_offset += word_result->NumCharacters();
     }
-    cluster_starts.Finish(run_info.from, run_info.to);
-    SetText(run_info.run.ToStringView(), run_info.from, run_info.to,
-            cluster_starts.Data());
+    cluster_starts.Finish(from, to);
+    SetText(text, from, to, cluster_starts.Data());
   }
 
-  if (run_info.run.Rtl()) {
-    unsigned word_offset = run_info.run.length();
-    for (unsigned j = 0; j < results.size(); j++) {
-      unsigned resolved_index = results.size() - 1 - j;
-      const scoped_refptr<const ShapeResult>& word_result =
-          results[resolved_index];
-      unsigned word_characters = word_result->NumCharacters();
+  float advance = 0;
+  if (IsRtl(direction)) {
+    wtf_size_t word_offset = text.length();
+    for (const auto& item : std::views::reverse(list)) {
+      const ShapeResult* word_result = GetShapeResult(item);
+      wtf_size_t word_characters = word_result->NumCharacters();
       word_offset -= word_characters;
-      DVLOG(4) << " FillGlyphs RTL run from: " << run_info.from
-               << " to: " << run_info.to << " offset: " << word_offset
-               << " length: " << word_characters;
-      advance =
-          FillGlyphsForResult(word_result.get(), run_info.run.ToStringView(),
-                              run_info.from, run_info.to, advance, word_offset);
+      DVLOG(4) << " FillGlyphs RTL run from: " << from << " to: " << to
+               << " offset: " << word_offset << " length: " << word_characters;
+      advance = FillGlyphsForResult(word_result, text, from, to, advance,
+                                    word_offset);
     }
   } else {
-    unsigned word_offset = 0;
-    for (const auto& word_result : results) {
-      unsigned word_characters = word_result->NumCharacters();
-      DVLOG(4) << " FillGlyphs LTR run from: " << run_info.from
-               << " to: " << run_info.to << " offset: " << word_offset
-               << " length: " << word_characters;
-      advance =
-          FillGlyphsForResult(word_result.get(), run_info.run.ToStringView(),
-                              run_info.from, run_info.to, advance, word_offset);
+    wtf_size_t word_offset = 0;
+    for (const auto& item : list) {
+      const ShapeResult* word_result = GetShapeResult(item);
+      wtf_size_t word_characters = word_result->NumCharacters();
+      DVLOG(4) << " FillGlyphs LTR run from: " << from << " to: " << to
+               << " offset: " << word_offset << " length: " << word_characters;
+      advance = FillGlyphsForResult(word_result, text, from, to, advance,
+                                    word_offset);
       word_offset += word_characters;
     }
   }
 
-  if (UNLIKELY(type_ == Type::kEmitText))
+  if (type_ == Type::kEmitText) [[unlikely]] {
     CommitText();
+  }
 
   advance_ = advance;
 }
 
-ShapeResultBloberizer::FillGlyphsNG::FillGlyphsNG(
+ShapeResultBloberizer::ShapeResultBloberizer(
     const FontDescription& font_description,
-    float device_scale_factor,
     const StringView& text,
-    unsigned from,
-    unsigned to,
+    wtf_size_t from,
+    wtf_size_t to,
     const ShapeResultView* result,
     const Type type)
-    : ShapeResultBloberizer(font_description, device_scale_factor, type) {
+    : ShapeResultBloberizer(font_description, type) {
   DCHECK(result);
   DCHECK(to <= text.length());
   float initial_advance = 0;
   if (CanUseFastPath(from, to, result)) {
-    DVLOG(4) << "FillGlyphsNG fast path";
+    DVLOG(4) << "FillGlyphs fast path";
     DCHECK(!result->HasVerticalOffsets());
     DCHECK_NE(type_, ShapeResultBloberizer::Type::kTextIntercepts);
     DCHECK_NE(type_, ShapeResultBloberizer::Type::kEmitText);
@@ -515,9 +569,9 @@ ShapeResultBloberizer::FillGlyphsNG::FillGlyphsNG(
     return;
   }
 
-  DVLOG(4) << "FillGlyphsNG slow path";
-  unsigned run_offset = 0;
-  if (UNLIKELY(type_ == Type::kEmitText)) {
+  DVLOG(4) << "FillGlyphs slow path";
+  wtf_size_t run_offset = 0;
+  if (type_ == Type::kEmitText) [[unlikely]] {
     ClusterStarts cluster_starts;
     result->ForEachGlyph(initial_advance, from, to, run_offset,
                          ClusterStarts::Accumulate,
@@ -531,77 +585,33 @@ ShapeResultBloberizer::FillGlyphsNG::FillGlyphsNG(
       result->ForEachGlyph(initial_advance, from, to, run_offset,
                            AddGlyphToBloberizer, static_cast<void*>(&context));
 
-  if (UNLIKELY(type_ == Type::kEmitText))
+  if (type_ == Type::kEmitText) [[unlikely]] {
     CommitText();
-}
-
-ShapeResultBloberizer::FillTextEmphasisGlyphs::FillTextEmphasisGlyphs(
-    const FontDescription& font_description,
-    float device_scale_factor,
-    const TextRunPaintInfo& run_info,
-    const ShapeResultBuffer& result_buffer,
-    const GlyphData& emphasis)
-    : ShapeResultBloberizer(font_description,
-                            device_scale_factor,
-                            Type::kNormal) {
-  FloatPoint glyph_center =
-      emphasis.font_data->BoundsForGlyph(emphasis.glyph).Center();
-
-  float advance = 0;
-  auto results = result_buffer.results_;
-
-  if (run_info.run.Rtl()) {
-    unsigned word_offset = run_info.run.length();
-    for (unsigned j = 0; j < results.size(); j++) {
-      unsigned resolved_index = results.size() - 1 - j;
-      const scoped_refptr<const ShapeResult>& word_result =
-          results[resolved_index];
-      word_offset -= word_result->NumCharacters();
-      StringView text = run_info.run.ToStringView();
-      ClusterCallbackContext context = {this, text, emphasis, glyph_center};
-      advance = word_result->ForEachGraphemeClusters(
-          text, advance, run_info.from, run_info.to, word_offset,
-          AddEmphasisMarkToBloberizer, static_cast<void*>(&context));
-    }
-  } else {  // Left-to-right.
-    unsigned word_offset = 0;
-    for (const auto& word_result : results) {
-      StringView text = run_info.run.ToStringView();
-      ClusterCallbackContext context = {this, text, emphasis, glyph_center};
-      advance = word_result->ForEachGraphemeClusters(
-          text, advance, run_info.from, run_info.to, word_offset,
-          AddEmphasisMarkToBloberizer, static_cast<void*>(&context));
-      word_offset += word_result->NumCharacters();
-    }
   }
-
-  advance_ = advance;
 }
 
-ShapeResultBloberizer::FillTextEmphasisGlyphsNG::FillTextEmphasisGlyphsNG(
+ShapeResultBloberizer::ShapeResultBloberizer(
     const FontDescription& font_description,
-    float device_scale_factor,
     const StringView& text,
-    unsigned from,
-    unsigned to,
+    wtf_size_t from,
+    wtf_size_t to,
     const ShapeResultView* result,
     const GlyphData& emphasis)
-    : ShapeResultBloberizer(font_description,
-                            device_scale_factor,
-                            Type::kNormal) {
-  FloatPoint glyph_center =
-      emphasis.font_data->BoundsForGlyph(emphasis.glyph).Center();
-  ClusterCallbackContext context = {this, text, emphasis, glyph_center};
+    : ShapeResultBloberizer(font_description, Type::kNormal) {
+  gfx::PointF glyph_center =
+      emphasis.font_data->BoundsForGlyph(emphasis.glyph).CenterPoint();
+  ClusterCallbackContext context = {this, text, emphasis, glyph_center,
+                                    font_description.LetterSpacing()};
   float initial_advance = 0;
-  unsigned index_offset = 0;
+  wtf_size_t index_offset = 0;
   advance_ = result->ForEachGraphemeClusters(
       text, initial_advance, from, to, index_offset,
       AddEmphasisMarkToBloberizer, static_cast<void*>(&context));
 }
 
-bool ShapeResultBloberizer::CanUseFastPath(unsigned from,
-                                           unsigned to,
-                                           unsigned length,
+bool ShapeResultBloberizer::CanUseFastPath(wtf_size_t from,
+                                           wtf_size_t to,
+                                           wtf_size_t length,
                                            bool has_vertical_offsets) {
   return !from && to == length && !has_vertical_offsets &&
          type_ != ShapeResultBloberizer::Type::kTextIntercepts &&
@@ -609,31 +619,13 @@ bool ShapeResultBloberizer::CanUseFastPath(unsigned from,
 }
 
 bool ShapeResultBloberizer::CanUseFastPath(
-    unsigned from,
-    unsigned to,
+    wtf_size_t from,
+    wtf_size_t to,
     const ShapeResultView* shape_result) {
   return from <= shape_result->StartIndex() && to >= shape_result->EndIndex() &&
          !shape_result->HasVerticalOffsets() &&
          type_ != ShapeResultBloberizer::Type::kTextIntercepts &&
          type_ != ShapeResultBloberizer::Type::kEmitText;
-}
-
-float ShapeResultBloberizer::FillFastHorizontalGlyphs(
-    const ShapeResultBuffer& result_buffer,
-    TextDirection text_direction) {
-  DCHECK(!result_buffer.HasVerticalOffsets());
-  DCHECK_NE(type_, ShapeResultBloberizer::Type::kTextIntercepts);
-
-  float advance = 0;
-  auto results = result_buffer.results_;
-
-  for (unsigned i = 0; i < results.size(); ++i) {
-    const auto& word_result =
-        IsLtr(text_direction) ? results[i] : results[results.size() - 1 - i];
-    advance = FillFastHorizontalGlyphs(word_result.get(), advance);
-  }
-
-  return advance;
 }
 
 float ShapeResultBloberizer::FillFastHorizontalGlyphs(const ShapeResult* result,
@@ -644,6 +636,62 @@ float ShapeResultBloberizer::FillFastHorizontalGlyphs(const ShapeResult* result,
   return result->ForEachGlyph(initial_advance,
                               &AddFastHorizontalGlyphToBloberizer,
                               static_cast<void*>(this));
+}
+
+void DrawTextBlobs(const ShapeResultBloberizer::BlobBuffer& blobs,
+                   cc::PaintCanvas& canvas,
+                   const gfx::PointF& point,
+                   const cc::PaintFlags& flags,
+                   cc::NodeId node_id) {
+  for (const auto& blob_info : blobs) {
+    DCHECK(blob_info.blob);
+    cc::PaintCanvasAutoRestore auto_restore(&canvas, false);
+    switch (blob_info.rotation) {
+      case CanvasRotationInVertical::kRegular:
+        break;
+      case CanvasRotationInVertical::kRotateCanvasUpright: {
+        canvas.save();
+
+        SkMatrix m;
+        m.setSinCos(-1, 0, point.x(), point.y());
+        canvas.concat(SkM44(m));
+        break;
+      }
+      case CanvasRotationInVertical::kRotateCanvasUprightOblique: {
+        canvas.save();
+
+        SkMatrix m;
+        m.setSinCos(-1, 0, point.x(), point.y());
+        // TODO(yosin): We should use angle specified in CSS instead of
+        // constant value -15deg.
+        // Note: We draw glyph in right-top corner upper.
+        // See CSS "transform: skew(0, -15deg)"
+        SkMatrix skew_y;
+        constexpr SkScalar kSkewY = -0.2679491924311227;  // tan(-15deg)
+        skew_y.setSkew(0, kSkewY, point.x(), point.y());
+        m.preConcat(skew_y);
+        canvas.concat(SkM44(m));
+        break;
+      }
+      case CanvasRotationInVertical::kOblique: {
+        // TODO(yosin): We should use angle specified in CSS instead of
+        // constant value 15deg.
+        // Note: We draw glyph in right-top corner upper.
+        // See CSS "transform: skew(0, -15deg)"
+        canvas.save();
+        SkMatrix skew_x;
+        constexpr SkScalar kSkewX = 0.2679491924311227;  // tan(15deg)
+        skew_x.setSkew(kSkewX, 0, point.x(), point.y());
+        canvas.concat(SkM44(skew_x));
+        break;
+      }
+    }
+    if (node_id != cc::kInvalidNodeId) {
+      canvas.drawTextBlob(blob_info.blob, point.x(), point.y(), node_id, flags);
+    } else {
+      canvas.drawTextBlob(blob_info.blob, point.x(), point.y(), flags);
+    }
+  }
 }
 
 }  // namespace blink

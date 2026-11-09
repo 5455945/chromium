@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,17 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/token.h"
 #include "base/unguessable_token.h"
 #include "media/capture/video_capture_types.h"
-#include "media/capture/video_capturer_source.h"
-#include "third_party/blink/public/common/media/video_capture.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/platform/media/video_capture.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/platform/video_capture/video_capturer_source.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace base {
@@ -34,10 +35,9 @@ class WebVideoCaptureImplManager;
 // WebVideoCaptureImplManager to start / stop and receive I420 frames from
 // Chrome's video capture implementation. This is a main Render thread only
 // object.
-class MODULES_EXPORT LocalVideoCapturerSource
-    : public media::VideoCapturerSource {
+class MODULES_EXPORT LocalVideoCapturerSource : public VideoCapturerSource {
  public:
-  static std::unique_ptr<media::VideoCapturerSource> Create(
+  static std::unique_ptr<VideoCapturerSource> Create(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       LocalFrame* frame,
       const base::UnguessableToken& session_id);
@@ -45,18 +45,21 @@ class MODULES_EXPORT LocalVideoCapturerSource
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       LocalFrame* frame,
       const base::UnguessableToken& session_id);
+
+  LocalVideoCapturerSource(const LocalVideoCapturerSource&) = delete;
+  LocalVideoCapturerSource& operator=(const LocalVideoCapturerSource&) = delete;
+
   ~LocalVideoCapturerSource() override;
 
   // VideoCaptureSource Implementation.
   media::VideoCaptureFormats GetPreferredFormats() override;
   void StartCapture(const media::VideoCaptureParams& params,
-                    const VideoCaptureDeliverFrameCB& new_frame_callback,
-                    const RunningCallback& running_callback) override;
+                    VideoCaptureCallbacks video_capture_callbacks,
+                    VideoCaptureRunningCallbackCB running_callback) override;
   void RequestRefreshFrame() override;
   void MaybeSuspend() override;
   void Resume() override;
   void StopCapture() override;
-  void OnFrameDropped(media::VideoCaptureFrameDropReason reason) override;
   void OnLog(const std::string& message) override;
   media::VideoCaptureFeedbackCB GetFeedbackCallback() const override;
 
@@ -66,7 +69,7 @@ class MODULES_EXPORT LocalVideoCapturerSource
   // |session_id_| identifies the capture device used for this capture session.
   const media::VideoCaptureSessionId session_id_;
 
-  WebVideoCaptureImplManager* const manager_;
+  const raw_ptr<WebVideoCaptureImplManager> manager_;
 
   LocalFrameToken frame_token_;
   base::OnceClosure release_device_cb_;
@@ -74,7 +77,7 @@ class MODULES_EXPORT LocalVideoCapturerSource
   // These two are valid between StartCapture() and StopCapture().
   // |running_call_back_| is run when capture is successfully started, and when
   // it is stopped or error happens.
-  RunningCallback running_callback_;
+  VideoCaptureRunningCallbackCB running_callback_;
   base::OnceClosure stop_capture_cb_;
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
@@ -83,8 +86,6 @@ class MODULES_EXPORT LocalVideoCapturerSource
   THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<LocalVideoCapturerSource> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LocalVideoCapturerSource);
 };
 
 }  // namespace blink

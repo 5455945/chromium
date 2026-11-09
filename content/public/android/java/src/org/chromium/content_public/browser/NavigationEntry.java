@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,44 @@ package org.chromium.content_public.browser;
 
 import android.graphics.Bitmap;
 
-import androidx.annotation.NonNull;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.url.GURL;
 
-/**
- * Represents one entry in the navigation history of a page.
- */
+/** Represents one entry in the navigation history of a page. */
+@NullMarked
 public class NavigationEntry {
 
     private final int mIndex;
     private final GURL mUrl;
     private final GURL mOriginalUrl;
     private final GURL mVirtualUrl;
-    private final GURL mReferrerUrl;
     private final String mTitle;
-    private Bitmap mFavicon;
-    private int mTransition;
-    private long mTimestamp;
+    private @Nullable Bitmap mFavicon;
+    private final int mTransition;
+    private final long mTimestamp;
+    private final boolean mIsInitialEntry;
 
-    /**
-     * Default constructor.
-     */
-    public NavigationEntry(int index, @NonNull GURL url, @NonNull GURL virtualUrl,
-            @NonNull GURL originalUrl, @NonNull GURL referrerUrl, String title, Bitmap favicon,
-            int transition, long timestamp) {
+    /** Default constructor. */
+    public NavigationEntry(
+            int index,
+            GURL url,
+            GURL virtualUrl,
+            GURL originalUrl,
+            String title,
+            @Nullable Bitmap favicon,
+            int transition,
+            long timestamp,
+            boolean isInitialEntry) {
         mIndex = index;
         mUrl = url;
         mVirtualUrl = virtualUrl;
         mOriginalUrl = originalUrl;
-        mReferrerUrl = referrerUrl;
         mTitle = title;
         mFavicon = favicon;
         mTransition = transition;
         mTimestamp = timestamp;
+        mIsInitialEntry = isInitialEntry;
     }
 
     /**
@@ -54,7 +58,7 @@ public class NavigationEntry {
      *         scary data: URL or something like that. Use GetVirtualURL() for
      *         showing to the user.
      */
-    public @NonNull GURL getUrl() {
+    public GURL getUrl() {
         return mUrl;
     }
 
@@ -69,22 +73,15 @@ public class NavigationEntry {
      *         cases, so if there is no overridden display URL, it will return
      *         the actual one.
      */
-    public @NonNull GURL getVirtualUrl() {
+    public GURL getVirtualUrl() {
         return mVirtualUrl;
     }
 
     /**
      * @return The URL that caused this NavigationEntry to be created.
      */
-    public @NonNull GURL getOriginalUrl() {
+    public GURL getOriginalUrl() {
         return mOriginalUrl;
-    }
-
-    /**
-     * @return The referring URL, can be empty.
-     */
-    public @NonNull GURL getReferrerUrl() {
-        return mReferrerUrl;
     }
 
     /**
@@ -100,7 +97,7 @@ public class NavigationEntry {
     /**
      * @return The favicon of the page. This may be null.
      */
-    public Bitmap getFavicon() {
+    public @Nullable Bitmap getFavicon() {
         return mFavicon;
     }
 
@@ -120,5 +117,12 @@ public class NavigationEntry {
      */
     public long getTimestamp() {
         return mTimestamp;
+    }
+
+    /**
+     * @return Whether the entry is the initial entry or not.
+     */
+    public boolean isInitialEntry() {
+        return mIsInitialEntry;
     }
 }

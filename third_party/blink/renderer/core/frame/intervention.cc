@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@
 #include "third_party/blink/renderer/core/frame/report.h"
 #include "third_party/blink/renderer/core/frame/reporting_context.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -22,16 +22,29 @@ namespace blink {
 void Intervention::GenerateReport(LocalFrame* frame,
                                   const String& id,
                                   const String& message) {
-  if (!frame || !frame->Client())
+  if (!frame || !frame->Client()) {
     return;
+  }
 
   // Send the message to the console.
-  auto* window = frame->DomWindow();
-  window->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
-      mojom::ConsoleMessageSource::kIntervention,
-      mojom::ConsoleMessageLevel::kError, message));
+  frame->DomWindow()->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+      mojom::blink::ConsoleMessageSource::kIntervention,
+      mojom::blink::ConsoleMessageLevel::kError, message));
+
+  GenerateReportWithoutAdditionalConsoleWarning(frame, id, message);
+}
+
+// static
+void Intervention::GenerateReportWithoutAdditionalConsoleWarning(
+    LocalFrame* frame,
+    const String& id,
+    const String& message) {
+  if (!frame || !frame->Client()) {
+    return;
+  }
 
   // Construct the intervention report.
+  auto* window = frame->DomWindow();
   InterventionReportBody* body =
       MakeGarbageCollected<InterventionReportBody>(id, message);
   Report* report = MakeGarbageCollected<Report>(

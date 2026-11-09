@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,20 +13,16 @@
 #include "base/sequence_checker.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_command_line.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "components/component_updater/component_updater_switches.h"
-#include "services/network/public/cpp/features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace component_updater {
 
-namespace {
 using ::testing::_;
-}  // namespace
 
 class TrustTokenKeyCommitmentsComponentInstallerTest : public ::testing::Test {
  public:
@@ -42,9 +38,6 @@ class TrustTokenKeyCommitmentsComponentInstallerTest : public ::testing::Test {
 
 TEST_F(TrustTokenKeyCommitmentsComponentInstallerTest,
        LoadsCommitmentsFromOverriddenPath) {
-  base::test::ScopedFeatureList scoped_list;
-  scoped_list.InitAndEnableFeature(network::features::kTrustTokens);
-
   base::SequenceCheckerImpl checker;
 
   std::string expectation = "some trust token keys";
@@ -71,7 +64,7 @@ TEST_F(TrustTokenKeyCommitmentsComponentInstallerTest,
   // The |component_install_dir_.GetPath()| should be ignored in favor of the
   // separate path we provide through the switch.
   policy->ComponentReady(base::Version(), component_install_dir_.GetPath(),
-                         std::make_unique<base::DictionaryValue>());
+                         base::DictValue());
 
   run_loop.Run();
 
@@ -79,9 +72,6 @@ TEST_F(TrustTokenKeyCommitmentsComponentInstallerTest,
 }
 
 TEST_F(TrustTokenKeyCommitmentsComponentInstallerTest, LoadsCommitments) {
-  base::test::ScopedFeatureList scoped_list;
-  scoped_list.InitAndEnableFeature(network::features::kTrustTokens);
-
   base::SequenceCheckerImpl checker;
 
   std::string expectation = "some trust token keys";
@@ -101,7 +91,7 @@ TEST_F(TrustTokenKeyCommitmentsComponentInstallerTest, LoadsCommitments) {
       expectation));
 
   policy->ComponentReady(base::Version(), component_install_dir_.GetPath(),
-                         std::make_unique<base::DictionaryValue>());
+                         base::DictValue());
 
   run_loop.Run();
 }

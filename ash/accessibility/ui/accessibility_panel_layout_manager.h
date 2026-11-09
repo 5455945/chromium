@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include "ash/ash_export.h"
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/shell_observer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/display/display_observer.h"
 #include "ui/gfx/geometry/rect.h"
@@ -35,6 +35,12 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
   static constexpr int kDefaultPanelHeight = 35;
 
   AccessibilityPanelLayoutManager();
+
+  AccessibilityPanelLayoutManager(const AccessibilityPanelLayoutManager&) =
+      delete;
+  AccessibilityPanelLayoutManager& operator=(
+      const AccessibilityPanelLayoutManager&) = delete;
+
   ~AccessibilityPanelLayoutManager() override;
 
   // Controls the panel's visibility and location.
@@ -53,7 +59,7 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
 
   // DisplayObserver:
   void OnDisplayAdded(const display::Display& new_display) override {}
-  void OnDisplayRemoved(const display::Display& old_display) override {}
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override {}
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 
@@ -76,7 +82,7 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
   void UpdateWorkAreaForPanelHeight();
 
   // The panel being managed (e.g. the ChromeVoxPanel's native aura window).
-  aura::Window* panel_window_ = nullptr;
+  raw_ptr<aura::Window> panel_window_ = nullptr;
 
   // Window bounds when not in fullscreen
   gfx::Rect panel_bounds_ = gfx::Rect(0, 0, 0, 0);
@@ -88,8 +94,6 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
 
   // Determines how the panel_bounds_ are used when displaying the panel.
   AccessibilityPanelState panel_state_ = AccessibilityPanelState::BOUNDED;
-
-  DISALLOW_COPY_AND_ASSIGN(AccessibilityPanelLayoutManager);
 };
 
 }  // namespace ash

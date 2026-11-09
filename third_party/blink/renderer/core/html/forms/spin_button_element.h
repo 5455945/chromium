@@ -67,7 +67,7 @@ class CORE_EXPORT SpinButtonElement final : public HTMLDivElement,
 
   void Step(int amount);
 
-  bool WillRespondToMouseMoveEvents() override;
+  bool WillRespondToMouseMoveEvents() const override;
   bool WillRespondToMouseClickEvents() override;
 
   void ForwardEvent(Event&);
@@ -88,13 +88,17 @@ class CORE_EXPORT SpinButtonElement final : public HTMLDivElement,
   void StartRepeatingTimer();
   void StopRepeatingTimer();
   void RepeatingTimerFired(TimerBase*);
-  bool ShouldRespondToMouseEvents();
-  bool IsMouseFocusable() const override { return false; }
+  bool ShouldRespondToMouseEvents() const;
+  FocusableState IsFocusableState(UpdateBehavior) const override {
+    return FocusableState::kNotFocusable;
+  }
+  void CalculateUpDownStateByMouseLocation(Event&);
 
   Member<SpinButtonOwner> spin_button_owner_;
   bool capturing_;
   UpDownState up_down_state_;
   UpDownState press_starting_state_;
+  bool should_recalc_up_down_state_;
   HeapTaskRunnerTimer<SpinButtonElement> repeating_timer_;
 };
 

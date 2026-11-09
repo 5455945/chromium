@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,12 @@
 
 #include <memory>
 
-#include "base/time/time.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 class Profile;
@@ -20,7 +24,8 @@ class PrefRegistrySyncable;
 
 // SessionDataService is responsible for deleting SessionOnly cookies and
 // site data when the browser or all windows of a profile are closed.
-class SessionDataService : public BrowserListObserver, public KeyedService {
+class SessionDataService : public BrowserCollectionObserver,
+                           public KeyedService {
  public:
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
@@ -51,8 +56,8 @@ class SessionDataService : public BrowserListObserver, public KeyedService {
 
  private:
   // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
+  void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   // Starts a deletion of session only cookies and storage unless the deletion
   // is already running or the browser is already shutting down.
@@ -60,23 +65,25 @@ class SessionDataService : public BrowserListObserver, public KeyedService {
   // content setting are removed.
   void StartCleanupInternal(bool skip_session_cookies);
 
-  // Records the Status of the last session.
-  void RecordHistogramForLastSession(Status last_status);
   // Starts another data deletion if the deletion at the end of the last session
   // did not finish.
   void MaybeContinueDeletionFromLastSesssion(Status last_status);
 
   void SetStatusPref(Status status);
-  void OnCleanupAtStartupFinished(base::TimeTicks time_started);
-  void OnCleanupAtSessionEndFinished(base::TimeTicks time_started);
+  void OnCleanupAtStartupFinished();
+  void OnCleanupAtSessionEndFinished();
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   std::unique_ptr<SessionDataDeleter> deleter_;
   // A flag that is set to skip session data deletion on restarts.
   bool force_keep_session_state_ = false;
   // A flag to indicate that a deletion was started and further requests for
   // cleanup should be ignored.
   bool cleanup_started_ = false;
+
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
+  base::WeakPtrFactory<SessionDataService> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_SESSIONS_SESSION_DATA_SERVICE_H_

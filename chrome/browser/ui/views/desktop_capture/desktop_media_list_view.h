@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_list_controller.h"
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_source_view.h"
@@ -26,21 +27,22 @@ class DesktopMediaListView
                        DesktopMediaSourceViewStyle single_style,
                        const std::u16string& accessible_name);
 
+  DesktopMediaListView(const DesktopMediaListView&) = delete;
+  DesktopMediaListView& operator=(const DesktopMediaListView&) = delete;
+
   ~DesktopMediaListView() override;
 
   // Called by DesktopMediaSourceView when selection has changed.
   void OnSelectionChanged();
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
-  void Layout() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
   // DesktopMediaListController::ListView:
-  absl::optional<content::DesktopMediaID> GetSelection() override;
+  std::optional<content::DesktopMediaID> GetSelection() override;
   DesktopMediaListController::SourceListListener* GetSourceListListener()
       override;
+  void ClearSelection() override;
 
   // DesktopMediaListController::SourceListListener:
   void OnSourceAdded(size_t index) override;
@@ -48,22 +50,20 @@ class DesktopMediaListView
   void OnSourceMoved(size_t old_index, size_t new_index) override;
   void OnSourceNameChanged(size_t index) override;
   void OnSourceThumbnailChanged(size_t index) override;
+  void OnSourcePreviewChanged(size_t index) override;
+  void OnDelegatedSourceListSelection() override;
 
  private:
   // Change the source style of this list on the fly.
-  void SetStyle(DesktopMediaSourceViewStyle* style);
+  void SetStyle(const DesktopMediaSourceViewStyle& style);
 
   DesktopMediaSourceView* GetSelectedView();
 
-  DesktopMediaListController* controller_;
+  base::WeakPtr<DesktopMediaListController> controller_;
 
   DesktopMediaSourceViewStyle single_style_;
   DesktopMediaSourceViewStyle generic_style_;
-  DesktopMediaSourceViewStyle* active_style_;
-
-  const std::u16string accessible_name_;
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopMediaListView);
+  DesktopMediaSourceViewStyle active_style_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_DESKTOP_CAPTURE_DESKTOP_MEDIA_LIST_VIEW_H_

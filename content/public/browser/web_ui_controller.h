@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,20 @@
 #include <string>
 
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "content/common/content_export.h"
+#include "third_party/blink/public/mojom/loader/local_resource_loader_config.mojom-forward.h"
+#include "url/origin.h"
 
 class GURL;
 
-namespace base {
-class ListValue;
-}
-
 namespace content {
 
+class Page;
 class RenderFrameHost;
 class WebUI;
+class WebUIBrowserInterfaceBrokerRegistry;
 
 // A WebUI page is controlled by the embedder's WebUIController object. It
 // manages the data source and message handlers.
@@ -30,8 +32,23 @@ class CONTENT_EXPORT WebUIController {
   // This is used for safe downcasting.
   typedef const void* Type;
 
-  explicit WebUIController(WebUI* web_ui) : web_ui_(web_ui) {}
-  virtual ~WebUIController() {}
+  enum TrustPolicy {
+    kTrusted,
+    kUntrusted,
+  };
+
+  enum class DisplayDisposition {
+    kRegularPage,
+    kUIElement,
+  };
+
+  explicit WebUIController(WebUI* web_ui);
+  virtual ~WebUIController();
+
+  // Returns the intended context for this WebUI. By default, WebUIs are regular
+  // pages (e.g. settings, history). Some WebUIs are intended to be rendered as
+  // UI elements embedded within the browser interface.
+  virtual DisplayDisposition GetDisplayDisposition() const;
 
   // Allows the controller to override handling all messages from the page.
   // Return true if the message handling was overridden.
@@ -45,6 +62,21 @@ class CONTENT_EXPORT WebUIController {
   // This is deliberately named to differentiate from
   // WebContentsObserver::RenderFrameCreated, as some classes may override both.
   virtual void WebUIRenderFrameCreated(RenderFrameHost* render_frame_host) {}
+
+  // Called when the WebUI's primary page changes. WebUIControllers should reset
+  // its state if necessary.
+  virtual void WebUIPrimaryPageChanged(Page& page) {}
+
+  // Allows the controller to directly populate the local resource loader
+  // config. This is used to add shared resources or dynamically generated
+  // content, e.g. theme colors, without creating a full WebUIDataSource.
+  //
+  // `requesting_origin` is the origin of the WebUI page that is requesting the
+  // resources, e.g. "chrome://webui-toolbar.top-chrome". It matches the origin
+  // that the `config` will be sent to.
+  virtual void PopulateLocalResourceLoaderConfig(
+      blink::mojom::LocalResourceLoaderConfig* config,
+      const url::Origin& requesting_origin) {}
 
   WebUI* web_ui() const { return web_ui_; }
 
@@ -73,21 +105,22 @@ class CONTENT_EXPORT WebUIController {
   // bugs would be too low priority to bother with.
   virtual bool IsJavascriptErrorReportingEnabled();
 
- protected:
   // TODO(calamity): Make this abstract once all subclasses implement GetType().
   virtual Type GetType();
+  virtual TrustPolicy GetTrustPolicy();
 
  private:
-  WebUI* web_ui_;
+  raw_ptr<WebUI> web_ui_;
 };
 
 // This macro declares a static variable inside the class that inherits from
 // WebUIController. The address of the static variable is used as the unique
 // Type for the subclass.
-#define WEB_UI_CONTROLLER_TYPE_DECL()            \
-  static constexpr int kWebUIControllerType = 0; \
-  Type GetType() final;                          \
-  friend class content::WebUIController
+#define WEB_UI_CONTROLLER_TYPE_DECL()        \
+  static const int kWebUIControllerType = 0; \
+  Type GetType() final;                      \
+  friend class content::WebUIController;     \
+  friend class content::WebUIBrowserInterfaceBrokerRegistry
 
 // This macro instantiates the static variable declared by the previous macro.
 // It must live in a .cc file to ensure that there is only one instantiation

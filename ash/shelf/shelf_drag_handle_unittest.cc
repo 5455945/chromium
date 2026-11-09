@@ -1,13 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/controls/contextual_tooltip.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/session/session_controller_impl.h"
-#include "ash/shelf/contextual_tooltip.h"
 #include "ash/shelf/drag_handle.h"
 #include "ash/shelf/drag_window_from_shelf_controller.h"
 #include "ash/shelf/drag_window_from_shelf_controller_test_api.h"
@@ -15,12 +15,13 @@
 #include "ash/shelf/test/shelf_layout_manager_test_base.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
@@ -40,10 +41,8 @@ ShelfLayoutManager* GetShelfLayoutManager() {
 class DragHandleContextualNudgeTest : public ShelfLayoutManagerTestBase {
  public:
   DragHandleContextualNudgeTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {ash::features::kContextualNudges,
-         ash::features::kHideShelfControlsInTabletMode},
-        {});
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kHideShelfControlsInTabletMode);
   }
   ~DragHandleContextualNudgeTest() override = default;
 
@@ -55,12 +54,12 @@ class DragHandleContextualNudgeTest : public ShelfLayoutManagerTestBase {
   // ShelfLayoutManagerTestBase:
   void SetUp() override {
     ShelfLayoutManagerTestBase::SetUp();
-    test_clock_.Advance(base::TimeDelta::FromHours(2));
+    test_clock_.Advance(base::Hours(2));
     contextual_tooltip::OverrideClockForTesting(&test_clock_);
   }
   void TearDown() override {
     contextual_tooltip::ClearClockOverrideForTesting();
-    AshTestBase::TearDown();
+    ShelfLayoutManagerTestBase::TearDown();
   }
 
   base::SimpleTestClock test_clock_;
@@ -85,7 +84,8 @@ TEST_F(DragHandleContextualNudgeTest, ShowDragHandleNudgeWithTimer) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
 
   // The drag handle should be showing but the nudge should not. A timer to show
   // the nudge should be initialized.
@@ -106,7 +106,8 @@ TEST_F(DragHandleContextualNudgeTest, HideDragHandleNudgeHiddenOnMinimize) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
 
   // The drag handle and nudge should be showing after the timer fires.
   GetShelfWidget()->GetDragHandle()->fire_show_drag_handle_timer_for_testing();
@@ -119,10 +120,6 @@ TEST_F(DragHandleContextualNudgeTest, HideDragHandleNudgeHiddenOnMinimize) {
   EXPECT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
   EXPECT_FALSE(
       GetShelfWidget()->GetDragHandle()->gesture_nudge_target_visibility());
-
-  histogram_tester.ExpectBucketCount(
-      "Ash.ContextualNudgeDismissContext.InAppToHome",
-      contextual_tooltip::DismissNudgeReason::kExitToHomeScreen, 1);
 }
 
 // Tests that the drag handle nudge nudge is hidden when closing the widget and
@@ -132,7 +129,8 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeHiddenOnClose) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
 
   DragHandle* const drag_handle = GetShelfWidget()->GetDragHandle();
 
@@ -155,10 +153,11 @@ TEST_F(DragHandleContextualNudgeTest,
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
 
-  ui::ScopedAnimationDurationScaleMode normal_animation_duration(
-      ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
+  gfx::ScopedAnimationDurationScaleMode normal_animation_duration(
+      gfx::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   GetShelfWidget()->GetDragHandle()->MaybeShowDragHandleNudge();
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
   EXPECT_TRUE(
@@ -190,7 +189,8 @@ TEST_F(DragHandleContextualNudgeTest, DoNotShowNudgeWithoutDragHandle) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
 
   // Minimizing the widget should hide the drag handle and nudge.
   widget->Minimize();
@@ -206,7 +206,8 @@ TEST_F(DragHandleContextualNudgeTest,
   widget->Maximize();
 
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
   GetShelfWidget()->GetDragHandle()->fire_show_drag_handle_timer_for_testing();
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
   EXPECT_TRUE(
@@ -237,7 +238,8 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeShownInAppShelf) {
   // maximized window will show the drag nudge immedietly. The drag handle nudge
   // should not be visible yet and the timer to show it should be set.
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
   EXPECT_FALSE(
       GetShelfWidget()->GetDragHandle()->gesture_nudge_target_visibility());
@@ -261,10 +263,6 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeShownInAppShelf) {
   EXPECT_FALSE(
       GetShelfWidget()->GetDragHandle()->gesture_nudge_target_visibility());
 
-  histogram_tester.ExpectBucketCount(
-      "Ash.ContextualNudgeDismissContext.InAppToHome",
-      contextual_tooltip::DismissNudgeReason::kSwitchToClamshell, 1);
-
   // Reentering tablet mode should show the drag handle but the nudge should
   // not. No timer should be set to show the nudge.
   TabletModeControllerTestApi().EnterTabletMode();
@@ -276,7 +274,7 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeShownInAppShelf) {
                    ->has_show_drag_handle_timer_for_testing());
 
   // Advance time for more than a day (which should enable the nudge again).
-  test_clock_.Advance(base::TimeDelta::FromHours(25));
+  test_clock_.Advance(base::Hours(25));
 
   // Reentering tablet mode with a maximized widget should immedietly show the
   // drag handle and set a timer to show the nudge.
@@ -306,7 +304,8 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeShownOnTap) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
   EXPECT_FALSE(
       GetShelfWidget()->GetDragHandle()->gesture_nudge_target_visibility());
@@ -574,7 +573,7 @@ TEST_F(DragHandleContextualNudgeTest,
 
   TabletModeControllerTestApi().LeaveTabletMode();
   // Advance time for more than a day (which should enable the nudge again).
-  test_clock_.Advance(base::TimeDelta::FromHours(25));
+  test_clock_.Advance(base::Hours(25));
   TabletModeControllerTestApi().EnterTabletMode();
   EXPECT_TRUE(drag_handle->has_show_drag_handle_timer_for_testing());
   drag_handle->fire_show_drag_handle_timer_for_testing();
@@ -585,8 +584,7 @@ TEST_F(DragHandleContextualNudgeTest,
   // hide the drag handle nudge is canceled when the window drag from shelf
   // starts.
   GetEventGenerator()->GestureScrollSequenceWithCallback(
-      start, start + gfx::Vector2d(0, -200),
-      base::TimeDelta::FromMilliseconds(50),
+      start, start + gfx::Vector2d(0, -200), base::Milliseconds(50),
       /*num_steps = */ 6,
       base::BindRepeating(
           [](DragHandle* drag_handle, ui::EventType type,
@@ -598,7 +596,7 @@ TEST_F(DragHandleContextualNudgeTest,
               EXPECT_FALSE(
                   drag_handle->has_hide_drag_handle_timer_for_testing());
             }
-            const bool scroll_end = type == ui::ET_GESTURE_SCROLL_END;
+            const bool scroll_end = type == ui::EventType::kGestureScrollEnd;
             EXPECT_EQ(!scroll_end,
                       drag_handle->gesture_nudge_target_visibility());
           },
@@ -629,8 +627,7 @@ TEST_F(DragHandleContextualNudgeTest,
   // show the drag handle nudge is canceled when the window drag from shelf
   // starts.
   GetEventGenerator()->GestureScrollSequenceWithCallback(
-      start, start + gfx::Vector2d(0, -200),
-      base::TimeDelta::FromMilliseconds(50),
+      start, start + gfx::Vector2d(0, -200), base::Milliseconds(50),
       /*num_steps = */ 6,
       base::BindRepeating(
           [](DragHandle* drag_handle, ui::EventType type,
@@ -643,7 +640,7 @@ TEST_F(DragHandleContextualNudgeTest,
                   drag_handle->has_show_drag_handle_timer_for_testing());
 
               // Attempt to schedule the nudge should fail.
-              if (type != ui::ET_GESTURE_SCROLL_END) {
+              if (type != ui::EventType::kGestureScrollEnd) {
                 drag_handle->ScheduleShowDragHandleNudge();
                 EXPECT_FALSE(
                     drag_handle->has_show_drag_handle_timer_for_testing());
@@ -677,20 +674,12 @@ TEST_F(DragHandleContextualNudgeTest, GestureSwipeHidesDragHandleNudge) {
   // Simulates a swipe up from the drag handle to perform the in app to home
   // gesture.
   GetEventGenerator()->GestureScrollSequence(
-      start, start + gfx::Vector2d(0, -300),
-      base::TimeDelta::FromMilliseconds(10),
+      start, start + gfx::Vector2d(0, -300), base::Milliseconds(10),
       /*num_steps = */ 5);
 
   // The nudge should be hidden when the gesture completes.
   EXPECT_FALSE(drag_handle->gesture_nudge_target_visibility());
   GetAppListTestHelper()->CheckVisibility(true);
-
-  histogram_tester.ExpectBucketCount(
-      "Ash.ContextualNudgeDismissContext.InAppToHome",
-      contextual_tooltip::DismissNudgeReason::kPerformedGesture, 1);
-  histogram_tester.ExpectTimeBucketCount(
-      "Ash.ContextualNudgeDismissTime.InAppToHome",
-      base::TimeDelta::FromSeconds(0), 1);
 }
 
 // Tests that drag handle nudge gets hidden when the user performs window drag
@@ -714,13 +703,12 @@ TEST_F(DragHandleContextualNudgeTest, FlingFromShelfToHomeHidesTheNudge) {
   // hide the drag handle nudge is canceled when the window drag from shelf
   // starts.
   GetEventGenerator()->GestureScrollSequenceWithCallback(
-      start, start + gfx::Vector2d(0, -300),
-      base::TimeDelta::FromMilliseconds(10),
+      start, start + gfx::Vector2d(0, -300), base::Milliseconds(10),
       /*num_steps = */ 6,
       base::BindRepeating(
           [](DragHandle* drag_handle, ui::EventType type,
              const gfx::Vector2dF& offset) {
-            const bool scroll_end = type == ui::ET_GESTURE_SCROLL_END;
+            const bool scroll_end = type == ui::EventType::kGestureScrollEnd;
             EXPECT_EQ(!scroll_end,
                       drag_handle->gesture_nudge_target_visibility());
           },
@@ -752,8 +740,7 @@ TEST_F(DragHandleContextualNudgeTest, DragFromShelfToHomeHidesTheNudge) {
   // hide the drag handle nudge is canceled when the window drag from shelf
   // starts.
   GetEventGenerator()->GestureScrollSequenceWithCallback(
-      start, start + gfx::Vector2d(0, -150),
-      base::TimeDelta::FromMilliseconds(500),
+      start, start + gfx::Vector2d(0, -150), base::Milliseconds(500),
       /*num_steps = */ 20,
       base::BindRepeating(
           [](DragHandle* drag_handle, ui::EventType type,
@@ -765,7 +752,7 @@ TEST_F(DragHandleContextualNudgeTest, DragFromShelfToHomeHidesTheNudge) {
               DragWindowFromShelfControllerTestApi().WaitUntilOverviewIsShown(
                   window_drag_controller);
             }
-            const bool scroll_end = type == ui::ET_GESTURE_SCROLL_END;
+            const bool scroll_end = type == ui::EventType::kGestureScrollEnd;
             EXPECT_EQ(!scroll_end,
                       drag_handle->gesture_nudge_target_visibility());
           },
@@ -836,7 +823,7 @@ TEST_F(DragHandleContextualNudgeTest,
        DragHandleTapDoesNotShowNudgeForSplitScreen) {
   TabletModeControllerTestApi().EnterTabletMode();
   std::unique_ptr<aura::Window> window =
-      AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   wm::ActivateWindow(window.get());
 
   ShelfWidget* const shelf_widget = GetShelfWidget();
@@ -847,7 +834,7 @@ TEST_F(DragHandleContextualNudgeTest,
   EnterOverview();
   SplitViewController* split_view_controller =
       SplitViewController::Get(shelf_widget->GetNativeWindow());
-  split_view_controller->SnapWindow(window.get(), SplitViewController::LEFT);
+  split_view_controller->SnapWindow(window.get(), SnapPosition::kPrimary);
   EXPECT_TRUE(split_view_controller->InSplitViewMode());
 
   // Tapping the drag handle will not show the drag handle.
@@ -861,7 +848,7 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeHiddenOnSplitScreen) {
   TabletModeControllerTestApi().EnterTabletMode();
 
   std::unique_ptr<aura::Window> window =
-      AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   wm::ActivateWindow(window.get());
 
   ShelfWidget* const shelf_widget = GetShelfWidget();
@@ -877,7 +864,7 @@ TEST_F(DragHandleContextualNudgeTest, DragHandleNudgeHiddenOnSplitScreen) {
   EnterOverview();
   SplitViewController* split_view_controller =
       SplitViewController::Get(shelf_widget->GetNativeWindow());
-  split_view_controller->SnapWindow(window.get(), SplitViewController::LEFT);
+  split_view_controller->SnapWindow(window.get(), SnapPosition::kPrimary);
   EXPECT_TRUE(split_view_controller->InSplitViewMode());
 
   // The drag handle nudge should no longer be visible.
@@ -890,7 +877,8 @@ TEST_P(DragHandleContextualNudgeTestA11yPrefs, HideNudgesForShelfControls) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
 
   // The drag handle should be showing but the nudge should not. A timer to show
   // the nudge should be initialized.
@@ -926,7 +914,8 @@ TEST_P(DragHandleContextualNudgeTestA11yPrefs, DisableNudgesForShelfControls) {
   views::Widget* widget = CreateTestWidget();
   widget->Maximize();
   TabletModeControllerTestApi().EnterTabletMode();
-  EXPECT_EQ(ShelfBackgroundType::kInApp, GetShelfWidget()->GetBackgroundType());
+  EXPECT_EQ(ShelfBackgroundType::kInApp,
+            GetShelfLayoutManager()->shelf_background_type());
   // The drag handle should be showing but the nudge should not. A timer to show
   // the nudge should not be initialized because shelf controls are on.
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());

@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,11 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "gpu/command_buffer/client/client_discardable_manager.h"
 #include "gpu/raster_export.h"
-#include "third_party/skia/src/core/SkRemoteGlyphCache.h"
+#include "third_party/skia/include/private/chromium/SkChromeRemoteGlyphCache.h"
 
 namespace gpu {
 class CommandBuffer;
@@ -22,7 +24,7 @@ class RASTER_EXPORT ClientFontManager
    public:
     virtual ~Client() {}
 
-    virtual void* MapFontBuffer(uint32_t size) = 0;
+    virtual base::span<uint8_t> MapFontBuffer(uint32_t size) = 0;
   };
 
   ClientFontManager(Client* client, CommandBuffer* command_buffer);
@@ -39,8 +41,8 @@ class RASTER_EXPORT ClientFontManager
  private:
   static constexpr SkDiscardableHandleId kInvalidSkDiscardableHandleId = -1;
 
-  Client* client_;
-  CommandBuffer* command_buffer_;
+  raw_ptr<Client> client_;
+  raw_ptr<CommandBuffer> command_buffer_;
 
   SkDiscardableHandleId last_allocated_handle_id_ = 0u;
   SkStrikeServer strike_server_;

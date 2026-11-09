@@ -1,52 +1,35 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_MOJOM_HDR_METADATA_MOJOM_TRAITS_H_
 #define UI_GFX_MOJOM_HDR_METADATA_MOJOM_TRAITS_H_
 
+#include "skia/public/mojom/hdr_metadata_mojom_traits.h"
+#include "third_party/skia/include/private/SkHdrMetadata.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/mojom/hdr_metadata.mojom.h"
 
 namespace mojo {
 
 template <>
-struct StructTraits<gfx::mojom::MasteringMetadataDataView,
-                    gfx::MasteringMetadata> {
-  static const gfx::PointF& primary_r(const gfx::MasteringMetadata& input) {
-    return input.primary_r;
-  }
-  static const gfx::PointF& primary_g(const gfx::MasteringMetadata& input) {
-    return input.primary_g;
-  }
-  static const gfx::PointF& primary_b(const gfx::MasteringMetadata& input) {
-    return input.primary_b;
-  }
-  static const gfx::PointF& white_point(const gfx::MasteringMetadata& input) {
-    return input.white_point;
-  }
-  static float luminance_max(const gfx::MasteringMetadata& input) {
-    return input.luminance_max;
-  }
-  static float luminance_min(const gfx::MasteringMetadata& input) {
-    return input.luminance_min;
-  }
-
-  static bool Read(gfx::mojom::MasteringMetadataDataView data,
-                   gfx::MasteringMetadata* output);
-};
-
-template <>
 struct StructTraits<gfx::mojom::HDRMetadataDataView, gfx::HDRMetadata> {
-  static unsigned max_content_light_level(const gfx::HDRMetadata& input) {
-    return input.max_content_light_level;
+  static mojo::OptionalAsPointer<const skhdr::ContentLightLevelInformation>
+  clli(const gfx::HDRMetadata& input) {
+    return mojo::OptionalAsPointer(input.HasCLLI() ? &input.GetCLLI()
+                                                   : nullptr);
   }
-  static unsigned max_frame_average_light_level(const gfx::HDRMetadata& input) {
-    return input.max_frame_average_light_level;
-  }
-  static const gfx::MasteringMetadata& mastering_metadata(
+
+  static mojo::OptionalAsPointer<const skhdr::MasteringDisplayColorVolume> mdcv(
       const gfx::HDRMetadata& input) {
-    return input.mastering_metadata;
+    return mojo::OptionalAsPointer(input.HasMDCV() ? &input.GetMDCV()
+                                                   : nullptr);
+  }
+
+  static mojo::OptionalAsPointer<const skhdr::AdaptiveGlobalToneMap> agtm(
+      const gfx::HDRMetadata& input) {
+    return mojo::OptionalAsPointer(input.HasAgtm() ? &input.GetAgtm()
+                                                   : nullptr);
   }
 
   static bool Read(gfx::mojom::HDRMetadataDataView data,

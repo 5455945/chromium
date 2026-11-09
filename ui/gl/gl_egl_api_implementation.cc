@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ namespace gl {
 GL_IMPL_WRAPPER_TYPE(EGL) * g_egl_wrapper = nullptr;
 
 void InitializeStaticGLBindingsEGL() {
-  g_driver_egl.InitializeStaticBindings();
+  g_driver_egl.InitializeStaticBindings(GetGLProcAddress);
   if (!g_egl_wrapper) {
     auto real_api = std::make_unique<RealEGLApi>();
     real_api->Initialize(&g_driver_egl);
@@ -24,6 +24,7 @@ void InitializeStaticGLBindingsEGL() {
   }
 
   g_current_egl_context = g_egl_wrapper->api();
+  g_driver_egl.client_ext.InitializeClientExtensionSettings();
 }
 
 void ClearBindingsEGL() {
@@ -68,8 +69,9 @@ void RealEGLApi::SetDisabledExtensions(const std::string& disabled_extensions) {
         base::SplitString(disabled_extensions, ", ;", base::KEEP_WHITESPACE,
                           base::SPLIT_WANT_NONEMPTY);
     for (const auto& ext : candidates) {
-      if (!base::StartsWith(ext, "EGL_", base::CompareCase::SENSITIVE))
+      if (!ext.starts_with("EGL_")) {
         continue;
+      }
       // For the moment, only the following two extensions can be disabled.
       // See DriverEGL::UpdateConditionalExtensionBindings().
       DCHECK(ext == "EGL_KHR_fence_sync" || ext == "EGL_KHR_wait_sync");
@@ -114,7 +116,11 @@ void TraceEGLApi::SetDisabledExtensions(
 }
 
 bool GetGLWindowSystemBindingInfoEGL(GLWindowSystemBindingInfo* info) {
-  EGLDisplay display = eglGetCurrentDisplay();
+  return GetGLWindowSystemBindingInfoEGL(eglGetCurrentDisplay(), info);
+}
+
+bool GetGLWindowSystemBindingInfoEGL(EGLDisplay display,
+                                     GLWindowSystemBindingInfo* info) {
   const char* vendor = eglQueryString(display, EGL_VENDOR);
   const char* version = eglQueryString(display, EGL_VERSION);
   const char* extensions = eglQueryString(display, EGL_EXTENSIONS);
@@ -134,8 +140,8 @@ void SetDisabledExtensionsEGL(const std::string& disabled_extensions) {
   g_current_egl_context->SetDisabledExtensions(disabled_extensions);
 }
 
-bool InitializeExtensionSettingsOneOffEGL() {
-  return GLSurfaceEGL::InitializeExtensionSettingsOneOff();
+bool InitializeExtensionSettingsOneOffEGL(GLDisplayEGL* display) {
+  return display->InitializeExtensionSettings();
 }
 
 }  // namespace gl

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 #define MEDIA_FUCHSIA_COMMON_VMO_BUFFER_H_
 
 #include <fuchsia/media/cpp/fidl.h>
-#include <fuchsia/sysmem/cpp/fidl.h>
+#include <fuchsia/sysmem2/cpp/fidl.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "media/base/media_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -22,15 +22,15 @@ class MEDIA_EXPORT VmoBuffer {
  public:
   // Returns sysmem buffer constraints to use to ensure that sysmem buffer
   // collection is compatible with this class.
-  static fuchsia::sysmem::BufferCollectionConstraints GetRecommendedConstraints(
-      size_t min_buffer_count,
-      absl::optional<size_t> min_buffer_size,
-      bool writable);
+  static fuchsia::sysmem2::BufferCollectionConstraints
+  GetRecommendedConstraints(size_t min_buffer_count,
+                            std::optional<size_t> min_buffer_size,
+                            bool writable);
 
   // Creates a set of buffers from a sysmem collection. An empty vector is
   // returned in case of a failure.
   static std::vector<VmoBuffer> CreateBuffersFromSysmemCollection(
-      fuchsia::sysmem::BufferCollectionInfo_2* info,
+      fuchsia::sysmem2::BufferCollectionInfo* info,
       bool writable);
 
   VmoBuffer();
@@ -43,12 +43,12 @@ class MEDIA_EXPORT VmoBuffer {
   // for writable buffers. |offset| and |size| are used to specify the portion
   // of the |vmo| that should be used for this buffer. Returns false if it fails
   // to map the buffer.
-  bool Initialize(zx::vmo vmo,
-                  bool writable,
-                  size_t offset,
-                  size_t size,
-                  fuchsia::sysmem::CoherencyDomain coherency_domain)
-      WARN_UNUSED_RESULT;
+  [[nodiscard]] bool Initialize(
+      zx::vmo vmo,
+      bool writable,
+      size_t offset,
+      size_t size,
+      fuchsia::sysmem2::CoherencyDomain coherency_domain);
 
   size_t size() const { return size_; }
 
@@ -86,12 +86,12 @@ class MEDIA_EXPORT VmoBuffer {
 
   zx::vmo vmo_;
 
-  uint8_t* base_address_ = nullptr;
+  raw_ptr<uint8_t, AllowPtrArithmetic> base_address_ = nullptr;
 
   bool writable_ = false;
   size_t offset_ = 0;
   size_t size_ = 0;
-  fuchsia::sysmem::CoherencyDomain coherency_domain_;
+  fuchsia::sysmem2::CoherencyDomain coherency_domain_;
 };
 
 }  // namespace media

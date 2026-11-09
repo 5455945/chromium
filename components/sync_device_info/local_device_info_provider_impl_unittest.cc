@@ -1,13 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/sync_device_info/local_device_info_provider_impl.h"
 
+#include <optional>
+
+#include "base/containers/flat_set.h"
 #include "base/memory/ptr_util.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/sync_util.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/device_info_sync_client.h"
 #include "components/version_info/version_string.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -22,55 +25,76 @@ const char kLocalDeviceManufacturerName[] = "manufacturer";
 const char kLocalDeviceModelName[] = "model";
 const char kLocalFullHardwareClass[] = "test_full_hardware_class";
 
-const char kSharingVapidFCMRegistrationToken[] = "test_vapid_fcm_token";
-const char kSharingVapidP256dh[] = "test_vapid_p256_dh";
-const char kSharingVapidAuthSecret[] = "test_vapid_auth_secret";
 const char kSharingSenderIdFCMRegistrationToken[] = "test_sender_id_fcm_token";
 const char kSharingSenderIdP256dh[] = "test_sender_id_p256_dh";
 const char kSharingSenderIdAuthSecret[] = "test_sender_id_auth_secret";
-const sync_pb::SharingSpecificFields::EnabledFeatures
-    kSharingEnabledFeatures[] = {
-        sync_pb::SharingSpecificFields::CLICK_TO_CALL_V2};
+const char kSharingChimeRepresentativeTargetId[] =
+    "chime_representative_target_id";
+const DeviceInfo::SharingFeature kSharingEnabledFeatures[] = {
+    DeviceInfo::SharingFeature::kRemoteCopy};
 
-using testing::_;
 using testing::NiceMock;
 using testing::NotNull;
 using testing::Return;
-using testing::ReturnRef;
 
 class MockDeviceInfoSyncClient : public DeviceInfoSyncClient {
  public:
   MockDeviceInfoSyncClient() = default;
-  ~MockDeviceInfoSyncClient() = default;
+
+  MockDeviceInfoSyncClient(const MockDeviceInfoSyncClient&) = delete;
+  MockDeviceInfoSyncClient& operator=(const MockDeviceInfoSyncClient&) = delete;
+
+  ~MockDeviceInfoSyncClient() override = default;
 
   MOCK_METHOD(std::string, GetSigninScopedDeviceId, (), (const override));
-  MOCK_METHOD(bool, GetSendTabToSelfReceivingEnabled, (), (const override));
-  MOCK_METHOD(absl::optional<DeviceInfo::SharingInfo>,
+  MOCK_METHOD(DeviceInfo::SendTabReceivingType,
+              GetSendTabToSelfReceivingType,
+              (),
+              (const override));
+  MOCK_METHOD(std::optional<DeviceInfo::SharingInfo>,
               GetLocalSharingInfo,
               (),
               (const override));
-  MOCK_METHOD(absl::optional<DeviceInfo::PhoneAsASecurityKeyInfo>,
+  MOCK_METHOD(DeviceInfo::PhoneAsASecurityKeyInfo::StatusOrInfo,
               GetPhoneAsASecurityKeyInfo,
               (),
               (const override));
-  MOCK_METHOD(absl::optional<std::string>,
+  MOCK_METHOD(std::optional<std::string>,
               GetFCMRegistrationToken,
               (),
               (const override));
-  MOCK_METHOD(absl::optional<ModelTypeSet>,
+  MOCK_METHOD(std::optional<DataTypeSet>,
               GetInterestedDataTypes,
               (),
               (const override));
   MOCK_METHOD(bool, IsUmaEnabledOnCrOSDevice, (), (const override));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockDeviceInfoSyncClient);
+  MOCK_METHOD(bool, GetDesktopToIOSPromoReceivingEnabled, (), (const override));
+  MOCK_METHOD(MobilePromoOnDesktopPromoTypeSet,
+              GetDesktopToIOSPromoReceivingTypes,
+              (),
+              (const override));
+  MOCK_METHOD(DeviceInfo::GlicExperimentalTriggeringState,
+              GetGlicExperimentalTriggeringState,
+              (),
+              (const override));
+  MOCK_METHOD(std::optional<int>,
+              GetGlicExperimentalTriggeringVersion,
+              (),
+              (const override));
+  MOCK_METHOD(base::flat_set<std::string>,
+              GetGlicExperimentalTriggeringCapabilities,
+              (),
+              (const override));
+  MOCK_METHOD(DeviceInfo::PersonalContextInfo::StatusOrInfo,
+              GetLocalPersonalContextInfo,
+              (),
+              (const override));
 };
 
 class LocalDeviceInfoProviderImplTest : public testing::Test {
  public:
-  LocalDeviceInfoProviderImplTest() {}
-  ~LocalDeviceInfoProviderImplTest() override {}
+  LocalDeviceInfoProviderImplTest() = default;
+  ~LocalDeviceInfoProviderImplTest() override = default;
 
   void SetUp() override {
     provider_ = std::make_unique<LocalDeviceInfoProviderImpl>(
@@ -88,6 +112,7 @@ class LocalDeviceInfoProviderImplTest : public testing::Test {
     provider_->Initialize(guid, kLocalDeviceClientName,
                           kLocalDeviceManufacturerName, kLocalDeviceModelName,
                           kLocalFullHardwareClass,
+                          /*android_os_build_fingerprint_prefix=*/std::nullopt,
                           /*device_info_restored_from_store=*/nullptr);
   }
 
@@ -105,7 +130,7 @@ class LocalDeviceInfoProviderImplTest : public testing::Test {
   std::unique_ptr<LocalDeviceInfoProviderImpl> provider_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(LocalDeviceInfoProviderImplTest, UmaToggleFullHardwareClass) {
   InitializeProvider(kLocalDeviceGuid);
 
@@ -125,7 +150,7 @@ TEST_F(LocalDeviceInfoProviderImplTest, UmaToggleFullHardwareClass) {
   EXPECT_EQ(provider_->GetLocalDeviceInfo()->full_hardware_class(),
             kLocalFullHardwareClass);
 }
-#else   // NOT BUILDFLAG(IS_CHROMEOS_ASH)
+#else   // NOT BUILDFLAG(IS_CHROMEOS)
 TEST_F(LocalDeviceInfoProviderImplTest,
        UmaEnabledNonChromeOSHardwareClassEmpty) {
   // Tests that the |full_hardware_class| doesn't get updated when on
@@ -140,7 +165,7 @@ TEST_F(LocalDeviceInfoProviderImplTest,
   // |kLocalFullHardwareClass| is reset after retrieving |local_device_info|
   EXPECT_EQ(local_device_info->full_hardware_class(), "");
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(LocalDeviceInfoProviderImplTest, GetLocalDeviceInfo) {
   ASSERT_EQ(nullptr, provider_->GetLocalDeviceInfo());
@@ -175,63 +200,181 @@ TEST_F(LocalDeviceInfoProviderImplTest, GetSigninScopedDeviceId) {
             provider_->GetLocalDeviceInfo()->signin_scoped_device_id());
 }
 
-TEST_F(LocalDeviceInfoProviderImplTest, SendTabToSelfReceivingEnabled) {
-  ON_CALL(device_info_sync_client_, GetSendTabToSelfReceivingEnabled())
-      .WillByDefault(Return(true));
+TEST_F(LocalDeviceInfoProviderImplTest, SendTabToSelfReceivingType) {
+  ON_CALL(device_info_sync_client_, GetSendTabToSelfReceivingType())
+      .WillByDefault(
+          Return(DeviceInfo::SendTabReceivingType::kChromeOrUnspecified));
 
   InitializeProvider();
 
   ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
-  EXPECT_TRUE(
-      provider_->GetLocalDeviceInfo()->send_tab_to_self_receiving_enabled());
+  EXPECT_EQ(provider_->GetLocalDeviceInfo()->send_tab_to_self_receiving_type(),
+            DeviceInfo::SendTabReceivingType::kChromeOrUnspecified);
 
-  ON_CALL(device_info_sync_client_, GetSendTabToSelfReceivingEnabled())
-      .WillByDefault(Return(false));
+  ON_CALL(device_info_sync_client_, GetSendTabToSelfReceivingType())
+      .WillByDefault(
+          Return(DeviceInfo::SendTabReceivingType::kChromeAndPushNotification));
 
   ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
-  EXPECT_FALSE(
-      provider_->GetLocalDeviceInfo()->send_tab_to_self_receiving_enabled());
+  EXPECT_EQ(provider_->GetLocalDeviceInfo()->send_tab_to_self_receiving_type(),
+            DeviceInfo::SendTabReceivingType::kChromeAndPushNotification);
+}
+
+TEST_F(LocalDeviceInfoProviderImplTest, DesktopToIOSPromoReceivingEnabled) {
+  ON_CALL(device_info_sync_client_, GetDesktopToIOSPromoReceivingEnabled())
+      .WillByDefault(Return(true));
+  ON_CALL(device_info_sync_client_, GetDesktopToIOSPromoReceivingTypes())
+      .WillByDefault(Return(MobilePromoOnDesktopPromoTypeSet{
+          MobilePromoOnDesktopPromoType::kAllPromos}));
+
+  InitializeProvider();
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_TRUE(provider_->GetLocalDeviceInfo()
+                  ->desktop_to_ios_promo_receiving_enabled());
+  EXPECT_TRUE(provider_->GetLocalDeviceInfo()
+                  ->desktop_to_ios_promo_receiving_types()
+                  .Has(MobilePromoOnDesktopPromoType::kAllPromos));
+
+  ON_CALL(device_info_sync_client_, GetDesktopToIOSPromoReceivingEnabled())
+      .WillByDefault(Return(false));
+  ON_CALL(device_info_sync_client_, GetDesktopToIOSPromoReceivingTypes())
+      .WillByDefault(Return(MobilePromoOnDesktopPromoTypeSet{}));
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_FALSE(provider_->GetLocalDeviceInfo()
+                   ->desktop_to_ios_promo_receiving_enabled());
+  EXPECT_TRUE(provider_->GetLocalDeviceInfo()
+                  ->desktop_to_ios_promo_receiving_types()
+                  .empty());
+}
+
+TEST_F(LocalDeviceInfoProviderImplTest, ExperimentalTriggeringState) {
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringState())
+      .WillByDefault(
+          Return(DeviceInfo::GlicExperimentalTriggeringState::kReady));
+
+  InitializeProvider();
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_EQ(
+      provider_->GetLocalDeviceInfo()->glic_experimental_triggering_state(),
+      DeviceInfo::GlicExperimentalTriggeringState::kReady);
+
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringState())
+      .WillByDefault(
+          Return(DeviceInfo::GlicExperimentalTriggeringState::kNeedsOptIn));
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_EQ(
+      provider_->GetLocalDeviceInfo()->glic_experimental_triggering_state(),
+      DeviceInfo::GlicExperimentalTriggeringState::kNeedsOptIn);
+
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringState())
+      .WillByDefault(
+          Return(DeviceInfo::GlicExperimentalTriggeringState::kUnavailable));
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_EQ(
+      provider_->GetLocalDeviceInfo()->glic_experimental_triggering_state(),
+      DeviceInfo::GlicExperimentalTriggeringState::kUnavailable);
+}
+TEST_F(LocalDeviceInfoProviderImplTest, ExperimentalTriggeringVersion) {
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringVersion())
+      .WillByDefault(Return(std::nullopt));
+
+  InitializeProvider();
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_EQ(
+      provider_->GetLocalDeviceInfo()->glic_experimental_triggering_version(),
+      std::nullopt);
+
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringVersion())
+      .WillByDefault(Return(std::optional<int>(42)));
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_EQ(
+      provider_->GetLocalDeviceInfo()->glic_experimental_triggering_version(),
+      std::optional<int>(42));
+}
+
+TEST_F(LocalDeviceInfoProviderImplTest, ExperimentalTriggeringCapabilities) {
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringCapabilities())
+      .WillByDefault(Return(base::flat_set<std::string>{}));
+
+  InitializeProvider();
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_TRUE(provider_->GetLocalDeviceInfo()
+                  ->glic_experimental_triggering_capabilities()
+                  .empty());
+
+  ON_CALL(device_info_sync_client_, GetGlicExperimentalTriggeringCapabilities())
+      .WillByDefault(Return(base::flat_set<std::string>{"screenshot"}));
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_EQ(provider_->GetLocalDeviceInfo()
+                ->glic_experimental_triggering_capabilities(),
+            base::flat_set<std::string>{"screenshot"});
 }
 
 TEST_F(LocalDeviceInfoProviderImplTest, SharingInfo) {
   ON_CALL(device_info_sync_client_, GetLocalSharingInfo())
-      .WillByDefault(Return(absl::nullopt));
+      .WillByDefault(Return(std::nullopt));
 
   InitializeProvider();
 
   ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
   EXPECT_FALSE(provider_->GetLocalDeviceInfo()->sharing_info());
 
-  std::set<sync_pb::SharingSpecificFields::EnabledFeatures> enabled_features(
+  std::set<DeviceInfo::SharingFeature> enabled_features(
       std::begin(kSharingEnabledFeatures), std::end(kSharingEnabledFeatures));
-  absl::optional<DeviceInfo::SharingInfo> sharing_info =
-      absl::make_optional<DeviceInfo::SharingInfo>(
-          DeviceInfo::SharingTargetInfo{kSharingVapidFCMRegistrationToken,
-                                        kSharingVapidP256dh,
-                                        kSharingVapidAuthSecret},
+  std::optional<DeviceInfo::SharingInfo> sharing_info =
+      std::make_optional<DeviceInfo::SharingInfo>(
           DeviceInfo::SharingTargetInfo{kSharingSenderIdFCMRegistrationToken,
                                         kSharingSenderIdP256dh,
                                         kSharingSenderIdAuthSecret},
-          enabled_features);
+          kSharingChimeRepresentativeTargetId, enabled_features);
   ON_CALL(device_info_sync_client_, GetLocalSharingInfo())
       .WillByDefault(Return(sharing_info));
 
   ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
-  const absl::optional<DeviceInfo::SharingInfo>& local_sharing_info =
+  const std::optional<DeviceInfo::SharingInfo>& local_sharing_info =
       provider_->GetLocalDeviceInfo()->sharing_info();
   ASSERT_TRUE(local_sharing_info);
-  EXPECT_EQ(kSharingVapidFCMRegistrationToken,
-            local_sharing_info->vapid_target_info.fcm_token);
-  EXPECT_EQ(kSharingVapidP256dh, local_sharing_info->vapid_target_info.p256dh);
-  EXPECT_EQ(kSharingVapidAuthSecret,
-            local_sharing_info->vapid_target_info.auth_secret);
   EXPECT_EQ(kSharingSenderIdFCMRegistrationToken,
             local_sharing_info->sender_id_target_info.fcm_token);
   EXPECT_EQ(kSharingSenderIdP256dh,
             local_sharing_info->sender_id_target_info.p256dh);
+  EXPECT_EQ(kSharingChimeRepresentativeTargetId,
+            local_sharing_info->chime_representative_target_id);
   EXPECT_EQ(kSharingSenderIdAuthSecret,
             local_sharing_info->sender_id_target_info.auth_secret);
   EXPECT_EQ(enabled_features, local_sharing_info->enabled_features);
+}
+
+TEST_F(LocalDeviceInfoProviderImplTest, PersonalContextInfo) {
+  ON_CALL(device_info_sync_client_, GetLocalPersonalContextInfo())
+      .WillByDefault(Return(DeviceInfo::PersonalContextInfo::NotEligible()));
+
+  InitializeProvider();
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  EXPECT_FALSE(provider_->GetLocalDeviceInfo()->personal_context_info());
+
+  const std::vector<uint8_t> kSerializedKeyset = {1, 2, 3, 4, 5};
+  DeviceInfo::PersonalContextInfo personal_context_info{
+      .serialized_tink_keyset = kSerializedKeyset, .eligible_for_spii = true};
+  ON_CALL(device_info_sync_client_, GetLocalPersonalContextInfo())
+      .WillByDefault(Return(personal_context_info));
+
+  ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
+  const std::optional<DeviceInfo::PersonalContextInfo>& local_info =
+      provider_->GetLocalDeviceInfo()->personal_context_info();
+  ASSERT_TRUE(local_info);
+  EXPECT_EQ(kSerializedKeyset, local_info->serialized_tink_keyset);
+  EXPECT_TRUE(local_info->eligible_for_spii);
 }
 
 TEST_F(LocalDeviceInfoProviderImplTest, ShouldPopulateFCMRegistrationToken) {
@@ -251,9 +394,9 @@ TEST_F(LocalDeviceInfoProviderImplTest, ShouldPopulateFCMRegistrationToken) {
 TEST_F(LocalDeviceInfoProviderImplTest, ShouldPopulateInterestedDataTypes) {
   InitializeProvider();
   ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
-  EXPECT_TRUE(provider_->GetLocalDeviceInfo()->interested_data_types().Empty());
+  EXPECT_TRUE(provider_->GetLocalDeviceInfo()->interested_data_types().empty());
 
-  const ModelTypeSet kTypes = ModelTypeSet(BOOKMARKS);
+  const DataTypeSet kTypes = {BOOKMARKS};
   EXPECT_CALL(device_info_sync_client_, GetInterestedDataTypes())
       .WillRepeatedly(Return(kTypes));
 
@@ -262,44 +405,75 @@ TEST_F(LocalDeviceInfoProviderImplTest, ShouldPopulateInterestedDataTypes) {
 
 TEST_F(LocalDeviceInfoProviderImplTest, ShouldKeepStoredInvalidationFields) {
   const std::string kFCMRegistrationToken = "fcm_token";
-  const ModelTypeSet kInterestedDataTypes(BOOKMARKS);
+  const DataTypeSet kInterestedDataTypes = {BOOKMARKS};
 
   DeviceInfo::PhoneAsASecurityKeyInfo paask_info =
       SamplePhoneAsASecurityKeyInfo();
-  auto device_info_restored_from_store = std::make_unique<DeviceInfo>(
+  DeviceInfo::PersonalContextInfo personal_context_info{
+      .serialized_tink_keyset = {1, 2, 3}};
+  const DeviceInfo device_info_restored_from_store(
       kLocalDeviceGuid, "name", "chrome_version", "user_agent",
-      sync_pb::SyncEnums_DeviceType_TYPE_LINUX, "device_id", "manufacturer",
-      "model", "full_hardware_class", base::Time(),
-      base::TimeDelta::FromDays(1),
-      /*send_tab_to_self_receiving_enabled=*/true,
-      /*sharing_info=*/absl::nullopt, paask_info, kFCMRegistrationToken,
-      kInterestedDataTypes);
+      DeviceInfo::DeviceType::kLinux, DeviceInfo::OsType::kLinux,
+      DeviceInfo::FormFactor::kDesktop, "device_id", "manufacturer", "model",
+      /*server_determined_model_name=*/std::nullopt, "full_hardware_class",
+      base::Time(), base::Days(1),
+      /*send_tab_to_self_receiving_type=*/
+      DeviceInfo::SendTabReceivingType::kChromeOrUnspecified,
+      /*sharing_info=*/std::nullopt, paask_info, kFCMRegistrationToken,
+      kInterestedDataTypes,
+      /*auto_sign_out_last_signin_timestamp=*/std::nullopt,
+      /*desktop_to_ios_promo_receiving_enabled=*/false,
+      /*desktop_to_ios_promo_receiving_types=*/
+      MobilePromoOnDesktopPromoTypeSet{},
+      /*glic_experimental_triggering_state=*/
+      DeviceInfo::GlicExperimentalTriggeringState::kUnavailable,
+      /*glic_experimental_triggering_version=*/
+      std::nullopt,
+      /*glic_experimental_triggering_capabilities=*/{},
+      /*android_os_build_fingerprint_prefix=*/std::nullopt,
+      personal_context_info);
 
-  // |kFCMRegistrationToken|, |kInterestedDataTypes|,
-  // and |paask_info| should be taken from |device_info_restored_from_store|
-  // when |device_info_sync_client_| returns nullopt.
+  // |kFCMRegistrationToken|, |kInterestedDataTypes|, |paask_info|, and
+  // |personal_context_info| should be taken from
+  // |device_info_restored_from_store| when |device_info_sync_client_| is not
+  // ready.
   provider_->Initialize(kLocalDeviceGuid, kLocalDeviceClientName,
                         kLocalDeviceManufacturerName, kLocalDeviceModelName,
                         kLocalFullHardwareClass,
-                        std::move(device_info_restored_from_store));
+                        /*android_os_build_fingerprint_prefix=*/std::nullopt,
+                        &device_info_restored_from_store);
 
   EXPECT_CALL(device_info_sync_client_, GetFCMRegistrationToken())
-      .WillOnce(Return(absl::nullopt));
+      .WillRepeatedly(Return(std::nullopt));
   EXPECT_CALL(device_info_sync_client_, GetInterestedDataTypes())
-      .WillOnce(Return(absl::nullopt));
+      .WillRepeatedly(Return(std::nullopt));
   EXPECT_CALL(device_info_sync_client_, GetPhoneAsASecurityKeyInfo())
-      .WillOnce(Return(absl::nullopt));
+      .WillOnce(Return(DeviceInfo::PhoneAsASecurityKeyInfo::NotReady()));
+  EXPECT_CALL(device_info_sync_client_, GetLocalPersonalContextInfo())
+      .WillOnce(Return(DeviceInfo::PersonalContextInfo::NotReady()));
 
   const DeviceInfo* local_device_info = provider_->GetLocalDeviceInfo();
   EXPECT_EQ(local_device_info->interested_data_types(), kInterestedDataTypes);
   EXPECT_EQ(local_device_info->fcm_registration_token(), kFCMRegistrationToken);
   EXPECT_TRUE(
       local_device_info->paask_info()->NonRotatingFieldsEqual(paask_info));
+  EXPECT_EQ(local_device_info->personal_context_info(), personal_context_info);
+
+  // `GetPhoneAsASecurityKeyInfo` and `GetLocalPersonalContextInfo` can erase
+  // the fields too.
+  EXPECT_CALL(device_info_sync_client_, GetPhoneAsASecurityKeyInfo())
+      .WillOnce(Return(DeviceInfo::PhoneAsASecurityKeyInfo::NoSupport()));
+  EXPECT_CALL(device_info_sync_client_, GetLocalPersonalContextInfo())
+      .WillOnce(Return(DeviceInfo::PersonalContextInfo::NotEligible()));
+
+  const DeviceInfo* local_device_info2 = provider_->GetLocalDeviceInfo();
+  EXPECT_FALSE(local_device_info2->paask_info().has_value());
+  EXPECT_FALSE(local_device_info2->personal_context_info().has_value());
 }
 
 TEST_F(LocalDeviceInfoProviderImplTest, PhoneAsASecurityKeyInfo) {
   ON_CALL(device_info_sync_client_, GetPhoneAsASecurityKeyInfo())
-      .WillByDefault(Return(absl::nullopt));
+      .WillByDefault(Return(DeviceInfo::PhoneAsASecurityKeyInfo::NoSupport()));
 
   InitializeProvider();
 
@@ -312,7 +486,7 @@ TEST_F(LocalDeviceInfoProviderImplTest, PhoneAsASecurityKeyInfo) {
       .WillByDefault(Return(paask_info));
 
   ASSERT_THAT(provider_->GetLocalDeviceInfo(), NotNull());
-  const absl::optional<DeviceInfo::PhoneAsASecurityKeyInfo>& result_paask_info =
+  const std::optional<DeviceInfo::PhoneAsASecurityKeyInfo>& result_paask_info =
       provider_->GetLocalDeviceInfo()->paask_info();
   ASSERT_TRUE(result_paask_info);
   EXPECT_EQ(paask_info.tunnel_server_domain,

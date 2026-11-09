@@ -1,15 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "chromeos/components/cdm_factory_daemon/content_decryption_module_adapter.h"
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "chromeos/components/cdm_factory_daemon/chromeos_cdm_factory.h"
 #include "media/base/cdm_promise.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/eme_constants.h"
@@ -44,7 +47,7 @@ ContentDecryptionModuleAdapter::ContentDecryptionModuleAdapter(
       session_closed_cb_(session_closed_cb),
       session_keys_change_cb_(session_keys_change_cb),
       session_expiration_update_cb_(session_expiration_update_cb),
-      mojo_task_runner_(base::SequencedTaskRunnerHandle::Get()) {
+      mojo_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   DVLOG(1) << "Created ContentDecryptionModuleAdapter";
   cros_cdm_remote_.set_disconnect_handler(
       base::BindOnce(&ContentDecryptionModuleAdapter::OnConnectionError,
@@ -239,9 +242,42 @@ void ContentDecryptionModuleAdapter::GetHwKeyDataInternal(
                                  std::move(callback));
 }
 
+void ContentDecryptionModuleAdapter::GetHwConfigData(
+    GetHwConfigDataCB callback) {
+  ChromeOsCdmFactory::GetHwConfigData(std::move(callback));
+}
+
+void ContentDecryptionModuleAdapter::GetScreenResolutions(
+    GetScreenResolutionsCB callback) {
+  ChromeOsCdmFactory::GetScreenResolutions(std::move(callback));
+}
+
 std::unique_ptr<media::CdmContextRef>
 ContentDecryptionModuleAdapter::GetCdmContextRef() {
   return std::make_unique<media::CdmContextRefImpl>(base::WrapRefCounted(this));
+}
+
+bool ContentDecryptionModuleAdapter::UsingArcCdm() const {
+  return false;
+}
+
+bool ContentDecryptionModuleAdapter::IsRemoteCdm() const {
+  return false;
+}
+
+void ContentDecryptionModuleAdapter::AllocateSecureBuffer(
+    uint32_t size,
+    AllocateSecureBufferCB callback) {
+  ChromeOsCdmFactory::AllocateSecureBuffer(size, std::move(callback));
+}
+
+void ContentDecryptionModuleAdapter::ParseEncryptedSliceHeader(
+    uint64_t secure_handle,
+    uint32_t offset,
+    const std::vector<uint8_t>& stream_data,
+    ParseEncryptedSliceHeaderCB callback) {
+  ChromeOsCdmFactory::ParseEncryptedSliceHeader(
+      secure_handle, offset, stream_data, std::move(callback));
 }
 
 void ContentDecryptionModuleAdapter::OnSessionMessage(
@@ -258,7 +294,7 @@ void ContentDecryptionModuleAdapter::OnSessionClosed(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DVLOG(2) << __func__;
   cdm_session_tracker_.RemoveSession(session_id);
-  // TODO(crbug.com/1208618): Update cdm::mojom::ContentDecryptionModuleClient
+  // TODO(crbug.com/40181810): Update cdm::mojom::ContentDecryptionModuleClient
   // to support CdmSessionClosedReason.
   session_closed_cb_.Run(session_id, media::CdmSessionClosedReason::kClose);
 }
@@ -283,7 +319,7 @@ void ContentDecryptionModuleAdapter::OnSessionExpirationUpdate(
     double new_expiry_time_sec) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   session_expiration_update_cb_.Run(
-      session_id, base::Time::FromDoubleT(new_expiry_time_sec));
+      session_id, base::Time::FromSecondsSinceUnixEpoch(new_expiry_time_sec));
 }
 
 void ContentDecryptionModuleAdapter::Decrypt(
@@ -313,9 +349,9 @@ void ContentDecryptionModuleAdapter::Decrypt(
     // clear content otherwise.
     DCHECK_EQ(stream_type, Decryptor::kVideo);
     cros_cdm_remote_->Decrypt(
-        std::vector<uint8_t>(encrypted->data(),
-                             encrypted->data() + encrypted->data_size()),
-        nullptr, true,
+        std::vector<uint8_t>(encrypted->begin(), encrypted->end()), nullptr,
+        true,
+        encrypted->side_data() ? encrypted->side_data()->secure_handle : 0,
         base::BindOnce(&ContentDecryptionModuleAdapter::OnDecrypt,
                        base::Unretained(this), stream_type, encrypted,
                        std::move(decrypt_cb)));
@@ -327,7 +363,7 @@ void ContentDecryptionModuleAdapter::Decrypt(
   const std::vector<media::SubsampleEntry>& subsamples =
       decrypt_config->subsamples();
   if (!subsamples.empty() &&
-      !VerifySubsamplesMatchSize(subsamples, encrypted->data_size())) {
+      !VerifySubsamplesMatchSize(subsamples, encrypted->size())) {
     LOG(ERROR) << "Subsample sizes do not match input size";
     std::move(decrypt_cb).Run(kError, nullptr);
     return;
@@ -336,9 +372,9 @@ void ContentDecryptionModuleAdapter::Decrypt(
   // TODO(jkardatzke): Evaluate the performance cost here of copying the data
   // and see if want to use something like MojoDecoderBufferWriter instead.
   cros_cdm_remote_->Decrypt(
-      std::vector<uint8_t>(encrypted->data(),
-                           encrypted->data() + encrypted->data_size()),
+      std::vector<uint8_t>(encrypted->begin(), encrypted->end()),
       decrypt_config->Clone(), stream_type == Decryptor::kVideo,
+      encrypted->side_data() ? encrypted->side_data()->secure_handle : 0,
       base::BindOnce(&ContentDecryptionModuleAdapter::OnDecrypt,
                      base::Unretained(this), stream_type, encrypted,
                      std::move(decrypt_cb)));
@@ -480,15 +516,16 @@ void ContentDecryptionModuleAdapter::OnDecrypt(
     return;
   }
 
+  // If we decrypted to secure memory, then just send the original buffer back
+  // because the result is stored in the secure world.
+  if (encrypted->side_data() && encrypted->side_data()->secure_handle) {
+    std::move(decrypt_cb).Run(media::Decryptor::kSuccess, std::move(encrypted));
+    return;
+  }
+
   scoped_refptr<media::DecoderBuffer> decrypted =
-      media::DecoderBuffer::CopyFrom(decrypted_data.data(),
-                                     decrypted_data.size());
-  // Copy the auxiliary fields.
-  decrypted->set_timestamp(encrypted->timestamp());
-  decrypted->set_duration(encrypted->duration());
-  decrypted->set_is_key_frame(encrypted->is_key_frame());
-  decrypted->CopySideDataFrom(encrypted->side_data(),
-                              encrypted->side_data_size());
+      media::DecoderBuffer::CopyFrom(decrypted_data);
+  decrypted->CopyMetadataClearBufferFrom(*encrypted);
 
   if (decrypt_config_out)
     decrypted->set_decrypt_config(std::move(decrypt_config_out));

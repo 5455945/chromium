@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,12 @@
 #include <windows.applicationmodel.datatransfer.h>
 #include <wrl/event.h>
 
-#include "base/callback.h"
-#include "base/task/post_task.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include <utility>
+
+#include "base/functional/callback.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/win/core_winrt_util.h"
+#include "base/win/scoped_hstring.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -37,12 +39,6 @@ HRESULT GetDataTransferManagerHandles(
     HWND hwnd,
     IDataTransferManagerInterop** data_transfer_manager_interop,
     IDataTransferManager** data_transfer_manager) {
-  // If the required WinRT functionality is not available, fail the operation
-  if (!base::win::ResolveCoreWinRTDelayload() ||
-      !base::win::ScopedHString::ResolveCoreWinRTStringDelayload()) {
-    return E_FAIL;
-  }
-
   // IDataTransferManagerInterop is semi-hidden behind a CloakedIid
   // structure on the DataTransferManager, excluding it from things
   // used by RoGetActivationFactory like GetIids(). Because of this,
@@ -87,7 +83,7 @@ void ShowShareUIForWindowOperation::SetRoGetActivationFactoryFunctionForTesting(
 
 void ShowShareUIForWindowOperation::Run(
     DataRequestedCallback data_requested_callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   data_requested_callback_ = std::move(data_requested_callback);
 
@@ -105,7 +101,8 @@ void ShowShareUIForWindowOperation::Run(
       ITypedEventHandler<DataTransferManager*, DataRequestedEventArgs*>>(
       [weak_ptr](IDataTransferManager* data_transfer_manager,
                  IDataRequestedEventArgs* event_args) -> HRESULT {
-        DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+        CHECK_CURRENTLY_ON(content::BrowserThread::UI,
+                           base::NotFatalUntil::M162);
         if (weak_ptr)
           weak_ptr.get()->OnDataRequested(data_transfer_manager, event_args);
 
@@ -144,7 +141,7 @@ void ShowShareUIForWindowOperation::Run(
   // therefore never comes)
   if (SUCCEEDED(hr) && weak_ptr && data_requested_callback_) {
     remove_data_requested_listener_ = std::move(remove_data_requested_listener);
-    if (!base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    if (!base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
             FROM_HERE,
             base::BindOnce(&ShowShareUIForWindowOperation::Cancel, weak_ptr),
             kMaxExecutionTime)) {
@@ -154,6 +151,11 @@ void ShowShareUIForWindowOperation::Run(
     // In all other cases (i.e. failure or synchronous completion), remove the
     // listener right away
     std::move(remove_data_requested_listener).Run();
+
+    // In the failure case, also cancel the operation (if it was not already
+    // cancelled synchronously).
+    if (FAILED(hr) && weak_ptr)
+      return Cancel();
   }
 }
 
@@ -168,7 +170,7 @@ void ShowShareUIForWindowOperation::Cancel() {
 void ShowShareUIForWindowOperation::OnDataRequested(
     IDataTransferManager* data_transfer_manager,
     IDataRequestedEventArgs* event_args) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // If the callback to remove the DataRequested listener has been stored on
   // |this| (i.e. this function is being invoked asynchronously), invoke it now

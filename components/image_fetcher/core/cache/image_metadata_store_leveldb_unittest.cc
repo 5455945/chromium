@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 #include <map>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "components/image_fetcher/core/cache/image_store_types.h"
 #include "components/image_fetcher/core/cache/proto/cached_image_metadata.pb.h"
 #include "components/leveldb_proto/testing/fake_db.h"
@@ -18,8 +20,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using leveldb_proto::test::FakeDB;
-using testing::Mock;
 using testing::_;
+using testing::Mock;
 
 namespace image_fetcher {
 
@@ -34,6 +36,11 @@ constexpr int kImageDataLength = 5;
 class CachedImageFetcherImageMetadataStoreLevelDBTest : public testing::Test {
  public:
   CachedImageFetcherImageMetadataStoreLevelDBTest() : db_(nullptr) {}
+
+  CachedImageFetcherImageMetadataStoreLevelDBTest(
+      const CachedImageFetcherImageMetadataStoreLevelDBTest&) = delete;
+  CachedImageFetcherImageMetadataStoreLevelDBTest& operator=(
+      const CachedImageFetcherImageMetadataStoreLevelDBTest&) = delete;
 
   void CreateDatabase() {
     // Reset everything.
@@ -65,10 +72,9 @@ class CachedImageFetcherImageMetadataStoreLevelDBTest : public testing::Test {
   void PrepareDatabase(bool initialize) {
     CreateDatabase();
     InitializeDatabase();
-    metadata_store()->SaveImageMetadata(
-        kImageKey, kImageDataLength,
-        /* needs_transcoding */ false,
-        /* expiration_interval */ absl::nullopt);
+    metadata_store()->SaveImageMetadata(kImageKey, kImageDataLength,
+                                        /* needs_transcoding */ false,
+                                        /* expiration_interval */ std::nullopt);
     ASSERT_TRUE(IsDataPresent(kImageKey));
 
     if (!initialize) {
@@ -110,7 +116,7 @@ class CachedImageFetcherImageMetadataStoreLevelDBTest : public testing::Test {
       base::Time creation_time,
       base::Time last_used_time,
       bool needs_transcoding,
-      ExpirationInterval expiration_interval = absl::nullopt) {
+      ExpirationInterval expiration_interval = std::nullopt) {
     if (!IsDataPresent(key)) {
       ASSERT_TRUE(false);
     }
@@ -138,22 +144,22 @@ class CachedImageFetcherImageMetadataStoreLevelDBTest : public testing::Test {
   FakeDB<CachedImageMetadataProto>* db() { return db_; }
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
-  MOCK_METHOD0(OnInitialized, void());
-  MOCK_METHOD1(OnKeysReturned, void(std::vector<std::string>));
-  MOCK_METHOD1(OnStoreOperationComplete, void(bool));
-  MOCK_METHOD1(OnImageMetadataLoaded,
-               void(absl::optional<CachedImageMetadataProto>));
+  MOCK_METHOD(void, OnInitialized, (), ());
+  MOCK_METHOD(void, OnKeysReturned, (std::vector<std::string>), ());
+  MOCK_METHOD(void, OnStoreOperationComplete, (bool), ());
+  MOCK_METHOD(void,
+              OnImageMetadataLoaded,
+              (std::optional<CachedImageMetadataProto>),
+              ());
 
  private:
   std::unique_ptr<base::SimpleTestClock> clock_;
-  FakeDB<CachedImageMetadataProto>* db_;
+  raw_ptr<FakeDB<CachedImageMetadataProto>, DanglingUntriaged> db_;
   std::map<std::string, CachedImageMetadataProto> db_store_;
   std::unique_ptr<ImageMetadataStoreLevelDB> metadata_store_;
 
   base::HistogramTester histogram_tester_;
   base::test::TaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(CachedImageFetcherImageMetadataStoreLevelDBTest);
 };
 
 TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, Initialize) {
@@ -170,12 +176,23 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, SaveBeforeInit) {
   // Start an image load before the database is initialized.
   metadata_store()->SaveImageMetadata(kImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval */ absl::nullopt);
+                                      /* expiration_interval */ std::nullopt);
 
   InitializeDatabase();
   EXPECT_TRUE(metadata_store()->IsInitialized());
 
   ASSERT_FALSE(IsDataPresent(kImageKey));
+}
+
+TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
+       FailedInitializationIsNotInitialized) {
+  CreateDatabase();
+  base::test::TestFuture<void> initialized;
+  metadata_store()->Initialize(initialized.GetCallback());
+  db()->InitStatusCallback(leveldb_proto::Enums::InitStatus::kError);
+
+  ASSERT_TRUE(initialized.IsReady());
+  EXPECT_FALSE(metadata_store()->IsInitialized());
 }
 
 TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, Save) {
@@ -184,11 +201,11 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, Save) {
 
   metadata_store()->SaveImageMetadata(kImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval */ absl::nullopt);
+                                      /* expiration_interval */ std::nullopt);
   AssertDataPresent(kImageKey, kImageDataLength, clock()->Now(), clock()->Now(),
                     /* needs_transcoding */ false);
 
-  ExpirationInterval expiration_interval = base::TimeDelta::FromHours(1);
+  ExpirationInterval expiration_interval = base::Hours(1);
   metadata_store()->SaveImageMetadata(kImageKey, kImageDataLength,
                                       /* needs_transcoding */ true,
                                       expiration_interval);
@@ -210,7 +227,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, Delete) {
   InitializeDatabase();
   metadata_store()->SaveImageMetadata(kImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval */ absl::nullopt);
+                                      /* expiration_interval */ std::nullopt);
   ASSERT_TRUE(IsDataPresent(kImageKey));
 
   // Delete the data.
@@ -226,7 +243,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, DeleteDifferentKey) {
   InitializeDatabase();
   metadata_store()->SaveImageMetadata(kImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval */ absl::nullopt);
+                                      /* expiration_interval */ std::nullopt);
   ASSERT_TRUE(IsDataPresent(kImageKey));
 
   // Delete the data.
@@ -252,15 +269,15 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
 TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, UpdateImageMetadata) {
   PrepareDatabase(true);
 
-  clock()->SetNow(base::Time() + base::TimeDelta::FromHours(1));
+  clock()->SetNow(base::Time() + base::Hours(1));
   metadata_store()->UpdateImageMetadata(kImageKey);
   db()->LoadCallback(true);
   db()->UpdateCallback(true);
   RunUntilIdle();
 
   AssertDataPresent(kImageKey, kImageDataLength,
-                    clock()->Now() - base::TimeDelta::FromHours(1),
-                    clock()->Now(), /* needs_transcoding */ false);
+                    clock()->Now() - base::Hours(1), clock()->Now(),
+                    /* needs_transcoding */ false);
 }
 
 TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
@@ -303,7 +320,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, GetAllKeys) {
   PrepareDatabase(true);
   metadata_store()->SaveImageMetadata(kOtherImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval */ absl::nullopt);
+                                      /* expiration_interval */ std::nullopt);
 
   // A GC call before the db is initialized should be ignore.
   EXPECT_CALL(
@@ -319,7 +336,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, GetAllKeysLoadFailed) {
   PrepareDatabase(true);
   metadata_store()->SaveImageMetadata(kOtherImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval */ absl::nullopt);
+                                      /* expiration_interval */ std::nullopt);
 
   // A GC call before the db is initialized should be ignore.
   EXPECT_CALL(*this, OnKeysReturned(std::vector<std::string>({})));
@@ -335,7 +352,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, GetEstimatedSize) {
 
   metadata_store()->SaveImageMetadata(kOtherImageKey, 15,
                                       /* needs_transcoding */ false,
-                                      base::TimeDelta::FromDays(7));
+                                      base::Days(7));
   EXPECT_EQ(5, metadata_store()->GetEstimatedSize(CacheOption::kBestEffort));
   EXPECT_EQ(15,
             metadata_store()->GetEstimatedSize(CacheOption::kHoldUntilExpired));
@@ -348,7 +365,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
   // A GC call before the db is initialized should be ignore.
   EXPECT_CALL(*this, OnKeysReturned(std::vector<std::string>()));
   RunGarbageCollection(
-      base::TimeDelta::FromHours(1), base::TimeDelta::FromHours(1),
+      base::Hours(1), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)),
@@ -362,7 +379,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, GarbageCollect) {
 
   metadata_store()->SaveImageMetadata(kOtherImageKey, 100,
                                       /* needs_transcoding */ false,
-                                      base::TimeDelta::FromSeconds(1));
+                                      base::Seconds(1));
   db()->UpdateCallback(true);
   EXPECT_EQ(metadata_store()->GetEstimatedSize(CacheOption::kBestEffort),
             kImageDataLength);
@@ -374,7 +391,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, GarbageCollect) {
       *this,
       OnKeysReturned(std::vector<std::string>({kImageKey, kOtherImageKey})));
   RunGarbageCollection(
-      base::TimeDelta::FromHours(1), base::TimeDelta::FromHours(1),
+      base::Hours(1), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)));
@@ -402,7 +419,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, GarbageCollectNoHits) {
 
   // Run GC without moving the clock forward, should result in no hits.
   RunGarbageCollection(
-      base::TimeDelta::FromHours(0), base::TimeDelta::FromHours(1),
+      base::Hours(0), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)));
@@ -422,11 +439,11 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
   PrepareDatabase(true);
 
   // Insert an item one our later.
-  clock()->SetNow(clock()->Now() + base::TimeDelta::FromHours(1));
+  clock()->SetNow(clock()->Now() + base::Hours(1));
   metadata_store()->SaveImageMetadata(kOtherImageKey, kImageDataLength,
                                       /* needs_transcoding */ false,
-                                      /* expiration_interval*/ absl::nullopt);
-  clock()->SetNow(clock()->Now() - base::TimeDelta::FromHours(1));
+                                      /* expiration_interval*/ std::nullopt);
+  clock()->SetNow(clock()->Now() - base::Hours(1));
   ASSERT_TRUE(IsDataPresent(kOtherImageKey));
 
   EXPECT_CALL(*this, OnKeysReturned(std::vector<std::string>({kImageKey})));
@@ -435,7 +452,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
   // Byte limit set so the one garbage collected should be enough. The older
   // entry should be gc'd kImageKey, the other should stay kOtherImageKey.
   RunGarbageCollection(
-      base::TimeDelta::FromHours(1), base::TimeDelta::FromHours(1),
+      base::Hours(1), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)),
@@ -454,7 +471,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
   // Run GC without moving the clock forward, should result in no hits.
   // Run GC with a byte limit of 0, everything should go.
   RunGarbageCollection(
-      base::TimeDelta::FromHours(0), base::TimeDelta::FromHours(1),
+      base::Hours(0), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)),
@@ -472,7 +489,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
 
   // Run GC but loading the entries failed, should return an empty list.
   RunGarbageCollection(
-      base::TimeDelta::FromHours(1), base::TimeDelta::FromHours(1),
+      base::Hours(1), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)));
@@ -485,7 +502,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest,
   PrepareDatabase(true);
   EXPECT_CALL(*this, OnKeysReturned(std::vector<std::string>()));
   RunGarbageCollection(
-      base::TimeDelta::FromHours(1), base::TimeDelta::FromHours(1),
+      base::Hours(1), base::Hours(1),
       base::BindOnce(
           &CachedImageFetcherImageMetadataStoreLevelDBTest::OnKeysReturned,
           base::Unretained(this)));
@@ -498,7 +515,7 @@ TEST_F(CachedImageFetcherImageMetadataStoreLevelDBTest, LoadImageMetadata) {
   PrepareDatabase(true);
   metadata_store()->SaveImageMetadata(kOtherImageKey, kImageDataLength,
                                       /* needs_transcoding */ true,
-                                      /* expiration_interval*/ absl::nullopt);
+                                      /* expiration_interval*/ std::nullopt);
 
   EXPECT_CALL(*this, OnImageMetadataLoaded(_));
   metadata_store()->LoadImageMetadata(

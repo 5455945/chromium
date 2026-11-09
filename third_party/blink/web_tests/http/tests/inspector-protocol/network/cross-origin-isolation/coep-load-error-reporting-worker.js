@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       `Tests that cross-origin embedder policy (COEP) related blocking for worker sources is reported correctly.`);
 
@@ -36,21 +36,22 @@
     }
   }
 
-  async function initalizeTarget(dp) {
+  async function initializeTarget(dp) {
     dp.Network.onLoadingFailed(event => record(event.params.requestId, {loadingFailed: event.params})),
     dp.Network.onLoadingFinished(event => record(event.params.requestId, {loadingFinished: event.params})),
     dp.Network.onRequestWillBeSent(event => record(event.params.requestId, {requestWillBeSent: event.params})),
     await Promise.all([
       dp.Network.enable(),
-      dp.Page.enable()
+      dp.Page.enable(),
+      dp.Runtime.runIfWaitingForDebugger(),
     ]);
   }
 
-  await initalizeTarget(dp);
+  await initializeTarget(dp);
 
   dp.Target.onAttachedToTarget(async e => {
     const dp = session.createChild(e.params.sessionId).protocol;
-    await initalizeTarget(dp);
+    await initializeTarget(dp);
   });
 
   page.navigate('https://devtools.test:8443/inspector-protocol/network/cross-origin-isolation/resources/coep-page-with-worker.php');

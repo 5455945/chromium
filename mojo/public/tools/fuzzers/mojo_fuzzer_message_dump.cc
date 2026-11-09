@@ -1,13 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_executor.h"
@@ -56,11 +59,9 @@ class MessageDumper : public mojo::MessageFilter {
       return false;
     }
 
-    size_t size = message->data_num_bytes();
-    const char* data = reinterpret_cast<const char*>(message->data());
-    int ret = file.WriteAtCurrentPos(data, size);
-    if (ret != static_cast<int>(size)) {
-      LOG(ERROR) << "Failed to write " << size << " bytes.";
+    if (!file.WriteAtCurrentPosAndCheck(message->data_as_span())) {
+      LOG(ERROR) << "Failed to write " << message->data_num_bytes()
+                 << " bytes.";
       return false;
     }
     return true;
@@ -74,19 +75,15 @@ class MessageDumper : public mojo::MessageFilter {
 
 /* Returns a FuzzUnion with fuzz_bool initialized. */
 auto GetBoolFuzzUnion() {
-  fuzz::mojom::FuzzUnionPtr union_bool = fuzz::mojom::FuzzUnion::New();
-  union_bool->set_fuzz_bool(true);
-  return union_bool;
+  return fuzz::mojom::FuzzUnion::NewFuzzBool(true);
 }
 
 /* Returns a FuzzUnion with fuzz_struct_map initialized. Takes in a
  * FuzzDummyStructPtr to use within the fuzz_struct_map value. */
 auto GetStructMapFuzzUnion(fuzz::mojom::FuzzDummyStructPtr in) {
-  fuzz::mojom::FuzzUnionPtr union_struct_map = fuzz::mojom::FuzzUnion::New();
   base::flat_map<std::string, fuzz::mojom::FuzzDummyStructPtr> struct_map;
   struct_map["fuzz"] = std::move(in);
-  union_struct_map->set_fuzz_struct_map(std::move(struct_map));
-  return union_struct_map;
+  return fuzz::mojom::FuzzUnion::NewFuzzStructMap(std::move(struct_map));
 }
 
 /* Returns a FuzzUnion with fuzz_complex initialized. Takes in a FuzzUnionPtr
@@ -94,8 +91,8 @@ auto GetStructMapFuzzUnion(fuzz::mojom::FuzzDummyStructPtr in) {
 auto GetComplexFuzzUnion(fuzz::mojom::FuzzUnionPtr in) {
   std::remove_reference<decltype(in->get_fuzz_complex())>::type complex_map;
   std::remove_reference<decltype(complex_map.value()[0])>::type outer;
-  std::remove_reference<decltype(
-      outer[fuzz::mojom::FuzzEnum::FUZZ_VALUE0])>::type inner;
+  std::remove_reference<
+      decltype(outer[fuzz::mojom::FuzzEnum::FUZZ_VALUE0])>::type inner;
   std::remove_reference<decltype(inner['z'])>::type center;
 
   center.emplace();
@@ -105,9 +102,7 @@ auto GetComplexFuzzUnion(fuzz::mojom::FuzzUnionPtr in) {
   complex_map.emplace();
   complex_map.value().push_back(std::move(outer));
 
-  fuzz::mojom::FuzzUnionPtr union_complex = fuzz::mojom::FuzzUnion::New();
-  union_complex->set_fuzz_complex(std::move(complex_map));
-  return union_complex;
+  return fuzz::mojom::FuzzUnion::NewFuzzComplex(std::move(complex_map));
 }
 
 /* Returns a populated value for FuzzStruct->fuzz_primitive_array. */
@@ -172,8 +167,8 @@ auto GetFuzzStructNullableArrayValue() {
 auto GetFuzzStructComplexValue() {
   decltype(fuzz::mojom::FuzzStruct::fuzz_complex) complex_map;
   std::remove_reference<decltype(complex_map.value()[0])>::type outer;
-  std::remove_reference<decltype(
-      outer[fuzz::mojom::FuzzEnum::FUZZ_VALUE0])>::type inner;
+  std::remove_reference<
+      decltype(outer[fuzz::mojom::FuzzEnum::FUZZ_VALUE0])>::type inner;
   std::remove_reference<decltype(inner['z'])>::type center;
 
   center.emplace();
@@ -270,10 +265,10 @@ void DumpMessages(std::string output_directory) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    printf("Usage: %s [output_directory]\n", argv[0]);
+    UNSAFE_TODO(printf("Usage: %s [output_directory]\n", argv[0]));
     exit(1);
   }
-  std::string output_directory(argv[1]);
+  std::string output_directory(UNSAFE_TODO(argv[1]));
 
   /* Dump the messages from a TaskExecutor, and wait for it to finish. */
   env->main_thread_task_executor.task_runner()->PostTask(

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 namespace extensions {
 class Extension;
@@ -28,6 +28,11 @@ class IdleAppNameNotificationView {
   IdleAppNameNotificationView(int message_visibility_time_in_ms,
                               int animation_time_ms,
                               const extensions::Extension* extension);
+
+  IdleAppNameNotificationView(const IdleAppNameNotificationView&) = delete;
+  IdleAppNameNotificationView& operator=(const IdleAppNameNotificationView&) =
+      delete;
+
   virtual ~IdleAppNameNotificationView();
 
   // Close and destroy the message instantly.
@@ -46,9 +51,7 @@ class IdleAppNameNotificationView {
                    const extensions::Extension* extension);
 
   // A reference to an existing message.
-  IdleAppNameNotificationDelegateView* view_;
-
-  DISALLOW_COPY_AND_ASSIGN(IdleAppNameNotificationView);
+  raw_ptr<IdleAppNameNotificationDelegateView> view_;
 };
 
 }  // namespace ash

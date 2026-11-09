@@ -1,9 +1,8 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 chrome.app.runtime.onLaunched.addListener(function() {
-
   chrome.test.sendMessage('launched', function(reply) {
     // Create window options defined in tests.
     const options = JSON.parse(reply);
@@ -11,5 +10,4 @@ chrome.app.runtime.onLaunched.addListener(function() {
       appWindow.focus();
     });
   });
-
 });

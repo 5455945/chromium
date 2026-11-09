@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,28 +18,36 @@ function failOnSuccess() {
   return false;
 }
 
-var service = { uuid: '00001234-0000-1000-8000-00805f9b34fb', isPrimary: true }
+const service = {
+  uuid: '00001234-0000-1000-8000-00805f9b34fb',
+  isPrimary: true,
+};
 chrome.bluetoothLowEnergy.createService(service, function(serviceId) {
-  if (failOnError(serviceId))
+  if (failOnError(serviceId)) {
     return;
+  }
 
   chrome.bluetoothLowEnergy.registerService(serviceId, function() {
-    if (failOnError('result'))
+    if (failOnError('result')) {
       return;
+    }
 
     chrome.bluetoothLowEnergy.unregisterService(serviceId, function() {
-      if (failOnError('result'))
+      if (failOnError('result')) {
         return;
+      }
 
       // Unregistering an unregistered app, should fail.
       chrome.bluetoothLowEnergy.unregisterService('fake_id', function() {
-        if (failOnSuccess())
+        if (failOnSuccess()) {
           return;
+        }
 
         // Unregistering an unregistered service again, should fail.
         chrome.bluetoothLowEnergy.unregisterService(serviceId, function() {
-          if (failOnSuccess())
+          if (failOnSuccess()) {
             return;
+          }
           chrome.test.succeed();
         });
       });

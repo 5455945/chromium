@@ -1,12 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/ambient_mode_metrics_provider.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/ambient/ambient_client.h"
-#include "ash/public/cpp/ambient/ambient_metrics.h"
+#include "ash/public/cpp/ambient/ambient_mode_photo_source.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -21,8 +20,9 @@ AmbientModePhotoSource GetAmbientModePhotoSourcePref(
   auto value = pref_service->GetInteger(
       ash::ambient::prefs::kAmbientModePhotoSourcePref);
 
-  DCHECK_LE(0, value);
-  DCHECK_GE(static_cast<int>(AmbientModePhotoSource::kMaxValue), value);
+  CHECK_LE(0, value, base::NotFatalUntil::M161);
+  CHECK_GE(static_cast<int>(AmbientModePhotoSource::kMaxValue), value,
+           base::NotFatalUntil::M161);
 
   return static_cast<AmbientModePhotoSource>(value);
 }
@@ -34,9 +34,6 @@ AmbientModeMetricsProvider::~AmbientModeMetricsProvider() = default;
 
 void AmbientModeMetricsProvider::ProvideCurrentSessionData(
     metrics::ChromeUserMetricsExtension* uma_proto_unused) {
-  if (!chromeos::features::IsAmbientModeEnabled())
-    return;
-
   auto* ambient_client = ash::AmbientClient::Get();
   if (!ambient_client || !ambient_client->IsAmbientModeAllowed())
     return;
@@ -45,12 +42,10 @@ void AmbientModeMetricsProvider::ProvideCurrentSessionData(
   // user.
   PrefService* pref_service =
       ProfileManager::GetActiveUserProfile()->GetPrefs();
-  DCHECK(pref_service);
+  CHECK(pref_service, base::NotFatalUntil::M161);
 
   bool enabled =
       pref_service->GetBoolean(ash::ambient::prefs::kAmbientModeEnabled);
-
-  base::UmaHistogramBoolean("Ash.AmbientMode.Enabled", enabled);
 
   if (!enabled)
     return;

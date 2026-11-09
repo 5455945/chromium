@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,10 @@ namespace blink {
 ImeEventGuard::ImeEventGuard(base::WeakPtr<WidgetBase> widget)
     : widget_(std::move(widget)) {
   widget_->OnImeEventGuardStart(this);
+}
+
+bool ImeEventGuard::IsValid() const {
+  return !!widget_;
 }
 
 ImeEventGuard::~ImeEventGuard() {

@@ -37,31 +37,35 @@ bool SVGZoomAndPan::ParseAttribute(const QualifiedName& name,
   if (name != svg_names::kZoomAndPanAttr)
     return false;
   zoom_and_pan_ = kSVGZoomAndPanUnknown;
-  if (!value.IsEmpty()) {
-    zoom_and_pan_ =
-        WTF::VisitCharacters(value, [&](const auto* chars, unsigned length) {
-          return Parse(chars, chars + length);
-        });
+  if (!value.empty()) {
+    size_t position = 0;
+    zoom_and_pan_ = VisitCharacters(
+        value, [&](auto chars) { return Parse(chars, position); });
   }
   return true;
 }
 
 template <typename CharType>
-static SVGZoomAndPanType ParseZoomAndPanInternal(const CharType*& start,
-                                                 const CharType* end) {
-  if (SkipToken(start, end, "disable"))
+static SVGZoomAndPanType ParseZoomAndPanInternal(
+    const base::span<const CharType> chars,
+    size_t& position) {
+  if (SkipToken(chars, "disable", position)) {
     return kSVGZoomAndPanDisable;
-  if (SkipToken(start, end, "magnify"))
+  }
+  if (SkipToken(chars, "magnify", position)) {
     return kSVGZoomAndPanMagnify;
+  }
   return kSVGZoomAndPanUnknown;
 }
 
-SVGZoomAndPanType SVGZoomAndPan::Parse(const LChar*& start, const LChar* end) {
-  return ParseZoomAndPanInternal(start, end);
+SVGZoomAndPanType SVGZoomAndPan::Parse(const base::span<const LChar> chars,
+                                       size_t& position) {
+  return ParseZoomAndPanInternal(chars, position);
 }
 
-SVGZoomAndPanType SVGZoomAndPan::Parse(const UChar*& start, const UChar* end) {
-  return ParseZoomAndPanInternal(start, end);
+SVGZoomAndPanType SVGZoomAndPan::Parse(const base::span<const UChar> chars,
+                                       size_t& position) {
+  return ParseZoomAndPanInternal(chars, position);
 }
 
 }  // namespace blink

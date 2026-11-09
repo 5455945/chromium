@@ -1,20 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_PEERCONNECTION_RTC_RTP_SENDER_PLATFORM_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_PEERCONNECTION_RTC_RTP_SENDER_PLATFORM_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/dtls_transport_interface.h"
+#include "third_party/webrtc/api/encoded_audio_frame_injector_interface.h"
+#include "third_party/webrtc/api/encoded_video_frame_injector_interface.h"
 #include "third_party/webrtc/api/rtp_parameters.h"
-#include "third_party/webrtc/api/stats/rtc_stats.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 
 namespace blink {
 
@@ -37,7 +41,7 @@ class PLATFORM_EXPORT RTCRtpSenderPlatform {
   // the same |id|. IDs are guaranteed to be unique amongst senders but they are
   // allowed to be reused after a sender is destroyed.
   virtual uintptr_t Id() const = 0;
-  virtual rtc::scoped_refptr<webrtc::DtlsTransportInterface>
+  virtual webrtc::scoped_refptr<webrtc::DtlsTransportInterface>
   DtlsTransport() = 0;
   // Note: For convenience, DtlsTransportInformation always returns a value.
   // The information is only interesting if DtlsTransport() is non-null.
@@ -51,10 +55,9 @@ class PLATFORM_EXPORT RTCRtpSenderPlatform {
   virtual std::unique_ptr<RtcDtmfSenderHandler> GetDtmfSender() const = 0;
   virtual std::unique_ptr<webrtc::RtpParameters> GetParameters() const = 0;
   virtual void SetParameters(Vector<webrtc::RtpEncodingParameters>,
-                             absl::optional<webrtc::DegradationPreference>,
+                             std::optional<webrtc::DegradationPreference>,
                              RTCVoidRequest*) = 0;
-  virtual void GetStats(RTCStatsReportCallback,
-                        const Vector<webrtc::NonStandardGroupId>&) = 0;
+  virtual void GetStats(RTCStatsReportCallback) = 0;
   virtual void SetStreams(const Vector<String>& stream_ids) = 0;
   virtual RTCEncodedAudioStreamTransformer* GetEncodedAudioStreamTransformer()
       const {
@@ -64,6 +67,13 @@ class PLATFORM_EXPORT RTCRtpSenderPlatform {
       const {
     return nullptr;
   }
+  virtual scoped_refptr<webrtc::EncodedVideoFrameInjectorInterface>
+  CreateEncodedVideoFrameInjector(
+      webrtc::KeyFrameCallback keyframe_callback,
+      webrtc::BitrateInfoCallback bitrate_callback) = 0;
+  virtual scoped_refptr<webrtc::EncodedAudioFrameInjectorInterface>
+  CreateEncodedAudioFrameInjector(
+      webrtc::TargetBitrateCallback bitrate_callback) = 0;
 };
 
 }  // namespace blink

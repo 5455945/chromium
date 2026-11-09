@@ -27,9 +27,16 @@
 
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
 
+#include <optional>
+
+#include "base/feature_list.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
+#include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_result.h"
@@ -39,24 +46,65 @@
 #include "third_party/blink/renderer/core/dom/events/window_event_context.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/editing/editor.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/events/simulated_event_util.h"
-#include "third_party/blink/renderer/core/frame/ad_tracker.h"
-#include "third_party/blink/renderer/core/frame/deprecation.h"
+#include "third_party/blink/renderer/core/events/text_event.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/layout/layout_shift_tracker.h"
-#include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/core/page/spatial_navigation_controller.h"
 #include "third_party/blink/renderer/core/timing/event_timing.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-
+#include "third_party/blink/renderer/platform/keyboard_codes.h"
+#include "ui/events/keycodes/dom/keycode_converter.h"
 namespace blink {
+
+namespace {
+
+// Returns the activation target for an activation event dispatched to `node`.
+// https://dom.spec.whatwg.org/#concept-event-dispatch
+Node* FindActivationTarget(Node& node, Event& event) {
+  // 6.5. If isActivationEvent is true and target has activation behavior, then
+  // set activationTarget to target.
+  if (node.HasActivationBehavior()) {
+    return &node;
+  }
+
+  // A part of step 6.9 loop.
+  //
+  // 6.9.6.1. If isActivationEvent is true, event's bubbles attribute is true,
+  // activationTarget is null, and parent has activation behavior, then set
+  // activationTarget to parent.
+  if (!event.bubbles()) {
+    return nullptr;
+  }
+  const EventPath& path = event.GetEventPath();
+  // When node is a pseudo-element, CalculatePath() replaces it with its
+  // UltimateOriginatingElement() at path index 0 (pseudos are not exposed
+  // in the event path). That means path[0] is the originating element, not
+  // node itself, so we must start the search at i=0 to avoid skipping the
+  // originating element (e.g., <summary> whose ::marker was clicked).
+  const wtf_size_t start = node.IsPseudoElement() ? 0 : 1;
+  for (wtf_size_t i = start; i < path.size(); ++i) {
+    Node& target = path[i].GetNode();
+    if (target.HasActivationBehavior()) {
+      return &target;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 DispatchEventResult EventDispatcher::DispatchEvent(Node& node, Event& event) {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
@@ -89,9 +137,9 @@ void EventDispatcher::DispatchSimulatedClick(
   // before dispatchSimulatedClick() returns. This vector is here just to
   // prevent the code from running into an infinite recursion of
   // dispatchSimulatedClick().
-  DEFINE_STATIC_LOCAL(Persistent<HeapHashSet<Member<Node>>>,
+  DEFINE_STATIC_LOCAL(Persistent<GCedHeapHashSet<Member<Node>>>,
                       nodes_dispatching_simulated_clicks,
-                      (MakeGarbageCollected<HeapHashSet<Member<Node>>>()));
+                      (MakeGarbageCollected<GCedHeapHashSet<Member<Node>>>()));
 
   if (IsDisabledFormControl(&node))
     return;
@@ -145,6 +193,27 @@ void EventDispatcher::DispatchSimulatedClick(
   nodes_dispatching_simulated_clicks->erase(&node);
 }
 
+void EventDispatcher::DispatchSimulatedEnterEvent(
+    HTMLInputElement& input_element) {
+  LocalDOMWindow* local_dom_window = input_element.GetDocument().domWindow();
+  for (auto type : {WebInputEvent::Type::kRawKeyDown,
+                    WebInputEvent::Type::kChar, WebInputEvent::Type::kKeyUp}) {
+    WebKeyboardEvent enter{type, WebInputEvent::kNoModifiers,
+                           base::TimeTicks::Now()};
+    enter.dom_key = ui::DomKey::ENTER;
+    enter.dom_code = static_cast<int>(ui::DomKey::ENTER);
+    enter.native_key_code = blink::VKEY_RETURN;
+    enter.windows_key_code = blink::VKEY_RETURN;
+    enter.text[0] = blink::VKEY_RETURN;
+    enter.unmodified_text[0] = blink::VKEY_RETURN;
+
+    KeyboardEvent* event =
+        blink::KeyboardEvent::Create(enter, local_dom_window, true);
+    event->SetTrusted(true);
+    DispatchScopedEvent(input_element, *event);
+  }
+}
+
 // https://dom.spec.whatwg.org/#dispatching-events
 DispatchEventResult EventDispatcher::Dispatch() {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
@@ -159,10 +228,12 @@ DispatchEventResult EventDispatcher::Dispatch() {
     // path.
     return DispatchEventResult::kNotCanceled;
   }
-  std::unique_ptr<EventTiming> eventTiming;
-  LocalFrame* frame = node_->GetDocument().GetFrame();
-  if (frame && frame->DomWindow())
-    eventTiming = EventTiming::Create(frame->DomWindow(), *event_);
+
+  auto& document = node_->GetDocument();
+  LocalFrame* frame = document.GetFrame();
+
+  UIEventTiming event_timing(frame, *event_);
+
   if (event_->type() == event_type_names::kChange && event_->isTrusted() &&
       view_) {
     view_->GetLayoutShiftTracker().NotifyChangeEvent();
@@ -172,75 +243,61 @@ DispatchEventResult EventDispatcher::Dispatch() {
   const bool is_click =
       event_->IsMouseEvent() && event_->type() == event_type_names::kClick;
 
-  if (is_click && event_->isTrusted()) {
-    Document& document = node_->GetDocument();
-    if (frame) {
-      // A genuine mouse click cannot be triggered by script so we don't expect
-      // there are any script in the stack.
-      DCHECK(!frame->GetAdTracker() ||
-             !frame->GetAdTracker()->IsAdScriptInStack(
-                 AdTracker::StackType::kBottomAndTop));
-      if (frame->IsAdSubframe()) {
-        UseCounter::Count(document, WebFeature::kAdClick);
-      }
+  if (is_click && event_->isTrusted() && frame) {
+    // A genuine mouse click cannot be triggered by script so we don't expect
+    // there are any script in the stack.
+    DCHECK(!frame->GetAdTracker() || !frame->GetAdTracker()->IsAdScriptInStack(
+                                         AdTracker::StackType::kTopOnly));
+    if (frame->IsAdFrame()) {
+      UseCounter::Count(document, WebFeature::kAdClick);
     }
   }
 
-  // 6. Let isActivationEvent be true, if event is a MouseEvent object and
+  // 6.4. Let isActivationEvent be true, if event is a MouseEvent object and
   // event's type attribute is "click", and false otherwise.
   //
   // We need to include non-standard textInput event for HTMLInputElement.
   const bool is_activation_event =
       is_click || event_->type() == event_type_names::kTextInput;
 
-  // 7. Let activationTarget be target, if isActivationEvent is true and target
-  // has activation behavior, and null otherwise.
+  // Steps 6.5 and 6.9.6.1.
   Node* activation_target =
-      is_activation_event && node_->HasActivationBehavior() ? node_ : nullptr;
-
-  // A part of step 9 loop.
-  if (is_activation_event && !activation_target && event_->bubbles()) {
-    wtf_size_t size = event_->GetEventPath().size();
-    for (wtf_size_t i = 1; i < size; ++i) {
-      Node& target = event_->GetEventPath()[i].GetNode();
-      if (target.HasActivationBehavior()) {
-        activation_target = &target;
-        break;
-      }
-    }
-  }
+      is_activation_event ? FindActivationTarget(*node_, *event_) : nullptr;
 
   event_->SetTarget(&EventPath::EventTargetRespectingTargetRules(*node_));
 #if DCHECK_IS_ON()
   DCHECK(!EventDispatchForbiddenScope::IsEventDispatchForbidden());
 #endif
-  DCHECK(event_->target());
+  DCHECK(event_->RawTarget());
   DEVTOOLS_TIMELINE_TRACE_EVENT("EventDispatch",
-                                inspector_event_dispatch_event::Data, *event_);
+                                inspector_event_dispatch_event::Data, *event_,
+                                document.GetAgent().isolate());
   EventDispatchHandlingState* pre_dispatch_event_handler_result = nullptr;
-  if (DispatchEventPreProcess(activation_target,
-                              pre_dispatch_event_handler_result) ==
+  if (DispatchEventLegacyPreActivationBehavior(
+          activation_target, pre_dispatch_event_handler_result) ==
       kContinueDispatching) {
-    if (DispatchEventAtCapturing() == kContinueDispatching)
+    if (DispatchEventAtCapturing() == kContinueDispatching) {
       DispatchEventAtBubbling();
+    }
   }
   DispatchEventPostProcess(activation_target,
                            pre_dispatch_event_handler_result);
-  if (eventTiming)
-    eventTiming->DidDispatchEvent(*event_, node_->GetDocument());
 
-  return EventTarget::GetDispatchEventResult(*event_);
+  auto result = EventTarget::GetDispatchEventResult(*event_);
+
+  return result;
 }
 
-inline EventDispatchContinuation EventDispatcher::DispatchEventPreProcess(
+inline EventDispatchContinuation
+EventDispatcher::DispatchEventLegacyPreActivationBehavior(
     Node* activation_target,
     EventDispatchHandlingState*& pre_dispatch_event_handler_result) {
-  // 11. If activationTarget is non-null and activationTarget has
+  // 12. If activationTarget is non-null and activationTarget has
   // legacy-pre-activation behavior, then run activationTarget's
   // legacy-pre-activation behavior.
   if (activation_target) {
     pre_dispatch_event_handler_result =
-        activation_target->PreDispatchEventHandler(*event_);
+        activation_target->LegacyPreActivationBehavior(*event_);
   }
 
   return (event_->GetEventPath().IsEmpty() || event_->PropagationStopped())
@@ -252,22 +309,36 @@ inline EventDispatchContinuation EventDispatcher::DispatchEventAtCapturing() {
   // Trigger capturing event handlers, starting at the top and working our way
   // down. When we get to the last one, the target, change the event phase to
   // AT_TARGET and fire only the capture listeners on it.
-  event_->SetEventPhase(Event::kCapturingPhase);
+  event_->SetEventPhase(Event::PhaseType::kCapturingPhase);
+
+  if (!node_->GetDocument().HasCaptureListener()) {
+    DCHECK(RuntimeEnabledFeatures::SkipEventCaptureEnabled());
+    return kContinueDispatching;
+  }
 
   if (event_->GetEventPath().GetWindowEventContext().HandleLocalEvents(
           *event_) &&
       event_->PropagationStopped())
     return kDoneDispatching;
 
+  // https://dom.spec.whatwg.org/#concept-event-dispatch
+  // 6.13. For each struct of event's path, in reverse order:
   for (wtf_size_t i = event_->GetEventPath().size(); i > 0; --i) {
     const NodeEventContext& event_context = event_->GetEventPath()[i - 1];
     if (event_context.CurrentTargetSameAsTarget()) {
-      event_->SetEventPhase(Event::kAtTarget);
+      // 6.13.1. If struct's shadow-adjusted target is non-null, then set
+      // event's eventPhase attribute to AT_TARGET.
+      event_->SetEventPhase(Event::PhaseType::kAtTarget);
       event_->SetFireOnlyCaptureListenersAtTarget(true);
+      // 6.13.3. Invoke with struct, event, "capturing", and
+      // legacyOutputDidListenersThrowFlag if given.
       event_context.HandleLocalEvents(*event_);
       event_->SetFireOnlyCaptureListenersAtTarget(false);
     } else {
-      event_->SetEventPhase(Event::kCapturingPhase);
+      // 6.13.2. Otherwise, set event's eventPhase attribute to CAPTURING_PHASE.
+      event_->SetEventPhase(Event::PhaseType::kCapturingPhase);
+      // 6.13.3. Invoke with struct, event, "capturing", and
+      // legacyOutputDidListenersThrowFlag if given.
       event_context.HandleLocalEvents(*event_);
     }
     if (event_->PropagationStopped())
@@ -281,26 +352,38 @@ inline void EventDispatcher::DispatchEventAtBubbling() {
   // Trigger bubbling event handlers, starting at the bottom and working our way
   // up. On the first one, the target, change the event phase to AT_TARGET and
   // fire only the bubble listeners on it.
+
+  // https://dom.spec.whatwg.org/#concept-event-dispatch
+  // 6.14. For each struct of event's path.
   wtf_size_t size = event_->GetEventPath().size();
   for (wtf_size_t i = 0; i < size; ++i) {
     const NodeEventContext& event_context = event_->GetEventPath()[i];
     if (event_context.CurrentTargetSameAsTarget()) {
+      // 6.14.1. If struct's shadow-adjusted target is non-null, then set
+      // event's eventPhase attribute to AT_TARGET.
+      //
       // TODO(hayato): Need to check cancelBubble() also here?
-      event_->SetEventPhase(Event::kAtTarget);
+      event_->SetEventPhase(Event::PhaseType::kAtTarget);
       event_->SetFireOnlyNonCaptureListenersAtTarget(true);
+      // 6.14.3. Invoke with struct, event, "bubbling", and
+      // legacyOutputDidListenersThrowFlag if given.
       event_context.HandleLocalEvents(*event_);
       event_->SetFireOnlyNonCaptureListenersAtTarget(false);
     } else if (event_->bubbles() && !event_->cancelBubble()) {
-      event_->SetEventPhase(Event::kBubblingPhase);
+      // 6.14.2.2. Set event's eventPhase attribute to BUBBLING_PHASE.
+      event_->SetEventPhase(Event::PhaseType::kBubblingPhase);
+      // 6.14.3. Invoke with struct, event, "bubbling", and
+      // legacyOutputDidListenersThrowFlag if given.
       event_context.HandleLocalEvents(*event_);
     } else {
+      // 6.14.1.1. If event's bubbles attribute is false, then continue.
       continue;
     }
     if (event_->PropagationStopped())
       return;
   }
   if (event_->bubbles() && !event_->cancelBubble()) {
-    event_->SetEventPhase(Event::kBubblingPhase);
+    event_->SetEventPhase(Event::PhaseType::kBubblingPhase);
     event_->GetEventPath().GetWindowEventContext().HandleLocalEvents(*event_);
   }
 }
@@ -309,16 +392,19 @@ inline void EventDispatcher::DispatchEventPostProcess(
     Node* activation_target,
     EventDispatchHandlingState* pre_dispatch_event_handler_result) {
   event_->SetTarget(&EventPath::EventTargetRespectingTargetRules(*node_));
-  // https://dom.spec.whatwg.org/#concept-event-dispatch
-  // 14. Unset event’s dispatch flag, stop propagation flag, and stop immediate
+  // This is a continuation of
+  // https://dom.spec.whatwg.org/#concept-event-dispatch.
+
+  // 7. Set event's eventPhase attribute to NONE.
+  event_->SetEventPhase(Event::PhaseType::kNone);
+
+  // 8. Set event's currentTarget attribute to null.
+  event_->SetCurrentTarget(nullptr);
+
+  // 10. Unset event's dispatch flag, stop propagation flag, and stop immediate
   // propagation flag.
   event_->SetStopPropagation(false);
   event_->SetStopImmediatePropagation(false);
-  // 15. Set event’s eventPhase attribute to NONE.
-  event_->SetEventPhase(0);
-  // TODO(rakina): investigate this and move it to the bottom of step 16
-  // 17. Set event’s currentTarget attribute to null.
-  event_->SetCurrentTarget(nullptr);
 
   auto* mouse_event = DynamicTo<MouseEvent>(event_);
   bool is_click =
@@ -327,13 +413,32 @@ inline void EventDispatcher::DispatchEventPostProcess(
     // Fire an accessibility event indicating a node was clicked on.  This is
     // safe if event_->target()->ToNode() returns null.
     if (AXObjectCache* cache = node_->GetDocument().ExistingAXObjectCache())
-      cache->HandleClicked(event_->target()->ToNode());
+      cache->HandleClicked(event_->RawTarget()->ToNode());
 
-    // Pass the data from the PreDispatchEventHandler to the
-    // PostDispatchEventHandler.
-    // This may dispatch an event, and node_ and event_ might be altered.
+    // Non-standard: listeners may have changed which nodes have activation
+    // behavior, so find the activation target again, using the same rules as
+    // before dispatch. See the comment above the default event handler loop
+    // below. This is skipped if the activation target ran
+    // legacy-pre-activation behavior (e.g. toggling a checkbox), because the
+    // rest of that target's activation behavior has to run to commit or
+    // revert it.
+    if (RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled() &&
+        !pre_dispatch_event_handler_result) {
+      activation_target = FindActivationTarget(*node_, *event_);
+    }
+
+    // Pass the data from `Node::LegacyPreActivationBehavior()` to
+    // `Node::RunActivationBehaviorBeforeDOMActivate()`, which runs the part of
+    // the activation behavior that happens before the DOMActivate event is
+    // dispatched. The rest runs after the click event's default handlers have
+    // dispatched DOMActivate, below.
+    //
+    // This may dispatch an event, and `node_` and `event_` might be altered.
+    //
+    // See the documentation above `Node::RunActivationBehavior()` for more
+    // information on how activation behavior is implemented in Blink.
     if (activation_target) {
-      activation_target->PostDispatchEventHandler(
+      activation_target->RunActivationBehaviorBeforeDOMActivate(
           *event_, pre_dispatch_event_handler_result);
     }
     // TODO(tkent): Is it safe to kick DefaultEventHandler() with such altered
@@ -346,7 +451,8 @@ inline void EventDispatcher::DispatchEventPostProcess(
 
   // For Android WebView (distinguished by wideViewportQuirkEnabled)
   // enable untrusted events for mouse down on select elements because
-  // fastclick.js seems to generate these. crbug.com/642698
+  // fastclick.js and ionic js seem to generate these.
+  // http://crbug.com/642698 http://crbug.com/540916916
   // TODO(dtapuska): Change this to a target SDK quirk crbug.com/643705
   if (!is_trusted_or_click && event_->IsMouseEvent() &&
       event_->type() == event_type_names::kMousedown &&
@@ -361,44 +467,108 @@ inline void EventDispatcher::DispatchEventPostProcess(
   // internal implementation detail and not part of the DOM.
   if (!event_->defaultPrevented() && !event_->DefaultHandled() &&
       is_trusted_or_click) {
+    // Non-standard: the DOM Standard runs only the activation behavior of the
+    // activation target, which it finds before dispatch:
+    // https://dom.spec.whatwg.org/#concept-event-dispatch
+    // Browsers roughly agree on different behavior, and there is a discussion
+    // about changing the HTML Standard to match it:
+    // https://github.com/whatwg/html/issues/10032
+    // Before CleanUpActivationBehavior, activation behavior ran from default
+    // event handlers, which run in bubbling order until one of them marks the
+    // click as handled, and which check the state of their element when they
+    // run. So if the innermost element with activation behavior did nothing
+    // that marks the click as handled (e.g. a `<button type=button>`), an
+    // ancestor such as an enclosing `<a href>` also ran its activation
+    // behavior. That is preserved here: for each node in the event path, in
+    // bubbling order, its default event handler runs, and then its activation
+    // behavior runs if it is the activation target or has activation behavior,
+    // until the click is handled. Every node, including the activation target
+    // (which was found again above), is checked for activation behavior after
+    // the listeners have run.
+    const bool run_activation_behavior =
+        RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled() && is_click;
+    auto is_handled = [&]() {
+      return event_->DefaultHandled() || event_->defaultPrevented();
+    };
+    auto run_activation_behavior_for = [&](Node& node) {
+      if (!run_activation_behavior || is_handled()) {
+        return;
+      }
+      if (&node == activation_target) {
+        // The part before DOMActivate already ran, above.
+        node.RunActivationBehavior(*event_, pre_dispatch_event_handler_result);
+        return;
+      }
+      if (!node.HasActivationBehavior()) {
+        return;
+      }
+      node.RunActivationBehaviorBeforeDOMActivate(*event_, nullptr);
+      if (!is_handled()) {
+        node.RunActivationBehavior(*event_, nullptr);
+      }
+    };
+
     // Non-bubbling events call only one default event handler, the one for the
     // target.
+    //
+    // `Node::DefaultEventHandler()` on the target dispatches the legacy
+    // DOMActivate event for click events, and activation behavior used to run
+    // as that event's default handler. Activation behavior therefore runs
+    // after it, and is skipped if a DOMActivate listener called
+    // `preventDefault()`, which marks the click as default-handled.
     node_->DefaultEventHandler(*event_);
-    DCHECK(!event_->defaultPrevented());
+    run_activation_behavior_for(*node_);
+
+    // When node_ is a pseudo-element, CalculatePath() replaces it at path
+    // index 0 with its UltimateOriginatingElement() (pseudos are not exposed
+    // in the event path), and EventTargetRespectingTargetRules() makes that
+    // originating element the event's target unless the pseudo itself has
+    // activation behavior. Since `Node::DefaultEventHandler()` returns early
+    // for anything that is not the event's target, in that case it is the
+    // originating element (e.g. <summary> for ::marker) whose default event
+    // handler dispatches DOMActivate. As for the other nodes in the event
+    // path, the originating element's activation behavior runs after its
+    // default event handler.
+    const EventPath& path = event_->GetEventPath();
+    if (node_->IsPseudoElement() && event_->bubbles() && !is_handled() &&
+        !path.IsEmpty()) {
+      Node& originating_element = path[0].GetNode();
+      originating_element.DefaultEventHandler(*event_);
+      run_activation_behavior_for(originating_element);
+    }
+
     // For bubbling events, call default event handlers on the same targets in
-    // the same order as the bubbling phase.
-    if (!event_->DefaultHandled() && event_->bubbles()) {
-      wtf_size_t size = event_->GetEventPath().size();
-      for (wtf_size_t i = 1; i < size; ++i) {
-        event_->GetEventPath()[i].GetNode().DefaultEventHandler(*event_);
-        DCHECK(!event_->defaultPrevented());
-        if (event_->DefaultHandled())
+    // the same order as the bubbling phase. Path index 0 is the target, whose
+    // default event handler already ran above.
+    if (!is_handled() && event_->bubbles()) {
+      for (wtf_size_t i = 1; i < path.size(); ++i) {
+        Node& node = path[i].GetNode();
+        node.DefaultEventHandler(*event_);
+        run_activation_behavior_for(node);
+        if (is_handled()) {
           break;
+        }
       }
     }
   } else {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
     // If a keypress event is prevented, the cursor position may be out of
     // sync as RenderWidgetHostViewCocoa::insertText assumes that the text
     // has been accepted. See https://crbug.com/1204523 for details.
     if (event_->type() == event_type_names::kKeypress && view_)
       view_->GetFrame().GetEditor().SyncSelection(SyncCondition::kForced);
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
   }
 
-  auto* keyboard_event = DynamicTo<KeyboardEvent>(event_);
-  if (Page* page = node_->GetDocument().GetPage()) {
-    if (page->GetSettings().GetSpatialNavigationEnabled() &&
-        is_trusted_or_click && keyboard_event &&
-        keyboard_event->key() == "Enter" &&
-        event_->type() == event_type_names::kKeyup) {
-      page->GetSpatialNavigationController().ResetEnterKeyState();
-    }
+  if (event_->IsMouseEvent() && event_->type() == event_type_names::kMouseup) {
+    node_->GetDocument().SetPopoverPickerPointerdown({.target = nullptr});
   }
 
   // Track the usage of sending a mousedown event to a select element to force
   // it to open. This measures a possible breakage of not allowing untrusted
   // events to open select boxes.
+  // TODO(crbug.com/41273490): Obsolete this UseCounter and remove this code
+  // after removing the corresponding functionality.
   if (!event_->isTrusted() && event_->IsMouseEvent() &&
       event_->type() == event_type_names::kMousedown &&
       IsA<HTMLSelectElement>(*node_)) {
@@ -408,8 +578,9 @@ inline void EventDispatcher::DispatchEventPostProcess(
   // 16. If target's root is a shadow root, then set event's target attribute
   // and event's relatedTarget to null.
   event_->SetTarget(event_->GetEventPath().GetWindowEventContext().Target());
-  if (!event_->target())
-    event_->SetRelatedTargetIfExists(nullptr);
+  if (!event_->RawTarget()) {
+    event_->SetRelatedTarget(nullptr);
+  }
 }
 
 }  // namespace blink

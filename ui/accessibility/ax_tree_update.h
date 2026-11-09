@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_event_intent.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/accessibility/ax_tree_checks.h"
 #include "ui/accessibility/ax_tree_data.h"
 
 namespace ui {
@@ -49,25 +50,37 @@ namespace ui {
 //        before or after an AXTreeUpdate.
 struct AX_BASE_EXPORT AXTreeUpdate {
   AXTreeUpdate();
+
+  AXTreeUpdate(AXTreeUpdate&& other);
+  AXTreeUpdate& operator=(AXTreeUpdate&& other);
+
+  // TODO(accessibility): try to = delete these or finish auditing all sites.
   AXTreeUpdate(const AXTreeUpdate& other);
+  AXTreeUpdate& operator=(const AXTreeUpdate& other);
+
   ~AXTreeUpdate();
+
+  void AccumulateSize(AXNodeData::AXNodeDataSize& node_data_size) const;
+
+  // Returns true if all node IDs are valid from an untrusted renderer.
+  bool HasValidAXNodeIDsFromRenderer() const;
 
   // If |has_tree_data| is true, the value of |tree_data| should be used
   // to update the tree data, otherwise it should be ignored.
   bool has_tree_data = false;
   AXTreeData tree_data;
 
-  // The id of a node to clear, before applying any updates,
-  // or 0 if no nodes should be cleared. Clearing a node means deleting
-  // all of its children and their descendants, but leaving that node in
-  // the tree. It's an error to clear a node but not subsequently update it
+  // The id of a node to clear, before applying any updates, or
+  // `kInvalidAXNodeID` if no nodes should be cleared. Clearing a node means
+  // deleting all of its children and their descendants, but leaving that node
+  // in the tree. It's an error to clear a node but not subsequently update it
   // as part of the tree update.
   AXNodeID node_id_to_clear = kInvalidAXNodeID;
 
   // The id of the root of the tree, if the root is changing. This is
   // required to be set if the root of the tree is changing or Unserialize
   // will fail. If the root of the tree is not changing this is optional
-  // and it is allowed to pass 0.
+  // and it is allowed to pass `kInvalidAXNodeID`.
   AXNodeID root_id = kInvalidAXNodeID;
 
   // A vector of nodes to update, according to the rules above.
@@ -82,18 +95,19 @@ struct AX_BASE_EXPORT AXTreeUpdate {
   // The event intents associated with this tree update.
   std::vector<AXEventIntent> event_intents;
 
+  std::optional<AXTreeChecks> tree_checks;
+
   // Return a multi-line indented string representation, for logging.
-  std::string ToString() const;
+  // This method is used to help diagnose inconsistent tree states. Limiting the
+  // max number of items avoids out of memory errors and excessive logging.
+  // To stringify the entire update, pass in max_items = -1.
+  static constexpr int kMaxItemsToStringify = 200;
+  std::string ToString(bool verbose = true,
+                       int max_items = kMaxItemsToStringify) const;
 
-  // TODO(dmazzoni): location changes
+  // Returns the approximate size in bytes.
+  size_t ByteSize() const;
 };
-
-// Two tree updates can be merged into one if the second one
-// doesn't clear a subtree, doesn't have new tree data, and
-// doesn't have a new root id - in other words the second tree
-// update consists of only changes to nodes.
-bool AX_BASE_EXPORT TreeUpdatesCanBeMerged(const AXTreeUpdate& u1,
-                                           const AXTreeUpdate& u2);
 
 }  // namespace ui
 

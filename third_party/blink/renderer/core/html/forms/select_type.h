@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/html/forms/popup_menu.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -34,7 +35,7 @@ class SelectType : public GarbageCollected<SelectType> {
   virtual void DidBlur() = 0;
   virtual void DidDetachLayoutTree();
   virtual void DidRecalcStyle(const StyleRecalcChange change);
-  virtual void DidSetSuggestedOption(HTMLOptionElement* option) = 0;
+  virtual void DidSetSuggestedOption(HTMLOptionElement* option);
   virtual void SaveLastSelection() = 0;
 
   // Update style of text in the CSS box on style or selected OPTION change.
@@ -59,15 +60,28 @@ class SelectType : public GarbageCollected<SelectType> {
   // Clear OPTION selection information saved by SaveLastSelection().
   // This is for ListBoxes.
   virtual void ClearLastOnChangeSelection();
+  // Sets the active selection range to just the provided option element. This
+  // will make ActiveSelectionEnd() return the provided option.
+  virtual void SetListBoxActiveSelection(HTMLOptionElement*);
 
-  virtual void CreateShadowSubtree(ShadowRoot& root);
+  virtual void CreateShadowSubtree(ShadowRoot& root) = 0;
+  virtual void ManuallyAssignSlots() = 0;
+  virtual HTMLButtonElement* SlottedButton() const = 0;
+  virtual HTMLElement* PopoverPickerElement() const = 0;
+  virtual bool IsAppearanceBasePicker() const = 0;
+  virtual bool PickerIsPopover() const = 0;
+  virtual void SetIsAppearanceBasePickerForDisplayNone(bool) = 0;
+  virtual HTMLSelectElement::SelectAutofillPreviewElement*
+  GetAutofillPreviewElement() const;
   virtual Element& InnerElement() const;
-  virtual void ShowPopup();
-  virtual void HidePopup();
+  virtual void ShowPopup(PopupMenu::ShowEventType type);
+  virtual void HidePopup(SelectPopupHideBehavior);
   virtual void PopupDidHide();
   virtual bool PopupIsVisible() const;
   virtual PopupMenu* PopupForTesting() const;
   virtual AXObject* PopupRootAXObject() const;
+  virtual void ShowPicker();
+  HTMLDivElement* ShadowListBox() const { return listbox_.Get(); }
 
   enum SkipDirection { kSkipBackwards = -1, kSkipForwards = 1 };
   CORE_EXPORT HTMLOptionElement* NextSelectableOption(HTMLOptionElement*) const;
@@ -82,7 +96,14 @@ class SelectType : public GarbageCollected<SelectType> {
                                      SkipDirection direction,
                                      int skip) const;
 
+  void CreateAutofillPopover(ShadowRoot& root);
+
   const Member<HTMLSelectElement> select_;
+  Member<HTMLSelectElement::SelectAutofillPreviewElement> autofill_popover_;
+  Member<HTMLDivElement> autofill_popover_text_;
+  // Used by the FilterableSelect feature for the internal <div role=listbox>
+  // created when <select> has descendant <input> elements.
+  Member<HTMLDivElement> listbox_;
   bool will_be_destroyed_ = false;
 
  private:

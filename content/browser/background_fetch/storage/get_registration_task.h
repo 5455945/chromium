@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_registration_id.h"
 #include "content/browser/background_fetch/storage/database_task.h"
@@ -32,6 +32,9 @@ class GetRegistrationTask : public DatabaseTask {
                       const std::string& developer_id,
                       GetRegistrationCallback callback);
 
+  GetRegistrationTask(const GetRegistrationTask&) = delete;
+  GetRegistrationTask& operator=(const GetRegistrationTask&) = delete;
+
   ~GetRegistrationTask() override;
 
   // DatabaseTask implementation:
@@ -44,8 +47,6 @@ class GetRegistrationTask : public DatabaseTask {
 
   void FinishWithError(blink::mojom::BackgroundFetchError error) override;
 
-  std::string HistogramName() const override;
-
   int64_t service_worker_registration_id_;
   blink::StorageKey storage_key_;
   std::string developer_id_;
@@ -56,8 +57,6 @@ class GetRegistrationTask : public DatabaseTask {
 
   base::WeakPtrFactory<GetRegistrationTask> weak_factory_{
       this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(GetRegistrationTask);
 };
 
 }  // namespace background_fetch

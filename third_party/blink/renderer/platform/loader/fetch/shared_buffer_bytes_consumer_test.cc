@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,7 @@ TEST(SharedBufferBytesConsumerTest, Read) {
   std::string flatten_expected_data;
   auto shared_buffer = SharedBuffer::Create();
   for (const auto& chunk : kData) {
-    shared_buffer->Append(chunk.data(), chunk.size());
+    shared_buffer->Append(chunk);
     flatten_expected_data += chunk;
   }
 
@@ -33,9 +33,7 @@ TEST(SharedBufferBytesConsumerTest, Read) {
   auto task_runner = base::MakeRefCounted<scheduler::FakeTaskRunner>();
   auto* test_reader =
       MakeGarbageCollected<BytesConsumerTestReader>(bytes_consumer);
-  Vector<char> data_from_consumer;
-  BytesConsumer::Result result;
-  std::tie(result, data_from_consumer) = test_reader->Run(task_runner.get());
+  auto [result, data_from_consumer] = test_reader->Run(task_runner.get());
   EXPECT_EQ(BytesConsumer::Result::kDone, result);
   EXPECT_EQ(PublicState::kClosed, bytes_consumer->GetPublicState());
   EXPECT_EQ(flatten_expected_data,
@@ -47,7 +45,7 @@ TEST(SharedBufferBytesConsumerTest, Cancel) {
                                   "This is another data!"};
   auto shared_buffer = SharedBuffer::Create();
   for (const auto& chunk : kData) {
-    shared_buffer->Append(chunk.data(), chunk.size());
+    shared_buffer->Append(chunk);
   }
 
   auto* bytes_consumer =
@@ -55,10 +53,9 @@ TEST(SharedBufferBytesConsumerTest, Cancel) {
   EXPECT_EQ(PublicState::kReadableOrWaiting, bytes_consumer->GetPublicState());
 
   bytes_consumer->Cancel();
-  const char* buffer;
-  size_t available;
-  BytesConsumer::Result result = bytes_consumer->BeginRead(&buffer, &available);
-  EXPECT_EQ(0u, available);
+  base::span<const char> buffer;
+  BytesConsumer::Result result = bytes_consumer->BeginRead(buffer);
+  EXPECT_EQ(0u, buffer.size());
   EXPECT_EQ(BytesConsumer::Result::kDone, result);
   EXPECT_EQ(PublicState::kClosed, bytes_consumer->GetPublicState());
 }

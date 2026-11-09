@@ -1,18 +1,18 @@
 <!DOCTYPE html>
-<html>
-<head>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-1000">
 <script src='../../../resources/testharness.js'></script>
 <script src='../../../resources/testharnessreport.js'></script>
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src='../../../fast/forms/resources/picker-common.js'></script>
-</head>
-<body>
+
 <input type='color' id='color' value='#000000'>
 <script>
 'use strict';
 
 promise_test(() => {
   let colorControl = document.getElementById('color');
-  return openPickerWithPromise(colorControl)
+  return openPicker(colorControl)
   .then(() => {
     internals.pagePopupWindow.focus();
     const popupDocument = internals.pagePopupWindow.document;
@@ -30,5 +30,3 @@ promise_test(() => {
 }, "Color picker: Hue slider change with no color value change doesn't affect escape behavior");
 
 </script>
-</body>
-</html>

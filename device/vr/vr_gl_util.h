@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 
 #define SHADER(Src) "#version 100\n" #Src
+#define SHADER_ES3(Src) "#version 300 es\n" #Src
 #define OEIE_SHADER(Src) \
   "#version 100\n#extension GL_OES_EGL_image_external : require\n" #Src
 #define VOID_OFFSET(x) reinterpret_cast<void*>(x)

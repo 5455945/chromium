@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,6 +39,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) IgnoreErrorsCertVerifier
   IgnoreErrorsCertVerifier(std::unique_ptr<net::CertVerifier> verifier,
                            SPKIHashSet allowlist);
 
+  IgnoreErrorsCertVerifier(const IgnoreErrorsCertVerifier&) = delete;
+  IgnoreErrorsCertVerifier& operator=(const IgnoreErrorsCertVerifier&) = delete;
+
   ~IgnoreErrorsCertVerifier() override;
 
   // Verify skips certificate verification and returns OK if any of the
@@ -50,7 +53,16 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) IgnoreErrorsCertVerifier
              net::CompletionOnceCallback callback,
              std::unique_ptr<Request>* out_req,
              const net::NetLogWithSource& net_log) override;
+  void Verify2QwacBinding(
+      const std::string& binding,
+      const std::string& hostname,
+      const scoped_refptr<net::X509Certificate>& tls_cert,
+      base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+          callback,
+      const net::NetLogWithSource& net_log) override;
   void SetConfig(const Config& config) override;
+  void AddObserver(Observer* observer) override;
+  void RemoveObserver(Observer* observer) override;
 
  private:
   friend class IgnoreErrorsCertVerifierTest;
@@ -59,8 +71,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) IgnoreErrorsCertVerifier
 
   std::unique_ptr<net::CertVerifier> verifier_;
   SPKIHashSet allowlist_;
-
-  DISALLOW_COPY_AND_ASSIGN(IgnoreErrorsCertVerifier);
 };
 
 }  // namespace network

@@ -1,16 +1,8 @@
-// Copyright 2007 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 /**
@@ -34,6 +26,19 @@ goog.require('goog.graphics.Font');
 goog.require('goog.graphics.SolidFill');
 goog.require('goog.math.Size');
 goog.require('goog.style');
+goog.requireType('goog.dom.DomHelper');
+goog.requireType('goog.graphics.AffineTransform');
+goog.requireType('goog.graphics.Element');
+goog.requireType('goog.graphics.EllipseElement');
+goog.requireType('goog.graphics.Fill');
+goog.requireType('goog.graphics.GroupElement');
+goog.requireType('goog.graphics.ImageElement');
+goog.requireType('goog.graphics.Path');
+goog.requireType('goog.graphics.PathElement');
+goog.requireType('goog.graphics.RectElement');
+goog.requireType('goog.graphics.Stroke');
+goog.requireType('goog.graphics.StrokeAndFillElement');
+goog.requireType('goog.graphics.TextElement');
 
 
 
@@ -57,6 +62,7 @@ goog.require('goog.style');
  */
 goog.graphics.CanvasGraphics = function(
     width, height, opt_coordWidth, opt_coordHeight, opt_domHelper) {
+  'use strict';
   goog.graphics.AbstractGraphics.call(
       this, width, height, opt_coordWidth, opt_coordHeight, opt_domHelper);
 };
@@ -72,6 +78,7 @@ goog.inherits(goog.graphics.CanvasGraphics, goog.graphics.AbstractGraphics);
  */
 goog.graphics.CanvasGraphics.prototype.setElementFill = function(
     element, fill) {
+  'use strict';
   this.redraw();
 };
 
@@ -85,6 +92,7 @@ goog.graphics.CanvasGraphics.prototype.setElementFill = function(
  */
 goog.graphics.CanvasGraphics.prototype.setElementStroke = function(
     element, stroke) {
+  'use strict';
   this.redraw();
 };
 
@@ -104,6 +112,7 @@ goog.graphics.CanvasGraphics.prototype.setElementStroke = function(
  */
 goog.graphics.CanvasGraphics.prototype.setElementTransform = function(
     element, x, y, angle, centerX, centerY) {
+  'use strict';
   this.redraw();
 };
 
@@ -120,6 +129,7 @@ goog.graphics.CanvasGraphics.prototype.setElementTransform = function(
  */
 goog.graphics.CanvasGraphics.prototype.setElementAffineTransform = function(
     element, affineTransform) {
+  'use strict';
   this.redraw();
 };
 
@@ -127,9 +137,11 @@ goog.graphics.CanvasGraphics.prototype.setElementAffineTransform = function(
 /**
  * Push an element transform on to the transform stack.
  * @param {goog.graphics.Element} element The transformed element.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.pushElementTransform = function(
     element) {
+  'use strict';
   var ctx = this.getContext();
   ctx.save();
 
@@ -151,8 +163,10 @@ goog.graphics.CanvasGraphics.prototype.pushElementTransform = function(
 
 /**
  * Pop an element transform off of the transform stack.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.popElementTransform = function() {
+  'use strict';
   this.getContext().restore();
 };
 
@@ -162,10 +176,12 @@ goog.graphics.CanvasGraphics.prototype.popElementTransform = function() {
  * @override
  */
 goog.graphics.CanvasGraphics.prototype.createDom = function() {
+  'use strict';
   var element = this.dom_.createDom(
       goog.dom.TagName.DIV, {'style': 'position:relative;overflow:hidden'});
   this.setElementInternal(element);
 
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.canvas_ = this.dom_.createDom(goog.dom.TagName.CANVAS);
   element.appendChild(this.canvas_);
 
@@ -175,7 +191,9 @@ goog.graphics.CanvasGraphics.prototype.createDom = function() {
    */
   this.canvasElement = new goog.graphics.CanvasGroupElement(this);
 
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.lastGroup_ = this.canvasElement;
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.redrawTimeout_ = 0;
 
   this.updateSize();
@@ -188,6 +206,8 @@ goog.graphics.CanvasGraphics.prototype.createDom = function() {
  * @private
  */
 goog.graphics.CanvasGraphics.prototype.clearContext_ = function() {
+  'use strict';
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.context_ = null;
 };
 
@@ -195,12 +215,15 @@ goog.graphics.CanvasGraphics.prototype.clearContext_ = function() {
 /**
  * Returns the drawing context.
  * @return {Object} The canvas element rendering context.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.getContext = function() {
+  'use strict';
   if (!this.getElement()) {
     this.createDom();
   }
   if (!this.context_) {
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.context_ = this.canvas_.getContext('2d');
     this.context_.save();
   }
@@ -215,6 +238,7 @@ goog.graphics.CanvasGraphics.prototype.getContext = function() {
  * @override
  */
 goog.graphics.CanvasGraphics.prototype.setCoordOrigin = function(left, top) {
+  'use strict';
   this.coordLeft = left;
   this.coordTop = top;
   this.redraw();
@@ -229,6 +253,7 @@ goog.graphics.CanvasGraphics.prototype.setCoordOrigin = function(left, top) {
  */
 goog.graphics.CanvasGraphics.prototype.setCoordSize = function(
     coordWidth, coordHeight) {
+  'use strict';
   goog.graphics.CanvasGraphics.superClass_.setCoordSize.apply(this, arguments);
   this.redraw();
 };
@@ -242,6 +267,7 @@ goog.graphics.CanvasGraphics.prototype.setCoordSize = function(
  */
 goog.graphics.CanvasGraphics.prototype.setSize = function(
     pixelWidth, pixelHeight) {
+  'use strict';
   this.width = pixelWidth;
   this.height = pixelHeight;
 
@@ -252,6 +278,7 @@ goog.graphics.CanvasGraphics.prototype.setSize = function(
 
 /** @override */
 goog.graphics.CanvasGraphics.prototype.getPixelSize = function() {
+  'use strict';
   // goog.style.getSize does not work for Canvas elements.  We
   // have to compute the size manually if it is percentage based.
   var width = this.width;
@@ -287,8 +314,10 @@ goog.graphics.CanvasGraphics.prototype.getPixelSize = function() {
 
 /**
  * Update the size of the canvas.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.updateSize = function() {
+  'use strict';
   goog.style.setSize(this.getElement(), this.width, this.height);
 
   var pixels = this.getPixelSize();
@@ -297,7 +326,9 @@ goog.graphics.CanvasGraphics.prototype.updateSize = function() {
         this.canvas_,
         /** @type {number} */ (pixels.width),
         /** @type {number} */ (pixels.height));
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.canvas_.width = pixels.width;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.canvas_.height = pixels.height;
     this.clearContext_();
   }
@@ -306,8 +337,10 @@ goog.graphics.CanvasGraphics.prototype.updateSize = function() {
 
 /**
  * Reset the canvas.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.reset = function() {
+  'use strict';
   var ctx = this.getContext();
   ctx.restore();
   var size = this.getPixelSize();
@@ -323,22 +356,26 @@ goog.graphics.CanvasGraphics.prototype.reset = function() {
  * @override
  */
 goog.graphics.CanvasGraphics.prototype.clear = function() {
+  'use strict';
   this.reset();
   this.canvasElement.clear();
   var el = this.getElement();
 
   // Remove all children (text nodes) except the canvas (which is at index 0)
   while (el.childNodes.length > 1) {
-    el.removeChild(el.lastChild);
+    el.removeChild(/** @type {!Node} */ (el.lastChild));
   }
 };
 
 
 /**
  * Redraw the entire canvas.
+ * @suppress {strictCheckTypes} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.redraw = function() {
+  'use strict';
   if (this.preventRedraw_) {
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.needsRedraw_ = true;
     return;
   }
@@ -364,8 +401,10 @@ goog.graphics.CanvasGraphics.prototype.redraw = function() {
 /**
  * Draw an element, including any stroke or fill.
  * @param {goog.graphics.Element} element The element to draw.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.drawElement = function(element) {
+  'use strict';
   if (element instanceof goog.graphics.CanvasTextElement) {
     // Don't draw text since that is not implemented using canvas.
     return;
@@ -385,18 +424,33 @@ goog.graphics.CanvasGraphics.prototype.drawElement = function(element) {
   if (fill) {
     if (fill instanceof goog.graphics.SolidFill) {
       if (fill.getOpacity() != 0) {
+        /**
+         * @suppress {strictMissingProperties} Added to tighten compiler checks
+         */
         ctx.globalAlpha = fill.getOpacity();
+        /**
+         * @suppress {strictMissingProperties} Added to tighten compiler checks
+         */
         ctx.fillStyle = fill.getColor();
         element.draw(ctx);
         ctx.fill();
+        /**
+         * @suppress {strictMissingProperties} Added to tighten compiler checks
+         */
         ctx.globalAlpha = 1;
       }
     } else {  // (fill instanceof goog.graphics.LinearGradient)
+              /**
+               * @suppress {strictMissingProperties} Added to tighten compiler checks
+               */
       var linearGradient = ctx.createLinearGradient(
           fill.getX1(), fill.getY1(), fill.getX2(), fill.getY2());
       linearGradient.addColorStop(0.0, fill.getColor1());
       linearGradient.addColorStop(1.0, fill.getColor2());
 
+      /**
+       * @suppress {strictMissingProperties} Added to tighten compiler checks
+       */
       ctx.fillStyle = linearGradient;
       element.draw(ctx);
       ctx.fill();
@@ -406,12 +460,14 @@ goog.graphics.CanvasGraphics.prototype.drawElement = function(element) {
   var stroke = element.getStroke();
   if (stroke) {
     element.draw(ctx);
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     ctx.strokeStyle = stroke.getColor();
 
     var width = stroke.getWidth();
     if (typeof width === 'string' && width.indexOf('px') != -1) {
       width = parseFloat(width) / this.getPixelScaleX();
     }
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     ctx.lineWidth = width;
 
     ctx.stroke();
@@ -428,8 +484,10 @@ goog.graphics.CanvasGraphics.prototype.drawElement = function(element) {
  * @param {goog.graphics.GroupElement|undefined} group The group to draw
  *     it in. If null or undefined, defaults to the root group.
  * @protected
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.append = function(element, group) {
+  'use strict';
   group = group || this.canvasElement;
   group.appendChild(element);
 
@@ -457,6 +515,7 @@ goog.graphics.CanvasGraphics.prototype.append = function(element, group) {
  */
 goog.graphics.CanvasGraphics.prototype.drawEllipse = function(
     cx, cy, rx, ry, stroke, fill, opt_group) {
+  'use strict';
   var element = new goog.graphics.CanvasEllipseElement(
       null, this, cx, cy, rx, ry, stroke, fill);
   this.append(element, opt_group);
@@ -482,6 +541,7 @@ goog.graphics.CanvasGraphics.prototype.drawEllipse = function(
  */
 goog.graphics.CanvasGraphics.prototype.drawRect = function(
     x, y, width, height, stroke, fill, opt_group) {
+  'use strict';
   var element = new goog.graphics.CanvasRectElement(
       null, this, x, y, width, height, stroke, fill);
   this.append(element, opt_group);
@@ -504,6 +564,7 @@ goog.graphics.CanvasGraphics.prototype.drawRect = function(
  */
 goog.graphics.CanvasGraphics.prototype.drawImage = function(
     x, y, width, height, src, opt_group) {
+  'use strict';
   var element = new goog.graphics.CanvasImageElement(
       null, this, x, y, width, height, src);
   this.append(element, opt_group);
@@ -531,6 +592,7 @@ goog.graphics.CanvasGraphics.prototype.drawImage = function(
  */
 goog.graphics.CanvasGraphics.prototype.drawTextOnLine = function(
     text, x1, y1, x2, y2, align, font, stroke, fill, opt_group) {
+  'use strict';
   var element = new goog.graphics.CanvasTextElement(
       this, text, x1, y1, x2, y2, align,
       /** @type {!goog.graphics.Font} */ (font), stroke, fill);
@@ -552,6 +614,7 @@ goog.graphics.CanvasGraphics.prototype.drawTextOnLine = function(
  */
 goog.graphics.CanvasGraphics.prototype.drawPath = function(
     path, stroke, fill, opt_group) {
+  'use strict';
   var element =
       new goog.graphics.CanvasPathElement(null, this, path, stroke, fill);
   this.append(element, opt_group);
@@ -563,8 +626,10 @@ goog.graphics.CanvasGraphics.prototype.drawPath = function(
  * @param {goog.graphics.GroupElement} group The group to possibly
  *     draw to.
  * @return {boolean} Whether drawing can occur now.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.isDrawable = function(group) {
+  'use strict';
   return this.isInDocument() && !this.redrawTimeout_ &&
       !this.isRedrawRequired(group);
 };
@@ -574,8 +639,10 @@ goog.graphics.CanvasGraphics.prototype.isDrawable = function(group) {
  * Returns true if drawing to the given group means a redraw is required.
  * @param {goog.graphics.GroupElement} group The group to draw to.
  * @return {boolean} Whether drawing to this group should force a redraw.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.isRedrawRequired = function(group) {
+  'use strict';
   // TODO(robbyw): Moving up to any parent of lastGroup should not force redraw.
   return group != this.canvasElement && group != this.lastGroup_;
 };
@@ -589,14 +656,17 @@ goog.graphics.CanvasGraphics.prototype.isRedrawRequired = function(group) {
  *
  * @return {!goog.graphics.CanvasGroupElement} The newly created group.
  * @override
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.createGroup = function(opt_group) {
+  'use strict';
   var group = new goog.graphics.CanvasGroupElement(this);
 
   opt_group = opt_group || this.canvasElement;
 
   // TODO(robbyw): Moving up to any parent group should not force redraw.
   if (opt_group == this.canvasElement || opt_group == this.lastGroup_) {
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.lastGroup_ = group;
   }
 
@@ -627,6 +697,8 @@ goog.graphics.CanvasGraphics.prototype.getTextWidth = goog.abstractMethod;
  * @protected
  */
 goog.graphics.CanvasGraphics.prototype.disposeInternal = function() {
+  'use strict';
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.context_ = null;
   goog.graphics.CanvasGraphics.superClass_.disposeInternal.call(this);
 };
@@ -634,6 +706,7 @@ goog.graphics.CanvasGraphics.prototype.disposeInternal = function() {
 
 /** @override */
 goog.graphics.CanvasGraphics.prototype.enterDocument = function() {
+  'use strict';
   var oldPixelSize = this.getPixelSize();
   goog.graphics.CanvasGraphics.superClass_.enterDocument.call(this);
   if (!oldPixelSize) {
@@ -651,6 +724,8 @@ goog.graphics.CanvasGraphics.prototype.enterDocument = function() {
  * @override
  */
 goog.graphics.CanvasGraphics.prototype.suspend = function() {
+  'use strict';
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.preventRedraw_ = true;
 };
 
@@ -659,12 +734,16 @@ goog.graphics.CanvasGraphics.prototype.suspend = function() {
  * Stop preventing redraws.  If any redraws had been prevented, a redraw will
  * be done now.
  * @override
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.graphics.CanvasGraphics.prototype.resume = function() {
+  'use strict';
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.preventRedraw_ = false;
 
   if (this.needsRedraw_) {
     this.redraw();
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.needsRedraw_ = false;
   }
 };
@@ -676,6 +755,7 @@ goog.graphics.CanvasGraphics.prototype.resume = function() {
  * @override
  */
 goog.graphics.CanvasGraphics.prototype.removeElement = function(elem) {
+  'use strict';
   if (!elem) {
     return;
   }

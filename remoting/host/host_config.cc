@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,58 +11,78 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/values.h"
+#include "remoting/base/is_google_email.h"
 
 namespace remoting {
 
-const char kHostEnabledConfigPath[] = "enabled";
-const char kHostOwnerConfigPath[] = "host_owner";
-const char kHostOwnerEmailConfigPath[] = "host_owner_email";
-const char kXmppLoginConfigPath[] = "xmpp_login";
-const char kOAuthRefreshTokenConfigPath[] = "oauth_refresh_token";
-const char kHostIdConfigPath[] = "host_id";
-const char kHostNameConfigPath[] = "host_name";
-const char kHostSecretHashConfigPath[] = "host_secret_hash";
-const char kPrivateKeyConfigPath[] = "private_key";
-const char kUsageStatsConsentConfigPath[] = "usage_stats_consent";
-const char kEnableVp9ConfigPath[] = "enable_vp9";
-const char kEnableH264ConfigPath[] = "enable_h264";
-const char kFrameRecorderBufferKbConfigPath[] = "frame-recorder-buffer-kb";
-
-std::unique_ptr<base::DictionaryValue> HostConfigFromJson(
-    const std::string& json) {
-  std::unique_ptr<base::Value> value =
-      base::JSONReader::ReadDeprecated(json, base::JSON_ALLOW_TRAILING_COMMAS);
-  if (!value || !value->is_dict()) {
-    LOG(WARNING) << "Failed to parse host config from JSON";
-    return nullptr;
+std::optional<base::DictValue> HostConfigFromJson(const std::string& json) {
+  std::optional<base::DictValue> config =
+      base::JSONReader::ReadDict(json, base::JSON_ALLOW_TRAILING_COMMAS);
+  if (!config) {
+    LOG(ERROR) << "Failed to parse host config from JSON";
+    return std::nullopt;
   }
 
-  return base::WrapUnique(static_cast<base::DictionaryValue*>(value.release()));
+  // The service_account field was added in M120 so this key will not be present
+  // if the host was configured using an earlier package version. For that case,
+  // we read from xmpp_login and use that value if it is present. Otherwise the
+  // config is considered to be malformed.
+  if (!config->FindString(kServiceAccountConfigPath)) {
+    auto xmpp_login = config->Extract(kDeprecatedXmppLoginConfigPath);
+    if (xmpp_login.has_value()) {
+      config->Set(kServiceAccountConfigPath, xmpp_login->GetString());
+    } else {
+      LOG(WARNING) << "Host config is missing values for both: "
+                   << kServiceAccountConfigPath << " and "
+                   << kDeprecatedXmppLoginConfigPath;
+    }
+  }
+
+  // Legacy configs may have both host_owner and host_owner_email due to the way
+  // we integrated with Google Talk. If host_owner_email exists, we should use
+  // its value rather than use host_owner which is likely a Google Talk JID.
+  auto host_owner_email = config->Extract(kDeprecatedHostOwnerEmailConfigPath);
+  if (host_owner_email.has_value()) {
+    LOG(INFO) << "Replacing the value of `" << kHostOwnerConfigPath << "` with "
+              << *host_owner_email;
+    config->Set(kHostOwnerConfigPath, host_owner_email->GetString());
+  }
+
+  return config;
 }
 
-std::string HostConfigToJson(const base::DictionaryValue& host_config) {
-  std::string data;
-  base::JSONWriter::Write(host_config, &data);
-  return data;
+std::string HostConfigToJson(const base::DictValue& host_config) {
+  return base::WriteJson(host_config).value_or("");
 }
 
-std::unique_ptr<base::DictionaryValue> HostConfigFromJsonFile(
+std::optional<base::DictValue> HostConfigFromJsonFile(
     const base::FilePath& config_file) {
-  // TODO(sergeyu): Implement better error handling here.
   std::string serialized;
   if (!base::ReadFileToString(config_file, &serialized)) {
-    LOG(WARNING) << "Failed to read " << config_file.value();
-    return nullptr;
+    LOG(ERROR) << "Failed to read " << config_file.value();
+    return std::nullopt;
   }
 
   return HostConfigFromJson(serialized);
 }
 
-bool HostConfigToJsonFile(const base::DictionaryValue& host_config,
+bool HostConfigToJsonFile(const base::DictValue& host_config,
                           const base::FilePath& config_file) {
   std::string serialized = HostConfigToJson(host_config);
   return base::ImportantFileWriter::WriteFileAtomically(config_file,
                                                         serialized);
+}
+
+bool IsCorpHostConfig(const base::DictValue& host_config) {
+  const std::string* host_owner = host_config.FindString(kHostOwnerConfigPath);
+  // TODO: joedow - Remove the email check once all Corp hosts have a hint set.
+  bool has_google_email = host_owner && IsGoogleEmail(*host_owner);
+  const std::string* host_type_hint = host_config.FindString(kHostTypeHintPath);
+  bool is_cloud_host = host_type_hint && *host_type_hint == kCloudHostTypeHint;
+  // TODO: joedow - Remove the !is_cloud_host override here when all Corp hosts
+  // have a hint set. This is used to allow Googlers to test with Cloud hosts.
+  return (host_type_hint && *host_type_hint == kCorpHostTypeHint) ||
+         (has_google_email && !is_cloud_host);
 }
 
 }  // namespace remoting

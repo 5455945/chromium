@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,29 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
-#include "ui/base/layout.h"
+#include "ui/actions/actions.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/display/screen.h"
+#include "ui/events/base_event_utils.h"
+#include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
-#include "ui/views/animation/ink_drop_host_view.h"
+#include "ui/events/types/event_type.h"
+#include "ui/gfx/geometry/point.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/animation/ink_drop_impl.h"
-#include "ui/views/animation/test/ink_drop_host_view_test_api.h"
+#include "ui/views/animation/test/ink_drop_host_test_api.h"
 #include "ui/views/animation/test/test_ink_drop.h"
 #include "ui/views/animation/test/test_ink_drop_host.h"
 #include "ui/views/context_menu_controller.h"
@@ -37,6 +45,7 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/test/ax_event_counter.h"
+#include "ui/views/test/button_test_api.h"
 #include "ui/views/test/view_metadata_test_utils.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget_utils.h"
@@ -58,18 +67,23 @@ namespace {
 class TestContextMenuController : public ContextMenuController {
  public:
   TestContextMenuController() = default;
+
+  TestContextMenuController(const TestContextMenuController&) = delete;
+  TestContextMenuController& operator=(const TestContextMenuController&) =
+      delete;
+
   ~TestContextMenuController() override = default;
 
   // ContextMenuController:
-  void ShowContextMenuForViewImpl(View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestContextMenuController);
+  void ShowContextMenuForViewImpl(
+      View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override {}
 };
 
 class TestButton : public Button {
+  METADATA_HEADER(TestButton, Button)
+
  public:
   explicit TestButton(bool has_ink_drop_action_on_click)
       : Button(base::BindRepeating([](bool* pressed) { *pressed = true; },
@@ -77,11 +91,15 @@ class TestButton : public Button {
     SetHasInkDropActionOnClick(has_ink_drop_action_on_click);
   }
 
+  TestButton(const TestButton&) = delete;
+  TestButton& operator=(const TestButton&) = delete;
+
   ~TestButton() override = default;
 
   KeyClickAction GetKeyClickActionForEvent(const ui::KeyEvent& event) override {
-    if (custom_key_click_action_ == KeyClickAction::kNone)
+    if (custom_key_click_action_ == KeyClickAction::kNone) {
       return Button::GetKeyClickActionForEvent(event);
+    }
     return custom_key_click_action_;
   }
 
@@ -108,9 +126,10 @@ class TestButton : public Button {
   bool canceled_ = false;
 
   KeyClickAction custom_key_click_action_ = KeyClickAction::kNone;
-
-  DISALLOW_COPY_AND_ASSIGN(TestButton);
 };
+
+BEGIN_METADATA(TestButton)
+END_METADATA
 
 class TestButtonObserver {
  public:
@@ -124,6 +143,10 @@ class TestButtonObserver {
             [](TestButtonObserver* obs) { obs->state_changed_ = true; },
             base::Unretained(this)));
   }
+
+  TestButtonObserver(const TestButtonObserver&) = delete;
+  TestButtonObserver& operator=(const TestButtonObserver&) = delete;
+
   ~TestButtonObserver() = default;
 
   void Reset() {
@@ -140,8 +163,6 @@ class TestButtonObserver {
 
   base::CallbackListSubscription highlighted_changed_subscription_;
   base::CallbackListSubscription state_changed_subscription_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestButtonObserver);
 };
 
 TestInkDrop* AddTestInkDrop(TestButton* button) {
@@ -158,6 +179,10 @@ TestInkDrop* AddTestInkDrop(TestButton* button) {
 class ButtonTest : public ViewsTestBase {
  public:
   ButtonTest() = default;
+
+  ButtonTest(const ButtonTest&) = delete;
+  ButtonTest& operator=(const ButtonTest&) = delete;
+
   ~ButtonTest() override = default;
 
   void SetUp() override {
@@ -167,13 +192,13 @@ class ButtonTest : public ViewsTestBase {
     // correctly.
     widget_ = std::make_unique<Widget>();
     Widget::InitParams params =
-        CreateParams(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+        CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                     Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     params.bounds = gfx::Rect(0, 0, 650, 650);
     widget_->Init(std::move(params));
     widget_->Show();
 
-    button_ = widget()->SetContentsView(std::make_unique<TestButton>(false));
+    widget()->SetContentsView(std::make_unique<TestButton>(false));
 
     event_generator_ =
         std::make_unique<ui::test::EventGenerator>(GetRootWindow(widget()));
@@ -186,20 +211,22 @@ class ButtonTest : public ViewsTestBase {
   }
 
   TestInkDrop* CreateButtonWithInkDrop(bool has_ink_drop_action_on_click) {
-    button_ = widget()->SetContentsView(
+    widget()->SetContentsView(
         std::make_unique<TestButton>(has_ink_drop_action_on_click));
-    return AddTestInkDrop(button_);
+    return AddTestInkDrop(button());
   }
 
   void CreateButtonWithObserver() {
-    button_ = widget()->SetContentsView(std::make_unique<TestButton>(false));
-    InkDrop::Get(button_)->SetMode(views::InkDropHost::InkDropMode::ON);
-    button_observer_ = std::make_unique<TestButtonObserver>(button_);
+    widget()->SetContentsView(std::make_unique<TestButton>(false));
+    InkDrop::Get(button())->SetMode(views::InkDropHost::InkDropMode::ON);
+    button_observer_ = std::make_unique<TestButtonObserver>(button());
   }
 
  protected:
   Widget* widget() { return widget_.get(); }
-  TestButton* button() { return button_; }
+  TestButton* button() {
+    return static_cast<TestButton*>(widget()->GetContentsView());
+  }
   TestButtonObserver* button_observer() { return button_observer_.get(); }
   ui::test::EventGenerator* event_generator() { return event_generator_.get(); }
   void SetDraggedView(View* dragged_view) {
@@ -208,10 +235,8 @@ class ButtonTest : public ViewsTestBase {
 
  private:
   std::unique_ptr<Widget> widget_;
-  TestButton* button_;
   std::unique_ptr<TestButtonObserver> button_observer_;
   std::unique_ptr<ui::test::EventGenerator> event_generator_;
-  DISALLOW_COPY_AND_ASSIGN(ButtonTest);
 };
 
 // Iterate through the metadata for Button to ensure it all works.
@@ -245,8 +270,8 @@ TEST_F(ButtonTest, HoverStateOnVisibilityChange) {
     // If another widget has capture, the button should ignore mouse position
     // and not enter hovered state.
     Widget second_widget;
-    Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_POPUP);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+    Widget::InitParams params = CreateParams(
+        Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
     params.bounds = gfx::Rect(700, 700, 10, 10);
     second_widget.Init(std::move(params));
     second_widget.Show();
@@ -268,7 +293,7 @@ TEST_F(ButtonTest, HoverStateOnVisibilityChange) {
 
 // Disabling cursor events occurs for touch events and the Ash magnifier. There
 // is no touch on desktop Mac. Tracked in http://crbug.com/445520.
-#if !defined(OS_MAC) || defined(USE_AURA)
+#if !BUILDFLAG(IS_MAC) || defined(USE_AURA)
   aura::test::TestCursorClient cursor_client(GetRootWindow(widget()));
 
   // In Aura views, no new hover effects are invoked if mouse events
@@ -286,7 +311,35 @@ TEST_F(ButtonTest, HoverStateOnVisibilityChange) {
 
   button()->SetVisible(true);
   EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
-#endif  // !defined(OS_MAC) || defined(USE_AURA)
+#endif  // !BUILDFLAG(IS_MAC) || defined(USE_AURA)
+}
+
+TEST_F(ButtonTest, HoverStateOnEmptyVisibleBounds) {
+  // Create a parent view with small bounds.
+  View* parent = widget()->SetContentsView(std::make_unique<View>());
+  parent->SetBoundsRect(gfx::Rect(0, 0, 10, 10));
+
+  // Add a button that is positioned completely outside the parent's bounds.
+  TestButton* test_button =
+      parent->AddChildView(std::make_unique<TestButton>(false));
+  test_button->SetBoundsRect(gfx::Rect(100, 100, 50, 50));
+
+  // The button is locally visible, but its visible bounds are empty due to
+  // being outside the parent's bounds.
+  EXPECT_TRUE(test_button->GetVisible());
+  EXPECT_TRUE(test_button->GetVisibleBounds().IsEmpty());
+
+  // Move the mouse over the button's screen center point.
+  event_generator()->MoveMouseTo(
+      test_button->GetBoundsInScreen().CenterPoint());
+
+  // Force a state update to trigger ShouldEnterHoveredState().
+  test_button->SetEnabled(false);
+  test_button->SetEnabled(true);
+
+  // The button should not enter the hovered state because its visible bounds
+  // are empty.
+  EXPECT_EQ(Button::STATE_NORMAL, test_button->GetState());
 }
 
 // Tests that the hover state is preserved during a view hierarchy update of a
@@ -296,9 +349,51 @@ TEST_F(ButtonTest, HoverStatePreservedOnDescendantViewHierarchyChange) {
 
   EXPECT_EQ(Button::STATE_HOVERED, button()->GetState());
   Label* child = new Label(std::u16string());
-  button()->AddChildView(child);
+  button()->AddChildViewRaw(child);
   delete child;
   EXPECT_EQ(Button::STATE_HOVERED, button()->GetState());
+}
+
+TEST_F(ButtonTest, AccessibleHoveredStateUpdatesCorrectly) {
+  event_generator()->MoveMouseTo(button()->GetBoundsInScreen().CenterPoint());
+  event_generator()->PressLeftButton();
+
+  ui::AXNodeData node_data;
+  button()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(button()->GetViewAccessibility().GetIsHovered());
+  EXPECT_FALSE(node_data.HasState(ax::mojom::State::kHovered));
+
+  event_generator()->ReleaseLeftButton();
+  node_data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_TRUE(button()->GetViewAccessibility().GetIsHovered());
+  EXPECT_TRUE(node_data.HasState(ax::mojom::State::kHovered));
+
+  button()->SetEnabled(false);
+  EXPECT_EQ(Button::STATE_DISABLED, button()->GetState());
+  node_data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(button()->GetViewAccessibility().GetIsHovered());
+  EXPECT_FALSE(node_data.HasState(ax::mojom::State::kHovered));
+
+  button()->SetEnabled(true);
+  node_data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_TRUE(button()->GetViewAccessibility().GetIsHovered());
+  EXPECT_TRUE(node_data.HasState(ax::mojom::State::kHovered));
+
+  button()->SetVisible(false);
+  EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
+  node_data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_FALSE(button()->GetViewAccessibility().GetIsHovered());
+  EXPECT_FALSE(node_data.HasState(ax::mojom::State::kHovered));
+
+  button()->SetVisible(true);
+  node_data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_TRUE(button()->GetViewAccessibility().GetIsHovered());
+  EXPECT_TRUE(node_data.HasState(ax::mojom::State::kHovered));
 }
 
 // Tests the different types of NotifyActions.
@@ -307,13 +402,13 @@ TEST_F(ButtonTest, NotifyAction) {
 
   // By default the button should notify the callback on mouse release.
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_EQ(Button::STATE_PRESSED, button()->GetState());
   EXPECT_FALSE(button()->pressed());
 
   button()->OnMouseReleased(ui::MouseEvent(
-      ui::ET_MOUSE_RELEASED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMouseReleased, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_EQ(Button::STATE_HOVERED, button()->GetState());
   EXPECT_TRUE(button()->pressed());
@@ -323,7 +418,7 @@ TEST_F(ButtonTest, NotifyAction) {
   button()->button_controller()->set_notify_action(
       ButtonController::NotifyAction::kOnPress);
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_EQ(Button::STATE_PRESSED, button()->GetState());
   EXPECT_TRUE(button()->pressed());
@@ -331,7 +426,7 @@ TEST_F(ButtonTest, NotifyAction) {
   // The button should no longer notify on mouse release.
   button()->Reset();
   button()->OnMouseReleased(ui::MouseEvent(
-      ui::ET_MOUSE_RELEASED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMouseReleased, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_EQ(Button::STATE_HOVERED, button()->GetState());
   EXPECT_FALSE(button()->pressed());
@@ -344,12 +439,12 @@ TEST_F(ButtonTest, NotifyActionNoClick) {
 
   // By default the button should notify the callback on mouse release.
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_RIGHT_MOUSE_BUTTON, ui::EF_RIGHT_MOUSE_BUTTON));
   EXPECT_FALSE(button()->canceled());
 
   button()->OnMouseReleased(ui::MouseEvent(
-      ui::ET_MOUSE_RELEASED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMouseReleased, center, center, ui::EventTimeForNow(),
       ui::EF_RIGHT_MOUSE_BUTTON, ui::EF_RIGHT_MOUSE_BUTTON));
   EXPECT_TRUE(button()->canceled());
 
@@ -358,7 +453,7 @@ TEST_F(ButtonTest, NotifyActionNoClick) {
   button()->button_controller()->set_notify_action(
       ButtonController::NotifyAction::kOnPress);
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_RIGHT_MOUSE_BUTTON, ui::EF_RIGHT_MOUSE_BUTTON));
   // OnClickCanceled is only sent on mouse release.
   EXPECT_FALSE(button()->canceled());
@@ -366,13 +461,19 @@ TEST_F(ButtonTest, NotifyActionNoClick) {
   // The button should no longer notify on mouse release.
   button()->Reset();
   button()->OnMouseReleased(ui::MouseEvent(
-      ui::ET_MOUSE_RELEASED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMouseReleased, center, center, ui::EventTimeForNow(),
       ui::EF_RIGHT_MOUSE_BUTTON, ui::EF_RIGHT_MOUSE_BUTTON));
   EXPECT_FALSE(button()->canceled());
 }
 
+TEST_F(ButtonTest, ButtonControllerNotifyClick) {
+  EXPECT_FALSE(button()->pressed());
+  button()->button_controller()->NotifyClick();
+  EXPECT_TRUE(button()->pressed());
+}
+
 // No touch on desktop Mac. Tracked in http://crbug.com/445520.
-#if !defined(OS_MAC) || defined(USE_AURA)
+#if !BUILDFLAG(IS_MAC) || defined(USE_AURA)
 
 namespace {
 
@@ -390,13 +491,13 @@ TEST_F(ButtonTest, GestureEventsSetState) {
 
   EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
 
-  PerformGesture(button(), ui::ET_GESTURE_TAP_DOWN);
+  PerformGesture(button(), ui::EventType::kGestureTapDown);
   EXPECT_EQ(Button::STATE_PRESSED, button()->GetState());
 
-  PerformGesture(button(), ui::ET_GESTURE_SHOW_PRESS);
+  PerformGesture(button(), ui::EventType::kGestureShowPress);
   EXPECT_EQ(Button::STATE_PRESSED, button()->GetState());
 
-  PerformGesture(button(), ui::ET_GESTURE_TAP_CANCEL);
+  PerformGesture(button(), ui::EventType::kGestureTapCancel);
   EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
 }
 
@@ -412,7 +513,7 @@ TEST_F(ButtonTest, GestureEventsRespectDisabledState) {
   EXPECT_EQ(Button::STATE_DISABLED, button()->GetState());
 }
 
-#endif  // !defined(OS_MAC) || defined(USE_AURA)
+#endif  // !BUILDFLAG(IS_MAC) || defined(USE_AURA)
 
 // Ensure subclasses of Button are correctly recognized as Button.
 TEST_F(ButtonTest, AsButton) {
@@ -488,7 +589,7 @@ TEST_F(ButtonTest, HideInkDropWhenShowingContextMenu) {
   ink_drop->SetHovered(true);
   ink_drop->AnimateToState(InkDropState::ACTION_PENDING);
 
-  button()->ShowContextMenu(gfx::Point(), ui::MENU_SOURCE_MOUSE);
+  button()->ShowContextMenu(gfx::Point(), ui::mojom::MenuSourceType::kMouse);
 
   EXPECT_FALSE(ink_drop->is_hovered());
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
@@ -503,7 +604,7 @@ TEST_F(ButtonTest, DontHideInkDropWhenShowingContextMenu) {
   ink_drop->SetHovered(true);
   ink_drop->AnimateToState(InkDropState::ACTION_PENDING);
 
-  button()->ShowContextMenu(gfx::Point(), ui::MENU_SOURCE_MOUSE);
+  button()->ShowContextMenu(gfx::Point(), ui::mojom::MenuSourceType::kMouse);
 
   EXPECT_TRUE(ink_drop->is_hovered());
   EXPECT_EQ(InkDropState::ACTION_PENDING, ink_drop->GetTargetInkDropState());
@@ -517,7 +618,7 @@ TEST_F(ButtonTest, HideInkDropOnBlur) {
   button()->OnFocus();
 
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_EQ(InkDropState::ACTION_PENDING, ink_drop->GetTargetInkDropState());
 
@@ -525,7 +626,7 @@ TEST_F(ButtonTest, HideInkDropOnBlur) {
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
 
   button()->OnMouseReleased(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_TRUE(button()->pressed());
 }
@@ -548,7 +649,7 @@ TEST_F(ButtonTest, InkDropAfterTryingToShowContextMenu) {
   ink_drop->SetHovered(true);
   ink_drop->AnimateToState(InkDropState::ACTION_PENDING);
 
-  button()->ShowContextMenu(gfx::Point(), ui::MENU_SOURCE_MOUSE);
+  button()->ShowContextMenu(gfx::Point(), ui::mojom::MenuSourceType::kMouse);
 
   EXPECT_TRUE(ink_drop->is_hovered());
   EXPECT_EQ(InkDropState::ACTION_PENDING, ink_drop->GetTargetInkDropState());
@@ -605,32 +706,32 @@ TEST_F(ButtonTest, InkDropShowHideOnMouseDraggedNotifyOnRelease) {
       ButtonController::NotifyAction::kOnRelease);
 
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_PENDING, ink_drop->GetTargetInkDropState());
 
-  button()->OnMouseDragged(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+  button()->OnMouseDragged(ui::MouseEvent(
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
 
   button()->OnMouseDragged(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_PENDING, ink_drop->GetTargetInkDropState());
 
-  button()->OnMouseDragged(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+  button()->OnMouseDragged(ui::MouseEvent(
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
 
-  button()->OnMouseReleased(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+  button()->OnMouseReleased(ui::MouseEvent(
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_FALSE(button()->pressed());
 }
@@ -646,33 +747,33 @@ TEST_F(ButtonTest, InkDropShowHideOnMouseDraggedNotifyOnPress) {
       ButtonController::NotifyAction::kOnPress);
 
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_TRIGGERED, ink_drop->GetTargetInkDropState());
   EXPECT_TRUE(button()->pressed());
 
-  button()->OnMouseDragged(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
-
-  EXPECT_EQ(InkDropState::ACTION_TRIGGERED, ink_drop->GetTargetInkDropState());
-
   button()->OnMouseDragged(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_TRIGGERED, ink_drop->GetTargetInkDropState());
 
-  button()->OnMouseDragged(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+  button()->OnMouseDragged(ui::MouseEvent(
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_TRIGGERED, ink_drop->GetTargetInkDropState());
 
-  button()->OnMouseReleased(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+  button()->OnMouseDragged(ui::MouseEvent(
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+
+  EXPECT_EQ(InkDropState::ACTION_TRIGGERED, ink_drop->GetTargetInkDropState());
+
+  button()->OnMouseReleased(ui::MouseEvent(
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_TRIGGERED, ink_drop->GetTargetInkDropState());
 }
@@ -684,7 +785,7 @@ TEST_F(ButtonTest, InkDropStaysHiddenWhileDragging) {
   TestInkDrop* ink_drop = CreateButtonWithInkDrop(false);
 
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::ACTION_PENDING, ink_drop->GetTargetInkDropState());
@@ -695,14 +796,14 @@ TEST_F(ButtonTest, InkDropStaysHiddenWhileDragging) {
 
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
 
-  button()->OnMouseDragged(
-      ui::MouseEvent(ui::ET_MOUSE_PRESSED, oob, oob, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
+  button()->OnMouseDragged(ui::MouseEvent(
+      ui::EventType::kMousePressed, oob, oob, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
 
   button()->OnMouseDragged(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
 
   EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
@@ -718,11 +819,11 @@ TEST_F(ButtonTest, SetCallback) {
 
   const gfx::Point center(10, 10);
   button()->OnMousePressed(ui::MouseEvent(
-      ui::ET_MOUSE_PRESSED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMousePressed, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   // Default button controller notifies callback at mouse release.
   button()->OnMouseReleased(ui::MouseEvent(
-      ui::ET_MOUSE_RELEASED, center, center, ui::EventTimeForNow(),
+      ui::EventType::kMouseReleased, center, center, ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   EXPECT_TRUE(pressed);
 }
@@ -733,13 +834,16 @@ class VisibilityTestButton : public TestButton {
  public:
   VisibilityTestButton() : TestButton(false) {}
   ~VisibilityTestButton() override {
-    if (layer())
+    if (layer()) {
       ADD_FAILURE();
+    }
   }
 
-  void AddLayerBeneathView(ui::Layer* layer) override { ADD_FAILURE(); }
+  void AddLayerToRegion(ui::Layer* layer, views::LayerRegion region) override {
+    ADD_FAILURE();
+  }
 
-  void RemoveLayerBeneathView(ui::Layer* layer) override { ADD_FAILURE(); }
+  void RemoveLayerFromRegions(ui::Layer* layer) override { ADD_FAILURE(); }
 };
 
 // Test that hiding or closing a Widget doesn't attempt to add a layer due to
@@ -775,10 +879,11 @@ TEST_F(ButtonTest, ActionOnSpace) {
   button()->RequestFocus();
   EXPECT_TRUE(button()->HasFocus());
 
-  ui::KeyEvent space_press(ui::ET_KEY_PRESSED, ui::VKEY_SPACE, ui::EF_NONE);
+  ui::KeyEvent space_press(ui::EventType::kKeyPressed, ui::VKEY_SPACE,
+                           ui::EF_NONE);
   EXPECT_TRUE(button()->OnKeyPressed(space_press));
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
   EXPECT_TRUE(button()->pressed());
 #else
@@ -786,9 +891,10 @@ TEST_F(ButtonTest, ActionOnSpace) {
   EXPECT_FALSE(button()->pressed());
 #endif
 
-  ui::KeyEvent space_release(ui::ET_KEY_RELEASED, ui::VKEY_SPACE, ui::EF_NONE);
+  ui::KeyEvent space_release(ui::EventType::kKeyReleased, ui::VKEY_SPACE,
+                             ui::EF_NONE);
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   EXPECT_FALSE(button()->OnKeyReleased(space_release));
 #else
   EXPECT_TRUE(button()->OnKeyReleased(space_release));
@@ -806,9 +912,10 @@ TEST_F(ButtonTest, ActionOnReturn) {
   button()->RequestFocus();
   EXPECT_TRUE(button()->HasFocus());
 
-  ui::KeyEvent return_press(ui::ET_KEY_PRESSED, ui::VKEY_RETURN, ui::EF_NONE);
+  ui::KeyEvent return_press(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
+                            ui::EF_NONE);
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   EXPECT_FALSE(button()->OnKeyPressed(return_press));
   EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
   EXPECT_FALSE(button()->pressed());
@@ -818,7 +925,7 @@ TEST_F(ButtonTest, ActionOnReturn) {
   EXPECT_TRUE(button()->pressed());
 #endif
 
-  ui::KeyEvent return_release(ui::ET_KEY_RELEASED, ui::VKEY_RETURN,
+  ui::KeyEvent return_release(ui::EventType::kKeyReleased, ui::VKEY_RETURN,
                               ui::EF_NONE);
   EXPECT_FALSE(button()->OnKeyReleased(return_release));
 }
@@ -832,12 +939,13 @@ TEST_F(ButtonTest, CustomActionOnKeyPressedEvent) {
   // Set the button to handle any key pressed event as kOnKeyPress.
   button()->set_custom_key_click_action(Button::KeyClickAction::kOnKeyPress);
 
-  ui::KeyEvent control_press(ui::ET_KEY_PRESSED, ui::VKEY_CONTROL, ui::EF_NONE);
+  ui::KeyEvent control_press(ui::EventType::kKeyPressed, ui::VKEY_CONTROL,
+                             ui::EF_NONE);
   EXPECT_TRUE(button()->OnKeyPressed(control_press));
   EXPECT_EQ(Button::STATE_NORMAL, button()->GetState());
   EXPECT_TRUE(button()->pressed());
 
-  ui::KeyEvent control_release(ui::ET_KEY_RELEASED, ui::VKEY_CONTROL,
+  ui::KeyEvent control_release(ui::EventType::kKeyReleased, ui::VKEY_CONTROL,
                                ui::EF_NONE);
   EXPECT_FALSE(button()->OnKeyReleased(control_release));
 }
@@ -849,7 +957,7 @@ TEST_F(ButtonTest, ChangingHighlightStateNotifiesCallback) {
   EXPECT_FALSE(button_observer()->highlighted_changed());
   EXPECT_FALSE(InkDrop::Get(button())->GetHighlighted());
 
-  button()->SetHighlighted(/*bubble_visible=*/true);
+  button()->SetHighlighted(/*highlighted=*/true);
   EXPECT_TRUE(button_observer()->highlighted_changed());
   EXPECT_TRUE(InkDrop::Get(button())->GetHighlighted());
 
@@ -857,7 +965,7 @@ TEST_F(ButtonTest, ChangingHighlightStateNotifiesCallback) {
   EXPECT_FALSE(button_observer()->highlighted_changed());
   EXPECT_TRUE(InkDrop::Get(button())->GetHighlighted());
 
-  button()->SetHighlighted(/*bubble_visible=*/false);
+  button()->SetHighlighted(/*highlighted=*/false);
   EXPECT_TRUE(button_observer()->highlighted_changed());
   EXPECT_FALSE(InkDrop::Get(button())->GetHighlighted());
 }
@@ -905,16 +1013,188 @@ TEST_F(ButtonTest, SetStateNotifiesObserver) {
 // Verifies setting the tooltip text will call NotifyAccessibilityEvent.
 TEST_F(ButtonTest, SetTooltipTextNotifiesAccessibilityEvent) {
   std::u16string test_tooltip_text = u"Test Tooltip Text";
-  test::AXEventCounter counter(views::AXEventManager::Get());
+  test::AXEventCounter counter(views::AXUpdateNotifier::Get());
   EXPECT_EQ(0, counter.GetCount(ax::mojom::Event::kTextChanged));
   button()->SetTooltipText(test_tooltip_text);
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kTextChanged));
-  EXPECT_EQ(test_tooltip_text, button()->GetTooltipText(gfx::Point()));
+  EXPECT_EQ(test_tooltip_text, button()->GetRenderedTooltipText(gfx::Point()));
   ui::AXNodeData data;
-  button()->GetAccessibleNodeData(&data);
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
   const std::string& name =
       data.GetStringAttribute(ax::mojom::StringAttribute::kName);
   EXPECT_EQ(test_tooltip_text, base::ASCIIToUTF16(name));
+}
+
+TEST_F(ButtonTest, AccessibleRole) {
+  ui::AXNodeData data;
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.role, ax::mojom::Role::kButton);
+  EXPECT_EQ(button()->GetViewAccessibility().GetCachedRole(),
+            ax::mojom::Role::kButton);
+
+  button()->GetViewAccessibility().SetRole(ax::mojom::Role::kCheckBox);
+
+  data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.role, ax::mojom::Role::kCheckBox);
+  EXPECT_EQ(button()->GetViewAccessibility().GetCachedRole(),
+            ax::mojom::Role::kCheckBox);
+}
+
+// Verify that when there is no accessible name, the tooltip text is used as the
+// name.
+TEST_F(ButtonTest, SetTooltipTextAccessibleName) {
+  std::u16string test_tooltip_text = u"Test Tooltip Text";
+  button()->SetTooltipText(test_tooltip_text);
+  button()->SetAccessibleName(std::u16string());
+  EXPECT_EQ(test_tooltip_text, button()->GetRenderedTooltipText(gfx::Point()));
+  ui::AXNodeData data;
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  const std::string& name =
+      data.GetStringAttribute(ax::mojom::StringAttribute::kName);
+  EXPECT_EQ(test_tooltip_text, base::ASCIIToUTF16(name));
+}
+
+// Verify that the tooltip text will be used as the accessible description.
+TEST_F(ButtonTest, SetTooltipTextAccessibleDescription) {
+  std::u16string test_tooltip_text = u"Test Tooltip Text";
+  std::u16string test_name = u"Test Name";
+  button()->SetTooltipText(test_tooltip_text);
+  button()->SetAccessibleName(test_name);
+  EXPECT_EQ(test_tooltip_text, button()->GetRenderedTooltipText(gfx::Point()));
+  ui::AXNodeData data;
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  const std::string& name =
+      data.GetStringAttribute(ax::mojom::StringAttribute::kName);
+  EXPECT_EQ(test_name, base::ASCIIToUTF16(name));
+  const std::string& description =
+      data.GetStringAttribute(ax::mojom::StringAttribute::kDescription);
+  EXPECT_EQ(test_tooltip_text, base::ASCIIToUTF16(description));
+}
+
+TEST_F(ButtonTest, AccessibleCheckedState) {
+  ui::AXNodeData data;
+  event_generator()->MoveMouseTo(button()->GetBoundsInScreen().CenterPoint());
+  event_generator()->PressLeftButton();
+  EXPECT_EQ(Button::STATE_PRESSED, button()->GetState());
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetCheckedState(), ax::mojom::CheckedState::kTrue);
+
+  event_generator()->ReleaseLeftButton();
+  EXPECT_EQ(Button::STATE_HOVERED, button()->GetState());
+  data = ui::AXNodeData();
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetCheckedState(), ax::mojom::CheckedState::kNone);
+}
+
+TEST_F(ButtonTest, AccessibleDefaultActionVerb) {
+  ui::AXNodeData data;
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kPress);
+
+  data = ui::AXNodeData();
+  button()->SetEnabled(false);
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_FALSE(
+      data.HasIntAttribute(ax::mojom::IntAttribute::kDefaultActionVerb));
+
+  data = ui::AXNodeData();
+  button()->SetEnabled(true);
+  button()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kPress);
+}
+
+TEST_F(ButtonTest, AnchorHighlightSetsHiglight) {
+  TestInkDrop* ink_drop = CreateButtonWithInkDrop(false);
+
+  Button::ScopedAnchorHighlight highlight = button()->AddAnchorHighlight();
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+TEST_F(ButtonTest, AnchorHighlightDestructionClearsHighlight) {
+  TestInkDrop* ink_drop = CreateButtonWithInkDrop(false);
+
+  std::optional<Button::ScopedAnchorHighlight> highlight =
+      button()->AddAnchorHighlight();
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+  highlight.reset();
+  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+TEST_F(ButtonTest, NestedAnchorHighlights) {
+  TestInkDrop* ink_drop = CreateButtonWithInkDrop(false);
+
+  std::optional<Button::ScopedAnchorHighlight> highlight1 =
+      button()->AddAnchorHighlight();
+  std::optional<Button::ScopedAnchorHighlight> highlight2 =
+      button()->AddAnchorHighlight();
+
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+  highlight2.reset();
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+  highlight1.reset();
+  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+TEST_F(ButtonTest, OverlappingAnchorHighlights) {
+  TestInkDrop* ink_drop = CreateButtonWithInkDrop(false);
+
+  std::optional<Button::ScopedAnchorHighlight> highlight1 =
+      button()->AddAnchorHighlight();
+  std::optional<Button::ScopedAnchorHighlight> highlight2 =
+      button()->AddAnchorHighlight();
+
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+  highlight1.reset();
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+  highlight2.reset();
+  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+TEST_F(ButtonTest, AnchorHighlightsCanOutliveButton) {
+  CreateButtonWithInkDrop(false);
+
+  std::optional<Button::ScopedAnchorHighlight> highlight =
+      button()->AddAnchorHighlight();
+
+  // Creating a new button will destroy the old one
+  CreateButtonWithInkDrop(false);
+
+  highlight.reset();
+}
+
+using ButtonActionViewInterfaceTest = ButtonTest;
+
+TEST_F(ButtonActionViewInterfaceTest, TestActionChanged) {
+  const std::u16string test_string = u"test_string";
+  std::unique_ptr<actions::ActionItem> action_item =
+      actions::ActionItem::Builder()
+          .SetTooltipText(test_string)
+          .SetActionId(0)
+          .SetEnabled(false)
+          .Build();
+  button()->GetActionViewInterface()->ActionItemChangedImpl(action_item.get());
+  // Test some properties to ensure that the right ActionViewInterface is linked
+  // to the view.
+  EXPECT_EQ(test_string, button()->GetTooltipText());
+  EXPECT_FALSE(button()->GetEnabled());
+}
+
+TEST_F(ButtonActionViewInterfaceTest, TestActionTriggered) {
+  ui::MouseEvent e(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                   ui::EventTimeForNow(), 0, 0);
+  bool called = false;
+  button()->GetActionViewInterface()->LinkActionInvocationToView(
+      base::BindRepeating([](bool* called_bool) { *called_bool = true; },
+                          &called));
+  views::test::ButtonTestApi test_api(button());
+  test_api.NotifyClick(e);
+  EXPECT_TRUE(called);
 }
 
 }  // namespace views

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,9 +23,9 @@ struct StructTraits<media::mojom::AudioDecoderConfigDataView,
     return input.sample_format();
   }
 
-  static media::ChannelLayout channel_layout(
+  static media::ChannelLayoutConfig channel_layout_config(
       const media::AudioDecoderConfig& input) {
-    return input.channel_layout();
+    return input.channel_layout_config();
   }
 
   static int samples_per_second(const media::AudioDecoderConfig& input) {
@@ -37,6 +37,11 @@ struct StructTraits<media::mojom::AudioDecoderConfigDataView,
     return input.extra_data();
   }
 
+  static media::EncryptionScheme encryption_scheme(
+      const media::AudioDecoderConfig& input) {
+    return input.encryption_scheme();
+  }
+
   static base::TimeDelta seek_preroll(const media::AudioDecoderConfig& input) {
     return input.seek_preroll();
   }
@@ -45,14 +50,24 @@ struct StructTraits<media::mojom::AudioDecoderConfigDataView,
     return input.codec_delay();
   }
 
-  static media::EncryptionScheme encryption_scheme(
-      const media::AudioDecoderConfig& input) {
-    return input.encryption_scheme();
-  }
-
   static media::AudioCodecProfile profile(
       const media::AudioDecoderConfig& input) {
     return input.profile();
+  }
+
+  static const media::ChannelLayoutConfig& target_output_channel_layout(
+      const media::AudioDecoderConfig& input) {
+    return input.target_output_channel_layout();
+  }
+
+  static media::SampleFormat target_output_sample_format(
+      const media::AudioDecoderConfig& input) {
+    return input.target_output_sample_format();
+  }
+
+  static bool should_discard_decoder_delay(
+      const media::AudioDecoderConfig& input) {
+    return input.should_discard_decoder_delay();
   }
 
   static bool Read(media::mojom::AudioDecoderConfigDataView input,

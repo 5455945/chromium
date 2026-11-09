@@ -1,113 +1,56 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/family_link_user_metrics_provider.h"
 
-#include "base/bind.h"
-#include "base/logging.h"
+#include <vector>
+
+#include "base/check_deref.h"
 #include "base/metrics/histogram_functions.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/metrics/profile_metrics_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "components/session_manager/core/session_manager.h"
-#include "components/signin/public/identity_manager/consent_level.h"
+#include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
-#include "google_apis/gaia/oauth2_id_token_decoder.h"
+#include "components/supervised_user/core/browser/supervised_user_log_record.h"
+#include "components/supervised_user/core/browser/supervised_user_utils.h"
 
-namespace {
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"  // nogncheck
+#endif
 
-constexpr char kHistogramName[] = "ChromeOS.FamilyLinkUser.LogSegment";
+FamilyLinkUserMetricsProvider::~FamilyLinkUserMetricsProvider() = default;
 
-}  // namespace
-
-FamilyLinkUserMetricsProvider::FamilyLinkUserMetricsProvider() {
-  session_manager::SessionManager* session_manager =
-      session_manager::SessionManager::Get();
-  // The |session_manager| is nullptr only for unit tests.
-  if (session_manager)
-    session_manager->AddObserver(this);
-}
-
-FamilyLinkUserMetricsProvider::~FamilyLinkUserMetricsProvider() {
-  session_manager::SessionManager* session_manager =
-      session_manager::SessionManager::Get();
-  // The |session_manager| is nullptr only for unit tests.
-  if (session_manager)
-    session_manager->RemoveObserver(this);
-}
-
-// This function is called at unpredictable intervals throughout the entire
-// ChromeOS session, so guarantee it will never crash.
-void FamilyLinkUserMetricsProvider::ProvideCurrentSessionData(
-    metrics::ChromeUserMetricsExtension* uma_proto_unused) {
-  if (!log_segment_)
-    return;
-  base::UmaHistogramEnumeration(kHistogramName, log_segment_.value());
-}
-
-void FamilyLinkUserMetricsProvider::OnUserSessionStarted(bool is_primary_user) {
-  if (!is_primary_user)
-    return;
-
-  const user_manager::User* primary_user =
-      user_manager::UserManager::Get()->GetPrimaryUser();
-  DCHECK(primary_user);
-  if (!primary_user->IsChild()) {
-    SetLogSegment(LogSegment::kOther);
-    return;
+bool FamilyLinkUserMetricsProvider::ProvideHistograms() {
+  // This function is called at unpredictable intervals throughout the Chrome
+  // session, so guarantee it will never crash.
+  std::vector<supervised_user::SupervisedUserLogRecord> records;
+  for (Profile* const profile :
+       g_browser_process->profile_manager()->GetLoadedProfiles()) {
+#if !BUILDFLAG(IS_ANDROID)
+    auto* profile_browser_collection =
+        ProfileBrowserCollection::GetForProfile(profile);
+    if (!FamilyLinkUserMetricsProvider::
+            skip_active_browser_count_for_unittesting_ &&
+        (!profile_browser_collection ||
+         profile_browser_collection->IsEmpty())) {
+      // The profile is loaded, but there's no opened browser for this
+      // profile.
+      continue;
+    }
+#endif
+    records.push_back(supervised_user::SupervisedUserLogRecord::Create(
+        IdentityManagerFactory::GetForProfile(profile), *profile->GetPrefs(),
+        *HostContentSettingsMapFactory::GetForProfile(profile),
+        supervised_user::SupervisedUserUrlFilteringServiceFactory::
+            GetForProfile(profile),
+        g_browser_process->device_parental_controls(),
+        CHECK_DEREF(ProfileMetricsServiceFactory::GetForProfile(profile))));
   }
-
-  DCHECK(primary_user->is_profile_created());
-  Profile* profile =
-      chromeos::ProfileHelper::Get()->GetProfileByUser(primary_user);
-  DCHECK(profile);
-  DCHECK(chromeos::ProfileHelper::IsRegularProfile(profile));
-
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
-  DCHECK(identity_manager);
-
-  DCHECK(!access_token_fetcher_);
-  access_token_fetcher_ =
-      std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          /*consumer_name=*/"FamilyLinkUserMetricsProvider", identity_manager,
-          signin::ScopeSet(),
-          base::BindOnce(
-              &FamilyLinkUserMetricsProvider::OnAccessTokenRequestCompleted,
-              // It is safe to use base::Unretained as |this| owns
-              // |access_token_fetcher_|. See comments in
-              // primary_account_access_token_fetcher.h.
-              base::Unretained(this)),
-          signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
-          signin::ConsentLevel::kSignin);
-}
-
-// static
-const char* FamilyLinkUserMetricsProvider::GetHistogramNameForTesting() {
-  return kHistogramName;
-}
-
-void FamilyLinkUserMetricsProvider::SetLogSegment(LogSegment log_segment) {
-  log_segment_ = log_segment;
-}
-
-void FamilyLinkUserMetricsProvider::OnAccessTokenRequestCompleted(
-    GoogleServiceAuthError error,
-    signin::AccessTokenInfo access_token_info) {
-  access_token_fetcher_.reset();
-
-  if (error.state() != GoogleServiceAuthError::NONE)
-    return;
-
-  gaia::TokenServiceFlags service_flags =
-      gaia::ParseServiceFlags(access_token_info.id_token);
-  LogSegment log_segment = service_flags.is_child_account
-                               ? LogSegment::kUnderConsentAge
-                               : LogSegment::kOverConsentAge;
-  SetLogSegment(log_segment);
+  return supervised_user::SupervisedUserLogRecord::EmitHistograms(
+      records, g_browser_process->device_parental_controls());
 }

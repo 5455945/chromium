@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 #include "mojo/public/cpp/bindings/lib/serialization.h"
 #include "mojo/public/cpp/bindings/lib/validation_util.h"
@@ -30,8 +31,9 @@ bool ValidateControlResponse(Message* message) {
   ValidationContext validation_context(message->payload(),
                                        message->payload_num_bytes(), 0, 0,
                                        message, "ControlResponseValidator");
-  if (!ValidateMessageIsResponse(message, &validation_context))
+  if (!ValidateMessageIsResponse(message, &validation_context)) {
     return false;
+  }
 
   switch (message->header()->name) {
     case interface_control::kRunMessageId:
@@ -49,16 +51,21 @@ class RunResponseForwardToCallback : public MessageReceiver {
  public:
   explicit RunResponseForwardToCallback(RunCallback callback)
       : callback_(std::move(callback)) {}
+
+  RunResponseForwardToCallback(const RunResponseForwardToCallback&) = delete;
+  RunResponseForwardToCallback& operator=(const RunResponseForwardToCallback&) =
+      delete;
+
   bool Accept(Message* message) override;
 
  private:
   RunCallback callback_;
-  DISALLOW_COPY_AND_ASSIGN(RunResponseForwardToCallback);
 };
 
 bool RunResponseForwardToCallback::Accept(Message* message) {
-  if (!ValidateControlResponse(message))
+  if (!ValidateControlResponse(message)) {
     return false;
+  }
 
   interface_control::internal::RunResponseMessageParams_Data* params =
       reinterpret_cast<
@@ -115,8 +122,9 @@ void RunVersionCallback(
     base::OnceCallback<void(uint32_t)> callback,
     interface_control::RunResponseMessageParamsPtr run_response) {
   uint32_t version = 0u;
-  if (run_response->output && run_response->output->is_query_version_result())
+  if (run_response->output && run_response->output->is_query_version_result()) {
     version = run_response->output->get_query_version_result()->version;
+  }
   std::move(callback).Run(version);
 }
 
@@ -133,14 +141,15 @@ ControlMessageProxy::ControlMessageProxy(InterfaceEndpointClient* owner)
 ControlMessageProxy::~ControlMessageProxy() {
   // If this is destroyed in the middle of a flush, make sure the callback is
   // still run.
-  if (!pending_flush_callback_.is_null())
+  if (!pending_flush_callback_.is_null()) {
     RunFlushForTestingClosure();
+  }
 }
 
 void ControlMessageProxy::QueryVersion(
     base::OnceCallback<void(uint32_t)> callback) {
-  auto input_ptr = interface_control::RunInput::New();
-  input_ptr->set_query_version(interface_control::QueryVersion::New());
+  auto input_ptr = interface_control::RunInput::NewQueryVersion(
+      interface_control::QueryVersion::New());
   SendRunMessage(owner_, std::move(input_ptr),
                  base::BindOnce(&RunVersionCallback, std::move(callback)));
 }
@@ -148,8 +157,8 @@ void ControlMessageProxy::QueryVersion(
 void ControlMessageProxy::RequireVersion(uint32_t version) {
   auto require_version = interface_control::RequireVersion::New();
   require_version->version = version;
-  auto input_ptr = interface_control::RunOrClosePipeInput::New();
-  input_ptr->set_require_version(std::move(require_version));
+  auto input_ptr = interface_control::RunOrClosePipeInput::NewRequireVersion(
+      std::move(require_version));
   SendRunOrClosePipeMessage(owner_, std::move(input_ptr));
 }
 
@@ -161,13 +170,13 @@ void ControlMessageProxy::FlushForTesting() {
 
 void ControlMessageProxy::FlushAsyncForTesting(base::OnceClosure callback) {
   if (encountered_error_) {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                     std::move(callback));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
     return;
   }
 
-  auto input_ptr = interface_control::RunInput::New();
-  input_ptr->set_flush_for_testing(interface_control::FlushForTesting::New());
+  auto input_ptr = interface_control::RunInput::NewFlushForTesting(
+      interface_control::FlushForTesting::New());
   DCHECK(!pending_flush_callback_);
   pending_flush_callback_ = std::move(callback);
   SendRunMessage(
@@ -184,28 +193,28 @@ void ControlMessageProxy::RunFlushForTestingClosure() {
 }
 
 void ControlMessageProxy::EnableIdleTracking(base::TimeDelta timeout) {
-  auto input = interface_control::RunOrClosePipeInput::New();
-  input->set_enable_idle_tracking(
+  auto input = interface_control::RunOrClosePipeInput::NewEnableIdleTracking(
       interface_control::EnableIdleTracking::New(timeout.InMicroseconds()));
   SendRunOrClosePipeMessage(owner_, std::move(input));
 }
 
 void ControlMessageProxy::SendMessageAck() {
-  auto input = interface_control::RunOrClosePipeInput::New();
-  input->set_message_ack(interface_control::MessageAck::New());
+  auto input = interface_control::RunOrClosePipeInput::NewMessageAck(
+      interface_control::MessageAck::New());
   SendRunOrClosePipeMessage(owner_, std::move(input));
 }
 
 void ControlMessageProxy::NotifyIdle() {
-  auto input = interface_control::RunOrClosePipeInput::New();
-  input->set_notify_idle(interface_control::NotifyIdle::New());
+  auto input = interface_control::RunOrClosePipeInput::NewNotifyIdle(
+      interface_control::NotifyIdle::New());
   SendRunOrClosePipeMessage(owner_, std::move(input));
 }
 
 void ControlMessageProxy::OnConnectionError() {
   encountered_error_ = true;
-  if (!pending_flush_callback_.is_null())
+  if (!pending_flush_callback_.is_null()) {
     RunFlushForTestingClosure();
+  }
 }
 
 }  // namespace internal

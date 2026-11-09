@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,20 +21,15 @@ namespace {
 // The returned handle will have |desired_access| rights.
 bool CopyProcessToken(DWORD desired_access, ScopedHandle* token_out) {
   HANDLE temp_handle;
-  if (!OpenProcessToken(GetCurrentProcess(),
-                        TOKEN_DUPLICATE | desired_access,
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | desired_access,
                         &temp_handle)) {
     PLOG(ERROR) << "Failed to open process token";
     return false;
   }
   ScopedHandle process_token(temp_handle);
 
-  if (!DuplicateTokenEx(process_token.Get(),
-                        desired_access,
-                        nullptr,
-                        SecurityImpersonation,
-                        TokenPrimary,
-                        &temp_handle)) {
+  if (!DuplicateTokenEx(process_token.Get(), desired_access, nullptr,
+                        SecurityImpersonation, TokenPrimary, &temp_handle)) {
     PLOG(ERROR) << "Failed to duplicate the process token";
     return false;
   }
@@ -99,9 +94,7 @@ bool CreateSessionToken(uint32_t session_id, ScopedHandle* token_out) {
 
   // Change the session ID of the token.
   DWORD new_session_id = session_id;
-  if (!SetTokenInformation(session_token.Get(),
-                           TokenSessionId,
-                           &new_session_id,
+  if (!SetTokenInformation(session_token.Get(), TokenSessionId, &new_session_id,
                            sizeof(new_session_id))) {
     PLOG(ERROR) << "Failed to change session ID of a token";
 
@@ -124,22 +117,29 @@ bool LaunchProcessWithToken(
     SECURITY_ATTRIBUTES* process_attributes,
     SECURITY_ATTRIBUTES* thread_attributes,
     const base::HandlesToInheritVector& handles_to_inherit,
+    SECURITY_CAPABILITIES* security_capabilities,
     DWORD creation_flags,
     const wchar_t* desktop_name,
     ScopedHandle* process_out,
-    ScopedHandle* thread_out) {
+    ScopedHandle* thread_out,
+    DWORD* last_error_out) {
   base::FilePath::StringType application_name = binary.value();
 
   base::win::StartupInformation startup_info_wrapper;
   STARTUPINFO* startup_info = startup_info_wrapper.startup_info();
-  if (desktop_name)
+  if (desktop_name) {
     startup_info->lpDesktop = const_cast<wchar_t*>(desktop_name);
+  }
 
   bool inherit_handles = false;
+  DWORD attribute_count = 0;
   if (!handles_to_inherit.empty()) {
     if (handles_to_inherit.size() >
         std::numeric_limits<DWORD>::max() / sizeof(HANDLE)) {
       DLOG(ERROR) << "Too many handles to inherit.";
+      if (last_error_out) {
+        *last_error_out = ERROR_INVALID_PARAMETER;
+      }
       return false;
     }
 
@@ -149,22 +149,53 @@ bool LaunchProcessWithToken(
                                          HANDLE_FLAG_INHERIT);
       PCHECK(result);
     }
-
-    if (!startup_info_wrapper.InitializeProcThreadAttributeList(
-            /* attribute_count= */ 1)) {
-      PLOG(ERROR) << "InitializeProcThreadAttributeList()";
-      return false;
-    }
-
-    if (!startup_info_wrapper.UpdateProcThreadAttribute(
-            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            const_cast<HANDLE*>(&handles_to_inherit.at(0)),
-            static_cast<DWORD>(handles_to_inherit.size() * sizeof(HANDLE)))) {
-      PLOG(ERROR) << "UpdateProcThreadAttribute()";
-      return false;
-    }
-
     inherit_handles = true;
+    attribute_count++;
+  }
+  if (security_capabilities) {
+    attribute_count++;
+  }
+
+  if (attribute_count > 0) {
+    if (!startup_info_wrapper.InitializeProcThreadAttributeList(
+            attribute_count)) {
+      DWORD last_error = ::GetLastError();
+      PLOG(ERROR) << "InitializeProcThreadAttributeList()";
+      if (last_error_out) {
+        *last_error_out = last_error;
+      }
+      return false;
+    }
+
+    if (inherit_handles) {
+      if (!startup_info_wrapper.UpdateProcThreadAttribute(
+              PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+              const_cast<HANDLE*>(&handles_to_inherit.at(0)),
+              static_cast<DWORD>(handles_to_inherit.size() * sizeof(HANDLE)))) {
+        DWORD last_error = ::GetLastError();
+        PLOG(ERROR)
+            << "UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)";
+        if (last_error_out) {
+          *last_error_out = last_error;
+        }
+        return false;
+      }
+    }
+
+    if (security_capabilities) {
+      if (!startup_info_wrapper.UpdateProcThreadAttribute(
+              PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+              security_capabilities, sizeof(*security_capabilities))) {
+        DWORD last_error = ::GetLastError();
+        PLOG(ERROR) << "UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_"
+                       "SECURITY_CAPABILITIES)";
+        if (last_error_out) {
+          *last_error_out = last_error;
+        }
+        return false;
+      }
+    }
+
     creation_flags |= EXTENDED_STARTUPINFO_PRESENT;
   }
   PROCESS_INFORMATION temp_process_info = {};
@@ -175,7 +206,11 @@ bool LaunchProcessWithToken(
                                     nullptr, startup_info, &temp_process_info);
 
   if (!result) {
+    DWORD last_error = ::GetLastError();
     PLOG(ERROR) << "Failed to launch a process with a user token";
+    if (last_error_out) {
+      *last_error_out = last_error;
+    }
     return false;
   }
 
@@ -184,6 +219,9 @@ bool LaunchProcessWithToken(
   CHECK(process_info.IsValid());
   process_out->Set(process_info.TakeProcessHandle());
   thread_out->Set(process_info.TakeThreadHandle());
+  if (last_error_out) {
+    *last_error_out = ERROR_SUCCESS;
+  }
   return true;
 }
 

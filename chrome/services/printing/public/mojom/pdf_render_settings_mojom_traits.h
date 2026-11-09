@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_SERVICES_PRINTING_PUBLIC_MOJOM_PDF_RENDER_SETTINGS_MOJOM_TRAITS_H_
 #define CHROME_SERVICES_PRINTING_PUBLIC_MOJOM_PDF_RENDER_SETTINGS_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "chrome/services/printing/public/mojom/pdf_render_settings.mojom-shared.h"
 #include "printing/pdf_render_settings.h"
@@ -21,56 +22,43 @@ struct EnumTraits<printing::mojom::PdfRenderSettings_Mode,
     switch (mode) {
       case PrintMode::NORMAL:
         return MojomMode::NORMAL;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
       case PrintMode::TEXTONLY:
         return MojomMode::TEXTONLY;
-      case PrintMode::GDI_TEXT:
-        return MojomMode::GDI_TEXT;
       case PrintMode::POSTSCRIPT_LEVEL2:
         return MojomMode::POSTSCRIPT_LEVEL2;
       case PrintMode::POSTSCRIPT_LEVEL3:
         return MojomMode::POSTSCRIPT_LEVEL3;
       case PrintMode::EMF_WITH_REDUCED_RASTERIZATION:
         return MojomMode::EMF_WITH_REDUCED_RASTERIZATION;
-      case PrintMode::EMF_WITH_REDUCED_RASTERIZATION_AND_GDI_TEXT:
-        return MojomMode::EMF_WITH_REDUCED_RASTERIZATION_AND_GDI_TEXT;
+      case PrintMode::POSTSCRIPT_LEVEL3_WITH_TYPE42_FONTS:
+        return MojomMode::POSTSCRIPT_LEVEL3_WITH_TYPE42_FONTS;
 #endif
     }
     NOTREACHED() << "Unknown mode " << static_cast<int>(mode);
-    return printing::mojom::PdfRenderSettings_Mode::NORMAL;
   }
 
-  static bool FromMojom(printing::mojom::PdfRenderSettings_Mode input,
-                        printing::PdfRenderSettings::Mode* output) {
+  static printing::PdfRenderSettings::Mode FromMojom(
+      printing::mojom::PdfRenderSettings_Mode input) {
     using MojomMode = printing::mojom::PdfRenderSettings_Mode;
     using PrintMode = printing::PdfRenderSettings::Mode;
     switch (input) {
       case MojomMode::NORMAL:
-        *output = PrintMode::NORMAL;
-        return true;
-#if defined(OS_WIN)
+        return PrintMode::NORMAL;
+#if BUILDFLAG(IS_WIN)
       case MojomMode::TEXTONLY:
-        *output = PrintMode::TEXTONLY;
-        return true;
-      case MojomMode::GDI_TEXT:
-        *output = PrintMode::GDI_TEXT;
-        return true;
+        return PrintMode::TEXTONLY;
       case MojomMode::POSTSCRIPT_LEVEL2:
-        *output = PrintMode::POSTSCRIPT_LEVEL2;
-        return true;
+        return PrintMode::POSTSCRIPT_LEVEL2;
       case MojomMode::POSTSCRIPT_LEVEL3:
-        *output = PrintMode::POSTSCRIPT_LEVEL3;
-        return true;
+        return PrintMode::POSTSCRIPT_LEVEL3;
       case MojomMode::EMF_WITH_REDUCED_RASTERIZATION:
-        *output = PrintMode::EMF_WITH_REDUCED_RASTERIZATION;
-        return true;
-      case MojomMode::EMF_WITH_REDUCED_RASTERIZATION_AND_GDI_TEXT:
-        *output = PrintMode::EMF_WITH_REDUCED_RASTERIZATION_AND_GDI_TEXT;
-        return true;
+        return PrintMode::EMF_WITH_REDUCED_RASTERIZATION;
+      case MojomMode::POSTSCRIPT_LEVEL3_WITH_TYPE42_FONTS:
+        return PrintMode::POSTSCRIPT_LEVEL3_WITH_TYPE42_FONTS;
 #endif
     }
     NOTREACHED() << "Unknown mode " << static_cast<int>(input);
-    return false;
   }
 };
 

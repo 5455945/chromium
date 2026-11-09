@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,47 +6,40 @@
 
 #include <CoreWLAN/CoreWLAN.h>
 
+#include <optional>
 #include <string>
-#include <utility>
+#include <string_view>
 
 #include "base/check.h"
 #include "base/strings/sys_string_conversions.h"
 
-// TODO(crbug.com/841631): This file uses the deprecated CWInterface interface;
-// it needs to be migrated to CWWiFiClient, which is unfortunately not
-// compatible.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-
 namespace media_router {
 namespace {
 
-bool GetWifiSSID(NSString* ns_ifname, std::string* ssid_out) {
-  CWInterface* interface = [CWInterface interfaceWithName:ns_ifname];
-  if (interface == nil) {
-    return false;
-  }
-  std::string ssid(base::SysNSStringToUTF8([interface ssid]));
+std::optional<std::string> GetWifiSSID(CWInterface* interface) {
+  CHECK(interface);
+  std::string ssid(base::SysNSStringToUTF8(interface.ssid));
   if (ssid.empty()) {
-    return false;
+    return std::nullopt;
   }
-  ssid_out->assign(std::move(ssid));
-  return true;
+  return ssid;
 }
 
 }  // namespace
 
-bool MaybeGetWifiSSID(const std::string& if_name, std::string* ssid_out) {
-  DCHECK(ssid_out);
-
-  NSString* ns_ifname = base::SysUTF8ToNSString(if_name.data());
-  NSSet* all_ifnames = [CWInterface interfaceNames];
-  for (NSString* ifname in all_ifnames)
-    if ([ifname isEqualToString:ns_ifname])
-      return GetWifiSSID(ns_ifname, ssid_out);
-  return false;
+std::optional<std::string> MaybeGetWifiSSID(std::string_view if_name) {
+  NSString* ns_ifname = base::SysUTF8ToNSString(if_name);
+  NSArray<CWInterface*>* all_interfaces =
+      [[CWWiFiClient sharedWiFiClient] interfaces];
+  if (all_interfaces == nil) {
+    return std::nullopt;
+  }
+  for (CWInterface* interface in all_interfaces) {
+    if (interface && [interface.interfaceName isEqualToString:ns_ifname]) {
+      return GetWifiSSID(interface);
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace media_router
-
-#pragma clang diagnostic pop

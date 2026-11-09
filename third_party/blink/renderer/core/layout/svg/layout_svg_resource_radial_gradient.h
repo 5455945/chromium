@@ -32,6 +32,7 @@ class LayoutSVGResourceRadialGradient final : public LayoutSVGResourceGradient {
  public:
   explicit LayoutSVGResourceRadialGradient(SVGRadialGradientElement*);
   ~LayoutSVGResourceRadialGradient() override;
+  void Trace(Visitor*) const override;
 
   const char* GetName() const override {
     NOT_DESTROYED();
@@ -45,33 +46,16 @@ class LayoutSVGResourceRadialGradient final : public LayoutSVGResourceGradient {
     return kResourceType;
   }
 
-  SVGUnitTypes::SVGUnitType GradientUnits() const override {
-    NOT_DESTROYED();
-    return Attributes().GradientUnits();
-  }
-  AffineTransform CalculateGradientTransform() const override {
-    NOT_DESTROYED();
-    return Attributes().GradientTransform();
-  }
-  void CollectGradientAttributes() override;
-  scoped_refptr<Gradient> BuildGradient() const override;
-
-  FloatPoint CenterPoint(const RadialGradientAttributes&) const;
-  FloatPoint FocalPoint(const RadialGradientAttributes&) const;
+  gfx::PointF CenterPoint(const RadialGradientAttributes&) const;
+  gfx::PointF FocalPoint(const RadialGradientAttributes&) const;
   float Radius(const RadialGradientAttributes&) const;
   float FocalRadius(const RadialGradientAttributes&) const;
 
  private:
-  Persistent<RadialGradientAttributesWrapper> attributes_wrapper_;
+  const GradientAttributes& EnsureAttributes() const override;
+  std::unique_ptr<Gradient> BuildGradient() const override;
 
-  RadialGradientAttributes& MutableAttributes() {
-    NOT_DESTROYED();
-    return attributes_wrapper_->Attributes();
-  }
-  const RadialGradientAttributes& Attributes() const {
-    NOT_DESTROYED();
-    return attributes_wrapper_->Attributes();
-  }
+  mutable RadialGradientAttributes attributes_;
 };
 
 template <>

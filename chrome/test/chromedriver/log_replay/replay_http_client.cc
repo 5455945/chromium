@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "chrome/test/chromedriver/log_replay/replay_http_client.h"
 
 #include <utility>
 
-#include "chrome/test/chromedriver/chrome/device_metrics.h"
+#include "base/logging.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "url/gurl.h"
 
@@ -14,27 +14,16 @@ namespace {
 // Fetch the path from the given url (i.e. "http://foo.bar/baz" -> "/baz")
 std::string UrlPath(const std::string& url) {
   GURL gurl(url);
-  return gurl.path();
+  return gurl.GetPath();
 }
 
 }  // namespace
 
-ReplayHttpClient::ReplayHttpClient(
-    const DevToolsEndpoint& endpoint,
-    network::mojom::URLLoaderFactory* factory,
-    const SyncWebSocketFactory& socket_factory,
-    std::unique_ptr<DeviceMetrics> device_metrics,
-    std::unique_ptr<std::set<WebViewInfo::Type>> window_types,
-    std::string page_load_strategy,
-    const base::FilePath& log_path)
-    : DevToolsHttpClient(endpoint,
-                         factory,
-                         socket_factory,
-                         std::move(device_metrics),
-                         std::move(window_types),
-                         page_load_strategy),
-      log_reader_(log_path) {}
-ReplayHttpClient::~ReplayHttpClient() {}
+ReplayHttpClient::ReplayHttpClient(const DevToolsEndpoint& endpoint,
+                                   network::mojom::URLLoaderFactory* factory,
+                                   const base::FilePath& log_path)
+    : DevToolsHttpClient(endpoint, factory), log_reader_(log_path) {}
+ReplayHttpClient::~ReplayHttpClient() = default;
 
 bool ReplayHttpClient::FetchUrlAndLog(const std::string& url,
                                       std::string* response) {

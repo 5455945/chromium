@@ -1,15 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/updates/announcement_notification/announcement_notification_service.h"
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/clock.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"    // nogncheck
 #include "chrome/browser/profiles/profile_attributes_storage.h"  // nogncheck
@@ -46,8 +47,8 @@ class AnnouncementNotificationServiceImpl
         remote_version_(kInvalidVersion),
         require_signout_(false),
         show_one_(false) {
-    DCHECK(delegate_);
-    DCHECK(profile_);
+    CHECK(delegate_, base::NotFatalUntil::M162);
+    CHECK(profile_, base::NotFatalUntil::M162);
 
     if (!IsFeatureEnabled())
       return;
@@ -76,6 +77,11 @@ class AnnouncementNotificationServiceImpl
     if (!success)
       skip_first_run_after_ = base::Time();
   }
+
+  AnnouncementNotificationServiceImpl(
+      const AnnouncementNotificationServiceImpl&) = delete;
+  AnnouncementNotificationServiceImpl& operator=(
+      const AnnouncementNotificationServiceImpl&) = delete;
 
   ~AnnouncementNotificationServiceImpl() override = default;
 
@@ -171,7 +177,7 @@ class AnnouncementNotificationServiceImpl
   }
 
   bool IsUserSignIn() {
-    DCHECK(g_browser_process);
+    CHECK(g_browser_process, base::NotFatalUntil::M162);
     // No browser process, assume the user is not signed in.
     if (!g_browser_process)
       return false;
@@ -180,16 +186,16 @@ class AnnouncementNotificationServiceImpl
         g_browser_process->profile_manager()->GetProfileAttributesStorage();
 
     // Can't find the profile path, assume the user is not signed in.
-    DCHECK(profile_);
+    CHECK(profile_, base::NotFatalUntil::M162);
     ProfileAttributesEntry* entry =
         storage.GetProfileAttributesWithPath(profile_->GetPath());
     return entry && entry->GetSigninState() != SigninState::kNotSignedIn;
   }
 
-  Profile* profile_;
-  PrefService* pref_service_;
+  raw_ptr<Profile, DanglingUntriaged> profile_;
+  raw_ptr<PrefService, DanglingUntriaged> pref_service_;
   std::unique_ptr<Delegate> delegate_;
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 
   // Whether to skip first Chrome launch. Parsed from Finch.
   bool skip_first_run_;
@@ -219,29 +225,28 @@ class AnnouncementNotificationServiceImpl
 
   base::WeakPtrFactory<AnnouncementNotificationServiceImpl> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(AnnouncementNotificationServiceImpl);
 };
 
-const base::Feature kAnnouncementNotification{
-    "AnnouncementNotificationService", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kAnnouncementNotification,
+             "AnnouncementNotificationService",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // static
 void AnnouncementNotificationService::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-  DCHECK(registry);
+  CHECK(registry, base::NotFatalUntil::M162);
   registry->RegisterIntegerPref(kCurrentVersionPrefName, kInvalidVersion);
   registry->RegisterTimePref(kAnnouncementFirstRunTimePrefName, base::Time());
 }
 
 // static
-AnnouncementNotificationService* AnnouncementNotificationService::Create(
-    Profile* profile,
-    PrefService* pref_service,
-    std::unique_ptr<Delegate> delegate,
-    base::Clock* clock) {
-  return new AnnouncementNotificationServiceImpl(profile, pref_service,
-                                                 std::move(delegate), clock);
+std::unique_ptr<AnnouncementNotificationService>
+AnnouncementNotificationService::Create(Profile* profile,
+                                        PrefService* pref_service,
+                                        std::unique_ptr<Delegate> delegate,
+                                        base::Clock* clock) {
+  return std::make_unique<AnnouncementNotificationServiceImpl>(
+      profile, pref_service, std::move(delegate), clock);
 }
 
 // static
@@ -257,7 +262,7 @@ GURL AnnouncementNotificationService::GetAnnouncementURL() {
 
 // static
 bool AnnouncementNotificationService::CanOpenAnnouncement(Profile* profile) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M162);
   if (!profile)
     return false;
 

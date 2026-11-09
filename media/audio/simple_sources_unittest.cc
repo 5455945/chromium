@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <limits>
 #include <memory>
 
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/time/time.h"
 #include "media/audio/audio_io.h"
@@ -22,54 +24,54 @@ namespace media {
 
 // Validate that the SineWaveAudioSource writes the expected values.
 TEST(SimpleSources, SineWaveAudioSource) {
-  static const uint32_t samples = 1024;
-  static const int freq = 200;
+  constexpr uint32_t samples = 1024;
+  constexpr int freq = 200;
 
-  AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
+  AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR,
+                         ChannelLayoutConfig::Mono(),
                          AudioParameters::kTelephoneSampleRate, samples);
 
   SineWaveAudioSource source(1, freq, params.sample_rate());
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(params);
-  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                     audio_bus.get());
   EXPECT_EQ(1, source.callbacks());
   EXPECT_EQ(0, source.errors());
 
   uint32_t half_period = AudioParameters::kTelephoneSampleRate / (freq * 2);
 
+  auto first_channel = audio_bus->channel(0);
+
   // Spot test positive incursion of sine wave.
-  EXPECT_NEAR(0, audio_bus->channel(0)[0],
-              std::numeric_limits<float>::epsilon());
-  EXPECT_FLOAT_EQ(0.15643446f, audio_bus->channel(0)[1]);
-  EXPECT_LT(audio_bus->channel(0)[1], audio_bus->channel(0)[2]);
-  EXPECT_LT(audio_bus->channel(0)[2], audio_bus->channel(0)[3]);
+  EXPECT_NEAR(0, first_channel[0], std::numeric_limits<float>::epsilon());
+  EXPECT_FLOAT_EQ(0.15643446f, first_channel[1]);
+  EXPECT_LT(first_channel[1], first_channel[2]);
+  EXPECT_LT(first_channel[2], first_channel[3]);
   // Spot test negative incursion of sine wave.
-  EXPECT_NEAR(0, audio_bus->channel(0)[half_period],
+  EXPECT_NEAR(0, first_channel[half_period],
               std::numeric_limits<float>::epsilon());
-  EXPECT_FLOAT_EQ(-0.15643446f, audio_bus->channel(0)[half_period + 1]);
-  EXPECT_GT(audio_bus->channel(0)[half_period + 1],
-            audio_bus->channel(0)[half_period + 2]);
-  EXPECT_GT(audio_bus->channel(0)[half_period + 2],
-            audio_bus->channel(0)[half_period + 3]);
+  EXPECT_FLOAT_EQ(-0.15643446f, first_channel[half_period + 1]);
+  EXPECT_GT(first_channel[half_period + 1], first_channel[half_period + 2]);
+  EXPECT_GT(first_channel[half_period + 2], first_channel[half_period + 3]);
 }
 
 TEST(SimpleSources, SineWaveAudioCapped) {
   SineWaveAudioSource source(1, 200, AudioParameters::kTelephoneSampleRate);
 
-  static const int kSampleCap = 100;
+  constexpr int kSampleCap = 100;
   source.CapSamples(kSampleCap);
 
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(1, 2 * kSampleCap);
-  EXPECT_EQ(source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  EXPECT_EQ(source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                               audio_bus.get()),
             kSampleCap);
   EXPECT_EQ(1, source.callbacks());
-  EXPECT_EQ(source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  EXPECT_EQ(source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                               audio_bus.get()),
             0);
   EXPECT_EQ(2, source.callbacks());
   source.Reset();
-  EXPECT_EQ(source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  EXPECT_EQ(source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                               audio_bus.get()),
             kSampleCap);
   EXPECT_EQ(3, source.callbacks());
@@ -87,8 +89,8 @@ TEST(SimpleSources, OnError) {
 void VerifyContainsTestFile(const AudioBus* audio_bus) {
   // Convert the test data (little-endian) into floats and compare. We need to
   // index past the first bytes in the data, which contain the wav header.
-  const int kFirstSampleIndex = 12 + 8 + 16 + 8;
-  int16_t data[2];
+  constexpr int kFirstSampleIndex = 12 + 8 + 16 + 8;
+  std::array<int16_t, 2> data;
   data[0] = kTestAudioData[kFirstSampleIndex];
   data[0] |= (kTestAudioData[kFirstSampleIndex + 1] << 8);
   data[1] = kTestAudioData[kFirstSampleIndex + 2];
@@ -102,28 +104,28 @@ void VerifyContainsTestFile(const AudioBus* audio_bus) {
 
   // All other frames should be zero-padded. This applies even when looping, as
   // the looping will restart on the next call to OnMoreData.
-  for (int channel = 0; channel < audio_bus->channels(); ++channel) {
+  for (auto channel : audio_bus->AllChannels()) {
     for (int frame = 1; frame < audio_bus->frames(); ++frame) {
-      EXPECT_FLOAT_EQ(0.0, audio_bus->channel(channel)[frame]);
+      EXPECT_FLOAT_EQ(0.0, channel[frame]);
     }
   }
 }
 
 TEST(SimpleSources, FileSourceTestDataWithoutLooping) {
-  const int kNumFrames = 10;
+  constexpr int kNumFrames = 10;
 
   // Create a temporary file filled with WAV data.
   base::FilePath temp_path;
   ASSERT_TRUE(base::CreateTemporaryFile(&temp_path));
   base::File temp(temp_path,
                   base::File::FLAG_WRITE | base::File::FLAG_OPEN_ALWAYS);
-  temp.WriteAtCurrentPos(kTestAudioData, kTestAudioDataSize);
+  temp.WriteAtCurrentPos(base::byte_span_from_cstring(kTestAudioData));
   ASSERT_EQ(kTestAudioDataSize, static_cast<size_t>(temp.GetLength()));
   temp.Close();
 
   // Create AudioParameters which match those in the WAV data.
   AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR,
-                         CHANNEL_LAYOUT_STEREO, 48000, kNumFrames);
+                         ChannelLayoutConfig::Stereo(), 48000, kNumFrames);
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(2, kNumFrames);
   audio_bus->Zero();
 
@@ -131,37 +133,34 @@ TEST(SimpleSources, FileSourceTestDataWithoutLooping) {
   bool loop = false;
   FileSource source(params, temp_path, loop);
   EXPECT_EQ(kNumFrames,
-            source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+            source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                               audio_bus.get()));
 
   VerifyContainsTestFile(audio_bus.get());
 
   // We should not play any more audio after the file reaches its end.
   audio_bus->Zero();
-  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                     audio_bus.get());
-  for (int channel = 0; channel < audio_bus->channels(); ++channel) {
-    for (int frame = 0; frame < audio_bus->frames(); ++frame) {
-      EXPECT_FLOAT_EQ(0.0, audio_bus->channel(channel)[frame]);
-    }
-  }
+
+  EXPECT_TRUE(audio_bus->AreFramesZero());
 }
 
 TEST(SimpleSources, FileSourceTestDataWithLooping) {
-  const int kNumFrames = 10;
+  constexpr int kNumFrames = 10;
 
   // Create a temporary file filled with WAV data.
   base::FilePath temp_path;
   ASSERT_TRUE(base::CreateTemporaryFile(&temp_path));
   base::File temp(temp_path,
                   base::File::FLAG_WRITE | base::File::FLAG_OPEN_ALWAYS);
-  temp.WriteAtCurrentPos(kTestAudioData, kTestAudioDataSize);
+  temp.WriteAtCurrentPos(base::byte_span_from_cstring(kTestAudioData));
   ASSERT_EQ(kTestAudioDataSize, static_cast<size_t>(temp.GetLength()));
   temp.Close();
 
   // Create AudioParameters which match those in the WAV data.
   AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR,
-                         CHANNEL_LAYOUT_STEREO, 48000, kNumFrames);
+                         ChannelLayoutConfig::Stereo(), 48000, kNumFrames);
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(2, kNumFrames);
   audio_bus->Zero();
 
@@ -169,10 +168,10 @@ TEST(SimpleSources, FileSourceTestDataWithLooping) {
   FileSource source(params, temp_path, loop);
 
   // Verify that we keep reading in the file when looping.
-  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                     audio_bus.get());
   audio_bus->Zero();
-  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                     audio_bus.get());
 
   VerifyContainsTestFile(audio_bus.get());
@@ -180,7 +179,7 @@ TEST(SimpleSources, FileSourceTestDataWithLooping) {
 
 TEST(SimpleSources, BadFilePathFails) {
   AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR,
-                         CHANNEL_LAYOUT_STEREO, 48000, 10);
+                         ChannelLayoutConfig::Stereo(), 48000, 10);
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(2, 10);
   audio_bus->Zero();
 
@@ -191,15 +190,11 @@ TEST(SimpleSources, BadFilePathFails) {
              .Append(FILE_PATH_LITERAL("exist"));
   bool loop = false;
   FileSource source(params, path, loop);
-  EXPECT_EQ(0, source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  EXPECT_EQ(0, source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                                  audio_bus.get()));
 
   // Confirm all frames are zero-padded.
-  for (int channel = 0; channel < audio_bus->channels(); ++channel) {
-    for (int frame = 0; frame < audio_bus->frames(); ++frame) {
-      EXPECT_FLOAT_EQ(0.0, audio_bus->channel(channel)[frame]);
-    }
-  }
+  EXPECT_TRUE(audio_bus->AreFramesZero());
 }
 
 TEST(SimpleSources, FileSourceCorruptTestDataFails) {
@@ -210,32 +205,29 @@ TEST(SimpleSources, FileSourceCorruptTestDataFails) {
   ASSERT_TRUE(base::CreateTemporaryFile(&temp_path));
   base::File temp(temp_path,
                   base::File::FLAG_WRITE | base::File::FLAG_OPEN_ALWAYS);
-  temp.WriteAtCurrentPos(kTestAudioData, kTestAudioDataSize);
+  temp.WriteAtCurrentPos(base::byte_span_from_cstring(kTestAudioData));
 
   // Corrupt the header.
-  temp.Write(3, "0x00", 1);
+  static constexpr uint8_t zero = 0;
+  temp.Write(3, base::byte_span_from_ref(zero));
 
   ASSERT_EQ(kTestAudioDataSize, static_cast<size_t>(temp.GetLength()));
   temp.Close();
 
   // Create AudioParameters which match those in the WAV data.
   AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR,
-                         CHANNEL_LAYOUT_STEREO, 48000, kNumFrames);
+                         ChannelLayoutConfig::Stereo(), 48000, kNumFrames);
   std::unique_ptr<AudioBus> audio_bus = AudioBus::Create(2, kNumFrames);
   audio_bus->Zero();
 
   // Create a FileSource that reads this file.
   bool loop = false;
   FileSource source(params, temp_path, loop);
-  EXPECT_EQ(0, source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), 0,
+  EXPECT_EQ(0, source.OnMoreData(base::TimeDelta(), base::TimeTicks::Now(), {},
                                  audio_bus.get()));
 
   // Confirm all frames are zero-padded.
-  for (int channel = 0; channel < audio_bus->channels(); ++channel) {
-    for (int frame = 0; frame < audio_bus->frames(); ++frame) {
-      EXPECT_FLOAT_EQ(0.0, audio_bus->channel(channel)[frame]);
-    }
-  }
+  EXPECT_TRUE(audio_bus->AreFramesZero());
 }
 
 }  // namespace media

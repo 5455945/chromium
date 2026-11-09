@@ -1,13 +1,17 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Templates for generating builder classes for UKM entries."""
 
-import codegen
+import setup_modules  # pylint: disable=unused-import
 
-HEADER = codegen.Template(basename="ukm_builders.h",
-                          file_template="""
+
+import chromium_src.tools.metrics.ukm.codegen as codegen
+
+HEADER = codegen.Template(
+  basename='ukm_builders.h',
+  file_template="""
 // Generated from gen_builders.py.  DO NOT EDIT!
 // source: ukm.xml
 
@@ -28,11 +32,13 @@ namespace builders {{
 
 #endif  // {file.guard_path}
 """,
-                          event_template="""
+  event_template="""
 class {event.name} final : public ::ukm::internal::UkmEntryBuilderBase {{
  public:
   explicit {event.name}(ukm::SourceId source_id);
   explicit {event.name}(ukm::SourceIdObj source_id);
+  {event.name}({event.name}&&);
+  {event.name}& operator=({event.name}&&);
   ~{event.name}() override;
 
   static const char kEntryName[];
@@ -41,14 +47,16 @@ class {event.name} final : public ::ukm::internal::UkmEntryBuilderBase {{
 {metric_code}
 }};
 """,
-                          metric_template="""
+  metric_template="""
   static const char k{metric.name}Name[];
   static constexpr uint64_t k{metric.name}NameHash = UINT64_C({metric.hash});
   {event.name}& Set{metric.name}(int64_t value);
-""")
+""",
+)
 
-IMPL = codegen.Template(basename="ukm_builders.cc",
-                        file_template="""
+IMPL = codegen.Template(
+  basename='ukm_builders.cc',
+  file_template="""
 // Generated from gen_builders.py.  DO NOT EDIT!
 // source: ukm.xml
 
@@ -62,7 +70,7 @@ namespace builders {{
 }}  // namespace builders
 }}  // namespace ukm
 """,
-                        event_template="""
+  event_template="""
 const char {event.name}::kEntryName[] = "{event.raw_name}";
 const uint64_t {event.name}::kEntryNameHash;
 
@@ -74,11 +82,15 @@ const uint64_t {event.name}::kEntryNameHash;
   ::ukm::internal::UkmEntryBuilderBase(source_id, kEntryNameHash) {{
 }}
 
+{event.name}::{event.name}({event.name}&&) = default;
+
+{event.name}& {event.name}::operator=({event.name}&&) = default;
+
 {event.name}::~{event.name}() = default;
 
 {metric_code}
 """,
-                        metric_template="""
+  metric_template="""
 const char {event.name}::k{metric.name}Name[] = "{metric.raw_name}";
 const uint64_t {event.name}::k{metric.name}NameHash;
 
@@ -86,9 +98,10 @@ const uint64_t {event.name}::k{metric.name}NameHash;
   SetMetricInternal(k{metric.name}NameHash, value);
   return *this;
 }}
-""")
+""",
+)
 
 
-def WriteFiles(outdir, relpath, data):
-  HEADER.WriteFile(outdir, relpath, data)
-  IMPL.WriteFile(outdir, relpath, data)
+def write_files(outdir, relpath, data):
+  HEADER.write_file(outdir, relpath, data)
+  IMPL.write_file(outdir, relpath, data)

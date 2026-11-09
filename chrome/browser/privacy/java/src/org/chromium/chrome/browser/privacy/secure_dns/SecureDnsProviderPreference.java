@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.privacy.secure_dns;
 import android.content.Context;
 import android.text.Editable;
 import android.text.Html;
+import android.text.InputType;
 import android.text.TextWatcher;
 import android.text.method.LinkMovementMethod;
 import android.util.AttributeSet;
@@ -18,13 +19,16 @@ import android.widget.RadioGroup;
 import android.widget.Spinner;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
-import androidx.preference.Preference;
 import androidx.preference.PreferenceViewHolder;
 
 import com.google.android.material.textfield.TextInputLayout;
 
+import org.chromium.build.annotations.EnsuresNonNull;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsBridge.Entry;
+import org.chromium.components.browser_ui.settings.ContainedRadioButtonGroupPreference;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescription;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionLayout;
 
@@ -33,12 +37,14 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * SecureDnsProviderPreference is the user interface that is shown when Secure DNS is enabled.
- * When Secure DNS is disabled, the SecureDnsProviderPreference is hidden.
+ * SecureDnsProviderPreference is the user interface that is shown when Secure DNS is enabled. When
+ * Secure DNS is disabled, the SecureDnsProviderPreference is hidden.
  */
-class SecureDnsProviderPreference extends Preference implements RadioGroup.OnCheckedChangeListener,
-                                                                AdapterView.OnItemSelectedListener,
-                                                                TextWatcher {
+@NullMarked
+class SecureDnsProviderPreference extends ContainedRadioButtonGroupPreference
+        implements RadioGroup.OnCheckedChangeListener,
+                AdapterView.OnItemSelectedListener,
+                TextWatcher {
     // UI strings, loaded from the context.
     private final String mPrivacyTemplate;
     private final String mInvalidWarning;
@@ -48,38 +54,38 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
     private final List<Entry> mOptions;
 
     // UI elements.  These fields are assigned only once, in onBindViewHolder.
-    private RadioButtonWithDescriptionLayout mGroup;
-    private RadioButtonWithDescription mAutomaticButton;
-    private RadioButtonWithDescription mSecureButton;
-    private Spinner mServerMenu;
-    private TextView mPrivacyPolicy;
-    private EditText mCustomServer;
-    private TextInputLayout mCustomServerLayout;
+    private @MonotonicNonNull RadioButtonWithDescriptionLayout mGroup;
+    private @MonotonicNonNull RadioButtonWithDescription mAutomaticButton;
+    private @MonotonicNonNull RadioButtonWithDescription mSecureButton;
+    private @MonotonicNonNull Spinner mServerMenu;
+    private @MonotonicNonNull TextView mPrivacyPolicy;
+    private @MonotonicNonNull EditText mCustomServer;
+    private @MonotonicNonNull TextInputLayout mCustomServerLayout;
 
     // All variable UI state for SecureDnsProviderPreference is encapsulated in this field.
     // To ensure that the UI is updated whenever the state changes, this field
     // should only be modified by setState().
-    private State mState;
+    private State mState = new State(false, "", false);
 
     // Checks whether the current template is actually reachable, and updates
     // mCustomServerLayout's error state.
     private final Runnable mProbeRunner = this::startServerProbe;
 
     /**
-     * State is an immutable representation of the control's current UI state.  It can represent
+     * State is an immutable representation of the control's current UI state. It can represent
      * states that are invalid, which are required when editing the template or changing modes.
      */
     static class State {
         // Indicates that secure mode is selected.
         public final boolean secure;
         // The selected or entered DoH template(s), if any.
-        public final @NonNull String template;
+        public final String config;
         // Whether the selected template is valid.
         public final boolean valid;
 
-        State(boolean secure, @NonNull String template, boolean valid) {
+        State(boolean secure, String config, boolean valid) {
             this.secure = secure;
-            this.template = template;
+            this.config = config;
             this.valid = valid;
         }
 
@@ -87,33 +93,23 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
         public boolean equals(Object obj) {
             if (obj instanceof State) {
                 State other = (State) obj;
-                return other.secure == secure && other.template.equals(template)
+                return other.secure == secure
+                        && other.config.equals(config)
                         && other.valid == valid;
             }
             return false;
         }
 
-        @Override
-        public int hashCode() {
-            // This method is not used, but is defined here for consistency with equals().
-            return toString().hashCode();
-        }
-
         State withSecure(boolean secure) {
-            return new State(secure, template, valid);
+            return new State(secure, config, valid);
         }
 
-        State withTemplate(@NonNull String template) {
-            return new State(secure, template, valid);
+        State withConfig(String config) {
+            return new State(secure, config, valid);
         }
 
         State withValid(boolean valid) {
-            return new State(secure, template, valid);
-        }
-
-        @Override
-        public @NonNull String toString() {
-            return String.format("State(%b, %s, %b)", secure, template, valid);
+            return new State(secure, config, valid);
         }
     }
 
@@ -127,6 +123,20 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
         mInvalidWarning = context.getString(R.string.settings_secure_dns_custom_format_error);
         mProbeWarning = context.getString(R.string.settings_secure_dns_custom_connection_error);
         mOptions = makeOptions(context);
+    }
+
+    @EnsuresNonNull({
+        "mGroup",
+        "mAutomaticButton",
+        "mSecureButton",
+        "mServerMenu",
+        "mPrivacyPolicy",
+        "mCustomServer",
+        "mCustomServerLayout"
+    })
+    @SuppressWarnings("NullAway") // Checking one is good enough.
+    private void assertBound() {
+        assert mGroup != null;
     }
 
     private static List<Entry> makeOptions(Context context) {
@@ -164,6 +174,8 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
         mPrivacyPolicy.setMovementMethod(LinkMovementMethod.getInstance());
         mCustomServer = selectionContainer.findViewById(R.id.custom_server);
         mCustomServer.addTextChangedListener(this);
+        // Show an action button instead of a carriage-return key.
+        mCustomServer.setRawInputType(InputType.TYPE_TEXT_VARIATION_URI);
         mCustomServerLayout = selectionContainer.findViewById(R.id.custom_server_layout);
 
         mGroup.attachAccessoryView(selectionContainer, mSecureButton);
@@ -183,24 +195,24 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
 
     // Returns the index of the dropdown entry that matches the current template,
     // or 0 if none match (i.e. a custom template).
+    @RequiresNonNull("mServerMenu")
     private int matchingDropdownIndex() {
         for (int i = 1; i < mServerMenu.getCount(); ++i) {
             Entry entry = (Entry) mServerMenu.getItemAtPosition(i);
-            if (entry.template.equals(mState.template)) {
+            if (entry.config.equals(mState.config)) {
                 return i;
             }
         }
         return 0;
     }
 
-    /**
-     * Updates the view to match mState.
-     */
+    /** Updates the view to match mState. */
     private void updateView() {
         if (mGroup == null) {
             // Not yet bound to view holder.
             return;
         }
+        assertBound();
 
         if (mSecureButton.isChecked() != mState.secure) {
             mSecureButton.setChecked(mState.secure);
@@ -228,8 +240,8 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
                 mCustomServerLayout.setVisibility(View.GONE);
             } else {
                 // Custom server mode.
-                if (!mCustomServer.getText().toString().equals(mState.template)) {
-                    mCustomServer.setText(mState.template);
+                if (!mCustomServer.getText().toString().equals(mState.config)) {
+                    mCustomServer.setText(mState.config);
                     mCustomServer.removeCallbacks(mProbeRunner);
                     if (mState.secure) {
                         mCustomServer.requestFocus();
@@ -241,7 +253,7 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
                 }
 
                 // Show a warning if the input is invalid and is not the start of a valid URL.
-                boolean showWarning = !mState.valid && !"https://".startsWith(mState.template);
+                boolean showWarning = !mState.valid && !"https://".startsWith(mState.config);
                 mCustomServerLayout.setError(showWarning ? mInvalidWarning : null);
 
                 mCustomServerLayout.setVisibility(View.VISIBLE);
@@ -257,26 +269,28 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
     }
 
     private void startServerProbe() {
-        String group = mState.template;
+        String group = mState.config;
         if (group.isEmpty() || !mState.valid || !mState.secure) {
             return;
         }
-        // probeServer() is a blocking network call that uses WaitableEvent, so it cannot run
+        assertBound();
+        // probeConfig() is a blocking network call that uses WaitableEvent, so it cannot run
         // on the UI thread, nor via the Java PostTask bindings, which do not expose
         // base::WithBaseSyncPrimitives.  Instead, it runs on a fresh Java thread.
-        new Thread(() -> {
-            for (String template : SecureDnsBridge.splitTemplateGroup(group)) {
-                if (SecureDnsBridge.probeServer(template)) {
-                    return;
-                }
-            }
-            mCustomServer.post(() -> { // Send the state change back to the UI thread.
-                // Check that the setting hasn't been changed.
-                if (mState.template.contentEquals(group)) {
-                    mCustomServerLayout.setError(mProbeWarning);
-                }
-            });
-        }).start();
+        new Thread(
+                        () -> {
+                            if (SecureDnsBridge.probeConfig(group)) {
+                                return;
+                            }
+                            mCustomServer.post(
+                                    () -> { // Send the state change back to the UI thread.
+                                        // Check that the setting hasn't been changed.
+                                        if (mState.config.contentEquals(group)) {
+                                            mCustomServerLayout.setError(mProbeWarning);
+                                        }
+                                    });
+                        })
+                .start();
     }
 
     @Override
@@ -289,6 +303,7 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
 
     @Override
     public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+        assertBound();
         int oldPos = matchingDropdownIndex();
         if (oldPos == pos) {
             // This is the same item that was already in effect.  Ignore spurious event.
@@ -296,11 +311,8 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
             // attaching an adapter triggers a spurious onItemSelected event.
             return;
         }
-        Entry oldEntry = (Entry) parent.getItemAtPosition(oldPos);
         Entry entry = (Entry) parent.getItemAtPosition(pos);
-        tryUpdate(mState.withTemplate(entry.template));
-
-        SecureDnsBridge.updateDropdownHistograms(oldEntry, entry);
+        tryUpdate(mState.withConfig(entry.config));
     }
 
     @Override
@@ -324,7 +336,8 @@ class SecureDnsProviderPreference extends Preference implements RadioGroup.OnChe
 
     @Override
     public void afterTextChanged(Editable s) {
-        tryUpdate(mState.withTemplate(s.toString()));
+        assertBound();
+        tryUpdate(mState.withConfig(s.toString()));
 
         mCustomServer.removeCallbacks(mProbeRunner);
         mCustomServer.postDelayed(mProbeRunner, 1000);

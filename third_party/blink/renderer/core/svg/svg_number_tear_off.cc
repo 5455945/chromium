@@ -29,7 +29,7 @@
  */
 
 #include "third_party/blink/renderer/core/svg/svg_number_tear_off.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -44,7 +44,7 @@ void SVGNumberTearOff::setValue(float f, ExceptionState& exception_state) {
     return;
   }
   Target()->SetValue(f);
-  CommitChange();
+  CommitChange(SVGPropertyCommitReason::kUpdated);
 }
 
 SVGNumberTearOff* SVGNumberTearOff::CreateDetached() {

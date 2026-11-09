@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@ using ui::mojom::ImeTextSpanUnderlineStyle;
 
 namespace blink {
 
-StyleableMarker::StyleableMarker(unsigned start_offset,
-                                 unsigned end_offset,
+StyleableMarker::StyleableMarker(wtf_size_t start_offset,
+                                 wtf_size_t end_offset,
                                  Color underline_color,
                                  ImeTextSpanThickness thickness,
                                  ImeTextSpanUnderlineStyle underline_style,
@@ -60,7 +60,8 @@ bool IsStyleableMarker(const DocumentMarker& marker) {
   DocumentMarker::MarkerType type = marker.GetType();
   return type == DocumentMarker::kComposition ||
          type == DocumentMarker::kActiveSuggestion ||
-         type == DocumentMarker::kSuggestion;
+         type == DocumentMarker::kSuggestion ||
+         type == DocumentMarker::kPreviewStylusGesture;
 }
 
 }  // namespace blink

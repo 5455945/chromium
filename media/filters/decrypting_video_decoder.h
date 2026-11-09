@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "media/base/callback_registry.h"
 #include "media/base/cdm_context.h"
 #include "media/base/decryptor.h"
+#include "media/base/hdr_metadata_reordering_map.h"
 #include "media/base/video_decoder.h"
 #include "media/base/video_decoder_config.h"
 
@@ -36,6 +37,10 @@ class MEDIA_EXPORT DecryptingVideoDecoder : public VideoDecoder {
   DecryptingVideoDecoder(
       const scoped_refptr<base::SequencedTaskRunner>& task_runner,
       MediaLog* media_log);
+
+  DecryptingVideoDecoder(const DecryptingVideoDecoder&) = delete;
+  DecryptingVideoDecoder& operator=(const DecryptingVideoDecoder&) = delete;
+
   ~DecryptingVideoDecoder() override;
 
   bool SupportsDecryption() const override;
@@ -85,9 +90,11 @@ class MEDIA_EXPORT DecryptingVideoDecoder : public VideoDecoder {
   void CompletePendingDecode(Decryptor::Status status);
   void CompleteWaitingForDecryptionKey();
 
+  bool HasClearLead() const { return has_clear_lead_.value_or(false); }
+
   // Set in constructor.
   scoped_refptr<base::SequencedTaskRunner> const task_runner_;
-  MediaLog* const media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -101,10 +108,12 @@ class MEDIA_EXPORT DecryptingVideoDecoder : public VideoDecoder {
 
   VideoDecoderConfig config_;
 
-  Decryptor* decryptor_ = nullptr;
+  raw_ptr<Decryptor> decryptor_ = nullptr;
 
   // The buffer that needs decrypting/decoding.
   scoped_refptr<media::DecoderBuffer> pending_buffer_to_decode_;
+
+  HdrMetadataReorderingMap hdr_metadata_reordering_map_;
 
   // Indicates the situation where new key is added during pending decode
   // (in other words, this variable can only be set in state kPendingDecode).
@@ -117,12 +126,14 @@ class MEDIA_EXPORT DecryptingVideoDecoder : public VideoDecoder {
   // clear content, we want to ensure this decoder remains used.
   bool support_clear_content_ = false;
 
+  std::optional<bool> has_clear_lead_;
+
+  bool switched_clear_to_encrypted_ = false;
+
   // To keep the CdmContext event callback registered.
   std::unique_ptr<CallbackRegistration> event_cb_registration_;
 
   base::WeakPtrFactory<DecryptingVideoDecoder> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DecryptingVideoDecoder);
 };
 
 }  // namespace media

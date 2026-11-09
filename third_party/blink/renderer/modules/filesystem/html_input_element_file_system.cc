@@ -40,7 +40,7 @@
 #include "third_party/blink/renderer/modules/filesystem/file_entry.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -69,14 +69,15 @@ EntryHeapVector HTMLInputElementFileSystem::webkitEntries(
     File* file = files->item(i);
 
     // FIXME: This involves synchronous file operation.
-    FileMetadata metadata;
-    if (!GetFileMetadata(file->GetPath(), *context, metadata))
+    std::optional<FileMetadata> metadata =
+        GetFileMetadata(file->GetPath(), *context);
+    if (!metadata) {
       continue;
-
+    }
     // The dropped entries are mapped as top-level entries in the isolated
     // filesystem.
     String virtual_path = DOMFilePath::Append("/", file->name());
-    if (metadata.type == FileMetadata::kTypeDirectory) {
+    if (metadata->type == FileMetadata::kTypeDirectory) {
       entries.push_back(
           MakeGarbageCollected<DirectoryEntry>(filesystem, virtual_path));
     } else {

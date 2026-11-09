@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,30 @@ namespace extensions {
 
 WebViewPermissionHelperDelegate::WebViewPermissionHelperDelegate(
     WebViewPermissionHelper* web_view_permission_helper)
-    : content::WebContentsObserver(
-          web_view_permission_helper->web_view_guest()->web_contents()),
-      web_view_permission_helper_(web_view_permission_helper) {
-}
+    : web_view_permission_helper_(web_view_permission_helper) {}
 
 WebViewPermissionHelperDelegate::~WebViewPermissionHelperDelegate() {
+}
+
+bool WebViewPermissionHelperDelegate::
+    CheckMediaAccessPermissionForControlledFrame(
+        content::RenderFrameHost* render_frame_host,
+        const url::Origin& security_origin,
+        blink::mojom::MediaStreamType type) {
+  return false;
+}
+
+bool WebViewPermissionHelperDelegate::
+    ForwardEmbeddedMediaPermissionChecksAsEmbedder(
+        const url::Origin& embedder_origin) {
+  return false;
+}
+
+std::optional<content::PermissionResult>
+WebViewPermissionHelperDelegate::OverridePermissionResult(
+    ContentSettingsType type,
+    const url::Origin& requesting_origin) {
+  return std::nullopt;
 }
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "net/base/load_timing_info.h"
@@ -21,7 +21,7 @@
 #include "net/http/http_stream_factory.h"
 #include "net/http/http_stream_request.h"
 #include "net/log/net_log_with_source.h"
-#include "net/third_party/quiche/src/spdy/core/spdy_header_block.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 
 namespace base {
 class OneShotTimer;
@@ -36,7 +36,6 @@ class IOBuffer;
 class ProxyInfo;
 struct BidirectionalStreamRequestInfo;
 struct NetErrorDetails;
-struct SSLConfig;
 
 // A class to do HTTP/2 bidirectional streaming. Note that at most one each of
 // ReadData or SendData/SendvData should be in flight until the operation
@@ -50,6 +49,9 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
   class NET_EXPORT Delegate {
    public:
     Delegate();
+
+    Delegate(const Delegate&) = delete;
+    Delegate& operator=(const Delegate&) = delete;
 
     // Called when the stream is ready for writing and reading. This is called
     // at most once for the lifetime of a stream.
@@ -66,8 +68,15 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
     // The delegate may call BidirectionalStream::ReadData to start reading,
     // call BidirectionalStream::SendData to send data,
     // or call BidirectionalStream::Cancel to cancel the stream.
+    // Note: one could argue that `proxy_info` should be exposed within
+    // Delegate::OnStreamReady() instead, as that is the first callback that
+    // could have access to that information. Having said that, the only
+    // consumer of this information requires it within
+    // Delegate::OnHeadersReceived. This decision can be revisited if in the
+    // future a new consumer comes up.
     virtual void OnHeadersReceived(
-        const spdy::Http2HeaderBlock& response_headers) = 0;
+        const quiche::HttpHeaderBlock& response_headers,
+        const net::ProxyInfo& used_proxy_info) = 0;
 
     // Called when a pending read is completed asynchronously.
     // |bytes_read| specifies how much data is read.
@@ -87,7 +96,8 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
     // are received, which can happen before a read completes.
     // The delegate is able to continue reading if there is no pending read and
     // EOF has not been received, or to send data if there is no pending send.
-    virtual void OnTrailersReceived(const spdy::Http2HeaderBlock& trailers) = 0;
+    virtual void OnTrailersReceived(
+        const quiche::HttpHeaderBlock& trailers) = 0;
 
     // Called when an error occurred. Do not call into the stream after this
     // point. No other delegate functions will be called after this.
@@ -95,9 +105,6 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
 
    protected:
     virtual ~Delegate();
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Delegate);
   };
 
   // Constructs a BidirectionalStream. |request_info| contains information about
@@ -122,6 +129,9 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
       bool send_request_headers_automatically,
       Delegate* delegate,
       std::unique_ptr<base::OneShotTimer> timer);
+
+  BidirectionalStream(const BidirectionalStream&) = delete;
+  BidirectionalStream& operator=(const BidirectionalStream&) = delete;
 
   // Cancels |stream_request_| or |stream_impl_| if applicable.
   // |this| should not be destroyed during Delegate::OnHeadersSent or
@@ -181,42 +191,34 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
   void PopulateNetErrorDetails(NetErrorDetails* details);
 
  private:
-  void StartRequest(const SSLConfig& ssl_config);
+  void StartRequest();
   // BidirectionalStreamImpl::Delegate implementation:
   void OnStreamReady(bool request_headers_sent) override;
   void OnHeadersReceived(
-      const spdy::Http2HeaderBlock& response_headers) override;
+      const quiche::HttpHeaderBlock& response_headers) override;
   void OnDataRead(int bytes_read) override;
   void OnDataSent() override;
-  void OnTrailersReceived(const spdy::Http2HeaderBlock& trailers) override;
+  void OnTrailersReceived(const quiche::HttpHeaderBlock& trailers) override;
   void OnFailed(int error) override;
 
   // HttpStreamRequest::Delegate implementation:
-  void OnStreamReady(const SSLConfig& used_ssl_config,
-                     const ProxyInfo& used_proxy_info,
+  void OnStreamReady(const ProxyInfo& used_proxy_info,
                      std::unique_ptr<HttpStream> stream) override;
   void OnBidirectionalStreamImplReady(
-      const SSLConfig& used_ssl_config,
       const ProxyInfo& used_proxy_info,
       std::unique_ptr<BidirectionalStreamImpl> stream) override;
   void OnWebSocketHandshakeStreamReady(
-      const SSLConfig& used_ssl_config,
       const ProxyInfo& used_proxy_info,
       std::unique_ptr<WebSocketHandshakeStreamBase> stream) override;
   void OnStreamFailed(int status,
                       const NetErrorDetails& net_error_details,
-                      const SSLConfig& used_ssl_config,
                       const ProxyInfo& used_proxy_info,
                       ResolveErrorInfo resolve_error_info) override;
-  void OnCertificateError(int status,
-                          const SSLConfig& used_ssl_config,
-                          const SSLInfo& ssl_info) override;
+  void OnCertificateError(int status, const SSLInfo& ssl_info) override;
   void OnNeedsProxyAuth(const HttpResponseInfo& response_info,
-                        const SSLConfig& used_ssl_config,
                         const ProxyInfo& used_proxy_info,
                         HttpAuthController* auth_controller) override;
-  void OnNeedsClientAuth(const SSLConfig& used_ssl_config,
-                         SSLCertRequestInfo* cert_info) override;
+  void OnNeedsClientAuth(SSLCertRequestInfo* cert_info) override;
   void OnQuicBroken() override;
 
   // Helper method to notify delegate if there is an error.
@@ -226,14 +228,14 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
   std::unique_ptr<BidirectionalStreamRequestInfo> request_info_;
   const NetLogWithSource net_log_;
 
-  HttpNetworkSession* session_;
+  raw_ptr<HttpNetworkSession> session_;
 
   bool send_request_headers_automatically_;
   // Whether request headers have been sent, as indicated in OnStreamReady()
   // callback.
-  bool request_headers_sent_;
+  bool request_headers_sent_ = false;
 
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 
   // Timer used to buffer data received in short time-spans and send a single
   // read completion notification.
@@ -259,9 +261,9 @@ class NET_EXPORT BidirectionalStream : public BidirectionalStreamImpl::Delegate,
   // are received. Other fields are populated at different stages of the request
   LoadTimingInfo load_timing_info_;
 
-  base::WeakPtrFactory<BidirectionalStream> weak_factory_{this};
+  ProxyInfo used_proxy_info_;
 
-  DISALLOW_COPY_AND_ASSIGN(BidirectionalStream);
+  base::WeakPtrFactory<BidirectionalStream> weak_factory_{this};
 };
 
 }  // namespace net

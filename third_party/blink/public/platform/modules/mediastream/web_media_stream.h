@@ -25,9 +25,9 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_MODULES_MEDIASTREAM_WEB_MEDIA_STREAM_H_
 #define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_MODULES_MEDIASTREAM_WEB_MEDIA_STREAM_H_
 
+#include "base/memory/weak_ptr.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_private_ptr.h"
-#include "third_party/blink/public/platform/web_vector.h"
 
 namespace blink {
 
@@ -47,11 +47,16 @@ class BLINK_PLATFORM_EXPORT WebMediaStreamObserver {
   // active or inactive.
   virtual void ActiveStateChanged(bool is_active) {}
 
+  // EnabledStateChangedForWebRtcAudio is called only when the observed
+  // MediaStream that has a WebRTC remote audio track and that track is enabled
+  // or disabled.
+  virtual void EnabledStateChangedForWebRtcAudio(bool is_enabled) {}
+
  protected:
   virtual ~WebMediaStreamObserver() = default;
 };
 
-class WebMediaStream {
+class BLINK_PLATFORM_EXPORT WebMediaStream {
  public:
   WebMediaStream() = default;
   WebMediaStream(const WebMediaStream& other) { Assign(other); }
@@ -62,37 +67,35 @@ class WebMediaStream {
     return *this;
   }
 
-  BLINK_PLATFORM_EXPORT void Assign(const WebMediaStream&);
+  void Assign(const WebMediaStream&);
 
-  BLINK_PLATFORM_EXPORT void Reset();
+  void Reset();
   bool IsNull() const { return private_.IsNull(); }
 
-  BLINK_PLATFORM_EXPORT WebString Id() const;
-  BLINK_PLATFORM_EXPORT int UniqueId() const;
+  WebString Id() const;
+  int UniqueId() const;
 
   // If a track is not found with the specified id, the returned track's
   // |IsNull| will return true.
-  BLINK_PLATFORM_EXPORT WebMediaStreamTrack
-  GetAudioTrack(const WebString& track_id) const;
-  BLINK_PLATFORM_EXPORT WebMediaStreamTrack
-  GetVideoTrack(const WebString& track_id) const;
+  WebMediaStreamTrack GetAudioTrack(const WebString& track_id) const;
+  WebMediaStreamTrack GetVideoTrack(const WebString& track_id) const;
 
   // These methods add/remove an observer to/from this WebMediaStream. The
   // caller is responsible for removing the observer before the destruction of
   // the WebMediaStream. Observers cannot be null, cannot be added or removed
   // more than once, and cannot invoke AddObserver/RemoveObserver in their
   // TrackAdded/TrackRemoved callbacks.
-  BLINK_PLATFORM_EXPORT void AddObserver(WebMediaStreamObserver*);
-  BLINK_PLATFORM_EXPORT void RemoveObserver(WebMediaStreamObserver*);
+  void AddObserver(base::WeakPtr<WebMediaStreamObserver>);
+  void RemoveObserver(base::WeakPtr<WebMediaStreamObserver>);
 
 #if INSIDE_BLINK
-  BLINK_PLATFORM_EXPORT explicit WebMediaStream(MediaStreamDescriptor*);
-  BLINK_PLATFORM_EXPORT operator MediaStreamDescriptor*() const;
-  BLINK_PLATFORM_EXPORT WebMediaStream& operator=(MediaStreamDescriptor*);
+  explicit WebMediaStream(MediaStreamDescriptor*);
+  operator MediaStreamDescriptor*() const;
+  WebMediaStream& operator=(MediaStreamDescriptor*);
 #endif
 
  private:
-  WebPrivatePtr<MediaStreamDescriptor> private_;
+  WebPrivatePtrForGC<MediaStreamDescriptor> private_;
 };
 
 }  // namespace blink

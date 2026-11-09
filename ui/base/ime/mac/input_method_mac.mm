@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,10 @@
 
 namespace ui {
 
-InputMethodMac::InputMethodMac(internal::InputMethodDelegate* delegate)
-    : InputMethodBase(delegate) {}
+InputMethodMac::InputMethodMac(ImeKeyEventDispatcher* ime_key_event_dispatcher)
+    : InputMethodBase(ime_key_event_dispatcher) {}
 
-InputMethodMac::~InputMethodMac() {
-}
+InputMethodMac::~InputMethodMac() = default;
 
 ui::EventDispatchDetails InputMethodMac::DispatchKeyEvent(ui::KeyEvent* event) {
   // This is used on Mac only to dispatch events post-IME.
@@ -26,12 +25,21 @@ void InputMethodMac::CancelComposition(const TextInputClient* client) {
   if (!IsTextInputClientFocused(client))
     return;
 
-  [[NSTextInputContext currentInputContext] discardMarkedText];
+  [NSTextInputContext.currentInputContext discardMarkedText];
 }
 
 bool InputMethodMac::IsCandidatePopupOpen() const {
   // There seems to be no way to tell if a candidate window is open.
   return false;
+}
+
+void InputMethodMac::OnWillChangeFocusedClient(TextInputClient* focused_before,
+                                               TextInputClient*) {
+  if (focused_before) {
+    // AppKit can keep a conversion session alive after an insertText: callback
+    // clears the client's composition.
+    CancelComposition(focused_before);
+  }
 }
 
 }  // namespace ui

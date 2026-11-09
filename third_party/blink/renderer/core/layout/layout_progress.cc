@@ -29,32 +29,29 @@ namespace blink {
 
 namespace {
 
-constexpr base::TimeDelta kAnimationInterval =
-    base::TimeDelta::FromMilliseconds(125);
+constexpr base::TimeDelta kAnimationInterval = base::Milliseconds(125);
 constexpr base::TimeDelta kAnimationDuration = kAnimationInterval * 20;
 
 }  // namespace
 
-LayoutProgress::LayoutProgress(Element* element)
-    : LayoutBlockFlow(element),
+LayoutProgress::LayoutProgress(HTMLProgressElement& node)
+    : LayoutBlockFlow(&node),
       position_(HTMLProgressElement::kInvalidPosition),
       animating_(false),
       animation_timer_(
-          element->GetDocument().GetTaskRunner(TaskType::kInternalDefault),
+          node.GetDocument().GetTaskRunner(TaskType::kInternalDefault),
           this,
-          &LayoutProgress::AnimationTimerFired) {
-  DCHECK(IsA<HTMLProgressElement>(element));
-}
+          &LayoutProgress::AnimationTimerFired) {}
 
 LayoutProgress::~LayoutProgress() = default;
 
-void LayoutProgress::WillBeDestroyed() {
+void LayoutProgress::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
   if (animating_) {
     animation_timer_.Stop();
     animating_ = false;
   }
-  LayoutBlockFlow::WillBeDestroyed();
+  LayoutBlockFlow::WillBeDestroyed(style);
 }
 
 void LayoutProgress::UpdateFromElement() {
@@ -103,7 +100,7 @@ void LayoutProgress::AnimationTimerFired(TimerBase*) {
 
 void LayoutProgress::UpdateAnimationState() {
   NOT_DESTROYED();
-  bool animating = !IsDeterminate() && StyleRef().HasEffectiveAppearance();
+  bool animating = !IsDeterminate() && Style().HasEffectiveAppearance();
   if (animating == animating_)
     return;
 

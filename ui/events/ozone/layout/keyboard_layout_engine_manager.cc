@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,14 @@ KeyboardLayoutEngine* KeyboardLayoutEngineManager::keyboard_layout_engine_;
 // static
 void KeyboardLayoutEngineManager::SetKeyboardLayoutEngine(
     KeyboardLayoutEngine* keyboard_layout_engine) {
-  DCHECK(!keyboard_layout_engine_);
-  DCHECK(keyboard_layout_engine);
+  CHECK(!keyboard_layout_engine_, base::NotFatalUntil::M163);
+  CHECK(keyboard_layout_engine, base::NotFatalUntil::M163);
   keyboard_layout_engine_ = keyboard_layout_engine;
 }
 
 // static
 void KeyboardLayoutEngineManager::ResetKeyboardLayoutEngine() {
-  DCHECK(keyboard_layout_engine_);
+  CHECK(keyboard_layout_engine_, base::NotFatalUntil::M163);
   keyboard_layout_engine_ = nullptr;
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,6 +30,13 @@ static constexpr uint8_t kAdditionalInformation4Bytes = 26u;
 static constexpr uint8_t kAdditionalInformation8Bytes = 27u;
 
 extern const char kUnsupportedMajorType[];
+
+enum class SimpleValue {
+  kFalse = 20,
+  kTrue = 21,
+  kNull = 22,
+  kUndefined = 23,
+};
 
 }  // namespace constants
 }  // namespace cbor

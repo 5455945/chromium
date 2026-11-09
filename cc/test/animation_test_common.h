@@ -1,25 +1,34 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_TEST_ANIMATION_TEST_COMMON_H_
 #define CC_TEST_ANIMATION_TEST_COMMON_H_
 
+#include <atomic>
 #include <memory>
 
+#include "base/memory/ref_counted.h"
+#include "base/time/time.h"
 #include "cc/animation/animation_timeline.h"
 #include "cc/animation/keyframe_model.h"
+#include "cc/paint/animation_curve_proxy.h"
 #include "cc/paint/element_id.h"
 #include "cc/paint/filter_operations.h"
-#include "cc/test/geometry_test_utils.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/animation/keyframe/animation_curve.h"
-#include "ui/gfx/transform_operations.h"
+#include "ui/gfx/geometry/transform_operations.h"
 
 namespace gfx {
-class ScrollOffset;
+class PointF;
 }
 
 namespace cc {
+
+// Helper method to convert base::TimeTicks to double.
+// Returns double milliseconds if the input value is resolved or
+// std::numeric_limits<double>::quiet_NaN() otherwise.
+double ToMilliseconds(std::optional<base::TimeTicks> time_ticks);
 
 class FakeFloatAnimationCurve : public gfx::FloatAnimationCurve {
  public:
@@ -29,6 +38,9 @@ class FakeFloatAnimationCurve : public gfx::FloatAnimationCurve {
 
   base::TimeDelta Duration() const override;
   float GetValue(base::TimeDelta now) const override;
+  float GetTransformedValue(
+      base::TimeDelta now,
+      gfx::TimingFunction::LimitDirection limit_direction) const override;
   std::unique_ptr<gfx::AnimationCurve> Clone() const override;
 
  private:
@@ -42,6 +54,10 @@ class FakeTransformTransition : public gfx::TransformAnimationCurve {
 
   base::TimeDelta Duration() const override;
   gfx::TransformOperations GetValue(base::TimeDelta time) const override;
+  gfx::TransformOperations GetTransformedValue(
+      base::TimeDelta time,
+      gfx::TimingFunction::LimitDirection limit_direction) const override;
+
   bool PreservesAxisAlignment() const override;
   bool MaximumScale(float* max_scale) const override;
 
@@ -58,6 +74,9 @@ class FakeFloatTransition : public gfx::FloatAnimationCurve {
 
   base::TimeDelta Duration() const override;
   float GetValue(base::TimeDelta time) const override;
+  float GetTransformedValue(
+      base::TimeDelta time,
+      gfx::TimingFunction::LimitDirection limit_direction) const override;
 
   std::unique_ptr<gfx::AnimationCurve> Clone() const override;
 
@@ -67,14 +86,48 @@ class FakeFloatTransition : public gfx::FloatAnimationCurve {
   float to_;
 };
 
+// Thread-safe test curve that interpolates between `from` and `to` and counts
+// `Sample()` calls.
+class TestColorCurve : public AnimationCurveProxy<SkColor4f>,
+                       public base::RefCountedThreadSafe<TestColorCurve> {
+ public:
+  explicit TestColorCurve(SkColor4f from = SkColors::kBlack,
+                          SkColor4f to = SkColors::kWhite);
+
+  // The color at `progress` for the default curve.
+  static SkColor4f Gray(float progress) {
+    return {progress, progress, progress, 1.f};
+  }
+
+  // AnimationCurveProxy<SkColor4f>:
+  void Sample(float progress, SkColor4f* value) const override;
+  void AddRef() const override;
+  void Release() const override;
+
+  int samples() const { return samples_.load(std::memory_order_relaxed); }
+
+ private:
+  friend class base::RefCountedThreadSafe<TestColorCurve>;
+  ~TestColorCurve() override;
+
+  SkColor4f from_;
+  SkColor4f to_;
+  mutable std::atomic<int> samples_{0};
+};
+
 int AddScrollOffsetAnimationToAnimation(Animation* animation,
-                                        gfx::ScrollOffset initial_value,
-                                        gfx::ScrollOffset target_value);
+                                        gfx::PointF initial_value,
+                                        gfx::PointF target_value);
 
 int AddAnimatedTransformToAnimation(Animation* animation,
                                     double duration,
                                     int delta_x,
                                     int delta_y);
+
+int AddAnimatedCustomPropertyToAnimation(Animation* animation,
+                                         double duration,
+                                         int start_value,
+                                         int end_value);
 
 int AddAnimatedTransformToAnimation(Animation* animation,
                                     double duration,
@@ -85,7 +138,9 @@ int AddOpacityTransitionToAnimation(Animation* animation,
                                     double duration,
                                     float start_opacity,
                                     float end_opacity,
-                                    bool use_timing_function);
+                                    bool use_timing_function,
+                                    std::optional<int> id = std::nullopt,
+                                    std::optional<int> group_id = std::nullopt);
 
 int AddAnimatedFilterToAnimation(Animation* animation,
                                  double duration,
@@ -150,6 +205,8 @@ int AddOpacityTransitionToElementWithAnimation(
     float start_opacity,
     float end_opacity,
     bool use_timing_function);
+
+scoped_refptr<Animation> CancelAndReplaceAnimation(Animation& animation);
 
 }  // namespace cc
 

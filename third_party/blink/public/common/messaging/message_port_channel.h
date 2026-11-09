@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,6 +27,9 @@ class BLINK_COMMON_EXPORT MessagePortChannel {
   // Shallow copy, resulting in multiple references to the same port.
   MessagePortChannel(const MessagePortChannel& other);
   MessagePortChannel& operator=(const MessagePortChannel& other);
+
+  MessagePortChannel(MessagePortChannel&& other) noexcept;
+  MessagePortChannel& operator=(MessagePortChannel&& other) noexcept;
 
   explicit MessagePortChannel(MessagePortDescriptor handle);
 

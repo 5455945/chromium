@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,13 @@
 #include "url/gurl.h"
 
 bool ShouldTrackURLForRestore(const GURL& url) {
-  return url.is_valid() &&
-         !(url.SchemeIs(content::kChromeUIScheme) &&
-           (url.host_piece() == chrome::kChromeUIQuitHost ||
-            url.host_piece() == chrome::kChromeUIRestartHost));
+  return url.is_valid() && !(url.SchemeIs(content::kChromeUIScheme) &&
+                             (url.host() == chrome::kChromeUIQuitHost ||
+                              url.host() == chrome::kChromeUIRestartHost));
 }
 
 int GetNavigationIndexToSelect(const sessions::SessionTab& tab) {
-  DCHECK(!tab.navigations.empty());
+  CHECK(!tab.navigations.empty(), base::NotFatalUntil::M163);
   const int selected_index =
       std::max(0, std::min(tab.current_navigation_index,
                            static_cast<int>(tab.navigations.size() - 1)));

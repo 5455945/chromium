@@ -26,14 +26,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_HISTORY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_HISTORY_H_
 
-#include "base/gtest_prod_util.h"
 #include "third_party/blink/public/mojom/page_state/page_state.mojom-blink.h"
 #include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
@@ -43,6 +43,8 @@ class KURL;
 class ExceptionState;
 class HistoryItem;
 class ScriptState;
+class ScriptValue;
+class V8ScrollRestoration;
 
 // This class corresponds to the History interface.
 class CORE_EXPORT History final : public ScriptWrappable,
@@ -59,22 +61,24 @@ class CORE_EXPORT History final : public ScriptWrappable,
   void forward(ScriptState*, ExceptionState&);
   void go(ScriptState*, int delta, ExceptionState&);
 
-  void pushState(v8::Isolate* isolate,
+  void pushState(ScriptState*,
                  const ScriptValue& data,
                  const String& title,
                  const String& url,
                  ExceptionState&);
 
-  void replaceState(v8::Isolate* isolate,
+  void replaceState(ScriptState*,
                     const ScriptValue& data,
                     const String& title,
                     const String& url,
                     ExceptionState& exception_state);
 
-  void setScrollRestoration(const String& value, ExceptionState&);
-  String scrollRestoration(ExceptionState&);
+  void setScrollRestoration(const V8ScrollRestoration& value, ExceptionState&);
+  V8ScrollRestoration scrollRestoration(ExceptionState&);
 
   bool IsSameAsCurrentState(SerializedScriptValue*) const;
+
+  ScriptValue StateHelper(ScriptState*, ExceptionState&);
 
   void Trace(Visitor*) const override;
 
@@ -84,8 +88,8 @@ class CORE_EXPORT History final : public ScriptWrappable,
   void StateObjectAdded(scoped_refptr<SerializedScriptValue>,
                         const String& title,
                         const String& url,
-                        mojom::blink::ScrollRestorationType,
                         WebFrameLoadType,
+                        ScriptState*,
                         ExceptionState&);
   SerializedScriptValue* StateInternal() const;
   mojom::blink::ScrollRestorationType ScrollRestorationInternal() const;

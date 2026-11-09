@@ -1,16 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/gfx/begin_frame_source_webview.h"
 
-#include "android_webview/browser_jni_headers/RootBeginFrameSourceWebView_jni.h"
 #include "base/auto_reset.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/trace_event/trace_event.h"
-#include "components/power_scheduler/power_mode.h"
-#include "components/power_scheduler/power_mode_arbiter.h"
-#include "components/power_scheduler/power_mode_voter.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/RootBeginFrameSourceWebView_jni.h"
 
 namespace android_webview {
 
@@ -35,7 +36,7 @@ class BeginFrameSourceWebView::BeginFrameObserver
   bool WantsAnimateOnlyBeginFrames() const override { return true; }
 
  private:
-  BeginFrameSourceWebView* const owner_;
+  const raw_ptr<BeginFrameSourceWebView> owner_;
   viz::BeginFrameArgs last_used_begin_frame_args_;
 };
 
@@ -53,10 +54,7 @@ void BeginFrameSourceWebView::BeginFrameSourceClient::OnNeedsBeginFrames(
 BeginFrameSourceWebView::BeginFrameSourceWebView()
     : ExternalBeginFrameSource(&bfs_client_),
       bfs_client_(this),
-      parent_observer_(std::make_unique<BeginFrameObserver>(this)),
-      animation_power_mode_voter_(
-          power_scheduler::PowerModeArbiter::GetInstance()->NewVoter(
-              "PowerModeVoter.Animation")) {
+      parent_observer_(std::make_unique<BeginFrameObserver>(this)) {
   OnSetBeginFrameSourcePaused(true);
 }
 
@@ -89,16 +87,13 @@ void BeginFrameSourceWebView::ObserveBeginFrameSource(
 }
 
 void BeginFrameSourceWebView::OnNeedsBeginFrames(bool needs_begin_frames) {
+  auto track = perfetto::NamedTrack::FromPointer("NeedsBeginFrames", this);
   if (needs_begin_frames) {
-    TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("cc,benchmark", "NeedsBeginFrames", this);
-    animation_power_mode_voter_->VoteFor(
-        power_scheduler::PowerMode::kAnimation);
+    TRACE_EVENT_BEGIN("cc,benchmark", "NeedsBeginFrames", track);
     if (observed_begin_frame_source_)
       observed_begin_frame_source_->AddObserver(parent_observer_.get());
   } else {
-    TRACE_EVENT_NESTABLE_ASYNC_END0("cc,benchmark", "NeedsBeginFrames", this);
-    animation_power_mode_voter_->ResetVoteAfterTimeout(
-        power_scheduler::PowerModeVoter::kAnimationTimeout);
+    TRACE_EVENT_END("cc,benchmark", track);
     if (observed_begin_frame_source_)
       observed_begin_frame_source_->RemoveObserver(parent_observer_.get());
   }
@@ -118,6 +113,11 @@ void BeginFrameSourceWebView::AddBeginFrameCompletionCallback(
   parent_->AddBeginFrameCompletionCallback(std::move(callback));
 }
 
+const viz::BeginFrameArgs&
+BeginFrameSourceWebView::LastDispatchedBeginFrameArgs() {
+  return parent_observer_->LastUsedBeginFrameArgs();
+}
+
 // static
 RootBeginFrameSourceWebView* RootBeginFrameSourceWebView::GetInstance() {
   static base::NoDestructor<RootBeginFrameSourceWebView> instance;
@@ -125,10 +125,12 @@ RootBeginFrameSourceWebView* RootBeginFrameSourceWebView::GetInstance() {
 }
 
 RootBeginFrameSourceWebView::RootBeginFrameSourceWebView()
-    : begin_frame_source_(kNotRestartableId, 60.0f),
+    : begin_frame_source_(kNotRestartableId,
+                          60.0f,
+                          /*requires_align_with_java=*/true),
       j_object_(Java_RootBeginFrameSourceWebView_Constructor(
-          base::android::AttachCurrentThread(),
-          reinterpret_cast<jlong>(this))) {
+          jni_zero::AttachCurrentThread(),
+          reinterpret_cast<int64_t>(this))) {
   ObserveBeginFrameSource(&begin_frame_source_);
 }
 
@@ -136,7 +138,6 @@ RootBeginFrameSourceWebView::~RootBeginFrameSourceWebView() = default;
 
 void RootBeginFrameSourceWebView::OnUpdateRefreshRate(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj,
     float refresh_rate) {
   begin_frame_source_.UpdateRefreshRate(refresh_rate);
 }
@@ -154,3 +155,5 @@ void RootBeginFrameSourceWebView::AddBeginFrameCompletionCallback(
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(RootBeginFrameSourceWebView)

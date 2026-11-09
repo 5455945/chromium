@@ -1,60 +1,62 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/updater/app/app.h"
 
-#include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/check_op.h"
-#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/run_loop.h"
-#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/updater/constants.h"
-#include "chrome/updater/tag.h"
 #include "chrome/updater/updater_scope.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 namespace updater {
 
-constexpr base::StringPiece App::kThreadPoolName;
-
-App::App() : updater_scope_(GetUpdaterScope()) {}
-
+App::App() = default;
 App::~App() = default;
 
-void App::InitializeThreadPool() {
-  base::ThreadPoolInstance::CreateAndStartWithDefaultParams(kThreadPoolName);
+int App::Initialize() {
+  return kErrorOk;
 }
 
 int App::Run() {
-  InitializeThreadPool();
-  Initialize();
-  int exit_code = 0;
-  {
-    base::ScopedDisallowBlocking no_blocking_allowed_on_ui_thread;
-    base::RunLoop runloop;
-    quit_ = base::BindOnce(
-        [](base::OnceClosure quit, int* exit_code_out, int exit_code) {
-          *exit_code_out = exit_code;
-          std::move(quit).Run();
-        },
-        runloop.QuitWhenIdleClosure(), &exit_code);
-    FirstTaskRun();
-    runloop.Run();
+  int exit_code = Initialize();
+  if (exit_code != kErrorOk) {
+    return exit_code;
   }
-  Uninitialize();
+  absl::Cleanup uninitialize = [this] { Uninitialize(); };
+  return RunTasks();
+}
 
-  // Shutting down the thread pool involves joining threads.
-  base::ThreadPoolInstance::Get()->Shutdown();
+int App::RunTasks() {
+  int exit_code = kErrorOk;
+  base::ScopedDisallowBlocking no_blocking_allowed_on_ui_thread;
+  base::RunLoop runloop;
+  quit_ = base::BindOnce(
+      [](base::OnceClosure quit, int* exit_code_out, int exit_code) {
+        *exit_code_out = exit_code;
+        std::move(quit).Run();
+      },
+      runloop.QuitWhenIdleClosure(), &exit_code);
+  FirstTaskRun();
+  runloop.Run();
   return exit_code;
 }
 
 void App::Shutdown(int exit_code) {
+  VLOG(1) << __func__ << ": " << exit_code;
+
+  if (quit_.is_null()) {
+    // It's possible for shutdown to be called twice, since the runloop exits
+    // only when idle. The exit code of the first shutdown will be used.
+    return;
+  }
+
   std::move(quit_).Run(exit_code);
 }
 

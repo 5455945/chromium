@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@ package org.chromium.chrome.browser.payments.test_support;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.res.Resources;
 
 import androidx.annotation.Nullable;
 
 import org.mockito.Mockito;
+import org.robolectric.Robolectric;
 
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.payments.ChromePaymentRequestService;
@@ -55,7 +55,6 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
     private final WebContents mWebContents;
     private final PaymentRequestSpec mSpec;
     private final PaymentUiService mPaymentUiService;
-    private final boolean mGoogleBridgeEligible;
     private final PaymentOptions mOptions;
     private JourneyLogger mJourneyLogger;
     private String mSupportedMethod = "https://www.chromium.org";
@@ -72,14 +71,10 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
         mPaymentUiService = paymentUiService;
         mJourneyLogger = Mockito.mock(JourneyLogger.class);
         mWebContents = Mockito.mock(WebContents.class);
-        Mockito.doReturn(JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1))
-                .when(mWebContents)
-                .getLastCommittedUrl();
+        Mockito.doReturn(JUnitTestGURLs.URL_1).when(mWebContents).getLastCommittedUrl();
         mRenderFrameHost = Mockito.mock(RenderFrameHost.class);
         // subframe
-        Mockito.doReturn(JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_2))
-                .when(mRenderFrameHost)
-                .getLastCommittedURL();
+        Mockito.doReturn(JUnitTestGURLs.URL_2).when(mRenderFrameHost).getLastCommittedURL();
         Origin origin = Mockito.mock(Origin.class);
         Mockito.doReturn(origin).when(mRenderFrameHost).getLastCommittedOrigin();
         mMethodData = new PaymentMethodData[1];
@@ -88,7 +83,6 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
         mDetails.total = new PaymentItem();
         mOptions = new PaymentOptions();
         mSpec = Mockito.mock(PaymentRequestSpec.class);
-        mGoogleBridgeEligible = false;
     }
 
     public PaymentRequest buildAndInit() {
@@ -106,11 +100,12 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
         Mockito.doReturn(methodDataMap).when(mSpec).getMethodData();
         Mockito.doReturn(mOptions).when(mSpec).getPaymentOptions();
 
-        PaymentRequest request = new MojoPaymentRequestGateKeeper(
-                (client, onClosed)
-                        -> new PaymentRequestService(
-                                mRenderFrameHost, client, onClosed, this, () -> null));
-        request.init(mClient, mMethodData, mDetails, mOptions, mGoogleBridgeEligible);
+        PaymentRequest request =
+                new MojoPaymentRequestGateKeeper(
+                        (client, onClosed) ->
+                                new PaymentRequestService(
+                                        mRenderFrameHost, client, onClosed, this, () -> null));
+        request.init(mClient, mMethodData, mDetails, mOptions);
         return request;
     }
 
@@ -130,11 +125,6 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
     }
 
     @Override
-    public boolean skipUiForBasicCard() {
-        return false;
-    }
-
-    @Override
     public BrowserPaymentRequest createBrowserPaymentRequest(
             PaymentRequestService paymentRequestService) {
         return new ChromePaymentRequestService(paymentRequestService, mDelegate);
@@ -146,7 +136,7 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
     }
 
     @Override
-    public String getInvalidSslCertificateErrorMessage() {
+    public @Nullable String getInvalidSslCertificateErrorMessage() {
         return null;
     }
 
@@ -173,18 +163,13 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
     }
 
     @Override
-    public JourneyLogger createJourneyLogger(boolean isIncognito, WebContents webContents) {
+    public JourneyLogger createJourneyLogger(WebContents webContents) {
         return mJourneyLogger;
     }
 
     @Override
     public String formatUrlForSecurityDisplay(GURL uri) {
         return uri.getSpec();
-    }
-
-    @Override
-    public byte[][] getCertificateChain(WebContents webContents) {
-        return new byte[0][];
     }
 
     @Override
@@ -198,24 +183,28 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
     }
 
     @Override
-    public PaymentRequestSpec createPaymentRequestSpec(PaymentOptions options,
-            PaymentDetails details, Collection<PaymentMethodData> methodData, String appLocale) {
+    public PaymentRequestSpec createPaymentRequestSpec(
+            PaymentOptions options,
+            PaymentDetails details,
+            Collection<PaymentMethodData> methodData,
+            String appLocale) {
         return mSpec;
     }
 
     @Override
-    public PaymentUiService createPaymentUiService(PaymentUiService.Delegate delegate,
-            PaymentRequestParams params, WebContents webContents, boolean isOffTheRecord,
-            JourneyLogger journeyLogger, String topLevelOrigin) {
+    public PaymentUiService createPaymentUiService(
+            PaymentUiService.Delegate delegate,
+            PaymentRequestParams params,
+            WebContents webContents,
+            boolean isOffTheRecord,
+            JourneyLogger journeyLogger,
+            String topLevelOrigin) {
         return mPaymentUiService;
     }
 
     @Override
     public Activity getActivity(WebContents webContents) {
-        Activity activity = Mockito.mock(Activity.class);
-        Resources resources = Mockito.mock(Resources.class);
-        Mockito.doReturn(resources).when(activity).getResources();
-        return activity;
+        return Robolectric.buildActivity(Activity.class).get();
     }
 
     @Nullable
@@ -242,21 +231,12 @@ public class PaymentRequestParamsBuilder implements ChromePaymentRequestService.
     }
 
     @Override
-    public PaymentAppFactoryInterface createAutofillPaymentAppFactory() {
-        return null;
-    }
-
-    @Override
-    public boolean canMakeAutofillPayment(Map<String, PaymentMethodData> methodData) {
-        return false;
-    }
-
-    @Override
     public boolean isWebContentsActive(RenderFrameHost renderFrameHost) {
         return true;
     }
 
     @Override
+    @SuppressWarnings("unchecked") // Mockito.mock(WeakReference.class) erases generics.
     public WindowAndroid getWindowAndroid(RenderFrameHost renderFrameHost) {
         WindowAndroid window = Mockito.mock(WindowAndroid.class);
         Context context = Mockito.mock(Context.class);

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,29 @@
 
 #include <memory>
 
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/grit/extensions_browser_resources.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/browser_window_util.h"
+#include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#endif
 
 namespace task_manager {
 
@@ -33,8 +44,7 @@ ExtensionTask::ExtensionTask(content::WebContents* web_contents,
   LoadExtensionIcon(extension);
 }
 
-ExtensionTask::~ExtensionTask() {
-}
+ExtensionTask::~ExtensionTask() = default;
 
 void ExtensionTask::UpdateTitle() {
   // The title of the extension should not change as a result of title change
@@ -47,6 +57,7 @@ void ExtensionTask::UpdateFavicon() {
 }
 
 void ExtensionTask::Activate() {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // This task represents the extension view of (for example) a background page
   // or browser action button, so there is no top-level window to bring to the
   // front. Instead, when this task is double-clicked, we bring up the
@@ -63,14 +74,28 @@ void ExtensionTask::Activate() {
   if (!extension)
     return;
 
-  Browser* browser = chrome::FindTabbedBrowser(
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext()), true);
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+  CHECK(profile);
+  BrowserWindowInterface* browser =
+      extensions::browser_window_util::GetLastActiveNormalBrowserWithProfile(
+          *profile, /*include_incognito_or_parent=*/true);
 
   // If an existing browser isn't found, don't create a new one.
   if (!browser)
     return;
 
+#if BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/417512763): Consolidate this with chrome::ShowExtensions()
+  // when it works on Android.
+  GURL url = extensions::util::GetExtensionsPageUrl(extension->id());
+  NavigateParams params(browser, url, ui::PAGE_TRANSITION_LINK);
+  params.disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
+  Navigate(&params);
+#else
   chrome::ShowExtensions(browser, extension->id());
+#endif  // BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 Task::Type ExtensionTask::GetType() const {
@@ -92,7 +117,7 @@ int ExtensionTask::GetKeepaliveCount() const {
 }
 
 void ExtensionTask::OnExtensionIconImageChanged(extensions::IconImage* image) {
-  DCHECK_EQ(extension_icon_.get(), image);
+  CHECK_EQ(extension_icon_.get(), image, base::NotFatalUntil::M162);
 
   if (!image->image_skia().isNull())
     set_icon(image->image_skia());
@@ -102,7 +127,7 @@ std::u16string ExtensionTask::GetExtensionTitle(
     content::WebContents* web_contents,
     const extensions::Extension* extension,
     extensions::mojom::ViewType view_type) const {
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M162);
 
   std::u16string title =
       extension ? base::UTF8ToUTF16(extension->name())

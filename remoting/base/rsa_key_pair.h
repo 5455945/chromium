@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,11 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "base/memory/ref_counted.h"
-
-namespace crypto {
-class RSAPrivateKey;
-}  // namespace crypto
+#include "crypto/keypair.h"
 
 namespace remoting {
 
@@ -25,30 +23,32 @@ class RsaKeyPair : public base::RefCountedThreadSafe<RsaKeyPair> {
   // Loads a private key from a base64-encoded string. Returns true on success.
   static scoped_refptr<RsaKeyPair> FromString(const std::string& key_base64);
 
+  RsaKeyPair(const RsaKeyPair&) = delete;
+  RsaKeyPair& operator=(const RsaKeyPair&) = delete;
+
   // Returns a base64 encoded string representing the private key.
   std::string ToString() const;
 
   // Generates a DER-encoded self-signed certificate using the key pair. Returns
   // empty string if cert generation fails (e.g. it may happen when the system
   // clock is off).
-  std::string GenerateCertificate() const;
+  std::string GenerateCertificate();
 
   // Returns a base64-encoded string representing the public key.
   std::string GetPublicKey() const;
 
-  // Returns a base64-encoded signature for the message.
-  std::string SignMessage(const std::string& message) const;
+  // Signs |data| with this key pair using RSA-PSS with SHA-256.
+  // Returns an empty vector if signing fails.
+  std::vector<uint8_t> Sign(base::span<const uint8_t> data);
 
-  crypto::RSAPrivateKey* private_key() { return key_.get(); }
+  EVP_PKEY* private_key() { return key_.key(); }
 
  private:
   friend class base::RefCountedThreadSafe<RsaKeyPair>;
-  RsaKeyPair(std::unique_ptr<crypto::RSAPrivateKey> key);
+  explicit RsaKeyPair(crypto::keypair::PrivateKey&& key);
   virtual ~RsaKeyPair();
 
-  std::unique_ptr<crypto::RSAPrivateKey> key_;
-
-  DISALLOW_COPY_AND_ASSIGN(RsaKeyPair);
+  crypto::keypair::PrivateKey key_;
 };
 
 }  // namespace remoting

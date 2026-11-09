@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,19 +10,19 @@
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/chrome_shelf_prefs.h"
+#include "chrome/browser/ui/ash/shelf/app_shortcut_shelf_item_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
+#include "chrome/browser/ui/ash/shelf/chrome_shelf_prefs.h"
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
-#include "chrome/browser/ui/webui/app_management/app_management_page_handler.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
-
-using apps::mojom::OptionalBool;
+#include "chrome/browser/ui/webui/app_management/app_management_page_handler_chromeos.h"
 
 AppManagementShelfDelegate::AppManagementShelfDelegate(
-    AppManagementPageHandler* page_handler,
+    AppManagementPageHandlerChromeOs* page_handler,
     Profile* profile)
-    : page_handler_(page_handler) {
+    : page_handler_(page_handler),
+      shelf_controller_helper_(
+          std::make_unique<ShelfControllerHelper>(profile)) {
   auto* shelf_controller = ChromeShelfController::instance();
   if (!shelf_controller) {
     return;
@@ -32,7 +32,6 @@ AppManagementShelfDelegate::AppManagementShelfDelegate(
   if (!shelf_model) {
     return;
   }
-  shelf_controller_helper_ = new ShelfControllerHelper(profile);
 
   shelf_model->AddObserver(this);
 }
@@ -73,25 +72,22 @@ bool AppManagementShelfDelegate::IsPolicyPinned(
   }
   // The app doesn't exist on the shelf - check launcher prefs instead.
   std::vector<std::string> policy_pinned_apps =
-      GetAppsPinnedByPolicy(shelf_controller_helper_);
-  return std::any_of(policy_pinned_apps.begin(), policy_pinned_apps.end(),
-                     [app_id](std::string app) { return app_id == app; });
+      ChromeShelfPrefs::GetAppsPinnedByPolicy(
+          shelf_controller_helper_->profile());
+  return std::ranges::contains(policy_pinned_apps, app_id);
 }
 
 void AppManagementShelfDelegate::SetPinned(const std::string& app_id,
-                                           OptionalBool pinned) {
+                                           bool pinned) {
   auto* shelf_controller = ChromeShelfController::instance();
-
   if (!shelf_controller) {
     return;
   }
 
-  if (pinned == OptionalBool::kTrue) {
-    shelf_controller->PinAppWithID(app_id);
-  } else if (pinned == OptionalBool::kFalse) {
-    shelf_controller->UnpinAppWithID(app_id);
+  if (pinned) {
+    PinAppWithIDToShelf(app_id);
   } else {
-    NOTREACHED();
+    UnpinAppWithIDFromShelf(app_id);
   }
 }
 

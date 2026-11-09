@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,10 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <string>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/files/file_util.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -66,6 +63,10 @@ class CpuDataCollector {
   }
 
   CpuDataCollector();
+
+  CpuDataCollector(const CpuDataCollector&) = delete;
+  CpuDataCollector& operator=(const CpuDataCollector&) = delete;
+
   ~CpuDataCollector();
 
   // Starts a repeating timer which periodically runs a callback to collect
@@ -139,14 +140,8 @@ class CpuDataCollector {
   int cpu_count_;
 
   base::WeakPtrFactory<CpuDataCollector> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(CpuDataCollector);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when ChromeOS code migration is done.
-namespace chromeos {
-using ::ash::CpuDataCollector;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_POWER_CPU_DATA_COLLECTOR_H_

@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/power/ml/boot_clock.h"
 
 #include <time.h>
+#include <ostream>
 
 #include "base/check_op.h"
 #include "base/time/time_override.h"
@@ -15,8 +16,7 @@ namespace ml {
 
 BootClock::BootClock()
     : mock_boot_time_(base::subtle::ScopedTimeClockOverrides::overrides_active()
-                          ? base::TimeTicks::Now() -
-                                base::TimeDelta::FromMinutes(5)
+                          ? base::TimeTicks::Now() - base::Minutes(5)
                           : base::TimeTicks()) {}
 
 BootClock::~BootClock() = default;
@@ -30,7 +30,7 @@ base::TimeDelta BootClock::GetTimeSinceBoot() const {
 
   struct timespec ts = {0};
   const int ret = clock_gettime(CLOCK_BOOTTIME, &ts);
-  DCHECK_EQ(ret, 0);
+  CHECK_EQ(ret, 0, base::NotFatalUntil::M160);
   return base::TimeDelta::FromTimeSpec(ts);
 }
 

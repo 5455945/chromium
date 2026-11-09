@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.ContextWrapper;
 
-import androidx.annotation.Nullable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * Contains a helper method needed by the AndroidX Fragment library due to bytecode modification we
  * perform at build time.
  */
+@NullMarked
 public class ContextUtils {
     private ContextUtils() {}
 

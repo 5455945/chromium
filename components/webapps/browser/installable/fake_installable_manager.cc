@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,23 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/webapps/browser/installable/installable_data.h"
 
 namespace webapps {
 
 FakeInstallableManager::FakeInstallableManager(
     content::WebContents* web_contents)
-    : InstallableManager(web_contents) {}
+    : InstallableManager(web_contents),
+      web_page_metadata_(mojom::WebPageMetadata::New()) {}
 
-FakeInstallableManager::~FakeInstallableManager() {}
+FakeInstallableManager::~FakeInstallableManager() = default;
 
 void FakeInstallableManager::GetData(const InstallableParams& params,
                                      InstallableCallback callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&FakeInstallableManager::RunCallback,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
@@ -47,30 +48,27 @@ FakeInstallableManager::CreateForWebContentsWithManifest(
     content::WebContents* web_contents,
     InstallableStatusCode installable_code,
     const GURL& manifest_url,
-    std::unique_ptr<blink::Manifest> manifest) {
-  DCHECK(manifest);
-
+    std::optional<blink::Manifest> manifest) {
   FakeInstallableManager* installable_manager =
       FakeInstallableManager::CreateForWebContents(web_contents);
 
-  const bool valid_manifest = !manifest->IsEmpty();
+  const bool valid_manifest = manifest.has_value();
   installable_manager->manifest_url_ = manifest_url;
   installable_manager->manifest_ = std::move(manifest);
 
-  const bool has_worker = true;
   std::vector<InstallableStatusCode> errors;
 
   // Not used:
   const std::unique_ptr<SkBitmap> icon;
 
-  if (installable_code != NO_ERROR_DETECTED)
+  if (installable_code != InstallableStatusCode::NO_ERROR_DETECTED) {
     errors.push_back(installable_code);
+  }
 
   auto installable_data = std::make_unique<InstallableData>(
       std::move(errors), installable_manager->manifest_url_,
-      *installable_manager->manifest_, GURL::EmptyGURL(), icon.get(), false,
-      GURL::EmptyGURL(), icon.get(), false, std::vector<SkBitmap>(),
-      valid_manifest, has_worker);
+      installable_manager->manifest_, *installable_manager->web_page_metadata_,
+      GURL(), icon.get(), false, std::vector<Screenshot>(), valid_manifest);
 
   installable_manager->data_ = std::move(installable_data);
 

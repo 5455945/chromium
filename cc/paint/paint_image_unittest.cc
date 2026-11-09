@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,13 +12,14 @@
 #include "cc/test/skia_common.h"
 #include "cc/test/test_paint_worklet_input.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 
 namespace cc {
 
 TEST(PaintImageTest, DecodesCorrectFrames) {
   std::vector<FrameMetadata> frames = {
-      FrameMetadata(true, base::TimeDelta::FromMilliseconds(2)),
-      FrameMetadata(true, base::TimeDelta::FromMilliseconds(3))};
+      FrameMetadata(true, base::Milliseconds(2)),
+      FrameMetadata(true, base::Milliseconds(3))};
   sk_sp<FakePaintImageGenerator> generator =
       sk_make_sp<FakePaintImageGenerator>(SkImageInfo::MakeN32Premul(10, 10),
                                           frames);
@@ -33,8 +34,9 @@ TEST(PaintImageTest, DecodesCorrectFrames) {
   // The recorded index is 0u but ask for 1u frame.
   SkImageInfo info = SkImageInfo::MakeN32Premul(10, 10);
   std::vector<size_t> memory(info.computeMinByteSize());
-  image.Decode(memory.data(), &info, nullptr, 1u,
-               PaintImage::kDefaultGeneratorClientId);
+  SkPixmap pixmap(info, memory.data(), info.minRowBytes());
+  image.Decode(pixmap, 1u, AuxImage::kDefault,
+               PaintImage::GetNextGeneratorClientId());
   ASSERT_EQ(generator->frames_decoded().size(), 1u);
   EXPECT_EQ(generator->frames_decoded().count(1u), 1u);
   generator->reset_frames_decoded();
@@ -42,8 +44,9 @@ TEST(PaintImageTest, DecodesCorrectFrames) {
   // Not N32 color type.
   info.makeColorType(kRGB_565_SkColorType);
   memory = std::vector<size_t>(info.computeMinByteSize());
-  image.Decode(memory.data(), &info, nullptr, 1u,
-               PaintImage::kDefaultGeneratorClientId);
+  pixmap = SkPixmap(info, memory.data(), info.minRowBytes());
+  image.Decode(pixmap, 1u, AuxImage::kDefault,
+               PaintImage::GetNextGeneratorClientId());
   ASSERT_EQ(generator->frames_decoded().size(), 1u);
   EXPECT_EQ(generator->frames_decoded().count(1u), 1u);
   generator->reset_frames_decoded();
@@ -94,11 +97,11 @@ TEST(PaintImageTest, DecodeToYuv420NoAlpha) {
 
   SkYUVAPixmapInfo image_yuva_pixmap_info;
   ASSERT_TRUE(image.IsYuv(SkYUVAPixmapInfo::SupportedDataTypes::All(),
-                          &image_yuva_pixmap_info));
+                          AuxImage::kDefault, &image_yuva_pixmap_info));
   ASSERT_EQ(yuva_pixmap_info, image_yuva_pixmap_info);
 
-  image.DecodeYuv(pixmaps, 1u /* frame_index */,
-                  PaintImage::kDefaultGeneratorClientId);
+  image.DecodeYuv(pixmaps, 1u /* frame_index */, AuxImage::kDefault,
+                  PaintImage::GetNextGeneratorClientId());
   ASSERT_EQ(yuv_generator->frames_decoded().size(), 1u);
   EXPECT_EQ(yuv_generator->frames_decoded().count(1u), 1u);
   yuv_generator->reset_frames_decoded();
@@ -110,9 +113,9 @@ TEST(PaintImageTest, BuildPaintWorkletImage) {
       base::MakeRefCounted<TestPaintWorkletInput>(size);
   PaintImage paint_image = PaintImageBuilder::WithDefault()
                                .set_id(1)
-                               .set_paint_worklet_input(std::move(input))
+                               .set_deferred_paint_record(std::move(input))
                                .TakePaintImage();
-  EXPECT_TRUE(paint_image.paint_worklet_input());
+  EXPECT_TRUE(paint_image.deferred_paint_record());
   EXPECT_EQ(paint_image.width(), size.width());
   EXPECT_EQ(paint_image.height(), size.height());
   EXPECT_EQ(paint_image.GetContentColorUsage(), gfx::ContentColorUsage::kSRGB);
@@ -170,6 +173,30 @@ TEST(PaintImageTest, HlgHdrImage) {
 
   EXPECT_TRUE(image.is_high_bit_depth());
   EXPECT_EQ(image.GetContentColorUsage(), gfx::ContentColorUsage::kHDR);
+}
+
+TEST(PaintImageTest, ReinterpretAsSRGBWithGenerator) {
+  auto color_space = gfx::ColorSpace::CreateDisplayP3D65().ToSkColorSpace();
+  auto generator = sk_make_sp<FakePaintImageGenerator>(SkImageInfo::Make(
+      10, 10, kRGBA_F16_SkColorType, kPremul_SkAlphaType, color_space));
+  PaintImage image = PaintImageBuilder::WithDefault()
+                         .set_id(PaintImage::GetNextId())
+                         .set_paint_image_generator(generator)
+                         .set_reinterpret_as_srgb(true)
+                         .TakePaintImage();
+
+  EXPECT_TRUE(image.GetReinterpretAsSRGB());
+
+  auto sk_image = image.GetSwSkImage();
+  ASSERT_TRUE(sk_image);
+  EXPECT_TRUE(SkColorSpace::Equals(sk_image->colorSpace(),
+                                   SkColorSpace::MakeSRGB().get()));
+
+  auto frame_sk_image = image.GetSkImageForFrame(
+      PaintImage::kDefaultFrameIndex, PaintImage::GetNextGeneratorClientId());
+  ASSERT_TRUE(frame_sk_image);
+  EXPECT_TRUE(SkColorSpace::Equals(frame_sk_image->colorSpace(),
+                                   SkColorSpace::MakeSRGB().get()));
 }
 
 }  // namespace cc

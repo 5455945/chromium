@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,18 +14,21 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/media_galleries/gallery_watch_manager_observer.h"
 #include "chrome/browser/media_galleries/media_file_system_registry.h"
 #include "chrome/common/apps/platform_apps/api/media_galleries.h"
-#include "chrome/common/media_galleries/metadata_types.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/metadata_types.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
 #include "components/storage_monitor/media_storage_util.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/common/event_args.h"
 
 namespace content {
 class BlobHandle;
@@ -42,6 +45,8 @@ class MediaGalleriesEventRouter : public extensions::BrowserContextKeyedAPI,
                                   public GalleryWatchManagerObserver,
                                   public extensions::EventRouter::Observer {
  public:
+  explicit MediaGalleriesEventRouter(content::BrowserContext* context);
+  ~MediaGalleriesEventRouter() override;
   MediaGalleriesEventRouter(const MediaGalleriesEventRouter&) = delete;
   MediaGalleriesEventRouter& operator=(const MediaGalleriesEventRouter&) =
       delete;
@@ -65,10 +70,7 @@ class MediaGalleriesEventRouter : public extensions::BrowserContextKeyedAPI,
       const std::string& extension_id,
       extensions::events::HistogramValue histogram_value,
       const std::string& event_name,
-      std::vector<base::Value> event_args);
-
-  explicit MediaGalleriesEventRouter(content::BrowserContext* context);
-  ~MediaGalleriesEventRouter() override;
+      scoped_refptr<const extensions::EventArgs> event_args);
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "MediaGalleriesAPI"; }
@@ -84,7 +86,7 @@ class MediaGalleriesEventRouter : public extensions::BrowserContextKeyedAPI,
   void OnListenerRemoved(const extensions::EventListenerInfo& details) override;
 
   // Current profile.
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   base::WeakPtrFactory<MediaGalleriesEventRouter> weak_ptr_factory_{this};
 };
@@ -173,7 +175,7 @@ class MediaGalleriesGetMetadataFunction : public ExtensionFunction {
 
   void GetMetadata(media_galleries::GetMetadataType metadata_type,
                    const std::string& blob_uuid,
-                   std::unique_ptr<std::string> blob_header,
+                   std::string blob_header,
                    int64_t total_blob_length);
 
   void OnSafeMediaMetadataParserDone(
@@ -183,9 +185,9 @@ class MediaGalleriesGetMetadataFunction : public ExtensionFunction {
       std::unique_ptr<std::vector<metadata::AttachedImage>> attached_images);
 
   void ConstructNextBlob(
-      std::unique_ptr<base::DictionaryValue> result_dictionary,
+      base::DictValue result_dictionary,
       std::unique_ptr<std::vector<metadata::AttachedImage>> attached_images,
-      std::unique_ptr<std::vector<std::string>> blob_uuids,
+      std::vector<blink::mojom::SerializedBlobPtr> blobs,
       std::unique_ptr<content::BlobHandle> current_blob);
 };
 

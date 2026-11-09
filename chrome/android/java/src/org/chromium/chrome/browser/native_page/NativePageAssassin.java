@@ -1,9 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.native_page;
 
+import org.chromium.base.ResettersForTesting;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 
 import java.lang.ref.WeakReference;
@@ -19,23 +22,25 @@ import java.util.ArrayList;
  *
  * Thread safety: this should only be accessed on the UI thread.
  */
+@NullMarked
 public class NativePageAssassin {
 
     private static final NativePageAssassin sInstance = new NativePageAssassin();
+    private static boolean sDisableFreezeAllHiddenPagesForTesting;
 
     /**
      * The number of hidden tabs to consider "recent". Any non-recent native page will be frozen.
      */
-    private static final int MAX_RECENT_TABS = 3;
+    private static final int MAX_RECENT_TABS = 5;
 
     /**
      * The most recently hidden tabs, limited to MAX_RECENT_TABS elements, ordered from oldest to
      * newest. Visible tabs are not included in this list.
      */
-    private ArrayList<WeakReference<Tab>> mRecentTabs = new ArrayList<WeakReference<Tab>>(
-            MAX_RECENT_TABS + 1);
+    private final ArrayList<WeakReference<Tab>> mRecentTabs = new ArrayList<>(MAX_RECENT_TABS + 1);
 
-    private NativePageAssassin() {}
+    /** Package-private for testing. Production code should use {@link #getInstance()}. */
+    NativePageAssassin() {}
 
     /**
      * @return The one and only NativePageAssassin.
@@ -65,7 +70,7 @@ public class NativePageAssassin {
      * @param tab The tab being hidden.
      */
     public void tabHidden(Tab tab) {
-        mRecentTabs.add(new WeakReference<Tab>(tab));
+        mRecentTabs.add(new WeakReference<>(tab));
 
         // If a tab has just passed the threshold from "recent" to "not recent" and it's displaying
         // a native page, freeze the native page.
@@ -73,17 +78,25 @@ public class NativePageAssassin {
         freeze(mRecentTabs.remove(0).get());
     }
 
-    /**
-     * Freezes all hidden NativePages that aren't already frozen.
-     */
+    /** Freezes all hidden NativePages that aren't already frozen. */
     public void freezeAllHiddenPages() {
+        if (sDisableFreezeAllHiddenPagesForTesting) return;
         for (int i = 0; i < mRecentTabs.size(); i++) {
             freeze(mRecentTabs.get(i).get());
         }
         mRecentTabs.clear();
     }
 
-    private void freeze(Tab tab) {
+    /**
+     * Disables {@link #freezeAllHiddenPages()} (triggered by OS memory pressure) for testing so
+     * batched multi-tab tests do not flakily freeze hidden native pages mid-test.
+     */
+    public static void setDisableFreezeAllHiddenPagesForTesting(boolean disable) {
+        sDisableFreezeAllHiddenPagesForTesting = disable;
+        ResettersForTesting.register(() -> sDisableFreezeAllHiddenPagesForTesting = false);
+    }
+
+    private void freeze(@Nullable Tab tab) {
         if (tab != null) tab.freezeNativePage();
     }
 }

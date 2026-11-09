@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/byte_queue.h"
 #include "media/formats/mp2t/ts_section.h"
 
@@ -24,12 +24,15 @@ class TsSectionPes : public TsSection {
  public:
   TsSectionPes(std::unique_ptr<EsParser> es_parser,
                TimestampUnroller* timestamp_unroller);
+
+  TsSectionPes(const TsSectionPes&) = delete;
+  TsSectionPes& operator=(const TsSectionPes&) = delete;
+
   ~TsSectionPes() override;
 
   // TsSection implementation.
   bool Parse(bool payload_unit_start_indicator,
-             const uint8_t* buf,
-             int size) override;
+             base::span<const uint8_t> buf) override;
   void Flush() override;
   void Reset() override;
 
@@ -41,7 +44,7 @@ class TsSectionPes : public TsSection {
   bool Emit(bool emit_for_unknown_size);
 
   // Parse a PES packet, return true if successful.
-  bool ParseInternal(const uint8_t* raw_pes, int raw_pes_size);
+  bool ParseInternal(base::span<const uint8_t> pes);
 
   void ResetPesState();
 
@@ -55,9 +58,7 @@ class TsSectionPes : public TsSection {
   bool wait_for_pusi_;
 
   // Used to unroll PTS and DTS.
-  TimestampUnroller* const timestamp_unroller_;
-
-  DISALLOW_COPY_AND_ASSIGN(TsSectionPes);
+  const raw_ptr<TimestampUnroller> timestamp_unroller_;
 };
 
 }  // namespace mp2t

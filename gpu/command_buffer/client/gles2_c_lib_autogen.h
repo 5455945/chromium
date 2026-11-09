@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -423,11 +423,6 @@ GLint GL_APIENTRY GLES2GetAttribLocation(GLuint program, const char* name) {
 void GL_APIENTRY GLES2GetBooleanv(GLenum pname, GLboolean* params) {
   gles2::GetGLContext()->GetBooleanv(pname, params);
 }
-void GL_APIENTRY GLES2GetBooleani_v(GLenum pname,
-                                    GLuint index,
-                                    GLboolean* data) {
-  gles2::GetGLContext()->GetBooleani_v(pname, index, data);
-}
 void GL_APIENTRY GLES2GetBufferParameteri64v(GLenum target,
                                              GLenum pname,
                                              GLint64* params) {
@@ -735,9 +730,6 @@ void GL_APIENTRY GLES2ShaderSource(GLuint shader,
                                    const GLchar* const* str,
                                    const GLint* length) {
   gles2::GetGLContext()->ShaderSource(shader, count, str, length);
-}
-void GL_APIENTRY GLES2ShallowFinishCHROMIUM() {
-  gles2::GetGLContext()->ShallowFinishCHROMIUM();
 }
 void GL_APIENTRY GLES2OrderingBarrierCHROMIUM() {
   gles2::GetGLContext()->OrderingBarrierCHROMIUM();
@@ -1281,91 +1273,12 @@ void GL_APIENTRY GLES2FramebufferParameteri(GLenum target,
                                             GLint param) {
   gles2::GetGLContext()->FramebufferParameteri(target, pname, param);
 }
-void GL_APIENTRY GLES2BindImageTexture(GLuint unit,
-                                       GLuint texture,
-                                       GLint level,
-                                       GLboolean layered,
-                                       GLint layer,
-                                       GLenum access,
-                                       GLenum format) {
-  gles2::GetGLContext()->BindImageTexture(unit, texture, level, layered, layer,
-                                          access, format);
-}
-void GL_APIENTRY GLES2DispatchCompute(GLuint num_groups_x,
-                                      GLuint num_groups_y,
-                                      GLuint num_groups_z) {
-  gles2::GetGLContext()->DispatchCompute(num_groups_x, num_groups_y,
-                                         num_groups_z);
-}
-void GL_APIENTRY GLES2DispatchComputeIndirect(GLintptr offset) {
-  gles2::GetGLContext()->DispatchComputeIndirect(offset);
-}
-void GL_APIENTRY GLES2DrawArraysIndirect(GLenum mode, const void* offset) {
-  gles2::GetGLContext()->DrawArraysIndirect(mode, offset);
-}
-void GL_APIENTRY GLES2DrawElementsIndirect(GLenum mode,
-                                           GLenum type,
-                                           const void* offset) {
-  gles2::GetGLContext()->DrawElementsIndirect(mode, type, offset);
-}
-void GL_APIENTRY GLES2GetProgramInterfaceiv(GLuint program,
-                                            GLenum program_interface,
-                                            GLenum pname,
-                                            GLint* params) {
-  gles2::GetGLContext()->GetProgramInterfaceiv(program, program_interface,
-                                               pname, params);
-}
-GLuint GL_APIENTRY GLES2GetProgramResourceIndex(GLuint program,
-                                                GLenum program_interface,
-                                                const char* name) {
-  return gles2::GetGLContext()->GetProgramResourceIndex(
-      program, program_interface, name);
-}
-void GL_APIENTRY GLES2GetProgramResourceName(GLuint program,
-                                             GLenum program_interface,
-                                             GLuint index,
-                                             GLsizei bufsize,
-                                             GLsizei* length,
-                                             char* name) {
-  gles2::GetGLContext()->GetProgramResourceName(program, program_interface,
-                                                index, bufsize, length, name);
-}
-void GL_APIENTRY GLES2GetProgramResourceiv(GLuint program,
-                                           GLenum program_interface,
-                                           GLuint index,
-                                           GLsizei prop_count,
-                                           const GLenum* props,
-                                           GLsizei bufsize,
-                                           GLsizei* length,
-                                           GLint* params) {
-  gles2::GetGLContext()->GetProgramResourceiv(program, program_interface, index,
-                                              prop_count, props, bufsize,
-                                              length, params);
-}
-GLint GL_APIENTRY GLES2GetProgramResourceLocation(GLuint program,
-                                                  GLenum program_interface,
-                                                  const char* name) {
-  return gles2::GetGLContext()->GetProgramResourceLocation(
-      program, program_interface, name);
-}
-void GL_APIENTRY GLES2MemoryBarrierEXT(GLbitfield barriers) {
-  gles2::GetGLContext()->MemoryBarrierEXT(barriers);
-}
-void GL_APIENTRY GLES2MemoryBarrierByRegion(GLbitfield barriers) {
-  gles2::GetGLContext()->MemoryBarrierByRegion(barriers);
-}
-void GL_APIENTRY GLES2SwapBuffers(GLuint64 swap_id, GLbitfield flags) {
-  gles2::GetGLContext()->SwapBuffers(swap_id, flags);
-}
 GLuint GL_APIENTRY GLES2GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                                     GLsizei count,
                                                     GLenum type,
                                                     GLuint offset) {
   return gles2::GetGLContext()->GetMaxValueInBufferCHROMIUM(buffer_id, count,
                                                             type, offset);
-}
-GLboolean GL_APIENTRY GLES2EnableFeatureCHROMIUM(const char* feature) {
-  return gles2::GetGLContext()->EnableFeatureCHROMIUM(feature);
 }
 void* GL_APIENTRY GLES2MapBufferCHROMIUM(GLuint target, GLenum access) {
   return gles2::GetGLContext()->MapBufferCHROMIUM(target, access);
@@ -1383,20 +1296,6 @@ void* GL_APIENTRY GLES2MapBufferSubDataCHROMIUM(GLuint target,
 void GL_APIENTRY GLES2UnmapBufferSubDataCHROMIUM(const void* mem) {
   gles2::GetGLContext()->UnmapBufferSubDataCHROMIUM(mem);
 }
-void* GL_APIENTRY GLES2MapBufferRange(GLenum target,
-                                      GLintptr offset,
-                                      GLsizeiptr size,
-                                      GLbitfield access) {
-  return gles2::GetGLContext()->MapBufferRange(target, offset, size, access);
-}
-GLboolean GL_APIENTRY GLES2UnmapBuffer(GLenum target) {
-  return gles2::GetGLContext()->UnmapBuffer(target);
-}
-void GL_APIENTRY GLES2FlushMappedBufferRange(GLenum target,
-                                             GLintptr offset,
-                                             GLsizeiptr size) {
-  gles2::GetGLContext()->FlushMappedBufferRange(target, offset, size);
-}
 void* GL_APIENTRY GLES2MapTexSubImage2DCHROMIUM(GLenum target,
                                                 GLint level,
                                                 GLint xoffset,
@@ -1411,14 +1310,6 @@ void* GL_APIENTRY GLES2MapTexSubImage2DCHROMIUM(GLenum target,
 }
 void GL_APIENTRY GLES2UnmapTexSubImage2DCHROMIUM(const void* mem) {
   gles2::GetGLContext()->UnmapTexSubImage2DCHROMIUM(mem);
-}
-void GL_APIENTRY GLES2ResizeCHROMIUM(GLuint width,
-                                     GLuint height,
-                                     GLfloat scale_factor,
-                                     GLcolorSpace color_space,
-                                     GLboolean alpha) {
-  gles2::GetGLContext()->ResizeCHROMIUM(width, height, scale_factor,
-                                        color_space, alpha);
 }
 const GLchar* GL_APIENTRY GLES2GetRequestableExtensionsCHROMIUM() {
   return gles2::GetGLContext()->GetRequestableExtensionsCHROMIUM();
@@ -1451,16 +1342,6 @@ void GL_APIENTRY GLES2GetUniformsES3CHROMIUM(GLuint program,
                                              void* info) {
   gles2::GetGLContext()->GetUniformsES3CHROMIUM(program, bufsize, size, info);
 }
-GLuint GL_APIENTRY GLES2CreateImageCHROMIUM(ClientBuffer buffer,
-                                            GLsizei width,
-                                            GLsizei height,
-                                            GLenum internalformat) {
-  return gles2::GetGLContext()->CreateImageCHROMIUM(buffer, width, height,
-                                                    internalformat);
-}
-void GL_APIENTRY GLES2DestroyImageCHROMIUM(GLuint image_id) {
-  gles2::GetGLContext()->DestroyImageCHROMIUM(image_id);
-}
 void GL_APIENTRY GLES2DescheduleUntilFinishedCHROMIUM() {
   gles2::GetGLContext()->DescheduleUntilFinishedCHROMIUM();
 }
@@ -1470,15 +1351,6 @@ void GL_APIENTRY GLES2GetTranslatedShaderSourceANGLE(GLuint shader,
                                                      char* source) {
   gles2::GetGLContext()->GetTranslatedShaderSourceANGLE(shader, bufsize, length,
                                                         source);
-}
-void GL_APIENTRY GLES2PostSubBufferCHROMIUM(GLuint64 swap_id,
-                                            GLint x,
-                                            GLint y,
-                                            GLint width,
-                                            GLint height,
-                                            GLbitfield flags) {
-  gles2::GetGLContext()->PostSubBufferCHROMIUM(swap_id, x, y, width, height,
-                                               flags);
 }
 void GL_APIENTRY GLES2CopyTextureCHROMIUM(GLuint source_id,
                                           GLint source_level,
@@ -1553,30 +1425,10 @@ GLES2DrawElementsInstancedBaseVertexBaseInstanceANGLE(GLenum mode,
 void GL_APIENTRY GLES2VertexAttribDivisorANGLE(GLuint index, GLuint divisor) {
   gles2::GetGLContext()->VertexAttribDivisorANGLE(index, divisor);
 }
-void GL_APIENTRY GLES2ProduceTextureDirectCHROMIUM(GLuint texture,
-                                                   GLbyte* mailbox) {
-  gles2::GetGLContext()->ProduceTextureDirectCHROMIUM(texture, mailbox);
-}
-GLuint GL_APIENTRY GLES2CreateAndConsumeTextureCHROMIUM(const GLbyte* mailbox) {
-  return gles2::GetGLContext()->CreateAndConsumeTextureCHROMIUM(mailbox);
-}
 void GL_APIENTRY GLES2BindUniformLocationCHROMIUM(GLuint program,
                                                   GLint location,
                                                   const char* name) {
   gles2::GetGLContext()->BindUniformLocationCHROMIUM(program, location, name);
-}
-void GL_APIENTRY GLES2BindTexImage2DCHROMIUM(GLenum target, GLint imageId) {
-  gles2::GetGLContext()->BindTexImage2DCHROMIUM(target, imageId);
-}
-void GL_APIENTRY
-GLES2BindTexImage2DWithInternalformatCHROMIUM(GLenum target,
-                                              GLenum internalformat,
-                                              GLint imageId) {
-  gles2::GetGLContext()->BindTexImage2DWithInternalformatCHROMIUM(
-      target, internalformat, imageId);
-}
-void GL_APIENTRY GLES2ReleaseTexImage2DCHROMIUM(GLenum target, GLint imageId) {
-  gles2::GetGLContext()->ReleaseTexImage2DCHROMIUM(target, imageId);
 }
 void GL_APIENTRY GLES2TraceBeginCHROMIUM(const char* category_name,
                                          const char* trace_name) {
@@ -1593,67 +1445,8 @@ void GL_APIENTRY GLES2DiscardFramebufferEXT(GLenum target,
 void GL_APIENTRY GLES2LoseContextCHROMIUM(GLenum current, GLenum other) {
   gles2::GetGLContext()->LoseContextCHROMIUM(current, other);
 }
-void GL_APIENTRY GLES2UnpremultiplyAndDitherCopyCHROMIUM(GLuint source_id,
-                                                         GLuint dest_id,
-                                                         GLint x,
-                                                         GLint y,
-                                                         GLsizei width,
-                                                         GLsizei height) {
-  gles2::GetGLContext()->UnpremultiplyAndDitherCopyCHROMIUM(
-      source_id, dest_id, x, y, width, height);
-}
 void GL_APIENTRY GLES2DrawBuffersEXT(GLsizei count, const GLenum* bufs) {
   gles2::GetGLContext()->DrawBuffersEXT(count, bufs);
-}
-void GL_APIENTRY GLES2DiscardBackbufferCHROMIUM() {
-  gles2::GetGLContext()->DiscardBackbufferCHROMIUM();
-}
-void GL_APIENTRY GLES2ScheduleOverlayPlaneCHROMIUM(GLint plane_z_order,
-                                                   GLenum plane_transform,
-                                                   GLuint overlay_texture_id,
-                                                   GLint bounds_x,
-                                                   GLint bounds_y,
-                                                   GLint bounds_width,
-                                                   GLint bounds_height,
-                                                   GLfloat uv_x,
-                                                   GLfloat uv_y,
-                                                   GLfloat uv_width,
-                                                   GLfloat uv_height,
-                                                   GLboolean enable_blend,
-                                                   GLuint gpu_fence_id) {
-  gles2::GetGLContext()->ScheduleOverlayPlaneCHROMIUM(
-      plane_z_order, plane_transform, overlay_texture_id, bounds_x, bounds_y,
-      bounds_width, bounds_height, uv_x, uv_y, uv_width, uv_height,
-      enable_blend, gpu_fence_id);
-}
-void GL_APIENTRY
-GLES2ScheduleCALayerSharedStateCHROMIUM(GLfloat opacity,
-                                        GLboolean is_clipped,
-                                        const GLfloat* clip_rect,
-                                        const GLfloat* rounded_corner_bounds,
-                                        GLint sorting_context_id,
-                                        const GLfloat* transform) {
-  gles2::GetGLContext()->ScheduleCALayerSharedStateCHROMIUM(
-      opacity, is_clipped, clip_rect, rounded_corner_bounds, sorting_context_id,
-      transform);
-}
-void GL_APIENTRY GLES2ScheduleCALayerCHROMIUM(GLuint contents_texture_id,
-                                              const GLfloat* contents_rect,
-                                              GLuint background_color,
-                                              GLuint edge_aa_mask,
-                                              const GLfloat* bounds_rect,
-                                              GLuint filter) {
-  gles2::GetGLContext()->ScheduleCALayerCHROMIUM(
-      contents_texture_id, contents_rect, background_color, edge_aa_mask,
-      bounds_rect, filter);
-}
-void GL_APIENTRY
-GLES2ScheduleCALayerInUseQueryCHROMIUM(GLsizei count, const GLuint* textures) {
-  gles2::GetGLContext()->ScheduleCALayerInUseQueryCHROMIUM(count, textures);
-}
-void GL_APIENTRY GLES2CommitOverlayPlanesCHROMIUM(GLuint64 swap_id,
-                                                  GLbitfield flags) {
-  gles2::GetGLContext()->CommitOverlayPlanesCHROMIUM(swap_id, flags);
 }
 void GL_APIENTRY GLES2FlushDriverCachesCHROMIUM() {
   gles2::GetGLContext()->FlushDriverCachesCHROMIUM();
@@ -1661,44 +1454,17 @@ void GL_APIENTRY GLES2FlushDriverCachesCHROMIUM() {
 GLuint GL_APIENTRY GLES2GetLastFlushIdCHROMIUM() {
   return gles2::GetGLContext()->GetLastFlushIdCHROMIUM();
 }
-void GL_APIENTRY GLES2ScheduleDCLayerCHROMIUM(GLuint texture_0,
-                                              GLuint texture_1,
-                                              GLint z_order,
-                                              GLint content_x,
-                                              GLint content_y,
-                                              GLint content_width,
-                                              GLint content_height,
-                                              GLint quad_x,
-                                              GLint quad_y,
-                                              GLint quad_width,
-                                              GLint quad_height,
-                                              GLfloat transform_c1r1,
-                                              GLfloat transform_c2r1,
-                                              GLfloat transform_c1r2,
-                                              GLfloat transform_c2r2,
-                                              GLfloat transform_tx,
-                                              GLfloat transform_ty,
-                                              GLboolean is_clipped,
-                                              GLint clip_x,
-                                              GLint clip_y,
-                                              GLint clip_width,
-                                              GLint clip_height,
-                                              GLuint protected_video_type) {
-  gles2::GetGLContext()->ScheduleDCLayerCHROMIUM(
-      texture_0, texture_1, z_order, content_x, content_y, content_width,
-      content_height, quad_x, quad_y, quad_width, quad_height, transform_c1r1,
-      transform_c2r1, transform_c1r2, transform_c2r2, transform_tx,
-      transform_ty, is_clipped, clip_x, clip_y, clip_width, clip_height,
-      protected_video_type);
-}
 void GL_APIENTRY GLES2SetActiveURLCHROMIUM(const char* url) {
   gles2::GetGLContext()->SetActiveURLCHROMIUM(url);
 }
+void GL_APIENTRY GLES2GetBufferSubDataCHROMIUM(GLenum target,
+                                               GLintptr offset,
+                                               GLsizeiptr size,
+                                               void* data) {
+  gles2::GetGLContext()->GetBufferSubDataCHROMIUM(target, offset, size, data);
+}
 void GL_APIENTRY GLES2ContextVisibilityHintCHROMIUM(GLboolean visibility) {
   gles2::GetGLContext()->ContextVisibilityHintCHROMIUM(visibility);
-}
-void GL_APIENTRY GLES2CoverageModulationCHROMIUM(GLenum components) {
-  gles2::GetGLContext()->CoverageModulationCHROMIUM(components);
 }
 GLenum GL_APIENTRY GLES2GetGraphicsResetStatusKHR() {
   return gles2::GetGLContext()->GetGraphicsResetStatusKHR();
@@ -1720,43 +1486,6 @@ void GL_APIENTRY GLES2BindFragDataLocationEXT(GLuint program,
 }
 GLint GL_APIENTRY GLES2GetFragDataIndexEXT(GLuint program, const char* name) {
   return gles2::GetGLContext()->GetFragDataIndexEXT(program, name);
-}
-void GL_APIENTRY GLES2SwapBuffersWithBoundsCHROMIUM(GLuint64 swap_id,
-                                                    GLsizei count,
-                                                    const GLint* rects,
-                                                    GLbitfield flags) {
-  gles2::GetGLContext()->SwapBuffersWithBoundsCHROMIUM(swap_id, count, rects,
-                                                       flags);
-}
-void GL_APIENTRY GLES2SetDrawRectangleCHROMIUM(GLint x,
-                                               GLint y,
-                                               GLint width,
-                                               GLint height) {
-  gles2::GetGLContext()->SetDrawRectangleCHROMIUM(x, y, width, height);
-}
-void GL_APIENTRY GLES2SetEnableDCLayersCHROMIUM(GLboolean enabled) {
-  gles2::GetGLContext()->SetEnableDCLayersCHROMIUM(enabled);
-}
-void GL_APIENTRY GLES2InitializeDiscardableTextureCHROMIUM(GLuint texture_id) {
-  gles2::GetGLContext()->InitializeDiscardableTextureCHROMIUM(texture_id);
-}
-void GL_APIENTRY GLES2UnlockDiscardableTextureCHROMIUM(GLuint texture_id) {
-  gles2::GetGLContext()->UnlockDiscardableTextureCHROMIUM(texture_id);
-}
-bool GL_APIENTRY GLES2LockDiscardableTextureCHROMIUM(GLuint texture_id) {
-  return gles2::GetGLContext()->LockDiscardableTextureCHROMIUM(texture_id);
-}
-void GL_APIENTRY GLES2TexStorage2DImageCHROMIUM(GLenum target,
-                                                GLenum internalFormat,
-                                                GLenum bufferUsage,
-                                                GLsizei width,
-                                                GLsizei height) {
-  gles2::GetGLContext()->TexStorage2DImageCHROMIUM(target, internalFormat,
-                                                   bufferUsage, width, height);
-}
-void GL_APIENTRY GLES2SetColorSpaceMetadataCHROMIUM(GLuint texture_id,
-                                                    GLcolorSpace color_space) {
-  gles2::GetGLContext()->SetColorSpaceMetadataCHROMIUM(texture_id, color_space);
 }
 void GL_APIENTRY GLES2WindowRectanglesEXT(GLenum mode,
                                           GLsizei count,
@@ -1796,14 +1525,6 @@ GLES2CreateAndTexStorage2DSharedImageCHROMIUM(const GLbyte* mailbox) {
   return gles2::GetGLContext()->CreateAndTexStorage2DSharedImageCHROMIUM(
       mailbox);
 }
-GLuint GL_APIENTRY
-GLES2CreateAndTexStorage2DSharedImageWithInternalFormatCHROMIUM(
-    const GLbyte* mailbox,
-    GLenum internalformat) {
-  return gles2::GetGLContext()
-      ->CreateAndTexStorage2DSharedImageWithInternalFormatCHROMIUM(
-          mailbox, internalformat);
-}
 void GL_APIENTRY GLES2BeginSharedImageAccessDirectCHROMIUM(GLuint texture,
                                                            GLenum mode) {
   gles2::GetGLContext()->BeginSharedImageAccessDirectCHROMIUM(texture, mode);
@@ -1811,11 +1532,74 @@ void GL_APIENTRY GLES2BeginSharedImageAccessDirectCHROMIUM(GLuint texture,
 void GL_APIENTRY GLES2EndSharedImageAccessDirectCHROMIUM(GLuint texture) {
   gles2::GetGLContext()->EndSharedImageAccessDirectCHROMIUM(texture);
 }
-void GL_APIENTRY GLES2BeginBatchReadAccessSharedImageCHROMIUM() {
-  gles2::GetGLContext()->BeginBatchReadAccessSharedImageCHROMIUM();
+void GL_APIENTRY GLES2CopySharedImageINTERNAL(GLint xoffset,
+                                              GLint yoffset,
+                                              GLint x,
+                                              GLint y,
+                                              GLsizei width,
+                                              GLsizei height,
+                                              const GLbyte* mailboxes) {
+  gles2::GetGLContext()->CopySharedImageINTERNAL(xoffset, yoffset, x, y, width,
+                                                 height, mailboxes);
 }
-void GL_APIENTRY GLES2EndBatchReadAccessSharedImageCHROMIUM() {
-  gles2::GetGLContext()->EndBatchReadAccessSharedImageCHROMIUM();
+void GL_APIENTRY
+GLES2CopySharedImageToTextureINTERNAL(GLuint texture,
+                                      GLenum target,
+                                      GLuint internal_format,
+                                      GLenum type,
+                                      GLint src_x,
+                                      GLint src_y,
+                                      GLsizei width,
+                                      GLsizei height,
+                                      GLboolean is_dst_origin_top_left,
+                                      const GLbyte* src_mailbox) {
+  gles2::GetGLContext()->CopySharedImageToTextureINTERNAL(
+      texture, target, internal_format, type, src_x, src_y, width, height,
+      is_dst_origin_top_left, src_mailbox);
+}
+GLboolean GL_APIENTRY
+GLES2ReadbackARGBImagePixelsINTERNAL(const GLbyte* mailbox,
+                                     const void* dst_color_space,
+                                     GLuint dst_color_space_size,
+                                     GLuint dst_size,
+                                     GLuint dst_width,
+                                     GLuint dst_height,
+                                     GLuint dst_color_type,
+                                     GLuint dst_alpha_type,
+                                     GLuint dst_row_bytes,
+                                     GLint src_x,
+                                     GLint src_y,
+                                     GLint plane_index,
+                                     void* pixels) {
+  return gles2::GetGLContext()->ReadbackARGBImagePixelsINTERNAL(
+      mailbox, dst_color_space, dst_color_space_size, dst_size, dst_width,
+      dst_height, dst_color_type, dst_alpha_type, dst_row_bytes, src_x, src_y,
+      plane_index, pixels);
+}
+void GL_APIENTRY GLES2WritePixelsYUVINTERNAL(const GLbyte* mailbox,
+                                             GLuint src_size_plane1,
+                                             GLuint src_size_plane2,
+                                             GLuint src_size_plane3,
+                                             GLuint src_size_plane4,
+                                             GLuint src_width,
+                                             GLuint src_height,
+                                             GLuint src_plane_config,
+                                             GLuint src_subsampling,
+                                             GLuint src_datatype,
+                                             GLuint src_row_bytes_plane1,
+                                             GLuint src_row_bytes_plane2,
+                                             GLuint src_row_bytes_plane3,
+                                             GLuint src_row_bytes_plane4,
+                                             const void* src_pixels_plane1,
+                                             const void* src_pixels_plane2,
+                                             const void* src_pixels_plane3,
+                                             const void* src_pixels_plane4) {
+  gles2::GetGLContext()->WritePixelsYUVINTERNAL(
+      mailbox, src_size_plane1, src_size_plane2, src_size_plane3,
+      src_size_plane4, src_width, src_height, src_plane_config, src_subsampling,
+      src_datatype, src_row_bytes_plane1, src_row_bytes_plane2,
+      src_row_bytes_plane3, src_row_bytes_plane4, src_pixels_plane1,
+      src_pixels_plane2, src_pixels_plane3, src_pixels_plane4);
 }
 void GL_APIENTRY GLES2EnableiOES(GLenum target, GLuint index) {
   gles2::GetGLContext()->EnableiOES(target, index);
@@ -1851,6 +1635,89 @@ void GL_APIENTRY GLES2ColorMaskiOES(GLuint buf,
 }
 GLboolean GL_APIENTRY GLES2IsEnablediOES(GLenum target, GLuint index) {
   return gles2::GetGLContext()->IsEnablediOES(target, index);
+}
+void GL_APIENTRY GLES2ProvokingVertexANGLE(GLenum provokeMode) {
+  gles2::GetGLContext()->ProvokingVertexANGLE(provokeMode);
+}
+void GL_APIENTRY
+GLES2FramebufferMemorylessPixelLocalStorageANGLE(GLint plane,
+                                                 GLenum internalformat,
+                                                 GLbitfield usage) {
+  gles2::GetGLContext()->FramebufferMemorylessPixelLocalStorageANGLE(
+      plane, internalformat, usage);
+}
+void GL_APIENTRY
+GLES2FramebufferTexturePixelLocalStorageANGLE(GLint plane,
+                                              GLuint backingtexture,
+                                              GLint level,
+                                              GLint layer,
+                                              GLbitfield usage) {
+  gles2::GetGLContext()->FramebufferTexturePixelLocalStorageANGLE(
+      plane, backingtexture, level, layer, usage);
+}
+void GL_APIENTRY
+GLES2FramebufferPixelLocalClearValuefvANGLE(GLint plane, const GLfloat* value) {
+  gles2::GetGLContext()->FramebufferPixelLocalClearValuefvANGLE(plane, value);
+}
+void GL_APIENTRY
+GLES2FramebufferPixelLocalClearValueivANGLE(GLint plane, const GLint* value) {
+  gles2::GetGLContext()->FramebufferPixelLocalClearValueivANGLE(plane, value);
+}
+void GL_APIENTRY
+GLES2FramebufferPixelLocalClearValueuivANGLE(GLint plane, const GLuint* value) {
+  gles2::GetGLContext()->FramebufferPixelLocalClearValueuivANGLE(plane, value);
+}
+void GL_APIENTRY GLES2BeginPixelLocalStorageANGLE(GLsizei count,
+                                                  const GLenum* loadops) {
+  gles2::GetGLContext()->BeginPixelLocalStorageANGLE(count, loadops);
+}
+void GL_APIENTRY GLES2EndPixelLocalStorageANGLE(GLsizei count,
+                                                const GLenum* storeops) {
+  gles2::GetGLContext()->EndPixelLocalStorageANGLE(count, storeops);
+}
+void GL_APIENTRY GLES2EndPixelLocalStorageImplicitANGLE() {
+  gles2::GetGLContext()->EndPixelLocalStorageImplicitANGLE();
+}
+void GL_APIENTRY GLES2PixelLocalStorageBarrierANGLE() {
+  gles2::GetGLContext()->PixelLocalStorageBarrierANGLE();
+}
+void GL_APIENTRY GLES2FramebufferPixelLocalStorageInterruptANGLE() {
+  gles2::GetGLContext()->FramebufferPixelLocalStorageInterruptANGLE();
+}
+void GL_APIENTRY GLES2FramebufferPixelLocalStorageRestoreANGLE() {
+  gles2::GetGLContext()->FramebufferPixelLocalStorageRestoreANGLE();
+}
+void GL_APIENTRY
+GLES2GetFramebufferPixelLocalStorageParameterfvANGLE(GLint plane,
+                                                     GLenum pname,
+                                                     GLfloat* params) {
+  gles2::GetGLContext()->GetFramebufferPixelLocalStorageParameterfvANGLE(
+      plane, pname, params);
+}
+void GL_APIENTRY
+GLES2GetFramebufferPixelLocalStorageParameterivANGLE(GLint plane,
+                                                     GLenum pname,
+                                                     GLint* params) {
+  gles2::GetGLContext()->GetFramebufferPixelLocalStorageParameterivANGLE(
+      plane, pname, params);
+}
+void GL_APIENTRY
+GLES2GetFramebufferPixelLocalStorageParameteruivANGLE(GLint plane,
+                                                      GLenum pname,
+                                                      GLuint* params) {
+  gles2::GetGLContext()->GetFramebufferPixelLocalStorageParameteruivANGLE(
+      plane, pname, params);
+}
+void GL_APIENTRY GLES2ClipControlEXT(GLenum origin, GLenum depth) {
+  gles2::GetGLContext()->ClipControlEXT(origin, depth);
+}
+void GL_APIENTRY GLES2PolygonModeANGLE(GLenum face, GLenum mode) {
+  gles2::GetGLContext()->PolygonModeANGLE(face, mode);
+}
+void GL_APIENTRY GLES2PolygonOffsetClampEXT(GLfloat factor,
+                                            GLfloat units,
+                                            GLfloat clamp) {
+  gles2::GetGLContext()->PolygonOffsetClampEXT(factor, units, clamp);
 }
 
 namespace gles2 {
@@ -2189,10 +2056,6 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glGetBooleanv),
     },
     {
-        "glGetBooleani_v",
-        reinterpret_cast<GLES2FunctionPointer>(glGetBooleani_v),
-    },
-    {
         "glGetBufferParameteri64v",
         reinterpret_cast<GLES2FunctionPointer>(glGetBufferParameteri64v),
     },
@@ -2464,10 +2327,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glShaderSource",
         reinterpret_cast<GLES2FunctionPointer>(glShaderSource),
-    },
-    {
-        "glShallowFinishCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glShallowFinishCHROMIUM),
     },
     {
         "glOrderingBarrierCHROMIUM",
@@ -2889,64 +2748,8 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glFramebufferParameteri),
     },
     {
-        "glBindImageTexture",
-        reinterpret_cast<GLES2FunctionPointer>(glBindImageTexture),
-    },
-    {
-        "glDispatchCompute",
-        reinterpret_cast<GLES2FunctionPointer>(glDispatchCompute),
-    },
-    {
-        "glDispatchComputeIndirect",
-        reinterpret_cast<GLES2FunctionPointer>(glDispatchComputeIndirect),
-    },
-    {
-        "glDrawArraysIndirect",
-        reinterpret_cast<GLES2FunctionPointer>(glDrawArraysIndirect),
-    },
-    {
-        "glDrawElementsIndirect",
-        reinterpret_cast<GLES2FunctionPointer>(glDrawElementsIndirect),
-    },
-    {
-        "glGetProgramInterfaceiv",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramInterfaceiv),
-    },
-    {
-        "glGetProgramResourceIndex",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceIndex),
-    },
-    {
-        "glGetProgramResourceName",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceName),
-    },
-    {
-        "glGetProgramResourceiv",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceiv),
-    },
-    {
-        "glGetProgramResourceLocation",
-        reinterpret_cast<GLES2FunctionPointer>(glGetProgramResourceLocation),
-    },
-    {
-        "glMemoryBarrierEXT",
-        reinterpret_cast<GLES2FunctionPointer>(glMemoryBarrierEXT),
-    },
-    {
-        "glMemoryBarrierByRegion",
-        reinterpret_cast<GLES2FunctionPointer>(glMemoryBarrierByRegion),
-    },
-    {
-        "glSwapBuffers",
-        reinterpret_cast<GLES2FunctionPointer>(glSwapBuffers),
-    },
-    {
         "glGetMaxValueInBufferCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glGetMaxValueInBufferCHROMIUM),
-    },
-    {
-        "glEnableFeatureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glEnableFeatureCHROMIUM),
     },
     {
         "glMapBufferCHROMIUM",
@@ -2965,28 +2768,12 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glUnmapBufferSubDataCHROMIUM),
     },
     {
-        "glMapBufferRange",
-        reinterpret_cast<GLES2FunctionPointer>(glMapBufferRange),
-    },
-    {
-        "glUnmapBuffer",
-        reinterpret_cast<GLES2FunctionPointer>(glUnmapBuffer),
-    },
-    {
-        "glFlushMappedBufferRange",
-        reinterpret_cast<GLES2FunctionPointer>(glFlushMappedBufferRange),
-    },
-    {
         "glMapTexSubImage2DCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glMapTexSubImage2DCHROMIUM),
     },
     {
         "glUnmapTexSubImage2DCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glUnmapTexSubImage2DCHROMIUM),
-    },
-    {
-        "glResizeCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glResizeCHROMIUM),
     },
     {
         "glGetRequestableExtensionsCHROMIUM",
@@ -3015,14 +2802,6 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glGetUniformsES3CHROMIUM),
     },
     {
-        "glCreateImageCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glCreateImageCHROMIUM),
-    },
-    {
-        "glDestroyImageCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glDestroyImageCHROMIUM),
-    },
-    {
         "glDescheduleUntilFinishedCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(
             glDescheduleUntilFinishedCHROMIUM),
@@ -3031,10 +2810,6 @@ extern const NameToFunc g_gles2_function_table[] = {
         "glGetTranslatedShaderSourceANGLE",
         reinterpret_cast<GLES2FunctionPointer>(
             glGetTranslatedShaderSourceANGLE),
-    },
-    {
-        "glPostSubBufferCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glPostSubBufferCHROMIUM),
     },
     {
         "glCopyTextureCHROMIUM",
@@ -3067,30 +2842,8 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glVertexAttribDivisorANGLE),
     },
     {
-        "glProduceTextureDirectCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glProduceTextureDirectCHROMIUM),
-    },
-    {
-        "glCreateAndConsumeTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glCreateAndConsumeTextureCHROMIUM),
-    },
-    {
         "glBindUniformLocationCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glBindUniformLocationCHROMIUM),
-    },
-    {
-        "glBindTexImage2DCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glBindTexImage2DCHROMIUM),
-    },
-    {
-        "glBindTexImage2DWithInternalformatCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glBindTexImage2DWithInternalformatCHROMIUM),
-    },
-    {
-        "glReleaseTexImage2DCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glReleaseTexImage2DCHROMIUM),
     },
     {
         "glTraceBeginCHROMIUM",
@@ -3109,39 +2862,8 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glLoseContextCHROMIUM),
     },
     {
-        "glUnpremultiplyAndDitherCopyCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glUnpremultiplyAndDitherCopyCHROMIUM),
-    },
-    {
         "glDrawBuffersEXT",
         reinterpret_cast<GLES2FunctionPointer>(glDrawBuffersEXT),
-    },
-    {
-        "glDiscardBackbufferCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glDiscardBackbufferCHROMIUM),
-    },
-    {
-        "glScheduleOverlayPlaneCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glScheduleOverlayPlaneCHROMIUM),
-    },
-    {
-        "glScheduleCALayerSharedStateCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glScheduleCALayerSharedStateCHROMIUM),
-    },
-    {
-        "glScheduleCALayerCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glScheduleCALayerCHROMIUM),
-    },
-    {
-        "glScheduleCALayerInUseQueryCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glScheduleCALayerInUseQueryCHROMIUM),
-    },
-    {
-        "glCommitOverlayPlanesCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glCommitOverlayPlanesCHROMIUM),
     },
     {
         "glFlushDriverCachesCHROMIUM",
@@ -3152,20 +2874,16 @@ extern const NameToFunc g_gles2_function_table[] = {
         reinterpret_cast<GLES2FunctionPointer>(glGetLastFlushIdCHROMIUM),
     },
     {
-        "glScheduleDCLayerCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glScheduleDCLayerCHROMIUM),
-    },
-    {
         "glSetActiveURLCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(glSetActiveURLCHROMIUM),
     },
     {
-        "glContextVisibilityHintCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glContextVisibilityHintCHROMIUM),
+        "glGetBufferSubDataCHROMIUM",
+        reinterpret_cast<GLES2FunctionPointer>(glGetBufferSubDataCHROMIUM),
     },
     {
-        "glCoverageModulationCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glCoverageModulationCHROMIUM),
+        "glContextVisibilityHintCHROMIUM",
+        reinterpret_cast<GLES2FunctionPointer>(glContextVisibilityHintCHROMIUM),
     },
     {
         "glGetGraphicsResetStatusKHR",
@@ -3187,41 +2905,6 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glGetFragDataIndexEXT",
         reinterpret_cast<GLES2FunctionPointer>(glGetFragDataIndexEXT),
-    },
-    {
-        "glSwapBuffersWithBoundsCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glSwapBuffersWithBoundsCHROMIUM),
-    },
-    {
-        "glSetDrawRectangleCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glSetDrawRectangleCHROMIUM),
-    },
-    {
-        "glSetEnableDCLayersCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glSetEnableDCLayersCHROMIUM),
-    },
-    {
-        "glInitializeDiscardableTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glInitializeDiscardableTextureCHROMIUM),
-    },
-    {
-        "glUnlockDiscardableTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glUnlockDiscardableTextureCHROMIUM),
-    },
-    {
-        "glLockDiscardableTextureCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glLockDiscardableTextureCHROMIUM),
-    },
-    {
-        "glTexStorage2DImageCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glTexStorage2DImageCHROMIUM),
-    },
-    {
-        "glSetColorSpaceMetadataCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(glSetColorSpaceMetadataCHROMIUM),
     },
     {
         "glWindowRectanglesEXT",
@@ -3263,11 +2946,6 @@ extern const NameToFunc g_gles2_function_table[] = {
             glCreateAndTexStorage2DSharedImageCHROMIUM),
     },
     {
-        "glCreateAndTexStorage2DSharedImageWithInternalFormatCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glCreateAndTexStorage2DSharedImageWithInternalFormatCHROMIUM),
-    },
-    {
         "glBeginSharedImageAccessDirectCHROMIUM",
         reinterpret_cast<GLES2FunctionPointer>(
             glBeginSharedImageAccessDirectCHROMIUM),
@@ -3278,14 +2956,22 @@ extern const NameToFunc g_gles2_function_table[] = {
             glEndSharedImageAccessDirectCHROMIUM),
     },
     {
-        "glBeginBatchReadAccessSharedImageCHROMIUM",
-        reinterpret_cast<GLES2FunctionPointer>(
-            glBeginBatchReadAccessSharedImageCHROMIUM),
+        "glCopySharedImageINTERNAL",
+        reinterpret_cast<GLES2FunctionPointer>(glCopySharedImageINTERNAL),
     },
     {
-        "glEndBatchReadAccessSharedImageCHROMIUM",
+        "glCopySharedImageToTextureINTERNAL",
         reinterpret_cast<GLES2FunctionPointer>(
-            glEndBatchReadAccessSharedImageCHROMIUM),
+            glCopySharedImageToTextureINTERNAL),
+    },
+    {
+        "glReadbackARGBImagePixelsINTERNAL",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glReadbackARGBImagePixelsINTERNAL),
+    },
+    {
+        "glWritePixelsYUVINTERNAL",
+        reinterpret_cast<GLES2FunctionPointer>(glWritePixelsYUVINTERNAL),
     },
     {
         "glEnableiOES",
@@ -3318,6 +3004,89 @@ extern const NameToFunc g_gles2_function_table[] = {
     {
         "glIsEnablediOES",
         reinterpret_cast<GLES2FunctionPointer>(glIsEnablediOES),
+    },
+    {
+        "glProvokingVertexANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(glProvokingVertexANGLE),
+    },
+    {
+        "glFramebufferMemorylessPixelLocalStorageANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferMemorylessPixelLocalStorageANGLE),
+    },
+    {
+        "glFramebufferTexturePixelLocalStorageANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferTexturePixelLocalStorageANGLE),
+    },
+    {
+        "glFramebufferPixelLocalClearValuefvANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferPixelLocalClearValuefvANGLE),
+    },
+    {
+        "glFramebufferPixelLocalClearValueivANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferPixelLocalClearValueivANGLE),
+    },
+    {
+        "glFramebufferPixelLocalClearValueuivANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferPixelLocalClearValueuivANGLE),
+    },
+    {
+        "glBeginPixelLocalStorageANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(glBeginPixelLocalStorageANGLE),
+    },
+    {
+        "glEndPixelLocalStorageANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(glEndPixelLocalStorageANGLE),
+    },
+    {
+        "glEndPixelLocalStorageImplicitANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glEndPixelLocalStorageImplicitANGLE),
+    },
+    {
+        "glPixelLocalStorageBarrierANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(glPixelLocalStorageBarrierANGLE),
+    },
+    {
+        "glFramebufferPixelLocalStorageInterruptANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferPixelLocalStorageInterruptANGLE),
+    },
+    {
+        "glFramebufferPixelLocalStorageRestoreANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glFramebufferPixelLocalStorageRestoreANGLE),
+    },
+    {
+        "glGetFramebufferPixelLocalStorageParameterfvANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glGetFramebufferPixelLocalStorageParameterfvANGLE),
+    },
+    {
+        "glGetFramebufferPixelLocalStorageParameterivANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glGetFramebufferPixelLocalStorageParameterivANGLE),
+    },
+    {
+        "glGetFramebufferPixelLocalStorageParameteruivANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(
+            glGetFramebufferPixelLocalStorageParameteruivANGLE),
+    },
+    {
+        "glClipControlEXT",
+        reinterpret_cast<GLES2FunctionPointer>(glClipControlEXT),
+    },
+    {
+        "glPolygonModeANGLE",
+        reinterpret_cast<GLES2FunctionPointer>(glPolygonModeANGLE),
+    },
+    {
+        "glPolygonOffsetClampEXT",
+        reinterpret_cast<GLES2FunctionPointer>(glPolygonOffsetClampEXT),
     },
     {
         nullptr,

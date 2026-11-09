@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,229 +7,268 @@ package org.chromium.chrome.browser.toolbar;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeFalse;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import android.animation.Animator;
 import android.content.res.Resources;
+import android.graphics.Color;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
 import androidx.annotation.ColorInt;
-import androidx.test.filters.SmallTest;
+import androidx.test.core.app.ActivityScenario;
 
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.robolectric.shadows.ShadowLooper;
 
-import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.MathUtils;
-import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.build.BuildConfig;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.ClipDrawableProgressBar.ProgressBarObserver;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.ui.test.util.DummyUiActivityTestCase;
-import org.chromium.ui.test.util.UiRestriction;
+import org.chromium.ui.base.TestActivity;
+import org.chromium.ui.util.ColorUtils;
 
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests related to the ToolbarProgressBar.
- */
-@RunWith(ChromeJUnit4ClassRunner.class)
-@Restriction(UiRestriction.RESTRICTION_TYPE_PHONE)
-public class ToolbarProgressBarTest extends DummyUiActivityTestCase {
-    private final CallbackHelper mProgressUpdateHelper = new CallbackHelper();
-    private final CallbackHelper mProgressVisibilityHelper = new CallbackHelper();
+/** Tests related to the ToolbarProgressBar. */
+@RunWith(BaseRobolectricTestRunner.class)
+public class ToolbarProgressBarTest {
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock ProgressBarObserver mMockProgressBarObserver;
     private ToolbarProgressBar mProgressBar;
+    private ToolbarProgressBarAnimatingView mProgressBarAnimatingView;
+    private ShadowLooper mShadowLooper;
+    private ActivityScenario<TestActivity> mActivityScenario;
+    private TestActivity mActivity;
+    private @ColorInt int mThemeColor;
 
-    @Override
-    public void setUpTest() throws Exception {
-        super.setUpTest();
-        TestThreadUtils.runOnUiThreadBlocking(this::setUpTestOnUi);
+    private static final float THEMED_BACKGROUND_WHITE_FRACTION = 0.2f;
+
+    @Before
+    public void setUp() {
+        mShadowLooper = ShadowLooper.shadowMainLooper();
+
+        mActivityScenario =
+                ActivityScenario.launch(TestActivity.class)
+                        .onActivity(
+                                activity -> {
+                                    mActivity = activity;
+                                    activity.setTheme(R.style.Theme_BrowserUI_DayNight);
+
+                                    ViewGroup view = new FrameLayout(activity);
+                                    view.setVisibility(View.VISIBLE);
+                                    FrameLayout.LayoutParams params =
+                                            new FrameLayout.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    ViewGroup.LayoutParams.MATCH_PARENT);
+                                    activity.setContentView(view, params);
+
+                                    Resources res = activity.getResources();
+                                    int heightPx;
+                                    if (ChromeFeatureList.sAndroidProgressBarVisualUpdate
+                                            .isEnabled()) {
+                                        heightPx =
+                                                res.getDimensionPixelSize(
+                                                        R.dimen
+                                                                .toolbar_progress_bar_increased_height);
+                                    } else {
+                                        heightPx =
+                                                res.getDimensionPixelSize(
+                                                        R.dimen.toolbar_progress_bar_height);
+                                    }
+
+                                    View anchor = new View(activity);
+                                    view.addView(
+                                            anchor,
+                                            new FrameLayout.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    heightPx * 2));
+
+                                    mProgressBarAnimatingView =
+                                            new ToolbarProgressBarAnimatingView(activity, null);
+                                    mProgressBar = new ToolbarProgressBar(activity, null);
+                                    mProgressBar.setAnimatingView(mProgressBarAnimatingView);
+                                    mThemeColor =
+                                            SemanticColorUtils.getToolbarBackgroundPrimary(
+                                                    mActivity);
+                                    mProgressBar.setThemeColor(mThemeColor, false);
+                                    mProgressBar.addObserver(mMockProgressBarObserver);
+
+                                    view.addView(
+                                            mProgressBar,
+                                            new FrameLayout.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT, heightPx));
+                                });
     }
 
-    private void setUpTestOnUi() {
-        ViewGroup view = new FrameLayout(getActivity());
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        getActivity().setContentView(view, params);
-
-        Resources res = getActivity().getResources();
-        int heightPx = res.getDimensionPixelSize(R.dimen.toolbar_progress_bar_height);
-
-        View anchor = new View(getActivity());
-        view.addView(anchor,
-                new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, heightPx * 2));
-
-        mProgressBar = new ToolbarProgressBar(getActivity(), heightPx, anchor, false, () -> false);
-        @ColorInt
-        int toolbarColor = ApiCompatibilityUtils.getColor(res, R.color.toolbar_background_primary);
-        mProgressBar.setThemeColor(toolbarColor, false);
-        mProgressBar.setProgressBarObserver(new ProgressBarObserver() {
-            @Override
-            public void onVisibleProgressUpdated() {
-                mProgressUpdateHelper.notifyCalled();
-            }
-
-            @Override
-            public void onVisibilityChanged() {
-                mProgressVisibilityHelper.notifyCalled();
-            }
-        });
-
-        view.addView(mProgressBar,
-                new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, heightPx));
+    @After
+    public void tearDown() throws Exception {
+        mActivityScenario.close();
     }
 
     /**
      * Get the current progress from the UI thread.
+     *
      * @return The current progress displayed by the progress bar.
      */
     private float getProgress() {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(() -> mProgressBar.getProgress());
+        return mProgressBar.getProgress();
     }
 
-    /**
-     * Get the current progress bar visibility from the UI thread.
-     * @return The current progress displayed by the progress bar.
-     */
-    private boolean isProgressBarVisible() {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> mProgressBar.getVisibility() == View.VISIBLE);
+    /** Whether the progress bar and its animating view are visible. */
+    private boolean isAndroidProgressBarVisible() {
+        return mProgressBar.getVisibility() == View.VISIBLE
+                && mProgressBarAnimatingView.getVisibility() == View.VISIBLE;
     }
 
-    /**
-     * Test that the progress bar indeterminate animation completely traverses the screen.
-     */
+    private boolean isCompositedProgressBarVisible() {
+        return mProgressBar.getCompositedVisibilityForTesting() == View.VISIBLE;
+    }
+
+    /** Test that the progress bar indeterminate animation completely traverses the screen. */
     @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER)
     @Feature({"Android-Progress-Bar"})
-    @SmallTest
     public void testProgressBarCompletion_indeterminateAnimation() throws TimeoutException {
         Animator progressAnimator = mProgressBar.getIndeterminateAnimatorForTesting();
 
-        int currentVisibilityCallCount = mProgressVisibilityHelper.getCallCount();
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.start());
+        mProgressBar.start();
         assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mProgressBar.startIndeterminateAnimationForTesting();
-            mProgressBar.setProgress(0.5f);
-        });
-
         // Wait for a visibility change.
-        mProgressVisibilityHelper.waitForCallback(currentVisibilityCallCount, 1);
-        currentVisibilityCallCount++;
+        mShadowLooper.idle();
+        verify(mMockProgressBarObserver, times(1)).onCompositedLayersVisibilityChanged();
+
+        mProgressBar.startIndeterminateAnimationForTesting();
+        mProgressBar.setProgress(0.5f);
 
         assertTrue("Indeterminate animation should be running.", progressAnimator.isRunning());
+        assertTrue(mProgressBarAnimatingView.isRunning());
 
         // Wait for progress updates to reach 50%.
-        int currentProgressCallCount = mProgressUpdateHelper.getCallCount();
         while (!MathUtils.areFloatsEqual(getProgress(), 0.5f)) {
-            mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-            currentProgressCallCount++;
+            mShadowLooper.runOneTask();
         }
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.finish(true));
+        mProgressBar.finish(true);
 
         // Wait for progress updates to reach 100%.
-        currentProgressCallCount = mProgressUpdateHelper.getCallCount();
         while (!MathUtils.areFloatsEqual(getProgress(), 1.0f)) {
-            mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-            currentProgressCallCount++;
+            mShadowLooper.runOneTask();
         }
 
+        assertFalse(mProgressBarAnimatingView.isRunning());
         // Make sure the progress bar remains visible through completion.
-        assertTrue("Progress bar should still be visible.", isProgressBarVisible());
+        assertTrue("Progress bar should still be visible.", isAndroidProgressBarVisible());
 
         assertEquals("Progress should have reached 100%.", 1.0f, getProgress(), MathUtils.EPSILON);
 
         // Wait for a visibility change now that progress has completed.
-        mProgressVisibilityHelper.waitForCallback(currentVisibilityCallCount, 1);
+        mShadowLooper.runToEndOfTasks();
 
+        verify(mMockProgressBarObserver, times(2)).onCompositedLayersVisibilityChanged();
         assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
-        assertFalse("Progress bar should not be visible.", isProgressBarVisible());
+        assertFalse("Progress bar should not be visible.", isAndroidProgressBarVisible());
     }
 
-    /**
-     * Test that the progress bar completely traverses the screen without animation.
-     */
+    /** Test that the progress bar completely traverses the screen without animation. */
     @Test
     @Feature({"Android-Progress-Bar"})
-    @SmallTest
     public void testProgressBarCompletion_noAnimation() throws TimeoutException {
-        int currentVisibilityCallCount = mProgressVisibilityHelper.getCallCount();
-        int currentProgressCallCount = mProgressUpdateHelper.getCallCount();
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mProgressBar.start();
-            mProgressBar.setProgress(0.5f);
-        });
+        mProgressBar.start();
+        mProgressBar.setProgress(0.5f);
 
         // Wait for a visibility change.
-        mProgressVisibilityHelper.waitForCallback(currentVisibilityCallCount, 1);
-        currentVisibilityCallCount++;
+        mShadowLooper.idle();
+        verify(mMockProgressBarObserver).onCompositedLayersVisibilityChanged();
+        boolean androidVisibilityDuringLoad = !mProgressBar.shouldAnimateCompositedLayer();
+        assertEquals(
+                "Android view visibility is incorrect.",
+                androidVisibilityDuringLoad,
+                isAndroidProgressBarVisible());
+        assertTrue("Composited progress bar should be visible.", isCompositedProgressBarVisible());
 
-        // Wait for progress updates to reach 50%.
-        mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-        currentProgressCallCount++;
+        // Ensure progress updates reached 50%.
+        verify(mMockProgressBarObserver, atLeast(1)).onVisibleProgressUpdated();
+        clearInvocations(mMockProgressBarObserver);
         assertEquals("Progress should have reached 50%.", 0.5f, getProgress(), MathUtils.EPSILON);
 
-        currentProgressCallCount = mProgressUpdateHelper.getCallCount();
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.finish(true));
+        // Finish progress bar.
+        mProgressBar.finish(true);
+        mShadowLooper.idle();
 
-        // Wait for progress updates to reach 100%.
-        mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-        currentProgressCallCount++;
+        // Ensure progress reached 100%.
+        verify(mMockProgressBarObserver, atLeast(1)).onVisibleProgressUpdated();
         assertEquals("Progress should have reached 100%.", 1.0f, getProgress(), MathUtils.EPSILON);
 
         // Make sure the progress bar remains visible through completion.
-        assertTrue("Progress bar should still be visible.", isProgressBarVisible());
+        assertEquals(
+                "Android view visibility is incorrect.",
+                androidVisibilityDuringLoad,
+                isAndroidProgressBarVisible());
+        assertTrue("Composited progress bar should be visible.", isCompositedProgressBarVisible());
 
-        // Wait for a visibility change now that progress has completed.
-        mProgressVisibilityHelper.waitForCallback(currentVisibilityCallCount, 1);
+        // Wait for hiding tasks.
+        mShadowLooper.runToEndOfTasks();
 
-        assertFalse("Progress bar should not be visible.", isProgressBarVisible());
+        // Ensure that visibility changed now that progress has completed.
+        assertFalse("Progress bar should not be visible.", isAndroidProgressBarVisible());
+        verify(mMockProgressBarObserver, times(1)).onCompositedLayersVisibilityChanged();
+        assertFalse(
+                "Composited progress bar should not be visible.", isCompositedProgressBarVisible());
     }
 
-    /**
-     * Test that the progress bar ends immediately if #finish(...) is called with delay = false.
-     */
+    /** Test that the progress bar ends immediately if #finish(...) is called with delay = false. */
     @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER)
     @Feature({"Android-Progress-Bar"})
-    @SmallTest
     public void testProgressBarCompletion_indeterminateAnimation_noDelay() throws TimeoutException {
         Animator progressAnimator = mProgressBar.getIndeterminateAnimatorForTesting();
 
-        int currentVisibilityCallCount = mProgressVisibilityHelper.getCallCount();
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.start());
+        mProgressBar.start();
         assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mProgressBar.startIndeterminateAnimationForTesting();
-            mProgressBar.setProgress(0.5f);
-        });
-
         // Wait for a visibility change.
-        mProgressVisibilityHelper.waitForCallback(currentVisibilityCallCount, 1);
-        currentVisibilityCallCount++;
+        mShadowLooper.idle();
+        verify(mMockProgressBarObserver).onCompositedLayersVisibilityChanged();
+        assertTrue("Progress bar should be visible.", isAndroidProgressBarVisible());
+
+        mProgressBar.startIndeterminateAnimationForTesting();
+        mProgressBar.setProgress(0.5f);
 
         assertTrue("Indeterminate animation should be running.", progressAnimator.isRunning());
 
         // Wait for progress updates to reach 50%.
-        int currentProgressCallCount = mProgressUpdateHelper.getCallCount();
         while (!MathUtils.areFloatsEqual(getProgress(), 0.5f)) {
-            mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-            currentProgressCallCount++;
+            mShadowLooper.runOneTask();
         }
 
         // Finish progress with no delay.
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.finish(false));
+        mProgressBar.finish(false);
 
         // The progress bar should immediately be invisible.
-        assertFalse("Progress bar should be invisible.", isProgressBarVisible());
+        assertFalse("Progress bar should be invisible.", isAndroidProgressBarVisible());
 
         assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
     }
@@ -239,45 +278,243 @@ public class ToolbarProgressBarTest extends DummyUiActivityTestCase {
      * animation is running.
      */
     @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER)
     @Feature({"Android-Progress-Bar"})
-    @SmallTest
     public void testProgressBarReset_indeterminateAnimation() throws TimeoutException {
         Animator progressAnimator = mProgressBar.getIndeterminateAnimatorForTesting();
 
-        int currentVisibilityCallCount = mProgressVisibilityHelper.getCallCount();
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.start());
+        mProgressBar.start();
         assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mProgressBar.startIndeterminateAnimationForTesting();
-            mProgressBar.setProgress(0.5f);
-        });
-
         // Wait for a visibility change.
-        mProgressVisibilityHelper.waitForCallback(currentVisibilityCallCount, 1);
-        currentVisibilityCallCount++;
+        mShadowLooper.idle();
+        verify(mMockProgressBarObserver).onCompositedLayersVisibilityChanged();
 
+        mProgressBar.startIndeterminateAnimationForTesting();
+        mProgressBar.setProgress(0.5f);
+
+        assertTrue(mProgressBarAnimatingView.isRunning());
         assertTrue("Indeterminate animation should be running.", progressAnimator.isRunning());
 
         // Wait for progress updates to reach 50%.
-        int currentProgressCallCount = mProgressUpdateHelper.getCallCount();
         while (!MathUtils.areFloatsEqual(getProgress(), 0.5f)) {
-            mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-            currentProgressCallCount++;
+            mShadowLooper.runOneTask();
         }
 
         // Restart the progress bar.
-        currentProgressCallCount = mProgressUpdateHelper.getCallCount();
-        TestThreadUtils.runOnUiThreadBlocking(() -> mProgressBar.start());
+        mProgressBar.start();
 
-        // Wait for progress update.
-        mProgressUpdateHelper.waitForCallback(currentProgressCallCount, 1);
-        currentProgressCallCount++;
+        // Indeterminate animator and animating view are canceled automatically on restart.
+        assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
+        assertFalse(mProgressBarAnimatingView.isRunning());
 
         // Make sure the progress bar remains visible through completion.
-        assertTrue("Progress bar should still be visible.", isProgressBarVisible());
+        assertTrue("Progress bar should still be visible.", isAndroidProgressBarVisible());
 
         assertEquals("Progress should be at 0%.", 0.0f, getProgress(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_PROGRESS_BAR_CANCEL_ON_WINDOW_INVISIBLE)
+    @DisableFeatures(ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER)
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBar_cancelsAnimationWhenWindowInvisible() {
+        Animator progressAnimator = mProgressBar.getIndeterminateAnimatorForTesting();
+
+        mProgressBar.start();
+        mProgressBar.startIndeterminateAnimationForTesting();
+        mProgressBar.setProgress(0.5f);
+        assertTrue("Indeterminate animation should be running.", progressAnimator.isRunning());
+        assertTrue(mProgressBarAnimatingView.isRunning());
+
+        // Simulate Chrome moving to background (window visibility becomes GONE).
+        mProgressBar.onWindowVisibilityChanged(View.GONE);
+        assertFalse(
+                "Indeterminate animation should be canceled when window is not visible.",
+                progressAnimator.isRunning());
+        assertFalse(
+                "Animating view should be canceled when window is not visible.",
+                mProgressBarAnimatingView.isRunning());
+        assertEquals(
+                "Progress should snap to target when animation is canceled on hide.",
+                0.5f,
+                getProgress(),
+                MathUtils.EPSILON);
+
+        // Indeterminate animation runnable should not start while window is not visible.
+        mProgressBar.startIndeterminateAnimationForTesting();
+        assertFalse(
+                "Indeterminate animation should not start while window is not visible.",
+                progressAnimator.isRunning());
+
+        // Returning to VISIBLE while started should allow indeterminate animation to resume.
+        mProgressBar.onWindowVisibilityChanged(View.VISIBLE);
+        mProgressBar.startIndeterminateAnimationForTesting();
+        assertTrue(
+                "Indeterminate animation should resume when window is visible again.",
+                progressAnimator.isRunning());
+
+        // If finish(true) is deferred while animators are running and the window becomes invisible
+        // before the animator reaches 1.0f, finish immediately instead of leaving mIsStarted true.
+        mProgressBar.finish(true);
+        assertTrue(
+                "Progress bar should remain started while animating to 1.0f.",
+                mProgressBar.isStarted());
+        mProgressBar.onWindowVisibilityChanged(View.GONE);
+        assertFalse(
+                "Deferred finish should complete immediately when window becomes invisible.",
+                mProgressBar.isStarted());
+        assertFalse("Indeterminate animation should not be running.", progressAnimator.isRunning());
+    }
+
+    @Test
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBar_finishWithoutFadeOutHidesOnSameTurn() {
+        mProgressBar.start();
+        mProgressBar.setProgress(0.3f);
+        mShadowLooper.idle();
+        assertTrue("Composited progress bar should be visible.", isCompositedProgressBarVisible());
+
+        // Calling finish(false) when progress < 1.0f (e.g., via finishLoadProgress(false) on an
+        // uncommitted navigation) must synchronously hide both the Android view and the composited
+        // layer on the same UI-thread turn before any frame is drawn.
+        mProgressBar.finish(false);
+        assertEquals(0.0f, mProgressBar.getAlpha(), MathUtils.EPSILON);
+        assertFalse("Android progress bar should be invisible.", isAndroidProgressBarVisible());
+        assertFalse(
+                "Composited progress bar should be invisible.", isCompositedProgressBarVisible());
+    }
+
+    @Test
+    // TODO(https://crbug.com/556322774): when cleaning up APB, keep the bug fix to pass this test.
+    @EnableFeatures(ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER)
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarHideWithBrowserControls() {
+        // TODO(crbug.com/525121768): Failing on Desktop Android.
+        assumeFalse(BuildConfig.IS_DESKTOP_ANDROID);
+
+        mProgressBar.setAlpha(1.0f);
+        mProgressBar.onAndroidControlsVisibilityChanged(View.INVISIBLE);
+
+        // The progress bar should stay visible when the android controls disappears, otherwise
+        // the progress bar disappears on scroll.
+        assertEquals(View.VISIBLE, mProgressBar.getVisibility());
+        assertEquals(View.INVISIBLE, mProgressBarAnimatingView.getVisibility());
+
+        mProgressBar.onAndroidControlsVisibilityChanged(View.VISIBLE);
+        assertEquals(View.VISIBLE, mProgressBar.getVisibility());
+        // Animating view should say invisible since pulse animation is not running. Otherwise
+        // the composited progress bar can get covered up by this view.
+        assertEquals(View.INVISIBLE, mProgressBarAnimatingView.getVisibility());
+    }
+
+    @Test
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarHideWithBrowserControls_duringIndeterminateAnimation() {
+        mProgressBar.start();
+        mProgressBar.startIndeterminateAnimationForTesting();
+        assertEquals(View.VISIBLE, mProgressBarAnimatingView.getVisibility());
+        mProgressBar.onAndroidControlsVisibilityChanged(View.INVISIBLE);
+        assertEquals(View.INVISIBLE, mProgressBarAnimatingView.getVisibility());
+        mProgressBar.onAndroidControlsVisibilityChanged(View.VISIBLE);
+        assertEquals(View.VISIBLE, mProgressBarAnimatingView.getVisibility());
+        mProgressBar.finish(false);
+    }
+
+    @Test
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarColors_incognito() {
+        final boolean isIncognito = true;
+        mProgressBar.setThemeColor(mThemeColor, isIncognito);
+
+        assertEquals("Foreground color does not match expected color.",
+                ColorUtils.getThemedAssetColor(mThemeColor, isIncognito),
+                mProgressBar.getForegroundColor());
+        assertEquals("Background color does not match expected color.",
+                ColorUtils.getColorWithOverlay(mThemeColor, Color.WHITE,
+                        THEMED_BACKGROUND_WHITE_FRACTION), mProgressBar.getBackgroundColor());
+    }
+
+    @Test
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarColors_TransparentTheme() {
+        mProgressBar.setThemeColor(Color.TRANSPARENT, /* isIncognito = */ false);
+        mProgressBar.setAnimatingView(mProgressBarAnimatingView);
+
+        assertEquals(
+                "Foreground color does not match expected color.",
+                SemanticColorUtils.getProgressBarForeground(mActivity),
+                mProgressBar.getForegroundColor());
+    }
+
+    @Test
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarColors_nonDefaultTheme() {
+        final int themeColor = Color.BLUE;
+        final boolean isIncognito = false;
+        mProgressBar.setThemeColor(themeColor, isIncognito);
+
+        assertEquals(
+                "Foreground color does not match expected color.",
+                ColorUtils.getThemedAssetColor(themeColor, isIncognito),
+                mProgressBar.getForegroundColor());
+        assertEquals(
+                "Background color does not match expected color.",
+                ColorUtils.getColorWithOverlay(themeColor, Color.WHITE,
+                        THEMED_BACKGROUND_WHITE_FRACTION), mProgressBar.getBackgroundColor());
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_PROGRESS_BAR_VISUAL_UPDATE)
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarColors_defaultTheme() {
+        mProgressBar.setThemeColor(mThemeColor, /* isIncognito = */ false);
+
+        assertEquals(
+                "Foreground color does not match expected color.",
+                SemanticColorUtils.getProgressBarForeground(mActivity),
+                mProgressBar.getForegroundColor());
+        assertEquals(
+                "Background color does not match expected color.",
+                mActivity.getColor(R.color.progress_bar_bg_color_list),
+                mProgressBar.getBackgroundColor());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_PROGRESS_BAR_VISUAL_UPDATE)
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBarColors_defaultTheme_visualUpdate() {
+        mProgressBar.setThemeColor(mThemeColor, /* isIncognito = */ false);
+
+        assertEquals(
+                "Foreground color does not match expected color.",
+                SemanticColorUtils.getProgressBarForeground(mActivity),
+                mProgressBar.getForegroundColor());
+        assertEquals(
+                "Background color does not match expected color.",
+                SemanticColorUtils.getProgressBarTrackColor(mActivity),
+                mProgressBar.getBackgroundColor());
+
+        int gapBackgroundColor = ((ColorDrawable) mProgressBar.getBackground()).getColor();
+        assertEquals("Gap color doesn't match the toolbar color.", mThemeColor,
+                gapBackgroundColor);
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_PROGRESS_BAR_VISUAL_UPDATE)
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBar_staticBackground() {
+        assertFalse(mProgressBar.useGradientDrawable());
+        assertTrue(mProgressBar.getDrawable() instanceof ClipDrawable);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_PROGRESS_BAR_VISUAL_UPDATE)
+    @Feature({"Android-Progress-Bar"})
+    public void testProgressBar_movableBackground() {
+        assertTrue(mProgressBar.useGradientDrawable());
+        Drawable drawable = mProgressBar.getDrawable();
+        assertTrue(drawable instanceof LayerDrawable);
+        LayerDrawable layerDrawable = (LayerDrawable) drawable;
+        assertTrue(layerDrawable.getNumberOfLayers() > 1);
     }
 }

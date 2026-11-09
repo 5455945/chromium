@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,16 @@
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace {
 
 constexpr base::TimeDelta kStyleChangeTransitionDuration =
-    base::TimeDelta::FromMilliseconds(200);
-constexpr base::TimeDelta kHiddenAnimationDuration =
-    base::TimeDelta::FromMilliseconds(300);
-constexpr base::TimeDelta kShowToastDuration = base::TimeDelta::FromSeconds(5);
+    base::Milliseconds(200);
+constexpr base::TimeDelta kHiddenAnimationDuration = base::Milliseconds(300);
+constexpr base::TimeDelta kShowToastDuration = base::Seconds(5);
 
 }  // namespace
 
@@ -64,19 +64,15 @@ void MediaRemotingInterstitial::Show(
   if (IsVisible())
     return;
   if (remote_device_friendly_name.IsEmpty()) {
-    cast_text_message_->setInnerText(
-        GetVideoElement().GetLocale().QueryString(
-            IDS_MEDIA_REMOTING_CAST_TO_UNKNOWN_DEVICE_TEXT),
-        ASSERT_NO_EXCEPTION);
+    cast_text_message_->setInnerText(GetVideoElement().GetLocale().QueryString(
+        IDS_MEDIA_REMOTING_CAST_TO_UNKNOWN_DEVICE_TEXT));
   } else {
-    cast_text_message_->setInnerText(
-        GetVideoElement().GetLocale().QueryString(IDS_MEDIA_REMOTING_CAST_TEXT,
-                                                  remote_device_friendly_name),
-        ASSERT_NO_EXCEPTION);
+    cast_text_message_->setInnerText(GetVideoElement().GetLocale().QueryString(
+        IDS_MEDIA_REMOTING_CAST_TEXT, remote_device_friendly_name));
   }
   if (toggle_interstitial_timer_.IsActive())
     toggle_interstitial_timer_.Stop();
-  state_ = VISIBLE;
+  state_ = kVisible;
   RemoveInlineStyleProperty(CSSPropertyID::kDisplay);
   SetInlineStyleProperty(CSSPropertyID::kOpacity, 0,
                          CSSPrimitiveValue::UnitType::kNumber);
@@ -89,21 +85,33 @@ void MediaRemotingInterstitial::Hide(int error_code) {
     return;
   if (toggle_interstitial_timer_.IsActive())
     toggle_interstitial_timer_.Stop();
-  if (error_code == WebMediaPlayerClient::kMediaRemotingStopNoText) {
-    state_ = HIDDEN;
+  if (!isConnected()) {
+    // Nothing is being rendered, so immediately hide the interstitial
+    // without scheduling a fade-out transition timer.
+    state_ = kHidden;
+    DidHide();
+    return;
+  }
+  if (error_code == MediaPlayerClient::kMediaRemotingStopNoText) {
+    state_ = kHidden;
   } else {
     String stop_text =
         GetVideoElement().GetLocale().QueryString(IDS_MEDIA_REMOTING_STOP_TEXT);
     if (error_code != IDS_MEDIA_REMOTING_STOP_TEXT) {
-      stop_text = GetVideoElement().GetLocale().QueryString(error_code) + ", " +
-                  stop_text;
+      stop_text = StrCat({GetVideoElement().GetLocale().QueryString(error_code),
+                          ", ", stop_text});
     }
-    toast_message_->setInnerText(stop_text, ASSERT_NO_EXCEPTION);
-    state_ = TOAST;
+    toast_message_->setInnerText(stop_text);
+    state_ = kToast;
   }
   SetInlineStyleProperty(CSSPropertyID::kOpacity, 0,
                          CSSPrimitiveValue::UnitType::kNumber);
   toggle_interstitial_timer_.StartOneShot(kHiddenAnimationDuration, FROM_HERE);
+}
+
+void MediaRemotingInterstitial::DidHide() {
+  SetInlineStyleProperty(CSSPropertyID::kDisplay, CSSValueID::kNone);
+  toast_message_->setInnerText(WebString());
 }
 
 void MediaRemotingInterstitial::ToggleInterstitialTimerFired(TimerBase*) {
@@ -118,9 +126,8 @@ void MediaRemotingInterstitial::ToggleInterstitialTimerFired(TimerBase*) {
     SetInlineStyleProperty(CSSPropertyID::kBackgroundColor, CSSValueID::kBlack);
     SetInlineStyleProperty(CSSPropertyID::kOpacity, 1,
                            CSSPrimitiveValue::UnitType::kNumber);
-  } else if (state_ == HIDDEN) {
-    SetInlineStyleProperty(CSSPropertyID::kDisplay, CSSValueID::kNone);
-    toast_message_->setInnerText(WebString(), ASSERT_NO_EXCEPTION);
+  } else if (state_ == kHidden) {
+    DidHide();
   } else {
     // Show |toast_message_| only.
     toast_message_->RemoveInlineStyleProperty(CSSPropertyID::kDisplay);
@@ -136,7 +143,7 @@ void MediaRemotingInterstitial::ToggleInterstitialTimerFired(TimerBase*) {
                                                CSSValueID::kNone);
     toast_message_->SetInlineStyleProperty(
         CSSPropertyID::kOpacity, 1, CSSPrimitiveValue::UnitType::kNumber);
-    state_ = HIDDEN;
+    state_ = kHidden;
     toggle_interstitial_timer_.StartOneShot(kShowToastDuration, FROM_HERE);
   }
 }

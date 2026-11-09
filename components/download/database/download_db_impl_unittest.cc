@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/uuid.h"
 #include "components/download/database/download_db_conversions.h"
 #include "components/download/database/download_db_entry.h"
 #include "components/download/database/proto/download_entry.pb.h"
@@ -25,7 +26,7 @@ namespace {
 DownloadDBEntry CreateDownloadDBEntry() {
   DownloadDBEntry entry;
   DownloadInfo download_info;
-  download_info.guid = base::GenerateGUID();
+  download_info.guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   entry.download_info = download_info;
   return entry;
 }
@@ -41,6 +42,9 @@ std::string GetKey(const std::string& guid) {
 class DownloadDBTest : public testing::Test {
  public:
   DownloadDBTest() : db_(nullptr), init_success_(false) {}
+
+  DownloadDBTest(const DownloadDBTest&) = delete;
+  DownloadDBTest& operator=(const DownloadDBTest&) = delete;
 
   ~DownloadDBTest() override = default;
 
@@ -86,10 +90,11 @@ class DownloadDBTest : public testing::Test {
 
  protected:
   std::map<std::string, download_pb::DownloadDBEntry> db_entries_;
-  leveldb_proto::test::FakeDB<download_pb::DownloadDBEntry>* db_;
+  raw_ptr<leveldb_proto::test::FakeDB<download_pb::DownloadDBEntry>,
+          DanglingUntriaged>
+      db_;
   std::unique_ptr<DownloadDBImpl> download_db_;
   bool init_success_;
-  DISALLOW_COPY_AND_ASSIGN(DownloadDBTest);
 };
 
 TEST_F(DownloadDBTest, InitializeSucceeded) {

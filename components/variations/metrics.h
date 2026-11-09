@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,19 @@
 #define COMPONENTS_VARIATIONS_METRICS_H_
 
 #include "base/component_export.h"
-#include "build/build_config.h"
 
 namespace variations {
 
-#if defined(OS_ANDROID)
-// The result of importing a seed during Android first run.
+// The result of importing a seed during first run.
 // Note: UMA histogram enum - don't re-order or remove entries.
 enum class FirstRunSeedImportResult {
-  SUCCESS,
-  FAIL_NO_CALLBACK,
-  FAIL_NO_FIRST_RUN_SEED,
-  FAIL_STORE_FAILED,
-  FAIL_INVALID_RESPONSE_DATE,
-  ENUM_SIZE
+  kSuccess = 0,
+  kFailNoCallback = 1,
+  kFailNoFirstRunSeed = 2,
+  kFailStoreFailed = 3,
+  kFailInvalidResponseDate = 4,
+  kMaxValue = kFailInvalidResponseDate
 };
-#endif  // OS_ANDROID
 
 // The result of attempting to load a variations seed during startup.
 //
@@ -29,6 +26,7 @@ enum class FirstRunSeedImportResult {
 // numeric values should never be reused.
 //
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.variations
+// LINT.IfChange(LoadSeedResult)
 enum class LoadSeedResult {
   kSuccess = 0,
   kEmpty = 1,
@@ -40,62 +38,123 @@ enum class LoadSeedResult {
   kLoadTimedOut = 7,
   kLoadInterrupted = 8,
   kLoadOtherFailure = 9,
-  kMaxValue = kLoadOtherFailure,
+  kExceedsUncompressedSizeLimit = 10,
+  kErrorReadingFile = 11,
+  kSeedInfoParseToProtoError = 12,
+  kZstdContentSizeError = 13,
+  kCorruptZstd = 14,
+  kFileNotFound = 15,
+  kMaxValue = kFileNotFound,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/variations/enums.xml:VariationsSeedLoadResult)
 
 // The result of attempting to store a variations seed received from the server.
-// Note: UMA histogram enum - don't re-order or remove entries.
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(StoreSeedResult)
 enum class StoreSeedResult {
-  SUCCESS,
-  FAILED_EMPTY,
-  FAILED_PARSE,
-  FAILED_SIGNATURE,
-  FAILED_GZIP,
-  DELTA_COUNT_OBSOLETE,
-  FAILED_DELTA_READ_SEED,
-  FAILED_DELTA_APPLY,
-  FAILED_DELTA_STORE,
-  FAILED_UNGZIP,
-  FAILED_EMPTY_GZIP_CONTENTS,
-  FAILED_UNSUPPORTED_SEED_FORMAT,
+  kSuccess = 0,
+  // kFailedEmpty = 1,  // Deprecated.
+  kFailedParse = 2,
+  kFailedSignature = 3,
+  kFailedGzip = 4,
+  // kDeltaCount = 5,  // Deprecated.
+  kFailedDeltaReadSeed = 6,
+  kFailedDeltaApply = 7,
+  kFailedDeltaStore = 8,
+  kFailedUngzip = 9,
+  kFailedEmptyGzipContents = 10,
+  kFailedUnsupportedSeedFormat = 11,
   // The following are not so much a result of the seed store, but rather
   // counting the types of seeds the SeedStore() function saw. Kept in the same
   // histogram for efficiency and convenience of comparing against the other
   // values.
-  GZIP_DELTA_COUNT,
-  NON_GZIP_DELTA_COUNT,
-  GZIP_FULL_COUNT,
-  NON_GZIP_FULL_COUNT,
-  ENUM_SIZE
+  kGzipDeltaCount = 12,
+  kNonGzipDeltaCount = 13,
+  kGzipFullCount = 14,
+  kNonGzipFullCount = 15,
+  // The uncompressed size of the seed exceeded the limit.
+  kUncompressedSizeLimitExceeded = 16,
+  kMaxValue = kUncompressedSizeLimitExceeded,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/variations/enums.xml:VariationsSeedStoreResult)
 
 // The result of updating the date associated with an existing stored variations
 // seed.
 // Note: UMA histogram enum - don't re-order or remove entries.
+// LINT.IfChange(UpdateSeedDateResult)
 enum class UpdateSeedDateResult {
-  NO_OLD_DATE,
-  NEW_DATE_IS_OLDER,
-  SAME_DAY,
-  NEW_DAY,
-  ENUM_SIZE
+  kNoOldDate = 0,
+  kNewDateIsOlder = 1,
+  kSameDay = 2,
+  kNewDay = 3,
+  // The response did not provide a trusted server date. Takes precedence over
+  // kNoOldDate.
+  kNoNewDate = 4,
+  kMaxValue = kNoNewDate,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/variations/enums.xml:UpdateSeedDateResult)
 
 // The result of verifying a variation seed's signature.
 // Note: UMA histogram enum - don't re-order or remove entries.
 enum class VerifySignatureResult {
-  MISSING_SIGNATURE,
-  DECODE_FAILED,
-  INVALID_SIGNATURE,
-  INVALID_SEED,
-  VALID_SIGNATURE,
-  ENUM_SIZE
+  kMissingSignature = 0,
+  kDecodeFailed = 1,
+  // kInvalidPublicKey = 2, // no longer used
+  kInvalidSeedSignature = 3,
+  kValidSignature = 4,
+  kMaxValue = kValidSignature,
 };
 
-#if defined(OS_ANDROID)
-// Records the result of importing a seed during Android first run.
+// The result of attempting to prepare runtime mutable changes from a new seed.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(VariationsPrepareRuntimeMutableChangesResult)
+enum class PrepareRuntimeMutableChangesResult {
+  // Reserve the default/uninitialized value. This should not be used.
+  kUnknown = 0,
+  kSuccess = 1,
+  kSimulatedGroupIsNull = 2,
+  kSimulatedGroupNotFound = 3,
+  // Deprecated: runtime mutability now allows enabling features as well as
+  // killswitches, so this will no longer be recorded.
+  // kNotStrictKillswitch = 4,
+  // Deprecated: both ACTIVATE_ON_STARTUP and ACTIVATE_ON_QUERY are now
+  // supported; replaced by kInvalidActivationType.
+  // kNotStartsActive = 5,
+  kNotPermanentConsistency = 6,
+  kAlreadyApplied = 7,
+  kNonRuntimeMutableFeature = 8,
+  kFeatureOverriddenFromCommandLine = 9,
+  kFeaturesNotControlledBySameTrial = 10,
+  kControllingTrialHasOtherFeatures = 11,
+  kTrialNameCollision = 12,
+  kControllingTrialNotFound = 13,
+  // Deprecated: preparing the feature state update is now CHECK()ed, so this
+  // can no longer be recorded.
+  // kPrepareFeatureStateUpdateFailed = 14,
+  kRuntimeExperimentHasGoogleWebId = 15,
+  kOverriddenTrialHasGoogleWebId = 16,
+  // Deprecated: runtime mutability now supports experiment params, so this will
+  // no longer be recorded.
+  // kRuntimeExperimentHasParams = 17,
+  kFeatureBothEnabledAndDisabled = 18,
+  kInvalidActivationType = 19,
+  kLowAnonymityStudy = 20,
+  kMaxValue = kLowAnonymityStudy,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/variations/enums.xml:VariationsPrepareRuntimeMutableChangesResult)
+
+// Describes instance manipulations applied to data.
+struct InstanceManipulations {
+  const bool gzip_compressed;
+  const bool delta_compressed;
+};
+
+// Records the result of importing a seed during first run.
 COMPONENT_EXPORT(VARIATIONS)
 void RecordFirstRunSeedImportResult(FirstRunSeedImportResult result);
-#endif  // OS_ANDROID
 
 // Records the result of attempting to load the latest variations seed on
 // startup.
@@ -108,6 +167,17 @@ void RecordLoadSafeSeedResult(LoadSeedResult state);
 // Records the result of attempting to store a variations seed received from the
 // server.
 COMPONENT_EXPORT(VARIATIONS) void RecordStoreSeedResult(StoreSeedResult result);
+
+// Records the result of attempting to store a seed as the safe seed.
+COMPONENT_EXPORT(VARIATIONS)
+void RecordStoreSafeSeedResult(StoreSeedResult result);
+
+// Reports to UMA that the seed format specified by the server is unsupported.
+COMPONENT_EXPORT(VARIATIONS) void ReportUnsupportedSeedFormatError();
+
+// Records the instance manipulations a seed was received with.
+COMPONENT_EXPORT(VARIATIONS)
+void RecordSeedInstanceManipulations(const InstanceManipulations& im);
 
 }  // namespace variations
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,22 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/uuid.h"
+#include "build/build_config.h"
 #include "content/browser/browser_main_loop.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/media/video_capture_manager.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_paths.h"
@@ -31,13 +31,14 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/browser/shell_javascript_dialog_manager.h"
+#include "media/capture/video/video_capture_device_enumeration_mode_util.h"
 #include "net/base/filename_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/views/test/desktop_window_tree_host_win_test_api.h"  // nogncheck
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_win.h"
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace content {
 
@@ -98,7 +99,10 @@ bool NavigateToURL(Shell* window,
 bool NavigateToURLAndExpectNoCommit(Shell* window, const GURL& url) {
   NavigationEntry* old_entry =
       window->web_contents()->GetController().GetLastCommittedEntry();
-  NavigateToURLBlockUntilNavigationsComplete(window->web_contents(), url, 1);
+  NavigateToURLBlockUntilNavigationsComplete(
+      window->web_contents(), url,
+      /*number_of_navigations=*/1,
+      /*ignore_uncommitted_navigations=*/false);
   NavigationEntry* new_entry =
       window->web_contents()->GetController().GetLastCommittedEntry();
   return old_entry == new_entry;
@@ -135,7 +139,7 @@ void AppModalDialogWaiter::EarlyCallback() {
 }
 
 RenderFrameHost* ConvertToRenderFrameHost(Shell* shell) {
-  return shell->web_contents()->GetMainFrame();
+  return shell->web_contents()->GetPrimaryMainFrame();
 }
 
 void LookupAndLogNameAndIdOfFirstCamera() {
@@ -149,10 +153,17 @@ void LookupAndLogNameAndIdOfFirstCamera() {
           [](MediaStreamManager* media_stream_manager,
              base::OnceClosure quit_closure) {
             media_stream_manager->video_capture_manager()->EnumerateDevices(
+                media::GetDefaultVideoEnumerationMode(),
                 base::BindOnce(
                     [](base::OnceClosure quit_closure,
+                       media::mojom::DeviceEnumerationResult result,
                        const media::VideoCaptureDeviceDescriptors&
                            descriptors) {
+                      if (result !=
+                          media::mojom::DeviceEnumerationResult::kSuccess) {
+                        LOG(WARNING) << "Camera enumeration failed";
+                        return;
+                      }
                       if (descriptors.empty()) {
                         LOG(WARNING) << "No camera found";
                         return;
@@ -201,6 +212,14 @@ void IsolateOriginsForTesting(
         url::Origin::Create(GURL(std::string("http://") + hostname + "/")));
   }
 
+  IsolateOriginsForTesting(embedded_test_server, web_contents,
+                           origins_to_isolate);
+}
+
+void IsolateOriginsForTesting(
+    net::test_server::EmbeddedTestServer* embedded_test_server,
+    WebContents* web_contents,
+    std::vector<url::Origin> origins_to_isolate) {
   auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
   policy->AddFutureIsolatedOrigins(
       origins_to_isolate,
@@ -212,13 +231,14 @@ void IsolateOriginsForTesting(
   scoped_refptr<SiteInstanceImpl> new_site_instance;
   do {
     old_site_instance = static_cast<SiteInstanceImpl*>(
-        web_contents->GetMainFrame()->GetSiteInstance());
-    std::string cross_site_hostname = base::GenerateGUID() + ".com";
+        web_contents->GetPrimaryMainFrame()->GetSiteInstance());
+    std::string cross_site_hostname =
+        base::Uuid::GenerateRandomV4().AsLowercaseString() + ".com";
     EXPECT_TRUE(NavigateToURL(
         web_contents,
         embedded_test_server->GetURL(cross_site_hostname, "/title1.html")));
     new_site_instance = static_cast<SiteInstanceImpl*>(
-        web_contents->GetMainFrame()->GetSiteInstance());
+        web_contents->GetPrimaryMainFrame()->GetSiteInstance());
 
     // The navigation might need to be repeated until we actually swap the
     // SiteInstance (no swap might happen when navigating away from the initial,
@@ -236,7 +256,7 @@ void IsolateOriginsForTesting(
   }
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
 void SetMockCursorPositionForTesting(WebContents* web_contents,
                                      const gfx::Point& position) {
@@ -246,6 +266,6 @@ void SetMockCursorPositionForTesting(WebContents* web_contents,
   host.SetMockCursorPositionForTesting(position);
 }
 
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace content

@@ -1,11 +1,13 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 source_set("generic_sensor") {
   sources = [
-    "sensor_reading.cc",
-    "sensor_reading.h",
+    "orientation_util.cc",
+    "orientation_util.h",
+    "sensor_reading_shared_buffer.cc",
+    "sensor_reading_shared_buffer.h",
     "sensor_reading_shared_buffer_reader.cc",
     "sensor_reading_shared_buffer_reader.h",
     "sensor_traits.cc",
@@ -14,12 +16,14 @@ source_set("generic_sensor") {
 
   public_deps = [
     ":sensor_configuration",
+    ":sensor_reading",
     "//services/device/public/mojom:generic_sensor",
   ]
 
   deps = [
     "//base",
     "//device/base/synchronization",
+    "//ui/gfx/geometry",
   ]
 }
 
@@ -30,4 +34,11 @@ source_set("sensor_configuration") {
   ]
 
   deps = [ "//base" ]
+}
+
+source_set("sensor_reading") {
+  sources = [
+    "sensor_reading.cc",
+    "sensor_reading.h",
+  ]
 }

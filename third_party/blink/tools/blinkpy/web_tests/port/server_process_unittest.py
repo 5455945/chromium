@@ -26,6 +26,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import platform
 import sys
 import time
 import unittest
@@ -90,17 +91,22 @@ class FakeServerProcess(server_process.ServerProcess):
 
 
 class TestServerProcess(unittest.TestCase):
+    @unittest.skipIf(
+        platform.mac_ver()[0].startswith('12'),
+        "Failing on macOS 12; see crbug.com/474036848",
+    )
     def test_basic(self):
         cmd = [
-            sys.executable, '-c',
-            'import sys; import time; time.sleep(0.02); print "stdout"; sys.stdout.flush(); print >>sys.stderr, "stderr"'
+            sys.executable,
+            '-c',
+            'import sys; import time; time.sleep(0.02); print "stdout"; sys.stdout.flush(); print >>sys.stderr, "stderr"',
         ]
         host = SystemHost()
         factory = PortFactory(host)
         port = factory.get()
         now = time.time()
         proc = server_process.ServerProcess(port, 'python', cmd)
-        proc.write('')
+        proc.write(b'')
 
         self.assertIsNone(proc.poll())
         self.assertFalse(proc.has_crashed())
@@ -125,7 +131,8 @@ class TestServerProcess(unittest.TestCase):
     def test_cleanup(self):
         port_obj = TrivialMockPort()
         server_process = FakeServerProcess(
-            port_obj=port_obj, name="test", cmd=["test"])
+            port_obj=port_obj, name="test", cmd=["test"]
+        )
         server_process._start()
         server_process.stop()
         self.assertTrue(server_process.stdin.closed)
@@ -137,8 +144,9 @@ class TestServerProcess(unittest.TestCase):
 
         port_obj.host.platform.os_name = 'win'
         server_process = FakeServerProcess(
-            port_obj=port_obj, name="test", cmd=["test"])
-        server_process.write("should break")
+            port_obj=port_obj, name="test", cmd=["test"]
+        )
+        server_process.write(b"should break")
         self.assertTrue(server_process.has_crashed())
         self.assertIsNotNone(server_process.pid())
         self.assertIsNone(server_process._proc)
@@ -146,8 +154,9 @@ class TestServerProcess(unittest.TestCase):
 
         port_obj.host.platform.os_name = 'mac'
         server_process = FakeServerProcess(
-            port_obj=port_obj, name="test", cmd=["test"])
-        server_process.write("should break")
+            port_obj=port_obj, name="test", cmd=["test"]
+        )
+        server_process.write(b"should break")
         self.assertTrue(server_process.has_crashed())
         self.assertIsNone(server_process._proc)
         self.assertEqual(server_process.broken_pipes, [server_process.stdin])

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/types/expected.h"
 #include "components/update_client/protocol_parser.h"
 
 namespace update_client {
@@ -18,11 +18,15 @@ class ProtocolParserJSON final : public ProtocolParser {
  public:
   ProtocolParserJSON() = default;
 
+  ProtocolParserJSON(const ProtocolParserJSON&) = delete;
+  ProtocolParserJSON& operator=(const ProtocolParserJSON&) = delete;
+
+  static base::expected<Results, std::string> ParseJSON(
+      const std::string& json);
+
  private:
   // Overrides for ProtocolParser.
-  bool DoParse(const std::string& response_json, Results* results) override;
-
-  DISALLOW_COPY_AND_ASSIGN(ProtocolParserJSON);
+  bool DoParse(std::string_view response_json, Results* results) override;
 };
 
 }  // namespace update_client

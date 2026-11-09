@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,9 @@
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/public/mojom/service_worker/navigation_preload_state.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_navigation_preload_state.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_service_worker_update_via_cache.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -22,10 +24,9 @@
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_container.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_error.h"
-#include "third_party/blink/renderer/modules/service_worker/service_worker_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher_properties.h"
@@ -34,26 +35,25 @@ namespace blink {
 
 namespace {
 
-void DidUpdate(ScriptPromiseResolver* resolver,
+void DidUpdate(ScriptPromiseResolver<ServiceWorkerRegistration>* resolver,
                ServiceWorkerRegistration* registration,
                mojom::ServiceWorkerErrorType error,
                const String& error_msg) {
-  if (!resolver->GetExecutionContext() ||
-      resolver->GetExecutionContext()->IsContextDestroyed()) {
+  if (!resolver->GetExecutionContext()) {
     return;
   }
 
+  ScriptState::Scope scope(resolver->GetScriptState());
   if (error != mojom::ServiceWorkerErrorType::kNone) {
     DCHECK(!error_msg.IsNull());
-    ScriptState::Scope scope(resolver->GetScriptState());
-    resolver->Reject(ServiceWorkerErrorForUpdate::Take(
-        resolver, WebServiceWorkerError(error, error_msg)));
+    resolver->Reject(ServiceWorkerErrorForUpdate::AsJSException(
+        resolver->GetScriptState(), error, error_msg));
     return;
   }
   resolver->Resolve(registration);
 }
 
-void DidUnregister(ScriptPromiseResolver* resolver,
+void DidUnregister(ScriptPromiseResolver<IDLBoolean>* resolver,
                    mojom::ServiceWorkerErrorType error,
                    const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
@@ -64,14 +64,13 @@ void DidUnregister(ScriptPromiseResolver* resolver,
   if (error != mojom::ServiceWorkerErrorType::kNone &&
       error != mojom::ServiceWorkerErrorType::kNotFound) {
     DCHECK(!error_msg.IsNull());
-    resolver->Reject(
-        ServiceWorkerError::GetException(resolver, error, error_msg));
+    resolver->Reject(ServiceWorkerError::AsException(error, error_msg));
     return;
   }
   resolver->Resolve(error == mojom::ServiceWorkerErrorType::kNone);
 }
 
-void DidEnableNavigationPreload(ScriptPromiseResolver* resolver,
+void DidEnableNavigationPreload(ScriptPromiseResolver<IDLUndefined>* resolver,
                                 mojom::ServiceWorkerErrorType error,
                                 const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
@@ -81,15 +80,14 @@ void DidEnableNavigationPreload(ScriptPromiseResolver* resolver,
 
   if (error != mojom::ServiceWorkerErrorType::kNone) {
     DCHECK(!error_msg.IsNull());
-    resolver->Reject(
-        ServiceWorkerError::GetException(resolver, error, error_msg));
+    resolver->Reject(ServiceWorkerError::AsException(error, error_msg));
     return;
   }
   resolver->Resolve();
 }
 
 void DidGetNavigationPreloadState(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<NavigationPreloadState>* resolver,
     mojom::ServiceWorkerErrorType error,
     const String& error_msg,
     mojom::blink::NavigationPreloadStatePtr state) {
@@ -100,8 +98,7 @@ void DidGetNavigationPreloadState(
 
   if (error != mojom::ServiceWorkerErrorType::kNone) {
     DCHECK(!error_msg.IsNull());
-    resolver->Reject(
-        ServiceWorkerError::GetException(resolver, error, error_msg));
+    resolver->Reject(ServiceWorkerError::AsException(error, error_msg));
     return;
   }
   NavigationPreloadState* dict = NavigationPreloadState::Create();
@@ -110,9 +107,10 @@ void DidGetNavigationPreloadState(
   resolver->Resolve(dict);
 }
 
-void DidSetNavigationPreloadHeader(ScriptPromiseResolver* resolver,
-                                   mojom::ServiceWorkerErrorType error,
-                                   const String& error_msg) {
+void DidSetNavigationPreloadHeader(
+    ScriptPromiseResolver<IDLUndefined>* resolver,
+    mojom::ServiceWorkerErrorType error,
+    const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
       resolver->GetExecutionContext()->IsContextDestroyed()) {
     return;
@@ -120,8 +118,7 @@ void DidSetNavigationPreloadHeader(ScriptPromiseResolver* resolver,
 
   if (error != mojom::ServiceWorkerErrorType::kNone) {
     DCHECK(!error_msg.IsNull());
-    resolver->Reject(
-        ServiceWorkerError::GetException(resolver, error, error_msg));
+    resolver->Reject(ServiceWorkerError::AsException(error, error_msg));
     return;
   }
   resolver->Resolve();
@@ -129,20 +126,15 @@ void DidSetNavigationPreloadHeader(ScriptPromiseResolver* resolver,
 
 }  // namespace
 
-ServiceWorkerRegistration* ServiceWorkerRegistration::Take(
-    ScriptPromiseResolver* resolver,
-    WebServiceWorkerRegistrationObjectInfo info) {
-  return ServiceWorkerContainer::From(
-             *To<LocalDOMWindow>(resolver->GetExecutionContext()))
-      ->GetOrCreateServiceWorkerRegistration(std::move(info));
-}
-
 ServiceWorkerRegistration::ServiceWorkerRegistration(
     ExecutionContext* execution_context,
     WebServiceWorkerRegistrationObjectInfo info)
-    : ExecutionContextLifecycleObserver(execution_context),
+    : ActiveScriptWrappable<ServiceWorkerRegistration>({}),
+      ExecutionContextLifecycleObserver(execution_context),
       registration_id_(info.registration_id),
       scope_(std::move(info.scope)),
+      host_(execution_context),
+      receiver_(this, execution_context),
       stopped_(false) {
   DCHECK_NE(mojom::blink::kInvalidServiceWorkerRegistrationId,
             registration_id_);
@@ -152,9 +144,12 @@ ServiceWorkerRegistration::ServiceWorkerRegistration(
 ServiceWorkerRegistration::ServiceWorkerRegistration(
     ExecutionContext* execution_context,
     mojom::blink::ServiceWorkerRegistrationObjectInfoPtr info)
-    : ExecutionContextLifecycleObserver(execution_context),
+    : ActiveScriptWrappable<ServiceWorkerRegistration>({}),
+      ExecutionContextLifecycleObserver(execution_context),
       registration_id_(info->registration_id),
       scope_(std::move(info->scope)),
+      host_(execution_context),
+      receiver_(this, execution_context),
       stopped_(false) {
   DCHECK_NE(mojom::blink::kInvalidServiceWorkerRegistrationId,
             registration_id_);
@@ -178,11 +173,11 @@ ServiceWorkerRegistration::ServiceWorkerRegistration(
 void ServiceWorkerRegistration::Attach(
     WebServiceWorkerRegistrationObjectInfo info) {
   DCHECK_EQ(registration_id_, info.registration_id);
-  DCHECK_EQ(scope_.GetString(), WTF::String(info.scope.GetString()));
+  DCHECK_EQ(scope_.GetString(), String(info.scope.GetString()));
 
   // If |host_| is bound, it already points to the same object host as
   // |info.host_remote|, so there is no need to bind again.
-  if (!host_) {
+  if (!host_.is_bound()) {
     host_.Bind(std::move(info.host_remote),
                GetExecutionContext()->GetTaskRunner(
                    blink::TaskType::kInternalDefault));
@@ -214,48 +209,60 @@ const AtomicString& ServiceWorkerRegistration::InterfaceName() const {
 NavigationPreloadManager* ServiceWorkerRegistration::navigationPreload() {
   if (!navigation_preload_)
     navigation_preload_ = MakeGarbageCollected<NavigationPreloadManager>(this);
-  return navigation_preload_;
+  return navigation_preload_.Get();
 }
 
 String ServiceWorkerRegistration::scope() const {
   return scope_.GetString();
 }
 
-String ServiceWorkerRegistration::updateViaCache() const {
+V8ServiceWorkerUpdateViaCache ServiceWorkerRegistration::updateViaCache()
+    const {
   switch (update_via_cache_) {
     case mojom::ServiceWorkerUpdateViaCache::kImports:
-      return "imports";
+      return V8ServiceWorkerUpdateViaCache(
+          V8ServiceWorkerUpdateViaCache::Enum::kImports);
     case mojom::ServiceWorkerUpdateViaCache::kAll:
-      return "all";
+      return V8ServiceWorkerUpdateViaCache(
+          V8ServiceWorkerUpdateViaCache::Enum::kAll);
     case mojom::ServiceWorkerUpdateViaCache::kNone:
-      return "none";
+      return V8ServiceWorkerUpdateViaCache(
+          V8ServiceWorkerUpdateViaCache::Enum::kNone);
   }
   NOTREACHED();
-  return "";
 }
 
 void ServiceWorkerRegistration::EnableNavigationPreload(
     bool enable,
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
+  if (!host_.is_bound()) {
+    return;
+  }
   host_->EnableNavigationPreload(
-      enable, WTF::Bind(&DidEnableNavigationPreload, WrapPersistent(resolver)));
+      enable, BindOnce(&DidEnableNavigationPreload, WrapPersistent(resolver)));
 }
 
 void ServiceWorkerRegistration::GetNavigationPreloadState(
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<NavigationPreloadState>* resolver) {
+  if (!host_.is_bound()) {
+    return;
+  }
   host_->GetNavigationPreloadState(
-      WTF::Bind(&DidGetNavigationPreloadState, WrapPersistent(resolver)));
+      BindOnce(&DidGetNavigationPreloadState, WrapPersistent(resolver)));
 }
 
 void ServiceWorkerRegistration::SetNavigationPreloadHeader(
     const String& value,
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
+  if (!host_.is_bound()) {
+    return;
+  }
   host_->SetNavigationPreloadHeader(
       value,
-      WTF::Bind(&DidSetNavigationPreloadHeader, WrapPersistent(resolver)));
+      BindOnce(&DidSetNavigationPreloadHeader, WrapPersistent(resolver)));
 }
 
-ScriptPromise ServiceWorkerRegistration::update(
+ScriptPromise<ServiceWorkerRegistration> ServiceWorkerRegistration::update(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   if (!GetExecutionContext()) {
@@ -263,7 +270,7 @@ ScriptPromise ServiceWorkerRegistration::update(
         DOMExceptionCode::kInvalidStateError,
         "Failed to update a ServiceWorkerRegistration: No associated provider "
         "is available.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   auto* execution_context = ExecutionContext::From(script_state);
@@ -273,7 +280,7 @@ ScriptPromise ServiceWorkerRegistration::update(
           ->GetProperties()
           .GetFetchClientSettingsObject();
   auto mojom_settings_object = mojom::blink::FetchClientSettingsObject::New(
-      settings_object.GetReferrerPolicy(),
+      settings_object.GetPolicyContainerPolicies().Clone(),
       KURL(settings_object.GetOutgoingReferrer()),
       (settings_object.GetInsecureRequestsPolicy() &
        mojom::blink::InsecureRequestPolicy::kUpgradeInsecureRequests) !=
@@ -281,14 +288,27 @@ ScriptPromise ServiceWorkerRegistration::update(
           ? blink::mojom::InsecureRequestsPolicy::kUpgrade
           : blink::mojom::InsecureRequestsPolicy::kDoNotUpgrade);
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  host_->Update(
-      std::move(mojom_settings_object),
-      WTF::Bind(&DidUpdate, WrapPersistent(resolver), WrapPersistent(this)));
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<ServiceWorkerRegistration>>(
+          script_state);
+
+  // Defer update() from a prerendered page until page activation.
+  // https://wicg.github.io/nav-speculation/prerendering.html#patch-service-workers
+  if (GetExecutionContext()->IsWindow()) {
+    Document* document = To<LocalDOMWindow>(GetExecutionContext())->document();
+    if (document->IsPrerendering()) {
+      document->AddPostPrerenderingActivationStep(BindOnce(
+          &ServiceWorkerRegistration::UpdateInternal, WrapWeakPersistent(this),
+          std::move(mojom_settings_object), WrapPersistent(resolver)));
+      return resolver->Promise();
+    }
+  }
+
+  UpdateInternal(std::move(mojom_settings_object), resolver);
   return resolver->Promise();
 }
 
-ScriptPromise ServiceWorkerRegistration::unregister(
+ScriptPromise<IDLBoolean> ServiceWorkerRegistration::unregister(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   if (!GetExecutionContext()) {
@@ -296,10 +316,25 @@ ScriptPromise ServiceWorkerRegistration::unregister(
                                       "Failed to unregister a "
                                       "ServiceWorkerRegistration: No "
                                       "associated provider is available.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  host_->Unregister(WTF::Bind(&DidUnregister, WrapPersistent(resolver)));
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
+
+  // Defer unregister() from a prerendered page until page activation.
+  // https://wicg.github.io/nav-speculation/prerendering.html#patch-service-workers
+  if (GetExecutionContext()->IsWindow()) {
+    Document* document = To<LocalDOMWindow>(GetExecutionContext())->document();
+    if (document->IsPrerendering()) {
+      document->AddPostPrerenderingActivationStep(
+          BindOnce(&ServiceWorkerRegistration::UnregisterInternal,
+                   WrapWeakPersistent(this), WrapPersistent(resolver)));
+      return resolver->Promise();
+    }
+  }
+
+  UnregisterInternal(resolver);
   return resolver->Promise();
 }
 
@@ -315,7 +350,9 @@ void ServiceWorkerRegistration::Trace(Visitor* visitor) const {
   visitor->Trace(waiting_);
   visitor->Trace(active_);
   visitor->Trace(navigation_preload_);
-  EventTargetWithInlineData::Trace(visitor);
+  visitor->Trace(host_);
+  visitor->Trace(receiver_);
+  EventTarget::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
   Supplementable<ServiceWorkerRegistration>::Trace(visitor);
 }
@@ -356,6 +393,25 @@ void ServiceWorkerRegistration::SetUpdateViaCache(
 
 void ServiceWorkerRegistration::UpdateFound() {
   DispatchEvent(*Event::Create(event_type_names::kUpdatefound));
+}
+
+void ServiceWorkerRegistration::UpdateInternal(
+    mojom::blink::FetchClientSettingsObjectPtr mojom_settings_object,
+    ScriptPromiseResolver<ServiceWorkerRegistration>* resolver) {
+  if (!host_.is_bound()) {
+    return;
+  }
+  host_->Update(
+      std::move(mojom_settings_object),
+      BindOnce(&DidUpdate, WrapPersistent(resolver), WrapPersistent(this)));
+}
+
+void ServiceWorkerRegistration::UnregisterInternal(
+    ScriptPromiseResolver<IDLBoolean>* resolver) {
+  if (!host_.is_bound()) {
+    return;
+  }
+  host_->Unregister(BindOnce(&DidUnregister, WrapPersistent(resolver)));
 }
 
 }  // namespace blink

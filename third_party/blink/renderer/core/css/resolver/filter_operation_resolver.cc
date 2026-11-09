@@ -31,13 +31,12 @@
 #include "third_party/blink/renderer/core/css/resolver/filter_operation_resolver.h"
 
 #include "third_party/blink/renderer/core/css/css_function_value.h"
-#include "third_party/blink/renderer/core/css/css_primitive_value_mappings.h"
 #include "third_party/blink/renderer/core/css/css_uri_value.h"
 #include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver_state.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
@@ -49,89 +48,86 @@ FilterOperation::OperationType FilterOperationResolver::FilterOperationForType(
     CSSValueID type) {
   switch (type) {
     case CSSValueID::kGrayscale:
-      return FilterOperation::GRAYSCALE;
+      return FilterOperation::OperationType::kGrayscale;
     case CSSValueID::kSepia:
-      return FilterOperation::SEPIA;
+      return FilterOperation::OperationType::kSepia;
     case CSSValueID::kSaturate:
-      return FilterOperation::SATURATE;
+      return FilterOperation::OperationType::kSaturate;
     case CSSValueID::kHueRotate:
-      return FilterOperation::HUE_ROTATE;
+      return FilterOperation::OperationType::kHueRotate;
     case CSSValueID::kInvert:
-      return FilterOperation::INVERT;
+      return FilterOperation::OperationType::kInvert;
     case CSSValueID::kOpacity:
-      return FilterOperation::OPACITY;
+      return FilterOperation::OperationType::kOpacity;
     case CSSValueID::kBrightness:
-      return FilterOperation::BRIGHTNESS;
+      return FilterOperation::OperationType::kBrightness;
     case CSSValueID::kContrast:
-      return FilterOperation::CONTRAST;
+      return FilterOperation::OperationType::kContrast;
     case CSSValueID::kBlur:
-      return FilterOperation::BLUR;
+      return FilterOperation::OperationType::kBlur;
     case CSSValueID::kDropShadow:
-      return FilterOperation::DROP_SHADOW;
+      return FilterOperation::OperationType::kDropShadow;
     default:
       NOTREACHED();
-      // FIXME: We shouldn't have a type None since we never create them
-      return FilterOperation::NONE;
   }
 }
 
 static void CountFilterUse(FilterOperation::OperationType operation_type,
                            const Document& document) {
-  // This variable is always reassigned, but MSVC thinks it might be left
-  // uninitialized.
-  WebFeature feature = WebFeature::kNumberOfFeatures;
+  std::optional<WebFeature> feature;
   switch (operation_type) {
-    case FilterOperation::NONE:
-    case FilterOperation::BOX_REFLECT:
-    case FilterOperation::CONVOLVE_MATRIX:
-    case FilterOperation::COMPONENT_TRANSFER:
+    case FilterOperation::OperationType::kBoxReflect:
+    case FilterOperation::OperationType::kConvolveMatrix:
+    case FilterOperation::OperationType::kComponentTransfer:
+    case FilterOperation::OperationType::kTurbulence:
       NOTREACHED();
-      return;
-    case FilterOperation::REFERENCE:
+    case FilterOperation::OperationType::kReference:
       feature = WebFeature::kCSSFilterReference;
       break;
-    case FilterOperation::GRAYSCALE:
+    case FilterOperation::OperationType::kGrayscale:
       feature = WebFeature::kCSSFilterGrayscale;
       break;
-    case FilterOperation::SEPIA:
+    case FilterOperation::OperationType::kSepia:
       feature = WebFeature::kCSSFilterSepia;
       break;
-    case FilterOperation::SATURATE:
+    case FilterOperation::OperationType::kSaturate:
       feature = WebFeature::kCSSFilterSaturate;
       break;
-    case FilterOperation::HUE_ROTATE:
+    case FilterOperation::OperationType::kHueRotate:
       feature = WebFeature::kCSSFilterHueRotate;
       break;
-    case FilterOperation::LUMINANCE_TO_ALPHA:
+    case FilterOperation::OperationType::kLuminanceToAlpha:
       feature = WebFeature::kCSSFilterLuminanceToAlpha;
       break;
-    case FilterOperation::COLOR_MATRIX:
+    case FilterOperation::OperationType::kColorMatrix:
       feature = WebFeature::kCSSFilterColorMatrix;
       break;
-    case FilterOperation::INVERT:
+    case FilterOperation::OperationType::kInvert:
       feature = WebFeature::kCSSFilterInvert;
       break;
-    case FilterOperation::OPACITY:
+    case FilterOperation::OperationType::kOpacity:
       feature = WebFeature::kCSSFilterOpacity;
       break;
-    case FilterOperation::BRIGHTNESS:
+    case FilterOperation::OperationType::kBrightness:
       feature = WebFeature::kCSSFilterBrightness;
       break;
-    case FilterOperation::CONTRAST:
+    case FilterOperation::OperationType::kContrast:
       feature = WebFeature::kCSSFilterContrast;
       break;
-    case FilterOperation::BLUR:
+    case FilterOperation::OperationType::kBlur:
       feature = WebFeature::kCSSFilterBlur;
       break;
-    case FilterOperation::DROP_SHADOW:
+    case FilterOperation::OperationType::kDropShadow:
       feature = WebFeature::kCSSFilterDropShadow;
       break;
   };
-  document.CountUse(feature);
+  DCHECK(feature.has_value());
+  document.CountUse(*feature);
 }
 
 double FilterOperationResolver::ResolveNumericArgumentForFunction(
-    const CSSFunctionValue& filter) {
+    const CSSFunctionValue& filter,
+    const CSSLengthResolver& length_resolver) {
   switch (filter.FunctionType()) {
     case CSSValueID::kGrayscale:
     case CSSValueID::kSepia:
@@ -140,26 +136,57 @@ double FilterOperationResolver::ResolveNumericArgumentForFunction(
     case CSSValueID::kBrightness:
     case CSSValueID::kContrast:
     case CSSValueID::kOpacity: {
-      double amount = 1;
       if (filter.length() == 1) {
         const CSSPrimitiveValue& value = To<CSSPrimitiveValue>(filter.Item(0));
-        amount = value.GetDoubleValue();
-        if (value.IsPercentage())
-          amount /= 100;
+        double computed_value;
+        if (value.IsPercentage()) {
+          computed_value = value.ComputePercentage(length_resolver) / 100;
+        } else {
+          computed_value = value.ComputeNumber(length_resolver);
+        }
+        if (filter.FunctionType() != CSSValueID::kBrightness &&
+            filter.FunctionType() != CSSValueID::kSaturate &&
+            filter.FunctionType() != CSSValueID::kContrast) {
+          // Most values will be clamped at parse time, but the ones within
+          // calc() will not, so we need to clamp them again here.
+          return std::clamp(computed_value, 0.0, 1.0);
+        } else {
+          return computed_value;
+        }
       }
-      return amount;
+      return 1;
     }
     case CSSValueID::kHueRotate: {
       double angle = 0;
       if (filter.length() == 1) {
         const CSSPrimitiveValue& value = To<CSSPrimitiveValue>(filter.Item(0));
-        angle = value.ComputeDegrees();
+        angle = value.ComputeDegrees(length_resolver);
       }
       return angle;
     }
     default:
       return 0;
   }
+}
+
+// To avoid unnecessary filter invalidations, preserve the filter pointer from
+// the old style if the URL and resource match.
+static Filter* GetFilterFromOldStyle(const ComputedStyle* old_style,
+                                     const ReferenceFilterOperation& new_ref,
+                                     wtf_size_t index) {
+  if (!old_style || !old_style->HasFilter()) {
+    return nullptr;
+  }
+  const auto& ops = old_style->Filter().Operations();
+  if (index >= ops.size()) {
+    return nullptr;
+  }
+  auto* old_ref = DynamicTo<ReferenceFilterOperation>(ops[index].Get());
+  if (old_ref && old_ref->Url() == new_ref.Url() &&
+      old_ref->Resource() == new_ref.Resource()) {
+    return old_ref->GetFilter();
+  }
+  return nullptr;
 }
 
 FilterOperations FilterOperationResolver::CreateFilterOperations(
@@ -179,14 +206,15 @@ FilterOperations FilterOperationResolver::CreateFilterOperations(
   for (auto& curr_value : To<CSSValueList>(in_value)) {
     if (const auto* url_value =
             DynamicTo<cssvalue::CSSURIValue>(curr_value.Get())) {
-      CountFilterUse(FilterOperation::REFERENCE, state.GetDocument());
+      CountFilterUse(FilterOperation::OperationType::kReference,
+                     state.GetDocument());
 
-      SVGResource* resource =
-          state.GetElementStyleResources().GetSVGResourceFromValue(property_id,
-                                                                   *url_value);
-      operations.Operations().push_back(
-          MakeGarbageCollected<ReferenceFilterOperation>(
-              url_value->ValueForSerialization(), resource));
+      auto* new_op = MakeGarbageCollected<ReferenceFilterOperation>(
+          url_value->ValueForSerialization(),
+          state.GetSVGResource(property_id, *url_value));
+      new_op->SetFilter(
+          GetFilterFromOldStyle(state.OldStyle(), *new_op, operations.size()));
+      operations.Operations().push_back(new_op);
       continue;
     }
 
@@ -202,7 +230,8 @@ FilterOperations FilterOperationResolver::CreateFilterOperations(
       case CSSValueID::kHueRotate: {
         operations.Operations().push_back(
             MakeGarbageCollected<BasicColorMatrixFilterOperation>(
-                ResolveNumericArgumentForFunction(*filter_value),
+                ResolveNumericArgumentForFunction(*filter_value,
+                                                  conversion_data),
                 operation_type));
         break;
       }
@@ -212,7 +241,8 @@ FilterOperations FilterOperationResolver::CreateFilterOperations(
       case CSSValueID::kOpacity: {
         operations.Operations().push_back(
             MakeGarbageCollected<BasicComponentTransferFilterOperation>(
-                ResolveNumericArgumentForFunction(*filter_value),
+                ResolveNumericArgumentForFunction(*filter_value,
+                                                  conversion_data),
                 operation_type));
         break;
       }
@@ -230,17 +260,12 @@ FilterOperations FilterOperationResolver::CreateFilterOperations(
       case CSSValueID::kDropShadow: {
         ShadowData shadow = StyleBuilderConverter::ConvertShadow(
             conversion_data, &state, filter_value->Item(0));
-        // TODO(fs): Resolve 'currentcolor' when constructing the filter chain.
-        if (shadow.GetColor().IsCurrentColor()) {
-          shadow.OverrideColor(state.Style()->GetCurrentColor());
-        }
         operations.Operations().push_back(
             MakeGarbageCollected<DropShadowFilterOperation>(shadow));
         break;
       }
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -249,7 +274,7 @@ FilterOperations FilterOperationResolver::CreateFilterOperations(
 
 FilterOperations FilterOperationResolver::CreateOffscreenFilterOperations(
     const CSSValue& in_value,
-    const Font& font) {
+    const Font* font) {
   FilterOperations operations;
 
   if (auto* in_identifier_value = DynamicTo<CSSIdentifierValue>(in_value)) {
@@ -260,17 +285,21 @@ FilterOperations FilterOperationResolver::CreateOffscreenFilterOperations(
   // TODO(layout-dev): Should document zoom factor apply for offscreen canvas?
   float zoom = 1.0f;
   CSSToLengthConversionData::FontSizes font_sizes(
-      kOffScreenCanvasEmFontSize, kOffScreenCanvasRemFontSize, &font, zoom);
+      kOffScreenCanvasEmFontSize, kOffScreenCanvasRemFontSize, font, zoom);
+  CSSToLengthConversionData::LineHeightSize line_height_size;
   CSSToLengthConversionData::ViewportSize viewport_size(0, 0);
   CSSToLengthConversionData::ContainerSizes container_sizes;
-  CSSToLengthConversionData conversion_data(nullptr,  // ComputedStyle
-                                            font_sizes, viewport_size,
-                                            container_sizes,
-                                            1);  // zoom
+  CSSToLengthConversionData::AnchorData anchor_data;
+  CSSToLengthConversionData::Flags ignored_flags = 0;
+  CSSToLengthConversionData conversion_data(
+      WritingMode::kHorizontalTb, font_sizes, line_height_size, viewport_size,
+      container_sizes, anchor_data, 1 /* zoom */, ignored_flags,
+      /*element=*/nullptr);
 
   for (auto& curr_value : To<CSSValueList>(in_value)) {
-    if (curr_value->IsURIValue())
+    if (curr_value->IsURIValue()) {
       continue;
+    }
 
     const auto* filter_value = To<CSSFunctionValue>(curr_value.Get());
     FilterOperation::OperationType operation_type =
@@ -286,7 +315,8 @@ FilterOperations FilterOperationResolver::CreateOffscreenFilterOperations(
       case CSSValueID::kHueRotate: {
         operations.Operations().push_back(
             MakeGarbageCollected<BasicColorMatrixFilterOperation>(
-                ResolveNumericArgumentForFunction(*filter_value),
+                ResolveNumericArgumentForFunction(*filter_value,
+                                                  conversion_data),
                 operation_type));
         break;
       }
@@ -296,7 +326,8 @@ FilterOperations FilterOperationResolver::CreateOffscreenFilterOperations(
       case CSSValueID::kOpacity: {
         operations.Operations().push_back(
             MakeGarbageCollected<BasicComponentTransferFilterOperation>(
-                ResolveNumericArgumentForFunction(*filter_value),
+                ResolveNumericArgumentForFunction(*filter_value,
+                                                  conversion_data),
                 operation_type));
         break;
       }
@@ -314,17 +345,12 @@ FilterOperations FilterOperationResolver::CreateOffscreenFilterOperations(
       case CSSValueID::kDropShadow: {
         ShadowData shadow = StyleBuilderConverter::ConvertShadow(
             conversion_data, nullptr, filter_value->Item(0));
-        // For offscreen canvas, the default color is always black.
-        if (shadow.GetColor().IsCurrentColor()) {
-          shadow.OverrideColor(Color::kBlack);
-        }
         operations.Operations().push_back(
             MakeGarbageCollected<DropShadowFilterOperation>(shadow));
         break;
       }
       default:
         NOTREACHED();
-        break;
     }
   }
   return operations;

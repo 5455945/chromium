@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 
 #include "base/check_op.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/profiles/scoped_profile_keep_alive.h"
 #include "chrome/browser/ui/browser_window_state.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -21,16 +20,19 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/version_info/version_info.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/app_types.h"
-#include "chrome/browser/ui/views/touch_selection_menu_runner_chromeos.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/experiences/arc/touch_selection_menu/touch_selection_menu_runner_chromeos.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/frame/frame_utils.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/views/widget/widget_delegate.h"
 #endif
 
 // Helpers --------------------------------------------------------------------
@@ -38,8 +40,9 @@
 namespace {
 
 Profile* GetProfileForWindow(const views::Widget* window) {
-  if (!window)
-    return NULL;
+  if (!window) {
+    return nullptr;
+  }
   return reinterpret_cast<Profile*>(
       window->GetNativeWindowProperty(Profile::kProfileKey));
 }
@@ -61,11 +64,10 @@ PrefService* GetPrefsForWindow(const views::Widget* window) {
 
 }  // namespace
 
-
 // ChromeViewsDelegate --------------------------------------------------------
 
 ChromeViewsDelegate::ChromeViewsDelegate() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // ViewsDelegate's constructor may have created a menu runner already, and
   // since TouchSelectionMenuRunner is a singleton with checks to not
   // initialize it if there is already an existing runner we need to first
@@ -77,65 +79,66 @@ ChromeViewsDelegate::ChromeViewsDelegate() {
 }
 
 ChromeViewsDelegate::~ChromeViewsDelegate() {
-  DCHECK_EQ(0u, ref_count_);
+  CHECK_EQ(0u, ref_count_, base::NotFatalUntil::M162);
 }
 
-void ChromeViewsDelegate::SaveWindowPlacement(const views::Widget* window,
-                                              const std::string& window_name,
-                                              const gfx::Rect& bounds,
-                                              ui::WindowShowState show_state) {
+void ChromeViewsDelegate::SaveWindowPlacement(
+    const views::Widget* window,
+    const std::string& window_name,
+    const gfx::Rect& bounds,
+    ui::mojom::WindowShowState show_state) {
   PrefService* prefs = GetPrefsForWindow(window);
-  if (!prefs)
+  if (!prefs) {
     return;
+  }
 
-  std::unique_ptr<DictionaryPrefUpdate> pref_update =
-      chrome::GetWindowPlacementDictionaryReadWrite(window_name, prefs);
-  base::DictionaryValue* window_preferences = pref_update->Get();
-  window_preferences->SetInteger("left", bounds.x());
-  window_preferences->SetInteger("top", bounds.y());
-  window_preferences->SetInteger("right", bounds.right());
-  window_preferences->SetInteger("bottom", bounds.bottom());
-  window_preferences->SetBoolean("maximized",
-                                 show_state == ui::SHOW_STATE_MAXIMIZED);
+  std::unique_ptr<ScopedDictPrefUpdate> pref_update;
+  base::DictValue& window_preferences =
+      chrome::GetWindowPlacementDictionaryReadWrite(window_name, prefs,
+                                                    pref_update);
+  window_preferences.Set("left", bounds.x());
+  window_preferences.Set("top", bounds.y());
+  window_preferences.Set("right", bounds.right());
+  window_preferences.Set("bottom", bounds.bottom());
+  window_preferences.Set("maximized",
+                         show_state == ui::mojom::WindowShowState::kMaximized);
 
-  gfx::Rect work_area(display::Screen::GetScreen()
+  gfx::Rect work_area(display::Screen::Get()
                           ->GetDisplayNearestView(window->GetNativeView())
                           .work_area());
-  window_preferences->SetInteger("work_area_left", work_area.x());
-  window_preferences->SetInteger("work_area_top", work_area.y());
-  window_preferences->SetInteger("work_area_right", work_area.right());
-  window_preferences->SetInteger("work_area_bottom", work_area.bottom());
+  window_preferences.Set("work_area_left", work_area.x());
+  window_preferences.Set("work_area_top", work_area.y());
+  window_preferences.Set("work_area_right", work_area.right());
+  window_preferences.Set("work_area_bottom", work_area.bottom());
 }
 
 bool ChromeViewsDelegate::GetSavedWindowPlacement(
     const views::Widget* widget,
     const std::string& window_name,
     gfx::Rect* bounds,
-    ui::WindowShowState* show_state) const {
+    ui::mojom::WindowShowState* show_state) const {
   PrefService* prefs = g_browser_process->local_state();
-  if (!prefs)
+  if (!prefs) {
     return false;
+  }
 
-  DCHECK(prefs->FindPreference(window_name));
-  const base::DictionaryValue* dictionary = prefs->GetDictionary(window_name);
-  int left = 0;
-  int top = 0;
-  int right = 0;
-  int bottom = 0;
-  if (!dictionary || !dictionary->GetInteger("left", &left) ||
-      !dictionary->GetInteger("top", &top) ||
-      !dictionary->GetInteger("right", &right) ||
-      !dictionary->GetInteger("bottom", &bottom))
+  CHECK(prefs->FindPreference(window_name), base::NotFatalUntil::M162);
+  const base::DictValue& dictionary = prefs->GetDict(window_name);
+  std::optional<int> left = dictionary.FindInt("left");
+  std::optional<int> top = dictionary.FindInt("top");
+  std::optional<int> right = dictionary.FindInt("right");
+  std::optional<int> bottom = dictionary.FindInt("bottom");
+  if (!left || !top || !right || !bottom) {
     return false;
+  }
 
-  bounds->SetRect(left, top, right - left, bottom - top);
+  bounds->SetRect(*left, *top, *right - *left, *bottom - *top);
 
-  bool maximized = false;
-  if (dictionary)
-    dictionary->GetBoolean("maximized", &maximized);
-  *show_state = maximized ? ui::SHOW_STATE_MAXIMIZED : ui::SHOW_STATE_NORMAL;
+  const bool maximized = dictionary.FindBool("maximized").value_or(false);
+  *show_state = maximized ? ui::mojom::WindowShowState::kMaximized
+                          : ui::mojom::WindowShowState::kNormal;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   AdjustSavedWindowPlacementChromeOS(widget, bounds);
 #endif
   return true;
@@ -160,7 +163,7 @@ void ChromeViewsDelegate::AddRef() {
   // way, we pick up any new profiles that have become loaded since the last
   // call to AddRef().
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  DCHECK(profile_manager);
+  CHECK(profile_manager, base::NotFatalUntil::M162);
   for (Profile* profile : profile_manager->GetLoadedProfiles()) {
     profile_keep_alives_[profile] = std::make_unique<ScopedProfileKeepAlive>(
         profile, ProfileKeepAliveOrigin::kChromeViewsDelegate);
@@ -170,7 +173,7 @@ void ChromeViewsDelegate::AddRef() {
 }
 
 void ChromeViewsDelegate::ReleaseRef() {
-  DCHECK_NE(0u, ref_count_);
+  CHECK_NE(0u, ref_count_, base::NotFatalUntil::M162);
 
   if (--ref_count_ == 0u) {
     keep_alive_.reset();
@@ -181,19 +184,22 @@ void ChromeViewsDelegate::ReleaseRef() {
 void ChromeViewsDelegate::OnBeforeWidgetInit(
     views::Widget::InitParams* params,
     views::internal::NativeWidgetDelegate* delegate) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Only for dialog widgets, if this is not going to be a transient child,
   // then we mark it as an OS system app, otherwise its transient root's app
   // type should be used.
-  if (delegate->IsDialogBox() && !params->parent) {
+  // `delegate->IsDialogBox()` does not work because the underlying Widget
+  // does not have its widget delegate set before `OnBeforeWidgetInit`.
+  if (params->delegate && params->delegate->AsDialogDelegate() &&
+      !params->parent) {
     params->init_properties_container.SetProperty(
-        aura::client::kAppType, static_cast<int>(ash::AppType::SYSTEM_APP));
+        chromeos::kAppTypeKey, chromeos::AppType::SYSTEM_APP);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // We need to determine opacity if it's not already specified.
   if (params->opacity == views::Widget::InitParams::WindowOpacity::kInferred) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     chromeos::ResolveInferredOpacity(params);
 #else
     params->opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
@@ -202,18 +208,20 @@ void ChromeViewsDelegate::OnBeforeWidgetInit(
 
   // If we already have a native_widget, we don't have to try to come
   // up with one.
-  if (params->native_widget)
+  if (params->native_widget) {
     return;
+  }
 
   if (!native_widget_factory().is_null()) {
     params->native_widget = native_widget_factory().Run(*params, delegate);
-    if (params->native_widget)
+    if (params->native_widget) {
       return;
+    }
   }
 
   params->native_widget = CreateNativeWidget(params, delegate);
 }
 
 std::string ChromeViewsDelegate::GetApplicationName() {
-  return version_info::GetProductName();
+  return std::string(version_info::GetProductName());
 }

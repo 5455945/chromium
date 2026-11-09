@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,11 +13,14 @@
 #include <iosfwd>
 #include <string>
 
-#include "ui/gfx/geometry/geometry_export.h"
+#include "base/component_export.h"
 
+namespace perfetto {
+class TracedValue;
+}
 namespace gfx {
 
-class GEOMETRY_EXPORT Vector2dF {
+class COMPONENT_EXPORT(GEOMETRY) Vector2dF {
  public:
   constexpr Vector2dF() : x_(0), y_(0) {}
   constexpr Vector2dF(float x, float y) : x_(x), y_(y) {}
@@ -40,19 +43,28 @@ class GEOMETRY_EXPORT Vector2dF {
   void operator-=(const Vector2dF& other) { Subtract(other); }
 
   void SetToMin(const Vector2dF& other) {
-    x_ = x_ <= other.x_ ? x_ : other.x_;
-    y_ = y_ <= other.y_ ? y_ : other.y_;
+    x_ = std::min(x_, other.x_);
+    y_ = std::min(y_, other.y_);
   }
 
   void SetToMax(const Vector2dF& other) {
-    x_ = x_ >= other.x_ ? x_ : other.x_;
-    y_ = y_ >= other.y_ ? y_ : other.y_;
+    x_ = std::max(x_, other.x_);
+    y_ = std::max(y_, other.y_);
   }
 
-  // Gives the square of the diagonal length of the vector.
+  // Gives the square of the diagonal length, i.e. the square of magnitude, of
+  // the vector.
   double LengthSquared() const;
-  // Gives the diagonal length of the vector.
+
+  // Gives the diagonal length (i.e. the magnitude) of the vector.
   float Length() const;
+
+  float AspectRatio() const { return x_ / y_; }
+
+  // Gives the slope angle in radians of the vector from the positive x axis,
+  // in the range of (-pi, pi]. The sign of the result is the same as the sign
+  // of y(), except that the result is pi for Vector2dF(negative-x, zero-y).
+  float SlopeAngleRadians() const;
 
   // Scale the x and y components of the vector by |scale|.
   void Scale(float scale) { Scale(scale, scale); }
@@ -60,20 +72,29 @@ class GEOMETRY_EXPORT Vector2dF {
   // respectively.
   void Scale(float x_scale, float y_scale);
 
+  // Divides all components of the vector by |scale|.
+  void InvScale(float inv_scale) { InvScale(inv_scale, inv_scale); }
+  // Divides each component of the vector by the given scale factors.
+  void InvScale(float inv_x_scale, float inv_y_scale);
+
+  void Normalize() { InvScale(Length()); }
+
+  void Transpose() {
+    using std::swap;
+    swap(x_, y_);
+  }
+
   std::string ToString() const;
+
+  void WriteIntoTrace(perfetto::TracedValue) const;
+
+  friend constexpr bool operator==(const Vector2dF&,
+                                   const Vector2dF&) = default;
 
  private:
   float x_;
   float y_;
 };
-
-inline constexpr bool operator==(const Vector2dF& lhs, const Vector2dF& rhs) {
-  return lhs.x() == rhs.x() && lhs.y() == rhs.y();
-}
-
-inline constexpr bool operator!=(const Vector2dF& lhs, const Vector2dF& rhs) {
-  return !(lhs == rhs);
-}
 
 inline constexpr Vector2dF operator-(const Vector2dF& v) {
   return Vector2dF(-v.x(), -v.y());
@@ -91,21 +112,33 @@ inline Vector2dF operator-(const Vector2dF& lhs, const Vector2dF& rhs) {
   return result;
 }
 
-// Return the cross product of two vectors.
-GEOMETRY_EXPORT double CrossProduct(const Vector2dF& lhs, const Vector2dF& rhs);
+// Return the cross product of two vectors, i.e. the determinant.
+COMPONENT_EXPORT(GEOMETRY)
+double CrossProduct(const Vector2dF& lhs, const Vector2dF& rhs);
 
 // Return the dot product of two vectors.
-GEOMETRY_EXPORT double DotProduct(const Vector2dF& lhs, const Vector2dF& rhs);
+COMPONENT_EXPORT(GEOMETRY)
+double DotProduct(const Vector2dF& lhs, const Vector2dF& rhs);
 
 // Return a vector that is |v| scaled by the given scale factors along each
 // axis.
-GEOMETRY_EXPORT Vector2dF ScaleVector2d(const Vector2dF& v,
-                                        float x_scale,
-                                        float y_scale);
+COMPONENT_EXPORT(GEOMETRY)
+Vector2dF ScaleVector2d(const Vector2dF& v, float x_scale, float y_scale);
 
 // Return a vector that is |v| scaled by the given scale factor.
 inline Vector2dF ScaleVector2d(const Vector2dF& v, float scale) {
   return ScaleVector2d(v, scale, scale);
+}
+
+inline Vector2dF TransposeVector2d(const Vector2dF& v) {
+  return Vector2dF(v.y(), v.x());
+}
+
+// Return a unit vector with the same direction as v.
+inline Vector2dF NormalizeVector2d(const Vector2dF& v) {
+  Vector2dF normal(v);
+  normal.Normalize();
+  return normal;
 }
 
 // This is declared here for use in gtest-based unit tests but is defined in
@@ -115,4 +148,4 @@ void PrintTo(const Vector2dF& vector, ::std::ostream* os);
 
 }  // namespace gfx
 
-#endif // UI_GFX_GEOMETRY_VECTOR2D_F_H_
+#endif  // UI_GFX_GEOMETRY_VECTOR2D_F_H_

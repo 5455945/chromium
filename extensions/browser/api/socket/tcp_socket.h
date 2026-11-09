@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,14 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "extensions/browser/api/socket/socket.h"
 #include "extensions/common/api/socket.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/completion_once_callback.h"
-#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
 
@@ -50,8 +49,11 @@ class TCPSocket : public Socket {
   TCPSocket(mojo::PendingRemote<network::mojom::TCPConnectedSocket> socket,
             mojo::ScopedDataPipeConsumerHandle receive_stream,
             mojo::ScopedDataPipeProducerHandle send_stream,
-            const absl::optional<net::IPEndPoint>& remote_addr,
+            const std::optional<net::IPEndPoint>& remote_addr,
             const std::string& owner_extension_id);
+
+  TCPSocket(const TCPSocket&) = delete;
+  TCPSocket& operator=(const TCPSocket&) = delete;
 
   ~TCPSocket() override;
 
@@ -100,17 +102,17 @@ class TCPSocket : public Socket {
  private:
   // Connects a client TCP socket.
   void OnConnectComplete(int result,
-                         const absl::optional<net::IPEndPoint>& local_addr,
-                         const absl::optional<net::IPEndPoint>& peer_addr,
+                         const std::optional<net::IPEndPoint>& local_addr,
+                         const std::optional<net::IPEndPoint>& peer_addr,
                          mojo::ScopedDataPipeConsumerHandle receive_stream,
                          mojo::ScopedDataPipeProducerHandle send_stream);
 
   // Connects a server TCP socket.
   void OnListenComplete(int result,
-                        const absl::optional<net::IPEndPoint>& local_addr);
+                        const std::optional<net::IPEndPoint>& local_addr);
   void OnAccept(
       int result,
-      const absl::optional<net::IPEndPoint>& remote_addr,
+      const std::optional<net::IPEndPoint>& remote_addr,
       mojo::PendingRemote<network::mojom::TCPConnectedSocket> connected_socket,
       mojo::ScopedDataPipeConsumerHandle receive_stream,
       mojo::ScopedDataPipeProducerHandle send_stream);
@@ -124,7 +126,7 @@ class TCPSocket : public Socket {
       int result,
       mojo::ScopedDataPipeConsumerHandle receive_stream,
       mojo::ScopedDataPipeProducerHandle send_stream,
-      const absl::optional<net::SSLInfo>& ssl_info);
+      const std::optional<net::SSLInfo>& ssl_info);
 
   content::StoragePartition* GetStoragePartitionHelper();
 
@@ -136,7 +138,7 @@ class TCPSocket : public Socket {
 
   // |this| doesn't outlive |browser_context_| because |this| is owned by
   // ApiResourceManager which is a BrowserContextKeyedAPI.
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext, DanglingUntriaged> browser_context_;
 
   SocketMode socket_mode_;
 
@@ -152,17 +154,16 @@ class TCPSocket : public Socket {
 
   std::unique_ptr<MojoDataPump> mojo_data_pump_;
 
-  absl::optional<net::IPEndPoint> local_addr_;
-  absl::optional<net::IPEndPoint> peer_addr_;
+  std::optional<net::IPEndPoint> local_addr_;
+  std::optional<net::IPEndPoint> peer_addr_;
 
   // Only used in tests.
-  content::StoragePartition* storage_partition_ = nullptr;
+  raw_ptr<content::StoragePartition, DanglingUntriaged> storage_partition_ =
+      nullptr;
 
   // WeakPtr is used when posting tasks to |task_runner_| which might outlive
   // |this|.
   base::WeakPtrFactory<TCPSocket> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TCPSocket);
 };
 
 // TCP Socket instances from the "sockets.tcp" namespace. These are regular
@@ -177,7 +178,7 @@ class ResumableTCPSocket : public TCPSocket {
       mojo::PendingRemote<network::mojom::TCPConnectedSocket> socket,
       mojo::ScopedDataPipeConsumerHandle receive_stream,
       mojo::ScopedDataPipeProducerHandle send_stream,
-      const absl::optional<net::IPEndPoint>& remote_addr,
+      const std::optional<net::IPEndPoint>& remote_addr,
       const std::string& owner_extension_id);
 
   ~ResumableTCPSocket() override;
@@ -248,6 +249,14 @@ class ResumableTCPServerSocket : public TCPSocket {
   // more data - see sockets_tcp_server.idl.
   bool paused_;
 };
+
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<ResumableTCPSocket>>::
+    ServiceIsCreatedWithBrowserContext() const;
+
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<
+    ResumableTCPServerSocket>>::ServiceIsCreatedWithBrowserContext() const;
 
 }  //  namespace extensions
 

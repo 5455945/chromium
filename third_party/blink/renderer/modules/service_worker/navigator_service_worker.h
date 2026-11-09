@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
+class ExecutionContext;
 class ExceptionState;
-class LocalDOMWindow;
 class Navigator;
 class ScriptState;
 class ServiceWorkerContainer;
@@ -21,7 +21,7 @@ class MODULES_EXPORT NavigatorServiceWorker {
   STATIC_ONLY(NavigatorServiceWorker);
 
  public:
-  static ServiceWorkerContainer* From(LocalDOMWindow&);
+  static ServiceWorkerContainer* From(ExecutionContext&);
   static ServiceWorkerContainer* serviceWorker(ScriptState*,
                                                Navigator&,
                                                ExceptionState&);

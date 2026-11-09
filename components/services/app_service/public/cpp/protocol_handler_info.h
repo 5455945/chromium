@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/values.h"
 #include "url/gurl.h"
 
 namespace apps {
@@ -18,14 +19,16 @@ struct ProtocolHandlerInfo {
   ProtocolHandlerInfo(const ProtocolHandlerInfo& other);
   ~ProtocolHandlerInfo();
 
+  friend bool operator==(const ProtocolHandlerInfo&,
+                         const ProtocolHandlerInfo&) = default;
+
+  base::Value AsDebugValue() const;
+
   std::string protocol;
   GURL url;
+  std::string name;
 };
 using ProtocolHandlers = std::vector<ProtocolHandlerInfo>;
-
-bool operator==(const ProtocolHandlerInfo& handler1,
-                const ProtocolHandlerInfo& handler2);
-std::ostream& operator<<(std::ostream& out, const ProtocolHandlerInfo& handler);
 
 }  // namespace apps
 

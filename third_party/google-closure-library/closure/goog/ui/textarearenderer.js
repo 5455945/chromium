@@ -1,4 +1,8 @@
-// Copyright 2010 The Closure Library Authors. All Rights Reserved.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +18,7 @@
 
 /**
  * @fileoverview Native browser textarea renderer for {@link goog.ui.Textarea}s.
+ * @suppress {strictMissingProperties} legacy accesses off type 'Element'
  */
 
 goog.provide('goog.ui.TextareaRenderer');
@@ -21,6 +26,7 @@ goog.provide('goog.ui.TextareaRenderer');
 goog.require('goog.dom.TagName');
 goog.require('goog.ui.Component');
 goog.require('goog.ui.ControlRenderer');
+goog.requireType('goog.ui.Control');
 
 
 
@@ -33,6 +39,7 @@ goog.require('goog.ui.ControlRenderer');
  * @extends {goog.ui.ControlRenderer}
  */
 goog.ui.TextareaRenderer = function() {
+  'use strict';
   goog.ui.ControlRenderer.call(this);
 };
 goog.inherits(goog.ui.TextareaRenderer, goog.ui.ControlRenderer);
@@ -49,6 +56,7 @@ goog.ui.TextareaRenderer.CSS_CLASS = goog.getCssName('goog-textarea');
 
 /** @override */
 goog.ui.TextareaRenderer.prototype.getAriaRole = function() {
+  'use strict';
   // textareas don't need ARIA roles to be recognized by screen readers.
   return undefined;
 };
@@ -56,6 +64,7 @@ goog.ui.TextareaRenderer.prototype.getAriaRole = function() {
 
 /** @override */
 goog.ui.TextareaRenderer.prototype.decorate = function(control, element) {
+  'use strict';
   this.setUpTextarea_(control);
   goog.ui.TextareaRenderer.superClass_.decorate.call(this, control, element);
   control.setContent(element.value);
@@ -72,6 +81,7 @@ goog.ui.TextareaRenderer.prototype.decorate = function(control, element) {
  * @override
  */
 goog.ui.TextareaRenderer.prototype.createDom = function(textarea) {
+  'use strict';
   this.setUpTextarea_(textarea);
   var element = textarea.getDomHelper().createDom(
       goog.dom.TagName.TEXTAREA, {
@@ -91,6 +101,7 @@ goog.ui.TextareaRenderer.prototype.createDom = function(textarea) {
  * @override
  */
 goog.ui.TextareaRenderer.prototype.canDecorate = function(element) {
+  'use strict';
   return element.tagName == goog.dom.TagName.TEXTAREA;
 };
 
@@ -99,7 +110,7 @@ goog.ui.TextareaRenderer.prototype.canDecorate = function(element) {
  * Textareas natively support right-to-left rendering.
  * @override
  */
-goog.ui.TextareaRenderer.prototype.setRightToLeft = goog.nullFunction;
+goog.ui.TextareaRenderer.prototype.setRightToLeft = function() {};
 
 
 /**
@@ -107,6 +118,7 @@ goog.ui.TextareaRenderer.prototype.setRightToLeft = goog.nullFunction;
  * @override
  */
 goog.ui.TextareaRenderer.prototype.isFocusable = function(textarea) {
+  'use strict';
   return textarea.isEnabled();
 };
 
@@ -115,7 +127,7 @@ goog.ui.TextareaRenderer.prototype.isFocusable = function(textarea) {
  * Textareas natively support keyboard focus.
  * @override
  */
-goog.ui.TextareaRenderer.prototype.setFocusable = goog.nullFunction;
+goog.ui.TextareaRenderer.prototype.setFocusable = function() {};
 
 
 /**
@@ -125,6 +137,7 @@ goog.ui.TextareaRenderer.prototype.setFocusable = goog.nullFunction;
  */
 goog.ui.TextareaRenderer.prototype.setState = function(
     textarea, state, enable) {
+  'use strict';
   goog.ui.TextareaRenderer.superClass_.setState.call(
       this, textarea, state, enable);
   var element = textarea.getElement();
@@ -139,7 +152,7 @@ goog.ui.TextareaRenderer.prototype.setState = function(
  * a no-op.
  * @override
  */
-goog.ui.TextareaRenderer.prototype.updateAriaState = goog.nullFunction;
+goog.ui.TextareaRenderer.prototype.updateAriaState = function() {};
 
 
 /**
@@ -150,6 +163,7 @@ goog.ui.TextareaRenderer.prototype.updateAriaState = goog.nullFunction;
  * @private
  */
 goog.ui.TextareaRenderer.prototype.setUpTextarea_ = function(textarea) {
+  'use strict';
   textarea.setHandleMouseEvents(false);
   textarea.setAutoStates(goog.ui.Component.State.ALL, false);
   textarea.setSupportedState(goog.ui.Component.State.FOCUSED, false);
@@ -158,6 +172,7 @@ goog.ui.TextareaRenderer.prototype.setUpTextarea_ = function(textarea) {
 
 /** @override **/
 goog.ui.TextareaRenderer.prototype.setContent = function(element, value) {
+  'use strict';
   if (element) {
     element.value = value;
   }
@@ -166,5 +181,6 @@ goog.ui.TextareaRenderer.prototype.setContent = function(element, value) {
 
 /** @override **/
 goog.ui.TextareaRenderer.prototype.getCssClass = function() {
+  'use strict';
   return goog.ui.TextareaRenderer.CSS_CLASS;
 };

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/threading/thread_restrictions.h"
 #include "content/browser/web_package/signed_exchange_utils.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -35,14 +34,13 @@ SignedExchangeBrowserTestHelper::~SignedExchangeBrowserTestHelper() = default;
 
 void SignedExchangeBrowserTestHelper::SetUp() {
   signed_exchange_utils::SetVerificationTimeForTesting(
-      base::Time::UnixEpoch() +
-      base::TimeDelta::FromSeconds(kSignatureHeaderDate));
+      base::Time::UnixEpoch() + base::Seconds(kSignatureHeaderDate));
 }
 
 void SignedExchangeBrowserTestHelper::TearDownOnMainThread() {
   interceptor_.reset();
   signed_exchange_utils::SetVerificationTimeForTesting(
-      absl::optional<base::Time>());
+      std::optional<base::Time>());
 }
 
 scoped_refptr<net::X509Certificate>
@@ -77,8 +75,8 @@ void SignedExchangeBrowserTestHelper::InstallMockCert(
   net::CertVerifyResult dummy_result;
   dummy_result.verified_cert = original_cert;
   dummy_result.cert_status = net::OK;
-  dummy_result.ocsp_result.response_status = net::OCSPVerifyResult::PROVIDED;
-  dummy_result.ocsp_result.revocation_status = net::OCSPRevocationStatus::GOOD;
+  dummy_result.ocsp_result.response_status = bssl::OCSPVerifyResult::PROVIDED;
+  dummy_result.ocsp_result.revocation_status = bssl::OCSPRevocationStatus::GOOD;
   cert_verifier->AddResultForCertAndHost(original_cert, "test.example.org",
                                          dummy_result, net::OK);
 }
@@ -94,7 +92,9 @@ bool SignedExchangeBrowserTestHelper::OnInterceptCallback(
   const auto it = interceptor_data_path_map_.find(params->url_request.url);
   if (it == interceptor_data_path_map_.end())
     return false;
-  URLLoaderInterceptor::WriteResponse(it->second, params->client.get());
+  URLLoaderInterceptor::WriteResponse(
+      it->second, params->client.get(), /*headers=*/nullptr,
+      std::optional<net::SSLInfo>(), params->url_request.url);
   return true;
 }
 

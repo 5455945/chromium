@@ -1,5 +1,10 @@
 Tests ARIA 1.1 accessibility markup.
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 170
+    }
     domNode : input
     ignored : false
     name : {
@@ -17,28 +22,33 @@ Tests ARIA 1.1 accessibility markup.
                 type : relatedElement
             }
             [3] : {
+                attribute : title
+                type : attribute
+            }
+            [4] : {
                 attribute : placeholder
                 type : placeholder
             }
-            [4] : {
+            [5] : {
                 attribute : aria-placeholder
                 type : placeholder
             }
-            [5] : {
+            [6] : {
                 attribute : title
                 type : attribute
             }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
             value : {
                 type : token
-                value : false
+                value : true
             }
         }
         [1] : {
@@ -92,7 +102,8 @@ Tests ARIA 1.1 accessibility markup.
                         nodeResult : h3#err
                     }
                 ]
-                type : idref
+                type : idrefList
+                value : err
             }
         }
     ]
@@ -102,6 +113,11 @@ Tests ARIA 1.1 accessibility markup.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 99
+    }
     domNode : img
     ignored : false
     name : {
@@ -137,6 +153,7 @@ Tests ARIA 1.1 accessibility markup.
         value : Label
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : details
@@ -154,10 +171,15 @@ Tests ARIA 1.1 accessibility markup.
     ]
     role : {
         type : role
-        value : img
+        value : image
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 9
+    }
     domNode : button
     ignored : false
     name : {
@@ -191,6 +213,7 @@ Tests ARIA 1.1 accessibility markup.
         value : Select All
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid
@@ -220,6 +243,11 @@ Tests ARIA 1.1 accessibility markup.
     }
 }
 {
+    childIds : <object>
+    chromeRole : {
+        type : internalRole
+        value : 14
+    }
     domNode : input
     ignored : false
     name : {
@@ -245,9 +273,10 @@ Tests ARIA 1.1 accessibility markup.
             }
         ]
         type : computedString
-        value : 
+        value :
     }
     nodeId : <string>
+    parentId : <string>
     properties : [
         [0] : {
             name : invalid

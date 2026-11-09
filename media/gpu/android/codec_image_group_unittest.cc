@@ -1,16 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/gpu/android/codec_image_group.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/threading/thread.h"
+#include "gpu/command_buffer/service/ref_counted_lock_for_test.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "media/base/android/mock_android_overlay.h"
 #include "media/gpu/android/codec_surface_bundle.h"
 #include "media/gpu/android/mock_codec_image.h"
@@ -20,16 +22,17 @@
 namespace media {
 
 namespace {
-// Size used to create MockCodecImage.
-constexpr gfx::Size kMockImageSize(100, 100);
-
 // Subclass of CodecImageGroup which will notify us when it's destroyed.
 class CodecImageGroupWithDestructionHook : public CodecImageGroup {
  public:
   CodecImageGroupWithDestructionHook(
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       scoped_refptr<CodecSurfaceBundle> surface_bundle)
-      : CodecImageGroup(std::move(task_runner), std::move(surface_bundle)) {}
+      : CodecImageGroup(std::move(task_runner),
+                        std::move(surface_bundle),
+                        features::NeedThreadSafeAndroidMedia()
+                            ? base::MakeRefCounted<gpu::RefCountedLockForTest>()
+                            : nullptr) {}
 
   void SetDestructionCallback(base::OnceClosure cb) {
     destruction_cb_ = std::move(cb);
@@ -111,7 +114,11 @@ TEST_F(CodecImageGroupTest, SurfaceBundleWithoutOverlayDoesntCrash) {
   scoped_refptr<CodecSurfaceBundle> surface_bundle =
       base::MakeRefCounted<CodecSurfaceBundle>();
   scoped_refptr<CodecImageGroup> image_group =
-      base::MakeRefCounted<CodecImageGroup>(gpu_task_runner_, surface_bundle);
+      base::MakeRefCounted<CodecImageGroup>(
+          gpu_task_runner_, surface_bundle,
+          features::NeedThreadSafeAndroidMedia()
+              ? base::MakeRefCounted<gpu::RefCountedLockForTest>()
+              : nullptr);
   // TODO(liberato): we should also make sure that adding an image doesn't call
   // ReleaseCodecBuffer when it's added.
 }
@@ -122,7 +129,7 @@ TEST_F(CodecImageGroupTest, ImagesRetainRefToGroup) {
   bool was_destroyed = false;
   rec.image_group->SetDestructionCallback(
       base::BindOnce([](bool* flag) -> void { *flag = true; }, &was_destroyed));
-  scoped_refptr<CodecImage> image = new MockCodecImage(kMockImageSize);
+  scoped_refptr<CodecImage> image = base::MakeRefCounted<MockCodecImage>();
   // We're supposed to call this from |gpu_task_runner_|, but all
   // CodecImageGroup really cares about is being single sequence.
   rec.image_group->AddCodecImage(image.get());
@@ -141,8 +148,10 @@ TEST_F(CodecImageGroupTest, ImageGroupDropsForwardsSurfaceDestruction) {
   // also verify that the image group drops its ref to the surface bundle, so
   // that it doesn't prevent destruction of the overlay that provided it.
   Record rec = CreateImageGroup();
-  scoped_refptr<MockCodecImage> image_1 = new MockCodecImage(kMockImageSize);
-  scoped_refptr<MockCodecImage> image_2 = new MockCodecImage(kMockImageSize);
+  scoped_refptr<MockCodecImage> image_1 =
+      base::MakeRefCounted<MockCodecImage>();
+  scoped_refptr<MockCodecImage> image_2 =
+      base::MakeRefCounted<MockCodecImage>();
   rec.image_group->AddCodecImage(image_1.get());
   rec.image_group->AddCodecImage(image_2.get());
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/values.h"
 #include "chrome/browser/sync_file_system/conflict_resolution_policy.h"
 #include "chrome/browser/sync_file_system/sync_callbacks.h"
 #include "chrome/browser/sync_file_system/sync_file_metadata.h"
@@ -22,17 +21,12 @@
 class BrowserContextKeyedServiceFactory;
 class GURL;
 
-namespace base {
-class ListValue;
-}
-
 namespace content {
 class BrowserContext;
 }
 
 namespace sync_file_system {
 
-class FileStatusObserver;
 class LocalChangeProcessor;
 class RemoteChangeProcessor;
 class TaskLogger;
@@ -82,8 +76,12 @@ class RemoteFileSyncService {
  public:
   class Observer {
    public:
-    Observer() {}
-    virtual ~Observer() {}
+    Observer() = default;
+
+    Observer(const Observer&) = delete;
+    Observer& operator=(const Observer&) = delete;
+
+    virtual ~Observer() = default;
 
     // This is called when RemoteFileSyncService updates its internal queue
     // of pending remote changes.
@@ -96,9 +94,6 @@ class RemoteFileSyncService {
     virtual void OnRemoteServiceStateUpdated(
         RemoteServiceState state,
         const std::string& description) {}
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
   };
 
   struct Version {
@@ -111,15 +106,6 @@ class RemoteFileSyncService {
     UNINSTALL_AND_KEEP_REMOTE,
   };
 
-  // For GetOriginStatusMap.
-  using OriginStatusMap = std::map<GURL, std::string>;
-  using StatusMapCallback =
-      base::OnceCallback<void(std::unique_ptr<OriginStatusMap> status_map)>;
-
-  // For DumpFile.
-  using ListCallback =
-      base::OnceCallback<void(std::unique_ptr<base::ListValue> list)>;
-
   // Creates an initialized RemoteFileSyncService for backend |version|
   // for |context|.
   static std::unique_ptr<RemoteFileSyncService> CreateForBrowserContext(
@@ -131,12 +117,15 @@ class RemoteFileSyncService {
   static void AppendDependsOnFactories(
       std::set<BrowserContextKeyedServiceFactory*>* factories);
 
-  RemoteFileSyncService() {}
-  virtual ~RemoteFileSyncService() {}
+  RemoteFileSyncService() = default;
+
+  RemoteFileSyncService(const RemoteFileSyncService&) = delete;
+  RemoteFileSyncService& operator=(const RemoteFileSyncService&) = delete;
+
+  virtual ~RemoteFileSyncService() = default;
 
   // Adds and removes observers.
   virtual void AddServiceObserver(Observer* observer) = 0;
-  virtual void AddFileStatusObserver(FileStatusObserver* observer) = 0;
 
   // Registers |origin| to track remote side changes for the |origin|.
   // Upon completion, invokes |callback|.
@@ -179,16 +168,6 @@ class RemoteFileSyncService {
   // returned by the last OnRemoteServiceStateUpdated notification.
   virtual RemoteServiceState GetCurrentState() const = 0;
 
-  // Returns all origins along with an arbitrary string description of their
-  // corresponding sync statuses.
-  virtual void GetOriginStatusMap(StatusMapCallback callback) = 0;
-
-  // Returns file metadata for |origin| to call |callback|.
-  virtual void DumpFiles(const GURL& origin, ListCallback callback) = 0;
-
-  // Returns the dump of internal database.
-  virtual void DumpDatabase(ListCallback callback) = 0;
-
   // Enables or disables the background sync.
   // Setting this to false should disable the synchronization (and make
   // the service state to REMOTE_SERVICE_DISABLED), while setting this to
@@ -198,9 +177,6 @@ class RemoteFileSyncService {
   virtual void SetSyncEnabled(bool enabled) = 0;
 
   virtual void PromoteDemotedChanges(base::OnceClosure callback) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RemoteFileSyncService);
 };
 
 }  // namespace sync_file_system

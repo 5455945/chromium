@@ -1,27 +1,33 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 
+#include <optional>
+
 #include "base/check_op.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/origin.h"
+#include "base/types/optional_util.h"
+#include "url/gurl.h"
 
 namespace ui {
 
-DataTransferEndpoint::DataTransferEndpoint(const url::Origin& origin,
-                                           bool notify_if_restricted)
+DataTransferEndpoint::DataTransferEndpoint(const GURL& url,
+                                           DataTransferEndpointOptions options)
     : type_(EndpointType::kUrl),
-      origin_(origin),
-      notify_if_restricted_(notify_if_restricted) {}
+      url_(url),
+      off_the_record_(options.off_the_record),
+      notify_if_restricted_(options.notify_if_restricted) {
+  CHECK(url.is_valid(), base::NotFatalUntil::M163);
+}
 
 DataTransferEndpoint::DataTransferEndpoint(EndpointType type,
-                                           bool notify_if_restricted)
+                                           DataTransferEndpointOptions options)
     : type_(type),
-      origin_(absl::nullopt),
-      notify_if_restricted_(notify_if_restricted) {
-  DCHECK_NE(type, EndpointType::kUrl);
+      url_(std::nullopt),
+      off_the_record_(options.off_the_record),
+      notify_if_restricted_(options.notify_if_restricted) {
+  CHECK_NE(type, EndpointType::kUrl, base::NotFatalUntil::M163);
 }
 
 DataTransferEndpoint::DataTransferEndpoint(const DataTransferEndpoint& other) =
@@ -36,16 +42,18 @@ DataTransferEndpoint& DataTransferEndpoint::operator=(
 DataTransferEndpoint& DataTransferEndpoint::operator=(
     DataTransferEndpoint&& other) = default;
 
-bool DataTransferEndpoint::operator==(const DataTransferEndpoint& other) const {
-  return origin_ == other.origin_ && type_ == other.type_ &&
-         notify_if_restricted_ == other.notify_if_restricted_;
-}
+bool DataTransferEndpoint::operator==(const DataTransferEndpoint& other) const =
+    default;
 
 DataTransferEndpoint::~DataTransferEndpoint() = default;
 
-bool DataTransferEndpoint::IsSameOriginWith(
+const GURL* DataTransferEndpoint::GetURL() const {
+  return base::OptionalToPtr(url_);
+}
+
+bool DataTransferEndpoint::IsSameURLWith(
     const DataTransferEndpoint& other) const {
-  return IsUrlType() && (type_ == other.type_) && (origin_ == other.origin_);
+  return IsUrlType() && (type_ == other.type_) && (url_ == other.url_);
 }
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "net/net_jni_headers/AndroidCertVerifyResult_jni.h"
 
 using base::android::AttachCurrentThread;
@@ -13,8 +15,7 @@ using base::android::JavaArrayOfByteArrayToStringVector;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
-namespace net {
-namespace android {
+namespace net::android {
 
 void ExtractCertVerifyResult(const JavaRef<jobject>& result,
                              CertVerifyStatusAndroid* status,
@@ -33,5 +34,6 @@ void ExtractCertVerifyResult(const JavaRef<jobject>& result,
   JavaArrayOfByteArrayToStringVector(env, chain_byte_array, verified_chain);
 }
 
-}  // namespace android
-}  // namespace net
+}  // namespace net::android
+
+DEFINE_JNI(AndroidCertVerifyResult)

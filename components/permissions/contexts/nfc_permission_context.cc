@@ -1,56 +1,65 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/permissions/contexts/nfc_permission_context.h"
 
+#include "build/build_config.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_request_id.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "content/public/browser/permission_result.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 
 namespace permissions {
 
 NfcPermissionContext::NfcPermissionContext(
     content::BrowserContext* browser_context,
     std::unique_ptr<Delegate> delegate)
-    : PermissionContextBase(browser_context,
-                            ContentSettingsType::NFC,
-                            blink::mojom::PermissionsPolicyFeature::kNotFound),
+    : ContentSettingPermissionContextBase(
+          browser_context,
+          ContentSettingsType::NFC,
+          network::mojom::PermissionsPolicyFeature::kNotFound),
       delegate_(std::move(delegate)) {}
 
 NfcPermissionContext::~NfcPermissionContext() = default;
 
-#if !defined(OS_ANDROID)
-ContentSetting NfcPermissionContext::GetPermissionStatusInternal(
+ContentSetting NfcPermissionContext::GetContentSettingStatusInternal(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     const GURL& embedding_origin) const {
+#if BUILDFLAG(IS_ANDROID)
+  if (!render_frame_host || !render_frame_host->IsInPrimaryMainFrame() ||
+      render_frame_host->GetLastCommittedOrigin().opaque()) {
+    return CONTENT_SETTING_BLOCK;
+  }
+  return ContentSettingPermissionContextBase::GetContentSettingStatusInternal(
+      render_frame_host, requesting_origin, embedding_origin);
+#else
   return CONTENT_SETTING_BLOCK;
-}
 #endif
+}
 
 void NfcPermissionContext::DecidePermission(
-    content::WebContents* web_contents,
-    const PermissionRequestID& id,
-    const GURL& requesting_origin,
-    const GURL& embedding_origin,
-    bool user_gesture,
+    std::unique_ptr<PermissionRequestData> request_data,
     BrowserPermissionCallback callback) {
-  if (!user_gesture) {
-    std::move(callback).Run(CONTENT_SETTING_BLOCK);
+  if (!request_data->user_gesture) {
+    std::move(callback).Run(content::PermissionResult(
+        blink::mojom::PermissionStatus::DENIED,
+        content::PermissionStatusSource::UNSPECIFIED));
     return;
   }
-  permissions::PermissionContextBase::DecidePermission(
-      web_contents, id, requesting_origin, embedding_origin, user_gesture,
-      std::move(callback));
+
+  permissions::ContentSettingPermissionContextBase::DecidePermission(
+      std::move(request_data), std::move(callback));
 }
 
-void NfcPermissionContext::UpdateTabContext(const PermissionRequestID& id,
-                                            const GURL& requesting_frame,
-                                            bool allowed) {
+void NfcPermissionContext::UpdateTabContext(
+    const PermissionRequestData& request_data,
+    bool allowed) {
   auto* content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(
-          id.render_process_id(), id.render_frame_id());
+          request_data.id.global_render_frame_host_id());
   if (!content_settings)
     return;
 
@@ -58,10 +67,6 @@ void NfcPermissionContext::UpdateTabContext(const PermissionRequestID& id,
     content_settings->OnContentAllowed(ContentSettingsType::NFC);
   else
     content_settings->OnContentBlocked(ContentSettingsType::NFC);
-}
-
-bool NfcPermissionContext::IsRestrictedToSecureOrigins() const {
-  return true;
 }
 
 }  // namespace permissions

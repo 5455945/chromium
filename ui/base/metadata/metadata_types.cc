@@ -1,13 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/metadata/metadata_types.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "ui/base/metadata/base_type_conversion.h"
 
@@ -37,6 +39,10 @@ MetaDataProvider::MetaDataProvider() = default;
 
 MetaDataProvider::~MetaDataProvider() = default;
 
+class ClassMetaData* MetaDataProvider::GetClassMetaData() {
+  return const_cast<ClassMetaData*>(std::as_const(*this).GetClassMetaData());
+}
+
 base::CallbackListSubscription MetaDataProvider::AddPropertyChangedCallback(
     PropertyKey property,
     PropertyChangedCallback callback) {
@@ -53,8 +59,9 @@ base::CallbackListSubscription MetaDataProvider::AddPropertyChangedCallback(
 
 void MetaDataProvider::TriggerChangedCallback(PropertyKey property) {
   auto entry = property_changed_vectors_.find(property);
-  if (entry == property_changed_vectors_.end())
+  if (entry == property_changed_vectors_.end()) {
     return;
+  }
 
   PropertyChangedCallbacks* property_changed_callbacks = entry->second.get();
   property_changed_callbacks->Notify();
@@ -62,11 +69,25 @@ void MetaDataProvider::TriggerChangedCallback(PropertyKey property) {
 
 ClassMetaData::ClassMetaData() = default;
 
-ClassMetaData::ClassMetaData(std::string file, int line) : line_(line) {
-  base::TrimString(file, "./\\", &file_);
+static std::string_view TrimFilename(std::string_view file) {
+  size_t first = file.find_first_not_of("./\\");
+  if (first == std::string_view::npos) {
+    first = 0;
+  }
+  return file.substr(first, file.size() - first);
 }
 
+ClassMetaData::ClassMetaData(std::string_view file, int line)
+    : file_(TrimFilename(file)), line_(line) {}
+
 ClassMetaData::~ClassMetaData() = default;
+
+const std::string& ClassMetaData::GetUniqueName() const {
+  if (unique_name_.empty()) {
+    unique_name_ = base::StrCat({file_, ":", type_name_});
+  }
+  return unique_name_;
+}
 
 void ClassMetaData::AddMemberData(
     std::unique_ptr<MemberMetaDataBase> member_data) {
@@ -76,8 +97,9 @@ void ClassMetaData::AddMemberData(
 MemberMetaDataBase* ClassMetaData::FindMemberData(
     const std::string& member_name) {
   for (MemberMetaDataBase* member_data : members_) {
-    if (member_data->member_name() == member_name)
+    if (member_data->member_name() == member_name) {
       return member_data;
+    }
   }
 
   if (parent_class_meta_data_ != nullptr)
@@ -137,11 +159,11 @@ bool ClassMetaData::ClassMemberIterator::IsLastMember() const {
 
 std::string ClassMetaData::ClassMemberIterator::GetCurrentCollectionName()
     const {
-  return current_collection_->type_name();
+  return std::string(current_collection_->type_name());
 }
 
 void ClassMetaData::ClassMemberIterator::IncrementHelper() {
-  DCHECK_LT(current_vector_index_, SIZE_MAX);
+  CHECK_LT(current_vector_index_, SIZE_MAX, base::NotFatalUntil::M163);
   ++current_vector_index_;
 
   if (current_vector_index_ >= current_collection_->members().size()) {
@@ -160,7 +182,7 @@ ClassMetaData::ClassMemberIterator ClassMetaData::end() {
   return ClassMemberIterator(nullptr);
 }
 
-void ClassMetaData::SetTypeName(const std::string& type_name) {
+void ClassMetaData::SetTypeName(std::string_view type_name) {
   type_name_ = type_name;
 }
 
@@ -169,8 +191,8 @@ void MemberMetaDataBase::SetValueAsString(void* obj,
   NOTREACHED();
 }
 
-const char* MemberMetaDataBase::GetMemberNamePrefix() const {
-  return "";
+std::string_view MemberMetaDataBase::GetMemberNamePrefix() const {
+  return {};
 }
 
 MemberMetaDataBase::ValueStrings MemberMetaDataBase::GetValidValues() const {

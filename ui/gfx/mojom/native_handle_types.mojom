@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,15 +23,18 @@ struct NativePixmapPlane {
 struct NativePixmapHandle {
   array<NativePixmapPlane> planes;
 
-  [EnableIf=is_linux]
-  uint64 modifier;
-  [EnableIf=is_chromeos_ash]
+  [EnableIf=is_chromeos|is_linux]
   uint64 modifier;
 
+  [EnableIf=is_chromeos|is_linux]
+  bool supports_zero_copy_webgpu_import;
+
   [EnableIf=is_fuchsia]
-  mojo_base.mojom.UnguessableToken? buffer_collection_id;
+  handle<platform> buffer_collection_handle;
+
   [EnableIf=is_fuchsia]
   uint32 buffer_index;
+
   [EnableIf=is_fuchsia]
   bool ram_coherency;
 };
@@ -50,10 +53,32 @@ struct AHardwareBufferHandle {
   handle<message_pipe> tracking_pipe;
 };
 
+// gfx::DXGIHandleToken
+// A unique identifier to identify one of the below resources
+// (cannot identify the other at the same time):
+// - Texture corresponding to the GMB handle. Handles get duplicated and OS
+//   provides no other identifier. DXGISharedHandleManager in the GPU services
+//   uses this as a key to cache state across calls that reference the same
+//   texture via different handles.
+// - Fence corresponding to the GPUFenceHandle. Fence handle get duplicated
+//   and OS provides no other identifier. D3DImageBacking in the GPU services
+//   uses this as a key to reference the same fence via different handles.
 [EnableIf=is_win]
-struct DxgiHandle {
+struct DXGIHandleToken {
+  mojo_base.mojom.UnguessableToken value;
+};
+
+[EnableIf=is_win]
+struct DXGIHandle {
   // The actual buffer windows handle.
   handle<platform> buffer_handle;
+
+  // A unique identifier for the texture corresponding to this GMB handle. This
+  // is needed because there's no other way to uniquely identify the underlying
+  // texture. Handles get duplicated and the OS provides no other identifier.
+  // DXGISharedHandleManager in the GPU service uses this as a key to cache
+  // state across calls that reference the same texture via different handles.
+  DXGIHandleToken token;
 
   // Shared memory copy of all the data. Valid only if requested by the
   // consumer. It is included here because DXGI GMBs are unmappable except in
@@ -62,17 +87,38 @@ struct DxgiHandle {
   mojo_base.mojom.UnsafeSharedMemoryRegion? shared_memory_handle;
 };
 
+[EnableIf=is_apple]
+struct IOSurfaceHandle {
+  // The mach send right for the IOSurface from IOSurfaceCreateMachPort.
+  handle<platform> mach_send_right;
+
+  // On iOS, we can't use IOKit to access IOSurfaces in the renderer process, so
+  // we share the memory segment backing the IOSurface as shared memory which is
+  // then mapped in the renderer process.
+  [EnableIf=is_ios]
+  mojo_base.mojom.UnsafeSharedMemoryRegion shared_memory_handle;
+
+  // We have to pass the plane strides and offsets since we can't use IOSurface
+  // helper methods to get them.
+  [EnableIf=is_ios]
+  array<uint32> plane_strides;
+
+  // See comment above `plane_strides`.
+  [EnableIf=is_ios]
+  array<uint32> plane_offsets;
+};
+
 union GpuMemoryBufferPlatformHandle {
   mojo_base.mojom.UnsafeSharedMemoryRegion shared_memory_handle;
 
   [EnableIf=supports_native_pixmap]
   NativePixmapHandle native_pixmap_handle;
 
-  [EnableIf=is_mac]
-  handle<platform> mach_port;
+  [EnableIf=is_apple]
+  IOSurfaceHandle io_surface_handle;
 
   [EnableIf=is_win]
-  DxgiHandle dxgi_handle;
+  DXGIHandle dxgi_handle;
 
   [EnableIf=is_android]
   AHardwareBufferHandle android_hardware_buffer_handle;

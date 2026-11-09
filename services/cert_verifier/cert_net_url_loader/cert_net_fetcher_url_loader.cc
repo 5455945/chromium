@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -58,31 +58,38 @@
 
 #include "services/cert_verifier/cert_net_url_loader/cert_net_fetcher_url_loader.h"
 
+#include <algorithm>
 #include <memory>
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_math.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/load_flags.h"
 #include "net/cert/cert_net_fetcher.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/redirect_info.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 // TODO(eroman): Add support for POST parameters.
 // TODO(eroman): Add controls for bypassing the cache.
@@ -139,6 +146,10 @@ class CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader {
           factory_pending_remote,
       BindNewURLLoaderFactoryCallback bind_new_url_loader_factory_cb);
 
+  AsyncCertNetFetcherURLLoader(const AsyncCertNetFetcherURLLoader&) = delete;
+  AsyncCertNetFetcherURLLoader& operator=(const AsyncCertNetFetcherURLLoader&) =
+      delete;
+
   // The AsyncCertNetFetcherURLLoader is expected to be kept alive until all
   // requests have completed or Shutdown() is called.
   ~AsyncCertNetFetcherURLLoader();
@@ -185,8 +196,6 @@ class CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader {
   BindNewURLLoaderFactoryCallback bind_new_url_loader_factory_cb_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(AsyncCertNetFetcherURLLoader);
 };
 
 namespace {
@@ -202,8 +211,8 @@ net::Error CanFetchUrl(const GURL& url) {
 
 base::TimeDelta GetTimeout(int timeout_milliseconds) {
   if (timeout_milliseconds == net::CertNetFetcher::DEFAULT)
-    return base::TimeDelta::FromSeconds(kTimeoutSeconds);
-  return base::TimeDelta::FromMilliseconds(timeout_milliseconds);
+    return base::Seconds(kTimeoutSeconds);
+  return base::Milliseconds(timeout_milliseconds);
 }
 
 size_t GetMaxResponseBytes(int max_response_bytes,
@@ -230,6 +239,9 @@ class CertNetFetcherURLLoader::RequestCore
                           base::WaitableEvent::InitialState::NOT_SIGNALED),
         task_runner_(std::move(task_runner)) {}
 
+  RequestCore(const RequestCore&) = delete;
+  RequestCore& operator=(const RequestCore&) = delete;
+
   void AttachedToJob(Job* job) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
     DCHECK(!job_);
@@ -242,18 +254,14 @@ class CertNetFetcherURLLoader::RequestCore
 
   void OnJobCompleted(Job* job,
                       net::Error error,
-                      const std::string* response_body) {
+                      base::span<const uint8_t> response_body) {
     DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
     DCHECK_EQ(job_, job);
     job_ = nullptr;
 
-    const uint8_t* string_data =
-        reinterpret_cast<const uint8_t*>(response_body->data());
-
     error_ = error;
-    bytes_ =
-        std::vector<uint8_t>(string_data, string_data + response_body->size());
+    bytes_ = base::ToVector(response_body);
     completion_event_.Signal();
   }
 
@@ -288,7 +296,7 @@ class CertNetFetcherURLLoader::RequestCore
   void CancelJobOnTaskRunner();
 
   // A non-owned pointer to the job that is executing the request.
-  Job* job_ = nullptr;
+  raw_ptr<Job> job_ = nullptr;
 
   // May be written to from network thread, or from the caller thread only when
   // there is no work that will be done on the network thread (e.g. when the
@@ -302,12 +310,13 @@ class CertNetFetcherURLLoader::RequestCore
 
   // The task runner of the creation thread.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(RequestCore);
 };
 
 struct CertNetFetcherURLLoader::RequestParams {
   RequestParams();
+
+  RequestParams(const RequestParams&) = delete;
+  RequestParams& operator=(const RequestParams&) = delete;
 
   bool operator<(const RequestParams& other) const;
 
@@ -319,9 +328,6 @@ struct CertNetFetcherURLLoader::RequestParams {
   base::TimeDelta timeout;
 
   // IMPORTANT: When adding fields to this structure, update operator<().
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RequestParams);
 };
 
 CertNetFetcherURLLoader::RequestParams::RequestParams()
@@ -342,6 +348,10 @@ class Job {
  public:
   Job(std::unique_ptr<CertNetFetcherURLLoader::RequestParams> request_params,
       CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader* parent);
+
+  Job(const Job&) = delete;
+  Job& operator=(const Job&) = delete;
+
   ~Job();
 
   const CertNetFetcherURLLoader::RequestParams& request_params() const {
@@ -368,25 +378,26 @@ class Job {
   void Cancel();
 
  private:
-  void OnReceivedRedirect(const net::RedirectInfo& redirect_info,
+  void OnReceivedRedirect(const GURL& url_before_redirect,
+                          const net::RedirectInfo& redirect_info,
                           const network::mojom::URLResponseHead& response_head,
                           std::vector<std::string>* removed_headers);
   void OnResponseStarted(const GURL& final_url,
                          const network::mojom::URLResponseHead& response_head);
 
   // Callback for when |url_loader_| has finished.
-  void OnUrlLoaderCompleted(std::unique_ptr<std::string> response_body);
+  void OnUrlLoaderCompleted(std::optional<std::string> response_body);
 
   // Called when the Job has completed. The job may finish in response to a
   // timeout, an invalid URL, or the SimpleURLLoader completing.
   // This will delete the Job after calling |CompleteAndClearRequests()|.
   void OnJobCompleted(net::Error error,
-                      std::unique_ptr<std::string> response_body);
+                      std::optional<std::string> response_body);
 
   // Calls r->OnJobCompleted() for each RequestCore |r| currently attached
   // to this job, and then clears |requests_|.
   void CompleteAndClearRequests(net::Error error,
-                                std::unique_ptr<std::string> response_body);
+                                std::optional<std::string> response_body);
 
   // Cancels a request with a specified error code and calls
   // OnUrlRequestCompleted().
@@ -403,9 +414,7 @@ class Job {
 
   // Non-owned pointer to the AsyncCertNetFetcherURLLoader that created this
   // job.
-  CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader* parent_;
-
-  DISALLOW_COPY_AND_ASSIGN(Job);
+  raw_ptr<CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader> parent_;
 };
 
 }  // namespace
@@ -434,7 +443,7 @@ void CertNetFetcherURLLoader::RequestCore::CancelJob() {
 
 void CertNetFetcherURLLoader::RequestCore::CancelJobOnTaskRunner() {
   if (job_) {
-    auto* job = job_;
+    auto* job = job_.get();
     job_ = nullptr;
     job->DetachRequest(this);
   }
@@ -461,8 +470,8 @@ void Job::AttachRequest(
 void Job::DetachRequest(CertNetFetcherURLLoader::RequestCore* request) {
   std::unique_ptr<Job> delete_this;
 
-  auto it = std::find(requests_.begin(), requests_.end(), request);
-  DCHECK(it != requests_.end());
+  auto it = std::ranges::find(requests_, request);
+  CHECK(it != requests_.end());
   requests_.erase(it);
 
   // If there are no longer any requests attached to the job then
@@ -518,6 +527,10 @@ void Job::StartURLLoader(network::mojom::URLLoaderFactory* factory) {
   request->trusted_params = network::ResourceRequest::TrustedParams();
   request->trusted_params->disable_secure_dns = true;
   request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  // Ensure that we bypass HSTS for all requests sent through
+  // CertNetFetcherURLLoader, since AIA/CRL/OCSP requests must be in HTTP to
+  // avoid circular dependencies.
+  request->load_flags |= net::LOAD_SHOULD_BYPASS_HSTS;
   url_loader_ =
       network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
   // base::Unretained(this) is safe because |this| owns |url_loader_|, which
@@ -537,10 +550,11 @@ void Job::Cancel() {
   // Reset the SimpleURLLoader.
   url_loader_.reset();
   // Signal attached requests that they've been completed.
-  CompleteAndClearRequests(net::ERR_ABORTED, nullptr);
+  CompleteAndClearRequests(net::ERR_ABORTED, std::nullopt);
 }
 
 void Job::OnReceivedRedirect(
+    const GURL& url_before_redirect,
     const net::RedirectInfo& redirect_info,
     const network::mojom::URLResponseHead& response_head,
     std::vector<std::string>* removed_headers) {
@@ -559,13 +573,13 @@ void Job::OnResponseStarted(
   }
 }
 
-void Job::OnUrlLoaderCompleted(std::unique_ptr<std::string> response_body) {
+void Job::OnUrlLoaderCompleted(std::optional<std::string> response_body) {
   net::Error error = static_cast<net::Error>(url_loader_->NetError());
   OnJobCompleted(error, std::move(response_body));
 }
 
 void Job::OnJobCompleted(net::Error error,
-                         std::unique_ptr<std::string> response_body) {
+                         std::optional<std::string> response_body) {
   // Reset the SimpleURLLoader.
   url_loader_.reset();
 
@@ -574,18 +588,19 @@ void Job::OnJobCompleted(net::Error error,
 }
 
 void Job::CompleteAndClearRequests(net::Error error,
-                                   std::unique_ptr<std::string> response_body) {
+                                   std::optional<std::string> response_body) {
   for (const auto& request : requests_) {
-    std::string empty_str;
     request->OnJobCompleted(this, error,
-                            response_body ? response_body.get() : &empty_str);
+                            response_body.has_value()
+                                ? base::as_byte_span(*response_body)
+                                : base::span<uint8_t>());
   }
 
   requests_.clear();
 }
 
 void Job::FailRequest(net::Error error) {
-  OnJobCompleted(error, nullptr);
+  OnJobCompleted(error, std::nullopt);
 }
 
 }  // namespace
@@ -614,7 +629,7 @@ void CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader::
   // it, binding it to a new pipe, and dropping the PendingReceiver on the
   // floor.
   factory_.reset();
-  ignore_result(factory_.BindNewPipeAndPassReceiver());
+  std::ignore = factory_.BindNewPipeAndPassReceiver();
   factory_.FlushForTesting();
 }
 
@@ -738,7 +753,7 @@ class CertNetFetcherRequestImpl : public net::CertNetFetcher::Request {
 }  // namespace
 
 CertNetFetcherURLLoader::CertNetFetcherURLLoader()
-    : task_runner_(base::SequencedTaskRunnerHandle::Get()) {}
+    : task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {}
 
 CertNetFetcherURLLoader::~CertNetFetcherURLLoader() = default;
 
@@ -747,7 +762,7 @@ void CertNetFetcherURLLoader::SetURLLoaderFactoryAndReconnector(
     base::RepeatingCallback<
         void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)>
         bind_new_url_loader_factory_cb) {
-  DCHECK(!impl_);
+  CHECK(!impl_);
   impl_ = std::make_unique<AsyncCertNetFetcherURLLoader>(
       std::move(factory), std::move(bind_new_url_loader_factory_cb));
 }

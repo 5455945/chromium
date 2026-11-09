@@ -1,14 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_TRIGGERS_AD_SAMPLER_TRIGGER_H_
 #define COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_TRIGGERS_AD_SAMPLER_TRIGGER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
 
 class PrefService;
 
@@ -57,21 +57,8 @@ enum AdSamplerTriggerAction {
 
 // This class periodically checks for Google ads on the page and may decide to
 // send a report to Google with the ad's structure for further analysis.
-class AdSamplerTrigger : public content::WebContentsObserver,
-                         public content::WebContentsUserData<AdSamplerTrigger> {
+class AdSamplerTrigger : public content::WebContentsObserver {
  public:
-  ~AdSamplerTrigger() override;
-
-  // content::WebContentsObserver implementation.
-  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                     const GURL& validated_url) override;
-
- private:
-  friend class AdSamplerTriggerTest;
-  friend class content::WebContentsUserData<AdSamplerTrigger>;
-  FRIEND_TEST_ALL_PREFIXES(AdSamplerTriggerTestFinch,
-                           FrequencyDenominatorFeature);
-
   AdSamplerTrigger(
       content::WebContents* web_contents,
       TriggerManager* trigger_manager,
@@ -79,6 +66,19 @@ class AdSamplerTrigger : public content::WebContentsObserver,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       history::HistoryService* history_service,
       ReferrerChainProvider* referrer_chain_provider);
+  AdSamplerTrigger(const AdSamplerTrigger&) = delete;
+  AdSamplerTrigger& operator=(const AdSamplerTrigger&) = delete;
+
+  ~AdSamplerTrigger() override;
+
+  // content::WebContentsObserver implementation.
+  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                     const GURL& validated_url) override;
+
+  static size_t GetSamplerFrequencyDenominatorForTest();
+
+ private:
+  friend class AdSamplerTriggerTest;
 
   // Called to create an ad sample report.
   void CreateAdSampleReport();
@@ -88,7 +88,7 @@ class AdSamplerTrigger : public content::WebContentsObserver,
 
   // Sets a task runner to use for tests.
   void SetTaskRunnerForTest(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      scoped_refptr<base::SequencedTaskRunner> task_runner);
 
   // Ad samples will be collected with frequency
   // 1/|sampler_frequency_denominator_|
@@ -104,22 +104,18 @@ class AdSamplerTrigger : public content::WebContentsObserver,
 
   // TriggerManager gets called if this trigger detects an ad and wants to
   // collect some data about it. Not owned.
-  TriggerManager* trigger_manager_;
+  raw_ptr<TriggerManager> trigger_manager_;
 
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  history::HistoryService* history_service_;
-  ReferrerChainProvider* referrer_chain_provider_;
+  raw_ptr<history::HistoryService> history_service_;
+  raw_ptr<ReferrerChainProvider> referrer_chain_provider_;
 
   // Task runner for posting delayed tasks. Normally set to the runner for the
   // UI thread, but can be overwritten for tests.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   base::WeakPtrFactory<AdSamplerTrigger> weak_ptr_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(AdSamplerTrigger);
 };
 
 }  // namespace safe_browsing

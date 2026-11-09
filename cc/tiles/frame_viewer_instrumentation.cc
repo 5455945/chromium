@@ -1,8 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/tiles/frame_viewer_instrumentation.h"
+
+#include <memory>
+#include <utility>
 
 #include "components/viz/common/traced_value.h"
 
@@ -19,11 +22,10 @@ const char kTileId[] = "tileId";
 const char kTileResolution[] = "tileResolution";
 const char kSourceFrameNumber[] = "sourceFrameNumber";
 
-const char kAnalyzeTask[] = "AnalyzeTask";
 const char kRasterTask[] = "RasterTask";
 
 std::unique_ptr<base::trace_event::ConvertableToTraceFormat> TileDataAsValue(
-    const void* tile_id,
+    viz::TracedValue::Id tile_id,
     TileResolution tile_resolution,
     int source_frame_number,
     int layer_id) {
@@ -38,30 +40,17 @@ std::unique_ptr<base::trace_event::ConvertableToTraceFormat> TileDataAsValue(
 
 }  // namespace
 
-ScopedAnalyzeTask::ScopedAnalyzeTask(const void* tile_id,
-                                     TileResolution tile_resolution,
-                                     int source_frame_number,
-                                     int layer_id) {
-  TRACE_EVENT_BEGIN1(
-      kCategory, kAnalyzeTask, kTileData,
-      TileDataAsValue(tile_id, tile_resolution, source_frame_number, layer_id));
-}
-
-ScopedAnalyzeTask::~ScopedAnalyzeTask() {
-  TRACE_EVENT_END0(kCategory, kAnalyzeTask);
-}
-
-ScopedRasterTask::ScopedRasterTask(const void* tile_id,
+ScopedRasterTask::ScopedRasterTask(viz::TracedValue::Id tile_id,
                                    TileResolution tile_resolution,
                                    int source_frame_number,
                                    int layer_id) {
-  TRACE_EVENT_BEGIN1(
+  TRACE_EVENT_BEGIN(
       kCategory, kRasterTask, kTileData,
       TileDataAsValue(tile_id, tile_resolution, source_frame_number, layer_id));
 }
 
 ScopedRasterTask::~ScopedRasterTask() {
-  TRACE_EVENT_END0(kCategory, kRasterTask);
+  TRACE_EVENT_END(kCategory);
 }
 
 bool IsTracingLayerTreeSnapshots() {

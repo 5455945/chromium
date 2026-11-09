@@ -1,40 +1,38 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/sync/engine/backoff_delay_provider.h"
 
-#include <stdint.h>
-
 #include <algorithm>
 
 #include "base/memory/ptr_util.h"
 #include "base/rand_util.h"
-#include "components/sync/base/syncer_error.h"
 #include "components/sync/engine/cycle/model_neutral_state.h"
 #include "components/sync/engine/polling_constants.h"
+#include "components/sync/engine/sync_protocol_error.h"
+#include "components/sync/engine/syncer_error.h"
 
 namespace syncer {
 
 namespace {
 
 // This calculates approx. last_delay * kBackoffMultiplyFactor +/- last_delay
-// * kBackoffJitterFactor. |jitter_sign| must be -1 or 1 and determines whether
+// * kBackoffJitterFactor. `jitter_sign` must be -1 or 1 and determines whether
 // the jitter in the delay will be positive or negative.
 base::TimeDelta GetDelayImpl(base::TimeDelta last_delay, int jitter_sign) {
   DCHECK(jitter_sign == -1 || jitter_sign == 1);
 
-  if (last_delay >= kMaxBackoffTime)
+  if (last_delay >= kMaxBackoffTime) {
     return kMaxBackoffTime;
+  }
 
   const base::TimeDelta backoff =
-      std::max(base::TimeDelta::FromSeconds(1),
-               last_delay * kBackoffMultiplyFactor) +
+      std::max(kMinBackoffTime, last_delay * kBackoffMultiplyFactor) +
       jitter_sign * kBackoffJitterFactor * last_delay;
 
-  // Clamp backoff between 1 second and |kMaxBackoffTime|.
-  return std::max(base::TimeDelta::FromSeconds(1),
-                  std::min(backoff, kMaxBackoffTime));
+  // Clamp backoff between 1 second and `kMaxBackoffTime`.
+  return std::max(kMinBackoffTime, std::min(backoff, kMaxBackoffTime));
 }
 
 }  // namespace
@@ -43,7 +41,7 @@ base::TimeDelta GetDelayImpl(base::TimeDelta last_delay, int jitter_sign) {
 std::unique_ptr<BackoffDelayProvider> BackoffDelayProvider::FromDefaults() {
   // base::WrapUnique() used because the constructor is private.
   return base::WrapUnique(new BackoffDelayProvider(
-      kInitialBackoffRetryTime, kInitialBackoffImmediateRetryTime));
+      kInitialBackoffRetryTime, kInitialBackoffShortRetryTime));
 }
 
 // static
@@ -60,48 +58,50 @@ BackoffDelayProvider::BackoffDelayProvider(
     : default_initial_backoff_(default_initial_backoff),
       short_initial_backoff_(short_initial_backoff) {}
 
-BackoffDelayProvider::~BackoffDelayProvider() {}
+BackoffDelayProvider::~BackoffDelayProvider() = default;
 
 base::TimeDelta BackoffDelayProvider::GetDelay(
     const base::TimeDelta& last_delay) {
   // Flip a coin to randomize backoff interval by +/- kBackoffJitterFactor.
-  const int jitter_sign = base::RandInt(0, 1) * 2 - 1;
+  const int jitter_sign = base::RandIntInclusive(0, 1) * 2 - 1;
   return GetDelayImpl(last_delay, jitter_sign);
 }
 
 base::TimeDelta BackoffDelayProvider::GetInitialDelay(
     const ModelNeutralState& state) const {
-  // NETWORK_CONNECTION_UNAVAILABLE implies we did not receive HTTP response
-  // from server because of some network error. If network is unavailable then
-  // on next connection type or address change scheduler will run canary job.
-  // Otherwise we'll retry in 30 seconds.
-  if (state.commit_result.value() ==
-          SyncerError::NETWORK_CONNECTION_UNAVAILABLE ||
-      state.last_download_updates_result.value() ==
-          SyncerError::NETWORK_CONNECTION_UNAVAILABLE) {
-    return default_initial_backoff_;
+  // kNetworkError implies we did not receive HTTP response from server because
+  // of some network error. If network is unavailable then on next connection
+  // type or address change scheduler will run canary job. Otherwise we'll retry
+  // in 1 second.
+  if (state.commit_result.type() == SyncerError::Type::kNetworkError ||
+      state.last_download_updates_result.type() ==
+          SyncerError::Type::kNetworkError) {
+    // Retry with a short delay on network error. This should be safe because
+    // it shouldn't increase traffic to the server but should help to recover
+    // from the network errors faster.
+    return short_initial_backoff_;
   }
 
-  if (state.last_get_key_result.IsActualError())
+  if (state.last_get_key_failed) {
     return default_initial_backoff_;
+  }
 
   // Note: If we received a MIGRATION_DONE on download updates, then commit
   // should not have taken place.  Moreover, if we receive a MIGRATION_DONE
   // on commit, it means that download updates succeeded.  Therefore, we only
   // need to check if either code is equal to SERVER_RETURN_MIGRATION_DONE,
   // and not if there were any more serious errors requiring the long retry.
-  if (state.last_download_updates_result.value() ==
-          SyncerError::SERVER_RETURN_MIGRATION_DONE ||
-      state.commit_result.value() ==
-          SyncerError::SERVER_RETURN_MIGRATION_DONE) {
-    return short_initial_backoff_;
+  if (state.last_download_updates_result.type() ==
+          SyncerError::Type::kProtocolError &&
+      state.last_download_updates_result.GetProtocolErrorOrDie() ==
+          SyncProtocolErrorType::MIGRATION_DONE) {
+    return kInitialBackoffImmediateRetryTime;
   }
-
-  // If a datatype decides the GetUpdates must be retried (e.g. because the
-  // context has been updated since the request), use the short delay.
-  if (state.last_download_updates_result.value() ==
-      SyncerError::DATATYPE_TRIGGERED_RETRY)
-    return short_initial_backoff_;
+  if (state.commit_result.type() == SyncerError::Type::kProtocolError &&
+      state.commit_result.GetProtocolErrorOrDie() ==
+          SyncProtocolErrorType::MIGRATION_DONE) {
+    return kInitialBackoffImmediateRetryTime;
+  }
 
   // When the server tells us we have a conflict, then we should download the
   // latest updates so we can see the conflict ourselves, resolve it locally,
@@ -111,8 +111,11 @@ base::TimeDelta BackoffDelayProvider::GetInitialDelay(
   // TODO(sync): We shouldn't need to handle this in BackoffDelayProvider.
   // There should be a way to deal with protocol errors before we get to this
   // point.
-  if (state.commit_result.value() == SyncerError::SERVER_RETURN_CONFLICT)
-    return short_initial_backoff_;
+  if (state.commit_result.type() == SyncerError::Type::kProtocolError &&
+      state.commit_result.GetProtocolErrorOrDie() ==
+          SyncProtocolErrorType::CONFLICT) {
+    return kInitialBackoffImmediateRetryTime;
+  }
 
   return default_initial_backoff_;
 }

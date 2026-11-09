@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,9 @@
 #include "base/test/bind.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/nacl_host/nacl_browser_delegate_impl.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
-#include "components/nacl/browser/nacl_browser.h"
-#include "components/nacl/common/buildflags.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -39,10 +36,10 @@ enterprise_management::RemoteCommand CreateCommandProto(
       enterprise_management::RemoteCommand_Type_BROWSER_CLEAR_BROWSING_DATA);
   command_proto.set_command_id(kUniqueID);
 
-  base::Value root(base::Value::Type::DICTIONARY);
-  root.SetStringKey(kProfilePathField, profile_path);
-  root.SetBoolKey(kClearCacheField, clear_cache);
-  root.SetBoolKey(kClearCookiesField, clear_cookies);
+  base::DictValue root;
+  root.Set(kProfilePathField, profile_path);
+  root.Set(kClearCacheField, clear_cache);
+  root.Set(kClearCookiesField, clear_cookies);
 
   std::string payload;
   base::JSONWriter::Write(root, &payload);
@@ -50,13 +47,28 @@ enterprise_management::RemoteCommand CreateCommandProto(
   return command_proto;
 }
 
-std::unique_ptr<ClearBrowsingDataJob> CreateJob(
-    enterprise_management::RemoteCommand command_proto,
-    ProfileManager* profile_manager) {
-  auto job = std::make_unique<ClearBrowsingDataJob>(profile_manager);
-  EXPECT_TRUE(job->Init(base::TimeTicks::Now(), command_proto, nullptr));
+void InitJob(ClearBrowsingDataJob* job,
+             const enterprise_management::RemoteCommand& command_proto) {
+  EXPECT_TRUE(job->Init(base::TimeTicks::Now(), command_proto,
+                        enterprise_management::SignedData{}));
   EXPECT_EQ(kUniqueID, job->unique_id());
   EXPECT_EQ(policy::RemoteCommandJob::NOT_STARTED, job->status());
+}
+
+std::unique_ptr<ClearBrowsingDataJob> CreateJob(
+    const enterprise_management::RemoteCommand& command_proto,
+    ProfileManager* profile_manager) {
+  auto job = std::make_unique<ClearBrowsingDataJob>(profile_manager);
+  InitJob(job.get(), command_proto);
+
+  return job;
+}
+
+std::unique_ptr<ClearBrowsingDataJob> CreateJob(
+    const enterprise_management::RemoteCommand& command_proto,
+    Profile* profile) {
+  auto job = std::make_unique<ClearBrowsingDataJob>(profile);
+  InitJob(job.get(), command_proto);
 
   return job;
 }
@@ -73,22 +85,11 @@ class ClearBrowsingDataJobTest : public ::testing::Test {
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     EXPECT_TRUE(profile_manager_->SetUp());
-
-#if BUILDFLAG(ENABLE_NACL)
-    // Clearing Cache will clear PNACL cache, which needs this delegate set.
-    nacl::NaClBrowser::SetDelegate(
-        std::make_unique<NaClBrowserDelegateImpl>(profile_manager()));
-#endif
   }
 
   void TearDown() override {
     profile_manager_.reset();
     task_environment_.reset();
-
-#if BUILDFLAG(ENABLE_NACL)
-    // Clearing Cache will clear PNACL cache, which needs this delegate set.
-    nacl::NaClBrowser::ClearAndDeleteDelegateForTest();
-#endif
 
     ::testing::Test::TearDown();
   }
@@ -99,8 +100,8 @@ class ClearBrowsingDataJobTest : public ::testing::Test {
 
   void RunUntilIdle() { task_environment_->RunUntilIdle(); }
 
-  void AddTestingProfile() {
-    profile_manager_->CreateTestingProfile(kProfileName);
+  TestingProfile* AddTestingProfile() {
+    return profile_manager_->CreateTestingProfile(kProfileName);
   }
 
   base::FilePath GetTestProfilePath() {
@@ -124,15 +125,16 @@ TEST_F(ClearBrowsingDataJobTest, CanParseWithMissingDataTypes) {
       enterprise_management::RemoteCommand_Type_BROWSER_CLEAR_BROWSING_DATA);
   command_proto.set_command_id(kUniqueID);
 
-  base::Value root(base::Value::Type::DICTIONARY);
-  root.SetStringKey(kProfilePathField, kTestProfilePath);
+  base::DictValue root;
+  root.Set(kProfilePathField, kTestProfilePath);
 
   std::string payload;
   base::JSONWriter::Write(root, &payload);
   command_proto.set_payload(payload);
 
   auto job = std::make_unique<ClearBrowsingDataJob>(profile_manager());
-  EXPECT_TRUE(job->Init(base::TimeTicks::Now(), command_proto, nullptr));
+  EXPECT_TRUE(job->Init(base::TimeTicks::Now(), command_proto,
+                        enterprise_management::SignedData{}));
 
   bool done = false;
   // Run should return true because the command will be successfully posted,
@@ -155,16 +157,17 @@ TEST_F(ClearBrowsingDataJobTest, DontInitWhenMissingProfilePath) {
       enterprise_management::RemoteCommand_Type_BROWSER_CLEAR_BROWSING_DATA);
   command_proto.set_command_id(kUniqueID);
 
-  base::Value root(base::Value::Type::DICTIONARY);
-  root.SetBoolKey(kClearCacheField, true);
-  root.SetBoolKey(kClearCookiesField, true);
+  base::DictValue root;
+  root.Set(kClearCacheField, true);
+  root.Set(kClearCookiesField, true);
 
   std::string payload;
   base::JSONWriter::Write(root, &payload);
   command_proto.set_payload(payload);
 
   auto job = std::make_unique<ClearBrowsingDataJob>(profile_manager());
-  EXPECT_FALSE(job->Init(base::TimeTicks::Now(), command_proto, nullptr));
+  EXPECT_FALSE(job->Init(base::TimeTicks::Now(), command_proto,
+                         enterprise_management::SignedData{}));
 }
 
 TEST_F(ClearBrowsingDataJobTest, FailureWhenProfileDoesntExist) {
@@ -286,6 +289,28 @@ TEST_F(ClearBrowsingDataJobTest, SuccessClearNeither) {
   EXPECT_TRUE(done);
 }
 
+TEST_F(ClearBrowsingDataJobTest, SucessClearWithProfile) {
+  base::RunLoop run_loop;
+  TestingProfile* profile = AddTestingProfile();
+  auto job = CreateJob(CreateCommandProto(GetTestProfilePath().AsUTF8Unsafe(),
+                                          /* clear_cache= */ true,
+                                          /* clear_cookies= */ false),
+                       profile);
+  bool done = false;
+  // Run should return true because the command will be successfully posted,
+  // but status of the command will be |FAILED| when |finished_callback| is
+  // invoked.
+  EXPECT_TRUE(job->Run(base::Time::Now(), base::TimeTicks::Now(),
+                       base::BindLambdaForTesting([&] {
+                         EXPECT_EQ(policy::RemoteCommandJob::SUCCEEDED,
+                                   job->status());
+                         done = true;
+                         run_loop.Quit();
+                       })));
+  run_loop.Run();
+  EXPECT_TRUE(done);
+}
+
 // For Windows machines, the path that Chrome reports for the profile is
 // "Normalized" to all lower-case on the reporting server. This means that
 // when the server sends the command, the path will be all lower case and
@@ -304,7 +329,7 @@ TEST_F(ClearBrowsingDataJobTest, HandleProfilPathCaseSensitivity) {
 
   bool done = false;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // On windows, paths are case-insensitive so passing a lowercase path should
   // still result in success.
   auto expected = policy::RemoteCommandJob::SUCCEEDED;
@@ -312,7 +337,7 @@ TEST_F(ClearBrowsingDataJobTest, HandleProfilPathCaseSensitivity) {
   // On other platforms, paths are case-sensitive, so passing a lower case path
   // will result in the profile not being found.
   auto expected = policy::RemoteCommandJob::FAILED;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
   EXPECT_TRUE(job->Run(base::Time::Now(), base::TimeTicks::Now(),
                        base::BindLambdaForTesting([&] {

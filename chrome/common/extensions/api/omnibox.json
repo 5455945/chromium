@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,13 +31,32 @@
         }
       },
       {
-        "id": "MatchClassificationRaw",
-        "nodoc": true,
+        "id": "Action",
         "type": "object",
-        "description": "The style ranges for the description, as provided by ToValue().",
+        "description": "An action button attached to a suggest result.",
+        "nodoc": true,
         "properties": {
-          "offset": { "type": "integer" },
-          "type": { "type": "integer" }
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The string sent to the extension in the event corresponding to the user clicking on the action."
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The action button label."
+          },
+          "tooltipText": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The action button hover tooltip text."
+          },
+          "icon": {
+            "optional": true,
+            "type": "object",
+            "additionalProperties": { "type": "any" },
+            "description": "The icon shown in the action button on the leading side of the  action label. The icon must be specified as an imageData object. The size should not be more than 160 px wide and tall."
+          }
         }
       },
       {
@@ -70,21 +89,25 @@
               "$ref": "MatchClassification"
             }
           },
-          "descriptionStylesRaw": {
+          "actions": {
             "nodoc": true,
             "optional": true,
             "type": "array",
-            "description": "An array of style ranges for the description, as provided by ToValue().",
+            "description": "An array of actions attached to the suggestion. Only supported for suggestions added in unscoped mode.",
             "items": {
-              "name": "matchClassificationRaw",
-              "$ref": "MatchClassificationRaw"
+              "$ref": "Action"
             }
+          },
+          "iconUrl" : {
+            "nodoc": true,
+            "optional": true,
+            "description": "An icon shown on the leading edge of the suggestion in the omnibox dropdown. Only supported for suggestions added in unscoped mode.",
+            "type": "string"
           }
         }
       },
       {
         "id": "DefaultSuggestResult",
-        "inline_doc": true,
         "type": "object",
         "description": "A suggest result.",
         "properties": {
@@ -102,16 +125,22 @@
               "name": "matchClassification",
               "$ref": "MatchClassification"
             }
+          }
+        }
+      },
+      {
+        "id": "ActionExecution",
+        "type": "object",
+        "description": "Details about an action executed by the user sent in the listener of `onActionExecuted`.",
+        "nodoc": true,
+        "properties": {
+          "actionName": {
+            "type": "string",
+            "description": "The name of the action the user selected, as defined by the `action` field in `Action`."
           },
-          "descriptionStylesRaw": {
-            "nodoc": true,
-            "optional": true,
-            "type": "array",
-            "description": "An array of style ranges for the description, as provided by ToValue().",
-            "items": {
-              "name": "matchClassificationRaw",
-              "$ref": "MatchClassificationRaw"
-            }
+          "content": {
+            "type": "string",
+            "description": "The text of the suggestion corresponding to the action, as shown in the Omnibox. The same as the `SuggestResult.content`."
           }
         }
       }
@@ -119,6 +148,7 @@
     "manifest_keys": {
       "omnibox": {
         "type": "object",
+        "optional": true,
         "properties": {
           "keyword": {
             "type": "string",
@@ -155,7 +185,12 @@
             "$ref": "DefaultSuggestResult",
             "description": "A partial SuggestResult object, without the 'content' parameter."
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
       }
     ],
     "events": [
@@ -221,6 +256,18 @@
             "type": "string",
             "name": "text",
             "description": "Text of the deleted suggestion."
+          }
+        ]
+      },
+      {
+        "name": "onActionExecuted",
+        "nodoc": true,
+        "type": "function",
+        "description": "User has selected an action attached to a suggested result by pressing the corresponding button in the Omnibox.",
+        "parameters": [
+          {
+            "name": "actionExecution",
+            "$ref": "ActionExecution"
           }
         ]
       }

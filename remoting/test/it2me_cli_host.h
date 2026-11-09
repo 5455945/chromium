@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
@@ -30,6 +29,10 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   static void PrintHelp();
 
   It2MeCliHost();
+
+  It2MeCliHost(const It2MeCliHost&) = delete;
+  It2MeCliHost& operator=(const It2MeCliHost&) = delete;
+
   ~It2MeCliHost() override;
 
   void Start();
@@ -41,14 +44,15 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   void CloseChannel(const std::string& error_message) override;
 
   // Sends message to host in separate task.
-  void SendMessageToHost(const std::string& type, base::Value params);
+  void SendMessageToHost(const std::string& type, base::DictValue params);
   // Actually sends message to host.
   void DoSendMessage(const std::string& json);
   void OnProtocolBroken(const std::string& message);
 
   void StartCRDHostAndGetCode(OAuthTokenGetter::Status status,
                               const std::string& user_email,
-                              const std::string& access_token);
+                              const std::string& access_token,
+                              const std::string& scopes);
 
   // Shuts down host in a separate task.
   void ShutdownHost();
@@ -59,10 +63,11 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   void OnHelloResponse();
   void OnDisconnectResponse();
 
-  void OnStateError(const std::string& error_state, const base::Value& message);
-  void OnStateRemoteConnected(const base::Value& message);
+  void OnStateError(const std::string& error_state,
+                    const base::DictValue& message);
+  void OnStateRemoteConnected(const base::DictValue& message);
   void OnStateRemoteDisconnected();
-  void OnStateReceivedAccessCode(const base::Value& message);
+  void OnStateReceivedAccessCode(const base::DictValue& message);
 
   std::unique_ptr<test::TestTokenStorage> storage_;
   std::unique_ptr<test::TestOAuthTokenGetter> token_getter_;
@@ -70,7 +75,7 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   std::unique_ptr<extensions::NativeMessageHost> host_;
 
   // Filled structure with parameters for "connect" message.
-  base::Value connect_params_;
+  base::DictValue connect_params_;
 
   // Determines actions when receiving messages from CRD host,
   // if command is still running (no error / access code), then
@@ -80,7 +85,6 @@ class It2MeCliHost final : public extensions::NativeMessageHost::Client {
   bool remote_connected_;
 
   base::WeakPtrFactory<It2MeCliHost> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(It2MeCliHost);
 };
 
 }  // namespace remoting

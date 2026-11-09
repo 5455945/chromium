@@ -1,11 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.contextualsearch;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.url.GURL;
 
 /**
@@ -13,6 +13,7 @@ import org.chromium.url.GURL;
  * This is used to stub out the server during tests but in normal operation it just
  * short circuits from the {@link ContextualSearchManager} to itself.
  */
+@NullMarked
 interface ContextualSearchNetworkCommunicator {
     /**
      * Starts a Search Term Resolution request.
@@ -32,14 +33,7 @@ interface ContextualSearchNetworkCommunicator {
      */
     void handleSearchTermResolutionResponse(ResolvedSearchTerm resolvedSearchTerm);
 
-    /**
-     * @return Whether the device is currently online.
-     */
-    boolean isOnline();
-
-    /**
-     * Stops any navigation in the overlay panel's {@code WebContents}.
-     */
+    /** Stops any navigation in the overlay panel's {@code WebContents}. */
     void stopPanelContentsNavigation();
 
     // --------------------------------------------------------------------------------------------
@@ -52,6 +46,5 @@ interface ContextualSearchNetworkCommunicator {
      * This is needed to stub out for testing, but has nothing to do with networking.
      * @return The URL of the base page (needed for testing purposes).
      */
-    @Nullable
-    GURL getBasePageUrl();
+    @Nullable GURL getBasePageUrl();
 }

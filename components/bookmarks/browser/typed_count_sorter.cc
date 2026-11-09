@@ -1,10 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/bookmarks/browser/typed_count_sorter.h"
 
+#include <algorithm>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "components/bookmarks/browser/bookmark_client.h"
+#include "components/bookmarks/browser/titled_url_node.h"
 
 namespace bookmarks {
 
@@ -12,7 +17,8 @@ using UrlTypedCountMap = BookmarkClient::UrlTypedCountMap;
 
 namespace {
 
-using UrlNodeMap = std::map<const GURL*, const TitledUrlNode*>;
+using UrlNodeMap =
+    std::map<const GURL*, raw_ptr<const TitledUrlNode, CtnExperimental>>;
 using UrlTypedCountPair = std::pair<const GURL*, int>;
 using UrlTypedCountPairs = std::vector<UrlTypedCountPair>;
 
@@ -29,16 +35,15 @@ struct UrlTypedCountPairSortFunctor {
 // corresponding TitledUrlNode.
 class UrlTypedCountPairNodeLookupFunctor {
  public:
-  UrlTypedCountPairNodeLookupFunctor(UrlNodeMap& url_node_map)
-      : url_node_map_(url_node_map) {
-  }
+  explicit UrlTypedCountPairNodeLookupFunctor(UrlNodeMap& url_node_map)
+      : url_node_map_(url_node_map) {}
 
   const TitledUrlNode* operator()(const UrlTypedCountPair& pair) const {
-    return url_node_map_[pair.first];
+    return (*url_node_map_)[pair.first];
   }
 
  private:
-  UrlNodeMap& url_node_map_;
+  const raw_ref<UrlNodeMap> url_node_map_;
 };
 
 }  // namespace
@@ -48,7 +53,7 @@ TypedCountSorter::TypedCountSorter(BookmarkClient* client)
   DCHECK(client_);
 }
 
-TypedCountSorter::~TypedCountSorter() {}
+TypedCountSorter::~TypedCountSorter() = default;
 
 void TypedCountSorter::SortMatches(const TitledUrlNodeSet& matches,
                                    TitledUrlNodes* sorted_nodes) const {
@@ -56,7 +61,7 @@ void TypedCountSorter::SortMatches(const TitledUrlNodeSet& matches,
   if (client_->SupportsTypedCountForUrls()) {
     UrlNodeMap url_node_map;
     UrlTypedCountMap url_typed_count_map;
-    for (auto* node : matches) {
+    for (const TitledUrlNode* node : matches) {
       const GURL& url = node->GetTitledUrlNodeUrl();
       url_node_map.insert(std::make_pair(&url, node));
       url_typed_count_map.insert(std::make_pair(&url, 0));
@@ -65,16 +70,13 @@ void TypedCountSorter::SortMatches(const TitledUrlNodeSet& matches,
     client_->GetTypedCountForUrls(&url_typed_count_map);
 
     UrlTypedCountPairs url_typed_counts;
-    std::copy(url_typed_count_map.begin(),
-              url_typed_count_map.end(),
-              std::back_inserter(url_typed_counts));
+    std::ranges::copy(url_typed_count_map,
+                      std::back_inserter(url_typed_counts));
     std::sort(url_typed_counts.begin(),
               url_typed_counts.end(),
               UrlTypedCountPairSortFunctor());
-    std::transform(url_typed_counts.begin(),
-                   url_typed_counts.end(),
-                   std::back_inserter(*sorted_nodes),
-                   UrlTypedCountPairNodeLookupFunctor(url_node_map));
+    std::ranges::transform(url_typed_counts, std::back_inserter(*sorted_nodes),
+                           UrlTypedCountPairNodeLookupFunctor(url_node_map));
   } else {
     sorted_nodes->insert(sorted_nodes->end(), matches.begin(), matches.end());
   }

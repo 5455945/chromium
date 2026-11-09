@@ -1,20 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/omnibox_client.h"
 
-#include <memory>
+#include <optional>
+#include <string>
 
+#include "base/functional/callback.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/gfx/image/image.h"
+#include "url/gurl.h"
 
-std::unique_ptr<OmniboxNavigationObserver>
-OmniboxClient::CreateOmniboxNavigationObserver(
-    const std::u16string& text,
-    const AutocompleteMatch& match,
-    const AutocompleteMatch& alternate_nav_match) {
-  return nullptr;
+bool OmniboxClient::IsChromeOmniboxClient() const {
+  return false;
 }
 
 bool OmniboxClient::CurrentPageExists() const {
@@ -33,6 +35,10 @@ gfx::Image OmniboxClient::GetFavicon() const {
   return gfx::Image();
 }
 
+ukm::SourceId OmniboxClient::GetUKMSourceId() const {
+  return ukm::kInvalidSourceId;
+}
+
 bool OmniboxClient::IsLoading() const {
   return false;
 }
@@ -49,15 +55,25 @@ bookmarks::BookmarkModel* OmniboxClient::GetBookmarkModel() {
   return nullptr;
 }
 
-OmniboxControllerEmitter* OmniboxClient::GetOmniboxControllerEmitter() {
-  return nullptr;
+bool OmniboxClient::ShowConfirmationDialogIfDefaultSearchExtensionControlled(
+    const GURL& url,
+    base::OnceCallback<void(ExtensionControlledDialogResult)> callback) {
+  return false;
 }
 
 TemplateURLService* OmniboxClient::GetTemplateURLService() {
   return nullptr;
 }
 
+AiModeButtonService* OmniboxClient::GetAiModeButtonService() {
+  return nullptr;
+}
+
 AutocompleteClassifier* OmniboxClient::GetAutocompleteClassifier() {
+  return nullptr;
+}
+
+omnibox::OmniboxPopupCloser* OmniboxClient::GetOmniboxPopupCloser() {
   return nullptr;
 }
 
@@ -69,8 +85,29 @@ int OmniboxClient::GetHttpsPortForTesting() const {
   return 0;
 }
 
-gfx::Image OmniboxClient::GetIconIfExtensionMatch(
-    const AutocompleteMatch& match) const {
+bool OmniboxClient::IsContextualTasksPage() const {
+  return false;
+}
+
+GURL OmniboxClient::GetContextualTasksInnerFrameURL() const {
+  return GURL();
+}
+
+metrics::OmniboxEventProto::PageClassification
+OmniboxClient::GetOmniboxComposeboxPageClassification() const {
+  return metrics::OmniboxEventProto::INVALID_SPEC;
+}
+
+bool OmniboxClient::IsUsingFakeHttpsForHttpsUpgradeTesting() const {
+  return false;
+}
+
+gfx::Image OmniboxClient::GetExtensionIcon(
+    const TemplateURL* template_url) const {
+  return gfx::Image();
+}
+
+gfx::Image OmniboxClient::GetSizedIcon(const SkBitmap* bitmap) const {
   return gfx::Image();
 }
 
@@ -83,13 +120,31 @@ gfx::Image OmniboxClient::GetSizedIcon(const gfx::Image& icon) const {
   return gfx::Image();
 }
 
-bool OmniboxClient::ProcessExtensionKeyword(
-    const TemplateURL* template_url,
-    const AutocompleteMatch& match,
-    WindowOpenDisposition disposition,
-    OmniboxNavigationObserver* observer) {
+std::optional<lens::proto::LensOverlaySuggestInputs>
+OmniboxClient::GetLensOverlaySuggestInputs() const {
+  return std::nullopt;
+}
+
+std::optional<lens::ContextualInputData> OmniboxClient::GetContextualInputData()
+    const {
+  return std::nullopt;
+}
+
+bool OmniboxClient::HasPreviousSubmittedThreadContext() const {
   return false;
 }
+
+bool OmniboxClient::HasAutoSuggestedTab() const {
+  return false;
+}
+
+void OmniboxClient::ProcessExtensionMatch(
+    const std::u16string& text,
+    const TemplateURL* template_url,
+    const AutocompleteMatch& match,
+    ui::mojom::WindowOpenDisposition disposition) {}
+
+void OmniboxClient::OnUserPastedInOmniboxResultingInValidURL() {}
 
 gfx::Image OmniboxClient::GetFaviconForPageUrl(
     const GURL& page_url,
@@ -106,4 +161,36 @@ gfx::Image OmniboxClient::GetFaviconForKeywordSearchProvider(
     const TemplateURL* template_url,
     FaviconFetchedCallback on_favicon_fetched) {
   return gfx::Image();
+}
+
+gfx::Image OmniboxClient::GetFaviconForIconUrl(
+    const GURL& icon_url,
+    FaviconFetchedCallback on_favicon_fetched,
+    bool notify_on_empty) {
+  return gfx::Image();
+}
+
+bool OmniboxClient::IsAimPopupEnabled() const {
+  return false;
+}
+
+omnibox::InputState OmniboxClient::GetInputState() const {
+  return omnibox::InputState();
+}
+
+void OmniboxClient::ExecuteAction(OmniboxAction* action,
+                                  ui::mojom::WindowOpenDisposition disposition,
+                                  base::TimeTicks match_selection_timestamp,
+                                  OmniboxAction::Client& action_client) {
+  if (!action) {
+    return;
+  }
+  OmniboxAction::ExecutionContext context(
+      action_client,
+      base::BindOnce(&OmniboxClient::OnAutocompleteAccept, AsWeakPtr()),
+      match_selection_timestamp, disposition);
+  base::UmaHistogramMicrosecondsTimes(
+      "Omnibox.InputToExecuteAction",
+      base::TimeTicks::Now() - match_selection_timestamp);
+  action->Execute(context);
 }

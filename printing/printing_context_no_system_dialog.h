@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/component_export.h"
+#include "printing/mojom/print.mojom.h"
 #include "printing/printing_context.h"
 
 namespace printing {
@@ -15,7 +16,8 @@ namespace printing {
 class COMPONENT_EXPORT(PRINTING) PrintingContextNoSystemDialog
     : public PrintingContext {
  public:
-  explicit PrintingContextNoSystemDialog(Delegate* delegate);
+  PrintingContextNoSystemDialog(Delegate* delegate,
+                                OutOfProcessBehavior out_of_process_behavior);
   PrintingContextNoSystemDialog(const PrintingContextNoSystemDialog&) = delete;
   PrintingContextNoSystemDialog& operator=(
       const PrintingContextNoSystemDialog&) = delete;
@@ -26,15 +28,15 @@ class COMPONENT_EXPORT(PRINTING) PrintingContextNoSystemDialog
                           bool has_selection,
                           bool is_scripted,
                           PrintSettingsCallback callback) override;
-  Result UseDefaultSettings() override;
+  mojom::ResultCode UseDefaultSettings() override;
   gfx::Size GetPdfPaperSizeDeviceUnits() override;
-  Result UpdatePrinterSettings(bool external_preview,
-                               bool show_system_dialog,
-                               int page_count) override;
-  Result NewDocument(const std::u16string& document_name) override;
-  Result NewPage() override;
-  Result PageDone() override;
-  Result DocumentDone() override;
+  mojom::ResultCode UpdatePrinterSettings(
+      const PrinterSettings& printer_settings) override;
+  mojom::ResultCode NewDocument(const std::u16string& document_name) override;
+  mojom::ResultCode PrintDocument(const MetafilePlayer& metafile,
+                                  const PrintSettings& settings,
+                                  uint32_t num_pages) override;
+  mojom::ResultCode DocumentDone() override;
   void Cancel() override;
   void ReleaseContext() override;
   printing::NativeDrawingContext context() const override;

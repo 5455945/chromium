@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,21 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/dom_distiller/content/browser/distiller_javascript_utils.h"
 #include "components/dom_distiller/core/distiller_page.h"
 #include "components/dom_distiller/core/dom_distiller_constants.h"
+#include "components/dom_distiller/core/dom_distiller_features.h"
 #include "components/dom_distiller/core/dom_distiller_service.h"
+#include "components/dom_distiller/core/extraction_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
@@ -27,10 +32,45 @@
 
 namespace dom_distiller {
 
+namespace {
+
+// UserData key to identify DistillerPageWebContents.
+const char kDistillerPageWebContentsUserDataTag[] =
+    "DistillerPageWebContentsUserDataTag";
+
+// Trivial SupportsUserData::Data implementation.
+class DistillerPageWebContentsUserData : public base::SupportsUserData::Data {
+ public:
+  explicit DistillerPageWebContentsUserData() = default;
+};
+
+// Blocks redirects for the web contents created for distillation viewing.
+class RedirectBlockingNavigationThrottle : public content::NavigationThrottle {
+ public:
+  explicit RedirectBlockingNavigationThrottle(
+      content::NavigationThrottleRegistry& registry)
+      : content::NavigationThrottle(registry) {}
+  ~RedirectBlockingNavigationThrottle() override = default;
+
+  // content::NavigationThrottle:
+  ThrottleCheckResult WillRedirectRequest() override {
+    return content::NavigationThrottle::CANCEL;
+  }
+  const char* GetNameForLogging() override {
+    return "DistillerViewerSourceNavigationThrottle";
+  }
+};
+
+}  // namespace
+
 SourcePageHandleWebContents::SourcePageHandleWebContents(
     content::WebContents* web_contents,
     bool owned)
-    : web_contents_(web_contents), owned_(owned) {}
+    : web_contents_(web_contents), owned_(owned) {
+  if (web_contents_ && owned) {
+    web_contents_->SetOwnerLocationForDebug(FROM_HERE);
+  }
+}
 
 SourcePageHandleWebContents::~SourcePageHandleWebContents() {
   if (owned_) {
@@ -58,6 +98,16 @@ DistillerPageWebContentsFactory::CreateDistillerPageWithHandle(
       browser_context_, gfx::Size(), std::move(web_contents_handle)));
 }
 
+// static
+void DistillerPageWebContents::MaybeCreateAndAddNavigationThrottle(
+    content::NavigationThrottleRegistry& registry) {
+  auto* web_contents = registry.GetNavigationHandle().GetWebContents();
+  if (web_contents->GetUserData(kDistillerPageWebContentsUserDataTag)) {
+    registry.AddThrottle(
+        std::make_unique<RedirectBlockingNavigationThrottle>(registry));
+  }
+}
+
 DistillerPageWebContents::DistillerPageWebContents(
     content::BrowserContext* browser_context,
     const gfx::Size& render_view_size,
@@ -76,10 +126,6 @@ DistillerPageWebContents::DistillerPageWebContents(
 
 DistillerPageWebContents::~DistillerPageWebContents() = default;
 
-bool DistillerPageWebContents::StringifyOutput() {
-  return false;
-}
-
 void DistillerPageWebContents::DistillPageImpl(const GURL& url,
                                                const std::string& script) {
   DCHECK(browser_context_);
@@ -87,20 +133,28 @@ void DistillerPageWebContents::DistillPageImpl(const GURL& url,
   state_ = LOADING_PAGE;
   script_ = script;
 
-  if (source_page_handle_ && source_page_handle_->web_contents() &&
-      source_page_handle_->web_contents()->GetLastCommittedURL() == url) {
-    if (source_page_handle_->web_contents()
-            ->GetMainFrame()
-            ->IsDOMContentLoaded()) {
-      // Main frame has already loaded for the current WebContents, so execute
-      // JavaScript immediately.
-      ExecuteJavaScript();
+  // Caller-supplied handles are unowned and must match `url` or fail
+  // immediately without spawning a hidden WebContents. Owned handles come from
+  // a prior `CreateNewWebContents` call when reusing a handle-less
+  // `DistillerPageWebContents` instance and fall through to create a new
+  // WebContents for the next URL.
+  if (source_page_handle_ && !source_page_handle_->owned()) {
+    if (source_page_handle_->web_contents() &&
+        TargetRenderFrameHost().GetLastCommittedURL() == url) {
+      if (TargetRenderFrameHost().IsDOMContentLoaded()) {
+        // Main frame has already loaded for the current WebContents, so execute
+        // JavaScript immediately.
+        ExecuteJavaScript();
+      } else {
+        // Main frame document has not loaded yet, so wait until it has before
+        // executing JavaScript. It will trigger after DOMContentLoaded is
+        // called for the main frame.
+        content::WebContentsObserver::Observe(
+            source_page_handle_->web_contents());
+      }
     } else {
-      // Main frame document has not loaded yet, so wait until it has before
-      // executing JavaScript. It will trigger after DOMContentLoaded is
-      // called for the main frame.
-      content::WebContentsObserver::Observe(
-          source_page_handle_->web_contents());
+      state_ = PAGELOAD_FAILED;
+      OnWebContentsDistillationDone(GURL(), base::TimeTicks(), base::Value());
     }
   } else {
     CreateNewWebContents(url);
@@ -114,6 +168,11 @@ void DistillerPageWebContents::CreateNewWebContents(const GURL& url) {
   std::unique_ptr<content::WebContents> web_contents =
       content::WebContents::Create(create_params);
   DCHECK(web_contents);
+
+  // Add a tag to the WebContents so that we can identify it later.
+  web_contents->SetUserData(
+      kDistillerPageWebContentsUserDataTag,
+      std::make_unique<DistillerPageWebContentsUserData>());
 
   web_contents->SetDelegate(this);
 
@@ -136,24 +195,26 @@ gfx::Size DistillerPageWebContents::GetSizeForNewRenderView(
   // in the executed domdistiller.js won't be 0.
   if (size.IsEmpty()) {
     DVLOG(1) << "Using fullscreen as default RenderView size";
-    size = display::Screen::GetScreen()->GetPrimaryDisplay().size();
+    size = display::Screen::Get()->GetPrimaryDisplay().size();
   }
   return size;
 }
 
 void DistillerPageWebContents::DOMContentLoaded(
     content::RenderFrameHost* render_frame_host) {
-  if (render_frame_host ==
-      source_page_handle_->web_contents()->GetMainFrame()) {
+  if (render_frame_host == &TargetRenderFrameHost()) {
     ExecuteJavaScript();
   }
 }
 
-void DistillerPageWebContents::DidFailLoad(
-    content::RenderFrameHost* render_frame_host,
-    const GURL& validated_url,
-    int error_code) {
-  if (!render_frame_host->GetParent()) {
+void DistillerPageWebContents::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  // If the navigation was not for the main frame, we should not fail the
+  // distillation. This is because non-essential subframes (e.g. analytics,
+  // social widgets) can fail to load or be cancelled without affecting the main
+  // content.
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      !navigation_handle->HasCommitted()) {
     content::WebContentsObserver::Observe(nullptr);
     DCHECK(state_ == LOADING_PAGE || state_ == EXECUTING_JAVASCRIPT);
     state_ = PAGELOAD_FAILED;
@@ -162,18 +223,19 @@ void DistillerPageWebContents::DidFailLoad(
 }
 
 void DistillerPageWebContents::ExecuteJavaScript() {
-  content::RenderFrameHost* frame =
-      source_page_handle_->web_contents()->GetMainFrame();
-  DCHECK(frame);
   DCHECK_EQ(LOADING_PAGE, state_);
   state_ = EXECUTING_JAVASCRIPT;
   content::WebContentsObserver::Observe(nullptr);
   // Stop any pending navigation since the intent is to distill the current
   // page.
-  source_page_handle_->web_contents()->Stop();
-  DVLOG(1) << "Beginning distillation";
+  // Don't stop the navigation of the WebContents we don't own, to prevent any
+  // negative impact to the embedder's WebContents (e.g. don't stop a PDF from
+  // loading in the main renderer).
+  if (source_page_handle_->owned()) {
+    source_page_handle_->web_contents()->Stop();
+  }
   RunIsolatedJavaScript(
-      frame, script_,
+      &TargetRenderFrameHost(), script_,
       base::BindOnce(&DistillerPageWebContents::OnWebContentsDistillationDone,
                      weak_factory_.GetWeakPtr(),
                      source_page_handle_->web_contents()->GetLastCommittedURL(),
@@ -190,11 +252,28 @@ void DistillerPageWebContents::OnWebContentsDistillationDone(
 
   if (!javascript_start.is_null()) {
     base::TimeDelta javascript_time = base::TimeTicks::Now() - javascript_start;
-    UMA_HISTOGRAM_TIMES("DomDistiller.Time.RunJavaScript", javascript_time);
-    DVLOG(1) << "DomDistiller.Time.RunJavaScript = " << javascript_time;
+    base::UmaHistogramTimes("DomDistiller.Time.RunDistillationJavaScript",
+                            javascript_time);
   }
 
-  DistillerPage::OnDistillationDone(page_url, &value);
+  OnDistillationDone(page_url, &value);
+}
+
+content::RenderFrameHost& DistillerPageWebContents::TargetRenderFrameHost() {
+  // Distiller is invoked through an explicit user gesture. We don't have code
+  // path for triggering this on non-primary pages.
+  // We target the currently visible primary page's main document to run the
+  // distiller script, thus `GetPrimaryPage().GetMainDocument()` usage is valid
+  // here.
+  return source_page_handle_->web_contents()
+      ->GetPrimaryPage()
+      .GetMainDocument();
+}
+
+base::SupportsUserData::Data*
+DistillerPageWebContents::GetUserDataForTesting() {
+  return source_page_handle_->web_contents()->GetUserData(
+      kDistillerPageWebContentsUserDataTag);
 }
 
 }  // namespace dom_distiller

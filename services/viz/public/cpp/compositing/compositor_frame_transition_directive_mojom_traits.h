@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,13 @@
 
 #include <vector>
 
+#include "base/time/time.h"
+#include "base/types/expected.h"
 #include "components/viz/common/quads/compositor_frame_transition_directive.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_transition_directive.mojom-shared.h"
+#include "ui/gfx/display_color_spaces.h"
 
 namespace mojo {
 
@@ -19,20 +23,28 @@ struct EnumTraits<viz::mojom::CompositorFrameTransitionDirectiveType,
   static viz::mojom::CompositorFrameTransitionDirectiveType ToMojom(
       viz::CompositorFrameTransitionDirective::Type type);
 
-  static bool FromMojom(
-      viz::mojom::CompositorFrameTransitionDirectiveType input,
-      viz::CompositorFrameTransitionDirective::Type* out);
+  static viz::CompositorFrameTransitionDirective::Type FromMojom(
+      viz::mojom::CompositorFrameTransitionDirectiveType input);
 };
 
 template <>
-struct EnumTraits<viz::mojom::CompositorFrameTransitionDirectiveEffect,
-                  viz::CompositorFrameTransitionDirective::Effect> {
-  static viz::mojom::CompositorFrameTransitionDirectiveEffect ToMojom(
-      viz::CompositorFrameTransitionDirective::Effect type);
+struct StructTraits<
+    viz::mojom::CompositorFrameTransitionDirectiveSharedElementDataView,
+    viz::CompositorFrameTransitionDirective::SharedElement> {
+  static viz::CompositorRenderPassId render_pass_id(
+      const viz::CompositorFrameTransitionDirective::SharedElement& element) {
+    return element.render_pass_id;
+  }
 
-  static bool FromMojom(
-      viz::mojom::CompositorFrameTransitionDirectiveEffect input,
-      viz::CompositorFrameTransitionDirective::Effect* out);
+  static viz::ViewTransitionElementResourceId
+  view_transition_element_resource_id(
+      const viz::CompositorFrameTransitionDirective::SharedElement& element) {
+    return element.view_transition_element_resource_id;
+  }
+
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::CompositorFrameTransitionDirectiveSharedElementDataView data,
+      viz::CompositorFrameTransitionDirective::SharedElement* out);
 };
 
 template <>
@@ -48,18 +60,34 @@ struct StructTraits<viz::mojom::CompositorFrameTransitionDirectiveDataView,
     return directive.type();
   }
 
-  static viz::CompositorFrameTransitionDirective::Effect effect(
+  static blink::ViewTransitionToken transition_token(
       const viz::CompositorFrameTransitionDirective& directive) {
-    return directive.effect();
+    return directive.transition_token();
   }
 
-  static std::vector<viz::CompositorRenderPassId> shared_render_pass_ids(
+  static bool maybe_cross_frame_sink(
       const viz::CompositorFrameTransitionDirective& directive) {
-    return directive.shared_render_pass_ids();
+    return directive.maybe_cross_frame_sink();
   }
 
-  static bool Read(viz::mojom::CompositorFrameTransitionDirectiveDataView data,
-                   viz::CompositorFrameTransitionDirective* out);
+  static std::vector<viz::CompositorFrameTransitionDirective::SharedElement>
+  shared_elements(const viz::CompositorFrameTransitionDirective& directive) {
+    return directive.shared_elements();
+  }
+
+  static const gfx::DisplayColorSpaces& display_color_spaces(
+      const viz::CompositorFrameTransitionDirective& directive) {
+    return directive.display_color_spaces();
+  }
+
+  static bool delay_layer_tree_view_deletion(
+      const viz::CompositorFrameTransitionDirective& directive) {
+    return directive.delay_layer_tree_view_deletion();
+  }
+
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::CompositorFrameTransitionDirectiveDataView data,
+      viz::CompositorFrameTransitionDirective* out);
 };
 
 }  // namespace mojo

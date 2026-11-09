@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,36 +6,52 @@
 
 #include <memory>
 
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_event.h"
+#include "base/trace_event/trace_log.h"
+#include "build/build_config.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/test/v8_test.h"
+#include "v8/include/v8-initialization.h"
 
 namespace gin {
 
-typedef V8Test V8MemoryDumpProviderTest;
+class V8MemoryDumpProviderTest : public V8Test {
+  void SetUp() override {
+    // Sets the track objects flag for dumping object statistics. Set this
+    // before initializing V8, because flags should not be modified after
+    // initialization. Also, setting the flag as early as possible ensures more
+    // precise numbers.
+    v8::V8::SetFlagsFromString("--track-gc-object-stats");
+    V8Test::SetUp();
+  }
+};
 
 class V8MemoryDumpProviderWorkerTest : public V8MemoryDumpProviderTest {
  protected:
   std::unique_ptr<IsolateHolder> CreateIsolateHolder() const override {
     return std::make_unique<gin::IsolateHolder>(
-        base::ThreadTaskRunnerHandle::Get(),
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
         gin::IsolateHolder::IsolateType::kBlinkWorkerThread);
+  }
+};
+
+class V8MemoryDumpProviderBackgroundModeTest
+    : public V8MemoryDumpProviderTest,
+      public ::testing::WithParamInterface<IsolateHolder::IsolateType> {
+  std::unique_ptr<IsolateHolder> CreateIsolateHolder() const override {
+    return std::make_unique<gin::IsolateHolder>(
+        base::SingleThreadTaskRunner::GetCurrentDefault(), GetParam());
   }
 };
 
 // Checks if the dump provider runs without crashing and dumps root objects.
 TEST_F(V8MemoryDumpProviderTest, DumpStatistics) {
-  // Sets the track objects flag for dumping object statistics. Since this is
-  // not set before V8::InitializePlatform the sizes will not be accurate, but
-  // this serves the purpose of this test.
-  const char track_objects_flag[] = "--track-gc-object-stats";
-  v8::V8::SetFlagsFromString(track_objects_flag, strlen(track_objects_flag));
-
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::DETAILED};
+      base::trace_event::MemoryDumpLevelOfDetail::kDetailed};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
   instance_->isolate_memory_dump_provider_for_testing()->OnMemoryDump(
@@ -48,13 +64,13 @@ TEST_F(V8MemoryDumpProviderTest, DumpStatistics) {
   bool did_dump_objects_stats = false;
   for (const auto& name_dump : allocator_dumps) {
     const std::string& name = name_dump.first;
-    if (name.find("v8/main") != std::string::npos) {
+    if (name.contains("v8/main")) {
       did_dump_isolate_stats = true;
     }
-    if (name.find("v8/main/heap") != std::string::npos) {
+    if (name.contains("v8/main/heap")) {
       did_dump_space_stats = true;
     }
-    if (name.find("v8/main/heap_objects") != std::string::npos) {
+    if (name.contains("v8/main/heap_objects")) {
       did_dump_objects_stats = true;
     }
   }
@@ -66,7 +82,7 @@ TEST_F(V8MemoryDumpProviderTest, DumpStatistics) {
 
 TEST_F(V8MemoryDumpProviderTest, DumpGlobalHandlesSize) {
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND};
+      base::trace_event::MemoryDumpLevelOfDetail::kBackground};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
   instance_->isolate_memory_dump_provider_for_testing()->OnMemoryDump(
@@ -77,7 +93,7 @@ TEST_F(V8MemoryDumpProviderTest, DumpGlobalHandlesSize) {
   bool did_dump_global_handles = false;
   for (const auto& name_dump : allocator_dumps) {
     const std::string& name = name_dump.first;
-    if (name.find("v8/main/global_handles") != std::string::npos) {
+    if (name.contains("v8/main/global_handles")) {
       did_dump_global_handles = true;
     }
   }
@@ -87,7 +103,7 @@ TEST_F(V8MemoryDumpProviderTest, DumpGlobalHandlesSize) {
 
 TEST_F(V8MemoryDumpProviderTest, DumpContextStatistics) {
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::LIGHT};
+      base::trace_event::MemoryDumpLevelOfDetail::kLight};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
   instance_->isolate_memory_dump_provider_for_testing()->OnMemoryDump(
@@ -99,10 +115,10 @@ TEST_F(V8MemoryDumpProviderTest, DumpContextStatistics) {
   bool did_dump_native_contexts = false;
   for (const auto& name_dump : allocator_dumps) {
     const std::string& name = name_dump.first;
-    if (name.find("main/contexts/detached_context") != std::string::npos) {
+    if (name.contains("main/contexts/detached_context")) {
       did_dump_detached_contexts = true;
     }
-    if (name.find("main/contexts/native_context") != std::string::npos) {
+    if (name.contains("main/contexts/native_context")) {
       did_dump_native_contexts = true;
     }
   }
@@ -113,7 +129,7 @@ TEST_F(V8MemoryDumpProviderTest, DumpContextStatistics) {
 
 TEST_F(V8MemoryDumpProviderWorkerTest, DumpContextStatistics) {
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::LIGHT};
+      base::trace_event::MemoryDumpLevelOfDetail::kLight};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
   instance_->isolate_memory_dump_provider_for_testing()->OnMemoryDump(
@@ -125,12 +141,10 @@ TEST_F(V8MemoryDumpProviderWorkerTest, DumpContextStatistics) {
   bool did_dump_native_contexts = false;
   for (const auto& name_dump : allocator_dumps) {
     const std::string& name = name_dump.first;
-    if (name.find("workers/contexts/detached_context/isolate_0x") !=
-        std::string::npos) {
+    if (name.contains("workers/contexts/detached_context/isolate_0x")) {
       did_dump_detached_contexts = true;
     }
-    if (name.find("workers/contexts/native_context/isolate_0x") !=
-        std::string::npos) {
+    if (name.contains("workers/contexts/native_context/isolate_0x")) {
       did_dump_native_contexts = true;
     }
   }
@@ -140,14 +154,14 @@ TEST_F(V8MemoryDumpProviderWorkerTest, DumpContextStatistics) {
 }
 
 TEST_F(V8MemoryDumpProviderTest, DumpCodeStatistics) {
+  base::test::TracingEnvironment tracing_environment;
   // Code stats are disabled unless this category is enabled.
   base::trace_event::TraceLog::GetInstance()->SetEnabled(
       base::trace_event::TraceConfig(
-          TRACE_DISABLED_BY_DEFAULT("memory-infra.v8.code_stats"), ""),
-      base::trace_event::TraceLog::RECORDING_MODE);
+          TRACE_DISABLED_BY_DEFAULT("memory-infra.v8.code_stats"), ""));
 
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::LIGHT};
+      base::trace_event::MemoryDumpLevelOfDetail::kLight};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
   instance_->isolate_memory_dump_provider_for_testing()->OnMemoryDump(
@@ -158,18 +172,21 @@ TEST_F(V8MemoryDumpProviderTest, DumpCodeStatistics) {
   bool did_dump_bytecode_size = false;
   bool did_dump_code_size = false;
   bool did_dump_external_scripts_size = false;
+  bool did_dump_cpu_profiler_metadata_size = false;
 
   for (const auto& name_dump : allocator_dumps) {
     const std::string& name = name_dump.first;
-    if (name.find("code_stats") != std::string::npos) {
+    if (name.contains("code_stats")) {
       for (const base::trace_event::MemoryAllocatorDump::Entry& entry :
            name_dump.second->entries()) {
-        if (entry.name == "bytecode_and_metadata_size") {
+        if (entry.name.contains("bytecode_and_metadata_size")) {
           did_dump_bytecode_size = true;
-        } else if (entry.name == "code_and_metadata_size") {
+        } else if (entry.name.contains("code_and_metadata_size")) {
           did_dump_code_size = true;
-        } else if (entry.name == "external_script_source_size") {
+        } else if (entry.name.contains("external_script_source_size")) {
           did_dump_external_scripts_size = true;
+        } else if (entry.name.contains("cpu_profiler_metadata_size")) {
+          did_dump_cpu_profiler_metadata_size = true;
         }
       }
     }
@@ -179,13 +196,14 @@ TEST_F(V8MemoryDumpProviderTest, DumpCodeStatistics) {
   ASSERT_TRUE(did_dump_bytecode_size);
   ASSERT_TRUE(did_dump_code_size);
   ASSERT_TRUE(did_dump_external_scripts_size);
+  ASSERT_TRUE(did_dump_cpu_profiler_metadata_size);
 }
 
 // Tests that a deterministic memory dump request performs a GC.
 TEST_F(V8MemoryDumpProviderTest, Deterministic) {
   base::trace_event::MemoryDumpArgs dump_args = {
-      base::trace_event::MemoryDumpLevelOfDetail::LIGHT,
-      base::trace_event::MemoryDumpDeterminism::FORCE_GC};
+      base::trace_event::MemoryDumpLevelOfDetail::kLight,
+      base::trace_event::MemoryDumpDeterminism::kForceGc};
   std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
       new base::trace_event::ProcessMemoryDump(dump_args));
 
@@ -205,5 +223,23 @@ TEST_F(V8MemoryDumpProviderTest, Deterministic) {
   // GC reclaimed the object.
   ASSERT_TRUE(weak_ref.IsEmpty());
 }
+
+TEST_P(V8MemoryDumpProviderBackgroundModeTest, AllowList) {
+  // Things that are dumped at the background mode level of detail must be
+  // in the allowlist in base/trace_event/memory_infra_background_allowlist.cc
+  base::trace_event::MemoryDumpArgs dump_args = {
+      base::trace_event::MemoryDumpLevelOfDetail::kBackground};
+  std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump(
+      new base::trace_event::ProcessMemoryDump(dump_args));
+  instance_->isolate_memory_dump_provider_for_testing()->OnMemoryDump(
+      dump_args, process_memory_dump.get());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    /* no label */,
+    V8MemoryDumpProviderBackgroundModeTest,
+    testing::Values(IsolateHolder::IsolateType::kBlinkMainThread,
+                    IsolateHolder::IsolateType::kBlinkWorkerThread,
+                    IsolateHolder::IsolateType::kUtility));
 
 }  // namespace gin

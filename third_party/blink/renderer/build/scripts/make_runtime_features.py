@@ -36,7 +36,6 @@ if sys.version_info.major == 2:
 else:
     import pickle
 
-from blinkbuild.name_style_converter import NameStyleConverter
 import make_runtime_features_utilities as util
 import json5_generator
 import template_expander
@@ -51,8 +50,16 @@ class BaseRuntimeFeatureWriter(json5_generator.Writer):
     file_basename = None
 
     def __init__(self, json5_file_path, output_dir):
-        super(BaseRuntimeFeatureWriter, self).__init__(json5_file_path,
-                                                       output_dir)
+        super(BaseRuntimeFeatureWriter, self).__init__(
+            json5_file_path, output_dir
+        )
+
+        for path in json5_file_path:
+            file_root, file_ext = os.path.splitext(path)
+            override_file_path = f"{file_root}.override{file_ext}"
+            if os.path.exists(override_file_path):
+                self.json5_file.load_override_file(override_file_path)
+
         # Subclasses should add generated output files and their contents to this dict.
         self._outputs = {}
         assert self.file_basename
@@ -62,29 +69,62 @@ class BaseRuntimeFeatureWriter(json5_generator.Writer):
 
         # Make sure the resulting dictionaries have all the keys we expect.
         for feature in self._features:
-            feature['in_origin_trial'] = str(
-                feature['name']) in origin_trial_set
-            feature['data_member_name'] = self._data_member_name(
-                feature['name'])
+            feature['in_origin_trial'] = (
+                str(feature['name']) in origin_trial_set
+            )
             # If 'status' is a dict, add the values for all the not-mentioned platforms too.
             if isinstance(feature['status'], dict):
                 feature['status'] = self._status_with_all_platforms(
-                    feature['status'])
+                    feature['status']
+                )
             # Specify the type of status
-            feature['status_type'] = "dict" if isinstance(
-                feature['status'], dict) else "str"
+            feature['status_type'] = (
+                "dict" if isinstance(feature['status'], dict) else "str"
+            )
+            if feature['base_feature'] == 'none':
+                feature['base_feature'] = ''
+            elif feature['base_feature'] == '':
+                feature['base_feature'] = feature['name']
+            if feature['custom_enable_check']:
+                self._validate_custom_enable_check(feature)
 
         self._origin_trial_features = [
             feature for feature in self._features if feature['in_origin_trial']
         ]
-        self._header_guard = self.make_header_guard(self._relative_output_dir +
-                                                    self.file_basename + '.h')
+        self._header_guard = self.make_header_guard(
+            self._relative_output_dir + self.file_basename + '.h'
+        )
 
     @staticmethod
-    def _data_member_name(str_or_converter):
-        converter = NameStyleConverter(str_or_converter) if type(
-            str_or_converter) is str else str_or_converter
-        return converter.to_class_data_member(prefix='is', suffix='enabled')
+    def _validate_custom_enable_check(feature):
+        """Validates the config for a feature that uses a `custom_enable_check`
+
+        A `custom_enable_check` guards powerful or security-sensitive features
+        and failing the check may be fatal. Disallow configuration options that
+        provide a way of reading or writing the feature state that would likely
+        bypass the coordination required with a custom enable check, as well as
+        options that allow a feature to depend on the state of other features.
+        """
+        unsupported = (
+            f'runtime_enabled_features.json5: {feature["name"]}: '
+            'custom_enable_check is not supported for features '
+        )
+        assert not feature['in_origin_trial'], (
+            unsupported + 'controlled by origin trials'
+        )
+        assert (
+            not feature['browser_process_read_access']
+            and not feature['browser_process_read_write_access']
+        ), (
+            unsupported + 'readable or writable through '
+            'RuntimeFeatureStateOverrideContext'
+        )
+        assert not feature['public'], unsupported + 'with a public setter'
+        assert not feature['settable_from_internals'], (
+            unsupported + 'settable from internals'
+        )
+        assert not feature['implied_by'], unsupported + 'with implied_by'
+        assert not feature['depends_on'], unsupported + 'with depends_on'
 
     def _feature_sets(self):
         # Another way to think of the status levels is as "sets of features"
@@ -115,15 +155,33 @@ class RuntimeFeatureWriter(BaseRuntimeFeatureWriter):
         self._outputs = {
             (self.file_basename + '.h'): self.generate_header,
             (self.file_basename + '.cc'): self.generate_implementation,
+            (
+                'exported/web_runtime_features_base.cc'
+            ): self.generate_web_implementation,
         }
 
         # Write features to file for bindings generation
         self._write_features_to_pickle_file(output_dir)
+        self._overridable_features = util.overridable_features(self._features)
+
+        overridable_set = set()
+        for feature in self._overridable_features:
+            overridable_set.add(str(feature['name']))
+
+        for feature in self._features:
+            feature['is_overridable_feature'] = (
+                str(feature['name']) in overridable_set
+            )
 
     def _write_features_to_pickle_file(self, platform_output_dir):
         # TODO(yashard): Get the file path from args instead of hardcoding it.
-        file_name = os.path.join(platform_output_dir, '..', 'build', 'scripts',
-                                 'runtime_enabled_features.pickle')
+        file_name = os.path.join(
+            platform_output_dir,
+            '..',
+            'build',
+            'scripts',
+            'runtime_enabled_features.pickle',
+        )
         features_map = {}
         for feature in self._features:
             features_map[str(feature['name'])] = {
@@ -131,7 +189,6 @@ class RuntimeFeatureWriter(BaseRuntimeFeatureWriter):
             }
         if os.path.isfile(file_name):
             with open(os.path.abspath(file_name)) as pickle_file:
-                # pylint: disable=broad-except
                 try:
                     if pickle.load(pickle_file) == features_map:
                         return
@@ -142,8 +199,20 @@ class RuntimeFeatureWriter(BaseRuntimeFeatureWriter):
             pickle.dump(features_map, pickle_file)
 
     def _template_inputs(self):
+        # Sorted by name so that the generated lookup tables can be binary
+        # searched.
+        features_by_name = sorted(self._features, key=lambda f: str(f['name']))
+        custom_enable_check_features = [
+            f for f in features_by_name if f['custom_enable_check']
+        ]
+        custom_enable_checks = sorted(
+            {f['custom_enable_check'] for f in custom_enable_check_features}
+        )
         return {
             'features': self._features,
+            'features_by_name': features_by_name,
+            'custom_enable_check_features': custom_enable_check_features,
+            'custom_enable_checks': custom_enable_checks,
             'feature_sets': self._feature_sets(),
             'platforms': self._platforms(),
             'input_files': self._input_files,
@@ -159,6 +228,10 @@ class RuntimeFeatureWriter(BaseRuntimeFeatureWriter):
     def generate_implementation(self):
         return self._template_inputs()
 
+    @template_expander.use_jinja('templates/web_runtime_features_base.cc.tmpl')
+    def generate_web_implementation(self):
+        return self._template_inputs()
+
 
 class RuntimeFeatureTestHelpersWriter(BaseRuntimeFeatureWriter):
     class_name = 'ScopedRuntimeEnabledFeatureForTest'
@@ -166,7 +239,8 @@ class RuntimeFeatureTestHelpersWriter(BaseRuntimeFeatureWriter):
 
     def __init__(self, json5_file_path, output_dir):
         super(RuntimeFeatureTestHelpersWriter, self).__init__(
-            json5_file_path, output_dir)
+            json5_file_path, output_dir
+        )
         self._outputs = {
             ('testing/' + self.file_basename + '.h'): self.generate_header
         }

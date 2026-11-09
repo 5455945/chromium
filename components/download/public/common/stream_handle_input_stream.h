@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_STREAM_HANDLE_INPUT_STREAM_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_STREAM_HANDLE_INPUT_STREAM_H_
 
+#include "base/sequence_checker.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_stream.mojom.h"
 #include "components/download/public/common/input_stream.h"
@@ -20,6 +21,10 @@ class COMPONENTS_DOWNLOAD_EXPORT StreamHandleInputStream
  public:
   explicit StreamHandleInputStream(
       mojom::DownloadStreamHandlePtr stream_handle);
+
+  StreamHandleInputStream(const StreamHandleInputStream&) = delete;
+  StreamHandleInputStream& operator=(const StreamHandleInputStream&) = delete;
+
   ~StreamHandleInputStream() override;
 
   // InputStream
@@ -52,8 +57,6 @@ class COMPONENTS_DOWNLOAD_EXPORT StreamHandleInputStream
   base::OnceClosure completion_callback_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(StreamHandleInputStream);
 };
 
 }  // namespace download

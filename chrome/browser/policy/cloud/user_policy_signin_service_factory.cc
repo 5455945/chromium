@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,15 @@
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_profile_attributes_updater_factory.h"
 #include "chrome/common/pref_names.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/policy/cloud/user_policy_signin_service_mobile.h"
 #else
 #include "chrome/browser/policy/cloud/user_policy_signin_service.h"
@@ -29,18 +30,28 @@ namespace policy {
 namespace {
 
 // Used only for testing.
-DeviceManagementService* g_device_management_service = NULL;
+DeviceManagementService* g_device_management_service = nullptr;
 
 }  // namespace
 
 UserPolicySigninServiceFactory::UserPolicySigninServiceFactory()
-    : BrowserContextKeyedServiceFactory(
-        "UserPolicySigninService",
-        BrowserContextDependencyManager::GetInstance()) {
+    : ProfileKeyedServiceFactory(
+          "UserPolicySigninService",
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              .Build()) {
   DependsOn(IdentityManagerFactory::GetInstance());
+  // SigninProfileAttributesUpdater must be instantiated and observe
+  // IdentityManager before UserPolicySigninService so that profile attributes
+  // (such as GAIA ID and user management acceptance) are updated before
+  // UserPolicySigninService processes sign-in events.
+  DependsOn(SigninProfileAttributesUpdaterFactory::GetInstance());
 }
 
-UserPolicySigninServiceFactory::~UserPolicySigninServiceFactory() {}
+UserPolicySigninServiceFactory::~UserPolicySigninServiceFactory() = default;
 
 // static
 UserPolicySigninService* UserPolicySigninServiceFactory::GetForProfile(
@@ -51,7 +62,8 @@ UserPolicySigninService* UserPolicySigninServiceFactory::GetForProfile(
 
 // static
 UserPolicySigninServiceFactory* UserPolicySigninServiceFactory::GetInstance() {
-  return base::Singleton<UserPolicySigninServiceFactory>::get();
+  static base::NoDestructor<UserPolicySigninServiceFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -60,7 +72,8 @@ void UserPolicySigninServiceFactory::SetDeviceManagementServiceForTesting(
   g_device_management_service = device_management_service;
 }
 
-KeyedService* UserPolicySigninServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+UserPolicySigninServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = static_cast<Profile*>(context);
   BrowserPolicyConnector* connector =
@@ -69,12 +82,11 @@ KeyedService* UserPolicySigninServiceFactory::BuildServiceInstanceFor(
       g_device_management_service ? g_device_management_service
                                   : connector->device_management_service();
 
-  UserPolicySigninService* service = new UserPolicySigninService(
+  return std::make_unique<UserPolicySigninService>(
       profile, g_browser_process->local_state(), device_management_service,
       profile->GetUserCloudPolicyManager(),
       IdentityManagerFactory::GetForProfile(profile),
       g_browser_process->shared_url_loader_factory());
-  return service;
 }
 
 bool
@@ -86,9 +98,8 @@ UserPolicySigninServiceFactory::ServiceIsCreatedWithBrowserContext() const {
 
 void UserPolicySigninServiceFactory::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* user_prefs) {
-  user_prefs->RegisterBooleanPref(prefs::kUserAcceptedAccountManagement, false);
-#if defined(OS_ANDROID)
-  user_prefs->RegisterInt64Pref(prefs::kLastPolicyCheckTime, 0);
+#if BUILDFLAG(IS_ANDROID)
+  user_prefs->RegisterInt64Pref(policy_prefs::kLastPolicyCheckTime, 0);
 #endif
 }
 

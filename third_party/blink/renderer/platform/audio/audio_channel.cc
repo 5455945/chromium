@@ -29,22 +29,34 @@
 #include "third_party/blink/renderer/platform/audio/audio_channel.h"
 
 #include <math.h>
-#include <algorithm>
+
+#include "base/compiler_specific.h"
 #include "base/numerics/checked_math.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
 
 namespace blink {
 
-void AudioChannel::ResizeSmaller(size_t new_length) {
-  DCHECK_LE(new_length, length_);
-  length_ = new_length;
+bool AudioChannel::TryAllocate(uint32_t length) {
+  if (!mem_buffer_.TryAllocate(length)) {
+    data_span_ = base::span<float>();
+    return false;
+  }
+  data_span_ = mem_buffer_.as_span();
+  silent_ = true;
+  return true;
+}
+
+void AudioChannel::ResizeSmaller(uint32_t new_length) {
+  DCHECK_LE(new_length, data_span_.size());
+  data_span_ = data_span_.first(new_length);
 }
 
 void AudioChannel::Scale(float scale) {
-  if (IsSilent())
+  if (IsSilent()) {
     return;
+  }
 
-  vector_math::Vsmul(Data(), 1, &scale, MutableData(), 1, length());
+  vector_math::Vsmul(Span(), scale, MutableSpan());
 }
 
 void AudioChannel::CopyFrom(const AudioChannel* source_channel) {
@@ -53,10 +65,9 @@ void AudioChannel::CopyFrom(const AudioChannel* source_channel) {
 
   if (source_channel->IsSilent()) {
     Zero();
-    return;
+  } else {
+    MutableSpan().copy_from(source_channel->Span().first(length()));
   }
-  memcpy(MutableData(), source_channel->Data(),
-         base::CheckMul(sizeof(float), length()).ValueOrDie());
 }
 
 void AudioChannel::CopyFromRange(const AudioChannel* source_channel,
@@ -67,25 +78,24 @@ void AudioChannel::CopyFromRange(const AudioChannel* source_channel,
   DCHECK_LT(start_frame, end_frame);
   DCHECK_LE(end_frame, source_channel->length());
 
-  if (source_channel->IsSilent() && IsSilent())
+  if (source_channel->IsSilent() && IsSilent()) {
     return;
+  }
 
   // Check that this channel has enough space.
   size_t range_length = end_frame - start_frame;
   DCHECK_LE(range_length, length());
 
-  const float* source = source_channel->Data();
-  float* destination = MutableData();
-
-  const size_t safe_length =
-      base::CheckMul(sizeof(float), range_length).ValueOrDie();
   if (source_channel->IsSilent()) {
-    if (range_length == length())
+    if (range_length == length()) {
       Zero();
-    else
-      memset(destination, 0, safe_length);
+    } else {
+      std::ranges::fill(MutableSpan().first(range_length), 0.f);
+    }
   } else {
-    memcpy(destination, source + start_frame, safe_length);
+    MutableSpan()
+        .first(range_length)
+        .copy_from(source_channel->Span().subspan(start_frame, range_length));
   }
 }
 
@@ -93,26 +103,24 @@ void AudioChannel::SumFrom(const AudioChannel* source_channel) {
   DCHECK(source_channel);
   DCHECK_GE(source_channel->length(), length());
 
-  if (source_channel->IsSilent())
+  if (source_channel->IsSilent()) {
     return;
+  }
 
   if (IsSilent()) {
     CopyFrom(source_channel);
   } else {
-    vector_math::Vadd(Data(), 1, source_channel->Data(), 1, MutableData(), 1,
-                      length());
+    vector_math::Vadd(Span(), source_channel->Span().first(length()),
+                      MutableSpan());
   }
 }
 
 float AudioChannel::MaxAbsValue() const {
-  if (IsSilent())
+  if (IsSilent()) {
     return 0;
+  }
 
-  float max = 0;
-
-  vector_math::Vmaxmgv(Data(), 1, &max, length());
-
-  return max;
+  return vector_math::Vmaxmgv(Span());
 }
 
 }  // namespace blink

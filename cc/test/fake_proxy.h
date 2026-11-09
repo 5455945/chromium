@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,12 @@
 
 #include <memory>
 
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/types/optional_ref.h"
+#include "cc/input/browser_controls_offset_tag_modifications.h"
 #include "cc/trees/layer_tree_host.h"
+#include "cc/trees/paint_holding_reason.h"
 #include "cc/trees/proxy.h"
 #include "cc/trees/render_frame_metadata_observer.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
@@ -25,40 +29,54 @@ class FakeProxy : public Proxy {
   void SetLayerTreeFrameSink(
       LayerTreeFrameSink* layer_tree_frame_sink) override {}
   void ReleaseLayerTreeFrameSink() override {}
+  void SetShouldWarmUp() override {}
   void SetVisible(bool visible) override {}
-  void SetNeedsAnimate() override {}
+  void SetNeedsAnimate(BeginMainFrameReason, bool urgent) override {}
   void SetNeedsUpdateLayers() override {}
-  void SetNeedsCommit() override {}
+  void SetNeedsCommit(bool urgent) override {}
   void SetNeedsRedraw(const gfx::Rect& damage_rect) override {}
-  void SetNextCommitWaitsForActivation() override {}
   void SetTargetLocalSurfaceId(
       const viz::LocalSurfaceId& target_local_surface_id) override {}
+  void SetMemoryPolicy(const ManagedMemoryPolicy& policy) override {}
+  void DetachInputDelegateAndRenderFrameObserver() override {}
   bool RequestedAnimatePending() override;
   void SetDeferMainFrameUpdate(bool defer_main_frame_update) override {}
-  void StartDeferringCommits(base::TimeDelta timeout) override {}
-  void StopDeferringCommits(PaintHoldingCommitTrigger) override {}
+  bool StartDeferringCommits(base::TimeDelta timeout,
+                             PaintHoldingReason reason) override;
+  void StopDeferringCommits() override {}
+  bool IsDeferringCommits() const override;
   bool CommitRequested() const override;
   void Start() override {}
   void Stop() override {}
+  void QueueImageDecode(int request_id,
+                        const DrawImage& image,
+                        bool speculative) override;
   void SetMutator(std::unique_ptr<LayerTreeMutator> mutator) override;
   void SetPaintWorkletLayerPainter(
       std::unique_ptr<PaintWorkletLayerPainter> painter) override;
   bool MainFrameWillHappenForTesting() override;
-  void UpdateBrowserControlsState(BrowserControlsState constraints,
-                                  BrowserControlsState current,
-                                  bool animate) override {}
+  void UpdateBrowserControlsState(
+      BrowserControlsState constraints,
+      BrowserControlsState current,
+      bool animate,
+      base::optional_ref<const BrowserControlsOffsetTagModifications>
+          offset_tag_modifications) override {}
   void RequestBeginMainFrameNotExpected(bool new_state) override {}
   void SetSourceURL(ukm::SourceId source_id, const GURL& url) override {}
-  void SetUkmSmoothnessDestination(
-      base::WritableSharedMemoryMapping ukm_smoothness_data) override {}
-  void ClearHistory() override {}
   void SetRenderFrameObserver(
       std::unique_ptr<RenderFrameMetadataObserver> observer) override {}
-  void SetEnableFrameRateThrottling(
-      bool enable_frame_rate_throttling) override {}
+  void CompositeImmediatelyForTest(base::TimeTicks frame_begin_time,
+                                   bool raster,
+                                   base::OnceClosure callback) override {}
+  double GetAverageThroughput() const override;
+  void SetPauseRendering(bool pause_rendering,
+                         bool delay_until_visibility_change) override {}
+  void SetInputResponsePending() override {}
+  bool IsRenderingPaused() const override;
+  void NotifyNewLocalSurfaceIdExpectedWhilePaused() override {}
 
  private:
-  LayerTreeHost* layer_tree_host_;
+  raw_ptr<LayerTreeHost> layer_tree_host_;
 };
 
 }  // namespace cc

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "base/macros.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/payments/validation_delegate.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -19,14 +17,22 @@ namespace payments {
 
 class ValidatingTextfieldTest : public ChromeViewsTestBase {
  public:
-  ValidatingTextfieldTest() {}
-  ~ValidatingTextfieldTest() override {}
+  ValidatingTextfieldTest() = default;
+
+  ValidatingTextfieldTest(const ValidatingTextfieldTest&) = delete;
+  ValidatingTextfieldTest& operator=(const ValidatingTextfieldTest&) = delete;
+
+  ~ValidatingTextfieldTest() override = default;
 
  protected:
   class TestValidationDelegate : public ValidationDelegate {
    public:
-    TestValidationDelegate() {}
-    ~TestValidationDelegate() override {}
+    TestValidationDelegate() = default;
+
+    TestValidationDelegate(const TestValidationDelegate&) = delete;
+    TestValidationDelegate& operator=(const TestValidationDelegate&) = delete;
+
+    ~TestValidationDelegate() override = default;
 
     // ValidationDelegate:
     bool TextfieldValueChanged(views::Textfield* textfield,
@@ -48,13 +54,7 @@ class ValidatingTextfieldTest : public ChromeViewsTestBase {
       return true;
     }
     void ComboboxModelChanged(ValidatingCombobox* combobox) override {}
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(TestValidationDelegate);
   };
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ValidatingTextfieldTest);
 };
 
 TEST_F(ValidatingTextfieldTest, Validation) {

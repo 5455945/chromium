@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,16 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
-#include "chrome/browser/ash/login/test/local_state_mixin.h"
-#include "chrome/browser/ash/login/test/scoped_policy_update.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
 
-namespace chromeos {
+namespace ash {
+
+class ScopedDevicePolicyUpdate;
+class ScopedUserPolicyUpdate;
 
 // A mixin for setting up device state:
 // *   OOBE completion state
@@ -32,12 +32,12 @@ namespace chromeos {
 // It will initialized the fake in-memory client in
 // SetUpInProcessBrowserTestFixture(), provided that a session manager was not
 // initialized previously.
-class DeviceStateMixin : public InProcessBrowserTestMixin,
-                         public LocalStateMixin::Delegate {
+class DeviceStateMixin : public InProcessBrowserTestMixin {
  public:
   enum class State {
     BEFORE_OOBE,
     OOBE_COMPLETED_UNOWNED,
+    OOBE_COMPLETED_PERMANENTLY_UNOWNED,
     OOBE_COMPLETED_CLOUD_ENROLLED,
     OOBE_COMPLETED_ACTIVE_DIRECTORY_ENROLLED,
     OOBE_COMPLETED_CONSUMER_OWNED,
@@ -45,14 +45,16 @@ class DeviceStateMixin : public InProcessBrowserTestMixin,
   };
 
   DeviceStateMixin(InProcessBrowserTestMixinHost* host, State initial_state);
+
+  DeviceStateMixin(const DeviceStateMixin&) = delete;
+  DeviceStateMixin& operator=(const DeviceStateMixin&) = delete;
+
   ~DeviceStateMixin() override;
 
   // InProcessBrowserTestMixin:
   bool SetUpUserDataDirectory() override;
   void SetUpInProcessBrowserTestFixture() override;
-
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override;
+  void SetUpLocalStatePrefService(PrefService* local_state) override;
 
   // Returns a ScopedDevicePolicyUpdate instance that can be used to update
   // local device policy blob (kept in fake session manager client).
@@ -87,9 +89,15 @@ class DeviceStateMixin : public InProcessBrowserTestMixin,
     skip_initial_policy_setup_ = value;
   }
 
+  // Writes the install attributes file if it doesn't exist yet (i.e. the mixin
+  // should be instantiated with OOBE_COMPLETED_UNOWNED). Primarily useful for
+  // tests that want to simulate the device locking event. The created file will
+  // contain the data corresponding to the requested `state`.
+  void WriteInstallAttrFile(State state);
+
  private:
   void SetDeviceState();
-  void WriteInstallAttrFile();
+
   void WriteOwnerKey();
 
   // Whether `state_` value indicates enrolled state.
@@ -117,17 +125,9 @@ class DeviceStateMixin : public InProcessBrowserTestMixin,
   std::map<std::string, policy::UserPolicyBuilder>
       device_local_account_policies_;
 
-  LocalStateMixin local_state_mixin_;
-
   base::WeakPtrFactory<DeviceStateMixin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceStateMixin);
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after //chrome/browser/chromeos
-// source migration is finished.
-using chromeos::DeviceStateMixin;
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_TEST_DEVICE_STATE_MIXIN_H_

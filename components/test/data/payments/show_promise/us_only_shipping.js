@@ -1,20 +1,19 @@
 /*
- * Copyright 2019 The Chromium Authors. All rights reserved.
+ * Copyright 2019 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
 /**
  * Launch PaymentRequest with a show promise and US-only shipping.
- * @param {bool} useWindowUrlPaymentMethod - Whether the window URL is used as
- * the payment method name. If false, then 'basic-card' is used instead.
+ * @param {string} supportedMethods - The payment method identifier.
  */
-function buy(useWindowUrlPaymentMethod) { // eslint-disable-line no-unused-vars
-  supportedMethods = 'basic-card';
-  if (useWindowUrlPaymentMethod) {
-    supportedMethods = window.location.href;
+function buy(supportedMethods) {
+  if (!supportedMethods) {
+    print('supportedMethods required');
+    return;
   }
-  var detailsForUSAddress = {
+  const detailsForUSAddress = {
     shippingOptions: [{
       id: '1',
       label: 'Free shipping',
@@ -23,10 +22,10 @@ function buy(useWindowUrlPaymentMethod) { // eslint-disable-line no-unused-vars
     }],
   };
 
-  var detailsForNonUSAddress = {error: 'Cannot ship outside of US.'};
+  const detailsForNonUSAddress = {error: 'Cannot ship outside of US.'};
 
   try {
-    var request = new PaymentRequest(
+    const request = new PaymentRequest(
         [{supportedMethods}], {
           total: {
             label: 'PENDING TOTAL',

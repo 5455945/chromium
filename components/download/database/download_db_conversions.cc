@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/notreached.h"
 #include "base/pickle.h"
+#include "base/time/time.h"
 #include "components/download/public/common/download_features.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 
 namespace download {
 namespace {
@@ -20,8 +23,7 @@ int64_t FromTimeToMilliseconds(base::Time time) {
 
 // Converts a time stamp in milliseconds to base::Time.
 base::Time FromMillisecondsToTime(int64_t time_ms) {
-  return base::Time::FromDeltaSinceWindowsEpoch(
-      base::TimeDelta::FromMilliseconds(time_ms));
+  return base::Time::FromDeltaSinceWindowsEpoch(base::Milliseconds(time_ms));
 }
 
 }  // namespace
@@ -83,9 +85,12 @@ DownloadSource DownloadDBConversions::DownloadSourceFromProto(
       return DownloadSource::CONTEXT_MENU;
     case download_pb::DownloadSource::RETRY:
       return DownloadSource::RETRY;
+    case download_pb::DownloadSource::RETRY_FROM_BUBBLE:
+      return DownloadSource::RETRY_FROM_BUBBLE;
+    case download_pb::DownloadSource::TOOLBAR_MENU:
+      return DownloadSource::TOOLBAR_MENU;
   }
   NOTREACHED();
-  return DownloadSource::UNKNOWN;
 }
 
 // static
@@ -114,9 +119,12 @@ download_pb::DownloadSource DownloadDBConversions::DownloadSourceToProto(
       return download_pb::DownloadSource::CONTEXT_MENU;
     case DownloadSource::RETRY:
       return download_pb::DownloadSource::RETRY;
+    case DownloadSource::RETRY_FROM_BUBBLE:
+      return download_pb::DownloadSource::RETRY_FROM_BUBBLE;
+    case DownloadSource::TOOLBAR_MENU:
+      return download_pb::DownloadSource::TOOLBAR_MENU;
   }
   NOTREACHED();
-  return download_pb::DownloadSource::UNKNOWN;
 }
 
 std::vector<DownloadEntry> DownloadDBConversions::DownloadEntriesFromProto(
@@ -166,7 +174,8 @@ download_pb::InProgressInfo DownloadDBConversions::InProgressInfoToProto(
   for (size_t i = 0; i < in_progress_info.url_chain.size(); ++i)
     proto.add_url_chain(in_progress_info.url_chain[i].spec());
   proto.set_referrer_url(in_progress_info.referrer_url.spec());
-  proto.set_site_url(in_progress_info.site_url.spec());
+  proto.set_serialized_embedder_download_data(
+      in_progress_info.serialized_embedder_download_data);
   proto.set_tab_url(in_progress_info.tab_url.spec());
   proto.set_tab_referrer_url(in_progress_info.tab_referrer_url.spec());
   proto.set_fetch_error_body(in_progress_info.fetch_error_body);
@@ -209,16 +218,14 @@ download_pb::InProgressInfo DownloadDBConversions::InProgressInfoToProto(
   proto.set_metered(in_progress_info.metered);
   proto.set_bytes_wasted(in_progress_info.bytes_wasted);
   proto.set_auto_resume_count(in_progress_info.auto_resume_count);
-  if (base::FeatureList::IsEnabled(download::features::kDownloadLater) &&
-      in_progress_info.download_schedule.has_value()) {
-    DCHECK_NE(in_progress_info.download_schedule->only_on_wifi(),
-              in_progress_info.metered);
-    auto download_schedule_proto =
-        std::make_unique<download_pb::DownloadSchedule>(DownloadScheduleToProto(
-            in_progress_info.download_schedule.value()));
-    proto.set_allocated_download_schedule(download_schedule_proto.release());
-  }
-
+  proto.set_credentials_mode(
+      static_cast<int32_t>(in_progress_info.credentials_mode));
+  proto.set_fetch_request_mode(
+      static_cast<int32_t>(in_progress_info.fetch_request_mode));
+  proto.set_range_request_from(in_progress_info.range_request_from);
+  proto.set_range_request_to(in_progress_info.range_request_to);
+  proto.set_fetched_via_service_worker(
+      in_progress_info.fetched_via_service_worker);
   return proto;
 }
 
@@ -229,7 +236,8 @@ InProgressInfo DownloadDBConversions::InProgressInfoFromProto(
   for (const auto& url : proto.url_chain())
     info.url_chain.emplace_back(url);
   info.referrer_url = GURL(proto.referrer_url());
-  info.site_url = GURL(proto.site_url());
+  info.serialized_embedder_download_data =
+      proto.serialized_embedder_download_data();
   info.tab_url = GURL(proto.tab_url());
   info.tab_referrer_url = GURL(proto.tab_referrer_url());
   info.fetch_error_body = proto.fetch_error_body();
@@ -240,11 +248,11 @@ InProgressInfo DownloadDBConversions::InProgressInfoFromProto(
   info.mime_type = proto.mime_type();
   info.original_mime_type = proto.original_mime_type();
   info.total_bytes = proto.total_bytes();
-  base::PickleIterator current_path(
-      base::Pickle(proto.current_path().data(), proto.current_path().size()));
+  base::PickleIterator current_path =
+      base::PickleIterator::WithData(base::as_byte_span(proto.current_path()));
   info.current_path.ReadFromPickle(&current_path);
-  base::PickleIterator target_path(
-      base::Pickle(proto.target_path().data(), proto.target_path().size()));
+  base::PickleIterator target_path =
+      base::PickleIterator::WithData(base::as_byte_span(proto.target_path()));
   info.target_path.ReadFromPickle(&target_path);
   info.received_bytes = proto.received_bytes();
   info.start_time = proto.start_time() == -1
@@ -269,11 +277,22 @@ InProgressInfo DownloadDBConversions::InProgressInfoFromProto(
   info.metered = proto.metered();
   info.bytes_wasted = proto.bytes_wasted();
   info.auto_resume_count = proto.auto_resume_count();
-  if (base::FeatureList::IsEnabled(download::features::kDownloadLater) &&
-      proto.has_download_schedule()) {
-    info.download_schedule = DownloadScheduleFromProto(
-        proto.download_schedule(), !proto.metered() /*only_on_wifi*/);
-    DCHECK_NE(info.download_schedule->only_on_wifi(), info.metered);
+  if (proto.has_credentials_mode()) {
+    info.credentials_mode = static_cast<::network::mojom::CredentialsMode>(
+        proto.credentials_mode());
+  }
+  if (proto.has_fetch_request_mode() && proto.fetch_request_mode() >= 0 &&
+      proto.fetch_request_mode() <=
+          static_cast<int32_t>(::network::mojom::RequestMode::kMaxValue)) {
+    info.fetch_request_mode =
+        static_cast<::network::mojom::RequestMode>(proto.fetch_request_mode());
+  }
+  if (proto.has_range_request_from())
+    info.range_request_from = proto.range_request_from();
+  if (proto.has_range_request_to())
+    info.range_request_to = proto.range_request_to();
+  if (proto.has_fetched_via_service_worker()) {
+    info.fetched_via_service_worker = proto.fetched_via_service_worker();
   }
 
   return info;
@@ -293,27 +312,6 @@ download_pb::UkmInfo DownloadDBConversions::UkmInfoToProto(
   proto.set_download_source(DownloadSourceToProto(info.download_source));
   proto.set_ukm_download_id(info.ukm_download_id);
   return proto;
-}
-
-download_pb::DownloadSchedule DownloadDBConversions::DownloadScheduleToProto(
-    const DownloadSchedule& download_schedule) {
-  // download::DownloadSchedule.only_on_wifi is not persisted, use
-  // InProgressInfo.metered instead.
-  download_pb::DownloadSchedule proto;
-  if (download_schedule.start_time().has_value()) {
-    proto.set_start_time(
-        FromTimeToMilliseconds(download_schedule.start_time().value()));
-  }
-  return proto;
-}
-
-DownloadSchedule DownloadDBConversions::DownloadScheduleFromProto(
-    const download_pb::DownloadSchedule& proto,
-    bool only_on_wifi) {
-  absl::optional<base::Time> start_time;
-  if (proto.has_start_time())
-    start_time = FromMillisecondsToTime(proto.start_time());
-  return DownloadSchedule(only_on_wifi, std::move(start_time));
 }
 
 DownloadInfo DownloadDBConversions::DownloadInfoFromProto(

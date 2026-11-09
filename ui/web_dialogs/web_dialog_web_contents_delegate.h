@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/web_dialogs/web_dialogs_export.h"
 
 namespace blink {
@@ -36,18 +37,25 @@ class WEB_DIALOGS_EXPORT WebDialogWebContentsDelegate
   // Handles OpenURLFromTab and AddNewContents for WebDialogWebContentsDelegate.
   class WebContentsHandler {
    public:
-    virtual ~WebContentsHandler() {}
+    virtual ~WebContentsHandler() = default;
+    // If a `navigation_handle_callback` function is provided, it should be
+    // called with the pending navigation (if any) when the navigation handle
+    // become available. This allows callers to observe or attach their specific
+    // data. `navigation_handle_callback` may not be called if the navigation
+    // fails for any reason.
     virtual content::WebContents* OpenURLFromTab(
         content::BrowserContext* context,
         content::WebContents* source,
-        const content::OpenURLParams& params) = 0;
+        const content::OpenURLParams& params,
+        base::OnceCallback<void(content::NavigationHandle&)>
+            navigation_handle_callback) = 0;
     virtual void AddNewContents(
         content::BrowserContext* context,
         content::WebContents* source,
         std::unique_ptr<content::WebContents> new_contents,
         const GURL& target_url,
-        WindowOpenDisposition disposition,
-        const gfx::Rect& initial_rect,
+        ui::mojom::WindowOpenDisposition disposition,
+        const blink::mojom::WindowFeatures& window_features,
         bool user_gesture) = 0;
     // This is added to allow the injection of a file chooser handler.
     // The WebDialogWebContentsDelegate's original implementation does not
@@ -56,11 +64,21 @@ class WEB_DIALOGS_EXPORT WebDialogWebContentsDelegate
         content::RenderFrameHost* render_frame_host,
         scoped_refptr<content::FileSelectListener> listener,
         const blink::mojom::FileChooserParams& params) = 0;
+    // Called after the dialog's WebContents is created and before its initial
+    // navigation, so that the embedder can attach WebContentsObservers and
+    // other per-WebContents state that must see that navigation.
+    virtual void OnDialogWebContentsCreated(
+        content::WebContents* web_contents) {}
   };
 
   // |context| and |handler| must be non-NULL.
   WebDialogWebContentsDelegate(content::BrowserContext* context,
                                std::unique_ptr<WebContentsHandler> handler);
+
+  WebDialogWebContentsDelegate(const WebDialogWebContentsDelegate&) = delete;
+  WebDialogWebContentsDelegate& operator=(const WebDialogWebContentsDelegate&) =
+      delete;
+
   ~WebDialogWebContentsDelegate() override;
 
   // The returned browser context is guaranteed to be original if non-NULL.
@@ -76,27 +94,30 @@ class WEB_DIALOGS_EXPORT WebDialogWebContentsDelegate
   // content::WebContentsDelegate declarations.
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) override;
-  void AddNewContents(content::WebContents* source,
-                      std::unique_ptr<content::WebContents> new_contents,
-                      const GURL& target_url,
-                      WindowOpenDisposition disposition,
-                      const gfx::Rect& initial_rect,
-                      bool user_gesture,
-                      bool* was_blocked) override;
-  bool PreHandleGestureEvent(content::WebContents* source,
-                             const blink::WebGestureEvent& event) override;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
+  content::WebContents* AddNewContents(
+      content::WebContents* source,
+      std::unique_ptr<content::WebContents> new_contents,
+      const GURL& target_url,
+      ui::mojom::WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override;
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
                       scoped_refptr<content::FileSelectListener> listener,
                       const blink::mojom::FileChooserParams& params) override;
 
+  // Called by the view hosting the dialog's WebContents; see
+  // WebContentsHandler::OnDialogWebContentsCreated().
+  void OnDialogWebContentsCreated(content::WebContents* web_contents);
+
  private:
   // Weak pointer.  Always an original profile.
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext> browser_context_;
 
   std::unique_ptr<WebContentsHandler> const handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebDialogWebContentsDelegate);
 };
 
 }  // namespace ui

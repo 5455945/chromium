@@ -23,46 +23,43 @@
 
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
 
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
-#include "third_party/blink/renderer/platform/geometry/float_size.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/geometry/length_point.h"
 #include "third_party/blink/renderer/platform/geometry/length_size.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/size_f.h"
 
 namespace blink {
 
-int IntValueForLength(const Length& length, int maximum_value) {
-  return ValueForLength(length, LayoutUnit(maximum_value)).ToInt();
-}
-
-float FloatValueForLength(const Length& length, float maximum_value) {
+float FloatValueForLength(const Length& length,
+                          float maximum_value,
+                          const EvaluationInput& input) {
   switch (length.GetType()) {
     case Length::kFixed:
-      return length.GetFloatValue();
+      return length.Pixels();
     case Length::kPercent:
-      return clampTo<float>(maximum_value * length.Percent() / 100.0f);
-    case Length::kFillAvailable:
+      return ClampTo<float>(maximum_value * length.Percent() / 100.0f);
+    case Length::kStretch:
     case Length::kAuto:
       return static_cast<float>(maximum_value);
     case Length::kCalculated:
-      return length.NonNanCalculatedValue(LayoutUnit(maximum_value));
+      return length.NonNanCalculatedValue(maximum_value, input);
     case Length::kMinContent:
     case Length::kMaxContent:
     case Length::kMinIntrinsic:
     case Length::kFitContent:
-    case Length::kExtendToZoom:
-    case Length::kDeviceWidth:
-    case Length::kDeviceHeight:
+    case Length::kContent:
+    case Length::kFlex:
     case Length::kNone:
+    case Length::kOverlapJoin:
       NOTREACHED();
-      return 0;
   }
   NOTREACHED();
-  return 0;
 }
 
 LayoutUnit MinimumValueForLengthInternal(const Length& length,
-                                         LayoutUnit maximum_value) {
+                                         LayoutUnit maximum_value,
+                                         const EvaluationInput& input) {
   switch (length.GetType()) {
     case Length::kPercent:
       // Don't remove the extra cast to float. It is needed for rounding on
@@ -70,8 +67,8 @@ LayoutUnit MinimumValueForLengthInternal(const Length& length,
       return LayoutUnit(
           static_cast<float>(maximum_value * length.Percent() / 100.0f));
     case Length::kCalculated:
-      return LayoutUnit(length.NonNanCalculatedValue(maximum_value));
-    case Length::kFillAvailable:
+      return LayoutUnit(length.NonNanCalculatedValue(maximum_value, input));
+    case Length::kStretch:
     case Length::kAuto:
       return LayoutUnit();
     case Length::kFixed:
@@ -79,52 +76,50 @@ LayoutUnit MinimumValueForLengthInternal(const Length& length,
     case Length::kMaxContent:
     case Length::kMinIntrinsic:
     case Length::kFitContent:
-    case Length::kExtendToZoom:
-    case Length::kDeviceWidth:
-    case Length::kDeviceHeight:
+    case Length::kContent:
+    case Length::kFlex:
     case Length::kNone:
+    case Length::kOverlapJoin:
       NOTREACHED();
-      return LayoutUnit();
   }
   NOTREACHED();
-  return LayoutUnit();
 }
 
-LayoutUnit ValueForLength(const Length& length, LayoutUnit maximum_value) {
+LayoutUnit ValueForLength(const Length& length,
+                          LayoutUnit maximum_value,
+                          const EvaluationInput& input) {
   switch (length.GetType()) {
     case Length::kFixed:
     case Length::kPercent:
     case Length::kCalculated:
-      return MinimumValueForLength(length, maximum_value);
-    case Length::kFillAvailable:
+      return MinimumValueForLength(length, maximum_value, input);
+    case Length::kStretch:
     case Length::kAuto:
       return maximum_value;
     case Length::kMinContent:
     case Length::kMaxContent:
     case Length::kMinIntrinsic:
     case Length::kFitContent:
-    case Length::kExtendToZoom:
-    case Length::kDeviceWidth:
-    case Length::kDeviceHeight:
+    case Length::kContent:
+    case Length::kFlex:
     case Length::kNone:
+    case Length::kOverlapJoin:
       NOTREACHED();
-      return LayoutUnit();
   }
   NOTREACHED();
-  return LayoutUnit();
 }
 
-FloatSize FloatSizeForLengthSize(const LengthSize& length_size,
-                                 const FloatSize& box_size) {
-  return FloatSize(
-      FloatValueForLength(length_size.Width(), box_size.Width()),
-      FloatValueForLength(length_size.Height(), box_size.Height()));
+gfx::SizeF SizeForLengthSize(const LengthSize& length_size,
+                             const gfx::SizeF& box_size) {
+  return gfx::SizeF(
+      FloatValueForLength(length_size.Width(), box_size.width()),
+      FloatValueForLength(length_size.Height(), box_size.height()));
 }
 
-FloatPoint FloatPointForLengthPoint(const LengthPoint& length_point,
-                                    const FloatSize& box_size) {
-  return FloatPoint(FloatValueForLength(length_point.X(), box_size.Width()),
-                    FloatValueForLength(length_point.Y(), box_size.Height()));
+gfx::PointF PointForLengthPoint(const LengthPoint& length_point,
+                                const gfx::SizeF& box_size) {
+  return gfx::PointF(FloatValueForLength(length_point.X(), box_size.width()),
+                     FloatValueForLength(length_point.Y(), box_size.height()));
 }
 
 }  // namespace blink

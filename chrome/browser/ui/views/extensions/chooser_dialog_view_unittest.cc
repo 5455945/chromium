@@ -1,26 +1,33 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "chrome/browser/ui/views/extensions/chooser_dialog_view.h"
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/device_chooser_content_view.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/permissions/fake_bluetooth_chooser_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/table/table_view.h"
+#include "ui/views/test/button_test_api.h"
 #include "ui/views/widget/widget.h"
 
 using permissions::FakeBluetoothChooserController;
 
 class ChooserDialogViewTest : public ChromeViewsTestBase {
  public:
-  ChooserDialogViewTest() {}
+  ChooserDialogViewTest() = default;
+
+  ChooserDialogViewTest(const ChooserDialogViewTest&) = delete;
+  ChooserDialogViewTest& operator=(const ChooserDialogViewTest&) = delete;
 
   void SetUp() override {
     ChromeViewsTestBase::SetUp();
@@ -32,20 +39,21 @@ class ChooserDialogViewTest : public ChromeViewsTestBase {
     controller_->SetBluetoothStatus(
         FakeBluetoothChooserController::BluetoothStatus::IDLE);
 
-    gfx::NativeView parent = gfx::kNullNativeView;
-#if defined(OS_MAC)
+    gfx::NativeView parent = gfx::NativeView();
+#if BUILDFLAG(IS_MAC)
     // We need a native view parent for the dialog to avoid a DCHECK
     // on Mac.
-    parent_widget_ = CreateTestWidget();
+    parent_widget_ =
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     parent = parent_widget_->GetNativeView();
 #endif
     widget_ = views::DialogDelegate::CreateDialogWidget(dialog_, GetContext(),
                                                         parent);
     widget_->SetVisibilityChangedAnimationsEnabled(false);
     widget_->Show();
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
     // Necessary for Mac. On other platforms this happens in the focus
-    // manager, but it's disabled for Mac due to crbug.com/650859.
+    // manager, but it's disabled for Mac due to crbug.com/40486728.
     parent_widget_->Activate();
     widget_->Activate();
 #endif
@@ -78,53 +86,52 @@ class ChooserDialogViewTest : public ChromeViewsTestBase {
   }
 
  protected:
-  ChooserDialogView* dialog_ = nullptr;
-  FakeBluetoothChooserController* controller_ = nullptr;
+  raw_ptr<ChooserDialogView, DanglingUntriaged> dialog_ = nullptr;
+  raw_ptr<FakeBluetoothChooserController, DanglingUntriaged> controller_ =
+      nullptr;
+  raw_ptr<views::Widget, DanglingUntriaged> widget_ = nullptr;
 
  private:
   std::unique_ptr<views::Widget> parent_widget_;
-  views::Widget* widget_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(ChooserDialogViewTest);
 };
 
 TEST_F(ChooserDialogViewTest, ButtonState) {
   // Cancel button is always enabled.
-  EXPECT_TRUE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_CANCEL));
+  EXPECT_TRUE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kCancel));
 
   // Selecting a device enables the OK button.
-  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
   AddDevice();
-  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
   table_view()->Select(0);
-  EXPECT_TRUE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_TRUE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
 
   // Changing state disables the OK button.
   controller_->SetBluetoothStatus(
       FakeBluetoothChooserController::BluetoothStatus::UNAVAILABLE);
-  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
   controller_->SetBluetoothStatus(
       FakeBluetoothChooserController::BluetoothStatus::SCANNING);
-  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
   table_view()->Select(0);
-  EXPECT_TRUE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_TRUE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
   controller_->SetBluetoothStatus(
       FakeBluetoothChooserController::BluetoothStatus::IDLE);
-  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  EXPECT_FALSE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
 }
 
 TEST_F(ChooserDialogViewTest, CancelButtonFocusedWhenReScanIsPressed) {
-  EXPECT_CALL(*controller_, RefreshOptions()).WillOnce(testing::Invoke([=]() {
+  EXPECT_CALL(*controller_, RefreshOptions()).WillOnce([=, this]() {
     controller_->SetBluetoothStatus(
         FakeBluetoothChooserController::BluetoothStatus::SCANNING);
-  }));
+  });
   AddDevice();
   table_view()->RequestFocus();
   controller_->RemoveDevice(0);
 
   // Click the re-scan button.
   const gfx::Point point(10, 10);
-  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, point, point,
+  const ui::MouseEvent event(ui::EventType::kMousePressed, point, point,
                              ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                              ui::EF_LEFT_MOUSE_BUTTON);
   re_scan_button()->OnMousePressed(event);
@@ -142,6 +149,40 @@ TEST_F(ChooserDialogViewTest, Accept) {
   std::vector<size_t> expected = {1u};
   EXPECT_CALL(*controller_, Select(testing::Eq(expected))).Times(1);
   dialog_->Accept();
+}
+
+TEST_F(ChooserDialogViewTest, KeyEventsBlockedDuringInputProtection) {
+  EXPECT_FALSE(dialog_->ShouldAllowKeyEventsDuringInputProtection());
+
+  AddDevice();
+  table_view()->Select(0);
+  ASSERT_TRUE(dialog_->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
+  views::MdTextButton* ok_button = dialog_->GetOkButton();
+  ASSERT_NE(ok_button, nullptr);
+
+  // Pressing Enter immediately (within the 500ms input protection window)
+  // should be ignored.
+  EXPECT_CALL(*controller_, Select(testing::_)).Times(0);
+  views::test::ButtonTestApi(ok_button).NotifyClick(
+      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE,
+                   ui::EventTimeForNow()));
+  EXPECT_FALSE(widget_->IsClosed());
+
+  // A repeated Enter key event (holding Enter down from before the dialog
+  // opened) should still be ignored even after the 500ms safety window.
+  views::test::ButtonTestApi(ok_button).NotifyClick(ui::KeyEvent(
+      ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_IS_REPEAT,
+      ui::EventTimeForNow() + base::Milliseconds(600)));
+  EXPECT_FALSE(widget_->IsClosed());
+  testing::Mock::VerifyAndClearExpectations(controller_);
+
+  // A fresh Enter key press after the safety window (600ms later) should
+  // succeed.
+  EXPECT_CALL(*controller_, Select(testing::ElementsAre(0u))).Times(1);
+  views::test::ButtonTestApi(ok_button).NotifyClick(
+      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE,
+                   ui::EventTimeForNow() + base::Milliseconds(600)));
+  EXPECT_TRUE(widget_->IsClosed());
 }
 
 TEST_F(ChooserDialogViewTest, Cancel) {

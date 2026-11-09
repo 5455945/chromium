@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 
 namespace about_flags {
 
-constexpr char kSiteIsolationTrialOptOutInternalName[] =
+inline constexpr char kSiteIsolationTrialOptOutInternalName[] =
     "site-isolation-trial-opt-out";
 
 inline std::string SiteIsolationTrialOptOutChoiceEnabled() {

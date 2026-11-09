@@ -1,14 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.browserservices.ui.view;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityModel.DISCLOSURE_EVENTS_CALLBACK;
 import static org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityModel.DISCLOSURE_FIRST_TIME;
@@ -17,8 +15,8 @@ import static org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityM
 import static org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityModel.DISCLOSURE_STATE_NOT_SHOWN;
 import static org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityModel.DISCLOSURE_STATE_SHOWN;
 import static org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityModel.PACKAGE_NAME;
-import static org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions.ChannelId.TWA_DISCLOSURE_INITIAL;
-import static org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions.ChannelId.TWA_DISCLOSURE_SUBSEQUENT;
+import static org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions.ChannelId.WEBAPPS;
+import static org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions.ChannelId.WEBAPPS_QUIET;
 
 import android.content.Context;
 
@@ -28,58 +26,47 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.JniMocker;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.browserservices.ui.TrustedWebActivityModel;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+import org.chromium.components.browser_ui.notifications.BaseNotificationManagerProxyFactory;
+import org.chromium.components.browser_ui.notifications.NotificationFeatureMap;
 import org.chromium.components.browser_ui.notifications.NotificationManagerProxy;
 import org.chromium.components.browser_ui.notifications.NotificationWrapper;
-import org.chromium.components.url_formatter.UrlFormatter;
-import org.chromium.components.url_formatter.UrlFormatterJni;
 
-/**
- * Tests for {@link DisclosureNotification}.
- */
+/** Tests for {@link DisclosureNotification}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@EnableFeatures({NotificationFeatureMap.CACHE_NOTIIFICATIONS_ENABLED})
 public class DisclosureNotificationTest {
     private static final String SCOPE = "https://www.example.com";
     private static final String PACKAGE = "com.example.twa";
 
-    @Rule
-    public JniMocker mJniMocker = new JniMocker();
-    @Mock
-    private UrlFormatter.Natives mUrlFormatterJniMock;
-    @Mock
-    public ActivityLifecycleDispatcher mLifecycleDispatcher;
-    @Mock
-    public TrustedWebActivityModel.DisclosureEventsCallback mCallback;
-    @Mock
-    public NotificationManagerProxy mNotificationManager;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock public ActivityLifecycleDispatcher mLifecycleDispatcher;
+    @Mock public TrustedWebActivityModel.DisclosureEventsCallback mCallback;
+    @Mock public NotificationManagerProxy mNotificationManager;
 
-    private TrustedWebActivityModel mModel = new TrustedWebActivityModel();
+    private final TrustedWebActivityModel mModel = new TrustedWebActivityModel();
     private DisclosureNotification mNotification;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
 
         mModel.set(DISCLOSURE_EVENTS_CALLBACK, mCallback);
         mModel.set(DISCLOSURE_SCOPE, SCOPE);
         mModel.set(PACKAGE_NAME, PACKAGE);
         mModel.set(DISCLOSURE_FIRST_TIME, true);
 
-        Context context = RuntimeEnvironment.application;
-        mNotification = new DisclosureNotification(context, context.getResources(),
-                mNotificationManager, mModel, mLifecycleDispatcher);
+        BaseNotificationManagerProxyFactory.setInstanceForTesting(mNotificationManager);
 
-        mJniMocker.mock(UrlFormatterJni.TEST_HOOKS, mUrlFormatterJniMock);
-        when(mUrlFormatterJniMock.formatUrlForDisplayOmitSchemeOmitTrivialSubdomains(anyString()))
-                .then(inv -> "formatted " + inv.getArgument(0));
+        Context context = RuntimeEnvironment.getApplication();
+        mNotification =
+                new DisclosureNotification(context.getResources(), mModel, mLifecycleDispatcher);
     }
 
     @Test
@@ -92,7 +79,7 @@ public class DisclosureNotificationTest {
         mModel.set(DISCLOSURE_STATE, DISCLOSURE_STATE_SHOWN);
 
         NotificationWrapper notification = verifyAndGetNotification();
-        assertEquals(TWA_DISCLOSURE_INITIAL, notification.getNotification().getChannelId());
+        assertEquals(WEBAPPS, notification.getNotification().getChannelId());
     }
 
     @Test
@@ -101,7 +88,7 @@ public class DisclosureNotificationTest {
         mModel.set(DISCLOSURE_STATE, DISCLOSURE_STATE_SHOWN);
 
         NotificationWrapper notification = verifyAndGetNotification();
-        assertEquals(TWA_DISCLOSURE_SUBSEQUENT, notification.getNotification().getChannelId());
+        assertEquals(WEBAPPS_QUIET, notification.getNotification().getChannelId());
     }
 
     @Test

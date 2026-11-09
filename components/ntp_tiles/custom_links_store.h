@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "components/ntp_tiles/custom_links_manager.h"
 
 class PrefService;
@@ -21,7 +22,13 @@ namespace ntp_tiles {
 // preference file. All virtual functions are for testing.
 class CustomLinksStore {
  public:
-  explicit CustomLinksStore(PrefService* prefs);
+  explicit CustomLinksStore(
+      PrefService* prefs,
+      CustomLinksScope scope = CustomLinksScope::kDesktop);
+
+  CustomLinksStore(const CustomLinksStore&) = delete;
+  CustomLinksStore& operator=(const CustomLinksStore&) = delete;
+
   // Virtual for testing.
   virtual ~CustomLinksStore();
 
@@ -43,11 +50,14 @@ class CustomLinksStore {
   static void RegisterProfilePrefs(
       user_prefs::PrefRegistrySyncable* user_prefs);
 
- private:
-  // The pref service used to persist the custom link data.
-  PrefService* prefs_;
+  // The pref key this store reads from and writes to, as resolved from the
+  // CustomLinksScope it was constructed with.
+  const char* list_pref_name() const { return custom_links_list_pref_; }
 
-  DISALLOW_COPY_AND_ASSIGN(CustomLinksStore);
+ private:
+  const char* const custom_links_list_pref_;
+  // The pref service used to persist the custom link data.
+  raw_ptr<PrefService> prefs_;
 };
 
 }  // namespace ntp_tiles

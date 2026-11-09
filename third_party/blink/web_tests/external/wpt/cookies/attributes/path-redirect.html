@@ -7,6 +7,8 @@
     <meta name="timeout" content="long">
     <script src="/resources/testharness.js"></script>
     <script src="/resources/testharnessreport.js"></script>
+    <script src="/resources/testdriver.js"></script>
+    <script src="/resources/testdriver-vendor.js"></script>
     <script src="/cookies/resources/cookie-test.js"></script>
   </head>
   <body>
@@ -114,6 +116,12 @@
           expected: "",
           name: "No cookie sent for redirected path mismatch with trailing '/' after unquoted Path",
           location: "/cookies/attributes/resources/path/one.html",
+        },
+        {
+          cookie: "test=18; path=/cookies/attributes/resources/path/",
+          expected: "test=18",
+          name: "Cookie sent for exact redirected path match with trailing '/'",
+          location: "/cookies/attributes/resources/path/",
         },
       ];
 

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 
 namespace notifications {
 
@@ -18,6 +18,11 @@ void WebUIClient::BeforeShowNotification(
     std::unique_ptr<NotificationData> notification_data,
     NotificationDataCallback callback) {
   std::move(callback).Run(std::move(notification_data));
+}
+
+void WebUIClient::OnShowNotification(
+    std::unique_ptr<NotificationData> notification_data) {
+  NOTIMPLEMENTED();
 }
 
 void WebUIClient::OnSchedulerInitialized(bool success,

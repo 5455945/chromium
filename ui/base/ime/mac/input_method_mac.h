@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #define UI_BASE_IME_MAC_INPUT_METHOD_MAC_H_
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "ui/base/ime/input_method_base.h"
 
 namespace ui {
@@ -18,7 +17,11 @@ namespace ui {
 class COMPONENT_EXPORT(UI_BASE_IME_MAC) InputMethodMac
     : public InputMethodBase {
  public:
-  explicit InputMethodMac(internal::InputMethodDelegate* delegate);
+  explicit InputMethodMac(ImeKeyEventDispatcher* ime_key_event_dispatcher);
+
+  InputMethodMac(const InputMethodMac&) = delete;
+  InputMethodMac& operator=(const InputMethodMac&) = delete;
+
   ~InputMethodMac() override;
 
   // Overriden from InputMethod.
@@ -27,8 +30,9 @@ class COMPONENT_EXPORT(UI_BASE_IME_MAC) InputMethodMac
   void CancelComposition(const TextInputClient* client) override;
   bool IsCandidatePopupOpen() const override;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(InputMethodMac);
+ protected:
+  void OnWillChangeFocusedClient(TextInputClient* focused_before,
+                                 TextInputClient* focused) override;
 };
 
 }  // namespace ui

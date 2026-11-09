@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,15 +29,6 @@ const char* ConvertMessageLevelEnum(InspectorPlayerMessage::Level level) {
   }
 }
 
-const char* ConvertErrorTypeEnum(InspectorPlayerError::Type level) {
-  switch (level) {
-    case InspectorPlayerError::Type::kPipelineError:
-      return protocol::Media::PlayerError::TypeEnum::Pipeline_error;
-    case InspectorPlayerError::Type::kMediaStatus:
-      return protocol::Media::PlayerError::TypeEnum::Media_error;
-  }
-}
-
 std::unique_ptr<protocol::Media::PlayerEvent> ConvertToProtocolType(
     const InspectorPlayerEvent& event) {
   return protocol::Media::PlayerEvent::create()
@@ -62,11 +53,37 @@ std::unique_ptr<protocol::Media::PlayerMessage> ConvertToProtocolType(
       .build();
 }
 
+std::unique_ptr<protocol::Media::PlayerErrorSourceLocation>
+ConvertToProtocolType(const InspectorPlayerError::SourceLocation& stack) {
+  return protocol::Media::PlayerErrorSourceLocation::create()
+      .setFile(stack.filename)
+      .setLine(stack.line_number)
+      .build();
+}
+
 std::unique_ptr<protocol::Media::PlayerError> ConvertToProtocolType(
     const InspectorPlayerError& error) {
+  auto caused_by =
+      std::make_unique<protocol::Array<protocol::Media::PlayerError>>();
+  auto stack = std::make_unique<
+      protocol::Array<protocol::Media::PlayerErrorSourceLocation>>();
+  auto data = protocol::DictionaryValue::create();
+
+  for (const InspectorPlayerError& cause : error.caused_by)
+    caused_by->push_back(ConvertToProtocolType(cause));
+
+  for (const InspectorPlayerError::Data& pair : error.data)
+    data->setString(pair.name, pair.value);
+
+  for (const InspectorPlayerError::SourceLocation& pair : error.stack)
+    stack->push_back(ConvertToProtocolType(pair));
+
   return protocol::Media::PlayerError::create()
-      .setType(ConvertErrorTypeEnum(error.type))
-      .setErrorCode(error.errorCode)
+      .setErrorType(error.group)
+      .setCode(error.code)
+      .setCause(std::move(caused_by))
+      .setData(std::move(data))
+      .setStack(std::move(stack))
       .build();
 }
 
@@ -91,7 +108,7 @@ InspectorMediaAgent::~InspectorMediaAgent() = default;
 
 ExecutionContext* InspectorMediaAgent::GetTargetExecutionContext() const {
   if (worker_global_scope_)
-    return worker_global_scope_;
+    return worker_global_scope_.Get();
   DCHECK(inspected_frames_);
   return inspected_frames_->Root()->DomWindow()->GetExecutionContext();
 }
@@ -106,12 +123,15 @@ void InspectorMediaAgent::RegisterAgent() {
   instrumenting_agents_->AddInspectorMediaAgent(this);
   auto* cache = MediaInspectorContextImpl::From(*GetTargetExecutionContext());
   Vector<WebString> players = cache->AllPlayerIdsAndMarkSent();
-  PlayersCreated(players);
+  if (players.empty()) {
+    return;
+  }
+
   for (const auto& player_id : players) {
     const auto& media_player = cache->MediaPlayerFromId(player_id);
-    Vector<InspectorPlayerProperty> properties;
-    properties.AppendRange(media_player.properties.Values().begin(),
-                           media_player.properties.Values().end());
+    PlayerCreated(media_player);
+    Vector<InspectorPlayerProperty> properties(
+        media_player.properties.Values());
 
     PlayerPropertiesChanged(player_id, properties);
     PlayerMessagesLogged(player_id, media_player.messages);
@@ -164,13 +184,14 @@ void InspectorMediaAgent::PlayerMessagesLogged(
       playerId, ConvertVector<protocol::Media::PlayerMessage>(messages));
 }
 
-void InspectorMediaAgent::PlayersCreated(const Vector<WebString>& player_ids) {
-  auto protocol_players =
-      std::make_unique<protocol::Array<protocol::Media::PlayerId>>();
-  protocol_players->reserve(player_ids.size());
-  for (const auto& player_id : player_ids)
-    protocol_players->push_back(player_id);
-  GetFrontend()->playersCreated(std::move(protocol_players));
+void InspectorMediaAgent::PlayerCreated(const MediaPlayer& media_player) {
+  auto player_object = protocol::Media::Player::create()
+                           .setPlayerId(media_player.player_id)
+                           .build();
+  if (media_player.dom_node_id) {
+    player_object->setDomNodeId(media_player.dom_node_id.value());
+  }
+  GetFrontend()->playerCreated(std::move(player_object));
 }
 
 void InspectorMediaAgent::Trace(Visitor* visitor) const {

@@ -1,4 +1,4 @@
-// Copyright 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,38 +8,54 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "cc/cc_export.h"
-#include "cc/document_transition/document_transition_shared_element_id.h"
 #include "cc/layers/draw_mode.h"
 #include "cc/layers/layer_collections.h"
+#include "cc/paint/element_id.h"
 #include "cc/trees/occlusion.h"
 #include "cc/trees/property_tree.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/shared_quad_state.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/gfx/geometry/mask_filter_info.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/mask_filter_info.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 
+struct AppendQuadsContext;
 class AppendQuadsData;
 class DamageTracker;
+class EffectTree;
 class FilterOperations;
 class Occlusion;
 class LayerImpl;
 class LayerTreeImpl;
-class PictureLayerImpl;
+
+struct RenderSurfacePropertyChangedFlags {
+ public:
+  RenderSurfacePropertyChangedFlags() = default;
+  RenderSurfacePropertyChangedFlags(bool self_changed, bool ancestor_changed)
+      : self_changed_(self_changed), ancestor_changed_(ancestor_changed) {}
+  bool self_changed() const { return self_changed_; }
+  bool ancestor_changed() const { return ancestor_changed_; }
+
+ private:
+  bool self_changed_ = false;
+  bool ancestor_changed_ = false;
+};
 
 class CC_EXPORT RenderSurfaceImpl {
  public:
-  RenderSurfaceImpl(LayerTreeImpl* layer_tree_impl, uint64_t stable_id);
+  RenderSurfaceImpl(LayerTreeImpl* layer_tree_impl, ElementId stable_id);
   RenderSurfaceImpl(const RenderSurfaceImpl&) = delete;
   virtual ~RenderSurfaceImpl();
 
@@ -59,11 +75,16 @@ class CC_EXPORT RenderSurfaceImpl {
   }
   float draw_opacity() const { return draw_properties_.draw_opacity; }
 
-  void SetMaskFilterInfo(const gfx::MaskFilterInfo& mask_filter_info) {
+  void SetMaskFilterInfo(const gfx::MaskFilterInfo& mask_filter_info,
+                         bool is_fast_rounded_corner) {
     draw_properties_.mask_filter_info = mask_filter_info;
+    draw_properties_.is_fast_rounded_corner = is_fast_rounded_corner;
   }
   const gfx::MaskFilterInfo& mask_filter_info() const {
     return draw_properties_.mask_filter_info;
+  }
+  bool is_fast_rounded_corner() const {
+    return draw_properties_.is_fast_rounded_corner;
   }
 
   SkBlendMode BlendMode() const;
@@ -75,14 +96,19 @@ class CC_EXPORT RenderSurfaceImpl {
     return nearest_occlusion_immune_ancestor_;
   }
 
-  SkColor GetDebugBorderColor() const;
+  SkColor4f GetDebugBorderColor() const;
   float GetDebugBorderWidth() const;
 
-  void SetDrawTransform(const gfx::Transform& draw_transform) {
+  void SetDrawTransform(const gfx::Transform& draw_transform,
+                        const gfx::Vector2dF& pixel_alignment_offset) {
     draw_properties_.draw_transform = draw_transform;
+    draw_properties_.pixel_alignment_offset = pixel_alignment_offset;
   }
   const gfx::Transform& draw_transform() const {
     return draw_properties_.draw_transform;
+  }
+  const gfx::Vector2dF& pixel_alignment_offset() const {
+    return draw_properties_.pixel_alignment_offset;
   }
 
   void SetScreenSpaceTransform(const gfx::Transform& screen_space_transform) {
@@ -111,12 +137,24 @@ class CC_EXPORT RenderSurfaceImpl {
     contributes_to_drawn_surface_ = contributes_to_drawn_surface;
   }
 
-  void set_has_contributing_layer_that_escapes_clip(
-      bool contributing_layer_escapes_clip) {
-    has_contributing_layer_that_escapes_clip_ = contributing_layer_escapes_clip;
+  // Called when any contributing layer's escapes OwningEffectNode's clip node,
+  // or to clear the current `common_ancestor_clip_id_` before a full update.
+  // After this is called for all clip-escaping layers,
+  // `common_ancestor_clip_id_` is the lowest common ancestor of OwningEffect's
+  // clip node and all contributing layers' clips. It will be used as the
+  // render surface's clip.
+  void set_common_ancestor_clip_id(int id) {
+    DCHECK_NE(id, ClipTreeIndex());
+    DCHECK(id < ClipTreeIndex() || id == kInvalidPropertyNodeId);
+    common_ancestor_clip_id_ = id;
+  }
+  int common_ancestor_clip_id() const {
+    return common_ancestor_clip_id_ == kInvalidPropertyNodeId
+               ? ClipTreeIndex()
+               : common_ancestor_clip_id_;
   }
   bool has_contributing_layer_that_escapes_clip() const {
-    return has_contributing_layer_that_escapes_clip_;
+    return common_ancestor_clip_id_ != kInvalidPropertyNodeId;
   }
 
   void set_is_render_surface_list_member(bool is_render_surface_list_member) {
@@ -135,12 +173,21 @@ class CC_EXPORT RenderSurfaceImpl {
   void SetContentRectToViewport();
   void SetContentRectForTesting(const gfx::Rect& rect);
   gfx::Rect content_rect() const { return draw_properties_.content_rect; }
+  gfx::Rect view_transition_capture_content_rect() const {
+    return view_transition_capture_content_rect_;
+  }
 
   void ClearAccumulatedContentRect();
+  // Please see `append_quads_context.h` for a comment about
+  // `capture_view_transition_tokens`.
   void AccumulateContentRectFromContributingLayer(
-      LayerImpl* contributing_layer);
+      LayerImpl* contributing_layer,
+      const base::flat_set<blink::ViewTransitionToken>&
+          capture_view_transition_tokens);
   void AccumulateContentRectFromContributingRenderSurface(
-      RenderSurfaceImpl* contributing_surface);
+      RenderSurfaceImpl* contributing_surface,
+      const base::flat_set<blink::ViewTransitionToken>&
+          capture_view_transition_tokens);
 
   gfx::Rect accumulated_content_rect() const {
     return accumulated_content_rect_;
@@ -161,20 +208,27 @@ class CC_EXPORT RenderSurfaceImpl {
     occlusion_in_content_space_ = occlusion;
   }
 
-  uint64_t id() const { return stable_id_; }
+  ElementId id() const { return id_; }
   viz::CompositorRenderPassId render_pass_id() const {
-    return viz::CompositorRenderPassId{id()};
+    return viz::CompositorRenderPassId(id().GetInternalValue());
+  }
+
+  // This is a render pass id that is used for view transition capture phase.
+  // It's constructed by using the regular `render_pass_id()` and mapping it to
+  // a reserved internal cc namespace (see code in cc/paint/element_.h:
+  // `kElementIdReservedBitCount` and `RemapElementIdToCcNamespace`).
+  viz::CompositorRenderPassId view_transition_capture_render_pass_id() const {
+    return viz::CompositorRenderPassId(
+        RemapElementIdToCcNamespace(id()).GetInternalValue());
   }
 
   bool HasMaskingContributingSurface() const;
 
   const FilterOperations& Filters() const;
   const FilterOperations& BackdropFilters() const;
-  absl::optional<gfx::RRectF> BackdropFilterBounds() const;
+  std::optional<SkPath> BackdropFilterBounds() const;
   LayerImpl* BackdropMaskLayer() const;
   gfx::Transform SurfaceScale() const;
-
-  bool TrilinearFiltering() const;
 
   bool HasCopyRequest() const;
 
@@ -191,12 +245,16 @@ class CC_EXPORT RenderSurfaceImpl {
 
   // Returns true if it's required to copy the output of this surface (i.e. when
   // it has copy requests, should be cached, or has a valid subtree capture ID),
-  // and should be e.g. immune from occlusion, etc. Returns false otherise.
+  // and should be e.g. immune from occlusion, etc. Returns false otherwise.
   bool CopyOfOutputRequired() const;
+
+  // These are to enable commit, where we need to snapshot these flags from the
+  // main thread property trees, and then apply them to the sync tree.
+  RenderSurfacePropertyChangedFlags GetPropertyChangeFlags() const;
+  void ApplyPropertyChangeFlags(const RenderSurfacePropertyChangedFlags& flags);
 
   void ResetPropertyChangedFlags();
   bool SurfacePropertyChanged() const;
-  bool SurfacePropertyChangedOnlyFromDescendant() const;
   bool AncestorPropertyChanged() const;
   void NoteAncestorPropertyChanged();
   bool HasDamageFromeContributingContent() const;
@@ -204,11 +262,16 @@ class CC_EXPORT RenderSurfaceImpl {
   DamageTracker* damage_tracker() const { return damage_tracker_.get(); }
   gfx::Rect GetDamageRect() const;
 
-  std::unique_ptr<viz::CompositorRenderPass> CreateRenderPass();
-  viz::ResourceId GetMaskResourceFromLayer(PictureLayerImpl* mask_layer,
-                                           gfx::Size* mask_texture_size,
-                                           gfx::RectF* mask_uv_rect) const;
-  void AppendQuads(DrawMode draw_mode,
+  // Please see `append_quads_context.h` for a comment about
+  // `capture_view_transition_tokens`.
+  std::unique_ptr<viz::CompositorRenderPass> CreateRenderPass(
+      const base::flat_set<blink::ViewTransitionToken>&
+          capture_view_transition_tokens = {});
+  std::unique_ptr<viz::CompositorRenderPass>
+  CreateViewTransitionCaptureRenderPass(
+      const base::flat_set<blink::ViewTransitionToken>&
+          capture_view_transition_tokens = {});
+  void AppendQuads(const AppendQuadsContext& context,
                    viz::CompositorRenderPass* render_pass,
                    AppendQuadsData* append_quads_data);
 
@@ -218,10 +281,32 @@ class CC_EXPORT RenderSurfaceImpl {
   void set_effect_tree_index(int index) { effect_tree_index_ = index; }
   int EffectTreeIndex() const;
 
-  const EffectNode* OwningEffectNode() const;
+  // Returns the effect tree associated with this render surface.
+  const EffectTree* effect_tree() const;
 
-  const DocumentTransitionSharedElementId&
-  GetDocumentTransitionSharedElementId() const;
+  const EffectNode* OwningEffectNode() const;
+  EffectNode* OwningEffectNodeMutableForTest() const;
+
+  // Returns true if the owning effect node has a view transition resource.
+  bool IsViewTransitionElement() const;
+
+  // Returns true if this render surface is for an unbounded element.
+  bool IsUnbounded() const;
+
+  // Returns the view transition element resource id for this render surface.
+  // This may be invalid, if this render surface is not a view transition
+  // element.
+  const viz::ViewTransitionElementResourceId& ViewTransitionElementResourceId()
+      const;
+
+  // Identifies whether this render surface may have a view transition render
+  // pass contribution.
+  bool has_view_transition_capture_contributions() const {
+    return has_view_transition_capture_contributions_;
+  }
+  void set_has_view_transition_capture_contributions(bool flag) {
+    has_view_transition_capture_contributions_ = flag;
+  }
 
  private:
   void SetContentRect(const gfx::Rect& content_rect);
@@ -231,10 +316,22 @@ class CC_EXPORT RenderSurfaceImpl {
   void TileMaskLayer(viz::CompositorRenderPass* render_pass,
                      viz::SharedQuadState* shared_quad_state,
                      const gfx::Rect& unoccluded_content_rect);
+  std::unique_ptr<viz::CompositorRenderPass> CreateRenderPassCommon(
+      viz::CompositorRenderPassId id,
+      const gfx::Rect& output_rect);
 
-  LayerTreeImpl* layer_tree_impl_;
-  uint64_t stable_id_;
+  // Returns true if this surface should be clipped. This is false if there
+  // are copy requests, it should be cached, or is part of a view transition.
+  bool ShouldClip() const;
+
+  raw_ptr<LayerTreeImpl> layer_tree_impl_;
+  ElementId id_;
   int effect_tree_index_;
+
+  // A unique id in the same namespace as
+  // `LayerImpl::stable_id_for_shared_quad_state`, so viz can identify
+  // `RenderPassDrawQuads` across the frame, similarly to other quads.
+  const int stable_id_for_shared_quad_state_ = 0;
 
   // Container for properties that render surfaces need to compute before they
   // can be drawn.
@@ -242,11 +339,14 @@ class CC_EXPORT RenderSurfaceImpl {
     DrawProperties();
     ~DrawProperties();
 
-    float draw_opacity;
+    float draw_opacity = 1.0f;
 
     // Transforms from the surface's own space to the space of its target
-    // surface.
+    // surface. This has been adjusted from the original draw transform
+    // calculated from the property tree, by -pixel_alignment_offset.
     gfx::Transform draw_transform;
+    // See draw_property_utils::PixelAlignmentOffset().
+    gfx::Vector2dF pixel_alignment_offset;
     // Transforms from the surface's own space to the viewport.
     gfx::Transform screen_space_transform;
 
@@ -257,35 +357,57 @@ class CC_EXPORT RenderSurfaceImpl {
     gfx::Rect clip_rect;
 
     // True if the surface needs to be clipped by clip_rect.
-    bool is_clipped : 1;
+    bool is_clipped : 1 = false;
 
     // Contains a mask information applied to the layer. The coordinates is in
     // the target space of the render surface. The root render surface will
     // never have this set.
     gfx::MaskFilterInfo mask_filter_info;
+
+    // This information is further passed to SharedQuadState when a
+    // SharedQuadState and a quad for this layer that represents a render
+    // surface is appended. Then, it's up to the SurfaceAggregator to decide
+    // whether it can actually merge this render surface and avoid having
+    // additional render pass.
+    bool is_fast_rounded_corner : 1 = false;
   };
 
   DrawProperties draw_properties_;
 
   // Is used to calculate the content rect from property trees.
   gfx::Rect accumulated_content_rect_;
-  int num_contributors_;
-  // Is used to decide if the surface is clipped.
-  bool has_contributing_layer_that_escapes_clip_ : 1;
-  bool surface_property_changed_ : 1;
-  bool ancestor_property_changed_ : 1;
+  int num_contributors_ = 0;
 
-  bool contributes_to_drawn_surface_ : 1;
-  bool is_render_surface_list_member_ : 1;
-  bool intersects_damage_under_ : 1;
+  // If this is not kInvalidPropertyNodeId, it means that some contributing
+  // layer escaping the effect's clip node, and this is the the lowest common
+  // ancestor of the effect's clip node and the clip nodes of all contributing
+  // layers. Otherwise `ClipTreeIndex()` is already the common ancestor clip.
+  int common_ancestor_clip_id_ = kInvalidPropertyNodeId;
+
+  bool surface_property_changed_ : 1 = false;
+  bool ancestor_property_changed_ : 1 = false;
+
+  bool contributes_to_drawn_surface_ : 1 = false;
+  bool is_render_surface_list_member_ : 1 = false;
+  bool intersects_damage_under_ : 1 = true;
 
   Occlusion occlusion_in_content_space_;
 
   // The nearest ancestor target surface that will contain the contents of this
   // surface, and that ignores outside occlusion. This can point to itself.
-  const RenderSurfaceImpl* nearest_occlusion_immune_ancestor_;
+  raw_ptr<const RenderSurfaceImpl, AcrossTasksDanglingUntriaged>
+      nearest_occlusion_immune_ancestor_ = nullptr;
 
   std::unique_ptr<DamageTracker> damage_tracker_;
+
+  // A ViewTransitionContentLayer only knows its final visible drawable rect
+  // once its originating surface's content rect has been computed. So we defer
+  // adding this contribution until that is complete.
+  std::vector<raw_ptr<LayerImpl>> deferred_contributing_layers_;
+
+  gfx::Rect view_transition_capture_content_rect_;
+
+  bool has_view_transition_capture_contributions_ = false;
 };
 
 }  // namespace cc

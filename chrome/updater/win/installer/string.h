@@ -1,6 +1,7 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #ifndef CHROME_UPDATER_WIN_INSTALLER_STRING_H_
 #define CHROME_UPDATER_WIN_INSTALLER_STRING_H_
@@ -12,10 +13,6 @@ namespace updater {
 // NOTE: Do not assume that these string functions support UTF encoding.
 // This is fine for the purposes of the mini_installer, but you have
 // been warned!
-
-// Formats a sequence of |bytes| as hex.  The |str| buffer must have room for
-// at least 2*|size| + 1.
-bool HexEncode(const void* bytes, size_t size, wchar_t* str, size_t str_size);
 
 // Counts the number of characters in the string up to a maximum of
 // alloc_size.  The highest return value from this function can therefore be
@@ -35,19 +32,6 @@ bool SafeStrCopy(wchar_t* dest, size_t dest_size, const wchar_t* src);
 // string should be the same as it was before.
 bool SafeStrCat(wchar_t* dest, size_t dest_size, const wchar_t* src);
 
-// Function to check if a string (specified by str) starts with another string
-// (specified by start_str). The comparison is string insensitive.
-bool StrStartsWith(const wchar_t* str, const wchar_t* start_str);
-
-// Takes the path to file and returns a pointer to the basename component.
-// Example input -> output:
-//     c:\full\path\to\file.ext -> file.ext
-//     file.ext -> file.ext
-// Note: |size| is the number of characters in |path| not including the string
-// terminator.
-const wchar_t* GetNameFromPathExt(const wchar_t* path, size_t size);
-wchar_t* GetNameFromPathExt(wchar_t* path, size_t size);
-
 // A string class that manages a fixed size buffer on the stack.
 // The methods in the class are based on the above string methods and the
 // class additionally is careful about proper buffer termination.
@@ -59,6 +43,9 @@ class StackString {
     buffer_[kCapacity] = L'\0';  // We always reserve 1 more than asked for.
     clear();
   }
+
+  StackString(const StackString&) = delete;
+  StackString& operator=(const StackString&) = delete;
 
   // We do not expose a constructor that accepts a string pointer on purpose.
   // We expect the caller to call assign() and handle failures.
@@ -96,8 +83,9 @@ class StackString {
   // Note: this method has no effect if this object's length is less than
   // |location|.
   bool truncate_at(size_t location) {
-    if (location >= kCapacity)
+    if (location >= kCapacity) {
       return false;
+    }
     buffer_[location] = L'\0';
     return true;
   }
@@ -106,10 +94,6 @@ class StackString {
   // We reserve 1 more than what is asked for as a safeguard against
   // off-by-one errors.
   wchar_t buffer_[kCapacity + 1];
-
- private:
-  StackString(const StackString&);
-  StackString& operator=(const StackString&);
 };
 
 }  // namespace updater

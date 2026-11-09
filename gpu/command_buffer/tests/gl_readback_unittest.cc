@@ -1,24 +1,33 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <GLES2/gl2.h>
+#include <GLES2/gl2chromium.h>
 #include <GLES2/gl2ext.h>
 #include <GLES2/gl2extchromium.h>
+#include <GLES3/gl3.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <cmath>
 #include <memory>
+#include <string_view>
+#include <vector>
 
-#include "base/bind.h"
 #include "base/bit_cast.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
+#include "gpu/config/gpu_test_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -37,11 +46,11 @@ class GLReadbackTest : public testing::Test {
     if (done) {
       std::move(cb).Run();
     } else {
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
           FROM_HERE,
           base::BindOnce(&GLReadbackTest::WaitForQueryCallback,
                          base::Unretained(this), q, std::move(cb)),
-          base::TimeDelta::FromMilliseconds(3));
+          base::Milliseconds(3));
     }
   }
 
@@ -74,14 +83,18 @@ TEST_F(GLReadbackTest, ReadPixelsWithPBOAndQuery) {
   WaitForQuery(q);
 
   // TODO(hubbe): Check that glMapBufferCHROMIUM does not block here.
-  unsigned char *data = static_cast<unsigned char *>(
-      glMapBufferCHROMIUM(
-          GL_PIXEL_PACK_TRANSFER_BUFFER_CHROMIUM,
-          GL_READ_ONLY));
+  const unsigned char* data =
+      static_cast<const unsigned char*>(glMapBufferCHROMIUM(
+          GL_PIXEL_PACK_TRANSFER_BUFFER_CHROMIUM, GL_READ_ONLY));
   EXPECT_TRUE(data);
-  EXPECT_EQ(data[0], 0);   // red
-  EXPECT_EQ(data[1], 0);   // green
-  EXPECT_EQ(data[2], 255); // blue
+  // SAFETY: The mapped read-only PBO is guaranteed to be large enough to
+  // contain the mapped pixels, meaning it holds at least `kWidth * kHeight *
+  // kBytesPerPixel` bytes.
+  auto data_span = UNSAFE_BUFFERS(
+      base::span(data, static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
+  EXPECT_EQ(data_span[0], 0);    // red
+  EXPECT_EQ(data_span[1], 0);    // green
+  EXPECT_EQ(data_span[2], 255);  // blue
   glUnmapBufferCHROMIUM(GL_PIXEL_PACK_TRANSFER_BUFFER_CHROMIUM);
   glBindBuffer(GL_PIXEL_PACK_TRANSFER_BUFFER_CHROMIUM, 0);
   glDeleteBuffers(1, &b);
@@ -97,7 +110,7 @@ static float HalfToFloat32(uint16_t value) {
   if (e == 0) {
     if (m == 0) {
       uint32_t result = s << 31;
-      return bit_cast<float>(result);
+      return base::bit_cast<float>(result);
     } else {
       while (!(m & 0x00000400)) {
         m <<= 1;
@@ -110,10 +123,10 @@ static float HalfToFloat32(uint16_t value) {
   } else if (e == 31) {
     if (m == 0) {
       uint32_t result = (s << 31) | 0x7f800000;
-      return bit_cast<float>(result);
+      return base::bit_cast<float>(result);
     } else {
       uint32_t result = (s << 31) | 0x7f800000 | (m << 13);
-      return bit_cast<float>(result);
+      return base::bit_cast<float>(result);
     }
   }
 
@@ -121,7 +134,7 @@ static float HalfToFloat32(uint16_t value) {
   m = m << 13;
 
   uint32_t result = (s << 31) | (e << 23) | m;
-  return bit_cast<float>(result);
+  return base::bit_cast<float>(result);
 }
 
 static GLuint CompileShader(GLenum type, const char *data) {
@@ -145,14 +158,14 @@ static GLuint CompileShader(GLenum type, const char *data) {
 // backend. crbug.com/607283.
 // TODO(zmo): This test also fails on some android devices when the readback
 // type is HALF_FLOAT_OES. Likely it's due to a driver bug. crbug.com/607936.
-#if defined(OS_WIN) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 #define MAYBE_ReadPixelsFloat DISABLED_ReadPixelsFloat
 #else
 #define MAYBE_ReadPixelsFloat ReadPixelsFloat
 #endif
 TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
   const GLsizei kTextureSize = 4;
-  const GLfloat kDrawColor[4] = { -10.9f, 0.5f, 10.5f, 100.12f };
+  const std::array<GLfloat, 4> kDrawColor = {-10.9f, 0.5f, 10.5f, 100.12f};
   const GLfloat kEpsilon = 0.01f;
 
   struct TestFormat {
@@ -160,23 +173,18 @@ TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
     GLint type;
     uint32_t comp_count;
   };
-  TestFormat test_formats[4];
-  size_t test_count = 0;
-  const char *extensions = reinterpret_cast<const char*>(
-      glGetString(GL_EXTENSIONS));
-  if (strstr(extensions, "GL_OES_texture_half_float") != nullptr) {
-    TestFormat rgb16f = {GL_RGB, GL_HALF_FLOAT_OES, 3};
-    test_formats[test_count++] = rgb16f;
-
-    TestFormat rgba16f = {GL_RGBA, GL_HALF_FLOAT_OES, 4};
-    test_formats[test_count++] = rgba16f;
+  std::vector<TestFormat> test_formats;
+  test_formats.reserve(4);
+  const char* extensions_cstr =
+      reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+  std::string_view extensions(extensions_cstr ? extensions_cstr : "");
+  if (extensions.find("GL_OES_texture_half_float") != std::string_view::npos) {
+    test_formats.push_back({GL_RGB, GL_HALF_FLOAT_OES, 3});
+    test_formats.push_back({GL_RGBA, GL_HALF_FLOAT_OES, 4});
   }
-  if (strstr(extensions, "GL_OES_texture_float") != nullptr) {
-    TestFormat rgb32f = {GL_RGB, GL_FLOAT, 3};
-    test_formats[test_count++] = rgb32f;
-
-    TestFormat rgba32f = {GL_RGBA, GL_FLOAT, 4};
-    test_formats[test_count++] = rgba32f;
+  if (extensions.find("GL_OES_texture_float") != std::string_view::npos) {
+    test_formats.push_back({GL_RGB, GL_FLOAT, 3});
+    test_formats.push_back({GL_RGBA, GL_FLOAT, 4});
   }
 
   const char *vs_source =
@@ -226,9 +234,8 @@ TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
   GLuint vertex_buffer;
   glGenBuffers(1, &vertex_buffer);
   glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
-  glBufferData(
-      GL_ARRAY_BUFFER, sizeof(quad_vertices),
-      reinterpret_cast<void*>(quad_vertices), GL_STATIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), quad_vertices,
+               GL_STATIC_DRAW);
 
   GLint position_location = glGetAttribLocation(program, "a_position");
   glVertexAttribPointer(position_location, 2, GL_FLOAT, GL_FALSE,
@@ -236,17 +243,17 @@ TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
   glEnableVertexAttribArray(position_location);
 
   glUseProgram(program);
-  glUniform4fv(glGetUniformLocation(program, "u_color"), 1, kDrawColor);
+  glUniform4fv(glGetUniformLocation(program, "u_color"), 1, kDrawColor.data());
 
   EXPECT_EQ(glGetError(), GLenum(GL_NO_ERROR));
 
-  for (size_t ii = 0; ii < test_count; ++ii) {
+  for (const auto& test_format : test_formats) {
     GLuint texture_id = 0;
     glGenTextures(1, &texture_id);
     glBindTexture(GL_TEXTURE_2D, texture_id);
-    glTexImage2D(GL_TEXTURE_2D, 0, test_formats[ii].format, kTextureSize,
-                 kTextureSize, 0, test_formats[ii].format,
-                 test_formats[ii].type, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, test_format.format, kTextureSize,
+                 kTextureSize, 0, test_format.format, test_format.type,
+                 nullptr);
 
     GLuint framebuffer = 0;
     glGenFramebuffers(1, &framebuffer);
@@ -268,7 +275,7 @@ TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
       EXPECT_EQ(glGetError(), GLenum(GL_NO_ERROR));
 
       if ((read_format == GL_RGB || read_format == GL_RGBA) &&
-          read_type == test_formats[ii].type) {
+          read_type == test_format.type) {
         glClear(GL_COLOR_BUFFER_BIT);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
@@ -284,34 +291,43 @@ TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
 
         switch (read_type) {
           case GL_HALF_FLOAT_OES: {
-            std::unique_ptr<GLushort[]> buf(
-                new GLushort[kTextureSize * kTextureSize * read_comp_count]);
-            glReadPixels(
-                0, 0, kTextureSize, kTextureSize, read_format, read_type,
-                buf.get());
+            auto buf = base::HeapArray<GLushort>::Uninit(
+                kTextureSize * kTextureSize * read_comp_count);
+            glReadPixels(0, 0, kTextureSize, kTextureSize, read_format,
+                         read_type, buf.data());
             EXPECT_EQ(glGetError(), GLenum(GL_NO_ERROR));
+            base::span<const GLushort> buf_span = buf;
             for (uint32_t jj = 0; jj < kTextureSize * kTextureSize; ++jj) {
-              for (uint32_t kk = 0; kk < test_formats[ii].comp_count; ++kk) {
-                EXPECT_LE(
-                    std::abs(HalfToFloat32(buf[jj * read_comp_count + kk]) -
-                        kDrawColor[kk]),
-                    std::abs(kDrawColor[kk] * kEpsilon));
+              auto pixel =
+                  buf_span.subspan(jj * read_comp_count, read_comp_count);
+              // Only compare components that exist in both the texture and the
+              // read-back format.
+              for (uint32_t kk = 0;
+                   kk < std::min(test_format.comp_count, read_comp_count);
+                   ++kk) {
+                EXPECT_LE(std::abs(HalfToFloat32(pixel[kk]) - kDrawColor[kk]),
+                          std::abs(kDrawColor[kk] * kEpsilon));
               }
             }
             break;
           }
           case GL_FLOAT: {
-            std::unique_ptr<GLfloat[]> buf(
-                new GLfloat[kTextureSize * kTextureSize * read_comp_count]);
-            glReadPixels(
-                0, 0, kTextureSize, kTextureSize, read_format, read_type,
-                buf.get());
+            auto buf = base::HeapArray<GLfloat>::Uninit(
+                kTextureSize * kTextureSize * read_comp_count);
+            glReadPixels(0, 0, kTextureSize, kTextureSize, read_format,
+                         read_type, buf.data());
             EXPECT_EQ(glGetError(), GLenum(GL_NO_ERROR));
+            base::span<const GLfloat> buf_span = buf;
             for (uint32_t jj = 0; jj < kTextureSize * kTextureSize; ++jj) {
-              for (uint32_t kk = 0; kk < test_formats[ii].comp_count; ++kk) {
-                EXPECT_LE(
-                    std::abs(buf[jj * read_comp_count + kk] - kDrawColor[kk]),
-                    std::abs(kDrawColor[kk] * kEpsilon));
+              auto pixel =
+                  buf_span.subspan(jj * read_comp_count, read_comp_count);
+              // Only compare components that exist in both the texture and the
+              // read-back format.
+              for (uint32_t kk = 0;
+                   kk < std::min(test_format.comp_count, read_comp_count);
+                   ++kk) {
+                EXPECT_LE(std::abs(pixel[kk] - kDrawColor[kk]),
+                          std::abs(kDrawColor[kk] * kEpsilon));
               }
             }
             break;
@@ -327,5 +343,262 @@ TEST_F(GLReadbackTest, MAYBE_ReadPixelsFloat) {
   glDeleteBuffers(1, &vertex_buffer);
   glDeleteProgram(program);
 }
+
+TEST_F(GLReadbackTest, PackLargeRowLengthSeparatelyPackBuffer) {
+  // Test fails on these configurations due to underlying driver or ANGLE
+  // implementation bugs.
+#if BUILDFLAG(IS_ANDROID)
+  return;
+#else
+#if BUILDFLAG(IS_MAC)
+  if (GPUTestBotConfig::CurrentConfigMatches("Intel") ||
+      GPUTestBotConfig::CurrentConfigMatches("AMD")) {
+    return;
+  }
+#endif
+
+  GLManager::Options options;
+  options.context_type = CONTEXT_TYPE_OPENGLES3;
+  GpuDriverBugWorkarounds workarounds;
+  workarounds.pack_large_row_length_separately_pack_buffer = true;
+  gl_.Destroy();
+  gl_.InitializeWithWorkarounds(options, workarounds);
+
+  if (!gl_.IsInitialized()) {
+    return;
+  }
+
+  const uint8_t kExpectedColor[4] = {65, 128, 192, 255};
+  constexpr GLint kLargeRowLength = 0x7fffffc;
+  constexpr GLsizeiptr kByteOffsetToVerify = 0x1ffffff0;
+  constexpr GLsizeiptr kBufferSize = kByteOffsetToVerify + 256;
+
+  GLuint pbo = 0;
+  glGenBuffers(1, &pbo);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+  glBufferData(GL_PIXEL_PACK_BUFFER, kBufferSize, nullptr, GL_STREAM_READ);
+  if (glGetError() == GL_OUT_OF_MEMORY) {
+    glDeleteBuffers(1, &pbo);
+    return;
+  }
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+
+  glClearColor(kExpectedColor[0] / 255.0f, kExpectedColor[1] / 255.0f,
+               kExpectedColor[2] / 255.0f, kExpectedColor[3] / 255.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  glPixelStorei(GL_PACK_ROW_LENGTH, kLargeRowLength);
+  glPixelStorei(GL_PACK_ALIGNMENT, 4);
+  glReadPixels(0, 0, 1, 2, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+
+  uint8_t actualColorRow0[4] = {0};
+  uint8_t actualColorRow1[4] = {0};
+
+  glGetBufferSubDataCHROMIUM(GL_PIXEL_PACK_BUFFER, 0, sizeof(actualColorRow0),
+                             actualColorRow0);
+  glGetBufferSubDataCHROMIUM(GL_PIXEL_PACK_BUFFER, kByteOffsetToVerify,
+                             sizeof(actualColorRow1), actualColorRow1);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  glDeleteBuffers(1, &pbo);
+
+  EXPECT_EQ(kExpectedColor[0], actualColorRow0[0]);
+  EXPECT_EQ(kExpectedColor[1], actualColorRow0[1]);
+  EXPECT_EQ(kExpectedColor[2], actualColorRow0[2]);
+  EXPECT_EQ(kExpectedColor[3], actualColorRow0[3]);
+
+  EXPECT_EQ(kExpectedColor[0], actualColorRow1[0]);
+  EXPECT_EQ(kExpectedColor[1], actualColorRow1[1]);
+  EXPECT_EQ(kExpectedColor[2], actualColorRow1[2]);
+  EXPECT_EQ(kExpectedColor[3], actualColorRow1[3]);
+#endif
+}
+
+// check_graphics_reset_status_after_readback must not change readback behavior
+// on a healthy context. The rejection leg requires a driver that
+// force-completes discarded work across a queue-group fatal and is exercised
+// on-device; conformant drivers never report a reset here.
+class GLReadbackResetCheckTest : public testing::TestWithParam<bool> {
+ protected:
+  void SetUp() override {
+    GpuDriverBugWorkarounds workarounds;
+    workarounds.check_graphics_reset_status_after_readback = GetParam();
+    gl_.InitializeWithWorkarounds(GLManager::Options(), workarounds);
+  }
+  void TearDown() override { gl_.Destroy(); }
+  GLManager gl_;
+};
+
+// Tests end to end that a healthy blocking ReadPixels into client memory is
+// byte-exact with the workaround both on and off via the suite parameter.
+// This ensures check_graphics_reset_status_after_readback changes nothing
+// outside its trigger (crbug.com/552550589).
+TEST_P(GLReadbackResetCheckTest, ReadPixelsClientMemoryUnaffected) {
+  glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+  uint8_t pixels[4] = {1, 2, 3, 4};
+  glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+  EXPECT_EQ(0u, pixels[0]);
+  EXPECT_EQ(255u, pixels[1]);
+  EXPECT_EQ(0u, pixels[2]);
+  EXPECT_EQ(255u, pixels[3]);
+}
+
+// Same shape as ReadPixelsClientMemoryUnaffected, but with an explicit flush
+// between produce and read (delivery after a pipeline break).
+TEST_P(GLReadbackResetCheckTest,
+       ReadPixelsAfterClearAndFlushDeliversClearColor) {
+  // A full FBO clear + flush followed by a blocking readback is the sequence
+  // from crbug.com/550525698. With the reset-status check enabled and a
+  // healthy context, the readback must deliver the clear color unchanged.
+  GLuint texture = 0;
+  glGenTextures(1, &texture);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  const uint8_t kRed[4] = {255, 0, 0, 255};
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               kRed);
+
+  GLuint fbo = 0;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         texture, 0);
+  ASSERT_EQ(static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE),
+            glCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+  glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glFlush();
+
+  uint8_t pixel[4] = {1, 2, 3, 4};
+  glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+  EXPECT_EQ(0u, pixel[0]);
+  EXPECT_EQ(0u, pixel[1]);
+  EXPECT_EQ(255u, pixel[2]);
+  EXPECT_EQ(255u, pixel[3]);
+
+  glDeleteFramebuffers(1, &fbo);
+  glDeleteTextures(1, &texture);
+}
+
+// Readbacks of freshly generated mip levels must deliver the generated content
+// on a healthy context with check_graphics_reset_status_after_readback enabled.
+// The rejection leg (the generation transfer discarded by a queue-group fatal
+// while the readback is blocked) requires affected hardware and is exercised
+// on-device. Level-1 framebuffer attachment requires ES3.
+INSTANTIATE_TEST_SUITE_P(Service, GLReadbackResetCheckTest, ::testing::Bool());
+
+class GLReadbackResetCheckES3Test : public testing::TestWithParam<bool> {
+ protected:
+  void SetUp() override {
+    GpuDriverBugWorkarounds workarounds;
+    workarounds.check_graphics_reset_status_after_readback = GetParam();
+    GLManager::Options options;
+    options.context_type = CONTEXT_TYPE_OPENGLES3;
+    gl_.InitializeWithWorkarounds(options, workarounds);
+  }
+  void TearDown() override { gl_.Destroy(); }
+  GLManager gl_;
+};
+
+// Tests that a generateMipmap-defined level (the crbug.com/550996500
+// producer) reads back correctly on ES3, with the workaround on and off
+// via the suite parameter.
+TEST_P(GLReadbackResetCheckES3Test, GenerateMipmapLevelReadbackUnaffected) {
+  if (!gl_.IsInitialized()) {
+    LOG(INFO) << "ES3 context unavailable, skipping.";
+    return;
+  }
+  constexpr GLsizei kSize = 8;
+  std::vector<uint8_t> blue(kSize * kSize * 4);
+  for (size_t i = 0; i < blue.size(); i += 4) {
+    blue[i + 0] = 0;
+    blue[i + 1] = 0;
+    blue[i + 2] = 255;
+    blue[i + 3] = 255;
+  }
+  GLuint texture = 0;
+  glGenTextures(1, &texture);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glTexStorage2DEXT(GL_TEXTURE_2D, /*levels=*/2, GL_RGBA8, kSize, kSize);
+  glTexSubImage2D(GL_TEXTURE_2D, /*level=*/0, /*xoffset=*/0, /*yoffset=*/0,
+                  kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, blue.data());
+  glGenerateMipmap(GL_TEXTURE_2D);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+
+  GLuint fbo = 0;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         texture, /*level=*/1);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+  ASSERT_EQ(static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE),
+            glCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+  uint8_t pixel[4] = {1, 2, 3, 4};
+  glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+  EXPECT_EQ(0u, pixel[0]);
+  EXPECT_EQ(0u, pixel[1]);
+  EXPECT_EQ(255u, pixel[2]);
+  EXPECT_EQ(255u, pixel[3]);
+}
+
+// Tests end to end that a copyTexImage2D-defined level reads back exactly
+// with the workaround forced on, on both decoders (crbug.com/558111285).
+TEST_F(GLReadbackTest, ReadPixelsAfterCopyTexImage2DWithResetCheckWorkaround) {
+  const GLsizei kSize = 64;
+  GLManager::Options options;
+  options.size = gfx::Size(kSize, kSize);
+  GpuDriverBugWorkarounds workarounds;
+  workarounds.check_graphics_reset_status_after_readback = true;
+  gl_.Destroy();
+  gl_.InitializeWithWorkarounds(options, workarounds);
+  if (!gl_.IsInitialized()) {
+    return;
+  }
+
+  const uint8_t kExpectedColor[4] = {65, 128, 192, 255};
+
+  glClearColor(kExpectedColor[0] / 255.0f, kExpectedColor[1] / 255.0f,
+               kExpectedColor[2] / 255.0f, kExpectedColor[3] / 255.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  GLuint texture = 0;
+  glGenTextures(1, &texture);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, kSize, kSize, 0);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+
+  GLuint fbo = 0;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         texture, 0);
+  ASSERT_EQ(static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE),
+            glCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+  uint8_t actual[4] = {0};
+  glReadPixels(kSize / 2, kSize / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, actual);
+  EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+
+  EXPECT_EQ(kExpectedColor[0], actual[0]);
+  EXPECT_EQ(kExpectedColor[1], actual[1]);
+  EXPECT_EQ(kExpectedColor[2], actual[2]);
+  EXPECT_EQ(kExpectedColor[3], actual[3]);
+
+  glDeleteFramebuffers(1, &fbo);
+  glDeleteTextures(1, &texture);
+}
+
+INSTANTIATE_TEST_SUITE_P(Service,
+                         GLReadbackResetCheckES3Test,
+                         ::testing::Bool());
 
 }  // namespace gpu

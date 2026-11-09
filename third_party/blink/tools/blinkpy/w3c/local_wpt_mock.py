@@ -1,15 +1,17 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """A mock LocalWPT class with canned responses."""
 
 
 class MockLocalWPT(object):
-    def __init__(self,
-                 test_patch=None,
-                 apply_patch=None,
-                 change_ids=None,
-                 commit_positions=None):
+    def __init__(
+        self,
+        test_patch=None,
+        apply_patch=None,
+        change_ids=None,
+        commit_positions=None,
+    ):
         """Initializes the mock with pre-populated responses.
 
         Args:

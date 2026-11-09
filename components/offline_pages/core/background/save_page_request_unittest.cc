@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ class SavePageRequestTest : public testing::Test {
   ~SavePageRequestTest() override;
 };
 
-SavePageRequestTest::~SavePageRequestTest() {}
+SavePageRequestTest::~SavePageRequestTest() = default;
 
 TEST_F(SavePageRequestTest, CreatePendingReqeust) {
   const GURL kUrl1("http://example.com");
@@ -52,7 +52,7 @@ TEST_F(SavePageRequestTest, StartAndCompleteRequest) {
                           kUserRequested);
   request.set_request_origin(kRequestOrigin);
 
-  base::Time start_time = creation_time + base::TimeDelta::FromHours(3);
+  base::Time start_time = creation_time + base::Hours(3);
   request.MarkAttemptStarted(start_time);
 
   // Most things don't change about the request.
@@ -86,7 +86,7 @@ TEST_F(SavePageRequestTest, StartAndAbortRequest) {
   SavePageRequest request(kRequestId, kUrl1, kClientId, creation_time,
                           kUserRequested);
 
-  base::Time start_time = creation_time + base::TimeDelta::FromHours(3);
+  base::Time start_time = creation_time + base::Hours(3);
   request.MarkAttemptStarted(start_time);
 
   // Most things don't change about the request.

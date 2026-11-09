@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/user_metrics_action.h"
-#include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/events/gesture_event.h"
@@ -16,6 +15,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
+#include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html/time_ranges.h"
 #include "third_party/blink/renderer/core/html_names.h"
@@ -29,13 +29,16 @@
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_remaining_time_display_element.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_impl.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_shared_helper.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "ui/display/screen_info.h"
+#include "ui/strings/grit/ax_strings.h"
 
 namespace {
 
 const int kThumbRadius = 6;
+const base::TimeDelta kRenderTimelineInterval = base::Seconds(1);
 
 // Only respond to main button of primary pointer(s).
 bool IsValidPointerEvent(const blink::Event& event) {
@@ -57,7 +60,11 @@ namespace blink {
 // +-div#thumb (created by the HTMLSliderElement)
 MediaControlTimelineElement::MediaControlTimelineElement(
     MediaControlsImpl& media_controls)
-    : MediaControlSliderElement(media_controls) {
+    : MediaControlSliderElement(media_controls),
+      render_timeline_timer_(
+          GetDocument().GetTaskRunner(TaskType::kInternalMedia),
+          this,
+          &MediaControlTimelineElement::RenderTimelineTimerFired) {
   SetShadowPseudoId(AtomicString("-webkit-media-controls-timeline"));
 }
 
@@ -66,23 +73,43 @@ bool MediaControlTimelineElement::WillRespondToMouseClickEvents() {
 }
 
 void MediaControlTimelineElement::UpdateAria() {
-  String aria_label =
-      GetLocale().QueryString(IsA<HTMLVideoElement>(MediaElement())
-                                  ? IDS_AX_MEDIA_VIDEO_SLIDER_HELP
-                                  : IDS_AX_MEDIA_AUDIO_SLIDER_HELP) +
-      " " + GetMediaControls().CurrentTimeDisplay().textContent(true) + " " +
-      GetMediaControls().RemainingTimeDisplay().textContent(true);
+  String aria_label = GetLocale().QueryString(
+      IsA<HTMLVideoElement>(MediaElement()) ? IDS_AX_MEDIA_VIDEO_SLIDER_HELP
+                                            : IDS_AX_MEDIA_AUDIO_SLIDER_HELP);
   setAttribute(html_names::kAriaLabelAttr, AtomicString(aria_label));
 
+  // The aria-valuetext is a human-friendly description of the current value
+  // of the slider, as opposed to the natural slider value which will be read
+  // out as a percentage.
   setAttribute(html_names::kAriaValuetextAttr,
                AtomicString(GetLocale().QueryString(
                    IDS_AX_MEDIA_CURRENT_TIME_DISPLAY,
-                   GetMediaControls().CurrentTimeDisplay().textContent(true))));
+                   GetMediaControls().CurrentTimeDisplay().FormatTime())));
+
+  // The total time is exposed as aria-description, which will be read after the
+  // aria-label and aria-valuetext. Unfortunately, aria-valuenow will not work,
+  // because it must be numeric. ARIA and platform APIs do not provide a means
+  // of setting a friendly max value, similar to aria-valuetext. Note:
+  // IDS_AX_MEDIA_TIME_REMAINING_DISPLAY is a misnomer and refers to the total
+  // time.
+  setAttribute(html_names::kAriaDescriptionAttr,
+               AtomicString(GetLocale().QueryString(
+                   IDS_AX_MEDIA_TIME_REMAINING_DISPLAY,
+                   GetMediaControls()
+                       .RemainingTimeDisplay()
+                       .MediaControlTimeDisplayElement::FormatTime())));
 }
 
 void MediaControlTimelineElement::SetPosition(double current_time,
                                               bool suppress_aria) {
-  setValue(String::Number(current_time));
+  if (is_live_ && !live_anchor_time_ && current_time != 0) {
+    live_anchor_time_.emplace(LiveAnchorTime());
+    live_anchor_time_->clock_time_ = base::TimeTicks::Now();
+    live_anchor_time_->media_time_ = MediaElement().currentTime();
+  }
+
+  MaybeUpdateTimelineInterval();
+  SetValue(String::NumberToStringEcmaScript(current_time));
 
   if (!suppress_aria)
     UpdateAria();
@@ -91,8 +118,11 @@ void MediaControlTimelineElement::SetPosition(double current_time,
 }
 
 void MediaControlTimelineElement::SetDuration(double duration) {
-  double duration_value = std::isfinite(duration) ? duration : 0;
-  SetFloatingPointAttribute(html_names::kMaxAttr, duration_value);
+  is_live_ = std::isinf(duration);
+  double duration_value = duration;
+  SetFloatingPointAttribute(html_names::kMaxAttr,
+                            is_live_ ? 0.0 : duration_value);
+  SetFloatingPointAttribute(html_names::kMinAttr, 0.0);
   RenderBarSegments();
 }
 
@@ -109,10 +139,12 @@ void MediaControlTimelineElement::DefaultEventHandler(Event& event) {
   if (BeginScrubbingEvent(event)) {
     Platform::Current()->RecordAction(
         UserMetricsAction("Media.Controls.ScrubbingBegin"));
+    is_scrubbing_ = true;
     GetMediaControls().BeginScrubbing(MediaControlsImpl::IsTouchEvent(&event));
   } else if (EndScrubbingEvent(event)) {
     Platform::Current()->RecordAction(
         UserMetricsAction("Media.Controls.ScrubbingEnd"));
+    is_scrubbing_ = false;
     GetMediaControls().EndScrubbing();
   }
 
@@ -140,7 +172,7 @@ void MediaControlTimelineElement::DefaultEventHandler(Event& event) {
     return;
   }
 
-  double time = value().ToDouble();
+  double time = StringToDouble(Value()).value_or(0);
   double duration = MediaElement().duration();
   // Workaround for floating point error - it's possible for this element's max
   // attribute to be rounded to a value slightly higher than the duration. If
@@ -150,8 +182,9 @@ void MediaControlTimelineElement::DefaultEventHandler(Event& event) {
 
   // FIXME: This will need to take the timeline offset into consideration
   // once that concept is supported, see https://crbug.com/312699
-  if (MediaElement().seekable()->Contain(time))
+  if (MediaElement().CanSeekTo(time)) {
     MediaElement().setCurrentTime(time);
+  }
 
   // Provide immediate feedback (without waiting for media to seek) to make it
   // easier for user to seek to a precise time.
@@ -161,6 +194,62 @@ void MediaControlTimelineElement::DefaultEventHandler(Event& event) {
 bool MediaControlTimelineElement::KeepEventInNode(const Event& event) const {
   return MediaControlElementsHelper::IsUserInteractionEventForSlider(
       event, GetLayoutObject());
+}
+
+void MediaControlTimelineElement::OnMediaPlaying() {
+  if (!is_live_)
+    return;
+
+  render_timeline_timer_.Stop();
+}
+
+void MediaControlTimelineElement::OnMediaStoppedPlaying() {
+  if (!is_live_ || is_scrubbing_ || !live_anchor_time_)
+    return;
+
+  render_timeline_timer_.StartRepeating(kRenderTimelineInterval, FROM_HERE);
+}
+
+void MediaControlTimelineElement::OnProgress() {
+  MaybeUpdateTimelineInterval();
+  RenderBarSegments();
+}
+
+void MediaControlTimelineElement::RenderTimelineTimerFired(TimerBase*) {
+  MaybeUpdateTimelineInterval();
+  RenderBarSegments();
+}
+
+void MediaControlTimelineElement::MaybeUpdateTimelineInterval() {
+  if (!is_live_ || !live_anchor_time_) {
+    return;
+  }
+
+  TimeRanges* seekable_ranges = MediaElement().seekable();
+  DCHECK(seekable_ranges != nullptr);
+
+  if (seekable_ranges->length() == 0u) {
+    return;
+  }
+
+  int last_seekable = seekable_ranges->length() - 1;
+  double seekable_start =
+      seekable_ranges->start(last_seekable, ASSERT_NO_EXCEPTION);
+  double seekable_end =
+      seekable_ranges->end(last_seekable, ASSERT_NO_EXCEPTION);
+  double expected_media_time_now =
+      live_anchor_time_->media_time_ +
+      (base::TimeTicks::Now() - live_anchor_time_->clock_time_).InSecondsF();
+
+  // Cap the current live time in seekable range.
+  if (expected_media_time_now > seekable_end) {
+    live_anchor_time_->media_time_ = seekable_end;
+    live_anchor_time_->clock_time_ = base::TimeTicks::Now();
+    expected_media_time_now = seekable_end;
+  }
+
+  SetFloatingPointAttribute(html_names::kMinAttr, seekable_start);
+  SetFloatingPointAttribute(html_names::kMaxAttr, expected_media_time_now);
 }
 
 void MediaControlTimelineElement::RenderBarSegments() {
@@ -174,55 +263,61 @@ void MediaControlTimelineElement::RenderBarSegments() {
   // buffered range containing the current play head.
   TimeRanges* buffered_time_ranges = MediaElement().buffered();
   DCHECK(buffered_time_ranges);
-  if (std::isnan(duration) || std::isinf(duration) || !duration ||
-      std::isnan(current_time)) {
-    SetBeforeSegmentPosition(MediaControlSliderElement::Position(0, 0));
-    SetAfterSegmentPosition(MediaControlSliderElement::Position(0, 0));
+
+  // Calculate |current_time| and |duration| for live media base on the timeline
+  // value since timeline's minimum value is not necessarily zero.
+  if (is_live_) {
+    current_time = StringToDouble(Value()).value_or(0) -
+                   GetFloatingPointAttribute(html_names::kMinAttr);
+    duration = GetFloatingPointAttribute(html_names::kMaxAttr) -
+               GetFloatingPointAttribute(html_names::kMinAttr);
+  }
+
+  if (!std::isfinite(duration) || !duration || std::isnan(current_time)) {
+    SetBeforeSegmentFraction(0.0);
+    SetAfterSegmentFraction(0.0);
     return;
   }
 
-  double current_position = current_time / duration;
+  double current_fraction = current_time / duration;
 
-  // Transform the current_position to always align with the center of thumb
+  // Transform the current_fraction to always align with the center of thumb
   // At time 0, the thumb's center is 6px away from beginning of progress bar
   // At the end of video, thumb's center is -6px away from end of progress bar
   // Convert 6px into ratio respect to progress bar width since
-  // current_position is range from 0 to 1
+  // current_fraction is range from 0 to 1
   double width = TrackWidth() / ZoomFactor();
-  if (width != 0 && current_position != 0 && !MediaElement().ended()) {
+  if (width != 0 && current_fraction != 0 && !MediaElement().ended()) {
     double offset = kThumbRadius / width;
-    current_position += offset - (2 * offset * current_position);
+    current_fraction += offset - (2 * offset * current_fraction);
   }
 
-  MediaControlSliderElement::Position before_segment(0, 0);
-  MediaControlSliderElement::Position after_segment(0, 0);
+  double before_segment_fraction = current_fraction;
+  double after_segment_fraction = 0.0;
 
-  // The before segment (i.e. what has been played) should be purely be based on
-  // the current time.
-  before_segment.width = current_position;
-
-  absl::optional<unsigned> current_buffered_time_range =
+  std::optional<unsigned> current_buffered_time_range =
       MediaControlsSharedHelpers::GetCurrentBufferedTimeRange(MediaElement());
 
   if (current_buffered_time_range) {
     float end = buffered_time_ranges->end(current_buffered_time_range.value(),
                                           ASSERT_NO_EXCEPTION);
 
-    double end_position = end / duration;
+    double end_fraction = end / duration;
 
     // Draw dark grey highlight to show what we have loaded. This just uses a
     // width since it just starts at zero just like the before segment.
-    // We use |std::max()| here because |current_position| has an offset added
-    // to it and can therefore be greater than |end_position| in some cases.
-    after_segment.width = std::max(current_position, end_position);
+    // We use |std::max()| here because |current_fraction| has an offset added
+    // to it and can therefore be greater than |end_fraction| in some cases.
+    after_segment_fraction = std::max(current_fraction, end_fraction);
   }
 
-  // Update the positions of the segments.
-  SetBeforeSegmentPosition(before_segment);
-  SetAfterSegmentPosition(after_segment);
+  // Update the fractions of the segments.
+  SetBeforeSegmentFraction(before_segment_fraction);
+  SetAfterSegmentFraction(after_segment_fraction);
 }
 
 void MediaControlTimelineElement::Trace(Visitor* visitor) const {
+  visitor->Trace(render_timeline_timer_);
   MediaControlSliderElement::Trace(visitor);
 }
 

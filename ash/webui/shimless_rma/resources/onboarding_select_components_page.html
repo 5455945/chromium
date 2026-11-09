@@ -1,26 +1,34 @@
 <style include="cr-shared-style shimless-rma-shared">
+  #reworkFlowLink {
+    color: var(--cros-link-color);
+  }
 </style>
 
-<base-page orientation="column">
-  <div slot="header">
-    <!-- TODO(gavindodd): Update strings for i18n -->
-    <h1>Select which components were replaced</h1>
-  </div>
-  <div slot="body">
-    <div>
-      <template is="dom-repeat" items="{{componentCheckboxes_}}" as="component" mutable-data>
-        <cr-checkbox id="[[component.id]]"
-          checked="{{component.checked}}"
-          disabled$="[[component.disabled]]">
-          [[component.name]]
-        </cr-checkbox>
-      </template>
+<base-page>
+  <div slot="left-pane">
+    <h1 tabindex="-1">[[i18n('selectComponentsTitleText')]]</h1>
+    <div class="instructions">
+      <span inner-h-t-m-l="[[reworkFlowLinkText]]"></span>
     </div>
-    <div>If you are reworking a motherboard to use in another device, go to the
-      <a href="#" id="reworkFlow" on-click="onReworkFlowButtonClicked_">
-        rework flow
-      </a>
-      .
+  </div>
+  <div slot="right-pane">
+    <div class="scroll-container">
+      <div id="componentList" class="component-grid repair">
+        <template is="dom-repeat" items="{{componentCheckboxes}}"
+            as="component">
+          <repair-component-chip id="[[component.id]]"
+            unique-id="[[component.uniqueId]]"
+            checked="{{component.checked}}"
+            disabled$="[[isComponentDisabled(component.disabled,
+                allButtonsDisabled)]]"
+            component-name="[[component.name]]"
+            component-identifier="[[component.identifier]]"
+            is-first-clickable-component=
+                "[[component.isFirstClickableComponent]]">
+          </repair-component-chip>
+        </template>
+      </div>
+      <div class="gradient unequal-panes"></div>
     </div>
   </div>
 </base-page>

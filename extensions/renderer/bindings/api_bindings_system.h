@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/values.h"
+#include "extensions/common/mojom/event_dispatcher.mojom-forward.h"
 #include "extensions/renderer/bindings/api_binding.h"
 #include "extensions/renderer/bindings/api_binding_types.h"
 #include "extensions/renderer/bindings/api_event_handler.h"
@@ -20,13 +22,9 @@
 #include "extensions/renderer/bindings/binding_access_checker.h"
 #include "extensions/renderer/bindings/exception_handler.h"
 
-namespace base {
-class DictionaryValue;
-class ListValue;
-}
-
 namespace extensions {
 class APIBindingHooks;
+class APIBindingHooksDelegate;
 class InteractionProvider;
 
 // A class encompassing the necessary pieces to construct the JS entry points
@@ -35,7 +33,7 @@ class InteractionProvider;
 class APIBindingsSystem {
  public:
   using GetAPISchemaMethod =
-      base::RepeatingCallback<const base::DictionaryValue&(const std::string&)>;
+      base::RepeatingCallback<const base::DictValue&(const std::string&)>;
   using CustomTypeHandler = base::RepeatingCallback<v8::Local<v8::Object>(
       v8::Isolate* isolate,
       const std::string& property_name,
@@ -45,54 +43,55 @@ class APIBindingsSystem {
       APITypeReferenceMap* type_refs,
       const BindingAccessChecker* access_checker)>;
 
-  APIBindingsSystem(
-      GetAPISchemaMethod get_api_schema,
-      BindingAccessChecker::APIAvailabilityCallback api_available,
-      BindingAccessChecker::PromiseAvailabilityCallback promises_available,
-      APIRequestHandler::SendRequestMethod send_request,
-      std::unique_ptr<InteractionProvider> interaction_provider,
-      APIEventListeners::ListenersUpdated event_listeners_changed,
-      APIEventHandler::ContextOwnerIdGetter context_owner_getter,
-      APIBinding::OnSilentRequest on_silent_request,
-      binding::AddConsoleError add_console_error,
-      APILastError last_error);
+  APIBindingsSystem(GetAPISchemaMethod get_api_schema,
+                    BindingAccessChecker::APIAvailabilityCallback api_available,
+                    APIRequestHandler::SendRequestMethod send_request,
+                    std::unique_ptr<InteractionProvider> interaction_provider,
+                    APIEventListeners::ListenersUpdated event_listeners_changed,
+                    APIEventHandler::ContextOwnerIdGetter context_owner_getter,
+                    APIBinding::OnSilentRequest on_silent_request,
+                    binding::AddConsoleError add_console_error,
+                    APILastError last_error);
+
+  APIBindingsSystem(const APIBindingsSystem&) = delete;
+  APIBindingsSystem& operator=(const APIBindingsSystem&) = delete;
+
   ~APIBindingsSystem();
 
-  // Returns a new v8::Object representing the api specified by |api_name|.
-  v8::Local<v8::Object> CreateAPIInstance(
-      const std::string& api_name,
-      v8::Local<v8::Context> context,
-      APIBindingHooks** hooks_out);
+  // Returns a new v8::Object representing the api specified by `api_name`.
+  v8::Local<v8::Object> CreateAPIInstance(std::string_view api_name,
+                                          v8::Local<v8::Context> context,
+                                          APIBindingHooks** hooks_out);
 
-  // Responds to the request with the given |request_id|, calling the callback
-  // with |response|. If |error| is non-empty, sets the last error.
+  // Responds to the request with the given `request_id`, calling the callback
+  // with `response`. If `error` is non-empty, sets the last error.
   void CompleteRequest(int request_id,
                        const base::ListValue& response,
-                       const std::string& error);
+                       const std::string& error,
+                       mojom::ExtraResponseDataPtr extra_data = nullptr);
 
   // Notifies the APIEventHandler to fire the corresponding event, notifying
   // listeners.
   void FireEventInContext(const std::string& event_name,
                           v8::Local<v8::Context> context,
                           const base::ListValue& response,
-                          const EventFilteringInfo* filter);
+                          mojom::EventFilteringInfoPtr filter);
 
-  // Returns the APIBindingHooks object for the given api to allow for
-  // registering custom hooks. These must be registered *before* the
-  // binding is instantiated.
-  // TODO(devlin): It's a little weird that we don't just expose a
-  // RegisterHooks-type method. Depending on how complex the hook interface
-  // is, maybe we should rethink this. Downside would be that it's less
-  // efficient to register multiple hooks for the same API.
-  APIBindingHooks* GetHooksForAPI(const std::string& api_name);
+  // Registers the custom hook on the APIBindingHooks object for the given API.
+  // These must be registered *before* the binding is instantiated.
+  void RegisterHooksDelegate(const std::string& api_name,
+                             std::unique_ptr<APIBindingHooksDelegate> delegate);
 
   // Registers the handler for creating a custom type with the given
-  // |type_name|, where |type_name| is the fully-qualified type (e.g.
+  // `type_name`, where `type_name` is the fully-qualified type (e.g.
   // storage.StorageArea).
   void RegisterCustomType(const std::string& type_name,
                           CustomTypeHandler function);
 
-  // Handles any cleanup necessary before releasing the given |context|.
+  // Handles any initialization of the context. This should be called before any
+  // APIs or other objects are created.
+  void DidCreateContext(v8::Local<v8::Context> context);
+  // Handles any cleanup necessary before releasing the given `context`.
   void WillReleaseContext(v8::Local<v8::Context> context);
 
   InteractionProvider* interaction_provider() {
@@ -104,7 +103,7 @@ class APIBindingsSystem {
   ExceptionHandler* exception_handler() { return &exception_handler_; }
 
  private:
-  // Creates a new APIBinding for the given |api_name|.
+  // Creates a new APIBinding for the given `api_name`.
   std::unique_ptr<APIBinding> CreateNewAPIBinding(const std::string& api_name);
 
   // Callback for the APITypeReferenceMap in order to initialize an unknown
@@ -138,7 +137,7 @@ class APIBindingsSystem {
 
   // A map from api_name -> APIBinding for constructed APIs. APIBindings are
   // created lazily.
-  std::map<std::string, std::unique_ptr<APIBinding>> api_bindings_;
+  std::map<std::string, std::unique_ptr<APIBinding>, std::less<>> api_bindings_;
 
   // A map from api_name -> APIBindingHooks for registering custom hooks.
   // TODO(devlin): This map is pretty pointer-y. Is that going to be a
@@ -147,15 +146,13 @@ class APIBindingsSystem {
 
   std::map<std::string, CustomTypeHandler> custom_types_;
 
-  // The method to retrieve the DictionaryValue describing a given extension
+  // The method to retrieve the dictionary describing a given extension
   // API. Curried in for testing purposes so we can use fake APIs.
   GetAPISchemaMethod get_api_schema_;
 
   // The method to call when the system silently handles an API request without
   // notifying the browser.
   APIBinding::OnSilentRequest on_silent_request_;
-
-  DISALLOW_COPY_AND_ASSIGN(APIBindingsSystem);
 };
 
 }  // namespace

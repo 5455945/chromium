@@ -1,32 +1,21 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_BROWSER_AW_DEVTOOLS_SERVER_H_
 #define ANDROID_WEBVIEW_BROWSER_AW_DEVTOOLS_SERVER_H_
 
-#include "base/macros.h"
-
 namespace android_webview {
 
 // This class controls WebView-specific Developer Tools remote debugging server.
-class AwDevToolsServer {
- public:
-  AwDevToolsServer();
-  ~AwDevToolsServer();
 
-  // Opens linux abstract socket to be ready for remote debugging.
-  void Start();
+// Opens linux abstract socket to be ready for remote debugging.
+void StartAwDevToolsServer();
 
-  // Closes debugging socket, stops debugging.
-  void Stop();
+// Closes debugging socket, stops debugging.
+void StopAwDevToolsServer();
 
-  bool IsStarted() const;
-
- private:
-  bool is_started_;
-  DISALLOW_COPY_AND_ASSIGN(AwDevToolsServer);
-};
+bool IsAwDevToolsServerStarted();
 
 }  // namespace android_webview
 

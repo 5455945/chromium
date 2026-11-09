@@ -1,15 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TYPES_STRONG_ALIAS_H_
 #define BASE_TYPES_STRONG_ALIAS_H_
 
+#include <compare>
+#include <functional>
 #include <ostream>
 #include <type_traits>
 #include <utility>
 
-#include "base/template_util.h"
+#include "base/trace_event/base_tracing_forward.h"
+#include "base/types/supports_ostream_operator.h"
 
 namespace base {
 
@@ -58,24 +61,25 @@ namespace base {
 // used) if UnderlyingType doesn't support them.
 //
 // StrongAlias only directly exposes comparison operators (for convenient use in
-// ordered containers) and a hash function (for unordered_map/set). It's
-// impossible, without reflection, to expose all methods of the UnderlyingType
-// in StrongAlias's interface. It's also potentially unwanted (ex. you don't
-// want to be able to add two StrongAliases that represent socket handles).
-// A getter and dereference operators are provided in case you need to access
-// the UnderlyingType.
+// ordered containers). It's impossible, without reflection, to expose all
+// methods of the UnderlyingType in StrongAlias's interface. It's also
+// potentially unwanted (ex. you don't want to be able to add two StrongAliases
+// that represent socket handles). A getter and dereference operators are
+// provided in case you need to access the UnderlyingType.
 //
 // See also
 // - //styleguide/c++/blink-c++.md which provides recommendation and examples of
 //   using StrongAlias<Tag, bool> instead of a bare bool.
-// - util::IdType<...> which provides helpers for specializing
-//   StrongAlias to be used as an id.
-// - util::TokenType<...> which provides helpers for specializing StrongAlias
-//   to be used as a wrapper of base::UnguessableToken.
+// - IdType<...> which provides helpers for specializing StrongAlias to be
+//   used as an id.
+// - TokenType<...> which provides helpers for specializing StrongAlias to be
+//   used as a wrapper of base::UnguessableToken.
 template <typename TagType, typename UnderlyingType>
 class StrongAlias {
  public:
-  constexpr StrongAlias() = default;
+  using underlying_type = UnderlyingType;
+
+  StrongAlias() = default;
   constexpr explicit StrongAlias(const UnderlyingType& v) : value_(v) {}
   constexpr explicit StrongAlias(UnderlyingType&& v) noexcept
       : value_(std::move(v)) {}
@@ -97,48 +101,56 @@ class StrongAlias {
 
   constexpr explicit operator const UnderlyingType&() const& { return value_; }
 
-  constexpr bool operator==(const StrongAlias& other) const {
-    return value_ == other.value_;
-  }
-  constexpr bool operator!=(const StrongAlias& other) const {
-    return value_ != other.value_;
-  }
-  constexpr bool operator<(const StrongAlias& other) const {
-    return value_ < other.value_;
-  }
-  constexpr bool operator<=(const StrongAlias& other) const {
-    return value_ <= other.value_;
-  }
-  constexpr bool operator>(const StrongAlias& other) const {
-    return value_ > other.value_;
-  }
-  constexpr bool operator>=(const StrongAlias& other) const {
-    return value_ >= other.value_;
+  // Comparison operators that default to the behavior of `UnderlyingType`.
+  // Note that if you wish to compare `StrongAlias<UnderlyingType>`, e.g.,
+  // by using `operator<` in a `std::set`, then `UnderlyingType` must
+  // implement `operator<=>`. If you cannot modify `UnderlyingType` (e.g.,
+  // because it is from an external library), then a work-around is to create a
+  // thin wrapper `W` around it, define `operator<=>` for the wrapper and create
+  // a `StrongAlias<W>`.
+  friend auto operator<=>(const StrongAlias& lhs,
+                          const StrongAlias& rhs) = default;
+  friend bool operator==(const StrongAlias& lhs,
+                         const StrongAlias& rhs) = default;
+
+  // Make this type hashable by Abseil if the underlying type is hashable
+  // by Abseil.
+  template <typename H>
+    requires requires(H h, const StrongAlias& strong_alias) {
+      { H::combine(std::move(h), strong_alias.value()) } -> std::same_as<H>;
+    }
+  friend H AbslHashValue(H h, const StrongAlias& strong_alias) {
+    return H::combine(std::move(h), strong_alias.value_);
   }
 
-  // Hasher to use in std::unordered_map, std::unordered_set, etc.
-  struct Hasher {
-    using argument_type = StrongAlias;
-    using result_type = std::size_t;
-    result_type operator()(const argument_type& id) const {
-      return std::hash<UnderlyingType>()(id.value());
-    }
-  };
+  // If UnderlyingType can be serialised into trace, its alias is also
+  // serialisable.
+  template <class U = UnderlyingType>
+  typename perfetto::check_traced_value_support<U>::type WriteIntoTrace(
+      perfetto::TracedValue&& context) const {
+    perfetto::WriteIntoTracedValue(std::move(context), value_);
+  }
 
  protected:
   UnderlyingType value_;
 };
 
 // Stream operator for convenience, streams the UnderlyingType.
-template <typename TagType,
-          typename UnderlyingType,
-          typename = std::enable_if_t<
-              base::internal::SupportsOstreamOperator<UnderlyingType>::value>>
+template <typename TagType, typename UnderlyingType>
+  requires(internal::SupportsOstreamOperator<UnderlyingType>)
 std::ostream& operator<<(std::ostream& stream,
                          const StrongAlias<TagType, UnderlyingType>& alias) {
   return stream << alias.value();
 }
 
 }  // namespace base
+
+template <typename TagType, typename UnderlyingType>
+struct std::hash<base::StrongAlias<TagType, UnderlyingType>> {
+  size_t operator()(
+      const base::StrongAlias<TagType, UnderlyingType>& id) const {
+    return std::hash<UnderlyingType>()(id.value());
+  }
+};
 
 #endif  // BASE_TYPES_STRONG_ALIAS_H_

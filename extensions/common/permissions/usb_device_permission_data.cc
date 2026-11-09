@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,7 @@
 #include <stdint.h>
 
 #include <limits>
-#include <memory>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "base/strings/string_number_conversions.h"
@@ -28,25 +26,25 @@ const char kInterfaceIdKey[] = "interfaceId";
 const char kInterfaceClassKey[] = "interfaceClass";
 
 bool ExtractFromDict(const std::string& key,
-                     const base::DictionaryValue* dict_value,
+                     const base::DictValue* dict_value,
                      int max,
                      int* value) {
-  int temp;
-  if (!dict_value->GetInteger(key, &temp)) {
+  std::optional<int> temp = dict_value->FindInt(key);
+  if (!temp) {
     *value = UsbDevicePermissionData::SPECIAL_VALUE_ANY;
     return true;
   }
 
-  if (temp < UsbDevicePermissionData::SPECIAL_VALUE_ANY || temp > max)
+  if (*temp < UsbDevicePermissionData::SPECIAL_VALUE_ANY || *temp > max)
     return false;
 
-  *value = temp;
+  *value = *temp;
   return true;
 }
 
 }  // namespace
 
-UsbDevicePermissionData::UsbDevicePermissionData() {}
+UsbDevicePermissionData::UsbDevicePermissionData() = default;
 
 UsbDevicePermissionData::UsbDevicePermissionData(int vendor_id,
                                                  int product_id,
@@ -81,24 +79,21 @@ bool UsbDevicePermissionData::Check(
           interface_id_ == specific_param.interface_id) &&
          (!specific_param.interface_classes ||
           interface_class_ == SPECIAL_VALUE_ANY ||
-          specific_param.interface_classes->count(interface_class_) > 0);
+          specific_param.interface_classes->contains(interface_class_));
 }
 
-std::unique_ptr<base::Value> UsbDevicePermissionData::ToValue() const {
-  base::DictionaryValue* result = new base::DictionaryValue();
-  result->SetInteger(kVendorIdKey, vendor_id_);
-  result->SetInteger(kProductIdKey, product_id_);
-  result->SetInteger(kInterfaceIdKey, interface_id_);
-  result->SetInteger(kInterfaceClassKey, interface_class_);
-  return std::unique_ptr<base::Value>(result);
+base::Value UsbDevicePermissionData::ToValue() const {
+  base::DictValue result;
+  result.Set(kVendorIdKey, vendor_id_);
+  result.Set(kProductIdKey, product_id_);
+  result.Set(kInterfaceIdKey, interface_id_);
+  result.Set(kInterfaceClassKey, interface_class_);
+  return base::Value(std::move(result));
 }
 
-bool UsbDevicePermissionData::FromValue(const base::Value* value) {
-  if (!value)
-    return false;
-
-  const base::DictionaryValue* dict_value;
-  if (!value->GetAsDictionary(&dict_value))
+bool UsbDevicePermissionData::FromValue(const base::Value& value) {
+  const base::DictValue* dict_value = value.GetIfDict();
+  if (!dict_value)
     return false;
 
   const int kMaxId = std::numeric_limits<uint16_t>::max();
@@ -142,20 +137,6 @@ bool UsbDevicePermissionData::FromValue(const base::Value* value) {
   }
 
   return true;
-}
-
-bool UsbDevicePermissionData::operator<(
-    const UsbDevicePermissionData& rhs) const {
-  return std::tie(vendor_id_, product_id_, interface_id_, interface_class_) <
-         std::tie(rhs.vendor_id_, rhs.product_id_, rhs.interface_id_,
-                  rhs.interface_class_);
-}
-
-bool UsbDevicePermissionData::operator==(
-    const UsbDevicePermissionData& rhs) const {
-  return vendor_id_ == rhs.vendor_id_ && product_id_ == rhs.product_id_ &&
-         interface_id_ == rhs.interface_id_ &&
-         interface_class_ == rhs.interface_class_;
 }
 
 }  // namespace extensions

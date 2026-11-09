@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
-#include "base/mac/scoped_cftyperef.h"
+#include "base/apple/scoped_cftyperef.h"
+#include "base/containers/heap_array.h"
 #include "base/mac/scoped_ioplugininterface.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "device/gamepad/abstract_haptic_gamepad.h"
 #include "device/gamepad/gamepad_id_list.h"
 #include "device/gamepad/public/mojom/gamepad.mojom-forward.h"
@@ -63,16 +66,22 @@ class XboxControllerMac final : public AbstractHapticGamepad {
     LED_NUM_PATTERNS
   };
 
-  enum OpenDeviceResult {
-    OPEN_SUCCEEDED = 0,
-    OPEN_FAILED,
-    OPEN_FAILED_EXCLUSIVE_ACCESS
+  // This enum is used for the Gamepad.UsbDeviceOpenMacResult histogram.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(OpenDeviceResult)
+  enum class OpenDeviceResult {
+    kOpenSucceeded = 0,
+    kOpenFailed,
+    kOpenFailedExclusiveAccess,
+    kMaxValue = kOpenFailedExclusiveAccess
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/others/enums.xml:GamepadUsbDeviceOpenMacResult)
 
   struct Data {
-    bool buttons[15];
-    float triggers[2];
-    float axes[4];
+    std::array<bool, 15> buttons = {};
+    std::array<float, 2> triggers = {};
+    std::array<float, 4> axes = {};
   };
 
   class Delegate {
@@ -103,7 +112,7 @@ class XboxControllerMac final : public AbstractHapticGamepad {
   // AbstractHapticGamepad implementation.
   void DoShutdown() override;
   double GetMaxEffectDurationMillis() override;
-  void SetVibration(double strong_magnitude, double weak_magnitude) override;
+  void SetVibration(mojom::GamepadEffectParametersPtr params) override;
   base::WeakPtr<AbstractHapticGamepad> GetWeakPtr() override;
 
   uint32_t location_id() const { return location_id_; }
@@ -156,7 +165,10 @@ class XboxControllerMac final : public AbstractHapticGamepad {
   // Send an Xbox One rumble packet to the device, where |strong_magnitude| and
   // |weak_magnitude| are values in the range [0,255] that represent the
   // vibration intensity for the strong and weak rumble motors.
-  void WriteXboxOneRumble(uint8_t strong_magnitude, uint8_t weak_magnitude);
+  void WriteXboxOneRumble(uint8_t strong_magnitude,
+                          uint8_t weak_magnitude,
+                          uint8_t left_trigger,
+                          uint8_t right_trigger);
 
   // Send an Xbox One packet to the device acknowledging that the Xbox button
   // was pressed or released. |sequence_number| must match the value in the
@@ -174,7 +186,7 @@ class XboxControllerMac final : public AbstractHapticGamepad {
   bool device_is_open_ = false;
   bool interface_is_open_ = false;
 
-  base::ScopedCFTypeRef<CFRunLoopSourceRef> source_;
+  base::apple::ScopedCFTypeRef<CFRunLoopSourceRef> source_;
 
   // This will be set to the max packet size reported by the interface, which
   // is 32 bytes. I would have expected USB to do message framing itself, but
@@ -182,8 +194,7 @@ class XboxControllerMac final : public AbstractHapticGamepad {
   // aren't correctly framed. The 360 controller frames its packets with a 2
   // byte header (type, total length) so we can reframe the packet data
   // ourselves.
-  uint16_t read_buffer_size_ = 0;
-  std::unique_ptr<uint8_t[]> read_buffer_;
+  base::HeapArray<uint8_t> read_buffer_;
 
   // The pattern that the LEDs on the device are currently displaying, or
   // LED_NUM_PATTERNS if unknown.
@@ -191,7 +202,7 @@ class XboxControllerMac final : public AbstractHapticGamepad {
 
   uint32_t location_id_ = 0;
 
-  Delegate* delegate_ = nullptr;
+  raw_ptr<Delegate> delegate_ = nullptr;
 
   XInputType xinput_type_ = kXInputTypeNone;
   GamepadId gamepad_id_ = GamepadId::kUnknownGamepad;

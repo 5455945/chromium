@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,10 @@
 #define MOJO_PUBLIC_CPP_BINDINGS_LIB_THREAD_SAFE_FORWARDER_BASE_H_
 
 #include <memory>
-#include <vector>
 
 #include "base/component_export.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
-#include "base/synchronization/lock.h"
-#include "base/synchronization/waitable_event.h"
-#include "mojo/public/cpp/bindings/associated_group.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/thread_safe_proxy.h"
 
@@ -41,7 +35,6 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) ThreadSafeForwarderBase
   ~ThreadSafeForwarderBase() override;
 
   // MessageReceiverWithResponder implementation:
-  bool PrefersSerializedMessages() override;
   bool Accept(Message* message) override;
   bool AcceptWithResponder(Message* message,
                            std::unique_ptr<MessageReceiver> responder) override;

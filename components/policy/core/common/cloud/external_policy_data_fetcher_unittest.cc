@@ -1,18 +1,20 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/external_policy_data_fetcher.h"
 
 #include <stdint.h>
+
+#include <array>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
 #include "net/base/net_errors.h"
@@ -25,10 +27,8 @@ namespace policy {
 
 namespace {
 
-const char* kExternalPolicyDataURLs[] = {
-    "http://localhost/data_1",
-    "http://localhost/data_2"
-};
+constexpr auto kExternalPolicyDataURLs = std::to_array<const char*>(
+    {"http://localhost/data_1", "http://localhost/data_2"});
 
 const int64_t kExternalPolicyDataMaxSize = 20;
 
@@ -38,6 +38,11 @@ const char* kExternalPolicyDataOverflowPayload = "External policy data+++++++";
 }  // namespace
 
 class ExternalPolicyDataFetcherTest : public testing::Test {
+ public:
+  ExternalPolicyDataFetcherTest(const ExternalPolicyDataFetcherTest&) = delete;
+  ExternalPolicyDataFetcherTest& operator=(
+      const ExternalPolicyDataFetcherTest&) = delete;
+
  protected:
   ExternalPolicyDataFetcherTest();
   ~ExternalPolicyDataFetcherTest() override;
@@ -58,15 +63,13 @@ class ExternalPolicyDataFetcherTest : public testing::Test {
   network::TestURLLoaderFactory test_url_loader_factory_;
   std::unique_ptr<ExternalPolicyDataFetcher> fetcher_;
 
-  std::map<int, ExternalPolicyDataFetcher::Job*> jobs_;  // Not owned.
+  std::map<int, raw_ptr<ExternalPolicyDataFetcher::Job, CtnExperimental>>
+      jobs_;  // Not owned.
 
   int callback_count_;
   int callback_job_index_;
   ExternalPolicyDataFetcher::Result callback_result_;
   std::unique_ptr<std::string> callback_data_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ExternalPolicyDataFetcherTest);
 };
 
 ExternalPolicyDataFetcherTest::ExternalPolicyDataFetcherTest()

@@ -1,16 +1,8 @@
-// Copyright 2014 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /** @fileoverview Unit tests for SafeStyle and its builders. */
 
@@ -18,6 +10,7 @@ goog.module('goog.html.safeStyleTest');
 goog.setTestOnly();
 
 const Const = goog.require('goog.string.Const');
+const PropertyReplacer = goog.require('goog.testing.PropertyReplacer');
 const SafeStyle = goog.require('goog.html.SafeStyle');
 const SafeUrl = goog.require('goog.html.SafeUrl');
 const googObject = goog.require('goog.object');
@@ -33,14 +26,26 @@ function assertCreateEquals(expected, style) {
   assertEquals(expected, SafeStyle.unwrap(styleWrapped));
 }
 
+const stubs = new PropertyReplacer();
+
 testSuite({
+  tearDown() {
+    stubs.reset();
+  },
+
+  testConstructor_throwsOnBadToken() {
+    assertThrows(() => new (/** @type {?} */ (SafeStyle))(''));
+    assertThrows(
+        () => new (/** @type {?} */ (SafeStyle.EMPTY)).constructor(''));
+  },
+
   testSafeStyle() {
     const style = 'width: 1em;height: 1em;';
     const safeStyle = SafeStyle.fromConstant(Const.from(style));
     const extracted = SafeStyle.unwrap(safeStyle);
     assertEquals(style, extracted);
     assertEquals(style, safeStyle.getTypedStringValue());
-    assertEquals(`SafeStyle{${style}}`, String(safeStyle));
+    assertEquals(`${style}`, String(safeStyle));
 
     // Interface marker is present.
     assertTrue(safeStyle.implementsGoogStringTypedString);
@@ -49,15 +54,11 @@ testSuite({
   /** @suppress {checkTypes} */
   testUnwrap() {
     const privateFieldName = 'privateDoNotAccessOrElseSafeStyleWrappedValue_';
-    const markerFieldName =
-        'SAFE_STYLE_TYPE_MARKER_GOOG_HTML_SECURITY_PRIVATE_';
     const propNames =
         googObject.getKeys(SafeStyle.fromConstant(Const.from('')));
     assertContains(privateFieldName, propNames);
-    assertContains(markerFieldName, propNames);
     const evil = {};
     evil[privateFieldName] = 'width: expression(evil);';
-    evil[markerFieldName] = {};
 
     const exception = assertThrows(() => {
       SafeStyle.unwrap(evil);
@@ -142,6 +143,12 @@ testSuite({
         {'grid-template-columns': 'repeat(3, [start] 100px [end])'});
   },
 
+  testCreate_allowsSteps() {
+    assertCreateEquals(
+        'animation-timing-function:steps(2, start);',
+        {'animation-timing-function': 'steps(2, start)'});
+  },
+
   testCreate_allowsCubicBezier() {
     assertCreateEquals(
         'transition-timing-function:cubic-bezier(0.26, 0.86, 0.44, 0.95);',
@@ -179,6 +186,45 @@ testSuite({
     assertCreateEquals(
         'transform:translateX(5px);',  // expected
         {'transform': 'translateX(5px)'});
+  },
+
+  testCreate_allowsVar() {
+    assertCreateEquals(
+        'color:var(--xyz);',  // expected
+        {'color': 'var(--xyz)'});
+    assertCreateEquals(
+        'color:var(--xyz, black);',  // expected
+        {'color': 'var(--xyz, black)'});
+  },
+
+  testCreate_allowsLinearGradient() {
+    assertCreateEquals(
+        'background:linear-gradient(red, blue);',
+        {'background': 'linear-gradient(red, blue)'});
+    assertCreateEquals(
+        'background:linear-gradient(rgb(10,0,0), rgb(0,0,30));',
+        {'background': 'linear-gradient(rgb(10,0,0), rgb(0,0,30))'});
+    assertCreateEquals(
+        'background:linear-gradient(#333, #eee);',
+        {'background': 'linear-gradient(#333, #eee)'});
+    assertCreateEquals(
+        'background:linear-gradient(#C0C0C0, #FF0000);',
+        {'background': 'linear-gradient(#C0C0C0, #FF0000)'});
+  },
+
+  testCreate_allowsRadialGradient() {
+    assertCreateEquals(
+        'background:radial-gradient(red, blue);',
+        {'background': 'radial-gradient(red, blue)'});
+    assertCreateEquals(
+        'background:radial-gradient(rgb(10,0,0), rgb(0,0,30));',
+        {'background': 'radial-gradient(rgb(10,0,0), rgb(0,0,30))'});
+    assertCreateEquals(
+        'background:radial-gradient(#333, #eee);',
+        {'background': 'radial-gradient(#333, #eee)'});
+    assertCreateEquals(
+        'background:radial-gradient(#C0C0C0, #FF0000);',
+        {'background': 'radial-gradient(#C0C0C0, #FF0000)'});
   },
 
   testCreate_allowsSafeUrl() {
@@ -299,6 +345,8 @@ testSuite({
       '\'Times New Roman\'',
       '"Bold \'nuff"',
       '"O\'Connor\'s Revenge"',
+      '20% / 50%',
+      '20px/1',
     ];
     for (let i = 0; i < valids.length; i++) {
       const value = valids[i];
@@ -320,6 +368,14 @@ testSuite({
         SafeStyle.create({'background': value});
       });
     }
+  },
+
+  /** @suppress {checkTypes} suppression added to enable type checking */
+  testCreate_withMonkeypatchedObjectPrototype() {
+    stubs.set(Object.prototype, 'foo', 'bar');
+    assertCreateEquals(
+        'background:url(i.png);margin:0;',
+        {'background': Const.from('url(i.png)'), 'margin': '0'});
   },
 
   testConcat() {

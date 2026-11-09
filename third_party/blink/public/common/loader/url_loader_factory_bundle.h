@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,9 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "third_party/blink/public/common/common_export.h"
+#include "third_party/blink/public/mojom/loader/local_resource_loader_config.mojom.h"
 #include "url/origin.h"
 
 namespace network {
@@ -49,6 +50,7 @@ class BLINK_COMMON_EXPORT PendingURLLoaderFactoryBundle
           pending_default_factory,
       SchemeMap scheme_specific_pending_factories,
       OriginMap isolated_world_pending_factories,
+      mojom::LocalResourceLoaderConfigPtr local_resource_loader_config,
       bool bypass_redirect_checks);
   PendingURLLoaderFactoryBundle(const PendingURLLoaderFactoryBundle&) = delete;
   PendingURLLoaderFactoryBundle& operator=(
@@ -60,16 +62,19 @@ class BLINK_COMMON_EXPORT PendingURLLoaderFactoryBundle
     return pending_default_factory_;
   }
 
-  mojo::PendingRemote<network::mojom::URLLoaderFactory>&
-  pending_appcache_factory() {
-    return pending_appcache_factory_;
-  }
-
   SchemeMap& pending_scheme_specific_factories() {
     return pending_scheme_specific_factories_;
   }
   OriginMap& pending_isolated_world_factories() {
     return pending_isolated_world_factories_;
+  }
+
+  mojom::LocalResourceLoaderConfigPtr& local_resource_loader_config() {
+    return local_resource_loader_config_;
+  }
+  void set_local_resource_loader_config(
+      mojom::LocalResourceLoaderConfigPtr local_resource_loader_config) {
+    local_resource_loader_config_ = std::move(local_resource_loader_config);
   }
 
   bool bypass_redirect_checks() const { return bypass_redirect_checks_; }
@@ -85,14 +90,14 @@ class BLINK_COMMON_EXPORT PendingURLLoaderFactoryBundle
 
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
       pending_default_factory_;
-  mojo::PendingRemote<network::mojom::URLLoaderFactory>
-      pending_appcache_factory_;
   SchemeMap pending_scheme_specific_factories_;
 
   // TODO(https://crbug.com/1098410): Remove the
   // `pending_isolated_world_factories_` field once Chrome Platform Apps are
   // gone.
   OriginMap pending_isolated_world_factories_;
+
+  mojom::LocalResourceLoaderConfigPtr local_resource_loader_config_;
 
   bool bypass_redirect_checks_ = false;
 };
@@ -156,11 +161,6 @@ class BLINK_COMMON_EXPORT URLLoaderFactoryBundle
   // context should not be given access to the network.
   mojo::Remote<network::mojom::URLLoaderFactory> default_factory_;
 
-  // |appcache_factory_| is a special loader factory that intercepts
-  // requests when the context has AppCache. See also
-  // AppCacheSubresourceURLFactory.
-  mojo::Remote<network::mojom::URLLoaderFactory> appcache_factory_;
-
   // Map from URL scheme to Remote<URLLoaderFactory> for handling URL requests
   // for schemes not handled by the |default_factory_|.  See also
   // PendingURLLoaderFactoryBundle::SchemeMap and
@@ -178,6 +178,8 @@ class BLINK_COMMON_EXPORT URLLoaderFactoryBundle
   using OriginMap =
       std::map<url::Origin, mojo::Remote<network::mojom::URLLoaderFactory>>;
   OriginMap isolated_world_factories_;
+
+  mojom::LocalResourceLoaderConfigPtr local_resource_loader_config_;
 
   bool bypass_redirect_checks_ = false;
 };

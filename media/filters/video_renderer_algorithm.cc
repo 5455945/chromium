@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,10 +34,11 @@ bool VideoRendererAlgorithm::ReadyFrame::operator<(
 VideoRendererAlgorithm::VideoRendererAlgorithm(
     const TimeSource::WallClockTimeCB& wall_clock_time_cb,
     MediaLog* media_log)
-    : media_log_(media_log),
-      cadence_estimator_(base::TimeDelta::FromSeconds(
-          kMinimumAcceptableTimeBetweenGlitchesSecs)),
+    : media_log_(MediaLog::CloneSafely(media_log)),
+      cadence_estimator_(
+          base::Seconds(kMinimumAcceptableTimeBetweenGlitchesSecs)),
       wall_clock_time_cb_(wall_clock_time_cb),
+      render_interval_calculator_(kMovingAverageSamples),
       frame_duration_calculator_(kMovingAverageSamples),
       frame_dropping_disabled_(false) {
   DCHECK(wall_clock_time_cb_);
@@ -67,11 +68,12 @@ scoped_refptr<VideoFrame> VideoRendererAlgorithm::Render(
   // to Render().  If so, we assume the last frame provided was rendered during
   // those intervals and adjust its render count appropriately.
   AccountForMissedIntervals(deadline_min, deadline_max);
+  deadline_max = deadline_min + render_interval_;
 
   // Step 3: Update the wall clock timestamps and frame duration estimates for
   // all frames currently in the |frame_queue_|.
   UpdateFrameStatistics();
-  const bool have_known_duration = average_frame_duration_ > base::TimeDelta();
+  const bool have_known_duration = average_frame_duration_.is_positive();
   if (!was_time_moving_ || !have_known_duration || render_interval_.is_zero()) {
     ReadyFrame& ready_frame = frame_queue_.front();
     DCHECK(ready_frame.frame);
@@ -79,11 +81,17 @@ scoped_refptr<VideoFrame> VideoRendererAlgorithm::Render(
     UpdateEffectiveFramesQueued();
 
     // If time stops, we should reset the |first_frame_| marker.
-    if (!was_time_moving_)
+    if (!was_time_moving_) {
       first_frame_ = true;
+      last_deadline_min_ = base::TimeTicks();
+      last_declared_interval_ = base::TimeDelta();
+      render_interval_calculator_.Reset();
+      using_avg_render_interval_ = false;
+    }
     return ready_frame.frame;
   }
 
+  last_deadline_min_ = deadline_min;
   last_deadline_max_ = deadline_max;
   base::TimeDelta selected_frame_drift, cadence_frame_drift;
 
@@ -234,8 +242,10 @@ scoped_refptr<VideoFrame> VideoRendererAlgorithm::Render(
 size_t VideoRendererAlgorithm::RemoveExpiredFrames(base::TimeTicks deadline) {
   // Update |last_deadline_max_| if it's no longer accurate; this should always
   // be done or EffectiveFramesQueued() may never expire the last frame.
-  if (deadline > last_deadline_max_)
+  if (deadline > last_deadline_max_) {
+    last_deadline_min_ = base::TimeTicks();
     last_deadline_max_ = deadline;
+  }
 
   if (frame_queue_.empty())
     return 0;
@@ -304,7 +314,11 @@ void VideoRendererAlgorithm::Reset(ResetFlag reset_flag) {
   cadence_estimator_.Reset();
   if (reset_flag != ResetFlag::kPreserveNextFrameEstimates) {
     average_frame_duration_ = base::TimeDelta();
+    last_deadline_min_ = base::TimeTicks();
     last_deadline_max_ = base::TimeTicks();
+    last_declared_interval_ = base::TimeDelta();
+    render_interval_calculator_.Reset();
+    using_avg_render_interval_ = false;
     frame_duration_calculator_.Reset();
   }
   first_frame_ = true;
@@ -313,7 +327,7 @@ void VideoRendererAlgorithm::Reset(ResetFlag reset_flag) {
 
   // Default to ATSC IS/191 recommendations for maximum acceptable drift before
   // we have enough frames to base the maximum on frame duration.
-  max_acceptable_drift_ = base::TimeDelta::FromMilliseconds(15);
+  max_acceptable_drift_ = base::Milliseconds(15);
 }
 
 int64_t VideoRendererAlgorithm::GetMemoryUsage() const {
@@ -364,7 +378,7 @@ void VideoRendererAlgorithm::EnqueueFrame(scoped_refptr<VideoFrame> frame) {
       new_frame_index > 0
           ? timestamp - frame_queue_[new_frame_index - 1].frame->timestamp()
           : base::TimeDelta::Max());
-  if (delta < base::TimeDelta::FromMilliseconds(1)) {
+  if (delta < base::Milliseconds(1)) {
     DVLOG(2) << "Dropping frame too close to an already enqueued frame: "
              << delta.InMicroseconds() << " us";
     ++frames_dropped_during_enqueue_;
@@ -382,8 +396,8 @@ void VideoRendererAlgorithm::EnqueueFrame(scoped_refptr<VideoFrame> frame) {
   //
   // Note: This duration value is not compensated for playback rate and
   // thus is different than |average_frame_duration_| which is compensated.
-  if (!frame_duration_calculator_.count() &&
-      metadata_frame_duration > base::TimeDelta()) {
+  if (!frame_duration_calculator_.Count() &&
+      metadata_frame_duration.is_positive()) {
     media_timestamps.push_back(timestamp + metadata_frame_duration);
   }
 
@@ -391,7 +405,7 @@ void VideoRendererAlgorithm::EnqueueFrame(scoped_refptr<VideoFrame> frame) {
   base::TimeDelta wallclock_duration;
   wall_clock_time_cb_.Run(media_timestamps, &wall_clock_times);
   ready_frame.start_time = wall_clock_times[0];
-  if (frame_duration_calculator_.count()) {
+  if (frame_duration_calculator_.Count()) {
     ready_frame.end_time = ready_frame.start_time + average_frame_duration_;
     wallclock_duration = average_frame_duration_;
   } else if (wall_clock_times.size() > 1u) {
@@ -429,15 +443,74 @@ void VideoRendererAlgorithm::EnqueueFrame(scoped_refptr<VideoFrame> frame) {
 void VideoRendererAlgorithm::AccountForMissedIntervals(
     base::TimeTicks deadline_min,
     base::TimeTicks deadline_max) {
-  if (last_deadline_max_.is_null() || deadline_min <= last_deadline_max_ ||
-      !have_rendered_frames_ || !was_time_moving_ ||
-      render_interval_.is_zero()) {
+  if (last_deadline_max_.is_null() || !have_rendered_frames_ ||
+      !was_time_moving_ || render_interval_.is_zero()) {
+    if (!render_interval_.is_zero()) {
+      last_declared_interval_ = render_interval_;
+    }
     return;
   }
 
   DCHECK_GT(render_interval_, base::TimeDelta());
+  constexpr base::TimeDelta kMinRenderIntervalDifference =
+      base::Microseconds(100);
+  // If the declared interval itself changed (e.g., display refresh rate or VRR
+  // change), reset the calculator so stale samples from the previous rate don't
+  // override the new declared interval.
+  const bool declared_interval_changed =
+      (render_interval_ - last_declared_interval_).magnitude() >
+      kMinRenderIntervalDifference;
+  if (declared_interval_changed) {
+    last_declared_interval_ = render_interval_;
+    render_interval_calculator_.Reset();
+    using_avg_render_interval_ = false;
+  }
+
+  const base::TimeDelta current_interval =
+      using_avg_render_interval_ ? render_interval_calculator_.Mean()
+                                 : render_interval_;
   const int64_t render_cycle_count =
-      (deadline_min - last_deadline_max_).IntDiv(render_interval_);
+      deadline_min > last_deadline_max_
+          ? (deadline_min - last_deadline_max_).IntDiv(current_interval)
+          : 0;
+
+  // If no intervals were missed and the declared interval didn't just change,
+  // record the actual interval between Render() calls. When intervals are
+  // missed (e.g., during 250ms background rendering ticks), skip sampling so
+  // the moving average isn't skewed.
+  if (!declared_interval_changed && !render_cycle_count &&
+      !last_deadline_min_.is_null() && deadline_min > last_deadline_min_) {
+    render_interval_calculator_.AddSample(deadline_min - last_deadline_min_);
+  }
+
+  // If the actual cadence of Render() calls systematically differs from the
+  // declared interval, prefer the observed average interval.
+  constexpr size_t kMinRenderIntervalSamples = 4;
+  if (render_interval_calculator_.Count() >= kMinRenderIntervalSamples) {
+    const base::TimeDelta avg_render_interval =
+        render_interval_calculator_.Mean();
+    const base::TimeDelta deviation = render_interval_calculator_.Deviation();
+    const base::TimeDelta diff =
+        (avg_render_interval - render_interval_).magnitude();
+    // Normal VSync jitter causes individual intervals to fluctuate around the
+    // declared interval, but over 4+ samples the average stays within ~0.5x of
+    // the sample deviation. If the average differs by more than `0.6 *
+    // deviation` (and at least 100us), the actual Render() cadence is
+    // systematically different from the declared interval (e.g., 8ms timer
+    // ticks on a 144Hz / 6.943ms display), so use the observed average instead.
+    // Once active, only switch back to the declared interval if the difference
+    // drops below half the threshold to avoid flipping back and forth.
+    const base::TimeDelta threshold =
+        std::max(deviation * 0.6, kMinRenderIntervalDifference);
+    if (diff > threshold) {
+      using_avg_render_interval_ = true;
+    } else if (diff < threshold * 0.5) {
+      using_avg_render_interval_ = false;
+    }
+    if (using_avg_render_interval_) {
+      render_interval_ = avg_render_interval;
+    }
+  }
 
   // In the ideal case this value will be zero.
   if (!render_cycle_count)
@@ -482,7 +555,7 @@ void VideoRendererAlgorithm::UpdateFrameStatistics() {
     const auto& last_frame = frame_queue_.back().frame;
     base::TimeDelta metadata_frame_duration =
         last_frame->metadata().frame_duration.value_or(base::TimeDelta());
-    if (metadata_frame_duration > base::TimeDelta()) {
+    if (metadata_frame_duration.is_positive()) {
       have_metadata_duration = true;
       media_timestamps.push_back(last_frame->timestamp() +
                                  metadata_frame_duration);
@@ -517,10 +590,10 @@ void VideoRendererAlgorithm::UpdateFrameStatistics() {
   }
 
   base::TimeDelta deviation;
-  if (frame_duration_calculator_.count()) {
+  if (frame_duration_calculator_.Count()) {
     // Compute |average_frame_duration_|, a moving average of the last few
     // frames; see kMovingAverageSamples for the exact number.
-    average_frame_duration_ = frame_duration_calculator_.Average();
+    average_frame_duration_ = frame_duration_calculator_.Mean();
     deviation = frame_duration_calculator_.Deviation();
   }
 
@@ -533,7 +606,7 @@ void VideoRendererAlgorithm::UpdateFrameStatistics() {
     // to use our estimate of |average_frame_duration_| when we have no samples
     // in |frame_duration_calculator_| -- since it's a more accurate reflection
     // of the per-frame on screen time.
-    if (!frame_duration_calculator_.count()) {
+    if (!frame_duration_calculator_.Count()) {
       average_frame_duration_ = frame.end_time - frame.start_time;
       if (average_frame_duration_.is_zero())
         return;
@@ -544,8 +617,9 @@ void VideoRendererAlgorithm::UpdateFrameStatistics() {
     // If |have_metadata_duration| is false and we don't have any subsequent
     // frames, we can't continue processing since the cadence estimate requires
     // |average_frame_duration_| and |deviation| to be non-zero.
-    if (!frame_duration_calculator_.count())
+    if (!frame_duration_calculator_.Count()) {
       return;
+    }
 
     // Update the frame end time for the last frame based on the average.
     frame_queue_.back().end_time =
@@ -559,8 +633,12 @@ void VideoRendererAlgorithm::UpdateFrameStatistics() {
   // We'll always allow at least 16.66ms of drift since literature suggests it's
   // well below the floor of detection and is high enough to ensure stability
   // for 60fps content.
-  max_acceptable_drift_ = std::max(average_frame_duration_ / 2,
-                                   base::TimeDelta::FromSecondsD(1.0 / 60));
+  //
+  // We also impose a maximum of 8fps (~125ms) since more than that may result
+  // in large visible differences with low frame rate video.
+  max_acceptable_drift_ =
+      std::clamp(average_frame_duration_ / 2, base::Seconds(1.0 / 60),
+                 base::Seconds(1.0 / 8));
 
   // If we were called via RemoveExpiredFrames() and Render() was never called,
   // we may not have a render interval yet.
@@ -661,7 +739,7 @@ int VideoRendererAlgorithm::FindBestFrameByCoverage(
   if (best_frame_by_coverage >= 0) {
     coverage[best_frame_by_coverage] = base::TimeDelta();
     auto it = std::max_element(coverage.begin(), coverage.end());
-    if (*it > base::TimeDelta())
+    if (it->is_positive())
       *second_best = it - coverage.begin();
   }
 
@@ -670,8 +748,7 @@ int VideoRendererAlgorithm::FindBestFrameByCoverage(
   // ensure proper coverage calculation for 24fps in 60Hz where +/- 100us of
   // jitter is present within the |render_interval_|. At 60Hz this works out to
   // an allowed jitter of 3%.
-  const base::TimeDelta kAllowableJitter =
-      base::TimeDelta::FromMicroseconds(500);
+  const base::TimeDelta kAllowableJitter = base::Microseconds(500);
   if (*second_best >= 0 && best_frame_by_coverage > *second_best &&
       (best_coverage - coverage[*second_best]).magnitude() <=
           kAllowableJitter) {
@@ -744,9 +821,8 @@ void VideoRendererAlgorithm::UpdateEffectiveFramesQueued() {
   // If frame dropping is disabled, the lower bound is the number of frames
   // that were not rendered yet.
   if (frame_dropping_disabled_) {
-    min_frames_queued = std::count_if(
-        frame_queue_.cbegin(), frame_queue_.cend(),
-        [](const ReadyFrame& frame) { return frame.render_count == 0; });
+    min_frames_queued =
+        std::ranges::count(frame_queue_, 0, &ReadyFrame::render_count);
   }
 
   // Next, see if can report more frames as queued.

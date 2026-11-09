@@ -1,5 +1,1 @@
-monorail {
-  component: "Mobile>WebView"
-}
-
-team_email: "android-webview-dev@chromium.org"
+mixins: "//android_webview/COMMON_METADATA"

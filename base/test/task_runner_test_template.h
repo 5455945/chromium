@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,7 +26,7 @@
 //
 //     // Stop the task runner and make sure all tasks posted before
 //     // this is called are run. Caveat: delayed tasks are not run,
-       // they're simply deleted.
+// they're simply deleted.
 //     void StopTaskRunner() {
 //       ...
 //     }
@@ -50,16 +50,16 @@
 #include <cstddef>
 #include <map>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
-#include "base/task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -71,6 +71,9 @@ namespace test {
 class TaskTracker : public RefCountedThreadSafe<TaskTracker> {
  public:
   TaskTracker();
+
+  TaskTracker(const TaskTracker&) = delete;
+  TaskTracker& operator=(const TaskTracker&) = delete;
 
   // Returns a closure that runs the given task and increments the run
   // count of |i| by one.  |task| may be null.  It is guaranteed that
@@ -93,8 +96,6 @@ class TaskTracker : public RefCountedThreadSafe<TaskTracker> {
   std::map<int, int> task_run_counts_;
   int task_runs_;
   ConditionVariable task_runs_cv_;
-
-  DISALLOW_COPY_AND_ASSIGN(TaskTracker);
 };
 
 }  // namespace test
@@ -131,8 +132,7 @@ TYPED_TEST_P(TaskRunnerTest, Basic) {
   }
   this->delegate_.StopTaskRunner();
 
-  EXPECT_EQ(expected_task_run_counts,
-            this->task_tracker_->GetTaskRunCounts());
+  EXPECT_EQ(expected_task_run_counts, this->task_tracker_->GetTaskRunCounts());
 }
 
 // Post a bunch of delayed tasks to the task runner.  They should all
@@ -148,8 +148,7 @@ TYPED_TEST_P(TaskRunnerTest, Delayed) {
     RepeatingClosure ith_task =
         this->task_tracker_->WrapTask(RepeatingClosure(), i);
     for (int j = 0; j < i + 1; ++j) {
-      task_runner->PostDelayedTask(
-          FROM_HERE, ith_task, base::TimeDelta::FromMilliseconds(j));
+      task_runner->PostDelayedTask(FROM_HERE, ith_task, base::Milliseconds(j));
       ++expected_task_run_counts[i];
       ++expected_total_tasks;
     }
@@ -157,8 +156,7 @@ TYPED_TEST_P(TaskRunnerTest, Delayed) {
   this->task_tracker_->WaitForCompletedTasks(expected_total_tasks);
   this->delegate_.StopTaskRunner();
 
-  EXPECT_EQ(expected_task_run_counts,
-            this->task_tracker_->GetTaskRunCounts());
+  EXPECT_EQ(expected_task_run_counts, this->task_tracker_->GetTaskRunCounts());
 }
 
 // The TaskRunnerTest test case verifies behaviour that is expected from a

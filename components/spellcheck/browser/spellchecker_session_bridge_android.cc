@@ -1,32 +1,34 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/spellcheck/browser/spellchecker_session_bridge_android.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/metrics/histogram_macros.h"
-#include "components/spellcheck/browser/android/jni_headers/SpellCheckerSessionBridge_jni.h"
+#include "base/android/scoped_java_ref.h"
+#include "base/feature_list.h"
+#include "base/logging.h"
+#include "components/spellcheck/common/spellcheck_decoration.h"
+#include "components/spellcheck/common/spellcheck_features.h"
 #include "components/spellcheck/common/spellcheck_result.h"
+#include "components/spellcheck/common/spelling_marker.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/jni_zero/jni_zero.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/spellcheck/browser/android/jni_headers/SpellCheckerSessionBridge_jni.h"
 
-namespace {
-
-void RecordAvailabilityUMA(bool spellcheck_available) {
-  UMA_HISTOGRAM_BOOLEAN("Spellcheck.Android.Available", spellcheck_available);
-}
-
-}  // namespace
+using base::android::JavaRef;
 
 SpellCheckerSessionBridge::SpellCheckerSessionBridge()
-    : java_object_initialization_failed_(false), active_session_(false) {}
+    : java_object_initialization_failed_(false) {}
 
 SpellCheckerSessionBridge::~SpellCheckerSessionBridge() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -36,21 +38,19 @@ SpellCheckerSessionBridge::~SpellCheckerSessionBridge() {
 
 void SpellCheckerSessionBridge::RequestTextCheck(
     const std::u16string& text,
+    const std::vector<spellcheck::SpellingMarker>& spelling_markers,
     RequestTextCheckCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   // This allows us to discard |callback| safely in case it's not run due to
   // failures in initialization of |java_object_|.
   std::unique_ptr<SpellingRequest> incoming_request =
-      std::make_unique<SpellingRequest>(text, std::move(callback));
+      std::make_unique<SpellingRequest>(text, spelling_markers,
+                                        std::move(callback));
 
   // SpellCheckerSessionBridge#create() will return null if spell checker
   // service is unavailable.
   if (java_object_initialization_failed_) {
-    if (!active_session_) {
-      RecordAvailabilityUMA(false);
-      active_session_ = true;
-    }
     return;
   }
 
@@ -59,14 +59,18 @@ void SpellCheckerSessionBridge::RequestTextCheck(
   // contains completed text.  We need to initialize the spellchecker here
   // rather than in response to DisconnectSessionBridge so that the existing
   // text will be spellchecked immediately.
+  //
+  // AndroidSpellcheckFullApiBlink gives input methods inside Android enough
+  // info to render a custom suggestion menu. We should only allow hiding the
+  // suggestion menu from the Clank side when we are sure that the Android
+  // input methods have enough information to render an alternative menu.
   if (java_object_.is_null()) {
     java_object_.Reset(Java_SpellCheckerSessionBridge_create(
-        base::android::AttachCurrentThread(),
-        reinterpret_cast<intptr_t>(this)));
-    if (!active_session_) {
-      RecordAvailabilityUMA(!java_object_.is_null());
-      active_session_ = true;
-    }
+        base::android::AttachCurrentThread(), jni_zero::MakeRaw(this),
+        base::FeatureList::IsEnabled(spellcheck::kAndroidGrammarCheck),
+        /* allowHideSuggestionMenuAttribute= */
+        base::FeatureList::IsEnabled(
+            blink::features::kAndroidSpellcheckFullApiBlink)));
     if (java_object_.is_null()) {
       java_object_initialization_failed_ = true;
       return;
@@ -85,42 +89,53 @@ void SpellCheckerSessionBridge::RequestTextCheck(
 
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_SpellCheckerSessionBridge_requestTextCheck(
-      env, java_object_, base::android::ConvertUTF16ToJavaString(env, text));
+      env, java_object_, base::android::ConvertUTF16ToJavaString(env, text),
+      spelling_markers);
 }
 
 void SpellCheckerSessionBridge::ProcessSpellCheckResults(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jobj,
-    const JavaParamRef<jintArray>& offset_array,
-    const JavaParamRef<jintArray>& length_array,
-    const JavaParamRef<jobjectArray>& suggestions_array) {
+    const JavaRef<jintArray>& offset_array,
+    const JavaRef<jintArray>& length_array,
+    const JavaRef<jobjectArray>& suggestions_array,
+    const JavaRef<jintArray>& spellcheck_result_decorations_array,
+    const JavaRef<jbooleanArray>& hide_suggestion_menu_booleans_array) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   std::vector<int> offsets;
   std::vector<int> lengths;
+  std::vector<int> spellcheck_result_decorations;
+  std::vector<bool> hide_suggestion_menu_booleans;
 
   base::android::JavaIntArrayToIntVector(env, offset_array, &offsets);
   base::android::JavaIntArrayToIntVector(env, length_array, &lengths);
+  base::android::JavaIntArrayToIntVector(
+      env, spellcheck_result_decorations_array, &spellcheck_result_decorations);
+  base::android::JavaBooleanArrayToBoolVector(
+      env, hide_suggestion_menu_booleans_array, &hide_suggestion_menu_booleans);
 
   std::vector<SpellCheckResult> results;
   for (size_t i = 0; i < offsets.size(); i++) {
-    base::android::ScopedJavaLocalRef<jobjectArray> suggestions_for_word_array(
+    auto suggestions_for_word_array = jni_zero::AdoptRef(
         env, static_cast<jobjectArray>(
-                 env->GetObjectArrayElement(suggestions_array, i)));
+                 env->GetObjectArrayElement(suggestions_array.obj(), i)));
     std::vector<std::u16string> suggestions_for_word;
     base::android::AppendJavaStringArrayToStringVector(
         env, suggestions_for_word_array, &suggestions_for_word);
-    results.push_back(SpellCheckResult(SpellCheckResult::SPELLING, offsets[i],
-                                       lengths[i], suggestions_for_word));
+    spellcheck::Decoration decoration =
+        static_cast<spellcheck::Decoration>(spellcheck_result_decorations[i]);
+    results.emplace_back(decoration, offsets[i], lengths[i],
+                         suggestions_for_word,
+                         hide_suggestion_menu_booleans[i]);
   }
 
   std::move(active_request_->callback_).Run(results);
 
   active_request_ = std::move(pending_request_);
   if (active_request_) {
-    JNIEnv* env = base::android::AttachCurrentThread();
     Java_SpellCheckerSessionBridge_requestTextCheck(
         env, java_object_,
-        base::android::ConvertUTF16ToJavaString(env, active_request_->text_));
+        base::android::ConvertUTF16ToJavaString(env, active_request_->text_),
+        active_request_->spelling_markers_);
   }
 }
 
@@ -131,7 +146,6 @@ void SpellCheckerSessionBridge::DisconnectSession() {
 
   active_request_.reset();
   pending_request_.reset();
-  active_session_ = false;
 
   if (!java_object_.is_null()) {
     Java_SpellCheckerSessionBridge_disconnect(
@@ -142,11 +156,30 @@ void SpellCheckerSessionBridge::DisconnectSession() {
 
 SpellCheckerSessionBridge::SpellingRequest::SpellingRequest(
     const std::u16string& text,
+    const std::vector<spellcheck::SpellingMarker>& spelling_markers,
     RequestTextCheckCallback callback)
-    : text_(text), callback_(std::move(callback)) {}
+    : text_(text),
+      spelling_markers_(spelling_markers),
+      callback_(std::move(callback)) {}
 
 SpellCheckerSessionBridge::SpellingRequest::~SpellingRequest() {
   // Ensure that we don't clear an uncalled RequestTextCheckCallback
   if (callback_)
     std::move(callback_).Run(std::vector<SpellCheckResult>());
 }
+
+base::android::ScopedJavaLocalRef<jobject> ToJavaSpellingMarker(
+    JNIEnv* env,
+    const spellcheck::SpellingMarker& spelling_marker) {
+  base::android::ScopedJavaLocalRef<jobject> j_spelling_marker =
+      Java_SpellCheckerSessionBridge_createSpellingMarker(
+          env, spelling_marker.start, spelling_marker.end,
+          spelling_marker.marker_type);
+  if (j_spelling_marker.is_null()) {
+    LOG(ERROR) << "Failed to create a spelling marker with range ["
+               << spelling_marker.start << ", " << spelling_marker.end << "];";
+  }
+  return j_spelling_marker;
+}
+
+DEFINE_JNI(SpellCheckerSessionBridge)

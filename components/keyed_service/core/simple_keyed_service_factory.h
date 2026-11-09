@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "components/keyed_service/core/keyed_service_export.h"
 #include "components/keyed_service/core/keyed_service_factory.h"
 
@@ -63,8 +62,12 @@ class KEYED_SERVICE_EXPORT SimpleKeyedServiceFactory
   // A callback that supplies the instance of a KeyedService for a given
   // SimpleFactoryKey. This is used primarily for testing, where we want to feed
   // a specific test double into the SKSF system.
-  using TestingFactory = base::RepeatingCallback<std::unique_ptr<KeyedService>(
-      SimpleFactoryKey* key)>;
+  using TestingFactory =
+      base::OnceCallback<std::unique_ptr<KeyedService>(SimpleFactoryKey* key)>;
+
+  SimpleKeyedServiceFactory(const SimpleKeyedServiceFactory&) = delete;
+  SimpleKeyedServiceFactory& operator=(const SimpleKeyedServiceFactory&) =
+      delete;
 
   // Associates |testing_factory| with |key| so that |testing_factory| is
   // used to create the KeyedService when requested.  |testing_factory| can be
@@ -129,7 +132,6 @@ class KEYED_SERVICE_EXPORT SimpleKeyedServiceFactory
   // KeyedServiceFactory:
   std::unique_ptr<KeyedService> BuildServiceInstanceFor(
       void* context) const final;
-  bool IsOffTheRecord(void* context) const final;
 
   // KeyedServiceBaseFactory:
   void* GetContextToUse(void* context) const final;
@@ -137,11 +139,7 @@ class KEYED_SERVICE_EXPORT SimpleKeyedServiceFactory
   void ContextShutdown(void* context) final;
   void ContextDestroyed(void* context) final;
   void RegisterPrefs(user_prefs::PrefRegistrySyncable* registry) final;
-  void SetEmptyTestingFactory(void* context) final;
-  bool HasTestingFactory(void* context) final;
   void CreateServiceNow(void* context) final;
-
-  DISALLOW_COPY_AND_ASSIGN(SimpleKeyedServiceFactory);
 };
 
 #endif  // COMPONENTS_KEYED_SERVICE_CORE_SIMPLE_KEYED_SERVICE_FACTORY_H_

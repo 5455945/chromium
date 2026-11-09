@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/shelf/drag_handle.h"
+#include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "ui/compositor/animation_throughput_reporter.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -118,8 +119,11 @@ void HotseatTransitionAnimator::DoAnimation(HotseatState old_state,
 
   StopObservingImplicitAnimations();
 
-  shelf_widget_->GetAnimatingBackground()->SetColor(
-      ShelfConfig::Get()->GetMaximizedShelfColor());
+  // TODO(b:522627357): Update `GetAnimatingBackground` to return
+  // `ui::LayerSolidColor`.
+  shelf_widget_->GetAnimatingBackground()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(
+          ShelfConfig::Get()->GetMaximizedShelfColor(shelf_widget_)));
 
   gfx::Rect drag_handle_bounds(shelf_widget_->GetAnimatingBackground()->size());
   drag_handle_bounds.ClampToCenteredSize(ShelfConfig::Get()->DragHandleSize());
@@ -143,7 +147,7 @@ void HotseatTransitionAnimator::DoAnimation(HotseatState old_state,
 
     ui::AnimationThroughputReporter reporter(
         shelf_bg_animation_setter.GetAnimator(),
-        metrics_util::ForSmoothness(
+        metrics_util::ForSmoothnessV3(
             base::BindRepeating(&ReportSmoothness, new_state)));
 
     shelf_widget_->GetAnimatingBackground()->SetTransform(transform);
@@ -155,11 +159,16 @@ bool HotseatTransitionAnimator::ShouldDoAnimation(HotseatState old_state,
   if (!animations_enabled_for_current_session_state_)
     return false;
 
+  // The shelf should be directly hidden without animation if the auto hide
+  // state is auto hidden.
+  if (shelf_widget_->shelf_layout_manager()->is_shelf_auto_hidden())
+    return false;
+
   return (new_state == HotseatState::kShownHomeLauncher ||
           old_state == HotseatState::kShownHomeLauncher) &&
          !(new_state == HotseatState::kShownClamshell ||
            old_state == HotseatState::kShownClamshell) &&
-         Shell::Get()->tablet_mode_controller()->InTabletMode();
+         display::Screen::Get()->InTabletMode();
 }
 
 void HotseatTransitionAnimator::NotifyHotseatTransitionAnimationEnded(

@@ -38,13 +38,12 @@
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_cue.h"
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_tokenizer.h"
 #include "third_party/blink/renderer/core/html_names.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
 class Document;
-class DoublePoint;
 class VTTScanner;
 
 class VTTParserClient : public GarbageCollectedMixin {
@@ -75,11 +74,6 @@ class VTTParser final : public GarbageCollected<VTTParser> {
   VTTParser(VTTParserClient*, Document&);
   ~VTTParser() = default;
 
-  static inline bool IsRecognizedTag(const AtomicString& tag_name) {
-    return tag_name == html_names::kITag || tag_name == html_names::kBTag ||
-           tag_name == html_names::kUTag || tag_name == html_names::kRubyTag ||
-           tag_name == html_names::kRtTag;
-  }
   static inline bool IsASpace(UChar c) {
     // WebVTT space characters are U+0020 SPACE, U+0009 CHARACTER
     // TABULATION (tab), U+000A LINE FEED (LF), U+000C FORM FEED (FF), and
@@ -97,7 +91,7 @@ class VTTParser final : public GarbageCollected<VTTParser> {
   // Useful functions for parsing percentage settings.
   static bool ParsePercentageValue(VTTScanner& value_scanner,
                                    double& percentage);
-  static bool ParsePercentageValuePair(VTTScanner&, char, DoublePoint&);
+  static bool ParsePercentageValuePair(VTTScanner&, char, gfx::PointF&);
 
   // Create the DocumentFragment representation of the WebVTT cue text.
   static DocumentFragment* CreateDocumentFragmentFromCueText(Document&,
@@ -105,7 +99,7 @@ class VTTParser final : public GarbageCollected<VTTParser> {
                                                              TextTrack*);
 
   // Input data to the parser to parse.
-  void ParseBytes(const char* data, size_t length);
+  void ParseBytes(base::span<const char> data);
   void Flush();
 
   // Transfers ownership of last parsed cues to caller.

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,14 @@
 #include <cstdint>
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_table.h"
 #include "chrome/browser/predictors/loading_predictor_config.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
@@ -29,6 +31,17 @@ namespace {
 const base::FilePath::CharType kPredictorDatabaseName[] =
     FILE_PATH_LITERAL("Network Action Predictor");
 
+void ReportUMA(const base::FilePath& file_path) {
+  std::optional<int64_t> db_file_size = base::GetFileSize(file_path);
+  if (!db_file_size.has_value()) {
+    return;
+  }
+  // "x>>10 == x/1024"
+  const int kb_size = base::saturated_cast<int>(db_file_size.value() >> 10);
+  base::UmaHistogramCounts1M("LoadingPredictor.PredictorDatabaseFileSize",
+                             kb_size);
+}
+
 }  // namespace
 
 namespace predictors {
@@ -38,6 +51,11 @@ namespace predictors {
 // for all methods performing database access.
 class PredictorDatabaseInternal
     : public base::RefCountedThreadSafe<PredictorDatabaseInternal> {
+ public:
+  PredictorDatabaseInternal(const PredictorDatabaseInternal&) = delete;
+  PredictorDatabaseInternal& operator=(const PredictorDatabaseInternal&) =
+      delete;
+
  private:
   friend class base::RefCountedThreadSafe<PredictorDatabaseInternal>;
   friend class PredictorDatabase;
@@ -57,7 +75,7 @@ class PredictorDatabaseInternal
   void SetCancelled();
 
   bool is_loading_predictor_enabled_;
-  base::FilePath db_path_;
+  const base::FilePath db_path_;
   std::unique_ptr<sql::Database> db_;
   scoped_refptr<base::SequencedTaskRunner> db_task_runner_;
 
@@ -65,73 +83,87 @@ class PredictorDatabaseInternal
   // to using a WeakPtr instead.
   scoped_refptr<AutocompleteActionPredictorTable> autocomplete_table_;
   scoped_refptr<ResourcePrefetchPredictorTables> resource_prefetch_tables_;
-
-  DISALLOW_COPY_AND_ASSIGN(PredictorDatabaseInternal);
+  std::unique_ptr<base::RepeatingTimer> uma_report_timer_;
 };
 
 PredictorDatabaseInternal::PredictorDatabaseInternal(
     Profile* profile,
     scoped_refptr<base::SequencedTaskRunner> db_task_runner)
     : db_path_(profile->GetPath().Append(kPredictorDatabaseName)),
-      db_(std::make_unique<sql::Database>()),
+      db_(std::make_unique<sql::Database>(
+          sql::DatabaseOptions()
+              // TODO(pwnall): Add a meta table and remove this option.
+              .set_mmap_alt_status_discouraged(true)
+              .set_enable_views_discouraged(
+                  true),  // Required by mmap_alt_status.
+          sql::Database::Tag("Predictor"))),
       db_task_runner_(db_task_runner),
       autocomplete_table_(
           new AutocompleteActionPredictorTable(db_task_runner_)),
       resource_prefetch_tables_(
           new ResourcePrefetchPredictorTables(db_task_runner_)) {
-  db_->set_histogram_tag("Predictor");
-
-  // This db does not use [meta] table, store mmap status data elsewhere.
-  db_->set_mmap_alt_status();
-
   is_loading_predictor_enabled_ = IsLoadingPredictorEnabled(profile);
 }
 
 PredictorDatabaseInternal::~PredictorDatabaseInternal() {
+  if (uma_report_timer_) {
+    // Since `uma_report_timer_` run on `db_task_runner_`, we need to shut down
+    // it on DB sequence.
+    db_task_runner_->PostTask(FROM_HERE,
+                              base::BindOnce(&base::RepeatingTimer::Stop,
+                                             std::move(uma_report_timer_)));
+  }
   // The connection pointer needs to be deleted on the DB sequence since there
   // might be a task in progress on the DB sequence which uses this connection.
-  db_task_runner_->DeleteSoon(FROM_HERE, db_.release());
+  db_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&AutocompleteActionPredictorTable::ResetDB,
+                                autocomplete_table_));
+  db_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&ResourcePrefetchPredictorTables::ResetDB,
+                                resource_prefetch_tables_));
+  db_task_runner_->DeleteSoon(FROM_HERE, std::move(db_));
 }
 
 void PredictorDatabaseInternal::Initialize() {
-  DCHECK(db_task_runner_->RunsTasksInCurrentSequence());
-  // TODO(tburkard): figure out if we need this.
-  //  db_->set_exclusive_locking();
+  CHECK(db_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (autocomplete_table_->IsCancelled() ||
       resource_prefetch_tables_->IsCancelled()) {
     return;
   }
 
-  bool success = db_->Open(db_path_);
-  db_->Preload();
-
-  if (!success)
+  if (!db_->Open(db_path_)) {
     return;
+  }
 
   autocomplete_table_->Initialize(db_.get());
   resource_prefetch_tables_->Initialize(db_.get());
 
-  // The logged_in_predictor table is obsolete as of Chrome 44.
-  // TODO(davidben): Remove this after April 16, 2016.
-  ignore_result(db_->Execute("DROP TABLE IF EXISTS logged_in_predictor"));
-
   LogDatabaseStats();
+  ReportUMA(db_path_);
+  uma_report_timer_ = std::make_unique<base::RepeatingTimer>();
+  // Report DB usage periodically to see its growth.
+  uma_report_timer_->Start(FROM_HERE, base::Days(1),
+                           base::BindRepeating(&ReportUMA, db_path_));
 }
 
 void PredictorDatabaseInternal::SetCancelled() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
-         !BrowserThread::IsThreadInitialized(BrowserThread::UI));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
+            !BrowserThread::IsThreadInitialized(BrowserThread::UI),
+        base::NotFatalUntil::M162);
 
   autocomplete_table_->SetCancelled();
   resource_prefetch_tables_->SetCancelled();
 }
 
 void PredictorDatabaseInternal::LogDatabaseStats() {
-  DCHECK(db_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(db_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
 
   autocomplete_table_->LogDatabaseStats();
-  if (is_loading_predictor_enabled_)
+  if (is_loading_predictor_enabled_) {
     resource_prefetch_tables_->LogDatabaseStats();
+  }
 }
 
 PredictorDatabase::PredictorDatabase(
@@ -142,20 +174,19 @@ PredictorDatabase::PredictorDatabase(
       FROM_HERE, base::BindOnce(&PredictorDatabaseInternal::Initialize, db_));
 }
 
-PredictorDatabase::~PredictorDatabase() {
-}
+PredictorDatabase::~PredictorDatabase() = default;
 
 void PredictorDatabase::Shutdown() {
   db_->SetCancelled();
 }
 
 scoped_refptr<AutocompleteActionPredictorTable>
-    PredictorDatabase::autocomplete_table() {
+PredictorDatabase::autocomplete_table() {
   return db_->autocomplete_table_;
 }
 
 scoped_refptr<ResourcePrefetchPredictorTables>
-    PredictorDatabase::resource_prefetch_tables() {
+PredictorDatabase::resource_prefetch_tables() {
   return db_->resource_prefetch_tables_;
 }
 

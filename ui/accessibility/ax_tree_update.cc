@@ -1,48 +1,63 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/ax_tree_update.h"
 
-#include "ui/accessibility/ax_tree_data.h"
+#include <map>
+#include <string>
+
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "ui/accessibility/ax_enum_util.h"
+#include "ui/accessibility/ax_node_id_forward.h"
+#include "ui/accessibility/ax_tree_checks.h"
+#include "ui/accessibility/ax_tree_data.h"
 
 namespace ui {
 
 AXTreeUpdate::AXTreeUpdate() = default;
 
-AXTreeUpdate::AXTreeUpdate(const ui::AXTreeUpdate& other) = default;
+AXTreeUpdate::AXTreeUpdate(AXTreeUpdate&& other) = default;
+
+AXTreeUpdate& AXTreeUpdate::operator=(AXTreeUpdate&& other) = default;
+
+AXTreeUpdate::AXTreeUpdate(const AXTreeUpdate& other) = default;
+
+AXTreeUpdate& AXTreeUpdate::operator=(const AXTreeUpdate& other) = default;
 
 AXTreeUpdate::~AXTreeUpdate() = default;
 
-std::string AXTreeUpdate::ToString() const {
+std::string AXTreeUpdate::ToString(bool verbose, int max_items) const {
   std::string result;
 
   if (has_tree_data) {
-    result += "AXTreeUpdate tree data:" + tree_data.ToString() + "\n";
+    base::StrAppend(&result,
+                    {"AXTreeUpdate tree data:", tree_data.ToString(), "\n"});
   }
 
   if (node_id_to_clear != kInvalidAXNodeID) {
-    result += "AXTreeUpdate: clear node " +
-              base::NumberToString(node_id_to_clear) + "\n";
+    base::StrAppend(&result, {"AXTreeUpdate: clear node ",
+                              base::NumberToString(node_id_to_clear), "\n"});
   }
 
   if (root_id != kInvalidAXNodeID) {
-    result += "AXTreeUpdate: root id " + base::NumberToString(root_id) + "\n";
+    base::StrAppend(&result, {"AXTreeUpdate: root id ",
+                              base::NumberToString(root_id), "\n"});
   }
 
-  if (event_from != ax::mojom::EventFrom::kNone)
-    result += "event_from=" + std::string(ui::ToString(event_from)) + "\n";
-  if (event_from_action != ax::mojom::Action::kNone)
-    result +=
-        "event_from_action=" + std::string(ui::ToString(event_from_action)) +
-        "\n";
+  if (event_from != ax::mojom::EventFrom::kNone) {
+    base::StrAppend(&result, {"event_from=", ui::ToString(event_from), "\n"});
+  }
+  if (event_from_action != ax::mojom::Action::kNone) {
+    base::StrAppend(
+        &result, {"event_from_action=", ui::ToString(event_from_action), "\n"});
+  }
 
   if (!event_intents.empty()) {
     result += "event_intents=[\n";
     for (const auto& event_intent : event_intents)
-      result += "  " + event_intent.ToString() + "\n";
+      base::StrAppend(&result, {"  ", event_intent.ToString(), "\n"});
     result += "]\n";
   }
 
@@ -53,9 +68,12 @@ std::string AXTreeUpdate::ToString() const {
   // parents.
   std::map<AXNodeID, int> id_to_indentation;
   for (const AXNodeData& node_data : nodes) {
+    if (max_items > 0 && max_items-- == 0) {
+      break;
+    }
     int indent = id_to_indentation[node_data.id];
-    result += std::string(2 * indent, ' ');
-    result += node_data.ToString() + "\n";
+    result.append(2 * indent, ' ');
+    base::StrAppend(&result, {node_data.ToString(/*verbose=*/verbose), "\n"});
     for (AXNodeID child_id : node_data.child_ids)
       id_to_indentation[child_id] = indent + 1;
   }
@@ -63,18 +81,35 @@ std::string AXTreeUpdate::ToString() const {
   return result;
 }
 
-bool TreeUpdatesCanBeMerged(
-    const AXTreeUpdate& u1,
-    const AXTreeUpdate& u2) {
-  if (u2.node_id_to_clear)
-    return false;
+size_t AXTreeUpdate::ByteSize() const {
+  size_t total_size = sizeof(AXTreeUpdate);
+  for (auto& node : nodes) {
+    total_size += node.ByteSize();
+  }
+  total_size += event_intents.size() * sizeof(AXEventIntent);
 
-  if (u2.has_tree_data && u2.tree_data != u1.tree_data)
-    return false;
+  return total_size;
+}
 
-  if (u2.root_id != u1.root_id)
-    return false;
+void AXTreeUpdate::AccumulateSize(
+    AXNodeData::AXNodeDataSize& node_data_size) const {
+  for (const auto& node : nodes) {
+    node.AccumulateSize(node_data_size);
+  }
+}
 
+bool AXTreeUpdate::HasValidAXNodeIDsFromRenderer() const {
+  if (!IsValidAXNodeIDFromRenderer(node_id_to_clear)) {
+    return false;
+  }
+  if (!IsValidAXNodeIDFromRenderer(root_id)) {
+    return false;
+  }
+  for (const AXNodeData& node : nodes) {
+    if (!node.HasValidAXNodeIDsFromRenderer()) {
+      return false;
+    }
+  }
   return true;
 }
 

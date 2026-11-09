@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,21 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HIGHLIGHT_HIGHLIGHT_H_
 
 #include "third_party/blink/renderer/bindings/core/v8/iterable.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_highlight_type.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_sync_iterator_highlight.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/abstract_range.h"
+#include "third_party/blink/renderer/core/dom/live_collection_iterator.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
-using HighlightSetIterable = SetlikeIterable<Member<AbstractRange>>;
+using HighlightSetIterable = ValueSyncIterable<Highlight>;
 class HighlightRegistry;
 
 class CORE_EXPORT Highlight : public ScriptWrappable,
@@ -36,50 +42,56 @@ class CORE_EXPORT Highlight : public ScriptWrappable,
   wtf_size_t size() const;
 
   const int32_t& priority() const { return priority_; }
-  void setPriority(const int32_t& priority) { priority_ = priority; }
+  void setPriority(const int32_t&);
+
+  V8HighlightType type() const { return type_; }
+  void setType(const V8HighlightType& type) { type_ = type; }
 
   bool Contains(AbstractRange*) const;
 
-  class IterationSource final : public HighlightSetIterable::IterationSource {
-   public:
-    explicit IterationSource(const Highlight& highlight);
+  // HighlightSetIterable implements live iteration following Set semantics.
+  using HighlightLiveIterator = LiveCollectionIterator<AbstractRange>;
 
-    bool Next(ScriptState*,
-              Member<AbstractRange>&,
-              Member<AbstractRange>&,
-              ExceptionState&) override;
+  class CORE_EXPORT IterationSource final
+      : public HighlightSetIterable::IterationSource,
+        public HighlightLiveIterator {
+   public:
+    explicit IterationSource(Highlight& highlight);
+
+    bool FetchNextItem(ScriptState*, AbstractRange*&) override;
 
     void Trace(blink::Visitor*) const override;
 
    private:
-    wtf_size_t index_;
-    HeapVector<Member<AbstractRange>> highlight_ranges_snapshot_;
+    Member<Highlight> highlight_;
   };
-
-  HighlightSetIterable::IterationSource* StartIteration(
-      ScriptState*,
-      ExceptionState&) override;
 
   const HeapLinkedHashSet<Member<AbstractRange>>& GetRanges() const {
     return highlight_ranges_;
   }
 
   void RegisterIn(HighlightRegistry* highlight_registry);
-  void Deregister();
+  void DeregisterFrom(HighlightRegistry* highlight_registry);
 
  private:
+  HighlightSetIterable::IterationSource* CreateIterationSource(
+      ScriptState*) override;
+
   HeapLinkedHashSet<Member<AbstractRange>> highlight_ranges_;
+  // Active iteration sources that need to be notified of mutations.
+  HeapHashSet<WeakMember<HighlightLiveIterator>> active_iterators_;
+  void NotifyIteratorsWillRemoveItem(AbstractRange* range);
+  void NotifyIteratorsWillClear();
+
   int32_t priority_ = 0;
-  // Since a Highlight can be registered many times in the HighlightRegistry
-  // under different names, we need to keep track of the number of times it's
-  // present in the registry (|times_registered_|) to know when it's not
-  // registered anymore (can't be done only with |highlight_registry_|). If the
-  // Highlight is not registered anywhere then we avoid scheduling repaints in
-  // case of modifications to it.
-  // TODO(crbug.com/1225034): This is not taking into account when a Highlight
-  // is added to HighlightRegistries of multiple same-domain iframes.
-  unsigned times_registered_ = 0;
-  Member<HighlightRegistry> highlight_registry_ = nullptr;
+  V8HighlightType type_ = V8HighlightType{V8HighlightType::Enum::kHighlight};
+  // Since a Highlight can be registered many times under different names in
+  // many HighlightRegistries, we need to keep track of the number of times
+  // it's present in each registry. If the Highlight is not registered anywhere,
+  // then we avoid scheduling repaints in case of modifications to it.
+  HeapHashMap<Member<HighlightRegistry>, unsigned>
+      containing_highlight_registries_;
+  void ScheduleRepaintsInContainingHighlightRegistries() const;
 };
 
 }  // namespace blink

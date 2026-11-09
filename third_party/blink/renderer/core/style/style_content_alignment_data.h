@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,8 +35,21 @@ class StyleContentAlignmentData {
     overflow_ = static_cast<unsigned>(overflow);
   }
 
-  ContentPosition GetPosition() const {
+  ContentPosition GetComputedPosition() const {
     return static_cast<ContentPosition>(position_);
+  }
+  // Returns the used position, which is the keyword that we are actually using
+  // internally. In the case of 'flex-start'/'flex-end', it aliases to
+  // 'flow-start'/'flow-end', which is what we use internally.
+  ContentPosition GetUsedPosition() const {
+    const ContentPosition position = GetComputedPosition();
+    if (position == ContentPosition::kFlexStart) {
+      return ContentPosition::kFlowStart;
+    }
+    if (position == ContentPosition::kFlexEnd) {
+      return ContentPosition::kFlowEnd;
+    }
+    return position;
   }
   ContentDistributionType Distribution() const {
     return static_cast<ContentDistributionType>(distribution_);
@@ -48,10 +61,6 @@ class StyleContentAlignmentData {
   bool operator==(const StyleContentAlignmentData& o) const {
     return position_ == o.position_ && distribution_ == o.distribution_ &&
            overflow_ == o.overflow_;
-  }
-
-  bool operator!=(const StyleContentAlignmentData& o) const {
-    return !(*this == o);
   }
 
  private:

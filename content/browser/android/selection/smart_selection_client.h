@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 
 #include <string>
 
-#include "base/android/jni_weak_ref.h"
-#include "base/macros.h"
+#include "base/android/scoped_java_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "content/public/browser/web_contents_observer.h"
 
 namespace content {
 
@@ -21,39 +21,35 @@ class WebContents;
 // This class performs one operation: retrieves the selected text together with
 // its surrounding context from WebContents. This surrounding text is obtained
 // asynchronously from the current focused frame and passed back to Java layer.
-class SmartSelectionClient {
+class SmartSelectionClient : public WebContentsObserver {
  public:
-  SmartSelectionClient(JNIEnv* env,
-                       const base::android::JavaRef<jobject>& obj,
-                       WebContents* web_contents);
-  ~SmartSelectionClient();
+  explicit SmartSelectionClient(WebContents* web_contents);
+
+  SmartSelectionClient(const SmartSelectionClient&) = delete;
+  SmartSelectionClient& operator=(const SmartSelectionClient&) = delete;
+
+  ~SmartSelectionClient() override;
 
   // Sends asynchronius request to retrieve the text.
   void RequestSurroundingText(JNIEnv* env,
-                              const base::android::JavaParamRef<jobject>& obj,
                               int num_extra_characters,
                               int callback_data);
 
   // Cancels all pending requests.
-  void CancelAllRequests(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj);
+  void CancelAllRequests(JNIEnv* env);
 
  private:
+  // WebContentsObserver:
+  void WebContentsDestroyed() override;
+
   void OnSurroundingTextReceived(int callback_data,
                                  const std::u16string& text,
                                  uint32_t start,
                                  uint32_t end);
 
-  // A weak reference to the Java ContentSelectionClient object.
-  JavaObjectWeakGlobalRef java_ref_;
-
-  // WebContents is used to find the relevant RenderFrameHost that can send
-  // the request for the text.
-  WebContents* web_contents_;
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env);
 
   base::WeakPtrFactory<SmartSelectionClient> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SmartSelectionClient);
 };
 
 }  // namespace content

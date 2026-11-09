@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 
 #include <string>
 
-#include "base/compiler_specific.h"
 #include "base/time/time.h"
 
 namespace base {
 class Value;
+class ValueView;
 }
 
 typedef bool (*IsVLogOnFunc)(int vlog_level);
@@ -32,7 +32,7 @@ class Log {
   static bool truncate_logged_params;
   static IsVLogOnFunc is_vlog_on_func;
 
-  virtual ~Log() {}
+  virtual ~Log() = default;
 
   // Adds an entry to the log.
   virtual void AddEntryTimestamped(const base::Time& timestamp,
@@ -55,7 +55,7 @@ class Log {
 bool IsVLogOn(int vlog_level);
 bool TruncateLoggedParams();
 
-std::string PrettyPrintValue(const base::Value& value);
+std::string PrettyPrintValue(base::ValueView value);
 
 // Returns a pretty printed value, after truncating long strings.
 std::string FormatValueForDisplay(const base::Value& value);

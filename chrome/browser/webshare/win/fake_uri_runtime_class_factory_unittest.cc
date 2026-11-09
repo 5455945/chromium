@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <wrl/implements.h>
 
-#include "base/strings/string_piece.h"
+#include "base/debug/stack_trace.h"
 #include "base/win/scoped_hstring.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -18,9 +18,6 @@ using Microsoft::WRL::Make;
 namespace webshare {
 
 TEST(FakeUriRuntimeClassFactoryTest, CreateUri) {
-  if (!base::win::ScopedHString::ResolveCoreWinRTStringDelayload())
-    return;
-
   auto factory = Make<FakeUriRuntimeClassFactory>();
 
   auto uri = base::win::ScopedHString::Create("https://www.site.come");
@@ -34,9 +31,8 @@ TEST(FakeUriRuntimeClassFactoryTest, CreateUri) {
 }
 
 TEST(FakeUriRuntimeClassFactoryTest, CreateUri_Invalid) {
-  if (!base::win::ScopedHString::ResolveCoreWinRTStringDelayload())
-    return;
-
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   auto factory = Make<FakeUriRuntimeClassFactory>();
 
   auto uri = base::win::ScopedHString::Create("");

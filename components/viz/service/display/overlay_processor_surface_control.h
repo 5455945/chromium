@@ -1,9 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_OVERLAY_PROCESSOR_SURFACE_CONTROL_H_
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_OVERLAY_PROCESSOR_SURFACE_CONTROL_H_
+
+#include <optional>
 
 #include "components/viz/service/display/overlay_processor_using_strategy.h"
 
@@ -16,6 +18,8 @@ class VIZ_SERVICE_EXPORT OverlayProcessorSurfaceControl
   OverlayProcessorSurfaceControl();
   ~OverlayProcessorSurfaceControl() override;
 
+  static std::optional<gfx::ColorSpace> GetOverrideColorSpace();
+
   bool IsOverlaySupported() const override;
 
   bool NeedsSurfaceDamageRectList() const override;
@@ -23,13 +27,24 @@ class VIZ_SERVICE_EXPORT OverlayProcessorSurfaceControl
   // Override OverlayProcessorUsingStrategy.
   void SetDisplayTransformHint(gfx::OverlayTransform transform) override;
   void SetViewportSize(const gfx::Size& size) override;
-  void AdjustOutputSurfaceOverlay(
-      absl::optional<OutputSurfaceOverlayPlane>* output_surface_plane) override;
-  void CheckOverlaySupport(
-      const OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
+  void CheckOverlaySupportImpl(
+      const std::optional<OverlayCandidate>& primary_plane,
       OverlayCandidateList* candidates) override;
   gfx::Rect GetOverlayDamageRectForOutputSurface(
       const OverlayCandidate& overlay) const override;
+  bool SupportsFlipRotateTransform() const override;
+
+  void AdjustPrimaryPlaneForDisplayTransformForTesting(
+      OverlayCandidate& primary_plane) const {
+    AdjustPrimaryPlaneForDisplayTransform(primary_plane);
+  }
+
+ protected:
+  void InsertPrimaryPlane(OverlayCandidate primary_plane,
+                          OverlayCandidateList& candidates) override;
+
+  virtual void AdjustPrimaryPlaneForDisplayTransform(
+      OverlayCandidate& primary_plane) const;
 
  private:
   gfx::OverlayTransform display_transform_ = gfx::OVERLAY_TRANSFORM_NONE;

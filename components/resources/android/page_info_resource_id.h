@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,14 +24,20 @@
 
 // PageInfoUI images, used in ConnectionInfoView
 // Good:
-DECLARE_RESOURCE_ID(IDR_PAGEINFO_GOOD, R.drawable.omnibox_https_valid)
+DECLARE_RESOURCE_ID(IDR_PAGEINFO_GOOD, R.drawable.omnibox_https_valid_lock)
+// Good (new version):
+DECLARE_RESOURCE_ID(IDR_PAGEINFO_GOOD_NEW, R.drawable.ic_lock_24dp)
 // Bad:
 DECLARE_RESOURCE_ID(IDR_PAGEINFO_BAD, R.drawable.omnibox_not_secure_warning)
+// Internal page:
+DECLARE_RESOURCE_ID(IDR_PAGEINFO_INTERNAL, R.drawable.omnibox_info)
 
 // PageInfoUI colors, used in ConnectionInfoView
 // Good:
-DECLARE_RESOURCE_ID(IDR_PAGEINFO_GOOD_COLOR, R.color.default_icon_color)
+DECLARE_RESOURCE_ID(IDR_PAGEINFO_GOOD_COLOR,
+                    R.color.default_icon_color_tint_list)
 // Warning:
-DECLARE_RESOURCE_ID(IDR_PAGEINFO_WARNING_COLOR, R.color.default_icon_color_blue)
+DECLARE_RESOURCE_ID(IDR_PAGEINFO_WARNING_COLOR,
+                    R.color.default_icon_color_accent1_tint_list)
 // Bad:
 DECLARE_RESOURCE_ID(IDR_PAGEINFO_BAD_COLOR, R.color.default_text_color_error)

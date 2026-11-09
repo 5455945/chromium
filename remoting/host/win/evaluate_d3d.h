@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,10 @@ int EvaluateD3D();
 // Note, this is not a cheap call, it uses EvaluateCapability() internally to
 // spawn a new process, which may take a noticeable amount of time.
 bool GetD3DCapabilities(std::vector<std::string>* result);
+
+// Returns true if |capabilities| indicates that the DirectX capturer is
+// supported.
+bool HasDirectXCapturerCapability(const std::vector<std::string>& capabilities);
 
 // Used to ensure that pulling in the DirectX dependencies and creating a D3D
 // Device does not result in a crash or system instability.

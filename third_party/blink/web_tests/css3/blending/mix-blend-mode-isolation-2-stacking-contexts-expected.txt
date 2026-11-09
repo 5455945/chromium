@@ -1,17 +1,13 @@
 {
   "layers": [
     {
-      "name": "LayoutNGBlockFlow HTML",
-      "bounds": [800, 600]
-    },
-    {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='stacking-context'",
-      "position": [8, 8],
+      "name": "Scrolling background of LayoutView #document",
+      "bounds": [800, 600],
       "contentsOpaque": true,
-      "drawsContent": false
+      "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='stacking-context'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='stacking-context'",
       "position": [8, 8],
       "bounds": [160, 90],
       "contentsOpaque": true,
@@ -23,18 +19,7 @@
       "transform": 1
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='stacking-context' (foreground) Layer",
-      "position": [8, 8],
-      "drawsContent": false
-    },
-    {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='accelerated stacking-context'",
-      "contentsOpaque": true,
-      "drawsContent": false,
-      "transform": 2
-    },
-    {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='stacking-context'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='stacking-context'",
       "bounds": [160, 90],
       "contentsOpaque": true,
       "backgroundColor": "#008000",
@@ -46,13 +31,9 @@
       "transform": 2
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='accelerated stacking-context' (foreground) Layer",
-      "drawsContent": false,
-      "transform": 2
-    },
-    {
-      "name": "LayoutNGBlockFlow HTML (foreground) Layer",
-      "bounds": [800, 600]
+      "name": "LayoutBlockFlow HTML",
+      "position": [8, 8],
+      "bounds": [784, 579]
     }
   ],
   "transforms": [

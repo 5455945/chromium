@@ -1,24 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_TEST_TEST_NAVIGATION_THROTTLE_INSERTER_H_
 #define CONTENT_PUBLIC_TEST_TEST_NAVIGATION_THROTTLE_INSERTER_H_
 
-#include <memory>
-
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "content/public/browser/web_contents_observer.h"
 
 namespace content {
 
 class NavigationThrottle;
+class NavigationThrottleRegistry;
 class WebContents;
 
 using ThrottleInsertionCallback =
-    base::RepeatingCallback<std::unique_ptr<NavigationThrottle>(
-        NavigationHandle*)>;
+    base::RepeatingCallback<void(NavigationThrottleRegistry& registry)>;
 
 // This class is instantiated with a NavigationThrottle factory callback, and
 //  - Calls the callback in every DidStartNavigation.
@@ -28,6 +25,12 @@ class TestNavigationThrottleInserter : public WebContentsObserver {
  public:
   TestNavigationThrottleInserter(WebContents* web_contents,
                                  ThrottleInsertionCallback callback);
+
+  TestNavigationThrottleInserter(const TestNavigationThrottleInserter&) =
+      delete;
+  TestNavigationThrottleInserter& operator=(
+      const TestNavigationThrottleInserter&) = delete;
+
   ~TestNavigationThrottleInserter() override;
 
   // WebContentsObserver:
@@ -35,8 +38,6 @@ class TestNavigationThrottleInserter : public WebContentsObserver {
 
  private:
   ThrottleInsertionCallback callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestNavigationThrottleInserter);
 };
 
 }  // namespace content

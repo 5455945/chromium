@@ -27,72 +27,27 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_CONSTRUCTION_SITE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_CONSTRUCTION_SITE_H_
 
+#include "base/check_op.h"
+#include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/parser_content_policy.h"
 #include "third_party/blink/renderer/core/html/parser/html_element_stack.h"
 #include "third_party/blink/renderer/core/html/parser/html_formatting_element_list.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
-struct HTMLConstructionSiteTask {
-  DISALLOW_NEW();
-
- public:
-  enum Operation {
-    kInsert,
-    kInsertText,                // Handles possible merging of text nodes.
-    kInsertAlreadyParsedChild,  // Insert w/o calling begin/end parsing.
-    kReparent,
-    kTakeAllChildren,
-  };
-
-  explicit HTMLConstructionSiteTask(Operation op)
-      : operation(op), self_closing(false) {}
-
-  void Trace(Visitor* visitor) const {
-    visitor->Trace(parent);
-    visitor->Trace(next_child);
-    visitor->Trace(child);
-  }
-
-  ContainerNode* OldParent() {
-    // It's sort of ugly, but we store the |oldParent| in the |child| field of
-    // the task so that we don't bloat the HTMLConstructionSiteTask object in
-    // the common case of the Insert operation.
-    return To<ContainerNode>(child.Get());
-  }
-
-  Operation operation;
-  Member<ContainerNode> parent;
-  Member<Node> next_child;
-  Member<Node> child;
-  bool self_closing;
-};
-
-}  // namespace blink
-
-WTF_ALLOW_MOVE_INIT_AND_COMPARE_WITH_MEM_FUNCTIONS(
-    blink::HTMLConstructionSiteTask)
-
-namespace blink {
-
 // Note: These are intentionally ordered so that when we concatonate strings and
 // whitespaces the resulting whitespace is ws = min(ws1, ws2).
-enum WhitespaceMode {
+enum class WhitespaceMode {
   kWhitespaceUnknown,
   kNotAllWhitespace,
   kAllWhitespace,
-};
-
-enum FlushMode {
-  // Flush pending text. Flush queued tasks.
-  kFlushAlways,
-
-  // Flush pending text if node has length limit. Flush queued tasks.
-  kFlushIfAtTextLimit,
+  // Even stronger guarantee: string of type '\n[space]*'.
+  kNewlineThenWhitespace,
 };
 
 class AtomicHTMLToken;
@@ -101,63 +56,70 @@ class Document;
 class Element;
 class HTMLFormElement;
 class HTMLParserReentryPermit;
-enum class DeclarativeShadowRootType;
+class ParserRootInsertionPoint;
+class StreamingSanitizer;
 
 class HTMLConstructionSite final {
   DISALLOW_NEW();
 
  public:
+  struct InsertionLocation {
+    STACK_ALLOCATED();
+
+   public:
+    bool IsValid() const {
+      return !next_child || next_child->parentNode() == parent;
+    }
+
+    ContainerNode* parent = nullptr;
+    Node* next_child = nullptr;
+  };
+
+  static constexpr unsigned kMaximumHTMLParserDOMTreeDepth = 512;
+
   HTMLConstructionSite(HTMLParserReentryPermit*,
                        Document&,
-                       ParserContentPolicy);
+                       ParserContentPolicy,
+                       ContainerNode*,
+                       Element*,
+                       CustomElementRegistry*,
+                       StreamingSanitizer*,
+                       ParserRootInsertionPoint*);
   HTMLConstructionSite(const HTMLConstructionSite&) = delete;
   HTMLConstructionSite& operator=(const HTMLConstructionSite&) = delete;
   ~HTMLConstructionSite();
-  void Trace(Visitor*) const;
 
-  void InitFragmentParsing(DocumentFragment*, Element* context_element);
+  void Trace(Visitor*) const;
 
   void Detach();
 
-  // executeQueuedTasks empties the queue but does not flush pending text.
-  // NOTE: Possible reentrancy via JavaScript execution.
-  void ExecuteQueuedTasks();
+  void FlushPendingText();
 
-  // flushPendingText turns pending text into queued Text insertions, but does
-  // not execute them.
-  void FlushPendingText(FlushMode);
-
-  // Called before every token in HTMLTreeBuilder::processToken, thus inlined:
-  void Flush(FlushMode mode) {
-    if (!HasPendingTasks())
-      return;
-    FlushPendingText(mode);
-    // NOTE: Possible reentrancy via JavaScript execution.
-    ExecuteQueuedTasks();
-    DCHECK(mode == kFlushIfAtTextLimit || !HasPendingTasks());
-  }
-
-  bool HasPendingTasks() {
-    return !pending_text_.IsEmpty() || !task_queue_.IsEmpty();
-  }
+  bool HasPendingTasks() const { return !pending_text_.IsEmpty(); }
 
   void SetDefaultCompatibilityMode();
   void ProcessEndOfFile();
   void FinishedParsing();
 
   void InsertDoctype(AtomicHTMLToken*);
+  void InsertProcessingInstruction(AtomicHTMLToken*);
+  void InsertProcessingInstructionOnDocument(AtomicHTMLToken*);
+  void InsertProcessingInstructionOnHTMLHtmlElement(AtomicHTMLToken*);
   void InsertComment(AtomicHTMLToken*);
   void InsertCommentOnDocument(AtomicHTMLToken*);
   void InsertCommentOnHTMLHtmlElement(AtomicHTMLToken*);
   void InsertHTMLElement(AtomicHTMLToken*);
-  void InsertHTMLTemplateElement(AtomicHTMLToken*, DeclarativeShadowRootType);
+  void InsertHTMLTemplateElement(AtomicHTMLToken*, String);
   void InsertSelfClosingHTMLElementDestroyingToken(AtomicHTMLToken*);
   void InsertFormattingElement(AtomicHTMLToken*);
   void InsertHTMLHeadElement(AtomicHTMLToken*);
   void InsertHTMLBodyElement(AtomicHTMLToken*);
-  void InsertHTMLFormElement(AtomicHTMLToken*, bool is_demoted = false);
+  void InsertHTMLFormElement(AtomicHTMLToken*,
+                             bool is_demoted,
+                             bool is_parsing_template_contents);
   void InsertScriptElement(AtomicHTMLToken*);
-  void InsertTextNode(const StringView&, WhitespaceMode = kWhitespaceUnknown);
+  void InsertTextNode(const StringView&,
+                      WhitespaceMode = WhitespaceMode::kWhitespaceUnknown);
   void InsertForeignElement(AtomicHTMLToken*,
                             const AtomicString& namespace_uri);
 
@@ -165,43 +127,41 @@ class HTMLConstructionSite final {
   void InsertHTMLHtmlStartTagInBody(AtomicHTMLToken*);
   void InsertHTMLBodyStartTagInBody(AtomicHTMLToken*);
 
-  void Reparent(HTMLElementStack::ElementRecord* new_parent,
-                HTMLElementStack::ElementRecord* child);
-  void Reparent(HTMLElementStack::ElementRecord* new_parent,
-                HTMLStackItem* child);
+  void Reparent(HTMLStackItem* new_parent, HTMLStackItem* child);
+  void RemoveNode(HTMLStackItem* child);
+
+  Sanitizer::Action CheckSanitizerAction(Node* node) const;
+  Sanitizer::Action SanitizeAndReturnAction(Node* node) const;
+
   // insertAlreadyParsedChild assumes that |child| has already been parsed
   // (i.e., we're just moving it around in the tree rather than parsing it for
   // the first time). That means this function doesn't call beginParsingChildren
   // / finishParsingChildren.
   void InsertAlreadyParsedChild(HTMLStackItem* new_parent,
-                                HTMLElementStack::ElementRecord* child);
-  void TakeAllChildren(HTMLStackItem* new_parent,
-                       HTMLElementStack::ElementRecord* old_parent);
+                                HTMLStackItem* child);
+  void TakeAllChildren(HTMLStackItem* new_parent, HTMLStackItem* old_parent);
 
   HTMLStackItem* CreateElementFromSavedToken(HTMLStackItem*);
 
   bool ShouldFosterParent() const;
   void FosterParent(Node*);
+  void FosterParentAlreadyParsedChild(Node*);
 
   bool IndexOfFirstUnopenFormattingElement(
       unsigned& first_unopen_element_index) const;
   void ReconstructTheActiveFormattingElements();
 
   void GenerateImpliedEndTags();
-  void GenerateImpliedEndTagsWithExclusion(const AtomicString& tag_name);
+  void GenerateImpliedEndTagsWithExclusion(const HTMLTokenName& name);
 
   bool InQuirksMode();
 
   bool IsEmpty() const { return !open_elements_.StackDepth(); }
-  HTMLElementStack::ElementRecord* CurrentElementRecord() const {
-    return open_elements_.TopRecord();
-  }
   Element* CurrentElement() const { return open_elements_.Top(); }
   ContainerNode* CurrentNode() const { return open_elements_.TopNode(); }
   HTMLStackItem* CurrentStackItem() const {
     return open_elements_.TopStackItem();
   }
-  HTMLStackItem* OneBelowTop() const { return open_elements_.OneBelowTop(); }
   Document& OwnerDocumentForCurrentNode();
   HTMLElementStack* OpenElements() const { return &open_elements_; }
   HTMLFormattingElementList* ActiveFormattingElements() const {
@@ -214,12 +174,18 @@ class HTMLConstructionSite final {
   Element* Head() const { return head_->GetElement(); }
   HTMLStackItem* HeadStackItem() const { return head_.Get(); }
 
-  bool IsFormElementPointerNonNull() const { return form_; }
+  bool IsFormElementPointerNonNull() const { return form_ != nullptr; }
   HTMLFormElement* TakeForm();
 
   ParserContentPolicy GetParserContentPolicy() {
     return parser_content_policy_;
   }
+
+  static CustomElementDefinition* LookUpCustomElementDefinition(
+      Document&,
+      const QualifiedName&,
+      const AtomicString& is,
+      CustomElementRegistry* registry);
 
   class RedirectToFosterParentGuard {
     STACK_ALLOCATED();
@@ -245,33 +211,38 @@ class HTMLConstructionSite final {
   };
 
  private:
-  // In the common case, this queue will have only one task because most tokens
-  // produce only one DOM mutation.
-  typedef HeapVector<HTMLConstructionSiteTask, 1> TaskQueue;
-
   void SetCompatibilityMode(Document::CompatibilityMode);
-  void SetCompatibilityModeFromDoctype(const String& name,
+  void SetCompatibilityModeFromDoctype(const html_names::HTMLTag tag,
                                        const String& public_id,
                                        const String& system_id);
 
-  void AttachLater(ContainerNode* parent,
-                   Node* child,
-                   bool self_closing = false);
+  void Attach(InsertionLocation location,
+              Node* child,
+              bool self_closing = false);
+  void Attach(ContainerNode* parent, Node* child, bool self_closing = false) {
+    Attach({parent, nullptr}, child, self_closing);
+  }
 
-  void FindFosterSite(HTMLConstructionSiteTask&);
+  void AttachOrFosterParent(Node* child,
+                            HTMLStackItem* item = nullptr,
+                            bool self_closing = false);
+  void AttachOrFosterParent(HTMLStackItem* item);
+
+  InsertionLocation CurrentInsertionLocation();
+  InsertionLocation AdjustInsertionLocation(InsertionLocation location);
+
+  void FindFosterSite(InsertionLocation&);
 
   CreateElementFlags GetCreateElementFlags() const;
+  bool ShouldMarkScriptAlreadyStarted() const;
   Element* CreateElement(AtomicHTMLToken*, const AtomicString& namespace_uri);
 
   void MergeAttributesFromTokenIntoElement(AtomicHTMLToken*, Element*);
 
-  void ExecuteTask(HTMLConstructionSiteTask&);
-  void QueueTask(const HTMLConstructionSiteTask&);
-
-  CustomElementDefinition* LookUpCustomElementDefinition(
-      Document&,
-      const QualifiedName&,
-      const AtomicString& is);
+  bool ShouldInsertChild(const InsertionLocation& location, Node* child);
+  StreamingSanitizer* ActiveSanitizer(
+      Node* node_being_inserted = nullptr) const;
+  void SetAttributes(Element* element, AtomicHTMLToken* token);
 
   Member<HTMLParserReentryPermit> reentry_permit_;
   Member<Document> document_;
@@ -281,6 +252,8 @@ class HTMLConstructionSite final {
   // and a Document in all other cases.
   Member<ContainerNode> attachment_root_;
 
+  Member<ParserRootInsertionPoint> root_insertion_point_;
+
   // https://html.spec.whatwg.org/C/#head-element-pointer
   Member<HTMLStackItem> head_;
   // https://html.spec.whatwg.org/C/#form-element-pointer
@@ -288,13 +261,11 @@ class HTMLConstructionSite final {
   mutable HTMLElementStack open_elements_;
   mutable HTMLFormattingElementList active_formatting_elements_;
 
-  TaskQueue task_queue_;
-
   class PendingText final {
     DISALLOW_NEW();
 
    public:
-    PendingText() : whitespace_mode(kWhitespaceUnknown) {}
+    PendingText() : whitespace_mode(WhitespaceMode::kWhitespaceUnknown) {}
 
     void Append(ContainerNode* new_parent,
                 Node* new_next_child,
@@ -308,26 +279,25 @@ class HTMLConstructionSite final {
       whitespace_mode = std::min(whitespace_mode, new_whitespace_mode);
     }
 
-    void Swap(PendingText& other) {
-      std::swap(whitespace_mode, other.whitespace_mode);
-      parent.Swap(other.parent);
-      next_child.Swap(other.next_child);
-      string_builder.Swap(other.string_builder);
-    }
-
     void Discard() {
-      PendingText discarded_text;
-      Swap(discarded_text);
+      if (IsEmpty()) {
+        return;
+      }
+
+      parent.Clear();
+      next_child.Clear();
+      string_builder.Clear();
+      whitespace_mode = WhitespaceMode::kWhitespaceUnknown;
     }
 
-    bool IsEmpty() {
+    bool IsEmpty() const {
       // When the stringbuilder is empty, the parent and whitespace should also
       // be "empty".
-      DCHECK_EQ(string_builder.IsEmpty(), !parent);
-      DCHECK(!string_builder.IsEmpty() || !next_child);
-      DCHECK(!string_builder.IsEmpty() ||
-             (whitespace_mode == kWhitespaceUnknown));
-      return string_builder.IsEmpty();
+      DCHECK_EQ(string_builder.empty(), !parent);
+      DCHECK(!string_builder.empty() || !next_child);
+      DCHECK(!string_builder.empty() ||
+             (whitespace_mode == WhitespaceMode::kWhitespaceUnknown));
+      return string_builder.empty();
     }
 
     void Trace(Visitor*) const;
@@ -340,7 +310,8 @@ class HTMLConstructionSite final {
 
   PendingText pending_text_;
 
-  ParserContentPolicy parser_content_policy_;
+  const ParserContentPolicy parser_content_policy_;
+  const bool is_scripting_content_allowed_;
   bool is_parsing_fragment_;
 
   // http://www.whatwg.org/specs/web-apps/current-work/multipage/tokenization.html#parsing-main-intable
@@ -350,6 +321,15 @@ class HTMLConstructionSite final {
   bool redirect_attach_to_foster_parent_;
 
   bool in_quirks_mode_;
+
+  // Whether duplicate attribute was reported.
+  bool reported_duplicate_attribute_ = false;
+
+  // The custom element registry used to parse html and grab definition from
+  // when custom elements are encountered.
+  Member<CustomElementRegistry> custom_element_registry_;
+
+  Member<StreamingSanitizer> sanitizer_;
 };
 
 }  // namespace blink

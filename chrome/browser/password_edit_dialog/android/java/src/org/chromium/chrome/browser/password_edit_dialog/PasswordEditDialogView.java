@@ -1,106 +1,161 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.password_edit_dialog;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
+import android.text.Editable;
+import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.AttributeSet;
 import android.view.View;
-import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemSelectedListener;
 import android.widget.ArrayAdapter;
+import android.widget.AutoCompleteTextView;
 import android.widget.LinearLayout;
-import android.widget.Spinner;
 import android.widget.TextView;
 
+import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.textfield.TextInputLayout;
+
 import org.chromium.base.Callback;
-import org.chromium.ui.modelutil.PropertyKey;
-import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.browser_ui.widget.FadingEdgeScrollView;
+import org.chromium.ui.text.EmptyTextWatcher;
 
 import java.util.List;
 
 /**
- * The custom view for password edit modal dialog.
+ * The view which represents a username label and input control and a password label and input
+ * control. The view has the functionality of editing both password and username.
  */
-public class PasswordEditDialogView extends LinearLayout implements OnItemSelectedListener {
-    private Spinner mUsernamesSpinner;
-    private TextView mPasswordView;
+@NullMarked
+class PasswordEditDialogView extends LinearLayout {
+    private AutoCompleteTextView mUsernameView;
+    private TextInputLayout mUsernameInputLayout;
+    private TextInputEditText mPasswordField;
+    private TextInputLayout mPasswordInputLayout;
+    private @Nullable Callback<String> mUsernameChangedCallback;
+    private @Nullable Callback<String> mPasswordChangedCallback;
+    private @Nullable List<String> mUsernames;
     private TextView mFooterView;
-    private Callback<Integer> mUsernameSelectedCallback;
-
-    /**
-     * The view binder method to propagate parameters from model to view
-     */
-    public static void bind(
-            PropertyModel model, PasswordEditDialogView dialogView, PropertyKey propertyKey) {
-        if (propertyKey == PasswordEditDialogProperties.USERNAMES) {
-            // Propagation of USERNAMES property triggers passing both USERNAMES and
-            // SELECTED_USERNAME_INDEX properties to the view. This is safe because both properties
-            // are set through property model builder and available by the time the property model
-            // is bound to the view. The SELECTED_USERNAME_INDEX property is writable since it
-            // maintains username index of the user, currently selected in UI. Updating the property
-            // by itself doesn't get propagated to the view as the value originates in the view and
-            // gets routed to coordinator through USERNAME_SELECTED_CALLBACK.
-            dialogView.setUsernames(model.get(PasswordEditDialogProperties.USERNAMES),
-                    model.get(PasswordEditDialogProperties.SELECTED_USERNAME_INDEX));
-        } else if (propertyKey == PasswordEditDialogProperties.PASSWORD) {
-            dialogView.setPassword(model.get(PasswordEditDialogProperties.PASSWORD));
-        } else if (propertyKey == PasswordEditDialogProperties.FOOTER) {
-            dialogView.setFooter(model.get(PasswordEditDialogProperties.FOOTER));
-        } else if (propertyKey == PasswordEditDialogProperties.USERNAME_SELECTED_CALLBACK) {
-            dialogView.setUsernameSelectedCallback(
-                    model.get(PasswordEditDialogProperties.USERNAME_SELECTED_CALLBACK));
-        }
-    }
 
     public PasswordEditDialogView(Context context, AttributeSet attrs) {
         super(context, attrs);
     }
 
-    /**
-     * Stores references to the dialog fields after dialog inflation.
-     */
+    /** Stores references to the dialog fields after dialog inflation. */
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
-        mUsernamesSpinner = findViewById(R.id.usernames_spinner);
-        mUsernamesSpinner.setOnItemSelectedListener(this);
-
-        mPasswordView = findViewById(R.id.password);
+        FadingEdgeScrollView scrollView = findViewById(R.id.password_edit_dialog_scroll_view);
+        scrollView.disableScrollbarOnTablet();
         mFooterView = findViewById(R.id.footer);
+        mUsernameView = findViewById(R.id.username_view);
+        mUsernameInputLayout = findViewById(R.id.username_input_layout);
+        mUsernameInputLayout.setEndIconOnClickListener(view -> mUsernameView.showDropDown());
+        mUsernameView.addTextChangedListener(
+                new EmptyTextWatcher() {
+                    @Override
+                    public void onTextChanged(CharSequence charSequence, int i, int i1, int i2) {
+                        if (mUsernameChangedCallback == null) return;
+                        mUsernameChangedCallback.onResult(charSequence.toString());
+                    }
+
+                    @Override
+                    public void afterTextChanged(Editable editable) {
+                        setDropDownVisibility(editable.toString());
+                    }
+                });
+
+        mPasswordField = findViewById(R.id.password);
+        mPasswordField.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_PASSWORD
+                        | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        mPasswordField.addTextChangedListener(
+                new TextWatcher() {
+                    @Override
+                    public void beforeTextChanged(
+                            CharSequence charSequence, int i, int i1, int i2) {}
+
+                    @Override
+                    public void onTextChanged(CharSequence charSequence, int i, int i1, int i2) {
+                        if (mPasswordChangedCallback == null) return;
+                        mPasswordChangedCallback.onResult(charSequence.toString());
+                    }
+
+                    @Override
+                    public void afterTextChanged(Editable editable) {}
+                });
+        mPasswordInputLayout = findViewById(R.id.password_text_input_layout);
     }
 
-    void setUsernames(List<String> usernames, int selectedUsernameIndex) {
+    public void setPassword(String password) {
+        if (assumeNonNull(mPasswordField.getText()).toString().equals(password)) return;
+        mPasswordField.setText(password);
+    }
+
+    public void setPasswordChangedCallback(Callback<String> callback) {
+        mPasswordChangedCallback = callback;
+    }
+
+    public void setPasswordError(String error) {
+        mPasswordInputLayout.setError(error);
+    }
+
+    /** Sets usernames list in the AutoCompleteTextView */
+    public void setUsernames(List<String> usernames) {
+        mUsernames = usernames;
         ArrayAdapter<String> usernamesAdapter =
-                new ArrayAdapter<>(getContext(), android.R.layout.simple_spinner_item);
-        usernamesAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        usernamesAdapter.addAll(usernames);
-        mUsernamesSpinner.setAdapter(usernamesAdapter);
-        mUsernamesSpinner.setSelection(selectedUsernameIndex);
+                new NoFilterArrayAdapter<>(
+                        getContext(), R.layout.password_edit_dialog_dropdown_item, usernames);
+        mUsernameView.setAdapter(usernamesAdapter);
+        setDropDownVisibility(mUsernameView.getText().toString());
     }
 
-    void setPassword(String password) {
-        mPasswordView.setText(password);
+    /**
+     * Sets callback for handling username change.
+     *
+     * @param callback The callback to be called with new username typed into the
+     *     AutoCompleteTextView
+     */
+    public void setUsernameChangedCallback(Callback<String> callback) {
+        mUsernameChangedCallback = callback;
+    }
+
+    /** Sets username in the text input */
+    public void setUsername(String username) {
+        if (mUsernameView.getText().toString().equals(username)) return;
+        mUsernameView.setText(username);
+        setDropDownVisibility(username);
+    }
+
+    private void setDropDownVisibility(String currentUsername) {
+        if (shouldShowDropDown(currentUsername)) {
+            mUsernameInputLayout.setEndIconVisible(true);
+        } else {
+            // Hide the dropdown button and dismiss the dropdown (in case if it's open).
+            mUsernameInputLayout.setEndIconVisible(false);
+            mUsernameView.dismissDropDown();
+        }
+    }
+
+    private boolean shouldShowDropDown(String currentUsername) {
+        // Do not show the dropdown, when there are no usernames to list.
+        if (mUsernames == null) return false;
+        // Show the dropdown when there is more than one choice.
+        if (mUsernames.size() > 1) return true;
+        // Show the dropdown when there is one choice which is different from current username.
+        return (mUsernames.size() == 1 && !mUsernames.get(0).equals(currentUsername));
     }
 
     void setFooter(String footer) {
         mFooterView.setVisibility(!TextUtils.isEmpty(footer) ? View.VISIBLE : View.GONE);
         mFooterView.setText(footer);
     }
-
-    void setUsernameSelectedCallback(Callback<Integer> callback) {
-        mUsernameSelectedCallback = callback;
-    }
-
-    @Override
-    public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-        if (mUsernameSelectedCallback != null) {
-            mUsernameSelectedCallback.onResult(position);
-        }
-    }
-
-    @Override
-    public void onNothingSelected(AdapterView<?> parent) {}
 }

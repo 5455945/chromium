@@ -1,27 +1,24 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <sstream>
-
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/chrome_notification_types.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
+#include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/search/instant_test_base.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/omnibox/browser/omnibox_edit_model.h"
-#include "components/omnibox/browser/omnibox_view.h"
 #include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -29,38 +26,12 @@
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-namespace {
-
-std::string WrapScript(const std::string& script) {
-  return "domAutomationController.send(" + script + ")";
-}
-
-bool GetBoolFromJS(const content::ToRenderFrameHost& adapter,
-                   const std::string& script,
-                   bool* result) {
-  return content::ExecuteScriptAndExtractBool(adapter, WrapScript(script),
-                                              result);
-}
-
-bool GetIntFromJS(const content::ToRenderFrameHost& adapter,
-                  const std::string& script,
-                  int* result) {
-  return content::ExecuteScriptAndExtractInt(adapter, WrapScript(script),
-                                             result);
-}
-
-}  // namespace
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 
 class InstantExtendedTest : public InProcessBrowserTest,
                             public InstantTestBase {
  public:
-  InstantExtendedTest()
-      : on_most_visited_change_calls_(0),
-        most_visited_items_count_(0),
-        first_most_visited_item_id_(0),
-        on_focus_changed_calls_(0),
-        is_focused_(false) {}
+  InstantExtendedTest() = default;
 
  protected:
   void SetUpOnMainThread() override {
@@ -68,35 +39,33 @@ class InstantExtendedTest : public InProcessBrowserTest,
     GURL base_url = https_test_server().GetURL("/instant_extended.html?");
     GURL ntp_url = https_test_server().GetURL("/instant_extended_ntp.html?");
     ASSERT_NO_FATAL_FAILURE(
-        SetupInstant(browser()->profile(), base_url, ntp_url));
+        SetupInstant(browser()->GetProfile(), base_url, ntp_url));
   }
 
-  bool UpdateSearchState(content::WebContents* contents) WARN_UNUSED_RESULT {
-    return GetIntFromJS(contents, "onMostVisitedChangedCalls",
-                        &on_most_visited_change_calls_) &&
-           GetIntFromJS(contents, "mostVisitedItemsCount",
-                        &most_visited_items_count_) &&
-           GetIntFromJS(contents, "firstMostVisitedItemId",
-                        &first_most_visited_item_id_) &&
-           GetIntFromJS(contents, "onFocusChangedCalls",
-                        &on_focus_changed_calls_) &&
-           GetBoolFromJS(contents, "isFocused", &is_focused_);
+  void UpdateSearchState(content::WebContents* contents) {
+    on_most_visited_change_calls_ =
+        content::EvalJs(contents, "onMostVisitedChangedCalls").ExtractInt();
   }
 
   OmniboxView* omnibox() {
-    return browser()->window()->GetLocationBar()->GetOmniboxView();
+    return BrowserWindow::FromBrowser(browser())
+        ->GetLocationBar()
+        ->GetOmniboxView();
   }
 
   void FocusOmnibox() {
     // If the omnibox already has focus, just notify OmniboxTabHelper.
-    if (omnibox()->model()->has_focus()) {
+    LocationBar* location_bar =
+        BrowserWindow::FromBrowser(browser())->GetLocationBar();
+    if (location_bar->GetOmniboxController()->edit_model()->has_focus()) {
       content::WebContents* active_tab =
-          browser()->tab_strip_model()->GetActiveWebContents();
+          browser()->GetTabStripModel()->GetActiveWebContents();
       OmniboxTabHelper::FromWebContents(active_tab)
           ->OnFocusChanged(OMNIBOX_FOCUS_VISIBLE,
                            OMNIBOX_FOCUS_CHANGE_EXPLICIT);
     } else {
-      browser()->window()->GetLocationBar()->FocusLocation(false);
+      location_bar->FocusLocation(/*is_user_initiated=*/false,
+                                  /*clear_focus_if_failed=*/false);
     }
   }
 
@@ -105,30 +74,18 @@ class InstantExtendedTest : public InProcessBrowserTest,
     omnibox()->SetUserText(base::UTF8ToUTF16(text));
   }
 
-  void PressEnterAndWaitForNavigation() {
+  void PressEnterAndWaitForLoadStop() {
     content::TestNavigationObserver observer(
-        browser()->tab_strip_model()->GetActiveWebContents(), 1);
-    browser()->window()->GetLocationBar()->AcceptInput();
-    observer.WaitForNavigationFinished();
+        browser()->GetTabStripModel()->GetActiveWebContents());
+    BrowserWindow::FromBrowser(browser())
+        ->GetLocationBar()
+        ->GetOmniboxController()
+        ->edit_model()
+        ->OpenCurrentSelection();
+    observer.Wait();
   }
 
-  void PressEnterAndWaitForFrameLoad() {
-    content::WindowedNotificationObserver nav_observer(
-        content::NOTIFICATION_LOAD_COMPLETED_MAIN_FRAME,
-        content::NotificationService::AllSources());
-    browser()->window()->GetLocationBar()->AcceptInput();
-    nav_observer.Wait();
-  }
-
-  std::string GetOmniboxText() {
-    return base::UTF16ToUTF8(omnibox()->GetText());
-  }
-
-  int on_most_visited_change_calls_;
-  int most_visited_items_count_;
-  int first_most_visited_item_id_;
-  int on_focus_changed_calls_;
-  bool is_focused_;
+  int on_most_visited_change_calls_ = 0;
 };
 
 // Test to verify that switching tabs should not dispatch onmostvisitedchanged
@@ -136,96 +93,101 @@ class InstantExtendedTest : public InProcessBrowserTest,
 IN_PROC_BROWSER_TEST_F(InstantExtendedTest, NoMostVisitedChangedOnTabSwitch) {
   // Open new tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_EQ(2, browser()->GetTabStripModel()->count());
 
   // Make sure new tab received the onmostvisitedchanged event once.
   content::WebContents* active_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  EXPECT_TRUE(UpdateSearchState(active_tab));
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  UpdateSearchState(active_tab);
   EXPECT_EQ(1, on_most_visited_change_calls_);
 
   // Activate the previous tab.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
 
   // Switch back to new tab.
-  browser()->tab_strip_model()->ActivateTabAt(1);
+  browser()->GetTabStripModel()->ActivateTabAt(1);
 
   // Confirm that new tab got no onmostvisitedchanged event.
-  active_tab = browser()->tab_strip_model()->GetActiveWebContents();
-  EXPECT_TRUE(UpdateSearchState(active_tab));
+  active_tab = browser()->GetTabStripModel()->GetActiveWebContents();
+  UpdateSearchState(active_tab);
   EXPECT_EQ(1, on_most_visited_change_calls_);
 }
 
-IN_PROC_BROWSER_TEST_F(InstantExtendedTest, NavigateBackToNTP) {
+// TODO(crbug.com/40810214): Failing on MSan.
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_NavigateBackToNTP DISABLED_NavigateBackToNTP
+#else
+#define MAYBE_NavigateBackToNTP NavigateBackToNTP
+#endif
+IN_PROC_BROWSER_TEST_F(InstantExtendedTest, MAYBE_NavigateBackToNTP) {
   FocusOmnibox();
 
   // Open a new tab page.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_EQ(2, browser()->GetTabStripModel()->count());
 
   SetOmniboxText("flowers");
-  PressEnterAndWaitForNavigation();
+  PressEnterAndWaitForLoadStop();
 
   // Navigate back to NTP.
   content::WebContents* active_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(active_tab->GetController().CanGoBack());
-  content::WindowedNotificationObserver load_stop_observer(
-      content::NOTIFICATION_LOAD_STOP,
-      content::Source<content::NavigationController>(
-          &active_tab->GetController()));
+  content::TestNavigationObserver back_observer(active_tab);
   active_tab->GetController().GoBack();
-  load_stop_observer.Wait();
+  back_observer.Wait();
 
-  active_tab = browser()->tab_strip_model()->GetActiveWebContents();
+  active_tab = browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(search::IsInstantNTP(active_tab));
 }
 
+// TODO(crbug.com/40810214): Failing on MSan.
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_DispatchMVChangeEventWhileNavigatingBackToNTP \
+  DISABLED_DispatchMVChangeEventWhileNavigatingBackToNTP
+#else
+#define MAYBE_DispatchMVChangeEventWhileNavigatingBackToNTP \
+  DispatchMVChangeEventWhileNavigatingBackToNTP
+#endif
 IN_PROC_BROWSER_TEST_F(InstantExtendedTest,
-                       DispatchMVChangeEventWhileNavigatingBackToNTP) {
+                       MAYBE_DispatchMVChangeEventWhileNavigatingBackToNTP) {
   FocusOmnibox();
 
   // Open new tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   content::WebContents* active_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  EXPECT_TRUE(UpdateSearchState(active_tab));
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  UpdateSearchState(active_tab);
   EXPECT_EQ(1, on_most_visited_change_calls_);
 
-  content::WindowedNotificationObserver observer(
-      content::NOTIFICATION_LOAD_STOP,
-      content::NotificationService::AllSources());
   // Set the text and press enter to navigate from NTP.
   SetOmniboxText("Pen");
-  PressEnterAndWaitForNavigation();
-  observer.Wait();
+  PressEnterAndWaitForLoadStop();
 
   // Navigate back to NTP.
-  content::WindowedNotificationObserver back_observer(
-      content::NOTIFICATION_LOAD_STOP,
-      content::NotificationService::AllSources());
-  active_tab = browser()->tab_strip_model()->GetActiveWebContents();
+  active_tab = browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(active_tab->GetController().CanGoBack());
+  content::TestNavigationObserver back_observer(active_tab);
   active_tab->GetController().GoBack();
   back_observer.Wait();
 
   // Verify that onmostvisitedchange event is dispatched when we navigate from
   // SRP to NTP.
-  active_tab = browser()->tab_strip_model()->GetActiveWebContents();
-  EXPECT_TRUE(UpdateSearchState(active_tab));
+  active_tab = browser()->GetTabStripModel()->GetActiveWebContents();
+  UpdateSearchState(active_tab);
   EXPECT_EQ(1, on_most_visited_change_calls_);
 }
 
@@ -238,17 +200,12 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedTest, Referrer) {
 
   // Type a query and press enter to get results.
   SetOmniboxText("query");
-  PressEnterAndWaitForFrameLoad();
+  PressEnterAndWaitForLoadStop();
 
   // Simulate going to a result.
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  std::ostringstream stream;
-  stream << "var link = document.createElement('a');";
-  stream << "link.href = \"" << result_url.spec() << "\";";
-  stream << "document.body.appendChild(link);";
-  stream << "link.click();";
-  EXPECT_TRUE(content::ExecuteScript(contents, stream.str()));
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  EXPECT_TRUE(content::NavigateToURLFromRenderer(contents, result_url));
 
   EXPECT_TRUE(content::WaitForLoadStop(contents));
   std::string expected_title =

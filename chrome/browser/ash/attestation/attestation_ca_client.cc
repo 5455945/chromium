@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
@@ -18,10 +17,12 @@
 #include "net/base/net_errors.h"
 #include "net/base/network_isolation_key.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/proxy_lookup_client.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 namespace {
@@ -71,7 +72,7 @@ class CAProxyLookupClient : public network::mojom::ProxyLookupClient {
   // network::mojom::ProxyLookupClient:
   void OnProxyLookupComplete(
       int32_t net_error,
-      const absl::optional<net::ProxyInfo>& proxy_info) override {
+      const std::optional<net::ProxyInfo>& proxy_info) override {
     LOG_IF(WARNING, !proxy_info.has_value())
         << " Error determining the proxy information: " << net_error;
     // Assume there is a proxy if failing to get proxy information.
@@ -89,15 +90,15 @@ class CAProxyLookupClient : public network::mojom::ProxyLookupClient {
     CHECK(network_context);
   }
   void Start(network::mojom::NetworkContext* network_context, const GURL& url) {
-    const net::NetworkIsolationKey network_isolation_key =
-        net::NetworkIsolationKey::CreateTransient();
+    const net::NetworkAnonymizationKey network_anonymization_key =
+        net::NetworkAnonymizationKey::CreateTransient();
     mojo::PendingRemote<network::mojom::ProxyLookupClient> proxy_lookup_client =
         receiver_.BindNewPipeAndPassRemote();
-    receiver_.set_disconnect_handler(base::BindOnce(
-        &CAProxyLookupClient::OnProxyLookupComplete, base::Unretained(this),
-        net::ERR_ABORTED, absl::nullopt));
+    receiver_.set_disconnect_handler(
+        base::BindOnce(&CAProxyLookupClient::OnProxyLookupComplete,
+                       base::Unretained(this), net::ERR_ABORTED, std::nullopt));
 
-    network_context->LookUpProxyForURL(url, network_isolation_key,
+    network_context->LookUpProxyForURL(url, network_anonymization_key,
                                        std::move(proxy_lookup_client));
   }
 
@@ -127,7 +128,7 @@ AttestationCAClient::AttestationCAClient() {
   pca_type_ = GetAttestationServerType();
 }
 
-AttestationCAClient::~AttestationCAClient() {}
+AttestationCAClient::~AttestationCAClient() = default;
 
 void AttestationCAClient::SendEnrollRequest(const std::string& request,
                                             DataCallback on_response) {
@@ -146,12 +147,12 @@ void AttestationCAClient::SendCertificateRequest(const std::string& request,
 void AttestationCAClient::OnURLLoadComplete(
     std::list<std::unique_ptr<network::SimpleURLLoader>>::iterator it,
     DataCallback callback,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Move the loader out of the active loaders list.
   std::unique_ptr<network::SimpleURLLoader> url_loader = std::move(*it);
   url_loaders_.erase(it);
 
-  DCHECK(url_loader);
+  CHECK(url_loader, base::NotFatalUntil::M161);
 
   if (url_loader->ResponseInfo() && url_loader->ResponseInfo()->headers) {
     int response_code = url_loader->ResponseInfo()->headers->response_code();
@@ -201,10 +202,8 @@ void AttestationCAClient::FetchURL(const std::string& url,
         policy {
           cookies_allowed: NO
           setting:
-            "The device setting DeviceAttestationEnabled can disable the "
-            "attestation requests and AttestationForContentProtectionEnabled "
-            "can disable the attestation for content protection. But they "
-            "cannot be controlled by a policy or through settings."
+            "The device setting AttestationForContentProtectionEnabled "
+            "can disable the attestation for content protection."
           policy_exception_justification: "Not implemented."
         })");
   auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -235,26 +234,19 @@ void AttestationCAClient::CheckIfAnyProxyPresent(
     ProxyPresenceCallback callback) {
   GURL url(GetType() == TEST_PCA ? kTestEnrollRequestURL
                                  : kDefaultEnrollRequestURL);
-  DCHECK(url.is_valid());
+  CHECK(url.is_valid(), base::NotFatalUntil::M161);
 
   network::mojom::NetworkContext* network_context = nullptr;
   // Uses the injected network context if present.
   if (network_context_for_testing_ != nullptr) {
     network_context = network_context_for_testing_;
-  } else if (!g_browser_process ||
-             !g_browser_process->system_network_context_manager() ||
-             !g_browser_process->system_network_context_manager()
-                  ->GetContext()) {
-    LOG(DFATAL) << "No valid system network context.";
-    std::move(callback).Run(/*is_any_proxy_present=*/true);
-    return;
   } else {
-    network_context =
-        g_browser_process->system_network_context_manager()->GetContext();
+    CHECK(SystemNetworkContextManager::HasInstance());
+    network_context = SystemNetworkContextManager::GetInstance()->GetContext();
   }
 
-  CAProxyLookupClient::LookUpProxyForURL(network_context, url.GetOrigin(),
-                                         std::move(callback));
+  CAProxyLookupClient::LookUpProxyForURL(
+      network_context, url.DeprecatedGetOriginAsURL(), std::move(callback));
 }
 
 }  // namespace attestation

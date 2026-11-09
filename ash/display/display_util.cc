@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <memory>
 #include <utility>
 
+#include "ash/constants/notifier_catalogs.h"
+#include "ash/display/display_configuration_controller.h"
 #include "ash/display/extended_mouse_warp_controller.h"
 #include "ash/display/null_mouse_warp_controller.h"
 #include "ash/display/unified_mouse_warp_controller.h"
@@ -17,7 +19,8 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "base/bind.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -27,6 +30,7 @@
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/display/display.h"
+#include "ui/display/manager/display_layout_store.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/manager/managed_display_info.h"
 #include "ui/gfx/geometry/point.h"
@@ -56,12 +60,14 @@ void ConvertPointFromScreenToNative(aura::WindowTreeHost* host,
 std::unique_ptr<MouseWarpController> CreateMouseWarpController(
     display::DisplayManager* manager,
     aura::Window* drag_source) {
-  if (manager->IsInUnifiedMode() && manager->num_connected_displays() >= 2)
+  if (manager->IsInUnifiedMode() && manager->num_connected_displays() >= 2) {
     return std::make_unique<UnifiedMouseWarpController>();
+  }
   // Extra check for |num_connected_displays()| is for SystemDisplayApiTest
   // that injects MockScreen.
-  if (manager->GetNumDisplays() < 2 || manager->num_connected_displays() < 2)
+  if (manager->GetNumDisplays() < 2 || manager->num_connected_displays() < 2) {
     return std::make_unique<NullMouseWarpController>();
+  }
   return std::make_unique<ExtendedMouseWarpController>(drag_source);
 }
 
@@ -113,7 +119,7 @@ void MoveCursorTo(AshWindowTreeHost* ash_host,
   // Shrink further so that the mouse doesn't warp on the
   // edge. The right/bottom needs to be shrink by 2 to subtract
   // the 1 px from width/height value.
-  native_bounds.Inset(1, 1, 2, 2);
+  native_bounds.Inset(gfx::Insets::TLBR(1, 1, 2, 2));
 
   // Ensure that |point_in_native| is inside the |native_bounds|.
   point_in_native.SetToMax(native_bounds.origin());
@@ -156,20 +162,20 @@ void ShowDisplayErrorNotification(const std::u16string& message,
   }
 
   std::unique_ptr<message_center::Notification> notification =
-      CreateSystemNotification(
+      CreateSystemNotificationPtr(
           message_center::NOTIFICATION_TYPE_SIMPLE, kDisplayErrorNotificationId,
           std::u16string(),  // title
           message,
           std::u16string(),  // display_source
-          GURL(),
           message_center::NotifierId(
               message_center::NotifierType::SYSTEM_COMPONENT,
-              kNotifierDisplayError),
+              kNotifierDisplayError, NotificationCatalogName::kDisplayError),
           data,
           base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
-              base::BindRepeating([](absl::optional<int> button_index) {
-                if (button_index)
+              base::BindRepeating([](std::optional<int> button_index) {
+                if (button_index) {
                   NewWindowDelegate::GetInstance()->OpenFeedbackPage();
+                }
               })),
           kNotificationMonitorWarningIcon,
           message_center::SystemNotificationWarningLevel::WARNING);
@@ -179,10 +185,11 @@ void ShowDisplayErrorNotification(const std::u16string& message,
 
 bool IsRectContainedByAnyDisplay(const gfx::Rect& rect_in_screen) {
   const std::vector<display::Display>& displays =
-      display::Screen::GetScreen()->GetAllDisplays();
+      display::Screen::Get()->GetAllDisplays();
   for (const auto& display : displays) {
-    if (display.bounds().Contains(rect_in_screen))
+    if (display.bounds().Contains(rect_in_screen)) {
       return true;
+    }
   }
   return false;
 }
@@ -191,8 +198,9 @@ std::u16string ConvertRefreshRateToString16(float refresh_rate) {
   std::string str = base::StringPrintf("%.2f", refresh_rate);
 
   // Remove the mantissa for whole numbers.
-  if (EndsWith(str, ".00", base::CompareCase::INSENSITIVE_ASCII))
+  if (EndsWith(str, ".00", base::CompareCase::INSENSITIVE_ASCII)) {
     str.erase(str.length() - 3);
+  }
 
   return base::UTF8ToUTF16(str);
 }
@@ -200,11 +208,16 @@ std::u16string ConvertRefreshRateToString16(float refresh_rate) {
 std::u16string GetDisplayErrorNotificationMessageForTest() {
   message_center::NotificationList::Notifications notifications =
       message_center::MessageCenter::Get()->GetVisibleNotifications();
-  for (auto* const notification : notifications) {
-    if (notification->id() == kDisplayErrorNotificationId)
+  for (message_center::Notification* const notification : notifications) {
+    if (notification->id() == kDisplayErrorNotificationId) {
       return notification->message();
+    }
   }
   return std::u16string();
+}
+
+bool ShouldUndoRotationForMirror() {
+  return Shell::Get()->tablet_mode_controller()->is_in_tablet_physical_state();
 }
 
 }  // namespace ash

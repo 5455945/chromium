@@ -1,16 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.payments;
 
-import androidx.annotation.Nullable;
-
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.payments.mojom.PaymentOptions;
 
-/**
- * A collection of utility methods for PaymentOptions.
- */
+/** A collection of utility methods for PaymentOptions. */
+@NullMarked
 public class PaymentOptionsUtils {
     /**
      * @param options Any PaymentOption, can be null.
@@ -19,7 +18,9 @@ public class PaymentOptionsUtils {
      */
     public static boolean requestAnyInformation(@Nullable PaymentOptions options) {
         if (options == null) return false;
-        return options.requestShipping || options.requestPayerEmail || options.requestPayerPhone
+        return options.requestShipping
+                || options.requestPayerEmail
+                || options.requestPayerPhone
                 || options.requestPayerName;
     }
 
@@ -48,7 +49,8 @@ public class PaymentOptionsUtils {
             requestPayerPhone = options.requestPayerPhone;
             requestShipping = options.requestShipping;
         }
-        return String.format("{payerEmail:%s,payerName:%s,payerPhone:%s,shipping:%s}",
+        return String.format(
+                "{payerEmail:%s,payerName:%s,payerPhone:%s,shipping:%s}",
                 requestPayerEmail, requestPayerName, requestPayerPhone, requestShipping);
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include "components/webcrypto/algorithms/aes.h"
 #include "components/webcrypto/algorithms/util.h"
 #include "components/webcrypto/blink_key_handle.h"
-#include "components/webcrypto/crypto_data.h"
 #include "components/webcrypto/status.h"
 #include "crypto/openssl_util.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
@@ -32,31 +31,35 @@ const EVP_AEAD* GetAesGcmAlgorithmFromKeySize(size_t key_size_bytes) {
   }
 }
 
+bool TagLengthValid(unsigned int tag_length_bits) {
+  return tag_length_bits == 32 || tag_length_bits == 64 ||
+         tag_length_bits == 96 || tag_length_bits == 104 ||
+         tag_length_bits == 112 || tag_length_bits == 120 ||
+         tag_length_bits == 128;
+}
+
 Status AesGcmEncryptDecrypt(EncryptOrDecrypt mode,
                             const blink::WebCryptoAlgorithm& algorithm,
                             const blink::WebCryptoKey& key,
-                            const CryptoData& data,
+                            base::span<const uint8_t> data,
                             std::vector<uint8_t>* buffer) {
   const std::vector<uint8_t>& raw_key = GetSymmetricKeyData(key);
-  const blink::WebCryptoAesGcmParams* params = algorithm.AesGcmParams();
+  const blink::WebCryptoAeadParams* params = algorithm.AeadParams();
 
   // The WebCrypto spec defines the default value for the tag length, as well as
   // the allowed values for tag length.
   unsigned int tag_length_bits = 128;
   if (params->HasTagLengthBits()) {
     tag_length_bits = params->OptionalTagLengthBits();
-    if (tag_length_bits != 32 && tag_length_bits != 64 &&
-        tag_length_bits != 96 && tag_length_bits != 104 &&
-        tag_length_bits != 112 && tag_length_bits != 120 &&
-        tag_length_bits != 128) {
+    if (!TagLengthValid(tag_length_bits)) {
       return Status::ErrorInvalidAesGcmTagLength();
     }
   }
 
-  return AeadEncryptDecrypt(
-      mode, raw_key, data, tag_length_bits / 8, CryptoData(params->Iv()),
-      CryptoData(params->OptionalAdditionalData()),
-      GetAesGcmAlgorithmFromKeySize(raw_key.size()), buffer);
+  return AeadEncryptDecrypt(mode, raw_key, data, tag_length_bits / 8,
+                            params->Iv(), params->OptionalAdditionalData(),
+                            GetAesGcmAlgorithmFromKeySize(raw_key.size()),
+                            buffer);
 }
 
 class AesGcmImplementation : public AesAlgorithm {
@@ -65,16 +68,32 @@ class AesGcmImplementation : public AesAlgorithm {
 
   Status Encrypt(const blink::WebCryptoAlgorithm& algorithm,
                  const blink::WebCryptoKey& key,
-                 const CryptoData& data,
+                 base::span<const uint8_t> data,
                  std::vector<uint8_t>* buffer) const override {
     return AesGcmEncryptDecrypt(ENCRYPT, algorithm, key, data, buffer);
   }
 
   Status Decrypt(const blink::WebCryptoAlgorithm& algorithm,
                  const blink::WebCryptoKey& key,
-                 const CryptoData& data,
+                 base::span<const uint8_t> data,
                  std::vector<uint8_t>* buffer) const override {
     return AesGcmEncryptDecrypt(DECRYPT, algorithm, key, data, buffer);
+  }
+
+  bool Supports(blink::WebCryptoOperation op,
+                const blink::WebCryptoAlgorithm& algorithm,
+                std::optional<unsigned int> length_bits) const override {
+    if (op == blink::kWebCryptoOperationEncrypt ||
+        op == blink::kWebCryptoOperationDecrypt) {
+      const blink::WebCryptoAeadParams* params = algorithm.AeadParams();
+      unsigned int tag_length_bits = 128;
+      if (params->HasTagLengthBits()) {
+        tag_length_bits = params->OptionalTagLengthBits();
+      }
+      return TagLengthValid(tag_length_bits);
+    } else {
+      return AesAlgorithm::Supports(op, algorithm, length_bits);
+    }
   }
 };
 

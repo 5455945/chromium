@@ -31,7 +31,8 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/node_event_context.h"
 #include "third_party/blink/renderer/core/dom/events/tree_scope_event_context.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -65,17 +66,47 @@ class CORE_EXPORT EventPath final : public GarbageCollected<EventPath> {
   }
   NodeEventContext& Last() { return node_event_contexts_[size() - 1]; }
 
+  HeapVector<NodeEventContext>::iterator begin() {
+    return node_event_contexts_.begin();
+  }
+  HeapVector<NodeEventContext>::iterator end() {
+    return node_event_contexts_.end();
+  }
+  HeapVector<NodeEventContext>::const_iterator begin() const {
+    return node_event_contexts_.begin();
+  }
+  HeapVector<NodeEventContext>::const_iterator end() const {
+    return node_event_contexts_.end();
+  }
+  HeapVector<NodeEventContext>::reverse_iterator rbegin() {
+    return node_event_contexts_.rbegin();
+  }
+  HeapVector<NodeEventContext>::reverse_iterator rend() {
+    return node_event_contexts_.rend();
+  }
+  HeapVector<NodeEventContext>::const_reverse_iterator rbegin() const {
+    return node_event_contexts_.rbegin();
+  }
+  HeapVector<NodeEventContext>::const_reverse_iterator rend() const {
+    return node_event_contexts_.rend();
+  }
+
   WindowEventContext& GetWindowEventContext() {
     DCHECK(window_event_context_);
     return *window_event_context_;
   }
   void EnsureWindowEventContext();
 
-  bool IsEmpty() const { return node_event_contexts_.IsEmpty(); }
+  bool IsEmpty() const { return node_event_contexts_.empty(); }
   wtf_size_t size() const { return node_event_contexts_.size(); }
 
   void AdjustForRelatedTarget(Node&, EventTarget* related_target);
+  void AdjustForReferenceTarget(Node&, EventTarget* source);
   void AdjustForTouchEvent(const TouchEvent&);
+  // AdjustForDisabledFormControl will shrink this event path if there is a
+  // disabled form control in it so that the disabled form control and its
+  // parents are not included.
+  void AdjustForDisabledFormControl();
 
   bool DisabledFormControlExistsInPath() const;
   bool HasEventListenersInPath(const AtomicString& event_type) const;

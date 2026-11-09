@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/barrier_closure.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/hash/sha1.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "components/base32/base32.h"
@@ -40,6 +39,9 @@ constexpr int kCacheResizeWhenFull = 48 * 1024 * 1024;  // 48mb.
 constexpr int kCacheItemsTimeToLiveDays = 7;
 constexpr int kImageCacheEvictionIntervalHours = 24;
 
+// Both the image data store and the metadata store must finish initialization.
+constexpr int kStoreCount = 2;
+
 void OnStartupEvictionQueued() {}
 
 }  // namespace
@@ -48,7 +50,7 @@ namespace image_fetcher {
 
 // static
 std::string ImageCache::HashUrlToKey(const std::string& input) {
-  return base32::Base32Encode(base::SHA1HashString(input));
+  return base32::Base32Encode(base::SHA1Hash(base::as_byte_span(input)));
 }
 
 // static
@@ -62,8 +64,7 @@ ImageCache::ImageCache(std::unique_ptr<ImageDataStore> data_store,
                        PrefService* pref_service,
                        base::Clock* clock,
                        scoped_refptr<base::SequencedTaskRunner> task_runner)
-    : initialization_attempted_(false),
-      data_store_(std::move(data_store)),
+    : data_store_(std::move(data_store)),
       metadata_store_(std::move(metadata_store)),
       pref_service_(pref_service),
       clock_(clock),
@@ -102,7 +103,7 @@ void ImageCache::DeleteImage(std::string url) {
 }
 
 void ImageCache::QueueOrStartRequest(base::OnceClosure request) {
-  if (!AreAllDependenciesInitialized()) {
+  if (!initialization_finished_) {
     queued_requests_.push_back(std::move(request));
     MaybeStartInitialization();
     return;
@@ -117,26 +118,43 @@ void ImageCache::MaybeStartInitialization() {
   }
 
   initialization_attempted_ = true;
-  data_store_->Initialize(base::BindOnce(&ImageCache::OnDependencyInitialized,
-                                         weak_ptr_factory_.GetWeakPtr()));
-  metadata_store_->Initialize(base::BindOnce(
-      &ImageCache::OnDependencyInitialized, weak_ptr_factory_.GetWeakPtr()));
+  base::RepeatingClosure on_initialized = base::BarrierClosure(
+      kStoreCount, base::BindOnce(&ImageCache::OnDependenciesInitialized,
+                                  weak_ptr_factory_.GetWeakPtr()));
+  data_store_->Initialize(on_initialized);
+  metadata_store_->Initialize(on_initialized);
 }
 
-bool ImageCache::AreAllDependenciesInitialized() const {
-  return data_store_->IsInitialized() && metadata_store_->IsInitialized();
-}
-
-void ImageCache::OnDependencyInitialized() {
-  if (!AreAllDependenciesInitialized()) {
-    return;
+void ImageCache::OnDependenciesInitialized() {
+  // A cache-miss callback may release the last external reference to this
+  // cache.
+  scoped_refptr<ImageCache> keep_alive(this);
+  initialization_finished_ = true;
+  const bool data_store_initialized = data_store_->IsInitialized();
+  const bool metadata_store_initialized = metadata_store_->IsInitialized();
+  cache_available_ = data_store_initialized && metadata_store_initialized;
+  if (!data_store_initialized) {
+    ImageFetcherMetricsReporter::ReportEvent(
+        ImageFetcherMetricsReporter::kCachedImageFetcherInternalUmaClientName,
+        ImageFetcherEvent::kCacheDataStoreInitializationFailed);
+  }
+  if (!metadata_store_initialized) {
+    ImageFetcherMetricsReporter::ReportEvent(
+        ImageFetcherMetricsReporter::kCachedImageFetcherInternalUmaClientName,
+        ImageFetcherEvent::kCacheMetadataStoreInitializationFailed);
   }
 
-  // Everything is initialized, take care of the queued requests.
-  for (base::OnceClosure& request : queued_requests_) {
+  // Complete queued requests even if a store failed. Loads will return cache
+  // misses and writes/deletions will be ignored without touching either store.
+  auto queued_requests = std::move(queued_requests_);
+  queued_requests_.clear();
+  for (base::OnceClosure& request : queued_requests) {
     std::move(request).Run();
   }
-  queued_requests_.clear();
+
+  if (!cache_available_) {
+    return;
+  }
 
   // TODO(wylieb): Consider delaying eviction as new requests come in via
   // separate weak pointers.
@@ -156,6 +174,9 @@ void ImageCache::SaveImageImpl(const std::string& url,
                                std::string image_data,
                                bool needs_transcoding,
                                ExpirationInterval expiration_interval) {
+  if (!cache_available_) {
+    return;
+  }
   std::string key = ImageCache::HashUrlToKey(url);
 
   // If the cache is full, evict some stuff.
@@ -170,6 +191,10 @@ void ImageCache::SaveImageImpl(const std::string& url,
 void ImageCache::LoadImageImpl(bool read_only,
                                const std::string& url,
                                ImageDataCallback callback) {
+  if (!cache_available_) {
+    std::move(callback).Run(/*needs_transcoding=*/false, std::string());
+    return;
+  }
   std::string key = ImageCache::HashUrlToKey(url);
   metadata_store_->LoadImageMetadata(
       key, base::BindOnce(&ImageCache::OnImageMetadataLoadedForLoadImage,
@@ -182,7 +207,7 @@ void ImageCache::OnImageMetadataLoadedForLoadImage(
     const std::string& key,
     ImageDataCallback callback,
     base::TimeTicks start_time,
-    absl::optional<CachedImageMetadataProto> metadata) {
+    std::optional<CachedImageMetadataProto> metadata) {
   // Record time spent to load metadata.
   ImageFetcherMetricsReporter::ReportLoadImageMetadata(start_time);
 
@@ -199,6 +224,9 @@ void ImageCache::OnImageMetadataLoadedForLoadImage(
 }
 
 void ImageCache::DeleteImageImpl(const std::string& url) {
+  if (!cache_available_) {
+    return;
+  }
   std::string key = ImageCache::HashUrlToKey(url);
 
   data_store_->DeleteImage(key);
@@ -210,8 +238,7 @@ void ImageCache::RunEvictionOnStartup() {
       pref_service_->GetTime(kPrefLastStartupEviction);
   // If we've already garbage collected in the past interval, bail out.
   if (last_eviction_time >
-      clock_->Now() -
-          base::TimeDelta::FromHours(kImageCacheEvictionIntervalHours)) {
+      clock_->Now() - base::Hours(kImageCacheEvictionIntervalHours)) {
     return;
   }
 
@@ -247,8 +274,7 @@ void ImageCache::RunEvictionWhenFull() {
 void ImageCache::RunEviction(size_t bytes_left,
                              base::OnceClosure on_completion) {
   metadata_store_->EvictImageMetadata(
-      clock_->Now() - base::TimeDelta::FromDays(kCacheItemsTimeToLiveDays),
-      bytes_left,
+      clock_->Now() - base::Days(kCacheItemsTimeToLiveDays), bytes_left,
       base::BindOnce(&ImageCache::OnKeysEvicted, weak_ptr_factory_.GetWeakPtr(),
                      std::move(on_completion)));
 }

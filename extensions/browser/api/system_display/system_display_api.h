@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,37 @@
 
 #include <string>
 
-#include "extensions/browser/api/system_display/display_info_provider.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/system_display.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/memory/raw_ptr.h"
+#include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/browser/event_router.h"
+#include "extensions/browser/event_router_factory.h"
+#endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
-class SystemDisplayCrOSRestrictedFunction : public ExtensionFunction {
+class SystemDisplayFunction : public ExtensionFunction {
+ public:
+  static const char kApiNotAvailableError[];
+
+ protected:
+  ~SystemDisplayFunction() override = default;
+  bool PreRunValidation(std::string* error) override;
+};
+
+class SystemDisplayCrOSRestrictedFunction : public SystemDisplayFunction {
  public:
   static const char kCrosOnlyError[];
   static const char kKioskOnlyError[];
 
  protected:
-  ~SystemDisplayCrOSRestrictedFunction() override {}
+  ~SystemDisplayCrOSRestrictedFunction() override = default;
   bool PreRunValidation(std::string* error) override;
 
   // Returns true if this function should be restricted to kiosk-mode apps and
@@ -26,18 +45,19 @@ class SystemDisplayCrOSRestrictedFunction : public ExtensionFunction {
   virtual bool ShouldRestrictToKioskAndWebUI();
 };
 
-// This function inherits from ExtensionFunction because, unlike the
+// This function inherits from SystemDisplayFunction because, unlike the
 // rest of this API, it's available on all platforms.
-class SystemDisplayGetInfoFunction : public ExtensionFunction {
+class SystemDisplayGetInfoFunction : public SystemDisplayFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("system.display.getInfo", SYSTEM_DISPLAY_GETINFO)
 
  protected:
-  ~SystemDisplayGetInfoFunction() override {}
+  ~SystemDisplayGetInfoFunction() override = default;
 
   ResponseAction Run() override;
 
-  void Response(DisplayInfoProvider::DisplayUnitInfoList all_displays_info);
+  void Response(
+      std::vector<api::system_display::DisplayUnitInfo> all_displays_info);
 };
 
 class SystemDisplayGetDisplayLayoutFunction
@@ -47,11 +67,9 @@ class SystemDisplayGetDisplayLayoutFunction
                              SYSTEM_DISPLAY_GETDISPLAYLAYOUT)
 
  protected:
-  ~SystemDisplayGetDisplayLayoutFunction() override {}
+  ~SystemDisplayGetDisplayLayoutFunction() override = default;
   ResponseAction Run() override;
   bool ShouldRestrictToKioskAndWebUI() override;
-
-  void Response(DisplayInfoProvider::DisplayLayoutList display_layout);
 };
 
 class SystemDisplaySetDisplayPropertiesFunction
@@ -61,10 +79,10 @@ class SystemDisplaySetDisplayPropertiesFunction
                              SYSTEM_DISPLAY_SETDISPLAYPROPERTIES)
 
  protected:
-  ~SystemDisplaySetDisplayPropertiesFunction() override {}
+  ~SystemDisplaySetDisplayPropertiesFunction() override = default;
   ResponseAction Run() override;
 
-  void Response(absl::optional<std::string> error);
+  void Response(std::optional<std::string> error);
 };
 
 class SystemDisplaySetDisplayLayoutFunction
@@ -74,10 +92,8 @@ class SystemDisplaySetDisplayLayoutFunction
                              SYSTEM_DISPLAY_SETDISPLAYLAYOUT)
 
  protected:
-  ~SystemDisplaySetDisplayLayoutFunction() override {}
+  ~SystemDisplaySetDisplayLayoutFunction() override = default;
   ResponseAction Run() override;
-
-  void Response(absl::optional<std::string> error);
 };
 
 class SystemDisplayEnableUnifiedDesktopFunction
@@ -87,7 +103,7 @@ class SystemDisplayEnableUnifiedDesktopFunction
                              SYSTEM_DISPLAY_ENABLEUNIFIEDDESKTOP)
 
  protected:
-  ~SystemDisplayEnableUnifiedDesktopFunction() override {}
+  ~SystemDisplayEnableUnifiedDesktopFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -98,7 +114,7 @@ class SystemDisplayOverscanCalibrationStartFunction
                              SYSTEM_DISPLAY_OVERSCANCALIBRATIONSTART)
 
  protected:
-  ~SystemDisplayOverscanCalibrationStartFunction() override {}
+  ~SystemDisplayOverscanCalibrationStartFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -109,7 +125,7 @@ class SystemDisplayOverscanCalibrationAdjustFunction
                              SYSTEM_DISPLAY_OVERSCANCALIBRATIONADJUST)
 
  protected:
-  ~SystemDisplayOverscanCalibrationAdjustFunction() override {}
+  ~SystemDisplayOverscanCalibrationAdjustFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -120,7 +136,7 @@ class SystemDisplayOverscanCalibrationResetFunction
                              SYSTEM_DISPLAY_OVERSCANCALIBRATIONRESET)
 
  protected:
-  ~SystemDisplayOverscanCalibrationResetFunction() override {}
+  ~SystemDisplayOverscanCalibrationResetFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -131,7 +147,7 @@ class SystemDisplayOverscanCalibrationCompleteFunction
                              SYSTEM_DISPLAY_OVERSCANCALIBRATIONCOMPLETE)
 
  protected:
-  ~SystemDisplayOverscanCalibrationCompleteFunction() override {}
+  ~SystemDisplayOverscanCalibrationCompleteFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -142,10 +158,10 @@ class SystemDisplayShowNativeTouchCalibrationFunction
                              SYSTEM_DISPLAY_SHOWNATIVETOUCHCALIBRATION)
 
  protected:
-  ~SystemDisplayShowNativeTouchCalibrationFunction() override {}
+  ~SystemDisplayShowNativeTouchCalibrationFunction() override = default;
   ResponseAction Run() override;
 
-  void OnCalibrationComplete(absl::optional<std::string> error);
+  void OnCalibrationComplete(std::optional<std::string> error);
 };
 
 class SystemDisplayStartCustomTouchCalibrationFunction
@@ -155,7 +171,7 @@ class SystemDisplayStartCustomTouchCalibrationFunction
                              SYSTEM_DISPLAY_STARTCUSTOMTOUCHCALIBRATION)
 
  protected:
-  ~SystemDisplayStartCustomTouchCalibrationFunction() override {}
+  ~SystemDisplayStartCustomTouchCalibrationFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -166,7 +182,7 @@ class SystemDisplayCompleteCustomTouchCalibrationFunction
                              SYSTEM_DISPLAY_COMPLETECUSTOMTOUCHCALIBRATION)
 
  protected:
-  ~SystemDisplayCompleteCustomTouchCalibrationFunction() override {}
+  ~SystemDisplayCompleteCustomTouchCalibrationFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -177,7 +193,7 @@ class SystemDisplayClearTouchCalibrationFunction
                              SYSTEM_DISPLAY_CLEARTOUCHCALIBRATION)
 
  protected:
-  ~SystemDisplayClearTouchCalibrationFunction() override {}
+  ~SystemDisplayClearTouchCalibrationFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -188,11 +204,50 @@ class SystemDisplaySetMirrorModeFunction
                              SYSTEM_DISPLAY_SETMIRRORMODE)
 
  protected:
-  ~SystemDisplaySetMirrorModeFunction() override {}
+  ~SystemDisplaySetMirrorModeFunction() override = default;
   ResponseAction Run() override;
 
-  void Response(absl::optional<std::string> error);
+  void Response(std::optional<std::string> error);
 };
+
+// This keyed service is currently only needed on Android, where
+// ENABLE_EXTENSIONS_CORE can be enabled without full ENABLE_EXTENSIONS, so
+// onDisplayChanged still needs explicit listener-lifecycle wiring.
+#if BUILDFLAG(IS_ANDROID)
+class SystemDisplayAPI : public BrowserContextKeyedAPI,
+                         public EventRouter::Observer {
+ public:
+  static BrowserContextKeyedAPIFactory<SystemDisplayAPI>* GetFactoryInstance();
+
+  explicit SystemDisplayAPI(content::BrowserContext* context);
+  SystemDisplayAPI(const SystemDisplayAPI&) = delete;
+  SystemDisplayAPI& operator=(const SystemDisplayAPI&) = delete;
+  ~SystemDisplayAPI() override;
+
+  // BrowserContextKeyedAPI:
+  void Shutdown() override;
+
+  // EventRouter::Observer:
+  void OnListenerAdded(const EventListenerInfo& details) override;
+  void OnListenerRemoved(const EventListenerInfo& details) override;
+
+ private:
+  friend class BrowserContextKeyedAPIFactory<SystemDisplayAPI>;
+
+  static const char* service_name() { return "SystemDisplayAPI"; }
+  static const bool kServiceIsNULLWhileTesting = true;
+
+  raw_ptr<content::BrowserContext> browser_context_;
+};
+
+template <>
+struct BrowserContextFactoryDependencies<SystemDisplayAPI> {
+  static void DeclareFactoryDependencies(
+      BrowserContextKeyedAPIFactory<SystemDisplayAPI>* factory) {
+    factory->DependsOn(EventRouterFactory::GetInstance());
+  }
+};
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions
 

@@ -35,7 +35,8 @@ StepRange::StepRange()
       step_(1),
       step_base_(0),
       has_step_(false),
-      has_range_limitations_(false),
+      has_min_(false),
+      has_max_(false),
       supports_reversed_range_(false) {}
 
 StepRange::StepRange(const StepRange& step_range) = default;
@@ -43,7 +44,8 @@ StepRange::StepRange(const StepRange& step_range) = default;
 StepRange::StepRange(const Decimal& step_base,
                      const Decimal& minimum,
                      const Decimal& maximum,
-                     bool has_range_limitations,
+                     bool has_min,
+                     bool has_max,
                      bool supports_reversed_range,
                      const Decimal& step,
                      const StepDescription& step_description)
@@ -53,7 +55,8 @@ StepRange::StepRange(const Decimal& step_base,
       step_base_(step_base.IsFinite() ? step_base : 1),
       step_description_(step_description),
       has_step_(step.IsFinite()),
-      has_range_limitations_(has_range_limitations),
+      has_min_(has_min),
+      has_max_(has_max),
       supports_reversed_range_(supports_reversed_range) {
   DCHECK(maximum_.IsFinite());
   DCHECK(minimum_.IsFinite());
@@ -101,10 +104,10 @@ Decimal StepRange::ClampValue(const Decimal& value) const {
 Decimal StepRange::ParseStep(AnyStepHandling any_step_handling,
                              const StepDescription& step_description,
                              const String& step_string) {
-  if (step_string.IsEmpty())
+  if (step_string.empty())
     return step_description.DefaultValue();
 
-  if (EqualIgnoringASCIICase(step_string, "any")) {
+  if (EqualIgnoringAsciiCase(step_string, "any")) {
     switch (any_step_handling) {
       case kRejectAny:
         return Decimal::Nan();
@@ -176,9 +179,16 @@ bool StepRange::StepMismatch(const Decimal& value_for_check) const {
 Decimal StepRange::StepSnappedMaximum() const {
   Decimal base = StepBase();
   Decimal step = Step();
+  if (step < Decimal(0))
+    return Decimal::Nan();
   if (base - step == base || !(base / step).IsFinite())
     return Decimal::Nan();
-  Decimal aligned_maximum = base + ((Maximum() - base) / step).Floor() * step;
+  Decimal divided = ((Maximum() - base) / step);
+  Decimal aligned_maximum;
+  if (divided == divided.Floor())
+    aligned_maximum = Maximum();
+  else
+    aligned_maximum = base + divided.Floor() * step;
   if (aligned_maximum > Maximum())
     aligned_maximum -= step;
   DCHECK_LE(aligned_maximum, Maximum());

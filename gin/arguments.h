@@ -1,10 +1,12 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GIN_ARGUMENTS_H_
 #define GIN_ARGUMENTS_H_
 
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/stack_allocated.h"
 #include "gin/converter.h"
 #include "gin/gin_export.h"
 
@@ -17,25 +19,31 @@ namespace gin {
 // If constructed instead with a v8::PropertyCallbackInfo, behaves as though a
 // function with no arguments had been called.
 class GIN_EXPORT Arguments {
+  STACK_ALLOCATED();
+
  public:
   Arguments();
   explicit Arguments(const v8::FunctionCallbackInfo<v8::Value>& info);
   explicit Arguments(const v8::PropertyCallbackInfo<v8::Value>& info);
-  ~Arguments();
 
   template <typename T>
   bool GetHolder(T* out) const {
     v8::Local<v8::Object> holder = is_for_property_
                                        ? info_for_property_->Holder()
-                                       : info_for_function_->Holder();
-    return ConvertFromV8(isolate_, holder, out);
+                                       : info_for_function_->This();
+    return ConvertFromV8(isolate(), holder, out);
   }
 
   template<typename T>
   bool GetData(T* out) {
-    v8::Local<v8::Value> data = is_for_property_ ? info_for_property_->Data()
-                                                 : info_for_function_->Data();
-    return ConvertFromV8(isolate_, data, out);
+    v8::Local<v8::Data> data = is_for_property_ ? info_for_property_->DataV2()
+                                                : info_for_function_->DataV2();
+    return ConvertFromV8(isolate(), data.As<v8::Value>(), out);
+  }
+
+  v8::Local<v8::Data> GetData() const {
+    return is_for_property_ ? info_for_property_->DataV2()
+                            : info_for_function_->DataV2();
   }
 
   template<typename T>
@@ -45,7 +53,7 @@ class GIN_EXPORT Arguments {
       return false;
     }
     v8::Local<v8::Value> val = (*info_for_function_)[next_++];
-    return ConvertFromV8(isolate_, val, out);
+    return ConvertFromV8(isolate(), val, out);
   }
 
   template<typename T>
@@ -58,8 +66,9 @@ class GIN_EXPORT Arguments {
     out->resize(remaining);
     for (int i = 0; i < remaining; ++i) {
       v8::Local<v8::Value> val = (*info_for_function_)[next_++];
-      if (!ConvertFromV8(isolate_, val, &out->at(i)))
+      if (!ConvertFromV8(isolate(), val, &out->at(i))) {
         return false;
+      }
     }
     return true;
   }
@@ -77,11 +86,12 @@ class GIN_EXPORT Arguments {
     return is_for_property_ ? 0 : info_for_function_->Length();
   }
 
-  template<typename T>
-  void Return(T val) {
+  template <typename T>
+  void Return(const T& val) {
     v8::Local<v8::Value> v8_value;
-    if (!TryConvertToV8(isolate_, val, &v8_value))
+    if (!TryConvertToV8(isolate(), val, &v8_value)) {
       return;
+    }
     (is_for_property_ ? info_for_property_->GetReturnValue()
                       : info_for_function_->GetReturnValue())
         .Set(v8_value);
@@ -97,22 +107,38 @@ class GIN_EXPORT Arguments {
   // Returns all arguments. Since this doesn't require any conversion, it
   // cannot fail. This does not rely on or modify the current position in the
   // array used by Get/PeekNext().
-  std::vector<v8::Local<v8::Value>> GetAll() const;
+  v8::LocalVector<v8::Value> GetAll() const;
+
+  // Returns the original v8::FunctionCallbackInfo used to construct this
+  // Arguments if it exists, or nullptr otherwise.
+  const v8::FunctionCallbackInfo<v8::Value>* GetFunctionCallbackInfo() const {
+    return info_for_function_;
+  }
 
   void ThrowError() const;
   void ThrowTypeError(const std::string& message) const;
 
-  v8::Isolate* isolate() const { return isolate_; }
+  v8::Isolate* isolate() const {
+    if (is_for_property_) {
+      return info_for_property_->GetIsolate();
+    }
+    return info_for_function_ ? info_for_function_->GetIsolate() : nullptr;
+  }
 
   // Allows the function handler to distinguish between normal invocation
   // and object construction.
   bool IsConstructCall() const;
 
  private:
-  v8::Isolate* isolate_;
   union {
-    const v8::FunctionCallbackInfo<v8::Value>* info_for_function_;
-    const v8::PropertyCallbackInfo<v8::Value>* info_for_property_;
+    // This field is not a raw_ptr<> because it was filtered by the rewriter
+    // for: #union
+    RAW_PTR_EXCLUSION const v8::FunctionCallbackInfo<v8::Value>*
+        info_for_function_;
+    // This field is not a raw_ptr<> because it was filtered by the rewriter
+    // for: #union
+    RAW_PTR_EXCLUSION const v8::PropertyCallbackInfo<v8::Value>*
+        info_for_property_;
   };
   int next_ = 0;
   bool insufficient_arguments_ = false;

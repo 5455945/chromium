@@ -1,18 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_RUNTIME_RUNTIME_API_H_
 #define EXTENSIONS_BROWSER_API_RUNTIME_RUNTIME_API_H_
 
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "base/values.h"
+#include "base/version.h"
 #include "extensions/browser/api/runtime/runtime_api_delegate.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/events/lazy_event_dispatch_util.h"
@@ -23,11 +26,11 @@
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/update_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/runtime.h"
+#include "extensions/common/extension_id.h"
 
-namespace base {
-class Version;
-}
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -37,14 +40,13 @@ class PrefRegistrySimple;
 
 namespace extensions {
 
-namespace api {
-namespace runtime {
+namespace api::runtime {
 struct PlatformInfo;
-}
 }
 
 class Extension;
 class ExtensionRegistry;
+enum class UnloadedExtensionReason;
 
 // Runtime API dispatches onStartup, onInstalled, and similar events to
 // extensions. There is one instance shared between a browser context and
@@ -86,21 +88,30 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
   explicit RuntimeAPI(content::BrowserContext* context);
+
+  RuntimeAPI(const RuntimeAPI&) = delete;
+  RuntimeAPI& operator=(const RuntimeAPI&) = delete;
+
   ~RuntimeAPI() override;
 
-  void ReloadExtension(const std::string& extension_id);
-  bool CheckForUpdates(const std::string& extension_id,
+  void ReloadExtension(const ExtensionId& extension_id);
+  bool CheckForUpdates(const ExtensionId& extension_id,
                        RuntimeAPIDelegate::UpdateCheckCallback callback);
   void OpenURL(const GURL& uninstall_url);
   bool GetPlatformInfo(api::runtime::PlatformInfo* info);
   bool RestartDevice(std::string* error_message);
 
   RestartAfterDelayStatus RestartDeviceAfterDelay(
-      const std::string& extension_id,
+      const ExtensionId& extension_id,
       int seconds_from_now);
 
-  bool OpenOptionsPage(const Extension* extension,
-                       content::BrowserContext* browser_context);
+  // Opens the options page for an extension. On Android, this will open the
+  // options page asynchronously. After the option page attempts to open,
+  // the callback will execute with the result of the attempt. Returns true
+  // if the options page could be opened successfully, false otherwise.
+  void OpenOptionsPage(const Extension* extension,
+                       content::BrowserContext* browser_context,
+                       base::OnceCallback<void(bool)> callback);
 
  private:
   friend class BrowserContextKeyedAPIFactory<RuntimeAPI>;
@@ -109,6 +120,14 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
   // ExtensionRegistryObserver implementation.
   void OnExtensionLoaded(content::BrowserContext* browser_context,
                          const Extension* extension) override;
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionReason reason) override;
+  void OnExtensionEnabled(content::BrowserContext* browser_context,
+                          const Extension* extension) override;
+  void OnExtensionReloaded(content::BrowserContext* browser_context,
+                           const Extension* extension) override;
+
   void OnExtensionUninstalled(content::BrowserContext* browser_context,
                               const Extension* extension,
                               UninstallReason reason) override;
@@ -118,6 +137,13 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
       content::BrowserContext* browser_context,
       const Extension* extension,
       const base::Version& previous_version) override;
+
+  // Dispatches `runtime.onExtensionLoaded` with reason `kInstall` or `kUpdate`
+  // for the extension with `extension_id`, using its entry in
+  // `pending_install_load_versions_`. Does nothing if the entry is gone,
+  // because `OnExtensionUnloaded()` dropped it or an earlier posted task
+  // already dispatched it.
+  void MaybeDispatchInstallOrUpdateLoadedEvent(const ExtensionId& extension_id);
 
   // Cancels any previously scheduled restart request.
   void MaybeCancelRunningDelayedRestartTimer();
@@ -139,7 +165,7 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
   void Shutdown() override;
 
   // extensions::UpdateObserver overrides:
-  void OnAppUpdateAvailable(const Extension* extension) override;
+  void OnAppUpdateAvailable(const Extension& extension) override;
   void OnChromeUpdateAvailable() override;
 
   // ProcessManagerObserver implementation:
@@ -153,15 +179,16 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
 
   std::unique_ptr<RuntimeAPIDelegate> delegate_;
 
-  content::BrowserContext* browser_context_;
-
-  content::NotificationRegistrar registrar_;
+  raw_ptr<content::BrowserContext> browser_context_;
 
   // Listen to extension notifications.
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observation_{this};
   base::ScopedObservation<ProcessManager, ProcessManagerObserver>
       process_manager_observation_{this};
+  base::ScopedObservation<LazyEventDispatchUtil,
+                          LazyEventDispatchUtil::Observer>
+      lazy_event_dispatch_util_observation_{this};
 
   // The ID of the first extension to call the restartAfterDelay API. Any other
   // extensions to call this API after that will fail.
@@ -182,12 +209,21 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
   // reason "chrome_update" upon loading each extension.
   bool dispatch_chrome_updated_event_;
 
+  // True once initial startup extension loading has completed and
+  // `ExtensionSystem::ready()` has signaled.
+  bool startup_complete_ = false;
+
+  // Maps the ID of each extension whose `kInstall` or `kUpdate`
+  // `runtime.onExtensionLoaded` event is queued but not yet dispatched to its
+  // version from before the install or update (invalid for a fresh install).
+  // `OnExtensionEnabled()` checks it so that it doesn't dispatch `kEnable` when
+  // an extension that was installed or updated while disabled is enabled.
+  std::map<ExtensionId, base::Version> pending_install_load_versions_;
+
   bool did_read_delayed_restart_preferences_;
   bool was_last_restart_due_to_delayed_restart_api_;
 
   base::WeakPtrFactory<RuntimeAPI> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(RuntimeAPI);
 };
 
 template <>
@@ -197,19 +233,53 @@ class RuntimeEventRouter {
  public:
   // Dispatches the onStartup event to all currently-loaded extensions.
   static void DispatchOnStartupEvent(content::BrowserContext* context,
-                                     const std::string& extension_id);
+                                     const ExtensionId& extension_id);
 
   // Dispatches the onInstalled event to the given extension.
-  static void DispatchOnInstalledEvent(content::BrowserContext* context,
-                                       const std::string& extension_id,
+  //
+  // `context_id` is intentionally a `MayBeDangling<void>` opaque handle: the
+  // posted task may outlive the BrowserContext during profile shutdown.
+  // Validity is checked via `ExtensionsBrowserClient::IsValidContext()`
+  // before any dereference. See `base::UnsafeDangling()` in
+  // base/functional/bind.h for the id-then-lookup pattern this implements.
+  static void DispatchOnInstalledEvent(MayBeDangling<void> context_id,
+                                       const ExtensionId& extension_id,
                                        const base::Version& old_version,
                                        bool chrome_updated);
 
+  // Dispatches the `runtime.onEnabled` event to the extension with
+  // `extension_id` when it transitions from a disabled state to an enabled
+  // state. If `wait_for_lazy_context` is true and the extension's background
+  // context isn't ready, the dispatch waits until it is, so listeners that the
+  // background context registers while starting up receive the event.
+  // `RuntimeAPI::OnExtensionEnabled()` sets `wait_for_lazy_context` only when
+  // the extension was installed or updated while disabled, because that clears
+  // its persisted event listeners.
+  static void DispatchOnEnabledEvent(MayBeDangling<void> context_id,
+                                     const ExtensionId& extension_id,
+                                     bool wait_for_lazy_context);
+
+  // Dispatches the `runtime.onExtensionLoaded` event to the extension with
+  // `extension_id` when it is added to the set of active extensions, as
+  // specified by the W3C WebExtensions proposal
+  // (https://github.com/w3c/webextensions/blob/main/proposals/runtime_on_load_on_enabled_events.md):
+  // - `reason` indicates why the extension was loaded (`kInstall`, `kUpdate`,
+  //   `kBrowserUpdate`, `kEnable`, `kStartup`, or `kReload`), following the
+  //   precedence `update > install > reload > enable > browser_update >
+  //   startup` when multiple reasons apply.
+  // - `previous_version` is included in the event details only when `reason` is
+  //   `kUpdate` (the version before the update) or `kEnable` (the extension's
+  //   current version).
+  static void DispatchOnExtensionLoadedEvent(
+      MayBeDangling<void> context_id,
+      const ExtensionId& extension_id,
+      api::runtime::OnLoadedReason reason,
+      const std::optional<std::string>& previous_version);
+
   // Dispatches the onUpdateAvailable event to the given extension.
-  static void DispatchOnUpdateAvailableEvent(
-      content::BrowserContext* context,
-      const std::string& extension_id,
-      const base::DictionaryValue* manifest);
+  static void DispatchOnUpdateAvailableEvent(content::BrowserContext* context,
+                                             const ExtensionId& extension_id,
+                                             const base::DictValue* manifest);
 
   // Dispatches the onBrowserUpdateAvailable event to all extensions.
   static void DispatchOnBrowserUpdateAvailableEvent(
@@ -223,7 +293,7 @@ class RuntimeEventRouter {
 
   // Does any work needed at extension uninstall (e.g. load uninstall url).
   static void OnExtensionUninstalled(content::BrowserContext* context,
-                                     const std::string& extension_id,
+                                     const ExtensionId& extension_id,
                                      UninstallReason reason);
 };
 
@@ -233,7 +303,7 @@ class RuntimeGetBackgroundPageFunction : public ExtensionFunction {
                              RUNTIME_GETBACKGROUNDPAGE)
 
  protected:
-  ~RuntimeGetBackgroundPageFunction() override {}
+  ~RuntimeGetBackgroundPageFunction() override = default;
   ResponseAction Run() override;
 
  private:
@@ -246,8 +316,11 @@ class RuntimeOpenOptionsPageFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("runtime.openOptionsPage", RUNTIME_OPENOPTIONSPAGE)
 
  protected:
-  ~RuntimeOpenOptionsPageFunction() override {}
+  ~RuntimeOpenOptionsPageFunction() override = default;
   ResponseAction Run() override;
+
+ private:
+  void OnOpenOptionsPageResult(bool success);
 };
 
 class RuntimeSetUninstallURLFunction : public ExtensionFunction {
@@ -255,7 +328,7 @@ class RuntimeSetUninstallURLFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("runtime.setUninstallURL", RUNTIME_SETUNINSTALLURL)
 
  protected:
-  ~RuntimeSetUninstallURLFunction() override {}
+  ~RuntimeSetUninstallURLFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -264,7 +337,7 @@ class RuntimeReloadFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("runtime.reload", RUNTIME_RELOAD)
 
  protected:
-  ~RuntimeReloadFunction() override {}
+  ~RuntimeReloadFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -274,7 +347,7 @@ class RuntimeRequestUpdateCheckFunction : public ExtensionFunction {
                              RUNTIME_REQUESTUPDATECHECK)
 
  protected:
-  ~RuntimeRequestUpdateCheckFunction() override {}
+  ~RuntimeRequestUpdateCheckFunction() override = default;
   ResponseAction Run() override;
 
  private:
@@ -286,7 +359,7 @@ class RuntimeRestartFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("runtime.restart", RUNTIME_RESTART)
 
  protected:
-  ~RuntimeRestartFunction() override {}
+  ~RuntimeRestartFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -296,7 +369,7 @@ class RuntimeRestartAfterDelayFunction : public ExtensionFunction {
                              RUNTIME_RESTARTAFTERDELAY)
 
  protected:
-  ~RuntimeRestartAfterDelayFunction() override {}
+  ~RuntimeRestartAfterDelayFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -305,7 +378,7 @@ class RuntimeGetPlatformInfoFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("runtime.getPlatformInfo", RUNTIME_GETPLATFORMINFO)
 
  protected:
-  ~RuntimeGetPlatformInfoFunction() override {}
+  ~RuntimeGetPlatformInfoFunction() override = default;
   ResponseAction Run() override;
 };
 
@@ -315,7 +388,47 @@ class RuntimeGetPackageDirectoryEntryFunction : public ExtensionFunction {
                              RUNTIME_GETPACKAGEDIRECTORYENTRY)
 
  protected:
-  ~RuntimeGetPackageDirectoryEntryFunction() override {}
+  ~RuntimeGetPackageDirectoryEntryFunction() override = default;
+  ResponseAction Run() override;
+};
+
+class RuntimeGetContextsFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("runtime.getContexts", RUNTIME_GETCONTEXTS)
+
+  RuntimeGetContextsFunction();
+  RuntimeGetContextsFunction(const RuntimeGetContextsFunction&) = delete;
+  RuntimeGetContextsFunction& operator=(const RuntimeGetContextsFunction&) =
+      delete;
+
+ private:
+  // ExtensionFunction:
+  ~RuntimeGetContextsFunction() override;
+  ResponseAction Run() override;
+
+  // Returns the context for the extension background service worker, if the
+  // worker is active. Otherwise, returns nullopt.
+  std::optional<api::runtime::ExtensionContext> GetWorkerContext();
+
+  // Returns a collection of all frame-based extension contexts for the
+  // extension.
+  std::vector<api::runtime::ExtensionContext> GetFrameContexts();
+
+  // Helper methods to return tab id, frame id and window id for a given
+  // context.
+  int GetTabId(content::WebContents& web_contents);
+  int GetFrameId(content::RenderFrameHost& host);
+  int GetWindowId(content::WebContents& web_contents);
+};
+
+class RuntimeMarkListenerRegistrationCompleteFunction
+    : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("runtime.markListenerRegistrationComplete",
+                             RUNTIME_MARKLISTENERREGISTRATIONCOMPLETE)
+
+ protected:
+  ~RuntimeMarkListenerRegistrationCompleteFunction() override = default;
   ResponseAction Run() override;
 };
 

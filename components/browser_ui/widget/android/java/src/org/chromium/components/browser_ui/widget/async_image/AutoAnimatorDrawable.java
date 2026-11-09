@@ -1,33 +1,32 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.browser_ui.widget.async_image;
 
-import android.annotation.TargetApi;
 import android.graphics.drawable.Animatable;
-import android.graphics.drawable.Animatable2;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.DrawableWrapper;
 import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RotateDrawable;
 import android.graphics.drawable.ScaleDrawable;
-import android.os.Build;
-import android.os.Handler;
-import android.os.Looper;
 
-import androidx.annotation.Nullable;
-import androidx.appcompat.graphics.drawable.DrawableWrapper;
-import androidx.vectordrawable.graphics.drawable.Animatable2Compat;
+import androidx.appcompat.graphics.drawable.DrawableWrapperCompat;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
- * A helper {@link Drawable} that wraps another {@link Drawable} and starts/stops any
- * {@link Animatable} {@link Drawable}s in the {@link Drawable} hierarchy when this {@link Drawable}
- * is shown or hidden.
+ * A helper {@link Drawable} that wraps another {@link Drawable} and starts/stops any {@link
+ * Animatable} {@link Drawable}s in the {@link Drawable} hierarchy when this {@link Drawable} is
+ * shown or hidden.
  */
-public class AutoAnimatorDrawable extends DrawableWrapper {
+@NullMarked
+public class AutoAnimatorDrawable extends DrawableWrapperCompat {
     // Since Drawables default visible to true by default, we might not get a change and start the
     // animation on the first visibility request.
     private boolean mGotVisibilityCall;
@@ -40,20 +39,25 @@ public class AutoAnimatorDrawable extends DrawableWrapper {
      * @return         A new {@link Drawable} that will automaticaly animate or {@code null} if
      *                 {@code drawable} is {@code null}.
      */
-    public static Drawable wrap(@Nullable Drawable drawable) {
+    public static @Nullable Drawable wrap(@Nullable Drawable drawable) {
         if (drawable == null || !shouldWrapDrawable(drawable)) return drawable;
         return new AutoAnimatorDrawable(drawable);
     }
 
     private AutoAnimatorDrawable(Drawable drawable) {
         super(drawable);
-        AutoAnimatorDrawable.attachRestartListeners(this);
     }
 
-    // DrawableWrapper implementation.
+    // DrawableWrapperCompat implementation.
     @Override
     public boolean setVisible(boolean visible, boolean restart) {
         boolean changed = super.setVisible(visible, restart);
+        Drawable wrapped = getDrawable();
+        if (wrapped != null) {
+            // DrawableWrapperCompat.setVisible short-circuits `||` when super.setVisible returns
+            // true, leaving the wrapped drawable's visibility stale when hiding.
+            changed |= wrapped.setVisible(visible, restart);
+        }
         if (visible) {
             if (changed || restart || !mGotVisibilityCall) {
                 AutoAnimatorDrawable.startAnimatedDrawables(this);
@@ -80,25 +84,12 @@ public class AutoAnimatorDrawable extends DrawableWrapper {
         return found.get();
     }
 
-    @TargetApi(Build.VERSION_CODES.M)
-    private static void attachRestartListeners(@Nullable Drawable drawable) {
-        AutoAnimatorDrawable.animatedDrawableHelper(drawable, animatable -> {
-            if (animatable instanceof Animatable2Compat) {
-                ((Animatable2Compat) animatable)
-                        .registerAnimationCallback(LazyHolderCompat.INSTANCE);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                    && animatable instanceof Animatable2) {
-                ((Animatable2) animatable).registerAnimationCallback(LazyHolder.INSTANCE);
-            }
-        });
-    }
-
     private static void animatedDrawableHelper(
-            @Nullable Drawable drawable, org.chromium.base.Callback<Animatable> consumer) {
+            @Nullable Drawable drawable, Consumer<Animatable> consumer) {
         if (drawable == null) return;
 
-        if (drawable instanceof Animatable) {
-            consumer.onResult((Animatable) drawable);
+        if (drawable instanceof Animatable animatable) {
+            consumer.accept(animatable);
 
             // Assume Animatable drawables can handle animating their own internals/sub drawables.
             return;
@@ -110,64 +101,27 @@ public class AutoAnimatorDrawable extends DrawableWrapper {
             AutoAnimatorDrawable.animatedDrawableHelper(drawable.getCurrent(), consumer);
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && drawable instanceof android.graphics.drawable.DrawableWrapper) {
+        if (drawable instanceof DrawableWrapper wrapper) {
             // Support all modern versions of drawables that wrap other ones.  This won't cover old
             // versions of Android (see below for other if/else blocks).
-            AutoAnimatorDrawable.animatedDrawableHelper(
-                    ((android.graphics.drawable.DrawableWrapper) drawable).getDrawable(), consumer);
-        } else if (drawable instanceof DrawableWrapper) {
-            // Support the AppCompat DrawableWrapper.
-            AutoAnimatorDrawable.animatedDrawableHelper(
-                    ((DrawableWrapper) drawable).getWrappedDrawable(), consumer);
-        } else if (drawable instanceof LayerDrawable) {
+            AutoAnimatorDrawable.animatedDrawableHelper(wrapper.getDrawable(), consumer);
+        } else if (drawable instanceof DrawableWrapperCompat wrapperCompat) {
+            // Support the AppCompat DrawableWrapperCompat.
+            AutoAnimatorDrawable.animatedDrawableHelper(wrapperCompat.getDrawable(), consumer);
+        } else if (drawable instanceof LayerDrawable layerDrawable) {
             // Support a LayerDrawable and try to animate all layers.
-            LayerDrawable layerDrawable = (LayerDrawable) drawable;
             for (int i = 0; i < layerDrawable.getNumberOfLayers(); i++) {
                 AutoAnimatorDrawable.animatedDrawableHelper(layerDrawable.getDrawable(i), consumer);
             }
-        } else if (drawable instanceof InsetDrawable) {
+        } else if (drawable instanceof InsetDrawable insetDrawable) {
             // Support legacy versions of InsetDrawable.
-            AutoAnimatorDrawable.animatedDrawableHelper(
-                    ((InsetDrawable) drawable).getDrawable(), consumer);
-        } else if (drawable instanceof RotateDrawable) {
+            AutoAnimatorDrawable.animatedDrawableHelper(insetDrawable.getDrawable(), consumer);
+        } else if (drawable instanceof RotateDrawable rotateDrawable) {
             // Support legacy versions of RotateDrawable.
-            AutoAnimatorDrawable.animatedDrawableHelper(
-                    ((RotateDrawable) drawable).getDrawable(), consumer);
-        } else if (drawable instanceof ScaleDrawable) {
+            AutoAnimatorDrawable.animatedDrawableHelper(rotateDrawable.getDrawable(), consumer);
+        } else if (drawable instanceof ScaleDrawable scaleDrawable) {
             // Support legacy versions of ScaleDrawable.
-            AutoAnimatorDrawable.animatedDrawableHelper(
-                    ((ScaleDrawable) drawable).getDrawable(), consumer);
-        }
-    }
-
-    private static final class LazyHolder {
-        private static final AutoRestarter INSTANCE = new AutoRestarter();
-    }
-
-    private static final class LazyHolderCompat {
-        private static final AutoRestarterCompat INSTANCE = new AutoRestarterCompat();
-    }
-
-    private static final class AutoRestarterCompat extends Animatable2Compat.AnimationCallback {
-        private final Handler mHandler = new Handler(Looper.getMainLooper());
-
-        // Animatable2Compat.AnimationCallback implementation.
-        @Override
-        public void onAnimationEnd(Drawable drawable) {
-            if (!(drawable instanceof Animatable)) return;
-            mHandler.post(() -> {
-                if (drawable.isVisible()) ((Animatable) drawable).start();
-            });
-        }
-    }
-
-    @TargetApi(Build.VERSION_CODES.M)
-    private static final class AutoRestarter extends Animatable2.AnimationCallback {
-        // Animatable2.AnimationCallback implementation.
-        @Override
-        public void onAnimationEnd(Drawable drawable) {
-            LazyHolderCompat.INSTANCE.onAnimationEnd(drawable);
+            AutoAnimatorDrawable.animatedDrawableHelper(scaleDrawable.getDrawable(), consumer);
         }
     }
 }

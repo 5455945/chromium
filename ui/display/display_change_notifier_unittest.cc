@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/display.h"
 #include "ui/display/display_observer.h"
@@ -21,11 +20,16 @@ class MockDisplayObserver : public DisplayObserver {
         display_changed_(0),
         latest_metrics_change_(DisplayObserver::DISPLAY_METRIC_NONE) {}
 
+  MockDisplayObserver(const MockDisplayObserver&) = delete;
+  MockDisplayObserver& operator=(const MockDisplayObserver&) = delete;
+
   ~MockDisplayObserver() override {}
 
   void OnDisplayAdded(const Display& display) override { display_added_++; }
 
-  void OnDisplayRemoved(const Display& display) override { display_removed_++; }
+  void OnDisplaysRemoved(const Displays& removed_displays) override {
+    display_removed_ += removed_displays.size();
+  }
 
   void OnDisplayMetricsChanged(const Display& display,
                                uint32_t metrics) override {
@@ -46,8 +50,6 @@ class MockDisplayObserver : public DisplayObserver {
   int display_removed_;
   int display_changed_;
   uint32_t latest_metrics_change_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockDisplayObserver);
 };
 
 TEST(DisplayChangeNotifierTest, AddObserver_Smoke) {

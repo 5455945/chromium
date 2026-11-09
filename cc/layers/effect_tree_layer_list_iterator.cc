@@ -1,36 +1,33 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/layers/effect_tree_layer_list_iterator.h"
 
+#include "base/notreached.h"
+
 namespace cc {
 
 EffectTreeLayerListIterator::EffectTreeLayerListIterator(
-    LayerTreeImpl* layer_tree_impl)
-    : state_(EffectTreeLayerListIterator::State::END),
-      layer_list_iterator_(layer_tree_impl->rbegin()),
-      current_effect_tree_index_(EffectTree::kInvalidNodeId),
-      next_effect_tree_index_(EffectTree::kInvalidNodeId),
-      lowest_common_effect_tree_ancestor_index_(EffectTree::kInvalidNodeId),
-      layer_tree_impl_(layer_tree_impl),
-      effect_tree_(&layer_tree_impl->property_trees()->effect_tree) {
+    const LayerTreeImpl& layer_tree_impl)
+    : state_(EffectTreeLayerListIterator::State::kEnd),
+      layers_remaining_(layer_tree_impl.num_layers()),
+      current_effect_tree_index_(kInvalidPropertyNodeId),
+      next_effect_tree_index_(kInvalidPropertyNodeId),
+      lowest_common_effect_tree_ancestor_index_(kInvalidPropertyNodeId) {
   // Find the front-most drawn layer.
-  while (layer_list_iterator_ != layer_tree_impl->rend() &&
-         !(*layer_list_iterator_)->contributes_to_drawn_render_surface()) {
-    ++layer_list_iterator_;
-  }
+  SkipLayersNotContributingToDrawnSurface(layer_tree_impl);
 
   // If there are no drawn layers, start at the root render surface, if it
   // exists.
-  if (layer_list_iterator_ == layer_tree_impl->rend()) {
-    DCHECK(effect_tree_->size() > EffectTree::kContentsRootNodeId);
-    state_ = State::TARGET_SURFACE;
-    current_effect_tree_index_ = EffectTree::kContentsRootNodeId;
+  if (layers_remaining_ == 0) {
+    DCHECK(GetEffectTree(layer_tree_impl).size() > kContentsRootPropertyNodeId);
+    state_ = State::kTargetSurface;
+    current_effect_tree_index_ = kContentsRootPropertyNodeId;
   } else {
-    state_ = State::LAYER;
+    state_ = State::kLayer;
     current_effect_tree_index_ =
-        (*layer_list_iterator_)->render_target_effect_tree_index();
+        LayerAtCursor(layer_tree_impl)->render_target_effect_tree_index();
     next_effect_tree_index_ = current_effect_tree_index_;
     lowest_common_effect_tree_ancestor_index_ = current_effect_tree_index_;
   }
@@ -39,33 +36,45 @@ EffectTreeLayerListIterator::EffectTreeLayerListIterator(
 EffectTreeLayerListIterator::EffectTreeLayerListIterator(
     const EffectTreeLayerListIterator& iterator) = default;
 
+EffectTreeLayerListIterator& EffectTreeLayerListIterator::operator=(
+    const EffectTreeLayerListIterator& iterator) = default;
+
 EffectTreeLayerListIterator::~EffectTreeLayerListIterator() = default;
 
-void EffectTreeLayerListIterator::operator++() {
+void EffectTreeLayerListIterator::SkipLayersNotContributingToDrawnSurface(
+    const LayerTreeImpl& layer_tree_impl) {
+  while (
+      layers_remaining_ > 0 &&
+      !LayerAtCursor(layer_tree_impl)->contributes_to_drawn_render_surface()) {
+    --layers_remaining_;
+  }
+}
+
+void EffectTreeLayerListIterator::Advance(
+    const LayerTreeImpl& layer_tree_impl) {
   switch (state_) {
-    case State::LAYER:
+    case State::kLayer:
       // Find the next drawn layer.
-      ++layer_list_iterator_;
-      while (layer_list_iterator_ != layer_tree_impl_->rend() &&
-             !(*layer_list_iterator_)->contributes_to_drawn_render_surface()) {
-        ++layer_list_iterator_;
-      }
-      if (layer_list_iterator_ == layer_tree_impl_->rend()) {
-        next_effect_tree_index_ = EffectTree::kInvalidNodeId;
-        lowest_common_effect_tree_ancestor_index_ = EffectTree::kInvalidNodeId;
-        state_ = State::TARGET_SURFACE;
+      CHECK_GT(layers_remaining_, 0u);
+      --layers_remaining_;
+      SkipLayersNotContributingToDrawnSurface(layer_tree_impl);
+      if (layers_remaining_ == 0) {
+        next_effect_tree_index_ = kInvalidPropertyNodeId;
+        lowest_common_effect_tree_ancestor_index_ = kInvalidPropertyNodeId;
+        state_ = State::kTargetSurface;
         break;
       }
 
       next_effect_tree_index_ =
-          (*layer_list_iterator_)->render_target_effect_tree_index();
+          LayerAtCursor(layer_tree_impl)->render_target_effect_tree_index();
 
       // If the next drawn layer has a different target effect tree index, check
       // for surfaces whose contributors have all been visited.
       if (next_effect_tree_index_ != current_effect_tree_index_) {
         lowest_common_effect_tree_ancestor_index_ =
-            effect_tree_->LowestCommonAncestorWithRenderSurface(
-                current_effect_tree_index_, next_effect_tree_index_);
+            GetEffectTree(layer_tree_impl)
+                .LowestCommonAncestorWithRenderSurface(
+                    current_effect_tree_index_, next_effect_tree_index_);
         // If the current layer's target effect node is an ancestor of the next
         // layer's target effect node, then the current effect node still has
         // more contributors that need to be visited. Otherwise, all
@@ -75,28 +84,29 @@ void EffectTreeLayerListIterator::operator++() {
           current_effect_tree_index_ = next_effect_tree_index_;
           lowest_common_effect_tree_ancestor_index_ = next_effect_tree_index_;
         } else {
-          state_ = State::TARGET_SURFACE;
+          state_ = State::kTargetSurface;
         }
       }
       break;
-    case State::TARGET_SURFACE:
-      if (current_effect_tree_index_ == EffectTree::kContentsRootNodeId) {
-        current_effect_tree_index_ = EffectTree::kInvalidNodeId;
-        state_ = State::END;
-        DCHECK(next_effect_tree_index_ == EffectTree::kInvalidNodeId);
-        DCHECK(layer_list_iterator_ == layer_tree_impl_->rend());
+    case State::kTargetSurface:
+      if (current_effect_tree_index_ == kContentsRootPropertyNodeId) {
+        current_effect_tree_index_ = kInvalidPropertyNodeId;
+        state_ = State::kEnd;
+        DCHECK(next_effect_tree_index_ == kInvalidPropertyNodeId);
+        DCHECK_EQ(layers_remaining_, 0u);
       } else {
-        state_ = State::CONTRIBUTING_SURFACE;
+        state_ = State::kContributingSurface;
       }
       break;
-    case State::CONTRIBUTING_SURFACE:
+    case State::kContributingSurface:
       DCHECK(current_effect_tree_index_ !=
              lowest_common_effect_tree_ancestor_index_);
       // Step towards the lowest common ancestor.
-      current_effect_tree_index_ =
-          effect_tree_->Node(current_effect_tree_index_)->target_id;
+      current_effect_tree_index_ = GetEffectTree(layer_tree_impl)
+                                       .Node(current_effect_tree_index_)
+                                       .target_id;
       if (current_effect_tree_index_ == next_effect_tree_index_) {
-        state_ = State::LAYER;
+        state_ = State::kLayer;
       } else if (current_effect_tree_index_ ==
                  lowest_common_effect_tree_ancestor_index_) {
         // In this case, we know that more content contributes to the current
@@ -104,7 +114,7 @@ void EffectTreeLayerListIterator::operator++() {
         // not yet ready to visit it as a target surface. The same holds for all
         // effect nodes on the path from the current node to the next effect
         // tree node.
-        state_ = State::LAYER;
+        state_ = State::kLayer;
         current_effect_tree_index_ = next_effect_tree_index_;
         lowest_common_effect_tree_ancestor_index_ = next_effect_tree_index_;
       } else {
@@ -112,10 +122,10 @@ void EffectTreeLayerListIterator::operator++() {
         // current effect node. This means that all contributors to the current
         // effect node have been visited, so we're ready to visit it as a target
         // surface.
-        state_ = State::TARGET_SURFACE;
+        state_ = State::kTargetSurface;
       }
       break;
-    case State::END:
+    case State::kEnd:
       NOTREACHED();
   }
 }

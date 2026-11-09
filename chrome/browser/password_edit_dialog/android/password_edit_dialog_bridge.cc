@@ -1,68 +1,65 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/password_edit_dialog/android/password_edit_dialog_bridge.h"
 
+#include <jni.h>
+
 #include "base/android/jni_string.h"
+#include "base/check.h"
 #include "base/memory/ptr_util.h"
-#include "chrome/browser/password_edit_dialog/android/jni_headers/PasswordEditDialogBridge_jni.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/default_conversions.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/android/window_android.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/password_edit_dialog/android/jni_headers/PasswordEditDialogBridge_jni.h"
 
 PasswordEditDialog::~PasswordEditDialog() = default;
 
 // static
 std::unique_ptr<PasswordEditDialog> PasswordEditDialogBridge::Create(
     content::WebContents* web_contents,
-    DialogAcceptedCallback dialog_accepted_callback,
-    DialogDismissedCallback dialog_dismissed_callback) {
-  DCHECK(web_contents);
+    PasswordEditDialogBridgeDelegate* delegate) {
+  CHECK(web_contents, base::NotFatalUntil::M161);
+  CHECK(delegate);
 
   ui::WindowAndroid* window_android = web_contents->GetTopLevelNativeWindow();
-  if (!window_android)
+  if (!window_android) {
     return nullptr;
-  return base::WrapUnique(new PasswordEditDialogBridge(
-      window_android->GetJavaObject(), std::move(dialog_accepted_callback),
-      std::move(dialog_dismissed_callback)));
+  }
+  return base::WrapUnique(
+      new PasswordEditDialogBridge(window_android->GetJavaObject(), delegate));
 }
 
 PasswordEditDialogBridge::PasswordEditDialogBridge(
     base::android::ScopedJavaLocalRef<jobject> j_window_android,
-    DialogAcceptedCallback dialog_accepted_callback,
-    DialogDismissedCallback dialog_dismissed_callback)
-    : dialog_accepted_callback_(std::move(dialog_accepted_callback)),
-      dialog_dismissed_callback_(std::move(dialog_dismissed_callback)) {
+    PasswordEditDialogBridgeDelegate* delegate)
+    : delegate_(delegate) {
+  CHECK(delegate_);
+
   JNIEnv* env = base::android::AttachCurrentThread();
   java_password_dialog_ = Java_PasswordEditDialogBridge_create(
-      env, reinterpret_cast<intptr_t>(this), j_window_android);
+      env, jni_zero::MakeRaw(this), j_window_android);
 }
 
 PasswordEditDialogBridge::~PasswordEditDialogBridge() {
-  DCHECK(java_password_dialog_.is_null());
+  CHECK(java_password_dialog_.is_null(), base::NotFatalUntil::M161);
 }
 
-void PasswordEditDialogBridge::Show(
-    const std::vector<std::u16string>& usernames,
-    int selected_username_index,
+void PasswordEditDialogBridge::ShowPasswordEditDialog(
+    const std::vector<std::u16string>& saved_usernames,
+    const std::u16string& username,
     const std::u16string& password,
-    const std::u16string& origin,
-    const std::string& account_email) {
+    const std::optional<std::string>& account_email,
+    bool is_saving_blocked_by_trusted_vault_error) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  base::android::ScopedJavaLocalRef<jobjectArray> j_usernames =
-      base::android::ToJavaArrayOfStrings(env, usernames);
-
-  base::android::ScopedJavaLocalRef<jstring> j_password =
-      base::android::ConvertUTF16ToJavaString(env, password);
-  base::android::ScopedJavaLocalRef<jstring> j_origin =
-      base::android::ConvertUTF16ToJavaString(env, origin);
-  base::android::ScopedJavaLocalRef<jstring> j_account_email =
-      base::android::ConvertUTF8ToJavaString(env, account_email);
-
-  Java_PasswordEditDialogBridge_show(env, java_password_dialog_, j_usernames,
-                                     selected_username_index, j_password,
-                                     j_origin, j_account_email);
+  Java_PasswordEditDialogBridge_showPasswordEditDialog(
+      env, java_password_dialog_, saved_usernames, username, password,
+      account_email, is_saving_blocked_by_trusted_vault_error);
 }
 
 void PasswordEditDialogBridge::Dismiss() {
@@ -70,13 +67,23 @@ void PasswordEditDialogBridge::Dismiss() {
   Java_PasswordEditDialogBridge_dismiss(env, java_password_dialog_);
 }
 
-void PasswordEditDialogBridge::OnDialogAccepted(JNIEnv* env,
-                                                jint selected_username_index) {
-  std::move(dialog_accepted_callback_).Run(selected_username_index);
+void PasswordEditDialogBridge::OnDialogAccepted(
+    JNIEnv* env,
+    const std::u16string& username,
+    const std::u16string& password) {
+  delegate_->HandleSavePasswordFromDialog(username, password);
 }
 
 void PasswordEditDialogBridge::OnDialogDismissed(JNIEnv* env,
-                                                 jboolean dialogAccepted) {
+                                                 bool dialogAccepted) {
   java_password_dialog_.Reset();
-  std::move(dialog_dismissed_callback_).Run(dialogAccepted);
+  delegate_->HandleDialogDismissed(dialogAccepted);
 }
+
+bool PasswordEditDialogBridge::IsUsingAccountStorage(
+    JNIEnv* env,
+    const std::u16string& username) {
+  return delegate_->IsUsingAccountStorage(username);
+}
+
+DEFINE_JNI(PasswordEditDialogBridge)

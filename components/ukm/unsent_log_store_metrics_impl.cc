@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,7 @@ UnsentLogStoreMetricsImpl::~UnsentLogStoreMetricsImpl() = default;
 
 void UnsentLogStoreMetricsImpl::RecordLogReadStatus(
     metrics::UnsentLogStoreMetrics::LogReadStatus status) {
-  UMA_HISTOGRAM_ENUMERATION("UKM.PersistentLogRecall.Status", status,
-                            metrics::UnsentLogStoreMetrics::END_RECALL_STATUS);
+  UMA_HISTOGRAM_ENUMERATION("UKM.PersistentLogRecall.Status", status);
 }
 
 void UnsentLogStoreMetricsImpl::RecordCompressionRatio(size_t compressed_size,

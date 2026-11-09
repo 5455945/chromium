@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "gpu/command_buffer/client/client_transfer_cache.h"
@@ -26,12 +26,11 @@
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/context_result.h"
 
-class GrDirectContext;
-
 namespace gpu {
 
 namespace gles2 {
 class QueryTracker;
+class GLES2ImplementationTest;
 }
 
 class CommandBufferHelper;
@@ -62,6 +61,10 @@ class GLES2_IMPL_EXPORT ImplementationBase
   ImplementationBase(CommandBufferHelper* helper,
                      TransferBufferInterface* transfer_buffer,
                      GpuControl* gpu_control);
+
+  ImplementationBase(const ImplementationBase&) = delete;
+  ImplementationBase& operator=(const ImplementationBase&) = delete;
+
   ~ImplementationBase() override;
 
   void FreeUnusedSharedMemory();
@@ -78,16 +81,11 @@ class GLES2_IMPL_EXPORT ImplementationBase
   void SignalSyncToken(const gpu::SyncToken& sync_token,
                        base::OnceClosure callback) override;
   bool IsSyncTokenSignaled(const gpu::SyncToken& sync_token) override;
+  SyncPointClientId GetSyncPointClientId() const override;
   void SignalQuery(uint32_t query, base::OnceClosure callback) override;
   void GetGpuFence(uint32_t gpu_fence_id,
                    base::OnceCallback<void(std::unique_ptr<gfx::GpuFence>)>
                        callback) override;
-  void SetGrContext(GrDirectContext* gr) override;
-  bool HasGrContextSupport() const override;
-  void WillCallGLFromSkia() override;
-  void DidCallGLFromSkia() override;
-  void SetDisplayTransform(gfx::OverlayTransform transform) override;
-  void SetFrameRate(float frame_rate) override;
 
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
@@ -103,7 +101,7 @@ class GLES2_IMPL_EXPORT ImplementationBase
   gpu::ContextResult Initialize(const SharedMemoryLimits& limits);
 
   // Waits for all commands to execute.
-  void WaitForCmd();
+  bool WaitForCmd();
 
   // Gets the value of the result.
   template <typename T>
@@ -138,7 +136,7 @@ class GLES2_IMPL_EXPORT ImplementationBase
 
   void RunIfContextNotLost(base::OnceClosure callback);
 
-  TransferBufferInterface* transfer_buffer_;
+  raw_ptr<TransferBufferInterface> transfer_buffer_;
 
   std::unique_ptr<MappedMemoryManager> mapped_memory_;
 
@@ -147,7 +145,7 @@ class GLES2_IMPL_EXPORT ImplementationBase
   base::OnceClosure lost_context_callback_;
   bool lost_context_callback_run_ = false;
 
-  GpuControl* const gpu_control_;
+  const raw_ptr<GpuControl> gpu_control_;
 
   Capabilities capabilities_;
 
@@ -157,12 +155,21 @@ class GLES2_IMPL_EXPORT ImplementationBase
                           const char* function_name,
                           const char* msg) = 0;
 
-  CommandBufferHelper* helper_;
+  friend class gles2::GLES2ImplementationTest;
+
+  raw_ptr<CommandBufferHelper> helper_;
 
   base::WeakPtrFactory<ImplementationBase> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ImplementationBase);
 };
+
+// Helper for copying 2D pixel data without touching the padding between rows.
+GLES2_IMPL_EXPORT void RelaxedAtomicWriteMemcpyImageRowsSkippingPadding(
+    base::span<uint8_t> dst,
+    base::span<uint8_t> src,
+    size_t row_bytes,
+    size_t height,
+    size_t dst_stride,
+    size_t src_stride);
 
 }  // namespace gpu
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "media/base/video_decoder.h"
 #include "media/gpu/android/promotion_hint_aggregator.h"
@@ -63,12 +63,18 @@ class MEDIA_GPU_EXPORT VideoFrameFactory {
       std::unique_ptr<CodecOutputBuffer> output_buffer,
       base::TimeDelta timestamp,
       gfx::Size natural_size,
+      const gfx::ColorSpace& color_space,
+      const gfx::HDRMetadata& hdr_metadata,
       PromotionHintAggregator::NotifyPromotionHintCB promotion_hint_cb,
       OnceOutputCB output_cb) = 0;
 
   // Runs |closure| on the calling sequence after all previous
   // CreateVideoFrame() calls have completed.
   virtual void RunAfterPendingVideoFrames(base::OnceClosure closure) = 0;
+
+  // Returns true if the VideoFrameFactory can't currently produce any more
+  // frames.
+  virtual bool IsStalled() const = 0;
 };
 
 }  // namespace media

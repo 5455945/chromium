@@ -1,43 +1,55 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_USER_SELECTION_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_USER_SELECTION_SCREEN_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "ash/public/cpp/login_types.h"
-#include "ash/public/cpp/session/user_info.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-// TODO(https://crbug.com/1164001): move to forward declaration
-#include "chrome/browser/ash/login/easy_unlock/easy_unlock_service.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_checkers_collection.h"
-#include "chrome/browser/ash/login/signin/token_handle_util.h"
-#include "chrome/browser/ash/login/ui/login_display.h"
+#include "chrome/browser/ash/login/signin/token_handle_store.h"
 #include "chrome/browser/ash/login/user_online_signin_notifier.h"
+#include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
 #include "chrome/browser/ash/system/system_clock.h"
-#include "chromeos/components/proximity_auth/screenlock_bridge.h"
-#include "chromeos/dbus/cryptohome/rpc.pb.h"
+#include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
+#include "chromeos/ash/components/proximity_auth/screenlock_bridge.h"
 #include "components/account_id/account_id.h"
 #include "components/session_manager/core/session_manager_observer.h"
 #include "components/user_manager/user.h"
-#include "ui/base/ime/chromeos/ime_keyboard.h"
-#include "ui/base/ime/chromeos/input_method_manager.h"
+#include "ui/base/ime/ash/ime_keyboard.h"
+#include "ui/base/ime/ash/input_method_manager.h"
 
 class AccountId;
+class ApplicationLocaleStorage;
+class PrefService;
 
-namespace chromeos {
-class UserBoardView;
-}
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
+namespace user_manager {
+class MultiUserSignInPolicyController;
+}  // namespace user_manager
 
 namespace ash {
+
+class SmartLockService;
+class UserBoardView;
+struct LoginUserInfo;
 
 enum class DisplayedScreen { SIGN_IN_SCREEN, USER_ADDING_SCREEN, LOCK_SCREEN };
 
@@ -46,29 +58,43 @@ class UserSelectionScreen
     : public proximity_auth::ScreenlockBridge::LockHandler,
       public session_manager::SessionManagerObserver,
       public PasswordSyncTokenLoginChecker::Observer,
-      public UserOnlineSigninNotifier::Observer {
+      public UserOnlineSigninNotifier::Observer,
+      public policy::DeviceLocalAccountPolicyService::Observer {
  public:
-  explicit UserSelectionScreen(DisplayedScreen display_type);
+  // `local_state`, `application_locale_storage`,
+  // `browser_policy_connector_ash`, `multi_user_sign_in_policy_controller`,
+  // and `system_clock` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  UserSelectionScreen(
+      PrefService* local_state,
+      const ApplicationLocaleStorage* application_locale_storage,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      const user_manager::MultiUserSignInPolicyController*
+          multi_user_sign_in_policy_controller,
+      system::SystemClock* system_clock,
+      DisplayedScreen display_type);
+
+  UserSelectionScreen(const UserSelectionScreen&) = delete;
+  UserSelectionScreen& operator=(const UserSelectionScreen&) = delete;
+
   ~UserSelectionScreen() override;
 
-  void SetView(chromeos::UserBoardView* view);
+  void SetView(UserBoardView* view);
 
   static const user_manager::UserList PrepareUserListForSending(
       const user_manager::UserList& users,
       const AccountId& owner,
       bool is_signin_to_add);
 
-  virtual void Init(const user_manager::UserList& users);
+  void Init(const user_manager::UserList& users);
 
   void CheckUserStatus(const AccountId& account_id);
   void HandleFocusPod(const AccountId& account_id);
   void HandleNoPodFocused();
   void OnBeforeShow();
 
-  // Methods for easy unlock support.
-  void HardLockPod(const AccountId& account_id);
   void AttemptEasyUnlock(const AccountId& account_id);
-
   void InitEasyUnlock();
 
   void SetTpmLockedState(bool is_locked, base::TimeDelta time_left);
@@ -76,11 +102,10 @@ class UserSelectionScreen
   // proximity_auth::ScreenlockBridge::LockHandler implementation:
   void ShowBannerMessage(const std::u16string& message,
                          bool is_warning) override;
-  void ShowUserPodCustomIcon(
-      const AccountId& account_id,
-      const proximity_auth::ScreenlockBridge::UserPodCustomIconInfo& icon_info)
-      override;
-  void HideUserPodCustomIcon(const AccountId& account_id) override;
+  void SetSmartLockState(const AccountId& account_id,
+                         SmartLockState state) override;
+  void NotifySmartLockAuthResult(const AccountId& account_id,
+                                 bool success) override;
 
   void EnableInput() override;
   void SetAuthType(const AccountId& account_id,
@@ -91,9 +116,6 @@ class UserSelectionScreen
   ScreenType GetScreenType() const override;
 
   void Unlock(const AccountId& account_id) override;
-  void AttemptEasySignin(const AccountId& account_id,
-                         const std::string& secret,
-                         const std::string& key_label) override;
 
   // session_manager::SessionManagerObserver
   void OnSessionStateChanged() override;
@@ -104,17 +126,69 @@ class UserSelectionScreen
   // UserOnlineSigninNotifier::Observer
   void OnOnlineSigninEnforced(const AccountId& account_id) override;
 
-  // Determines if user auth status requires online sign in.
-  static bool ShouldForceOnlineSignIn(const user_manager::User* user);
-
-  // Builds a `UserAvatar` instance which contains the current image for `user`.
-  static UserAvatar BuildAshUserAvatarForUser(const user_manager::User& user);
+  // policy::DeviceLocalAccountPolicyService::Observer:
+  void OnPolicyUpdated(const std::string& user_id) override;
+  void OnDeviceLocalAccountsChanged() override;
 
   std::vector<LoginUserInfo> UpdateAndReturnUserListForAsh();
   void SetUsersLoaded(bool loaded);
 
- protected:
-  chromeos::UserBoardView* view_ = nullptr;
+ private:
+  class DircryptoMigrationChecker;
+  class TpmLockedChecker;
+
+  SmartLockService* GetSmartLockServiceForUser(
+      const AccountId& account_id) const;
+
+  void OnUserStatusChecked(const AccountId& account_id,
+                           const std::string& token,
+                           bool reauth_required);
+  void OnAllowedInputMethodsChanged();
+
+  // Check whether the display name set by policy for a public session has
+  // changed and if so, notify the UI.
+  void CheckForPublicSessionDisplayNameChange(
+      policy::DeviceLocalAccountPolicyBroker* broker);
+
+  // Check whether the list of recommended locales set by policy for a public
+  // session has changed and if so, notify the UI.
+  void CheckForPublicSessionLocalePolicyChange(
+      policy::DeviceLocalAccountPolicyBroker* broker);
+
+  // Check whether full management disclosure is needed for the public/managed
+  // session login screen and if so, notify the UI.
+  void CheckIfFullManagementDisclosureNeeded(
+      policy::DeviceLocalAccountPolicyBroker* broker);
+
+  // Notify the UI that the display name for a public session has changed,
+  // taking the display name from the `User` owned by `UserManager`.
+  void SetPublicSessionDisplayName(const AccountId& account_id);
+
+  // Send an updated list of locales for a public session to the UI, consisting
+  // of the `recommended_locales` followed by all other available locales.
+  void SetPublicSessionLocales(
+      const AccountId& account_id,
+      const std::vector<std::string>& recommended_locales);
+
+  // Send an updated flag for enabling/disable full management disclosure to the
+  // UI.
+  void SetPublicSessionShowFullManagementDisclosure(
+      bool show_full_management_disclosure);
+
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
+  const raw_ref<const policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+  const raw_ref<const user_manager::MultiUserSignInPolicyController>
+      multi_user_sign_in_policy_controller_;
+  const raw_ref<system::SystemClock> system_clock_;
+
+  // Purpose of the screen.
+  const DisplayedScreen display_type_;
+
+  raw_ptr<UserBoardView> view_ = nullptr;
 
   // Map from public session account IDs to recommended locales set by policy.
   std::map<AccountId, std::vector<std::string>>
@@ -123,19 +197,16 @@ class UserSelectionScreen
   // Whether users have been sent to the UI(WebUI or Views).
   bool users_loaded_ = false;
 
- private:
-  class DircryptoMigrationChecker;
-  class TpmLockedChecker;
+  // May be null.
+  const raw_ptr<policy::DeviceLocalAccountPolicyService>
+      device_local_account_policy_service_;
 
-  EasyUnlockService* GetEasyUnlockServiceForUser(
-      const AccountId& account_id) const;
+  base::ScopedObservation<policy::DeviceLocalAccountPolicyService,
+                          policy::DeviceLocalAccountPolicyService::Observer>
+      device_local_account_policy_observation_{this};
 
-  void OnUserStatusChecked(const AccountId& account_id,
-                           TokenHandleUtil::TokenHandleStatus status);
-  void OnAllowedInputMethodsChanged();
-
-  // Purpose of the screen.
-  const DisplayedScreen display_type_;
+  // Map from public session account IDs to their display names set by policy.
+  std::map<AccountId, std::string> public_session_display_names_;
 
   // Set of Users that are visible.
   user_manager::UserList users_;
@@ -144,11 +215,8 @@ class UserSelectionScreen
   // contained in the map, it is using the default authentication type.
   std::map<AccountId, proximity_auth::mojom::AuthType> user_auth_type_map_;
 
-  // Timer for measuring idle state duration before password clear.
-  base::OneShotTimer password_clear_timer_;
-
-  // Token handler util for checking user OAuth token status.
-  std::unique_ptr<TokenHandleUtil> token_handle_util_;
+  // Used for checking user OAuth token status.
+  raw_ptr<TokenHandleStore> token_handle_store_;
 
   // Helper to check whether a user needs dircrypto migration.
   std::unique_ptr<DircryptoMigrationChecker> dircrypto_migration_checker_;
@@ -159,13 +227,13 @@ class UserSelectionScreen
   user_manager::UserList users_to_send_;
 
   AccountId focused_pod_account_id_;
-  absl::optional<system::SystemClock::ScopedHourClockType>
+  std::optional<system::SystemClock::ScopedHourClockType>
       focused_user_clock_type_;
 
   // Sometimes we might get focused pod while user session is still active. e.g.
   // while creating lock screen. So postpone any work until after the session
   // state changes.
-  absl::optional<AccountId> pending_focused_account_id_;
+  std::optional<AccountId> pending_focused_account_id_;
 
   // Input Method Engine state used at the user selection screen.
   scoped_refptr<input_method::InputMethodManager::State> ime_state_;
@@ -184,17 +252,8 @@ class UserSelectionScreen
       scoped_observation_{this};
 
   base::WeakPtrFactory<UserSelectionScreen> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UserSelectionScreen);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::DisplayedScreen;
-using ::ash::UserSelectionScreen;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_USER_SELECTION_SCREEN_H_

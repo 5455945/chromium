@@ -1,20 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "google_apis/gcm/engine/checkin_request.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "build/chromeos_buildflags.h"
+#include "base/task/sequenced_task_runner.h"
+#include "build/build_config.h"
+#include "google_apis/credentials_mode.h"
 #include "google_apis/gcm/monitoring/gcm_stats_recorder.h"
 #include "google_apis/gcm/protocol/checkin.pb.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace gcm {
 
@@ -70,7 +78,6 @@ std::string GetCheckinRequestStatusString(CheckinRequestStatus status) {
   }
 
   NOTREACHED();
-  return "Failed: Unknown reason";
 }
 
 // Records checkin status to both stats recorder and reports to UMA.
@@ -92,12 +99,10 @@ void RecordCheckinStatusAndReportUMA(CheckinRequestStatus status,
 CheckinRequest::RequestInfo::RequestInfo(
     uint64_t android_id,
     uint64_t security_token,
-    const std::map<std::string, std::string>& account_tokens,
     const std::string& settings_digest,
     const checkin_proto::ChromeBuildProto& chrome_build_proto)
     : android_id(android_id),
       security_token(security_token),
-      account_tokens(account_tokens),
       settings_digest(settings_digest),
       chrome_build_proto(chrome_build_proto) {}
 
@@ -139,21 +144,11 @@ void CheckinRequest::Start() {
 
   checkin_proto::AndroidCheckinProto* checkin = request.mutable_checkin();
   checkin->mutable_chrome_build()->CopyFrom(request_info_.chrome_build_proto);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   checkin->set_type(checkin_proto::DEVICE_CHROME_OS);
 #else
   checkin->set_type(checkin_proto::DEVICE_CHROME_BROWSER);
 #endif
-
-  // Pack a map of email -> token mappings into a repeated field, where odd
-  // entries are email addresses, while even ones are respective OAuth2 tokens.
-  for (std::map<std::string, std::string>::const_iterator iter =
-           request_info_.account_tokens.begin();
-       iter != request_info_.account_tokens.end();
-       ++iter) {
-    request.add_account_cookie(iter->first);
-    request.add_account_cookie(iter->second);
-  }
 
   std::string upload_data;
   CHECK(request.SerializeToString(&upload_data));
@@ -192,7 +187,9 @@ void CheckinRequest::Start() {
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = checkin_url_;
   resource_request->method = "POST";
-  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  resource_request->credentials_mode =
+      google_apis::GetOmitCredentialsModeForGaiaRequests();
+
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  traffic_annotation);
   url_loader_->AttachStringForUpload(upload_data, kRequestContentType);
@@ -212,9 +209,6 @@ void CheckinRequest::RetryWithBackoff() {
   backoff_entry_.InformOfRequest(false);
   url_loader_.reset();
 
-  DVLOG(1) << "Delay GCM checkin for: "
-           << backoff_entry_.GetTimeUntilRelease().InMilliseconds()
-           << " milliseconds.";
   recorder_->RecordCheckinDelayedDueToBackoff(
       backoff_entry_.GetTimeUntilRelease().InMilliseconds());
   DCHECK(!weak_ptr_factory_.HasWeakPtrs());
@@ -225,12 +219,10 @@ void CheckinRequest::RetryWithBackoff() {
 }
 
 void CheckinRequest::OnURLLoadComplete(const network::SimpleURLLoader* source,
-                                       std::unique_ptr<std::string> body) {
+                                       std::optional<std::string> body) {
   if (source->NetError() != net::OK) {
     RecordCheckinStatusAndReportUMA(CheckinRequestStatus::kFailedNetError,
                                     recorder_, /* will_retry= */ true);
-    base::UmaHistogramSparse("GCM.CheckinRequestStatusNetError",
-                             std::abs(source->NetError()));
 
     RetryWithBackoff();
     return;
@@ -268,9 +260,6 @@ void CheckinRequest::OnURLLoadComplete(const network::SimpleURLLoader* source,
 
   if (response_status != net::HTTP_OK || !body ||
       !response_proto.ParseFromString(*body)) {
-    LOG(ERROR) << "Failed to parse checkin response. HTTP Status: "
-               << response_status << ". Retrying.";
-
     CheckinRequestStatus status =
         response_status != net::HTTP_OK
             ? CheckinRequestStatus::kStatusNotOK

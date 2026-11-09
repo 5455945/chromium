@@ -1,10 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/webxr/android/arcore_device_provider.h"
 
-#include "components/webxr/android/arcore_java_utils.h"
+#include "components/webxr/android/xr_session_coordinator.h"
 #include "components/webxr/mailbox_to_surface_bridge_impl.h"
 #include "device/vr/android/arcore/ar_image_transport.h"
 #include "device/vr/android/arcore/arcore_device.h"
@@ -14,21 +14,17 @@
 namespace webxr {
 
 ArCoreDeviceProvider::ArCoreDeviceProvider(
-    webxr::ArCompositorDelegateProvider compositor_delegate_provider)
-    : compositor_delegate_provider_(compositor_delegate_provider) {}
+    std::unique_ptr<webxr::ArCompositorDelegateProvider>
+        compositor_delegate_provider)
+    : compositor_delegate_provider_(std::move(compositor_delegate_provider)) {}
 
 ArCoreDeviceProvider::~ArCoreDeviceProvider() = default;
 
 void ArCoreDeviceProvider::Initialize(
-    base::RepeatingCallback<void(device::mojom::XRDeviceId,
-                                 device::mojom::VRDisplayInfoPtr,
-                                 device::mojom::XRDeviceDataPtr,
-                                 mojo::PendingRemote<device::mojom::XRRuntime>)>
-        add_device_callback,
-    base::RepeatingCallback<void(device::mojom::XRDeviceId)>
-        remove_device_callback,
-    base::OnceClosure initialization_complete,
-    device::XrFrameSinkClientFactory xr_frame_sink_client_factory) {
+    device::VRDeviceProviderClient* client,
+    content::WebContents* initializing_web_contents) {
+  CHECK(!initialized_);
+
   if (device::IsArCoreSupported()) {
     DVLOG(2) << __func__ << ": ARCore is supported, creating device";
 
@@ -36,15 +32,15 @@ void ArCoreDeviceProvider::Initialize(
         std::make_unique<device::ArCoreImplFactory>(),
         std::make_unique<device::ArImageTransportFactory>(),
         std::make_unique<webxr::MailboxToSurfaceBridgeFactoryImpl>(),
-        std::make_unique<webxr::ArCoreJavaUtils>(compositor_delegate_provider_),
-        std::move(xr_frame_sink_client_factory));
+        std::make_unique<webxr::XrSessionCoordinator>(),
+        std::move(compositor_delegate_provider_),
+        client->GetXrFrameSinkClientFactory());
 
-    add_device_callback.Run(
-        arcore_device_->GetId(), arcore_device_->GetVRDisplayInfo(),
-        arcore_device_->GetDeviceData(), arcore_device_->BindXRRuntime());
+    client->AddRuntime(arcore_device_->GetId(), arcore_device_->GetDeviceData(),
+                       arcore_device_->BindXRRuntime());
   }
   initialized_ = true;
-  std::move(initialization_complete).Run();
+  client->OnProviderInitialized();
 }
 
 bool ArCoreDeviceProvider::Initialized() {

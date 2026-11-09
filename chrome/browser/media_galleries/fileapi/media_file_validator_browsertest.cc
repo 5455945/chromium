@@ -1,20 +1,21 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
@@ -24,6 +25,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_test.h"
 #include "storage/browser/file_system/copy_or_move_file_validator.h"
+#include "storage/browser/file_system/copy_or_move_hook_delegate.h"
 #include "storage/browser/file_system/file_system_backend.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
@@ -34,6 +36,7 @@
 #include "storage/browser/test/test_file_system_context.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -66,8 +69,9 @@ void HandleCheckFileResult(int64_t expected_size,
 
 base::FilePath GetMediaTestDir() {
   base::FilePath test_file;
-  if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &test_file))
+  if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &test_file)) {
     return base::FilePath();
+  }
   return test_file.AppendASCII("media").AppendASCII("test").AppendASCII("data");
 }
 
@@ -76,6 +80,9 @@ base::FilePath GetMediaTestDir() {
 class MediaFileValidatorTest : public InProcessBrowserTest {
  public:
   MediaFileValidatorTest() : test_file_size_(0) {}
+
+  MediaFileValidatorTest(const MediaFileValidatorTest&) = delete;
+  MediaFileValidatorTest& operator=(const MediaFileValidatorTest&) = delete;
 
   ~MediaFileValidatorTest() override = default;
 
@@ -133,7 +140,7 @@ class MediaFileValidatorTest : public InProcessBrowserTest {
         std::make_unique<storage::TestFileSystemBackend>(
             file_system_runner_.get(), src_path));
     additional_providers.push_back(
-        std::make_unique<MediaFileSystemBackend>(base, base::NullCallback()));
+        std::make_unique<MediaFileSystemBackend>(base));
     file_system_context_ =
         storage::CreateFileSystemContextWithAdditionalProvidersForTesting(
             content::GetIOThreadTaskRunner({}), file_system_runner_,
@@ -141,8 +148,8 @@ class MediaFileValidatorTest : public InProcessBrowserTest {
             base);
 
     move_src_ = file_system_context_->CreateCrackedFileSystemURL(
-        url::Origin::Create(GURL(kOrigin)), storage::kFileSystemTypeTest,
-        base::FilePath::FromUTF8Unsafe(filename));
+        blink::StorageKey::CreateFromStringForTesting(kOrigin),
+        storage::kFileSystemTypeTest, base::FilePath::FromUTF8Unsafe(filename));
 
     test_file_size_ = content.size();
     base::FilePath test_file = src_path.AppendASCII(filename);
@@ -160,8 +167,8 @@ class MediaFileValidatorTest : public InProcessBrowserTest {
     std::string extension = filename.substr(extension_index);
     std::string dest_root_fs_url = storage::GetIsolatedFileSystemRootURIString(
         GURL(kOrigin), dest_fs_.id(), "dest_fs/");
-    move_dest_ = file_system_context_->CrackURL(GURL(
-          dest_root_fs_url + "move_dest" + extension));
+    const GURL crack_url = GURL(dest_root_fs_url + "move_dest" + extension);
+    move_dest_ = file_system_context_->CrackURLInFirstPartyContext(crack_url);
 
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
@@ -197,7 +204,7 @@ class MediaFileValidatorTest : public InProcessBrowserTest {
                  int64_t expected_size,
                  base::OnceCallback<void(bool success)> callback) {
     operation_runner()->GetMetadata(
-        url, storage::FileSystemOperation::GET_METADATA_FIELD_SIZE,
+        url, {storage::FileSystemOperation::GetMetadataField::kSize},
         base::BindOnce(&HandleCheckFileResult, expected_size,
                        std::move(callback)));
   }
@@ -221,9 +228,10 @@ class MediaFileValidatorTest : public InProcessBrowserTest {
   void OnTestFilesReady(bool expected_result, bool test_files_ready) {
     ASSERT_TRUE(test_files_ready);
     operation_runner()->Move(
-        move_src_, move_dest_, storage::FileSystemOperation::OPTION_NONE,
+        move_src_, move_dest_,
+        storage::FileSystemOperation::CopyOrMoveOptionSet(),
         storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-        storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+        std::make_unique<storage::CopyOrMoveHookDelegate>(),
         base::BindOnce(&MediaFileValidatorTest::OnMoveResult,
                        base::Unretained(this), expected_result));
   }
@@ -263,34 +271,24 @@ class MediaFileValidatorTest : public InProcessBrowserTest {
 
   base::OnceClosure quit_closure_;
   scoped_refptr<base::SequencedTaskRunner> file_system_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaFileValidatorTest);
 };
 
 IN_PROC_BROWSER_TEST_F(MediaFileValidatorTest, UnsupportedExtension) {
-  MoveTest("a.txt", std::string(kValidImage, base::size(kValidImage)), false);
+  MoveTest("a.txt", std::string(kValidImage, std::size(kValidImage)), false);
 }
 
-// TODO(crbug.com/1169640): Re-enable. Flaky on Linux.
-#if defined(OS_LINUX)
-#define MAYBE_ValidImage DISABLED_ValidImage
-#else
-#define MAYBE_ValidImage ValidImage
-#endif
-IN_PROC_BROWSER_TEST_F(MediaFileValidatorTest, MAYBE_ValidImage) {
-  MoveTest("a.webp", std::string(kValidImage, base::size(kValidImage)), true);
+IN_PROC_BROWSER_TEST_F(MediaFileValidatorTest, ValidImage) {
+  MoveTest("a.webp", std::string(kValidImage, std::size(kValidImage)), true);
 }
 
 IN_PROC_BROWSER_TEST_F(MediaFileValidatorTest, InvalidImage) {
   MoveTest("a.webp",
-           std::string(kInvalidMediaFile, base::size(kInvalidMediaFile)),
-           false);
+           std::string(kInvalidMediaFile, std::size(kInvalidMediaFile)), false);
 }
 
 IN_PROC_BROWSER_TEST_F(MediaFileValidatorTest, InvalidAudio) {
   MoveTest("a.ogg",
-           std::string(kInvalidMediaFile, base::size(kInvalidMediaFile)),
-           false);
+           std::string(kInvalidMediaFile, std::size(kInvalidMediaFile)), false);
 }
 
 IN_PROC_BROWSER_TEST_F(MediaFileValidatorTest, ValidAudio) {

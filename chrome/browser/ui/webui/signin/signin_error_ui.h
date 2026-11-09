@@ -1,30 +1,50 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_WEBUI_SIGNIN_SIGNIN_ERROR_UI_H_
 #define CHROME_BROWSER_UI_WEBUI_SIGNIN_SIGNIN_ERROR_UI_H_
 
-#include "base/macros.h"
-#include "chrome/browser/ui/webui/signin/signin_web_dialog_ui.h"
+#include "chrome/common/webui_url_constants.h"
+#include "content/public/browser/webui_config.h"
+#include "content/public/common/url_constants.h"
+#include "ui/web_dialogs/web_dialog_ui.h"
 
-namespace ui {
+class BrowserWindowInterface;
+class SigninErrorUI;
+class SigninUIError;
+
+namespace content {
 class WebUI;
-}
+}  // namespace content
 
-class SigninErrorUI : public SigninWebDialogUI {
+class SigninErrorUIConfig : public content::DefaultWebUIConfig<SigninErrorUI> {
+ public:
+  SigninErrorUIConfig()
+      : DefaultWebUIConfig(content::kChromeUIScheme,
+                           chrome::kChromeUISigninErrorHost) {}
+
+  // content::WebUIConfig:
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+};
+
+class SigninErrorUI : public ui::WebDialogUI {
  public:
   explicit SigninErrorUI(content::WebUI* web_ui);
-  ~SigninErrorUI() override {}
 
-  // SigninWebDialogUI:
-  void InitializeMessageHandlerWithBrowser(Browser* browser) override;
+  SigninErrorUI(const SigninErrorUI&) = delete;
+  SigninErrorUI& operator=(const SigninErrorUI&) = delete;
 
- private:
-  void InitializeMessageHandlerForProfilePicker();
-  void Initialize(Browser* browser, bool is_system_profile);
+  ~SigninErrorUI() override = default;
 
-  DISALLOW_COPY_AND_ASSIGN(SigninErrorUI);
+  static std::u16string GetTitle(const std::u16string& email);
+
+  // Creates a WebUI message handler with the specified browser and error and
+  // adds it to the web UI.
+  void InitializeMessageHandlerWithBrowser(BrowserWindowInterface* browser,
+                                           const SigninUIError& error);
+
+  WEB_UI_CONTROLLER_TYPE_DECL();
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_SIGNIN_SIGNIN_ERROR_UI_H_

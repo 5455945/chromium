@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,6 +23,10 @@ const char kWebViewSafebrowsingBlockAllResources[] =
 // tint. This is useful for identifying WebViews in an Android application.
 const char kHighlightAllWebViews[] = "highlight-all-webviews";
 
+// Enable net logging from WebView. This captures network activity for debugging
+// purposes, and stores the files in DevUi.
+const char kNetLog[] = "net-log";
+
 // WebView will log additional debugging information to logcat, such as
 // variations and commandline state.
 const char kWebViewVerboseLogging[] = "webview-verbose-logging";
@@ -36,6 +40,13 @@ const char kFinchSeedExpirationAge[] = "finch-seed-expiration-age";
 // job, even if one is already pending.
 const char kFinchSeedIgnorePendingDownload[] =
     "finch-seed-ignore-pending-download";
+
+// Forces WebView's service to always schedule a new variations seed download
+// job, even if the device is not charging. Note this switch may be necessary
+// for testing on Android emulators as these are not always considered to be
+// charging.
+const char kFinchSeedNoChargingRequirement[] =
+    "finch-seed-no-charging-requirement";
 
 // The minimum amount of time in seconds that WebView's service will wait
 // between two variations seed downloads from the variations server.
@@ -53,8 +64,54 @@ const char kFinchSeedMinUpdatePeriod[] = "finch-seed-min-update-period";
 const char kWebViewEnableModernCookieSameSite[] =
     "webview-enable-modern-cookie-same-site";
 
-// Enables downloading Apps Package Names Allowlist.
-const char kWebViewAppsPackageNamesAllowlist[] =
-    "webview-apps-package-names-allowlist";
+// Enables FencedFrames. This also enables PrivacySandboxAdsAPIsOverride.
+const char kWebViewFencedFrames[] = "webview-fenced-frames";
+
+// Force disables 3rd party cookie for all apps.
+const char kWebViewForceDisable3pcs[] = "webview-force-disable-3pcs";
+
+// Enables crashes during WebView startup in the Java layer
+const char kWebViewForceCrashJava[] = "webview-force-crash-java";
+
+// Enables crashes during WebView startup in the Native layer
+const char kWebViewForceCrashNative[] = "webview-force-crash-native";
+
+// Use WebView's context for resource lookups instead of the embedding app's.
+const char kWebViewUseSeparateResourceContext[] =
+    "webview-use-separate-resource-context";
+
+// Override and enable features useful for BSA library testing/debugging.
+const char kDebugBsa[] = "debug-bsa";
+// Enables non-blocking WebView constructor.
+const char kStartupNonBlockingWebViewConstructor[] =
+    "startup-non-blocking-webview-constructor";
+
+// Post Chromium startup in the WebView constructor. Only has any effect
+// when kStartupNonBlockingWebViewConstructor is enabled.
+const char kPostChromiumStartupInWebViewConstructor[] =
+    "post-chromium-startup-in-webview-constructor";
+
+// Certain static methods in SharedStatics do not trigger startup.
+const char kWebViewStaticMethodsNotTriggerStartup[] =
+    "webview-static-methods-not-trigger-startup";
+
+// Certain ProfileStore methods do not trigger startup.
+const char kWebViewProfileStoreNotTriggerStartup[] =
+    "webview-profile-store-not-trigger-startup";
+
+// Opts in WebView to GMSCore's bindService optimizations
+const char kWebViewOptInToGmsBindServiceOptimization[] =
+    "webview-opt-in-to-gms-bind-service-optimization";
+
+
+// Enables different reductions of the user-agent.
+const char kWebViewReduceUserAgentMinorVersion[] =
+    "webview-reduce-user-agent-minor-version";
+const char kWebViewReduceUAAndroidVersionDeviceModel[] =
+    "webview-reduce-ua-android-version-device-model";
+
+// Forces startup tasks to run synchronously on the UI thread even when
+// triggered from a background thread.
+const char kWebViewRunStartupTasksSync[] = "webview-run-startup-tasks-sync";
 
 }  // namespace switches

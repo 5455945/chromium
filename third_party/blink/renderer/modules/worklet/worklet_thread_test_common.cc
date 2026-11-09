@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,18 +35,21 @@ CreateAnimationAndPaintWorkletThread(
           window->UserAgent(), window->GetFrame()->Loader().UserAgentMetadata(),
           nullptr /* web_worker_fetch_context */,
           Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+          /*outside_settings_reporter=*/mojo::NullRemote(),
           window->GetReferrerPolicy(), window->GetSecurityOrigin(),
           window->IsSecureContext(), window->GetHttpsState(), clients,
-          nullptr /* content_settings_client */, window->AddressSpace(),
-          OriginTrialContext::GetTokens(window).get(),
+          nullptr /* content_settings_client */,
+          OriginTrialContext::GetInheritedTrialFeatures(window).get(),
           base::UnguessableToken::Create(), nullptr /* worker_settings */,
           mojom::blink::V8CacheOptions::kDefault,
           MakeGarbageCollected<WorkletModuleResponsesMap>(),
           mojo::NullRemote() /* browser_interface_broker */,
+          window->GetFrame()->Loader().CreateWorkerCodeCacheHost(),
+          window->GetFrame()->GetBlobUrlStorePendingRemote(),
           BeginFrameProviderParams(), nullptr /* parent_permissions_policy */,
           window->GetAgentClusterID(), ukm::kInvalidSourceId,
           window->GetExecutionContextToken()),
-      absl::nullopt, std::make_unique<WorkerDevToolsParams>());
+      std::nullopt, std::make_unique<WorkerDevToolsParams>());
   return thread;
 }
 

@@ -29,6 +29,7 @@
 #include "base/auto_reset.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/editing/commands/undo_step.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -41,7 +42,7 @@ static const size_t kMaximumUndoStackDepth = 1000;
 UndoStack::UndoStack() = default;
 
 void UndoStack::RegisterUndoStep(UndoStep* step) {
-  if (!undo_stack_.IsEmpty())
+  if (!undo_stack_.empty())
     DCHECK_GE(step->SequenceNumber(), undo_stack_.back()->SequenceNumber());
   if (undo_stack_.size() == kMaximumUndoStackDepth) {
     // Drop the oldest item off the far end.
@@ -62,11 +63,11 @@ void UndoStack::RegisterRedoStep(UndoStep* step) {
 }
 
 bool UndoStack::CanUndo() const {
-  return !undo_stack_.IsEmpty();
+  return !undo_stack_.empty();
 }
 
 bool UndoStack::CanRedo() const {
-  return !redo_stack_.IsEmpty();
+  return !redo_stack_.empty();
 }
 
 void UndoStack::Undo() {
@@ -119,11 +120,9 @@ void UndoStack::DidSetEndingSelection(UndoStep* step) {
 void UndoStack::ElementRemoved(Element* element) {
   DCHECK(element->HasUndoStack()) << element;
   // In design mode, every root editable elements can be reinserted.
-  if (!undo_stack_.IsEmpty() &&
-      undo_stack_.front()->GetDocument().InDesignMode())
+  if (!undo_stack_.empty() && undo_stack_.front()->GetDocument().InDesignMode())
     return;
-  if (!redo_stack_.IsEmpty() &&
-      redo_stack_.front()->GetDocument().InDesignMode())
+  if (!redo_stack_.empty() && redo_stack_.front()->GetDocument().InDesignMode())
     return;
 
   const auto should_be_erased = [&element](const UndoStep* undo_step) {
@@ -139,6 +138,20 @@ void UndoStack::ElementRemoved(Element* element) {
       redo_stack_.end());
 
   element->SetHasUndoStack(false);
+}
+
+String UndoStack::ToString() const {
+  StringBuilder builder;
+  builder.Append("UndoStack {undo_stack:[\n  ");
+  builder.AppendRange(
+      UndoSteps(), ",\n  ",
+      [](const auto& step, StringBuilder& b) { b.Append(step->ToString()); });
+  builder.Append("], redo_stack:[\n  ");
+  builder.AppendRange(
+      RedoSteps(), ",\n  ",
+      [](const auto& step, StringBuilder& b) { b.Append(step->ToString()); });
+  builder.Append("]}");
+  return builder.ReleaseString();
 }
 
 }  // namespace blink

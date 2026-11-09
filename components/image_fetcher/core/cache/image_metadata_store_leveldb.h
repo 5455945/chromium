@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/image_fetcher/core/cache/image_metadata_store.h"
@@ -31,19 +32,24 @@ class CachedImageMetadataProto;
 // Stores image metadata in leveldb.
 class ImageMetadataStoreLevelDB : public ImageMetadataStore {
  public:
-  // Initializes the database with |proto_database_provider|.
+  // Initializes the database with `proto_database_provider`.
   ImageMetadataStoreLevelDB(
       leveldb_proto::ProtoDatabaseProvider* proto_database_provider,
       const base::FilePath& database_dir,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       base::Clock* clock);
 
-  // Creates storage using the given |database| for local storage. Useful for
+  // Creates storage using the given `database` for local storage. Useful for
   // testing.
   ImageMetadataStoreLevelDB(
       std::unique_ptr<leveldb_proto::ProtoDatabase<CachedImageMetadataProto>>
           database,
       base::Clock* clock);
+
+  ImageMetadataStoreLevelDB(const ImageMetadataStoreLevelDB&) = delete;
+  ImageMetadataStoreLevelDB& operator=(const ImageMetadataStoreLevelDB&) =
+      delete;
+
   ~ImageMetadataStoreLevelDB() override;
 
   // ImageMetadataStorage:
@@ -103,10 +109,8 @@ class ImageMetadataStoreLevelDB : public ImageMetadataStore {
   std::unique_ptr<leveldb_proto::ProtoDatabase<CachedImageMetadataProto>>
       database_;
   // Clock is owned by the service that creates this object.
-  base::Clock* clock_;
+  raw_ptr<base::Clock, DanglingUntriaged> clock_;
   base::WeakPtrFactory<ImageMetadataStoreLevelDB> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ImageMetadataStoreLevelDB);
 };
 
 }  // namespace image_fetcher

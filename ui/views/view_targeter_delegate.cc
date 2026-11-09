@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include <limits.h>
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/views/rect_based_targeting_utils.h"
 #include "ui/views/view.h"
@@ -44,25 +45,29 @@ View* ViewTargeterDelegate::TargetForRect(View* root, const gfx::Rect& rect) {
   View* point_view = nullptr;
 
   View::Views children = root->GetChildrenInZOrder();
-  DCHECK_EQ(root->children().size(), children.size());
-  for (auto* child : base::Reversed(children)) {
-    if (!child->GetCanProcessEventsWithinSubtree() || !child->GetEnabled())
+  CHECK_EQ(root->children().size(), children.size(), base::NotFatalUntil::M163);
+  for (views::View* child : std::views::reverse(children)) {
+    if (!child->GetCanProcessEventsWithinSubtree()) {
       continue;
+    }
 
     // Ignore any children which are invisible or do not intersect |rect|.
-    if (!child->GetVisible())
+    if (!child->GetVisible()) {
       continue;
+    }
     gfx::RectF rect_in_child_coords_f(rect);
     View::ConvertRectToTarget(root, child, &rect_in_child_coords_f);
     gfx::Rect rect_in_child_coords =
         gfx::ToEnclosingRect(rect_in_child_coords_f);
-    if (!child->HitTestRect(rect_in_child_coords))
+    if (!child->HitTestRect(rect_in_child_coords)) {
       continue;
+    }
 
     View* cur_view = child->GetEventHandlerForRect(rect_in_child_coords);
 
-    if (views::UsePointBasedTargeting(rect))
+    if (views::UsePointBasedTargeting(rect)) {
       return cur_view;
+    }
 
     gfx::RectF cur_view_bounds_f(cur_view->GetLocalBounds());
     View::ConvertRectToTarget(cur_view, root, &cur_view_bounds_f);
@@ -81,13 +86,15 @@ View* ViewTargeterDelegate::TargetForRect(View* root, const gfx::Rect& rect) {
       // Rect-based targeting has not yielded any candidates so far. Check
       // if point-based targeting would have selected |cur_view|.
       gfx::Point point_in_child_coords(rect_in_child_coords.CenterPoint());
-      if (child->HitTestPoint(point_in_child_coords))
+      if (child->HitTestPoint(point_in_child_coords)) {
         point_view = child->GetEventHandlerForPoint(point_in_child_coords);
+      }
     }
   }
 
-  if (views::UsePointBasedTargeting(rect) || (!rect_view && !point_view))
+  if (views::UsePointBasedTargeting(rect) || (!rect_view && !point_view)) {
     return root;
+  }
 
   return rect_view ? rect_view : point_view;
 }

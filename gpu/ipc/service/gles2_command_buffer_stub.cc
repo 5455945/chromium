@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,53 +7,48 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/hash/hash.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/unsafe_shared_memory_region.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/constants.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/mailbox.h"
-#include "gpu/command_buffer/common/presentation_feedback_utils.h"
 #include "gpu/command_buffer/common/swap_buffers_flags.h"
 #include "gpu/command_buffer/service/gl_context_virtual.h"
 #include "gpu/command_buffer/service/gl_state_restorer_impl.h"
 #include "gpu/command_buffer/service/gpu_fence_manager.h"
-#include "gpu/command_buffer/service/image_manager.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/scheduler.h"
 #include "gpu/command_buffer/service/service_utils.h"
-#include "gpu/command_buffer/service/sync_point_manager.h"
 #include "gpu/command_buffer/service/transfer_buffer_manager.h"
 #include "gpu/config/gpu_crash_keys.h"
 #include "gpu/ipc/service/gpu_channel.h"
 #include "gpu/ipc/service/gpu_channel_manager.h"
 #include "gpu/ipc/service/gpu_channel_manager_delegate.h"
-#include "gpu/ipc/service/gpu_memory_buffer_factory.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
 #include "gpu/ipc/service/image_transport_surface.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/gfx/gpu_fence_handle.h"
+#include "ui/gfx/switches.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
-#include "ui/gl/gl_image.h"
+#include "ui/gl/gl_features.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/gl_switches.h"
-#include "ui/gl/gl_workarounds.h"
+#include "ui/gl/gl_utils.h"
 #include "ui/gl/init/gl_factory.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
 #endif
 
@@ -77,187 +72,156 @@ GLES2CommandBufferStub::GLES2CommandBufferStub(
 GLES2CommandBufferStub::~GLES2CommandBufferStub() = default;
 
 gpu::ContextResult GLES2CommandBufferStub::Initialize(
-    CommandBufferStub* share_command_buffer_stub,
     const mojom::CreateCommandBufferParams& init_params,
     base::UnsafeSharedMemoryRegion shared_state_shm) {
   TRACE_EVENT0("gpu", "GLES2CommandBufferStub::Initialize");
   UpdateActiveUrl();
 
+  const auto& attribs = *init_params.attribs->get_gles();
+
+#if BUILDFLAG(IS_WIN)
+  if (attribs.context_type == CONTEXT_TYPE_OPENGLES2 &&
+      channel_->client_type() != viz::mojom::GpuClientType::kBrowser &&
+      channel_->client_type() != viz::mojom::GpuClientType::kXR) {
+    LOG(ERROR) << "ContextResult::kFatalFailure: CONTEXT_TYPE_OPENGLES2 is not "
+                  "allowed";
+    return gpu::ContextResult::kFatalFailure;
+  }
+#else
+  if (attribs.context_type == CONTEXT_TYPE_OPENGLES2 &&
+      channel_->client_type() != viz::mojom::GpuClientType::kBrowser) {
+    LOG(ERROR) << "ContextResult::kFatalFailure: CONTEXT_TYPE_OPENGLES2 is not "
+                  "allowed";
+    return gpu::ContextResult::kFatalFailure;
+  }
+#endif
+
   GpuChannelManager* manager = channel_->gpu_channel_manager();
   DCHECK(manager);
   memory_tracker_ = CreateMemoryTracker();
 
-  if (share_command_buffer_stub) {
-    context_group_ =
-        share_command_buffer_stub->decoder_context()->GetContextGroup();
-    if (!context_group_) {
-      LOG(ERROR) << "ContextResult::kFatalFailure: attempt to create a GLES2 "
-                    "context sharing with a non-GLES2 context";
+  auto feature_info = base::MakeRefCounted<gles2::FeatureInfo>(
+      manager->gpu_driver_bug_workarounds(), manager->gpu_feature_info());
+  context_group_ = base::MakeRefCounted<gles2::ContextGroup>(
+      manager->gpu_preferences(), memory_tracker_,
+      manager->shader_translator_cache(),
+      manager->framebuffer_completeness_cache(), feature_info,
+      manager->watchdog() /* progress_reporter */, manager->gpu_feature_info(),
+      manager->shared_image_manager());
+
+  // If the `fail_if_major_perf_caveat` context creation attribute was true
+  // and we are using a software renderer, fail.
+  if (attribs.fail_if_major_perf_caveat) {
+    auto* command_line = base::CommandLine::ForCurrentProcess();
+    const auto useGL = command_line->GetSwitchValueASCII(switches::kUseGL);
+    const auto useANGLE =
+        command_line->GetSwitchValueASCII(switches::kUseANGLE);
+
+    const bool is_software_webgl =
+        (useGL == gl::kGLImplementationANGLEName) &&
+        (useANGLE == gl::kANGLEImplementationSwiftShaderForWebGLName ||
+         useANGLE == gl::kANGLEImplementationD3D11WarpForWebGLName);
+
+    if (is_software_webgl) {
+      LOG(ERROR) << "ContextResult::kFatalFailure: "
+                    "fail_if_major_perf_caveat + software gl";
       return gpu::ContextResult::kFatalFailure;
     }
-    if (context_group_->bind_generates_resource() !=
-        init_params.attribs.bind_generates_resource) {
-      LOG(ERROR) << "ContextResult::kFatalFailure: attempt to create a shared "
-                    "GLES2 context with inconsistent bind_generates_resource";
-      return gpu::ContextResult::kFatalFailure;
-    }
-  } else {
-    scoped_refptr<gles2::FeatureInfo> feature_info = new gles2::FeatureInfo(
-        manager->gpu_driver_bug_workarounds(), manager->gpu_feature_info());
-    gpu::GpuMemoryBufferFactory* gmb_factory =
-        manager->gpu_memory_buffer_factory();
-    context_group_ = new gles2::ContextGroup(
-        manager->gpu_preferences(), gles2::PassthroughCommandDecoderSupported(),
-        manager->mailbox_manager(), CreateMemoryTracker(),
-        manager->shader_translator_cache(),
-        manager->framebuffer_completeness_cache(), feature_info,
-        init_params.attribs.bind_generates_resource, channel_->image_manager(),
-        gmb_factory ? gmb_factory->AsImageFactory() : nullptr,
-        manager->watchdog() /* progress_reporter */,
-        manager->gpu_feature_info(), manager->discardable_manager(),
-        manager->passthrough_discardable_manager(),
-        manager->shared_image_manager());
   }
 
-#if defined(OS_MAC)
+  bool use_virtualized_gl_context = false;
+
+#if BUILDFLAG(IS_MAC)
   // Virtualize GpuPreference::kLowPower contexts by default on OS X to prevent
   // performance regressions when enabling FCM.
   // http://crbug.com/180463
-  if (init_params.attribs.gpu_preference == gl::GpuPreference::kLowPower)
-    use_virtualized_gl_context_ = true;
+  if (attribs.gpu_preference == gl::GpuPreference::kLowPower) {
+    use_virtualized_gl_context = true;
+  }
 #endif
 
-  use_virtualized_gl_context_ |=
+  use_virtualized_gl_context |=
       context_group_->feature_info()->workarounds().use_virtualized_gl_contexts;
 
-  bool offscreen = (surface_handle_ == kNullSurfaceHandle);
-  gl::GLSurface* default_surface = manager->default_offscreen_surface();
-  // On low-spec Android devices, the default offscreen surface is
-  // RGB565, but WebGL rendering contexts still ask for RGBA8888 mode.
-  // That combination works for offscreen rendering, we can still use
-  // a virtualized context with the RGB565 backing surface since we're
-  // not drawing to that. Explicitly set that as the desired surface
-  // format to ensure it's treated as compatible where applicable.
-  gl::GLSurfaceFormat surface_format =
-      offscreen ? default_surface->GetFormat() : gl::GLSurfaceFormat();
-#if defined(OS_ANDROID)
-  if (init_params.attribs.red_size <= 5 &&
-      init_params.attribs.green_size <= 6 &&
-      init_params.attribs.blue_size <= 5 &&
-      init_params.attribs.alpha_size == 0) {
-    // We hit this code path when creating the onscreen render context
-    // used for compositing on low-end Android devices.
-    //
-    // TODO(klausw): explicitly copy rgba sizes? Currently the formats
-    // supported are only RGB565 and default (RGBA8888).
-    surface_format.SetRGB565();
-    DVLOG(1) << __FUNCTION__ << ": Choosing RGB565 mode.";
+  command_buffer_ =
+      std::make_unique<CommandBufferService>(this, memory_tracker_);
+  auto decoder = gles2::GLES2Decoder::Create(
+      this, command_buffer_.get(), manager->outputter(), context_group_.get());
+  gles2_decoder_ = decoder.get();
+  set_decoder_context(std::move(decoder));
+
+  scoped_sync_point_client_state_ =
+      channel_->scheduler()->CreateSyncPointClientState(
+          sequence_id_, CommandBufferNamespace::GPU_IO, command_buffer_id_);
+
+  // TODO(crbug.com/40198488): Remove this after testing.
+  // Only enable multiple displays on ANGLE/Metal and only behind a feature.
+  bool force_default_display = true;
+  if (gl::GetGLImplementation() == gl::kGLImplementationEGLANGLE &&
+      gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal &&
+      features::SupportsEGLDualGPURendering()) {
+    force_default_display = false;
+  }
+  gl::GpuPreference gpu_preference = attribs.gpu_preference;
+  // If the user queries a low-power context, it's better to use whatever the
+  // default GPU used by Chrome is, which may be different than the low-power
+  // GPU determined by GLDisplayManager.
+  if (gpu_preference == gl::GpuPreference::kLowPower ||
+      gpu_preference == gl::GpuPreference::kNone || force_default_display) {
+    gpu_preference = gl::GpuPreference::kDefault;
   }
 
-  // We can only use virtualized contexts for onscreen command buffers if their
-  // config is compatible with the offscreen ones - otherwise MakeCurrent fails.
-  // Example use case is a client requesting an onscreen RGBA8888 buffer for
-  // fullscreen video on a low-spec device with RGB565 default format.
-  if (!surface_format.IsCompatible(default_surface->GetFormat()) && !offscreen)
-    use_virtualized_gl_context_ = false;
-#endif
+  // Query and initialize the default display for this GPU preference,
+  // ignoring any queried display key for now. For simplicity we need
+  // to initialize the default display per-GPU first.
+  // We may be requesting a new GPU/display, so get or initialize the display.
+  gl::GLDisplay* display =
+      gl::init::GetOrInitializeGLOneOffPlatformImplementation(
+          /*fallback_to_software_gl=*/false, /*disable_gl_drawing=*/false,
+          /*init_extensions=*/true,
+          /*gpu_preference=*/gpu_preference);
 
-  command_buffer_ = std::make_unique<CommandBufferService>(
-      this, context_group_->memory_tracker());
-  gles2_decoder_ = gles2::GLES2Decoder::Create(
-      this, command_buffer_.get(), manager->outputter(), context_group_.get());
-  set_decoder_context(std::unique_ptr<DecoderContext>(gles2_decoder_));
+  // If the user queries a key to create a distinct display on this GPU,
+  // check if this display already exists, and if not, initialize it from
+  // the default display on this GPU.
+  gl::DisplayKey display_key = gl::DisplayKey::kDefault;
+  if (manager->gpu_preferences().force_separate_egl_display_for_webgl_testing &&
+      features::SupportsEGLDualGPURendering()) {
+    display_key = gl::DisplayKey::kSeparateEGLDisplayForWebGLTesting;
+  }
 
-  sync_point_client_state_ =
-      channel_->sync_point_manager()->CreateSyncPointClientState(
-          CommandBufferNamespace::GPU_IO, command_buffer_id_, sequence_id_);
-
-  if (offscreen) {
-    // Do we want to create an offscreen rendering context suitable
-    // for directly drawing to a separately supplied surface? In that
-    // case, we must ensure that the surface used for context creation
-    // is compatible with the requested attributes. This is explicitly
-    // opt-in since some context such as for NaCl request custom
-    // attributes but don't expect to get their own surface, and not
-    // all surface factories support custom formats.
-    if (init_params.attribs.own_offscreen_surface) {
-      if (init_params.attribs.depth_size > 0) {
-        surface_format.SetDepthBits(init_params.attribs.depth_size);
-      }
-      if (init_params.attribs.samples > 0) {
-        surface_format.SetSamples(init_params.attribs.samples);
-      }
-      if (init_params.attribs.stencil_size > 0) {
-        surface_format.SetStencilBits(init_params.attribs.stencil_size);
-      }
-      // Currently, we can't separately control alpha channel for surfaces,
-      // it's generally enabled by default except for RGB565 and (on desktop)
-      // smaller-than-32bit formats.
-      //
-      // TODO(klausw): use init_params.attribs.alpha_size here if possible.
+  if (display_key != gl::DisplayKey::kDefault) {
+    gl::GLDisplay* keyed_display = gl::GetDisplay(gpu_preference, display_key);
+    if (!keyed_display->IsInitialized()) {
+      keyed_display->Initialize(display);
     }
-    if (!surface_format.IsCompatible(default_surface->GetFormat())) {
-      DVLOG(1) << __FUNCTION__ << ": Hit the OwnOffscreenSurface path";
-      use_virtualized_gl_context_ = false;
-      surface_ = gl::init::CreateOffscreenGLSurfaceWithFormat(gfx::Size(),
-                                                              surface_format);
-      if (!surface_) {
-        LOG(ERROR)
-            << "ContextResult::kSurfaceFailure: Failed to create surface.";
-        return gpu::ContextResult::kSurfaceFailure;
-      }
-    } else {
-      surface_ = default_surface;
-    }
+    display = keyed_display;
+  }
+
+  gl::GLSurface* default_surface = manager->default_offscreen_surface();
+  if (default_surface->GetGLDisplay() == display) {
+    surface_ = default_surface;
   } else {
-    switch (init_params.attribs.color_space) {
-      case COLOR_SPACE_UNSPECIFIED:
-        surface_format.SetColorSpace(
-            gl::GLSurfaceFormat::COLOR_SPACE_UNSPECIFIED);
-        break;
-      case COLOR_SPACE_SRGB:
-        surface_format.SetColorSpace(gl::GLSurfaceFormat::COLOR_SPACE_SRGB);
-        break;
-      case COLOR_SPACE_DISPLAY_P3:
-        surface_format.SetColorSpace(
-            gl::GLSurfaceFormat::COLOR_SPACE_DISPLAY_P3);
-        break;
-    }
-    surface_ = ImageTransportSurface::CreateNativeSurface(
-        weak_ptr_factory_.GetWeakPtr(), surface_handle_, surface_format);
-    if (!surface_ || !surface_->Initialize(surface_format)) {
-      surface_ = nullptr;
-      LOG(ERROR) << "ContextResult::kSurfaceFailure: Failed to create surface.";
-      return gpu::ContextResult::kSurfaceFailure;
-    }
-    if (init_params.attribs.enable_swap_timestamps_if_supported &&
-        surface_->SupportsSwapTimestamps())
-      surface_->SetEnableSwapTimestamps();
+    // The default surface was created on a different display, create a
+    // new surface on the requested display.
+    surface_ = gl::init::CreateOffscreenGLSurface(display, gfx::Size());
   }
 
   if (context_group_->use_passthrough_cmd_decoder()) {
     // Virtualized contexts don't work with passthrough command decoder.
     // See https://crbug.com/914976
-    use_virtualized_gl_context_ = false;
+    use_virtualized_gl_context = false;
     // When using the passthrough command decoder, only share with other
     // contexts in the explicitly requested share group
-    if (share_command_buffer_stub) {
-      share_group_ = share_command_buffer_stub->share_group();
-    } else {
-      share_group_ = base::MakeRefCounted<gl::GLShareGroup>();
-    }
+    share_group_ = base::MakeRefCounted<gl::GLShareGroup>();
   } else {
     // When using the validating command decoder, always use the global share
     // group
     share_group_ = channel_->share_group();
   }
 
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
-
   scoped_refptr<gl::GLContext> context;
-  if (use_virtualized_gl_context_ && share_group_) {
+  if (use_virtualized_gl_context && share_group_) {
     context = share_group_->shared_context();
     if (context && (!context->MakeCurrent(surface_.get()) ||
                     context->CheckStickyGraphicsResetStatus() != GL_NO_ERROR)) {
@@ -266,7 +230,9 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     if (!context) {
       context = gl::init::CreateGLContext(
           share_group_.get(), surface_.get(),
-          GenerateGLContextAttribs(init_params.attribs, context_group_.get()));
+          GenerateGLContextAttribsForDecoder(attribs.context_type,
+                                             attribs.gpu_preference,
+                                             context_group_.get()));
       if (!context) {
         // TODO(piman): This might not be fatal, we could recurse into
         // CreateGLContext to get more info, tho it should be exceedingly
@@ -293,8 +259,9 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     context = base::MakeRefCounted<GLContextVirtual>(
         share_group_.get(), context.get(), gles2_decoder_->AsWeakPtr());
     if (!context->Initialize(surface_.get(),
-                             GenerateGLContextAttribs(init_params.attribs,
-                                                      context_group_.get()))) {
+                             GenerateGLContextAttribsForDecoder(
+                                 attribs.context_type, attribs.gpu_preference,
+                                 context_group_.get()))) {
       // The real context created above for the default offscreen surface
       // might not be compatible with this surface.
       context = nullptr;
@@ -308,7 +275,9 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   } else {
     context = gl::init::CreateGLContext(
         share_group_.get(), surface_.get(),
-        GenerateGLContextAttribs(init_params.attribs, context_group_.get()));
+        GenerateGLContextAttribsForDecoder(attribs.context_type,
+                                           attribs.gpu_preference,
+                                           context_group_.get()));
     if (!context) {
       // TODO(piman): This might not be fatal, we could recurse into
       // CreateGLContext to get more info, tho it should be exceedingly
@@ -341,9 +310,9 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   }
 
   // Initialize the decoder with either the view or pbuffer GLContext.
-  auto result = gles2_decoder_->Initialize(surface_, context, offscreen,
-                                           gpu::gles2::DisallowedFeatures(),
-                                           init_params.attribs);
+  auto result = gles2_decoder_->Initialize(
+      surface_, context, /*offscreen=*/true, attribs.context_type,
+      /*lose_context_when_out_of_memory=*/true);
   if (result != gpu::ContextResult::kSuccess) {
     DLOG(ERROR) << "Failed to initialize decoder.";
     return result;
@@ -364,10 +333,11 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   command_buffer_->SetSharedStateBuffer(MakeBackingFromSharedMemory(
       std::move(shared_state_shm), std::move(shared_state_mapping)));
 
-  if (offscreen && !active_url_.is_empty())
+  if (!active_url_.is_empty()) {
     manager->delegate()->DidCreateOffscreenContext(active_url_.url());
+  }
 
-  if (use_virtualized_gl_context_) {
+  if (use_virtualized_gl_context) {
     // If virtualized GL contexts are in use, then real GL context state
     // is in an indeterminate state, since the GLStateRestorer was not
     // initialized at the time the GLContextVirtual was made current. In
@@ -383,72 +353,22 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     }
   }
 
+  if (IsWebGLContextType(attribs.context_type)) {
+    gl::GLDisplayEGL* display_egl = display->GetAs<gl::GLDisplayEGL>();
+    if (display_egl) {
+      UMA_HISTOGRAM_ENUMERATION("GPU.WebGLDisplayType",
+                                display_egl->GetDisplayType(),
+                                gl::DISPLAY_TYPE_MAX);
+    }
+  }
+
   manager->delegate()->DidCreateContextSuccessfully();
   initialized_ = true;
   return gpu::ContextResult::kSuccess;
 }
 
-#if defined(OS_WIN)
-void GLES2CommandBufferStub::DidCreateAcceleratedSurfaceChildWindow(
-    SurfaceHandle parent_window,
-    SurfaceHandle child_window) {
-  GpuChannelManager* gpu_channel_manager = channel_->gpu_channel_manager();
-  gpu_channel_manager->delegate()->SendCreatedChildWindow(parent_window,
-                                                          child_window);
-}
-#endif
-
-void GLES2CommandBufferStub::DidSwapBuffersComplete(
-    SwapBuffersCompleteParams params,
-    gfx::GpuFenceHandle release_fence) {
-  DCHECK(release_fence.is_null());
-  params.swap_response.swap_id = pending_swap_completed_params_.front().swap_id;
-  pending_swap_completed_params_.pop_front();
-  client().OnSwapBuffersCompleted(params);
-}
-
-const gles2::FeatureInfo* GLES2CommandBufferStub::GetFeatureInfo() const {
-  return context_group_->feature_info();
-}
-
-const GpuPreferences& GLES2CommandBufferStub::GetGpuPreferences() const {
-  return context_group_->gpu_preferences();
-}
-
-void GLES2CommandBufferStub::BufferPresented(
-    const gfx::PresentationFeedback& feedback) {
-  SwapBufferParams params = pending_presented_params_.front();
-  pending_presented_params_.pop_front();
-  client().OnBufferPresented(params.swap_id, feedback);
-}
-
-viz::GpuVSyncCallback GLES2CommandBufferStub::GetGpuVSyncCallback() {
-  return viz::GpuVSyncCallback();
-}
-
-base::TimeDelta GLES2CommandBufferStub::GetGpuBlockedTimeSinceLastSwap() {
-  return channel_->scheduler()->TakeTotalBlockingTime();
-}
-
-MemoryTracker* GLES2CommandBufferStub::GetContextGroupMemoryTracker() const {
-  return context_group_->memory_tracker();
-}
-
-void GLES2CommandBufferStub::OnGpuSwitched(
-    gl::GpuPreference active_gpu_heuristic) {
-  client().OnGpuSwitched(active_gpu_heuristic);
-}
-
-void GLES2CommandBufferStub::OnTakeFrontBuffer(const Mailbox& mailbox) {
-  TRACE_EVENT0("gpu", "CommandBufferStub::OnTakeFrontBuffer");
-  DCHECK(gles2_decoder_);
-  gles2_decoder_->TakeFrontBuffer(mailbox);
-}
-
-void GLES2CommandBufferStub::OnReturnFrontBuffer(const Mailbox& mailbox,
-                                                 bool is_lost) {
-  // No need to pull texture updates.
-  gles2_decoder_->ReturnFrontBuffer(mailbox, is_lost);
+base::WeakPtr<CommandBufferStub> GLES2CommandBufferStub::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void GLES2CommandBufferStub::CreateGpuFenceFromHandle(
@@ -492,7 +412,13 @@ void GLES2CommandBufferStub::GetGpuFenceHandle(
   if (manager->IsValidGpuFence(gpu_fence_id)) {
     std::unique_ptr<gfx::GpuFence> gpu_fence =
         manager->GetGpuFence(gpu_fence_id);
-    handle = gpu_fence->GetGpuFenceHandle().Clone();
+    if (gpu_fence) {
+      handle = gpu_fence->GetGpuFenceHandle().Clone();
+    } else {
+      DLOG(ERROR) << "Failed to retrieve GpuFence";
+      command_buffer_->SetParseError(error::kLostContext);
+      CheckContextLost();
+    }
   } else {
     // Retrieval failed. This shouldn't happen, force context loss to avoid
     // inconsistent state.
@@ -502,72 +428,6 @@ void GLES2CommandBufferStub::GetGpuFenceHandle(
   }
 
   std::move(callback).Run(std::move(handle));
-}
-
-void GLES2CommandBufferStub::CreateImage(mojom::CreateImageParamsPtr params) {
-  TRACE_EVENT0("gpu", "GLES2CommandBufferStub::OnCreateImage");
-  const int32_t id = params->id;
-  const gfx::Size& size = params->size;
-  const gfx::BufferFormat& format = params->format;
-  const uint64_t image_release_count = params->image_release_count;
-  ScopedContextOperation operation(*this);
-  if (!operation.is_context_current())
-    return;
-
-  gles2::ImageManager* image_manager = channel_->image_manager();
-  DCHECK(image_manager);
-  if (image_manager->LookupImage(id)) {
-    LOG(ERROR) << "Image already exists with same ID.";
-    return;
-  }
-
-  if (!gpu::IsImageFromGpuMemoryBufferFormatSupported(
-          format, gles2_decoder_->GetCapabilities())) {
-    LOG(ERROR) << "Format is not supported.";
-    return;
-  }
-
-  if (!gpu::IsImageSizeValidForGpuMemoryBufferFormat(size, format)) {
-    LOG(ERROR) << "Invalid image size for format.";
-    return;
-  }
-
-  if (!gpu::IsPlaneValidForGpuMemoryBufferFormat(params->plane, format)) {
-    LOG(ERROR) << "Invalid plane " << gfx::BufferPlaneToString(params->plane)
-               << " for " << gfx::BufferFormatToString(format);
-    return;
-  }
-
-  scoped_refptr<gl::GLImage> image = channel()->CreateImageForGpuMemoryBuffer(
-      std::move(params->gpu_memory_buffer), size, format, params->plane,
-      surface_handle_);
-  if (!image.get())
-    return;
-
-  image_manager->AddImage(image.get(), id);
-  if (image_release_count)
-    sync_point_client_state_->ReleaseFenceSync(image_release_count);
-}
-
-void GLES2CommandBufferStub::DestroyImage(int32_t id) {
-  TRACE_EVENT0("gpu", "GLES2CommandBufferStub::OnDestroyImage");
-  ScopedContextOperation operation(*this);
-  if (!operation.is_context_current())
-    return;
-
-  gles2::ImageManager* image_manager = channel_->image_manager();
-  DCHECK(image_manager);
-  if (!image_manager->LookupImage(id)) {
-    LOG(ERROR) << "Image with ID doesn't exist.";
-    return;
-  }
-
-  image_manager->RemoveImage(id);
-}
-
-void GLES2CommandBufferStub::OnSwapBuffers(uint64_t swap_id, uint32_t flags) {
-  pending_swap_completed_params_.push_back({swap_id, flags});
-  pending_presented_params_.push_back({swap_id, flags});
 }
 
 }  // namespace gpu

@@ -1,4 +1,11 @@
 Verifies that Overlay.setShowViewportSizeOnResize works.
+Response to setDeviceMetricsOverride:
+{
+    id : <number>
+    result : {
+    }
+    sessionId : <string>
+}
 Initial device metrics:
 [
   {
@@ -11,7 +18,7 @@ Initial device metrics:
         "width": 800,
         "height": 600
       },
-      "visualViewportSize": {
+      "viewportSizeForMediaQueries": {
         "width": 800,
         "height": 600
       },
@@ -21,6 +28,13 @@ Initial device metrics:
     }
   }
 ]
+Response to setDeviceMetricsOverride:
+{
+    id : <number>
+    result : {
+    }
+    sessionId : <string>
+}
 Device metrics with changed viewport:
 [
   {
@@ -37,9 +51,46 @@ Device metrics with changed viewport:
         "width": 500,
         "height": 500
       },
-      "visualViewportSize": {
+      "viewportSizeForMediaQueries": {
         "width": 500,
         "height": 500
+      },
+      "pageZoomFactor": 1,
+      "scrollX": 0,
+      "scrollY": 0
+    }
+  },
+  {
+    "name": "drawViewSize",
+    "data": ""
+  }
+]
+Response to setDeviceMetricsOverride:
+{
+    id : <number>
+    result : {
+    }
+    sessionId : <string>
+}
+Device metrics with scrollbar:
+[
+  {
+    "name": "setOverlay",
+    "data": "viewportSize"
+  },
+  {
+    "name": "reset",
+    "data": {
+      "deviceScaleFactor": 1,
+      "emulationScaleFactor": 1,
+      "pageScaleFactor": 1,
+      "viewportSize": {
+        "width": 300,
+        "height": 300
+      },
+      "viewportSizeForMediaQueries": {
+        "width": 300,
+        "height": 300
       },
       "pageZoomFactor": 1,
       "scrollX": 0,

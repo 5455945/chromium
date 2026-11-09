@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 
 #include <windows.h>
 
+#include <array>
 #include <string>
 #include <vector>
-
-#include "base/macros.h"
 
 namespace content {
 
@@ -19,6 +18,10 @@ namespace content {
 class MockKeyboardDriverWin {
  public:
   MockKeyboardDriverWin();
+
+  MockKeyboardDriverWin(const MockKeyboardDriverWin&) = delete;
+  MockKeyboardDriverWin& operator=(const MockKeyboardDriverWin&) = delete;
+
   ~MockKeyboardDriverWin();
 
   bool SetLayout(int layout);
@@ -34,11 +37,9 @@ class MockKeyboardDriverWin {
   HKL original_keyboard_layout_;
   // The currently active driver.
   HKL active_keyboard_layout_;
-  BYTE original_keyboard_states_[256];
+  std::array<BYTE, 256> original_keyboard_states_ = {};
 
-  BYTE keyboard_states_[256];
-
-  DISALLOW_COPY_AND_ASSIGN(MockKeyboardDriverWin);
+  std::array<BYTE, 256> keyboard_states_ = {};
 };
 
 }  // namespace content

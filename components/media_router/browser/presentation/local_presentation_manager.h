@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/media_router/common/media_route.h"
@@ -18,7 +20,6 @@
 #include "content/public/browser/presentation_service_delegate.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/presentation/presentation.mojom.h"
 
 namespace content {
@@ -54,7 +55,7 @@ namespace media_router {
 //
 //   manager->RegisterLocalPresentationController(
 //       presentation_info,
-//       std::move(controller_connection_remote,
+//       std::move(controller_connection_remote),
 //       std::move(receiver_connection_receiver));
 //
 // Invoked on receiver's PresentationServiceImpl when controller connection is
@@ -109,6 +110,12 @@ namespace media_router {
 // thread.
 class LocalPresentationManager : public KeyedService {
  public:
+  // Used by
+  // LocalPresentationManagerFactory::BuildServiceInstanceForBrowserContext.
+  LocalPresentationManager();
+  LocalPresentationManager(const LocalPresentationManager&) = delete;
+  LocalPresentationManager& operator=(const LocalPresentationManager&) = delete;
+
   ~LocalPresentationManager() override;
 
   // Registers controller PresentationConnectionPtr to presentation with
@@ -169,6 +176,10 @@ class LocalPresentationManager : public KeyedService {
    public:
     explicit LocalPresentation(
         const blink::mojom::PresentationInfo& presentation_info);
+
+    LocalPresentation(const LocalPresentation&) = delete;
+    LocalPresentation& operator=(const LocalPresentation&) = delete;
+
     ~LocalPresentation();
 
     // Register controller with |render_frame_id|. If |receiver_callback_| has
@@ -207,8 +218,9 @@ class LocalPresentationManager : public KeyedService {
     bool IsValid() const;
 
     const blink::mojom::PresentationInfo presentation_info_;
-    absl::optional<MediaRoute> route_;
-    content::WebContents* receiver_web_contents_ = nullptr;
+    std::optional<MediaRoute> route_;
+    raw_ptr<content::WebContents, DanglingUntriaged> receiver_web_contents_ =
+        nullptr;
 
     // Callback to invoke whenever a receiver connection is available.
     content::ReceiverConnectionAvailableCallback receiver_callback_;
@@ -239,19 +251,13 @@ class LocalPresentationManager : public KeyedService {
                        std::unique_ptr<ControllerConnection>,
                        content::GlobalRenderFrameHostIdHasher>
         pending_controllers_;
-
-    DISALLOW_COPY_AND_ASSIGN(LocalPresentation);
   };
 
  private:
-  friend class LocalPresentationManagerFactory;
   friend class LocalPresentationManagerTest;
   friend class MockLocalPresentationManager;
-  FRIEND_TEST_ALL_PREFIXES(PresentationServiceDelegateImplTest,
+  FRIEND_TEST_ALL_PREFIXES(ControllerPresentationServiceDelegateImplTest,
                            ConnectToLocalPresentation);
-
-  // Used by LocalPresentationManagerFactory::GetOrCreateForBrowserContext.
-  LocalPresentationManager();
 
   using LocalPresentationMap =
       std::map<std::string, std::unique_ptr<LocalPresentation>>;
@@ -264,8 +270,6 @@ class LocalPresentationManager : public KeyedService {
   LocalPresentationMap local_presentations_;
 
   THREAD_CHECKER(thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(LocalPresentationManager);
 };
 
 }  // namespace media_router

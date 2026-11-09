@@ -1,10 +1,13 @@
 Name: pywebsocket3
 Short Name: pywebsocket3
 URL: https://github.com/GoogleChromeLabs/pywebsocket3/
-Version: 0
-License: New BSD
+Version: v4.0.2
+Revision: 139224e0d71db84fe1922601cb92ec8c8f3885ba
+Update Mechanism: Autoroll
+License: BSD-3-Clause
 License File: src/LICENSE
 Security Critical: no
+Shipped: no
 
 Description:
 pywebsocket3 is a WebSocket server which is intended for testing.

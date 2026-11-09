@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,34 @@ package org.chromium.components.browser_ui.settings;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.res.TypedArray;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.os.StrictMode;
+import android.util.AttributeSet;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.ViewTreeObserver.OnScrollChangedListener;
-import android.widget.ImageView;
 
 import androidx.annotation.ColorRes;
 import androidx.annotation.DrawableRes;
-import androidx.annotation.Nullable;
 import androidx.annotation.XmlRes;
 import androidx.appcompat.content.res.AppCompatResources;
-import androidx.appcompat.widget.ActionMenuView;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.graphics.drawable.DrawableCompat;
+import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
+import androidx.preference.PreferenceGroup;
+import androidx.preference.PreferenceScreen;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.browser_ui.util.ToolbarUtils;
+import org.chromium.ui.drawable.StateListDrawableBuilder;
 
-/**
- * A helper class for Settings.
- */
+import java.util.ArrayList;
+
+/** A helper class for Settings. */
+@NullMarked
 public class SettingsUtils {
     /**
      * A helper that is used to load preferences from XML resources without causing a
@@ -65,22 +72,18 @@ public class SettingsUtils {
         };
     }
 
-    /**
-     * Creates a {@link Drawable} for the given resource id with the default icon color applied.
-     */
+    /** Creates a {@link Drawable} for the given resource id with the default icon color applied. */
     public static Drawable getTintedIcon(Context context, @DrawableRes int resId) {
-        return getTintedIcon(context, resId, R.color.default_icon_color);
+        return getTintedIcon(context, resId, R.color.default_icon_color_tint_list);
     }
 
-    /**
-     * Creates a {@link Drawable} for the given resource id with provided color id applied.
-     */
+    /** Creates a {@link Drawable} for the given resource id with provided color id applied. */
     public static Drawable getTintedIcon(
             Context context, @DrawableRes int resId, @ColorRes int colorId) {
         Drawable icon = AppCompatResources.getDrawable(context, resId);
         // DrawableCompat.setTint() doesn't work well on BitmapDrawables on older versions.
-        icon.setColorFilter(ApiCompatibilityUtils.getColor(context.getResources(), colorId),
-                PorterDuff.Mode.SRC_IN);
+        icon.setColorFilter(
+                context.getColorStateList(colorId).getDefaultColor(), PorterDuff.Mode.SRC_IN);
         return icon;
     }
 
@@ -88,42 +91,106 @@ public class SettingsUtils {
      * A helper that is used to set the visibility of the overflow menu view in a given activity.
      *
      * @param activity The Activity containing the action bar with the menu.
-     * @param visibility The new visibility of the overflow menu view.
+     * @param visibility The Activity containing the action bar with the menu.
      * @return True if the visibility could be set, false otherwise (e.g. because no menu exists).
      */
     public static boolean setOverflowMenuVisibility(@Nullable Activity activity, int visibility) {
         if (activity == null) return false;
-        ViewGroup actionBar = activity.findViewById(R.id.action_bar);
-        int i = actionBar.getChildCount();
-        ActionMenuView menuView = null;
-        while (i-- > 0) {
-            if (actionBar.getChildAt(i) instanceof ActionMenuView) {
-                menuView = (ActionMenuView) actionBar.getChildAt(i);
-                break;
-            }
-        }
-        if (menuView == null) return false;
-        View overflowButton = menuView.getChildAt(menuView.getChildCount() - 1);
-        if (!isOverflowMenuButton(overflowButton, menuView)) return false;
-        overflowButton.setVisibility(visibility);
+        Toolbar toolbar = activity.findViewById(R.id.action_bar);
+        if (toolbar == null) return false;
+        ToolbarUtils.setOverflowMenuVisibility(toolbar, visibility);
         return true;
     }
 
+    /** Returns a Drawable representing an arrow used next to an expandable text section. */
+    public static Drawable createExpandArrow(Context context) {
+        assert context != null;
+        StateListDrawableBuilder builder = new StateListDrawableBuilder(context);
+        StateListDrawableBuilder.State checked =
+                builder.addState(
+                        R.drawable.ic_expand_less_black_24dp, android.R.attr.state_checked);
+        StateListDrawableBuilder.State unchecked =
+                builder.addState(R.drawable.ic_expand_more_black_24dp);
+        builder.addTransition(
+                checked, unchecked, R.drawable.transition_expand_less_expand_more_black_24dp);
+        builder.addTransition(
+                unchecked, checked, R.drawable.transition_expand_more_expand_less_black_24dp);
+
+        Drawable tintableDrawable = DrawableCompat.wrap(builder.build());
+        DrawableCompat.setTintList(
+                tintableDrawable, context.getColorStateList(R.color.default_icon_color_tint_list));
+        return tintableDrawable;
+    }
+
     /**
-     * There is no regular way to access the overflow button of an {@link ActionMenuView}.
-     * Checking whether a given view is an {@link ImageView} with the correct icon is an
-     * approximation to this issue as the exact icon that the parent menu will set is always known.
+     * Traverses a {@link PreferenceScreen} and returns a flat list of all visible preferences.
      *
-     * @param button A view in the |parentMenu| that might be the overflow menu.
-     * @param parentMenu The menu that created the overflow button.
-     * @return True, if the given button can belong to the overflow menu. False otherwise.
+     * @param preferenceScreen The preference screen to traverse.
+     * @return A list of visible preferences.
      */
-    private static boolean isOverflowMenuButton(View button, ActionMenuView parentMenu) {
-        if (button == null) return false;
-        if (!(button instanceof ImageView)) {
-            return false; // Normal items are usually TextView or LinearLayouts.
+    public static ArrayList<Preference> getVisiblePreferences(PreferenceScreen preferenceScreen) {
+        ArrayList<Preference> visiblePreferences = new ArrayList<>();
+        if (preferenceScreen == null) return visiblePreferences;
+
+        for (int i = 0; i < preferenceScreen.getPreferenceCount(); i++) {
+            Preference preference = preferenceScreen.getPreference(i);
+            if (preference.isVisible()) {
+                addVisiblePreferences(preference, visiblePreferences);
+            }
         }
-        ImageView imageButton = (ImageView) button;
-        return imageButton.getDrawable() == parentMenu.getOverflowIcon();
+        return visiblePreferences;
+    }
+
+    /**
+     * Recursively adds all visible preferences from a {@link PreferenceGroup}.
+     *
+     * @param preference The preference to start from.
+     * @param visiblePreferences The list to add visible preferences to.
+     */
+    private static void addVisiblePreferences(
+            Preference preference, ArrayList<Preference> visiblePreferences) {
+        visiblePreferences.add(preference);
+        if (preference instanceof PreferenceGroup preferenceGroup) {
+            for (int i = 0; i < preferenceGroup.getPreferenceCount(); i++) {
+                Preference nestedPreference = preferenceGroup.getPreference(i);
+                if (nestedPreference.isVisible()) {
+                    addVisiblePreferences(nestedPreference, visiblePreferences);
+                }
+            }
+        }
+    }
+
+    /**
+     * Initializes default attributes on the given preference.
+     *
+     * <p>AndroidX Preference defaults iconSpaceReserved to true and persistent to true.
+     *
+     * <p>When hosted inside an Activity that does not define preferenceTheme in its theme (such as
+     * ChromeTabbedActivity in SettingsInTab), PreferenceFragmentCompat falls back to
+     * PreferenceThemeOverlay, which keeps iconSpaceReserved as true. Explicitly default
+     * iconSpaceReserved to false unless overridden in attrs so unused icon_frame space is
+     * collapsed.
+     *
+     * <p>Chrome preference widgets generally do not use the default SharedPreferences file for
+     * persistence (preferring native prefs or declared SharedPreferences keys), and writing
+     * auto-persisted values causes unnecessary disk I/O and shared prefs pollution. Explicitly
+     * default persistent to false unless overridden in attrs.
+     *
+     * @param context The context for the preference.
+     * @param attrs The XML attribute set, or null if constructed programmatically.
+     * @param preference The preference to initialize.
+     */
+    public static void initializePreferenceDefaults(
+            Context context, @Nullable AttributeSet attrs, Preference preference) {
+        TypedArray preferenceAttrs = context.obtainStyledAttributes(attrs, R.styleable.Preference);
+        if (!preferenceAttrs.hasValue(R.styleable.Preference_iconSpaceReserved)
+                && !preferenceAttrs.hasValue(R.styleable.Preference_android_iconSpaceReserved)) {
+            preference.setIconSpaceReserved(false);
+        }
+        if (!preferenceAttrs.hasValue(R.styleable.Preference_persistent)
+                && !preferenceAttrs.hasValue(R.styleable.Preference_android_persistent)) {
+            preference.setPersistent(false);
+        }
+        preferenceAttrs.recycle();
     }
 }

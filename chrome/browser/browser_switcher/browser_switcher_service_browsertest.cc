@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 
 #include <string.h>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -18,7 +19,6 @@
 #include "chrome/browser/browser_switcher/browser_switcher_service_factory.h"
 #include "chrome/browser/browser_switcher/browser_switcher_sitelist.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -31,10 +31,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/browser/browser_switcher/browser_switcher_policy_migrator.h"
 #include "chrome/browser/browser_switcher/browser_switcher_service_win.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension.h"
@@ -48,18 +48,46 @@ namespace {
 const char kAValidUrl[] = "http://example.com/";
 const char kAnInvalidUrl[] = "the quick brown fox jumps over the lazy dog";
 
-const char kSitelistXml[] =
-    "<rules version=\"1\"><docMode><domain docMode=\"9\">"
-    "docs.google.com</domain></docMode></rules>";
+const char kSitelistXml[] = R"(
+  <rules version="1">
+    <docMode>
+      <domain docMode="9">docs.google.com</domain>
+    </docMode>
+  </rules>
+)";
 
-const char kOtherSitelistXml[] =
-    "<rules version=\"1\"><docMode><domain docMode=\"9\">"
-    "yahoo.com</domain></docMode></rules>";
+const char kOtherSitelistXml[] = R"(
+  <rules version="1">
+    <docMode>
+      <domain docMode="9">yahoo.com</domain>
+    </docMode>
+  </rules>
+)";
 
-#if defined(OS_WIN)
-const char kYetAnotherSitelistXml[] =
-    "<rules version=\"1\"><docMode><domain docMode=\"9\">"
-    "greylist.invalid.com</domain></docMode></rules>";
+// This XML parses differently, depending on the value of the
+// BrowserSwitcherParsingMode policy.
+const char kParsingModeSensitiveSitelistXml[] = R"(
+  <site-list version="1">
+    <site url="example.com/grey">
+      <open-in>None</open-in>
+    </site>
+    <site url="example.com/chrome">
+      <open-in>MSEdge</open-in>
+    </site>
+    <site url="example.com/ie">
+      <open-in>IE11</open-in>
+    </site>
+  </site-list>
+)";
+
+#if BUILDFLAG(IS_WIN)
+const char kYetAnotherSitelistXml[] = R"(
+  <rules version="1">
+    <docMode>
+      <domain docMode="9">greylist.invalid.com</domain>
+    </docMode>
+  </rules>
+)";
 #endif
 
 bool ReturnValidXml(content::URLLoaderInterceptor::RequestParams* params) {
@@ -95,26 +123,24 @@ void EnableBrowserSwitcher(policy::PolicyMap* policies) {
 
 class BrowserSwitcherServiceTest : public InProcessBrowserTest {
  public:
-  BrowserSwitcherServiceTest() = default;
   ~BrowserSwitcherServiceTest() override = default;
 
   void SetUpInProcessBrowserTestFixture() override {
-    ON_CALL(provider_, IsInitializationComplete(testing::_))
-        .WillByDefault(testing::Return(true));
-    ON_CALL(provider_, IsFirstPolicyLoadComplete(testing::_))
-        .WillByDefault(testing::Return(true));
+    provider_.SetDefaultReturns(
+        /*is_initialization_complete_return=*/true,
+        /*is_first_policy_load_complete_return=*/true);
     policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
     BrowserSwitcherService::SetRefreshDelayForTesting(base::TimeDelta());
   }
 
   void SetUpOnMainThread() override {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     fake_appdata_dir_ =
-        browser()->profile()->GetPath().AppendASCII("FakeAppData");
+        browser()->GetProfile()->GetPath().AppendASCII("FakeAppData");
     ASSERT_TRUE(DirectoryExists(fake_appdata_dir_) ||
                 CreateDirectory(fake_appdata_dir_));
     BrowserSwitcherServiceFactory::GetInstance()->SetTestingFactory(
-        browser()->profile(),
+        browser()->GetProfile(),
         base::BindRepeating(
             [](base::FilePath cache_dir, content::BrowserContext* context) {
               auto* instance = new BrowserSwitcherServiceWin(
@@ -126,6 +152,7 @@ class BrowserSwitcherServiceTest : public InProcessBrowserTest {
 #endif
   }
 
+#if BUILDFLAG(IS_WIN)
   void SetUseIeSitelist(bool use_ie_sitelist) {
     policy::PolicyMap policies;
     EnableBrowserSwitcher(&policies);
@@ -134,14 +161,21 @@ class BrowserSwitcherServiceTest : public InProcessBrowserTest {
     provider_.UpdateChromePolicy(policies);
     base::RunLoop().RunUntilIdle();
   }
+#endif  // BUILDFLAG(IS_WIN)
+
+  void UpdatePolicies(policy::PolicyMap& policies) {
+    provider_.UpdateChromePolicy(policies);
+    base::RunLoop().RunUntilIdle();
+    BrowserSwitcherServiceFactory::GetForBrowserContext(browser()->GetProfile())
+        ->Init();
+  }
 
   void SetExternalUrl(const std::string& url) {
     policy::PolicyMap policies;
     EnableBrowserSwitcher(&policies);
     SetPolicy(&policies, policy::key::kBrowserSwitcherExternalSitelistUrl,
               base::Value(url));
-    provider_.UpdateChromePolicy(policies);
-    base::RunLoop().RunUntilIdle();
+    UpdatePolicies(policies);
   }
 
   void WaitForRefresh() {
@@ -152,21 +186,21 @@ class BrowserSwitcherServiceTest : public InProcessBrowserTest {
 
   void WaitForActionTimeout() {
     base::RunLoop run_loop;
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE, run_loop.QuitClosure(), TestTimeouts::action_timeout());
     run_loop.Run();
   }
 
   BrowserSwitcherService* GetService() {
     return BrowserSwitcherServiceFactory::GetForBrowserContext(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   policy::MockConfigurationPolicyProvider& policy_provider() {
     return provider_;
   }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   BrowserSwitcherServiceWin* GetServiceWin() {
     return static_cast<BrowserSwitcherServiceWin*>(GetService());
   }
@@ -202,7 +236,7 @@ class BrowserSwitcherServiceTest : public InProcessBrowserTest {
  private:
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::FilePath fake_appdata_dir_;
 #endif
 };
@@ -263,6 +297,11 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
 
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
                        ExternalFirstFetchFailsButSecondWorks) {
+  // Use a non-zero refresh delay so that the second refresh doesn't finish
+  // before we've had a chance to check the state after the first (failed)
+  // refresh.
+  BrowserSwitcherService::SetRefreshDelayForTesting(base::Milliseconds(500));
+
   SetExternalUrl(kAValidUrl);
 
   int counter = 0;
@@ -313,6 +352,66 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
   EXPECT_FALSE(ShouldSwitch(service, GURL("http://docs.google.com/")));
 }
 
+// Check that changing the BrowserSwitcherParsingMode policy triggers a
+// redownload, and parses the XML with the right ParsingMode.
+IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
+                       ExternalRedownloadOnParsingModeChange) {
+  policy::PolicyMap policies;
+  EnableBrowserSwitcher(&policies);
+  SetPolicy(&policies, policy::key::kBrowserSwitcherExternalSitelistUrl,
+            base::Value(kAValidUrl));
+  UpdatePolicies(policies);
+
+  content::URLLoaderInterceptor interceptor(base::BindRepeating(
+      [](content::URLLoaderInterceptor::RequestParams* params) {
+        if (params->url_request.url.spec() != kAValidUrl)
+          return false;
+        std::string headers = "HTTP/1.1 200 OK\nContent-Type: text/html\n\n";
+        content::URLLoaderInterceptor::WriteResponse(
+            headers, kParsingModeSensitiveSitelistXml, params->client.get());
+        return true;
+      }));
+
+  // Execute everything and make sure the rules are applied correctly.
+  auto* service = GetService();
+
+  WaitForRefresh();
+  EXPECT_FALSE(ShouldSwitch(service, GURL("http://example.com/grey")));
+  EXPECT_TRUE(ShouldSwitch(service, GURL("http://example.com/chrome")));
+  EXPECT_TRUE(ShouldSwitch(service, GURL("http://example.com/ie")));
+  EXPECT_EQ(3u, service->sitelist()->GetExternalSitelist()->sitelist.size());
+  EXPECT_EQ(0u, service->sitelist()->GetExternalSitelist()->greylist.size());
+  EXPECT_EQ(
+      "!//example.com/grey",
+      service->sitelist()->GetExternalSitelist()->sitelist[0]->ToString());
+  EXPECT_EQ(
+      "//example.com/chrome",
+      service->sitelist()->GetExternalSitelist()->sitelist[1]->ToString());
+  EXPECT_EQ(
+      "//example.com/ie",
+      service->sitelist()->GetExternalSitelist()->sitelist[2]->ToString());
+
+  SetPolicy(&policies, policy::key::kBrowserSwitcherParsingMode,
+            base::Value(static_cast<int>(ParsingMode::kIESiteListMode)));
+  UpdatePolicies(policies);
+
+  WaitForRefresh();
+  EXPECT_FALSE(ShouldSwitch(service, GURL("http://example.com/grey")));
+  EXPECT_FALSE(ShouldSwitch(service, GURL("http://example.com/chrome")));
+  EXPECT_TRUE(ShouldSwitch(service, GURL("http://example.com/ie")));
+  EXPECT_EQ(2u, service->sitelist()->GetExternalSitelist()->sitelist.size());
+  EXPECT_EQ(1u, service->sitelist()->GetExternalSitelist()->greylist.size());
+  EXPECT_EQ(
+      "!*://example.com/chrome",
+      service->sitelist()->GetExternalSitelist()->sitelist[0]->ToString());
+  EXPECT_EQ(
+      "*://example.com/ie",
+      service->sitelist()->GetExternalSitelist()->sitelist[1]->ToString());
+  EXPECT_EQ(
+      "*://example.com/grey",
+      service->sitelist()->GetExternalSitelist()->greylist[0]->ToString());
+}
+
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, ExternalFileUrl) {
   base::ScopedAllowBlockingForTesting allow_blocking;
 
@@ -348,8 +447,8 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
 
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
                        ExternalIgnoresNonManagedPref) {
-  browser()->profile()->GetPrefs()->SetString(prefs::kExternalSitelistUrl,
-                                              kAValidUrl);
+  browser()->GetProfile()->GetPrefs()->SetString(prefs::kExternalSitelistUrl,
+                                                 kAValidUrl);
 
   bool fetch_happened = false;
   content::URLLoaderInterceptor interceptor(base::BindRepeating(
@@ -370,14 +469,12 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
                        ExternalGreylistFetchAndParseAfterStartup) {
   policy::PolicyMap policies;
   EnableBrowserSwitcher(&policies);
-  base::Value url_list(base::Value::Type::LIST);
-  url_list.Append("*");
+  auto url_list = base::ListValue().Append("*");
   SetPolicy(&policies, policy::key::kBrowserSwitcherUrlList,
-            std::move(url_list));
+            base::Value(std::move(url_list)));
   SetPolicy(&policies, policy::key::kBrowserSwitcherExternalGreylistUrl,
             base::Value(kAValidUrl));
-  policy_provider().UpdateChromePolicy(policies);
-  base::RunLoop().RunUntilIdle();
+  UpdatePolicies(policies);
 
   content::URLLoaderInterceptor interceptor(
       base::BindRepeating(ReturnValidXml));
@@ -421,7 +518,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
   EXPECT_FALSE(ShouldSwitch(service, GURL("http://yahoo.com/")));
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, IeemSitelistInvalidUrl) {
   SetUseIeSitelist(true);
   BrowserSwitcherServiceWin::SetIeemSitelistUrlForTesting(kAnInvalidUrl);
@@ -443,8 +540,9 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, IeemSitelistInvalidUrl) {
   EXPECT_FALSE(fetch_happened);
 }
 
+// TODO(crbug.com/323787135): Times out flakily on CI.
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
-                       IeemFetchAndParseAfterStartup) {
+                       DISABLED_IeemFetchAndParseAfterStartup) {
   SetUseIeSitelist(true);
   BrowserSwitcherServiceWin::SetIeemSitelistUrlForTesting(kAValidUrl);
 
@@ -474,7 +572,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, IeemIgnoresFailedDownload) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, IeemIgnoresNonManagedPref) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUseIeSitelist, true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUseIeSitelist, true);
   BrowserSwitcherServiceWin::SetIeemSitelistUrlForTesting(kAValidUrl);
 
   bool fetch_happened = false;
@@ -516,26 +614,27 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, WritesPrefsToCacheFile) {
   EnableBrowserSwitcher(&policies);
   SetPolicy(&policies, policy::key::kAlternativeBrowserPath,
             base::Value("IExplore.exe"));
-  base::Value alt_params(base::Value::Type::LIST);
+  base::ListValue alt_params;
   alt_params.Append("--bogus-flag");
   SetPolicy(&policies, policy::key::kAlternativeBrowserParameters,
-            std::move(alt_params));
+            base::Value(std::move(alt_params)));
   SetPolicy(&policies, policy::key::kBrowserSwitcherChromePath,
             base::Value("chrome.exe"));
-  base::Value chrome_params(base::Value::Type::LIST);
+  base::ListValue chrome_params;
   chrome_params.Append("--force-dark-mode");
   SetPolicy(&policies, policy::key::kBrowserSwitcherChromeParameters,
-            std::move(chrome_params));
-  base::Value url_list(base::Value::Type::LIST);
+            base::Value(std::move(chrome_params)));
+  base::ListValue url_list;
   url_list.Append("example.com");
   SetPolicy(&policies, policy::key::kBrowserSwitcherUrlList,
-            std::move(url_list));
-  base::Value greylist(base::Value::Type::LIST);
+            base::Value(std::move(url_list)));
+  base::ListValue greylist;
   greylist.Append("foo.example.com");
   SetPolicy(&policies, policy::key::kBrowserSwitcherUrlGreylist,
-            std::move(greylist));
-  policy_provider().UpdateChromePolicy(policies);
-  base::RunLoop().RunUntilIdle();
+            base::Value(std::move(greylist)));
+  SetPolicy(&policies, policy::key::kBrowserSwitcherParsingMode,
+            base::Value(static_cast<int>(ParsingMode::kIESiteListMode)));
+  UpdatePolicies(policies);
 
   // Execute everything and check "cache.dat" file contents.
   GetService();
@@ -546,11 +645,12 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, WritesPrefsToCacheFile) {
       "IExplore.exe\n"
       "--bogus-flag\n"
       "chrome.exe\n"
-      "--force-dark-mode\n"
+      "--force-dark-mode --from-browser-switcher\n"
       "1\n"
-      "example.com\n"
+      "*://example.com/\n"
       "1\n"
-      "foo.example.com\n";
+      "*://foo.example.com/\n"
+      "ie_sitelist\n";
 
   base::ScopedAllowBlockingForTesting allow_blocking;
   std::string output;
@@ -587,8 +687,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
             base::Value(net::FilePathToFileURL(external_greylist_path).spec()));
   SetPolicy(&policies, policy::key::kBrowserSwitcherUseIeSitelist,
             base::Value(true));
-  policy_provider().UpdateChromePolicy(policies);
-  base::RunLoop().RunUntilIdle();
+  UpdatePolicies(policies);
   BrowserSwitcherServiceWin::SetIeemSitelistUrlForTesting(
       net::FilePathToFileURL(ieem_sitelist_path).spec());
 
@@ -603,7 +702,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
 
   base::FilePath expected_chrome_path;
   base::FilePath::CharType chrome_path[MAX_PATH];
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   ::GetModuleFileName(nullptr, chrome_path, ARRAYSIZE(chrome_path));
   expected_chrome_path = base::FilePath(chrome_path);
 #endif
@@ -612,7 +711,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
       "\n"
       "\n"
       "%s\n"
-      "\n"
+      "--from-browser-switcher\n"
       "2\n"
       "docs.google.com\n"
       "yahoo.com\n"
@@ -652,8 +751,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, CacheFileCorrectOnStartup) {
   SetUseIeSitelist(true);
   // Never refresh the sitelist. We want to check the state of cache.dat after
   // startup, not after the sitelist is downloaded.
-  BrowserSwitcherServiceWin::SetFetchDelayForTesting(
-      base::TimeDelta::FromHours(24));
+  BrowserSwitcherServiceWin::SetFetchDelayForTesting(base::Hours(24));
   BrowserSwitcherServiceWin::SetIeemSitelistUrlForTesting(kAValidUrl);
 
   content::URLLoaderInterceptor interceptor(
@@ -677,10 +775,11 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, CacheFileCorrectOnStartup) {
       "\n"
       "\n"
       "%s\n"
-      "\n"
+      "--from-browser-switcher\n"
       "1\n"
       "docs.google.com\n"
-      "0\n",
+      "0\n"
+      "default\n",
       expected_chrome_path.MaybeAsASCII().c_str());
 
   std::string output;
@@ -694,8 +793,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
 
   policy::PolicyMap policies;
   EnableBrowserSwitcher(&policies);
-  policy_provider().UpdateChromePolicy(policies);
-  base::RunLoop().RunUntilIdle();
+  UpdatePolicies(policies);
 
   ASSERT_TRUE(base::CreateDirectory(cache_dir()));
   base::WriteFile(sitelist_cache_file_path(), "");
@@ -742,15 +840,13 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
       extensions::ExtensionBuilder()
           .SetLocation(extensions::mojom::ManifestLocation::kInternal)
           .SetID(kLBSExtensionId)
-          .SetManifest(extensions::DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "Legacy Browser Support")
                            .Set("manifest_version", 2)
-                           .Set("version", "5.9")
-                           .Build())
+                           .Set("version", "5.9"))
           .Build();
-  extensions::ExtensionSystem::Get(browser()->profile())
-      ->extension_service()
-      ->AddExtension(extension.get());
+  extensions::ExtensionRegistrar::Get(browser()->GetProfile())
+      ->AddExtension(extension);
 
   // Cache files already exist.
   ASSERT_TRUE(base::CreateDirectory(cache_dir()));

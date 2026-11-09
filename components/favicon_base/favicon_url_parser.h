@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@ namespace chrome {
 struct ParsedFaviconPath {
   ParsedFaviconPath();
   ParsedFaviconPath(const ParsedFaviconPath& other);
+  ParsedFaviconPath& operator=(const ParsedFaviconPath& other);
 
   // URL pointing to the page whose favicon we want.
   std::string page_url;
@@ -31,7 +32,6 @@ struct ParsedFaviconPath {
   // The device scale factor of the requested favicon.
   float device_scale_factor = 1.0f;
 
-  // TODO(victorvianna): Remove this parameter.
   // The index of the first character (relative to the path) where the the URL
   // from which the favicon is being requested is located.
   size_t path_index = std::string::npos;
@@ -41,12 +41,22 @@ struct ParsedFaviconPath {
 
   // Whether we should show a fallback monogram in place of the default favicon.
   bool show_fallback_monogram = false;
+
+  // Whether we should ignore the theme when theming the default favicon and
+  // just return the light mode version.
+  bool force_light_mode = false;
+
+  // Whether we should fallback to the host to find the best matching favicon.
+  bool fallback_to_host = true;
+
+  // Whether we should return an empty image as the default favicon.
+  bool force_empty_default_favicon = false;
 };
 
 // Enum describing the two possible url formats: the legacy chrome://favicon
 // and chrome://favicon2.
 // - chrome://favicon format:
-//   chrome://favicon/size&scalefactor/iconurl/url
+//   chrome://favicon/size&scaleFactor/iconUrl/url
 // Some parameters are optional as described below. However, the order of the
 // parameters is not interchangeable.
 //
@@ -55,7 +65,7 @@ struct ParsedFaviconPath {
 //    Specifies the page URL of the requested favicon. If the 'iconurl'
 //    parameter is specified, the URL refers to the URL of the favicon image
 //    instead.
-//  'size&scalefactor'  Optional
+//  'size&scaleFactor'  Optional
 //    Values: ['size/aa@bx/']
 //      Specifies the requested favicon's size in DIP (aa) and the requested
 //      favicon's scale factor. (b).
@@ -63,41 +73,40 @@ struct ParsedFaviconPath {
 //      If the parameter is unspecified, the requested favicon's size defaults
 //      to 16 and the requested scale factor defaults to 1x.
 //      Example: chrome://favicon/size/16@2x/https://www.google.com/
-//  'iconurl'           Optional
-//    Values: ['iconurl']
+//  'iconUrl'           Optional
+//    Values: ['iconUrl']
 //    'iconurl': Specifies that the url parameter refers to the URL of
 //    the favicon image as opposed to the URL of the page that the favicon is
 //    on.
 //    Example: chrome://favicon/iconurl/https://www.google.com/favicon.ico
 //
 // - chrome://favicon2 format:
-//   chrome://favicon2/?query_parameters
+//   chrome://favicon2/?queryParameters
 // Standard URL query parameters are used as described below.
 //
 // URL Parameters:
-//  'page_url'
+//  'pageUrl'
 //    URL pointing to the page whose favicon we want.
-//  'icon_url'
-//    URL pointing directly to favicon image associated with |page_url|.
+//  'iconUrl'
+//    URL pointing directly to favicon image associated with `pageUrl`.
 //    Pointed image will not necessarily have the most appropriate resolution
 //    to the user's device.
 //
-// At least one of the two must be provided and non-empty. If both |page_url|
-// and |icon_url| are passed, |page_url| will have precedence.
+// At least one of the two must be provided and non-empty. If both `pageUrl`
+// and `iconUrl` are passed, `pageUrl` will have precedence.
 //
 // Other parameters:
 //  'size'  Optional
 //      Specifies the requested favicon's size in DIP. If unspecified, defaults
 //      to 16.
 //    Example: chrome://favicon2/?size=32
-// TODO(victorvianna): Refactor to remove scale_factor parameter.
-//  'scale_factor'  Optional
+//  'scaleFactor'  Optional
 //      Values: ['SCALEx']
 //      Specifies the requested favicon's scale factor. If unspecified, defaults
 //      to 1x.
-//    Example: chrome://favicon2/?scale_factor=1.2x
+//    Example: chrome://favicon2/?scaleFactor=1.2x
 //
-//  'allow_google_server_fallback' Optional
+//  'allowGoogleServerFallback' Optional
 //      Values: ['1', '0']
 //      Specifies whether we are allowed to fall back to an external server
 //      request (by page url) in case the icon is not found locally.

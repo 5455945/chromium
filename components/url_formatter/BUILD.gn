@@ -1,6 +1,8 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+
+import("//testing/libfuzzer/fuzzer_test.gni")
 
 if (is_android) {
   import("//build/config/android/rules.gni")
@@ -17,47 +19,77 @@ static_library("skeleton_generator") {
   ]
 }
 
-static_library("url_formatter") {
+source_set("idn_spoof_checker_headers") {
+  visibility = [ ":*" ]
   sources = [
-    "elide_url.cc",
-    "elide_url.h",
-    "spoof_checks/idn_spoof_checker.cc",
     "spoof_checks/idn_spoof_checker.h",
-    "url_fixer.cc",
-    "url_fixer.h",
-    "url_formatter.cc",
-    "url_formatter.h",
+    "spoof_checks/idn_spoof_checker_types.h",
   ]
-
-  configs += [
-    # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
-
-    "//build/config/compiler:noshadowing",
+  public_deps = [
+    "//base",
+    "//third_party/icu",
+    "//url",
   ]
+}
 
+source_set("idn_spoof_checker_impl") {
+  visibility = [ ":*" ]
+  public = []
+  sources = [ "spoof_checks/idn_spoof_checker.cc" ]
   deps = [
+    ":idn_spoof_checker_headers",
+    ":skeleton_generator",
     "//base",
     "//base:i18n",
-    "//components/url_formatter:skeleton_generator",
     "//components/url_formatter/spoof_checks/common_words:common",
     "//components/url_formatter/spoof_checks/common_words:common_words_dafsa",
     "//components/url_formatter/spoof_checks/top_domains:common",
     "//components/url_formatter/spoof_checks/top_domains:generate_top_domains_trie",
     "//net",
     "//net:preload_decoder",
-    "//ui/gfx",
+    "//third_party/icu",
+    "//url",
+  ]
+}
+
+static_library("url_formatter") {
+  sources = [
+    "elide_url.cc",
+    "elide_url.h",
+    "url_fixer.cc",
+    "url_fixer.h",
+    "url_formatter.cc",
+    "url_formatter.h",
+  ]
+
+  deps = [
+    ":idn_spoof_checker_impl",
+    "//base",
+    "//base:i18n",
+    "//build:robolectric_buildflags",
+    "//components/url_formatter:skeleton_generator",
+    "//components/url_formatter/spoof_checks/common_words:common",
+    "//components/url_formatter/spoof_checks/top_domains:common",
+    "//net",
+    "//net:preload_decoder",
     "//url",
   ]
 
-  public_deps = [ "//third_party/icu" ]
+  public_deps = [
+    ":idn_spoof_checker_headers",
+    "//third_party/icu",
+  ]
 
-  if (is_android) {
+  if (is_robolectric) {
+    # Make jni.h available.
+    configs += [ "//third_party/jdk" ]
+  }
+  if (is_android || is_robolectric) {
     sources += [ "url_formatter_android.cc" ]
-    deps += [
-      "android:jni_headers",
-      "//url:gurl_android",
-    ]
+    deps += [ "android:jni_headers" ]
+  } else {
+    # Used in elide_url.cc
+    deps += [ "//ui/gfx" ]
   }
 }
 
@@ -77,14 +109,38 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    ":skeleton_generator",
     ":url_formatter",
     "//base",
     "//base/test:test_support",
+    "//components/url_formatter/spoof_checks/top_domains:generate_idn_top_domains_test_trie",
     "//components/url_formatter/spoof_checks/top_domains:generate_top_domains_test_trie",
     "//net",
     "//net:preload_decoder",
     "//testing/gtest",
     "//ui/gfx",
+    "//url",
+  ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+}
+
+test("url_formatter_fixer_fuzzer") {
+  sources = [ "url_fixer_fuzzer.cc" ]
+  fuzztests = [
+    "URLFixerFuzzer.FuzzSegmentURL",
+    "URLFixerFuzzer.FuzzUTF16SegmentURL",
+    "URLFixerFuzzer.FuzzFormatURL",
+    "URLFixerFuzzer.FuzzFixupURL",
+    "URLFixerFuzzer.FuzzFixupRelativeFile",
+  ]
+  deps = [
+    ":url_formatter",
+    "//base",
+    "//base:i18n",
+    "//third_party/fuzztest:fuzztest_gtest_main",
     "//url",
   ]
 }

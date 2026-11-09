@@ -1,6 +1,4 @@
-# Primary
-dmurph@chromium.org
-mek@chromium.org
+file://storage/OWNERS
 
-# Secondary
-pwnall@chromium.org
+stevebe@microsoft.com
+arichiv@chromium.org #{LAST_RESORT_SUGGESTION}

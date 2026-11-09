@@ -1,12 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/memory/raw_ptr.h"
 #include "base/process/process.h"
 #include "base/threading/platform_thread.h"
+#include "base/time/time.h"
 #include "gpu/command_buffer/client/gles2_cmd_helper.h"
 #include "gpu/command_buffer/client/gles2_implementation.h"
 #include "gpu/command_buffer/client/gpu_control.h"
@@ -20,14 +25,10 @@
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
-#include "gpu/command_buffer/service/image_manager.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager_impl.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
-#include "gpu/command_buffer/service/passthrough_discardable_manager.h"
-#include "gpu/command_buffer/service/service_discardable_manager.h"
 #include "gpu/command_buffer/service/service_utils.h"
-#include "gpu/command_buffer/service/shared_image_manager.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "gpu/command_buffer/service/sync_point_manager.h"
 #include "gpu/command_buffer/service/transfer_buffer_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -36,6 +37,7 @@
 #include "ui/gl/gl_context_stub.h"
 #include "ui/gl/gl_share_group.h"
 #include "ui/gl/gl_surface_stub.h"
+#include "ui/gl/gl_utils.h"
 #include "ui/gl/init/gl_factory.h"
 
 namespace gpu {
@@ -115,7 +117,6 @@ class RecordReplayCommandBuffer : public CommandBufferDirect {
         break;
       case kReplay:
         NOTREACHED();
-        break;
     }
   }
 
@@ -155,10 +156,7 @@ class RecordReplayContext : public GpuControl {
   RecordReplayContext()
       : gpu_preferences_(GetGpuPreferences()),
         share_group_(new gl::GLShareGroup),
-        discardable_manager_(gpu::GpuPreferences()),
-        passthrough_discardable_manager_(gpu::GpuPreferences()),
         translator_cache_(gpu_preferences_) {
-    bool bind_generates_resource = false;
     if (base::CommandLine::ForCurrentProcess()->HasSwitch("use-stub")) {
       surface_ = new gl::GLSurfaceStub;
       scoped_refptr<gl::GLContextStub> context_stub =
@@ -168,46 +166,37 @@ class RecordReplayContext : public GpuControl {
       context_ = context_stub;
     } else {
       gl::GLContextAttribs attribs;
-      if (gpu_preferences_.use_passthrough_cmd_decoder)
-        attribs.bind_generates_resource = bind_generates_resource;
-      surface_ = gl::init::CreateOffscreenGLSurface(gfx::Size());
+      if (gpu_preferences_.use_passthrough_cmd_decoder) {
+        attribs.allow_client_arrays = false;
+      }
+      surface_ = gl::init::CreateOffscreenGLSurface(gl::GetDefaultDisplay(),
+                                                    gfx::Size());
       context_ = gl::init::CreateGLContext(share_group_.get(), surface_.get(),
                                            attribs);
     }
     context_->MakeCurrent(surface_.get());
 
     scoped_refptr<gles2::FeatureInfo> feature_info = new gles2::FeatureInfo();
-    scoped_refptr<gles2::ContextGroup> context_group = new gles2::ContextGroup(
-        gpu_preferences_, true, &mailbox_manager_, nullptr /* memory_tracker */,
-        &translator_cache_, &completeness_cache_, feature_info,
-        bind_generates_resource, &image_manager_, nullptr /* image_factory */,
-        nullptr /* progress_reporter */, GpuFeatureInfo(),
-        &discardable_manager_, &passthrough_discardable_manager_,
+    auto context_group = base::MakeRefCounted<gles2::ContextGroup>(
+        gpu_preferences_, /*memory_tracker=*/nullptr, &translator_cache_,
+        &completeness_cache_, feature_info,
+        /*progress_reporter=*/nullptr, GpuFeatureInfo(),
         &shared_image_manager_);
     command_buffer_ = std::make_unique<RecordReplayCommandBuffer>();
 
-    decoder_.reset(gles2::GLES2Decoder::Create(
-        command_buffer_.get(), command_buffer_->service(), &outputter_,
-        context_group.get()));
+    decoder_ = gles2::GLES2Decoder::Create(command_buffer_.get(),
+                                           command_buffer_->service(),
+                                           &outputter_, context_group.get());
     command_buffer_->set_handler(decoder_.get());
 
     decoder_->GetLogger()->set_log_synthesized_gl_errors(false);
 
-    ContextCreationAttribs attrib_helper;
-    attrib_helper.offscreen_framebuffer_size = gfx::Size(16, 16);
-    attrib_helper.red_size = 8;
-    attrib_helper.green_size = 8;
-    attrib_helper.blue_size = 8;
-    attrib_helper.alpha_size = 8;
-    attrib_helper.depth_size = 0;
-    attrib_helper.stencil_size = 0;
-    attrib_helper.context_type = CONTEXT_TYPE_OPENGLES3;
-
-    ContextResult result =
-        decoder_->Initialize(surface_.get(), context_.get(), true,
-                             gles2::DisallowedFeatures(), attrib_helper);
+    ContextResult result = decoder_->Initialize(
+        surface_.get(), context_.get(), /*offscreen=*/true,
+        CONTEXT_TYPE_OPENGLES3, /*lose_context_when_out_of_memory=*/false);
     DCHECK_EQ(result, ContextResult::kSuccess);
     capabilities_ = decoder_->GetCapabilities();
+    gl_capabilities_ = decoder_->GetGLCapabilities();
 
     const SharedMemoryLimits limits;
     gles2_helper_ =
@@ -220,11 +209,9 @@ class RecordReplayContext : public GpuControl {
 
     // Create the object exposing the OpenGL API.
     const bool lose_context_when_out_of_memory = false;
-    const bool support_client_side_arrays = false;
     gles2_implementation_ = std::make_unique<gles2::GLES2Implementation>(
         gles2_helper_.get(), nullptr, transfer_buffer_.get(),
-        bind_generates_resource, lose_context_when_out_of_memory,
-        support_client_side_arrays, this);
+        lose_context_when_out_of_memory, this);
 
     result = gles2_implementation_->Initialize(limits);
     DCHECK_EQ(result, ContextResult::kSuccess);
@@ -247,6 +234,8 @@ class RecordReplayContext : public GpuControl {
     command_buffer_->AdvanceMode();
   }
 
+  void WaitExec() { gles2_helper_->Finish(); }
+
   void StartReplay() {
     DCHECK_EQ(command_buffer_->mode(), RecordReplayCommandBuffer::kRecord);
     gles2_helper_->FlushLazy();
@@ -263,18 +252,15 @@ class RecordReplayContext : public GpuControl {
 
   const Capabilities& GetCapabilities() const override { return capabilities_; }
 
-  int32_t CreateImage(ClientBuffer buffer,
-                      size_t width,
-                      size_t height) override {
-    NOTIMPLEMENTED();
-    return -1;
+  const GLCapabilities& GetGLCapabilities() const override {
+    return gl_capabilities_;
   }
-
-  void DestroyImage(int32_t id) override { NOTREACHED(); }
 
   void SignalQuery(uint32_t query, base::OnceClosure callback) override {
     NOTREACHED();
   }
+
+  void CancelAllQueries() override { NOTREACHED(); }
 
   void CreateGpuFence(uint32_t gpu_fence_id, ClientGpuFence source) override {
     NOTREACHED();
@@ -300,15 +286,9 @@ class RecordReplayContext : public GpuControl {
 
   void FlushPendingWork() override { NOTREACHED(); }
 
-  uint64_t GenerateFenceSyncRelease() override {
-    NOTREACHED();
-    return 0;
-  }
+  uint64_t GenerateFenceSyncRelease() override { NOTREACHED(); }
 
-  bool IsFenceSyncReleased(uint64_t release) override {
-    NOTREACHED();
-    return true;
-  }
+  bool IsFenceSyncReleased(uint64_t release) override { NOTREACHED(); }
 
   void SignalSyncToken(const gpu::SyncToken& sync_token,
                        base::OnceClosure callback) override {
@@ -321,18 +301,11 @@ class RecordReplayContext : public GpuControl {
 
   bool CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) override {
     NOTREACHED();
-    return true;
   }
-
-  void SetDisplayTransform(gfx::OverlayTransform) override { NOTREACHED(); }
 
   GpuPreferences gpu_preferences_;
 
-  gles2::MailboxManagerImpl mailbox_manager_;
   scoped_refptr<gl::GLShareGroup> share_group_;
-  gles2::ImageManager image_manager_;
-  ServiceDiscardableManager discardable_manager_;
-  PassthroughDiscardableManager passthrough_discardable_manager_;
   SharedImageManager shared_image_manager_;
 
   scoped_refptr<gl::GLSurface> surface_;
@@ -346,6 +319,7 @@ class RecordReplayContext : public GpuControl {
   gles2::TraceOutputter outputter_;
   std::unique_ptr<gles2::GLES2Decoder> decoder_;
   gpu::Capabilities capabilities_;
+  gpu::GLCapabilities gl_capabilities_;
 
   std::unique_ptr<gles2::GLES2CmdHelper> gles2_helper_;
   std::unique_ptr<TransferBuffer> transfer_buffer_;
@@ -372,6 +346,9 @@ class PerfIterator {
     }
   }
 
+  PerfIterator(const PerfIterator&) = delete;
+  PerfIterator& operator=(const PerfIterator&) = delete;
+
   bool Iterate() {
     if (--current_iterations_ > 0)
       return true;
@@ -384,7 +361,7 @@ class PerfIterator {
     if (warmup_) {
       warmup_ = false;
       if (for_linux_perf_)
-        base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(1));
+        base::PlatformThread::Sleep(base::Seconds(1));
       else
         time = base::TimeTicks::Now();
     } else if (!for_linux_perf_) {
@@ -414,8 +391,6 @@ class PerfIterator {
   int current_iterations_ = 1 + kWarmupIterations;
   bool warmup_ = true;
   bool for_linux_perf_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(PerfIterator);
 };
 
 class DecoderPerfTest : public testing::Test {
@@ -435,11 +410,11 @@ class DecoderPerfTest : public testing::Test {
     gl_->Viewport(0, 0, 256, 256);
   }
 
-  void TearDown() override { context_.reset(); }
-
   void StartRecord() { context_->StartRecord(); }
 
   void StartReplay() { context_->StartReplay(); }
+
+  void WaitExec() { context_->WaitExec(); }
 
   void Replay() { context_->Replay(); }
 
@@ -454,11 +429,11 @@ class DecoderPerfTest : public testing::Test {
       GLint log_length = 0;
       gl_->GetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
       if (log_length) {
-        std::unique_ptr<GLchar[]> log(new GLchar[log_length]);
+        auto log = base::HeapArray<GLchar>::WithSize(log_length);
         GLsizei returned_log_length = 0;
         gl_->GetShaderInfoLog(shader, log_length, &returned_log_length,
-                              log.get());
-        LOG(ERROR) << std::string(log.get(), returned_log_length);
+                              log.data());
+        LOG(ERROR) << std::string(log.data(), returned_log_length);
       }
       gl_->DeleteShader(shader);
       return 0;
@@ -505,7 +480,7 @@ class DecoderPerfTest : public testing::Test {
 
  protected:
   std::unique_ptr<RecordReplayContext> context_;
-  gles2::GLES2Implementation* gl_;
+  raw_ptr<gles2::GLES2Implementation> gl_;
   GLuint renderbuffer_ = 0;
   GLuint framebuffer_ = 0;
 };
@@ -614,7 +589,7 @@ TEST_F(DecoderPerfTest, TextureDraw) {
     float xpos = 2.f * x / N - 1.f;
     for (int y = 0; y < N; ++y) {
       float ypos = 2.f * y / N - 1.f;
-      gl_->BindTexture(GL_TEXTURE_2D, textures[texture]);
+      gl_->BindTexture(GL_TEXTURE_2D, UNSAFE_TODO(textures[texture]));
       gl_->Uniform2f(offset_location, xpos, ypos);
       gl_->DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
       texture = (texture + 1) % kTextures;
@@ -644,7 +619,7 @@ TEST_F(DecoderPerfTest, ProgramDraw) {
       "  gl_FragColor = color;\n"
       "}\n";
 
-  GLuint programs[2];
+  std::array<GLuint, 2> programs;
   programs[0] =
       CreateAndLinkProgram(kVertexShader, kFragmentShader, {{"position", 0}});
 
@@ -682,8 +657,9 @@ TEST_F(DecoderPerfTest, ProgramDraw) {
   gl_->Uniform2f(scale_location2, 2.f / N, 2.f / N);
   gl_->Uniform4f(color_location2, 1.f, 0.f, 0.f, 1.f);
 
-  GLint offset_locations[2] = {gl_->GetUniformLocation(programs[0], "offset"),
-                               gl_->GetUniformLocation(programs[1], "offset")};
+  std::array<GLint, 2> offset_locations = {
+      gl_->GetUniformLocation(programs[0], "offset"),
+      gl_->GetUniformLocation(programs[1], "offset")};
 
   StartRecord();
   size_t program = 0;
@@ -697,6 +673,7 @@ TEST_F(DecoderPerfTest, ProgramDraw) {
       program = 1 - program;
     }
   }
+  WaitExec();
 
   StartReplay();
   PerfIterator iterator("program_draw_100", kDefaultRuns, kDefaultIterations);

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,7 +27,7 @@ namespace test {
 
 namespace {
 
-constexpr base::TimeDelta kTimeDelay = base::TimeDelta::FromMilliseconds(100);
+constexpr base::TimeDelta kTimeDelay = base::Milliseconds(100);
 constexpr int kSwipeDistance = 50;
 constexpr int kNumSteps = 5;
 // constexpr gfx::Point kZeroPoint{0, 0};
@@ -98,14 +98,14 @@ class SideSwipeDetectorTest : public aura::test::AuraTestBase {
             ui::PointerId pointer_id,
             bool end_release = true) {
     ui::TouchEvent press(
-        ui::ET_TOUCH_PRESSED, start_point, mock_clock()->NowTicks(),
+        ui::EventType::kTouchPressed, start_point, mock_clock()->NowTicks(),
         ui::PointerDetails(ui::EventPointerType::kTouch, pointer_id));
     GetEventGenerator().Dispatch(&press);
     mock_task_runner()->AdvanceMockTickClock(start_hold_time);
     mock_task_runner()->FastForwardBy(start_hold_time);
 
     ui::TouchEvent move(
-        ui::ET_TOUCH_MOVED, end_point, mock_clock()->NowTicks(),
+        ui::EventType::kTouchMoved, end_point, mock_clock()->NowTicks(),
         ui::PointerDetails(ui::EventPointerType::kTouch, pointer_id));
     GetEventGenerator().Dispatch(&move);
     mock_task_runner()->AdvanceMockTickClock(drag_time);
@@ -113,7 +113,7 @@ class SideSwipeDetectorTest : public aura::test::AuraTestBase {
 
     if (end_release) {
       ui::TouchEvent release(
-          ui::ET_TOUCH_RELEASED, end_point, mock_clock()->NowTicks(),
+          ui::EventType::kTouchReleased, end_point, mock_clock()->NowTicks(),
           ui::PointerDetails(ui::EventPointerType::kTouch, pointer_id));
       GetEventGenerator().Dispatch(&release);
     }
@@ -339,15 +339,15 @@ TEST_F(SideSwipeDetectorTest, IgnoreSecondFinger) {
       .Times(0);
 
   // Start a drag but don't complete.
-  Drag(drag_point, base::TimeDelta::FromMilliseconds(10) /*start_hold_time */,
-       base::TimeDelta::FromMilliseconds(1000) /* drag_time */, end_point,
-       1 /* pointer_id */, false /* end_release */);
+  Drag(drag_point, base::Milliseconds(10) /*start_hold_time */,
+       base::Milliseconds(1000) /* drag_time */, end_point, 1 /* pointer_id */,
+       false /* end_release */);
 
   // A second drag is started with another finger, but will be ignored as a
   // swipe and all its events eaten.
-  Drag(drag_point, base::TimeDelta::FromMilliseconds(10) /*start_hold_time */,
-       base::TimeDelta::FromMilliseconds(1000) /* drag_time */, end_point,
-       2 /* pointer_id */, true /* end_release */);
+  Drag(drag_point, base::Milliseconds(10) /*start_hold_time */,
+       base::Milliseconds(1000) /* drag_time */, end_point, 2 /* pointer_id */,
+       true /* end_release */);
 
   base::RunLoop().RunUntilIdle();
 

@@ -1,12 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/platform/drm/host/drm_window_host.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "ui/base/cursor/ozone/bitmap_cursor_factory_ozone.h"
+#include "base/notimplemented.h"
 #include "ui/base/cursor/platform_cursor.h"
 #include "ui/display/display.h"
 #include "ui/events/devices/device_data_manager.h"
@@ -14,6 +14,7 @@
 #include "ui/events/ozone/evdev/event_factory_evdev.h"
 #include "ui/events/ozone/events_ozone.h"
 #include "ui/events/platform/platform_event_source.h"
+#include "ui/ozone/common/bitmap_cursor.h"
 #include "ui/ozone/platform/drm/host/drm_cursor.h"
 #include "ui/ozone/platform/drm/host/drm_display_host.h"
 #include "ui/ozone/platform/drm/host/drm_display_host_manager.h"
@@ -73,19 +74,29 @@ void DrmWindowHost::Close() {}
 
 bool DrmWindowHost::IsVisible() const {
   NOTREACHED();
-  return true;
 }
 
 void DrmWindowHost::PrepareForShutdown() {}
 
-void DrmWindowHost::SetBounds(const gfx::Rect& bounds) {
+void DrmWindowHost::SetBoundsInPixels(const gfx::Rect& bounds) {
+  bool origin_changed = bounds_.origin() != bounds.origin();
   bounds_ = bounds;
-  delegate_->OnBoundsChanged(bounds);
+  delegate_->OnBoundsChanged({origin_changed});
   SendBoundsChange();
 }
 
-gfx::Rect DrmWindowHost::GetBounds() const {
+gfx::Rect DrmWindowHost::GetBoundsInPixels() const {
   return bounds_;
+}
+
+void DrmWindowHost::SetBoundsInDIP(const gfx::Rect& bounds) {
+  // No scaling at DRM level and should always use pixel bounds.
+  NOTREACHED();
+}
+
+gfx::Rect DrmWindowHost::GetBoundsInDIP() const {
+  // No scaling at DRM level and should always use pixel bounds.
+  NOTREACHED();
 }
 
 void DrmWindowHost::SetTitle(const std::u16string& title) {}
@@ -102,7 +113,7 @@ bool DrmWindowHost::HasCapture() const {
   return widget_ == window_manager_->event_grabber();
 }
 
-void DrmWindowHost::ToggleFullscreen() {}
+void DrmWindowHost::SetFullscreen(bool fullscreen, int64_t target_display_id) {}
 
 void DrmWindowHost::Maximize() {}
 
@@ -129,11 +140,16 @@ bool DrmWindowHost::ShouldUseNativeFrame() const {
 }
 
 void DrmWindowHost::SetCursor(scoped_refptr<PlatformCursor> cursor) {
-  cursor_->SetCursor(widget_, BitmapCursorOzone::FromPlatformCursor(cursor));
+  cursor_->SetCursor(widget_, BitmapCursor::FromPlatformCursor(cursor));
 }
 
 void DrmWindowHost::MoveCursorTo(const gfx::Point& location) {
   event_factory_->WarpCursorTo(widget_, gfx::PointF(location));
+}
+
+void DrmWindowHost::SynthesizeMouseMove(const gfx::PointF& location) {
+  window_manager_->ForceCursorUpdateOnNextMouseMove();
+  event_factory_->SynthesizeMouseMove(location);
 }
 
 void DrmWindowHost::ConfineCursorToBounds(const gfx::Rect& bounds) {
@@ -144,13 +160,12 @@ void DrmWindowHost::ConfineCursorToBounds(const gfx::Rect& bounds) {
   cursor_->CommitBoundsChange(widget_, bounds_, bounds);
 }
 
-void DrmWindowHost::SetRestoredBoundsInPixels(const gfx::Rect& bounds) {
+void DrmWindowHost::SetRestoredBoundsInDIP(const gfx::Rect& bounds) {
   NOTREACHED();
 }
 
-gfx::Rect DrmWindowHost::GetRestoredBoundsInPixels() const {
+gfx::Rect DrmWindowHost::GetRestoredBoundsInDIP() const {
   NOTREACHED();
-  return gfx::Rect();
 }
 
 void DrmWindowHost::SetWindowIcons(const gfx::ImageSkia& window_icon,
@@ -162,12 +177,12 @@ void DrmWindowHost::SizeConstraintsChanged() {
   NOTREACHED();
 }
 
-void DrmWindowHost::OnMouseEnter() {
-  delegate_->OnMouseEnter();
+void DrmWindowHost::OnCursorUpdate() {
+  delegate_->OnCursorUpdate();
 }
 
 bool DrmWindowHost::CanDispatchEvent(const PlatformEvent& event) {
-  DCHECK(event);
+  CHECK(event, base::NotFatalUntil::M163);
 
   // If there is a grab, capture events here.
   gfx::AcceleratedWidget grabber = window_manager_->event_grabber();
@@ -207,7 +222,7 @@ bool DrmWindowHost::CanDispatchEvent(const PlatformEvent& event) {
 }
 
 uint32_t DrmWindowHost::DispatchEvent(const PlatformEvent& event) {
-  DCHECK(event);
+  CHECK(event, base::NotFatalUntil::M163);
 
   if (event->IsLocatedEvent()) {
     // Make the event location relative to this window's origin.

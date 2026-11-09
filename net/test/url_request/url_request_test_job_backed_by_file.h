@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,11 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/expected.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_byte_range.h"
 #include "net/url_request/url_request.h"
@@ -41,6 +42,10 @@ class URLRequestTestJobBackedByFile : public URLRequestJob {
       const base::FilePath& file_path,
       const scoped_refptr<base::TaskRunner>& file_task_runner);
 
+  URLRequestTestJobBackedByFile(const URLRequestTestJobBackedByFile&) = delete;
+  URLRequestTestJobBackedByFile& operator=(
+      const URLRequestTestJobBackedByFile&) = delete;
+
   // URLRequestJob:
   void Start() override;
   void Kill() override;
@@ -58,10 +63,10 @@ class URLRequestTestJobBackedByFile : public URLRequestJob {
   // Called before OnSeekComplete, only called if the request advanced to the
   // point the file was opened, without being canceled.
   virtual void OnOpenComplete(int result);
-  // Called at most once.  On success, |result| is the non-negative offset into
-  // the file that the request will read from.  On seek failure, it's a negative
-  // net:Error code.
-  virtual void OnSeekComplete(int64_t result);
+  // Called at most once. On success, |result| contains the non-negative offset
+  // into the file that the request will read from. On seek failure, it contains
+  // a net::Error code.
+  virtual void OnSeekComplete(base::expected<int64_t, net::Error> result);
   // Called once per read attempt.  |buf| contains the read data, if any.
   // |result| is the number of read bytes.  0 (net::OK) indicates EOF, negative
   // numbers indicate it's a net::Error code.
@@ -86,36 +91,37 @@ class URLRequestTestJobBackedByFile : public URLRequestJob {
     FileMetaInfo();
 
     // Size of the file.
-    int64_t file_size;
+    int64_t file_size = 0;
     // Mime type associated with the file.
     std::string mime_type;
     // Result returned from GetMimeTypeFromFile(), i.e. flag showing whether
     // obtaining of the mime type was successful.
-    bool mime_type_result;
+    bool mime_type_result = false;
     // Flag showing whether the file exists.
-    bool file_exists;
+    bool file_exists = false;
     // Flag showing whether the file name actually refers to a directory.
-    bool is_directory;
+    bool is_directory = false;
     // Absolute path of the file (i.e. symbolic link is resolved).
     base::FilePath absolute_path;
   };
 
   // Fetches file info on a background thread.
-  static void FetchMetaInfo(const base::FilePath& file_path,
-                            FileMetaInfo* meta_info);
+  static std::unique_ptr<FileMetaInfo> FetchMetaInfo(
+      const base::FilePath& file_path);
 
   // Callback after fetching file info on a background thread.
-  void DidFetchMetaInfo(const FileMetaInfo* meta_info);
+  void DidFetchMetaInfo(std::unique_ptr<FileMetaInfo> meta_info);
 
   // Callback after opening file on a background thread.
-  void DidOpen(int result);
+  void DidOpen(net::Error result);
 
   // Callback after seeking to the beginning of |byte_range_| in the file
   // on a background thread.
-  void DidSeek(int64_t result);
+  void DidSeek(base::expected<int64_t, net::Error> result);
 
   // Callback after data is asynchronously read from the file into |buf|.
-  void DidRead(scoped_refptr<IOBuffer> buf, int result);
+  void DidRead(scoped_refptr<IOBuffer> buf,
+               base::expected<base::ByteSize, net::Error> result);
 
   std::unique_ptr<FileStream> stream_;
   FileMetaInfo meta_info_;
@@ -123,14 +129,12 @@ class URLRequestTestJobBackedByFile : public URLRequestJob {
 
   std::vector<HttpByteRange> byte_ranges_;
   HttpByteRange byte_range_;
-  int64_t remaining_bytes_;
+  int64_t remaining_bytes_ = 0;
   bool serve_mime_type_as_content_type_ = false;
 
-  Error range_parse_result_;
+  Error range_parse_result_ = OK;
 
   base::WeakPtrFactory<URLRequestTestJobBackedByFile> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(URLRequestTestJobBackedByFile);
 };
 
 }  // namespace net

@@ -2040,10 +2040,6 @@
         "name": "rendering.desktop/filter_terrain_svg"
     },
     {
-        "duration": "15.892346",
-        "name": "rendering.desktop/geo_apis"
-    },
-    {
         "duration": "27.855965",
         "name": "rendering.desktop/gmail"
     },
@@ -3344,10 +3340,6 @@
         "name": "smoothness.tough_canvas_cases/fill_shapes"
     },
     {
-        "duration": "13.7820835",
-        "name": "smoothness.tough_canvas_cases/geo_apis"
-    },
-    {
         "duration": "12.007142",
         "name": "smoothness.tough_canvas_cases/hakim"
     },
@@ -3993,10 +3985,6 @@
     },
     {
         "duration": null,
-        "name": "system_health.common_desktop/multitab:misc:typical24"
-    },
-    {
-        "duration": null,
         "name": "system_health.common_desktop/play:media:google_play_music"
     },
     {
@@ -4253,10 +4241,6 @@
     },
     {
         "duration": null,
-        "name": "system_health.memory_desktop/multitab:misc:typical24"
-    },
-    {
-        "duration": null,
         "name": "system_health.memory_desktop/play:media:google_play_music"
     },
     {
@@ -4266,10 +4250,6 @@
     {
         "duration": "131.950131",
         "name": "system_health.memory_desktop/play:media:soundcloud"
-    },
-    {
-        "duration": null,
-        "name": "tab_switching.typical_25/multitab:misc:typical24"
     },
     {
         "duration": "24.021742",
@@ -4286,10 +4266,6 @@
     {
         "duration": "21.72734",
         "name": "thread_times.tough_compositor_cases/http://jsbin.com/giqafofe/1/quiet?JS_POSTER_CIRCLE"
-    },
-    {
-        "duration": "19.765928",
-        "name": "thread_times.tough_compositor_cases/http://jsbin.com/jevibahi/4/quiet?JS_SCROLL_200_LAYER_GRID"
     },
     {
         "duration": "14.614125",

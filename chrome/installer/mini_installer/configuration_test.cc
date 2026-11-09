@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/environment.h"
-#include "base/macros.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/registry.h"
 #include "build/branding_buildflags.h"
@@ -40,12 +41,12 @@ class ScopedGoogleUpdateIsMachine {
 class TestConfiguration : public Configuration {
  public:
   explicit TestConfiguration(const wchar_t* command_line) {
-    EXPECT_TRUE(Initialize(::GetModuleHandle(nullptr)));
+    EXPECT_TRUE(Initialize());
     EXPECT_TRUE(ParseCommandLine(command_line));
   }
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestConfiguration);
+  TestConfiguration(const TestConfiguration&) = delete;
+  TestConfiguration& operator=(const TestConfiguration&) = delete;
 };
 
 }  // namespace
@@ -53,6 +54,11 @@ class TestConfiguration : public Configuration {
 class MiniInstallerConfigurationTest : public ::testing::Test {
  protected:
   MiniInstallerConfigurationTest() = default;
+
+  MiniInstallerConfigurationTest(const MiniInstallerConfigurationTest&) =
+      delete;
+  MiniInstallerConfigurationTest& operator=(
+      const MiniInstallerConfigurationTest&) = delete;
 
   void SetUp() override {
     ASSERT_NO_FATAL_FAILURE(
@@ -63,8 +69,6 @@ class MiniInstallerConfigurationTest : public ::testing::Test {
 
  private:
   registry_util::RegistryOverrideManager registry_overrides_;
-
-  DISALLOW_COPY_AND_ASSIGN(MiniInstallerConfigurationTest);
 };
 
 TEST_F(MiniInstallerConfigurationTest, Program) {
@@ -84,14 +88,14 @@ TEST_F(MiniInstallerConfigurationTest, ArgumentCount) {
 }
 
 TEST_F(MiniInstallerConfigurationTest, CommandLine) {
-  static const wchar_t* const kCommandLines[] = {
+  static constexpr auto kCommandLines = std::to_array<const wchar_t*>({
       L"",
       L"spam.exe",
       L"spam.exe --foo",
-  };
-  for (size_t i = 0; i < _countof(kCommandLines); ++i) {
-    EXPECT_TRUE(std::wstring(kCommandLines[i]) ==
-                TestConfiguration(kCommandLines[i]).command_line());
+  });
+  for (const wchar_t* command_line : kCommandLines) {
+    EXPECT_TRUE(std::wstring(command_line) ==
+                TestConfiguration(command_line).command_line());
   }
 }
 

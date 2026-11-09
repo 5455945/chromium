@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,18 +25,16 @@ ScopedAppGLStateRestore* ScopedAppGLStateRestore::Current() {
   return g_current_instance;
 }
 
-ScopedAppGLStateRestore::ScopedAppGLStateRestore(CallMode mode,
-                                                 bool save_restore) {
+ScopedAppGLStateRestore::ScopedAppGLStateRestore(CallMode mode) {
   DCHECK(!g_current_instance);
   g_current_instance = this;
 
   TRACE_EVENT0("android_webview", "AppGLStateSave");
-  if (gl::GLSurfaceEGL::IsANGLEExternalContextAndSurfaceSupported()) {
-    impl_ = std::make_unique<internal::ScopedAppGLStateRestoreImplAngle>(
-        mode, save_restore);
+  if (gl::GLSurfaceEGL::GetGLDisplayEGL()
+          ->ext->b_EGL_ANGLE_external_context_and_surface) {
+    impl_ = std::make_unique<internal::ScopedAppGLStateRestoreImplAngle>(mode);
   } else {
-    impl_ = std::make_unique<internal::ScopedAppGLStateRestoreImpl>(
-        mode, save_restore);
+    impl_ = std::make_unique<internal::ScopedAppGLStateRestoreImpl>(mode);
   }
 }
 
@@ -54,6 +52,10 @@ StencilState ScopedAppGLStateRestore::stencil_state() const {
 
 int ScopedAppGLStateRestore::framebuffer_binding_ext() const {
   return impl_->framebuffer_binding_ext();
+}
+
+bool ScopedAppGLStateRestore::skip_draw() const {
+  return impl_->skip_draw();
 }
 
 ScopedAppGLStateRestore::Impl::Impl() = default;

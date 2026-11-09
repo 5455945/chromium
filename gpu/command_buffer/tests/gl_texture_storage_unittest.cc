@@ -1,15 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <GLES2/gl2.h>
+#include <GLES2/gl2chromium.h>
 #include <GLES2/gl2ext.h>
 #include <stdint.h>
 
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/tests/gl_manager.h"
 #include "gpu/command_buffer/tests/gl_test_utils.h"
-#include "gpu/command_buffer/tests/texture_image_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -77,9 +79,7 @@ class TextureStorageTest : public testing::Test {
   static const GLsizei kResolution = 64;
   void SetUp() override {
     GLManager::Options options;
-    image_factory_.SetRequiredTextureType(GL_TEXTURE_2D);
     options.size = gfx::Size(kResolution, kResolution);
-    options.image_factory = &image_factory_;
     gl_.Initialize(options);
     gl_.MakeCurrent();
 
@@ -91,22 +91,21 @@ class TextureStorageTest : public testing::Test {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            tex_, 0);
 
-    const GLubyte* extensions = glGetString(GL_EXTENSIONS);
-    ext_texture_storage_available_ = strstr(
-        reinterpret_cast<const char*>(extensions), "GL_EXT_texture_storage");
-    chromium_texture_storage_image_available_ =
-        strstr(reinterpret_cast<const char*>(extensions),
-               "GL_CHROMIUM_texture_storage_image");
+    std::string_view extensions =
+        reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    ext_texture_storage_available_ =
+        extensions.contains("GL_EXT_texture_storage");
+    oes_required_internal_format_available_ =
+        extensions.contains("GL_OES_required_internalformat");
   }
 
   void TearDown() override { gl_.Destroy(); }
 
-  TextureImageFactory image_factory_;
   GLManager gl_;
   GLuint tex_ = 0;
   GLuint fbo_ = 0;
   bool ext_texture_storage_available_ = false;
-  bool chromium_texture_storage_image_available_ = false;
+  bool oes_required_internal_format_available_ = false;
 };
 
 TEST_F(TextureStorageTest, CorrectPixels) {
@@ -147,7 +146,7 @@ TEST_F(TextureStorageTest, OneLevel) {
 
   glTexStorage2DEXT(GL_TEXTURE_2D, 1, GL_RGBA8_OES, 4, 4);
 
-  uint8_t source_pixels[64] = {0};
+  uint8_t source_pixels[64] = {};
 
   EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4,
@@ -164,7 +163,7 @@ TEST_F(TextureStorageTest, MultipleLevels) {
 
   glTexStorage2DEXT(GL_TEXTURE_2D, 2, GL_RGBA8_OES, 2, 2);
 
-  uint8_t source_pixels[16] = {0};
+  uint8_t source_pixels[16] = {};
 
   EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2,
@@ -214,30 +213,17 @@ TEST_F(TextureStorageTest, CannotRedefine) {
 }
 
 TEST_F(TextureStorageTest, InternalFormatBleedingToTexImage) {
-  if (!ext_texture_storage_available_)
-    return;
-
   EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
   // The context is ES2 context.
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8_OES, 4, 4, 0, GL_RGBA,
                GL_UNSIGNED_BYTE, nullptr);
-  EXPECT_NE(static_cast<GLenum>(GL_NO_ERROR), glGetError());
-}
-
-TEST_F(TextureStorageTest, CorrectImagePixels) {
-  if (!chromium_texture_storage_image_available_)
-    return;
-
-  glTexStorage2DImageCHROMIUM(GL_TEXTURE_2D, GL_RGBA8_OES, GL_SCANOUT_CHROMIUM,
-                              2, 2);
-
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         tex_, 0);
-
-  uint8_t source_pixels[16] = {1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4};
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE,
-                  source_pixels);
-  EXPECT_TRUE(GLTestHelper::CheckPixels(0, 0, 2, 2, 0, source_pixels, nullptr));
+  if (oes_required_internal_format_available_) {
+    // GL_OES_required_internalformat allows sized texture formats to be passed
+    // to glTexImage2D even in ES2.
+    EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+  } else {
+    EXPECT_NE(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+  }
 }
 
 TEST_F(TextureStorageTest, LuminanceEmulation) {
@@ -343,6 +329,3 @@ TEST_F(TextureStorageTest, LuminanceAlphaEmulation) {
 }
 
 }  // namespace gpu
-
-
-

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_OOM_INTERVENTION_OOM_INTERVENTION_TYPES_H_
 
 #include <stdint.h>
+
+#include "base/byte_size.h"
 
 namespace blink {
 
@@ -16,12 +18,8 @@ namespace blink {
 // the arm64 and renderer in the arm32.
 
 struct OomInterventionMetrics {
-  uint64_t current_private_footprint_kb = 0;
-  uint64_t current_swap_kb = 0;
-  uint64_t current_vm_size_kb = 0;
-
-  // Stores the total of V8, BlinkGC and PartitionAlloc memory usage.
-  uint64_t current_blink_usage_kb = 0;
+  base::ByteSize current_available_memory;
+  base::ByteSize current_swap_free;
 
   // Indicates whether the crash was because of virtual address space OOM.
   // This holds only 0 or 1 as a value but because of the reason stated above,

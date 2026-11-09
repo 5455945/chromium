@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,19 @@
 #include <utility>
 
 #include "base/atomic_sequence_num.h"
-#include "content/browser/permissions/permission_controller_impl.h"
-#include "content/public/android/content_jni_headers/NfcHost_jni.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/permission_controller.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/web_contents.h"
 #include "services/device/public/mojom/nfc.mojom.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/NfcHost_jni.h"
 
 namespace content {
 
@@ -23,40 +29,69 @@ base::AtomicSequenceNumber g_unique_id;
 
 NFCHost::NFCHost(WebContents* web_contents)
     : WebContentsObserver(web_contents) {
-  DCHECK(web_contents);
-
-  permission_controller_ = PermissionControllerImpl::FromBrowserContext(
-      web_contents->GetBrowserContext());
+  CHECK(web_contents, base::NotFatalUntil::M159);
 }
 
-NFCHost::~NFCHost() {
-  Close();
-}
+NFCHost::~NFCHost() = default;
 
 void NFCHost::GetNFC(RenderFrameHost* render_frame_host,
                      mojo::PendingReceiver<device::mojom::NFC> receiver) {
   // https://w3c.github.io/web-nfc/#security-policies
-  // WebNFC API must be only accessible from top level browsing context.
+  // WebNFC API must be only accessible from the outermost frame and restrict
+  // from the prerendered page. Well-behaved renderer can't trigger this method
+  // since mojo capabiliy control blocks during prerendering and permission
+  // request of WebNFC from fenced frames is denied.
   if (render_frame_host->GetParent()) {
-    mojo::ReportBadMessage(
-        "WebNFC is only allowed in a top-level browsing context.");
+    mojo::ReportBadMessage("WebNFC is not allowed in an iframe.");
+    return;
+  }
+  if (render_frame_host->GetLifecycleState() ==
+      RenderFrameHost::LifecycleState::kPrerendering) {
+    mojo::ReportBadMessage("WebNFC is not allowed in a prerendered page.");
+    return;
+  }
+  if (render_frame_host->IsNestedWithinFencedFrame()) {
+    mojo::ReportBadMessage("WebNFC is not allowed within in a fenced frame.");
     return;
   }
 
-  GURL origin_url = render_frame_host->GetLastCommittedOrigin().GetURL();
-  if (permission_controller_->GetPermissionStatusForFrame(
-          PermissionType::NFC, render_frame_host, origin_url) !=
-      blink::mojom::PermissionStatus::GRANTED) {
+  if (web_contents()->GetPrimaryMainFrame() != render_frame_host) {
+    mojo::ReportBadMessage("WebNFC not on primary main frame.");
     return;
   }
 
-  if (!subscription_id_) {
+  if (render_frame_host->GetLastCommittedOrigin().opaque()) {
+    return;
+  }
+
+  if (render_frame_host->GetBrowserContext()
+          ->GetPermissionController()
+          ->GetPermissionStatusForCurrentDocument(
+              content::PermissionDescriptorUtil::
+                  CreatePermissionDescriptorForPermissionType(
+                      blink::PermissionType::NFC),
+              render_frame_host) != blink::mojom::PermissionStatus::GRANTED) {
+    return;
+  }
+
+  if (!permission_subscription_) {
     // base::Unretained() is safe here because the subscription is canceled when
     // this object is destroyed.
-    subscription_id_ = permission_controller_->SubscribePermissionStatusChange(
-        PermissionType::NFC, render_frame_host, origin_url,
-        base::BindRepeating(&NFCHost::OnPermissionStatusChange,
-                            base::Unretained(this)));
+    permission_subscription_ =
+        web_contents()
+            ->GetBrowserContext()
+            ->GetPermissionController()
+            ->SubscribeToPermissionResultChange(
+                PermissionDescriptorUtil::
+                    CreatePermissionDescriptorForPermissionType(
+                        blink::PermissionType::NFC),
+                /*render_process_host=*/nullptr, render_frame_host,
+                render_frame_host->GetMainFrame()
+                    ->GetLastCommittedOrigin()
+                    .GetURL(),
+                /*should_include_device_status=*/false,
+                base::BindRepeating(&NFCHost::OnPermissionResultChange,
+                                    base::Unretained(this)));
   }
 
   if (!nfc_provider_) {
@@ -78,7 +113,7 @@ void NFCHost::GetNFC(RenderFrameHost* render_frame_host,
 void NFCHost::RenderFrameHostChanged(RenderFrameHost* old_host,
                                      RenderFrameHost* new_host) {
   // If the main frame has been replaced then close an old NFC connection.
-  if (!new_host->GetParent())
+  if (new_host->IsInPrimaryMainFrame())
     Close();
 }
 
@@ -99,15 +134,17 @@ void NFCHost::MaybeResumeOrSuspendOperations(Visibility visibility) {
     nfc_provider_->SuspendNFCOperations();
 }
 
-void NFCHost::OnPermissionStatusChange(blink::mojom::PermissionStatus status) {
-  if (status != blink::mojom::PermissionStatus::GRANTED)
+void NFCHost::OnPermissionResultChange(PermissionResult permission_result) {
+  if (permission_result.status != blink::mojom::PermissionStatus::GRANTED) {
     Close();
+  }
 }
 
 void NFCHost::Close() {
   nfc_provider_.reset();
-  permission_controller_->UnsubscribePermissionStatusChange(subscription_id_);
-  subscription_id_ = PermissionController::SubscriptionId();
+  permission_subscription_.reset();
 }
 
 }  // namespace content
+
+DEFINE_JNI(NfcHost)

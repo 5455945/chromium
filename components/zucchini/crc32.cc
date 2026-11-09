@@ -1,12 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/zucchini/crc32.h"
 
 #include <array>
-
-#include "base/check_op.h"
 
 namespace zucchini {
 
@@ -28,15 +26,14 @@ std::array<uint32_t, 256> MakeCrc32Table() {
 }  // namespace
 
 // Minimalistic CRC-32 implementation for Zucchini usage. Adapted from LZMA SDK
-// (found at third_party/lzma_sdk/7zCrc.c), which is public domain.
-uint32_t CalculateCrc32(const uint8_t* first, const uint8_t* last) {
-  DCHECK_GE(last, first);
-
+// (found at third_party/lzma_sdk/src/C/7zCrc.c), which is public domain.
+uint32_t CalculateCrc32(base::span<const uint8_t> data) {
   static const std::array<uint32_t, 256> kCrc32Table = MakeCrc32Table();
 
   uint32_t ret = 0xFFFFFFFF;
-  for (; first != last; ++first)
-    ret = kCrc32Table[(ret ^ *first) & 0xFF] ^ (ret >> 8);
+  for (uint8_t byte : data) {
+    ret = kCrc32Table[(ret ^ byte) & 0xFF] ^ (ret >> 8);
+  }
   return ret ^ 0xFFFFFFFF;
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/rand_util.h"
@@ -18,6 +17,7 @@
 
 #define MAX_CACHE_SIZE 5u
 
+namespace thumbnail {
 namespace {
 
 unsigned int GenerateValue(unsigned int key) {
@@ -30,13 +30,14 @@ class MockObject {
     return base::WrapUnique(new MockObject(key));
   }
 
+  MockObject(const MockObject&) = delete;
+  MockObject& operator=(const MockObject&) = delete;
+
   unsigned int value() const { return value_; }
 
  private:
   explicit MockObject(unsigned int key) : value_(GenerateValue(key)) {}
   unsigned int value_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockObject);
 };
 
 }  // namespace
@@ -75,8 +76,9 @@ TEST_F(ScopedPtrExpiringCacheTest, SimplePutAndGet) {
   // Test Get as membership test.
   cached_count = 0;
   for (unsigned int i = 0; i < MAX_CACHE_SIZE + 1; i++) {
-    if (cache.Get(i))
+    if (cache.Get(i)) {
       cached_count++;
+    }
   }
   EXPECT_EQ(MAX_CACHE_SIZE, cached_count);
 
@@ -169,3 +171,5 @@ TEST_F(ScopedPtrExpiringCacheTest, Iterator) {
     key_iter++;
   }
 }
+
+}  // namespace thumbnail

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,98 +10,107 @@
 #include <set>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "components/sync/model/syncable_service.h"
+#include "components/value_store/value_store_factory.h"
 #include "extensions/browser/api/storage/settings_observer.h"
 #include "extensions/browser/api/storage/settings_storage_quota_enforcer.h"
-#include "extensions/browser/value_store/value_store_factory.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
 
-namespace syncer {
-class SyncErrorFactory;
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace sync_pb {
+class ExtensionSettingSpecifics;
+}
+
+namespace value_store {
+class ValueStoreFactory;
 }
 
 namespace extensions {
 
 class SettingsSyncProcessor;
 class SyncableSettingsStorage;
-class ValueStoreFactory;
 
 // Manages ValueStore objects for extensions, including routing
 // changes from sync to them.
 // Lives entirely on the FILE thread.
-class SyncStorageBackend : public syncer::SyncableService {
+class SyncStorageBackend final : public syncer::SyncableService {
  public:
-  // |storage_factory| is use to create leveldb storage areas.
-  // |observers| is the list of observers to settings changes.
-  SyncStorageBackend(scoped_refptr<ValueStoreFactory> storage_factory,
-                     const SettingsStorageQuotaEnforcer::Limits& quota,
-                     scoped_refptr<SettingsObserverList> observers,
-                     syncer::ModelType sync_type,
-                     const syncer::SyncableService::StartSyncFlare& flare);
+  // `storage_factory` is use to create leveldb storage areas.
+  // `observers` is the list of observers to settings changes.
+  SyncStorageBackend(
+      scoped_refptr<value_store::ValueStoreFactory> storage_factory,
+      const SettingsStorageQuotaEnforcer::Limits& quota,
+      SequenceBoundSettingsChangedCallback observer,
+      syncer::DataType sync_type,
+      const syncer::SyncableService::StartSyncFlare& flare);
+
+  SyncStorageBackend(const SyncStorageBackend&) = delete;
+  SyncStorageBackend& operator=(const SyncStorageBackend&) = delete;
 
   ~SyncStorageBackend() override;
 
-  virtual ValueStore* GetStorage(const std::string& extension_id);
-  virtual void DeleteStorage(const std::string& extension_id);
+  value_store::ValueStore* GetStorage(const ExtensionId& extension_id);
+  void DeleteStorage(const ExtensionId& extension_id);
 
   // syncer::SyncableService implementation.
   void WaitUntilReadyToSync(base::OnceClosure done) override;
-  syncer::SyncDataList GetAllSyncDataForTesting(syncer::ModelType type) const;
-  absl::optional<syncer::ModelError> MergeDataAndStartSyncing(
-      syncer::ModelType type,
+  syncer::SyncDataList GetAllSyncDataForTesting(syncer::DataType type) const;
+  std::optional<syncer::ModelError> MergeDataAndStartSyncing(
+      syncer::DataType type,
       const syncer::SyncDataList& initial_sync_data,
-      std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
-      std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory) override;
-  absl::optional<syncer::ModelError> ProcessSyncChanges(
+      std::unique_ptr<syncer::SyncChangeProcessor> sync_processor) override;
+  std::optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override;
-  void StopSyncing(syncer::ModelType type) override;
+  void StopSyncing(syncer::DataType type) override;
+  base::WeakPtr<SyncableService> AsWeakPtr() override;
+  std::string GetClientTag(
+      const syncer::EntityData& entity_data) const override;
 
  private:
   // Gets a weak reference to the storage area for a given extension,
   // initializing sync with some initial data if sync enabled.
   SyncableSettingsStorage* GetOrCreateStorageWithSyncData(
-      const std::string& extension_id,
-      std::unique_ptr<base::DictionaryValue> sync_data) const;
-
-  // Gets all extension IDs known to extension settings.  This may not be all
-  // installed extensions.
-  std::set<std::string> GetKnownExtensionIDs(
-      ValueStoreFactory::ModelType model_type) const;
+      const ExtensionId& extension_id,
+      base::DictValue sync_data) const;
 
   // Creates a new SettingsSyncProcessor for an extension.
   std::unique_ptr<SettingsSyncProcessor> CreateSettingsSyncProcessor(
-      const std::string& extension_id) const;
+      const ExtensionId& extension_id) const;
+
+  // Returns the client tag for an extension or app setting.
+  std::string GetClientTagInternal(
+      const sync_pb::ExtensionSettingSpecifics& specifics) const;
 
   // The Factory to use for creating new ValueStores.
-  const scoped_refptr<ValueStoreFactory> storage_factory_;
+  const scoped_refptr<value_store::ValueStoreFactory> storage_factory_;
 
   // Quota limits (see SettingsStorageQuotaEnforcer).
   const SettingsStorageQuotaEnforcer::Limits quota_;
 
-  // The list of observers to settings changes.
-  const scoped_refptr<SettingsObserverList> observers_;
+  // Observer to settings changes.
+  SequenceBoundSettingsChangedCallback observer_;
 
   // A cache of ValueStore objects that have already been created.
   // Ensure that there is only ever one created per extension.
   using StorageObjMap =
-      std::map<std::string, std::unique_ptr<SyncableSettingsStorage>>;
+      std::map<ExtensionId, std::unique_ptr<SyncableSettingsStorage>>;
   mutable StorageObjMap storage_objs_;
 
-  // Current sync model type. Either EXTENSION_SETTINGS or APP_SETTINGS.
-  syncer::ModelType sync_type_;
+  // Current sync data type. Either EXTENSION_SETTINGS or APP_SETTINGS.
+  syncer::DataType sync_type_;
 
   // Current sync processor, if any.
   std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
 
-  // Current sync error handler if any.
-  std::unique_ptr<syncer::SyncErrorFactory> sync_error_factory_;
-
   syncer::SyncableService::StartSyncFlare flare_;
 
-  DISALLOW_COPY_AND_ASSIGN(SyncStorageBackend);
+  base::WeakPtrFactory<SyncStorageBackend> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,15 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
-#include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/output_device_info.h"
 
 namespace media {
+
+class AudioBus;
+struct AudioGlitchInfo;
 
 // AudioRendererSink is an interface representing the end-point for
 // rendered audio.  An implementation is expected to
@@ -24,17 +26,18 @@ namespace media {
 class AudioRendererSink
     : public base::RefCountedThreadSafe<media::AudioRendererSink> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   class RenderCallback {
    public:
     // Attempts to completely fill all channels of |dest|, returns actual
-    // number of frames filled. |prior_frames_skipped| contains the number of
-    // frames
-    // the consumer has skipped, if any.
-    // The |delay| argument represents audio device output latency,
-    // |delay_timestamp| represents the time when |delay| was obtained.
+    // number of frames filled. The |delay| argument represents audio device
+    // output latency, |delay_timestamp| represents the time when |delay| was
+    // obtained. |glitch_info| contains information about all glitches that
+    // have occurred since the last call to Render().
     virtual int Render(base::TimeDelta delay,
                        base::TimeTicks delay_timestamp,
-                       int prior_frames_skipped,
+                       const AudioGlitchInfo& glitch_info,
                        AudioBus* dest) = 0;
     // Signals an error has occurred.
     virtual void OnRenderError() = 0;
@@ -55,8 +58,19 @@ class AudioRendererSink
   // destruction.
   virtual void Stop() = 0;
 
+  enum class PauseReason {
+    // Audio playback is intentionally paused or suspended (e.g. explicit
+    // pause, mute, or silence suspension) and will not resume until a future
+    // Play().
+    kPlaybackPaused,
+    // Audio playback is active, but rendering is temporarily halted waiting
+    // for data (e.g. buffer underflow or seek flush) and will resume as soon
+    // as data is available.
+    kWaitingForData,
+  };
+
   // Pauses playback.
-  virtual void Pause() = 0;
+  virtual void Pause(PauseReason reason) = 0;
 
   // Resumes playback after calling Pause().
   virtual void Play() = 0;
@@ -103,7 +117,7 @@ class AudioRendererSink
 
  protected:
   friend class base::RefCountedThreadSafe<AudioRendererSink>;
-  virtual ~AudioRendererSink() {}
+  virtual ~AudioRendererSink() = default;
 };
 
 // Same as AudioRendererSink except that Initialize() and Start() can be called
@@ -113,7 +127,7 @@ class AudioRendererSink
 
 class RestartableAudioRendererSink : public AudioRendererSink {
  protected:
-  ~RestartableAudioRendererSink() override {}
+  ~RestartableAudioRendererSink() override = default;
 };
 
 class SwitchableAudioRendererSink : public RestartableAudioRendererSink {
@@ -127,7 +141,7 @@ class SwitchableAudioRendererSink : public RestartableAudioRendererSink {
                                   OutputDeviceStatusCB callback) = 0;
 
  protected:
-  ~SwitchableAudioRendererSink() override {}
+  ~SwitchableAudioRendererSink() override = default;
 };
 
 }  // namespace media

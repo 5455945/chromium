@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/version_info/version_info_values.h"
 #include "chrome/install_static/buildflags.h"
-#include "components/version_info/version_info_values.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,6 +35,9 @@ class FakeInstallDetails : public InstallDetails {
     payload.channel_length = channel.length();
   }
 
+  FakeInstallDetails(const FakeInstallDetails&) = delete;
+  FakeInstallDetails& operator=(const FakeInstallDetails&) = delete;
+
   void set_product_version(const char* version) {
     product_version.assign(version);
     payload.product_version = product_version.c_str();
@@ -49,8 +51,6 @@ class FakeInstallDetails : public InstallDetails {
   std::wstring channel = std::wstring(L"testchannel");
   std::string product_version = std::string(PRODUCT_VERSION);
   Payload payload = Payload();
-
-  DISALLOW_COPY_AND_ASSIGN(FakeInstallDetails);
 };
 
 TEST(InstallDetailsTest, GetClientStateKeyPath) {
@@ -98,6 +98,36 @@ TEST(InstallDetailsTest, VersionMismatch) {
     FakeInstallDetails details;
     details.set_mode_size(sizeof(InstallConstants) + 1);
     EXPECT_TRUE(details.VersionMismatch());
+  }
+}
+
+TEST(InstallDetailsTest, VersionMismatchWithExpectedVersion) {
+  EXPECT_TRUE(FakeInstallDetails().VersionMismatch("9999.0.0.1"));
+
+  // Patched module with matching expected_version succeeds even when primary
+  // module payload has a different product_version, but still fails on wrong
+  // expected_version or struct size mismatch.
+  {
+    FakeInstallDetails details;
+    details.set_product_version("0.1.2.3");
+    EXPECT_FALSE(details.VersionMismatch(PRODUCT_VERSION));
+    EXPECT_TRUE(details.VersionMismatch("9999.0.0.1"));
+  }
+
+  // Bad Payload size.
+  {
+    FakeInstallDetails details;
+    details.set_product_version("0.1.2.3");
+    details.set_payload_size(sizeof(InstallDetails::Payload) + 1);
+    EXPECT_TRUE(details.VersionMismatch(PRODUCT_VERSION));
+  }
+
+  // Bad InstallConstants size.
+  {
+    FakeInstallDetails details;
+    details.set_product_version("0.1.2.3");
+    details.set_mode_size(sizeof(InstallConstants) + 1);
+    EXPECT_TRUE(details.VersionMismatch(PRODUCT_VERSION));
   }
 }
 

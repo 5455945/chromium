@@ -1,10 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chromecast.cma.backend.android;
 
-import android.annotation.TargetApi;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -14,11 +13,13 @@ import android.os.Build;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.ContextUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
 import org.chromium.chromecast.media.AudioContentType;
 
 /**
@@ -36,7 +37,6 @@ import org.chromium.chromecast.media.AudioContentType;
  * intents and reports detected changes back to the native volume controller code.
  */
 @JNINamespace("chromecast::media")
-@TargetApi(Build.VERSION_CODES.M)
 class VolumeControl {
     /**
      * Helper class storing settings and reading/writing volume and mute settings from/to Android's
@@ -90,13 +90,8 @@ class VolumeControl {
         /** Sets the given mute state in AudioManager. */
         void setMuted(boolean muted) {
             if (DEBUG_LEVEL >= 1) Log.i(TAG, "setMuted: muted=" + muted);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                int direction = muted ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE;
-                int flag = 0;
-                mAudioManager.adjustStreamVolume(mStreamType, direction, flag);
-            } else {
-                mAudioManager.setStreamMute(mStreamType, muted);
-            }
+            mAudioManager.adjustStreamVolume(mStreamType,
+                    muted ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE, 0 /*flag*/);
         }
 
         /** Refreshes the stored mute state by reading it from AudioManager.
@@ -114,7 +109,7 @@ class VolumeControl {
         private final float mMaxVolumeIndexAsFloat;
 
         // Cached minimum volume index.
-        private int mMinVolumeIndex;
+        private final int mMinVolumeIndex;
 
         // Current volume index. Stored as float for easier calculations.
         float mVolumeIndexAsFloat;
@@ -132,25 +127,34 @@ class VolumeControl {
     private static final String EXTRA_VOLUME_STREAM_TYPE = "android.media.EXTRA_VOLUME_STREAM_TYPE";
 
     // Mapping from Android's stream_type to Cast's AudioContentType (used for callback).
-    private static final SparseIntArray ANDROID_TYPE_TO_CAST_TYPE_MAP = new SparseIntArray(4) {
-        {
-            append(AudioManager.STREAM_MUSIC, AudioContentType.MEDIA);
-            append(AudioManager.STREAM_ALARM, AudioContentType.ALARM);
-            append(AudioManager.STREAM_SYSTEM, AudioContentType.COMMUNICATION);
-            append(AudioManager.STREAM_VOICE_CALL, AudioContentType.OTHER);
-        }
-    };
+    private static final SparseIntArray ANDROID_TYPE_TO_CAST_TYPE_MAP;
+    static {
+        var array = new SparseIntArray(4);
+        array.append(AudioManager.STREAM_MUSIC, AudioContentType.MEDIA);
+        array.append(AudioManager.STREAM_ALARM, AudioContentType.ALARM);
+        array.append(AudioManager.STREAM_SYSTEM, AudioContentType.COMMUNICATION);
+        array.append(AudioManager.STREAM_VOICE_CALL, AudioContentType.OTHER);
+
+        ANDROID_TYPE_TO_CAST_TYPE_MAP = array;
+    }
 
     private final long mNativeVolumeControl;
 
-    private Context mContext;
+    private final Context mContext;
 
-    private AudioManager mAudioManager;
+    private final AudioManager mAudioManager;
 
     private BroadcastReceiver mMediaEventIntentListener;
 
     // Mapping from Cast's AudioContentType to their respective Settings instance.
-    private SparseArray<Settings> mSettings;
+    private final SparseArray<Settings> mSettings;
+
+    @CalledByNative
+    private static boolean isSingleVolumeDevice() {
+        // Android TV devices map all stream types to STREAM_MUSIC, so they functionally have only
+        // one volume stream.
+        return DeviceInfo.isTV();
+    }
 
     /** Construction */
     @CalledByNative
@@ -204,7 +208,8 @@ class VolumeControl {
         IntentFilter mediaEventIntentFilter = new IntentFilter();
         mediaEventIntentFilter.addAction(VOLUME_CHANGED_ACTION);
         mediaEventIntentFilter.addAction(STREAM_MUTE_CHANGED_ACTION);
-        mContext.registerReceiver(mMediaEventIntentListener, mediaEventIntentFilter);
+        ContextUtils.registerProtectedBroadcastReceiver(
+                mContext, mMediaEventIntentListener, mediaEventIntentFilter);
     }
 
     /**
@@ -218,8 +223,8 @@ class VolumeControl {
             if (DEBUG_LEVEL >= 1) {
                 Log.i(TAG, "New volume for castType " + castType + " is " + s.getVolumeLevel());
             }
-            VolumeControlJni.get().onVolumeChange(
-                    mNativeVolumeControl, VolumeControl.this, castType, s.getVolumeLevel());
+            VolumeControlJni.get()
+                    .onVolumeChange(mNativeVolumeControl, castType, s.getVolumeLevel());
         }
     }
 
@@ -234,8 +239,7 @@ class VolumeControl {
             if (DEBUG_LEVEL >= 1) {
                 Log.i(TAG, "New mute state for castType " + castType + " is " + s.isMuted());
             }
-            VolumeControlJni.get().onMuteChange(
-                    mNativeVolumeControl, VolumeControl.this, castType, s.isMuted());
+            VolumeControlJni.get().onMuteChange(mNativeVolumeControl, castType, s.isMuted());
         }
     }
 
@@ -278,10 +282,8 @@ class VolumeControl {
 
     @NativeMethods
     interface Natives {
-        void onVolumeChange(
-                long nativeVolumeControlAndroid, VolumeControl caller, int type, float level);
+        void onVolumeChange(long nativeVolumeControlAndroid, int type, float level);
 
-        void onMuteChange(
-                long nativeVolumeControlAndroid, VolumeControl caller, int type, boolean muted);
+        void onMuteChange(long nativeVolumeControlAndroid, int type, boolean muted);
     }
 }

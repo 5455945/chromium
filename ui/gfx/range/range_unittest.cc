@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -195,6 +195,22 @@ TYPED_TEST(RangeTest, SetReversedRange) {
   EXPECT_TRUE(r.IsValid());
   EXPECT_EQ(21U, r.GetMin());
   EXPECT_EQ(25U, r.GetMax());
+}
+
+TYPED_TEST(RangeTest, MatchDirection) {
+  TypeParam r(20, 10);
+  EXPECT_TRUE(r.is_reversed());
+  EXPECT_EQ(20U, r.start());
+  EXPECT_EQ(10U, r.end());
+  EXPECT_EQ(10U, r.length());
+  EXPECT_TRUE(r.IsValid());
+
+  r.MatchDirection(TypeParam(10, 20));
+  EXPECT_FALSE(r.is_reversed());
+  EXPECT_EQ(10U, r.start());
+  EXPECT_EQ(20U, r.end());
+  EXPECT_EQ(10U, r.length());
+  EXPECT_TRUE(r.IsValid());
 }
 
 TYPED_TEST(RangeTest, ContainAndIntersect) {
@@ -503,6 +519,43 @@ TEST(RangeTest, IntersectRangeF) {
             gfx::RangeF::InvalidRange());
 }
 
+TEST(RangeTest, ClosedRangeF) {
+  const gfx::RangeF forward = gfx::RangeF::ClosedRange(2.f, 3.f);
+  EXPECT_FALSE(forward.is_reversed());
+  EXPECT_TRUE(forward.Contains(gfx::RangeF(2.f)));
+  EXPECT_TRUE(forward.Contains(gfx::RangeF(2.5f)));
+  EXPECT_TRUE(forward.Contains(gfx::RangeF(3.f)));
+  EXPECT_FALSE(forward.Contains(gfx::RangeF(1.999f)));
+  EXPECT_FALSE(forward.Contains(gfx::RangeF(3.001f)));
+
+  // A reverse RangeF excludes its start (the max), so that's the end that is
+  // extended.
+  const gfx::RangeF reverse = gfx::RangeF::ClosedRange(3.f, 2.f);
+  EXPECT_TRUE(reverse.is_reversed());
+  EXPECT_TRUE(reverse.Contains(gfx::RangeF(2.f)));
+  EXPECT_TRUE(reverse.Contains(gfx::RangeF(2.5f)));
+  EXPECT_TRUE(reverse.Contains(gfx::RangeF(3.f)));
+  EXPECT_FALSE(reverse.Contains(gfx::RangeF(1.999f)));
+  EXPECT_FALSE(reverse.Contains(gfx::RangeF(3.001f)));
+
+  const gfx::RangeF point = gfx::RangeF::ClosedRange(2.f, 2.f);
+  EXPECT_TRUE(point.Contains(gfx::RangeF(2.f)));
+  EXPECT_FALSE(point.Contains(gfx::RangeF(1.999f)));
+  EXPECT_FALSE(point.Contains(gfx::RangeF(2.001f)));
+
+  // Closed ranges that only touch at an endpoint intersect, unlike half-open
+  // ones.
+  EXPECT_FALSE(gfx::RangeF(0.f, 1.f).Intersects(gfx::RangeF(1.f, 2.f)));
+  EXPECT_TRUE(gfx::RangeF::ClosedRange(0.f, 1.f).Intersects(
+      gfx::RangeF::ClosedRange(1.f, 2.f)));
+  EXPECT_TRUE(gfx::RangeF::ClosedRange(1.f, 0.f).Intersects(
+      gfx::RangeF::ClosedRange(2.f, 1.f)));
+  EXPECT_TRUE(gfx::RangeF::ClosedRange(0.f, 0.f).Intersects(
+      gfx::RangeF::ClosedRange(-1.f, 0.f)));
+  EXPECT_TRUE(gfx::RangeF::ClosedRange(0.f, 0.f).Intersects(
+      gfx::RangeF::ClosedRange(0.f, 1.f)));
+}
+
 TEST(RangeTest, IsBoundedBy) {
   constexpr gfx::Range r1(0, 0);
   constexpr gfx::Range r2(0, 1);
@@ -523,4 +576,14 @@ TEST(RangeTest, ToString) {
   std::ostringstream expected;
   expected << "{" << range.start() << "," << range.end() << "}";
   EXPECT_EQ(expected.str(), range.ToString());
+}
+
+TEST(RangeTest, ToIntVector) {
+  gfx::Range range(4, 7);
+  std::vector<int> indices{4, 5, 6};
+  EXPECT_EQ(indices, range.ToIntVector());
+
+  gfx::Range reverse_range(5, 2);
+  std::vector<int> reverse_indices{4, 3, 2};
+  EXPECT_EQ(reverse_indices, reverse_range.ToIntVector());
 }

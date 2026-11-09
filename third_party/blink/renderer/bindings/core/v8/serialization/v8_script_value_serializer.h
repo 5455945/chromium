@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SERIALIZATION_V8_SCRIPT_VALUE_SERIALIZER_H_
 
 #include "base/dcheck_is_on.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/types/pass_key.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialization_tag.h"
-#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_color_params.h"
+#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_params.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/serialization/trailer_writer.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8/include/v8.h"
@@ -21,7 +21,10 @@
 namespace blink {
 
 class File;
+class ReadableStream;
 class Transferables;
+class ScriptState;
+class WritableStream;
 
 // Serializes V8 values according to the HTML structured clone algorithm:
 // https://html.spec.whatwg.org/C/#structured-clone
@@ -37,6 +40,7 @@ class CORE_EXPORT V8ScriptValueSerializer
 
  public:
   using Options = SerializedScriptValue::SerializeOptions;
+  using PassKey = base::PassKey<V8ScriptValueSerializer>;
 
   // |object_index| is for use in exceptiun messages.
   static bool ExtractTransferable(v8::Isolate*,
@@ -47,6 +51,9 @@ class CORE_EXPORT V8ScriptValueSerializer
 
   explicit V8ScriptValueSerializer(ScriptState*, const Options& = Options());
 
+  V8ScriptValueSerializer(const V8ScriptValueSerializer&) = delete;
+  V8ScriptValueSerializer& operator=(const V8ScriptValueSerializer&) = delete;
+
   scoped_refptr<SerializedScriptValue> Serialize(v8::Local<v8::Value>,
                                                  ExceptionState&);
 
@@ -55,6 +62,9 @@ class CORE_EXPORT V8ScriptValueSerializer
   // If false is returned and no more specific exception is thrown, a generic
   // DataCloneError message will be used.
   virtual bool WriteDOMObject(ScriptWrappable*, ExceptionState&);
+
+  bool WriteReadableStream(ReadableStream*, ExceptionState&);
+  bool WriteWritableStream(WritableStream*, ExceptionState&);
 
   ScriptState* GetScriptState() const { return script_state_; }
 
@@ -68,7 +78,13 @@ class CORE_EXPORT V8ScriptValueSerializer
   void WriteRawBytes(const void* data, size_t size) {
     serializer_.WriteRawBytes(data, size);
   }
-  void WriteUTF8String(const String&);
+  void WriteUnguessableToken(const base::UnguessableToken& token);
+  void WriteUTF8String(const StringView&);
+
+  void WriteAndRequireInterfaceTag(SerializationTag tag) {
+    GetTrailerWriter().RequireExposedInterface(tag);
+    WriteTag(tag);
+  }
 
   template <typename E>
   void WriteUint32Enum(E value) {
@@ -86,6 +102,10 @@ class CORE_EXPORT V8ScriptValueSerializer
 
   bool IsForStorage() const { return for_storage_; }
 
+  const Transferables* GetTransferables() const { return transferables_; }
+
+  TrailerWriter& GetTrailerWriter() { return trailer_writer_; }
+
  private:
   // Transfer is split into two phases: scanning the transferables so that we
   // don't have to serialize the data (just an index), and finalizing (to
@@ -100,6 +120,10 @@ class CORE_EXPORT V8ScriptValueSerializer
 
   // v8::ValueSerializer::Delegate
   void ThrowDataCloneError(v8::Local<v8::String> message) override;
+
+  bool HasCustomHostObject(v8::Isolate* isolate) override { return true; }
+  v8::Maybe<bool> IsHostObject(v8::Isolate* isolate,
+                               v8::Local<v8::Object> object) override;
   v8::Maybe<bool> WriteHostObject(v8::Isolate*,
                                   v8::Local<v8::Object> message) override;
   v8::Maybe<uint32_t> GetSharedArrayBufferId(
@@ -117,25 +141,31 @@ class CORE_EXPORT V8ScriptValueSerializer
                                size_t* actual_size) override;
   void FreeBufferMemory(void* buffer) override;
 
-  bool TransferableStreamsEnabled() const;
+  bool AdoptSharedValueConveyor(v8::Isolate* isolate,
+                                v8::SharedValueConveyor&& conveyor) override;
+
+  // Stores the blob in `serialized_script_value_` and returns an identifier for
+  // use with `serializer_`. The identifier is an index.
+  String AttachBlob(scoped_refptr<BlobDataHandle> blob_data);
 
   ScriptState* script_state_;
   scoped_refptr<SerializedScriptValue> serialized_script_value_;
   v8::ValueSerializer serializer_;
+  TrailerWriter trailer_writer_;
   const Transferables* transferables_ = nullptr;
-  const ExceptionState* exception_state_ = nullptr;
   WebBlobInfoArray* blob_info_array_ = nullptr;
   SharedArrayBufferArray shared_array_buffers_;
   Options::WasmSerializationPolicy wasm_policy_;
   bool for_storage_ = false;
+  bool skip_wrapped_objects_ = false;
 #if DCHECK_IS_ON()
   bool serialize_invoked_ = false;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(V8ScriptValueSerializer);
 };
 
-// For code testing V8ScriptValueSerializer
+// For code testing V8ScriptValueSerializer. Behaves the same as
+// SerializedScriptValue::Create, except it can be called on an initializer
+// list.
 scoped_refptr<SerializedScriptValue> SerializedValue(
     const Vector<uint8_t>& bytes);
 

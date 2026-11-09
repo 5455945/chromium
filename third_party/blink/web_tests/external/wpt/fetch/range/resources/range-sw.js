@@ -12,7 +12,7 @@ async function broadcast(msg) {
   }
 }
 
-addEventListener('fetch', event => {
+addEventListener('fetch', async event => {
   /** @type Request */
   const request = event.request;
   const url = new URL(request.url);
@@ -31,8 +31,19 @@ addEventListener('fetch', event => {
     case 'use-stored-ranged-response':
       useStoredRangeResponse(event);
       return;
+    case 'cache-ranged-response':
+      cacheRangedResponse(event);
+      return;
+    case 'use-cached-ranged-response':
+      useCachedRangeResponse(event);
+      return;
     case 'broadcast-accept-encoding':
       broadcastAcceptEncoding(event);
+      return;
+    case 'record-media-range-request':
+      return recordMediaRangeRequest(event);
+    case 'use-media-range-request':
+      useMediaRangeRequest(event);
       return;
   }
 });
@@ -139,9 +150,34 @@ function storeRangedResponse(event) {
 function useStoredRangeResponse(event) {
   event.respondWith(async function() {
     const response = await storedRangeResponseP;
-    if (!response) throw Error("Expected stored range response");
     return response.clone();
   }());
+}
+
+const RANGE_CACHE_NAME = 'range-response-cache';
+const RANGE_CACHE_KEY = 'cached-ranged-response';
+
+function cacheRangedResponse(event) {
+  /** @type Request */
+  const request = event.request;
+  const id = new URL(request.url).searchParams.get('id');
+
+  event.waitUntil((async () => {
+    const response = await fetch(event.request);
+    const cache = await caches.open(RANGE_CACHE_NAME);
+    await cache.put(RANGE_CACHE_KEY, response);
+    broadcast({ id });
+  })());
+
+  // Just send back any response, it isn't important for the test.
+  event.respondWith(new Response(''));
+}
+
+function useCachedRangeResponse(event) {
+  event.respondWith((async () => {
+    const cache = await caches.open(RANGE_CACHE_NAME);
+    return cache.match(RANGE_CACHE_KEY);
+  })());
 }
 
 function broadcastAcceptEncoding(event) {
@@ -156,4 +192,58 @@ function broadcastAcceptEncoding(event) {
 
   // Just send back any response, it isn't important for the test.
   event.respondWith(new Response(''));
+}
+
+let rangeResponse = {};
+
+async function recordMediaRangeRequest(event) {
+  /** @type Request */
+  const request = event.request;
+  const url = new URL(request.url);
+  const urlParams = new URLSearchParams(url.search);
+  const size = urlParams.get("size");
+  const id = urlParams.get('id');
+  const key = 'size' + size;
+
+  if (key in rangeResponse) {
+    // Don't re-fetch ranges we already have.
+    const clonedResponse = rangeResponse[key].clone();
+    event.respondWith(clonedResponse);
+  } else if (event.request.headers.get("range") === "bytes=0-") {
+    // Generate a bogus 206 response to trigger subsequent range requests
+    // of the desired size.
+    const length = urlParams.get("length") + 100;
+    const body = "A".repeat(Number(size));
+    event.respondWith(new Response(body, {status: 206, headers: {
+      "Content-Type": "audio/mp4",
+      "Content-Range": `bytes 0-1/${length}`
+    }}));
+  } else if (event.request.headers.get("range") === `bytes=${Number(size)}-`) {
+    // Pass through actual range requests which will attempt to fetch up to the
+    // length in the original response which is bigger than the actual resource
+    // to make sure 206 and 416 responses are treated the same.
+    rangeResponse[key] = await fetch(event.request);
+
+    // Let the client know we have the range response for the given ID
+    broadcast({id});
+  } else {
+    event.respondWith(Promise.reject(Error("Invalid Request")));
+  }
+}
+
+function useMediaRangeRequest(event) {
+  /** @type Request */
+  const request = event.request;
+  const url = new URL(request.url);
+  const urlParams = new URLSearchParams(url.search);
+  const size = urlParams.get("size");
+  const key = 'size' + size;
+
+  // Send a clone of the range response to preload.
+  if (key in rangeResponse) {
+    const clonedResponse = rangeResponse[key].clone();
+    event.respondWith(clonedResponse);
+  } else {
+    event.respondWith(Promise.reject(Error("Invalid Request")));
+  }
 }

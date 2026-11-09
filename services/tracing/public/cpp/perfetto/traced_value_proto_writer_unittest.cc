@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,10 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "base/trace_event/perfetto_proto_appender.h"
 #include "base/trace_event/traced_value.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/perfetto/include/perfetto/protozero/scattered_heap_buffer.h"
@@ -54,18 +58,12 @@ class ProtoInputStream : public google::protobuf::io::ZeroCopyInputStream {
     has_backed_up_ = true;
   }
 
-  bool Skip(int count) override {
-    NOTREACHED();
-    return false;
-  }
+  bool Skip(int count) override { NOTREACHED(); }
 
-  int64_t ByteCount() const override {
-    NOTREACHED();
-    return 0;
-  }
+  int64_t ByteCount() const override { NOTREACHED(); }
 
  private:
-  const protozero::ScatteredHeapBuffer* buffer_;
+  raw_ptr<const protozero::ScatteredHeapBuffer> buffer_;
   size_t slices_read_ = 0;
   bool has_backed_up_ = false;
 };
@@ -85,7 +83,6 @@ const NestedValue* FindDictEntry(const NestedValue* dict, const char* name) {
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
 bool IsValue(const NestedValue* proto_value, bool value) {
@@ -108,7 +105,7 @@ bool IsValue(const NestedValue* proto_value, const char* value) {
 
 NestedValue GetProtoFromTracedValue(TracedValue* traced_value) {
   protozero::HeapBuffered<perfetto::protos::pbzero::DebugAnnotation> proto;
-  PerfettoProtoAppender proto_appender(proto.get());
+  base::trace_event::PerfettoProtoAppender proto_appender(proto.get());
   EXPECT_TRUE(traced_value->AppendToProto(&proto_appender));
 
   DebugAnnotation full_proto;
@@ -200,10 +197,11 @@ TEST_F(TracedValueProtoWriterTest, Hierarchy) {
 TEST_F(TracedValueProtoWriterTest, LongStrings) {
   std::string kLongString = "supercalifragilisticexpialidocious";
   std::string kLongString2 = "0123456789012345678901234567890123456789";
-  char kLongString3[4096];
-  for (size_t i = 0; i < sizeof(kLongString3); ++i)
+  std::array<char, 4096> kLongString3;
+  for (size_t i = 0; i < kLongString3.size(); ++i) {
     kLongString3[i] = 'a' + (i % 25);
-  kLongString3[sizeof(kLongString3) - 1] = '\0';
+  }
+  kLongString3[kLongString3.size() - 1] = '\0';
 
   std::unique_ptr<TracedValue> value(new TracedValue());
   value->SetString("a", "short");
@@ -212,7 +210,7 @@ TEST_F(TracedValueProtoWriterTest, LongStrings) {
   value->AppendString(kLongString2);
   value->AppendString("");
   value->BeginDictionary();
-  value->SetString("a", kLongString3);
+  value->SetString("a", kLongString3.data());
   value->EndDictionary();
   value->EndArray();
 
@@ -230,7 +228,7 @@ TEST_F(TracedValueProtoWriterTest, LongStrings) {
   EXPECT_TRUE(c_subdict);
   EXPECT_EQ(c_subdict->dict_values_size(), 1);
   EXPECT_EQ(c_subdict->nested_type(), NestedValue::DICT);
-  EXPECT_TRUE(IsValue(FindDictEntry(c_subdict, "a"), kLongString3));
+  EXPECT_TRUE(IsValue(FindDictEntry(c_subdict, "a"), kLongString3.data()));
 }
 
 // Test that the proto which results from the TracedValue is still

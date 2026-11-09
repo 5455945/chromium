@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,62 +12,54 @@
 #include "components/safe_browsing/core/common/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/renderer/render_thread.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "third_party/blink/public/common/loader/resource_type_util.h"
 
 namespace android_webview {
 
+// TODO(crbug.com/324108312): Remove the unused `broker` parameter.
 AwURLLoaderThrottleProvider::AwURLLoaderThrottleProvider(
     blink::ThreadSafeBrowserInterfaceBrokerProxy* broker,
     blink::URLLoaderThrottleProviderType type)
     : type_(type) {
-  DETACH_FROM_THREAD(thread_checker_);
-  broker->GetInterface(safe_browsing_remote_.InitWithNewPipeAndPassReceiver());
+  DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
 AwURLLoaderThrottleProvider::AwURLLoaderThrottleProvider(
     const AwURLLoaderThrottleProvider& other)
     : type_(other.type_) {
-  DETACH_FROM_THREAD(thread_checker_);
-  if (other.safe_browsing_) {
-    other.safe_browsing_->Clone(
-        safe_browsing_remote_.InitWithNewPipeAndPassReceiver());
-  }
+  DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
 std::unique_ptr<blink::URLLoaderThrottleProvider>
 AwURLLoaderThrottleProvider::Clone() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (safe_browsing_remote_)
-    safe_browsing_.Bind(std::move(safe_browsing_remote_));
+  DETACH_FROM_SEQUENCE(sequence_checker_);
   return base::WrapUnique(new AwURLLoaderThrottleProvider(*this));
 }
 
 AwURLLoaderThrottleProvider::~AwURLLoaderThrottleProvider() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-blink::WebVector<std::unique_ptr<blink::URLLoaderThrottle>>
+std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
 AwURLLoaderThrottleProvider::CreateThrottles(
-    int render_frame_id,
-    const blink::WebURLRequest& request) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    base::optional_ref<const blink::LocalFrameToken> local_frame_token,
+    const network::ResourceRequest& request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  blink::WebVector<std::unique_ptr<blink::URLLoaderThrottle>> throttles;
+  std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles;
 
   // Some throttles have already been added in the browser for frame resources.
   // Don't add them for frame requests.
   bool is_frame_resource =
-      blink::IsRequestDestinationFrame(request.GetRequestDestination());
+      blink::IsRequestDestinationFrame(request.destination);
 
   DCHECK(!is_frame_resource ||
          type_ == blink::URLLoaderThrottleProviderType::kFrame);
 
   if (!is_frame_resource) {
-    if (safe_browsing_remote_)
-      safe_browsing_.Bind(std::move(safe_browsing_remote_));
     throttles.emplace_back(
-        std::make_unique<safe_browsing::RendererURLLoaderThrottle>(
-            safe_browsing_.get(), render_frame_id));
+        std::make_unique<safe_browsing::RendererURLLoaderThrottle>());
   }
 
   return throttles;

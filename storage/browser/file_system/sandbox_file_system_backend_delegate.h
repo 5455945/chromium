@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,16 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/files/file_error_or.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -24,11 +26,15 @@
 #include "storage/browser/file_system/file_system_options.h"
 #include "storage/browser/file_system/file_system_quota_util.h"
 #include "storage/browser/file_system/task_runner_bound_observer_list.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "storage/browser/quota/quota_manager_proxy.h"
 
 namespace base {
 class SequencedTaskRunner;
-}
+}  // namespace base
+
+namespace blink {
+class StorageKey;
+}  // namespace blink
 
 namespace storage {
 class SandboxFileSystemBackendDelegateTest;
@@ -37,11 +43,11 @@ class SandboxFileSystemTestHelper;
 
 namespace leveldb {
 class Env;
-}
+}  // namespace leveldb
 
 namespace url {
 class Origin;
-}
+}  // namespace url
 
 namespace storage {
 
@@ -65,27 +71,25 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
     : public FileSystemQuotaUtil {
  public:
   using OpenFileSystemCallback = FileSystemBackend::OpenFileSystemCallback;
+  using ResolveURLCallback = FileSystemBackend::ResolveURLCallback;
 
-  // The FileSystem directory name.
-  static const base::FilePath::CharType kFileSystemDirectory[];
-
-  // Origin enumerator interface.
+  // StorageKey enumerator interface.
   // An instance of this interface is assumed to be called on the file thread.
-  class OriginEnumerator {
+  class StorageKeyEnumerator {
    public:
-    OriginEnumerator(const OriginEnumerator&) = delete;
-    OriginEnumerator& operator=(const OriginEnumerator&) = delete;
-    virtual ~OriginEnumerator() = default;
+    StorageKeyEnumerator(const StorageKeyEnumerator&) = delete;
+    StorageKeyEnumerator& operator=(const StorageKeyEnumerator&) = delete;
+    virtual ~StorageKeyEnumerator() = default;
 
-    // Returns the next origin.  Returns absl::nullopt if there are no more
-    // origins.
-    virtual absl::optional<url::Origin> Next() = 0;
+    // Returns the next StorageKey.  Returns std::nullopt if there are no more
+    // StorageKey.
+    virtual std::optional<blink::StorageKey> Next() = 0;
 
-    // Returns the current origin's information.
+    // Returns the current StorageKey's information.
     virtual bool HasFileSystemType(FileSystemType type) const = 0;
 
    protected:
-    OriginEnumerator() = default;
+    StorageKeyEnumerator() = default;
   };
 
   // Returns the type directory name in sandbox directory for given |type|.
@@ -105,25 +109,34 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
       const SandboxFileSystemBackendDelegate&) = delete;
   ~SandboxFileSystemBackendDelegate() override;
 
-  // Returns an origin enumerator of sandbox filesystem.
+  // Returns a StorageKey enumerator of sandbox filesystem.
   // This method can only be called on the file thread.
-  OriginEnumerator* CreateOriginEnumerator();
+  StorageKeyEnumerator* CreateStorageKeyEnumerator();
 
   // Gets a base directory path of the sandboxed filesystem that is
-  // specified by |origin_url| and |type|.
+  // specified by `storage_key` and `type`.
   // (The path is similar to the origin's root path but doesn't contain
   // the 'unique' part.)
   // Returns an empty path if the given type is invalid.
   // This method can only be called on the file thread.
-  base::FilePath GetBaseDirectoryForOriginAndType(const url::Origin& origin,
-                                                  FileSystemType type,
-                                                  bool create);
+  base::FilePath GetBaseDirectoryForStorageKeyAndType(
+      const blink::StorageKey& storage_key,
+      FileSystemType type,
+      bool create);
+
+  // Gets a base directory path of the sandboxed filesystem that is specified by
+  // `bucket_locator` and `type`. Returns an empty path if invalid or directory
+  // does not exist when `create` is false.
+  base::FilePath GetBaseDirectoryForBucketAndType(
+      const BucketLocator& bucket_locator,
+      FileSystemType type,
+      bool create);
 
   // FileSystemBackend helpers.
-  void OpenFileSystem(const url::Origin& origin,
+  void OpenFileSystem(const BucketLocator& bucket_locator,
                       FileSystemType type,
                       OpenFileSystemMode mode,
-                      OpenFileSystemCallback callback,
+                      ResolveURLCallback callback,
                       const GURL& root_url);
   std::unique_ptr<FileSystemOperationContext> CreateFileSystemOperationContext(
       const FileSystemURL& url,
@@ -141,36 +154,34 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
       FileSystemType type) const;
 
   // FileSystemQuotaUtil overrides.
-  base::File::Error DeleteOriginDataOnFileTaskRunner(
+  void DeleteCachedDefaultBucket(const blink::StorageKey& storage_key) override;
+  base::File::Error DeleteBucketDataOnFileTaskRunner(
       FileSystemContext* context,
       QuotaManagerProxy* proxy,
-      const url::Origin& origin,
+      const BucketLocator& bucket_locator,
       FileSystemType type) override;
   void PerformStorageCleanupOnFileTaskRunner(FileSystemContext* context,
                                              QuotaManagerProxy* proxy,
                                              FileSystemType type) override;
-  std::vector<url::Origin> GetOriginsForTypeOnFileTaskRunner(
+  std::vector<blink::StorageKey> GetDefaultStorageKeysOnFileTaskRunner(
       FileSystemType type) override;
-  std::vector<url::Origin> GetOriginsForHostOnFileTaskRunner(
-      FileSystemType type,
-      const std::string& host) override;
-  int64_t GetOriginUsageOnFileTaskRunner(FileSystemContext* context,
-                                         const url::Origin& origin,
+  int64_t GetBucketUsageOnFileTaskRunner(FileSystemContext* context,
+                                         const BucketLocator& bucket_locator,
                                          FileSystemType type) override;
   scoped_refptr<QuotaReservation> CreateQuotaReservationOnFileTaskRunner(
-      const url::Origin& origin,
+      const blink::StorageKey& storage_key,
       FileSystemType type) override;
 
   // Adds an observer for the secified |type| of a file system, bound to
   // |task_runner|.
   virtual void AddFileUpdateObserver(FileSystemType type,
-                                     FileUpdateObserver* observer,
+                                     scoped_refptr<FileUpdateObserver> observer,
                                      base::SequencedTaskRunner* task_runner);
   virtual void AddFileChangeObserver(FileSystemType type,
-                                     FileChangeObserver* observer,
+                                     scoped_refptr<FileChangeObserver> observer,
                                      base::SequencedTaskRunner* task_runner);
   virtual void AddFileAccessObserver(FileSystemType type,
-                                     FileAccessObserver* observer,
+                                     scoped_refptr<FileAccessObserver> observer,
                                      base::SequencedTaskRunner* task_runner);
 
   // Returns observer lists for the specified |type| of a file system.
@@ -184,17 +195,12 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
   // Registers quota observer for file updates on filesystem of |type|.
   void RegisterQuotaUpdateObserver(FileSystemType type);
 
-  void InvalidateUsageCache(const url::Origin& origin, FileSystemType type);
-  void StickyInvalidateUsageCache(const url::Origin& origin,
+  void InvalidateUsageCache(const blink::StorageKey& storage_key,
+                            FileSystemType type);
+  void StickyInvalidateUsageCache(const blink::StorageKey& storage_key,
                                   FileSystemType type);
 
   void CollectOpenFileSystemMetrics(base::File::Error error_code);
-
-  // Used for migrating from the general storage partition to an isolated
-  // storage partition
-  void CopyFileSystem(const url::Origin& origin,
-                      FileSystemType type,
-                      SandboxFileSystemBackendDelegate* destination);
 
   base::SequencedTaskRunner* file_task_runner() {
     return file_task_runner_.get();
@@ -210,6 +216,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
 
   const FileSystemOptions& file_system_options() const {
     return file_system_options_;
+  }
+
+  const scoped_refptr<QuotaManagerProxy> quota_manager_proxy() const {
+    return quota_manager_proxy_;
   }
 
   FileSystemFileUtil* sync_file_util();
@@ -231,19 +241,31 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
   bool IsAllowedScheme(const GURL& url) const;
 
   // Returns a path to the usage cache file.
-  base::FilePath GetUsageCachePathForOriginAndType(const url::Origin& origin,
-                                                   FileSystemType type);
+  base::FileErrorOr<base::FilePath> GetUsageCachePathForStorageKeyAndType(
+      const blink::StorageKey& storage_key,
+      FileSystemType type);
 
   // Returns a path to the usage cache file (static version).
-  static base::FilePath GetUsageCachePathForOriginAndType(
-      ObfuscatedFileUtil* sandbox_file_util,
-      const url::Origin& origin,
-      FileSystemType type,
-      base::File::Error* error_out);
+  static base::FileErrorOr<base::FilePath>
+  GetUsageCachePathForStorageKeyAndType(ObfuscatedFileUtil* sandbox_file_util,
+                                        const blink::StorageKey& storage_key,
+                                        FileSystemType type);
 
-  int64_t RecalculateUsage(FileSystemContext* context,
-                           const url::Origin& origin,
-                           FileSystemType type);
+  // Returns a path to the usage cache file for a given bucket and type.
+  base::FileErrorOr<base::FilePath> GetUsageCachePathForBucketAndType(
+      const BucketLocator& bucket_locator,
+      FileSystemType type);
+
+  // Returns a path to the usage cache file for a given bucket and type(static
+  // version).
+  static base::FileErrorOr<base::FilePath> GetUsageCachePathForBucketAndType(
+      ObfuscatedFileUtil* sandbox_file_util,
+      const BucketLocator& bucket_locator,
+      FileSystemType type);
+
+  int64_t RecalculateBucketUsage(FileSystemContext* context,
+                                 const BucketLocator& bucket_locator,
+                                 FileSystemType type);
 
   ObfuscatedFileUtil* obfuscated_file_util();
 
@@ -252,7 +274,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileSystemBackendDelegate
 
   std::unique_ptr<AsyncFileUtil> sandbox_file_util_;
   std::unique_ptr<FileSystemUsageCache> file_system_usage_cache_;
-  std::unique_ptr<SandboxQuotaObserver> quota_observer_;
+  const scoped_refptr<SandboxQuotaObserver> quota_observer_;
   std::unique_ptr<QuotaReservationManager> quota_reservation_manager_;
 
   const scoped_refptr<SpecialStoragePolicy> special_storage_policy_;

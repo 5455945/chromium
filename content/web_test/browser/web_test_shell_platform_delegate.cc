@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "content/web_test/browser/web_test_control_host.h"
 #include "content/web_test/browser/web_test_javascript_dialog_manager.h"
 #include "content/web_test/common/web_test_switches.h"
+#include "third_party/blink/public/mojom/input/pointer_lock_result.mojom.h"
 
 namespace content {
 
@@ -29,22 +30,29 @@ void WebTestShellPlatformDelegate::DidCreateOrAttachWebContents(
   WebTestControlHost::Get()->DidCreateOrAttachWebContents(web_contents);
 }
 
+void WebTestShellPlatformDelegate::DidCloseLastWindow() {
+  // Some tests, or some fuzzer's test cases are closing every window. When
+  // this happens, the test runner must run the next test. For this reason, this
+  // do not call Shell::Shutdown(). It will be called manually at the end of:
+  // WebTestBrowserMainRunner::RunBrowserMain().
+}
+
 std::unique_ptr<JavaScriptDialogManager>
 WebTestShellPlatformDelegate::CreateJavaScriptDialogManager(Shell* shell) {
   return std::make_unique<WebTestJavaScriptDialogManager>();
 }
 
-bool WebTestShellPlatformDelegate::HandleRequestToLockMouse(
+bool WebTestShellPlatformDelegate::HandlePointerLockRequest(
     Shell* shell,
     WebContents* web_contents,
     bool user_gesture,
     bool last_unlocked_by_target) {
   if (!user_gesture && !last_unlocked_by_target) {
-    web_contents->GotResponseToLockMouseRequest(
+    web_contents->GotResponseToPointerLockRequest(
         blink::mojom::PointerLockResult::kRequiresUserGesture);
   }
 
-  WebTestControlHost::Get()->RequestToLockMouse(web_contents);
+  WebTestControlHost::Get()->RequestPointerLock(web_contents);
   // Always indicate that we have handled the request to lock the mouse.
   return true;
 }

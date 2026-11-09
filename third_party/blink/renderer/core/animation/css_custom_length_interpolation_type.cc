@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,13 +17,14 @@ InterpolationValue CSSCustomLengthInterpolationType::MaybeConvertNeutral(
 
 InterpolationValue CSSCustomLengthInterpolationType::MaybeConvertValue(
     const CSSValue& value,
-    const StyleResolverState*,
+    const StyleResolverState&,
     ConversionCheckers&) const {
-  std::unique_ptr<InterpolableLength> maybe_length =
+  InterpolableLength* maybe_length =
       InterpolableLength::MaybeConvertCSSValue(value);
-  if (!maybe_length || maybe_length->HasPercentage())
+  if (!maybe_length || maybe_length->HasPercentage()) {
     return nullptr;
-  return InterpolationValue(std::move(maybe_length));
+  }
+  return InterpolationValue(maybe_length);
 }
 
 const CSSValue* CSSCustomLengthInterpolationType::CreateCSSValue(
@@ -32,7 +33,18 @@ const CSSValue* CSSCustomLengthInterpolationType::CreateCSSValue(
     const StyleResolverState&) const {
   const auto& interpolable_length = To<InterpolableLength>(interpolable_value);
   DCHECK(!interpolable_length.HasPercentage());
-  return interpolable_length.CreateCSSValue(kValueRangeAll);
+  return interpolable_length.CreateCSSValue(Length::ValueRange::kAll);
+}
+
+InterpolationValue
+CSSCustomLengthInterpolationType::MaybeConvertCustomPropertyUnderlyingValue(
+    const CSSValue& value) const {
+  InterpolableLength* maybe_length =
+      InterpolableLength::MaybeConvertCSSValue(value);
+  if (!maybe_length || maybe_length->HasPercentage()) {
+    return nullptr;
+  }
+  return InterpolationValue(maybe_length);
 }
 
 }  // namespace blink

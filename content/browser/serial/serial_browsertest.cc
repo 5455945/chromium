@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,19 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
 #include "content/browser/serial/serial_test_utils.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/serial_chooser.h"
 #include "content/public/browser/serial_delegate.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "services/device/public/cpp/test/fake_serial_port_manager.h"
@@ -31,35 +34,37 @@ namespace content {
 
 namespace {
 
+class SerialTestShellContentBrowserClient
+    : public ContentBrowserTestContentBrowserClient {
+ public:
+  MockSerialDelegate& delegate() { return delegate_; }
+
+  // ContentBrowserClient:
+  SerialDelegate* GetSerialDelegate() override { return &delegate_; }
+
+ private:
+  MockSerialDelegate delegate_;
+};
+
 class SerialTest : public ContentBrowserTest {
  public:
-  SerialTest() {
-    ON_CALL(delegate(), GetPortManager).WillByDefault(Return(&port_manager_));
-  }
-
-  ~SerialTest() override = default;
-
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(
         switches::kEnableExperimentalWebPlatformFeatures);
   }
 
   void SetUpOnMainThread() override {
-    original_client_ = SetBrowserClientForTesting(&test_client_);
+    test_client_ = std::make_unique<SerialTestShellContentBrowserClient>();
+    ON_CALL(delegate(), GetPortManager).WillByDefault(Return(&port_manager_));
   }
 
-  void TearDownOnMainThread() override {
-    if (original_client_)
-      SetBrowserClientForTesting(original_client_);
-  }
+  void TearDownOnMainThread() override { test_client_.reset(); }
 
-  MockSerialDelegate& delegate() { return test_client_.delegate(); }
+  MockSerialDelegate& delegate() { return test_client_->delegate(); }
   device::FakeSerialPortManager* port_manager() { return &port_manager_; }
 
  private:
-  SerialTestContentBrowserClient test_client_;
-  ContentBrowserClient* original_client_ = nullptr;
+  std::unique_ptr<SerialTestShellContentBrowserClient> test_client_;
   device::FakeSerialPortManager port_manager_;
 };
 
@@ -117,6 +122,43 @@ IN_PROC_BROWSER_TEST_F(SerialTest, DisallowRequestPort) {
                               return false;
                             }
                           })())"));
+}
+
+IN_PROC_BROWSER_TEST_F(SerialTest, FrameDetachDuringRunChooser) {
+  EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl(nullptr, "simple_page.html")));
+
+  EXPECT_CALL(delegate(), CanRequestPortPermission).WillOnce(Return(true));
+
+  // Add an iframe and wait for it to load.
+  EXPECT_TRUE(ExecJs(shell(), R"(
+    new Promise(resolve => {
+      let iframe = document.createElement('iframe');
+      iframe.src = 'simple_page.html';
+      iframe.onload = resolve;
+      document.body.appendChild(iframe);
+    });
+  )"));
+
+  RenderFrameHost* child_rfh =
+      ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(child_rfh);
+
+  EXPECT_CALL(delegate(), RunChooserInternal).WillOnce([&]() {
+    // Synchronously detach the iframe during RunChooser.
+    EXPECT_TRUE(ExecJs(shell(), "document.querySelector('iframe').remove();"));
+    return nullptr;
+  });
+
+  auto result = EvalJs(child_rfh, R"((async () => {
+    try {
+      await navigator.serial.requestPort({});
+      return true;
+    } catch (e) {
+      return false;
+    }
+  })())");
+  EXPECT_THAT(result,
+              EvalJsResult::ErrorIs(testing::HasSubstr("RenderFrame deleted")));
 }
 
 }  // namespace content

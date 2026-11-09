@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <wrl/implements.h>
 
+#include "base/compiler_specific.h"
+#include "base/debug/stack_trace.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -32,6 +34,8 @@ TEST(FakeBufferTest, Length) {
   ASSERT_HRESULT_SUCCEEDED(buffer->get_Length(&length));
   ASSERT_EQ(length, 47u);
 
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   EXPECT_NONFATAL_FAILURE(ASSERT_HRESULT_FAILED(buffer->put_Length(48)),
                           "put_Length");
 }
@@ -43,7 +47,7 @@ TEST(FakeBufferTest, Bytes) {
   ASSERT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
 
   raw_buffer[0] = 'a';
-  raw_buffer[1] = 'b';
+  UNSAFE_TODO(raw_buffer[1]) = 'b';
 
   auto buffer2 = buffer;
   byte* raw_buffer_2;
@@ -51,7 +55,7 @@ TEST(FakeBufferTest, Bytes) {
 
   ASSERT_EQ(raw_buffer, raw_buffer_2);
   ASSERT_EQ(raw_buffer_2[0], 'a');
-  ASSERT_EQ(raw_buffer_2[1], 'b');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer_2[1]), 'b');
 }
 
 }  // namespace webshare

@@ -1,66 +1,34 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <string>
+// The tests in this file verify the behavior of variations safe mode. The tests
+// should be kept in sync with those in ios/chrome/browser/variations/
+// variations_safe_mode_egtest.mm.
 
-#include "base/base64.h"
+#include "base/metrics/field_trial.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/metrics/clean_exit_beacon.h"
-#include "components/metrics/metrics_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/variations/metrics.h"
 #include "components/variations/pref_names.h"
+#include "components/variations/seed_reader_writer.h"
+#include "components/variations/service/variations_field_trial_creator.h"
 #include "components/variations/variations_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/zlib/google/compression_utils.h"
 
-namespace {
-
-// Returns a base64-encoded compressed serialized form of a VariationsSeed.
-std::string GetTestSeedForPrefs() {
-  std::string serialized_seed;
-  base::Base64Decode(variations::kUncompressedBase64TestSeedData,
-                     &serialized_seed);
-
-  std::string compressed_seed_data;
-  compression::GzipCompress(serialized_seed, &compressed_seed_data);
-
-  std::string base64_seed_data;
-  base::Base64Encode(compressed_seed_data, &base64_seed_data);
-  return base64_seed_data;
-}
-
-// Sets |local_state|'s seed and seed signature prefs to a valid seed-signature
-// pair. If |use_safe_seed_prefs| is true, then uses the safe seed prefs.
-void StoreTestSeedAndSignature(PrefService* local_state,
-                               bool use_safe_seed_prefs) {
-  const std::string seed_pref =
-      use_safe_seed_prefs ? variations::prefs::kVariationsSafeCompressedSeed
-                          : variations::prefs::kVariationsCompressedSeed;
-  local_state->SetString(seed_pref, GetTestSeedForPrefs());
-
-  const std::string signature_pref =
-      use_safe_seed_prefs ? variations::prefs::kVariationsSafeSeedSignature
-                          : variations::prefs::kVariationsSeedSignature;
-  local_state->SetString(signature_pref, variations::kBase64TestSeedSignature);
-}
-
-// Simulates a crash by forcing Chrome to fail to exit cleanly.
-void SimulateCrash(PrefService* local_state) {
-  local_state->SetBoolean(metrics::prefs::kStabilityExitedCleanly, false);
-  metrics::CleanExitBeacon::SkipCleanShutdownStepsForTesting();
-}
-
-}  // namespace
+namespace variations {
 
 class VariationsSafeModeBrowserTest : public InProcessBrowserTest {
  public:
-  VariationsSafeModeBrowserTest() { variations::DisableTestingConfig(); }
+  VariationsSafeModeBrowserTest() {
+    DisableTestingConfig();
+    // TODO(https://crbug.com/564792943): Update tests so they work with the
+    // SeedFile.
+    base::FieldTrialList::CreateFieldTrial(kSeedFileTrial, kControlGroup);
+  }
   ~VariationsSafeModeBrowserTest() override = default;
 
  protected:
@@ -74,7 +42,7 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
   // pref to be set early enough to be read by the variations code, which runs
   // very early during startup.
   PrefService* local_state = g_browser_process->local_state();
-  StoreTestSeedAndSignature(local_state, /*use_safe_seed_prefs=*/true);
+  WriteSignedSeedData(local_state, TestSeedData(), kSafeSeedPrefKeys);
   SimulateCrash(local_state);
 }
 
@@ -91,7 +59,7 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
 IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
                        ThreeCrashesTriggerSafeMode) {
   EXPECT_EQ(g_browser_process->local_state()->GetInteger(
-                variations::prefs::kVariationsCrashStreak),
+                prefs::kVariationsCrashStreak),
             3);
   histogram_tester_.ExpectUniqueSample("Variations.SafeMode.Streak.Crashes", 3,
                                        1);
@@ -99,10 +67,12 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
   // Verify that Chrome fell back to a safe seed, which happens during browser
   // test setup.
   histogram_tester_.ExpectUniqueSample(
-      "Variations.SafeMode.LoadSafeSeed.Result",
-      variations::LoadSeedResult::kSuccess, 1);
-  histogram_tester_.ExpectUniqueSample(
-      "Variations.SafeMode.FellBackToSafeMode2", true, 1);
+      "Variations.SafeMode.LoadSafeSeed.Result", LoadSeedResult::kSuccess, 1);
+  histogram_tester_.ExpectUniqueSample("Variations.SeedUsage",
+                                       SeedUsage::kSafeSeedUsed, 1);
+
+  // Verify that |kTestSeedData| has been applied.
+  EXPECT_TRUE(FieldTrialListHasAllStudiesFrom(TestSeedData()));
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
@@ -112,9 +82,8 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
   // pref to be set early enough to be read by the variations code, which runs
   // very early during startup.
   PrefService* local_state = g_browser_process->local_state();
-  local_state->SetInteger(variations::prefs::kVariationsFailedToFetchSeedStreak,
-                          25);
-  StoreTestSeedAndSignature(local_state, /*use_safe_seed_prefs=*/true);
+  local_state->SetInteger(prefs::kVariationsFailedToFetchSeedStreak, 25);
+  WriteSignedSeedData(local_state, TestSeedData(), kSafeSeedPrefKeys);
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
@@ -125,10 +94,12 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
   // Verify that Chrome fell back to a safe seed, which happens during browser
   // test setup.
   histogram_tester_.ExpectUniqueSample(
-      "Variations.SafeMode.LoadSafeSeed.Result",
-      variations::LoadSeedResult::kSuccess, 1);
-  histogram_tester_.ExpectUniqueSample(
-      "Variations.SafeMode.FellBackToSafeMode2", true, 1);
+      "Variations.SafeMode.LoadSafeSeed.Result", LoadSeedResult::kSuccess, 1);
+  histogram_tester_.ExpectUniqueSample("Variations.SeedUsage",
+                                       SeedUsage::kSafeSeedUsed, 1);
+
+  // Verify that |kTestSeedData| has been applied.
+  EXPECT_TRUE(FieldTrialListHasAllStudiesFrom(TestSeedData()));
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
@@ -138,10 +109,9 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest,
   // pref to be set early enough to be read by the variations code, which runs
   // very early during startup.
   PrefService* local_state = g_browser_process->local_state();
-  local_state->SetInteger(variations::prefs::kVariationsCrashStreak, 2);
-  local_state->SetInteger(variations::prefs::kVariationsFailedToFetchSeedStreak,
-                          24);
-  StoreTestSeedAndSignature(local_state, /*use_safe_seed_prefs=*/false);
+  local_state->SetInteger(prefs::kVariationsCrashStreak, 2);
+  local_state->SetInteger(prefs::kVariationsFailedToFetchSeedStreak, 24);
+  WriteSignedSeedData(local_state, TestSeedData(), kRegularSeedPrefKeys);
 }
 
 IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest, DoNotTriggerSafeMode) {
@@ -150,11 +120,11 @@ IN_PROC_BROWSER_TEST_F(VariationsSafeModeBrowserTest, DoNotTriggerSafeMode) {
   histogram_tester_.ExpectUniqueSample(
       "Variations.SafeMode.Streak.FetchFailures", 24, 1);
 
-  // Verify that Chrome applied the latest seed.
+  // Verify that Chrome applied the regular seed.
   histogram_tester_.ExpectUniqueSample("Variations.SeedLoadResult",
-                                       variations::LoadSeedResult::kSuccess, 1);
-
-  // Verify that Chrome did not fall back to a safe seed.
-  histogram_tester_.ExpectUniqueSample(
-      "Variations.SafeMode.FellBackToSafeMode2", false, 1);
+                                       LoadSeedResult::kSuccess, 1);
+  histogram_tester_.ExpectUniqueSample("Variations.SeedUsage",
+                                       SeedUsage::kRegularSeedUsed, 1);
 }
+
+}  // namespace variations

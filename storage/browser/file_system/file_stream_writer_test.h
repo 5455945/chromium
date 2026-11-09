@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 #define STORAGE_BROWSER_FILE_SYSTEM_FILE_STREAM_WRITER_TEST_H_
 
 #include <cstdio>
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/single_thread_task_runner.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
 #include "net/base/io_buffer.h"
@@ -27,7 +27,7 @@ namespace storage {
 // GetFileContent to manipulate files for their particular implementation.
 class FileStreamWriterTest : public testing::Test {
  public:
-  static constexpr base::StringPiece kTestFileName = "file_a";
+  static constexpr std::string_view kTestFileName = "file_a";
 
   virtual bool CreateFileWithContent(const std::string& name,
                                      const std::string& data) = 0;
@@ -39,7 +39,10 @@ class FileStreamWriterTest : public testing::Test {
 
   static void NeverCalled(int unused) { ADD_FAILURE(); }
 
- private:
+ protected:
+  // Must be listed before base::test::TaskEnvironment.
+  base::ScopedTempDir dir_;
+
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::IO};
 };
@@ -175,7 +178,7 @@ TYPED_TEST_P(FileStreamWriterTypedTest, CancelFlush) {
   EXPECT_EQ(net::OK, WriteStringToWriter(writer.get(), "foo"));
 
   int cancel_expectation = net::OK;
-  int result = writer->Flush(base::DoNothing());
+  int result = writer->Flush(FlushMode::kEndOfFile, base::DoNothing());
   // Flush can run synchronously or asynchronously.
   if (result == net::OK) {
     // Cancel() should error if called when there is no in-flight operation.
@@ -196,7 +199,7 @@ TYPED_TEST_P(FileStreamWriterTypedTest, FlushBeforeWriting) {
   std::unique_ptr<FileStreamWriter> writer(
       this->CreateWriter(std::string(this->kTestFileName), 0));
 
-  EXPECT_EQ(net::OK, writer->Flush(base::DoNothing()));
+  EXPECT_EQ(net::OK, writer->Flush(FlushMode::kDefault, base::DoNothing()));
   EXPECT_EQ(net::OK, WriteStringToWriter(writer.get(), "foo"));
   EXPECT_EQ("foo", this->GetFileContent(std::string(this->kTestFileName)));
 }
@@ -211,7 +214,8 @@ TYPED_TEST_P(FileStreamWriterTypedTest, FlushAfterWriting) {
 
   net::TestCompletionCallback callback;
   int result =
-      writer->Flush(base::OnceCallback<void(int)>(callback.callback()));
+      writer->Flush(FlushMode::kEndOfFile,
+                    base::OnceCallback<void(int)>(callback.callback()));
   ASSERT_EQ(net::OK, callback.GetResult(result));
 
   EXPECT_EQ("foo", this->GetFileContent(std::string(this->kTestFileName)));

@@ -1,20 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <UIKit/UIKit.h>
-#include <functional>
 
-#include "base/test/scoped_feature_list.h"
-#include "ios/web/common/features.h"
+#import <functional>
+
+#import "base/test/scoped_feature_list.h"
+#import "ios/web/common/features.h"
 #import "ios/web/common/uikit_ui_util.h"
 #import "ios/web/public/test/web_test_with_web_state.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace web {
 
@@ -22,8 +19,9 @@ namespace {
 // Overrides GetWindowedContainer.
 class FakeWebClient : public WebClient {
   UIView* GetWindowedContainer() override {
-    if (!windowed_container)
+    if (!windowed_container) {
       windowed_container = [[UIView alloc] init];
+    }
     return windowed_container;
   }
 
@@ -39,6 +37,10 @@ class KeepRenderProcessAliveTest : public WebTestWithWebState {
     scoped_feature_list_.InitAndEnableFeature(
         web::features::kKeepsRenderProcessAlive);
   }
+
+  KeepRenderProcessAliveTest(const KeepRenderProcessAliveTest&) = delete;
+  KeepRenderProcessAliveTest& operator=(const KeepRenderProcessAliveTest&) =
+      delete;
 
   void SetUp() override {
     WebTestWithWebState::SetUp();
@@ -61,7 +63,6 @@ class KeepRenderProcessAliveTest : public WebTestWithWebState {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-  DISALLOW_COPY_AND_ASSIGN(KeepRenderProcessAliveTest);
 };
 
 // Test's that nothing is added to the WindowedContainer when

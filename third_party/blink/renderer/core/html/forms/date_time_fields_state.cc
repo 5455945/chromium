@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/html/forms/date_time_fields_state.h"
 
 #include "third_party/blink/renderer/core/html/forms/form_controller.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -33,11 +34,11 @@ const unsigned DateTimeFieldsState::kEmptyValue = static_cast<unsigned>(-1);
 
 static unsigned GetNumberFromFormControlState(const FormControlState& state,
                                               wtf_size_t index) {
-  if (index >= state.ValueSize())
+  if (index >= state.ValueSize()) {
     return DateTimeFieldsState::kEmptyValue;
-  bool parsed;
-  unsigned const value = state[index].ToUInt(&parsed);
-  return parsed ? value : DateTimeFieldsState::kEmptyValue;
+  }
+  return StringToUintLoose(state[index])
+      .value_or(DateTimeFieldsState::kEmptyValue);
 }
 
 static DateTimeFieldsState::AMPMValue GetAMPMFromFormControlState(
@@ -64,10 +65,21 @@ DateTimeFieldsState::DateTimeFieldsState()
       week_of_year_(kEmptyValue),
       ampm_(kAMPMValueEmpty) {}
 
-unsigned DateTimeFieldsState::Hour23() const {
+unsigned DateTimeFieldsState::Hour24() const {
   if (!HasHour() || !HasAMPM())
     return kEmptyValue;
   return (hour_ % 12) + (ampm_ == kAMPMValuePM ? 12 : 0);
+}
+
+void DateTimeFieldsState::SetHour24(unsigned hour24) {
+  DCHECK_LT(hour24, 24u);
+  if (hour24 >= 12) {
+    ampm_ = kAMPMValuePM;
+    hour_ = hour24 - 12;
+  } else {
+    ampm_ = kAMPMValueAM;
+    hour_ = hour24;
+  }
 }
 
 DateTimeFieldsState DateTimeFieldsState::RestoreFormControlState(

@@ -1,6 +1,8 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/ash/policy/login/login_policy_test_base.h"
 
 #include <string>
 #include <vector>
@@ -9,14 +11,13 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/user_policy_test_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/policy/login/login_policy_test_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/profile_waiter.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -27,17 +28,21 @@
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/ime/chromeos/input_method_manager.h"
+#include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "url/gurl.h"
 
 namespace policy {
 
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
+
 IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, PRE_AllowedLanguages) {
   SkipToLoginScreen();
-  LogIn(kAccountId, kAccountPassword, kEmptyServices);
+  LogIn();
 
   Profile* const profile = GetProfileForActiveUser();
   PrefService* prefs = profile->GetPrefs();
@@ -47,26 +52,23 @@ IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, PRE_AllowedLanguages) {
   prefs->SetString(language::prefs::kPreferredLanguages, "en-US");
 
   // Set policy to only allow "fr" as locale.
-  std::unique_ptr<base::DictionaryValue> policy =
-      std::make_unique<base::DictionaryValue>();
-  base::ListValue allowed_languages;
-  allowed_languages.AppendString("fr");
-  policy->SetKey(key::kAllowedLanguages, std::move(allowed_languages));
-  user_policy_helper()->SetPolicyAndWait(*policy, base::DictionaryValue(),
-                                         profile);
+  enterprise_management::CloudPolicySettings policy;
+  policy.mutable_allowedlanguages()->mutable_value()->add_entries("fr");
+  user_policy_helper()->SetPolicyAndWait(policy, profile);
 }
 
 IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, AllowedLanguages) {
-  LogIn(kAccountId, kAccountPassword, kEmptyServices);
+  LogIn();
 
   Profile* const profile = GetProfileForActiveUser();
   const PrefService* prefs = profile->GetPrefs();
 
   // Verifies that the default locale has been overridden by policy
   // (see |GetMandatoryPoliciesValue|)
-  Browser* browser = CreateBrowser(profile);
+  BrowserWindowInterface* browser = CreateBrowser(profile);
   EXPECT_EQ("fr", prefs->GetString(language::prefs::kApplicationLocale));
-  ui_test_utils::NavigateToURL(browser, GURL(chrome::kChromeUINewTabURL));
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(browser, chrome::ChromeUINewTabURLAsGURL()));
   std::u16string french_title = l10n_util::GetStringUTF16(IDS_NEW_TAB_TITLE);
   std::u16string title;
   EXPECT_TRUE(ui_test_utils::GetCurrentTabTitle(browser, &title));
@@ -87,14 +89,13 @@ IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, AllowedLanguages) {
 
 IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, AllowedInputMethods) {
   SkipToLoginScreen();
-  LogIn(kAccountId, kAccountPassword, kEmptyServices);
+  LogIn();
 
   Profile* const profile = GetProfileForActiveUser();
 
-  chromeos::input_method::InputMethodManager* imm =
-      chromeos::input_method::InputMethodManager::Get();
+  auto* imm = ash::input_method::InputMethodManager::Get();
   ASSERT_TRUE(imm);
-  scoped_refptr<chromeos::input_method::InputMethodManager::State> ime_state =
+  scoped_refptr<ash::input_method::InputMethodManager::State> ime_state =
       imm->GetActiveIMEState();
   ASSERT_TRUE(ime_state.get());
 
@@ -102,57 +103,121 @@ IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, AllowedInputMethods) {
   input_methods.emplace_back("xkb:us::eng");
   input_methods.emplace_back("xkb:fr::fra");
   input_methods.emplace_back("xkb:de::ger");
-  EXPECT_TRUE(imm->MigrateInputMethods(&input_methods));
+  EXPECT_TRUE(imm->GetMigratedInputMethodIDs(&input_methods));
 
   // No restrictions and current input method should be "xkb:us::eng" (default).
-  EXPECT_EQ(0U, ime_state->GetAllowedInputMethods().size());
+  EXPECT_EQ(0U, ime_state->GetAllowedInputMethodIds().size());
   EXPECT_EQ(input_methods[0], ime_state->GetCurrentInputMethod().id());
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[1]));
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
 
-  // Set policy to only allow "xkb:fr::fra", "xkb:de::ger" an an invalid value
+  // Set policy to only allow "xkb:fr::fra", "xkb:de::ger" and an invalid value
   // as input method.
-  std::unique_ptr<base::DictionaryValue> policy =
-      std::make_unique<base::DictionaryValue>();
-  base::ListValue allowed_input_methods;
-  allowed_input_methods.AppendString("xkb:fr::fra");
-  allowed_input_methods.AppendString("xkb:de::ger");
-  allowed_input_methods.AppendString("invalid_value_will_be_ignored");
-  policy->SetKey(key::kAllowedInputMethods, std::move(allowed_input_methods));
-  user_policy_helper()->SetPolicyAndWait(*policy, base::DictionaryValue(),
-                                         profile);
+  enterprise_management::CloudPolicySettings policy;
+  auto* allowed_input_methods =
+      policy.mutable_allowedinputmethods()->mutable_value();
+  allowed_input_methods->add_entries("xkb:fr::fra");
+  allowed_input_methods->add_entries("xkb:de::ger");
+  allowed_input_methods->add_entries("invalid_value_will_be_ignored");
+  user_policy_helper()->SetPolicyAndWait(policy, profile);
 
   // Only "xkb:fr::fra", "xkb:de::ger" should be allowed, current input method
   // should be "xkb:fr::fra", enabling "xkb:us::eng" should not be possible,
   // enabling "xkb:de::ger" should be possible.
-  EXPECT_EQ(2U, ime_state->GetAllowedInputMethods().size());
-  EXPECT_EQ(2U, ime_state->GetActiveInputMethods()->size());
+  EXPECT_EQ(2U, ime_state->GetAllowedInputMethodIds().size());
+  EXPECT_EQ(2U, ime_state->GetEnabledInputMethods().size());
   EXPECT_EQ(input_methods[1], ime_state->GetCurrentInputMethod().id());
   EXPECT_FALSE(ime_state->EnableInputMethod(input_methods[0]));
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
 
   // Set policy to only allow an invalid value as input method.
-  std::unique_ptr<base::DictionaryValue> policy_invalid =
-      std::make_unique<base::DictionaryValue>();
-  base::ListValue invalid_input_methods;
-  invalid_input_methods.AppendString("invalid_value_will_be_ignored");
-  policy_invalid->SetKey(key::kAllowedInputMethods,
-                         std::move(invalid_input_methods));
-  user_policy_helper()->SetPolicyAndWait(*policy_invalid,
-                                         base::DictionaryValue(), profile);
+  enterprise_management::CloudPolicySettings policy_invalid;
+  policy_invalid.mutable_allowedinputmethods()->mutable_value()->add_entries(
+      "invalid_value_will_be_ignored");
+  user_policy_helper()->SetPolicyAndWait(policy_invalid, profile);
 
   // No restrictions and current input method should still be "xkb:fr::fra".
-  EXPECT_EQ(0U, ime_state->GetAllowedInputMethods().size());
+  EXPECT_EQ(0U, ime_state->GetAllowedInputMethodIds().size());
   EXPECT_EQ(input_methods[1], ime_state->GetCurrentInputMethod().id());
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[0]));
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
 
   // Allow all input methods again.
-  user_policy_helper()->SetPolicyAndWait(base::DictionaryValue(),
-                                         base::DictionaryValue(), profile);
+  user_policy_helper()->SetPolicyAndWait(
+      enterprise_management::CloudPolicySettings(), profile);
 
   // No restrictions and current input method should still be "xkb:fr::fra".
-  EXPECT_EQ(0U, ime_state->GetAllowedInputMethods().size());
+  EXPECT_EQ(0U, ime_state->GetAllowedInputMethodIds().size());
+  EXPECT_EQ(input_methods[1], ime_state->GetCurrentInputMethod().id());
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[0]));
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
+}
+
+IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, AllowedInputMethodsForceEnabled) {
+  SkipToLoginScreen();
+  LogIn();
+
+  Profile* const profile = GetProfileForActiveUser();
+
+  auto* imm = ash::input_method::InputMethodManager::Get();
+  ASSERT_TRUE(imm);
+  scoped_refptr<ash::input_method::InputMethodManager::State> ime_state =
+      imm->GetActiveIMEState();
+  ASSERT_TRUE(ime_state.get());
+
+  std::vector<std::string> input_methods = {"xkb:us::eng", "xkb:fr::fra",
+                                            "xkb:de::ger"};
+  EXPECT_TRUE(imm->GetMigratedInputMethodIDs(&input_methods));
+  ASSERT_THAT(input_methods, SizeIs(3));
+
+  // No restrictions and current input method should be "xkb:us::eng" (default).
+  EXPECT_THAT(ime_state->GetAllowedInputMethodIds(), IsEmpty());
+  EXPECT_EQ(input_methods[0], ime_state->GetCurrentInputMethod().id());
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[1]));
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
+
+  // Set policy to only enable "xkb:fr::fra", "xkb:de::ger" and an invalid value
+  // as input method. Allowed policy should be ignored.
+  enterprise_management::CloudPolicySettings policy;
+  policy.mutable_subproto1()
+      ->mutable_allowedinputmethodsforceenabled()
+      ->set_value(true);
+  auto* allowed_input_methods =
+      policy.mutable_allowedinputmethods()->mutable_value();
+  allowed_input_methods->add_entries(input_methods[1]);
+  allowed_input_methods->add_entries(input_methods[2]);
+  user_policy_helper()->SetPolicyAndWait(policy, profile);
+
+  // Only "xkb:fr::fra", "xkb:de::ger" should be enabled, current input method
+  // should be "xkb:fr::fra", enabling "xkb:us::eng" should be not possible.
+  EXPECT_THAT(ime_state->GetAllowedInputMethodIds(), SizeIs(2));
+  EXPECT_THAT(ime_state->GetEnabledInputMethods(), SizeIs(2));
+  EXPECT_EQ(input_methods[1], ime_state->GetCurrentInputMethod().id());
+  EXPECT_FALSE(ime_state->EnableInputMethod(input_methods[0]));
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[1]));
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
+
+  // Set only AllowedInputMethodsForceEnabled policy - it should be ignored.
+  enterprise_management::CloudPolicySettings policy_invalid;
+  policy_invalid.mutable_subproto1()
+      ->mutable_allowedinputmethodsforceenabled()
+      ->set_value(true);
+  user_policy_helper()->SetPolicyAndWait(policy_invalid, profile);
+
+  // No restrictions and "xkb:fr::fra" input method should be set, but others
+  // can be enabled.
+  EXPECT_THAT(ime_state->GetAllowedInputMethodIds(), IsEmpty());
+  EXPECT_THAT(ime_state->GetEnabledInputMethods(), SizeIs(2));
+  EXPECT_EQ(input_methods[1], ime_state->GetCurrentInputMethod().id());
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[1]));
+  EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
+
+  // Allow all input methods again.
+  user_policy_helper()->SetPolicyAndWait(
+      enterprise_management::CloudPolicySettings(), profile);
+
+  // No restrictions and current input method should still be set.
+  EXPECT_THAT(ime_state->GetAllowedInputMethodIds(), IsEmpty());
   EXPECT_EQ(input_methods[1], ime_state->GetCurrentInputMethod().id());
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[0]));
   EXPECT_TRUE(ime_state->EnableInputMethod(input_methods[2]));
@@ -161,28 +226,26 @@ IN_PROC_BROWSER_TEST_F(LoginPolicyTestBase, AllowedInputMethods) {
 class StartupBrowserWindowLaunchSuppressedTest : public LoginPolicyTestBase {
  public:
   StartupBrowserWindowLaunchSuppressedTest() = default;
+  StartupBrowserWindowLaunchSuppressedTest(
+      const StartupBrowserWindowLaunchSuppressedTest&) = delete;
+  StartupBrowserWindowLaunchSuppressedTest& operator=(
+      const StartupBrowserWindowLaunchSuppressedTest&) = delete;
 
   void SetUpPolicy(bool enabled) {
-    std::unique_ptr<base::DictionaryValue> policy =
-        std::make_unique<base::DictionaryValue>();
-
-    policy->SetKey(key::kStartupBrowserWindowLaunchSuppressed,
-                   base::Value(enabled));
-
-    user_policy_helper()->SetPolicy(*policy, base::DictionaryValue());
+    enterprise_management::CloudPolicySettings policy;
+    policy.mutable_startupbrowserwindowlaunchsuppressed()->set_value(enabled);
+    user_policy_helper()->SetPolicy(policy);
   }
 
   void CheckLaunchedBrowserCount(unsigned int count) {
     SkipToLoginScreen();
-    LogIn(kAccountId, kAccountPassword, kEmptyServices);
+    LogIn();
 
     Profile* const profile = GetProfileForActiveUser();
 
-    ASSERT_EQ(count, chrome::GetBrowserCount(profile));
+    ASSERT_EQ(count,
+              ProfileBrowserCollection::GetForProfile(profile)->GetSize());
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(StartupBrowserWindowLaunchSuppressedTest);
 };
 
 // Test that the browser window is not launched when
@@ -204,44 +267,46 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWindowLaunchSuppressedTest,
 class PrimaryUserPoliciesProxiedTest : public LoginPolicyTestBase {
  public:
   PrimaryUserPoliciesProxiedTest() = default;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PrimaryUserPoliciesProxiedTest);
+  PrimaryUserPoliciesProxiedTest(const PrimaryUserPoliciesProxiedTest&) =
+      delete;
+  PrimaryUserPoliciesProxiedTest& operator=(
+      const PrimaryUserPoliciesProxiedTest&) = delete;
 };
 
 IN_PROC_BROWSER_TEST_F(PrimaryUserPoliciesProxiedTest,
                        AvailableInLocalStateEarly) {
   PolicyService* const device_wide_policy_service =
       g_browser_process->platform_part()
-          ->browser_policy_connector_chromeos()
+          ->browser_policy_connector_ash()
           ->GetPolicyService();
 
   // Sanity check default state without a policy active.
-  EXPECT_FALSE(device_wide_policy_service
-                   ->GetPolicies(PolicyNamespace(
-                       POLICY_DOMAIN_CHROME, std::string() /* component_id */))
-                   .GetValue(key::kAudioOutputAllowed));
+  EXPECT_FALSE(
+      device_wide_policy_service
+          ->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME,
+                                        std::string() /* component_id */))
+          .GetValue(key::kAudioOutputAllowed, base::Value::Type::BOOLEAN));
   const PrefService::Preference* pref =
       g_browser_process->local_state()->FindPreference(
-          chromeos::prefs::kAudioOutputAllowed);
+          ash::prefs::kAudioOutputAllowed);
   EXPECT_FALSE(pref->IsManaged());
   EXPECT_TRUE(pref->GetValue()->GetBool());
 
-  base::DictionaryValue policy;
-  policy.SetKey(key::kAudioOutputAllowed, base::Value(false));
-  user_policy_helper()->SetPolicy(policy, base::DictionaryValue());
+  enterprise_management::CloudPolicySettings policy;
+  policy.mutable_audiooutputallowed()->set_value(false);
+  user_policy_helper()->SetPolicy(policy);
 
   SkipToLoginScreen();
 
   ProfileWaiter profile_waiter;
-  TriggerLogIn(kAccountId, kAccountPassword, kEmptyServices);
+  TriggerLogIn();
   profile_waiter.WaitForProfileAdded();
 
   const base::Value* policy_value =
       device_wide_policy_service
           ->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME,
                                         std::string() /* component_id */))
-          .GetValue(key::kAudioOutputAllowed);
+          .GetValue(key::kAudioOutputAllowed, base::Value::Type::BOOLEAN);
   ASSERT_TRUE(policy_value);
   EXPECT_FALSE(policy_value->GetBool());
 
@@ -250,8 +315,8 @@ IN_PROC_BROWSER_TEST_F(PrimaryUserPoliciesProxiedTest,
 
   // Make sure that session startup finishes before letting chrome exit.
   // Rationale: We've seen CHECK-failures when exiting chrome right after
-  // a new profile is created, see e.g. https://crbug.com/1002066.
-  chromeos::test::WaitForPrimaryUserSessionStart();
+  // a new profile is created, see e.g. https://crbug.com/40097998.
+  ash::test::WaitForPrimaryUserSessionStart();
 }
 
 }  // namespace policy

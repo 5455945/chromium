@@ -1,35 +1,34 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/history/core/browser/in_memory_database.h"
 
-#include "base/files/file_path.h"
-#include "base/metrics/histogram_macros.h"
+#include <memory>
+#include <tuple>
+
 #include "base/notreached.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/time/time.h"
-#include "build/build_config.h"
+#include "components/history/core/browser/keyword_search_term.h"
+#include "sql/database.h"
+#include "sql/transaction.h"
 
 namespace history {
 
-InMemoryDatabase::InMemoryDatabase()
-    : db_({.exclusive_locking = true, .page_size = 4096, .cache_size = 500}) {}
+InMemoryDatabase::InMemoryDatabase() : db_(/*tag=*/"HistoryInMemoryDB") {}
 
 InMemoryDatabase::~InMemoryDatabase() = default;
 
 bool InMemoryDatabase::InitDB() {
   if (!db_.OpenInMemory()) {
     NOTREACHED() << "Cannot open databse " << GetDB().GetErrorMessage();
-    return false;
   }
 
   // No reason to leave data behind in memory when rows are removed.
-  ignore_result(db_.Execute("PRAGMA auto_vacuum=1"));
+  std::ignore = db_.Execute("PRAGMA auto_vacuum=1");
 
   // Create the URL table, but leave it empty for now.
   if (!CreateURLTable(false)) {
-    NOTREACHED() << "Unable to create table";
+    DUMP_WILL_BE_NOTREACHED() << "Unable to create table";
     db_.Close();
     return false;
   }
@@ -37,8 +36,6 @@ bool InMemoryDatabase::InitDB() {
   // Create the keyword search terms table.
   if (!InitKeywordSearchTermsTable()) {
     NOTREACHED() << "Unable to create keyword search terms";
-    db_.Close();
-    return false;
   }
 
   return true;
@@ -54,80 +51,57 @@ bool InMemoryDatabase::InitFromScratch() {
   return true;
 }
 
-bool InMemoryDatabase::InitFromDisk(const base::FilePath& history_name) {
-  if (!InitDB())
-    return false;
-
-  // Attach to the history database on disk.  (We can't ATTACH in the middle of
-  // a transaction.)
-  sql::Statement attach(GetDB().GetUniqueStatement("ATTACH ? AS history"));
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
-  attach.BindString(0, history_name.value());
-#else
-  attach.BindString(0, base::WideToUTF8(history_name.value()));
-#endif
-  if (!attach.Run())
-    return false;
-
-  // Copy URL data to memory.
-  base::TimeTicks begin_load = base::TimeTicks::Now();
-
-  // Need to explicitly specify the column names here since databases on disk
-  // may or may not have a favicon_id column, but the in-memory one will never
-  // have it. Therefore, the columns aren't guaranteed to match.
-  //
-  // TODO(https://crbug.com/736136) Once we can guarantee that the favicon_id
-  // column doesn't exist with migration code, this can be replaced with the
-  // simpler:
-  //   "INSERT INTO urls SELECT * FROM history.urls WHERE typed_count > 0"
-  // which does not require us to keep the list of columns in sync. However,
-  // we may still want to keep the explicit columns as a safety measure.
-  if (!db_.Execute(
-      "INSERT INTO urls "
-      "(id, url, title, visit_count, typed_count, last_visit_time, hidden) "
-      "SELECT "
-      "id, url, title, visit_count, typed_count, last_visit_time, hidden "
-      "FROM history.urls WHERE typed_count > 0")) {
-    // Unable to get data from the history database. This is OK, the file may
-    // just not exist yet.
-  }
-  UMA_HISTOGRAM_MEDIUM_TIMES("History.InMemoryDBPopulate",
-                             base::TimeTicks::Now() - begin_load);
-  UMA_HISTOGRAM_COUNTS_1M("History.InMemoryDBItemCount",
-                          db_.GetLastChangeCount());
-
-  // Insert keyword search related URLs.
-  if (!db_.Execute("INSERT OR IGNORE INTO urls SELECT u.id, u.url, u.title, "
-                   "u.visit_count, u.typed_count, u.last_visit_time, u.hidden "
-                   "FROM history.urls u JOIN history.keyword_search_terms kst "
-                   "WHERE u.typed_count = 0 AND u.id = kst.url_id")) {
-    // Unable to get data from the history database. This is OK, the file may
-    // just not exist yet.
-  }
-  UMA_HISTOGRAM_COUNTS_1M("History.InMemoryDBKeywordURLItemCount",
-                          db_.GetLastChangeCount());
-
-  // Copy search terms to memory.
-  if (!db_.Execute(
-      "INSERT INTO keyword_search_terms SELECT * FROM "
-      "history.keyword_search_terms")) {
-    // Unable to get data from the history database. This is OK, the file may
-    // just not exist yet.
-  }
-  UMA_HISTOGRAM_COUNTS_1M("History.InMemoryDBKeywordTermsCount",
-                          db_.GetLastChangeCount());
-
-  // Detach from the history database on disk.
-  if (!db_.Execute("DETACH history")) {
-    NOTREACHED() << "Unable to detach from history database.";
+bool InMemoryDatabase::InitFromUrlDatabase(URLDatabase& history_db) {
+  if (!InitDB()) {
     return false;
   }
+
+  // Populating is best effort. An empty or incomplete cache is still useful
+  // because `InMemoryHistoryBackend` keeps it up to date from here on, and read
+  // errors on `history_db` are reported through its own error callback.
+  PopulateFrom(history_db);
 
   // Index the table, this is faster than creating the index first and then
   // inserting into it.
   CreateMainURLIndex();
 
+  // After this point, the database may be accessed from another sequence.
+  db_.DetachFromSequence();
+
   return true;
+}
+
+void InMemoryDatabase::PopulateFrom(URLDatabase& history_db) {
+  // The transaction holds a reference to `db_` and must be gone before
+  // `InitFromUrlDatabase()` detaches the database from this sequence.
+  sql::Transaction transaction(&db_);
+  if (!transaction.Begin()) {
+    return;
+  }
+
+  URLEnumerator url_enumerator;
+  if (!history_db.InitURLEnumeratorForTypedOrSearched(&url_enumerator)) {
+    return;
+  }
+  for (URLRow row; url_enumerator.GetNextURL(&row);) {
+    if (!InsertOrUpdateURLRowByID(row)) {
+      return;
+    }
+  }
+
+  std::unique_ptr<KeywordSearchTermRowEnumerator> term_enumerator =
+      history_db.CreateKeywordSearchTermRowEnumerator();
+  if (!term_enumerator) {
+    return;
+  }
+  while (std::unique_ptr<KeywordSearchTermRow> row =
+             term_enumerator->GetNextRow()) {
+    if (!InsertKeywordSearchTermRow(*row)) {
+      return;
+    }
+  }
+
+  std::ignore = transaction.Commit();
 }
 
 sql::Database& InMemoryDatabase::GetDB() {

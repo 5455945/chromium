@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/guid.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
+#include "base/uuid.h"
 #include "chrome/browser/notifications/scheduler/internal/impression_types.h"
 #include "chrome/browser/notifications/scheduler/test/fake_clock.h"
 #include "chrome/browser/notifications/scheduler/test/test_utils.h"
@@ -22,7 +23,7 @@ const char kFakeNow[] = "01/01/18 01:23:45 AM";
 
 class SchedulerUtilsTest : public testing::Test {
  public:
-  SchedulerUtilsTest() {}
+  SchedulerUtilsTest() = default;
   SchedulerUtilsTest(const SchedulerUtilsTest&) = delete;
   SchedulerUtilsTest& operator=(const SchedulerUtilsTest&) = delete;
   ~SchedulerUtilsTest() override = default;
@@ -40,7 +41,8 @@ class SchedulerUtilsTest : public testing::Test {
     client_state->impressions.clear();
     auto type = client_state->type;
     for (const auto& time : times) {
-      client_state->impressions.emplace_back(type, base::GenerateGUID(), time);
+      client_state->impressions.emplace_back(
+          type, base::Uuid::GenerateRandomV4().AsLowercaseString(), time);
     }
   }
 
@@ -106,25 +108,23 @@ TEST_F(SchedulerUtilsTest, NotificationsShownTodayMultipleClients) {
   // client3  * |                      |                    | *
 
   std::vector<base::Time> create_times = {
-      now - base::TimeDelta::FromSeconds(2) /*today*/,
-      now - base::TimeDelta::FromSeconds(1) /*today*/,
-      beginning_of_today() - base::TimeDelta::FromSeconds(1) /*yesterday*/,
-      beginning_of_today() + base::TimeDelta::FromDays(1) /*tomorrow*/};
+      now - base::Seconds(2) /*today*/, now - base::Seconds(1) /*today*/,
+      beginning_of_today() - base::Seconds(1) /*yesterday*/,
+      beginning_of_today() + base::Days(1) /*tomorrow*/};
   auto new_client1 = CreateFakeClientStateWithImpression(
       SchedulerClientType::kTest1, config(), create_times);
 
-  create_times = {
-      now /*today*/,
-      beginning_of_today() + base::TimeDelta::FromDays(1) /*tomorrow*/,
-      beginning_of_today() - base::TimeDelta::FromSeconds(1) /*yesterday*/,
-      beginning_of_today() + base::TimeDelta::FromSeconds(1) /*today*/,
-      beginning_of_today() /*today*/};
+  create_times = {now /*today*/,
+                  beginning_of_today() + base::Days(1) /*tomorrow*/,
+                  beginning_of_today() - base::Seconds(1) /*yesterday*/,
+                  beginning_of_today() + base::Seconds(1) /*today*/,
+                  beginning_of_today() /*today*/};
   auto new_client2 = CreateFakeClientStateWithImpression(
       SchedulerClientType::kTest2, config(), create_times);
 
   create_times = {
-      beginning_of_today() - base::TimeDelta::FromSeconds(2), /*yesterday*/
-      beginning_of_today() + base::TimeDelta::FromDays(1)     /*tomorrow*/
+      beginning_of_today() - base::Seconds(2), /*yesterday*/
+      beginning_of_today() + base::Days(1)     /*tomorrow*/
   };
   auto new_client3 = CreateFakeClientStateWithImpression(
       SchedulerClientType::kTest3, config(), create_times);
@@ -156,10 +156,9 @@ TEST_F(SchedulerUtilsTest, NotificationsShownToday) {
 
   // Test case 2:
   std::vector<base::Time> create_times = {
-      now /*today*/,
-      beginning_of_today() + base::TimeDelta::FromDays(1) /*tomorrow*/,
-      beginning_of_today() - base::TimeDelta::FromSeconds(1) /*yesterday*/,
-      beginning_of_today() + base::TimeDelta::FromSeconds(1) /*today*/,
+      now /*today*/, beginning_of_today() + base::Days(1) /*tomorrow*/,
+      beginning_of_today() - base::Seconds(1) /*yesterday*/,
+      beginning_of_today() + base::Seconds(1) /*today*/,
       beginning_of_today() /*today*/};
 
   CreateFakeImpressions(new_client.get(), create_times);
@@ -168,18 +167,17 @@ TEST_F(SchedulerUtilsTest, NotificationsShownToday) {
 
   // Test case 3:
   create_times = {
-      beginning_of_today() - base::TimeDelta::FromSeconds(2), /*yesterday*/
-      beginning_of_today() + base::TimeDelta::FromDays(1),    /*tomorrow*/
+      beginning_of_today() - base::Seconds(2), /*yesterday*/
+      beginning_of_today() + base::Days(1),    /*tomorrow*/
   };
   CreateFakeImpressions(new_client.get(), create_times);
   count = NotificationsShownToday(new_client.get(), clock());
   EXPECT_EQ(count, 0);
 
   // Test case 4:
-  create_times = {
-      now /*today*/, now - base::TimeDelta::FromSeconds(1) /*today*/,
-      beginning_of_today() - base::TimeDelta::FromSeconds(1) /*yesterday*/,
-      beginning_of_today() + base::TimeDelta::FromDays(1) /*tomorrow*/};
+  create_times = {now /*today*/, now - base::Seconds(1) /*today*/,
+                  beginning_of_today() - base::Seconds(1) /*yesterday*/,
+                  beginning_of_today() + base::Days(1) /*tomorrow*/};
   CreateFakeImpressions(new_client.get(), create_times);
   count = NotificationsShownToday(new_client.get(), clock());
   EXPECT_EQ(count, 2);

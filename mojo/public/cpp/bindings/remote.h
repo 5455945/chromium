@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,25 @@
 #define MOJO_PUBLIC_CPP_BINDINGS_REMOTE_H_
 
 #include <cstdint>
+#include <string_view>
+#include <tuple>
 #include <utility>
 
-#include "base/callback_forward.h"
 #include "base/check.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/async_flusher.h"
-#include "mojo/public/cpp/bindings/interface_ptr_info.h"
 #include "mojo/public/cpp/bindings/lib/interface_ptr_state.h"
 #include "mojo/public/cpp/bindings/pending_flush.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/runtime_features.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
+
+class MessageFilter;
 
 // A Remote is used to issue Interface method calls to a single connected
 // Receiver or PendingReceiver. The Remote must be bound in order to issue those
@@ -70,8 +71,8 @@ class Remote {
 
   // Constructs a new Remote which is bound from |pending_remote| and which
   // schedules response callbacks and disconnection notifications on the default
-  // SequencedTaskRunner (i.e., base::SequencedTaskRunnerHandle::Get() at
-  // construction time).
+  // SequencedTaskRunner (i.e., base::SequencedTaskRunner::GetCurrentDefault()
+  // at construction time).
   explicit Remote(PendingRemote<Interface> pending_remote)
       : Remote(std::move(pending_remote), nullptr) {}
 
@@ -83,6 +84,9 @@ class Remote {
          scoped_refptr<base::SequencedTaskRunner> task_runner) {
     Bind(std::move(pending_remote), std::move(task_runner));
   }
+
+  Remote(const Remote&) = delete;
+  Remote& operator=(const Remote&) = delete;
 
   ~Remote() = default;
 
@@ -143,8 +147,9 @@ class Remote {
   // If invoked at all, |handler| will be scheduled asynchronously using the
   // Remote's bound SequencedTaskRunner.
   void set_disconnect_handler(base::OnceClosure handler) {
-    if (is_connected())
+    if (is_connected()) {
       internal_state_.set_connection_error_handler(std::move(handler));
+    }
   }
 
   // Like above but also receives extra user-defined metadata about why the
@@ -156,7 +161,10 @@ class Remote {
   }
 
   // A convenient helper that resets this Remote on disconnect. Note that this
-  // replaces any previously set disconnection handler.
+  // replaces any previously set disconnection handler. Must be called on a
+  // bound Remote object. If the Remote is connected, a callback is set to reset
+  // it after it is disconnected. If Remote is bound but disconnected then reset
+  // is called immediately.
   void reset_on_disconnect() {
     if (!is_connected()) {
       reset();
@@ -213,10 +221,20 @@ class Remote {
   }
 
   // Similar to the method above, but also specifies a disconnect reason.
-  void ResetWithReason(uint32_t custom_reason, const std::string& description) {
-    if (internal_state_.is_bound())
+  void ResetWithReason(uint32_t custom_reason, std::string_view description) {
+    if (internal_state_.is_bound()) {
       internal_state_.CloseWithReason(custom_reason, description);
+    }
     reset();
+  }
+
+  // Sets the message filter to be notified of each outgoing message before
+  // dispatch. If a filter returns |false| from WillDispatch(), the message is
+  // not dispatched and the pip is closed. Filters cannot be removed once
+  // added and only one can be set.
+  void SetFilter(std::unique_ptr<MessageFilter> filter) {
+    CHECK(is_bound()) << "Remote must be bound before setting the filter";
+    internal_state_.SetFilter(std::move(filter));
   }
 
   // Returns the version of Interface used by this Remote. Defaults to 0 but can
@@ -227,10 +245,12 @@ class Remote {
   // Binds this Remote, connecting it to a new PendingReceiver which is
   // returned for transmission to some Receiver which can bind it. The Remote
   // will schedule any response callbacks or disconnection notifications on the
-  // default SequencedTaskRunner (i.e. base::SequencedTaskRunnerHandle::Get() at
-  // the time of this call). Must only be called on an unbound Remote.
-  PendingReceiver<Interface> BindNewPipeAndPassReceiver() WARN_UNUSED_RESULT {
-    DCHECK(!is_bound()) << "Remote is already bound";
+  // default SequencedTaskRunner (i.e.
+  // base::SequencedTaskRunner::GetCurrentDefault() at the time of this call).
+  // Must only be called on an unbound Remote.
+  [[nodiscard]] PendingReceiver<Interface> BindNewPipeAndPassReceiver() {
+    DCHECK(!is_bound()) << "Remote for " << Interface::Name_
+                        << " is already bound";
     return BindNewPipeAndPassReceiver(nullptr);
   }
 
@@ -238,9 +258,14 @@ class Remote {
   // disconnection notifications on |task_runner| instead of the default
   // SequencedTaskRunner. |task_runner| must run tasks on the same sequence that
   // owns this Remote.
-  PendingReceiver<Interface> BindNewPipeAndPassReceiver(
-      scoped_refptr<base::SequencedTaskRunner> task_runner) WARN_UNUSED_RESULT {
-    DCHECK(!is_bound()) << "Remote is already bound";
+  [[nodiscard]] PendingReceiver<Interface> BindNewPipeAndPassReceiver(
+      scoped_refptr<base::SequencedTaskRunner> task_runner) {
+    DCHECK(!is_bound()) << "Remote for " << Interface::Name_
+                        << " is already bound";
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      reset();
+      return PendingReceiver<Interface>();
+    }
     MessagePipe pipe;
     Bind(PendingRemote<Interface>(std::move(pipe.handle0), 0),
          std::move(task_runner));
@@ -250,10 +275,11 @@ class Remote {
   // Binds this Remote by consuming |pending_remote|, which must be valid. The
   // Remote will schedule any response callbacks or disconnection notifications
   // on the default SequencedTaskRunner (i.e.
-  // base::SequencedTaskRunnerHandle::Get() at the time of this call). Must only
-  // be called on an unbound Remote.
+  // base::SequencedTaskRunner::GetCurrentDefault() at the time of this call).
+  // Must only be called on an unbound Remote.
   void Bind(PendingRemote<Interface> pending_remote) {
-    DCHECK(!is_bound()) << "Remote is already bound";
+    DCHECK(!is_bound()) << "Remote for " << Interface::Name_
+                        << " is already bound";
     DCHECK(pending_remote.is_valid());
     Bind(std::move(pending_remote), nullptr);
   }
@@ -264,12 +290,16 @@ class Remote {
   // |task_runner| must run tasks on the same sequence that owns this Remote.
   void Bind(PendingRemote<Interface> pending_remote,
             scoped_refptr<base::SequencedTaskRunner> task_runner) {
-    DCHECK(!is_bound()) << "Remote is already bound";
+    DCHECK(!is_bound()) << "Remote for " << Interface::Name_
+                        << " is already bound";
     if (!pending_remote) {
       reset();
       return;
     }
-
+    if (!internal::GetRuntimeFeature_ExpectEnabled<Interface>()) {
+      reset();
+      return;
+    }
     internal_state_.Bind(pending_remote.internal_state(),
                          std::move(task_runner));
 
@@ -278,7 +308,7 @@ class Remote {
     // binding to a SequencedTaskRunner and observing pipe handle state. This
     // allows for e.g. |is_connected()| to be a more reliable API than
     // |InterfacePtr::encountered_error()|.
-    ignore_result(internal_state_.instance());
+    std::ignore = internal_state_.instance();
   }
 
   // Unbinds this Remote, rendering it unable to issue further Interface method
@@ -291,13 +321,14 @@ class Remote {
   // considered in cases where satisfaction of that constraint can be proven.
   //
   // Must only be called on a bound Remote.
-  PendingRemote<Interface> Unbind() WARN_UNUSED_RESULT {
+  [[nodiscard]] PendingRemote<Interface> Unbind() {
     DCHECK(is_bound());
     CHECK(!internal_state_.has_pending_callbacks());
     State state;
     internal_state_.Swap(&state);
-    InterfacePtrInfo<Interface> info = state.PassInterface();
-    return PendingRemote<Interface>(info.PassHandle(), info.version());
+    internal::PendingRemoteState pending_state = state.Unbind();
+    return PendingRemote<Interface>(std::move(pending_state.pipe),
+                                    pending_state.version);
   }
 
   // Queries the max version that the receiving endpoint supports. Once a
@@ -385,8 +416,6 @@ class Remote {
  private:
   using State = internal::InterfacePtrState<Interface>;
   mutable State internal_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(Remote);
 };
 
 }  // namespace mojo

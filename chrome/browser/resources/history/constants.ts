@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,20 +10,28 @@ export const RESULTS_PER_PAGE = 150;
  */
 export const BROWSING_GAP_TIME = 15 * 60 * 1000;
 
-/**
- * The largest bucket value for UMA histogram, based on entry ID. All entries
- * with IDs greater than this will be included in this bucket.
- * Keep consistent with the UMA constants on the Android history page
- * (see HistoryManager.java).
- */
-export const UMA_MAX_BUCKET_VALUE = 1000;
+// This enum is used to differentiate all the relevant sign-in/history-sync
+// states.
+// LINT.IfChange(HistorySignInState)
+export enum HistorySignInState {
+  SIGNED_OUT = 0,
+  // The user is signed in only in web.
+  WEB_ONLY_SIGNED_IN = 1,
+  // The user is signed in.
+  SIGNED_IN = 2,
+  // The user is pending sign-in.
+  SIGN_IN_PENDING = 3,
+}
+// LINT.ThenChange(/chrome/browser/ui/webui/history/history_identity_state_watcher.h:HistoryIdentityState.SignIn)
 
-/**
- * The largest bucket value for a UMA histogram that is a subset of above.
- * Keep consistent with the UMA constants on the Android history page
- * (see HistoryManager.java).
- */
-export const UMA_MAX_SUBSET_BUCKET_VALUE = 100;
+// Enum below is used to differentiate all the relevant history-sync states.
+// LINT.IfChange(SyncState)
+export enum SyncState {
+  TURNED_OFF = 0,
+  TURNED_ON = 1,
+  DISABLED = 2,
+}
+// LINT.ThenChange(/chrome/browser/ui/webui/history/history_identity_state_watcher.h:HistoryIdentityState.SyncState)
 
 /**
  * Histogram buckets for UMA tracking of which view is being shown to the user.
@@ -36,7 +44,9 @@ export enum HistoryPageViewHistogram {
   DEPRECATED_GROUPED_MONTH = 2,
   SYNCED_TABS = 3,
   SIGNIN_PROMO = 4,
-  END = 5,  // Should always be last.
+  JOURNEYS = 5,
+  PRODUCT_SPECIFICATIONS_LISTS = 6,
+  END = 7,  // Should always be last.
 }
 
 export const SYNCED_TABS_HISTOGRAM_NAME = 'HistoryPage.OtherDevicesMenu';
@@ -60,5 +70,26 @@ export enum SyncedTabsHistogram {
   HAS_FOREIGN_DATA = 9,
   HIDE_FOR_NOW = 10,
   OPENED_LINK_VIA_CONTEXT_MENU = 11,
-  LIMIT = 12  // Should always be the last one.
+  OPEN_WINDOW = 12,
+  LIMIT = 13  // Should always be the last one.
 }
+
+/**
+ * Contains all context menu interactions for a visit in the history page.
+ *
+ * These values are persisted to logs. Entries should not be renumbered and
+ * numeric values should never be reused.
+ *
+ * Must be kept in sync with the VisitContextMenuAction enum in
+ * histograms/metadata/history/enums.xml
+ */
+// LINT.IfChange(VisitContextMenuAction)
+export enum VisitContextMenuAction {
+  MORE_FROM_THIS_SITE_CLICKED = 0,
+  REMOVE_FROM_HISTORY_CLICKED = 1,
+  REMOVE_BOOKMARK_CLICKED = 2,
+  REVIEW_GEMINI_ACTIVITY_CLICKED = 3,
+  GO_TO_GEMINI_CHAT_CLICKED = 4,
+  MAX_VALUE = 5,
+}
+// LINT.ThenChange(/tools/metrics/histograms/metadata/history/enums.xml:VisitContextMenuAction)

@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_TABLE_COL_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_TABLE_COL_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_table_part_element.h"
 
 namespace blink {
@@ -35,6 +36,10 @@ class CORE_EXPORT HTMLTableColElement final : public HTMLTablePartElement {
 
  public:
   HTMLTableColElement(const QualifiedName& tag_name, Document&);
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLTableColElement;
+  }
 
   unsigned span() const { return span_; }
   void setSpan(unsigned);
@@ -49,16 +54,12 @@ class CORE_EXPORT HTMLTableColElement final : public HTMLTablePartElement {
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
   const CSSPropertyValueSet* AdditionalPresentationAttributeStyle() override;
 
   unsigned span_;
 };
 
-template <>
-inline bool IsElementOfType<const HTMLTableColElement>(const Node& node) {
-  return IsA<HTMLTableColElement>(node);
-}
 template <>
 struct DowncastTraits<HTMLTableColElement> {
   static bool AllowFrom(const Node& node) {

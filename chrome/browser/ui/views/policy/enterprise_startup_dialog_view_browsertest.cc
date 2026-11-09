@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/policy/enterprise_startup_dialog_view.h"
 
-#include "base/bind.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "content/public/test/browser_test.h"
@@ -21,6 +21,12 @@ void DialogResultCallback(bool result, bool can_show_browser_window) {}
 class EnterpriseStartupDialogViewBrowserTest : public DialogBrowserTest {
  public:
   EnterpriseStartupDialogViewBrowserTest() = default;
+
+  EnterpriseStartupDialogViewBrowserTest(
+      const EnterpriseStartupDialogViewBrowserTest&) = delete;
+  EnterpriseStartupDialogViewBrowserTest& operator=(
+      const EnterpriseStartupDialogViewBrowserTest&) = delete;
+
   ~EnterpriseStartupDialogViewBrowserTest() override = default;
 
   // override DialogBrowserTest
@@ -37,20 +43,22 @@ class EnterpriseStartupDialogViewBrowserTest : public DialogBrowserTest {
     }
   }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // On mac, we need to wait until the dialog launched modally before closing
   // it.
   void DismissUi() override {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&EnterpriseStartupDialogView::CloseDialog,
                                   base::Unretained(dialog)));
   }
 #endif
 
- private:
-  EnterpriseStartupDialogView* dialog;
+  // EnterpriseStartupDialogView runs a blocking modal loop, so return false to
+  // avoid deadlocks when pumping the run loop in VerifyUi().
+  bool ShouldWaitForDialogBeforeVerify() override { return false; }
 
-  DISALLOW_COPY_AND_ASSIGN(EnterpriseStartupDialogViewBrowserTest);
+ private:
+  raw_ptr<EnterpriseStartupDialogView, AcrossTasksDanglingUntriaged> dialog;
 };
 
 IN_PROC_BROWSER_TEST_F(EnterpriseStartupDialogViewBrowserTest,

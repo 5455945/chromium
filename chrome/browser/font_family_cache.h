@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 #define CHROME_BROWSER_FONT_FAMILY_CACHE_H_
 
 #include <string>
-#include <unordered_map>
+#include <string_view>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/font_pref_change_notifier.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 
 class PrefService;
@@ -19,58 +20,61 @@ class Profile;
 
 FORWARD_DECLARE_TEST(FontFamilyCacheTest, Caching);
 
-// Caches font family preferences associated with a PrefService. This class
-// relies on the assumption that each concatenation of map_name + '.' + script
-// is a unique string. It also relies on the assumption that the (const char*)
-// keys used in both inner and outer maps are compile time constants.
-// This class caches the strings necessary to update
-// "blink::web_pref::ScriptFontFamilyMap". This is necessary since Chrome
-// attempts to update blink::web_pref::ScriptFontFamilyMap 20000 times at
-// startup. See https://crbug.com/308095.
+// Caches font family preferences associated with a PrefService.
+// This class caches the blink::web_pref::ScriptFontFamilyMap instances for each
+// generic font family to avoid repeated PrefService lookups and map
+// reconstructions when computing WebPreferences. See
+// https://crbug.com/40337107.
 class FontFamilyCache : public base::SupportsUserData::Data {
  public:
   explicit FontFamilyCache(Profile* profile);
+
+  FontFamilyCache(const FontFamilyCache&) = delete;
+  FontFamilyCache& operator=(const FontFamilyCache&) = delete;
+
   ~FontFamilyCache() override;
+
+  // Name of a font family pref prefix (e.g. a `prefs::kWebKit*FontFamilyMap`
+  // constant), used as a cache key without copying. The consteval constructor
+  // verifies at compile time that the string has static storage duration.
+  class MapName {
+   public:
+    // Purposely not explicit to avoid requiring callers to wrap their string.
+    consteval MapName(const char* name) : name_(name) {}
+
+    constexpr std::string_view value() const { return name_; }
+
+   private:
+    std::string_view name_;
+  };
 
   // Gets or creates the relevant FontFamilyCache, and then fills |map|.
   static void FillFontFamilyMap(Profile* profile,
-                                const char* map_name,
+                                MapName map_name,
                                 blink::web_pref::ScriptFontFamilyMap* map);
 
   // Fills |map| with font family preferences.
-  void FillFontFamilyMap(const char* map_name,
+  void FillFontFamilyMap(MapName map_name,
                          blink::web_pref::ScriptFontFamilyMap* map);
 
  protected:
   // Exposed and virtual for testing.
   // Fetches the font without checking the cache.
-  virtual std::u16string FetchFont(const char* script, const char* map_name);
+  virtual std::u16string FetchFont(const char* script,
+                                   std::string_view map_name);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(::FontFamilyCacheTest, Caching);
 
-  // Map from script to font.
-  // Key comparison uses pointer equality.
-  using ScriptFontMap = std::unordered_map<const char*, std::u16string>;
-
-  // Map from font family to ScriptFontMap.
-  // Key comparison uses pointer equality.
-  using FontFamilyMap = std::unordered_map<const char*, ScriptFontMap>;
-
-  // Checks the cache for the font. If not present, fetches the font and stores
-  // the result in the cache.
-  // This method needs to be very fast, because it's called ~20,000 times on a
-  // fresh launch with an empty profile. It's important to avoid unnecessary
-  // object construction, hence the heavy use of const char* and the minimal use
-  // of std::string.
-  // |script| and |map_name| must be compile time constants. Two behaviors rely
-  // on this: key comparison uses pointer equality, and keys must outlive the
-  // maps.
-  std::u16string FetchAndCacheFont(const char* script, const char* map_name);
+  // Map from font family pref prefix (e.g. "webkit.webprefs.fonts.standard")
+  // to cached ScriptFontFamilyMap. Keys point to `MapName` strings with static
+  // storage duration.
+  using FontFamilyMap =
+      absl::flat_hash_map<std::string_view,
+                          blink::web_pref::ScriptFontFamilyMap>;
 
   // Called when font family preferences changed.
-  // Invalidates the cached entry, and removes the relevant observer.
-  // Note: It is safe to remove the observer from the pref change callback.
+  // Updates the cached entry if present.
   void OnPrefsChanged(const std::string& pref_name);
 
   // Cache of font family preferences.
@@ -79,7 +83,7 @@ class FontFamilyCache : public base::SupportsUserData::Data {
   // Weak reference.
   // Note: The lifetime of this object is tied to the lifetime of the
   // PrefService, so there is no worry about an invalid pointer.
-  const PrefService* prefs_;
+  raw_ptr<const PrefService, AcrossTasksDanglingUntriaged> prefs_;
 
   // Reacts to profile font changes. |font_change_registrar_| will be
   // automatically unregistered when the FontPrefChangeNotifier is destroyed as
@@ -87,8 +91,6 @@ class FontFamilyCache : public base::SupportsUserData::Data {
   // |this| is destroyed after the Profile destructor completes as part of
   // Profile's super class destructor ~base::SupportsUserData.
   FontPrefChangeNotifier::Registrar font_change_registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(FontFamilyCache);
 };
 
 #endif  // CHROME_BROWSER_FONT_FAMILY_CACHE_H_

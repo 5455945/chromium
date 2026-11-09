@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,27 @@
 
 #include <utility>
 
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/chrome_tab_restore_service_client.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chrome/common/buildflags.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
+
+
+namespace {
+
+std::unique_ptr<KeyedService> BuildTemplateService(
+    content::BrowserContext* browser_context) {
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  CHECK(!profile->IsOffTheRecord(), base::NotFatalUntil::M163);
+  auto client = std::make_unique<ChromeTabRestoreServiceClient>(profile);
+  return std::make_unique<sessions::TabRestoreServiceImpl>(
+      std::move(client), profile->GetPrefs(), /*time_factory=*/nullptr,
+      g_browser_process->os_crypt_async());
+}
+
+}  // namespace
 
 // static
 sessions::TabRestoreService* TabRestoreServiceFactory::GetForProfile(
@@ -33,28 +50,39 @@ void TabRestoreServiceFactory::ResetForProfile(Profile* profile) {
 }
 
 TabRestoreServiceFactory* TabRestoreServiceFactory::GetInstance() {
-  return base::Singleton<TabRestoreServiceFactory>::get();
+  static base::NoDestructor<TabRestoreServiceFactory> instance;
+  return instance.get();
+}
+
+// static
+BrowserContextKeyedServiceFactory::TestingFactory
+TabRestoreServiceFactory::GetDefaultFactory() {
+  return base::BindRepeating(&BuildTemplateService);
 }
 
 TabRestoreServiceFactory::TabRestoreServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "sessions::TabRestoreService",
-          BrowserContextDependencyManager::GetInstance()) {}
-
-TabRestoreServiceFactory::~TabRestoreServiceFactory() {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .Build()) {
+  DependsOn(glic::GlicKeyedServiceFactory::GetInstance());
 }
+
+TabRestoreServiceFactory::~TabRestoreServiceFactory() = default;
 
 bool TabRestoreServiceFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }
 
-KeyedService* TabRestoreServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+TabRestoreServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* browser_context) const {
-  Profile* profile = Profile::FromBrowserContext(browser_context);
-  DCHECK(!profile->IsOffTheRecord());
-  std::unique_ptr<sessions::TabRestoreServiceClient> client(
-      new ChromeTabRestoreServiceClient(profile));
-
-  return new sessions::TabRestoreServiceImpl(std::move(client),
-                                             profile->GetPrefs(), nullptr);
+  return BuildTemplateService(browser_context);
 }

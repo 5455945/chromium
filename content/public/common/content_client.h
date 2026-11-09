@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,24 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/system/message_pipe.h"
-#include "ui/base/layout.h"
+#include "ui/base/resource/resource_scale_factor.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_util.h"
 
 namespace base {
-class FilePath;
 class RefCountedMemory;
 class SequencedTaskRunner;
-}
+}  // namespace base
 
 namespace blink {
 class OriginTrialPolicy;
@@ -54,7 +55,7 @@ class ContentGpuClient;
 class ContentRendererClient;
 class ContentUtilityClient;
 struct CdmInfo;
-struct PepperPluginInfo;
+struct WebPluginInfo;
 
 // Setter and getter for the client. The client should be set early, before any
 // content code is called.
@@ -69,6 +70,7 @@ ContentClient* GetContentClient();
 // returns the old value. In browser tests it seems safest to call these in
 // SetUpOnMainThread() or you may get TSan errors due a race between the
 // browser "process" and the child "process" for the test both accessing it.
+CONTENT_EXPORT ContentClient* GetContentClientForTesting();
 CONTENT_EXPORT ContentBrowserClient* SetBrowserClientForTesting(
     ContentBrowserClient* b);
 CONTENT_EXPORT ContentRendererClient* SetRendererClientForTesting(
@@ -99,9 +101,8 @@ class CONTENT_EXPORT ContentClient {
   // Sets the data on the current gpu.
   virtual void SetGpuInfo(const gpu::GPUInfo& gpu_info) {}
 
-  // Gives the embedder a chance to register its own pepper plugins.
-  virtual void AddPepperPlugins(
-      std::vector<content::PepperPluginInfo>* plugins) {}
+  // Gives the embedder a chance to register its own plugins.
+  virtual void AddPlugins(std::vector<content::WebPluginInfo>* plugins) {}
 
   // Gives the embedder a chance to register the Content Decryption Modules
   // (CDM) it supports, as well as the CDM host file paths to verify CDM host.
@@ -139,7 +140,21 @@ class CONTENT_EXPORT ContentClient {
     // Registers a URL scheme as strictly empty documents, allowing them to
     // commit synchronously.
     std::vector<std::string> empty_document_schemes;
-#if defined(OS_ANDROID)
+    // Registers a URL scheme as extension scheme.
+    std::vector<std::string> extension_schemes;
+    // Registers a URL scheme with a predefined default custom handler.
+    // This pair of strings must be normalized protocol handler parameters as
+    // described in the Custom Handler specification.
+    // https://html.spec.whatwg.org/multipage/system-state.html#normalize-protocol-handler-parameters
+    std::vector<std::pair<std::string, std::string>> predefined_handler_schemes;
+    // Registers a URL scheme as an Isolated Web App scheme.
+    std::vector<std::string> isolated_app_schemes;
+    // Registers a URL scheme whose scripts may use the V8 code cache. It must
+    // also be in standard_schemes; http, https, chrome and chrome-untrusted are
+    // not allowed. Entries are keyed by the requesting process's lock like
+    // http(s), and a process locked to this scheme as a whole gets none.
+    std::vector<std::string> code_cache_schemes;
+#if BUILDFLAG(IS_ANDROID)
     // Normally, non-standard schemes canonicalize to opaque origins. However,
     // Android WebView requires non-standard schemes to still be preserved.
     bool allow_non_standard_schemes_in_origins = false;
@@ -156,25 +171,25 @@ class CONTENT_EXPORT ContentClient {
   virtual std::u16string GetLocalizedString(int message_id,
                                             const std::u16string& replacement);
 
-  // Return the contents of a resource in a StringPiece given the resource id.
-  virtual base::StringPiece GetDataResource(int resource_id,
-                                            ui::ScaleFactor scale_factor);
+  // Returns true if GetDataResource would return non-null data for the
+  // specified |resource_id|.
+  virtual bool HasDataResource(int resource_id) const;
+
+  // Return the contents of a resource in a std::string_view given the resource
+  // id.
+  virtual std::string_view GetDataResource(
+      int resource_id,
+      ui::ResourceScaleFactor scale_factor);
 
   // Returns the raw bytes of a scale independent data resource.
-  virtual base::RefCountedMemory* GetDataResourceBytes(int resource_id);
+  virtual scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id);
+
+  // Returns the string contents of a resource given the resource id.
+  virtual std::string GetDataResourceString(int resource_id);
 
   // Returns a native image given its id.
   virtual gfx::Image& GetNativeImageNamed(int resource_id);
-
-#if defined(OS_MAC)
-  // Gets the path for an embedder-specific helper child process. The
-  // |child_flags| is a value greater than
-  // ChildProcessHost::CHILD_EMBEDDER_FIRST. The |helpers_path| is the location
-  // of the known //content Mac helpers in the framework bundle.
-  virtual base::FilePath GetChildProcessPath(
-      int child_flags,
-      const base::FilePath& helpers_path);
-#endif  // defined(OS_MAC)
 
   // Called by content::GetProcessTypeNameInEnglish for process types that it
   // doesn't know about because they're from the embedder.
@@ -184,7 +199,18 @@ class CONTENT_EXPORT ContentClient {
   // supported by the embedder.
   virtual blink::OriginTrialPolicy* GetOriginTrialPolicy();
 
-#if defined(OS_ANDROID)
+  // Cross-origin subframes are generally not allowed to display a file picker
+  // for security reasons. This method allows content embedders to specify
+  // whether a cross-origin subframe of a particular origin should be allowed to
+  // display the file picker.
+  //
+  // For example, Chrome's built-in PDF viewer may be hosted in a cross-origin
+  // subframe. To allow this viewer to function correctly, Chrome uses this
+  // method to grant it access to the file picker.
+  virtual bool IsFilePickerAllowedForCrossOriginSubframe(
+      const url::Origin& origin);
+
+#if BUILDFLAG(IS_ANDROID)
   // Returns true for clients like Android WebView that uses synchronous
   // compositor. Note setting this to true will permit synchronous IPCs from
   // the browser UI thread.
@@ -192,7 +218,7 @@ class CONTENT_EXPORT ContentClient {
 
   // Returns the MediaDrmBridgeClient to be used by media code on Android.
   virtual media::MediaDrmBridgeClient* GetMediaDrmBridgeClient();
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Allows the embedder to handle incoming interface binding requests from
   // the browser process to any type of child process. This is called once
@@ -201,18 +227,57 @@ class CONTENT_EXPORT ContentClient {
       scoped_refptr<base::SequencedTaskRunner> io_task_runner,
       mojo::BinderMap* binders);
 
+  // Whether the embedder wants to allow default SiteInstanceGroups to be used
+  // in cases where full site isolation is not available.
+  // TODO(crbug.com/419595581): This method is here so we can disable default
+  // SiteInstanceGroups on Android WebView while still enabling the feature by
+  // default. Remove this carveout once remaining WebView issues are resolved.
+  virtual bool ShouldAllowDefaultSiteInstanceGroup();
+
+  // Returns whether duplicate navigations should be ignored.
+  //
+  // Currently, returns true (ignore) if:
+  // 1. The specific initiator's skip param (browser or renderer) is disabled.
+  // 2. AND one of the following origin criteria is met:
+  //    - It is a browser-initiated navigation.
+  //    - The origin list `kIgnoreDuplicateNavsOrigins` is empty (applies to all
+  //      origins).
+  //    - The navigation's origin matches one in the origin list.
+  // Returns false otherwise.
+  virtual bool ShouldIgnoreDuplicateNavs(const GURL& url,
+                                         bool is_renderer_initiated) const;
+
+  virtual base::TimeDelta GetIgnoreDuplicateNavsThreshold() const;
+
+  // Returns whether the navigation's origin is included in the
+  // kIgnoreDuplicateNavsOrigins parameter list for the
+  // IgnoreDuplicateNavs feature. If the origin list is empty, returns false.
+  virtual bool IsUrlInIgnoreDuplicateNavsOrigins(const GURL& url) const;
+
  private:
+  // For SetBrowserClientAlwaysAllowForTesting().
+  friend class BrowserTestBase;
   friend class ContentClientInitializer;  // To set these pointers.
   friend class InternalTestInitializer;
+  // For SetCanChangeContentBrowserClientForTesting().
+  friend class ContentBrowserTest;
+  // For SetCanChangeContentBrowserClientForTesting().
+  friend class ContentBrowserTestContentBrowserClient;
+
+  // Controls whether test code may change the ContentBrowserClient. This is
+  // used to enforce the right ContentBrowserClient is used.
+  static void SetCanChangeContentBrowserClientForTesting(bool value);
+  // Same as SetBrowserClientForTesting(), but always succeeds.
+  static void SetBrowserClientAlwaysAllowForTesting(ContentBrowserClient* b);
 
   // The embedder API for participating in browser logic.
-  ContentBrowserClient* browser_;
+  raw_ptr<ContentBrowserClient, DanglingUntriaged> browser_;
   // The embedder API for participating in gpu logic.
-  ContentGpuClient* gpu_;
+  raw_ptr<ContentGpuClient> gpu_;
   // The embedder API for participating in renderer logic.
-  ContentRendererClient* renderer_;
+  raw_ptr<ContentRendererClient> renderer_;
   // The embedder API for participating in utility logic.
-  ContentUtilityClient* utility_;
+  raw_ptr<ContentUtilityClient> utility_;
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "base/containers/span.h"
 #include "third_party/pdfium/public/fpdf_save.h"
 
 namespace chrome_pdf {
@@ -30,7 +31,7 @@ class PDFiumMemBufferFileWrite : public FPDF_FILEWRITE {
                             const void* data,
                             unsigned long size);
 
-  int DoWriteBlock(const uint8_t* data, unsigned long size);
+  int DoWriteBlock(base::span<const uint8_t> data);
 
   std::vector<uint8_t> buffer_;
 };

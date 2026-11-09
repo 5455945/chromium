@@ -1,21 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_BLOCKED_CONTENT_TAB_UNDER_NAVIGATION_THROTTLE_H_
 #define CHROME_BROWSER_UI_BLOCKED_CONTENT_TAB_UNDER_NAVIGATION_THROTTLE_H_
 
-#include <memory>
-
-#include "base/feature_list.h"
-#include "base/macros.h"
 #include "content/public/browser/navigation_throttle.h"
 
 namespace content {
-class NavigationHandle;
+class NavigationThrottleRegistry;
 }
 
-constexpr char kBlockTabUnderFormatMessage[] =
+inline constexpr char kBlockTabUnderFormatMessage[] =
     "Chrome stopped this site from navigating to %s, see "
     "https://www.chromestatus.com/feature/5675755719622656 for more details.";
 
@@ -35,15 +31,12 @@ constexpr char kBlockTabUnderFormatMessage[] =
 //  in the background to be considered a tab-under restricts the scope of the
 //  intervention. For instance, popups that do not completely hide the original
 //  page may cause subsequent tab-under navigations to occur while visible (not
-//  compeltely backgrounded). See https://crbug.com/733736.
+//  compeltely backgrounded). See https://crbug.com/41325640.
 //
 //  For now, we allow these tab-unders because this pattern seems to be
 //  legitimate for some cases (like auth).
 class TabUnderNavigationThrottle : public content::NavigationThrottle {
  public:
-  // TODO(https://crbug.com/954178): Remove this.
-  static const base::Feature kBlockTabUnders;
-
   // This enum backs a histogram. Update enums.xml if you make any updates, and
   // put new entries before |kLast|.
   enum class Action {
@@ -68,13 +61,17 @@ class TabUnderNavigationThrottle : public content::NavigationThrottle {
     kCount
   };
 
-  static std::unique_ptr<content::NavigationThrottle> MaybeCreate(
-      content::NavigationHandle* handle);
+  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
+
+  TabUnderNavigationThrottle(const TabUnderNavigationThrottle&) = delete;
+  TabUnderNavigationThrottle& operator=(const TabUnderNavigationThrottle&) =
+      delete;
 
   ~TabUnderNavigationThrottle() override;
 
  private:
-  explicit TabUnderNavigationThrottle(content::NavigationHandle* handle);
+  explicit TabUnderNavigationThrottle(
+      content::NavigationThrottleRegistry& registry);
 
   // This method is described at the top of this file.
   //
@@ -86,19 +83,11 @@ class TabUnderNavigationThrottle : public content::NavigationThrottle {
 
   bool HasOpenedPopupSinceLastUserGesture() const;
 
-  // Returns true if tab-unders are allowed due to content settings. Currently,
-  // tab-unders blocking is governed by the same setting as popups.
-  bool TabUndersAllowedBySettings() const;
-
   // content::NavigationThrottle:
   content::NavigationThrottle::ThrottleCheckResult WillStartRequest() override;
   content::NavigationThrottle::ThrottleCheckResult WillRedirectRequest()
       override;
   const char* GetNameForLogging() override;
-
-  // True if the experiment is turned on and the class should actually attempt
-  // to block tab-unders.
-  const bool block_ = false;
 
   // Tracks whether this WebContents has opened a popup since the last user
   // gesture, at the time this navigation is starting.
@@ -110,8 +99,6 @@ class TabUnderNavigationThrottle : public content::NavigationThrottle {
 
   // True if the throttle has seen a tab under.
   bool seen_tab_under_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(TabUnderNavigationThrottle);
 };
 
 #endif  // CHROME_BROWSER_UI_BLOCKED_CONTENT_TAB_UNDER_NAVIGATION_THROTTLE_H_

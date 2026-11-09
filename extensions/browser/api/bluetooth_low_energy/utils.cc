@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,45 +17,41 @@ namespace bluetooth_low_energy {
 namespace {
 
 // Converts a list of CharacteristicProperty to a base::ListValue of strings.
-std::unique_ptr<base::ListValue> CharacteristicPropertiesToValue(
+base::ListValue CharacteristicPropertiesToList(
     const std::vector<CharacteristicProperty> properties) {
-  std::unique_ptr<base::ListValue> property_list(new base::ListValue());
-  for (auto iter = properties.cbegin(); iter != properties.cend(); ++iter)
-    property_list->AppendString(ToString(*iter));
+  base::ListValue property_list;
+  for (const auto& property : properties) {
+    property_list.Append(ToString(property));
+  }
   return property_list;
 }
 
 }  // namespace
 
-std::unique_ptr<base::DictionaryValue> CharacteristicToValue(
-    Characteristic* from) {
+base::DictValue CharacteristicToValue(Characteristic& from) {
   // Copy the properties. Use Characteristic::ToValue to generate the result
   // dictionary without the properties, to prevent json_schema_compiler from
   // failing.
-  std::vector<CharacteristicProperty> properties = from->properties;
-  from->properties.clear();
-  std::unique_ptr<base::DictionaryValue> to = from->ToValue();
-  to->SetKey("properties", base::Value::FromUniquePtrValue(
-                               CharacteristicPropertiesToValue(properties)));
+  std::vector<CharacteristicProperty> properties = std::move(from.properties);
+  base::DictValue to = from.ToValue();
+  to.Set("properties", CharacteristicPropertiesToList(properties));
   return to;
 }
 
-std::unique_ptr<base::DictionaryValue> DescriptorToValue(Descriptor* from) {
-  if (!from->characteristic)
-    return from->ToValue();
+base::DictValue DescriptorToValue(Descriptor& from) {
+  if (!from.characteristic) {
+    return from.ToValue();
+  }
 
   // Copy the characteristic properties and set them later manually.
   std::vector<CharacteristicProperty> properties =
-      from->characteristic->properties;
-  from->characteristic->properties.clear();
-  std::unique_ptr<base::DictionaryValue> to = from->ToValue();
+      std::move(from.characteristic->properties);
+  from.characteristic->properties.clear();
+  base::DictValue to = from.ToValue();
 
-  base::DictionaryValue* chrc_value = NULL;
-  to->GetDictionaryWithoutPathExpansion("characteristic", &chrc_value);
+  base::DictValue* chrc_value = to.FindDict("characteristic");
   DCHECK(chrc_value);
-  chrc_value->SetKey("properties",
-                     base::Value::FromUniquePtrValue(
-                         CharacteristicPropertiesToValue(properties)));
+  chrc_value->Set("properties", CharacteristicPropertiesToList(properties));
   return to;
 }
 

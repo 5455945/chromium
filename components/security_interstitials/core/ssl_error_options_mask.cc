@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@ namespace security_interstitials {
 
 namespace {
 
-int IsCertErrorFatal(int cert_error) {
+int IsCertErrorFatal(net::Error cert_error) {
   switch (cert_error) {
     case net::ERR_CERT_COMMON_NAME_INVALID:
     case net::ERR_CERT_DATE_INVALID:
@@ -19,13 +19,13 @@ int IsCertErrorFatal(int cert_error) {
     case net::ERR_CERT_NO_REVOCATION_MECHANISM:
     case net::ERR_CERT_UNABLE_TO_CHECK_REVOCATION:
     case net::ERR_CERT_WEAK_SIGNATURE_ALGORITHM:
+    case net::ERR_CERT_NON_UNIQUE_NAME:
     case net::ERR_CERT_WEAK_KEY:
     case net::ERR_CERT_NAME_CONSTRAINT_VIOLATION:
     case net::ERR_CERT_VALIDITY_TOO_LONG:
     case net::ERR_CERTIFICATE_TRANSPARENCY_REQUIRED:
-    case net::ERR_CERT_SYMANTEC_LEGACY:
     case net::ERR_CERT_KNOWN_INTERCEPTION_BLOCKED:
-    case net::ERR_SSL_OBSOLETE_VERSION:
+    case net::ERR_CERT_SELF_SIGNED_LOCAL_NETWORK:
       return false;
     case net::ERR_CERT_CONTAINS_ERRORS:
     case net::ERR_CERT_REVOKED:
@@ -34,13 +34,12 @@ int IsCertErrorFatal(int cert_error) {
       return true;
     default:
       NOTREACHED();
-      return true;
   }
 }
 
 }  // namespace
 
-int CalculateSSLErrorOptionsMask(int cert_error,
+int CalculateSSLErrorOptionsMask(net::Error cert_error,
                                  bool hard_override_disabled,
                                  bool should_ssl_errors_be_fatal) {
   int options_mask = 0;

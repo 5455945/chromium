@@ -1,14 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_XR_INSTALL_HELPER_H_
 #define CONTENT_PUBLIC_BROWSER_XR_INSTALL_HELPER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "content/common/content_export.h"
 
 namespace content {
+
+struct GlobalRenderFrameHostId;
+
+// The result of a WebXR runtime installation check.
+enum class XrInstallResult {
+  kSuccessAlreadyInstalled,
+  kSuccessInstalled,
+  kFailed,
+};
 
 // Interface class to provide the opportunity for runtimes to ensure that any
 // necessary installation steps that need to occur from within the browser
@@ -30,9 +39,8 @@ class CONTENT_EXPORT XrInstallHelper {
   // is destroyed, and should return whether or not the runtime was able to be
   // successfully installed (or verified to already be installed).
   virtual void EnsureInstalled(
-      int render_process_id,
-      int render_frame_id,
-      base::OnceCallback<void(bool installed)> install_callback) = 0;
+      const content::GlobalRenderFrameHostId& frame_id,
+      base::OnceCallback<void(XrInstallResult)> install_callback) = 0;
 
  protected:
   XrInstallHelper() = default;

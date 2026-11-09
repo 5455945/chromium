@@ -31,19 +31,21 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DOM_VISUAL_VIEWPORT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_DOM_VISUAL_VIEWPORT_H_
 
+#include <optional>
+
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 class LocalDOMWindow;
 class ExecutionContext;
 
-class CORE_EXPORT DOMVisualViewport final : public EventTargetWithInlineData {
+class CORE_EXPORT DOMVisualViewport final : public EventTarget {
   DEFINE_WRAPPERTYPEINFO();
 
  public:

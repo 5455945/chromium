@@ -1,19 +1,23 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_ZUCCHINI_IO_UTILS_H_
 #define COMPONENTS_ZUCCHINI_IO_UTILS_H_
 
-#include <stdint.h>
-
-#include <cctype>
+#include <array>
+#include <cstdint>
 #include <istream>
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ref.h"
+#include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 
 namespace zucchini {
 
@@ -37,19 +41,19 @@ class LimitedOutputStream : public std::ostream {
     bool full() const { return counter_ >= limit_; }
 
    private:
-    std::ostream& os_;
+    const raw_ref<std::ostream> os_;
     const int limit_;
     int counter_ = 0;
   };
 
  public:
   LimitedOutputStream(std::ostream& os, int limit);
+  LimitedOutputStream(const LimitedOutputStream&) = delete;
+  const LimitedOutputStream& operator=(const LimitedOutputStream&) = delete;
   bool full() const { return buf_.full(); }
 
  private:
   StreamBuf buf_;
-
-  DISALLOW_COPY_AND_ASSIGN(LimitedOutputStream);
 };
 
 // A class to render hexadecimal numbers for std::ostream with 0-padding. This
@@ -69,14 +73,17 @@ struct AsHex {
 
 template <int N, typename T>
 std::ostream& operator<<(std::ostream& os, const AsHex<N, T>& as_hex) {
-  char buf[N + 1];
-  buf[N] = '\0';
+  std::array<char, N> buf;
   T value = as_hex.value;
-  for (int i = N - 1; i >= 0; --i, value >>= 4)
-    buf[i] = "0123456789ABCDEF"[static_cast<int>(value & 0x0F)];
-  if (value)
+  static constexpr auto kHexDigits =
+      base::span_from_cstring("0123456789ABCDEF");
+  for (int i = N - 1; i >= 0; --i, value >>= 4) {
+    buf[static_cast<size_t>(i)] = kHexDigits[value & 0x0F];
+  }
+  if (value) {
     os << "...";  // To indicate data truncation, or negative values.
-  os << buf;
+  }
+  os << base::as_string_view(buf);
   return os;
 }
 
@@ -88,14 +95,14 @@ std::ostream& operator<<(std::ostream& os, const AsHex<N, T>& as_hex) {
 class PrefixSep {
  public:
   explicit PrefixSep(const std::string& sep_str) : sep_str_(sep_str) {}
+  PrefixSep(const PrefixSep&) = delete;
+  const PrefixSep& operator=(const PrefixSep&) = delete;
 
   friend std::ostream& operator<<(std::ostream& ostr, PrefixSep& obj);
 
  private:
   std::string sep_str_;
   bool first_ = true;
-
-  DISALLOW_COPY_AND_ASSIGN(PrefixSep);
 };
 
 // An input manipulator that dictates the expected next character in
@@ -103,6 +110,8 @@ class PrefixSep {
 class EatChar {
  public:
   explicit EatChar(char ch) : ch_(ch) {}
+  EatChar(const EatChar&) = delete;
+  const EatChar& operator=(const EatChar&) = delete;
 
   friend inline std::istream& operator>>(std::istream& istr,
                                          const EatChar& obj) {
@@ -113,8 +122,6 @@ class EatChar {
 
  private:
   char ch_;
-
-  DISALLOW_COPY_AND_ASSIGN(EatChar);
 };
 
 // An input manipulator that reads an unsigned integer from |std::istream|,
@@ -126,15 +133,15 @@ class StrictUInt {
   StrictUInt(const StrictUInt&) = default;
 
   friend std::istream& operator>>(std::istream& istr, StrictUInt<T> obj) {
-    if (!istr.fail() && !::isdigit(istr.peek())) {
+    if (!istr.fail() && !base::IsAsciiDigit(istr.peek())) {
       istr.setstate(std::ios_base::failbit);
       return istr;
     }
-    return istr >> obj.var_;
+    return istr >> *obj.var_;
   }
 
  private:
-  T& var_;
+  const raw_ref<T> var_;
 };
 
 // Stub out uint8_t: istream treats it as char, and value won't be read as int!

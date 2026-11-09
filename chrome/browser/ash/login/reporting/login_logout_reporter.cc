@@ -1,132 +1,270 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/reporting/login_logout_reporter.h"
 
-#include "base/bind_post_task.h"
-#include "base/logging.h"
-#include "chrome/browser/ash/login/users/chrome_user_manager.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_chromeos.h"
+#include <optional>
 
-namespace chromeos {
+#include "base/check_deref.h"
+#include "base/logging.h"
+#include "base/strings/strcat.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/ash/login/existing_user_controller.h"
+#include "chrome/browser/ash/policy/reporting/user_event_reporter_helper.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/policy/messaging_layer/proto/synced/login_logout_event.pb.h"
+#include "chrome/browser/profiles/reporting_util.h"
+#include "chromeos/ash/components/login/auth/public/auth_failure.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
+#include "components/account_id/account_id.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_names.h"
+#include "content/public/browser/browser_thread.h"
+
+namespace ash {
 namespace reporting {
 
-bool LoginLogoutReporter::Delegate::ShouldReportUser(
-    base::StringPiece user_email) const {
-  return ash::ChromeUserManager::Get()->ShouldReportUser(
-      std::string(user_email));
-}
+namespace {
 
-bool LoginLogoutReporter::Delegate::ShouldReportEvent() const {
-  // TODO(crbug.com/1215406): add login/logout reporting policy check.
-  return false;
-}
+constexpr char kLoginLogoutReporterDictionary[] =
+    "reporting.login_logout_reporter_dictionary";
+constexpr char kKioskLoginFailureTimestamp[] = "kiosk_login_failure_timestamp";
 
-policy::DMToken LoginLogoutReporter::Delegate::GetDMToken() const {
-  policy::DMToken dm_token(policy::DMToken::Status::kEmpty, "");
-
-  auto* const connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  if (!connector) {
-    return dm_token;
+LoginLogoutSessionType GetSessionType(const AccountId& account_id) {
+  if (account_id == user_manager::GuestAccountId()) {
+    return LoginLogoutSessionType::GUEST_SESSION;
   }
 
-  auto* const policy_manager = connector->GetDeviceCloudPolicyManager();
-  if (policy_manager && policy_manager->IsClientRegistered()) {
-    dm_token = policy::DMToken(policy::DMToken::Status::kValid,
-                               policy_manager->core()->client()->dm_token());
+  auto type = policy::GetDeviceLocalAccountType(account_id.GetUserEmail());
+  if (!type.has_value()) {
+    return LoginLogoutSessionType::REGULAR_USER_SESSION;
   }
 
-  return dm_token;
+  switch (type.value()) {
+    case policy::DeviceLocalAccountType::kPublicSession:
+    case policy::DeviceLocalAccountType::kSamlPublicSession:
+      return LoginLogoutSessionType::PUBLIC_ACCOUNT_SESSION;
+    case policy::DeviceLocalAccountType::kKioskApp:
+    case policy::DeviceLocalAccountType::kWebKioskApp:
+    case policy::DeviceLocalAccountType::kKioskIsolatedWebApp:
+    case policy::DeviceLocalAccountType::kArcvmKioskApp:
+      return LoginLogoutSessionType::KIOSK_SESSION;
+  }
+  NOTREACHED();
 }
 
-void LoginLogoutReporter::Delegate::CreateReportingQueue(
-    std::unique_ptr<::reporting::ReportQueueConfiguration> config,
-    ::reporting::ReportQueueProvider::CreateReportQueueCallback
-        create_queue_cb) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, base::BindOnce(::reporting::ReportQueueProvider::CreateQueue,
-                                std::move(config), std::move(create_queue_cb)));
+LoginFailureReason GetLoginFailureReasonForReport(
+    const AuthFailure& error,
+    LoginLogoutSessionType session_type) {
+  switch (error.reason()) {
+    case AuthFailure::OWNER_REQUIRED:
+      return LoginFailureReason::OWNER_REQUIRED;
+    case AuthFailure::TPM_ERROR:
+      return LoginFailureReason::TPM_ERROR;
+    case AuthFailure::TPM_UPDATE_REQUIRED:
+      return LoginFailureReason::TPM_UPDATE_REQUIRED;
+    case AuthFailure::MISSING_CRYPTOHOME:
+      return LoginFailureReason::MISSING_CRYPTOHOME;
+    case AuthFailure::UNRECOVERABLE_CRYPTOHOME:
+      return LoginFailureReason::UNRECOVERABLE_CRYPTOHOME;
+    case AuthFailure::COULD_NOT_MOUNT_TMPFS:
+      return LoginFailureReason::COULD_NOT_MOUNT_TMPFS;
+    case AuthFailure::COULD_NOT_MOUNT_CRYPTOHOME:
+    case AuthFailure::DATA_REMOVAL_FAILED:
+    case AuthFailure::USERNAME_HASH_FAILED:
+    case AuthFailure::FAILED_TO_INITIALIZE_TOKEN:
+      return session_type == LoginLogoutSessionType::REGULAR_USER_SESSION
+                 ? LoginFailureReason::AUTHENTICATION_ERROR
+                 : LoginFailureReason::INTERNAL_LOGIN_FAILURE_REASON;
+    // The following cases are not expected with failed logins, but we add them
+    // to fail compliation in case a new relevant auth failure reason was added
+    // and we need to add the corresponding enum value to the reporting proto.
+    case AuthFailure::NONE:
+    case AuthFailure::COULD_NOT_UNMOUNT_CRYPTOHOME:
+    case AuthFailure::LOGIN_TIMED_OUT:
+    case AuthFailure::UNLOCK_FAILED:
+    case AuthFailure::NETWORK_AUTH_FAILED:
+    case AuthFailure::ALLOWLIST_CHECK_FAILED:
+    case AuthFailure::AUTH_DISABLED:
+    case AuthFailure::CRYPTOHOME_RECOVERY_SERVICE_ERROR:
+    case AuthFailure::CRYPTOHOME_RECOVERY_OAUTH_TOKEN_ERROR:
+    case AuthFailure::NUM_FAILURE_REASONS:
+      return LoginFailureReason::UNKNOWN_LOGIN_FAILURE_REASON;
+  }
 }
 
-LoginLogoutReporter::LoginLogoutReporter(std::unique_ptr<Delegate> delegate)
-    : delegate_(std::move(delegate)) {}
+}  // namespace
+
+AccountId LoginLogoutReporter::Delegate::GetLastLoginAttemptAccountId() const {
+  if (!ExistingUserController::current_controller()) {
+    return EmptyAccountId();
+  }
+  return ExistingUserController::current_controller()
+      ->GetLastLoginAttemptAccountId();
+}
+
+// static
+void LoginLogoutReporter::RegisterPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(kLoginLogoutReporterDictionary);
+}
+
+LoginLogoutReporter::LoginLogoutReporter(
+    PrefService* local_state,
+    std::unique_ptr<::reporting::UserEventReporterHelper> reporter_helper,
+    std::unique_ptr<Delegate> delegate,
+    policy::ManagedSessionService* managed_session_service,
+    base::Clock* clock)
+    : local_state_(CHECK_DEREF(local_state)),
+      reporter_helper_(std::move(reporter_helper)),
+      delegate_(std::move(delegate)),
+      clock_(clock) {
+  if (managed_session_service) {
+    managed_session_observation_.Observe(managed_session_service);
+  }
+  MaybeReportKioskLoginFailure();
+}
 
 LoginLogoutReporter::~LoginLogoutReporter() = default;
 
 // static
-void LoginLogoutReporter::OnReportQueueCreated(
-    LoginLogoutRecord record,
-    ::reporting::StatusOr<std::unique_ptr<::reporting::ReportQueue>>
-        report_queue_result) {
-  if (!report_queue_result.ok()) {
-    DVLOG(1) << "ReportQueue could not be created: "
-             << report_queue_result.status();
-    return;
-  }
-  auto* const report_queue = report_queue_result.ValueOrDie().release();
-  auto enqueue_cb = base::BindOnce(&LoginLogoutReporter::OnRecordEnqueued,
-                                   base::Owned(report_queue));
-  report_queue->Enqueue(&record, ::reporting::Priority::IMMEDIATE,
-                        std::move(enqueue_cb));
+std::unique_ptr<LoginLogoutReporter> LoginLogoutReporter::Create(
+    PrefService* local_state,
+    policy::ManagedSessionService* managed_session_service) {
+  auto reporter_helper = std::make_unique<::reporting::UserEventReporterHelper>(
+      ::reporting::Destination::LOGIN_LOGOUT_EVENTS);
+  auto delegate = std::make_unique<LoginLogoutReporter::Delegate>();
+  return base::WrapUnique(
+      new LoginLogoutReporter(local_state, std::move(reporter_helper),
+                              std::move(delegate), managed_session_service));
 }
 
 // static
-void LoginLogoutReporter::OnRecordEnqueued(
-    ::reporting::ReportQueue* report_queue,
-    ::reporting::Status status) {
-  if (!status.ok()) {
-    DVLOG(1)
-        << "Could not enqueue login/logout event to reporting queue because of "
-        << status;
-  }
+std::unique_ptr<LoginLogoutReporter> LoginLogoutReporter::CreateForTest(
+    PrefService* local_state,
+    std::unique_ptr<::reporting::UserEventReporterHelper> reporter_helper,
+    std::unique_ptr<LoginLogoutReporter::Delegate> delegate,
+    policy::ManagedSessionService* managed_session_service,
+    base::Clock* clock) {
+  return base::WrapUnique(new LoginLogoutReporter(
+      local_state, std::move(reporter_helper), std::move(delegate),
+      managed_session_service, clock));
 }
 
-void LoginLogoutReporter::MaybeReportEvent(base::StringPiece user_email,
-                                           LoginLogoutRecord record) const {
-  if (delegate_->ShouldReportEvent()) {
-    const policy::DMToken dm_token = delegate_->GetDMToken();
-    if (!dm_token.is_valid()) {
-      DVLOG(1) << "Cannot initialize login/logout reporting. Invalid DMToken.";
-      return;
-    }
-
-    record.set_event_timestamp(base::Time::Now().ToTimeT());
-    if (delegate_->ShouldReportUser(user_email)) {
-      record.mutable_affiliated_user()->set_user_email(std::string(user_email));
-    }
-
-    auto config_result = ::reporting::ReportQueueConfiguration::Create(
-        dm_token.value(), ::reporting::Destination::LOGIN_LOGOUT_EVENTS,
-        base::BindRepeating([]() { return ::reporting::Status::StatusOK(); }));
-
-    if (!config_result.ok()) {
-      DVLOG(1) << "Cannot initialize login/logout reporting. "
-               << "Invalid ReportQueueConfiguration";
-      return;
-    }
-
-    auto create_queue_cb = base::BindOnce(
-        &LoginLogoutReporter::OnReportQueueCreated, std::move(record));
-    delegate_->CreateReportingQueue(std::move(config_result.ValueOrDie()),
-                                    std::move(create_queue_cb));
+void LoginLogoutReporter::MaybeReportEvent(LoginLogoutRecord record,
+                                           const AccountId& account_id) {
+  if (!reporter_helper_->ReportingEnabled(kReportDeviceLoginLogout)) {
+    return;
   }
+
+  const LoginLogoutSessionType session_type = GetSessionType(account_id);
+  record.set_event_timestamp_sec(clock_->Now().ToTimeT());
+  record.set_session_type(session_type);
+  const std::string& user_email = account_id.GetUserEmail();
+  if (session_type == PUBLIC_ACCOUNT_SESSION || session_type == GUEST_SESSION) {
+    record.set_is_guest_session(true);
+  } else if (session_type == REGULAR_USER_SESSION) {
+    if (reporter_helper_->ShouldReportUser(user_email)) {
+      record.mutable_affiliated_user()->set_user_email(user_email);
+    } else if (std::optional<uint32_t> user_id =
+                   reporter_helper_->GetUniqueUserIdForThisDevice(user_email);
+               user_id.has_value()) {
+      // This is an unaffiliated user. We can't report any personal information
+      // about them, so we report a device-unique user id instead.
+      record.mutable_unaffiliated_user()->set_user_id_num(user_id.value());
+    }
+    }
+  reporter_helper_->ReportEvent(
+      std::make_unique<LoginLogoutRecord>(std::move(record)),
+      ::reporting::Priority::SECURITY);
 }
 
-void LoginLogoutReporter::MaybeReportLogin(base::StringPiece user_email) const {
+void LoginLogoutReporter::OnLogin(Profile* profile) {
+  user_manager::User* user = ProfileHelper::Get()->GetUserByProfile(profile);
   LoginLogoutRecord record;
   record.mutable_login_event();
-  MaybeReportEvent(user_email, std::move(record));
+  MaybeReportEvent(std::move(record), user->GetAccountId());
 }
 
-void LoginLogoutReporter::MaybeReportLogout(
-    base::StringPiece user_email) const {
+void LoginLogoutReporter::OnSessionTerminationStarted(
+    const user_manager::User* user) {
   LoginLogoutRecord record;
   record.mutable_logout_event();
-  MaybeReportEvent(user_email, std::move(record));
+  MaybeReportEvent(std::move(record), user->GetAccountId());
 }
+
+void LoginLogoutReporter::OnLoginFailure(const AuthFailure& error) {
+  AccountId account_id = delegate_->GetLastLoginAttemptAccountId();
+  if (account_id == EmptyAccountId()) {
+    return;
+  }
+
+  LoginFailureReason failure_reason =
+      GetLoginFailureReasonForReport(error, GetSessionType(account_id));
+  LoginLogoutRecord record;
+  record.mutable_login_event()->mutable_failure()->set_reason(failure_reason);
+  MaybeReportEvent(std::move(record), account_id);
+}
+
+void LoginLogoutReporter::OnKioskLoginFailure() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+
+  if (!reporter_helper_->ReportingEnabled(kReportDeviceLoginLogout)) {
+    return;
+  }
+
+  ScopedDictPrefUpdate dict_update(&local_state_.get(),
+                                   kLoginLogoutReporterDictionary);
+  dict_update->Set(kKioskLoginFailureTimestamp,
+                   static_cast<int>(clock_->Now().ToTimeT()));
+}
+
+void LoginLogoutReporter::MaybeReportKioskLoginFailure() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+
+  const auto* pref =
+      local_state_->FindPreference(kLoginLogoutReporterDictionary);
+  if (!pref) {
+    NOTREACHED() << "Cannot find pref.";
+  }
+
+  std::optional<int> last_kiosk_login_failure_timestamp =
+      pref->GetValue()->GetDict().FindInt(kKioskLoginFailureTimestamp);
+  if (!last_kiosk_login_failure_timestamp.has_value()) {
+    // No kiosk login failure to report.
+    return;
+  }
+
+  auto record = std::make_unique<LoginLogoutRecord>();
+  record->set_event_timestamp_sec(last_kiosk_login_failure_timestamp.value());
+  record->set_session_type(LoginLogoutSessionType::KIOSK_SESSION);
+  record->mutable_login_event()->mutable_failure();
+
+  auto enqueue_cb = base::BindOnce(
+      [](PrefService* local_state, ::reporting::Status status) {
+        if (!status.ok()) {
+          DVLOG(1) << "Could not enqueue event to reporting queue because of: "
+                   << status;
+          return;
+        }
+
+        ScopedDictPrefUpdate dict_update(local_state,
+                                         kLoginLogoutReporterDictionary);
+        dict_update->Remove(kKioskLoginFailureTimestamp);
+      },
+      &local_state_.get());
+
+  // Enqueue callback should run on the UI thread (current thread) to access
+  // pref service.
+  reporter_helper_->ReportEvent(
+      std::move(record), ::reporting::Priority::SECURITY,
+      base::BindPostTask(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                         std::move(enqueue_cb)));
+}
+
 }  // namespace reporting
-}  // namespace chromeos
+}  // namespace ash

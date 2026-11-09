@@ -1,39 +1,31 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/shell_dialogs/shell_dialog_linux.h"
-
 #include "base/notreached.h"
-#include "build/chromeos_buildflags.h"
+#include "build/config/linux/dbus/buildflags.h"
+#include "ui/linux/linux_ui.h"
+#include "ui/shell_dialogs/select_file_dialog_linux.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 
-namespace {
-
-ui::ShellDialogLinux* g_shell_dialog_linux = nullptr;
-
-}  // namespace
+#if BUILDFLAG(USE_DBUS)
+#include "ui/shell_dialogs/select_file_dialog_linux_portal.h"
+#endif
 
 namespace ui {
-
-void ShellDialogLinux::SetInstance(ShellDialogLinux* instance) {
-  g_shell_dialog_linux = instance;
-}
-
-const ShellDialogLinux* ShellDialogLinux::instance() {
-  return g_shell_dialog_linux;
-}
 
 SelectFileDialog* CreateSelectFileDialog(
     SelectFileDialog::Listener* listener,
     std::unique_ptr<SelectFilePolicy> policy) {
-#if defined(USE_AURA) && !BUILDFLAG(IS_CHROMEOS_ASH)
-  const ui::ShellDialogLinux* shell_dialogs = ui::ShellDialogLinux::instance();
-  if (shell_dialogs)
-    return shell_dialogs->CreateSelectFileDialog(listener, std::move(policy));
-#endif
-  NOTIMPLEMENTED();
+#if BUILDFLAG(USE_DBUS)
+  return new SelectFileDialogLinuxPortal(listener, std::move(policy));
+#else
+  const LinuxUi* linux_ui = LinuxUi::instance();
+  if (linux_ui) {
+    return linux_ui->CreateSelectFileDialog(listener, std::move(policy));
+  }
   return nullptr;
+#endif
 }
 
 }  // namespace ui

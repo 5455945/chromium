@@ -1,16 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/permissions/crowd_deny_safe_browsing_request.h"
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/task/post_task.h"
+#include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "chrome/browser/permissions/crowd_deny_fake_safe_browsing_database_manager.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -21,6 +22,31 @@ namespace {
 constexpr char kTestOriginFoo[] = "https://foo.com";
 constexpr char kTestOriginBar[] = "https://bar.com";
 
+class V5TestingDatabaseManager
+    : public CrowdDenyFakeSafeBrowsingDatabaseManager {
+ public:
+  V5TestingDatabaseManager() = default;
+
+  bool CheckNotificationAbuseUrl(const GURL& url, Client* client) override {
+    if (client) {
+      v5_manager_from_client_ = client->GetV5GetHashProtocolManager();
+      client->OnCheckNotificationAbuseUrlResult(/*is_abusive=*/false);
+    }
+    return false;
+  }
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  v5_manager_from_client() const {
+    return v5_manager_from_client_;
+  }
+
+ private:
+  ~V5TestingDatabaseManager() override = default;
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+      v5_manager_from_client_;
+};
+
 }  // namespace
 
 class CrowdDenySafeBrowsingRequestTest : public testing::Test {
@@ -30,6 +56,12 @@ class CrowdDenySafeBrowsingRequestTest : public testing::Test {
   CrowdDenySafeBrowsingRequestTest()
       : fake_database_manager_(
             base::MakeRefCounted<CrowdDenyFakeSafeBrowsingDatabaseManager>()) {}
+
+  CrowdDenySafeBrowsingRequestTest(const CrowdDenySafeBrowsingRequestTest&) =
+      delete;
+  CrowdDenySafeBrowsingRequestTest& operator=(
+      const CrowdDenySafeBrowsingRequestTest&) = delete;
+
   ~CrowdDenySafeBrowsingRequestTest() override = default;
 
  protected:
@@ -47,8 +79,9 @@ class CrowdDenySafeBrowsingRequestTest : public testing::Test {
                                              Verdict expected_verdict) {
     base::HistogramTester histogram_tester;
     base::MockOnceCallback<void(Verdict)> mock_callback_receiver;
-    CrowdDenySafeBrowsingRequest request(fake_database_manager(), test_clock(),
-                                         origin, mock_callback_receiver.Get());
+    CrowdDenySafeBrowsingRequest request(
+        fake_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr,
+        test_clock(), origin, mock_callback_receiver.Get());
     EXPECT_CALL(mock_callback_receiver, Run(expected_verdict));
     task_environment()->RunUntilIdle();
 
@@ -65,8 +98,6 @@ class CrowdDenySafeBrowsingRequestTest : public testing::Test {
 
   scoped_refptr<CrowdDenyFakeSafeBrowsingDatabaseManager>
       fake_database_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrowdDenySafeBrowsingRequestTest);
 };
 
 TEST_F(CrowdDenySafeBrowsingRequestTest, Acceptable_SynchronousCompletion) {
@@ -80,28 +111,19 @@ TEST_F(CrowdDenySafeBrowsingRequestTest, Acceptable_UnavailableMetaData) {
       url::Origin::Create(GURL(kTestOriginFoo)), Verdict::kAcceptable);
 }
 
-TEST_F(CrowdDenySafeBrowsingRequestTest, Acceptable_UnknownAPIName) {
+TEST_F(CrowdDenySafeBrowsingRequestTest, Acceptable_ExplicitSafeVerdict) {
   const GURL kTestURL(kTestOriginFoo);
-
-  safe_browsing::ThreatMetadata test_metadata;
-  test_metadata.api_permissions.emplace("");
-  test_metadata.api_permissions.emplace("Stuff");
-  test_metadata.api_permissions.emplace("NOTIFICATION");   // Singular.
-  test_metadata.api_permissions.emplace("notifications");  // Lowercase.
-  fake_database_manager()->SetSimulatedMetadataForUrl(kTestURL, test_metadata);
+  fake_database_manager()->SetSimulatedVerdictForUrl(kTestURL,
+                                                     /*is_abusive=*/false);
 
   StartRequestForOriginAndExpectVerdict(url::Origin::Create(kTestURL),
                                         Verdict::kAcceptable);
 }
 
-TEST_F(CrowdDenySafeBrowsingRequestTest, Spammy) {
+TEST_F(CrowdDenySafeBrowsingRequestTest, Unacceptable_NotificationAbuse) {
   const GURL kTestURL(kTestOriginFoo);
-
-  safe_browsing::ThreatMetadata test_metadata;
-  test_metadata.api_permissions.emplace("BANANAS");
-  test_metadata.api_permissions.emplace("NOTIFICATIONS");
-  test_metadata.api_permissions.emplace("ORANGES");
-  fake_database_manager()->SetSimulatedMetadataForUrl(kTestURL, test_metadata);
+  fake_database_manager()->SetSimulatedVerdictForUrl(kTestURL,
+                                                     /*is_abusive=*/true);
 
   StartRequestForOriginAndExpectVerdict(url::Origin::Create(kTestURL),
                                         Verdict::kUnacceptable);
@@ -115,12 +137,13 @@ TEST_F(CrowdDenySafeBrowsingRequestTest, Timeout) {
   base::HistogramTester histogram_tester;
   base::MockOnceCallback<void(Verdict)> mock_callback_receiver;
   CrowdDenySafeBrowsingRequest request(
-      fake_database_manager(), test_clock(),
-      url::Origin::Create(GURL(kTestOriginFoo)), mock_callback_receiver.Get());
+      fake_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr,
+      test_clock(), url::Origin::Create(GURL(kTestOriginFoo)),
+      mock_callback_receiver.Get());
 
   // Verify the request doesn't time out unreasonably fast.
   EXPECT_CALL(mock_callback_receiver, Run(testing::_)).Times(0);
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(100));
+  task_environment()->FastForwardBy(base::Milliseconds(100));
   testing::Mock::VerifyAndClearExpectations(&mock_callback_receiver);
 
   // But that it eventually does.
@@ -143,8 +166,8 @@ TEST_F(CrowdDenySafeBrowsingRequestTest, AbandonedImmediately) {
 
   {
     CrowdDenySafeBrowsingRequest request(
-        fake_database_manager(), test_clock(),
-        url::Origin::Create(GURL(kTestOriginFoo)),
+        fake_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr,
+        test_clock(), url::Origin::Create(GURL(kTestOriginFoo)),
         mock_callback_receiver.Get());
   }
 
@@ -161,10 +184,37 @@ TEST_F(CrowdDenySafeBrowsingRequestTest, AbandonedWhileCheckPending) {
   EXPECT_CALL(mock_callback_receiver, Run(testing::_)).Times(0);
 
   CrowdDenySafeBrowsingRequest request(
-      fake_database_manager(), test_clock(),
-      url::Origin::Create(GURL(kTestOriginFoo)), mock_callback_receiver.Get());
+      fake_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr,
+      test_clock(), url::Origin::Create(GURL(kTestOriginFoo)),
+      mock_callback_receiver.Get());
 
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(100));
+  task_environment()->FastForwardBy(base::Milliseconds(100));
   EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("Permissions."),
               testing::IsEmpty());
+}
+
+TEST_F(CrowdDenySafeBrowsingRequestTest, GetV5GetHashProtocolManager) {
+  scoped_refptr<V5TestingDatabaseManager> v5_db_manager =
+      base::MakeRefCounted<V5TestingDatabaseManager>();
+
+  safe_browsing::V5GetHashProtocolManager v5_protocol_manager(
+      /*url_loader_factory=*/nullptr,
+      safe_browsing::SBProtocolConfig(/*client_name=*/"test",
+                                      /*disable_auto_update=*/false,
+                                      /*key_param=*/"key", /*version=*/"1.0"),
+      /*cache=*/nullptr,
+      /*webui_delegate=*/nullptr);
+
+  base::RunLoop run_loop;
+  CrowdDenySafeBrowsingRequest request(
+      v5_db_manager, v5_protocol_manager.GetWeakPtr(), test_clock(),
+      url::Origin::Create(GURL(kTestOriginFoo)),
+      base::BindOnce(
+          [](base::RunLoop* run_loop, Verdict verdict) { run_loop->Quit(); },
+          &run_loop));
+
+  EXPECT_EQ(v5_db_manager->v5_manager_from_client().get(),
+            &v5_protocol_manager);
+
+  run_loop.Run();
 }

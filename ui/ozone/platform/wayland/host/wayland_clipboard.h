@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/ozone/platform/wayland/host/wayland_data_device.h"
 #include "ui/ozone/public/platform_clipboard.h"
@@ -40,10 +42,8 @@ class WaylandClipboard : public PlatformClipboard {
   ~WaylandClipboard() override;
 
   // PlatformClipboard.
-  void OfferClipboardData(
-      ClipboardBuffer buffer,
-      const PlatformClipboard::DataMap& data_map,
-      PlatformClipboard::OfferDataClosure callback) override;
+  void OfferClipboardData(ClipboardBuffer buffer,
+                          const PlatformClipboard::DataMap& data_map) override;
   void RequestClipboardData(
       ClipboardBuffer buffer,
       const std::string& mime_type,
@@ -51,22 +51,26 @@ class WaylandClipboard : public PlatformClipboard {
   void GetAvailableMimeTypes(
       ClipboardBuffer buffer,
       PlatformClipboard::GetMimeTypesClosure callback) override;
-  bool IsSelectionOwner(ClipboardBuffer buffer) override;
+  void IsSelectionOwner(ClipboardBuffer buffer,
+                        IsSelectionOwnerClosure callback) override;
   void SetClipboardDataChangedCallback(
       ClipboardDataChangedCallback data_changed_callback) override;
   bool IsSelectionBufferAvailable() const override;
 
  private:
+  friend class WaylandClipboardTest;
   // Get the wl::Clipboard instance owning a given |buffer|. Can return null in
   // case |buffer| is unsupported. E.g: primary selection is not available.
   wl::Clipboard* GetClipboard(ClipboardBuffer buffer);
 
   // WaylandConnection providing optional data device managers, e.g: gtk
   // primary selection.
-  WaylandConnection* const connection_;
+  const raw_ptr<WaylandConnection> connection_;
 
   const std::unique_ptr<wl::Clipboard> copypaste_clipboard_;
   std::unique_ptr<wl::Clipboard> primary_selection_clipboard_;
+
+  base::WeakPtrFactory<WaylandClipboard> weak_factory_{this};
 };
 
 }  // namespace ui

@@ -1,18 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_FEEDBACK_CONTENT_FEEDBACK_UPLOADER_FACTORY_H_
 #define COMPONENTS_FEEDBACK_CONTENT_FEEDBACK_UPLOADER_FACTORY_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
-
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-}  // namespace base
 
 namespace content {
 class BrowserContext;
@@ -32,22 +26,23 @@ class FeedbackUploaderFactory : public BrowserContextKeyedServiceFactory {
   static FeedbackUploader* GetForBrowserContext(
       content::BrowserContext* context);
 
+  FeedbackUploaderFactory(const FeedbackUploaderFactory&) = delete;
+  FeedbackUploaderFactory& operator=(const FeedbackUploaderFactory&) = delete;
+
  protected:
   FeedbackUploaderFactory(const char* service_name);
   ~FeedbackUploaderFactory() override;
 
  private:
-  friend struct base::DefaultSingletonTraits<FeedbackUploaderFactory>;
+  friend base::NoDestructor<FeedbackUploaderFactory>;
 
   FeedbackUploaderFactory();
 
   // BrowserContextKeyedServiceFactory overrides:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(FeedbackUploaderFactory);
 };
 
 }  // namespace feedback

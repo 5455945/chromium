@@ -1,34 +1,34 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/testing/layer_tree_host_embedder.h"
 
-#include "base/threading/thread_task_runner_handle.h"
+#include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 
 namespace blink {
 
 LayerTreeHostEmbedder::LayerTreeHostEmbedder()
     : LayerTreeHostEmbedder(/*client=*/nullptr,
-                            /*single_thread_client=*/nullptr) {}
+                            /*single_thread_delegate=*/nullptr) {}
 
 LayerTreeHostEmbedder::LayerTreeHostEmbedder(
-    cc::LayerTreeHostClient* client,
-    cc::LayerTreeHostSingleThreadClient* single_thread_client) {
+    cc::LayerTreeHostDelegate* client,
+    cc::LayerTreeHostSingleThreadDelegate* single_thread_delegate) {
   cc::LayerTreeSettings settings;
   settings.single_thread_proxy_scheduler = false;
   settings.use_layer_lists = true;
   animation_host_ = cc::AnimationHost::CreateMainInstance();
   cc::LayerTreeHost::InitParams params;
-  params.client = client ? client : &layer_tree_host_client_;
+  params.client = client ? client : &layer_tree_host_delegate_;
   params.settings = &settings;
-  params.main_task_runner = base::ThreadTaskRunnerHandle::Get();
+  params.main_task_runner = scheduler::GetSingleThreadTaskRunnerForTesting();
   params.task_graph_runner = &task_graph_runner_;
   params.mutator_host = animation_host_.get();
 
   layer_tree_host_ = cc::LayerTreeHost::CreateSingleThreaded(
-      single_thread_client ? single_thread_client
-                           : &layer_tree_host_single_thread_client_,
+      single_thread_delegate ? single_thread_delegate
+                             : &layer_tree_host_single_thread_delegate_,
       std::move(params));
 }
 

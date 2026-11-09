@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,13 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/process/process_metrics.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
 
@@ -59,8 +57,8 @@ int GetSystemReservedKb() {
 }  // namespace
 
 CastSystemMemoryPressureEvaluator::CastSystemMemoryPressureEvaluator(
-    std::unique_ptr<util::MemoryPressureVoter> voter)
-    : util::SystemMemoryPressureEvaluator(std::move(voter)),
+    std::unique_ptr<memory_pressure::MemoryPressureVoter> voter)
+    : memory_pressure::SystemMemoryPressureEvaluator(std::move(voter)),
       critical_memory_fraction_command_line_(
           GetSwitchValueDouble(switches::kCastMemoryPressureCriticalFraction,
                                -1.0f)),
@@ -68,7 +66,7 @@ CastSystemMemoryPressureEvaluator::CastSystemMemoryPressureEvaluator(
           GetSwitchValueDouble(switches::kCastMemoryPressureModerateFraction,
                                -1.0f)),
       system_reserved_kb_(GetSystemReservedKb()),
-      task_runner_(base::ThreadTaskRunnerHandle::Get()),
+      task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       weak_ptr_factory_(this) {
   relaxed_critical_memory_fraction_ = kRelaxedCriticalMemoryFraction;
   relaxed_moderate_memory_fraction_ = kRelaxedModerateMemoryFraction;
@@ -85,66 +83,57 @@ CastSystemMemoryPressureEvaluator::~CastSystemMemoryPressureEvaluator() =
 
 void CastSystemMemoryPressureEvaluator::PollPressureLevel() {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  base::MemoryPressureListener::MemoryPressureLevel level =
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
+  base::MemoryPressureLevel level = base::MEMORY_PRESSURE_LEVEL_NONE;
 
-  base::SystemMemoryInfoKB info;
+  base::SystemMemoryInfo info;
   if (!base::GetSystemMemoryInfo(&info)) {
     LOG(ERROR) << "GetSystemMemoryInfo failed";
-  } else if (system_reserved_kb_ != 0 || info.available != 0) {
+  } else if (system_reserved_kb_ != 0 || !info.available.is_zero()) {
     // Preferred memory pressure heuristic:
     // 1. Use /proc/meminfo's MemAvailable if possible, fall back to estimate
     // of free + buffers + cached otherwise.
-    const int total_available = (info.available != 0)
-                                    ? info.available
-                                    : (info.free + info.buffers + info.cached);
+    const int total_available =
+        (!info.available.is_zero())
+            ? info.available.InKiB()
+            : (info.free + info.buffers + info.cached).InKiB();
 
     // 2. Allow some memory to be 'reserved' on command line.
     const int available = total_available - system_reserved_kb_;
-    const int total = info.total - system_reserved_kb_;
+    const int total = info.total.InKiB() - system_reserved_kb_;
     DCHECK_GT(total, 0);
     const float ratio = available / static_cast<float>(total);
 
     if (ratio < critical_memory_fraction_)
-      level = base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL;
+      level = base::MEMORY_PRESSURE_LEVEL_CRITICAL;
     else if (ratio < moderate_memory_fraction_)
-      level = base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE;
+      level = base::MEMORY_PRESSURE_LEVEL_MODERATE;
   } else {
     // Backup method purely using 'free' memory.  It may generate more
     // pressure events than necessary, since more memory may actually be free.
-    if (info.free < kCriticalFreeMemoryKB)
-      level = base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL;
-    else if (info.free < kModerateFreeMemoryKB)
-      level = base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE;
+    if (info.free.InKiB() < kCriticalFreeMemoryKB) {
+      level = base::MEMORY_PRESSURE_LEVEL_CRITICAL;
+    } else if (info.free.InKiB() < kModerateFreeMemoryKB) {
+      level = base::MEMORY_PRESSURE_LEVEL_MODERATE;
+    }
   }
 
   UpdateMemoryPressureLevel(level);
-
-  UMA_HISTOGRAM_PERCENTAGE("Platform.MeminfoMemFree",
-                           (info.free * 100.0) / info.total);
-  UMA_HISTOGRAM_CUSTOM_COUNTS("Platform.Cast.MeminfoMemFreeDerived2",
-                              (info.free + info.buffers + info.cached) / 1024,
-                              1, 2000, 100);
-  if (info.available != 0) {
-    UMA_HISTOGRAM_CUSTOM_COUNTS("Platform.Cast.MeminfoMemAvailable2",
-                                info.available / 1024, 1, 2000, 100);
-  }
 
   task_runner_->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&CastSystemMemoryPressureEvaluator::PollPressureLevel,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(kPollingIntervalMS));
+      base::Milliseconds(kPollingIntervalMS));
 }
 
 void CastSystemMemoryPressureEvaluator::UpdateMemoryPressureLevel(
-    base::MemoryPressureListener::MemoryPressureLevel new_level) {
+    base::MemoryPressureLevel new_level) {
   DCHECK(task_runner_->BelongsToCurrentThread());
   auto old_vote = current_vote();
   SetCurrentVote(new_level);
 
   SendCurrentVote(/* notify = */ current_vote() !=
-                  base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE);
+                  base::MEMORY_PRESSURE_LEVEL_NONE);
 
   if (old_vote == current_vote())
     return;

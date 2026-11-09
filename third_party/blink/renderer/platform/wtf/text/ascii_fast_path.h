@@ -24,22 +24,24 @@
 
 #include <stdint.h>
 
+#include <limits>
+#include <ranges>
+
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
 #include "build/build_config.h"
-#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
-#include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
-#if defined(OS_MAC) && defined(ARCH_CPU_X86_FAMILY)
-#include <emmintrin.h>
-#endif
-
-namespace WTF {
+namespace blink {
 
 // Assuming that a pointer is the size of a "machine word", then
 // uintptr_t is an integer type that is also a machine word.
-typedef uintptr_t MachineWord;
+using MachineWord = uintptr_t;
 const uintptr_t kMachineWordAlignmentMask = sizeof(MachineWord) - 1;
 
 inline bool IsAlignedToMachineWord(const void* pointer) {
@@ -53,72 +55,81 @@ inline T* AlignToMachineWord(T* pointer) {
 }
 
 template <size_t size, typename CharacterType>
-struct NonASCIIMask;
+struct NonAsciiMask;
 template <>
-struct NonASCIIMask<4, UChar> {
+struct NonAsciiMask<4, UChar> {
   static inline uint32_t Value() { return 0xFF80FF80U; }
 };
 template <>
-struct NonASCIIMask<4, LChar> {
+struct NonAsciiMask<4, LChar> {
   static inline uint32_t Value() { return 0x80808080U; }
 };
 template <>
-struct NonASCIIMask<8, UChar> {
+struct NonAsciiMask<8, UChar> {
   static inline uint64_t Value() { return 0xFF80FF80FF80FF80ULL; }
 };
 template <>
-struct NonASCIIMask<8, LChar> {
+struct NonAsciiMask<8, LChar> {
   static inline uint64_t Value() { return 0x8080808080808080ULL; }
 };
 
 template <typename CharacterType>
-inline bool IsAllASCII(MachineWord word) {
-  return !(word & NonASCIIMask<sizeof(MachineWord), CharacterType>::Value());
+inline bool IsAllAscii(MachineWord word) {
+  return !(word & NonAsciiMask<sizeof(MachineWord), CharacterType>::Value());
 }
 
-struct ASCIIStringAttributes {
-  ASCIIStringAttributes(bool contains_only_ascii, bool is_lower_ascii)
+struct AsciiStringAttributes {
+  AsciiStringAttributes(bool contains_only_ascii, bool is_lower_ascii)
       : contains_only_ascii(contains_only_ascii),
         is_lower_ascii(is_lower_ascii) {}
-  unsigned contains_only_ascii : 1;
-  unsigned is_lower_ascii : 1;
+  uint32_t contains_only_ascii : 1;
+
+  // True if there are no upper-case ascii characters in the string.
+  // Only valid if contains_only_ascii is true.
+  uint32_t is_lower_ascii : 1;
 };
 
 // Note: This function assumes the input is likely all ASCII, and
 // does not leave early if it is not the case.
 template <typename CharacterType>
-ALWAYS_INLINE ASCIIStringAttributes
-CharacterAttributes(const CharacterType* characters, size_t length) {
-  DCHECK_GT(length, 0u);
+ALWAYS_INLINE AsciiStringAttributes
+CharacterAttributes(base::span<const CharacterType> chars) {
+  DCHECK_GT(chars.size(), 0u);
 
   // Performance note: This loop will not vectorize properly in -Oz. Ensure
   // the calling code is built with -O2.
   CharacterType all_char_bits = 0;
   bool contains_upper_case = false;
-  for (size_t i = 0; i < length; i++) {
-    all_char_bits |= characters[i];
-    contains_upper_case |= IsASCIIUpper(characters[i]);
+  for (CharacterType ch : chars) {
+    all_char_bits |= ch;
+    contains_upper_case |= IsAsciiUpper(ch);
   }
 
-  return ASCIIStringAttributes(IsASCII(all_char_bits), !contains_upper_case);
+  return AsciiStringAttributes(IsAscii(all_char_bits), !contains_upper_case);
 }
 
+// Fast-path specialization for LChar as it's called very frequently by
+// String::FromUTF8.
+template <>
+WTF_EXPORT AsciiStringAttributes
+CharacterAttributes(base::span<const LChar> chars);
+
+// Returns true if `chars` contains no ASCII upper letters, or is empty.
 template <typename CharacterType>
-ALWAYS_INLINE bool IsLowerASCII(const CharacterType* characters,
-                                size_t length) {
+ALWAYS_INLINE bool ContainsNoAsciiUpper(base::span<const CharacterType> chars) {
   bool contains_upper_case = false;
-  for (wtf_size_t i = 0; i < length; i++) {
-    contains_upper_case |= IsASCIIUpper(characters[i]);
+  for (CharacterType ch : chars) {
+    contains_upper_case |= IsAsciiUpper(ch);
   }
   return !contains_upper_case;
 }
 
+// Returns true if `chars` contains no ASCII lower letters, or is empty.
 template <typename CharacterType>
-ALWAYS_INLINE bool IsUpperASCII(const CharacterType* characters,
-                                size_t length) {
+ALWAYS_INLINE bool ContainsNoAsciiLower(base::span<const CharacterType> chars) {
   bool contains_lower_case = false;
-  for (wtf_size_t i = 0; i < length; i++) {
-    contains_lower_case |= IsASCIILower(characters[i]);
+  for (CharacterType ch : chars) {
+    contains_lower_case |= IsAsciiLower(ch);
   }
   return !contains_lower_case;
 }
@@ -126,139 +137,49 @@ ALWAYS_INLINE bool IsUpperASCII(const CharacterType* characters,
 class LowerConverter {
  public:
   template <typename CharType>
-  ALWAYS_INLINE static bool IsCorrectCase(CharType* characters, size_t length) {
-    return IsLowerASCII(characters, length);
+  ALWAYS_INLINE static bool IsCorrectCase(base::span<const CharType> chars) {
+    return ContainsNoAsciiUpper(chars);
   }
 
   template <typename CharType>
   ALWAYS_INLINE static CharType Convert(CharType ch) {
-    return ToASCIILower(ch);
+    return ToAsciiLower(ch);
   }
 };
 
 class UpperConverter {
  public:
   template <typename CharType>
-  ALWAYS_INLINE static bool IsCorrectCase(CharType* characters, size_t length) {
-    return IsUpperASCII(characters, length);
+  ALWAYS_INLINE static bool IsCorrectCase(base::span<const CharType> chars) {
+    return ContainsNoAsciiLower(chars);
   }
 
   template <typename CharType>
   ALWAYS_INLINE static CharType Convert(CharType ch) {
-    return ToASCIIUpper(ch);
+    return ToAsciiUpper(ch);
   }
 };
 
 template <typename StringType, typename Converter, typename Allocator>
-ALWAYS_INLINE typename Allocator::ResultStringType ConvertASCIICase(
+ALWAYS_INLINE typename Allocator::ResultStringType ConvertAsciiCase(
     const StringType& string,
     Converter&& converter,
     Allocator&& allocator) {
   CHECK_LE(string.length(), std::numeric_limits<wtf_size_t>::max());
+  return VisitCharacters(string, [&](auto chars) {
+    // Callers must ensure that the string needs conversion.
+    DCHECK(!converter.IsCorrectCase(chars));
 
-  // First scan the string for uppercase and non-ASCII characters:
-  wtf_size_t length = string.length();
-  if (string.Is8Bit()) {
-    if (converter.IsCorrectCase(string.Characters8(), length)) {
-      return allocator.CoerceOriginal(string);
-    }
+    base::span<typename decltype(chars)::value_type> data;
+    auto new_impl = allocator.Alloc(string.length(), data);
 
-    LChar* data8;
-    auto new_impl = allocator.Alloc(length, data8);
-
-    for (wtf_size_t i = 0; i < length; ++i) {
-      data8[i] = converter.Convert(string.Characters8()[i]);
+    for (auto [dest, src] : std::views::zip(data, chars)) {
+      dest = converter.Convert(src);
     }
     return new_impl;
-  }
-
-  if (converter.IsCorrectCase(string.Characters16(), length)) {
-    return allocator.CoerceOriginal(string);
-  }
-
-  UChar* data16;
-  auto new_impl = allocator.Alloc(length, data16);
-
-  for (wtf_size_t i = 0; i < length; ++i) {
-    data16[i] = converter.Convert(string.Characters16()[i]);
-  }
-  return new_impl;
+  });
 }
 
-inline void CopyLCharsFromUCharSource(LChar* destination,
-                                      const UChar* source,
-                                      size_t length) {
-#if defined(OS_MAC) && defined(ARCH_CPU_X86_FAMILY)
-  const uintptr_t kMemoryAccessSize =
-      16;  // Memory accesses on 16 byte (128 bit) alignment
-  const uintptr_t kMemoryAccessMask = kMemoryAccessSize - 1;
-
-  size_t i = 0;
-  for (; i < length &&
-         reinterpret_cast<uintptr_t>(&source[i]) & kMemoryAccessMask;
-       ++i) {
-    DCHECK(!(source[i] & 0xff00));
-    destination[i] = static_cast<LChar>(source[i]);
-  }
-
-  const uintptr_t kSourceLoadSize =
-      32;  // Process 32 bytes (16 UChars) each iteration
-  const size_t kUcharsPerLoop = kSourceLoadSize / sizeof(UChar);
-  if (length > kUcharsPerLoop) {
-    const size_t end_length = length - kUcharsPerLoop + 1;
-    for (; i < end_length; i += kUcharsPerLoop) {
-#if DCHECK_IS_ON()
-      for (unsigned check_index = 0; check_index < kUcharsPerLoop;
-           ++check_index)
-        DCHECK(!(source[i + check_index] & 0xff00));
-#endif
-      __m128i first8u_chars =
-          _mm_load_si128(reinterpret_cast<const __m128i*>(&source[i]));
-      __m128i second8u_chars =
-          _mm_load_si128(reinterpret_cast<const __m128i*>(&source[i + 8]));
-      __m128i packed_chars = _mm_packus_epi16(first8u_chars, second8u_chars);
-      _mm_storeu_si128(reinterpret_cast<__m128i*>(&destination[i]),
-                       packed_chars);
-    }
-  }
-
-  for (; i < length; ++i) {
-    DCHECK(!(source[i] & 0xff00));
-    destination[i] = static_cast<LChar>(source[i]);
-  }
-#elif defined(COMPILER_GCC) && defined(CPU_ARM_NEON) && \
-    !defined(ARCH_CPU_BIG_ENDIAN) && defined(NDEBUG)
-  const LChar* const end = destination + length;
-  const uintptr_t kMemoryAccessSize = 8;
-
-  if (length >= (2 * kMemoryAccessSize) - 1) {
-    // Prefix: align dst on 64 bits.
-    const uintptr_t kMemoryAccessMask = kMemoryAccessSize - 1;
-    while (reinterpret_cast<uintptr_t>(destination) & kMemoryAccessMask)
-      *destination++ = static_cast<LChar>(*source++);
-
-    // Vector interleaved unpack, we only store the lower 8 bits.
-    const uintptr_t length_left = end - destination;
-    const LChar* const simd_end = end - (length_left % kMemoryAccessSize);
-    do {
-      asm("vld2.8   { d0-d1 }, [%[SOURCE]] !\n\t"
-          "vst1.8   { d0 }, [%[DESTINATION],:64] !\n\t"
-          : [SOURCE] "+r"(source), [DESTINATION] "+r"(destination)
-          :
-          : "memory", "d0", "d1");
-    } while (destination != simd_end);
-  }
-
-  while (destination != end)
-    *destination++ = static_cast<LChar>(*source++);
-#else
-  for (size_t i = 0; i < length; ++i) {
-    DCHECK(!(source[i] & 0xff00));
-    destination[i] = static_cast<LChar>(source[i]);
-  }
-#endif
-}
-
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_ASCII_FAST_PATH_H_

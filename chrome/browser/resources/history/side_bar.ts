@@ -1,74 +1,191 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import 'chrome://resources/cr_components/managed_footnote/managed_footnote.js';
-import 'chrome://resources/cr_elements/cr_icons_css.m.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
-import 'chrome://resources/cr_elements/icons.m.js';
-import 'chrome://resources/cr_elements/shared_vars_css.m.js';
-import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
-import 'chrome://resources/polymer/v3_0/iron-selector/iron-selector.js';
-import 'chrome://resources/polymer/v3_0/paper-ripple/paper-ripple.js';
-import 'chrome://resources/polymer/v3_0/paper-styles/color.js';
-import './shared_style.js';
-import './strings.m.js';
+import 'chrome://resources/cr_elements/cr_ripple/cr_ripple.js';
+import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import './shared_icons.html.js';
+import './shared_vars.css.js';
+import '/strings.m.js';
 
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-import {PaperRippleElement} from 'chrome://resources/polymer/v3_0/paper-ripple/paper-ripple.js';
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {CrMenuSelectorElement} from 'chrome://resources/cr_elements/cr_menu_selector/cr_menu_selector.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserService} from './browser_service.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
+import {Page, TABBED_PAGES} from './router.js';
+import {getCss} from './side_bar.css.js';
+import {getHtml} from './side_bar.html.js';
 
-export type FooterInfo = {
-  managed: boolean,
-  otherFormsOfHistory: boolean,
-};
+export interface FooterInfo {
+  managed: boolean;
+  otherFormsOfHistory: boolean;
+  geminiAppsActivity: boolean;
+}
 
 export interface HistorySideBarElement {
   $: {
-    'cbd-ripple': PaperRippleElement,
+    history: HTMLAnchorElement,
+    menu: CrMenuSelectorElement,
+    syncedTabs: HTMLElement,
   };
 }
 
-export class HistorySideBarElement extends PolymerElement {
+export class HistorySideBarElement extends CrLitElement {
   static get is() {
     return 'history-side-bar';
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
+      footerInfo: {type: Object},
+
+      historyClustersEnabled: {type: Boolean},
+
+      historyClustersVisible: {
+        type: Boolean,
+        notify: true,
+      },
+
+      /* The id of the currently selected page. */
       selectedPage: {
         type: String,
         notify: true,
       },
 
-      guestSession_: Boolean,
+      /* The index of the currently selected tab. */
+      selectedTab: {
+        type: Number,
+        notify: true,
+      },
 
-      footerInfo: Object,
+      guestSession_: {type: Boolean},
 
       /**
        * Used to display notices for profile sign-in status and managed status.
        */
-      showFooter_: {
-        type: Boolean,
-        computed: 'computeShowFooter_(' +
-            'footerInfo.otherFormsOfHistory, footerInfo.managed)',
-      },
+      showFooter_: {type: Boolean},
+      /**
+       * Used to display Google Account section in the footer. This section
+       * contains links to Google My Activity and/or Gemini Apps Activity.
+       *
+       * When this property is true, `showFooter_` property should also be true.
+       */
+      showGoogleAccountFooter_: {type: Boolean},
+      /**
+       * Mutually exclusive flags that determine which message to show in the
+       * Google Account footer:
+       *   - message with Google My Activity (GMA) link
+       *   - message with Gemini Apps Activity (GAA) link
+       *   - message with both Google My Activity (GMA) and
+       *     Gemini Apps Activity (GAA) links.
+       *
+       * At most one of these can be true.
+       */
+      showGMAOnly_: {type: Boolean},
+      showGAAOnly_: {type: Boolean},
+      showGMAAndGAA_: {type: Boolean},
+
+      showHistoryClusters_: {type: Boolean},
     };
   }
 
-  private guestSession_ = loadTimeData.getBoolean('isGuestSession');
-  footerInfo: FooterInfo;
+  accessor footerInfo: FooterInfo = {
+    managed: false,
+    otherFormsOfHistory: false,
+    geminiAppsActivity: false,
+  };
+  accessor historyClustersEnabled: boolean = false;
+  accessor historyClustersVisible: boolean = false;
+  accessor selectedPage: string = '';
+  accessor selectedTab: number = -1;
+  protected accessor guestSession_ = loadTimeData.getBoolean('isGuestSession');
+  protected accessor showFooter_: boolean = false;
+  protected accessor showGoogleAccountFooter_: boolean = false;
+  protected accessor showGMAOnly_: boolean = false;
+  protected accessor showGAAOnly_: boolean = false;
+  protected accessor showGMAAndGAA_: boolean = false;
+  private accessor showHistoryClusters_: boolean = false;
 
-  /** @override */
-  ready() {
-    super.ready();
+  override connectedCallback() {
+    super.connectedCallback();
     this.addEventListener('keydown', e => this.onKeydown_(e));
+  }
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    if (changedProperties.has('footerInfo')) {
+      this.updateFooterVisibility();
+    }
+    if (changedProperties.has('historyClustersEnabled') ||
+        changedProperties.has('historyClustersVisible')) {
+      this.showHistoryClusters_ =
+          this.historyClustersEnabled && this.historyClustersVisible;
+    }
+  }
+
+  private updateFooterVisibility() {
+    // At most one of these values can be true.
+    this.showGMAOnly_ = false;
+    this.showGAAOnly_ = false;
+    this.showGMAAndGAA_ = false;
+
+    if (this.footerInfo.otherFormsOfHistory &&
+        this.footerInfo.geminiAppsActivity) {
+      this.showGMAAndGAA_ = true;
+    } else if (this.footerInfo.otherFormsOfHistory) {
+      this.showGMAOnly_ = true;
+    } else if (this.footerInfo.geminiAppsActivity) {
+      this.showGAAOnly_ = true;
+    }
+
+    this.showGoogleAccountFooter_ =
+        this.showGMAAndGAA_ || this.showGMAOnly_ || this.showGAAOnly_;
+    this.showFooter_ = this.footerInfo.managed || this.showGoogleAccountFooter_;
+  }
+
+  protected onGoogleAccountFooterClick_(e: Event) {
+    if ((e.target as HTMLElement).tagName !== 'A') {
+      // Do nothing if a link is not clicked.
+      return;
+    }
+
+    e.preventDefault();
+
+    // Proxy URL navigation to fix CI failures in
+    // `js_code_coverage_browser_tests`. The tests fail because Chrome attempts
+    // to open real URLs.
+
+    const browserProxy = BrowserProxyImpl.getInstance();
+    switch ((e.target as HTMLElement).id) {
+      case 'footerGoogleMyActivityLink':
+        browserProxy.recordAction('SideBarFooterGoogleMyActivityClick');
+        browserProxy.navigateToUrl(
+            loadTimeData.getString('sidebarFooterGMALink'), '_blank',
+            e as MouseEvent);
+        break;
+      case 'footerGeminiAppsActivityLink':
+        browserProxy.recordAction('SideBarFooterGeminiAppsActivityClick');
+        browserProxy.navigateToUrl(
+            loadTimeData.getString('sidebarFooterGAALink'), '_blank',
+            e as MouseEvent);
+        break;
+      default:
+        break;
+    }
   }
 
   private onKeydown_(e: KeyboardEvent) {
@@ -77,37 +194,58 @@ export class HistorySideBarElement extends PolymerElement {
     }
   }
 
-  private onSelectorActivate_() {
-    this.dispatchEvent(new CustomEvent(
-        'history-close-drawer', {bubbles: true, composed: true}));
+  protected onMenuIronActivate_() {
+    this.fire('history-close-drawer');
+  }
+
+  protected onSelectorSelectedChanged_(e: CustomEvent<{value: string}>) {
+    this.selectedPage = e.detail.value;
   }
 
   /**
    * Relocates the user to the clear browsing data section of the settings page.
    */
-  private onClearBrowsingDataTap_(e: Event) {
-    const browserService = BrowserService.getInstance();
-    browserService.recordAction('InitClearBrowsingData');
-    browserService.openClearBrowsingData();
-    this.$['cbd-ripple'].upAction();
+  protected onClearBrowsingDataClick_(e: Event) {
+    const browserProxy = BrowserProxyImpl.getInstance();
+    browserProxy.recordAction('InitClearBrowsingData');
+    browserProxy.handler.openClearBrowsingDataDialog();
     e.preventDefault();
-  }
-
-  private computeClearBrowsingDataTabIndex_(): string {
-    return this.guestSession_ ? '-1' : '';
   }
 
   /**
    * Prevent clicks on sidebar items from navigating. These are only links for
-   * accessibility purposes, taps are handled separately by <iron-selector>.
+   * accessibility purposes, taps are handled separately.
    */
-  private onItemClick_(e: Event) {
+  protected onItemClick_(e: Event) {
     e.preventDefault();
   }
 
-  private computeShowFooter_(
-      includeOtherFormsOfBrowsingHistory: boolean, managed: boolean): boolean {
-    return includeOtherFormsOfBrowsingHistory || managed;
+  /**
+   * @returns The url to navigate to when the history menu item is clicked. It
+   *     reflects the currently selected tab.
+   */
+  protected getHistoryItemHref_(): string {
+    return this.showHistoryClusters_ &&
+            TABBED_PAGES[this.selectedTab] === Page.HISTORY_CLUSTERS ?
+        '/' + Page.HISTORY_CLUSTERS :
+        '/';
+  }
+
+  /**
+   * @returns The path that determines if the history menu item is selected. It
+   *     reflects the currently selected tab.
+   */
+  protected getHistoryItemPath_(): string {
+    return this.showHistoryClusters_ &&
+            TABBED_PAGES[this.selectedTab] === Page.HISTORY_CLUSTERS ?
+        Page.HISTORY_CLUSTERS :
+        Page.HISTORY;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'history-side-bar': HistorySideBarElement;
   }
 }
 

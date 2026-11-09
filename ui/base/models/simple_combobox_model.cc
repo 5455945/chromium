@@ -1,10 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/models/simple_combobox_model.h"
 
 #include <utility>
+
+#include "ui/base/models/combobox_model_observer.h"
 
 namespace ui {
 
@@ -34,29 +36,37 @@ SimpleComboboxModel::SimpleComboboxModel(std::vector<Item> items)
 
 SimpleComboboxModel::~SimpleComboboxModel() = default;
 
-int SimpleComboboxModel::GetItemCount() const {
+void SimpleComboboxModel::UpdateItemList(std::vector<Item> items) {
+  items_ = std::move(items);
+
+  for (auto& observer : observers()) {
+    observer.OnComboboxModelChanged(this);
+  }
+}
+
+size_t SimpleComboboxModel::GetItemCount() const {
   return items_.size();
 }
 
-std::u16string SimpleComboboxModel::GetItemAt(int index) const {
+std::u16string SimpleComboboxModel::GetItemAt(size_t index) const {
   return items_[index].text;
 }
 
 std::u16string SimpleComboboxModel::GetDropDownSecondaryTextAt(
-    int index) const {
+    size_t index) const {
   return items_[index].dropdown_secondary_text;
 }
 
-ui::ImageModel SimpleComboboxModel::GetIconAt(int index) const {
+ui::ImageModel SimpleComboboxModel::GetIconAt(size_t index) const {
   return items_[index].icon;
 }
 
-bool SimpleComboboxModel::IsItemSeparatorAt(int index) const {
+bool SimpleComboboxModel::IsItemSeparatorAt(size_t index) const {
   return items_[index].text.empty();
 }
 
-int SimpleComboboxModel::GetDefaultIndex() const {
-  return 0;
+std::optional<size_t> SimpleComboboxModel::GetDefaultIndex() const {
+  return items_.empty() ? std::nullopt : std::make_optional(0u);
 }
 
 }  // namespace ui

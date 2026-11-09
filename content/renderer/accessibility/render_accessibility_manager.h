@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,19 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "content/common/content_export.h"
-#include "content/common/render_accessibility.mojom.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/blink/public/mojom/render_accessibility.mojom.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_event.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/ax_tree_id.h"
 #include "ui/accessibility/ax_tree_update.h"
+#include "ui/accessibility/mojom/ax_updates_and_events.mojom.h"
 
 namespace content {
 
@@ -41,15 +42,21 @@ class RenderAccessibilityImpl;
 // bi-directional communication between the RenderFrameHostImpl object in the
 // browser process and Blink.
 class CONTENT_EXPORT RenderAccessibilityManager
-    : public mojom::RenderAccessibility {
+    : public blink::mojom::RenderAccessibility {
  public:
   RenderAccessibilityManager(RenderFrameImpl* const render_frame);
+
+  RenderAccessibilityManager(const RenderAccessibilityManager&) = delete;
+  RenderAccessibilityManager& operator=(const RenderAccessibilityManager&) =
+      delete;
+
   ~RenderAccessibilityManager() override;
 
   // Binds the |receiver| to process mojo messages. This method is expected to
   // be called only while |receiver_| is in an unbound state.
   void BindReceiver(
-      mojo::PendingAssociatedReceiver<mojom::RenderAccessibility> receiver);
+      mojo::PendingAssociatedReceiver<blink::mojom::RenderAccessibility>
+          receiver);
 
   // Returns a pointer to the RenderAccessibilityImpl object owned by this
   // class. Can return nullptr if accessibility is not enabled in the renderer.
@@ -58,44 +65,45 @@ class CONTENT_EXPORT RenderAccessibilityManager
   // Returns the current accessibility mode for the associated RenderFrameImpl.
   ui::AXMode GetAccessibilityMode() const;
 
-  // mojom::RenderAccessibility implementation.
-  void SetMode(uint32_t ax_mode) override;
+  // blink::mojom::RenderAccessibility implementation.
+  void SetMode(const ui::AXMode& ax_mode, uint32_t reset_token) override;
   void FatalError() override;
-  void HitTest(const gfx::Point& point,
-               ax::mojom::Event event_to_fire,
-               int request_id,
-               mojom::RenderAccessibility::HitTestCallback callback) override;
+  void HitTest(
+      const gfx::Point& point,
+      ax::mojom::Event event_to_fire,
+      int request_id,
+      blink::mojom::RenderAccessibility::HitTestCallback callback) override;
   void PerformAction(const ui::AXActionData& data) override;
-  void Reset(int32_t reset_token) override;
+  void Reset(uint32_t reset_token) override;
 
-  // Communication with the browser process.
-  void HandleAccessibilityEvents(
-      mojom::AXUpdatesAndEventsPtr updates_and_events,
-      int32_t reset_token,
-      mojom::RenderAccessibilityHost::HandleAXEventsCallback callback);
-  void HandleLocationChanges(std::vector<mojom::LocationChangesPtr> changes);
+  // Pass-through methods that communicate with the browser process,
+  // corresponds with blink::mojom::RenderAccessibilityHost.
+  void HandleAXEvents(
+      ui::AXUpdatesAndEvents& updates_and_events,
+      ui::AXLocationAndScrollUpdates& location_and_scroll_updates,
+      uint32_t reset_token,
+      blink::mojom::RenderAccessibilityHost::HandleAXEventsCallback callback);
 
   void CloseConnection();
 
  private:
   // Returns the associated remote used to send messages to the browser process,
   // lazily initializing it the first time it's used.
-  mojo::Remote<mojom::RenderAccessibilityHost>&
+  mojo::Remote<blink::mojom::RenderAccessibilityHost>&
   GetOrCreateRemoteRenderAccessibilityHost();
 
   // The RenderFrameImpl that owns us.
-  RenderFrameImpl* render_frame_;
+  raw_ptr<RenderFrameImpl> render_frame_;
 
   // Valid only while an accessibility mode including kWebContents is set.
   std::unique_ptr<RenderAccessibilityImpl> render_accessibility_;
 
   // Endpoint to receive and handle messages from the browser process.
-  mojo::AssociatedReceiver<mojom::RenderAccessibility> receiver_{this};
+  mojo::AssociatedReceiver<blink::mojom::RenderAccessibility> receiver_{this};
 
   // Endpoint to send messages to the browser process.
-  mojo::Remote<mojom::RenderAccessibilityHost> render_accessibility_host_;
-
-  DISALLOW_COPY_AND_ASSIGN(RenderAccessibilityManager);
+  mojo::Remote<blink::mojom::RenderAccessibilityHost>
+      render_accessibility_host_;
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
+#include "base/values.h"
 #include "url/gurl.h"
 
 namespace apps {
@@ -27,6 +28,10 @@ struct FileHandler {
     ~AcceptEntry();
     AcceptEntry(const AcceptEntry& accept_entry);
 
+    friend bool operator==(const AcceptEntry&, const AcceptEntry&) = default;
+
+    base::Value AsDebugValue() const;
+
     // A MIME type that can be handled by the file handler.
     std::string mime_type;
 
@@ -35,14 +40,28 @@ struct FileHandler {
     base::flat_set<std::string> file_extensions;
   };
 
+  base::Value AsDebugValue() const;
+
   // The URL that will be navigated to when dispatching on a file with a
   // matching MIME type or file extension.
   GURL action;
+
+  // The user-visible name for the file type, e.g. "ACME Word Processor document
+  // file". May be empty.
+  std::u16string display_name;
 
   // A collection of MIME type to file extensions mappings that the handler
   // will match on.
   using Accept = std::vector<AcceptEntry>;
   Accept accept;
+
+  // How the app should be launched in the case where there are multiple files
+  // being opened.
+  enum class LaunchType {
+    kSingleClient,
+    kMultipleClients,
+  };
+  LaunchType launch_type = LaunchType::kSingleClient;
 };
 using FileHandlers = std::vector<FileHandler>;
 
@@ -50,23 +69,21 @@ using FileHandlers = std::vector<FileHandler>;
 std::set<std::string> GetMimeTypesFromFileHandlers(
     const FileHandlers& file_handlers);
 
+// Get a set of all MIME types supported by |file_handler|.
+std::set<std::string> GetMimeTypesFromFileHandler(
+    const FileHandler& file_handler);
+
 // Get a set of all file extensions supported by any of |file_handlers|.
+// Note: These are always transformed to lower-case.
 std::set<std::string> GetFileExtensionsFromFileHandlers(
     const FileHandlers& file_handlers);
 
-// For logging and debug purposes.
-std::ostream& operator<<(std::ostream& out,
-                         const FileHandler::AcceptEntry& accept_entry);
-std::ostream& operator<<(std::ostream& out, const FileHandler& file_handler);
+// Get a set of all file extensions supported by |file_handler|.
+// Note: These are always transformed to lower-case.
+std::set<std::string> GetFileExtensionsFromFileHandler(
+    const FileHandler& file_handler);
 
-bool operator==(const FileHandler::AcceptEntry& accept_entry1,
-                const FileHandler::AcceptEntry& accept_entry2);
 bool operator==(const FileHandler& file_handler1,
-                const FileHandler& file_handler2);
-
-bool operator!=(const FileHandler::AcceptEntry& accept_entry1,
-                const FileHandler::AcceptEntry& accept_entry2);
-bool operator!=(const FileHandler& file_handler1,
                 const FileHandler& file_handler2);
 
 }  // namespace apps

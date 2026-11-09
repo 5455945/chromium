@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,15 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/arc/fileapi/arc_file_system_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "dbus/message.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
+namespace ash {
 namespace {
 
 arc::ArcFileSystemBridge* GetArcFileSystemBridge() {
@@ -33,7 +33,8 @@ arc::ArcFileSystemBridge* GetArcFileSystemBridge() {
 
 }  // namespace
 
-VirtualFileRequestServiceProvider::VirtualFileRequestServiceProvider() {}
+VirtualFileRequestServiceProvider::VirtualFileRequestServiceProvider() =
+    default;
 
 VirtualFileRequestServiceProvider::~VirtualFileRequestServiceProvider() =
     default;
@@ -41,8 +42,8 @@ VirtualFileRequestServiceProvider::~VirtualFileRequestServiceProvider() =
 void VirtualFileRequestServiceProvider::Start(
     scoped_refptr<dbus::ExportedObject> exported_object) {
   exported_object->ExportMethod(
-      kVirtualFileRequestServiceInterface,
-      kVirtualFileRequestServiceHandleReadRequestMethod,
+      chromeos::kVirtualFileRequestServiceInterface,
+      chromeos::kVirtualFileRequestServiceHandleReadRequestMethod,
       base::BindRepeating(&VirtualFileRequestServiceProvider::HandleReadRequest,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce([](const std::string& interface_name,
@@ -51,8 +52,8 @@ void VirtualFileRequestServiceProvider::Start(
             << "Failed to export " << interface_name << "." << method_name;
       }));
   exported_object->ExportMethod(
-      kVirtualFileRequestServiceInterface,
-      kVirtualFileRequestServiceHandleIdReleasedMethod,
+      chromeos::kVirtualFileRequestServiceInterface,
+      chromeos::kVirtualFileRequestServiceHandleIdReleasedMethod,
       base::BindRepeating(&VirtualFileRequestServiceProvider::HandleIdReleased,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce([](const std::string& interface_name,
@@ -71,7 +72,8 @@ void VirtualFileRequestServiceProvider::HandleReadRequest(
   base::ScopedFD pipe_write_end;
   dbus::MessageReader reader(method_call);
   if (!reader.PopString(&id) || !reader.PopInt64(&offset) ||
-      !reader.PopInt64(&size) || !reader.PopFileDescriptor(&pipe_write_end)) {
+      !reader.PopInt64(&size) || !reader.PopFileDescriptor(&pipe_write_end) ||
+      (offset < 0) || (size < 0)) {
     std::move(response_sender)
         .Run(dbus::ErrorResponse::FromMethodCall(
             method_call, DBUS_ERROR_INVALID_ARGS, std::string()));
@@ -111,4 +113,4 @@ void VirtualFileRequestServiceProvider::HandleIdReleased(
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

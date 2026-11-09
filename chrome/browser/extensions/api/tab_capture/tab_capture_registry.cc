@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 #include <memory>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/lazy_instance.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -18,9 +19,20 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/url_constants.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_util.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
+#include "extensions/common/extensions_client.h"
+#include "extensions/common/manifest.h"
+#include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/switches.h"
 #include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 using extensions::tab_capture::TabCaptureState;
@@ -35,35 +47,35 @@ namespace tab_capture = api::tab_capture;
 class TabCaptureRegistry::LiveRequest : public content::WebContentsObserver {
  public:
   LiveRequest(content::WebContents* target_contents,
-              const std::string& extension_id,
+              const ExtensionId& extension_id,
               bool is_anonymous,
               TabCaptureRegistry* registry)
       : content::WebContentsObserver(target_contents),
         extension_id_(extension_id),
         is_anonymous_(is_anonymous),
         registry_(registry),
-        capture_state_(tab_capture::TAB_CAPTURE_STATE_NONE),
-        is_verified_(false),
-        // TODO(miu): This initial value for |is_fullscreened_| is a faulty
-        // assumption.  http://crbug.com/350491
-        is_fullscreened_(false),
-        render_process_id_(
-            target_contents->GetMainFrame()->GetProcess()->GetID()),
-        render_frame_id_(target_contents->GetMainFrame()->GetRoutingID()) {
-    DCHECK(web_contents());
-    DCHECK(registry_);
+        render_process_id_(target_contents->GetPrimaryMainFrame()
+                               ->GetProcess()
+                               ->GetDeprecatedID()),
+        render_frame_id_(
+            target_contents->GetPrimaryMainFrame()->GetRoutingID()) {
+    CHECK(web_contents(), base::NotFatalUntil::M161);
+    CHECK(registry_, base::NotFatalUntil::M161);
   }
 
-  ~LiveRequest() override {}
+  LiveRequest(const LiveRequest&) = delete;
+  LiveRequest& operator=(const LiveRequest&) = delete;
+
+  ~LiveRequest() override = default;
 
   // Accessors.
-  const std::string& extension_id() const { return extension_id_; }
+  const ExtensionId& extension_id() const { return extension_id_; }
   bool is_anonymous() const { return is_anonymous_; }
   TabCaptureState capture_state() const { return capture_state_; }
   bool is_verified() const { return is_verified_; }
 
   void SetIsVerified() {
-    DCHECK(!is_verified_);
+    CHECK(!is_verified_, base::NotFatalUntil::M161);
     is_verified_ = true;
   }
 
@@ -77,8 +89,9 @@ class TabCaptureRegistry::LiveRequest : public content::WebContentsObserver {
     // This method can get duplicate calls if both audio and video were
     // requested, so return early to avoid duplicate dispatching of status
     // change events.
-    if (capture_state_ == next_capture_state)
+    if (capture_state_ == next_capture_state) {
       return;
+    }
 
     capture_state_ = next_capture_state;
     registry_->DispatchStatusChangeEvent(this);
@@ -94,8 +107,9 @@ class TabCaptureRegistry::LiveRequest : public content::WebContentsObserver {
   void DidToggleFullscreenModeForTab(bool entered_fullscreen,
                                      bool will_cause_resize) override {
     is_fullscreened_ = entered_fullscreen;
-    if (capture_state_ == tab_capture::TAB_CAPTURE_STATE_ACTIVE)
+    if (capture_state_ == tab_capture::TabCaptureState::kActive) {
       registry_->DispatchStatusChangeEvent(this);
+    }
   }
 
   void WebContentsDestroyed() override {
@@ -103,20 +117,18 @@ class TabCaptureRegistry::LiveRequest : public content::WebContentsObserver {
   }
 
  private:
-  const std::string extension_id_;
+  const ExtensionId extension_id_;
   const bool is_anonymous_;
-  TabCaptureRegistry* const registry_;
-  TabCaptureState capture_state_;
-  bool is_verified_;
-  bool is_fullscreened_;
+  const raw_ptr<TabCaptureRegistry> registry_;
+  TabCaptureState capture_state_ = tab_capture::TabCaptureState::kNone;
+  bool is_verified_ = false;
+  bool is_fullscreened_ = false;
 
   // These reference the originally targetted RenderFrameHost by its ID.  The
   // RenderFrameHost may have gone away long before a LiveRequest closes, but
   // calls to OnRequestUpdate() will always refer to this request by this ID.
   int render_process_id_;
   int render_frame_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(LiveRequest);
 };
 
 TabCaptureRegistry::TabCaptureRegistry(content::BrowserContext* context)
@@ -146,17 +158,17 @@ TabCaptureRegistry::GetFactoryInstance() {
 
 void TabCaptureRegistry::GetCapturedTabs(
     const std::string& extension_id,
-    base::ListValue* list_of_capture_info) const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(list_of_capture_info);
-  list_of_capture_info->Clear();
+    base::ListValue* capture_info_list) const {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(capture_info_list, base::NotFatalUntil::M161);
+  capture_info_list->clear();
   for (const std::unique_ptr<LiveRequest>& request : requests_) {
     if (request->is_anonymous() || !request->is_verified() ||
         request->extension_id() != extension_id)
       continue;
     tab_capture::CaptureInfo info;
     request->GetCaptureInfo(&info);
-    list_of_capture_info->Append(info.ToValue());
+    capture_info_list->Append(info.ToValue());
   }
 }
 
@@ -165,13 +177,9 @@ void TabCaptureRegistry::OnExtensionUnloaded(
     const Extension* extension,
     UnloadedExtensionReason reason) {
   // Cleanup all the requested media streams for this extension.
-  for (auto it = requests_.begin(); it != requests_.end();) {
-    if ((*it)->extension_id() == extension->id()) {
-      it = requests_.erase(it);
-    } else {
-      ++it;
-    }
-  }
+  std::erase_if(requests_, [extension](const auto& entry) {
+    return entry->extension_id() == extension->id();
+  });
 }
 
 std::string TabCaptureRegistry::AddRequest(
@@ -180,15 +188,15 @@ std::string TabCaptureRegistry::AddRequest(
     bool is_anonymous,
     const GURL& origin,
     content::DesktopMediaID source,
-    const std::string& extension_name,
-    content::WebContents* caller_contents) {
+    int caller_render_process_id,
+    std::optional<int> restrict_to_render_frame_id) {
   std::string device_id;
   LiveRequest* const request = FindRequest(target_contents);
 
   // Currently, we do not allow multiple active captures for same tab.
-  if (request != NULL) {
-    if (request->capture_state() == tab_capture::TAB_CAPTURE_STATE_PENDING ||
-        request->capture_state() == tab_capture::TAB_CAPTURE_STATE_ACTIVE) {
+  if (request != nullptr) {
+    if (request->capture_state() == tab_capture::TabCaptureState::kPending ||
+        request->capture_state() == tab_capture::TabCaptureState::kActive) {
       return device_id;
     } else {
       // Delete the request before creating its replacement (below).
@@ -199,13 +207,9 @@ std::string TabCaptureRegistry::AddRequest(
   requests_.push_back(std::make_unique<LiveRequest>(
       target_contents, extension_id, is_anonymous, this));
 
-  content::RenderFrameHost* const main_frame = caller_contents->GetMainFrame();
-  if (main_frame) {
-    device_id = content::DesktopStreamsRegistry::GetInstance()->RegisterStream(
-        main_frame->GetProcess()->GetID(), main_frame->GetRoutingID(),
-        url::Origin::Create(origin), source, extension_name,
-        content::kRegistryStreamTypeTab);
-  }
+  device_id = content::DesktopStreamsRegistry::GetInstance()->RegisterStream(
+      caller_render_process_id, restrict_to_render_frame_id,
+      url::Origin::Create(origin), source, content::kRegistryStreamTypeTab);
 
   return device_id;
 }
@@ -213,7 +217,7 @@ std::string TabCaptureRegistry::AddRequest(
 bool TabCaptureRegistry::VerifyRequest(int render_process_id,
                                        int render_frame_id,
                                        const std::string& extension_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
 
   LiveRequest* const request = FindRequest(render_process_id, render_frame_id);
   if (!request) {
@@ -221,9 +225,10 @@ bool TabCaptureRegistry::VerifyRequest(int render_process_id,
   }
 
   if (request->is_verified() ||
-      (request->capture_state() != tab_capture::TAB_CAPTURE_STATE_NONE &&
-       request->capture_state() != tab_capture::TAB_CAPTURE_STATE_PENDING))
+      (request->capture_state() != tab_capture::TabCaptureState::kNone &&
+       request->capture_state() != tab_capture::TabCaptureState::kPending)) {
     return false;
+  }
 
   request->SetIsVerified();
   return true;
@@ -234,7 +239,7 @@ void TabCaptureRegistry::OnRequestUpdate(
     int target_render_frame_id,
     blink::mojom::MediaStreamType stream_type,
     const content::MediaRequestState new_state) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   if (stream_type != blink::mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE &&
       stream_type != blink::mojom::MediaStreamType::GUM_TAB_AUDIO_CAPTURE) {
     return;
@@ -246,36 +251,35 @@ void TabCaptureRegistry::OnRequestUpdate(
     return;  // Stale or invalid request update.
   }
 
-  TabCaptureState next_state = tab_capture::TAB_CAPTURE_STATE_NONE;
+  TabCaptureState next_state = tab_capture::TabCaptureState::kNone;
   switch (new_state) {
     case content::MEDIA_REQUEST_STATE_PENDING_APPROVAL:
-      next_state = tab_capture::TAB_CAPTURE_STATE_PENDING;
+      next_state = tab_capture::TabCaptureState::kPending;
       break;
     case content::MEDIA_REQUEST_STATE_DONE:
-      next_state = tab_capture::TAB_CAPTURE_STATE_ACTIVE;
+      next_state = tab_capture::TabCaptureState::kActive;
       break;
     case content::MEDIA_REQUEST_STATE_CLOSING:
-      next_state = tab_capture::TAB_CAPTURE_STATE_STOPPED;
+      next_state = tab_capture::TabCaptureState::kStopped;
       break;
     case content::MEDIA_REQUEST_STATE_ERROR:
-      next_state = tab_capture::TAB_CAPTURE_STATE_ERROR;
+      next_state = tab_capture::TabCaptureState::kError;
       break;
     case content::MEDIA_REQUEST_STATE_OPENING:
       return;
     case content::MEDIA_REQUEST_STATE_REQUESTED:
     case content::MEDIA_REQUEST_STATE_NOT_REQUESTED:
       NOTREACHED();
-      return;
   }
 
-  if (next_state == tab_capture::TAB_CAPTURE_STATE_PENDING &&
-      request->capture_state() != tab_capture::TAB_CAPTURE_STATE_PENDING &&
-      request->capture_state() != tab_capture::TAB_CAPTURE_STATE_NONE &&
-      request->capture_state() != tab_capture::TAB_CAPTURE_STATE_STOPPED &&
-      request->capture_state() != tab_capture::TAB_CAPTURE_STATE_ERROR) {
-    // If we end up trying to grab a new stream while the previous one was never
-    // terminated, then something fishy is going on.
-    NOTREACHED() << "Trying to capture tab with existing stream.";
+  if (next_state == tab_capture::TabCaptureState::kPending &&
+      request->capture_state() != tab_capture::TabCaptureState::kPending &&
+      request->capture_state() != tab_capture::TabCaptureState::kNone &&
+      request->capture_state() != tab_capture::TabCaptureState::kStopped &&
+      request->capture_state() != tab_capture::TabCaptureState::kError) {
+    // Despite other code preventing multiple captures of the same tab, we can
+    // reach this case due to a race condition (see crbug.com/40869705).
+    // TODO(crbug.com/40874553): Handle status updates for multiple capturers.
     return;
   }
 
@@ -284,21 +288,22 @@ void TabCaptureRegistry::OnRequestUpdate(
 
 void TabCaptureRegistry::DispatchStatusChangeEvent(
     const LiveRequest* request) const {
-  if (request->is_anonymous())
+  if (request->is_anonymous()) {
     return;
+  }
 
   EventRouter* router = EventRouter::Get(browser_context_);
-  if (!router)
+  if (!router) {
     return;
+  }
 
-  std::unique_ptr<base::ListValue> args(new base::ListValue());
+  auto args = base::MakeRefCounted<EventArgs>();
   tab_capture::CaptureInfo info;
   request->GetCaptureInfo(&info);
-  args->Append(info.ToValue());
-  auto event =
-      std::make_unique<Event>(events::TAB_CAPTURE_ON_STATUS_CHANGED,
-                              tab_capture::OnStatusChanged::kEventName,
-                              std::move(*args).TakeList(), browser_context_);
+  args->data.Append(info.ToValue());
+  auto event = std::make_unique<Event>(events::TAB_CAPTURE_ON_STATUS_CHANGED,
+                                       tab_capture::OnStatusChanged::kEventName,
+                                       std::move(args), browser_context_);
 
   router->DispatchEventToExtension(request->extension_id(), std::move(event));
 }
@@ -306,8 +311,9 @@ void TabCaptureRegistry::DispatchStatusChangeEvent(
 TabCaptureRegistry::LiveRequest* TabCaptureRegistry::FindRequest(
     const content::WebContents* target_contents) const {
   for (const auto& request : requests_) {
-    if (request->web_contents() == target_contents)
+    if (request->web_contents() == target_contents) {
       return request.get();
+    }
   }
   return nullptr;
 }
@@ -332,6 +338,78 @@ void TabCaptureRegistry::KillRequest(LiveRequest* request) {
     }
   }
   NOTREACHED();
+}
+
+// static
+bool TabCaptureRegistry::CanCaptureWebContents(
+    const Extension& extension,
+    content::BrowserContext& browser_context,
+    content::WebContents& target_contents,
+    std::string& error,
+    bool is_navigation) {
+  const url::Origin& origin =
+      target_contents.GetPrimaryMainFrame()->GetLastCommittedOrigin();
+  const GURL origin_url =
+      origin.opaque() ? origin.GetTupleOrPrecursorTupleIfOpaque().GetURL()
+                      : origin.GetURL();
+
+  if (origin_url.SchemeIs(url::kFileScheme) &&
+      !util::AllowFileAccess(extension.id(), &browser_context)) {
+    error = tab_capture_errors::kCannotCapturePage;
+    return false;
+  }
+
+  // Component extensions are built into (and are implementation details of) the
+  // browser. Allow them to capture any valid contents (except file contents;
+  // no component extension needs to access those today, and this gives us
+  // nice defense-in-depth).
+  if (Manifest::IsComponentLocation(extension.location())) {
+    return true;
+  }
+
+  // Non-component extensions may only capture chrome:// URLs if they have been
+  // explicitly granted activeTab permission for the current page view (or are
+  // allowlisted via command line). ActiveTab grants on chrome:// pages are
+  // ephemeral and do not persist across navigations (see
+  // ActiveTabPermissionGranter::DidFinishNavigation); note that
+  // PrimaryPageChanged fires before DidFinishNavigation clears the previous
+  // page's grant, so `is_navigation` unconditionally disallows chrome:// URLs
+  // unless allowlisted.
+  if (origin_url.SchemeIs(content::kChromeUIScheme) &&
+      (is_navigation ||
+       !extension.permissions_data()->HasAPIPermissionForTab(
+           sessions::SessionTabHelper::IdForTab(&target_contents).id(),
+           mojom::APIPermissionID::kTabCaptureForTab)) &&
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+          switches::kAllowlistedExtensionID) != extension.id()) {
+    error = tab_capture_errors::kCannotCapturePage;
+    return false;
+  }
+
+  if (extension.permissions_data()->IsPolicyBlockedHost(origin_url)) {
+    error = tab_capture_errors::kCannotCapturePage;
+    return false;
+  }
+
+  if (extension.permissions_data()->IsUrlBlockedByUser(origin_url)) {
+    error = tab_capture_errors::kCannotCapturePage;
+    return false;
+  }
+
+  if (!ExtensionsClient::Get()->IsCapturableURL(origin_url, &error)) {
+    // Note: override the error to preserve a consistent message.
+    error = tab_capture_errors::kCannotCapturePage;
+    return false;
+  }
+
+  return true;
+}
+
+std::string TabCaptureRegistry::GetExtensionIdForRequest(
+    int render_process_id,
+    int render_frame_id) const {
+  LiveRequest* const request = FindRequest(render_process_id, render_frame_id);
+  return request ? request->extension_id() : std::string();
 }
 
 }  // namespace extensions

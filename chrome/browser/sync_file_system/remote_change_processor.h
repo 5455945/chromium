@@ -1,12 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_FILE_SYSTEM_REMOTE_CHANGE_PROCESSOR_H_
 #define CHROME_BROWSER_SYNC_FILE_SYSTEM_REMOTE_CHANGE_PROCESSOR_H_
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "chrome/browser/sync_file_system/sync_callbacks.h"
 #include "chrome/browser/sync_file_system/sync_status_code.h"
 
@@ -39,8 +38,12 @@ class RemoteChangeProcessor {
                               const SyncFileMetadata& metadata,
                               const FileChangeList& changes)>;
 
-  RemoteChangeProcessor() {}
-  virtual ~RemoteChangeProcessor() {}
+  RemoteChangeProcessor() = default;
+
+  RemoteChangeProcessor(const RemoteChangeProcessor&) = delete;
+  RemoteChangeProcessor& operator=(const RemoteChangeProcessor&) = delete;
+
+  virtual ~RemoteChangeProcessor() = default;
 
   // This must be called before processing the change for the |url|.
   // This tries to lock the target |url| and returns the local changes
@@ -80,9 +83,6 @@ class RemoteChangeProcessor {
   virtual void RecordFakeLocalChange(const storage::FileSystemURL& url,
                                      const FileChange& change,
                                      SyncStatusCallback callback) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RemoteChangeProcessor);
 };
 
 }  // namespace sync_file_system

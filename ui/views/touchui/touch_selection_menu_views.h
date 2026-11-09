@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_TOUCHUI_TOUCH_SELECTION_MENU_VIEWS_H_
 #define UI_VIEWS_TOUCHUI_TOUCH_SELECTION_MENU_VIEWS_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/touchui/touch_selection_menu_runner_views.h"
 
@@ -19,20 +19,25 @@ class LabelButton;
 // A bubble that contains actions available for the selected text. An object of
 // this type, as a BubbleDialogDelegateView, manages its own lifetime.
 class VIEWS_EXPORT TouchSelectionMenuViews : public BubbleDialogDelegateView {
- public:
-  METADATA_HEADER(TouchSelectionMenuViews);
+  METADATA_HEADER(TouchSelectionMenuViews, BubbleDialogDelegateView)
 
+ public:
   enum ButtonViewId : int { kEllipsisButton = 1 };
 
   TouchSelectionMenuViews(TouchSelectionMenuRunnerViews* owner,
-                          ui::TouchSelectionMenuClient* client,
-                          aura::Window* context);
+                          base::WeakPtr<ui::TouchSelectionMenuClient> client,
+                          aura::Window* context,
+                          bool can_paste);
+
+  TouchSelectionMenuViews(const TouchSelectionMenuViews&) = delete;
+  TouchSelectionMenuViews& operator=(const TouchSelectionMenuViews&) = delete;
 
   void ShowMenu(const gfx::Rect& anchor_rect,
                 const gfx::Size& handle_image_size);
 
   // Checks whether there is any command available to show in the menu.
-  static bool IsMenuAvailable(const ui::TouchSelectionMenuClient* client);
+  static bool IsMenuAvailable(const ui::TouchSelectionMenuClient* client,
+                              bool can_paste);
 
   // Closes the menu. This will eventually self-destroy the object.
   void CloseMenu();
@@ -48,22 +53,24 @@ class VIEWS_EXPORT TouchSelectionMenuViews : public BubbleDialogDelegateView {
   LabelButton* CreateButton(const std::u16string& title,
                             Button::PressedCallback callback);
 
+  void CreateSeparator();
+
  private:
   friend class TouchSelectionMenuRunnerViews::TestApi;
 
   void ButtonPressed(int command, const ui::Event& event);
 
+  void EllipsisPressed(const ui::Event& event);
+
   // Helper to disconnect this menu object from its owning menu runner.
   void DisconnectOwner();
 
   // BubbleDialogDelegateView:
-  void OnPaint(gfx::Canvas* canvas) override;
   void WindowClosing() override;
 
-  TouchSelectionMenuRunnerViews* owner_;
-  ui::TouchSelectionMenuClient* const client_;
-
-  DISALLOW_COPY_AND_ASSIGN(TouchSelectionMenuViews);
+  raw_ptr<TouchSelectionMenuRunnerViews> owner_;
+  const base::WeakPtr<ui::TouchSelectionMenuClient> client_;
+  const bool can_paste_;
 };
 
 }  // namespace views

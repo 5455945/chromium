@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,24 @@
 
 #include <string>
 
+#include "base/memory/stack_allocated.h"
 #include "gin/gin_export.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-exception.h"
 
 namespace gin {
 
 // TryCatch is a convenient wrapper around v8::TryCatch.
 class GIN_EXPORT TryCatch {
+  STACK_ALLOCATED();
+
  public:
   explicit TryCatch(v8::Isolate* isolate);
   TryCatch(const TryCatch&) = delete;
   TryCatch& operator=(const TryCatch&) = delete;
-  ~TryCatch();
 
   bool HasCaught();
   std::string GetStackTrace();
+  void SetVerbose(bool verbose) { try_catch_.SetVerbose(verbose); }
 
  private:
   v8::Isolate* isolate_;

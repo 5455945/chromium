@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -44,11 +44,13 @@ def compile_src(out_dir):
     ])
 
 
-def compile_src_for_node(out_dir):
-    # First, clean the output directory so deleted files are pruned from old builds.
-    shutil.rmtree(out_dir)
+def compile_src_for_node(out_dir, additional_args=None, clean=True):
+    additional_args = additional_args or []
+    if clean:
+        # First, clean the output directory so deleted files are pruned from old builds.
+        shutil.rmtree(out_dir)
 
-    run_tsc_ignore_errors([
+    args = [
         '--project',
         os.path.join(webgpu_cts_dir, 'src', 'node.tsconfig.json'),
         '--outDir',
@@ -63,7 +65,10 @@ def compile_src_for_node(out_dir):
         'false',
         '--target',
         'ES6',
-    ])
+    ]
+    args.extend(additional_args)
+
+    run_tsc_ignore_errors(args)
 
 
 if __name__ == '__main__':
@@ -79,6 +84,11 @@ if __name__ == '__main__':
 
     # Run gen_listings.js to overwrite the dummy src/webgpu/listings.js created
     # from transpiling src/
+    # Note: Need to copy the package.json file so that the NodeJS invocation
+    # below correctly parses gen_listings.js as CommonJS.
+    shutil.copyfile(
+        os.path.join(webgpu_cts_dir, 'package.json'),
+        os.path.join(gen_dir, 'src-node', 'package.json'))
     RunNode([
         os.path.join(gen_dir, 'src-node', 'common', 'tools',
                      'gen_listings.js'),

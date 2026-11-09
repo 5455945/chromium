@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/command_line.h"
@@ -22,10 +23,13 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/zucchini/io_utils.h"
+#include "components/zucchini/version_info.h"
 #include "components/zucchini/zucchini_commands.h"
 
-#if defined(OS_WIN)
-#include <windows.h>  // This include must come first.
+#if BUILDFLAG(IS_WIN)
+// clang-format off
+#include <windows.h>  // Must be in front of other Windows header files.
+// clang-format on
 
 #include <psapi.h>
 #endif
@@ -65,20 +69,24 @@ struct Command {
 constexpr Command kCommands[] = {
     {"gen",
      "-gen <old_file> <new_file> <patch_file> [-raw] [-keep]"
-     " [-impose=#+#=#+#,#+#=#+#,...]",
+     " [-start-scan-at=#] [-impose=#+#=#+#,#+#=#+#,...]",
      3, &MainGen},
     {"apply", "-apply <old_file> <patch_file> <new_file> [-keep]", 3,
      &MainApply},
+    {"verify", "-verify <patch_file>", 1, &MainVerify},
     {"read", "-read <exe> [-dump]", 1, &MainRead},
-    {"detect", "-detect <archive_file>", 1, &MainDetect},
-    {"match", "-match <old_file> <new_file> [-impose=#+#=#+#,#+#=#+#,...]", 2,
-     &MainMatch},
+    {"detect", "-detect <archive_file> [-start-scan-at=#]", 1, &MainDetect},
+    {"match",
+     "-match <old_file> <new_file> [-start-scan-at=#]"
+     " [-impose=#+#=#+#,#+#=#+#,...]",
+     2, &MainMatch},
     {"crc32", "-crc32 <file>", 1, &MainCrc32},
+    {"suffix-array", "-suffix-array <file>", 1, &MainSuffixArray},
 };
 
 /******** GetPeakMemoryMetrics ********/
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 // Linux does not have an exact mapping to the values used on Windows so use a
 // close approximation:
 // peak_virtual_memory ~= peak_page_file_usage
@@ -95,12 +103,12 @@ void GetPeakMemoryMetrics(size_t* peak_virtual_memory,
           .Append("status");
   std::string contents_string;
   base::ReadFileToString(status_path, &contents_string);
-  std::vector<base::StringPiece> lines = base::SplitStringPiece(
+  std::vector<std::string_view> lines = base::SplitStringPiece(
       contents_string, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
   for (const auto& line : lines) {
     // Tokens should generally be of the form "Metric: <val> kB"
-    std::vector<base::StringPiece> tokens = base::SplitStringPiece(
+    std::vector<std::string_view> tokens = base::SplitStringPiece(
         line, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     if (tokens.size() < 2)
       continue;
@@ -120,9 +128,9 @@ void GetPeakMemoryMetrics(size_t* peak_virtual_memory,
     }
   }
 }
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // On failure the input values will be set to 0.
 void GetPeakMemoryMetrics(size_t* peak_page_file_usage,
                           size_t* peak_working_set_size) {
@@ -134,7 +142,7 @@ void GetPeakMemoryMetrics(size_t* peak_page_file_usage,
     *peak_working_set_size = pmc.PeakWorkingSetSize;
   }
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 /******** ScopedResourceUsageTracker ********/
 
@@ -145,17 +153,17 @@ class ScopedResourceUsageTracker {
   ScopedResourceUsageTracker() {
     start_time_ = base::TimeTicks::Now();
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
     GetPeakMemoryMetrics(&start_peak_page_file_usage_,
                          &start_peak_working_set_size_);
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
   }
 
   // Computes and prints usage.
   ~ScopedResourceUsageTracker() {
     base::TimeTicks end_time = base::TimeTicks::Now();
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
     size_t cur_peak_page_file_usage = 0;
     size_t cur_peak_working_set_size = 0;
     GetPeakMemoryMetrics(&cur_peak_page_file_usage, &cur_peak_working_set_size);
@@ -171,7 +179,7 @@ class ScopedResourceUsageTracker {
               << (cur_peak_working_set_size - start_peak_working_set_size_) /
                      1024
               << " KiB";
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 
     LOG(INFO) << "Zucchini.TotalTime " << (end_time - start_time_).InSecondsF()
               << " s";
@@ -179,10 +187,10 @@ class ScopedResourceUsageTracker {
 
  private:
   base::TimeTicks start_time_;
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
   size_t start_peak_page_file_usage_ = 0;
   size_t start_peak_working_set_size_ = 0;
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_WIN)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 };
 
 /******** Helper functions ********/
@@ -206,6 +214,8 @@ bool CheckAndGetFilePathParams(const base::CommandLine& command_line,
 
 // Prints main Zucchini usage text.
 void PrintUsage(std::ostream& err) {
+  err << "Version: " << zucchini::kMajorVersion << "."
+      << zucchini::kMinorVersion << std::endl;
   err << "Usage:" << std::endl;
   for (const Command& command : kCommands)
     err << "  zucchini " << command.usage << std::endl;
@@ -251,5 +261,6 @@ zucchini::status::Code RunZucchiniCommand(const base::CommandLine& command_line,
   }
 
   ScopedResourceUsageTracker resource_usage_tracker;
-  return command_use->command_function({command_line, paths, out, err});
+  return command_use->command_function(
+      {raw_ref(command_line), raw_ref(paths), raw_ref(out), raw_ref(err)});
 }

@@ -1,11 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <utility>
 
-#include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -25,30 +24,32 @@ namespace {
 // Notifies the main thread after all history backend thread tasks have run.
 class WaitForHistoryTask : public history::HistoryDBTask {
  public:
-  WaitForHistoryTask() {}
+  explicit WaitForHistoryTask(base::OnceClosure quit_closure)
+      : quit_closure_(std::move(quit_closure)) {}
+
+  WaitForHistoryTask(const WaitForHistoryTask&) = delete;
+  WaitForHistoryTask& operator=(const WaitForHistoryTask&) = delete;
 
   bool RunOnDBThread(history::HistoryBackend* backend,
                      history::HistoryDatabase* db) override {
     return true;
   }
-
-  void DoneRunOnMainThread() override {
-    base::RunLoop::QuitCurrentWhenIdleDeprecated();
-  }
+  void DoneRunOnMainThread() override { std::move(quit_closure_).Run(); }
 
  private:
-  ~WaitForHistoryTask() override {}
-
-  DISALLOW_COPY_AND_ASSIGN(WaitForHistoryTask);
+  base::OnceClosure quit_closure_;
+  ~WaitForHistoryTask() override = default;
 };
 
 }  // namespace
 
 void WaitForHistoryBackendToRun(Profile* profile) {
+  base::RunLoop loop;
   base::CancelableTaskTracker task_tracker;
-  std::unique_ptr<history::HistoryDBTask> task(new WaitForHistoryTask());
+  std::unique_ptr<history::HistoryDBTask> task(
+      new WaitForHistoryTask(loop.QuitWhenIdleClosure()));
   history::HistoryService* history = HistoryServiceFactory::GetForProfile(
       profile, ServiceAccessType::EXPLICIT_ACCESS);
   history->ScheduleDBTask(FROM_HERE, std::move(task), &task_tracker);
-  content::RunMessageLoop();
+  loop.Run();
 }

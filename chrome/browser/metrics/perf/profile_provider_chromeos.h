@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,16 @@
 
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
+#include "base/power_monitor/power_observer.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
-#include "chrome/browser/sessions/session_restore.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/dbus/power/power_manager_client.h"
-#include "chromeos/login/login_state/login_state.h"
 #include "content/public/browser/jank_monitor.h"
+
+class Profile;
 
 namespace metrics {
 
@@ -23,10 +27,15 @@ class SampledProfile;
 // It detects certain system triggers, such as device resuming from suspend
 // mode, or user logging in, which it forwards to the registered collectors.
 class ProfileProvider : public chromeos::PowerManagerClient::Observer,
-                        public chromeos::LoginState::Observer,
-                        public content::JankMonitor::Observer {
+                        public ash::LoginState::Observer,
+                        public content::JankMonitor::Observer,
+                        public base::PowerThermalObserver {
  public:
   ProfileProvider();
+
+  ProfileProvider(const ProfileProvider&) = delete;
+  ProfileProvider& operator=(const ProfileProvider&) = delete;
+
   ~ProfileProvider() override;
 
   void Init();
@@ -52,12 +61,17 @@ class ProfileProvider : public chromeos::PowerManagerClient::Observer,
   void SuspendDone(base::TimeDelta sleep_duration) override;
 
   // Called when a session restore has finished.
-  void OnSessionRestoreDone(int num_tabs_restored);
+  void OnSessionRestoreDone(Profile* profile, int num_tabs_restored);
 
   // Called when a jank is observed by the JankMonitor. Note that these 2
   // methods don't run on the UI thread.
   void OnJankStarted() override;
   void OnJankStopped() override;
+
+  // base::PowerThermalObserver overrides.
+  void OnThermalStateChange(
+      base::PowerThermalObserver::DeviceThermalState new_state) override;
+  void OnSpeedLimitChange(int new_limit) override;
 
   // For testing.
   scoped_refptr<content::JankMonitor> jank_monitor() const {
@@ -86,10 +100,14 @@ class ProfileProvider : public chromeos::PowerManagerClient::Observer,
 
   const base::TimeDelta jankiness_collection_min_interval_;
 
+  base::ScopedObservation<ash::LoginState, ash::LoginState::Observer>
+      login_state_observer_{this};
+  base::ScopedObservation<chromeos::PowerManagerClient,
+                          chromeos::PowerManagerClient::Observer>
+      power_manager_client_observer_{this};
+
   // To pass around the "this" pointer across threads safely.
   base::WeakPtrFactory<ProfileProvider> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ProfileProvider);
 };
 
 }  // namespace metrics

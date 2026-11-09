@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/check.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/bind.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -17,24 +18,47 @@ namespace subresource_filter {
 
 namespace {
 
-content::RenderFrameHost* CreateFrameImpl(
-    const content::ToRenderFrameHost& adapter,
-    const GURL& url,
-    bool ad_script) {
-  content::RenderFrameHost* rfh = adapter.render_frame_host();
-  std::string name = GetUniqueFrameName();
-  std::string script = base::StringPrintf(
-      "%s('%s','%s');", ad_script ? "createAdFrame" : "createFrame",
-      url.spec().c_str(), name.c_str());
+using content::RenderFrameHost;
+
+RenderFrameHost* CreateFrameImpl(const content::ToRenderFrameHost& adapter,
+                                 const GURL& url,
+                                 bool ad_script) {
+  RenderFrameHost* rfh = adapter.render_frame_host();
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(rfh);
-  content::TestNavigationObserver navigation_observer(web_contents, 1);
-  EXPECT_TRUE(content::ExecuteScript(rfh, script));
-  navigation_observer.Wait();
-  EXPECT_TRUE(navigation_observer.last_navigation_succeeded())
-      << navigation_observer.last_net_error_code();
+  const bool is_prerender = rfh->GetLifecycleState() ==
+                            RenderFrameHost::LifecycleState::kPrerendering;
+  std::string name = GetUniqueFrameName();
+
+  if (is_prerender) {
+    // TODO(bokan): We must avoid using a TestNavigationObserver if executing
+    // this script on a prerendering RFH because this observer relies on
+    // DidStartLoading, which PrerenderHost::PageHolder doesn't yet implement.
+    // Instead we use a promise based version of the script and wait on that.
+    // Once load events in prerender are clarified this can be resolved.
+    // https://crbug.com/1199682.
+    std::string script = base::StringPrintf(
+        R"JS(
+        (async () => {
+            await %s('%s', '%s');
+        })()
+        )JS",
+        ad_script ? "createAdFramePromise" : "createFramePromise",
+        url.spec().c_str(), name.c_str());
+    EXPECT_TRUE(content::ExecJs(rfh, script));
+  } else {
+    std::string script = base::StringPrintf(
+        "%s('%s','%s');", ad_script ? "createAdFrame" : "createFrame",
+        url.spec().c_str(), name.c_str());
+    content::TestNavigationObserver navigation_observer(web_contents, 1);
+    EXPECT_TRUE(content::ExecJs(rfh, script));
+    navigation_observer.Wait();
+    EXPECT_TRUE(navigation_observer.last_navigation_succeeded())
+        << navigation_observer.last_net_error_code();
+  }
+
   return content::FrameMatchingPredicate(
-      web_contents, base::BindRepeating(&content::FrameMatchesName, name));
+      rfh->GetPage(), base::BindRepeating(&content::FrameMatchesName, name));
 }
 
 }  // namespace
@@ -44,20 +68,19 @@ std::string GetUniqueFrameName() {
   return base::StringPrintf("frame_%d", frame_count++);
 }
 
-content::RenderFrameHost* CreateSrcFrameFromAdScript(
+RenderFrameHost* CreateSrcFrameFromAdScript(
     const content::ToRenderFrameHost& adapter,
     const GURL& url) {
   return CreateFrameImpl(adapter, url, true /* ad_script */);
 }
 
-content::RenderFrameHost* CreateSrcFrame(
-    const content::ToRenderFrameHost& adapter,
-    const GURL& url) {
+RenderFrameHost* CreateSrcFrame(const content::ToRenderFrameHost& adapter,
+                                const GURL& url) {
   return CreateFrameImpl(adapter, url, false /* ad_script */);
 }
 
 testing::AssertionResult EvidenceForFrameComprises(
-    content::RenderFrameHost* frame_host,
+    RenderFrameHost* frame_host,
     bool parent_is_ad,
     blink::mojom::FilterListResult filter_list_result,
     blink::mojom::FrameCreationStackEvidence created_by_ad_script) {
@@ -66,21 +89,22 @@ testing::AssertionResult EvidenceForFrameComprises(
 }
 
 testing::AssertionResult EvidenceForFrameComprises(
-    content::RenderFrameHost* frame_host,
+    RenderFrameHost* frame_host,
     bool parent_is_ad,
     blink::mojom::FilterListResult latest_filter_list_result,
     blink::mojom::FilterListResult most_restrictive_filter_list_result,
     blink::mojom::FrameCreationStackEvidence created_by_ad_script) {
   auto* throttle_manager =
-      ContentSubresourceFilterThrottleManager::FromWebContents(
-          content::WebContents::FromRenderFrameHost(frame_host));
-  absl::optional<blink::FrameAdEvidence> ad_evidence =
+      ContentSubresourceFilterThrottleManager::FromPage(frame_host->GetPage());
+  std::optional<blink::FrameAdEvidence> ad_evidence =
       throttle_manager->GetAdEvidenceForFrame(frame_host);
 
-  if (!ad_evidence.has_value())
+  if (!ad_evidence.has_value()) {
     return testing::AssertionFailure() << "Expected ad evidence to exist.";
-  if (!ad_evidence->is_complete())
+  }
+  if (!ad_evidence->is_complete()) {
     return testing::AssertionFailure() << "Expect ad evidence to be complete.";
+  }
   if (ad_evidence->parent_is_ad() != parent_is_ad) {
     return testing::AssertionFailure()
            << "Expected: " << parent_is_ad

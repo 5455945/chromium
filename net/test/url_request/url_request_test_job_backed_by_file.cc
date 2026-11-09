@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,13 +20,16 @@
 
 #include "net/test/url_request/url_request_test_job_backed_by_file.h"
 
-#include "base/bind.h"
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
-#include "base/task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "net/base/file_stream.h"
 #include "net/base/filename_util.h"
@@ -34,22 +37,18 @@
 #include "net/base/load_flags.h"
 #include "net/base/mime_util.h"
 #include "net/filter/gzip_source_stream.h"
-#include "net/filter/source_stream.h"
+#include "net/filter/source_stream_type.h"
 #include "net/http/http_util.h"
 #include "net/url_request/url_request_error_job.h"
 #include "url/gurl.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/shortcut.h"
 #endif
 
 namespace net {
 
-URLRequestTestJobBackedByFile::FileMetaInfo::FileMetaInfo()
-    : file_size(0),
-      mime_type_result(false),
-      file_exists(false),
-      is_directory(false) {}
+URLRequestTestJobBackedByFile::FileMetaInfo::FileMetaInfo() = default;
 
 URLRequestTestJobBackedByFile::URLRequestTestJobBackedByFile(
     URLRequest* request,
@@ -57,19 +56,15 @@ URLRequestTestJobBackedByFile::URLRequestTestJobBackedByFile(
     const scoped_refptr<base::TaskRunner>& file_task_runner)
     : URLRequestJob(request),
       file_path_(file_path),
-      stream_(new FileStream(file_task_runner)),
-      file_task_runner_(file_task_runner),
-      remaining_bytes_(0),
-      range_parse_result_(OK) {}
+      stream_(std::make_unique<FileStream>(file_task_runner)),
+      file_task_runner_(file_task_runner) {}
 
 void URLRequestTestJobBackedByFile::Start() {
-  FileMetaInfo* meta_info = new FileMetaInfo();
-  file_task_runner_->PostTaskAndReply(
+  file_task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
-      base::BindOnce(&URLRequestTestJobBackedByFile::FetchMetaInfo, file_path_,
-                     base::Unretained(meta_info)),
+      base::BindOnce(&URLRequestTestJobBackedByFile::FetchMetaInfo, file_path_),
       base::BindOnce(&URLRequestTestJobBackedByFile::DidFetchMetaInfo,
-                     weak_ptr_factory_.GetWeakPtr(), base::Owned(meta_info)));
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void URLRequestTestJobBackedByFile::Kill() {
@@ -91,16 +86,19 @@ int URLRequestTestJobBackedByFile::ReadRawData(IOBuffer* dest, int dest_size) {
   if (!dest_size)
     return 0;
 
-  int rv = stream_->Read(dest, dest_size,
-                         base::BindOnce(&URLRequestTestJobBackedByFile::DidRead,
-                                        weak_ptr_factory_.GetWeakPtr(),
-                                        base::WrapRefCounted(dest)));
-  if (rv >= 0) {
-    remaining_bytes_ -= rv;
+  auto result =
+      stream_->Read(dest, dest_size,
+                    base::BindOnce(&URLRequestTestJobBackedByFile::DidRead,
+                                   weak_ptr_factory_.GetWeakPtr(),
+                                   base::WrapRefCounted(dest)));
+  if (result.has_value()) {
+    int bytes_read = base::checked_cast<int>(result->InBytes());
+    remaining_bytes_ -= bytes_read;
     DCHECK_GE(remaining_bytes_, 0);
+    return bytes_read;
   }
 
-  return rv;
+  return result.error();
 }
 
 bool URLRequestTestJobBackedByFile::GetMimeType(std::string* mime_type) const {
@@ -114,14 +112,15 @@ bool URLRequestTestJobBackedByFile::GetMimeType(std::string* mime_type) const {
 
 void URLRequestTestJobBackedByFile::SetExtraRequestHeaders(
     const HttpRequestHeaders& headers) {
-  std::string range_header;
-  if (headers.GetHeader(HttpRequestHeaders::kRange, &range_header)) {
+  std::optional<std::string_view> range_header =
+      headers.GetHeaderView(HttpRequestHeaders::kRange);
+  if (range_header) {
     // This job only cares about the Range header. This method stashes the value
     // for later use in DidOpen(), which is responsible for some of the range
     // validation as well. NotifyStartError is not legal to call here since
     // the job has not started.
     std::vector<HttpByteRange> ranges;
-    if (HttpUtil::ParseRangeHeader(range_header, &ranges)) {
+    if (HttpUtil::ParseRangeHeader(*range_header, &ranges)) {
       if (ranges.size() == 1) {
         byte_range_ = ranges[0];
       } else {
@@ -147,7 +146,8 @@ void URLRequestTestJobBackedByFile::GetResponseInfo(HttpResponseInfo* info) {
 
 void URLRequestTestJobBackedByFile::OnOpenComplete(int result) {}
 
-void URLRequestTestJobBackedByFile::OnSeekComplete(int64_t result) {}
+void URLRequestTestJobBackedByFile::OnSeekComplete(
+    base::expected<int64_t, net::Error> result) {}
 
 void URLRequestTestJobBackedByFile::OnReadComplete(IOBuffer* buf, int result) {}
 
@@ -156,15 +156,15 @@ URLRequestTestJobBackedByFile::~URLRequestTestJobBackedByFile() = default;
 std::unique_ptr<SourceStream>
 URLRequestTestJobBackedByFile::SetUpSourceStream() {
   std::unique_ptr<SourceStream> source = URLRequestJob::SetUpSourceStream();
-  if (!base::LowerCaseEqualsASCII(file_path_.Extension(), ".svgz"))
+  if (!base::EqualsCaseInsensitiveASCII(file_path_.Extension(), ".svgz"))
     return source;
 
-  return GzipSourceStream::Create(std::move(source), SourceStream::TYPE_GZIP);
+  return GzipSourceStream::Create(std::move(source), SourceStreamType::kGzip);
 }
 
-void URLRequestTestJobBackedByFile::FetchMetaInfo(
-    const base::FilePath& file_path,
-    FileMetaInfo* meta_info) {
+std::unique_ptr<URLRequestTestJobBackedByFile::FileMetaInfo>
+URLRequestTestJobBackedByFile::FetchMetaInfo(const base::FilePath& file_path) {
+  auto meta_info = std::make_unique<FileMetaInfo>();
   base::File::Info file_info;
   meta_info->file_exists = base::GetFileInfo(file_path, &file_info);
   if (meta_info->file_exists) {
@@ -176,10 +176,11 @@ void URLRequestTestJobBackedByFile::FetchMetaInfo(
   meta_info->mime_type_result =
       GetMimeTypeFromFile(file_path, &meta_info->mime_type);
   meta_info->absolute_path = base::MakeAbsoluteFilePath(file_path);
+  return meta_info;
 }
 
 void URLRequestTestJobBackedByFile::DidFetchMetaInfo(
-    const FileMetaInfo* meta_info) {
+    std::unique_ptr<FileMetaInfo> meta_info) {
   meta_info_ = *meta_info;
 
   if (!meta_info_.file_exists) {
@@ -200,10 +201,10 @@ void URLRequestTestJobBackedByFile::DidFetchMetaInfo(
                          base::BindOnce(&URLRequestTestJobBackedByFile::DidOpen,
                                         weak_ptr_factory_.GetWeakPtr()));
   if (rv != ERR_IO_PENDING)
-    DidOpen(rv);
+    DidOpen(static_cast<net::Error>(rv));
 }
 
-void URLRequestTestJobBackedByFile::DidOpen(int result) {
+void URLRequestTestJobBackedByFile::DidOpen(net::Error result) {
   OnOpenComplete(result);
   if (result != OK) {
     NotifyStartError(result);
@@ -212,7 +213,7 @@ void URLRequestTestJobBackedByFile::DidOpen(int result) {
 
   if (range_parse_result_ != OK ||
       !byte_range_.ComputeBounds(meta_info_.file_size)) {
-    DidSeek(ERR_REQUEST_RANGE_NOT_SATISFIABLE);
+    DidSeek(base::unexpected(ERR_REQUEST_RANGE_NOT_SATISFIABLE));
     return;
   }
 
@@ -226,7 +227,7 @@ void URLRequestTestJobBackedByFile::DidOpen(int result) {
                       base::BindOnce(&URLRequestTestJobBackedByFile::DidSeek,
                                      weak_ptr_factory_.GetWeakPtr()));
     if (rv != ERR_IO_PENDING)
-      DidSeek(ERR_REQUEST_RANGE_NOT_SATISFIABLE);
+      DidSeek(base::unexpected(ERR_REQUEST_RANGE_NOT_SATISFIABLE));
   } else {
     // We didn't need to call stream_->Seek() at all, so we pass to DidSeek()
     // the value that would mean seek success. This way we skip the code
@@ -235,11 +236,13 @@ void URLRequestTestJobBackedByFile::DidOpen(int result) {
   }
 }
 
-void URLRequestTestJobBackedByFile::DidSeek(int64_t result) {
-  DCHECK(result < 0 || result == byte_range_.first_byte_position());
+void URLRequestTestJobBackedByFile::DidSeek(
+    base::expected<int64_t, net::Error> result) {
+  DCHECK(!result.has_value() ||
+         result.value() == byte_range_.first_byte_position());
 
   OnSeekComplete(result);
-  if (result < 0) {
+  if (!result.has_value()) {
     NotifyStartError(ERR_REQUEST_RANGE_NOT_SATISFIABLE);
     return;
   }
@@ -248,17 +251,21 @@ void URLRequestTestJobBackedByFile::DidSeek(int64_t result) {
   NotifyHeadersComplete();
 }
 
-void URLRequestTestJobBackedByFile::DidRead(scoped_refptr<IOBuffer> buf,
-                                            int result) {
-  if (result >= 0) {
-    remaining_bytes_ -= result;
+void URLRequestTestJobBackedByFile::DidRead(
+    scoped_refptr<IOBuffer> buf,
+    base::expected<base::ByteSize, net::Error> result) {
+  if (result.has_value()) {
+    int bytes_read = base::checked_cast<int>(result->InBytes());
+    remaining_bytes_ -= bytes_read;
     DCHECK_GE(remaining_bytes_, 0);
+    OnReadComplete(buf.get(), bytes_read);
+    buf = nullptr;
+    ReadRawDataComplete(bytes_read);
+  } else {
+    OnReadComplete(buf.get(), result.error());
+    buf = nullptr;
+    ReadRawDataComplete(result.error());
   }
-
-  OnReadComplete(buf.get(), result);
-  buf = nullptr;
-
-  ReadRawDataComplete(result);
 }
 
 }  // namespace net

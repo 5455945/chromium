@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,15 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/clock.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "components/history/core/browser/history_service.h"
@@ -27,8 +28,10 @@
 #include "components/history/core/browser/url_row.h"
 #include "components/history/core/browser/web_history_service.h"
 #include "components/history/core/browser/web_history_service_observer.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_service_observer.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_service_observer.h"
+#include "components/sync_device_info/device_info_tracker.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "url/gurl.h"
 
 FORWARD_DECLARE_TEST(BrowsingHistoryHandlerTest, ObservingWebHistoryDeletions);
@@ -68,7 +71,10 @@ class BrowsingHistoryService : public HistoryServiceObserver,
                  bool blocked_visit,
                  const GURL& remote_icon_url_for_uma,
                  int visit_count,
-                 int typed_count);
+                 int typed_count,
+                 bool is_actor_visit,
+                 std::optional<std::string> app_id,
+                 history::VisitID visit_id);
     HistoryEntry();
     HistoryEntry(const HistoryEntry& other);
     virtual ~HistoryEntry();
@@ -91,9 +97,9 @@ class BrowsingHistoryService : public HistoryServiceObserver,
     // The sync ID of the client on which the most recent visit occurred.
     std::string client_id;
 
-    // Timestamps of all local or remote visits the same URL on the same day.
-    // TODO(skym): These should probably be converted to base::Time.
-    std::set<int64_t> all_timestamps;
+    // Timestamps of all local or remote visits to this or similar URLs on the
+    // same day. Similar URLs are ones with matching title and host.
+    absl::flat_hash_map<GURL, std::set<base::Time>> all_timestamps;
 
     // If true, this entry is a search result.
     bool is_search_result;
@@ -112,6 +118,17 @@ class BrowsingHistoryService : public HistoryServiceObserver,
 
     // Number of times this URL has been manually entered in the URL bar.
     int typed_count = 0;
+
+    // Whether the visit is actor-initiated.
+    bool is_actor_visit = false;
+
+    // ID of the app this entry was generated for. Set to a non-null value
+    // on Android only.
+    std::optional<std::string> app_id;
+
+    // All visit IDs in the local database represented by this entry (including
+    // synced visits).
+    std::vector<history::VisitID> all_visit_ids;
   };
 
   // Contains information about a completed history query.
@@ -127,35 +144,66 @@ class BrowsingHistoryService : public HistoryServiceObserver,
 
     // Whether the last call to Web History timed out.
     bool sync_timed_out = false;
+  };
 
-    // Whether the last call to Web History returned successfully with a message
-    // body. During continuation queries we are not guaranteed to always make a
-    // call to WebHistory, and this value could reflect the state from previous
-    // queries.
-    bool has_synced_results = false;
+  // Represents a physical device by grouping sync IDs of clients that share a
+  // name and is_local status.
+  struct ClientGroup {
+    std::string name;
+    bool is_local_device = false;
+    std::vector<std::string> client_ids;
   };
 
   BrowsingHistoryService(BrowsingHistoryDriver* driver,
                          HistoryService* local_history,
-                         syncer::SyncService* sync_service);
+                         WebHistoryService* web_history,
+                         syncer::SyncService* sync_service,
+                         syncer::DeviceInfoTracker* device_info_tracker);
+
+  BrowsingHistoryService(const BrowsingHistoryService&) = delete;
+  BrowsingHistoryService& operator=(const BrowsingHistoryService&) = delete;
+
   ~BrowsingHistoryService() override;
 
   // Start a new query with the given parameters.
-  void QueryHistory(const std::u16string& search_text,
-                    const QueryOptions& options);
+  virtual void QueryHistory(const std::u16string& search_text,
+                            const QueryOptions& options);
+
+  // Fetch all the app IDs used in the database.
+  void GetAllAppIds();
+
+  // Callback invoked when the app ID fetching task is completed.
+  void OnGetAllAppIds(GetAllAppIdsResult result);
+
+  // Gets a version of the last time any webpage on the given host was visited,
+  // by using the min("last navigation time", x minutes ago) as the upper bound
+  // of the GetLastVisitToHost query. This is done in order to provide the user
+  // with a more useful sneak peak into their navigation history, by excluding
+  // the site(s) they were just on.
+  void GetLastVisitToHostBeforeRecentNavigations(
+      const std::string& host_name,
+      base::OnceCallback<void(base::Time)> callback);
 
   // Removes `items` from history.
+  // TODO(tommycli): Update this API to take only URLs and timestamps, because
+  // callers only have that information, and only that information is used by
+  // the actual implementation.
   void RemoveVisits(const std::vector<HistoryEntry>& items);
 
-  // SyncServiceObserver implementation.
-  void OnStateChanged(syncer::SyncService* sync) override;
+  // Returns synced clients deduplicated by a combination of the name and
+  // is_local status.
+  virtual std::vector<ClientGroup> GetSyncedDevicesForFiltering() const;
 
  protected:
   // Constructor that allows specifying more dependencies for unit tests.
   BrowsingHistoryService(BrowsingHistoryDriver* driver,
                          HistoryService* local_history,
+                         WebHistoryService* web_history,
                          syncer::SyncService* sync_service,
-                         std::unique_ptr<base::OneShotTimer> web_history_timer);
+                         std::unique_ptr<base::OneShotTimer> web_history_timer,
+                         syncer::DeviceInfoTracker* device_info_tracker);
+  // Should be used only for tests when mocking the service.
+  BrowsingHistoryService();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(::BrowsingHistoryHandlerTest,
@@ -163,6 +211,24 @@ class BrowsingHistoryService : public HistoryServiceObserver,
 
   // Used to hold and track query state between asynchronous calls.
   struct QueryHistoryState;
+
+  // Used for grouping/merging similar history entries.
+  // Depending on the algorithm, some fields might be unused and left empty.
+  struct GroupingKey {
+    GURL url;
+    std::string host;
+    std::u16string title;
+    std::optional<std::string> app_id;
+
+    auto operator<=>(const GroupingKey& other) const = default;
+  };
+
+  // Prepare the object for shutdown, clearing all pending requests, and
+  // resetting member variables pointing to other objects that may soon
+  // be destroyed.
+  void Shutdown();
+
+  static bool ShouldQueryRemote(const QueryHistoryState& state);
 
   // Moves results from `state` into `results`, merging both remote and local
   // results together and maintaining reverse chronological order. Any results
@@ -174,6 +240,24 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   static void MergeDuplicateResults(QueryHistoryState* state,
                                     std::vector<HistoryEntry>* results);
 
+  // Merges both remote and local results together from `state` while
+  // maintaining reverse chronological order and returns the final results. Any
+  // results with the same host and title will be merged together for each day.
+  // Often holds back some results in `state` from one of the two sources to
+  // ensure that they're always returned to the driver in correct order. This
+  // function also updates the end times in `state` for both sources that the
+  // next query should be made against.
+  static std::vector<HistoryEntry> GroupSimilarVisits(QueryHistoryState* state);
+
+  // Holds back some results in `state` from one of the two sources to ensure
+  // that they're always returned to the driver in correct order. This function
+  // also updates the end times in `state` for both sources that the next query
+  // should be made against.
+  static void HoldbackAndPartitionResults(QueryHistoryState* state,
+                                          const base::Time oldest_local,
+                                          const base::Time oldest_remote,
+                                          std::vector<HistoryEntry>* results);
+
   // Core implementation of history querying.
   void QueryHistoryInternal(scoped_refptr<QueryHistoryState> state);
 
@@ -181,20 +265,43 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   void QueryComplete(scoped_refptr<QueryHistoryState> state,
                      QueryResults results);
 
+  // Callback from the history system when the last visit query has completed.
+  // May need to do a second query based on the results.
+  void OnLastVisitBeforeRecentNavigationsComplete(
+      const std::string& host_name,
+      base::Time query_start_time,
+      base::OnceCallback<void(base::Time)> callback,
+      HistoryLastVisitResult result);
+
+  // Callback from the history system when the last visit query has completed
+  // the second time.
+  void OnLastVisitBeforeRecentNavigationsComplete2(
+      base::OnceCallback<void(base::Time)> callback,
+      HistoryLastVisitResult result);
+
   // Combines the query results from the local history database and the history
   // server, and sends the combined results to the
   // BrowsingHistoryDriver.
   void ReturnResultsToDriver(scoped_refptr<QueryHistoryState> state);
+
+  // Records the metrics for results.
+  static void RecordResultsMetrics(const std::vector<HistoryEntry>& results,
+                                   base::Time now);
+
+  // Records the number of duplicate visits removed from a history query.
+  static void RecordDuplicateVisitsCount(
+      const std::vector<HistoryEntry>& results);
 
   // Callback from `web_history_timer_` when a response from web history has
   // not been received in time.
   void WebHistoryTimeout(scoped_refptr<QueryHistoryState> state);
 
   // Callback from the WebHistoryService when a query has completed.
-  void WebHistoryQueryComplete(scoped_refptr<QueryHistoryState> state,
-                               base::Time start_time,
-                               WebHistoryService::Request* request,
-                               const base::DictionaryValue* results_value);
+  void WebHistoryQueryComplete(
+      scoped_refptr<QueryHistoryState> state,
+      base::Time start_time,
+      WebHistoryService::Request* request,
+      base::optional_ref<const WebHistoryService::QueryHistoryResult> results);
 
   // Callback telling us whether other forms of browsing history were found
   // on the history server.
@@ -207,9 +314,13 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   // Callback from history server when visits were deleted.
   void RemoveWebHistoryComplete(bool success);
 
+  // SyncServiceObserver implementation.
+  void OnSyncShutdown(syncer::SyncService* sync) override;
+
   // HistoryServiceObserver implementation.
-  void OnURLsDeleted(HistoryService* history_service,
-                     const DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(HistoryService* history_service,
+                          const DeletionInfo& deletion_info) override;
+  void HistoryServiceBeingDeleted(HistoryService* history_service) override;
 
   // WebHistoryServiceObserver implementation.
   void OnWebHistoryDeleted() override;
@@ -221,14 +332,11 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   // Deleting the request will cancel it.
   std::unique_ptr<WebHistoryService::Request> web_history_request_;
 
-  // True if there is a pending delete requests to the history service.
+  // True if there is a pending delete requests to the web service.
   bool has_pending_delete_request_ = false;
 
   // Tracker for delete requests to the history service.
   base::CancelableTaskTracker delete_task_tracker_;
-
-  // The list of URLs that are in the process of being deleted.
-  std::set<GURL> urls_to_be_deleted_;
 
   // Timer used to implement a timeout on a Web History response.
   std::unique_ptr<base::OneShotTimer> web_history_timer_;
@@ -241,7 +349,7 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   base::ScopedObservation<WebHistoryService, WebHistoryServiceObserver>
       web_history_service_observation_{this};
 
-  // SyncService observer listens to late initialization of history sync.
+  // SyncService observer listens to destruction of the SyncService.
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
       sync_service_observation_{this};
 
@@ -251,18 +359,20 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   // Whether there are other forms of browsing history on the history server.
   bool has_other_forms_of_browsing_history_ = false;
 
-  BrowsingHistoryDriver* driver_;
+  raw_ptr<BrowsingHistoryDriver, DanglingUntriaged> driver_;
 
-  HistoryService* local_history_;
+  raw_ptr<HistoryService> local_history_;
 
-  syncer::SyncService* sync_service_;
+  raw_ptr<WebHistoryService> web_history_;
+
+  raw_ptr<syncer::SyncService> sync_service_;
+
+  raw_ptr<syncer::DeviceInfoTracker> device_info_tracker_ = nullptr;
 
   // The clock used to vend times.
   std::unique_ptr<base::Clock> clock_;
 
   base::WeakPtrFactory<BrowsingHistoryService> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BrowsingHistoryService);
 };
 
 }  // namespace history

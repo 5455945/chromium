@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/extension_system.h"
-#include "extensions/browser/management_policy.h"
 
 namespace extensions {
 
@@ -14,14 +13,22 @@ PolicyCheck::PolicyCheck(content::BrowserContext* context,
                          scoped_refptr<const Extension> extension)
     : PreloadCheck(extension), context_(context) {}
 
-PolicyCheck::~PolicyCheck() {}
+PolicyCheck::~PolicyCheck() = default;
 
 void PolicyCheck::Start(ResultCallback callback) {
+  ExtensionSystem::Get(context_)->management_policy()->UserMayInstall(
+      extension(),
+      base::BindOnce(&PolicyCheck::OnUserMayInstallDone,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void PolicyCheck::OnUserMayInstallDone(ResultCallback callback,
+                                       ManagementPolicy::Decision decision) {
   Errors errors;
-  if (!ExtensionSystem::Get(context_)->management_policy()->UserMayInstall(
-          extension(), &error_)) {
+  if (!decision.allowed) {
+    error_ = std::move(decision.error);
     DCHECK(!error_.empty());
-    errors.insert(DISALLOWED_BY_POLICY);
+    errors.insert(Error::kDisallowedByPolicy);
   }
   std::move(callback).Run(errors);
 }

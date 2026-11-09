@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,11 @@ namespace ash {
 class NotificationOverflowViewTest : public views::ViewsTestBase {
  public:
   NotificationOverflowViewTest() {}
+
+  NotificationOverflowViewTest(const NotificationOverflowViewTest&) = delete;
+  NotificationOverflowViewTest& operator=(const NotificationOverflowViewTest&) =
+      delete;
+
   ~NotificationOverflowViewTest() override = default;
 
   // views::ViewsTestBase:
@@ -38,7 +43,7 @@ class NotificationOverflowViewTest : public views::ViewsTestBase {
   // shown in the overflow. Does not include the overflow icon.
   void CheckNumberOfNotificationIcons(int expected_notification_icons) {
     int actual_notification_icons = 0;
-    for (auto* v : notification_overflow_view_->GetChildrenInZOrder()) {
+    for (views::View* v : notification_overflow_view_->GetChildrenInZOrder()) {
       if (!v->GetVisible() || v->GetID() != kNotificationOverflowIconId)
         continue;
 
@@ -49,7 +54,7 @@ class NotificationOverflowViewTest : public views::ViewsTestBase {
 
   // Returns whether the overflow icon is being shown.
   bool HasOverflowIcon() {
-    for (auto* v : notification_overflow_view_->GetChildrenInZOrder()) {
+    for (views::View* v : notification_overflow_view_->GetChildrenInZOrder()) {
       if (v->GetID() != kOverflowIconId)
         continue;
 
@@ -65,8 +70,6 @@ class NotificationOverflowViewTest : public views::ViewsTestBase {
  private:
   int notification_identifier_ = 0;
   std::unique_ptr<NotificationOverflowView> notification_overflow_view_;
-
-  DISALLOW_COPY_AND_ASSIGN(NotificationOverflowViewTest);
 };
 
 // Tests that icons get added and removed when notifications come and go.

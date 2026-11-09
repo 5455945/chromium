@@ -1,12 +1,12 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 const FRIEND_EXTENSION_ID = 'knldjmfmopnpolahpmmgbagdohdnhkik';
 
-var assertCorrectLog = function(activityType, apiCall, result) {
+const assertCorrectLog = function(activityType, apiCall, result) {
   chrome.test.assertEq(1, result.activities.length);
-  var activity = result.activities[0];
+  const activity = result.activities[0];
   chrome.test.assertEq(activityType, activity.activityType);
   chrome.test.assertEq(apiCall, activity.apiCall);
 };
@@ -37,5 +37,5 @@ chrome.test.runTests([
           assertCorrectLog('api_call', 'runtime.connect', result);
           chrome.test.succeed();
         });
-  }
+  },
 ]);

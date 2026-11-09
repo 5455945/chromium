@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@ package org.chromium.components.browser_ui.widget;
 
 import android.content.Context;
 import android.graphics.Color;
-import android.support.test.InstrumentationRegistry;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
@@ -15,34 +15,34 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.library_loader.LibraryLoader;
-import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
-/**
- * Unit tests for RoundedIconGenerator.
- */
+/** Unit tests for RoundedIconGenerator. */
 @RunWith(BaseJUnit4ClassRunner.class)
-@Batch(Batch.PER_CLASS)
+@Batch(Batch.UNIT_TESTS)
 public class RoundedIconGeneratorTest {
     private static Context sContext;
 
     @BeforeClass
     public static void setUp() {
         sContext = InstrumentationRegistry.getTargetContext();
-        LibraryLoader.getInstance().setLibraryProcessType(LibraryProcessType.PROCESS_BROWSER);
-        LibraryLoader.getInstance().ensureInitialized();
+        NativeLibraryTestUtils.loadNativeLibraryNoBrowserProcess();
     }
 
     private String getIconTextForUrl(String url, boolean includePrivateRegistries) {
         return RoundedIconGenerator.getIconTextForUrl(url, includePrivateRegistries);
     }
 
+    private String getInitialLetter(String text) {
+        return RoundedIconGenerator.getInitialLetter(text);
+    }
+
     /**
-     * Verifies that RoundedIconGenerator's ability to generate icons based on URLs considers
-     * the appropriate parts of the URL for the icon to generate.
+     * Verifies that RoundedIconGenerator's ability to generate icons based on URLs considers the
+     * appropriate parts of the URL for the icon to generate.
      */
     @Test
     @SmallTest
@@ -67,14 +67,13 @@ public class RoundedIconGeneratorTest {
         Assert.assertEquals("127.0.0.1", getIconTextForUrl("http://127.0.0.1/", false));
 
         // Verify that the fallback is the the URL itself.
-        Assert.assertEquals("file:///home/chrome/test.html",
+        Assert.assertEquals(
+                "file:///home/chrome/test.html",
                 getIconTextForUrl("file:///home/chrome/test.html", false));
         Assert.assertEquals("data:image", getIconTextForUrl("data:image", false));
     }
 
-    /**
-     * Verifies that asking for more letters than can be served does not crash.
-     */
+    /** Verifies that asking for more letters than can be served does not crash. */
     @Test
     @SmallTest
     @Feature({"Browser", "RoundedIconGenerator"})
@@ -84,10 +83,30 @@ public class RoundedIconGeneratorTest {
         final int iconTextSizeDp = 12;
 
         int iconColor = Color.GRAY;
-        RoundedIconGenerator generator = new RoundedIconGenerator(sContext.getResources(),
-                iconSizeDp, iconSizeDp, iconCornerRadiusDp, iconColor, iconTextSizeDp);
+        RoundedIconGenerator generator =
+                new RoundedIconGenerator(
+                        sContext.getResources(),
+                        iconSizeDp,
+                        iconSizeDp,
+                        iconCornerRadiusDp,
+                        iconColor,
+                        iconTextSizeDp);
 
         Assert.assertTrue(generator.generateIconForText("") != null);
         Assert.assertTrue(generator.generateIconForText("A") != null);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Browser", "RoundedIconGenerator"})
+    public void testGetInitialLetter() {
+        Assert.assertEquals("E", getInitialLetter("English Text"));
+        Assert.assertEquals("😊", getInitialLetter("😊 Emoji Text"));
+        Assert.assertEquals("ا", getInitialLetter("النص العربي"));
+        Assert.assertEquals("ט", getInitialLetter("טקסט בעברית"));
+        Assert.assertEquals("中", getInitialLetter("中文文本"));
+        Assert.assertEquals("H́", getInitialLetter("h́ Text with combining character"));
+        Assert.assertEquals(
+                "👩🏾‍⚕️", getInitialLetter("👩🏾‍⚕️ Emoji with skin tone (combining character)"));
     }
 }

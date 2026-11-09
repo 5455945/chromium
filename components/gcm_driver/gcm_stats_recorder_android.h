@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include <string>
 
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
-#include "components/gcm_driver/gcm_activity.h"
+#include "base/memory/raw_ptr.h"
+#include "components/fcm/fcm_activity.h"
+
+namespace fcm {
+enum class FcmDecryptionResult;
+}  // namespace fcm
 
 namespace gcm {
-
-enum class GCMDecryptionResult;
 
 // Stats recorder for Android, used for recording stats and activities on the
 // GCM Driver level for debugging purposes. Based on the GCMStatsRecorder, as
@@ -34,13 +36,17 @@ class GCMStatsRecorderAndroid {
 
   // A weak reference to |delegate| is stored, so it must outlive the recorder.
   explicit GCMStatsRecorderAndroid(Delegate* delegate);
+
+  GCMStatsRecorderAndroid(const GCMStatsRecorderAndroid&) = delete;
+  GCMStatsRecorderAndroid& operator=(const GCMStatsRecorderAndroid&) = delete;
+
   ~GCMStatsRecorderAndroid();
 
   // Clears the recorded activities.
   void Clear();
 
   // Collects all recorded activities into |*recorded_activities|.
-  void CollectActivities(RecordedActivities* recorded_activities) const;
+  void CollectActivities(fcm::RecordedActivities* recorded_activities) const;
 
   // Records that a registration for |app_id| has been sent.
   void RecordRegistrationSent(const std::string& app_id);
@@ -63,7 +69,7 @@ class GCMStatsRecorderAndroid {
 
   // Records a message decryption failure caused by |result| for |app_id|.
   void RecordDecryptionFailure(const std::string& app_id,
-                               GCMDecryptionResult result);
+                               fcm::FcmDecryptionResult result);
 
   bool is_recording() const { return is_recording_; }
   void set_is_recording(bool recording) { is_recording_ = recording; }
@@ -74,22 +80,20 @@ class GCMStatsRecorderAndroid {
                           const std::string& details);
 
   // Delegate made available by the container. May be a nullptr.
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
   // Toggle determining whether the recorder is recording.
   bool is_recording_ = false;
 
   // Recorded registration activities (which includes unregistrations).
-  base::circular_deque<RegistrationActivity> registration_activities_;
+  base::circular_deque<fcm::RegistrationActivity> registration_activities_;
 
   // Recorded received message activities.
-  base::circular_deque<ReceivingActivity> receiving_activities_;
+  base::circular_deque<fcm::ReceivingActivity> receiving_activities_;
 
   // Recorded message decryption failure activities.
-  base::circular_deque<DecryptionFailureActivity>
+  base::circular_deque<fcm::DecryptionFailureActivity>
       decryption_failure_activities_;
-
-  DISALLOW_COPY_AND_ASSIGN(GCMStatsRecorderAndroid);
 };
 
 }  // namespace gcm

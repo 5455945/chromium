@@ -1,4 +1,4 @@
-; Copyright 2018 The Chromium Authors. All rights reserved.
+; Copyright 2018 The Chromium Authors
 ; Use of this source code is governed by a BSD-style license that can be
 ; found in the LICENSE file.
 
@@ -9,14 +9,42 @@
 (define network-service-storage-path-n "NETWORK_SERVICE_STORAGE_PATH_")
 (define network-service-test-certs-dir "NETWORK_SERVICE_TEST_CERTS_DIR")
 
+; Allows the network process to create symlinks.
+(define allow-network-symlink-creation "ALLOW_NETWORK_SYMLINK_CREATION")
+
 ; Allow access to the [0,N) storage location paths.
-(let ((count (string->number (param network-service-storage-paths-count))))
-  (let loop ((i 0))
-    (if (< i count)
-      (begin
-        (allow file* (subpath
-          (param (string-append network-service-storage-path-n (number->string i)))))
-        (loop (+ i 1))))))
+; TODO(https://crbug.com/567101748) remove this once we have fully rolled out
+; the TriggerNetworkDataMigration feature to macOS.
+(if (param-defined? network-service-storage-paths-count)
+  (let ((count (string->number (param network-service-storage-paths-count))))
+    (let loop ((i 0))
+      (if (< i count)
+        (begin
+          (allow file* (subpath
+              (param (string-append network-service-storage-path-n (number->string i)))))
+          (loop (+ i 1)))))))
+
+; Scopes file access to known subdirectories either directly at the root,
+; within a profile, or within an extension storage partition
+; (https://crbug.com/567101748).
+(define (allow-network-subpaths dir-param subpaths)
+  (if (param-defined? dir-param)
+    (let ((base (regex-quote (param dir-param))))
+      (allow file*
+        ; Root or profile: [<profile>/]<subpath>[/...]
+        (regex (string-append "^" base #"(/[^/]+)?/" subpaths #"(/.*)?$"))
+        ; Storage partition:
+        ; <profile>/Storage/ext/<domain>/<partition>/<subpath>[/...]
+        (regex (string-append
+          "^" base #"/[^/]+/Storage/ext/[^/]+/[^/]+/" subpaths #"(/.*)?$"))))))
+
+(allow-network-subpaths user-data-dir
+  #"(Network|Safe Browsing Network|Shared Dictionary)")
+(allow-network-subpaths user-cache-dir #"Cache")
+
+; Disallow creating symbolic links.
+(unless (param-true? allow-network-symlink-creation)
+  (deny file-write-create (vnode-type SYMLINK)))
 
 ; DNS configuration watcher entries. This is a nesty mess of symlinks.
 (allow file-read*
@@ -46,10 +74,6 @@
   (subpath "/System/Library/Security")
   (subpath "/private/var/db/mds")
   (subpath (user-homedir-path "/Library/Keychains"))
-)
-(allow file-read* file-write*
-  (subpath (param darwin-user-cache-dir))
-  (subpath (param darwin-user-temp-dir))
 )
 (if (param-defined? network-service-test-certs-dir)
   (allow file-read* (subpath (param network-service-test-certs-dir))))
@@ -103,6 +127,13 @@
   ; Read network configuration.
   (global-name "com.apple.SystemConfiguration.DNSConfiguration")
   (global-name "com.apple.SystemConfiguration.configd")
+
+  ; If the system has a relay configured, system frameworks may call out
+  ; to nehelper to access its configuration (https://crbug.com/383306185)
+  (global-name "com.apple.nehelper")
+
+  ; Required by the Okta SSO which is performed using URLSession api.
+  (global-name "com.apple.AppSSO.service-xpc")
 )
 
 (allow sysctl-read

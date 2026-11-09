@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,14 @@
 
 #include <stddef.h>
 
-#include "base/check_op.h"
-#include "base/macros.h"
-
-namespace base {
-namespace internal {
+namespace base::json_internal {
 
 // Chosen to support 99.9% of documents found in the wild late 2016.
 // http://crbug.com/673263
-const size_t kAbsoluteMaxDepth = 200;
+// LINT.IfChange
+inline constexpr size_t kAbsoluteMaxDepth = 200;
+// LINT.ThenChange(//third_party/rust/serde_json_lenient/v0_2/wrapper/visitor.rs)
 
-// Simple class that checks for maximum recursion/stack overflow.
-class StackMarker {
- public:
-  StackMarker(size_t max_depth, size_t* depth)
-      : max_depth_(max_depth), depth_(depth) {
-    ++(*depth_);
-    DCHECK_LE(*depth_, max_depth_);
-  }
-  ~StackMarker() { --(*depth_); }
-
-  bool IsTooDeep() const { return *depth_ >= max_depth_; }
-
- private:
-  const size_t max_depth_;
-  size_t* const depth_;
-
-  DISALLOW_COPY_AND_ASSIGN(StackMarker);
-};
-
-}  // namespace internal
-}  // namespace base
+}  // namespace base::json_internal
 
 #endif  // BASE_JSON_JSON_COMMON_H_

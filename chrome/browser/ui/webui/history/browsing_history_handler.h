@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,46 +8,85 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/clock.h"
+#include "base/time/time.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/values.h"
 #include "chrome/browser/history/profile_based_browsing_history_driver.h"
-#include "content/public/browser/web_ui_message_handler.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "ui/webui/resources/cr_components/history/history.mojom.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"  // nogncheck
+#endif
+
+namespace content {
+class WebContents;
+}  // namespace content
+
+namespace critical_actions {
+struct CriticalActionEntry;
+}  // namespace critical_actions
 
 // The handler for Javascript messages related to the "history" view.
-class BrowsingHistoryHandler : public content::WebUIMessageHandler,
-                               public ProfileBasedBrowsingHistoryDriver {
+class BrowsingHistoryHandler : public history::mojom::PageHandler,
+                               public ProfileBasedBrowsingHistoryDriver,
+                               public signin::IdentityManager::Observer {
  public:
-  BrowsingHistoryHandler();
+  BrowsingHistoryHandler(
+      mojo::PendingReceiver<history::mojom::PageHandler> pending_page_handler,
+      Profile* profile,
+      content::WebContents* web_contents);
+
+  BrowsingHistoryHandler(const BrowsingHistoryHandler&) = delete;
+  BrowsingHistoryHandler& operator=(const BrowsingHistoryHandler&) = delete;
+
   ~BrowsingHistoryHandler() override;
 
-  // WebUIMessageHandler implementation.
-  void OnJavascriptAllowed() override;
-  void OnJavascriptDisallowed() override;
-  void RegisterMessages() override;
+#if !BUILDFLAG(IS_ANDROID)
+  void SetSidePanelUIEmbedder(
+      base::WeakPtr<TopChromeWebUIController::Embedder> side_panel_embedder);
+#endif
 
-  void StartQueryHistory();
+  void SetPage(mojo::PendingRemote<history::mojom::Page> pending_page) override;
 
-  // Handler for the "queryHistory" message.
-  void HandleQueryHistory(const base::ListValue* args);
+  void ShowSidePanelUI() override;
 
-  // Handler for the "queryHistoryContinuation" message.
-  void HandleQueryHistoryContinuation(const base::ListValue* args);
+  void QueryHistory(const std::string& query,
+                    int max_count,
+                    std::optional<base::Time> begin_time,
+                    std::optional<base::Time> end_time,
+                    bool include_user_visits,
+                    bool include_actor_visits,
+                    const std::vector<std::string>& client_ids,
+                    QueryHistoryCallback callback) override;
 
-  // Handler for the "removeVisits" message.
-  void HandleRemoveVisits(const base::ListValue* args);
+  void QueryHistoryContinuation(
+      QueryHistoryContinuationCallback callback) override;
 
-  // Handler for "clearBrowsingData" message.
-  void HandleClearBrowsingData(const base::ListValue* args);
+  void RemoveVisits(const std::vector<history::mojom::RemovalItemPtr> items,
+                    RemoveVisitsCallback callback) override;
 
-  // Handler for "removeBookmark" message.
-  void HandleRemoveBookmark(const base::ListValue* args);
+  void OpenClearBrowsingDataDialog() override;
+
+  void RemoveBookmark(const std::string& url) override;
+
+  void SetLastSelectedTab(const int last_tab) override;
 
   // BrowsingHistoryDriver implementation.
   void OnQueryComplete(
@@ -64,36 +103,125 @@ class BrowsingHistoryHandler : public content::WebUIMessageHandler,
   // ProfileBasedBrowsingHistoryDriver implementation.
   Profile* GetProfile() override;
 
+  // history::mojom::PageHandler:
+  void RequestAccountInfo(RequestAccountInfoCallback callback) override;
+  void TurnOnHistorySync(history::mojom::AccessPoint access_point) override;
+  void OpenCriticalActionConversation(
+      const std::string& critical_action_id,
+      OpenCriticalActionConversationCallback callback) override;
+  void GetSyncedDevicesForFiltering(
+      GetSyncedDevicesForFilteringCallback callback) override;
+  void GetTimePeriodOptions(GetTimePeriodOptionsCallback callback) override;
+#if !BUILDFLAG(IS_CHROMEOS)
+  void ShouldShowHistoryPageHistorySyncPromo(
+      ShouldShowHistoryPageHistorySyncPromoCallback callback) override;
+  void RecordHistoryPageHistorySyncPromoDismissed() override;
+  void IncrementHistoryPageHistorySyncPromoShownCount() override;
+#endif
+
   // For tests. This does not take the ownership of the clock. |clock| must
   // outlive the BrowsingHistoryHandler instance.
   void set_clock(base::Clock* clock) { clock_ = clock; }
 
+  void set_browsing_history_service_for_testing(
+      std::unique_ptr<history::BrowsingHistoryService> service) {
+    browsing_history_service_ = std::move(service);
+  }
+
+  history::BrowsingHistoryService* get_browsing_history_service_for_testing() {
+    return browsing_history_service_.get();
+  }
+
+#if defined(UNIT_TEST)
+  bool is_observing_identity_manager_for_testing() const {
+    return identity_manager_observation_.IsObserving();
+  }
+#endif
+
  protected:
-  virtual void SendHistoryQuery(int count, const std::u16string& query);
+  virtual void SendHistoryQuery(int count,
+                                const std::string& query,
+                                std::optional<base::Time> begin_time,
+                                std::optional<base::Time> end_time,
+                                bool include_user_visits,
+                                bool include_actor_visits,
+                                const std::vector<std::string>& client_ids);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(BrowsingHistoryHandlerTest,
                            ObservingWebHistoryDeletions);
   FRIEND_TEST_ALL_PREFIXES(BrowsingHistoryHandlerTest, MdTruncatesTitles);
 
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+  int GetHistoryPageHistorySyncPromoShownCount() const;
+  void IncrementHistoryPageHistorySyncPromoShownCountPref();
+
+  base::Time GetHistoryPageHistorySyncPromoLastDismissedTimestamp() const;
+  void SetHistoryPageHistorySyncPromoLastDismissedTimestamp(base::Time time);
+
+  bool IsHistoryPageHistorySyncPromoShownAfterDismissal() const;
+  // Sets pref to true when the history sync promo was shown after dismissal.
+  void SetHistoryPageHistorySyncPromoShownAfterDismissal();
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+  base::WeakPtr<TopChromeWebUIController::Embedder> side_panel_embedder_;
+#endif
+
+  // signin::IdentityManager::Observer:
+  void OnExtendedAccountInfoUpdated(const AccountInfo& info) override;
+
+  void CriticalActionsFetched(
+      const std::vector<history::BrowsingHistoryService::HistoryEntry>& results,
+      const history::BrowsingHistoryService::QueryResultsInfo&
+          query_results_info,
+      base::ElapsedTimer critical_actions_timer,
+      std::vector<critical_actions::CriticalActionEntry> critical_actions);
+
+  void HandleQueryResults(
+      const std::vector<history::BrowsingHistoryService::HistoryEntry>& results,
+      const history::BrowsingHistoryService::QueryResultsInfo&
+          query_results_info,
+      std::vector<critical_actions::CriticalActionEntry> critical_actions);
+
+  void OnCriticalActionRetrievedForLinkout(
+      OpenCriticalActionConversationCallback callback,
+      std::optional<critical_actions::CriticalActionEntry> entry);
+
+  raw_ptr<Profile> profile_;
+  raw_ptr<content::WebContents> web_contents_;
+  // Interface to send information to the web ui page.
+  mojo::Remote<history::mojom::Page> page_;
+  // Allows handling received messages from the web ui page.
+  mojo::Receiver<history::mojom::PageHandler> page_handler_;
+  const base::raw_ref<signin::IdentityManager> identity_manager_;
+  base::ScopedObservation<signin::IdentityManager,
+                          signin::IdentityManager::Observer>
+      identity_manager_observation_{this};
+
   // The clock used to vend times.
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 
   std::unique_ptr<history::BrowsingHistoryService> browsing_history_service_;
 
   std::vector<base::OnceClosure> deferred_callbacks_;
 
-  base::Value initial_results_;
-
-  std::string query_history_callback_id_;
+  QueryHistoryCallback query_history_callback_;
 
   base::OnceClosure query_history_continuation_;
 
-  std::string remove_visits_callback_;
+  // Timer tracking elapsed time from when a history query is sent until
+  // results are processed.
+  std::optional<base::ElapsedTimer> query_timer_;
+
+  // The hostname suffix from the current query. Used as `results_info->term`
+  // for host-only queries where `search_text` is empty, as the frontend
+  // requires a non-empty term to detect search mode.
+  std::string query_hostname_suffix_;
+
+  std::queue<RemoveVisitsCallback> remove_visits_callbacks_;
 
   base::WeakPtrFactory<BrowsingHistoryHandler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BrowsingHistoryHandler);
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_HISTORY_BROWSING_HISTORY_HANDLER_H_

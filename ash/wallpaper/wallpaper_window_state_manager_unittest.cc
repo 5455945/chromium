@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/window_state.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "ui/aura/window.h"
 
@@ -27,23 +26,29 @@ class WallpaperWindowStateManagerTest : public AshTestBase {
       : window_state_manager_(std::make_unique<WallpaperWindowStateManager>()) {
   }
 
+  WallpaperWindowStateManagerTest(const WallpaperWindowStateManagerTest&) =
+      delete;
+  WallpaperWindowStateManagerTest& operator=(
+      const WallpaperWindowStateManagerTest&) = delete;
+
   ~WallpaperWindowStateManagerTest() override = default;
 
  protected:
   std::unique_ptr<WallpaperWindowStateManager> window_state_manager_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WallpaperWindowStateManagerTest);
 };
 
 TEST_F(WallpaperWindowStateManagerTest, HideAndRestoreWindows) {
-  SimulateUserLogin(kTestAccount);
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   std::unique_ptr<aura::Window> wallpaper_picker_window(
-      CreateTestWindowInShellWithId(0));
-  std::unique_ptr<aura::Window> window1(CreateTestWindowInShellWithId(1));
-  std::unique_ptr<aura::Window> window2(CreateTestWindowInShellWithId(2));
-  std::unique_ptr<aura::Window> window3(CreateTestWindowInShellWithId(3));
-  std::unique_ptr<aura::Window> window4(CreateTestWindowInShellWithId(4));
+      CreateTestWindowInShell({.window_id = 0}));
+  std::unique_ptr<aura::Window> window1(
+      CreateTestWindowInShell({.window_id = 1}));
+  std::unique_ptr<aura::Window> window2(
+      CreateTestWindowInShell({.window_id = 2}));
+  std::unique_ptr<aura::Window> window3(
+      CreateTestWindowInShell({.window_id = 3}));
+  std::unique_ptr<aura::Window> window4(
+      CreateTestWindowInShell({.window_id = 4}));
 
   WindowState* wallpaper_picker_window_state =
       WindowState::Get(wallpaper_picker_window.get());
@@ -100,10 +105,11 @@ TEST_F(WallpaperWindowStateManagerTest, HideAndRestoreWindows) {
 // 2. If some windows are unminimized by user, the following call will minimize
 //    the unminimized windows again.
 TEST_F(WallpaperWindowStateManagerTest, HideAndManualUnminimizeWindows) {
-  SimulateUserLogin(kTestAccount);
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   std::unique_ptr<aura::Window> wallpaper_picker_window(
-      CreateTestWindowInShellWithId(0));
-  std::unique_ptr<aura::Window> window1(CreateTestWindowInShellWithId(1));
+      CreateTestWindowInShell({.window_id = 0}));
+  std::unique_ptr<aura::Window> window1(
+      CreateTestWindowInShell({.window_id = 1}));
 
   WindowState* wallpaper_picker_window_state =
       WindowState::Get(wallpaper_picker_window.get());
@@ -145,11 +151,13 @@ TEST_F(WallpaperWindowStateManagerTest, HideAndManualUnminimizeWindows) {
 // Test that invisible windows (e.g. those belonging to an inactive user) should
 // not be affected by |MinimizeInactiveWindows| or |RestoreMinimizedWindows|.
 TEST_F(WallpaperWindowStateManagerTest, IgnoreInvisibleWindows) {
-  SimulateUserLogin(kTestAccount);
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   std::unique_ptr<aura::Window> wallpaper_picker_window(
-      CreateTestWindowInShellWithId(0));
-  std::unique_ptr<aura::Window> window1(CreateTestWindowInShellWithId(1));
-  std::unique_ptr<aura::Window> window2(CreateTestWindowInShellWithId(2));
+      CreateTestWindowInShell({.window_id = 0}));
+  std::unique_ptr<aura::Window> window1(
+      CreateTestWindowInShell({.window_id = 1}));
+  std::unique_ptr<aura::Window> window2(
+      CreateTestWindowInShell({.window_id = 2}));
 
   WindowState* wallpaper_picker_window_state =
       WindowState::Get(wallpaper_picker_window.get());

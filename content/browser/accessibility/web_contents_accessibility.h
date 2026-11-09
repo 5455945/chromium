@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,21 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
 #include "content/common/content_export.h"
 
 namespace content {
 
 // Class that bridges BrowserAccessibilityManager and platform-dependent
 // handler.
-// TODO(crbug.com/727210): Expand this class to work on all the platforms.
+// TODO(crbug.com/40522979): Expand this class to work on all the platforms.
 class CONTENT_EXPORT WebContentsAccessibility {
  public:
-  WebContentsAccessibility() {}
-  virtual ~WebContentsAccessibility() {}
+  WebContentsAccessibility() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(WebContentsAccessibility);
+  WebContentsAccessibility(const WebContentsAccessibility&) = delete;
+  WebContentsAccessibility& operator=(const WebContentsAccessibility&) = delete;
+
+  virtual ~WebContentsAccessibility() = default;
 };
 }  // namespace content
 

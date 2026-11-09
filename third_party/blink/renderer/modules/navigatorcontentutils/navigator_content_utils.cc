@@ -28,8 +28,10 @@
 
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/common/custom_handlers/protocol_handler_utils.h"
+#include "third_party/blink/public/common/scheme_registry.h"
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
@@ -48,27 +50,31 @@ const char NavigatorContentUtils::kSupplementName[] = "NavigatorContentUtils";
 
 namespace {
 
-const char kToken[] = "%s";
+constexpr char kIsolatedAppError[] =
+    "Isolated Web Apps do not support registering/unregistering protocol "
+    "handlers via the navigator API; use the `protocol_handlers` field in the "
+    "web app manifest instead.";
 
+// Verify custom handler URL security as described in steps 6 and 7
+// https://html.spec.whatwg.org/multipage/system-state.html#normalize-protocol-handler-parameters
 static bool VerifyCustomHandlerURLSecurity(
     const LocalDOMWindow& window,
     const KURL& full_url,
     String& error_message,
     ProtocolHandlerSecurityLevel security_level) {
-  // This matches ProtocolHandler::IsValid().
-  // https://html.spec.whatwg.org/multipage/system-state.html#normalize-protocol-handler-parameters
-  bool has_valid_scheme =
-      full_url.ProtocolIsInHTTPFamily() ||
-      (security_level == ProtocolHandlerSecurityLevel::kExtensionFeatures &&
-       SchemeRegistry::IsExtensionScheme(full_url.Protocol()));
-  if (!has_valid_scheme || !network::IsUrlPotentiallyTrustworthy(full_url)) {
+  // The specification says that the API throws SecurityError exception if the
+  // URL's protocol isn't HTTP(S) or is potentially trustworthy.
+  if (!IsAllowedCustomHandlerURL(GURL(full_url), security_level)) {
     error_message = "The scheme of the url provided must be HTTP(S).";
     return false;
   }
 
   // The specification says that the API throws SecurityError exception if the
-  // URL's origin differs from the window's origin.
-  if (security_level < ProtocolHandlerSecurityLevel::kUntrustedOrigins &&
+  // URL's origin differs from the window's origin. At elevated security levels,
+  // the same-origin requirement may be relaxed, but only for HTTP(S) handler
+  // URLs.
+  if ((security_level < ProtocolHandlerSecurityLevel::kUntrustedOrigins ||
+       !full_url.ProtocolIsInHttpFamily()) &&
       !window.GetSecurityOrigin()->CanRequest(full_url)) {
     error_message =
         "Can only register custom handler in the document's origin.";
@@ -88,7 +94,7 @@ static bool VerifyCustomHandlerURL(
   String error_message;
 
   if (!VerifyCustomHandlerURLSyntax(full_url, base_url, user_url,
-                                    error_message)) {
+                                    security_level, error_message)) {
     exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
                                       error_message);
     return false;
@@ -109,27 +115,25 @@ bool VerifyCustomHandlerScheme(const String& scheme,
                                String& error_string,
                                ProtocolHandlerSecurityLevel security_level) {
   if (!IsValidProtocol(scheme)) {
-    error_string = "The scheme name '" + scheme +
-                   "' is not allowed by URI syntax (RFC3986).";
+    error_string = StrCat({"The scheme name '", scheme,
+                           "' is not allowed by URI syntax (RFC3986)."});
     return false;
   }
 
-  bool allow_ext_plus_prefix =
-      security_level >= ProtocolHandlerSecurityLevel::kExtensionFeatures;
-  bool has_custom_scheme_prefix;
-  StringUTF8Adaptor scheme_adaptor(scheme);
-  if (!IsValidCustomHandlerScheme(scheme_adaptor.AsStringPiece(),
-                                  allow_ext_plus_prefix,
-                                  has_custom_scheme_prefix)) {
+  bool has_custom_scheme_prefix = false;
+  StringUtf8Adaptor scheme_adaptor(scheme);
+  if (!IsValidCustomHandlerScheme(scheme_adaptor.AsStringView(), security_level,
+                                  &has_custom_scheme_prefix)) {
     if (has_custom_scheme_prefix) {
-      error_string = "The scheme name '" + scheme +
-                     "' is not allowed. Schemes starting with '" + scheme +
-                     "' must be followed by one or more ASCII letters.";
+      error_string =
+          StrCat({"The scheme name '", scheme,
+                  "' is not allowed. Schemes starting with '", scheme,
+                  "' must be followed by one or more ASCII letters."});
     } else {
-      error_string = "The scheme '" + scheme +
-                     "' doesn't belong to the scheme allowlist. "
-                     "Please prefix non-allowlisted schemes "
-                     "with the string 'web+'.";
+      error_string =
+          StrCat({"The scheme '", scheme,
+                  "' doesn't belong to the scheme allowlist. Please prefix "
+                  "non-allowlisted schemes with the string 'web+'."});
     }
     return false;
   }
@@ -140,26 +144,26 @@ bool VerifyCustomHandlerScheme(const String& scheme,
 bool VerifyCustomHandlerURLSyntax(const KURL& full_url,
                                   const KURL& base_url,
                                   const String& user_url,
+                                  ProtocolHandlerSecurityLevel security_level,
                                   String& error_message) {
-  // The specification requires that it is a SyntaxError if the "%s" token is
-  // not present.
-  int index = user_url.Find(kToken);
-  if (-1 == index) {
-    error_message =
-        "The url provided ('" + user_url + "') does not contain '%s'.";
-    return false;
+  StringUtf8Adaptor url_adaptor(user_url);
+  URLSyntaxErrorCode code = IsValidCustomHandlerURLSyntax(
+      GURL(full_url), url_adaptor.AsStringView(), security_level);
+  switch (code) {
+    case URLSyntaxErrorCode::kNoError:
+      return true;
+    case URLSyntaxErrorCode::kMissingToken:
+      error_message = StrCat(
+          {"The url provided ('", user_url, "') does not contain '%s'."});
+      break;
+    case URLSyntaxErrorCode::kInvalidUrl:
+      error_message = StrCat(
+          {"The custom handler URL created by removing '%s' and prepending '",
+           base_url.GetString(), "' is invalid."});
+      break;
   }
 
-  // It is also a SyntaxError if the custom handler URL, as created by removing
-  // the "%s" token and prepending the base url, does not resolve.
-  if (full_url.IsEmpty() || !full_url.IsValid()) {
-    error_message =
-        "The custom handler URL created by removing '%s' and prepending '" +
-        base_url.GetString() + "' is invalid.";
-    return false;
-  }
-
-  return true;
+  return false;
 }
 
 NavigatorContentUtils& NavigatorContentUtils::From(Navigator& navigator,
@@ -182,11 +186,18 @@ void NavigatorContentUtils::registerProtocolHandler(
     const String& url,
     ExceptionState& exception_state) {
   LocalDOMWindow* window = navigator.DomWindow();
-  if (!window)
+  if (!window) {
     return;
+  }
+
+  WebSecurityOrigin origin(window->GetSecurityOrigin());
+  if (CommonSchemeRegistry::IsIsolatedAppScheme(origin.Protocol().Ascii())) {
+    exception_state.ThrowSecurityError(kIsolatedAppError);
+    return;
+  }
 
   ProtocolHandlerSecurityLevel security_level =
-      Platform::Current()->GetProtocolHandlerSecurityLevel();
+      Platform::Current()->GetProtocolHandlerSecurityLevel(origin);
 
   // Per the HTML specification, exceptions for arguments must be surfaced in
   // the order of the arguments.
@@ -196,13 +207,14 @@ void NavigatorContentUtils::registerProtocolHandler(
     return;
   }
 
-  if (!VerifyCustomHandlerURL(*window, url, exception_state, security_level))
+  if (!VerifyCustomHandlerURL(*window, url, exception_state, security_level)) {
     return;
+  }
 
   // Count usage; perhaps we can forbid this from cross-origin subframes as
   // proposed in https://crbug.com/977083.
   UseCounter::Count(
-      window, window->GetFrame()->IsCrossOriginToMainFrame()
+      window, window->GetFrame()->IsCrossOriginToOutermostMainFrame()
                   ? WebFeature::kRegisterProtocolHandlerCrossOriginSubframe
                   : WebFeature::kRegisterProtocolHandlerSameOriginAsTop);
   // Count usage. Context should now always be secure due to the same-origin
@@ -212,9 +224,17 @@ void NavigatorContentUtils::registerProtocolHandler(
                         ? WebFeature::kRegisterProtocolHandlerSecureOrigin
                         : WebFeature::kRegisterProtocolHandlerInsecureOrigin);
 
-  NavigatorContentUtils::From(navigator, *window->GetFrame())
-      .Client()
-      ->RegisterProtocolHandler(scheme, window->CompleteURL(url));
+  Document* document = window->document();
+  auto* client =
+      NavigatorContentUtils::From(navigator, *window->GetFrame()).Client();
+
+  if (!document->IsPrerendering()) {
+    client->RegisterProtocolHandler(scheme, window->CompleteURL(url));
+  } else {
+    document->AddPostPrerenderingActivationStep(
+        BindOnce(&NavigatorContentUtilsClient::RegisterProtocolHandler,
+                 WrapWeakPersistent(client), scheme, window->CompleteURL(url)));
+  }
 }
 
 void NavigatorContentUtils::unregisterProtocolHandler(
@@ -223,11 +243,18 @@ void NavigatorContentUtils::unregisterProtocolHandler(
     const String& url,
     ExceptionState& exception_state) {
   LocalDOMWindow* window = navigator.DomWindow();
-  if (!window)
+  if (!window) {
     return;
+  }
+
+  WebSecurityOrigin origin(window->GetSecurityOrigin());
+  if (CommonSchemeRegistry::IsIsolatedAppScheme(origin.Protocol().Ascii())) {
+    exception_state.ThrowSecurityError(kIsolatedAppError);
+    return;
+  }
 
   ProtocolHandlerSecurityLevel security_level =
-      Platform::Current()->GetProtocolHandlerSecurityLevel();
+      Platform::Current()->GetProtocolHandlerSecurityLevel(origin);
 
   String error_message;
   if (!VerifyCustomHandlerScheme(scheme, error_message, security_level)) {
@@ -235,12 +262,21 @@ void NavigatorContentUtils::unregisterProtocolHandler(
     return;
   }
 
-  if (!VerifyCustomHandlerURL(*window, url, exception_state, security_level))
+  if (!VerifyCustomHandlerURL(*window, url, exception_state, security_level)) {
     return;
+  }
 
-  NavigatorContentUtils::From(navigator, *window->GetFrame())
-      .Client()
-      ->UnregisterProtocolHandler(scheme, window->CompleteURL(url));
+  Document* document = window->document();
+  auto* client =
+      NavigatorContentUtils::From(navigator, *window->GetFrame()).Client();
+
+  if (!document->IsPrerendering()) {
+    client->UnregisterProtocolHandler(scheme, window->CompleteURL(url));
+  } else {
+    document->AddPostPrerenderingActivationStep(
+        BindOnce(&NavigatorContentUtilsClient::UnregisterProtocolHandler,
+                 WrapWeakPersistent(client), scheme, window->CompleteURL(url)));
+  }
 }
 
 void NavigatorContentUtils::Trace(Visitor* visitor) const {

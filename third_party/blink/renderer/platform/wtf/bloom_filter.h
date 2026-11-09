@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Apple Inc. All rights reserved.
+ * Copyright (C) 2011, 2015 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,109 +26,113 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_BLOOM_FILTER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_BLOOM_FILTER_H_
 
-#include "base/dcheck_is_on.h"
+#include <algorithm>
+#include <array>
+
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
-namespace WTF {
+namespace blink {
 
-// Counting bloom filter with k=2 and 8 bit counters. Uses 2^keyBits bytes of
-// memory.  False positive rate is approximately (1-e^(-2n/m))^2, where n is
-// the number of unique keys and m is the table size (==2^keyBits).
-template <unsigned keyBits>
+// Bloom filter with k=2. Uses 2^kKeyBits/8 bytes of memory.
+// False positive rate is approximately (1-e^(-2n/m))^2, where n is the number
+// of unique  keys and m is the table size (==2^kKeyBits).
+template <wtf_size_t kKeyBits>
 class BloomFilter {
   USING_FAST_MALLOC(BloomFilter);
 
  public:
-  static_assert(keyBits <= 16, "bloom filter key size check");
+  BloomFilter() = default;
 
-  static const size_t kTableSize = 1 << keyBits;
-  static const unsigned kKeyMask = (1 << keyBits) - 1;
-  static uint8_t MaximumCount() { return std::numeric_limits<uint8_t>::max(); }
-
-  BloomFilter() { Clear(); }
-
-  void Add(unsigned hash);
-  void Remove(unsigned hash);
+  void Add(uint32_t hash);
 
   // The filter may give false positives (claim it may contain a key it doesn't)
   // but never false negatives (claim it doesn't contain a key it does).
-  bool MayContain(unsigned hash) const {
-    return FirstSlot(hash) && SecondSlot(hash);
-  }
+  bool MayContain(uint32_t hash) const;
 
-  // The filter must be cleared before reuse even if all keys are removed.
-  // Otherwise overflowed keys will stick around.
+  // The filter must be cleared before reuse.
   void Clear();
 
-#if DCHECK_IS_ON()
-  // Slow.
-  bool LikelyEmpty() const;
-  bool IsClear() const;
-#endif
+  // Add every element from the other filter into this one, so that
+  // if this->MayContain(hash) || other.MayContain(hash) before the call,
+  // this->MayContain(hash) will be true after it.
+  void Merge(const BloomFilter<kKeyBits>& other);
+
+  friend bool operator==(const BloomFilter<kKeyBits>& a,
+                         const BloomFilter<kKeyBits>& b) {
+    return a.bit_array_ == b.bit_array_;
+  }
+
+  base::span<uint32_t> GetRawData() { return base::span(bit_array_); }
 
  private:
-  uint8_t& FirstSlot(unsigned hash) { return table_[hash & kKeyMask]; }
-  uint8_t& SecondSlot(unsigned hash) { return table_[(hash >> 16) & kKeyMask]; }
-  const uint8_t& FirstSlot(unsigned hash) const {
-    return table_[hash & kKeyMask];
-  }
-  const uint8_t& SecondSlot(unsigned hash) const {
-    return table_[(hash >> 16) & kKeyMask];
-  }
+  using BitArrayUnit = uint32_t;
+  static constexpr size_t kMaxKeyBits = 16;
+  static constexpr size_t kTableSize = 1 << kKeyBits;
+  static constexpr size_t kBitsPerPosition = 8 * sizeof(BitArrayUnit);
+  static constexpr size_t kBitArraySize = kTableSize / kBitsPerPosition;
+  static constexpr uint32_t kKeyMask = (1u << kKeyBits) - 1;
 
-  uint8_t table_[kTableSize];
+  static size_t BitArrayIndex(uint32_t key);
+  static uint32_t BitMask(uint32_t key);
+
+  bool IsBitSet(uint32_t key) const;
+  void SetBit(uint32_t key);
+
+  std::array<BitArrayUnit, kBitArraySize> bit_array_{};
+
+  static_assert(kKeyBits <= kMaxKeyBits, "bloom filter key size check");
+
+  friend class BloomFilterTest;
 };
 
-template <unsigned keyBits>
-inline void BloomFilter<keyBits>::Add(unsigned hash) {
-  uint8_t& first = FirstSlot(hash);
-  uint8_t& second = SecondSlot(hash);
-  if (LIKELY(first < MaximumCount()))
-    ++first;
-  if (LIKELY(second < MaximumCount()))
-    ++second;
+template <wtf_size_t kKeyBits>
+inline bool BloomFilter<kKeyBits>::MayContain(uint32_t hash) const {
+  // The top and bottom bits of the incoming hash are treated as independent
+  // bloom filter hash functions. This works well as long as the filter size
+  // is not much above 2^kMaxKeyBits
+  return IsBitSet(hash) && IsBitSet(hash >> kMaxKeyBits);
 }
 
-template <unsigned keyBits>
-inline void BloomFilter<keyBits>::Remove(unsigned hash) {
-  uint8_t& first = FirstSlot(hash);
-  uint8_t& second = SecondSlot(hash);
-  DCHECK(first);
-  DCHECK(second);
-  // In case of an overflow, the slot sticks in the table until clear().
-  if (LIKELY(first < MaximumCount()))
-    --first;
-  if (LIKELY(second < MaximumCount()))
-    --second;
+template <wtf_size_t kKeyBits>
+inline void BloomFilter<kKeyBits>::Add(uint32_t hash) {
+  SetBit(hash);
+  SetBit(hash >> kMaxKeyBits);
 }
 
-template <unsigned keyBits>
-inline void BloomFilter<keyBits>::Clear() {
-  memset(table_, 0, kTableSize);
+template <wtf_size_t kKeyBits>
+inline void BloomFilter<kKeyBits>::Clear() {
+  std::ranges::fill(bit_array_, 0);
 }
 
-#if DCHECK_IS_ON()
-template <unsigned keyBits>
-bool BloomFilter<keyBits>::LikelyEmpty() const {
-  for (size_t n = 0; n < kTableSize; ++n) {
-    if (table_[n] && table_[n] != MaximumCount())
-      return false;
+template <wtf_size_t kKeyBits>
+inline void BloomFilter<kKeyBits>::Merge(const BloomFilter<kKeyBits>& other) {
+  for (size_t i = 0; i < kBitArraySize; ++i) {
+    bit_array_[i] |= other.bit_array_[i];
   }
-  return true;
 }
 
-template <unsigned keyBits>
-bool BloomFilter<keyBits>::IsClear() const {
-  for (size_t n = 0; n < kTableSize; ++n) {
-    if (table_[n])
-      return false;
-  }
-  return true;
+template <wtf_size_t kKeyBits>
+inline size_t BloomFilter<kKeyBits>::BitArrayIndex(uint32_t key) {
+  return (key & kKeyMask) / kBitsPerPosition;
 }
-#endif
 
-}  // namespace WTF
+template <wtf_size_t kKeyBits>
+inline uint32_t BloomFilter<kKeyBits>::BitMask(uint32_t key) {
+  return 1u << (key % kBitsPerPosition);
+}
 
-using WTF::BloomFilter;
+template <wtf_size_t kKeyBits>
+bool BloomFilter<kKeyBits>::IsBitSet(uint32_t key) const {
+  return bit_array_[BitArrayIndex(key)] & BitMask(key);
+}
+
+template <wtf_size_t kKeyBits>
+void BloomFilter<kKeyBits>::SetBit(uint32_t key) {
+  bit_array_[BitArrayIndex(key)] |= BitMask(key);
+}
+
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_BLOOM_FILTER_H_

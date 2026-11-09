@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/ref_counted.h"
 #include "gpu/command_buffer/service/common_decoder.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/shader_manager.h"
 #include "gpu/gpu_gles2_export.h"
+
+namespace gl {
+class ProgressReporter;
+}
 
 namespace gpu {
 
@@ -31,7 +37,6 @@ namespace gles2 {
 class FeatureInfo;
 class ProgramCache;
 class ProgramManager;
-class ProgressReporter;
 class Shader;
 class ShaderManager;
 
@@ -75,8 +80,6 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
  public:
   static const int kMaxAttachedShaders = 2;
 
-  enum VaryingsPackingOption { kCountOnlyStaticallyUsed, kCountAll };
-
   struct ProgramOutputInfo {
     ProgramOutputInfo(GLuint _color_name,
                       GLuint _index,
@@ -88,7 +91,7 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
     std::string name;
   };
 
-  struct UniformInfo {
+  struct GPU_GLES2_EXPORT UniformInfo {
     UniformInfo();
     UniformInfo(const UniformInfo& other);
     UniformInfo(const std::string& client_name,
@@ -100,9 +103,10 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
     bool IsSampler() const {
       switch (type) {
         case GL_SAMPLER_2D:
-        case GL_SAMPLER_2D_RECT_ARB:
+        case GL_SAMPLER_2D_RECT_ANGLE:
         case GL_SAMPLER_CUBE:
         case GL_SAMPLER_EXTERNAL_OES:
+        case GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT:
         case GL_SAMPLER_3D:
         case GL_SAMPLER_2D_SHADOW:
         case GL_SAMPLER_2D_ARRAY:
@@ -180,7 +184,7 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
     }
 
    private:
-    T* shader_variable_;  // Pointer to *_info_ vector entry.
+    raw_ptr<T> shader_variable_;  // Pointer to *_info_ vector entry.
     bool inactive_;
   };
 
@@ -318,7 +322,6 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
 
   // Performs glLinkProgram and related activities.
   bool Link(ShaderManager* manager,
-            VaryingsPackingOption varyings_packing_option,
             DecoderClient* client);
 
   // Performs glValidateProgram and related activities.
@@ -331,6 +334,16 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
   bool InUse() const {
     DCHECK_GE(use_count_, 0);
     return use_count_ != 0;
+  }
+
+  void IncrementActiveTransformFeedbackCount() {
+    ++active_transform_feedback_count_;
+  }
+
+  void DecrementActiveTransformFeedbackCount();
+
+  bool IsActiveForTransformFeedback() const {
+    return active_transform_feedback_count_ > 0;
   }
 
   // Sets attribute-location binding from a glBindAttribLocation() call.
@@ -392,7 +405,7 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
 
   // Return false if varyings can't be packed into the max available
   // varying registers.
-  bool CheckVaryingsPacking(VaryingsPackingOption option) const;
+  bool CheckVaryingsPacking() const;
 
   void TransformFeedbackVaryings(GLsizei count, const char* const* varyings,
       GLenum buffer_mode);
@@ -498,9 +511,6 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
   // Updates the program log info from GL
   void UpdateLogInfo();
 
-  // Clears all the uniforms.
-  void ClearUniforms(std::vector<uint8_t>* zero_buffer);
-
   // Updates the draw id uniform location used by ANGLE_multi_draw
   void UpdateDrawIDUniformLocation();
 
@@ -543,9 +553,11 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
 
   void ClearVertexInputMasks();
 
-  ProgramManager* manager_;
+  raw_ptr<ProgramManager> manager_;
 
   int use_count_;
+
+  int active_transform_feedback_count_;
 
   GLsizei max_attrib_name_length_;
 
@@ -570,8 +582,9 @@ class GPU_GLES2_EXPORT Program : public base::RefCounted<Program> {
   GLuint service_id_;
 
   // Shaders by type of shader.
-  scoped_refptr<Shader> attached_shaders_[kMaxAttachedShaders];
-  scoped_refptr<Shader> shaders_from_last_successful_link_[kMaxAttachedShaders];
+  std::array<scoped_refptr<Shader>, kMaxAttachedShaders> attached_shaders_;
+  std::array<scoped_refptr<Shader>, kMaxAttachedShaders>
+      shaders_from_last_successful_link_;
 
   // True if this program is marked as deleted.
   bool deleted_;
@@ -653,6 +666,10 @@ class GPU_GLES2_EXPORT ProgramManager {
                  const GpuPreferences& gpu_preferences,
                  FeatureInfo* feature_info,
                  gl::ProgressReporter* progress_reporter);
+
+  ProgramManager(const ProgramManager&) = delete;
+  ProgramManager& operator=(const ProgramManager&) = delete;
+
   ~ProgramManager();
 
   // Must call before destruction.
@@ -678,9 +695,6 @@ class GPU_GLES2_EXPORT ProgramManager {
 
   // Makes a program as unused. If deleted the program will be removed.
   void UnuseProgram(ShaderManager* shader_manager, Program* program);
-
-  // Clears the uniforms for this program.
-  void ClearUniforms(Program* program);
 
   // Updates the draw id location for this program for ANGLE_multi_draw
   void UpdateDrawIDUniformLocation(Program* program);
@@ -738,22 +752,20 @@ class GPU_GLES2_EXPORT ProgramManager {
   // Used to clear uniforms.
   std::vector<uint8_t> zero_;
 
-  ProgramCache* program_cache_;
+  raw_ptr<ProgramCache> program_cache_;
 
   uint32_t max_varying_vectors_;
   uint32_t max_draw_buffers_;
   uint32_t max_dual_source_draw_buffers_;
   uint32_t max_vertex_attribs_;
 
-  const GpuPreferences& gpu_preferences_;
+  const raw_ref<const GpuPreferences> gpu_preferences_;
   scoped_refptr<FeatureInfo> feature_info_;
 
   // Used to notify the watchdog thread of progress during destruction,
   // preventing time-outs when destruction takes a long time. May be null when
   // using in-process command buffer.
-  gl::ProgressReporter* progress_reporter_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProgramManager);
+  raw_ptr<gl::ProgressReporter> progress_reporter_;
 };
 
 inline const FeatureInfo& Program::feature_info() const {

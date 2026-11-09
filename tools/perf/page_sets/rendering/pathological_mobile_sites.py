@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 from telemetry.page import shared_page_state
@@ -14,16 +14,19 @@ class PathologicalMobileSitesPage(rendering_story.RenderingStory):
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
   TAGS = [story_tags.PATHOLOGICAL_MOBILE_SITES]
 
-  def __init__(self,
-               page_set,
-               shared_page_state_class=shared_page_state.SharedMobilePageState,
-               name_suffix='',
-               extra_browser_args=None):
+  def __init__(
+    self,
+    page_set,
+    shared_page_state_class=shared_page_state.SharedMobilePageState,
+    name_suffix='',
+    extra_browser_args=None,
+  ):
     super(PathologicalMobileSitesPage, self).__init__(
-        page_set=page_set,
-        shared_page_state_class=shared_page_state_class,
-        name_suffix=name_suffix,
-        extra_browser_args=extra_browser_args)
+      page_set=page_set,
+      shared_page_state_class=shared_page_state_class,
+      name_suffix=name_suffix,
+      extra_browser_args=extra_browser_args,
+    )
 
   def RunPageInteractions(self, action_runner):
     with action_runner.CreateGestureInteraction('ScrollAction'):

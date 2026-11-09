@@ -1,45 +1,42 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/screens/chromevox_hint/chromevox_hint_detector.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "chrome/browser/chromeos/idle_detector.h"
+#include "base/functional/bind.h"
+#include "chromeos/ash/experiences/idle_detector/idle_detector.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
 
 namespace ash {
 namespace {
 
 // Amount of time the user has to be idle for before giving the ChromeVox hint.
-const base::TimeDelta kChromeVoxHintIdleDuration =
-    base::TimeDelta::FromSeconds(20);
+const base::TimeDelta kChromeVoxHintIdleDuration = base::Seconds(20);
 
 }  // namespace
 
 ChromeVoxHintDetector::ChromeVoxHintDetector(const base::TickClock* clock,
                                              Observer* observer)
     : tick_clock_(clock), observer_(observer) {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M161);
   StartIdleDetection();
 }
 
-ChromeVoxHintDetector::~ChromeVoxHintDetector() {}
+ChromeVoxHintDetector::~ChromeVoxHintDetector() = default;
 
 void ChromeVoxHintDetector::StartIdleDetection() {
-  if (!features::IsOobeChromeVoxHintEnabled() ||
-      switches::IsOOBEChromeVoxHintTimerDisabledForTesting()) {
+  if (switches::IsOOBEChromeVoxHintTimerDisabledForTesting()) {
     return;
   }
 
   // This is done so that developers and testers don't repeatedly receive
   // the hint when flashing.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kSystemDevMode) &&
+          chromeos::switches::kSystemDevMode) &&
       !switches::IsOOBEChromeVoxHintEnabledForDevMode()) {
     return;
   }

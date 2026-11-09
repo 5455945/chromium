@@ -1,14 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/events/keyboard_hook.h"
+#include <windows.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event.h"
+#include "ui/events/keyboard_hook.h"
 
 namespace ui {
 
@@ -16,6 +17,11 @@ class MediaKeyboardHookWinInteractiveTest : public testing::Test {
  public:
   MediaKeyboardHookWinInteractiveTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::UI) {}
+
+  MediaKeyboardHookWinInteractiveTest(
+      const MediaKeyboardHookWinInteractiveTest&) = delete;
+  MediaKeyboardHookWinInteractiveTest& operator=(
+      const MediaKeyboardHookWinInteractiveTest&) = delete;
 
  protected:
   void SetUp() override {
@@ -40,7 +46,7 @@ class MediaKeyboardHookWinInteractiveTest : public testing::Test {
     input.ki.wVk = code;
     input.ki.time = time_stamp_++;
     input.ki.dwFlags = 0;
-    SendInput(1, &input, sizeof(INPUT));
+    ::SendInput(1, &input, sizeof(INPUT));
   }
 
   void SendKeyUp(KeyboardCode code) {
@@ -49,7 +55,7 @@ class MediaKeyboardHookWinInteractiveTest : public testing::Test {
     input.ki.wVk = code;
     input.ki.time = time_stamp_++;
     input.ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(1, &input, sizeof(INPUT));
+    ::SendInput(1, &input, sizeof(INPUT));
   }
 
   // Expect that we have received the correct number of key events.
@@ -84,8 +90,6 @@ class MediaKeyboardHookWinInteractiveTest : public testing::Test {
   base::RunLoop key_event_wait_loop_;
   uint32_t num_key_events_to_wait_for_ = 0;
   DWORD time_stamp_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaKeyboardHookWinInteractiveTest);
 };
 
 // Test that we catch the different media key events.
@@ -108,12 +112,14 @@ TEST_F(MediaKeyboardHookWinInteractiveTest, CallbackReceivesProperEvents) {
   // Send a key down event and validate it when received through the hook.
   SendKeyDown(ui::VKEY_MEDIA_PLAY_PAUSE);
   WaitForKeyEvents(1);
-  ExpectReceivedEvent(/*index=*/0, ui::VKEY_MEDIA_PLAY_PAUSE, ET_KEY_PRESSED);
+  ExpectReceivedEvent(/*index=*/0, ui::VKEY_MEDIA_PLAY_PAUSE,
+                      EventType::kKeyPressed);
 
   // Send a key up event and validate it when received through the hook.
   SendKeyUp(ui::VKEY_MEDIA_PLAY_PAUSE);
   WaitForKeyEvents(2);
-  ExpectReceivedEvent(/*index=*/1, ui::VKEY_MEDIA_PLAY_PAUSE, ET_KEY_RELEASED);
+  ExpectReceivedEvent(/*index=*/1, ui::VKEY_MEDIA_PLAY_PAUSE,
+                      EventType::kKeyReleased);
 }
 
 }  // namespace ui

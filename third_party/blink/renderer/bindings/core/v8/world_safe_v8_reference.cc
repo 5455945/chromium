@@ -1,11 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/bindings/core/v8/world_safe_v8_reference.h"
 
+#include "base/check.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/wtf/stack_util.h"
 
 namespace blink {
 
@@ -19,13 +21,13 @@ v8::Local<v8::Value> WorldSafeV8ReferenceInternal::ToWorldSafeValue(
   v8::Isolate* isolate = target_script_state->GetIsolate();
 
   if (&v8_reference_world == &target_script_state->World())
-    return v8_reference.NewLocal(isolate);
+    return v8_reference.Get(isolate);
 
   // If |v8_reference| is a v8::Object, clones |v8_reference| in the context of
   // |target_script_state| and returns it.  Otherwise returns |v8_reference|
   // itself that is already safe to access in |target_script_state|.
 
-  v8::Local<v8::Value> value = v8_reference.NewLocal(isolate);
+  v8::Local<v8::Value> value = v8_reference.Get(isolate);
   if (!value->IsObject())
     return value;
 
@@ -35,19 +37,35 @@ v8::Local<v8::Value> WorldSafeV8ReferenceInternal::ToWorldSafeValue(
 }
 
 // static
-void WorldSafeV8ReferenceInternal::MaybeCheckCreationContextWorld(
-    const DOMWrapperWorld& world,
-    v8::Local<v8::Value> value) {
-  if (!value->IsObject())
+void WorldSafeV8ReferenceInternal::MaybeCheckCreationContext(
+    v8::Isolate* isolate,
+    const v8::Local<v8::Context> current_context,
+    const DOMWrapperWorld& current_world,
+    const v8::Local<v8::Value> value) {
+  if (!value->IsObject()) {
     return;
+  }
 
-  v8::Local<v8::Context> context = value.As<v8::Object>()->CreationContext();
+  // Fast bailout: If we are on the main thread and only a single world exists,
+  // we know that all contexts belong to this particular world.
+  if (!MayNotBeMainThread() &&
+      !DOMWrapperWorld::NonMainWorldsExistInMainThread()) {
+    return;
+  }
+
+  v8::Local<v8::Context> creation_context;
   // Creation context is null if the value is a remote object.
-  if (context.IsEmpty())
+  if (!value.As<v8::Object>()->GetCreationContext(isolate).ToLocal(
+          &creation_context)) {
     return;
-
-  ScriptState* script_state = ScriptState::From(context);
-  CHECK_EQ(&world, &script_state->World());
+  }
+  // Early bailout in case contexts are equal.
+  if (current_context == creation_context) [[likely]] {
+    return;
+  }
+  // For different contexts we need to check the corresponding worlds.
+  CHECK_EQ(&DOMWrapperWorld::World(isolate, current_context),
+           &ScriptState::From(isolate, creation_context)->World());
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 #define CONTENT_BROWSER_NOTIFICATIONS_NOTIFICATION_ID_GENERATOR_H_
 
 #include <stdint.h>
-#include <string>
 
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include <string>
+#include <string_view>
+
 #include "content/common/content_export.h"
 #include "url/origin.h"
 
@@ -36,6 +36,10 @@ namespace content {
 // It is important to note that, for persistent notifications, the generated
 // notification id can outlive the browser process responsible for creating it.
 //
+// The browser may create notifications on behalf of an origin which will be
+// captured as part of the notification id to make sure those ids don't collide
+// with ones created via the website.
+//
 // Note that the PlatformNotificationService is expected to handle
 // distinguishing identical generated ids from different browser contexts.
 //
@@ -47,20 +51,24 @@ class CONTENT_EXPORT NotificationIdGenerator {
  public:
   NotificationIdGenerator() = default;
 
+  NotificationIdGenerator(const NotificationIdGenerator&) = delete;
+  NotificationIdGenerator& operator=(const NotificationIdGenerator&) = delete;
+
   // Returns whether |notification_id| belongs to a persistent notification.
-  static bool IsPersistentNotification(
-      const base::StringPiece& notification_id);
+  static bool IsPersistentNotification(const std::string_view& notification_id);
 
   // Returns whether |notification_id| belongs to a non-persistent notification.
   static bool IsNonPersistentNotification(
-      const base::StringPiece& notification_id);
+      const std::string_view& notification_id);
 
   // Generates an id for a persistent notification given the notification's
-  // origin, tag and persistent notification id. The persistent notification id
-  // will have been created by the persistent notification database.
+  // origin, tag, is_shown_by_browser and persistent notification id. The
+  // persistent notification id will have been created by the persistent
+  // notification database.
   std::string GenerateForPersistentNotification(
       const GURL& origin,
       const std::string& tag,
+      bool is_shown_by_browser,
       int64_t persistent_notification_id) const;
 
   // Generates an id for a non-persistent notification given the notification's
@@ -74,9 +82,6 @@ class CONTENT_EXPORT NotificationIdGenerator {
   std::string GenerateForNonPersistentNotification(
       const url::Origin& origin,
       const std::string& token) const;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NotificationIdGenerator);
 };
 
 }  // namespace context

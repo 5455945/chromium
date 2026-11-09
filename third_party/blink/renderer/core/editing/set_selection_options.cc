@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 namespace blink {
 
+SetSelectionOptions::SetSelectionOptions() = default;
 SetSelectionOptions::SetSelectionOptions(const SetSelectionOptions& other) =
     default;
-SetSelectionOptions::SetSelectionOptions() = default;
+SetSelectionOptions& SetSelectionOptions::operator=(
+    const SetSelectionOptions& other) = default;
 SetSelectionOptions::Builder::Builder() = default;
 
 SetSelectionOptions::Builder::Builder(const SetSelectionOptions& data) {
@@ -77,6 +79,12 @@ SetSelectionOptions::Builder::SetShouldShrinkNextTap(bool new_value) {
 SetSelectionOptions::Builder& SetSelectionOptions::Builder::SetIsDirectional(
     bool new_value) {
   data_.is_directional_ = new_value;
+  return *this;
+}
+
+SetSelectionOptions::Builder& SetSelectionOptions::Builder::
+    SetShouldNotifySelectionControllerOfUnchangedSelection(bool new_value) {
+  data_.should_notify_selection_controller_of_unchanged_selection_ = new_value;
   return *this;
 }
 }  // namespace blink

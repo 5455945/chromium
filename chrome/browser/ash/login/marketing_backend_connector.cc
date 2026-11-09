@@ -1,37 +1,38 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/marketing_backend_connector.h"
 
 #include <cstddef>
+#include <optional>
+#include <string>
 
 #include "ash/constants/ash_switches.h"
-#include "base/callback_helpers.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/account_info.h"
-#include "components/signin/public/identity_manager/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/scope_set.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
+#include "google_apis/credentials_mode.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
-// The scope that will be used to access the ChromebookEmailService API.
-const char kChromebookOAuth2Scope[] =
-    "https://www.googleapis.com/auth/chromebook.email";
 
 // API Endpoint
 const char kAccessPointsApiEndpoint[] = "https://accesspoints.googleapis.com/";
@@ -64,10 +65,12 @@ std::unique_ptr<network::ResourceRequest> GetResourceRequest() {
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = GetChromebookServiceEndpoint();
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
-  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  resource_request->credentials_mode =
+      google_apis::GetOmitCredentialsModeForGaiaRequests();
   resource_request->method = "POST";
   return resource_request;
 }
+
 }  // namespace
 
 // static
@@ -78,7 +81,7 @@ base::RepeatingCallback<void(std::string)>*
 void MarketingBackendConnector::UpdateEmailPreferences(
     Profile* profile,
     const std::string& country_code) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M160);
   VLOG(1) << "Subscribing the user to all chromebook email campaigns.";
 
   // Early exit for testing
@@ -89,18 +92,25 @@ void MarketingBackendConnector::UpdateEmailPreferences(
   }
 
   // No requests without a Gaia account
-  if (profile->IsOffTheRecord())
+  if (profile->IsOffTheRecord()) {
     return;
+  }
 
-  scoped_refptr<MarketingBackendConnector> ref =
-      new MarketingBackendConnector(profile);
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  signin::IdentityManager& identity_manager =
+      CHECK_DEREF(ash::IdentityManagerProvider::Get().Find(
+          CHECK_DEREF(ash::AnnotatedAccountId::Get(profile))));
+  scoped_refptr<MarketingBackendConnector> ref = new MarketingBackendConnector(
+      profile->GetURLLoaderFactory(), identity_manager);
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&MarketingBackendConnector::PerformRequest, ref,
                                 country_code));
 }
 
-MarketingBackendConnector::MarketingBackendConnector(Profile* profile)
-    : profile_(profile) {}
+MarketingBackendConnector::MarketingBackendConnector(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    signin::IdentityManager& identity_manager)
+    : identity_manager_(identity_manager),
+      url_loader_factory_(std::move(url_loader_factory)) {}
 
 void MarketingBackendConnector::PerformRequest(
     const std::string& country_code) {
@@ -109,20 +119,13 @@ void MarketingBackendConnector::PerformRequest(
 }
 
 void MarketingBackendConnector::StartTokenFetch() {
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile_);
-  if (!identity_manager) {
-    RecordUMAHistogram(BackendConnectorEvent::kErrorOther, country_code_);
-    return;
-  }
-
-  signin::ScopeSet chromebook_scope;
-  chromebook_scope.insert(kChromebookOAuth2Scope);
   token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-      "MarketingBackendConnector", identity_manager, chromebook_scope,
+      signin::OAuthConsumerId::kMarketingBackendConnector,
+      &identity_manager_.get(),
       base::BindOnce(&MarketingBackendConnector::OnAccessTokenRequestCompleted,
                      this),
-      signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate);
+      signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
+      signin::ConsentLevel::kSignin);
 }
 
 void MarketingBackendConnector::OnAccessTokenRequestCompleted(
@@ -146,15 +149,15 @@ void MarketingBackendConnector::SetTokenAndStartRequest() {
       semantics {
         sender: "Chrome OS Marketing Opt-In Screen"
         description:
-          "Communication with the Chromebook Email API to change the user's"
-          "preference regarding marketing emails. It is only used on the"
-          "last screen of the Chrome OS OOBE - Marketing Opt-In Screen.
+          "Communication with the Chromebook Email API to change the user's "
+          "preference regarding marketing emails. It is only used on the "
+          "last screen of the Chrome OS OOBE - Marketing Opt-In Screen."
         trigger:
-          "The request is triggered when the user opts-in for marketing"
+          "The request is triggered when the user opts-in for marketing "
           "emails by enabling the toggle on the marketing opt-in screen."
         data:
-          "The only transmitted information is the country and the language"
-          "of the user's account. This information is used for delivering"
+          "The only transmitted information is the country and the language "
+          "of the user's account. This information is used for delivering "
           "emails to the user in the requested language."
         destination: GOOGLE_OWNED_SERVICE
       }
@@ -164,8 +167,8 @@ void MarketingBackendConnector::SetTokenAndStartRequest() {
         cookies_allowed: NO
         policy_exception_justification:
           "Managed users are not presented with the option to opt-in."
-        }
-      })");
+      }
+      )");
 
   auto resource_request = GetResourceRequest();
   resource_request->headers.SetHeader(net::HttpRequestHeaders::kAuthorization,
@@ -178,7 +181,6 @@ void MarketingBackendConnector::SetTokenAndStartRequest() {
   simple_url_loader_->AttachStringForUpload(GetRequestContent(),
                                             "application/json");
 
-  url_loader_factory_ = profile_->GetURLLoaderFactory();
   simple_url_loader_->DownloadToString(
       url_loader_factory_.get(),
       base::BindOnce(&MarketingBackendConnector::OnSimpleLoaderComplete, this),
@@ -186,7 +188,7 @@ void MarketingBackendConnector::SetTokenAndStartRequest() {
 }
 
 void MarketingBackendConnector::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   int response_code = -1;
   std::string raw_header;
   if (simple_url_loader_->ResponseInfo() &&
@@ -196,8 +198,9 @@ void MarketingBackendConnector::OnSimpleLoaderComplete(
   }
 
   std::string data;
-  if (response_body)
+  if (response_body) {
     data = std::move(*response_body);
+  }
 
   OnSimpleLoaderCompleteInternal(response_code, data);
 }
@@ -234,16 +237,14 @@ void MarketingBackendConnector::OnSimpleLoaderCompleteInternal(
 }
 
 std::string MarketingBackendConnector::GetRequestContent() {
-  base::Value request_dict(base::Value::Type::DICTIONARY);
-  request_dict.SetKey("country_code", base::Value(country_code_));
-  request_dict.SetKey("language", base::Value("en"));
+  base::DictValue request_dict;
+  request_dict.Set("country_code", country_code_);
+  request_dict.Set("language", "en");
 
-  std::string request_content;
-  base::JSONWriter::Write(request_dict, &request_content);
-  return request_content;
+  return base::WriteJson(request_dict).value_or("");
 }
 
-MarketingBackendConnector::~MarketingBackendConnector() {}
+MarketingBackendConnector::~MarketingBackendConnector() = default;
 
 ScopedRequestCallbackSetter::ScopedRequestCallbackSetter(
     std::unique_ptr<base::RepeatingCallback<void(std::string)>> callback)
@@ -255,4 +256,4 @@ ScopedRequestCallbackSetter::~ScopedRequestCallbackSetter() {
   MarketingBackendConnector::request_finished_for_tests_ = nullptr;
 }
 
-}  // namespace chromeos
+}  // namespace ash

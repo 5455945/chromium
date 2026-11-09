@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,19 @@
 #include <cmath>
 
 #include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
+#include "ash/display/display_util.h"
 #include "ash/host/root_window_transformer.h"
 #include "ash/shell.h"
 #include "ash/utility/transformer_util.h"
 #include "base/command_line.h"
+#include "base/memory/ptr_util.h"
 #include "base/system/sys_info.h"
 #include "ui/display/display.h"
-#include "ui/display/manager/display_layout_store.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size_conversions.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace ash {
 namespace {
@@ -123,6 +124,9 @@ class AshRootWindowTransformer : public RootWindowTransformer {
     initial_host_size_ = info.bounds_in_native().size();
   }
 
+  AshRootWindowTransformer(const AshRootWindowTransformer&) = delete;
+  AshRootWindowTransformer& operator=(const AshRootWindowTransformer&) = delete;
+
   // aura::RootWindowTransformer overrides:
   gfx::Transform GetTransform() const override { return transform_; }
   gfx::Transform GetInverseTransform() const override {
@@ -139,8 +143,8 @@ class AshRootWindowTransformer : public RootWindowTransformer {
       return initial_root_bounds_;
 
     gfx::RectF new_bounds = gfx::RectF(gfx::SizeF(host_size));
-    new_bounds.Inset(host_insets_);
-    root_window_bounds_transform_.TransformRect(&new_bounds);
+    new_bounds.Inset(gfx::InsetsF(host_insets_));
+    new_bounds = root_window_bounds_transform_.MapRect(new_bounds);
 
     // Root window origin will be (0,0) except during bounds changes.
     // Set to exactly zero to avoid rounding issues.
@@ -186,8 +190,6 @@ class AshRootWindowTransformer : public RootWindowTransformer {
   gfx::Transform insets_and_scale_transform_;
   gfx::Rect initial_root_bounds_;
   gfx::Size initial_host_size_;
-
-  DISALLOW_COPY_AND_ASSIGN(AshRootWindowTransformer);
 };
 
 // RootWindowTransformer for mirror root window. We simply copy the
@@ -203,14 +205,10 @@ class MirrorRootWindowTransformer : public RootWindowTransformer {
         gfx::Rect(source_display_info.GetSizeInPixelWithPanelOrientation());
     display::Display::Rotation active_root_rotation =
         source_display_info.GetActiveRotation();
+    display::Display::Rotation active_mirror_rotation =
+        mirror_display_info.GetActiveRotation();
 
-    // The rotation of the source display (internal display) should be undone in
-    // the destination display (external display) if mirror mode is enabled in
-    // tablet mode.
-    bool should_undo_rotation = Shell::Get()
-                                    ->display_manager()
-                                    ->layout_store()
-                                    ->forced_mirror_mode_for_tablet();
+    const bool should_undo_rotation = ShouldUndoRotationForMirror();
     gfx::Transform rotation_transform;
     if (should_undo_rotation) {
       // Calculate the transform to undo the rotation and apply it to the
@@ -219,26 +217,31 @@ class MirrorRootWindowTransformer : public RootWindowTransformer {
       rotation_transform = CreateRotationTransform(
           source_display_info.GetActiveRotation(), display::Display::ROTATE_0,
           gfx::SizeF(root_bounds_.size()));
-      gfx::RectF rotated_bounds(root_bounds_);
-      rotation_transform.TransformRect(&rotated_bounds);
-      root_bounds_ = gfx::ToNearestRect(rotated_bounds);
+      root_bounds_ = gfx::ToNearestRect(
+          rotation_transform.MapRect(gfx::RectF(root_bounds_)));
       active_root_rotation = display::Display::ROTATE_0;
     }
 
     gfx::Rect mirror_display_rect =
-        gfx::Rect(mirror_display_info.bounds_in_native().size());
+        gfx::Rect(mirror_display_info.GetSizeInPixelWithPanelOrientation());
 
-    // When logical rotation is 90 or 270 degree, transpose is needed to apply
+    // When the root rotation is 90 or 270 degree, transpose is needed to apply
     // reverse rotation to `root_bounds_` and `mirror_display_rect` to exclude
     // the rotation. This is because the rotation happens at viz output and
     // `transform_` needs to be calculated without the rotation.
     // E.g. host native size 1600x1200. Rotation 90 degree. `transform_` needs
     // to fit 1200x1600 rather than 1600x1200.
-    const bool need_transpose =
-        active_root_rotation == display::Display::ROTATE_90 ||
-        active_root_rotation == display::Display::ROTATE_270;
-    if (need_transpose) {
+    if (active_root_rotation == display::Display::ROTATE_90 ||
+        active_root_rotation == display::Display::ROTATE_270) {
       root_bounds_.Transpose();
+      mirror_display_rect.Transpose();
+    }
+
+    // In tablet mode, we want to keep the active rotation of the mirroring
+    // display.
+    if (display::Screen::Get()->InTabletMode() &&
+        (active_mirror_rotation == display::Display::ROTATE_90 ||
+         active_mirror_rotation == display::Display::ROTATE_270)) {
       mirror_display_rect.Transpose();
     }
 
@@ -252,7 +255,7 @@ class MirrorRootWindowTransformer : public RootWindowTransformer {
       int margin = static_cast<int>((mirror_display_rect.height() -
                                      root_bounds_.height() * inverted_scale) /
                                     2);
-      insets_.Set(0, margin, 0, margin);
+      insets_ = gfx::Insets::TLBR(margin, 0, margin, 0);
 
       transform_.Translate(0, margin);
       transform_.Scale(inverted_scale, inverted_scale);
@@ -264,12 +267,16 @@ class MirrorRootWindowTransformer : public RootWindowTransformer {
       int margin = static_cast<int>((mirror_display_rect.width() -
                                      root_bounds_.width() * inverted_scale) /
                                     2);
-      insets_.Set(margin, 0, margin, 0);
+      insets_ = gfx::Insets::TLBR(0, margin, 0, margin);
 
       transform_.Translate(margin, 0);
       transform_.Scale(inverted_scale, inverted_scale);
     }
   }
+
+  MirrorRootWindowTransformer(const MirrorRootWindowTransformer&) = delete;
+  MirrorRootWindowTransformer& operator=(const MirrorRootWindowTransformer&) =
+      delete;
 
   // aura::RootWindowTransformer overrides:
   gfx::Transform GetTransform() const override { return transform_; }
@@ -292,8 +299,6 @@ class MirrorRootWindowTransformer : public RootWindowTransformer {
   gfx::Transform transform_;
   gfx::Rect root_bounds_;
   gfx::Insets insets_;
-
-  DISALLOW_COPY_AND_ASSIGN(MirrorRootWindowTransformer);
 };
 
 class PartialBoundsRootWindowTransformer : public RootWindowTransformer {
@@ -307,11 +312,19 @@ class PartialBoundsRootWindowTransformer : public RootWindowTransformer {
     // Physical root bounds.
     root_bounds_ = gfx::Rect(display_info.bounds_in_native().size());
 
+    display::Display::Rotation active_root_rotation =
+        display_info.GetActiveRotation();
+    const bool need_transpose =
+        active_root_rotation == display::Display::ROTATE_90 ||
+        active_root_rotation == display::Display::ROTATE_270;
+    if (need_transpose)
+      root_bounds_.Transpose();
+
     // |screen_bounds| is the unified desktop logical bounds.
     // Calculate the unified height scale value, and apply the same scale on the
     // row physical height to get the row logical height.
     display::Display unified_display =
-        display::Screen::GetScreen()->GetPrimaryDisplay();
+        display::Screen::Get()->GetPrimaryDisplay();
     const int unified_physical_height =
         unified_display.GetSizeInPixel().height();
     const int unified_logical_height = screen_bounds.height();
@@ -330,14 +343,23 @@ class PartialBoundsRootWindowTransformer : public RootWindowTransformer {
     transform_.Scale(scale, scale);
     transform_.Translate(-SkIntToScalar(display.bounds().x()),
                          -SkIntToScalar(display.bounds().y()));
+    // Scaling using physical root bounds here, because rotation is applied
+    // before device_scale_factor is applied.
+    gfx::Transform rotation = CreateRotationTransform(
+        display::Display::ROTATE_0, display.panel_rotation(),
+        gfx::SizeF(root_bounds_.size()));
+    CHECK((rotation * transform_).GetInverse(&invert_transform_));
   }
+
+  PartialBoundsRootWindowTransformer(
+      const PartialBoundsRootWindowTransformer&) = delete;
+  PartialBoundsRootWindowTransformer& operator=(
+      const PartialBoundsRootWindowTransformer&) = delete;
 
   // RootWindowTransformer:
   gfx::Transform GetTransform() const override { return transform_; }
   gfx::Transform GetInverseTransform() const override {
-    gfx::Transform invert;
-    CHECK(transform_.GetInverse(&invert));
-    return invert;
+    return invert_transform_;
   }
   gfx::Rect GetRootWindowBounds(const gfx::Size& host_size) const override {
     return root_bounds_;
@@ -348,30 +370,35 @@ class PartialBoundsRootWindowTransformer : public RootWindowTransformer {
   }
 
  private:
-  gfx::Transform transform_;
-  gfx::Rect root_bounds_;
+  ~PartialBoundsRootWindowTransformer() override = default;
 
-  DISALLOW_COPY_AND_ASSIGN(PartialBoundsRootWindowTransformer);
+  gfx::Transform transform_;
+  gfx::Transform invert_transform_;
+  gfx::Rect root_bounds_;
 };
 
 }  // namespace
 
-RootWindowTransformer* CreateRootWindowTransformerForDisplay(
+std::unique_ptr<RootWindowTransformer> CreateRootWindowTransformerForDisplay(
     const display::Display& display) {
-  return new AshRootWindowTransformer(display);
+  return base::WrapUnique<RootWindowTransformer>(
+      new AshRootWindowTransformer(display));
 }
 
-RootWindowTransformer* CreateRootWindowTransformerForMirroredDisplay(
+std::unique_ptr<RootWindowTransformer>
+CreateRootWindowTransformerForMirroredDisplay(
     const display::ManagedDisplayInfo& source_display_info,
     const display::ManagedDisplayInfo& mirror_display_info) {
-  return new MirrorRootWindowTransformer(source_display_info,
-                                         mirror_display_info);
+  return base::WrapUnique<RootWindowTransformer>(
+      new MirrorRootWindowTransformer(source_display_info,
+                                      mirror_display_info));
 }
 
-RootWindowTransformer* CreateRootWindowTransformerForUnifiedDesktop(
-    const gfx::Rect& screen_bounds,
-    const display::Display& display) {
-  return new PartialBoundsRootWindowTransformer(screen_bounds, display);
+std::unique_ptr<RootWindowTransformer>
+CreateRootWindowTransformerForUnifiedDesktop(const gfx::Rect& screen_bounds,
+                                             const display::Display& display) {
+  return base::WrapUnique<RootWindowTransformer>(
+      new PartialBoundsRootWindowTransformer(screen_bounds, display));
 }
 
 }  // namespace ash

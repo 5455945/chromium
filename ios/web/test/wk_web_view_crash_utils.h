@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,6 @@ WKWebView* BuildTerminatedWKWebView();
 // Returns a specialized WKWebView mock object with overridden JavaScript
 // evaluation method that always succeeds with nil result.
 WKWebView* BuildHealthyWKWebView();
-}  // web
+}  // namespace web
 
-#endif // IOS_WEB_TEST_WK_WEB_VIEW_CRASH_UTILS_H_
+#endif  // IOS_WEB_TEST_WK_WEB_VIEW_CRASH_UTILS_H_

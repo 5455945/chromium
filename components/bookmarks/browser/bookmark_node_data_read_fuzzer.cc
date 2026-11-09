@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,21 +11,21 @@
 #include "base/logging.h"
 #include "base/pickle.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
+#include "testing/libfuzzer/libfuzzer_base_wrappers.h"
 
 class Environment {
  public:
   Environment() {
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
     CHECK(base::i18n::InitializeICU());
   }
   base::AtExitManager at_exit_manager;
 };
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN(const base::span<const uint8_t> data) {
   static Environment env;
 
-  base::Pickle pickle(reinterpret_cast<const char*>(data), size);
   bookmarks::BookmarkNodeData bookmark_node_data;
-  bookmark_node_data.ReadFromPickle(&pickle);
+  bookmark_node_data.ReadFromPickle(base::PickleIterator::WithData(data));
   return 0;
 }

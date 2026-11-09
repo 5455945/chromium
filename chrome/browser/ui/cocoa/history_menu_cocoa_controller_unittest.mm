@@ -1,54 +1,56 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/cocoa/history_menu_cocoa_controller.h"
 
 #include <memory>
+#include <set>
+#include <utility>
 
-#include "base/mac/scoped_nsobject.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/cocoa/history_menu_bridge.h"
 #include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/sessions/core/session_id.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 @interface FakeHistoryMenuController : HistoryMenuCocoaController {
  @public
-  BOOL _opened[3];
+  // ivars are initialized to zero, so these all start out as NO.
+  std::set<SessionID::id_type> _opened;
 }
 @end
 
 @implementation FakeHistoryMenuController
 
-- (instancetype)initTest {
-  if ((self = [super init])) {
-    _opened[1] = NO;
-    _opened[2] = NO;
-  }
-  return self;
-}
-
 - (void)openURLForItem:(const HistoryMenuBridge::HistoryItem*)item {
-  _opened[item->session_id.id()] = YES;
+  _opened.insert(item->session_id.id());
 }
 
 @end  // FakeHistoryMenuController
 
-class HistoryMenuCocoaControllerTest : public BrowserWithTestWindowTest {
+class HistoryMenuCocoaControllerTest : public CocoaTest {
  public:
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
-    ASSERT_TRUE(profile());
+    CocoaTest::SetUp();
+    profile_ = std::make_unique<TestingProfile>();
 
-    bridge_ = std::make_unique<HistoryMenuBridge>(profile());
-    bridge_->controller_.reset(
-        [[FakeHistoryMenuController alloc] initWithBridge:bridge_.get()]);
-    [controller() initTest];
+    bridge_ = std::make_unique<HistoryMenuBridge>(profile_.get());
+    bridge_->controller_ =
+        [[FakeHistoryMenuController alloc] initWithBridge:bridge_.get()];
   }
+
+  void TearDown() override {
+    bridge_.reset();
+    profile_.reset();
+    CocoaTest::TearDown();
+  }
+
+  TestingProfile* profile() { return profile_.get(); }
 
   void CreateItems(NSMenu* menu) {
     auto item = std::make_unique<HistoryMenuBridge::HistoryItem>();
@@ -70,24 +72,43 @@ class HistoryMenuCocoaControllerTest : public BrowserWithTestWindowTest {
   }
 
   FakeHistoryMenuController* controller() {
-    return static_cast<FakeHistoryMenuController*>(bridge_->controller_.get());
+    return static_cast<FakeHistoryMenuController*>(bridge_->controller_);
   }
 
  private:
-  CocoaTestHelper cocoa_test_helper_;
+  content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<HistoryMenuBridge> bridge_;
 };
 
 TEST_F(HistoryMenuCocoaControllerTest, OpenURLForItem) {
-  base::scoped_nsobject<NSMenu> menu([[NSMenu alloc] initWithTitle:@"History"]);
-  CreateItems(menu.get());
+  NSMenu* menu = [[NSMenu alloc] initWithTitle:@"History"];
+  CreateItems(menu);
 
   std::map<NSMenuItem*, std::unique_ptr<HistoryMenuBridge::HistoryItem>>&
       items = menu_item_map();
   for (const auto& pair : items) {
     HistoryMenuBridge::HistoryItem* item = pair.second.get();
-    EXPECT_FALSE(controller()->_opened[item->session_id.id()]);
+    EXPECT_FALSE(controller()->_opened.count(item->session_id.id()));
     [controller() openHistoryMenuItem:pair.first];
-    EXPECT_TRUE(controller()->_opened[item->session_id.id()]);
+    EXPECT_TRUE(controller()->_opened.count(item->session_id.id()));
   }
+}
+
+// Verifies that menu delegate callbacks (e.g., menuDidClose:) and item
+// actions safely no-op after HistoryMenuBridge is destroyed
+// (https://crbug.com/573702454).
+TEST_F(HistoryMenuCocoaControllerTest, MenuCallbacksAfterBridgeDestroyed) {
+  NSMenu* menu = [[NSMenu alloc] initWithTitle:@"History"];
+  FakeHistoryMenuController* ctrl = controller();
+  [ctrl clearBridge];
+
+  // These should safely no-op when the bridge pointer is cleared.
+  [ctrl menuWillOpen:menu];
+  [ctrl menuDidClose:menu];
+  NSMenuItem* item =
+      [[NSMenuItem alloc] initWithTitle:@"Item"
+                                 action:@selector(openHistoryMenuItem:)
+                          keyEquivalent:@""];
+  [ctrl openHistoryMenuItem:item];
 }

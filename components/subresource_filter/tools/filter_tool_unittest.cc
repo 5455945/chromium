@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,11 +25,13 @@ namespace {
 
 std::string CreateJsonLine(const std::string& origin,
                            const std::string& request_url,
-                           const std::string& request_type) {
-  base::DictionaryValue dictionary;
-  dictionary.SetString("origin", origin);
-  dictionary.SetString("request_url", request_url);
-  dictionary.SetString("request_type", request_type);
+                           const std::string& request_type,
+                           const std::string& site_rank) {
+  base::DictValue dictionary;
+  dictionary.Set("origin", origin);
+  dictionary.Set("request_url", request_url);
+  dictionary.Set("request_type", request_type);
+  dictionary.Set("site_rank", site_rank);
 
   std::string output;
   EXPECT_TRUE(base::JSONWriter::Write(dictionary, &output));
@@ -38,7 +40,10 @@ std::string CreateJsonLine(const std::string& origin,
 
 class FilterToolTest : public ::testing::Test {
  public:
-  FilterToolTest() {}
+  FilterToolTest() = default;
+
+  FilterToolTest(const FilterToolTest&) = delete;
+  FilterToolTest& operator=(const FilterToolTest&) = delete;
 
  protected:
   void SetUp() override {
@@ -68,8 +73,6 @@ class FilterToolTest : public ::testing::Test {
   scoped_refptr<const MemoryMappedRuleset> ruleset_;
   std::ostringstream out_stream_;
   std::unique_ptr<FilterTool> filter_tool_;
-
-  DISALLOW_COPY_AND_ASSIGN(FilterToolTest);
 };
 
 TEST_F(FilterToolTest, MatchBlocklist) {
@@ -105,12 +108,15 @@ TEST_F(FilterToolTest, NoMatch) {
 TEST_F(FilterToolTest, MatchBatch) {
   std::stringstream batch_queries;
   batch_queries << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed1.png", "image")
+                                  "http://example.com/disallowed1.png", "image",
+                                  "1000")
                 << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed2.png", "image")
+                                  "http://example.com/disallowed2.png", "image",
+                                  "100000")
                 << CreateJsonLine(
                        "http://example.com",
-                       "http://example.com/allowlist/disallowed2.png", "image");
+                       "http://example.com/allowlist/disallowed2.png", "image",
+                       "1000000");
 
   filter_tool_->MatchBatch(&batch_queries);
 
@@ -127,56 +133,30 @@ TEST_F(FilterToolTest, MatchBatch) {
 
 TEST_F(FilterToolTest, MatchRules) {
   std::stringstream batch_queries;
-  batch_queries << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed1.png", "image")
-                << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed1.png", "image")
-                << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed2.png", "image")
-                << CreateJsonLine(
-                       "http://example.com",
-                       "http://example.com/allowlist/disallowed2.png", "image")
-                << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed1.png", "image")
-                << CreateJsonLine(
-                       "http://example.com",
-                       "http://example.com/allowlist/disallowed2.png", "image");
+  batch_queries
+      << CreateJsonLine("http://example.com",
+                        "http://example.com/disallowed1.png", "image", "10")
+      << CreateJsonLine("http://example.com",
+                        "http://example.com/disallowed1.png", "image", "10")
+      << CreateJsonLine("http://example.com",
+                        "http://example.com/disallowed2.png", "image", "10")
+      << CreateJsonLine("http://example.com",
+                        "http://example.com/allowlist/disallowed2.png", "image",
+                        "1000")
+      << CreateJsonLine("http://example.com",
+                        "http://example.com/disallowed1.png", "image", "1000")
+      << CreateJsonLine("http://example.com",
+                        "http://example.com/allowlist/disallowed2.png", "image",
+                        "1000");
 
-  filter_tool_->MatchRules(&batch_queries, 1);
+  filter_tool_->MatchRules(&batch_queries);
 
   std::string result = out_stream_.str();
 
   std::string expected =
-      "3 disallowed1.png|\n"
-      "2 @@allowlist/disallowed2.png|\n"
-      "1 disallowed2.png|\n";
-
-  EXPECT_EQ(expected, out_stream_.str());
-}
-
-TEST_F(FilterToolTest, MatchRulesMinCount) {
-  std::stringstream batch_queries;
-  batch_queries << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed1.png", "image")
-                << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed1.png", "image")
-                << CreateJsonLine("http://example.com",
-                                  "http://example.com/disallowed2.png", "image")
-                << CreateJsonLine(
-                       "http://example.com",
-                       "http://example.com/allowlist/disallowed2.png", "image")
-                << CreateJsonLine(
-                       "http://example.com",
-                       "http://example.com/allowlist/disallowed2.png", "image")
-                << CreateJsonLine(
-                       "http://example.com",
-                       "http://example.com/allowlist/disallowed2.png", "image");
-
-  filter_tool_->MatchRules(&batch_queries, 2);
-
-  std::string expected =
-      "3 @@allowlist/disallowed2.png|\n"
-      "2 disallowed1.png|\n";
+      "0.206924 disallowed1.png|\n"
+      "0.103384 disallowed2.png|\n"
+      "0.000312955 @@allowlist/disallowed2.png|\n";
 
   EXPECT_EQ(expected, out_stream_.str());
 }

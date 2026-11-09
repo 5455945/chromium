@@ -1,18 +1,23 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/permissions/chrome_permission_message_rules.h"
 
+#include <initializer_list>
 #include <iterator>
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/feature_list.h"
+#include "base/notreached.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
+#include "extensions/common/mojom/api_permission_id.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 
 using extensions::mojom::APIPermissionID;
@@ -28,7 +33,13 @@ class DefaultPermissionMessageFormatter
  public:
   explicit DefaultPermissionMessageFormatter(int message_id)
       : message_id_(message_id) {}
-  ~DefaultPermissionMessageFormatter() override {}
+
+  DefaultPermissionMessageFormatter(const DefaultPermissionMessageFormatter&) =
+      delete;
+  DefaultPermissionMessageFormatter& operator=(
+      const DefaultPermissionMessageFormatter&) = delete;
+
+  ~DefaultPermissionMessageFormatter() override = default;
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
@@ -38,8 +49,6 @@ class DefaultPermissionMessageFormatter
 
  private:
   int message_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(DefaultPermissionMessageFormatter);
 };
 
 // A formatter that substitutes the parameter into the message using string
@@ -48,7 +57,11 @@ class DefaultPermissionMessageFormatter
 class SingleParameterFormatter : public ChromePermissionMessageFormatter {
  public:
   explicit SingleParameterFormatter(int message_id) : message_id_(message_id) {}
-  ~SingleParameterFormatter() override {}
+
+  SingleParameterFormatter(const SingleParameterFormatter&) = delete;
+  SingleParameterFormatter& operator=(const SingleParameterFormatter&) = delete;
+
+  ~SingleParameterFormatter() override = default;
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
@@ -63,8 +76,6 @@ class SingleParameterFormatter : public ChromePermissionMessageFormatter {
 
  private:
   int message_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(SingleParameterFormatter);
 };
 
 // Adds each parameter to a growing list, with the given |root_message_id| as
@@ -73,7 +84,11 @@ class SimpleListFormatter : public ChromePermissionMessageFormatter {
  public:
   explicit SimpleListFormatter(int root_message_id)
       : root_message_id_(root_message_id) {}
-  ~SimpleListFormatter() override {}
+
+  SimpleListFormatter(const SimpleListFormatter&) = delete;
+  SimpleListFormatter& operator=(const SimpleListFormatter&) = delete;
+
+  ~SimpleListFormatter() override = default;
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
@@ -85,8 +100,6 @@ class SimpleListFormatter : public ChromePermissionMessageFormatter {
 
  private:
   int root_message_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(SimpleListFormatter);
 };
 
 // Creates a space-separated list of permissions with the given PermissionID.
@@ -100,7 +113,12 @@ class SpaceSeparatedListFormatter : public ChromePermissionMessageFormatter {
                               int message_id_for_multiple_hosts)
       : message_id_for_one_host_(message_id_for_one_host),
         message_id_for_multiple_hosts_(message_id_for_multiple_hosts) {}
-  ~SpaceSeparatedListFormatter() override {}
+
+  SpaceSeparatedListFormatter(const SpaceSeparatedListFormatter&) = delete;
+  SpaceSeparatedListFormatter& operator=(const SpaceSeparatedListFormatter&) =
+      delete;
+
+  ~SpaceSeparatedListFormatter() override = default;
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
@@ -119,8 +137,6 @@ class SpaceSeparatedListFormatter : public ChromePermissionMessageFormatter {
  private:
   int message_id_for_one_host_;
   int message_id_for_multiple_hosts_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpaceSeparatedListFormatter);
 };
 
 // Creates a list of host permissions. If there are 1-3 hosts, they are inserted
@@ -136,7 +152,11 @@ class HostListFormatter : public ChromePermissionMessageFormatter {
         message_id_for_two_hosts_(message_id_for_two_hosts),
         message_id_for_three_hosts_(message_id_for_three_hosts),
         message_id_for_many_hosts_(message_id_for_many_hosts) {}
-  ~HostListFormatter() override {}
+
+  HostListFormatter(const HostListFormatter&) = delete;
+  HostListFormatter& operator=(const HostListFormatter&) = delete;
+
+  ~HostListFormatter() override = default;
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
@@ -188,14 +208,16 @@ class HostListFormatter : public ChromePermissionMessageFormatter {
   int message_id_for_two_hosts_;
   int message_id_for_three_hosts_;
   int message_id_for_many_hosts_;
-
-  DISALLOW_COPY_AND_ASSIGN(HostListFormatter);
 };
 
 class USBDevicesFormatter : public ChromePermissionMessageFormatter {
  public:
-  USBDevicesFormatter() {}
-  ~USBDevicesFormatter() override {}
+  USBDevicesFormatter() = default;
+
+  USBDevicesFormatter(const USBDevicesFormatter&) = delete;
+  USBDevicesFormatter& operator=(const USBDevicesFormatter&) = delete;
+
+  ~USBDevicesFormatter() override = default;
 
   PermissionMessage GetPermissionMessage(
       const PermissionIDSet& permissions) const override {
@@ -254,9 +276,17 @@ class USBDevicesFormatter : public ChromePermissionMessageFormatter {
         l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_WARNING_USB_DEVICE_LIST),
         permissions, submessages);
   }
-
-  DISALLOW_COPY_AND_ASSIGN(USBDevicesFormatter);
 };
+
+int GetEnterpriseReportingPrivatePermissionMessageId() {
+#if BUILDFLAG(IS_WIN)
+  return IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_REPORTING_PRIVATE_ENABLED_WIN;
+#elif BUILDFLAG(IS_LINUX) or BUILDFLAG(IS_MAC)
+  return IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_REPORTING_PRIVATE_ENABLED_LINUX_AND_MACOS;
+#else
+  return IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_REPORTING_PRIVATE;
+#endif
+}
 
 }  // namespace
 
@@ -285,8 +315,7 @@ ChromePermissionMessageRule::ChromePermissionMessageRule(
 ChromePermissionMessageRule& ChromePermissionMessageRule::operator=(
     ChromePermissionMessageRule&& other) = default;
 
-ChromePermissionMessageRule::~ChromePermissionMessageRule() {
-}
+ChromePermissionMessageRule::~ChromePermissionMessageRule() = default;
 
 std::set<APIPermissionID> ChromePermissionMessageRule::required_permissions()
     const {
@@ -355,8 +384,21 @@ ChromePermissionMessageRule::GetAllRules() {
       // blocking parts of pages, which is a subset of what the "<all_urls>"
       // access allows. Therefore we display only the "<all_urls>" warning
       // message if both permissions are required.
+      // Hiding the MIME handler warning behind the "<all_urls>" warning is an
+      // intentional compromise to avoid showing too many warnings.
       {IDS_EXTENSION_PROMPT_WARNING_ALL_HOSTS,
        {APIPermissionID::kHostsAll},
+       {APIPermissionID::kDeclarativeWebRequest,
+        APIPermissionID::kDeclarativeNetRequestFeedback,
+        APIPermissionID::kFavicon, APIPermissionID::kHostsAllReadOnly,
+        APIPermissionID::kHostReadOnly, APIPermissionID::kHostReadWrite,
+        APIPermissionID::kProcesses, APIPermissionID::kTab,
+        APIPermissionID::kTopSites, APIPermissionID::kWebNavigation,
+        APIPermissionID::kDeclarativeNetRequest,
+        APIPermissionID::kWebAuthenticationProxy,
+        APIPermissionID::kMimeTypesHandlerPdf}},
+      {IDS_EXTENSION_PROMPT_WARNING_ALL_HOSTS,
+       {APIPermissionID::kWebAuthenticationProxy},
        {APIPermissionID::kDeclarativeWebRequest,
         APIPermissionID::kDeclarativeNetRequestFeedback,
         APIPermissionID::kFavicon, APIPermissionID::kHostsAllReadOnly,
@@ -403,6 +445,10 @@ ChromePermissionMessageRule::GetAllRules() {
        {APIPermissionID::kVideoCapture},
        {}},
 
+      {IDS_EXTENSION_PROMPT_WARNING_SPEECH_RECOGNITION,
+       {APIPermissionID::kSpeechRecognitionPrivate},
+       {}},
+
       {IDS_EXTENSION_PROMPT_WARNING_GEOLOCATION,
        {APIPermissionID::kGeolocation},
        {}},
@@ -410,25 +456,19 @@ ChromePermissionMessageRule::GetAllRules() {
       // History-related permission messages.
       // History already allows reading favicons, tab access and accessing the
       // list of most frequently visited sites.
-      {IDS_EXTENSION_PROMPT_WARNING_HISTORY_WRITE_AND_SESSIONS,
-       {APIPermissionID::kHistory, APIPermissionID::kSessions},
-       {APIPermissionID::kDeclarativeNetRequestFeedback,
-        APIPermissionID::kFavicon, APIPermissionID::kProcesses,
-        APIPermissionID::kTab, APIPermissionID::kTopSites,
-        APIPermissionID::kWebNavigation}},
-      {IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ_AND_SESSIONS,
-       {APIPermissionID::kTab, APIPermissionID::kSessions},
-       {APIPermissionID::kDeclarativeNetRequestFeedback,
-        APIPermissionID::kFavicon, APIPermissionID::kProcesses,
-        APIPermissionID::kTopSites, APIPermissionID::kWebNavigation}},
-      {IDS_EXTENSION_PROMPT_WARNING_HISTORY_WRITE,
+      {IDS_EXTENSION_PROMPT_WARNING_HISTORY_WRITE_ON_ALL_DEVICES,
        {APIPermissionID::kHistory},
        {APIPermissionID::kDeclarativeNetRequestFeedback,
         APIPermissionID::kFavicon, APIPermissionID::kProcesses,
         APIPermissionID::kTab, APIPermissionID::kTopSites,
         APIPermissionID::kWebNavigation}},
+      {IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ_ON_ALL_DEVICES,
+       {APIPermissionID::kTab, APIPermissionID::kSessions},
+       {APIPermissionID::kDeclarativeNetRequestFeedback,
+        APIPermissionID::kFavicon, APIPermissionID::kProcesses,
+        APIPermissionID::kTopSites, APIPermissionID::kWebNavigation}},
       // Note: kSessions allows reading history from other devices only if kTab
-      // is also present. Therefore, there are no _AND_SESSIONS versions of
+      // is also present. Therefore, there are no _ON_ALL_DEVICES versions of
       // the other rules that generate the HISTORY_READ warning.
       {IDS_EXTENSION_PROMPT_WARNING_HISTORY_READ,
        {APIPermissionID::kTab},
@@ -452,6 +492,11 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_PRINTING, {APIPermissionID::kPrinting}, {}},
       {IDS_EXTENSION_PROMPT_WARNING_PRINTING_METRICS,
        {APIPermissionID::kPrintingMetrics},
+       {}},
+
+      // Third-party MIME handlers, one warning per claimed MIME type.
+      {IDS_EXTENSION_PROMPT_WARNING_MIME_TYPES_HANDLER_PDF,
+       {APIPermissionID::kMimeTypesHandlerPdf},
        {}},
 
       {IDS_EXTENSION_PROMPT_WARNING_DECLARATIVE_WEB_REQUEST,
@@ -491,6 +536,18 @@ ChromePermissionMessageRule::GetAllRules() {
       {std::make_unique<USBDevicesFormatter>(),
        {APIPermissionID::kUsbDeviceUnknownVendor},
        {}},
+      // A ChromeOS platform app that holds both "usb" and "printerProvider"
+      // becomes a Print Preview provisional USB printer provider for every
+      // vendor/product ID listed in its "usb_printers" manifest key. The
+      // filter list itself is not represented in any PermissionSet (its
+      // manifest handler creates no ManifestPermission), and neither kUsb nor
+      // kPrinterProvider produces a message on its own, so acquiring this
+      // capability through a silent auto-update was invisible to
+      // IsPrivilegeIncrease(). Surface a warning for the combination so that
+      // an update adding it disables the app pending user approval.
+      {IDS_EXTENSION_PROMPT_WARNING_USB_DEVICE_UNKNOWN_VENDOR,
+       {APIPermissionID::kUsb, APIPermissionID::kPrinterProvider},
+       {}},
       // Access to users' devices should provide a single warning message
       // specifying the transport method used; serial and/or Bluetooth.
       {IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_SERIAL,
@@ -501,6 +558,17 @@ ChromePermissionMessageRule::GetAllRules() {
        {APIPermissionID::kBluetoothDevices}},
       {IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_DEVICES,
        {APIPermissionID::kBluetoothDevices},
+       {APIPermissionID::kBluetoothSocket, APIPermissionID::kBluetoothLowEnergy,
+        APIPermissionID::kBluetoothPeripheral}},
+      {IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_DEVICES_SOCKET,
+       {APIPermissionID::kBluetoothSocket},
+       {APIPermissionID::kBluetoothLowEnergy,
+        APIPermissionID::kBluetoothPeripheral}},
+      {IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_DEVICES_LOW_ENERGY,
+       {APIPermissionID::kBluetoothLowEnergy},
+       {APIPermissionID::kBluetoothPeripheral}},
+      {IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_DEVICES_PERIPHERAL,
+       {APIPermissionID::kBluetoothPeripheral},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_BLUETOOTH_PRIVATE,
        {APIPermissionID::kBluetoothPrivate},
@@ -590,6 +658,9 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_BOOKMARKS,
        {APIPermissionID::kBookmark},
        {}},
+      {IDS_EXTENSION_PROMPT_WARNING_READING_LIST,
+       {APIPermissionID::kReadingList},
+       {}},
       {IDS_EXTENSION_PROMPT_WARNING_CLIPBOARD_READWRITE,
        {APIPermissionID::kClipboardRead, APIPermissionID::kClipboardWrite},
        {}},
@@ -631,9 +702,6 @@ ChromePermissionMessageRule::GetAllRules() {
        {APIPermissionID::kNativeMessaging},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_PRIVACY, {APIPermissionID::kPrivacy}, {}},
-      {IDS_EXTENSION_PROMPT_WARNING_SIGNED_IN_DEVICES,
-       {APIPermissionID::kSignedInDevices},
-       {}},
       {IDS_EXTENSION_PROMPT_WARNING_SYNCFILESYSTEM,
        {APIPermissionID::kSyncFileSystem},
        {}},
@@ -656,9 +724,6 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_ACTIVITY_LOG_PRIVATE,
        {APIPermissionID::kActivityLogPrivate},
        {}},
-      {IDS_EXTENSION_PROMPT_WARNING_MUSIC_MANAGER_PRIVATE,
-       {APIPermissionID::kMusicManagerPrivate},
-       {}},
       {IDS_EXTENSION_PROMPT_WARNING_SETTINGS_PRIVATE,
        {APIPermissionID::kSettingsPrivate},
        {}},
@@ -671,7 +736,7 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_USERS_PRIVATE,
        {APIPermissionID::kUsersPrivate},
        {}},
-      {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_REPORTING_PRIVATE,
+      {GetEnterpriseReportingPrivatePermissionMessageId(),
        {APIPermissionID::kEnterpriseReportingPrivate},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_HARDWARE_PLATFORM,
@@ -680,11 +745,23 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_DEVICE_ATTRIBUTES,
        {APIPermissionID::kEnterpriseDeviceAttributes},
        {}},
+      {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_WEBRTC,
+       {APIPermissionID::kEnterpriseWebrtc},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_KIOSK_INPUT,
+       {APIPermissionID::kEnterpriseKioskInput},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_LOGIN,
+       {APIPermissionID::kEnterpriseLogin},
+       {}},
       {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_NETWORKING_ATTRIBUTES,
        {APIPermissionID::kEnterpriseNetworkingAttributes},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_PLATFORMKEYS,
        {APIPermissionID::kEnterprisePlatformKeys},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_OMNIBOX_DIRECT_INPUT,
+       {APIPermissionID::kOmniboxDirectInput},
        {}},
       {IDS_EXTENSION_PROMPT_WARNING_LOGIN, {APIPermissionID::kLogin}, {}},
       {IDS_EXTENSION_PROMPT_WARNING_LOGIN_SCREEN_UI,
@@ -693,10 +770,41 @@ ChromePermissionMessageRule::GetAllRules() {
       {IDS_EXTENSION_PROMPT_WARNING_LOGIN_SCREEN_STORAGE,
        {APIPermissionID::kLoginScreenStorage},
        {}},
+      {IDS_EXTENSION_PROMPT_WARNING_ENTERPRISE_REMOTE_APPS,
+       {APIPermissionID::kEnterpriseRemoteApps},
+       {}},
       {IDS_EXTENSION_PROMPT_WARNING_TRANSIENT_BACKGROUND,
        {APIPermissionID::kTransientBackground},
        {}},
-  };
+
+      // Telemetry System Extension permission messages.
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_ATTACHED_DEVICE_INFO,
+       {APIPermissionID::kChromeOSAttachedDeviceInfo},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_BLUETOOTH_PERIPHERALS_INFO,
+       {APIPermissionID::kChromeOSBluetoothPeripheralsInfo},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_DIAGNOSTICS,
+       {APIPermissionID::kChromeOSDiagnostics},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_DIAGNOSTICS_NETWORK_INFO_FOR_MLAB,
+       {APIPermissionID::kChromeOSDiagnosticsNetworkInfoForMlab},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_EVENTS,
+       {APIPermissionID::kChromeOSEvents},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_MANAGEMENT_AUDIO,
+       {APIPermissionID::kChromeOSManagementAudio},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_TELEMETRY,
+       {APIPermissionID::kChromeOSTelemetry},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_TELEMETRY_SERIAL_NUMBER,
+       {APIPermissionID::kChromeOSTelemetrySerialNumber},
+       {}},
+      {IDS_EXTENSION_PROMPT_WARNING_CHROMEOS_TELEMETRY_NETWORK_INFORMATION,
+       {APIPermissionID::kChromeOSTelemetryNetworkInformation},
+       {}}};
 
   return std::vector<ChromePermissionMessageRule>(
       std::make_move_iterator(std::begin(rules_arr)),

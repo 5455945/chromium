@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "chrome/browser/ui/ash/shelf/app_shortcut_shelf_item_controller.h"
 
 class ArcAppLauncher;
@@ -16,6 +15,12 @@ class ArcPlaystoreShortcutShelfItemController
     : public AppShortcutShelfItemController {
  public:
   ArcPlaystoreShortcutShelfItemController();
+
+  ArcPlaystoreShortcutShelfItemController(
+      const ArcPlaystoreShortcutShelfItemController&) = delete;
+  ArcPlaystoreShortcutShelfItemController& operator=(
+      const ArcPlaystoreShortcutShelfItemController&) = delete;
+
   ~ArcPlaystoreShortcutShelfItemController() override;
 
   // AppShortcutShelfItemController overrides:
@@ -27,8 +32,6 @@ class ArcPlaystoreShortcutShelfItemController
 
  private:
   std::unique_ptr<ArcAppLauncher> playstore_launcher_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcPlaystoreShortcutShelfItemController);
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_ARC_PLAYSTORE_SHORTCUT_SHELF_ITEM_CONTROLLER_H_

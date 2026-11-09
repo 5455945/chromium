@@ -1,90 +1,103 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/payments/content/payment_request_web_contents_manager.h"
 
-#include <utility>
+#include <string_view>
 
-#include "base/check.h"
-#include "components/payments/content/content_payment_request_delegate.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
-#include "components/payments/content/payment_request.h"
-#include "components/payments/content/payment_request_display_manager.h"
+#include "base/feature_list.h"
+#include "base/logging.h"
+#include "base/notreached.h"
+#include "components/payments/core/features.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/reload_type.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
 namespace payments {
 
-PaymentRequestWebContentsManager::~PaymentRequestWebContentsManager() {}
-
-PaymentRequestWebContentsManager*
-PaymentRequestWebContentsManager::GetOrCreateForWebContents(
-    content::WebContents* web_contents) {
-  DCHECK(web_contents);
-  // CreateForWebContents does nothing if the manager instance already exists.
-  PaymentRequestWebContentsManager::CreateForWebContents(web_contents);
-  return PaymentRequestWebContentsManager::FromWebContents(web_contents);
+namespace {
+std::string_view GetReloadTypeString(content::ReloadType reload_type) {
+  switch (reload_type) {
+    case content::ReloadType::NONE:
+      return "NONE";
+    case content::ReloadType::NORMAL:
+      return "NORMAL";
+    case content::ReloadType::BYPASSING_CACHE:
+      return "BYPASSING_CACHE";
+  }
+  NOTREACHED();
 }
+}  // namespace
 
-void PaymentRequestWebContentsManager::CreatePaymentRequest(
-    content::RenderFrameHost* render_frame_host,
-    std::unique_ptr<ContentPaymentRequestDelegate> delegate,
-    mojo::PendingReceiver<payments::mojom::PaymentRequest> receiver,
-    PaymentRequest::ObserverForTest* observer_for_testing) {
-  auto new_request = std::make_unique<PaymentRequest>(
-      render_frame_host, std::move(delegate), /*manager=*/this,
-      delegate->GetDisplayManager(), std::move(receiver), observer_for_testing);
-  PaymentRequest* request_ptr = new_request.get();
-  payment_requests_.insert(std::make_pair(request_ptr, std::move(new_request)));
+PaymentRequestWebContentsManager::PaymentRequestWebContentsManager(
+    content::WebContents* web_contents)
+    : WebContentsObserver(web_contents), WebContentsUserData(*web_contents) {}
+
+PaymentRequestWebContentsManager::~PaymentRequestWebContentsManager() = default;
+
+void PaymentRequestWebContentsManager::RecordActivationlessShow() {
+  VLOG(2) << "PaymentRequestWebContentsManager::RecordActivationlessShow()";
+  had_activationless_show_ = true;
 }
 
 void PaymentRequestWebContentsManager::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
-  // Navigations that are not in the main frame (e.g. iframe) or that are in the
-  // same document do not close the Payment Request. Disregard those.
-  if (!navigation_handle->IsInMainFrame() ||
-      navigation_handle->IsSameDocument()) {
+  const bool in_primary_main_frame = navigation_handle->IsInPrimaryMainFrame();
+  const bool is_same_document = navigation_handle->IsSameDocument();
+  VLOG(2) << "PaymentRequestWebContentsManager::DidStartNavigation(): "
+          << "IsInPrimaryMainFrame()=" << in_primary_main_frame
+          << ", IsSameDocument()=" << is_same_document;
+  if (!in_primary_main_frame || is_same_document) {
     return;
   }
-  for (auto& it : payment_requests_) {
-    // Since the PaymentRequest dialog blocks the content of the page, the user
-    // cannot click on a link to navigate away. Therefore, if the navigation
-    // is initiated in the renderer, it does not come from the user.
-    it.second->DidStartMainFrameNavigationToDifferentDocument(
-        !navigation_handle->IsRendererInitiated());
+
+  // Reset the activationless show tracker at the next user-initiated
+  // navigation, which is defined as either a renderer-initiated navigation with
+  // a user gesture, or a browser-initiated navigation other than an error-page
+  // reload.
+  //
+  // Browser-initiated reloads of error pages are excluded because
+  // error_page::NetErrorAutoReloader (and other error-page reloaders) trigger
+  // automatic browser-initiated reloads when a page fails to load. Because a
+  // website can intentionally navigate without user activation to a URL that
+  // fails with a network error (e.g., net::ERR_TOO_MANY_REDIRECTS) and then
+  // succeeds on the subsequent auto-reload, treating error-page reloads as
+  // user-initiated would allow websites to bypass the 'user-initiated' guard
+  // and repeatedly trigger activationless show() calls (a security
+  // vulnerability; see crbug.com/40072274).
+  //
+  // TODO(crbug.com/40622940): This check has to be done at DidStartNavigation
+  // time, the HasUserGesture state is lost by the time the navigation
+  // commits.
+  const bool is_renderer_initiated = navigation_handle->IsRendererInitiated();
+  const content::ReloadType reload_type = navigation_handle->GetReloadType();
+  const bool has_user_gesture = navigation_handle->HasUserGesture();
+  const bool is_error_document =
+      web_contents()->GetPrimaryMainFrame()->IsErrorDocument();
+  VLOG(2) << "PaymentRequestWebContentsManager::DidStartNavigation(): "
+          << "IsRendererInitiated()=" << is_renderer_initiated
+          << ", GetReloadType()=" << GetReloadTypeString(reload_type)
+          << ", HasUserGesture()=" << has_user_gesture
+          << ", IsErrorDocument()=" << is_error_document;
+  const bool is_reload = reload_type != content::ReloadType::NONE;
+  const bool can_reset_on_reload =
+      !is_error_document &&
+      base::FeatureList::IsEnabled(
+          features::kPaymentRequestResetActivationlessShowOnReload);
+  const bool is_allowable_browser_navigation =
+      !is_renderer_initiated && (!is_reload || can_reset_on_reload);
+  if (has_user_gesture || is_allowable_browser_navigation) {
+    VLOG(2) << "PaymentRequestWebContentsManager::DidStartNavigation(): "
+            << "Resetting had_activationless_show_";
+    had_activationless_show_ = false;
+  } else {
+    VLOG(2) << "PaymentRequestWebContentsManager::DidStartNavigation(): "
+            << "Ignoring navigation, NOT resetting had_activationless_show_";
   }
 }
 
-void PaymentRequestWebContentsManager::RenderFrameDeleted(
-    content::RenderFrameHost* render_frame_host) {
-  const auto render_frame_host_id = render_frame_host->GetGlobalId();
-  // Two passes to avoid modifying the |payment_requests_| map while iterating
-  // over it.
-  std::vector<PaymentRequest*> obsolete;
-  for (auto& it : payment_requests_) {
-    if (it.second->initiator_frame_routing_id() == render_frame_host_id) {
-      obsolete.push_back(it.first);
-    }
-  }
-  for (auto* request : obsolete) {
-    request->RenderFrameDeleted(render_frame_host);
-  }
-}
-
-void PaymentRequestWebContentsManager::DestroyRequest(
-    base::WeakPtr<PaymentRequest> request) {
-  if (!request)
-    return;
-
-  request->HideIfNecessary();
-  payment_requests_.erase(request.get());
-}
-
-PaymentRequestWebContentsManager::PaymentRequestWebContentsManager(
-    content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {}
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(PaymentRequestWebContentsManager)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PaymentRequestWebContentsManager);
 
 }  // namespace payments

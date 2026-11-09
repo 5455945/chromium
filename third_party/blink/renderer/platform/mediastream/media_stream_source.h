@@ -32,26 +32,31 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIASTREAM_MEDIA_STREAM_SOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIASTREAM_MEDIA_STREAM_SOURCE_H_
 
+#include <cstdint>
 #include <memory>
-#include <utility>
+#include <optional>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "build/buildflag.h"
+#include "third_party/blink/public/common/mediastream/media_stream_request.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_source.h"
-#include "third_party/blink/public/platform/modules/mediastream/web_media_stream_track.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_platform_media_stream_source.h"
-#include "third_party/blink/renderer/platform/audio/audio_destination_consumer.h"
-#include "third_party/blink/renderer/platform/mediastream/media_constraints.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_processor_options.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/display/types/display_constants.h"
 
 namespace blink {
 
-class WebAudioDestinationConsumer;
-
+// GarbageCollected wrapper of a WebPlatformMediaStreamSource, which acts as a
+// source backing one or more MediaStreamTracks.
 class PLATFORM_EXPORT MediaStreamSource final
     : public GarbageCollected<MediaStreamSource> {
   USING_PRE_FINALIZER(MediaStreamSource, Dispose);
@@ -61,7 +66,12 @@ class PLATFORM_EXPORT MediaStreamSource final
    public:
     virtual ~Observer() = default;
     virtual void SourceChangedState() = 0;
-    virtual void SourceChangedCaptureHandle(media::mojom::CaptureHandlePtr) = 0;
+    virtual void SourceChangedCaptureConfiguration() = 0;
+    virtual void SourceChangedCaptureHandle() = 0;
+    // No listener needs zoom-level updates on Android or iOS.
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+    virtual void SourceChangedZoomLevel(int) = 0;
+#endif
   };
 
   enum StreamType { kTypeAudio, kTypeVideo };
@@ -72,16 +82,27 @@ class PLATFORM_EXPORT MediaStreamSource final
     kReadyStateEnded = 2
   };
 
-  enum class EchoCancellationMode { kDisabled, kBrowser, kAec3, kSystem };
+  MediaStreamSource(
+      const String& id,
+      StreamType type,
+      const String& name,
+      bool remote,
+      std::unique_ptr<WebPlatformMediaStreamSource> platform_source,
+      ReadyState state = kReadyStateLive,
+      bool requires_consumer = false);
 
-  MediaStreamSource(const String& id,
-                    StreamType,
-                    const String& name,
-                    bool remote,
-                    ReadyState = kReadyStateLive,
-                    bool requires_consumer = false);
+  MediaStreamSource(
+      const String& id,
+      int64_t display_id,
+      StreamType type,
+      const String& name,
+      bool remote,
+      std::unique_ptr<WebPlatformMediaStreamSource> platform_source,
+      ReadyState state = kReadyStateLive,
+      bool requires_consumer = false);
 
   const String& Id() const { return id_; }
+  int64_t GetDisplayId() const { return display_id_; }
   StreamType GetType() const { return type_; }
   const String& GetName() const { return name_; }
   bool Remote() const { return remote_; }
@@ -97,26 +118,28 @@ class PLATFORM_EXPORT MediaStreamSource final
   WebPlatformMediaStreamSource* GetPlatformSource() const {
     return platform_source_.get();
   }
-  void SetPlatformSource(
-      std::unique_ptr<WebPlatformMediaStreamSource> platform_source);
 
-  void SetAudioProcessingProperties(EchoCancellationMode echo_cancellation_mode,
+  void SetAudioProcessingProperties(EchoCancellationMode echo_cancellation,
                                     bool auto_gain_control,
-                                    bool noise_supression);
+                                    bool noise_supression,
+                                    bool voice_isolation);
 
   void GetSettings(MediaStreamTrackPlatform::Settings&);
 
   struct Capabilities {
-    // Vector is used to store an optional range for the below numeric
-    // fields. All of them should have 0 or 2 values representing min/max.
+    // Vector is used to store an optional range for the below fields.
+    // Numeric fields should have 0 or 2 values representing min/max.
+    // Boolean or enum fields can have 0 or more entries representing supported
+    // values.
     Vector<uint32_t> width;
     Vector<uint32_t> height;
     Vector<double> aspect_ratio;
     Vector<double> frame_rate;
-    Vector<bool> echo_cancellation;
-    Vector<String> echo_cancellation_type;
+    Vector<EchoCancellationMode> echo_cancellation;
     Vector<bool> auto_gain_control;
     Vector<bool> noise_suppression;
+    Vector<bool> voice_isolation;
+    std::optional<Vector<bool>> restrict_own_audio;
     Vector<int32_t> sample_size;
     Vector<int32_t> channel_count;
     Vector<int32_t> sample_rate;
@@ -126,6 +149,10 @@ class PLATFORM_EXPORT MediaStreamSource final
         MediaStreamTrackPlatform::FacingMode::kNone;
     String device_id;
     String group_id;
+
+    // Indicates if the device is available for use. If not, capabilities are
+    // not exposed.
+    bool is_available = true;
   };
 
   const Capabilities& GetCapabilities() { return capabilities_; }
@@ -133,60 +160,34 @@ class PLATFORM_EXPORT MediaStreamSource final
     capabilities_ = capabilities;
   }
 
-  void SetAudioFormat(size_t number_of_channels, float sample_rate);
-  void ConsumeAudio(AudioBus*, size_t number_of_frames);
-
-  // Only used if this is a WebAudio source.
-  // The WebAudioDestinationConsumer is not owned, and has to be disposed of
-  // separately after calling removeAudioConsumer.
-  bool RequiresAudioConsumer() const { return requires_consumer_; }
-  void AddAudioConsumer(WebAudioDestinationConsumer*);
-  bool RemoveAudioConsumer(WebAudioDestinationConsumer*);
-
+  void OnDeviceCaptureConfigurationChange(const MediaStreamDevice& device);
   void OnDeviceCaptureHandleChange(const MediaStreamDevice& device);
+  void OnZoomLevelChange(const MediaStreamDevice& device, int zoom_level);
 
   void Trace(Visitor*) const;
-
   void Dispose();
 
  private:
-  class PLATFORM_EXPORT ConsumerWrapper final
-      : public AudioDestinationConsumer {
-    USING_FAST_MALLOC(ConsumerWrapper);
-
-   public:
-    explicit ConsumerWrapper(WebAudioDestinationConsumer* consumer);
-
-    void SetFormat(size_t number_of_channels, float sample_rate) override;
-    void ConsumeAudio(AudioBus* bus, size_t number_of_frames) override;
-
-    // m_consumer is not owned by this class.
-    WebAudioDestinationConsumer* consumer_;
-    // bus_vector_ must only be used in ConsumeAudio. The only reason it's a
-    // member variable is to not have to reallocate it for each call.
-    Vector<const float*> bus_vector_;
-  };
-
+  // The ID of this MediaStreamSource object itself.
   String id_;
+  // If this MediaStreamSource object is associated with a display,
+  // then `display_id_` holds the display's own ID.
+  // Otherwise, display::kInvalidDisplayId.
+  // This attribute is currently only set on ChromeOS.
+  int64_t display_id_ = display::kInvalidDisplayId;
   StreamType type_;
   String name_;
   String group_id_;
   bool remote_;
   ReadyState ready_state_;
-  bool requires_consumer_;
   HeapHashSet<WeakMember<Observer>> observers_;
-  Mutex audio_consumers_lock_;
-  HashMap<WebAudioDestinationConsumer*, std::unique_ptr<ConsumerWrapper>>
-      audio_consumers_ GUARDED_BY(audio_consumers_lock_);
   std::unique_ptr<WebPlatformMediaStreamSource> platform_source_;
-  MediaConstraints constraints_;
   Capabilities capabilities_;
-  absl::optional<EchoCancellationMode> echo_cancellation_mode_;
-  absl::optional<bool> auto_gain_control_;
-  absl::optional<bool> noise_supression_;
+  std::optional<EchoCancellationMode> echo_cancellation_;
+  std::optional<bool> auto_gain_control_;
+  std::optional<bool> noise_supression_;
+  std::optional<bool> voice_isolation_;
 };
-
-typedef HeapVector<Member<MediaStreamSource>> MediaStreamSourceVector;
 
 }  // namespace blink
 

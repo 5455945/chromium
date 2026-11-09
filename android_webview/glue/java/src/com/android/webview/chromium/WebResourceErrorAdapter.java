@@ -1,19 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package com.android.webview.chromium;
 
-import android.annotation.TargetApi;
-import android.os.Build;
 import android.webkit.WebResourceError;
 
-import org.chromium.android_webview.AwContentsClient.AwWebResourceError;
+import org.chromium.android_webview.AwWebResourceError;
 
-/**
- * Chromium implementation of {@link WebResourceError}.
- */
-@TargetApi(Build.VERSION_CODES.M)
+/** Chromium implementation of {@link WebResourceError}. */
 public class WebResourceErrorAdapter extends WebResourceError {
     private final AwWebResourceError mError;
 
@@ -27,11 +22,11 @@ public class WebResourceErrorAdapter extends WebResourceError {
 
     @Override
     public int getErrorCode() {
-        return mError.errorCode;
+        return mError.getWebviewError();
     }
 
     @Override
     public CharSequence getDescription() {
-        return mError.description;
+        return mError.getDescription();
     }
 }

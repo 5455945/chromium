@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
 using EnvironmentInternalTest = PlatformTest;
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
 namespace {
 void ExpectEnvironmentBlock(const std::vector<std::wstring>& vars,
@@ -29,28 +29,36 @@ void ExpectEnvironmentBlock(const std::vector<std::wstring>& vars,
   expected.push_back('\0');
   EXPECT_EQ(expected, block);
 }
+
+std::vector<wchar_t> MakeBlock(const std::vector<std::wstring>& vars) {
+  std::vector<wchar_t> block;
+  for (const auto& var : vars) {
+    block.insert(block.end(), var.begin(), var.end());
+    block.push_back(L'\0');
+  }
+  block.push_back(L'\0');
+  return block;
+}
 }  // namespace
 
 TEST_F(EnvironmentInternalTest, AlterEnvironment) {
-  const wchar_t empty[] = {'\0'};
-  const wchar_t a2[] = {'A', '=', '2', '\0', '\0'};
-  const wchar_t a2b3[] = {'A', '=', '2', '\0', 'B', '=', '3', '\0', '\0'};
   EnvironmentMap changes;
   NativeEnvironmentString e;
 
-  e = AlterEnvironment(empty, changes);
+  e = AlterEnvironment(base::span<const wchar_t>(), changes);
   ExpectEnvironmentBlock({}, e);
 
   changes[L"A"] = L"1";
-  e = AlterEnvironment(empty, changes);
+  e = AlterEnvironment(base::span<const wchar_t>(), changes);
   ExpectEnvironmentBlock({L"A=1"}, e);
 
   changes.clear();
   changes[L"A"] = std::wstring();
-  e = AlterEnvironment(empty, changes);
+  e = AlterEnvironment(base::span<const wchar_t>(), changes);
   ExpectEnvironmentBlock({}, e);
 
   changes.clear();
+  auto a2 = MakeBlock({L"A=2"});
   e = AlterEnvironment(a2, changes);
   ExpectEnvironmentBlock({L"A=2"}, e);
 
@@ -67,6 +75,7 @@ TEST_F(EnvironmentInternalTest, AlterEnvironment) {
   changes.clear();
   changes[L"A"] = std::wstring();
   changes[L"B"] = std::wstring();
+  auto a2b3 = MakeBlock({L"A=2", L"B=3"});
   e = AlterEnvironment(a2b3, changes);
   ExpectEnvironmentBlock({}, e);
 
@@ -88,66 +97,68 @@ TEST_F(EnvironmentInternalTest, AlterEnvironment) {
   ExpectEnvironmentBlock({L"B=3", L"A=1", L"C=4"}, e);
 }
 
-#else  // !OS_WIN
+#else  // !BUILDFLAG(IS_WIN)
 
 TEST_F(EnvironmentInternalTest, AlterEnvironment) {
-  const char* const empty[] = {nullptr};
-  const char* const a2[] = {"A=2", nullptr};
-  const char* const a2b3[] = {"A=2", "B=3", nullptr};
+  // SAFETY: The environment blocks used in these tests are static and
+  // null-terminated, satisfying AlterEnvironment's requirements.
+  auto empty = base::span<const char* const>();
+  auto a2 = std::vector<const char*>{"A=2"};
+  auto a2b3 = std::vector<const char*>{"A=2", "B=3"};
   EnvironmentMap changes;
-  std::unique_ptr<char*[]> e;
+  base::HeapArray<char*> e;
 
-  e = AlterEnvironment(empty, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(empty, changes));
   EXPECT_TRUE(e[0] == nullptr);
 
   changes["A"] = "1";
-  e = AlterEnvironment(empty, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(empty, changes));
   EXPECT_EQ(std::string("A=1"), e[0]);
   EXPECT_TRUE(e[1] == nullptr);
 
   changes.clear();
   changes["A"] = std::string();
-  e = AlterEnvironment(empty, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(empty, changes));
   EXPECT_TRUE(e[0] == nullptr);
 
   changes.clear();
-  e = AlterEnvironment(a2, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2, changes));
   EXPECT_EQ(std::string("A=2"), e[0]);
   EXPECT_TRUE(e[1] == nullptr);
 
   changes.clear();
   changes["A"] = "1";
-  e = AlterEnvironment(a2, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2, changes));
   EXPECT_EQ(std::string("A=1"), e[0]);
   EXPECT_TRUE(e[1] == nullptr);
 
   changes.clear();
   changes["A"] = std::string();
-  e = AlterEnvironment(a2, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2, changes));
   EXPECT_TRUE(e[0] == nullptr);
 
   changes.clear();
   changes["A"] = std::string();
   changes["B"] = std::string();
-  e = AlterEnvironment(a2b3, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2b3, changes));
   EXPECT_TRUE(e[0] == nullptr);
 
   changes.clear();
   changes["A"] = std::string();
-  e = AlterEnvironment(a2b3, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2b3, changes));
   EXPECT_EQ(std::string("B=3"), e[0]);
   EXPECT_TRUE(e[1] == nullptr);
 
   changes.clear();
   changes["B"] = std::string();
-  e = AlterEnvironment(a2b3, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2b3, changes));
   EXPECT_EQ(std::string("A=2"), e[0]);
   EXPECT_TRUE(e[1] == nullptr);
 
   changes.clear();
   changes["A"] = "1";
   changes["C"] = "4";
-  e = AlterEnvironment(a2b3, changes);
+  e = UNSAFE_BUFFERS(AlterEnvironment(a2b3, changes));
   EXPECT_EQ(std::string("B=3"), e[0]);
   // AlterEnvironment() currently always puts changed entries at the end.
   EXPECT_EQ(std::string("A=1"), e[1]);
@@ -155,7 +166,6 @@ TEST_F(EnvironmentInternalTest, AlterEnvironment) {
   EXPECT_TRUE(e[3] == nullptr);
 }
 
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

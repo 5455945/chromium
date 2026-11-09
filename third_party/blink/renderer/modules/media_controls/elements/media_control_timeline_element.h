@@ -1,12 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIA_CONTROLS_ELEMENTS_MEDIA_CONTROL_TIMELINE_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIA_CONTROLS_ELEMENTS_MEDIA_CONTROL_TIMELINE_ELEMENT_H_
 
+#include <optional>
+
+#include "base/time/time.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_slider_element.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/platform/timer.h"
 
 namespace blink {
 
@@ -23,10 +27,14 @@ class MediaControlTimelineElement : public MediaControlSliderElement {
 
   // FIXME: An "earliest possible position" will be needed once that concept
   // is supported by HTMLMediaElement, see https://crbug.com/137275
-  void SetPosition(double, bool suppress_aria = false);
-  void SetDuration(double);
+  MODULES_EXPORT void SetPosition(double, bool suppress_aria = false);
+  MODULES_EXPORT void SetDuration(double);
 
   void OnMediaKeyboardEvent(Event* event) { DefaultEventHandler(*event); }
+
+  void OnMediaPlaying();
+  void OnMediaStoppedPlaying();
+  void OnProgress();
 
   void RenderBarSegments();
 
@@ -40,8 +48,17 @@ class MediaControlTimelineElement : public MediaControlSliderElement {
   const char* GetNameForHistograms() const override;
 
  private:
+  // Struct used to track the current live time.
+  struct LiveAnchorTime {
+    base::TimeTicks clock_time_;
+    double media_time_ = 0;
+  };
+
   void DefaultEventHandler(Event&) override;
   bool KeepEventInNode(const Event&) const override;
+
+  void RenderTimelineTimerFired(TimerBase*);
+  void MaybeUpdateTimelineInterval();
 
   // Checks if we can begin or end a scrubbing event. If the event is a pointer
   // event then it needs to start and end with valid pointer events. If the
@@ -55,6 +72,14 @@ class MediaControlTimelineElement : public MediaControlSliderElement {
   bool is_touching_ = false;
 
   bool controls_hidden_ = false;
+
+  bool is_scrubbing_ = false;
+
+  bool is_live_ = false;
+
+  std::optional<LiveAnchorTime> live_anchor_time_;
+
+  HeapTaskRunnerTimer<MediaControlTimelineElement> render_timeline_timer_;
 };
 
 }  // namespace blink

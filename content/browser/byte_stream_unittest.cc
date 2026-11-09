@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,19 @@
 #include <stddef.h>
 
 #include <limits>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,20 +34,17 @@ void CountCallbacks(int* counter) {
 
 class ByteStreamTest : public testing::Test {
  public:
-  ByteStreamTest();
-
   // Create a new IO buffer of the given |buffer_size|.  Details of the
   // contents of the created buffer will be kept, and can be validated
   // by ValidateIOBuffer.
   scoped_refptr<net::IOBuffer> NewIOBuffer(size_t buffer_size) {
-    scoped_refptr<net::IOBuffer> buffer =
-        base::MakeRefCounted<net::IOBuffer>(buffer_size);
-    char *bufferp = buffer->data();
-    for (size_t i = 0; i < buffer_size; i++)
-      bufferp[i] = (i + producing_seed_key_) % (1 << sizeof(char));
-    pointer_queue_.push_back(bufferp);
-    length_queue_.push_back(buffer_size);
-    ++producing_seed_key_;
+    static uint8_t seed = 0;
+    auto buffer = base::MakeRefCounted<net::IOBufferWithSize>(buffer_size);
+    base::span<uint8_t> span = buffer->span();
+    for (size_t i = 0; i < buffer_size; i++) {
+      span[i] = ++seed;
+    }
+    data_queue_.emplace_back(base::ToVector(span));
     return buffer;
   }
 
@@ -59,58 +60,27 @@ class ByteStreamTest : public testing::Test {
   // called on buffers that were allocated from NewIOBuffer, and in the
   // order that they were allocated.  Calls to NewIOBuffer &&
   // ValidateIOBuffer may be interleaved.
-  bool ValidateIOBuffer(
-      scoped_refptr<net::IOBuffer> buffer, size_t buffer_size) {
-    char *bufferp = buffer->data();
+  bool ValidateIOBuffer(scoped_refptr<net::IOBuffer> buffer) {
+    base::span<const uint8_t> buffer_span = buffer->span();
+    std::vector<uint8_t> expected_data = data_queue_.front();
+    data_queue_.pop_front();
 
-    char *expected_ptr = pointer_queue_.front();
-    size_t expected_length = length_queue_.front();
-    pointer_queue_.pop_front();
-    length_queue_.pop_front();
-    ++consuming_seed_key_;
-
-    EXPECT_EQ(expected_ptr, bufferp);
-    if (expected_ptr != bufferp)
-      return false;
-
-    EXPECT_EQ(expected_length, buffer_size);
-    if (expected_length != buffer_size)
-      return false;
-
-    for (size_t i = 0; i < buffer_size; i++) {
-      // Already incremented, so subtract one from the key.
-      EXPECT_EQ(static_cast<int>((i + consuming_seed_key_ - 1)
-                                 % (1 << sizeof(char))),
-                bufferp[i]);
-      if (static_cast<int>((i + consuming_seed_key_ - 1) %
-                           (1 << sizeof(char))) != bufferp[i]) {
-        return false;
-      }
-    }
-    return true;
+    EXPECT_EQ(buffer_span, expected_data);
+    return buffer_span == expected_data;
   }
 
- protected:
-  base::test::SingleThreadTaskEnvironment task_environment_;
-
  private:
-  int producing_seed_key_;
-  int consuming_seed_key_;
-  base::circular_deque<char*> pointer_queue_;
-  base::circular_deque<size_t> length_queue_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
+  base::circular_deque<std::vector<uint8_t>> data_queue_;
 };
-
-ByteStreamTest::ByteStreamTest()
-    : producing_seed_key_(0),
-      consuming_seed_key_(0) { }
 
 // Confirm that filling and emptying the stream works properly, and that
 // we get full triggers when we expect.
 TEST_F(ByteStreamTest, ByteStream_PushBack) {
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
 
   // Push a series of IO buffers on; test pushback happening and
@@ -133,23 +103,23 @@ TEST_F(ByteStreamTest, ByteStream_PushBack) {
   size_t output_length;
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_COMPLETE,
             byte_stream_output->Read(&output_io_buffer, &output_length));
@@ -164,8 +134,8 @@ TEST_F(ByteStreamTest, ByteStream_PushBack) {
 TEST_F(ByteStreamTest, ByteStream_Flush) {
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 1024,
                    &byte_stream_input, &byte_stream_output);
 
   EXPECT_TRUE(Write(byte_stream_input.get(), 1));
@@ -182,7 +152,7 @@ TEST_F(ByteStreamTest, ByteStream_Flush) {
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   // Check that it's ok to Flush() an empty writer.
   byte_stream_input->Flush();
@@ -204,8 +174,8 @@ TEST_F(ByteStreamTest, ByteStream_Flush) {
 TEST_F(ByteStreamTest, ByteStream_PushBackSplit) {
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 9 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 9 * 1024,
                    &byte_stream_input, &byte_stream_output);
 
   // Push a series of IO buffers on; test pushback happening and
@@ -227,23 +197,23 @@ TEST_F(ByteStreamTest, ByteStream_PushBackSplit) {
   size_t output_length;
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
@@ -259,8 +229,8 @@ TEST_F(ByteStreamTest, ByteStream_CompleteTransmits) {
   size_t output_length;
 
   // Empty stream, non-error case.
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
@@ -271,8 +241,8 @@ TEST_F(ByteStreamTest, ByteStream_CompleteTransmits) {
   EXPECT_EQ(0, byte_stream_output->GetStatus());
 
   // Non-empty stream, non-error case.
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
@@ -281,7 +251,7 @@ TEST_F(ByteStreamTest, ByteStream_CompleteTransmits) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   ASSERT_EQ(ByteStreamReader::STREAM_COMPLETE,
             byte_stream_output->Read(&output_io_buffer, &output_length));
   EXPECT_EQ(0, byte_stream_output->GetStatus());
@@ -289,8 +259,8 @@ TEST_F(ByteStreamTest, ByteStream_CompleteTransmits) {
   const int kFakeErrorCode = 22;
 
   // Empty stream, error case.
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
@@ -301,8 +271,8 @@ TEST_F(ByteStreamTest, ByteStream_CompleteTransmits) {
   EXPECT_EQ(kFakeErrorCode, byte_stream_output->GetStatus());
 
   // Non-empty stream, error case.
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
@@ -311,7 +281,7 @@ TEST_F(ByteStreamTest, ByteStream_CompleteTransmits) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   ASSERT_EQ(ByteStreamReader::STREAM_COMPLETE,
             byte_stream_output->Read(&output_io_buffer, &output_length));
   EXPECT_EQ(kFakeErrorCode, byte_stream_output->GetStatus());
@@ -324,8 +294,8 @@ TEST_F(ByteStreamTest, ByteStream_SinkCallback) {
 
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(), task_runner, 10000,
-                   &byte_stream_input, &byte_stream_output);
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   task_runner, 10000, &byte_stream_input, &byte_stream_output);
 
   scoped_refptr<net::IOBuffer> output_io_buffer;
   size_t output_length;
@@ -352,7 +322,7 @@ TEST_F(ByteStreamTest, ByteStream_SinkCallback) {
   // Check data and stream state.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
 
@@ -375,7 +345,8 @@ TEST_F(ByteStreamTest, ByteStream_SourceCallback) {
 
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(task_runner, base::ThreadTaskRunnerHandle::Get(), 10000,
+  CreateByteStream(task_runner,
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 10000,
                    &byte_stream_input, &byte_stream_output);
 
   scoped_refptr<net::IOBuffer> output_io_buffer;
@@ -402,13 +373,13 @@ TEST_F(ByteStreamTest, ByteStream_SourceCallback) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   // Grab data, triggering callback.  Recorded on dispatch, but doesn't
   // happen because it's caught by the mock.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   // Confirm that the callback passed to the mock does what we expect.
   EXPECT_EQ(0, num_callbacks);
@@ -418,7 +389,7 @@ TEST_F(ByteStreamTest, ByteStream_SourceCallback) {
   // Same drill with final buffer.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
   EXPECT_EQ(1, num_callbacks);
@@ -436,8 +407,8 @@ TEST_F(ByteStreamTest, ByteStream_SinkInterrupt) {
 
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(), task_runner, 10000,
-                   &byte_stream_input, &byte_stream_output);
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   task_runner, 10000, &byte_stream_input, &byte_stream_output);
 
   scoped_refptr<net::IOBuffer> output_io_buffer;
   size_t output_length;
@@ -467,7 +438,7 @@ TEST_F(ByteStreamTest, ByteStream_SinkInterrupt) {
   // Final cleanup.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
 
@@ -481,7 +452,8 @@ TEST_F(ByteStreamTest, ByteStream_SourceInterrupt) {
 
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(task_runner, base::ThreadTaskRunnerHandle::Get(), 10000,
+  CreateByteStream(task_runner,
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 10000,
                    &byte_stream_input, &byte_stream_output);
 
   scoped_refptr<net::IOBuffer> output_io_buffer;
@@ -499,13 +471,13 @@ TEST_F(ByteStreamTest, ByteStream_SourceInterrupt) {
   // Initial get should not trigger callback.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   base::RunLoop().RunUntilIdle();
 
   // Second get *should* trigger callback.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
 
   // Which should do the right thing when it's run.
   int num_alt_callbacks = 0;
@@ -518,7 +490,7 @@ TEST_F(ByteStreamTest, ByteStream_SourceInterrupt) {
   // Third get should also trigger callback.
   EXPECT_EQ(ByteStreamReader::STREAM_HAS_DATA,
             byte_stream_output->Read(&output_io_buffer, &output_length));
-  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer, output_length));
+  EXPECT_TRUE(ValidateIOBuffer(output_io_buffer));
   EXPECT_EQ(ByteStreamReader::STREAM_EMPTY,
             byte_stream_output->Read(&output_io_buffer, &output_length));
 }
@@ -531,8 +503,8 @@ TEST_F(ByteStreamTest, ByteStream_ZeroCallback) {
 
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(), task_runner, 10000,
-                   &byte_stream_input, &byte_stream_output);
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   task_runner, 10000, &byte_stream_input, &byte_stream_output);
 
   // Record initial state.
   int num_callbacks = 0;
@@ -548,8 +520,8 @@ TEST_F(ByteStreamTest, ByteStream_ZeroCallback) {
 TEST_F(ByteStreamTest, ByteStream_CloseWithoutAnyWrite) {
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
 
   byte_stream_input->Close(0);
@@ -564,8 +536,8 @@ TEST_F(ByteStreamTest, ByteStream_CloseWithoutAnyWrite) {
 TEST_F(ByteStreamTest, ByteStream_FlushWithoutAnyWrite) {
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(), 3 * 1024,
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(), 3 * 1024,
                    &byte_stream_input, &byte_stream_output);
 
   byte_stream_input->Flush();
@@ -586,8 +558,8 @@ TEST_F(ByteStreamTest, ByteStream_FlushWithoutAnyWrite) {
 TEST_F(ByteStreamTest, ByteStream_WriteOverflow) {
   std::unique_ptr<ByteStreamWriter> byte_stream_input;
   std::unique_ptr<ByteStreamReader> byte_stream_output;
-  CreateByteStream(base::ThreadTaskRunnerHandle::Get(),
-                   base::ThreadTaskRunnerHandle::Get(),
+  CreateByteStream(base::SingleThreadTaskRunner::GetCurrentDefault(),
+                   base::SingleThreadTaskRunner::GetCurrentDefault(),
                    std::numeric_limits<size_t>::max(), &byte_stream_input,
                    &byte_stream_output);
 

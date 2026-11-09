@@ -1,10 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/router/providers/dial/dial_activity_manager.h"
 
-#include "base/bind.h"
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/media/router/discovery/dial/dial_app_discovery_service.h"
 #include "chrome/browser/media/router/providers/dial/dial_internal_message_util.h"
@@ -16,6 +18,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
+using testing::NiceMock;
 using testing::Not;
 
 namespace media_router {
@@ -27,8 +30,7 @@ TEST(DialActivityTest, From) {
       "cast-dial:YouTube?clientId=152127444812943594&dialPostData=foo";
   url::Origin origin = url::Origin::Create(GURL("https://www.youtube.com/"));
 
-  auto activity = DialActivity::From(presentation_id, sink, source_id, origin,
-                                     /*off_the_record*/ true);
+  auto activity = DialActivity::From(presentation_id, sink, source_id, origin);
   ASSERT_TRUE(activity);
 
   GURL expected_app_launch_url(sink.dial_data().app_url.spec() + "/YouTube");
@@ -44,7 +46,6 @@ TEST(DialActivityTest, From) {
   EXPECT_EQ(sink.sink().id(), route.media_sink_id());
   EXPECT_EQ("YouTube", route.description());
   EXPECT_TRUE(route.is_local());
-  EXPECT_TRUE(route.is_off_the_record());
   EXPECT_FALSE(route.is_local_presentation());
   EXPECT_EQ(RouteControllerType::kNone, route.controller_type());
 }
@@ -56,8 +57,8 @@ class DialActivityManagerTest : public testing::Test {
   ~DialActivityManagerTest() override = default;
 
   void TestLaunchApp(const DialActivity& activity,
-                     const absl::optional<std::string>& launch_parameter,
-                     const absl::optional<GURL>& app_instance_url) {
+                     const std::optional<std::string>& launch_parameter,
+                     const std::optional<GURL>& app_instance_url) {
     manager_.SetExpectedRequest(activity.launch_info.app_launch_url, "POST",
                                 launch_parameter ? *launch_parameter : "foo");
     LaunchApp(activity.route.media_route_id(), launch_parameter);
@@ -67,7 +68,7 @@ class DialActivityManagerTest : public testing::Test {
 
     // Pending launch request, no-op.
     EXPECT_CALL(manager_, OnFetcherCreated()).Times(0);
-    LaunchApp(activity.route.media_route_id(), absl::nullopt);
+    LaunchApp(activity.route.media_route_id(), std::nullopt);
     LaunchApp(activity.route.media_route_id(), "bar");
 
     auto response_head = network::mojom::URLResponseHead::New();
@@ -79,8 +80,11 @@ class DialActivityManagerTest : public testing::Test {
     loader_factory_.AddResponse(activity.launch_info.app_launch_url,
                                 std::move(response_head), "",
                                 network::URLLoaderCompletionStatus());
-    EXPECT_CALL(*this, OnAppLaunchResult(true));
-    base::RunLoop().RunUntilIdle();
+    base::RunLoop run_loop;
+    EXPECT_CALL(*this, OnAppLaunchResult(true)).WillOnce([&run_loop]() {
+      run_loop.Quit();
+    });
+    run_loop.Run();
 
     auto routes = manager_.GetRoutes();
     EXPECT_EQ(1u, routes.size());
@@ -88,11 +92,11 @@ class DialActivityManagerTest : public testing::Test {
 
     // App already launched, no-op.
     EXPECT_CALL(manager_, OnFetcherCreated()).Times(0);
-    LaunchApp(activity.route.media_route_id(), absl::nullopt);
+    LaunchApp(activity.route.media_route_id(), std::nullopt);
   }
 
   void LaunchApp(const MediaRoute::Id& route_id,
-                 const absl::optional<std::string>& launch_parameter) {
+                 const std::optional<std::string>& launch_parameter) {
     CustomDialLaunchMessageBody message(true, launch_parameter);
     manager_.LaunchApp(
         route_id, message,
@@ -109,28 +113,31 @@ class DialActivityManagerTest : public testing::Test {
   }
 
   MOCK_METHOD2(OnStopAppResult,
-               void(const absl::optional<std::string>&,
-                    RouteRequestResult::ResultCode));
+               void(const std::optional<std::string>&,
+                    mojom::RouteRequestResultCode));
 
   std::unique_ptr<DialActivity> FailToStopApp() {
     auto activity =
-        DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                           /*off_the_record*/ false);
+        DialActivity::From(presentation_id_, sink_, source_id_, origin_);
     CHECK(activity);
     manager_.AddActivity(*activity);
 
-    TestLaunchApp(*activity, absl::nullopt, absl::nullopt);
+    TestLaunchApp(*activity, std::nullopt, std::nullopt);
 
     GURL app_instance_url =
         GURL(activity->launch_info.app_launch_url.spec() + "/run");
-    manager_.SetExpectedRequest(app_instance_url, "DELETE", absl::nullopt);
+    manager_.SetExpectedRequest(app_instance_url, "DELETE", std::nullopt);
     StopApp(activity->route.media_route_id());
 
     loader_factory_.AddResponse(
         app_instance_url, network::mojom::URLResponseHead::New(), "",
         network::URLLoaderCompletionStatus(net::HTTP_SERVICE_UNAVAILABLE));
-    EXPECT_CALL(*this, OnStopAppResult(_, Not(RouteRequestResult::OK)));
-    base::RunLoop().RunUntilIdle();
+    base::RunLoop run_loop;
+    EXPECT_CALL(app_discovery_service_, DoFetchDialAppInfo(_, _))
+        .WillOnce([&run_loop]() { run_loop.Quit(); });
+    EXPECT_CALL(*this,
+                OnStopAppResult(_, Not(mojom::RouteRequestResultCode::OK)));
+    run_loop.Run();
     return activity;
   }
 
@@ -142,14 +149,13 @@ class DialActivityManagerTest : public testing::Test {
       "cast-dial:YouTube?clientId=152127444812943594&dialPostData=foo"};
   url::Origin origin_{url::Origin::Create(GURL{"https://www.youtube.com/"})};
   network::TestURLLoaderFactory loader_factory_;
-  MockDialAppDiscoveryService app_discovery_service_;
+  NiceMock<MockDialAppDiscoveryService> app_discovery_service_;
   TestDialActivityManager manager_;
 };
 
 TEST_F(DialActivityManagerTest, AddActivity) {
   auto activity =
-      DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                         /*off_the_record*/ false);
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   ASSERT_TRUE(activity);
 
   EXPECT_TRUE(manager_.GetRoutes().empty());
@@ -162,46 +168,39 @@ TEST_F(DialActivityManagerTest, AddActivity) {
 }
 
 TEST_F(DialActivityManagerTest, GetActivityBySinkId) {
-  auto activity = DialActivity::From(presentation_id_, sink_, source_id_,
-                                     origin_, /*off_the_record*/ false);
+  auto activity =
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   manager_.AddActivity(*activity);
   EXPECT_TRUE(manager_.GetActivityBySinkId(sink_.id()));
   EXPECT_FALSE(manager_.GetActivityBySinkId("wrong-sink-id"));
 }
 
 TEST_F(DialActivityManagerTest, GetActivityToJoin) {
-  const bool off_the_record = false;
-  auto activity = DialActivity::From(presentation_id_, sink_, source_id_,
-                                     origin_, off_the_record);
+  auto activity =
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   manager_.AddActivity(*activity);
-  EXPECT_TRUE(manager_.GetActivityToJoin(
-      presentation_id_, MediaSource(source_id_), origin_, off_the_record));
-  EXPECT_FALSE(manager_.GetActivityToJoin(presentation_id_,
-                                          MediaSource("wrong-source-id"),
-                                          origin_, off_the_record));
-  EXPECT_FALSE(manager_.GetActivityToJoin("wrong-presentation-id",
-                                          MediaSource(source_id_), origin_,
-                                          off_the_record));
+  EXPECT_TRUE(manager_.GetActivityToJoin(presentation_id_,
+                                         MediaSource(source_id_), origin_));
   EXPECT_FALSE(manager_.GetActivityToJoin(
-      presentation_id_, MediaSource(source_id_), origin_, !off_the_record));
+      presentation_id_, MediaSource("wrong-source-id"), origin_));
+  EXPECT_FALSE(manager_.GetActivityToJoin("wrong-presentation-id",
+                                          MediaSource(source_id_), origin_));
 }
 
 TEST_F(DialActivityManagerTest, LaunchApp) {
   auto activity =
-      DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                         /*off_the_record*/ false);
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   ASSERT_TRUE(activity);
   manager_.AddActivity(*activity);
 
   GURL app_instance_url =
       GURL(sink_.dial_data().app_url.spec() + "/YouTube/app_instance");
-  TestLaunchApp(*activity, absl::nullopt, app_instance_url);
+  TestLaunchApp(*activity, std::nullopt, app_instance_url);
 }
 
 TEST_F(DialActivityManagerTest, LaunchAppLaunchParameter) {
   auto activity =
-      DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                         /*off_the_record*/ false);
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   ASSERT_TRUE(activity);
   manager_.AddActivity(*activity);
 
@@ -212,21 +211,23 @@ TEST_F(DialActivityManagerTest, LaunchAppLaunchParameter) {
 
 TEST_F(DialActivityManagerTest, LaunchAppFails) {
   auto activity =
-      DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                         /*off_the_record*/ false);
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   ASSERT_TRUE(activity);
   manager_.AddActivity(*activity);
 
   manager_.SetExpectedRequest(activity->launch_info.app_launch_url, "POST",
                               "foo");
-  LaunchApp(activity->route.media_route_id(), absl::nullopt);
+  LaunchApp(activity->route.media_route_id(), std::nullopt);
 
   loader_factory_.AddResponse(
       activity->launch_info.app_launch_url,
       network::mojom::URLResponseHead::New(), "",
       network::URLLoaderCompletionStatus(net::HTTP_SERVICE_UNAVAILABLE));
-  EXPECT_CALL(*this, OnAppLaunchResult(false));
-  base::RunLoop().RunUntilIdle();
+  base::RunLoop run_loop;
+  EXPECT_CALL(*this, OnAppLaunchResult(false)).WillOnce([&run_loop]() {
+    run_loop.Quit();
+  });
+  run_loop.Run();
 
   // Activity is removed on failure.
   EXPECT_TRUE(manager_.GetRoutes().empty());
@@ -235,55 +236,57 @@ TEST_F(DialActivityManagerTest, LaunchAppFails) {
 
 TEST_F(DialActivityManagerTest, StopApp) {
   auto activity =
-      DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                         /*off_the_record*/ false);
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   ASSERT_TRUE(activity);
   manager_.AddActivity(*activity);
 
   GURL app_instance_url =
       GURL(sink_.dial_data().app_url.spec() + "/YouTube/app_instance");
-  TestLaunchApp(*activity, absl::nullopt, app_instance_url);
+  TestLaunchApp(*activity, std::nullopt, app_instance_url);
 
   auto can_stop = manager_.CanStopApp(activity->route.media_route_id());
-  EXPECT_EQ(can_stop.second, RouteRequestResult::OK);
-  manager_.SetExpectedRequest(app_instance_url, "DELETE", absl::nullopt);
+  EXPECT_EQ(can_stop.second, mojom::RouteRequestResultCode::OK);
+  manager_.SetExpectedRequest(app_instance_url, "DELETE", std::nullopt);
   StopApp(activity->route.media_route_id());
   testing::Mock::VerifyAndClearExpectations(this);
 
   // // The result should not be OK because there is a pending request.
   can_stop = manager_.CanStopApp(activity->route.media_route_id());
-  EXPECT_NE(can_stop.second, RouteRequestResult::OK);
+  EXPECT_NE(can_stop.second, mojom::RouteRequestResultCode::OK);
 
   loader_factory_.AddResponse(app_instance_url,
                               network::mojom::URLResponseHead::New(), "",
                               network::URLLoaderCompletionStatus());
-  EXPECT_CALL(*this, OnStopAppResult(testing::Eq(absl::nullopt),
-                                     RouteRequestResult::OK));
-  base::RunLoop().RunUntilIdle();
+  base::RunLoop run_loop;
+  EXPECT_CALL(*this, OnStopAppResult(testing::Eq(std::nullopt),
+                                     mojom::RouteRequestResultCode::OK))
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
+  run_loop.Run();
 
   EXPECT_TRUE(manager_.GetRoutes().empty());
 }
 
 TEST_F(DialActivityManagerTest, StopAppUseFallbackURL) {
   auto activity =
-      DialActivity::From(presentation_id_, sink_, source_id_, origin_,
-                         /*off_the_record*/ false);
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
   ASSERT_TRUE(activity);
   manager_.AddActivity(*activity);
 
-  TestLaunchApp(*activity, absl::nullopt, absl::nullopt);
+  TestLaunchApp(*activity, std::nullopt, std::nullopt);
 
   GURL app_instance_url =
       GURL(activity->launch_info.app_launch_url.spec() + "/run");
-  manager_.SetExpectedRequest(app_instance_url, "DELETE", absl::nullopt);
+  manager_.SetExpectedRequest(app_instance_url, "DELETE", std::nullopt);
   StopApp(activity->route.media_route_id());
 
   loader_factory_.AddResponse(app_instance_url,
                               network::mojom::URLResponseHead::New(), "",
                               network::URLLoaderCompletionStatus());
-  EXPECT_CALL(*this, OnStopAppResult(testing::Eq(absl::nullopt),
-                                     RouteRequestResult::OK));
-  base::RunLoop().RunUntilIdle();
+  base::RunLoop run_loop;
+  EXPECT_CALL(*this, OnStopAppResult(testing::Eq(std::nullopt),
+                                     mojom::RouteRequestResultCode::OK))
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
+  run_loop.Run();
 
   EXPECT_TRUE(manager_.GetRoutes().empty());
 }
@@ -296,8 +299,11 @@ TEST_F(DialActivityManagerTest, StopAppFails) {
           CreateParsedDialAppInfoPtr("YouTube", DialAppState::kRunning),
           DialAppInfoResultCode::kOk));
 
-  EXPECT_TRUE(manager_.GetActivity(activity->route.media_route_id()));
-  EXPECT_FALSE(manager_.GetRoutes().empty());
+  // Even if we fail to terminate an app, we remove it from the list of routes
+  // tracked by DialActivityManager. This is done because manually stopping Cast
+  // session from DIAL device is not reflected on Chrome side.
+  EXPECT_FALSE(manager_.GetActivity(activity->route.media_route_id()));
+  EXPECT_TRUE(manager_.GetRoutes().empty());
 }
 
 TEST_F(DialActivityManagerTest, TryToStopAppThatIsAlreadyStopped) {
@@ -311,6 +317,90 @@ TEST_F(DialActivityManagerTest, TryToStopAppThatIsAlreadyStopped) {
   // |manager_|, upon learning that the app's state is already |kStopped|,
   // should remove the route.
   EXPECT_TRUE(manager_.GetRoutes().empty());
+}
+
+TEST_F(DialActivityManagerTest, StopAppMaliciousLocationHeader) {
+  auto activity =
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
+  ASSERT_TRUE(activity);
+  manager_.AddActivity(*activity);
+
+  // Malicious URL targeting localhost
+  GURL malicious_url("http://127.0.0.1:8080/api/admin/delete_all");
+
+  // Launch the app and receive the malicious LOCATION header
+  TestLaunchApp(*activity, std::nullopt, malicious_url);
+
+  // When stopping the app, it should NOT send a request to the malicious URL.
+  // Instead, it should use the fallback URL because the malicious one was
+  // rejected.
+  GURL fallback_url(activity->launch_info.app_launch_url.spec() + "/run");
+  manager_.SetExpectedRequest(fallback_url, "DELETE", std::nullopt);
+  StopApp(activity->route.media_route_id());
+
+  loader_factory_.AddResponse(fallback_url,
+                              network::mojom::URLResponseHead::New(), "",
+                              network::URLLoaderCompletionStatus());
+  base::RunLoop run_loop;
+  EXPECT_CALL(*this, OnStopAppResult(testing::Eq(std::nullopt),
+                                     mojom::RouteRequestResultCode::OK))
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
+  run_loop.Run();
+
+  EXPECT_TRUE(manager_.GetRoutes().empty());
+}
+
+TEST_F(DialActivityManagerTest, StopAppErrorCallbackAfterManagerDestroyed) {
+  auto manager = std::make_unique<TestDialActivityManager>(
+      &app_discovery_service_, &loader_factory_);
+  auto activity =
+      DialActivity::From(presentation_id_, sink_, source_id_, origin_);
+  ASSERT_TRUE(activity);
+  manager->AddActivity(*activity);
+
+  CustomDialLaunchMessageBody message(true, std::nullopt);
+  manager->SetExpectedRequest(activity->launch_info.app_launch_url, "POST",
+                              "foo");
+  manager->LaunchApp(activity->route.media_route_id(), message,
+                     base::BindOnce(&DialActivityManagerTest::OnAppLaunchResult,
+                                    base::Unretained(this)));
+  loader_factory_.AddResponse(activity->launch_info.app_launch_url,
+                              network::mojom::URLResponseHead::New(), "",
+                              network::URLLoaderCompletionStatus());
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(*this, OnAppLaunchResult(true)).WillOnce([&run_loop]() {
+      run_loop.Quit();
+    });
+    run_loop.Run();
+  }
+
+  GURL app_instance_url(activity->launch_info.app_launch_url.spec() + "/run");
+  manager->SetExpectedRequest(app_instance_url, "DELETE", std::nullopt);
+  manager->StopApp(activity->route.media_route_id(),
+                   base::BindOnce(&DialActivityManagerTest::OnStopAppResult,
+                                  base::Unretained(this)));
+  loader_factory_.AddResponse(
+      app_instance_url, network::mojom::URLResponseHead::New(), "",
+      network::URLLoaderCompletionStatus(net::HTTP_SERVICE_UNAVAILABLE));
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(app_discovery_service_, DoFetchDialAppInfo(_, _))
+        .WillOnce([&run_loop]() { run_loop.Quit(); });
+    run_loop.Run();
+  }
+  ASSERT_TRUE(app_discovery_service_.HasPendingCallback());
+
+  // Destroy the manager while the app-info request is still in flight.
+  EXPECT_CALL(*this, OnStopAppResult(_, _)).Times(0);
+  manager.reset();
+
+  // Invoking the pending callback after the manager is destroyed is a no-op.
+  app_discovery_service_.PassCallback().Run(
+      sink_.sink().id(), "YouTube",
+      DialAppInfoResult(
+          CreateParsedDialAppInfoPtr("YouTube", DialAppState::kStopped),
+          DialAppInfoResultCode::kOk));
 }
 
 }  // namespace media_router

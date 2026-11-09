@@ -54,6 +54,8 @@
 #ifndef BASE_SYMBOLIZE_H_
 #define BASE_SYMBOLIZE_H_
 
+#include <sys/types.h>  // for ssize_t
+
 #include "utilities.h"
 #include "config.h"
 #include "glog/logging.h"
@@ -99,11 +101,71 @@ _START_GOOGLE_NAMESPACE_
 bool GetSectionHeaderByName(int fd, const char *name, size_t name_len,
                             ElfW(Shdr) *out);
 
+// Searches for the object file (from /proc/self/maps) that contains the
+// specified pc.  If found, sets `start_address` and `end_address` to the start
+// address and end address of where this object file is mapped in memory, sets
+// the module base address into `base_address`, copies the object file name
+// into `out_file_name`, and attempts to open the object file.  If the object
+// file is opened successfully, returns the file descriptor.  Otherwise,
+// returns -1.  `out_file_name_size` is the size of the file name buffer
+// (including the NUL-terminator).
+ATTRIBUTE_NOINLINE int OpenObjectFileContainingPcAndGetStartAddress(
+    uint64_t pc,
+    uint64_t& start_address,
+    uint64_t& end_address,
+    uint64_t& base_address,
+    char* out_file_name,
+    size_t out_file_name_size);
+
 _END_GOOGLE_NAMESPACE_
 
-#endif  /* __ELF__ */
+#endif /* __ELF__ */
 
 _START_GOOGLE_NAMESPACE_
+
+// Thin wrapper around a file descriptor so that the file descriptor
+// gets closed for sure.
+struct FileDescriptor {
+  const int fd_;
+  explicit FileDescriptor(int fd) : fd_(fd) {}
+  ~FileDescriptor();
+  int get() { return fd_; }
+
+ private:
+  FileDescriptor(const FileDescriptor&);
+  void operator=(const FileDescriptor&);
+};
+
+// Small cache to use for miscellaneous file reads.
+const int kSmallFileCacheSize = 100;
+// Bigger cache size to use when performing many reads from a file. Abseil uses
+// an 8K cache, but Abseil uses an async signal safe arena allocator for
+// storage for bigger buffers; in Chrome, these buffers are on the stack.
+const int kBigFileCacheSize = 4096;
+
+class CachingFile {
+ public:
+  // Setup reader for fd that uses buf[0, buf_size-1] as a cache.
+  CachingFile(int fd, char* buf, size_t buf_size)
+      : fd_(fd),
+        cache_(buf),
+        cache_size_(buf_size),
+        cache_start_(0),
+        cache_limit_(0) {}
+
+  int fd() const { return fd_; }
+  ssize_t ReadFromOffset(void* buf, size_t count, off_t offset);
+  bool ReadFromOffsetExact(void* buf, size_t count, off_t offset);
+
+ private:
+  // Bytes [cache_start_, cache_limit_-1] from fd_ are stored in
+  // a prefix of cache_[0, cache_size_-1].
+  int fd_;
+  char* cache_;
+  size_t cache_size_;
+  off_t cache_start_;
+  off_t cache_limit_;
+};
 
 // Restrictions on the callbacks that follow:
 //  - The callbacks must not use heaps but only use stacks.
@@ -121,23 +183,25 @@ typedef int (*SymbolizeCallback)(int fd,
                                  char* out,
                                  size_t out_size,
                                  uint64_t relocation);
+GLOG_EXPORT
 void InstallSymbolizeCallback(SymbolizeCallback callback);
 
 // Installs a callback function, which will be called instead of
-// OpenObjectFileContainingPcAndGetStartAddress.  The callback is expected
+// OpenObjectFileContainingPcAndGetStartAddress. The callback is expected
 // to searches for the object file (from /proc/self/maps) that contains
-// the specified pc.  If found, sets |start_address| to the start address
-// of where this object file is mapped in memory, sets the module base
-// address into |base_address|, copies the object file name into
-// |out_file_name|, and attempts to open the object file.  If the object
-// file is opened successfully, returns the file descriptor.  Otherwise,
-// returns -1.  |out_file_name_size| is the size of the file name buffer
-// (including the null-terminator).
+// the specified pc. If found, sets `start_address` and `end_address` to the
+// start address and end address of where this object file is mapped in memory,
+// sets the module base address into `base_address`, copies the object file
+// name into `out_file_name`, and attempts to open the object file. If the
+// object file is opened successfully, returns the file descriptor. Otherwise,
+// returns -1. `out_file_name_size` is the size of the file name buffer
+// (including the NUL-terminator).
 typedef int (*SymbolizeOpenObjectFileCallback)(uint64_t pc,
                                                uint64_t& start_address,
+                                               uint64_t& end_address,
                                                uint64_t& base_address,
                                                char* out_file_name,
-                                               int out_file_name_size);
+                                               size_t out_file_name_size);
 void InstallSymbolizeOpenObjectFileCallback(
     SymbolizeOpenObjectFileCallback callback);
 
@@ -151,7 +215,7 @@ _START_GOOGLE_NAMESPACE_
 // symbol name to "out".  The symbol name is demangled if possible
 // (supports symbols generated by GCC 3.x or newer).  Otherwise,
 // returns false.
-GOOGLE_GLOG_DLL_DECL bool Symbolize(void *pc, char *out, int out_size);
+GLOG_EXPORT bool Symbolize(void* pc, char* out, size_t out_size);
 
 _END_GOOGLE_NAMESPACE_
 

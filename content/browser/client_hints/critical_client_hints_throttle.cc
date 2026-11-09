@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,28 +9,31 @@
 #include "content/browser/client_hints/client_hints.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/navigation_request.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/client_hints_controller_delegate.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_util.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/client_hints.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/parsed_headers.mojom-forward.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/blink/public/common/client_hints/client_hints.h"
+#include "third_party/blink/public/common/client_hints/enabled_client_hints.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
-#include "third_party/blink/public/platform/web_client_hints_type.h"
 
 namespace {
 
+using ::network::mojom::WebClientHintsType;
+
 void LogCriticalCHStatus(CriticalCHRestart status) {
   base::UmaHistogramEnumeration("ClientHints.CriticalCHRestart", status);
-}
-
-void LogAcceptCHFrameStatus(AcceptCHFrameRestart status) {
-  base::UmaHistogramEnumeration("ClientHints.AcceptCHFrame", status);
 }
 
 }  // namespace
@@ -40,35 +43,95 @@ namespace content {
 CriticalClientHintsThrottle::CriticalClientHintsThrottle(
     BrowserContext* context,
     ClientHintsControllerDelegate* client_hint_delegate,
-    int frame_tree_node_id)
+    FrameTreeNodeId frame_tree_node_id)
     : context_(context),
       client_hint_delegate_(client_hint_delegate),
       frame_tree_node_id_(frame_tree_node_id) {
   LogCriticalCHStatus(CriticalCHRestart::kNavigationStarted);
 }
 
-void CriticalClientHintsThrottle::WillProcessResponse(
-    const GURL& response_url,
-    network::mojom::URLResponseHead* response_head,
+CriticalClientHintsThrottle::~CriticalClientHintsThrottle() = default;
+
+void CriticalClientHintsThrottle::WillStartRequest(
+    network::ResourceRequest* request,
     bool* defer) {
-  if (critical_redirect_ ||
-      !base::FeatureList::IsEnabled(features::kCriticalClientHint)) {
+  response_url_ = request->url;
+  initial_request_headers_ = request->headers;
+}
+
+void CriticalClientHintsThrottle::BeforeWillProcessResponse(
+    const GURL& response_url,
+    const network::mojom::URLResponseHead& response_head,
+    RestartWithURLReset* restart_with_url_reset) {
+  CHECK_EQ(response_url, response_url_, base::NotFatalUntil::M160);
+  MaybeRestartWithHints(response_head, restart_with_url_reset);
+}
+
+void CriticalClientHintsThrottle::BeforeWillRedirectRequest(
+    const net::RedirectInfo& redirect_info,
+    const network::mojom::URLResponseHead& response_head,
+    RestartWithURLReset* restart_with_url_reset) {
+  MaybeRestartWithHints(response_head, restart_with_url_reset);
+  response_url_ = redirect_info.new_url;
+}
+
+void CriticalClientHintsThrottle::MaybeRestartWithHints(
+    const network::mojom::URLResponseHead& response_head,
+    RestartWithURLReset* restart_with_url_reset) {
+  if (!base::FeatureList::IsEnabled(features::kCriticalClientHint))
+    return;
+  FrameTreeNode* frame_tree_node =
+      FrameTreeNode::GloballyFindByID(frame_tree_node_id_);
+
+  // Measure any usage of the header whether or not we take action on it.
+  auto* ukm_recorder = ukm::UkmRecorder::Get();
+  if (response_head.parsed_headers && frame_tree_node &&
+      frame_tree_node->navigation_request()) {
+    if (response_head.parsed_headers->critical_ch) {
+      for (const WebClientHintsType hint :
+           response_head.parsed_headers->critical_ch.value()) {
+        ukm::builders::ClientHints_CriticalCHHeaderUsage(
+            frame_tree_node->navigation_request()->GetNextPageUkmSourceId())
+            .SetType(static_cast<int64_t>(hint))
+            .Record(ukm_recorder->Get());
+      }
+    }
+    if (response_head.parsed_headers->accept_ch) {
+      for (const WebClientHintsType hint :
+           response_head.parsed_headers->accept_ch.value()) {
+        ukm::builders::ClientHints_AcceptCHHeaderUsage(
+            frame_tree_node->navigation_request()->GetNextPageUkmSourceId())
+            .SetType(static_cast<int64_t>(hint))
+            .Record(ukm_recorder->Get());
+      }
+    }
+  }
+
+  if (!response_head.parsed_headers ||
+      !response_head.parsed_headers->accept_ch ||
+      !response_head.parsed_headers->critical_ch)
+    return;
+
+  url::Origin response_origin = url::Origin::Create(response_url_);
+
+  // Only restart once per-Origin (per navigation)
+  if (restarted_origins_.contains(response_origin))
+    return;
+
+  if (!ShouldAddClientHints(response_origin, frame_tree_node,
+                            client_hint_delegate_)) {
     return;
   }
 
-  if (!response_head->parsed_headers ||
-      !response_head->parsed_headers->accept_ch ||
-      !response_head->parsed_headers->critical_ch)
-    return;
-
   // Ensure that only hints in the accept-ch header are examined
-  blink::WebEnabledClientHints hints;
-
-  for (const auto& hint : response_head->parsed_headers->accept_ch.value())
+  blink::EnabledClientHints hints;
+  for (const WebClientHintsType hint :
+       response_head.parsed_headers->accept_ch.value())
     hints.SetIsEnabled(hint, true);
 
-  std::vector<network::mojom::WebClientHintsType> critical_hints;
-  for (const auto& hint : response_head->parsed_headers->critical_ch.value())
+  std::vector<WebClientHintsType> critical_hints;
+  for (const WebClientHintsType hint :
+       response_head.parsed_headers->critical_ch.value())
     if (hints.IsEnabled(hint))
       critical_hints.push_back(hint);
 
@@ -77,63 +140,49 @@ void CriticalClientHintsThrottle::WillProcessResponse(
 
   LogCriticalCHStatus(CriticalCHRestart::kHeaderPresent);
 
-  net::HttpRequestHeaders modified_headers;
-  if (ShouldRestartWithHints(response_url, critical_hints, modified_headers)) {
-    critical_redirect_ = true;
-    LogCriticalCHStatus(CriticalCHRestart::kNavigationRestarted);
-    delegate_->RestartWithModifiedHeadersNow(modified_headers);
-  }
-}
-
-void CriticalClientHintsThrottle::HandleAcceptCHFrameReceived(
-    const GURL& url,
-    const std::vector<network::mojom::WebClientHintsType>& accept_ch_frame) {
-  if (accept_ch_frame_redirect_ ||
-      !base::FeatureList::IsEnabled(network::features::kAcceptCHFrame)) {
+  if (GetCriticalHintsMissingStatus(response_origin, frame_tree_node,
+                                    client_hint_delegate_, critical_hints) !=
+      CriticalHintsMissingStatus::kMissing) {
     return;
   }
 
-  LogAcceptCHFrameStatus(AcceptCHFrameRestart::kFramePresent);
+  ParseAndPersistAcceptCHForNavigation(response_origin,
+                                       response_head.parsed_headers,
+                                       response_head.headers.get(), context_,
+                                       client_hint_delegate_, frame_tree_node);
+  restarted_origins_.insert(response_origin);
 
   net::HttpRequestHeaders modified_headers;
-
-  if (ShouldRestartWithHints(url, accept_ch_frame, modified_headers)) {
-    accept_ch_frame_redirect_ = true;
-    LogAcceptCHFrameStatus(AcceptCHFrameRestart::kNavigationRestarted);
-    delegate_->RestartWithModifiedHeadersNow(modified_headers);
-  }
-}
-
-bool CriticalClientHintsThrottle::ShouldRestartWithHints(
-    const GURL& response_url,
-    const std::vector<network::mojom::WebClientHintsType>& hints,
-    net::HttpRequestHeaders& modified_headers) {
-  FrameTreeNode* frame_tree_node =
-      FrameTreeNode::GloballyFindByID(frame_tree_node_id_);
-
-  if (!AreCriticalHintsMissing(response_url, frame_tree_node,
-                               client_hint_delegate_, hints)) {
-    return false;
-  }
-
-  client_hint_delegate_->SetAdditionalClientHints(hints);
-  // TODO(crbug.com/1195034): If the frame tree node doesn't have an associated
+  // TODO(crbug.com/40175866): If the frame tree node doesn't have an associated
   // navigation_request (e.g. a service worker request) it might not override
   // the user agent correctly.
-  if (frame_tree_node) {
+  if (frame_tree_node && frame_tree_node->navigation_request()) {
     AddNavigationRequestClientHintsHeaders(
-        response_url, &modified_headers, context_, client_hint_delegate_,
+        response_origin, &modified_headers, context_, client_hint_delegate_,
         frame_tree_node->navigation_request()->is_overriding_user_agent(),
         frame_tree_node,
         frame_tree_node->navigation_request()
             ->commit_params()
             .frame_policy.container_policy);
   } else {
+    // Uses default UA metadata and persistent origin client hints when there
+    // is no active navigation_request (e.g. prefetch requests).
+    // TODO(crbug.com/427866914): Set correct `ftn_for_devtools_override` to
+    // apply DevTools-initiated UA overrides.
     AddPrefetchNavigationRequestClientHintsHeaders(
-        response_url, &modified_headers, context_, client_hint_delegate_,
-        /*is_ua_override_on=*/false, /*is_javascript_enabled=*/true);
+        response_origin, &modified_headers, context_, client_hint_delegate_,
+        /*is_ua_override_on=*/false, /*ftn_for_devtools_override=*/nullptr);
   }
-  client_hint_delegate_->ClearAdditionalClientHints();
-  return true;
+
+  // If a client hint header is not in the original request,
+  // restart the request.
+  for (auto modified_header : modified_headers.GetHeaderVector()) {
+    if (!initial_request_headers_.HasHeader(modified_header.key)) {
+      LogCriticalCHStatus(CriticalCHRestart::kNavigationRestarted);
+      delegate_->DidRestartForCriticalClientHint();
+      *restart_with_url_reset = RestartWithURLReset(true);
+      return;
+    }
+  }
 }
 }  // namespace content

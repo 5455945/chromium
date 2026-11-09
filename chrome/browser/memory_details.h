@@ -1,21 +1,19 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_MEMORY_DETAILS_H_
 #define CHROME_BROWSER_MEMORY_DETAILS_H_
 
-#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process_handle.h"
 #include "base/process/process_metrics.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "content/public/common/process_type.h"
+#include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom-shared.h"
 
 namespace memory_instrumentation {
 class GlobalMemoryDump;
@@ -115,6 +113,9 @@ class MemoryDetails : public base::RefCountedThreadSafe<MemoryDetails> {
   // Constructor.
   MemoryDetails();
 
+  MemoryDetails(const MemoryDetails&) = delete;
+  MemoryDetails& operator=(const MemoryDetails&) = delete;
+
   // Initiate updating the current memory details.  These are fetched
   // asynchronously because data must be collected from multiple threads.
   // OnDetailsAvailable will be called when this process is complete.
@@ -140,18 +141,11 @@ class MemoryDetails : public base::RefCountedThreadSafe<MemoryDetails> {
   // Returns a pointer to the ProcessData structure for Chrome.
   ProcessData* ChromeBrowser();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   const base::SwapInfo& swap_info() const { return swap_info_; }
 #endif
 
  private:
-  // Collect child process information on the process thread.  This is needed
-  // because information about some child process types (i.e. plugins) can only
-  // be taken on that thread.  The data will be used by about:memory.  When
-  // finished, invokes back to the file thread to run the rest of the
-  // about:memory functionality.
-  void CollectChildInfoOnProcessThread();
-
   // Collect current process information from the OS and store it
   // for processing.  If data has already been collected, clears old
   // data and re-collects the data.
@@ -165,17 +159,17 @@ class MemoryDetails : public base::RefCountedThreadSafe<MemoryDetails> {
   // renderer processes is only available there.
   void CollectChildInfoOnUIThread();
 
+  // `outcome` is the outcome of requesting the memory dump, or nullopt if the
+  // memory instrumentation service is not available.
   void DidReceiveMemoryDump(
-      bool success,
+      std::optional<memory_instrumentation::mojom::RequestOutcome> outcome,
       std::unique_ptr<memory_instrumentation::GlobalMemoryDump> dump);
 
   std::vector<ProcessData> process_data_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   base::SwapInfo swap_info_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(MemoryDetails);
 };
 
 #endif  // CHROME_BROWSER_MEMORY_DETAILS_H_

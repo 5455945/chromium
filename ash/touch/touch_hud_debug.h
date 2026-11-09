@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <map>
 #include <memory>
 
 #include "ash/ash_export.h"
 #include "ash/touch/touch_observer_hud.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 namespace views {
 class Label;
@@ -21,7 +22,6 @@ class View;
 
 namespace ash {
 class TouchHudCanvas;
-class TouchLog;
 
 // A heads-up display to show touch traces on the screen and log touch events.
 // As a derivative of TouchObserverHud, objects of this class manage their own
@@ -35,6 +35,9 @@ class ASH_EXPORT TouchHudDebug : public TouchObserverHud {
   };
 
   explicit TouchHudDebug(aura::Window* initial_root);
+
+  TouchHudDebug(const TouchHudDebug&) = delete;
+  TouchHudDebug& operator=(const TouchHudDebug&) = delete;
 
   // Changes the display mode (e.g. scale, visibility). Calling this repeatedly
   // cycles between a fixed number of display modes.
@@ -64,13 +67,9 @@ class ASH_EXPORT TouchHudDebug : public TouchObserverHud {
 
   Mode mode_;
 
-  std::unique_ptr<TouchLog> touch_log_;
-
-  TouchHudCanvas* canvas_;
-  views::View* label_container_;
-  views::Label* touch_labels_[kMaxTouchPoints];
-
-  DISALLOW_COPY_AND_ASSIGN(TouchHudDebug);
+  raw_ptr<TouchHudCanvas> canvas_;
+  raw_ptr<views::View> label_container_;
+  std::array<views::Label*, kMaxTouchPoints> touch_labels_;
 };
 
 }  // namespace ash

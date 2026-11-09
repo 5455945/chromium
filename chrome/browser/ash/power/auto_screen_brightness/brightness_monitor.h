@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,10 @@ class BrightnessMonitor {
   class Observer : public base::CheckedObserver {
    public:
     Observer() = default;
+
+    Observer(const Observer&) = delete;
+    Observer& operator=(const Observer&) = delete;
+
     ~Observer() override = default;
 
     // Called when BrightnessMonitor is initialized.
@@ -42,9 +46,6 @@ class BrightnessMonitor {
     // Called for every user request, i.e. it's not consolidated like
     // |OnUserBrightnessChanged|.
     virtual void OnUserBrightnessChangeRequested() = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
   };
 
   virtual ~BrightnessMonitor() = default;

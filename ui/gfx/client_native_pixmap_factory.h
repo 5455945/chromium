@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <memory>
 #include <vector>
 
+#include "base/component_export.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/client_native_pixmap.h"
-#include "ui/gfx/gfx_export.h"
 
 namespace gfx {
 
@@ -20,18 +20,20 @@ struct NativePixmapHandle;
 class Size;
 
 // The Ozone interface allows external implementations to hook into Chromium to
-// provide a client pixmap for non-GPU processes.
-class GFX_EXPORT ClientNativePixmapFactory {
+// provide a client pixmap for non-GPU processes (though ClientNativePixmap
+// instances created using this interface can be used in the GPU process).
+class COMPONENT_EXPORT(GFX) ClientNativePixmapFactory {
  public:
   virtual ~ClientNativePixmapFactory() {}
 
-  // Import the native pixmap from |handle| to be used in non-GPU processes.
-  // Implementations must verify that the buffer in |handle| fits an image of
-  // the specified |size| and |format|. Otherwise nullptr is returned.
+  // Import the native pixmap from |handle|. Implementations must verify that
+  // the buffer in |handle| fits an image of the specified |size| and |format|.
+  // Otherwise nullptr is returned. Note that a |handle| with no planes may or
+  // may not be considered valid depending on the implementation.
   virtual std::unique_ptr<ClientNativePixmap> ImportFromHandle(
       gfx::NativePixmapHandle handle,
       const gfx::Size& size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::BufferUsage usage) = 0;
 };
 

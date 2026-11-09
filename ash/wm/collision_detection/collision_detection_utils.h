@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ namespace ash {
 
 // The inset into the work area for a window's resting position. Visible for
 // testing.
-const static int kCollisionWindowWorkAreaInsetsDp = 8;
+constexpr int kCollisionWindowWorkAreaInsetsDp = 8;
 
 // Provides utility functions to compute resting positions for windows which
 // wish to avoid other system windows, for example, the PIP and the Automatic
@@ -37,17 +37,22 @@ class ASH_EXPORT CollisionDetectionUtils {
   // priority will not affect collision with each other. kDefault is used for
   // "everything else", and should not be an input to GetRestingPosition or
   // AvoidObstacles.
-  // TODO(crbug.com/955512): Ensure calculations take place from high to low
-  // priority to reduce number of collision computations.
   enum class RelativePriority {
     kPictureInPicture = 0,
     kSwitchAccessMenu = 1,
     kAutomaticClicksMenu = 2,
     kAutomaticClicksScrollMenu = 3,
-    kDefault = 4,
+    kDictationBubble = 4,
+    kFaceGazeBubble = 5,
+    kMouseKeysBubble = 6,
+    kDefault = 7,
   };
 
   CollisionDetectionUtils() = delete;
+
+  CollisionDetectionUtils(const CollisionDetectionUtils&) = delete;
+  CollisionDetectionUtils& operator=(const CollisionDetectionUtils&) = delete;
+
   ~CollisionDetectionUtils() = delete;
 
   // Returns the area that the window can be positioned inside for a given
@@ -117,8 +122,6 @@ class ASH_EXPORT CollisionDetectionUtils {
                                           const std::vector<gfx::Rect>& rects,
                                           const gfx::Rect& bounds_in_screen,
                                           RelativePriority priority);
-
-  DISALLOW_COPY_AND_ASSIGN(CollisionDetectionUtils);
 };
 
 }  // namespace ash

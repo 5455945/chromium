@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
@@ -17,10 +18,6 @@
 
 class Profile;
 
-namespace user_prefs {
-class PrefRegistrySyncable;
-}
-
 // This class manages the installation of shortcuts for any extension-based apps
 // (Chrome Apps). Bookmark apps OS shortcut management is handled in
 // web_app::AppShortcutManager and its subclasses.
@@ -30,17 +27,11 @@ class AppShortcutManager : public KeyedService,
                            public extensions::ExtensionRegistryObserver,
                            public ProfileAttributesStorage::Observer {
  public:
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
-
   explicit AppShortcutManager(Profile* profile);
 
   AppShortcutManager(const AppShortcutManager&) = delete;
   AppShortcutManager& operator=(const AppShortcutManager&) = delete;
   ~AppShortcutManager() override;
-
-  // Schedules a call to UpdateShortcutsForAllAppsNow() if kAppShortcutsVersion
-  // in prefs is less than kCurrentAppShortcutsVersion.
-  void UpdateShortcutsForAllAppsIfNeeded();
 
   // extensions::ExtensionRegistryObserver.
   void OnExtensionWillBeInstalled(content::BrowserContext* browser_context,
@@ -57,11 +48,9 @@ class AppShortcutManager : public KeyedService,
   static void SuppressShortcutsForTesting();
 
  private:
-  void UpdateShortcutsForAllAppsNow();
-  void SetCurrentAppShortcutsVersion();
   void DeleteApplicationShortcuts(const extensions::Extension* extension);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   base::ScopedObservation<ProfileAttributesStorage,
                           ProfileAttributesStorage::Observer>
       profile_storage_observation_{this};

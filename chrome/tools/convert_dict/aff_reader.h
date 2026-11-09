@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright 2006-2008 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,7 +30,7 @@ class AffReader {
 
   // Returns a string representing the encoding of the dictionary. This will
   // default to ISO-8859-1 if the .aff file does not specify it.
-  const char* encoding() const { return encoding_.c_str(); }
+  const std::string& encoding() const { return encoding_; }
 
   // Converts the given string from the file encoding to UTF-8, returning true
   // on success.

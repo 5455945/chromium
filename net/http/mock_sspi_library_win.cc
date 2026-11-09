@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,9 @@
 #include <string>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_util_win.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -59,7 +62,7 @@ struct MockCredential {
 };
 
 struct MockContext {
-  MockCredential* credential = nullptr;
+  raw_ptr<MockCredential> credential = nullptr;
   std::u16string target_principal;
   int uniquifier = ++uniquifier_;
   int rounds = 0;
@@ -86,9 +89,9 @@ struct MockContext {
 
   std::string ToString() const {
     return base::StringPrintf(
-        "%s's token #%d for %S",
+        "%s's token #%d for %s",
         base::UTF16ToUTF8(credential->source_principal).c_str(), rounds + 1,
-        base::as_wcstr(target_principal));
+        base::UTF16ToUTF8(target_principal).c_str());
   }
 
   static MockContext* FromHandle(PCtxtHandle handle) {
@@ -170,9 +173,16 @@ SECURITY_STATUS MockSSPILibrary::InitializeSecurityContext(
 
   auto token = new_context->ToString();
   PSecBuffer out_buffer = pOutput->pBuffers;
-  out_buffer->cbBuffer = std::min<ULONG>(out_buffer->cbBuffer, token.size());
-  std::memcpy(out_buffer->pvBuffer, token.data(), out_buffer->cbBuffer);
+  // SAFETY: out_buffer->pvBuffer has length out_buffer->cbBuffer. See
+  // https://learn.microsoft.com/en-us/windows/win32/api/sspi/ns-sspi-secbuffer.
+  auto dest_span = UNSAFE_BUFFERS(base::span(
+      static_cast<uint8_t*>(out_buffer->pvBuffer), out_buffer->cbBuffer));
 
+  size_t copy_size = std::min(dest_span.size(), token.size());
+  out_buffer->cbBuffer = static_cast<ULONG>(copy_size);
+
+  dest_span.first(copy_size).copy_from(
+      base::as_byte_span(token).first(copy_size));
   if (ptsExpiry) {
     ptsExpiry->LowPart = 0xBAA5B780;
     ptsExpiry->HighPart = 0x01D54E15;
@@ -267,10 +277,7 @@ SECURITY_STATUS MockSSPILibrary::DeleteSecurityContext(PCtxtHandle phContext) {
 
 SECURITY_STATUS MockSSPILibrary::FreeContextBuffer(PVOID pvContextBuffer) {
   PSecPkgInfoW package_info = static_cast<PSecPkgInfoW>(pvContextBuffer);
-  std::set<PSecPkgInfoW>::iterator it = expected_freed_packages_.find(
-      package_info);
-  EXPECT_TRUE(it != expected_freed_packages_.end());
-  expected_freed_packages_.erase(it);
+  EXPECT_EQ(1u, expected_freed_packages_.erase(package_info));
   return SEC_E_OK;
 }
 

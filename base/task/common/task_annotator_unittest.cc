@@ -1,26 +1,36 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/task/common/task_annotator.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/allocator/partition_alloc_features.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/pending_task.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "build/build_config.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/extended_api.h"
+#include "partition_alloc/partition_alloc_for_testing.h"
+#include "partition_alloc/partition_alloc_public_constants.h"
+#include "partition_alloc/scheduler_loop_quarantine_support.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -37,32 +47,45 @@ TEST(TaskAnnotatorTest, QueueAndRunTask) {
   PendingTask pending_task(FROM_HERE, BindOnce(&TestTask, &result));
 
   TaskAnnotator annotator;
-  annotator.WillQueueTask("TaskAnnotatorTest::Queue", &pending_task, "?");
+  annotator.WillQueueTask("TaskAnnotatorTest::Queue", &pending_task);
   EXPECT_EQ(0, result);
-  annotator.RunTask("TaskAnnotatorTest::Queue", &pending_task);
+  annotator.RunTask("TaskAnnotator::RunTask", pending_task);
   EXPECT_EQ(123, result);
 }
 
 // Test task annotator integration in base APIs and ensuing support for
 // backtraces. Tasks posted across multiple threads in this test fixture should
 // be synchronized as BeforeRunTask() and VerifyTraceAndPost() assume tasks are
-// observed in lock steps, one at a time.
+// observed in lock steps, one at a time, on a given thread.
 class TaskAnnotatorBacktraceIntegrationTest
     : public ::testing::Test,
       public TaskAnnotator::ObserverForTesting {
  public:
-  using ExpectedTrace = std::vector<const void*>;
+  using ExpectedTrace = std::vector<uintptr_t>;
 
   TaskAnnotatorBacktraceIntegrationTest() = default;
+
+  TaskAnnotatorBacktraceIntegrationTest(
+      const TaskAnnotatorBacktraceIntegrationTest&) = delete;
+  TaskAnnotatorBacktraceIntegrationTest& operator=(
+      const TaskAnnotatorBacktraceIntegrationTest&) = delete;
 
   ~TaskAnnotatorBacktraceIntegrationTest() override = default;
 
   // TaskAnnotator::ObserverForTesting:
   void BeforeRunTask(const PendingTask* pending_task) override {
-    AutoLock auto_lock(on_before_run_task_lock_);
-    last_posted_from_ = pending_task->posted_from;
-    last_task_backtrace_ = pending_task->task_backtrace;
-    last_ipc_hash_ = pending_task->ipc_hash;
+    // This hook is invoked for every task run in the process, including tasks
+    // that are unrelated to this test (e.g. ThreadPool internal tasks running
+    // on its service thread). It is however always invoked on the thread that
+    // is about to run |pending_task|, immediately before it runs, so keying
+    // the observed state by thread guarantees that VerifyTraceAndPost() below
+    // reads the state of the very task it runs in, no matter what other
+    // threads are up to.
+    AutoLock auto_lock(last_task_state_lock_);
+    TaskState& state = last_task_state_[PlatformThread::CurrentId()];
+    state.posted_from = pending_task->posted_from;
+    state.task_backtrace = pending_task->task_backtrace;
+    state.ipc_hash = pending_task->ipc_hash;
   }
 
   void SetUp() override { TaskAnnotator::RegisterObserverForTesting(this); }
@@ -77,15 +100,18 @@ class TaskAnnotatorBacktraceIntegrationTest
                           OnceClosure task) {
     SCOPED_TRACE(StringPrintf("Callback Depth: %zu", expected_trace.size()));
 
-    EXPECT_EQ(posted_from, last_posted_from_);
-    for (size_t i = 0; i < last_task_backtrace_.size(); i++) {
+    const TaskState state = GetLastTaskStateForCurrentThread();
+
+    EXPECT_EQ(posted_from, state.posted_from);
+    for (size_t i = 0; i < state.task_backtrace.size(); i++) {
       SCOPED_TRACE(StringPrintf("Trace frame: %zu", i));
-      if (i < expected_trace.size())
-        EXPECT_EQ(expected_trace[i], last_task_backtrace_[i]);
-      else
-        EXPECT_EQ(nullptr, last_task_backtrace_[i]);
+      if (i < expected_trace.size()) {
+        EXPECT_EQ(expected_trace[i], state.task_backtrace[i]);
+      } else {
+        EXPECT_EQ(0, state.task_backtrace[i]);
+      }
     }
-    EXPECT_EQ(expected_ipc_hash, last_ipc_hash_);
+    EXPECT_EQ(expected_ipc_hash, state.ipc_hash);
 
     task_runner->PostTask(next_from_here, std::move(task));
   }
@@ -116,14 +142,11 @@ class TaskAnnotatorBacktraceIntegrationTest
       WaitableEvent* wait_before_next_task) {
     DCHECK(wait_before_next_task);
 
-    // Need to lock to ensure the upcoming VerifyTraceAndPost() runs before the
-    // BeforeRunTask() hook for the posted WaitableEvent::Wait(). Otherwise the
-    // upcoming VerifyTraceAndPost() will race to read the state saved in the
-    // BeforeRunTask() hook preceding the current task.
-    AutoLock auto_lock(on_before_run_task_lock_);
-    task_runner->PostTask(
-        FROM_HERE,
-        BindOnce(&WaitableEvent::Wait, Unretained(wait_before_next_task)));
+    // The BeforeRunTask() hook for the posted WaitableEvent::Wait() runs on
+    // |task_runner|'s thread, i.e. not on the thread running the upcoming
+    // VerifyTraceAndPost(), and hence cannot interfere with it.
+    task_runner->PostTask(FROM_HERE,
+                          wait_before_next_task->GetWaitCallbackForTesting());
     VerifyTraceAndPost(task_runner, posted_from, next_from_here, expected_trace,
                        expected_ipc_hash, std::move(task));
   }
@@ -135,20 +158,28 @@ class TaskAnnotatorBacktraceIntegrationTest
   }
 
  private:
-  // While calls to VerifyTraceAndPost() are strictly ordered in tests below
-  // (and hence non-racy), some helper methods (e.g. Wait/Signal) do racily call
-  // into BeforeRunTask(). This Lock ensures these unobserved writes are not
-  // racing. Locking isn't required on read per the VerifyTraceAndPost()
-  // themselves being ordered.
-  Lock on_before_run_task_lock_;
+  // State captured in BeforeRunTask() for the task about to run on a given
+  // thread.
+  struct TaskState {
+    Location posted_from;
+    std::array<uintptr_t, PendingTask::kTaskBacktraceLength> task_backtrace =
+        {};
+    uint32_t ipc_hash = 0;
+  };
 
-  Location last_posted_from_ = {};
-  std::array<const void*, PendingTask::kTaskBacktraceLength>
-      last_task_backtrace_ = {};
+  TaskState GetLastTaskStateForCurrentThread() {
+    AutoLock auto_lock(last_task_state_lock_);
+    return last_task_state_[PlatformThread::CurrentId()];
+  }
 
-  uint32_t last_ipc_hash_ = 0;
+  // BeforeRunTask() is invoked from every thread running tasks in this process
+  // while this observer is registered. This Lock protects |last_task_state_|
+  // from concurrent access by these threads.
+  Lock last_task_state_lock_;
 
-  DISALLOW_COPY_AND_ASSIGN(TaskAnnotatorBacktraceIntegrationTest);
+  // Last state observed in BeforeRunTask(), per thread.
+  flat_map<PlatformThreadId, TaskState> last_task_state_
+      GUARDED_BY(last_task_state_lock_);
 };
 
 // Ensure the task backtrace populates correctly.
@@ -172,7 +203,8 @@ TEST_F(TaskAnnotatorBacktraceIntegrationTest, SingleThreadedSimple) {
   // last 4 parents are kept).
   OnceClosure task5 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location5, FROM_HERE,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location5,
+      FROM_HERE,
       ExpectedTrace({location4.program_counter(), location3.program_counter(),
                      location2.program_counter(), location1.program_counter()}),
       0, run_loop.QuitClosure());
@@ -180,32 +212,36 @@ TEST_F(TaskAnnotatorBacktraceIntegrationTest, SingleThreadedSimple) {
   // Task i=4/3/2/1/0 have tasks [0,i) as parents.
   OnceClosure task4 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location4, location5,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location4,
+      location5,
       ExpectedTrace({location3.program_counter(), location2.program_counter(),
                      location1.program_counter(), location0.program_counter()}),
       0, std::move(task5));
   OnceClosure task3 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location3, location4,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location3,
+      location4,
       ExpectedTrace({location2.program_counter(), location1.program_counter(),
                      location0.program_counter()}),
       0, std::move(task4));
   OnceClosure task2 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location2, location3,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location2,
+      location3,
       ExpectedTrace({location1.program_counter(), location0.program_counter()}),
       dummy_ipc_hash, std::move(task3));
   OnceClosure task1 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPostWithIpcContext,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location1, location2,
-      ExpectedTrace({location0.program_counter()}), 0, std::move(task2),
-      dummy_ipc_hash);
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location1,
+      location2, ExpectedTrace({location0.program_counter()}), 0,
+      std::move(task2), dummy_ipc_hash);
   OnceClosure task0 =
       BindOnce(&TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-               Unretained(this), ThreadTaskRunnerHandle::Get(), location0,
-               location1, ExpectedTrace({}), 0, std::move(task1));
+               Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(),
+               location0, location1, ExpectedTrace({}), 0, std::move(task1));
 
-  ThreadTaskRunnerHandle::Get()->PostTask(location0, std::move(task0));
+  SingleThreadTaskRunner::GetCurrentDefault()->PostTask(location0,
+                                                        std::move(task0));
 
   run_loop.Run();
 }
@@ -218,7 +254,7 @@ TEST_F(TaskAnnotatorBacktraceIntegrationTest, MultipleThreads) {
   // based SequencedTaskRunner, and a ThreadPool based
   // SingleThreadTaskRunner) to verify that TaskAnnotator can capture backtraces
   // for PostTasks back-and-forth between these.
-  auto main_thread_a = ThreadTaskRunnerHandle::Get();
+  auto main_thread_a = SingleThreadTaskRunner::GetCurrentDefault();
   auto task_runner_b = ThreadPool::CreateSingleThreadTaskRunner({});
   auto task_runner_c = ThreadPool::CreateSequencedTaskRunner(
       {base::MayBlock(), base::WithBaseSyncPrimitives()});
@@ -357,19 +393,22 @@ TEST_F(TaskAnnotatorBacktraceIntegrationTest, SingleThreadedNested) {
   // 4.
   OnceClosure task5 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location5, FROM_HERE,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location5,
+      FROM_HERE,
       ExpectedTrace({location4.program_counter(), location3.program_counter(),
                      location2.program_counter(), location1.program_counter()}),
       0, run_loop.QuitClosure());
   OnceClosure task4 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location4, location5,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location4,
+      location5,
       ExpectedTrace({location3.program_counter(), location2.program_counter(),
                      location1.program_counter(), location0.program_counter()}),
       0, std::move(task5));
   OnceClosure task3 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location3, location4,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location3,
+      location4,
       ExpectedTrace({location2.program_counter(), location1.program_counter(),
                      location0.program_counter()}),
       0, std::move(task4));
@@ -380,7 +419,8 @@ TEST_F(TaskAnnotatorBacktraceIntegrationTest, SingleThreadedNested) {
 
   OnceClosure task2 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPost,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location2, location3,
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location2,
+      location3,
       ExpectedTrace({location1.program_counter(), location0.program_counter()}),
       0, std::move(run_task_3_then_quit_nested_loop1));
 
@@ -397,28 +437,503 @@ TEST_F(TaskAnnotatorBacktraceIntegrationTest, SingleThreadedNested) {
           // This context should not leak out of the inner loop and color the
           // tasks in the outer loop.
           TaskAnnotator::ScopedSetIpcHash scoped_ipc_hash(dummy_ipc_hash1);
-          ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, DoNothing());
+          SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                                DoNothing());
           nested_run_loop->RunUntilIdle();
         }
-        ThreadTaskRunnerHandle::Get()->PostTask(location2, std::move(task2));
+        SingleThreadTaskRunner::GetCurrentDefault()->PostTask(location2,
+                                                              std::move(task2));
       }),
       Unretained(&nested_run_loop2), location2, std::move(task2));
 
   OnceClosure task0 = BindOnce(
       &TaskAnnotatorBacktraceIntegrationTest::VerifyTraceAndPostWithIpcContext,
-      Unretained(this), ThreadTaskRunnerHandle::Get(), location0, location1,
-      ExpectedTrace({}), 0, std::move(task1), dummy_ipc_hash);
+      Unretained(this), SingleThreadTaskRunner::GetCurrentDefault(), location0,
+      location1, ExpectedTrace({}), 0, std::move(task1), dummy_ipc_hash);
 
-  ThreadTaskRunnerHandle::Get()->PostTask(location0, std::move(task0));
+  SingleThreadTaskRunner::GetCurrentDefault()->PostTask(location0,
+                                                        std::move(task0));
 
   {
     TaskAnnotator::ScopedSetIpcHash scoped_ipc_hash(dummy_ipc_hash2);
-    ThreadTaskRunnerHandle::Get()->PostTask(
+    SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         BindOnce(&RunLoop::Run, Unretained(&nested_run_loop1), FROM_HERE));
   }
 
   run_loop.Run();
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest, PurgeAfterTaskCompletion) {
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  // Prepare PA root for testing.
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config
+      .enable_task_controlled_purge = true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  // Disables ThreadCache for the default allocator and enables it for the
+  // testing allocator.
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  void* ptr = root.Alloc(16);
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_FALSE(branch_accessor.IsQuarantined(ptr));
+        root.Free<
+            partition_alloc::internal::FreeFlags::kSchedulerLoopQuarantine>(
+            ptr);
+        EXPECT_TRUE(branch_accessor.IsQuarantined(ptr));
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // `ptr` must not be in the quarantine as RunTask finished.
+  EXPECT_FALSE(branch_accessor.IsQuarantined(ptr));
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest, PauseInBetweenTasks) {
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  // Initially the branch should be paused (PausedCount should be 1).
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+
+  void* ptr = root.Alloc(16);
+
+  // Freeing outside of TaskRunner/TaskAnnotator should NOT quarantine.
+  root.Free<partition_alloc::internal::FreeFlags::kSchedulerLoopQuarantine>(
+      ptr);
+  EXPECT_FALSE(branch_accessor.IsQuarantined(ptr));
+
+  // Alloc again.
+  ptr = root.Alloc(16);
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        // Inside Task, it should be active (PausedCount should be 0).
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+        EXPECT_FALSE(branch_accessor.IsQuarantined(ptr));
+        root.Free<
+            partition_alloc::internal::FreeFlags::kSchedulerLoopQuarantine>(
+            ptr);
+        EXPECT_TRUE(branch_accessor.IsQuarantined(ptr));
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // After Task, it should be paused again (PausedCount should be 1).
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+
+  // The quarantined pointer should have been purged at the end of RunTask.
+  EXPECT_FALSE(branch_accessor.IsQuarantined(ptr));
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ConfigureInsideTask_TrueToTrue) {
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+
+        // Reconfigure inside task, keeping pause_in_between_tasks = true.
+        partition_alloc::internal::SchedulerLoopQuarantineConfig new_config;
+        new_config.enable_quarantine = true;
+        new_config.pause_in_between_tasks = true;
+        new_config.branch_capacity_in_bytes = 8192;
+        root.ReconfigureSchedulerLoopQuarantineForCurrentThread(new_config);
+
+        // Should still be active.
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // After task, it should be paused.
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ConfigureInsideTask_TrueToFalse) {
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+
+        // Reconfigure inside task, changing pause_in_between_tasks to false.
+        partition_alloc::internal::SchedulerLoopQuarantineConfig new_config;
+        new_config.enable_quarantine = true;
+        new_config.pause_in_between_tasks = false;
+        new_config.branch_capacity_in_bytes = 8192;
+        root.ReconfigureSchedulerLoopQuarantineForCurrentThread(new_config);
+
+        // Should still be active (0).
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // After task, it should remain active (0) because pause_in_between_tasks is
+  // now false.
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ConfigureInsideTask_FalseToTrue) {
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      false;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+
+        // Reconfigure inside task, changing pause_in_between_tasks to true.
+        partition_alloc::internal::SchedulerLoopQuarantineConfig new_config;
+        new_config.enable_quarantine = true;
+        new_config.pause_in_between_tasks = true;
+        new_config.branch_capacity_in_bytes = 8192;
+        root.ReconfigureSchedulerLoopQuarantineForCurrentThread(new_config);
+
+        // Should still be active (0) during the task.
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // After task, it should be paused (1) because pause_in_between_tasks is now
+  // true.
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ExcludeNonIpcTasks_PIBT_False) {
+#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      false;
+  opts.scheduler_loop_quarantine_thread_local_config.exclude_non_ipc_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  // Initially active (0) because PIBT is false.
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+
+  // Test with Non-IPC task (should be paused during execution)
+  {
+    PendingTask non_ipc_task(FROM_HERE, base::BindLambdaForTesting([&]() {
+                               EXPECT_EQ(1, branch_accessor.PausedCount());
+                             }));
+    annotator.RunTask("TestNonIpcTask", non_ipc_task);
+    EXPECT_EQ(0, branch_accessor.PausedCount());
+  }
+
+  // Test with IPC task (should be active during execution)
+  {
+    PendingTask ipc_task(FROM_HERE, base::BindLambdaForTesting([&]() {
+                           EXPECT_EQ(0, branch_accessor.PausedCount());
+                         }));
+    ipc_task.ipc_interface_name = "TestInterface";
+    ipc_task.ipc_hash = 12345;
+    annotator.RunTask("TestIpcTask", ipc_task);
+    EXPECT_EQ(0, branch_accessor.PausedCount());
+  }
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ExcludeNonIpcTasks_PIBT_True) {
+#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.exclude_non_ipc_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  // Initially paused (1) because PIBT is true.
+  EXPECT_EQ(1, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+
+  // Test with Non-IPC task (should remain paused during execution)
+  {
+    PendingTask non_ipc_task(FROM_HERE, base::BindLambdaForTesting([&]() {
+                               EXPECT_EQ(1, branch_accessor.PausedCount());
+                             }));
+    annotator.RunTask("TestNonIpcTask", non_ipc_task);
+    EXPECT_EQ(1, branch_accessor.PausedCount());
+  }
+
+  // Test with IPC task (should be active during execution)
+  {
+    PendingTask ipc_task(FROM_HERE, base::BindLambdaForTesting([&]() {
+                           EXPECT_EQ(0, branch_accessor.PausedCount());
+                         }));
+    ipc_task.ipc_interface_name = "TestInterface";
+    ipc_task.ipc_hash = 12345;
+    annotator.RunTask("TestIpcTask", ipc_task);
+    EXPECT_EQ(1, branch_accessor.PausedCount());
+  }
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ConfigureInsideTask_ENIT_FalseToTrue_NonIpc) {
+#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      false;
+  opts.scheduler_loop_quarantine_thread_local_config.exclude_non_ipc_tasks =
+      false;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+
+        // Reconfigure inside task, changing exclude_non_ipc_tasks to true.
+        partition_alloc::internal::SchedulerLoopQuarantineConfig new_config;
+        new_config.enable_quarantine = true;
+        new_config.exclude_non_ipc_tasks = true;
+        new_config.branch_capacity_in_bytes = 8192;
+        root.ReconfigureSchedulerLoopQuarantineForCurrentThread(new_config);
+
+        // Should become paused immediately because this is a Non-IPC task.
+        EXPECT_EQ(1, branch_accessor.PausedCount());
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // After task, it should be active again (0) because PIBT is false.
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+#endif
+}
+
+TEST(SchedulerLoopQuarantineTaskControlledPurgeTest,
+     ConfigureInsideTask_ENIT_TrueToFalse_NonIpc) {
+#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+  GTEST_SKIP() << "This test does not work with memory tools.";
+#elif !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || \
+    !PA_CONFIG(THREAD_CACHE_SUPPORTED)
+  GTEST_SKIP() << "This test requires PA-E and ThreadCache.";
+#else
+  EnableSchedulerLoopQuarantineTaskControlledPurge();
+
+  partition_alloc::PartitionOptions opts;
+  opts.scheduler_loop_quarantine_thread_local_config.enable_quarantine = true;
+  opts.scheduler_loop_quarantine_thread_local_config.pause_in_between_tasks =
+      false;
+  opts.scheduler_loop_quarantine_thread_local_config.exclude_non_ipc_tasks =
+      true;
+  opts.scheduler_loop_quarantine_thread_local_config.branch_capacity_in_bytes =
+      4096;
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionRoot& root = *allocator.root();
+
+  partition_alloc::internal::ThreadCacheProcessScopeForTesting tcache_scope(
+      &root);
+
+  partition_alloc::internal::
+      ScopedSchedulerLoopQuarantineBranchAccessorForTesting branch_accessor(
+          &root);
+
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+
+  TaskAnnotator annotator;
+  PendingTask pending_task(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_EQ(1, branch_accessor.PausedCount());
+
+        // Reconfigure inside task, changing exclude_non_ipc_tasks to false.
+        partition_alloc::internal::SchedulerLoopQuarantineConfig new_config;
+        new_config.enable_quarantine = true;
+        new_config.exclude_non_ipc_tasks = false;
+        new_config.branch_capacity_in_bytes = 8192;
+        root.ReconfigureSchedulerLoopQuarantineForCurrentThread(new_config);
+
+        // Should become active immediately.
+        EXPECT_EQ(0, branch_accessor.PausedCount());
+      }));
+  annotator.RunTask("TestTask", pending_task);
+
+  // After task, it should remain active.
+  EXPECT_EQ(0, branch_accessor.PausedCount());
+#endif
 }
 
 }  // namespace base

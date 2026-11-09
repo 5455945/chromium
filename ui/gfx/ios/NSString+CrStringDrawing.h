@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,16 +49,6 @@
 // nil |font| and rounding, then replaced with cr_pixelAlignedSizeWithFont: or
 // sizeWithAttributes: (crbug.com/364419).
 - (CGSize)cr_sizeWithFont:(UIFont*)font;
-
-// If |index| is 0, returns an empty string.
-// If |index| is >= than self.length, returns self.
-// Otherwise, returns string cut to have |index| characters with an
-// ellipsis at the end.
-- (NSString*)cr_stringByCuttingToIndex:(NSUInteger)index;
-
-// Returns an elided version of string that fits in |bounds|.
-// System font of Label size is used for determining the string drawing size.
-- (NSString*)cr_stringByElidingToFitSize:(CGSize)bounds;
 
 @end
 

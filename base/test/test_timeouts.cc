@@ -1,12 +1,15 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "base/test/test_timeouts.h"
 
 #include <algorithm>
 #include <string>
 
+#include "base/cfi_buildflags.h"
+#include "base/check_op.h"
 #include "base/clang_profiling_buildflags.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
@@ -17,6 +20,17 @@
 #include "build/chromeos_buildflags.h"
 
 namespace {
+
+#if (!defined(NDEBUG) || defined(MEMORY_SANITIZER) || \
+     defined(ADDRESS_SANITIZER)) &&                   \
+    BUILDFLAG(IS_CHROMEOS)
+// History of this value:
+// 1) TODO(crbug.com/40120948): reduce the multiplier back to 2x.
+// 2) A number of tests on ChromeOS run very close to the base limit, so
+// ChromeOS gets 3x. TODO(b:318608561) Reduce back to 3x once OOBE load time is
+// lower.
+constexpr int kAshBaseMultiplier = 4;
+#endif
 
 // Sets value to the greatest of:
 // 1) value's current value multiplied by kTimeoutMultiplier (assuming
@@ -30,15 +44,15 @@ void InitializeTimeout(const char* switch_name,
   DCHECK(value);
   base::TimeDelta command_line_timeout;
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switch_name)) {
-    std::string string_value(base::CommandLine::ForCurrentProcess()->
-         GetSwitchValueASCII(switch_name));
+    std::string string_value(
+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+            switch_name));
     int command_line_timeout_ms = 0;
     if (!base::StringToInt(string_value, &command_line_timeout_ms)) {
       LOG(FATAL) << "Timeout value \"" << string_value << "\" was parsed as "
                  << command_line_timeout_ms;
     }
-    command_line_timeout =
-        base::TimeDelta::FromMilliseconds(command_line_timeout_ms);
+    command_line_timeout = base::Milliseconds(command_line_timeout_ms);
   }
 
 #if defined(MEMORY_SANITIZER)
@@ -46,34 +60,45 @@ void InitializeTimeout(const char* switch_name,
   // down significantly.
   // For MSan the slowdown depends heavily on the value of msan_track_origins
   // build flag. The multiplier below corresponds to msan_track_origins = 1.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // A handful of tests on ChromeOS run *very* close to the 6x limit used
-  // else where, so it's bumped to 7x.
-  constexpr int kTimeoutMultiplier = 7;
+#if BUILDFLAG(IS_CHROMEOS)
+  // Typical slowdown for memory sanitizer is 3x.
+  constexpr int kTimeoutMultiplier = 3 * kAshBaseMultiplier;
 #else
   constexpr int kTimeoutMultiplier = 6;
 #endif
-#elif defined(ADDRESS_SANITIZER) && defined(OS_WIN)
+#elif BUILDFLAG(CFI_DIAG)
+  constexpr int kTimeoutMultiplier = 3;
+#elif defined(ADDRESS_SANITIZER) && BUILDFLAG(IS_WIN)
   // ASan/Win has not been optimized yet, give it a higher
   // timeout multiplier. See http://crbug.com/412471
   constexpr int kTimeoutMultiplier = 3;
-#elif defined(ADDRESS_SANITIZER) && BUILDFLAG(IS_CHROMEOS_ASH)
-  // A number of tests on ChromeOS run very close to the 2x limit, so ChromeOS
-  // gets 3x.
+#elif defined(ADDRESS_SANITIZER) && BUILDFLAG(IS_MAC)
+  // ASan/Mac has significant overhead during process startup when dyld resolves
+  // symbols and loads dynamic libraries with ASan hooks, especially under
+  // parallel test execution.
   constexpr int kTimeoutMultiplier = 3;
+#elif defined(ADDRESS_SANITIZER) && BUILDFLAG(IS_CHROMEOS)
+  // Typical slowdown for memory sanitizer is 2x.
+  constexpr int kTimeoutMultiplier = 2 * kAshBaseMultiplier;
 #elif defined(ADDRESS_SANITIZER) || defined(THREAD_SANITIZER)
   constexpr int kTimeoutMultiplier = 2;
 #elif BUILDFLAG(CLANG_PROFILING)
   // On coverage build, tests run 3x slower.
   constexpr int kTimeoutMultiplier = 3;
-#elif !defined(NDEBUG) && BUILDFLAG(IS_CHROMEOS_ASH)
-  // TODO(crbug.com/1058022): reduce the multiplier back to 2x.
-  // A number of tests on ChromeOS run very close to the base limit, so ChromeOS
-  // gets 3x.
-  constexpr int kTimeoutMultiplier = 3;
-#elif !defined(NDEBUG) && defined(OS_MAC)
-  // A lot of browser_tests on Mac debug time out.
+#elif !defined(NDEBUG) && BUILDFLAG(IS_CHROMEOS)
+  constexpr int kTimeoutMultiplier = kAshBaseMultiplier;
+#elif !defined(NDEBUG) && (BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX))
+  // A lot of browser_tests on Mac and Linux debug time out.
   constexpr int kTimeoutMultiplier = 2;
+#elif !defined(NDEBUG) && BUILDFLAG(IS_FUCHSIA) && defined(ARCH_CPU_ARM64)
+  // Fuchsia ARM64 debug build is noticeably slower than other configurations.
+  constexpr int kTimeoutMultiplier = 2;
+#elif BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(IS_CHROMEOS_DEVICE)
+  // For test running on ChromeOS device/VM, they could be slower. We should not
+  // add too many ChromeOS details into //base. Say in the future if we want to
+  // set different values for a set of low spec ChromeOS boards, we should move
+  // the logic somewhere.
+  constexpr int kTimeoutMultiplier = 3;
 #else
   constexpr int kTimeoutMultiplier = 1;
 #endif
@@ -89,14 +114,10 @@ bool TestTimeouts::initialized_ = false;
 
 // The timeout values should increase in the order they appear in this block.
 // static
-base::TimeDelta TestTimeouts::tiny_timeout_ =
-    base::TimeDelta::FromMilliseconds(100);
-base::TimeDelta TestTimeouts::action_timeout_ =
-    base::TimeDelta::FromSeconds(10);
-base::TimeDelta TestTimeouts::action_max_timeout_ =
-    base::TimeDelta::FromSeconds(30);
-base::TimeDelta TestTimeouts::test_launcher_timeout_ =
-    base::TimeDelta::FromSeconds(45);
+base::TimeDelta TestTimeouts::tiny_timeout_ = base::Milliseconds(100);
+base::TimeDelta TestTimeouts::action_timeout_ = base::Seconds(10);
+base::TimeDelta TestTimeouts::action_max_timeout_ = base::Seconds(30);
+base::TimeDelta TestTimeouts::test_launcher_timeout_ = base::Seconds(45);
 
 // static
 void TestTimeouts::Initialize() {
@@ -105,7 +126,8 @@ void TestTimeouts::Initialize() {
 
   const bool being_debugged = base::debug::BeingDebugged();
   if (being_debugged) {
-    fprintf(stdout,
+    fprintf(
+        stdout,
         "Detected presence of a debugger, running without test timeouts.\n");
   }
 
@@ -126,7 +148,7 @@ void TestTimeouts::Initialize() {
   base::TimeDelta min_ui_test_action_timeout = tiny_timeout_;
   if (being_debugged || base::CommandLine::ForCurrentProcess()->HasSwitch(
                             switches::kTestLauncherInteractive)) {
-    min_ui_test_action_timeout = base::TimeDelta::FromDays(1);
+    min_ui_test_action_timeout = base::Days(1);
   }
 
   InitializeTimeout(switches::kUiTestActionTimeout, min_ui_test_action_timeout,

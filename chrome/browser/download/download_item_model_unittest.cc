@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,25 +11,69 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/cxx17_backports.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/simple_test_clock.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/download/chrome_download_manager_delegate.h"
+#include "chrome/browser/download/download_commands.h"
+#include "chrome/browser/download/download_core_service_factory.h"
+#include "chrome/browser/download/download_core_service_impl.h"
+#include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/download/status_text_builder_utils.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
+#include "components/download/public/common/download_danger_type.h"
+#include "components/download/public/common/download_interrupt_reasons.h"
+#include "components/download/public/common/download_item_rename_handler.h"
 #include "components/download/public/common/mock_download_item.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "content/public/browser/download_item_utils.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/base/ui_base_features.h"
+#include "url/gurl.h"
+#include "url/origin.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "base/strings/pattern.h"
+#include "chrome/test/base/testing_profile.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "ui/views/vector_icons.h"
+
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 using download::DownloadItem;
+using offline_items_collection::FailState;
 using safe_browsing::DownloadFileType;
+using ::testing::_;
 using ::testing::Mock;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::ReturnRef;
 using ::testing::ReturnRefOfCopy;
 using ::testing::SetArgPointee;
-using ::testing::_;
+
+#if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+using TailoredVerdict = safe_browsing::ClientDownloadResponse::TailoredVerdict;
+#endif
 
 namespace {
 
@@ -43,7 +87,7 @@ char kInterruptReasonCounter[] = {
 #include "components/download/public/common/download_interrupt_reason_values.h"
 #undef INTERRUPT_REASON
 };
-const size_t kInterruptReasonCount = base::size(kInterruptReasonCounter);
+const size_t kInterruptReasonCount = std::size(kInterruptReasonCounter);
 
 // Default target path for a mock download item in DownloadItemModelTest.
 const base::FilePath::CharType kDefaultTargetFilePath[] =
@@ -55,12 +99,76 @@ const base::FilePath::CharType kDefaultDisplayFileName[] =
 // Default URL for a mock download item in DownloadItemModelTest.
 const char kDefaultURL[] = "http://example.com/foo.bar";
 
+class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
+ public:
+  explicit TestChromeDownloadManagerDelegate(Profile* profile)
+      : ChromeDownloadManagerDelegate(profile) {}
+  ~TestChromeDownloadManagerDelegate() override = default;
+
+  // ChromeDownloadManagerDelegate override:
+  bool IsOpenInBrowserPreferredForFile(const base::FilePath& path) override {
+    return true;
+  }
+};
+
+// A DownloadCoreService that returns the TestChromeDownloadManagerDelegate.
+class TestDownloadCoreService : public DownloadCoreServiceImpl {
+ public:
+  explicit TestDownloadCoreService(Profile* profile);
+  ~TestDownloadCoreService() override;
+
+  ChromeDownloadManagerDelegate* GetDownloadManagerDelegate() override;
+
+  std::unique_ptr<ChromeDownloadManagerDelegate> delegate_;
+};
+
+TestDownloadCoreService::TestDownloadCoreService(Profile* profile)
+    : DownloadCoreServiceImpl(profile),
+      delegate_(std::make_unique<NiceMock<TestChromeDownloadManagerDelegate>>(
+          profile)) {}
+
+TestDownloadCoreService::~TestDownloadCoreService() = default;
+
+ChromeDownloadManagerDelegate*
+TestDownloadCoreService::GetDownloadManagerDelegate() {
+  return delegate_.get();
+}
+
+static std::unique_ptr<KeyedService> CreateTestDownloadCoreService(
+    content::BrowserContext* browser_context) {
+  return std::make_unique<TestDownloadCoreService>(
+      Profile::FromBrowserContext(browser_context));
+}
+
+class FakeRenameHandler : public download::DownloadItemRenameHandler {
+ public:
+  explicit FakeRenameHandler(DownloadItem* download_item)
+      : DownloadItemRenameHandler(download_item) {}
+  ~FakeRenameHandler() override = default;
+
+  // DownloadItemRenameHandler interface:
+  bool ShowRenameProgress() override { return true; }
+};
+
+}  // namespace
+
 class DownloadItemModelTest : public testing::Test {
  public:
   DownloadItemModelTest()
-      : model_(&item_) {}
+      : model_(&item_),
+        testing_profile_manager_(TestingBrowserProcess::GetGlobal()) {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  }
 
-  ~DownloadItemModelTest() override {}
+  ~DownloadItemModelTest() override = default;
+
+  void SetUp() override {
+    ASSERT_TRUE(testing_profile_manager_.SetUp());
+    profile_ = testing_profile_manager_.CreateTestingProfile("testing_profile");
+
+    DownloadCoreServiceFactory::GetInstance()->SetTestingFactory(
+        profile_, base::BindRepeating(&CreateTestDownloadCoreService));
+  }
 
  protected:
   // Sets up defaults for the download item and sets |model_| to a new
@@ -85,6 +193,14 @@ class DownloadItemModelTest : public testing::Test {
         .WillByDefault(
             Return(DownloadItem::TARGET_DISPOSITION_OVERWRITE));
     ON_CALL(item_, IsPaused()).WillByDefault(Return(false));
+    ON_CALL(item_, CanResume()).WillByDefault(Return(false));
+    ON_CALL(item_, GetInsecureDownloadStatus())
+        .WillByDefault(
+            Return(download::DownloadItem::InsecureDownloadStatus::SAFE));
+    ON_CALL(item(), GetDangerType())
+        .WillByDefault(Return(download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS));
+    content::DownloadItemUtils::AttachInfoForTesting(&(item()), profile_,
+                                                     nullptr);
   }
 
   void SetupInterruptedDownloadItem(download::DownloadInterruptReason reason) {
@@ -96,18 +212,41 @@ class DownloadItemModelTest : public testing::Test {
                        : DownloadItem::INTERRUPTED));
   }
 
+  void SetupCompletedDownloadItem(base::TimeDelta time_since_complete) {
+    ON_CALL(item_, GetFileExternallyRemoved()).WillByDefault(Return(false));
+    EXPECT_CALL(item_, GetState())
+        .WillRepeatedly(Return(DownloadItem::COMPLETE));
+    base::Time now = base::Time::Now();
+    base::TimeDelta diff = time_since_complete;
+    clock_.SetNow(now);
+    model_.set_clock_for_testing(&clock_);
+    ON_CALL(item_, GetEndTime()).WillByDefault(Return(now - diff));
+  }
+
   download::MockDownloadItem& item() { return item_; }
 
   DownloadItemModel& model() {
     return model_;
   }
 
+  Profile* profile() { return profile_; }
+  TestingProfile* testing_profile() { return profile_; }
+
+  void SetStatusTextBuilder(bool for_bubble) {
+    model_.set_status_text_builder_for_testing(for_bubble);
+  }
+
+  content::BrowserTaskEnvironment task_environment_;
+
  private:
   NiceMock<download::MockDownloadItem> item_;
   DownloadItemModel model_;
-};
+  base::SimpleTestClock clock_;
+  TestingProfileManager testing_profile_manager_;
+  raw_ptr<TestingProfile> profile_ = nullptr;
 
-}  // namespace
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
 
 TEST_F(DownloadItemModelTest, InterruptedStatus) {
   // Test that we have the correct interrupt status message for downloads that
@@ -117,71 +256,96 @@ TEST_F(DownloadItemModelTest, InterruptedStatus) {
     download::DownloadInterruptReason reason;
 
     // Expected status string. This will include the progress as well.
-    const char* expected_status;
+    std::u16string expected_status_msg;
+
+    // Expected bubble status string. This will include the progress as well.
+    std::u16string expected_bubble_status_msg;
+
+    // Most types of interrupted downloads have combination of icon and color
+    // that is not the same as "dangerous" or "suspicious" downloads.
+    DownloadUIModel::DangerUiPattern expected_danger_pattern =
+        DownloadUIModel::DangerUiPattern::kOther;
   } kTestCases[] = {
-      {download::DOWNLOAD_INTERRUPT_REASON_NONE, "1/2 B"},
+      {download::DOWNLOAD_INTERRUPT_REASON_NONE, u"1/2 B", u"1/2 B • Resuming…",
+       DownloadUIModel::DangerUiPattern::kNormal},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_FAILED,
-       "Failed - Download error"},
+       u"Failed - Download error", u"Something went wrong"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_ACCESS_DENIED,
-       "Failed - Insufficient permissions"},
-      {download::DOWNLOAD_INTERRUPT_REASON_FILE_NO_SPACE, "Failed - Disk full"},
+       u"Failed - Insufficient permissions", u"Needs permission to download"},
+      {download::DOWNLOAD_INTERRUPT_REASON_FILE_NO_SPACE, u"Failed - Disk full",
+       u"Out of storage space"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_NAME_TOO_LONG,
-       "Failed - Path too long"},
+       u"Failed - Path too long", u"File name or location is too long"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_TOO_LARGE,
-       "Failed - File too large"},
+       u"Failed - File too large", u"File is too big for this device"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_VIRUS_INFECTED,
-       "Failed - Virus detected"},
-      {download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED, "Failed - Blocked"},
+       u"Failed - Virus detected", u"Virus detected"},
+      {download::DOWNLOAD_INTERRUPT_REASON_LOCAL_DOWNLOAD_BLOCKED,
+       u"Failed - Local download blocked",
+       u"Your organization blocked the local download of this file."},
+      {download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED, u"Failed - Blocked",
+       u"Blocked by your organization"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_SECURITY_CHECK_FAILED,
-       "Failed - Virus scan failed"},
+       u"Failed - Virus scan failed", u"Virus scan failed"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_TOO_SHORT,
-       "Failed - File truncated"},
+       u"Failed - File truncated", u"Something went wrong"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_SAME_AS_SOURCE,
-       "Failed - Already downloaded"},
+       u"Failed - Already downloaded", u"Already downloaded"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_TRANSIENT_ERROR,
-       "Failed - System busy"},
+       u"Failed - System busy", u"Couldn’t finish download"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_HASH_MISMATCH,
-       "Failed - Download error"},
+       u"Failed - Download error", u"Something went wrong"},
       {download::DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED,
-       "Failed - Network error"},
+       u"Failed - Network error", u"Check internet connection"},
       {download::DOWNLOAD_INTERRUPT_REASON_NETWORK_TIMEOUT,
-       "Failed - Network timeout"},
+       u"Failed - Network timeout", u"Check internet connection"},
       {download::DOWNLOAD_INTERRUPT_REASON_NETWORK_DISCONNECTED,
-       "Failed - Network disconnected"},
+       u"Failed - Network disconnected", u"Check internet connection"},
       {download::DOWNLOAD_INTERRUPT_REASON_NETWORK_SERVER_DOWN,
-       "Failed - Server unavailable"},
+       u"Failed - Server unavailable", u"Site wasn’t available"},
       {download::DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST,
-       "Failed - Network error"},
+       u"Failed - Network error", u"Check internet connection"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_FAILED,
-       "Failed - Server problem"},
+       u"Failed - Server problem", u"Site wasn’t available"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_NO_RANGE,
-       "Failed - Download error"},
+       u"Failed - Download error", u"Something went wrong"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_BAD_CONTENT,
-       "Failed - No file"},
+       u"Failed - No file", u"File wasn’t available on site"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_UNAUTHORIZED,
-       "Failed - Needs authorization"},
+       u"Failed - Needs authorization", u"File wasn’t available on site"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_CERT_PROBLEM,
-       "Failed - Bad certificate"},
+       u"Failed - Bad certificate", u"Site wasn’t available"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_FORBIDDEN,
-       "Failed - Forbidden"},
+       u"Failed - Forbidden", u"File wasn’t available on site"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_UNREACHABLE,
-       "Failed - Server unreachable"},
+       u"Failed - Server unreachable", u"Site wasn’t available"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_CONTENT_LENGTH_MISMATCH,
-       "Failed - File incomplete"},
+       u"Failed - File incomplete", u"Couldn’t finish download"},
       {download::DOWNLOAD_INTERRUPT_REASON_SERVER_CROSS_ORIGIN_REDIRECT,
-       "Failed - Download error"},
-      {download::DOWNLOAD_INTERRUPT_REASON_USER_CANCELED, "Canceled"},
-      {download::DOWNLOAD_INTERRUPT_REASON_USER_SHUTDOWN, "Failed - Shutdown"},
-      {download::DOWNLOAD_INTERRUPT_REASON_CRASH, "Failed - Crash"},
+       u"Failed - Download error", u"Something went wrong"},
+      {download::DOWNLOAD_INTERRUPT_REASON_USER_CANCELED, u"Canceled",
+       u"Canceled"},
+      {download::DOWNLOAD_INTERRUPT_REASON_USER_SHUTDOWN, u"Failed - Shutdown",
+       u"Couldn’t finish download"},
+      {download::DOWNLOAD_INTERRUPT_REASON_CRASH, u"Failed - Crash",
+       u"Couldn’t finish download"},
   };
-  static_assert(kInterruptReasonCount == base::size(kTestCases),
+  static_assert(kInterruptReasonCount == std::size(kTestCases),
                 "interrupt reason mismatch");
 
   SetupDownloadItemDefaults();
+
   for (const auto& test_case : kTestCases) {
     SetupInterruptedDownloadItem(test_case.reason);
-    EXPECT_EQ(test_case.expected_status,
-              base::UTF16ToUTF8(model().GetStatusText()));
+    SetStatusTextBuilder(/*for_bubble=*/false);
+    EXPECT_EQ(test_case.expected_status_msg, model().GetStatusText());
+
+    SetStatusTextBuilder(/*for_bubble=*/true);
+    EXPECT_EQ(test_case.expected_bubble_status_msg, model().GetStatusText());
+
+#if !BUILDFLAG(IS_ANDROID)
+    EXPECT_EQ(model().GetDangerUiPattern(), test_case.expected_danger_pattern);
+#endif
   }
 }
 
@@ -209,6 +373,8 @@ TEST_F(DownloadItemModelTest, InterruptTooltip) {
        "foo.bar\nFile too large"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_VIRUS_INFECTED,
        "foo.bar\nVirus detected"},
+      {download::DOWNLOAD_INTERRUPT_REASON_LOCAL_DOWNLOAD_BLOCKED,
+       "foo.bar\nLocal download blocked"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED, "foo.bar\nBlocked"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_SECURITY_CHECK_FAILED,
        "foo.bar\nVirus scan failed"},
@@ -252,7 +418,7 @@ TEST_F(DownloadItemModelTest, InterruptTooltip) {
       {download::DOWNLOAD_INTERRUPT_REASON_USER_SHUTDOWN, "foo.bar\nShutdown"},
       {download::DOWNLOAD_INTERRUPT_REASON_CRASH, "foo.bar\nCrash"},
   };
-  static_assert(kInterruptReasonCount == base::size(kTestCases),
+  static_assert(kInterruptReasonCount == std::size(kTestCases),
                 "interrupt reason mismatch");
 
   SetupDownloadItemDefaults();
@@ -269,47 +435,60 @@ TEST_F(DownloadItemModelTest, InProgressStatus) {
     int64_t total_bytes;                // Return value of GetTotalBytes().
     bool  time_remaining_known;         // If TimeRemaining() is known.
     bool  open_when_complete;           // GetOpenWhenComplete().
-    bool  is_paused;                    // IsPaused().
-    const char* expected_status;        // Expected status text.
+    bool is_paused;                     // IsPaused().
+    const char* expected_status_msg;    // Expected status text.
+    // Expected bubble status string. This will include the progress as well.
+    // If empty, use the expected_status_msg.
+    std::string expected_bubble_status_msg;
   } kTestCases[] = {
-    // These are all the valid combinations of the above fields for a download
-    // that is in IN_PROGRESS state. Go through all of them and check the return
-    // value of DownloadItemModel::GetStatusText(). The point isn't to lock down
-    // the status strings, but to make sure we end up with something sane for
-    // all the circumstances we care about.
-    //
-    // For GetReceivedBytes()/GetTotalBytes(), we only check whether each is
-    // non-zero. In addition, if |total_bytes| is zero, then
-    // |time_remaining_known| is also false.
-    //
-    //         .-- .TimeRemaining() is known.
-    //        |       .-- .GetOpenWhenComplete()
-    //        |      |      .---- .IsPaused()
-    { 0, 0, false, false, false, "Starting\xE2\x80\xA6" },
-    { 1, 0, false, false, false, "1 B" },
-    { 0, 2, false, false, false, "Starting\xE2\x80\xA6"},
-    { 1, 2, false, false, false, "1/2 B" },
-    { 0, 2, true,  false, false, "0/2 B, 10 secs left" },
-    { 1, 2, true,  false, false, "1/2 B, 10 secs left" },
-    { 0, 0, false, true,  false, "Opening when complete" },
-    { 1, 0, false, true,  false, "Opening when complete" },
-    { 0, 2, false, true,  false, "Opening when complete" },
-    { 1, 2, false, true,  false, "Opening when complete" },
-    { 0, 2, true,  true,  false, "Opening in 10 secs\xE2\x80\xA6"},
-    { 1, 2, true,  true,  false, "Opening in 10 secs\xE2\x80\xA6"},
-    { 0, 0, false, false, true,  "0 B, Paused" },
-    { 1, 0, false, false, true,  "1 B, Paused" },
-    { 0, 2, false, false, true,  "0/2 B, Paused" },
-    { 1, 2, false, false, true,  "1/2 B, Paused" },
-    { 0, 2, true,  false, true,  "0/2 B, Paused" },
-    { 1, 2, true,  false, true,  "1/2 B, Paused" },
-    { 0, 0, false, true,  true,  "0 B, Paused" },
-    { 1, 0, false, true,  true,  "1 B, Paused" },
-    { 0, 2, false, true,  true,  "0/2 B, Paused" },
-    { 1, 2, false, true,  true,  "1/2 B, Paused" },
-    { 0, 2, true,  true,  true,  "0/2 B, Paused" },
-    { 1, 2, true,  true,  true,  "1/2 B, Paused" },
-  };
+      // These are all the valid combinations of the above fields for a download
+      // that is in IN_PROGRESS state. Go through all of them and check the
+      // return
+      // value of DownloadItemModel::GetStatusText(). The point isn't to lock
+      // down
+      // the status strings, but to make sure we end up with something sane for
+      // all the circumstances we care about.
+      //
+      // For GetReceivedBytes()/GetTotalBytes(), we only check whether each is
+      // non-zero. In addition, if |total_bytes| is zero, then
+      // |time_remaining_known| is also false.
+      {0, 0, false, false, false, "Starting\xE2\x80\xA6",
+       "0 B \xE2\x80\xA2 Starting\xE2\x80\xA6"},
+      {1, 0, false, false, false, "1 B",
+       "1 B \xE2\x80\xA2 Resuming\xE2\x80\xA6"},
+      {0, 2, false, false, false, "Starting\xE2\x80\xA6",
+       "0/2 B \xE2\x80\xA2 Starting\xE2\x80\xA6"},
+      {1, 2, false, false, false, "1/2 B",
+       "1/2 B \xE2\x80\xA2 Resuming\xE2\x80\xA6"},
+      {0, 2, true, false, false, "0/2 B, 10 secs left",
+       "\xE2\x86\x93 0/2 B \xE2\x80\xA2 10 seconds left"},
+      {1, 2, true, false, false, "1/2 B, 10 secs left",
+       "\xE2\x86\x93 1/2 B \xE2\x80\xA2 10 seconds left"},
+      {0, 0, false, true, false, "Opening when complete",
+       "0 B \xE2\x80\xA2 Opening when complete"},
+      {1, 0, false, true, false, "Opening when complete",
+       "1 B \xE2\x80\xA2 Opening when complete"},
+      {0, 2, false, true, false, "Opening when complete",
+       "0/2 B \xE2\x80\xA2 Opening when complete"},
+      {1, 2, false, true, false, "Opening when complete",
+       "1/2 B \xE2\x80\xA2 Opening when complete"},
+      {0, 2, true, true, false, "Opening in 10 secs\xE2\x80\xA6",
+       "\xE2\x86\x93 0/2 B \xE2\x80\xA2 Opening in 10 seconds\xE2\x80\xA6"},
+      {1, 2, true, true, false, "Opening in 10 secs\xE2\x80\xA6",
+       "\xE2\x86\x93 1/2 B \xE2\x80\xA2 Opening in 10 seconds\xE2\x80\xA6"},
+      {0, 0, false, false, true, "0 B, Paused", "0 B \xE2\x80\xA2 Paused"},
+      {1, 0, false, false, true, "1 B, Paused", "1 B \xE2\x80\xA2 Paused"},
+      {0, 2, false, false, true, "0/2 B, Paused", "0/2 B \xE2\x80\xA2 Paused"},
+      {1, 2, false, false, true, "1/2 B, Paused", "1/2 B \xE2\x80\xA2 Paused"},
+      {0, 2, true, false, true, "0/2 B, Paused", "0/2 B \xE2\x80\xA2 Paused"},
+      {1, 2, true, false, true, "1/2 B, Paused", "1/2 B \xE2\x80\xA2 Paused"},
+      {0, 0, false, true, true, "0 B, Paused", "0 B \xE2\x80\xA2 Paused"},
+      {1, 0, false, true, true, "1 B, Paused", "1 B \xE2\x80\xA2 Paused"},
+      {0, 2, false, true, true, "0/2 B, Paused", "0/2 B \xE2\x80\xA2 Paused"},
+      {1, 2, false, true, true, "1/2 B, Paused", "1/2 B \xE2\x80\xA2 Paused"},
+      {0, 2, true, true, true, "0/2 B, Paused", "0/2 B \xE2\x80\xA2 Paused"},
+      {1, 2, true, true, true, "1/2 B, Paused", "1/2 B \xE2\x80\xA2 Paused"},
+      {5, 5, false, false, false, "", "5 B \xE2\x80\xA2 Done"}};
 
   SetupDownloadItemDefaults();
 
@@ -321,41 +500,317 @@ TEST_F(DownloadItemModelTest, InProgressStatus) {
     EXPECT_CALL(item(), GetTotalBytes())
         .WillRepeatedly(Return(test_case.total_bytes));
     EXPECT_CALL(item(), TimeRemaining(_))
-        .WillRepeatedly(testing::DoAll(
-            testing::SetArgPointee<0>(base::TimeDelta::FromSeconds(10)),
-            Return(test_case.time_remaining_known)));
+        .WillRepeatedly(
+            testing::DoAll(testing::SetArgPointee<0>(base::Seconds(10)),
+                           Return(test_case.time_remaining_known)));
     EXPECT_CALL(item(), GetOpenWhenComplete())
         .WillRepeatedly(Return(test_case.open_when_complete));
-    EXPECT_CALL(item(), IsPaused())
-        .WillRepeatedly(Return(test_case.is_paused));
+    EXPECT_CALL(item(), IsPaused()).WillRepeatedly(Return(test_case.is_paused));
 
-    EXPECT_EQ(test_case.expected_status,
+    SetStatusTextBuilder(/*for_bubble=*/false);
+    EXPECT_EQ(test_case.expected_status_msg,
               base::UTF16ToUTF8(model().GetStatusText()));
+    SetStatusTextBuilder(/*for_bubble=*/true);
+    EXPECT_EQ(test_case.expected_bubble_status_msg.empty()
+                  ? test_case.expected_status_msg
+                  : test_case.expected_bubble_status_msg,
+              base::UTF16ToUTF8(model().GetStatusText()));
+#if !BUILDFLAG(IS_ANDROID)
+    EXPECT_EQ(model().GetDangerUiPattern(),
+              DownloadUIModel::DangerUiPattern::kNormal);
+#endif
   }
 }
 
-TEST_F(DownloadItemModelTest, ShouldShowInShelf) {
+TEST_F(DownloadItemModelTest, InProgressStatus_ContentCheck) {
   SetupDownloadItemDefaults();
 
-  // By default the download item should be displayable on the shelf when it is
+  EXPECT_CALL(item(), GetReceivedBytes()).WillRepeatedly(Return(10));
+  EXPECT_CALL(item(), GetTotalBytes()).WillRepeatedly(Return(10));
+
+  // Indicates that the content check is still pending.
+  EXPECT_CALL(item(), GetDangerType())
+      .WillRepeatedly(
+          Return(download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT));
+
+  SetStatusTextBuilder(/*for_bubble=*/true);
+
+  EXPECT_EQ("10 B \xE2\x80\xA2 Checking for safety\xE2\x80\xA6",
+            base::UTF16ToUTF8(model().GetStatusText()));
+}
+
+TEST_F(DownloadItemModelTest, CompletedStatus) {
+  SetupDownloadItemDefaults();
+
+  const struct TimeElapsedTestCase {
+    base::TimeDelta time_since_download_complete;
+    std::string expected_status_message;
+    std::string expected_bubble_status_msg;
+  } kTimeElapsedTestCases[] = {
+      {base::Seconds(10), "", "2 B \xE2\x80\xA2 Done"},
+      {base::Seconds(50), "", "2 B \xE2\x80\xA2 Done"},
+      {base::Seconds(60), "", "2 B \xE2\x80\xA2 1 minute ago"},
+      {base::Hours(23), "", "2 B \xE2\x80\xA2 23 hours ago"},
+      // Negative TimeDeltas may happen if the system time is adjusted
+      // backwards.
+      {base::Seconds(-10), "", "2 B \xE2\x80\xA2 Done"},
+      {base::Minutes(-10), "", "2 B \xE2\x80\xA2 Done"},
+  };
+  for (const auto& test_case : kTimeElapsedTestCases) {
+    SetupCompletedDownloadItem(test_case.time_since_download_complete);
+    SetStatusTextBuilder(/*for_bubble=*/false);
+    EXPECT_EQ(base::UTF16ToUTF8(model().GetStatusText()),
+              test_case.expected_status_message);
+    SetStatusTextBuilder(/*for_bubble=*/true);
+    EXPECT_EQ(base::UTF16ToUTF8(model().GetStatusText()),
+              test_case.expected_bubble_status_msg);
+#if !BUILDFLAG(IS_ANDROID)
+    EXPECT_EQ(model().GetDangerUiPattern(),
+              DownloadUIModel::DangerUiPattern::kNormal);
+#endif
+  }
+
+  EXPECT_CALL(item(), GetDangerType())
+      .WillRepeatedly(Return(download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE));
+  EXPECT_EQ("2 B \xE2\x80\xA2 Scan is done",
+            base::UTF16ToUTF8(model().GetStatusText()));
+#if !BUILDFLAG(IS_ANDROID)
+  EXPECT_EQ(model().GetDangerUiPattern(),
+            DownloadUIModel::DangerUiPattern::kNormal);
+#endif
+
+#if BUILDFLAG(IS_MAC)
+  EXPECT_EQ("Show in Finder", base::UTF16ToUTF8(model().GetShowInFolderText()));
+#else  // BUILDFLAG(IS_MAC)
+  EXPECT_EQ("Show in folder", base::UTF16ToUTF8(model().GetShowInFolderText()));
+#endif
+}
+
+TEST_F(DownloadItemModelTest, CompletedBubbleWarningStatusText) {
+  SetupCompletedDownloadItem(base::Hours(1));
+  SetStatusTextBuilder(/*for_bubble=*/true);
+
+  const struct InsecureDownloadStatusTestCase {
+    download::DownloadItem::InsecureDownloadStatus insecure_download_status;
+    std::string expected_bubble_status_msg;
+  } kInsecureDownloadStatusTestCases[] = {
+      {download::DownloadItem::InsecureDownloadStatus::BLOCK,
+       "Insecure download blocked"},
+      {download::DownloadItem::InsecureDownloadStatus::WARN,
+       "Insecure download blocked"},
+  };
+  for (const auto& test_case : kInsecureDownloadStatusTestCases) {
+    SetupDownloadItemDefaults();
+    ON_CALL(item(), GetInsecureDownloadStatus())
+        .WillByDefault(Return(test_case.insecure_download_status));
+    EXPECT_EQ(base::UTF16ToUTF8(model().GetStatusText()),
+              test_case.expected_bubble_status_msg);
+#if !BUILDFLAG(IS_ANDROID)
+    EXPECT_EQ(model().GetDangerUiPattern(),
+              DownloadUIModel::DangerUiPattern::kSuspicious);
+#endif
+  }
+
+  const struct DangerTypeTestCase {
+    download::DownloadDangerType danger_type;
+    std::string expected_bubble_status_msg;
+    DownloadUIModel::DangerUiPattern expected_danger_pattern;
+  } kDangerTypeTestCases[] = {
+      {download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT,
+       "Dangerous download blocked",
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST,
+       "Dangerous download blocked",
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE,
+       "Dangerous download blocked",
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED,
+       "Dangerous download blocked",
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_BLOCKED_PASSWORD_PROTECTED,
+       "Blocked \xE2\x80\xA2 Encrypted",
+       DownloadUIModel::DangerUiPattern::kOther},
+      {download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL,
+       "Dangerous download blocked",
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_BLOCKED_TOO_LARGE,
+       "Blocked \xE2\x80\xA2 Too big",
+       DownloadUIModel::DangerUiPattern::kOther},
+      {download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING,
+       "Sensitive content", DownloadUIModel::DangerUiPattern::kOther},
+      {download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK,
+       "Blocked by your organization",
+       DownloadUIModel::DangerUiPattern::kOther},
+      {download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING,
+       "Scan for malware \xE2\x80\xA2 Suspicious",
+       DownloadUIModel::DangerUiPattern::kSuspicious},
+  };
+  for (const auto& test_case : kDangerTypeTestCases) {
+    SCOPED_TRACE(testing::Message()
+                 << "Failed for danger type "
+                 << download::GetDownloadDangerTypeString(test_case.danger_type)
+                 << std::endl);
+    SetupDownloadItemDefaults();
+    ON_CALL(item(), GetDangerType())
+        .WillByDefault(Return(test_case.danger_type));
+    EXPECT_EQ(base::UTF16ToUTF8(model().GetStatusText()),
+              test_case.expected_bubble_status_msg);
+#if !BUILDFLAG(IS_ANDROID)
+    EXPECT_EQ(model().GetDangerUiPattern(), test_case.expected_danger_pattern);
+#endif
+  }
+}
+
+TEST_F(DownloadItemModelTest,
+       CompletedBubbleWarningStatusText_FiletypeWarning) {
+  SetupCompletedDownloadItem(base::Hours(1));
+  SetStatusTextBuilder(/*for_bubble=*/true);
+  SetupDownloadItemDefaults();
+  ON_CALL(item(), GetDangerType())
+      .WillByDefault(Return(download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE));
+  EXPECT_EQ(base::UTF16ToUTF8(model().GetStatusText()),
+            "Unverified download blocked");
+#if !BUILDFLAG(IS_ANDROID)
+  EXPECT_EQ(model().GetDangerUiPattern(),
+            DownloadUIModel::DangerUiPattern::kSuspicious);
+#endif
+
+#if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+  // It doesn't matter what the DownloadProtectionData is; just that it is
+  // present.
+  std::string token = "token";
+  safe_browsing::ClientDownloadResponse::Verdict verdict =
+      safe_browsing::ClientDownloadResponse::SAFE;
+  safe_browsing::ClientDownloadResponse::TailoredVerdict tailored_verdict;
+  safe_browsing::DownloadProtectionService::SetDownloadProtectionData(
+      &item(), token, verdict, tailored_verdict);
+
+  EXPECT_EQ(base::UTF16ToUTF8(model().GetStatusText()),
+            "Suspicious download blocked");
+#endif  // !BUILDFLAG(IS_ANDROID) &&
+        // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+
+TEST_F(DownloadItemModelTest, ShouldPreferOpeningInBrowser) {
+  SetupDownloadItemDefaults();
+  SetupCompletedDownloadItem(base::Hours(1));
+  EXPECT_TRUE(model().ShouldPreferOpeningInBrowser());
+}
+
+TEST_F(DownloadItemModelTest, ShouldShowInBubble) {
+  auto in_progress = DownloadItem::IN_PROGRESS;
+  auto canceled = DownloadItem::CANCELLED;
+  auto never = std::optional<base::Time>();
+  auto two_mins_ago = base::Time::Now() - base::Minutes(2);
+  auto ten_mins_ago = base::Time::Now() - base::Minutes(10);
+  auto dangerous_file = download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE;
+  auto not_dangerous = download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS;
+
+  const struct TestCase {
+    DownloadItem::DownloadState state;
+    download::DownloadDangerType danger_type;
+    std::optional<base::Time> shown_time;
+    bool expected_should_show;
+  } kTestCases[] = {
+      {in_progress, not_dangerous, two_mins_ago, true},
+      {in_progress, not_dangerous, ten_mins_ago, true},
+      {in_progress, dangerous_file, never, true},
+      {in_progress, dangerous_file, two_mins_ago, true},
+      {in_progress, dangerous_file, ten_mins_ago, false},
+      {canceled, dangerous_file, two_mins_ago, false},
+      {canceled, dangerous_file, ten_mins_ago, false},
+      {canceled, not_dangerous, two_mins_ago, true},
+      {canceled, not_dangerous, ten_mins_ago, true},
+  };
+
+  SetupDownloadItemDefaults();
+  for (const auto& test_case : kTestCases) {
+    EXPECT_CALL(item(), GetState()).WillRepeatedly(Return(test_case.state));
+    EXPECT_CALL(item(), GetDangerType())
+        .WillRepeatedly(Return(test_case.danger_type));
+    model().SetEphemeralWarningUiShownTime(test_case.shown_time);
+
+    EXPECT_EQ(test_case.expected_should_show, model().ShouldShowInBubble());
+  }
+}
+
+TEST_F(DownloadItemModelTest, GetBubbleStatusMessageWithBytes) {
+  auto compare_results = [](std::u16string actual, std::vector<int> expected) {
+    EXPECT_EQ(actual.length(), expected.size());
+    for (auto it = expected.begin(); it < expected.end(); it++) {
+      int index = std::distance(expected.begin(), it);
+      EXPECT_EQ(actual[index], expected[index]);
+    }
+  };
+
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
+
+    // Arabic
+    auto* arabic_bytes = L"5 \x062A";
+    auto* arabic_status = L"\x0645";
+    std::u16string arabic =
+        StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
+            base::WideToUTF16(arabic_bytes), base::WideToUTF16(arabic_status));
+    std::vector<int> expected_arabic =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_POSIX)
+        {8207, 8235, 53, 32, 1578, 32, 8226, 32, 1605, 8236, 8207};
+#else
+        {8235, 53, 32, 1578, 32, 8226, 32, 1605, 8236};
+#endif
+    compare_results(arabic, expected_arabic);
+
+    // Hebrew
+    auto* hebrew_status = L"\x05D0";
+    std::u16string hebrew =
+        StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
+            u"5 MB", base::WideToUTF16(hebrew_status));
+    std::vector<int> expected_hebrew =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_POSIX)
+        {8207, 8235, 8234, 53, 32,   77,   66,
+         8236, 32,   8226, 32, 1488, 8236, 8207};
+#else
+        {8235, 8234, 53, 32, 77, 66, 8236, 32, 8226, 32, 1488, 8236};
+#endif
+    compare_results(hebrew, expected_hebrew);
+  }
+
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
+    // English
+    std::u16string english =
+        StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(u"5 MB", u"A");
+    std::vector<int> expected_english = {53, 32, 77, 66, 32, 8226, 32, 65};
+    compare_results(english, expected_english);
+  }
+}
+
+TEST_F(DownloadItemModelTest, ShouldShowInUi) {
+  SetupDownloadItemDefaults();
+
+  // By default the download item should be displayable on the UI when it is
   // not a transient download.
   EXPECT_CALL(item(), IsTransient()).WillOnce(Return(false));
-  EXPECT_TRUE(model().ShouldShowInShelf());
+  EXPECT_TRUE(model().ShouldShowInUi());
 
   EXPECT_CALL(item(), IsTransient()).WillOnce(Return(true));
-  EXPECT_FALSE(model().ShouldShowInShelf());
+  EXPECT_FALSE(model().ShouldShowInUi());
 
-  // Once explicitly set, ShouldShowInShelf() should return the explicit value
+  // Once explicitly set, ShouldShowInUi() should return the explicit value
   // regardless of whether it's a transient download, which should no longer
   // be considered by the model after initializing it.
   EXPECT_CALL(item(), IsTransient()).Times(1);
 
-  model().SetShouldShowInShelf(true);
-  EXPECT_TRUE(model().ShouldShowInShelf());
+  model().SetShouldShowInUi(true);
+  EXPECT_TRUE(model().ShouldShowInUi());
 
-  model().SetShouldShowInShelf(false);
-  EXPECT_FALSE(model().ShouldShowInShelf());
+  model().SetShouldShowInUi(false);
+  EXPECT_FALSE(model().ShouldShowInUi());
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(DownloadItemModelTest, DangerLevel) {
   SetupDownloadItemDefaults();
@@ -394,59 +849,6 @@ TEST_F(DownloadItemModelTest, HasSupportedImageMimeType) {
   EXPECT_FALSE(model().HasSupportedImageMimeType());
 }
 
-TEST_F(DownloadItemModelTest, ShouldRemoveFromShelfWhenComplete) {
-  const struct TestCase {
-    DownloadItem::DownloadState state;
-    bool is_dangerous;  // Expectation for IsDangerous().
-    bool is_auto_open;  // Expectation for GetOpenWhenComplete().
-    bool auto_opened;   // Whether the download was successfully
-                        // auto-opened. Expecation for GetAutoOpened().
-    bool expected_result;
-  } kTestCases[] = {
-    // All the valid combinations of state, is_dangerous, is_auto_open and
-    // auto_opened.
-    //
-    //                              .--- Is dangerous.
-    //                             |       .--- Auto open or temporary.
-    //                             |      |      .--- Auto opened.
-    //                             |      |      |      .--- Expected result.
-    { DownloadItem::IN_PROGRESS, false, false, false, false},
-    { DownloadItem::IN_PROGRESS, false, true , false, true },
-    { DownloadItem::IN_PROGRESS, true , false, false, false},
-    { DownloadItem::IN_PROGRESS, true , true , false, false},
-    { DownloadItem::COMPLETE,    false, false, false, false},
-    { DownloadItem::COMPLETE,    false, true , false, false},
-    { DownloadItem::COMPLETE,    false, false, true , true },
-    { DownloadItem::COMPLETE,    false, true , true , true },
-    { DownloadItem::CANCELLED,   false, false, false, false},
-    { DownloadItem::CANCELLED,   false, true , false, false},
-    { DownloadItem::CANCELLED,   true , false, false, false},
-    { DownloadItem::CANCELLED,   true , true , false, false},
-    { DownloadItem::INTERRUPTED, false, false, false, false},
-    { DownloadItem::INTERRUPTED, false, true , false, false},
-    { DownloadItem::INTERRUPTED, true , false, false, false},
-    { DownloadItem::INTERRUPTED, true , true , false, false}
-  };
-
-  SetupDownloadItemDefaults();
-
-  for (const auto& test_case : kTestCases) {
-    EXPECT_CALL(item(), GetOpenWhenComplete())
-        .WillRepeatedly(Return(test_case.is_auto_open));
-    EXPECT_CALL(item(), GetState())
-        .WillRepeatedly(Return(test_case.state));
-    EXPECT_CALL(item(), IsDangerous())
-        .WillRepeatedly(Return(test_case.is_dangerous));
-    EXPECT_CALL(item(), GetAutoOpened())
-        .WillRepeatedly(Return(test_case.auto_opened));
-
-    EXPECT_EQ(test_case.expected_result,
-              model().ShouldRemoveFromShelfWhenComplete());
-    Mock::VerifyAndClearExpectations(&item());
-    Mock::VerifyAndClearExpectations(&model());
-  }
-}
-
 TEST_F(DownloadItemModelTest, ShouldShowDropdown) {
   // A few aliases for DownloadDangerTypes since the full names are fairly
   // verbose.
@@ -464,8 +866,6 @@ TEST_F(DownloadItemModelTest, ShouldShowDropdown) {
       download::DOWNLOAD_DANGER_TYPE_BLOCKED_TOO_LARGE;
   download::DownloadDangerType blocked_sensitive =
       download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK;
-  download::DownloadDangerType blocked_filetype =
-      download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE;
 
   const struct TestCase {
     DownloadItem::DownloadState state;        // Expectation for GetState()
@@ -483,7 +883,6 @@ TEST_F(DownloadItemModelTest, ShouldShowDropdown) {
       {DownloadItem::COMPLETE,  blocked_encrypted, true,  false},
       {DownloadItem::COMPLETE,  blocked_too_large, true,  false},
       {DownloadItem::COMPLETE,  blocked_sensitive, true,  false},
-      {DownloadItem::COMPLETE,  blocked_filetype,  true,  false},
   };
 
   SetupDownloadItemDefaults();
@@ -500,3 +899,189 @@ TEST_F(DownloadItemModelTest, ShouldShowDropdown) {
     Mock::VerifyAndClearExpectations(&model());
   }
 }
+
+TEST_F(DownloadItemModelTest, RenamingProgress) {
+  FakeRenameHandler fake_handler(&item());
+  EXPECT_CALL(item(), GetRenameHandler()).WillRepeatedly(Return(&fake_handler));
+  EXPECT_CALL(item(), GetReceivedBytes()).WillRepeatedly(Return(10));
+  EXPECT_CALL(item(), GetUploadedBytes()).WillRepeatedly(Return(2));
+  EXPECT_CALL(item(), GetTotalBytes()).WillRepeatedly(Return(10));
+
+  EXPECT_EQ(6, model().GetCompletedBytes());
+  EXPECT_EQ(60, model().PercentComplete());
+}
+
+TEST_F(DownloadItemModelTest, GetDownloadDomainForDisplay_PrefersTabUrl) {
+  GURL tab_url("https://tab.example.com/path");
+  std::optional<url::Origin> initiator =
+      url::Origin::Create(GURL("https://initiator.example.com"));
+  GURL original_url("https://original.example.com/file.apk");
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(initiator));
+  EXPECT_CALL(item(), GetOriginalUrl()).WillRepeatedly(ReturnRef(original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"tab.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"tab.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_FallsBackToRequestInitiator) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> initiator =
+      url::Origin::Create(GURL("https://initiator.example.com"));
+  GURL original_url("https://original.example.com/file.apk");
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(initiator));
+  EXPECT_CALL(item(), GetOriginalUrl()).WillRepeatedly(ReturnRef(original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"initiator.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"initiator.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_FallsBackToOriginalUrl) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL original_url("https://original.example.com/file.apk");
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl()).WillRepeatedly(ReturnRef(original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"original.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"original.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest, GetDownloadDomainForDisplay_FallsBackToUrl) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL empty_original_url;
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl())
+      .WillRepeatedly(ReturnRef(empty_original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"cdn.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"cdn.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_BlobUrlExtractsInnerOrigin) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL empty_original_url;
+  GURL blob_url("blob:https://blob.example.com/1234-5678");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl())
+      .WillRepeatedly(ReturnRef(empty_original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(blob_url));
+
+  EXPECT_EQ(u"blob.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"blob.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_OpaqueOriginReturnsEmpty) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL empty_original_url;
+  GURL data_url("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ==");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl())
+      .WillRepeatedly(ReturnRef(empty_original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(data_url));
+
+  EXPECT_EQ(u"", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"", DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+class DownloadItemModelTailoredWarningTest : public DownloadItemModelTest {
+ public:
+  DownloadItemModelTailoredWarningTest() {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  }
+
+  ~DownloadItemModelTailoredWarningTest() override = default;
+
+ protected:
+  void SetupTailoredWarningForItem(
+      download::DownloadDangerType danger_type,
+      TailoredVerdict::TailoredVerdictType tailored_verdict_type) {
+    ON_CALL(item(), GetDangerType()).WillByDefault(Return(danger_type));
+    TailoredVerdict tailored_verdict;
+    tailored_verdict.set_tailored_verdict_type(tailored_verdict_type);
+    safe_browsing::DownloadProtectionService::SetDownloadProtectionData(
+        &item(), "token",
+        safe_browsing::ClientDownloadResponse::SAFE,  // placeholder
+        tailored_verdict);
+  }
+};
+
+TEST_F(DownloadItemModelTailoredWarningTest, GetTailoredWarningType) {
+  SetupDownloadItemDefaults();
+
+  const struct GetTailoredWarningTypeTestCase {
+    download::DownloadDangerType danger_type;
+    TailoredVerdict::TailoredVerdictType tailored_verdict_type;
+    DownloadUIModel::TailoredWarningType expected_warning_type;
+    DownloadUIModel::DangerUiPattern expected_danger_pattern;
+  } kShouldShowTailoredWarningTestCases[] = {
+      {download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE,
+       TailoredVerdict::COOKIE_THEFT,
+       DownloadUIModel::TailoredWarningType::kCookieTheft,
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_UNCOMMON_CONTENT,
+       TailoredVerdict::SUSPICIOUS_ARCHIVE,
+       DownloadUIModel::TailoredWarningType::kSuspiciousArchive,
+       DownloadUIModel::DangerUiPattern::kSuspicious},
+      {download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL,
+       TailoredVerdict::COOKIE_THEFT,
+       DownloadUIModel::TailoredWarningType::kNoTailoredWarning,
+       // This is dangerous despite kNoTailoredWarning, because the base
+       // danger_type is dangerous.
+       DownloadUIModel::DangerUiPattern::kDangerous},
+      {download::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED,
+       TailoredVerdict::SUSPICIOUS_ARCHIVE,
+       DownloadUIModel::TailoredWarningType::kNoTailoredWarning,
+       DownloadUIModel::DangerUiPattern::kDangerous},
+  };
+  for (const auto& test_case : kShouldShowTailoredWarningTestCases) {
+    SCOPED_TRACE(::testing::Message()
+                 << "danger_type "
+                 << GetDownloadDangerTypeString(test_case.danger_type));
+    SetupTailoredWarningForItem(test_case.danger_type,
+                                test_case.tailored_verdict_type);
+    EXPECT_EQ(model().GetTailoredWarningType(),
+              test_case.expected_warning_type);
+    EXPECT_EQ(model().GetDangerUiPattern(), test_case.expected_danger_pattern);
+  }
+}
+
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)

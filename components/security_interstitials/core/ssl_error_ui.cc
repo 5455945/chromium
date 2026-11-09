@@ -1,10 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/security_interstitials/core/ssl_error_ui.h"
 
 #include "base/i18n/time_formatting.h"
+#include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "components/security_interstitials/core/common_string_util.h"
 #include "components/security_interstitials/core/controller_client.h"
@@ -13,6 +14,7 @@
 #include "components/ssl_errors/error_classification.h"
 #include "components/ssl_errors/error_info.h"
 #include "components/strings/grit/components_strings.h"
+#include "net/base/features.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace security_interstitials {
@@ -28,7 +30,7 @@ bool IsMasked(int options, SSLErrorOptionsMask mask) {
 }  // namespace
 
 SSLErrorUI::SSLErrorUI(const GURL& request_url,
-                       int cert_error,
+                       net::Error cert_error,
                        const net::SSLInfo& ssl_info,
                        int display_options,
                        const base::Time& time_triggered,
@@ -63,36 +65,36 @@ SSLErrorUI::~SSLErrorUI() {
   controller_->metrics_helper()->RecordShutdownMetrics();
 }
 
-void SSLErrorUI::PopulateStringsForHTML(base::Value* load_time_data) {
-  DCHECK(load_time_data);
-
+void SSLErrorUI::PopulateStringsForHTML(base::DictValue& load_time_data) {
   // Shared with other errors.
   common_string_util::PopulateSSLLayoutStrings(cert_error_, load_time_data);
   common_string_util::PopulateSSLDebuggingStrings(ssl_info_, time_triggered_,
                                                   load_time_data);
 
   // Shared values for both the overridable and non-overridable versions.
-  load_time_data->SetBoolKey("bad_clock", false);
-  load_time_data->SetBoolKey("hide_primary_button", false);
-  load_time_data->SetStringKey("tabTitle",
-                               l10n_util::GetStringUTF16(IDS_SSL_V2_TITLE));
-  load_time_data->SetStringKey("heading",
-                               l10n_util::GetStringUTF16(IDS_SSL_V2_HEADING));
-  load_time_data->SetStringKey(
+  load_time_data.Set("bad_clock", false);
+  load_time_data.Set("hide_primary_button", false);
+  load_time_data.Set("tabTitle", l10n_util::GetStringUTF16(IDS_SSL_V2_TITLE));
+  load_time_data.Set("heading", l10n_util::GetStringUTF16(IDS_SSL_V2_HEADING));
+  load_time_data.Set(
       "primaryParagraph",
       l10n_util::GetStringFUTF16(
           IDS_SSL_V2_PRIMARY_PARAGRAPH,
           common_string_util::GetFormattedHostName(request_url_)));
-  load_time_data->SetStringKey(
-      "recurrentErrorParagraph",
-      l10n_util::GetStringUTF16(IDS_SSL_V2_RECURRENT_ERROR_PARAGRAPH));
-  load_time_data->SetBoolKey("show_recurrent_error_paragraph",
-                             controller_->HasSeenRecurrentError());
 
-  if (soft_override_enabled_)
+  load_time_data.Set("is_qwac_enabled",
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+                     base::FeatureList::IsEnabled(net::features::kVerifyQWACs)
+#else
+                     false
+#endif
+  );
+
+  if (soft_override_enabled_) {
     PopulateOverridableStrings(load_time_data);
-  else
+  } else {
     PopulateNonOverridableStrings(load_time_data);
+  }
 }
 
 const net::SSLInfo& SSLErrorUI::ssl_info() const {
@@ -107,11 +109,11 @@ ControllerClient* SSLErrorUI::controller() const {
   return controller_;
 }
 
-int SSLErrorUI::cert_error() const {
+net::Error SSLErrorUI::cert_error() const {
   return cert_error_;
 }
 
-void SSLErrorUI::PopulateOverridableStrings(base::Value* load_time_data) {
+void SSLErrorUI::PopulateOverridableStrings(base::DictValue& load_time_data) {
   DCHECK(soft_override_enabled_);
 
   std::u16string url(common_string_util::GetFormattedHostName(request_url_));
@@ -119,48 +121,49 @@ void SSLErrorUI::PopulateOverridableStrings(base::Value* load_time_data) {
       ssl_errors::ErrorInfo::NetErrorToErrorType(cert_error_),
       ssl_info_.cert.get(), request_url_);
 
-  load_time_data->SetBoolKey("overridable", true);
-  load_time_data->SetBoolKey("hide_primary_button", false);
-  load_time_data->SetStringKey("explanationParagraph", error_info.details());
-  load_time_data->SetStringKey(
+  load_time_data.Set("overridable", true);
+  load_time_data.Set("hide_primary_button", false);
+  load_time_data.Set("explanationParagraph", error_info.details());
+  load_time_data.Set(
       "primaryButtonText",
       l10n_util::GetStringUTF16(IDS_SSL_OVERRIDABLE_SAFETY_BUTTON));
 
 // On iOS, offer to close the page instead of navigating to NTP when unable to
 // go back. See crbug.com/1058476 for discussion.
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   if (!controller()->CanGoBack()) {
-    load_time_data->SetStringKey(
+    load_time_data.Set(
         "primaryButtonText",
         l10n_util::GetStringUTF16(IDS_SSL_OVERRIDABLE_CLOSE_PAGE_BUTTON));
-    load_time_data->SetBoolKey("primary_button_close_page", true);
+    load_time_data.Set("primary_button_close_page", true);
   }
 #endif
 
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       "finalParagraph",
       l10n_util::GetStringFUTF16(IDS_SSL_OVERRIDABLE_PROCEED_PARAGRAPH, url));
 }
 
-void SSLErrorUI::PopulateNonOverridableStrings(base::Value* load_time_data) {
+void SSLErrorUI::PopulateNonOverridableStrings(
+    base::DictValue& load_time_data) {
   DCHECK(!soft_override_enabled_);
 
   std::u16string url(common_string_util::GetFormattedHostName(request_url_));
   ssl_errors::ErrorInfo::ErrorType type =
       ssl_errors::ErrorInfo::NetErrorToErrorType(cert_error_);
 
-  load_time_data->SetBoolKey("overridable", false);
-  load_time_data->SetBoolKey("hide_primary_button", false);
-  load_time_data->SetStringKey(
+  load_time_data.Set("overridable", false);
+  load_time_data.Set("hide_primary_button", false);
+  load_time_data.Set(
       "explanationParagraph",
       l10n_util::GetStringFUTF16(IDS_SSL_NONOVERRIDABLE_MORE, url));
-  load_time_data->SetStringKey("primaryButtonText",
-                               l10n_util::GetStringUTF16(IDS_SSL_RELOAD));
+  load_time_data.Set("primaryButtonText",
+                     l10n_util::GetStringUTF16(IDS_SSL_RELOAD));
 
   // Customize the help link depending on the specific error type.
   // Only mark as HSTS if none of the more specific error types apply,
   // and use INVALID as a fallback if no other string is appropriate.
-  load_time_data->SetIntKey("errorType", type);
+  load_time_data.Set("errorType", type);
   int help_string = IDS_SSL_NONOVERRIDABLE_INVALID;
   switch (type) {
     case ssl_errors::ErrorInfo::CERT_REVOKED:
@@ -173,11 +176,12 @@ void SSLErrorUI::PopulateNonOverridableStrings(base::Value* load_time_data) {
       help_string = IDS_SSL_NONOVERRIDABLE_INVALID;
       break;
     default:
-      if (requested_strict_enforcement_)
+      if (requested_strict_enforcement_) {
         help_string = IDS_SSL_NONOVERRIDABLE_HSTS;
+      }
   }
-  load_time_data->SetStringKey("finalParagraph",
-                               l10n_util::GetStringFUTF16(help_string, url));
+  load_time_data.Set("finalParagraph",
+                     l10n_util::GetStringFUTF16(help_string, url));
 }
 
 void SSLErrorUI::HandleCommand(SecurityInterstitialCommand command) {
@@ -211,7 +215,8 @@ void SSLErrorUI::HandleCommand(SecurityInterstitialCommand command) {
           security_interstitials::MetricsHelper::SHOW_ADVANCED);
       break;
     }
-    case CMD_OPEN_HELP_CENTER: {
+    case CMD_OPEN_HELP_CENTER:
+    case CMD_OPEN_HELP_CENTER_IN_NEW_TAB: {
       controller_->metrics_helper()->RecordUserInteraction(
           security_interstitials::MetricsHelper::SHOW_LEARN_MORE);
 
@@ -220,7 +225,7 @@ void SSLErrorUI::HandleCommand(SecurityInterstitialCommand command) {
       GURL::Replacements replacements;
       // This has to be stored in a separate variable, otherwise asan throws a
       // use-after-scope error
-      std::string cert_error_string = std::to_string(cert_error_);
+      std::string cert_error_string = base::NumberToString(cert_error_);
       replacements.SetRefStr(cert_error_string);
       // If |support_url_| is invalid, use the default help center url.
       controller_->OpenUrlInNewForegroundTab(
@@ -236,11 +241,13 @@ void SSLErrorUI::HandleCommand(SecurityInterstitialCommand command) {
       controller_->Reload();
       break;
     }
-    case CMD_OPEN_REPORTING_PRIVACY: {
+    case CMD_OPEN_REPORTING_PRIVACY:
+    case CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB: {
       controller_->OpenExtendedReportingPrivacyPolicy(true);
       break;
     }
-    case CMD_OPEN_WHITEPAPER: {
+    case CMD_OPEN_WHITEPAPER:
+    case CMD_OPEN_WHITEPAPER_IN_NEW_TAB: {
       controller_->OpenExtendedReportingWhitepaper(true);
       break;
     }
@@ -250,12 +257,27 @@ void SSLErrorUI::HandleCommand(SecurityInterstitialCommand command) {
       controller_->OpenEnhancedProtectionSettings();
       break;
     }
+    case CMD_SHOW_CERTIFICATE_VIEWER: {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+      controller_->metrics_helper()->RecordUserInteraction(
+          security_interstitials::MetricsHelper::VIEW_CERTIFICATE);
+      controller_->ShowCertificateViewer();
+      break;
+#else
+      NOTREACHED();
+#endif
+    }
     case CMD_OPEN_DATE_SETTINGS:
     case CMD_OPEN_DIAGNOSTIC:
     case CMD_OPEN_LOGIN:
-    case CMD_REPORT_PHISHING_ERROR: {
+    case CMD_REPORT_PHISHING_ERROR:
+    case CMD_CLOSE_INTERSTITIAL_WITHOUT_UI:
+    case CMD_REQUEST_SITE_ACCESS_PERMISSION:
+    case CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS:
+    case CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB:
+    case CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB: {
       // Not supported by the SSL error page.
-      NOTREACHED() << "Unsupported command: " << command;
+      DUMP_WILL_BE_NOTREACHED() << "Unsupported command: " << command;
       break;
     }
     case CMD_ERROR:
@@ -267,4 +289,4 @@ void SSLErrorUI::HandleCommand(SecurityInterstitialCommand command) {
   }
 }
 
-}  // security_interstitials
+}  // namespace security_interstitials

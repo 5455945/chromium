@@ -1,28 +1,36 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_REMOTING_STREAM_PROVIDER_H_
 #define MEDIA_REMOTING_STREAM_PROVIDER_H_
 
-#include "base/callback_forward.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner_helpers.h"
-#include "base/single_thread_task_runner.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner_helpers.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/demuxer.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/video_decoder_config.h"
 #include "media/mojo/mojom/remoting.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/openscreen/src/cast/streaming/remoting.pb.h"
 
 namespace base {
 class SingleThreadTaskRunner;
 }  // namespace base
+
+namespace openscreen {
+namespace cast {
+class RpcMessenger;
+}
+}  // namespace openscreen
 
 namespace media {
 
@@ -31,39 +39,44 @@ class MojoDecoderBufferReader;
 namespace remoting {
 
 class ReceiverController;
-class RpcBroker;
 
 // The media stream provider for Media Remoting receiver.
+//
+// Threading Model:
+// - Creation: StreamProvider must be created on the renderer main thread.
+// - Execution: All Demuxer and DemuxerStream methods (Initialize, Stop, Read,
+//   Seek, etc.) run on `media_task_runner`.
+// - Destruction: StreamProvider must be destroyed on `media_task_runner`.
 class StreamProvider final : public Demuxer {
  public:
+  // Must be called on the main thread.
   StreamProvider(
       ReceiverController* receiver_controller,
-      const scoped_refptr<base::SingleThreadTaskRunner>& media_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner>& media_task_runner);
+
+  ~StreamProvider() override;
 
   // Demuxer implementation.
-  std::vector<DemuxerStream*> GetAllStreams() override;
+  std::vector<raw_ptr<DemuxerStream>> GetAllStreams() override;
   std::string GetDisplayName() const override;
+  DemuxerType GetDemuxerType() const override;
   void Initialize(DemuxerHost* host, PipelineStatusCallback status_cb) override;
   void AbortPendingReads() override;
   void StartWaitingForSeek(base::TimeDelta seek_time) override;
   void CancelPendingSeek(base::TimeDelta seek_time) override;
   void Seek(base::TimeDelta time, PipelineStatusCallback status_cb) override;
+  bool IsSeekable() const override;
   void Stop() override;
   base::TimeDelta GetStartTime() const override;
   base::Time GetTimelineOffset() const override;
   int64_t GetMemoryUsage() const override;
-  absl::optional<container_names::MediaContainerName> GetContainerForMetrics()
+  std::optional<container_names::MediaContainerName> GetContainerForMetrics()
       const override;
-  void OnEnabledAudioTracksChanged(const std::vector<MediaTrack::Id>& track_ids,
-                                   base::TimeDelta curr_time,
-                                   TrackChangeCB change_completed_cb) override;
-  void OnSelectedVideoTrackChanged(const std::vector<MediaTrack::Id>& track_ids,
-                                   base::TimeDelta curr_time,
-                                   TrackChangeCB change_completed_cb) override;
-
- protected:
-  // Deletion is only allowed via Destroy().
-  ~StreamProvider() override;
+  void OnTracksChanged(DemuxerStream::Type track_type,
+                       std::optional<MediaTrack::Id> track_id,
+                       base::TimeDelta curr_time,
+                       TrackChangeCB change_completed_cb) override;
+  void SetPlaybackRate(double rate) override {}
 
  private:
   // An implementation of media::DemuxerStream on Media Remoting receiver.
@@ -76,12 +89,12 @@ class StreamProvider final : public Demuxer {
         std::unique_ptr<MediaStream, std::function<void(MediaStream*)>>;
 
     // MediaStream should be created on the main thread to be able to get unique
-    // handle ID from |rpc_broker_|.
+    // handle ID from |rpc_messenger_|.
     static void CreateOnMainThread(
-        RpcBroker* rpc_broker,
+        openscreen::cast::RpcMessenger* rpc_messenger,
         Type type,
         int32_t handle,
-        const scoped_refptr<base::SingleThreadTaskRunner>& media_task_runner,
+        const scoped_refptr<base::SequencedTaskRunner>& media_task_runner,
         base::OnceCallback<void(MediaStream::UniquePtr)> callback);
 
     // In order to destroy members in the right thread, MediaStream has to use
@@ -89,17 +102,17 @@ class StreamProvider final : public Demuxer {
     static void DestructionHelper(MediaStream* stream);
 
     MediaStream(
-        RpcBroker* rpc_broker,
+        openscreen::cast::RpcMessenger* rpc_messenger,
         Type type,
         int32_t remote_handle,
-        const scoped_refptr<base::SingleThreadTaskRunner>& media_task_runner);
+        const scoped_refptr<base::SequencedTaskRunner>& media_task_runner);
 
     // DemuxerStream implementation.
-    void Read(ReadCB read_cb) override;
+    void Read(uint32_t count, ReadCB read_cb) override;
     AudioDecoderConfig audio_decoder_config() override;
     VideoDecoderConfig video_decoder_config() override;
     DemuxerStream::Type type() const override;
-    Liveness liveness() const override;
+    StreamLiveness liveness() const override;
     bool SupportsConfigChanges() override;
 
     void Initialize(base::OnceClosure init_done_cb);
@@ -164,9 +177,9 @@ class StreamProvider final : public Demuxer {
     void OnError(const std::string& error);
 
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
-    scoped_refptr<base::SingleThreadTaskRunner> media_task_runner_;
+    scoped_refptr<base::SequencedTaskRunner> media_task_runner_;
 
-    RpcBroker* const rpc_broker_;  // Outlives this class.
+    const raw_ptr<openscreen::cast::RpcMessenger> rpc_messenger_;
     const Type type_;
     const int remote_handle_;
     const int rpc_handle_;
@@ -216,17 +229,15 @@ class StreamProvider final : public Demuxer {
 
     mojo::Receiver<mojom::RemotingDataStreamReceiver> receiver_{this};
 
-    base::WeakPtr<MediaStream> media_weak_this_;
-    base::WeakPtrFactory<MediaStream> media_weak_factory_{this};
-  };
+    SEQUENCE_CHECKER(main_sequence_checker_);
+    SEQUENCE_CHECKER(media_sequence_checker_);
 
-  friend std::default_delete<StreamProvider>;
-  friend class base::DeleteHelper<StreamProvider>;  // For using DeleteSoon().
+    base::WeakPtr<MediaStream> media_weak_this_;
+    base::WeakPtrFactory<MediaStream> media_stream_weak_factory_{this};
+  };
 
   // For testing.
   friend class StreamProviderTest;
-
-  void Destroy();
 
   // RPC messages handlers.
   void OnReceivedRpc(std::unique_ptr<openscreen::cast::RpcMessage> message);
@@ -241,43 +252,29 @@ class StreamProvider final : public Demuxer {
   void CompleteInitialize();
 
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> media_task_runner_;
-  ReceiverController* const receiver_controller_;  // Outlives this class
-  RpcBroker* const rpc_broker_;                    // Outlives this class
+  scoped_refptr<base::SequencedTaskRunner> media_task_runner_;
+  const raw_ptr<ReceiverController> receiver_controller_;
+  const raw_ptr<openscreen::cast::RpcMessenger> rpc_messenger_;
   MediaStream::UniquePtr audio_stream_;
   MediaStream::UniquePtr video_stream_;
   bool has_audio_{false};
   bool has_video_{false};
   bool audio_stream_initialized_{false};
   bool video_stream_initialized_{false};
+  bool stopped_{false};
 
   // Set when Initialize() is called, and will run when both video and audio
   // streams are initialized or error occurs.
   PipelineStatusCallback init_done_callback_;
 
+  SEQUENCE_CHECKER(main_sequence_checker_);
+  SEQUENCE_CHECKER(media_sequence_checker_);
+
   base::WeakPtr<StreamProvider> media_weak_this_;
-  base::WeakPtrFactory<StreamProvider> media_weak_factory_{this};
+  base::WeakPtrFactory<StreamProvider> stream_provider_weak_factory_{this};
 };
 
 }  // namespace remoting
 }  // namespace media
-
-namespace std {
-
-// Specialize std::default_delete to call Destroy().
-template <>
-struct default_delete<media::remoting::StreamProvider> {
-  constexpr default_delete() = default;
-
-  template <typename U,
-            typename = typename std::enable_if<std::is_convertible<
-                U*,
-                media::remoting::StreamProvider*>::value>::type>
-  explicit default_delete(const default_delete<U>& d) {}
-
-  void operator()(media::remoting::StreamProvider* ptr) const;
-};
-
-}  // namespace std
 
 #endif  // MEDIA_REMOTING_STREAM_PROVIDER_H_

@@ -31,30 +31,45 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
-InsertIntoTextNodeCommand::InsertIntoTextNodeCommand(Text* node,
-                                                     unsigned offset,
-                                                     const String& text)
+InsertIntoTextNodeCommand::InsertIntoTextNodeCommand(
+    Text* node,
+    wtf_size_t offset,
+    const String& text,
+    PasswordEchoBehavior password_echo_behavior)
     : SimpleEditCommand(node->GetDocument()),
       node_(node),
       offset_(offset),
-      text_(text) {
+      text_(text),
+      password_echo_behavior_(password_echo_behavior) {
   DCHECK(node_);
   DCHECK_LE(offset_, node_->length());
-  DCHECK(!text_.IsEmpty());
+  DCHECK(!text_.empty());
+}
+
+bool InsertIntoTextNodeCommand::ShouldEchoPassword() const {
+  const Settings* settings = GetDocument().GetSettings();
+  switch (password_echo_behavior_) {
+    case PasswordEchoBehavior::kEchoIfPasswordEchoPhysicalEnabled:
+      return settings && settings->GetPasswordEchoEnabledPhysical();
+    case PasswordEchoBehavior::kEchoIfPasswordEchoTouchEnabled:
+      return settings && settings->GetPasswordEchoEnabledTouch();
+    case PasswordEchoBehavior::kDoNotEcho:
+      return false;
+  }
+  NOTREACHED();
 }
 
 void InsertIntoTextNodeCommand::DoApply(EditingState*) {
-  bool password_echo_enabled =
-      GetDocument().GetSettings() &&
-      GetDocument().GetSettings()->GetPasswordEchoEnabled();
+  bool password_echo_enabled = ShouldEchoPassword();
   if (password_echo_enabled) {
     GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
   }
 
-  if (!HasEditableStyle(*node_))
+  if (!IsEditable(*node_))
     return;
 
   if (password_echo_enabled) {
@@ -68,10 +83,15 @@ void InsertIntoTextNodeCommand::DoApply(EditingState*) {
 }
 
 void InsertIntoTextNodeCommand::DoUnapply() {
-  if (!HasEditableStyle(*node_))
+  if (!IsEditable(*node_))
     return;
 
   node_->deleteData(offset_, text_.length(), IGNORE_EXCEPTION_FOR_TESTING);
+}
+
+String InsertIntoTextNodeCommand::ToString() const {
+  return Format("InsertIntoTextNodeCommand {{offset:{}, text:{}}}", offset_,
+                text_.EncodeForDebugging());
 }
 
 void InsertIntoTextNodeCommand::Trace(Visitor* visitor) const {

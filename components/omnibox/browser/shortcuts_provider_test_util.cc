@@ -1,9 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/shortcuts_provider_test_util.h"
 
+#include <algorithm>
+
+#include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -24,7 +27,7 @@ TestShortcutData::TestShortcutData(
     std::string description,
     std::string description_class,
     ui::PageTransition transition,
-    AutocompleteMatch::Type type,
+    omnibox::AutocompleteMatchType type,
     std::string keyword,
     int days_from_now,
     int number_of_hits) {
@@ -44,15 +47,13 @@ TestShortcutData::TestShortcutData(
   this->number_of_hits = number_of_hits;
 }
 
-TestShortcutData::~TestShortcutData() {}
+TestShortcutData::~TestShortcutData() = default;
 
 void PopulateShortcutsBackendWithTestData(
     scoped_refptr<ShortcutsBackend> backend,
-    TestShortcutData* db,
-    size_t db_size) {
-  size_t expected_size = backend->shortcuts_map().size() + db_size;
-  for (size_t i = 0; i < db_size; ++i) {
-    const TestShortcutData& cur = db[i];
+    base::span<TestShortcutData> db) {
+  size_t expected_size = backend->shortcuts_map().size() + db.size();
+  for (const auto& cur : db) {
     ShortcutsDatabase::Shortcut shortcut(
         cur.guid, base::ASCIIToUTF16(cur.text),
         ShortcutsDatabase::Shortcut::MatchCore(
@@ -61,8 +62,7 @@ void PopulateShortcutsBackendWithTestData(
             cur.contents_class, base::ASCIIToUTF16(cur.description),
             cur.description_class, cur.transition, cur.type,
             base::ASCIIToUTF16(cur.keyword)),
-        base::Time::Now() - base::TimeDelta::FromDays(cur.days_from_now),
-        cur.number_of_hits);
+        base::Time::Now() - base::Days(cur.days_from_now), cur.number_of_hits);
     backend->AddShortcut(shortcut);
   }
   EXPECT_EQ(expected_size, backend->shortcuts_map().size());
@@ -75,18 +75,29 @@ void RunShortcutsProviderTest(
     const std::vector<ExpectedURLAndAllowedToBeDefault>& expected_urls,
     std::string expected_top_result,
     std::u16string top_result_inline_autocompletion) {
-  base::RunLoop().RunUntilIdle();
   AutocompleteInput input(text, metrics::OmniboxEventProto::OTHER,
                           TestSchemeClassifier());
   input.set_prevent_inline_autocomplete(prevent_inline_autocomplete);
+  RunShortcutsProviderTest(provider, input, expected_urls, expected_top_result,
+                           top_result_inline_autocompletion);
+}
+
+void RunShortcutsProviderTest(
+    scoped_refptr<ShortcutsProvider> provider,
+    const AutocompleteInput& input,
+    const std::vector<ExpectedURLAndAllowedToBeDefault>& expected_urls,
+    std::string expected_top_result,
+    std::u16string top_result_inline_autocompletion) {
+  base::RunLoop().RunUntilIdle();
   provider->Start(input, false);
   EXPECT_TRUE(provider->done());
 
   ACMatches ac_matches = provider->matches();
 
-  std::string debug = base::StringPrintf(
-      "Input [%s], prevent inline [%d], matches:\n",
-      base::UTF16ToUTF8(text).c_str(), prevent_inline_autocomplete);
+  std::string debug =
+      base::StringPrintf("Input [%s], prevent inline [%d], matches:\n",
+                         base::UTF16ToUTF8(input.text()).c_str(),
+                         input.prevent_inline_autocomplete());
   for (auto match : ac_matches) {
     debug += base::StringPrintf("  URL [%s], default [%d]\n",
                                 match.destination_url.spec().c_str(),
@@ -102,13 +113,12 @@ void RunShortcutsProviderTest(
   EXPECT_EQ(expected_urls.size(), ac_matches.size()) << debug;
 
   for (const auto& expected_url : expected_urls) {
-    auto iter = std::find_if(
-        ac_matches.begin(), ac_matches.end(),
+    EXPECT_TRUE(std::ranges::any_of(
+        ac_matches,
         [&expected_url](const AutocompleteMatch& match) {
           return expected_url.first == match.destination_url.spec() &&
                  expected_url.second == match.allowed_to_be_default_match;
-        });
-    EXPECT_TRUE(iter != ac_matches.end())
+        }))
         << debug
         << base::StringPrintf("Expected URL [%s], default [%d]\n",
                               expected_url.first.c_str(), expected_url.second);

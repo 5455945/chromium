@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,16 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/time/default_clock.h"
 #include "base/time/default_tick_clock.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/global_features.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
+#include "chrome/browser/safe_browsing/advanced_protection/application_advanced_protection_status_detector.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
-
-#if BUILDFLAG(ENABLE_BACKGROUND_MODE)
-#include "chrome/browser/background/background_mode_manager.h"
-#endif  // BUILDFLAG(ENABLE_BACKGROUND_MODE)
 
 namespace {
 
@@ -84,22 +82,28 @@ RelaunchNotificationController::RelaunchNotificationController(
         prefs::kRelaunchNotification,
         base::BindRepeating(&RelaunchNotificationController::HandleCurrentStyle,
                             base::Unretained(this)));
-    // Synchronize the instance with the current state of the preference.
-    HandleCurrentStyle();
   }
   // Need to register with the UpgradeDetector right at the start to observe any
   // calls to override the preference value controlling the notification style.
   StartObservingUpgrades();
+#if !BUILDFLAG(IS_CHROMEOS)
+  StartObservingAPStatus();
+#endif
+  // Synchronize the instance with the current state of the preference and
+  // Advanced Protection status.
+  HandleCurrentStyle();
 }
 
 void RelaunchNotificationController::OnUpgradeRecommended() {
-  if (last_notification_style_ == NotificationStyle::kNone)
+  if (last_notification_style_ == NotificationStyle::kNone) {
     return;
+  }
 
   UpgradeDetector::UpgradeNotificationAnnoyanceLevel current_level =
       upgrade_detector_->upgrade_notification_stage();
   const base::Time current_high_deadline =
-      upgrade_detector_->GetHighAnnoyanceDeadline();
+      upgrade_detector_->GetAnnoyanceLevelDeadline(
+          UpgradeDetector::UPGRADE_ANNOYANCE_HIGH);
 
   // Nothing to do if there has been no change in the level and deadline. If
   // appropriate, a notification for this level has already been shown.
@@ -138,9 +142,15 @@ void RelaunchNotificationController::OnUpgradeRecommended() {
 
 void RelaunchNotificationController::OnRelaunchOverriddenToRequired(
     bool overridden) {
-  if (notification_type_required_overridden_ == overridden)
+  if (notification_type_required_overridden_ == overridden) {
     return;
+  }
   notification_type_required_overridden_ = overridden;
+  HandleCurrentStyle();
+}
+
+void RelaunchNotificationController::
+    OnApplicationAdvancedProtectionStatusChanged(bool enabled) {
   HandleCurrentStyle();
 }
 
@@ -152,7 +162,8 @@ void RelaunchNotificationController::HandleCurrentStyle() {
   } else {
     switch (ReadPreference()) {
       case RelaunchNotificationSetting::kChromeMenuOnly:
-        DCHECK_EQ(notification_style, NotificationStyle::kNone);
+        CHECK_EQ(notification_style, NotificationStyle::kNone,
+                 base::NotFatalUntil::M162);
         break;
       case RelaunchNotificationSetting::kRecommendedBubble:
         notification_style = NotificationStyle::kRecommended;
@@ -163,13 +174,27 @@ void RelaunchNotificationController::HandleCurrentStyle() {
     }
   }
 
+  // Force the style to `kRequired` if Advanced Protection is enabled and the
+  // relaunch required policy is not already in effect.
+  if (notification_style != NotificationStyle::kRequired &&
+      advanced_protection_observation_.IsObserving() &&
+      advanced_protection_observation_.GetSource()
+          ->IsUnderAdvancedProtection()) {
+    notification_style_overridden_for_advanced_protection_ = true;
+    notification_style = NotificationStyle::kRequired;
+  } else {
+    notification_style_overridden_for_advanced_protection_ = false;
+  }
+
   // Nothing to do if there has been no change in the notification style.
-  if (notification_style == last_notification_style_)
+  if (notification_style == last_notification_style_) {
     return;
+  }
 
   // Close the bubble or dialog if either is open.
-  if (last_notification_style_ != NotificationStyle::kNone)
+  if (last_notification_style_ != NotificationStyle::kNone) {
     CloseRelaunchNotification();
+  }
 
   // Reset state so that a notifications is shown anew in a new style if needed.
   last_level_ = UpgradeDetector::UPGRADE_ANNOYANCE_NONE;
@@ -194,10 +219,21 @@ void RelaunchNotificationController::StopObservingUpgrades() {
   upgrade_detector_->RemoveObserver(this);
 }
 
+void RelaunchNotificationController::StartObservingAPStatus() {
+  // advanced_protection_detector is available when
+  // `safe_browsing::kRelaunchNotificationForAdvancedProtection` is enabled.
+  if (auto* advanced_protection_detector =
+          g_browser_process->GetFeatures()
+              ->application_advanced_protection_status_detector()) {
+    advanced_protection_observation_.Observe(advanced_protection_detector);
+  }
+}
+
 void RelaunchNotificationController::ShowRelaunchNotification(
     UpgradeDetector::UpgradeNotificationAnnoyanceLevel level,
     base::Time high_deadline) {
-  DCHECK_NE(last_notification_style_, NotificationStyle::kNone);
+  CHECK_NE(last_notification_style_, NotificationStyle::kNone,
+           base::NotFatalUntil::M162);
 
   if (last_notification_style_ == NotificationStyle::kRecommended) {
     // Show the dialog if there has been a level change.
@@ -221,7 +257,8 @@ void RelaunchNotificationController::ShowRelaunchNotification(
 }
 
 void RelaunchNotificationController::CloseRelaunchNotification() {
-  DCHECK_NE(last_notification_style_, NotificationStyle::kNone);
+  CHECK_NE(last_notification_style_, NotificationStyle::kNone,
+           base::NotFatalUntil::M162);
 
   // Nothing needs to be closed if the annoyance level is none, very low, or
   // critical.
@@ -241,7 +278,8 @@ void RelaunchNotificationController::CloseRelaunchNotification() {
 void RelaunchNotificationController::HandleRelaunchRequiredState(
     UpgradeDetector::UpgradeNotificationAnnoyanceLevel level,
     base::Time high_deadline) {
-  DCHECK_EQ(last_notification_style_, NotificationStyle::kRequired);
+  CHECK_EQ(last_notification_style_, NotificationStyle::kRequired,
+           base::NotFatalUntil::M162);
   const base::Time now = clock_->Now();
 
   // Make no changes if the level has not changed, the new deadline is not in
@@ -253,9 +291,11 @@ void RelaunchNotificationController::HandleRelaunchRequiredState(
   // make it earlier than a previous GRACE.
   if (level == last_level_ && timer_.IsRunning()) {
     const base::Time& desired_run_time = timer_.desired_run_time();
-    DCHECK(!desired_run_time.is_null());
-    if (high_deadline <= now && desired_run_time - now <= kRelaunchGracePeriod)
+    CHECK(!desired_run_time.is_null(), base::NotFatalUntil::M162);
+    if (high_deadline <= now &&
+        desired_run_time - now <= kRelaunchGracePeriod) {
       return;
+    }
   }
 
   base::Time deadline = high_deadline;
@@ -267,26 +307,26 @@ void RelaunchNotificationController::HandleRelaunchRequiredState(
     // a) The device goes to sleep before the first notification and wakes up
     // after the deadline.
     // b) A change in policy value moves the deadline in the past.
-    if (high_deadline <= now)
+    if (high_deadline <= now) {
       deadline = now + kRelaunchGracePeriod;
+    }
     // (re)Start the timer to perform the relaunch when the deadline is reached.
     timer_.Start(FROM_HERE, deadline, this,
                  &RelaunchNotificationController::OnRelaunchDeadlineExpired);
   }
 
-  if (platform_impl_.IsRequiredNotificationShown()) {
-    platform_impl_.SetDeadline(deadline);
-  } else {
-    // Otherwise, show the dialog if there has been a level change or if the
-    // deadline is in the past.
-    if (level != last_level_ || high_deadline <= now)
-      NotifyRelaunchRequired();
+  platform_impl_.SetDeadline(deadline);
+  // Show the dialog if there has been a level change or if the deadline is in
+  // the past.
+  if (!platform_impl_.IsRequiredNotificationShown() &&
+      (level != last_level_ || high_deadline <= now)) {
+    NotifyRelaunchRequired();
   }
 }
 
 base::Time RelaunchNotificationController::IncreaseRelaunchDeadlineOnShow() {
-  DCHECK(timer_.IsRunning());
-  DCHECK(!timer_.desired_run_time().is_null());
+  CHECK(timer_.IsRunning(), base::NotFatalUntil::M162);
+  CHECK(!timer_.desired_run_time().is_null(), base::NotFatalUntil::M162);
   base::Time relaunch_deadline = timer_.desired_run_time();
 
   // Push the dealdine back if needed so that the user has at least the grace
@@ -300,11 +340,15 @@ base::Time RelaunchNotificationController::IncreaseRelaunchDeadlineOnShow() {
 }
 
 void RelaunchNotificationController::StartReshowTimer() {
-  DCHECK_EQ(last_notification_style_, NotificationStyle::kRecommended);
-  DCHECK(!last_relaunch_notification_time_.is_null());
+  CHECK_EQ(last_notification_style_, NotificationStyle::kRecommended,
+           base::NotFatalUntil::M162);
+  CHECK(!last_relaunch_notification_time_.is_null(), base::NotFatalUntil::M162);
   // Use the delta between the elevated and high annoyance levels as the
   // reshow period.
-  const auto reshow_period = upgrade_detector_->GetHighAnnoyanceLevelDelta();
+  const auto reshow_period = upgrade_detector_->GetAnnoyanceLevelDeadline(
+                                 UpgradeDetector::UPGRADE_ANNOYANCE_HIGH) -
+                             upgrade_detector_->GetAnnoyanceLevelDeadline(
+                                 UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED);
   // Compute the next time to show the notification.
   const auto desired_run_time =
       last_relaunch_notification_time_ + reshow_period;
@@ -313,7 +357,8 @@ void RelaunchNotificationController::StartReshowTimer() {
 }
 
 void RelaunchNotificationController::OnReshowRelaunchRecommended() {
-  DCHECK_EQ(last_notification_style_, NotificationStyle::kRecommended);
+  CHECK_EQ(last_notification_style_, NotificationStyle::kRecommended,
+           base::NotFatalUntil::M162);
   NotifyRelaunchRecommended(true);
   StartReshowTimer();
 }
@@ -331,9 +376,10 @@ void RelaunchNotificationController::DoNotifyRelaunchRecommended(
 }
 
 void RelaunchNotificationController::NotifyRelaunchRequired() {
-  DCHECK(timer_.IsRunning());
-  DCHECK(!timer_.desired_run_time().is_null());
+  CHECK(timer_.IsRunning(), base::NotFatalUntil::M162);
+  CHECK(!timer_.desired_run_time().is_null(), base::NotFatalUntil::M162);
   DoNotifyRelaunchRequired(
+      notification_style_overridden_for_advanced_protection_,
       timer_.desired_run_time(),
       base::BindOnce(
           &RelaunchNotificationController::IncreaseRelaunchDeadlineOnShow,
@@ -341,18 +387,20 @@ void RelaunchNotificationController::NotifyRelaunchRequired() {
 }
 
 void RelaunchNotificationController::DoNotifyRelaunchRequired(
+    bool is_notification_style_ap_required,
     base::Time relaunch_deadline,
     base::OnceCallback<base::Time()> on_visible) {
   platform_impl_.NotifyRelaunchRequired(relaunch_deadline,
+#if BUILDFLAG(IS_CHROMEOS)
+                                        notification_type_required_overridden_,
+#else
+                                        is_notification_style_ap_required,
+#endif
                                         std::move(on_visible));
 }
 
 void RelaunchNotificationController::Close() {
   platform_impl_.CloseRelaunchNotification();
-}
-
-void RelaunchNotificationController::SetDeadline(base::Time deadline) {
-  platform_impl_.SetDeadline(deadline);
 }
 
 void RelaunchNotificationController::OnRelaunchDeadlineExpired() {

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,6 +34,9 @@ class GaussianTrainerTest : public testing::Test {
 
     gaussian_trainer_ = std::make_unique<GaussianTrainer>();
   }
+
+  GaussianTrainerTest(const GaussianTrainerTest&) = delete;
+  GaussianTrainerTest& operator=(const GaussianTrainerTest&) = delete;
 
   ~GaussianTrainerTest() override = default;
 
@@ -79,9 +82,6 @@ class GaussianTrainerTest : public testing::Test {
   base::HistogramTester histogram_tester_;
 
   std::unique_ptr<GaussianTrainer> gaussian_trainer_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(GaussianTrainerTest);
 };
 
 // Tests the effect of |brightness_bound_scale| on outlier checks. A larger
@@ -574,7 +574,7 @@ TEST_F(GaussianTrainerTest, TrainedCurveValue) {
 
   const MonotoneCubicSpline trained_curve =
       *(gaussian_trainer_->Train({data}).new_curve);
-  const absl::optional<MonotoneCubicSpline> expected_curve =
+  const std::optional<MonotoneCubicSpline> expected_curve =
       MonotoneCubicSpline::CreateMonotoneCubicSpline(
           log_lux_, {3.0,   8.0,   12.48, 18.72, 24.96, 31.2, 37.44,
                      43.68, 49.92, 56.16, 62.4,  62.4,  62.4, 66.0,
@@ -609,9 +609,6 @@ TEST_F(GaussianTrainerTest, InvalidParameters) {
   ResetModelWithParams(params);
 
   EXPECT_FALSE(gaussian_trainer_->HasValidConfiguration());
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.ParameterError",
-      static_cast<int>(ParameterError::kModelError), 1);
 }
 
 }  // namespace auto_screen_brightness

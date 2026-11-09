@@ -1,10 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_BROWSER_INTERFACE_BROKER_IMPL_H_
 #define CONTENT_BROWSER_BROWSER_INTERFACE_BROKER_IMPL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "content/browser/browser_interface_binders.h"
 #include "content/browser/mojo_binder_policy_applier.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
@@ -45,6 +46,12 @@ class BrowserInterfaceBrokerImpl : public blink::mojom::BrowserInterfaceBroker {
     internal::PopulateBinderMapWithContext(host, &binder_map_with_context_);
   }
 
+  ~BrowserInterfaceBrokerImpl() override {
+    if (policy_applier_) {
+      policy_applier_->DropDeferredBinders();
+    }
+  }
+
   // Disallows copy and move operations.
   BrowserInterfaceBrokerImpl(const BrowserInterfaceBrokerImpl& other) = delete;
   BrowserInterfaceBrokerImpl& operator=(
@@ -53,14 +60,15 @@ class BrowserInterfaceBrokerImpl : public blink::mojom::BrowserInterfaceBroker {
   BrowserInterfaceBrokerImpl& operator=(BrowserInterfaceBrokerImpl&&) = delete;
 
   // blink::mojom::BrowserInterfaceBroker
-  void GetInterface(mojo::GenericPendingReceiver receiver) {
+  void GetInterface(mojo::GenericPendingReceiver receiver) override {
     DCHECK(receiver.interface_name().has_value());
     if (!policy_applier_) {
       BindInterface(std::move(receiver));
     } else {
       std::string interface_name = receiver.interface_name().value();
-      // base::Unretained is safe because `this` owns `policy_applier_`.
-      policy_applier_->ApplyPolicyToBinder(
+      // base::Unretained is safe because `~BrowserInterfaceBrokerImpl()` drops
+      // all deferred binders from `policy_applier_` upon destruction.
+      policy_applier_->ApplyPolicyToNonAssociatedBinder(
           interface_name,
           base::BindOnce(&BrowserInterfaceBrokerImpl::BindInterface,
                          base::Unretained(this), std::move(receiver)));
@@ -68,27 +76,22 @@ class BrowserInterfaceBrokerImpl : public blink::mojom::BrowserInterfaceBroker {
   }
 
   // Sets MojoBinderPolicyApplier to control when to bind interfaces.
-  void ApplyMojoBinderPolicies(
-      std::unique_ptr<MojoBinderPolicyApplier> policy_applier) {
-    DCHECK(blink::features::IsPrerender2Enabled());
+  void ApplyMojoBinderPolicies(MojoBinderPolicyApplier* policy_applier) {
     DCHECK(policy_applier);
     DCHECK(!policy_applier_);
-    policy_applier_ = std::move(policy_applier);
+    policy_applier_ = policy_applier;
   }
 
-  // Resolves requests that were previously deferred and stops applying policies
-  // to binding requests.
+  // Stops applying policies to binding requests.
   void ReleaseMojoBinderPolicies() {
-    DCHECK(blink::features::IsPrerender2Enabled());
     DCHECK(policy_applier_);
-    policy_applier_->GrantAll();
     // Reset `policy_applier_` to disable capability control.
-    policy_applier_.reset();
+    policy_applier_ = nullptr;
   }
 
-  MojoBinderPolicyApplier* GetMojoBinderPolicyApplier() {
-    DCHECK(blink::features::IsPrerender2Enabled());
-    return policy_applier_.get();
+  void GetBinderMapInterfacesForTesting(std::vector<std::string>& out) {
+    binder_map_.GetInterfacesForTesting(out);
+    binder_map_with_context_.GetInterfacesForTesting(out);
   }
 
  private:
@@ -102,10 +105,14 @@ class BrowserInterfaceBrokerImpl : public blink::mojom::BrowserInterfaceBroker {
     }
   }
 
-  ExecutionContextHost* const host_;
+  const raw_ptr<ExecutionContextHost> host_;
   mojo::BinderMap binder_map_;
   mojo::BinderMapWithContext<InterfaceBinderContext> binder_map_with_context_;
-  std::unique_ptr<MojoBinderPolicyApplier> policy_applier_;
+
+  // The lifetime of `policy_applier_` is managed by the owner of this instance,
+  // and `policy_applier_` must outlive this instance unless the owner calls
+  // `ReleaseMojoBinderPolicies()` before destroying the applier.
+  raw_ptr<MojoBinderPolicyApplier> policy_applier_ = nullptr;
 };
 
 }  // namespace content

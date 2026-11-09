@@ -1,16 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <tuple>
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/sequence_token.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
@@ -20,6 +20,11 @@
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
+#include "mojo/public/cpp/bindings/lib/message_fragment.h"
+#include "mojo/public/cpp/bindings/lib/send_message_helper.h"
+#include "mojo/public/cpp/bindings/lib/serialization_util.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -27,10 +32,19 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/shared_associated_remote.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
+#include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
+#include "mojo/public/cpp/bindings/tests/sync_method_unittest.test-mojom-shared-message-ids.h"
 #include "mojo/public/cpp/bindings/tests/sync_method_unittest.test-mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_sync_methods.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_sync_methods.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// This needs to be included last, since it forward declares a bunch of classes
+// but depends on those definitions to be included by headers that sort
+// lexicographically after.
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "mojo/public/cpp/bindings/tests/sync_method_unittest.test-mojom-params-data.h"
 
 namespace mojo {
 namespace test {
@@ -40,6 +54,9 @@ namespace {
 class TestSyncCommonImpl {
  public:
   TestSyncCommonImpl() = default;
+
+  TestSyncCommonImpl(const TestSyncCommonImpl&) = delete;
+  TestSyncCommonImpl& operator=(const TestSyncCommonImpl&) = delete;
 
   using PingHandler = base::RepeatingCallback<void(base::OnceClosure)>;
   template <typename Func>
@@ -110,8 +127,6 @@ class TestSyncCommonImpl {
   AsyncEchoHandler async_echo_handler_;
   SendRemoteHandler send_remote_handler_;
   SendReceiverHandler send_receiver_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSyncCommonImpl);
 };
 
 class TestSyncImpl : public TestSync, public TestSyncCommonImpl {
@@ -119,8 +134,14 @@ class TestSyncImpl : public TestSync, public TestSyncCommonImpl {
   explicit TestSyncImpl(PendingReceiver<TestSync> receiver)
       : receiver_(this, std::move(receiver)) {}
 
+  TestSyncImpl(const TestSyncImpl&) = delete;
+  TestSyncImpl& operator=(const TestSyncImpl&) = delete;
+
   // TestSync implementation:
   void Ping(PingCallback callback) override { PingImpl(std::move(callback)); }
+  void NoInterruptPing(NoInterruptPingCallback callback) override {
+    PingImpl(std::move(callback));
+  }
   void Echo(int32_t value, EchoCallback callback) override {
     EchoImpl(value, std::move(callback));
   }
@@ -132,14 +153,15 @@ class TestSyncImpl : public TestSync, public TestSyncCommonImpl {
 
  private:
   Receiver<TestSync> receiver_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSyncImpl);
 };
 
 class TestSyncPrimaryImpl : public TestSyncPrimary, public TestSyncCommonImpl {
  public:
   explicit TestSyncPrimaryImpl(PendingReceiver<TestSyncPrimary> receiver)
       : receiver_(this, std::move(receiver)) {}
+
+  TestSyncPrimaryImpl(const TestSyncPrimaryImpl&) = delete;
+  TestSyncPrimaryImpl& operator=(const TestSyncPrimaryImpl&) = delete;
 
   // TestSyncPrimary implementation:
   void Ping(PingCallback callback) override { PingImpl(std::move(callback)); }
@@ -160,8 +182,6 @@ class TestSyncPrimaryImpl : public TestSyncPrimary, public TestSyncCommonImpl {
 
  private:
   Receiver<TestSyncPrimary> receiver_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSyncPrimaryImpl);
 };
 
 class TestSyncAssociatedImpl : public TestSync, public TestSyncCommonImpl {
@@ -169,8 +189,14 @@ class TestSyncAssociatedImpl : public TestSync, public TestSyncCommonImpl {
   explicit TestSyncAssociatedImpl(PendingAssociatedReceiver<TestSync> receiver)
       : receiver_(this, std::move(receiver)) {}
 
+  TestSyncAssociatedImpl(const TestSyncAssociatedImpl&) = delete;
+  TestSyncAssociatedImpl& operator=(const TestSyncAssociatedImpl&) = delete;
+
   // TestSync implementation:
   void Ping(PingCallback callback) override { PingImpl(std::move(callback)); }
+  void NoInterruptPing(NoInterruptPingCallback callback) override {
+    PingImpl(std::move(callback));
+  }
   void Echo(int32_t value, EchoCallback callback) override {
     EchoImpl(value, std::move(callback));
   }
@@ -182,8 +208,6 @@ class TestSyncAssociatedImpl : public TestSync, public TestSyncCommonImpl {
 
  private:
   AssociatedReceiver<TestSync> receiver_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSyncAssociatedImpl);
 };
 
 template <typename Interface>
@@ -215,6 +239,9 @@ class RemoteWrapper {
 
   RemoteWrapper(RemoteWrapper&& other) = default;
 
+  RemoteWrapper(const RemoteWrapper&) = delete;
+  RemoteWrapper& operator=(const RemoteWrapper&) = delete;
+
   Interface* operator->() {
     return shared_remote_ ? shared_remote_.get() : remote_.get();
   }
@@ -232,16 +259,12 @@ class RemoteWrapper {
  private:
   Remote<Interface> remote_;
   SharedRemote<Interface> shared_remote_;
-
-  DISALLOW_COPY_AND_ASSIGN(RemoteWrapper);
 };
 
 // The type parameter for SyncMethodCommonTests and
 // SyncMethodOnSequenceCommonTests for varying the Interface and whether to use
 // Remote or SharedRemote.
-template <typename InterfaceT,
-          bool use_shared_remote,
-          BindingsTestSerializationMode serialization_mode>
+template <typename InterfaceT, bool use_shared_remote>
 struct TestParams {
   using Interface = InterfaceT;
   static const bool kIsSharedRemoteTest = use_shared_remote;
@@ -254,9 +277,6 @@ struct TestParams {
       return RemoteWrapper<Interface>(Remote<Interface>(std::move(remote)));
     }
   }
-
-  static const BindingsTestSerializationMode kSerializationMode =
-      serialization_mode;
 };
 
 template <typename Interface>
@@ -266,9 +286,12 @@ class TestSyncServiceSequence {
       : task_runner_(base::ThreadPool::CreateSequencedTaskRunner({})),
         ping_called_(false) {}
 
-  void SetUp(InterfaceRequest<Interface> request) {
+  TestSyncServiceSequence(const TestSyncServiceSequence&) = delete;
+  TestSyncServiceSequence& operator=(const TestSyncServiceSequence&) = delete;
+
+  void SetUp(PendingReceiver<Interface> receiver) {
     CHECK(task_runner()->RunsTasksInCurrentSequence());
-    impl_ = std::make_unique<ImplTypeFor<Interface>>(std::move(request));
+    impl_ = std::make_unique<ImplTypeFor<Interface>>(std::move(receiver));
     impl_->set_ping_handler([this](typename Interface::PingCallback callback) {
       {
         base::AutoLock locker(lock_);
@@ -296,8 +319,6 @@ class TestSyncServiceSequence {
 
   mutable base::Lock lock_;
   bool ping_called_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSyncServiceSequence);
 };
 
 class SyncMethodTest : public testing::Test {
@@ -314,10 +335,6 @@ class SyncMethodCommonTest : public SyncMethodTest {
  public:
   SyncMethodCommonTest() = default;
   ~SyncMethodCommonTest() override = default;
-
-  void SetUp() override {
-    BindingsTestBase::SetupSerializationBehavior(TypeParam::kSerializationMode);
-  }
 };
 
 class SyncMethodAssociatedTest : public SyncMethodTest {
@@ -408,7 +425,7 @@ class SequencedTaskRunnerTestBase {
       std::unique_ptr<SequencedTaskRunnerTestBase> test);
 
   void Init(base::OnceClosure quit_closure) {
-    task_runner_ = base::SequencedTaskRunnerHandle::Get();
+    task_runner_ = base::SequencedTaskRunner::GetCurrentDefault();
     quit_closure_ = std::move(quit_closure);
   }
 
@@ -429,7 +446,6 @@ template <typename TypeParam>
 class SyncMethodOnSequenceCommonTest : public SequencedTaskRunnerTestBase {
  public:
   void SetUp() override {
-    BindingsTestBase::SetupSerializationBehavior(TypeParam::kSerializationMode);
     impl_ = std::make_unique<ImplTypeFor<typename TypeParam::Interface>>(
         remote_.BindNewPipeAndPassReceiver());
   }
@@ -453,41 +469,11 @@ void RunTestOnSequencedTaskRunner(
 // TestSync (without associated interfaces) and TestSyncPrimary (with associated
 // interfaces) exercise MultiplexRouter with different configurations.
 // Each test is run once with a Remote and once with a SharedRemote to ensure
-// that they behave the same with respect to sync calls. Finally, all such
-// combinations are tested in different message serialization modes.
-using InterfaceTypes = testing::Types<
-    TestParams<TestSync,
-               true,
-               BindingsTestSerializationMode::kSerializeBeforeSend>,
-    TestParams<TestSync,
-               false,
-               BindingsTestSerializationMode::kSerializeBeforeSend>,
-    TestParams<TestSyncPrimary,
-               true,
-               BindingsTestSerializationMode::kSerializeBeforeSend>,
-    TestParams<TestSyncPrimary,
-               false,
-               BindingsTestSerializationMode::kSerializeBeforeSend>,
-    TestParams<TestSync,
-               true,
-               BindingsTestSerializationMode::kSerializeBeforeDispatch>,
-    TestParams<TestSync,
-               false,
-               BindingsTestSerializationMode::kSerializeBeforeDispatch>,
-    TestParams<TestSyncPrimary,
-               true,
-               BindingsTestSerializationMode::kSerializeBeforeDispatch>,
-    TestParams<TestSyncPrimary,
-               false,
-               BindingsTestSerializationMode::kSerializeBeforeDispatch>,
-    TestParams<TestSync, true, BindingsTestSerializationMode::kNeverSerialize>,
-    TestParams<TestSync, false, BindingsTestSerializationMode::kNeverSerialize>,
-    TestParams<TestSyncPrimary,
-               true,
-               BindingsTestSerializationMode::kNeverSerialize>,
-    TestParams<TestSyncPrimary,
-               false,
-               BindingsTestSerializationMode::kNeverSerialize>>;
+// that they behave the same with respect to sync calls.
+using InterfaceTypes = testing::Types<TestParams<TestSync, true>,
+                                      TestParams<TestSync, false>,
+                                      TestParams<TestSyncPrimary, true>,
+                                      TestParams<TestSyncPrimary, false>>;
 
 TYPED_TEST_SUITE(SyncMethodCommonTest, InterfaceTypes);
 TYPED_TEST_SUITE(SequencedTaskRunnerTestLauncher, InterfaceTypes);
@@ -509,31 +495,31 @@ TYPED_TEST(SyncMethodCommonTest, CallSyncMethodAsynchronously) {
 #define SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name) \
   fixture_name##name##_SequencedTaskRunnerTestSuffix
 
-#define SEQUENCED_TASK_RUNNER_TYPED_TEST(fixture_name, name)        \
-  template <typename TypeParam>                                     \
-  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)   \
-      : public fixture_name<TypeParam> {                            \
-    void Run() override;                                            \
-  };                                                                \
-  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {               \
-    RunTestOnSequencedTaskRunner(                                   \
-        std::make_unique<SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
-                             fixture_name, name) < TypeParam>> ()); \
-  }                                                                 \
-  template <typename TypeParam>                                     \
-  void SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name,          \
+#define SEQUENCED_TASK_RUNNER_TYPED_TEST(fixture_name, name)                \
+  template <typename TypeParam>                                             \
+  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)           \
+      : public fixture_name<TypeParam> {                                    \
+    void Run() override;                                                    \
+  };                                                                        \
+  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {                       \
+    RunTestOnSequencedTaskRunner(std::make_unique <                         \
+                                 SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
+                                     fixture_name, name) < TypeParam >>()); \
+  }                                                                         \
+  template <typename TypeParam>                                             \
+  void SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name,                  \
                                              name)<TypeParam>::Run()
 
-#define SEQUENCED_TASK_RUNNER_TYPED_TEST_F(fixture_name, name)      \
-  template <typename TypeParam>                                     \
-  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name);  \
-  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {               \
-    RunTestOnSequencedTaskRunner(                                   \
-        std::make_unique<SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
-                             fixture_name, name) < TypeParam>> ()); \
-  }                                                                 \
-  template <typename TypeParam>                                     \
-  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)   \
+#define SEQUENCED_TASK_RUNNER_TYPED_TEST_F(fixture_name, name)              \
+  template <typename TypeParam>                                             \
+  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name);          \
+  TYPED_TEST(SequencedTaskRunnerTestLauncher, name) {                       \
+    RunTestOnSequencedTaskRunner(std::make_unique <                         \
+                                 SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(     \
+                                     fixture_name, name) < TypeParam >>()); \
+  }                                                                         \
+  template <typename TypeParam>                                             \
+  class SEQUENCED_TASK_RUNNER_TYPED_TEST_NAME(fixture_name, name)           \
       : public fixture_name<TypeParam>
 
 SEQUENCED_TASK_RUNNER_TYPED_TEST(SyncMethodOnSequenceCommonTest,
@@ -952,8 +938,9 @@ TYPED_TEST(SyncMethodCommonTest,
 
   // SharedRemote doesn't guarantee that messages are delivered before the
   // disconnect handler, so skip it for this test.
-  if (TypeParam::kIsSharedRemoteTest)
+  if (TypeParam::kIsSharedRemoteTest) {
     return;
+  }
 
   using Interface = typename TypeParam::Interface;
   Remote<Interface> remote;
@@ -1309,14 +1296,16 @@ class PingerImpl : public mojom::Pinger, public mojom::SimplePinger {
   }
 
   void Ping(PingCallback callback) override {
-    if (pong_sender_ && same_pipe_pong_sender_)
+    if (pong_sender_ && same_pipe_pong_sender_) {
       DoPong();
+    }
     std::move(callback).Run();
   }
 
   void PingNoInterrupt(PingNoInterruptCallback callback) override {
-    if (pong_sender_ && same_pipe_pong_sender_)
+    if (pong_sender_ && same_pipe_pong_sender_) {
       DoPong();
+    }
     std::move(callback).Run();
   }
 
@@ -1336,8 +1325,8 @@ class PingerImpl : public mojom::Pinger, public mojom::SimplePinger {
         base::BarrierClosure(3, wait_to_reply.QuitClosure());
     pong_sender_.AsyncCall(&PongSender::SendPong).WithArgs(barrier);
     same_pipe_pong_sender_.AsyncCall(&PongSender::SendPong).WithArgs(barrier);
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, barrier, base::TimeDelta::FromMilliseconds(10));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, barrier, base::Milliseconds(10));
     wait_to_reply.Run();
   }
 
@@ -1389,41 +1378,84 @@ class PongerImpl : public mojom::Ponger {
 
 class SyncInterruptTest : public BindingsTestBase {
  public:
-  SyncInterruptTest() {
+  SyncInterruptTest() = default;
+
+  ~SyncInterruptTest() override = default;
+
+  void SetUp() override {
+    receiver_thread_ = std::make_unique<base::Thread>("Pinger Receiver Thread");
+    shared_pinger_thread_ = std::make_unique<base::Thread>("Shared Pinger IO");
+
     PendingRemote<mojom::Pinger> shared_remote;
     // Note that we cannot test [NoInterrupt] properly if the caller and
     // receiver live on the same thread, because the caller's own message is
     // unable to wake up the receiver during a [NoInterrupt] wait. Hence we run
     // the Pinger implementation on a background thread.
-    receiver_thread_.Start();
-    receiver_thread_.task_runner()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](PendingReceiver<mojom::Pinger> receiver,
-                          PendingReceiver<mojom::SimplePinger> simple_receiver,
-                          PendingReceiver<mojom::Pinger> shared_receiver) {
-                         MakeSelfOwnedReceiver(std::make_unique<PingerImpl>(),
-                                               std::move(receiver));
-                         MakeSelfOwnedReceiver(std::make_unique<PingerImpl>(),
-                                               std::move(simple_receiver));
-                         MakeSelfOwnedReceiver(std::make_unique<PingerImpl>(),
-                                               std::move(shared_receiver));
-                       },
-                       pinger_.BindNewPipeAndPassReceiver(),
-                       simple_pinger_.BindNewPipeAndPassReceiver(),
-                       shared_remote.InitWithNewPipeAndPassReceiver()));
+    receiver_thread_->Start();
+    receiver_thread_->task_runner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](PendingReceiver<mojom::Pinger> receiver,
+               PendingReceiver<mojom::SimplePinger> simple_receiver,
+               PendingReceiver<mojom::Pinger> shared_receiver,
+               base::OnceClosure receiver_quit_closure,
+               base::OnceClosure simple_receiver_quit_closure,
+               base::OnceClosure shared_receiver_quit_closure) {
+              auto self_owned_receiver = MakeSelfOwnedReceiver(
+                  std::make_unique<PingerImpl>(), std::move(receiver));
+              self_owned_receiver->set_connection_error_handler(
+                  std::move(receiver_quit_closure));
+              auto self_owned_simple_receiver = MakeSelfOwnedReceiver(
+                  std::make_unique<PingerImpl>(), std::move(simple_receiver));
+              self_owned_simple_receiver->set_connection_error_handler(
+                  std::move(simple_receiver_quit_closure));
+              auto self_owned_shared_receiver = MakeSelfOwnedReceiver(
+                  std::make_unique<PingerImpl>(), std::move(shared_receiver));
+              self_owned_shared_receiver->set_connection_error_handler(
+                  std::move(shared_receiver_quit_closure));
+            },
+            pinger_.BindNewPipeAndPassReceiver(),
+            simple_pinger_.BindNewPipeAndPassReceiver(),
+            shared_remote.InitWithNewPipeAndPassReceiver(),
+            receiver_quit_loop_.QuitClosure(),
+            simple_receiver_quit_loop_.QuitClosure(),
+            shared_receiver_quit_loop_.QuitClosure()));
 
-    shared_pinger_thread_.Start();
+    shared_pinger_thread_->Start();
     shared_pinger_ = SharedRemote<mojom::Pinger>(
-        std::move(shared_remote), shared_pinger_thread_.task_runner());
+        std::move(shared_remote), shared_pinger_thread_->task_runner());
 
     PendingAssociatedRemote<mojom::Pinger> associated_remote;
     CHECK(shared_pinger_->BindAssociated(
         associated_remote.InitWithNewEndpointAndPassReceiver()));
     shared_associated_pinger_ = SharedAssociatedRemote<mojom::Pinger>(
-        std::move(associated_remote), shared_pinger_thread_.task_runner());
+        std::move(associated_remote), shared_pinger_thread_->task_runner());
+    BindingsTestBase::SetUp();
   }
 
-  ~SyncInterruptTest() override = default;
+  // This tear down ensures deterministic clean-up by resetting the remotes
+  // and then waiting for the RunLoops to ensure the receivers are destroyed
+  // before ending the test.
+  void TearDown() override {
+    // Reset the remotes first to disconnect from self-owned receivers.
+    pinger_.reset();
+    simple_pinger_.reset();
+    shared_pinger_.reset();
+    shared_associated_pinger_.reset();
+
+    // Wait for the receivers to be destroyed on the receiver thread.
+    shared_receiver_quit_loop_.Run();
+    simple_receiver_quit_loop_.Run();
+    receiver_quit_loop_.Run();
+
+    // Close the threads.
+    receiver_thread_->Stop();
+    shared_pinger_thread_->Stop();
+    receiver_thread_.reset();
+    shared_pinger_thread_.reset();
+
+    BindingsTestBase::TearDown();
+  }
 
   mojom::Pinger& pinger() { return *pinger_.get(); }
   mojom::SimplePinger& simple_pinger() { return *simple_pinger_.get(); }
@@ -1448,17 +1480,21 @@ class SyncInterruptTest : public BindingsTestBase {
   }
 
  private:
-  base::Thread receiver_thread_{"Pinger Receiver Thread"};
-  base::Thread shared_pinger_thread_{"Shared Pinger IO"};
+  std::unique_ptr<base::Thread> receiver_thread_;
+  std::unique_ptr<base::Thread> shared_pinger_thread_;
   Remote<mojom::Pinger> pinger_;
   Remote<mojom::SimplePinger> simple_pinger_;
   SharedRemote<mojom::Pinger> shared_pinger_;
   SharedAssociatedRemote<mojom::Pinger> shared_associated_pinger_;
   PongerImpl ponger_;
   PongerImpl same_pipe_ponger_;
+
+  base::RunLoop receiver_quit_loop_;
+  base::RunLoop simple_receiver_quit_loop_;
+  base::RunLoop shared_receiver_quit_loop_;
 };
 
-TEST_P(SyncInterruptTest, AsyncCannotInterruptSync) {
+TEST_F(SyncInterruptTest, AsyncCannotInterruptSync) {
   // Verifies that async messages will not dispatch on a thread while that
   // thread is waiting for any sync reply.
   InitPonger(mojom::PongSendMode::kAsync);
@@ -1470,7 +1506,7 @@ TEST_P(SyncInterruptTest, AsyncCannotInterruptSync) {
   EXPECT_EQ(0, same_pipe_ponger().num_sync_pongs());
 }
 
-TEST_P(SyncInterruptTest, SyncCanInterruptSync) {
+TEST_F(SyncInterruptTest, SyncCanInterruptSync) {
   // Verifies that incoming sync messages can normally interrupt a sync wait on
   // the same thread, even when received on a different pipe.
   InitPonger(mojom::PongSendMode::kSyncBlockReply);
@@ -1482,7 +1518,7 @@ TEST_P(SyncInterruptTest, SyncCanInterruptSync) {
   EXPECT_EQ(1, same_pipe_ponger().num_sync_pongs());
 }
 
-TEST_P(SyncInterruptTest, NothingCanInterruptSyncNoInterrupt) {
+TEST_F(SyncInterruptTest, NothingCanInterruptSyncNoInterrupt) {
   // Verifies that no incoming messages can interrupt a [NoInterrupt] sync wait
   // except for the exact reply we're waiting on.
 
@@ -1528,7 +1564,7 @@ TEST_P(SyncInterruptTest, NothingCanInterruptSyncNoInterrupt) {
   EXPECT_TRUE(got_first_async_reply);
 }
 
-TEST_P(SyncInterruptTest, SharedRemoteNoInterrupt) {
+TEST_F(SyncInterruptTest, SharedRemoteNoInterrupt) {
   // Verifies that [NoInterrupt] behavior also works as expected when doing a
   // sync call through a SharedRemote. A key difference between this case and
   // Remote case is that with a SharedRemote caller, the only possible
@@ -1545,7 +1581,7 @@ TEST_P(SyncInterruptTest, SharedRemoteNoInterrupt) {
   EXPECT_EQ(0, same_pipe_ponger().num_sync_pongs());
 }
 
-TEST_P(SyncInterruptTest, SharedAssociatedRemoteNoInterrupt) {
+TEST_F(SyncInterruptTest, SharedAssociatedRemoteNoInterrupt) {
   // Verifies that [NoInterrupt] behavior also works as expected when doing a
   // sync call through a SharedAssociatedRemote. Expectations are identical to
   // the SharedRemote case in the test above.
@@ -1559,7 +1595,378 @@ TEST_P(SyncInterruptTest, SharedAssociatedRemoteNoInterrupt) {
   EXPECT_EQ(0, same_pipe_ponger().num_sync_pongs());
 }
 
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(SyncInterruptTest);
+class SyncService : public mojom::SyncService {
+ public:
+  explicit SyncService(PendingReceiver<mojom::SyncService> receiver)
+      : receiver_(this, std::move(receiver)) {}
+
+  void SetCallHandler(base::OnceClosure call_handler) {
+    call_handler_ = std::move(call_handler);
+  }
+
+  // mojom::SyncService:
+  void SyncCall(SyncCallCallback callback) override {
+    std::move(callback).Run();
+    if (call_handler_) {
+      std::move(call_handler_).Run();
+    }
+  }
+
+ private:
+  Receiver<mojom::SyncService> receiver_;
+  base::OnceClosure call_handler_;
+};
+
+class DisableSyncInterruptTest : public BindingsTestBase {
+ public:
+  void SetUp() override {
+    mojo::SyncCallRestrictions::DisableSyncCallInterrupts();
+  }
+
+  void TearDown() override {
+    mojo::SyncCallRestrictions::EnableSyncCallInterruptsForTesting();
+  }
+};
+
+TEST_F(DisableSyncInterruptTest, NoInterruptWhenDisabled) {
+  PendingRemote<mojom::SyncService> interrupter;
+  SyncService service(interrupter.InitWithNewPipeAndPassReceiver());
+
+  base::RunLoop wait_for_main_thread_service_call;
+  bool main_thread_service_called = false;
+  service.SetCallHandler(base::BindLambdaForTesting([&] {
+    main_thread_service_called = true;
+    wait_for_main_thread_service_call.Quit();
+  }));
+
+  Remote<mojom::SyncService> caller;
+  base::Thread background_service_thread("SyncService");
+  background_service_thread.Start();
+  base::SequenceBound<SyncService> background_service{
+      background_service_thread.task_runner(),
+      caller.BindNewPipeAndPassReceiver()};
+
+  base::Thread interrupter_thread("Interrupter");
+  interrupter_thread.Start();
+  interrupter_thread.task_runner()->PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&interrupter] {
+        // Issue a sync call to the SyncService on the main thread. This should
+        // never be dispatched until *after* the sync call *from* the main
+        // thread completes below.
+        Remote<mojom::SyncService>(std::move(interrupter))->SyncCall();
+      }));
+
+  // The key test expectation here is that `main_thread_service_called` cannot
+  // be set to true until after SyncCall() returns and we can pump the thread's
+  // message loop. If sync interrupts are not properly disabled, this
+  // expectation can fail flakily (and often.)
+  caller->SyncCall();
+  EXPECT_FALSE(main_thread_service_called);
+
+  // Now the incoming sync call can be dispatched.
+  wait_for_main_thread_service_call.Run();
+  EXPECT_TRUE(main_thread_service_called);
+
+  background_service.SynchronouslyResetForTest();
+  interrupter_thread.Stop();
+  background_service_thread.Stop();
+}
+
+TEST_F(DisableSyncInterruptTest, SharedRemoteNoInterruptWhenDisabled) {
+  PendingRemote<mojom::SyncService> interrupter;
+  SyncService service(interrupter.InitWithNewPipeAndPassReceiver());
+
+  base::RunLoop wait_for_main_thread_service_call;
+  bool main_thread_service_called = false;
+  service.SetCallHandler(base::BindLambdaForTesting([&] {
+    main_thread_service_called = true;
+    wait_for_main_thread_service_call.Quit();
+  }));
+
+  // Bind a SharedRemote to another background thread so that we exercise
+  // SharedRemote's own sync wait codepath when called into from the main
+  // thread.
+  base::Thread background_client_thread("Client");
+  background_client_thread.Start();
+
+  base::Thread background_service_thread("Service");
+  background_service_thread.Start();
+
+  SharedRemote<mojom::SyncService> caller;
+  base::SequenceBound<SyncService> background_service{
+      background_service_thread.task_runner(),
+      caller.BindNewPipeAndPassReceiver(
+          background_client_thread.task_runner())};
+
+  base::Thread interrupter_thread("Interrupter");
+  interrupter_thread.Start();
+  interrupter_thread.task_runner()->PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&interrupter] {
+        // Issue a sync call to the SyncService on the main thread. This should
+        // never be dispatched until *after* the sync call *from* the main
+        // thread completes below.
+        Remote<mojom::SyncService>(std::move(interrupter))->SyncCall();
+      }));
+
+  // The key test expectation here is that `main_thread_service_called` cannot
+  // be set to true until after SyncCall() returns and we can pump the thread's
+  // message loop. If sync interrupts are not properly disabled, this
+  // expectation can fail flakily (and often.)
+  caller->SyncCall();
+  EXPECT_FALSE(main_thread_service_called);
+
+  // Now the incoming sync call can be dispatched.
+  wait_for_main_thread_service_call.Run();
+  EXPECT_TRUE(main_thread_service_called);
+
+  background_service.SynchronouslyResetForTest();
+
+  // We need to reset the SharedRemote before the client thread is stopped, to
+  // ensure the necessary teardown work is executed on that thread. Otherwise
+  // the underlying pipe and related state will leak, and ASan will complain.
+  caller.reset();
+
+  interrupter_thread.Stop();
+  background_service_thread.Stop();
+  background_client_thread.Stop();
+}
+
+class OneSyncImpl;
+
+class NoSyncImpl : public mojom::NoSync {
+ public:
+  explicit NoSyncImpl(PendingReceiver<mojom::NoSync> receiver);
+
+  explicit NoSyncImpl(
+      PendingAssociatedReceiver<mojom::NoSync> associated_receiver);
+
+  // mojom::NoSync implementation:
+  void Method(MethodCallback callback) override;
+  void BindNoSync(PendingAssociatedReceiver<mojom::NoSync> receiver) override;
+  void BindOneSync(PendingAssociatedReceiver<mojom::OneSync> receiver) override;
+
+ private:
+  Receiver<mojom::NoSync> receiver_{this};
+  AssociatedReceiver<mojom::NoSync> associated_receiver_{this};
+
+  std::unique_ptr<NoSyncImpl> associated_no_sync_;
+  std::unique_ptr<OneSyncImpl> associated_one_sync_;
+};
+
+class OneSyncImpl : public mojom::OneSync {
+ public:
+  explicit OneSyncImpl(PendingReceiver<mojom::OneSync> receiver)
+      : receiver_(this, std::move(receiver)) {}
+
+  explicit OneSyncImpl(
+      PendingAssociatedReceiver<mojom::OneSync> associated_receiver)
+      : associated_receiver_(this, std::move(associated_receiver)) {}
+
+  // mojom::OneSync implementation:
+  void Method(MethodCallback callback) override;
+  void SyncMethod(SyncMethodCallback callback) override;
+  void BindNoSync(PendingAssociatedReceiver<mojom::NoSync> receiver) override;
+  void BindOneSync(PendingAssociatedReceiver<mojom::OneSync> receiver) override;
+
+ private:
+  Receiver<mojom::OneSync> receiver_{this};
+  AssociatedReceiver<mojom::OneSync> associated_receiver_{this};
+
+  std::unique_ptr<NoSyncImpl> associated_no_sync_;
+  std::unique_ptr<OneSyncImpl> associated_one_sync_;
+};
+
+NoSyncImpl::NoSyncImpl(PendingReceiver<mojom::NoSync> receiver)
+    : receiver_(this, std::move(receiver)) {}
+
+NoSyncImpl::NoSyncImpl(
+    PendingAssociatedReceiver<mojom::NoSync> associated_receiver)
+    : associated_receiver_(this, std::move(associated_receiver)) {}
+
+void NoSyncImpl::Method(MethodCallback callback) {
+  EXPECT_TRUE(false);
+  std::move(callback).Run();
+}
+
+void NoSyncImpl::BindNoSync(PendingAssociatedReceiver<mojom::NoSync> receiver) {
+  associated_no_sync_ = std::make_unique<NoSyncImpl>(std::move(receiver));
+}
+
+void NoSyncImpl::BindOneSync(
+    PendingAssociatedReceiver<mojom::OneSync> receiver) {
+  associated_one_sync_ = std::make_unique<OneSyncImpl>(std::move(receiver));
+}
+
+void OneSyncImpl::Method(MethodCallback callback) {
+  EXPECT_TRUE(false);
+  std::move(callback).Run();
+}
+
+void OneSyncImpl::SyncMethod(MethodCallback callback) {
+  std::move(callback).Run();
+}
+
+void OneSyncImpl::BindNoSync(
+    PendingAssociatedReceiver<mojom::NoSync> receiver) {
+  associated_no_sync_ = std::make_unique<NoSyncImpl>(std::move(receiver));
+}
+
+void OneSyncImpl::BindOneSync(
+    PendingAssociatedReceiver<mojom::OneSync> receiver) {
+  associated_one_sync_ = std::make_unique<OneSyncImpl>(std::move(receiver));
+}
+
+class NoResponseExpectedResponder : public MessageReceiver {
+ public:
+  explicit NoResponseExpectedResponder() = default;
+
+  // MessageReceiver implementation:
+  bool Accept(Message* message) override {
+    EXPECT_TRUE(false);
+    return true;
+  }
+};
+
+class SyncFlagValidationTest : public ::testing::TestWithParam<uint32_t> {
+ protected:
+  Message MakeNoSyncMethodMessage() {
+    const uint32_t flags =
+        // Always set the sync flag, as that's the primary point of the test.
+        Message::kFlagIsSync |
+        // InterfaceEndpointClient requires this flag if sending a message with
+        // a responder.
+        Message::kFlagExpectsResponse | GetParam();
+    Message message(std::to_underlying(mojom::messages::NoSync::kMethod), flags,
+                    0, 0, nullptr);
+    ::mojo::internal::MessageFragment<
+        mojom::internal::NoSync_Method_Params_Data>
+        params(message);
+    params.Allocate();
+    return message;
+  }
+
+  Message MakeOneSyncMethodMessage() {
+    const uint32_t flags =
+        // Always set the sync flag, as that's the primary point of the test.
+        Message::kFlagIsSync |
+        // InterfaceEndpointClient requires this flag if sending a message with
+        // a responder.
+        Message::kFlagExpectsResponse | GetParam();
+    Message message(std::to_underlying(mojom::messages::OneSync::kMethod),
+                    flags, 0, 0, nullptr);
+    ::mojo::internal::MessageFragment<
+        mojom::internal::NoSync_Method_Params_Data>
+        params(message);
+    params.Allocate();
+    return message;
+  }
+
+  void FlushPostedTasks() {
+    base::RunLoop run_loop;
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+ private:
+  base::test::SingleThreadTaskEnvironment task_environment;
+};
+
+TEST_P(SyncFlagValidationTest, NonSync) {
+  Remote<mojom::NoSync> remote;
+  NoSyncImpl impl(remote.BindNewPipeAndPassReceiver());
+
+  Message message = MakeNoSyncMethodMessage();
+  auto responder = std::make_unique<NoResponseExpectedResponder>();
+  ASSERT_TRUE(remote.internal_state()->endpoint_client_for_test());
+  ::mojo::internal::SendMojoMessage(
+      *remote.internal_state()->endpoint_client_for_test(), message,
+      std::move(responder));
+}
+
+TEST_P(SyncFlagValidationTest, OneSync) {
+  Remote<mojom::OneSync> remote;
+  OneSyncImpl impl(remote.BindNewPipeAndPassReceiver());
+
+  Message message = MakeOneSyncMethodMessage();
+  auto responder = std::make_unique<NoResponseExpectedResponder>();
+  ASSERT_TRUE(remote.internal_state()->endpoint_client_for_test());
+  ::mojo::internal::SendMojoMessage(
+      *remote.internal_state()->endpoint_client_for_test(), message,
+      std::move(responder));
+}
+
+TEST_P(SyncFlagValidationTest, NoSyncAssociatedWithNoSync) {
+  Remote<mojom::NoSync> remote;
+  NoSyncImpl impl(remote.BindNewPipeAndPassReceiver());
+
+  AssociatedRemote<mojom::NoSync> associated_remote;
+  remote->BindNoSync(associated_remote.BindNewEndpointAndPassReceiver());
+
+  FlushPostedTasks();
+
+  Message message = MakeNoSyncMethodMessage();
+  auto responder = std::make_unique<NoResponseExpectedResponder>();
+  ASSERT_TRUE(remote.internal_state()->endpoint_client_for_test());
+  ::mojo::internal::SendMojoMessage(
+      *associated_remote.internal_state()->endpoint_client_for_test(), message,
+      std::move(responder));
+}
+
+TEST_P(SyncFlagValidationTest, OneSyncAssociatedWithNoSync) {
+  Remote<mojom::NoSync> remote;
+  NoSyncImpl impl(remote.BindNewPipeAndPassReceiver());
+
+  AssociatedRemote<mojom::OneSync> associated_remote;
+  remote->BindOneSync(associated_remote.BindNewEndpointAndPassReceiver());
+
+  FlushPostedTasks();
+
+  Message message = MakeOneSyncMethodMessage();
+  auto responder = std::make_unique<NoResponseExpectedResponder>();
+  ASSERT_TRUE(remote.internal_state()->endpoint_client_for_test());
+  ::mojo::internal::SendMojoMessage(
+      *associated_remote.internal_state()->endpoint_client_for_test(), message,
+      std::move(responder));
+}
+
+TEST_P(SyncFlagValidationTest, NoSyncAssociatedWithOneSync) {
+  Remote<mojom::OneSync> remote;
+  OneSyncImpl impl(remote.BindNewPipeAndPassReceiver());
+
+  AssociatedRemote<mojom::NoSync> associated_remote;
+  remote->BindNoSync(associated_remote.BindNewEndpointAndPassReceiver());
+
+  FlushPostedTasks();
+
+  Message message = MakeNoSyncMethodMessage();
+  auto responder = std::make_unique<NoResponseExpectedResponder>();
+  ASSERT_TRUE(remote.internal_state()->endpoint_client_for_test());
+  ::mojo::internal::SendMojoMessage(
+      *associated_remote.internal_state()->endpoint_client_for_test(), message,
+      std::move(responder));
+}
+
+TEST_P(SyncFlagValidationTest, OneSyncAssociatedWithOneSync) {
+  Remote<mojom::OneSync> remote;
+  OneSyncImpl impl(remote.BindNewPipeAndPassReceiver());
+
+  AssociatedRemote<mojom::OneSync> associated_remote;
+  remote->BindOneSync(associated_remote.BindNewEndpointAndPassReceiver());
+
+  FlushPostedTasks();
+
+  Message message = MakeOneSyncMethodMessage();
+  auto responder = std::make_unique<NoResponseExpectedResponder>();
+  ASSERT_TRUE(remote.internal_state()->endpoint_client_for_test());
+  ::mojo::internal::SendMojoMessage(
+      *associated_remote.internal_state()->endpoint_client_for_test(), message,
+      std::move(responder));
+}
+
+INSTANTIATE_TEST_SUITE_P(,
+                         SyncFlagValidationTest,
+                         ::testing::Values(0, Message::kFlagIsResponse));
 
 }  // namespace
 }  // namespace sync_method_unittest

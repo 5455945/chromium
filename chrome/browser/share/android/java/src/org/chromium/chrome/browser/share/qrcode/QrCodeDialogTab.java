@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,33 @@ package org.chromium.chrome.browser.share.qrcode;
 
 import android.view.View;
 
-/**
- * Common interface for all the tab components in QrCodeDialog.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.ui.base.WindowAndroid;
+
+/** Common interface for all the tab components in QrCodeDialog. */
+@NullMarked
 public interface QrCodeDialogTab {
-    public View getView();
+    View getView();
 
     /**
-     *  Called when the entire dialog is resumed.
+     * @return whether the tab is currently enabled.
      */
-    public void onResume();
+    default boolean isEnabled() {
+        return true;
+    }
+
+    /** Called when the entire dialog is resumed. */
+    void onResume();
+
+    /** Called when the entire dialog is paused. */
+    void onPause();
 
     /**
-     *  Called when the entire dialog is paused.
+     * Called when the dialog is destroyed. This happens when the user has navigated away from the
+     * dialog.
      */
-    public void onPause();
+    void onDestroy();
 
-    /**
-     *  Called when the dialog is destroyed. This happens when the user has navigated away from the
-     *  dialog.
-     */
-    public void onDestroy();
+    /** Called when the permissions delegate is reset. */
+    void updatePermissions(WindowAndroid windowAndroid);
 }

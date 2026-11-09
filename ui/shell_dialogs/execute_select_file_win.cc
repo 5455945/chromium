@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,33 +7,66 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 
-#include "base/callback.h"
+#include <memory>
+#include <optional>
+
+#include "base/check.h"
+#include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
+#include "base/threading/hang_watcher.h"
 #include "base/win/com_init_util.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/shortcut.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/shell_dialogs/auto_close_dialog_event_handler_win.h"
 #include "ui/shell_dialogs/base_shell_dialog_win.h"
+#include "ui/shell_dialogs/safe_accept_file_dialog_event_handler_win.h"
+#include "ui/shell_dialogs/select_file_utils_win.h"
 #include "ui/strings/grit/ui_strings.h"
 
 namespace ui {
 
 namespace {
 
+// Stop switch for the AutoCloseDialogEventHandler.
+BASE_FEATURE(kAutoCloseFileDialogs, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Stop switch for the `SafeAcceptFileDialogEventHandler`.
+BASE_FEATURE(kSafeAcceptFileDialogs, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// RAII wrapper around a single `IFileDialogEvents` registration.
+class ScopedFileDialogEvents {
+ public:
+  ScopedFileDialogEvents(IFileDialog* file_dialog, IFileDialogEvents* handler)
+      : file_dialog_(file_dialog) {
+    CHECK(file_dialog_);
+    CHECK(handler);
+    file_dialog_->Advise(handler, &cookie_);
+  }
+
+  ~ScopedFileDialogEvents() {
+    if (cookie_) {
+      file_dialog_->Unadvise(cookie_);
+    }
+  }
+
+  ScopedFileDialogEvents(const ScopedFileDialogEvents&) = delete;
+  ScopedFileDialogEvents& operator=(const ScopedFileDialogEvents&) = delete;
+
+ private:
+  Microsoft::WRL::ComPtr<IFileDialog> file_dialog_;
+  DWORD cookie_ = 0;
+};
+
 // Distinguish directories from regular files.
 bool IsDirectory(const base::FilePath& path) {
   base::File::Info file_info;
   return base::GetFileInfo(path, &file_info) ? file_info.is_directory
                                              : path.EndsWithSeparator();
-}
-
-// Given |extension|, if it's not empty, then remove the leading dot.
-std::wstring GetExtensionWithoutLeadingDot(const std::wstring& extension) {
-  DCHECK(extension.empty() || extension[0] == L'.');
-  return extension.empty() ? extension : extension.substr(1);
 }
 
 // Sets which path is going to be open when the dialog will be shown. If
@@ -50,7 +83,9 @@ bool SetDefaultPath(IFileDialog* file_dialog,
     default_folder = default_path;
   } else {
     default_folder = default_path.DirName();
-    default_file_name = default_path.BaseName();
+    std::wstring sanitized = RemoveEnvVarFromFileName<wchar_t>(
+        default_path.BaseName().value(), std::wstring(L"%"));
+    default_file_name = base::FilePath(sanitized);
   }
 
   // Do not fail the file dialog operation if the specified folder is invalid.
@@ -155,8 +190,32 @@ bool RunSaveFileDialog(HWND owner,
 
   file_save_dialog->SetDefaultExtension(def_ext.c_str());
 
+  // Set up event handlers for the dialog.
+  std::optional<ScopedFileDialogEvents> auto_close_event;
+  if (owner && base::FeatureList::IsEnabled(kAutoCloseFileDialogs)) {
+    auto_close_event.emplace(
+        file_save_dialog.Get(),
+        Microsoft::WRL::Make<AutoCloseDialogEventHandler>(owner).Get());
+  }
+
+  std::optional<ScopedFileDialogEvents> safe_accept_event;
+  if (base::FeatureList::IsEnabled(kSafeAcceptFileDialogs)) {
+    safe_accept_event.emplace(
+        file_save_dialog.Get(),
+        Microsoft::WRL::Make<SafeAcceptFileDialogEventHandler>().Get());
+  }
+
+  // Never consider the current scope as hung. The hang watching deadline (if
+  // any) is not valid since the user can take unbounded time to choose the
+  // file.
+  base::HangWatcher::InvalidateActiveExpectations();
+
   HRESULT hr = file_save_dialog->Show(owner);
   BaseShellDialogImpl::DisableOwner(owner);
+
+  // Remove the event handlers regardless of the return value of `Show()`.
+  auto_close_event.reset();
+  safe_accept_event.reset();
   if (FAILED(hr))
     return false;
 
@@ -208,8 +267,33 @@ bool RunOpenFileDialog(HWND owner,
     return false;
   }
 
+  // Set up event handlers for the dialog.
+  std::optional<ScopedFileDialogEvents> auto_close_event;
+  if (owner && base::FeatureList::IsEnabled(kAutoCloseFileDialogs)) {
+    auto_close_event.emplace(
+        file_open_dialog.Get(),
+        Microsoft::WRL::Make<AutoCloseDialogEventHandler>(owner).Get());
+  }
+
+  std::optional<ScopedFileDialogEvents> safe_accept_event;
+  if (base::FeatureList::IsEnabled(kSafeAcceptFileDialogs)) {
+    safe_accept_event.emplace(
+        file_open_dialog.Get(),
+        Microsoft::WRL::Make<SafeAcceptFileDialogEventHandler>().Get());
+  }
+
+  // Never consider the current scope as hung. The hang watching deadline (if
+  // any) is not valid since the user can take unbounded time to choose the
+  // file.
+  base::HangWatcher::InvalidateActiveExpectations();
+
   HRESULT hr = file_open_dialog->Show(owner);
   BaseShellDialogImpl::DisableOwner(owner);
+
+  // Remove the event handlers regardless of the return value of `Show()`.
+  auto_close_event.reset();
+  safe_accept_event.reset();
+
   if (FAILED(hr))
     return false;
 
@@ -227,7 +311,8 @@ bool RunOpenFileDialog(HWND owner,
   if (FAILED(selected_items->GetCount(&result_count)))
     return false;
 
-  DCHECK(result_count == 1 || (dialog_options & FOS_ALLOWMULTISELECT));
+  CHECK(result_count == 1 || (dialog_options & FOS_ALLOWMULTISELECT),
+        base::NotFatalUntil::M163);
 
   std::vector<base::FilePath> result(result_count);
   for (DWORD i = 0; i < result_count; ++i) {
@@ -236,8 +321,7 @@ bool RunOpenFileDialog(HWND owner,
       return false;
 
     base::win::ScopedCoMem<wchar_t> display_name;
-    if (FAILED(shell_item->GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING,
-                                          &display_name))) {
+    if (FAILED(shell_item->GetDisplayName(SIGDN_FILESYSPATH, &display_name))) {
       return false;
     }
 
@@ -258,7 +342,7 @@ bool ExecuteSelectFolder(HWND owner,
                          const std::u16string& title,
                          const base::FilePath& default_path,
                          std::vector<base::FilePath>* paths) {
-  DCHECK(paths);
+  CHECK(paths, base::NotFatalUntil::M163);
 
   std::u16string new_title = title;
   if (new_title.empty() && type == SelectFileDialog::SELECT_UPLOAD_FOLDER) {
@@ -289,10 +373,8 @@ bool ExecuteSelectSingleFile(HWND owner,
                              const std::vector<FileFilterSpec>& filter,
                              int* filter_index,
                              std::vector<base::FilePath>* paths) {
-  // Note: The title is not passed down for historical reasons.
-  // TODO(pmonette): Figure out if it's a worthwhile improvement.
-  return RunOpenFileDialog(owner, std::u16string(), std::u16string(),
-                           default_path, filter, 0, filter_index, paths);
+  return RunOpenFileDialog(owner, title, std::u16string(), default_path, filter,
+                           0, filter_index, paths);
 }
 
 bool ExecuteSelectMultipleFile(HWND owner,
@@ -302,74 +384,31 @@ bool ExecuteSelectMultipleFile(HWND owner,
                                int* filter_index,
                                std::vector<base::FilePath>* paths) {
   DWORD dialog_options = FOS_ALLOWMULTISELECT;
-
-  // Note: The title is not passed down for historical reasons.
-  // TODO(pmonette): Figure out if it's a worthwhile improvement.
-  return RunOpenFileDialog(owner, std::u16string(), std::u16string(),
-                           default_path, filter, dialog_options, filter_index,
-                           paths);
+  return RunOpenFileDialog(owner, title, std::u16string(), default_path, filter,
+                           dialog_options, filter_index, paths);
 }
 
 bool ExecuteSaveFile(HWND owner,
+                     const std::u16string& title,
                      const base::FilePath& default_path,
                      const std::vector<FileFilterSpec>& filter,
                      const std::wstring& def_ext,
                      int* filter_index,
                      base::FilePath* path) {
-  DCHECK(path);
+  CHECK(path, base::NotFatalUntil::M163);
   // Having an empty filter for a bad user experience. We should always
   // specify a filter when saving.
+  // TODO(crbug.com/580851702): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!filter.empty());
 
   DWORD dialog_options = FOS_OVERWRITEPROMPT;
 
-  // Note: The title is not passed down for historical reasons.
-  // TODO(pmonette): Figure out if it's a worthwhile improvement.
-  return RunSaveFileDialog(owner, std::u16string(), default_path, filter,
-                           dialog_options, def_ext, filter_index, path);
+  return RunSaveFileDialog(owner, title, default_path, filter, dialog_options,
+                           def_ext, filter_index, path);
 }
 
 }  // namespace
-
-// This function takes the output of a SaveAs dialog: a filename, a filter and
-// the extension originally suggested to the user (shown in the dialog box) and
-// returns back the filename with the appropriate extension appended. If the
-// user requests an unknown extension and is not using the 'All files' filter,
-// the suggested extension will be appended, otherwise we will leave the
-// filename unmodified. |filename| should contain the filename selected in the
-// SaveAs dialog box and may include the path, |filter_selected| should be
-// '*.something', for example '*.*' or it can be blank (which is treated as
-// *.*). |suggested_ext| should contain the extension without the dot (.) in
-// front, for example 'jpg'.
-std::wstring AppendExtensionIfNeeded(const std::wstring& filename,
-                                     const std::wstring& filter_selected,
-                                     const std::wstring& suggested_ext) {
-  DCHECK(!filename.empty());
-  std::wstring return_value = filename;
-
-  // If we wanted a specific extension, but the user's filename deleted it or
-  // changed it to something that the system doesn't understand, re-append.
-  // Careful: Checking net::GetMimeTypeFromExtension() will only find
-  // extensions with a known MIME type, which many "known" extensions on Windows
-  // don't have.  So we check directly for the "known extension" registry key.
-  std::wstring file_extension(
-      GetExtensionWithoutLeadingDot(base::FilePath(filename).Extension()));
-  std::wstring key(L"." + file_extension);
-  if (!(filter_selected.empty() || filter_selected == L"*.*") &&
-      !base::win::RegKey(HKEY_CLASSES_ROOT, key.c_str(), KEY_READ).Valid() &&
-      file_extension != suggested_ext) {
-    if (return_value.back() != L'.')
-      return_value.append(L".");
-    return_value.append(suggested_ext);
-  }
-
-  // Strip any trailing dots, which Windows doesn't allow.
-  size_t index = return_value.find_last_not_of(L'.');
-  if (index < return_value.size() - 1)
-    return_value.resize(index + 1);
-
-  return return_value;
-}
 
 void ExecuteSelectFile(
     SelectFileDialog::Type type,
@@ -390,7 +429,7 @@ void ExecuteSelectFile(
       break;
     case SelectFileDialog::SELECT_SAVEAS_FILE: {
       base::FilePath path;
-      if (ExecuteSaveFile(owner, default_path, filter, default_extension,
+      if (ExecuteSaveFile(owner, title, default_path, filter, default_extension,
                           &file_type_index, &path)) {
         paths.push_back(std::move(path));
       }

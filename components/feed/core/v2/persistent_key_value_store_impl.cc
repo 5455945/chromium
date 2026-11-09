@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/rand_util.h"
 #include "base/time/time.h"
 #include "components/feed/core/proto/v2/keyvalue_store.pb.h"
@@ -73,7 +73,6 @@ class EvictTask {
       return;
     }
     const size_t first_index = state->next_key_index;
-    std::string last_key;
     state->next_key_index = std::min(
         state->next_key_index + kMaxEntriesInMemory, state->all_keys.size());
 
@@ -202,7 +201,7 @@ void PersistentKeyValueStoreImpl::Put(const std::string& key,
   // (sum of bytes written) / `cleanup_interval_in_written_bytes`.
   int cleanup_interval_in_written_bytes =
       GetFeedConfig().persistent_kv_store_cleanup_interval_in_written_bytes;
-  int rand_int = base::RandInt(0, cleanup_interval_in_written_bytes);
+  int rand_int = base::RandIntInclusive(0, cleanup_interval_in_written_bytes);
   if (cleanup_interval_in_written_bytes > 0 &&
       rand_int < static_cast<int>(value.size())) {
     EvictOldEntries(base::DoNothing());

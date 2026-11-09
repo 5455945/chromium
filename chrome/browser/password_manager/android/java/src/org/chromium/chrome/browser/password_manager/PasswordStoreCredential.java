@@ -1,15 +1,17 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.password_manager;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.url.GURL;
 
-/**
- * This class represents key elements of stored credential in the password store.
- */
+/** This class represents key elements of stored credential in the password store. */
+@NullMarked
 public class PasswordStoreCredential {
     private final GURL mUrl;
     private final String mUsername;
@@ -32,33 +34,38 @@ public class PasswordStoreCredential {
     }
 
     @CalledByNative
-    public GURL getUrl() {
+    public @JniType("GURL") GURL getUrl() {
         return mUrl;
     }
 
     @CalledByNative
-    public String getUsername() {
+    public @JniType("std::u16string") String getUsername() {
         return mUsername;
     }
 
     @CalledByNative
-    public String getPassword() {
+    public @JniType("std::u16string") String getPassword() {
         return mPassword;
     }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        PasswordStoreCredential that = (PasswordStoreCredential) o;
-        return mUrl.equals(that.mUrl) && mUsername.equals(that.mUsername)
+        if (!(o instanceof PasswordStoreCredential that)) return false;
+        return mUrl.equals(that.mUrl)
+                && mUsername.equals(that.mUsername)
                 && mPassword.equals(that.mPassword);
     }
 
     @Override
     public String toString() {
         return "PasswordStoreCredential{"
-                + "url=" + mUrl.getSpec() + ", username=" + mUsername + ", password=" + mPassword
+                + "url="
+                + mUrl.getSpec()
+                + ", username="
+                + mUsername
+                + ", password="
+                + mPassword
                 + '}';
     }
 }

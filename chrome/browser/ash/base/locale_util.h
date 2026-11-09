@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 
+class ApplicationLocaleStorage;
 class Profile;
 class PrefService;
 
@@ -46,7 +48,11 @@ using SwitchLanguageCallback =
 // with an unsupported input method may lead to undefined behavior. Use
 // |enable_locale_keyboard_layouts = false| with caution.
 // Note 2: |login_layouts_only = true| enables only login-capable layouts.
-void SwitchLanguage(const std::string& locale,
+// `application_locale_storage` must be non-null and must outlive the
+// SequencedTaskRunner::GetCurrentDefault() as it's bound to a task which will
+// be posted to the task runner.
+void SwitchLanguage(ApplicationLocaleStorage* application_locale_storage,
+                    const std::string& locale,
                     const bool enable_locale_keyboard_layouts,
                     const bool login_layouts_only,
                     SwitchLanguageCallback callback,
@@ -55,17 +61,17 @@ void SwitchLanguage(const std::string& locale,
 // This function checks if the given language is allowed according to the list
 // of allowed languages (stored in |prefs|, managed by 'AllowedLanguages'
 // policy). If the list is empty, every language is allowed.
-bool IsAllowedLanguage(const std::string& language, const PrefService* prefs);
+bool IsAllowedLanguage(std::string_view language, const PrefService* prefs);
 
 // This function checks if the given language is allowed
 // by 'AllowedLanguages' and also can be used as a UI locale.
 // (see |IsAllowedLanguage|).
-bool IsAllowedUILanguage(const std::string& language, const PrefService* prefs);
+bool IsAllowedUILanguage(std::string_view language, const PrefService* prefs);
 
 // This functions checks if the given language is a native UI language or can be
 // converted to one. (e.g., 'en-US', 'fr', 'de', 'de-CH', 'fr-CH' etc. are all
 // valid, but 'az' is not.
-bool IsNativeUILanguage(const std::string& locale);
+bool IsNativeUILanguage(std::string_view locale);
 
 // This function removes languages that are disallowed by the
 // 'AllowedLanguages' policy from the list of preferred languages.
@@ -95,19 +101,5 @@ bool AddLocaleToPreferredLanguages(const std::string& locale,
 
 }  // namespace locale_util
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-namespace locale_util {
-using ::ash::locale_util::GetAllowedFallbackUILanguage;
-using ::ash::locale_util::IsAllowedLanguage;
-using ::ash::locale_util::IsAllowedUILanguage;
-using ::ash::locale_util::LanguageSwitchResult;
-using ::ash::locale_util::RemoveDisallowedLanguagesFromPreferred;
-using ::ash::locale_util::SwitchLanguage;
-using ::ash::locale_util::SwitchLanguageCallback;
-}  // namespace locale_util
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_BASE_LOCALE_UTIL_H_

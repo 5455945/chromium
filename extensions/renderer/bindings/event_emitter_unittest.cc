@@ -1,22 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/bindings/event_emitter.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
-#include "base/macros.h"
+#include <string_view>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ref.h"
 #include "base/values.h"
+#include "extensions/common/mojom/event_dispatcher.mojom.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/bindings/api_event_listeners.h"
 #include "extensions/renderer/bindings/exception_handler.h"
 #include "extensions/renderer/bindings/listener_tracker.h"
 #include "extensions/renderer/bindings/test_js_runner.h"
-#include "gin/handle.h"
+#include "gin/public/gin_embedders.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 
 namespace extensions {
 
@@ -32,6 +36,10 @@ APIEventListeners::ContextOwnerIdGetter CreateContextOwnerIdGetter() {
 class EventEmitterUnittest : public APIBindingTest {
  public:
   EventEmitterUnittest() = default;
+
+  EventEmitterUnittest(const EventEmitterUnittest&) = delete;
+  EventEmitterUnittest& operator=(const EventEmitterUnittest&) = delete;
+
   ~EventEmitterUnittest() override = default;
 
   // A helper method to dispose of a context and set a flag.
@@ -41,9 +49,6 @@ class EventEmitterUnittest : public APIBindingTest {
     *did_invalidate = true;
     DisposeContext(context);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(EventEmitterUnittest);
 };
 
 TEST_F(EventEmitterUnittest, TestDispatchMethod) {
@@ -63,11 +68,12 @@ TEST_F(EventEmitterUnittest, TestDispatchMethod) {
   ExceptionHandler exception_handler(
       base::BindRepeating(log_error, &logged_errors));
 
-  gin::Handle<EventEmitter> event = gin::CreateHandle(
-      isolate(),
-      new EventEmitter(false, std::move(listeners), &exception_handler));
+  auto* event_emitter = cppgc::MakeGarbageCollected<EventEmitter>(
+      isolate()->GetCppHeap()->GetAllocationHandle(), false,
+      std::move(listeners), &exception_handler);
 
-  v8::Local<v8::Value> v8_event = event.ToV8();
+  v8::Local<v8::Value> v8_event =
+      event_emitter->GetWrapper(isolate()).ToLocalChecked();
 
   const char kAddListener[] =
       "(function(event, listener) { event.addListener(listener); })";
@@ -75,11 +81,11 @@ TEST_F(EventEmitterUnittest, TestDispatchMethod) {
       FunctionFromString(context, kAddListener);
 
   auto add_listener = [context, v8_event,
-                       add_listener_function](base::StringPiece listener) {
+                       add_listener_function](std::string_view listener) {
     v8::Local<v8::Function> listener_function =
         FunctionFromString(context, listener);
     v8::Local<v8::Value> args[] = {v8_event, listener_function};
-    RunFunction(add_listener_function, context, base::size(args), args);
+    RunFunction(add_listener_function, context, std::size(args), args);
   };
 
   const char kListener1[] =
@@ -118,7 +124,7 @@ TEST_F(EventEmitterUnittest, TestDispatchMethod) {
   TestJSRunner::AllowErrors allow_errors;
   v8::Local<v8::Value> dispatch_result =
       RunFunctionOnGlobal(FunctionFromString(context, kDispatch), context,
-                          base::size(dispatch_args), dispatch_args);
+                          std::size(dispatch_args), dispatch_args);
 
   const char kExpectedEventArgs[] = "[\"arg1\",2]";
   for (const char* property :
@@ -141,17 +147,18 @@ TEST_F(EventEmitterUnittest, ListenersDestroyingContext) {
   v8::Local<v8::Context> context = MainContext();
 
   struct ListenerClosureData {
-    EventEmitterUnittest& test;
+    const raw_ref<EventEmitterUnittest> test;
     bool did_invalidate_context;
-  } closure_data = {*this, false};
+  } closure_data = {raw_ref(*this), false};
 
   // A wrapper that just calls DisposeContextWrapper() on the curried in data.
   auto listener_wrapper = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
-    ASSERT_TRUE(info.Data()->IsExternal());
+    ASSERT_TRUE(info.DataV2().As<v8::Value>()->IsExternal());
     auto& data = *static_cast<ListenerClosureData*>(
-        info.Data().As<v8::External>()->Value());
-    data.test.DisposeContextWrapper(&data.did_invalidate_context,
-                                    info.GetIsolate()->GetCurrentContext());
+        info.DataV2().As<v8::External>()->Value(
+            gin::kEventEmitterUnittestListenerClosureDataTag));
+    data.test->DisposeContextWrapper(&data.did_invalidate_context,
+                                     info.GetIsolate()->GetCurrentContext());
   };
 
   ListenerTracker tracker;
@@ -160,11 +167,12 @@ TEST_F(EventEmitterUnittest, ListenersDestroyingContext) {
       binding::kNoListenerMax, true, &tracker);
   ExceptionHandler exception_handler(base::BindRepeating(
       [](v8::Local<v8::Context> context, const std::string& error) {}));
-  gin::Handle<EventEmitter> event = gin::CreateHandle(
-      isolate(),
-      new EventEmitter(false, std::move(listeners), &exception_handler));
+  auto* event_emitter = cppgc::MakeGarbageCollected<EventEmitter>(
+      isolate()->GetCppHeap()->GetAllocationHandle(), false,
+      std::move(listeners), &exception_handler);
 
-  v8::Local<v8::Value> v8_event = event.ToV8();
+  v8::Local<v8::Value> v8_event =
+      event_emitter->GetWrapper(isolate()).ToLocalChecked();
 
   const char kAddListener[] =
       "(function(event, listener) { event.addListener(listener); })";
@@ -176,19 +184,110 @@ TEST_F(EventEmitterUnittest, ListenersDestroyingContext) {
   constexpr size_t kNumListeners = 3;
   for (size_t i = 0; i < kNumListeners; ++i) {
     v8::Local<v8::Function> listener =
-        v8::Function::New(context, listener_wrapper,
-                          v8::External::New(isolate(), &closure_data))
+        v8::Function::New(
+            context, listener_wrapper,
+            v8::External::New(isolate(), &closure_data,
+                              gin::kEventEmitterUnittestListenerClosureDataTag))
             .ToLocalChecked();
     v8::Local<v8::Value> args[] = {v8_event, listener};
-    RunFunction(add_listener_function, context, base::size(args), args);
+    RunFunction(add_listener_function, context, std::size(args), args);
   }
 
-  EXPECT_EQ(kNumListeners, event->GetNumListeners());
+  EXPECT_EQ(kNumListeners, event_emitter->GetNumListenersForTesting());
 
-  std::vector<v8::Local<v8::Value>> args;
-  event->Fire(context, &args, nullptr, JSRunner::ResultCallback());
+  v8::LocalVector<v8::Value> args(isolate());
+  event_emitter->Fire(context, &args, /*filter=*/nullptr,
+                      /*on_dispatched_callback=*/v8::Local<v8::Function>(),
+                      /*listener_error_callback=*/v8::Local<v8::Function>());
 
   EXPECT_TRUE(closure_data.did_invalidate_context);
+}
+
+TEST_F(EventEmitterUnittest, AddListenerWithOptions_WebRequest) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  ListenerTracker tracker;
+  auto listeners = std::make_unique<FilteredEventListeners>(
+      base::DoNothing(), "webRequest.onBeforeRequest",
+      CreateContextOwnerIdGetter(), binding::kNoListenerMax, true, &tracker);
+  ExceptionHandler exception_handler(base::DoNothing());
+  auto* event_emitter = cppgc::MakeGarbageCollected<EventEmitter>(
+      isolate()->GetCppHeap()->GetAllocationHandle(), /*supports_filters=*/true,
+      std::move(listeners), &exception_handler);
+
+  v8::Local<v8::Value> v8_event =
+      event_emitter->GetWrapper(isolate()).ToLocalChecked();
+
+  const char kAddListener[] =
+      "(function(event, listener, filter, options) { "
+      "event.addListener(listener, filter, options); })";
+  v8::Local<v8::Function> add_listener_function =
+      FunctionFromString(context, kAddListener);
+
+  // Providing a valid options object for a webRequest event should succeed.
+  {
+    v8::Local<v8::Function> listener =
+        FunctionFromString(context, "(function() {})");
+    v8::Local<v8::Object> filter =
+        V8ValueFromScriptSource(context, "({})").As<v8::Object>();
+    v8::Local<v8::Value> options =
+        V8ValueFromScriptSource(context, "({extraInfo: ['blocking']})");
+    v8::Local<v8::Value> args[] = {v8_event, listener, filter, options};
+    RunFunction(add_listener_function, context, std::size(args), args);
+    EXPECT_EQ(1u, event_emitter->GetNumListenersForTesting());
+  }
+
+  // Providing an invalid options type (e.g., a string) should fail.
+  {
+    v8::Local<v8::Function> listener =
+        FunctionFromString(context, "(function() {})");
+    v8::Local<v8::Object> filter =
+        V8ValueFromScriptSource(context, "({})").As<v8::Object>();
+    v8::Local<v8::Value> options =
+        V8ValueFromScriptSource(context, "'not-an-object'");
+    v8::Local<v8::Value> args[] = {v8_event, listener, filter, options};
+    RunFunctionAndExpectError(add_listener_function, context, std::size(args),
+                              args, "Uncaught TypeError: Invalid invocation");
+    EXPECT_EQ(1u, event_emitter->GetNumListenersForTesting());
+  }
+}
+
+TEST_F(EventEmitterUnittest, AddListenerWithOptions_FailsForNonWebRequest) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  ListenerTracker tracker;
+  auto listeners = std::make_unique<FilteredEventListeners>(
+      base::DoNothing(), "other.event", CreateContextOwnerIdGetter(),
+      binding::kNoListenerMax, true, &tracker);
+  ExceptionHandler exception_handler(base::DoNothing());
+  auto* event_emitter = cppgc::MakeGarbageCollected<EventEmitter>(
+      isolate()->GetCppHeap()->GetAllocationHandle(), /*supports_filters=*/true,
+      std::move(listeners), &exception_handler);
+
+  v8::Local<v8::Value> v8_event =
+      event_emitter->GetWrapper(isolate()).ToLocalChecked();
+
+  const char kAddListener[] =
+      "(function(event, listener, filter, options) { "
+      "event.addListener(listener, filter, options); })";
+  v8::Local<v8::Function> add_listener_function =
+      FunctionFromString(context, kAddListener);
+
+  // Providing an options argument for a non-webRequest event is not allowed and
+  // should fail.
+  v8::Local<v8::Function> listener =
+      FunctionFromString(context, "(function() {})");
+  v8::Local<v8::Object> filter =
+      V8ValueFromScriptSource(context, "({})").As<v8::Object>();
+  v8::Local<v8::Value> options = V8ValueFromScriptSource(context, "{}");
+  v8::Local<v8::Value> args[] = {v8_event, listener, filter, options};
+
+  RunFunctionAndExpectError(
+      add_listener_function, context, std::size(args), args,
+      "Uncaught TypeError: This event does not support options");
+  EXPECT_EQ(0u, event_emitter->GetNumListenersForTesting());
 }
 
 }  // namespace extensions

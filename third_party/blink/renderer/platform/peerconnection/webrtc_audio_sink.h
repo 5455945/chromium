@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,25 @@
 #include <stdint.h>
 
 #include <atomic>
-#include <memory>
+#include <cstddef>
 #include <string>
 #include <utility>
-#include <vector>
 
+#include "base/memory/aligned_memory.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/audio_push_fifo.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_audio_sink.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_level_calculator.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
 #include "third_party/webrtc/api/media_stream_track.h"
-#include "third_party/webrtc/rtc_base/time_utils.h"
-#include "third_party/webrtc/rtc_base/timestamp_aligner.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 
 namespace blink {
 
@@ -123,11 +123,9 @@ class PLATFORM_EXPORT WebRtcAudioSink : public WebMediaStreamAudioSink {
     void AddSink(webrtc::AudioTrackSinkInterface* sink) override;
     void RemoveSink(webrtc::AudioTrackSinkInterface* sink) override;
     bool GetSignalLevel(int* level) override;
-    rtc::scoped_refptr<webrtc::AudioProcessorInterface> GetAudioProcessor()
+    webrtc::scoped_refptr<webrtc::AudioProcessorInterface> GetAudioProcessor()
         override;
     webrtc::AudioSourceInterface* GetSource() const override;
-
-    void UpdateTimestampAligner(base::TimeTicks capture_time);
 
    protected:
     ~Adapter() override;
@@ -143,8 +141,6 @@ class PLATFORM_EXPORT WebRtcAudioSink : public WebMediaStreamAudioSink {
 
     // Task runner used for the final de-referencing of |audio_processor_| at
     // destruction time.
-    //
-    // TODO(miu): Remove this once MediaStreamAudioProcessor is fixed.
     const scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
 
     // The audio processsor that applies audio post-processing on the source
@@ -162,16 +158,8 @@ class PLATFORM_EXPORT WebRtcAudioSink : public WebMediaStreamAudioSink {
 
     // A vector of pointers to unowned WebRTC-internal objects which each
     // receive the audio data.
-    std::vector<webrtc::AudioTrackSinkInterface*> sinks_;
-
-    // Used for getting capture timestamps referenced on the rtc::TimeMicros()
-    // clock. See the comment at the implementation of UpdateTimestampAligner()
-    // for more details.
-    rtc::TimestampAligner timestamp_aligner_;
+    Vector<webrtc::AudioTrackSinkInterface*> sinks_;
   };
-
-  template <typename>
-  friend struct WTF::CrossThreadCopier;
 
   // WebMediaStreamAudioSink implementation.
   void OnData(const media::AudioBus& audio_bus,
@@ -199,7 +187,7 @@ class PLATFORM_EXPORT WebRtcAudioSink : public WebMediaStreamAudioSink {
 
   // Buffer used for converting into the required signed 16-bit integer
   // interleaved samples.
-  std::unique_ptr<int16_t[]> interleaved_data_;
+  base::AlignedHeapArray<int16_t> interleaved_data_;
 
   base::TimeTicks last_estimated_capture_time_;
 

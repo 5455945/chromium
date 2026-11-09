@@ -25,6 +25,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_IMAGE_H_
 
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_model_object.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -35,8 +36,8 @@ class LayoutSVGImage final : public LayoutSVGModelObject {
  public:
   explicit LayoutSVGImage(SVGImageElement*);
   ~LayoutSVGImage() override;
+  void Trace(Visitor*) const override;
 
-  void SetNeedsBoundariesUpdate() override { NOT_DESTROYED(); }
   void SetNeedsTransformUpdate() override {
     NOT_DESTROYED();
     needs_transform_update_ = true;
@@ -51,7 +52,7 @@ class LayoutSVGImage final : public LayoutSVGModelObject {
     return image_resource_.Get();
   }
 
-  FloatRect ObjectBoundingBox() const override {
+  gfx::RectF ObjectBoundingBox() const override {
     NOT_DESTROYED();
     return object_bounding_box_;
   }
@@ -60,10 +61,9 @@ class LayoutSVGImage final : public LayoutSVGModelObject {
     return !object_bounding_box_.IsEmpty();
   }
 
-  bool IsOfType(LayoutObjectType type) const override {
+  bool IsSVGImage() const final {
     NOT_DESTROYED();
-    return type == kLayoutObjectSVGImage ||
-           LayoutSVGModelObject::IsOfType(type);
+    return true;
   }
 
   AffineTransform LocalSVGTransform() const override {
@@ -77,35 +77,48 @@ class LayoutSVGImage final : public LayoutSVGModelObject {
   }
 
  protected:
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;
-  void WillBeDestroyed() override;
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
+                      const StyleChangeContext&) override;
+  void WillBeDestroyed(const ComputedStyle*) override;
 
  private:
-  FloatRect StrokeBoundingBox() const override {
+  gfx::RectF StrokeBoundingBox() const override {
+    NOT_DESTROYED();
+    return object_bounding_box_;
+  }
+
+  gfx::RectF DecoratedBoundingBox() const override {
     NOT_DESTROYED();
     return object_bounding_box_;
   }
 
   void ImageChanged(WrappedImagePtr, CanDeferInvalidation) override;
 
-  void UpdateLayout() override;
+  SVGLayoutResult UpdateSVGLayout(const SVGLayoutInfo&) override;
   void Paint(const PaintInfo&) const override;
 
   bool UpdateBoundingBox();
+  // Update LayoutObject state after layout has completed. Returns true if
+  // boundaries needs to be propagated (because of a change to the transform).
+  bool UpdateAfterSVGLayout(const SVGLayoutInfo&, bool bbox_changed);
 
   bool NodeAtPoint(HitTestResult&,
                    const HitTestLocation&,
                    const PhysicalOffset& accumulated_offset,
-                   HitTestAction) override;
+                   HitTestPhase) override;
 
-  FloatSize CalculateObjectSize() const;
-  bool HasOverriddenIntrinsicSize() const;
+  gfx::SizeF CalculateObjectSize() const;
 
-  bool needs_transform_update_ : 1;
-  bool transform_uses_reference_box_ : 1;
+  // True if `local_transform_` is not up-to-date.
+  bool needs_transform_update_ : 1 = true;
+  // The transform applied to the object depends on the reference box (i.e
+  // translate(50%, 50%) or similar).
+  bool transform_uses_reference_box_ : 1 = false;
   AffineTransform local_transform_;
-  FloatRect object_bounding_box_;
-  Persistent<LayoutImageResource> image_resource_;
+  gfx::RectF object_bounding_box_;
+  Member<LayoutImageResource> image_resource_;
 };
 
 template <>

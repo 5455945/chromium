@@ -1,317 +1,259 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/js_messaging/web_frames_manager_impl.h"
+#import "ios/web/js_messaging/web_frames_manager_impl.h"
 
 #import "base/strings/string_number_conversions.h"
-#import "base/strings/sys_string_conversions.h"
-#import "ios/web/js_messaging/crw_wk_script_message_router.h"
-#include "ios/web/js_messaging/web_frame_impl.h"
-#include "ios/web/public/test/fakes/fake_web_frame.h"
-#import "ios/web/public/test/fakes/fake_web_state.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "testing/platform_test.h"
-#import "third_party/ocmock/OCMock/OCMock.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
-namespace {
-
-// A base64 encoded sample key.
-const char kFrameKey[] = "R7lsXtR74c6R9A9k691gUQ8JAd0be+w//Lntgcbjwrc=";
-
-// Message command sent when a frame becomes available.
-NSString* const kFrameBecameAvailableMessageName = @"FrameBecameAvailable";
-// Message command sent when a frame is unloading.
-NSString* const kFrameBecameUnavailableMessageName = @"FrameBecameUnavailable";
-
-}  // namespace
+#import "ios/web/js_messaging/web_frame_impl.h"
+#import "ios/web/public/js_messaging/web_frame.h"
+#import "ios/web/public/test/fakes/fake_web_frame.h"
+#import "ios/web/public/test/web_test_with_web_state.h"
+#import "ios/web/web_state/web_state_impl.h"
+#import "testing/gtest/include/gtest/gtest.h"
 
 namespace web {
 
-class WebFramesManagerImplTest : public PlatformTest,
-                                 public WebFramesManagerDelegate {
+namespace {
+
+constexpr char kLowercaseFrameId[] = "abba1234beef1234cafe1234deed1234";
+constexpr char kUppercaseFrameId[] = "ABBA1234BEEF1234CAFE1234DEED1234";
+
+class FakeWebFramesManagerObserver : public WebFramesManagerImpl::Observer {
+ public:
+  // The current available frames as tracked by the WebFramesManage Observer
+  // calls.
+  const std::map<std::string, WebFrame*> frames() const { return frames_; }
+
+  // WebFramesManagerImpl::Observer
+  void WebFrameBecameAvailable(WebFramesManager* web_frames_manager,
+                               WebFrame* web_frame) override {
+    frames_[web_frame->GetFrameId()] = web_frame;
+  }
+
+  void WebFrameBecameUnavailable(WebFramesManager* web_frames_manager,
+                                 const std::string& frame_id) override {
+    frames_.erase(frame_id);
+  }
+
+ private:
+  std::map<std::string, WebFrame*> frames_;
+};
+
+}  // namespace
+
+class WebFramesManagerImplTest : public WebTestWithWebState {
  protected:
-  WebFramesManagerImplTest()
-      : frames_manager_(*this),
-        user_content_controller_([[WKUserContentController alloc] init]),
-        router_([[CRWWKScriptMessageRouter alloc]
-            initWithUserContentController:user_content_controller_]),
-        web_view_(OCMClassMock([WKWebView class])),
-        main_frame_(web::FakeWebFrame::Create(kMainFakeFrameId,
-                                              /*is_main_frame=*/true,
-                                              GURL("https://www.main.test"))),
-        frame_1_(web::FakeWebFrame::Create(kChildFakeFrameId,
-                                           /*is_main_frame=*/false,
-                                           GURL("https://www.frame1.test"))),
-        frame_2_(web::FakeWebFrame::Create(kChildFakeFrameId2,
-                                           /*is_main_frame=*/false,
-                                           GURL("https://www.frame2.test"))) {
-    // Notify |frames_manager_| that its associated WKWebView has changed from
-    // nil to |web_view_|.
-    frames_manager_.OnWebViewUpdated(nil, web_view_, router_);
+  void SetUp() override {
+    WebTestWithWebState::SetUp();
+
+    GetPageWorldWebFramesManager().AddObserver(&observer_);
   }
 
-  // Sends a JS message of a newly loaded web frame to |router_| which will
-  // dispatch it to |frames_manager_|.
-  void SendFrameBecameAvailableMessage(const FakeWebFrame* web_frame) {
-    // Mock WKSecurityOrigin.
-    WKSecurityOrigin* security_origin = OCMClassMock([WKSecurityOrigin class]);
-    OCMStub([security_origin host])
-        .andReturn(
-            base::SysUTF8ToNSString(web_frame->GetSecurityOrigin().host()));
-    OCMStub([security_origin port])
-        .andReturn(web_frame->GetSecurityOrigin().EffectiveIntPort());
-    OCMStub([security_origin protocol])
-        .andReturn(
-            base::SysUTF8ToNSString(web_frame->GetSecurityOrigin().scheme()));
+  void TearDown() override {
+    GetPageWorldWebFramesManager().RemoveObserver(&observer_);
 
-    // Mock WKFrameInfo.
-    WKFrameInfo* frame_info = OCMClassMock([WKFrameInfo class]);
-    OCMStub([frame_info isMainFrame]).andReturn(web_frame->IsMainFrame());
-    OCMStub([frame_info securityOrigin]).andReturn(security_origin);
-
-    // Mock WKScriptMessage for "FrameBecameAvailable" message.
-    NSDictionary* body = @{
-      @"crwFrameId" : base::SysUTF8ToNSString(web_frame->GetFrameId()),
-      @"crwFrameKey" : base::SysUTF8ToNSString(kFrameKey),
-      @"crwFrameLastReceivedMessageId" : @-1,
-    };
-    WKScriptMessage* message = OCMClassMock([WKScriptMessage class]);
-    OCMStub([message body]).andReturn(body);
-    OCMStub([message frameInfo]).andReturn(frame_info);
-    OCMStub([message name]).andReturn(kFrameBecameAvailableMessageName);
-    OCMStub([message webView]).andReturn(web_view_);
-
-    [(id<WKScriptMessageHandler>)router_
-          userContentController:user_content_controller_
-        didReceiveScriptMessage:message];
+    WebTestWithWebState::TearDown();
   }
 
-  // Sends a JS message of a newly unloaded web frame to |router_| which will
-  // dispatch it to |frames_manager_|.
-  void SendFrameBecameUnavailableMessage(const FakeWebFrame* web_frame) {
-    // Mock WKSecurityOrigin.
-    WKSecurityOrigin* security_origin = OCMClassMock([WKSecurityOrigin class]);
-    OCMStub([security_origin host])
-        .andReturn(
-            base::SysUTF8ToNSString(web_frame->GetSecurityOrigin().host()));
-    OCMStub([security_origin port])
-        .andReturn(web_frame->GetSecurityOrigin().EffectiveIntPort());
-    OCMStub([security_origin protocol])
-        .andReturn(
-            base::SysUTF8ToNSString(web_frame->GetSecurityOrigin().scheme()));
-
-    // Mock WKFrameInfo.
-    WKFrameInfo* frame_info = OCMClassMock([WKFrameInfo class]);
-    OCMStub([frame_info isMainFrame]).andReturn(web_frame->IsMainFrame());
-    OCMStub([frame_info securityOrigin]).andReturn(security_origin);
-
-    // Mock WKScriptMessage for "FrameBecameUnavailable" message.
-    WKScriptMessage* message = OCMClassMock([WKScriptMessage class]);
-    OCMStub([message body])
-        .andReturn(base::SysUTF8ToNSString(web_frame->GetFrameId()));
-    OCMStub([message frameInfo]).andReturn(frame_info);
-    OCMStub([message name]).andReturn(kFrameBecameUnavailableMessageName);
-    OCMStub([message webView]).andReturn(web_view_);
-
-    [(id<WKScriptMessageHandler>)router_
-          userContentController:user_content_controller_
-        didReceiveScriptMessage:message];
+  // Notifies `web_state()` of a newly available `web_frame`.
+  void SendFrameBecameAvailableMessage(std::unique_ptr<WebFrame> web_frame) {
+    GetPageWorldWebFramesManager().AddFrame(std::move(web_frame));
   }
 
-  // WebFramesManagerDelegate.
-  void OnWebFrameAvailable(WebFrame* frame) override {}
-  void OnWebFrameUnavailable(WebFrame* frame) override {}
-  WebState* GetWebState() override { return &fake_web_state_; }
+  // Notifies `web_state()` that the web frame with `frame_id` will become
+  // unavailable.
+  void SendFrameBecameUnavailableMessage(const std::string& frame_id) {
+    GetPageWorldWebFramesManager().RemoveFrameWithId(frame_id);
+  }
 
-  FakeWebState fake_web_state_;
-  WebFramesManagerImpl frames_manager_;
-  WKUserContentController* user_content_controller_ = nil;
-  CRWWKScriptMessageRouter* router_ = nil;
-  WKWebView* web_view_ = nil;
-  std::unique_ptr<const FakeWebFrame> main_frame_;
-  std::unique_ptr<const FakeWebFrame> frame_1_;
-  std::unique_ptr<const FakeWebFrame> frame_2_;
+  WebFramesManagerImpl& GetPageWorldWebFramesManager() {
+    WebStateImpl* web_state_impl = WebStateImpl::FromWebState(web_state());
+    return web_state_impl->GetWebFramesManagerImpl(
+        ContentWorld::kPageContentWorld);
+  }
+
+ protected:
+  FakeWebFramesManagerObserver observer_;
 };
 
 // Tests main web frame construction/destruction.
 TEST_F(WebFramesManagerImplTest, MainWebFrame) {
-  SendFrameBecameAvailableMessage(main_frame_.get());
+  auto frame = FakeWebFrame::Create(kMainFakeFrameId,
+                                    /*is_main_frame=*/true,
+                                    GURL("https://www.main.test"));
+  FakeWebFrame* main_frame_ptr = frame.get();
 
-  EXPECT_EQ(1ul, frames_manager_.GetAllWebFrames().size());
-  WebFrame* main_frame = frames_manager_.GetMainWebFrame();
+  SendFrameBecameAvailableMessage(std::move(frame));
+
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  WebFrame* main_frame = GetPageWorldWebFramesManager().GetMainWebFrame();
   WebFrame* main_frame_by_id =
-      frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
+      GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId);
   ASSERT_TRUE(main_frame);
   ASSERT_TRUE(main_frame_by_id);
   EXPECT_EQ(main_frame, main_frame_by_id);
+  EXPECT_EQ(main_frame_ptr, main_frame_by_id);
   EXPECT_TRUE(main_frame->IsMainFrame());
-  EXPECT_EQ(main_frame_->GetSecurityOrigin(), main_frame->GetSecurityOrigin());
+  EXPECT_EQ(main_frame_ptr->GetSecurityOrigin(),
+            main_frame->GetSecurityOrigin());
 
-  SendFrameBecameUnavailableMessage(main_frame_.get());
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
-  EXPECT_FALSE(frames_manager_.GetMainWebFrame());
-  EXPECT_FALSE(frames_manager_.GetFrameWithId(main_frame_->GetFrameId()));
+  const std::map<std::string, WebFrame*> observed_frames = observer_.frames();
+  ASSERT_EQ(1ul, observed_frames.size());
+  auto main_frame_it = observed_frames.find(kMainFakeFrameId);
+  ASSERT_NE(main_frame_it, observed_frames.end());
+  WebFrame* observed_main_frame = main_frame_it->second;
+  EXPECT_TRUE(observed_main_frame);
+  EXPECT_EQ(main_frame, observed_main_frame);
+
+  SendFrameBecameUnavailableMessage(kMainFakeFrameId);
+  EXPECT_EQ(0ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetMainWebFrame());
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId));
+
+  EXPECT_EQ(0ul, observer_.frames().size());
 }
 
-// Tests that a WebFrame can not be registered with a malformed frame id.
-TEST_F(WebFramesManagerImplTest, WebFrameWithInvalidId) {
-  auto frame_with_invalid_id = FakeWebFrame::Create(
-      kInvalidFrameId,
-      /*is_main_frame=*/true, GURL("https://www.main.test"));
-  SendFrameBecameAvailableMessage(frame_with_invalid_id.get());
+// Tests duplicate registration of the main web frame.
+TEST_F(WebFramesManagerImplTest, DuplicateMainWebFrame) {
+  auto frame = FakeWebFrame::Create(kMainFakeFrameId,
+                                    /*is_main_frame=*/true,
+                                    GURL("https://www.main.test"));
+  FakeWebFrame* main_frame_ptr = frame.get();
 
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
-}
+  auto second_main_frame = FakeWebFrame::Create(kChildFakeFrameId,
+                                                /*is_main_frame=*/true,
+                                                GURL("https://www.main2.test"));
 
-// Tests multiple web frames construction/destruction.
-TEST_F(WebFramesManagerImplTest, MultipleWebFrame) {
-  // Add main frame.
-  SendFrameBecameAvailableMessage(main_frame_.get());
-  EXPECT_EQ(1ul, frames_manager_.GetAllWebFrames().size());
-  // Check main frame.
-  WebFrame* main_frame = frames_manager_.GetMainWebFrame();
+  SendFrameBecameAvailableMessage(std::move(frame));
+  SendFrameBecameAvailableMessage(std::move(second_main_frame));
+
+  // Validate that `frame` remains the main frame and `second_main_frame` is
+  // ignored.
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  WebFrame* main_frame = GetPageWorldWebFramesManager().GetMainWebFrame();
   WebFrame* main_frame_by_id =
-      frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
+      GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId);
   ASSERT_TRUE(main_frame);
+  ASSERT_TRUE(main_frame_by_id);
   EXPECT_EQ(main_frame, main_frame_by_id);
+  EXPECT_EQ(main_frame_ptr, main_frame_by_id);
   EXPECT_TRUE(main_frame->IsMainFrame());
-  EXPECT_EQ(main_frame_->GetSecurityOrigin(), main_frame->GetSecurityOrigin());
+  EXPECT_EQ(main_frame_ptr->GetSecurityOrigin(),
+            main_frame->GetSecurityOrigin());
 
-  // Add frame 1.
-  SendFrameBecameAvailableMessage(frame_1_.get());
-  EXPECT_EQ(2ul, frames_manager_.GetAllWebFrames().size());
-  // Check main frame.
-  main_frame = frames_manager_.GetMainWebFrame();
-  main_frame_by_id = frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
-  ASSERT_TRUE(main_frame);
-  EXPECT_EQ(main_frame, main_frame_by_id);
-  EXPECT_TRUE(main_frame->IsMainFrame());
-  EXPECT_EQ(main_frame_->GetSecurityOrigin(), main_frame->GetSecurityOrigin());
-  // Check frame 1.
-  WebFrame* frame_1 = frames_manager_.GetFrameWithId(frame_1_->GetFrameId());
-  ASSERT_TRUE(frame_1);
-  EXPECT_FALSE(frame_1->IsMainFrame());
-  EXPECT_EQ(frame_1_->GetSecurityOrigin(), frame_1->GetSecurityOrigin());
-
-  // Add frame 2.
-  SendFrameBecameAvailableMessage(frame_2_.get());
-  EXPECT_EQ(3ul, frames_manager_.GetAllWebFrames().size());
-  // Check main frame.
-  main_frame = frames_manager_.GetMainWebFrame();
-  main_frame_by_id = frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
-  ASSERT_TRUE(main_frame);
-  EXPECT_EQ(main_frame, main_frame_by_id);
-  EXPECT_TRUE(main_frame->IsMainFrame());
-  EXPECT_EQ(main_frame_->GetSecurityOrigin(), main_frame->GetSecurityOrigin());
-  // Check frame 1.
-  frame_1 = frames_manager_.GetFrameWithId(frame_1_->GetFrameId());
-  ASSERT_TRUE(frame_1);
-  EXPECT_FALSE(frame_1->IsMainFrame());
-  EXPECT_EQ(frame_1_->GetSecurityOrigin(), frame_1->GetSecurityOrigin());
-  // Check frame 2.
-  WebFrame* frame_2 = frames_manager_.GetFrameWithId(frame_2_->GetFrameId());
-  ASSERT_TRUE(frame_2);
-  EXPECT_FALSE(frame_2->IsMainFrame());
-  EXPECT_EQ(frame_2_->GetSecurityOrigin(), frame_2->GetSecurityOrigin());
-
-  // Remove frame 1.
-  SendFrameBecameUnavailableMessage(frame_1_.get());
-  EXPECT_EQ(2ul, frames_manager_.GetAllWebFrames().size());
-  // Check main frame.
-  main_frame = frames_manager_.GetMainWebFrame();
-  main_frame_by_id = frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
-  ASSERT_TRUE(main_frame);
-  EXPECT_EQ(main_frame, main_frame_by_id);
-  EXPECT_TRUE(main_frame->IsMainFrame());
-  EXPECT_EQ(main_frame_->GetSecurityOrigin(), main_frame->GetSecurityOrigin());
-  // Check frame 1.
-  frame_1 = frames_manager_.GetFrameWithId(frame_1_->GetFrameId());
-  EXPECT_FALSE(frame_1);
-  // Check frame 2.
-  frame_2 = frames_manager_.GetFrameWithId(frame_2_->GetFrameId());
-  ASSERT_TRUE(frame_2);
-  EXPECT_FALSE(frame_2->IsMainFrame());
-  EXPECT_EQ(frame_2_->GetSecurityOrigin(), frame_2->GetSecurityOrigin());
-
-  // Remove main frame.
-  SendFrameBecameUnavailableMessage(main_frame_.get());
-  EXPECT_EQ(1ul, frames_manager_.GetAllWebFrames().size());
-  // Check main frame.
-  main_frame = frames_manager_.GetMainWebFrame();
-  main_frame_by_id = frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
-  EXPECT_FALSE(main_frame);
-  EXPECT_FALSE(main_frame_by_id);
-  // Check frame 1.
-  frame_1 = frames_manager_.GetFrameWithId(frame_1_->GetFrameId());
-  EXPECT_FALSE(frame_1);
-  // Check frame 2.
-  frame_2 = frames_manager_.GetFrameWithId(frame_2_->GetFrameId());
-  ASSERT_TRUE(frame_2);
-  EXPECT_FALSE(frame_2->IsMainFrame());
-  EXPECT_EQ(frame_2_->GetSecurityOrigin(), frame_2->GetSecurityOrigin());
-
-  // Remove frame 2.
-  SendFrameBecameUnavailableMessage(frame_2_.get());
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
-  // Check main frame.
-  main_frame = frames_manager_.GetMainWebFrame();
-  main_frame_by_id = frames_manager_.GetFrameWithId(main_frame_->GetFrameId());
-  EXPECT_FALSE(main_frame);
-  EXPECT_FALSE(main_frame_by_id);
-  // Check frame 1.
-  frame_1 = frames_manager_.GetFrameWithId(frame_1_->GetFrameId());
-  EXPECT_FALSE(frame_1);
-  // Check frame 2.
-  frame_2 = frames_manager_.GetFrameWithId(frame_2_->GetFrameId());
-  EXPECT_FALSE(frame_2);
+  const std::map<std::string, WebFrame*> observed_frames = observer_.frames();
+  ASSERT_EQ(1ul, observed_frames.size());
+  auto main_frame_it = observed_frames.find(kMainFakeFrameId);
+  ASSERT_NE(main_frame_it, observed_frames.end());
+  WebFrame* observed_main_frame = main_frame_it->second;
+  EXPECT_TRUE(observed_main_frame);
+  EXPECT_EQ(main_frame, observed_main_frame);
 }
 
-// Tests WebFramesManagerImpl::RemoveAllWebFrames.
+// Tests WebStateImpl::RemoveAllWebFrames. Removing all frames must go through
+// the web state in order to notify observers.
 TEST_F(WebFramesManagerImplTest, RemoveAllWebFrames) {
-  SendFrameBecameAvailableMessage(main_frame_.get());
-  SendFrameBecameAvailableMessage(frame_1_.get());
-  SendFrameBecameAvailableMessage(frame_2_.get());
-  EXPECT_EQ(3ul, frames_manager_.GetAllWebFrames().size());
+  SendFrameBecameAvailableMessage(FakeWebFrame::Create(
+      kMainFakeFrameId,
+      /*is_main_frame=*/true, GURL("https://www.main.test")));
+  SendFrameBecameAvailableMessage(FakeWebFrame::Create(
+      kChildFakeFrameId,
+      /*is_main_frame=*/false, GURL("https://www.frame1.test")));
+  SendFrameBecameAvailableMessage(FakeWebFrame::Create(
+      kChildFakeFrameId2,
+      /*is_main_frame=*/false, GURL("https://www.frame2.test")));
+  EXPECT_EQ(3ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
 
-  frames_manager_.RemoveAllWebFrames();
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
+  WebStateImpl* web_state_impl = WebStateImpl::FromWebState(web_state());
+  web_state_impl->RemoveAllWebFrames();
+  EXPECT_EQ(0ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
   // Check main frame.
-  EXPECT_FALSE(frames_manager_.GetMainWebFrame());
-  EXPECT_FALSE(frames_manager_.GetFrameWithId(main_frame_->GetFrameId()));
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetMainWebFrame());
+  EXPECT_FALSE(GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId));
   // Check frame 1.
-  EXPECT_FALSE(frames_manager_.GetFrameWithId(frame_1_->GetFrameId()));
+  EXPECT_FALSE(
+      GetPageWorldWebFramesManager().GetFrameWithId(kChildFakeFrameId));
   // Check frame 2.
-  EXPECT_FALSE(frames_manager_.GetFrameWithId(frame_2_->GetFrameId()));
+  EXPECT_FALSE(
+      GetPageWorldWebFramesManager().GetFrameWithId(kChildFakeFrameId2));
+
+  const std::map<std::string, WebFrame*> observed_frames = observer_.frames();
+  ASSERT_EQ(0ul, observed_frames.size());
+  // Check main frame.
+  auto main_frame_it = observed_frames.find(kMainFakeFrameId);
+  ASSERT_EQ(main_frame_it, observed_frames.end());
+  // Check frame 1.
+  auto frame_1_it = observed_frames.find(kChildFakeFrameId);
+  ASSERT_EQ(frame_1_it, observed_frames.end());
+  // Check frame 2.
+  auto frame_2_it = observed_frames.find(kChildFakeFrameId2);
+  ASSERT_EQ(frame_2_it, observed_frames.end());
 }
 
-// Tests that WebFramesManagerImpl will ignore JS messages from previous
-// WKWebView after WebFramesManagerImpl::OnWebViewUpdated is called with a new
-// WKWebView, and that all web frames of previous WKWebView are removed.
-TEST_F(WebFramesManagerImplTest, OnWebViewUpdated) {
-  SendFrameBecameAvailableMessage(main_frame_.get());
-  SendFrameBecameAvailableMessage(frame_1_.get());
-  EXPECT_EQ(2ul, frames_manager_.GetAllWebFrames().size());
+// Tests removing a frame which doesn't exist.
+TEST_F(WebFramesManagerImplTest, RemoveNonexistantFrame) {
+  auto frame = FakeWebFrame::Create(kMainFakeFrameId,
+                                    /*is_main_frame=*/true,
+                                    GURL("https://www.main.test"));
+  FakeWebFrame* main_frame_ptr = frame.get();
+  SendFrameBecameAvailableMessage(std::move(frame));
 
-  // Notify WebFramesManagerImpl that its associated WKWebView has changed from
-  // |web_view_| to a new WKWebView.
-  WKWebView* web_view_2 = OCMClassMock([WKWebView class]);
-  frames_manager_.OnWebViewUpdated(web_view_, web_view_2, router_);
+  SendFrameBecameUnavailableMessage(kChildFakeFrameId);
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+  WebFrame* main_frame = GetPageWorldWebFramesManager().GetMainWebFrame();
+  WebFrame* main_frame_by_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kMainFakeFrameId);
+  ASSERT_TRUE(main_frame);
+  ASSERT_TRUE(main_frame_by_id);
+  EXPECT_EQ(main_frame, main_frame_by_id);
+  EXPECT_EQ(main_frame_ptr, main_frame_by_id);
+  EXPECT_TRUE(main_frame->IsMainFrame());
+  EXPECT_EQ(main_frame_ptr->GetSecurityOrigin(),
+            main_frame->GetSecurityOrigin());
 
-  // Send JS message of loaded/unloaded web frames in previous WKWebView (i.e.
-  // web_view_). |frames_manager_| should have unregistered JS message handlers
-  // for |web_view_| and removed all web frames, so no web frame should be
-  // added.
-  SendFrameBecameAvailableMessage(frame_1_.get());
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
-  SendFrameBecameAvailableMessage(frame_2_.get());
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
-  SendFrameBecameUnavailableMessage(frame_1_.get());
-  EXPECT_EQ(0ul, frames_manager_.GetAllWebFrames().size());
+  const std::map<std::string, WebFrame*> observed_frames = observer_.frames();
+  ASSERT_EQ(1ul, observed_frames.size());
+  auto main_frame_it = observed_frames.find(kMainFakeFrameId);
+  ASSERT_NE(main_frame_it, observed_frames.end());
+  WebFrame* observed_main_frame = main_frame_it->second;
+  EXPECT_TRUE(observed_main_frame);
+  EXPECT_EQ(main_frame, observed_main_frame);
+}
+
+// Tests that frame lookup is not case-sensitive.
+TEST_F(WebFramesManagerImplTest, CaseInsensitiveLookup) {
+  auto frame = FakeWebFrame::Create(kLowercaseFrameId,
+                                    /*is_main_frame=*/true,
+                                    GURL("https://www.main.test"));
+  SendFrameBecameAvailableMessage(std::move(frame));
+
+  EXPECT_EQ(1ul, GetPageWorldWebFramesManager().GetAllWebFrames().size());
+
+  WebFrame* frame_by_uppercase_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kUppercaseFrameId);
+  EXPECT_TRUE(frame_by_uppercase_id);
+
+  WebFrame* frame_by_lowercase_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kLowercaseFrameId);
+  EXPECT_TRUE(frame_by_lowercase_id);
+
+  EXPECT_EQ(frame_by_uppercase_id, frame_by_lowercase_id);
+}
+
+// By convention, the frame ID should be stored in lowercase internally, even if
+// it was passed as uppercase at construct-time.
+TEST_F(WebFramesManagerImplTest, CaseInsensitiveConstruct) {
+  auto frame_with_uppercase_id = FakeWebFrame::Create(
+      kUppercaseFrameId, /*is_main_frame=*/true, GURL("https://www.main.test"));
+
+  SendFrameBecameAvailableMessage(std::move(frame_with_uppercase_id));
+
+  WebFrame* frame_by_lowercase_id =
+      GetPageWorldWebFramesManager().GetFrameWithId(kLowercaseFrameId);
+  ASSERT_TRUE(frame_by_lowercase_id);
+
+  EXPECT_EQ(frame_by_lowercase_id->GetFrameId(), kLowercaseFrameId);
 }
 
 }  // namespace web

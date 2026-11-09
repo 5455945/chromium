@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,14 +14,11 @@
 using content::WebContents;
 using content::WebContentsObserver;
 
-namespace ash {
+namespace chromeos {
 
 namespace {
 
 constexpr char kValidPluginPath[] = "/path/to/valid_plugin";
-constexpr char kInvalidPluginPath[] = "/path/to/invalid_plugin";
-constexpr char kProcessId = 2;
-constexpr int kPluginChildId = 2;
 
 }  // namespace
 
@@ -35,16 +32,8 @@ class TestKioskSessionPluginHandlerDelegate
     return plugin_path.AsUTF8Unsafe() == kValidPluginPath;
   }
 
-  void OnPluginCrashed(const base::FilePath& plugin_path) override {
-    has_crashed_ = true;
-  }
-
-  void OnPluginHung(const std::set<int>& hung_plugins) override {}
-
-  bool has_crashed() const { return has_crashed_; }
-
- private:
-  bool has_crashed_ = false;
+  void OnPluginHung(
+      const std::set<content::ChildProcessId>& hung_plugins) override {}
 };
 
 class KioskSessionPluginHandlerTest : public testing::Test {
@@ -94,59 +83,10 @@ TEST_F(KioskSessionPluginHandlerTest, ObserveAndDestroyWebContents) {
 
   // The number of watchers returns to zero after each WebContents instance is
   // destroyed.
-  for (WebContentsObserver* observer : watchers)
+  for (WebContentsObserver* observer : watchers) {
     observer->WebContentsDestroyed();
+  }
   EXPECT_EQ(handler()->GetWatchersForTesting().size(), 0U);
 }
 
-TEST_F(KioskSessionPluginHandlerTest, PluginCrashed) {
-  TestingProfile profile;
-  std::unique_ptr<WebContents> contents =
-      WebContents::Create(WebContents::CreateParams(&profile));
-  handler()->Observe(contents.get());
-  WebContentsObserver* watcher = handler()->GetWatchersForTesting().front();
-
-  // At the beginning, no crash is notified to the delegate.
-  EXPECT_FALSE(delegate()->has_crashed());
-
-  // No crash is notified if the |plugin_path| is invalid.
-  watcher->PluginCrashed(base::FilePath(kInvalidPluginPath),
-                         base::ProcessId(kProcessId));
-  EXPECT_FALSE(delegate()->has_crashed());
-
-  // Crash is notified if the |plugin_path| is valid.
-  watcher->PluginCrashed(base::FilePath(kValidPluginPath),
-                         base::ProcessId(kProcessId));
-  EXPECT_TRUE(delegate()->has_crashed());
-}
-
-TEST_F(KioskSessionPluginHandlerTest, PluginHungStatusChanged) {
-  TestingProfile profile;
-  std::unique_ptr<WebContents> contents =
-      WebContents::Create(WebContents::CreateParams(&profile));
-  handler()->Observe(contents.get());
-
-  KioskSessionPluginHandler::Observer* observer =
-      handler()->GetWatchersForTesting().front();
-  WebContentsObserver* watcher = observer;
-
-  // At the beginning, there is no hung plugin.
-  EXPECT_EQ(observer->GetHungPluginsForTesting().size(), 0U);
-
-  // The hung plugin is not stored if the |plugin_path| is invalid.
-  watcher->PluginHungStatusChanged(kPluginChildId,
-                                   base::FilePath(kInvalidPluginPath), true);
-  EXPECT_EQ(observer->GetHungPluginsForTesting().size(), 0U);
-
-  // The hung plugin is not stored if the |is_hung| is false.
-  watcher->PluginHungStatusChanged(kPluginChildId,
-                                   base::FilePath(kValidPluginPath), false);
-  EXPECT_EQ(observer->GetHungPluginsForTesting().size(), 0U);
-
-  // The hung plugin is store.
-  watcher->PluginHungStatusChanged(kPluginChildId,
-                                   base::FilePath(kValidPluginPath), true);
-  EXPECT_EQ(observer->GetHungPluginsForTesting().size(), 1U);
-}
-
-}  // namespace ash
+}  // namespace chromeos

@@ -1,20 +1,21 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/shared/platform_info_serializer.h"
 
+#include "chromecast/public/media/decoder_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromecast {
 
 PlatformInfoSerializer ConvertAndValidate(
     const PlatformInfoSerializer& parser) {
-  std::string json = parser.ToJson();
-  absl::optional<PlatformInfoSerializer> deserialized_parser =
-      PlatformInfoSerializer::TryParse(json);
-  EXPECT_TRUE(deserialized_parser.has_value());
-  EXPECT_EQ(parser, deserialized_parser.value());
+  std::string base64 = parser.Serialize();
+  std::optional<PlatformInfoSerializer> deserialized_parser =
+      PlatformInfoSerializer::Deserialize(base64);
+  EXPECT_TRUE(deserialized_parser);
+  EXPECT_EQ(parser.Serialize(), deserialized_parser->Serialize());
   return std::move(deserialized_parser.value());
 }
 
@@ -97,14 +98,14 @@ TEST_F(PlatformInfoSerializerTest, PcmSurroundSoundSupported) {
       ConvertAndValidate(serializer_).PcmSurroundSoundSupported().value());
 }
 
-TEST_F(PlatformInfoSerializerTest, PlatformDobleVisionEnabled) {
-  serializer_.SetPlatformDobleVisionEnabled(true);
+TEST_F(PlatformInfoSerializerTest, PlatformDolbyVisionEnabled) {
+  serializer_.SetPlatformDolbyVisionEnabled(true);
   EXPECT_TRUE(
-      ConvertAndValidate(serializer_).IsPlatformDobleVisionEnabled().value());
+      ConvertAndValidate(serializer_).IsPlatformDolbyVisionEnabled().value());
 
-  serializer_.SetPlatformDobleVisionEnabled(false);
+  serializer_.SetPlatformDolbyVisionEnabled(false);
   EXPECT_FALSE(
-      ConvertAndValidate(serializer_).IsPlatformDobleVisionEnabled().value());
+      ConvertAndValidate(serializer_).IsPlatformDolbyVisionEnabled().value());
 }
 
 TEST_F(PlatformInfoSerializerTest, DolbyVisionSupported) {
@@ -187,12 +188,12 @@ TEST_F(PlatformInfoSerializerTest, SmpteSt2084Supported) {
       ConvertAndValidate(serializer_).IsSmpteSt2084Supported().value());
 }
 
-TEST_F(PlatformInfoSerializerTest, HglSupported) {
-  serializer_.SetHglSupported(true);
-  EXPECT_TRUE(ConvertAndValidate(serializer_).IsHglSupported().value());
+TEST_F(PlatformInfoSerializerTest, Hlg) {
+  serializer_.SetHlgSupported(true);
+  EXPECT_TRUE(ConvertAndValidate(serializer_).IsHlgSupported().value());
 
-  serializer_.SetHglSupported(false);
-  EXPECT_FALSE(ConvertAndValidate(serializer_).IsHglSupported().value());
+  serializer_.SetHlgSupported(false);
+  EXPECT_FALSE(ConvertAndValidate(serializer_).IsHlgSupported().value());
 }
 
 TEST_F(PlatformInfoSerializerTest, HdrFeatureEnabled) {

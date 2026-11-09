@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2021 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Test driver for integration tests of Chrome's mini_installer.
@@ -15,15 +15,14 @@ import sys
 # Add typ to the path if it's not already there, then import it.
 CUR_DIR = os.path.dirname(os.path.realpath(__file__))
 SRC_DIR = os.path.dirname(os.path.dirname(os.path.dirname(CUR_DIR)))
-TYP_DIR = os.path.join(SRC_DIR, 'third_party', 'catapult', 'third_party',
-                       'typ')
+TYP_DIR = os.path.join(SRC_DIR, 'third_party', 'catapult', 'third_party', 'typ')
 if TYP_DIR not in sys.path:
     sys.path.insert(0, TYP_DIR)
 del SRC_DIR, TYP_DIR
 
-import typ
+import typ  # noqa: E402
 
-from argument_parser import ArgumentParser
+from argument_parser import ArgumentParser  # noqa: E402
 
 
 def _prepare_env_for_subprocesses(parser, args):
@@ -45,13 +44,21 @@ def _prepare_env_for_subprocesses(parser, args):
     if args.installer_path != parser.get_default('installer_path'):
         os.environ['CMI_INSTALLER_PATH'] = args.installer_path
     if args.previous_version_installer_path != parser.get_default(
-            'previous_version_installer_path'):
-        os.environ['CMI_PREVIOUS_VERSION_INSTALLER_PATH'] = \
+        'previous_version_installer_path'
+    ):
+        os.environ['CMI_PREVIOUS_VERSION_INSTALLER_PATH'] = (
             args.previous_version_installer_path
+        )
     if args.chromedriver_path != parser.get_default('chromedriver_path'):
         os.environ['CMI_CHROMEDRIVER_PATH'] = args.chromedriver_path
     if args.config != parser.get_default('config'):
         os.environ['CMI_CONFIG'] = args.config
+    # mini_installer_tests is configured with module_scheme = "flat" in
+    # infra/config/targets/binaries.star. On builders that do not wrap
+    # isolated scripts with result_adapter (e.g., non-Swarming builders using
+    # LocalIsolatedScriptTest), typ uploads directly to ResultSink and defaults
+    # to the "pyunit" scheme unless RESULTDB_MODULE_SCHEME is set.
+    os.environ.setdefault('RESULTDB_MODULE_SCHEME', 'flat')
 
 
 def main(args):
@@ -77,7 +84,7 @@ def main(args):
     try:
         return runner.run()[0]
     except KeyboardInterrupt:
-        self.print_("interrupted, exiting", stream=self.host.stderr)
+        sys.stderr.write("interrupted, exiting")
         return 130
 
 

@@ -1,49 +1,91 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/performance_manager/policies/working_set_trimmer_policy_chromeos.h"
 
 #include <memory>
+#include <vector>
 
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ash/arc/process/arc_process.h"
-#include "chrome/browser/ash/arc/process/arc_process_service.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/performance_manager/policies/policy_features.h"
-#include "components/arc/mojom/process.mojom.h"
+#include "chrome/browser/performance_manager/policies/working_set_trimmer_policy_arcvm.h"
+#include "chromeos/ash/experiences/arc/mojom/process.mojom.h"
+#include "chromeos/ash/experiences/arc/process/arc_process.h"
+#include "chromeos/ash/experiences/arc/process/arc_process_service.h"
+#include "chromeos/dbus/power/fake_power_manager_client.h"
+#include "chromeos/dbus/power_manager/suspend.pb.h"
 #include "components/performance_manager/graph/graph_impl_operations.h"
 #include "components/performance_manager/graph/page_node_impl.h"
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/performance_manager_impl.h"
 #include "components/performance_manager/test_support/graph_test_harness.h"
 #include "components/performance_manager/test_support/mock_graphs.h"
+#include "content/public/common/process_type.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace performance_manager {
+
+namespace mechanism {
+class MockWorkingSetTrimmerChromeOS : public WorkingSetTrimmerChromeOS {
+ public:
+  MockWorkingSetTrimmerChromeOS() {
+    ON_CALL(*this, TrimArcVmWorkingSet)
+        .WillByDefault(testing::Invoke(
+            this, &MockWorkingSetTrimmerChromeOS::DefaultTrimArcVmWorkingSet));
+  }
+  MOCK_METHOD3(TrimArcVmWorkingSet,
+               void(WorkingSetTrimmerChromeOS::TrimArcVmWorkingSetCallback,
+                    ArcVmReclaimType,
+                    int));
+
+ private:
+  void DefaultTrimArcVmWorkingSet(TrimArcVmWorkingSetCallback callback,
+                                  ArcVmReclaimType reclaim_type,
+                                  int page_limit) {
+    std::move(callback).Run(true, "");
+  }
+};
+
+}  // namespace mechanism
+
 namespace policies {
 
 namespace {
+constexpr auto kNotFirstReclaimPostBoot = performance_manager::policies::
+    WorkingSetTrimmerPolicyArcVm::kNotFirstReclaimPostBoot;
+constexpr auto kYesFirstReclaimPostBoot = performance_manager::policies::
+    WorkingSetTrimmerPolicyArcVm::kYesFirstReclaimPostBoot;
 using testing::_;
 using testing::Exactly;
+using testing::Expectation;
+using testing::InSequence;
 using testing::Invoke;
+using testing::Return;
 
 // This method as it describes will get the milliseconds since system boot for
 // some past time this is necessary because of the JVM using int64 ms since
 // system update.
 int64_t GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta delta) {
   const base::Time cur_time = base::Time::NowFromSystemTime();
-  return (cur_time - delta).ToJavaTime();
+  return (cur_time - delta).InMillisecondsSinceUnixEpoch();
 }
 
 class ScopedTestArcVmDelegate
     : public WorkingSetTrimmerPolicyChromeOS::ArcVmDelegate {
  public:
   ScopedTestArcVmDelegate(WorkingSetTrimmerPolicyChromeOS* policy,
-                          bool eligible)
-      : policy_(policy), eligible_(eligible) {
+                          mechanism::ArcVmReclaimType eligibility,
+                          bool is_first_trim_post_boot)
+      : policy_(policy),
+        eligibility_(eligibility),
+        is_first_trim_post_boot_(is_first_trim_post_boot) {
     policy_->set_arcvm_delegate_for_testing(this);
   }
   ~ScopedTestArcVmDelegate() override {
@@ -54,14 +96,27 @@ class ScopedTestArcVmDelegate
   ScopedTestArcVmDelegate& operator=(const ScopedTestArcVmDelegate&) = delete;
 
   // WorkingSetTrimmerPolicyChromeOS::ArcVmDelegate overrides:
-  bool IsEligibleForReclaim(
-      const base::TimeDelta& arcvm_inactivity_time) override {
-    return eligible_;
+  mechanism::ArcVmReclaimType IsEligibleForReclaim(
+      const base::TimeDelta& arcvm_inactivity_time,
+      mechanism::ArcVmReclaimType trim_once_type_after_arcvm_boot,
+      bool* is_first_trim_post_boot) override {
+    if (is_first_trim_post_boot)
+      *is_first_trim_post_boot = is_first_trim_post_boot_;
+    return eligibility_;
+  }
+
+  void set_eligibility(mechanism::ArcVmReclaimType eligibility) {
+    eligibility_ = eligibility;
+  }
+
+  void set_is_first_trim_post_boot(bool is_first_trim_post_boot) {
+    is_first_trim_post_boot_ = is_first_trim_post_boot;
   }
 
  private:
-  WorkingSetTrimmerPolicyChromeOS* const policy_;
-  const bool eligible_;
+  const raw_ptr<WorkingSetTrimmerPolicyChromeOS> policy_;
+  mechanism::ArcVmReclaimType eligibility_;
+  bool is_first_trim_post_boot_;
 };
 
 }  // namespace
@@ -71,26 +126,26 @@ class MockWorkingSetTrimmerPolicyChromeOS
  public:
   MockWorkingSetTrimmerPolicyChromeOS() : WorkingSetTrimmerPolicyChromeOS() {
     // Setup our default configuration
-    set_trim_on_memory_pressure(true);
     set_trim_on_freeze(true);
     set_trim_arc_on_memory_pressure(false);
     set_trim_arcvm_on_memory_pressure(false);
 
-    params().graph_walk_backoff_time = base::TimeDelta::FromSeconds(30);
-    params().node_invisible_time = base::TimeDelta::FromSeconds(30);
-    params().node_trim_backoff_time = base::TimeDelta::FromSeconds(30);
+    params().graph_walk_backoff_time = base::Seconds(30);
+    params().node_invisible_time = base::Seconds(30);
+    params().node_trim_backoff_time = base::Seconds(30);
     params().arc_process_trim_backoff_time = base::TimeDelta::Min();
     params().arc_process_inactivity_time = base::TimeDelta::Min();
     params().trim_arc_aggressive = false;
     params().arcvm_inactivity_time = base::TimeDelta::Min();
     params().arcvm_trim_backoff_time = base::TimeDelta::Min();
     params().trim_arcvm_on_critical_pressure = false;
+    params().trim_arcvm_on_first_memory_pressure_after_arcvm_boot = false;
 
     // Setup some default invocations.
-    ON_CALL(*this, OnMemoryPressure(_))
+    ON_CALL(*this, OnReleaseMemory())
         .WillByDefault(Invoke(
             this,
-            &MockWorkingSetTrimmerPolicyChromeOS::DefaultOnMemoryPressure));
+            &MockWorkingSetTrimmerPolicyChromeOS::DefaultOnReleaseMemory));
 
     ON_CALL(*this, TrimArcProcesses)
         .WillByDefault(Invoke(
@@ -110,13 +165,23 @@ class MockWorkingSetTrimmerPolicyChromeOS
         .WillByDefault(Invoke(
             this,
             &MockWorkingSetTrimmerPolicyChromeOS::DefaultOnTrimArcVmProcesses));
+
+    ON_CALL(*this, OnArcVmTrimEnded)
+        .WillByDefault(Invoke(
+            this,
+            &MockWorkingSetTrimmerPolicyChromeOS::DefaultOnArcVmTrimEnded));
+
+    ON_CALL(*this, GetTrimmer)
+        .WillByDefault(Invoke(
+            this, &MockWorkingSetTrimmerPolicyChromeOS::DefaultGetTrimmer));
   }
 
-  ~MockWorkingSetTrimmerPolicyChromeOS() override {}
+  MockWorkingSetTrimmerPolicyChromeOS(
+      const MockWorkingSetTrimmerPolicyChromeOS&) = delete;
+  MockWorkingSetTrimmerPolicyChromeOS& operator=(
+      const MockWorkingSetTrimmerPolicyChromeOS&) = delete;
 
-  base::MemoryPressureListener& listener() {
-    return memory_pressure_listener_.value();
-  }
+  ~MockWorkingSetTrimmerPolicyChromeOS() override = default;
 
   base::TimeTicks get_last_graph_walk() {
     return last_graph_walk_ ? *last_graph_walk_ : base::TimeTicks();
@@ -126,26 +191,25 @@ class MockWorkingSetTrimmerPolicyChromeOS
   features::TrimOnMemoryPressureParams& params() { return params_; }
 
   // Mock methods related to tab (renderer) per process reclaim.
-  MOCK_METHOD1(TrimWorkingSet, bool(const ProcessNode*));
-  MOCK_METHOD1(OnMemoryPressure,
-               void(base::MemoryPressureListener::MemoryPressureLevel level));
+  MOCK_METHOD1(TrimWorkingSet, void(const ProcessNode*));
+  MOCK_METHOD0(OnReleaseMemory, void(void));
 
   // Mock methods related to ARC process trimming.
   MOCK_METHOD0(TrimArcProcesses, void(void));
   MOCK_METHOD2(TrimReceivedArcProcesses,
                void(int, arc::ArcProcessService::OptionalArcProcessList));
   MOCK_METHOD1(IsArcProcessEligibleForReclaim, bool(const arc::ArcProcess&));
-  MOCK_METHOD1(TrimArcProcess, bool(const base::ProcessId));
+  MOCK_METHOD1(TrimArcProcess, void(const base::ProcessId));
 
   // Mock methods related to ARCVM process trimming.
-  MOCK_METHOD1(TrimArcVmProcesses,
-               void(base::MemoryPressureListener::MemoryPressureLevel));
-  MOCK_METHOD1(OnTrimArcVmProcesses, void(bool));
+  MOCK_METHOD1(TrimArcVmProcesses, void(bool));
+  MOCK_METHOD2(OnTrimArcVmProcesses, void(mechanism::ArcVmReclaimType, bool));
+  MOCK_METHOD2(OnArcVmTrimEnded, void(mechanism::ArcVmReclaimType, bool));
+  MOCK_METHOD0(GetTrimmer, mechanism::WorkingSetTrimmerChromeOS*(void));
 
   // Exposes the default implementations so they can be used in tests.
-  void DefaultOnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel level) {
-    WorkingSetTrimmerPolicyChromeOS::OnMemoryPressure(level);
+  void DefaultOnReleaseMemory() {
+    WorkingSetTrimmerPolicyChromeOS::OnReleaseMemory();
   }
 
   void DefaultTrimArcProcesses() {
@@ -164,17 +228,23 @@ class MockWorkingSetTrimmerPolicyChromeOS
         proc);
   }
 
-  void DefaultTrimArcVmProcesses(
-      base::MemoryPressureListener::MemoryPressureLevel level) {
-    WorkingSetTrimmerPolicyChromeOS::TrimArcVmProcesses(level);
+  void DefaultTrimArcVmProcesses(bool is_critical) {
+    WorkingSetTrimmerPolicyChromeOS::TrimArcVmProcesses(is_critical);
   }
 
-  void DefaultOnTrimArcVmProcesses(bool need_reclaim) {
-    WorkingSetTrimmerPolicyChromeOS::OnTrimArcVmProcesses(need_reclaim);
+  void DefaultOnTrimArcVmProcesses(mechanism::ArcVmReclaimType reclaim_type,
+                                   bool is_first_trim_post_boot) {
+    WorkingSetTrimmerPolicyChromeOS::OnTrimArcVmProcesses(
+        reclaim_type, is_first_trim_post_boot);
   }
 
-  void trim_on_memory_pressure(bool enabled) {
-    set_trim_on_memory_pressure(enabled);
+  void DefaultOnArcVmTrimEnded(mechanism::ArcVmReclaimType reclaim_type,
+                               bool success) {
+    WorkingSetTrimmerPolicyChromeOS::OnArcVmTrimEnded(reclaim_type, success);
+  }
+
+  mechanism::WorkingSetTrimmerChromeOS* DefaultGetTrimmer() {
+    return WorkingSetTrimmerPolicyChromeOS::GetTrimmer();
   }
 
   void trim_arc_on_memory_pressure(bool enabled) {
@@ -184,46 +254,75 @@ class MockWorkingSetTrimmerPolicyChromeOS
   void trim_arcvm_on_memory_pressure(bool enabled) {
     set_trim_arcvm_on_memory_pressure(enabled);
   }
+};
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockWorkingSetTrimmerPolicyChromeOS);
+class PageNodeContext {
+ public:
+  TestNodeWrapper<ProcessNodeImpl> process_node_;
+  TestNodeWrapper<PageNodeImpl> page_node_;
+  TestNodeWrapper<FrameNodeImpl> parent_frame_;
+
+  PageNodeContext() = default;
+  ~PageNodeContext() = default;
+  PageNodeContext(const PageNodeContext&) = delete;
+  PageNodeContext& operator=(const PageNodeContext&) = delete;
 };
 
 class WorkingSetTrimmerPolicyChromeOSTest : public GraphTestHarness {
  public:
+  void SimulateMemoryPressure(bool is_critical) {
+    base::MemoryLimit limit =
+        is_critical ? base::MemoryLimit::CriticalPressureThreshold()
+                    : base::MemoryLimit::ModeratePressureThreshold();
+    test_registry_.NotifyUpdateMemoryLimitAndRelease(limit);
+  }
+
+  void SimulateNoMemoryPressure() {
+    test_registry_.NotifyUpdateMemoryLimitAndRelease(
+        base::MemoryLimit::NoPressureThreshold());
+  }
+
   WorkingSetTrimmerPolicyChromeOSTest()
       : GraphTestHarness(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
         run_loop_(std::make_unique<base::RunLoop>()) {}
-  ~WorkingSetTrimmerPolicyChromeOSTest() override {}
+
+  WorkingSetTrimmerPolicyChromeOSTest(
+      const WorkingSetTrimmerPolicyChromeOSTest&) = delete;
+  WorkingSetTrimmerPolicyChromeOSTest& operator=(
+      const WorkingSetTrimmerPolicyChromeOSTest&) = delete;
+
+  ~WorkingSetTrimmerPolicyChromeOSTest() override = default;
 
   void SetUp() override {
+    chromeos::PowerManagerClient::InitializeFake();
+    CreateTrimmer();
     GraphTestHarness::SetUp();
     RecreatePolicy(base::BindLambdaForTesting(
         [](MockWorkingSetTrimmerPolicyChromeOS*) {}));
   }
 
   void TearDown() override {
-    policy_ = nullptr;
     // Fix flakiness due to WorkingSetTrimmerPolicyChromeOS's weak ptr factory
     // getting destroyed and causing a weak ptr to get invalidated on a
     // different sequenced thread from where it was bound.
     task_env().RunUntilIdle();
+    TakePolicyFromGraph();
     GraphTestHarness::TearDown();
+    chromeos::PowerManagerClient::Shutdown();
   }
 
-  void DefaultOnTrimArcVmProcessesAndQuit(bool need_reclaim) {
-    policy()->DefaultOnTrimArcVmProcesses(need_reclaim);
+  void DefaultOnTrimArcVmProcessesAndQuit(
+      mechanism::ArcVmReclaimType reclaim_type,
+      bool is_first_trim_post_boot) {
+    policy()->DefaultOnTrimArcVmProcesses(reclaim_type,
+                                          is_first_trim_post_boot);
     run_loop()->Quit();
   }
 
-  size_t GetArcVmTrimCountForFinalReport(
-      size_t current_arcvm_trim_count,
-      const base::TimeDelta& time_since_last_arcvm_trim_metric_report,
-      const base::TimeDelta& arcvm_trim_backoff_time,
-      const base::TimeDelta& arcvm_trim_metric_report_delay) {
-    return policy()->GetArcVmTrimCountForFinalReport(
-        current_arcvm_trim_count, time_since_last_arcvm_trim_metric_report,
-        arcvm_trim_backoff_time, arcvm_trim_metric_report_delay);
+  void DefaultOnArcVmTrimEndedAndQuit(mechanism::ArcVmReclaimType reclaim_type,
+                                      bool success) {
+    policy()->DefaultOnArcVmTrimEnded(reclaim_type, success);
+    run_loop()->Quit();
   }
 
   // Creates a new policy and runs the |callback| with the policy before passing
@@ -237,7 +336,7 @@ class WorkingSetTrimmerPolicyChromeOSTest : public GraphTestHarness {
     auto mock_policy = std::make_unique<
         testing::NiceMock<MockWorkingSetTrimmerPolicyChromeOS>>();
     policy_ = mock_policy.get();
-    std::move(callback).Run(policy_);
+    std::move(callback).Run(policy_.get());
     graph()->PassToGraph(std::move(mock_policy));
   }
 
@@ -246,11 +345,20 @@ class WorkingSetTrimmerPolicyChromeOSTest : public GraphTestHarness {
     policy_ = nullptr;
   }
 
+  void CreateTrimmer() {
+    trimmer_ = std::make_unique<mechanism::MockWorkingSetTrimmerChromeOS>();
+  }
+
+  mechanism::MockWorkingSetTrimmerChromeOS* trimmer() const {
+    return trimmer_.get();
+  }
+
   void RecreateRunLoop() { run_loop_ = std::make_unique<base::RunLoop>(); }
 
   base::RunLoop* run_loop() { return run_loop_.get(); }
 
   MockWorkingSetTrimmerPolicyChromeOS* policy() { return policy_; }
+  features::TrimOnMemoryPressureParams params() { return policy()->params(); }
 
   base::TimeTicks NowTicks() { return task_env().NowTicks(); }
 
@@ -259,34 +367,72 @@ class WorkingSetTrimmerPolicyChromeOSTest : public GraphTestHarness {
     return NowTicks();
   }
 
- private:
-  std::unique_ptr<base::RunLoop> run_loop_;
-  MockWorkingSetTrimmerPolicyChromeOS* policy_ = nullptr;  // Not owned.
+  void ExpectNoReclaim();
+  void ExpectFullReclaim(bool is_first_reclaim, int computed_page_limit);
+  void ExpectDropPageCaches();
 
-  DISALLOW_COPY_AND_ASSIGN(WorkingSetTrimmerPolicyChromeOSTest);
+  std::unique_ptr<PageNodeContext> CreateInvisiblePage() {
+    // Create a simple graph
+    auto context = std::make_unique<PageNodeContext>();
+    context->process_node_ = CreateNode<ProcessNodeImpl>();
+    context->page_node_ = CreateNode<PageNodeImpl>();
+    context->parent_frame_ = CreateFrameNodeAutoId(context->process_node_.get(),
+                                                   context->page_node_.get());
+
+    // Create a Process so this process node doesn't bail on Process.IsValid();
+    context->process_node_->SetProcess(base::Process::Current().Duplicate(),
+                                       /* launch_time=*/base::TimeTicks::Now());
+
+    // Set it invisible using the current clock, then we will advance the clock
+    // and it should result in a TrimWorkingSet since it's been invisible long
+    // enough.
+    context->page_node_->SetIsVisible(
+        true);  // Reset visibility and then set invisible.
+    context->page_node_->SetIsVisible(false);  // Uses the testing clock.
+
+    return context;
+  }
+
+ private:
+  base::TestMemoryConsumerRegistry test_registry_;
+  std::unique_ptr<base::RunLoop> run_loop_;
+  raw_ptr<MockWorkingSetTrimmerPolicyChromeOS,
+          DanglingUntriaged>
+      policy_ = nullptr;  // Not owned.
+  std::unique_ptr<mechanism::MockWorkingSetTrimmerChromeOS> trimmer_;
 };
 
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest, NoGraphWalkOnNoPressure) {
+  const base::TimeTicks initial_walk_time = policy()->get_last_graph_walk();
+  ASSERT_EQ(initial_walk_time, base::TimeTicks());
+
+  SimulateNoMemoryPressure();
+
+  FastForwardBy(base::Seconds(1));
+
+  // We should not have walked the graph because there was no pressure.
+  EXPECT_EQ(initial_walk_time, policy()->get_last_graph_walk());
+}
+
 // Validate that we don't walk again before the backoff period has expired.
-// TODO(crbug.com/1051006): Test is flaky
+// TODO(crbug.com/40673488): Test is flaky
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, DISABLED_GraphWalkBackoffPeriod) {
   // Since we've never walked the graph we should do so now.
   const base::TimeTicks initial_walk_time = policy()->get_last_graph_walk();
   ASSERT_EQ(initial_walk_time, base::TimeTicks());
 
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
 
   // Since we have never walked we expect that we walked it now, we confirm by
   // checking the last walk time against the known clock.
   const base::TimeTicks last_walk_time = policy()->get_last_graph_walk();
   EXPECT_LT(initial_walk_time, last_walk_time);
 
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
 
   // We will not have caused a walk as the clock has not advanced beyond the
   // backoff period.
@@ -295,31 +441,29 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, DISABLED_GraphWalkBackoffPeriod) {
 
 // Validate that we will walk the graph again after the backoff period is
 // expired.
-// TODO(crbug.com/1051006): Test is flaky
+// TODO(crbug.com/40673488): Test is flaky
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
        DISABLED_GraphWalkAfterBackoffPeriod) {
   // Since we've never walked the graph we should do so now.
   const base::TimeTicks initial_walk_time = policy()->get_last_graph_walk();
   ASSERT_EQ(initial_walk_time, base::TimeTicks());
 
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
 
   // Since we have never walked we expect that we walked it now, we confirm by
   // checking the last walk time against the known clock.
   const base::TimeTicks last_walk_time = policy()->get_last_graph_walk();
   EXPECT_LT(initial_walk_time, last_walk_time);
 
-  FastForwardBy(base::TimeDelta::FromDays(1));
+  FastForwardBy(base::Days(1));
 
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
   // Finally advance the clock beyond the backoff period and it should allow it
   // to walk again.
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
 
   const base::TimeTicks final_walk_time = policy()->get_last_graph_walk();
   EXPECT_GT(final_walk_time, last_walk_time);
@@ -327,7 +471,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
 
 // This test will validate that we will NOT try to trim a node if it has not
 // been invisible for long enough.
-// TODO(crbug.com/1051006): Test is flaky
+// TODO(crbug.com/40673488): Test is flaky
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
        DISABLED_DontTrimIfNotInvisibleLongEnough) {
   // Create a simple graph
@@ -348,10 +492,9 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
   EXPECT_CALL(*policy(), TrimWorkingSet(testing::_)).Times(0);
 
   // Triger memory pressure and we should observe the walk.
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
 
   const base::TimeTicks current_walk_time = policy()->get_last_graph_walk();
   EXPECT_EQ(clock_time, current_walk_time);
@@ -367,56 +510,91 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, DontTrimIfNoMainFrame) {
   // Make sure the node is not visible for 1 day.
   page_node->SetIsVisible(true);   // Reset visibility and set invisible Now.
   page_node->SetIsVisible(false);  // Uses the testing clock.
-  FastForwardBy(base::TimeDelta::FromDays(1));
+  FastForwardBy(base::Days(1));
 
   // We should not be called because we don't have a frame node or process node.
   EXPECT_CALL(*policy(), TrimWorkingSet(testing::_)).Times(0);
 
   // Triger memory pressure and we should observe the walk.
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromDays(1));
+  FastForwardBy(base::Days(1));
 }
 
 // This test will validate that we WILL trim the working set if it has been
 // invisible long enough.
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, TrimIfInvisibleLongEnough) {
-  // Create a simple graph
-  auto process_node = CreateNode<ProcessNodeImpl>();
-  auto page_node = CreateNode<PageNodeImpl>();
-  auto parent_frame =
-      CreateFrameNodeAutoId(process_node.get(), page_node.get());
-
+  auto page = CreateInvisiblePage();
   ASSERT_EQ(1u, graph()->GetAllPageNodes().size());
 
-  // Create a Process so this process node doesn't bail on Process.IsValid();
-  const base::Process self = base::Process::Current();
-  auto duplicate = self.Duplicate();
-  ASSERT_TRUE(duplicate.IsValid());
-  process_node->SetProcess(std::move(duplicate), base::Time::Now());
-
-  // Set it invisible using the current clock, then we will advance the clock
-  // and it should result in a TrimWorkingSet since it's been invisible long
-  // enough.
-  page_node->SetIsVisible(true);   // Reset visibility and then set invisible.
-  page_node->SetIsVisible(false);  // Uses the testing clock.
-  const base::TimeTicks cur_time =
-      FastForwardBy(base::TimeDelta::FromDays(365));
+  const base::TimeTicks cur_time = FastForwardBy(base::Days(365));
 
   // We will attempt to trim to corresponding ProcessNode since we've been
   // invisible long enough.
-  EXPECT_CALL(*policy(), TrimWorkingSet(process_node.get())).Times(1);
+  EXPECT_CALL(*policy(), TrimWorkingSet(page->process_node_.get())).Times(1);
 
   // Triger memory pressure and we should observe the walk since we've never
   // walked before.
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
 
   // We should have triggered the walk and it should have trimmed.
   EXPECT_EQ(cur_time, policy()->get_last_graph_walk());
+}
+
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest, DoNotTrimWhileSuspended) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kDisableTrimmingWhileSuspended);
+  RecreatePolicy(
+      base::BindLambdaForTesting([](MockWorkingSetTrimmerPolicyChromeOS*) {}));
+  auto page = CreateInvisiblePage();
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
+
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
+      power_manager::SuspendImminent_Reason_OTHER);
+
+  EXPECT_CALL(*policy(), TrimWorkingSet(testing::_)).Times(0);
+
+  SimulateMemoryPressure(false);
+  FastForwardBy(base::Seconds(1));
+}
+
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest, DoNotTrimJustAfterResumed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kDisableTrimmingWhileSuspended);
+  RecreatePolicy(
+      base::BindLambdaForTesting([](MockWorkingSetTrimmerPolicyChromeOS*) {}));
+  auto page = CreateInvisiblePage();
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
+
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
+      power_manager::SuspendImminent_Reason_OTHER);
+  chromeos::FakePowerManagerClient::Get()->SendSuspendDone();
+
+  EXPECT_CALL(*policy(), TrimWorkingSet(testing::_)).Times(0);
+
+  SimulateMemoryPressure(false);
+  FastForwardBy(base::Seconds(1));
+}
+
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest, Trim15MinutesAfterResumed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kDisableTrimmingWhileSuspended);
+  RecreatePolicy(
+      base::BindLambdaForTesting([](MockWorkingSetTrimmerPolicyChromeOS*) {}));
+  auto page = CreateInvisiblePage();
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
+
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
+      power_manager::SuspendImminent_Reason_OTHER);
+  chromeos::FakePowerManagerClient::Get()->SendSuspendDone();
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
+
+  EXPECT_CALL(*policy(), TrimWorkingSet(page->process_node_.get())).Times(1);
+
+  SimulateMemoryPressure(false);
+  FastForwardBy(base::Seconds(1));
 }
 
 // This test is a simple smoke test to make sure that ARC process trimming
@@ -426,18 +604,16 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcDontTrimOnlyIfDisabled) {
   // actually trimming.
   policy()->trim_arc_on_memory_pressure(false);
   EXPECT_CALL(*policy(), TrimArcProcesses).Times(0);
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(1));
+  SimulateMemoryPressure(false);
 }
 
-// TODO(crbug.com/1177146) Re-enable test
+// TODO(crbug.com/40748300) Re-enable test
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, DISABLED_ArcTrimOnlyIfEnabled) {
   policy()->trim_arc_on_memory_pressure(true);
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
   EXPECT_CALL(*policy(), TrimArcProcesses).Times(1);
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 }
 
 // This test will validate that we don't fetch the ARC process list at an
@@ -448,28 +624,24 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
   // Our test setup will validate that we don't attempt to try to fetch and look
   // for ARC processes more than the configured frequency (in this case 60s).
   policy()->trim_arc_on_memory_pressure(true);
-  policy()->params().arc_process_list_fetch_backoff_time =
-      base::TimeDelta::FromSeconds(60);
+  policy()->params().arc_process_list_fetch_backoff_time = base::Seconds(60);
 
   // We're going to cause a moderate pressure notification twice, but we only
   // expect to attempt to fetch the ARC processes once because of our configured
   // backoff time.
   EXPECT_CALL(*policy(), TrimArcProcesses).Times(Exactly(1));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
 
   // Now as we pass through the backoff time we expect that we can be called
   // again.
   EXPECT_CALL(*policy(), TrimArcProcesses).Times(Exactly(1));
   FastForwardBy(policy()->params().arc_process_list_fetch_backoff_time);
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
 }
 
 // This test validates that a process which is focused is not eligible.
@@ -481,7 +653,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcProcessFocusedIsNotEligible) {
       /*nspid=*/0, /*pid=*/1234, "mock process",
       /*state=*/arc::mojom::ProcessState::SERVICE, /*is_focused=*/true,
       /*last activity=*/
-      GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromMinutes(2)));
+      GetSystemTimeInPastAsMsSinceUptime(base::Minutes(2)));
 
   EXPECT_FALSE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
 }
@@ -497,7 +669,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcBackgroundProtectIsNotEligible) {
       /*state=*/arc::mojom::ProcessState::IMPORTANT_BACKGROUND,
       /*is_focused=*/false,
       /*last activity=*/
-      GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromMinutes(2)));
+      GetSystemTimeInPastAsMsSinceUptime(base::Minutes(2)));
 
   EXPECT_FALSE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
 }
@@ -517,7 +689,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
       /*state=*/arc::mojom::ProcessState::IMPORTANT_BACKGROUND,
       /*is_focused=*/false,
       /*last activity=*/
-      GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromMinutes(60)));
+      GetSystemTimeInPastAsMsSinceUptime(base::Minutes(60)));
 
   EXPECT_TRUE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
 }
@@ -535,7 +707,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcAggressiveAllowsImportant) {
       /*state=*/arc::mojom::ProcessState::IMPORTANT_FOREGROUND,
       /*is_focused=*/false,
       /*last activity=*/
-      GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromMinutes(60)));
+      GetSystemTimeInPastAsMsSinceUptime(base::Minutes(60)));
 
   EXPECT_TRUE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
 }
@@ -549,8 +721,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcProcessNotTrimmedTooFrequently) {
   policy()->params().arc_process_inactivity_time = base::TimeDelta::Min();
 
   // We will only allow trimming of an individual process once every 10 seconds.
-  policy()->params().arc_process_trim_backoff_time =
-      base::TimeDelta::FromSeconds(10);
+  policy()->params().arc_process_trim_backoff_time = base::Seconds(10);
 
   // Use a mock ARC process, this process is eligible to be reclaimed so the
   // only thing which would prevent it would be that it was reclaimed too
@@ -559,7 +730,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcProcessNotTrimmedTooFrequently) {
       /*nspid=*/0, /*pid=*/1234, "mock process",
       /*state=*/arc::mojom::ProcessState::SERVICE, /*is_focused=*/false,
       /*last activity=*/
-      GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromMinutes(2)));
+      GetSystemTimeInPastAsMsSinceUptime(base::Minutes(2)));
 
   EXPECT_TRUE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
 
@@ -567,7 +738,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcProcessNotTrimmedTooFrequently) {
   // longer is eligible for reclaim.
   policy()->SetArcProcessLastTrimTime(mock_arc_proc.pid(),
                                       base::TimeTicks::Now());
-  FastForwardBy(base::TimeDelta::FromSeconds(5));
+  FastForwardBy(base::Seconds(5));
   EXPECT_FALSE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
 
   // And finally, as we move through the backoff period we should be able to
@@ -583,8 +754,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
   policy()->trim_arc_on_memory_pressure(true);
 
   // We won't trim when the last activity is less than 30s ago.
-  policy()->params().arc_process_inactivity_time =
-      base::TimeDelta::FromSeconds(30);
+  policy()->params().arc_process_inactivity_time = base::Seconds(30);
 
   // We don't care about the ARC process trim backoff time for this test.
   policy()->params().arc_process_trim_backoff_time = base::TimeDelta::Min();
@@ -595,7 +765,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
       /*nspid=*/0, /*pid=*/1234, "mock process",
       /*state=*/arc::mojom::ProcessState::SERVICE, /*is_focused=*/false,
       /*last activity=*/
-      GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromSeconds(10)));
+      GetSystemTimeInPastAsMsSinceUptime(base::Seconds(10)));
 
   // It was active too recently.
   EXPECT_FALSE(policy()->DefaultIsArcProcessEligibleForReclaim(mock_arc_proc));
@@ -629,7 +799,7 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
         /*nspid=*/0, /*pid=*/1234 + i, "mock process",
         /*state=*/arc::mojom::ProcessState::SERVICE, /*is_focused=*/false,
         /*last activity=*/
-        GetSystemTimeInPastAsMsSinceUptime(base::TimeDelta::FromMinutes(10)));
+        GetSystemTimeInPastAsMsSinceUptime(base::Minutes(10)));
   }
 
   // We expect that only the first two processes will be trimmed because
@@ -652,25 +822,226 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcVmDontTrimOnlyIfDisabled) {
   policy()->trim_arcvm_on_memory_pressure(false);
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(0);
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(1));
+  SimulateMemoryPressure(false);
 }
 
 // This test will validate that we do try to trim the ARCVM process on memory
 // pressure when the feature is enabled.
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcVmTrimOnlyIfEnabled) {
-  ScopedTestArcVmDelegate delegate(policy(), /*eligible=*/false);
+  ScopedTestArcVmDelegate delegate(policy(),
+                                   mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot);
 
   policy()->trim_arcvm_on_memory_pressure(true);
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(1);
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(false))
+
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
+  run_loop()->Run();
+}
+
+// Builds a list of expectations for a memory pressure event that results in
+// no reclaim.
+void WorkingSetTrimmerPolicyChromeOSTest::ExpectNoReclaim() {
+  // Enforces all EXPECT_CALLS to occur in the order they are stated below.
+  InSequence serialize_expected_calls;
+
+  EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
+
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot))
+      .Times(Exactly(1))
+      .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
+                                 DefaultOnTrimArcVmProcessesAndQuit));
+}
+
+// Builds a list of expectations for a memory pressure event that results in a
+// full reclaim, specifying the reclaim parameters:
+// |is_first_reclaim| whether or not this will be flagged as a first post-boot
+//                    reclaim.
+// |computed_page_limit| Expected limit for the number of pages to reclaim.
+void WorkingSetTrimmerPolicyChromeOSTest::ExpectFullReclaim(
+    bool is_first_reclaim,
+    int computed_page_limit) {
+  mechanism::ArcVmReclaimType full_reclaim =
+      mechanism::ArcVmReclaimType::kReclaimAll;
+
+  // Enforces all EXPECT_CALLS to occur in the order they are stated below.
+  InSequence serialize_expected_calls;
+
+  // 1. The request to trim.
+  EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
+
+  // 2. The intermediate forwarding operation. Checking that parameters are
+  //    carried forward.
+  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(full_reclaim, is_first_reclaim))
+      .Times(Exactly(1));
+
+  // 3. The call to the underlying trimmer. Validate the computed page limit.
+  EXPECT_CALL(*trimmer(),
+              TrimArcVmWorkingSet(_, full_reclaim, computed_page_limit))
+      .Times(Exactly(1));
+
+  // 4. Expect success and quit the run loop.
+  EXPECT_CALL(*policy(), OnArcVmTrimEnded(full_reclaim, true))
+      .Times(Exactly(1))
+      .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
+                                 DefaultOnArcVmTrimEndedAndQuit));
+}
+
+// Similarly, builds a list of expectations for dropping guest page caches.
+void WorkingSetTrimmerPolicyChromeOSTest::ExpectDropPageCaches() {
+  // Enforces all EXPECT_CALLS to occur in the order they are stated below.
+  InSequence serialize_expected_calls;
+
+  // 1. The request to trim.
+  EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
+
+  // 2. The intermediate forwarding operation. Checking that parameters are
+  //    carried forward.
+  EXPECT_CALL(
+      *policy(),
+      OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimGuestPageCaches,
+                           /*is_first_reclaim=*/true))
+      .Times(Exactly(1));
+
+  // 3. The call to the underlying trimmer. Validate the computed page limit.
+  EXPECT_CALL(
+      *trimmer(),
+      TrimArcVmWorkingSet(/*callback=*/_,
+                          mechanism::ArcVmReclaimType::kReclaimGuestPageCaches,
+                          /*computed_page_limit=*/_))
+      .Times(Exactly(1));
+
+  // 4. Expect success and quit the run loop.
+  EXPECT_CALL(*policy(),
+              OnArcVmTrimEnded(
+                  mechanism::ArcVmReclaimType::kReclaimGuestPageCaches, true))
+      .Times(Exactly(1))
+      .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
+                                 DefaultOnArcVmTrimEndedAndQuit));
+}
+
+// This test validates the calculation of trim limits.
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcVmTrimPageLimits) {
+  ScopedTestArcVmDelegate delegate(policy(),
+                                   mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot);
+
+  // Set up parameters.
+  int config_pages_per_minute = 3500;
+  int config_max_pages = 20000;
+  policy()->trim_arcvm_on_memory_pressure(true);
+  policy()->params().trim_arcvm_on_first_memory_pressure_after_arcvm_boot =
+      true;
+  policy()->params().trim_arcvm_on_critical_pressure = false;
+  policy()->params().arcvm_trim_backoff_time = base::Seconds(60);
+  policy()->params().trim_arcvm_pages_per_minute = config_pages_per_minute;
+  policy()->params().trim_arcvm_max_pages_per_iteration = config_max_pages;
+  policy()->params().arcvm_inactivity_time = base::Seconds(30);
+
+  // Replace the default trimmer with a mock one, so we can verify parameters
+  // to it and control success/failure return values.
+  EXPECT_CALL(*policy(), GetTrimmer).WillRepeatedly(Return(trimmer()));
+
+  // -------------------------
+  // Step 1 of 5:  No reclaim.
+
+  // Tell the fake Arc Delegate to respond as if it is not booted yet.
+  delegate.set_eligibility(mechanism::ArcVmReclaimType::kReclaimNone);
+  delegate.set_is_first_trim_post_boot(kNotFirstReclaimPostBoot);
+
+  ExpectNoReclaim();
+
+  FastForwardBy(base::Seconds(2));  // Still early in boot.
+
+  // Trigger pressure event and wait until last expectation is met.
+  SimulateMemoryPressure(false);
+  run_loop()->Run();
+  RecreateRunLoop();
+
+  // -------------------------------------------------------------
+  // Step 2 of 5:  First reclaim post-boot, drop guest page caches only.
+
+  // Tell fake Arc delegate to respond with first boot information.
+  delegate.set_eligibility(
+      mechanism::ArcVmReclaimType::kReclaimGuestPageCaches);
+  delegate.set_is_first_trim_post_boot(kYesFirstReclaimPostBoot);
+
+  ExpectDropPageCaches();
+
+  // Advance time just past the back-off setting.
+  FastForwardBy(base::Seconds(1));
+  FastForwardBy(policy()->params().arcvm_trim_backoff_time);
+
+  // Trigger pressure event and wait until last expectation is met.
+  SimulateMemoryPressure(false);
+  run_loop()->Run();
+  RecreateRunLoop();
+
+  // ------------------------------------------------------------------------
+  // Step 3 of 5:  Full reclaim after a few minutes
+
+  // Tell fake Arc delegate to respond saying it is NOT first boot.
+  delegate.set_eligibility(mechanism::ArcVmReclaimType::kReclaimAll);
+  delegate.set_is_first_trim_post_boot(kNotFirstReclaimPostBoot);
+
+  // The very first full reclaim is always done with |config_max_pages|.
+  ExpectFullReclaim(kNotFirstReclaimPostBoot, config_max_pages);
+
+  // Advance two times the back-off
+  FastForwardBy(base::Seconds(1));
+  FastForwardBy(policy()->params().arcvm_trim_backoff_time * 2);
+
+  // Trigger pressure event and wait until last expectation is met.
+  SimulateMemoryPressure(true);
+  run_loop()->Run();
+  RecreateRunLoop();
+
+  // ------------------------------------------------------------------------
+  // Step 4 of 5:  Full reclaim after a few minutes, confirm per-minute rate.
+
+  // Tell fake Arc delegate to respond saying it is NOT first boot.
+  delegate.set_eligibility(mechanism::ArcVmReclaimType::kReclaimAll);
+  delegate.set_is_first_trim_post_boot(kNotFirstReclaimPostBoot);
+
+  // Subsequent full reclaims are controlled by |config_pages_per_minute|.
+  constexpr int kMinutes = 2;
+  ExpectFullReclaim(kNotFirstReclaimPostBoot,
+                    config_pages_per_minute * kMinutes);
+
+  // Advance two times the back-off
+  FastForwardBy(base::Seconds(1));
+  FastForwardBy(policy()->params().arcvm_trim_backoff_time * kMinutes);
+
+  // Trigger pressure event and wait until last expectation is met.
+  SimulateMemoryPressure(true);
+  run_loop()->Run();
+  RecreateRunLoop();
+
+  // -----------------------------------------------------------------------
+  // Step 5 of 5:  Full reclaim after a long time, confirm cap at max pages.
+
+  // Tell fake Arc delegate to respond saying it is NOT first boot.
+  delegate.set_eligibility(mechanism::ArcVmReclaimType::kReclaimAll);
+  delegate.set_is_first_trim_post_boot(kNotFirstReclaimPostBoot);
+
+  ExpectFullReclaim(kNotFirstReclaimPostBoot, config_max_pages);
+
+  // Advance quite far into the future, to exceed the maximum reclaim.
+  FastForwardBy(base::Seconds(1));
+  FastForwardBy(policy()->params().arcvm_trim_backoff_time * 10);
+
+  // Trigger pressure event and wait until last expectation is met.
+  SimulateMemoryPressure(true);
   run_loop()->Run();
 }
 
@@ -679,225 +1050,250 @@ TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcVmTrimOnlyIfEnabled) {
 // levels.
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
        ArcVmTrimProcessesAtConfiguredInterval) {
-  ScopedTestArcVmDelegate delegate(policy(), /*eligible=*/true);
+  ScopedTestArcVmDelegate delegate(policy(),
+                                   mechanism::ArcVmReclaimType::kReclaimAll,
+                                   kNotFirstReclaimPostBoot);
 
   // Our test setup will validate that we don't attempt to try to trim the ARCVM
   // processes more than the configured frequency (in this case 60s).
   policy()->trim_arcvm_on_memory_pressure(true);
-  policy()->params().arcvm_trim_backoff_time = base::TimeDelta::FromSeconds(60);
+  policy()->params().arcvm_trim_backoff_time = base::Seconds(60);
 
   // We're going to cause a moderate pressure notification twice, but we only
   // expect to attempt to trim ARCVM once because of our configured backoff
   // time.
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
 
   // Now as we pass through the backoff time we expect that we can be called
   // again.
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(true))
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimAll,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
 
   FastForwardBy(policy()->params().arcvm_trim_backoff_time);
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  SimulateMemoryPressure(false);
   run_loop()->Run();
 }
 
-// Tests the same but with MEMORY_PRESSURE_LEVEL_CRITICAL. The behavior should
+// Tests the same but with critical memory pressure. The behavior should
 // be the same regardless of the pressure level.
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
        ArcVmTrimProcessesAtConfiguredInterval_Critical) {
-  ScopedTestArcVmDelegate delegate(policy(), /*eligible=*/true);
+  ScopedTestArcVmDelegate delegate(policy(),
+                                   mechanism::ArcVmReclaimType::kReclaimAll,
+                                   kNotFirstReclaimPostBoot);
 
   policy()->trim_arcvm_on_memory_pressure(true);
-  policy()->params().arcvm_trim_backoff_time = base::TimeDelta::FromSeconds(60);
+  policy()->params().arcvm_trim_backoff_time = base::Seconds(60);
 
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(true);
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(true);
 
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(true))
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimAll,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
 
   FastForwardBy(policy()->params().arcvm_trim_backoff_time);
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  SimulateMemoryPressure(true);
   run_loop()->Run();
 }
 
 // Tests that the actual reclaim is NOT performed when the delegate returns
-// false.
+// kReclaimNone.
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcVmTrimProcessesIneligible) {
-  ScopedTestArcVmDelegate delegate(policy(), /*eligible=*/false);
+  ScopedTestArcVmDelegate delegate(policy(),
+                                   mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot);
 
   policy()->trim_arcvm_on_memory_pressure(true);
-  policy()->params().arcvm_trim_backoff_time = base::TimeDelta::FromSeconds(60);
+  policy()->params().arcvm_trim_backoff_time = base::Seconds(60);
 
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(false))
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
 
   run_loop()->Run();
   RecreateRunLoop();
 
   // Repeat the same with CRITICAL.
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(false))
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
   FastForwardBy(policy()->params().arcvm_trim_backoff_time);
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  SimulateMemoryPressure(true);
+  run_loop()->Run();
+}
+
+// Tests that the actual reclaim is performed with the reclaim type the delegate
+// returns.
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest,
+       ArcVmTrimProcessesDropCachesEligible) {
+  ScopedTestArcVmDelegate delegate(
+      policy(), mechanism::ArcVmReclaimType::kReclaimGuestPageCaches,
+      kNotFirstReclaimPostBoot);
+
+  policy()->trim_arcvm_on_memory_pressure(true);
+  policy()->params().arcvm_trim_backoff_time = base::Seconds(60);
+
+  // Verify that OnTrimArcVmProcesses is called with kReclaimGuestPageCaches.
+  EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
+  EXPECT_CALL(
+      *policy(),
+      OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimGuestPageCaches,
+                           kNotFirstReclaimPostBoot))
+      .Times(Exactly(1))
+      .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
+                                 DefaultOnTrimArcVmProcessesAndQuit));
+
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
+  run_loop()->Run();
+  RecreateRunLoop();
+
+  // Change the delegate's return value to kReclaimAll. This happens in
+  // production too.
+  delegate.set_eligibility(mechanism::ArcVmReclaimType::kReclaimAll);
+
+  // Since dropping page caches is not an actual VM trim, a trimming can happen
+  // without waiting for the |arcvm_trim_backoff_time|.
+  EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimAll,
+                                   kNotFirstReclaimPostBoot))
+      .Times(Exactly(1))
+      .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
+                                 DefaultOnTrimArcVmProcessesAndQuit));
+
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
   run_loop()->Run();
 }
 
 // Tests that the actual reclaim is performed on LEVEL_CRITICAL when the
-// delegate returns false but |trim_arcvm_on_critical_pressure| is set to true.
+// delegate returns kReclaimNone but |trim_arcvm_on_critical_pressure| is
+// set to true.
 TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ArcVmTrimProcessesForceTrim) {
-  ScopedTestArcVmDelegate delegate(policy(), /*eligible=*/false);
+  ScopedTestArcVmDelegate delegate(policy(),
+                                   mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot);
 
   policy()->trim_arcvm_on_memory_pressure(true);
   policy()->params().trim_arcvm_on_critical_pressure = true;
-  policy()->params().arcvm_trim_backoff_time = base::TimeDelta::FromSeconds(60);
+  policy()->params().arcvm_trim_backoff_time = base::Seconds(60);
 
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(false))
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimNone,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(12));
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE);
+  FastForwardBy(base::Seconds(12));
+  SimulateMemoryPressure(false);
 
   run_loop()->Run();
   RecreateRunLoop();
 
   // Repeat the same with CRITICAL.
   EXPECT_CALL(*policy(), TrimArcVmProcesses).Times(Exactly(1));
-  EXPECT_CALL(*policy(), OnTrimArcVmProcesses(true))
+  EXPECT_CALL(*policy(),
+              OnTrimArcVmProcesses(mechanism::ArcVmReclaimType::kReclaimAll,
+                                   kNotFirstReclaimPostBoot))
       .Times(Exactly(1))
       .WillOnce(Invoke(this, &WorkingSetTrimmerPolicyChromeOSTest::
                                  DefaultOnTrimArcVmProcessesAndQuit));
 
-  FastForwardBy(base::TimeDelta::FromSeconds(1));
+  FastForwardBy(base::Seconds(1));
   FastForwardBy(policy()->params().arcvm_trim_backoff_time);
-  policy()->listener().SimulatePressureNotification(
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  SimulateMemoryPressure(true);
   run_loop()->Run();
 }
 
-// Tests that the UMA reporting is done every 30 minutes.
-TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ReportArcVmTrimMetric) {
-  base::HistogramTester tester;
+TEST_F(WorkingSetTrimmerPolicyChromeOSTest, TrimImperceptibleProcess) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kTrimImperceptibleProcess);
+  RecreatePolicy(
+      base::BindLambdaForTesting([](MockWorkingSetTrimmerPolicyChromeOS*) {}));
 
-  // Crates the policy _after_ ARCVM trimming is enabled. This is necessary to
-  // start the time for UMA reporting.
-  RecreatePolicy(base::BindLambdaForTesting(
-      [](MockWorkingSetTrimmerPolicyChromeOS* policy) {
-        policy->trim_arcvm_on_memory_pressure(true);
-      }));
+  // 1. Create an imperceptible page in process 1.
+  auto context1 = CreateInvisiblePage();
+  // Fast forward by 15 mins to exceed node_invisible_time.
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
 
-  FastForwardBy(base::TimeDelta::FromMinutes(15));
-  run_loop()->RunUntilIdle();
-  tester.ExpectTotalCount("Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins", 0);
+  // 2. Create a perceptible page in process 2.
+  auto context2 = CreateInvisiblePage();
+  context2->page_node_->SetIsAudible(true);
+  // Fast forward by 15 mins.
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
 
-  FastForwardBy(base::TimeDelta::FromMinutes(15));
-  run_loop()->RunUntilIdle();
-  tester.ExpectTotalCount("Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins", 1);
+  // 3. Create a process with one imperceptible and one perceptible frame.
+  auto context3_imperceptible = CreateInvisiblePage();
+  auto context3_perceptible_page = CreateNode<PageNodeImpl>();
+  context3_perceptible_page->SetIsVisible(false);
+  context3_perceptible_page->SetIsAudible(true);
+  auto context3_perceptible_frame =
+      CreateFrameNodeAutoId(context3_imperceptible->process_node_.get(),
+                            context3_perceptible_page.get());
+  // Fast forward by 15 mins.
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
 
-  FastForwardBy(base::TimeDelta::FromMinutes(30));
-  run_loop()->RunUntilIdle();
-  tester.ExpectTotalCount("Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins", 2);
+  // 4. Create a page with notification permission in process 4.
+  auto context4 = CreateInvisiblePage();
+  context4->page_node_->SetMainFrameRestoredState(
+      GURL("https://example.com"), blink::mojom::PermissionStatus::GRANTED);
+  // Fast forward by 15 mins.
+  FastForwardBy(base::Minutes(15) + base::Seconds(1));
 
-  TakePolicyFromGraph();
-}
+  // Expectations:
+  // process 1: trimmed (all frames imperceptible)
+  // process 2: NOT trimmed (page is audible)
+  // process 3: NOT trimmed (one frame is audible)
+  // process 4: trimmed (notification permission doesn't make it perceptible)
+  EXPECT_CALL(*policy(), TrimWorkingSet(context1->process_node_.get()))
+      .Times(1);
+  EXPECT_CALL(*policy(), TrimWorkingSet(context2->process_node_.get()))
+      .Times(0);
+  EXPECT_CALL(*policy(),
+              TrimWorkingSet(context3_imperceptible->process_node_.get()))
+      .Times(0);
+  EXPECT_CALL(*policy(), TrimWorkingSet(context4->process_node_.get()))
+      .Times(1);
 
-// Tests that the final UMA reporting is done when the policy is detached from
-// the graph.
-TEST_F(WorkingSetTrimmerPolicyChromeOSTest, ReportArcVmTrimMetricOnDestrution) {
-  base::HistogramTester tester;
-
-  // Crates the policy _after_ ARCVM trimming is enabled. This is necessary to
-  // start the time for UMA reporting.
-  RecreatePolicy(base::BindLambdaForTesting(
-      [](MockWorkingSetTrimmerPolicyChromeOS* policy) {
-        policy->trim_arcvm_on_memory_pressure(true);
-      }));
-
-  FastForwardBy(base::TimeDelta::FromMinutes(30));
-  run_loop()->RunUntilIdle();
-  tester.ExpectTotalCount("Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins", 1);
-
-  FastForwardBy(base::TimeDelta::FromMinutes(15));
-  run_loop()->RunUntilIdle();
-  tester.ExpectTotalCount("Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins", 1);
-
-  TakePolicyFromGraph();
-  tester.ExpectTotalCount("Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins", 2);
-}
-
-// Tests that the |arcvm_trim_count_| calculation for the final report is
-// properly done.
-TEST_F(WorkingSetTrimmerPolicyChromeOSTest, GetArcVmTrimCountForFinalReport) {
-  constexpr base::TimeDelta kBackoffTime = base::TimeDelta::FromMinutes(15);
-  constexpr base::TimeDelta kMetricReportDelay =
-      base::TimeDelta::FromMinutes(30);
-
-  // If 0 trim has been done in the last 15 minutes, 0 should be reported.
-  EXPECT_EQ(0u,
-            GetArcVmTrimCountForFinalReport(0, base::TimeDelta::FromMinutes(15),
-                                            kBackoffTime, kMetricReportDelay));
-
-  // If 1 trim has been done in the last 28 minutes, 1 should be reported.
-  EXPECT_EQ(1u,
-            GetArcVmTrimCountForFinalReport(1, base::TimeDelta::FromMinutes(28),
-                                            kBackoffTime, kMetricReportDelay));
-
-  // If 1 trim has been done in the last 15 minutes, 2 should be reported.
-  EXPECT_EQ(2u,
-            GetArcVmTrimCountForFinalReport(1, base::TimeDelta::FromMinutes(15),
-                                            kBackoffTime, kMetricReportDelay));
-
-  // If 2 trims have been done in the last 28 minutes, 2 should be reported.
-  EXPECT_EQ(2u,
-            GetArcVmTrimCountForFinalReport(2, base::TimeDelta::FromMinutes(28),
-                                            kBackoffTime, kMetricReportDelay));
-
-  // If 2 trims has been done in the last 15 minutes, 3 should be reported.
-  // This is not 4 because of |kBackoffTime|. Only 3 trims are possible within
-  // |kMetricReportDelay|.
-  EXPECT_EQ(3u,
-            GetArcVmTrimCountForFinalReport(2, base::TimeDelta::FromMinutes(15),
-                                            kBackoffTime, kMetricReportDelay));
+  SimulateMemoryPressure(false);
+  FastForwardBy(base::Seconds(1));
 }
 
 }  // namespace policies

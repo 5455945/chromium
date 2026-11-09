@@ -1,8 +1,9 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/exo/wayland/clients/test/wayland_client_test_server.h"
 #include "components/exo/wayland/compatibility_test/client_compatibility_test.h"
 
@@ -16,14 +17,16 @@ class CompatibilityTestSuiteServer : public WaylandClientTestSuiteServer {
  public:
   using WaylandClientTestSuiteServer::WaylandClientTestSuiteServer;
 
+  CompatibilityTestSuiteServer(const CompatibilityTestSuiteServer&) = delete;
+  CompatibilityTestSuiteServer& operator=(const CompatibilityTestSuiteServer&) =
+      delete;
+
   void SetClientTestUIThreadTaskRunner(
       scoped_refptr<base::SingleThreadTaskRunner> ui_thread_task_runner)
       override {
     ClientCompatibilityTest::SetUIThreadTaskRunner(
         std::move(ui_thread_task_runner));
   }
-
-  DISALLOW_COPY_AND_ASSIGN(CompatibilityTestSuiteServer);
 };
 
 std::unique_ptr<WaylandClientTestSuiteServer> MakeServer(int argc,

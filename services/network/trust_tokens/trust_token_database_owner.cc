@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,12 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/sqlite_proto/key_value_data.h"
 #include "components/sqlite_proto/key_value_table.h"
 #include "components/sqlite_proto/proto_table_manager.h"
 #include "services/network/trust_tokens/proto/storage.pb.h"
+#include "sql/database.h"
 
 namespace network {
 
@@ -26,6 +27,8 @@ const char kToplevelTableName[] = "trust_tokens_toplevel_config";
 const char kIssuerToplevelPairTableName[] =
     "trust_tokens_issuer_toplevel_pair_config";
 
+// When updating the database's schema, please increment the schema version.
+constexpr int kCurrentSchemaVersion = 2;
 }  // namespace
 
 void TrustTokenDatabaseOwner::Create(
@@ -46,6 +49,22 @@ void TrustTokenDatabaseOwner::Create(
 
 TrustTokenDatabaseOwner::~TrustTokenDatabaseOwner() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // KeyValueTables are first dereferenced in the DB runner sequence. This
+  // attaches their weak pointers to the DB runner sequence. Post tasks to free
+  // them in the DB task runner.
+  db_task_runner_->DeleteSoon(FROM_HERE, issuer_toplevel_pair_table_.release());
+  db_task_runner_->DeleteSoon(FROM_HERE, toplevel_table_.release());
+  db_task_runner_->DeleteSoon(FROM_HERE, issuer_table_.release());
+
+  // Prevent `table_manager_` from holding a dangling pointer to
+  // `backing_database_`.
+  db_task_runner_->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(&sqlite_proto::ProtoTableManager::WillShutdown,
+                     base::Unretained(table_manager_.get())),
+      base::BindOnce([](sqlite_proto::ProtoTableManager*) {},
+                     base::RetainedRef(table_manager_)));
 
   db_task_runner_->DeleteSoon(FROM_HERE, backing_database_.release());
 }
@@ -76,10 +95,16 @@ NOINLINE TrustTokenDatabaseOwner::TrustTokenDatabaseOwner(
     base::OnceCallback<void(std::unique_ptr<TrustTokenDatabaseOwner>)>
         on_done_initializing)
     : on_done_initializing_(std::move(on_done_initializing)),
+      backing_database_(std::make_unique<sql::Database>(
+          sql::DatabaseOptions()
+              // TODO(pwnall): Add a meta table and remove this option.
+              .set_mmap_alt_status_discouraged(true)
+              .set_enable_views_discouraged(
+                  true),  // Required by mmap_alt_status.
+          sql::Database::Tag("TrustTokens"))),
       table_manager_(base::MakeRefCounted<sqlite_proto::ProtoTableManager>(
           db_task_runner)),
       db_task_runner_(db_task_runner),
-      backing_database_(std::make_unique<sql::Database>()),
       issuer_table_(
           std::make_unique<sqlite_proto::KeyValueTable<TrustTokenIssuerConfig>>(
               kIssuerTableName)),
@@ -87,7 +112,7 @@ NOINLINE TrustTokenDatabaseOwner::TrustTokenDatabaseOwner(
           std::make_unique<sqlite_proto::KeyValueData<TrustTokenIssuerConfig>>(
               table_manager_,
               issuer_table_.get(),
-              /*max_num_entries=*/absl::nullopt,
+              /*max_num_entries=*/std::nullopt,
               flush_delay_for_writes)),
       toplevel_table_(std::make_unique<
                       sqlite_proto::KeyValueTable<TrustTokenToplevelConfig>>(
@@ -96,7 +121,7 @@ NOINLINE TrustTokenDatabaseOwner::TrustTokenDatabaseOwner(
                      sqlite_proto::KeyValueData<TrustTokenToplevelConfig>>(
           table_manager_,
           toplevel_table_.get(),
-          /*max_num_entries=*/absl::nullopt,
+          /*max_num_entries=*/std::nullopt,
           flush_delay_for_writes)),
       issuer_toplevel_pair_table_(
           std::make_unique<
@@ -107,13 +132,8 @@ NOINLINE TrustTokenDatabaseOwner::TrustTokenDatabaseOwner(
               sqlite_proto::KeyValueData<TrustTokenIssuerToplevelPairConfig>>(
               table_manager_,
               issuer_toplevel_pair_table_.get(),
-              /*max_num_entries=*/absl::nullopt,
+              /*max_num_entries=*/std::nullopt,
               flush_delay_for_writes)) {
-  // These two lines are boilerplate copied from predictor_database.cc.
-  backing_database_->set_histogram_tag("TrustTokens");
-  // We have to call this because the database doesn't have a "meta" table.
-  backing_database_->set_mmap_alt_status();
-
   // Because TrustTokenDatabaseOwners are only constructed through an
   // asynchronous factory method, they are impossible to delete prior to their
   // initialization concluding.
@@ -140,13 +160,11 @@ void TrustTokenDatabaseOwner::InitializeMembersOnDbSequence(
 
   DCHECK(!backing_database_ || backing_database_->is_open());
 
-  if (backing_database_)
-    backing_database_->Preload();
-
   table_manager_->InitializeOnDbSequence(
       backing_database_.get(),
       std::vector<std::string>{kIssuerTableName, kToplevelTableName,
-                               kIssuerToplevelPairTableName});
+                               kIssuerToplevelPairTableName},
+      kCurrentSchemaVersion);
 
   issuer_data_->InitializeOnDBSequence();
   toplevel_data_->InitializeOnDBSequence();

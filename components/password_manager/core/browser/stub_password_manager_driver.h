@@ -1,12 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_STUB_PASSWORD_MANAGER_DRIVER_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_STUB_PASSWORD_MANAGER_DRIVER_H_
 
-#include "base/macros.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/weak_ptr.h"
+#include "components/autofill/core/common/aliases.h"
 #include "components/password_manager/core/browser/password_manager_driver.h"
+#include "url/gurl.h"
 
 namespace password_manager {
 
@@ -16,28 +19,72 @@ namespace password_manager {
 class StubPasswordManagerDriver : public PasswordManagerDriver {
  public:
   StubPasswordManagerDriver();
+
+  StubPasswordManagerDriver(const StubPasswordManagerDriver&) = delete;
+  StubPasswordManagerDriver& operator=(const StubPasswordManagerDriver&) =
+      delete;
+
   ~StubPasswordManagerDriver() override;
 
   // PasswordManagerDriver:
-  int GetId() const override;
-  void FillPasswordForm(
+  DriverId GetId() const override;
+  void PropagateFillDataOnParsingCompletion(
       const autofill::PasswordFormFillData& form_data) override;
-  void GeneratedPasswordAccepted(const std::u16string& password) override;
+  void GeneratedPasswordAccepted(const PasswordString& password) override;
+  void GeneratedPasswordRejected() override;
+  void FocusNextFieldAfterPasswords() override;
+  void FillField(autofill::FieldRendererId triggering_field_id,
+                 const std::u16string& value,
+                 autofill::FieldPropertiesFlags field_properties,
+                 base::OnceCallback<void(bool)> success_callback) override;
   void FillSuggestion(const std::u16string& username,
-                      const std::u16string& password) override;
+                      const std::u16string& password,
+                      base::OnceCallback<void(bool)> success_callback) override;
+  void FillSuggestionById(
+      autofill::FieldRendererId username_element_id,
+      autofill::FieldRendererId password_element_id,
+      const std::u16string& username,
+      const std::u16string& password,
+      autofill::AutofillSuggestionTriggerSource suggestion_source) override;
+#if BUILDFLAG(IS_ANDROID)
+  void TriggerFormSubmission() override;
+#endif
   void PreviewSuggestion(const std::u16string& username,
                          const std::u16string& password) override;
+  void PreviewSuggestionById(autofill::FieldRendererId username_element_id,
+                             autofill::FieldRendererId password_element_id,
+                             const std::u16string& username,
+                             const std::u16string& password) override;
+  void PreviewGenerationSuggestion(const PasswordString& password) override;
   void ClearPreviewedForm() override;
+  void SetSuggestionAvailability(autofill::FieldRendererId element_id,
+                                 autofill::mojom::AutofillSuggestionAvailability
+                                     suggestion_availability) override;
   PasswordGenerationFrameHelper* GetPasswordGenerationHelper() override;
-  PasswordManager* GetPasswordManager() override;
+  PasswordManagerInterface* GetPasswordManager() override;
   PasswordAutofillManager* GetPasswordAutofillManager() override;
-  autofill::AutofillDriver* GetAutofillDriver() override;
-  bool IsMainFrame() const override;
+  autofill::PasswordManagerDelegate* GetPasswordManagerDelegate() override;
+  bool IsDirectChildOfPrimaryMainFrame() const override;
+  bool IsInPrimaryMainFrame() const override;
+  bool IsNestedWithinFencedFrame() const override;
   bool CanShowAutofillUi() const override;
+  int GetFrameId() const override;
+  void set_last_committed_url(const GURL& url);
   const GURL& GetLastCommittedURL() const override;
+  const url::Origin& GetLastCommittedOrigin() const override;
+  bool HasCrossOriginAncestor() const override;
+
+  void CheckViewAreaVisible(autofill::FieldRendererId field_id,
+                            base::OnceCallback<void(bool)>) override;
+  bool HasValidURL(bool may_kill_renderer) override;
+  bool IsRenderFrameHostSupported() override;
+  autofill::AutofillDriver* GetAutofillDriver() const override;
+  base::WeakPtr<password_manager::PasswordManagerDriver> AsWeakPtr() override;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(StubPasswordManagerDriver);
+  GURL last_committed_url_;
+  url::Origin last_committed_origin_;
+  base::WeakPtrFactory<StubPasswordManagerDriver> weak_ptr_factory_{this};
 };
 
 }  // namespace password_manager

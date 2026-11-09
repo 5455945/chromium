@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,13 +8,14 @@ import os
 
 import cr
 
+
 class LinuxChromeOSPlatform(cr.Platform):
   """Platform for Linux Chrome OS target"""
 
   ACTIVE = cr.Config.From(
-      CR_BINARY=os.path.join('{CR_BUILD_DIR}', '{CR_BUILD_TARGET}'),
-      CHROME_DEVEL_SANDBOX='/usr/local/sbin/chrome-devel-sandbox',
-      GN_ARG_target_os='"chromeos"',
+    CR_BINARY=os.path.join('{CR_BUILD_DIR}', '{CR_BUILD_TARGET}'),
+    CHROME_DEVEL_SANDBOX='/usr/local/sbin/chrome-devel-sandbox',
+    GN_ARG_target_os='"chromeos"',
   )
 
   @property
@@ -24,7 +25,3 @@ class LinuxChromeOSPlatform(cr.Platform):
   @property
   def priority(self):
     return 2
-
-  @property
-  def paths(self):
-    return ['{GOMA_DIR}']

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,13 @@ TrackedPreferenceIncident::TrackedPreferenceIncident(
         tracked_preference_incident,
     bool is_personal)
     : is_personal_(is_personal) {
-  DCHECK(tracked_preference_incident);
-  DCHECK(tracked_preference_incident->has_path());
+  CHECK(tracked_preference_incident, base::NotFatalUntil::M162);
+  CHECK(tracked_preference_incident->has_path(), base::NotFatalUntil::M162);
   payload()->set_allocated_tracked_preference(
       tracked_preference_incident.release());
 }
 
-TrackedPreferenceIncident::~TrackedPreferenceIncident() {
-}
+TrackedPreferenceIncident::~TrackedPreferenceIncident() = default;
 
 IncidentType TrackedPreferenceIncident::GetType() const {
   return IncidentType::TRACKED_PREFERENCE;

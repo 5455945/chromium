@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -21,18 +21,45 @@ class CSSOMTypesWriter(json5_generator.Writer):
 
         self._input_files = json5_file_paths
         self._properties = (
-            css_properties.CSSProperties(json5_file_paths)).longhands
+            css_properties.CSSProperties(json5_file_paths)
+        ).longhands
 
         for property_ in self._properties:
             types = []
             # Expand types
-            for single_type in property_['typedom_types']:
+            for single_type in property_.typedom_types:
                 types.append(single_type)
-            property_['typedom_types'] = types
+            property_.typedom_types = types
+
+            if property_.typedom_keywords:
+                keywords = property_.typedom_keywords
+            else:
+                keywords = property_.keywords
+            keywords = list(
+                dict.fromkeys(
+                    keywords
+                    + [
+                        keyword
+                        for feature_keywords in property_.runtime_enabled_keywords.values()
+                        for keyword in feature_keywords
+                    ]
+                )
+            )
 
             # Generate CSSValueID values from keywords.
-            property_['keywordIDs'] = list(
-                map(enum_key_for_css_keyword, property_['keywords']))
+            property_.keywordIDs = list(map(enum_key_for_css_keyword, keywords))
+            runtime_enabled_keywords = {
+                keyword: feature
+                for feature, feature_keywords in property_.runtime_enabled_keywords.items()
+                for keyword in feature_keywords
+            }
+            property_.runtime_enabled_keyword_features = {
+                enum_key_for_css_keyword(keyword): runtime_enabled_keywords[
+                    keyword
+                ]
+                for keyword in keywords
+                if keyword in runtime_enabled_keywords
+            }
 
         self._outputs = {
             'cssom_types.cc': self.generate_types,

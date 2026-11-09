@@ -1,21 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/services/video_decode_perf_history.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/stringprintf.h"
-#include "media/base/bind_to_current_loop.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/base/key_systems.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_codecs.h"
-#include "media/capabilities/learning_helper.h"
 #include "media/mojo/mojom/media_types.mojom.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
@@ -60,24 +60,16 @@ base::FieldTrialParams VideoDecodePerfHistory::GetFieldTrialParams() {
 
   const bool result = base::GetFieldTrialParamsByFeature(
       kMediaCapabilitiesWithParameters, &actual_trial_params);
-  DCHECK(result);
+  CHECK(result, base::NotFatalUntil::M163);
 
   return actual_trial_params;
 }
 
 VideoDecodePerfHistory::VideoDecodePerfHistory(
-    std::unique_ptr<VideoDecodeStatsDB> db,
-    learning::FeatureProviderFactoryCB feature_factory_cb)
-    : db_(std::move(db)),
-      db_init_status_(UNINITIALIZED),
-      feature_factory_cb_(std::move(feature_factory_cb)) {
+    std::unique_ptr<VideoDecodeStatsDB> db)
+    : db_(std::move(db)), db_init_status_(UNINITIALIZED) {
   DVLOG(2) << __func__;
-  DCHECK(db_);
-
-  // If the local learning experiment is enabled, then also create
-  // |learning_helper_| to send data to it.
-  if (base::FeatureList::IsEnabled(kMediaLearningExperiment))
-    learning_helper_ = std::make_unique<LearningHelper>(feature_factory_cb_);
+  CHECK(db_, base::NotFatalUntil::M163);
 }
 
 VideoDecodePerfHistory::~VideoDecodePerfHistory() {
@@ -102,7 +94,7 @@ void VideoDecodePerfHistory::InitDatabase() {
   // DB should be initialized only once! We hand out references to the
   // initialized DB via GetVideoDecodeStatsDB(). Dependents expect DB to remain
   // initialized during their lifetime.
-  DCHECK_EQ(db_init_status_, UNINITIALIZED);
+  CHECK_EQ(db_init_status_, UNINITIALIZED, base::NotFatalUntil::M163);
 
   db_->Initialize(base::BindOnce(&VideoDecodePerfHistory::OnDatabaseInit,
                                  weak_ptr_factory_.GetWeakPtr()));
@@ -112,14 +104,14 @@ void VideoDecodePerfHistory::InitDatabase() {
 void VideoDecodePerfHistory::OnDatabaseInit(bool success) {
   DVLOG(2) << __func__ << " " << success;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(db_init_status_, PENDING);
+  CHECK_EQ(db_init_status_, PENDING, base::NotFatalUntil::M163);
 
   db_init_status_ = success ? COMPLETE : FAILED;
 
   // Post all the deferred API calls as if they're just now coming in.
   for (auto& deferred_call : init_deferred_api_calls_) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                  std::move(deferred_call));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(deferred_call));
   }
   init_deferred_api_calls_.clear();
 }
@@ -129,9 +121,11 @@ void VideoDecodePerfHistory::GetPerfInfo(mojom::PredictionFeaturesPtr features,
   DVLOG(3) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  DCHECK_NE(features->profile, VIDEO_CODEC_PROFILE_UNKNOWN);
-  DCHECK_GT(features->frames_per_sec, 0);
-  DCHECK(features->video_size.width() > 0 && features->video_size.height() > 0);
+  CHECK_NE(features->profile, VIDEO_CODEC_PROFILE_UNKNOWN,
+           base::NotFatalUntil::M163);
+  CHECK_GT(features->frames_per_sec, 0, base::NotFatalUntil::M163);
+  CHECK(features->video_size.width() > 0 && features->video_size.height() > 0,
+        base::NotFatalUntil::M163);
 
   if (db_init_status_ == FAILED) {
     // Optimistically claim perf is both smooth and power efficient.
@@ -170,9 +164,14 @@ void VideoDecodePerfHistory::AssessStats(
   /// smooth. If lower resolutions/frames are known to be janky, we can assume
   // this will be janky.
 
-  // No stats? Lets be optimistic.
+  // No stats? Lets be optimistic for clear content, but pessimistic for
+  // encrypted content that uses sw secure codecs in regards to power
+  // efficiency. An empty key system means that it is clear content.
   if (!stats || stats->frames_decoded == 0) {
-    *is_power_efficient = true;
+    bool is_encrypted = !key.key_system.empty();
+    bool is_hw_secure = key.use_hw_secure_codecs;
+    bool is_sw_secure_decode = is_encrypted && !is_hw_secure;
+    *is_power_efficient = !is_sw_secure_decode;
     *is_smooth = true;
     return;
   }
@@ -196,8 +195,8 @@ void VideoDecodePerfHistory::OnGotStatsForRequest(
     bool database_success,
     std::unique_ptr<VideoDecodeStatsDB::DecodeStatsEntry> stats) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(got_info_cb);
-  DCHECK_EQ(db_init_status_, COMPLETE);
+  CHECK(got_info_cb, base::NotFatalUntil::M163);
+  CHECK_EQ(db_init_status_, COMPLETE, base::NotFatalUntil::M163);
 
   bool is_power_efficient = false;
   bool is_smooth = false;
@@ -207,7 +206,7 @@ void VideoDecodePerfHistory::OnGotStatsForRequest(
   AssessStats(video_key, stats.get(), &is_smooth, &is_power_efficient);
 
   if (stats && stats->frames_decoded) {
-    DCHECK(database_success);
+    CHECK(database_success, base::NotFatalUntil::M163);
     percent_dropped =
         static_cast<double>(stats->frames_dropped) / stats->frames_decoded;
     percent_power_efficient =
@@ -237,7 +236,6 @@ VideoDecodePerfHistory::SaveCallback VideoDecodePerfHistory::GetSaveCallback() {
 }
 
 void VideoDecodePerfHistory::SavePerfRecord(ukm::SourceId source_id,
-                                            learning::FeatureValue origin,
                                             bool is_top_frame,
                                             mojom::PredictionFeatures features,
                                             mojom::PredictionTargets targets,
@@ -262,8 +260,8 @@ void VideoDecodePerfHistory::SavePerfRecord(ukm::SourceId source_id,
   if (db_init_status_ != COMPLETE) {
     init_deferred_api_calls_.push_back(base::BindOnce(
         &VideoDecodePerfHistory::SavePerfRecord, weak_ptr_factory_.GetWeakPtr(),
-        source_id, origin, is_top_frame, std::move(features),
-        std::move(targets), player_id, std::move(save_done_cb)));
+        source_id, is_top_frame, std::move(features), std::move(targets),
+        player_id, std::move(save_done_cb)));
     InitDatabase();
     return;
   }
@@ -275,9 +273,6 @@ void VideoDecodePerfHistory::SavePerfRecord(ukm::SourceId source_id,
   VideoDecodeStatsDB::DecodeStatsEntry new_stats(
       targets.frames_decoded, targets.frames_dropped,
       targets.frames_power_efficient);
-
-  if (learning_helper_)
-    learning_helper_->AppendStats(video_key, origin, new_stats);
 
   // Get past perf info and report UKM metrics before saving this record.
   db_->GetDecodeStats(
@@ -297,7 +292,7 @@ void VideoDecodePerfHistory::OnGotStatsForSave(
     bool success,
     std::unique_ptr<VideoDecodeStatsDB::DecodeStatsEntry> past_stats) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(db_init_status_, COMPLETE);
+  CHECK_EQ(db_init_status_, COMPLETE, base::NotFatalUntil::M163);
 
   if (!success) {
     DVLOG(3) << __func__ << " FAILED! Aborting save.";
@@ -392,11 +387,6 @@ void VideoDecodePerfHistory::ClearHistory(base::OnceClosure clear_done_cb) {
   DVLOG(2) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // If we have a learning helper, then replace it.  This will erase any data
-  // that it currently has.
-  if (learning_helper_)
-    learning_helper_ = std::make_unique<LearningHelper>(feature_factory_cb_);
-
   if (db_init_status_ == FAILED) {
     DVLOG(3) << __func__ << " Can't clear history - No DB!";
     std::move(clear_done_cb).Run();
@@ -426,7 +416,7 @@ void VideoDecodePerfHistory::OnClearedHistory(base::OnceClosure clear_done_cb) {
 
 void VideoDecodePerfHistory::GetVideoDecodeStatsDB(GetCB get_db_cb) {
   DVLOG(3) << __func__;
-  DCHECK(get_db_cb);
+  CHECK(get_db_cb, base::NotFatalUntil::M163);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (db_init_status_ == FAILED) {
@@ -443,8 +433,10 @@ void VideoDecodePerfHistory::GetVideoDecodeStatsDB(GetCB get_db_cb) {
     return;
   }
 
-  // DB is already initialized. BindToCurrentLoop to avoid reentrancy.
-  std::move(BindToCurrentLoop(std::move(get_db_cb))).Run(db_.get());
+  // DB is already initialized. base::BindPostTaskToCurrentDefault to avoid
+  // reentrancy.
+  std::move(base::BindPostTaskToCurrentDefault(std::move(get_db_cb)))
+      .Run(db_.get());
 }
 
 }  // namespace media

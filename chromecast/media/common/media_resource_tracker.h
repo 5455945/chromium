@@ -1,13 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMECAST_MEDIA_COMMON_MEDIA_RESOURCE_TRACKER_H_
 #define CHROMECAST_MEDIA_COMMON_MEDIA_RESOURCE_TRACKER_H_
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner_helpers.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner_helpers.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -40,16 +40,22 @@ class MediaResourceTracker {
   class ScopedUsage {
    public:
     ScopedUsage(MediaResourceTracker* tracker);
+
+    ScopedUsage(const ScopedUsage&) = delete;
+    ScopedUsage& operator=(const ScopedUsage&) = delete;
+
     ~ScopedUsage();
 
    private:
     MediaResourceTracker* tracker_;
-    DISALLOW_COPY_AND_ASSIGN(ScopedUsage);
   };
 
   MediaResourceTracker(
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> media_task_runner);
+
+  MediaResourceTracker(const MediaResourceTracker&) = delete;
+  MediaResourceTracker& operator=(const MediaResourceTracker&) = delete;
 
   // Media resource acquire implementation. Must call on ui thread; runs
   // CastMediaShlib::Initialize on media thread.  Safe to call even if media lib
@@ -100,8 +106,6 @@ class MediaResourceTracker {
 
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> media_task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaResourceTracker);
 };
 
 }  // namespace media

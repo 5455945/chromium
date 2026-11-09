@@ -1,10 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/power/power_data_collector.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
@@ -18,18 +19,19 @@ class PowerDataCollectorTest : public testing::Test {
   ~PowerDataCollectorTest() override = default;
 
   void SetUp() override {
-    PowerManagerClient::InitializeFake();
+    chromeos::PowerManagerClient::InitializeFake();
     PowerDataCollector::InitializeForTesting();
     power_data_collector_ = PowerDataCollector::Get();
   }
 
   void TearDown() override {
     PowerDataCollector::Shutdown();
-    PowerManagerClient::Shutdown();
+    chromeos::PowerManagerClient::Shutdown();
   }
 
  protected:
-  PowerDataCollector* power_data_collector_ = nullptr;
+  raw_ptr<PowerDataCollector, DanglingUntriaged> power_data_collector_ =
+      nullptr;
 };
 
 TEST_F(PowerDataCollectorTest, PowerChanged) {
@@ -55,13 +57,13 @@ TEST_F(PowerDataCollectorTest, PowerChanged) {
 }
 
 TEST_F(PowerDataCollectorTest, SuspendDone) {
-  power_data_collector_->SuspendDone(base::TimeDelta::FromSeconds(10));
+  power_data_collector_->SuspendDone(base::Seconds(10));
   const base::circular_deque<PowerDataCollector::SystemResumedSample>& data1 =
       power_data_collector_->system_resumed_data();
   ASSERT_EQ(static_cast<size_t>(1), data1.size());
   ASSERT_EQ(static_cast<int64_t>(10), data1[0].sleep_duration.InSeconds());
 
-  power_data_collector_->SuspendDone(base::TimeDelta::FromSeconds(20));
+  power_data_collector_->SuspendDone(base::Seconds(20));
   const base::circular_deque<PowerDataCollector::SystemResumedSample>& data2 =
       power_data_collector_->system_resumed_data();
   ASSERT_EQ(static_cast<size_t>(2), data2.size());
@@ -72,8 +74,8 @@ TEST_F(PowerDataCollectorTest, AddSample) {
   base::circular_deque<PowerDataCollector::PowerSupplySample> sample_deque;
   PowerDataCollector::PowerSupplySample sample1, sample2;
   sample1.time = base::Time::FromInternalValue(1000);
-  sample2.time = sample1.time +
-      base::TimeDelta::FromSeconds(PowerDataCollector::kSampleTimeLimitSec + 1);
+  sample2.time =
+      sample1.time + base::Seconds(PowerDataCollector::kSampleTimeLimitSec + 1);
 
   AddSample(&sample_deque, sample1);
   ASSERT_EQ(static_cast<size_t>(1), sample_deque.size());

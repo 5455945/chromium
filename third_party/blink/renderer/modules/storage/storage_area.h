@@ -31,7 +31,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/storage/cached_storage_area.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
@@ -46,6 +46,9 @@ class StorageArea final : public ScriptWrappable,
 
  public:
   enum class StorageType { kLocalStorage, kSessionStorage };
+  static const char kAccessDataMessage[];
+  static const char kAccessDeniedMessage[];
+  static const char kAccessSandboxedMessage[];
 
   static StorageArea* Create(LocalDOMWindow*,
                              scoped_refptr<CachedStorageArea>,
@@ -84,11 +87,13 @@ class StorageArea final : public ScriptWrappable,
   bool EnqueueStorageEvent(const String& key,
                            const String& old_value,
                            const String& new_value,
-                           const String& url) override;
+                           const KURL& url) override;
 
   blink::WebScopedVirtualTimePauser CreateWebScopedVirtualTimePauser(
       const char* name,
       WebScopedVirtualTimePauser::VirtualTaskDuration duration) override;
+
+  LocalDOMWindow* GetDOMWindow() override;
 
  private:
   void RecordModificationInMetrics();

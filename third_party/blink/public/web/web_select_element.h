@@ -31,7 +31,10 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_SELECT_ELEMENT_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_SELECT_ELEMENT_H_
 
-#include "third_party/blink/public/platform/web_vector.h"
+#include <vector>
+
+#include "third_party/blink/public/platform/web_common.h"
+#include "third_party/blink/public/web/web_autofill_state.h"
 #include "third_party/blink/public/web/web_form_control_element.h"
 #include "third_party/blink/public/web/web_option_element.h"
 
@@ -40,9 +43,11 @@ namespace blink {
 class HTMLSelectElement;
 
 // Provides readonly access to some properties of a DOM select element node.
-class WebSelectElement final : public WebFormControlElement {
+class BLINK_EXPORT WebSelectElement final : public WebFormControlElement {
  public:
-  WebSelectElement() : WebFormControlElement() {}
+  explicit WebSelectElement(
+      cppgc::SourceLocation loc = BLINK_WEB_NODE_LOCATION_FROM_HERE)
+      : WebFormControlElement(loc) {}
   WebSelectElement(const WebSelectElement& element) = default;
 
   WebSelectElement& operator=(const WebSelectElement& element) {
@@ -53,7 +58,23 @@ class WebSelectElement final : public WebFormControlElement {
     WebFormControlElement::Assign(element);
   }
 
-  BLINK_EXPORT WebVector<WebElement> GetListItems() const;
+  // Auto-selects `option` in `this`. This is preferred in `WebSelectElement`
+  // over `WebFormControlElement::SetAutofillValue()` because the former
+  // specifies the exact option to select, whereas the latter triggers a
+  // search-by-value that could be inaccurate for select elements having options
+  // with duplicate values.
+  // Also dispatches focus/blur events before and after modifying the option
+  // respectively.
+  void SetAutofillOption(WebOptionElement* option,
+                         WebAutofillState autofill_state);
+
+  // Similar to `SetAutofillOption()` in terms of its advantages over
+  // `WebFormControlElement::SetSuggestedValue()`. Does not dispatch any events.
+  void SetSuggestedOption(WebOptionElement* option);
+
+  void SelectOption(WebOptionElement* option, bool send_events);
+
+  std::vector<WebElement> GetListItems() const;
 
 #if INSIDE_BLINK
   WebSelectElement(HTMLSelectElement*);

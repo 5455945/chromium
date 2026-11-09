@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,6 +37,7 @@ class SubsequenceRecorder final {
   SubsequenceRecorder(GraphicsContext& context, const DisplayItemClient& client)
       : paint_controller_(context.GetPaintController()) {
     subsequence_index_ = paint_controller_.BeginSubsequence(client);
+    paint_controller_.MarkClientForValidation(client);
   }
 
   SubsequenceRecorder(const SubsequenceRecorder&) = delete;

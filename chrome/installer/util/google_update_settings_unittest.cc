@@ -1,16 +1,19 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/installer/util/google_update_settings.h"
 
-#include <stddef.h>
 #include <windows.h>
 
+#include <stddef.h>
+
 #include <memory>
+#include <string_view>
 
 #include "base/base_paths.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/hash/hash.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
@@ -19,9 +22,10 @@
 #include "base/win/shlwapi.h"  // For SHDeleteKey.
 #include "build/branding_buildflags.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/install_static/install_details.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/install_static/test/scoped_install_details.h"
-#include "chrome/installer/util/channel_info.h"
+#include "chrome/installer/util/additional_parameters.h"
 #include "chrome/installer/util/fake_installation_state.h"
 #include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/helper.h"
@@ -30,13 +34,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::win::RegKey;
-using installer::ChannelInfo;
 
 namespace {
-
-const wchar_t kTestProductGuid[] = L"{89F1B351-B15D-48D4-8F10-1298721CF13D}";
-
-const wchar_t kTestExperimentLabel[] = L"test_label_value";
 
 // This test fixture redirects the HKLM and HKCU registry hives for
 // the duration of the test to make it independent of the machine
@@ -59,60 +58,15 @@ class GoogleUpdateSettingsTest : public testing::Test {
         registry_overrides_.OverrideRegistry(HKEY_CURRENT_USER));
   }
 
-  // Test the writing and deleting functionality of the experiments label
-  // helper.
-  void TestExperimentsLabelHelper(SystemUserInstall install) {
-    // Install a basic InstallDetails instance.
-    install_static::ScopedInstallDetails details(install == SYSTEM_INSTALL);
-
-    std::wstring value;
-    // Before anything is set, ReadExperimentLabels should succeed but return
-    // an empty string.
-    EXPECT_TRUE(GoogleUpdateSettings::ReadExperimentLabels(&value));
-    EXPECT_EQ(std::wstring(), value);
-
-    EXPECT_TRUE(
-        GoogleUpdateSettings::SetExperimentLabels(kTestExperimentLabel));
-
-    // Validate that something is written. Only worry about the label itself.
-    RegKey key;
-    HKEY root =
-        install == SYSTEM_INSTALL ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
-    std::wstring state_key = install == SYSTEM_INSTALL
-                                 ? install_static::GetClientStateMediumKeyPath()
-                                 : install_static::GetClientStateKeyPath();
-
-    EXPECT_EQ(ERROR_SUCCESS,
-              key.Open(root, state_key.c_str(), KEY_QUERY_VALUE));
-    EXPECT_EQ(ERROR_SUCCESS,
-              key.ReadValue(google_update::kExperimentLabels, &value));
-    EXPECT_EQ(kTestExperimentLabel, value);
-    EXPECT_TRUE(GoogleUpdateSettings::ReadExperimentLabels(&value));
-    EXPECT_EQ(kTestExperimentLabel, value);
-    key.Close();
-
-    // Now that the label is set, test the delete functionality. An empty label
-    // should result in deleting the value.
-    EXPECT_TRUE(GoogleUpdateSettings::SetExperimentLabels(std::wstring()));
-    EXPECT_EQ(ERROR_SUCCESS,
-              key.Open(root, state_key.c_str(), KEY_QUERY_VALUE));
-    EXPECT_EQ(ERROR_FILE_NOT_FOUND,
-              key.ReadValue(google_update::kExperimentLabels, &value));
-    EXPECT_TRUE(GoogleUpdateSettings::ReadExperimentLabels(&value));
-    EXPECT_EQ(std::wstring(), value);
-    key.Close();
-  }
-
   // Creates "ap" key with the value given as parameter. Also adds work
   // items to work_item_list given so that they can be rolled back later.
   bool CreateApKey(WorkItemList* work_item_list, const std::wstring& value) {
     HKEY reg_root = HKEY_CURRENT_USER;
     std::wstring reg_key = GetApKeyPath();
-    work_item_list->AddCreateRegKeyWorkItem(reg_root, reg_key,
-                                            WorkItem::kWow64Default);
-    work_item_list->AddSetRegValueWorkItem(
-        reg_root, reg_key, WorkItem::kWow64Default, google_update::kRegApField,
-        value.c_str(), true);
+    work_item_list->AddCreateRegKeyWorkItem(reg_root, reg_key, KEY_WOW64_32KEY);
+    work_item_list->AddSetRegValueWorkItem(reg_root, reg_key, KEY_WOW64_32KEY,
+                                           google_update::kRegApField,
+                                           value.c_str(), true);
     if (!work_item_list->Do()) {
       work_item_list->Rollback();
       return false;
@@ -120,13 +74,12 @@ class GoogleUpdateSettingsTest : public testing::Test {
     return true;
   }
 
+  static std::wstring GetProductGuid() { return install_static::GetAppGuid(); }
+
   // Returns the key path of "ap" key, e.g.:
   // Google\Update\ClientState\<kTestProductGuid>
   std::wstring GetApKeyPath() {
-    std::wstring reg_key(google_update::kRegPathClientState);
-    reg_key.append(L"\\");
-    reg_key.append(kTestProductGuid);
-    return reg_key;
+    return install_static::GetClientStateKeyPath();
   }
 
   // Utility method to read "ap" key value
@@ -134,8 +87,8 @@ class GoogleUpdateSettingsTest : public testing::Test {
     RegKey key;
     std::wstring ap_key_value;
     std::wstring reg_key = GetApKeyPath();
-    if (key.Open(HKEY_CURRENT_USER, reg_key.c_str(), KEY_ALL_ACCESS) ==
-        ERROR_SUCCESS) {
+    if (key.Open(HKEY_CURRENT_USER, reg_key.c_str(),
+                 KEY_WOW64_32KEY | KEY_QUERY_VALUE) == ERROR_SUCCESS) {
       key.ReadValue(google_update::kRegApField, &ap_key_value);
     }
 
@@ -216,64 +169,41 @@ class GoogleUpdateSettingsTest : public testing::Test {
 
 }  // namespace
 
-// Run through all combinations of diff vs. full install, success and failure
-// results, and a fistful of initial "ap" values checking that the expected
-// final "ap" value is generated by
-// GoogleUpdateSettings::UpdateGoogleUpdateApKey.
+// Run through all combinations success and failure results, and a fistful
+// of initial "ap" values checking that the expected final "ap" value is
+// generated by GoogleUpdateSettings::UpdateGoogleUpdateApKey.
 TEST_F(GoogleUpdateSettingsTest, UpdateGoogleUpdateApKey) {
-  const installer::ArchiveType archive_types[] = {
-      installer::UNKNOWN_ARCHIVE_TYPE, installer::FULL_ARCHIVE_TYPE,
-      installer::INCREMENTAL_ARCHIVE_TYPE};
   const int results[] = {installer::FIRST_INSTALL_SUCCESS,
                          installer::INSTALL_FAILED};
   const wchar_t* const plain[] = {L"", L"1.1", L"1.1-dev"};
   const wchar_t* const full[] = {L"-full", L"1.1-full", L"1.1-dev-full"};
-  static_assert(base::size(full) == base::size(plain), "bad full array size");
+  static_assert(std::size(full) == std::size(plain), "bad full array size");
   const wchar_t* const* input_arrays[] = {plain, full};
-  ChannelInfo v;
-  for (const installer::ArchiveType archive_type : archive_types) {
-    for (const int result : results) {
-      // The archive type will/must always be known on install success.
-      if (archive_type == installer::UNKNOWN_ARCHIVE_TYPE &&
-          result == installer::FIRST_INSTALL_SUCCESS) {
-        continue;
-      }
-      const wchar_t* const* outputs = nullptr;
-      if (result == installer::FIRST_INSTALL_SUCCESS ||
-          archive_type == installer::FULL_ARCHIVE_TYPE) {
-        outputs = plain;
-      } else if (archive_type == installer::INCREMENTAL_ARCHIVE_TYPE) {
-        outputs = full;
-      }  // else if (archive_type == UNKNOWN) see below
+  for (const int result : results) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "result="
+        << (result == installer::FIRST_INSTALL_SUCCESS ? "SUCCESS" : "FAILED"));
+    const wchar_t* const* outputs = plain;
 
-      for (const wchar_t* const* inputs : input_arrays) {
-        if (archive_type == installer::UNKNOWN_ARCHIVE_TYPE) {
-          // "-full" is untouched if the archive type is unknown.
-          if (inputs == full)
-            outputs = full;
-          else
-            outputs = plain;
-        }
-        for (size_t input_idx = 0; input_idx < base::size(plain); ++input_idx) {
-          const wchar_t* input = inputs[input_idx];
-          const wchar_t* output = outputs[input_idx];
+    for (const wchar_t* const* inputs : input_arrays) {
+      for (size_t input_idx = 0; input_idx < std::size(plain); ++input_idx) {
+        const wchar_t* input = UNSAFE_TODO(inputs[input_idx]);
+        const wchar_t* output = UNSAFE_TODO(outputs[input_idx]);
+        SCOPED_TRACE(::testing::Message() << "input=\"" << input << "\"");
+        SCOPED_TRACE(::testing::Message() << "output=\"" << output << "\"");
 
-          v.set_value(input);
-          if (output == v.value()) {
-            EXPECT_FALSE(GoogleUpdateSettings::UpdateGoogleUpdateApKey(
-                archive_type, result, &v))
-                << "archive_type: " << archive_type << ", result: " << result
-                << ", input ap value: " << input;
-          } else {
-            EXPECT_TRUE(GoogleUpdateSettings::UpdateGoogleUpdateApKey(
-                archive_type, result, &v))
-                << "archive_type: " << archive_type << ", result: " << result
-                << ", input ap value: " << input;
-          }
-          EXPECT_EQ(output, v.value())
-              << "archive_type: " << archive_type << ", result: " << result
-              << ", input ap value: " << input;
+        std::unique_ptr<WorkItemList> work_item_list(
+            WorkItem::CreateWorkItemList());
+
+        ASSERT_TRUE(CreateApKey(work_item_list.get(), input));
+        installer::AdditionalParameters ap;
+        if (std::wstring_view(output) == ap.value()) {
+          EXPECT_FALSE(GoogleUpdateSettings::UpdateGoogleUpdateApKey(ap));
+        } else {
+          EXPECT_TRUE(GoogleUpdateSettings::UpdateGoogleUpdateApKey(ap));
         }
+        EXPECT_STREQ(output, ap.value());
       }
     }
   }
@@ -281,42 +211,9 @@ TEST_F(GoogleUpdateSettingsTest, UpdateGoogleUpdateApKey) {
 
 TEST_F(GoogleUpdateSettingsTest, UpdateInstallStatusTest) {
   std::unique_ptr<WorkItemList> work_item_list(WorkItem::CreateWorkItemList());
-  // Test incremental install failure
-  ASSERT_TRUE(CreateApKey(work_item_list.get(), L""))
-      << "Failed to create ap key.";
-  GoogleUpdateSettings::UpdateInstallStatus(
-      false, installer::INCREMENTAL_ARCHIVE_TYPE, installer::INSTALL_FAILED,
-      kTestProductGuid);
-  EXPECT_STREQ(ReadApKeyValue().c_str(), L"-full");
-  work_item_list->Rollback();
-
-  work_item_list.reset(WorkItem::CreateWorkItemList());
-  // Test incremental install success
-  ASSERT_TRUE(CreateApKey(work_item_list.get(), L""))
-      << "Failed to create ap key.";
-  GoogleUpdateSettings::UpdateInstallStatus(
-      false, installer::INCREMENTAL_ARCHIVE_TYPE,
-      installer::FIRST_INSTALL_SUCCESS, kTestProductGuid);
-  EXPECT_STREQ(ReadApKeyValue().c_str(), L"");
-  work_item_list->Rollback();
-
-  work_item_list.reset(WorkItem::CreateWorkItemList());
-  // Test full install failure
   ASSERT_TRUE(CreateApKey(work_item_list.get(), L"-full"))
       << "Failed to create ap key.";
-  GoogleUpdateSettings::UpdateInstallStatus(false, installer::FULL_ARCHIVE_TYPE,
-                                            installer::INSTALL_FAILED,
-                                            kTestProductGuid);
-  EXPECT_STREQ(ReadApKeyValue().c_str(), L"");
-  work_item_list->Rollback();
-
-  work_item_list.reset(WorkItem::CreateWorkItemList());
-  // Test full install success
-  ASSERT_TRUE(CreateApKey(work_item_list.get(), L"-full"))
-      << "Failed to create ap key.";
-  GoogleUpdateSettings::UpdateInstallStatus(false, installer::FULL_ARCHIVE_TYPE,
-                                            installer::FIRST_INSTALL_SUCCESS,
-                                            kTestProductGuid);
+  GoogleUpdateSettings::UpdateInstallStatus();
   EXPECT_STREQ(ReadApKeyValue().c_str(), L"");
   work_item_list->Rollback();
 
@@ -327,31 +224,22 @@ TEST_F(GoogleUpdateSettingsTest, UpdateInstallStatusTest) {
   HKEY reg_root = HKEY_CURRENT_USER;
   bool ap_key_deleted = false;
   RegKey key;
-  if (key.Open(HKEY_CURRENT_USER, reg_key.c_str(), KEY_ALL_ACCESS) !=
-      ERROR_SUCCESS) {
-    work_item_list->AddCreateRegKeyWorkItem(reg_root, reg_key,
-                                            WorkItem::kWow64Default);
+  if (key.Open(HKEY_CURRENT_USER, reg_key.c_str(),
+               KEY_WOW64_32KEY | KEY_SET_VALUE) != ERROR_SUCCESS) {
+    work_item_list->AddCreateRegKeyWorkItem(reg_root, reg_key, KEY_WOW64_32KEY);
     ASSERT_TRUE(work_item_list->Do()) << "Failed to create ClientState key.";
   } else if (key.DeleteValue(google_update::kRegApField) == ERROR_SUCCESS) {
     ap_key_deleted = true;
   }
-  // try differential installer
-  GoogleUpdateSettings::UpdateInstallStatus(
-      false, installer::INCREMENTAL_ARCHIVE_TYPE, installer::INSTALL_FAILED,
-      kTestProductGuid);
-  EXPECT_STREQ(ReadApKeyValue().c_str(), L"-full");
-  // try full installer now
-  GoogleUpdateSettings::UpdateInstallStatus(false, installer::FULL_ARCHIVE_TYPE,
-                                            installer::INSTALL_FAILED,
-                                            kTestProductGuid);
+  GoogleUpdateSettings::UpdateInstallStatus();
   EXPECT_STREQ(ReadApKeyValue().c_str(), L"");
   // Now cleanup to leave the system in unchanged state.
-  // - Diff installer creates an ap key if it didn't exist, so delete this ap
-  // key
   // - If we created any reg key path for ap, roll it back
   // - Finally restore the original value of ap key.
-  key.Open(HKEY_CURRENT_USER, reg_key.c_str(), KEY_ALL_ACCESS);
-  key.DeleteValue(google_update::kRegApField);
+  if (key.Open(HKEY_CURRENT_USER, reg_key.c_str(),
+               KEY_WOW64_32KEY | KEY_SET_VALUE) == ERROR_SUCCESS) {
+    key.DeleteValue(google_update::kRegApField);
+  }
   work_item_list->Rollback();
   if (ap_key_deleted) {
     work_item_list.reset(WorkItem::CreateWorkItemList());
@@ -393,7 +281,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyNoOverride) {
                           GoogleUpdateSettings::kPoliciesKey, KEY_QUERY_VALUE));
   bool is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::kDefaultUpdatePolicy,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 
@@ -406,7 +294,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyNoOverride) {
                           GoogleUpdateSettings::kPoliciesKey, KEY_QUERY_VALUE));
   is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::kDefaultUpdatePolicy,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 }
@@ -423,7 +311,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyDefaultOverride) {
                             static_cast<DWORD>(0)));
   bool is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::UPDATES_DISABLED,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 
@@ -434,7 +322,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyDefaultOverride) {
                             static_cast<DWORD>(1)));
   is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::AUTOMATIC_UPDATES,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 
@@ -445,7 +333,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyDefaultOverride) {
                             static_cast<DWORD>(2)));
   is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::MANUAL_UPDATES_ONLY,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 
@@ -456,7 +344,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyDefaultOverride) {
                             static_cast<DWORD>(3)));
   is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::AUTO_UPDATES_ONLY,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 
@@ -468,7 +356,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyDefaultOverride) {
                             static_cast<DWORD>(4)));
   is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::kDefaultUpdatePolicy,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 }
@@ -477,7 +365,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyDefaultOverride) {
 TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyAppOverride) {
   std::wstring app_policy_value(
       GoogleUpdateSettings::kUpdateOverrideValuePrefix);
-  app_policy_value.append(kTestProductGuid);
+  app_policy_value.append(GetProductGuid());
 
   EXPECT_EQ(ERROR_SUCCESS,
             RegKey(HKEY_LOCAL_MACHINE, GoogleUpdateSettings::kPoliciesKey,
@@ -490,7 +378,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyAppOverride) {
                 .WriteValue(app_policy_value.c_str(), static_cast<DWORD>(0)));
   bool is_overridden = false;
   EXPECT_EQ(GoogleUpdateSettings::UPDATES_DISABLED,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_TRUE(is_overridden);
 
@@ -505,7 +393,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyAppOverride) {
                 .WriteValue(app_policy_value.c_str(), static_cast<DWORD>(1)));
   is_overridden = false;
   EXPECT_EQ(GoogleUpdateSettings::AUTOMATIC_UPDATES,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_TRUE(is_overridden);
 
@@ -515,7 +403,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyAppOverride) {
                 .WriteValue(app_policy_value.c_str(), static_cast<DWORD>(2)));
   is_overridden = false;
   EXPECT_EQ(GoogleUpdateSettings::MANUAL_UPDATES_ONLY,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_TRUE(is_overridden);
 
@@ -525,7 +413,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyAppOverride) {
                 .WriteValue(app_policy_value.c_str(), static_cast<DWORD>(3)));
   is_overridden = false;
   EXPECT_EQ(GoogleUpdateSettings::AUTO_UPDATES_ONLY,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_TRUE(is_overridden);
 
@@ -536,7 +424,7 @@ TEST_F(GoogleUpdateSettingsTest, GetAppUpdatePolicyAppOverride) {
                 .WriteValue(app_policy_value.c_str(), static_cast<DWORD>(4)));
   is_overridden = true;
   EXPECT_EQ(GoogleUpdateSettings::UPDATES_DISABLED,
-            GoogleUpdateSettings::GetAppUpdatePolicy(kTestProductGuid,
+            GoogleUpdateSettings::GetAppUpdatePolicy(GetProductGuid(),
                                                      &is_overridden));
   EXPECT_FALSE(is_overridden);
 }
@@ -620,14 +508,6 @@ TEST_F(GoogleUpdateSettingsTest, UpdatesDisabledByTimeout) {
 
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
-TEST_F(GoogleUpdateSettingsTest, ExperimentsLabelHelperSystem) {
-  TestExperimentsLabelHelper(SYSTEM_INSTALL);
-}
-
-TEST_F(GoogleUpdateSettingsTest, ExperimentsLabelHelperUser) {
-  TestExperimentsLabelHelper(USER_INSTALL);
-}
-
 TEST_F(GoogleUpdateSettingsTest, GetDownloadPreference) {
   RegKey policy_key;
 
@@ -694,7 +574,7 @@ class SetProgressTest : public GoogleUpdateSettingsTest,
 TEST_P(SetProgressTest, SetProgress) {
   std::wstring path(google_update::kRegPathClientState);
   path += L"\\";
-  path += kTestProductGuid;
+  path += GetProductGuid();
 
   constexpr int kValues[] = {0, 25, 50, 99, 100};
   for (int value : kValues) {
@@ -835,6 +715,54 @@ TEST_P(GetGoogleUpdateVersion, TestRealValue) {
 INSTANTIATE_TEST_SUITE_P(GetGoogleUpdateVersionAtLevel,
                          GetGoogleUpdateVersion,
                          testing::Bool());
+
+// Tests that GetHashedCohortId returns an empty optional if there's no cohort
+// key.
+TEST_F(GoogleUpdateSettingsTest, GetHashedCohortIdTestNoKey) {
+  EXPECT_FALSE(GoogleUpdateSettings::GetHashedCohortId());
+}
+
+// Tests that GetHashedCohortId returns an empty optional if there's no "id"
+// value in the cohort key.
+TEST_F(GoogleUpdateSettingsTest, GetHashedCohortIdTestNoValue) {
+  RegKey(install_static::InstallDetails::Get().system_level()
+             ? HKEY_LOCAL_MACHINE
+             : HKEY_CURRENT_USER,
+         install_static::GetClientStateKeyPath(
+             install_static::InstallDetails::Get().app_guid())
+             .append(L"\\cohort")
+             .c_str(),
+         KEY_SET_VALUE);
+  EXPECT_FALSE(GoogleUpdateSettings::GetHashedCohortId());
+}
+
+TEST_F(GoogleUpdateSettingsTest, GetHashedCohortIdTestEmptyValue) {
+  RegKey(install_static::InstallDetails::Get().system_level()
+             ? HKEY_LOCAL_MACHINE
+             : HKEY_CURRENT_USER,
+         install_static::GetClientStateKeyPath(
+             install_static::InstallDetails::Get().app_guid())
+             .append(L"\\cohort")
+             .c_str(),
+         KEY_SET_VALUE)
+      .WriteValue(google_update::kRegDefaultField, L"");
+  EXPECT_FALSE(GoogleUpdateSettings::GetHashedCohortId());
+}
+
+TEST_F(GoogleUpdateSettingsTest, GetHashedCohortIdTestRealValue) {
+  RegKey(install_static::InstallDetails::Get().system_level()
+             ? HKEY_LOCAL_MACHINE
+             : HKEY_CURRENT_USER,
+         install_static::GetClientStateKeyPath(
+             install_static::InstallDetails::Get().app_guid())
+             .append(L"\\cohort")
+             .c_str(),
+         KEY_SET_VALUE)
+      .WriteValue(google_update::kRegDefaultField, L"1:qesc2/qesff:qesee@0.5");
+  EXPECT_TRUE(GoogleUpdateSettings::GetHashedCohortId());
+  EXPECT_EQ(*GoogleUpdateSettings::GetHashedCohortId(),
+            base::PersistentHash("1:qesc2/qesff"));
+}
 
 // Test values for use by the CollectStatsConsent test fixture.
 class StatsState {

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "remoting/protocol/authenticator.h"
+#include "remoting/protocol/host_authentication_config.h"
 
-namespace jingle_xmpp {
-struct StaticQName;
-}  // namespace jingle_xmpp
-
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // This class provides the common base for a meta-authenticator that allows
 // clients and hosts that support multiple authentication methods to negotiate a
@@ -63,67 +57,37 @@ namespace protocol {
 //      mix of webapp, client plugin and host, for both Me2Me and IT2Me.
 class NegotiatingAuthenticatorBase : public Authenticator {
  public:
-  // Method represents an authentication algorithm.
-  enum class Method {
-    INVALID,
-
-    // SPAKE2 with P224 using access code in plain-text. Used for It2Me.
-    // TODO(sergeyu): Remove and use SHARED_SECRET_SPAKE2_CURVE25519 once
-    // the population of M50 hosts (which require this for IT2Me) is
-    // sufficiently low: crbug.com/607643.
-    SHARED_SECRET_PLAIN_SPAKE2_P224,
-
-    // SPAKE2 PIN or access code hashed with host_id using HMAC-SHA256.
-    SHARED_SECRET_SPAKE2_P224,
-    SHARED_SECRET_SPAKE2_CURVE25519,
-
-    // SPAKE2 using shared pairing secret. Falls back to PIN-based
-    // authentication when pairing fails.
-    PAIRED_SPAKE2_P224,
-    PAIRED_SPAKE2_CURVE25519,
-
-    // Authentication using third-party authentication server.
-    // SPAKE2 with P224 using shared pairing secret. Falls back to PIN-based
-    // authentication when it fails to authenticate using paired secret.
-    THIRD_PARTY_SPAKE2_P224,
-    THIRD_PARTY_SPAKE2_CURVE25519,
-  };
+  NegotiatingAuthenticatorBase(const NegotiatingAuthenticatorBase&) = delete;
+  NegotiatingAuthenticatorBase& operator=(const NegotiatingAuthenticatorBase&) =
+      delete;
 
   ~NegotiatingAuthenticatorBase() override;
 
   // Authenticator interface.
+  CredentialsType credentials_type() const override;
+  const Authenticator& implementing_authenticator() const override;
   State state() const override;
   bool started() const override;
   RejectionReason rejection_reason() const override;
+  RejectionDetails rejection_details() const override;
   const std::string& GetAuthKey() const override;
-  std::unique_ptr<ChannelAuthenticator> CreateChannelAuthenticator()
-      const override;
+  const SessionPolicies* GetSessionPolicies() const override;
 
   // Calls |current_authenticator_| to process |message|, passing the supplied
   // |resume_callback|.
-  void ProcessMessageInternal(const jingle_xmpp::XmlElement* message,
+  void ProcessMessageInternal(const JingleAuthentication& message,
                               base::OnceClosure resume_callback);
 
  protected:
   friend class NegotiatingAuthenticatorTest;
 
-  static const jingle_xmpp::StaticQName kMethodAttributeQName;
-  static const jingle_xmpp::StaticQName kSupportedMethodsAttributeQName;
   static const char kSupportedMethodsSeparator;
-
-  static const jingle_xmpp::StaticQName kPairingInfoTag;
-  static const jingle_xmpp::StaticQName kClientIdAttribute;
-
-  // Parses a string that defines an authentication method. Returns
-  // Method::INVALID if the string is invalid.
-  static Method ParseMethodString(const std::string& value);
-
-  // Returns string representation of |method|.
-  static std::string MethodToString(Method method);
 
   explicit NegotiatingAuthenticatorBase(Authenticator::State initial_state);
 
-  void AddMethod(Method method);
+  void NotifyStateChangeAfterAccepted() override;
+
+  void AddMethod(AuthenticationMethod method);
 
   // Updates |state_| to reflect the current underlying authenticator state.
   // |resume_callback| is called after the state is updated.
@@ -131,19 +95,18 @@ class NegotiatingAuthenticatorBase : public Authenticator {
 
   // Gets the next message from |current_authenticator_|, if any, and fills in
   // the 'method' tag with |current_method_|.
-  virtual std::unique_ptr<jingle_xmpp::XmlElement> GetNextMessageInternal();
+  virtual JingleAuthentication GetNextMessageInternal();
 
-  std::vector<Method> methods_;
-  Method current_method_ = Method::INVALID;
+  std::vector<AuthenticationMethod> methods_;
+  AuthenticationMethod current_method_ = AuthenticationMethod::INVALID;
   std::unique_ptr<Authenticator> current_authenticator_;
   State state_;
-  RejectionReason rejection_reason_ = INVALID_CREDENTIALS;
+  RejectionReason rejection_reason_ = RejectionReason::INVALID_CREDENTIALS;
+  RejectionDetails rejection_details_;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(NegotiatingAuthenticatorBase);
+  base::WeakPtrFactory<NegotiatingAuthenticatorBase> weak_factory_{this};
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_NEGOTIATING_AUTHENTICATOR_BASE_H_

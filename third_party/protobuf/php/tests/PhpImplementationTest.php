@@ -18,13 +18,35 @@ use Google\Protobuf\Internal\CodedOutputStream;
  * Please note, this test is only intended to be run without the protobuf C
  * extension.
  */
-class ImplementationTest extends TestBase
+class PhpImplementationTest extends TestBase
 {
-    public function setUp()
+    private $orig_level;
+
+    /**
+     * Avoid calling setUp, which has void return type (not avalialbe in php7.0).
+     * @before
+     */
+    public function skipTestsForExtension()
     {
         if (extension_loaded('protobuf')) {
             $this->markTestSkipped();
         }
+    }
+
+    /**
+     * @before
+     */
+    public function setErrorLevel()
+    {
+        $this->orig_level = error_reporting();
+    }
+
+    /**
+     * @after
+     */
+    public function restoreErrorLevel()
+    {
+        error_reporting($this->orig_level);
     }
 
     public function testReadInt32()
@@ -217,20 +239,28 @@ class ImplementationTest extends TestBase
         $this->assertSame(2, GPBWire::zigZagEncode32(1));
         $this->assertSame(3, GPBWire::zigZagEncode32(-2));
         $this->assertSame(0x7FFFFFFE, GPBWire::zigZagEncode32(0x3FFFFFFF));
+        // Currently this generates a warning so we suppress it. In PHP 9, this will be promoted to an error and the tests should be removed.
+        // https://wiki.php.net/rfc/warnings-php-8-5#casting_out_of_range_floats_to_int
+        error_reporting($this->orig_level & ~E_WARNING);
         $this->assertSame(0x7FFFFFFF, GPBWire::zigZagEncode32(0xC0000000));
+        $this->assertSame(-2, GPBWire::zigZagDecode32(3));
+        $this->assertSame(0x7FFFFFFF,  GPBWire::zigZagDecode32(0xFFFFFFFE));
+        error_reporting($this->orig_level);
         $this->assertSame(0x7FFFFFFF, GPBWire::zigZagEncode32(-1073741824));
 
         $this->assertSame(0,  GPBWire::zigZagDecode32(0));
         $this->assertSame(-1, GPBWire::zigZagDecode32(1));
         $this->assertSame(1,  GPBWire::zigZagDecode32(2));
-        $this->assertSame(-2, GPBWire::zigZagDecode32(3));
         $this->assertSame(0x3FFFFFFF,  GPBWire::zigZagDecode32(0x7FFFFFFE));
         $this->assertSame(-1073741824, GPBWire::zigZagDecode32(0x7FFFFFFF));
-        $this->assertSame(0x7FFFFFFF,  GPBWire::zigZagDecode32(0xFFFFFFFE));
         $this->assertSame((int)-2147483648,GPBWire::zigZagDecode32(0xFFFFFFFF));
 
         if (PHP_INT_SIZE == 4) {
+            // Currently this generates a warning so we suppress it. In PHP 9, this will be promoted to an error and the test should be removed.
+            // https://wiki.php.net/rfc/warnings-php-8-5#casting_out_of_range_floats_to_int
+            error_reporting($this->orig_level & ~E_WARNING);
             $this->assertSame(-2, GPBWire::zigZagEncode32(0x7FFFFFFF));
+            error_reporting($this->orig_level);
             $this->assertSame(-1, GPBWire::zigZagEncode32(0x80000000));
             $this->assertSame('0', GPBWire::zigZagEncode64(0));
             $this->assertSame('1', GPBWire::zigZagEncode64(-1));
@@ -271,13 +301,13 @@ class ImplementationTest extends TestBase
             $this->assertSame(0x7FFFFFFE, GPBWire::zigZagEncode64(0x3FFFFFFF));
             $this->assertSame(
                 0x7FFFFFFF,
-                GPBWire::zigZagEncode64(0xFFFFFFFFC0000000));
+                GPBWire::zigZagEncode64(-1073741824));  // 0xFFFFFFFFC0000000
             $this->assertSame(
                 0xFFFFFFFE,
                 GPBWire::zigZagEncode64(0x7FFFFFFF));
             $this->assertSame(
                 0xFFFFFFFF,
-                GPBWire::zigZagEncode64(0xFFFFFFFF80000000));
+                GPBWire::zigZagEncode64(-2147483648));  // 0xFFFFFFFF80000000
             $this->assertSame(
                 -2,  // 0xFFFFFFFFFFFFFFFE
                 GPBWire::zigZagEncode64(0x7FFFFFFFFFFFFFFF));
@@ -306,6 +336,8 @@ class ImplementationTest extends TestBase
         $m = new TestMessage();
         $m->mergeFromString(TestUtil::getGoldenTestMessage());
         TestUtil::assertTestMessage($m);
+
+        $this->assertTrue(true);
     }
 
     public function testDescriptorDecode()
@@ -347,9 +379,19 @@ class ImplementationTest extends TestBase
         $input = new CodedInputStream(hex2bin(''));
         $this->assertFalse($input->readVarint64($var));
 
-        // The largest varint is 10 bytes long.
+        // varints which are >10 bytes long aren't allowed
         $input = new CodedInputStream(hex2bin('8080808080808080808001'));
         $this->assertFalse($input->readVarint64($var));
+
+        // 10-byte varint with high bits set in the 10th byte.
+        // Bits above bit 0 in the 10th byte are discarded.
+        $input = new CodedInputStream(hex2bin('87808080808080808002'));
+        $this->assertTrue($input->readVarint64($var));
+        if (PHP_INT_SIZE == 4) {
+            $this->assertSame('7', $var);
+        } else {
+            $this->assertSame(7, $var);
+        }
 
         // Corrupted varint.
         $input = new CodedInputStream(hex2bin('808080'));
@@ -525,23 +567,23 @@ class ImplementationTest extends TestBase
         $this->assertSame(166, $m->byteSize());
     }
 
-    /**
-     * @expectedException UnexpectedValueException
-     * @expectedExceptionMessage Invalid message property: optionalInt32
-     */
     public function testArrayConstructorJsonCaseThrowsException()
     {
+        $this->expectException(UnexpectedValueException::class);
+        $this->expectExceptionMessage(
+            'Invalid message property: optionalInt32');
+
         $m = new TestMessage([
             'optionalInt32' => -42,
         ]);
     }
 
-    /**
-     * @expectedException Exception
-     * @expectedExceptionMessage Expect Foo\TestMessage\Sub.
-     */
     public function testArraysForMessagesThrowsException()
     {
+        $this->expectException(TypeError::class);
+        $this->expectExceptionMessage(
+            'Argument #1 ($var) must be of type ?Foo\TestMessage\Sub, array given');
+
         $m = new TestMessage([
             'optional_message' => [
                 'a' => 33
@@ -552,47 +594,45 @@ class ImplementationTest extends TestBase
     public function testArrayConstructorWithNullValues()
     {
         $requestData = [
-            'optional_bool' => null,
-            'optional_string' => null,
-            'optional_bytes' => null,
             'optional_message' => null,
         ];
 
         $m = new TestMessage($requestData);
-
-        $this->assertSame(false, $m->getOptionalBool());
-        $this->assertSame('', $m->getOptionalString());
-        $this->assertSame('', $m->getOptionalBytes());
         $this->assertSame(null, $m->getOptionalMessage());
     }
 
     /**
      * @dataProvider provideArrayConstructorWithNullValuesThrowsException
-     * @expectedException Exception
      */
-    public function testArrayConstructorWithNullValuesThrowsException($requestData)
+    public function testArrayConstructorWithNullValuesThrowsException($fieldName)
     {
-        $m = new TestMessage($requestData);
+        $this->expectException(TypeError::class);
+        $this->expectExceptionMessage('Argument #1 ($var) must be of type');
+
+        $m = new TestMessage([$fieldName => null]);
     }
 
-    public function provideArrayConstructorWithNullValuesThrowsException()
+    public static function provideArrayConstructorWithNullValuesThrowsException()
     {
         return [
-            [['optional_int32' => null]],
-            [['optional_int64' => null]],
-            [['optional_uint32' => null]],
-            [['optional_uint64' => null]],
-            [['optional_sint32' => null]],
-            [['optional_sint64' => null]],
-            [['optional_fixed32' => null]],
-            [['optional_fixed64' => null]],
-            [['optional_sfixed32' => null]],
-            [['optional_sfixed64' => null]],
-            [['optional_float' => null]],
-            [['optional_double' => null]],
-            [['optional_enum' => null]],
-            [['repeated_int32' => null]],
-            [['map_int32_int32' => null]],
+            ['optional_bool'],
+            ['optional_string'],
+            ['optional_bytes'],
+            ['optional_int32'],
+            ['optional_int64'],
+            ['optional_uint32'],
+            ['optional_uint64'],
+            ['optional_sint32'],
+            ['optional_sint64'],
+            ['optional_fixed32'],
+            ['optional_fixed64'],
+            ['optional_sfixed32'],
+            ['optional_sfixed64'],
+            ['optional_float'],
+            ['optional_double'],
+            ['optional_enum'],
+            ['repeated_int32'],
+            ['map_int32_int32'],
         ];
     }
 }

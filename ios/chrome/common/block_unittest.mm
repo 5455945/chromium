@@ -1,16 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Foundation/Foundation.h>
-#include <vector>
 
-#include "base/memory/ref_counted.h"
-#include "testing/platform_test.h"
+#import <vector>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/memory/ref_counted.h"
+#import "testing/platform_test.h"
 
 // This test verifies assumptions about the murky world of interaction between
 // C++ objects and blocks. Just to make sure.
@@ -33,8 +30,9 @@ class RefCountedObject : public base::RefCounted<RefCountedObject> {
       EXPECT_FALSE(check);
       ++count;
     }
-    for (int ii = 1; ii < count; ii++)
+    for (int ii = 1; ii < count; ii++) {
       base::subtle::RefCountedBase::AddRef();
+    }
     return count;
   }
 
@@ -66,14 +64,7 @@ TEST_F(BlockTest, BlockAndCPlusPlus) {
         EXPECT_EQ(object_void_ptr, object_ptr.get());
         EXPECT_EQ(expected, object_ptr.get()->refcount());
       };
-#ifdef XCODE_CLANG
-      // TODO(crbug.com/939749): With newer Clang versions, the expected value
-      // is 3. Remove this ifdef when moving to a newer xcode. Note:
-      // XCODE_CLANG is a Chromium-specific define local to this build target.
       stack_block(4);
-#else
-      stack_block(3);
-#endif
       heap_block = [stack_block copy];
       stack_block(4);
     }

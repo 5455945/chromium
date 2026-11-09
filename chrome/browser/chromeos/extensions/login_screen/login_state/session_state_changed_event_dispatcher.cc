@@ -1,20 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/extensions/login_screen/login_state/session_state_changed_event_dispatcher.h"
 
-#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login_state/login_state_api.h"
-#include "chrome/common/extensions/api/login_state.h"
+#include "chromeos/ash/experiences/extensions/common/api/login_state.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
 #include "content/public/browser/browser_context.h"
+#include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_event_histogram_value.h"
-#include "extensions/browser/extension_registry.h"
-#include "extensions/common/extension_set.h"
 
 namespace extensions {
 
@@ -29,8 +27,7 @@ SessionStateChangedEventDispatcher::GetFactoryInstance() {
 SessionStateChangedEventDispatcher::SessionStateChangedEventDispatcher(
     content::BrowserContext* browser_context)
     : browser_context_(browser_context),
-      event_router_(EventRouter::Get(browser_context)),
-      session_state_(api::login_state::SESSION_STATE_UNKNOWN) {
+      event_router_(EventRouter::Get(browser_context)) {
   session_manager_observation_.Observe(session_manager::SessionManager::Get());
 }
 
@@ -40,20 +37,15 @@ SessionStateChangedEventDispatcher::~SessionStateChangedEventDispatcher() =
 void SessionStateChangedEventDispatcher::Shutdown() {}
 
 void SessionStateChangedEventDispatcher::OnSessionStateChanged() {
-  api::login_state::SessionState new_state = SessionStateToApiEnum(
-      session_manager::SessionManager::Get()->session_state());
+  api::login_state::SessionState new_state =
+      ToApiEnum(session_manager::SessionManager::Get()->session_state());
 
-  // |session_manager::SessionState| changed but the mapped
-  // |api::login_state::SessionState| did not.
-  if (session_state_ == new_state)
-    return;
-
-  session_state_ = new_state;
-
-  std::unique_ptr<Event> event = std::make_unique<Event>(
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::login_state::OnSessionStateChanged::Create(new_state));
+  auto event = std::make_unique<Event>(
       events::LOGIN_STATE_ON_SESSION_STATE_CHANGED,
       api::login_state::OnSessionStateChanged::kEventName,
-      api::login_state::OnSessionStateChanged::Create(new_state));
+      std::move(event_args));
 
   event_router_->BroadcastEvent(std::move(event));
 }

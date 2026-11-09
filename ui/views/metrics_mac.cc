@@ -1,25 +1,19 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/views/metrics.h"
 
-namespace {
-
-// Default double click interval in milliseconds.
-// Same as what gtk uses.
-const int kDefaultDoubleClickInterval = 500;
-
-}  // namespace
-
 namespace views {
 
-int GetDoubleClickInterval() {
+base::TimeDelta GetDoubleClickInterval() {
+  constexpr base::TimeDelta kDefaultDoubleClickInterval =
+      base::Milliseconds(500);
   return kDefaultDoubleClickInterval;
 }
 
-int GetMenuShowDelay() {
-  return 0;
+base::TimeDelta GetMenuShowDelay() {
+  return base::Milliseconds(0);
 }
 
 }  // namespace views

@@ -1,11 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_EVENTS_ANDROID_GESTURE_EVENT_ANDROID_H_
 #define UI_EVENTS_ANDROID_GESTURE_EVENT_ANDROID_H_
 
-#include "base/macros.h"
+#include <memory>
+
+#include "ui/events/event_constants.h"
 #include "ui/events/events_export.h"
 #include "ui/gfx/geometry/point_f.h"
 
@@ -21,6 +23,7 @@ class EVENTS_EXPORT GestureEventAndroid {
                       const gfx::PointF& location,
                       const gfx::PointF& screen_location,
                       long time_ms,
+                      GestureDeviceType source,
                       float scale,
                       float delta_x,
                       float delta_y,
@@ -30,12 +33,16 @@ class EVENTS_EXPORT GestureEventAndroid {
                       bool synthetic_scroll,
                       bool prevent_boosting);
 
+  GestureEventAndroid(const GestureEventAndroid&) = delete;
+  GestureEventAndroid& operator=(const GestureEventAndroid&) = delete;
+
   ~GestureEventAndroid();
 
   int type() const { return type_; }
   const gfx::PointF& location() const { return location_; }
   const gfx::PointF& screen_location() const { return screen_location_; }
   long time() const { return time_ms_; }
+  GestureDeviceType source() const { return source_; }
   float scale() const { return scale_; }
   float delta_x() const { return delta_x_; }
   float delta_y() const { return delta_y_; }
@@ -56,6 +63,7 @@ class EVENTS_EXPORT GestureEventAndroid {
   gfx::PointF screen_location_;
   long time_ms_;
 
+  GestureDeviceType source_;
   float scale_;
   float delta_x_;
   float delta_y_;
@@ -67,8 +75,6 @@ class EVENTS_EXPORT GestureEventAndroid {
   // Used by fling cancel. If true, this gesture will never attempt to boost an
   // existing fling. It will immediately cancel an existing fling.
   bool prevent_boosting_;
-
-  DISALLOW_COPY_AND_ASSIGN(GestureEventAndroid);
 };
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,15 +11,17 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/byte_size.h"
 #include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "content/common/content_export.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/navigation_preload_state.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_ancestor_frame_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 #include "url/gurl.h"
 
@@ -38,6 +40,22 @@ class CONTENT_EXPORT ServiceWorkerRegistration
  public:
   using StatusCallback =
       base::OnceCallback<void(blink::ServiceWorkerStatusCode status)>;
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(DeleteInitiator)
+  enum class DeleteInitiator {
+    kUnregister = 0,
+    kDeleteForStorageKey = 1,
+    kForceDelete = 2,
+    kRegistrationFailure = 3,
+    kContentPublicApi = 4,
+    kWebUI = 5,
+    kTest = 6,
+    kMaxValue = kTest,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerRegistrationDeleteInitiator)
 
   class CONTENT_EXPORT Listener {
    public:
@@ -70,19 +88,26 @@ class CONTENT_EXPORT ServiceWorkerRegistration
     kUninstalled,
   };
 
-  // The constructor should be called only from ServiceWorkerRegistry other than
-  // tests.
-  ServiceWorkerRegistration(
+  // This is a factory method and should be used instead of the constructor.
+  static scoped_refptr<ServiceWorkerRegistration> Create(
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
       const blink::StorageKey& key,
       int64_t registration_id,
-      base::WeakPtr<ServiceWorkerContextCore> context);
+      base::WeakPtr<ServiceWorkerContextCore> context,
+      blink::mojom::AncestorFrameType ancestor_frame_type);
+
+  ServiceWorkerRegistration(const ServiceWorkerRegistration&) = delete;
+  ServiceWorkerRegistration& operator=(const ServiceWorkerRegistration&) =
+      delete;
 
   int64_t id() const { return registration_id_; }
   const GURL& scope() const { return scope_; }
   const blink::StorageKey& key() const { return key_; }
   blink::mojom::ServiceWorkerUpdateViaCache update_via_cache() const {
     return update_via_cache_;
+  }
+  blink::mojom::AncestorFrameType ancestor_frame_type() const {
+    return ancestor_frame_type_;
   }
 
   bool is_deleted() const { return status_ != Status::kIntact; }
@@ -98,12 +123,10 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   void SetStored();
   void UnsetStored();
 
-  int64_t resources_total_size_bytes() const {
-    return resources_total_size_bytes_;
-  }
+  base::ByteSize resources_total_size() const { return resources_total_size_; }
 
-  void set_resources_total_size_bytes(int64_t resources_total_size_bytes) {
-    resources_total_size_bytes_ = resources_total_size_bytes;
+  void set_resources_total_size(base::ByteSize resources_total_size) {
+    resources_total_size_ = resources_total_size;
   }
 
   // Returns the active version. This version may be in ACTIVATING or ACTIVATED
@@ -172,11 +195,11 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   // Deletes this registration from storage immediately. Triggers the
   // [[ClearRegistration]] algorithm when the currently active version has no
   // controllees.
-  void DeleteAndClearWhenReady();
+  void DeleteAndClearWhenReady(DeleteInitiator initiator);
 
   // Deletes this registration from storage immediately and then triggers the
   // [[ClearRegistration]] algorithm.
-  void DeleteAndClearImmediately();
+  void DeleteAndClearImmediately(DeleteInitiator initiator);
 
   // Restores this registration in storage and cancels the pending
   // [[ClearRegistration]] algorithm.
@@ -214,12 +237,38 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   // Called when there is no work in |version|.
   void OnNoWork(ServiceWorkerVersion* version);
 
+  // Delays an update if it is called by a ServiceWorker without controllee, to
+  // prevent workers from running forever (see https://crbug.com/805496).
+  void DelayUpdate(
+      ServiceWorkerVersion& version,
+      blink::mojom::FetchClientSettingsObjectPtr
+          outside_fetch_client_settings_object,
+      blink::mojom::ServiceWorkerRegistrationObjectHost::UpdateCallback
+          callback);
+  void ExecuteUpdate(
+      blink::mojom::FetchClientSettingsObjectPtr
+          outside_fetch_client_settings_object,
+      blink::mojom::ServiceWorkerRegistrationObjectHost::UpdateCallback
+          callback);
+
+  std::string ComposeUpdateErrorMessagePrefix(
+      const ServiceWorkerVersion* version_to_update) const;
+
  protected:
   virtual ~ServiceWorkerRegistration();
 
  private:
   friend class base::RefCounted<ServiceWorkerRegistration>;
   friend class ServiceWorkerActivationTest;
+
+  // Callers should use `ServiceWorkerRegistration` factory `Create()` method
+  // instead.
+  ServiceWorkerRegistration(
+      const blink::mojom::ServiceWorkerRegistrationOptions& options,
+      const blink::StorageKey& key,
+      int64_t registration_id,
+      base::WeakPtr<ServiceWorkerContextCore> context,
+      blink::mojom::AncestorFrameType ancestor_frame_type);
 
   void UnsetVersionInternal(
       ServiceWorkerVersion* version,
@@ -243,7 +292,8 @@ class CONTENT_EXPORT ServiceWorkerRegistration
       scoped_refptr<ServiceWorkerVersion> activating_version,
       blink::ServiceWorkerStatusCode status);
 
-  void OnDeleteFinished(blink::ServiceWorkerStatusCode status);
+  void OnDeleteFinished(DeleteInitiator initiator,
+                        blink::ServiceWorkerStatusCode status);
 
   // This method corresponds to the [[ClearRegistration]] algorithm.
   void Clear();
@@ -251,6 +301,14 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   void OnRestoreFinished(StatusCallback callback,
                          scoped_refptr<ServiceWorkerVersion> version,
                          blink::ServiceWorkerStatusCode status);
+
+  // Called back from ServiceWorkerContextCore when an update is complete.
+  void UpdateComplete(
+      blink::mojom::ServiceWorkerRegistrationObjectHost::UpdateCallback
+          callback,
+      blink::ServiceWorkerStatusCode status,
+      const std::string& status_message,
+      int64_t registration_id);
 
   enum class StoreState {
     // This registration is not stored yet in storage.
@@ -269,7 +327,7 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   blink::mojom::NavigationPreloadState navigation_preload_state_;
   base::Time last_update_check_;
   base::TimeDelta self_update_delay_;
-  int64_t resources_total_size_bytes_;
+  base::ByteSize resources_total_size_;
 
   // This registration is the primary owner of these versions.
   scoped_refptr<ServiceWorkerVersion> active_version_;
@@ -289,10 +347,10 @@ class CONTENT_EXPORT ServiceWorkerRegistration
   // longer considered a lame duck.
   base::RepeatingTimer lame_duck_timer_;
 
-  // TODO(crbug.com/1159778): Remove once the bug is fixed.
+  // TODO(crbug.com/40737650): Remove once the bug is fixed.
   bool in_activate_waiting_version_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerRegistration);
+  const blink::mojom::AncestorFrameType ancestor_frame_type_;
 };
 
 }  // namespace content

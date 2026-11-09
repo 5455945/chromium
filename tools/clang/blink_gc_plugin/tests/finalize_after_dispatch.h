@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,20 @@ class NeedsDispatch : public GarbageCollected<NeedsDispatch> {
  public:
   void Trace(Visitor*) const;
   // Needs a TraceAfterDispatch method.
-  void FinalizeGarbageCollectedObject(){};
+  void FinalizeGarbageCollectedObject() {}
+
+ protected:
+  NeedsDispatch() = default;
 };
 
 class NeedsFinalizedBase : public GarbageCollected<NeedsFinalizedBase> {
-public:
- void Trace(Visitor*) const {};
- void TraceAfterDispatch(Visitor*) const {};
- void FinalizeGarbageCollectedObject(){};
+ public:
+  void Trace(Visitor*) const {}
+  void TraceAfterDispatch(Visitor*) const {}
+  void FinalizeGarbageCollectedObject() {}
+
+ protected:
+  NeedsFinalizedBase() = default;
 };
 
 class A : GarbageCollected<A> {
@@ -30,7 +36,7 @@ class A : GarbageCollected<A> {
   void FinalizeGarbageCollectedObject();
 
  protected:
-  enum Type { TB, TC, TD };
+  enum Type { TB, TC, TD, TE };
   A(Type type) : m_type(type) {}
 
  private:
@@ -71,6 +77,15 @@ public:
     Member<A> m_a;
 };
 
+class E : public A {
+ public:
+  E() : A(TE) {}
+  void TraceAfterDispatch(Visitor*) const;
+  void FinalizeGarbageCollectedObject();
+
+ private:
+  Member<A> m_a;
+};
 }
 
-#endif
+#endif  // FINALIZE_AFTER_DISPATCH_H_

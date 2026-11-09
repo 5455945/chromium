@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 
 #include <stdio.h>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include <optional>
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -21,6 +23,10 @@ class FilePath;
 class XmlUnitTestResultPrinter : public testing::EmptyTestEventListener {
  public:
   XmlUnitTestResultPrinter();
+
+  XmlUnitTestResultPrinter(const XmlUnitTestResultPrinter&) = delete;
+  XmlUnitTestResultPrinter& operator=(const XmlUnitTestResultPrinter&) = delete;
+
   ~XmlUnitTestResultPrinter() override;
 
   static XmlUnitTestResultPrinter* Get();
@@ -30,8 +36,19 @@ class XmlUnitTestResultPrinter : public testing::EmptyTestEventListener {
   // explanation and usage.
   void AddLink(const std::string& name, const std::string& url);
 
+  // Add tag in the gtest xml output.
+  // Please see AddTagToTestResult in gtest_tags.h for detailed
+  // explanation and usage.
+  void AddTag(const std::string& name, const std::string& value);
+
+  // Add SubTestResult in the GTest XML output.
+  // See gtest_sub_test_results.h for more information.
+  void AddSubTestResult(std::string_view name,
+                        testing::TimeInMillis elapsed_time,
+                        std::optional<std::string_view> failure_message);
+
   // Must be called before adding as a listener. Returns true on success.
-  bool Initialize(const FilePath& output_file_path) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool Initialize(const FilePath& output_file_path);
 
   // CHECK/DCHECK failed. Print file/line and message to the xml.
   void OnAssert(const char* file,
@@ -41,10 +58,10 @@ class XmlUnitTestResultPrinter : public testing::EmptyTestEventListener {
 
  private:
   // testing::EmptyTestEventListener:
-  void OnTestCaseStart(const testing::TestCase& test_case) override;
+  void OnTestSuiteStart(const testing::TestSuite& test_suite) override;
   void OnTestStart(const testing::TestInfo& test_info) override;
   void OnTestEnd(const testing::TestInfo& test_info) override;
-  void OnTestCaseEnd(const testing::TestCase& test_case) override;
+  void OnTestSuiteEnd(const testing::TestSuite& test_suite) override;
 
   void WriteTestPartResult(const char* file,
                            int line,
@@ -53,11 +70,13 @@ class XmlUnitTestResultPrinter : public testing::EmptyTestEventListener {
                            const std::string& message);
 
   static XmlUnitTestResultPrinter* instance_;
-  FILE* output_file_{nullptr};
-  bool open_failed_{false};
-  ThreadChecker thread_checker_;
+  raw_ptr<FILE> output_file_ = nullptr;
+  bool open_failed_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(XmlUnitTestResultPrinter);
+  // Flag that's true iff a test has been started but not yet ended.
+  bool test_running_ = false;
+
+  ThreadChecker thread_checker_;
 };
 
 }  // namespace base

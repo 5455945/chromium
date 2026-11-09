@@ -1,14 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_DATA_TRANSFER_POLICY_DATA_TRANSFER_ENDPOINT_H_
 #define UI_BASE_DATA_TRANSFER_POLICY_DATA_TRANSFER_ENDPOINT_H_
 
-#include "base/stl_util.h"
-#include "build/chromeos_buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/origin.h"
+#include <optional>
+
+#include "base/component_export.h"
+#include "build/build_config.h"
+#include "url/gurl.h"
 
 namespace ui {
 
@@ -21,13 +22,19 @@ enum class EndpointType {
   kUrl = 1,      // Website URL e.g. www.example.com.
   kClipboardHistory = 2,  // Clipboard History UI has privileged access to any
                           // clipboard data.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   kUnknownVm = 3,  // The VM type is not identified.
   kArc = 4,        // ARC.
   kBorealis = 5,   // Borealis OS.
   kCrostini = 6,   // Crostini.
-  kPluginVm = 7    // Plugin VM App.
-#endif             // BUILDFLAG(IS_CHROMEOS_ASH)
+  kPluginVm = 7,   // Deprecated Plugin VM endpoint. Do not reuse.
+#endif             // BUILDFLAG(IS_CHROMEOS)
+};
+
+struct COMPONENT_EXPORT(UI_BASE_DATA_TRANSFER_POLICY)
+    DataTransferEndpointOptions {
+  bool notify_if_restricted = true;
+  bool off_the_record = false;
 };
 
 // DataTransferEndpoint represents:
@@ -41,11 +48,15 @@ enum class EndpointType {
 // if the data read is not allowed.)
 class COMPONENT_EXPORT(UI_BASE_DATA_TRANSFER_POLICY) DataTransferEndpoint {
  public:
-  explicit DataTransferEndpoint(const url::Origin& origin,
-                                bool notify_if_restricted = true);
+  // In case DataTransferEndpoint is constructed from a RenderFrameHost object,
+  // please use the url of its main frame.
+  explicit DataTransferEndpoint(
+      const GURL& url,
+      DataTransferEndpointOptions options = DataTransferEndpointOptions());
   // This constructor shouldn't be used if |type| == EndpointType::kUrl.
-  explicit DataTransferEndpoint(EndpointType type,
-                                bool notify_if_restricted = true);
+  explicit DataTransferEndpoint(
+      EndpointType type,
+      DataTransferEndpointOptions options = DataTransferEndpointOptions());
 
   DataTransferEndpoint(const DataTransferEndpoint& other);
   DataTransferEndpoint(DataTransferEndpoint&& other);
@@ -54,30 +65,35 @@ class COMPONENT_EXPORT(UI_BASE_DATA_TRANSFER_POLICY) DataTransferEndpoint {
   DataTransferEndpoint& operator=(DataTransferEndpoint&& other);
 
   bool operator==(const DataTransferEndpoint& other) const;
-  bool operator!=(const DataTransferEndpoint& other) const {
-    return !(*this == other);
-  }
 
   ~DataTransferEndpoint();
 
   bool IsUrlType() const { return type_ == EndpointType::kUrl; }
 
-  const url::Origin* origin() const { return base::OptionalOrNullptr(origin_); }
+  const GURL* GetURL() const;
 
   EndpointType type() const { return type_; }
 
+  bool off_the_record() const { return off_the_record_; }
+
   bool notify_if_restricted() const { return notify_if_restricted_; }
 
-  // Returns true if both of the endpoints have the same origin_ and type_ ==
+  // Returns true if both of the endpoints have the same url_ and type_ ==
   // kUrl.
-  bool IsSameOriginWith(const DataTransferEndpoint& other) const;
+  bool IsSameURLWith(const DataTransferEndpoint& other) const;
 
  private:
   // This variable should always have a value representing the object type.
   EndpointType type_;
-  // The url::Origin of the data endpoint. It always has a value if `type_` ==
+
+  // The URL of the data endpoint. It always has a value if `type_` ==
   // EndpointType::kUrl, otherwise it's empty.
-  absl::optional<url::Origin> origin_;
+  std::optional<GURL> url_;
+
+  // Whether the endpoint corresponds to an OTR browser context. This should
+  // only be set to true for `EndpointType::kUrl` endpoints.
+  bool off_the_record_ = false;
+
   // This variable should be set to true, if paste is initiated by the user.
   // Otherwise it should be set to false, so the user won't see a notification
   // when the data is restricted by the rules of data leak prevention policy

@@ -1,9 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/svg/svg_text_content_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 
@@ -13,7 +14,8 @@ class SVGTextContentElementTest : public EditingTestBase {};
 
 TEST_F(SVGTextContentElementTest, selectSubStringNotCrash) {
   SetBodyContent("<svg><text style='visibility:hidden;'>Text</text></svg>");
-  auto* elem = To<SVGTextContentElement>(GetDocument().QuerySelector("text"));
+  auto* elem = To<SVGTextContentElement>(
+      GetDocument().QuerySelector(AtomicString("text")));
   VisiblePosition start = VisiblePosition::FirstPositionInNode(
       *const_cast<SVGTextContentElement*>(elem));
   EXPECT_TRUE(start.IsNull());

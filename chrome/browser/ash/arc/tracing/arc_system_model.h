@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,6 +35,10 @@ class ArcSystemModel {
   using ThreadMap = std::map<int, ThreadInfo>;
 
   ArcSystemModel();
+
+  ArcSystemModel(const ArcSystemModel&) = delete;
+  ArcSystemModel& operator=(const ArcSystemModel&) = delete;
+
   ~ArcSystemModel();
 
   void Reset();
@@ -49,7 +53,7 @@ class ArcSystemModel {
   void CloseRangeForValueEvents(uint64_t max_timestamp);
 
   void CopyFrom(const ArcSystemModel& other);
-  base::DictionaryValue Serialize() const;
+  base::DictValue Serialize() const;
   bool Load(const base::Value* root);
 
   bool operator==(const ArcSystemModel& other) const;
@@ -69,8 +73,6 @@ class ArcSystemModel {
   // TODO(khmel): For simplification and performance use separate channels
   // for each event type.
   ValueEvents memory_events_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcSystemModel);
 };
 
 }  // namespace arc

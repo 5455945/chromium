@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "content/public/browser/browser_thread.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/bluetooth_socket.h"
@@ -23,7 +22,7 @@ namespace extensions {
 
 // Representation of socket instances from the "bluetooth" namespace,
 // abstracting away platform differences from the underlying BluetoothSocketXxx
-// class. All methods must be called on the |kThreadId| thread.
+// class. All methods must be called on the `kThreadId` thread.
 class BluetoothApiSocket : public ApiResource {
  public:
   enum ErrorReason { kSystemError, kNotConnected, kNotListening, kIOPending,
@@ -43,17 +42,21 @@ class BluetoothApiSocket : public ApiResource {
                      scoped_refptr<device::BluetoothSocket> socket,
                      const std::string& device_address,
                      const device::BluetoothUUID& uuid);
+
+  BluetoothApiSocket(const BluetoothApiSocket&) = delete;
+  BluetoothApiSocket& operator=(const BluetoothApiSocket&) = delete;
+
   ~BluetoothApiSocket() override;
 
-  // Adopts a socket |socket| connected to a device with address
-  // |device_address| using the service with UUID |uuid|.
+  // Adopts a socket `socket` connected to a device with address
+  // `device_address` using the service with UUID `uuid`.
   virtual void AdoptConnectedSocket(
       scoped_refptr<device::BluetoothSocket> socket,
       const std::string& device_address,
       const device::BluetoothUUID& uuid);
 
-  // Adopts a socket |socket| listening on a service advertised with UUID
-  // |uuid|.
+  // Adopts a socket `socket` listening on a service advertised with UUID
+  // `uuid`.
   virtual void AdoptListeningSocket(
       scoped_refptr<device::BluetoothSocket> socket,
       const device::BluetoothUUID& uuid);
@@ -61,28 +64,28 @@ class BluetoothApiSocket : public ApiResource {
   // Closes the underlying connection. This is a best effort, and never fails.
   virtual void Disconnect(base::OnceClosure callback);
 
-  // Receives data from the socket and calls |success_callback| when data is
-  // available. |count| is maximum amount of bytes received. If an error occurs,
-  // calls |error_callback| with a reason and a message. In particular, if a
-  // |Receive| operation is still pending, |error_callback| will be called with
-  // |kIOPending| error.
+  // Receives data from the socket and calls `success_callback` when data is
+  // available. `count` is maximum amount of bytes received. If an error occurs,
+  // calls `error_callback` with a reason and a message. In particular, if a
+  // `Receive` operation is still pending, `error_callback` will be called with
+  // `kIOPending` error.
   virtual void Receive(int count,
                        ReceiveCompletionCallback success_callback,
                        ErrorCompletionCallback error_callback);
 
-  // Sends |buffer| to the socket and calls |success_callback| when data has
-  // been successfully sent. |buffer_size| is the numberof bytes contained in
-  // |buffer|. If an error occurs, calls |error_callback| with a reason and a
-  // message. Calling |Send| multiple times without waiting for the callbacks to
-  // be called is a valid usage, as |buffer| instances are buffered until the
+  // Sends `buffer` to the socket and calls `success_callback` when data has
+  // been successfully sent. `buffer_size` is the numberof bytes contained in
+  // `buffer`. If an error occurs, calls `error_callback` with a reason and a
+  // message. Calling `Send` multiple times without waiting for the callbacks to
+  // be called is a valid usage, as `buffer` instances are buffered until the
   // underlying communication channel is available for sending data.
   virtual void Send(scoped_refptr<net::IOBuffer> buffer,
                     int buffer_size,
                     SendCompletionCallback success_callback,
                     ErrorCompletionCallback error_callback);
 
-  // Accepts a client connection from the socket and calls |success_callback|
-  // when one has connected. If an error occurs, calls |error_callback| with a
+  // Accepts a client connection from the socket and calls `success_callback`
+  // when one has connected. If an error occurs, calls `error_callback` with a
   // reason and a message.
   virtual void Accept(AcceptCompletionCallback success_callback,
                       ErrorCompletionCallback error_callback);
@@ -107,7 +110,7 @@ class BluetoothApiSocket : public ApiResource {
 
   bool IsConnected() const { return connected_; }
 
-  // Platform specific implementations of |BluetoothSocket| require being called
+  // Platform specific implementations of `BluetoothSocket` require being called
   // on the UI thread.
   static const content::BrowserThread::ID kThreadId =
       content::BrowserThread::UI;
@@ -151,9 +154,11 @@ class BluetoothApiSocket : public ApiResource {
 
   // Flag indicating whether a socket is connected.
   bool connected_;
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothApiSocket);
 };
+
+template <>
+bool BrowserContextKeyedAPIFactory<ApiResourceManager<BluetoothApiSocket>>::
+    ServiceIsCreatedWithBrowserContext() const;
 
 }  // namespace extensions
 

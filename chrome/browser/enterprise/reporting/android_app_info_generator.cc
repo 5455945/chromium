@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <sstream>
 
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
-#include "components/arc/mojom/app_permissions.mojom.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
+#include "chromeos/ash/experiences/arc/mojom/app_permissions.mojom.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
 namespace em = enterprise_management;

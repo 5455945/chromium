@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 
 #include <ostream>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/zucchini/buffer_view.h"
 #include "components/zucchini/ensemble_matcher.h"
+#include "components/zucchini/image_utils.h"
 
 namespace zucchini {
 
@@ -21,17 +22,21 @@ namespace zucchini {
 // - Have "minimal distance" among other potential matched pairs.
 class HeuristicEnsembleMatcher : public EnsembleMatcher {
  public:
-  explicit HeuristicEnsembleMatcher(std::ostream* out);
+  HeuristicEnsembleMatcher(offset_t start_scan_at, std::ostream* out);
+  HeuristicEnsembleMatcher(const HeuristicEnsembleMatcher&) = delete;
+  const HeuristicEnsembleMatcher& operator=(const HeuristicEnsembleMatcher&) =
+      delete;
   ~HeuristicEnsembleMatcher() override;
 
   // EnsembleMatcher:
   bool RunMatch(ConstBufferView old_image, ConstBufferView new_image) override;
 
  private:
-  // Optional stream to print detailed information during matching.
-  std::ostream* out_ = nullptr;
+  // The file offset to start element detection.
+  offset_t start_scan_at_;
 
-  DISALLOW_COPY_AND_ASSIGN(HeuristicEnsembleMatcher);
+  // Optional stream to print detailed information during matching.
+  raw_ptr<std::ostream> out_ = nullptr;
 };
 
 }  // namespace zucchini

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,7 @@ ash::Shelf* GetShelf() {
 
 ash::ShelfWidget* GetShelfWidget() {
   return ash::Shell::GetRootWindowControllerWithDisplayId(
-             display::Screen::GetScreen()->GetPrimaryDisplay().id())
+             display::Screen::Get()->GetPrimaryDisplay().id())
       ->shelf()
       ->shelf_widget();
 }
@@ -54,10 +54,6 @@ bool ShelfTestApi::IsAlignmentBottomLocked() {
 
 views::View* ShelfTestApi::GetHomeButton() {
   return GetShelfWidget()->navigation_widget()->GetHomeButton();
-}
-
-bool ShelfTestApi::HasLoginShelfGestureHandler() const {
-  return GetShelfWidget()->login_shelf_gesture_controller_for_testing();
 }
 
 ScrollableShelfInfo ShelfTestApi::GetScrollableShelfInfoForState(
@@ -106,9 +102,8 @@ HotseatInfo ShelfTestApi::GetHotseatInfo() {
   info.hotseat_state = hotseat_widget->state();
 
   // Hotseat swipe can happen from the bottom center of the display.
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(
-          hotseat_widget->GetNativeWindow()->GetRootWindow());
+  display::Display display = display::Screen::Get()->GetDisplayNearestWindow(
+      hotseat_widget->GetNativeWindow()->GetRootWindow());
   info.swipe_up.swipe_start_location = gfx::Point(
       display.bounds().CenterPoint().x(), display.bounds().bottom() - 1);
 
@@ -118,6 +113,8 @@ HotseatInfo ShelfTestApi::GetHotseatInfo() {
   gfx::Point swipe_end_location = info.swipe_up.swipe_start_location;
   swipe_end_location.set_y(swipe_end_location.y() - swipe_distance);
   info.swipe_up.swipe_end_location = swipe_end_location;
+  info.is_auto_hidden =
+      GetShelf()->shelf_layout_manager()->is_shelf_auto_hidden();
 
   return info;
 }

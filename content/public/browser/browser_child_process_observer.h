@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,10 @@
 #define CONTENT_PUBLIC_BROWSER_BROWSER_CHILD_PROCESS_OBSERVER_H_
 
 #include "content/common/content_export.h"
+
+namespace base {
+class Process;
+}
 
 namespace content {
 
@@ -18,9 +22,10 @@ struct ChildProcessTerminationInfo;
 class CONTENT_EXPORT BrowserChildProcessObserver {
  public:
   // Called when a child process has successfully launched and has connected to
-  // it child process host. The |data.handle| is guaranteed to be valid.
+  // its child process host. `process` is guaranteed to be valid.
   virtual void BrowserChildProcessLaunchedAndConnected(
-      const ChildProcessData& data) {}
+      const ChildProcessData& data,
+      const base::Process& process) {}
 
   // Called after a ChildProcessHost is disconnected from the child process.
   virtual void BrowserChildProcessHostDisconnected(
@@ -34,6 +39,18 @@ class CONTENT_EXPORT BrowserChildProcessObserver {
   // Called when a child process disappears unexpectedly as a result of being
   // killed.
   virtual void BrowserChildProcessKilled(
+      const ChildProcessData& data,
+      const ChildProcessTerminationInfo& info) {}
+
+  // Called when a child process never launches successfully. In this case,
+  // info.status will be TERMINATION_STATUS_LAUNCH_FAILED and info.exit_code
+  // will contain a platform specific launch failure error code.
+  virtual void BrowserChildProcessLaunchFailed(
+      const ChildProcessData& data,
+      const ChildProcessTerminationInfo& info) {}
+
+  // Called when a child process exits without crashing or being killed.
+  virtual void BrowserChildProcessExitedNormally(
       const ChildProcessData& data,
       const ChildProcessTerminationInfo& info) {}
 

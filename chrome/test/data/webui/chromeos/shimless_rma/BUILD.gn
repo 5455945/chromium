@@ -1,165 +1,59 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2024 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//third_party/closure_compiler/compile_js.gni")
+import("../../build_webui_tests.gni")
 
-js_type_check("closure_compile") {
-  is_polymer3 = true
-  closure_flags = default_closure_args + [
-                    "browser_resolver_prefix_replacements=\"chrome://shimless-rma/=../../ash/webui/shimless_rma/resources/\"",
-                    "js_module_root=../../chrome/test/data/webui/",
-                    "js_module_root=./gen/chrome/test/data/webui/",
-                  ]
-  deps = [
-    ":fake_shimless_rma_service_test",
-    ":onboarding_choose_destination_page_test",
-    ":onboarding_choose_wp_disable_method_page_test",
-    ":onboarding_enter_rsu_wp_disable_code_page_test",
-    ":onboarding_landing_page_test",
-    ":onboarding_select_components_page_test",
-    ":onboarding_update_page_test",
-    ":onboarding_wait_for_manual_wp_disable_page_test",
-    ":reimaging_firmware_update_page_test",
-    ":reimaging_provisioning_page_test",
-    ":shimless_rma_app_test",
-    ":shimless_rma_unified_test",
-    ":wrapup_repair_complete_page_test",
+build_webui_tests("build_webui_tests") {
+  cc_test_files = [ "shimless_rma_browsertest.cc" ]
+
+  ts_path_mappings = [
+    "chrome://shimless-rma/*|" +
+        rebase_path("$root_gen_dir/ash/webui/shimless_rma/resources/tsc/*",
+                    target_gen_dir),
+    "chrome://webui-test/chromeos/*|" +
+        rebase_path("$root_gen_dir/chrome/test/data/webui/chromeos/tsc/*",
+                    target_gen_dir),
   ]
-}
 
-js_library("fake_shimless_rma_service_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:fake_shimless_rma_service",
-    "//ash/webui/shimless_rma/resources:shimless_rma_types",
+  files = [
+    "all_inputs_disabled_test.ts",
+    "critical_error_page_test.ts",
+    "fake_shimless_rma_service_test.ts",
+    "hardware_error_page_test.ts",
+    "onboarding_choose_destination_page_test.ts",
+    "onboarding_choose_wipe_device_page_test.ts",
+    "onboarding_choose_wp_disable_method_page_test.ts",
+    "onboarding_enter_rsu_wp_disable_code_page_test.ts",
+    "onboarding_landing_page_test.ts",
+    "onboarding_network_page_test.ts",
+    "onboarding_select_components_page_test.ts",
+    "onboarding_update_page_test.ts",
+    "onboarding_wait_for_manual_wp_disable_page_test.ts",
+    "onboarding_wp_disable_complete_page_test.ts",
+    "reboot_page_test.ts",
+    "reimaging_calibration_failed_page_test.ts",
+    "reimaging_calibration_run_page_test.ts",
+    "reimaging_calibration_setup_page_test.ts",
+    "reimaging_device_information_page_test.ts",
+    "reimaging_firmware_update_page_test.ts",
+    "reimaging_provisioning_page_test.ts",
+    "repair_component_chip_test.ts",
+    "shimless_3p_diag_test.ts",
+    "shimless_rma_app_test.ts",
+    "wrapup_finalize_page_test.ts",
+    "wrapup_repair_complete_page_test.ts",
+    "wrapup_restock_page_test.ts",
+    "wrapup_wait_for_manual_wp_enable_page_test.ts",
   ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
 
-js_library("shimless_rma_app_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:fake_data",
-    "//ash/webui/shimless_rma/resources:fake_shimless_rma_service",
-    "//ash/webui/shimless_rma/resources:mojo_interface_provider",
-    "//ash/webui/shimless_rma/resources:shimless_rma",
-    "//ash/webui/shimless_rma/resources:shimless_rma_types",
+  ts_deps = [
+    "//ash/webui/common/resources:build_ts",
+    "//ash/webui/common/resources/cr_elements:build_ts",
+    "//ash/webui/shimless_rma/resources:build_ts",
+    "//chrome/test/data/webui/chromeos:build_ts",
+    "//third_party/polymer/v3_0:library",
+    "//ui/webui/resources/js:build_ts",
+    "//ui/webui/resources/mojo:build_ts",
   ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_choose_destination_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:fake_shimless_rma_service",
-    "//ash/webui/shimless_rma/resources:mojo_interface_provider",
-    "//ash/webui/shimless_rma/resources:onboarding_choose_destination_page",
-    "//ui/webui/resources/js:assert.m",
-    "//ui/webui/resources/js:promise_resolver.m",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_choose_wp_disable_method_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:onboarding_choose_wp_disable_method_page",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_enter_rsu_wp_disable_code_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:fake_shimless_rma_service",
-    "//ash/webui/shimless_rma/resources:mojo_interface_provider",
-    "//ash/webui/shimless_rma/resources:onboarding_enter_rsu_wp_disable_code_page",
-    "//ash/webui/shimless_rma/resources:shimless_rma_types",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_landing_page_test") {
-  deps = [
-    "..:fake_network_config_mojom.m",
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:mojo_interface_provider",
-    "//ash/webui/shimless_rma/resources:onboarding_landing_page",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_select_components_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:fake_shimless_rma_service",
-    "//ash/webui/shimless_rma/resources:mojo_interface_provider",
-    "//ash/webui/shimless_rma/resources:onboarding_select_components_page",
-    "//ui/webui/resources/js:assert.m",
-    "//ui/webui/resources/js:promise_resolver.m",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_update_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:onboarding_update_page",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_network_page_test") {
-  deps = [
-    "..:fake_network_config_mojom.m",
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:mojo_interface_provider",
-    "//ash/webui/shimless_rma/resources:onboarding_network_page",
-    "//chromeos/services/network_config/public/mojom:mojom_js_library_for_compile",
-    "//ui/webui/resources/cr_components/chromeos/network:network_config.m",
-    "//ui/webui/resources/cr_components/chromeos/network:network_list.m",
-    "//ui/webui/resources/cr_components/chromeos/network:onc_mojo.m",
-    "//ui/webui/resources/cr_elements/cr_button:cr_button.m",
-    "//ui/webui/resources/cr_elements/cr_dialog:cr_dialog.m",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("onboarding_wait_for_manual_wp_disable_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:onboarding_wait_for_manual_wp_disable_page",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("reimaging_firmware_update_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:onboarding_update_page",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("reimaging_provisioning_page_test") {
-  deps = [
-    "../..:chai_assert",
-    "//ash/webui/shimless_rma/resources:reimaging_provisioning_page",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("shimless_rma_unified_test") {
-  deps = []
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
-}
-
-js_library("wrapup_repair_complete_page_test") {
-  deps = [
-    "//ash/webui/shimless_rma/resources:wrapup_repair_complete_page",
-    "//ui/webui/resources/cr_elements/cr_button:cr_button.m",
-    "//ui/webui/resources/cr_elements/cr_dialog:cr_dialog.m",
-  ]
-  externs_list = [ "$externs_path/mocha-2.5.js" ]
 }

@@ -1,21 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_LEGAL_MESSAGE_LINE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_LEGAL_MESSAGE_LINE_H_
 
+#include <stddef.h>
+
 #include <string>
 #include <vector>
 
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/values.h"
 #include "ui/gfx/range/range.h"
 #include "url/gurl.h"
-
-namespace base {
-class Value;
-}
 
 namespace autofill {
 
@@ -29,6 +26,8 @@ class LegalMessageLine {
     Link(size_t start, size_t end, const std::string& url_spec);
     ~Link();
 
+    bool operator==(const Link& other) const;
+
     gfx::Range range;
     GURL url;
   };
@@ -37,6 +36,8 @@ class LegalMessageLine {
   LegalMessageLine();
   LegalMessageLine(const LegalMessageLine& other);
   virtual ~LegalMessageLine();  // Overridden in TestLegalMessageLine.
+
+  bool operator==(const LegalMessageLine& other) const;
 
   // Parses |legal_message|. Returns false on failure.
   //
@@ -68,9 +69,7 @@ class LegalMessageLine {
   //    text in MessageFormat, "'{0}" gets treated as a literal.  To avoid
   //    situations like these, setting |escape_apostrophes| to true will escape
   //    all ASCII apostrophes by doubling them up.
-  //
-  // |legal_message| must be a base::Value of type DICTIONARY.
-  static bool Parse(const base::Value& legal_message,
+  static bool Parse(const base::DictValue& legal_message,
                     LegalMessageLines* out,
                     bool escape_apostrophes = false);
 
@@ -80,7 +79,7 @@ class LegalMessageLine {
  private:
   friend class TestLegalMessageLine;
 
-  bool ParseLine(const base::Value& line, bool escape_apostrophes);
+  bool ParseLine(const base::DictValue& line, bool escape_apostrophes);
 
   std::u16string text_;
   Links links_;

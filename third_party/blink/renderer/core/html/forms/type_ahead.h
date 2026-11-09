@@ -26,8 +26,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_TYPE_AHEAD_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_TYPE_AHEAD_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -36,9 +41,8 @@ namespace blink {
 
 class KeyboardEvent;
 
-class CORE_EXPORT TypeAheadDataSource {
+class CORE_EXPORT TypeAheadDataSource : public GarbageCollectedMixin {
  public:
-  virtual ~TypeAheadDataSource() = default;
 
   virtual int IndexOfSelectedOption() const = 0;
   virtual int OptionCount() const = 0;
@@ -58,15 +62,20 @@ class CORE_EXPORT TypeAhead {
   };
   using MatchModeFlags = unsigned;
 
+  // Returns true if the provided event has the correct type, modifier keys, and
+  // character to be used for typeahead.
+  static bool ShouldHandleKeyboardEvent(const KeyboardEvent&);
+
   // Returns the index for the matching option.
-  int HandleEvent(const KeyboardEvent&, MatchModeFlags);
+  int HandleEvent(const KeyboardEvent&, UChar charCode, MatchModeFlags);
   bool HasActiveSession(const KeyboardEvent&);
   void ResetSession();
+  void Trace(Visitor*) const;
 
  private:
-  TypeAheadDataSource* data_source_;
+  Member<TypeAheadDataSource> data_source_;
   // platform timestamp of last keyboard event in seconds
-  absl::optional<base::TimeTicks> last_type_time_;
+  std::optional<base::TimeTicks> last_type_time_;
   UChar repeating_char_;
   StringBuilder buffer_;
 };

@@ -1,7 +1,9 @@
-// Copyright 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/memory/ptr_util.h"
+#include "cc/layers/append_quads_context.h"
 #include "cc/layers/append_quads_data.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/layers/render_surface_impl.h"
@@ -9,9 +11,8 @@
 #include "cc/test/fake_layer_tree_frame_sink.h"
 #include "cc/test/fake_layer_tree_host_impl.h"
 #include "cc/test/fake_picture_layer_impl.h"
-#include "cc/test/geometry_test_utils.h"
+#include "cc/test/fake_raster_source.h"
 #include "cc/test/layer_tree_impl_test_base.h"
-#include "cc/test/mock_occlusion_tracker.h"
 #include "cc/test/test_task_graph_runner.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "cc/trees/single_thread_proxy.h"
@@ -19,10 +20,7 @@
 #include "components/viz/common/quads/tile_draw_quad.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/transform.h"
-
-#include "base/memory/ptr_util.h"
-#include "cc/test/fake_raster_source.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 namespace {
@@ -49,7 +47,7 @@ class FakePictureLayerImplForRenderSurfaceTest : public FakePictureLayerImpl {
   }
 
   std::unique_ptr<LayerImpl> CreateLayerImpl(
-      LayerTreeImpl* tree_impl) override {
+      LayerTreeImpl* tree_impl) const override {
     return base::WrapUnique(
         new FakePictureLayerImplForRenderSurfaceTest(tree_impl, id()));
   }
@@ -60,7 +58,8 @@ class FakePictureLayerImplForRenderSurfaceTest : public FakePictureLayerImpl {
 
   bool HasValidTilePriorities() const override { return false; }
 
-  void AppendQuads(viz::CompositorRenderPass* render_pass,
+  void AppendQuads(const AppendQuadsContext& context,
+                   viz::CompositorRenderPass* render_pass,
                    AppendQuadsData* append_quads_data) override {
     viz::SharedQuadState* shared_quad_state =
         render_pass->CreateAndAppendSharedQuadState();
@@ -71,8 +70,7 @@ class FakePictureLayerImplForRenderSurfaceTest : public FakePictureLayerImpl {
     for (const auto& rect : quad_rects_) {
       auto* quad = render_pass->CreateAndAppendDrawQuad<viz::TileDrawQuad>();
       quad->SetNew(shared_quad_state, rect, rect, needs_blending,
-                   viz::kInvalidResourceId, gfx::RectF(rect), bounds(), false,
-                   false, false);
+                   viz::kInvalidResourceId, gfx::RectF(rect), false, false);
     }
   }
 
@@ -88,11 +86,11 @@ TEST(RenderSurfaceTest, VerifySurfaceChangesAreTrackedProperly) {
   // This test checks that SurfacePropertyChanged() has the correct behavior.
   //
 
-  LayerTreeImplTestBase impl;
+  LayerTreeImplTestBase impl(CommitToActiveTreeLayerListSettings());
   LayerImpl* root = impl.root_layer();
   LayerTreeImpl* active_tree = impl.host_impl()->active_tree();
 
-  LayerImpl* layer = impl.AddLayer<LayerImpl>();
+  LayerImpl* layer = impl.AddLayerInActiveTree<LayerImpl>();
   CopyProperties(root, layer);
   CreateEffectNode(layer).render_surface_reason = RenderSurfaceReason::kTest;
 
@@ -132,14 +130,14 @@ TEST(RenderSurfaceTest, VerifySurfaceChangesAreTrackedProperly) {
   EXECUTE_AND_VERIFY_SURFACE_DID_NOT_CHANGE(
       render_surface->SetDrawOpacity(0.5f));
   EXECUTE_AND_VERIFY_SURFACE_DID_NOT_CHANGE(
-      render_surface->SetDrawTransform(dummy_matrix));
+      render_surface->SetDrawTransform(dummy_matrix, gfx::Vector2dF()));
 }
 
 TEST(RenderSurfaceTest, SanityCheckSurfaceCreatesCorrectSharedQuadState) {
-  LayerTreeImplTestBase impl;
+  LayerTreeImplTestBase impl(CommitToActiveTreeLayerListSettings());
   LayerImpl* root = impl.root_layer();
 
-  LayerImpl* layer = impl.AddLayer<LayerImpl>();
+  LayerImpl* layer = impl.AddLayerInActiveTree<LayerImpl>();
   CopyProperties(root, layer);
   auto& effect_node = CreateEffectNode(layer);
   effect_node.render_surface_reason = RenderSurfaceReason::kBlendMode;
@@ -159,24 +157,20 @@ TEST(RenderSurfaceTest, SanityCheckSurfaceCreatesCorrectSharedQuadState) {
   render_surface->SetContentRectForTesting(content_rect);
   render_surface->SetClipRect(clip_rect);
   render_surface->SetDrawOpacity(1.f);
-  render_surface->SetDrawTransform(origin);
+  render_surface->SetDrawTransform(origin, gfx::Vector2dF());
 
   auto render_pass = viz::CompositorRenderPass::Create();
   AppendQuadsData append_quads_data;
 
-  render_surface->AppendQuads(DRAW_MODE_HARDWARE, render_pass.get(),
-                              &append_quads_data);
+  render_surface->AppendQuads(AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false},
+                              render_pass.get(), &append_quads_data);
 
   ASSERT_EQ(1u, render_pass->shared_quad_state_list.size());
   viz::SharedQuadState* shared_quad_state =
       render_pass->shared_quad_state_list.front();
 
-  EXPECT_EQ(
-      30.0,
-      shared_quad_state->quad_to_target_transform.matrix().getDouble(0, 3));
-  EXPECT_EQ(
-      40.0,
-      shared_quad_state->quad_to_target_transform.matrix().getDouble(1, 3));
+  EXPECT_EQ(30.0, shared_quad_state->quad_to_target_transform.rc(0, 3));
+  EXPECT_EQ(40.0, shared_quad_state->quad_to_target_transform.rc(1, 3));
   EXPECT_EQ(content_rect,
             gfx::Rect(shared_quad_state->visible_quad_layer_rect));
   EXPECT_EQ(1.f, shared_quad_state->opacity);
@@ -184,10 +178,11 @@ TEST(RenderSurfaceTest, SanityCheckSurfaceCreatesCorrectSharedQuadState) {
 }
 
 TEST(RenderSurfaceTest, SanityCheckSurfaceCreatesCorrectRenderPass) {
-  LayerTreeImplTestBase impl;
+  LayerTreeImplTestBase impl(CommitToActiveTreeLayerListSettings());
   LayerImpl* root = impl.root_layer();
+  LayerImpl* layer = impl.AddLayerInActiveTree<LayerImpl>();
+  impl.SetElementIdsForTesting();
 
-  LayerImpl* layer = impl.AddLayer<LayerImpl>();
   CopyProperties(root, layer);
   auto& effect_node = CreateEffectNode(layer);
   effect_node.render_surface_reason = RenderSurfaceReason::kTest;
@@ -206,24 +201,26 @@ TEST(RenderSurfaceTest, SanityCheckSurfaceCreatesCorrectRenderPass) {
 
   auto pass = render_surface->CreateRenderPass();
 
-  EXPECT_EQ(viz::CompositorRenderPassId{2}, pass->id);
+  EXPECT_EQ(viz::CompositorRenderPassId(layer->element_id().GetInternalValue()),
+            pass->id);
   EXPECT_EQ(content_rect, pass->output_rect);
   EXPECT_EQ(origin, pass->transform_to_root_target);
 }
 
 TEST(RenderSurfaceTest, SanityCheckSurfaceIgnoreMaskLayerOcclusion) {
-  LayerTreeImplTestBase impl;
+  LayerTreeImplTestBase impl(CommitToActiveTreeLayerListSettings());
   LayerImpl* root = impl.root_layer();
   // Set a big enough viewport to show the entire render pass.
   impl.host_impl()->active_tree()->SetDeviceViewportRect(gfx::Rect(1000, 1000));
 
-  auto* layer = impl.AddLayer<LayerImpl>();
+  auto* layer = impl.AddLayerInActiveTree<LayerImpl>();
   layer->SetBounds(gfx::Size(200, 100));
   layer->SetDrawsContent(true);
   CopyProperties(root, layer);
   CreateEffectNode(layer);
 
-  auto* mask_layer = impl.AddLayer<FakePictureLayerImplForRenderSurfaceTest>();
+  auto* mask_layer =
+      impl.AddLayerInActiveTree<FakePictureLayerImplForRenderSurfaceTest>();
   scoped_refptr<FakeRasterSource> raster_source(
       FakeRasterSource::CreateFilled(mask_layer->bounds()));
   mask_layer->SetRasterSource(raster_source, Region());
@@ -249,8 +246,8 @@ TEST(RenderSurfaceTest, SanityCheckSurfaceIgnoreMaskLayerOcclusion) {
   auto render_pass = viz::CompositorRenderPass::Create();
   AppendQuadsData append_quads_data;
 
-  render_surface->AppendQuads(DRAW_MODE_HARDWARE, render_pass.get(),
-                              &append_quads_data);
+  render_surface->AppendQuads(AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false},
+                              render_pass.get(), &append_quads_data);
 
   ASSERT_EQ(1u, render_pass->shared_quad_state_list.size());
   viz::SharedQuadState* shared_quad_state =

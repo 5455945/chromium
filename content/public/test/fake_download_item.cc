@@ -1,11 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/test/fake_download_item.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/notreached.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "net/http/http_response_headers.h"
@@ -79,6 +79,10 @@ void FakeDownloadItem::SetUrlChain(const std::vector<GURL>& url_chain) {
 
 const std::vector<GURL>& FakeDownloadItem::GetUrlChain() const {
   return url_chain_;
+}
+
+bool FakeDownloadItem::IsUrlTruncated() const {
+  return false;
 }
 
 void FakeDownloadItem::SetLastReason(
@@ -202,9 +206,22 @@ FakeDownloadItem::GetDownloadCreationType() const {
   return download::DownloadItem::DownloadCreationType::TYPE_ACTIVE_DOWNLOAD;
 }
 
-const absl::optional<download::DownloadSchedule>&
-FakeDownloadItem::GetDownloadSchedule() const {
-  return download_schedule_;
+::network::mojom::CredentialsMode FakeDownloadItem::GetCredentialsMode() const {
+  return ::network::mojom::CredentialsMode::kInclude;
+}
+
+::network::mojom::RequestMode FakeDownloadItem::GetFetchRequestMode() const {
+  return fetch_request_mode_;
+}
+
+void FakeDownloadItem::SetFetchRequestMode(
+    ::network::mojom::RequestMode fetch_request_mode) {
+  fetch_request_mode_ = fetch_request_mode;
+}
+
+const std::optional<net::IsolationInfo>& FakeDownloadItem::GetIsolationInfo()
+    const {
+  return isolation_info_;
 }
 
 void FakeDownloadItem::SetIsDone(bool is_done) {
@@ -248,6 +265,23 @@ void FakeDownloadItem::SetDummyFilePath(const base::FilePath& file_path) {
   dummy_file_path = file_path;
 }
 
+void FakeDownloadItem::SetIsDangerous(bool is_dangerous) {
+  is_dangerous_ = is_dangerous;
+}
+
+void FakeDownloadItem::SetIsInsecure(bool is_insecure) {
+  is_insecure_ = is_insecure;
+}
+
+void FakeDownloadItem::SetDangerType(download::DownloadDangerType danger_type) {
+  danger_type_ = danger_type;
+}
+
+void FakeDownloadItem::SetInsecureDownloadStatus(
+    download::DownloadItem::InsecureDownloadStatus insecure_download_status) {
+  insecure_download_status_ = insecure_download_status;
+}
+
 bool FakeDownloadItem::GetOpenWhenComplete() const {
   return open_when_complete_;
 }
@@ -261,14 +295,16 @@ void FakeDownloadItem::ValidateDangerousDownload() {
   NOTREACHED();
 }
 
-void FakeDownloadItem::ValidateMixedContentDownload() {
+void FakeDownloadItem::ValidateInsecureDownload() {
   NOTREACHED();
 }
 
-void FakeDownloadItem::StealDangerousDownload(bool delete_file_afterward,
-                                              AcquireFileCallback callback) {
+void FakeDownloadItem::ConfirmNonDangerousDownload() {
   NOTREACHED();
-  std::move(callback).Run(base::FilePath());
+}
+
+void FakeDownloadItem::CopyDownload(AcquireFileCallback callback) {
+  NOTREACHED();
 }
 
 void FakeDownloadItem::Pause() {
@@ -305,48 +341,40 @@ void FakeDownloadItem::OnAsyncScanningCompleted(
   NOTREACHED();
 }
 
-void FakeDownloadItem::OnDownloadScheduleChanged(
-    absl::optional<download::DownloadSchedule> schedule) {
-  NOTREACHED();
-}
-
 bool FakeDownloadItem::IsPaused() const {
   return false;
 }
 
 bool FakeDownloadItem::AllowMetered() const {
   NOTREACHED();
-  return false;
 }
 
 bool FakeDownloadItem::IsTemporary() const {
   NOTREACHED();
-  return false;
+}
+
+bool FakeDownloadItem::RequireSafetyChecks() const {
+  NOTREACHED();
 }
 
 bool FakeDownloadItem::CanResume() const {
   NOTREACHED();
-  return false;
 }
 
 int64_t FakeDownloadItem::GetBytesWasted() const {
   NOTREACHED();
-  return 0;
 }
 
 int32_t FakeDownloadItem::GetAutoResumeCount() const {
   NOTREACHED();
-  return 0;
 }
 
 const GURL& FakeDownloadItem::GetReferrerUrl() const {
   NOTREACHED();
-  return dummy_url;
 }
 
-const GURL& FakeDownloadItem::GetSiteUrl() const {
+const std::string& FakeDownloadItem::GetSerializedEmbedderDownloadData() const {
   NOTREACHED();
-  return dummy_url;
 }
 
 const GURL& FakeDownloadItem::GetTabUrl() const {
@@ -355,48 +383,39 @@ const GURL& FakeDownloadItem::GetTabUrl() const {
 
 const GURL& FakeDownloadItem::GetTabReferrerUrl() const {
   NOTREACHED();
-  return dummy_url;
 }
 
-const absl::optional<url::Origin>& FakeDownloadItem::GetRequestInitiator()
+const std::optional<url::Origin>& FakeDownloadItem::GetRequestInitiator()
     const {
   NOTREACHED();
-  return dummy_origin;
 }
 
 std::string FakeDownloadItem::GetSuggestedFilename() const {
   NOTREACHED();
-  return std::string();
 }
 
 std::string FakeDownloadItem::GetContentDisposition() const {
   NOTREACHED();
-  return std::string();
 }
 
 std::string FakeDownloadItem::GetOriginalMimeType() const {
   NOTREACHED();
-  return std::string();
 }
 
 std::string FakeDownloadItem::GetRemoteAddress() const {
   NOTREACHED();
-  return std::string();
 }
 
 bool FakeDownloadItem::HasUserGesture() const {
   NOTREACHED();
-  return false;
 }
 
 ui::PageTransition FakeDownloadItem::GetTransitionType() const {
   NOTREACHED();
-  return ui::PageTransition();
 }
 
 bool FakeDownloadItem::IsSavePackageDownload() const {
   NOTREACHED();
-  return false;
 }
 
 download::DownloadSource FakeDownloadItem::GetDownloadSource() const {
@@ -409,23 +428,19 @@ const base::FilePath& FakeDownloadItem::GetFullPath() const {
 
 const base::FilePath& FakeDownloadItem::GetForcedFilePath() const {
   NOTREACHED();
-  return dummy_file_path;
 }
 
 base::FilePath FakeDownloadItem::GetTemporaryFilePath() const {
   NOTREACHED();
-  return dummy_file_path;
 }
 
 base::FilePath FakeDownloadItem::GetFileNameToReportUser() const {
   NOTREACHED();
-  return base::FilePath();
 }
 
 download::DownloadItem::TargetDisposition
 FakeDownloadItem::GetTargetDisposition() const {
   NOTREACHED();
-  return TargetDisposition();
 }
 
 const std::string& FakeDownloadItem::GetHash() const {
@@ -444,45 +459,47 @@ download::DownloadItemRenameHandler* FakeDownloadItem::GetRenameHandler() {
   return nullptr;
 }
 
-const download::DownloadItemRerouteInfo& FakeDownloadItem::GetRerouteInfo()
-    const {
-  return reroute_info_;
+#if BUILDFLAG(IS_ANDROID)
+bool FakeDownloadItem::IsFromExternalApp() {
+  return false;
 }
+
+bool FakeDownloadItem::AllowAutoOpenAfterCompletion() {
+  return true;
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 bool FakeDownloadItem::IsDangerous() const {
-  NOTREACHED();
-  return false;
+  return is_dangerous_;
 }
 
-bool FakeDownloadItem::IsMixedContent() const {
+bool FakeDownloadItem::IsInsecure() const {
+  return is_insecure_;
+}
+
+bool FakeDownloadItem::IsUserConfirmed() const {
   NOTREACHED();
-  return false;
 }
 
 download::DownloadDangerType FakeDownloadItem::GetDangerType() const {
-  NOTREACHED();
-  return download::DownloadDangerType();
+  return danger_type_;
 }
 
-download::DownloadItem::MixedContentStatus
-FakeDownloadItem::GetMixedContentStatus() const {
-  NOTREACHED();
-  return download::DownloadItem::MixedContentStatus();
+download::DownloadItem::InsecureDownloadStatus
+FakeDownloadItem::GetInsecureDownloadStatus() const {
+  return insecure_download_status_;
 }
 
 bool FakeDownloadItem::TimeRemaining(base::TimeDelta* remaining) const {
   NOTREACHED();
-  return false;
 }
 
 int64_t FakeDownloadItem::CurrentSpeed() const {
   NOTREACHED();
-  return 1;
 }
 
 bool FakeDownloadItem::AllDataSaved() const {
   NOTREACHED();
-  return true;
 }
 
 int64_t FakeDownloadItem::GetTotalBytes() const {
@@ -492,38 +509,34 @@ int64_t FakeDownloadItem::GetTotalBytes() const {
 const std::vector<download::DownloadItem::ReceivedSlice>&
 FakeDownloadItem::GetReceivedSlices() const {
   NOTREACHED();
-  static const std::vector<download::DownloadItem::ReceivedSlice> slices;
-  return slices;
+}
+
+int64_t FakeDownloadItem::GetUploadedBytes() const {
+  return uploaded_bytes_;
 }
 
 bool FakeDownloadItem::CanShowInFolder() {
   NOTREACHED();
-  return true;
 }
 
 bool FakeDownloadItem::CanOpenDownload() {
   NOTREACHED();
-  return true;
 }
 
 bool FakeDownloadItem::ShouldOpenFileBasedOnExtension() {
   NOTREACHED();
-  return true;
 }
 
 bool FakeDownloadItem::ShouldOpenFileByPolicyBasedOnExtension() {
   NOTREACHED();
-  return true;
 }
 
 bool FakeDownloadItem::GetAutoOpened() {
   NOTREACHED();
-  return false;
 }
 
 bool FakeDownloadItem::GetOpened() const {
   NOTREACHED();
-  return false;
 }
 
 void FakeDownloadItem::OnContentCheckCompleted(
@@ -542,7 +555,6 @@ void FakeDownloadItem::SetDisplayName(const base::FilePath& name) {
 
 std::string FakeDownloadItem::DebugString(bool verbose) const {
   NOTREACHED();
-  return std::string();
 }
 
 void FakeDownloadItem::SimulateErrorForTesting(

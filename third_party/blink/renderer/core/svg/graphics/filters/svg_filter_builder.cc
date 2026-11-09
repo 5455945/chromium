@@ -19,8 +19,8 @@
 
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 
+#include "third_party/blink/renderer/core/css/css_identifier_value_mappings.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
-#include "third_party/blink/renderer/core/css/css_primitive_value_mappings.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
@@ -32,7 +32,7 @@
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_effect.h"
 #include "third_party/blink/renderer/platform/graphics/filters/source_alpha.h"
 #include "third_party/blink/renderer/platform/graphics/filters/source_graphic.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -105,8 +105,8 @@ void SVGFilterGraphNodeMap::Trace(Visitor* visitor) const {
 
 SVGFilterBuilder::SVGFilterBuilder(FilterEffect* source_graphic,
                                    SVGFilterGraphNodeMap* node_map,
-                                   const PaintFlags* fill_flags,
-                                   const PaintFlags* stroke_flags)
+                                   const cc::PaintFlags* fill_flags,
+                                   const cc::PaintFlags* stroke_flags)
     : node_map_(node_map) {
   builtin_effects_.insert(FilterInputKeywords::GetSourceGraphic(),
                           source_graphic);
@@ -121,6 +121,19 @@ SVGFilterBuilder::SVGFilterBuilder(FilterEffect* source_graphic,
     builtin_effects_.insert(FilterInputKeywords::StrokePaint(),
                             MakeGarbageCollected<PaintFilterEffect>(
                                 source_graphic->GetFilter(), *stroke_flags));
+  }
+  // If SourceGraphic is tainted, we assume that all other built-in effects are
+  // tainted as well. This is obviously true for SourceAlpha, and works out for
+  // all current users that pass values for {Fill,Stroke}Paint (i.e <canvas>).
+  if (source_graphic->OriginTainted()) {
+    for (auto& entry : builtin_effects_) {
+      entry.value->SetOriginTainted();
+    }
+  }
+  if (source_graphic->ContainsBackdrop()) {
+    for (auto& entry : builtin_effects_) {
+      entry.value->SetContainsBackdrop();
+    }
   }
   AddBuiltinEffects();
 }
@@ -137,7 +150,7 @@ static EColorInterpolation ColorInterpolationForElement(
     SVGElement& element,
     EColorInterpolation parent_color_interpolation) {
   if (const LayoutObject* layout_object = element.GetLayoutObject())
-    return layout_object->StyleRef().ColorInterpolationFilters();
+    return layout_object->Style().ColorInterpolationFilters();
 
   // No layout has been performed, try to determine the property value
   // "manually" (used by external SVG files.)
@@ -161,9 +174,11 @@ InterpolationSpace SVGFilterBuilder::ResolveInterpolationSpace(
              : kInterpolationSpaceSRGB;
 }
 
-void SVGFilterBuilder::BuildGraph(Filter* filter,
-                                  SVGFilterElement& filter_element,
-                                  const FloatRect& reference_box) {
+void SVGFilterBuilder::BuildGraph(
+    Filter* filter,
+    SVGFilterElement& filter_element,
+    const gfx::RectF& reference_box,
+    const std::optional<gfx::SizeF>& override_viewport) {
   EColorInterpolation filter_color_interpolation =
       ColorInterpolationForElement(filter_element, EColorInterpolation::kAuto);
   SVGUnitTypes::SVGUnitType primitive_units =
@@ -182,21 +197,25 @@ void SVGFilterBuilder::BuildGraph(Filter* filter,
     if (node_map_)
       node_map_->AddPrimitive(effect_element, effect);
 
-    effect_element.SetStandardAttributes(effect, primitive_units,
-                                         reference_box);
+    effect_element.SetStandardAttributes(effect, primitive_units, reference_box,
+                                         override_viewport);
     EColorInterpolation color_interpolation = ColorInterpolationForElement(
         effect_element, filter_color_interpolation);
     effect->SetOperatingInterpolationSpace(
         ResolveInterpolationSpace(color_interpolation));
     if (effect->InputsTaintOrigin() || effect_element.TaintsOrigin())
       effect->SetOriginTainted();
+    if (effect->InputsContainBackdrop()) {
+      effect->SetContainsBackdrop();
+    }
 
     Add(AtomicString(effect_element.result()->CurrentValue()->Value()), effect);
   }
 }
 
 void SVGFilterBuilder::Add(const AtomicString& id, FilterEffect* effect) {
-  if (id.IsEmpty()) {
+  DCHECK(effect);
+  if (id.empty()) {
     last_effect_ = effect;
     return;
   }
@@ -209,17 +228,21 @@ void SVGFilterBuilder::Add(const AtomicString& id, FilterEffect* effect) {
 }
 
 FilterEffect* SVGFilterBuilder::GetEffectById(const AtomicString& id) const {
-  if (!id.IsEmpty()) {
-    if (FilterEffect* builtin_effect = builtin_effects_.at(id))
-      return builtin_effect;
+  if (!id.empty()) {
+    auto builtin_it = builtin_effects_.find(id);
+    if (builtin_it != builtin_effects_.end())
+      return builtin_it->value.Get();
 
-    if (FilterEffect* named_effect = named_effects_.at(id))
-      return named_effect;
+    auto named_it = named_effects_.find(id);
+    if (named_it != named_effects_.end())
+      return named_it->value.Get();
   }
 
   if (last_effect_)
     return last_effect_;
 
+  // Fallback to the 'SourceGraphic' input. We add it in the constructor so it will always be
+  // present.
   return builtin_effects_.at(FilterInputKeywords::GetSourceGraphic());
 }
 

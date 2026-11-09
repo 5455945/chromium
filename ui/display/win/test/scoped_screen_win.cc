@@ -1,8 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/display/win/test/scoped_screen_win.h"
+
+#include <optional>
+
 #include "ui/display/win/display_info.h"
 #include "ui/display/win/test/screen_util_win.h"
 
@@ -16,12 +19,10 @@ ScopedScreenWin::ScopedScreenWin() : ScreenWin(false) {
   const MONITORINFOEX monitor_info =
       CreateMonitorInfo(kPixelBounds, kPixelWork, L"primary");
   UpdateFromDisplayInfos(
-      {{monitor_info, /*device_scale_factor=*/1.0f, 1.0f, Display::ROTATE_0, 60,
-        gfx::Vector2dF(96.0, 96.0), DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER}});
-}
-
-ScopedScreenWin::~ScopedScreenWin() {
-  Screen::SetScreenInstance(old_screen_);
+      {{std::nullopt, monitor_info, /*device_scale_factor=*/1.0f,
+        /*text_scale_multiplier=*/1.0f, Display::kDefaultBitsPerPixel, 1.0f,
+        Display::ROTATE_0, 60.0f, gfx::Vector2dF(96.0, 96.0),
+        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER, std::string()}});
 }
 
 }  // namespace test

@@ -1,13 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/bluetooth/dbus/bluetooth_agent_manager_client.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -25,6 +25,11 @@ class BluetoothAgentManagerClientImpl : public BluetoothAgentManagerClient,
                                         public dbus::ObjectManager::Interface {
  public:
   BluetoothAgentManagerClientImpl() {}
+
+  BluetoothAgentManagerClientImpl(const BluetoothAgentManagerClientImpl&) =
+      delete;
+  BluetoothAgentManagerClientImpl& operator=(
+      const BluetoothAgentManagerClientImpl&) = delete;
 
   ~BluetoothAgentManagerClientImpl() override = default;
 
@@ -54,12 +59,10 @@ class BluetoothAgentManagerClientImpl : public BluetoothAgentManagerClient,
     writer.AppendObjectPath(agent_path);
     writer.AppendString(capability);
 
-    object_proxy_->CallMethodWithErrorCallback(
+    object_proxy_->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAgentManagerClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAgentManagerClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAgentManagerClientImpl::OnMethodResponse,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
@@ -74,12 +77,10 @@ class BluetoothAgentManagerClientImpl : public BluetoothAgentManagerClient,
     dbus::MessageWriter writer(&method_call);
     writer.AppendObjectPath(agent_path);
 
-    object_proxy_->CallMethodWithErrorCallback(
+    object_proxy_->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAgentManagerClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAgentManagerClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAgentManagerClientImpl::OnMethodResponse,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
@@ -94,12 +95,10 @@ class BluetoothAgentManagerClientImpl : public BluetoothAgentManagerClient,
     dbus::MessageWriter writer(&method_call);
     writer.AppendObjectPath(agent_path);
 
-    object_proxy_->CallMethodWithErrorCallback(
+    object_proxy_->CallMethodWithErrorResponse(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&BluetoothAgentManagerClientImpl::OnSuccess,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
-        base::BindOnce(&BluetoothAgentManagerClientImpl::OnError,
-                       weak_ptr_factory_.GetWeakPtr(),
+        base::BindOnce(&BluetoothAgentManagerClientImpl::OnMethodResponse,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(error_callback)));
   }
 
@@ -146,31 +145,30 @@ class BluetoothAgentManagerClientImpl : public BluetoothAgentManagerClient,
                                  base::DoNothing());
   }
 
-  // Called when a response for successful method call is received.
-  void OnSuccess(base::OnceClosure callback, dbus::Response* response) {
-    DCHECK(response);
+  void OnMethodResponse(base::OnceClosure callback,
+                        ErrorCallback error_callback,
+                        dbus::Response* response,
+                        dbus::ErrorResponse* error_response) {
+    if (!response) {
+      std::string error_name;
+      std::string error_message;
+      if (error_response) {
+        dbus::MessageReader reader(error_response);
+        error_name = error_response->GetErrorName();
+        reader.PopString(&error_message);
+      } else {
+        error_name = kNoResponseError;
+      }
+      std::move(error_callback).Run(error_name, error_message);
+      return;
+    }
+
     std::move(callback).Run();
   }
 
-  // Called when a response for a failed method call is received.
-  void OnError(ErrorCallback error_callback, dbus::ErrorResponse* response) {
-    // Error response has optional error message argument.
-    std::string error_name;
-    std::string error_message;
-    if (response) {
-      dbus::MessageReader reader(response);
-      error_name = response->GetErrorName();
-      reader.PopString(&error_message);
-    } else {
-      error_name = kNoResponseError;
-      error_message = "";
-    }
-    std::move(error_callback).Run(error_name, error_message);
-  }
+  raw_ptr<dbus::ObjectProxy> object_proxy_;
 
-  dbus::ObjectProxy* object_proxy_;
-
-  dbus::ObjectManager* object_manager_;
+  raw_ptr<dbus::ObjectManager> object_manager_;
 
   // List of observers interested in event notifications from us.
   base::ObserverList<BluetoothAgentManagerClient::Observer> observers_;
@@ -180,8 +178,6 @@ class BluetoothAgentManagerClientImpl : public BluetoothAgentManagerClient,
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.
   base::WeakPtrFactory<BluetoothAgentManagerClientImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothAgentManagerClientImpl);
 };
 
 BluetoothAgentManagerClient::BluetoothAgentManagerClient() = default;

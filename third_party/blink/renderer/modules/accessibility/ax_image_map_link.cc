@@ -28,13 +28,14 @@
 
 #include "third_party/blink/renderer/modules/accessibility/ax_image_map_link.h"
 
-#include "skia/ext/skia_matrix_44.h"
-#include "third_party/blink/renderer/core/aom/accessible_node.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
-#include "third_party/blink/renderer/modules/accessibility/ax_layout_object.h"
+#include "third_party/blink/renderer/core/html/html_map_element.h"
+#include "third_party/blink/renderer/modules/accessibility/ax_node_object.h"
+#include "third_party/blink/renderer/modules/accessibility/ax_object-inl.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
-#include "third_party/blink/renderer/platform/graphics/path.h"
+#include "third_party/blink/renderer/platform/geometry/path.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace blink {
 
@@ -61,7 +62,7 @@ AXObject* AXImageMapLink::GetAXObjectForImageMap(AXObjectCacheImpl& cache,
   if (!map)
     return nullptr;
 
-  return cache.GetOrCreate(static_cast<Node*>(map->ImageElement()));
+  return cache.Get(static_cast<Node*>(map->ImageElement()));
 }
 
 ax::mojom::blink::Role AXImageMapLink::NativeRoleIgnoringAria() const {
@@ -80,11 +81,6 @@ ax::mojom::blink::Role AXImageMapLink::NativeRoleIgnoringAria() const {
   return ax::mojom::blink::Role::kGenericContainer;
 }
 
-bool AXImageMapLink::ComputeAccessibilityIsIgnored(
-    IgnoredReasons* ignored_reasons) const {
-  return AccessibilityIsIgnoredByDefault(ignored_reasons);
-}
-
 Element* AXImageMapLink::ActionElement() const {
   return AnchorElement();
 }
@@ -101,29 +97,27 @@ KURL AXImageMapLink::Url() const {
 }
 
 void AXImageMapLink::GetRelativeBounds(AXObject** out_container,
-                                       FloatRect& out_bounds_in_container,
-                                       skia::Matrix44& out_container_transform,
+                                       gfx::RectF& out_bounds_in_container,
+                                       gfx::Transform& out_container_transform,
                                        bool* clips_children) const {
   *out_container = nullptr;
-  out_bounds_in_container = FloatRect();
-  out_container_transform.setIdentity();
+  out_bounds_in_container = gfx::RectF();
+  out_container_transform.MakeIdentity();
 
   HTMLAreaElement* area = AreaElement();
   HTMLMapElement* map = MapElement();
   if (!area || !map)
     return;
 
-  LayoutObject* layout_object;
-  if (auto* ax_object = DynamicTo<AXLayoutObject>(parent_.Get()))
-    layout_object = ax_object->GetLayoutObject();
-  else
+  LayoutObject* layout_object = parent_->GetLayoutObject();
+  if (!layout_object) {
     layout_object = map->GetLayoutObject();
-
+  }
   if (!layout_object)
     return;
 
   out_bounds_in_container = area->GetPath(layout_object).BoundingRect();
-  *out_container = AXObjectCache().GetOrCreate(layout_object);
+  *out_container = AXObjectCache().Get(layout_object);
 }
 
 bool AXImageMapLink::IsImageMapLink() const {

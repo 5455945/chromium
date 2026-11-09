@@ -3,10 +3,17 @@
 // See the corresponding WPT RFC:
 // https://github.com/web-platform-tests/rfcs/blob/master/rfcs/address_space_overrides.md
 //
-// These ports are used to test the Private Network Access specification:
-// https://wicg.github.io/private-network-access/
+// These ports are used to test the Local Network Access specification:
+// https://github.com/explainers-by-googlers/local-network-access
 //
-// More tests can be found in `fetch/private-network-access/`.
+// More tests can be found in `fetch/local-network-access/`.
+
+const alternatePorts = {
+  httpLocal:  "{{ports[http-local][0]}}",
+  httpsLocal: "{{ports[https-local][0]}}",
+  httpPublic:   "{{ports[http-public][0]}}",
+  httpsPublic:  "{{ports[https-public][0]}}",
+};
 
 // Resolves a URL relative to the current location, returning an absolute URL.
 //
@@ -30,38 +37,75 @@ function resolveUrl(url, options) {
   return result;
 }
 
-promise_test(async () => {
-  const url = resolveUrl("/common/blank-with-cors.html", {
-    protocol: "https:",
-    port: "{{ports[https-private][0]}}"
-  });
-  const response = await fetch(url);
-  assert_true(response.ok);
-}, "Fetch from https-private port works.");
-
-promise_test(async () => {
-  const url = resolveUrl("/common/blank-with-cors.html", {
+const alternateOrigins = {
+  httpLocal: {
     protocol: "http:",
-    port: "{{ports[http-private][0]}}"
-  });
-  const response = await fetch(url);
-  assert_true(response.ok);
-}, "Fetch from http-private port works.");
+    port: alternatePorts.httpLocal,
+  },
+  httpsLocal: {
+    protocol: "https:",
+    port: alternatePorts.httpsLocal,
+  },
+  httpPublic: {
+    protocol: "http:",
+    port: alternatePorts.httpPublic,
+  },
+  httpsPublic: {
+    protocol: "https:",
+    port: alternatePorts.httpsPublic,
+  },
+};
 
 promise_test(async () => {
-  const url = resolveUrl("/common/blank-with-cors.html", {
-    protocol: "https:",
-    port: "{{ports[https-public][0]}}"
-  });
+  const url =
+    resolveUrl("/common/blank-with-cors.html", alternateOrigins.httpsLocal);
+  const response = await fetch(url);
+  assert_true(response.ok);
+}, "Fetch from https-local port works.");
+
+promise_test(async () => {
+  const url =
+    resolveUrl("/common/blank-with-cors.html", alternateOrigins.httpLocal);
+  const response = await fetch(url);
+  assert_true(response.ok);
+}, "Fetch from http-local port works.");
+
+promise_test(async () => {
+  const url =
+    resolveUrl("/common/blank-with-cors.html", alternateOrigins.httpsPublic);
   const response = await fetch(url);
   assert_true(response.ok);
 }, "Fetch from https-public port works.");
 
 promise_test(async () => {
-  const url = resolveUrl("/common/blank-with-cors.html", {
-    protocol: "http:",
-    port: "{{ports[http-public][0]}}"
-  });
+  const url =
+    resolveUrl("/common/blank-with-cors.html", alternateOrigins.httpPublic);
   const response = await fetch(url);
   assert_true(response.ok);
 }, "Fetch from http-public port works.");
+
+promise_test(async (t) => {
+  const futureMessage = new Promise((resolve) => {
+    window.addEventListener("message", resolve);
+  });
+
+  const iframe = await new Promise((resolve, reject) => {
+    const iframe = document.createElement("iframe");
+    iframe.src = resolveUrl("resources/fetch-and-post-result.html",
+                            alternateOrigins.httpPublic);
+
+    iframe.onload = () => { resolve(iframe); };
+    iframe.onerror = reject;
+
+    document.body.appendChild(iframe);
+    t.add_cleanup(() => {
+      document.body.removeChild(iframe);
+    });
+  });
+
+  iframe.contentWindow.postMessage(
+    resolveUrl("/common/blank-with-cors.html").toString(), "*");
+
+  const evt = await futureMessage;
+  assert_equals(evt.data, "failure: error = TypeError");
+}, "Fetch from http-public to local http fails.");

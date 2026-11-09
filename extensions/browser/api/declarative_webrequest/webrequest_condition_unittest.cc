@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,11 @@
 #include "components/url_matcher/url_matcher_constants.h"
 #include "extensions/browser/api/declarative_webrequest/webrequest_constants.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using url_matcher::URLMatcher;
 using url_matcher::URLMatcherConditionSet;
@@ -215,8 +218,8 @@ TEST(WebRequestConditionTest, NoUrlAttributes) {
 TEST(WebRequestConditionTest, CreateConditionSet) {
   URLMatcher matcher;
 
-  WebRequestConditionSet::Values conditions;
-  conditions.push_back(base::test::ParseJsonDeprecated(
+  base::ListValue conditions;
+  conditions.Append(base::test::ParseJson(
       "{ \n"
       "  \"instanceType\": \"declarativeWebRequest.RequestMatcher\", \n"
       "  \"url\": { \n"
@@ -224,7 +227,7 @@ TEST(WebRequestConditionTest, CreateConditionSet) {
       "    \"schemes\": [\"http\"], \n"
       "  }, \n"
       "}"));
-  conditions.push_back(base::test::ParseJsonDeprecated(
+  conditions.Append(base::test::ParseJson(
       "{ \n"
       "  \"instanceType\": \"declarativeWebRequest.RequestMatcher\", \n"
       "  \"url\": { \n"
@@ -285,8 +288,8 @@ TEST(WebRequestConditionTest, CreateConditionSet) {
 TEST(WebRequestConditionTest, TestPortFilter) {
   URLMatcher matcher;
 
-  WebRequestConditionSet::Values conditions;
-  conditions.push_back(base::test::ParseJsonDeprecated(
+  base::ListValue conditions;
+  conditions.Append(base::test::ParseJson(
       "{ \n"
       "  \"instanceType\": \"declarativeWebRequest.RequestMatcher\", \n"
       "  \"url\": { \n"
@@ -309,7 +312,7 @@ TEST(WebRequestConditionTest, TestPortFilter) {
   result->GetURLMatcherConditionSets(&url_matcher_condition_set);
   matcher.AddConditionSets(url_matcher_condition_set);
 
-  std::set<URLMatcherConditionSet::ID> url_match_ids;
+  std::set<base::MatcherStringPattern::ID> url_match_ids;
 
   // Test various URLs.
   GURL http_url("http://www.example.com");

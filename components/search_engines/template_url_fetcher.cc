@@ -1,11 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/search_engines/template_url_fetcher.h"
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include <algorithm>
+#include <optional>
+#include <string>
+
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -70,9 +75,12 @@ class TemplateURLFetcher::RequestDelegate {
                   int render_frame_id,
                   int32_t request_id);
 
+  RequestDelegate(const RequestDelegate&) = delete;
+  RequestDelegate& operator=(const RequestDelegate&) = delete;
+
   // If data contains a valid OSDD, a TemplateURL is created and added to
   // the TemplateURLService.
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   // URL of the OSDD.
   GURL url() const { return osdd_url_; }
@@ -86,7 +94,7 @@ class TemplateURLFetcher::RequestDelegate {
   void AddSearchProvider();
 
   std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
-  TemplateURLFetcher* fetcher_;
+  raw_ptr<TemplateURLFetcher> fetcher_;
   std::unique_ptr<TemplateURL> template_url_;
   std::u16string keyword_;
   const GURL osdd_url_;
@@ -94,7 +102,7 @@ class TemplateURLFetcher::RequestDelegate {
 
   base::CallbackListSubscription template_url_subscription_;
 
-  DISALLOW_COPY_AND_ASSIGN(RequestDelegate);
+  base::WeakPtrFactory<RequestDelegate> weak_factory_{this};
 };
 
 TemplateURLFetcher::RequestDelegate::RequestDelegate(
@@ -117,24 +125,25 @@ TemplateURLFetcher::RequestDelegate::RequestDelegate(
     // Start the model load and set-up waiting for it.
     template_url_subscription_ = model->RegisterOnLoadedCallback(
         base::BindOnce(&TemplateURLFetcher::RequestDelegate::OnLoaded,
-                       base::Unretained(this)));
+                       weak_factory_.GetWeakPtr()));
     model->Load();
   }
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = osdd_url;
   resource_request->request_initiator = initiator;
-  // TODO(crbug.com/1059639): Remove |resource_type| once the request is handled
-  // with RequestDestination without ResourceType.
+  // TODO(crbug.com/40121693): Remove |resource_type| once the request is
+  // handled with RequestDestination without ResourceType.
   resource_request->resource_type =
       /* blink::mojom::ResourceType::kSubResource */ 6;
   resource_request->destination = network::mojom::RequestDestination::kEmpty;
-  resource_request->load_flags = net::LOAD_DO_NOT_SAVE_COOKIES;
+  resource_request->site_for_cookies =
+      net::SiteForCookies::FromOrigin(initiator);
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), kTrafficAnnotation);
   simple_url_loader_->SetAllowHttpErrorResults(true);
   simple_url_loader_->SetTimeoutDuration(
-      base::TimeDelta::FromSeconds(kOpenSearchTimeoutSeconds));
+      base::Seconds(kOpenSearchTimeoutSeconds));
   simple_url_loader_->SetRetryOptions(
       kOpenSearchRetryCount, network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
   simple_url_loader_->SetRequestID(request_id);
@@ -142,7 +151,7 @@ TemplateURLFetcher::RequestDelegate::RequestDelegate(
       url_loader_factory,
       base::BindOnce(
           &TemplateURLFetcher::RequestDelegate::OnSimpleLoaderComplete,
-          base::Unretained(this)),
+          weak_factory_.GetWeakPtr()),
       50000 /* max_body_size */);
 }
 
@@ -174,7 +183,7 @@ void TemplateURLFetcher::RequestDelegate::OnLoaded() {
 }
 
 void TemplateURLFetcher::RequestDelegate::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Validation checks.
   // Make sure we can still replace the keyword, i.e. the fetch was successful.
   if (!response_body) {
@@ -184,10 +193,10 @@ void TemplateURLFetcher::RequestDelegate::OnSimpleLoaderComplete(
   }
 
   TemplateURLParser::Parse(
-      &fetcher_->template_url_service_->search_terms_data(),
-      *response_body.get(), TemplateURLParser::ParameterFilter(),
+      &fetcher_->template_url_service_->search_terms_data(), *response_body,
+      TemplateURLParser::ParameterFilter(),
       base::BindOnce(&RequestDelegate::OnTemplateURLParsed,
-                     base::Unretained(this)));
+                     weak_factory_.GetWeakPtr()));
 }
 
 void TemplateURLFetcher::RequestDelegate::AddSearchProvider() {
@@ -216,6 +225,12 @@ void TemplateURLFetcher::RequestDelegate::AddSearchProvider() {
   // Mark the keyword as replaceable so it can be removed if necessary.
   // Add() will automatically remove conflicting keyword replaceable engines.
   data.safe_for_autoreplace = true;
+
+  // Autogenerated keywords are kUnspecified active status by default.
+  // kUnspecified keywords are inactive and cannot be triggered in the
+  // omnibox until they are activated.
+  data.is_active = TemplateURLData::ActiveStatus::kUnspecified;
+
   model->Add(std::make_unique<TemplateURL>(data));
 
   fetcher_->RequestCompleted(this);
@@ -266,10 +281,8 @@ void TemplateURLFetcher::ScheduleDownload(
 }
 
 void TemplateURLFetcher::RequestCompleted(RequestDelegate* request) {
-  auto i = std::find_if(requests_.begin(), requests_.end(),
-                        [request](const std::unique_ptr<RequestDelegate>& ptr) {
-                          return ptr.get() == request;
-                        });
-  DCHECK(i != requests_.end());
+  auto i = std::ranges::find(requests_, request,
+                             &std::unique_ptr<RequestDelegate>::get);
+  CHECK(i != requests_.end());
   requests_.erase(i);
 }

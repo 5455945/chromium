@@ -26,27 +26,27 @@
 
 #include "third_party/blink/renderer/platform/weborigin/known_ports.h"
 
+#include "base/synchronization/lock.h"
 #include "net/base/port_util.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
 namespace {
 
-Mutex& ExplicitlyAllowedPortsMutex() {
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(Mutex, mutex, ());
-  return mutex;
+base::Lock& ExplicitlyAllowedPortsLock() {
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(base::Lock, lock, ());
+  return lock;
 }
 
 }  // namespace
 
-bool IsDefaultPortForProtocol(uint16_t port, const WTF::String& protocol) {
-  if (protocol.IsEmpty())
+bool IsDefaultPortForProtocol(uint16_t port, const String& protocol) {
+  if (protocol.empty())
     return false;
 
   switch (port) {
@@ -62,7 +62,7 @@ bool IsDefaultPortForProtocol(uint16_t port, const WTF::String& protocol) {
 
 // Please keep blink::DefaultPortForProtocol and url::DefaultPortForProtocol in
 // sync.
-uint16_t DefaultPortForProtocol(const WTF::String& protocol) {
+uint16_t DefaultPortForProtocol(const String& protocol) {
   if (protocol == "http" || protocol == "ws")
     return 80;
   if (protocol == "https" || protocol == "wss")
@@ -84,13 +84,13 @@ bool IsPortAllowedForScheme(const KURL& url) {
   uint16_t effective_port = url.Port();
   if (!effective_port)
     effective_port = DefaultPortForProtocol(protocol);
-  StringUTF8Adaptor utf8(protocol);
-  MutexLocker locker(ExplicitlyAllowedPortsMutex());
-  return net::IsPortAllowedForScheme(effective_port, utf8.AsStringPiece());
+  StringUtf8Adaptor utf8(protocol);
+  base::AutoLock locker(ExplicitlyAllowedPortsLock());
+  return net::IsPortAllowedForScheme(effective_port, utf8.AsStringView());
 }
 
 void SetExplicitlyAllowedPorts(base::span<const uint16_t> allowed_ports) {
-  MutexLocker locker(ExplicitlyAllowedPortsMutex());
+  base::AutoLock locker(ExplicitlyAllowedPortsLock());
   net::SetExplicitlyAllowedPorts(allowed_ports);
 }
 

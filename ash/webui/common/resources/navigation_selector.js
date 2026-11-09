@@ -1,47 +1,34 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-
-import './navigation_icons.js';
-import 'chrome://resources/cr_elements/cr_expand_button/cr_expand_button.m.js';
-import 'chrome://resources/cr_elements/shared_style_css.m.js';
-import 'chrome://resources/cr_elements/shared_vars_css.m.js';
+import './navigation_icons.html.js';
+import 'chrome://resources/ash/common/cr_elements/cr_expand_button/cr_expand_button.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_style.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/polymer/v3_0/iron-collapse/iron-collapse.js';
 import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
+
+import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {getTemplate} from './navigation_selector.html.js';
 
 /**
  * @typedef {{
  *   name: string,
  *   pageIs: string,
  *   icon: string,
+ *   initialData: ?Object,
+ *   id: string,
  * }}
  */
 export let SelectorItem;
 
 /**
- * @typedef {{
- *   isCollapsible: boolean,
- *   isExpanded: boolean,
- *   subMenuItems: ?Array<?SelectorItem>
- * }}
- */
-export let SelectorProperties;
-
-/**
- * @typedef {{
- *   selectorItem: !SelectorItem,
- *   properties: !SelectorProperties,
- * }}
- */
-export let MenuSelectorItem;
-
-/**
  * @fileoverview
  * 'navigation-selector' is a side bar navigation element. To populate the
  * navigation-selector you must provide the element with an array of
- * MenuSelectorItem's.
+ * SelectorItem's.
  */
 export class NavigationSelectorElement extends PolymerElement {
   static get is() {
@@ -49,7 +36,7 @@ export class NavigationSelectorElement extends PolymerElement {
   }
 
   static get template() {
-    return html`{__html_template__}`;
+    return getTemplate();
   }
 
   static get properties() {
@@ -61,18 +48,18 @@ export class NavigationSelectorElement extends PolymerElement {
       selectedItem: {
         type: Object,
         value: null,
-        observer: 'updateCurrentSelection_',
+        observer: 'selectedItemChanged_',
         notify: true,
       },
 
       /**
-       * @type {!Array<!MenuSelectorItem>}
+       * @type {!Array<!SelectorItem>}
        */
-      menuItems: {
+      selectorItems: {
         type: Array,
         value: () => [],
-      }
-    }
+      },
+    };
   }
 
   /**
@@ -80,31 +67,17 @@ export class NavigationSelectorElement extends PolymerElement {
    * @private
    */
   onSelected_(e) {
-    this.selectedItem = e.model.item.selectorItem;
-  }
-
-  /**
-   * @param {Event} e
-   * @private
-   */
-  onNestedSelected_(e) {
+    this.dispatchEvent(new CustomEvent(
+        'navigation-selected', {bubbles: true, composed: true}));
     this.selectedItem = e.model.item;
   }
 
-  /** @private */
-  updateCurrentSelection_() {
+  /** @protected */
+  selectedItemChanged_() {
     // Update any top-level entries.
     const items = /** @type {!NodeList<!HTMLDivElement>} */(
         this.shadowRoot.querySelectorAll('.navigation-item'));
     this.updateSelected_(items);
-
-    // Update any nested entries.
-    const collapsedLists = this.shadowRoot.querySelectorAll('iron-collapse');
-    for (const list of collapsedLists) {
-      const nestedElements = /** @type {!NodeList<!HTMLDivElement>} */(
-          list.shadowRoot.querySelectorAll('.navigation-item'));
-      this.updateSelected_(nestedElements);
-    }
   }
 
   /**
@@ -112,36 +85,15 @@ export class NavigationSelectorElement extends PolymerElement {
    * @private
    */
   updateSelected_(items) {
-    for (let item of items) {
+    for (const item of items) {
       if (item.textContent.trim() === this.selectedItem.name) {
         item.classList.add('selected');
+        item.setAttribute('aria-current', 'true');
       } else {
         item.classList.remove('selected');
+        item.removeAttribute('aria-current');
       }
     }
-  }
-
-  /**
-   * @param {Event} e
-   * @private
-   */
-  onExpandClicked_(e) {
-    const selectedMenuItem = e.model.item;
-    const foundIndex = this.menuItems.findIndex((element) => {
-      return element.selectorItem.name === selectedMenuItem.selectorItem.name;
-    });
-
-    this.menuItems[foundIndex].properties.isExpanded =
-        !this.menuItems[foundIndex].properties.isExpanded;
-    this.notifyPath(`menuItems.${foundIndex}.properties.isExpanded`);
-  }
-
-  /**
-   * @param {!MenuSelectorItem} item
-   * @private
-   */
-  isCollapsible_(item) {
-    return item.properties.isCollapsible;
   }
 
   /**
@@ -159,10 +111,10 @@ export class NavigationSelectorElement extends PolymerElement {
    * @protected
    */
   computeInitialClass_(item) {
-    let classList = "navigation-item";
+    let classList = 'navigation-item';
     if (!!this.selectedItem && item.name == this.selectedItem.name) {
       // Add the initial .selected class to the currently selected entry.
-      classList += " selected";
+      classList += ' selected';
     }
     return classList;
   }

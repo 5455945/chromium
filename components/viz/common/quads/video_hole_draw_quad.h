@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,8 @@ namespace viz {
 // to find the right VideoDecoder to apply SetGeometry() on.
 class VIZ_COMMON_EXPORT VideoHoleDrawQuad : public DrawQuad {
  public:
+  static constexpr Material kMaterial = Material::kVideoHole;
+
   VideoHoleDrawQuad();
   VideoHoleDrawQuad(const VideoHoleDrawQuad& other);
   ~VideoHoleDrawQuad() override;
@@ -29,15 +31,16 @@ class VIZ_COMMON_EXPORT VideoHoleDrawQuad : public DrawQuad {
   void SetNew(const SharedQuadState* shared_quad_state,
               const gfx::Rect& rect,
               const gfx::Rect& visible_rect,
-              const base::UnguessableToken& overlay_plane_id);
+              const base::UnguessableToken& plane_id);
 
   void SetAll(const SharedQuadState* shared_quad_state,
               const gfx::Rect& rect,
               const gfx::Rect& visible_rect,
               bool needs_blending,
-              const base::UnguessableToken& overlay_plane_id);
+              const base::UnguessableToken& plane_id);
 
   static const VideoHoleDrawQuad* MaterialCast(const DrawQuad*);
+
   base::UnguessableToken overlay_plane_id;
 
  private:

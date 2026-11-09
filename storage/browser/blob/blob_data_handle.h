@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner_helpers.h"
-#include "base/supports_user_data.h"
+#include "base/task/sequenced_task_runner_helpers.h"
 #include "storage/browser/blob/blob_storage_constants.h"
 
 namespace base {
@@ -37,13 +35,12 @@ class BlobStorageContext;
 // resources remain around for the duration of reading the blob.  This snapshot
 // can be read on any thread, but it must be destructed on the IO thread.
 // This object has delete semantics and may be deleted on any thread.
-class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataHandle
-    : public base::SupportsUserData::Data {
+class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataHandle {
  public:
   static constexpr uint64_t kUnknownSize = std::numeric_limits<uint64_t>::max();
 
   BlobDataHandle(const BlobDataHandle& other);  // May be copied on any thread.
-  ~BlobDataHandle() override;                   // May be deleted on any thread.
+  ~BlobDataHandle();                            // May be deleted on any thread.
 
   // Assignment operator matching copy constructor.
   BlobDataHandle& operator=(const BlobDataHandle& other);
@@ -87,8 +84,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataHandle
   const std::string& uuid() const;
   // May be accessed on any thread.
   const std::string& content_type() const;
-  // May be accessed on any thread.
-  const std::string& content_disposition() const;
   // May be accessed on any thread. In rare cases where the blob is created
   // as a file from javascript, this will be kUnknownSize.
   uint64_t size() const;
@@ -108,9 +103,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataHandle
    public:
     BlobDataHandleShared(const std::string& uuid,
                          const std::string& content_type,
-                         const std::string& content_disposition,
                          uint64_t size,
                          BlobStorageContext* context);
+
+    BlobDataHandleShared(const BlobDataHandleShared&) = delete;
+    BlobDataHandleShared& operator=(const BlobDataHandleShared&) = delete;
 
    private:
     friend class base::DeleteHelper<BlobDataHandleShared>;
@@ -121,17 +118,13 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobDataHandle
 
     const std::string uuid_;
     const std::string content_type_;
-    const std::string content_disposition_;
     const uint64_t size_;
     base::WeakPtr<BlobStorageContext> context_;
-
-    DISALLOW_COPY_AND_ASSIGN(BlobDataHandleShared);
   };
 
   friend class BlobStorageContext;
   BlobDataHandle(const std::string& uuid,
                  const std::string& content_type,
-                 const std::string& content_disposition,
                  uint64_t size,
                  BlobStorageContext* context,
                  base::SequencedTaskRunner* io_task_runner);

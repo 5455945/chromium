@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,39 +8,44 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/media_galleries/media_galleries_preferences.h"
-#include "components/download/public/common/quarantine_connection.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "storage/browser/file_system/file_system_backend.h"
+#include "storage/browser/file_system/file_system_request_info.h"
 #include "storage/browser/file_system/task_runner_bound_observer_list.h"
+
+using MediaGalleryPrefId = uint64_t;
 
 namespace base {
 class SequencedTaskRunner;
-}
+}  // namespace base
 
 namespace storage {
 class FileSystemURL;
-}
-
-namespace storage {
-struct FileSystemRequestInfo;
-}
+}  // namespace storage
 
 class DeviceMediaAsyncFileUtil;
 class MediaPathFilter;
 
 class MediaFileSystemBackend : public storage::FileSystemBackend {
  public:
-  MediaFileSystemBackend(
-      const base::FilePath& profile_path,
-      download::QuarantineConnectionCallback quarantine_connection_callback);
+  struct ParsedMountName {
+    std::string profile_base_name;
+    std::string extension_id;
+    MediaGalleryPrefId pref_id = 0;
+  };
+
+  explicit MediaFileSystemBackend(const base::FilePath& profile_path);
+
+  MediaFileSystemBackend(const MediaFileSystemBackend&) = delete;
+  MediaFileSystemBackend& operator=(const MediaFileSystemBackend&) = delete;
+
   ~MediaFileSystemBackend() override;
 
   // Asserts that the current task is sequenced with any other task that calls
@@ -49,11 +54,17 @@ class MediaFileSystemBackend : public storage::FileSystemBackend {
 
   static scoped_refptr<base::SequencedTaskRunner> MediaTaskRunner();
 
-  // Construct the mount point for the gallery specified by |pref_id| in
-  // the profile located in |profile_path|.
+  // Construct the mount point for the gallery specified by `pref_id` in
+  // the profile located in `profile_path`.
   static std::string ConstructMountName(const base::FilePath& profile_path,
                                         const std::string& extension_id,
                                         MediaGalleryPrefId pref_id);
+
+  // Parses a mount point `mount_name` constructed by `ConstructMountName` into
+  // its component parts. Returns `std::nullopt` if `mount_name` is not a valid
+  // media gallery mount name.
+  static std::optional<ParsedMountName> ParseMountName(
+      const std::string& mount_name);
 
   static bool AttemptAutoMountForURLRequest(
       const storage::FileSystemRequestInfo& request_info,
@@ -65,7 +76,7 @@ class MediaFileSystemBackend : public storage::FileSystemBackend {
   void Initialize(storage::FileSystemContext* context) override;
   void ResolveURL(const storage::FileSystemURL& url,
                   storage::OpenFileSystemMode mode,
-                  OpenFileSystemCallback callback) override;
+                  ResolveURLCallback callback) override;
   storage::AsyncFileUtil* GetAsyncFileUtil(
       storage::FileSystemType type) override;
   storage::WatcherManager* GetWatcherManager(
@@ -73,7 +84,8 @@ class MediaFileSystemBackend : public storage::FileSystemBackend {
   storage::CopyOrMoveFileValidatorFactory* GetCopyOrMoveFileValidatorFactory(
       storage::FileSystemType type,
       base::File::Error* error_code) override;
-  storage::FileSystemOperation* CreateFileSystemOperation(
+  std::unique_ptr<storage::FileSystemOperation> CreateFileSystemOperation(
+      storage::OperationType type,
       const storage::FileSystemURL& url,
       storage::FileSystemContext* context,
       base::File::Error* error_code) const override;
@@ -85,7 +97,9 @@ class MediaFileSystemBackend : public storage::FileSystemBackend {
       int64_t offset,
       int64_t max_bytes_to_read,
       const base::Time& expected_modification_time,
-      storage::FileSystemContext* context) const override;
+      storage::FileSystemContext* context,
+      file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+          file_access) const override;
   std::unique_ptr<storage::FileStreamWriter> CreateFileStreamWriter(
       const storage::FileSystemURL& url,
       int64_t offset,
@@ -108,11 +122,7 @@ class MediaFileSystemBackend : public storage::FileSystemBackend {
 
   std::unique_ptr<storage::AsyncFileUtil> native_media_file_util_;
 
-#if defined(OS_WIN) || defined(OS_MAC) || BUILDFLAG(IS_CHROMEOS_ASH)
   std::unique_ptr<DeviceMediaAsyncFileUtil> device_media_async_file_util_;
-#endif
-
-  DISALLOW_COPY_AND_ASSIGN(MediaFileSystemBackend);
 };
 
 #endif  // CHROME_BROWSER_MEDIA_GALLERIES_FILEAPI_MEDIA_FILE_SYSTEM_BACKEND_H_

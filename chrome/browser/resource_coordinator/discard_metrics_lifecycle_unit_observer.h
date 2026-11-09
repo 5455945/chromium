@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
 
@@ -19,19 +18,22 @@ using ::mojom::LifecycleUnitState;
 class DiscardMetricsLifecycleUnitObserver : public LifecycleUnitObserver {
  public:
   DiscardMetricsLifecycleUnitObserver();
+
+  DiscardMetricsLifecycleUnitObserver(
+      const DiscardMetricsLifecycleUnitObserver&) = delete;
+  DiscardMetricsLifecycleUnitObserver& operator=(
+      const DiscardMetricsLifecycleUnitObserver&) = delete;
+
   ~DiscardMetricsLifecycleUnitObserver() override;
 
   // LifecycleUnitObserver:
-  void OnLifecycleUnitStateChanged(
-      LifecycleUnit* lifecycle_unit,
-      LifecycleUnitState last_state,
-      LifecycleUnitStateChangeReason reason) override;
+  void OnLifecycleUnitStateChanged(LifecycleUnit* lifecycle_unit,
+                                   LifecycleUnitState last_state) override;
   void OnLifecycleUnitDestroyed(LifecycleUnit* lifecycle_unit) override;
 
  private:
   // Invoked when the LifecycleUnit is discarded.
-  void OnDiscard(LifecycleUnit* lifecycle_unit,
-                 LifecycleUnitStateChangeReason reason);
+  void OnDiscard(LifecycleUnit* lifecycle_unit);
 
   // Invoked when the LifecycleUnit is reloaded.
   void OnReload();
@@ -43,15 +45,9 @@ class DiscardMetricsLifecycleUnitObserver : public LifecycleUnitObserver {
   // The last time at which the LifecycleUnit was discarded.
   base::TimeTicks discard_time_;
 
-  // The last discard reason.
-  LifecycleUnitStateChangeReason discard_reason_ =
-      LifecycleUnitStateChangeReason::BROWSER_INITIATED;
-
   // The last time at which the LifecycleUnit was reloaded after being
   // discarded.
   base::TimeTicks reload_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(DiscardMetricsLifecycleUnitObserver);
 };
 
 }  // namespace resource_coordinator

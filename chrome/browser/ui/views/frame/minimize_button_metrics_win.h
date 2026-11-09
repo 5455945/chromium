@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,6 @@
 
 #include <windows.h>
 
-#include "base/macros.h"
-
 // Class that implements obtaining the X coordinate of the native minimize
 // button for the native frame on Windows.
 // This is a separate class because obtaining it is somewhat tricky and this
@@ -16,6 +14,10 @@
 class MinimizeButtonMetrics {
  public:
   MinimizeButtonMetrics();
+
+  MinimizeButtonMetrics(const MinimizeButtonMetrics&) = delete;
+  MinimizeButtonMetrics& operator=(const MinimizeButtonMetrics&) = delete;
+
   ~MinimizeButtonMetrics();
 
   void Init(HWND hwnd);
@@ -23,6 +25,10 @@ class MinimizeButtonMetrics {
   // Obtain the X offset of the native minimize button. Since Windows can lie
   // to us if we call this at the wrong moment, this might come from a cached
   // value rather than read when called.
+  //
+  // The value is an absolute distance from the leading edge of the frame. So if
+  // the browser is in LtR, this is expected to be a large number and must be
+  // adjusted for the right side of the window.
   int GetMinimizeButtonOffsetX() const;
 
   // Must be called when hwnd_ is activated to update the minimize button
@@ -34,21 +40,22 @@ class MinimizeButtonMetrics {
 
  private:
   // Gets the value for GetMinimizeButtonOffsetX(), caching if found.
-  int GetAndCacheMinimizeButtonOffsetX() const;
+  void CalculateAndCacheMinimizeButtonOffsetX() const;
 
   int GetButtonBoundsPositionOffset(const RECT& button_bounds,
                                     const RECT& window_bounds) const;
 
   int GetMinimizeButtonOffsetForWindow() const;
 
-  HWND hwnd_;
+  HWND hwnd_ = nullptr;
 
   // Cached offset of the minimize button. If RTL this is the location of the
   // minimize button, if LTR this is the offset from the right edge of the
   // client area to the minimize button.
-  mutable int cached_minimize_button_x_delta_;
+  mutable int cached_minimize_button_x_delta_ =
+      last_cached_minimize_button_x_delta_;
 
-  // Static cache of |cached_minimize_button_x_delta_|.
+  // Static cache of `cached_minimize_button_x_delta_`.
   static int last_cached_minimize_button_x_delta_;
 
   // Static cache of offset value representing the difference between
@@ -56,9 +63,7 @@ class MinimizeButtonMetrics {
   static int button_bounds_position_offset_;
 
   // Has OnHWNDActivated() been invoked?
-  bool was_activated_;
-
-  DISALLOW_COPY_AND_ASSIGN(MinimizeButtonMetrics);
+  bool was_activated_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_MINIMIZE_BUTTON_METRICS_WIN_H_

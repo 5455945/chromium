@@ -1,16 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "chrome/browser/ui/views/apps/shaped_app_window_targeter.h"
 
 #include <memory>
 #include <utility>
 
 #include "apps/ui/views/app_window_frame_view.h"
-#include "base/macros.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/views/apps/chrome_native_app_window_views_aura.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
@@ -24,11 +20,13 @@ using extensions::AppWindow;
 
 class ShapedAppWindowTargeterTest : public views::ViewsTestBase {
  public:
-  ShapedAppWindowTargeterTest()
-      : web_view_(NULL) {
-  }
+  ShapedAppWindowTargeterTest() : web_view_(nullptr) {}
 
-  ~ShapedAppWindowTargeterTest() override {}
+  ShapedAppWindowTargeterTest(const ShapedAppWindowTargeterTest&) = delete;
+  ShapedAppWindowTargeterTest& operator=(const ShapedAppWindowTargeterTest&) =
+      delete;
+
+  ~ShapedAppWindowTargeterTest() override = default;
 
   views::Widget* widget() { return widget_.get(); }
 
@@ -39,11 +37,12 @@ class ShapedAppWindowTargeterTest : public views::ViewsTestBase {
   void SetUp() override {
     views::ViewsTestBase::SetUp();
     widget_ = std::make_unique<views::Widget>();
-    views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+    views::Widget::InitParams params(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+        views::Widget::InitParams::TYPE_WINDOW);
     params.remove_standard_frame = true;
     params.bounds = gfx::Rect(30, 30, 100, 100);
     params.context = root_window();
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
     widget_->Init(std::move(params));
 
     app_window_.set_web_view_for_testing(&web_view_);
@@ -69,8 +68,6 @@ class ShapedAppWindowTargeterTest : public views::ViewsTestBase {
   views::WebView web_view_;
   std::unique_ptr<views::Widget> widget_;
   ChromeNativeAppWindowViewsAura app_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShapedAppWindowTargeterTest);
 };
 
 TEST_F(ShapedAppWindowTargeterTest, HitTestBasic) {
@@ -78,7 +75,7 @@ TEST_F(ShapedAppWindowTargeterTest, HitTestBasic) {
   {
     // Without any custom shapes, the event should be targeted correctly to the
     // window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(40, 40),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(40, 40),
                         gfx::Point(40, 40), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -92,7 +89,7 @@ TEST_F(ShapedAppWindowTargeterTest, HitTestBasic) {
   {
     // With an empty custom shape, all events within the window should fall
     // through to the root window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(40, 40),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(40, 40),
                         gfx::Point(40, 40), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -116,7 +113,7 @@ TEST_F(ShapedAppWindowTargeterTest, HitTestBasic) {
   {
     // With the custom shape, the events that don't fall within the custom shape
     // will go through to the root window.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(40, 40),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(40, 40),
                         gfx::Point(40, 40), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -124,7 +121,7 @@ TEST_F(ShapedAppWindowTargeterTest, HitTestBasic) {
     EXPECT_EQ(root_window(), move.target());
 
     // But events within the shape will still reach the window.
-    ui::MouseEvent move2(ui::ET_MOUSE_MOVED, gfx::Point(80, 80),
+    ui::MouseEvent move2(ui::EventType::kMouseMoved, gfx::Point(80, 80),
                          gfx::Point(80, 80), ui::EventTimeForNow(), ui::EF_NONE,
                          ui::EF_NONE);
     details = GetEventSink()->OnEventFromSource(&move2);
@@ -145,7 +142,7 @@ TEST_F(ShapedAppWindowTargeterTest, HitTestOnlyForShapedWindow) {
   {
     // Without any custom shapes, an event within the window bounds should be
     // targeted correctly to the window.
-    ui::MouseEvent move_inside(ui::ET_MOUSE_MOVED, gfx::Point(40, 40),
+    ui::MouseEvent move_inside(ui::EventType::kMouseMoved, gfx::Point(40, 40),
                                gfx::Point(40, 40), ui::EventTimeForNow(),
                                ui::EF_NONE, ui::EF_NONE);
     ui::EventDispatchDetails details =
@@ -154,7 +151,7 @@ TEST_F(ShapedAppWindowTargeterTest, HitTestOnlyForShapedWindow) {
     EXPECT_EQ(window, move_inside.target());
   }
 
-  ui::MouseEvent move_outside(ui::ET_MOUSE_MOVED, gfx::Point(10, 10),
+  ui::MouseEvent move_outside(ui::EventType::kMouseMoved, gfx::Point(10, 10),
                               gfx::Point(10, 10), ui::EventTimeForNow(),
                               ui::EF_NONE, ui::EF_NONE);
   SetWindowResizable(false);
@@ -221,7 +218,7 @@ TEST_F(ShapedAppWindowTargeterTest, ResizeInsetsWithinBounds) {
   {
     // An event in the center of the window should always have
     // |window| as its target.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(80, 80),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(80, 80),
                         gfx::Point(80, 80), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -232,7 +229,7 @@ TEST_F(ShapedAppWindowTargeterTest, ResizeInsetsWithinBounds) {
     // Without an EasyResizeTargeter on the container, an event
     // inside the window and within 5px of an edge should have
     // |window| as its target.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(32, 37),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(32, 37),
                         gfx::Point(32, 37), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -240,9 +237,9 @@ TEST_F(ShapedAppWindowTargeterTest, ResizeInsetsWithinBounds) {
     EXPECT_EQ(window, move.target());
   }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   // The non standard app frame has a easy resize targetter installed.
-  std::unique_ptr<views::NonClientFrameView> frame(
+  std::unique_ptr<views::FrameView> frame(
       app_window_views()->CreateNonStandardAppFrame());
   {
     // Ensure that the window has an event targeter (there should be an
@@ -260,7 +257,7 @@ TEST_F(ShapedAppWindowTargeterTest, ResizeInsetsWithinBounds) {
     // RenderWidgetHostViewAura, we cannot differentiate the two cases. Fix
     // the test environment so that the test can assert that non-border events
     // bubble down to a child of |window|.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(80, 80),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(80, 80),
                         gfx::Point(80, 80), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);
@@ -271,7 +268,7 @@ TEST_F(ShapedAppWindowTargeterTest, ResizeInsetsWithinBounds) {
     // With an EasyResizeTargeter on the container, an event
     // inside the window and within 5px of an edge should have
     // |window| as its target.
-    ui::MouseEvent move(ui::ET_MOUSE_MOVED, gfx::Point(32, 37),
+    ui::MouseEvent move(ui::EventType::kMouseMoved, gfx::Point(32, 37),
                         gfx::Point(32, 37), ui::EventTimeForNow(), ui::EF_NONE,
                         ui::EF_NONE);
     ui::EventDispatchDetails details = GetEventSink()->OnEventFromSource(&move);

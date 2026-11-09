@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,10 @@ import com.google.android.play.core.splitcompat.SplitCompat;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.StrictModeContext;
 import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
 
-/**
- * PlayCore SplitCompat initializer for installing modules in the application context.
- */
+/** PlayCore SplitCompat initializer for installing modules in the application context. */
+@NullMarked
 class SplitCompatInitializer {
     private static volatile boolean sIsInitialized;
 

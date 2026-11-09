@@ -1,21 +1,27 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/platform/child_url_loader_factory_bundle.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
+#include "base/metrics/histogram_functions.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/load_flags.h"
+#include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/loader/local_resource_loader_config.mojom.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
@@ -37,20 +43,17 @@ class URLLoaderRelay : public network::mojom::URLLoaderClient,
 
   // network::mojom::URLLoader implementation:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_request_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_request_headers,
-      const absl::optional<GURL>& new_url) override {
-    DCHECK(removed_headers.empty() && modified_request_headers.IsEmpty() &&
-           modified_cors_exempt_request_headers.IsEmpty())
+      network::HttpRequestHeadersUpdateParams headers_update_params,
+      const std::optional<GURL>& new_url) override {
+    DCHECK(headers_update_params.removed_headers.empty() &&
+           headers_update_params.modified_headers.IsEmpty() &&
+           headers_update_params.modified_cors_exempt_headers.IsEmpty())
         << "Redirect with removed or modified headers was not supported yet. "
            "crbug.com/845683";
     DCHECK(!new_url.has_value())
         << "Redirect with modified URL was not supported yet. "
            "crbug.com/845683";
-    loader_sink_->FollowRedirect(
-        {} /* removed_headers */, {} /* modified_headers */,
-        {} /* modified_cors_exempt_headers */, absl::nullopt /* new_url */);
+    loader_sink_->FollowRedirect({}, std::nullopt);
   }
 
   void SetPriority(net::RequestPriority priority,
@@ -58,21 +61,17 @@ class URLLoaderRelay : public network::mojom::URLLoaderClient,
     loader_sink_->SetPriority(priority, intra_priority_value);
   }
 
-  void PauseReadingBodyFromNet() override {
-    loader_sink_->PauseReadingBodyFromNet();
-  }
-
-  void ResumeReadingBodyFromNet() override {
-    loader_sink_->ResumeReadingBodyFromNet();
-  }
-
   // network::mojom::URLLoaderClient implementation:
   void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override {
     client_sink_->OnReceiveEarlyHints(std::move(early_hints));
   }
 
-  void OnReceiveResponse(network::mojom::URLResponseHeadPtr head) override {
-    client_sink_->OnReceiveResponse(std::move(head));
+  void OnReceiveResponse(
+      network::mojom::URLResponseHeadPtr head,
+      mojo::ScopedDataPipeConsumerHandle body,
+      std::optional<mojo_base::BigBuffer> cached_metadata) override {
+    client_sink_->OnReceiveResponse(std::move(head), std::move(body),
+                                    std::move(cached_metadata));
   }
 
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
@@ -87,17 +86,11 @@ class URLLoaderRelay : public network::mojom::URLLoaderClient,
                                    std::move(callback));
   }
 
-  void OnReceiveCachedMetadata(mojo_base::BigBuffer data) override {
-    client_sink_->OnReceiveCachedMetadata(std::move(data));
-  }
-
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override {
-    client_sink_->OnTransferSizeUpdated(transfer_size_diff);
-  }
+    network::RecordOnTransferSizeUpdatedUMA(
+        network::OnTransferSizeUpdatedFrom::kURLLoaderRelay);
 
-  void OnStartLoadingResponseBody(
-      mojo::ScopedDataPipeConsumerHandle body) override {
-    client_sink_->OnStartLoadingResponseBody(std::move(body));
+    client_sink_->OnTransferSizeUpdated(transfer_size_diff);
   }
 
   void OnComplete(const network::URLLoaderCompletionStatus& status) override {
@@ -135,30 +128,34 @@ ChildPendingURLLoaderFactoryBundle::ChildPendingURLLoaderFactoryBundle(
           std::move(base_factories->pending_default_factory()),
           std::move(base_factories->pending_scheme_specific_factories()),
           std::move(base_factories->pending_isolated_world_factories()),
-          base_factories->bypass_redirect_checks()) {
-  pending_appcache_factory_ =
-      std::move(base_factories->pending_appcache_factory());
-}
+          std::move(base_factories->local_resource_loader_config()),
+          base_factories->bypass_redirect_checks()) {}
 
 ChildPendingURLLoaderFactoryBundle::ChildPendingURLLoaderFactoryBundle(
     mojo::PendingRemote<network::mojom::URLLoaderFactory>
         pending_default_factory,
-    mojo::PendingRemote<network::mojom::URLLoaderFactory>
-        pending_appcache_factory,
     SchemeMap pending_scheme_specific_factories,
     OriginMap pending_isolated_world_factories,
     mojo::PendingRemote<network::mojom::URLLoaderFactory>
-        pending_prefetch_loader_factory,
+        pending_subresource_proxying_loader_factory,
+    mojo::PendingRemote<network::mojom::URLLoaderFactory>
+        pending_keep_alive_loader_factory,
+    mojo::PendingAssociatedRemote<blink::mojom::FetchLaterLoaderFactory>
+        pending_fetch_later_loader_factory,
+    mojom::LocalResourceLoaderConfigPtr local_resource_loader_config,
     bool bypass_redirect_checks)
     : PendingURLLoaderFactoryBundle(
           std::move(pending_default_factory),
           std::move(pending_scheme_specific_factories),
           std::move(pending_isolated_world_factories),
+          std::move(local_resource_loader_config),
           bypass_redirect_checks),
-      pending_prefetch_loader_factory_(
-          std::move(pending_prefetch_loader_factory)) {
-  pending_appcache_factory_ = std::move(pending_appcache_factory);
-}
+      pending_subresource_proxying_loader_factory_(
+          std::move(pending_subresource_proxying_loader_factory)),
+      pending_keep_alive_loader_factory_(
+          std::move(pending_keep_alive_loader_factory)),
+      pending_fetch_later_loader_factory_(
+          std::move(pending_fetch_later_loader_factory)) {}
 
 ChildPendingURLLoaderFactoryBundle::~ChildPendingURLLoaderFactoryBundle() =
     default;
@@ -167,13 +164,16 @@ scoped_refptr<network::SharedURLLoaderFactory>
 ChildPendingURLLoaderFactoryBundle::CreateFactory() {
   auto other = std::make_unique<ChildPendingURLLoaderFactoryBundle>();
   other->pending_default_factory_ = std::move(pending_default_factory_);
-  other->pending_appcache_factory_ = std::move(pending_appcache_factory_);
   other->pending_scheme_specific_factories_ =
       std::move(pending_scheme_specific_factories_);
   other->pending_isolated_world_factories_ =
       std::move(pending_isolated_world_factories_);
-  other->pending_prefetch_loader_factory_ =
-      std::move(pending_prefetch_loader_factory_);
+  other->pending_subresource_proxying_loader_factory_ =
+      std::move(pending_subresource_proxying_loader_factory_);
+  other->pending_keep_alive_loader_factory_ =
+      std::move(pending_keep_alive_loader_factory_);
+  other->pending_fetch_later_loader_factory_ =
+      std::move(pending_fetch_later_loader_factory_);
   other->bypass_redirect_checks_ = bypass_redirect_checks_;
 
   return base::MakeRefCounted<ChildURLLoaderFactoryBundle>(std::move(other));
@@ -205,7 +205,9 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
 
     mojo::Remote<network::mojom::URLLoaderClient> client_remote(
         std::move(client));
-    client_remote->OnReceiveResponse(std::move(transferrable_loader->head));
+    client_remote->OnReceiveResponse(std::move(transferrable_loader->head),
+                                     std::move(transferrable_loader->body),
+                                     std::nullopt);
     mojo::MakeSelfOwnedReceiver(
         std::make_unique<URLLoaderRelay>(
             std::move(transferrable_loader->url_loader),
@@ -216,20 +218,41 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
     return;
   }
 
-  // Use |prefetch_loader_factory_| for prefetch requests to send the requests
-  // to the PrefetchURLLoaderService in the browser process and triger the
-  // special prefetch handling.
+  // Prefetch is disjoint with keepalive.
+  const bool request_is_prefetch = request.load_flags & net::LOAD_PREFETCH;
+  CHECK(!(request_is_prefetch && request.keepalive));
+
+  // Use |subresource_proxying_loader_factory_| for prefetch requests to send
+  // the requests to `SubresourceProxyingURLLoaderService` in the browser
+  // process and trigger the special handling.
   // TODO(horo): Move this routing logic to network service, when we will have
   // the special prefetch handling in network service.
-  if ((request.load_flags & net::LOAD_PREFETCH) && prefetch_loader_factory_) {
-    // This is no-state prefetch (see
+  if (request_is_prefetch && subresource_proxying_loader_factory_) {
+    // For prefetch, this is no-state prefetch (see
     // WebURLRequest::GetLoadFlagsForWebUrlRequest).
-    prefetch_loader_factory_->CreateLoaderAndStart(
+    subresource_proxying_loader_factory_->CreateLoaderAndStart(
         std::move(loader), request_id, options, request, std::move(client),
         traffic_annotation);
     return;
   }
 
+  // Use |keep_alive_loader_factory_| to send the keepalive requests to the
+  // KeepAliveURLLoaderService in the browser process and trigger the special
+  // keepalive request handling.
+  // |keep_alive_loader_factory_| only presents when
+  // features::kKeepAliveInBrowserMigration is true.
+  if (request.keepalive) {
+    FetchUtils::LogFetchKeepAliveRequestSentToServiceMetric(request);
+  }
+  if (request.keepalive && keep_alive_loader_factory_ &&
+      base::FeatureList::IsEnabled(features::kKeepAliveInBrowserMigration)) {
+    keep_alive_loader_factory_->CreateLoaderAndStart(
+        std::move(loader), request_id, options, request, std::move(client),
+        traffic_annotation);
+    return;
+  }
+
+  // Default request handling.
   URLLoaderFactoryBundle::CreateLoaderAndStart(
       std::move(loader), request_id, options, request, std::move(client),
       traffic_annotation);
@@ -237,42 +260,9 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
 
 std::unique_ptr<network::PendingSharedURLLoaderFactory>
 ChildURLLoaderFactoryBundle::Clone() {
-  return CloneInternal(true /* include_appcache */);
-}
-
-std::unique_ptr<network::PendingSharedURLLoaderFactory>
-ChildURLLoaderFactoryBundle::CloneWithoutAppCacheFactory() {
-  return CloneInternal(false /* include_appcache */);
-}
-
-void ChildURLLoaderFactoryBundle::Update(
-    std::unique_ptr<ChildPendingURLLoaderFactoryBundle> info) {
-  if (info->pending_prefetch_loader_factory()) {
-    prefetch_loader_factory_.Bind(
-        std::move(info->pending_prefetch_loader_factory()));
-  }
-  URLLoaderFactoryBundle::Update(std::move(info));
-}
-
-void ChildURLLoaderFactoryBundle::UpdateSubresourceOverrides(
-    std::vector<blink::mojom::TransferrableURLLoaderPtr>*
-        subresource_overrides) {
-  for (auto& element : *subresource_overrides)
-    subresource_overrides_[element->url] = std::move(element);
-}
-
-void ChildURLLoaderFactoryBundle::SetPrefetchLoaderFactory(
-    mojo::PendingRemote<network::mojom::URLLoaderFactory>
-        prefetch_loader_factory) {
-  prefetch_loader_factory_.Bind(std::move(prefetch_loader_factory));
-}
-
-bool ChildURLLoaderFactoryBundle::IsHostChildURLLoaderFactoryBundle() const {
-  return false;
-}
-
-std::unique_ptr<network::PendingSharedURLLoaderFactory>
-ChildURLLoaderFactoryBundle::CloneInternal(bool include_appcache) {
+  base::ScopedUmaHistogramTimer timer(
+      "Blink.ChildURLLoaderFactoryBundle.CloneTime",
+      base::ScopedUmaHistogramTimer::ScopedHistogramTiming::kMicrosecondTimes);
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
       default_factory_pending_remote;
   if (default_factory_) {
@@ -281,17 +271,25 @@ ChildURLLoaderFactoryBundle::CloneInternal(bool include_appcache) {
   }
 
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
-      appcache_factory_pending_remote;
-  if (appcache_factory_ && include_appcache) {
-    appcache_factory_->Clone(
-        appcache_factory_pending_remote.InitWithNewPipeAndPassReceiver());
+      pending_subresource_proxying_loader_factory;
+  if (subresource_proxying_loader_factory_) {
+    subresource_proxying_loader_factory_->Clone(
+        pending_subresource_proxying_loader_factory
+            .InitWithNewPipeAndPassReceiver());
   }
 
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
-      pending_prefetch_loader_factory;
-  if (prefetch_loader_factory_) {
-    prefetch_loader_factory_->Clone(
-        pending_prefetch_loader_factory.InitWithNewPipeAndPassReceiver());
+      pending_keep_alive_loader_factory;
+  if (keep_alive_loader_factory_) {
+    keep_alive_loader_factory_->Clone(
+        pending_keep_alive_loader_factory.InitWithNewPipeAndPassReceiver());
+  }
+  mojo::PendingAssociatedRemote<blink::mojom::FetchLaterLoaderFactory>
+      pending_fetch_later_loader_factory;
+  if (fetch_later_loader_factory_) {
+    fetch_later_loader_factory_->Clone(
+        pending_fetch_later_loader_factory
+            .InitWithNewEndpointAndPassReceiver());
   }
 
   // Currently there is no need to override subresources from workers,
@@ -299,10 +297,12 @@ ChildURLLoaderFactoryBundle::CloneInternal(bool include_appcache) {
 
   return std::make_unique<ChildPendingURLLoaderFactoryBundle>(
       std::move(default_factory_pending_remote),
-      std::move(appcache_factory_pending_remote),
       CloneRemoteMapToPendingRemoteMap(scheme_specific_factories_),
       CloneRemoteMapToPendingRemoteMap(isolated_world_factories_),
-      std::move(pending_prefetch_loader_factory), bypass_redirect_checks_);
+      std::move(pending_subresource_proxying_loader_factory),
+      std::move(pending_keep_alive_loader_factory),
+      std::move(pending_fetch_later_loader_factory),
+      local_resource_loader_config_.Clone(), bypass_redirect_checks_);
 }
 
 std::unique_ptr<ChildPendingURLLoaderFactoryBundle>
@@ -312,21 +312,89 @@ ChildURLLoaderFactoryBundle::PassInterface() {
     pending_default_factory = default_factory_.Unbind();
 
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
-      pending_appcache_factory;
-  if (appcache_factory_)
-    pending_appcache_factory = appcache_factory_.Unbind();
+      pending_subresource_proxying_loader_factory;
+  if (subresource_proxying_loader_factory_) {
+    pending_subresource_proxying_loader_factory =
+        subresource_proxying_loader_factory_.Unbind();
+  }
 
   mojo::PendingRemote<network::mojom::URLLoaderFactory>
-      pending_prefetch_loader_factory;
-  if (prefetch_loader_factory_) {
-    pending_prefetch_loader_factory = prefetch_loader_factory_.Unbind();
+      pending_keep_alive_loader_factory;
+  if (keep_alive_loader_factory_) {
+    pending_keep_alive_loader_factory = keep_alive_loader_factory_.Unbind();
+  }
+  mojo::PendingAssociatedRemote<blink::mojom::FetchLaterLoaderFactory>
+      pending_fetch_later_loader_factory;
+  if (fetch_later_loader_factory_) {
+    pending_fetch_later_loader_factory = fetch_later_loader_factory_.Unbind();
   }
 
   return std::make_unique<ChildPendingURLLoaderFactoryBundle>(
-      std::move(pending_default_factory), std::move(pending_appcache_factory),
+      std::move(pending_default_factory),
       BoundRemoteMapToPendingRemoteMap(std::move(scheme_specific_factories_)),
       BoundRemoteMapToPendingRemoteMap(std::move(isolated_world_factories_)),
-      std::move(pending_prefetch_loader_factory), bypass_redirect_checks_);
+      std::move(pending_subresource_proxying_loader_factory),
+      std::move(pending_keep_alive_loader_factory),
+      std::move(pending_fetch_later_loader_factory),
+      std::move(local_resource_loader_config_), bypass_redirect_checks_);
+}
+
+void ChildURLLoaderFactoryBundle::Update(
+    std::unique_ptr<ChildPendingURLLoaderFactoryBundle> pending_factories) {
+  if (pending_factories->pending_subresource_proxying_loader_factory()) {
+    subresource_proxying_loader_factory_.Bind(std::move(
+        pending_factories->pending_subresource_proxying_loader_factory()));
+  }
+  if (pending_factories->pending_keep_alive_loader_factory()) {
+    keep_alive_loader_factory_.Bind(
+        std::move(pending_factories->pending_keep_alive_loader_factory()));
+  }
+  if (pending_factories->pending_fetch_later_loader_factory()) {
+    fetch_later_loader_factory_.Bind(
+        std::move(pending_factories->pending_fetch_later_loader_factory()));
+  }
+  URLLoaderFactoryBundle::Update(std::move(pending_factories));
+}
+
+void ChildURLLoaderFactoryBundle::UpdateSubresourceOverrides(
+    std::vector<blink::mojom::TransferrableURLLoaderPtr>*
+        subresource_overrides) {
+  for (auto& element : *subresource_overrides)
+    subresource_overrides_[element->url] = std::move(element);
+}
+
+void ChildURLLoaderFactoryBundle::SetSubresourceProxyingLoaderFactory(
+    mojo::PendingRemote<network::mojom::URLLoaderFactory>
+        subresource_proxying_loader_factory) {
+  subresource_proxying_loader_factory_.Bind(
+      std::move(subresource_proxying_loader_factory));
+}
+
+void ChildURLLoaderFactoryBundle::SetKeepAliveLoaderFactory(
+    mojo::PendingRemote<network::mojom::URLLoaderFactory>
+        keep_alive_loader_factory) {
+  keep_alive_loader_factory_.Bind(std::move(keep_alive_loader_factory));
+}
+
+void ChildURLLoaderFactoryBundle::SetFetchLaterLoaderFactory(
+    mojo::PendingAssociatedRemote<blink::mojom::FetchLaterLoaderFactory>
+        fetch_later_loader_factory) {
+  fetch_later_loader_factory_.Bind(std::move(fetch_later_loader_factory));
+}
+
+void ChildURLLoaderFactoryBundle::CreateFetchLaterLoader(
+    blink::CrossVariantMojoAssociatedReceiver<
+        mojom::FetchLaterLoaderInterfaceBase> loader,
+    int32_t request_id,
+    uint32_t options,
+    const network::ResourceRequest& request,
+    const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
+  fetch_later_loader_factory_->CreateLoader(
+      std::move(loader), request_id, options, request, traffic_annotation);
+}
+
+bool ChildURLLoaderFactoryBundle::IsHostChildURLLoaderFactoryBundle() const {
+  return false;
 }
 
 }  // namespace blink

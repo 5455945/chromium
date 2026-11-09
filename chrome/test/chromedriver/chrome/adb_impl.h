@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/test/chromedriver/chrome/adb.h"
 
 namespace base {
@@ -40,6 +39,9 @@ class AdbImpl : public Adb {
                            const std::string& package) override;
   Status ClearAppData(const std::string& device_serial,
                       const std::string& package) override;
+  Status GrantPermission(const std::string& device_serial,
+                         const std::string& package,
+                         const std::string& permission) override;
   Status SetDebugApp(const std::string& device_serial,
                      const std::string& package) override;
   Status Launch(const std::string& device_serial,
@@ -53,6 +55,12 @@ class AdbImpl : public Adb {
   Status GetSocketByPattern(const std::string& device_serial,
                             const std::string& grep_pattern,
                             std::string* socket_name) override;
+  Status SetPreferences(const std::string& device_serial,
+                        const std::string& path,
+                        const base::DictValue* custom_prefs) override;
+  Status SetLocalState(const std::string& device_serial,
+                       const std::string& path,
+                       const base::DictValue* custom_local_state) override;
 
  private:
   Status ExecuteCommand(const std::string& command,
@@ -63,6 +71,11 @@ class AdbImpl : public Adb {
   Status ExecuteHostShellCommand(const std::string& device_serial,
                                  const std::string& shell_command,
                                  std::string* response);
+  Status SendFile(const std::string& device_serial,
+                  const std::string& file_path,
+                  const std::string& content);
+  Status AddWritePermissions(const std::string& device_serial,
+                             const std::string& path);
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 

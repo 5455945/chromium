@@ -1,9 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/mojom/audio_decoder_config_mojom_traits.h"
 
+#include "base/time/time.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 
 namespace mojo {
@@ -21,9 +22,10 @@ bool StructTraits<media::mojom::AudioDecoderConfigDataView,
   if (!input.ReadSampleFormat(&sample_format))
     return false;
 
-  media::ChannelLayout channel_layout;
-  if (!input.ReadChannelLayout(&channel_layout))
+  media::ChannelLayoutConfig channel_layout_config;
+  if (!input.ReadChannelLayoutConfig(&channel_layout_config)) {
     return false;
+  }
 
   std::vector<uint8_t> extra_data;
   if (!input.ReadExtraData(&extra_data))
@@ -41,10 +43,24 @@ bool StructTraits<media::mojom::AudioDecoderConfigDataView,
   if (!input.ReadProfile(&profile))
     return false;
 
-  output->Initialize(codec, sample_format, channel_layout,
-                     input.samples_per_second(), extra_data, encryption_scheme,
-                     seek_preroll, input.codec_delay());
+  media::ChannelLayoutConfig target_output_channel_layout;
+  if (!input.ReadTargetOutputChannelLayout(&target_output_channel_layout))
+    return false;
+
+  media::SampleFormat target_output_sample_format;
+  if (!input.ReadTargetOutputSampleFormat(&target_output_sample_format))
+    return false;
+
+  output->Initialize(codec, sample_format, channel_layout_config,
+                     input.samples_per_second(), std::move(extra_data),
+                     encryption_scheme, seek_preroll, input.codec_delay());
   output->set_profile(profile);
+  output->set_target_output_channel_layout(target_output_channel_layout);
+  output->set_target_output_sample_format(target_output_sample_format);
+
+  if (!input.should_discard_decoder_delay())
+    output->disable_discard_decoder_delay();
+
   return output->IsValidConfig();
 }
 

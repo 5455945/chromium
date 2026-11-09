@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,20 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
+#include "base/types/optional_util.h"
 #include "base/values.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "extensions/browser/api/audio/audio_device_id_calculator.h"
 #include "extensions/browser/api/audio/pref_names.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/common/api/audio.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/features/behavior_feature.h"
-#include "extensions/common/features/feature_provider.h"
+#include "extensions/common/event_args.h"
+
+namespace {
+const char* const kLevelPropErrorMsg = "Could not set volume/gain properties";
+}  // namespace
 
 namespace extensions {
 
@@ -28,32 +31,6 @@ namespace {
 std::unique_ptr<AudioDeviceIdCalculator> CreateIdCalculator(
     content::BrowserContext* context) {
   return std::make_unique<AudioDeviceIdCalculator>(context);
-}
-
-// Checks if an extension is whitelisted to use deprecated version of audio API.
-// TODO(tbarzic): Retire this whitelist and remove the deprecated API methods,
-//     properties and events. This is currently targeted for M-60
-//     (http://crbug.com/697279).
-bool CanUseDeprecatedAudioApi(const Extension* extension) {
-  if (!extension)
-    return false;
-
-  const Feature* allow_deprecated_audio_api_feature =
-      FeatureProvider::GetBehaviorFeatures()->GetFeature(
-          behavior_feature::kAllowDeprecatedAudioApi);
-  if (!allow_deprecated_audio_api_feature)
-    return false;
-
-  return allow_deprecated_audio_api_feature->IsAvailableToExtension(extension)
-      .is_available();
-}
-
-bool CanReceiveDeprecatedAudioEvent(content::BrowserContext* browser_context,
-                                    Feature::Context target_context,
-                                    const Extension* extension,
-                                    Event* event,
-                                    const base::DictionaryValue* filter) {
-  return CanUseDeprecatedAudioApi(extension);
 }
 
 }  // namespace
@@ -78,35 +55,24 @@ AudioAPI::AudioAPI(content::BrowserContext* context)
   audio_service_observation_.Observe(service_.get());
 }
 
-AudioAPI::~AudioAPI() {}
+AudioAPI::~AudioAPI() = default;
 
 AudioService* AudioAPI::GetService() const {
   return service_.get();
 }
 
-void AudioAPI::OnDeviceChanged() {
-  EventRouter* event_router = EventRouter::Get(browser_context_);
-  if (!event_router)
-    return;
-
-  auto event = std::make_unique<Event>(events::AUDIO_ON_DEVICE_CHANGED,
-                                       audio::OnDeviceChanged::kEventName,
-                                       std::vector<base::Value>());
-  event->will_dispatch_callback =
-      base::BindRepeating(&CanReceiveDeprecatedAudioEvent);
-  event_router->BroadcastEvent(std::move(event));
-}
-
 void AudioAPI::OnLevelChanged(const std::string& id, int level) {
   EventRouter* event_router = EventRouter::Get(browser_context_);
-  if (!event_router)
+  if (!event_router) {
     return;
+  }
 
   audio::LevelChangedEvent raw_event;
   raw_event.device_id = id;
   raw_event.level = level;
 
-  auto event_args = audio::OnLevelChanged::Create(raw_event);
+  auto event_args =
+      base::MakeRefCounted<EventArgs>(audio::OnLevelChanged::Create(raw_event));
   auto event = std::make_unique<Event>(events::AUDIO_ON_LEVEL_CHANGED,
                                        audio::OnLevelChanged::kEventName,
                                        std::move(event_args));
@@ -115,15 +81,17 @@ void AudioAPI::OnLevelChanged(const std::string& id, int level) {
 
 void AudioAPI::OnMuteChanged(bool is_input, bool is_muted) {
   EventRouter* event_router = EventRouter::Get(browser_context_);
-  if (!event_router)
+  if (!event_router) {
     return;
+  }
 
   // Dispatch onMuteChanged event.
   audio::MuteChangedEvent raw_event;
   raw_event.stream_type =
-      is_input ? audio::STREAM_TYPE_INPUT : audio::STREAM_TYPE_OUTPUT;
+      is_input ? audio::StreamType::kInput : audio::StreamType::kOutput;
   raw_event.is_muted = is_muted;
-  auto event_args = audio::OnMuteChanged::Create(raw_event);
+  auto event_args =
+      base::MakeRefCounted<EventArgs>(audio::OnMuteChanged::Create(raw_event));
   auto event = std::make_unique<Event>(events::AUDIO_ON_MUTE_CHANGED,
                                        audio::OnMuteChanged::kEventName,
                                        std::move(event_args));
@@ -132,169 +100,156 @@ void AudioAPI::OnMuteChanged(bool is_input, bool is_muted) {
 
 void AudioAPI::OnDevicesChanged(const DeviceInfoList& devices) {
   EventRouter* event_router = EventRouter::Get(browser_context_);
-  if (!event_router)
+  if (!event_router) {
     return;
+  }
 
-  auto args = audio::OnDeviceListChanged::Create(devices);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      audio::OnDeviceListChanged::Create(devices));
   auto event = std::make_unique<Event>(events::AUDIO_ON_DEVICES_CHANGED,
                                        audio::OnDeviceListChanged::kEventName,
-                                       std::move(args));
+                                       std::move(event_args));
   event_router->BroadcastEvent(std::move(event));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ExtensionFunction::ResponseAction AudioGetInfoFunction::Run() {
-  if (!CanUseDeprecatedAudioApi(extension())) {
-    return RespondNow(
-        Error("audio.getInfo is deprecated, use audio.getDevices instead."));
-  }
+ExtensionFunction::ResponseAction AudioGetDevicesFunction::Run() {
+  std::optional<audio::GetDevices::Params> params =
+      audio::GetDevices::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   AudioService* service =
       AudioAPI::GetFactoryInstance()->Get(browser_context())->GetService();
   DCHECK(service);
-  OutputInfo output_info;
-  InputInfo input_info;
-  if (!service->GetInfo(&output_info, &input_info)) {
-    return RespondNow(
-        Error("Error occurred when querying audio device information."));
-  }
 
-  return RespondNow(
-      ArgumentList(audio::GetInfo::Results::Create(output_info, input_info)));
+  service->GetDevices(
+      base::OptionalToPtr(params->filter),
+      base::BindOnce(&AudioGetDevicesFunction::OnResponse, this));
+  return RespondLater();
 }
 
-///////////////////////////////////////////////////////////////////////////////
-
-ExtensionFunction::ResponseAction AudioGetDevicesFunction::Run() {
-  std::unique_ptr<audio::GetDevices::Params> params(
-      audio::GetDevices::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
-
-  AudioService* service =
-      AudioAPI::GetFactoryInstance()->Get(browser_context())->GetService();
-  DCHECK(service);
-
-  std::vector<api::audio::AudioDeviceInfo> devices;
-  if (!service->GetDevices(params->filter.get(), &devices)) {
-    return RespondNow(
-        Error("Error occurred when querying audio device information."));
+void AudioGetDevicesFunction::OnResponse(
+    bool success,
+    std::vector<api::audio::AudioDeviceInfo> devices) {
+  const char* const kGetDevicesErrorMsg =
+      "Error occurred when querying audio device information.";
+  if (success) {
+    Respond(ArgumentList(audio::GetDevices::Results::Create(devices)));
+  } else {
+    Respond(Error(kGetDevicesErrorMsg));
   }
-
-  return RespondNow(ArgumentList(audio::GetDevices::Results::Create(devices)));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 ExtensionFunction::ResponseAction AudioSetActiveDevicesFunction::Run() {
-  std::unique_ptr<audio::SetActiveDevices::Params> params(
-      audio::SetActiveDevices::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<audio::SetActiveDevices::Params> params =
+      audio::SetActiveDevices::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   AudioService* service =
       AudioAPI::GetFactoryInstance()->Get(browser_context())->GetService();
   DCHECK(service);
 
-  if (params->ids.as_device_id_lists) {
-    if (!service->SetActiveDeviceLists(
-            params->ids.as_device_id_lists->input,
-            params->ids.as_device_id_lists->output)) {
-      return RespondNow(Error("Failed to set active devices."));
-    }
-  } else if (params->ids.as_strings) {
-    if (!CanUseDeprecatedAudioApi(extension())) {
-      return RespondNow(
-          Error("String list |ids| is deprecated, use DeviceIdLists type."));
-    }
-    service->SetActiveDevices(*params->ids.as_strings);
+  service->SetActiveDeviceLists(
+      base::OptionalToPtr(params->ids.input),
+      base::OptionalToPtr(params->ids.output),
+      base::BindOnce(&AudioSetActiveDevicesFunction::OnResponse, this));
+  return RespondLater();
+}
+
+void AudioSetActiveDevicesFunction::OnResponse(bool success) {
+  const char* const kSetActiveDevicesErrorMsg = "Failed to set active devices.";
+  if (success) {
+    Respond(NoArguments());
+  } else {
+    Respond(Error(kSetActiveDevicesErrorMsg));
   }
-  return RespondNow(NoArguments());
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 ExtensionFunction::ResponseAction AudioSetPropertiesFunction::Run() {
-  std::unique_ptr<audio::SetProperties::Params> params(
-      audio::SetProperties::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<audio::SetProperties::Params> params =
+      audio::SetProperties::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   AudioService* service =
       AudioAPI::GetFactoryInstance()->Get(browser_context())->GetService();
   DCHECK(service);
 
-  if (!CanUseDeprecatedAudioApi(extension())) {
-    if (params->properties.volume)
-      return RespondNow(Error("|volume| property is deprecated, use |level|."));
-
-    if (params->properties.gain)
-      return RespondNow(Error("|gain| property is deprecated, use |level|."));
-
-    if (params->properties.is_muted) {
-      return RespondNow(
-          Error("|isMuted| property is deprecated, use |audio.setMute|."));
-    }
-  }
-
   bool level_set = !!params->properties.level;
   int level_value = level_set ? *params->properties.level : -1;
 
-  int volume_value = params->properties.volume.get() ?
-      *params->properties.volume : -1;
-
-  int gain_value = params->properties.gain.get() ?
-      *params->properties.gain : -1;
-
-  // |volume_value| and |gain_value| are deprecated in favor of |level_value|;
-  // they are kept around only to ensure backward-compatibility and should be
-  // ignored if |level_value| is set.
-  if (!service->SetDeviceSoundLevel(params->id,
-                                    level_set ? level_value : volume_value,
-                                    level_set ? level_value : gain_value))
-    return RespondNow(Error("Could not set volume/gain properties"));
-
-  if (params->properties.is_muted.get() &&
-      !service->SetMuteForDevice(params->id, *params->properties.is_muted)) {
-    return RespondNow(Error("Could not set mute property."));
+  if (level_set) {
+    service->SetDeviceSoundLevel(
+        params->id, level_value,
+        base::BindOnce(&AudioSetPropertiesFunction::OnResponse, this));
+    return RespondLater();
   }
+  return RespondNow(Error(kLevelPropErrorMsg));
+}
 
-  return RespondNow(NoArguments());
+void AudioSetPropertiesFunction::OnResponse(bool success) {
+  if (success) {
+    Respond(NoArguments());
+  } else {
+    Respond(Error(kLevelPropErrorMsg));
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 ExtensionFunction::ResponseAction AudioSetMuteFunction::Run() {
-  std::unique_ptr<audio::SetMute::Params> params(
-      audio::SetMute::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<audio::SetMute::Params> params =
+      audio::SetMute::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   AudioService* service =
       AudioAPI::GetFactoryInstance()->Get(browser_context())->GetService();
   DCHECK(service);
 
-  if (!service->SetMute(params->stream_type == audio::STREAM_TYPE_INPUT,
-                        params->is_muted)) {
-    return RespondNow(Error("Could not set mute state."));
+  const bool is_input = (params->stream_type == audio::StreamType::kInput);
+
+  service->SetMute(is_input, params->is_muted,
+                   base::BindOnce(&AudioSetMuteFunction::OnResponse, this));
+  return RespondLater();
+}
+
+void AudioSetMuteFunction::OnResponse(bool success) {
+  const char* const kSetMuteErrorMsg = "Could not set mute state.";
+  if (success) {
+    Respond(NoArguments());
+  } else {
+    Respond(Error(kSetMuteErrorMsg));
   }
-  return RespondNow(NoArguments());
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 ExtensionFunction::ResponseAction AudioGetMuteFunction::Run() {
-  std::unique_ptr<audio::GetMute::Params> params(
-      audio::GetMute::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<audio::GetMute::Params> params =
+      audio::GetMute::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   AudioService* service =
       AudioAPI::GetFactoryInstance()->Get(browser_context())->GetService();
   DCHECK(service);
+  const bool is_input = (params->stream_type == audio::StreamType::kInput);
 
-  bool value = false;
-  if (!service->GetMute(params->stream_type == audio::STREAM_TYPE_INPUT,
-                        &value)) {
-    return RespondNow(Error("Could not get mute state."));
+  service->GetMute(is_input,
+                   base::BindOnce(&AudioGetMuteFunction::OnResponse, this));
+  return RespondLater();
+}
+
+void AudioGetMuteFunction::OnResponse(bool success, bool is_muted) {
+  const char* const kGetMuteErrorMsg = "Could not get mute state.";
+  if (success) {
+    Respond(ArgumentList(audio::GetMute::Results::Create(is_muted)));
+  } else {
+    Respond(Error(kGetMuteErrorMsg));
   }
-  return RespondNow(ArgumentList(audio::GetMute::Results::Create(value)));
 }
 
 }  // namespace extensions

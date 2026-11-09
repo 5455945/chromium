@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/events_export.h"
 #include "ui/events/gestures/gesture_types.h"
@@ -25,6 +24,10 @@ class EVENTS_EXPORT GestureRecognizer {
   using Gestures = std::vector<std::unique_ptr<GestureEvent>>;
 
   GestureRecognizer();
+
+  GestureRecognizer(const GestureRecognizer&) = delete;
+  GestureRecognizer& operator=(const GestureRecognizer&) = delete;
+
   virtual ~GestureRecognizer();
 
   // Invoked before event dispatch. If the event is invalid given the current
@@ -73,19 +76,6 @@ class EVENTS_EXPORT GestureRecognizer {
       GestureConsumer* new_consumer,
       TransferTouchesBehavior transfer_touches_behavior) = 0;
 
-  // Extracts the consumer's current pointer state as "DOWN" TouchEvents. Each
-  // TouchEvent corresponds to an active pointer.
-  virtual std::vector<std::unique_ptr<TouchEvent>> ExtractTouches(
-      GestureConsumer* consumer) = 0;
-
-  // Used to transfer a consumer's pointer state to another consumer
-  // (|consumer|). The touch events are extracted from the old consumer using
-  // ExtractTouches. These events are then re-dispatched to |consumer|, which
-  // also results in gestures restarting in the new consumer.
-  virtual void TransferTouches(
-      GestureConsumer* consumer,
-      const std::vector<std::unique_ptr<ui::TouchEvent>>& touch_events) = 0;
-
   // If a gesture is underway for |consumer| |point| is set to the last touch
   // point and true is returned. If no touch events have been processed for
   // |consumer| false is returned and |point| is untouched.
@@ -110,12 +100,9 @@ class EVENTS_EXPORT GestureRecognizer {
   // Returns whether `consumer` has active touch or not.
   virtual bool DoesConsumerHaveActiveTouch(GestureConsumer* consumer) const = 0;
 
-  // Synthesizes gesture end events (including ET_GESTURE_END and
-  // ET_GESTURE_SCROLL_END) and send to `consumer`.
+  // Synthesizes gesture end events (including EventType::kGestureEnd and
+  // EventType::kGestureScrollEnd) and send to `consumer`.
   virtual void SendSynthesizedEndEvents(GestureConsumer* consumer) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(GestureRecognizer);
 };
 
 }  // namespace ui

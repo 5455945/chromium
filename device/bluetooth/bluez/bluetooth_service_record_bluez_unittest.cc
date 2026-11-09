@@ -1,17 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/bluetooth/bluez/bluetooth_service_record_bluez.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/bluez/bluetooth_adapter_bluez.h"
 #include "device/bluetooth/bluez/bluetooth_device_bluez.h"
@@ -39,6 +42,11 @@ class BluetoothServiceRecordBlueZTest : public device::BluetoothTestBlueZ {
         success_callbacks_(0),
         error_callbacks_(0),
         last_seen_handle_(0) {}
+
+  BluetoothServiceRecordBlueZTest(const BluetoothServiceRecordBlueZTest&) =
+      delete;
+  BluetoothServiceRecordBlueZTest& operator=(
+      const BluetoothServiceRecordBlueZTest&) = delete;
 
   void SetUp() override {
     BluetoothTestBlueZ::SetUp();
@@ -110,10 +118,9 @@ class BluetoothServiceRecordBlueZTest : public device::BluetoothTestBlueZ {
 
     BluetoothServiceAttributeValueBlueZ service_class_list =
         records_[0].GetAttributeValue(ids0[1]);
-    std::string str_value;
-    EXPECT_TRUE(
-        service_class_list.sequence()[0].value().GetAsString(&str_value));
-    EXPECT_EQ("1802", str_value);
+    const base::Value& value = service_class_list.sequence()[0].value();
+    EXPECT_TRUE(value.is_string());
+    EXPECT_EQ("1802", value.GetString());
 
     std::vector<uint16_t> ids1 = records_[1].GetAttributeIds();
     EXPECT_EQ(1u, ids1.size());
@@ -128,14 +135,14 @@ class BluetoothServiceRecordBlueZTest : public device::BluetoothTestBlueZ {
  protected:
   BluetoothServiceRecordBlueZ CreateaServiceRecord(const std::string uuid) {
     BluetoothServiceRecordBlueZ record;
-    record.AddRecordEntry(kServiceUuidAttributeId,
-                          BluetoothServiceAttributeValueBlueZ(
-                              BluetoothServiceAttributeValueBlueZ::UUID, 16,
-                              std::make_unique<base::Value>(uuid)));
+    record.AddRecordEntry(
+        kServiceUuidAttributeId,
+        BluetoothServiceAttributeValueBlueZ(
+            BluetoothServiceAttributeValueBlueZ::UUID, 16, base::Value(uuid)));
     return record;
   }
 
-  BluetoothAdapterBlueZ* adapter_bluez_;
+  raw_ptr<BluetoothAdapterBlueZ, DanglingUntriaged> adapter_bluez_;
   size_t success_callbacks_;
   size_t error_callbacks_;
 
@@ -159,8 +166,6 @@ class BluetoothServiceRecordBlueZTest : public device::BluetoothTestBlueZ {
 
   uint32_t last_seen_handle_;
   std::vector<BluetoothServiceRecordBlueZ> records_;
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothServiceRecordBlueZTest);
 };
 
 TEST_F(BluetoothServiceRecordBlueZTest, CreateAndRemove) {
@@ -185,7 +190,16 @@ TEST_F(BluetoothServiceRecordBlueZTest, GetServiceRecords) {
       static_cast<BluetoothDeviceBlueZ*>(adapter_->GetDevice(
           bluez::FakeBluetoothDeviceClient::kPairedDeviceAddress));
   GetServiceRecords(device, false);
-  device->Connect(nullptr, GetConnectCallback(Call::EXPECTED, Result::SUCCESS));
+  base::RunLoop run_loop;
+  device->Connect(
+      nullptr,
+      base::BindLambdaForTesting(
+          [&run_loop](std::optional<device::BluetoothDevice::ConnectErrorCode>
+                          error_code) {
+            EXPECT_FALSE(error_code.has_value());
+            run_loop.Quit();
+          }));
+  run_loop.Run();
   GetServiceRecords(device, true);
   VerifyRecords();
 }

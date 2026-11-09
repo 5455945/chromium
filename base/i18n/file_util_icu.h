@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -48,6 +48,11 @@ BASE_I18N_EXPORT bool IsFilenameLegal(const std::u16string& file_name);
 BASE_I18N_EXPORT void ReplaceIllegalCharactersInPath(
     FilePath::StringType* file_name,
     char replace_char);
+
+// Same as ReplaceIllegalCharactersInPath(), but always operates on a UTF-16
+// string.
+BASE_I18N_EXPORT void ReplaceIllegalCharacters(std::u16string* str,
+                                               char replace_char);
 
 // Compares two filenames using the current locale information. This can be
 // used to sort directory listings. It behaves like "operator<" for use in

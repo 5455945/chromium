@@ -1,17 +1,18 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/autofill/payments/offer_notification_bubble_views_test_base.h"
-
-#include "chrome/browser/ui/browser.h"
+#include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
+#include "chrome/browser/ui/autofill/payments/payments_ui_constants.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "chrome/browser/ui/views/autofill/payments/offer_notification_bubble_views_test_base.h"
+#include "components/autofill/core/browser/data_manager/payments/payments_data_manager_test_api.h"
+#include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/window_open_disposition.h"
-#include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
 namespace autofill {
@@ -28,47 +29,77 @@ class OfferNotificationBubbleViewsBrowserTest
 };
 
 // Tests that the offer notification bubble will not be shown if the offer data
-// is invalid (does not have a linked card).
+// is invalid (does not have a valid offer details url).
 IN_PROC_BROWSER_TEST_F(OfferNotificationBubbleViewsBrowserTest,
                        InvalidOfferData) {
-  auto offer_data = CreateCardLinkedOfferDataWithDomains(
-      {GURL("https://www.example.com/"), GURL("https://www.test.com/")});
-  offer_data->eligible_instrument_id.clear();
-  personal_data()->AddOfferDataForTest(std::move(offer_data));
+  auto offer_data = CreateWalletDirectOfferDataWithDomains(
+      {GetUrl("www.example.com", "/"), GetUrl("www.test.com", "/")});
+  offer_data->SetOfferDetailsUrl(GURL());
+  test_api(personal_data()->payments_data_manager())
+      .AddOfferData(std::move(offer_data));
   personal_data()->NotifyPersonalDataObserver();
 
   // Neither icon nor bubble should be visible.
-  NavigateTo("https://www.example.com/first/");
+  NavigateToAndWaitForForm(GetUrl("www.example.com", "/first"));
   EXPECT_FALSE(IsIconVisible());
   EXPECT_FALSE(GetOfferNotificationBubbleViews());
 }
 
-IN_PROC_BROWSER_TEST_F(OfferNotificationBubbleViewsBrowserTest, OpenNewTab) {
-  SetUpCardLinkedOfferDataWithDomains(
-      {GURL("https://www.example.com/"), GURL("https://www.test.com/")});
+// Tests that the offer notification bubble will not be shown if bubble has been
+// shown for kAutofillBubbleSurviveNavigationTime (5 seconds) and the user has
+// opened another tab on the same website.
+// TODO(crbug.com/40205397): Disabled due to flakiness with linux-wayland-rel.
+IN_PROC_BROWSER_TEST_F(OfferNotificationBubbleViewsBrowserTest,
+                       DISABLED_BubbleNotShowingOnDuplicateTab) {
+  SetUpWalletDirectOfferDataWithDomains({GetUrl("www.example.com", "/")});
 
-  NavigateTo(chrome::kChromeUINewTabURL);
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL("https://www.example.com/"),
-      WindowOpenDisposition::NEW_BACKGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  TestAutofillClockDeprecated test_clock;
+  test_clock.SetNow(base::Time::Now());
+  NavigateToAndWaitForForm(GetUrl("www.example.com", "/first"));
+  test_clock.Advance(kAutofillBubbleSurviveNavigationTime - base::Seconds(1));
+  NavigateToAndWaitForForm(GetUrl("www.example.com", "/second"));
+  // Ensure the bubble is still there if
+  // kOfferNotificationBubbleSurviveNavigationTime hasn't been reached yet.
+  EXPECT_TRUE(IsIconVisible());
+  EXPECT_TRUE(GetOfferNotificationBubbleViews());
 
-  browser()->tab_strip_model()->ActivateTabAt(1);
+  test_clock.Advance(base::Seconds(2));
+  NavigateToAndWaitForForm(GetUrl("www.example.com", "/second"));
+  // As kAutofillBubbleSurviveNavigationTime has been reached, the bubble should
+  // no longer be showing.
   EXPECT_TRUE(IsIconVisible());
   EXPECT_FALSE(GetOfferNotificationBubbleViews());
 }
 
-// Tests that the offer notification bubble will not be shown for a promo code
-// offer.
-IN_PROC_BROWSER_TEST_F(OfferNotificationBubbleViewsBrowserTest,
-                       PromoCodeOffer) {
-  auto offer_data = CreatePromoCodeOfferDataWithDomains(
-      {GURL("https://www.example.com/"), GURL("https://www.test.com/")});
-  personal_data()->AddOfferDataForTest(std::move(offer_data));
+class OfferNotificationBubbleViewsBubbleDisabledBrowserTest
+    : public OfferNotificationBubbleViewsTestBase {
+ public:
+  OfferNotificationBubbleViewsBubbleDisabledBrowserTest() {
+    feature_list_.InitAndDisableFeature(
+        features::kAutofillEnableWalletDirectOffersNotificationBubble);
+  }
+  ~OfferNotificationBubbleViewsBubbleDisabledBrowserTest() override = default;
+  OfferNotificationBubbleViewsBubbleDisabledBrowserTest(
+      const OfferNotificationBubbleViewsBubbleDisabledBrowserTest&) = delete;
+  OfferNotificationBubbleViewsBubbleDisabledBrowserTest& operator=(
+      const OfferNotificationBubbleViewsBubbleDisabledBrowserTest&) = delete;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Tests that the offer notification bubble will not be shown if the wallet
+// direct offers notification bubble feature is disabled.
+IN_PROC_BROWSER_TEST_F(OfferNotificationBubbleViewsBubbleDisabledBrowserTest,
+                       NotificationBubbleDisabled) {
+  auto offer_data = CreateWalletDirectOfferDataWithDomains(
+      {GetUrl("www.example.com", "/"), GetUrl("www.test.com", "/")});
+  test_api(personal_data()->payments_data_manager())
+      .AddOfferData(std::move(offer_data));
   personal_data()->NotifyPersonalDataObserver();
 
   // Neither icon nor bubble should be visible.
-  NavigateTo("https://www.example.com/first/");
+  NavigateToAndWaitForForm(GetUrl("www.example.com", "/first"));
   EXPECT_FALSE(IsIconVisible());
   EXPECT_FALSE(GetOfferNotificationBubbleViews());
 }

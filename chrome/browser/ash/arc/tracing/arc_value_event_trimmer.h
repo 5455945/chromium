@@ -1,10 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_ARC_TRACING_ARC_VALUE_EVENT_TRIMMER_H_
 #define CHROME_BROWSER_ASH_ARC_TRACING_ARC_VALUE_EVENT_TRIMMER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/arc/tracing/arc_value_event.h"
 
 namespace arc {
@@ -17,6 +18,10 @@ namespace arc {
 class ArcValueEventTrimmer {
  public:
   ArcValueEventTrimmer(ValueEvents* events, ArcValueEvent::Type type);
+
+  ArcValueEventTrimmer(const ArcValueEventTrimmer&) = delete;
+  ArcValueEventTrimmer& operator=(const ArcValueEventTrimmer&) = delete;
+
   ~ArcValueEventTrimmer();
 
   // May be add the next event, in case it is not trimmed out.
@@ -29,7 +34,7 @@ class ArcValueEventTrimmer {
   // In case value has changed, insert last trimmed value.
   void Flush();
 
-  ValueEvents* const events_;
+  const raw_ptr<ValueEvents> events_;
   const ArcValueEvent::Type type_;
   // Indicate if this is first event that would never be trimmed.
   bool first_event_ = true;
@@ -39,8 +44,6 @@ class ArcValueEventTrimmer {
   int64_t last_trimmed_timestamp_;
   // Value of the last event.
   int last_value_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcValueEventTrimmer);
 };
 
 }  // namespace arc

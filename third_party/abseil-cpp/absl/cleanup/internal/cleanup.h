@@ -15,10 +15,13 @@
 #ifndef ABSL_CLEANUP_INTERNAL_CLEANUP_H_
 #define ABSL_CLEANUP_INTERNAL_CLEANUP_H_
 
+#include <new>
 #include <type_traits>
 #include <utility>
 
-#include "absl/base/internal/invoke.h"
+#include "absl/base/config.h"
+#include "absl/base/internal/hardening.h"
+#include "absl/base/macros.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/utility/utility.h"
 
@@ -31,13 +34,12 @@ struct Tag {};
 
 template <typename Arg, typename... Args>
 constexpr bool WasDeduced() {
-  return (std::is_same<cleanup_internal::Tag, Arg>::value) &&
-         (sizeof...(Args) == 0);
+  return (std::is_same_v<cleanup_internal::Tag, Arg>) && (sizeof...(Args) == 0);
 }
 
 template <typename Callback>
 constexpr bool ReturnsVoid() {
-  return (std::is_same<base_internal::invoke_result_t<Callback>, void>::value);
+  return (std::is_same_v<std::invoke_result_t<Callback>, void>);
 }
 
 template <typename Callback>
@@ -45,14 +47,22 @@ class Storage {
  public:
   Storage() = delete;
 
-  Storage(Callback callback, bool is_callback_engaged)
-      : callback_(std::move(callback)),
-        is_callback_engaged_(is_callback_engaged) {}
+  explicit Storage(Callback callback) {
+    // Placement-new into a character buffer is used for eager destruction when
+    // the cleanup is invoked or cancelled. To ensure this optimizes well, the
+    // behavior is implemented locally instead of using a std::optional.
+    ::new (GetCallbackBuffer()) Callback(std::move(callback));
+    is_callback_engaged_ = true;
+  }
 
-  Storage(Storage&& other)
-      : callback_(std::move(other.callback_)),
-        is_callback_engaged_(
-            absl::exchange(other.is_callback_engaged_, false)) {}
+  Storage(Storage&& other) {
+    absl::base_internal::HardeningAssert(other.IsCallbackEngaged());
+
+    ::new (GetCallbackBuffer()) Callback(std::move(other.GetCallback()));
+    is_callback_engaged_ = true;
+
+    other.DestroyCallback();
+  }
 
   Storage(const Storage& other) = delete;
 
@@ -60,17 +70,26 @@ class Storage {
 
   Storage& operator=(const Storage& other) = delete;
 
+  void* GetCallbackBuffer() { return static_cast<void*>(callback_buffer_); }
+
+  Callback& GetCallback() {
+    return *reinterpret_cast<Callback*>(GetCallbackBuffer());
+  }
+
   bool IsCallbackEngaged() const { return is_callback_engaged_; }
 
-  void DisengageCallback() { is_callback_engaged_ = false; }
+  void DestroyCallback() {
+    is_callback_engaged_ = false;
+    GetCallback().~Callback();
+  }
 
   void InvokeCallback() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    std::move(callback_)();
+    std::move(GetCallback())();
   }
 
  private:
-  Callback callback_;
   bool is_callback_engaged_;
+  alignas(Callback) unsigned char callback_buffer_[sizeof(Callback)];
 };
 
 }  // namespace cleanup_internal

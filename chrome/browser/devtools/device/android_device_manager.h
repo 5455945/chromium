@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,15 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
-#include "chrome/browser/profiles/profile.h"
+#include "base/types/pass_key.h"
 #include "content/public/browser/browser_thread.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/device/public/mojom/usb_manager.mojom.h"
@@ -39,11 +40,11 @@ class AndroidDeviceManager {
                               const std::string& extensions,
                               const std::string& body_head,
                               std::unique_ptr<net::StreamSocket>)>;
-  using SerialsCallback = base::OnceCallback<void(std::vector<std::string>)>;
 
   struct BrowserInfo {
     BrowserInfo();
     BrowserInfo(const BrowserInfo& other);
+    BrowserInfo& operator=(const BrowserInfo& other);
 
     enum Type {
       kTypeChrome,
@@ -62,12 +63,22 @@ class AndroidDeviceManager {
     DeviceInfo(const DeviceInfo& other);
     ~DeviceInfo();
 
+    enum ConnectedState {
+      kUnknown,
+      kUnauthorized,
+      kOffline,
+      kConnected,
+      kLocked,
+    };
+
     std::string model;
-    bool connected;
+    ConnectedState connected_state = kUnknown;
     gfx::Size screen_size;
     std::vector<BrowserInfo> browser_info;
   };
 
+  using SerialsCallback = base::OnceCallback<void(
+      std::vector<std::pair<std::string, DeviceInfo::ConnectedState>>)>;
   using DeviceInfoCallback = base::OnceCallback<void(const DeviceInfo&)>;
   class Device;
 
@@ -80,8 +91,11 @@ class AndroidDeviceManager {
       virtual void OnSocketClosed() = 0;
 
      protected:
-      virtual ~Delegate() {}
+      virtual ~Delegate() = default;
     };
+
+    AndroidWebSocket(const AndroidWebSocket&) = delete;
+    AndroidWebSocket& operator=(const AndroidWebSocket&) = delete;
 
     ~AndroidWebSocket();
 
@@ -105,15 +119,22 @@ class AndroidDeviceManager {
 
     scoped_refptr<Device> device_;
     std::unique_ptr<WebSocketImpl, base::OnTaskRunnerDeleter> socket_impl_;
-    Delegate* delegate_;
+    raw_ptr<Delegate> delegate_;
     base::WeakPtrFactory<AndroidWebSocket> weak_factory_{this};
-    DISALLOW_COPY_AND_ASSIGN(AndroidWebSocket);
   };
 
   class DeviceProvider;
 
   class Device final : public base::RefCountedDeleteOnSequence<Device> {
    public:
+    Device(base::PassKey<AndroidDeviceManager>,
+           scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
+           scoped_refptr<DeviceProvider> provider,
+           const std::string& serial,
+           const DeviceInfo::ConnectedState connected_state);
+    Device(const Device&) = delete;
+    Device& operator=(const Device&) = delete;
+
     void QueryDeviceInfo(DeviceInfoCallback callback);
 
     void OpenSocket(const std::string& socket_name, SocketCallback callback);
@@ -132,6 +153,7 @@ class AndroidDeviceManager {
         AndroidWebSocket::Delegate* delegate);
 
     const std::string& serial() { return serial_; }
+    DeviceInfo::ConnectedState connected_state() { return connected_state_; }
 
    private:
     friend class base::RefCountedDeleteOnSequence<Device>;
@@ -139,18 +161,14 @@ class AndroidDeviceManager {
     friend class AndroidDeviceManager;
     friend class AndroidWebSocket;
 
-    Device(scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
-           scoped_refptr<DeviceProvider> provider,
-           const std::string& serial);
     ~Device();
 
     scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
     scoped_refptr<DeviceProvider> provider_;
     const std::string serial_;
+    DeviceInfo::ConnectedState connected_state_;
 
     base::WeakPtrFactory<Device> weak_factory_{this};
-
-    DISALLOW_COPY_AND_ASSIGN(Device);
   };
 
   using Devices = std::vector<scoped_refptr<Device>>;
@@ -220,24 +238,24 @@ class AndroidDeviceManager {
 
     scoped_refptr<DeviceProvider> provider;
     std::string serial;
+    DeviceInfo::ConnectedState connected_state;
   };
 
   typedef std::vector<DeviceDescriptor> DeviceDescriptors;
 
  private:
-  class HandlerThread : public base::RefCountedThreadSafe<HandlerThread> {
+  class HandlerThread {
    public:
-    static scoped_refptr<HandlerThread> GetInstance();
+    static HandlerThread* GetInstance();
     scoped_refptr<base::SingleThreadTaskRunner> message_loop();
 
    private:
-    friend class base::RefCountedThreadSafe<HandlerThread>;
-    static HandlerThread* instance_;
+    friend class base::NoDestructor<HandlerThread>;
     static void StopThread(base::Thread* thread);
 
     HandlerThread();
-    virtual ~HandlerThread();
-    base::Thread* thread_;
+    ~HandlerThread();
+    raw_ptr<base::Thread> thread_;
   };
 
   AndroidDeviceManager();
@@ -247,7 +265,7 @@ class AndroidDeviceManager {
 
   typedef std::map<std::string, base::WeakPtr<Device> > DeviceWeakMap;
 
-  scoped_refptr<HandlerThread> handler_thread_;
+  raw_ptr<HandlerThread> handler_thread_;
   DeviceProviders providers_;
   DeviceWeakMap devices_;
 

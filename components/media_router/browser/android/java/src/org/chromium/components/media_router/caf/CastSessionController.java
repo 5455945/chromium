@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.media_router.caf;
 
-import androidx.annotation.NonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import androidx.annotation.VisibleForTesting;
 
 import com.google.android.gms.cast.ApplicationMetadata;
@@ -13,6 +14,8 @@ import com.google.android.gms.cast.CastDevice;
 import com.google.android.gms.cast.framework.CastSession;
 
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -20,17 +23,17 @@ import java.util.List;
 import java.util.Set;
 
 /** Wrapper for {@link CastSession} for Casting. */
+@NullMarked
 public class CastSessionController extends BaseSessionController {
     private static final String TAG = "CafSessionCtrl";
 
-    private List<String> mNamespaces = new ArrayList<String>();
+    private final List<String> mNamespaces = new ArrayList<>();
     private CastListener mCastListener;
-    private CafNotificationController mNotificationController;
 
     public CastSessionController(CafBaseMediaRouteProvider provider) {
         super(provider);
         mCastListener = new CastListener();
-        mNotificationController = new CafNotificationController(this);
+        new CafNotificationController(this);
     }
 
     public List<String> getNamespaces() {
@@ -48,6 +51,7 @@ public class CastSessionController extends BaseSessionController {
     @Override
     public void attachToCastSession(CastSession session) {
         super.attachToCastSession(session);
+        assumeNonNull(getSession());
         getSession().addCastListener(mCastListener);
         updateNamespaces();
     }
@@ -67,11 +71,6 @@ public class CastSessionController extends BaseSessionController {
         super.onSessionEnded();
     }
 
-    @Override
-    public BaseNotificationController getNotificationController() {
-        return mNotificationController;
-    }
-
     private class CastListener extends Cast.Listener {
         @Override
         public void onApplicationStatusChanged() {
@@ -79,7 +78,7 @@ public class CastSessionController extends BaseSessionController {
         }
 
         @Override
-        public void onApplicationMetadataChanged(ApplicationMetadata metadata) {
+        public void onApplicationMetadataChanged(@Nullable ApplicationMetadata metadata) {
             CastSessionController.this.onApplicationStatusChanged();
         }
 
@@ -93,13 +92,15 @@ public class CastSessionController extends BaseSessionController {
     private void onApplicationStatusChanged() {
         updateNamespaces();
 
-        getMessageHandler().broadcastClientMessage(
-                "update_session", getMessageHandler().buildSessionMessage());
+        getMessageHandler()
+                .broadcastClientMessage(
+                        "update_session", getMessageHandler().buildSessionMessage());
     }
 
     @VisibleForTesting
     void updateNamespaces() {
         if (!isConnected()) return;
+        assumeNonNull(getSession());
 
         if (getSession().getApplicationMetadata() == null
                 || getSession().getApplicationMetadata().getSupportedNamespaces() == null) {
@@ -108,7 +109,7 @@ public class CastSessionController extends BaseSessionController {
 
         Set<String> namespacesToAdd =
                 new HashSet<>(getSession().getApplicationMetadata().getSupportedNamespaces());
-        Set<String> namespacesToRemove = new HashSet<String>(mNamespaces);
+        Set<String> namespacesToRemove = new HashSet<>(mNamespaces);
 
         namespacesToRemove.removeAll(namespacesToAdd);
         namespacesToAdd.removeAll(mNamespaces);
@@ -123,7 +124,8 @@ public class CastSessionController extends BaseSessionController {
         if (!isConnected()) return;
 
         try {
-            getSession().setMessageReceivedCallbacks(namespace, this::onMessageReceived);
+            assumeNonNull(getSession())
+                    .setMessageReceivedCallbacks(namespace, this::onMessageReceived);
             mNamespaces.add(namespace);
         } catch (Exception e) {
             Log.e(TAG, "Failed to register namespace listener for %s", namespace, e);
@@ -136,7 +138,7 @@ public class CastSessionController extends BaseSessionController {
         if (!isConnected()) return;
 
         try {
-            getSession().removeMessageReceivedCallbacks(namespace);
+            assumeNonNull(getSession()).removeMessageReceivedCallbacks(namespace);
             mNamespaces.remove(namespace);
         } catch (Exception e) {
             Log.e(TAG, "Failed to remove the namespace listener for %s", namespace, e);
@@ -149,7 +151,6 @@ public class CastSessionController extends BaseSessionController {
         getMessageHandler().onMessageReceived(namespace, message);
     }
 
-    @NonNull
     private CafMessageHandler getMessageHandler() {
         return ((CafMediaRouteProvider) getProvider()).getMessageHandler();
     }

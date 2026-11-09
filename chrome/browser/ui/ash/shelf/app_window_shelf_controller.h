@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <string>
 
 #include "ash/public/cpp/shelf_model_observer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/wm/public/activation_change_observer.h"
 
 class AppWindowShelfItemController;
@@ -26,6 +26,9 @@ class ActivationClient;
 class AppWindowShelfController : public wm::ActivationChangeObserver,
                                  public ash::ShelfModelObserver {
  public:
+  AppWindowShelfController(const AppWindowShelfController&) = delete;
+  AppWindowShelfController& operator=(const AppWindowShelfController&) = delete;
+
   ~AppWindowShelfController() override;
 
   // Called by ChromeShelfController when the active user changed and the
@@ -55,15 +58,13 @@ class AppWindowShelfController : public wm::ActivationChangeObserver,
 
  private:
   // Unowned pointers.
-  ChromeShelfController* owner_;
-  wm::ActivationClient* activation_client_ = nullptr;
+  raw_ptr<ChromeShelfController> owner_;
+  raw_ptr<wm::ActivationClient> activation_client_ = nullptr;
 
   // ash::ShelfModelObserver:
   void ShelfItemDelegateChanged(const ash::ShelfID& id,
                                 ash::ShelfItemDelegate* old_delegate,
                                 ash::ShelfItemDelegate* delegate) override;
-
-  DISALLOW_COPY_AND_ASSIGN(AppWindowShelfController);
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_APP_WINDOW_SHELF_CONTROLLER_H_

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <memory>
 
 #include "ash/ash_export.h"
+#include "ash/public/cpp/holding_space/holding_space_constants.h"
 #include "ash/public/cpp/holding_space/holding_space_model.h"
 #include "ash/public/cpp/holding_space/holding_space_model_observer.h"
 #include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/metadata/view_factory.h"
@@ -33,9 +35,9 @@ class HoldingSpaceViewDelegate;
 // animated out.
 class ASH_EXPORT HoldingSpaceItemView : public views::View,
                                         public HoldingSpaceModelObserver {
- public:
-  METADATA_HEADER(HoldingSpaceItemView);
+  METADATA_HEADER(HoldingSpaceItemView, views::View)
 
+ public:
   HoldingSpaceItemView(HoldingSpaceViewDelegate*, const HoldingSpaceItem*);
   HoldingSpaceItemView(const HoldingSpaceItemView&) = delete;
   HoldingSpaceItemView& operator=(const HoldingSpaceItemView&) = delete;
@@ -66,7 +68,9 @@ class ASH_EXPORT HoldingSpaceItemView : public views::View,
   void OnThemeChanged() override;
 
   // HoldingSpaceModelObserver:
-  void OnHoldingSpaceItemUpdated(const HoldingSpaceItem* item) override;
+  void OnHoldingSpaceItemUpdated(
+      const HoldingSpaceItem* item,
+      const HoldingSpaceItemUpdatedFields& updated_fields) override;
 
   // Starts a drag from this view at the location specified by the given `event`
   // and with the specified `source`. Note that this method copies the logic of
@@ -81,9 +85,11 @@ class ASH_EXPORT HoldingSpaceItemView : public views::View,
   bool selected() const { return selected_; }
 
  protected:
-  views::Builder<views::ImageView> CreateCheckmarkBuilder();
+  views::Builder<views::ImageView> CreateCheckmarkBuilder(
+      int container_size = kHoldingSpaceIconSize);
   views::Builder<views::View> CreatePrimaryActionBuilder(
-      const gfx::Size& min_size);
+      bool apply_accent_colors = false,
+      const gfx::Size& min_size = gfx::Size());
 
   virtual void OnPrimaryActionVisibilityChanged(bool visible) {}
   virtual void OnSelectionUiChanged();
@@ -101,8 +107,8 @@ class ASH_EXPORT HoldingSpaceItemView : public views::View,
   // NOTE: This view may outlive `delegate_` and/or `item_` during destruction
   // since the widget is closed asynchronously and the model is updated prior
   // to animation completion.
-  HoldingSpaceViewDelegate* delegate_;
-  const HoldingSpaceItem* const item_;
+  raw_ptr<HoldingSpaceViewDelegate> delegate_ = nullptr;
+  raw_ptr<const HoldingSpaceItem> item_ = nullptr;
 
   // Cache the id of the associated holding space item so that it can be
   // accessed even after `item_` has been destroyed. Note that `item_` may be
@@ -110,10 +116,10 @@ class ASH_EXPORT HoldingSpaceItemView : public views::View,
   const std::string item_id_;
 
   // Owned by view hierarchy.
-  views::ImageView* checkmark_ = nullptr;
-  views::View* primary_action_container_ = nullptr;
-  views::ImageButton* primary_action_cancel_ = nullptr;
-  views::ToggleImageButton* primary_action_pin_ = nullptr;
+  raw_ptr<views::ImageView> checkmark_ = nullptr;
+  raw_ptr<views::View> primary_action_container_ = nullptr;
+  raw_ptr<views::ImageButton> primary_action_cancel_ = nullptr;
+  raw_ptr<views::ToggleImageButton> primary_action_pin_ = nullptr;
 
   // Owners for the layers used to paint focused and selected states.
   std::unique_ptr<ui::LayerOwner> selected_layer_owner_;
@@ -122,8 +128,11 @@ class ASH_EXPORT HoldingSpaceItemView : public views::View,
   // Whether or not this view is selected.
   bool selected_ = false;
 
+  // Subscription to be notified of `item_` deletion.
+  base::CallbackListSubscription item_deletion_subscription_;
+
   // Subscription to be notified of changes to `delegate_''s selection UI.
-  base::RepeatingClosureList::Subscription selection_ui_changed_subscription_;
+  base::CallbackListSubscription selection_ui_changed_subscription_;
 
   base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
       model_observer_{this};

@@ -1,22 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/strings/sys_string_conversions.h"
-#include "base/strings/utf_string_conversions.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #import "ios/web/public/test/fakes/fake_web_state_delegate.h"
 #import "ios/web/public/test/js_test_util.h"
 #import "ios/web/public/test/navigation_test_util.h"
 #import "ios/web/public/test/web_test_with_web_state.h"
-#include "net/test/embedded_test_server/default_handlers.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/default_handlers.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
 #import "testing/gtest_mac.h"
-#include "url/gurl.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "url/gurl.h"
 
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
@@ -33,7 +29,7 @@ class HttpAuthTest : public WebTestWithWebState {
     ASSERT_TRUE(server_.Start());
   }
   // Waits until WebStateDelegate::OnAuthRequired callback is called.
-  bool WaitForOnAuthRequiredCallback() WARN_UNUSED_RESULT {
+  [[nodiscard]] bool WaitForOnAuthRequiredCallback() {
     delegate_.ClearLastAuthenticationRequest();
     return WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^bool {
       return delegate_.last_authentication_request();
@@ -59,7 +55,7 @@ TEST_F(HttpAuthTest, SuccessfullBasicAuth) {
   EXPECT_NSEQ(@"Realm1", protection_space.realm);
   EXPECT_FALSE(protection_space.receivesCredentialSecurely);
   EXPECT_FALSE([protection_space isProxy]);
-  EXPECT_EQ(url.host(), base::SysNSStringToUTF8(protection_space.host));
+  EXPECT_EQ(url.GetHost(), base::SysNSStringToUTF8(protection_space.host));
   EXPECT_EQ(server_.port(),
             base::checked_cast<uint16_t>(protection_space.port));
   EXPECT_FALSE(protection_space.proxyType);
@@ -71,7 +67,7 @@ TEST_F(HttpAuthTest, SuccessfullBasicAuth) {
   ASSERT_TRUE(web_state()->IsLoading());
   auth_request = delegate_.last_authentication_request();
   ASSERT_TRUE(auth_request);
-  std::move(auth_request->auth_callback).Run(@"me", @"goodpass");
+  std::move(auth_request->http_auth_callback).Run(@"me", @"goodpass");
   ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^{
     return web_state()->GetTitle() == u"me/goodpass";
   }));
@@ -86,7 +82,7 @@ TEST_F(HttpAuthTest, UnsucessfulBasicAuth) {
 
   // Make sure that incorrect credentials request authentication again.
   auto* auth_request = delegate_.last_authentication_request();
-  std::move(auth_request->auth_callback).Run(@"me", @"badpass");
+  std::move(auth_request->http_auth_callback).Run(@"me", @"badpass");
   ASSERT_TRUE(WaitForOnAuthRequiredCallback());
 
   // Verify that callback receives correct WebState.
@@ -98,7 +94,7 @@ TEST_F(HttpAuthTest, UnsucessfulBasicAuth) {
   EXPECT_NSEQ(@"Realm2", protection_space.realm);
   EXPECT_FALSE(protection_space.receivesCredentialSecurely);
   EXPECT_FALSE([protection_space isProxy]);
-  EXPECT_EQ(url.host(), base::SysNSStringToUTF8(protection_space.host));
+  EXPECT_EQ(url.GetHost(), base::SysNSStringToUTF8(protection_space.host));
   EXPECT_EQ(server_.port(),
             base::checked_cast<uint16_t>(protection_space.port));
   EXPECT_FALSE(protection_space.proxyType);
@@ -107,11 +103,11 @@ TEST_F(HttpAuthTest, UnsucessfulBasicAuth) {
               protection_space.authenticationMethod);
 
   // Cancel authentication and make sure that authentication is denied.
-  std::move(auth_request->auth_callback)
+  std::move(auth_request->http_auth_callback)
       .Run(/*username=*/nil, /*password=*/nil);
   ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^{
     return web_state()->GetTitle() == u"Denied: Missing Authorization Header";
   }));
 }
 
-}  // web
+}  // namespace web

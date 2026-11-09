@@ -1,19 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_BROWSER_INTERFACE_BINDERS_H_
 #define CONTENT_BROWSER_BROWSER_INTERFACE_BINDERS_H_
 
-#include "content/common/content_export.h"
-#include "mojo/public/cpp/bindings/binder_map.h"
-#include "services/device/public/mojom/battery_monitor.mojom-forward.h"
-#include "services/device/public/mojom/vibration_manager.mojom-forward.h"
-#include "url/origin.h"
+namespace mojo {
+class BinderMap;
+template <typename>
+class BinderMapWithContext;
+}  // namespace mojo
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace content {
 
-class AgentSchedulingGroupHost;
 class RenderFrameHost;
 class RenderFrameHostImpl;
 class DedicatedWorkerHost;
@@ -61,27 +64,7 @@ void PopulateBinderMapWithContext(
     mojo::BinderMapWithContext<const ServiceWorkerVersionBaseInfo&>* map);
 ServiceWorkerVersionInfo GetContextForHost(ServiceWorkerHost* host);
 
-// Registers the handlers for interfaces requested by `AgentSchedulingGroup`s.
-void PopulateBinderMap(AgentSchedulingGroupHost* host, mojo::BinderMap* map);
-void PopulateBinderMapWithContext(
-    AgentSchedulingGroupHost* host,
-    mojo::BinderMapWithContext<AgentSchedulingGroupHost*>* map);
-AgentSchedulingGroupHost* GetContextForHost(AgentSchedulingGroupHost* host);
-
 }  // namespace internal
-
-// Allows tests to override how frame hosts bind BatteryMonitor receivers.
-using BatteryMonitorBinder = base::RepeatingCallback<void(
-    mojo::PendingReceiver<device::mojom::BatteryMonitor>)>;
-CONTENT_EXPORT void OverrideBatteryMonitorBinderForTesting(
-    BatteryMonitorBinder binder);
-
-// Allows tests to override how frame hosts bind VibrationManager receivers.
-using VibrationManagerBinder = base::RepeatingCallback<void(
-    mojo::PendingReceiver<device::mojom::VibrationManager>)>;
-CONTENT_EXPORT void OverrideVibrationManagerBinderForTesting(
-    VibrationManagerBinder binder);
-
 }  // namespace content
 
 #endif  // CONTENT_BROWSER_BROWSER_INTERFACE_BINDERS_H_

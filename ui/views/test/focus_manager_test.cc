@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/widget/widget.h"
 
@@ -25,27 +26,35 @@ FocusManager* FocusManagerTest::GetFocusManager() {
 void FocusManagerTest::SetUp() {
   ViewsTestBase::SetUp();
 
-  Widget* widget = new Widget;
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  widget_ = std::make_unique<Widget>();
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params.delegate = this;
   params.bounds = gfx::Rect(0, 0, 1024, 768);
-  widget->Init(std::move(params));
+  widget_->Init(std::move(params));
 
   InitContentView();
-  widget->Show();
+  widget_->Show();
 }
 
 void FocusManagerTest::TearDown() {
-  if (focus_change_listener_)
+  if (focus_change_listener_) {
     GetFocusManager()->RemoveFocusChangeListener(focus_change_listener_);
+  }
   if (widget_focus_change_listener_) {
-    WidgetFocusManager::GetInstance()->RemoveFocusChangeListener(
+    NativeViewFocusManager::GetInstance()->RemoveFocusChangeListener(
         widget_focus_change_listener_);
   }
   GetWidget()->Close();
+  contents_view_ = nullptr;
 
   // Flush the message loop to make application verifiers happy.
   RunPendingMessages();
+  contents_view_ = nullptr;
+  focus_change_listener_ = nullptr;
+  widget_focus_change_listener_ = nullptr;
+  accessible_panes_.clear();
+  widget_.reset();
   ViewsTestBase::TearDown();
 }
 
@@ -62,8 +71,7 @@ const Widget* FocusManagerTest::GetWidget() const {
 }
 
 void FocusManagerTest::GetAccessiblePanes(std::vector<View*>* panes) {
-  std::copy(accessible_panes_.begin(), accessible_panes_.end(),
-            std::back_inserter(*panes));
+  std::ranges::copy(accessible_panes_, std::back_inserter(*panes));
 }
 
 void FocusManagerTest::InitContentView() {}
@@ -74,14 +82,31 @@ void FocusManagerTest::AddFocusChangeListener(FocusChangeListener* listener) {
   GetFocusManager()->AddFocusChangeListener(listener);
 }
 
-void FocusManagerTest::AddWidgetFocusChangeListener(
-    WidgetFocusChangeListener* listener) {
-  ASSERT_FALSE(widget_focus_change_listener_);
-  widget_focus_change_listener_ = listener;
-  WidgetFocusManager::GetInstance()->AddFocusChangeListener(listener);
+void FocusManagerTest::RemoveFocusChangeListener(
+    FocusChangeListener* listener) {
+  ASSERT_TRUE(focus_change_listener_);
+  ASSERT_EQ(focus_change_listener_, listener);
+  GetFocusManager()->RemoveFocusChangeListener(listener);
+  focus_change_listener_ = nullptr;
 }
 
-void FocusManagerTest::SetAccessiblePanes(const std::vector<View*>& panes) {
+void FocusManagerTest::AddNativeViewFocusChangeListener(
+    NativeViewFocusChangeListener* listener) {
+  ASSERT_FALSE(widget_focus_change_listener_);
+  widget_focus_change_listener_ = listener;
+  NativeViewFocusManager::GetInstance()->AddFocusChangeListener(listener);
+}
+
+void FocusManagerTest::RemoveNativeViewFocusChangeListener(
+    NativeViewFocusChangeListener* listener) {
+  ASSERT_TRUE(widget_focus_change_listener_);
+  ASSERT_EQ(widget_focus_change_listener_, listener);
+  NativeViewFocusManager::GetInstance()->RemoveFocusChangeListener(listener);
+  widget_focus_change_listener_ = nullptr;
+}
+
+void FocusManagerTest::SetAccessiblePanes(
+    const std::vector<raw_ptr<View, VectorExperimental>>& panes) {
   accessible_panes_ = panes;
 }
 
@@ -104,17 +129,17 @@ void TestFocusChangeListener::ClearFocusChanges() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// TestWidgetFocusChangeListener
+// TestNativeViewFocusChangeListener
 
-TestWidgetFocusChangeListener::TestWidgetFocusChangeListener() = default;
+TestNativeViewFocusChangeListener::TestNativeViewFocusChangeListener() = default;
 
-TestWidgetFocusChangeListener::~TestWidgetFocusChangeListener() = default;
+TestNativeViewFocusChangeListener::~TestNativeViewFocusChangeListener() = default;
 
-void TestWidgetFocusChangeListener::ClearFocusChanges() {
+void TestNativeViewFocusChangeListener::ClearFocusChanges() {
   focus_changes_.clear();
 }
 
-void TestWidgetFocusChangeListener::OnNativeFocusChanged(
+void TestNativeViewFocusChangeListener::OnNativeFocusChanged(
     gfx::NativeView focused_now) {
   focus_changes_.push_back(focused_now);
 }

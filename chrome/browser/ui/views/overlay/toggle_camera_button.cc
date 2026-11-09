@@ -1,19 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/overlay/toggle_camera_button.h"
 
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/overlay/constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 
 ToggleCameraButton::ToggleCameraButton(PressedCallback callback)
-    : ImageButton(std::move(callback)) {
-  SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
-  SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
+    : OverlayWindowImageButton(std::move(callback)) {
   UpdateImageAndTooltipText();
 }
 
@@ -23,22 +24,36 @@ void ToggleCameraButton::SetCameraState(bool is_turned_on) {
 }
 
 void ToggleCameraButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  if (size() == previous_bounds.size())
+  if (size() == previous_bounds.size()) {
     return;
+  }
 
   UpdateImageAndTooltipText();
 }
 
 void ToggleCameraButton::UpdateImageAndTooltipText() {
-  if (bounds().IsEmpty())
+  if (bounds().IsEmpty()) {
     return;
+  }
 
-  const auto& icon = is_turned_on_ ? vector_icons::kVideocamIcon
-                                   : vector_icons::kVideocamOffIcon;
+  const auto& icon = is_turned_on_
+                         ? features::IsRoundedIconsEnabled()
+                               ? vector_icons::kVideocamIcon
+                               : vector_icons::kVideocamChromeRefreshOldIcon
+                     : features::IsRoundedIconsEnabled()
+                         ? vector_icons::kVideocamOffIcon
+                         : vector_icons::kVideocamOffChromeRefreshOldIcon;
+
   auto text = is_turned_on_ ? IDS_PICTURE_IN_PICTURE_TURN_OFF_CAMERA_TEXT
                             : IDS_PICTURE_IN_PICTURE_TURN_ON_CAMERA_TEXT;
 
-  SetImage(views::Button::STATE_NORMAL,
-           gfx::CreateVectorIcon(icon, width(), kPipWindowIconColor));
+  const int icon_size = std::max(0, width() - (2 * kPipWindowIconPadding));
+
+  SetImageModel(views::Button::STATE_NORMAL,
+                ui::ImageModel::FromVectorIcon(icon, kColorPipWindowForeground,
+                                               icon_size));
   SetTooltipText(l10n_util::GetStringUTF16(text));
 }
+
+BEGIN_METADATA(ToggleCameraButton)
+END_METADATA

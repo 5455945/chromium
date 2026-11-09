@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,23 @@
 #include "build/build_config.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_manager.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/vector_icon_types.h"
 
-#if !defined(OS_IOS) && !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 #include "ui/gfx/color_palette.h"
-#include "ui/gfx/paint_vector_icon.h"
 #endif
 
 namespace infobars {
 
 const int InfoBarDelegate::kNoIconID = 0;
 
-InfoBarDelegate::~InfoBarDelegate() {
-}
+InfoBarDelegate::~InfoBarDelegate() = default;
 
-InfoBarDelegate::InfoBarAutomationType
-    InfoBarDelegate::GetInfoBarAutomationType() const {
-  return UNKNOWN_INFOBAR;
+InfoBarDelegate::InfobarPriority InfoBarDelegate::GetPriority() const {
+  return InfobarPriority::kDefault;
 }
 
 int InfoBarDelegate::GetIconId() const {
@@ -32,24 +31,24 @@ int InfoBarDelegate::GetIconId() const {
 }
 
 const gfx::VectorIcon& InfoBarDelegate::GetVectorIcon() const {
-  static gfx::VectorIcon empty_icon;
-  return empty_icon;
+  return gfx::VectorIcon::EmptyIcon();
 }
 
-gfx::Image InfoBarDelegate::GetIcon() const {
-#if !defined(OS_IOS) && !defined(OS_ANDROID)
+ui::ImageModel InfoBarDelegate::GetIcon() const {
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
   const gfx::VectorIcon& vector_icon = GetVectorIcon();
   if (!vector_icon.is_empty()) {
-    return gfx::Image(
-        gfx::CreateVectorIcon(vector_icon, 20, gfx::kGoogleBlue500));
+    return ui::ImageModel::FromVectorIcon(vector_icon, ui::kColorInfoBarIcon,
+                                          20);
   }
 #endif
 
   int icon_id = GetIconId();
   return icon_id == kNoIconID
-             ? gfx::Image()
-             : ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-                   icon_id);
+             ? ui::ImageModel()
+             : ui::ImageModel::FromImage(
+                   ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
+                       icon_id));
 }
 
 std::u16string InfoBarDelegate::GetLinkText() const {
@@ -60,28 +59,32 @@ GURL InfoBarDelegate::GetLinkURL() const {
   return GURL();
 }
 
+std::optional<std::u16string> InfoBarDelegate::GetLinkAccessibleText() const {
+  return std::nullopt;
+}
+
 bool InfoBarDelegate::EqualsDelegate(InfoBarDelegate* delegate) const {
   return false;
 }
 
 bool InfoBarDelegate::ShouldExpire(const NavigationDetails& details) const {
   return details.is_navigation_to_different_page &&
-      !details.did_replace_entry &&
-      // This next condition ensures a navigation that passes the above
-      // conditions doesn't dismiss infobars added while that navigation was
-      // already in process.  We carve out an exception for reloads since we
-      // want reloads to dismiss infobars, but they will have unchanged entry
-      // IDs.
-      ((nav_entry_id_ != details.entry_id) || details.is_reload);
+         !details.did_replace_entry &&
+         // This next condition ensures a navigation that passes the above
+         // conditions doesn't dismiss infobars added while that navigation was
+         // already in process.  We carve out an exception for reloads since we
+         // want reloads to dismiss infobars, but they will have unchanged entry
+         // IDs.
+         ((nav_entry_id_ != details.entry_id) || details.is_reload);
 }
 
-bool InfoBarDelegate::LinkClicked(WindowOpenDisposition disposition) {
+bool InfoBarDelegate::LinkClicked(
+    ui::mojom::WindowOpenDisposition disposition) {
   infobar()->owner()->OpenURL(GetLinkURL(), disposition);
   return false;
 }
 
-void InfoBarDelegate::InfoBarDismissed() {
-}
+void InfoBarDelegate::InfoBarDismissed() {}
 
 bool InfoBarDelegate::IsCloseable() const {
   return true;
@@ -91,32 +94,28 @@ bool InfoBarDelegate::ShouldAnimate() const {
   return true;
 }
 
+bool InfoBarDelegate::ShouldHideInFullscreen() const {
+  return false;
+}
+
 ConfirmInfoBarDelegate* InfoBarDelegate::AsConfirmInfoBarDelegate() {
-  return nullptr;
+  return const_cast<ConfirmInfoBarDelegate*>(
+      static_cast<const InfoBarDelegate*>(this)->AsConfirmInfoBarDelegate());
 }
 
-HungRendererInfoBarDelegate* InfoBarDelegate::AsHungRendererInfoBarDelegate() {
-  return nullptr;
-}
-
-blocked_content::PopupBlockedInfoBarDelegate*
-InfoBarDelegate::AsPopupBlockedInfoBarDelegate() {
+const ConfirmInfoBarDelegate* InfoBarDelegate::AsConfirmInfoBarDelegate()
+    const {
   return nullptr;
 }
 
 ThemeInstalledInfoBarDelegate*
-    InfoBarDelegate::AsThemePreviewInfobarDelegate() {
+InfoBarDelegate::AsThemePreviewInfobarDelegate() {
   return nullptr;
 }
 
+#if BUILDFLAG(IS_IOS)
 translate::TranslateInfoBarDelegate*
-    InfoBarDelegate::AsTranslateInfoBarDelegate() {
-  return nullptr;
-}
-
-#if defined(OS_ANDROID)
-offline_pages::OfflinePageInfoBarDelegate*
-InfoBarDelegate::AsOfflinePageInfoBarDelegate() {
+InfoBarDelegate::AsTranslateInfoBarDelegate() {
   return nullptr;
 }
 #endif

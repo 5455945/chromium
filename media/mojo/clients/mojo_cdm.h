@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
@@ -26,7 +27,6 @@
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -48,10 +48,14 @@ class MojoCdm final : public ContentDecryptionModule,
   // All parameters must be non-null.
   MojoCdm(mojo::Remote<mojom::ContentDecryptionModule> remote_cdm,
           media::mojom::CdmContextPtr cdm_context,
+          const CdmConfig& cdm_config,
           const SessionMessageCB& session_message_cb,
           const SessionClosedCB& session_closed_cb,
           const SessionKeysChangeCB& session_keys_change_cb,
           const SessionExpirationUpdateCB& session_expiration_update_cb);
+
+  MojoCdm(const MojoCdm&) = delete;
+  MojoCdm& operator=(const MojoCdm&) = delete;
 
   // ContentDecryptionModule implementation.
   void SetServerCertificate(const std::vector<uint8_t>& certificate,
@@ -79,10 +83,10 @@ class MojoCdm final : public ContentDecryptionModule,
   // All GetDecryptor() calls must be made on the same thread.
   std::unique_ptr<CallbackRegistration> RegisterEventCB(EventCB event_cb) final;
   Decryptor* GetDecryptor() final;
-  absl::optional<base::UnguessableToken> GetCdmId() const final;
-#if defined(OS_WIN)
+  std::optional<base::UnguessableToken> GetCdmId() const final;
+#if BUILDFLAG(IS_WIN)
   bool RequiresMediaFoundationRenderer() final;
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
  private:
   ~MojoCdm() final;
@@ -113,6 +117,9 @@ class MojoCdm final : public ContentDecryptionModule,
                                     mojom::CdmPromiseResultPtr result,
                                     const std::string& session_id);
 
+  // Helper for rejecting promises when connection lost.
+  void RejectPromiseConnectionLost(uint32_t promise_id);
+
   THREAD_CHECKER(thread_checker_);
 
   mojo::Remote<mojom::ContentDecryptionModule> remote_cdm_;
@@ -126,7 +133,7 @@ class MojoCdm final : public ContentDecryptionModule,
 
   // CDM ID of the remote CDM. Set after initialization is completed. Must not
   // be invalid if initialization succeeded.
-  absl::optional<base::UnguessableToken> cdm_id_ GUARDED_BY(lock_);
+  std::optional<base::UnguessableToken> cdm_id_ GUARDED_BY(lock_);
 
   // The mojo::PendingRemote<mojom::Decryptor> exposed by the remote CDM. Set
   // after initialization is completed and cleared after |decryptor_| is
@@ -141,9 +148,11 @@ class MojoCdm final : public ContentDecryptionModule,
   scoped_refptr<base::SingleThreadTaskRunner> decryptor_task_runner_
       GUARDED_BY(lock_);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   bool requires_media_foundation_renderer_ GUARDED_BY(lock_) = false;
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
+
+  CdmConfig cdm_config_;
 
   // Callbacks for firing session events.
   SessionMessageCB session_message_cb_;
@@ -161,8 +170,6 @@ class MojoCdm final : public ContentDecryptionModule,
 
   // This must be the last member.
   base::WeakPtrFactory<MojoCdm> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MojoCdm);
 };
 
 }  // namespace media

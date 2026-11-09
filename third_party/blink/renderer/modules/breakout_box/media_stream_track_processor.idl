@@ -1,12 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // See spec in developement at
 // https://w3c.github.io/mediacapture-insertable-streams/
 [
-    Exposed=Window,
-    RuntimeEnabled=MediaStreamInsertableStreams
+    Exposed=Window
 ]
 interface MediaStreamTrackProcessor {
   [CallWith=ScriptState, RaisesException, MeasureAs=MediaStreamTrackProcessor]
@@ -17,6 +16,6 @@ interface MediaStreamTrackProcessor {
   // This stream returns VideoFrame or AudioFrame objects.
   [CallWith=ScriptState] readonly attribute ReadableStream readable;
 
-  // This stream accepts MediaStreamTrackSignal objects
-  [CallWith=ScriptState] readonly attribute WritableStream writableControl;
+  [RuntimeEnabled=MediaStreamTrackProcessorStats] readonly attribute unsigned long long totalFrames;
+  [RuntimeEnabled=MediaStreamTrackProcessorStats] readonly attribute unsigned long long discardedFrames;
 };

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
 #include "base/containers/span.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/subsample_entry.h"
 #include "media/base/video_codecs.h"
 #include "media/gpu/accelerated_video_decoder.h"
 #include "media/gpu/h265_dpb.h"
 #include "media/gpu/media_gpu_export.h"
-#include "media/video/h265_parser.h"
+#include "media/parsers/h265_parser.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -80,6 +82,33 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
     // this situation as normal and return from Decode() with kRanOutOfSurfaces.
     virtual scoped_refptr<H265Picture> CreateH265Picture() = 0;
 
+    // |secure_handle| is a reference to the corresponding secure memory when
+    // doing secure decoding on ARM. This is invoked instead of CreateAV1Picture
+    // when doing secure decoding on ARM. Default implementation returns
+    // nullptr.
+    // TODO(jkardatzke): Remove this once we move to the V4L2 flat stateless
+    // decoder and add a field to media::CodecPicture instead.
+    virtual scoped_refptr<H265Picture> CreateH265PictureSecure(
+        uint64_t secure_handle);
+
+    // Provides the raw NALU data for a VPS. The |vps| passed to
+    // SubmitFrameMetadata() is always the most recent VPS passed to
+    // ProcessVPS() with the same |vps_video_parameter_set_id|.
+    virtual void ProcessVPS(const H265VPS* vps,
+                            base::span<const uint8_t> vps_nalu_data);
+
+    // Provides the raw NALU data for an SPS. The |sps| passed to
+    // SubmitFrameMetadata() is always the most recent SPS passed to
+    // ProcessSPS() with the same |sps_video_parameter_set_id|.
+    virtual void ProcessSPS(const H265SPS* sps,
+                            base::span<const uint8_t> sps_nalu_data);
+
+    // Provides the raw NALU data for a PPS. The |pps| passed to
+    // SubmitFrameMetadata() is always the most recent PPS passed to
+    // ProcessPPS() with the same |pps_pic_parameter_set_id|.
+    virtual void ProcessPPS(const H265PPS* pps,
+                            base::span<const uint8_t> pps_nalu_data);
+
     // Submit metadata for the current frame, providing the current |sps|, |pps|
     // and |slice_hdr| for it. |ref_pic_list| contains the set of pictures as
     // described in 8.3.2 from the lists RefPicSetLtCurr, RefPicSetLtFoll,
@@ -90,17 +119,21 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
     // before calling SubmitDecode().
     // Returns kOk if successful, kFail if there are errors, or kTryAgain if
     // the accelerator needs additional data before being able to proceed.
-    virtual Status SubmitFrameMetadata(const H265SPS* sps,
-                                       const H265PPS* pps,
-                                       const H265SliceHeader* slice_hdr,
-                                       const H265Picture::Vector& ref_pic_list,
-                                       scoped_refptr<H265Picture> pic) = 0;
+    virtual Status SubmitFrameMetadata(
+        const H265SPS* sps,
+        const H265PPS* pps,
+        const H265SliceHeader* slice_hdr,
+        const H265Picture::Vector& ref_pic_list,
+        const H265Picture::Vector& ref_pic_set_lt_curr,
+        const H265Picture::Vector& ref_pic_set_st_curr_after,
+        const H265Picture::Vector& ref_pic_set_st_curr_before,
+        scoped_refptr<H265Picture> pic) = 0;
 
     // Submit one slice for the current frame, passing the current |pps| and
     // |pic| (same as in SubmitFrameMetadata()), the parsed header for the
-    // current slice in |slice_hdr|, and the |ref_pic_listX|, as per H265 spec.
-    // |data| pointing to the full slice (including the unparsed header) of
-    // |size| in bytes.
+    // current slice in |slice_hdr|, the |ref_pic_listX| and |ref_pic_set_XX|,
+    // as per H265 spec. |data| pointing to the full slice (including the
+    // unparsed header) of |size| in bytes.
     // |subsamples| specifies which part of the slice data is encrypted.
     // This must be called one or more times per frame, before SubmitDecode().
     // Note that |data| does not have to remain valid after this call returns.
@@ -112,6 +145,9 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
         const H265SliceHeader* slice_hdr,
         const H265Picture::Vector& ref_pic_list0,
         const H265Picture::Vector& ref_pic_list1,
+        const H265Picture::Vector& ref_pic_set_lt_curr,
+        const H265Picture::Vector& ref_pic_set_st_curr_after,
+        const H265Picture::Vector& ref_pic_set_st_curr_before,
         scoped_refptr<H265Picture> pic,
         const uint8_t* data,
         size_t size,
@@ -147,6 +183,13 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
     // kNotSupported.
     virtual Status SetStream(base::span<const uint8_t> stream,
                              const DecryptConfig* decrypt_config);
+
+    // Indicates whether the accelerator supports bitstreams with
+    // specific chroma subsampling format.
+    virtual bool IsChromaSamplingSupported(VideoChromaSampling format) = 0;
+
+    // Indicates whether the accelerator supports an alpha layer.
+    virtual bool IsAlphaLayerSupported();
   };
 
   H265Decoder(std::unique_ptr<H265Accelerator> accelerator,
@@ -159,14 +202,16 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
   ~H265Decoder() override;
 
   // AcceleratedVideoDecoder implementation.
-  void SetStream(int32_t id, const DecoderBuffer& decoder) override;
-  bool Flush() override WARN_UNUSED_RESULT;
+  void SetStream(int32_t id, scoped_refptr<DecoderBuffer> decoder) override;
+  [[nodiscard]] bool Flush() override;
   void Reset() override;
-  DecodeResult Decode() override WARN_UNUSED_RESULT;
+  [[nodiscard]] DecodeResult Decode() override;
   gfx::Size GetPicSize() const override;
   gfx::Rect GetVisibleRect() const override;
   VideoCodecProfile GetProfile() const override;
   uint8_t GetBitDepth() const override;
+  VideoChromaSampling GetChromaSampling() const override;
+  VideoColorSpace GetVideoColorSpace() const override;
   size_t GetRequiredNumOfPictures() const override;
   size_t GetNumReferenceFrames() const override;
 
@@ -208,8 +253,13 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
   // All data for a frame received, process it and decode.
   H265Accelerator::Status FinishPrevFrameIfPresent();
 
-  // Called after we are done processing |pic|.
-  void FinishPicture(scoped_refptr<H265Picture> pic);
+  // Called after we are done processing |pic|. This runs the additional
+  // bumping of clause C.5.2.3 with the limits that StartNewFrame()
+  // snapshotted from |pic|'s SPS. The parser cannot stand in for that
+  // snapshot: an alpha-layer slice of the same access unit replaces
+  // |last_slice_hdr_|, and an alpha-layer SPS may reuse the base-layer
+  // SPS id.
+  bool FinishPicture(scoped_refptr<H265Picture> pic);
 
   // Commits all pending data for HW decoder and starts HW decoder.
   H265Accelerator::Status DecodePicture();
@@ -235,20 +285,41 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
                       const H265PPS* pps,
                       const H265SliceHeader* slice_hdr);
 
-  // Builds the reference pictures lists for |curr_pic_| using |sps|, |pps|,
-  // |slice_hdr| and the member variables calculated in CalcRefPicPocs. Returns
-  // false if bitstream conformance is not maintained or needed reference
-  // pictures are missing, true otherwise. At the end of this,
-  // |ref_pic_list{0,1}| will be populated with the required reference pictures
-  // for submitting to the accelerator.
-  bool BuildRefPicLists(const H265SPS* sps,
-                        const H265PPS* pps,
-                        const H265SliceHeader* slice_hdr);
+  // Derives the reference picture sets of clause 8.3.2 for |curr_pic_| from
+  // |sps| and the POCs calculated in CalcRefPicPocs(), and marks the
+  // corresponding pictures in the DPB. This is invoked once per picture, and
+  // populates |ref_pic_set_{lt_curr,st_curr_after,st_curr_before}_| and
+  // |ref_pic_list_| for submitting to the accelerator. Returns false if
+  // bitstream conformance is not maintained, true otherwise.
+  bool MarkRefPicSets(const H265SPS* sps);
+
+  // Builds the reference picture lists of clause 8.3.4 for |slice_hdr| from the
+  // sets derived by MarkRefPicSets(). Independent P/B slices can override the
+  // active list sizes and the list modifications, so this is invoked for every
+  // slice of the picture. I slices produce empty lists. At the end of this,
+  // |ref_pic_list{0,1}_| will be populated with the required reference pictures
+  // for submitting to the accelerator. Returns false if bitstream conformance
+  // is not maintained, true otherwise.
+  bool BuildRefPicLists(const H265SliceHeader* slice_hdr);
+
+  // Returns true if the "bumping" process of clause C.5.2.4 needs to be
+  // invoked. |include_buffering| selects between the condition set of C.5.2.2,
+  // which includes the DPB fullness condition, and the one of C.5.2.3, which
+  // does not. The limits come from the current picture's SPS, snapshotted in
+  // StartNewFrame().
+  bool NeedsBumping(bool include_buffering);
+
+  // C.5.2.4 - "Bumping" process. Outputs the picture that is first for output
+  // among the ones marked as "needed for output" and removes it from the DPB if
+  // it is no longer used for reference. |*bumped| is set to false when nothing
+  // was left to output; callers must treat that as a stop condition so that a
+  // DPB holding nothing but reference pictures cannot spin forever. Returns
+  // false if outputting the picture failed.
+  bool BumpOne(bool* bumped);
 
   // Performs DPB management operations for |curr_pic_| by removing no longer
-  // needed entries from the DPB and outputting pictures from the DPB. |sps|
-  // should be the corresponding SPS for |curr_pic_|.
-  bool PerformDpbOperations(const H265SPS* sps);
+  // needed entries from the DPB and outputting pictures from the DPB.
+  bool PerformDpbOperations();
 
   // Decoder state.
   State state_;
@@ -259,16 +330,20 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
   // Parser in use.
   H265Parser parser_;
 
-  // Most recent call to SetStream().
-  const uint8_t* current_stream_ = nullptr;
-  size_t current_stream_size_ = 0;
 
   // Decrypting config for the most recent data passed to SetStream().
   std::unique_ptr<DecryptConfig> current_decrypt_config_;
 
+  // Secure handle to pass through to the accelerator when doing secure playback
+  // on ARM.
+  uint64_t secure_handle_ = 0;
+
   // Keep track of when SetStream() is called so that
   // H265Accelerator::SetStream() can be called.
-  bool current_stream_has_been_changed_ = false;
+  bool decoder_buffer_has_been_changed_ = false;
+
+  // Most recent call to SetStream().
+  scoped_refptr<media::DecoderBuffer> decoder_buffer_;
 
   // DPB in use.
   H265DPB dpb_;
@@ -279,27 +354,36 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
   // Picture currently being processed/decoded.
   scoped_refptr<H265Picture> curr_pic_;
 
-  // Used to identify first picture in decoding order or first picture that
-  // follows an EOS NALU.
+  // Used to identify first picture in decoding order.
   bool first_picture_ = true;
+
+  // Used to identify the first picture that follows an EOS or EOB NALU.
+  bool first_picture_after_eos_ = false;
+
+  // Used to keep NoRaslOutputFlag state since last IRAP, to decide if we
+  // drop a RASL picture.
+  bool no_rasl_output_flag_ = true;
 
   // Global state values, needed in decoding. See spec.
   scoped_refptr<H265Picture> prev_tid0_pic_;
   int max_pic_order_cnt_lsb_;
-  bool curr_delta_poc_msb_present_flag_[kMaxDpbSize];
-  bool foll_delta_poc_msb_present_flag_[kMaxDpbSize];
+  std::array<bool, kMaxDpbSize> curr_delta_poc_msb_present_flag_;
+  std::array<bool, kMaxDpbSize> foll_delta_poc_msb_present_flag_;
   int num_poc_st_curr_before_;
   int num_poc_st_curr_after_;
   int num_poc_st_foll_;
   int num_poc_lt_curr_;
   int num_poc_lt_foll_;
-  int poc_st_curr_before_[kMaxDpbSize];
-  int poc_st_curr_after_[kMaxDpbSize];
-  int poc_st_foll_[kMaxDpbSize];
-  int poc_lt_curr_[kMaxDpbSize];
-  int poc_lt_foll_[kMaxDpbSize];
+  std::array<int, kMaxDpbSize> poc_st_curr_before_;
+  std::array<int, kMaxDpbSize> poc_st_curr_after_;
+  std::array<int, kMaxDpbSize> poc_st_foll_;
+  std::array<int, kMaxDpbSize> poc_lt_curr_;
+  std::array<int, kMaxDpbSize> poc_lt_foll_;
   H265Picture::Vector ref_pic_list0_;
   H265Picture::Vector ref_pic_list1_;
+  H265Picture::Vector ref_pic_set_lt_curr_;
+  H265Picture::Vector ref_pic_set_st_curr_after_;
+  H265Picture::Vector ref_pic_set_st_curr_before_;
 
   // |ref_pic_list_| is the collection of all pictures from StCurrBefore,
   // StCurrAfter, StFoll, LtCurr and LtFoll.
@@ -308,6 +392,20 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
   // Currently active SPS and PPS.
   int curr_sps_id_ = -1;
   int curr_pps_id_ = -1;
+
+  // C.5.2 bumping limits copied from the current picture's SPS. C.5.2.3 runs
+  // once the rest of the access unit has been parsed, by which point neither
+  // |last_slice_hdr_| nor |curr_sps_id_| still resolves to this SPS: an
+  // alpha-layer slice replaces the header, and an alpha-layer SPS may reuse
+  // the base-layer SPS id in the parser.
+  int max_num_reorder_pics_ = 0;
+  uint32_t max_latency_pictures_ = 0;
+  int max_dec_pic_buffering_minus1_ = 0;
+  uint32_t max_latency_increase_plus1_ = 0;
+
+  // If this value larger than 0, then that means the current NALU contain alpha
+  // layer.
+  int aux_alpha_layer_id_ = 0;
 
   // Current NALU and slice header being processed.
   std::unique_ptr<H265NALU> curr_nalu_;
@@ -323,6 +421,14 @@ class MEDIA_GPU_EXPORT H265Decoder final : public AcceleratedVideoDecoder {
   VideoCodecProfile profile_;
   // Bit depth of input bitstream.
   uint8_t bit_depth_ = 0;
+  // Active SPS of input bitstream.
+  std::unique_ptr<H265SPS> active_sps_;
+  // Chroma sampling format of input bitstream
+  VideoChromaSampling chroma_sampling_ = VideoChromaSampling::kUnknown;
+  // Video color space of input bitstream.
+  VideoColorSpace picture_color_space_;
+  // HDR metadata in the bitstream.
+  gfx::HDRMetadata hdr_metadata_bitstream_;
 
   const std::unique_ptr<H265Accelerator> accelerator_;
 };

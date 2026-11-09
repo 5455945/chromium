@@ -1,36 +1,30 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_TEST_COCOA_HELPER_H_
 #define UI_BASE_TEST_COCOA_HELPER_H_
 
-#include <set>
-
 #import <Cocoa/Cocoa.h>
+#include <Foundation/Foundation.h>
 
-#include "base/compiler_specific.h"
-#import "base/mac/scoped_nsautorelease_pool.h"
-#import "base/mac/scoped_nsobject.h"
-#import "base/strings/sys_string_conversions.h"
+#include <memory>
+
+#import "base/apple/scoped_nsautorelease_pool.h"
+#include "base/memory/stack_allocated.h"
 #include "testing/platform_test.h"
+#include "ui/display/screen.h"
 
 // CocoaTestHelperWindow behaves differently from a regular NSWindow in the
 // following ways:
 // - It allows -isKeyWindow to be manipulated to test things like focus rings
 //   (which background windows won't normally display).
-// - It ignores its real occlusion state and returns a value based on
-//   pretendIsOccluded.
 // - It ignores the system setting for full keyboard access and returns a value
 //   based on pretendFullKeyboardAccessIsEnabled.
 @interface CocoaTestHelperWindow : NSWindow
 
 // Value to return for -isKeyWindow.
 @property(nonatomic) BOOL pretendIsKeyWindow;
-
-// Value to return for -occlusionState. Setting posts a
-// NSWindowDidChangeOcclusionStateNotification.
-@property(nonatomic) BOOL pretendIsOccluded;
 
 // Value to return for -isOnActiveSpace. Posts
 // NSWorkspaceActiveSpaceDidChangeNotification when set.
@@ -39,7 +33,7 @@
 // Whether to handle the key view loop as if full keyboard access is enabled.
 @property(nonatomic) BOOL pretendFullKeyboardAccessIsEnabled;
 
-// Whether to use or ignore the default contraints for window sizing and
+// Whether to use or ignore the default constraints for window sizing and
 // placement.
 @property(nonatomic) BOOL useDefaultConstraints;
 
@@ -61,10 +55,6 @@
 // to being non-key.
 - (void)clearPretendKeyWindowAndFirstResponder;
 
-- (BOOL)isKeyWindow;
-
-- (NSWindowOcclusionState)occlusionState;
-
 @end
 
 namespace ui {
@@ -83,29 +73,27 @@ class CocoaTestHelper {
   CocoaTestHelperWindow* test_window();
 
  private:
-  // Return a set of currently open windows. Avoiding NSArray so
-  // contents aren't retained, the pointer values can only be used for
-  // comparison purposes.  Using std::set to make progress-checking
-  // convenient.
-  static std::set<NSWindow*> ApplicationWindows();
+  // A vector to hold a list of weak NSWindow pointers. Used as the container
+  // for lists of weak pointers, because putting pointers that can change their
+  // values to nil inside a set would break the hash.
+  using WeakWindowVector = std::vector<NSWindow * __weak>;
 
-  // Return a set of windows which are in |ApplicationWindows()| but
-  // not |initial_windows_|.
-  std::set<NSWindow*> WindowsLeft();
+  // Returns a vector of currently open windows.
+  WeakWindowVector ApplicationWindows();
 
-  base::mac::ScopedNSAutoreleasePool pool_;
+  // Returns a vector of windows which are in `ApplicationWindows()` but not
+  // `initial_windows_`.
+  WeakWindowVector WindowsLeft();
+
+  display::ScopedNativeScreen screen_;
+
+  STACK_ALLOCATED_IGNORE("https://crbug.com/1424190")
+  base::apple::ScopedNSAutoreleasePool pool_;
 
   // Windows which existed at the beginning of the test.
-  std::set<NSWindow*> initial_windows_;
+  WeakWindowVector initial_windows_;
 
-  // Strong. Lazily created. This isn't wrapped in a scoped_nsobject because
-  // we want to call [close] to destroy it rather than calling [release]. We
-  // want to verify that [close] is actually removing our window and that it's
-  // not hanging around because releaseWhenClosed was set to "no" on the window.
-  // It isn't wrapped in a different wrapper class to close it because we
-  // need to close it at a very specific time; just before we enter our clean
-  // up loop in TearDown.
-  CocoaTestHelperWindow* test_window_ = nil;
+  CocoaTestHelperWindow* __strong test_window_;
 };
 
 // A test class that all tests that depend on AppKit should inherit from.

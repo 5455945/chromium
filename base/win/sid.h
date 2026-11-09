@@ -1,19 +1,21 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_WIN_SID_H_
 #define BASE_WIN_SID_H_
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base_export.h"
+#include "base/containers/span.h"
+#include "base/strings/cstring_view.h"
 #include "base/win/windows_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace base {
-namespace win {
+namespace base::win {
 
 // Known capabilities defined in Windows 8.
 enum class WellKnownCapability {
@@ -65,44 +67,52 @@ enum class WellKnownSid {
 class BASE_EXPORT Sid {
  public:
   // Create a Sid from an AppContainer capability name. The name can be
-  // completely arbitrary. Only available on Windows 10 and above.
-  static absl::optional<Sid> FromNamedCapability(
-      const wchar_t* capability_name);
+  // completely arbitrary.
+  static Sid FromNamedCapability(std::wstring_view capability_name);
 
   // Create a Sid from a known capability enumeration value. The Sids
   // match with the list defined in Windows 8.
-  static absl::optional<Sid> FromKnownCapability(
-      WellKnownCapability capability);
+  static Sid FromKnownCapability(WellKnownCapability capability);
 
   // Create a SID from a well-known type.
-  static absl::optional<Sid> FromKnownSid(WellKnownSid type);
+  static Sid FromKnownSid(WellKnownSid type);
 
   // Create a Sid from a SDDL format string, such as S-1-1-0.
-  static absl::optional<Sid> FromSddlString(const wchar_t* sddl_sid);
+  static std::optional<Sid> FromSddlString(wcstring_view sddl_sid);
 
   // Create a Sid from a PSID pointer.
-  static absl::optional<Sid> FromPSID(const PSID sid);
+  static std::optional<Sid> FromPSID(const PSID sid);
 
   // Generate a random SID value.
-  static absl::optional<Sid> GenerateRandomSid();
-
-  // Create a SID for the current user.
-  static absl::optional<Sid> CurrentUser();
+  static Sid GenerateRandomSid();
 
   // Create a SID for an integrity level RID.
-  static absl::optional<Sid> FromIntegrityLevel(DWORD integrity_level);
+  static Sid FromIntegrityLevel(DWORD integrity_level);
 
   // Create a vector of SIDs from a vector of SDDL format strings.
-  static absl::optional<std::vector<Sid>> FromSddlStringVector(
-      const std::vector<const wchar_t*>& sddl_sids);
+  static std::optional<std::vector<Sid>> FromSddlStringVector(
+      span<const std::wstring> sddl_sids);
 
   // Create a vector of SIDs from a vector of capability names.
-  static absl::optional<std::vector<Sid>> FromNamedCapabilityVector(
-      const std::vector<const wchar_t*>& capability_names);
+  static std::vector<Sid> FromNamedCapabilityVector(
+      span<const std::wstring> capability_names);
 
+  // Create a vector of SIDs from a vector of well-known capability.
+  static std::vector<Sid> FromKnownCapabilityVector(
+      span<const WellKnownCapability> capabilities);
+
+  // Create a vector of SIDs from a vector of well-known sids.
+  static std::vector<Sid> FromKnownSidVector(
+      span<const WellKnownSid> known_sids);
+
+  // Create a known SID.
+  explicit Sid(WellKnownSid known_sid);
+  // Create a known capability SID.
+  explicit Sid(WellKnownCapability known_capability);
   Sid(const Sid&) = delete;
   Sid& operator=(const Sid&) = delete;
   Sid(Sid&& sid);
+  Sid& operator=(Sid&&);
   ~Sid();
 
   // Returns sid as a PSID. This should only be used temporarily while the Sid
@@ -110,14 +120,22 @@ class BASE_EXPORT Sid {
   PSID GetPSID() const;
 
   // Converts the SID to a SDDL format string.
-  absl::optional<std::wstring> ToSddlString() const;
+  std::optional<std::wstring> ToSddlString() const;
+
+  // Make a clone of the current Sid object.
+  Sid Clone() const;
+
+  // Is this Sid equal to another raw PSID?
+  bool Equal(PSID sid) const;
+
+  // Is this Sid equal to another Sid?
+  bool operator==(const Sid& sid) const;
 
  private:
   Sid(const void* sid, size_t length);
   std::vector<char> sid_;
 };
 
-}  // namespace win
-}  // namespace base
+}  // namespace base::win
 
 #endif  // BASE_WIN_SID_H_

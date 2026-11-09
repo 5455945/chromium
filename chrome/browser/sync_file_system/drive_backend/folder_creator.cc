@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_util.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.h"
 #include "components/drive/drive_api_util.h"
@@ -17,7 +17,7 @@
 namespace drive {
 class DriveServiceInterface;
 class DriveUploaderInterface;
-}
+}  // namespace drive
 
 namespace sync_file_system {
 namespace drive_backend {
@@ -31,8 +31,7 @@ FolderCreator::FolderCreator(drive::DriveServiceInterface* drive_service,
       parent_folder_id_(parent_folder_id),
       title_(title) {}
 
-FolderCreator::~FolderCreator() {
-}
+FolderCreator::~FolderCreator() = default;
 
 void FolderCreator::Run(FileIDCallback callback) {
   drive::AddNewDirectoryOptions options;
@@ -45,9 +44,9 @@ void FolderCreator::Run(FileIDCallback callback) {
 
 void FolderCreator::DidCreateFolder(
     FileIDCallback callback,
-    google_apis::DriveApiErrorCode error,
+    google_apis::ApiErrorCode error,
     std::unique_ptr<google_apis::FileResource> entry) {
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
     std::move(callback).Run(std::string(), status);
     return;
@@ -65,9 +64,9 @@ void FolderCreator::DidCreateFolder(
 void FolderCreator::DidListFolders(
     FileIDCallback callback,
     std::vector<std::unique_ptr<google_apis::FileResource>> candidates,
-    google_apis::DriveApiErrorCode error,
+    google_apis::ApiErrorCode error,
     std::unique_ptr<google_apis::FileList> file_list) {
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
     std::move(callback).Run(std::string(), status);
     return;
@@ -75,8 +74,6 @@ void FolderCreator::DidListFolders(
 
   if (!file_list) {
     NOTREACHED();
-    std::move(callback).Run(std::string(), SYNC_STATUS_FAILED);
-    return;
   }
 
   candidates.reserve(candidates.size() + file_list->items().size());
@@ -116,7 +113,7 @@ void FolderCreator::DidListFolders(
     return;
   }
 
-  DCHECK(!file_id.empty());
+  CHECK(!file_id.empty(), base::NotFatalUntil::M162);
   if (!metadata_database_->FindFileByFileID(file_id, nullptr)) {
     std::move(callback).Run(std::string(), SYNC_FILE_ERROR_NOT_FOUND);
     return;

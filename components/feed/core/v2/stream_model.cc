@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <sstream>
 #include <utility>
 
+#include "base/base64.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/json/string_escape.h"
+#include "base/observer_list.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/feed/core/proto/v2/store.pb.h"
@@ -18,9 +20,11 @@
 #include "components/feed/core/v2/feedstore_util.h"
 #include "components/feed/core/v2/proto_util.h"
 #include "components/feed/core/v2/protocol_translator.h"
+#include "components/feed/core/v2/types.h"
 
 namespace feed {
 namespace {
+using Context = StreamModel::Context;
 using UiUpdate = StreamModel::UiUpdate;
 using StoreUpdate = StreamModel::StoreUpdate;
 
@@ -51,6 +55,8 @@ void MergeSharedStateIds(const feedstore::StreamData& model_data,
 
 }  // namespace
 
+Context::Context() = default;
+Context::~Context() = default;
 UiUpdate::UiUpdate() = default;
 UiUpdate::~UiUpdate() = default;
 UiUpdate::UiUpdate(const UiUpdate&) = default;
@@ -60,7 +66,11 @@ StoreUpdate::~StoreUpdate() = default;
 StoreUpdate::StoreUpdate(StoreUpdate&&) = default;
 StoreUpdate& StoreUpdate::operator=(StoreUpdate&&) = default;
 
-StreamModel::StreamModel() = default;
+StreamModel::StreamModel(Context* context,
+                         const LoggingParameters& logging_parameters)
+    : logging_parameters_(logging_parameters),
+      content_map_(&(context->revision_generator)) {}
+
 StreamModel::~StreamModel() = default;
 
 void StreamModel::SetStoreObserver(StoreObserver* store_observer) {
@@ -71,6 +81,10 @@ void StreamModel::SetStoreObserver(StoreObserver* store_observer) {
 
 void StreamModel::SetStreamType(const StreamType& stream_type) {
   stream_type_ = stream_type;
+}
+
+const StreamType& StreamModel::GetStreamType() const {
+  return stream_type_;
 }
 
 void StreamModel::AddObserver(Observer* observer) {
@@ -139,6 +153,10 @@ void StreamModel::Update(
       } else {
         MergeSharedStateIds(stream_data_, update_request->stream_data);
       }
+      // Never allow overwriting the root event ID.
+      update_request->stream_data.set_root_event_id(
+          stream_data_.root_event_id());
+
       // Note: We might be overwriting some shared-states unnecessarily.
       StoreUpdate store_update;
       store_update.stream_type = stream_type_;
@@ -151,7 +169,6 @@ void StreamModel::Update(
     }
   }
 
-  // Update non-tree data.
   stream_data_ = update_request->stream_data;
 
   if (has_clear_all) {
@@ -169,9 +186,9 @@ void StreamModel::Update(
   for (feedstore::StreamSharedState& shared_state :
        update_request->shared_states) {
     std::string id = ContentIdString(shared_state.content_id());
-    if (!shared_states_.contains(id)) {
-      shared_states_[id].data =
-          std::move(*shared_state.mutable_shared_state_data());
+    auto [it, updated] = shared_states_.try_emplace(std::move(id));
+    if (updated) {
+      it->second.data = std::move(*shared_state.mutable_shared_state_data());
     }
   }
 
@@ -282,13 +299,34 @@ const std::string& StreamModel::GetNextPageToken() const {
 base::Time StreamModel::GetLastAddedTime() const {
   return feedstore::GetLastAddedTime(stream_data_);
 }
-ContentIdSet StreamModel::GetContentIds() const {
+ContentHashSet StreamModel::GetContentIds() const {
   return feedstore::GetContentIds(stream_data_);
+}
+
+ContentStats StreamModel::GetContentStats() const {
+  ContentStats stats;
+  for (auto content_revision : content_list_) {
+    const feedstore::Content* content = FindContent(content_revision);
+    if (content) {
+      stats.total_content_frame_size_bytes += content->frame().size();
+      stats.card_count++;
+    }
+  }
+
+  for (auto& entry : shared_states_) {
+    stats.shared_state_size += entry.second.data.size();
+  }
+  return stats;
+}
+
+const std::string& StreamModel::GetRootEventId() const {
+  return stream_data_.root_event_id();
 }
 
 std::string StreamModel::DumpStateForTesting() {
   std::stringstream ss;
   ss << "StreamModel{\n";
+  { ss << "root_event_id=" << base::Base64Encode(GetRootEventId()) << "'\n"; }
   ss << "next_page_token='" << GetNextPageToken() << "'\n";
   for (auto& entry : shared_states_) {
     ss << "shared_state[" << entry.first

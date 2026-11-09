@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include "base/android/jni_android.h"
 #include "base/trace_event/trace_event.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/download/network/jni_headers/NetworkStatusListenerAndroid_jni.h"
 
 namespace download {
@@ -14,12 +16,19 @@ NetworkStatusListenerAndroid::NetworkStatusListenerAndroid() = default;
 
 NetworkStatusListenerAndroid::~NetworkStatusListenerAndroid() = default;
 
-void NetworkStatusListenerAndroid::NotifyNetworkChange(
+void NetworkStatusListenerAndroid::OnNetworkStatusReady(
     JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    jint connectionType) {
+    int32_t connectionType) {
   DCHECK(observer_);
-  using ConnectionType = network::mojom::ConnectionType;
+  using ConnectionType = net::NetworkChangeNotifier::ConnectionType;
+  ConnectionType connection_type = static_cast<ConnectionType>(connectionType);
+  observer_->OnNetworkStatusReady(connection_type);
+}
+
+void NetworkStatusListenerAndroid::NotifyNetworkChange(JNIEnv* env,
+                                                       int32_t connectionType) {
+  DCHECK(observer_);
+  using ConnectionType = net::NetworkChangeNotifier::ConnectionType;
   ConnectionType connection_type = static_cast<ConnectionType>(connectionType);
   observer_->OnNetworkChanged(connection_type);
 }
@@ -31,8 +40,7 @@ void NetworkStatusListenerAndroid::Start(
   NetworkStatusListener::Start(observer);
   JNIEnv* env = base::android::AttachCurrentThread();
   java_obj_.Reset(env, Java_NetworkStatusListenerAndroid_create(
-                           env, reinterpret_cast<intptr_t>(this))
-                           .obj());
+                           env, reinterpret_cast<intptr_t>(this)));
 }
 
 void NetworkStatusListenerAndroid::Stop() {
@@ -41,12 +49,15 @@ void NetworkStatusListenerAndroid::Stop() {
       base::android::AttachCurrentThread(), java_obj_);
 }
 
-network::mojom::ConnectionType
+net::NetworkChangeNotifier::ConnectionType
 NetworkStatusListenerAndroid::GetConnectionType() {
   int connection_type =
       Java_NetworkStatusListenerAndroid_getCurrentConnectionType(
           base::android::AttachCurrentThread(), java_obj_);
-  return static_cast<network::mojom::ConnectionType>(connection_type);
+  return static_cast<net::NetworkChangeNotifier::ConnectionType>(
+      connection_type);
 }
 
 }  // namespace download
+
+DEFINE_JNI(NetworkStatusListenerAndroid)

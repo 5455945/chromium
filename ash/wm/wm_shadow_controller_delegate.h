@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,13 @@ class WmShadowControllerDelegate : public wm::ShadowControllerDelegate {
   ~WmShadowControllerDelegate() override;
 
   // wm::ShadowControllerDelegate:
+  bool ShouldObserveWindow(const aura::Window* window) override;
   bool ShouldShowShadowForWindow(const aura::Window* window) override;
+  bool ShouldUpdateShadowOnWindowPropertyChange(const aura::Window* window,
+                                                const void* key,
+                                                intptr_t old) override;
+  void ApplyColorThemeToWindowShadow(aura::Window* window) override;
+  bool ShouldRoundShadowForWindow(const aura::Window* window) override;
 };
 
 }  // namespace ash

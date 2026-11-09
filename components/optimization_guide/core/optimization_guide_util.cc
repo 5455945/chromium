@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,172 @@
 
 #include "base/containers/flat_set.h"
 #include "base/notreached.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/variations/active_field_trials.h"
+#include "components/optimization_guide/core/optimization_guide_logger.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "components/prefs/pref_service.h"
+#include "google_apis/common/api_key_request_util.h"
 #include "net/base/url_util.h"
+#include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "url/url_canon.h"
+
+namespace {
+
+constexpr char kAuthHeaderBearer[] = "Bearer ";
+constexpr char kServerTimeoutHeader[] = "X-Server-Timeout";
+
+optimization_guide::proto::Platform GetPlatform() {
+#if BUILDFLAG(IS_WIN)
+  return optimization_guide::proto::PLATFORM_WINDOWS;
+#elif BUILDFLAG(IS_IOS)
+  return optimization_guide::proto::PLATFORM_IOS;
+#elif BUILDFLAG(IS_MAC)
+  return optimization_guide::proto::PLATFORM_MAC;
+#elif BUILDFLAG(IS_CHROMEOS)
+  return optimization_guide::proto::PLATFORM_CHROMEOS;
+#elif BUILDFLAG(IS_ANDROID)
+  return optimization_guide::proto::PLATFORM_ANDROID;
+#elif BUILDFLAG(IS_LINUX)
+  return optimization_guide::proto::PLATFORM_LINUX;
+#else
+  return optimization_guide::proto::PLATFORM_UNDEFINED;
+#endif
+}
+
+}  // namespace
 
 namespace optimization_guide {
 
-std::string GetStringNameForOptimizationTarget(
-    optimization_guide::proto::OptimizationTarget optimization_target) {
-  switch (optimization_target) {
-    case proto::OPTIMIZATION_TARGET_UNKNOWN:
-      return "Unknown";
-    case proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD:
-      return "PainfulPageLoad";
-    case proto::OPTIMIZATION_TARGET_LANGUAGE_DETECTION:
-      return "LanguageDetection";
-    case proto::OPTIMIZATION_TARGET_PAGE_TOPICS:
-      return "PageTopics";
-    case proto::OPTIMIZATION_TARGET_SEGMENTATION_NEW_TAB:
-      return "SegmentationNewTab";
-    case proto::OPTIMIZATION_TARGET_SEGMENTATION_SHARE:
-      return "SegmentationShare";
-    case proto::OPTIMIZATION_TARGET_SEGMENTATION_VOICE:
-      return "SegmentationVoice";
+std::string_view GetStringNameForModelExecutionFeature(
+    std::optional<UserVisibleFeatureKey> feature) {
+  if (!feature) {
+    return GetStringNameForModelExecutionFeature(
+        proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED);
   }
-  NOTREACHED();
-  return std::string();
+  return GetStringNameForModelExecutionFeature(
+      ToModelExecutionFeatureProto(*feature));
+}
+
+std::string_view GetStringNameForModelExecutionFeature(
+    ModelBasedCapabilityKey feature) {
+  return GetStringNameForModelExecutionFeature(
+      ToModelExecutionFeatureProto(feature));
+}
+
+std::string_view GetStringNameForModelExecutionFeature(
+    proto::ModelExecutionFeature feature) {
+  // LINT.IfChange(ModelExecutionFeature)
+  switch (feature) {
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
+      return "WallpaperSearch";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
+      return "Compose";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
+      return "Test";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_PROMPT_API:
+      return "PromptApi";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SUMMARIZE:
+      return "Summarize";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_HISTORY_SEARCH:
+      return "HistorySearch";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_HISTORY_QUERY_INTENT:
+      return "HistoryQueryIntent";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_FORMS_CLASSIFICATIONS:
+      return "FormsClassifications";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_BLING_PROTOTYPING:
+      return "BlingPrototyping";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_PASSWORD_CHANGE_SUBMISSION:
+      return "PasswordChangeSubmission";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SCAM_DETECTION:
+      return "ScamDetection";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_PERMISSIONS_AI:
+      return "PermissionsAi";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_WRITING_ASSISTANCE_API:
+      return "WritingAssistanceApi";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ENHANCED_CALENDAR:
+      return "EnhancedCalendar";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ZERO_STATE_SUGGESTIONS:
+      return "ZeroStateSuggestions";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_PROOFREADER_API:
+      return "ProofreaderApi";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_WALLETABLE_PASS_EXTRACTION:
+      return "WalletablePassExtraction";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_AMOUNT_EXTRACTION:
+      return "AmountExtraction";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION:
+      return "OnDeviceSpeechRecognition";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA:
+      return "SpeechRecognitionSmallExpertModel";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_IOS_SMART_TAB_GROUPING:
+      return "IosSmartTabGrouping";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SKILLS:
+      return "Skills";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_GEMINI_ANTISCAM_PROTECTION:
+      return "GeminiAntiscamProtection";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CLASSIFIER:
+      return "Classifier";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CONTENT_ANNOTATION:
+      return "ContentAnnotation";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_FINDS:
+      return "Finds";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_ONE_P_RESOLVER:
+      return "AnnotationReducerOnePResolver";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_QUERY_CLASSIFIER:
+      return "AnnotationReducerQueryClassifier";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CONTEXTUAL_CUEING:
+      return "ContextualCueing";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UPDATER_CHAT:
+      return "UpdaterChat";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CARD_RECOMMENDATIONS:
+      return "CardRecommendations";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CONTEXT_HUB:
+      return "ContextHub";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_READ_ALOUD_GENERATE_TEXT:
+      return "ReadAloudGenerateText";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_READ_ALOUD_SYNTHESIZE:
+      return "ReadAloudSynthesize";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_SMART_SELECTION_SUGGESTIONS:
+      return "SmartSelectionSuggestions";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TTC:
+      return "Ttc";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_QUICK_ANSWERS:
+      return "QuickAnswers";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
+      return "Unknown";
+  }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/optimization/histograms.xml:ModelExecutionFeature)
 }
 
 bool IsHostValidToFetchFromRemoteOptimizationGuide(const std::string& host) {
-  if (net::HostStringIsLocalhost(host))
+  if (net::HostStringIsLocalhost(host)) {
     return false;
+  }
   url::CanonHostInfo host_info;
   std::string canonicalized_host(net::CanonicalizeHost(host, &host_info));
   if (host_info.IsIPAddress() ||
@@ -49,60 +181,77 @@ bool IsHostValidToFetchFromRemoteOptimizationGuide(const std::string& host) {
   return true;
 }
 
-google::protobuf::RepeatedPtrField<proto::FieldTrial>
-GetActiveFieldTrialsAllowedForFetch() {
-  google::protobuf::RepeatedPtrField<proto::FieldTrial>
-      filtered_active_field_trials;
+optimization_guide::proto::OriginInfo GetClientOriginInfo() {
+  optimization_guide::proto::OriginInfo origin_info;
+  origin_info.set_platform(GetPlatform());
+  return origin_info;
+}
 
-  base::flat_set<uint32_t> allowed_field_trials_for_fetch =
-      features::FieldTrialNameHashesAllowedForFetch();
-  if (allowed_field_trials_for_fetch.empty())
-    return filtered_active_field_trials;
+optimization_guide::proto::ChromePlatform GetChromePlatform() {
+#if BUILDFLAG(IS_WIN)
+  return optimization_guide::proto::CHROME_PLATFORM_WINDOWS;
+#elif BUILDFLAG(IS_IOS)
+  return optimization_guide::proto::CHROME_PLATFORM_IOS;
+#elif BUILDFLAG(IS_MAC)
+  return optimization_guide::proto::CHROME_PLATFORM_MAC;
+#elif BUILDFLAG(IS_CHROMEOS)
+  return optimization_guide::proto::CHROME_PLATFORM_CHROMEOS;
+#elif BUILDFLAG(IS_ANDROID)
+  return optimization_guide::proto::CHROME_PLATFORM_ANDROID;
+#elif BUILDFLAG(IS_LINUX)
+  return optimization_guide::proto::CHROME_PLATFORM_LINUX;
+#else
+  return optimization_guide::proto::CHROME_PLATFORM_UNKNOWN;
+#endif
+}
 
-  std::vector<variations::ActiveGroupId> active_field_trials;
-  variations::GetFieldTrialActiveGroupIds(/*suffix=*/"", &active_field_trials);
-  for (const auto& active_field_trial : active_field_trials) {
-    if (static_cast<size_t>(filtered_active_field_trials.size()) ==
-        allowed_field_trials_for_fetch.size()) {
-      // We've found all the field trials that we are allowed to send to the
-      // server.
-      break;
-    }
-
-    if (allowed_field_trials_for_fetch.find(active_field_trial.name) ==
-        allowed_field_trials_for_fetch.end()) {
-      // Continue if we are not allowed to send the field trial to the server.
-      continue;
-    }
-
-    proto::FieldTrial* ft_proto = filtered_active_field_trials.Add();
-    ft_proto->set_name_hash(active_field_trial.name);
-    ft_proto->set_group_hash(active_field_trial.group);
+void LogFeatureFlagsInfo(OptimizationGuideLogger* optimization_guide_logger,
+                         bool is_off_the_record,
+                         PrefService* pref_service) {
+  if (!optimization_guide_logger->ShouldEnableDebugLogs()) {
+    return;
   }
-  return filtered_active_field_trials;
+  if (!optimization_guide::features::IsOptimizationHintsEnabled()) {
+    OPTIMIZATION_GUIDE_LOG(
+        optimization_guide_common::mojom::LogSource::SERVICE_AND_SETTINGS,
+        optimization_guide_logger, "FEATURE_FLAG Hints component disabled");
+  }
+  if (!optimization_guide::IsUserPermittedToFetchFromRemoteOptimizationGuide(
+          is_off_the_record, pref_service)) {
+    OPTIMIZATION_GUIDE_LOG(
+        optimization_guide_common::mojom::LogSource::SERVICE_AND_SETTINGS,
+        optimization_guide_logger,
+        "FEATURE_FLAG remote fetching user permission disabled");
+  }
+  if (!optimization_guide::features::IsPushNotificationsEnabled()) {
+    OPTIMIZATION_GUIDE_LOG(
+        optimization_guide_common::mojom::LogSource::SERVICE_AND_SETTINGS,
+        optimization_guide_logger,
+        "FEATURE_FLAG remote push notification feature disabled");
+  }
 }
 
-absl::optional<base::FilePath> GetFilePathFromPredictionModel(
-    const proto::PredictionModel& model) {
-  if (!model.model().has_download_url())
-    return absl::nullopt;
-
-#if defined(OS_WIN)
-  return base::FilePath(base::UTF8ToWide(model.model().download_url()));
-#else
-  return base::FilePath(model.model().download_url());
-#endif
+void PopulateAuthorizationRequestHeader(
+    network::ResourceRequest* resource_request,
+    std::string_view access_token) {
+  CHECK(!access_token.empty());
+  resource_request->headers.SetHeader(
+      net::HttpRequestHeaders::kAuthorization,
+      base::StrCat({kAuthHeaderBearer, access_token}));
 }
 
-void SetFilePathInPredictionModel(const base::FilePath& file_path,
-                                  proto::PredictionModel* model) {
-  DCHECK(model);
+void PopulateApiKeyRequestHeader(network::ResourceRequest* resource_request,
+                                 std::string_view api_key) {
+  CHECK(!api_key.empty());
+  google_apis::AddAPIKeyToRequest(*resource_request, api_key);
+}
 
-#if defined(OS_WIN)
-  model->mutable_model()->set_download_url(base::WideToUTF8(file_path.value()));
-#else
-  model->mutable_model()->set_download_url(file_path.value());
-#endif
+void PopulateServerTimeoutRequestHeader(
+    network::ResourceRequest* resource_request,
+    base::TimeDelta timeout) {
+  CHECK(timeout.is_positive());
+  resource_request->headers.SetHeader(
+      kServerTimeoutHeader, base::NumberToString(timeout.InSeconds()));
 }
 
 }  // namespace optimization_guide

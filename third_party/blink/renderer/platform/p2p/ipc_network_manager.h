@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <memory>
 
 #include "base/memory/weak_ptr.h"
-#include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "base/threading/thread_checker.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/p2p/network_list_manager.h"
 #include "third_party/blink/renderer/platform/p2p/network_list_observer.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -29,7 +30,7 @@ namespace blink {
 // may only be accessed from the signaling thread. The one exception to that is
 // access to slots (e.g., `NetworkManager::SignalNetworksChanged`) that are safe
 // to access from any thread.
-class IpcNetworkManager : public rtc::NetworkManagerBase,
+class IpcNetworkManager : public webrtc::NetworkManagerBase,
                           public blink::NetworkListObserver {
  public:
   // Constructor doesn't take ownership of the |network_list_manager|.
@@ -44,7 +45,7 @@ class IpcNetworkManager : public rtc::NetworkManagerBase,
   base::WeakPtr<IpcNetworkManager> PLATFORM_EXPORT
   AsWeakPtrForSignalingThread();
 
-  // rtc:::NetworkManager:
+  // webrtc:::NetworkManager:
   void StartUpdating() override;
   void StopUpdating() override;
   webrtc::MdnsResponderInterface* GetMdnsResponder() const override;

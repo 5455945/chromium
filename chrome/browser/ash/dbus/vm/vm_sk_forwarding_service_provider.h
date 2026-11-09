@@ -1,21 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_DBUS_VM_VM_SK_FORWARDING_SERVICE_PROVIDER_H_
 #define CHROME_BROWSER_ASH_DBUS_VM_VM_SK_FORWARDING_SERVICE_PROVIDER_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
 
 namespace dbus {
 class MethodCall;
 }  // namespace dbus
 
-namespace chromeos {
+namespace ash {
 
 // This class exports D-Bus methods for functions used by Crostini VMs for
 // Security Key forwarding.
@@ -56,6 +54,6 @@ class VmSKForwardingServiceProvider
   base::WeakPtrFactory<VmSKForwardingServiceProvider> weak_ptr_factory_{this};
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_VM_VM_SK_FORWARDING_SERVICE_PROVIDER_H_

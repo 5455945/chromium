@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,7 @@
 
 #include <vector>
 
-#include "base/macros.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_text_checking_result.h"
 
 namespace content {
@@ -21,9 +19,8 @@ namespace content {
 // suitable for any other usages.
 class WebTestSpellChecker {
  public:
-  static void FillSuggestionList(
-      const blink::WebString& word,
-      blink::WebVector<blink::WebString>* suggestions);
+  static void FillSuggestionList(const blink::WebString& word,
+                                 std::vector<blink::WebString>* suggestions);
 
   WebTestSpellChecker();
   ~WebTestSpellChecker();
@@ -52,22 +49,6 @@ class WebTestSpellChecker {
   bool IsMultiWordMisspelling(
       const blink::WebString& text,
       std::vector<blink::WebTextCheckingResult>* results);
-
- private:
-  // Initialize the internal resources if we need to initialize it.
-  // Initializing this object may take long time. To prevent from hurting
-  // the performance of test_shell, we initialize this object when
-  // SpellCheckWord() is called for the first time.
-  // To be compliant with SpellCheck:InitializeIfNeeded(), this function
-  // returns true if this object is downloading a dictionary, otherwise
-  // it returns false.
-  bool InitializeIfNeeded();
-
-  // A table that consists of misspelled words.
-  std::vector<std::u16string> misspelled_words_;
-
-  // A flag representing whether or not this object is initialized.
-  bool initialized_ = false;
 };
 
 }  // namespace content

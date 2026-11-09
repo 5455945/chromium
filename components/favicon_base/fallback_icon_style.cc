@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,10 @@ namespace {
 const double kMaxBackgroundColorLightness = 0.67;
 const double kMinBackgroundColorLightness = 0.15;
 
+// LINT.IfChange(kDefaultBackgroundColor)
 // Default values for FallbackIconStyle.
 const SkColor kDefaultBackgroundColor = SkColorSetRGB(0x78, 0x78, 0x78);
+// LINT.ThenChange(//components/favicon/android/java/src/org/chromium/components/favicon/LargeIconBridge.java:DEFAULT_ICON_FALLBACK_COLOR)
 const SkColor kDefaultTextColor = SK_ColorWHITE;
 
 }  // namespace
@@ -38,9 +40,8 @@ bool FallbackIconStyle::operator==(const FallbackIconStyle& other) const {
          text_color == other.text_color;
 }
 
-void SetDominantColorAsBackground(
-    const scoped_refptr<base::RefCountedMemory>& bitmap_data,
-    FallbackIconStyle* style) {
+void SetDominantColorAsBackground(base::span<const uint8_t> bitmap_data,
+                                  FallbackIconStyle* style) {
   // Try to ensure color's lightness isn't too large so that light text is
   // visible. Set an upper bound for the dominant color.
   const color_utils::HSL lower_bound{-1.0, -1.0, kMinBackgroundColorLightness};

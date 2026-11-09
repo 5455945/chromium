@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,12 @@
 
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/mailbox.h"
-#include "gpu/gpu_export.h"
 #include "ui/gfx/overlay_transform.h"
 
 extern "C" typedef struct _ClientBuffer* ClientBuffer;
@@ -35,27 +34,26 @@ class GpuControlClient;
 struct SyncToken;
 
 // Common interface for GpuControl implementations.
-class GPU_EXPORT GpuControl {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT GpuControl {
  public:
   GpuControl() = default;
+
+  GpuControl(const GpuControl&) = delete;
+  GpuControl& operator=(const GpuControl&) = delete;
+
   virtual ~GpuControl() = default;
 
   virtual void SetGpuControlClient(GpuControlClient* gpu_control_client) = 0;
 
   virtual const Capabilities& GetCapabilities() const = 0;
 
-  // Create an image for a client buffer with the given dimensions. Returns its
-  // ID or -1 on error.
-  virtual int32_t CreateImage(ClientBuffer buffer,
-                              size_t width,
-                              size_t height) = 0;
-
-  // Destroy an image. The ID must be positive.
-  virtual void DestroyImage(int32_t id) = 0;
+  virtual const GLCapabilities& GetGLCapabilities() const = 0;
 
   // Runs |callback| when a query created via glCreateQueryEXT() has cleared
   // passed the glEndQueryEXT() point.
   virtual void SignalQuery(uint32_t query, base::OnceClosure callback) = 0;
+  // Cancels all quieries that havent been run via signalQuery.
+  virtual void CancelAllQueries() = 0;
 
   virtual void CreateGpuFence(uint32_t gpu_fence_id, ClientGpuFence source) = 0;
   virtual void GetGpuFence(
@@ -114,17 +112,6 @@ class GPU_EXPORT GpuControl {
   // channel as the wait command guarantee that the fence sync will be enqueued
   // first so does not need to be flushed.
   virtual bool CanWaitUnverifiedSyncToken(const SyncToken& sync_token) = 0;
-
-  // Notifies the onscreen surface of the display transform applied to the swaps
-  // from the client.
-  virtual void SetDisplayTransform(gfx::OverlayTransform transform) = 0;
-
-  // Notifies the surface of the ideal frame rate that the content is updated
-  // at. This can be used to tune the hardware refresh rate.
-  virtual void SetFrameRate(float frame_rate) {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(GpuControl);
 };
 
 }  // namespace gpu

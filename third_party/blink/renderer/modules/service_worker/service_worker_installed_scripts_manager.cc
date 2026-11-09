@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,15 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
+#include "base/containers/span.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "base/trace_event/trace_event.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_embedded_worker.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_thread.h"
@@ -22,9 +26,10 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
@@ -48,7 +53,7 @@ class Receiver {
                  mojo::SimpleWatcher::ArmingPolicy::MANUAL,
                  std::move(task_runner)),
         remaining_bytes_(total_bytes) {
-    data_.ReserveInitialCapacity(SafeCast<wtf_size_t>(total_bytes));
+    data_.ReserveInitialCapacity(base::checked_cast<wtf_size_t>(total_bytes));
   }
 
   void Start(base::OnceClosure callback) {
@@ -58,9 +63,9 @@ class Receiver {
     }
     callback_ = std::move(callback);
     // Unretained is safe because |watcher_| is owned by |this|.
-    MojoResult rv = watcher_.Watch(
-        handle_.get(), MOJO_HANDLE_SIGNAL_READABLE,
-        WTF::BindRepeating(&Receiver::OnReadable, WTF::Unretained(this)));
+    MojoResult rv =
+        watcher_.Watch(handle_.get(), MOJO_HANDLE_SIGNAL_READABLE,
+                       BindRepeating(&Receiver::OnReadable, Unretained(this)));
     DCHECK_EQ(MOJO_RESULT_OK, rv);
     watcher_.ArmOrNotify();
   }
@@ -68,15 +73,12 @@ class Receiver {
   void OnReadable(MojoResult) {
     // It isn't necessary to handle MojoResult here since BeginReadDataRaw()
     // returns an equivalent error.
-    const void* buffer = nullptr;
-    uint32_t bytes_read = 0;
-    MojoResult rv =
-        handle_->BeginReadData(&buffer, &bytes_read, MOJO_READ_DATA_FLAG_NONE);
+    base::span<const uint8_t> buffer;
+    MojoResult rv = handle_->BeginReadData(MOJO_READ_DATA_FLAG_NONE, buffer);
     switch (rv) {
       case MOJO_RESULT_BUSY:
       case MOJO_RESULT_INVALID_ARGUMENT:
         NOTREACHED();
-        return;
       case MOJO_RESULT_FAILED_PRECONDITION:
         // Closed by peer.
         OnCompleted();
@@ -94,13 +96,14 @@ class Receiver {
         return;
     }
 
-    if (bytes_read > 0)
-      data_.Append(static_cast<const uint8_t*>(buffer), bytes_read);
+    if (!buffer.empty()) {
+      data_.append_range(buffer);
+    }
 
-    rv = handle_->EndReadData(bytes_read);
+    rv = handle_->EndReadData(buffer.size());
     DCHECK_EQ(rv, MOJO_RESULT_OK);
-    CHECK_GE(remaining_bytes_, bytes_read);
-    remaining_bytes_ -= bytes_read;
+    CHECK_GE(remaining_bytes_, buffer.size());
+    remaining_bytes_ -= buffer.size();
     watcher_.ArmOrNotify();
   }
 
@@ -200,9 +203,9 @@ class Internal : public mojom::blink::ServiceWorkerInstalledScriptsManager {
     auto receivers = std::make_unique<BundledReceivers>(
         std::move(script_info->meta_data), script_info->meta_data_size,
         std::move(script_info->body), script_info->body_size, task_runner_);
-    receivers->Start(WTF::Bind(&Internal::OnScriptReceived,
-                               weak_factory_.GetWeakPtr(),
-                               std::move(script_info)));
+    receivers->Start(blink::BindOnce(&Internal::OnScriptReceived,
+                                     weak_factory_.GetWeakPtr(),
+                                     std::move(script_info)));
     DCHECK(!running_receivers_.Contains(script_url));
     running_receivers_.insert(script_url, std::move(receivers));
   }
@@ -211,7 +214,7 @@ class Internal : public mojom::blink::ServiceWorkerInstalledScriptsManager {
   void OnScriptReceived(mojom::blink::ServiceWorkerScriptInfoPtr script_info) {
     DCHECK_CALLED_ON_VALID_THREAD(io_thread_checker_);
     auto iter = running_receivers_.find(script_info->script_url);
-    DCHECK(iter != running_receivers_.end());
+    CHECK(iter != running_receivers_.end());
     std::unique_ptr<BundledReceivers> receivers = std::move(iter->value);
     DCHECK(receivers);
     if (!receivers->body()->HasReceivedAllData() ||
@@ -270,7 +273,7 @@ ServiceWorkerInstalledScriptsManager::ServiceWorkerInstalledScriptsManager(
   // worker thread later, so they should keep isolated from the current thread.
   for (const WebURL& url :
        installed_scripts_manager_params->installed_scripts_urls) {
-    installed_urls_.insert(KURL(url).Copy());
+    installed_urls_.insert(KURL(url));
   }
 
   PostCrossThreadTask(
@@ -302,13 +305,17 @@ ServiceWorkerInstalledScriptsManager::GetScriptData(const KURL& script_url) {
   std::unique_ptr<TextResourceDecoder> decoder =
       std::make_unique<TextResourceDecoder>(TextResourceDecoderOptions(
           TextResourceDecoderOptions::kPlainTextContent,
-          raw_script_data->Encoding().IsEmpty()
-              ? UTF8Encoding()
-              : WTF::TextEncoding(raw_script_data->Encoding())));
+          raw_script_data->Encoding().empty()
+              ? Utf8Encoding()
+              : TextEncoding(raw_script_data->Encoding())));
 
   Vector<uint8_t> source_text = raw_script_data->TakeScriptText();
-  String decoded_source_text = decoder->Decode(
-      reinterpret_cast<const char*>(source_text.data()), source_text.size());
+  String decoded_source_text = decoder->Decode(base::span(source_text));
+  if (String flushed = decoder->Flush(); !flushed.empty()) {
+    decoded_source_text = decoded_source_text.empty()
+                              ? std::move(flushed)
+                              : StrCat({decoded_source_text, flushed});
+  }
 
   // TODO(crbug.com/946676): Remove the unique_ptr<> wrapper around the Vector
   // as we can just use Vector::IsEmpty() to distinguish missing code cache.
@@ -319,7 +326,7 @@ ServiceWorkerInstalledScriptsManager::GetScriptData(const KURL& script_url) {
 
   return std::make_unique<InstalledScriptsManager::ScriptData>(
       script_url, decoded_source_text, std::move(meta_data),
-      raw_script_data->TakeHeaders());
+      raw_script_data->TakeHeaders(), decoder->Encoding());
 }
 
 std::unique_ptr<RawScriptData>

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -82,7 +82,7 @@ TtsExtension.prototype = {
     for (let i = 0; i < voices.length; i++) {
       this.voiceNameToLangAndGender_[voices[i].voice_name] = {
         lang: voices[i].lang,
-        gender: voices[i].gender
+        gender: voices[i].gender,
       };
     }
 
@@ -90,7 +90,7 @@ TtsExtension.prototype = {
     this.audioElement_ = document.createElement('audio');
     document.body.appendChild(this.audioElement_);
     this.audioElement_.addEventListener(
-        'ended', this.onStop_.bind(this), false);
+        'ended', this.onEnded_.bind(this), false);
     this.audioElement_.addEventListener(
         'canplaythrough', this.onStart_.bind(this), false);
 
@@ -114,7 +114,7 @@ TtsExtension.prototype = {
   onSpeak_(utterance, options, callback) {
     // Ignore the utterance if it is empty. Continue such processing causes no
     // speech and fails all subsequent calls to process additional utterances.
-    if (utterance.length == 0) {
+    if (utterance.length === 0) {
       callback({'type': 'end', 'charIndex': 0});
       return;
     }
@@ -133,7 +133,7 @@ TtsExtension.prototype = {
       this.currentUtterance_ = {
         utterance: utterance,
         options: options,
-        callback: callback
+        callback: callback,
       };
 
       let lang = options.lang;
@@ -207,7 +207,7 @@ TtsExtension.prototype = {
       this.audioElement_.pause();
       this.currentUtterance_.callback({
         'type': 'end',
-        'charIndex': this.currentUtterance_.utterance.length
+        'charIndex': this.currentUtterance_.utterance.length,
       });
     }
     this.currentUtterance_ = null;
@@ -221,6 +221,9 @@ TtsExtension.prototype = {
    * @private
    */
   onStart_() {
+    chrome.metricsPrivate.recordEnumerationValue(
+        'TextToSpeech.ExtensionNetworkSpeechSynthesis.Playback',
+        /*can play through*/ 0, /*enum size*/ 2);
     if (this.currentUtterance_) {
       if (this.currentUtterance_.options.volume !== undefined) {
         // Both APIs use the same range for volume, between 0.0 and 1.0.
@@ -229,6 +232,13 @@ TtsExtension.prototype = {
       this.audioElement_.play();
       this.currentUtterance_.callback({'type': 'start', 'charIndex': 0});
     }
+  },
+
+  onEnded_() {
+    chrome.metricsPrivate.recordEnumerationValue(
+        'TextToSpeech.ExtensionNetworkSpeechSynthesis.Playback', /*ended*/ 1,
+        /*enum size*/ 2);
+    this.onStop_();
   },
 
   /**
@@ -251,7 +261,7 @@ TtsExtension.prototype = {
     if (this.currentUtterance_) {
       this.audioElement_.play();
     }
-  }
+  },
 
 };
 

@@ -1,16 +1,8 @@
-// Copyright 2006 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.i18n.TimeZoneTest');
 goog.setTestOnly();
@@ -100,6 +92,17 @@ const americaLosAngelesDataStringKeys = {
   'std_offset': -480,
 };
 
+const irelandDublinData = {
+  'transitions': [
+    414025, 0,    419233, 1380, 422761, 0,    427969, 1380, 431665, 0,
+    436705, 1380, 440401, 0,    445441, 1380, 449137, 0,    454345, 1380,
+    457873, 0,    463081, 1380, 466609, 0,    471817, 1380
+  ],
+  'names': ['GMT', 'Greenwich Mean Time', 'IST', 'Irish Standard Time'],
+  'id': 'Europe/Dublin',
+  'std_offset': 60,
+};
+
 testSuite({
   testIsDaylightTime() {
     const usPacific = TimeZone.createTimeZone(americaLosAngelesData);
@@ -135,7 +138,6 @@ testSuite({
   },
 
   testGetters() {
-    const date = new Date();
     const usPacific = TimeZone.createTimeZone(americaLosAngelesData);
     assertEquals('America/Los_Angeles', usPacific.getTimeZoneId());
     assertObjectEquals(americaLosAngelesData, usPacific.getTimeZoneData());
@@ -253,4 +255,12 @@ testSuite({
     assertEquals('GMT+00:00', simpleTimeZone.getGenericLocation(date));
     assertEquals(false, simpleTimeZone.isDaylightTime(date));
   },
+
+  // This test is added for b/175384350.
+  testGetOffsetEdgeCase() {
+    const irish = TimeZone.createTimeZone(irelandDublinData);
+    const dt = new Date(2022, 1, 14);
+    assertEquals(0, irish.getOffset(dt));
+    assertEquals('UTC', irish.getUTCString(dt));
+  }
 });

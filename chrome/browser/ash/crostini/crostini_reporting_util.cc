@@ -1,14 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/crostini/crostini_reporting_util.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "base/check.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
@@ -30,8 +30,9 @@ void WriteMetricsForReportingToPrefs(
     LOG(ERROR) << "Could not determine Termina version for usage reporting";
   }
 
-  profile_prefs->SetInt64(crostini::prefs::kCrostiniLastLaunchTimeWindowStart,
-                          last_launch_time_window_start.ToJavaTime());
+  profile_prefs->SetInt64(
+      crostini::prefs::kCrostiniLastLaunchTimeWindowStart,
+      last_launch_time_window_start.InMillisecondsSinceUnixEpoch());
   profile_prefs->SetString(
       crostini::prefs::kCrostiniLastLaunchTerminaComponentVersion,
       crostini_version);
@@ -56,8 +57,8 @@ void WriteTerminaVmKernelVersionToPrefsForReporting(
 
 base::Time GetThreeDayWindowStart(const base::Time& actual_time) {
   const base::Time actual_time_midnight = actual_time.UTCMidnight();
-  const base::TimeDelta delta = base::TimeDelta::FromDays(
-      (actual_time_midnight - base::Time::UnixEpoch()).InDays() % 3);
+  const base::TimeDelta delta =
+      base::Days((actual_time_midnight - base::Time::UnixEpoch()).InDays() % 3);
   return actual_time_midnight - delta;
 }
 
@@ -66,8 +67,9 @@ std::string GetTerminaVersion(
   // Define a UTF16 version of imageloader::kTerminaComponentName for the string
   // comparison below. Assert that it is equal to the ASCII component name.
   static constexpr char16_t kTerminaComponentName16[] = u"cros-termina";
-  DCHECK(base::ranges::equal(imageloader::kTerminaComponentName,
-                             kTerminaComponentName16));
+  CHECK(std::ranges::equal(imageloader::kTerminaComponentName,
+                           kTerminaComponentName16),
+        base::NotFatalUntil::M160);
 
   const std::vector<component_updater::ComponentInfo> component_list =
       update_service->GetComponents();

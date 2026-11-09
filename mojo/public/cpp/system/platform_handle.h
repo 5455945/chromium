@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,30 +11,23 @@
 #ifndef MOJO_PUBLIC_CPP_SYSTEM_PLATFORM_HANDLE_H_
 #define MOJO_PUBLIC_CPP_SYSTEM_PLATFORM_HANDLE_H_
 
-#include <stdint.h>
-
-#include "base/files/platform_file.h"
-#include "base/macros.h"
-#include "base/memory/read_only_shared_memory_region.h"
-#include "base/memory/unsafe_shared_memory_region.h"
-#include "base/memory/writable_shared_memory_region.h"
-#include "base/process/process_handle.h"
-#include "build/build_config.h"
-#include "mojo/public/c/system/platform_handle.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "mojo/public/cpp/system/handle.h"
 #include "mojo/public/cpp/system/system_export.h"
 
-namespace mojo {
+namespace base {
+class ReadOnlySharedMemoryRegion;
+class UnsafeSharedMemoryRegion;
+class WritableSharedMemoryRegion;
 
-#if defined(OS_WIN)
-const MojoPlatformHandleType kPlatformFileHandleType =
-    MOJO_PLATFORM_HANDLE_TYPE_WINDOWS_HANDLE;
-#else
-const MojoPlatformHandleType kPlatformFileHandleType =
-    MOJO_PLATFORM_HANDLE_TYPE_FILE_DESCRIPTOR;
-#endif  // defined(OS_WIN)
+namespace subtle {
+class PlatformSharedMemoryRegion;
+}  // namespace subtle
+
+}  // namespace base
+
+namespace mojo {
 
 // Wraps and unwraps base::subtle::PlatformSharedMemoryRegions. This should be
 // used only while transitioning from the legacy shared memory API. In new code
@@ -51,16 +44,6 @@ MOJO_CPP_SYSTEM_EXPORT ScopedHandle WrapPlatformHandle(PlatformHandle handle);
 // Unwraps a Mojo handle to a PlatformHandle object from the C++ platform
 // support library.
 MOJO_CPP_SYSTEM_EXPORT PlatformHandle UnwrapPlatformHandle(ScopedHandle handle);
-
-// Wraps a ScopedPlatformFile as a Mojo handle. Takes ownership of the file
-// object. If |platform_file| is valid, this will return a valid handle.
-MOJO_CPP_SYSTEM_EXPORT
-ScopedHandle WrapPlatformFile(base::ScopedPlatformFile platform_file);
-
-// Unwraps a PlatformFile from a Mojo handle.
-MOJO_CPP_SYSTEM_EXPORT
-MojoResult UnwrapPlatformFile(ScopedHandle handle,
-                              base::ScopedPlatformFile* file);
 
 // Helpers for wrapping and unwrapping new base shared memory API primitives.
 // If the input |region| is valid for the Wrap* functions, they will always

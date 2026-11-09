@@ -1,18 +1,32 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/autofill/payments/offer_notification_bubble_controller_impl.h"
 
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/data_model/autofill_offer_data.h"
-#include "content/public/test/mock_navigation_handle.h"
+#include "chrome/browser/ui/autofill/bubble_manager.h"
+#include "chrome/browser/ui/autofill/mock_bubble_manager.h"
+#include "chrome/browser/ui/autofill/payments/payments_ui_constants.h"
+#include "chrome/browser/ui/autofill/test/test_autofill_bubble_handler.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
+#include "components/autofill/core/browser/metrics/payments/promo_code_metrics.h"
+#include "components/autofill/core/browser/payments/offer_notification_options.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/common/autofill_clock.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
+#include "components/commerce/core/commerce_feature_list.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/mock_tab_interface.h"
+#include "components/tabs/public/tab_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 namespace autofill {
 
@@ -32,52 +46,99 @@ class TestOfferNotificationBubbleControllerImpl
       content::WebContents* web_contents)
       : OfferNotificationBubbleControllerImpl(web_contents) {}
 
-  void SimulateNavigation(std::string url) {
-    content::RenderFrameHost* rfh = web_contents()->GetMainFrame();
-    content::MockNavigationHandle navigation_handle(GURL(url), rfh);
-    navigation_handle.set_has_committed(true);
-    DidFinishNavigation(&navigation_handle);
-  }
+  void UpdatePageActionIcon() override {}
 
  private:
   // Overrides to bypass the IsWebContentsActive check.
-  void DoShowBubble() override {
-    Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-    set_bubble_view(
-        browser->window()
-            ->GetAutofillBubbleHandler()
-            ->ShowOfferNotificationBubble(web_contents(), this,
-                                          /*is_user_gesture=*/false));
-    DCHECK(bubble_view());
-  }
+  bool IsWebContentsActive() override { return true; }
 };
 
 }  // namespace
 
+// The anonymous namespace needs to end here because of `friend`ships between
+// the tests and the production code.
 class OfferNotificationBubbleControllerImplTest
-    : public BrowserWithTestWindowTest {
+    : public ChromeRenderViewHostTestHarness {
  public:
-  OfferNotificationBubbleControllerImplTest() = default;
+  OfferNotificationBubbleControllerImplTest()
+      : ChromeRenderViewHostTestHarness(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
   OfferNotificationBubbleControllerImplTest(
       const OfferNotificationBubbleControllerImplTest&) = delete;
   OfferNotificationBubbleControllerImplTest& operator=(
       const OfferNotificationBubbleControllerImplTest&) = delete;
 
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
-    AddTab(browser(), GURL("about:blank"));
-    content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-    TestOfferNotificationBubbleControllerImpl::CreateForTesting(web_contents);
+    ChromeRenderViewHostTestHarness::SetUp();
+
+    // Ensure WebContents is navigated and process is fully initialized.
+    NavigateAndCommit(GURL("about:blank"));
+
+    // Create MockTabInterface.
+    auto mock_tab = std::make_unique<tabs::MockTabInterface>();
+
+    // Configure MockTabInterface to return our web_contents() when
+    // GetContents() is called.
+    ON_CALL(*mock_tab, GetContents())
+        .WillByDefault(testing::Return(web_contents()));
+
+    // Configure MockBubbleManager to immediately show bubble when requested.
+    ON_CALL(mock_bubble_manager_, RequestShowController(testing::_, testing::_))
+        .WillByDefault(
+            [](BubbleControllerBase& controller_to_show, bool force_show) {
+              controller_to_show.ShowBubble();
+            });
+
+    // Configure MockBubbleManager to return false for
+    // HasConflictingPendingBubble.
+    ON_CALL(mock_bubble_manager_, HasConflictingPendingBubble(testing::_))
+        .WillByDefault(testing::Return(false));
+
+    scoped_bubble_manager_ =
+        std::make_unique<ui::ScopedUnownedUserData<BubbleManager>>(
+            mock_tab->GetUnownedUserDataHost(), mock_bubble_manager_);
+
+    // Configure MockBrowserWindowInterface to return our UnownedUserDataHost.
+    ON_CALL(mock_browser_window_interface_, GetUnownedUserDataHost())
+        .WillByDefault(testing::ReturnRef(unowned_user_data_host_));
+
+    // Configure MockTabInterface to return our MockBrowserWindowInterface.
+    ON_CALL(*mock_tab, GetBrowserWindowInterface())
+        .WillByDefault(testing::Return(&mock_browser_window_interface_));
+
+    // Bind TestAutofillBubbleHandler to the UnownedUserDataHost.
+    scoped_autofill_bubble_handler_ = std::make_unique<
+        ui::ScopedUnownedUserData<autofill::AutofillBubbleHandler>>(
+        unowned_user_data_host_, test_autofill_bubble_handler_);
+
+    // Keep MockTabInterface alive by storing it in the test fixture.
+    tab_interface_ = std::move(mock_tab);
+
+    // Associate the mock TabInterface with the WebContents.
+    tabs::TabLookupFromWebContents::CreateForWebContents(web_contents(),
+                                                         tab_interface_.get());
+
+    TestOfferNotificationBubbleControllerImpl::CreateForTesting(web_contents());
+  }
+
+  TestOfferNotificationBubbleControllerImpl* controller() {
+    return static_cast<TestOfferNotificationBubbleControllerImpl*>(
+        TestOfferNotificationBubbleControllerImpl::FromWebContents(
+            web_contents()));
   }
 
  protected:
-  void ShowBubble(const AutofillOfferData* offer) {
-    controller()->ShowOfferNotificationIfApplicable(offer, &card_);
+  tabs::MockTabInterface& mock_tab() {
+    return static_cast<tabs::MockTabInterface&>(*tab_interface_);
   }
 
-  void CloseBubble(PaymentsBubbleClosedReason closed_reason =
-                       PaymentsBubbleClosedReason::kNotInteracted) {
+  void ShowBubble(const AutofillOfferData& offer) {
+    controller()->ShowOfferNotificationIfApplicable(
+        offer, {.show_notification_automatically = true});
+  }
+
+  void CloseBubble(PaymentsUiClosedReason closed_reason =
+                       PaymentsUiClosedReason::kNotInteracted) {
     controller()->OnBubbleClosed(closed_reason);
   }
 
@@ -86,61 +147,125 @@ class OfferNotificationBubbleControllerImplTest
     controller()->ReshowBubble();
   }
 
-  AutofillOfferData CreateTestOfferWithOrigins(
-      const std::vector<GURL>& merchant_origins) {
-    // Only adding what the tests need to pass. Feel free to add more populated
-    // fields as necessary.
-    AutofillOfferData offer;
-    offer.merchant_origins = merchant_origins;
-    return offer;
-  }
-
-  TestOfferNotificationBubbleControllerImpl* controller() {
-    return static_cast<TestOfferNotificationBubbleControllerImpl*>(
-        TestOfferNotificationBubbleControllerImpl::FromWebContents(
-            browser()->tab_strip_model()->GetActiveWebContents()));
-  }
-
  private:
-  CreditCard card_ = test::GetCreditCard();
+  std::unique_ptr<tabs::TabInterface> tab_interface_;
+  testing::NiceMock<MockBubbleManager> mock_bubble_manager_;
+  std::unique_ptr<ui::ScopedUnownedUserData<BubbleManager>>
+      scoped_bubble_manager_;
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_window_interface_;
+  ui::UnownedUserDataHost unowned_user_data_host_;
+  autofill::TestAutofillBubbleHandler test_autofill_bubble_handler_;
+  std::unique_ptr<ui::ScopedUnownedUserData<autofill::AutofillBubbleHandler>>
+      scoped_autofill_bubble_handler_;
 };
 
 TEST_F(OfferNotificationBubbleControllerImplTest, BubbleShown) {
   // Check that bubble is visible.
-  AutofillOfferData offer = CreateTestOfferWithOrigins(
-      {GURL("https://www.example.com/first/").GetOrigin()});
-  ShowBubble(&offer);
+  AutofillOfferData offer =
+      test::GetPromoCodeOfferData(GURL("https://www.example.com"));
+  ShowBubble(offer);
   EXPECT_TRUE(controller()->GetOfferNotificationBubbleView());
 }
 
-TEST_F(OfferNotificationBubbleControllerImplTest, OriginSticky) {
-  static const struct {
-    GURL url_navigated_to;
-    bool bubble_should_be_visible;
-  } test_cases[] = {
-      {GURL("https://www.example.com/second/"), true},
-      {GURL("https://www.about.com/"), false},
-      {GURL("https://support.example.com/first/"), false},
-      {GURL("http://www.example.com/first/"), false},
-      {GURL("https://www.test.com/first/"), true},
-  };
+// Ensures the bubble does not stick around after it has been shown for longer
+// than kAutofillBubbleSurviveNavigationTime (5 seconds).
+TEST_F(OfferNotificationBubbleControllerImplTest,
+       OfferBubbleDismissesOnNavigation) {
+  AutofillOfferData offer =
+      test::GetPromoCodeOfferData(GURL("https://www.example.com"));
+  ShowBubble(offer);
+  EXPECT_TRUE(controller()->GetOfferNotificationBubbleView());
+  task_environment()->FastForwardBy(kAutofillBubbleSurviveNavigationTime -
+                                    base::Seconds(1));
+  controller()->ShowOfferNotificationIfApplicable(
+      offer, {.notification_has_been_shown = true});
+  // Ensure the bubble is still there if
+  // kOfferNotificationBubbleSurviveNavigationTime hasn't been reached yet.
+  EXPECT_TRUE(controller()->GetOfferNotificationBubbleView());
 
-  for (const auto& test_case : test_cases) {
-    // Set the initial origin that the bubble will be displayed on.
-    NavigateAndCommitActiveTab(GURL("https://www.example.com/first/"));
-    AutofillOfferData offer = CreateTestOfferWithOrigins(
-        {GURL("https://www.example.com/first/").GetOrigin(),
-         GURL("https://www.test.com/first/").GetOrigin()});
-    ShowBubble(&offer);
+  task_environment()->FastForwardBy(base::Seconds(2));
+  controller()->ShowOfferNotificationIfApplicable(
+      offer, {.notification_has_been_shown = true});
+  // Ensure new page does not have an active offer notification bubble.
+  EXPECT_EQ(nullptr, controller()->GetOfferNotificationBubbleView());
+}
 
-    // Bubble should be visible.
-    EXPECT_TRUE(controller()->GetOfferNotificationBubbleView());
+TEST_F(OfferNotificationBubbleControllerImplTest,
+       ShownOfferIsRetrievableFromController) {
+  AutofillOfferData offer =
+      test::GetPromoCodeOfferData(GURL("https://www.example.com"));
+  ShowBubble(offer);
 
-    // Navigate to a different url, and verify bubble visibility.
-    NavigateAndCommitActiveTab(test_case.url_navigated_to);
-    EXPECT_EQ(test_case.bubble_should_be_visible,
-              !!controller()->GetOfferNotificationBubbleView());
-  }
+  EXPECT_TRUE(*controller()->GetOffer() == offer);
+}
+
+// Tests that the offer notification bubble will be shown for a wallet direct
+// offer, and that the bubble title is the offer's short title.
+TEST_F(OfferNotificationBubbleControllerImplTest,
+       WalletDirectOffer_BubbleShown) {
+  AutofillOfferData offer =
+      test::GetPromoCodeOfferData(GURL("https://www.example.com"));
+  ShowBubble(offer);
+
+  EXPECT_TRUE(controller()->GetOfferNotificationBubbleView());
+  EXPECT_EQ(controller()->GetWindowTitle(), u"5% off on shoes.");
+}
+
+TEST_F(OfferNotificationBubbleControllerImplTest, BubbleClosed_LogsResult) {
+  base::HistogramTester histogram_tester;
+  AutofillOfferData offer =
+      test::GetPromoCodeOfferData(GURL("https://www.example.com"));
+
+  // Verify closing the bubble logs kClosed.
+  ShowBubble(offer);
+  CloseBubble(PaymentsUiClosedReason::kClosed);
+  histogram_tester.ExpectUniqueSample("Autofill.OfferNotificationBubble.Result",
+                                      PaymentsUiClosedReason::kClosed, 1);
+
+  // Verify not interacted logs kNotInteracted.
+  ShowBubble(offer);
+  CloseBubble(PaymentsUiClosedReason::kNotInteracted);
+  histogram_tester.ExpectBucketCount("Autofill.OfferNotificationBubble.Result",
+                                     PaymentsUiClosedReason::kClosed, 1);
+  histogram_tester.ExpectBucketCount("Autofill.OfferNotificationBubble.Result",
+                                     PaymentsUiClosedReason::kNotInteracted, 1);
+
+  // Verify other close reason (e.g. kUnknown) logs kUnknown.
+  ShowBubble(offer);
+  CloseBubble(PaymentsUiClosedReason::kUnknown);
+  histogram_tester.ExpectBucketCount("Autofill.OfferNotificationBubble.Result",
+                                     PaymentsUiClosedReason::kUnknown, 1);
+  histogram_tester.ExpectTotalCount("Autofill.OfferNotificationBubble.Result",
+                                    3);
+}
+
+namespace {
+
+// Unlike `TestOfferNotificationBubbleControllerImpl`, keeps the real
+// `UpdatePageActionIcon()`.
+class OfferNotificationBubbleControllerImplWithPageActionIcon
+    : public OfferNotificationBubbleControllerImpl {
+ public:
+  explicit OfferNotificationBubbleControllerImplWithPageActionIcon(
+      content::WebContents* web_contents)
+      : OfferNotificationBubbleControllerImpl(web_contents) {}
+};
+
+}  // namespace
+
+// Tests that updating the page action icon does not crash while the tab has no
+// browser window, which is the case while it is being detached on close.
+TEST_F(OfferNotificationBubbleControllerImplTest,
+       UpdatePageActionIcon_NoBrowserWindow_DoesNotCrash) {
+  web_contents()->SetUserData(
+      OfferNotificationBubbleControllerImpl::UserDataKey(),
+      std::make_unique<OfferNotificationBubbleControllerImplWithPageActionIcon>(
+          web_contents()));
+  ON_CALL(mock_tab(), GetBrowserWindowInterface())
+      .WillByDefault(testing::Return(nullptr));
+
+  OfferNotificationBubbleControllerImpl::FromWebContents(web_contents())
+      ->DismissNotification();
 }
 
 }  // namespace autofill

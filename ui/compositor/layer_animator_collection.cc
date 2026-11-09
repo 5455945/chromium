@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/compositor/layer_animator_collection.h"
 
-#include <set>
-
+#include "base/containers/flat_set.h"
 #include "base/time/time.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer_animator.h"
@@ -14,6 +13,10 @@ namespace ui {
 
 LayerAnimatorCollection::LayerAnimatorCollection(Compositor* compositor)
     : compositor_(compositor), last_tick_time_(base::TimeTicks::Now()) {
+  // Do not check the active duration for the LayerAnimationCollection because
+  // new animation can be added while running existing animation, which
+  // extends the duration.
+  set_check_active_duration(false);
 }
 
 LayerAnimatorCollection::~LayerAnimatorCollection() {
@@ -23,7 +26,7 @@ LayerAnimatorCollection::~LayerAnimatorCollection() {
 
 void LayerAnimatorCollection::StartAnimator(
     scoped_refptr<LayerAnimator> animator) {
-  DCHECK_EQ(0U, animators_.count(animator));
+  CHECK_EQ(0U, animators_.count(animator), base::NotFatalUntil::M163);
   if (animators_.empty())
     last_tick_time_ = base::TimeTicks::Now();
   animators_.insert(animator);
@@ -33,7 +36,7 @@ void LayerAnimatorCollection::StartAnimator(
 
 void LayerAnimatorCollection::StopAnimator(
     scoped_refptr<LayerAnimator> animator) {
-  DCHECK_GT(animators_.count(animator), 0U);
+  CHECK_GT(animators_.count(animator), 0U, base::NotFatalUntil::M163);
   animators_.erase(animator);
   if (animators_.empty() && compositor_)
     compositor_->RemoveAnimationObserver(this);
@@ -45,7 +48,7 @@ bool LayerAnimatorCollection::HasActiveAnimators() const {
 
 void LayerAnimatorCollection::OnAnimationStep(base::TimeTicks now) {
   last_tick_time_ = now;
-  std::set<scoped_refptr<LayerAnimator> > list = animators_;
+  base::flat_set<scoped_refptr<LayerAnimator>> list = animators_;
   for (auto iter = list.begin(); iter != list.end(); ++iter) {
     // Make sure the animator is still valid.
     if (animators_.count(*iter) > 0)
@@ -57,7 +60,7 @@ void LayerAnimatorCollection::OnAnimationStep(base::TimeTicks now) {
 
 void LayerAnimatorCollection::OnCompositingShuttingDown(
     Compositor* compositor) {
-  DCHECK_EQ(compositor_, compositor);
+  CHECK_EQ(compositor_, compositor, base::NotFatalUntil::M163);
   compositor_->RemoveAnimationObserver(this);
   compositor_ = nullptr;
 }

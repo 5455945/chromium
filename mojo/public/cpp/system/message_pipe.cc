@@ -1,11 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/system/message_pipe.h"
 
+#include <algorithm>
 #include <cstring>
 
+#include "base/compiler_specific.h"
 #include "base/numerics/safe_math.h"
 
 namespace mojo {
@@ -29,12 +31,15 @@ MojoResult WriteMessageRaw(MessagePipeHandle message_pipe,
                              base::checked_cast<uint32_t>(num_bytes), handles,
                              base::checked_cast<uint32_t>(num_handles),
                              &append_options, &buffer, &buffer_size);
-  if (rv != MOJO_RESULT_OK)
+  if (rv != MOJO_RESULT_OK) {
     return MOJO_RESULT_ABORTED;
+  }
 
   DCHECK(buffer);
   DCHECK_GE(buffer_size, base::checked_cast<uint32_t>(num_bytes));
-  memcpy(buffer, bytes, num_bytes);
+  if (num_bytes > 0) {
+    UNSAFE_TODO(memcpy(buffer, bytes, num_bytes));
+  }
 
   MojoWriteMessageOptions write_options;
   write_options.struct_size = sizeof(write_options);
@@ -49,12 +54,14 @@ MojoResult ReadMessageRaw(MessagePipeHandle message_pipe,
                           MojoReadMessageFlags flags) {
   ScopedMessageHandle message_handle;
   MojoResult rv = ReadMessageNew(message_pipe, &message_handle, flags);
-  if (rv != MOJO_RESULT_OK)
+  if (rv != MOJO_RESULT_OK) {
     return rv;
+  }
 
   rv = MojoSerializeMessage(message_handle->value(), nullptr);
-  if (rv != MOJO_RESULT_OK && rv != MOJO_RESULT_FAILED_PRECONDITION)
+  if (rv != MOJO_RESULT_OK && rv != MOJO_RESULT_FAILED_PRECONDITION) {
     return MOJO_RESULT_ABORTED;
+  }
 
   void* buffer = nullptr;
   uint32_t num_bytes = 0;
@@ -62,7 +69,9 @@ MojoResult ReadMessageRaw(MessagePipeHandle message_pipe,
   rv = MojoGetMessageData(message_handle->value(), nullptr, &buffer, &num_bytes,
                           nullptr, &num_handles);
   if (rv == MOJO_RESULT_RESOURCE_EXHAUSTED) {
-    DCHECK(handles);
+    if (!handles) {
+      return MOJO_RESULT_RESOURCE_EXHAUSTED;
+    }
     handles->resize(num_handles);
     rv = MojoGetMessageData(
         message_handle->value(), nullptr, &buffer, &num_bytes,
@@ -73,16 +82,19 @@ MojoResult ReadMessageRaw(MessagePipeHandle message_pipe,
     DCHECK(buffer);
     uint8_t* payload_data = reinterpret_cast<uint8_t*>(buffer);
     payload->resize(num_bytes);
-    std::copy(payload_data, payload_data + num_bytes, payload->begin());
+    std::copy(payload_data, UNSAFE_TODO(payload_data + num_bytes),
+              payload->begin());
   } else if (payload) {
     payload->clear();
   }
 
-  if (handles && !num_handles)
+  if (handles && !num_handles) {
     handles->clear();
+  }
 
-  if (rv != MOJO_RESULT_OK)
+  if (rv != MOJO_RESULT_OK) {
     return MOJO_RESULT_ABORTED;
+  }
 
   return MOJO_RESULT_OK;
 }

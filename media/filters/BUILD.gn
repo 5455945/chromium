@@ -1,9 +1,51 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//media/gpu/args.gni")
 import("//media/media_options.gni")
+
+if (media_use_symphonia_decoder) {
+  rust_static_library("symphonia_decoder_bridge") {
+    # Needed because CXX generates unsafe code, for example using export_name
+    # is inherently unsafe.
+    allow_unsafe = true
+
+    crate_root = "symphonia_decoder_bridge.rs"
+    sources = [ "symphonia_decoder_bridge.rs" ]
+    cxx_bindings = [ "symphonia_decoder_bridge.rs" ]
+    visibility = [ ":*" ]
+    deps = [
+      "//third_party/rust/symphonia_bundle_flac/v0_6:lib",
+      "//third_party/rust/symphonia_bundle_mp3/v0_6:lib",
+      "//third_party/rust/symphonia_codec_pcm/v0_6:lib",
+      "//third_party/rust/symphonia_codec_vorbis/v0_6:lib",
+      "//third_party/rust/symphonia_core/v0_6:lib",
+    ]
+  }
+}
+
+if (media_use_symphonia_demuxer) {
+  source_set("symphonia_source_bridge") {
+    sources = [ "symphonia_source_bridge.h" ]
+    visibility = [ ":*" ]
+    public_deps = [
+      "//base",
+      "//build/rust:cxx_cppdeps",
+    ]
+  }
+
+  rust_static_library("symphonia_demuxer_bridge") {
+    allow_unsafe = true
+
+    crate_root = "symphonia_demuxer_bridge.rs"
+    sources = [ "symphonia_demuxer_bridge.rs" ]
+    cxx_bindings = [ "symphonia_demuxer_bridge.rs" ]
+    visibility = [ ":*" ]
+    deps = [ "//third_party/rust/symphonia/v0_6:lib" ]
+    public_deps = [ ":symphonia_source_bridge" ]
+  }
+}
 
 source_set("filters") {
   # Do not expand the visibility here without double-checking with OWNERS, this
@@ -38,16 +80,20 @@ source_set("filters") {
     "decrypting_media_resource.h",
     "decrypting_video_decoder.cc",
     "decrypting_video_decoder.h",
+    "demuxer_manager.cc",
+    "demuxer_manager.h",
     "file_data_source.cc",
     "file_data_source.h",
-    "frame_buffer_pool.cc",
-    "frame_buffer_pool.h",
     "frame_processor.cc",
     "frame_processor.h",
+    "h26x_annex_b_bitstream_builder.cc",
+    "h26x_annex_b_bitstream_builder.h",
     "memory_data_source.cc",
     "memory_data_source.h",
     "offloading_video_decoder.cc",
     "offloading_video_decoder.h",
+    "opus_audio_decoder.cc",
+    "opus_audio_decoder.h",
     "pipeline_controller.cc",
     "pipeline_controller.h",
     "source_buffer_parse_warnings.h",
@@ -63,37 +109,25 @@ source_set("filters") {
     "video_cadence_estimator.h",
     "video_renderer_algorithm.cc",
     "video_renderer_algorithm.h",
-    "vp9_bool_decoder.cc",
-    "vp9_bool_decoder.h",
-    "vp9_compressed_header_parser.cc",
-    "vp9_compressed_header_parser.h",
-    "vp9_parser.cc",
-    "vp9_parser.h",
-    "vp9_raw_bits_reader.cc",
-    "vp9_raw_bits_reader.h",
-    "vp9_uncompressed_header_parser.cc",
-    "vp9_uncompressed_header_parser.h",
     "wsola_internals.cc",
     "wsola_internals.h",
   ]
 
-  configs += [
-    # TODO(crbug.com/167187): Fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
-    "//media:subcomponent_config",
-  ]
+  configs += [ "//media:subcomponent_config" ]
 
   deps = [
-    "//base/util/type_safety:type_safety",
-    "//build:chromeos_buildflags",
+    "//base",
     "//cc/base",  # For MathUtil.
     "//media:media_buildflags",
     "//media/base",
     "//media/cdm",
     "//media/formats",
+    "//media/parsers",
     "//media/video",
+    "//net",
     "//third_party/libyuv",
-    "//ui/gfx/geometry:geometry",
+    "//third_party/opus",
+    "//ui/gfx/geometry",
   ]
 
   libs = []
@@ -103,6 +137,13 @@ source_set("filters") {
       "h264_to_annex_b_bitstream_converter.cc",
       "h264_to_annex_b_bitstream_converter.h",
     ]
+
+    if (enable_platform_hevc) {
+      sources += [
+        "h265_to_annex_b_bitstream_converter.cc",
+        "h265_to_annex_b_bitstream_converter.h",
+      ]
+    }
   }
 
   if (media_use_ffmpeg) {
@@ -133,6 +174,32 @@ source_set("filters") {
     ]
   }
 
+  if (media_use_iamf_tools) {
+    deps += [ "//third_party/iamf_tools:iamf_tools_lib" ]
+    sources += [
+      "iamf_audio_decoder.cc",
+      "iamf_audio_decoder.h",
+    ]
+  }
+
+  if (media_use_symphonia_decoder) {
+    sources += [
+      "symphonia_audio_decoder.cc",
+      "symphonia_audio_decoder.h",
+    ]
+    deps += [ ":symphonia_decoder_bridge" ]
+  }
+
+  if (media_use_symphonia_demuxer) {
+    sources += [
+      "symphonia_data_source_bridge.cc",
+      "symphonia_data_source_bridge.h",
+      "symphonia_demuxer_stream.cc",
+      "symphonia_demuxer_stream.h",
+    ]
+    deps += [ ":symphonia_demuxer_bridge" ]
+  }
+
   if (media_use_libvpx) {
     sources += [
       "vpx_video_decoder.cc",
@@ -145,16 +212,10 @@ source_set("filters") {
     sources += [
       "dav1d_video_decoder.cc",
       "dav1d_video_decoder.h",
+      "davxd_video_decoder_base.cc",
+      "davxd_video_decoder_base.h",
     ]
     deps += [ "//third_party/dav1d" ]
-  }
-
-  if (enable_libgav1_decoder) {
-    sources += [
-      "gav1_video_decoder.cc",
-      "gav1_video_decoder.h",
-    ]
-    deps += [ "//third_party/libgav1" ]
   }
 
   if (media_use_ffmpeg) {
@@ -203,30 +264,60 @@ source_set("filters") {
     deps += [ "//media/base/android" ]
   }
 
-  if (use_vaapi) {
+  if (is_apple) {
     sources += [
-      "h264_bitstream_buffer.cc",
-      "h264_bitstream_buffer.h",
+      "mac/audio_toolbox_audio_decoder.cc",
+      "mac/audio_toolbox_audio_decoder.h",
+      "mac/audio_toolbox_audio_encoder.cc",
+      "mac/audio_toolbox_audio_encoder.h",
+    ]
+    deps += [ "//media/base/mac" ]
+  }
+  if (is_win && enable_platform_dts_audio) {
+    sources += [
+      "passthrough_dts_audio_decoder.cc",
+      "passthrough_dts_audio_decoder.h",
     ]
   }
-
-  if (is_fuchsia) {
+  if (is_win) {
     sources += [
-      "fuchsia/fuchsia_video_decoder.cc",
-      "fuchsia/fuchsia_video_decoder.h",
+      "win/media_foundation_audio_decoder.cc",
+      "win/media_foundation_audio_decoder.h",
     ]
-    public_deps = [ "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.media" ]
-    deps += [
-      "//components/viz/common",
-      "//gpu/command_buffer/client",
-      "//gpu/command_buffer/common",
-      "//gpu/ipc/common",
-      "//media/fuchsia/cdm",
-      "//media/fuchsia/common",
-      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.mediacodec",
-      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.sysmem",
-      "//third_party/fuchsia-sdk/sdk/pkg/sys_cpp",
-      "//ui/ozone",
+    deps += [ "//media/base/win:media_foundation_util" ]
+    if (enable_platform_dts_audio) {
+      ldflags = [
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/concrt140_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/msvcp140_1_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/msvcp140_2_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/msvcp140_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/vcamp140_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/vccorlib140_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/vcomp140_app.dll",
+        "/DELAYLOAD:packages/Microsoft.VCRTForwarders.140.1.0.6/runtimes/win10-x64/native/release/vcruntime140_app.dll",
+      ]
+    }
+  }
+
+  if (enable_hls_demuxer) {
+    sources += [
+      "hls_data_source_provider.cc",
+      "hls_data_source_provider.h",
+      "hls_data_source_provider_impl.cc",
+      "hls_data_source_provider_impl.h",
+      "hls_demuxer_status.h",
+      "hls_manifest_demuxer_engine.cc",
+      "hls_manifest_demuxer_engine.h",
+      "hls_network_access.cc",
+      "hls_network_access.h",
+      "hls_network_access_impl.cc",
+      "hls_network_access_impl.h",
+      "hls_rendition.cc",
+      "hls_rendition.h",
+      "hls_rendition_impl.cc",
+      "hls_rendition_impl.h",
+      "manifest_demuxer.cc",
+      "manifest_demuxer.h",
     ]
   }
 }
@@ -257,13 +348,6 @@ static_library("test_support") {
   sources = [
     "fake_video_decoder.cc",
     "fake_video_decoder.h",
-    "ivf_parser.cc",
-    "ivf_parser.h",
-  ]
-
-  configs += [
-    # TODO(crbug.com/167187): Fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
   ]
 
   deps = [
@@ -287,9 +371,7 @@ source_set("unit_tests") {
     "decrypting_video_decoder_unittest.cc",
     "fake_video_decoder_unittest.cc",
     "file_data_source_unittest.cc",
-    "frame_buffer_pool_unittest.cc",
     "frame_processor_unittest.cc",
-    "ivf_parser_unittest.cc",
     "memory_data_source_unittest.cc",
     "offloading_video_decoder_unittest.cc",
     "pipeline_controller_unittest.cc",
@@ -298,51 +380,26 @@ source_set("unit_tests") {
     "video_cadence_estimator_unittest.cc",
     "video_decoder_stream_unittest.cc",
     "video_renderer_algorithm_unittest.cc",
-    "vp9_parser_unittest.cc",
-    "vp9_raw_bits_reader_unittest.cc",
-    "vp9_uncompressed_header_parser_unittest.cc",
   ]
 
   deps = [
     "//base/test:test_support",
-    "//build:chromeos_buildflags",
+    "//crypto",
     "//media:test_support",
     "//testing/gmock",
     "//testing/gtest",
     "//ui/gfx:test_support",
   ]
 
-  configs += [
-    # TODO(crbug.com/167187): Fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
-  ]
-
   if (is_android) {
-    sources += [ "android/video_frame_extractor_unittest.cc" ]
     sources -= [
       "decrypting_audio_decoder_unittest.cc",
       "decrypting_video_decoder_unittest.cc",
     ]
 
-    deps += [ "//ui/gl" ]
-  }
-
-  if (is_fuchsia) {
-    sources += [ "fuchsia/fuchsia_video_decoder_unittest.cc" ]
-    deps += [
-      "//components/viz/common",
-      "//components/viz/test:test_support",
-      "//gpu/command_buffer/client",
-      "//gpu/config",
-      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.sysmem",
-      "//third_party/fuchsia-sdk/sdk/pkg/sys_cpp",
-    ]
-  }
-
-  # libvpx for running vpx test on chromecast doesn't support high bit depth.
-  # This may cause some unit tests failure.
-  if (is_chromecast) {
-    defines = [ "LIBVPX_NO_HIGH_BIT_DEPTH" ]
+    if (media_use_ffmpeg) {
+      sources += [ "android/video_frame_extractor_unittest.cc" ]
+    }
   }
 
   if (media_use_ffmpeg) {
@@ -369,29 +426,30 @@ source_set("unit_tests") {
       ]
     }
 
-    if (enable_ffmpeg_video_decoders) {
+    if (enable_ffmpeg_video_decoders && proprietary_codecs) {
       sources += [ "ffmpeg_video_decoder_unittest.cc" ]
     }
   }
 
   if (media_use_libvpx) {
     sources += [ "vpx_video_decoder_unittest.cc" ]
+    deps += [ "//third_party/libvpx:libvpx_buildflags" ]
   }
 
   if (enable_dav1d_decoder) {
     sources += [ "dav1d_video_decoder_unittest.cc" ]
   }
 
-  if (enable_libgav1_decoder) {
-    sources += [ "gav1_video_decoder_unittest.cc" ]
-  }
-
-  if (use_vaapi) {
-    sources += [ "h264_bitstream_buffer_unittest.cc" ]
+  if (is_win || use_vaapi) {
+    sources += [ "h26x_annex_b_bitstream_builder_unittest.cc" ]
   }
 
   if (proprietary_codecs) {
     sources += [ "h264_to_annex_b_bitstream_converter_unittest.cc" ]
+
+    if (enable_platform_hevc) {
+      sources += [ "h265_to_annex_b_bitstream_converter_unittest.cc" ]
+    }
 
     if (media_use_ffmpeg) {
       sources += [
@@ -401,8 +459,79 @@ source_set("unit_tests") {
     }
   }
 
+  if (enable_hls_demuxer) {
+    sources += [
+      "hls_data_source_provider_impl_unittest.cc",
+      "hls_data_source_provider_unittest.cc",
+      "hls_manifest_demuxer_engine_unittest.cc",
+      "hls_network_access_impl_unittest.cc",
+      "hls_rendition_impl_unittest.cc",
+      "hls_test_helpers.cc",
+      "hls_test_helpers.h",
+      "manifest_demuxer_unittest.cc",
+      "stream_parser_factory_unittest.cc",
+    ]
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+
+  # NOTE: if more rust tests that are not gated on Symphonia being enabled are
+  # added to filters, this conditional can be dropped.
+  if (media_use_symphonia_decoder) {
+    sources += [ "symphonia_audio_decoder_unittest.cc" ]
+    deps += [ ":rust_unittests" ]
+  }
+  if (media_use_symphonia_demuxer) {
+    sources += [
+      "symphonia_data_source_bridge_unittest.cc",
+      "symphonia_demuxer_stream_unittest.cc",
+    ]
+    deps += [ ":symphonia_demuxer_bridge_unittests" ]
+  }
+
   if (media_use_ffmpeg) {
     # Direct dependency required to inherit config.
     deps += [ "//third_party/ffmpeg" ]
+  }
+
+  if (media_use_iamf_tools) {
+    sources += [ "iamf_audio_decoder_unittest.cc" ]
+  }
+}
+
+# Rust unit tests are not allowed to commingle with C++ unit tests inside of a
+# single source set, so are included here separately.
+#
+# NOTE: if more rust tests that are not gated on Symphonia being enabled are
+# added to filters, this conditional can more tightly scoped to Symphonia source
+# files.
+if (media_use_symphonia_decoder) {
+  rust_static_library("rust_unittests") {
+    testonly = true
+    is_gtest_unittests = true
+    crate_root = "symphonia_decoder_bridge_unittest.rs"
+    sources = [ "symphonia_decoder_bridge_unittest.rs" ]
+    deps = [
+      ":symphonia_decoder_bridge",
+      "//testing/rust_gtest_interop",
+      "//third_party/rust/num_traits/v0_2:lib",
+      "//third_party/rust/symphonia/v0_6:lib",
+    ]
+  }
+}
+
+if (media_use_symphonia_demuxer) {
+  rust_static_library("symphonia_demuxer_bridge_unittests") {
+    testonly = true
+    is_gtest_unittests = true
+    crate_root = "symphonia_demuxer_bridge_unittest.rs"
+    sources = [ "symphonia_demuxer_bridge_unittest.rs" ]
+    deps = [
+      ":symphonia_demuxer_bridge",
+      "//testing/rust_gtest_interop",
+      "//third_party/rust/symphonia/v0_6:lib",
+    ]
   }
 }

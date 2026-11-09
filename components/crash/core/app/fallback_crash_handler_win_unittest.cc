@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,15 +12,16 @@
 #include "base/base_switches.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/multiprocess_test.h"
 #include "base/threading/platform_thread.h"
 #include "base/win/scoped_handle.h"
-#include "base/win/win_util.h"
+#include "base/win/windows_handle_util.h"
+#include "build/build_config.h"
 #include "components/crash/core/app/fallback_crash_handler_launcher_win.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
@@ -36,14 +37,16 @@ namespace {
 
 class ExceptionPointers {
  public:
-  ExceptionPointers() {
+  ExceptionPointers() : exception_() {
     RtlCaptureContext(&context_);
-    memset(&exception_, 0, sizeof(exception_));
     exception_.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
 
     exception_ptrs_.ExceptionRecord = &exception_;
     exception_ptrs_.ContextRecord = &context_;
   }
+
+  ExceptionPointers(const ExceptionPointers&) = delete;
+  ExceptionPointers& operator=(const ExceptionPointers&) = delete;
 
   EXCEPTION_POINTERS* exception_ptrs() { return &exception_ptrs_; }
   std::string AsString() {
@@ -54,8 +57,6 @@ class ExceptionPointers {
   CONTEXT context_;
   EXCEPTION_RECORD exception_;
   EXCEPTION_POINTERS exception_ptrs_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExceptionPointers);
 };
 
 const char kProduct[] = "SomeProduct";
@@ -100,6 +101,10 @@ class FallbackCrashHandlerWinTest : public testing::Test {
  public:
   FallbackCrashHandlerWinTest() : self_handle_(base::kNullProcessHandle) {}
 
+  FallbackCrashHandlerWinTest(const FallbackCrashHandlerWinTest&) = delete;
+  FallbackCrashHandlerWinTest& operator=(const FallbackCrashHandlerWinTest&) =
+      delete;
+
   void SetUp() override {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
 
@@ -132,9 +137,6 @@ class FallbackCrashHandlerWinTest : public testing::Test {
  protected:
   base::ProcessHandle self_handle_;
   base::ScopedTempDir database_dir_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FallbackCrashHandlerWinTest);
 };
 
 }  // namespace
@@ -155,7 +157,7 @@ TEST_F(FallbackCrashHandlerWinTest, ParseCommandLine) {
   ASSERT_FALSE(handler.ParseCommandLine(cmd_line));
 
   cmd_line.AppendSwitchASCII(
-      "thread", base::NumberToString(base::PlatformThread::CurrentId()));
+      "thread", base::NumberToString(base::PlatformThread::CurrentId().raw()));
 
   // Should succeed with a fully populated command line.
   // Because of how handle ownership is guarded, we have to "disown" it before

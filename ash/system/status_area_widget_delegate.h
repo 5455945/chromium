@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,20 +9,26 @@
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/system/status_area_widget.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/widget/widget_delegate.h"
 
 namespace ash {
-class FocusCycler;
 class Shelf;
 
 // The View for the status area widget.
 class ASH_EXPORT StatusAreaWidgetDelegate : public views::AccessiblePaneView,
                                             public views::WidgetDelegate {
+  METADATA_HEADER(StatusAreaWidgetDelegate, views::AccessiblePaneView)
+
  public:
   explicit StatusAreaWidgetDelegate(Shelf* shelf);
+
+  StatusAreaWidgetDelegate(const StatusAreaWidgetDelegate&) = delete;
+  StatusAreaWidgetDelegate& operator=(const StatusAreaWidgetDelegate&) = delete;
+
   ~StatusAreaWidgetDelegate() override;
 
   // Calculates the bounds that this view should have given its constraints,
@@ -36,9 +42,6 @@ class ASH_EXPORT StatusAreaWidgetDelegate : public views::AccessiblePaneView,
   // bounds.
   void UpdateLayout(bool animate);
 
-  // Sets the focus cycler.
-  void SetFocusCyclerForTesting(const FocusCycler* focus_cycler);
-
   // If |reverse|, indicates backward focusing, otherwise forward focusing.
   // Returns true if status area widget delegate should focus out on the
   // designated focusing direction, otherwise false.
@@ -51,9 +54,10 @@ class ASH_EXPORT StatusAreaWidgetDelegate : public views::AccessiblePaneView,
   // Clears most of the Widget to prevent destruction problems before ~Widget.
   void Shutdown();
 
+  void UpdateAccessiblePreviousAndNextFocus();
+
   // views::AccessiblePaneView:
   View* GetDefaultFocusableChild() override;
-  const char* GetClassName() const override;
   views::Widget* GetWidget() override;
   const views::Widget* GetWidget() const override;
 
@@ -78,15 +82,12 @@ class ASH_EXPORT StatusAreaWidgetDelegate : public views::AccessiblePaneView,
   // screen.
   void SetBorderOnChild(views::View* child, bool extend_border_to_edge);
 
-  Shelf* const shelf_;
-  const FocusCycler* focus_cycler_for_testing_;
+  const raw_ptr<Shelf> shelf_;
   gfx::Rect target_bounds_;
 
   // When true, the default focus of the status area widget is the last
   // focusable child.
   bool default_last_focusable_child_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(StatusAreaWidgetDelegate);
 };
 
 }  // namespace ash

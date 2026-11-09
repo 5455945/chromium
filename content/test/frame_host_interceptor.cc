@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/frame.mojom-test-utils.h"
 #include "content/common/frame.mojom.h"
@@ -26,9 +27,12 @@ class FrameHostInterceptor::FrameAgent
         rfhi_(static_cast<RenderFrameHostImpl*>(rfh)),
         impl_(receiver().SwapImplForTesting(this)) {}
 
+  FrameAgent(const FrameAgent&) = delete;
+  FrameAgent& operator=(const FrameAgent&) = delete;
+
   ~FrameAgent() override {
     auto* old_impl = receiver().SwapImplForTesting(impl_);
-    // TODO(https://crbug.com/729021): Investigate the scenario where
+    // TODO(crbug.com/40523839): Investigate the scenario where
     // |old_impl| can be nullptr if the renderer process is killed.
     DCHECK_EQ(this, old_impl);
   }
@@ -46,33 +50,43 @@ class FrameHostInterceptor::FrameAgent
       blink::mojom::BeginNavigationParamsPtr begin_params,
       mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token,
       mojo::PendingAssociatedRemote<mojom::NavigationClient> navigation_client,
-      mojo::PendingRemote<blink::mojom::PolicyContainerHostKeepAliveHandle>
-          initiator_policy_container_keep_alive_handle) override {
+      mojo::PendingRemote<blink::mojom::NavigationStateKeepAliveHandle>
+          initiator_navigation_state_keep_alive_handle,
+      mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>
+          renderer_cancellation_listener,
+      mojo::PendingReceiver<
+          mojom::NavigationRendererIgnoreDuplicateNavigationListener>
+          renderer_ignore_duplicate_navigation_listener,
+      mojo::PendingReceiver<
+          blink::mojom::NavigationResumeDeferredCommitListener>
+          resume_after_deferred_commit_listener) override {
     if (interceptor_->WillDispatchBeginNavigation(
             rfhi_, &common_params, &begin_params, &blob_url_token,
             &navigation_client)) {
       GetForwardingInterface()->BeginNavigation(
           std::move(common_params), std::move(begin_params),
           std::move(blob_url_token), std::move(navigation_client),
-          std::move(initiator_policy_container_keep_alive_handle));
+          std::move(initiator_navigation_state_keep_alive_handle),
+          std::move(renderer_cancellation_listener),
+          std::move(renderer_ignore_duplicate_navigation_listener),
+          std::move(resume_after_deferred_commit_listener));
     }
   }
 
  private:
-  FrameHostInterceptor* interceptor_;
+  raw_ptr<FrameHostInterceptor> interceptor_;
 
-  RenderFrameHostImpl* rfhi_;
-  mojom::FrameHost* impl_;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameAgent);
+  raw_ptr<RenderFrameHostImpl> rfhi_;
+  raw_ptr<mojom::FrameHost> impl_;
 };
 
 FrameHostInterceptor::FrameHostInterceptor(WebContents* web_contents)
     : WebContentsObserver(web_contents) {
-  for (auto* rfh : web_contents->GetAllFrames()) {
-    if (rfh->IsRenderFrameLive())
-      RenderFrameCreated(rfh);
-  }
+  web_contents->ForEachRenderFrameHost(
+      [this](RenderFrameHost* render_frame_host) {
+        if (render_frame_host->IsRenderFrameLive())
+          RenderFrameCreated(render_frame_host);
+      });
 }
 
 FrameHostInterceptor::~FrameHostInterceptor() = default;

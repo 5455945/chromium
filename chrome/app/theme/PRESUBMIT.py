@@ -1,4 +1,4 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,7 +10,6 @@ https://chromium.googlesource.com/chromium/src/+/main/styleguide/web/web.md
 for the rules we're checking against here.
 """
 
-USE_PYTHON3 = True
 
 def CheckChangeOnUpload(input_api, output_api):
   return _CommonChecks(input_api, output_api)
@@ -23,8 +22,9 @@ def CheckChangeOnCommit(input_api, output_api):
 def _CommonChecks(input_api, output_api):
   """Checks common to both upload and commit."""
   results = []
-  resources = input_api.os_path.join(input_api.PresubmitLocalPath(),
-      '../../../ui/resources')
+  resources = input_api.os_path.join(
+    input_api.PresubmitLocalPath(), '../../../ui/resources'
+  )
 
   # List of paths with their associated scale factor. This is used to verify
   # that the images modified in one are the correct scale of the other.
@@ -33,6 +33,7 @@ def _CommonChecks(input_api, output_api):
   ]
 
   import sys
+
   old_path = sys.path
 
   try:
@@ -40,8 +41,11 @@ def _CommonChecks(input_api, output_api):
     from resource_check import resource_scale_factors, ico_files
 
     for paths in path_scales:
-      results.extend(resource_scale_factors.ResourceScaleFactors(
-          input_api, output_api, paths).RunChecks())
+      results.extend(
+        resource_scale_factors.ResourceScaleFactors(
+          input_api, output_api, paths
+        ).RunChecks()
+      )
 
     results.extend(ico_files.IcoFiles(input_api, output_api).RunChecks())
   finally:

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,19 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/animation/document_animations.h"
-#include "third_party/blink/renderer/core/page/page_widget_delegate.h"
+#include "third_party/blink/renderer/core/dom/dom_implementation.h"
+#include "third_party/blink/renderer/core/dom/xml_document.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/page/validation_message_client.h"
 #include "third_party/blink/renderer/core/page/validation_message_client_impl.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/strings/utf_string_conversions.h"
 #include "third_party/blink/public/web/win/web_font_rendering.h"
 #endif
@@ -25,8 +29,11 @@ namespace blink {
 
 class ValidationMessageOverlayDelegateTest : public PaintTestConfigurations,
                                              public RenderingTest {
-#if defined(OS_WIN)
  public:
+  ValidationMessageOverlayDelegateTest()
+      : RenderingTest(MakeGarbageCollected<SingleChildLocalFrameClient>()) {}
+
+#if BUILDFLAG(IS_WIN)
   void SetUp() override {
     RenderingTest::SetUp();
 
@@ -34,9 +41,15 @@ class ValidationMessageOverlayDelegateTest : public PaintTestConfigurations,
     // an extra step is required to ensure that the system font is configured.
     // See https://crbug.com/969622
     blink::WebFontRendering::SetMenuFontMetrics(
-        blink::WebString::FromASCII("Arial"), 12);
+        blink::WebString::FromAscii("Arial"), 12);
   }
 #endif
+
+ private:
+  // When WebTestSupport::IsRunningWebTest is set, the animations in
+  // ValidationMessageOverlayDelegate are disabled. We are specifically testing
+  // animations, so make sure that doesn't happen.
+  ScopedWebTestMode web_test_mode{false};
 };
 
 INSTANTIATE_PAINT_TEST_SUITE_P(ValidationMessageOverlayDelegateTest);
@@ -46,11 +59,6 @@ INSTANTIATE_PAINT_TEST_SUITE_P(ValidationMessageOverlayDelegateTest);
 // overlays operate in a Page that has no compositor, the animations broke.
 TEST_P(ValidationMessageOverlayDelegateTest,
        OverlayAnimationsShouldNotBeComposited) {
-  // When WebTestSupport::IsRunningWebTest is set, the animations in
-  // ValidationMessageOverlayDelegate are disabled. We are specifically testing
-  // animations, so make sure that doesn't happen.
-  ScopedWebTestMode web_test_mode(false);
-
   SetBodyInnerHTML("<div id='anchor'></div>");
   Element* anchor = GetElementById("anchor");
   ASSERT_TRUE(anchor);
@@ -60,17 +68,15 @@ TEST_P(ValidationMessageOverlayDelegateTest,
       TextDirection::kLtr);
   ValidationMessageOverlayDelegate* delegate_ptr = delegate.get();
 
-  auto overlay =
-      std::make_unique<FrameOverlay>(&GetFrame(), std::move(delegate));
+  auto* overlay =
+      MakeGarbageCollected<FrameOverlay>(&GetFrame(), std::move(delegate));
   delegate_ptr->CreatePage(*overlay);
   ASSERT_TRUE(GetFrame().View()->UpdateAllLifecyclePhasesExceptPaint(
       DocumentUpdateReason::kTest));
 
   // Trigger the overlay animations.
-  auto paint_controller =
-      std::make_unique<PaintController>(PaintController::kTransient);
-  GraphicsContext context(*paint_controller);
-  overlay->Paint(context);
+  delegate_ptr->UpdateFrameViewState(*overlay);
+  delegate_ptr->UpdateFrameViewState(*overlay);
 
   // Now find the related animations, and make sure they weren't composited.
   Document* internal_document =
@@ -79,11 +85,13 @@ TEST_P(ValidationMessageOverlayDelegateTest,
   HeapVector<Member<Animation>> animations =
       internal_document->GetDocumentAnimations().getAnimations(
           *internal_document);
-  ASSERT_FALSE(animations.IsEmpty());
+  ASSERT_FALSE(animations.empty());
 
   for (const auto& animation : animations) {
     EXPECT_FALSE(animation->HasActiveAnimationsOnCompositor());
   }
+
+  overlay->Destroy();
 }
 
 // Regression test for https://crbug.com/990680, where we found we were not
@@ -93,7 +101,7 @@ TEST_P(ValidationMessageOverlayDelegateTest,
 TEST_P(ValidationMessageOverlayDelegateTest,
        DelegatesInternalPageShouldHaveAnimationTimesUpdated) {
   // We use a ValidationMessageClientImpl here to create our delegate since we
-  // need the official path from PageWidgetDelegate::Animate to work.
+  // need the official path from Page::Animate to work.
   auto* client = MakeGarbageCollected<ValidationMessageClientImpl>(GetPage());
   ValidationMessageClient* original_client =
       &GetPage().GetValidationMessageClient();
@@ -123,8 +131,8 @@ TEST_P(ValidationMessageOverlayDelegateTest,
   AnimationClock& external_clock = GetPage().Animator().Clock();
   base::TimeTicks current_time = external_clock.CurrentTime();
 
-  base::TimeTicks new_time = current_time + base::TimeDelta::FromSeconds(1);
-  PageWidgetDelegate::Animate(GetPage(), new_time);
+  base::TimeTicks new_time = current_time + base::Seconds(1);
+  GetPage().Animate(new_time);
 
   // TODO(crbug.com/785940): Until this bug is fixed, this comparison could pass
   // even if the underlying behavior regresses (because calling CurrentTime
@@ -134,6 +142,75 @@ TEST_P(ValidationMessageOverlayDelegateTest,
   GetPage().SetValidationMessageClientForTesting(original_client);
 
   static_cast<ValidationMessageClient*>(client)->WillBeDestroyed();
+}
+
+TEST_P(ValidationMessageOverlayDelegateTest, Repaint) {
+  auto* client = MakeGarbageCollected<ValidationMessageClientImpl>(GetPage());
+  ValidationMessageClient* original_client =
+      &GetPage().GetValidationMessageClient();
+  GetPage().SetValidationMessageClientForTesting(client);
+
+  SetBodyInnerHTML(R"HTML(
+    <style>#anchor { width: 100px; height: 100px; }</style>
+    <div id='anchor'></div>
+  )HTML");
+
+  EXPECT_FALSE(
+      GetDocument().View()->VisualViewportOrOverlayNeedsRepaintForTesting());
+
+  Element* anchor = GetElementById("anchor");
+  ASSERT_TRUE(anchor);
+
+  client->ShowValidationMessage(*anchor, "Test message", TextDirection::kLtr,
+                                "Sub-message", TextDirection::kLtr);
+  ValidationMessageOverlayDelegate* delegate = client->GetDelegateForTesting();
+  ASSERT_TRUE(delegate);
+
+  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kTest);
+  EXPECT_TRUE(
+      GetDocument().View()->VisualViewportOrOverlayNeedsRepaintForTesting());
+  UpdateAllLifecyclePhasesForTest();
+
+  // The flag should be set again for animation update.
+  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kTest);
+  EXPECT_TRUE(
+      GetDocument().View()->VisualViewportOrOverlayNeedsRepaintForTesting());
+  UpdateAllLifecyclePhasesForTest();
+
+  GetPage().SetValidationMessageClientForTesting(original_client);
+  static_cast<ValidationMessageClient*>(client)->WillBeDestroyed();
+}
+
+TEST_P(ValidationMessageOverlayDelegateTest,
+       AdoptedAnchorOverlayDoesNotOutliveFrame) {
+  ScopedBlockingFocusWithoutUserActivationForTest blocking_focus(true);
+  SetBodyInnerHTML(
+      "<iframe sandbox='allow-scripts allow-same-origin'></iframe>");
+  SetChildFrameHTML("<input id='anchor' type='email' value='foo'>");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* anchor = To<HTMLInputElement>(
+      ChildDocument().getElementById(AtomicString("anchor")));
+  // The test platform does not provide localized validation messages.
+  anchor->setCustomValidity("Invalid email address.");
+  ASSERT_FALSE(anchor->reportValidity());
+  ASSERT_FALSE(ChildDocument().FocusedElement());
+
+  ValidationMessageClient& client = GetPage().GetValidationMessageClient();
+  ASSERT_TRUE(client.IsValidationMessageVisible(*anchor));
+
+  Document* detached_document = GetDocument().implementation().createDocument(
+      AtomicString("svg"), g_empty_atom, nullptr, ASSERT_NO_EXCEPTION);
+  detached_document->adoptNode(ChildDocument().documentElement(),
+                               ASSERT_NO_EXCEPTION);
+  ASSERT_EQ(&anchor->GetDocument(), detached_document);
+  // Without a focus change, removal only starts the hide animation.
+  ASSERT_TRUE(client.IsValidationMessageVisible(*anchor));
+
+  GetFrame().Detach(FrameDetachType::kRemove);
+  EXPECT_FALSE(client.IsValidationMessageVisible(*anchor));
 }
 
 }  // namespace blink

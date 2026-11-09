@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
@@ -19,7 +19,7 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/background_fetch_response.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
 #include "url/gurl.h"
 
@@ -40,6 +40,10 @@ class CONTENT_EXPORT BackgroundFetchRequestInfo
   BackgroundFetchRequestInfo(int request_index,
                              blink::mojom::FetchAPIRequestPtr fetch_request,
                              uint64_t request_body_size);
+
+  BackgroundFetchRequestInfo(const BackgroundFetchRequestInfo&) = delete;
+  BackgroundFetchRequestInfo& operator=(const BackgroundFetchRequestInfo&) =
+      delete;
 
   // Sets the download GUID to a newly generated value. Can only be used if no
   // GUID is already set.
@@ -117,6 +121,14 @@ class CONTENT_EXPORT BackgroundFetchRequestInfo
   // Returns the time at which the response was completed.
   const base::Time& GetResponseTime() const;
 
+  void set_url_loader_factory(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+    url_loader_factory_ = std::move(url_loader_factory);
+  }
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory() const {
+    return url_loader_factory_;
+  }
+
   // Whether the BackgroundFetchResult was successful.
   bool IsResultSuccess() const;
 
@@ -150,9 +162,9 @@ class CONTENT_EXPORT BackgroundFetchRequestInfo
   std::unique_ptr<BlobDataOnIO, BrowserThread::DeleteOnIOThread> io_blob_data_;
   uint64_t response_size_ = 0u;
 
-  SEQUENCE_CHECKER(sequence_checker_);
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  DISALLOW_COPY_AND_ASSIGN(BackgroundFetchRequestInfo);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace content

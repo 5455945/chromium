@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@ package org.chromium.support_lib_boundary;
 
 import android.webkit.WebView;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.lang.reflect.InvocationHandler;
 
-/**
- * Boundary interface for WebViewRendererClient.
- */
+/** Boundary interface for WebViewRendererClient. */
+@NullMarked
 public interface WebViewRendererClientBoundaryInterface extends FeatureFlagHolderBoundaryInterface {
     void onRendererUnresponsive(WebView view, /* WebViewRenderer */ InvocationHandler renderer);
+
     void onRendererResponsive(WebView view, /* WebViewRenderer */ InvocationHandler renderer);
 }

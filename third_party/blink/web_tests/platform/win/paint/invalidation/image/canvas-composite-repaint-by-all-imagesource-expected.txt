@@ -1,7 +1,7 @@
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [785, 933],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF",
@@ -59,22 +59,12 @@
       "transform": 1
     },
     {
-      "name": "ContentsLayer for LayoutVideo VIDEO id='video'",
+      "name": "LayoutVideo VIDEO id='video'",
       "bounds": [150, 60],
       "transform": 1
     },
     {
-      "name": "LayoutNGFlexibleBox (relative positioned) DIV class='sizing-small phase-pre-ready state-no-source'",
-      "bounds": [150, 60],
-      "transform": 1
-    },
-    {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV)",
-      "bounds": [150, 60],
-      "transform": 1
-    },
-    {
-      "name": "ContentsLayer for Vertical Scrollbar Layer",
+      "name": "VerticalScrollbar",
       "position": [785, 0],
       "bounds": [15, 600],
       "contentsOpaque": true

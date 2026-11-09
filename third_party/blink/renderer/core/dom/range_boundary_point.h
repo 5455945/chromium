@@ -26,7 +26,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_RANGE_BOUNDARY_POINT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_RANGE_BOUNDARY_POINT_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/dom/character_data.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/editing/position.h"
@@ -39,7 +41,8 @@ class RangeBoundaryPoint {
  public:
   explicit RangeBoundaryPoint(Node& container);
 
-  explicit RangeBoundaryPoint(const RangeBoundaryPoint&);
+  RangeBoundaryPoint(const RangeBoundaryPoint&);
+  RangeBoundaryPoint& operator=(const RangeBoundaryPoint&);
 
   bool IsConnected() const;
   const Position ToPosition() const;
@@ -52,6 +55,7 @@ class RangeBoundaryPoint {
   void SetOffset(unsigned);
 
   void SetToBeforeChild(Node&);
+  void SetToAfterChild(Node&);
   void SetToStartOfNode(Node&);
   void SetToEndOfNode(Node&);
 
@@ -83,11 +87,11 @@ inline RangeBoundaryPoint::RangeBoundaryPoint(Node& container)
       dom_tree_version_(DomTreeVersion()),
       offset_in_container_(0) {}
 
-inline RangeBoundaryPoint::RangeBoundaryPoint(const RangeBoundaryPoint& other)
-    : container_node_(other.Container()),
-      child_before_boundary_(other.ChildBefore()),
-      dom_tree_version_(other.dom_tree_version_),
-      offset_in_container_(other.Offset()) {}
+inline RangeBoundaryPoint::RangeBoundaryPoint(const RangeBoundaryPoint&) =
+    default;
+
+inline RangeBoundaryPoint& RangeBoundaryPoint::operator=(
+    const RangeBoundaryPoint& other) = default;
 
 inline Node& RangeBoundaryPoint::Container() const {
   return *container_node_;
@@ -164,6 +168,16 @@ inline void RangeBoundaryPoint::SetToBeforeChild(Node& child) {
   child_before_boundary_ = child.previousSibling();
   container_node_ = child.parentNode();
   offset_in_container_ = child_before_boundary_ ? kInvalidOffset : 0;
+  MarkValid();
+}
+
+inline void RangeBoundaryPoint::SetToAfterChild(Node& child) {
+  DCHECK(child.parentNode());
+  container_node_ = child.parentNode();
+  child_before_boundary_ = &child;
+  // The integer offset (child.NodeIndex() + 1) is computed lazily by
+  // EnsureOffsetIsValid().
+  offset_in_container_ = kInvalidOffset;
   MarkValid();
 }
 

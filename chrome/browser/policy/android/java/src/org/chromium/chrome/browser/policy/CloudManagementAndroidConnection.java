@@ -1,16 +1,21 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.policy;
 
-import androidx.annotation.VisibleForTesting;
+import android.text.TextUtils;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 
-/**
- * Allows access to cloud management functionalities implemented downstream.
- */
+import org.chromium.base.ServiceLoaderUtil;
+import org.chromium.build.annotations.NullMarked;
+
+import java.util.UUID;
+
+/** Allows access to cloud management functionalities implemented downstream. */
+@NullMarked
 public class CloudManagementAndroidConnection {
     private static class LazyHolder {
         private static final CloudManagementAndroidConnection INSTANCE =
@@ -23,39 +28,37 @@ public class CloudManagementAndroidConnection {
         return LazyHolder.INSTANCE;
     }
 
-    /** Provides access to downstream implementation. */
-    private final CloudManagementAndroidConnectionDelegate mDelegate;
-
-    private CloudManagementAndroidConnection() {
-        mDelegate = new CloudManagementAndroidConnectionDelegateImpl();
-    }
+    private CloudManagementAndroidConnection() {}
 
     /* Returns the client ID to be used in the DM token generation. Once generated, the ID is saved
      * to Shared Preferences so it can be reused. */
     @CalledByNative
-    public String getClientId() {
+    public @JniType("std::string") String getClientId() {
         // Return the ID saved in Shared Preferences, if available.
         String clientId = CloudManagementSharedPreferences.readClientId();
         if (!clientId.isEmpty()) {
             return clientId;
         }
 
-        // Generate a new ID and save it in Shared Preferences, so it can be reused.
-        String newClientId = getDelegate().generateClientId();
+        // Use the Gservices Android ID as the client ID. If the Android ID can't be obtained, then
+        // a randomly generated ID is used instead (e.g. for non-Chrome official builds).
+        // Save the ID in Shared Preferences, so it can be reused.
+        String newClientId = null;
+        CloudManagementAndroidConnectionDelegate delegate =
+                ServiceLoaderUtil.maybeCreate(CloudManagementAndroidConnectionDelegate.class);
+        if (delegate != null) {
+            newClientId = delegate.getGservicesAndroidId();
+        }
+        if (TextUtils.isEmpty(newClientId)) {
+            newClientId = UUID.randomUUID().toString();
+        }
         CloudManagementSharedPreferences.saveClientId(newClientId);
 
         return newClientId;
     }
 
-    /** Overrides {@link mDelegate} if not null. */
-    private static CloudManagementAndroidConnectionDelegate sDelegateForTesting;
-
-    @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
     public static void setDelegateForTesting(CloudManagementAndroidConnectionDelegate delegate) {
-        sDelegateForTesting = delegate;
-    }
-
-    private CloudManagementAndroidConnectionDelegate getDelegate() {
-        return sDelegateForTesting != null ? sDelegateForTesting : mDelegate;
+        ServiceLoaderUtil.setInstanceForTesting(
+                CloudManagementAndroidConnectionDelegate.class, delegate);
     }
 }

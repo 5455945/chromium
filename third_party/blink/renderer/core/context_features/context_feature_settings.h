@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CONTEXT_FEATURES_CONTEXT_FEATURE_SETTINGS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CONTEXT_FEATURES_CONTEXT_FEATURE_SETTINGS_H_
 
+#include "third_party/blink/public/web/web_v8_features.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
@@ -30,14 +31,54 @@ class CORE_EXPORT ContextFeatureSettings final
   // already exist for the given context, one is created.
   static ContextFeatureSettings* From(ExecutionContext*, CreationMode);
 
+  // Checks that this process has permissions to enable MojoJS on a per-context
+  // basis (see `WebV8Features::AllowMojoJSPerContextForProcess()`). Crashes
+  // via a `CHECK()` if the permission check fails.
+  static void CrashIfMojoJSNotAllowed();
+
   // ContextEnabled=MojoJS feature
-  void enableMojoJS(bool enable) { enable_mojo_js_ = enable; }
-  bool isMojoJSEnabled() const { return enable_mojo_js_; }
+  void EnableMojoJS(bool enable) { enable_mojo_js_ = enable; }
+  bool isMojoJSEnabled() const;
+
+  // ContextEnabled=MojoJSFileSystemAccessHelper
+  void EnableMojoJSFileSystemAccessHelper(bool enable) {
+    DCHECK(enable_mojo_js_);
+    enable_mojo_js_file_system_access_helper_ = enable;
+  }
+  bool isMojoJSFileSystemAccessHelperEnabled() const {
+    return enable_mojo_js_file_system_access_helper_;
+  }
+
+  enum class UnboundedElementAuth {
+    kDenied,
+    kAllowedOpenWeb,
+    // A non-privileged frame, allowed by permissions policy, whose main frame
+    // is privileged. Unlike kAllowedOpenWeb, this does not require user
+    // activation.
+    kAllowedByPrivilegedMainFrame,
+    kAllowedPrivileged,
+  };
+
+  static UnboundedElementAuth GetUnboundedElementAuth(
+      const ExecutionContext* context);
+
+  using UnboundedElementPrivilege = WebV8Features::UnboundedElementPrivilege;
+
+  // ContextEnabled=UnboundedElement
+  void EnableUnboundedElement(UnboundedElementPrivilege privilege) {
+    enable_unbounded_element_ = true;
+    unbounded_element_privilege_ = privilege;
+  }
+  bool isUnboundedElementEnabled() const;
 
   void Trace(Visitor*) const override;
 
  private:
   bool enable_mojo_js_ = false;
+  bool enable_mojo_js_file_system_access_helper_ = false;
+  bool enable_unbounded_element_ = false;
+  UnboundedElementPrivilege unbounded_element_privilege_ =
+      UnboundedElementPrivilege::kNone;
 };
 
 }  // namespace blink

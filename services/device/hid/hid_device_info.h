@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,13 +17,12 @@
 #include "base/memory/ref_counted.h"
 #include "build/build_config.h"
 #include "services/device/public/mojom/hid.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 typedef uint64_t HidPlatformDeviceId;
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
 typedef std::wstring HidPlatformDeviceId;
 #else
 typedef std::string HidPlatformDeviceId;
@@ -75,7 +75,7 @@ class HidDeviceInfo : public base::RefCountedThreadSafe<HidDeviceInfo> {
   const PlatformDeviceIdMap& platform_device_id_map() const {
     return platform_device_id_map_;
   }
-  const absl::optional<std::string>& interface_id() const {
+  const std::optional<std::string>& interface_id() const {
     return interface_id_;
   }
   const std::string& physical_device_id() const {
@@ -123,9 +123,9 @@ class HidDeviceInfo : public base::RefCountedThreadSafe<HidDeviceInfo> {
   // On platforms where the system enumerates top-level HID collections as
   // separate logical devices, |interface_id_| is an identifier for the HID
   // interface and is used to associate HidDeviceInfo objects generated from
-  // the same HID interface. May be absl::nullopt if the system does not split
+  // the same HID interface. May be std::nullopt if the system does not split
   // top-level collections during enumeration.
-  absl::optional<std::string> interface_id_;
+  std::optional<std::string> interface_id_;
 
   mojom::HidDeviceInfoPtr device_;
 };

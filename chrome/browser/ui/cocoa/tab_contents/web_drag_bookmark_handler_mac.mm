@@ -1,30 +1,40 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/cocoa/tab_contents/web_drag_bookmark_handler_mac.h"
 
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/base_window.h"
 
 using content::WebContents;
 
 WebDragBookmarkHandlerMac::WebDragBookmarkHandlerMac()
-    : bookmark_tab_helper_(NULL),
-      web_contents_(NULL) {
-}
+    : bookmark_tab_helper_(nullptr), web_contents_(nullptr) {}
 
 WebDragBookmarkHandlerMac::~WebDragBookmarkHandlerMac() {}
 
 void WebDragBookmarkHandlerMac::DragInitialize(WebContents* contents) {
   web_contents_ = contents;
-  if (!bookmark_tab_helper_)
+  if (!bookmark_tab_helper_) {
     bookmark_tab_helper_ = BookmarkTabHelper::FromWebContents(contents);
+  }
 
-  bookmark_drag_data_.ReadFromClipboard(ui::ClipboardBuffer::kDrag);
+  // This operation is synchronous on Mac.
+  bookmarks::BookmarkNodeData::ReadFromClipboard(
+      ui::ClipboardBuffer::kDrag,
+      base::BindOnce(
+          [](bookmarks::BookmarkNodeData* bookmark_drag_data,
+             std::unique_ptr<bookmarks::BookmarkNodeData> data) {
+            if (data) {
+              *bookmark_drag_data = std::move(*data);
+            }
+          },
+          &bookmark_drag_data_));
 }
 
 void WebDragBookmarkHandlerMac::OnDragOver() {
@@ -42,8 +52,8 @@ void WebDragBookmarkHandlerMac::OnDragEnter() {
 }
 
 void WebDragBookmarkHandlerMac::OnDrop() {
-  // This is non-null if the web_contents_ is showing an ExtensionWebUI with
-  // support for (at the moment experimental) drag and drop extensions.
+  // This is non-null if the web_contents_ is showing an ExtensionUrlOverrides
+  // with support for (at the moment experimental) drag and drop extensions.
   if (bookmark_tab_helper_) {
     if (bookmark_tab_helper_->bookmark_drag_delegate()) {
       bookmark_tab_helper_->bookmark_drag_delegate()->OnDrop(
@@ -51,9 +61,12 @@ void WebDragBookmarkHandlerMac::OnDrop() {
     }
 
     // Focus the target browser.
-    Browser* browser = chrome::FindBrowserWithWebContents(web_contents_);
-    if (browser)
-      browser->window()->Show();
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            web_contents_);
+    if (browser) {
+      browser->GetWindow()->Show();
+    }
   }
 }
 

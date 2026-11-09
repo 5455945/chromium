@@ -1,13 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 chrome.test.runTests([
   function testWebNavigationOnCommitted() {
-    var getURL = chrome.extension.getURL;
+    const getURL = chrome.runtime.getURL;
     chrome.tabs.create({url: 'about:blank'}, function(tab) {
-      var tabId = tab.id;
-      var aVisited = false;
+      const tabId = tab.id;
+      let aVisited = false;
       chrome.webNavigation.onCommitted.addListener(function(details) {
         chrome.test.fail();
       }, {url: [{pathSuffix: 'never-navigated.html'}]});
@@ -25,5 +25,5 @@ chrome.test.runTests([
 
       chrome.tabs.update(tabId, {url: getURL('a.html')});
     });
-  }
+  },
 ]);

@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Deaktiveer alle prentanimasie.</translation>
 <translation id="1703735871906654364">Karetblaai</translation>
 <translation id="1791496371305830581">Laat alle animasieprente toe.</translation>
+<translation id="1974060860693918893">Gevorderd</translation>
 <translation id="1996252509865389616">Aktiveer?</translation>
 <translation id="2079545284768500474">Ontdoen</translation>
 <translation id="2179565792157161713">Maak lang beskrywing in nuwe oortjie oop</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Prent Alt-tekskyker</translation>
 <translation id="381767806621926835">Regsklik op enigiets met 'n "longdesc"- of "aria-describedat"-kenmerk om na sy lang beskrywing te gaan.</translation>
 <translation id="4023902424053835668">Blaai deur die teks op webbladsye met behulp van pyltjiesleutels.</translation>
+<translation id="4384008284958619421">Moderne skermlesers en Google Chrome steun nou toeganklike elementbeskrywings en toestelspesifieke ARIA-standaarde.</translation>
 <translation id="4388820049312272371">Belig die merkerposisie met 'n vinnige flits.</translation>
 <translation id="4394049700291259645">Deaktiveer</translation>
 <translation id="4769065380738716500">Prente is deur hul "alt"-teks vervang.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Kleurversterker</translation>
 <translation id="633394792577263429">Hou &lt;span class='key'&gt;Control&lt;/span&gt; vas om volgens woorde te beweeg.</translation>
 <translation id="6550675742724504774">Opsies</translation>
+<translation id="6699630355767768222">Stap 3: Ignoreer die kleur-as vir die regstelling.</translation>
 <translation id="6838518108677880446">Opstelling:</translation>
 <translation id="690628312087070417">Wanneer die karet oor 'n groot afstand spring:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Kanselleer</translation>
 <translation id="786423340267544509">Voeg raam by elemente met aria-describedat- of longdesc-kenmerke.</translation>
 <translation id="7942349550061667556">Rooi</translation>
+<translation id="8081200409424070383">Lang beskrywings word op 20 November 2026 opgeskort.</translation>
 <translation id="8260673944985561857">Karetblaai-opsies</translation>
 <translation id="8321034316479930120">Animasiebeleid</translation>
 <translation id="8480209185614411573">Hoë kontras</translation>
 <translation id="8609925175482059018">Druk &lt;span class='key'&gt;F7&lt;/span&gt; om karetblaai aan te skakel. Druk dit weer om dit af te skakel.</translation>
+<translation id="8798099450830957504">Verstek</translation>
 <translation id="894241283505723656">Lang beskrywings in kontekskieslys</translation>
 </translationbundle>

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_ADAPTERS_SCTP_TRANSPORT_PROXY_H_
@@ -7,10 +7,11 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/sctp_transport_interface.h"
 
 // The SctpTransportProxy class takes care of thread-jumping when
@@ -56,7 +57,7 @@ class SctpTransportProxy : public webrtc::SctpTransportObserverInterface {
       LocalFrame& frame,
       scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
       scoped_refptr<base::SingleThreadTaskRunner> host_thread,
-      rtc::scoped_refptr<webrtc::SctpTransportInterface> sctp_transport,
+      webrtc::scoped_refptr<webrtc::SctpTransportInterface> sctp_transport,
       Delegate* delegate);
 
   ~SctpTransportProxy() override {}
@@ -66,7 +67,7 @@ class SctpTransportProxy : public webrtc::SctpTransportObserverInterface {
       LocalFrame& frame,
       scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
       scoped_refptr<base::SingleThreadTaskRunner> host_thread,
-      rtc::scoped_refptr<webrtc::SctpTransportInterface> sctp_transport,
+      webrtc::scoped_refptr<webrtc::SctpTransportInterface> sctp_transport,
       Delegate* delegate);
   // Implementation of webrtc::SctpTransportObserver
   void OnStateChange(webrtc::SctpTransportInformation info) override;
@@ -76,8 +77,8 @@ class SctpTransportProxy : public webrtc::SctpTransportObserverInterface {
 
   const scoped_refptr<base::SingleThreadTaskRunner> proxy_thread_;
   const scoped_refptr<base::SingleThreadTaskRunner> host_thread_;
-  const rtc::scoped_refptr<webrtc::SctpTransportInterface> sctp_transport_;
-  CrossThreadPersistent<Delegate> delegate_;
+  const webrtc::scoped_refptr<webrtc::SctpTransportInterface> sctp_transport_;
+  UnwrappingCrossThreadHandle<Delegate> delegate_;
 };
 
 }  // namespace blink

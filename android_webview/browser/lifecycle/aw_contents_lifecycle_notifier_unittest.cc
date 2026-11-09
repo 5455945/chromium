@@ -1,11 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/lifecycle/aw_contents_lifecycle_notifier.h"
 
-#include "base/task/post_task.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -41,7 +42,7 @@ class TestOnLoseForegroundCallback {
 
  private:
   bool called_ = false;
-  const TestWebViewAppObserver* other_;
+  raw_ptr<const TestWebViewAppObserver> other_;
 };
 
 class TestAwContentsLifecycleNotifier : public AwContentsLifecycleNotifier {
@@ -99,6 +100,7 @@ class AwContentsLifecycleNotifierTest : public testing::Test {
  protected:
   // testing::Test.
   void SetUp() override {
+    AwContentsLifecycleNotifier::InitForTesting();
     observer_ = std::make_unique<TestWebViewAppObserver>();
     callback_ = std::make_unique<TestOnLoseForegroundCallback>(observer_.get());
     notifier_ = std::make_unique<TestAwContentsLifecycleNotifier>(

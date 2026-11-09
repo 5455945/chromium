@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 #include <linux-dmabuf-unstable-v1-server-protocol.h>
 #include <wayland-server-core.h>
 
-#include "ui/ozone/platform/wayland/test/mock_buffer.h"
+#include <algorithm>
+
+#include "ui/ozone/platform/wayland/test/test_buffer.h"
 #include "ui/ozone/platform/wayland/test/test_zwp_linux_buffer_params.h"
 
 namespace wl {
@@ -17,6 +19,8 @@ namespace {
 constexpr uint32_t kLinuxDmabufVersion = 1;
 
 void CreateParams(wl_client* client, wl_resource* resource, uint32_t id) {
+  // base::DoNothing() is used because the ~TestZwpLinuxBufferParamsV1()
+  // takes care of the cleanup.
   wl_resource* params_resource =
       CreateResourceWithImpl<TestZwpLinuxBufferParamsV1>(
           client, &zwp_linux_buffer_params_v1_interface,
@@ -27,7 +31,7 @@ void CreateParams(wl_client* client, wl_resource* resource, uint32_t id) {
   auto* buffer_params =
       GetUserDataAs<TestZwpLinuxBufferParamsV1>(params_resource);
 
-  DCHECK(buffer_params);
+  CHECK(buffer_params, base::NotFatalUntil::M163);
   zwp_linux_dmabuf->StoreBufferParams(buffer_params);
   buffer_params->SetZwpLinuxDmabuf(zwp_linux_dmabuf);
   zwp_linux_dmabuf->CreateParams(client, resource, id);
@@ -46,7 +50,7 @@ MockZwpLinuxDmabufV1::MockZwpLinuxDmabufV1()
                    kLinuxDmabufVersion) {}
 
 MockZwpLinuxDmabufV1::~MockZwpLinuxDmabufV1() {
-  DCHECK(buffer_params_.empty());
+  CHECK(buffer_params_.empty(), base::NotFatalUntil::M163);
 }
 
 void MockZwpLinuxDmabufV1::StoreBufferParams(
@@ -56,8 +60,8 @@ void MockZwpLinuxDmabufV1::StoreBufferParams(
 
 void MockZwpLinuxDmabufV1::OnBufferParamsDestroyed(
     TestZwpLinuxBufferParamsV1* params) {
-  auto it = std::find(buffer_params_.begin(), buffer_params_.end(), params);
-  DCHECK(it != buffer_params_.end());
+  auto it = std::ranges::find(buffer_params_, params);
+  CHECK(it != buffer_params_.end());
   buffer_params_.erase(it);
 }
 

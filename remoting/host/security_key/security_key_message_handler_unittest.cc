@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -25,6 +25,11 @@ namespace remoting {
 class SecurityKeyMessageHandlerTest : public testing::Test {
  public:
   SecurityKeyMessageHandlerTest();
+
+  SecurityKeyMessageHandlerTest(const SecurityKeyMessageHandlerTest&) = delete;
+  SecurityKeyMessageHandlerTest& operator=(
+      const SecurityKeyMessageHandlerTest&) = delete;
+
   ~SecurityKeyMessageHandlerTest() override;
 
   // Passed to the object used for testing to be called back to signal
@@ -56,8 +61,6 @@ class SecurityKeyMessageHandlerTest : public testing::Test {
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::IO};
   std::unique_ptr<base::RunLoop> run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(SecurityKeyMessageHandlerTest);
 };
 
 SecurityKeyMessageHandlerTest::SecurityKeyMessageHandlerTest() = default;
@@ -122,10 +125,10 @@ TEST_F(SecurityKeyMessageHandlerTest,
                                                std::string()));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::CONNECT_RESPONSE,
-            writer_weak_ptr_->last_message_type());
-  ASSERT_EQ(std::string(1, kConnectResponseActiveSession),
-            writer_weak_ptr_->last_message_payload());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::CONNECT_RESPONSE);
+  ASSERT_EQ(writer_weak_ptr_->last_message_payload(),
+            std::string(1, kConnectResponseActiveSession));
 }
 
 TEST_F(SecurityKeyMessageHandlerTest,
@@ -154,8 +157,8 @@ TEST_F(SecurityKeyMessageHandlerTest,
                                                std::string()));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::CONNECT_ERROR,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::CONNECT_ERROR);
   ASSERT_FALSE(writer_weak_ptr_->last_message_payload().empty());
 }
 
@@ -168,10 +171,10 @@ TEST_F(SecurityKeyMessageHandlerTest, ProcessConnectMessage_NoSessionExists) {
                                                std::string()));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::CONNECT_RESPONSE,
-            writer_weak_ptr_->last_message_type());
-  ASSERT_EQ(std::string(1, kConnectResponseNoSession),
-            writer_weak_ptr_->last_message_payload());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::CONNECT_RESPONSE);
+  ASSERT_EQ(writer_weak_ptr_->last_message_payload(),
+            std::string(1, kConnectResponseNoSession));
 }
 
 TEST_F(SecurityKeyMessageHandlerTest, ProcessConnectMessage_IncorrectPayload) {
@@ -183,8 +186,8 @@ TEST_F(SecurityKeyMessageHandlerTest, ProcessConnectMessage_IncorrectPayload) {
                                                "Invalid request payload"));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::CONNECT_ERROR,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::CONNECT_ERROR);
   ASSERT_FALSE(writer_weak_ptr_->last_message_payload().empty());
 }
 
@@ -200,8 +203,8 @@ TEST_F(SecurityKeyMessageHandlerTest,
                                                request_payload));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::REQUEST_RESPONSE,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::REQUEST_RESPONSE);
   ASSERT_EQ(response_payload, writer_weak_ptr_->last_message_payload());
 }
 
@@ -233,8 +236,8 @@ TEST_F(SecurityKeyMessageHandlerTest,
                                                request_payload));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::REQUEST_ERROR,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::REQUEST_ERROR);
   ASSERT_FALSE(writer_weak_ptr_->last_message_payload().empty());
 }
 
@@ -250,8 +253,8 @@ TEST_F(SecurityKeyMessageHandlerTest,
                                                request_payload));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::REQUEST_ERROR,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::REQUEST_ERROR);
   ASSERT_FALSE(writer_weak_ptr_->last_message_payload().empty());
 }
 
@@ -267,8 +270,8 @@ TEST_F(SecurityKeyMessageHandlerTest,
                                                request_payload));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::REQUEST_ERROR,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::REQUEST_ERROR);
   ASSERT_FALSE(writer_weak_ptr_->last_message_payload().empty());
 }
 
@@ -279,8 +282,8 @@ TEST_F(SecurityKeyMessageHandlerTest, ProcessRequestMessage_InvalidPayload) {
                                                invalid_payload));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::REQUEST_ERROR,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::REQUEST_ERROR);
   ASSERT_FALSE(writer_weak_ptr_->last_message_payload().empty());
 }
 
@@ -290,8 +293,8 @@ TEST_F(SecurityKeyMessageHandlerTest, ProcessUnknownMessage) {
           SecurityKeyMessageType::UNKNOWN_ERROR, std::string()));
   WaitForOperationComplete();
 
-  ASSERT_EQ(SecurityKeyMessageType::UNKNOWN_COMMAND,
-            writer_weak_ptr_->last_message_type());
+  ASSERT_EQ(writer_weak_ptr_->last_message_type(),
+            SecurityKeyMessageType::UNKNOWN_COMMAND);
 }
 
 }  // namespace remoting

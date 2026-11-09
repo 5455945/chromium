@@ -42,9 +42,9 @@ async_test((t) => {
   // Wait for the next frame for the ax object to be recreated.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      axHidden = axElementById("hidden");
-      // #hidden is now unlocked and saved as a normal AXLayoutObject with 2 child nodes:
-      // "foo" text and #child node.
+      let axHidden = axElementById("hidden");
+      // Now #target is not locked, expect 2 children (no whitespace node).
+      // This is the same as it would be if content-visibility had never been used.
       t.step(() => { assert_equals(axHidden.childrenCount, 2, "Children count after activation"); });
       t.done();
     });

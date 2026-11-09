@@ -1,24 +1,23 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/system_display/display_info_provider.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "extensions/browser/api/extensions_api_client.h"
-#include "extensions/browser/extensions_browser_client.h"
-#include "extensions/common/api/system_display.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 namespace {
-
-// Created on demand and will leak when the process exits.
-DisplayInfoProvider* g_display_info_provider = nullptr;
 
 // Converts Rotation enum to integer.
 int RotationToDegrees(display::Display::Rotation rotation) {
@@ -37,25 +36,23 @@ int RotationToDegrees(display::Display::Rotation rotation) {
 
 }  // namespace
 
-DisplayInfoProvider::DisplayInfoProvider() = default;
+// static
+DisplayInfoProvider* DisplayInfoProvider::g_display_info_provider = nullptr;
+
+DisplayInfoProvider::DisplayInfoProvider(display::Screen* screen)
+    : provided_screen_(screen) {
+  // Do not use/call on the screen object in this constructor yet because a
+  // subclass may pass not-yet-initialized screen instance.
+}
 
 DisplayInfoProvider::~DisplayInfoProvider() = default;
 
 // static
-DisplayInfoProvider* DisplayInfoProvider::Get() {
-  if (!g_display_info_provider) {
-    // Let the DisplayInfoProvider leak.
-    g_display_info_provider =
-        ExtensionsAPIClient::Get()->CreateDisplayInfoProvider().release();
-  }
-  return g_display_info_provider;
-}
-
-// static
 void DisplayInfoProvider::InitializeForTesting(
     DisplayInfoProvider* display_info_provider) {
-  if (g_display_info_provider)
+  if (g_display_info_provider) {
     delete g_display_info_provider;
+  }
   g_display_info_provider = display_info_provider;
 }
 
@@ -75,6 +72,9 @@ api::system_display::DisplayUnitInfo DisplayInfoProvider::CreateDisplayUnitInfo(
   unit.id = base::NumberToString(display.id());
   unit.is_primary = (display.id() == primary_display_id);
   unit.is_internal = display.IsInternal();
+  unit.active_state = display.detected()
+                          ? api::system_display::ActiveState::kActive
+                          : api::system_display::ActiveState::kInactive;
   unit.is_enabled = true;
   unit.is_unified = false;
   unit.rotation = RotationToDegrees(display.rotation());
@@ -101,47 +101,53 @@ void DisplayInfoProvider::SetDisplayProperties(
   NOTREACHED() << "SetDisplayProperties not implemented";
 }
 
-void DisplayInfoProvider::SetDisplayLayout(const DisplayLayoutList& layouts,
-                                           ErrorCallback callback) {
+base::expected<void, std::string> DisplayInfoProvider::SetDisplayLayout(
+    const DisplayLayoutList& layouts) {
   NOTREACHED() << "SetDisplayLayout not implemented";
 }
 
 void DisplayInfoProvider::EnableUnifiedDesktop(bool enable) {}
 
-void DisplayInfoProvider::GetAllDisplaysInfo(
-    bool /* single_unified*/,
-    base::OnceCallback<void(DisplayUnitInfoList result)> callback) {
-  display::Screen* screen = display::Screen::GetScreen();
-  int64_t primary_id = screen->GetPrimaryDisplay().id();
-  std::vector<display::Display> displays = screen->GetAllDisplays();
+DisplayInfoProvider::DisplayUnitInfoList
+DisplayInfoProvider::GetAllDisplaysInfoList(
+    const std::vector<display::Display>& displays,
+    int64_t primary_id) const {
   DisplayUnitInfoList all_displays;
+
   for (const display::Display& display : displays) {
     api::system_display::DisplayUnitInfo unit =
         CreateDisplayUnitInfo(display, primary_id);
-    UpdateDisplayUnitInfoForPlatform(display, &unit);
     all_displays.push_back(std::move(unit));
   }
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), std::move(all_displays)));
+  UpdateDisplayUnitInfoForPlatform(displays, all_displays);
+  return all_displays;
 }
 
-void DisplayInfoProvider::GetDisplayLayout(
-    base::OnceCallback<void(DisplayLayoutList result)> callback) {
+void DisplayInfoProvider::GetAllDisplaysInfo(
+    bool /* single_unified*/,
+    base::OnceCallback<void(DisplayUnitInfoList result)> callback) {
+  const display::Screen* screen =
+      provided_screen_ ? provided_screen_.get() : display::Screen::Get();
+  int64_t primary_id = screen->GetPrimaryDisplay().id();
+  std::vector<display::Display> displays = screen->GetAllDisplays();
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&DisplayInfoProvider::GetAllDisplaysInfoList,
+                     base::Unretained(this),  // `this` is a global singleton.
+                     displays, primary_id),
+      std::move(callback));
+}
+
+DisplayInfoProvider::DisplayLayoutList DisplayInfoProvider::GetDisplayLayout() {
   NOTREACHED();  // Implemented on Chrome OS only in override.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), DisplayLayoutList()));
 }
 
 void DisplayInfoProvider::StartObserving() {
-  display::Screen* screen = display::Screen::GetScreen();
-  if (screen)
-    screen->AddObserver(this);
+  display_observer_.emplace(this);
 }
 
 void DisplayInfoProvider::StopObserving() {
-  display::Screen* screen = display::Screen::GetScreen();
-  if (screen)
-    screen->RemoveObserver(this);
+  display_observer_.reset();
 }
 
 bool DisplayInfoProvider::OverscanCalibrationStart(const std::string& id) {
@@ -169,45 +175,27 @@ void DisplayInfoProvider::ShowNativeTouchCalibration(const std::string& id,
 
 bool DisplayInfoProvider::StartCustomTouchCalibration(const std::string& id) {
   NOTREACHED();  // Implemented on Chrome OS only in override.
-  return false;
 }
 
 bool DisplayInfoProvider::CompleteCustomTouchCalibration(
     const api::system_display::TouchCalibrationPairQuad& pairs,
     const api::system_display::Bounds& bounds) {
   NOTREACHED();  // Implemented on Chrome OS only in override.
-  return false;
 }
 
 bool DisplayInfoProvider::ClearTouchCalibration(const std::string& id) {
   NOTREACHED();  // Implemented on Chrome OS only in override.
-  return false;
 }
 
 void DisplayInfoProvider::SetMirrorMode(
     const api::system_display::MirrorModeInfo& info,
     ErrorCallback callback) {
   NOTREACHED();  // Implemented on Chrome OS only in override.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), "Not supported"));
-}
-
-void DisplayInfoProvider::DispatchOnDisplayChangedEvent() {
-  // This function will dispatch the OnDisplayChangedEvent to both on-the-record
-  // and off-the-record profiles. This allows extensions running in incognito
-  // to be notified mirroring is enabled / disabled, which allows the Virtual
-  // keyboard on ChromeOS to correctly disable key highlighting when typing
-  // passwords on the login page (crbug/824656)
-  constexpr bool dispatch_to_off_the_record_profiles = true;
-  ExtensionsBrowserClient::Get()->BroadcastEventToRenderers(
-      events::SYSTEM_DISPLAY_ON_DISPLAY_CHANGED,
-      extensions::api::system_display::OnDisplayChanged::kEventName,
-      std::make_unique<base::ListValue>(), dispatch_to_off_the_record_profiles);
 }
 
 void DisplayInfoProvider::UpdateDisplayUnitInfoForPlatform(
-    const display::Display& display,
-    extensions::api::system_display::DisplayUnitInfo* unit) {
+    const std::vector<display::Display>& displays,
+    DisplayUnitInfoList& units) const {
   NOTIMPLEMENTED_LOG_ONCE();
 }
 
@@ -215,8 +203,8 @@ void DisplayInfoProvider::OnDisplayAdded(const display::Display& new_display) {
   DispatchOnDisplayChangedEvent();
 }
 
-void DisplayInfoProvider::OnDisplayRemoved(
-    const display::Display& old_display) {
+void DisplayInfoProvider::OnDisplaysRemoved(
+    const display::Displays& removed_displays) {
   DispatchOnDisplayChangedEvent();
 }
 

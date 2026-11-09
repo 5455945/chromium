@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include "base/mac/scoped_cftyperef.h"
+#include "base/apple/scoped_cftyperef.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "ui/events/base_event_utils.h"
@@ -19,10 +19,9 @@ CGPoint ScreenPointFromWindow(NSPoint window_point, NSWindow* window) {
   NSPoint screen_point = window
                              ? [window convertRectToScreen:window_rect].origin
                              : window_rect.origin;
-  CGFloat primary_screen_height =
-      NSHeight([[[NSScreen screens] firstObject] frame]);
+  CGFloat primary_screen_height = NSHeight(NSScreen.screens.firstObject.frame);
   screen_point.y = primary_screen_height - screen_point.y;
-  return NSPointToCGPoint(screen_point);
+  return screen_point;
 }
 
 NSEvent* AttachWindowToCGEvent(CGEventRef event, NSWindow* window) {
@@ -37,18 +36,18 @@ NSEvent* AttachWindowToCGEvent(CGEventRef event, NSWindow* window) {
   // once you do all the algebra, all we need to do here is offset by the window
   // origin, but in different directions for x/y.
   CGPoint location = CGEventGetLocation(event);
-  location.y += NSMinY([window frame]);
-  location.x -= NSMinX([window frame]);
+  location.y += NSMinY(window.frame);
+  location.x -= NSMinX(window.frame);
   CGEventSetLocation(event, location);
 
   // These CGEventFields were made public in the 10.7 SDK, but don't help to
   // populate the -[NSEvent window] pointer when creating an event with
   // +[NSEvent eventWithCGEvent:]. Set that separately, using reflection.
   CGEventSetIntegerValueField(event, kCGMouseEventWindowUnderMousePointer,
-                              [window windowNumber]);
+                              window.windowNumber);
   CGEventSetIntegerValueField(
       event, kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent,
-      [window windowNumber]);
+      window.windowNumber);
 
   // CGEventTimestamp is nanoseconds since system startup as a 64-bit integer.
   // Use EventTimeForNow() so that it can be mocked for tests.
@@ -58,29 +57,27 @@ NSEvent* AttachWindowToCGEvent(CGEventRef event, NSWindow* window) {
   CGEventSetTimestamp(event, timestamp);
 
   NSEvent* ns_event = [NSEvent eventWithCGEvent:event];
-  DCHECK_EQ(nil, [ns_event window]);  // Verify assumptions.
+  DCHECK_EQ(nil, ns_event.window);  // Verify assumptions.
   [ns_event setValue:window forKey:@"_window"];
-  DCHECK_EQ(window, [ns_event window]);
+  DCHECK_EQ(window, ns_event.window);
 
   return ns_event;
 }
 
 NSEvent* MouseEventAtPoint(NSPoint point, NSEventType type,
                            NSUInteger modifiers) {
-  if (type == NSOtherMouseUp) {
+  if (type == NSEventTypeOtherMouseUp) {
     // To synthesize middle clicks we need to create a CGEvent with the
     // "center" button flags so that our resulting NSEvent will have the
     // appropriate buttonNumber field. NSEvent provides no way to create a
     // mouse event with a buttonNumber directly.
     CGPoint location = { point.x, point.y };
-    CGEventRef cg_event = CGEventCreateMouseEvent(NULL, kCGEventOtherMouseUp,
-                                                  location,
-                                                  kCGMouseButtonCenter);
+    base::apple::ScopedCFTypeRef<CGEventRef> cg_event(CGEventCreateMouseEvent(
+        nullptr, kCGEventOtherMouseUp, location, kCGMouseButtonCenter));
     // Also specify the modifiers for the middle click case. This makes this
     // test resilient to external modifiers being pressed.
-    CGEventSetFlags(cg_event, static_cast<CGEventFlags>(modifiers));
-    NSEvent* event = [NSEvent eventWithCGEvent:cg_event];
-    CFRelease(cg_event);
+    CGEventSetFlags(cg_event.get(), static_cast<CGEventFlags>(modifiers));
+    NSEvent* event = [NSEvent eventWithCGEvent:cg_event.get()];
     return event;
   }
   return [NSEvent mouseEventWithType:type
@@ -106,7 +103,7 @@ NSEvent* MouseEventAtPointInWindow(NSPoint point,
                             location:point
                        modifierFlags:0
                            timestamp:TimeIntervalSinceSystemStartup()
-                        windowNumber:[window windowNumber]
+                        windowNumber:window.windowNumber
                              context:nil
                          eventNumber:0
                           clickCount:clickCount
@@ -114,7 +111,7 @@ NSEvent* MouseEventAtPointInWindow(NSPoint point,
 }
 
 NSEvent* RightMouseDownAtPointInWindow(NSPoint point, NSWindow* window) {
-  return MouseEventAtPointInWindow(point, NSRightMouseDown, window, 1);
+  return MouseEventAtPointInWindow(point, NSEventTypeRightMouseDown, window, 1);
 }
 
 NSEvent* RightMouseDownAtPoint(NSPoint point) {
@@ -122,33 +119,31 @@ NSEvent* RightMouseDownAtPoint(NSPoint point) {
 }
 
 NSEvent* LeftMouseDownAtPointInWindow(NSPoint point, NSWindow* window) {
-  return MouseEventAtPointInWindow(point, NSLeftMouseDown, window, 1);
+  return MouseEventAtPointInWindow(point, NSEventTypeLeftMouseDown, window, 1);
 }
 
 NSEvent* LeftMouseDownAtPoint(NSPoint point) {
   return LeftMouseDownAtPointInWindow(point, nil);
 }
 
-std::pair<NSEvent*,NSEvent*> MouseClickInView(NSView* view,
-                                              NSUInteger clickCount) {
-  const NSRect bounds = [view convertRect:[view bounds] toView:nil];
+NSArray<NSEvent*>* MouseClickInView(NSView* view, NSUInteger clickCount) {
+  const NSRect bounds = [view convertRect:view.bounds toView:nil];
   const NSPoint mid_point = NSMakePoint(NSMidX(bounds), NSMidY(bounds));
-  NSEvent* down = MouseEventAtPointInWindow(mid_point, NSLeftMouseDown,
-                                            [view window], clickCount);
-  NSEvent* up = MouseEventAtPointInWindow(mid_point, NSLeftMouseUp,
-                                          [view window], clickCount);
-  return std::make_pair(down, up);
+  NSEvent* down = MouseEventAtPointInWindow(mid_point, NSEventTypeLeftMouseDown,
+                                            view.window, clickCount);
+  NSEvent* up = MouseEventAtPointInWindow(mid_point, NSEventTypeLeftMouseUp,
+                                          view.window, clickCount);
+  return @[ down, up ];
 }
 
-std::pair<NSEvent*, NSEvent*> RightMouseClickInView(NSView* view,
-                                                    NSUInteger clickCount) {
-  const NSRect bounds = [view convertRect:[view bounds] toView:nil];
+NSArray<NSEvent*>* RightMouseClickInView(NSView* view, NSUInteger clickCount) {
+  const NSRect bounds = [view convertRect:view.bounds toView:nil];
   const NSPoint mid_point = NSMakePoint(NSMidX(bounds), NSMidY(bounds));
-  NSEvent* down = MouseEventAtPointInWindow(mid_point, NSRightMouseDown,
-                                            [view window], clickCount);
-  NSEvent* up = MouseEventAtPointInWindow(mid_point, NSRightMouseUp,
-                                          [view window], clickCount);
-  return std::make_pair(down, up);
+  NSEvent* down = MouseEventAtPointInWindow(
+      mid_point, NSEventTypeRightMouseDown, view.window, clickCount);
+  NSEvent* up = MouseEventAtPointInWindow(mid_point, NSEventTypeRightMouseUp,
+                                          view.window, clickCount);
+  return @[ down, up ];
 }
 
 NSEvent* TestScrollEvent(NSPoint window_point,
@@ -163,19 +158,19 @@ NSEvent* TestScrollEvent(NSPoint window_point,
   int32_t wheel2 = static_cast<int>(delta_x);
   CGScrollEventUnit units =
       has_precise_deltas ? kCGScrollEventUnitPixel : kCGScrollEventUnitLine;
-  base::ScopedCFTypeRef<CGEventRef> scroll(CGEventCreateScrollWheelEvent(
+  base::apple::ScopedCFTypeRef<CGEventRef> scroll(CGEventCreateScrollWheelEvent(
       nullptr, units, wheel_count, wheel1, wheel2));
-  CGEventSetLocation(scroll, ScreenPointFromWindow(window_point, window));
+  CGEventSetLocation(scroll.get(), ScreenPointFromWindow(window_point, window));
 
   // Always set event flags, otherwise +[NSEvent eventWithCGEvent:] populates
   // flags from current keyboard state which can make tests flaky.
-  CGEventSetFlags(scroll, static_cast<CGEventFlags>(0));
+  CGEventSetFlags(scroll.get(), static_cast<CGEventFlags>(0));
 
   if (has_precise_deltas) {
     // kCGScrollWheelEventIsContinuous is -[NSEvent hasPreciseScrollingDeltas].
     // CGEventTypes.h says it should be non-zero for pixel-based scrolling.
     // Verify that CGEventCreateScrollWheelEvent() set it.
-    DCHECK_EQ(1, CGEventGetIntegerValueField(scroll,
+    DCHECK_EQ(1, CGEventGetIntegerValueField(scroll.get(),
                                              kCGScrollWheelEventIsContinuous));
   }
 
@@ -214,22 +209,22 @@ NSEvent* TestScrollEvent(NSPoint window_point,
         // else was provided it should probably never appear on an NSEvent.
         NOTREACHED();
     }
-    CGEventSetIntegerValueField(scroll, kCGScrollWheelEventScrollPhase,
+    CGEventSetIntegerValueField(scroll.get(), kCGScrollWheelEventScrollPhase,
                                 cg_event_phase);
-    CGEventSetIntegerValueField(scroll, kCGScrollWheelEventMomentumPhase,
+    CGEventSetIntegerValueField(scroll.get(), kCGScrollWheelEventMomentumPhase,
                                 cg_momentum_phase);
   }
-  NSEvent* event = AttachWindowToCGEvent(scroll, window);
-  DCHECK_EQ(has_precise_deltas, [event hasPreciseScrollingDeltas]);
-  DCHECK_EQ(event_phase, [event phase]);
-  DCHECK_EQ(momentum_phase, [event momentumPhase]);
-  DCHECK_EQ(window_point.x, [event locationInWindow].x);
-  DCHECK_EQ(window_point.y, [event locationInWindow].y);
+  NSEvent* event = AttachWindowToCGEvent(scroll.get(), window);
+  DCHECK_EQ(has_precise_deltas, event.hasPreciseScrollingDeltas);
+  DCHECK_EQ(event_phase, event.phase);
+  DCHECK_EQ(momentum_phase, event.momentumPhase);
+  DCHECK_EQ(window_point.x, event.locationInWindow.x);
+  DCHECK_EQ(window_point.y, event.locationInWindow.y);
   return event;
 }
 
 NSEvent* KeyDownEventWithRepeat() {
-  return [NSEvent keyEventWithType:NSKeyDown
+  return [NSEvent keyEventWithType:NSEventTypeKeyDown
                           location:NSZeroPoint
                      modifierFlags:0
                          timestamp:TimeIntervalSinceSystemStartup()
@@ -242,7 +237,7 @@ NSEvent* KeyDownEventWithRepeat() {
 }
 
 NSEvent* KeyEventWithCharacter(unichar c) {
-  return KeyEventWithKeyCode(0, c, NSKeyDown, 0);
+  return KeyEventWithKeyCode(0, c, NSEventTypeKeyDown, 0);
 }
 
 NSEvent* KeyEventWithType(NSEventType event_type, NSUInteger modifiers) {
@@ -268,7 +263,7 @@ NSEvent* KeyEventWithKeyCode(unsigned short key_code,
 
 NSEvent* KeyEventWithModifierOnly(unsigned short key_code,
                                   NSUInteger modifiers) {
-  return [NSEvent keyEventWithType:NSFlagsChanged
+  return [NSEvent keyEventWithType:NSEventTypeFlagsChanged
                           location:NSZeroPoint
                      modifierFlags:modifiers
                          timestamp:TimeIntervalSinceSystemStartup()
@@ -287,19 +282,19 @@ static NSEvent* EnterExitEventWithType(NSPoint point,
                                 location:point
                            modifierFlags:0
                                timestamp:TimeIntervalSinceSystemStartup()
-                            windowNumber:[window windowNumber]
+                            windowNumber:window.windowNumber
                                  context:nil
                              eventNumber:0
                           trackingNumber:0
-                                userData:NULL];
+                                userData:nullptr];
 }
 
 NSEvent* EnterEvent(NSPoint point, NSWindow* window) {
-  return EnterExitEventWithType(point, NSMouseEntered, window);
+  return EnterExitEventWithType(point, NSEventTypeMouseEntered, window);
 }
 
 NSEvent* ExitEvent(NSPoint point, NSWindow* window) {
-  return EnterExitEventWithType(point, NSMouseExited, window);
+  return EnterExitEventWithType(point, NSEventTypeMouseExited, window);
 }
 
 NSEvent* OtherEventWithType(NSEventType event_type) {
@@ -328,12 +323,12 @@ NSEvent* SynthesizeKeyEvent(NSWindow* window,
   // Note on Mac (unlike other platforms) shift while caps is down does not go
   // back to lowercase.
   if (keycode >= ui::VKEY_A && keycode <= ui::VKEY_Z &&
-      (flags & NSAlphaShiftKeyMask))
-    flags |= NSShiftKeyMask;
+      (flags & NSEventModifierFlagCapsLock))
+    flags |= NSEventModifierFlagShift;
 
   // Clear caps regardless -- MacKeyCodeForWindowsKeyCode doesn't implement
   // logic to support it.
-  flags &= ~NSAlphaShiftKeyMask;
+  flags &= ~NSEventModifierFlagCapsLock;
 
   // Call sites may generate unicode character events with an undefined
   // keycode. Since it's not feasible to determine the correct keycode for
@@ -355,16 +350,15 @@ NSEvent* SynthesizeKeyEvent(NSWindow* window,
     shifted_character = dom_key.ToCharacter();
 
   // Note that, in line with AppKit's documentation (and tracing "real" events),
-  // -[NSEvent charactersIngoringModifiers]" are "the characters generated by
+  // -[NSEvent charactersIgnoringModifiers]" are "the characters generated by
   // the receiving key event as if no modifier key (except for Shift)".
   // So |charactersIgnoringModifiers| uses |shifted_character|.
   NSString* charactersIgnoringModifiers =
-      [[[NSString alloc] initWithCharacters:&shifted_character
-                                     length:1] autorelease];
+      [[NSString alloc] initWithCharacters:&shifted_character length:1];
 
   // Control + [Shift] Tab is special.
-  if (keycode == ui::VKEY_TAB && (flags & NSControlKeyMask)) {
-    if (flags & NSShiftKeyMask) {
+  if (keycode == ui::VKEY_TAB && (flags & NSEventModifierFlagControl)) {
+    if (flags & NSEventModifierFlagShift) {
       charactersIgnoringModifiers = @"\x19";
     } else {
       charactersIgnoringModifiers = @"\x9";
@@ -372,17 +366,16 @@ NSEvent* SynthesizeKeyEvent(NSWindow* window,
   }
 
   NSString* characters;
-  // The following were determined empirically on OSX 10.9.
-  if (flags & NSControlKeyMask) {
+  // The following were determined empirically on OS X 10.9.
+  if (flags & NSEventModifierFlagControl) {
     // If Ctrl is pressed, Cocoa always puts an empty string into |characters|.
-    characters = [NSString string];
-  } else if (flags & NSCommandKeyMask) {
+    characters = @"";
+  } else if (flags & NSEventModifierFlagCommand) {
     // If Cmd is pressed, Cocoa puts a lowercase character into |characters|,
     // regardless of Shift. If, however, Alt is also pressed then shift *is*
     // preserved, but re-mappings for Alt are not implemented. Although we still
     // need to support Alt for things like Alt+Left/Right which don't care.
-    characters =
-        [[[NSString alloc] initWithCharacters:&character length:1] autorelease];
+    characters = [[NSString alloc] initWithCharacters:&character length:1];
   } else {
     // If just Shift or nothing is pressed, |characters| will match
     // |charactersIgnoringModifiers|. Alt puts a special character into
@@ -391,22 +384,22 @@ NSEvent* SynthesizeKeyEvent(NSWindow* window,
     characters = charactersIgnoringModifiers;
   }
 
-  NSEventType type = (keyDown ? NSKeyDown : NSKeyUp);
+  NSEventType type = (keyDown ? NSEventTypeKeyDown : NSEventTypeKeyUp);
 
-  // Modifier keys generate NSFlagsChanged event rather than
-  // NSKeyDown/NSKeyUp events.
+  // Modifier keys generate NSEventTypeFlagsChanged event rather than
+  // NSEventTypeKeyDown/NSEventTypeKeyUp events.
   if (keycode == ui::VKEY_CONTROL || keycode == ui::VKEY_SHIFT ||
       keycode == ui::VKEY_MENU || keycode == ui::VKEY_COMMAND)
-    type = NSFlagsChanged;
+    type = NSEventTypeFlagsChanged;
 
   // For events other than mouse moved, [event locationInWindow] is
-  // UNDEFINED if the event is not NSMouseMoved.  Thus, the (0,0)
+  // UNDEFINED if the event is not NSEventTypeMouseMoved.  Thus, the (0,0)
   // location should be fine.
   NSEvent* event = [NSEvent keyEventWithType:type
                                     location:NSZeroPoint
                                modifierFlags:flags
                                    timestamp:TimeIntervalSinceSystemStartup()
-                                windowNumber:[window windowNumber]
+                                windowNumber:window.windowNumber
                                      context:nil
                                   characters:characters
                  charactersIgnoringModifiers:charactersIgnoringModifiers

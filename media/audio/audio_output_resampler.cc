@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,19 +11,25 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "media/audio/audio_manager.h"
 #include "media/audio/audio_output_dispatcher_impl.h"
 #include "media/audio/audio_output_proxy.h"
+#include "media/base/audio_bus.h"
+#if BUILDFLAG(IS_WIN)
+#include "media/audio/win/core_audio_util_win.h"
+#endif  // BUILDFLAG(IS_WIN)
 #include "media/base/audio_converter.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/limits.h"
@@ -38,12 +44,16 @@ class OnMoreDataConverter
   OnMoreDataConverter(const AudioParameters& input_params,
                       const AudioParameters& output_params,
                       std::unique_ptr<AudioDebugRecorder> debug_recorder);
+
+  OnMoreDataConverter(const OnMoreDataConverter&) = delete;
+  OnMoreDataConverter& operator=(const OnMoreDataConverter&) = delete;
+
   ~OnMoreDataConverter() override;
 
   // AudioSourceCallback interface.
   int OnMoreData(base::TimeDelta delay,
                  base::TimeTicks delay_timestamp,
-                 int prior_frames_skipped,
+                 const AudioGlitchInfo& glitch_info,
                  AudioBus* dest) override;
   void OnError(ErrorType type) override;
 
@@ -60,10 +70,12 @@ class OnMoreDataConverter
 
  private:
   // AudioConverter::InputCallback implementation.
-  double ProvideInput(AudioBus* audio_bus, uint32_t frames_delayed) override;
+  double ProvideInput(AudioBus* audio_bus,
+                      uint32_t frames_delayed,
+                      const AudioGlitchInfo& glitch_info) override;
 
   // Source callback.
-  AudioOutputStream::AudioSourceCallback* source_callback_;
+  raw_ptr<AudioOutputStream::AudioSourceCallback> source_callback_;
 
   // Last |delay| and |delay_timestamp| received via OnMoreData(). Used to
   // correct playback delay in ProvideInput() before calling |source_callback_|.
@@ -86,8 +98,6 @@ class OnMoreDataConverter
 
   // For audio debug recordings.
   std::unique_ptr<AudioDebugRecorder> debug_recorder_;
-
-  DISALLOW_COPY_AND_ASSIGN(OnMoreDataConverter);
 };
 
 namespace {
@@ -112,30 +122,56 @@ static void RecordStats(const AudioParameters& output_params) {
 
 // Only Windows has a high latency output driver that is not the same as the low
 // latency path.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Converts low latency based |output_params| into high latency appropriate
 // output parameters in error situations.
-AudioParameters GetFallbackOutputParams(
+AudioParameters GetFallbackHighLatencyOutputParams(
     const AudioParameters& original_output_params) {
   DCHECK_EQ(original_output_params.format(),
             AudioParameters::AUDIO_PCM_LOW_LATENCY);
   // Choose AudioParameters appropriate for opening the device in high latency
   // mode.  |kMinLowLatencyFrameSize| is arbitrarily based on Pepper Flash's
   // MAXIMUM frame size for low latency.
-  static const int kMinLowLatencyFrameSize = 2048;
+  constexpr int kMinLowLatencyFrameSize = 2048;
   const int frames_per_buffer = std::max(
       original_output_params.frames_per_buffer(), kMinLowLatencyFrameSize);
 
-  return AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
-                         original_output_params.channel_layout(),
-                         original_output_params.sample_rate(),
-                         frames_per_buffer);
+  AudioParameters fallback_params(original_output_params);
+  fallback_params.set_format(AudioParameters::AUDIO_PCM_LINEAR);
+  fallback_params.set_frames_per_buffer(frames_per_buffer);
+  return fallback_params;
+}
+
+// Get output parameter for low latency non-offload output, which is used for
+// falling back from offload mode.
+AudioParameters GetFallbackLowLatencyOutputParams(
+    const std::string& device_id,
+    const AudioParameters& original_output_params) {
+  AudioParameters output_params;
+
+  HRESULT hr = CoreAudioUtil::GetPreferredAudioParameters(
+      device_id,
+      /*is_output_device=*/true, &output_params, /*is_offload_stream=*/false);
+  if (SUCCEEDED(hr)) {
+    // Retain the channel layout and effects of the original output parameters.
+    int effects = output_params.effects();
+    effects |= original_output_params.effects();
+    output_params.set_effects(effects);
+    output_params.set_channel_layout_config(
+        original_output_params.channel_layout_config());
+    return output_params;
+  }
+  // If we fail to get preferred audio parameters, return empty(invalid)
+  // parameters so that fallbacking to linear mode will be attempted then.
+  return AudioParameters();
 }
 #endif
 
 // This enum must match the numbering for
-// AudioOutputResamplerOpenLowLatencyStreamResult in enums.xml. Do not reorder
-// or remove items, only add new items before OPEN_STREAM_MAX.
+// AudioOutputResamplerLowLatencyOpenStreamResult in
+// tools/metrics/histograms/metadata/media/enums.xml. Do not reorder or remove
+// items, only add new items before kMaxValue.
+// LINT.IfChange(OpenStreamResult)
 enum class OpenStreamResult {
   kFail = 0,
   kFallbackToFake = 1,
@@ -147,15 +183,20 @@ enum class OpenStreamResult {
   kFallbackToLinearSuccess = 7,
   kSubsequentFail = 8,
   kSubsequentSuccess = 9,
-  kMaxValue = kSubsequentSuccess,
+  kFallbackToLowLatencySuccess = 10,
+  kOffloadSuccess = 11,
+  kMaxValue = kOffloadSuccess,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:AudioOutputResamplerLowLatencyOpenStreamResult)
 
 OpenStreamResult GetSubsequentStreamCreationResultBucket(
     const AudioParameters& current_params,
     bool success) {
   switch (current_params.format()) {
     case AudioParameters::AUDIO_PCM_LOW_LATENCY:
-      return success ? OpenStreamResult::kSubsequentSuccess
+      return success ? (current_params.RequireOffload()
+                            ? OpenStreamResult::kOffloadSuccess
+                            : OpenStreamResult::kSubsequentSuccess)
                      : OpenStreamResult::kSubsequentFail;
     case AudioParameters::AUDIO_PCM_LINEAR:
       return success ? OpenStreamResult::kFallbackToLinearSuccess
@@ -165,7 +206,6 @@ OpenStreamResult GetSubsequentStreamCreationResultBucket(
                      : OpenStreamResult::kFallbackToFakeFail;
     default:
       NOTREACHED();
-      return OpenStreamResult::kFail;
   }
 }
 
@@ -255,9 +295,11 @@ bool AudioOutputResampler::OpenStream() {
   }
 
   constexpr char kFallbackHistogramName[] =
-      "Media.FallbackToHighLatencyAudioPath";
+      "Media.FallbackToHighLatencyAudioPath2";
   constexpr char kOpenLowLatencyHistogramName[] =
-      "Media.AudioOutputResampler.OpenLowLatencyStream";
+      "Media.AudioOutputResampler.OpenLowLatencyStream2";
+  constexpr char kOpenLowLatencyOffloadHistogramName[] =
+      "Media.AudioOutputResampler.OpenLowLatencyStream2.Offload";
 
   if (dispatcher_->OpenStream()) {
     // Only record the UMA statistic if we didn't fallback during construction
@@ -270,7 +312,9 @@ bool AudioOutputResampler::OpenStream() {
       base::UmaHistogramEnumeration(
           kOpenLowLatencyHistogramName,
           first_stream
-              ? OpenStreamResult::kSuccess
+              ? (original_output_params_.RequireOffload()
+                     ? OpenStreamResult::kOffloadSuccess
+                     : OpenStreamResult::kSuccess)
               : GetSubsequentStreamCreationResultBucket(output_params_, true));
     }
     return true;
@@ -285,21 +329,50 @@ bool AudioOutputResampler::OpenStream() {
   // If we have successfully opened a stream previously, there's nothing more to
   // be done.
   if (!first_stream) {
+    if (original_output_params_.RequireOffload()) {
+      base::UmaHistogramEnumeration(
+          kOpenLowLatencyOffloadHistogramName,
+          GetSubsequentStreamCreationResultBucket(output_params_, false));
+      return false;
+    }
     base::UmaHistogramEnumeration(
         kOpenLowLatencyHistogramName,
         GetSubsequentStreamCreationResultBucket(output_params_, false));
     return false;
   }
 
+  // Only Windows has a high latency output driver that is not the same as the
+  // low latency path; or it may originally be attempted to be initialized in
+  // offload mode while rejected later due to resource limitation.
+#if BUILDFLAG(IS_WIN)
+  // If Open() fails with offload mode, first try to fallback to non-offload
+  // mode.
+  if (original_output_params_.RequireOffload() &&
+      output_params_.RequireOffload()) {
+    DLOG(ERROR)
+        << "Unable to open device in offload mode. Attempt to fallback to "
+        << "non-offloaded low latency mode.";
+    output_params_ = GetFallbackLowLatencyOutputParams(
+        device_id_.empty() ? CoreAudioUtil::GetDefaultOutputDeviceID()
+                           : device_id_,
+        output_params_);
+    if (output_params_.IsValid()) {
+      dispatcher_ = MakeDispatcher(device_id_, output_params_);
+      if (dispatcher_->OpenStream()) {
+        base::UmaHistogramEnumeration(
+            kOpenLowLatencyHistogramName,
+            OpenStreamResult::kFallbackToLowLatencySuccess);
+        return true;
+      }
+    }
+  }
+
   base::UmaHistogramBoolean(kFallbackHistogramName, true);
 
-  // Only Windows has a high latency output driver that is not the same as the
-  // low latency path.
-#if defined(OS_WIN)
   DLOG(ERROR) << "Unable to open audio device in low latency mode.  Falling "
               << "back to high latency audio output.";
 
-  output_params_ = GetFallbackOutputParams(original_output_params_);
+  output_params_ = GetFallbackHighLatencyOutputParams(original_output_params_);
   const std::string fallback_device_id = "";
   dispatcher_ = MakeDispatcher(fallback_device_id, output_params_);
   if (dispatcher_->OpenStream()) {
@@ -369,7 +442,7 @@ void AudioOutputResampler::StopStream(AudioOutputProxy* stream_proxy) {
   DCHECK(audio_manager()->GetTaskRunner()->BelongsToCurrentThread());
 
   auto it = callbacks_.find(stream_proxy);
-  DCHECK(it != callbacks_.end());
+  CHECK(it != callbacks_.end());
   StopStreamInternal(*it);
 }
 
@@ -399,12 +472,18 @@ void AudioOutputResampler::FlushStream(AudioOutputProxy* stream_proxy) {
   dispatcher_->FlushStream(stream_proxy);
 }
 
+void AudioOutputResampler::CloseAllIdleStreams() {
+  DCHECK(audio_manager()->GetTaskRunner()->BelongsToCurrentThread());
+  if (dispatcher_) {
+    dispatcher_->CloseAllIdleStreams();
+  }
+}
+
 void AudioOutputResampler::StopStreamInternal(
     const CallbackMap::value_type& item) {
   DCHECK(audio_manager()->GetTaskRunner()->BelongsToCurrentThread());
   DCHECK(dispatcher_);
-  AudioOutputProxy* stream_proxy = item.first;
-  OnMoreDataConverter* callback = item.second.get();
+  const auto& [stream_proxy, callback] = item;
   DCHECK(callback->started());
 
   // Stop the underlying physical stream.
@@ -460,13 +539,16 @@ void OnMoreDataConverter::Stop() {
 
 int OnMoreDataConverter::OnMoreData(base::TimeDelta delay,
                                     base::TimeTicks delay_timestamp,
-                                    int /* prior_frames_skipped */,
+                                    const AudioGlitchInfo& glitch_info,
                                     AudioBus* dest) {
-  TRACE_EVENT2("audio", "OnMoreDataConverter::OnMoreData", "input buffer size",
-               input_buffer_size_, "output buffer size", output_buffer_size_);
+  TRACE_EVENT("audio", "OnMoreDataConverter::OnMoreData", "input buffer size",
+              input_buffer_size_, "output buffer size", output_buffer_size_,
+              "playout_delay (ms)", delay.InMillisecondsF(),
+              "delay_timestamp (ms)",
+              (delay_timestamp - base::TimeTicks()).InMillisecondsF());
   current_delay_ = delay;
   current_delay_timestamp_ = delay_timestamp;
-  audio_converter_.Convert(dest);
+  audio_converter_.ConvertWithInfo(0, glitch_info, dest);
 
   if (debug_recorder_)
     debug_recorder_->OnData(dest);
@@ -477,13 +559,16 @@ int OnMoreDataConverter::OnMoreData(base::TimeDelta delay,
 }
 
 double OnMoreDataConverter::ProvideInput(AudioBus* dest,
-                                         uint32_t frames_delayed) {
+                                         uint32_t frames_delayed,
+                                         const AudioGlitchInfo& glitch_info) {
+  TRACE_EVENT("audio", "OnMoreDataConverter::ProvideInput", "delay (frames)",
+              frames_delayed);
   base::TimeDelta new_delay =
       current_delay_ + AudioTimestampHelper::FramesToTime(
                            frames_delayed, input_samples_per_second_);
   // Retrieve data from the original callback.
   const int frames = source_callback_->OnMoreData(
-      new_delay, current_delay_timestamp_, 0, dest);
+      new_delay, current_delay_timestamp_, glitch_info, dest);
 
   // Zero any unfilled frames if anything was filled, otherwise we'll just
   // return a volume of zero and let AudioConverter drop the output.

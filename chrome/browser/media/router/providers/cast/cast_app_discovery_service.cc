@@ -1,17 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/router/providers/cast/cast_app_discovery_service.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/tick_clock.h"
 #include "chrome/browser/media/router/providers/cast/cast_media_route_provider_metrics.h"
-#include "components/cast_channel/cast_message_handler.h"
-#include "components/cast_channel/cast_socket.h"
-#include "components/cast_channel/cast_socket_service.h"
+#include "components/media_router/common/providers/cast/channel/cast_message_handler.h"
+#include "components/media_router/common/providers/cast/channel/cast_socket.h"
+#include "components/media_router/common/providers/cast/channel/cast_socket_service.h"
 
 namespace media_router {
 
@@ -21,8 +22,7 @@ constexpr char kLoggerComponent[] = "CastAppDiscoveryService";
 
 // The minimum time that must elapse before an app availability result can be
 // force refreshed.
-static constexpr base::TimeDelta kRefreshThreshold =
-    base::TimeDelta::FromMinutes(1);
+static constexpr base::TimeDelta kRefreshThreshold = base::Minutes(1);
 
 }  // namespace
 
@@ -36,9 +36,9 @@ CastAppDiscoveryServiceImpl::CastAppDiscoveryServiceImpl(
       media_sink_service_(media_sink_service),
       clock_(clock) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
-  DCHECK(message_handler_);
-  DCHECK(socket_service_);
-  DCHECK(clock_);
+  CHECK(message_handler_, base::NotFatalUntil::M161);
+  CHECK(socket_service_, base::NotFatalUntil::M161);
+  CHECK(clock_, base::NotFatalUntil::M161);
   socket_service_->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&CastAppDiscoveryServiceImpl::Init,
                                 base::Unretained(this)));
@@ -83,15 +83,14 @@ CastAppDiscoveryServiceImpl::StartObservingMediaSinks(
         cast_channel::CastSocket* socket =
             socket_service_->GetSocket(channel_id);
         if (!socket) {
-          if (logger_.is_bound()) {
-            logger_->LogError(
-                mojom::LogCategory::kDiscovery, kLoggerComponent,
-                base::StringPrintf(
-                    "Socket not found for channel id: %d when starting "
-                    "discovery for source.",
-                    channel_id),
-                sink.first, source.source_id(), "");
-          }
+          LoggerList::GetInstance()->Log(
+              LoggerImpl::Severity::kError, mojom::LogCategory::kDiscovery,
+              kLoggerComponent,
+              base::StringPrintf(
+                  "Socket not found for channel id: %d when starting "
+                  "discovery for source.",
+                  channel_id),
+              sink.first, source.source_id(), "");
           continue;
         }
         RequestAppAvailability(socket, app_id, sink.second);
@@ -112,26 +111,19 @@ void CastAppDiscoveryServiceImpl::Refresh() {
       int channel_id = sink.second.cast_data().cast_channel_id;
       cast_channel::CastSocket* socket = socket_service_->GetSocket(channel_id);
       if (!socket) {
-        if (logger_.is_bound()) {
-          logger_->LogError(
-              mojom::LogCategory::kDiscovery, kLoggerComponent,
-              base::StringPrintf(
-                  "Socket not found for channel id: %d when refreshing "
-                  "the discovery state.",
-                  channel_id),
-              sink.first, "", "");
-        }
+        LoggerList::GetInstance()->Log(
+            LoggerImpl::Severity::kError, mojom::LogCategory::kDiscovery,
+            kLoggerComponent,
+            base::StringPrintf(
+                "Socket not found for channel id: %d when refreshing "
+                "the discovery state.",
+                channel_id),
+            sink.first, "", "");
         continue;
       }
       RequestAppAvailability(socket, app_id, sink.second);
     }
   }
-}
-
-void CastAppDiscoveryServiceImpl::BindLogger(
-    mojo::PendingRemote<mojom::Logger> pending_remote) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  logger_.Bind(std::move(pending_remote));
 }
 
 scoped_refptr<base::SequencedTaskRunner>
@@ -163,14 +155,13 @@ void CastAppDiscoveryServiceImpl::OnSinkAddedOrUpdated(
   cast_channel::CastSocket* socket =
       socket_service_->GetSocket(sink.cast_channel_id());
   if (!socket) {
-    if (logger_.is_bound()) {
-      logger_->LogError(
-          mojom::LogCategory::kDiscovery, kLoggerComponent,
-          base::StringPrintf("Socket not found for channel id: "
-                             "%d when the sink is added or updated.",
-                             sink.cast_channel_id()),
-          sink.id(), "", "");
-    }
+    LoggerList::GetInstance()->Log(
+        LoggerImpl::Severity::kError, mojom::LogCategory::kDiscovery,
+        kLoggerComponent,
+        base::StringPrintf("Socket not found for channel id: "
+                           "%d when the sink is added or updated.",
+                           sink.cast_channel_id()),
+        sink.id(), "", "");
     return;
   }
 
@@ -179,8 +170,9 @@ void CastAppDiscoveryServiceImpl::OnSinkAddedOrUpdated(
   // Any queries that currently contains this sink should be updated.
   UpdateSinkQueries(availability_tracker_.GetSupportedSources(sink_id));
 
-  for (const std::string& app_id : availability_tracker_.GetRegisteredApps())
+  for (const std::string& app_id : availability_tracker_.GetRegisteredApps()) {
     RequestAppAvailability(socket, app_id, sink);
+  }
 }
 
 void CastAppDiscoveryServiceImpl::OnSinkRemoved(const MediaSinkInternal& sink) {
@@ -209,10 +201,10 @@ void CastAppDiscoveryServiceImpl::UpdateAppAvailability(
     cast_channel::GetAppAvailabilityResult availability) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RecordAppAvailabilityResult(availability, clock_->NowTicks() - start_time);
-  if (availability != cast_channel::GetAppAvailabilityResult::kAvailable &&
-      logger_.is_bound()) {
-    logger_->LogInfo(
-        mojom::LogCategory::kDiscovery, kLoggerComponent,
+  if (availability != cast_channel::GetAppAvailabilityResult::kAvailable) {
+    LoggerList::GetInstance()->Log(
+        LoggerImpl::Severity::kInfo, mojom::LogCategory::kDiscovery,
+        kLoggerComponent,
         base::StrCat({"App ", app_id, " on sink is ", ToString(availability)}),
         sink.id(), "", "");
   }
@@ -226,8 +218,9 @@ void CastAppDiscoveryServiceImpl::UpdateSinkQueries(
   for (const auto& source : sources) {
     const MediaSource::Id& source_id = source.source_id();
     auto it = sink_queries_.find(source_id);
-    if (it == sink_queries_.end())
+    if (it == sink_queries_.end()) {
       continue;
+    }
     base::flat_set<MediaSink::Id> sink_ids =
         availability_tracker_.GetAvailableSinks(source);
     it->second->Notify(source_id, GetSinksByIds(sink_ids));
@@ -239,8 +232,9 @@ std::vector<MediaSinkInternal> CastAppDiscoveryServiceImpl::GetSinksByIds(
   std::vector<MediaSinkInternal> sinks;
   for (const auto& sink_id : sink_ids) {
     const MediaSinkInternal* sink = media_sink_service_->GetSinkById(sink_id);
-    if (sink)
+    if (sink) {
       sinks.push_back(*sink);
+    }
   }
   return sinks;
 }
@@ -260,7 +254,6 @@ bool CastAppDiscoveryServiceImpl::ShouldRefreshAppAvailability(
   }
 
   NOTREACHED();
-  return false;
 }
 
 }  // namespace media_router

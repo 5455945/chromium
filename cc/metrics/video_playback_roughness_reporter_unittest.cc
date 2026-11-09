@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,9 @@
 #include <random>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/test/bind.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using VideoFrame = media::VideoFrame;
@@ -64,8 +65,8 @@ class VideoPlaybackRoughnessReporterTest : public ::testing::Test {
                  std::vector<int> cadence,
                  int frames,
                  int frame_size = 100) {
-    base::TimeDelta vsync = base::TimeDelta::FromSecondsD(1 / hz);
-    base::TimeDelta ideal_duration = base::TimeDelta::FromSecondsD(1 / fps);
+    base::TimeDelta vsync = base::Seconds(1 / hz);
+    base::TimeDelta ideal_duration = base::Seconds(1 / fps);
     for (int idx = 0; idx < frames; idx++) {
       int frame_cadence = cadence[idx % cadence.size()];
       base::TimeDelta duration = vsync * frame_cadence;
@@ -81,8 +82,8 @@ class VideoPlaybackRoughnessReporterTest : public ::testing::Test {
                             double hz,
                             std::vector<int> cadence,
                             int frames) {
-    base::TimeDelta vsync = base::TimeDelta::FromSecondsD(1 / hz);
-    base::TimeDelta ideal_duration = base::TimeDelta::FromSecondsD(1 / fps);
+    base::TimeDelta vsync = base::Seconds(1 / hz);
+    base::TimeDelta ideal_duration = base::Seconds(1 / fps);
     constexpr int batch_size = 3;
     for (int idx = 0; idx < frames; idx++) {
       auto frame = MakeFrame(ideal_duration);
@@ -108,8 +109,8 @@ class VideoPlaybackRoughnessReporterTest : public ::testing::Test {
                    int frame_size = 100,
                    int freeze_on_frame = 50,
                    int frozen_vsyncs = 10) {
-    base::TimeDelta vsync = base::TimeDelta::FromSecondsD(1 / hz);
-    base::TimeDelta ideal_duration = base::TimeDelta::FromSecondsD(1 / fps);
+    base::TimeDelta vsync = base::Seconds(1 / hz);
+    base::TimeDelta ideal_duration = base::Seconds(1 / fps);
     for (int idx = 0; idx < frames; idx++) {
       int frame_cadence = cadence[idx % cadence.size()];
       base::TimeDelta duration = vsync * frame_cadence;
@@ -134,7 +135,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, BestCase24fps) {
         ASSERT_EQ(measurement.refresh_rate_hz, 60);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 5.9, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.2, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -152,7 +153,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, BestCase24fpsOn120Hz) {
         ASSERT_EQ(measurement.refresh_rate_hz, 120);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 0.0, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.0, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -169,7 +170,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, BestCase30fps) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 0.0, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.0, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -192,7 +193,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, UserStudyOkay) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 4.3, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.5, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -215,7 +216,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, UserStudyBad) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 7.46, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.5, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -233,7 +234,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, Glitchy24fps) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 14.8, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.6, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -250,7 +251,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, BestCase60fps) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 0.0, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.0, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -267,7 +268,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, BestCase50fps) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 8.1, 01);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.67, 0.05);
         call_count++;
       });
   int frames_to_run =
@@ -283,17 +284,17 @@ TEST_F(VideoPlaybackRoughnessReporterTest, PredictableRoughnessValue) {
   int frames_in_window = fps;
   int call_count = 0;
   double intended_roughness = 4.2;
-  base::TimeDelta vsync = base::TimeDelta::FromSecondsD(1.0 / fps);
+  base::TimeDelta vsync = base::Seconds(1.0 / fps);
   // Calculating the error value that needs to be injected into one frame
   // in order to get desired roughness.
-  base::TimeDelta error = base::TimeDelta::FromMillisecondsD(
+  base::TimeDelta error = base::Milliseconds(
       std::sqrt(intended_roughness * intended_roughness * frames_in_window));
 
   auto callback =
       [&](const VideoPlaybackRoughnessReporter::Measurement& measurement) {
         ASSERT_EQ(frames_in_window, measurement.frames);
         ASSERT_NEAR(measurement.roughness, intended_roughness, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.0, 0.1);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.17, 0.05);
         call_count++;
       };
   SetReportingCallabck(callback);
@@ -323,7 +324,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, TakingPercentile) {
   int frames_in_window = fps;
   int call_count = 0;
   int win_count = 100;
-  base::TimeDelta vsync = base::TimeDelta::FromSecondsD(1.0 / fps);
+  base::TimeDelta vsync = base::Seconds(1.0 / fps);
   std::vector<double> targets;
   targets.reserve(win_count);
   for (int i = 0; i < win_count; i++)
@@ -345,8 +346,8 @@ TEST_F(VideoPlaybackRoughnessReporterTest, TakingPercentile) {
     double roughness = targets[win_idx];
     // Calculating the error value that needs to be injected into one frame
     // in order to get desired roughness.
-    base::TimeDelta error = base::TimeDelta::FromMillisecondsD(
-        std::sqrt(roughness * roughness * frames_in_window));
+    base::TimeDelta error =
+        base::Milliseconds(std::sqrt(roughness * roughness * frames_in_window));
 
     for (int frame_idx = 0; frame_idx < frames_in_window; frame_idx++) {
       base::TimeTicks time;
@@ -368,7 +369,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, TakingPercentile) {
 // feedback, the reporter still doesn't run out of memory.
 TEST_F(VideoPlaybackRoughnessReporterTest, LongRunWithoutWindows) {
   int call_count = 0;
-  base::TimeDelta vsync = base::TimeDelta::FromMilliseconds(1);
+  base::TimeDelta vsync = base::Milliseconds(1);
   SetReportingCallabck(
       [&](const VideoPlaybackRoughnessReporter::Measurement& measurement) {
         call_count++;
@@ -388,7 +389,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, LongRunWithoutWindows) {
 // tokens.
 TEST_F(VideoPlaybackRoughnessReporterTest, PresentingUnknownFrames) {
   int call_count = 0;
-  base::TimeDelta vsync = base::TimeDelta::FromMilliseconds(1);
+  base::TimeDelta vsync = base::Milliseconds(1);
   SetReportingCallabck(
       [&](const VideoPlaybackRoughnessReporter::Measurement& measurement) {
         call_count++;
@@ -407,7 +408,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, PresentingUnknownFrames) {
 // presentation timestamp.
 TEST_F(VideoPlaybackRoughnessReporterTest, IgnoringUnreliableTimings) {
   int call_count = 0;
-  base::TimeDelta vsync = base::TimeDelta::FromMilliseconds(1);
+  base::TimeDelta vsync = base::Milliseconds(1);
   SetReportingCallabck(
       [&](const VideoPlaybackRoughnessReporter::Measurement& measurement) {
         call_count++;
@@ -528,7 +529,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, BatchPresentation) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 5.9, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0, 0.01);
+        ASSERT_NEAR(measurement.freezing_ratio, 0.2, 0.05);
         call_count++;
       });
   fps = 24;
@@ -546,7 +547,7 @@ TEST_F(VideoPlaybackRoughnessReporterTest, Freezing30fps) {
         ASSERT_EQ(measurement.frames, fps);
         ASSERT_NEAR(measurement.duration.InMillisecondsF(), 1000.0, 1.0);
         ASSERT_NEAR(measurement.roughness, 0.0, 0.1);
-        ASSERT_NEAR(measurement.freezing.InSecondsF(), 0.25, 0.05);
+        ASSERT_NEAR(measurement.freezing_ratio, 9.0, 0.1);
         call_count++;
       });
   int frames_to_run =

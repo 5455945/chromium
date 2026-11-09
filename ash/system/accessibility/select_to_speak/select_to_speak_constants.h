@@ -1,9 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_SYSTEM_ACCESSIBILITY_SELECT_TO_SPEAK_SELECT_TO_SPEAK_CONSTANTS_H_
 #define ASH_SYSTEM_ACCESSIBILITY_SELECT_TO_SPEAK_SELECT_TO_SPEAK_CONSTANTS_H_
+
+#include <array>
+#include <string_view>
 
 namespace ash {
 
@@ -18,13 +21,14 @@ constexpr double kSelectToSpeakSpeechRatePeppy = 1.2;
 constexpr double kSelectToSpeakSpeechRateFast = 1.5;
 constexpr double kSelectToSpeakSpeechRateFaster = 2.0;
 
-const double kSelectToSpeakSpeechRates[] = {
+inline constexpr std::array<double, 5> kSelectToSpeakSpeechRates = {
     kSelectToSpeakSpeechRateSlow,   kSelectToSpeakSpeechRateNormal,
     kSelectToSpeakSpeechRatePeppy,  kSelectToSpeakSpeechRateFast,
     kSelectToSpeakSpeechRateFaster,
 };
 
-const char kSelectToSpeakSpeedBubbleWindowName[] = "SelectToSpeakSpeedBubble";
+inline constexpr std::string_view kSelectToSpeakSpeedBubbleWindowName =
+    "SelectToSpeakSpeedBubble";
 
 }  // namespace ash
 

@@ -28,55 +28,53 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_SETTINGS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_SETTINGS_H_
 
-#include "third_party/blink/public/common/css/navigation_controls.h"
-#include "third_party/blink/public/mojom/manifest/display_mode.mojom-shared.h"
-#include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
-#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
-#include "third_party/blink/public/platform/web_effective_connection_type.h"
+#include <optional>
+
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/events/add_event_listener_options_defaults.h"
-#include "third_party/blink/renderer/core/editing/selection_strategy.h"
-#include "third_party/blink/renderer/core/frame/settings_delegate.h"
-#include "third_party/blink/renderer/core/html/media/autoplay_policy.h"
-#include "third_party/blink/renderer/core/html/parser/parser_scripting_flag_policy.h"
-#include "third_party/blink/renderer/core/html/track/text_track_kind_user_preference.h"
-#include "third_party/blink/renderer/core/loader/frame_loader_types.h"
-#include "third_party/blink/renderer/core/settings_macros.h"
+#include "third_party/blink/renderer/core/settings_base.h"
 #include "third_party/blink/renderer/platform/fonts/generic_font_family_settings.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/timer.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "ui/base/pointer/pointer_device.h"
 
 namespace blink {
 
-class CORE_EXPORT Settings {
+class CORE_EXPORT Settings : public SettingsBase {
   USING_FAST_MALLOC(Settings);
 
  public:
   Settings();
+
+  // Default copy and assignment are forbidden because SettingsDelegate only
+  // supports 1:1 relationship with Settings.
   Settings(const Settings&) = delete;
   Settings& operator=(const Settings&) = delete;
 
   GenericFontFamilySettings& GetGenericFontFamilySettings() {
     return generic_font_family_settings_;
   }
+  const GenericFontFamilySettings& GetGenericFontFamilySettings() const {
+    return generic_font_family_settings_;
+  }
   void NotifyGenericFontFamilyChange() {
     Invalidate(SettingsDelegate::ChangeType::kFontFamily);
   }
 
-  SETTINGS_GETTERS_AND_SETTERS
+  void SetPreferCompositingToLCDTextForTesting(bool enabled);
 
-  void SetDelegate(SettingsDelegate*);
+  void SetDateTimeSubfieldsFocusableForTesting(std::optional<bool> focusable) {
+    date_time_subfields_focusable_for_testing_ = focusable;
+  }
+  std::optional<bool> DateTimeSubfieldsFocusableForTesting() const {
+    return date_time_subfields_focusable_for_testing_;
+  }
 
  private:
-  void Invalidate(SettingsDelegate::ChangeType);
-
-  SettingsDelegate* delegate_;
-
   GenericFontFamilySettings generic_font_family_settings_;
-
-  SETTINGS_MEMBER_VARIABLES
+  // Overrides DateTimeChooser::ShouldSubfieldsBeFocusable() in tests:
+  // - std::nullopt: Use the default platform behavior (focusable on desktop
+  //   platforms and desktop Android, not focusable on non-desktop Android).
+  // - true: Force date/time subfields and picker indicators to be focusable.
+  // - false: Force date/time subfields and picker indicators to not be
+  //   focusable (so the host input element is focused directly instead).
+  std::optional<bool> date_time_subfields_focusable_for_testing_;
 };
 
 }  // namespace blink

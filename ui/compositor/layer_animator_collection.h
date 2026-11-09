@@ -1,15 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_COMPOSITOR_LAYER_ANIMATOR_COLLECTION_H_
 #define UI_COMPOSITOR_LAYER_ANIMATOR_COLLECTION_H_
 
-#include <set>
-
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "ui/compositor/compositor_animation_observer.h"
 #include "ui/compositor/compositor_export.h"
@@ -25,6 +23,10 @@ class COMPOSITOR_EXPORT LayerAnimatorCollection
     : public CompositorAnimationObserver {
  public:
   explicit LayerAnimatorCollection(Compositor* compositor);
+
+  LayerAnimatorCollection(const LayerAnimatorCollection&) = delete;
+  LayerAnimatorCollection& operator=(const LayerAnimatorCollection&) = delete;
+
   ~LayerAnimatorCollection() override;
 
   void StartAnimator(scoped_refptr<LayerAnimator> animator);
@@ -39,11 +41,9 @@ class COMPOSITOR_EXPORT LayerAnimatorCollection
   void OnCompositingShuttingDown(Compositor* compositor) override;
 
  private:
-  Compositor* compositor_;
+  raw_ptr<Compositor> compositor_;
   base::TimeTicks last_tick_time_;
-  std::set<scoped_refptr<LayerAnimator> > animators_;
-
-  DISALLOW_COPY_AND_ASSIGN(LayerAnimatorCollection);
+  base::flat_set<scoped_refptr<LayerAnimator>> animators_;
 };
 
 }  // namespace ui

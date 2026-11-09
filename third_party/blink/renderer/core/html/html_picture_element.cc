@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,47 +12,50 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/image_loader.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 HTMLPictureElement::HTMLPictureElement(Document& document)
     : HTMLElement(html_names::kPictureTag, document) {}
 
-void HTMLPictureElement::SourceOrMediaChanged() {
-  for (HTMLImageElement* image_element =
-           Traversal<HTMLImageElement>::FirstChild(*this);
-       image_element; image_element = Traversal<HTMLImageElement>::NextSibling(
-                          *image_element)) {
-    image_element->SelectSourceURL(ImageLoader::kUpdateNormal);
+void HTMLPictureElement::SourceChanged(ImageSourceChangeType change_type) {
+  ImageLoader::UpdateFromElementBehavior update_behavior =
+      change_type == ImageSourceChangeType::kMedia
+          ? ImageLoader::kUpdateSizeChanged
+          : ImageLoader::kUpdateNormal;
+  for (HTMLImageElement& image_element :
+       Traversal<HTMLImageElement>::ChildrenOf(*this)) {
+    image_element.SelectSourceURL(update_behavior);
   }
 }
 
-void HTMLPictureElement::SourceAttributeChanged() {
-  for (HTMLImageElement* image_element =
-           Traversal<HTMLImageElement>::FirstChild(*this);
-       image_element; image_element = Traversal<HTMLImageElement>::NextSibling(
-                          *image_element)) {
-    image_element->InvalidateAttributeMapping();
+void HTMLPictureElement::SourceDimensionChanged() {
+  for (HTMLImageElement& image_element :
+       Traversal<HTMLImageElement>::ChildrenOf(*this)) {
+    image_element.InvalidateAttributeMapping();
+    // A previous sibling source's width or height attribute affects the
+    // dimension attribute aspect ratio used for source selection, so changing
+    // it is a relevant mutation:
+    // https://html.spec.whatwg.org/#relevant-mutations
+    if (RuntimeEnabledFeatures::SrcsetTwoDimensionalSizesEnabled() &&
+        !image_element.ImageSourceURL().empty()) {
+      image_element.SelectSourceURL(ImageLoader::kUpdateSizeChanged);
+    }
   }
 }
 
 void HTMLPictureElement::RemoveListenerFromSourceChildren() {
-  for (HTMLSourceElement* source_element =
-           Traversal<HTMLSourceElement>::FirstChild(*this);
-       source_element;
-       source_element =
-           Traversal<HTMLSourceElement>::NextSibling(*source_element)) {
-    source_element->RemoveMediaQueryListListener();
+  for (HTMLSourceElement& source_element :
+       Traversal<HTMLSourceElement>::ChildrenOf(*this)) {
+    source_element.RemoveMediaQueryListListener();
   }
 }
 
 void HTMLPictureElement::AddListenerToSourceChildren() {
-  for (HTMLSourceElement* source_element =
-           Traversal<HTMLSourceElement>::FirstChild(*this);
-       source_element;
-       source_element =
-           Traversal<HTMLSourceElement>::NextSibling(*source_element)) {
-    source_element->AddMediaQueryListListener();
+  for (HTMLSourceElement& source_element :
+       Traversal<HTMLSourceElement>::ChildrenOf(*this)) {
+    source_element.AddMediaQueryListListener();
   }
 }
 

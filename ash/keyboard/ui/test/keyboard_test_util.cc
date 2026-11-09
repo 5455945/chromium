@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,12 @@ class KeyboardVisibilityChangeWaiter : public ash::KeyboardControllerObserver {
       : wait_until_(wait_until) {
     KeyboardUIController::Get()->AddObserver(this);
   }
+
+  KeyboardVisibilityChangeWaiter(const KeyboardVisibilityChangeWaiter&) =
+      delete;
+  KeyboardVisibilityChangeWaiter& operator=(
+      const KeyboardVisibilityChangeWaiter&) = delete;
+
   ~KeyboardVisibilityChangeWaiter() override {
     KeyboardUIController::Get()->RemoveObserver(this);
   }
@@ -34,8 +40,6 @@ class KeyboardVisibilityChangeWaiter : public ash::KeyboardControllerObserver {
 
   base::RunLoop run_loop_;
   const bool wait_until_;
-
-  DISALLOW_COPY_AND_ASSIGN(KeyboardVisibilityChangeWaiter);
 };
 
 bool WaitVisibilityChangesTo(bool wait_until) {
@@ -61,8 +65,6 @@ bool WaitUntilLoaded() {
   return true;
 }
 
-}  // namespace test
-
 bool WaitUntilShown() {
   // KeyboardController send a visibility update once the show animation
   // finishes.
@@ -73,7 +75,7 @@ bool WaitUntilHidden() {
   // Unlike |WaitUntilShown|, KeyboardController updates its visibility
   // at the beginning of the hide animation. There's currently no way to
   // actually detect when the hide animation finishes.
-  // TODO(https://crbug.com/849995): Find a proper solution to this.
+  // TODO(crbug.com/41392988): Find a proper solution to this.
   return WaitVisibilityChangesTo(false /* wait_until */);
 }
 
@@ -98,5 +100,7 @@ gfx::Rect KeyboardBoundsFromRootBounds(const gfx::Rect& root_bounds,
   return gfx::Rect(root_bounds.x(), root_bounds.bottom() - keyboard_height,
                    root_bounds.width(), keyboard_height);
 }
+
+}  // namespace test
 
 }  // namespace keyboard

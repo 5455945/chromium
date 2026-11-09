@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,7 @@ class TestManagementPolicyProvider : public ManagementPolicy::Provider {
     MUST_REMAIN_ENABLED = 1 << 2,
     MUST_REMAIN_DISABLED = 1 << 3,
     MUST_REMAIN_INSTALLED = 1 << 4,
+    MUST_REMAIN_ISOLATED_MODE_ENABLED = 1 << 5,
   };
 
   static std::string expected_error() {
@@ -50,11 +51,13 @@ class TestManagementPolicyProvider : public ManagementPolicy::Provider {
                          std::u16string* error) const override;
 
   bool MustRemainDisabled(const Extension* extension,
-                          disable_reason::DisableReason* reason,
-                          std::u16string* error) const override;
+                          disable_reason::DisableReason* reason) const override;
 
   bool MustRemainInstalled(const Extension* extension,
                            std::u16string* error) const override;
+
+  bool MustRemainIsolatedModeEnabled(const Extension* extension,
+                                     std::u16string* error) const override;
 
  private:
   bool may_load_;
@@ -62,6 +65,7 @@ class TestManagementPolicyProvider : public ManagementPolicy::Provider {
   bool must_remain_enabled_;
   bool must_remain_disabled_;
   bool must_remain_installed_;
+  bool must_remain_isolated_mode_enabled_;
   disable_reason::DisableReason disable_reason_;
 
   std::u16string error_message_;

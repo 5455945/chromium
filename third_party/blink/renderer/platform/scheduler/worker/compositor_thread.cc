@@ -1,24 +1,53 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/scheduler/worker/compositor_thread.h"
 
+#include "base/message_loop/message_pump_wakeup_counter.h"
+#include "base/synchronization/lock_metrics_recorder.h"
 #include "base/task/sequence_manager/sequence_manager.h"
-#include "third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/threading/hang_watcher.h"
+#include "base/threading/platform_thread_metrics.h"
+#include "mojo/public/cpp/bindings/interface_endpoint_client.h"
+#include "third_party/blink/renderer/platform/scheduler/worker/compositor_thread_scheduler_impl.h"
 
 namespace blink {
 namespace scheduler {
 
 CompositorThread::CompositorThread(const ThreadCreationParams& params)
-    : WorkerThread(params) {}
+    : NonMainThreadImpl(params) {}
 
-CompositorThread::~CompositorThread() = default;
+CompositorThread::~CompositorThread() {
+  DCHECK(GetTaskRunner()->RunsTasksInCurrentSequence());
+}
 
-std::unique_ptr<NonMainThreadSchedulerImpl>
+void CompositorThread::InitializeHangWatcherAndThreadName() {
+  DCHECK(GetTaskRunner()->RunsTasksInCurrentSequence());
+
+  if (base::HangWatcher::IsCompositorThreadHangWatchingEnabled()) {
+    hang_watcher_registration_ = base::HangWatcher::RegisterThread(
+        base::HangWatcher::ThreadType::kCompositorThread);
+  }
+
+  constexpr char kCompositorThreadSuffix[] = "Compositor";
+  mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics(
+      kCompositorThreadSuffix);
+  base::MessagePumpWakeupCounter::InitializeForCurrentThread(
+      kCompositorThreadSuffix);
+  base::LockMetricsRecorder::EnableRecordingOnCurrentThread(
+      kCompositorThreadSuffix);
+#if BUILDFLAG(IS_ANDROID)
+  base::PlatformThreadPriorityMonitor::Get().RegisterCurrentThread(
+      kCompositorThreadSuffix);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+std::unique_ptr<NonMainThreadSchedulerBase>
 CompositorThread::CreateNonMainThreadScheduler(
     base::sequence_manager::SequenceManager* sequence_manager) {
-  return std::make_unique<CompositorThreadScheduler>(sequence_manager);
+  return std::make_unique<CompositorThreadSchedulerImpl>(sequence_manager);
 }
 
 }  // namespace scheduler

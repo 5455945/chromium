@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define ASH_SYSTEM_POWER_POWER_BUTTON_SCREENSHOT_CONTROLLER_H_
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -26,9 +26,15 @@ class ASH_EXPORT PowerButtonScreenshotController : public ui::EventHandler {
   // Time that volume down key and power button must be pressed within this
   // interval of each other to make a screenshot.
   static constexpr base::TimeDelta kScreenshotChordDelay =
-      base::TimeDelta::FromMilliseconds(150);
+      base::Milliseconds(150);
 
   explicit PowerButtonScreenshotController(const base::TickClock* tick_clock);
+
+  PowerButtonScreenshotController(const PowerButtonScreenshotController&) =
+      delete;
+  PowerButtonScreenshotController& operator=(
+      const PowerButtonScreenshotController&) = delete;
+
   ~PowerButtonScreenshotController() override;
 
   // Returns true if power button event is consumed by |this|, otherwise false.
@@ -74,9 +80,7 @@ class ASH_EXPORT PowerButtonScreenshotController : public ui::EventHandler {
   base::OneShotTimer volume_up_timer_;
 
   // Time source for performed action times.
-  const base::TickClock* tick_clock_;  // Not owned.
-
-  DISALLOW_COPY_AND_ASSIGN(PowerButtonScreenshotController);
+  raw_ptr<const base::TickClock> tick_clock_;  // Not owned.
 };
 
 }  // namespace ash

@@ -1,11 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_MECHANISMS_WORKING_SET_TRIMMER_H_
 #define CHROME_BROWSER_PERFORMANCE_MANAGER_MECHANISMS_WORKING_SET_TRIMMER_H_
 
-#include "base/macros.h"
 #include "base/no_destructor.h"
 
 namespace performance_manager {
@@ -19,6 +18,9 @@ namespace mechanism {
 // trimmed.
 class WorkingSetTrimmer {
  public:
+  WorkingSetTrimmer(const WorkingSetTrimmer&) = delete;
+  WorkingSetTrimmer& operator=(const WorkingSetTrimmer&) = delete;
+
   virtual ~WorkingSetTrimmer() = default;
 
   // GetInstance will return the singleton instance of a working set trimmer for
@@ -28,8 +30,7 @@ class WorkingSetTrimmer {
   // Returns true if the WorkingSetTrimmer is supported on the current platform.
   virtual bool PlatformSupportsWorkingSetTrim() = 0;
 
-  // Returns true if working set trim succeeded for the provided ProcessNode.
-  virtual bool TrimWorkingSet(const ProcessNode* process_node) = 0;
+  virtual void TrimWorkingSet(const ProcessNode* process_node) = 0;
 
  protected:
   // A WorkingSetTrimmer should never be created directly it should only be
@@ -38,7 +39,6 @@ class WorkingSetTrimmer {
 
  private:
   friend class base::NoDestructor<WorkingSetTrimmer>;
-  DISALLOW_COPY_AND_ASSIGN(WorkingSetTrimmer);
 };
 
 }  // namespace mechanism

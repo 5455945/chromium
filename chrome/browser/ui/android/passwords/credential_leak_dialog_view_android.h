@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "chrome/browser/ui/passwords/password_dialog_prompts.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ui {
 class WindowAndroid;
@@ -23,28 +23,32 @@ class CredentialLeakDialogViewAndroid {
  public:
   explicit CredentialLeakDialogViewAndroid(
       CredentialLeakControllerAndroid* controller);
+
+  CredentialLeakDialogViewAndroid(const CredentialLeakDialogViewAndroid&) =
+      delete;
+  CredentialLeakDialogViewAndroid& operator=(
+      const CredentialLeakDialogViewAndroid&) = delete;
+
   ~CredentialLeakDialogViewAndroid();
 
   // Called to create and show the dialog.
   void Show(ui::WindowAndroid* window_android);
 
   // Called from Java via JNI.
-  void Accepted(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void Accepted();
 
   // Called from Java via JNI.
-  void Cancelled(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void Cancelled();
 
   // Called from Java via JNI.
-  void Closed(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void Closed();
 
  private:
   // The controller which owns this dialog and handles the dialog events.
-  CredentialLeakControllerAndroid* controller_;
+  raw_ptr<CredentialLeakControllerAndroid> controller_;
 
   // The corresponding java object.
-  base::android::ScopedJavaGlobalRef<jobject> java_object_;
-
-  DISALLOW_COPY_AND_ASSIGN(CredentialLeakDialogViewAndroid);
+  jni_zero::ScopedJavaGlobalRef<jobject> java_object_;
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_PASSWORDS_CREDENTIAL_LEAK_DIALOG_VIEW_ANDROID_H_

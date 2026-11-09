@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 @class CWVSyncController;
 
 // Delegate of CWVSyncController.
-@protocol CWVSyncControllerDelegate<NSObject>
+@protocol CWVSyncControllerDelegate <NSObject>
 
 @optional
 
@@ -20,13 +20,14 @@ NS_ASSUME_NONNULL_BEGIN
 // property to see if |unlockWithPassphrase:| is necessary.
 - (void)syncControllerDidStartSync:(CWVSyncController*)syncController;
 
-// Called when sync fails. |error| details are described in cwv_sync_errors.h.
-// May need to call |stopSyncAndClearIdentity| and try starting again later.
-- (void)syncController:(CWVSyncController*)syncController
-      didFailWithError:(NSError*)error;
-
 // Called after sync has stopped.
 - (void)syncControllerDidStopSync:(CWVSyncController*)syncController;
+
+// Called whenever the state of sync internals updates.
+// Specifically, CWVSyncController properties like |currentIdentity|,
+// |passphraseNeeded|, |trustedVaultKeysRequired|, and
+// |trustedVaultRecoverabilityDegraded| may have changed.
+- (void)syncControllerDidUpdateState:(CWVSyncController*)syncController;
 
 @end
 

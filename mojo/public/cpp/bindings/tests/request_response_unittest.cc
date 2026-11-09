@@ -1,19 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
-#include "mojo/public/interfaces/bindings/tests/sample_import.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/sample_interfaces.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_import.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_interfaces.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -54,7 +55,7 @@ class ProviderImpl : public sample::Provider {
 
 using RequestResponseTest = BindingsTestBase;
 
-TEST_P(RequestResponseTest, EchoString) {
+TEST_F(RequestResponseTest, EchoString) {
   Remote<sample::Provider> provider;
   ProviderImpl provider_impl(provider.BindNewPipeAndPassReceiver());
 
@@ -68,11 +69,10 @@ TEST_P(RequestResponseTest, EchoString) {
   run_loop.Run();
 }
 
-TEST_P(RequestResponseTest, EchoStrings) {
+TEST_F(RequestResponseTest, EchoStrings) {
   Remote<sample::Provider> provider;
   ProviderImpl provider_impl(provider.BindNewPipeAndPassReceiver());
 
-  std::string buf;
   base::RunLoop run_loop;
   constexpr const char kTestMessage1[] = "hello";
   constexpr const char kTestMessage2[] = "hello";
@@ -87,7 +87,7 @@ TEST_P(RequestResponseTest, EchoStrings) {
   run_loop.Run();
 }
 
-TEST_P(RequestResponseTest, EchoMessagePipeHandle) {
+TEST_F(RequestResponseTest, EchoMessagePipeHandle) {
   Remote<sample::Provider> provider;
   ProviderImpl provider_impl(provider.BindNewPipeAndPassReceiver());
 
@@ -107,7 +107,7 @@ TEST_P(RequestResponseTest, EchoMessagePipeHandle) {
   run_loop.Run();
 }
 
-TEST_P(RequestResponseTest, EchoEnum) {
+TEST_F(RequestResponseTest, EchoEnum) {
   Remote<sample::Provider> provider;
   ProviderImpl provider_impl(provider.BindNewPipeAndPassReceiver());
 
@@ -119,8 +119,6 @@ TEST_P(RequestResponseTest, EchoEnum) {
                      }));
   run_loop.Run();
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(RequestResponseTest);
 
 }  // namespace
 }  // namespace test

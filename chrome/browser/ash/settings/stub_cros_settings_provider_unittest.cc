@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/values.h"
-#include "chromeos/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
@@ -22,7 +22,7 @@ class StubCrosSettingsProviderTest : public testing::Test {
             base::BindRepeating(&StubCrosSettingsProviderTest::FireObservers,
                                 base::Unretained(this)))) {}
 
-  ~StubCrosSettingsProviderTest() override {}
+  ~StubCrosSettingsProviderTest() override = default;
 
   void SetUp() override {
     // Reset the observer notification count.
@@ -32,7 +32,7 @@ class StubCrosSettingsProviderTest : public testing::Test {
   void AssertPref(const std::string& prefName, const base::Value* value) {
     const base::Value* pref = provider_->Get(prefName);
     ASSERT_TRUE(pref);
-    ASSERT_TRUE(pref->Equals(value));
+    ASSERT_EQ(*pref, *value);
   }
 
   void ExpectObservers(const std::string& prefName, int count) {
@@ -43,8 +43,10 @@ class StubCrosSettingsProviderTest : public testing::Test {
     observer_count_[path]++;
   }
 
-  std::unique_ptr<StubCrosSettingsProvider> provider_;
+  // Callback passed to StubCrosSettingsProvider depends on observer_count_,
+  // so declare it first.
   std::map<std::string, int> observer_count_;
+  std::unique_ptr<StubCrosSettingsProvider> provider_;
 };
 
 TEST_F(StubCrosSettingsProviderTest, HandlesSettings) {

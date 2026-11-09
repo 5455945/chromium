@@ -1,18 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 
-#include "base/strings/sys_string_conversions.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/strings/utf_string_conversions.h"
+#import "components/url_formatter/elide_url.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_app_interface.h"
+#import "ios/chrome/browser/settings/ui_bundled/settings_root_table_constants.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers_app_interface.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
-GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeMatchersAppInterface)
 
 namespace chrome_test_util {
 
@@ -44,12 +42,69 @@ id<GREYMatcher> ButtonWithAccessibilityLabelId(int message_id) {
   return [ChromeMatchersAppInterface buttonWithAccessibilityLabelID:message_id];
 }
 
+id<GREYMatcher> ButtonWithAccessibilityLabelIdAndNumberForPlural(int message_id,
+                                                                 int number) {
+  return [ChromeMatchersAppInterface buttonWithAccessibilityLabelID:message_id
+                                                    numberForPlural:number];
+}
+
+id<GREYMatcher> ButtonWithForegroundColor(NSString* colorName) {
+  return [ChromeMatchersAppInterface buttonWithForegroundColor:colorName];
+}
+
+id<GREYMatcher> ButtonWithPrimaryColor() {
+  return [ChromeMatchersAppInterface buttonWithPrimaryColor];
+}
+
+id<GREYMatcher> ButtonWithSecondaryColor() {
+  return [ChromeMatchersAppInterface buttonWithSecondaryColor];
+}
+
+id<GREYMatcher> ButtonWithEqualWeightColor() {
+  return [ChromeMatchersAppInterface buttonWithEqualWeightColor];
+}
+
+id<GREYMatcher> ButtonWithBackgroundColor(NSString* colorName) {
+  return [ChromeMatchersAppInterface buttonWithBackgroundColorNamed:colorName];
+}
+
+id<GREYMatcher> ContextMenuItemWithAccessibilityLabel(NSString* label) {
+  return
+      [ChromeMatchersAppInterface contextMenuItemWithAccessibilityLabel:label];
+}
+
+id<GREYMatcher> ContextMenuItemWithAccessibilityLabelId(int message_id) {
+  return [ChromeMatchersAppInterface
+      contextMenuItemWithAccessibilityLabelID:message_id];
+}
+
+id<GREYMatcher> ActionSheetItemWithAccessibilityLabel(NSString* label) {
+  return
+      [ChromeMatchersAppInterface actionSheetItemWithAccessibilityLabel:label];
+}
+
+id<GREYMatcher> ActionSheetItemWithAccessibilityLabelId(int message_id) {
+  return [ChromeMatchersAppInterface
+      actionSheetItemWithAccessibilityLabelID:message_id];
+}
+
+id<GREYMatcher> AlertItemWithAccessibilityLabelId(int message_id) {
+  return
+      [ChromeMatchersAppInterface alertItemWithAccessibilityLabelId:message_id];
+}
+
 id<GREYMatcher> ImageViewWithImageNamed(NSString* imageName) {
   return [ChromeMatchersAppInterface imageViewWithImageNamed:imageName];
 }
 
-id<GREYMatcher> ImageViewWithImage(int image_id) {
-  return [ChromeMatchersAppInterface imageViewWithImage:image_id];
+id<GREYMatcher> ImageViewWithSymbolAndPointSize(Symbol symbol,
+                                                CGFloat pointSize) {
+  return [ChromeMatchersAppInterface imageViewWithSymbol:symbol
+                                               pointSize:pointSize];
+}
+
+id<GREYMatcher> ImageViewWithImage(UIImage* image) {
+  return [ChromeMatchersAppInterface imageViewWithImage:image];
 }
 
 id<GREYMatcher> ButtonWithImage(int image_id) {
@@ -110,16 +165,28 @@ id<GREYMatcher> PrimaryToolbar() {
   return [ChromeMatchersAppInterface primaryToolbar];
 }
 
+id<GREYMatcher> SecondaryToolbar() {
+  return [ChromeMatchersAppInterface secondaryToolbar];
+}
+
 id<GREYMatcher> CancelButton() {
   return [ChromeMatchersAppInterface cancelButton];
+}
+
+id<GREYMatcher> ActionSheetCancelButton() {
+  return [ChromeMatchersAppInterface actionSheetCancelButton];
+}
+
+id<GREYMatcher> CloseButton() {
+  return [ChromeMatchersAppInterface closeButton];
 }
 
 id<GREYMatcher> NavigationBarCancelButton() {
   return [ChromeMatchersAppInterface navigationBarCancelButton];
 }
 
-id<GREYMatcher> CloseButton() {
-  return [ChromeMatchersAppInterface closeButton];
+id<GREYMatcher> NavigationBarSaveButton() {
+  return [ChromeMatchersAppInterface navigationBarSaveButton];
 }
 
 id<GREYMatcher> ForwardButton() {
@@ -138,8 +205,36 @@ id<GREYMatcher> StopButton() {
   return [ChromeMatchersAppInterface stopButton];
 }
 
+id<GREYMatcher> SearchBarClearTextButton() {
+  return [ChromeMatchersAppInterface searchBarClearTextButton];
+}
+
 id<GREYMatcher> Omnibox() {
   return [ChromeMatchersAppInterface omnibox];
+}
+
+id<GREYMatcher> OmniboxAtBottom() {
+  return [ChromeMatchersAppInterface omniboxAtBottom];
+}
+
+id<GREYMatcher> OmniboxOnTop() {
+  return [ChromeMatchersAppInterface omniboxOnTop];
+}
+
+id<GREYMatcher> OmniboxPopupRow() {
+  return [ChromeMatchersAppInterface omniboxPopupRow];
+}
+
+id<GREYMatcher> OmniboxPopupRowWithString(NSString* string) {
+  return [ChromeMatchersAppInterface omniboxPopupRowWithString:string];
+}
+
+id<GREYMatcher> OmniboxPopupRowVisibleWithString(NSString* string) {
+  return [ChromeMatchersAppInterface omniboxPopupRowVisibleWithString:string];
+}
+
+id<GREYMatcher> OmniboxPopupList() {
+  return [ChromeMatchersAppInterface omniboxPopupList];
 }
 
 id<GREYMatcher> DefocusedLocationView() {
@@ -163,25 +258,58 @@ id<GREYMatcher> OmniboxContainingText(const std::string& text) {
       omniboxContainingText:base::SysUTF8ToNSString(text)];
 }
 
+id<GREYMatcher> OmniboxContainingAutocompleteText(NSString* text) {
+  return [ChromeMatchersAppInterface omniboxContainingAutocompleteText:text];
+}
+
 id<GREYMatcher> LocationViewContainingText(const std::string& text) {
   return [ChromeMatchersAppInterface
       locationViewContainingText:base::SysUTF8ToNSString(text)];
+}
+
+id<GREYMatcher> LocationViewEmpty() {
+  return [ChromeMatchersAppInterface locationViewEmpty];
 }
 
 id<GREYMatcher> ToolsMenuButton() {
   return [ChromeMatchersAppInterface toolsMenuButton];
 }
 
+id<GREYMatcher> ToolsMenuNTPButton() {
+  return [ChromeMatchersAppInterface toolsMenuNTPButton];
+}
+
+id<GREYMatcher> NewTabButton() {
+  return [ChromeMatchersAppInterface openNewTabButton];
+}
+
 id<GREYMatcher> ShareButton() {
   return [ChromeMatchersAppInterface shareButton];
+}
+
+id<GREYMatcher> ContextMenuButtonContainingText(NSString* text) {
+  return [ChromeMatchersAppInterface contextMenuButtonContainingText:text];
 }
 
 id<GREYMatcher> TabShareButton() {
   return [ChromeMatchersAppInterface tabShareButton];
 }
 
+id<GREYMatcher> OverflowMenuShareButton() {
+  return [ChromeMatchersAppInterface overflowMenuShareButton];
+}
+
 id<GREYMatcher> ShowTabsButton() {
   return [ChromeMatchersAppInterface showTabsButton];
+}
+
+id<GREYMatcher> ShowTabsButtonWithCount(NSString* count) {
+  return grey_allOf(grey_descendant(grey_accessibilityLabel(count)),
+                    ShowTabsButton(), nil);
+}
+
+id<GREYMatcher> BlueDotOnShowTabsButton() {
+  return [ChromeMatchersAppInterface blueDotOnShowTabsButton];
 }
 
 id<GREYMatcher> AddToReadingListButton() {
@@ -196,18 +324,20 @@ id<GREYMatcher> CloseTabMenuButton() {
   return [ChromeMatchersAppInterface closeTabMenuButton];
 }
 
-id<GREYMatcher> SettingsSwitchCell(NSString* accessibility_identifier,
-                                   BOOL is_toggled_on) {
-  return [ChromeMatchersAppInterface settingsSwitchCell:accessibility_identifier
-                                            isToggledOn:is_toggled_on];
+id<GREYMatcher> TableViewSwitchCell(NSString* accessibility_identifier,
+                                    BOOL is_toggled_on) {
+  return
+      [ChromeMatchersAppInterface tableViewSwitchCell:accessibility_identifier
+                                          isToggledOn:is_toggled_on];
 }
 
-id<GREYMatcher> SettingsSwitchCell(NSString* accessibility_identifier,
-                                   BOOL is_toggled_on,
-                                   BOOL is_enabled) {
-  return [ChromeMatchersAppInterface settingsSwitchCell:accessibility_identifier
-                                            isToggledOn:is_toggled_on
-                                              isEnabled:is_enabled];
+id<GREYMatcher> TableViewSwitchCell(NSString* accessibility_identifier,
+                                    BOOL is_toggled_on,
+                                    BOOL is_enabled) {
+  return
+      [ChromeMatchersAppInterface tableViewSwitchCell:accessibility_identifier
+                                          isToggledOn:is_toggled_on
+                                            isEnabled:is_enabled];
 }
 
 id<GREYMatcher> SyncSwitchCell(NSString* accessibility_label,
@@ -220,17 +350,24 @@ id<GREYMatcher> OpenLinkInNewTabButton() {
   return [ChromeMatchersAppInterface openLinkInNewTabButton];
 }
 
-id<GREYMatcher> OpenLinkInIncognitoButton(BOOL use_new_string) {
-  return [ChromeMatchersAppInterface
-      openLinkInIncognitoButtonWithUseNewString:use_new_string];
+id<GREYMatcher> OpenLinkInIncognitoButton() {
+  return [ChromeMatchersAppInterface openLinkInIncognitoButton];
 }
 
 id<GREYMatcher> OpenLinkInNewWindowButton() {
   return [ChromeMatchersAppInterface openLinkInNewWindowButton];
 }
 
+id<GREYMatcher> NavigationBarCloseButton() {
+  return [ChromeMatchersAppInterface navigationBarCloseButton];
+}
+
 id<GREYMatcher> NavigationBarDoneButton() {
   return [ChromeMatchersAppInterface navigationBarDoneButton];
+}
+
+id<GREYMatcher> NavigationBarEditButton() {
+  return [ChromeMatchersAppInterface navigationBarEditButton];
 }
 
 id<GREYMatcher> BookmarksNavigationBarDoneButton() {
@@ -239,6 +376,11 @@ id<GREYMatcher> BookmarksNavigationBarDoneButton() {
 
 id<GREYMatcher> BookmarksNavigationBarBackButton() {
   return [ChromeMatchersAppInterface bookmarksNavigationBarBackButton];
+}
+
+id<GREYMatcher> ManagedProfileCreationNavigationBarBackButton() {
+  return [ChromeMatchersAppInterface
+      managedProfileCreationNavigationBarBackButton];
 }
 
 id<GREYMatcher> AddAccountButton() {
@@ -261,20 +403,8 @@ id<GREYMatcher> ClearBrowsingDataView() {
   return [ChromeMatchersAppInterface clearBrowsingDataView];
 }
 
-id<GREYMatcher> ConfirmClearBrowsingDataButton() {
-  return [ChromeMatchersAppInterface confirmClearBrowsingDataButton];
-}
-
-id<GREYMatcher> SettingsMenuButton() {
-  return [ChromeMatchersAppInterface settingsMenuButton];
-}
-
 id<GREYMatcher> SettingsDoneButton() {
   return [ChromeMatchersAppInterface settingsDoneButton];
-}
-
-id<GREYMatcher> SyncSettingsConfirmButton() {
-  return [ChromeMatchersAppInterface syncSettingsConfirmButton];
 }
 
 id<GREYMatcher> AutofillCreditCardEditTableView() {
@@ -301,10 +431,6 @@ id<GREYMatcher> AddCreditCardView() {
   return [ChromeMatchersAppInterface addCreditCardView];
 }
 
-id<GREYMatcher> AddPaymentMethodButton() {
-  return [ChromeMatchersAppInterface addPaymentMethodButton];
-}
-
 id<GREYMatcher> AddCreditCardButton() {
   return [ChromeMatchersAppInterface addCreditCardButton];
 }
@@ -329,6 +455,14 @@ id<GREYMatcher> SecondarySignInButton() {
   return [ChromeMatchersAppInterface secondarySignInButton];
 }
 
+id<GREYMatcher> IdentityChooserScrim() {
+  return [ChromeMatchersAppInterface identityChooserScrim];
+}
+
+id<GREYMatcher> FakeAddAccountScreenCancelButton() {
+  return [ChromeMatchersAppInterface fakeFakeAddAccountScreenCancelButton];
+}
+
 id<GREYMatcher> SettingsAccountButton() {
   return [ChromeMatchersAppInterface settingsAccountButton];
 }
@@ -337,24 +471,32 @@ id<GREYMatcher> SettingsAccountsCollectionView() {
   return [ChromeMatchersAppInterface settingsAccountsCollectionView];
 }
 
-id<GREYMatcher> SettingsImportDataImportButton() {
-  return [ChromeMatchersAppInterface settingsImportDataImportButton];
-}
-
-id<GREYMatcher> SettingsImportDataKeepSeparateButton() {
-  return [ChromeMatchersAppInterface settingsImportDataKeepSeparateButton];
-}
-
-id<GREYMatcher> SettingsImportDataContinueButton() {
-  return [ChromeMatchersAppInterface settingsImportDataContinueButton];
+id<GREYMatcher> SettingsSafetyCheckTableView() {
+  return [ChromeMatchersAppInterface settingsSafetyCheckTableView];
 }
 
 id<GREYMatcher> SettingsPrivacyTableView() {
   return [ChromeMatchersAppInterface settingsPrivacyTableView];
 }
 
-id<GREYMatcher> AccountsSyncButton() {
-  return [ChromeMatchersAppInterface accountsSyncButton];
+id<GREYMatcher> SettingsPrivacySafeBrowsingTableView() {
+  return [ChromeMatchersAppInterface settingsPrivacySafeBrowsingTableView];
+}
+
+id<GREYMatcher> SettingsNotificationsTableView() {
+  return [ChromeMatchersAppInterface settingsNotificationsTableView];
+}
+
+id<GREYMatcher> SettingsInactiveTabsTableView() {
+  return [ChromeMatchersAppInterface settingsInactiveTabsTableView];
+}
+
+id<GREYMatcher> SettingsTabsTableView() {
+  return [ChromeMatchersAppInterface settingsTabsTableView];
+}
+
+id<GREYMatcher> SettingsTrackingPriceTableView() {
+  return [ChromeMatchersAppInterface settingsTrackingPriceTableView];
 }
 
 id<GREYMatcher> ContentSettingsButton() {
@@ -365,8 +507,20 @@ id<GREYMatcher> GoogleServicesSettingsButton() {
   return [ChromeMatchersAppInterface googleServicesSettingsButton];
 }
 
+id<GREYMatcher> InactiveTabsSettingsButton() {
+  return [ChromeMatchersAppInterface inactiveTabsSettingsButton];
+}
+
+id<GREYMatcher> TabsSettingsButton() {
+  return [ChromeMatchersAppInterface tabsSettingsButton];
+}
+
 id<GREYMatcher> GoogleServicesSettingsView() {
   return [ChromeMatchersAppInterface googleServicesSettingsView];
+}
+
+id<GREYMatcher> SettingsNavigationBar() {
+  return [ChromeMatchersAppInterface settingsNavigationBar];
 }
 
 id<GREYMatcher> SettingsMenuBackButton() {
@@ -382,32 +536,40 @@ id<GREYMatcher> SettingsMenuPrivacyButton() {
   return [ChromeMatchersAppInterface settingsMenuPrivacyButton];
 }
 
+id<GREYMatcher> SettingsMenuNotificationsButton() {
+  return [ChromeMatchersAppInterface settingsMenuNotificationsButton];
+}
+
 id<GREYMatcher> SettingsMenuPasswordsButton() {
   return [ChromeMatchersAppInterface settingsMenuPasswordsButton];
 }
 
-id<GREYMatcher> PaymentRequestView() {
-  return [ChromeMatchersAppInterface paymentRequestView];
-}
-
-id<GREYMatcher> PaymentRequestErrorView() {
-  return [ChromeMatchersAppInterface paymentRequestErrorView];
+id<GREYMatcher> SettingsMenuSafetyCheckButton() {
+  return [ChromeMatchersAppInterface settingsMenuSafetyCheckButton];
 }
 
 id<GREYMatcher> VoiceSearchButton() {
   return [ChromeMatchersAppInterface voiceSearchButton];
 }
 
-id<GREYMatcher> VoiceSearchInputAccessoryButton() {
-  return [ChromeMatchersAppInterface voiceSearchInputAccessoryButton];
-}
-
 id<GREYMatcher> SettingsCollectionView() {
   return [ChromeMatchersAppInterface settingsCollectionView];
 }
 
+id<GREYMatcher> BrowsingDataButtonMatcher() {
+  return [ChromeMatchersAppInterface browsingDataButtonMatcher];
+}
+
+id<GREYMatcher> BrowsingDataDoneButtonMatcher() {
+  return [ChromeMatchersAppInterface browsingDataDoneButtonMatcher];
+}
+
 id<GREYMatcher> ClearBrowsingHistoryButton() {
   return [ChromeMatchersAppInterface clearBrowsingHistoryButton];
+}
+
+id<GREYMatcher> HistoryTableView() {
+  return [ChromeMatchersAppInterface historyTableView];
 }
 
 id<GREYMatcher> ClearCookiesButton() {
@@ -416,10 +578,6 @@ id<GREYMatcher> ClearCookiesButton() {
 
 id<GREYMatcher> ClearCacheButton() {
   return [ChromeMatchersAppInterface clearCacheButton];
-}
-
-id<GREYMatcher> ClearSavedPasswordsButton() {
-  return [ChromeMatchersAppInterface clearSavedPasswordsButton];
 }
 
 id<GREYMatcher> ClearAutofillButton() {
@@ -434,61 +592,60 @@ id<GREYMatcher> NTPCollectionView() {
   return [ChromeMatchersAppInterface ntpCollectionView];
 }
 
-id<GREYMatcher> WarningMessageView() {
-  return [ChromeMatchersAppInterface warningMessageView];
+id<GREYMatcher> NTPIncognitoView() {
+  return [ChromeMatchersAppInterface ntpIncognitoView];
 }
 
-id<GREYMatcher> PaymentRequestPickerRow() {
-  return [ChromeMatchersAppInterface paymentRequestPickerRow];
+id<GREYMatcher> NTPFeedMenuEnableButton() {
+  return [ChromeMatchersAppInterface ntpFeedMenuEnableButton];
 }
 
-id<GREYMatcher> PaymentRequestPickerSearchBar() {
-  return [ChromeMatchersAppInterface paymentRequestPickerSearchBar];
+id<GREYMatcher> NTPFeedMenuDisableButton() {
+  return [ChromeMatchersAppInterface ntpFeedMenuDisableButton];
 }
 
 id<GREYMatcher> OpenNewWindowMenuButton() {
   return [ChromeMatchersAppInterface openNewWindowMenuButton];
 }
 
-id<GREYMatcher> ReadingListMenuButton() {
-  return [ChromeMatchersAppInterface readingListMenuButton];
-}
-
-id<GREYMatcher> BookmarksMenuButton() {
-  return [ChromeMatchersAppInterface bookmarksMenuButton];
-}
-
-id<GREYMatcher> RecentTabsMenuButton() {
-  return [ChromeMatchersAppInterface recentTabsMenuButton];
+id<GREYMatcher> SearchBar() {
+  return [ChromeMatchersAppInterface searchBar];
 }
 
 id<GREYMatcher> SystemSelectionCallout() {
-  return [ChromeMatchersAppInterface systemSelectionCallout];
+  return [EditMenuAppInterface editMenuButtonMatcher];
 }
 
 id<GREYMatcher> SystemSelectionCalloutLinkToTextButton() {
-  return [ChromeMatchersAppInterface systemSelectionCalloutLinkToTextButton];
+  return [EditMenuAppInterface editMenuLinkToTextButtonMatcher];
 }
 
 id<GREYMatcher> SystemSelectionCalloutCopyButton() {
-  return [ChromeMatchersAppInterface systemSelectionCalloutCopyButton];
+  return [EditMenuAppInterface editMenuCopyButtonMatcher];
+}
+
+id<GREYMatcher> SystemSelectionCalloutCutButton() {
+  return [EditMenuAppInterface editMenuCutButtonMatcher];
+}
+
+id<GREYMatcher> SystemSelectionCalloutPasteButton() {
+  return [EditMenuAppInterface editMenuPasteButtonMatcher];
 }
 
 id<GREYMatcher> SystemSelectionCalloutOverflowButton() {
-  return [ChromeMatchersAppInterface systemSelectionCalloutOverflowButton];
+  return [EditMenuAppInterface editMenuNextButtonMatcher];
 }
 
 id<GREYMatcher> CopyActivityButton() {
   return [ChromeMatchersAppInterface copyActivityButton];
 }
 
-id<GREYMatcher> CopyLinkButton(BOOL use_new_string) {
-  return [ChromeMatchersAppInterface
-      copyLinkButtonWithUseNewString:use_new_string];
+id<GREYMatcher> CopyLinkButton() {
+  return [ChromeMatchersAppInterface copyLinkButton];
 }
 
-id<GREYMatcher> EditButton(BOOL use_new_string) {
-  return [ChromeMatchersAppInterface editButtonWithUseNewString:use_new_string];
+id<GREYMatcher> EditButton() {
+  return [ChromeMatchersAppInterface editButton];
 }
 
 id<GREYMatcher> MoveButton() {
@@ -507,6 +664,10 @@ id<GREYMatcher> DeleteButton() {
   return [ChromeMatchersAppInterface deleteButton];
 }
 
+id<GREYMatcher> SwipeActionDeleteButton() {
+  return [ChromeMatchersAppInterface swipeActionDeleteButton];
+}
+
 id<GREYMatcher> ContextMenuCopyButton() {
   return [ChromeMatchersAppInterface contextMenuCopyButton];
 }
@@ -517,6 +678,10 @@ id<GREYMatcher> NewTabPageOmnibox() {
 
 id<GREYMatcher> FakeOmnibox() {
   return [ChromeMatchersAppInterface fakeOmnibox];
+}
+
+id<GREYMatcher> SnackbarViewMatcher() {
+  return [ChromeMatchersAppInterface snackbarViewMatcher];
 }
 
 id<GREYMatcher> DiscoverHeaderLabel() {
@@ -548,20 +713,74 @@ id<GREYMatcher> OpenInButton() {
   return [ChromeMatchersAppInterface openInButton];
 }
 
+id<GREYMatcher> OpenPDFButton() {
+  return [ChromeMatchersAppInterface openPDFButton];
+}
+
 id<GREYMatcher> TabGridCellAtIndex(unsigned int index) {
   return [ChromeMatchersAppInterface tabGridCellAtIndex:index];
 }
 
+id<GREYMatcher> TabGridGroupCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface tabGridGroupCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGridGroupCellWithName(NSString* group_name,
+                                         NSInteger tab_count) {
+  return [ChromeMatchersAppInterface tabGridGroupCellWithName:group_name
+                                                        count:tab_count];
+}
+
+id<GREYMatcher> TabStripCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface tabStripCellAtIndex:index];
+}
+
+id<GREYMatcher> TabStripGroupCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface tabStripGroupCellAtIndex:index];
+}
+
+id<GREYMatcher> BlueDotOnTabStripCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface blueDotOnTabStripCellAtIndex:index];
+}
+
+id<GREYMatcher> NotificationDotOnTabStripGroupCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface
+      notificationDotOnTabStripGroupCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGroupsPanelNotificationCellAtIndex(unsigned int index) {
+  return
+      [ChromeMatchersAppInterface tabGroupsPanelNotificationCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGroupsPanelCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface tabGroupsPanelCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGroupsPanelCellWithName(NSString* group_name,
+                                           NSInteger tab_count,
+                                           bool shared) {
+  return [ChromeMatchersAppInterface tabGroupsPanelCellWithName:group_name
+                                                          count:tab_count
+                                                         shared:shared];
+}
+
+id<GREYMatcher> TabGroupRecentActivityCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface tabGroupRecentActivityCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGroupActivityLabelOnGroupCellAtIndex(unsigned int index) {
+  return [ChromeMatchersAppInterface
+      tabGroupActivityLabelOnGroupCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGroupActivityLabelOnGridCellAtIndex(unsigned int index) {
+  return
+      [ChromeMatchersAppInterface tabGroupActivityLabelOnGridCellAtIndex:index];
+}
+
 id<GREYMatcher> TabGridDoneButton() {
   return [ChromeMatchersAppInterface tabGridDoneButton];
-}
-
-id<GREYMatcher> TabGridCloseAllButton() {
-  return [ChromeMatchersAppInterface tabGridCloseAllButton];
-}
-
-id<GREYMatcher> TabGridUndoCloseAllButton() {
-  return [ChromeMatchersAppInterface tabGridUndoCloseAllButton];
 }
 
 id<GREYMatcher> TabGridSelectShowHistoryCell() {
@@ -592,6 +811,26 @@ id<GREYMatcher> TabGridOtherDevicesPanelButton() {
   return [ChromeMatchersAppInterface tabGridOtherDevicesPanelButton];
 }
 
+id<GREYMatcher> TabGroupSnackBar(int tab_group_count) {
+  return [ChromeMatchersAppInterface tabGroupSnackBar:tab_group_count];
+}
+
+id<GREYMatcher> TabGroupSnackBarAction() {
+  return [ChromeMatchersAppInterface tabGroupSnackBarAction];
+}
+
+id<GREYMatcher> TabGridTabGroupsPanelButton() {
+  return [ChromeMatchersAppInterface tabGridTabGroupsPanelButton];
+}
+
+id<GREYMatcher> TabGridNormalModePageControl() {
+  return [ChromeMatchersAppInterface tabGridNormalModePageControl];
+}
+
+id<GREYMatcher> TabGridInactiveTabsButton() {
+  return [ChromeMatchersAppInterface tabGridInactiveTabsButton];
+}
+
 id<GREYMatcher> TabGridBackground() {
   return [ChromeMatchersAppInterface tabGridBackground];
 }
@@ -604,8 +843,17 @@ id<GREYMatcher> IncognitoTabGrid() {
   return [ChromeMatchersAppInterface incognitoTabGrid];
 }
 
+id<GREYMatcher> InactiveTabGrid() {
+  return [ChromeMatchersAppInterface inactiveTabGrid];
+}
+
 id<GREYMatcher> TabGridCloseButtonForCellAtIndex(unsigned int index) {
   return [ChromeMatchersAppInterface tabGridCloseButtonForCellAtIndex:index];
+}
+
+id<GREYMatcher> TabGridCloseButtonForGroupCellAtIndex(unsigned int index) {
+  return
+      [ChromeMatchersAppInterface tabGridCloseButtonForGroupCellAtIndex:index];
 }
 
 id<GREYMatcher> SettingsPasswordMatcher() {
@@ -632,6 +880,14 @@ id<GREYMatcher> SettingsSearchEngineButton() {
   return [ChromeMatchersAppInterface settingsSearchEngineButton];
 }
 
+id<GREYMatcher> SettingsAddressBarButton() {
+  return [ChromeMatchersAppInterface settingsAddressBarButton];
+}
+
+id<GREYMatcher> SettingsGeminiInChromeButton() {
+  return [ChromeMatchersAppInterface settingsGeminiInChromeButton];
+}
+
 id<GREYMatcher> AutofillSuggestionViewMatcher() {
   return [ChromeMatchersAppInterface autofillSuggestionViewMatcher];
 }
@@ -640,102 +896,55 @@ id<GREYMatcher> ContentViewSmallerThanScrollView() {
   return [ChromeMatchersAppInterface contentViewSmallerThanScrollView];
 }
 
-id<GREYMatcher> AutofillSaveCardLocallyInfobar() {
-  return [ChromeMatchersAppInterface autofillSaveCardLocallyInfobar];
-}
-
-id<GREYMatcher> AutofillUploadCardInfobar() {
-  return [ChromeMatchersAppInterface autofillUploadCardInfobar];
-}
-
 id<GREYMatcher> HistoryEntry(const std::string& url, const std::string& title) {
-  return [ChromeMatchersAppInterface
-      historyEntryForURL:base::SysUTF8ToNSString(url)
-                   title:base::SysUTF8ToNSString(title)];
+  return grey_allOf(
+      grey_accessibilityLabel(
+          [NSString stringWithFormat:@"%@, %@", base::SysUTF8ToNSString(title),
+                                     base::SysUTF8ToNSString(url)]),
+      grey_sufficientlyVisible(), nil);
 }
 
-#pragma mark - Manual Fallback
-
-id<GREYMatcher> ManualFallbackFormSuggestionViewMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackFormSuggestionViewMatcher];
+id<GREYMatcher> HistoryEntry(const GURL& url, const std::string& title) {
+  std::string url_string = base::UTF16ToUTF8(
+      url_formatter::
+          FormatUrlForDisplayOmitSchemePathTrivialSubdomainsAndMobilePrefix(
+              url));
+  return HistoryEntry(url_string, title);
 }
 
-id<GREYMatcher> ManualFallbackKeyboardIconMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackKeyboardIconMatcher];
+id<GREYMatcher> SettingsToolbarAddButton() {
+  return [ChromeMatchersAppInterface settingsToolbarAddButton];
 }
 
-id<GREYMatcher> ManualFallbackPasswordIconMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackPasswordIconMatcher];
+id<GREYMatcher> SettingsToolbarEditButton() {
+  return grey_accessibilityID(kSettingsToolbarEditButtonId);
 }
 
-id<GREYMatcher> ManualFallbackPasswordTableViewMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackPasswordTableViewMatcher];
+id<GREYMatcher> CellCanBeSwipedToDismissed() {
+  return [ChromeMatchersAppInterface cellCanBeSwipedToDismissed];
 }
 
-id<GREYMatcher> ManualFallbackPasswordSearchBarMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackPasswordSearchBarMatcher];
+id<GREYMatcher> PasswordsTableViewMatcher() {
+  return [ChromeMatchersAppInterface passwordsTableViewMatcher];
 }
 
-id<GREYMatcher> ManualFallbackManagePasswordsMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackManagePasswordsMatcher];
+id<GREYMatcher> DefaultBrowserSettingsTableViewMatcher() {
+  return [ChromeMatchersAppInterface defaultBrowserSettingsTableViewMatcher];
 }
 
-id<GREYMatcher> ManualFallbackOtherPasswordsMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackOtherPasswordsMatcher];
+id<GREYMatcher> SafetyCheckTableViewMatcher() {
+  return [ChromeMatchersAppInterface safetyCheckTableViewMatcher];
 }
 
-id<GREYMatcher> ManualFallbackOtherPasswordsDismissMatcher() {
-  return
-      [ChromeMatchersAppInterface manualFallbackOtherPasswordsDismissMatcher];
+id<GREYMatcher> AutofillAndPasswordsTableViewMatcher() {
+  return [ChromeMatchersAppInterface autofillAndPasswordsTableViewMatcher];
 }
 
-id<GREYMatcher> ManualFallbackPasswordButtonMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackPasswordButtonMatcher];
-}
-
-id<GREYMatcher> ManualFallbackPasswordTableViewWindowMatcher() {
-  return
-      [ChromeMatchersAppInterface manualFallbackPasswordTableViewWindowMatcher];
-}
-
-id<GREYMatcher> ManualFallbackProfilesIconMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackProfilesIconMatcher];
-}
-
-id<GREYMatcher> ManualFallbackProfilesTableViewMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackProfilesTableViewMatcher];
-}
-
-id<GREYMatcher> ManualFallbackManageProfilesMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackManageProfilesMatcher];
-}
-
-id<GREYMatcher> ManualFallbackProfileTableViewWindowMatcher() {
-  return
-      [ChromeMatchersAppInterface manualFallbackProfileTableViewWindowMatcher];
-}
-
-id<GREYMatcher> ManualFallbackCreditCardIconMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackCreditCardIconMatcher];
-}
-
-id<GREYMatcher> ManualFallbackCreditCardTableViewMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackCreditCardTableViewMatcher];
-}
-
-// Returns a matcher for the button to open password settings in manual
-id<GREYMatcher> ManualFallbackManageCreditCardsMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackManageCreditCardsMatcher];
-}
-
-// Returns a matcher for the button to add credit cards settings in manual
-id<GREYMatcher> ManualFallbackAddCreditCardsMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackAddCreditCardsMatcher];
-}
-
-id<GREYMatcher> ManualFallbackCreditCardTableViewWindowMatcher() {
-  return [ChromeMatchersAppInterface
-      manualFallbackCreditCardTableViewWindowMatcher];
+id<GREYMatcher> AlertAction(NSString* title) {
+  return grey_allOf(
+      grey_accessibilityID([title stringByAppendingString:@"AlertAction"]),
+      grey_kindOfClassName(@"_UIAlertControllerActionView"),
+      grey_interactable(), nil);
 }
 
 id<GREYMatcher> ActivityViewHeader(NSString* url_host, NSString* page_title) {
@@ -743,12 +952,286 @@ id<GREYMatcher> ActivityViewHeader(NSString* url_host, NSString* page_title) {
                                                              title:page_title];
 }
 
-id<GREYMatcher> ManualFallbackSuggestPasswordMatcher() {
-  return [ChromeMatchersAppInterface manualFallbackSuggestPasswordMatcher];
-}
-
 id<GREYMatcher> UseSuggestedPasswordMatcher() {
   return [ChromeMatchersAppInterface useSuggestedPasswordMatcher];
+}
+
+id<GREYMatcher> ToolbarButtonWithID(NSString* button_id) {
+  return [ChromeMatchersAppInterface toolbarButtonWithID:button_id];
+}
+
+#pragma mark - Overflow Menu Destinations
+
+id<GREYMatcher> BookmarksDestinationButton() {
+  return [ChromeMatchersAppInterface bookmarksDestinationButton];
+}
+
+id<GREYMatcher> HistoryDestinationButton() {
+  return [ChromeMatchersAppInterface historyDestinationButton];
+}
+
+id<GREYMatcher> ReadingListDestinationButton() {
+  return [ChromeMatchersAppInterface readingListDestinationButton];
+}
+
+id<GREYMatcher> PasswordsDestinationButton() {
+  return [ChromeMatchersAppInterface passwordsDestinationButton];
+}
+
+id<GREYMatcher> PriceNotificationsDestinationButton() {
+  return [ChromeMatchersAppInterface priceNotificationsDestinationButton];
+}
+
+id<GREYMatcher> DownloadsDestinationButton() {
+  return [ChromeMatchersAppInterface downloadsDestinationButton];
+}
+
+id<GREYMatcher> RecentTabsDestinationButton() {
+  return [ChromeMatchersAppInterface recentTabsDestinationButton];
+}
+
+id<GREYMatcher> SiteInfoDestinationButton() {
+  return [ChromeMatchersAppInterface siteInfoDestinationButton];
+}
+
+id<GREYMatcher> SettingsDestinationButton() {
+  return [ChromeMatchersAppInterface settingsDestinationButton];
+}
+
+id<GREYMatcher> TranslateDestinationButton() {
+  return [ChromeMatchersAppInterface translateDestinationButton];
+}
+
+id<GREYMatcher> WhatsNewDestinationButton() {
+  return [ChromeMatchersAppInterface whatsNewDestinationButton];
+}
+
+#pragma mark - Overflow Menu Actions
+
+id<GREYMatcher> SettingsActionButton() {
+  return [ChromeMatchersAppInterface settingsActionButton];
+}
+
+#pragma mark - Incognito Interstitial
+
+id<GREYMatcher> IncognitoInterstitialMatcher() {
+  return [ChromeMatchersAppInterface incognitoInterstitial];
+}
+
+id<GREYMatcher> IncognitoInterstitialLabelForURL(const std::string& url) {
+  return [ChromeMatchersAppInterface
+      incognitoInterstitialLabelForURL:base::SysUTF8ToNSString(url)];
+}
+
+id<GREYMatcher> IncognitoInterstitialOpenInChromeIncognitoButton() {
+  return [ChromeMatchersAppInterface
+      incognitoInterstitialOpenInChromeIncognitoButton];
+}
+
+id<GREYMatcher> IncognitoInterstitialOpenInChromeButton() {
+  return [ChromeMatchersAppInterface incognitoInterstitialOpenInChromeButton];
+}
+
+id<GREYMatcher> IncognitoInterstitialCancelButton() {
+  return [ChromeMatchersAppInterface incognitoInterstitialCancelButton];
+}
+
+#pragma mark - Tab Grid Overflow Menu
+
+id<GREYMatcher> TabGridOverflowMenuButton() {
+  return [ChromeMatchersAppInterface tabGridOverflowMenuButton];
+}
+
+id<GREYMatcher> TabGridOverflowMenuCloseAllButton() {
+  return [ChromeMatchersAppInterface tabGridOverflowMenuCloseAllButton];
+}
+
+id<GREYMatcher> TabGridOverflowMenuSelectTabsButton() {
+  return [ChromeMatchersAppInterface tabGridOverflowMenuSelectTabsButton];
+}
+
+id<GREYMatcher> TabGridEditAddToButton() {
+  return [ChromeMatchersAppInterface tabGridEditAddToButton];
+}
+
+id<GREYMatcher> TabGridEditCloseTabsButton() {
+  return [ChromeMatchersAppInterface tabGridEditCloseTabsButton];
+}
+
+id<GREYMatcher> TabGridEditSelectAllButton() {
+  return [ChromeMatchersAppInterface tabGridEditSelectAllButton];
+}
+
+id<GREYMatcher> TabGridEditShareButton() {
+  return [ChromeMatchersAppInterface tabGridEditShareButton];
+}
+
+#pragma mark - Tab Grid Search Mode
+
+id<GREYMatcher> TabGridSearchTabsButton() {
+  return [ChromeMatchersAppInterface tabGridSearchTabsButton];
+}
+
+id<GREYMatcher> TabGridSearchBar() {
+  return [ChromeMatchersAppInterface tabGridSearchBar];
+}
+
+id<GREYMatcher> TabGridSearchCancelButton() {
+  return [ChromeMatchersAppInterface tabGridSearchCancelButton];
+}
+
+id<GREYMatcher> TabGridSearchModeToolbar() {
+  return [ChromeMatchersAppInterface tabGridSearchModeToolbar];
+}
+
+#pragma mark - Create Tab Group View
+
+id<GREYMatcher> TabGroupCreationView() {
+  return [ChromeMatchersAppInterface tabGroupCreationView];
+}
+
+id<GREYMatcher> CreateTabGroupTextField() {
+  return [ChromeMatchersAppInterface createTabGroupTextField];
+}
+
+id<GREYMatcher> CreateTabGroupTextFieldClearButton() {
+  return [ChromeMatchersAppInterface createTabGroupTextFieldClearButton];
+}
+
+id<GREYMatcher> CreateTabGroupCreateButton() {
+  return [ChromeMatchersAppInterface createTabGroupCreateButton];
+}
+
+id<GREYMatcher> CreateTabGroupCancelButton() {
+  return [ChromeMatchersAppInterface createTabGroupCancelButton];
+}
+
+#pragma mark - Tab Group View
+
+id<GREYMatcher> TabGroupView() {
+  return [ChromeMatchersAppInterface tabGroupView];
+}
+
+id<GREYMatcher> TabGroupViewTitle(NSString* title) {
+  return [ChromeMatchersAppInterface tabGroupViewTitle:title];
+}
+
+id<GREYMatcher> TabGroupOverflowMenuButton() {
+  return [ChromeMatchersAppInterface tabGroupOverflowMenuButton];
+}
+
+id<GREYMatcher> CloseTabGroupButton() {
+  return [ChromeMatchersAppInterface closeTabGroupButton];
+}
+
+id<GREYMatcher> TabGroupActivitySummaryCell() {
+  return [ChromeMatchersAppInterface tabGroupActivitySummaryCell];
+}
+
+id<GREYMatcher> TabGroupActivitySummaryCellCloseButton() {
+  return [ChromeMatchersAppInterface tabGroupActivitySummaryCellCloseButton];
+}
+
+#pragma mark - Tab Groups Context Menus
+
+id<GREYMatcher> AddTabToNewGroupButton() {
+  return [ChromeMatchersAppInterface addTabToNewGroupButton];
+}
+
+id<GREYMatcher> AddTabToGroupSubMenuButton() {
+  return [ChromeMatchersAppInterface addTabToGroupSubMenuButton];
+}
+
+id<GREYMatcher> RenameGroupButton() {
+  return [ChromeMatchersAppInterface renameGroupButton];
+}
+
+id<GREYMatcher> UngroupButton() {
+  return [ChromeMatchersAppInterface ungroupButton];
+}
+
+id<GREYMatcher> UngroupConfirmationButton() {
+  return [ChromeMatchersAppInterface ungroupConfirmationButton];
+}
+
+id<GREYMatcher> DeleteGroupButton() {
+  return [ChromeMatchersAppInterface deleteGroupButton];
+}
+
+id<GREYMatcher> DeleteGroupConfirmationButton() {
+  return [ChromeMatchersAppInterface deleteGroupConfirmationButton];
+}
+
+id<GREYMatcher> CloseGroupButton() {
+  return [ChromeMatchersAppInterface closeGroupButton];
+}
+
+id<GREYMatcher> ShareGroupButton() {
+  return [ChromeMatchersAppInterface shareGroupButton];
+}
+
+id<GREYMatcher> ManageGroupButton() {
+  return [ChromeMatchersAppInterface manageGroupButton];
+}
+
+id<GREYMatcher> RecentActivityButton() {
+  return [ChromeMatchersAppInterface recentActivityButton];
+}
+
+id<GREYMatcher> LeaveSharedGroupButton() {
+  return [ChromeMatchersAppInterface leaveSharedGroupButton];
+}
+
+id<GREYMatcher> LeaveSharedGroupConfirmationButton() {
+  return [ChromeMatchersAppInterface leaveSharedGroupConfirmationButton];
+}
+
+id<GREYMatcher> DeleteSharedGroupButton() {
+  return [ChromeMatchersAppInterface deleteSharedGroupButton];
+}
+
+id<GREYMatcher> DeleteSharedConfirmationButton() {
+  return [ChromeMatchersAppInterface deleteSharedConfirmationButton];
+}
+
+id<GREYMatcher> KeepSharedConfirmationButton() {
+  return [ChromeMatchersAppInterface keepSharedConfirmationButton];
+}
+
+id<GREYMatcher> FakeShareFlowView() {
+  return [ChromeMatchersAppInterface fakeShareFlowView];
+}
+
+id<GREYMatcher> FakeManageFlowView() {
+  return [ChromeMatchersAppInterface fakeManageFlowView];
+}
+
+id<GREYMatcher> FakeJoinFlowView() {
+  return [ChromeMatchersAppInterface fakeJoinFlowView];
+}
+
+#pragma mark - Tab Groups Panel
+
+id<GREYMatcher> TabGroupsPanel() {
+  return [ChromeMatchersAppInterface tabGroupsPanel];
+}
+
+#pragma mark - Button Stack
+
+id<GREYMatcher> ButtonStackPrimaryButton() {
+  return [ChromeMatchersAppInterface buttonStackPrimaryButton];
+}
+
+id<GREYMatcher> ButtonStackSecondaryButton() {
+  return [ChromeMatchersAppInterface buttonStackSecondaryButton];
+}
+
+id<GREYMatcher> ButtonStackTertiaryButton() {
+  return [ChromeMatchersAppInterface buttonStackTertiaryButton];
+}
+
+id<GREYMatcher> ButtonStackCheckmarkSymbol() {
+  return [ChromeMatchersAppInterface buttonStackCheckmarkSymbol];
 }
 
 }  // namespace chrome_test_util

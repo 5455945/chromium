@@ -1,13 +1,9 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/views/accessibility/ax_root_obj_wrapper.h"
 
-#include <utility>
-
-#include "base/containers/contains.h"
-#include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/platform/ax_unique_id.h"
@@ -19,42 +15,28 @@
 
 AXRootObjWrapper::AXRootObjWrapper(views::AXAuraObjCache::Delegate* delegate,
                                    views::AXAuraObjCache* cache)
-    : AXAuraObjWrapper(cache), delegate_(delegate) {
-  if (display::Screen::GetScreen())
-    display::Screen::GetScreen()->AddObserver(this);
-}
+    : views::AXAuraObjWrapper(cache), delegate_(delegate) {}
 
-AXRootObjWrapper::~AXRootObjWrapper() {
-  if (display::Screen::GetScreen())
-    display::Screen::GetScreen()->RemoveObserver(this);
-}
-
-bool AXRootObjWrapper::HasChild(views::AXAuraObjWrapper* child) {
-  std::vector<views::AXAuraObjWrapper*> children;
-  GetChildren(&children);
-  return base::Contains(children, child);
-}
+AXRootObjWrapper::~AXRootObjWrapper() = default;
 
 views::AXAuraObjWrapper* AXRootObjWrapper::GetParent() {
   return nullptr;
 }
 
 void AXRootObjWrapper::GetChildren(
-    std::vector<views::AXAuraObjWrapper*>* out_children) {
+    std::vector<raw_ptr<views::AXAuraObjWrapper, VectorExperimental>>*
+        out_children) {
   aura_obj_cache_->GetTopLevelWindows(out_children);
 }
 
 void AXRootObjWrapper::Serialize(ui::AXNodeData* out_node_data) {
   out_node_data->id = unique_id_.Get();
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  out_node_data->role = ax::mojom::Role::kClient;
-#else
   out_node_data->role = ax::mojom::Role::kDesktop;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
-  display::Screen* screen = display::Screen::GetScreen();
-  if (!screen)
+  display::Screen* screen = display::Screen::Get();
+  if (!screen) {
     return;
+  }
 
   const display::Display& display = screen->GetPrimaryDisplay();
 
@@ -65,10 +47,11 @@ void AXRootObjWrapper::Serialize(ui::AXNodeData* out_node_data) {
   // portrait. We use this rather than |rotation| because some devices default
   // to landscape, some in portrait. Encode landscape as horizontal state,
   // portrait as vertical state.
-  if (display.bounds().width() > display.bounds().height())
+  if (display.bounds().width() > display.bounds().height()) {
     out_node_data->AddState(ax::mojom::State::kHorizontal);
-  else
+  } else {
     out_node_data->AddState(ax::mojom::State::kVertical);
+  }
 }
 
 ui::AXNodeID AXRootObjWrapper::GetUniqueId() const {

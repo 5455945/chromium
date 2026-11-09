@@ -1,32 +1,27 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tabmodel;
 
-import android.util.SparseArray;
-
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.PostTask;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabCreationState;
-import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tab.state.CriticalPersistedTabData;
-import org.chromium.chrome.browser.tab.state.CriticalPersistedTabDataObserver;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.chrome.browser.tab.TabObserver;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Observer of tab changes for all tabs owned by a {@link TabModelSelector}.
- */
-public class TabModelSelectorTabObserver
-        extends EmptyTabObserver implements CriticalPersistedTabDataObserver {
-    private final TabModelSelector mTabModelSelector;
-    private final TabModelSelectorTabModelObserver mTabModelObserver;
-    private final SparseArray<Tab> mTabsToClose = new SparseArray<>();
+/** Observer of tab changes for all tabs owned by a {@link TabModelSelector}. */
+@NullMarked
+public class TabModelSelectorTabObserver implements TabObserver {
+    private final TabModelSelectorTabRegistrationObserver mTabRegistrationObserver;
+    private boolean mShouldDeferTabRegisterNotifications;
+    private final List<Tab> mDeferredTabs = new ArrayList<>();
+    private boolean mIsDestroyed;
+    private boolean mIsDeferredInitializationFinished;
 
     /**
      * Constructs an observer that should be notified of tab changes for all tabs owned
@@ -39,75 +34,72 @@ public class TabModelSelectorTabObserver
      * @param selector The selector that owns the Tabs that should notify this observer.
      */
     public TabModelSelectorTabObserver(TabModelSelector selector) {
-        mTabModelSelector = selector;
+        mTabRegistrationObserver = new TabModelSelectorTabRegistrationObserver(selector);
+        mShouldDeferTabRegisterNotifications = true;
+        mTabRegistrationObserver.addObserverAndNotifyExistingTabRegistration(
+                createRegistrationObserver());
+        mShouldDeferTabRegisterNotifications = false;
+        // Run |onTabRegistered| asynchronously so it is done after the tasks in the
+        // constructor of the inherited classes are completed and the relevant local
+        // variables are ready.
+        // TODO(jinsukkim): Consider making this class final, and introducing an inner
+        //     class that implements TabObserver + provides onTab[Un]Registered instead.
+        ThreadUtils.getUiThreadHandler()
+                .postAtFrontOfQueue(
+                        () -> {
+                            assert !mShouldDeferTabRegisterNotifications;
+                            // onTabRegistered may unregister tabs, so iterate over a copy and
+                            // skip tabs no longer in mDeferredTabs.
+                            for (Tab tab : new ArrayList<>(mDeferredTabs)) {
+                                // Keep destroyed tabs deferred so onTabUnregistered is skipped
+                                // for them too.
+                                if (tab.isDestroyed()) continue;
+                                if (mDeferredTabs.remove(tab)) onTabRegistered(tab);
+                            }
+                            mIsDeferredInitializationFinished = true;
+                        });
+    }
 
-        mTabModelObserver = new TabModelSelectorTabModelObserver(selector) {
+    private TabModelSelectorTabRegistrationObserver.Observer createRegistrationObserver() {
+        return new TabModelSelectorTabRegistrationObserver.Observer() {
             @Override
-            public void didAddTab(
-                    Tab tab, @TabLaunchType int type, @TabCreationState int creationState) {
-                // This observer is automatically removed by tab when it is destroyed.
+            public void onTabRegistered(Tab tab) {
+                if (tab.isDestroyed()) return;
                 tab.addObserver(TabModelSelectorTabObserver.this);
-                CriticalPersistedTabData.from(tab).addObserver(TabModelSelectorTabObserver.this);
-                onTabRegistered(tab);
-            }
-
-            @Override
-            public void willCloseTab(Tab tab, boolean animate) {
-                mTabsToClose.put(tab.getId(), tab);
-            }
-
-            @Override
-            public void tabClosureUndone(Tab tab) {
-                mTabsToClose.remove(tab.getId());
-            }
-
-            @Override
-            public void didCloseTab(int tabId, boolean incognito) {
-                Tab tab = mTabsToClose.get(tabId);
-                if (tab != null) {
-                    mTabsToClose.remove(tabId);
-                    onTabUnregistered(tab);
+                if (mShouldDeferTabRegisterNotifications) {
+                    mDeferredTabs.add(tab);
+                } else {
+                    TabModelSelectorTabObserver.this.onTabRegistered(tab);
                 }
             }
 
             @Override
-            public void tabRemoved(Tab tab) {
-                // Post the removal of the observer so that other tab events are notified
-                // before removing the tab observer (e.g. detach tab from activity).
-                PostTask.postTask(UiThreadTaskTraits.DEFAULT, () -> {
-                    // If the tab as been destroyed we cannot access PersistedTabData.
-                    if (tab.isDestroyed()) return;
-                    tab.removeObserver(TabModelSelectorTabObserver.this);
-                    CriticalPersistedTabData.from(tab).removeObserver(
-                            TabModelSelectorTabObserver.this);
-                });
-                onTabUnregistered(tab);
+            public void onTabUnregistered(Tab tab) {
+                // Tabs still in mDeferredTabs never got onTabRegistered: the posted task has not
+                // run yet, or it skipped them as destroyed. Detach the TabObserver and skip
+                // onTabUnregistered for them.
+                if (mDeferredTabs.remove(tab)) {
+                    performUnregister(tab);
+                    return;
+                }
+                assert !mShouldDeferTabRegisterNotifications
+                        : "Attempting to remove a tab during deferred registration that "
+                                + "never was added";
+
+                if (mIsDestroyed) {
+                    performUnregister(tab);
+                } else {
+                    // Post the removal of the observer so that other tab events are
+                    // notified before removing the tab observer (e.g. detach tab from
+                    // activity).
+                    PostTask.postTask(TaskTraits.UI_DEFAULT, () -> performUnregister(tab));
+                }
+                TabModelSelectorTabObserver.this.onTabUnregistered(tab);
             }
 
-            @Override
-            protected void onRegistrationComplete() {
-                List<Tab> tabs = new ArrayList<>();
-                List<TabModel> tabModels = mTabModelSelector.getModels();
-                for (int i = 0; i < tabModels.size(); i++) {
-                    TabModel tabModel = tabModels.get(i);
-                    TabList comprehensiveTabList = tabModel.getComprehensiveModel();
-                    for (int j = 0; j < comprehensiveTabList.getCount(); j++) {
-                        Tab tab = comprehensiveTabList.getTabAt(j);
-                        tab.addObserver(TabModelSelectorTabObserver.this);
-                        CriticalPersistedTabData.from(tab).addObserver(
-                                TabModelSelectorTabObserver.this);
-                        tabs.add(tab);
-                    }
-                }
-
-                // Run |onTabRegistered| asynchronously so it is done after the tasks in the
-                // constructor of the inherited classes are completed and the relevant local
-                // variables are ready.
-                // TODO(jinsukkim): Consifer making this class final, and instroducing an inner
-                //     class that extends EmptyTabObserver + provides onTab[Un]Registered instead.
-                ThreadUtils.getUiThreadHandler().postAtFrontOfQueue(() -> {
-                    for (Tab tab : tabs) onTabRegistered(tab);
-                });
+            private void performUnregister(Tab tab) {
+                if (mTabRegistrationObserver.isTabRegistered(tab)) return;
+                tab.removeObserver(TabModelSelectorTabObserver.this);
             }
         };
     }
@@ -119,31 +111,21 @@ public class TabModelSelectorTabObserver
     protected void onTabRegistered(Tab tab) {}
 
     /**
-     * Called when a tab is unregistered from a tab model this selector is managing.
+     * Called when a tab is unregistered from a tab model this selector is managing. Not called for
+     * tabs that are unregistered before their deferred {@link #onTabRegistered} runs.
+     *
      * @param tab The unregistered Tab.
      */
     protected void onTabUnregistered(Tab tab) {}
 
-    /**
-     * Destroys the observer and removes itself as a listener for Tab updates.
-     */
+    /** Destroys the observer and removes itself as a listener for Tab updates. */
     public void destroy() {
-        mTabModelObserver.destroy();
+        mIsDestroyed = true;
+        mTabRegistrationObserver.destroy();
+        assert mDeferredTabs.isEmpty();
+    }
 
-        List<TabModel> tabModels = mTabModelSelector.getModels();
-        for (int i = 0; i < tabModels.size(); i++) {
-            TabModel tabModel = tabModels.get(i);
-            tabModel.removeObserver(mTabModelObserver);
-
-            TabList comprehensiveTabList = tabModel.getComprehensiveModel();
-            for (int j = 0; j < comprehensiveTabList.getCount(); j++) {
-                Tab tab = comprehensiveTabList.getTabAt(j);
-                tab.removeObserver(this);
-                if (tab.isInitialized()) {
-                    CriticalPersistedTabData.from(tab).removeObserver(this);
-                }
-                onTabUnregistered(tab);
-            }
-        }
+    boolean isDeferredInitializationFinishedForTesting() {
+        return mIsDeferredInitializationFinished;
     }
 }

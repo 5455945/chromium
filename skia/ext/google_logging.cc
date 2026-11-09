@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,50 @@
 #include "base/strings/stringprintf.h"
 #include "third_party/skia/include/core/SkTypes.h"
 
+void SkLog_FileLine(const char* file,
+                    int line,
+                    SkLogPriority priority,
+                    const char* format,
+                    ...) {
+#if DCHECK_IS_ON()
+  int severity;
+  switch (priority) {
+    case SkLogPriority::kError:
+      severity = logging::LOGGING_ERROR;
+      break;
+    case SkLogPriority::kWarning:
+      severity = logging::LOGGING_WARNING;
+      break;
+    case SkLogPriority::kDebug:
+      severity = logging::LOGGING_INFO;
+      break;
+    default:
+      severity = logging::LOGGING_INFO;
+      break;
+  }
+#else
+  int severity = logging::LOGGING_INFO;
+#endif
+  if (severity < logging::GetMinLogLevel()) {
+    return;
+  }
+
+  va_list ap;
+  va_start(ap, format);
+
+  std::string msg;
+  UNSAFE_TODO(base::StringAppendV(&msg, format, ap));
+  va_end(ap);
+
+  logging::LogMessage(file, line, severity).stream() << msg;
+}
+
 void SkDebugf_FileLine(const char* file, int line, const char* format, ...) {
-  int severity = logging::LOG_INFO;
+#if DCHECK_IS_ON()
+  int severity = logging::LOGGING_ERROR;
+#else
+  int severity = logging::LOGGING_INFO;
+#endif
   if (severity < logging::GetMinLogLevel())
     return;
 
@@ -19,20 +61,20 @@ void SkDebugf_FileLine(const char* file, int line, const char* format, ...) {
   va_start(ap, format);
 
   std::string msg;
-  base::StringAppendV(&msg, format, ap);
+  UNSAFE_TODO(base::StringAppendV(&msg, format, ap));
   va_end(ap);
 
   logging::LogMessage(file, line, severity).stream() << msg;
 }
 
 void SkAbort_FileLine(const char* file, int line, const char* format, ...) {
-  int severity = logging::LOG_FATAL;
+  int severity = logging::LOGGING_FATAL;
 
   va_list ap;
   va_start(ap, format);
 
   std::string msg;
-  base::StringAppendV(&msg, format, ap);
+  UNSAFE_TODO(base::StringAppendV(&msg, format, ap));
   va_end(ap);
 
   logging::LogMessage(file, line, severity).stream() << msg;

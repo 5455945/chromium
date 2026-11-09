@@ -1,19 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.payments.handler.toolbar;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableFloatPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
-import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 /** PaymentHandlerToolbar UI properties, which fully describe the state of the UI. */
+@NullMarked
 /* package */ class PaymentHandlerToolbarProperties {
-    /* package */ static final WritableObjectPropertyKey<GURL> URL =
+    /* package */ static final WritableObjectPropertyKey<Origin> ORIGIN =
             new WritableObjectPropertyKey<>();
 
     /* package */ static final WritableObjectPropertyKey<String> TITLE =
@@ -38,9 +40,21 @@ import org.chromium.url.GURL;
     /* package */ static final WritableObjectPropertyKey<Runnable> CLOSE_BUTTON_ON_CLICK_CALLBACK =
             new WritableObjectPropertyKey<>();
 
-    /* package */ static final PropertyKey[] ALL_KEYS = new PropertyKey[] {URL, TITLE,
-            LOAD_PROGRESS, PROGRESS_VISIBLE, SECURITY_ICON, SECURITY_ICON_CONTENT_DESCRIPTION,
-            SECURITY_ICON_ON_CLICK_CALLBACK, CLOSE_BUTTON_ON_CLICK_CALLBACK};
+    /* package */ static final WritableBooleanPropertyKey CLOSE_BUTTON_VISIBILITY =
+            new WritableBooleanPropertyKey();
+
+    /* package */ static final PropertyKey[] ALL_KEYS =
+            new PropertyKey[] {
+                ORIGIN,
+                TITLE,
+                LOAD_PROGRESS,
+                PROGRESS_VISIBLE,
+                SECURITY_ICON,
+                SECURITY_ICON_CONTENT_DESCRIPTION,
+                SECURITY_ICON_ON_CLICK_CALLBACK,
+                CLOSE_BUTTON_ON_CLICK_CALLBACK,
+                CLOSE_BUTTON_VISIBILITY
+            };
 
     // Prevent instantiation.
     private PaymentHandlerToolbarProperties() {}

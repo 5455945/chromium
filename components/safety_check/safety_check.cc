@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,18 @@
 
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
+namespace {
+
+const base::TimeDelta kUnusedSitePermissionsRevocationCleanUpThreshold =
+    base::Days(30);
+
+}  // namespace
+
 namespace safety_check {
+
+base::TimeDelta GetUnusedSitePermissionsRevocationCleanUpThreshold() {
+  return kUnusedSitePermissionsRevocationCleanUpThreshold;
+}
 
 SafeBrowsingStatus CheckSafeBrowsing(PrefService* pref_service) {
   const PrefService::Preference* enabled_pref =

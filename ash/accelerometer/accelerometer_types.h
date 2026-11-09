@@ -1,12 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCELEROMETER_ACCELEROMETER_TYPES_H_
 #define ASH_ACCELEROMETER_ACCELEROMETER_TYPES_H_
 
+#include <array>
+
 #include "ash/ash_export.h"
-#include "base/macros.h"
 
 namespace gfx {
 class Vector3dF;
@@ -76,7 +77,7 @@ class ASH_EXPORT AccelerometerUpdate {
   void Reset();
 
  protected:
-  AccelerometerReading data_[ACCELEROMETER_SOURCE_COUNT];
+  std::array<AccelerometerReading, ACCELEROMETER_SOURCE_COUNT> data_;
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/net_errors.h"
@@ -62,7 +64,7 @@ class CertVerifierRequestImpl : public mojom::CertVerifierRequest,
   // Certificate being verified.
   scoped_refptr<net::X509Certificate> cert_;
   // Out parameter for the result.
-  net::CertVerifyResult* cert_verify_result_;
+  raw_ptr<net::CertVerifyResult> cert_verify_result_;
   // Callback to call once the result is available.
   net::CompletionOnceCallback completion_callback_;
 
@@ -96,10 +98,12 @@ class MojoCertVerifier::MojoReconnector
 
 MojoCertVerifier::MojoCertVerifier(
     mojo::PendingRemote<mojom::CertVerifierService> mojo_cert_verifier,
+    mojo::PendingReceiver<mojom::CertVerifierServiceClient> client_receiver,
     mojo::PendingRemote<network::mojom::URLLoaderFactory> url_loader_factory,
     base::RepeatingCallback<void(
         mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> reconnector)
-    : mojo_cert_verifier_(std::move(mojo_cert_verifier)) {
+    : mojo_cert_verifier_(std::move(mojo_cert_verifier)),
+      client_receiver_(this, std::move(client_receiver)) {
   mojo::PendingRemote<mojom::URLLoaderFactoryConnector> reconnector_remote;
 
   reconnector_ = std::make_unique<MojoReconnector>(
@@ -122,7 +126,8 @@ int MojoCertVerifier::Verify(
   mojo::PendingRemote<mojom::CertVerifierRequest> cert_verifier_request;
   auto cert_verifier_receiver =
       cert_verifier_request.InitWithNewPipeAndPassReceiver();
-  mojo_cert_verifier_->Verify(params, std::move(cert_verifier_request));
+  mojo_cert_verifier_->Verify(params, net_log.source(),
+                              std::move(cert_verifier_request));
   *out_req = std::make_unique<CertVerifierRequestImpl>(
       std::move(cert_verifier_receiver), params.certificate(), verify_result,
       std::move(callback), net_log);
@@ -130,8 +135,33 @@ int MojoCertVerifier::Verify(
   return net::ERR_IO_PENDING;
 }
 
+void MojoCertVerifier::Verify2QwacBinding(
+    const std::string& binding,
+    const std::string& hostname,
+    const scoped_refptr<net::X509Certificate>& tls_cert,
+    base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+        callback,
+    const net::NetLogWithSource& net_log) {
+  mojo_cert_verifier_->Verify2QwacBinding(
+      binding, hostname, tls_cert, net_log.source(), std::move(callback));
+}
+
 void MojoCertVerifier::SetConfig(const net::CertVerifier::Config& config) {
   mojo_cert_verifier_->SetConfig(config);
+}
+
+void MojoCertVerifier::AddObserver(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void MojoCertVerifier::RemoveObserver(Observer* observer) {
+  observers_.RemoveObserver(observer);
+}
+
+void MojoCertVerifier::OnCertVerifierChanged() {
+  for (Observer& observer : observers_) {
+    observer.OnCertVerifierChanged();
+  }
 }
 
 void MojoCertVerifier::FlushForTesting() {

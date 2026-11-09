@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,8 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/web_contents_observer_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/web_contents_observer_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
@@ -39,7 +39,7 @@ class Data : public NavigationHandleUserData<Data> {
   NAVIGATION_HANDLE_USER_DATA_KEY_DECL();
 };
 
-NAVIGATION_HANDLE_USER_DATA_KEY_IMPL(Data)
+NAVIGATION_HANDLE_USER_DATA_KEY_IMPL(Data);
 
 }  // namespace
 
@@ -58,7 +58,7 @@ class NavigationHandleUserDataBrowserTest : public ContentBrowserTest {
   }
 
   RenderFrameHostImpl* top_frame_host() {
-    return web_contents()->GetFrameTree()->root()->current_frame_host();
+    return web_contents()->GetPrimaryFrameTree().root()->current_frame_host();
   }
 };
 
@@ -95,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(NavigationHandleUserDataBrowserTest,
         EXPECT_EQ(data->value(), "data");
         did_finish_navigation = true;
       }));
-  navigation_manager.WaitForNavigationFinished();
+  ASSERT_TRUE(navigation_manager.WaitForNavigationFinished());
   EXPECT_TRUE(did_finish_navigation);
 
   // Ensure that the data is deleted after navigation finished.
@@ -180,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(NavigationHandleUserDataBrowserTest, VeryEarlyAttach) {
   web_contents_impl->GetController().LoadURLWithParams(
       NavigationController::LoadURLParams(url));
   auto* navigation =
-      web_contents_impl->GetFrameTree()->root()->navigation_request();
+      web_contents_impl->GetPrimaryFrameTree().root()->navigation_request();
   ASSERT_TRUE(navigation);
   navigation_id = navigation->GetNavigationId();
 
@@ -191,7 +191,7 @@ IN_PROC_BROWSER_TEST_F(NavigationHandleUserDataBrowserTest, VeryEarlyAttach) {
   EXPECT_EQ(data->value(), "data");
 
   // Wait for the navigation to finish.
-  navigation_manager.WaitForNavigationFinished();
+  ASSERT_TRUE(navigation_manager.WaitForNavigationFinished());
   EXPECT_TRUE(did_start_navigation);
   EXPECT_TRUE(did_finish_navigation);
 

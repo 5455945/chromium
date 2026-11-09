@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 
 #include <algorithm>
 #include <cmath>
+
 #include "build/build_config.h"
+#include "cc/base/features.h"
 
 namespace cc {
 namespace {
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 constexpr double kDistanceEstimatorScalar = 40;
 // The delta to be scrolled in next frame is 0.9 of the delta in last frame.
 constexpr double kRatio = 0.9;
@@ -20,9 +22,20 @@ constexpr double kDistanceEstimatorScalar = 25;
 // The delta to be scrolled in next frame is 0.92 of the delta in last frame.
 constexpr double kRatio = 0.92;
 #endif
-constexpr auto kFrameTime = base::TimeDelta::FromMilliseconds(16);
-constexpr base::TimeDelta kMaximumSnapDuration =
-    base::TimeDelta::FromSecondsD(5);
+constexpr auto kFrameTime = base::Milliseconds(16);
+constexpr base::TimeDelta kMaximumSnapDuration = base::Seconds(5);
+
+// The maximum decay factor (current_delta.Length() / previous_delta.Length())
+// that we predict a snap fling at. If the decay factor is larger than
+// this, it means there is still some acceleration from the fling being
+// applied. We want to be sure that we start predicting once the fling
+// acceleration has finished to ensure we get an accurate decay.
+constexpr float kMaxDecayFactor = 0.96f;
+
+// If the decay isn't slowing down below kMaxDecayFactor, we will use a decay
+// up to this value - meaning we won't predict a fling beyond 100x the current
+// displacement.
+constexpr float kMaxSlowDecayFactor = 0.99f;
 
 double GetDistanceFromDisplacement(gfx::Vector2dF displacement) {
   return std::hypot(displacement.x(), displacement.y());
@@ -51,15 +64,36 @@ bool IsWithinOnePixel(gfx::Vector2dF actual, gfx::Vector2dF target) {
 
 }  // namespace
 
-gfx::Vector2dF SnapFlingCurve::EstimateDisplacement(
-    const gfx::Vector2dF& first_delta) {
-  gfx::Vector2dF destination = first_delta;
+std::optional<gfx::Vector2dF> SnapFlingCurve::EstimateDisplacement(
+    const gfx::Vector2dF& current_delta,
+    const std::optional<gfx::Vector2dF>& previous_delta,
+    bool allow_slow_decay) {
+  if (base::FeatureList::IsEnabled(features::kSnapFlingDecayPrediction)) {
+    if (!previous_delta.has_value()) {
+      return std::nullopt;
+    }
+    float prev_len = previous_delta->Length();
+    float current_len = current_delta.Length();
+    if (prev_len > 0) {
+      float decay_factor = current_len / prev_len;
+      if (decay_factor < kMaxDecayFactor ||
+          (allow_slow_decay && decay_factor < 1.f)) {
+        gfx::Vector2dF ending_displacement = current_delta;
+        decay_factor = std::min(decay_factor, kMaxSlowDecayFactor);
+        ending_displacement.Scale(1.f / (1.f - decay_factor));
+        return ending_displacement;
+      }
+    }
+    return std::nullopt;
+  }
+
+  gfx::Vector2dF destination = current_delta;
   destination.Scale(kDistanceEstimatorScalar);
   return destination;
 }
 
-SnapFlingCurve::SnapFlingCurve(const gfx::Vector2dF& start_offset,
-                               const gfx::Vector2dF& target_offset,
+SnapFlingCurve::SnapFlingCurve(const gfx::PointF& start_offset,
+                               const gfx::PointF& target_offset,
                                base::TimeTicks first_gsu_time)
     : start_offset_(start_offset),
       total_displacement_(target_offset - start_offset),
@@ -105,7 +139,7 @@ gfx::Vector2dF SnapFlingCurve::GetScrollDelta(base::TimeTicks time_stamp) {
   return new_displacement - current_displacement_;
 }
 
-void SnapFlingCurve::UpdateCurrentOffset(const gfx::Vector2dF& current_offset) {
+void SnapFlingCurve::UpdateCurrentOffset(const gfx::PointF& current_offset) {
   current_displacement_ = current_offset - start_offset_;
 }
 

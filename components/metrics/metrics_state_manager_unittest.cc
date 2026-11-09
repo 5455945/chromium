@@ -1,10 +1,9 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/metrics_state_manager.h"
 
-#include <ctype.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -12,22 +11,30 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/feature_list.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/metrics/field_trial.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "components/metrics/client_info.h"
+#include "components/metrics/metrics_data_validation.h"
+#include "components/metrics/metrics_features.h"
 #include "components/metrics/metrics_log.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/metrics_switches.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/variations/pref_names.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/strings/ascii.h"
 
 namespace metrics {
 namespace {
@@ -41,8 +48,29 @@ void VerifyClientId(const std::string& client_id) {
     if (i == 8 || i == 13 || i == 18 || i == 23)
       EXPECT_EQ('-', current);
     else
-      EXPECT_TRUE(isxdigit(current));
+      EXPECT_TRUE(absl::ascii_isxdigit(static_cast<unsigned char>(current)));
   }
+}
+
+// Round a timestamp measured in seconds since epoch to one with a granularity
+// of an hour.
+int64_t RoundSecondsToHour(int64_t time_in_seconds) {
+  return 3600 * (time_in_seconds / 3600);
+}
+
+MATCHER(HaveClonedInstallInfo, "") {
+  return (
+      !arg.FindPreference(prefs::kClonedResetCount)->IsDefaultValue() &&
+      !arg.FindPreference(prefs::kFirstClonedResetTimestamp)
+           ->IsDefaultValue() &&
+      !arg.FindPreference(prefs::kLastClonedResetTimestamp)->IsDefaultValue());
+}
+
+MATCHER(HaveNoClonedInstallInfo, "") {
+  return (
+      arg.FindPreference(prefs::kClonedResetCount)->IsDefaultValue() &&
+      arg.FindPreference(prefs::kFirstClonedResetTimestamp)->IsDefaultValue() &&
+      arg.FindPreference(prefs::kLastClonedResetTimestamp)->IsDefaultValue());
 }
 
 }  // namespace
@@ -55,13 +83,22 @@ class MetricsStateManagerTest : public testing::Test {
     MetricsService::RegisterPrefs(prefs_.registry());
   }
 
+  MetricsStateManagerTest(const MetricsStateManagerTest&) = delete;
+  MetricsStateManagerTest& operator=(const MetricsStateManagerTest&) = delete;
+
   std::unique_ptr<MetricsStateManager> CreateStateManager() {
-    return MetricsStateManager::Create(
-        &prefs_, enabled_state_provider_.get(), std::wstring(),
-        base::BindRepeating(&MetricsStateManagerTest::MockStoreClientInfoBackup,
-                            base::Unretained(this)),
-        base::BindRepeating(&MetricsStateManagerTest::LoadFakeClientInfoBackup,
-                            base::Unretained(this)));
+    std::unique_ptr<MetricsStateManager> state_manager =
+        MetricsStateManager::Create(
+            &prefs_, enabled_state_provider_.get(), std::wstring(),
+            base::FilePath(), StartupVisibility::kUnknown, {},
+            base::BindRepeating(
+                &MetricsStateManagerTest::MockStoreClientInfoBackup,
+                base::Unretained(this)),
+            base::BindRepeating(
+                &MetricsStateManagerTest::LoadFakeClientInfoBackup,
+                base::Unretained(this)));
+    state_manager->InstantiateFieldTrialList();
+    return state_manager;
   }
 
   // Sets metrics reporting as enabled for testing.
@@ -89,6 +126,10 @@ class MetricsStateManagerTest : public testing::Test {
   int client_info_load_count_ = 0;
 
  protected:
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
+  using ClientIdBackupFixMethod = MetricsStateManager::ClientIdBackupFixMethod;
+#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
+
   TestingPrefServiceSimple prefs_;
 
   // Last ClientInfo stored by the MetricsStateManager via
@@ -135,8 +176,6 @@ class MetricsStateManagerTest : public testing::Test {
   }
 
   std::unique_ptr<TestEnabledStateProvider> enabled_state_provider_;
-
-  DISALLOW_COPY_AND_ASSIGN(MetricsStateManagerTest);
 };
 
 TEST_F(MetricsStateManagerTest, ClientIdCorrectlyFormatted_ConsentInitially) {
@@ -166,24 +205,26 @@ TEST_F(MetricsStateManagerTest, EntropySourceUsed_Low) {
   prefs_.SetInt64(prefs::kInstallDate, base::Time::Now().ToTimeT());
 
   std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
-  state_manager->CreateDefaultEntropyProvider();
-  EXPECT_EQ(MetricsStateManager::ENTROPY_SOURCE_LOW,
-            state_manager->entropy_source_returned());
-  EXPECT_EQ("", state_manager->initial_client_id_for_testing());
+  // |enable_limited_entropy_mode| is irrelevant but is set for test coverage.
+  state_manager->CreateEntropyProviders(
+      /*enable_limited_entropy_mode=*/true);
+  EXPECT_EQ(state_manager->entropy_source_returned(),
+            MetricsStateManager::ENTROPY_SOURCE_LOW);
+  EXPECT_EQ(state_manager->initial_client_id_for_testing(), "");
 }
 
 TEST_F(MetricsStateManagerTest, EntropySourceUsed_High) {
   EnableMetricsReporting();
   std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
-  state_manager->CreateDefaultEntropyProvider();
-  EXPECT_EQ(MetricsStateManager::ENTROPY_SOURCE_HIGH,
-            state_manager->entropy_source_returned());
+  // |enable_limited_entropy_mode| is irrelevant but is set for test coverage.
+  state_manager->CreateEntropyProviders(
+      /*enable_limited_entropy_mode=*/true);
+  EXPECT_EQ(state_manager->entropy_source_returned(),
+            MetricsStateManager::ENTROPY_SOURCE_HIGH);
   EXPECT_EQ(state_manager->initial_client_id_for_testing(),
             state_manager->client_id());
 }
 
-// Check that setting the kMetricsResetIds pref to true causes the client id to
-// be reset. We do not check that the low entropy source is reset because we
 // cannot ensure that metrics state manager won't generate the same id again.
 TEST_F(MetricsStateManagerTest, ResetMetricsIDs) {
   // Set an initial client id in prefs. It should not be possible for the
@@ -193,32 +234,42 @@ TEST_F(MetricsStateManagerTest, ResetMetricsIDs) {
 
   EnableMetricsReporting();
 
+  // No cloned install info should have been stored.
+  EXPECT_THAT(prefs_, HaveNoClonedInstallInfo());
+
   // Make sure the initial client id isn't reset by the metrics state manager.
   {
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
     state_manager->ForceClientIdCreation();
-    EXPECT_EQ(kInitialClientId, state_manager->client_id());
+    EXPECT_EQ(state_manager->client_id(), kInitialClientId);
     EXPECT_FALSE(state_manager->metrics_ids_were_reset_);
+    EXPECT_THAT(prefs_, HaveNoClonedInstallInfo());
   }
 
   // Set the reset pref to cause the IDs to be reset.
   prefs_.SetBoolean(prefs::kMetricsResetIds, true);
+  client_info_load_count_ = 0;
 
   // Cause the actual reset to happen.
   {
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
     state_manager->ForceClientIdCreation();
-    EXPECT_NE(kInitialClientId, state_manager->client_id());
+    EXPECT_NE(state_manager->client_id(), kInitialClientId);
     EXPECT_TRUE(state_manager->metrics_ids_were_reset_);
-    EXPECT_EQ(kInitialClientId, state_manager->previous_client_id_);
-    EXPECT_EQ(0, client_info_load_count_);
+    EXPECT_EQ(state_manager->previous_client_id_, kInitialClientId);
+    EXPECT_EQ(client_info_load_count_, 0);
 
     state_manager->GetLowEntropySource();
 
     EXPECT_FALSE(prefs_.GetBoolean(prefs::kMetricsResetIds));
+
+    EXPECT_THAT(prefs_, HaveClonedInstallInfo());
+    EXPECT_EQ(prefs_.GetInteger(prefs::kClonedResetCount), 1);
+    EXPECT_EQ(prefs_.GetInt64(prefs::kFirstClonedResetTimestamp),
+              prefs_.GetInt64(prefs::kLastClonedResetTimestamp));
   }
 
-  EXPECT_NE(kInitialClientId, prefs_.GetString(prefs::kMetricsClientID));
+  EXPECT_NE(prefs_.GetString(prefs::kMetricsClientID), kInitialClientId);
 }
 
 TEST_F(MetricsStateManagerTest, LogHasSessionShutdownCleanly) {
@@ -242,30 +293,38 @@ TEST_F(MetricsStateManagerTest, ForceClientIdCreation) {
   prefs_.SetInt64(prefs::kInstallDate, kFakeInstallationDate);
 
   {
+    base::HistogramTester histogram_tester;
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
 
     // client_id shouldn't be auto-generated if metrics reporting is not
     // enabled.
-    EXPECT_EQ(std::string(), state_manager->client_id());
-    EXPECT_EQ(0, prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp));
+    EXPECT_EQ(state_manager->client_id(), std::string());
+    EXPECT_EQ(prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp), 0);
 
     // Confirm that the initial ForceClientIdCreation call creates the client id
     // and backs it up via MockStoreClientInfoBackup.
     EXPECT_FALSE(stored_client_info_backup_);
     EnableMetricsReporting();
     state_manager->ForceClientIdCreation();
-    EXPECT_NE(std::string(), state_manager->client_id());
+    EXPECT_NE(state_manager->client_id(), std::string());
     EXPECT_GE(prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp),
               test_begin_time_);
 
     ASSERT_TRUE(stored_client_info_backup_);
-    EXPECT_EQ(1, client_info_load_count_);
+    EXPECT_EQ(client_info_load_count_, 1);
     EXPECT_EQ(state_manager->client_id(),
               stored_client_info_backup_->client_id);
-    EXPECT_EQ(kFakeInstallationDate,
-              stored_client_info_backup_->installation_date);
+    EXPECT_EQ(stored_client_info_backup_->installation_date,
+              kFakeInstallationDate);
     EXPECT_EQ(prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp),
               stored_client_info_backup_->reporting_enabled_date);
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
+    histogram_tester.ExpectUniqueSample(
+        "UMA.ClientIdBackupFixMethod",
+        ClientIdBackupFixMethod::kBackupNewlyCreated, 1);
+#else
+    histogram_tester.ExpectTotalCount("UMA.ClientIdBackupFixMethod", 0);
+#endif
   }
 }
 
@@ -278,24 +337,35 @@ TEST_F(MetricsStateManagerTest,
   std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
 
   ASSERT_TRUE(stored_client_info_backup_);
-  EXPECT_NE(0, stored_client_info_backup_->installation_date);
-  EXPECT_EQ(1, client_info_load_count_);
+  EXPECT_NE(stored_client_info_backup_->installation_date, 0);
+  EXPECT_EQ(client_info_load_count_, 1);
 }
 
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
 TEST_F(MetricsStateManagerTest, ProvisionalClientId_PromotedToClientId) {
+  // Force enable the creation of a provisional client ID on first run for
+  // consistency between Chromium and Chrome builds.
+  MetricsStateManager::enable_provisional_client_id_for_testing_ = true;
+
   std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
 
   // Verify that there was a provisional client id created.
-  std::string provisional_client_id = state_manager->provisional_client_id_;
+  std::string provisional_client_id =
+      prefs_.GetString(prefs::kMetricsProvisionalClientID);
   VerifyClientId(provisional_client_id);
   // No client id should have been stored.
   EXPECT_TRUE(prefs_.FindPreference(prefs::kMetricsClientID)->IsDefaultValue());
   int low_entropy_source = state_manager->GetLowEntropySource();
-  // The default entropy provider should be the high entropy one.
-  state_manager->CreateDefaultEntropyProvider();
-  EXPECT_EQ(MetricsStateManager::ENTROPY_SOURCE_HIGH,
-            state_manager->entropy_source_returned());
+  // The default entropy provider should be the high entropy one since we have a
+  // provisional client ID. |enable_limited_entropy_mode| is irrelevant but is
+  // set to true for test coverage.
+  state_manager->CreateEntropyProviders(
+      /*enable_limited_entropy_mode=*/true);
+  EXPECT_EQ(state_manager->entropy_source_returned(),
+            MetricsStateManager::ENTROPY_SOURCE_HIGH);
+  // The high entropy source used should be the provisional client ID.
+  EXPECT_EQ(state_manager->initial_client_id_for_testing(),
+            provisional_client_id);
 
   // Forcing client id creation should promote the provisional client id to
   // become the real client id and keep the low entropy source.
@@ -303,49 +373,68 @@ TEST_F(MetricsStateManagerTest, ProvisionalClientId_PromotedToClientId) {
   state_manager->ForceClientIdCreation();
   std::string client_id = state_manager->client_id();
   EXPECT_EQ(provisional_client_id, client_id);
-  EXPECT_EQ(client_id, prefs_.GetString(prefs::kMetricsClientID));
-  EXPECT_TRUE(state_manager->provisional_client_id_.empty());
-  EXPECT_EQ(low_entropy_source, state_manager->GetLowEntropySource());
-  EXPECT_EQ(1, client_info_load_count_);
+  EXPECT_EQ(prefs_.GetString(prefs::kMetricsClientID), client_id);
+  EXPECT_TRUE(prefs_.FindPreference(prefs::kMetricsProvisionalClientID)
+                  ->IsDefaultValue());
+  EXPECT_TRUE(prefs_.GetString(prefs::kMetricsProvisionalClientID).empty());
+  EXPECT_EQ(state_manager->GetLowEntropySource(), low_entropy_source);
+  EXPECT_EQ(client_info_load_count_, 1);
 }
 
-TEST_F(MetricsStateManagerTest, ProvisionalClientId_NotPersisted) {
-  std::string provisional_client_id;
-  int low_entropy_source;
+TEST_F(MetricsStateManagerTest, ProvisionalClientId_PersistedAcrossFirstRuns) {
+  // Force enable the creation of a provisional client ID on first run for
+  // consistency between Chromium and Chrome builds.
+  MetricsStateManager::enable_provisional_client_id_for_testing_ = true;
 
-  // First run, with a provisional client id.
+  std::string provisional_client_id;
+
+  // Simulate a first run, and verify that a provisional client id is generated.
+  // We also do not enable nor disable UMA in order to simulate exiting during
+  // the first run flow.
   {
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
     // Verify that there was a provisional client id created.
-    std::string provisional_client_id = state_manager->provisional_client_id_;
+    provisional_client_id =
+        prefs_.GetString(prefs::kMetricsProvisionalClientID);
     VerifyClientId(provisional_client_id);
     // No client id should have been stored.
     EXPECT_TRUE(
         prefs_.FindPreference(prefs::kMetricsClientID)->IsDefaultValue());
-    low_entropy_source = state_manager->GetLowEntropySource();
-    // The default entropy provider should be the high entropy one.
-    state_manager->CreateDefaultEntropyProvider();
-    EXPECT_EQ(MetricsStateManager::ENTROPY_SOURCE_HIGH,
-              state_manager->entropy_source_returned());
+    // The default entropy provider should be the high entropy one since we have
+    // a provisional client ID. |enable_limited_entropy_mode| is irrelevant but
+    // is set to true for test coverage.
+    state_manager->CreateEntropyProviders(
+        /*enable_limited_entropy_mode=*/true);
+    EXPECT_EQ(state_manager->entropy_source_returned(),
+              MetricsStateManager::ENTROPY_SOURCE_HIGH);
+    // The high entropy source used should be the provisional client ID.
+    EXPECT_EQ(state_manager->initial_client_id_for_testing(),
+              provisional_client_id);
   }
 
-  // Now, simulate a second run, such that UMA was not turned on during the
-  // first run. This should not result in any client id existing nor any
-  // provisional client id.
+  // Now, simulate a second run, and verify that the provisional client ID is
+  // the same.
   {
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
-    EXPECT_TRUE(state_manager->provisional_client_id_.empty());
-    EXPECT_TRUE(state_manager->client_id().empty());
-    EXPECT_EQ(low_entropy_source, state_manager->GetLowEntropySource());
+    // Verify that the same provisional client ID as the first run is used.
+    EXPECT_EQ(provisional_client_id,
+              prefs_.GetString(prefs::kMetricsProvisionalClientID));
+    // There still should not be any stored client ID.
     EXPECT_TRUE(
         prefs_.FindPreference(prefs::kMetricsClientID)->IsDefaultValue());
-    // The default entropy provider should be the low entropy one.
-    state_manager->CreateDefaultEntropyProvider();
-    EXPECT_EQ(MetricsStateManager::ENTROPY_SOURCE_LOW,
-              state_manager->entropy_source_returned());
+    // The default entropy provider should be the high entropy one since we have
+    // a provisional client ID. |enable_limited_entropy_mode| is irrelevant but
+    // is set to true for test coverage.
+    state_manager->CreateEntropyProviders(
+        /*enable_limited_entropy_mode=*/true);
+    EXPECT_EQ(state_manager->entropy_source_returned(),
+              MetricsStateManager::ENTROPY_SOURCE_HIGH);
+    // The high entropy source used should be the provisional client ID.
+    EXPECT_EQ(state_manager->initial_client_id_for_testing(),
+              provisional_client_id);
   }
 }
-#endif  // !defined(OS_WIN)
+#endif  // !BUILDFLAG(IS_WIN)
 
 TEST_F(MetricsStateManagerTest, LoadPrefs) {
   ClientInfo client_info;
@@ -363,7 +452,7 @@ TEST_F(MetricsStateManagerTest, LoadPrefs) {
 
     // client_id should be auto-obtained from the constructor when metrics
     // reporting is enabled.
-    EXPECT_EQ(client_info.client_id, state_manager->client_id());
+    EXPECT_EQ(state_manager->client_id(), client_info.client_id);
 
     // The backup should not be modified.
     ASSERT_FALSE(stored_client_info_backup_);
@@ -372,20 +461,28 @@ TEST_F(MetricsStateManagerTest, LoadPrefs) {
     // shouldn't affect the existing client id.
     state_manager->ForceClientIdCreation();
     EXPECT_FALSE(stored_client_info_backup_);
-    EXPECT_EQ(client_info.client_id, state_manager->client_id());
-    EXPECT_EQ(0, client_info_load_count_);
+    EXPECT_EQ(state_manager->client_id(), client_info.client_id);
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
+    const int expected_load_count =
+        base::FeatureList::IsEnabled(features::kClientIdBackupCorrectnessFix)
+            ? 1
+            : 0;
+#else
+    const int expected_load_count = 0;
+#endif
+    EXPECT_EQ(client_info_load_count_, expected_load_count);
   }
 }
 
 TEST_F(MetricsStateManagerTest, PreferPrefs) {
   ClientInfo client_info;
-  client_info.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEF";
+  client_info.client_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeef";
   client_info.installation_date = 1112;
   client_info.reporting_enabled_date = 2223;
   SetClientInfoPrefs(client_info);
 
   ClientInfo client_info2;
-  client_info2.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+  client_info2.client_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
   client_info2.installation_date = 1111;
   client_info2.reporting_enabled_date = 2222;
   SetFakeClientInfoBackup(client_info2);
@@ -397,11 +494,19 @@ TEST_F(MetricsStateManagerTest, PreferPrefs) {
     EXPECT_FALSE(stored_client_info_backup_);
 
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
-    EXPECT_EQ(client_info.client_id, state_manager->client_id());
+    EXPECT_EQ(state_manager->client_id(), client_info.client_id);
 
     // The backup should not be modified.
     ASSERT_FALSE(stored_client_info_backup_);
-    EXPECT_EQ(0, client_info_load_count_);
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
+    const int expected_load_count =
+        base::FeatureList::IsEnabled(features::kClientIdBackupCorrectnessFix)
+            ? 1
+            : 0;
+#else
+    const int expected_load_count = 0;
+#endif
+    EXPECT_EQ(client_info_load_count_, expected_load_count);
   }
 }
 
@@ -425,18 +530,20 @@ TEST_F(MetricsStateManagerTest, RestoreBackup) {
   {
     // The backup should kick in if the client id has gone missing. It should
     // replace remaining and missing dates as well.
+    base::HistogramTester histogram_tester;
 
     EXPECT_FALSE(stored_client_info_backup_);
 
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
-    EXPECT_EQ(client_info2.client_id, state_manager->client_id());
-    EXPECT_EQ(client_info2.installation_date,
-              prefs_.GetInt64(prefs::kInstallDate));
-    EXPECT_EQ(client_info2.reporting_enabled_date,
-              prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp));
+    EXPECT_EQ(state_manager->client_id(), client_info2.client_id);
+    EXPECT_EQ(prefs_.GetInt64(prefs::kInstallDate),
+              client_info2.installation_date);
+    EXPECT_EQ(prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp),
+              client_info2.reporting_enabled_date);
 
     EXPECT_TRUE(stored_client_info_backup_);
-    EXPECT_EQ(1, client_info_load_count_);
+    EXPECT_EQ(client_info_load_count_, 1);
+    histogram_tester.ExpectTotalCount("UMA.ClientIdBackupFixMethod", 0);
   }
 }
 
@@ -459,16 +566,15 @@ TEST_F(MetricsStateManagerTest, ResetBackup) {
     std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
 
     // A brand new client id should have been generated.
-    EXPECT_NE(std::string(), state_manager->client_id());
-    EXPECT_NE(client_info.client_id, state_manager->client_id());
+    EXPECT_NE(state_manager->client_id(), std::string());
+    EXPECT_NE(state_manager->client_id(), client_info.client_id);
     EXPECT_TRUE(state_manager->metrics_ids_were_reset_);
-    EXPECT_EQ(client_info.client_id, state_manager->previous_client_id_);
+    EXPECT_EQ(state_manager->previous_client_id_, client_info.client_id);
     EXPECT_TRUE(stored_client_info_backup_);
-    EXPECT_EQ(0, client_info_load_count_);
+    EXPECT_EQ(client_info_load_count_, 0);
 
-    // The installation date should not have been affected.
-    EXPECT_EQ(client_info.installation_date,
-              prefs_.GetInt64(prefs::kInstallDate));
+    // The installation date will be reset to Now().
+    EXPECT_GE(prefs_.GetInt64(prefs::kInstallDate), test_begin_time_);
 
     // The metrics-reporting-enabled date will be reset to Now().
     EXPECT_GE(prefs_.GetInt64(prefs::kMetricsReportingEnabledTimestamp),
@@ -494,6 +600,8 @@ TEST_F(MetricsStateManagerTest, CheckProvider) {
   std::unique_ptr<MetricsProvider> provider = state_manager->GetProvider();
   SystemProfileProto system_profile;
   provider->ProvideSystemProfileMetrics(&system_profile);
+  // The install date is rounded to the nearest hour for privacy reasons.
+  // This mirrors the implementation in metrics_state_manager.cc.
   EXPECT_EQ(system_profile.install_date(), kInstallDateExpected);
   EXPECT_EQ(system_profile.uma_enabled_date(), kEnabledDateExpected);
 
@@ -545,10 +653,9 @@ TEST_F(MetricsStateManagerTest, CheckClientIdWasUsedToAssignFieldTrial) {
 }
 
 TEST_F(MetricsStateManagerTest, CheckProviderResetIds) {
-  int64_t kInstallDate = 1373051956;
-  int64_t kInstallDateExpected = 1373050800;  // Computed from kInstallDate.
-  int64_t kEnabledDate = 1373001211;
-  int64_t kEnabledDateExpected = 1373000400;  // Computed from kEnabledDate.
+  int64_t kInstallDate = 1373001211;
+  int64_t kEnabledDate = 1373051956;
+  int64_t kEnabledDateExpected = 1373050800;  // Computed from kEnabledDate.
 
   ClientInfo client_info;
   client_info.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
@@ -561,22 +668,46 @@ TEST_F(MetricsStateManagerTest, CheckProviderResetIds) {
   // Set the reset pref to cause the IDs to be reset.
   prefs_.SetBoolean(prefs::kMetricsResetIds, true);
   std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
-  EXPECT_NE(client_info.client_id, state_manager->client_id());
+  // Verify that MetricsStateManager has the a new client_id after reset and has
+  // the right previous_client_id (equals to the client_id before being reset).
+  EXPECT_NE(state_manager->client_id(), client_info.client_id);
   EXPECT_TRUE(state_manager->metrics_ids_were_reset_);
-  EXPECT_EQ(client_info.client_id, state_manager->previous_client_id_);
-  EXPECT_EQ(0, client_info_load_count_);
+  EXPECT_EQ(state_manager->previous_client_id_, client_info.client_id);
+  EXPECT_EQ(client_info_load_count_, 0);
 
+  uint64_t hashed_previous_client_id =
+      MetricsLog::Hash(state_manager->previous_client_id_);
   std::unique_ptr<MetricsProvider> provider = state_manager->GetProvider();
   SystemProfileProto system_profile;
   provider->ProvideSystemProfileMetrics(&system_profile);
-  EXPECT_EQ(system_profile.install_date(), kInstallDateExpected);
+  // The install date is rounded to the nearest hour for privacy reasons.
+  // This mirrors the implementation in metrics_state_manager.cc.
+  EXPECT_EQ(system_profile.install_date(),
+            RoundSecondsToHour(test_begin_time_));
   EXPECT_EQ(system_profile.uma_enabled_date(), kEnabledDateExpected);
+  auto cloned_install_info = system_profile.cloned_install_info();
+  EXPECT_EQ(cloned_install_info.count(), 1);
+  EXPECT_EQ(cloned_install_info.cloned_from_client_id(),
+            hashed_previous_client_id);
+  // Make sure the first_timestamp is updated and is the same as the
+  // last_timestamp.
+  EXPECT_EQ(cloned_install_info.last_timestamp(),
+            cloned_install_info.first_timestamp());
+  EXPECT_NE(cloned_install_info.first_timestamp(), 0);
 
   base::HistogramTester histogram_tester;
   ChromeUserMetricsExtension uma_proto;
+  // The system_profile in the |uma_proto| is provided in
+  // https://source.chromium.org/chromium/chromium/src/+/main:components/metrics/metrics_service.cc;drc=4b86ff6c58f5651a4e2f44abb22d93c3593155cb;l=759
+  // and it's hard to be tested here. For logs from the previous session:
+  // 1. if the previous session is the detection session, the
+  // |uma_proto.system_profile| won't contain the latest cloned_install_info
+  // message.
+  // 2. if the previous session is a normal session, the
+  // |uma_proto.system_profile| should contain the cloned_install_info message
+  // as long as it's saved in prefs.
   provider->ProvidePreviousSessionData(&uma_proto);
-  EXPECT_EQ(MetricsLog::Hash(state_manager->previous_client_id_),
-            uma_proto.client_id());
+  EXPECT_EQ(uma_proto.client_id(), hashed_previous_client_id);
   histogram_tester.ExpectUniqueSample("UMA.IsClonedInstall", 1, 1);
 
   // Since we set the pref and didn't call SaveMachineId(), this should do
@@ -587,9 +718,297 @@ TEST_F(MetricsStateManagerTest, CheckProviderResetIds) {
   // Set the pref through SaveMachineId and expect previous to do nothing and
   // current to log the histogram
   prefs_.SetInteger(prefs::kMetricsMachineId, 2216820);
-  state_manager->cloned_install_detector_.SaveMachineId(&prefs_, "test");
+  state_manager->cloned_install_detector_.SaveMachineId(
+      &prefs_, base::Time::Now(), "test");
   provider->ProvideCurrentSessionData(&uma_proto);
   histogram_tester.ExpectUniqueSample("UMA.IsClonedInstall", 1, 2);
 }
+
+TEST_F(MetricsStateManagerTest,
+       CheckProviderResetIds_PreviousIdOnlyReportInResetSession) {
+  int64_t kInstallDate = 1373001211;
+  int64_t kEnabledDate = 1373051956;
+  int64_t kEnabledDateExpected = 1373050800;  // Computed from kEnabledDate.
+
+  ClientInfo client_info;
+  client_info.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+  client_info.installation_date = kInstallDate;
+  client_info.reporting_enabled_date = kEnabledDate;
+
+  SetFakeClientInfoBackup(client_info);
+  SetClientInfoPrefs(client_info);
+
+  // In the reset session:
+  // Set the reset pref to cause the IDs to be reset.
+  prefs_.SetBoolean(prefs::kMetricsResetIds, true);
+
+  {
+    std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+    EXPECT_NE(state_manager->client_id(), client_info.client_id);
+    EXPECT_TRUE(state_manager->metrics_ids_were_reset_);
+    // Verify that MetricsStateManager has the right previous_client_id (the ID
+    // that was there before being reset).
+    EXPECT_EQ(state_manager->previous_client_id_, client_info.client_id);
+    EXPECT_EQ(client_info_load_count_, 0);
+
+    std::unique_ptr<MetricsProvider> provider = state_manager->GetProvider();
+    SystemProfileProto system_profile;
+    provider->ProvideSystemProfileMetrics(&system_profile);
+    // The install date is rounded to the nearest hour for privacy reasons.
+    // This mirrors the implementation in metrics_state_manager.cc.
+    EXPECT_EQ(system_profile.install_date(),
+              RoundSecondsToHour(test_begin_time_));
+    EXPECT_EQ(system_profile.uma_enabled_date(), kEnabledDateExpected);
+    auto cloned_install_info = system_profile.cloned_install_info();
+    // |cloned_from_client_id| should be uploaded in the reset session.
+    EXPECT_EQ(cloned_install_info.cloned_from_client_id(),
+              MetricsLog::Hash(state_manager->previous_client_id_));
+    // Make sure the first_timestamp is updated and is the same as the
+    // last_timestamp.
+    EXPECT_EQ(cloned_install_info.count(), 1);
+    EXPECT_EQ(cloned_install_info.last_timestamp(),
+              cloned_install_info.first_timestamp());
+    EXPECT_NE(cloned_install_info.last_timestamp(), 0);
+  }
+  // In the normal session:
+  {
+    std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+    EXPECT_FALSE(state_manager->metrics_ids_were_reset_);
+    std::unique_ptr<MetricsProvider> provider = state_manager->GetProvider();
+    SystemProfileProto system_profile;
+    provider->ProvideSystemProfileMetrics(&system_profile);
+
+    auto cloned_install_info = system_profile.cloned_install_info();
+    // |cloned_from_client_id| shouldn't be reported in the normal session.
+    EXPECT_FALSE(cloned_install_info.has_cloned_from_client_id());
+    // Other cloned_install_info fields should continue be reported once set.
+    EXPECT_EQ(cloned_install_info.count(), 1);
+    EXPECT_EQ(cloned_install_info.last_timestamp(),
+              cloned_install_info.first_timestamp());
+    EXPECT_NE(cloned_install_info.last_timestamp(), 0);
+    // The install date is rounded to the nearest hour for privacy reasons.
+    // This mirrors the implementation in metrics_state_manager.cc.
+    EXPECT_EQ(system_profile.install_date(),
+              RoundSecondsToHour(test_begin_time_));
+  }
+}
+
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
+TEST_F(MetricsStateManagerTest, RepairClientInfoBackup_DisabledByDefault) {
+  base::HistogramTester histogram_tester;
+  EXPECT_FALSE(
+      base::FeatureList::IsEnabled(features::kClientIdBackupCorrectnessFix));
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "11111111-2222-3333-4444-555555555555";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "not-a-valid-uuid";
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+  state_manager->ForceClientIdCreation();
+
+  EXPECT_EQ(client_info_load_count_, 0);
+  EXPECT_FALSE(stored_client_info_backup_);
+  histogram_tester.ExpectTotalCount("UMA.ClientIdBackupFixMethod", 0);
+}
+
+TEST_F(MetricsStateManagerTest, RepairClientInfoBackup_FeatureDisabled) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kClientIdBackupCorrectnessFix);
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "11111111-2222-3333-4444-555555555555";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "not-a-valid-uuid";
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+  state_manager->ForceClientIdCreation();
+
+  EXPECT_EQ(client_info_load_count_, 0);
+  EXPECT_FALSE(stored_client_info_backup_);
+  histogram_tester.ExpectTotalCount("UMA.ClientIdBackupFixMethod", 0);
+}
+
+TEST_F(MetricsStateManagerTest,
+       RepairClientInfoBackup_InvalidBackupRepairedFromPrefs) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list(
+      features::kClientIdBackupCorrectnessFix);
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "11111111-2222-3333-4444-555555555555";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "not-a-valid-uuid";
+  backup_info.installation_date = 1000;
+  backup_info.reporting_enabled_date = 2000;
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+
+  ASSERT_TRUE(stored_client_info_backup_);
+  EXPECT_EQ(stored_client_info_backup_->client_id, prefs_info.client_id);
+  EXPECT_EQ(stored_client_info_backup_->installation_date,
+            prefs_info.installation_date);
+  EXPECT_EQ(stored_client_info_backup_->reporting_enabled_date,
+            prefs_info.reporting_enabled_date);
+  EXPECT_EQ(client_info_load_count_, 1);
+  histogram_tester.ExpectUniqueSample("UMA.ClientIdBackupFixMethod",
+                                      ClientIdBackupFixMethod::kFromLocalState,
+                                      1);
+
+  // Subsequent ForceClientIdCreation() calls in the same session should not
+  // re-check or re-write the backup.
+  stored_client_info_backup_.reset();
+  state_manager->ForceClientIdCreation();
+  EXPECT_FALSE(stored_client_info_backup_);
+  EXPECT_EQ(client_info_load_count_, 1);
+  histogram_tester.ExpectUniqueSample("UMA.ClientIdBackupFixMethod",
+                                      ClientIdBackupFixMethod::kFromLocalState,
+                                      1);
+}
+
+TEST_F(MetricsStateManagerTest,
+       RepairClientInfoBackup_UppercaseBackupRepairedFromPrefs) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list(
+      features::kClientIdBackupCorrectnessFix);
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "11111111-2222-3333-4444-555555555555";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+
+  ASSERT_TRUE(stored_client_info_backup_);
+  EXPECT_EQ(stored_client_info_backup_->client_id, prefs_info.client_id);
+  EXPECT_EQ(client_info_load_count_, 1);
+  histogram_tester.ExpectUniqueSample("UMA.ClientIdBackupFixMethod",
+                                      ClientIdBackupFixMethod::kFromLocalState,
+                                      1);
+}
+
+TEST_F(MetricsStateManagerTest,
+       RepairClientInfoBackup_InvalidBackupClearedWhenPrefsNotLowercase) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list(
+      features::kClientIdBackupCorrectnessFix);
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEF";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "not-a-valid-uuid";
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+
+  ASSERT_TRUE(stored_client_info_backup_);
+  EXPECT_TRUE(stored_client_info_backup_->client_id.empty());
+  EXPECT_EQ(client_info_load_count_, 1);
+  histogram_tester.ExpectUniqueSample("UMA.ClientIdBackupFixMethod",
+                                      ClientIdBackupFixMethod::kClearBackup, 1);
+}
+
+TEST_F(MetricsStateManagerTest,
+       RepairClientInfoBackup_ValidLowercaseBackupUntouched) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list(
+      features::kClientIdBackupCorrectnessFix);
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "11111111-2222-3333-4444-555555555555";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+
+  EXPECT_FALSE(stored_client_info_backup_);
+  EXPECT_EQ(client_info_load_count_, 1);
+  histogram_tester.ExpectTotalCount("UMA.ClientIdBackupFixMethod", 0);
+}
+
+TEST_F(MetricsStateManagerTest,
+       RepairClientInfoBackup_DeferredUntilFeatureListInitialized) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList null_feature_list;
+  null_feature_list.InitWithNullFeatureAndFieldTrialLists();
+  base::FieldTrialList field_trial_list;
+  ASSERT_FALSE(base::FeatureList::GetInstance());
+
+  ClientInfo prefs_info;
+  prefs_info.client_id = "11111111-2222-3333-4444-555555555555";
+  prefs_info.installation_date = 1112;
+  prefs_info.reporting_enabled_date = 2223;
+  SetClientInfoPrefs(prefs_info);
+
+  ClientInfo backup_info;
+  backup_info.client_id = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+  SetFakeClientInfoBackup(backup_info);
+
+  EnableMetricsReporting();
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+
+  // During early startup (before FeatureList is initialized), backup repair is
+  // deferred.
+  EXPECT_EQ(client_info_load_count_, 0);
+  EXPECT_FALSE(stored_client_info_backup_);
+  histogram_tester.ExpectTotalCount("UMA.ClientIdBackupFixMethod", 0);
+
+  {
+    base::test::ScopedFeatureList enabled_feature_list(
+        features::kClientIdBackupCorrectnessFix);
+    state_manager->ForceClientIdCreation();
+    ASSERT_TRUE(stored_client_info_backup_);
+    EXPECT_EQ(stored_client_info_backup_->client_id, prefs_info.client_id);
+    EXPECT_EQ(client_info_load_count_, 1);
+    histogram_tester.ExpectUniqueSample(
+        "UMA.ClientIdBackupFixMethod", ClientIdBackupFixMethod::kFromLocalState,
+        1);
+
+    stored_client_info_backup_.reset();
+    state_manager->ForceClientIdCreation();
+    EXPECT_FALSE(stored_client_info_backup_);
+    EXPECT_EQ(client_info_load_count_, 1);
+    histogram_tester.ExpectUniqueSample(
+        "UMA.ClientIdBackupFixMethod", ClientIdBackupFixMethod::kFromLocalState,
+        1);
+  }
+}
+#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS)
 
 }  // namespace metrics

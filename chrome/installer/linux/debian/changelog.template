@@ -1,5 +1,5 @@
-@@PACKAGE@@-@@CHANNEL@@ (@@VERSIONFULL@@) @@CHANNEL@@; urgency=low
+@@PACKAGE-@@channel (@@versionfull) @@channel; urgency=low
 
-  * Build spec: https://chromium.googlesource.com/chromium/src.git/+/@@VERSION@@/
+  * Build spec: https://chromium.googlesource.com/chromium/src.git/+/@@version/
 
- -- @@MAINTNAME@@ <@@MAINTMAIL@@>  Tue, 03 Feb 2009 14:54:35 -0800
+ -- @@MAINTNAME <@@MAINTMAIL>  @@deb_date_rfc5322

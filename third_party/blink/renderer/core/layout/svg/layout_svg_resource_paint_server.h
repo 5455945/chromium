@@ -20,10 +20,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_RESOURCE_PAINT_SERVER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_RESOURCE_PAINT_SERVER_H_
 
+#include "cc/paint/paint_flags.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_container.h"
-#include "third_party/blink/renderer/platform/graphics/paint/paint_flags.h"
+#include "third_party/blink/renderer/core/paint/paint_flags.h"
 
 namespace blink {
+
+struct AutoDarkMode;
 
 class LayoutSVGResourcePaintServer : public LayoutSVGResourceContainer {
  public:
@@ -31,16 +34,25 @@ class LayoutSVGResourcePaintServer : public LayoutSVGResourceContainer {
       : LayoutSVGResourceContainer(element) {}
 
   virtual bool ApplyShader(const SVGResourceClient&,
-                           const FloatRect& reference_box,
+                           const gfx::RectF& reference_box,
                            const AffineTransform* additional_transform,
-                           PaintFlags&) = 0;
+                           const AutoDarkMode& auto_dark_mode,
+                           cc::PaintFlags&,
+                           PaintFlags paint_flags) = 0;
+
+ protected:
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
+                      const StyleChangeContext&) override;
 };
 
 template <>
-inline bool IsResourceOfType<LayoutSVGResourcePaintServer>(
-    const LayoutSVGResourceContainer* container) {
-  return container->IsSVGPaintServer();
-}
+struct DowncastTraits<LayoutSVGResourcePaintServer> {
+  static bool AllowFrom(const LayoutSVGResourceContainer& container) {
+    return container.IsSVGPaintServer();
+  }
+};
 
 }  // namespace blink
 

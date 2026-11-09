@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "base/json/json_file_value_serializer.h"
-#include "base/macros.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "content/public/test/test_browser_context.h"
@@ -21,6 +20,7 @@
 #include "skia/ext/image_operations.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_skia_source.h"
 #include "ui/gfx/skia_util.h"
 
@@ -40,8 +40,9 @@ SkBitmap CreateBlankBitmapForScale(int size_dip,
 }
 
 SkBitmap EnsureBitmapSize(const SkBitmap& original, int size) {
-  if (original.width() == size && original.height() == size)
+  if (original.width() == size && original.height() == size) {
     return original;
+  }
 
   SkBitmap resized = skia::ImageOperations::Resize(
       original, skia::ImageOperations::RESIZE_LANCZOS3, size, size);
@@ -72,11 +73,16 @@ class ExtensionIconImageTest : public ExtensionsTest,
   ExtensionIconImageTest()
       : image_loaded_count_(0), quit_in_image_loaded_(false) {}
 
+  ExtensionIconImageTest(const ExtensionIconImageTest&) = delete;
+  ExtensionIconImageTest& operator=(const ExtensionIconImageTest&) = delete;
+
   ~ExtensionIconImageTest() override {}
 
   void WaitForImageLoad() {
+    base::RunLoop loop;
+    quit_closure_ = loop.QuitWhenIdleClosure();
     quit_in_image_loaded_ = true;
-    base::RunLoop().Run();
+    loop.Run();
     quit_in_image_loaded_ = false;
   }
 
@@ -99,26 +105,35 @@ class ExtensionIconImageTest : public ExtensionsTest,
     std::string error;
     JSONFileValueDeserializer deserializer(
         test_file.AppendASCII("manifest.json"));
-    std::unique_ptr<base::DictionaryValue> valid_value =
-        base::DictionaryValue::From(
-            deserializer.Deserialize(&error_code, &error));
+    std::unique_ptr<base::Value> valid_value =
+        deserializer.Deserialize(&error_code, &error);
     EXPECT_EQ(0, error_code) << error;
-    if (error_code != 0)
+    if (error_code != 0) {
       return nullptr;
+    }
 
-    EXPECT_TRUE(valid_value.get());
-    if (!valid_value)
+    EXPECT_TRUE(valid_value);
+    if (!valid_value) {
       return nullptr;
+    }
 
-    return Extension::Create(test_file, location, *valid_value,
-                             Extension::NO_FLAGS, &error);
+    const base::DictValue* valid_dict = valid_value->GetIfDict();
+    EXPECT_TRUE(valid_dict);
+    if (!valid_dict) {
+      return nullptr;
+    }
+
+    std::u16string utf16_error;
+    return Extension::Create(test_file, location, *valid_dict,
+                             Extension::NO_FLAGS, &utf16_error);
   }
 
   // IconImage::Delegate overrides:
   void OnExtensionIconImageChanged(IconImage* image) override {
     image_loaded_count_++;
-    if (quit_in_image_loaded_)
-      base::RunLoop::QuitCurrentWhenIdleDeprecated();
+    if (quit_in_image_loaded_) {
+      std::move(quit_closure_).Run();
+    }
   }
 
   gfx::ImageSkia GetDefaultIcon() {
@@ -128,18 +143,14 @@ class ExtensionIconImageTest : public ExtensionsTest,
  private:
   int image_loaded_count_;
   bool quit_in_image_loaded_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionIconImageTest);
+  base::OnceClosure quit_closure_;
 };
 
 }  // namespace
 
 TEST_F(ExtensionIconImageTest, Basic) {
-  std::vector<ui::ResourceScaleFactor> supported_factors;
-  supported_factors.push_back(ui::SCALE_FACTOR_100P);
-  supported_factors.push_back(ui::SCALE_FACTOR_200P);
   ui::test::ScopedSetSupportedResourceScaleFactors scoped_supported(
-      supported_factors);
+      {ui::k100Percent, ui::k200Percent});
   scoped_refptr<Extension> extension(CreateExtension(
       "extension_icon_image", ManifestLocation::kInvalidLocation));
   ASSERT_TRUE(extension.get() != nullptr);
@@ -174,9 +185,9 @@ TEST_F(ExtensionIconImageTest, Basic) {
 
   // Before the image representation is loaded, image should contain blank
   // image representation.
-  EXPECT_TRUE(gfx::BitmapsAreEqual(
-      representation.GetBitmap(),
-      CreateBlankBitmapForScale(16, ui::SCALE_FACTOR_100P)));
+  EXPECT_TRUE(
+      gfx::BitmapsAreEqual(representation.GetBitmap(),
+                           CreateBlankBitmapForScale(16, ui::k100Percent)));
 
   WaitForImageLoad();
   EXPECT_EQ(1, ImageLoadedCount());
@@ -191,9 +202,9 @@ TEST_F(ExtensionIconImageTest, Basic) {
   // Gets representation for an additional scale factor.
   representation = image.image_skia().GetRepresentation(2.0f);
 
-  EXPECT_TRUE(gfx::BitmapsAreEqual(
-      representation.GetBitmap(),
-      CreateBlankBitmapForScale(16, ui::SCALE_FACTOR_200P)));
+  EXPECT_TRUE(
+      gfx::BitmapsAreEqual(representation.GetBitmap(),
+                           CreateBlankBitmapForScale(16, ui::k200Percent)));
 
   WaitForImageLoad();
   EXPECT_EQ(1, ImageLoadedCount());
@@ -210,11 +221,8 @@ TEST_F(ExtensionIconImageTest, Basic) {
 // There is no resource with either exact or bigger size, but there is a smaller
 // resource.
 TEST_F(ExtensionIconImageTest, FallbackToSmallerWhenNoBigger) {
-  std::vector<ui::ResourceScaleFactor> supported_factors;
-  supported_factors.push_back(ui::SCALE_FACTOR_100P);
-  supported_factors.push_back(ui::SCALE_FACTOR_200P);
   ui::test::ScopedSetSupportedResourceScaleFactors scoped_supported(
-      supported_factors);
+      {ui::k100Percent, ui::k200Percent});
   scoped_refptr<Extension> extension(CreateExtension(
       "extension_icon_image", ManifestLocation::kInvalidLocation));
   ASSERT_TRUE(extension.get() != nullptr);
@@ -350,7 +358,7 @@ TEST_F(ExtensionIconImageTest, InvalidResource) {
   gfx::ImageSkiaRep representation = image.image_skia().GetRepresentation(1.0f);
   EXPECT_TRUE(gfx::BitmapsAreEqual(
       representation.GetBitmap(),
-      CreateBlankBitmapForScale(kInvalidIconSize, ui::SCALE_FACTOR_100P)));
+      CreateBlankBitmapForScale(kInvalidIconSize, ui::k100Percent)));
 
   WaitForImageLoad();
   EXPECT_EQ(1, ImageLoadedCount());

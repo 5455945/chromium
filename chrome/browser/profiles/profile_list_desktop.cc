@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,26 +18,20 @@ ProfileListDesktop::ProfileListDesktop(
     : profile_storage_(profile_storage) {
 }
 
-ProfileListDesktop::~ProfileListDesktop() {
-}
-
-// static
-ProfileList* ProfileList::Create(ProfileAttributesStorage* profile_storage) {
-  return new ProfileListDesktop(profile_storage);
-}
+ProfileListDesktop::~ProfileListDesktop() = default;
 
 size_t ProfileListDesktop::GetNumberOfItems() const {
   return items_.size();
 }
 
 const AvatarMenu::Item& ProfileListDesktop::GetItemAt(size_t index) const {
-  DCHECK_LT(index, items_.size());
+  CHECK_LT(index, items_.size(), base::NotFatalUntil::M162);
   return *items_[index];
 }
 
 void ProfileListDesktop::RebuildMenu() {
   std::vector<ProfileAttributesEntry*> entries =
-      profile_storage_->GetAllProfilesAttributesSortedByName();
+      profile_storage_->GetAllProfilesAttributesSortedByNameWithCheck();
 
   items_.clear();
   for (ProfileAttributesEntry* entry : entries) {
@@ -49,8 +43,6 @@ void ProfileListDesktop::RebuildMenu() {
         new AvatarMenu::Item(items_.size(), entry->GetPath(), icon));
     item->name = entry->GetName();
     item->username = entry->GetUserName();
-    item->child_account = entry->IsChild();
-    item->signed_in = entry->IsAuthenticated();
     if (entry->GetSigninState() == SigninState::kNotSignedIn) {
       item->username =
           l10n_util::GetStringUTF16(IDS_PROFILES_LOCAL_PROFILE_STATE);
@@ -61,8 +53,8 @@ void ProfileListDesktop::RebuildMenu() {
   }
 }
 
-size_t ProfileListDesktop::MenuIndexFromProfilePath(const base::FilePath& path)
-    const {
+std::optional<size_t> ProfileListDesktop::MenuIndexFromProfilePath(
+    const base::FilePath& path) const {
   const size_t menu_count = GetNumberOfItems();
 
   for (size_t i = 0; i < menu_count; ++i) {
@@ -71,9 +63,7 @@ size_t ProfileListDesktop::MenuIndexFromProfilePath(const base::FilePath& path)
       return i;
   }
 
-  // The desired index was not found; return a fallback value.
-  NOTREACHED();
-  return 0;
+  return std::nullopt;
 }
 
 void ProfileListDesktop::ActiveProfilePathChanged(

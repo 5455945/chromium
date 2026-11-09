@@ -1,14 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/loader/mime_sniffing_url_loader.h"
 
-#include "base/bind.h"
+#include <string_view>
+
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_view_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/mime_sniffer.h"
+#include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/loader/mime_sniffing_throttle.h"
@@ -67,10 +72,22 @@ MimeSniffingURLLoader::~MimeSniffingURLLoader() = default;
 void MimeSniffingURLLoader::Start(
     mojo::PendingRemote<network::mojom::URLLoader> source_url_loader_remote,
     mojo::PendingReceiver<network::mojom::URLLoaderClient>
-        source_url_client_receiver) {
+        source_url_client_receiver,
+    mojo::ScopedDataPipeConsumerHandle body) {
   source_url_loader_.Bind(std::move(source_url_loader_remote));
   source_url_client_receiver_.Bind(std::move(source_url_client_receiver),
                                    task_runner_);
+  if (!body)
+    return;
+
+  state_ = State::kSniffing;
+  body_consumer_handle_ = std::move(body);
+  body_consumer_watcher_.Watch(
+      body_consumer_handle_.get(),
+      MOJO_HANDLE_SIGNAL_READABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
+      base::BindRepeating(&MimeSniffingURLLoader::OnBodyReadable,
+                          base::Unretained(this)));
+  body_consumer_watcher_.ArmOrNotify();
 }
 
 void MimeSniffingURLLoader::OnReceiveEarlyHints(
@@ -81,7 +98,9 @@ void MimeSniffingURLLoader::OnReceiveEarlyHints(
 }
 
 void MimeSniffingURLLoader::OnReceiveResponse(
-    network::mojom::URLResponseHeadPtr response_head) {
+    network::mojom::URLResponseHeadPtr response_head,
+    mojo::ScopedDataPipeConsumerHandle body,
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   // OnReceiveResponse() shouldn't be called because MimeSniffingURLLoader is
   // created by MimeSniffingThrottle::WillProcessResponse(), which is equivalent
   // to OnReceiveResponse().
@@ -105,24 +124,10 @@ void MimeSniffingURLLoader::OnUploadProgress(
                                                    std::move(ack_callback));
 }
 
-void MimeSniffingURLLoader::OnReceiveCachedMetadata(mojo_base::BigBuffer data) {
-  destination_url_loader_client_->OnReceiveCachedMetadata(std::move(data));
-}
-
 void MimeSniffingURLLoader::OnTransferSizeUpdated(int32_t transfer_size_diff) {
+  network::RecordOnTransferSizeUpdatedUMA(
+      network::OnTransferSizeUpdatedFrom::kMimeSniffingURLLoader);
   destination_url_loader_client_->OnTransferSizeUpdated(transfer_size_diff);
-}
-
-void MimeSniffingURLLoader::OnStartLoadingResponseBody(
-    mojo::ScopedDataPipeConsumerHandle body) {
-  state_ = State::kSniffing;
-  body_consumer_handle_ = std::move(body);
-  body_consumer_watcher_.Watch(
-      body_consumer_handle_.get(),
-      MOJO_HANDLE_SIGNAL_READABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-      base::BindRepeating(&MimeSniffingURLLoader::OnBodyReadable,
-                          base::Unretained(this)));
-  body_consumer_watcher_.ArmOrNotify();
 }
 
 void MimeSniffingURLLoader::OnComplete(
@@ -138,7 +143,8 @@ void MimeSniffingURLLoader::OnComplete(
         Abort();
         return;
       }
-      throttle_->ResumeWithNewResponseHead(std::move(response_head_));
+      throttle_->ResumeWithNewResponseHead(
+          std::move(response_head_), mojo::ScopedDataPipeConsumerHandle());
       destination_url_loader_client_->OnComplete(status);
       return;
     case State::kSniffing:
@@ -152,16 +158,13 @@ void MimeSniffingURLLoader::OnComplete(
       return;
     case State::kAborted:
       NOTREACHED();
-      return;
   }
   NOTREACHED();
 }
 
 void MimeSniffingURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
-    const absl::optional<GURL>& new_url) {
+    network::HttpRequestHeadersUpdateParams headers_update_params,
+    const std::optional<GURL>& new_url) {
   // MimeSniffingURLLoader starts handling the request after
   // OnReceivedResponse(). A redirect response is not expected.
   NOTREACHED();
@@ -174,18 +177,6 @@ void MimeSniffingURLLoader::SetPriority(net::RequestPriority priority,
   source_url_loader_->SetPriority(priority, intra_priority_value);
 }
 
-void MimeSniffingURLLoader::PauseReadingBodyFromNet() {
-  if (state_ == State::kAborted)
-    return;
-  source_url_loader_->PauseReadingBodyFromNet();
-}
-
-void MimeSniffingURLLoader::ResumeReadingBodyFromNet() {
-  if (state_ == State::kAborted)
-    return;
-  source_url_loader_->ResumeReadingBodyFromNet();
-}
-
 void MimeSniffingURLLoader::OnBodyReadable(MojoResult) {
   if (state_ == State::kSending) {
     // The pipe becoming readable when kSending means all buffered body has
@@ -196,11 +187,13 @@ void MimeSniffingURLLoader::OnBodyReadable(MojoResult) {
   DCHECK_EQ(State::kSniffing, state_);
 
   size_t start_size = buffered_body_.size();
-  uint32_t read_bytes = net::kMaxBytesToSniff;
+  size_t read_bytes = net::kMaxBytesToSniff;
   buffered_body_.resize(start_size + read_bytes);
-  MojoResult result =
-      body_consumer_handle_->ReadData(buffered_body_.data() + start_size,
-                                      &read_bytes, MOJO_READ_DATA_FLAG_NONE);
+  MojoResult result = body_consumer_handle_->ReadData(
+      MOJO_READ_DATA_FLAG_NONE,
+      base::as_writable_byte_span(buffered_body_)
+          .subspan(start_size, read_bytes),
+      read_bytes);
   switch (result) {
     case MOJO_RESULT_OK:
       break;
@@ -210,20 +203,20 @@ void MimeSniffingURLLoader::OnBodyReadable(MojoResult) {
       CompleteSniffing();
       return;
     case MOJO_RESULT_SHOULD_WAIT:
+      buffered_body_.resize(start_size);
       body_consumer_watcher_.ArmOrNotify();
       return;
     default:
       NOTREACHED();
-      return;
   }
 
   DCHECK_EQ(MOJO_RESULT_OK, result);
   buffered_body_.resize(start_size + read_bytes);
   std::string new_type;
-  bool made_final_decision = net::SniffMimeType(
-      base::StringPiece(buffered_body_.data(), buffered_body_.size()),
-      response_url_, response_head_->mime_type,
-      net::ForceSniffFileUrlsForHtml::kDisabled, &new_type);
+  bool made_final_decision =
+      net::SniffMimeType(base::as_string_view(buffered_body_), response_url_,
+                         response_head_->mime_type,
+                         net::ForceSniffFileUrlsForHtml::kDisabled, &new_type);
   response_head_->mime_type = new_type;
   response_head_->did_mime_sniff = true;
   if (made_final_decision) {
@@ -256,7 +249,6 @@ void MimeSniffingURLLoader::CompleteSniffing() {
     Abort();
     return;
   }
-  throttle_->ResumeWithNewResponseHead(std::move(response_head_));
   mojo::ScopedDataPipeConsumerHandle body_to_send;
   MojoResult result =
       mojo::CreateDataPipe(nullptr, body_producer_handle_, body_to_send);
@@ -264,16 +256,14 @@ void MimeSniffingURLLoader::CompleteSniffing() {
     Abort();
     return;
   }
+  throttle_->ResumeWithNewResponseHead(std::move(response_head_),
+                                       std::move(body_to_send));
   // Set up the watcher for the producer handle.
   body_producer_watcher_.Watch(
       body_producer_handle_.get(),
       MOJO_HANDLE_SIGNAL_WRITABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
       base::BindRepeating(&MimeSniffingURLLoader::OnBodyWritable,
                           base::Unretained(this)));
-
-  // Send deferred message.
-  destination_url_loader_client_->OnStartLoadingResponseBody(
-      std::move(body_to_send));
 
   if (bytes_remaining_in_buffer_) {
     SendReceivedBodyToClient();
@@ -301,11 +291,11 @@ void MimeSniffingURLLoader::SendReceivedBodyToClient() {
   DCHECK_EQ(State::kSending, state_);
   // Send the buffered data first.
   DCHECK_GT(bytes_remaining_in_buffer_, 0u);
-  size_t start_position = buffered_body_.size() - bytes_remaining_in_buffer_;
-  uint32_t bytes_sent = bytes_remaining_in_buffer_;
-  MojoResult result =
-      body_producer_handle_->WriteData(buffered_body_.data() + start_position,
-                                       &bytes_sent, MOJO_WRITE_DATA_FLAG_NONE);
+  base::span<const uint8_t> bytes =
+      base::as_byte_span(buffered_body_).last(bytes_remaining_in_buffer_);
+  size_t actually_sent_bytes = 0;
+  MojoResult result = body_producer_handle_->WriteData(
+      bytes, MOJO_WRITE_DATA_FLAG_NONE, actually_sent_bytes);
   switch (result) {
     case MOJO_RESULT_OK:
       break;
@@ -319,19 +309,17 @@ void MimeSniffingURLLoader::SendReceivedBodyToClient() {
       return;
     default:
       NOTREACHED();
-      return;
   }
-  bytes_remaining_in_buffer_ -= bytes_sent;
+  bytes_remaining_in_buffer_ -= actually_sent_bytes;
   body_producer_watcher_.ArmOrNotify();
 }
 
 void MimeSniffingURLLoader::ForwardBodyToClient() {
   DCHECK_EQ(0u, bytes_remaining_in_buffer_);
   // Send the body from the consumer to the producer.
-  const void* buffer;
-  uint32_t buffer_size = 0;
+  base::span<const uint8_t> buffer;
   MojoResult result = body_consumer_handle_->BeginReadData(
-      &buffer, &buffer_size, MOJO_BEGIN_READ_DATA_FLAG_NONE);
+      MOJO_BEGIN_READ_DATA_FLAG_NONE, buffer);
   switch (result) {
     case MOJO_RESULT_OK:
       break;
@@ -344,11 +332,11 @@ void MimeSniffingURLLoader::ForwardBodyToClient() {
       return;
     default:
       NOTREACHED();
-      return;
   }
 
-  result = body_producer_handle_->WriteData(buffer, &buffer_size,
-                                            MOJO_WRITE_DATA_FLAG_NONE);
+  size_t actually_written_bytes = 0;
+  result = body_producer_handle_->WriteData(buffer, MOJO_WRITE_DATA_FLAG_NONE,
+                                            actually_written_bytes);
   switch (result) {
     case MOJO_RESULT_OK:
       break;
@@ -363,10 +351,9 @@ void MimeSniffingURLLoader::ForwardBodyToClient() {
       return;
     default:
       NOTREACHED();
-      return;
   }
 
-  body_consumer_handle_->EndReadData(buffer_size);
+  body_consumer_handle_->EndReadData(actually_written_bytes);
   body_consumer_watcher_.ArmOrNotify();
 }
 

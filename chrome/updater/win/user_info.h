@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,6 @@
 
 #include <string>
 
-#include "base/win/atl.h"
-
 namespace updater {
 
 // Gets the user name, domain, and the SID associated with the access token
@@ -18,9 +16,6 @@ namespace updater {
 HRESULT GetProcessUser(std::wstring* name,
                        std::wstring* domain,
                        std::wstring* sid);
-
-// Gets SID associated with the access token of the current process.
-HRESULT GetProcessUserSid(CSid* sid);
 
 // Returns true if the current user is NT AUTHORITY\SYSTEM.
 bool IsLocalSystemUser();

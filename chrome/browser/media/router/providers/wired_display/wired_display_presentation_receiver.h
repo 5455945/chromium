@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,6 @@
 #define CHROME_BROWSER_MEDIA_ROUTER_PROVIDERS_WIRED_DISPLAY_WIRED_DISPLAY_PRESENTATION_RECEIVER_H_
 
 #include <string>
-
-#include "base/callback.h"
-#include "base/macros.h"
 
 class GURL;
 
@@ -19,6 +16,12 @@ namespace media_router {
 class WiredDisplayPresentationReceiver {
  public:
   WiredDisplayPresentationReceiver() = default;
+
+  WiredDisplayPresentationReceiver(const WiredDisplayPresentationReceiver&) =
+      delete;
+  WiredDisplayPresentationReceiver& operator=(
+      const WiredDisplayPresentationReceiver&) = delete;
+
   virtual ~WiredDisplayPresentationReceiver() = default;
 
   // Starts a presentation with the given ID and URL.
@@ -30,9 +33,6 @@ class WiredDisplayPresentationReceiver {
 
   // Exits fullscreen and shows the receiver in windowed mode.
   virtual void ExitFullscreen() = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WiredDisplayPresentationReceiver);
 };
 
 }  // namespace media_router

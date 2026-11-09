@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,30 @@
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_PAGE_LOAD_TRACKER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/types/strong_alias.h"
+#include "base/unguessable_token.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
-#include "components/page_load_metrics/browser/page_load_metrics_event.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer_delegate.h"
 #include "components/page_load_metrics/browser/page_load_metrics_update_dispatcher.h"
 #include "components/page_load_metrics/browser/resource_tracker.h"
 #include "components/page_load_metrics/common/page_end_reason.h"
+#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "content/public/browser/global_request_id.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/cookies/canonical_cookie.h"
 #include "services/metrics/public/cpp/ukm_source.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/base/page_transition_types.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "ui/base/scoped_visibility_tracker.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -40,7 +46,6 @@ class WebContents;
 
 namespace page_load_metrics {
 
-struct MemoryUpdate;
 class PageLoadMetricsEmbedderInterface;
 
 namespace internal {
@@ -53,14 +58,14 @@ enum class PageLoadPrerenderEvent {
   kMaxValue = kPrerenderActivationNavigation,
 };
 
+enum class PageLoadTrackerPageType {
+  kPrimaryPage = 0,
+  kPrerenderPage = 1,
+  kFencedFramesPage = 2,
+  kMaxValue = kFencedFramesPage,
+};
+
 extern const char kErrorEvents[];
-extern const char kAbortChainSizeReload[];
-extern const char kAbortChainSizeForwardBack[];
-extern const char kAbortChainSizeNewNavigation[];
-extern const char kAbortChainSizeNoCommit[];
-extern const char kAbortChainSizeSameURL[];
-extern const char kPageLoadCompletedAfterAppBackground[];
-extern const char kPageLoadStartedInForeground[];
 extern const char kPageLoadPrerender2Event[];
 
 }  // namespace internal
@@ -168,7 +173,6 @@ enum InternalErrorLoadEvent {
 // to access them.
 void RecordInternalError(InternalErrorLoadEvent event);
 PageEndReason EndReasonForPageTransition(ui::PageTransition transition);
-void LogAbortChainSameURLHistogram(int aborted_chain_size_same_url);
 bool IsNavigationUserInitiated(content::NavigationHandle* handle);
 
 // This class tracks a given page load, starting from navigation start /
@@ -178,72 +182,108 @@ bool IsNavigationUserInitiated(content::NavigationHandle* handle);
 class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
                         public PageLoadMetricsObserverDelegate {
  public:
-  // Caller must guarantee that the embedder_interface pointer outlives this
-  // class. The PageLoadTracker must not hold on to
-  // currently_committed_load_or_null or navigation_handle beyond the scope of
-  // the constructor.
-  PageLoadTracker(bool in_foreground,
-                  PageLoadMetricsEmbedderInterface* embedder_interface,
-                  const GURL& currently_committed_url,
-                  bool is_first_navigation_in_web_contents,
-                  content::NavigationHandle* navigation_handle,
-                  UserInitiatedInfo user_initiated_info,
-                  int aborted_chain_size,
-                  int aborted_chain_size_same_url);
+  // Whether a page is in foreground when it starts loading.
+  using InForegroundBool = base::StrongAlias<struct ForegroundTag, bool>;
+  // Whether a navigation is the first to occur in a WebContents.
+  using IsFirstNavigationInWebContentsBool =
+      base::StrongAlias<struct FirstNavigationInWebContentsTag, bool>;
+  // Whether a navigation is a reload of a page that was previously discarded.
+  // This typically happens when a user re-activates a background page that the
+  // browser had discarded. See https://wicg.github.io/page-lifecycle/spec.html
+  // for the formal definition of discarding.
+  using IsReloadAfterDiscardBool =
+      base::StrongAlias<struct ReloadAfterDiscardTag, bool>;
+
+  // Caller must guarantee that the `embedder_interface` pointer outlives this
+  // class. The PageLoadTracker must not hold on to `navigation_handle` beyond
+  // the scope of the constructor.
+  PageLoadTracker(
+      InForegroundBool in_foreground,
+      PageLoadMetricsEmbedderInterface* embedder_interface,
+      const GURL& currently_committed_url,
+      IsFirstNavigationInWebContentsBool is_first_navigation_in_web_contents,
+      IsReloadAfterDiscardBool is_reload_after_discard,
+      content::NavigationHandle* navigation_handle,
+      UserInitiatedInfo user_initiated_info,
+      ukm::SourceId source_id,
+      base::WeakPtr<PageLoadTracker> parent_tracker);
+
+  PageLoadTracker(const PageLoadTracker&) = delete;
+  PageLoadTracker& operator=(const PageLoadTracker&) = delete;
+
   ~PageLoadTracker() override;
 
   // PageLoadMetricsUpdateDispatcher::Client implementation:
+  bool IsPageMainFrame(content::RenderFrameHost* rfh) const override;
   void OnTimingChanged() override;
+  void OnPageEventTimingChanged(uint64_t num_interactions) override;
   void OnSubFrameTimingChanged(content::RenderFrameHost* rfh,
                                const mojom::PageLoadTiming& timing) override;
+  void OnSubFrameEventTimingChanged(
+      content::RenderFrameHost* rfh,
+      const std::vector<mojom::EventTimingPtr>& event_timings) override;
+  void OnPageRenderDataChanged(const mojom::FrameRenderDataUpdate& render_data,
+                               bool is_main_frame) override;
   void OnSubFrameRenderDataChanged(
       content::RenderFrameHost* rfh,
       const mojom::FrameRenderDataUpdate& render_data) override;
   void OnMainFrameMetadataChanged() override;
   void OnSubframeMetadataChanged(content::RenderFrameHost* rfh,
                                  const mojom::FrameMetadata& metadata) override;
-  void OnSubFrameMobileFriendlinessChanged(
-      const blink::MobileFriendliness&) override;
+  void OnSoftNavigationFirstContentfulPaint(
+      const mojom::SoftNavigationMetrics& soft_navigation_metrics) override;
+  void OnSoftNavigationCompleted(
+      const SoftNavigationData& soft_navigation_data) override;
+  void OnSoftNavigationLargestContentfulPaint(uint64_t num_soft_lcps) override;
   void UpdateFeaturesUsage(
       content::RenderFrameHost* rfh,
       const std::vector<blink::UseCounterFeature>& new_features) override;
   void UpdateResourceDataUse(
       content::RenderFrameHost* rfh,
       const std::vector<mojom::ResourceDataUpdatePtr>& resources) override;
-  void OnNewDeferredResourceCounts(
-      const mojom::DeferredResourceCounts& new_deferred_resource_data) override;
   void UpdateFrameCpuTiming(content::RenderFrameHost* rfh,
                             const mojom::CpuTiming& timing) override;
-  void OnFrameIntersectionUpdate(
+  void OnMainFrameRectChanged(const gfx::Rect& main_frame_rect) override;
+  void OnMainFrameViewportRectChanged(
+      const gfx::Rect& main_frame_viewport_rect) override;
+  void OnMainFrameAdRectsChanged(
+      const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) override;
+  void OnSubresourceLoadMetricsObserved(
       content::RenderFrameHost* rfh,
-      const mojom::FrameIntersectionUpdate& frame_intersection_update) override;
-  void SetUpSharedMemoryForSmoothness(
-      base::ReadOnlySharedMemoryRegion shared_memory) override;
+      const blink::SubresourceLoadMetrics& subresource_load_metrics) override;
 
   // PageLoadMetricsObserverDelegate implementation:
   content::WebContents* GetWebContents() const override;
   base::TimeTicks GetNavigationStart() const override;
-  const absl::optional<base::TimeDelta>& GetFirstBackgroundTime()
-      const override;
-  const absl::optional<base::TimeDelta>& GetFirstForegroundTime()
-      const override;
+  std::optional<base::TimeDelta> GetTimeToFirstBackground() const override;
+  std::optional<base::TimeDelta> GetTimeToFirstForeground() const override;
+  PrerenderingState GetPrerenderingState() const override;
+  std::optional<base::TimeDelta> GetActivationStart() const override;
   const BackForwardCacheRestore& GetBackForwardCacheRestore(
       size_t index) const override;
+  size_t GetNumBackForwardCacheRestores() const override;
   bool StartedInForeground() const override;
+  PageVisibility GetVisibilityAtActivation() const override;
+  bool IsReloadAfterDiscard() const override;
+  bool WasPrerenderedThenActivatedInForeground() const override;
   const UserInitiatedInfo& GetUserInitiatedInfo() const override;
   const GURL& GetUrl() const override;
   const GURL& GetStartUrl() const override;
   bool DidCommit() const override;
   PageEndReason GetPageEndReason() const override;
   const UserInitiatedInfo& GetPageEndUserInitiatedInfo() const override;
-  absl::optional<base::TimeDelta> GetPageEndTime() const override;
+  std::optional<base::TimeDelta> GetTimeToPageEnd() const override;
+  const base::TimeTicks& GetPageEndTime() const override;
   const mojom::FrameMetadata& GetMainFrameMetadata() const override;
   const mojom::FrameMetadata& GetSubframeMetadata() const override;
   const PageRenderData& GetPageRenderData() const override;
   const NormalizedCLSData& GetNormalizedCLSData(
       BfcacheStrategy bfcache_strategy) const override;
-  const mojom::InputTiming& GetPageInputTiming() const override;
-  const blink::MobileFriendliness& GetMobileFriendliness() const override;
+  const InteractionToNextPaintCalculator& GetInteractionToNextPaintCalculator()
+      const override;
+  const std::optional<blink::SubresourceLoadMetrics>&
+  GetSubresourceLoadMetrics() const override;
+  const mojom::FontLoadingMetricsPtr& GetFontLoadingMetrics() const override;
   const PageRenderData& GetMainFrameRenderData() const override;
   const ui::ScopedVisibilityTracker& GetVisibilityTracker() const override;
   const ResourceTracker& GetResourceTracker() const override;
@@ -252,24 +292,40 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   const LargestContentfulPaintHandler&
   GetExperimentalLargestContentfulPaintHandler() const override;
   ukm::SourceId GetPageUkmSourceId() const override;
+  // Maps main-frame same-document navigation identified
+  // by |same_document_metrics_token| to its UKM source id.
+  ukm::SourceId GetUkmSourceIdForSameDocumentNavigation(
+      base::UnguessableToken same_document_metrics_token) const override;
   bool IsFirstNavigationInWebContents() const override;
+  NavigationScenario GetNavigationScenario() const override;
+  bool IsOriginVisit() const override;
+  bool IsTerminalVisit() const override;
+  bool ShouldObserveScheme(std::string_view scheme) const override;
+  int64_t GetNavigationId() const override;
 
-  void Redirect(content::NavigationHandle* navigation_handle);
-  void WillProcessNavigationResponse(
+  // The following methods are called on navigation related events.
+  //
+  // Called only on main frames.
+  void DidUpdateNavigationHandleTiming(
       content::NavigationHandle* navigation_handle);
+  void Redirect(content::NavigationHandle* navigation_handle);
   void Commit(content::NavigationHandle* navigation_handle);
   void DidCommitSameDocumentNavigation(
       content::NavigationHandle* navigation_handle);
   void DidInternalNavigationAbort(content::NavigationHandle* navigation_handle);
-  void ReadyToCommitNavigation(content::NavigationHandle* navigation_handle);
-  void DidFinishSubFrameNavigation(
-      content::NavigationHandle* navigation_handle);
   void FailedProvisionalLoad(content::NavigationHandle* navigation_handle,
                              base::TimeTicks failed_load_time);
+  // Called only on subframes.
+  void DidFinishSubFrameNavigation(
+      content::NavigationHandle* navigation_handle);
+  // Called on main and sub-frames.
+  void ReadyToCommitNavigation(content::NavigationHandle* navigation_handle);
+  void WillProcessNavigationResponse(
+      content::NavigationHandle* navigation_handle);
   void PageHidden();
   void PageShown();
   void RenderFrameDeleted(content::RenderFrameHost* rfh);
-  void FrameDeleted(int frame_tree_node_id);
+  void FrameTreeNodeDeleted(content::FrameTreeNodeId frame_tree_node_id);
 
   void OnInputEvent(const blink::WebInputEvent& event);
 
@@ -285,10 +341,10 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
     visibility_tracker_ = tracker;
   }
 
-  void NotifyClientRedirectTo(content::NavigationHandle* destination);
-
   void OnLoadedResource(
       const ExtraRequestCompleteInfo& extra_request_complete_info);
+  void DidLoadResourceFromMemoryCache(
+      const MemoryResourceLoadInfo& memory_resource_load_info);
 
   void FrameReceivedUserActivation(content::RenderFrameHost* rfh);
   void FrameDisplayStateChanged(content::RenderFrameHost* render_frame_host,
@@ -296,15 +352,22 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   void FrameSizeChanged(content::RenderFrameHost* render_frame_host,
                         const gfx::Size& frame_size);
 
-  void OnCookiesRead(const GURL& url,
-                     const GURL& first_party_url,
-                     const net::CookieList& cookie_list,
-                     bool blocked_by_policy);
+  void OnCookiesRead(
+      const GURL& url,
+      const GURL& first_party_url,
+      bool blocked_by_policy,
+      bool is_ad_tagged,
+      const net::CookieSettingOverrides& cookie_setting_overrides,
+      bool is_partitioned_access);
 
-  void OnCookieChange(const GURL& url,
-                      const GURL& first_party_url,
-                      const net::CanonicalCookie& cookie,
-                      bool blocked_by_policy);
+  void OnCookieChange(
+      const GURL& url,
+      const GURL& first_party_url,
+      const net::CanonicalCookie& cookie,
+      bool blocked_by_policy,
+      bool is_ad_tagged,
+      const net::CookieSettingOverrides& cookie_setting_overrides,
+      bool is_partitioned_access);
 
   void OnStorageAccessed(const GURL& url,
                          const GURL& first_party_url,
@@ -316,15 +379,9 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   // tracking metrics in DidFinishNavigation.
   void StopTracking();
 
-  int aborted_chain_size() const { return aborted_chain_size_; }
-  int aborted_chain_size_same_url() const {
-    return aborted_chain_size_same_url_;
-  }
-
-  PageEndReason page_end_reason() const { return page_end_reason_; }
-  base::TimeTicks page_end_time() const { return page_end_time_; }
-
-  void AddObserver(std::unique_ptr<PageLoadMetricsObserver> observer);
+  void AddObserver(std::unique_ptr<PageLoadMetricsObserverInterface> observer);
+  base::WeakPtr<PageLoadMetricsObserverInterface> FindObserver(
+      char const* name);
 
   // If the user performs some abort-like action while we are tracking this page
   // load, notify the tracker. Note that we may not classify this as an abort if
@@ -349,14 +406,10 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   // and is simpler than other feasible methods. See https://goo.gl/WKRG98.
   bool IsLikelyProvisionalAbort(base::TimeTicks abort_cause_time) const;
 
-  bool MatchesOriginalNavigation(content::NavigationHandle* navigation_handle);
-
   bool did_commit() const { return did_commit_; }
   const GURL& url() const { return url_; }
 
   base::TimeTicks navigation_start() const { return navigation_start_; }
-
-  ui::PageTransition page_transition() const { return page_transition_; }
 
   UserInitiatedInfo user_initiated_info() const { return user_initiated_info_; }
 
@@ -377,22 +430,48 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
       const content::WebContentsObserver::MediaPlayerInfo& video_type,
       content::RenderFrameHost* render_frame_host);
 
-  // Informs the observers that |event| has occurred.
-  void BroadcastEventToObservers(PageLoadMetricsEvent event);
-
   void OnEnterBackForwardCache();
   void OnRestoreFromBackForwardCache(
       content::NavigationHandle* navigation_handle);
 
-  // Called when the page tracked was just activated after being loaded inside a
-  // portal.
-  void DidActivatePortal(base::TimeTicks activation_time);
-
   // Called when the page tracked was just activated after being prerendered.
   void DidActivatePrerenderedPage(content::NavigationHandle* navigation_handle);
 
-  // Called when V8 per-frame memory usage updates are available.
-  void OnV8MemoryChanged(const std::vector<MemoryUpdate>& memory_updates);
+  // Checks if this tracker is for outermost pages.
+  bool IsOutermostTracker() const { return !parent_tracker_; }
+
+  void UpdateMetrics(
+      content::RenderFrameHost* render_frame_host,
+      mojom::PageLoadTimingPtr new_timing,
+      mojom::FrameMetadataPtr new_metadata,
+      const std::vector<blink::UseCounterFeature>& new_features,
+      const std::vector<mojom::ResourceDataUpdatePtr>& resources,
+      mojom::FrameRenderDataUpdatePtr render_data,
+      mojom::CpuTimingPtr new_cpu_timing,
+      std::vector<mojom::EventTimingPtr> event_timings,
+      const std::optional<blink::SubresourceLoadMetrics>&
+          subresource_load_metrics,
+      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+      std::vector<mojom::LargestContentfulPaintTimingPtr>
+          soft_largest_contentful_paint,
+      mojom::FontLoadingMetricsPtr font_loading_metrics);
+
+  void AddCustomUserTimings(
+      std::vector<mojom::CustomUserTimingMarkPtr> custom_timings);
+
+  // Sets RenderFrameHost for the main frame of the page this tracker instance
+  // is bound. This is called on moving the tracker to the active / inactive
+  // tracker list after the provisional load is committed.
+  void SetPageMainFrame(content::RenderFrameHost* rfh);
+
+  // Records the fact link navigation from the tracking page happens.
+  void RecordLinkNavigation();
+
+  // Gets a bound ukm::SourceId without any check for testing.
+  ukm::SourceId GetPageUkmSourceIdForTesting() const { return source_id_; }
+
+  // Obtains a weak pointer for this instance.
+  base::WeakPtr<PageLoadTracker> GetWeakPtr();
 
  private:
   // This function converts a TimeTicks value taken in the browser process
@@ -407,26 +486,29 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
                              UserInitiatedInfo user_initiated_info,
                              base::TimeTicks timestamp,
                              bool is_certainly_browser_timestamp);
-  // If |final_navigation| is null, then this is an "unparented" abort chain,
-  // and represents a sequence of provisional aborts that never ends with a
-  // committed load.
-  void LogAbortChainHistograms(content::NavigationHandle* final_navigation);
+
+  // Given a |time|, returns the duration between |navigation_start_| and
+  // |time|. |time| must be greater than or equal to |navigation_start_|.
+  // Returns nullopt if and only if the |time| passed is nullopt.
+  std::optional<base::TimeDelta> DurationSinceNavigationStartForTime(
+      const std::optional<base::TimeTicks>& time) const;
+
+  using InvokeCallback =
+      base::RepeatingCallback<PageLoadMetricsObserver::ObservePolicy(
+          PageLoadMetricsObserverInterface*)>;
+  void InvokeAndPruneObservers(const char* trace_name,
+                               InvokeCallback callback,
+                               bool permit_forwarding);
 
   // Whether we stopped tracking this navigation after it was initiated. We may
   // stop tracking a navigation if it doesn't meet the criteria for tracking
   // metrics in DidFinishNavigation.
   bool did_stop_tracking_;
 
-  // Whether the application went into the background when this PageLoadTracker
-  // was active. This is a temporary boolean for UMA tracking.
-  bool app_entered_background_;
+  int64_t navigation_id_;
 
   // The navigation start in TimeTicks, not the wall time reported by Blink.
   const base::TimeTicks navigation_start_;
-
-  // The navigation start after the last time when back-forward cache is
-  // restored.
-  base::TimeTicks navigation_start_after_back_forward_cache_restore_;
 
   // The most recent URL of this page load. Updated at navigation start, upon
   // redirection, and at commit time.
@@ -461,55 +543,68 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   // We record separate metrics for events that occur after a background,
   // because metrics like layout/paint are delayed artificially
   // when they occur in the background.
-  absl::optional<base::TimeDelta> first_background_time_;
-  absl::optional<base::TimeDelta> first_foreground_time_;
+  std::optional<base::TimeTicks> first_background_time_;
+  std::optional<base::TimeTicks> first_foreground_time_;
   std::vector<BackForwardCacheRestore> back_forward_cache_restores_;
   const bool started_in_foreground_;
+  PrerenderingState prerendering_state_ = PrerenderingState::kNoPrerendering;
+  // Holds the page's visibility at activation.
+  PageVisibility visibility_at_activation_ = PageVisibility::kNotInitialized;
+  std::optional<base::TimeDelta> activation_start_ = std::nullopt;
 
   mojom::PageLoadTimingPtr last_dispatched_merged_page_timing_;
-  blink::MobileFriendliness latest_mobile_friendliness_;
 
-  ui::PageTransition page_transition_;
-
-  absl::optional<content::GlobalRequestID> navigation_request_id_;
+  std::optional<content::GlobalRequestID> navigation_request_id_;
 
   // Whether this page load was user initiated.
   UserInitiatedInfo user_initiated_info_;
-
-  // This is a subtle member. If a provisional load A gets aborted by
-  // provisional load B, which gets aborted by C that eventually commits, then
-  // there exists an abort chain of length 2, starting at A's navigation_start.
-  // This is useful because it allows histograming abort chain lengths based on
-  // what the last load's transition type is. i.e. holding down F-5 to spam
-  // reload will produce a long chain with the RELOAD transition.
-  const int aborted_chain_size_;
-
-  // This member counts consecutive provisional aborts that share a url. It will
-  // always be less than or equal to |aborted_chain_size_|.
-  const int aborted_chain_size_same_url_;
 
   // Keeps track of actively loading resources on the page.
   ResourceTracker resource_tracker_;
 
   // Interface to chrome features. Must outlive the class.
-  PageLoadMetricsEmbedderInterface* const embedder_interface_;
+  const raw_ptr<PageLoadMetricsEmbedderInterface> embedder_interface_;
 
-  std::vector<std::unique_ptr<PageLoadMetricsObserver>> observers_;
+  // Holds active PageLoadMetricsObserverInterface inheritances' instances bound
+  // to the tracking page.
+  std::vector<std::unique_ptr<PageLoadMetricsObserverInterface>> observers_;
+
+  // Observer's name pointer to instance map. Can be raw_ptr as the instance is
+  // owned `observers` above, and is removed from the map on destruction.
+  base::flat_map<const char*, raw_ptr<PageLoadMetricsObserverInterface>>
+      observers_map_;
 
   PageLoadMetricsUpdateDispatcher metrics_update_dispatcher_;
 
-  const ukm::SourceId source_id_;
+  ukm::SourceId source_id_;
 
-  content::WebContents* const web_contents_;
+  const raw_ptr<content::WebContents> web_contents_;
 
-  const bool is_first_navigation_in_web_contents_;
+  // ID of the RenderFrameHost for the main frame of the page that this tracker
+  // instance is bound.
+  content::GlobalRenderFrameHostId page_main_frame_id_;
+
+  const IsFirstNavigationInWebContentsBool is_first_navigation_in_web_contents_;
+  const IsReloadAfterDiscardBool is_reload_after_discard_;
+  const bool is_origin_visit_;
+  const NavigationScenario navigation_scenario_;
+  bool is_terminal_visit_ = true;
 
   page_load_metrics::LargestContentfulPaintHandler
       largest_contentful_paint_handler_;
   page_load_metrics::LargestContentfulPaintHandler
       experimental_largest_contentful_paint_handler_;
 
-  DISALLOW_COPY_AND_ASSIGN(PageLoadTracker);
+  // Maps main-frame same-document navigations identified
+  // by their token to their UKM source ids.
+  std::map<base::UnguessableToken, ukm::SourceId>
+      source_id_by_same_document_metrics_token_;
+
+  const internal::PageLoadTrackerPageType page_type_;
+
+  const base::WeakPtr<PageLoadTracker> parent_tracker_;
+
+  base::WeakPtrFactory<PageLoadTracker> weak_factory_{this};
 };
 
 }  // namespace page_load_metrics

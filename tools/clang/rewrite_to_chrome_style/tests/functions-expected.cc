@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,8 +25,9 @@ int TestFunctionThatTakesTwoInts(int x, int y, int z);
 
 // Test that the actual function definition is also updated.
 int TestFunctionThatTakesTwoInts(int x, int y) {
-  if (x == 0)
+  if (x == 0) {
     return y;
+  }
   // Calls to the function also need to be updated.
   return TestFunctionThatTakesTwoInts(x - 1, y + 1);
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,20 +18,20 @@ namespace cronet {
 class IOBufferWithByteBuffer : public net::WrappedIOBuffer {
  public:
   // Creates a buffer wrapping the Java ByteBuffer |jbyte_buffer|.
-  // |byte_buffer_data| points to the memory backed by the ByteBuffer, and
   // |position| is the index of the first byte of data inside of the buffer.
   // |limit| is the the index of the first element that should not be read or
   // written, preserved to verify that buffer is not changed externally during
   // networking operations.
-  IOBufferWithByteBuffer(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jbyte_buffer,
-      void* byte_buffer_data,
-      jint position,
-      jint limit);
+  IOBufferWithByteBuffer(JNIEnv* env,
+                         const base::android::JavaRef<jobject>& jbyte_buffer,
+                         int32_t position,
+                         int32_t limit);
 
-  jint initial_position() const { return initial_position_; }
-  jint initial_limit() const { return initial_limit_; }
+  IOBufferWithByteBuffer(const IOBufferWithByteBuffer&) = delete;
+  IOBufferWithByteBuffer& operator=(const IOBufferWithByteBuffer&) = delete;
+
+  int32_t initial_position() const { return initial_position_; }
+  int32_t initial_limit() const { return initial_limit_; }
 
   const base::android::JavaRef<jobject>& byte_buffer() const {
     return byte_buffer_;
@@ -42,10 +42,8 @@ class IOBufferWithByteBuffer : public net::WrappedIOBuffer {
 
   base::android::ScopedJavaGlobalRef<jobject> byte_buffer_;
 
-  const jint initial_position_;
-  const jint initial_limit_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOBufferWithByteBuffer);
+  const int32_t initial_position_;
+  const int32_t initial_limit_;
 };
 
 // Represents a Java direct ByteBuffer backed by a net::IOBuffer. Keeps both the
@@ -55,6 +53,9 @@ class ByteBufferWithIOBuffer {
   ByteBufferWithIOBuffer(JNIEnv* env,
                          scoped_refptr<net::IOBuffer> io_buffer,
                          int io_buffer_len);
+
+  ByteBufferWithIOBuffer(const ByteBufferWithIOBuffer&) = delete;
+  ByteBufferWithIOBuffer& operator=(const ByteBufferWithIOBuffer&) = delete;
 
   ~ByteBufferWithIOBuffer();
   const net::IOBuffer* io_buffer() const { return io_buffer_.get(); }
@@ -69,8 +70,6 @@ class ByteBufferWithIOBuffer {
   int io_buffer_len_;
 
   base::android::ScopedJavaGlobalRef<jobject> byte_buffer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ByteBufferWithIOBuffer);
 };
 
 }  // namespace cronet

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/singleton.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/no_destructor.h"
+#include "build/build_config.h"
 #include "components/favicon_base/favicon_callback.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller_factory.h"
-#include "ui/base/layout.h"
+#include "ui/base/resource/resource_scale_factor.h"
 
 class Profile;
 
@@ -27,9 +28,13 @@ class Origin;
 
 class ChromeWebUIControllerFactory : public content::WebUIControllerFactory {
  public:
+  ChromeWebUIControllerFactory(const ChromeWebUIControllerFactory&) = delete;
+  ChromeWebUIControllerFactory& operator=(const ChromeWebUIControllerFactory&) =
+      delete;
+
   static ChromeWebUIControllerFactory* GetInstance();
 
-  // http://crbug.com/829412
+  // http://crbug.com/40091019
   // Renderers with WebUI bindings shouldn't make http(s) requests for security
   // reasons (e.g. to avoid malicious responses being able to run code in
   // priviliged renderers). Fix these webui's to make requests through C++
@@ -57,18 +62,21 @@ class ChromeWebUIControllerFactory : public content::WebUIControllerFactory {
   ~ChromeWebUIControllerFactory() override;
 
  private:
-  friend struct base::DefaultSingletonTraits<ChromeWebUIControllerFactory>;
+  friend base::NoDestructor<ChromeWebUIControllerFactory>;
 
   // Gets the data for the favicon for a WebUI page. Returns NULL if the WebUI
   // does not have a favicon.
   // The returned favicon data must be
   // |gfx::kFaviconSize| x |gfx::kFaviconSize| DIP. GetFaviconForURL() should
   // be updated if this changes.
-  base::RefCountedMemory* GetFaviconResourceBytes(
+  scoped_refptr<base::RefCountedMemory> GetFaviconResourceBytes(
       const GURL& page_url,
       ui::ResourceScaleFactor scale_factor) const;
 
-  DISALLOW_COPY_AND_ASSIGN(ChromeWebUIControllerFactory);
+#if BUILDFLAG(IS_ANDROID)
+  // Checks if the given page URL is a chrome native page that has a favicon.
+  bool HasFaviconForNativePage(const GURL& page_url) const;
+#endif
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_CHROME_WEB_UI_CONTROLLER_FACTORY_H_

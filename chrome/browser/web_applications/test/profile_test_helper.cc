@@ -1,38 +1,44 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/web_applications/test/profile_test_helper.h"
 
-#include "base/notreached.h"
-#include "build/chromeos_buildflags.h"
+#include <vector>
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/ash_switches.h"
-#include "components/account_id/account_id.h"
-#include "components/user_manager/user_names.h"
+#include "base/notreached.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_switches.h"          // nogncheck crbug.com/40147906
+#include "components/account_id/account_id.h"     // nogncheck crbug.com/40147906
+#include "components/user_manager/user_names.h"   // nogncheck crbug.com/40147906
 #endif
 
 std::string TestProfileTypeToString(
-    const ::testing::TestParamInfo<TestProfileType>& info) {
-  switch (info.param) {
+    const ::testing::TestParamInfo<TestProfileParam>& info) {
+  std::string result;
+  switch (info.param.profile_type) {
     case TestProfileType::kRegular:
-      return "Regular";
+      result = "Regular";
+      break;
     case TestProfileType::kIncognito:
-      return "Incognito";
+      result = "Incognito";
+      break;
     case TestProfileType::kGuest:
-      return "Guest";
+      result = "Guest";
+      break;
   }
+  return result;
 }
 
 void ConfigureCommandLineForGuestMode(base::CommandLine* command_line) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  command_line->AppendSwitch(chromeos::switches::kGuestSession);
+#if BUILDFLAG(IS_CHROMEOS)
+  command_line->AppendSwitch(ash::switches::kGuestSession);
   command_line->AppendSwitch(::switches::kIncognito);
-  command_line->AppendSwitchASCII(chromeos::switches::kLoginProfile, "hash");
+  command_line->AppendSwitchASCII(ash::switches::kLoginProfile, "hash");
   command_line->AppendSwitchASCII(
-      chromeos::switches::kLoginUser,
-      user_manager::GuestAccountId().GetUserEmail());
+      ash::switches::kLoginUser, user_manager::GuestAccountId().GetUserEmail());
 #else
   NOTREACHED();
 #endif

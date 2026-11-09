@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,33 @@
 
 #include "content/browser/contacts/contacts_provider.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/document_service.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/mojom/contacts/contacts_manager.mojom.h"
 
 namespace content {
 
-class RenderFrameHostImpl;
+class RenderFrameHost;
 
 class CONTENT_EXPORT ContactsManagerImpl
-    : public blink::mojom::ContactsManager {
+    : public DocumentService<blink::mojom::ContactsManager> {
  public:
   static void Create(
-      RenderFrameHostImpl* render_frame_host,
+      RenderFrameHost* render_frame_host,
       mojo::PendingReceiver<blink::mojom::ContactsManager> receiver);
 
-  explicit ContactsManagerImpl(RenderFrameHostImpl* render_frame_host);
-  ~ContactsManagerImpl() override;
+  static ContactsManagerImpl* CreateForTesting(
+      RenderFrameHost* render_frame_host,
+      mojo::PendingReceiver<blink::mojom::ContactsManager> receiver,
+      std::unique_ptr<ContactsProvider> provider);
+
+  ContactsManagerImpl(
+      RenderFrameHost& render_frame_host,
+      mojo::PendingReceiver<blink::mojom::ContactsManager> receiver,
+      std::unique_ptr<ContactsProvider> provider,
+      base::SelfDeletingPassKey key);
+  ContactsManagerImpl(const ContactsManagerImpl&) = delete;
+  ContactsManagerImpl& operator=(const ContactsManagerImpl&) = delete;
 
   void Select(bool multiple,
               bool include_names,
@@ -33,12 +44,12 @@ class CONTENT_EXPORT ContactsManagerImpl
               SelectCallback mojom_callback) override;
 
  private:
+  ~ContactsManagerImpl() override;
+
   std::unique_ptr<ContactsProvider> contacts_provider_;
 
   // The source id to use when reporting back UKM statistics.
   ukm::SourceId source_id_ = ukm::kInvalidSourceId;
-
-  DISALLOW_COPY_AND_ASSIGN(ContactsManagerImpl);
 };
 
 }  // namespace content

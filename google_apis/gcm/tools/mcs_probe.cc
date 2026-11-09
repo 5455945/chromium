@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -15,21 +15,25 @@
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_executor.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/default_clock.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "google_apis/gcm/base/fake_encryptor.h"
@@ -60,9 +64,10 @@
 #include "services/network/public/mojom/proxy_resolving_socket.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/test/test_network_connection_tracker.h"
+#include "url/scheme_host_port.h"
 
-#if defined(OS_MAC)
-#include "base/mac/scoped_nsautorelease_pool.h"
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/scoped_nsautorelease_pool.h"
 #endif
 
 // This is a simple utility that initializes an mcs client and
@@ -133,12 +138,10 @@ void MessageReceivedCallback(const MCSMessage& message) {
   }
 }
 
-void MessageSentCallback(int64_t user_serial_number,
-                         const std::string& app_id,
+void MessageSentCallback(const std::string& app_id,
                          const std::string& message_id,
                          MCSClient::MessageSendStatus status) {
-  LOG(INFO) << "Message sent. Serial number: " << user_serial_number
-            << " Application ID: " << app_id
+  LOG(INFO) << "Message sent. Application ID: " << app_id
             << " Message ID: " << message_id
             << " Message send status: " << status;
 }
@@ -158,7 +161,18 @@ class MyTestCertVerifier : public net::CertVerifier {
     verify_result->verified_cert = params.certificate();
     return net::OK;
   }
+  void Verify2QwacBinding(
+      const std::string& binding,
+      const std::string& hostname,
+      const scoped_refptr<net::X509Certificate>& tls_cert,
+      base::OnceCallback<void(const scoped_refptr<net::X509Certificate>&)>
+          callback,
+      const net::NetLogWithSource& net_log) override {
+    std::move(callback).Run(nullptr);
+  }
   void SetConfig(const Config& config) override {}
+  void AddObserver(Observer* observer) override {}
+  void RemoveObserver(Observer* observer) override {}
 };
 
 class MCSProbeAuthPreferences : public net::HttpAuthPreferences {
@@ -168,11 +182,12 @@ class MCSProbeAuthPreferences : public net::HttpAuthPreferences {
 
   bool NegotiateDisableCnameLookup() const override { return false; }
   bool NegotiateEnablePort() const override { return false; }
-  bool CanUseDefaultCredentials(const GURL& auth_origin) const override {
+  bool CanUseDefaultCredentials(
+      const url::SchemeHostPort& auth_scheme_host_port) const override {
     return false;
   }
   net::HttpAuth::DelegationType GetDelegationType(
-      const GURL& auth_origin) const override {
+      const url::SchemeHostPort& auth_scheme_host_port) const override {
     return net::HttpAuth::DelegationType::kNone;
   }
 };
@@ -196,7 +211,6 @@ class MCSProbe {
 
   void LoadCallback(std::unique_ptr<GCMStore::LoadResult> load_result);
   void UpdateCallback(bool success);
-  void ErrorCallback();
   void OnCheckInCompleted(
       net::HttpStatusCode response_code,
       const checkin_proto::AndroidCheckinResponse& checkin_response);
@@ -248,7 +262,7 @@ MCSProbe::MCSProbe(const base::CommandLine& command_line)
       net_log_(net::NetLog::Get()),
       file_thread_("FileThread") {
   network_connection_tracker_->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_ETHERNET);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
   if (command_line.HasSwitch(kRMQFileName)) {
     gcm_store_path_ = command_line.GetSwitchValuePath(kRMQFileName);
   }
@@ -288,15 +302,15 @@ void MCSProbe::Start() {
       endpoints, kDefaultBackoffPolicy,
       base::BindRepeating(&MCSProbe::RequestProxyResolvingSocketFactory,
                           base::Unretained(this)),
-      base::ThreadTaskRunnerHandle::Get(), &recorder_,
+      base::SingleThreadTaskRunner::GetCurrentDefault(), &recorder_,
       network_connection_tracker_.get());
   gcm_store_ = std::make_unique<GCMStoreImpl>(
-      gcm_store_path_, /*remove_account_mappings_with_email_key=*/true,
-      file_thread_.task_runner(), std::make_unique<FakeEncryptor>());
+      gcm_store_path_, file_thread_.task_runner(),
+      std::make_unique<FakeEncryptor>());
 
   mcs_client_ = std::make_unique<MCSClient>(
       "probe", &clock_, connection_factory_.get(), gcm_store_.get(),
-      base::ThreadTaskRunnerHandle::Get(), &recorder_);
+      base::SingleThreadTaskRunner::GetCurrentDefault(), &recorder_);
   run_loop_ = std::make_unique<base::RunLoop>();
   gcm_store_->Load(
       GCMStore::CREATE_IF_MISSING,
@@ -318,10 +332,9 @@ void MCSProbe::LoadCallback(std::unique_ptr<GCMStore::LoadResult> load_result) {
     secret_ = load_result->device_security_token;
     DVLOG(1) << "Loaded MCS id " << android_id_;
   }
-  mcs_client_->Initialize(
-      base::BindRepeating(&MCSProbe::ErrorCallback, base::Unretained(this)),
-      base::BindRepeating(&MessageReceivedCallback),
-      base::BindRepeating(&MessageSentCallback), std::move(load_result));
+  mcs_client_->Initialize(base::BindRepeating(&MessageReceivedCallback),
+                          base::BindRepeating(&MessageSentCallback),
+                          std::move(load_result));
 
   if (!android_id_ || !secret_) {
     DVLOG(1) << "Checkin to generate new MCS credentials.";
@@ -349,9 +362,10 @@ void MCSProbe::InitializeNetworkState() {
   builder.set_net_log(net_log_);
   builder.set_host_resolver(
       net::HostResolver::CreateStandaloneResolver(net_log_));
-  builder.SetHttpAuthHandlerFactory(net::HttpAuthHandlerRegistryFactory::Create(
-      &http_auth_preferences_,
-      std::vector<std::string>{net::kBasicAuthScheme}));
+  http_auth_preferences_.SetAllowedSchemes(
+      base::flat_set<std::string>({net::kBasicAuthScheme}));
+  builder.SetHttpAuthHandlerFactory(
+      net::HttpAuthHandlerRegistryFactory::Create(&http_auth_preferences_));
   builder.set_proxy_resolution_service(
       net::ConfiguredProxyResolutionService::CreateDirect());
 
@@ -368,18 +382,15 @@ void MCSProbe::InitializeNetworkState() {
       /*cors_exempt_header_list=*/std::vector<std::string>());
   auto url_loader_factory_params =
       network::mojom::URLLoaderFactoryParams::New();
-  url_loader_factory_params->process_id = network::mojom::kBrowserProcessId;
-  url_loader_factory_params->is_corb_enabled = false;
+  url_loader_factory_params->process_id =
+      network::OriginatingProcessId::browser();
+  url_loader_factory_params->is_orb_enabled = false;
   network_context_->CreateURLLoaderFactory(
       url_loader_factory_.BindNewPipeAndPassReceiver(),
       std::move(url_loader_factory_params));
   shared_url_loader_factory_ =
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           url_loader_factory_.get());
-}
-
-void MCSProbe::ErrorCallback() {
-  LOG(INFO) << "MCS error happened";
 }
 
 void MCSProbe::RequestProxyResolvingSocketFactory(
@@ -399,14 +410,13 @@ void MCSProbe::CheckIn() {
   chrome_build_proto.set_chrome_version(kChromeVersion);
 
   CheckinRequest::RequestInfo request_info(0, 0,
-                                           std::map<std::string, std::string>(),
                                            std::string(), chrome_build_proto);
 
   checkin_request_ = std::make_unique<CheckinRequest>(
       GServicesSettings().GetCheckinURL(), request_info, kDefaultBackoffPolicy,
       base::BindOnce(&MCSProbe::OnCheckInCompleted, base::Unretained(this)),
-      shared_url_loader_factory_, base::ThreadTaskRunnerHandle::Get(),
-      &recorder_);
+      shared_url_loader_factory_,
+      base::SingleThreadTaskRunner::GetCurrentDefault(), &recorder_);
   checkin_request_->Start();
 }
 

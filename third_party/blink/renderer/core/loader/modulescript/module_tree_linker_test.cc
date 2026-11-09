@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/bindings/core/v8/boxed_v8_module.h"
 #include "third_party/blink/renderer/bindings/core/v8/module_record.h"
@@ -25,7 +24,7 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -50,7 +49,7 @@ class TestModuleTreeClient final : public ModuleTreeClient {
   }
 
   bool WasNotifyFinished() const { return was_notify_finished_; }
-  ModuleScript* GetModuleScript() { return module_script_; }
+  ModuleScript* GetModuleScript() { return module_script_.Get(); }
 
  private:
   bool was_notify_finished_ = false;
@@ -98,10 +97,11 @@ TEST_F(ModuleTreeLinkerTest, FetchTreeNoDeps) {
   SimModuleRequest sim_module(KURL("http://example.com/root.js"));
   TestModuleTreeClient* client = MakeGarbageCollected<TestModuleTreeClient>();
   GetModulator()->FetchTree(
-      sim_module.GetURL(), ModuleType::kJavaScript, GetDocument().Fetcher(),
-      mojom::blink::RequestContextType::SCRIPT,
+      sim_module.GetURL(), ModuleType::kJavaScriptOrWasm,
+      GetDocument().Fetcher(), mojom::blink::RequestContextType::SCRIPT,
       network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-      ModuleScriptCustomFetchType::kNone, client);
+      ModuleScriptCustomFetchType::kNone, client,
+      ModuleImportPhase::kEvaluation);
 
   EXPECT_FALSE(client->WasNotifyFinished())
       << "ModuleTreeLinker should always finish asynchronously.";
@@ -122,10 +122,11 @@ TEST_F(ModuleTreeLinkerTest, FetchTreeInstantiationFailure) {
 
   TestModuleTreeClient* client = MakeGarbageCollected<TestModuleTreeClient>();
   GetModulator()->FetchTree(
-      sim_module.GetURL(), ModuleType::kJavaScript, GetDocument().Fetcher(),
-      mojom::blink::RequestContextType::SCRIPT,
+      sim_module.GetURL(), ModuleType::kJavaScriptOrWasm,
+      GetDocument().Fetcher(), mojom::blink::RequestContextType::SCRIPT,
       network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-      ModuleScriptCustomFetchType::kNone, client);
+      ModuleScriptCustomFetchType::kNone, client,
+      ModuleImportPhase::kEvaluation);
 
   EXPECT_FALSE(client->WasNotifyFinished())
       << "ModuleTreeLinker should always finish asynchronously.";
@@ -149,10 +150,11 @@ TEST_F(ModuleTreeLinkerTest, FetchTreeWithSingleDependency) {
 
   TestModuleTreeClient* client = MakeGarbageCollected<TestModuleTreeClient>();
   GetModulator()->FetchTree(
-      sim_module.GetURL(), ModuleType::kJavaScript, GetDocument().Fetcher(),
-      mojom::blink::RequestContextType::SCRIPT,
+      sim_module.GetURL(), ModuleType::kJavaScriptOrWasm,
+      GetDocument().Fetcher(), mojom::blink::RequestContextType::SCRIPT,
       network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-      ModuleScriptCustomFetchType::kNone, client);
+      ModuleScriptCustomFetchType::kNone, client,
+      ModuleImportPhase::kEvaluation);
 
   EXPECT_FALSE(client->WasNotifyFinished())
       << "ModuleTreeLinker should always finish asynchronously.";
@@ -177,10 +179,11 @@ TEST_F(ModuleTreeLinkerTest, FetchTreeWith3Deps) {
 
   TestModuleTreeClient* client = MakeGarbageCollected<TestModuleTreeClient>();
   GetModulator()->FetchTree(
-      sim_module.GetURL(), ModuleType::kJavaScript, GetDocument().Fetcher(),
-      mojom::blink::RequestContextType::SCRIPT,
+      sim_module.GetURL(), ModuleType::kJavaScriptOrWasm,
+      GetDocument().Fetcher(), mojom::blink::RequestContextType::SCRIPT,
       network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-      ModuleScriptCustomFetchType::kNone, client);
+      ModuleScriptCustomFetchType::kNone, client,
+      ModuleImportPhase::kEvaluation);
 
   EXPECT_FALSE(client->WasNotifyFinished())
       << "ModuleTreeLinker should always finish asynchronously.";
@@ -217,10 +220,11 @@ TEST_F(ModuleTreeLinkerTest, FetchTreeWith3Deps1Fail) {
 
   TestModuleTreeClient* client = MakeGarbageCollected<TestModuleTreeClient>();
   GetModulator()->FetchTree(
-      sim_module.GetURL(), ModuleType::kJavaScript, GetDocument().Fetcher(),
-      mojom::blink::RequestContextType::SCRIPT,
+      sim_module.GetURL(), ModuleType::kJavaScriptOrWasm,
+      GetDocument().Fetcher(), mojom::blink::RequestContextType::SCRIPT,
       network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-      ModuleScriptCustomFetchType::kNone, client);
+      ModuleScriptCustomFetchType::kNone, client,
+      ModuleImportPhase::kEvaluation);
 
   EXPECT_FALSE(client->WasNotifyFinished())
       << "ModuleTreeLinker should always finish asynchronously.";
@@ -267,10 +271,11 @@ TEST_F(ModuleTreeLinkerTest, FetchDependencyOfCyclicGraph) {
 
   TestModuleTreeClient* client = MakeGarbageCollected<TestModuleTreeClient>();
   GetModulator()->FetchTree(
-      sim_module.GetURL(), ModuleType::kJavaScript, GetDocument().Fetcher(),
-      mojom::blink::RequestContextType::SCRIPT,
+      sim_module.GetURL(), ModuleType::kJavaScriptOrWasm,
+      GetDocument().Fetcher(), mojom::blink::RequestContextType::SCRIPT,
       network::mojom::RequestDestination::kScript, ScriptFetchOptions(),
-      ModuleScriptCustomFetchType::kNone, client);
+      ModuleScriptCustomFetchType::kNone, client,
+      ModuleImportPhase::kEvaluation);
 
   EXPECT_FALSE(client->WasNotifyFinished())
       << "ModuleTreeLinker should always finish asynchronously.";

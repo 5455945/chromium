@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,52 +6,44 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DISPLAY_ITEM_CLIENT_H_
 
 #include "base/dcheck_is_on.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/graphics/paint/display_item_client_types.h"
 #include "third_party/blink/renderer/platform/graphics/paint_invalidation_reason.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
-
-enum class RasterEffectOutset : uint8_t {
-  kNone,
-  kHalfPixel,
-  kWholePixel,
-};
 
 // The class for objects that can be associated with display items. A
 // DisplayItemClient object should live at least longer than the document cycle
 // in which its display items are created during painting. After the document
 // cycle, a pointer/reference to DisplayItemClient should be no longer
 // dereferenced unless we can make sure the client is still alive.
-class PLATFORM_EXPORT DisplayItemClient {
+class PLATFORM_EXPORT DisplayItemClient : public GarbageCollectedMixin {
  public:
-  DisplayItemClient() {
-#if DCHECK_IS_ON()
-    OnCreate();
-#endif
-  }
+  DisplayItemClient()
+      : paint_invalidation_reason_(
+            static_cast<uint8_t>(PaintInvalidationReason::kJustCreated)),
+        marked_for_validation_(0) {}
   DisplayItemClient(const DisplayItemClient&) = delete;
   DisplayItemClient& operator=(const DisplayItemClient&) = delete;
-  virtual ~DisplayItemClient() {
-#if DCHECK_IS_ON()
-    OnDestroy();
-#endif
-  }
+  virtual ~DisplayItemClient() = default;
 
-#if DCHECK_IS_ON()
-  // Tests if this DisplayItemClient object has been created and has not been
-  // deleted yet.
-  bool IsAlive() const;
-  String SafeDebugName(bool known_to_be_safe = false) const;
-#endif
+  DisplayItemClientId Id() const {
+    return reinterpret_cast<DisplayItemClientId>(this);
+  }
 
   virtual String DebugName() const = 0;
 
   // Returns the id of the DOM node associated with this DisplayItemClient, or
   // kInvalidDOMNodeId if there is no associated DOM node.
-  virtual DOMNodeId OwnerNodeId() const { return kInvalidDOMNodeId; }
+  // If `is_internal_content` is true, the node id will assume the content
+  // is generated internally by the browser and not the web page, and look
+  // for special internal DOM node ids.
+  virtual DOMNodeId OwnerNodeId(bool is_internal_content) const {
+    return kInvalidDOMNodeId;
+  }
 
   // The outset will be used to inflate visual rect after the visual rect is
   // mapped into the space of the composited layer, for any special raster
@@ -66,37 +58,34 @@ class PLATFORM_EXPORT DisplayItemClient {
   // cached display items without calling this method.
   // See PaintController::ClientCacheIsValid() for more details.
   void Invalidate(
-      PaintInvalidationReason reason = PaintInvalidationReason::kFull) const {
-    // If a full invalidation reason is already set, do not overwrite it with
-    // a new reason.
-    if (IsFullPaintInvalidationReason(GetPaintInvalidationReason()) &&
-        // However, kUncacheable overwrites any other reason.
-        reason != PaintInvalidationReason::kUncacheable)
-      return;
-    paint_invalidation_reason_ = reason;
+      PaintInvalidationReason reason = PaintInvalidationReason::kLayout) const {
+    if (reason > GetPaintInvalidationReason())
+      paint_invalidation_reason_ = static_cast<uint8_t>(reason);
   }
 
   PaintInvalidationReason GetPaintInvalidationReason() const {
-    return paint_invalidation_reason_;
+    return static_cast<PaintInvalidationReason>(paint_invalidation_reason_);
   }
 
   // A client is considered "just created" if its display items have never been
   // validated by any PaintController since it's created.
   bool IsJustCreated() const {
-    return paint_invalidation_reason_ == PaintInvalidationReason::kJustCreated;
+    return GetPaintInvalidationReason() ==
+           PaintInvalidationReason::kJustCreated;
   }
 
   // Whether the client is cacheable. The uncacheable status is set when the
   // client produces any display items that skipped caching of any
   // PaintController.
   bool IsCacheable() const {
-    return paint_invalidation_reason_ != PaintInvalidationReason::kUncacheable;
+    return GetPaintInvalidationReason() !=
+           PaintInvalidationReason::kUncacheable;
   }
 
   // True if the client's display items are cached in PaintControllers without
   // needing to update.
   bool IsValid() const {
-    return paint_invalidation_reason_ == PaintInvalidationReason::kNone;
+    return GetPaintInvalidationReason() == PaintInvalidationReason::kNone;
   }
 
   String ToString() const;
@@ -104,30 +93,48 @@ class PLATFORM_EXPORT DisplayItemClient {
  private:
   friend class FakeDisplayItemClient;
   friend class ObjectPaintInvalidatorTest;
+  friend class PaintChunker;
   friend class PaintController;
-  friend class GraphicsLayer;  // Temporary for Validate().
+  friend class ClipPathPaintDefinitionTest;
 
+  void MarkForValidation() const { marked_for_validation_ = 1; }
+  bool IsMarkedForValidation() const { return marked_for_validation_; }
   void Validate() const {
-    paint_invalidation_reason_ = PaintInvalidationReason::kNone;
+    paint_invalidation_reason_ =
+        static_cast<uint8_t>(PaintInvalidationReason::kNone);
+    marked_for_validation_ = 0;
   }
 
-#if DCHECK_IS_ON()
-  void OnCreate();
-  void OnDestroy();
-#endif
-
-  mutable PaintInvalidationReason paint_invalidation_reason_ =
-      PaintInvalidationReason::kJustCreated;
+  mutable uint8_t paint_invalidation_reason_ : 5;
+  mutable uint8_t marked_for_validation_ : 1;
 };
 
-inline bool operator==(const DisplayItemClient& client1,
-                       const DisplayItemClient& client2) {
-  return &client1 == &client2;
-}
-inline bool operator!=(const DisplayItemClient& client1,
-                       const DisplayItemClient& client2) {
-  return &client1 != &client2;
-}
+class StaticDisplayItemClient
+    : public GarbageCollected<StaticDisplayItemClient>,
+      public DisplayItemClient {
+ public:
+  explicit StaticDisplayItemClient(const char* name) : name_(name) {}
+
+  String DebugName() const override { return name_; }
+  void Trace(Visitor* visitor) const override {
+    DisplayItemClient::Trace(visitor);
+  }
+
+ private:
+  const char* name_;
+};
+
+// Defines a StaticDisplayItemClient instance which can be used where a
+// DisplayItemClient is needed but DisplayItem::Id uniqueness is guaranteed
+// or not required, e.g.
+// - when recording a a foreign layer,
+// - when recording a DisplayItem that appears only once in the painted result,
+// - when painting with a transient PaintController.
+// Note: debug_name must be a literal string.
+#define DEFINE_STATIC_DISPLAY_ITEM_CLIENT(name, debug_name) \
+  DEFINE_STATIC_LOCAL(                                      \
+      Persistent<StaticDisplayItemClient>, name,            \
+      (MakeGarbageCollected<StaticDisplayItemClient>(debug_name)))
 
 PLATFORM_EXPORT std::ostream& operator<<(std::ostream&,
                                          const DisplayItemClient*);

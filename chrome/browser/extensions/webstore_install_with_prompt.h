@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "chrome/browser/extensions/webstore_standalone_installer.h"
-#include "chrome/browser/ui/native_window_tracker.h"
-#include "ui/gfx/native_widget_types.h"
-#include "url/gurl.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/native_window_tracker/native_window_tracker.h"
 
 namespace content {
 class WebContents;
@@ -23,7 +21,7 @@ namespace extensions {
 // metadata from the webstore, shows an install UI and starts the download once
 // the user confirms. No post-install UI is shown.
 //
-// Clients will be notified of success or failure via the |callback| argument
+// Clients will be notified of success or failure via the `callback` argument
 // passed into the constructor.
 //
 // Clients of this class must be trusted, as verification of the requestor is
@@ -31,18 +29,16 @@ namespace extensions {
 // methods and can be used as a base class.
 class WebstoreInstallWithPrompt : public WebstoreStandaloneInstaller {
  public:
-  // Use this constructor when there is no parent window. The install dialog
-  // will be centered on the screen.
-  WebstoreInstallWithPrompt(const std::string& webstore_item_id,
-                            Profile* profile,
-                            Callback callback);
-
   // If this constructor is used, the parent of the install dialog will be
-  // |parent_window|.
+  // `parent_window`.
   WebstoreInstallWithPrompt(const std::string& webstore_item_id,
                             Profile* profile,
                             gfx::NativeWindow parent_window,
                             Callback callback);
+
+  WebstoreInstallWithPrompt(const WebstoreInstallWithPrompt&) = delete;
+  WebstoreInstallWithPrompt& operator=(const WebstoreInstallWithPrompt&) =
+      delete;
 
  protected:
   friend class base::RefCountedThreadSafe<WebstoreInstallWithPrompt>;
@@ -53,11 +49,10 @@ class WebstoreInstallWithPrompt : public WebstoreStandaloneInstaller {
   // extensions::WebstoreStandaloneInstaller overrides:
   bool CheckRequestorAlive() const override;
   bool ShouldShowPostInstallUI() const override;
-  bool ShouldShowAppInstalledBubble() const override;
   content::WebContents* GetWebContents() const override;
-  std::unique_ptr<ExtensionInstallPrompt::Prompt> CreateInstallPrompt()
-      const override;
-  std::unique_ptr<ExtensionInstallPrompt> CreateInstallUI() override;
+  std::unique_ptr<InstallPromptData> CreateInstallPrompt() const override;
+  std::unique_ptr<ExtensionInstallPrompt> CreateInstallUI(
+      std::unique_ptr<InstallPromptData> prompt) override;
 
  private:
   bool show_post_install_ui_;
@@ -66,9 +61,7 @@ class WebstoreInstallWithPrompt : public WebstoreStandaloneInstaller {
   std::unique_ptr<content::WebContents> dummy_web_contents_;
 
   gfx::NativeWindow parent_window_;
-  std::unique_ptr<NativeWindowTracker> parent_window_tracker_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebstoreInstallWithPrompt);
+  std::unique_ptr<ui::NativeWindowTracker> parent_window_tracker_;
 };
 
 }  // namespace extensions

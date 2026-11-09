@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,154 +8,155 @@
 #include <unicode/uchar.h>
 
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/text/emoji_segmentation_category.h"
+#include "third_party/blink/renderer/platform/text/emoji_segmentation_category_inline_header.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_names.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
-// UTF16RagelIterator is set up on top of a UTF-16 UChar* buffer iterating over
+// Utf16RagelIterator is set up on top of a UTF-16 UChar* buffer iterating over
 // a Blink internal text string and as such is used as an adapter between Blink
 // strings and the Ragel-based emoji scanner. It supports forwarding and
 // reversing using arithmetic operators. Dereferencing the iterator means
 // retrieving a character class as defined in the Ragel grammar of
 // third-party/emoji-segmenter. The dereferenced character category is cached
 // since Ragel dereferences multiple times without moving the iterator's cursor.
-class PLATFORM_EXPORT UTF16RagelIterator {
-  DISALLOW_NEW();
+class PLATFORM_EXPORT Utf16RagelIterator {
+  STACK_ALLOCATED();
 
  public:
-  UTF16RagelIterator() : buffer_(nullptr), buffer_size_(0), cursor_(0) {}
+  Utf16RagelIterator() = default;
 
-  UTF16RagelIterator(const UChar* buffer,
-                     unsigned buffer_size,
-                     unsigned cursor = 0)
-      : buffer_(buffer),
-        buffer_size_(buffer_size),
-        cursor_(cursor),
-        cached_category_(kMaxEmojiScannerCategory) {
-    UpdateCachedCategory();
-  }
+  explicit Utf16RagelIterator(base::span<const UChar> buffer,
+                              wtf_size_t cursor = 0)
+      : buffer_(buffer), cursor_(cursor) {}
 
-  UTF16RagelIterator end() {
-    UTF16RagelIterator ret = *this;
-    ret.cursor_ = buffer_size_;
+  Utf16RagelIterator end() {
+    Utf16RagelIterator ret = *this;
+    ret.cursor_ = static_cast<wtf_size_t>(buffer_.size());
     return ret;
   }
 
-  UTF16RagelIterator& SetCursor(unsigned new_cursor);
+  size_t size() { return buffer_.size(); }
 
-  unsigned Cursor() { return cursor_; }
+  Utf16RagelIterator& SetCursor(wtf_size_t new_cursor) {
+    DCHECK_GE(new_cursor, 0u);
+    DCHECK_LT(new_cursor, buffer_.size());
+    cursor_ = new_cursor;
+    InvalidateCache();
+    return *this;
+  }
 
-  UTF16RagelIterator& operator+=(int v) {
+  wtf_size_t Cursor() { return cursor_; }
+
+  Utf16RagelIterator& operator+=(int v) {
     if (v > 0) {
-      U16_FWD_N(buffer_, cursor_, buffer_size_, v);
+      U16_FWD_N(buffer_, cursor_, buffer_.size(), v);
     } else if (v < 0) {
       U16_BACK_N(buffer_, 0, cursor_, -v);
     }
-    UpdateCachedCategory();
+    InvalidateCache();
     return *this;
   }
 
-  UTF16RagelIterator& operator-=(int v) { return *this += -v; }
+  Utf16RagelIterator& operator-=(int v) { return *this += -v; }
 
-  UTF16RagelIterator operator+(int v) {
-    UTF16RagelIterator ret = *this;
+  Utf16RagelIterator operator+(int v) {
+    Utf16RagelIterator ret = *this;
     return ret += v;
   }
 
-  UTF16RagelIterator operator-(int v) { return *this + -v; }
+  Utf16RagelIterator operator-(int v) { return *this + -v; }
 
-  int operator-(const UTF16RagelIterator& other) {
-    DCHECK_EQ(buffer_, other.buffer_);
+  int operator-(const Utf16RagelIterator& other) {
+    DCHECK_EQ(buffer_.data(), other.buffer_.data());
+    DCHECK_EQ(buffer_.size(), other.buffer_.size());
     return cursor_ - other.cursor_;
   }
 
-  UTF16RagelIterator& operator++() {
-    DCHECK_LT(cursor_, buffer_size_);
-    U16_FWD_1(buffer_, cursor_, buffer_size_);
-    UpdateCachedCategory();
+  Utf16RagelIterator& operator++() {
+    DCHECK_LT(cursor_, buffer_.size());
+    U16_FWD_1(buffer_, cursor_, buffer_.size());
+    InvalidateCache();
     return *this;
   }
 
-  UTF16RagelIterator& operator--() {
+  Utf16RagelIterator& operator--() {
     DCHECK_GT(cursor_, 0u);
     U16_BACK_1(buffer_, 0, cursor_);
-    UpdateCachedCategory();
+    InvalidateCache();
     return *this;
   }
 
-  UTF16RagelIterator operator++(int) {
-    UTF16RagelIterator ret = *this;
+  Utf16RagelIterator operator++(int) {
+    Utf16RagelIterator ret = *this;
     ++(*this);
     return ret;
   }
 
-  UTF16RagelIterator operator--(int) {
-    UTF16RagelIterator ret = *this;
+  Utf16RagelIterator operator--(int) {
+    Utf16RagelIterator ret = *this;
     --(*this);
     return ret;
   }
 
-  UTF16RagelIterator operator=(int v) {
+  Utf16RagelIterator operator=(int v) {
     // We need this integer assignment operator because Ragel has initialization
     // code for assigning 0 to ts, te.
     DCHECK_EQ(v, 0);
-    UTF16RagelIterator ret = *this;
+    Utf16RagelIterator ret = *this;
     ret.cursor_ = v;
     return ret;
   }
 
-  UChar32 operator*() {
-    CHECK(buffer_size_);
+  EmojiSegmentationCategory operator*() {
+    DCHECK(!buffer_.empty());
+    if (cached_category_ == EmojiSegmentationCategory::kInvalidCacheEntry) {
+      UChar32 codepoint;
+      U16_GET(buffer_, 0, cursor_, buffer_.size(), codepoint);
+      cached_category_ = GetEmojiSegmentationCategory(codepoint);
+    }
     return cached_category_;
   }
 
-  bool operator==(const UTF16RagelIterator& other) const {
-    return buffer_ == other.buffer_ && buffer_size_ == other.buffer_size_ &&
-           cursor_ == other.cursor_;
+  inline void InvalidateCache() {
+    cached_category_ = EmojiSegmentationCategory::kInvalidCacheEntry;
   }
 
-  bool operator!=(const UTF16RagelIterator& other) const {
-    return !(*this == other);
+  bool operator==(const Utf16RagelIterator& other) const {
+    return buffer_.data() == other.buffer_.data() &&
+           buffer_.size() == other.buffer_.size() && cursor_ == other.cursor_;
   }
 
-  // Must match the categories defined in third-party/emoji-segmenter/.
-  // TODO(drott): Add static asserts once emoji-segmenter is imported to
-  // third-party.
-  enum EmojiScannerCharacterClass {
-    EMOJI = 0,
-    EMOJI_TEXT_PRESENTATION = 1,
-    EMOJI_EMOJI_PRESENTATION = 2,
-    EMOJI_MODIFIER_BASE = 3,
-    EMOJI_MODIFIER = 4,
-    EMOJI_VS_BASE = 5,
-    REGIONAL_INDICATOR = 6,
-    KEYCAP_BASE = 7,
-    COMBINING_ENCLOSING_KEYCAP = 8,
-    COMBINING_ENCLOSING_CIRCLE_BACKSLASH = 9,
-    ZWJ = 10,
-    VS15 = 11,
-    VS16 = 12,
-    TAG_BASE = 13,
-    TAG_SEQUENCE = 14,
-    TAG_TERM = 15,
-    kMaxEmojiScannerCategory = 16
-  };
-
- private:
-  UChar32 Codepoint() const {
-    DCHECK_GT(buffer_size_, 0u);
-    UChar32 output;
-    U16_GET(buffer_, 0, cursor_, buffer_size_, output);
+  // Peeks the next codepoint. Note: Does not peak the
+  // `EmojiSegmentationCategory` as does `operator*()`. For performance reasons,
+  // this method is simplified to return U+FFFD when the cursor is at the end of
+  // the stream, instead of using `std::optional` or similar.
+  //
+  // TODO(drott): Before moving to ICU UNSAFE functions, check
+  // InputMethodControllerTest.DeleteSurroundingTextInCodePointsWithInvalidSurrogatePair
+  // and DeleteSurroundingTextInCodePointsWithInvalidSurrogatePair which cause
+  // this code to encounter an unmatched lead surrogate as the last character in
+  // the buffer. (Potential issue with InputMethodController, or the tests?).
+  UChar32 PeekCodepoint() {
+    UChar32 output = uchar::kReplacementCharacter;
+    wtf_size_t temp_cursor = cursor_;
+    U16_FWD_1(buffer_, temp_cursor, buffer_.size());
+    if (temp_cursor < buffer_.size()) {
+      U16_GET(buffer_, 0, temp_cursor, buffer_.size(), output);
+    }
     return output;
   }
 
-  void UpdateCachedCategory();
-
-  const UChar* buffer_;
-  unsigned buffer_size_;
-  unsigned cursor_;
-  unsigned char cached_category_;
+ private:
+  base::span<const UChar> buffer_;
+  wtf_size_t cursor_ = 0;
+  EmojiSegmentationCategory cached_category_ =
+      EmojiSegmentationCategory::kInvalidCacheEntry;
 };
 
 }  // namespace blink

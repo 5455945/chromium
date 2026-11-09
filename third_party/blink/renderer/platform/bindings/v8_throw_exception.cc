@@ -25,6 +25,7 @@
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
 
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
+#include "v8/include/v8-exception.h"
 
 namespace blink {
 
@@ -39,22 +40,17 @@ namespace blink {
   void V8ThrowException::Throw##blinkErrorType(v8::Isolate* isolate,     \
                                                const String& message) {  \
     ThrowException(isolate, Create##blinkErrorType(isolate, message));   \
+  }                                                                      \
+                                                                         \
+  void V8ThrowException::Throw##blinkErrorType(v8::Isolate* isolate,     \
+                                               const char* message) {    \
+    Throw##blinkErrorType(isolate, String(message));                     \
   }
 
 DEFINE_CREATE_AND_THROW_ERROR_FUNC(Error, Error, "Error")
 DEFINE_CREATE_AND_THROW_ERROR_FUNC(RangeError, RangeError, "Range error")
-DEFINE_CREATE_AND_THROW_ERROR_FUNC(ReferenceError,
-                                   ReferenceError,
-                                   "Reference error")
 DEFINE_CREATE_AND_THROW_ERROR_FUNC(SyntaxError, SyntaxError, "Syntax error")
 DEFINE_CREATE_AND_THROW_ERROR_FUNC(TypeError, TypeError, "Type error")
-DEFINE_CREATE_AND_THROW_ERROR_FUNC(WasmCompileError,
-                                   WasmCompileError,
-                                   "Compile error")
-DEFINE_CREATE_AND_THROW_ERROR_FUNC(WasmLinkError, WasmLinkError, "Link error")
-DEFINE_CREATE_AND_THROW_ERROR_FUNC(WasmRuntimeError,
-                                   WasmRuntimeError,
-                                   "Runtime error")
 
 #undef DEFINE_CREATE_AND_THROW_ERROR_FUNC
 

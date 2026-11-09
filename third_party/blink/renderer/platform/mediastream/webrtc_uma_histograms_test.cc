@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_api_name.h"
 
 using ::testing::_;
 
@@ -49,7 +50,6 @@ INSTANTIATE_TEST_SUITE_P(
     PerSessionWebRTCAPIMetricsTest,
     ::testing::ValuesIn({RTCAPIName::kGetUserMedia,
                          RTCAPIName::kGetDisplayMedia,
-                         RTCAPIName::kGetCurrentBrowsingContextMedia,
                          RTCAPIName::kEnumerateDevices,
                          RTCAPIName::kRTCPeerConnection}));
 

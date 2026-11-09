@@ -1,27 +1,28 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/child_accounts/time_limits/persisted_app_info.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 using PersistedAppInfoTest = testing::Test;
 
 TEST_F(PersistedAppInfoTest, RemoveActiveTimes) {
-  AppId app = AppId(apps::mojom::AppType::kArc, "1");
+  AppId app = AppId(apps::AppType::kArc, "1");
   AppState app_state = AppState::kAvailable;
-  base::TimeDelta running_active_time = base::TimeDelta::FromHours(5);
+  base::TimeDelta running_active_time = base::Hours(5);
 
   base::Time start_time = base::Time::Now();
-  base::TimeDelta activity = base::TimeDelta::FromHours(1);
+  base::TimeDelta activity = base::Hours(1);
 
   AppActivity::ActiveTime to_remove =
       AppActivity::ActiveTime(start_time, start_time + activity);
@@ -33,28 +34,28 @@ TEST_F(PersistedAppInfoTest, RemoveActiveTimes) {
   PersistedAppInfo app_info(app, app_state, running_active_time,
                             {{to_remove, to_trim, to_keep}});
 
-  EXPECT_TRUE(base::Contains(app_info.active_times(), to_remove));
-  EXPECT_TRUE(base::Contains(app_info.active_times(), to_trim));
-  EXPECT_TRUE(base::Contains(app_info.active_times(), to_keep));
+  EXPECT_TRUE(std::ranges::contains(app_info.active_times(), to_remove));
+  EXPECT_TRUE(std::ranges::contains(app_info.active_times(), to_trim));
+  EXPECT_TRUE(std::ranges::contains(app_info.active_times(), to_keep));
 
   base::Time report_time = start_time + 2.5 * activity;
   app_info.RemoveActiveTimeEarlierThan(report_time);
 
   EXPECT_EQ(2u, app_info.active_times().size());
-  EXPECT_FALSE(base::Contains(app_info.active_times(), to_remove));
-  EXPECT_TRUE(base::Contains(app_info.active_times(), to_keep));
+  EXPECT_FALSE(std::ranges::contains(app_info.active_times(), to_remove));
+  EXPECT_TRUE(std::ranges::contains(app_info.active_times(), to_keep));
 
   const AppActivity::ActiveTime trimmed(report_time, to_trim.active_to());
-  EXPECT_TRUE(base::Contains(app_info.active_times(), trimmed));
+  EXPECT_TRUE(std::ranges::contains(app_info.active_times(), trimmed));
 }
 
 TEST_F(PersistedAppInfoTest, UpdateAppActivityPreference) {
-  AppId app = AppId(apps::mojom::AppType::kArc, "1");
+  AppId app = AppId(apps::AppType::kArc, "1");
   AppState app_state = AppState::kAvailable;
-  base::TimeDelta running_active_time = base::TimeDelta::FromHours(5);
+  base::TimeDelta running_active_time = base::Hours(5);
 
   base::Time start_time = base::Time::Now();
-  base::TimeDelta activity = base::TimeDelta::FromHours(1);
+  base::TimeDelta activity = base::Hours(1);
 
   AppActivity::ActiveTime entry1 =
       AppActivity::ActiveTime(start_time, start_time + activity);
@@ -65,16 +66,16 @@ TEST_F(PersistedAppInfoTest, UpdateAppActivityPreference) {
 
   PersistedAppInfo app_info(app, app_state, running_active_time,
                             {{entry1, entry2, entry3}});
-  base::Value entry(base::Value::Type::DICTIONARY);
+  base::DictValue entry;
 
-  app_info.UpdateAppActivityPreference(&entry, /* replace */ false);
+  app_info.UpdateAppActivityPreference(entry, /* replace */ false);
   AppActivity::ActiveTime to_append = AppActivity::ActiveTime(
       start_time + 6 * activity, start_time + 7 * activity);
   PersistedAppInfo app_info2(app, app_state, running_active_time,
                              {{to_append}});
-  app_info2.UpdateAppActivityPreference(&entry, /* replace */ false);
+  app_info2.UpdateAppActivityPreference(entry, /* replace */ false);
 
-  absl::optional<PersistedAppInfo> updated_entry =
+  std::optional<PersistedAppInfo> updated_entry =
       PersistedAppInfo::PersistedAppInfoFromDict(
           &entry, /* include_app_activity_array */ true);
   ASSERT_TRUE(updated_entry.has_value());
@@ -88,8 +89,8 @@ TEST_F(PersistedAppInfoTest, UpdateAppActivityPreference) {
   EXPECT_EQ(active_times[2], entry3);
   EXPECT_EQ(active_times[3], to_append);
 
-  app_info2.UpdateAppActivityPreference(&entry, /* replace */ true);
-  absl::optional<PersistedAppInfo> final_entry =
+  app_info2.UpdateAppActivityPreference(entry, /* replace */ true);
+  std::optional<PersistedAppInfo> final_entry =
       PersistedAppInfo::PersistedAppInfoFromDict(
           &entry, /* include_app_activity_array */ true);
   EXPECT_TRUE(final_entry.has_value());
@@ -97,5 +98,4 @@ TEST_F(PersistedAppInfoTest, UpdateAppActivityPreference) {
   EXPECT_EQ(final_entry->active_times()[0], to_append);
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

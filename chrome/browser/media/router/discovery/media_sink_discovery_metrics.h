@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_MEDIA_SINK_DISCOVERY_METRICS_H_
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 
@@ -55,7 +56,7 @@ class DeviceCountMetrics {
  private:
   base::Time device_count_metrics_record_time_;
 
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 };
 
 // Metrics for DIAL device counts.
@@ -83,18 +84,17 @@ class CastDeviceCountMetrics : public DeviceCountMetrics {
     kMdnsDial = 4,  // Device was first discovered via mDNS, then by DIAL.
     kDialMdns = 5,  // Device was first discovered via DIAL, then by mDNS.
     kConnectionRetryOnError = 6,
+    kAccessCode = 7,
 
-    kTotalCount = 7,
+    kTotalCount = 8,
   };
 
   static const char kHistogramCastKnownDeviceCount[];
   static const char kHistogramCastConnectedDeviceCount[];
-  static const char kHistogramCastCachedSinksAvailableCount[];
   static const char kHistogramCastDiscoverySinkSource[];
 
   void RecordDeviceCounts(size_t available_device_count,
                           size_t known_device_count) override;
-  void RecordCachedSinksAvailableCount(size_t cached_sink_count);
   void RecordCastSinkDiscoverySource(SinkSource sink_source);
 };
 

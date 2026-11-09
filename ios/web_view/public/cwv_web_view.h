@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,11 @@ NS_ASSUME_NONNULL_BEGIN
 @class CWVAutofillController;
 @class CWVBackForwardList;
 @class CWVBackForwardListItem;
+@class CWVFindInPageController;
 @class CWVScriptCommand;
 @class CWVTranslationController;
 @class CWVWebViewConfiguration;
 @protocol CWVNavigationDelegate;
-@protocol CWVScriptCommandHandler;
 @protocol CWVUIDelegate;
 @class CWVSSLStatus;
 
@@ -71,7 +71,7 @@ CWV_EXPORT
 //   (not implemented for CWVWebView)
 //   |visibleURL| is the bad cert page URL. |lastCommittedURL| is the previous
 //   page URL.
-@property(nonatomic, readonly) NSURL* visibleURL;
+@property(nonatomic, readonly, nullable) NSURL* visibleURL;
 
 // A human-friendly string which represents the location of the document
 // currently being loaded. KVO compliant.
@@ -93,14 +93,14 @@ CWV_EXPORT
 //
 // See the comment of |visibleURL| above for the difference between |visibleURL|
 // and |lastCommittedURL|.
-@property(nonatomic, readonly) NSURL* lastCommittedURL;
+@property(nonatomic, readonly, nullable) NSURL* lastCommittedURL;
 
 // The SSL status displayed in the URL bar. KVO compliant.
 // It is nil when no page is loaded on the web view.
 @property(nonatomic, readonly, nullable) CWVSSLStatus* visibleSSLStatus;
 
 // The current page title. KVO compliant.
-@property(nonatomic, readonly, copy) NSString* title;
+@property(nonatomic, readonly, copy, nullable) NSString* title;
 
 // Page loading progress from 0.0 to 1.0. KVO compliant.
 //
@@ -112,24 +112,48 @@ CWV_EXPORT
 // The scroll view associated with the web view.
 //
 // It is reset on state restoration.
-@property(nonatomic, readonly) UIScrollView* scrollView;
+// It is nil while the app is terminating. Otherwise it should never be nil.
+@property(nonatomic, readonly, nullable) UIScrollView* scrollView;
 
 // A Boolean value indicating whether horizontal swipe gestures will trigger
 // back-forward list navigations.
 @property(nonatomic) BOOL allowsBackForwardNavigationGestures;
 
+// Whether or not long pressing a link in the web view renders a link preview.
+@property(nonatomic) BOOL allowsLinkPreview;
+
 // The web view's autofill controller.
 @property(nonatomic, readonly) CWVAutofillController* autofillController;
 
+// The web view's find in page controller.
+@property(nonatomic, readonly)
+    CWVFindInPageController* findInPageController API_AVAILABLE(ios(16.0));
+
 // An equivalent of
 // https://developer.apple.com/documentation/webkit/wkwebview/1414977-backforwardlist
-@property(nonatomic, readonly, nonnull) CWVBackForwardList* backForwardList;
+// It is nil while the app is terminating. Otherwise it should never be nil.
+@property(nonatomic, readonly, nullable) CWVBackForwardList* backForwardList;
 
 // Enables Chrome's custom logic to handle long press and force touch. Defaults
-// to YES. To use the system context menu this must be set to NO.
+// to NO.
 // This class property setting should only be changed BEFORE any
 // CWVWebViewConfiguration instance is initialized.
-@property(nonatomic, class) BOOL chromeLongPressAndForceTouchHandlingEnabled;
+@property(nonatomic, class) BOOL chromeContextMenuEnabled;
+
+// Whether or not to use the new session storage. Defaults to YES.
+// This class property setting should only be changed BEFORE any
+// CWVWebViewConfiguration instance is initialized.
+// Deprecated: the code ignore the value assigned.
+@property(nonatomic, class) BOOL useOptimizedSessionStorage;
+
+// Whether or not to enable debugging by Safari Web Inspector.
+// Defaults to NO.
+@property(nonatomic, class) BOOL webInspectorEnabled;
+
+// Normally ios/web_view/ CHECKs IsAccountStorageActive() early on. Setting
+// this to true will cause the CHECK to be skipped, which potentially fixes
+// crbug.com/347862165.
+@property(nonatomic, class) BOOL skipAccountStorageCheckEnabled;
 
 // Set this to customize the underlying WKWebView's inputAccessoryView. Setting
 // to nil means to use the WKWebView's default inputAccessoryView instead.
@@ -142,37 +166,16 @@ CWV_EXPORT
 // https://developer.apple.com/documentation/uikit/uiresponder/1621119-inputaccessoryview?language=objc
 @property(nonatomic, strong, nullable) UIView* inputAccessoryView;
 
-// Allows full customization of the user agent.
-// Similar to -[WKWebView customUserAgent], but applies to all instances.
-// If non-nil, this is used instead of |userAgentProduct|.
-@property(nonatomic, class, copy, nullable) NSString* customUserAgent;
-
-// The User Agent product string used to build the full User Agent.
-// Deprecated. Use |customUserAgent| instead.
-+ (NSString*)userAgentProduct;
-
-// Customizes the User Agent string by inserting |product|. It should be of the
-// format "product/1.0". For example:
-// "Mozilla/5.0 (iPhone; CPU iPhone OS 10_3 like Mac OS X) AppleWebKit/603.1.30
-// (KHTML, like Gecko) <product> Mobile/16D32 Safari/602.1" where <product>
-// will be replaced with |product| or empty string if not set.
+// Edge insets on all sides, relative to the web view's coordinate space, which
+// shrink the bounds of the layout viewport. Obscured content areas (that is,
+// parts of the web view that overlap with obscured content insets) should be
+// covered by UI elements managed by the client, such as a navigation bar or
+// buttons. The web view automatically adjusts how fixed and sticky elements are
+// rendered near edges with non-zero obscured insets, to ensure compatibility
+// and legibility.
 //
-// NOTE: It is recommended to set |product| before initializing any web views.
-// Setting |product| is only guaranteed to affect web views which have not yet
-// been initialized. However, exisiting web views could also be affected
-// depending upon their internal state.
-//
-// Deprecated. Use |customUserAgent| instead.
-+ (void)setUserAgentProduct:(NSString*)product;
-
-// Use this method to set the necessary credentials used to communicate with
-// the Google API for features such as translate. See this link for more info:
-// https://support.google.com/googleapi/answer/6158857
-// This method must be called before any |CWVWebViews| are instantiated for
-// the keys to be used.
-+ (void)setGoogleAPIKey:(NSString*)googleAPIKey
-               clientID:(NSString*)clientID
-           clientSecret:(NSString*)clientSecret;
+// All edge insets must be non-negative. Defaults to 0 on all sides.
+@property(nonatomic) UIEdgeInsets obscuredContentInsets API_AVAILABLE(ios(26));
 
 - (instancetype)initWithFrame:(CGRect)frame
                 configuration:(CWVWebViewConfiguration*)configuration;
@@ -182,6 +185,8 @@ CWV_EXPORT
 // |*createdWKWebView| if |createdWKWebView| is not nil.
 // |*createdWKWebView| will be provided only if |wkConfiguration| is provided,
 // otherwise it will always be reset to nil.
+// IMPORTANT NOTE: Also create a new WKUserContentController and set it in the
+// |wkConfiguration| before calling this method.
 //
 // IMPORTANT: Use |*createdWKWebView| just as a return value of
 // -[WKNavigationDelegate
@@ -216,57 +221,53 @@ CWV_EXPORT
 // Unlike WKWebView, this method supports HTTPBody.
 - (void)loadRequest:(NSURLRequest*)request;
 
-// Evaluates a JavaScript string.
-// The completion handler is invoked when script evaluation completes.
+// Evaluates a JavaScript string in the main frame of the page content world.
+// `completion` is invoked with the result of evaluating the script and a
+// boolean representing success (`YES`) or failure (`NO`) of the evaluation.
 //
-// Note that |javaScriptString| is wrapped with:
-//   if (<implementation defined>) { ... }
-// before evaluation, which causes some tricky side effect when you use |let| or
-// |const| in the script.
-//
-//   1. Variables defined with |let| or |const| at the top level of the script
-//      do NOT become a global variable. i.e., It is accessible neither from
-//      scripts in the page nor another call to
-//      -evaluateJavaScript:completionHandler:. Variables defined with |var|
-//      DOES become a global variable.
-//
-//   2. Variables defined with |let| or |const| at the top level are not
-//      accessible from top level functions, even in the same script. Variable
-//      defined with |var| doesn't have this issue either. e.g., evaluation of
-//      this script causes an error:
-//
-//        let a =  3;
-//        function f() {
-//          console.log(a);  // ReferenceError: Can't find variable: a
-//        }
-//        f();
-//
-// To workaround the issue, you can use |var| instead, or an explicit reference
-// to window.xxx. This is because |let| and |const| are scoped by braces while
-// |var| isn't, and due to tricky behavior of WebKit in non-strict mode.
+// Evaluation of `javaScriptString` will fail (and return NO to `completion`)
+// if there is no current internal representation of the main frame. This can
+// occur when the web view is navigating or if the current page content does
+// not allow JavaScript execution (ex: JS disabled or PDF content).
 - (void)evaluateJavaScript:(NSString*)javaScriptString
-         completionHandler:(void (^)(id, NSError*))completionHandler;
+         completionHandler:
+             (nullable void (^)(id result,
+                                NSError* __nullable error))completion;
 
-// Registers a handler that will be called when a command matching
-// |commandPrefix| is received.
-//
-// Web pages can send a command by executing JavaScript like this:
-//   __gCrWeb.message.invokeOnHost(
-//       {'command': 'test.command1', 'key1':'value1', 'key2': 42});
-// And receive it by:
-//   [webView addScriptCommandHandler:handler commandPrefix:@"test"];
-//
-// Make sure to call -removeScriptCommandHandlerForCommandPrefix: with the same
-// prefix before deallocating a CWVWebView instance. Otherwise it causes an
-// assertion failure.
-//
-// This provides a similar functionarity to -[WKUserContentController
-// addScriptMessageHandler:name:].
-- (void)addScriptCommandHandler:(id<CWVScriptCommandHandler>)handler
-                  commandPrefix:(NSString*)commandPrefix;
+// DEPRECATED: Use `evaluateJavaScript:completionHandler` instead. These
+// methods are the same, but `evaluateJavaScript:completionHandler` provides
+// better Swift type compatibility.
+- (void)evaluateJavaScript:(NSString*)javaScriptString
+                completion:(void (^)(id result, NSError* error))completion;
 
-// Removes the handler associated with |commandPrefix|.
-- (void)removeScriptCommandHandlerForCommandPrefix:(NSString*)commandPrefix;
+// DEPRECATED: Use `CWVUserContentController addMessageHandler:forCommand:`
+// instead.
+// Adds a message handler for messages sent from JavaScript from *any*
+// CWVWebView.
+// `handler` will be called each time a message is sent with the corresponding
+// value of `command`. To send messages from JavaScript, use the WebKit
+// message handler `CWVWebViewMessage` and provide values for the `command` and
+// `payload` keys.
+// `command` must be a string and match the registered handler `command` string
+// `payload` must be a dictionary.
+//
+// Example call from JavaScript:
+//
+//  let message = {
+//    'command': 'myFeatureMessage',
+//    'payload' : {'key1':'value1', 'key2':42}
+//  }
+//  window.webkit.messageHandlers['CWVWebViewMessage'].postMessage(message);
+//
+// NOTE: Only a single `handler` may be registered for a given `command`.
+- (void)addMessageHandler:(void (^)(NSDictionary* payload))handler
+               forCommand:(NSString*)command;
+
+// DEPRECATED: Use `CWVUserContentController removeMessageHandlerForCommand:`
+// instead.
+// Removes the message handler associated with `command` previously added with
+// `addMessageHandler:forCommand:`.
+- (void)removeMessageHandlerForCommand:(NSString*)command;
 
 @end
 

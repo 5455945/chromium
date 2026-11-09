@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,15 @@ import android.content.Intent;
 import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.DeferredStartupHandler;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.media.ui.ChromeMediaNotificationManager;
 import org.chromium.chrome.browser.tab.Tab;
@@ -24,6 +28,7 @@ import org.chromium.components.media_router.MediaRouterClient;
 import org.chromium.content_public.browser.WebContents;
 
 /** Provides Chrome-specific behavior for Media Router. */
+@NullMarked
 @JNINamespace("media_router")
 public class ChromeMediaRouterClient extends MediaRouterClient {
     private ChromeMediaRouterClient() {}
@@ -61,10 +66,16 @@ public class ChromeMediaRouterClient extends MediaRouterClient {
     }
 
     @Override
-    public FragmentManager getSupportFragmentManager(WebContents initiator) {
+    public @Nullable FragmentManager getSupportFragmentManager(WebContents initiator) {
         FragmentActivity currentActivity =
                 (FragmentActivity) ApplicationStatus.getLastTrackedFocusedActivity();
         return currentActivity == null ? null : currentActivity.getSupportFragmentManager();
+    }
+
+    @Override
+    public void addDeferredTask(Runnable deferredTask) {
+        DeferredStartupHandler.getInstance().addDeferredTask(deferredTask);
+        DeferredStartupHandler.getInstance().queueDeferredTasksOnIdleHandler();
     }
 
     @CalledByNative

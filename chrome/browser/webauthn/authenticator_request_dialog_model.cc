@@ -1,964 +1,363 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
 
-#include <algorithm>
-#include <iterator>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/containers/fixed_flat_map.h"
+#include "base/functional/callback.h"
+#include "base/observer_list.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/ui/webauthn/authenticator_request_dialog_view_controller.h"
+#include "chrome/browser/ui/webauthn/authenticator_request_window.h"
+#include "chrome/browser/webauthn/authenticator_transport.h"
+#include "chrome/browser/webauthn/webauthn_pref_names.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/vector_icons/vector_icons.h"
-#include "device/fido/features.h"
-#include "device/fido/fido_authenticator.h"
-#include "device/fido/pin.h"
-#include "device/fido/public_key_credential_user_entity.h"
+#include "components/device_event_log/device_event_log.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/strings/grit/components_strings.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "device/fido/discoverable_credential_metadata.h"
+#include "device/fido/public/fido_types.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/text_elider.h"
+#include "ui/gfx/paint_vector_icon.h"
 
 namespace {
 
-constexpr int GetMessageIdForTransportDescription(
-    AuthenticatorTransport transport) {
-  switch (transport) {
-    case AuthenticatorTransport::kUsbHumanInterfaceDevice:
-      return IDS_WEBAUTHN_TRANSPORT_USB;
-    case AuthenticatorTransport::kInternal:
-      return IDS_WEBAUTHN_TRANSPORT_INTERNAL;
-    case AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy:
-      return IDS_WEBAUTHN_TRANSPORT_CABLE;
-    case AuthenticatorTransport::kAndroidAccessory:
-      return IDS_WEBAUTHN_TRANSPORT_AOA;
-    case AuthenticatorTransport::kBluetoothLowEnergy:
-    case AuthenticatorTransport::kNearFieldCommunication:
-      NOTREACHED();
-      return 0;
+// StepUiType enumerates the different types of UI that can be displayed.
+enum class StepUIType {
+  NONE,
+  // A Chromium captive dialog.
+  DIALOG,
+  // A top-level window.
+  WINDOW,
+};
+
+StepUIType step_ui_type(AuthenticatorRequestDialogModel::Step step) {
+  switch (step) {
+    case AuthenticatorRequestDialogModel::Step::kClosed:
+    case AuthenticatorRequestDialogModel::Step::kNotStarted:
+    case AuthenticatorRequestDialogModel::Step::kPasskeyAutofill:
+    case AuthenticatorRequestDialogModel::Step::kPasskeyUpgrade:
+    case AuthenticatorRequestDialogModel::Step::kPasswordOsAuth:
+    case AuthenticatorRequestDialogModel::Step::kPlatformAuthenticator:
+      return StepUIType::NONE;
+
+    case AuthenticatorRequestDialogModel::Step::kGPMRecoverSecurityDomain:
+    case AuthenticatorRequestDialogModel::Step::kGPMReauthForPinReset:
+      return StepUIType::WINDOW;
+
+    default:
+      return StepUIType::DIALOG;
   }
 }
 
-std::u16string GetTransportDescription(AuthenticatorTransport transport) {
-  const int msg_id = GetMessageIdForTransportDescription(transport);
-  if (!msg_id) {
-    return std::u16string();
+std::optional<content::GlobalRenderFrameHostId> FrameHostIdFromMaybeNull(
+    content::RenderFrameHost* render_frame_host) {
+  if (render_frame_host == nullptr) {
+    return std::nullopt;
   }
-  return l10n_util::GetStringUTF16(msg_id);
+  return render_frame_host->GetGlobalId();
 }
 
-constexpr int GetMessageIdForTransportShortDescription(
-    AuthenticatorTransport transport) {
-  switch (transport) {
-    case AuthenticatorTransport::kUsbHumanInterfaceDevice:
-      return IDS_WEBAUTHN_TRANSPORT_POPUP_USB;
-    case AuthenticatorTransport::kInternal:
-      return IDS_WEBAUTHN_TRANSPORT_POPUP_INTERNAL;
-    case AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy:
-      return IDS_WEBAUTHN_TRANSPORT_POPUP_CABLE;
-    case AuthenticatorTransport::kAndroidAccessory:
-      return IDS_WEBAUTHN_TRANSPORT_POPUP_AOA;
-    case AuthenticatorTransport::kBluetoothLowEnergy:
-    case AuthenticatorTransport::kNearFieldCommunication:
-      NOTREACHED();
-      return 0;
+content::WebContents* GetWebContentsFromFrameHostId(
+    std::optional<content::GlobalRenderFrameHostId> frame_host_id) {
+  if (!frame_host_id) {
+    return nullptr;
   }
-}
-
-std::u16string GetTransportShortDescription(AuthenticatorTransport transport) {
-  const int msg_id = GetMessageIdForTransportShortDescription(transport);
-  if (!msg_id) {
-    return std::u16string();
-  }
-  return l10n_util::GetStringUTF16(msg_id);
-}
-
-constexpr const gfx::VectorIcon* GetTransportIcon(
-    AuthenticatorTransport transport) {
-  switch (transport) {
-    case AuthenticatorTransport::kUsbHumanInterfaceDevice:
-      return &vector_icons::kUsbIcon;
-    case AuthenticatorTransport::kInternal:
-      return &kLaptopIcon;
-    case AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy:
-      return &kSmartphoneIcon;
-    case AuthenticatorTransport::kAndroidAccessory:
-      return &kUsbCableIcon;
-    case AuthenticatorTransport::kBluetoothLowEnergy:
-    case AuthenticatorTransport::kNearFieldCommunication:
-      NOTREACHED();
-      return nullptr;
-  }
+  return content::WebContents::FromRenderFrameHost(
+      content::RenderFrameHost::FromID(*frame_host_id));
 }
 
 }  // namespace
 
-AuthenticatorRequestDialogModel::EphemeralState::EphemeralState() = default;
-AuthenticatorRequestDialogModel::EphemeralState::~EphemeralState() = default;
+#define AUTHENTICATOR_REQUEST_EVENT_0(name) \
+  void AuthenticatorRequestDialogModel::Observer::name() {}
+#define AUTHENTICATOR_REQUEST_EVENT_1(name, arg1type) \
+  void AuthenticatorRequestDialogModel::Observer::name(arg1type) {}
+AUTHENTICATOR_EVENTS
+#undef AUTHENTICATOR_REQUEST_EVENT_0
+#undef AUTHENTICATOR_REQUEST_EVENT_1
+
+// static
+std::u16string AuthenticatorRequestDialogModel::GetMechanismDescription(
+    const device::DiscoverableCredentialMetadata& cred,
+    UIPresentation ui_presentation) {
+  bool immediate_mode = UIPresentation::kModalImmediate == ui_presentation;
+  if (cred.provider_name) {
+    return immediate_mode ? l10n_util::GetStringFUTF16(
+                                IDS_PASSWORD_MANAGER_PASSKEY_FROM_PROVIDER,
+                                base::UTF8ToUTF16(*cred.provider_name))
+                          : base::UTF8ToUTF16(*cred.provider_name);
+  }
+  int message;
+  switch (cred.source) {
+    case device::AuthenticatorType::kWinNative:
+      message = immediate_mode ? IDS_PASSWORD_MANAGER_PASSKEY_FROM_WINDOWS_HELLO
+                               : IDS_WEBAUTHN_SOURCE_WINDOWS_HELLO;
+      break;
+    case device::AuthenticatorType::kTouchID:
+      message = immediate_mode
+                    ? IDS_PASSWORD_MANAGER_PASSKEY_FROM_CHROME_PROFILE
+                    : IDS_WEBAUTHN_SOURCE_CHROME_PROFILE;
+      break;
+    case device::AuthenticatorType::kICloudKeychain:
+      message = immediate_mode
+                    ? IDS_PASSWORD_MANAGER_PASSKEY_FROM_ICLOUD_KEYCHAIN
+                    : IDS_WEBAUTHN_SOURCE_ICLOUD_KEYCHAIN;
+      break;
+    case device::AuthenticatorType::kEnclave:
+      message = immediate_mode
+                    ? IDS_PASSWORD_MANAGER_PASSKEY_FROM_GOOGLE_PASSWORD_MANAGER
+                    : IDS_WEBAUTHN_SOURCE_GOOGLE_PASSWORD_MANAGER;
+      break;
+    case device::AuthenticatorType::kOther:
+      // "Other" is USB security keys and the virtual authenticator.
+      CHECK(!immediate_mode);
+      message = IDS_WEBAUTHN_SOURCE_USB_SECURITY_KEY;
+      break;
+    default:
+      message = IDS_PASSWORD_MANAGER_USE_GENERIC_DEVICE;
+  }
+  return l10n_util::GetStringUTF16(message);
+}
+
+AuthenticatorRequestDialogModel::AuthenticatorRequestDialogModel(
+    content::RenderFrameHost* render_frame_host)
+    : frame_host_id(FrameHostIdFromMaybeNull(render_frame_host)) {}
+
+AuthenticatorRequestDialogModel::~AuthenticatorRequestDialogModel() {
+  for (auto& observer : observers) {
+    observer.OnModelDestroyed(this);
+  }
+}
+
+void AuthenticatorRequestDialogModel::AddObserver(
+    AuthenticatorRequestDialogModel::Observer* observer) {
+  observers.AddObserver(observer);
+}
+
+void AuthenticatorRequestDialogModel::RemoveObserver(
+    AuthenticatorRequestDialogModel::Observer* observer) {
+  observers.RemoveObserver(observer);
+}
+
+void AuthenticatorRequestDialogModel::SetStep(Step step) {
+  FIDO_LOG(EVENT) << "UI step: " << step;
+
+  const StepUIType previous_ui_type = step_ui_type(step_);
+  step_ = step;
+  ui_disabled_ = false;
+
+  const StepUIType ui_type = step_ui_type(step_);
+  auto* web_contents = GetWebContentsFromFrameHostId(frame_host_id);
+  if (ui_type != StepUIType::DIALOG) {
+    view_controller_.reset();
+    if (ui_type == StepUIType::WINDOW &&
+        previous_ui_type != StepUIType::WINDOW && web_contents) {
+      ShowAuthenticatorRequestWindow(web_contents, this);
+    }
+  } else if (previous_ui_type != StepUIType::DIALOG && web_contents) {
+    view_controller_ =
+        AuthenticatorRequestDialogViewController::Create(web_contents, this);
+  }
+
+  for (auto& observer : observers) {
+    observer.OnStepTransition();
+  }
+}
+
+void AuthenticatorRequestDialogModel::DisableUiOrShowLoadingDialog() {
+  // If the current step is showing a dialog, disable it. Else, show the GPM
+  // Connecting dialog. The native Touch ID control cannot be effectively
+  // disabled so that sheet is an exception.
+  if (step() != Step::kPasskeyAutofill &&
+      (should_dialog_be_closed() || step() == Step::kGPMTouchID)) {
+    SetStep(Step::kGPMConnecting);
+  } else {
+    ui_disabled_ = true;
+    OnSheetModelChanged();
+  }
+}
+
+bool AuthenticatorRequestDialogModel::should_dialog_be_closed() const {
+  return step_ui_type(step_) != StepUIType::DIALOG;
+}
+
+std::optional<AccountInfo>
+AuthenticatorRequestDialogModel::GetGpmAccountInfo() {
+  Profile* profile = GetProfile();
+  if (!profile) {
+    return std::nullopt;
+  }
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile->GetOriginalProfile());
+  if (!identity_manager) {
+    return std::nullopt;
+  }
+  CoreAccountInfo core_account_info =
+      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+  CHECK(!core_account_info.IsEmpty());
+  return identity_manager->FindExtendedAccountInfo(core_account_info);
+}
+
+std::string AuthenticatorRequestDialogModel::GetGpmAccountEmail() {
+  std::optional<AccountInfo> account_info = GetGpmAccountInfo();
+  if (!account_info) {
+    return "";
+  }
+  return std::string(account_info->GetEmail());
+}
+
+Profile* AuthenticatorRequestDialogModel::GetProfile() {
+  content::RenderFrameHost* rfh =
+      content::RenderFrameHost::FromID(*frame_host_id);
+  if (!rfh) {
+    return nullptr;
+  }
+  return Profile::FromBrowserContext(rfh->GetBrowserContext());
+}
+
+#define AUTHENTICATOR_REQUEST_EVENT_0(name)        \
+  void AuthenticatorRequestDialogModel::name() {   \
+    const int start_generation = this->generation; \
+    for (auto& observer : observers) {             \
+      if (start_generation != this->generation) {  \
+        break;                                     \
+      }                                            \
+      observer.name();                             \
+    }                                              \
+  }
+#define AUTHENTICATOR_REQUEST_EVENT_1(name, arg1type)         \
+  void AuthenticatorRequestDialogModel::name(arg1type arg1) { \
+    const int start_generation = this->generation;            \
+    for (auto& observer : observers) {                        \
+      if (start_generation != this->generation) {             \
+        break;                                                \
+      }                                                       \
+      observer.name(arg1);                                    \
+    }                                                         \
+  }
+AUTHENTICATOR_EVENTS
+#undef AUTHENTICATOR_REQUEST_EVENT_0
+#undef AUTHENTICATOR_REQUEST_EVENT_1
+
+std::ostream& operator<<(std::ostream& os,
+                         const AuthenticatorRequestDialogModel::Step& step) {
+  using Step = AuthenticatorRequestDialogModel::Step;
+  constexpr auto kStepNames = base::MakeFixedFlatMap<Step, std::string_view>({
+      {Step::kNotStarted, "kNotStarted"},
+      {Step::kPasskeyAutofill, "kPasskeyAutofill"},
+      {Step::kPasskeyUpgrade, "kPasskeyUpgrade"},
+      {Step::kMechanismSelection, "kMechanismSelection"},
+      {Step::kErrorNoAvailableTransports, "kErrorNoAvailableTransports"},
+      {Step::kErrorNoPasskeys, "kErrorNoPasskeys"},
+      {Step::kErrorGpmDisabled, "kErrorGpmDisabled"},
+      {Step::kErrorInternalUnrecognized, "kErrorInternalUnrecognized"},
+      {Step::kErrorWindowsHelloNotEnabled, "kErrorWindowsHelloNotEnabled"},
+      {Step::kTimedOut, "kTimedOut"},
+      {Step::kKeyNotRegistered, "kKeyNotRegistered"},
+      {Step::kKeyAlreadyRegistered, "kKeyAlreadyRegistered"},
+      {Step::kMissingCapability, "kMissingCapability"},
+      {Step::kStorageFull, "kStorageFull"},
+      {Step::kClosed, "kClosed"},
+      {Step::kUsbInsertAndActivate, "kUsbInsertAndActivate"},
+      {Step::kBlePowerOnAutomatic, "kBlePowerOnAutomatic"},
+      {Step::kBlePowerOnManual, "kBlePowerOnManual"},
+      {Step::kBlePermissionMac, "kBlePermissionMac"},
+      {Step::kOffTheRecordInterstitial, "kOffTheRecordInterstitial"},
+      {Step::kCableV2QRCode, "kCableV2QRCode"},
+      {Step::kCableV2Connecting, "kCableV2Connecting"},
+      {Step::kCableV2Connected, "kCableV2Connected"},
+      {Step::kCableV2Error, "kCableV2Error"},
+      {Step::kClientPinChange, "kClientPinChange"},
+      {Step::kClientPinEntry, "kClientPinEntry"},
+      {Step::kClientPinSetup, "kClientPinSetup"},
+      {Step::kClientPinTapAgain, "kClientPinTapAgain"},
+      {Step::kClientPinErrorSoftBlock, "kClientPinErrorSoftBlock"},
+      {Step::kClientPinErrorHardBlock, "kClientPinErrorHardBlock"},
+      {Step::kClientPinErrorAuthenticatorRemoved,
+       "kClientPinErrorAuthenticatorRemoved"},
+      {Step::kInlineBioEnrollment, "kInlineBioEnrollment"},
+      {Step::kRetryInternalUserVerification, "kRetryInternalUserVerification"},
+      {Step::kResidentCredentialConfirmation,
+       "kResidentCredentialConfirmation"},
+      {Step::kSelectAccount, "kSelectAccount"},
+      {Step::kPreSelectAccount, "kPreSelectAccount"},
+      {Step::kSelectPriorityMechanism, "kSelectPriorityMechanism"},
+      {Step::kGPMChangePin, "kGPMChangePin"},
+      {Step::kGPMCreatePin, "kGPMCreatePin"},
+      {Step::kGPMEnterPin, "kGPMEnterPin"},
+      {Step::kGPMChangeArbitraryPin, "kGPMChangeArbitraryPin"},
+      {Step::kGPMCreateArbitraryPin, "kGPMCreateArbitraryPin"},
+      {Step::kGPMEnterArbitraryPin, "kGPMEnterArbitraryPin"},
+      {Step::kGPMTouchID, "kGPMTouchID"},
+      {Step::kGPMCreatePasskey, "kGPMCreatePasskey"},
+      {Step::kChromeProfileCreatePasskey, "kChromeProfileCreatePasskey"},
+      {Step::kGPMError, "kGPMError"},
+      {Step::kGPMConnecting, "kGPMConnecting"},
+      {Step::kGPMRecoverSecurityDomain, "kGPMRecoverSecurityDomain"},
+      {Step::kGPMTrustThisComputerAssertion, "kGPMTrustThisComputerAssertion"},
+      {Step::kGPMTrustThisComputerCreation, "kGPMTrustThisComputerCreation"},
+      {Step::kGPMReauthForPinReset, "kGPMReauthForPinReset"},
+      {Step::kGPMLockedPin, "kGPMLockedPin"},
+      {Step::kPasswordOsAuth, "kPasswordAuth"},
+      {Step::kPlatformAuthenticator, "kPlatformAuthenticator"},
+  });
+  static_assert(Step::kMaxValue == Step::kPlatformAuthenticator &&
+                    kStepNames.size() - 1 == static_cast<int>(Step::kMaxValue),
+                "implement operator<< overload when adding new Step values");
+  return os << kStepNames.at(step);
+}
 
 AuthenticatorRequestDialogModel::Mechanism::Mechanism(
     AuthenticatorRequestDialogModel::Mechanism::Type in_type,
     std::u16string in_name,
-    std::u16string in_short_name,
-    const gfx::VectorIcon* in_icon,
+    const gfx::VectorIcon& in_icon,
     base::RepeatingClosure in_callback,
-    bool is_priority)
-    : name(std::move(in_name)),
-      short_name(std::move(in_short_name)),
+    std::u16string in_display_name)
+    : type(std::move(in_type)),
+      name(std::move(in_name)),
+      display_name(std::move(in_display_name)),
       icon(in_icon),
-      callback(std::move(in_callback)),
-      priority(is_priority),
-      type(std::move(in_type)) {}
+      callback(std::move(in_callback)) {}
 AuthenticatorRequestDialogModel::Mechanism::~Mechanism() = default;
 AuthenticatorRequestDialogModel::Mechanism::Mechanism(Mechanism&&) = default;
 
-AuthenticatorRequestDialogModel::PairedPhone::PairedPhone(const PairedPhone&) =
+AuthenticatorRequestDialogModel::Mechanism::CredentialInfo::CredentialInfo(
+    device::AuthenticatorType source_in,
+    std::vector<uint8_t> user_id_in,
+    std::optional<base::Time> last_used_time_in)
+    : source(source_in),
+      user_id(std::move(user_id_in)),
+      last_used_time(last_used_time_in) {}
+AuthenticatorRequestDialogModel::Mechanism::CredentialInfo::CredentialInfo(
+    const CredentialInfo&) = default;
+AuthenticatorRequestDialogModel::Mechanism::CredentialInfo::~CredentialInfo() =
     default;
-AuthenticatorRequestDialogModel::PairedPhone::PairedPhone(
-    const std::string& name,
-    size_t contact_id,
-    const std::array<uint8_t, device::kP256X962Length> public_key_x962) {
-  this->name = name;
-  this->contact_id = contact_id;
-  this->public_key_x962 = public_key_x962;
-}
-AuthenticatorRequestDialogModel::PairedPhone::~PairedPhone() = default;
-AuthenticatorRequestDialogModel::PairedPhone&
-AuthenticatorRequestDialogModel::PairedPhone::operator=(const PairedPhone&) =
+bool AuthenticatorRequestDialogModel::Mechanism::CredentialInfo::operator==(
+    const CredentialInfo&) const = default;
+
+AuthenticatorRequestDialogModel::Mechanism::PasswordInfo::PasswordInfo(
+    std::optional<base::Time> last_used_time_in,
+    std::optional<std::u16string> origin_in)
+    : last_used_time(std::move(last_used_time_in)),
+      origin(std::move(origin_in)) {}
+AuthenticatorRequestDialogModel::Mechanism::PasswordInfo::PasswordInfo(
+    const PasswordInfo&) = default;
+AuthenticatorRequestDialogModel::Mechanism::PasswordInfo::~PasswordInfo() =
     default;
-
-bool AuthenticatorRequestDialogModel::PairedPhone::CompareByName(
-    const PairedPhone& a,
-    const PairedPhone& b) {
-  return a.name < b.name;
-}
-
-void AuthenticatorRequestDialogModel::EphemeralState::Reset() {
-  selected_authenticator_id_ = absl::nullopt;
-  saved_authenticators_.RemoveAllAuthenticators();
-  users_.clear();
-}
-
-AuthenticatorRequestDialogModel::AuthenticatorRequestDialogModel(
-    const std::string& relying_party_id)
-    : relying_party_id_(relying_party_id) {}
-
-AuthenticatorRequestDialogModel::~AuthenticatorRequestDialogModel() {
-  for (auto& observer : observers_)
-    observer.OnModelDestroyed(this);
-}
-
-void AuthenticatorRequestDialogModel::HideDialog() {
-  SetCurrentStep(Step::kNotStarted);
-}
-
-void AuthenticatorRequestDialogModel::StartFlow(
-    TransportAvailabilityInfo transport_availability,
-    bool use_location_bar_bubble) {
-  DCHECK(!started_);
-  DCHECK_EQ(current_step(), Step::kNotStarted);
-
-  started_ = true;
-  transport_availability_ = std::move(transport_availability);
-  use_location_bar_bubble_ = use_location_bar_bubble;
-
-  PopulateMechanisms();
-
-  if (use_location_bar_bubble_) {
-    // This is a conditional request so show a lightweight, non-modal dialog
-    // instead.
-    StartLocationBarBubbleRequest();
-  } else {
-    StartGuidedFlowForMostLikelyTransportOrShowMechanismSelection();
-  }
-}
-
-void AuthenticatorRequestDialogModel::StartOver() {
-  ephemeral_state_.Reset();
-
-  for (auto& observer : observers_)
-    observer.OnStartOver();
-
-  if (use_location_bar_bubble_) {
-    StartLocationBarBubbleRequest();
-    return;
-  }
-  current_mechanism_.reset();
-  SetCurrentStep(Step::kMechanismSelection);
-}
-
-void AuthenticatorRequestDialogModel::
-    StartGuidedFlowForMostLikelyTransportOrShowMechanismSelection() {
-  DCHECK(current_step() == Step::kNotStarted);
-
-  const auto priority_mechanism_it =
-      std::find_if(mechanisms_.begin(), mechanisms_.end(),
-                   [](const Mechanism& m) -> bool { return m.priority; });
-
-  if (pending_step_) {
-    SetCurrentStep(*pending_step_);
-    pending_step_.reset();
-  } else if (mechanisms_.empty()) {
-    SetCurrentStep(Step::kErrorNoAvailableTransports);
-  } else if (mechanisms_.size() == 1) {
-    mechanisms_[0].callback.Run();
-  } else if (priority_mechanism_it != mechanisms_.end()) {
-    priority_mechanism_it->callback.Run();
-  } else {
-    SetCurrentStep(Step::kMechanismSelection);
-  }
-}
-
-void AuthenticatorRequestDialogModel::
-    HideDialogAndDispatchToNativeWindowsApi() {
-  if (!transport_availability()->has_win_native_api_authenticator ||
-      transport_availability()->win_native_api_authenticator_id.empty()) {
-    NOTREACHED();
-    SetCurrentStep(Step::kClosed);
-    return;
-  }
-
-  // The Windows-native UI already handles retrying so we do not offer a second
-  // level of retry in that case.
-  offer_try_again_in_ui_ = false;
-
-  // There is no AuthenticatorReference for the Windows authenticator, hence
-  // directly call DispatchRequestAsyncInternal here.
-  DispatchRequestAsyncInternal(
-      transport_availability()->win_native_api_authenticator_id);
-
-  HideDialog();
-}
-
-void AuthenticatorRequestDialogModel::OnPhoneContactFailed(
-    const std::string& name) {
-  ContactNextPhoneByName(name);
-}
-
-void AuthenticatorRequestDialogModel::StartPhonePairing() {
-  DCHECK(cable_qr_string_);
-  SetCurrentStep(Step::kCableV2QRCode);
-}
-
-void AuthenticatorRequestDialogModel::
-    EnsureBleAdapterIsPoweredAndContinueWithCable() {
-  DCHECK(current_step() == Step::kMechanismSelection ||
-         current_step() == Step::kUsbInsertAndActivate ||
-         current_step() == Step::kCableActivate ||
-         current_step() == Step::kAndroidAccessory ||
-         current_step() == Step::kOffTheRecordInterstitial ||
-         current_step() == Step::kNotStarted);
-  Step cable_step;
-  if (!base::FeatureList::IsEnabled(device::kWebAuthPhoneSupport)) {
-    // caBLEv1/2 without QR codes.
-    cable_step = Step::kCableActivate;
-  } else {
-    // caBLEv2 with QR support. Display QR code if the user never paired a phone
-    // before, or show instructions how to use the previously paired phone
-    // otherwise. The user can still decide to pair a new phone on that screen.
-    cable_step =
-        paired_phones_.empty() ? Step::kCableV2QRCode : Step::kCableV2Activate;
-  }
-  if (ble_adapter_is_powered()) {
-    SetCurrentStep(cable_step);
-    return;
-  }
-
-  next_step_once_ble_powered_ = cable_step;
-  SetCurrentStep(transport_availability()->can_power_on_ble_adapter
-                     ? Step::kBlePowerOnAutomatic
-                     : Step::kBlePowerOnManual);
-}
-
-void AuthenticatorRequestDialogModel::ContinueWithFlowAfterBleAdapterPowered() {
-  DCHECK(current_step() == Step::kBlePowerOnManual ||
-         current_step() == Step::kBlePowerOnAutomatic);
-  DCHECK(ble_adapter_is_powered());
-  DCHECK(next_step_once_ble_powered_.has_value());
-
-  SetCurrentStep(*next_step_once_ble_powered_);
-}
-
-void AuthenticatorRequestDialogModel::PowerOnBleAdapter() {
-  DCHECK_EQ(current_step(), Step::kBlePowerOnAutomatic);
-  if (!bluetooth_adapter_power_on_callback_)
-    return;
-
-  bluetooth_adapter_power_on_callback_.Run();
-}
-
-void AuthenticatorRequestDialogModel::TryUsbDevice() {
-  DCHECK_EQ(current_step(), Step::kUsbInsertAndActivate);
-}
-
-void AuthenticatorRequestDialogModel::StartPlatformAuthenticatorFlow() {
-  // Never try the platform authenticator if the request is known in advance to
-  // fail. Proceed to a special error screen instead.
-  if (transport_availability_.request_type ==
-      device::FidoRequestType::kGetAssertion) {
-    DCHECK(transport_availability_
-               .has_recognized_platform_authenticator_credential);
-    if (!*transport_availability_
-              .has_recognized_platform_authenticator_credential) {
-      SetCurrentStep(Step::kErrorInternalUnrecognized);
-      return;
-    }
-  }
-
-  if (transport_availability_.request_type ==
-          device::FidoRequestType::kMakeCredential &&
-      transport_availability_.is_off_the_record_context) {
-    after_off_the_record_interstitial_ =
-        base::BindOnce(&AuthenticatorRequestDialogModel::
-                           HideDialogAndDispatchToPlatformAuthenticator,
-                       weak_factory_.GetWeakPtr());
-    SetCurrentStep(Step::kOffTheRecordInterstitial);
-    return;
-  }
-
-  HideDialogAndDispatchToPlatformAuthenticator();
-}
-
-void AuthenticatorRequestDialogModel::OnOffTheRecordInterstitialAccepted() {
-  std::move(after_off_the_record_interstitial_).Run();
-}
-
-void AuthenticatorRequestDialogModel::ShowCableUsbFallback() {
-  DCHECK_EQ(current_step(), Step::kCableActivate);
-  SetCurrentStep(Step::kAndroidAccessory);
-}
-
-void AuthenticatorRequestDialogModel::ShowCable() {
-  DCHECK_EQ(current_step(), Step::kAndroidAccessory);
-  SetCurrentStep(Step::kCableActivate);
-}
-
-void AuthenticatorRequestDialogModel::Cancel() {
-  if (is_request_complete()) {
-    SetCurrentStep(Step::kClosed);
-  }
-
-  for (auto& observer : observers_)
-    observer.OnCancelRequest();
-}
-
-void AuthenticatorRequestDialogModel::OnSheetModelDidChange() {
-  for (auto& observer : observers_)
-    observer.OnSheetModelChanged();
-}
-
-void AuthenticatorRequestDialogModel::AddObserver(Observer* observer) {
-  observers_.AddObserver(observer);
-}
-
-void AuthenticatorRequestDialogModel::RemoveObserver(Observer* observer) {
-  observers_.RemoveObserver(observer);
-}
-
-void AuthenticatorRequestDialogModel::OnRequestComplete() {
-  SetCurrentStep(Step::kClosed);
-}
-
-void AuthenticatorRequestDialogModel::OnRequestTimeout() {
-  if (current_step_ == Step::kLocationBarBubble) {
-    Cancel();
-    return;
-  }
-  // The request may time out while the UI shows a different error.
-  if (!is_request_complete()) {
-    SetCurrentStep(Step::kTimedOut);
-  }
-}
-
-void AuthenticatorRequestDialogModel::OnActivatedKeyNotRegistered() {
-  DCHECK(!is_request_complete());
-  SetCurrentStep(Step::kKeyNotRegistered);
-}
-
-void AuthenticatorRequestDialogModel::OnActivatedKeyAlreadyRegistered() {
-  DCHECK(!is_request_complete());
-  SetCurrentStep(Step::kKeyAlreadyRegistered);
-}
-
-void AuthenticatorRequestDialogModel::OnSoftPINBlock() {
-  SetCurrentStep(Step::kClientPinErrorSoftBlock);
-}
-
-void AuthenticatorRequestDialogModel::OnHardPINBlock() {
-  SetCurrentStep(Step::kClientPinErrorHardBlock);
-}
-
-void AuthenticatorRequestDialogModel::OnAuthenticatorRemovedDuringPINEntry() {
-  SetCurrentStep(Step::kClientPinErrorAuthenticatorRemoved);
-}
-
-void AuthenticatorRequestDialogModel::OnAuthenticatorMissingResidentKeys() {
-  SetCurrentStep(Step::kMissingCapability);
-}
-
-void AuthenticatorRequestDialogModel::OnAuthenticatorMissingUserVerification() {
-  SetCurrentStep(Step::kMissingCapability);
-}
-
-void AuthenticatorRequestDialogModel::OnAuthenticatorMissingLargeBlob() {
-  SetCurrentStep(Step::kMissingCapability);
-}
-
-void AuthenticatorRequestDialogModel::OnNoCommonAlgorithms() {
-  SetCurrentStep(Step::kMissingCapability);
-}
-
-void AuthenticatorRequestDialogModel::OnAuthenticatorStorageFull() {
-  SetCurrentStep(Step::kStorageFull);
-}
-
-void AuthenticatorRequestDialogModel::OnUserConsentDenied() {
-  if (use_location_bar_bubble_) {
-    // Do not show a page-modal retry error sheet if the user cancelled out of
-    // their platform authenticator while displaying the location bar bubble UI.
-    Cancel();
-    return;
-  }
-  SetCurrentStep(Step::kErrorInternalUnrecognized);
-}
-
-bool AuthenticatorRequestDialogModel::OnWinUserCancelled() {
-  return false;
-}
-
-void AuthenticatorRequestDialogModel::OnBluetoothPoweredStateChanged(
-    bool powered) {
-  transport_availability_.is_ble_powered = powered;
-
-  for (auto& observer : observers_)
-    observer.OnBluetoothPoweredStateChanged();
-
-  // For the manual flow, the user has to click the "next" button explicitly.
-  if (current_step() == Step::kBlePowerOnAutomatic)
-    ContinueWithFlowAfterBleAdapterPowered();
-}
-
-void AuthenticatorRequestDialogModel::SetRequestCallback(
-    RequestCallback request_callback) {
-  request_callback_ = request_callback;
-}
-
-void AuthenticatorRequestDialogModel::SetBluetoothAdapterPowerOnCallback(
-    base::RepeatingClosure bluetooth_adapter_power_on_callback) {
-  bluetooth_adapter_power_on_callback_ = bluetooth_adapter_power_on_callback;
-}
-
-void AuthenticatorRequestDialogModel::OnHavePIN(std::u16string pin) {
-  if (!pin_callback_) {
-    // Protect against the view submitting a PIN more than once without
-    // receiving a matching response first. |CollectPIN| is called again if
-    // the user needs to be prompted for a retry.
-    return;
-  }
-  std::move(pin_callback_).Run(pin);
-}
-
-void AuthenticatorRequestDialogModel::OnRetryUserVerification(int attempts) {
-  uv_attempts_ = attempts;
-  SetCurrentStep(Step::kRetryInternalUserVerification);
-}
-
-void AuthenticatorRequestDialogModel::OnResidentCredentialConfirmed() {
-  DCHECK_EQ(current_step(), Step::kResidentCredentialConfirmation);
-  HideDialogAndDispatchToNativeWindowsApi();
-}
-
-void AuthenticatorRequestDialogModel::OnAttestationPermissionResponse(
-    bool attestation_permission_granted) {
-  if (!attestation_callback_) {
-    return;
-  }
-  std::move(attestation_callback_).Run(attestation_permission_granted);
-}
-
-void AuthenticatorRequestDialogModel::AddAuthenticator(
-    const device::FidoAuthenticator& authenticator) {
-  if (!authenticator.AuthenticatorTransport()) {
-#if defined(OS_WIN)
-    DCHECK(authenticator.IsWinNativeApiAuthenticator());
-#endif  // defined(OS_WIN)
-    return;
-  }
-
-  AuthenticatorReference authenticator_reference(
-      authenticator.GetId(), *authenticator.AuthenticatorTransport());
-
-  ephemeral_state_.saved_authenticators_.AddAuthenticator(
-      std::move(authenticator_reference));
-}
-
-void AuthenticatorRequestDialogModel::RemoveAuthenticator(
-    base::StringPiece authenticator_id) {
-  ephemeral_state_.saved_authenticators_.RemoveAuthenticator(authenticator_id);
-}
-
-// SelectAccount is called to trigger an account selection dialog.
-void AuthenticatorRequestDialogModel::SelectAccount(
-    std::vector<device::AuthenticatorGetAssertionResponse> responses,
-    base::OnceCallback<void(device::AuthenticatorGetAssertionResponse)>
-        callback) {
-  if (preselected_account_) {
-    for (auto& response : responses) {
-      if (response.user_entity == preselected_account_) {
-        std::move(callback).Run(std::move(response));
-        return;
-      }
-    }
-    // The user selected an account that was not part of the responses. This
-    // shouldn't really happen, cancel the request.
-    Cancel();
-    return;
-  }
-  ephemeral_state_.responses_ = std::move(responses);
-  ephemeral_state_.users_ = {};
-  for (const auto& response : ephemeral_state_.responses_) {
-    ephemeral_state_.users_.push_back(*response.user_entity);
-  }
-  selection_callback_ = std::move(callback);
-  SetCurrentStep(Step::kSelectAccount);
-}
-
-void AuthenticatorRequestDialogModel::OnAccountSelected(size_t index) {
-  if (ephemeral_state_.responses_.empty()) {
-    // An account has been pre-selected from the conditional UI prompt.
-    preselected_account_ = std::move(ephemeral_state_.users_.at(index));
-    ephemeral_state_.users_.clear();
-    HideDialogAndDispatchToPlatformAuthenticator();
-    return;
-  }
-
-  if (!selection_callback_) {
-    // It's possible that the user could activate the dialog more than once
-    // before the Webauthn request is completed and its torn down.
-    return;
-  }
-
-  device::AuthenticatorGetAssertionResponse response =
-      std::move(ephemeral_state_.responses_.at(index));
-  ephemeral_state_.users_.clear();
-  ephemeral_state_.responses_.clear();
-  std::move(selection_callback_).Run(std::move(response));
-}
-
-void AuthenticatorRequestDialogModel::SetSelectedAuthenticatorForTesting(
-    AuthenticatorReference test_authenticator) {
-  ephemeral_state_.selected_authenticator_id_ =
-      test_authenticator.authenticator_id;
-  ephemeral_state_.saved_authenticators_.AddAuthenticator(
-      std::move(test_authenticator));
-}
-
-base::span<const AuthenticatorRequestDialogModel::Mechanism>
-AuthenticatorRequestDialogModel::mechanisms() const {
-  return mechanisms_;
-}
-
-absl::optional<size_t> AuthenticatorRequestDialogModel::current_mechanism()
-    const {
-  return current_mechanism_;
-}
-
-void AuthenticatorRequestDialogModel::ContactPhoneForTesting(
-    const std::string& name) {
-  ContactPhone(name, /*mechanism_index=*/0);
-}
-
-void AuthenticatorRequestDialogModel::StartTransportFlowForTesting(
-    AuthenticatorTransport transport) {
-  StartGuidedFlowForTransport(transport, /*mechanism_index=*/0);
-}
-
-void AuthenticatorRequestDialogModel::SetCurrentStepForTesting(Step step) {
-  SetCurrentStep(step);
-}
-
-bool AuthenticatorRequestDialogModel::cable_should_suggest_usb() const {
-  return base::Contains(transport_availability_.available_transports,
-                        AuthenticatorTransport::kAndroidAccessory);
-}
-
-void AuthenticatorRequestDialogModel::CollectPIN(
-    device::pin::PINEntryReason reason,
-    device::pin::PINEntryError error,
-    uint32_t min_pin_length,
-    int attempts,
-    base::OnceCallback<void(std::u16string)> provide_pin_cb) {
-  pin_callback_ = std::move(provide_pin_cb);
-  min_pin_length_ = min_pin_length;
-  pin_error_ = error;
-  switch (reason) {
-    case device::pin::PINEntryReason::kChallenge:
-      pin_attempts_ = attempts;
-      SetCurrentStep(Step::kClientPinEntry);
-      return;
-    case device::pin::PINEntryReason::kChange:
-      SetCurrentStep(Step::kClientPinChange);
-      return;
-    case device::pin::PINEntryReason::kSet:
-      SetCurrentStep(Step::kClientPinSetup);
-      return;
-  }
-}
-
-void AuthenticatorRequestDialogModel::FinishCollectToken() {
-  SetCurrentStep(Step::kClientPinTapAgain);
-}
-
-void AuthenticatorRequestDialogModel::StartInlineBioEnrollment(
-    base::OnceClosure next_callback) {
-  max_bio_samples_ = absl::nullopt;
-  bio_samples_remaining_ = absl::nullopt;
-  bio_enrollment_callback_ = std::move(next_callback);
-  SetCurrentStep(Step::kInlineBioEnrollment);
-}
-
-void AuthenticatorRequestDialogModel::OnSampleCollected(
-    int bio_samples_remaining) {
-  DCHECK(current_step_ == Step::kInlineBioEnrollment);
-
-  bio_samples_remaining_ = bio_samples_remaining;
-  if (!max_bio_samples_) {
-    max_bio_samples_ = bio_samples_remaining + 1;
-  }
-  OnSheetModelDidChange();
-}
-
-void AuthenticatorRequestDialogModel::OnBioEnrollmentDone() {
-  std::move(bio_enrollment_callback_).Run();
-}
-
-void AuthenticatorRequestDialogModel::RequestAttestationPermission(
-    bool is_enterprise_attestation,
-    base::OnceCallback<void(bool)> callback) {
-  DCHECK(current_step_ != Step::kClosed);
-  attestation_callback_ = std::move(callback);
-  SetCurrentStep(is_enterprise_attestation
-                     ? Step::kEnterpriseAttestationPermissionRequest
-                     : Step::kAttestationPermissionRequest);
-}
-
-void AuthenticatorRequestDialogModel::set_cable_transport_info(
-    absl::optional<bool> extension_is_v2,
-    std::vector<PairedPhone> paired_phones,
-    base::RepeatingCallback<void(size_t)> contact_phone_callback,
-    const absl::optional<std::string>& cable_qr_string) {
-  DCHECK(paired_phones.empty() || contact_phone_callback);
-
-  if (extension_is_v2.has_value()) {
-    cable_extension_provided_ = true;
-    if (*extension_is_v2) {
-      cable_ui_type_ = CableUIType::CABLE_V2_SERVER_LINK;
-    } else {
-      cable_ui_type_ = CableUIType::CABLE_V1;
-    }
-  } else {
-    cable_ui_type_ = CableUIType::CABLE_V2_2ND_FACTOR;
-  }
-
-  paired_phones_ = std::move(paired_phones);
-  contact_phone_callback_ = std::move(contact_phone_callback);
-  cable_qr_string_ = cable_qr_string;
-
-  std::stable_sort(paired_phones_.begin(), paired_phones_.end(),
-                   PairedPhone::CompareByName);
-  paired_phones_contacted_.assign(paired_phones_.size(), false);
-}
-
-std::vector<std::string> AuthenticatorRequestDialogModel::paired_phone_names()
-    const {
-  DCHECK(std::is_sorted(paired_phones_.begin(), paired_phones_.end(),
-                        PairedPhone::CompareByName));
-
-  std::vector<std::string> names;
-  std::transform(paired_phones_.begin(), paired_phones_.end(),
-                 std::back_inserter(names),
-                 [](const PairedPhone& phone) -> const std::string& {
-                   return phone.name;
-                 });
-  names.erase(std::unique(names.begin(), names.end()), names.end());
-  return names;
-}
-
-base::WeakPtr<AuthenticatorRequestDialogModel>
-AuthenticatorRequestDialogModel::GetWeakPtr() {
-  return weak_factory_.GetWeakPtr();
-}
-
-void AuthenticatorRequestDialogModel::SetCurrentStep(Step step) {
-  if (!started_) {
-    // Dialog isn't showing yet. Remember to show this step when it appears.
-    pending_step_ = step;
-    return;
-  }
-
-  current_step_ = step;
-  for (auto& observer : observers_)
-    observer.OnStepTransition();
-}
-
-void AuthenticatorRequestDialogModel::StartGuidedFlowForTransport(
-    AuthenticatorTransport transport,
-    size_t mechanism_index) {
-  current_mechanism_ = mechanism_index;
-
-  DCHECK(current_step() == Step::kMechanismSelection ||
-         current_step() == Step::kUsbInsertAndActivate ||
-         current_step() == Step::kCableActivate ||
-         current_step() == Step::kAndroidAccessory ||
-         current_step() == Step::kNotStarted);
-  switch (transport) {
-    case AuthenticatorTransport::kUsbHumanInterfaceDevice:
-      SetCurrentStep(Step::kUsbInsertAndActivate);
-      break;
-    case AuthenticatorTransport::kInternal:
-      StartPlatformAuthenticatorFlow();
-      break;
-    case AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy:
-      EnsureBleAdapterIsPoweredAndContinueWithCable();
-      break;
-    case AuthenticatorTransport::kAndroidAccessory:
-      SetCurrentStep(Step::kAndroidAccessory);
-      break;
-    default:
-      break;
-  }
-}
-
-void AuthenticatorRequestDialogModel::StartWinNativeApi(
-    size_t mechanism_index) {
-  DCHECK(transport_availability_.has_win_native_api_authenticator);
-  current_mechanism_ = mechanism_index;
-
-  if (resident_key_requirement() !=
-          device::ResidentKeyRequirement::kDiscouraged &&
-      !transport_availability_.win_native_ui_shows_resident_credential_notice) {
-    SetCurrentStep(Step::kResidentCredentialConfirmation);
-  } else {
-    HideDialogAndDispatchToNativeWindowsApi();
-  }
-}
-
-void AuthenticatorRequestDialogModel::ContactPhone(const std::string& name,
-                                                   size_t mechanism_index) {
-  current_mechanism_ = mechanism_index;
-
-  if (transport_availability_.request_type ==
-          device::FidoRequestType::kMakeCredential &&
-      transport_availability_.is_off_the_record_context) {
-    after_off_the_record_interstitial_ =
-        base::BindOnce(&AuthenticatorRequestDialogModel::
-                           ContactPhoneAfterOffTheRecordInterstitial,
-                       weak_factory_.GetWeakPtr(), name);
-    SetCurrentStep(Step::kOffTheRecordInterstitial);
-    return;
-  }
-
-  ContactPhoneAfterOffTheRecordInterstitial(name);
-}
-
-void AuthenticatorRequestDialogModel::ContactPhoneAfterOffTheRecordInterstitial(
-    std::string name) {
-  ContactNextPhoneByName(name);
-  EnsureBleAdapterIsPoweredAndContinueWithCable();
-}
-
-void AuthenticatorRequestDialogModel::StartLocationBarBubbleRequest() {
-  ephemeral_state_.users_ = {};
-  for (const auto& user :
-       transport_availability_.recognized_platform_authenticator_credentials) {
-    ephemeral_state_.users_.push_back(user);
-  }
-  SetCurrentStep(Step::kLocationBarBubble);
-}
-
-void AuthenticatorRequestDialogModel::DispatchRequestAsync(
-    AuthenticatorReference* authenticator) {
-  // Dispatching to the same authenticator twice may result in unexpected
-  // behavior.
-  if (authenticator->dispatched) {
-    return;
-  }
-
-  DispatchRequestAsyncInternal(authenticator->authenticator_id);
-  authenticator->dispatched = true;
-}
-
-void AuthenticatorRequestDialogModel::DispatchRequestAsyncInternal(
-    const std::string& authenticator_id) {
-  if (!request_callback_)
-    return;
-
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(request_callback_, authenticator_id));
-}
-
-void AuthenticatorRequestDialogModel::ContactNextPhoneByName(
-    const std::string& name) {
-  DCHECK(std::is_sorted(paired_phones_.begin(), paired_phones_.end(),
-                        PairedPhone::CompareByName));
-
-  bool found_name = false;
-  for (size_t i = 0; i != paired_phones_.size(); i++) {
-    const PairedPhone& phone = paired_phones_[i];
-    if (phone.name == name) {
-      found_name = true;
-      if (!paired_phones_contacted_[i]) {
-        paired_phones_contacted_[i] = true;
-        contact_phone_callback_.Run(phone.contact_id);
-        break;
-      }
-    } else if (found_name) {
-      // |paired_phones_| is sorted by name so as soon as we see a mismatch
-      // after a match, we're done.
-      break;
-    }
-  }
-
-  DCHECK(found_name);
-}
-
-void AuthenticatorRequestDialogModel::PopulateMechanisms() {
-  const bool is_get_assertion = transport_availability_.request_type ==
-                                device::FidoRequestType::kGetAssertion;
-  // priority_transport contains the transport that should be activated
-  // immediately, if this is a getAssertion.
-  absl::optional<AuthenticatorTransport> priority_transport;
-
-  if (base::Contains(transport_availability_.available_transports,
-                     AuthenticatorTransport::kInternal) &&
-      is_get_assertion &&
-      *transport_availability_
-           .has_recognized_platform_authenticator_credential) {
-    priority_transport = AuthenticatorTransport::kInternal;
-  }
-
-  std::vector<AuthenticatorTransport> transports_to_list_if_active = {
-      AuthenticatorTransport::kUsbHumanInterfaceDevice,
-      AuthenticatorTransport::kInternal,
-  };
-
-  if (cable_ui_type_) {
-    switch (*cable_ui_type_) {
-      case AuthenticatorRequestDialogModel::CableUIType::CABLE_V2_2ND_FACTOR:
-        if (!base::FeatureList::IsEnabled(device::kWebAuthPhoneSupport)) {
-          break;
-        }
-        [[fallthrough]];
-
-      case AuthenticatorRequestDialogModel::CableUIType::CABLE_V2_SERVER_LINK:
-        transports_to_list_if_active.push_back(
-            AuthenticatorTransport::kAndroidAccessory);
-        [[fallthrough]];
-
-      case AuthenticatorRequestDialogModel::CableUIType::CABLE_V1: {
-        const auto cable =
-            AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy;
-        if (base::Contains(transport_availability_.available_transports,
-                           cable)) {
-          transports_to_list_if_active.push_back(cable);
-          DCHECK(is_get_assertion ||
-                 base::FeatureList::IsEnabled(device::kWebAuthPhoneSupport));
-          if (!priority_transport) {
-            priority_transport = cable;
-          }
-
-          // If this is a caBLEv1 or server-link request then offering to "Try
-          // Again" is unfortunate because the server won't send another ping
-          // to the phone. It is valid if trying to use USB devices but the
-          // confusion of the caBLE case overrides that.
-          //
-          // The only other case here is device::kWebAuthPhoneSupport mode,
-          // which is purely for testing so we don't worry about it.
-          offer_try_again_in_ui_ = false;
-        }
-        break;
-      }
-    }
-  }
-
-  for (const auto transport : transports_to_list_if_active) {
-    if (!base::Contains(transport_availability_.available_transports,
-                        transport)) {
-      continue;
-    }
-
-    mechanisms_.emplace_back(
-        Mechanism::Transport(transport), GetTransportDescription(transport),
-        GetTransportShortDescription(transport), GetTransportIcon(transport),
-        base::BindRepeating(
-            &AuthenticatorRequestDialogModel::StartGuidedFlowForTransport,
-            base::Unretained(this), transport, mechanisms_.size()),
-        transport_availability_.request_type ==
-                device::FidoRequestType::kGetAssertion &&
-            priority_transport.has_value() && *priority_transport == transport);
-  }
-
-  if (win_native_api_enabled()) {
-    const std::u16string desc = l10n_util::GetStringUTF16(
-        IDS_WEBAUTHN_TRANSPORT_POPUP_DIFFERENT_AUTHENTICATOR_WIN);
-    mechanisms_.emplace_back(
-        Mechanism::WindowsAPI(/*unused*/ true), desc, desc,
-        GetTransportIcon(AuthenticatorTransport::kUsbHumanInterfaceDevice),
-        base::BindRepeating(&AuthenticatorRequestDialogModel::StartWinNativeApi,
-                            base::Unretained(this), mechanisms_.size()),
-        // The Windows API should have priority unless caBLE does or if there
-        // are linked phones.
-        !priority_transport.has_value() && paired_phones_.empty());
-  }
-
-  if (base::Contains(
-          transport_availability_.available_transports,
-          AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy)) {
-    for (const auto& phone_name : paired_phone_names()) {
-      const std::u16string name16 = base::UTF8ToUTF16(phone_name);
-      static constexpr size_t kMaxLongNameChars = 50;
-      static constexpr size_t kMaxShortNameChars = 30;
-      std::u16string long_name, short_name;
-      gfx::ElideString(name16, kMaxLongNameChars, &long_name);
-      gfx::ElideString(name16, kMaxShortNameChars, &short_name);
-
-      mechanisms_.emplace_back(
-          Mechanism::Phone(phone_name), std::move(long_name),
-          std::move(short_name), &kSmartphoneIcon,
-          base::BindRepeating(&AuthenticatorRequestDialogModel::ContactPhone,
-                              base::Unretained(this), phone_name,
-                              mechanisms_.size()),
-          /*priority=*/false);
-    }
-  }
-
-  // At most one mechanism has priority.
-  DCHECK_LE(std::count_if(mechanisms_.begin(), mechanisms_.end(),
-                          [](const Mechanism& m) { return m.priority; }),
-            1);
-}
-
-void AuthenticatorRequestDialogModel::
-    HideDialogAndDispatchToPlatformAuthenticator() {
-  HideDialog();
-
-  auto& authenticators =
-      ephemeral_state_.saved_authenticators_.authenticator_list();
-  auto platform_authenticator_it =
-      std::find_if(authenticators.begin(), authenticators.end(),
-                   [](const auto& authenticator) {
-                     return authenticator.transport ==
-                            device::FidoTransportProtocol::kInternal;
-                   });
-
-  if (platform_authenticator_it == authenticators.end()) {
-    return;
-  }
-
-  DispatchRequestAsync(&*platform_authenticator_it);
-}
+bool AuthenticatorRequestDialogModel::Mechanism::PasswordInfo::operator==(
+    const PasswordInfo&) const = default;

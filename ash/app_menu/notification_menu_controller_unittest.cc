@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 
 #include "ash/app_menu/app_menu_model_adapter.h"
 #include "ash/test/ash_test_base.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/submenu_view.h"
 
@@ -24,8 +27,8 @@ void BuildAndSendNotification(const std::string& app_id,
   std::unique_ptr<message_center::Notification> notification =
       std::make_unique<message_center::Notification>(
           message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
-          u"Test Web Notification", u"Notification message body.", gfx::Image(),
-          u"www.test.org", GURL(), notifier_id,
+          u"Test Web Notification", u"Notification message body.",
+          ui::ImageModel(), u"www.test.org", GURL(), notifier_id,
           message_center::RichNotificationData(), nullptr /* delegate */);
   message_center::MessageCenter::Get()->AddNotification(
       std::move(notification));
@@ -38,15 +41,16 @@ class TestAppMenuModelAdapter : public AppMenuModelAdapter {
       : AppMenuModelAdapter(app_id,
                             std::move(model),
                             nullptr,
-                            ui::MENU_SOURCE_TYPE_LAST,
+                            ui::mojom::MenuSourceType::kMaxValue,
                             base::OnceClosure(),
                             false /* is_tablet_mode */) {}
+
+  TestAppMenuModelAdapter(const TestAppMenuModelAdapter&) = delete;
+  TestAppMenuModelAdapter& operator=(const TestAppMenuModelAdapter&) = delete;
 
  private:
   // AppMenuModelAdapter overrides:
   void RecordHistogramOnMenuClosed() override {}
-
-  DISALLOW_COPY_AND_ASSIGN(TestAppMenuModelAdapter);
 };
 
 }  // namespace
@@ -54,10 +58,17 @@ class TestAppMenuModelAdapter : public AppMenuModelAdapter {
 class NotificationMenuControllerTest : public AshTestBase {
  public:
   NotificationMenuControllerTest() = default;
+
+  NotificationMenuControllerTest(const NotificationMenuControllerTest&) =
+      delete;
+  NotificationMenuControllerTest& operator=(
+      const NotificationMenuControllerTest&) = delete;
+
   ~NotificationMenuControllerTest() override {}
 
   // Overridden from AshTestBase:
   void TearDown() override {
+    root_menu_item_view_.reset();
     // NotificationMenuController removes itself from MessageCenter's observer
     // list in the dtor, so force it to happen first to prevent a crash. This
     // crash does not repro in production.
@@ -73,29 +84,26 @@ class NotificationMenuControllerTest : public AshTestBase {
     test_app_menu_model_adapter_->model()->AddItem(0, u"item 0");
     test_app_menu_model_adapter_->model()->AddItem(1, u"item 1");
 
-    root_menu_item_view_ =
-        new views::MenuItemView(test_app_menu_model_adapter_.get());
-    host_view_ = std::make_unique<views::View>();
-    host_view_->AddChildView(root_menu_item_view_);
-    test_app_menu_model_adapter_->BuildMenu(root_menu_item_view_);
+    root_menu_item_view_ = std::make_unique<views::MenuItemView>(
+        test_app_menu_model_adapter_.get());
+    test_app_menu_model_adapter_->BuildMenu(root_menu_item_view());
 
     notification_menu_controller_ =
         std::make_unique<NotificationMenuController>(
-            kTestAppId, root_menu_item_view_,
+            kTestAppId, root_menu_item_view(),
             test_app_menu_model_adapter_.get());
   }
 
-  views::MenuItemView* root_menu_item_view() { return root_menu_item_view_; }
+  views::MenuItemView* root_menu_item_view() {
+    return root_menu_item_view_.get();
+  }
 
  private:
-  // The root MenuItemView. Owned by |host_view_|.
-  views::MenuItemView* root_menu_item_view_ = nullptr;
-  // Allows the dtor to access the restricted views::MenuItemView dtor.
-  std::unique_ptr<views::View> host_view_;
+  // The root `MenuItemView`. In production, it is created and owned by the
+  // `AppMenuModelAdapter`. In this test setup, the test fixture owns it.
+  std::unique_ptr<views::MenuItemView> root_menu_item_view_;
   std::unique_ptr<NotificationMenuController> notification_menu_controller_;
   std::unique_ptr<TestAppMenuModelAdapter> test_app_menu_model_adapter_;
-
-  DISALLOW_COPY_AND_ASSIGN(NotificationMenuControllerTest);
 };
 
 // Tests that NotificationMenuController does not add the

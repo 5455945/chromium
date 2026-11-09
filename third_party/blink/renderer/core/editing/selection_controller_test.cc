@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,12 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/page/focus_controller.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -39,7 +41,7 @@ class SelectionControllerTest : public EditingTestBase {
   }
 
   HitTestResult HitTestResultAtLocation(int x, int y) {
-    HitTestLocation location(IntPoint(x, y));
+    HitTestLocation location(gfx::Point(x, y));
     return HitTestResultAtLocation(location);
   }
 
@@ -48,8 +50,8 @@ class SelectionControllerTest : public EditingTestBase {
     return hit_test_result.GetPosition();
   }
 
-  VisibleSelection VisibleSelectionInDOMTree() const {
-    return Selection().ComputeVisibleSelectionInDOMTree();
+  VisibleSelection VisibleSelectionInDomTree() const {
+    return Selection().ComputeVisibleSelectionInDomTree();
   }
 
   VisibleSelectionInFlatTree GetVisibleSelectionInFlatTree() const {
@@ -91,28 +93,15 @@ void SelectionControllerTest::SetNonDirectionalSelectionIfNeeded(
           SelectionController::kDoNotAdjustEndpoints);
 }
 
-class ParameterizedSelectionControllerTest
-    : public SelectionControllerTest,
-      public testing::WithParamInterface<bool>,
-      private ScopedLayoutNGForTest {
- public:
-  ParameterizedSelectionControllerTest() : ScopedLayoutNGForTest(GetParam()) {}
-
-  bool LayoutNGEnabled() const { return GetParam(); }
-};
-
-INSTANTIATE_TEST_SUITE_P(SelectionControllerTest,
-                         ParameterizedSelectionControllerTest,
-                         testing::Bool());
-
 TEST_F(SelectionControllerTest, setNonDirectionalSelectionIfNeeded) {
   const char* body_content = "<span id=top>top</span><span id=host></span>";
   const char* shadow_content = "<span id=bottom>bottom</span>";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* top = GetDocument().getElementById("top")->firstChild();
-  Node* bottom = shadow_root->getElementById("bottom")->firstChild();
+  Node* top = GetElementById("top")->firstChild();
+  Node* bottom =
+      shadow_root->getElementById(AtomicString("bottom"))->firstChild();
 
   // top to bottom
   SetNonDirectionalSelectionIfNeeded(SelectionInFlatTree::Builder()
@@ -120,16 +109,16 @@ TEST_F(SelectionControllerTest, setNonDirectionalSelectionIfNeeded) {
                                          .Extend(PositionInFlatTree(bottom, 3))
                                          .Build(),
                                      TextGranularity::kCharacter);
-  EXPECT_EQ(VisibleSelectionInDOMTree().Start(),
-            VisibleSelectionInDOMTree().Base());
-  EXPECT_EQ(VisibleSelectionInDOMTree().End(),
-            VisibleSelectionInDOMTree().Extent());
-  EXPECT_EQ(Position(top, 1), VisibleSelectionInDOMTree().Start());
-  EXPECT_EQ(Position(top, 3), VisibleSelectionInDOMTree().End());
+  auto selection = VisibleSelectionInDomTree();
+  EXPECT_EQ(selection.Start(), selection.Anchor());
+  EXPECT_EQ(selection.End(), selection.Focus());
+  EXPECT_EQ(Position(top, 1), selection.Start());
+  EXPECT_EQ(Position(top, 3), selection.End());
 
-  EXPECT_EQ(PositionInFlatTree(top, 1), GetVisibleSelectionInFlatTree().Base());
+  EXPECT_EQ(PositionInFlatTree(top, 1),
+            GetVisibleSelectionInFlatTree().Anchor());
   EXPECT_EQ(PositionInFlatTree(bottom, 3),
-            GetVisibleSelectionInFlatTree().Extent());
+            GetVisibleSelectionInFlatTree().Focus());
   EXPECT_EQ(PositionInFlatTree(top, 1),
             GetVisibleSelectionInFlatTree().Start());
   EXPECT_EQ(PositionInFlatTree(bottom, 3),
@@ -142,17 +131,16 @@ TEST_F(SelectionControllerTest, setNonDirectionalSelectionIfNeeded) {
           .Extend(PositionInFlatTree(top, 1))
           .Build(),
       TextGranularity::kCharacter);
-  EXPECT_EQ(VisibleSelectionInDOMTree().End(),
-            VisibleSelectionInDOMTree().Base());
-  EXPECT_EQ(VisibleSelectionInDOMTree().Start(),
-            VisibleSelectionInDOMTree().Extent());
-  EXPECT_EQ(Position(bottom, 0), VisibleSelectionInDOMTree().Start());
-  EXPECT_EQ(Position(bottom, 3), VisibleSelectionInDOMTree().End());
+  selection = VisibleSelectionInDomTree();
+  EXPECT_EQ(selection.End(), selection.Anchor());
+  EXPECT_EQ(selection.Start(), selection.Focus());
+  EXPECT_EQ(Position(bottom, 0), selection.Start());
+  EXPECT_EQ(Position(bottom, 3), selection.End());
 
   EXPECT_EQ(PositionInFlatTree(bottom, 3),
-            GetVisibleSelectionInFlatTree().Base());
+            GetVisibleSelectionInFlatTree().Anchor());
   EXPECT_EQ(PositionInFlatTree(top, 1),
-            GetVisibleSelectionInFlatTree().Extent());
+            GetVisibleSelectionInFlatTree().Focus());
   EXPECT_EQ(PositionInFlatTree(top, 1),
             GetVisibleSelectionInFlatTree().Start());
   EXPECT_EQ(PositionInFlatTree(bottom, 3),
@@ -164,13 +152,13 @@ TEST_F(SelectionControllerTest, setCaretAtHitTestResult) {
   SetBodyContent(body_content);
   GetDocument().GetSettings()->SetScriptEnabled(true);
   Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
-  script->setInnerHTML(
+  script->SetInnerHTMLWithoutTrustedTypes(
       "var sample = document.getElementById('sample');"
       "sample.addEventListener('onselectstart', "
       "  event => elem.parentNode.removeChild(elem));");
   GetDocument().body()->AppendChild(script);
   UpdateAllLifecyclePhasesForTest();
-  HitTestLocation location((IntPoint(8, 8)));
+  HitTestLocation location((gfx::Point(8, 8)));
   GetFrame().GetEventHandler().GetSelectionController().HandleGestureLongPress(
       GetFrame().GetEventHandler().HitTestResultAtLocation(location));
 }
@@ -185,12 +173,12 @@ TEST_F(SelectionControllerTest, setCaretAtHitTestResultWithNullPosition) {
       "<div id=sample></div>");
   UpdateAllLifecyclePhasesForTest();
 
-  // Hit "&nbsp;" in before pseudo element of "sample".
-  HitTestLocation location((IntPoint(10, 10)));
+  // Hit "&nbsp;" in before pseudo-element of "sample".
+  HitTestLocation location((gfx::Point(10, 10)));
   SetCaretAtHitTestResult(
       GetFrame().GetEventHandler().HitTestResultAtLocation(location));
 
-  EXPECT_TRUE(Selection().GetSelectionInDOMTree().IsNone());
+  EXPECT_TRUE(Selection().GetSelectionInDomTree().IsNone());
 }
 
 // For http://crbug.com/759971
@@ -198,7 +186,7 @@ TEST_F(SelectionControllerTest,
        SetCaretAtHitTestResultWithDisconnectedPosition) {
   GetDocument().GetSettings()->SetScriptEnabled(true);
   Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
-  script->setInnerHTML(
+  script->SetInnerHTMLWithoutTrustedTypes(
       "document.designMode = 'on';"
       "const selection = window.getSelection();"
       "const html = document.getElementsByTagName('html')[0];"
@@ -221,7 +209,7 @@ TEST_F(SelectionControllerTest,
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   mouse_event.SetFrameScale(1);
-  HitTestLocation location((IntPoint(0, 0)));
+  HitTestLocation location((gfx::Point(0, 0)));
   GetFrame().GetEventHandler().GetSelectionController().HandleMousePressEvent(
       MouseEventWithHitTestResults(
           mouse_event, location,
@@ -233,7 +221,7 @@ TEST_F(SelectionControllerTest,
   // crashing.
 
   // Verify no selection was set.
-  EXPECT_TRUE(Selection().GetSelectionInDOMTree().IsNone());
+  EXPECT_TRUE(Selection().GetSelectionInDomTree().IsNone());
 }
 
 // For http://crbug.com/700368
@@ -241,7 +229,7 @@ TEST_F(SelectionControllerTest, AdjustSelectionWithTrailingWhitespace) {
   SetBodyContent(
       "<input type=checkbox>"
       "<div style='user-select:none'>abc</div>");
-  Element* const input = GetDocument().QuerySelector("input");
+  Element* const input = QuerySelector("input");
 
   const SelectionInFlatTree& selection = ExpandWithGranularity(
       SelectionInFlatTree::Builder()
@@ -264,12 +252,12 @@ TEST_F(SelectionControllerTest,
   SetBodyContent("<pre>(1)\n(2)</pre>");
 
   // Click/Tap after "(1)"
-  HitTestLocation location(IntPoint(40, 10));
+  HitTestLocation location(gfx::Point(40, 10));
   HitTestResult result =
       GetFrame().GetEventHandler().HitTestResultAtLocation(location);
   ASSERT_EQ("<pre>(1)|\n(2)</pre>",
             GetSelectionTextFromBody(
-                SelectionInDOMTree::Builder()
+                SelectionInDomTree::Builder()
                     .Collapse(GetPositionFromHitTestResult(result))
                     .Build()));
 
@@ -293,12 +281,12 @@ TEST_F(SelectionControllerTest,
   SetBodyContent("<pre>ab:\ncd</pre>");
 
   // Click/Tap after "(1)"
-  HitTestLocation location(IntPoint(40, 10));
+  HitTestLocation location(gfx::Point(40, 10));
   HitTestResult result =
       GetFrame().GetEventHandler().HitTestResultAtLocation(location);
   ASSERT_EQ("<pre>ab:|\ncd</pre>",
             GetSelectionTextFromBody(
-                SelectionInDOMTree::Builder()
+                SelectionInDomTree::Builder()
                     .Collapse(GetPositionFromHitTestResult(result))
                     .Build()));
 
@@ -328,7 +316,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfLine) {
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   double_click.SetFrameScale(1);
-  HitTestLocation location((IntPoint(20, 5)));
+  HitTestLocation location((gfx::Point(20, 5)));
   double_click.button = blink::WebMouseEvent::Button::kLeft;
   double_click.click_count = 2;
   HitTestResult result =
@@ -337,7 +325,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfLine) {
       MouseEventWithHitTestResults(double_click, location, result));
   ASSERT_EQ("<div>ab|c def<br>ghi</div>",
             GetSelectionTextFromBody(
-                SelectionInDOMTree::Builder()
+                SelectionInDomTree::Builder()
                     .Collapse(GetPositionFromHitTestResult(result))
                     .Build()));
 
@@ -354,7 +342,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfLine) {
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   single_shift_click.SetFrameScale(1);
-  HitTestLocation single_click_location((IntPoint(400, 5)));
+  HitTestLocation single_click_location((gfx::Point(400, 5)));
   single_shift_click.button = blink::WebMouseEvent::Button::kLeft;
   single_shift_click.click_count = 1;
   HitTestResult single_click_result =
@@ -380,7 +368,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfTableCell) {
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   double_click.SetFrameScale(1);
-  HitTestLocation location((IntPoint(20, 5)));
+  HitTestLocation location((gfx::Point(20, 5)));
   double_click.button = WebMouseEvent::Button::kLeft;
   double_click.click_count = 2;
   HitTestResult result =
@@ -389,7 +377,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfTableCell) {
       MouseEventWithHitTestResults(double_click, location, result));
   ASSERT_EQ("<table><tbody><tr><td>fo|o</td><td>bar</td></tr></tbody></table>",
             GetSelectionTextFromBody(
-                SelectionInDOMTree::Builder()
+                SelectionInDomTree::Builder()
                     .Collapse(GetPositionFromHitTestResult(result))
                     .Build()));
   // Select word by mouse
@@ -406,7 +394,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfTableCell) {
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   cell1_single_shift_click.SetFrameScale(1);
-  HitTestLocation cell1_single_click_location((IntPoint(175, 5)));
+  HitTestLocation cell1_single_click_location((gfx::Point(175, 5)));
   cell1_single_shift_click.button = blink::WebMouseEvent::Button::kLeft;
   cell1_single_shift_click.click_count = 1;
   HitTestResult cell1_single_click_result =
@@ -426,7 +414,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfTableCell) {
       blink::WebInputEvent::GetStaticTimeStampForTests());
   // Frame scale defaults to 0, which would cause a divide-by-zero problem.
   cell2_single_shift_click.SetFrameScale(1);
-  HitTestLocation cell2_single_click_location((IntPoint(375, 5)));
+  HitTestLocation cell2_single_click_location((gfx::Point(375, 5)));
   cell2_single_shift_click.button = blink::WebMouseEvent::Button::kLeft;
   cell2_single_shift_click.click_count = 1;
   HitTestResult cell2_single_click_result =
@@ -440,7 +428,7 @@ TEST_F(SelectionControllerTest, SelectWordToEndOfTableCell) {
             GetSelectionTextFromBody());
 }
 
-TEST_P(ParameterizedSelectionControllerTest, Scroll) {
+TEST_F(SelectionControllerTest, Scroll) {
   SetBodyInnerHTML(R"HTML(
     <style>
     html, body {
@@ -473,8 +461,7 @@ TEST_P(ParameterizedSelectionControllerTest, Scroll) {
 
   // Hit-test on the first visible line. This should be "line3".
   HitTestResult line3_result = HitTestResultAtLocation(5, 50);
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line3_result.LocalPoint(), PhysicalOffset(5, 50));
+  EXPECT_EQ(line3_result.LocalPoint(), PhysicalOffset(5, 50));
   PositionWithAffinity line3 = line3_result.GetPosition();
   Node* line3_node = line3.AnchorNode();
   EXPECT_EQ(line3_node->nodeName(), "#text");
@@ -504,33 +491,27 @@ TEST_P(ParameterizedSelectionControllerTest, Scroll) {
 
   // At the padding of an inline box.
   HitTestResult line5_result = HitTestResultAtLocation(5, 250);
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line5_result.LocalPoint(), PhysicalOffset(5, 250));
+  EXPECT_EQ(line5_result.LocalPoint(), PhysicalOffset(5, 250));
   PositionWithAffinity line5 = line5_result.GetPosition();
   Node* line5_node = line5.AnchorNode();
   EXPECT_EQ(line5_node->nodeName(), "#text");
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line5_node->textContent(), "line5");
+  EXPECT_EQ(line5_node->textContent(), "line5");
 
   // At the border of an inline box.
   HitTestResult line6_result = HitTestResultAtLocation(5, 350);
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line6_result.LocalPoint(), PhysicalOffset(5, 350));
+  EXPECT_EQ(line6_result.LocalPoint(), PhysicalOffset(5, 350));
   PositionWithAffinity line6 = line6_result.GetPosition();
   Node* line6_node = line6.AnchorNode();
   EXPECT_EQ(line6_node->nodeName(), "#text");
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line6_node->textContent(), "line6");
+  EXPECT_EQ(line6_node->textContent(), "line6");
 
   // At the margin of an inline box.
   HitTestResult line7_result = HitTestResultAtLocation(5, 450);
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line7_result.LocalPoint(), PhysicalOffset(5, 450));
+  EXPECT_EQ(line7_result.LocalPoint(), PhysicalOffset(5, 450));
   PositionWithAffinity line7 = line7_result.GetPosition();
   Node* line7_node = line7.AnchorNode();
   EXPECT_EQ(line7_node->nodeName(), "#text");
-  if (LayoutNGEnabled())  // Legacy fails this test.
-    EXPECT_EQ(line7_node->textContent(), "line7");
+  EXPECT_EQ(line7_node->textContent(), "line7");
 
   // At the inline-block.
   HitTestResult line8_result = HitTestResultAtLocation(5, 550);
@@ -539,6 +520,205 @@ TEST_P(ParameterizedSelectionControllerTest, Scroll) {
   Node* line8_node = line8.AnchorNode();
   EXPECT_EQ(line8_node->nodeName(), "#text");
   EXPECT_EQ(line8_node->textContent(), "x");
+}
+
+// http://crbug.com/1372847
+TEST_F(SelectionControllerTest, AdjustSelectionByUserSelectWithInput) {
+  SetBodyContent(R"HTML(
+    <div style="user-select: none;">
+      <div id="one" style="user-select: text;">11</div>
+      <input type="text" value="input"/>
+    </div>
+    <div id="two">22</div>)HTML");
+
+  Element* one = GetElementById("one");
+  const SelectionInFlatTree& selection =
+      ExpandWithGranularity(SelectionInFlatTree::Builder()
+                                .Collapse(PositionInFlatTree(one, 0))
+                                .Build(),
+                            TextGranularity::kParagraph);
+  SelectionInFlatTree adjust_selection =
+      AdjustSelectionByUserSelect(one, selection);
+  EXPECT_EQ(adjust_selection.Anchor(), selection.Anchor());
+  EXPECT_EQ(adjust_selection.Focus(), PositionInFlatTree(one->parentNode(), 2));
+}
+
+// http://crbug.com/1410448
+TEST_F(SelectionControllerTest, AdjustSelectionByUserSelectWithSpan) {
+  SetBodyContent(R"HTML(
+    <div id="div" style="user-select:none">
+      <span id="one" style="user-select:text">
+        <span style="user-select:text">Hel</span>lo
+      </span>
+      <span style="user-select:text"> lo </span>
+      <span id="two" style="user-select:text">there</span></div>)HTML");
+
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
+
+  const SelectionInFlatTree& selection =
+      ExpandWithGranularity(SelectionInFlatTree::Builder()
+                                .Collapse(PositionInFlatTree(one, 0))
+                                .Build(),
+                            TextGranularity::kParagraph);
+  SelectionInFlatTree adjust_selection =
+      AdjustSelectionByUserSelect(one, selection);
+  EXPECT_EQ(adjust_selection.Anchor(), selection.Anchor());
+  EXPECT_EQ(adjust_selection.Focus(),
+            PositionInFlatTree::LastPositionInNode(*two->firstChild()));
+}
+
+// http://crbug.com/1487484
+TEST_F(SelectionControllerTest, AdjustSelectionByUserSelectWithComment) {
+  SetBodyContent(R"HTML(
+    <div id="div">
+      <span id="one">Hello World!</span>
+      <b>before comment</b><!---->
+      <span id="two">after comment Hello World!</span>
+    </div>)HTML");
+
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
+
+  const SelectionInFlatTree& selection =
+      ExpandWithGranularity(SelectionInFlatTree::Builder()
+                                .Collapse(PositionInFlatTree(one, 0))
+                                .Build(),
+                            TextGranularity::kParagraph);
+  SelectionInFlatTree adjust_selection =
+      AdjustSelectionByUserSelect(one, selection);
+  EXPECT_EQ(adjust_selection.Anchor(), selection.Anchor());
+  EXPECT_EQ(adjust_selection.Anchor(),
+            PositionInFlatTree::FirstPositionInNode(*one->firstChild()));
+  EXPECT_EQ(adjust_selection.Focus(), selection.Focus());
+  EXPECT_EQ(adjust_selection.Focus(),
+            PositionInFlatTree::LastPositionInNode(*two->firstChild()));
+}
+
+// http://crbug.com/553831659
+TEST_F(SelectionControllerTest,
+       AdjustSelectionByUserSelectWithNonEditableWidget) {
+  SetBodyContent(R"HTML(
+    <div contenteditable><p>
+      <span id="one">Triple click this line, which has an</span>
+      <span contenteditable="false"><span
+          style="user-select:none">EMBED</span></span>
+      <span id="two">inline widget inside it</span></p></div>)HTML");
+
+  Node* const one = GetElementById("one")->firstChild();
+  const SelectionInFlatTree& selection =
+      ExpandWithGranularity(SelectionInFlatTree::Builder()
+                                .Collapse(PositionInFlatTree(one, 0))
+                                .Build(),
+                            TextGranularity::kParagraph);
+  const SelectionInFlatTree adjusted_selection =
+      AdjustSelectionByUserSelect(one, selection);
+
+  EXPECT_EQ(adjusted_selection.Anchor(), selection.Anchor());
+  EXPECT_EQ(adjusted_selection.Focus(), selection.Focus());
+  EXPECT_TRUE(CreateVisibleSelection(adjusted_selection).IsRange());
+}
+
+// https://crbug.com/399412221
+#if BUILDFLAG(IS_OZONE)
+#define MAYBE_MiddleClickPasteToggle MiddleClickPasteToggle
+#else
+#define MAYBE_MiddleClickPasteToggle DISABLED_MiddleClickPasteToggle
+#endif
+TEST_F(SelectionControllerTest, MAYBE_MiddleClickPasteToggle) {
+  SetBodyContent("<input type=text id=dst>");
+
+  // Create a middle mouse button up event
+  auto point = gfx::PointF(25, 25);
+  WebMouseEvent mouse_event(WebInputEvent::Type::kMouseUp, point, point,
+                            WebMouseEvent::Button::kMiddle, 1, 0,
+                            WebInputEvent::GetStaticTimeStampForTests());
+  mouse_event.SetFrameScale(1);
+
+  // Test with middle-click paste disabled
+  GetDocument().GetSettings()->SetMiddleClickPasteAllowed(false);
+  EXPECT_FALSE(Controller().HandlePasteGlobalSelection(mouse_event));
+
+  // Test with middle-click paste enabled
+  GetDocument().GetSettings()->SetMiddleClickPasteAllowed(true);
+  EXPECT_TRUE(Controller().HandlePasteGlobalSelection(mouse_event));
+
+  // Test with middle-click paste enabled, but wrong mouse event
+  WebMouseEvent mouse_event_down(WebInputEvent::Type::kMouseDown,
+                                 WebInputEvent::kIsCompatibilityEventForTouch,
+                                 WebInputEvent::GetStaticTimeStampForTests());
+  EXPECT_FALSE(Controller().HandlePasteGlobalSelection(mouse_event_down));
+}
+
+// http://crbug.com/362901608
+TEST_F(SelectionControllerTest, ClickOnPseudoElementLockedByItsOwnFocus) {
+  InsertStyleElement(
+      "li:focus-within > ul { display: block; }"
+      "li:focus-within > ul:focus { content-visibility: hidden; }"
+      "li:focus-within > ul:not(:focus)::before {"
+      "  content: '#'; display: block; position: absolute;"
+      "  top: 0px; left: 0px; width: 20px; height: 20px; }"
+      "ul ul { display: none; position: relative; }"
+      "li { position: relative; }");
+  SetBodyContent(
+      "<ul><li id=item tabindex=0>item"
+      "<ul id=sub tabindex=-1><li tabindex=0>sub item</li></ul>"
+      "</li></ul>");
+  GetPage().GetFocusController().SetActive(true);
+  GetPage().GetFocusController().SetFocused(true);
+  GetElementById("item")->Focus();
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* const sub = GetElementById("sub");
+  DOMRect* const rect = sub->GetBoundingClientRect();
+  const gfx::PointF point(rect->x() + 3, rect->y() + 3);
+  WebMouseEvent mouse_down(WebInputEvent::Type::kMouseDown, point, point,
+                           WebMouseEvent::Button::kLeft, 1,
+                           WebInputEvent::Modifiers::kLeftButtonDown,
+                           WebInputEvent::GetStaticTimeStampForTests());
+  GetFrame().GetEventHandler().HandleMousePressEvent(mouse_down);
+
+  EXPECT_EQ(sub, GetDocument().FocusedElement());
+}
+
+TEST_F(SelectionControllerTest, HandleGestureLongPressOnNonSelectable) {
+  SetBodyContent(
+      "<div id='sample' style='user-select: none;'>Non-selectable text</div>");
+  UpdateAllLifecyclePhasesForTest();
+
+  HitTestLocation location((gfx::Point(8, 8)));
+  HitTestResult hit_test_result =
+      GetFrame().GetEventHandler().HitTestResultAtLocation(location);
+
+  // Dirty style/layout AFTER the hit test to simulate a JS handler modifying
+  // the page
+  GetDocument()
+      .getElementById(AtomicString("sample"))
+      ->setAttribute(html_names::kStyleAttr,
+                     AtomicString("user-select: none; color: blue;"));
+
+  // This should not crash when the fix is applied.
+  Controller().HandleGestureLongPress(hit_test_result);
+}
+
+TEST_F(SelectionControllerTest, HandleGestureLongPressWithSelectStartMutation) {
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+  SetBodyContent("<span id='sample'>Selectable text</span>");
+  Element* script = GetDocument().CreateRawElement(html_names::kScriptTag);
+  script->SetInnerHTMLWithoutTrustedTypes(
+      "document.addEventListener('selectstart', (e) => {"
+      "  document.getElementById('sample').style.fontSize = '20px';"
+      "  e.preventDefault();"
+      "});");
+  GetDocument().body()->AppendChild(script);
+  UpdateAllLifecyclePhasesForTest();
+
+  HitTestLocation location((gfx::Point(8, 8)));
+  HitTestResult hit_test_result =
+      GetFrame().GetEventHandler().HitTestResultAtLocation(location);
+
+  // This should not crash when the fix is applied.
+  Controller().HandleGestureLongPress(hit_test_result);
 }
 
 }  // namespace blink

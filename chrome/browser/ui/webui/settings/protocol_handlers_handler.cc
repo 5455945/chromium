@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,51 +8,83 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/url_identity.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/url_constants.h"
+#include "components/custom_handlers/protocol_handler.h"
 #include "components/google/core/common/google_util.h"
 #include "components/prefs/pref_service.h"
+#include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_ui.h"
 
 namespace settings {
 
 namespace {
 
-void GetHandlersAsListValue(
-    const ProtocolHandlerRegistry& registry,
-    const ProtocolHandlerRegistry::ProtocolHandlerList& handlers,
-    base::ListValue* handler_list) {
-  ProtocolHandlerRegistry::ProtocolHandlerList::const_iterator handler;
-  for (handler = handlers.begin(); handler != handlers.end(); ++handler) {
-    std::unique_ptr<base::DictionaryValue> handler_value(
-        new base::DictionaryValue());
-    handler_value->SetString("protocol_display_name",
-                             handler->GetProtocolDisplayName());
-    handler_value->SetString("protocol", handler->protocol());
-    handler_value->SetString("spec", handler->url().spec());
-    handler_value->SetString("host", handler->url().host());
-    handler_value->SetBoolean("is_default", registry.IsDefault(*handler));
-    handler_list->Append(std::move(handler_value));
+base::ListValue GetHandlersAsListValue(
+    const custom_handlers::ProtocolHandlerRegistry* registry,
+    const custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList&
+        handlers,
+    const web_app::WebAppProvider* web_app_provider) {
+  base::ListValue handler_list;
+  for (const auto& handler : handlers) {
+    base::DictValue handler_value;
+    handler_value.Set("protocol_display_name",
+                      handler.GetProtocolDisplayName());
+    handler_value.Set("protocol", handler.protocol());
+    handler_value.Set("spec", handler.url().spec());
+    handler_value.Set("host", handler.url().host());
+    if (registry) {
+      handler_value.Set("is_default", registry->IsDefault(handler));
+    }
+
+    if (handler.web_app_id().has_value()) {
+      const auto& web_app_id = handler.web_app_id().value();
+      handler_value.Set("app_id", web_app_id);
+      if (web_app_provider) {
+        const auto app_name = base::CollapseWhitespaceASCII(
+            web_app_provider->registrar_unsafe().GetAppShortName(web_app_id),
+            false);
+        handler_value.Set("app_name", app_name);
+      }
+    }
+    handler_list.Append(std::move(handler_value));
   }
+  return handler_list;
 }
 
 }  // namespace
 
-ProtocolHandlersHandler::ProtocolHandlersHandler() = default;
+ProtocolHandlersHandler::ProtocolHandlersHandler(Profile* profile)
+    : profile_(profile),
+      web_app_provider_(web_app::WebAppProvider::GetForWebApps(profile)) {}
+
 ProtocolHandlersHandler::~ProtocolHandlersHandler() = default;
 
 void ProtocolHandlersHandler::OnJavascriptAllowed() {
   registry_observation_.Observe(GetProtocolHandlerRegistry());
+  if (web_app_provider_) {
+    app_observation_.Observe(&web_app_provider_->registrar_unsafe());
+    install_manager_observation_.Observe(&web_app_provider_->install_manager());
+  }
 }
 
 void ProtocolHandlersHandler::OnJavascriptDisallowed() {
   registry_observation_.Reset();
+  install_manager_observation_.Reset();
+  app_observation_.Reset();
 }
 
 void ProtocolHandlersHandler::RegisterMessages() {
@@ -78,6 +110,23 @@ void ProtocolHandlersHandler::RegisterMessages() {
       "setDefault",
       base::BindRepeating(&ProtocolHandlersHandler::HandleSetDefault,
                           base::Unretained(this)));
+
+  // Web App Protocol Handlers register message callbacks:
+  web_ui()->RegisterMessageCallback(
+      "observeAppProtocolHandlers",
+      base::BindRepeating(
+          &ProtocolHandlersHandler::HandleObserveAppProtocolHandlers,
+          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "removeAppAllowedHandler",
+      base::BindRepeating(
+          &ProtocolHandlersHandler::ResetProtocolHandlerUserApproval,
+          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "removeAppDisallowedHandler",
+      base::BindRepeating(
+          &ProtocolHandlersHandler::ResetProtocolHandlerUserApproval,
+          base::Unretained(this)));
 }
 
 void ProtocolHandlersHandler::OnProtocolHandlerRegistryChanged() {
@@ -85,56 +134,74 @@ void ProtocolHandlersHandler::OnProtocolHandlerRegistryChanged() {
   UpdateHandlerList();
 }
 
-void ProtocolHandlersHandler::GetHandlersForProtocol(
-    const std::string& protocol,
-    base::DictionaryValue* handlers_value) {
-  ProtocolHandlerRegistry* registry = GetProtocolHandlerRegistry();
-  handlers_value->SetString("protocol_display_name",
-                            ProtocolHandler::GetProtocolDisplayName(protocol));
-  handlers_value->SetString("protocol", protocol);
-
-  base::ListValue handlers_list;
-  GetHandlersAsListValue(*registry, registry->GetHandlersFor(protocol),
-                         &handlers_list);
-  handlers_value->SetKey("handlers", std::move(handlers_list));
+void ProtocolHandlersHandler::OnWebAppProtocolSettingsChanged(
+    const webapps::AppId& app_id) {
+  UpdateAllAllowedLaunchProtocols();
+  UpdateAllDisallowedLaunchProtocols();
 }
 
-void ProtocolHandlersHandler::GetIgnoredHandlers(base::ListValue* handlers) {
-  ProtocolHandlerRegistry* registry = GetProtocolHandlerRegistry();
-  ProtocolHandlerRegistry::ProtocolHandlerList ignored_handlers =
-      registry->GetIgnoredHandlers();
-  return GetHandlersAsListValue(*registry, ignored_handlers, handlers);
+void ProtocolHandlersHandler::OnAppRegistrarDestroyed() {
+  app_observation_.Reset();
+}
+
+void ProtocolHandlersHandler::OnWebAppUninstalled(
+    const webapps::AppId& app_id,
+    webapps::WebappUninstallSource uninstall_source) {
+  OnWebAppProtocolSettingsChanged(app_id);
+}
+
+void ProtocolHandlersHandler::OnWebAppInstallManagerDestroyed() {
+  install_manager_observation_.Reset();
+}
+
+base::DictValue ProtocolHandlersHandler::GetHandlersForProtocol(
+    const std::string& protocol) {
+  base::DictValue handlers_value;
+  custom_handlers::ProtocolHandlerRegistry* registry =
+      GetProtocolHandlerRegistry();
+  handlers_value.Set(
+      "protocol_display_name",
+      custom_handlers::ProtocolHandler::GetProtocolDisplayName(protocol));
+  handlers_value.Set("protocol", protocol);
+
+  base::ListValue handlers_list = GetHandlersAsListValue(
+      registry, registry->GetHandlersFor(protocol), web_app_provider_);
+  handlers_value.Set("handlers", std::move(handlers_list));
+  return handlers_value;
+}
+
+base::ListValue ProtocolHandlersHandler::GetIgnoredHandlers() {
+  custom_handlers::ProtocolHandlerRegistry* registry =
+      GetProtocolHandlerRegistry();
+  custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList
+      ignored_handlers = registry->GetIgnoredHandlers();
+  return GetHandlersAsListValue(registry, ignored_handlers, web_app_provider_);
 }
 
 void ProtocolHandlersHandler::UpdateHandlerList() {
-  ProtocolHandlerRegistry* registry = GetProtocolHandlerRegistry();
+  custom_handlers::ProtocolHandlerRegistry* registry =
+      GetProtocolHandlerRegistry();
   std::vector<std::string> protocols;
   registry->GetRegisteredProtocols(&protocols);
 
   base::ListValue handlers;
-  for (auto protocol = protocols.begin(); protocol != protocols.end();
-       protocol++) {
-    std::unique_ptr<base::DictionaryValue> handler_value(
-        new base::DictionaryValue());
-    GetHandlersForProtocol(*protocol, handler_value.get());
-    handlers.Append(std::move(handler_value));
+  for (auto& protocol : protocols) {
+    handlers.Append(GetHandlersForProtocol(protocol));
   }
 
-  std::unique_ptr<base::ListValue> ignored_handlers(new base::ListValue());
-  GetIgnoredHandlers(ignored_handlers.get());
   FireWebUIListener("setProtocolHandlers", handlers);
-  FireWebUIListener("setIgnoredProtocolHandlers", *ignored_handlers);
+  FireWebUIListener("setIgnoredProtocolHandlers", GetIgnoredHandlers());
 }
 
 void ProtocolHandlersHandler::HandleObserveProtocolHandlers(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   AllowJavascript();
   SendHandlersEnabledValue();
   UpdateHandlerList();
 }
 
 void ProtocolHandlersHandler::HandleObserveProtocolHandlersEnabledState(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   AllowJavascript();
   SendHandlersEnabledValue();
 }
@@ -144,8 +211,8 @@ void ProtocolHandlersHandler::SendHandlersEnabledValue() {
                     base::Value(GetProtocolHandlerRegistry()->enabled()));
 }
 
-void ProtocolHandlersHandler::HandleRemoveHandler(const base::ListValue* args) {
-  ProtocolHandler handler(ParseHandlerFromArgs(args));
+void ProtocolHandlersHandler::HandleRemoveHandler(const base::ListValue& args) {
+  custom_handlers::ProtocolHandler handler(ParseHandlerFromArgs(args));
   CHECK(!handler.IsEmpty());
   GetProtocolHandlerRegistry()->RemoveHandler(handler);
 
@@ -155,35 +222,135 @@ void ProtocolHandlersHandler::HandleRemoveHandler(const base::ListValue* args) {
 }
 
 void ProtocolHandlersHandler::HandleSetHandlersEnabled(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   bool enabled = true;
-  CHECK(args->GetBoolean(0, &enabled));
-  if (enabled)
+  CHECK(args[0].is_bool());
+  enabled = args[0].GetBool();
+  if (enabled) {
     GetProtocolHandlerRegistry()->Enable();
-  else
+  } else {
     GetProtocolHandlerRegistry()->Disable();
+  }
 }
 
-void ProtocolHandlersHandler::HandleSetDefault(const base::ListValue* args) {
-  const ProtocolHandler& handler(ParseHandlerFromArgs(args));
+void ProtocolHandlersHandler::HandleSetDefault(const base::ListValue& args) {
+  const custom_handlers::ProtocolHandler& handler(ParseHandlerFromArgs(args));
   CHECK(!handler.IsEmpty());
   GetProtocolHandlerRegistry()->OnAcceptRegisterProtocolHandler(handler);
 }
 
-ProtocolHandler ProtocolHandlersHandler::ParseHandlerFromArgs(
-    const base::ListValue* args) const {
-  std::u16string protocol;
-  std::u16string url;
-  bool ok = args->GetString(0, &protocol) && args->GetString(1, &url);
-  if (!ok)
-    return ProtocolHandler::EmptyProtocolHandler();
-  return ProtocolHandler::CreateProtocolHandler(base::UTF16ToUTF8(protocol),
-                                                GURL(base::UTF16ToUTF8(url)));
+custom_handlers::ProtocolHandler ProtocolHandlersHandler::ParseHandlerFromArgs(
+    const base::ListValue& args) const {
+  bool ok = args.size() >= 2u && args[0].is_string() && args[1].is_string();
+  if (!ok) {
+    return custom_handlers::ProtocolHandler::EmptyProtocolHandler();
+  }
+  const std::string& protocol = args[0].GetString();
+  const std::string& url = args[1].GetString();
+  return custom_handlers::ProtocolHandler::CreateProtocolHandler(protocol,
+                                                                 GURL(url));
 }
 
-ProtocolHandlerRegistry* ProtocolHandlersHandler::GetProtocolHandlerRegistry() {
-  return ProtocolHandlerRegistryFactory::GetForBrowserContext(
-      Profile::FromWebUI(web_ui()));
+custom_handlers::ProtocolHandlerRegistry*
+ProtocolHandlersHandler::GetProtocolHandlerRegistry() {
+  return ProtocolHandlerRegistryFactory::GetForBrowserContext(profile_);
+}
+
+// App Protocol Handler specific functions
+
+base::DictValue ProtocolHandlersHandler::GetAppHandlersForProtocol(
+    const std::string& protocol,
+    custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList handlers) {
+  base::DictValue handlers_value;
+
+  if (!handlers.empty()) {
+    handlers_value.Set(
+        "protocol_display_name",
+        custom_handlers::ProtocolHandler::GetProtocolDisplayName(protocol));
+    handlers_value.Set("protocol", protocol);
+    handlers_value.Set("handlers", GetHandlersAsListValue(nullptr, handlers,
+                                                          web_app_provider_));
+  }
+  return handlers_value;
+}
+
+void ProtocolHandlersHandler::UpdateAllAllowedLaunchProtocols() {
+  if (!web_app_provider_) {
+    return;
+  }
+
+  base::flat_set<std::string> protocols(
+      web_app_provider_->registrar_unsafe().GetAllAllowedLaunchProtocols());
+  web_app::OsIntegrationManager& os_integration_manager =
+      web_app_provider_->os_integration_manager();
+
+  base::ListValue handlers;
+  for (auto& protocol : protocols) {
+    custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList
+        protocol_handlers =
+            os_integration_manager.GetAllowedHandlersForProtocol(protocol);
+
+    handlers.Append(GetAppHandlersForProtocol(protocol, protocol_handlers));
+  }
+
+  FireWebUIListener("setAppAllowedProtocolHandlers", handlers);
+}
+
+void ProtocolHandlersHandler::UpdateAllDisallowedLaunchProtocols() {
+  if (!web_app_provider_) {
+    return;
+  }
+
+  base::flat_set<std::string> protocols(
+      web_app_provider_->registrar_unsafe().GetAllDisallowedLaunchProtocols());
+  web_app::OsIntegrationManager& os_integration_manager =
+      web_app_provider_->os_integration_manager();
+
+  base::ListValue handlers;
+  for (auto& protocol : protocols) {
+    custom_handlers::ProtocolHandlerRegistry::ProtocolHandlerList
+        protocol_handlers =
+            os_integration_manager.GetDisallowedHandlersForProtocol(protocol);
+    handlers.Append(GetAppHandlersForProtocol(protocol, protocol_handlers));
+  }
+
+  FireWebUIListener("setAppDisallowedProtocolHandlers", handlers);
+}
+
+void ProtocolHandlersHandler::HandleObserveAppProtocolHandlers(
+    const base::ListValue& args) {
+  AllowJavascript();
+  UpdateAllAllowedLaunchProtocols();
+  UpdateAllDisallowedLaunchProtocols();
+}
+
+void ProtocolHandlersHandler::ResetProtocolHandlerUserApproval(
+    const base::ListValue& args) {
+  custom_handlers::ProtocolHandler handler(ParseAppHandlerFromArgs(args));
+  CHECK(!handler.IsEmpty());
+  CHECK(web_app_provider_, base::NotFatalUntil::M162);
+
+  const webapps::AppId& app_id = handler.web_app_id().value();
+  web_app_provider_->scheduler().UpdateProtocolHandlerUserApproval(
+      app_id, handler.protocol(), web_app::ApiApprovalState::kRequiresPrompt,
+      base::DoNothing());
+
+  // No need to call UpdateAllDisallowedLaunchProtocols() - we should receive a
+  // notification that the Web App Protocol Settings has changed and we will
+  // update the view then.
+}
+
+custom_handlers::ProtocolHandler
+ProtocolHandlersHandler::ParseAppHandlerFromArgs(
+    const base::ListValue& args) const {
+  const std::string* protocol = args[0].GetIfString();
+  const std::string* url = args[1].GetIfString();
+  const std::string* app_id = args[2].GetIfString();
+  if (!protocol || !url || !app_id) {
+    return custom_handlers::ProtocolHandler::EmptyProtocolHandler();
+  }
+  return custom_handlers::ProtocolHandler::CreateWebAppProtocolHandler(
+      *protocol, GURL(*url), *app_id);
 }
 
 }  // namespace settings

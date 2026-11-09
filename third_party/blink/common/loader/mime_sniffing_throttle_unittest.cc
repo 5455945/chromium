@@ -1,12 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/loader/mime_sniffing_throttle.h"
 
 #include <memory>
+#include <string_view>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -41,9 +44,11 @@ class MojoDataPipeSender {
   }
 
   void OnWritable(MojoResult) {
-    uint32_t sending_bytes = data_.size() - sent_bytes_;
-    MojoResult result = handle_->WriteData(
-        data_.c_str() + sent_bytes_, &sending_bytes, MOJO_WRITE_DATA_FLAG_NONE);
+    base::span<const uint8_t> bytes = base::as_byte_span(data_);
+    bytes = bytes.subspan(sent_bytes_);
+    size_t actually_written_bytes = 0;
+    MojoResult result = handle_->WriteData(bytes, MOJO_WRITE_DATA_FLAG_NONE,
+                                           actually_written_bytes);
     switch (result) {
       case MOJO_RESULT_OK:
         break;
@@ -56,9 +61,8 @@ class MojoDataPipeSender {
         return;
       default:
         NOTREACHED();
-        return;
     }
-    sent_bytes_ += sending_bytes;
+    sent_bytes_ += actually_written_bytes;
     if (data_.size() == sent_bytes_)
       std::move(done_callback_).Run();
   }
@@ -74,37 +78,37 @@ class MojoDataPipeSender {
   mojo::SimpleWatcher watcher_;
   base::OnceClosure done_callback_;
   std::string data_;
-  uint32_t sent_bytes_ = 0;
+  size_t sent_bytes_ = 0;
 };
 
 class MockDelegate : public blink::URLLoaderThrottle::Delegate {
  public:
   // Implements blink::URLLoaderThrottle::Delegate.
   void CancelWithError(int error_code,
-                       base::StringPiece custom_reason) override {
+                       std::string_view custom_reason) override {
     NOTIMPLEMENTED();
   }
   void Resume() override {
     is_resumed_ = true;
     // Resume from OnReceiveResponse() with a customized response header.
     destination_loader_client()->OnReceiveResponse(
-        std::move(updated_response_head_));
+        std::move(updated_response_head_), std::move(body_), std::nullopt);
   }
 
-  void SetPriority(net::RequestPriority priority) override { NOTIMPLEMENTED(); }
   void UpdateDeferredResponseHead(
-      network::mojom::URLResponseHeadPtr new_response_head) override {
+      network::mojom::URLResponseHeadPtr new_response_head,
+      mojo::ScopedDataPipeConsumerHandle body) override {
     updated_response_head_ = std::move(new_response_head);
+    body_ = std::move(body);
   }
-  void PauseReadingBodyFromNet() override { NOTIMPLEMENTED(); }
-  void ResumeReadingBodyFromNet() override { NOTIMPLEMENTED(); }
   void InterceptResponse(
       mojo::PendingRemote<network::mojom::URLLoader> new_loader,
       mojo::PendingReceiver<network::mojom::URLLoaderClient>
           new_client_receiver,
       mojo::PendingRemote<network::mojom::URLLoader>* original_loader,
       mojo::PendingReceiver<network::mojom::URLLoaderClient>*
-          original_client_receiver) override {
+          original_client_receiver,
+      mojo::ScopedDataPipeConsumerHandle* body) override {
     is_intercepted_ = true;
 
     destination_loader_remote_.Bind(std::move(new_loader));
@@ -116,18 +120,18 @@ class MockDelegate : public blink::URLLoaderThrottle::Delegate {
 
     *original_client_receiver =
         source_loader_client_remote_.BindNewPipeAndPassReceiver();
+
+    if (no_body_)
+      return;
+
+    DCHECK(!source_body_handle_);
+    mojo::ScopedDataPipeConsumerHandle consumer;
+    EXPECT_EQ(MOJO_RESULT_OK,
+              mojo::CreateDataPipe(nullptr, source_body_handle_, consumer));
+    *body = std::move(consumer);
   }
 
   void LoadResponseBody(const std::string& body) {
-    if (!source_body_handle_.is_valid()) {
-      // Send OnStartLoadingResponseBody() if it's the first call.
-      mojo::ScopedDataPipeConsumerHandle consumer;
-      EXPECT_EQ(MOJO_RESULT_OK,
-                mojo::CreateDataPipe(nullptr, source_body_handle_, consumer));
-      source_loader_client_remote()->OnStartLoadingResponseBody(
-          std::move(consumer));
-    }
-
     MojoDataPipeSender sender(std::move(source_body_handle_));
     base::RunLoop loop;
     sender.Start(body, loop.QuitClosure());
@@ -143,10 +147,10 @@ class MockDelegate : public blink::URLLoaderThrottle::Delegate {
     source_body_handle_.reset();
   }
 
-  uint32_t ReadResponseBody(uint32_t size) {
+  uint32_t ReadResponseBody(size_t size) {
     std::vector<uint8_t> buffer(size);
     MojoResult result = destination_loader_client_.response_body().ReadData(
-        buffer.data(), &size, MOJO_READ_DATA_FLAG_NONE);
+        MOJO_READ_DATA_FLAG_NONE, buffer, size);
     switch (result) {
       case MOJO_RESULT_OK:
         return size;
@@ -157,11 +161,13 @@ class MockDelegate : public blink::URLLoaderThrottle::Delegate {
       default:
         NOTREACHED();
     }
-    return 0;
   }
+
+  void ResetProducer() { source_body_handle_.reset(); }
 
   bool is_intercepted() const { return is_intercepted_; }
   bool is_resumed() const { return is_resumed_; }
+  void set_no_body() { no_body_ = true; }
 
   network::TestURLLoaderClient* destination_loader_client() {
     return &destination_loader_client_;
@@ -174,7 +180,9 @@ class MockDelegate : public blink::URLLoaderThrottle::Delegate {
  private:
   bool is_intercepted_ = false;
   bool is_resumed_ = false;
+  bool no_body_ = false;
   network::mojom::URLResponseHeadPtr updated_response_head_;
+  mojo::ScopedDataPipeConsumerHandle body_;
 
   // A pair of a loader and a loader client for destination of the response.
   mojo::Remote<network::mojom::URLLoader> destination_loader_remote_;
@@ -196,9 +204,9 @@ class MimeSniffingThrottleTest : public testing::Test {
 };
 
 TEST_F(MimeSniffingThrottleTest, NoMimeTypeWithSniffableScheme) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -210,9 +218,9 @@ TEST_F(MimeSniffingThrottleTest, NoMimeTypeWithSniffableScheme) {
 }
 
 TEST_F(MimeSniffingThrottleTest, SniffableMimeTypeWithSniffableScheme) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -225,9 +233,9 @@ TEST_F(MimeSniffingThrottleTest, SniffableMimeTypeWithSniffableScheme) {
 }
 
 TEST_F(MimeSniffingThrottleTest, NotSniffableMimeTypeWithSniffableScheme) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -240,9 +248,9 @@ TEST_F(MimeSniffingThrottleTest, NotSniffableMimeTypeWithSniffableScheme) {
 }
 
 TEST_F(MimeSniffingThrottleTest, NoMimeTypeWithNotSniffableScheme) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -254,9 +262,9 @@ TEST_F(MimeSniffingThrottleTest, NoMimeTypeWithNotSniffableScheme) {
 }
 
 TEST_F(MimeSniffingThrottleTest, SniffableMimeTypeWithNotSniffableScheme) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -269,9 +277,9 @@ TEST_F(MimeSniffingThrottleTest, SniffableMimeTypeWithNotSniffableScheme) {
 }
 
 TEST_F(MimeSniffingThrottleTest, NotSniffableMimeTypeWithNotSniffableScheme) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -284,9 +292,9 @@ TEST_F(MimeSniffingThrottleTest, NotSniffableMimeTypeWithNotSniffableScheme) {
 }
 
 TEST_F(MimeSniffingThrottleTest, SniffableButAlreadySniffed) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   auto response_head = network::mojom::URLResponseHead::New();
@@ -300,14 +308,15 @@ TEST_F(MimeSniffingThrottleTest, SniffableButAlreadySniffed) {
 }
 
 TEST_F(MimeSniffingThrottleTest, NoBody) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com");
   auto response_head = network::mojom::URLResponseHead::New();
   bool defer = false;
+  delegate->set_no_body();
   throttle->WillProcessResponse(response_url, response_head.get(), &defer);
   EXPECT_TRUE(defer);
   EXPECT_TRUE(delegate->is_intercepted());
@@ -324,9 +333,9 @@ TEST_F(MimeSniffingThrottleTest, NoBody) {
 }
 
 TEST_F(MimeSniffingThrottleTest, EmptyBody) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com");
@@ -336,12 +345,7 @@ TEST_F(MimeSniffingThrottleTest, EmptyBody) {
   EXPECT_TRUE(defer);
   EXPECT_TRUE(delegate->is_intercepted());
 
-  mojo::ScopedDataPipeProducerHandle producer;
-  mojo::ScopedDataPipeConsumerHandle consumer;
-  CHECK_EQ(MOJO_RESULT_OK, mojo::CreateDataPipe(nullptr, producer, consumer));
-  delegate->source_loader_client_remote()->OnStartLoadingResponseBody(
-      std::move(consumer));
-  producer.reset();  // The pipe is empty.
+  delegate->ResetProducer();
 
   delegate->source_loader_client_remote()->OnComplete(
       network::URLLoaderCompletionStatus());
@@ -354,9 +358,9 @@ TEST_F(MimeSniffingThrottleTest, EmptyBody) {
 }
 
 TEST_F(MimeSniffingThrottleTest, Body_PlainText) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com");
@@ -378,9 +382,9 @@ TEST_F(MimeSniffingThrottleTest, Body_PlainText) {
 }
 
 TEST_F(MimeSniffingThrottleTest, Body_Docx) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com/hogehoge.docx");
@@ -402,9 +406,9 @@ TEST_F(MimeSniffingThrottleTest, Body_Docx) {
 }
 
 TEST_F(MimeSniffingThrottleTest, Body_PNG) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com/hogehoge.docx");
@@ -426,9 +430,9 @@ TEST_F(MimeSniffingThrottleTest, Body_PNG) {
 }
 
 TEST_F(MimeSniffingThrottleTest, Body_LongPlainText) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com");
@@ -482,9 +486,9 @@ TEST_F(MimeSniffingThrottleTest, Body_LongPlainText) {
 }
 
 TEST_F(MimeSniffingThrottleTest, Abort_NoBodyPipe) {
+  auto delegate = std::make_unique<MockDelegate>();
   auto throttle = std::make_unique<MimeSniffingThrottle>(
       task_environment_.GetMainThreadTaskRunner());
-  auto delegate = std::make_unique<MockDelegate>();
   throttle->set_delegate(delegate.get());
 
   GURL response_url("https://example.com");
@@ -503,9 +507,6 @@ TEST_F(MimeSniffingThrottleTest, Abort_NoBodyPipe) {
   // Release a pipe for the body on the receiver side.
   delegate->destination_loader_client()->response_body_release();
   task_environment_.RunUntilIdle();
-
-  // Send the body after the pipe is closed. The the loader aborts.
-  delegate->LoadResponseBody("This is a text.");
 
   // Calling OnComplete should not crash.
   delegate->CompleteResponse();

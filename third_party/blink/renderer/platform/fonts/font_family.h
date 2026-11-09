@@ -28,8 +28,8 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 
 namespace blink {
 
@@ -39,26 +39,51 @@ class PLATFORM_EXPORT FontFamily {
   DISALLOW_NEW();
 
  public:
+  // https://drafts.csswg.org/css-fonts/#font-family-prop
+  enum class Type : uint8_t { kFamilyName, kGenericFamily };
+
+  FontFamily(const AtomicString& family_name,
+             Type family_type,
+             scoped_refptr<SharedFontFamily> next = nullptr)
+      : family_name_(family_name),
+        next_(std::move(next)),
+        family_type_(family_type) {}
   FontFamily() = default;
   ~FontFamily();
 
-  void SetFamily(const AtomicString& family) { family_ = family; }
-  const AtomicString& Family() const { return family_; }
-  bool FamilyIsEmpty() const { return family_.IsEmpty(); }
+  // Return this font family's name. Note that it is never quoted nor escaped.
+  // For web-exposed serialization, please rely instead on the functions
+  // ComputedStyleUtils::ValueForFontFamily(const FontFamily&) and
+  // CSSValue::CssText() in order to match formatting rules from the CSSOM
+  // specification.
+  const AtomicString& FamilyName() const { return family_name_; }
+  bool FamilyIsGeneric() const { return family_type_ == Type::kGenericFamily; }
 
   const FontFamily* Next() const;
 
-  void AppendFamily(scoped_refptr<SharedFontFamily>);
-  void AppendFamily(AtomicString family);
   scoped_refptr<SharedFontFamily> ReleaseNext();
 
+  bool IsPrewarmed() const { return is_prewarmed_; }
+  void SetIsPrewarmed() const { is_prewarmed_ = true; }
+
   // Returns this font family's name followed by all subsequent linked
-  // families delimited by commas.
+  // families separated ", " (comma and space). Font family names are never
+  // quoted nor escaped. For web-exposed serialization, please rely instead on
+  // the functions ComputedStyleUtils::ValueForFontFamily(const FontFamily&) and
+  // CSSValue::CssText() in order to match formatting rules from the CSSOM
+  // specification.
   String ToString() const;
 
+  // Return kGenericFamily if family_name is equal to one of the supported
+  // <generic-family> keyword from the CSS fonts module spec and kFamilyName
+  // otherwise.
+  static Type InferredTypeFor(const AtomicString& family_name);
+
  private:
-  AtomicString family_;
+  AtomicString family_name_;
   scoped_refptr<SharedFontFamily> next_;
+  Type family_type_ = Type::kFamilyName;
+  mutable bool is_prewarmed_ = false;
 };
 
 class PLATFORM_EXPORT SharedFontFamily : public FontFamily,
@@ -68,18 +93,22 @@ class PLATFORM_EXPORT SharedFontFamily : public FontFamily,
   SharedFontFamily(const SharedFontFamily&) = delete;
   SharedFontFamily& operator=(const SharedFontFamily&) = delete;
 
-  static scoped_refptr<SharedFontFamily> Create() {
-    return base::AdoptRef(new SharedFontFamily);
+  static scoped_refptr<SharedFontFamily> Create(
+      const AtomicString& family_name,
+      Type family_type,
+      scoped_refptr<SharedFontFamily> next = nullptr) {
+    return base::AdoptRef(
+        new SharedFontFamily(family_name, family_type, std::move(next)));
   }
 
  private:
-  SharedFontFamily() = default;
+  SharedFontFamily(const AtomicString& family_name,
+                   Type family_type,
+                   scoped_refptr<SharedFontFamily> next)
+      : FontFamily(family_name, family_type, std::move(next)) {}
 };
 
 PLATFORM_EXPORT bool operator==(const FontFamily&, const FontFamily&);
-inline bool operator!=(const FontFamily& a, const FontFamily& b) {
-  return !(a == b);
-}
 
 inline FontFamily::~FontFamily() {
   scoped_refptr<SharedFontFamily> reaper = std::move(next_);
@@ -91,10 +120,6 @@ inline FontFamily::~FontFamily() {
 
 inline const FontFamily* FontFamily::Next() const {
   return next_.get();
-}
-
-inline void FontFamily::AppendFamily(scoped_refptr<SharedFontFamily> family) {
-  next_ = std::move(family);
 }
 
 inline scoped_refptr<SharedFontFamily> FontFamily::ReleaseNext() {

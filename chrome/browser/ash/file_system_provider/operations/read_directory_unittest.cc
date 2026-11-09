@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,26 +9,23 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
-#include "base/macros.h"
 #include "base/values.h"
 #include "chrome/browser/ash/file_system_provider/icon_set.h"
 #include "chrome/browser/ash/file_system_provider/operations/get_metadata.h"
 #include "chrome/browser/ash/file_system_provider/operations/test_util.h"
-#include "chrome/common/extensions/api/file_system_provider.h"
-#include "chrome/common/extensions/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h"
-#include "chrome/common/extensions/api/file_system_provider_internal.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_internal.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
 #include "extensions/browser/event_router.h"
 #include "storage/browser/file_system/async_file_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace file_system_provider {
-namespace operations {
+namespace ash::file_system_provider::operations {
 namespace {
 
 const char kExtensionId[] = "mbflcebpggnecokmikipoihdbecnjfoj";
@@ -48,7 +45,11 @@ class CallbackLogger {
         : result_(result),
           entry_list_(std::move(entry_list)),
           has_more_(has_more) {}
-    virtual ~Event() {}
+
+    Event(const Event&) = delete;
+    Event& operator=(const Event&) = delete;
+
+    virtual ~Event() = default;
 
     base::File::Error result() { return result_; }
     const storage::AsyncFileUtil::EntryList& entry_list() {
@@ -60,12 +61,14 @@ class CallbackLogger {
     base::File::Error result_;
     storage::AsyncFileUtil::EntryList entry_list_;
     bool has_more_;
-
-    DISALLOW_COPY_AND_ASSIGN(Event);
   };
 
-  CallbackLogger() {}
-  virtual ~CallbackLogger() {}
+  CallbackLogger() = default;
+
+  CallbackLogger(const CallbackLogger&) = delete;
+  CallbackLogger& operator=(const CallbackLogger&) = delete;
+
+  virtual ~CallbackLogger() = default;
 
   void OnReadDirectory(base::File::Error result,
                        storage::AsyncFileUtil::EntryList entry_list,
@@ -78,39 +81,35 @@ class CallbackLogger {
 
  private:
   std::vector<std::unique_ptr<Event>> events_;
-
-  DISALLOW_COPY_AND_ASSIGN(CallbackLogger);
 };
 
 // Returns the request value as |result| in case of successful parse.
-void CreateRequestValueFromJSON(const std::string& json,
-                                std::unique_ptr<RequestValue>* result) {
+void CreateRequestValueFromJSON(const std::string& json, RequestValue* result) {
   using extensions::api::file_system_provider_internal::
       ReadDirectoryRequestedSuccess::Params;
 
-  base::JSONReader::ValueWithError parsed_json =
-      base::JSONReader::ReadAndReturnValueWithError(json);
-  ASSERT_TRUE(parsed_json.value) << parsed_json.error_message;
+  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
+      json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
 
-  base::ListValue* value_as_list;
-  ASSERT_TRUE(parsed_json.value->GetAsList(&value_as_list));
-  std::unique_ptr<Params> params(Params::Create(*value_as_list));
-  ASSERT_TRUE(params.get());
-  *result = RequestValue::CreateForReadDirectorySuccess(std::move(params));
-  ASSERT_TRUE(result->get());
+  ASSERT_TRUE(parsed_json->is_list());
+  std::optional<Params> params = Params::Create(parsed_json->GetList());
+  ASSERT_TRUE(params.has_value());
+  *result = RequestValue::CreateForReadDirectorySuccess(std::move(*params));
+  ASSERT_TRUE(result->is_valid());
 }
 
 }  // namespace
 
 class FileSystemProviderOperationsReadDirectoryTest : public testing::Test {
  protected:
-  FileSystemProviderOperationsReadDirectoryTest() {}
-  ~FileSystemProviderOperationsReadDirectoryTest() override {}
+  FileSystemProviderOperationsReadDirectoryTest() = default;
+  ~FileSystemProviderOperationsReadDirectoryTest() override = default;
 
   void SetUp() override {
     file_system_info_ = ProvidedFileSystemInfo(
-        kExtensionId, MountOptions(kFileSystemId, "" /* display_name */),
-        base::FilePath(), false /* configurable */, true /* watchable */,
+        kExtensionId, MountOptions(kFileSystemId, /*display_name=*/""),
+        base::FilePath(), /*configurable=*/false, /*watchable=*/true,
         extensions::SOURCE_FILE, IconSet());
   }
 
@@ -120,16 +119,13 @@ class FileSystemProviderOperationsReadDirectoryTest : public testing::Test {
 TEST_F(FileSystemProviderOperationsReadDirectoryTest, Execute) {
   using extensions::api::file_system_provider::ReadDirectoryRequestedOptions;
 
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   ReadDirectory read_directory(
-      NULL, file_system_info_, base::FilePath(kDirectoryPath),
+      &dispatcher, file_system_info_, base::FilePath(kDirectoryPath),
       base::BindRepeating(&CallbackLogger::OnReadDirectory,
                           base::Unretained(&callback_logger)));
-  read_directory.SetDispatchEventImplForTesting(
-      base::BindRepeating(&util::LoggingDispatchEventImpl::OnDispatchEventImpl,
-                          base::Unretained(&dispatcher)));
 
   EXPECT_TRUE(read_directory.Execute(kRequestId));
 
@@ -138,46 +134,40 @@ TEST_F(FileSystemProviderOperationsReadDirectoryTest, Execute) {
   EXPECT_EQ(extensions::api::file_system_provider::OnReadDirectoryRequested::
                 kEventName,
             event->event_name);
-  base::ListValue* event_args = event->event_args.get();
-  ASSERT_EQ(1u, event_args->GetSize());
+  const base::ListValue& event_args = event->args();
+  ASSERT_EQ(1u, event_args.size());
 
-  const base::DictionaryValue* options_as_value = NULL;
-  ASSERT_TRUE(event_args->GetDictionary(0, &options_as_value));
+  const base::Value* options_as_value = &event_args[0];
+  ASSERT_TRUE(options_as_value->is_dict());
 
-  ReadDirectoryRequestedOptions options;
-  ASSERT_TRUE(
-      ReadDirectoryRequestedOptions::Populate(*options_as_value, &options));
-  EXPECT_EQ(kFileSystemId, options.file_system_id);
-  EXPECT_EQ(kRequestId, options.request_id);
-  EXPECT_EQ(kDirectoryPath, options.directory_path);
+  auto options =
+      ReadDirectoryRequestedOptions::FromValue(options_as_value->GetDict());
+  ASSERT_TRUE(options);
+  EXPECT_EQ(kFileSystemId, options->file_system_id);
+  EXPECT_EQ(kRequestId, options->request_id);
+  EXPECT_EQ(kDirectoryPath, options->directory_path);
 }
 
 TEST_F(FileSystemProviderOperationsReadDirectoryTest, Execute_NoListener) {
-  util::LoggingDispatchEventImpl dispatcher(false /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/false);
   CallbackLogger callback_logger;
 
   ReadDirectory read_directory(
-      NULL, file_system_info_, base::FilePath(kDirectoryPath),
+      &dispatcher, file_system_info_, base::FilePath(kDirectoryPath),
       base::BindRepeating(&CallbackLogger::OnReadDirectory,
                           base::Unretained(&callback_logger)));
-  read_directory.SetDispatchEventImplForTesting(
-      base::BindRepeating(&util::LoggingDispatchEventImpl::OnDispatchEventImpl,
-                          base::Unretained(&dispatcher)));
 
   EXPECT_FALSE(read_directory.Execute(kRequestId));
 }
 
 TEST_F(FileSystemProviderOperationsReadDirectoryTest, OnSuccess) {
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   ReadDirectory read_directory(
-      NULL, file_system_info_, base::FilePath(kDirectoryPath),
+      &dispatcher, file_system_info_, base::FilePath(kDirectoryPath),
       base::BindRepeating(&CallbackLogger::OnReadDirectory,
                           base::Unretained(&callback_logger)));
-  read_directory.SetDispatchEventImplForTesting(
-      base::BindRepeating(&util::LoggingDispatchEventImpl::OnDispatchEventImpl,
-                          base::Unretained(&dispatcher)));
 
   EXPECT_TRUE(read_directory.Execute(kRequestId));
 
@@ -197,7 +187,7 @@ TEST_F(FileSystemProviderOperationsReadDirectoryTest, OnSuccess) {
       "  false,\n"  // has_more
       "  0\n"       // execution_time
       "]\n";
-  std::unique_ptr<RequestValue> request_value;
+  RequestValue request_value;
   ASSERT_NO_FATAL_FAILURE(CreateRequestValueFromJSON(input, &request_value));
 
   const bool has_more = false;
@@ -215,16 +205,13 @@ TEST_F(FileSystemProviderOperationsReadDirectoryTest, OnSuccess) {
 
 TEST_F(FileSystemProviderOperationsReadDirectoryTest,
        OnSuccess_InvalidMetadata) {
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   ReadDirectory read_directory(
-      NULL, file_system_info_, base::FilePath(kDirectoryPath),
+      &dispatcher, file_system_info_, base::FilePath(kDirectoryPath),
       base::BindRepeating(&CallbackLogger::OnReadDirectory,
                           base::Unretained(&callback_logger)));
-  read_directory.SetDispatchEventImplForTesting(
-      base::BindRepeating(&util::LoggingDispatchEventImpl::OnDispatchEventImpl,
-                          base::Unretained(&dispatcher)));
 
   EXPECT_TRUE(read_directory.Execute(kRequestId));
 
@@ -244,7 +231,7 @@ TEST_F(FileSystemProviderOperationsReadDirectoryTest,
       "  false,\n"  // has_more
       "  0\n"       // execution_time
       "]\n";
-  std::unique_ptr<RequestValue> request_value;
+  RequestValue request_value;
   ASSERT_NO_FATAL_FAILURE(CreateRequestValueFromJSON(input, &request_value));
 
   const bool has_more = false;
@@ -258,20 +245,17 @@ TEST_F(FileSystemProviderOperationsReadDirectoryTest,
 }
 
 TEST_F(FileSystemProviderOperationsReadDirectoryTest, OnError) {
-  util::LoggingDispatchEventImpl dispatcher(true /* dispatch_reply */);
+  util::LoggingDispatchEventImpl dispatcher(/*dispatch_reply=*/true);
   CallbackLogger callback_logger;
 
   ReadDirectory read_directory(
-      NULL, file_system_info_, base::FilePath(kDirectoryPath),
+      &dispatcher, file_system_info_, base::FilePath(kDirectoryPath),
       base::BindRepeating(&CallbackLogger::OnReadDirectory,
                           base::Unretained(&callback_logger)));
-  read_directory.SetDispatchEventImplForTesting(
-      base::BindRepeating(&util::LoggingDispatchEventImpl::OnDispatchEventImpl,
-                          base::Unretained(&dispatcher)));
 
   EXPECT_TRUE(read_directory.Execute(kRequestId));
 
-  read_directory.OnError(kRequestId, std::make_unique<RequestValue>(),
+  read_directory.OnError(kRequestId, RequestValue(),
                          base::File::FILE_ERROR_TOO_MANY_OPENED);
 
   ASSERT_EQ(1u, callback_logger.events().size());
@@ -280,6 +264,4 @@ TEST_F(FileSystemProviderOperationsReadDirectoryTest, OnError) {
   ASSERT_EQ(0u, event->entry_list().size());
 }
 
-}  // namespace operations
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::operations

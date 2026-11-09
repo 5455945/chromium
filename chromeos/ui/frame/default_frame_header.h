@@ -1,19 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMEOS_UI_FRAME_DEFAULT_FRAME_HEADER_H_
 #define CHROMEOS_UI_FRAME_DEFAULT_FRAME_HEADER_H_
 
+#include <optional>
+
 #include "base/compiler_specific.h"  // override
 #include "base/component_export.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "chromeos/ui/base/chromeos_ui_constants.h"
 #include "chromeos/ui/frame/frame_header.h"
 
 namespace ash {
 FORWARD_DECLARE_TEST(DefaultFrameHeaderTest, FrameColors);
+FORWARD_DECLARE_TEST(FrameViewAshFrameColorTest, WideFrameInitialColor);
 }  // namespace ash
 
 namespace chromeos {
@@ -28,37 +30,37 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) DefaultFrameHeader
       views::Widget* target_widget,
       views::View* header_view,
       chromeos::FrameCaptionButtonContainerView* caption_button_container);
+
+  DefaultFrameHeader(const DefaultFrameHeader&) = delete;
+  DefaultFrameHeader& operator=(const DefaultFrameHeader&) = delete;
+
   ~DefaultFrameHeader() override;
 
-  SkColor active_frame_color_for_testing() { return active_frame_color_; }
-  SkColor inactive_frame_color_for_testing() { return inactive_frame_color_; }
-
-  void SetWidthInPixels(int width_in_pixels);
+  void SetWidthInPixels(std::optional<int> width_in_pixels);
+  std::optional<int> width_in_pixels() const { return width_in_pixels_; }
 
   // FrameHeader:
   void UpdateFrameColors() override;
+  views::CaptionButtonLayoutSize GetButtonLayoutSize() const override;
 
  protected:
   // FrameHeader:
   void DoPaintHeader(gfx::Canvas* canvas) override;
-  views::CaptionButtonLayoutSize GetButtonLayoutSize() const override;
   SkColor GetTitleColor() const override;
   SkColor GetCurrentFrameColor() const override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(ash::DefaultFrameHeaderTest, FrameColors);
+  FRIEND_TEST_ALL_PREFIXES(ash::FrameViewAshFrameColorTest,
+                           WideFrameInitialColor);
 
   // Returns the window of the target widget.
   aura::Window* GetTargetWindow();
 
-  SkColor GetActiveFrameColorForPaintForTest();
-
   SkColor active_frame_color_ = chromeos::kDefaultFrameColor;
   SkColor inactive_frame_color_ = chromeos::kDefaultFrameColor;
 
-  int width_in_pixels_ = -1;
-
-  DISALLOW_COPY_AND_ASSIGN(DefaultFrameHeader);
+  std::optional<int> width_in_pixels_;
 };
 
 }  // namespace chromeos

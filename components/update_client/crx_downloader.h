@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,16 @@
 
 #include <stdint.h>
 
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "url/gurl.h"
 
 namespace update_client {
@@ -29,30 +30,41 @@ namespace update_client {
 // When multiple urls and downloaders exists, first all the urls are tried, in
 // the order they are provided in the StartDownload function argument. After
 // that, the download request is routed to the next downloader in the chain.
-// The members of this class expect to be called from the main thread only.
+// The members of this class expect to be called from the main sequence only.
 class CrxDownloader : public base::RefCountedThreadSafe<CrxDownloader> {
  public:
   struct DownloadMetrics {
-    enum Downloader { kNone = 0, kUrlFetcher, kBits };
-
-    DownloadMetrics();
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    // LINT.IfChange(CrxDownloaderType)
+    enum Downloader {
+      kNone = 0,
+      kUrlFetcher = 1,
+      kBits = 2,
+      kBackgroundMac = 3,
+      kDeliveryOptimization = 4,
+      kMaxValue = kDeliveryOptimization,
+    };
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/others/enums.xml:CrxDownloaderType)
 
     GURL url;
 
-    Downloader downloader;
+    Downloader downloader = kNone;
 
-    int error;
+    int error = 0;
+    int extra_code1 = 0;
 
-    int64_t downloaded_bytes;  // -1 means that the byte count is unknown.
-    int64_t total_bytes;
+    int64_t downloaded_bytes = -1;  // -1 means that the byte count is unknown.
+    int64_t total_bytes = -1;
 
-    uint64_t download_time_ms;
+    uint64_t download_time_ms = 0;
   };
 
   // Contains the progress or the outcome of the download.
   struct Result {
     // Download error: 0 indicates success.
     int error = 0;
+    int extra_code1 = 0;
 
     // Path of the downloaded file if the download was successful.
     base::FilePath response;
@@ -81,20 +93,21 @@ class CrxDownloader : public base::RefCountedThreadSafe<CrxDownloader> {
   // One instance of CrxDownloader can only be started once, otherwise the
   // behavior is undefined. The callback gets invoked if the download can't
   // be started. |expected_hash| represents the SHA256 cryptographic hash of
-  // the download payload, represented as a hexadecimal string.
-  void StartDownloadFromUrl(const GURL& url,
-                            const std::string& expected_hash,
-                            DownloadCallback download_callback);
-  void StartDownload(const std::vector<GURL>& urls,
-                     const std::string& expected_hash,
-                     DownloadCallback download_callback);
-
-  void set_progress_callback(const ProgressCallback& progress_callback);
+  // the download payload, represented as a hexadecimal string. Returns a
+  // callback that can be run to cancel the download.
+  base::OnceClosure StartDownloadFromUrl(const GURL& url,
+                                         const std::string& expected_hash,
+                                         ProgressCallback progress_callback,
+                                         DownloadCallback download_callback);
+  base::OnceClosure StartDownload(const std::vector<GURL>& urls,
+                                  const std::string& expected_hash,
+                                  ProgressCallback progress_callback,
+                                  DownloadCallback download_callback);
 
   const std::vector<DownloadMetrics> download_metrics() const;
 
  protected:
-  explicit CrxDownloader(scoped_refptr<CrxDownloader> successor);
+  explicit CrxDownloader(scoped_refptr<CrxDownloader> successor = nullptr);
   virtual ~CrxDownloader();
 
   // Handles the fallback in the case of multiple urls and routing of the
@@ -115,14 +128,15 @@ class CrxDownloader : public base::RefCountedThreadSafe<CrxDownloader> {
   // Returns the url which is currently being downloaded from.
   GURL url() const;
 
-  scoped_refptr<base::SingleThreadTaskRunner> main_task_runner() const {
+  scoped_refptr<base::SequencedTaskRunner> main_task_runner() const {
     return main_task_runner_;
   }
 
  private:
   friend class base::RefCountedThreadSafe<CrxDownloader>;
 
-  virtual void DoStartDownload(const GURL& url) = 0;
+  // Returns a callback that can be run to cancel the download.
+  virtual base::OnceClosure DoStartDownload(const GURL& url) = 0;
 
   void HandleDownloadError(bool is_handled,
                            const Result& result,
@@ -130,8 +144,8 @@ class CrxDownloader : public base::RefCountedThreadSafe<CrxDownloader> {
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  // Used to post callbacks to the main thread.
-  scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
+  // Used to post callbacks to the main sequence.
+  scoped_refptr<base::SequencedTaskRunner> main_task_runner_;
 
   std::vector<GURL> urls_;
 
@@ -145,6 +159,11 @@ class CrxDownloader : public base::RefCountedThreadSafe<CrxDownloader> {
 
   std::vector<DownloadMetrics> download_metrics_;
 };
+
+std::ostream& operator<<(std::ostream& os,
+                         CrxDownloader::DownloadMetrics::Downloader downloader);
+std::ostream& operator<<(std::ostream& os,
+                         const CrxDownloader::DownloadMetrics& metrics);
 
 }  // namespace update_client
 

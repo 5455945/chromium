@@ -8,7 +8,7 @@ limited set of helper functions.
 ## Window Number
 
 Windows are numbered, through their `accessibilityIdentifier`, in the order they
-are created. The first window will be `@”0”`, the second window will be `@”1”`,
+are created. The first window will be `@"0"`, the second window will be `@"1"`,
 etc. In most helper functions, the integer is used to identify windows.
 
 Windows are not automatically renumbered so it is possible to end up with two
@@ -17,7 +17,7 @@ windows with the same number. You can use
 unlikely case it is needed.  Depending on the needs of the test, you can decide
 on how to proceed, for example wanting to keep the left window as 0 and the
 right window as 1.  See
-[`[BrowserViewControllerTestCase testMultiWindowURLLoading]`](https://source.chromium.org/chromium/chromium/src/+/main:ios/chrome/browser/ui/browser_view/browser_view_controller_egtest.mm;l=209)
+[`[BrowserViewControllerTestCase testMultiWindowURLLoading]`](https://source.chromium.org/chromium/chromium/src/+/main:ios/chrome/browser/browser_view/ui_bundled/browser_view_controller_egtest.mm;l=209)
 as an example of this.
 
 ## Helpers
@@ -233,14 +233,14 @@ For example, the following code:
   [EarlGrey setRootMatcherForSubsequentInteractions:
                 chrome_test_util::WindowWithNumber(windowNumber)];
   [ChromeEarlGreyUI openToolsMenu];
-  [ChromeEarlGreyUI tapToolsMenuButton:HistoryButton()];
+  [ChromeEarlGreyUI tapToolsMenuButton:HistoryDestinationButton()];
 ```
 
 Can be reduced to:
 
 ```
   [ChromeEarlGreyUI openToolsMenuInWindowWithNumber:windowNumber];
-  [ChromeEarlGreyUI tapToolsMenuButton:HistoryButton()];
+  [ChromeEarlGreyUI tapToolsMenuButton:HistoryDestinationButton()];
 ```
 
 ## Actions

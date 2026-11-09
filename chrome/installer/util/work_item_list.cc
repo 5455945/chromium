@@ -1,9 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/installer/util/work_item_list.h"
 
+#include "base/containers/adapters.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "chrome/installer/util/callback_work_item.h"
@@ -13,17 +14,16 @@
 #include "chrome/installer/util/delete_reg_key_work_item.h"
 #include "chrome/installer/util/delete_reg_value_work_item.h"
 #include "chrome/installer/util/delete_tree_work_item.h"
-#include "chrome/installer/util/logging_installer.h"
 #include "chrome/installer/util/move_tree_work_item.h"
 #include "chrome/installer/util/set_reg_value_work_item.h"
 
 WorkItemList::~WorkItemList() {
-  for (WorkItemIterator itr = list_.begin(); itr != list_.end(); ++itr) {
-    delete (*itr);
+  // Delete the items in the opposite order of addition.
+  for (WorkItem* item : base::Reversed(list_)) {
+    delete item;
   }
-  for (WorkItemIterator itr = executed_list_.begin();
-       itr != executed_list_.end(); ++itr) {
-    delete (*itr);
+  for (WorkItem* item : executed_list_) {
+    delete item;
   }
 }
 
@@ -79,14 +79,11 @@ WorkItem* WorkItemList::AddCallbackWorkItem(
   return item;
 }
 
-WorkItem* WorkItemList::AddCopyTreeWorkItem(
-    const base::FilePath& source_path,
-    const base::FilePath& dest_path,
-    const base::FilePath& temp_path,
-    CopyOverWriteOption overwrite_option,
-    const base::FilePath& alternative_path) {
-  WorkItem* item = WorkItem::CreateCopyTreeWorkItem(
-      source_path, dest_path, temp_path, overwrite_option, alternative_path);
+WorkItem* WorkItemList::AddCopyTreeWorkItem(const base::FilePath& source_path,
+                                            const base::FilePath& dest_path,
+                                            const base::FilePath& temp_path) {
+  WorkItem* item =
+      WorkItem::CreateCopyTreeWorkItem(source_path, dest_path, temp_path);
   AddWorkItem(item);
   return item;
 }
@@ -136,9 +133,9 @@ WorkItem* WorkItemList::AddDeleteTreeWorkItem(const base::FilePath& root_path,
 WorkItem* WorkItemList::AddMoveTreeWorkItem(const base::FilePath& source_path,
                                             const base::FilePath& dest_path,
                                             const base::FilePath& temp_path,
-                                            MoveTreeOption duplicate_option) {
-  WorkItem* item = WorkItem::CreateMoveTreeWorkItem(
-      source_path, dest_path, temp_path, duplicate_option);
+                                            MoveTreeOptions options) {
+  WorkItem* item = WorkItem::CreateMoveTreeWorkItem(source_path, dest_path,
+                                                    temp_path, options);
   AddWorkItem(item);
   return item;
 }

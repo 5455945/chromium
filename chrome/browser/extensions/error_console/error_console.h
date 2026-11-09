@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include <set>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
@@ -25,6 +25,9 @@
 #include "extensions/browser/extension_error.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -49,7 +52,7 @@ class ErrorConsole : public KeyedService,
     // Sent when a new error is reported to the error console.
     virtual void OnErrorAdded(const ExtensionError* error);
 
-    // Sent when errors are removed from the error console. |extension_ids| is
+    // Sent when errors are removed from the error console. `extension_ids` is
     // the set of ids that were affected.
     // Note: This is not sent when an extension is uninstalled, or when a
     // profile is destroyed.
@@ -61,25 +64,29 @@ class ErrorConsole : public KeyedService,
   };
 
   explicit ErrorConsole(Profile* profile);
+
+  ErrorConsole(const ErrorConsole&) = delete;
+  ErrorConsole& operator=(const ErrorConsole&) = delete;
+
   ~ErrorConsole() override;
 
-  // Convenience method to return the ErrorConsole for a given |context|.
+  // Convenience method to return the ErrorConsole for a given `context`.
   static ErrorConsole* Get(content::BrowserContext* context);
 
-  // Set whether or not errors of the specified |type| are stored for the
-  // extension with the given |extension_id|. This will be stored in the
+  // Set whether or not errors of the specified `type` are stored for the
+  // extension with the given `extension_id`. This will be stored in the
   // preferences.
   void SetReportingForExtension(const std::string& extension_id,
                                 ExtensionError::Type type,
                                 bool enabled);
 
   // Set whether or not errors of all types are stored for the extension with
-  // the given |extension_id|.
+  // the given `extension_id`.
   void SetReportingAllForExtension(const std::string& extension_id,
                                            bool enabled);
 
   // Returns true if reporting for either manifest or runtime errors is enabled
-  // for the extension with the given |extension_id|.
+  // for the extension with the given `extension_id`.
   bool IsReportingEnabledForExtension(const std::string& extension_id) const;
 
   // Restore default reporting to the given extension.
@@ -88,11 +95,11 @@ class ErrorConsole : public KeyedService,
   // Report an extension error, and add it to the list.
   void ReportError(std::unique_ptr<ExtensionError> error);
 
-  // Removes errors from the map according to the given |filter|.
+  // Removes errors from the map according to the given `filter`.
   void RemoveErrors(const ErrorMap::Filter& filter);
 
   // Get a collection of weak pointers to all errors relating to the extension
-  // with the given |extension_id|.
+  // with the given `extension_id`.
   const ErrorList& GetErrorsForExtension(const std::string& extension_id) const;
 
   // Add or remove observers of the ErrorConsole to be notified of any errors
@@ -117,8 +124,9 @@ class ErrorConsole : public KeyedService,
 
   // Set the default reporting for all extensions.
   void set_default_reporting_for_test(ExtensionError::Type type, bool enabled) {
-    default_mask_ =
-        enabled ? default_mask_ | (1 << type) : default_mask_ & ~(1 << type);
+    int intType = static_cast<int>(type);
+    default_mask_ = enabled ? default_mask_ | (1 << intType)
+                            : default_mask_ & ~(1 << intType);
   }
 
  private:
@@ -185,12 +193,12 @@ class ErrorConsole : public KeyedService,
   // The profile with which the ErrorConsole is associated. Only collect errors
   // from extensions and RenderViews associated with this Profile (and it's
   // incognito fellow).
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   // The ExtensionPrefs with which the ErrorConsole is associated. This weak
   // pointer is safe because ErrorConsole is owned by ExtensionSystem, which
   // is dependent on ExtensionPrefs.
-  ExtensionPrefs* prefs_;
+  raw_ptr<ExtensionPrefs> prefs_;
 
   base::ScopedMultiSourceObservation<Profile, ProfileObserver>
       profile_observations_{this};
@@ -198,8 +206,6 @@ class ErrorConsole : public KeyedService,
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       registry_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ErrorConsole);
 };
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,14 +18,19 @@ namespace blink {
 enum class DocumentUpdateReason {
   kAccessibility,
   kBaseColor,
+  kBaseSelect,
   kBeginMainFrame,
   kCanvas,
+  kCanvasDrawElementImage,
+  kComputedStyle,
   kContextMenu,
   kDisplayLock,
+  kViewTransition,
   kDragImage,
   kEditing,
   kFindInPage,
   kFocus,
+  kFocusgroup,
   kForm,
   kHitTest,
   kInput,
@@ -35,15 +40,19 @@ enum class DocumentUpdateReason {
   kOverlay,
   kPagePopup,
   kPlugin,
+  kPopover,
+  kPrerender,
   kPrinting,
   kScroll,
   kSelection,
   kSizeChange,
   kSpatialNavigation,
   kSpellCheck,
+  kSMILAnimation,
   kSVGImage,
   kTapHighlight,
   kTest,
+  kWebAnimation,
   kUnknown
 };
 

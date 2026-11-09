@@ -1,488 +1,198 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/autofill/core/browser/autofill_type.h"
 
-#include "base/notreached.h"
-#include "base/strings/string_piece.h"
+#include <algorithm>
+#include <string>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_types.h"
+#include "components/autofill/core/common/dense_set.h"
 
 namespace autofill {
 
-FieldTypeGroup GroupTypeOfServerFieldType(ServerFieldType field_type) {
-  switch (field_type) {
-    case NAME_HONORIFIC_PREFIX:
-    case NAME_FIRST:
-    case NAME_MIDDLE:
-    case NAME_LAST:
-    case NAME_LAST_FIRST:
-    case NAME_LAST_SECOND:
-    case NAME_LAST_CONJUNCTION:
-    case NAME_MIDDLE_INITIAL:
-    case NAME_FULL:
-    case NAME_SUFFIX:
-    case NAME_FULL_WITH_HONORIFIC_PREFIX:
-      return FieldTypeGroup::kName;
+namespace {
 
-    case NAME_BILLING_FIRST:
-    case NAME_BILLING_MIDDLE:
-    case NAME_BILLING_LAST:
-    case NAME_BILLING_MIDDLE_INITIAL:
-    case NAME_BILLING_FULL:
-    case NAME_BILLING_SUFFIX:
-      return FieldTypeGroup::kNameBilling;
-
-    case EMAIL_ADDRESS:
-    case USERNAME_AND_EMAIL_ADDRESS:
-      return FieldTypeGroup::kEmail;
-
-    case PHONE_HOME_NUMBER:
-    case PHONE_HOME_CITY_CODE:
-    case PHONE_HOME_COUNTRY_CODE:
-    case PHONE_HOME_CITY_AND_NUMBER:
-    case PHONE_HOME_WHOLE_NUMBER:
-    case PHONE_HOME_EXTENSION:
-      return FieldTypeGroup::kPhoneHome;
-
-    case PHONE_BILLING_NUMBER:
-    case PHONE_BILLING_CITY_CODE:
-    case PHONE_BILLING_COUNTRY_CODE:
-    case PHONE_BILLING_CITY_AND_NUMBER:
-    case PHONE_BILLING_WHOLE_NUMBER:
-      return FieldTypeGroup::kPhoneBilling;
-
-    case ADDRESS_HOME_LINE1:
-    case ADDRESS_HOME_LINE2:
-    case ADDRESS_HOME_LINE3:
-    case ADDRESS_HOME_APT_NUM:
-    case ADDRESS_HOME_CITY:
-    case ADDRESS_HOME_STATE:
-    case ADDRESS_HOME_ZIP:
-    case ADDRESS_HOME_COUNTRY:
-    case ADDRESS_HOME_STREET_ADDRESS:
-    case ADDRESS_HOME_SORTING_CODE:
-    case ADDRESS_HOME_DEPENDENT_LOCALITY:
-    case ADDRESS_HOME_STREET_NAME:
-    case ADDRESS_HOME_DEPENDENT_STREET_NAME:
-    case ADDRESS_HOME_HOUSE_NUMBER:
-    case ADDRESS_HOME_PREMISE_NAME:
-    case ADDRESS_HOME_STREET_AND_DEPENDENT_STREET_NAME:
-    case ADDRESS_HOME_SUBPREMISE:
-    case ADDRESS_HOME_OTHER_SUBUNIT:
-    case ADDRESS_HOME_ADDRESS:
-    case ADDRESS_HOME_ADDRESS_WITH_NAME:
-    case ADDRESS_HOME_FLOOR:
-      return FieldTypeGroup::kAddressHome;
-
-    case ADDRESS_BILLING_LINE1:
-    case ADDRESS_BILLING_LINE2:
-    case ADDRESS_BILLING_LINE3:
-    case ADDRESS_BILLING_APT_NUM:
-    case ADDRESS_BILLING_CITY:
-    case ADDRESS_BILLING_STATE:
-    case ADDRESS_BILLING_ZIP:
-    case ADDRESS_BILLING_COUNTRY:
-    case ADDRESS_BILLING_STREET_ADDRESS:
-    case ADDRESS_BILLING_SORTING_CODE:
-    case ADDRESS_BILLING_DEPENDENT_LOCALITY:
-      return FieldTypeGroup::kAddressBilling;
-
-    case CREDIT_CARD_NAME_FULL:
-    case CREDIT_CARD_NAME_FIRST:
-    case CREDIT_CARD_NAME_LAST:
-    case CREDIT_CARD_NUMBER:
-    case CREDIT_CARD_EXP_MONTH:
-    case CREDIT_CARD_EXP_2_DIGIT_YEAR:
-    case CREDIT_CARD_EXP_4_DIGIT_YEAR:
-    case CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR:
-    case CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR:
-    case CREDIT_CARD_TYPE:
-    case CREDIT_CARD_VERIFICATION_CODE:
-      return FieldTypeGroup::kCreditCard;
-
-    case COMPANY_NAME:
-      return FieldTypeGroup::kCompany;
-
-    case MERCHANT_PROMO_CODE:
-      // TODO(crbug/1190334): Create new field type group kMerchantPromoCode.
-      //                      (This involves updating many switch statements.)
-      return FieldTypeGroup::kNoGroup;
-
-    case PASSWORD:
-    case ACCOUNT_CREATION_PASSWORD:
-    case NOT_ACCOUNT_CREATION_PASSWORD:
-    case NEW_PASSWORD:
-    case PROBABLY_NEW_PASSWORD:
-    case NOT_NEW_PASSWORD:
-    case CONFIRMATION_PASSWORD:
-    case NOT_PASSWORD:
-    case SINGLE_USERNAME:
-    case NOT_USERNAME:
-      return FieldTypeGroup::kPasswordField;
-
-    case NO_SERVER_DATA:
-    case EMPTY_TYPE:
-    case AMBIGUOUS_TYPE:
-    case PHONE_FAX_NUMBER:
-    case PHONE_FAX_CITY_CODE:
-    case PHONE_FAX_COUNTRY_CODE:
-    case PHONE_FAX_CITY_AND_NUMBER:
-    case PHONE_FAX_WHOLE_NUMBER:
-    case FIELD_WITH_DEFAULT_VALUE:
-    case MERCHANT_EMAIL_SIGNUP:
-    case UPI_VPA:
-      return FieldTypeGroup::kNoGroup;
-
-    case MAX_VALID_FIELD_TYPE:
-      NOTREACHED();
-      return FieldTypeGroup::kNoGroup;
-
-    case USERNAME:
-      return FieldTypeGroup::kUsernameField;
-
-    case PRICE:
-    case SEARCH_TERM:
-      return FieldTypeGroup::kUnfillable;
-
-    case UNKNOWN_TYPE:
-      return FieldTypeGroup::kNoGroup;
-  }
-  NOTREACHED();
-  return FieldTypeGroup::kNoGroup;
+// Returns the single element in `s` if it exists or UNKNOWN_TYPE.
+// `s` must not contain more than one element.
+[[nodiscard]] constexpr FieldType GetUniqueIfAny(const FieldTypeSet& s) {
+  DCHECK_LE(s.size(), 1u) << FieldTypeSetToString(s);
+  return !s.empty() ? *s.begin() : UNKNOWN_TYPE;
 }
 
-FieldTypeGroup GroupTypeOfHtmlFieldType(HtmlFieldType field_type,
-                                        HtmlFieldMode field_mode) {
-  switch (field_type) {
-    case HTML_TYPE_NAME:
-    case HTML_TYPE_HONORIFIC_PREFIX:
-    case HTML_TYPE_GIVEN_NAME:
-    case HTML_TYPE_ADDITIONAL_NAME:
-    case HTML_TYPE_ADDITIONAL_NAME_INITIAL:
-    case HTML_TYPE_FAMILY_NAME:
-      return field_mode == HTML_MODE_BILLING ? FieldTypeGroup::kNameBilling
-                                             : FieldTypeGroup::kName;
-
-    case HTML_TYPE_ORGANIZATION:
-      return FieldTypeGroup::kCompany;
-
-    case HTML_TYPE_STREET_ADDRESS:
-    case HTML_TYPE_ADDRESS_LINE1:
-    case HTML_TYPE_ADDRESS_LINE2:
-    case HTML_TYPE_ADDRESS_LINE3:
-    case HTML_TYPE_ADDRESS_LEVEL1:
-    case HTML_TYPE_ADDRESS_LEVEL2:
-    case HTML_TYPE_ADDRESS_LEVEL3:
-    case HTML_TYPE_COUNTRY_CODE:
-    case HTML_TYPE_COUNTRY_NAME:
-    case HTML_TYPE_POSTAL_CODE:
-    case HTML_TYPE_FULL_ADDRESS:
-      return field_mode == HTML_MODE_BILLING ? FieldTypeGroup::kAddressBilling
-                                             : FieldTypeGroup::kAddressHome;
-
-    case HTML_TYPE_CREDIT_CARD_NAME_FULL:
-    case HTML_TYPE_CREDIT_CARD_NAME_FIRST:
-    case HTML_TYPE_CREDIT_CARD_NAME_LAST:
-    case HTML_TYPE_CREDIT_CARD_NUMBER:
-    case HTML_TYPE_CREDIT_CARD_EXP:
-    case HTML_TYPE_CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR:
-    case HTML_TYPE_CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR:
-    case HTML_TYPE_CREDIT_CARD_EXP_MONTH:
-    case HTML_TYPE_CREDIT_CARD_EXP_YEAR:
-    case HTML_TYPE_CREDIT_CARD_EXP_2_DIGIT_YEAR:
-    case HTML_TYPE_CREDIT_CARD_EXP_4_DIGIT_YEAR:
-    case HTML_TYPE_CREDIT_CARD_VERIFICATION_CODE:
-    case HTML_TYPE_CREDIT_CARD_TYPE:
-      return FieldTypeGroup::kCreditCard;
-
-    case HTML_TYPE_TRANSACTION_AMOUNT:
-    case HTML_TYPE_TRANSACTION_CURRENCY:
-      return FieldTypeGroup::kTransaction;
-
-    case HTML_TYPE_TEL:
-    case HTML_TYPE_TEL_COUNTRY_CODE:
-    case HTML_TYPE_TEL_NATIONAL:
-    case HTML_TYPE_TEL_AREA_CODE:
-    case HTML_TYPE_TEL_LOCAL:
-    case HTML_TYPE_TEL_LOCAL_PREFIX:
-    case HTML_TYPE_TEL_LOCAL_SUFFIX:
-    case HTML_TYPE_TEL_EXTENSION:
-      return field_mode == HTML_MODE_BILLING ? FieldTypeGroup::kPhoneBilling
-                                             : FieldTypeGroup::kPhoneHome;
-
-    case HTML_TYPE_EMAIL:
-      return FieldTypeGroup::kEmail;
-
-    case HTML_TYPE_UPI_VPA:
-      // TODO(crbug/702223): Add support for UPI-VPA.
-      return FieldTypeGroup::kNoGroup;
-
-    case HTML_TYPE_ONE_TIME_CODE:
-      return FieldTypeGroup::kNoGroup;
-
-    case HTML_TYPE_UNSPECIFIED:
-    case HTML_TYPE_UNRECOGNIZED:
-      return FieldTypeGroup::kNoGroup;
+// Used by the constructor to handle NO_SERVER_DATA and UNKNOWN_TYPE:
+// - NO_SERVER_DATA is represented as the empty set of FieldTypes.
+// - UNKNOWN_TYPE trumps all other FieldTypes.
+FieldTypeSet Normalize(FieldTypeSet field_types) {
+  field_types.erase(NO_SERVER_DATA);
+  if (field_types.contains(UNKNOWN_TYPE)) {
+    field_types.clear();
+    field_types.insert(UNKNOWN_TYPE);
   }
-  NOTREACHED();
-  return FieldTypeGroup::kNoGroup;
+  return field_types;
 }
 
-AutofillType::AutofillType(ServerFieldType field_type)
-    : html_type_(HTML_TYPE_UNSPECIFIED), html_mode_(HTML_MODE_NONE) {
-  if ((field_type < NO_SERVER_DATA || field_type >= MAX_VALID_FIELD_TYPE) ||
-      (field_type >= 15 && field_type <= 19) ||
-      (field_type >= 25 && field_type <= 29) ||
-      (field_type >= 44 && field_type <= 50) || field_type == 94) {
-    server_type_ = UNKNOWN_TYPE;
-  } else {
-    server_type_ = field_type;
-  }
+// The sets below define the AutofillType constraints. Every AutofillType must
+// contain at most one of these FieldTypes. This is so that we define getters
+// like GetAddressType() which return a unique FieldType. See TestConstraints().
+//
+// These FieldTypes are not identical to other groupings of FieldTypes:
+// - FieldTypeGroups are too granular (e.g., multiple FieldTypeGroups make up
+//   the address-related FieldTypes) and overlap (e.g., FieldTypeGroup::kName
+//   types count both as address and as Autofill AI FieldTypes).
+// - FormTypes are too granular (FormType::kCreditCardForm and
+//   FormType::kStandaloneCvcForm both count as CVC fields) and too hierarchical
+//   (e.g., they count names exclusively towards addresses) and incomplete
+//   (e.g., there is no FormType::kAutofillAi).
+// - FillingProducts are too decoupled from FieldTypes (e.g., some
+//   FillingProducts have no associated FieldTypes).
+
+constexpr FieldTypeSet kAddressFieldTypes =
+    Union(FieldTypesOfGroup(FieldTypeGroup::kName),
+          FieldTypesOfGroup(FieldTypeGroup::kEmail),
+          FieldTypesOfGroup(FieldTypeGroup::kCompany),
+          FieldTypesOfGroup(FieldTypeGroup::kAddress),
+          FieldTypesOfGroup(FieldTypeGroup::kPhone));
+
+constexpr FieldTypeSet kCreditCardFieldTypes =
+    Union(FieldTypesOfGroup(FieldTypeGroup::kCreditCard),
+          FieldTypesOfGroup(FieldTypeGroup::kStandaloneCvcField));
+
+// FedCM currently only supports full names (NAME_FULL) and given names
+// (NAME_FIRST), no other name parts:
+// https://w3c-fedid.github.io/FedCM/#dictdef-identityprovideraccount
+//
+// TODO(crbug.com/432645177): We probably need to remove this set and the
+// `FieldType GetIdentityCredentialType()` getter if and when we start
+// populating AutofillType with _all_ FieldTypes received from the server, which
+// will be needed when we migrate the PWM to AutofillType. The reason is that
+// the server does and should predict classical Autofill FieldTypes and PWM
+// FieldTypes simultaneously (e.g., a field may receive the predictions
+// NAME_FULL and PASSWORD), and this set disallows them. This will become even
+// more acute if the set below grows further (e.g., to include USERNAME) and the
+// overlap with PWM types grows (the Autofill server may predict
+// EMAIL_ADDRESS and USERNAME for the same field).
+constexpr FieldTypeSet kIdentityCredentialFieldTypes = {PASSWORD};
+
+// TODO(crbug.com/432645177): Remove `EMAIL_OR_LOYALTY_MEMBERSHIP_ID` and
+// represent it as union of the other three types. That means the getter
+// `FieldType GetLoyaltyCardType()` must be replaced with
+// `FieldTypeSet GetLoyaltyCardTypes()`.
+constexpr FieldTypeSet kLoyaltyCardFieldTypes = {
+    EMAIL_ADDRESS, LOYALTY_MEMBERSHIP_ID, LOYALTY_MEMBERSHIP_PROGRAM,
+    LOYALTY_MEMBERSHIP_PROVIDER, EMAIL_OR_LOYALTY_MEMBERSHIP_ID};
+
+// Password Manager currently does not use AutofillType except for filling
+// ONE_TIME_CODE fields. If and when we want to migrate Password Manager to
+// AutofillType, we need to be careful about the AutofillType constraints.
+// For example, the constraint for Identity Credentials says that an
+// AutofillType cannot contain NAME_FULL and PASSWORD simultaneously, but the
+// server may well serve such predictions at the moment.
+constexpr FieldTypeSet kPasswordManagerFieldTypes =
+    Union(FieldTypesOfGroup(FieldTypeGroup::kUsernameField),
+          FieldTypesOfGroup(FieldTypeGroup::kPasswordField),
+          FieldTypeSet{ONE_TIME_CODE});
+
+}  // namespace
+
+// static
+bool AutofillType::TestConstraints(const FieldTypeSet& s) {
+  // Each EntityType defines one constraint, so we don't have a constant
+  // FieldTypeSet for each of them.
+  auto test_entity_constraint = [&s](EntityType entity) {
+    FieldTypeSet t;
+    for (AttributeType attribute : entity.attributes()) {
+      t.insert_all(attribute.field_subtypes());
+    }
+    return Intersection(s, t).size() <= 1;
+  };
+  return Intersection(s, kAddressFieldTypes).size() <= 1 &&
+         std::ranges::all_of(DenseSet<EntityType>::all(),
+                             test_entity_constraint) &&
+         Intersection(s, kCreditCardFieldTypes).size() <= 1 &&
+         Intersection(s, kIdentityCredentialFieldTypes).size() <= 1 &&
+         Intersection(s, kLoyaltyCardFieldTypes).size() <= 1 &&
+         Intersection(s, kPasswordManagerFieldTypes).size() <= 1;
 }
 
-AutofillType::AutofillType(HtmlFieldType field_type, HtmlFieldMode mode)
-    : server_type_(UNKNOWN_TYPE), html_type_(field_type), html_mode_(mode) {}
-
-FieldTypeGroup AutofillType::group() const {
-  FieldTypeGroup result = FieldTypeGroup::kNoGroup;
-  if (server_type_ != UNKNOWN_TYPE) {
-    result = GroupTypeOfServerFieldType(server_type_);
-  } else {
-    result = GroupTypeOfHtmlFieldType(html_type_, html_mode_);
-  }
-  return result;
+AutofillType::AutofillType(FieldTypeSet field_types)
+    : types_(Normalize(field_types)) {
+  DCHECK(TestConstraints(field_types)) << FieldTypeSetToString(field_types);
+  DCHECK(TestConstraints(GetTypes())) << FieldTypeSetToString(GetTypes());
 }
 
-bool AutofillType::IsUnknown() const {
-  return server_type_ == UNKNOWN_TYPE && (html_type_ == HTML_TYPE_UNSPECIFIED ||
-                                          html_type_ == HTML_TYPE_UNRECOGNIZED);
+AutofillType::AutofillType(FieldType field_type)
+    : AutofillType(FieldTypeSet{field_type}) {}
+
+FieldTypeSet AutofillType::GetTypes() const {
+  return types_;
 }
 
-ServerFieldType AutofillType::GetStorableType() const {
-  // Map billing types to the equivalent non-billing types.
-  switch (server_type_) {
-    case ADDRESS_BILLING_LINE1:
-      return ADDRESS_HOME_LINE1;
+DenseSet<FieldTypeGroup> AutofillType::GetGroups() const {
+  FieldTypeGroupSet groups = FieldTypeGroupSet(types_, &GroupTypeOfFieldType);
+  groups.erase(FieldTypeGroup::kNoGroup);
+  return groups;
+}
 
-    case ADDRESS_BILLING_LINE2:
-      return ADDRESS_HOME_LINE2;
+DenseSet<FormType> AutofillType::GetFormTypes() const {
+  DenseSet<FormType> form_types =
+      DenseSet<FormType>(GetGroups(), &FieldTypeGroupToFormType);
+  form_types.erase(FormType::kUnknownFormType);
+  return form_types;
+}
 
-    case ADDRESS_BILLING_LINE3:
-      return ADDRESS_HOME_LINE3;
+FieldType AutofillType::GetAddressType() const {
+  return GetUniqueIfAny(Intersection(GetTypes(), kAddressFieldTypes));
+}
 
-    case ADDRESS_BILLING_APT_NUM:
-      return ADDRESS_HOME_APT_NUM;
-
-    case ADDRESS_BILLING_CITY:
-      return ADDRESS_HOME_CITY;
-
-    case ADDRESS_BILLING_STATE:
-      return ADDRESS_HOME_STATE;
-
-    case ADDRESS_BILLING_ZIP:
-      return ADDRESS_HOME_ZIP;
-
-    case ADDRESS_BILLING_COUNTRY:
-      return ADDRESS_HOME_COUNTRY;
-
-    case PHONE_BILLING_WHOLE_NUMBER:
-      return PHONE_HOME_WHOLE_NUMBER;
-
-    case PHONE_BILLING_NUMBER:
-      return PHONE_HOME_NUMBER;
-
-    case PHONE_BILLING_CITY_CODE:
-      return PHONE_HOME_CITY_CODE;
-
-    case PHONE_BILLING_COUNTRY_CODE:
-      return PHONE_HOME_COUNTRY_CODE;
-
-    case PHONE_BILLING_CITY_AND_NUMBER:
-      return PHONE_HOME_CITY_AND_NUMBER;
-
-    case NAME_BILLING_FIRST:
-      return NAME_FIRST;
-
-    case NAME_BILLING_MIDDLE:
-      return NAME_MIDDLE;
-
-    case NAME_BILLING_LAST:
-      return NAME_LAST;
-
-    case NAME_BILLING_MIDDLE_INITIAL:
-      return NAME_MIDDLE_INITIAL;
-
-    case NAME_BILLING_FULL:
-      return NAME_FULL;
-
-    case NAME_BILLING_SUFFIX:
-      return NAME_SUFFIX;
-
-    case ADDRESS_BILLING_STREET_ADDRESS:
-      return ADDRESS_HOME_STREET_ADDRESS;
-
-    case ADDRESS_BILLING_SORTING_CODE:
-      return ADDRESS_HOME_SORTING_CODE;
-
-    case ADDRESS_BILLING_DEPENDENT_LOCALITY:
-      return ADDRESS_HOME_DEPENDENT_LOCALITY;
-
-    case UNKNOWN_TYPE:
-      break;  // Try to parse HTML types instead.
-
-    default:
-      return server_type_;
+FieldType AutofillType::GetAutofillAiType(EntityType entity) const {
+  FieldTypeSet field_types = {};
+  for (AttributeType attribute : entity.attributes()) {
+    field_types.insert_all(attribute.field_subtypes());
   }
+  return GetUniqueIfAny(Intersection(GetTypes(), field_types));
+}
 
-  switch (html_type_) {
-    case HTML_TYPE_UNSPECIFIED:
-      return UNKNOWN_TYPE;
+FieldType AutofillType::GetCreditCardType() const {
+  return GetUniqueIfAny(Intersection(GetTypes(), kCreditCardFieldTypes));
+}
 
-    case HTML_TYPE_NAME:
-      return NAME_FULL;
+FieldType AutofillType::GetIdentityCredentialType() const {
+  return GetUniqueIfAny(
+      Intersection(GetTypes(), kIdentityCredentialFieldTypes));
+}
 
-    case HTML_TYPE_HONORIFIC_PREFIX:
-      return NAME_HONORIFIC_PREFIX;
+FieldType AutofillType::GetLoyaltyCardType() const {
+  return GetUniqueIfAny(Intersection(GetTypes(), kLoyaltyCardFieldTypes));
+}
 
-    case HTML_TYPE_GIVEN_NAME:
-      return NAME_FIRST;
+FieldType AutofillType::GetPasswordManagerType() const {
+  return GetUniqueIfAny(Intersection(GetTypes(), kPasswordManagerFieldTypes));
+}
 
-    case HTML_TYPE_ADDITIONAL_NAME:
-      return NAME_MIDDLE;
+FieldTypeSet AutofillType::GetAutofillAiTypes() const {
+  static constexpr FieldTypeSet kFieldTypes = [] {
+    FieldTypeSet field_types;
+    for (AttributeType at : DenseSet<AttributeType>::all()) {
+      field_types.insert_all(at.field_subtypes());
+    }
+    return field_types;
+  }();
+  return Intersection(GetTypes(), kFieldTypes);
+}
 
-    case HTML_TYPE_FAMILY_NAME:
-      return NAME_LAST;
-
-    case HTML_TYPE_ORGANIZATION:
-      return COMPANY_NAME;
-
-    case HTML_TYPE_STREET_ADDRESS:
-      return ADDRESS_HOME_STREET_ADDRESS;
-
-    case HTML_TYPE_ADDRESS_LINE1:
-      return ADDRESS_HOME_LINE1;
-
-    case HTML_TYPE_ADDRESS_LINE2:
-      return ADDRESS_HOME_LINE2;
-
-    case HTML_TYPE_ADDRESS_LINE3:
-      return ADDRESS_HOME_LINE3;
-
-    case HTML_TYPE_ADDRESS_LEVEL1:
-      return ADDRESS_HOME_STATE;
-
-    case HTML_TYPE_ADDRESS_LEVEL2:
-      return ADDRESS_HOME_CITY;
-
-    case HTML_TYPE_ADDRESS_LEVEL3:
-      return ADDRESS_HOME_DEPENDENT_LOCALITY;
-
-    case HTML_TYPE_COUNTRY_CODE:
-    case HTML_TYPE_COUNTRY_NAME:
-      return ADDRESS_HOME_COUNTRY;
-
-    case HTML_TYPE_POSTAL_CODE:
-      return ADDRESS_HOME_ZIP;
-
-    // Full address is composed of other types; it can't be stored.
-    case HTML_TYPE_FULL_ADDRESS:
-      return UNKNOWN_TYPE;
-
-    case HTML_TYPE_CREDIT_CARD_NAME_FULL:
-      return CREDIT_CARD_NAME_FULL;
-
-    case HTML_TYPE_CREDIT_CARD_NAME_FIRST:
-      return CREDIT_CARD_NAME_FIRST;
-
-    case HTML_TYPE_CREDIT_CARD_NAME_LAST:
-      return CREDIT_CARD_NAME_LAST;
-
-    case HTML_TYPE_CREDIT_CARD_NUMBER:
-      return CREDIT_CARD_NUMBER;
-
-    case HTML_TYPE_CREDIT_CARD_EXP:
-      return CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR;
-
-    case HTML_TYPE_CREDIT_CARD_EXP_MONTH:
-      return CREDIT_CARD_EXP_MONTH;
-
-    case HTML_TYPE_CREDIT_CARD_EXP_YEAR:
-      return CREDIT_CARD_EXP_4_DIGIT_YEAR;
-
-    case HTML_TYPE_CREDIT_CARD_VERIFICATION_CODE:
-      return CREDIT_CARD_VERIFICATION_CODE;
-
-    case HTML_TYPE_CREDIT_CARD_TYPE:
-      return CREDIT_CARD_TYPE;
-
-    case HTML_TYPE_TEL:
-      return PHONE_HOME_WHOLE_NUMBER;
-
-    case HTML_TYPE_TEL_COUNTRY_CODE:
-      return PHONE_HOME_COUNTRY_CODE;
-
-    case HTML_TYPE_TEL_NATIONAL:
-      return PHONE_HOME_CITY_AND_NUMBER;
-
-    case HTML_TYPE_TEL_AREA_CODE:
-      return PHONE_HOME_CITY_CODE;
-
-    case HTML_TYPE_TEL_LOCAL:
-    case HTML_TYPE_TEL_LOCAL_PREFIX:
-    case HTML_TYPE_TEL_LOCAL_SUFFIX:
-      return PHONE_HOME_NUMBER;
-
-    case HTML_TYPE_TEL_EXTENSION:
-      return PHONE_HOME_EXTENSION;
-
-    case HTML_TYPE_EMAIL:
-      return EMAIL_ADDRESS;
-
-    case HTML_TYPE_ADDITIONAL_NAME_INITIAL:
-      return NAME_MIDDLE_INITIAL;
-
-    case HTML_TYPE_CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR:
-      return CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR;
-
-    case HTML_TYPE_CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR:
-      return CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR;
-
-    case HTML_TYPE_CREDIT_CARD_EXP_2_DIGIT_YEAR:
-      return CREDIT_CARD_EXP_2_DIGIT_YEAR;
-
-    case HTML_TYPE_CREDIT_CARD_EXP_4_DIGIT_YEAR:
-      return CREDIT_CARD_EXP_4_DIGIT_YEAR;
-
-    case HTML_TYPE_UPI_VPA:
-      return UPI_VPA;
-
-    // These types aren't stored; they're transient.
-    case HTML_TYPE_TRANSACTION_AMOUNT:
-    case HTML_TYPE_TRANSACTION_CURRENCY:
-    case HTML_TYPE_ONE_TIME_CODE:
-      return UNKNOWN_TYPE;
-
-    case HTML_TYPE_UNRECOGNIZED:
-      return UNKNOWN_TYPE;
-  }
-
-  NOTREACHED();
-  return UNKNOWN_TYPE;
+FieldTypeSet AutofillType::GetStaticAutofillAiTypes() const {
+  return Intersection(GetAutofillAiTypes(),
+                      FieldTypesOfGroup(FieldTypeGroup::kAutofillAi));
 }
 
 std::string AutofillType::ToString() const {
-  if (IsUnknown())
-    return "UNKNOWN_TYPE";
-
-  if (server_type_ != UNKNOWN_TYPE)
-    return ServerFieldTypeToString(server_type_);
-
-  return std::string(FieldTypeToStringPiece(html_type_));
-}
-
-// static
-std::string AutofillType::ServerFieldTypeToString(ServerFieldType type) {
-  return std::string(FieldTypeToStringPiece(type));
+  return FieldTypeSetToString(types_);
 }
 
 }  // namespace autofill

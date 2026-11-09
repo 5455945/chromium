@@ -1,35 +1,46 @@
-// Copyright 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_PROCESS_PROCESS_H_
 #define BASE_PROCESS_PROCESS_H_
 
-#include "base/base_export.h"
-#include "base/macros.h"
-#include "base/process/process_handle.h"
-#include "base/strings/string_piece.h"
-#include "base/time/time.h"
-#include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include <iosfwd>
+#include <string_view>
 
-#if defined(OS_WIN)
+#include "base/base_export.h"
+#include "base/compiler_specific.h"
+#include "base/process/process_handle.h"
+#include "base/time/time.h"
+#include "build/blink_buildflags.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_WIN)
 #include "base/win/scoped_handle.h"
 #endif
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
 #include <lib/zx/process.h>
 #endif
 
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 #include "base/feature_list.h"
+#endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_APPLE)
 #include "base/process/port_provider_mac.h"
-#endif
+#endif  // BUILDFLAG(IS_APPLE)
 
 namespace base {
 
-#if defined(OS_APPLE)
-extern const Feature kMacAllowBackgroundingProcesses;
+#if BUILDFLAG(IS_CHROMEOS)
+// FlattenCpuCgroups feature uses /sys/fs/cgroup/cpu/chrome_renderers and
+// /sys/fs/cgroup/cpu/chrome_renderers_background cpu cgroups for renderer
+// processes instead of nested cpu cgroups. Nested cpu cgroups has an overhead
+// on task scheduling.
+BASE_EXPORT BASE_DECLARE_FEATURE(kFlattenCpuCgroups);
+
+class ProcessPriorityDelegate;
 #endif
 
 // Provides a move-only encapsulation of a process.
@@ -53,10 +64,18 @@ class BASE_EXPORT Process {
 
   Process(Process&& other);
 
+  Process(const Process&) = delete;
+  Process& operator=(const Process&) = delete;
+
   // The destructor does not terminate the process.
   ~Process();
 
   Process& operator=(Process&& other);
+
+  // The result code that is used when a process is killed by a bad message.
+  // Consistent with the value of RESULT_CODE_KILLED_BAD_MESSAGE in
+  // content/public/common/result_codes.h.
+  static constexpr int kResultCodeKilledBadMessage = 3;
 
   // Returns an object for the current process.
   static Process Current();
@@ -69,14 +88,15 @@ class BASE_EXPORT Process {
   // address space and duplicate handles).
   static Process OpenWithExtraPrivileges(ProcessId pid);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Returns a Process for the given |pid|, using some |desired_access|.
   // See ::OpenProcess documentation for valid |desired_access|.
   static Process OpenWithAccess(ProcessId pid, DWORD desired_access);
 #endif
 
-  // Returns true if processes can be backgrounded.
-  static bool CanBackgroundProcesses();
+  // Returns true if changing the priority of processes through `SetPriority()`
+  // is possible.
+  static bool CanSetPriority();
 
   // Terminates the current process immediately with |exit_code|.
   [[noreturn]] static void TerminateCurrentProcessImmediately(int exit_code);
@@ -89,12 +109,23 @@ class BASE_EXPORT Process {
   ProcessHandle Handle() const;
 
   // Returns a second object that represents this process.
+  //
+  // Warning: on Windows this duplicates the process handle, which is not a
+  // cheap user-mode operation. Handle duplication takes the per-process handle
+  // table lock and, for process objects, the system-wide process table lock, so
+  // it contends with handle and process operations machine-wide and is prone to
+  // priority inversion. Third-party security software compounds this by
+  // registering ObRegisterCallbacks() callbacks that run inline on the calling
+  // thread. Stalls of seconds have been observed. Avoid calling this on the UI
+  // thread or any other latency-sensitive thread: pass an existing Process by
+  // reference where possible, or duplicate it off of the critical path. See
+  // https://crbug.com/40716800.
   Process Duplicate() const;
 
   // Relinquishes ownership of the handle and sets this to kNullProcessHandle.
   // The result may be a pseudo-handle, depending on the OS and value stored in
   // this.
-  ProcessHandle Release() WARN_UNUSED_RESULT;
+  [[nodiscard]] ProcessHandle Release();
 
   // Get the PID for this process.
   ProcessId Pid() const;
@@ -118,7 +149,7 @@ class BASE_EXPORT Process {
   // (and maybe Fuchsia?), because the ProcessHandle will keep the zombie
   // process information available until itself has been released. But on Posix,
   // the OS may reuse the ProcessId.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   bool IsRunning() const {
     return !WaitForExitWithTimeout(base::TimeDelta(), nullptr);
   }
@@ -131,7 +162,7 @@ class BASE_EXPORT Process {
   // NOTE: |exit_code| is only used on OS_WIN.
   bool Terminate(int exit_code, bool wait) const;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   enum class WaitExitStatus {
     PROCESS_EXITED,
     STOP_EVENT_SIGNALED,
@@ -144,7 +175,7 @@ class BASE_EXPORT Process {
   WaitExitStatus WaitForExitOrEvent(
       const base::win::ScopedHandle& stop_event_handle,
       int* exit_code) const;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
   // Waits for the process to exit. Returns true on success.
   // On POSIX, if the process has been signaled then |exit_code| is set to -1.
@@ -159,79 +190,163 @@ class BASE_EXPORT Process {
   // is not required.
   bool WaitForExitWithTimeout(TimeDelta timeout, int* exit_code) const;
 
-  // Indicates that the process has exited with the specified |exit_code|.
-  // This should be called if process exit is observed outside of this class.
-  // (i.e. Not because Terminate or WaitForExit, above, was called.)
-  // Note that nothing prevents this being called multiple times for a dead
-  // process though that should be avoided.
-  void Exited(int exit_code) const;
+  // The different priorities that a process can have.
+  enum class Priority {
+    kMinValue = 0,
 
-#if defined(OS_MAC)
+    // The process does not contribute to content that is currently important
+    // to the user. Lowest priority.
+    kBestEffort = kMinValue,
+
+    // The process contributes to content that is visible to the user, but the
+    // work don't have significant performance or latency requirement, so it can
+    // run in energy efficient manner. Moderate priority.
+    kUserVisible,
+
+    // The process contributes to content that is of the utmost importance to
+    // the user, like producing audible content, or visible content in the
+    // main frame. High priority.
+    kUserBlocking,
+
+    kMaxValue = kUserBlocking,
+  };
+
+#if (BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_IOS) && BUILDFLAG(USE_BLINK))) && \
+    !BUILDFLAG(IS_IOS_TVOS)
   // The Mac needs a Mach port in order to manipulate a process's priority,
   // and there's no good way to get that from base given the pid. These Mac
-  // variants of the IsProcessBackgrounded and SetProcessBackgrounded API take
-  // a port provider for this reason. See crbug.com/460102
-  //
-  // A process is backgrounded when its task priority is
-  // |TASK_BACKGROUND_APPLICATION|.
-  //
-  // Returns true if the port_provider can locate a task port for the process
-  // and it is backgrounded. If port_provider is null, returns false.
-  bool IsProcessBackgrounded(PortProvider* port_provider) const;
+  // variants of the `GetPriority()` and `SetPriority()` API take a port
+  // provider for this reason. See crbug.com/460102.
 
-  // Set the process as backgrounded. If value is
-  // true, the priority of the associated task will be set to
-  // TASK_BACKGROUND_APPLICATION. If value is false, the
-  // priority of the process will be set to TASK_FOREGROUND_APPLICATION.
-  //
-  // Returns true if the priority was changed, false otherwise. If
-  // |port_provider| is null, this is a no-op and it returns false.
-  bool SetProcessBackgrounded(PortProvider* port_provider, bool value);
+  // Retrieves the priority of the process. Defaults to Priority::kUserBlocking
+  // if the priority could not be retrieved, or if `port_provider` is null.
+  Priority GetPriority(PortProvider* port_provider) const;
+
+  // Sets the priority of the process process. Returns true if the priority was
+  // changed, false otherwise. If `port_provider` is null, this is a no-op and
+  // it returns false.
+  bool SetPriority(PortProvider* port_provider, Priority priority);
 #else
-  // A process is backgrounded when it's priority is lower than normal.
-  // Return true if this process is backgrounded, false otherwise.
-  bool IsProcessBackgrounded() const;
+  // Retrieves the priority of the process. Defaults to Priority::kUserBlocking
+  // if the priority could not be retrieved.
+  Priority GetPriority() const;
 
-  // Set a process as backgrounded. If value is true, the priority of the
-  // process will be lowered. If value is false, the priority of the process
-  // will be made "normal" - equivalent to default process priority.
-  // Returns true if the priority was changed, false otherwise.
-  bool SetProcessBackgrounded(bool value);
-#endif  // defined(OS_APPLE)
+  // Sets the priority of the process process. Returns true if the priority was
+  // changed, false otherwise.
+  bool SetPriority(Priority priority);
+#endif  // BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_IOS) && BUILDFLAG(USE_BLINK))
+
   // Returns an integer representing the priority of a process. The meaning
   // of this value is OS dependent.
-  int GetPriority() const;
+  int GetOSPriority() const;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Get the PID in its PID namespace.
   // If the process is not in a PID namespace or /proc/<pid>/status does not
   // report NSpid, kNullProcessId is returned.
   ProcessId GetPidInNamespace() const;
 #endif
 
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  // Returns true if the process has any seccomp policy applied.
+  bool IsSeccompSandboxed();
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Sets a delegate which handles process priority changes. This
+  // must be externally synchronized with any call to base::Process methods.
+  static void SetProcessPriorityDelegate(ProcessPriorityDelegate* delegate);
+
+  // Initializes the process's priority.
+  //
+  // This should be called before SetPriority().
+  //
+  // If SchedQoSOnResourcedForChrome is enabled, this creates a cache entry for
+  // the process priority. The returned `base::Process::PriorityEntry` should be
+  // freed when the process is terminated so that the cached entry is freed from
+  // the internal map.
+  //
+  // If OneGroupPerRenderer is enabled, it also creates a unique cgroup for the
+  // process.
+  // This is a no-op if the Process is not valid or if it has already been
+  // called.
+  void InitializePriority();
+
+  // Clears the entities initialized by InitializePriority().
+  //
+  // This is no-op if SchedQoSOnResourcedForChrome is disabled.
+  void ForgetPriority();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_APPLE)
+  // Sets the priority of the current process to its default value.
+  // Ironically, non-App Nap compliant processes do not get this by default on
+  // Mac.
+  static void SetCurrentTaskDefaultRole();
+#endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_IOS) && BUILDFLAG(USE_BLINK)
+  using TerminateCallback = bool (*)(ProcessHandle handle,
+                                     int exit_code,
+                                     bool wait);
+  using WaitForExitCallback = bool (*)(ProcessHandle handle,
+                                       int* exit_code,
+                                       base::TimeDelta timeout);
+  // Function ptrs to implement termination without polluting //base with
+  // BrowserEngineKit APIs.
+  static void SetTerminationHooks(TerminateCallback terminate_callback,
+                                  WaitForExitCallback wait_callback);
+#if TARGET_OS_SIMULATOR
+  // Methods for supporting both "content processes" and traditional
+  // forked processes. For non-simulator builds on iOS every process would
+  // be a "content process" so we don't need the conditionals.
+  void SetIsContentProcess();
+  bool IsContentProcess() const;
+#endif
+#endif
+
  private:
-#if defined(OS_WIN)
+#if !BUILDFLAG(IS_IOS) || (BUILDFLAG(IS_IOS) && TARGET_OS_SIMULATOR)
+  bool TerminateInternal(int exit_code, bool wait) const;
+  bool WaitForExitWithTimeoutImpl(base::ProcessHandle handle,
+                                  int* exit_code,
+                                  base::TimeDelta timeout) const;
+#endif
+
+#if BUILDFLAG(IS_WIN)
   win::ScopedHandle process_;
-#elif defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_FUCHSIA)
   zx::process process_;
 #else
   ProcessHandle process_;
 #endif
 
-#if defined(OS_WIN) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
   bool is_current_process_;
 #endif
 
-  DISALLOW_COPY_AND_ASSIGN(Process);
+#if BUILDFLAG(IS_IOS) && BUILDFLAG(USE_BLINK) && TARGET_OS_SIMULATOR
+  // A flag indicating that this is a "content process". iOS does not support
+  // generic process invocation but it does support some types of well defined
+  // processes. These types of processes are defined at the //content layer so
+  // for termination we defer to some globally initialized callbacks.
+  bool content_process_ = false;
+#endif
 };
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+BASE_EXPORT const char* ProcessPriorityToString(
+    Process::Priority process_priority);
+
+BASE_EXPORT std::ostream& operator<<(std::ostream& os,
+                                     Process::Priority priority);
+
+#if BUILDFLAG(IS_CHROMEOS)
 // Exposed for testing.
 // Given the contents of the /proc/<pid>/cgroup file, determine whether the
 // process is backgrounded or not.
-BASE_EXPORT bool IsProcessBackgroundedCGroup(
-    const StringPiece& cgroup_contents);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+BASE_EXPORT Process::Priority GetProcessPriorityCGroup(
+    std::string_view cgroup_contents);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace base
 

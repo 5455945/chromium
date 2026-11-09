@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,13 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/activity_log/activity_database.h"
 #include "chrome/browser/extensions/activity_log/activity_log_policy.h"
 #include "chrome/browser/extensions/activity_log/database_string_table.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -61,7 +65,6 @@ class CountingPolicy : public ActivityLogDatabasePolicy {
 
   // The main database table, and the name for a read-only view that
   // decompresses string values for easier parsing.
-  static const char kTableName[];
   static const char kReadViewName[];
 
  protected:

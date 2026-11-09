@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,9 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "media/base/android/android_util.h"
 #include "media/base/media_drm_storage.h"
 #include "url/origin.h"
 
@@ -30,6 +29,10 @@ class MediaDrmStorageBridge {
   using InitCB = base::OnceCallback<void(bool)>;
 
   MediaDrmStorageBridge();
+
+  MediaDrmStorageBridge(const MediaDrmStorageBridge&) = delete;
+  MediaDrmStorageBridge& operator=(const MediaDrmStorageBridge&) = delete;
+
   ~MediaDrmStorageBridge();
 
   // Once storage is initialized, |init_cb| will be called and it will have a
@@ -45,40 +48,38 @@ class MediaDrmStorageBridge {
   // Called by the java object when device provision is finished. Implementation
   // will record the time as provisioning time.
   void OnProvisioned(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& j_storage,
                      // Callback<Boolean>
-                     const base::android::JavaParamRef<jobject>& j_callback);
+                     const base::android::JavaRef<jobject>& j_callback);
 
   // Called by the java object to load session data into memory. |j_callback|
   // will return a null object if load fails.
   void OnLoadInfo(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& j_storage,
-                  const base::android::JavaParamRef<jbyteArray>& j_session_id,
+                  const base::android::JavaRef<jbyteArray>& j_session_id,
                   // Callback<PersistentInfo>
-                  const base::android::JavaParamRef<jobject>& j_callback);
+                  const base::android::JavaRef<jobject>& j_callback);
 
   // Called by the java object to persistent session data.
   void OnSaveInfo(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& j_storage,
                   // PersistentInfo
-                  const base::android::JavaParamRef<jobject>& j_persist_info,
+                  const base::android::JavaRef<jobject>& j_persist_info,
                   // Callback<Boolean>
-                  const base::android::JavaParamRef<jobject>& j_callback);
+                  const base::android::JavaRef<jobject>& j_callback);
 
   // Called by the java object to remove persistent session data.
   void OnClearInfo(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& j_storage,
-                   const base::android::JavaParamRef<jbyteArray>& j_session_id,
+                   const base::android::JavaRef<jbyteArray>& j_session_id,
                    // Callback<Boolean>
-                   const base::android::JavaParamRef<jobject>& j_callback);
+                   const base::android::JavaRef<jobject>& j_callback);
 
  private:
-  void RunAndroidBoolCallback(JavaObjectPtr j_callback, bool success);
+  void RunAndroidBoolCallback(
+      base::android::ScopedJavaGlobalRef<jobject> j_callback,
+      bool success);
   void OnInitialized(InitCB init_cb,
                      bool success,
                      const MediaDrmStorage::MediaDrmOriginId& origin_id);
   void OnSessionDataLoaded(
-      JavaObjectPtr j_callback,
+      const base::android::ScopedJavaGlobalRef<jobject>& j_callback,
       const std::string& session_id,
       std::unique_ptr<MediaDrmStorage::SessionData> session_data);
 
@@ -90,8 +91,6 @@ class MediaDrmStorageBridge {
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   base::WeakPtrFactory<MediaDrmStorageBridge> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MediaDrmStorageBridge);
 };
 
 }  // namespace media

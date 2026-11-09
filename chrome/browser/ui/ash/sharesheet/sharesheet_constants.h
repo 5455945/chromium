@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,50 +16,43 @@ namespace sharesheet {
 // LayoutProvider.
 
 // Sizes are in px.
-constexpr int kSpacing = 24;
+inline constexpr int kDefaultBubbleWidth = 416;
+inline constexpr int kSpacing = 24;
 
-constexpr int kFooterDefaultVerticalPadding = 20;
-constexpr int kFooterNoExtensionVerticalPadding = 16;
+inline constexpr int kFooterDefaultVerticalPadding = 20;
+inline constexpr int kFooterNoExtensionVerticalPadding = 16;
 
-constexpr int kExpandButtonInsideBorderInsetsVertical = 6;
-constexpr int kExpandButtonInsideBorderInsetsHorizontal = 16;
-constexpr int kExpandButtonBetweenChildSpacing = 8;
-constexpr int kExpandButtonCaretIconSize = 20;
+inline constexpr int kExpandButtonInsideBorderInsetsVertical = 6;
+inline constexpr int kExpandButtonInsideBorderInsetsHorizontal = 16;
+inline constexpr int kExpandButtonBetweenChildSpacing = 8;
+inline constexpr int kExpandButtonCaretIconSize = 20;
 
-constexpr size_t kTextPreviewMaximumLines = 3;
-constexpr size_t kImagePreviewMaxIcons = 4;
-// TODO(crbug.com/1189945) |kImagePreviewHalfIconSize| value should actually be
+inline constexpr size_t kTextPreviewMaximumLines = 3;
+inline constexpr size_t kImagePreviewMaxIcons = 4;
+// TODO(crbug.com/40173943) |kImagePreviewHalfIconSize| value should actually be
 // 19. When refactoring HoldingSpaceImage, once the DCHECK_GT(20) is removed,
 // this should be set to 19. At that point |kImagePreviewFullIconSize| can be
 // be removed and set to |::sharesheet::kIconSize|.
-constexpr size_t kImagePreviewHalfIconSize = 21;
-constexpr size_t kImagePreviewFullIconSize = 44;
-constexpr gfx::Size kImagePreviewFullSize(kImagePreviewFullIconSize,
-                                          kImagePreviewFullIconSize);
-constexpr gfx::Size kImagePreviewHalfSize(kImagePreviewFullIconSize,
-                                          kImagePreviewHalfIconSize);
-constexpr gfx::Size kImagePreviewQuarterSize(kImagePreviewHalfIconSize,
-                                             kImagePreviewHalfIconSize);
-constexpr int kImagePreviewFileEnumerationLineHeight = 10;
-constexpr int kImagePreviewBetweenChildSpacing = 2;
-constexpr int kImagePreviewIconCornerRadius = 2;
-constexpr int kImagePreviewPlaceholderIconContentSize = 20;
-constexpr SkAlpha kImagePreviewBackgroundAlphaComponent = 0x32;
-constexpr SkColor kImagePreviewPlaceholderBackgroundColor = gfx::kGoogleBlue050;
+inline constexpr size_t kImagePreviewHalfIconSize = 21;
+inline constexpr size_t kImagePreviewFullIconSize = 44;
+inline constexpr gfx::Size kImagePreviewFullSize(kImagePreviewFullIconSize,
+                                                 kImagePreviewFullIconSize);
+inline constexpr gfx::Size kImagePreviewHalfSize(kImagePreviewFullIconSize,
+                                                 kImagePreviewHalfIconSize);
+inline constexpr gfx::Size kImagePreviewQuarterSize(kImagePreviewHalfIconSize,
+                                                    kImagePreviewHalfIconSize);
+inline constexpr int kImagePreviewFileEnumerationLineHeight = 10;
+inline constexpr int kImagePreviewBetweenChildSpacing = 2;
+inline constexpr int kImagePreviewIconCornerRadius = 2;
+inline constexpr int kImagePreviewPlaceholderIconContentSize = 20;
+inline constexpr SkAlpha kImagePreviewBackgroundAlphaComponent = 0x32;
 
-constexpr int kHeaderViewBetweenChildSpacing = 12;
-constexpr int kHeaderViewNarrowInsideBorderInsets = 14;
+inline constexpr int kHeaderViewBetweenChildSpacing = 12;
+inline constexpr int kHeaderViewNarrowInsideBorderInsets = 14;
 
-constexpr int kTitleTextLineHeight = 24;
-constexpr int kSubtitleTextLineHeight = 22;
-constexpr int kPrimaryTextLineHeight = 20;
-
-// TODO(crbug.com/1156343) : Go through code and replace all color constants
-// with colors from ColorProvider.
-constexpr SkColor kTitleTextColor = gfx::kGoogleGrey900;
-constexpr SkColor kPrimaryTextColor = gfx::kGoogleGrey700;
-constexpr SkColor kSecondaryTextColor = gfx::kGoogleGrey600;
-constexpr SkColor kButtonTextColor = gfx::kGoogleBlue600;
+inline constexpr int kTitleTextLineHeight = 24;
+inline constexpr int kSubtitleTextLineHeight = 22;
+inline constexpr int kPrimaryTextLineHeight = 20;
 
 }  // namespace sharesheet
 }  // namespace ash

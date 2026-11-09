@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,11 @@
 #include <algorithm>
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
@@ -30,20 +29,26 @@
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/layer_tree_owner.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/geometry/vector3d_f.h"
 #include "ui/gfx/interpolated_transform.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/wm/core/window_properties.h"
 #include "ui/wm/core/window_util.h"
 #include "ui/wm/core/wm_core_switches.h"
 #include "ui/wm/public/animation_host.h"
 
+DEFINE_UI_CLASS_PROPERTY_TYPE(wm::WindowVisibilityAnimationCallback*)
+
 namespace wm {
 namespace {
+
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(wm::WindowVisibilityAnimationCallback,
+                                   kWindowVisibilityCustomAnimationKey)
 
 // A base class for hiding animation observer which has two roles:
 // 1) Notifies AnimationHost at the end of hiding animation.
@@ -58,21 +63,36 @@ class HidingWindowAnimationObserverBase : public aura::WindowObserver {
  public:
   explicit HidingWindowAnimationObserverBase(aura::Window* window)
       : window_(window) {
+    window_->SetProperty(
+        kWindowHidingAnimationCountKey,
+        window_->GetProperty(kWindowHidingAnimationCountKey) + 1);
     window_->AddObserver(this);
   }
+
+  HidingWindowAnimationObserverBase(const HidingWindowAnimationObserverBase&) =
+      delete;
+  HidingWindowAnimationObserverBase& operator=(
+      const HidingWindowAnimationObserverBase&) = delete;
+
   ~HidingWindowAnimationObserverBase() override {
-    if (window_)
-      window_->RemoveObserver(this);
+    if (!window_)
+      return;
+    window_->RemoveObserver(this);
+    window_->SetProperty(
+        kWindowHidingAnimationCountKey,
+        window_->GetProperty(kWindowHidingAnimationCountKey) - 1);
+    CHECK_GE(window_->GetProperty(kWindowHidingAnimationCountKey), 0,
+             base::NotFatalUntil::M163);
   }
 
   // aura::WindowObserver:
   void OnWindowDestroying(aura::Window* window) override {
-    DCHECK_EQ(window, window_);
+    CHECK_EQ(window, window_, base::NotFatalUntil::M163);
     WindowInvalid();
   }
 
   void OnWindowDestroyed(aura::Window* window) override {
-    DCHECK_EQ(window, window_);
+    CHECK_EQ(window, window_, base::NotFatalUntil::M163);
     WindowInvalid();
   }
 
@@ -87,13 +107,13 @@ class HidingWindowAnimationObserverBase : public aura::WindowObserver {
     if (window_->parent()) {
       const aura::Window::Windows& transient_children =
           GetTransientChildren(window_);
-      auto iter = std::find(window_->parent()->children().begin(),
-                            window_->parent()->children().end(), window_);
-      DCHECK(iter != window_->parent()->children().end());
+      auto iter = std::ranges::find(window_->parent()->children(), window_);
+      CHECK(iter != window_->parent()->children().end());
       aura::Window* topmost_transient_child = nullptr;
       for (++iter; iter != window_->parent()->children().end(); ++iter) {
-        if (base::Contains(transient_children, *iter))
+        if (std::ranges::contains(transient_children, *iter)) {
           topmost_transient_child = *iter;
+        }
       }
       if (topmost_transient_child) {
         window_->parent()->layer()->StackAbove(
@@ -117,7 +137,6 @@ class HidingWindowAnimationObserverBase : public aura::WindowObserver {
       AnimationHost* animation_host = GetAnimationHost(window_);
       if (animation_host)
         animation_host->OnWindowHidingAnimationCompleted();
-      window_->RemoveObserver(this);
     }
     delete this;
   }
@@ -131,15 +150,13 @@ class HidingWindowAnimationObserverBase : public aura::WindowObserver {
     window_ = nullptr;
   }
 
-  aura::Window* window_;
+  raw_ptr<aura::Window> window_;
 
   // The owner of detached layers.
   std::unique_ptr<ui::LayerTreeOwner> layer_owner_;
-
-  DISALLOW_COPY_AND_ASSIGN(HidingWindowAnimationObserverBase);
 };
 
-// TODO(crbug.com/1021774): Find a better home and merge with
+// TODO(crbug.com/40657251): Find a better home and merge with
 //     ash::metris_util::ForSmoothness.
 using SmoothnessCallback = base::RepeatingCallback<void(int smoothness)>;
 ui::AnimationThroughputReporter::ReportCallback ForSmoothness(
@@ -147,8 +164,9 @@ ui::AnimationThroughputReporter::ReportCallback ForSmoothness(
   return base::BindRepeating(
       [](SmoothnessCallback callback,
          const cc::FrameSequenceMetrics::CustomReportData& data) {
-        const int smoothness =
-            std::floor(100.0f * data.frames_produced / data.frames_expected);
+        const int smoothness = std::floor(
+            100.0f * (data.frames_expected_v3 - data.frames_dropped_v3) /
+            data.frames_expected_v3);
         callback.Run(smoothness);
       },
       std::move(callback));
@@ -169,13 +187,16 @@ class ImplicitHidingWindowAnimationObserver
   ImplicitHidingWindowAnimationObserver(
       aura::Window* window,
       ui::ScopedLayerAnimationSettings* settings);
+
+  ImplicitHidingWindowAnimationObserver(
+      const ImplicitHidingWindowAnimationObserver&) = delete;
+  ImplicitHidingWindowAnimationObserver& operator=(
+      const ImplicitHidingWindowAnimationObserver&) = delete;
+
   ~ImplicitHidingWindowAnimationObserver() override {}
 
   // ui::ImplicitAnimationObserver:
   void OnImplicitAnimationsCompleted() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ImplicitHidingWindowAnimationObserver);
 };
 
 namespace {
@@ -204,8 +225,7 @@ base::TimeDelta GetWindowVisibilityAnimationDuration(
       window.GetProperty(kWindowVisibilityAnimationDurationKey);
   if (duration.is_zero() &&
       window.GetType() == aura::client::WINDOW_TYPE_MENU) {
-    return base::TimeDelta::FromMilliseconds(
-        kDefaultAnimationDurationForMenuMS);
+    return base::Milliseconds(kDefaultAnimationDurationForMenuMS);
   }
   return duration;
 }
@@ -235,10 +255,7 @@ gfx::Rect GetLayerWorldBoundsAfterTransform(ui::Layer* layer,
   gfx::Transform in_world = transform;
   GetTransformRelativeToRoot(layer, &in_world);
 
-  gfx::RectF transformed = gfx::RectF(layer->bounds());
-  in_world.TransformRect(&transformed);
-
-  return gfx::ToEnclosingRect(transformed);
+  return in_world.MapRect(layer->bounds());
 }
 
 // Augment the host window so that the enclosing bounds of the full
@@ -266,8 +283,9 @@ void AugmentWindowSize(aura::Window* window,
       union_in_window_space.y() + union_in_window_space.height() -
           (world_at_start.y() + world_at_start.height()));
 
-  DCHECK(top_left_delta.x() >= 0 && top_left_delta.y() >= 0 &&
-         bottom_right_delta.x() >= 0 && bottom_right_delta.y() >= 0);
+  CHECK(top_left_delta.x() >= 0 && top_left_delta.y() >= 0 &&
+            bottom_right_delta.x() >= 0 && bottom_right_delta.y() >= 0,
+        base::NotFatalUntil::M163);
 
   animation_host->SetHostTransitionOffsets(top_left_delta, bottom_right_delta);
 }
@@ -288,7 +306,7 @@ void AnimateShowWindowCommon(aura::Window* window,
     // Property sets within this scope will be implicitly animated.
     ui::ScopedLayerAnimationSettings settings(window->layer()->GetAnimator());
     base::TimeDelta duration = GetWindowVisibilityAnimationDuration(*window);
-    if (duration > base::TimeDelta())
+    if (duration.is_positive())
       settings.SetTransitionDuration(duration);
 
     window->layer()->SetTransform(end_transform);
@@ -315,7 +333,7 @@ void AnimateHideWindowCommon(aura::Window* window,
   if (!window->layer()->children().empty())
     hiding_settings.layer_animation_settings()->CacheRenderSurface();
   base::TimeDelta duration = GetWindowVisibilityAnimationDuration(*window);
-  if (duration > base::TimeDelta())
+  if (duration.is_positive())
     hiding_settings.layer_animation_settings()->SetTransitionDuration(duration);
 
   window->layer()->SetOpacity(kWindowAnimation_HideOpacity);
@@ -382,9 +400,9 @@ std::unique_ptr<ui::LayerAnimationElement> CreateGrowShrinkElement(
   std::unique_ptr<ui::LayerAnimationElement> transition =
       ui::LayerAnimationElement::CreateInterpolatedTransformElement(
           std::move(scale_about_pivot),
-          base::TimeDelta::FromMilliseconds(
-              kWindowAnimation_Bounce_DurationMS *
-              kWindowAnimation_Bounce_GrowShrinkDurationPercent / 100));
+          base::Milliseconds(kWindowAnimation_Bounce_DurationMS *
+                             kWindowAnimation_Bounce_GrowShrinkDurationPercent /
+                             100));
   transition->set_tween_type(grow ? gfx::Tween::EASE_OUT : gfx::Tween::EASE_IN);
   return transition;
 }
@@ -399,10 +417,10 @@ void AnimateBounce(aura::Window* window) {
   sequence->AddElement(CreateGrowShrinkElement(window, true));
   sequence->AddElement(ui::LayerAnimationElement::CreatePauseElement(
       ui::LayerAnimationElement::BOUNDS,
-      base::TimeDelta::FromMilliseconds(
-        kWindowAnimation_Bounce_DurationMS *
-            (100 - 2 * kWindowAnimation_Bounce_GrowShrinkDurationPercent) /
-            100)));
+      base::Milliseconds(
+          kWindowAnimation_Bounce_DurationMS *
+          (100 - 2 * kWindowAnimation_Bounce_GrowShrinkDurationPercent) /
+          100)));
   sequence->AddElement(CreateGrowShrinkElement(window, false));
   window->layer()->GetAnimator()->StartAnimation(sequence.release());
 }
@@ -415,6 +433,12 @@ class RotateHidingWindowAnimationObserver
  public:
   explicit RotateHidingWindowAnimationObserver(aura::Window* window)
       : HidingWindowAnimationObserverBase(window) {}
+
+  RotateHidingWindowAnimationObserver(
+      const RotateHidingWindowAnimationObserver&) = delete;
+  RotateHidingWindowAnimationObserver& operator=(
+      const RotateHidingWindowAnimationObserver&) = delete;
+
   ~RotateHidingWindowAnimationObserver() override {}
 
   // Destroys itself after |last_sequence| ends or is aborted. Does not take
@@ -432,17 +456,14 @@ class RotateHidingWindowAnimationObserver
   }
   void OnLayerAnimationScheduled(
       ui::LayerAnimationSequence* sequence) override {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RotateHidingWindowAnimationObserver);
 };
 
 void AddLayerAnimationsForRotate(aura::Window* window, bool show) {
   if (show)
     window->layer()->SetOpacity(kWindowAnimation_HideOpacity);
 
-  base::TimeDelta duration = base::TimeDelta::FromMilliseconds(
-      kWindowAnimation_Rotate_DurationMS);
+  base::TimeDelta duration =
+      base::Milliseconds(kWindowAnimation_Rotate_DurationMS);
 
   if (!show) {
     window->layer()->GetAnimator()->SchedulePauseForProperties(
@@ -541,6 +562,12 @@ bool AnimateShowWindow(aura::Window* window) {
     case WINDOW_VISIBILITY_ANIMATION_TYPE_ROTATE:
       AnimateShowWindow_Rotate(window);
       return true;
+    case WINDOW_VISIBILITY_ANIMATION_TYPE_CUSTOM: {
+      auto* callback = window->GetProperty(kWindowVisibilityCustomAnimationKey);
+      CHECK(callback);
+      (*callback).Run(window, /*visible=*/true);
+    }
+      return true;
     default:
       return false;
   }
@@ -570,6 +597,12 @@ bool AnimateHideWindow(aura::Window* window) {
     case WINDOW_VISIBILITY_ANIMATION_TYPE_ROTATE:
       AnimateHideWindow_Rotate(window);
       return true;
+    case WINDOW_VISIBILITY_ANIMATION_TYPE_CUSTOM: {
+      auto* callback = window->GetProperty(kWindowVisibilityCustomAnimationKey);
+      CHECK(callback);
+      (*callback).Run(window, /*visible=*/false);
+      return true;
+    }
     default:
       return false;
   }
@@ -615,6 +648,15 @@ void SetWindowVisibilityAnimationType(aura::Window* window, int type) {
 
 int GetWindowVisibilityAnimationType(aura::Window* window) {
   return window->GetProperty(kWindowVisibilityAnimationTypeKey);
+}
+
+void SetWindowVisibilityCustomAnimation(
+    aura::Window* window,
+    WindowVisibilityAnimationCallback callback) {
+  SetWindowVisibilityAnimationType(
+      window,
+      WindowVisibilityAnimationType::WINDOW_VISIBILITY_ANIMATION_TYPE_CUSTOM);
+  window->SetProperty(kWindowVisibilityCustomAnimationKey, callback);
 }
 
 void SetWindowVisibilityAnimationTransition(
@@ -663,7 +705,6 @@ bool AnimateWindow(aura::Window* window, WindowAnimationType type) {
     return true;
   default:
     NOTREACHED();
-    return false;
   }
 }
 
@@ -688,9 +729,10 @@ bool WindowAnimationsDisabled(aura::Window* window) {
 
   // Tests of animations themselves should still run even if the machine is
   // being accessed via Remote Desktop.
-  if (ui::ScopedAnimationDurationScaleMode::duration_multiplier() ==
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION)
+  if (gfx::ScopedAnimationDurationScaleMode::duration_multiplier() ==
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION) {
     return false;
+  }
 
   // Let the user decide whether or not to play the animation.
   return !gfx::Animation::ShouldRenderRichAnimation();

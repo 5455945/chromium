@@ -1,24 +1,33 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/profiler/module_cache.h"
+
+#include <algorithm>
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <ranges>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/profiler/module_cache.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include "base/debug/proc_maps_linux.h"
 #endif
+
+// Note: The special-case IS_CHROMEOS code inside GetDebugBasenameForModule to
+// handle the interaction between that function and
+// SetProcessTitleFromCommandLine() is tested in
+// base/process/set_process_title_linux_unittest.cc due to dependency issues.
 
 namespace base {
 namespace {
@@ -33,12 +42,14 @@ int AFunctionForTest() {
 class IsolatedModule : public ModuleCache::Module {
  public:
   explicit IsolatedModule(bool is_native = true)
-      : is_native_(is_native), memory_region_(new char[kRegionSize]) {}
+      : is_native_(is_native),
+        memory_region_(base::HeapArray<char>::Uninit(kRegionSize)) {}
 
   // ModuleCache::Module
   uintptr_t GetBaseAddress() const override {
     // Place the module in the middle of the region.
-    return reinterpret_cast<uintptr_t>(&memory_region_[kRegionSize / 4]);
+    return reinterpret_cast<uintptr_t>(
+        memory_region_.subspan(kRegionSize / 4).data());
   }
 
   std::string GetId() const override { return ""; }
@@ -50,7 +61,7 @@ class IsolatedModule : public ModuleCache::Module {
   static const int kRegionSize = 100;
 
   bool is_native_;
-  std::unique_ptr<char[]> memory_region_;
+  base::HeapArray<char> memory_region_;
 };
 
 // Provides a fake module with configurable base address and size.
@@ -93,8 +104,8 @@ const ModuleCache::Module* AddNonNativeModule(
   return module_ptr;
 }
 
-#if (defined(OS_POSIX) && !defined(OS_IOS) && !defined(ARCH_CPU_ARM64)) || \
-    (defined(OS_FUCHSIA) && !defined(ARCH_CPU_ARM64)) || defined(OS_WIN)
+#if (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_IOS) && !defined(ARCH_CPU_ARM64)) || \
+    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_WIN)
 #define MAYBE_TEST(TestSuite, TestName) TEST(TestSuite, TestName)
 #else
 #define MAYBE_TEST(TestSuite, TestName) TEST(TestSuite, DISABLED_##TestName)
@@ -105,17 +116,12 @@ MAYBE_TEST(ModuleCacheTest, GetDebugBasename) {
   const ModuleCache::Module* module =
       cache.GetModuleForAddress(reinterpret_cast<uintptr_t>(&AFunctionForTest));
   ASSERT_NE(nullptr, module);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   EXPECT_EQ("libbase_unittests__library",
-            // Different build configurations varyingly use .so vs. .cr.so for
-            // the module extension. Remove all the extensions in both cases.
-            module->GetDebugBasename()
-                .RemoveFinalExtension()
-                .RemoveFinalExtension()
-                .value());
-#elif defined(OS_POSIX)
+            module->GetDebugBasename().RemoveFinalExtension().value());
+#elif BUILDFLAG(IS_POSIX)
   EXPECT_EQ("base_unittests", module->GetDebugBasename().value());
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   EXPECT_EQ(L"base_unittests.exe.pdb", module->GetDebugBasename().value());
 #endif
 }
@@ -216,7 +222,7 @@ MAYBE_TEST(ModuleCacheTest, UpdateNonNativeModulesRemoveModuleIsNotDestroyed) {
     std::vector<std::unique_ptr<const ModuleCache::Module>> modules;
     modules.push_back(std::make_unique<FakeModule>(
         1, 1, false,
-        BindLambdaForTesting([&was_destroyed]() { was_destroyed = true; })));
+        BindLambdaForTesting([&was_destroyed] { was_destroyed = true; })));
     const ModuleCache::Module* module = modules.back().get();
     cache.UpdateNonNativeModules({}, std::move(modules));
     cache.UpdateNonNativeModules({module}, {});
@@ -231,7 +237,7 @@ MAYBE_TEST(ModuleCacheTest, UpdateNonNativeModulesRemoveModuleIsNotDestroyed) {
 // https://crbug.com/1127466 case 2.
 MAYBE_TEST(ModuleCacheTest, UpdateNonNativeModulesPartitioning) {
   int destroyed_count = 0;
-  const auto record_destroyed = [&destroyed_count]() { ++destroyed_count; };
+  const auto record_destroyed = [&destroyed_count] { ++destroyed_count; };
   {
     ModuleCache cache;
     std::vector<std::unique_ptr<const ModuleCache::Module>> modules;
@@ -267,7 +273,7 @@ MAYBE_TEST(ModuleCacheTest, UpdateNonNativeModulesReplace) {
 MAYBE_TEST(ModuleCacheTest,
            UpdateNonNativeModulesMultipleRemovedModulesAtSameAddress) {
   int destroyed_count = 0;
-  const auto record_destroyed = [&destroyed_count]() { ++destroyed_count; };
+  const auto record_destroyed = [&destroyed_count] { ++destroyed_count; };
   ModuleCache cache;
 
   // Checks that non-native modules can be repeatedly added and removed at the
@@ -332,8 +338,8 @@ MAYBE_TEST(ModuleCacheTest, InvalidModule) {
 }
 
 // arm64 module support is not implemented.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || \
-    (defined(OS_ANDROID) && !defined(ARCH_CPU_ARM64))
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+    (BUILDFLAG(IS_ANDROID) && !defined(ARCH_CPU_ARM64))
 // Validates that, for the memory regions listed in /proc/self/maps, the modules
 // found via ModuleCache are consistent with those regions' extents.
 TEST(ModuleCacheTest, CheckAgainstProcMaps) {
@@ -342,17 +348,25 @@ TEST(ModuleCacheTest, CheckAgainstProcMaps) {
   std::vector<debug::MappedMemoryRegion> regions;
   ASSERT_TRUE(debug::ParseProcMaps(proc_maps, &regions));
 
-  // Map distinct paths to lists of regions for the path in increasing memory
-  // order.
+  // Map module base address to regions.
   using RegionVector = std::vector<const debug::MappedMemoryRegion*>;
-  using PathRegionsMap = std::map<StringPiece, RegionVector>;
-  PathRegionsMap path_regions;
-  for (const debug::MappedMemoryRegion& region : regions)
-    path_regions[region.path].push_back(&region);
+  std::map<uintptr_t, RegionVector> module_regions;
+  ModuleCache cache;
+  for (const debug::MappedMemoryRegion& region : regions) {
+    // Regions that aren't associated with absolute paths are unlikely to be
+    // part of modules.
+    if (region.path.empty() || region.path[0] != '/') {
+      continue;
+    }
+    if (const ModuleCache::Module* module =
+            cache.GetModuleForAddress(region.start)) {
+      module_regions[module->GetBaseAddress()].push_back(&region);
+    }
+  }
 
   const auto find_last_executable_region = [](const RegionVector& regions) {
-    const auto rloc = std::find_if(
-        regions.rbegin(), regions.rend(),
+    const auto rloc = std::ranges::find_if(
+        std::views::reverse(regions),
         [](const debug::MappedMemoryRegion* region) {
           return static_cast<bool>(region->permissions &
                                    debug::MappedMemoryRegion::EXECUTE);
@@ -362,37 +376,33 @@ TEST(ModuleCacheTest, CheckAgainstProcMaps) {
 
   int module_count = 0;
 
-  // Loop through each distinct path.
-  for (const auto& path_regions_pair : path_regions) {
-    // Regions that aren't associated with absolute paths are unlikely to be
-    // part of modules.
-    if (path_regions_pair.first.empty() || path_regions_pair.first[0] != '/')
-      continue;
-
+  for (const auto& [base_address, regions_vector] : module_regions) {
     const debug::MappedMemoryRegion* const last_executable_region =
-        find_last_executable_region(path_regions_pair.second);
+        find_last_executable_region(regions_vector);
     // The region isn't part of a module if no executable regions are associated
-    // with the same path.
-    if (!last_executable_region)
+    // with it.
+    if (!last_executable_region) {
       continue;
+    }
 
-    // Loop through all the regions associated with the path, checking that
+    ++module_count;
+
+    const uintptr_t expected_base_address = regions_vector.front()->start;
+    EXPECT_EQ(expected_base_address, base_address);
+
+    // Loop through all the regions associated with the module, checking that
     // modules created for addresses in each region have the expected extents.
-    const uintptr_t expected_base_address =
-        path_regions_pair.second.front()->start;
-    for (const auto* region : path_regions_pair.second) {
-      ModuleCache cache;
+    for (const auto* region : regions_vector) {
+      ModuleCache cache2;
       const ModuleCache::Module* module =
-          cache.GetModuleForAddress(region->start);
+          cache2.GetModuleForAddress(region->start);
       // Not all regions matching the prior conditions are necessarily modules;
       // things like resources are also mmapped into memory from files. Ignore
       // any region isn't part of a module.
-      if (!module)
+      if (!module) {
         continue;
-
-      ++module_count;
-
-      EXPECT_EQ(expected_base_address, module->GetBaseAddress());
+      }
+      EXPECT_EQ(base_address, module->GetBaseAddress());
       // This needs an inequality comparison because the module size is computed
       // based on the ELF section's actual extent, while the |proc_maps| region
       // is aligned to a larger boundary.
@@ -473,6 +483,16 @@ TEST(ModuleCacheTest, UnregisterAuxiliaryModuleProvider) {
 
   EXPECT_EQ(nullptr, cache.GetModuleForAddress(1));
 }
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+TEST(ModuleCacheTest, TransformELFToSymbolServerFormat) {
+  // See explanation for the module_id mangling in
+  // base::TransformModuleIDToSymbolServerFormat implementation.
+  EXPECT_EQ(TransformModuleIDToSymbolServerFormat(
+                "7F0715C286F8B16C10E4AD349CDA3B9B56C7A773"),
+            "C215077FF8866CB110E4AD349CDA3B9B0");
+}
+#endif
 
 }  // namespace
 }  // namespace base

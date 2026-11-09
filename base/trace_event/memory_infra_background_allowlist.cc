@@ -1,19 +1,27 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/trace_event/memory_infra_background_allowlist.h"
 
-#include <ctype.h>
 #include <string.h>
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 
-#include "base/allocator/buildflags.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/containers/span.h"
 #include "base/strings/string_util.h"
+#include "build/build_config.h"
+#include "partition_alloc/buildflags.h"
+#include "third_party/abseil-cpp/absl/strings/ascii.h"
 
-namespace base {
-namespace trace_event {
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/meminfo_dump_provider.h"
+#endif
+
+namespace base::trace_event {
 namespace {
 
 // The names of dump providers allowed to perform background tracing. Dump
@@ -21,425 +29,380 @@ namespace {
 // little processor and memory overhead.
 // TODO(ssid): Some dump providers do not create ownership edges on background
 // dump. So, the effective size will not be correct.
-const char* const kDumpProviderAllowlist[] = {
-    "android::ResourceManagerImpl",
-    "AutocompleteController",
-    "BlinkGC",
-    "BlinkObjectCounters",
-    "BlobStorageContext",
-    "Canvas",
-    "ClientDiscardableSharedMemoryManager",
-    "DevTools",
-    "DiscardableSharedMemoryManager",
-    "DOMStorage",
-    "DownloadService",
-    "ExtensionFunctions",
-    "gpu::BufferManager",
-    "gpu::RenderbufferManager",
-    "gpu::ServiceDiscardableManager",
-    "gpu::ServiceTransferCache",
-    "gpu::SharedImageStub",
-    "gpu::TextureManager",
-    "GrShaderCache",
-    "FontCaches",
-    "HistoryReport",
-    "IPCChannel",
-    "IndexedDBBackingStore",
-    "IndexedDBFactoryImpl",
-    "InMemoryURLIndex",
-    "JavaHeap",
-    "LevelDB",
-    "LeveldbValueStore",
-    "LocalStorage",
-    "MadvFreeDiscardableMemoryAllocator",
-    "Malloc",
-    "ManualFillingCache",
-    "MemoryCache",
-    "MojoHandleTable",
-    "MojoLevelDB",
-    "MojoMessages",
-    "PartitionAlloc",
-    "ProcessMemoryMetrics",
-    "SharedContextState",
-    "SharedMemoryTracker",
-    "Skia",
-    "Sql",
-    "URLRequestContext",
-    "V8Isolate",
-    "WebMediaPlayer_MainThread",
-    "WebMediaPlayer_MediaThread",
-    "SyncDirectory",
-    "TabRestoreServiceHelper",
-    "VizProcessContextProvider",
-    nullptr  // End of list marker.
-};
+constexpr auto kDumpProviderAllowlist =
+    base::MakeFixedFlatSet<std::string_view>({
+// clang-format off
+#if BUILDFLAG(IS_ANDROID)
+        base::android::MeminfoDumpProvider::kDumpProviderName,
+        "android::ResourceManagerImpl",
+#endif
+        "AutocompleteController",
+        "AXPlatformNode",
+        "AXPlatformNodeWin",
+        "BlinkGC",
+        "BlinkObjectCounters",
+        "BlobStorageContext",
+        "Canvas",
+        "ClientDiscardableSharedMemoryManager",
+#if BUILDFLAG(IS_MAC)
+        "CommandBuffer",
+#endif
+        "ContextProviderCommandBuffer",
+        "DOMStorage",
+        "DawnSharedContext",
+        "DevTools",
+        "DevtoolsDurableMessageCollectorManager",
+        "DiscardableSharedMemoryManager",
+        "DownloadService",
+        "DawnCache",
+        "ExtensionFunctions",
+        "FontCaches",
+        "FrameEvictionManager",
+        "GrShaderCache",
+        "HistoryReport",
+        "cc::ResourcePool",
+        "gpu::BufferManager",
+        "gpu::RenderbufferManager",
+        "gpu::ServiceDiscardableManager",
+        "gpu::ServiceTransferCache",
+        "gpu::SharedImageStub",
+        "gpu::TextureManager",
+        "hibernated_canvas",
+        "vulkan",
+        "IPCChannel",
+        "InMemoryURLIndex",
+        "IndexedDBBackingStore",
+        "IndexedDBFactoryImpl",
+        "JavaHeap",
+        "LevelDB",
+        "LeveldbValueStore",
+        "LocalStorage",
+        "LocalStorageSqlite",
+        "MadvFreeDiscardableMemoryAllocator",
+        "Malloc",
+        "ManualFillingCache",
+        "MemoryCache",
+        "MojoHandleTable",
+        "MojoLevelDB",
+        "MojoMessages",
+        "PartitionAlloc",
+        "PartitionAlloc.AddressSpace",
+        "ProcessMemoryMetrics",
+        "SessionStorageSqlite",
+        "SharedContextState",
+        "SharedImageManager",
+        "SharedMemoryTracker",
+        "Skia",
+        "Sql",
+        "TabRestoreServiceHelper",
+        "TextureOwner",
+        "V8Isolate",
+        "viz::SkiaRenderer",
+        "WebGL",
+        "WebMediaPlayer_MainThread",
+        "WebMediaPlayer_MediaThread",
+        // clang-format on
+    });
 
 // A list of string names that are allowed for the memory allocator dumps in
 // background mode.
-const char* const kAllocatorDumpNameAllowlist[] = {
-    "blink_gc/main/heap",
-    "blink_gc/workers/heap/worker_0x?",
-    "blink_objects/AdSubframe",
-    "blink_objects/ArrayBufferContents",
-    "blink_objects/AudioHandler",
-    "blink_objects/ContextLifecycleStateObserver",
-    "blink_objects/DetachedScriptState",
-    "blink_objects/Document",
-    "blink_objects/Frame",
-    "blink_objects/JSEventListener",
-    "blink_objects/LayoutObject",
-    "blink_objects/MediaKeySession",
-    "blink_objects/MediaKeys",
-    "blink_objects/Node",
-    "blink_objects/Resource",
-    "blink_objects/RTCPeerConnection",
-    "blink_objects/ScriptPromise",
-    "blink_objects/V8PerContextData",
-    "blink_objects/WorkerGlobalScope",
-    "blink_objects/UACSSResource",
-    "blink_objects/ResourceFetcher",
-    "canvas/ResourceProvider/SkSurface",
-    "canvas/ResourceProvider/SkSurface/0x?",
-    "components/download/controller_0x?",
-    "devtools/file_watcher_0x?",
-    "discardable",
-    "discardable/madv_free_allocated",
-    "discardable/child_0x?",
-    "extensions/functions",
-    "extensions/value_store/Extensions.Database.Open.Settings/0x?",
-    "extensions/value_store/Extensions.Database.Open.Rules/0x?",
-    "extensions/value_store/Extensions.Database.Open.State/0x?",
-    "extensions/value_store/Extensions.Database.Open/0x?",
-    "extensions/value_store/Extensions.Database.Restore/0x?",
-    "extensions/value_store/Extensions.Database.Value.Restore/0x?",
-    "font_caches/font_platform_data_cache",
-    "font_caches/shape_caches",
-    "gpu/discardable_cache/cache_0x?",
-    "gpu/discardable_cache/cache_0x?/avg_image_size",
-    "gpu/gl/buffers/context_group_0x?",
-    "gpu/gl/renderbuffers/context_group_0x?",
-    "gpu/gl/textures/context_group_0x?",
-    "gpu/gr_shader_cache/cache_0x?",
-    "gpu/shared_images/client_0x?",
-    "gpu/transfer_cache/cache_0x?",
-    "gpu/transfer_cache/cache_0x?/avg_image_size",
-    "history/delta_file_service/leveldb_0x?",
-    "history/usage_reports_buffer/leveldb_0x?",
-    "java_heap",
-    "java_heap/allocated_objects",
-    "leveldatabase",
-    "leveldatabase/block_cache/browser",
-    "leveldatabase/block_cache/in_memory",
-    "leveldatabase/block_cache/unified",
-    "leveldatabase/block_cache/web",
-    "leveldatabase/db_0x?",
-    "leveldatabase/db_0x?/block_cache",
-    "leveldatabase/memenv_0x?",
-    "malloc",
-    "malloc/allocated_objects",
-    "malloc/metadata_fragmentation_caches",
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-    "malloc/partitions",
-    "malloc/partitions/allocator",
-    "malloc/partitions/allocator/thread_cache",
-    "malloc/partitions/allocator/thread_cache/main_thread",
-    "malloc/partitions/aligned",
-    "malloc/partitions/original",
-    "malloc/partitions/nonscannable",
-    "malloc/win_heap",
+// NOTE: There is no generic pattern matching support and only names containing
+// "0x?" match "0x" followed by hex digits.
+constexpr auto kAllocatorDumpNameAllowlist =
+    base::MakeFixedFlatSet<std::string_view>({
+// clang-format off
+        // Some of the blink values vary based on compile time flags. The
+        // compile time flags are not in base, so all are listed here.
+#if BUILDFLAG(IS_ANDROID)
+        base::android::MeminfoDumpProvider::kDumpName,
 #endif
-    "media/webmediaplayer/audio/player_0x?",
-    "media/webmediaplayer/data_source/player_0x?",
-    "media/webmediaplayer/demuxer/player_0x?",
-    "media/webmediaplayer/video/player_0x?",
-    "media/webmediaplayer/player_0x?",
-    "mojo",
-    "mojo/data_pipe_consumer",
-    "mojo/data_pipe_producer",
-    "mojo/invitation",
-    "mojo/messages",
-    "mojo/message_pipe",
-    "mojo/platform_handle",
-    "mojo/queued_ipc_channel_message/0x?",
-    "mojo/shared_buffer",
-    "mojo/unknown",
-    "mojo/watcher",
-    "net/http_network_session_0x?",
-    "net/http_network_session_0x?/quic_stream_factory",
-    "net/http_network_session_0x?/socket_pool",
-    "net/http_network_session_0x?/spdy_session_pool",
-    "net/http_network_session_0x?/ssl_client_session_cache",
-    "net/http_network_session_0x?/stream_factory",
-    "net/url_request_context",
-    "net/url_request_context/app_request",
-    "net/url_request_context/app_request/0x?",
-    "net/url_request_context/app_request/0x?/cookie_monster",
-    "net/url_request_context/app_request/0x?/cookie_monster/cookies",
-    "net/url_request_context/app_request/0x?/cookie_monster/"
-    "tasks_pending_global",
-    "net/url_request_context/app_request/0x?/cookie_monster/"
-    "tasks_pending_for_key",
-    "net/url_request_context/app_request/0x?/http_cache",
-    "net/url_request_context/app_request/0x?/http_cache/memory_backend",
-    "net/url_request_context/app_request/0x?/http_cache/simple_backend",
-    "net/url_request_context/app_request/0x?/http_network_session",
-    "net/url_request_context/extensions",
-    "net/url_request_context/extensions/0x?",
-    "net/url_request_context/extensions/0x?/cookie_monster",
-    "net/url_request_context/extensions/0x?/cookie_monster/cookies",
-    "net/url_request_context/extensions/0x?/cookie_monster/"
-    "tasks_pending_global",
-    "net/url_request_context/extensions/0x?/cookie_monster/"
-    "tasks_pending_for_key",
-    "net/url_request_context/extensions/0x?/http_cache",
-    "net/url_request_context/extensions/0x?/http_cache/memory_backend",
-    "net/url_request_context/extensions/0x?/http_cache/simple_backend",
-    "net/url_request_context/extensions/0x?/http_network_session",
-    "net/url_request_context/isolated_media",
-    "net/url_request_context/isolated_media/0x?",
-    "net/url_request_context/isolated_media/0x?/cookie_monster",
-    "net/url_request_context/isolated_media/0x?/cookie_monster/cookies",
-    "net/url_request_context/isolated_media/0x?/cookie_monster/"
-    "tasks_pending_global",
-    "net/url_request_context/isolated_media/0x?/cookie_monster/"
-    "tasks_pending_for_key",
-    "net/url_request_context/isolated_media/0x?/http_cache",
-    "net/url_request_context/isolated_media/0x?/http_cache/memory_backend",
-    "net/url_request_context/isolated_media/0x?/http_cache/simple_backend",
-    "net/url_request_context/isolated_media/0x?/http_network_session",
-    "net/url_request_context/main",
-    "net/url_request_context/main/0x?",
-    "net/url_request_context/main/0x?/cookie_monster",
-    "net/url_request_context/main/0x?/cookie_monster/cookies",
-    "net/url_request_context/main/0x?/cookie_monster/tasks_pending_global",
-    "net/url_request_context/main/0x?/cookie_monster/tasks_pending_for_key",
-    "net/url_request_context/main/0x?/http_cache",
-    "net/url_request_context/main/0x?/http_cache/memory_backend",
-    "net/url_request_context/main/0x?/http_cache/simple_backend",
-    "net/url_request_context/main/0x?/http_network_session",
-    "net/url_request_context/main_media",
-    "net/url_request_context/main_media/0x?",
-    "net/url_request_context/main_media/0x?/cookie_monster",
-    "net/url_request_context/main_media/0x?/cookie_monster/cookies",
-    "net/url_request_context/main_media/0x?/cookie_monster/"
-    "tasks_pending_global",
-    "net/url_request_context/main_media/0x?/cookie_monster/"
-    "tasks_pending_for_key",
-    "net/url_request_context/main_media/0x?/http_cache",
-    "net/url_request_context/main_media/0x?/http_cache/memory_backend",
-    "net/url_request_context/main_media/0x?/http_cache/simple_backend",
-    "net/url_request_context/main_media/0x?/http_network_session",
-    "net/url_request_context/mirroring",
-    "net/url_request_context/mirroring/0x?",
-    "net/url_request_context/mirroring/0x?/cookie_monster",
-    "net/url_request_context/mirroring/0x?/cookie_monster/cookies",
-    "net/url_request_context/mirroring/0x?/cookie_monster/tasks_pending_global",
-    "net/url_request_context/mirroring/0x?/cookie_monster/"
-    "tasks_pending_for_key",
-    "net/url_request_context/mirroring/0x?/http_cache",
-    "net/url_request_context/mirroring/0x?/http_cache/memory_backend",
-    "net/url_request_context/mirroring/0x?/http_cache/simple_backend",
-    "net/url_request_context/mirroring/0x?/http_network_session",
-    "net/url_request_context/proxy",
-    "net/url_request_context/proxy/0x?",
-    "net/url_request_context/proxy/0x?/cookie_monster",
-    "net/url_request_context/proxy/0x?/cookie_monster/cookies",
-    "net/url_request_context/proxy/0x?/cookie_monster/tasks_pending_global",
-    "net/url_request_context/proxy/0x?/cookie_monster/tasks_pending_for_key",
-    "net/url_request_context/proxy/0x?/http_cache",
-    "net/url_request_context/proxy/0x?/http_cache/memory_backend",
-    "net/url_request_context/proxy/0x?/http_cache/simple_backend",
-    "net/url_request_context/proxy/0x?/http_network_session",
-    "net/url_request_context/safe_browsing",
-    "net/url_request_context/safe_browsing/0x?",
-    "net/url_request_context/safe_browsing/0x?/cookie_monster",
-    "net/url_request_context/safe_browsing/0x?/cookie_monster/cookies",
-    "net/url_request_context/safe_browsing/0x?/cookie_monster/"
-    "tasks_pending_global",
-    "net/url_request_context/safe_browsing/0x?/cookie_monster/"
-    "tasks_pending_for_key",
-    "net/url_request_context/safe_browsing/0x?/http_cache",
-    "net/url_request_context/safe_browsing/0x?/http_cache/memory_backend",
-    "net/url_request_context/safe_browsing/0x?/http_cache/simple_backend",
-    "net/url_request_context/safe_browsing/0x?/http_network_session",
-    "net/url_request_context/system",
-    "net/url_request_context/system/0x?",
-    "net/url_request_context/system/0x?/cookie_monster",
-    "net/url_request_context/system/0x?/cookie_monster/cookies",
-    "net/url_request_context/system/0x?/cookie_monster/tasks_pending_global",
-    "net/url_request_context/system/0x?/cookie_monster/tasks_pending_for_key",
-    "net/url_request_context/system/0x?/http_cache",
-    "net/url_request_context/system/0x?/http_cache/memory_backend",
-    "net/url_request_context/system/0x?/http_cache/simple_backend",
-    "net/url_request_context/system/0x?/http_network_session",
-    "net/url_request_context/unknown",
-    "net/url_request_context/unknown/0x?",
-    "net/url_request_context/unknown/0x?/cookie_monster",
-    "net/url_request_context/unknown/0x?/cookie_monster/cookies",
-    "net/url_request_context/unknown/0x?/cookie_monster/tasks_pending_global",
-    "net/url_request_context/unknown/0x?/cookie_monster/tasks_pending_for_key",
-    "net/url_request_context/unknown/0x?/http_cache",
-    "net/url_request_context/unknown/0x?/http_cache/memory_backend",
-    "net/url_request_context/unknown/0x?/http_cache/simple_backend",
-    "net/url_request_context/unknown/0x?/http_network_session",
-    "omnibox/autocomplete_controller/0x?",
-    "omnibox/in_memory_url_index/0x?",
-    "passwords/manual_filling_controller/0x?",
-    "web_cache/Image_resources",
-    "web_cache/CSS stylesheet_resources",
-    "web_cache/Script_resources",
-    "web_cache/XSL stylesheet_resources",
-    "web_cache/Font_resources",
-    "web_cache/Code_cache",
-    "web_cache/Encoded_size_duplicated_in_data_urls",
-    "web_cache/Other_resources",
-    "partition_alloc/allocated_objects",
-    "partition_alloc/partitions",
-    "partition_alloc/partitions/array_buffer",
-    "partition_alloc/partitions/buffer",
-    "partition_alloc/partitions/fast_malloc",
-#if !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-    "partition_alloc/partitions/fast_malloc/thread_cache",
-    "partition_alloc/partitions/fast_malloc/thread_cache/main_thread",
+        "accessibility/ax_platform_win_dormant_node",
+        "accessibility/ax_platform_win_ghost_node",
+        "accessibility/ax_platform_win_live_node",
+        "accessibility/ax_platform_node",
+        "blink_gc/main/allocated_objects",
+        "blink_gc/main/heap",
+        "blink_gc/workers/heap/worker_0x?",
+        "blink_gc/workers/worker_0x?/heap",
+        "blink_gc/workers/worker_0x?/allocated_objects",
+        "blink_objects/AdSubframe",
+        "blink_objects/ArrayBufferContents",
+        "blink_objects/AudioHandler",
+        "blink_objects/AudioWorkletProcessor",
+        "blink_objects/ContextLifecycleStateObserver",
+        "blink_objects/DetachedScriptState",
+        "blink_objects/Document",
+        "blink_objects/Frame",
+        "blink_objects/JSEventListener",
+        "blink_objects/LayoutObject",
+        "blink_objects/MediaKeySession",
+        "blink_objects/MediaKeys",
+        "blink_objects/Node",
+        "blink_objects/Resource",
+        "blink_objects/RTCPeerConnection",
+        "blink_objects/ScriptPromise",
+        "blink_objects/V8PerContextData",
+        "blink_objects/WorkerGlobalScope",
+        "blink_objects/UACSSResource",
+        "blink_objects/ResourceFetcher",
+        "canvas/hibernated",
+        "canvas/ResourceProvider/SkSurface",
+        "canvas/ResourceProvider/SkSurface/0x?",
+        "cc/tile_memory/provider_0x?",
+        "components/download/controller_0x?",
+        "devtools/file_watcher_0x?",
+        "devtools/durable_message_collectors",
+        "discardable",
+        "discardable/child_0x?",
+        "extensions/functions",
+        "extensions/value_store/Extensions.Database.Open.OriginManagedConfiguration/0x?",
+        "extensions/value_store/Extensions.Database.Open.Rules/0x?",
+        "extensions/value_store/Extensions.Database.Open.Scripts/0x?",
+        "extensions/value_store/Extensions.Database.Open.Settings/0x?",
+        "extensions/value_store/Extensions.Database.Open.State/0x?",
+        "extensions/value_store/Extensions.Database.Open.WebAppsLockScreen/0x?",
+        "extensions/value_store/Extensions.Database.Open/0x?",
+        "extensions/value_store/Extensions.Database.Restore/0x?",
+        "extensions/value_store/Extensions.Database.Value.Restore/0x?",
+        "font_caches/font_platform_data_cache",
+        "font_caches/shape_caches",
+        "frame_evictor",
+#if BUILDFLAG(IS_MAC)
+        "gpu/angle/metal",
 #endif
-    "partition_alloc/partitions/layout",
-    "skia/gpu_resources/context_0x?",
-    "skia/sk_glyph_cache",
-    "skia/sk_resource_cache",
-    "sqlite",
-    "ui/resource_manager_0x?/default_resource/0x?",
-    "ui/resource_manager_0x?/tinted_resource",
-    "site_storage/blob_storage/0x?",
-    "v8/main/code_stats",
-    "v8/main/contexts/detached_context",
-    "v8/main/contexts/native_context",
-    "v8/main/global_handles",
-    "v8/main/heap/code_space",
-    "v8/main/heap/code_stats",
-    "v8/main/heap/code_large_object_space",
-    "v8/main/heap/large_object_space",
-    "v8/main/heap/map_space",
-    "v8/main/heap/new_large_object_space",
-    "v8/main/heap/new_space",
-    "v8/main/heap/old_space",
-    "v8/main/heap/read_only_space",
-    "v8/main/malloc",
-    "v8/main/zapped_for_debug",
-    "v8/utility/code_stats",
-    "v8/utility/contexts/detached_context",
-    "v8/utility/contexts/native_context",
-    "v8/utility/global_handles",
-    "v8/utility/heap/code_space",
-    "v8/utility/heap/code_large_object_space",
-    "v8/utility/heap/large_object_space",
-    "v8/utility/heap/map_space",
-    "v8/utility/heap/new_large_object_space",
-    "v8/utility/heap/new_space",
-    "v8/utility/heap/old_space",
-    "v8/utility/heap/read_only_space",
-    "v8/utility/malloc",
-    "v8/utility/zapped_for_debug",
-    "v8/workers/code_stats/isolate_0x?",
-    "v8/workers/contexts/detached_context/isolate_0x?",
-    "v8/workers/contexts/native_context/isolate_0x?",
-    "v8/workers/global_handles/isolate_0x?",
-    "v8/workers/heap/code_space/isolate_0x?",
-    "v8/workers/heap/code_large_object_space/isolate_0x?",
-    "v8/workers/heap/large_object_space/isolate_0x?",
-    "v8/workers/heap/map_space/isolate_0x?",
-    "v8/workers/heap/new_large_object_space/isolate_0x?",
-    "v8/workers/heap/new_space/isolate_0x?",
-    "v8/workers/heap/old_space/isolate_0x?",
-    "v8/workers/heap/read_only_space/isolate_0x?",
-    "v8/workers/malloc/isolate_0x?",
-    "v8/workers/zapped_for_debug/isolate_0x?",
-    "site_storage/index_db/db_0x?",
-    "site_storage/index_db/memenv_0x?",
-    "site_storage/index_db/in_flight_0x?",
-    "site_storage/local_storage/0x?/cache_size",
-    "site_storage/localstorage/0x?/cache_size",
-    "site_storage/localstorage/0x?/leveldb",
-    "site_storage/session_storage/0x?",
-    "site_storage/session_storage/0x?/cache_size",
-    "sync/0x?/kernel",
-    "sync/0x?/store",
-    "sync/0x?/model_type/APP",
-    "sync/0x?/model_type/APP_LIST",
-    "sync/0x?/model_type/APP_SETTING",
-    "sync/0x?/model_type/ARC_PACKAGE",
-    "sync/0x?/model_type/AUTOFILL",
-    "sync/0x?/model_type/AUTOFILL_PROFILE",
-    "sync/0x?/model_type/AUTOFILL_WALLET",
-    "sync/0x?/model_type/AUTOFILL_WALLET_OFFER",
-    "sync/0x?/model_type/BOOKMARK",
-    "sync/0x?/model_type/DEVICE_INFO",
-    "sync/0x?/model_type/DICTIONARY",
-    "sync/0x?/model_type/EXTENSION",
-    "sync/0x?/model_type/EXTENSION_SETTING",
-    "sync/0x?/model_type/HISTORY_DELETE_DIRECTIVE",
-    "sync/0x?/model_type/MANAGED_USER",
-    "sync/0x?/model_type/MANAGED_USER_SETTING",
-    "sync/0x?/model_type/NIGORI",
-    "sync/0x?/model_type/OS_PREFERENCE",
-    "sync/0x?/model_type/OS_PRIORITY_PREFERENCE",
-    "sync/0x?/model_type/PASSWORD",
-    "sync/0x?/model_type/PREFERENCE",
-    "sync/0x?/model_type/PRINTER",
-    "sync/0x?/model_type/PRIORITY_PREFERENCE",
-    "sync/0x?/model_type/READING_LIST",
-    "sync/0x?/model_type/SEARCH_ENGINE",
-    "sync/0x?/model_type/SECURITY_EVENT",
-    "sync/0x?/model_type/SEND_TAB_TO_SELF",
-    "sync/0x?/model_type/SESSION",
-    "sync/0x?/model_type/SHARING_MESSAGE",
-    "sync/0x?/model_type/THEME",
-    "sync/0x?/model_type/TYPED_URL",
-    "sync/0x?/model_type/USER_CONSENT",
-    "sync/0x?/model_type/USER_EVENT",
-    "sync/0x?/model_type/WALLET_METADATA",
-    "sync/0x?/model_type/WEB_APP",
-    "sync/0x?/model_type/WIFI_CONFIGURATION",
-    "sync/0x?/model_type/WORKSPACE_DESK",
-    "tab_restore/service_helper_0x?/entries",
-    "tab_restore/service_helper_0x?/entries/tab_0x?",
-    "tab_restore/service_helper_0x?/entries/window_0x?",
-    "tracing/heap_profiler_blink_gc/AllocationRegister",
-    "tracing/heap_profiler_malloc/AllocationRegister",
-    "tracing/heap_profiler_partition_alloc/AllocationRegister",
-    nullptr  // End of list marker.
-};
+        "gpu/command_buffer_memory/buffer_0x?",
+        "gpu/dawn",
+        "gpu/dawn/textures",
+        "gpu/dawn/textures/depth_stencil",
+        "gpu/dawn/textures/msaa",
+        "gpu/dawn/buffers",
+        "gpu/discardable_cache/cache_0x?",
+        "gpu/discardable_cache/cache_0x?/avg_image_size",
+        "gpu/gl/buffers/context_group_0x?",
+        "gpu/gl/renderbuffers/context_group_0x?",
+        "gpu/gl/textures/context_group_0x?",
+        "gpu/mapped_memory/manager_0x?",
+        "gpu/shader_cache/graphite_cache",
+        "gpu/shader_cache/gr_shader_cache/cache_0x?",
+        "gpu/shared_images",
+        "gpu/media_texture_owner_0x?",
+        "gpu/transfer_buffer_memory/buffer_0x?",
+        "gpu/transfer_cache/cache_0x?",
+        "gpu/transfer_cache/cache_0x?/avg_image_size",
+        "gpu/viz_buffer_queue/queue_0x?",
+        "gpu/vulkan/vma_allocator_0x?",
+        "gpu/vulkan/graphite_allocator",
+        "history/delta_file_service/leveldb_0x?",
+        "history/usage_reports_buffer/leveldb_0x?",
+#if BUILDFLAG(IS_MAC)
+        "ioaccelerator",
+        "iosurface",
+#endif
+        "java_heap",
+        "java_heap/allocated_objects",
+        "leveldatabase",
+        "leveldatabase/block_cache/browser",
+        "leveldatabase/block_cache/in_memory",
+        "leveldatabase/block_cache/unified",
+        "leveldatabase/block_cache/web",
+        "leveldatabase/db_0x?",
+        "leveldatabase/db_0x?/block_cache",
+        "leveldatabase/memenv_0x?",
+        "malloc",
+        "malloc/allocated_objects",
+        "malloc/metadata_fragmentation_caches",
+        // Also reported without PartitionAlloc-as-malloc, which mallinfo(3)
+        // backs instead.
+        "malloc/allocated_objects/sys_malloc",
+        "malloc/sys_malloc",
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+        "malloc/allocated_objects/partitions",
+        "malloc/extreme_lud",
+        "malloc/extreme_lud/small_objects",
+        "malloc/extreme_lud/large_objects",
+        "malloc/partitions",
+        "malloc/partitions/allocator",
+        "malloc/partitions/allocator/scheduler_loop_quarantine",
+        "malloc/partitions/allocator/thread_cache",
+        "malloc/partitions/allocator/thread_cache/main_thread",
+        "malloc/partitions/aligned",
+        "malloc/partitions/leaked",
+        "malloc/partitions/original",
+        "malloc/win_heap",
+        "partition_alloc/partitions/buffer/",
+        "partition_alloc/partitions/buffer/scheduler_loop_quarantine",
+        "partition_alloc/partitions/buffer/thread_cache",
+        "partition_alloc/partitions/buffer/thread_cache/main_thread",
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+        "media/webmediaplayer/audio/player_0x?",
+        "media/webmediaplayer/data_source/player_0x?",
+        "media/webmediaplayer/demuxer/player_0x?",
+        "media/webmediaplayer/video/player_0x?",
+        "media/webmediaplayer/player_0x?",
+        "mojo",
+        "mojo/data_pipe_consumer",
+        "mojo/data_pipe_producer",
+        "mojo/invitation",
+        "mojo/messages",
+        "mojo/message_pipe",
+        "mojo/platform_handle",
+        "mojo/queued_ipc_channel_message/0x?",
+        "mojo/shared_buffer",
+        "mojo/unknown",
+        "mojo/watcher",
+        "omnibox/autocomplete_controller/0x?",
+        "omnibox/in_memory_url_index/0x?",
+        "passwords/manual_filling_controller/0x?",
+        "web_cache/Image_resources",
+        "web_cache/CSS stylesheet_resources",
+        "web_cache/Script_resources",
+        "web_cache/XSL stylesheet_resources",
+        "web_cache/Font_resources",
+        "web_cache/Code_cache",
+        "web_cache/Encoded_size_duplicated_in_data_urls",
+        "web_cache/Other_resources",
+        "webgl/context_0x?",
+        "webgl/offscreen_context_0x?",
+        "partition_alloc/allocated_objects",
+        "partition_alloc/address_space",
+        "partition_alloc/partitions",
+        "partition_alloc/partitions/array_buffer",
+        "partition_alloc/partitions/buffer",
+        "partition_alloc/partitions/fast_malloc",
+#if !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+        "partition_alloc/partitions/fast_malloc/thread_cache",
+        "partition_alloc/partitions/fast_malloc/thread_cache/main_thread",
+#endif
+        "partition_alloc/partitions/layout",
+        "skia/gpu_resources/context_0x?",
+        "skia/gpu_resources/graphite_shared_context_0x?",
+        "skia/gpu_resources/gpu_main_graphite_image_provider_0x?",
+        "skia/gpu_resources/gpu_main_graphite_recorder_0x?",
+        "skia/gpu_resources/viz_compositor_graphite_image_provider_0x?",
+        "skia/gpu_resources/viz_compositor_graphite_recorder_0x?",
+        "skia/sk_glyph_cache",
+        "skia/sk_resource_cache",
+        "sqlite",
+        "ui/resource_manager_0x?/default_resource/0x?",
+        "ui/resource_manager_0x?/tinted_resource",
+        "site_storage/blob_storage/0x?",
+        "v8/main/code_stats",
+        "v8/main/contexts/detached_context",
+        "v8/main/contexts/native_context",
+        "v8/main/global_handles",
+        "v8/main/heap/code_space",
+        "v8/main/heap/code_stats",
+        "v8/main/heap/code_large_object_space",
+        "v8/main/heap/large_object_space",
+        "v8/main/heap/map_space",
+        "v8/main/heap/new_large_object_space",
+        "v8/main/heap/new_space",
+        "v8/main/heap/old_space",
+        "v8/main/heap/read_only_space",
+        "v8/main/heap/shared_large_object_space",
+        "v8/main/heap/shared_space",
+        "v8/main/heap/shared_trusted_large_object_space",
+        "v8/main/heap/shared_trusted_space",
+        "v8/main/heap/trusted_space",
+        "v8/main/heap/trusted_large_object_space",
+        "v8/main/malloc",
+        "v8/main/zapped_for_debug",
+        "v8/utility/code_stats/isolate_0x?",
+        "v8/utility/contexts/detached_context/isolate_0x?",
+        "v8/utility/contexts/native_context/isolate_0x?",
+        "v8/utility/global_handles/isolate_0x?",
+        "v8/utility/heap/code_space/isolate_0x?",
+        "v8/utility/heap/code_large_object_space/isolate_0x?",
+        "v8/utility/heap/large_object_space/isolate_0x?",
+        "v8/utility/heap/map_space/isolate_0x?",
+        "v8/utility/heap/new_large_object_space/isolate_0x?",
+        "v8/utility/heap/new_space/isolate_0x?",
+        "v8/utility/heap/old_space/isolate_0x?",
+        "v8/utility/heap/read_only_space/isolate_0x?",
+        "v8/utility/heap/shared_large_object_space/isolate_0x?",
+        "v8/utility/heap/shared_space/isolate_0x?",
+        "v8/utility/heap/shared_trusted_large_object_space/isolate_0x?",
+        "v8/utility/heap/shared_trusted_space/isolate_0x?",
+        "v8/utility/heap/trusted_space/isolate_0x?",
+        "v8/utility/heap/trusted_large_object_space/isolate_0x?",
+        "v8/utility/malloc/isolate_0x?",
+        "v8/utility/zapped_for_debug/isolate_0x?",
+        "v8/workers/code_stats/isolate_0x?",
+        "v8/workers/contexts/detached_context/isolate_0x?",
+        "v8/workers/contexts/native_context/isolate_0x?",
+        "v8/workers/global_handles/isolate_0x?",
+        "v8/workers/heap/code_space/isolate_0x?",
+        "v8/workers/heap/code_large_object_space/isolate_0x?",
+        "v8/workers/heap/large_object_space/isolate_0x?",
+        "v8/workers/heap/map_space/isolate_0x?",
+        "v8/workers/heap/new_large_object_space/isolate_0x?",
+        "v8/workers/heap/new_space/isolate_0x?",
+        "v8/workers/heap/old_space/isolate_0x?",
+        "v8/workers/heap/read_only_space/isolate_0x?",
+        "v8/workers/heap/shared_large_object_space/isolate_0x?",
+        "v8/workers/heap/shared_space/isolate_0x?",
+        "v8/workers/heap/shared_trusted_large_object_space/isolate_0x?",
+        "v8/workers/heap/shared_trusted_space/isolate_0x?",
+        "v8/workers/heap/trusted_space/isolate_0x?",
+        "v8/workers/heap/trusted_large_object_space/isolate_0x?",
+        "v8/workers/malloc/isolate_0x?",
+        "v8/workers/zapped_for_debug/isolate_0x?",
+        "site_storage/indexed_db/database_engine_0x?",
+        "site_storage/indexed_db/memenv_0x?",
+        "site_storage/indexed_db/in_flight_0x?",
+        "site_storage/indexed_db/database_engine_0x?/sqlite_db_0x?",
+        "site_storage/local_storage/0x?/cache_size",
+        "site_storage/localstorage/0x?/cache_size",
+        "site_storage/localstorage/0x?/leveldb",
+        "site_storage/localstorage/0x?/sqlite",
+        "site_storage/session_storage/0x?",
+        "site_storage/session_storage/0x?/cache_size",
+        "site_storage/sessionstorage/0x?/leveldb",
+        "site_storage/sessionstorage/0x?/sqlite",
+        "site_storage/localstorage/sqlite/db_0x?",
+        "site_storage/sessionstorage/sqlite/db_0x?",
+        "tab_restore/service_helper_0x?/entries",
+        "tab_restore/service_helper_0x?/entries/group_0x?",
+        "tab_restore/service_helper_0x?/entries/tab_0x?",
+        "tab_restore/service_helper_0x?/entries/window_0x?",
+        "tab_restore/service_helper_0x?/entries/split_0x?",
+        "tracing/heap_profiler_blink_gc/AllocationRegister",
+        "tracing/heap_profiler_malloc/AllocationRegister",
+        "tracing/heap_profiler_partition_alloc/AllocationRegister",
+        // clang-format on
+    });
 
-const char* const* g_dump_provider_allowlist = kDumpProviderAllowlist;
-const char* const* g_allocator_dump_name_allowlist =
-    kAllocatorDumpNameAllowlist;
-
-bool IsMemoryDumpProviderInList(const char* mdp_name, const char* const* list) {
-  for (size_t i = 0; list[i] != nullptr; ++i) {
-    if (strcmp(mdp_name, list[i]) == 0)
-      return true;
-  }
-  return false;
-}
+base::span<const std::string_view> g_dump_provider_allowlist_for_testing;
+base::span<const std::string_view> g_allocator_dump_name_allowlist_for_testing;
 
 }  // namespace
 
 bool IsMemoryDumpProviderInAllowlist(const char* mdp_name) {
-  return IsMemoryDumpProviderInList(mdp_name, g_dump_provider_allowlist);
+  if (g_dump_provider_allowlist_for_testing.empty()) {
+    return kDumpProviderAllowlist.contains(mdp_name);
+  } else {
+    return std::ranges::contains(g_dump_provider_allowlist_for_testing,
+                                 mdp_name);
+  }
 }
 
 bool IsMemoryAllocatorDumpNameInAllowlist(const std::string& name) {
   // Global dumps that are of hex digits are all allowed for background use.
   if (base::StartsWith(name, "global/", CompareCase::SENSITIVE)) {
-    for (size_t i = strlen("global/"); i < name.size(); i++)
-      if (!base::IsHexDigit(name[i]))
+    for (size_t i = strlen("global/"); i < name.size(); i++) {
+      if (!base::IsHexDigit(name[i])) {
         return false;
+      }
+    }
     return true;
   }
 
   if (base::StartsWith(name, "shared_memory/", CompareCase::SENSITIVE)) {
-    for (size_t i = strlen("shared_memory/"); i < name.size(); i++)
-      if (!base::IsHexDigit(name[i]))
+    for (size_t i = strlen("shared_memory/"); i < name.size(); i++) {
+      if (!base::IsHexDigit(name[i])) {
         return false;
+      }
+    }
     return true;
   }
 
@@ -450,8 +413,10 @@ bool IsMemoryAllocatorDumpNameInAllowlist(const std::string& name) {
   stripped_str.reserve(length);
   bool parsing_hex = false;
   for (size_t i = 0; i < length; ++i) {
-    if (parsing_hex && isxdigit(name[i]))
+    if (parsing_hex &&
+        absl::ascii_isxdigit(static_cast<unsigned char>(name[i]))) {
       continue;
+    }
     parsing_hex = false;
     if (i + 1 < length && name[i] == '0' && name[i + 1] == 'x') {
       parsing_hex = true;
@@ -462,21 +427,22 @@ bool IsMemoryAllocatorDumpNameInAllowlist(const std::string& name) {
     }
   }
 
-  for (size_t i = 0; g_allocator_dump_name_allowlist[i] != nullptr; ++i) {
-    if (stripped_str == g_allocator_dump_name_allowlist[i]) {
-      return true;
-    }
+  if (g_allocator_dump_name_allowlist_for_testing.empty()) {
+    return kAllocatorDumpNameAllowlist.contains(stripped_str);
+  } else {
+    return std::ranges::contains(g_allocator_dump_name_allowlist_for_testing,
+                                 stripped_str);
   }
-  return false;
 }
 
-void SetDumpProviderAllowlistForTesting(const char* const* list) {
-  g_dump_provider_allowlist = list;
+void SetDumpProviderAllowlistForTesting(
+    base::span<const std::string_view> list) {
+  g_dump_provider_allowlist_for_testing = list;
 }
 
-void SetAllocatorDumpNameAllowlistForTesting(const char* const* list) {
-  g_allocator_dump_name_allowlist = list;
+void SetAllocatorDumpNameAllowlistForTesting(
+    base::span<const std::string_view> list) {
+  g_allocator_dump_name_allowlist_for_testing = list;
 }
 
-}  // namespace trace_event
-}  // namespace base
+}  // namespace base::trace_event

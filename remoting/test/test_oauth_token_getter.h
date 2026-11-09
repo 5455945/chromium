@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "remoting/base/oauth_token_getter.h"
 
@@ -35,6 +35,10 @@ class TestOAuthTokenGetter final : public OAuthTokenGetter {
 
   // |token_storage| must outlive |this|.
   explicit TestOAuthTokenGetter(TestTokenStorage* token_storage);
+
+  TestOAuthTokenGetter(const TestOAuthTokenGetter&) = delete;
+  TestOAuthTokenGetter& operator=(const TestOAuthTokenGetter&) = delete;
+
   ~TestOAuthTokenGetter() override;
 
   // Initializes the token getter and runs the authentication flow on the
@@ -48,14 +52,9 @@ class TestOAuthTokenGetter final : public OAuthTokenGetter {
   // OAuthTokenGetter implementations
   void CallWithToken(TokenCallback on_access_token) override;
   void InvalidateCache() override;
-
-  base::WeakPtr<TestOAuthTokenGetter> GetWeakPtr();
+  base::WeakPtr<OAuthTokenGetter> GetWeakPtr() override;
 
  private:
-  std::unique_ptr<OAuthTokenGetter> CreateFromIntermediateCredentials(
-      const std::string& auth_code,
-      const OAuthTokenGetter::CredentialsUpdatedCallback&
-          on_credentials_update);
   std::unique_ptr<OAuthTokenGetter> CreateWithRefreshToken(
       const std::string& refresh_token,
       const std::string& email);
@@ -65,19 +64,19 @@ class TestOAuthTokenGetter final : public OAuthTokenGetter {
 
   void OnAccessToken(OAuthTokenGetter::Status status,
                      const std::string& user_email,
-                     const std::string& access_token);
+                     const std::string& access_token,
+                     const std::string& scopes);
 
   void RunAuthenticationDoneCallbacks();
 
   std::unique_ptr<network::TransitionalURLLoaderFactoryOwner>
       url_loader_factory_owner_;
-  TestTokenStorage* token_storage_ = nullptr;
+  raw_ptr<TestTokenStorage> token_storage_ = nullptr;
   std::unique_ptr<OAuthTokenGetter> token_getter_;
   bool is_authenticating_ = false;
   base::queue<base::OnceClosure> on_authentication_done_;
 
   base::WeakPtrFactory<TestOAuthTokenGetter> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(TestOAuthTokenGetter);
 };
 
 }  // namespace test

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <string>
 
 #include "build/build_config.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/payments/core/payment_options_provider.h"
 
 namespace autofill {
@@ -23,11 +23,6 @@ std::u16string GetShippingAddressLabelFromAutofillProfile(
     const autofill::AutofillProfile& profile,
     const std::string& locale);
 
-// Helper function to create a billing address label from an autofill profile.
-std::u16string GetBillingAddressLabelFromAutofillProfile(
-    const autofill::AutofillProfile& profile,
-    const std::string& locale);
-
 // Gets the informational message to be displayed in the shipping address
 // selector view when there are no valid shipping options.
 std::u16string GetShippingAddressSelectorInfoMessage(
@@ -37,23 +32,6 @@ std::u16string GetShippingAddressSelectorInfoMessage(
 // given PaymentShippingType.
 std::u16string GetShippingAddressSectionString(
     PaymentShippingType shipping_type);
-
-#if defined(OS_IOS)
-// Gets the appropriate display string for the Choose Shipping Address string
-// for the given PaymentShippingType.
-std::u16string GetChooseShippingAddressButtonLabel(
-    PaymentShippingType shipping_type);
-
-// Gets the appropriate display string for the Add Shipping Address string
-// for the given PaymentShippingType.
-std::u16string GetAddShippingAddressButtonLabel(
-    PaymentShippingType shipping_type);
-
-// Gets the appropriate display string for the Choose Shipping Option string for
-// the given PaymentShippingType.
-std::u16string GetChooseShippingOptionButtonLabel(
-    PaymentShippingType shipping_type);
-#endif  // defined(OS_IOS)
 
 // Gets the appropriate display string for the Shipping Option string for the
 // given PaymentShippingType.

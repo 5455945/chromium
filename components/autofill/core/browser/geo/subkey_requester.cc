@@ -1,22 +1,35 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/autofill/core/browser/geo/subkey_requester.h"
 
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/cancelable_callback.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "build/buildflag.h"
 #include "third_party/libaddressinput/chromium/chrome_address_validator.h"
-#include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_data.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/source.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/storage.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_android.h"
+#include "base/android/jni_string.h"
+#include "third_party/jni_zero/default_conversions.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "components/autofill/android/main_autofill_jni_headers/SubKeyRequester_jni.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace autofill {
 
@@ -37,13 +50,14 @@ class SubKeyRequest : public SubKeyRequester::Request {
         language_(language),
         address_validator_(address_validator),
         on_subkeys_received_(std::move(on_subkeys_received)),
-        has_responded_(false),
         on_timeout_(base::BindOnce(&SubKeyRequest::OnRulesLoaded,
                                    base::Unretained(this))) {
-    base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, on_timeout_.callback(),
-        base::TimeDelta::FromSeconds(timeout_seconds));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, on_timeout_.callback(), base::Seconds(timeout_seconds));
   }
+
+  SubKeyRequest(const SubKeyRequest&) = delete;
+  SubKeyRequest& operator=(const SubKeyRequest&) = delete;
 
   ~SubKeyRequest() override { on_timeout_.Cancel(); }
 
@@ -58,9 +72,9 @@ class SubKeyRequest : public SubKeyRequester::Request {
         address_validator_->GetRegionSubKeys(region_code_, language_);
     std::vector<std::string> subkeys_codes;
     std::vector<std::string> subkeys_names;
-    for (auto s : subkeys) {
-      subkeys_codes.push_back(s.first);
-      subkeys_names.push_back(s.second);
+    for (const auto& [code, name] : subkeys) {
+      subkeys_codes.push_back(code);
+      subkeys_names.push_back(name);
     }
     std::move(on_subkeys_received_).Run(subkeys_codes, subkeys_names);
   }
@@ -69,32 +83,41 @@ class SubKeyRequest : public SubKeyRequester::Request {
   std::string region_code_;
   std::string language_;
   // Not owned. Never null. Outlive this object.
-  AddressValidator* address_validator_;
+  raw_ptr<AddressValidator> address_validator_;
 
   SubKeyReceiverCallback on_subkeys_received_;
 
-  bool has_responded_;
+  bool has_responded_ = false;
   base::CancelableOnceClosure on_timeout_;
-
-  DISALLOW_COPY_AND_ASSIGN(SubKeyRequest);
 };
+
+#if BUILDFLAG(IS_ANDROID)
+void OnSubKeysReceived(jni_zero::ScopedJavaGlobalRef<jobject> jdelegate,
+                       const std::vector<std::string>& subkeys_codes,
+                       const std::vector<std::string>& subkeys_names) {
+  JNIEnv* env = jni_zero::AttachCurrentThread();
+  Java_GetSubKeysRequestDelegate_onSubKeysReceived(
+      env, jdelegate, subkeys_codes, subkeys_names);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 
 SubKeyRequester::SubKeyRequester(std::unique_ptr<Source> source,
-                                 std::unique_ptr<Storage> storage)
-    : address_validator_(std::move(source), std::move(storage), this) {}
+                                 std::unique_ptr<Storage> storage,
+                                 std::string_view language)
+    : address_validator_(std::move(source), std::move(storage), this),
+      language_(std::string(language)) {}
 
-SubKeyRequester::~SubKeyRequester() {}
+SubKeyRequester::~SubKeyRequester() = default;
 
 void SubKeyRequester::StartRegionSubKeysRequest(const std::string& region_code,
-                                                const std::string& language,
                                                 int timeout_seconds,
                                                 SubKeyReceiverCallback cb) {
   DCHECK(timeout_seconds >= 0);
 
   std::unique_ptr<SubKeyRequest> request(
-      std::make_unique<SubKeyRequest>(region_code, language, timeout_seconds,
+      std::make_unique<SubKeyRequest>(region_code, language_, timeout_seconds,
                                       &address_validator_, std::move(cb)));
 
   if (AreRulesLoadedForRegion(region_code)) {
@@ -139,4 +162,32 @@ void SubKeyRequester::CancelPendingGetSubKeys() {
   pending_subkey_request_.reset();
 }
 
+#if BUILDFLAG(IS_ANDROID)
+jni_zero::ScopedJavaLocalRef<jobject> SubKeyRequester::GetJavaObject() {
+  if (!java_ref_) {
+    java_ref_.Reset(Java_SubKeyRequester_Constructor(
+        jni_zero::AttachCurrentThread(), reinterpret_cast<intptr_t>(this)));
+  }
+  return jni_zero::ScopedJavaLocalRef<jobject>(java_ref_);
+}
+
+void SubKeyRequester::LoadRulesForSubKeys(const std::string& region_code) {
+  LoadRulesForRegion(region_code);
+}
+
+void SubKeyRequester::StartRegionSubKeysRequest(
+    const std::string& region_code,
+    int32_t jtimeout_seconds,
+    const jni_zero::JavaRef<jobject>& jdelegate) {
+  SubKeyReceiverCallback cb = base::BindOnce(
+      &OnSubKeysReceived, jni_zero::ScopedJavaGlobalRef<jobject>(jdelegate));
+
+  StartRegionSubKeysRequest(region_code, jtimeout_seconds, std::move(cb));
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 }  // namespace autofill
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(SubKeyRequester)
+#endif

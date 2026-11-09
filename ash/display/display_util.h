@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 
 #include "ash/ash_export.h"
+#include "ui/display/display.h"
 
 namespace aura {
 class Window;
@@ -43,9 +44,9 @@ ASH_EXPORT gfx::Rect GetNativeEdgeBounds(AshWindowTreeHost* ash_host,
 // the point_in_screen, which may be outside of the root window.
 // |update_last_loation_now| is used for the test to update the mouse
 // location synchronously.
-void MoveCursorTo(AshWindowTreeHost* ash_host,
-                  const gfx::Point& point_in_screen,
-                  bool update_last_location_now);
+ASH_EXPORT void MoveCursorTo(AshWindowTreeHost* ash_host,
+                             const gfx::Point& point_in_screen,
+                             bool update_last_location_now);
 
 // Shows the notification message for display related issues, and optionally
 // adds a button to send a feedback report.
@@ -61,6 +62,14 @@ bool IsRectContainedByAnyDisplay(const gfx::Rect& rect_in_screen);
 ASH_EXPORT std::u16string ConvertRefreshRateToString16(float refresh_rate);
 
 ASH_EXPORT std::u16string GetDisplayErrorNotificationMessageForTest();
+
+// Returns whether the rotation of the source display (internal display) should
+// be undone in the destination display (external display). Returning true makes
+// the destination display to show in an orientation independent of the source
+// display. Currently, this returns true when mirror mode is enabled in tablet
+// mode (https://crbug.com/824417), or the device is in physical tablet mode
+// (https://crbug.com/1180809).
+bool ShouldUndoRotationForMirror();
 
 }  // namespace ash
 

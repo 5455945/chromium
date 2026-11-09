@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,21 @@
 
 #include <stddef.h>
 
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/preferences/public/mojom/preferences.mojom-forward.h"
 #include "services/preferences/public/mojom/tracked_preference_validation_delegate.mojom-forward.h"
 
 class PersistentPrefStore;
 class PrefService;
-
-namespace base {
-class DictionaryValue;
-}  // namespace base
 
 namespace service_manager {
 class Connector;
@@ -33,18 +31,20 @@ namespace user_prefs {
 class PrefRegistrySyncable;
 }  // namespace user_prefs
 
+namespace os_crypt_async {
+class OSCryptAsync;
+}  // namespace os_crypt_async
+
 // Provides a facade through which the user preference store may be accessed and
 // managed.
 class ProfilePrefStoreManager {
  public:
   // Instantiates a ProfilePrefStoreManager with the configuration required to
-  // manage the user preferences of the profile at |profile_path|.
-  // |seed| and |legacy_device_id| are used to track preference value changes
-  // and must be the same on each launch in order to verify loaded preference
-  // values.
+  // manage the user preferences of the profile at |profile_path|. |seed| is
+  // used to track preference value changes and must be the same on each launch
+  // in order to verify loaded preference values.
   ProfilePrefStoreManager(const base::FilePath& profile_path,
-                          const std::string& seed,
-                          const std::string& legacy_device_id);
+                          const std::string& seed);
 
   ProfilePrefStoreManager(const ProfilePrefStoreManager&) = delete;
   ProfilePrefStoreManager& operator=(const ProfilePrefStoreManager&) = delete;
@@ -66,7 +66,7 @@ class ProfilePrefStoreManager {
   // was built by ProfilePrefStoreManager.
   static void ClearResetTime(PrefService* pref_service);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Call before startup tasks kick in to use a different registry path for
   // storing and validating tracked preference MACs. Callers are responsible
   // for ensuring that the key is deleted on shutdown. For testing only.
@@ -90,7 +90,8 @@ class ProfilePrefStoreManager {
       mojo::PendingRemote<prefs::mojom::ResetOnLoadObserver>
           reset_on_load_observer,
       mojo::PendingRemote<prefs::mojom::TrackedPreferenceValidationDelegate>
-          validation_delegate);
+          validation_delegate,
+      os_crypt_async::OSCryptAsync* os_crypt);
 
   // Initializes the preferences for the managed profile with the preference
   // values in |master_prefs|. Acts synchronously, including blocking IO.
@@ -99,7 +100,8 @@ class ProfilePrefStoreManager {
       std::vector<prefs::mojom::TrackedPreferenceMetadataPtr>
           tracking_configuration,
       size_t reporting_ids_count,
-      std::unique_ptr<base::DictionaryValue> master_prefs);
+      base::DictValue master_prefs,
+      os_crypt_async::OSCryptAsync* os_crypt);
 
  private:
   // Connects to the pref service over mojo and configures it.
@@ -125,7 +127,6 @@ class ProfilePrefStoreManager {
 
   const base::FilePath profile_path_;
   const std::string seed_;
-  const std::string legacy_device_id_;
 };
 
 #endif  // CHROME_BROWSER_PREFS_PROFILE_PREF_STORE_MANAGER_H_

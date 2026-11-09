@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,34 +11,24 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree_id.h"
 #include "ui/accessibility/ax_tree_update.h"
-#include "ui/accessibility/test_ax_tree_manager.h"
+#include "ui/accessibility/test_ax_tree_update.h"
+#include "ui/accessibility/test_single_ax_tree_manager.h"
 
 namespace ui {
 
-class AXPlatformNodeTest : public ::testing::Test, public TestAXTreeManager {
+class AXPlatformNodeTest : public ::testing::Test,
+                           public TestSingleAXTreeManager {
  public:
   AXPlatformNodeTest();
   ~AXPlatformNodeTest() override;
   AXPlatformNodeTest(const AXPlatformNodeTest&) = delete;
   AXPlatformNodeTest& operator=(const AXPlatformNodeTest&) = delete;
 
- protected:
-  // Initialize given an AXTreeUpdate.
-  void Init(const AXTreeUpdate& initial_state);
+  // `TestSingleAXTreeManager`
+  void SetTree(std::unique_ptr<AXTree> tree) override;
 
-  // Convenience functions to initialize directly from a few AXNodeData objects.
-  void Init(const ui::AXNodeData& node1,
-            const ui::AXNodeData& node2 = ui::AXNodeData(),
-            const ui::AXNodeData& node3 = ui::AXNodeData(),
-            const ui::AXNodeData& node4 = ui::AXNodeData(),
-            const ui::AXNodeData& node5 = ui::AXNodeData(),
-            const ui::AXNodeData& node6 = ui::AXNodeData(),
-            const ui::AXNodeData& node7 = ui::AXNodeData(),
-            const ui::AXNodeData& node8 = ui::AXNodeData(),
-            const ui::AXNodeData& node9 = ui::AXNodeData(),
-            const ui::AXNodeData& node10 = ui::AXNodeData(),
-            const ui::AXNodeData& node11 = ui::AXNodeData(),
-            const ui::AXNodeData& node12 = ui::AXNodeData());
+ protected:
+  void TearDown() override;
 
   AXTreeUpdate BuildTextField();
   AXTreeUpdate BuildTextFieldWithSelectionRange(int32_t start, int32_t stop);

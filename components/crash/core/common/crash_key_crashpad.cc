@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,7 +19,7 @@ void InitializeCrashKeys() {
   InitializeCrashKeyBaseSupport();
 }
 
-// Returns a value for the crash key named |key_name|. For Crashpad-based
+// Returns a value for the crash key named `key_name`. For Crashpad-based
 // clients, this returns the first instance found of the name.
 std::string GetCrashKeyValue(const std::string& key_name) {
   auto* annotation_list = crashpad::AnnotationList::Get();

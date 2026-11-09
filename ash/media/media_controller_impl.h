@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/media_controller.h"
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "components/account_id/account_id.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -46,9 +47,17 @@ class ASH_EXPORT MediaControllerImpl
       public media_session::mojom::MediaControllerObserver {
  public:
   MediaControllerImpl();
+
+  MediaControllerImpl(const MediaControllerImpl&) = delete;
+  MediaControllerImpl& operator=(const MediaControllerImpl&) = delete;
+
   ~MediaControllerImpl() override;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+
+  media_session::mojom::MediaSessionInfoPtr GetMediaSessionInfo() const {
+    return media_session_info_ ? media_session_info_->Clone() : nullptr;
+  }
 
   // Determine if lock screen media keys are enabled.
   bool AreLockScreenMediaKeysEnabled() const;
@@ -86,14 +95,14 @@ class ASH_EXPORT MediaControllerImpl
   void MediaSessionInfoChanged(
       media_session::mojom::MediaSessionInfoPtr session_info) override;
   void MediaSessionMetadataChanged(
-      const absl::optional<media_session::MediaMetadata>& metadata) override {}
+      const std::optional<media_session::MediaMetadata>& metadata) override {}
   void MediaSessionActionsChanged(
       const std::vector<media_session::mojom::MediaSessionAction>& actions)
       override;
   void MediaSessionChanged(
-      const absl::optional<base::UnguessableToken>& request_id) override {}
+      const std::optional<base::UnguessableToken>& request_id) override {}
   void MediaSessionPositionChanged(
-      const absl::optional<media_session::MediaPosition>& position) override {}
+      const std::optional<media_session::MediaPosition>& position) override {}
 
  private:
   friend class MediaControllerTest;
@@ -153,11 +162,9 @@ class ASH_EXPORT MediaControllerImpl
   mojo::Receiver<media_session::mojom::MediaControllerObserver>
       media_controller_observer_receiver_{this};
 
-  MediaClient* client_ = nullptr;
+  raw_ptr<MediaClient> client_ = nullptr;
 
   base::ObserverList<MediaCaptureObserver>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaControllerImpl);
 };
 
 }  // namespace ash

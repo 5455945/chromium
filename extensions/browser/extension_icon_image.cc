@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,20 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "content/public/browser/notification_service.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "extensions/browser/image_loader.h"
-#include "extensions/browser/notification_types.h"
 #include "extensions/common/extension.h"
-#include "ui/base/layout.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_skia_source.h"
 
 // The ImageSkia provided by extensions::IconImage contains ImageSkiaReps that
@@ -48,7 +47,7 @@ extensions::ExtensionResource GetExtensionIconResource(
     const extensions::Extension& extension,
     const ExtensionIconSet& icons,
     int size,
-    ExtensionIconSet::MatchType match_type) {
+    ExtensionIconSet::Match match_type) {
   const std::string& path = icons.Get(size, match_type);
   return path.empty() ? extensions::ExtensionResource()
                       : extension.GetResource(path);
@@ -58,6 +57,10 @@ class BlankImageSource : public gfx::CanvasImageSource {
  public:
   explicit BlankImageSource(const gfx::Size& size_in_dip)
       : CanvasImageSource(size_in_dip) {}
+
+  BlankImageSource(const BlankImageSource&) = delete;
+  BlankImageSource& operator=(const BlankImageSource&) = delete;
+
   ~BlankImageSource() override {}
 
  private:
@@ -65,8 +68,6 @@ class BlankImageSource : public gfx::CanvasImageSource {
   void Draw(gfx::Canvas* canvas) override {
     canvas->DrawColor(SkColorSetARGB(0, 0, 0, 0));
   }
-
-  DISALLOW_COPY_AND_ASSIGN(BlankImageSource);
 };
 
 }  // namespace
@@ -79,6 +80,10 @@ namespace extensions {
 class IconImage::Source : public gfx::ImageSkiaSource {
  public:
   Source(IconImage* host, const gfx::Size& size_in_dip);
+
+  Source(const Source&) = delete;
+  Source& operator=(const Source&) = delete;
+
   ~Source() override;
 
   void ResetHost();
@@ -89,13 +94,11 @@ class IconImage::Source : public gfx::ImageSkiaSource {
 
   // Used to load images, possibly asynchronously. nullptr'ed out when the
   // IconImage is destroyed.
-  IconImage* host_;
+  raw_ptr<IconImage> host_;
 
   // Image whose representations will be used until |host_| loads the real
   // representations for the image.
   gfx::ImageSkia blank_image_;
-
-  DISALLOW_COPY_AND_ASSIGN(Source);
 };
 
 IconImage::Source::Source(IconImage* host, const gfx::Size& size_in_dip)
@@ -111,8 +114,9 @@ void IconImage::Source::ResetHost() {
 }
 
 gfx::ImageSkiaRep IconImage::Source::GetImageForScale(float scale) {
-  if (host_)
+  if (host_) {
     host_->LoadImageForScaleAsync(scale);
+  }
   return blank_image_.GetRepresentation(scale);
 }
 
@@ -137,16 +141,15 @@ IconImage::IconImage(content::BrowserContext* context,
           default_icon,
           skia::ImageOperations::RESIZE_BEST,
           gfx::Size(resource_size_in_dip, resource_size_in_dip))) {
-  if (observer)
+  if (observer) {
     AddObserver(observer);
+  }
   gfx::Size resource_size(resource_size_in_dip, resource_size_in_dip);
   source_ = new Source(this, resource_size);
-  image_skia_ = gfx::ImageSkia(base::WrapUnique(source_), resource_size);
+  image_skia_ = gfx::ImageSkia(base::WrapUnique(source_.get()), resource_size);
   image_ = gfx::Image(image_skia_);
 
-  registrar_.Add(this,
-                 extensions::NOTIFICATION_EXTENSION_REMOVED,
-                 content::NotificationService::AllSources());
+  registry_observation_.Observe(ExtensionRegistry::Get(context));
 }
 
 IconImage::IconImage(content::BrowserContext* context,
@@ -179,24 +182,26 @@ IconImage::~IconImage() {
 
 void IconImage::LoadImageForScaleAsync(float scale) {
   // Do nothing if extension is unloaded.
-  if (!extension_)
+  if (!extension_) {
     return;
+  }
 
   const int resource_size_in_pixel =
       static_cast<int>(resource_size_in_dip_ * scale);
 
   extensions::ExtensionResource resource;
 
-  // Find extension resource for non bundled component extensions.
+  // Find a bigger extension icon resource for non bundled component extensions.
+  // TODO(crbug.com/329953472): Use a predefined threshold.
   resource =
       GetExtensionIconResource(*extension_, icon_set_, resource_size_in_pixel,
-                               ExtensionIconSet::MATCH_BIGGER);
+                               ExtensionIconSet::Match::kBigger);
 
-  // If resource is not found by now, try matching smaller one.
+  // If a larger icon wasn't found, try matching a smaller one.
   if (resource.empty()) {
     resource =
         GetExtensionIconResource(*extension_, icon_set_, resource_size_in_pixel,
-                                 ExtensionIconSet::MATCH_SMALLER);
+                                 ExtensionIconSet::Match::kSmaller);
   }
 
   if (!resource.empty()) {
@@ -204,9 +209,9 @@ void IconImage::LoadImageForScaleAsync(float scale) {
     const ImageLoader::ImageRepresentation::ResizeCondition resize_condition =
         keep_original_size_ ? ImageLoader::ImageRepresentation::NEVER_RESIZE
                             : ImageLoader::ImageRepresentation::ALWAYS_RESIZE;
-    info_list.push_back(ImageLoader::ImageRepresentation(
+    info_list.emplace_back(
         resource, resize_condition,
-        gfx::Size(resource_size_in_pixel, resource_size_in_pixel), scale));
+        gfx::Size(resource_size_in_pixel, resource_size_in_pixel), scale);
 
     extensions::ImageLoader* loader =
         extensions::ImageLoader::Get(browser_context_);
@@ -218,7 +223,7 @@ void IconImage::LoadImageForScaleAsync(float scale) {
     // If there is no resource found, update from the default icon.
     const gfx::ImageSkiaRep& rep = default_icon_.GetRepresentation(scale);
     if (!rep.is_null()) {
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(&IconImage::OnImageRepLoaded,
                                     weak_ptr_factory_.GetWeakPtr(), rep));
     }
@@ -230,8 +235,9 @@ void IconImage::OnImageLoaded(float scale, const gfx::Image& image_in) {
       image_in.IsEmpty() ? &default_icon_ : image_in.ToImageSkia();
 
   // Maybe default icon was not set.
-  if (image->isNull())
+  if (image->isNull()) {
     return;
+  }
 
   OnImageRepLoaded(image->GetRepresentation(scale));
 }
@@ -254,15 +260,19 @@ void IconImage::OnImageRepLoaded(const gfx::ImageSkiaRep& rep) {
     observer.OnExtensionIconImageChanged(this);
 }
 
-void IconImage::Observe(int type,
-                        const content::NotificationSource& source,
-                        const content::NotificationDetails& details) {
-  DCHECK_EQ(type, extensions::NOTIFICATION_EXTENSION_REMOVED);
-
-  const Extension* extension = content::Details<const Extension>(details).ptr();
-
-  if (extension_.get() == extension)
+void IconImage::OnExtensionUnloaded(content::BrowserContext* browser_context,
+                                    const Extension* extension,
+                                    UnloadedExtensionReason reason) {
+  if (extension == extension_) {
     extension_ = nullptr;
+  }
+}
+
+void IconImage::OnShutdown(ExtensionRegistry* extension_registry) {
+  // UI shutdown has historically been racy with profiles. Be sure to clean
+  // up the registration so that the ScopedObservation doesn't call
+  // RemoveObserver() on ExtensionRegistry after it's freed.
+  registry_observation_.Reset();
 }
 
 }  // namespace extensions

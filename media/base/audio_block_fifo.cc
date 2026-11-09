@@ -1,46 +1,45 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "media/base/audio_block_fifo.h"
 
 #include <stdint.h>
 
 #include <algorithm>
-
-#include "media/base/audio_block_fifo.h"
+#include <utility>
 
 #include "base/check_op.h"
 #include "base/trace_event/trace_event.h"
-
+#include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
+#include "media/base/sample_format.h"
 namespace media {
 
 AudioBlockFifo::AudioBlockFifo(int channels, int frames, int blocks)
-    : channels_(channels),
-      block_frames_(frames),
-      write_block_(0),
-      read_block_(0),
-      available_blocks_(0),
-      write_pos_(0) {
+    : channels_(channels), block_frames_(frames) {
   IncreaseCapacity(blocks);
 }
 
 AudioBlockFifo::~AudioBlockFifo() = default;
 
-void AudioBlockFifo::Push(const void* source,
+void AudioBlockFifo::Push(base::span<const uint8_t> source,
                           int frames,
-                          int bytes_per_sample) {
+                          SampleFormat sample_format) {
   TRACE_EVENT2("audio", "AudioBlockFifo::Push", "pushed frames", frames,
                "available frames", GetAvailableFrames());
-  PushInternal(source, frames, bytes_per_sample);
+  CHECK(!source.empty());
+  PushInternal(source, frames, sample_format);
 }
 
 void AudioBlockFifo::PushSilence(int frames) {
   TRACE_EVENT2("audio", "AudioBlockFifo::PushSilence", "pushed frames", frames,
                "available frames", GetAvailableFrames());
-  PushInternal(nullptr, frames, 0);
+  PushInternal({}, frames, kUnknownSampleFormat);
 }
 
 const AudioBus* AudioBlockFifo::Consume() {
-  DCHECK(available_blocks_);
+  CHECK_GT(available_blocks_, 0);
   TRACE_EVENT1("audio", "AudioBlockFifo::Consume", "available frames",
                GetAvailableFrames());
   AudioBus* audio_bus = audio_blocks_[read_block_].get();
@@ -63,19 +62,23 @@ int AudioBlockFifo::GetAvailableFrames() const {
 int AudioBlockFifo::GetUnfilledFrames() const {
   const int unfilled_frames =
       (audio_blocks_.size() - available_blocks_) * block_frames_ - write_pos_;
-  DCHECK_GE(unfilled_frames, 0);
+  CHECK_GE(unfilled_frames, 0);
   return unfilled_frames;
 }
 
 void AudioBlockFifo::IncreaseCapacity(int blocks) {
-  DCHECK_GT(blocks, 0);
+  CHECK_GT(blocks, 0);
 
-  // Create |blocks| of audio buses and insert them to the containers.
+  // Create `blocks` of zero-initialized audio buses and insert them into the
+  // container.
   audio_blocks_.reserve(audio_blocks_.size() + blocks);
 
   const int original_size = audio_blocks_.size();
-  for (int i = 0; i < blocks; ++i)
-    audio_blocks_.push_back(AudioBus::Create(channels_, block_frames_));
+  for (int i = 0; i < blocks; ++i) {
+    auto audio_bus = AudioBus::Create(channels_, block_frames_);
+    audio_bus->Zero();
+    audio_blocks_.push_back(std::move(audio_bus));
+  }
 
   if (!original_size)
     return;
@@ -83,9 +86,13 @@ void AudioBlockFifo::IncreaseCapacity(int blocks) {
   std::rotate(audio_blocks_.begin() + read_block_,
               audio_blocks_.begin() + original_size, audio_blocks_.end());
 
-  // Update the write pointer if it is on top of the new inserted blocks.
-  if (write_block_ >= read_block_)
+  // Update `write_block_` if the block it pointed to was shifted.
+  // If the FIFO was full, keep `write_block_` pointing to the new empty blocks.
+  const bool write_block_moved = write_block_ >= read_block_;
+  const bool fifo_was_full = available_blocks_ == original_size;
+  if (write_block_moved && !fifo_was_full) {
     write_block_ += blocks;
+  }
 
   // Update the read pointers correspondingly.
   read_block_ += blocks;
@@ -94,48 +101,60 @@ void AudioBlockFifo::IncreaseCapacity(int blocks) {
   DCHECK_LT(write_block_, static_cast<int>(audio_blocks_.size()));
 }
 
-void AudioBlockFifo::PushInternal(const void* source,
+void AudioBlockFifo::PushInternal(base::span<const uint8_t> source,
                                   int frames,
-                                  int bytes_per_sample) {
-  // |source| may be nullptr if bytes_per_sample is 0. In that case,
-  // we inject silence.
-  DCHECK((source && bytes_per_sample > 0) || (!source && !bytes_per_sample));
+                                  SampleFormat sample_format) {
+  // |source| may be empty if bytes_per_sample is 0. In that case, we inject
+  // silence.
+  const bool push_silence = source.empty();
+  CHECK_EQ(push_silence, (sample_format == kUnknownSampleFormat));
+
+  const int bytes_per_sample = SampleFormatToBytesPerChannel(sample_format);
+
   DCHECK_GT(frames, 0);
   DCHECK_LT(available_blocks_, static_cast<int>(audio_blocks_.size()));
   CHECK_LE(frames, GetUnfilledFrames());
 
-  const uint8_t* source_ptr = static_cast<const uint8_t*>(source);
   int frames_to_push = frames;
+
+  const size_t bytes_per_frame = channels_ * bytes_per_sample;
   while (frames_to_push) {
     // Get the current write block.
     AudioBus* current_block = audio_blocks_[write_block_].get();
 
     // Figure out what segment sizes we need when adding the new content to
     // the FIFO.
-    const int push_frames =
+    const size_t push_frames =
         std::min(block_frames_ - write_pos_, frames_to_push);
 
-    if (source) {
+    if (!push_silence) {
+      CHECK_GT(bytes_per_frame, 0u);
+      auto data_for_current_block = source.take_first(
+          base::CheckMul<size_t>(bytes_per_frame, push_frames).ValueOrDie());
       // Deinterleave the content to the FIFO.
-      switch (bytes_per_sample) {
-        case 1:
-          current_block->FromInterleavedPartial<UnsignedInt8SampleTypeTraits>(
-              source_ptr, write_pos_, push_frames);
+      switch (sample_format) {
+        case kSampleFormatU8:
+          current_block
+              ->FromInterleavedBytesPartial<UnsignedInt8SampleTypeTraits>(
+                  data_for_current_block, write_pos_);
           break;
-        case 2:
-          current_block->FromInterleavedPartial<SignedInt16SampleTypeTraits>(
-              reinterpret_cast<const int16_t*>(source_ptr), write_pos_,
-              push_frames);
+        case kSampleFormatS16:
+          current_block
+              ->FromInterleavedBytesPartial<SignedInt16SampleTypeTraits>(
+                  data_for_current_block, write_pos_);
           break;
-        case 4:
-          current_block->FromInterleavedPartial<SignedInt32SampleTypeTraits>(
-              reinterpret_cast<const int32_t*>(source_ptr), write_pos_,
-              push_frames);
+        case kSampleFormatS32:
+          current_block
+              ->FromInterleavedBytesPartial<SignedInt32SampleTypeTraits>(
+                  data_for_current_block, write_pos_);
+          break;
+        case kSampleFormatF32:
+          current_block->FromInterleavedBytesPartial<Float32SampleTypeTraits>(
+              data_for_current_block, write_pos_);
           break;
         default:
-          NOTREACHED() << "Unsupported bytes per sample encountered: "
-                       << bytes_per_sample;
-          current_block->ZeroFramesPartial(write_pos_, push_frames);
+          NOTREACHED() << "Unsupported sample format encountered: "
+                       << SampleFormatToString(sample_format);
       }
     } else {
       current_block->ZeroFramesPartial(write_pos_, push_frames);
@@ -150,11 +169,11 @@ void AudioBlockFifo::PushInternal(const void* source,
       ++available_blocks_;
     }
 
-    if (source_ptr)
-      source_ptr += push_frames * bytes_per_sample * channels_;
     frames_to_push -= push_frames;
     DCHECK_GE(frames_to_push, 0);
   }
+
+  CHECK(source.empty());
 }
 
 }  // namespace media

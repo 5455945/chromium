@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/core/frame/policy_container.h"
 
 namespace blink {
 
@@ -32,15 +32,15 @@ const SecurityOrigin* FetchClientSettingsObjectImpl::GetSecurityOrigin() const {
   return execution_context_->GetSecurityOrigin();
 }
 
-network::mojom::ReferrerPolicy
-FetchClientSettingsObjectImpl::GetReferrerPolicy() const {
+const mojom::blink::PolicyContainerPolicies&
+FetchClientSettingsObjectImpl::GetPolicyContainerPolicies() const {
   DCHECK(execution_context_->IsContextThread());
-  return execution_context_->GetReferrerPolicy();
+  return execution_context_->GetPolicyContainer()->GetPolicies();
 }
 
-const String FetchClientSettingsObjectImpl::GetOutgoingReferrer() const {
+KURL FetchClientSettingsObjectImpl::GetOutgoingReferrerUrl() const {
   DCHECK(execution_context_->IsContextThread());
-  return execution_context_->OutgoingReferrer();
+  return execution_context_->OutgoingReferrerUrl();
 }
 
 HttpsState FetchClientSettingsObjectImpl::GetHttpsState() const {
@@ -50,9 +50,6 @@ HttpsState FetchClientSettingsObjectImpl::GetHttpsState() const {
 
 AllowedByNosniff::MimeTypeCheck
 FetchClientSettingsObjectImpl::MimeTypeCheckForClassicWorkerScript() const {
-  if (RuntimeEnabledFeatures::StrictMimeTypesForWorkersEnabled())
-    return AllowedByNosniff::MimeTypeCheck::kStrict;
-
   if (execution_context_->IsWindow()) {
     // For worker creation on a document, don't impose strict MIME-type checks
     // on the top-level worker script for backward compatibility. Note that
@@ -70,11 +67,6 @@ FetchClientSettingsObjectImpl::MimeTypeCheckForClassicWorkerScript() const {
   // Nested workers is a new feature (enabled by default in M69) and there is no
   // backward compatibility issue.
   return AllowedByNosniff::MimeTypeCheck::kStrict;
-}
-
-network::mojom::IPAddressSpace FetchClientSettingsObjectImpl::GetAddressSpace()
-    const {
-  return execution_context_->AddressSpace();
 }
 
 mojom::blink::InsecureRequestPolicy

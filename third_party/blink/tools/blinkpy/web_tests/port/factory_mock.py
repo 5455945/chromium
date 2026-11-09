@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,6 +13,5 @@ class MockPortFactory(object):
         return TestPort(port_name=port_name, host=self._host)
 
     def get_from_builder_name(self, builder_name):
-        port_name = self._host.builders.port_name_for_builder_name(
-            builder_name)
+        port_name = self._host.builders.port_name_for_builder_name(builder_name)
         return self.get(port_name)

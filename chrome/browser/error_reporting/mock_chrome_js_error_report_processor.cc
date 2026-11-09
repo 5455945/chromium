@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,23 +16,17 @@
 #include "components/crash/content/browser/error_reporting/mock_crash_endpoint.h"
 #include "components/variations/variations_crash_keys.h"
 
-const char MockChromeJsErrorReportProcessor::
-    kDefaultExperimentListStringPreEscaping[] =
-        "6598898b-ac59b6dc,";  // variations::GetExperimentListInfo() always
-                               // leaves a trailing comma.
-
 const char MockChromeJsErrorReportProcessor::kDefaultExperimentListString[] =
-    "6598898b-ac59b6dc%2C";  // The URL escaping turns the comma into %2C in the
-                             // query string.
+    "6598898b-ac59b6dc,";  // variations::GetExperimentListInfo() always
+                           // leaves a trailing comma.
 
 // Tricium gets confused by the #if's and thinks we should change this to
 // "= default".
 // NOLINTNEXTLINE
 MockChromeJsErrorReportProcessor::MockChromeJsErrorReportProcessor() {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
   // Shorten timeout or tests will time out.
-  set_maximium_wait_for_crash_reporter_for_test(
-      base::TimeDelta::FromSeconds(5));
+  set_maximium_wait_for_crash_reporter_for_test(base::Seconds(5));
 #endif
 }
 
@@ -76,11 +70,11 @@ MockChromeJsErrorReportProcessor::GetExperimentListInfo() const {
   }
   variations::ExperimentListInfo result;
   result.num_experiments = 1;
-  result.experiment_list = kDefaultExperimentListStringPreEscaping;
+  result.experiment_list = kDefaultExperimentListString;
   return result;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
 std::vector<std::string>
 MockChromeJsErrorReportProcessor::GetCrashReporterArgvStart() {
   // Redirect uploads to our a simple upload shim which will then send them to
@@ -114,7 +108,7 @@ void MockChromeJsErrorReportProcessor::UpdateReportDatabase(
         std::move(remote_report_id), report_time);
   }
 }
-#endif  //  !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  //  !BUILDFLAG(IS_CHROMEOS)
 
 ScopedMockChromeJsErrorReportProcessor::ScopedMockChromeJsErrorReportProcessor(
     const MockCrashEndpoint& endpoint)

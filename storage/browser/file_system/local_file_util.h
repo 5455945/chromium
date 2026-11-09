@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "storage/browser/file_system/file_system_file_util.h"
 
 namespace base {
@@ -29,7 +28,13 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) LocalFileUtil
     : public FileSystemFileUtil {
  public:
   LocalFileUtil();
+
+  LocalFileUtil(const LocalFileUtil&) = delete;
+  LocalFileUtil& operator=(const LocalFileUtil&) = delete;
+
   ~LocalFileUtil() override;
+
+  static base::FilePath GetRootPathForURL(const FileSystemURL& url);
 
   base::File CreateOrOpen(FileSystemOperationContext* context,
                           const FileSystemURL& url,
@@ -65,7 +70,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) LocalFileUtil
   base::File::Error CopyOrMoveFile(FileSystemOperationContext* context,
                                    const FileSystemURL& src_url,
                                    const FileSystemURL& dest_url,
-                                   CopyOrMoveOption option,
+                                   CopyOrMoveOptionSet options,
                                    bool copy) override;
   base::File::Error CopyInForeignFile(FileSystemOperationContext* context,
                                       const base::FilePath& src_file_path,
@@ -87,10 +92,13 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) LocalFileUtil
   // restriction by overriding this method.
   virtual bool IsHiddenItem(const base::FilePath& local_file_path) const;
 
+  // Checks whether |local_file_path| or any of its ancestors up to
+  // (but not including) |root_path| is a hidden item.
+  virtual bool IsHiddenItemUnderRoot(const base::FilePath& local_file_path,
+                                     const base::FilePath& root_path) const;
+
  private:
   class LocalFileEnumerator;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileUtil);
 };
 
 }  // namespace storage

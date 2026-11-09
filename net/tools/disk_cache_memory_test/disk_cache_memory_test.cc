@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,23 +10,25 @@
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/test_future.h"
+#include "base/types/expected.h"
 #include "net/base/cache_type.h"
 #include "net/base/net_errors.h"
+#include "net/base/test_completion_callback.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/simple/simple_backend_impl.h"
 #include "net/disk_cache/simple/simple_index.h"
@@ -56,7 +58,7 @@ struct CacheSpec {
       return nullptr;
     if (tokens[1] != kDiskCacheType && tokens[1] != kAppCacheType)
       return nullptr;
-    return std::unique_ptr<CacheSpec>(new CacheSpec(
+    return base::WrapUnique(new CacheSpec(
         tokens[0] == kBlockFileBackendType ? net::CACHE_BACKEND_BLOCKFILE
                                            : net::CACHE_BACKEND_SIMPLE,
         tokens[1] == kDiskCacheType ? net::DISK_CACHE : net::APP_CACHE,
@@ -89,43 +91,44 @@ void SetSuccessCodeOnCompletion(base::RunLoop* run_loop,
 }
 
 std::unique_ptr<Backend> CreateAndInitBackend(const CacheSpec& spec) {
-  std::unique_ptr<Backend> result;
-  std::unique_ptr<Backend> backend;
-  bool succeeded = false;
   base::RunLoop run_loop;
-  net::CompletionOnceCallback callback =
-      base::BindOnce(&SetSuccessCodeOnCompletion, &run_loop, &succeeded);
-  const int net_error =
-      CreateCacheBackend(spec.cache_type, spec.backend_type, spec.path, 0,
-                         disk_cache::ResetHandling::kNeverReset, nullptr,
-                         &backend, std::move(callback));
-  if (net_error == net::OK)
-    SetSuccessCodeOnCompletion(&run_loop, &succeeded, net::OK);
-  else
+  BackendResult result;
+  result = CreateCacheBackend(
+      spec.cache_type, spec.backend_type, /*file_operations=*/nullptr,
+      spec.path, 0, disk_cache::ResetHandling::kNeverReset, /*net_log=*/nullptr,
+      /*cache_encryption_delegate=*/nullptr,
+      base::BindOnce(
+          [](BackendResult* out, base::RunLoop* run_loop,
+             BackendResult async_result) {
+            *out = std::move(async_result);
+            run_loop->Quit();
+          },
+          &result, &run_loop));
+  if (result.net_error == net::ERR_IO_PENDING)
     run_loop.Run();
-  if (!succeeded) {
+  if (result.net_error != net::OK) {
     LOG(ERROR) << "Could not initialize backend in "
                << spec.path.LossyDisplayName();
-    return result;
+    return nullptr;
   }
   // For the simple cache, the index may not be initialized yet.
+  bool succeeded = false;
   if (spec.backend_type == net::CACHE_BACKEND_SIMPLE) {
     base::RunLoop index_run_loop;
     net::CompletionOnceCallback index_callback = base::BindOnce(
         &SetSuccessCodeOnCompletion, &index_run_loop, &succeeded);
     SimpleBackendImpl* simple_backend =
-        static_cast<SimpleBackendImpl*>(backend.get());
+        static_cast<SimpleBackendImpl*>(result.backend.get());
     simple_backend->index()->ExecuteWhenReady(std::move(index_callback));
     index_run_loop.Run();
     if (!succeeded) {
       LOG(ERROR) << "Could not initialize Simple Cache in "
                  << spec.path.LossyDisplayName();
-      return result;
+      return nullptr;
     }
   }
-  DCHECK(backend);
-  result.swap(backend);
-  return result;
+  DCHECK(result.backend);
+  return std::move(result.backend);
 }
 
 // Parses range lines from /proc/<PID>/smaps, e.g. (anonymous read write):
@@ -216,7 +219,17 @@ uint64_t GetMemoryConsumption() {
         return total_size;
     }
   }
-  return total_size;
+}
+
+int32_t GetCacheEntryCount(disk_cache::Backend* cache) {
+  base::test::TestFuture<int32_t> future;
+  base::expected<int32_t, net::Error> result =
+      cache->GetEntryCount(future.GetCallback());
+  if (result.has_value()) {
+    return result.value();
+  }
+  CHECK_EQ(result.error(), net::ERR_IO_PENDING);
+  return future.Get();
 }
 
 bool CacheMemTest(const std::vector<std::unique_ptr<CacheSpec>>& specs) {
@@ -226,7 +239,7 @@ bool CacheMemTest(const std::vector<std::unique_ptr<CacheSpec>>& specs) {
     if (!backend)
       return false;
     std::cout << "Number of entries in " << it->path.LossyDisplayName() << " : "
-              << backend->GetEntryCount() << std::endl;
+              << GetCacheEntryCount(backend.get()) << std::endl;
     backends.push_back(std::move(backend));
   }
   const uint64_t memory_consumption = GetMemoryConsumption();

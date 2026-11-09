@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,17 @@
 
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
+#include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_host_queue.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/test_extension_dir.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -30,6 +34,14 @@ enum class BackgroundType {
 // ExtensionBrowserTest itself.
 using ExtensionBrowserTestBrowserTest = ExtensionBrowserTest;
 
+IN_PROC_BROWSER_TEST_F(ExtensionBrowserTestBrowserTest,
+                       PlatformOpenURLOffTheRecord) {
+  content::WebContents* contents =
+      PlatformOpenURLOffTheRecord(profile(), GURL("chrome://version"));
+  ASSERT_TRUE(contents);
+  EXPECT_TRUE(contents->GetBrowserContext()->IsOffTheRecord());
+}
+
 class MultiBackgroundExtensionBrowserTestBrowserTest
     : public ExtensionBrowserTestBrowserTest,
       public testing::WithParamInterface<BackgroundType> {};
@@ -39,8 +51,7 @@ IN_PROC_BROWSER_TEST_P(MultiBackgroundExtensionBrowserTestBrowserTest,
   // We add a custom delay here to force the background page of the extension to
   // load a little later; this helps ensure we are properly waiting on it in the
   // LoadExtension() method.
-  ExtensionHostQueue::GetInstance().SetCustomDelayForTesting(
-      base::TimeDelta::FromSeconds(1));
+  ExtensionHostQueue::GetInstance().SetCustomDelayForTesting(base::Seconds(1));
 
   constexpr char kPersistentBackgroundPage[] =
       R"("scripts": ["background.js"])";
@@ -85,15 +96,20 @@ IN_PROC_BROWSER_TEST_P(MultiBackgroundExtensionBrowserTestBrowserTest,
   EventRouter* event_router = EventRouter::Get(profile());
   EXPECT_TRUE(event_router->ExtensionHasEventListener(extension->id(),
                                                       "tabs.onCreated"));
-  ExtensionHostQueue::GetInstance().SetCustomDelayForTesting(
-      base::TimeDelta::FromSeconds(0));
+  ExtensionHostQueue::GetInstance().SetCustomDelayForTesting(base::Seconds(0));
 }
 
-// TODO(devlin): Add support for ServiceWorker-based extensions here as well.
-// Currently, we have no good way to wait for the ServiceWorker to be ready.
+#if BUILDFLAG(IS_ANDROID)
+// Android only supports service worker.
+INSTANTIATE_TEST_SUITE_P(All,
+                         MultiBackgroundExtensionBrowserTestBrowserTest,
+                         testing::Values(BackgroundType::kWorker));
+#else
 INSTANTIATE_TEST_SUITE_P(All,
                          MultiBackgroundExtensionBrowserTestBrowserTest,
                          testing::Values(BackgroundType::kPersistentPage,
-                                         BackgroundType::kLazyPage));
+                                         BackgroundType::kLazyPage,
+                                         BackgroundType::kWorker));
+#endif
 
 }  // namespace extensions

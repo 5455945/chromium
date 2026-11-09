@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <string>
 
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 namespace extensions {
 class ScriptContext;
@@ -16,7 +16,7 @@ class ScriptContext;
 // Utility for logging console messages.
 namespace console {
 
-// Adds |message| to the console of of the |script_context|. If |script_context|
+// Adds `message` to the console of of the `script_context`. If `script_context`
 // is null, LOG()s the message instead.
 void AddMessage(ScriptContext* script_context,
                 blink::mojom::ConsoleMessageLevel level,

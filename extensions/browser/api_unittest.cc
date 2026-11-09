@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,16 +21,14 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest.h"
-#include "extensions/common/manifest_handlers/background_info.h"
-#include "extensions/common/value_builder.h"
 
 namespace utils = extensions::api_test_utils;
 
 namespace extensions {
 
-ApiUnitTest::ApiUnitTest() {}
+ApiUnitTest::ApiUnitTest() = default;
 
-ApiUnitTest::~ApiUnitTest() {}
+ApiUnitTest::~ApiUnitTest() = default;
 
 void ApiUnitTest::SetUp() {
   ExtensionsTest::SetUp();
@@ -46,68 +44,39 @@ void ApiUnitTest::TearDown() {
   ExtensionsTest::TearDown();
 }
 
-void ApiUnitTest::CreateBackgroundPage() {
+void ApiUnitTest::CreateExtensionPage() {
   if (!contents_) {
-    GURL url = BackgroundInfo::GetBackgroundURL(extension());
-    if (url.is_empty())
-      url = GURL(url::kAboutBlankURL);
     contents_ = content::WebContents::Create(content::WebContents::CreateParams(
-        browser_context(),
-        content::SiteInstance::CreateForURL(browser_context(), url)));
+        browser_context(), content::SiteInstance::CreateForURL(
+                               browser_context(), GURL(url::kAboutBlankURL))));
   }
 }
 
-std::unique_ptr<base::Value> ApiUnitTest::RunFunctionAndReturnValue(
-    ExtensionFunction* function,
-    const std::string& args) {
+std::optional<base::Value> ApiUnitTest::RunFunctionAndReturnValue(
+    scoped_refptr<ExtensionFunction> function,
+    api_test_utils::ArgsType args) {
   function->set_extension(extension());
-  if (contents_)
-    function->SetRenderFrameHost(contents_->GetMainFrame());
-  return std::unique_ptr<base::Value>(utils::RunFunctionAndReturnSingleResult(
-      function, args, browser_context()));
+  if (contents_) {
+    function->SetRenderFrameHost(contents_->GetPrimaryMainFrame());
+  }
+  return utils::RunFunctionAndReturnSingleResult(function, std::move(args),
+                                                 browser_context());
 }
 
-std::unique_ptr<base::DictionaryValue>
-ApiUnitTest::RunFunctionAndReturnDictionary(ExtensionFunction* function,
-                                            const std::string& args) {
-  base::Value* value = RunFunctionAndReturnValue(function, args).release();
-  base::DictionaryValue* dict = NULL;
-
-  if (value && !value->GetAsDictionary(&dict))
-    delete value;
-
-  // We expect to either have successfuly retrieved a dictionary from the value,
-  // or the value to have been NULL.
-  EXPECT_TRUE(dict || !value);
-  return std::unique_ptr<base::DictionaryValue>(dict);
-}
-
-std::unique_ptr<base::ListValue> ApiUnitTest::RunFunctionAndReturnList(
-    ExtensionFunction* function,
-    const std::string& args) {
-  base::Value* value = RunFunctionAndReturnValue(function, args).release();
-  base::ListValue* list = NULL;
-
-  if (value && !value->GetAsList(&list))
-    delete value;
-
-  // We expect to either have successfuly retrieved a list from the value,
-  // or the value to have been NULL.
-  EXPECT_TRUE(list || !value);
-  return std::unique_ptr<base::ListValue>(list);
-}
-
-std::string ApiUnitTest::RunFunctionAndReturnError(ExtensionFunction* function,
-                                                   const std::string& args) {
+std::string ApiUnitTest::RunFunctionAndReturnError(
+    scoped_refptr<ExtensionFunction> function,
+    api_test_utils::ArgsType args) {
   function->set_extension(extension());
-  if (contents_)
-    function->SetRenderFrameHost(contents_->GetMainFrame());
-  return utils::RunFunctionAndReturnError(function, args, browser_context());
+  if (contents_) {
+    function->SetRenderFrameHost(contents_->GetPrimaryMainFrame());
+  }
+  return utils::RunFunctionAndReturnError(function, std::move(args),
+                                          browser_context());
 }
 
-void ApiUnitTest::RunFunction(ExtensionFunction* function,
-                              const std::string& args) {
-  RunFunctionAndReturnValue(function, args);
+void ApiUnitTest::RunFunction(scoped_refptr<ExtensionFunction> function,
+                              api_test_utils::ArgsType args) {
+  RunFunctionAndReturnValue(function, std::move(args));
 }
 
 }  // namespace extensions

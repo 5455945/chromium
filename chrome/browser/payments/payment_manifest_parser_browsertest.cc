@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -20,8 +20,8 @@ namespace payments {
 namespace {
 
 std::string CreatePaymentMethodManifestJson(
-    const std::vector<GURL> web_app_manifest_urls,
-    const std::vector<url::Origin> supported_origins) {
+    const std::vector<GURL>& web_app_manifest_urls,
+    const std::vector<url::Origin>& supported_origins) {
   std::string manifest =
       "{"
       "    \"default_applications\":[";
@@ -50,28 +50,23 @@ std::string CreatePaymentMethodManifestJson(
 class PaymentManifestParserTest : public InProcessBrowserTest {
  public:
   PaymentManifestParserTest() : parser_(std::make_unique<ErrorLogger>()) {}
+
+  PaymentManifestParserTest(const PaymentManifestParserTest&) = delete;
+  PaymentManifestParserTest& operator=(const PaymentManifestParserTest&) =
+      delete;
+
   ~PaymentManifestParserTest() override = default;
 
-  // Sends the |content| to the utility process to parse as a web app manifest
-  // and waits until the utility process responds.
+  // Parses the |content| as a web app manifest.
   void ParseWebAppManifest(const std::string& content) {
-    base::RunLoop run_loop;
-    parser_.ParseWebAppManifest(
-        content,
-        base::BindOnce(&PaymentManifestParserTest::OnWebAppManifestParsed,
-                       base::Unretained(this), run_loop.QuitClosure()));
-    run_loop.Run();
+    web_app_manifest_ = parser_.ParseWebAppManifest(content);
   }
 
-  // Sends the |content| to the utility process to parse as a payment method
-  // manifest and waits until the utility process responds.
+  // Parses the |content| as a payment method manifest.
   void ParsePaymentMethodManifest(const std::string& content) {
-    base::RunLoop run_loop;
-    parser_.ParsePaymentMethodManifest(
-        GURL("https://alicepay.com/"), content, base::BindOnce(
-                     &PaymentManifestParserTest::OnPaymentMethodManifestParsed,
-                     base::Unretained(this), run_loop.QuitClosure()));
-    run_loop.Run();
+    parser_.ParsePaymentMethodManifest(GURL("https://alicepay.test/"), content,
+                                       &web_app_manifest_urls_,
+                                       &supported_origins_);
   }
 
   // The parsed web app manifest.
@@ -90,40 +85,45 @@ class PaymentManifestParserTest : public InProcessBrowserTest {
   }
 
  private:
-  // Called after the utility process has parsed the web app manifest.
-  void OnWebAppManifestParsed(
-      base::OnceClosure resume_test,
-      const std::vector<WebAppManifestSection>& web_app_manifest) {
-    web_app_manifest_ = std::move(web_app_manifest);
-    DCHECK(!resume_test.is_null());
-    std::move(resume_test).Run();
-  }
-
-  // Called after the utility process has parsed the payment method manifest.
-  void OnPaymentMethodManifestParsed(
-      base::OnceClosure resume_test,
-      const std::vector<GURL>& web_app_manifest_urls,
-      const std::vector<url::Origin>& supported_origins) {
-    web_app_manifest_urls_ = web_app_manifest_urls;
-    supported_origins_ = supported_origins;
-    DCHECK(!resume_test.is_null());
-    std::move(resume_test).Run();
-  }
-
   PaymentManifestParser parser_;
   std::vector<WebAppManifestSection> web_app_manifest_;
   std::vector<GURL> web_app_manifest_urls_;
   std::vector<url::Origin> supported_origins_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaymentManifestParserTest);
 };
 
-// Handles a a manifest with 100 web app URLs.
+// A simple payment method manifest can be parsed.
+IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, SimpleMethod) {
+  ParsePaymentMethodManifest(R"(
+    {
+      "default_applications": ["https://test.example/app.json"]
+    }
+  )");
+
+  ASSERT_EQ(1U, web_app_manifest_urls().size());
+  EXPECT_EQ(GURL("https://test.example/app.json"),
+            web_app_manifest_urls().front());
+}
+
+// A JavaScript style comment that starts with two forward slashes is not
+// allowed.
+IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, SlasSlashCommentNotAllowed) {
+  ParsePaymentMethodManifest(R"(
+    {
+      // This is a JavaScript style comment that should result in parsing
+      // failure.
+      "default_applications": ["https://test.example/app.json"]
+    }
+  )");
+
+  EXPECT_TRUE(web_app_manifest_urls().empty());
+}
+
+// Handles a manifest with 100 web app URLs.
 IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, TooManyWebAppUrls) {
   std::vector<GURL> web_app_manifest_urls_in;
   web_app_manifest_urls_in.insert(web_app_manifest_urls_in.begin(),
                                   /*count=*/101,
-                                  GURL("https://bobpay.com/manifest.json"));
+                                  GURL("https://bobpay.test/manifest.json"));
   std::string json = CreatePaymentMethodManifestJson(
       web_app_manifest_urls_in, std::vector<url::Origin>());
   ParsePaymentMethodManifest(json);
@@ -134,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, TooManyWebAppUrls) {
 IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, TooManySupportedOrigins) {
   std::vector<url::Origin> supported_origins_in;
   supported_origins_in.insert(supported_origins_in.begin(), /*count=*/100001,
-                              url::Origin::Create(GURL("https://bobpay.com")));
+                              url::Origin::Create(GURL("https://bobpay.test")));
   std::string json = CreatePaymentMethodManifestJson(std::vector<GURL>(),
                                                      supported_origins_in);
   ParsePaymentMethodManifest(json);
@@ -145,8 +145,8 @@ IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, TooManySupportedOrigins) {
 IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, InsecureSupportedOrigin) {
   std::string json = CreatePaymentMethodManifestJson(
       std::vector<GURL>(),
-      std::vector<url::Origin>(1,
-                               url::Origin::Create(GURL("http://bobpay.com"))));
+      std::vector<url::Origin>(
+          1, url::Origin::Create(GURL("http://bobpay.test"))));
   ParsePaymentMethodManifest(json);
   EXPECT_TRUE(supported_origins().empty());
 }
@@ -154,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, InsecureSupportedOrigin) {
 // Handles a manifest with an insecure web app manifest URL.
 IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, InsecureWebAppManifestUrl) {
   std::string json = CreatePaymentMethodManifestJson(
-      std::vector<GURL>(1, GURL("http://bobpay.com/manifest.json")),
+      std::vector<GURL>(1, GURL("http://bobpay.test/manifest.json")),
       std::vector<url::Origin>());
   ParsePaymentMethodManifest(json);
   EXPECT_TRUE(web_app_manifest_urls().empty());
@@ -191,14 +191,14 @@ IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, AllOriginsSupported) {
 IN_PROC_BROWSER_TEST_F(PaymentManifestParserTest, UrlsAndOrigins) {
   ParsePaymentMethodManifest(
       "{\"default_applications\": "
-      "[\"https://alicepay.com/web-app-manifest.json\"], "
-      "\"supported_origins\": [\"https://bobpay.com\"]}");
+      "[\"https://alicepay.test/web-app-manifest.json\"], "
+      "\"supported_origins\": [\"https://bobpay.test\"]}");
 
   EXPECT_EQ(
-      std::vector<GURL>(1, GURL("https://alicepay.com/web-app-manifest.json")),
+      std::vector<GURL>(1, GURL("https://alicepay.test/web-app-manifest.json")),
       web_app_manifest_urls());
   EXPECT_EQ(std::vector<url::Origin>(
-                1, url::Origin::Create(GURL("https://bobpay.com"))),
+                1, url::Origin::Create(GURL("https://bobpay.test"))),
             supported_origins());
 }
 

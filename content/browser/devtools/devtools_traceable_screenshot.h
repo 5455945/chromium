@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 #define CONTENT_BROWSER_DEVTOOLS_DEVTOOLS_TRACEABLE_SCREENSHOT_H_
 
 #include "base/atomicops.h"
-#include "base/macros.h"
-#include "base/trace_event/trace_event_impl.h"
+#include "base/trace_event/trace_arguments.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace content {
@@ -15,11 +14,18 @@ namespace content {
 class DevToolsTraceableScreenshot
     : public base::trace_event::ConvertableToTraceFormat {
  public:
-  static constexpr int kMaximumNumberOfScreenshots = 450;
+  // Default maximum number of screenshots captured per tracing session.
+  // Callers can override this through the `screenshotMaxCount` parameter on
+  // `Tracing.start` (subject to clamping in the tracing handler).
+  static constexpr int kDefaultMaximumNumberOfScreenshots = 450;
 
   static base::subtle::Atomic32 GetNumberOfInstances();
 
   DevToolsTraceableScreenshot(const SkBitmap& bitmap);
+
+  DevToolsTraceableScreenshot(const DevToolsTraceableScreenshot&) = delete;
+  DevToolsTraceableScreenshot& operator=(const DevToolsTraceableScreenshot&) =
+      delete;
 
   ~DevToolsTraceableScreenshot() override;
 
@@ -30,8 +36,6 @@ class DevToolsTraceableScreenshot
   static base::subtle::Atomic32 number_of_instances_;
 
   SkBitmap frame_;
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsTraceableScreenshot);
 };
 
 }  // namespace content

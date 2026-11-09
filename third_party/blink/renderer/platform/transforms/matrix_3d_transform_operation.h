@@ -26,6 +26,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_MATRIX_3D_TRANSFORM_OPERATION_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_MATRIX_3D_TRANSFORM_OPERATION_H_
 
+#include <optional>
+
 #include "third_party/blink/renderer/platform/transforms/transform_operation.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
@@ -34,40 +36,45 @@ namespace blink {
 class PLATFORM_EXPORT Matrix3DTransformOperation final
     : public TransformOperation {
  public:
-  static scoped_refptr<Matrix3DTransformOperation> Create(
-      const TransformationMatrix& matrix) {
-    return base::AdoptRef(new Matrix3DTransformOperation(matrix));
-  }
+  explicit Matrix3DTransformOperation(const gfx::Transform& matrix)
+      : matrix_(matrix) {}
 
-  TransformationMatrix Matrix() const { return matrix_; }
+  gfx::Transform Matrix() const { return matrix_; }
+
+  // Decomposes |base| and |delta|, accumulates delta onto base N times per
+  // component, and recomposes. Returns nullopt if either matrix cannot be
+  // decomposed.
+  static std::optional<gfx::Transform> AccumulateTransforms(
+      const gfx::Transform& base,
+      const gfx::Transform& delta,
+      int n);
 
   static bool IsMatchingOperationType(OperationType type) {
     return type == kMatrix3D;
   }
 
- private:
-  OperationType GetType() const override { return kMatrix3D; }
-
-  bool operator==(const TransformOperation& o) const override {
-    if (!IsSameType(o))
-      return false;
+ protected:
+  bool IsEqualAssumingSameType(const TransformOperation& o) const override {
     const Matrix3DTransformOperation* m =
         static_cast<const Matrix3DTransformOperation*>(&o);
     return matrix_ == m->matrix_;
   }
 
-  void Apply(TransformationMatrix& transform, const FloatSize&) const override {
-    transform.Multiply(TransformationMatrix(matrix_));
+ private:
+  OperationType GetType() const override { return kMatrix3D; }
+
+  void Apply(gfx::Transform& transform, const gfx::SizeF&) const override {
+    transform.PreConcat(matrix_);
   }
 
-  scoped_refptr<TransformOperation> Accumulate(
-      const TransformOperation& other) override;
+  TransformOperation* Accumulate(const TransformOperation& other) override;
+  TransformOperation* AccumulateN(const TransformOperation& other,
+                                  int n) override;
 
-  scoped_refptr<TransformOperation> Blend(
-      const TransformOperation* from,
-      double progress,
-      bool blend_to_identity = false) override;
-  scoped_refptr<TransformOperation> Zoom(double factor) final;
+  TransformOperation* Blend(const TransformOperation* from,
+                            double progress,
+                            bool blend_to_identity = false) override;
+  TransformOperation* Zoom(double factor) final;
 
   bool PreservesAxisAlignment() const final {
     return matrix_.Preserves2dAxisAlignment();
@@ -76,9 +83,7 @@ class PLATFORM_EXPORT Matrix3DTransformOperation final
     return matrix_.IsIdentityOrTranslation();
   }
 
-  Matrix3DTransformOperation(const TransformationMatrix& mat) { matrix_ = mat; }
-
-  TransformationMatrix matrix_;
+  gfx::Transform matrix_;
 };
 
 template <>

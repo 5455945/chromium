@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,26 @@
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/trace_event/typed_macros.h"
 #include "build/build_config.h"
-#include "components/tracing/common/trace_startup_config.h"
 #include "components/tracing/common/tracing_switches.h"
-#include "content/browser/tracing/startup_tracing_controller.h"
-#include "content/browser/tracing/tracing_controller_impl.h"
+#include "content/browser/browser_main_loop.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "services/tracing/perfetto/privacy_filtering_check.h"
-#include "services/tracing/public/cpp/perfetto/trace_event_data_source.h"
+#include "services/tracing/public/cpp/startup_tracing_controller.h"
 #include "services/tracing/public/cpp/trace_startup.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
+#include "third_party/perfetto/include/perfetto/tracing/tracing.h"
 
 namespace content {
 
@@ -37,7 +38,7 @@ void CheckForConditionAndWaitMoreIfNeeded(
     std::move(quit_closure).Run();
     return;
   }
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&CheckForConditionAndWaitMoreIfNeeded,
                      std::move(condition), std::move(quit_closure)),
@@ -72,6 +73,10 @@ class StartupTracingInProcessTest : public ContentBrowserTest {
 class LargeTraceEventData : public base::trace_event::ConvertableToTraceFormat {
  public:
   LargeTraceEventData() = default;
+
+  LargeTraceEventData(const LargeTraceEventData&) = delete;
+  LargeTraceEventData& operator=(const LargeTraceEventData&) = delete;
+
   ~LargeTraceEventData() override = default;
 
   const size_t kLargeMessageSize = 100 * 1024;
@@ -79,47 +84,48 @@ class LargeTraceEventData : public base::trace_event::ConvertableToTraceFormat {
     std::string large_string(kLargeMessageSize, '.');
     out->append(large_string);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LargeTraceEventData);
 };
 
 // This will fill a massive amount of startup tracing data into a
 // StartupTraceWriter, which Perfetto will then have to sync copy into
 // the SMB once the full tracing service starts up. This is to catch common
 // deadlocks.
-IN_PROC_BROWSER_TEST_F(StartupTracingInProcessTest, TestFilledStartupBuffer) {
-  auto config = tracing::TraceStartupConfig::GetInstance()
-                    ->GetDefaultBrowserStartupConfig();
-  config.SetTraceBufferSizeInEvents(0);
-  config.SetTraceBufferSizeInKb(0);
+// TODO(crbug.com/330909115): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_TestFilledStartupBuffer DISABLED_TestFilledStartupBuffer
+#else
+#define MAYBE_TestFilledStartupBuffer TestFilledStartupBuffer
+#endif
+IN_PROC_BROWSER_TEST_F(StartupTracingInProcessTest,
+                       MAYBE_TestFilledStartupBuffer) {
+  auto config =
+      tracing::TraceStartupConfig::GetDefaultBackgroundStartupConfig();
 
-  CHECK(tracing::EnableStartupTracingForProcess(
-      config,
-      /*privacy_filtering_enabled=*/false));
+  perfetto::Tracing::SetupStartupTracingOpts opts;
+  opts.timeout_ms = tracing::kStartupTracingTimeoutMs;
+  opts.backend = perfetto::kCustomBackend;
+
+  perfetto::Tracing::SetupStartupTracingBlocking(config, opts);
 
   for (int i = 0; i < 1024; ++i) {
     auto data = std::make_unique<LargeTraceEventData>();
     TRACE_EVENT1("toplevel", "bar", "data", std::move(data));
   }
 
-  config.SetTraceBufferSizeInKb(32);
-
   base::RunLoop wait_for_tracing;
-  TracingControllerImpl::GetInstance()->StartTracing(
-      config, wait_for_tracing.QuitClosure());
+  auto session =
+      perfetto::Tracing::NewTrace(perfetto::BackendType::kCustomBackend);
+  session->Setup(config);
+  session->SetOnStartCallback(
+      [&wait_for_tracing]() { wait_for_tracing.Quit(); });
+  session->Start();
   wait_for_tracing.Run();
 
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
   base::RunLoop wait_for_stop;
-  TracingControllerImpl::GetInstance()->StopTracing(
-      TracingController::CreateStringEndpoint(base::BindOnce(
-          [](base::OnceClosure quit_callback,
-             std::unique_ptr<std::string> data) {
-            std::move(quit_callback).Run();
-          },
-          wait_for_stop.QuitClosure())));
+  session->SetOnStopCallback([&wait_for_stop]() { wait_for_stop.Quit(); });
+  session->Stop();
   wait_for_stop.Run();
 }
 
@@ -163,9 +169,7 @@ enum class OutputLocation {
   // Write trace into a given directory (basename will be set to trace1 before
   // starting).
   kDirectoryWithDefaultBasename,
-  // Write trace into a given directory (basename will be set to trace1 before
-  // starting, and updated to trace2 before calling Stop()).
-  kDirectoryWithBasenameUpdatedBeforeStop,
+
 };
 
 std::ostream& operator<<(std::ostream& o, OutputLocation type) {
@@ -175,9 +179,6 @@ std::ostream& operator<<(std::ostream& o, OutputLocation type) {
       return o;
     case OutputLocation::kDirectoryWithDefaultBasename:
       o << "dir/trace1";
-      return o;
-    case OutputLocation::kDirectoryWithBasenameUpdatedBeforeStop:
-      o << "dir/trace2";
       return o;
   }
 }
@@ -190,6 +191,9 @@ class StartupTracingTest
           std::tuple<FinishType, OutputType, OutputLocation>> {
  public:
   StartupTracingTest() = default;
+
+  StartupTracingTest(const StartupTracingTest&) = delete;
+  StartupTracingTest& operator=(const StartupTracingTest&) = delete;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kTraceStartup);
@@ -217,9 +221,9 @@ class StartupTracingTest
       // calling SetDefaultBasenameForTest, which forces the creation of
       // TraceStartupConfig, which queries the command line flags and
       // stores the snapshot.
-      StartupTracingController::GetInstance().SetDefaultBasenameForTest(
+      tracing::StartupTracingController::OverrideDefaultBasenameForTest(
           "trace1",
-          StartupTracingController::ExtensionType::kAppendAppropriate);
+          tracing::StartupTracingController::ExtensionType::kAppendAppropriate);
     }
   }
 
@@ -232,7 +236,7 @@ class StartupTracingTest
       case OutputType::kJSON:
         return "json";
       case OutputType::kProto:
-        return "proto";
+        return "pftrace";
     }
   }
 
@@ -247,9 +251,6 @@ class StartupTracingTest
       case OutputLocation::kDirectoryWithDefaultBasename:
         filename = "trace1";
         break;
-      case OutputLocation::kDirectoryWithBasenameUpdatedBeforeStop:
-        filename = "trace2";
-        break;
     }
 
     // Renames are not supported together with timeouts.
@@ -261,36 +262,44 @@ class StartupTracingTest
   }
 
   static void CheckOutput(base::FilePath path, OutputType output_type) {
-#if defined(OS_LINUX) && defined(THREAD_SANITIZER)
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
     // Skip checks because the thread sanitizer is often too slow to flush trace
     // data correctly within the timeouts. We still run the tests on TSAN to
     // catch general threading issues.
-#else // !(defined(OS_LINUX) && defined(THREAD_SANITIZER))
+#else   // !(BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER))
     std::string trace;
     base::ScopedAllowBlockingForTesting allow_blocking;
     ASSERT_TRUE(base::ReadFileToString(path, &trace))
         << "Failed to read file " << path;
 
     if (output_type == OutputType::kJSON) {
-      EXPECT_TRUE(base::JSONReader::Read(trace));
+      EXPECT_TRUE(
+          base::JSONReader::Read(trace, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
     }
 
     // Both proto and json should have the trace event name recorded somewhere
-    // as a substring.
-    EXPECT_TRUE(trace.find("StartupTracingController::Start") !=
+    // as a substring. We check for "ThreadControllerImpl::RunTask" because
+    // it's an example of event that happens early in the trace, but any other
+    // early event will do. The event has to happen early because in
+    // WaitForTimeout and in EmergencyStop tests we don't wait for
+    // TracingSession::StartBlocking() to complete.
+    EXPECT_TRUE(trace.find("ThreadControllerImpl::RunTask") !=
                 std::string::npos);
-#endif // !(defined(OS_LINUX) && defined(THREAD_SANITIZER))
+#endif  // !(BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER))
   }
 
   void Wait() {
     if (GetFinishType() == FinishType::kWaitForTimeout) {
       WaitForCondition(base::BindRepeating([]() {
-                         return StartupTracingController::GetInstance()
-                             .is_finished_for_testing();
+                         return BrowserMainLoop::GetInstance()
+                             ->startup_tracing_controller()
+                             ->is_finished_for_testing();
                        }),
                        "finish file write");
     } else {
-      StartupTracingController::GetInstance().WaitUntilStopped();
+      BrowserMainLoop::GetInstance()
+          ->startup_tracing_controller()
+          ->ShutdownAndWaitForStopIfNeeded();
     }
   }
 
@@ -300,8 +309,6 @@ class StartupTracingTest
  private:
   base::test::ScopedRunLoopTimeout increased_timeout_{
       FROM_HERE, TestTimeouts::test_launcher_timeout()};
-
-  DISALLOW_COPY_AND_ASSIGN(StartupTracingTest);
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -311,14 +318,11 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(FinishType::kStopExplicitly,
                         FinishType::kWaitForTimeout),
         testing::Values(OutputType::kJSON, OutputType::kProto),
-        testing::Values(
-            OutputLocation::kGivenFile,
-            OutputLocation::kDirectoryWithDefaultBasename,
-            OutputLocation::kDirectoryWithBasenameUpdatedBeforeStop)));
+        testing::Values(OutputLocation::kGivenFile,
+                        OutputLocation::kDirectoryWithDefaultBasename)));
 
-// TODO(crbug.com/1197278): Failing on Windows 7 debug builds.
-// TODO(crbug.com/1224903): Failing on Linux dbg tests.
-#if (defined(OS_WIN) || defined(OS_LINUX)) && DCHECK_IS_ON()
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
 #define MAYBE_TestEnableTracing DISABLED_TestEnableTracing
 #else
 #define MAYBE_TestEnableTracing TestEnableTracing
@@ -326,24 +330,12 @@ INSTANTIATE_TEST_SUITE_P(
 IN_PROC_BROWSER_TEST_P(StartupTracingTest, MAYBE_TestEnableTracing) {
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
-  if (GetOutputLocation() ==
-      OutputLocation::kDirectoryWithBasenameUpdatedBeforeStop) {
-    StartupTracingController::GetInstance().SetDefaultBasenameForTest(
-        "trace2", StartupTracingController::ExtensionType::kAppendAppropriate);
-  }
 
   Wait();
 
   CheckOutput(GetExpectedPath(), GetOutputType());
 }
 
-// TODO(ssid): Fix the flaky tests, probably the same reason as
-// crbug.com/1041392.
-IN_PROC_BROWSER_TEST_P(StartupTracingTest, DISABLED_ContinueAtShutdown) {
-  EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
-  StartupTracingController::GetInstance()
-      .set_continue_on_shutdown_for_testing();
-}
 
 class EmergencyStopTracingTest : public StartupTracingTest {};
 
@@ -355,9 +347,8 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(OutputType::kJSON, OutputType::kProto),
         testing::Values(OutputLocation::kDirectoryWithDefaultBasename)));
 
-// TODO(crbug.com/1197278): Failing on Windows 7 debug builds.
-// TODO(crbug.com/1224903): Failing on Linux dbg tests.
-#if (defined(OS_WIN) || defined(OS_LINUX)) && DCHECK_IS_ON()
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
 #define MAYBE_StopOnUIThread DISABLED_StopOnUIThread
 #else
 #define MAYBE_StopOnUIThread StopOnUIThread
@@ -365,13 +356,12 @@ INSTANTIATE_TEST_SUITE_P(
 IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, MAYBE_StopOnUIThread) {
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
-  StartupTracingController::EmergencyStop();
+  tracing::StartupTracingController::EmergencyStop();
   CheckOutput(GetExpectedPath(), GetOutputType());
 }
 
-// TODO(crbug.com/1197278): Failing on Windows 7 debug builds.
-// TODO(crbug.com/1224903): Failing on Linux dbg tests.
-#if (defined(OS_WIN) || defined(OS_LINUX)) && DCHECK_IS_ON()
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
 #define MAYBE_StopOnThreadPool DISABLED_StopOnThreadPool
 #else
 #define MAYBE_StopOnThreadPool StopOnThreadPool
@@ -384,18 +374,18 @@ IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, MAYBE_StopOnThreadPool) {
 
   base::RunLoop run_loop;
 
-  base::ThreadPool::PostTask(FROM_HERE, base::BindLambdaForTesting([&]() {
-                               StartupTracingController::EmergencyStop();
-                               CheckOutput(expected_path, output_type);
-                               run_loop.Quit();
-                             }));
+  base::ThreadPool::PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        tracing::StartupTracingController::EmergencyStop();
+        CheckOutput(expected_path, output_type);
+        run_loop.Quit();
+      }));
 
   run_loop.Run();
 }
 
-// TODO(crbug.com/1197278): Failing on Windows 7 debug builds.
-// TODO(crbug.com/1224903): Failing on Linux dbg tests.
-#if (defined(OS_WIN) || defined(OS_LINUX)) && DCHECK_IS_ON()
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
 #define MAYBE_StopOnThreadPoolTwice DISABLED_StopOnThreadPoolTwice
 #else
 #define MAYBE_StopOnThreadPoolTwice StopOnThreadPoolTwice
@@ -409,16 +399,18 @@ IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, MAYBE_StopOnThreadPoolTwice) {
   base::RunLoop run_loop1;
   base::RunLoop run_loop2;
 
-  base::ThreadPool::PostTask(FROM_HERE, base::BindLambdaForTesting([&]() {
-                               StartupTracingController::EmergencyStop();
-                               CheckOutput(expected_path, output_type);
-                               run_loop1.Quit();
-                             }));
-  base::ThreadPool::PostTask(FROM_HERE, base::BindLambdaForTesting([&]() {
-                               StartupTracingController::EmergencyStop();
-                               CheckOutput(expected_path, output_type);
-                               run_loop2.Quit();
-                             }));
+  base::ThreadPool::PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        tracing::StartupTracingController::EmergencyStop();
+        CheckOutput(expected_path, output_type);
+        run_loop1.Quit();
+      }));
+  base::ThreadPool::PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        tracing::StartupTracingController::EmergencyStop();
+        CheckOutput(expected_path, output_type);
+        run_loop2.Quit();
+      }));
 
   run_loop1.Run();
   run_loop2.Run();

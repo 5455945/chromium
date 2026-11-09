@@ -1,15 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXECUTION_CONTEXT_REMOTE_SECURITY_CONTEXT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXECUTION_CONTEXT_REMOTE_SECURITY_CONTEXT_H_
 
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink-forward.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
 
 namespace blink {
 
@@ -32,9 +32,9 @@ class CORE_EXPORT RemoteSecurityContext final : public SecurityContext {
   // Note that |parent_permissions_policy| is null, and |container_policy| is
   // empty for a top-level security context.
   void InitializePermissionsPolicy(
-      const ParsedPermissionsPolicy& parsed_header,
-      const ParsedPermissionsPolicy& container_policy,
-      const PermissionsPolicy* parent_permissions_policy);
+      const network::ParsedPermissionsPolicy& parsed_header,
+      const network::ParsedPermissionsPolicy& container_policy,
+      const network::PermissionsPolicy* parent_permissions_policy);
 };
 
 }  // namespace blink

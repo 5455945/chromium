@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,8 @@
 #include "ash/accessibility/ui/accessibility_layer.h"
 #include "ash/accessibility/ui/layer_animation_info.h"
 #include "ash/public/cpp/accessibility_focus_ring_info.h"
+#include "base/memory/values_equivalent.h"
+#include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -20,9 +22,8 @@ namespace ash {
 
 namespace {
 
-// The number of pixels the focus ring is outset from the object it outlines,
+// The number of DIPs the focus ring is outset from the object it outlines,
 // which also determines the border radius of the rounded corners.
-// TODO(dmazzoni): take display resolution into account.
 constexpr int kAccessibilityFocusRingMargin = 7;
 
 // Time to transition between one location and the next.
@@ -48,9 +49,9 @@ struct Region {
 
 AccessibilityFocusRingGroup::AccessibilityFocusRingGroup() {
   focus_animation_info_.fade_in_time =
-      base::TimeDelta::FromMilliseconds(kFocusFadeInTimeMilliseconds);
+      base::Milliseconds(kFocusFadeInTimeMilliseconds);
   focus_animation_info_.fade_out_time =
-      base::TimeDelta::FromMilliseconds(kFocusFadeOutTimeMilliseconds);
+      base::Milliseconds(kFocusFadeOutTimeMilliseconds);
 }
 
 AccessibilityFocusRingGroup::~AccessibilityFocusRingGroup() {}
@@ -59,42 +60,50 @@ void AccessibilityFocusRingGroup::UpdateFocusRingsFromInfo(
     AccessibilityLayerDelegate* delegate) {
   previous_focus_rings_.swap(focus_rings_);
   focus_rings_.clear();
+  focus_animation_.reset();
   RectsToRings(focus_ring_info_->rects_in_screen, &(focus_rings_));
   focus_layers_.resize(focus_rings_.size());
   if (focus_rings_.empty())
     return;
 
+  // Set() reads stacking order and background color set by SetAppearance().
   for (size_t i = 0; i < focus_rings_.size(); ++i) {
-    if (!focus_layers_[i])
+    if (!focus_layers_[i]) {
       focus_layers_[i] =
           std::make_unique<AccessibilityFocusRingLayer>(delegate);
-  }
-
-  if (focus_ring_info_->behavior == FocusRingBehavior::PERSIST &&
-      focus_layers_[0]->CanAnimate() && !no_fade_for_testing_) {
-    // In PERSIST mode, animate the first ring to its destination
-    // location, then set the rest of the rings directly.
-    // If no_fade_for_testing_ is set, don't wait for animation.
-    for (size_t i = 1; i < focus_rings_.size(); ++i)
-      focus_layers_[i]->Set(focus_rings_[i]);
-  } else {
-    // In FADE mode, set all focus rings to their destination location.
-    for (size_t i = 0; i < focus_rings_.size(); ++i)
-      focus_layers_[i]->Set(focus_rings_[i]);
-  }
-
-  for (size_t i = 0; i < focus_rings_.size(); ++i) {
+    }
     focus_layers_[i]->SetAppearance(
         focus_ring_info_->type, focus_ring_info_->stacking_order,
         focus_ring_info_->color, focus_ring_info_->secondary_color,
         focus_ring_info_->background_color);
   }
-}
 
-bool AccessibilityFocusRingGroup::CanAnimate() const {
-  if (no_fade_for_testing_)
-    return false;
-  return !focus_rings_.empty() && focus_layers_[0]->CanAnimate();
+  if (focus_ring_info_->behavior == FocusRingBehavior::PERSIST &&
+      !no_fade_for_testing_) {
+    // In PERSIST mode, animate the first ring to its destination
+    // location, then set the rest of the rings directly.
+    // If no_fade_for_testing_ is set, don't wait for animation.
+    if (previous_focus_rings_.empty()) {
+      previous_focus_rings_ = focus_rings_;
+    }
+    focus_layers_[0]->Set(previous_focus_rings_[0]);
+    for (size_t i = 1; i < focus_rings_.size(); ++i) {
+      focus_layers_[i]->Set(focus_rings_[i]);
+    }
+  } else {
+    // In FADE mode, set all focus rings to their destination location.
+    for (size_t i = 0; i < focus_rings_.size(); ++i) {
+      focus_layers_[i]->Set(focus_rings_[i]);
+    }
+  }
+
+  // Start watching for animations.
+  if (!no_fade_for_testing_) {
+    focus_animation_ = std::make_unique<AccessibilityAnimationOneShot>(
+        focus_rings_[0].GetBounds(),
+        base::BindRepeating(&AccessibilityFocusRingGroup::AnimateFocusRings,
+                            base::Unretained(this)));
+  }
 }
 
 bool AccessibilityFocusRingGroup::AnimateFocusRings(base::TimeTicks timestamp) {
@@ -111,7 +120,7 @@ bool AccessibilityFocusRingGroup::AnimateFocusRings(base::TimeTicks timestamp) {
   if (focus_ring_info_->behavior == FocusRingBehavior::PERSIST) {
     base::TimeDelta delta = timestamp - focus_animation_info_.change_time;
     base::TimeDelta transition_time =
-        base::TimeDelta::FromMilliseconds(kTransitionTimeMilliseconds);
+        base::Milliseconds(kTransitionTimeMilliseconds);
     if (delta >= transition_time) {
       focus_layers_[0]->Set(focus_rings_[0]);
       return true;
@@ -147,8 +156,7 @@ bool AccessibilityFocusRingGroup::UpdateFocusRing(
   }
 
   // If there is no change, don't do any work.
-  if ((!focus_ring_info_ && !focus_ring) ||
-      (focus_ring_info_ && focus_ring && *focus_ring_info_ == *focus_ring))
+  if (base::ValuesEquivalent(focus_ring_info_, focus_ring))
     return false;
 
   focus_ring_info_ = std::move(focus_ring);
@@ -177,7 +185,7 @@ void AccessibilityFocusRingGroup::RectsToRings(
   rects.resize(src_rects.size());
   for (size_t i = 0; i < src_rects.size(); ++i) {
     rects[i] = src_rects[i];
-    rects[i].Inset(-GetMargin(), -GetMargin());
+    rects[i].Inset(-GetMargin());
   }
 
   // Split the rects into contiguous regions.

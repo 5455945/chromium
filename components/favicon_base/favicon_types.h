@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#include "base/containers/flat_set.h"
+#include "base/containers/enum_set.h"
 #include "base/memory/ref_counted_memory.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
@@ -24,7 +24,7 @@ using FaviconID = int64_t;
 // Defines the icon types.
 //
 // IMPORTANT: these values must stay in sync with the FaviconType enum in
-// tools/metrics/histograms/enum.xml.
+// tools/metrics/histograms/enums.xml.
 // When you update the types please also check if it needs to be reflected in
 // blink::mojom::FaviconIconType enums
 //
@@ -43,7 +43,7 @@ enum class IconType {
   kCount
 };
 
-using IconTypeSet = base::flat_set<IconType>;
+using IconTypeSet = base::EnumSet<IconType, IconType::kInvalid, IconType::kMax>;
 
 // Defines a gfx::Image of size desired_size_in_dip composed of image
 // representations for each of the desired scale factors.
@@ -103,10 +103,13 @@ using FaviconRawBitmapData = FaviconRawBitmapResult;
 struct LargeIconResult {
   explicit LargeIconResult(const FaviconRawBitmapResult& bitmap_in);
 
-  // Takes ownership of |fallback_icon_style_in|.
-  explicit LargeIconResult(FallbackIconStyle* fallback_icon_style_in);
+  explicit LargeIconResult(
+      std::unique_ptr<FallbackIconStyle> fallback_icon_style_in);
 
   ~LargeIconResult();
+
+  LargeIconResult(LargeIconResult&& result) noexcept;
+  LargeIconResult& operator=(LargeIconResult&& result) noexcept;
 
   // The bitmap from the favicon database if the database has a sufficiently
   // large one.
@@ -125,9 +128,13 @@ struct LargeIconImageResult {
                                 const GURL& icon_url_in);
 
   // Takes ownership of |fallback_icon_style_in|.
-  explicit LargeIconImageResult(FallbackIconStyle* fallback_icon_style_in);
+  explicit LargeIconImageResult(
+      std::unique_ptr<FallbackIconStyle> fallback_icon_style_in);
 
   ~LargeIconImageResult();
+
+  LargeIconImageResult(LargeIconImageResult&& result) noexcept;
+  LargeIconImageResult& operator=(LargeIconImageResult&& result) noexcept;
 
   // The image from the favicon database if the database has a sufficiently
   // large one.
@@ -145,6 +152,7 @@ struct LargeIconImageResult {
 // favicon server. Used for UMA enum GoogleFaviconServerRequestStatus, so do not
 // change existing values. Insert new values at the end, and update the
 // histogram definition.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.favicon
 enum class GoogleFaviconServerRequestStatus {
   // Request sent out and the favicon successfully fetched.
   SUCCESS = 0,

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,15 +18,16 @@ UsbPrinterManifestHandler::~UsbPrinterManifestHandler() {
 
 bool UsbPrinterManifestHandler::Parse(Extension* extension,
                                       std::u16string* error) {
-  const base::Value* usb_printers = nullptr;
-  CHECK(extension->manifest()->Get(manifest_keys::kUsbPrinters, &usb_printers));
+  const base::Value* usb_printers =
+      extension->manifest()->FindPath(manifest_keys::kUsbPrinters);
+  CHECK(usb_printers != nullptr);
   std::unique_ptr<UsbPrinterManifestData> data =
       UsbPrinterManifestData::FromValue(*usb_printers, error);
   if (!data) {
     return false;
   }
 
-  extension->SetManifestData(manifest_keys::kUsbPrinters, std::move(data));
+  extension->SetManifestData(std::move(data));
   return true;
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,26 @@
 #include <string>
 #include <vector>
 
-#include "content/common/content_export.h"
-#include "content/public/browser/document_service_base.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "content/browser/renderer_host/back_forward_cache_disabling_feature_handle.h"
+#include "content/public/browser/document_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/keyboard_lock/keyboard_lock.mojom.h"
 
 namespace content {
 
-class RenderFrameHost;
-class RenderFrameHostImpl;
-
-class CONTENT_EXPORT KeyboardLockServiceImpl final
-    : public DocumentServiceBase<blink::mojom::KeyboardLockService> {
+class KeyboardLockServiceImpl final
+    : public DocumentService<blink::mojom::KeyboardLockService> {
  public:
-  KeyboardLockServiceImpl(
-      RenderFrameHost* render_frame_host,
-      mojo::PendingReceiver<blink::mojom::KeyboardLockService> receiver);
-
   static void CreateMojoService(
       RenderFrameHost* render_frame_host,
       mojo::PendingReceiver<blink::mojom::KeyboardLockService> receiver);
+
+  KeyboardLockServiceImpl(
+      RenderFrameHost& render_frame_host,
+      mojo::PendingReceiver<blink::mojom::KeyboardLockService> receiver,
+      base::SelfDeletingPassKey key);
 
   // blink::mojom::KeyboardLockService implementation.
   void RequestKeyboardLock(const std::vector<std::string>& key_codes,
@@ -36,10 +36,11 @@ class CONTENT_EXPORT KeyboardLockServiceImpl final
   void GetKeyboardLayoutMap(GetKeyboardLayoutMapCallback callback) override;
 
  private:
-  // |this| can only be destroyed by DocumentServiceBase.
+  // |this| can only be destroyed by DocumentService.
   ~KeyboardLockServiceImpl() override;
 
-  RenderFrameHostImpl* const render_frame_host_;
+  BackForwardCacheDisablingFeatureHandle feature_handle_;
+  base::WeakPtrFactory<KeyboardLockServiceImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace content

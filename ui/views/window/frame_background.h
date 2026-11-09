@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_WINDOW_FRAME_BACKGROUND_H_
 #define UI_VIEWS_WINDOW_FRAME_BACKGROUND_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/views_export.h"
 
@@ -15,8 +16,9 @@ class Canvas;
 }
 
 namespace ui {
+class ColorProvider;
 class NativeTheme;
-}
+}  // namespace ui
 
 namespace views {
 
@@ -28,6 +30,10 @@ class View;
 class VIEWS_EXPORT FrameBackground {
  public:
   FrameBackground();
+
+  FrameBackground(const FrameBackground&) = delete;
+  FrameBackground& operator=(const FrameBackground&) = delete;
+
   ~FrameBackground();
 
   // Sets the color to draw under the frame images.
@@ -44,8 +50,11 @@ class VIEWS_EXPORT FrameBackground {
   // Memory is owned by the caller.
   void set_theme_image(const gfx::ImageSkia& image) { theme_image_ = image; }
 
-  // Sets an inset into the theme image to begin painting at.
-  void set_theme_image_y_inset(int y_inset) { theme_image_y_inset_ = y_inset; }
+  // Sets an inset into the theme image to begin painting at. This must be
+  // further modified by the origin of the frame.
+  void set_theme_image_inset(gfx::Point theme_image_inset) {
+    theme_image_inset_ = theme_image_inset;
+  }
 
   // Sets an image that overlays the top window image.  Usually used to add
   // edge highlighting to provide the illusion of depth.  May be null (empty).
@@ -86,6 +95,7 @@ class VIEWS_EXPORT FrameBackground {
 
   void PaintMaximized(gfx::Canvas* canvas,
                       const ui::NativeTheme* native_theme,
+                      const ui::ColorProvider* color_provider,
                       int x,
                       int y,
                       int width) const;
@@ -102,26 +112,24 @@ class VIEWS_EXPORT FrameBackground {
   bool use_custom_frame_ = true;
   bool is_active_ = true;
   gfx::ImageSkia theme_image_;
-  int theme_image_y_inset_ = 0;
+  gfx::Point theme_image_inset_;
   gfx::ImageSkia theme_overlay_image_;
   int top_area_height_ = 0;
 
   // Images for the sides of the frame.
-  const gfx::ImageSkia* left_edge_ = nullptr;
-  const gfx::ImageSkia* top_edge_ = nullptr;
-  const gfx::ImageSkia* right_edge_ = nullptr;
-  const gfx::ImageSkia* bottom_edge_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> left_edge_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> top_edge_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> right_edge_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> bottom_edge_ = nullptr;
 
   // Images for the corners of the frame.
-  const gfx::ImageSkia* top_left_corner_ = nullptr;
-  const gfx::ImageSkia* top_right_corner_ = nullptr;
-  const gfx::ImageSkia* bottom_left_corner_ = nullptr;
-  const gfx::ImageSkia* bottom_right_corner_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> top_left_corner_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> top_right_corner_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> bottom_left_corner_ = nullptr;
+  raw_ptr<const gfx::ImageSkia> bottom_right_corner_ = nullptr;
 
   // Vertical inset for theme image when drawing maximized.
   int maximized_top_inset_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameBackground);
 };
 
 }  // namespace views

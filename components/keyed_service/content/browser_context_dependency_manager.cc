@@ -1,22 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 
+#include "base/check.h"
 #include "base/no_destructor.h"
 #include "base/trace_event/trace_event.h"
+#include "components/keyed_service/core/keyed_service_base_factory.h"
 #include "content/public/browser/browser_context.h"
-
-#ifndef NDEBUG
-#include "base/command_line.h"
-#include "base/files/file_util.h"
-
-// Dumps dependency information about our browser context keyed services
-// into a dot file in the browser context directory.
-const char kDumpBrowserContextDependencyGraphFlag[] =
-    "dump-browser-context-graph";
-#endif  // NDEBUG
 
 void BrowserContextDependencyManager::RegisterProfilePrefsForServices(
     user_prefs::PrefRegistrySyncable* pref_registry) {
@@ -46,6 +38,20 @@ void BrowserContextDependencyManager::DoCreateBrowserContextServices(
   DependencyManager::CreateContextServices(context, is_testing_context);
 }
 
+void BrowserContextDependencyManager::CreateBrowserContextServicesAfterStartup(
+    content::BrowserContext* context) {
+  TRACE_EVENT0("browser",
+               "BrowserContextDependencyManager::"
+               "CreateBrowserContextServicesAfterStartup");
+  AssertBrowserContextWasntDestroyed(context);
+  for (KeyedServiceBaseFactory* factory : GetConstructionOrder()) {
+    if (factory->ServiceIsCreatedAfterStartup()) {
+      DCHECK(!factory->ServiceIsCreatedWithContext());
+      factory->CreateServiceNow(context);
+    }
+  }
+}
+
 void BrowserContextDependencyManager::DestroyBrowserContextServices(
     content::BrowserContext* context) {
   DependencyManager::DestroyContextServices(context);
@@ -67,6 +73,17 @@ void BrowserContextDependencyManager::MarkBrowserContextLive(
   DependencyManager::MarkContextLive(context);
 }
 
+void BrowserContextDependencyManager::DisableBrowserContextServicesByDefault(
+    content::BrowserContext* context) {
+  DependencyManager::DisableContextServicesByDefault(context);
+}
+
+bool BrowserContextDependencyManager::
+    AreBrowserContextServicesDisabledByDefault(
+        content::BrowserContext* context) const {
+  return DependencyManager::AreContextServicesDisabledByDefault(context);
+}
+
 // static
 BrowserContextDependencyManager*
 BrowserContextDependencyManager::GetInstance() {
@@ -79,18 +96,3 @@ BrowserContextDependencyManager::BrowserContextDependencyManager() {
 
 BrowserContextDependencyManager::~BrowserContextDependencyManager() {
 }
-
-#ifndef NDEBUG
-void BrowserContextDependencyManager::DumpContextDependencies(
-    void* context) const {
-  // Whenever we try to build a destruction ordering, we should also dump a
-  // dependency graph to "/path/to/context/context-dependencies.dot".
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          kDumpBrowserContextDependencyGraphFlag)) {
-    base::FilePath dot_file =
-        static_cast<content::BrowserContext*>(context)->GetPath().AppendASCII(
-            "browser-context-dependencies.dot");
-    DumpDependenciesAsGraphviz("BrowserContext", dot_file);
-  }
-}
-#endif  // NDEBUG

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "content/public/browser/global_routing_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/mediasession/media_session.mojom.h"
 
@@ -24,6 +23,9 @@ class MediaSessionImpl;
 class CONTENT_EXPORT MediaSessionServiceImpl
     : public blink::mojom::MediaSessionService {
  public:
+  MediaSessionServiceImpl(const MediaSessionServiceImpl&) = delete;
+  MediaSessionServiceImpl& operator=(const MediaSessionServiceImpl&) = delete;
+
   ~MediaSessionServiceImpl() override;
 
   static void Create(
@@ -44,7 +46,7 @@ class CONTENT_EXPORT MediaSessionServiceImpl
   const std::set<media_session::mojom::MediaSessionAction>& actions() const {
     return actions_;
   }
-  const absl::optional<media_session::MediaPosition>& position() const {
+  const std::optional<media_session::MediaPosition>& position() const {
     return position_;
   }
   media_session::mojom::MicrophoneState microphone_state() const {
@@ -63,7 +65,7 @@ class CONTENT_EXPORT MediaSessionServiceImpl
 
   void SetPlaybackState(blink::mojom::MediaSessionPlaybackState state) override;
   void SetPositionState(
-      const absl::optional<media_session::MediaPosition>& position) override;
+      const std::optional<media_session::MediaPosition>& position) override;
   void SetMetadata(blink::mojom::SpecMediaMetadataPtr metadata) override;
   void SetMicrophoneState(
       media_session::mojom::MicrophoneState microphone_state) override;
@@ -78,20 +80,17 @@ class CONTENT_EXPORT MediaSessionServiceImpl
  private:
   MediaSessionImpl* GetMediaSession();
 
-  void Bind(mojo::PendingReceiver<blink::mojom::MediaSessionService> receiver);
-
   void ClearActions();
 
   const GlobalRenderFrameHostId render_frame_host_id_;
 
-  // RAII binding of |this| to an MediaSessionService interface request.
-  // The binding is removed when receiver_ is cleared or goes out of scope.
-  std::unique_ptr<mojo::Receiver<blink::mojom::MediaSessionService>> receiver_;
+  base::WeakPtr<MediaSessionImpl> media_session_;
+
   mojo::Remote<blink::mojom::MediaSessionClient> client_;
   blink::mojom::MediaSessionPlaybackState playback_state_;
   blink::mojom::SpecMediaMetadataPtr metadata_;
   std::set<media_session::mojom::MediaSessionAction> actions_;
-  absl::optional<media_session::MediaPosition> position_;
+  std::optional<media_session::MediaPosition> position_;
 
   // Tracks whether the microphone is muted in a WebRTC session.
   media_session::mojom::MicrophoneState microphone_state_ =
@@ -100,8 +99,6 @@ class CONTENT_EXPORT MediaSessionServiceImpl
   // Tracks whether the camera is turned on in a WebRTC session.
   media_session::mojom::CameraState camera_state_ =
       media_session::mojom::CameraState::kUnknown;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaSessionServiceImpl);
 };
 
 }  // namespace content

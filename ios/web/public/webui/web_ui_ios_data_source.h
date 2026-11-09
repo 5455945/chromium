@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,16 @@
 #define IOS_WEB_PUBLIC_WEBUI_WEB_UI_IOS_DATA_SOURCE_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/containers/span.h"
 #include "base/supports_user_data.h"
-
-namespace base {
-class DictionaryValue;
-}
+#include "base/values.h"
 
 namespace webui {
 struct LocalizedString;
-}
+struct ResourcePath;
+}  // namespace webui
 
 namespace web {
 class BrowserState;
@@ -28,9 +26,9 @@ class WebUIIOSDataSource : public base::SupportsUserData {
  public:
   ~WebUIIOSDataSource() override {}
 
-  static WebUIIOSDataSource* Create(const std::string& source_name);
+  static WebUIIOSDataSource* Create(std::string_view source_name);
 
-  // Adds a WebUIIOS data source to |browser_state|.
+  // Adds a WebUIIOS data source to `browser_state`.
   static void Add(BrowserState* browser_state, WebUIIOSDataSource* source);
 
   // Adds a string keyed to its name to our dictionary.
@@ -40,12 +38,12 @@ class WebUIIOSDataSource : public base::SupportsUserData {
   // Adds a string keyed to its name to our dictionary.
   virtual void AddString(const std::string& name, const std::string& value) = 0;
 
-  // Adds a localized string with resource |ids| keyed to its name to our
+  // Adds a localized string with resource `ids` keyed to its name to our
   // dictionary.
   virtual void AddLocalizedString(const std::string& name, int ids) = 0;
 
   virtual void AddLocalizedStrings(
-      const base::DictionaryValue& localized_strings) = 0;
+      const base::DictValue& localized_strings) = 0;
 
   virtual void AddLocalizedStrings(
       base::span<const webui::LocalizedString> strings) = 0;
@@ -57,8 +55,17 @@ class WebUIIOSDataSource : public base::SupportsUserData {
   // URL that provides translations and dynamic data when requested.
   virtual void UseStringsJs() = 0;
 
+  // Call this to enable i18n replacements in JS files (needed by Web UIs that
+  // use Web Components).
+  virtual void EnableReplaceI18nInJS() = 0;
+
   // Adds a mapping between a path name and a resource to return.
   virtual void AddResourcePath(const std::string& path, int resource_id) = 0;
+
+  // Calls AddResourcePath() in a for-loop for `paths`. Reduces code size vs.
+  // reimplementing the same for-loop.
+  virtual void AddResourcePaths(
+      base::span<const webui::ResourcePath> paths) = 0;
 
   // Sets the resource to returned when no other paths match.
   virtual void SetDefaultResource(int resource_id) = 0;

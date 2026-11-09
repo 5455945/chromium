@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 
 #include <memory>
 
+#include "base/containers/span.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "services/network/public/mojom/load_timing_info.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/task_type.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/platform/web_url_response.h"
 #include "third_party/blink/public/platform/web_worker_fetch_context.h"
@@ -25,29 +28,30 @@
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/core/workers/worker_reporting_proxy.h"
 #include "third_party/blink/renderer/core/workers/worker_thread_test_helper.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_error.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_timing_info.h"
-#include "third_party/blink/renderer/platform/loader/testing/web_url_loader_factory_with_mock.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace blink {
 
 namespace {
 
 using testing::_;
+using testing::ElementsAre;
 using testing::InSequence;
 using testing::InvokeWithoutArgs;
-using testing::StrEq;
 using testing::Truly;
 using Checkpoint = testing::StrictMock<testing::MockFunction<void(int)>>;
 
@@ -60,7 +64,7 @@ class MockThreadableLoaderClient final
   MockThreadableLoaderClient() = default;
   MOCK_METHOD2(DidSendData, void(uint64_t, uint64_t));
   MOCK_METHOD2(DidReceiveResponse, void(uint64_t, const ResourceResponse&));
-  MOCK_METHOD2(DidReceiveData, void(const char*, unsigned));
+  MOCK_METHOD1(DidReceiveData, void(base::span<const char>));
   MOCK_METHOD1(DidReceiveCachedMetadata, void(mojo_base::BigBuffer));
   MOCK_METHOD1(DidFinishLoading, void(uint64_t));
   MOCK_METHOD2(DidFail, void(uint64_t, const ResourceError&));
@@ -77,13 +81,13 @@ bool IsNotCancellation(const ResourceError& error) {
 }
 
 KURL SuccessURL() {
-  return KURL("http://example.com/success").Copy();
+  return KURL("http://example.com/success");
 }
 KURL ErrorURL() {
-  return KURL("http://example.com/error").Copy();
+  return KURL("http://example.com/error");
 }
 KURL RedirectURL() {
-  return KURL("http://example.com/redirect").Copy();
+  return KURL("http://example.com/redirect");
 }
 
 void SetUpSuccessURL() {
@@ -132,11 +136,10 @@ enum ThreadableLoaderToTest {
 class ThreadableLoaderTestHelper final {
  public:
   ThreadableLoaderTestHelper()
-      : dummy_page_holder_(std::make_unique<DummyPageHolder>(IntSize(1, 1))) {
+      : dummy_page_holder_(std::make_unique<DummyPageHolder>(gfx::Size(1, 1))) {
     KURL url("http://fake.url/");
     dummy_page_holder_->GetFrame().Loader().CommitNavigation(
-        WebNavigationParams::CreateWithHTMLBufferForTesting(
-            SharedBuffer::Create(), url),
+        WebNavigationParams::CreateWithEmptyHTMLForTesting(url),
         nullptr /* extra_data */);
     blink::test::RunPendingTasks();
   }
@@ -158,6 +161,7 @@ class ThreadableLoaderTestHelper final {
     loader_ = nullptr;
   }
   void ClearLoader() { loader_ = nullptr; }
+
   Checkpoint& GetCheckpoint() { return checkpoint_; }
   void CallCheckpoint(int n) { checkpoint_.Call(n); }
 
@@ -174,6 +178,7 @@ class ThreadableLoaderTestHelper final {
   }
 
  private:
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<DummyPageHolder> dummy_page_holder_;
   Checkpoint checkpoint_;
   Persistent<ThreadableLoader> loader_;
@@ -190,6 +195,7 @@ class ThreadableLoaderTest : public testing::Test {
     ResourceRequest request(url);
     request.SetRequestContext(mojom::blink::RequestContextType::OBJECT);
     request.SetMode(request_mode);
+    request.SetTargetAddressSpace(network::mojom::IPAddressSpace::kUnknown);
     request.SetCredentialsMode(network::mojom::CredentialsMode::kOmit);
     helper_->StartLoader(std::move(request));
   }
@@ -197,6 +203,7 @@ class ThreadableLoaderTest : public testing::Test {
   void CancelLoader() { helper_->CancelLoader(); }
   void CancelAndClearLoader() { helper_->CancelAndClearLoader(); }
   void ClearLoader() { helper_->ClearLoader(); }
+
   Checkpoint& GetCheckpoint() { return helper_->GetCheckpoint(); }
   void CallCheckpoint(int n) { helper_->CallCheckpoint(n); }
 
@@ -300,7 +307,7 @@ TEST_F(ThreadableLoaderTest, CancelInDidReceiveData) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(_, _))
+  EXPECT_CALL(*Client(), DidReceiveData(_))
       .WillOnce(InvokeWithoutArgs(this, &ThreadableLoaderTest::CancelLoader));
   EXPECT_CALL(*Client(), DidFail(_, Truly(IsCancellation)));
 
@@ -317,7 +324,7 @@ TEST_F(ThreadableLoaderTest, CancelAndClearInDidReceiveData) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(_, _))
+  EXPECT_CALL(*Client(), DidReceiveData(_))
       .WillOnce(
           InvokeWithoutArgs(this, &ThreadableLoaderTest::CancelAndClearLoader));
   EXPECT_CALL(*Client(), DidFail(_, Truly(IsCancellation)));
@@ -335,7 +342,7 @@ TEST_F(ThreadableLoaderTest, DidFinishLoading) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(StrEq("fox"), 4));
+  EXPECT_CALL(*Client(), DidReceiveData(ElementsAre('f', 'o', 'x', '\0')));
   EXPECT_CALL(*Client(), DidFinishLoading(_));
 
   StartLoader(SuccessURL());
@@ -351,7 +358,7 @@ TEST_F(ThreadableLoaderTest, CancelInDidFinishLoading) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(_, _));
+  EXPECT_CALL(*Client(), DidReceiveData(_));
   EXPECT_CALL(*Client(), DidFinishLoading(_))
       .WillOnce(InvokeWithoutArgs(this, &ThreadableLoaderTest::CancelLoader));
 
@@ -368,7 +375,7 @@ TEST_F(ThreadableLoaderTest, ClearInDidFinishLoading) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(_, _));
+  EXPECT_CALL(*Client(), DidReceiveData(_));
   EXPECT_CALL(*Client(), DidFinishLoading(_))
       .WillOnce(InvokeWithoutArgs(this, &ThreadableLoaderTest::ClearLoader));
 
@@ -429,7 +436,7 @@ TEST_F(ThreadableLoaderTest, RedirectDidFinishLoading) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(StrEq("fox"), 4));
+  EXPECT_CALL(*Client(), DidReceiveData(ElementsAre('f', 'o', 'x', '\0')));
   EXPECT_CALL(*Client(), DidFinishLoading(_));
 
   StartLoader(RedirectURL());
@@ -445,7 +452,7 @@ TEST_F(ThreadableLoaderTest, CancelInRedirectDidFinishLoading) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(StrEq("fox"), 4));
+  EXPECT_CALL(*Client(), DidReceiveData(ElementsAre('f', 'o', 'x', '\0')));
   EXPECT_CALL(*Client(), DidFinishLoading(_))
       .WillOnce(InvokeWithoutArgs(this, &ThreadableLoaderTest::CancelLoader));
 
@@ -462,7 +469,7 @@ TEST_F(ThreadableLoaderTest, ClearInRedirectDidFinishLoading) {
 
   EXPECT_CALL(GetCheckpoint(), Call(2));
   EXPECT_CALL(*Client(), DidReceiveResponse(_, _));
-  EXPECT_CALL(*Client(), DidReceiveData(StrEq("fox"), 4));
+  EXPECT_CALL(*Client(), DidReceiveData(ElementsAre('f', 'o', 'x', '\0')));
   EXPECT_CALL(*Client(), DidFinishLoading(_))
       .WillOnce(InvokeWithoutArgs(this, &ThreadableLoaderTest::ClearLoader));
 
@@ -471,6 +478,45 @@ TEST_F(ThreadableLoaderTest, ClearInRedirectDidFinishLoading) {
   ServeRequests();
 }
 
-}  // namespace
+// TODO(crbug.com/1356128): Add unit tests to cover histogram logging.
 
+TEST(ThreadableLoaderCCNSTest, IsDomainAllowedForCCNS) {
+  test::TaskEnvironment task_environment;
+
+  // When feature is disabled:
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        features::kBackForwardCacheCCNSAllowlist);
+    EXPECT_FALSE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("http://example.com")));
+  }
+
+  // When feature is enabled with allowed domains:
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeatureWithParameters(
+        features::kBackForwardCacheCCNSAllowlist,
+        {{features::kBackForwardCacheCCNSAllowedDomains.name,
+          "example.com, allowed.org, test.net"}});
+
+    EXPECT_TRUE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("http://example.com/path")));
+    EXPECT_TRUE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("https://allowed.org:8080/foo?bar=1")));
+    EXPECT_TRUE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("http://test.net")));
+
+    // Subdomains or other domains are not allowed:
+    EXPECT_FALSE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("http://sub.example.com")));
+    EXPECT_FALSE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("http://disallowed.com")));
+    EXPECT_FALSE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(
+        KURL("http://example.com.evil.com")));
+    EXPECT_FALSE(ThreadableLoader::IsDomainAllowedForCCNSForTesting(KURL()));
+  }
+}
+
+}  // namespace
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,26 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_mock_time_task_runner.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/media/media_engagement_preloaded_list.h"
 #include "chrome/browser/media/media_engagement_score.h"
+#include "chrome/browser/media/media_engagement_service.h"
+#include "chrome/browser/media/media_engagement_service_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -47,7 +53,18 @@ namespace {
 base::FilePath g_temp_history_dir;
 
 // History is automatically expired after 90 days.
-base::TimeDelta kHistoryExpirationThreshold = base::TimeDelta::FromDays(90);
+base::TimeDelta kHistoryExpirationThreshold = base::Days(90);
+
+const base::FilePath kTestDataPath = base::FilePath(
+    FILE_PATH_LITERAL("chrome/test/data/media/engagement/preload"));
+
+const base::FilePath kSampleDataPath = kTestDataPath.AppendASCII("test.pb");
+
+const base::FilePath kEmptyFilePath = kTestDataPath.AppendASCII("empty.pb");
+
+base::FilePath GeneratedTestDataRoot() {
+  return base::PathService::CheckedGet(base::DIR_GEN_TEST_DATA_ROOT);
+}
 
 // Waits until a change is observed in media engagement content settings.
 class MediaEngagementChangeWaiter : public content_settings::Observer {
@@ -56,16 +73,21 @@ class MediaEngagementChangeWaiter : public content_settings::Observer {
     HostContentSettingsMapFactory::GetForProfile(profile)->AddObserver(this);
   }
 
+  MediaEngagementChangeWaiter(const MediaEngagementChangeWaiter&) = delete;
+  MediaEngagementChangeWaiter& operator=(const MediaEngagementChangeWaiter&) =
+      delete;
+
   ~MediaEngagementChangeWaiter() override {
     HostContentSettingsMapFactory::GetForProfile(profile_)->RemoveObserver(
         this);
   }
 
   // Overridden from content_settings::Observer:
-  void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
-                               const ContentSettingsPattern& secondary_pattern,
-                               ContentSettingsType content_type) override {
-    if (content_type == ContentSettingsType::MEDIA_ENGAGEMENT)
+  void OnContentSettingChanged(
+      const ContentSettingsPattern& primary_pattern,
+      const ContentSettingsPattern& secondary_pattern,
+      ContentSettingsTypeSet content_type_set) override {
+    if (content_type_set.Contains(ContentSettingsType::MEDIA_ENGAGEMENT))
       Proceed();
   }
 
@@ -74,26 +96,18 @@ class MediaEngagementChangeWaiter : public content_settings::Observer {
  private:
   void Proceed() { run_loop_.Quit(); }
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   base::RunLoop run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaEngagementChangeWaiter);
 };
 
 base::Time GetReferenceTime() {
-  base::Time::Exploded exploded_reference_time;
-  exploded_reference_time.year = 2015;
-  exploded_reference_time.month = 1;
-  exploded_reference_time.day_of_month = 30;
-  exploded_reference_time.day_of_week = 5;
-  exploded_reference_time.hour = 11;
-  exploded_reference_time.minute = 0;
-  exploded_reference_time.second = 0;
-  exploded_reference_time.millisecond = 0;
-
+  static constexpr base::Time::Exploded kReferenceTime = {.year = 2015,
+                                                          .month = 1,
+                                                          .day_of_week = 5,
+                                                          .day_of_month = 30,
+                                                          .hour = 11};
   base::Time out_time;
-  EXPECT_TRUE(
-      base::Time::FromLocalExploded(exploded_reference_time, &out_time));
+  EXPECT_TRUE(base::Time::FromLocalExploded(kReferenceTime, &out_time));
   return out_time;
 }
 
@@ -146,12 +160,26 @@ class MediaEngagementServiceTest : public ChromeRenderViewHostTestHarness,
     }
     ChromeRenderViewHostTestHarness::SetUp();
 
+    // Prevent the factory from implicitly creating a second
+    // MediaEngagementService (e.g. during Autoplay policy checks), which would
+    // conflict with the manual test instance and double-process
+    // HistoryServiceObserver events.
+    MediaEngagementServiceFactory::GetInstance()->SetTestingFactory(
+        profile(), base::BindRepeating([](content::BrowserContext* context)
+                                           -> std::unique_ptr<KeyedService> {
+          return nullptr;
+        }));
+
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     g_temp_history_dir = temp_dir_.GetPath();
     ConfigureHistoryService(nullptr);
 
     test_clock_.SetNow(GetReferenceTime());
     service_ = base::WrapUnique(StartNewMediaEngagementService());
+
+    // Start with an empty preloaded list during each test.
+    ASSERT_TRUE(MediaEngagementPreloadedList::GetInstance()->LoadFromFile(
+        GetAbsolutePathToGeneratedTestFile(kEmptyFilePath)));
   }
 
   MediaEngagementService* service() const { return service_.get(); }
@@ -205,9 +233,7 @@ class MediaEngagementServiceTest : public ChromeRenderViewHostTestHarness,
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
-  void AdvanceClock() {
-    test_clock_.SetNow(Now() + base::TimeDelta::FromHours(1));
-  }
+  void AdvanceClock() { test_clock_.SetNow(Now() + base::Hours(1)); }
 
   void RecordVisit(const url::Origin& origin) { service_->RecordVisit(origin); }
 
@@ -298,6 +324,10 @@ class MediaEngagementServiceTest : public ChromeRenderViewHostTestHarness,
 
   std::vector<MediaEngagementScore> GetAllStoredScores() const {
     return GetAllStoredScores(service_.get());
+  }
+
+  base::FilePath GetAbsolutePathToGeneratedTestFile(base::FilePath path) {
+    return GeneratedTestDataRoot().Append(path);
   }
 
  protected:
@@ -496,11 +526,10 @@ TEST_P(MediaEngagementServiceTest, CleanupOriginsOnHistoryDeletion) {
   SetScores(origin4, MediaEngagementScore::GetScoreMinVisits(), 10);
 
   base::Time today = GetReferenceTime();
-  base::Time yesterday = GetReferenceTime() - base::TimeDelta::FromDays(1);
-  base::Time yesterday_afternoon = GetReferenceTime() -
-                                   base::TimeDelta::FromDays(1) +
-                                   base::TimeDelta::FromHours(4);
-  base::Time yesterday_week = GetReferenceTime() - base::TimeDelta::FromDays(8);
+  base::Time yesterday = GetReferenceTime() - base::Days(1);
+  base::Time yesterday_afternoon =
+      GetReferenceTime() - base::Days(1) + base::Hours(4);
+  base::Time yesterday_week = GetReferenceTime() - base::Days(8);
   SetNow(today);
 
   history::HistoryService* history = HistoryServiceFactory::GetForProfile(
@@ -532,10 +561,11 @@ TEST_P(MediaEngagementServiceTest, CleanupOriginsOnHistoryDeletion) {
 
     base::CancelableTaskTracker task_tracker;
     // Expire origin1, url1a, origin2, and url3a's most recent visit.
-    history->ExpireHistoryBetween(std::set<GURL>(), yesterday, today,
-                                  /*user_initiated*/ true, base::DoNothing(),
-                                  &task_tracker);
+    history->ExpireHistoryBetween(
+        std::set<GURL>(), history::kNoAppIdFilter, yesterday, today,
+        /*user_initiated*/ true, base::DoNothing(), &task_tracker);
     waiter.Wait();
+    task_environment()->RunUntilIdle();
 
     // origin1 should have a score that is not zero and is the same as the old
     // score (sometimes it may not match exactly due to rounding). origin2
@@ -565,6 +595,7 @@ TEST_P(MediaEngagementServiceTest, CleanupOriginsOnHistoryDeletion) {
     base::CancelableTaskTracker task_tracker;
     history->ExpireHistory(expire_list, base::DoNothing(), &task_tracker);
     waiter.Wait();
+    task_environment()->RunUntilIdle();
 
     // origin1's score should have changed but the rest should remain the same.
     ExpectScores(origin1, 0.55, MediaEngagementScore::GetScoreMinVisits() - 1,
@@ -588,6 +619,7 @@ TEST_P(MediaEngagementServiceTest, CleanupOriginsOnHistoryDeletion) {
     base::CancelableTaskTracker task_tracker;
     history->ExpireHistory(expire_list, base::DoNothing(), &task_tracker);
     waiter.Wait();
+    task_environment()->RunUntilIdle();
 
     // origin3's score should be removed but the rest should remain the same.
     std::map<url::Origin, double> scores = GetScoreMapForTesting();
@@ -601,8 +633,8 @@ TEST_P(MediaEngagementServiceTest, CleanupOriginsOnHistoryDeletion) {
   }
 }
 
-// The test is flaky: crbug.com/1042417.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+// The test is flaky: crbug.com/40668468.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #define MAYBE_CleanUpDatabaseWhenHistoryIsExpired \
   DISABLED_CleanUpDatabaseWhenHistoryIsExpired
 #else
@@ -646,8 +678,9 @@ TEST_P(MediaEngagementServiceTest, MAYBE_CleanUpDatabaseWhenHistoryIsExpired) {
   // Now, fast forward time to ensure that the expiration job is completed. This
   // will start by triggering the backend initialization. 30 seconds is the
   // value of kExpirationDelaySec.
-  mock_time_task_runner_->FastForwardBy(base::TimeDelta::FromSeconds(30));
+  mock_time_task_runner_->FastForwardBy(base::Seconds(30));
   waiter.Wait();
+  task_environment()->RunUntilIdle();
 
   // Check the scores for the test origins.
   ExpectScores(origin1, 1.0, 20, 20, TimeNotSet());
@@ -675,10 +708,9 @@ TEST_P(MediaEngagementServiceTest, CleanUpDatabaseWhenHistoryIsDeleted) {
   SetScores(origin4, MediaEngagementScore::GetScoreMinVisits(), 10);
 
   base::Time today = GetReferenceTime();
-  base::Time yesterday_afternoon = GetReferenceTime() -
-                                   base::TimeDelta::FromDays(1) +
-                                   base::TimeDelta::FromHours(4);
-  base::Time yesterday_week = GetReferenceTime() - base::TimeDelta::FromDays(8);
+  base::Time yesterday_afternoon =
+      GetReferenceTime() - base::Days(1) + base::Hours(4);
+  base::Time yesterday_week = GetReferenceTime() - base::Days(8);
   SetNow(today);
 
   history::HistoryService* history = HistoryServiceFactory::GetForProfile(
@@ -709,10 +741,11 @@ TEST_P(MediaEngagementServiceTest, CleanUpDatabaseWhenHistoryIsDeleted) {
     base::RunLoop run_loop;
     base::CancelableTaskTracker task_tracker;
     // Clear all history.
-    history->ExpireHistoryBetween(std::set<GURL>(), base::Time(), base::Time(),
-                                  /*user_initiated*/ true,
-                                  run_loop.QuitClosure(), &task_tracker);
+    history->ExpireHistoryBetween(
+        std::set<GURL>(), history::kNoAppIdFilter, base::Time(), base::Time(),
+        /*user_initiated*/ true, run_loop.QuitClosure(), &task_tracker);
     run_loop.Run();
+    task_environment()->RunUntilIdle();
 
     // origin1 should have a score that is not zero and is the same as the old
     // score (sometimes it may not match exactly due to rounding). origin2
@@ -758,10 +791,11 @@ TEST_P(MediaEngagementServiceTest, HistoryExpirationIsNoOp) {
     history::HistoryService* history = HistoryServiceFactory::GetForProfile(
         profile(), ServiceAccessType::IMPLICIT_ACCESS);
 
-    service()->OnURLsDeleted(
+    service()->OnHistoryDeletions(
         history, history::DeletionInfo(history::DeletionTimeRange::Invalid(),
                                        true, history::URLRows(),
-                                       std::set<GURL>(), absl::nullopt));
+                                       std::set<GURL>(), std::nullopt));
+    task_environment()->RunUntilIdle();
 
     // Same as above, nothing should have changed.
     ExpectScores(origin1, 7.0 / 11.0,
@@ -788,8 +822,8 @@ TEST_P(MediaEngagementServiceTest,
   SetScores(origin, 1, 1);
   SetLastMediaPlaybackTime(origin, today);
 
-  ClearDataBetweenTime(today - base::TimeDelta::FromDays(2),
-                       today - base::TimeDelta::FromDays(1));
+  ClearDataBetweenTime(today - base::Days(2), today - base::Days(1));
+  task_environment()->RunUntilIdle();
   ExpectScores(origin, 0.05, 1, 1, today);
 }
 
@@ -799,8 +833,8 @@ TEST_P(MediaEngagementServiceTest,
   url::Origin origin2 = url::Origin::Create(GURL("https://www.google.co.uk"));
 
   base::Time today = GetReferenceTime();
-  base::Time yesterday = today - base::TimeDelta::FromDays(1);
-  base::Time two_days_ago = today - base::TimeDelta::FromDays(2);
+  base::Time yesterday = today - base::Days(1);
+  base::Time two_days_ago = today - base::Days(2);
   SetNow(today);
 
   SetScores(origin1, 1, 1);
@@ -809,6 +843,7 @@ TEST_P(MediaEngagementServiceTest,
   SetLastMediaPlaybackTime(origin2, two_days_ago);
 
   ClearDataBetweenTime(two_days_ago, yesterday);
+  task_environment()->RunUntilIdle();
   ExpectScores(origin1, 0, 0, 0, TimeNotSet());
   ExpectScores(origin2, 0, 0, 0, TimeNotSet());
 }
@@ -821,8 +856,8 @@ TEST_P(MediaEngagementServiceTest, CleanupDataOnSiteDataCleanup_NoTimeSet) {
   SetNow(GetReferenceTime());
   SetScores(origin, 1, 0);
 
-  ClearDataBetweenTime(today - base::TimeDelta::FromDays(2),
-                       today - base::TimeDelta::FromDays(1));
+  ClearDataBetweenTime(today - base::Days(2), today - base::Days(1));
+  task_environment()->RunUntilIdle();
   ExpectScores(origin, 0.0, 1, 0, TimeNotSet());
 }
 
@@ -831,8 +866,8 @@ TEST_P(MediaEngagementServiceTest, CleanupDataOnSiteDataCleanup_All) {
   url::Origin origin2 = url::Origin::Create(GURL("https://www.google.co.uk"));
 
   base::Time today = GetReferenceTime();
-  base::Time yesterday = today - base::TimeDelta::FromDays(1);
-  base::Time two_days_ago = today - base::TimeDelta::FromDays(2);
+  base::Time yesterday = today - base::Days(1);
+  base::Time two_days_ago = today - base::Days(2);
   SetNow(today);
 
   SetScores(origin1, 1, 1);
@@ -841,6 +876,7 @@ TEST_P(MediaEngagementServiceTest, CleanupDataOnSiteDataCleanup_All) {
   SetLastMediaPlaybackTime(origin2, two_days_ago);
 
   ClearDataBetweenTime(base::Time(), base::Time::Max());
+  task_environment()->RunUntilIdle();
   ExpectScores(origin1, 0, 0, 0, TimeNotSet());
   ExpectScores(origin2, 0, 0, 0, TimeNotSet());
 }
@@ -856,6 +892,67 @@ TEST_P(MediaEngagementServiceTest, HasHighEngagement) {
   EXPECT_TRUE(HasHighEngagement(origin1));
   EXPECT_FALSE(HasHighEngagement(origin2));
   EXPECT_FALSE(HasHighEngagement(origin3));
+}
+
+// Disable test on Android. Feature `kPreloadMediaEngagementData` is not
+// available for this platforms.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_HasHighEngagement_PreloadListOriginPresent \
+  DISABLED_HasHighEngagement_PreloadListOriginPresent
+#else
+#define MAYBE_HasHighEngagement_PreloadListOriginPresent \
+  HasHighEngagement_PreloadListOriginPresent
+#endif
+TEST_P(MediaEngagementServiceTest,
+       MAYBE_HasHighEngagement_PreloadListOriginPresent) {
+  url::Origin origin = url::Origin::Create(GURL("https://google.com"));
+  EXPECT_FALSE(HasHighEngagement(origin));
+
+  // Load Media Engagement Preloaded List.
+  EXPECT_TRUE(base::FeatureList::IsEnabled(media::kPreloadMediaEngagementData));
+  ASSERT_TRUE(MediaEngagementPreloadedList::GetInstance()->LoadFromFile(
+      GetAbsolutePathToGeneratedTestFile(kSampleDataPath)));
+
+  // Verify that `origin` has high engagement.
+  EXPECT_TRUE(HasHighEngagement(origin));
+}
+
+// Disable test on Android. Feature `kPreloadMediaEngagementData` is not
+// available for this platforms.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_HasHighEngagement_ScoreVisits \
+  DISABLED_HasHighEngagement_ScoreVisits
+#else
+#define MAYBE_HasHighEngagement_ScoreVisits HasHighEngagement_ScoreVisits
+#endif
+TEST_P(MediaEngagementServiceTest, MAYBE_HasHighEngagement_ScoreVisits) {
+  url::Origin origin = url::Origin::Create(GURL("https://google.com"));
+  EXPECT_FALSE(HasHighEngagement(origin));
+
+  // Load Media Engagement Preloaded List.
+  EXPECT_TRUE(base::FeatureList::IsEnabled(media::kPreloadMediaEngagementData));
+  ASSERT_TRUE(MediaEngagementPreloadedList::GetInstance()->LoadFromFile(
+      GetAbsolutePathToGeneratedTestFile(kSampleDataPath)));
+
+  // Verify that the `origin` has high engagement, since it is present in the
+  // list.
+  EXPECT_TRUE(HasHighEngagement(origin));
+
+  // Set the number of visits for `origin` to a value lower than the score min
+  // visits, and verify that the `origin` has high media engagement.
+  SetScores(origin, MediaEngagementScore::GetScoreMinVisits() - 1, 1);
+  EXPECT_TRUE(HasHighEngagement(origin));
+
+  // Set the number of visits for `origin` to the score min visits, and verify
+  // that the `origin` does not have high media engagement.
+  SetScores(origin, MediaEngagementScore::GetScoreMinVisits(), 1);
+  EXPECT_FALSE(HasHighEngagement(origin));
+
+  // Set the number of visits for `origin` to a value greater than the score min
+  // visits, and verify that the `origin` does not have high media engagement.
+  SetScores(origin, MediaEngagementScore::GetScoreMinVisits() + 1, 1);
+  EXPECT_FALSE(HasHighEngagement(origin));
+  task_environment()->RunUntilIdle();
 }
 
 TEST_P(MediaEngagementServiceTest, SchemaVersion_Changed) {
@@ -889,7 +986,7 @@ class MediaEngagementServiceEnabledTest
     : public ChromeRenderViewHostTestHarness {};
 
 TEST_F(MediaEngagementServiceEnabledTest, IsEnabled) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Make sure these flags are disabled on Android
   EXPECT_FALSE(base::FeatureList::IsEnabled(
       media::kMediaEngagementBypassAutoplayPolicies));

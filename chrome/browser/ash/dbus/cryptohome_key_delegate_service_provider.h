@@ -1,21 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_DBUS_CRYPTOHOME_KEY_DELEGATE_SERVICE_PROVIDER_H_
 #define CHROME_BROWSER_ASH_DBUS_CRYPTOHOME_KEY_DELEGATE_SERVICE_PROVIDER_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
+
+class PrefService;
 
 namespace dbus {
 class MethodCall;
-}
+}  // namespace dbus
 
-namespace chromeos {
+namespace ash {
 
 // Provider for the org.chromium.CryptohomeKeyDelegateInterface service
 // implementation.
@@ -27,7 +29,14 @@ namespace chromeos {
 class CryptohomeKeyDelegateServiceProvider final
     : public CrosDBusService::ServiceProviderInterface {
  public:
-  CryptohomeKeyDelegateServiceProvider();
+  // `local_state` must be non-null and must outlive `this`.
+  explicit CryptohomeKeyDelegateServiceProvider(PrefService* local_state);
+
+  CryptohomeKeyDelegateServiceProvider(
+      const CryptohomeKeyDelegateServiceProvider&) = delete;
+  CryptohomeKeyDelegateServiceProvider& operator=(
+      const CryptohomeKeyDelegateServiceProvider&) = delete;
+
   ~CryptohomeKeyDelegateServiceProvider() override;
 
   // CrosDBusService::ServiceProviderInterface overrides:
@@ -38,13 +47,13 @@ class CryptohomeKeyDelegateServiceProvider final
   void HandleChallengeKey(dbus::MethodCall* method_call,
                           dbus::ExportedObject::ResponseSender response_sender);
 
+  const raw_ref<PrefService> local_state_;
+
   // Must be the last member.
   base::WeakPtrFactory<CryptohomeKeyDelegateServiceProvider> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(CryptohomeKeyDelegateServiceProvider);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_CRYPTOHOME_KEY_DELEGATE_SERVICE_PROVIDER_H_

@@ -33,7 +33,8 @@ However, the official Chrome build is
 [codesigned](../../chrome/installer/mac/signing/README.md) with the `restrict`
 and `runtime` options, which generally prohibit debuggers from attaching.
 
-In order to debug production/released Chrome, you need to do one of two things:
+In order to debug production/released Chrome, you need to do one of two things
+while Chrome is not running:
 
 1. Disable [System Integrity
 Protection](https://developer.apple.com/documentation/security/disabling_and_enabling_system_integrity_protection),
@@ -43,7 +44,7 @@ by:
     3. Running `csrutil enable --without debug`
     4. Rebooting
 2. Stripping or force-re-codesigning the binary to not use those options:
-   `codesign --force --sign - path/to/Google\ Chrome.app`
+   `codesign --sign=- --deep --force  path/to/Google\ Chrome.app`
 
 If you will frequently debug official builds, (1) is recommended. Note that
 disabling SIP reduces the overall security of the system, so your system
@@ -220,11 +221,11 @@ This approach creates an empty Xcode project that only provides a GUI debugger:
 ### (2) Use *gn*
 
 1. Tell `gn` to generate an Xcode project for your out directory:
-   `gn gen --ide=xcode out/debug`
+   `gn gen --ide=xcode out/debug --ninja-executable=autoninja`
 2. Open *out/debug/all.xcodeproj*
 3. Have it automatically generate schemes for you
 4. You can now build targets from within Xcode, which will simply call out to
-   `ninja` via an Xcode script. But the resulting binaries are available as
+   `autoninja` via an Xcode script. But the resulting binaries are available as
    debuggable targets in Xcode.
 
 Note that any changes to the .xcodeproj will be overwritten; all changes to the
@@ -247,7 +248,7 @@ To launch Chromium via launch services, use the `open(1)` command:
 
 To pass command line arguments:
 
-    open ./out/debug/Chromium.app -- --enable-features=MyCoolFeature
+    open ./out/debug/Chromium.app --args --enable-features=MyCoolFeature
 
 ## Taking CPU Samples
 
@@ -269,6 +270,27 @@ analysis.
 
 See also [How to Obtain a Heap
 Dump](../memory-infra/heap_profiler.md#how-to-obtain-a-heap-dump-m66_linux_macos_windows).
+
+## Profiling using Instruments Time Profiler
+
+For more sophisticated CPU sampling, use the Time Profiler tool from Instruments. Instruments is macOS's performance analysis toolkit that comes with Xcode. The following steps assume that you've installed Xcode 12.0 or later.
+
+After installing Xcode, run `xcode-select -s XCODE_FOLDER` from the command line to set up the Xcode folder for the command line tools. `XCODE_FOLDER` is where the Xcode is installed, and should be something like `/Applications/Xcode.app/Contents/Developer`.
+
+Time Profiler provides a GUI to record traces, but is likely to be janky. To generate a trace from the terminal,
+
+1. Start Chrome.
+2. Run `xcrun xctrace record --template 'Time Profiler' --all-processes` in terminal to start tracing.
+3. Perform actions that you want to profile, e.g. open a new tab page.
+4. Back to the terminal, press Ctrl+C to terminate the profiling. A `.trace` profile file will be generated at the current working path.
+
+In Step 2, if you know which process you are looking at, you can change the `--all-processes` to `--attach PID`.
+
+To visualize a trace,
+
+1. In Time Profiler, load the profile file by File > Open. You will see the traces of all threads and other stats like the Thermal State. You may filter the threads of your interest.
+2. For official Google Chrome builds, you need to follow [this doc](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/mac/debugging.md#chrome-builds) to download the dSYMs files for symbolization.
+3. In Time Profiler, use File > Symbols to load symbols. Loading symbols only for the main executable (Google Chrome) should be sufficient for other executables (Google Chrome Helper and Renderer) as well.
 
 ## Working with Minidumps
 
@@ -293,7 +315,7 @@ Yes, you need to run this for both the normal user and the admin user.
 
 If you get a Google Chrome crash report caught by ReportCrash/macOS, it will not
 have symbols (every frame will be ChromeMain). To get a symbolized stack trace,
-use the internal [crsym](httsp://goto.google.com/crsym) tool by simply pasting
+use the internal [crsym](https://goto.google.com/crsym) tool by simply pasting
 the contents of an entire Apple crash report.
 
 ## Testing Other Locales
@@ -331,10 +353,21 @@ Chrome has [built-in memory instrumentation](../memory-infra/README.md) that can
 be used to identify allocations and potential leaks.
 
 MacOS also provides several low-level command-line tools that can be used to
-inspect what's going on with memory inside a process.
+inspect what's going on with memory inside a process. Note that most of these
+tools only work effectively with system malloc and not PartitionAlloc. Since
+[PartitionAlloc Everywhere](https://docs.google.com/document/d/1R1H9z5IVUAnXJgDjnts3nTJVcRbufWWT9ByXLgecSUM/preview),
+you should additionally disable PartitionAlloc with these GN args:
 
-**`heap`** summarizes what's currently in the malloc heap(s) of a process. (It
-only works with regular malloc, of course, but Mac Chrome still uses that.) It
+```
+use_partition_alloc_as_malloc = false
+enable_backup_ref_ptr_support = false
+```
+
+Note that PartitionAlloc will still be used in Blink, just not for `malloc` in
+other places anymore. See [PartitionAlloc build config](../../base/allocator/partition_allocator/build_config.md)
+for disabling PartitionAlloc completely via GN arg `use_partition_alloc`.
+
+**`heap`** summarizes what's currently in the malloc heap(s) of a process. It
 shows a number of useful things:
 
 * How much of the heap is used or free
@@ -344,7 +377,7 @@ shows a number of useful things:
 
 It identifies C++ objects by their vtables, so it can't identify vtable-less
 classes, including a lot of the lower-level WebCore ones like StringImpl. To
-work around, temporarily added the `virtual` keyword to `WTF::RefCounted`'s
+work around, temporarily added the `virtual` keyword to `blink::RefCounted`'s
 destructor method, which forces every ref-counted object to include a vtable
 pointer identifying its class.
 
@@ -358,7 +391,7 @@ when it launches. The `env` command is handy for this:
 
 Then in another shell you run
 
-    $ malloc_history <pid> -all_by_size
+    $ malloc_history <pid> -allBySize
 
 Watch out: the output is *big*.
 

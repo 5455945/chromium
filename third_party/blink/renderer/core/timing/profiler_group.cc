@@ -1,13 +1,19 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/timing/profiler_group.h"
 
+#include <algorithm>
+
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy_features.h"
+#include "third_party/blink/public/common/permissions_policy/policy_value.h"
+#include "third_party/blink/public/mojom/permissions_policy/policy_value.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/profiler_trace_builder.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_profiler_init_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_profiler_trace.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
@@ -18,10 +24,9 @@
 #include "third_party/blink/renderer/core/timing/profiler.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
-#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8/include/v8-profiler.h"
 #include "v8/include/v8.h"
@@ -30,7 +35,7 @@ namespace blink {
 
 namespace {
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // On Windows, assume we have the coarsest possible timer.
 static constexpr int kBaseSampleIntervalMs =
     base::Time::kMinLowResolutionThresholdMs;
@@ -38,7 +43,7 @@ static constexpr int kBaseSampleIntervalMs =
 // Default to a 10ms base sampling interval on other platforms.
 // TODO(acomminos): Reevaluate based on empirical overhead.
 static constexpr int kBaseSampleIntervalMs = 10;
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace
 
@@ -66,52 +71,89 @@ class ProfilerGroup::ProfilingContextObserver
   Member<ProfilerGroup> profiler_group_;
 };
 
-bool ProfilerGroup::CanProfile(LocalDOMWindow* local_window,
+JSProfilingMode ProfilerGroup::GetProfilingMode(
+    ExecutionContext* execution_context,
+    ReportOptions report_options) {
+  DCHECK(execution_context);
+  // Check the new js-profiling-mode enum policy first.
+  PolicyValue mode_value = execution_context->GetDocumentPolicyValue(
+      mojom::blink::DocumentPolicyFeature::kJSProfilingMode);
+  if (std::optional<int32_t> v = mode_value.GetIfEnum()) {
+    if (*v >= 1 && *v <= static_cast<int32_t>(JSProfilingMode::kMax)) {
+      // "eager" or "lazy" explicitly set in the header — honour it.
+      return static_cast<JSProfilingMode>(*v);
+    }
+    // *v == 0: default "not set", meaning the header was absent. Fall through
+    // to the legacy kJSProfiling boolean policy.
+  }
+  // Fall back to the legacy js-profiling boolean policy.
+  if (execution_context->IsFeatureEnabled(
+          mojom::blink::DocumentPolicyFeature::kJSProfiling, report_options)) {
+    return JSProfilingMode::kEager;
+  }
+  return JSProfilingMode::kNone;
+}
+
+bool ProfilerGroup::CanProfile(ExecutionContext* execution_context,
                                ExceptionState* exception_state,
                                ReportOptions report_options) {
-  DCHECK(local_window);
-  if (!local_window->IsFeatureEnabled(
-          mojom::blink::DocumentPolicyFeature::kJSProfiling, report_options)) {
+  DCHECK(execution_context);
+
+  if (execution_context->IsDedicatedWorkerGlobalScope() &&
+      !RuntimeEnabledFeatures::DocumentPolicyInDedicatedWorkerEnabled()) {
     if (exception_state) {
       exception_state->ThrowDOMException(
-          DOMExceptionCode::kNotAllowedError,
-          "JS profiling is disabled by Document Policy.");
+          DOMExceptionCode::kNotSupportedError,
+          "Document Policy is not enabled for this context.");
     }
     return false;
   }
 
-  return true;
+  if (GetProfilingMode(execution_context, report_options) !=
+      JSProfilingMode::kNone) {
+    return true;
+  }
+
+  if (exception_state) {
+    exception_state->ThrowDOMException(
+        DOMExceptionCode::kNotAllowedError,
+        "JS profiling is disabled by Document Policy.");
+  }
+  return false;
 }
 
-void ProfilerGroup::InitializeIfEnabled(LocalDOMWindow* local_window) {
-  if (ProfilerGroup::CanProfile(local_window)) {
-    auto* profiler_group =
-        ProfilerGroup::From(V8PerIsolateData::MainThreadIsolate());
-    profiler_group->OnProfilingContextAdded(local_window);
+void ProfilerGroup::InitializeIfEnabled(ExecutionContext* execution_context) {
+  if (!CanProfile(execution_context)) {
+    return;
   }
+  JSProfilingMode mode = GetProfilingMode(execution_context);
+  CHECK_NE(mode, JSProfilingMode::kNone);
+  auto* profiler_group = ProfilerGroup::From(execution_context->GetIsolate());
+  profiler_group->OnProfilingContextAdded(execution_context, mode);
 }
 
 ProfilerGroup* ProfilerGroup::From(v8::Isolate* isolate) {
   auto* isolate_data = V8PerIsolateData::From(isolate);
   auto* profiler_group =
-      reinterpret_cast<ProfilerGroup*>(isolate_data->ProfilerGroup());
+      reinterpret_cast<ProfilerGroup*>(isolate_data->GetUserData(
+          V8PerIsolateData::UserData::Key::kProfileGroup));
   if (!profiler_group) {
     profiler_group = MakeGarbageCollected<ProfilerGroup>(isolate);
-    isolate_data->SetProfilerGroup(profiler_group);
+    isolate_data->SetUserData(V8PerIsolateData::UserData::Key::kProfileGroup,
+                              profiler_group);
   }
   return profiler_group;
 }
 
 base::TimeDelta ProfilerGroup::GetBaseSampleInterval() {
-  return base::TimeDelta::FromMilliseconds(kBaseSampleIntervalMs);
+  return base::Milliseconds(kBaseSampleIntervalMs);
 }
 
 ProfilerGroup::ProfilerGroup(v8::Isolate* isolate)
     : isolate_(isolate),
       cpu_profiler_(nullptr),
       next_profiler_id_(0),
-      num_active_profilers_(0) {
-}
+      num_active_profilers_(0) {}
 
 void DiscardedSamplesDelegate::Notify() {
   if (profiler_group_) {
@@ -119,7 +161,9 @@ void DiscardedSamplesDelegate::Notify() {
   }
 }
 
-void ProfilerGroup::OnProfilingContextAdded(ExecutionContext* context) {
+void ProfilerGroup::OnProfilingContextAdded(ExecutionContext* context,
+                                            JSProfilingMode mode) {
+  CHECK_NE(mode, JSProfilingMode::kNone);
   // Retain an observer for the context's lifetime. During which, keep the V8
   // profiler alive.
   auto* observer =
@@ -127,7 +171,14 @@ void ProfilerGroup::OnProfilingContextAdded(ExecutionContext* context) {
   context_observers_.insert(observer);
 
   if (!cpu_profiler_) {
-    InitV8Profiler();
+    if (mode == JSProfilingMode::kEager) {
+      InitV8Profiler(v8::kEagerLogging);
+    } else if (mode == JSProfilingMode::kLazy) {
+      // Initialize with kLazyLogging: the V8 profiler is created now but
+      // defers JIT event logging until StartProfiling() is called, avoiding
+      // the page-load overhead of eager JIT enumeration.
+      InitV8Profiler(v8::kLazyLogging);
+    }
     DCHECK(cpu_profiler_);
   }
 }
@@ -146,13 +197,11 @@ Profiler* ProfilerGroup::CreateProfiler(ScriptState* script_state,
                                         const ProfilerInitOptions& init_options,
                                         base::TimeTicks time_origin,
                                         ExceptionState& exception_state) {
-  DCHECK(RuntimeEnabledFeatures::ExperimentalJSProfilerEnabled(
-      ExecutionContext::From(script_state)));
   DCHECK_EQ(script_state->GetIsolate(), isolate_);
   DCHECK(init_options.hasSampleInterval());
 
   const base::TimeDelta sample_interval =
-      base::TimeDelta::FromMillisecondsD(init_options.sampleInterval());
+      base::Milliseconds(init_options.sampleInterval());
   const int64_t sample_interval_us = sample_interval.InMicroseconds();
 
   if (sample_interval_us < 0 ||
@@ -169,14 +218,12 @@ Profiler* ProfilerGroup::CreateProfiler(ScriptState* script_state,
 
   String profiler_id = NextProfilerId();
 
-  v8::CpuProfilingOptions options(
-      v8::kLeafNodeLineNumbers,
-      init_options.hasMaxBufferSize() ? init_options.maxBufferSize()
-                                      : v8::CpuProfilingOptions::kNoSampleLimit,
-      static_cast<int>(sample_interval_us), script_state->GetContext());
-
   v8::CpuProfilingStatus status = cpu_profiler_->StartProfiling(
-      V8String(isolate_, profiler_id), options,
+      V8String(isolate_, profiler_id),
+      v8::CpuProfilingOptions(
+          v8::kLeafNodeLineNumbers, init_options.maxBufferSize(),
+          static_cast<int>(sample_interval_us), script_state->GetContext(),
+          v8::CpuProfileSource::kSelfProfiling),
       std::make_unique<DiscardedSamplesDelegate>(this, profiler_id));
 
   switch (status) {
@@ -192,12 +239,6 @@ Profiler* ProfilerGroup::CreateProfiler(ScriptState* script_state,
       return nullptr;
     }
     case v8::CpuProfilingStatus::kStarted: {
-      // Limit non-crossorigin script frames to the origin that started the
-      // profiler.
-      auto* execution_context = ExecutionContext::From(script_state);
-      scoped_refptr<const SecurityOrigin> source_origin(
-          execution_context->GetSecurityOrigin());
-
       // The V8 CPU profiler ticks in multiples of the base sampling interval.
       // This effectively means that we gather samples at the multiple of the
       // base sampling interval that's greater than or equal to the requested
@@ -213,7 +254,7 @@ Profiler* ProfilerGroup::CreateProfiler(ScriptState* script_state,
 
       auto* profiler = MakeGarbageCollected<Profiler>(
           this, script_state, profiler_id, effective_sample_interval_ms,
-          source_origin, time_origin);
+          time_origin);
       profilers_.insert(profiler);
       num_active_profilers_++;
       return profiler;
@@ -227,7 +268,7 @@ ProfilerGroup::~ProfilerGroup() {
 }
 
 void ProfilerGroup::WillBeDestroyed() {
-  while (!profilers_.IsEmpty()) {
+  while (!profilers_.empty()) {
     Profiler* profiler = profilers_.begin()->Get();
     DCHECK(profiler);
     CancelProfiler(profiler);
@@ -236,14 +277,17 @@ void ProfilerGroup::WillBeDestroyed() {
     DCHECK(!profilers_.Contains(profiler));
   }
 
-  if (cpu_profiler_)
+  StopDetachedProfilers();
+
+  if (cpu_profiler_) {
     TeardownV8Profiler();
+  }
 }
 
 void ProfilerGroup::Trace(Visitor* visitor) const {
   visitor->Trace(profilers_);
   visitor->Trace(context_observers_);
-  V8PerIsolateData::GarbageCollectedData::Trace(visitor);
+  V8PerIsolateData::UserData::Trace(visitor);
 }
 
 void ProfilerGroup::OnProfilingContextDestroyed(
@@ -254,17 +298,17 @@ void ProfilerGroup::OnProfilingContextDestroyed(
   }
 }
 
-void ProfilerGroup::InitV8Profiler() {
+void ProfilerGroup::InitV8Profiler(v8::CpuProfilingLoggingMode logging_mode) {
   DCHECK(!cpu_profiler_);
   DCHECK_EQ(num_active_profilers_, 0);
 
   cpu_profiler_ =
-      v8::CpuProfiler::New(isolate_, v8::kStandardNaming, v8::kEagerLogging);
-#if defined(OS_WIN)
+      v8::CpuProfiler::New(isolate_, v8::kStandardNaming, logging_mode);
+#if BUILDFLAG(IS_WIN)
   // Avoid busy-waiting on Windows, clamping us to the system clock interrupt
   // interval in the worst case.
   cpu_profiler_->SetUsePreciseSampling(false);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
   cpu_profiler_->SetSamplingInterval(kBaseSampleIntervalMs *
                                      base::Time::kMicrosecondsPerMillisecond);
 }
@@ -277,21 +321,23 @@ void ProfilerGroup::TeardownV8Profiler() {
   cpu_profiler_ = nullptr;
 }
 
-void ProfilerGroup::StopProfiler(ScriptState* script_state,
-                                 Profiler* profiler,
-                                 ScriptPromiseResolver* resolver) {
+void ProfilerGroup::StopProfiler(
+    ScriptState* script_state,
+    Profiler* profiler,
+    ScriptPromiseResolver<ProfilerTrace>* resolver) {
   DCHECK(cpu_profiler_);
   DCHECK(!profiler->stopped());
 
   v8::Local<v8::String> profiler_id =
       V8String(isolate_, profiler->ProfilerId());
   auto* profile = cpu_profiler_->StopProfiling(profiler_id);
-  auto* trace = ProfilerTraceBuilder::FromProfile(
-      script_state, profile, profiler->SourceOrigin(), profiler->TimeOrigin());
+  auto* trace = ProfilerTraceBuilder::FromProfile(script_state, profile,
+                                                  profiler->TimeOrigin());
   resolver->Resolve(trace);
 
-  if (profile)
+  if (profile) {
     profile->Delete();
+  }
 
   profilers_.erase(profiler);
   --num_active_profilers_;
@@ -306,21 +352,52 @@ void ProfilerGroup::CancelProfiler(Profiler* profiler) {
 
 void ProfilerGroup::CancelProfilerAsync(ScriptState* script_state,
                                         Profiler* profiler) {
+  DCHECK(IsMainThread());
   DCHECK(cpu_profiler_);
   DCHECK(!profiler->stopped());
   profilers_.erase(profiler);
+
+  // register the profiler to be cleaned up in case its associated context
+  // gets destroyed before the cleanup task is executed.
+  detached_profiler_ids_.push_back(profiler->ProfilerId());
 
   // Since it's possible for the profiler to get destructed along with its
   // associated context, dispatch a task to cleanup context-independent isolate
   // resources (rather than use the context's task runner).
   ThreadScheduler::Current()->V8TaskRunner()->PostTask(
-      FROM_HERE, WTF::Bind(&ProfilerGroup::CancelProfilerImpl,
-                           WrapPersistent(this), profiler->ProfilerId()));
+      FROM_HERE, BindOnce(&ProfilerGroup::StopDetachedProfiler,
+                          WrapPersistent(this), profiler->ProfilerId()));
+}
+
+void ProfilerGroup::StopDetachedProfiler(String profiler_id) {
+  DCHECK(IsMainThread());
+
+  // we use a vector instead of a map because the expected number of profiler
+  // is expected to be very small
+  auto it = std::ranges::find(detached_profiler_ids_, profiler_id);
+
+  if (it == detached_profiler_ids_.end()) {
+    // Profiler already stopped
+    return;
+  }
+
+  CancelProfilerImpl(profiler_id);
+  detached_profiler_ids_.erase(it);
+}
+
+void ProfilerGroup::StopDetachedProfilers() {
+  DCHECK(IsMainThread());
+
+  for (auto& detached_profiler_id : detached_profiler_ids_) {
+    CancelProfilerImpl(detached_profiler_id);
+  }
+  detached_profiler_ids_.clear();
 }
 
 void ProfilerGroup::CancelProfilerImpl(String profiler_id) {
-  if (!cpu_profiler_)
+  if (!cpu_profiler_) {
     return;
+  }
 
   v8::HandleScope scope(isolate_);
   v8::Local<v8::String> v8_profiler_id = V8String(isolate_, profiler_id);
@@ -331,7 +408,7 @@ void ProfilerGroup::CancelProfilerImpl(String profiler_id) {
 }
 
 String ProfilerGroup::NextProfilerId() {
-  auto id = String::Format("blink::Profiler[%d]", next_profiler_id_);
+  auto id = Format("blink::Profiler[{}]", next_profiler_id_);
   ++next_profiler_id_;
   return id;
 }

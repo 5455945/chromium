@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 #define COMPONENTS_CAST_MESSAGE_PORT_CAST_CORE_MESSAGE_PORT_CORE_WITH_TASK_RUNNER_H_
 
 #include "base/memory/scoped_refptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/cast/message_port/cast_core/message_port_core.h"
 
 namespace cast_api_bindings {
 
-// MessagePortCore serving users of base::SequenedTaskRunnerHandle
+// MessagePortCore serving users of
+// base::SequencedTaskRunner::CurrentDefaultHandle
 class MessagePortCoreWithTaskRunner : public MessagePortCore {
  public:
   explicit MessagePortCoreWithTaskRunner(uint32_t channel_id);

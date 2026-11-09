@@ -1,12 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/messaging/channel_endpoint.h"
 
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/common/child_process_host.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/constants.h"
 
@@ -19,17 +20,15 @@ ChannelEndpoint::ChannelEndpoint(content::BrowserContext* browser_context,
       render_process_id_(render_process_id),
       port_context_(port_context) {
   // Context must be exclusive to render frame or worker.
-  DCHECK_NE(port_context.is_for_service_worker(),
-            port_context.is_for_render_frame());
+  DCHECK(port_context.is_for_service_worker() ^
+         port_context.is_for_render_frame());
 }
 
 // For native message endpoint.
 ChannelEndpoint::ChannelEndpoint(content::BrowserContext* browser_context)
     : browser_context_(browser_context),
-      render_process_id_(content::ChildProcessHost::kInvalidUniqueID) {
-  DCHECK(!port_context_.is_for_render_frame() &&
-         !port_context_.is_for_service_worker());
-}
+      render_process_id_(content::ChildProcessHost::kInvalidUniqueID),
+      port_context_(PortContext::ForNativeHost()) {}
 
 bool ChannelEndpoint::is_for_service_worker() const {
   return port_context_.is_for_service_worker();
@@ -52,7 +51,8 @@ content::RenderFrameHost* ChannelEndpoint::GetRenderFrameHost() const {
 
 WorkerId ChannelEndpoint::GetWorkerId() const {
   DCHECK(port_context_.is_for_service_worker());
-  return {port_context_.worker->extension_id, render_process_id_,
+  return {port_context_.worker->extension_id,
+          content::ChildProcessId::FromUnsafeValue(render_process_id_),
           port_context_.worker->version_id, port_context_.worker->thread_id};
 }
 
@@ -62,8 +62,9 @@ bool ChannelEndpoint::IsValid() const {
         ->HasServiceWorker(GetWorkerId());
   }
 
-  if (is_for_render_frame())
+  if (is_for_render_frame()) {
     return GetRenderFrameHost() != nullptr;
+  }
 
   DCHECK(is_for_native_host());
   return true;

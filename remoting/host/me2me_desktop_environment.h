@@ -1,13 +1,21 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_HOST_ME2ME_DESKTOP_ENVIRONMENT_H_
 #define REMOTING_HOST_ME2ME_DESKTOP_ENVIRONMENT_H_
 
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
+#include <memory>
+#include <string>
+
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "remoting/host/action_executor.h"
+#include "remoting/host/base/desktop_environment_options.h"
 #include "remoting/host/basic_desktop_environment.h"
+#include "remoting/host/desktop_environment.h"
+#include "remoting/host/desktop_interaction_strategy.h"
 
 namespace remoting {
 
@@ -19,6 +27,9 @@ class LocalInputMonitor;
 // notifications on Linux.
 class Me2MeDesktopEnvironment : public BasicDesktopEnvironment {
  public:
+  Me2MeDesktopEnvironment(const Me2MeDesktopEnvironment&) = delete;
+  Me2MeDesktopEnvironment& operator=(const Me2MeDesktopEnvironment&) = delete;
+
   ~Me2MeDesktopEnvironment() override;
 
   // DesktopEnvironment interface.
@@ -30,9 +41,8 @@ class Me2MeDesktopEnvironment : public BasicDesktopEnvironment {
   friend class Me2MeDesktopEnvironmentFactory;
   Me2MeDesktopEnvironment(
       scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+      std::unique_ptr<DesktopInteractionStrategy> interaction_strategy,
       base::WeakPtr<ClientSessionControl> client_session_control,
       const DesktopEnvironmentOptions& options);
 
@@ -51,8 +61,6 @@ class Me2MeDesktopEnvironment : public BasicDesktopEnvironment {
 
   // Notifies the client session about the local mouse movements.
   std::unique_ptr<LocalInputMonitor> local_input_monitor_;
-
-  DISALLOW_COPY_AND_ASSIGN(Me2MeDesktopEnvironment);
 };
 
 // Used to create |Me2MeDesktopEnvironment| instances.
@@ -60,18 +68,22 @@ class Me2MeDesktopEnvironmentFactory : public BasicDesktopEnvironmentFactory {
  public:
   Me2MeDesktopEnvironmentFactory(
       scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+      std::unique_ptr<DesktopInteractionStrategyFactory>
+          interaction_strategy_factory);
+
+  Me2MeDesktopEnvironmentFactory(const Me2MeDesktopEnvironmentFactory&) =
+      delete;
+  Me2MeDesktopEnvironmentFactory& operator=(
+      const Me2MeDesktopEnvironmentFactory&) = delete;
+
   ~Me2MeDesktopEnvironmentFactory() override;
 
   // DesktopEnvironmentFactory interface.
-  std::unique_ptr<DesktopEnvironment> Create(
-      base::WeakPtr<ClientSessionControl> client_session_control,
-      const DesktopEnvironmentOptions& options) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Me2MeDesktopEnvironmentFactory);
+  void Create(base::WeakPtr<ClientSessionControl> client_session_control,
+              base::WeakPtr<ClientSessionEvents> client_session_events,
+              const DesktopEnvironmentOptions& options,
+              CreateCallback callback) override;
 };
 
 }  // namespace remoting

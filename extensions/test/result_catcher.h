@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "extensions/browser/api/test/test_api_observer.h"
+#include "extensions/browser/api/test/test_api_observer_registry.h"
 
 namespace content {
 class BrowserContext;
@@ -24,28 +25,28 @@ namespace extensions {
 // GetNextResult() and message() if GetNextResult() return false. If there
 // are no results, this method will pump the UI message loop until one is
 // received.
-class ResultCatcher : public content::NotificationObserver {
+class ResultCatcher : public TestApiObserver {
  public:
   ResultCatcher();
   ~ResultCatcher() override;
 
   // Pumps the UI loop until a notification is received that an API test
   // succeeded or failed. Returns true if the test succeeded, false otherwise.
-  bool GetNextResult() WARN_UNUSED_RESULT;
+  [[nodiscard]] bool GetNextResult();
 
   void RestrictToBrowserContext(content::BrowserContext* context) {
     browser_context_restriction_ = context;
   }
 
-  const std::string& message() { return message_; }
+  const std::string& message() const { return message_; }
 
  private:
-  // content::NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // TestApiObserver:
+  void OnTestPassed(content::BrowserContext* browser_context) override;
+  void OnTestFailed(content::BrowserContext* browser_context,
+                    const std::string& message) override;
 
-  content::NotificationRegistrar registrar_;
+  bool IsRelevantBrowserContext(content::BrowserContext* browser_context) const;
 
   // A sequential list of pass/fail notifications from the test extension(s).
   base::circular_deque<bool> results_;
@@ -55,11 +56,14 @@ class ResultCatcher : public content::NotificationObserver {
   std::string message_;
 
   // If non-NULL, we will listen to events from this BrowserContext only.
-  content::BrowserContext* browser_context_restriction_;
+  raw_ptr<content::BrowserContext> browser_context_restriction_ = nullptr;
 
   // Only set if we're in a nested run loop waiting for results from
   // the extension.
   base::OnceClosure quit_closure_;
+
+  base::ScopedObservation<TestApiObserverRegistry, TestApiObserver>
+      test_api_observation_{this};
 };
 
 }  // namespace extensions

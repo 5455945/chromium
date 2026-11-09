@@ -23,14 +23,19 @@
 
 #include "third_party/blink/renderer/core/events/wheel_event.h"
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_wheel_event_init.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
 #include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/frame/intervention.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/widget/frame_widget.h"
+#include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
 
@@ -47,25 +52,20 @@ unsigned ConvertDeltaMode(const WebMouseWheelEvent& event) {
 }
 
 MouseEventInit* GetMouseEventInitForWheel(const WebMouseWheelEvent& event,
-                                          AbstractView* view) {
+                                          LocalDOMWindow& window) {
   MouseEventInit* initializer = MouseEventInit::Create();
   initializer->setBubbles(true);
   initializer->setCancelable(event.IsCancelable());
-  auto* local_dom_window = DynamicTo<LocalDOMWindow>(view);
-  MouseEvent::SetCoordinatesFromWebPointerProperties(
-      event.FlattenTransform(), local_dom_window, initializer);
+  MouseEvent::SetCoordinatesFromWebPointerProperties(event.FlattenTransform(),
+                                                     &window, initializer);
   initializer->setButton(static_cast<int16_t>(event.button));
   initializer->setButtons(
       MouseEvent::WebInputEventModifiersToButtons(event.GetModifiers()));
-  initializer->setView(view);
+  initializer->setView(&window);
   initializer->setComposed(true);
   initializer->setDetail(event.click_count);
   UIEventWithKeyState::SetFromWebInputEventModifiers(
       initializer, static_cast<WebInputEvent::Modifiers>(event.GetModifiers()));
-
-  // TODO(zino): Should support canvas hit region because the
-  // wheel event is a kind of mouse event. Please see
-  // http://crbug.com/594075
 
   return initializer;
 }
@@ -73,14 +73,8 @@ MouseEventInit* GetMouseEventInitForWheel(const WebMouseWheelEvent& event,
 }  // namespace
 
 WheelEvent* WheelEvent::Create(const WebMouseWheelEvent& event,
-                               AbstractView* view) {
-  return MakeGarbageCollected<WheelEvent>(event, view);
-}
-
-WheelEvent* WheelEvent::Create(const WebMouseWheelEvent& event,
-                               const gfx::Vector2dF& delta_in_pixels,
-                               AbstractView* view) {
-  return MakeGarbageCollected<WheelEvent>(event, delta_in_pixels, view);
+                               LocalDOMWindow& window) {
+  return MakeGarbageCollected<WheelEvent>(event, window);
 }
 
 WheelEvent::WheelEvent()
@@ -92,35 +86,52 @@ WheelEvent::WheelEvent(const AtomicString& type,
     : MouseEvent(type, initializer),
       wheel_delta_(
           initializer->wheelDeltaX() ? initializer->wheelDeltaX()
-                                     : clampTo<int32_t>(initializer->deltaX()),
+                                     : ClampTo<int32_t>(initializer->deltaX()),
           initializer->wheelDeltaY() ? initializer->wheelDeltaY()
-                                     : clampTo<int32_t>(initializer->deltaY())),
+                                     : ClampTo<int32_t>(initializer->deltaY())),
       delta_x_(initializer->deltaX() ? initializer->deltaX()
-                                     : clampTo<int32_t>(-static_cast<double>(
+                                     : ClampTo<int32_t>(-static_cast<double>(
                                            initializer->wheelDeltaX()))),
       delta_y_(initializer->deltaY() ? initializer->deltaY()
-                                     : clampTo<int32_t>(-static_cast<double>(
+                                     : ClampTo<int32_t>(-static_cast<double>(
                                            initializer->wheelDeltaY()))),
       delta_z_(initializer->deltaZ()),
-      delta_mode_(initializer->deltaMode()) {}
+      delta_mode_(initializer->deltaMode()),
+      is_momentum_(initializer->momentum()) {}
 
-WheelEvent::WheelEvent(const WebMouseWheelEvent& event, AbstractView* view)
+WheelEvent::WheelEvent(const WebMouseWheelEvent& event, LocalDOMWindow& window)
     : MouseEvent(event_type_names::kWheel,
-                 GetMouseEventInitForWheel(event, view),
+                 GetMouseEventInitForWheel(event, window),
                  event.TimeStamp()),
-      wheel_delta_(event.wheel_ticks_x * kTickMultiplier,
-                   event.wheel_ticks_y * kTickMultiplier),
-      delta_x_(-event.DeltaXInRootFrame()),
-      delta_y_(-event.DeltaYInRootFrame()),
+      wheel_delta_(
+          (event.wheel_ticks_x * kTickMultiplier) / window.devicePixelRatio(),
+          (event.wheel_ticks_y * kTickMultiplier) / window.devicePixelRatio()),
+      delta_x_(-event.DeltaXInRootFrame() / window.devicePixelRatio()),
+      delta_y_(-event.DeltaYInRootFrame() / window.devicePixelRatio()),
       delta_z_(0),
       delta_mode_(ConvertDeltaMode(event)),
-      native_event_(event) {}
+      native_event_(event),
+      is_momentum_(event.momentum_phase != WebMouseWheelEvent::kPhaseNone) {
+  if (RuntimeEnabledFeatures::WheelEventDeltaExternalPageScaleEnabled() &&
+      delta_mode_ == kDomDeltaPixel && window.GetFrame()) {
+    if (auto* widget = window.GetFrame()->GetWidgetForLocalRoot()) {
+      // Child widgets receive ancestor pinch zoom as an external scale. Their
+      // input-event transform removes only the local visual viewport scale.
+      // Normalize DOM pixel deltas while retaining the original native event
+      // for plugins and the original browser-side deltas used for scrolling.
+      const float external_scale = widget->GetExternalPageScaleFactor();
+      DCHECK_GT(external_scale, 0.0f);
+      delta_x_ /= external_scale;
+      delta_y_ /= external_scale;
+    }
+  }
+}
 
 WheelEvent::WheelEvent(const WebMouseWheelEvent& event,
                        const gfx::Vector2dF& delta_in_pixels,
-                       AbstractView* view)
+                       LocalDOMWindow& window)
     : MouseEvent(event_type_names::kWheel,
-                 GetMouseEventInitForWheel(event, view),
+                 GetMouseEventInitForWheel(event, window),
                  event.TimeStamp()),
       wheel_delta_(event.wheel_ticks_x * kTickMultiplier,
                    event.wheel_ticks_y * kTickMultiplier),
@@ -128,7 +139,8 @@ WheelEvent::WheelEvent(const WebMouseWheelEvent& event,
       delta_y_(delta_in_pixels.y()),
       delta_z_(0),
       delta_mode_(WheelEvent::kDomDeltaPixel),
-      native_event_(event) {}
+      native_event_(event),
+      is_momentum_(event.momentum_phase != WebMouseWheelEvent::kPhaseNone) {}
 
 const AtomicString& WheelEvent::InterfaceName() const {
   return event_interface_names::kWheelEvent;
@@ -145,13 +157,19 @@ bool WheelEvent::IsWheelEvent() const {
 void WheelEvent::preventDefault() {
   MouseEvent::preventDefault();
 
+  if (!IsFullyTrusted()) {
+    // The messages below should only be sent for implementation-created
+    // events, not for script-created ones.
+    return;
+  }
+
   PassiveMode passive_mode = HandlingPassive();
   if (passive_mode == PassiveMode::kPassiveForcedDocumentLevel) {
     String id = "PreventDefaultPassive";
     String message =
         "Unable to preventDefault inside passive event listener due to "
         "target being treated as passive. See "
-        "https://www.chromestatus.com/features/6662647093133312";
+        "https://www.chromestatus.com/feature/6662647093133312";
     auto* local_dom_window = DynamicTo<LocalDOMWindow>(view());
     if (local_dom_window && local_dom_window->GetFrame()) {
       Intervention::GenerateReport(local_dom_window->GetFrame(), id, message);

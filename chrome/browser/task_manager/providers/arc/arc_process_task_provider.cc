@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/process/process.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/ash/arc/process/arc_process_service.h"
-#include "components/arc/mojom/process.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/process.mojom.h"
+#include "chromeos/ash/experiences/arc/process/arc_process_service.h"
 
 namespace task_manager {
 
@@ -57,7 +57,7 @@ void ArcProcessTaskProvider::UpdateProcessList(
       // After calling NotifyObserverTaskAdded(), the raw pointer of |task| is
       // remebered somewhere else. One should not (implicitly) delete the
       // referenced object before calling NotifyObserverTaskRemoved() first
-      // (crbug.com/587707).
+      // (crbug.com/41239957).
       DCHECK(!task.get()) <<
           "Task with the same pid should not be added twice.";
       task = std::make_unique<ArcProcessTask>(std::move(entry));
@@ -65,7 +65,7 @@ void ArcProcessTaskProvider::UpdateProcessList(
     } else {
       // Update process state of existing process.
       std::unique_ptr<ArcProcessTask>& task = (*pid_to_task)[entry.nspid()];
-      DCHECK(task.get());
+      CHECK(task.get(), base::NotFatalUntil::M162);
       task->SetProcessState(entry.process_state());
     }
   }
@@ -145,7 +145,7 @@ void ArcProcessTaskProvider::ScheduleNextRequest(base::OnceClosure task) {
   // TODO(nya): Remove this timer once ARC starts to send us UpdateProcessList
   // message when the process list changed. As of today, ARC does not send
   // the process list unless we request it by RequestAppProcessList message.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, std::move(task),
       arc::ArcProcessService::kProcessSnapshotRefreshTime);
 }

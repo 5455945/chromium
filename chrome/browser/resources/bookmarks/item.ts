@@ -1,39 +1,37 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
-import 'chrome://resources/cr_elements/cr_icons_css.m.js';
-import 'chrome://resources/cr_elements/shared_vars_css.m.js';
-import './shared_style.js';
-import './strings.m.js';
+import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import '/strings.m.js';
 
-import {CrIconButtonElement} from 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
-import {assert} from 'chrome://resources/js/assert.m.js';
-import {isMac} from 'chrome://resources/js/cr.m.js';
-import {focusWithoutInk} from 'chrome://resources/js/cr/ui/focus_without_ink.m.js';
-import {StoreObserver} from 'chrome://resources/js/cr/ui/store.m.js';
-import {getFaviconForPageURL} from 'chrome://resources/js/icon.m.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-import {html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {CrIconButtonElement} from 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
+import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {isMac} from 'chrome://resources/js/platform.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {selectItem} from './actions.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 import {BookmarksCommandManagerElement} from './command_manager.js';
 import {Command, MenuSource} from './constants.js';
-import {BookmarksStoreClientInterface, StoreClient} from './store_client.js';
-import {BookmarkNode, BookmarksPageState} from './types.js';
+import {getCss} from './item.css.js';
+import {getHtml} from './item.html.js';
+import {StoreClientMixinLit} from './store_client_mixin_lit.js';
+import type {BookmarkNode, BookmarksPageState} from './types.js';
 
 const BookmarksItemElementBase =
-    mixinBehaviors(StoreClient, PolymerElement) as {
-  new (): PolymerElement & BookmarksStoreClientInterface &
-      StoreObserver<BookmarksPageState>
-}
+    WebUiListenerMixinLit(StoreClientMixinLit(CrLitElement));
 
 export interface BookmarksItemElement {
   $: {
-    icon: HTMLDivElement,
+    icon: HTMLElement,
     menuButton: CrIconButtonElement,
-  }
+  };
 }
 
 export class BookmarksItemElement extends BookmarksItemElementBase {
@@ -41,74 +39,100 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
     return 'bookmarks-item';
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      itemId: {
-        type: String,
-        observer: 'onItemIdChanged_',
-      },
-      ironListTabIndex: Number,
-      item_: {
-        type: Object,
-        observer: 'onItemChanged_',
-      },
+      itemId: {type: String},
+      ironListTabIndex: {type: Number},
+      item_: {type: Object},
       isSelectedItem_: {
         type: Boolean,
-        reflectToAttribute: true,
+        reflect: true,
       },
-      isMultiSelect_: Boolean,
-      isFolder_: Boolean,
-      lastTouchPoints_: Number,
+      isMultiSelect_: {type: Boolean},
+      isFolder_: {type: Boolean},
+      lastTouchPoints_: {type: Number},
+      canUploadAsAccountBookmark_: {type: Boolean},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
-  itemId: string;
-  private item_: BookmarkNode;
-  private isSelectedItem_: boolean;
-  private isMultiSelect_: boolean;
-  private isFolder_: boolean;
-  private lastTouchPoints_: number;
+  accessor itemId: string = '';
+  accessor ironListTabIndex: number|undefined;
+  protected accessor item_: BookmarkNode|undefined;
+  private accessor isSelectedItem_: boolean = false;
+  private accessor isMultiSelect_: boolean = false;
+  private accessor isFolder_: boolean = false;
+  private accessor lastTouchPoints_: number = -1;
+  // This is always false if `SyncEnableBookmarksInTransportMode` is disabled.
+  protected accessor canUploadAsAccountBookmark_: boolean = false;
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
-  static get observers() {
-    return [
-      'updateFavicon_(item_.url)',
-    ];
-  }
-
-  ready() {
-    super.ready();
-
-    this.addEventListener('click', e => this.onClick_(e as MouseEvent));
-    this.addEventListener('dblclick', e => this.onDblClick_(e as MouseEvent));
-    this.addEventListener('contextmenu', e => this.onContextMenu_(e));
-    this.addEventListener('keydown', e => this.onKeydown_(e as KeyboardEvent));
-    this.addEventListener(
-        'auxclick', e => this.onMiddleClick_(e as MouseEvent));
-    this.addEventListener(
-        'mousedown', e => this.cancelMiddleMouseBehavior_(e as MouseEvent));
-    this.addEventListener(
-        'mouseup', e => this.cancelMiddleMouseBehavior_(e as MouseEvent));
-    this.addEventListener(
-        'touchstart', e => this.onTouchStart_(e as TouchEvent));
-  }
-
-  connectedCallback() {
+  override connectedCallback() {
     super.connectedCallback();
-    this.watch('item_', state => {
-      return (state as BookmarksPageState).nodes[this.itemId];
-    });
-    this.watch('isSelectedItem_', state => {
-      return (state as BookmarksPageState).selection.items.has(this.itemId);
-    });
-    this.watch('isMultiSelect_', state => {
-      return (state as BookmarksPageState).selection.items.size > 1;
-    });
-
     this.updateFromStore();
+
+    this.addWebUiListener(
+        'bookmarks-sync-state-changed',
+        this.updateCanUploadAsAccountBookmark_.bind(this));
+  }
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    if (changedProperties.has('itemId') && this.itemId !== '') {
+      this.updateFromStore();
+    }
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('item_')) {
+      this.isFolder_ = !!this.item_ && !this.item_.url;
+      this.ariaLabel = this.item_?.title || this.item_?.url ||
+          loadTimeData.getString('folderLabel');
+      this.updateCanUploadAsAccountBookmark_();
+    }
+  }
+
+  override firstUpdated(changedProperties: PropertyValues<this>) {
+    super.firstUpdated(changedProperties);
+    this.addEventListener('click', e => this.onClick_(e));
+    this.addEventListener('dblclick', e => this.onDblClick_(e));
+    this.addEventListener('contextmenu', e => this.onContextMenu_(e));
+    this.addEventListener('keydown', e => this.onKeydown_(e));
+    this.addEventListener('auxclick', e => this.onMiddleClick_(e));
+    this.addEventListener('mousedown', e => this.cancelMiddleMouseBehavior_(e));
+    this.addEventListener('mouseup', e => this.cancelMiddleMouseBehavior_(e));
+    this.addEventListener('touchstart', e => this.onTouchStart_(e));
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('item_')) {
+      this.updateFavicon_(this.item_?.url);
+    }
+  }
+
+  override onStateChanged(state: BookmarksPageState) {
+    this.item_ = state.nodes[this.itemId];
+    this.isSelectedItem_ = state.selection.items.has(this.itemId);
+    this.isMultiSelect_ = state.selection.items.size > 1;
+  }
+
+
+  setIsSelectedItemForTesting(selected: boolean) {
+    this.isSelectedItem_ = selected;
   }
 
   focusMenuButton() {
@@ -126,7 +150,7 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
     // Prevent context menu from appearing after a drag, but allow opening the
     // context menu through 2 taps
     const capabilities = (e as unknown as {
-                           sourceCapabilities: {firesTouchEvents?: boolean}
+                           sourceCapabilities: {firesTouchEvents?: boolean},
                          }).sourceCapabilities;
     if (capabilities && capabilities.firesTouchEvents &&
         this.lastTouchPoints_ !== 2) {
@@ -138,19 +162,15 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
       this.selectThisItem_();
     }
 
-    this.dispatchEvent(new CustomEvent('open-command-menu', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        x: e.clientX,
-        y: e.clientY,
-        source: MenuSource.ITEM,
-        targetId: this.itemId,
-      }
-    }));
+    this.fire('open-command-menu', {
+      x: e.clientX,
+      y: e.clientY,
+      source: MenuSource.ITEM,
+      targetId: this.itemId,
+    });
   }
 
-  private onMenuButtonClick_(e: Event) {
+  protected onMenuButtonClick_(e: Event) {
     e.stopPropagation();
     e.preventDefault();
 
@@ -159,15 +179,23 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
       this.selectThisItem_();
     }
 
-    this.dispatchEvent(new CustomEvent('open-command-menu', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        targetElement: e.target,
-        source: MenuSource.ITEM,
-        targetId: this.itemId,
-      }
-    }));
+    this.fire('open-command-menu', {
+      targetElement: e.target,
+      source: MenuSource.ITEM,
+      targetId: this.itemId,
+    });
+  }
+
+  protected onUploadButtonClick_() {
+    // Skip selecting the item if this item is part of a multi-selected group.
+    if (!this.isMultiSelectMenu_()) {
+      this.selectThisItem_();
+    }
+
+    // The handler identifies bookmarks by their legacy numeric id.
+    assert(this.item_?.legacyId !== undefined);
+    BrowserProxyImpl.getInstance().onSingleBookmarkUploadClicked(
+        this.item_.legacyId.toString());
   }
 
   private selectThisItem_() {
@@ -178,19 +206,12 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
     }));
   }
 
-  private onItemIdChanged_() {
-    // TODO(tsergeant): Add a histogram to measure whether this assertion fails
-    // for real users.
-    assert(this.getState().nodes[this.itemId]);
-    this.updateFromStore();
+  protected getItemUrl_(): string {
+    return this.item_?.url || '';
   }
 
-  private onItemChanged_() {
-    this.isFolder_ = !this.item_.url;
-    this.setAttribute(
-        'aria-label',
-        this.item_.title || this.item_.url ||
-            loadTimeData.getString('folderLabel'));
+  protected getItemTitle_(): string {
+    return this.item_?.title || '';
   }
 
   private onClick_(e: MouseEvent) {
@@ -209,11 +230,13 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
   }
 
   private onKeydown_(e: KeyboardEvent) {
+    const cursorModifier = isMac ? e.metaKey : e.ctrlKey;
     if (e.key === 'ArrowLeft') {
       this.focus();
     } else if (e.key === 'ArrowRight') {
       this.$.menuButton.focus();
-    } else if (e.key === ' ') {
+    } else if (e.key === ' ' && !cursorModifier) {
+      // Spacebar with the modifier is handled by the list.
       this.dispatch(selectItem(this.itemId, this.getState(), {
         clear: false,
         range: false,
@@ -222,7 +245,7 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
     }
   }
 
-  private onDblClick_(e: MouseEvent) {
+  private onDblClick_(_e: MouseEvent) {
     if (!this.isSelectedItem_) {
       this.selectThisItem_();
     }
@@ -266,13 +289,14 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
     }
   }
 
-  private updateFavicon_(url: string) {
-    this.$.icon.className = url ? 'website-icon' : 'folder-icon';
+  private updateFavicon_(url?: string) {
+    this.$.icon.className =
+        url ? 'website-icon' : 'folder-icon icon-folder-open';
     this.$.icon.style.backgroundImage =
         url ? getFaviconForPageURL(url, false) : '';
   }
 
-  private getButtonAriaLabel_(): string {
+  protected getButtonAriaLabel_(): string {
     if (!this.item_) {
       return '';  // Item hasn't loaded, skip for now.
     }
@@ -290,6 +314,25 @@ export class BookmarksItemElement extends BookmarksItemElementBase {
    */
   private isMultiSelectMenu_(): boolean {
     return this.isSelectedItem_ && this.isMultiSelect_;
+  }
+
+  private updateCanUploadAsAccountBookmark_() {
+    // The handler identifies bookmarks by their legacy numeric id.
+    if (this.item_?.legacyId === undefined) {
+      this.canUploadAsAccountBookmark_ = false;
+      return;
+    }
+    BrowserProxyImpl.getInstance()
+        .getCanUploadBookmarkToAccountStorage(this.item_.legacyId.toString())
+        .then((canUpload) => {
+          this.canUploadAsAccountBookmark_ = canUpload;
+        });
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'bookmarks-item': BookmarksItemElement;
   }
 }
 

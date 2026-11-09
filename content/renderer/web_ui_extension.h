@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,10 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "content/public/common/bindings_policy.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-function.h"
+#include "v8/include/v8-object.h"
 
 namespace blink {
 class WebLocalFrame;
@@ -21,13 +24,19 @@ namespace content {
 
 class WebUIExtension {
  public:
-  static void Install(blink::WebLocalFrame* frame);
+  WebUIExtension() = delete;
+  WebUIExtension(const WebUIExtension&) = delete;
+  WebUIExtension& operator=(const WebUIExtension&) = delete;
+
+  static void Install(blink::WebLocalFrame* frame, BindingsPolicySet bindings);
 
  private:
+  static void InstallDefaultWebUIExtension(v8::Isolate* isolate,
+                                           v8::Local<v8::Context> context,
+                                           v8::Local<v8::Object> chrome);
   static void Send(gin::Arguments* args);
   static std::string GetVariableValue(const std::string& name);
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(WebUIExtension);
+  static v8::Local<v8::Value> RequestPresentationTime(gin::Arguments* args);
 };
 
 }  // namespace content

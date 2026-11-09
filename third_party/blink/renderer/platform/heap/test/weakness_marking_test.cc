@@ -1,8 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/test/gtest_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/heap_test_objects.h"
 #include "third_party/blink/renderer/platform/heap/heap_test_utilities.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
@@ -47,7 +51,8 @@ void TestMapImpl(ObjectLiveness expected_key_liveness,
 }
 
 TEST_F(WeaknessMarkingTest, WeakToWeakMap) {
-  using Map = HeapHashMap<WeakMember<IntegerObject>, WeakMember<IntegerObject>>;
+  using Map =
+      GCedHeapHashMap<WeakMember<IntegerObject>, WeakMember<IntegerObject>>;
   TestMapImpl<Map, Persistent, Persistent>(ObjectLiveness::Alive,
                                            ObjectLiveness::Alive);
   TestMapImpl<Map, WeakPersistent, Persistent>(ObjectLiveness::Dead,
@@ -59,7 +64,7 @@ TEST_F(WeaknessMarkingTest, WeakToWeakMap) {
 }
 
 TEST_F(WeaknessMarkingTest, WeakToStrongMap) {
-  using Map = HeapHashMap<WeakMember<IntegerObject>, Member<IntegerObject>>;
+  using Map = GCedHeapHashMap<WeakMember<IntegerObject>, Member<IntegerObject>>;
   TestMapImpl<Map, Persistent, Persistent>(ObjectLiveness::Alive,
                                            ObjectLiveness::Alive);
   TestMapImpl<Map, WeakPersistent, Persistent>(ObjectLiveness::Dead,
@@ -71,7 +76,7 @@ TEST_F(WeaknessMarkingTest, WeakToStrongMap) {
 }
 
 TEST_F(WeaknessMarkingTest, StrongToWeakMap) {
-  using Map = HeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
+  using Map = GCedHeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
   TestMapImpl<Map, Persistent, Persistent>(ObjectLiveness::Alive,
                                            ObjectLiveness::Alive);
   TestMapImpl<Map, WeakPersistent, Persistent>(ObjectLiveness::Alive,
@@ -83,7 +88,7 @@ TEST_F(WeaknessMarkingTest, StrongToWeakMap) {
 }
 
 TEST_F(WeaknessMarkingTest, StrongToStrongMap) {
-  using Map = HeapHashMap<Member<IntegerObject>, Member<IntegerObject>>;
+  using Map = GCedHeapHashMap<Member<IntegerObject>, Member<IntegerObject>>;
   TestMapImpl<Map, Persistent, Persistent>(ObjectLiveness::Alive,
                                            ObjectLiveness::Alive);
   TestMapImpl<Map, WeakPersistent, Persistent>(ObjectLiveness::Alive,
@@ -109,19 +114,19 @@ void TestSetImpl(ObjectLiveness object_liveness) {
 }
 
 TEST_F(WeaknessMarkingTest, WeakSet) {
-  using Set = HeapHashSet<WeakMember<IntegerObject>>;
+  using Set = GCedHeapHashSet<WeakMember<IntegerObject>>;
   TestSetImpl<Set, Persistent>(ObjectLiveness::Alive);
   TestSetImpl<Set, WeakPersistent>(ObjectLiveness::Dead);
 }
 
 TEST_F(WeaknessMarkingTest, StrongSet) {
-  using Set = HeapHashSet<Member<IntegerObject>>;
+  using Set = GCedHeapHashSet<Member<IntegerObject>>;
   TestSetImpl<Set, Persistent>(ObjectLiveness::Alive);
   TestSetImpl<Set, WeakPersistent>(ObjectLiveness::Alive);
 }
 
 TEST_F(WeaknessMarkingTest, DeadValueInReverseEphemeron) {
-  using Map = HeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
+  using Map = GCedHeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
   Persistent<Map> map = MakeGarbageCollected<Map>();
   Persistent<IntegerObject> key = MakeGarbageCollected<IntegerObject>(1);
   map->insert(key.Get(), MakeGarbageCollected<IntegerObject>(2));
@@ -132,7 +137,7 @@ TEST_F(WeaknessMarkingTest, DeadValueInReverseEphemeron) {
 }
 
 TEST_F(WeaknessMarkingTest, NullValueInReverseEphemeron) {
-  using Map = HeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
+  using Map = GCedHeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
   Persistent<Map> map = MakeGarbageCollected<Map>();
   Persistent<IntegerObject> key = MakeGarbageCollected<IntegerObject>(1);
   map->insert(key.Get(), nullptr);
@@ -150,7 +155,7 @@ TEST_F(WeaknessMarkingTest, SwapIntoAlreadyProcessedWeakSet) {
   // Test ensures that an empty weak set that has already been marked sets up
   // weakness callbacks. This is important as another backing may be swapped in
   // at some point after marking it initially.
-  using WeakLinkedSet = HeapLinkedHashSet<WeakMember<IntegerObject>>;
+  using WeakLinkedSet = GCedHeapLinkedHashSet<WeakMember<IntegerObject>>;
   Persistent<WeakLinkedSet> holder3(MakeGarbageCollected<WeakLinkedSet>());
   Persistent<WeakLinkedSet> holder4(MakeGarbageCollected<WeakLinkedSet>());
   holder3->insert(MakeGarbageCollected<IntegerObject>(1));
@@ -164,7 +169,7 @@ TEST_F(WeaknessMarkingTest, SwapIntoAlreadyProcessedWeakSet) {
 TEST_F(WeaknessMarkingTest, EmptyEphemeronCollection) {
   // Tests that an empty ephemeron collection does not crash in the GC when
   // processing a non-existent backing store.
-  using Map = HeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
+  using Map = GCedHeapHashMap<Member<IntegerObject>, WeakMember<IntegerObject>>;
   Persistent<Map> map = MakeGarbageCollected<Map>();
   TestSupportingGC::PreciselyCollectGarbage();
 }
@@ -176,7 +181,7 @@ TEST_F(WeaknessMarkingTest, ClearWeakHashTableAfterMarking) {
   // left behind after marking. The test creates a backing that is floating
   // garbage. The marking verifier ensures that all buckets are properly
   // deleted.
-  using Set = HeapHashSet<WeakMember<IntegerObject>>;
+  using Set = GCedHeapHashSet<WeakMember<IntegerObject>>;
   Persistent<Set> holder(MakeGarbageCollected<Set>());
   holder->insert(MakeGarbageCollected<IntegerObject>(1));
   IncrementalMarkingTestDriver driver(ThreadState::Current());
@@ -200,6 +205,68 @@ TEST_F(WeaknessMarkingTest, StrongifyBackingOnStack) {
   EXPECT_EQ(1u, strong_set_on_stack.size());
   EXPECT_EQ(1, weak_set_on_stack.begin()->Get()->Value());
   EXPECT_EQ(1, strong_set_on_stack.begin()->Get()->Value());
+}
+
+TEST_F(WeaknessMarkingTest, StrongifyAlreadyMarkedOnBackingDuringIteration) {
+  using WeakSet = GCedHeapHashSet<WeakMember<IntegerObject>>;
+  static constexpr size_t kNumberOfWeakEntries = 1000;
+
+  Persistent<WeakSet> weak_set = MakeGarbageCollected<WeakSet>();
+  for (size_t i = 0; i < kNumberOfWeakEntries; i++) {
+    weak_set->insert(MakeGarbageCollected<IntegerObject>(static_cast<int>(i)));
+  }
+  CHECK_EQ(weak_set->size(), kNumberOfWeakEntries);
+  IncrementalMarkingTestDriver driver(ThreadState::Current());
+  driver.StartGC();
+  driver.TriggerMarkingSteps();
+  bool trigger_gc = true;
+  for (auto& it : *weak_set.Get()) {
+    if (trigger_gc) {
+      TestSupportingGC::ConservativelyCollectGarbage();
+      trigger_gc = false;
+      (void)it;
+    }
+  }
+  CHECK_EQ(weak_set->size(), kNumberOfWeakEntries);
+}
+
+TEST_F(WeaknessMarkingTest, StrongLinkedHashSetIteratorAcrossRehashAndGC) {
+  using StrongSet = GCedHeapLinkedHashSet<Member<IntegerObject>>;
+  Persistent<StrongSet> set = MakeGarbageCollected<StrongSet>();
+  Persistent<IntegerObject> first = MakeGarbageCollected<IntegerObject>(1);
+  set->insert(first.Get());
+  set->insert(MakeGarbageCollected<IntegerObject>(2));
+
+  size_t visited = 0;
+  for (auto it = set->begin(); it != set->end();) {
+    EXPECT_NE(it->Get(), nullptr);
+    if (visited == 0) {
+      // Trigger rehash of the underlying LinkedHashSet::value_to_index_ map.
+      for (int j = 10; j < 40; ++j) {
+        set->insert(MakeGarbageCollected<IntegerObject>(j));
+      }
+    }
+    ++it;
+    TestSupportingGC::ConservativelyCollectGarbage();
+    ++visited;
+  }
+  EXPECT_EQ(visited, 32u);
+}
+
+TEST_F(WeaknessMarkingTest, WeakLinkedHashSetModificationDuringIteration) {
+  using WeakSet = GCedHeapLinkedHashSet<WeakMember<IntegerObject>>;
+  Persistent<WeakSet> set = MakeGarbageCollected<WeakSet>();
+  Persistent<IntegerObject> first = MakeGarbageCollected<IntegerObject>(1);
+  Persistent<IntegerObject> second = MakeGarbageCollected<IntegerObject>(2);
+  set->insert(first.Get());
+  set->insert(second.Get());
+
+  auto it = set->begin();
+  EXPECT_EQ(it->Get(), first.Get());
+  set->insert(MakeGarbageCollected<IntegerObject>(3));
+  EXPECT_DCHECK_DEATH(++it);
+  EXPECT_DCHECK_DEATH(*it);
+  EXPECT_DCHECK_DEATH(it->Get());
 }
 
 }  // namespace weakness_marking_test

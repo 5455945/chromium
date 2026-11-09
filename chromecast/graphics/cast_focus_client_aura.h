@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -25,6 +25,10 @@ class CastFocusClientAura : public aura::WindowObserver,
                             public wm::ActivationClient {
  public:
   CastFocusClientAura();
+
+  CastFocusClientAura(const CastFocusClientAura&) = delete;
+  CastFocusClientAura& operator=(const CastFocusClientAura&) = delete;
+
   ~CastFocusClientAura() override;
 
   // aura::client::FocusClient implementation:
@@ -64,18 +68,15 @@ class CastFocusClientAura : public aura::WindowObserver,
   }
   const aura::Window* GetZOrderWindow(const aura::Window* window) const;
 
-  base::ObserverList<aura::client::FocusChangeObserver>::Unchecked
-      focus_observers_;
+  base::ObserverList<aura::client::FocusChangeObserver> focus_observers_;
 
   // Track the currently focused window, which isn't necessarily a top-level
   // window.
-  aura::Window* focused_window_;
+  raw_ptr<aura::Window> focused_window_;
   // Track the windows that we've focused in the past, so that we can restore
   // focus to them.  We assume that this is a small list so that we can perform
   // linear ops on it.
-  std::vector<aura::Window*> focusable_windows_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastFocusClientAura);
+  std::vector<raw_ptr<aura::Window>> focusable_windows_;
 };
 
 }  // namespace chromecast

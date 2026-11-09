@@ -1,25 +1,25 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/navigation/navigation_item_impl.h"
 
-#include <memory>
+#import <memory>
 
-#include "base/strings/utf_string_conversions.h"
-#include "ios/web/navigation/wk_navigation_util.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/strings/utf_string_conversions.h"
+#import "ios/web/navigation/wk_navigation_util.h"
+#import "ios/web/public/session/proto/navigation.pb.h"
+#import "ios/web/public/session/proto/proto_util.h"
+#import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
-#include "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "testing/platform_test.h"
 
 namespace web {
 namespace {
 
 const char kItemURLString[] = "http://init.test";
+constexpr std::string_view kReferrerURLString = "http://referrer.url";
 static NSString* const kHTTPHeaderKey1 = @"key1";
 static NSString* const kHTTPHeaderKey2 = @"key2";
 static NSString* const kHTTPHeaderValue1 = @"value1";
@@ -61,13 +61,13 @@ TEST_F(NavigationItemTest, Description) {
   EXPECT_TRUE(
       [description containsString:@"is_created_from_hash_change: false"]);
   EXPECT_TRUE([description containsString:@"navigation_initiation_type: 0"]);
-  EXPECT_TRUE([description containsString:@"is_upgraded_to_https: false"]);
+  EXPECT_TRUE([description containsString:@"https_upgrade_type: None"]);
 }
 #endif
 
-// Tests that copied NavigationItemImpls create copies of data members that are
+// Tests that cloning NavigationItemImpls create copies of data members that are
 // objects.
-TEST_F(NavigationItemTest, Copy) {
+TEST_F(NavigationItemTest, Clone) {
   // Create objects to be copied.
   NSString* postData0 = @"postData0";
   NSMutableData* mutablePostData =
@@ -76,9 +76,12 @@ TEST_F(NavigationItemTest, Copy) {
   NSString* state0 = @"state0";
   NSMutableString* mutableState = [state0 mutableCopy];
   item_->SetSerializedStateObject(mutableState);
+  item_->SetInternalScrollToTextFragment("start,end");
 
-  // Create copy.
-  web::NavigationItemImpl copy(*item_.get());
+  // Clone.
+  std::unique_ptr<web::NavigationItemImpl> clone = item_->Clone();
+  EXPECT_EQ(item_->GetInternalScrollToTextFragment(),
+            clone->GetInternalScrollToTextFragment());
 
   // Modify the objects.
   NSString* postData1 = @"postData1";
@@ -86,19 +89,19 @@ TEST_F(NavigationItemTest, Copy) {
   NSString* state1 = @"state1";
   [mutableState setString:state1];
 
-  // Check that changes occurred in |item_|, but not in |copy|.
+  // Check that changes occurred in `item_`, but not in `copy`.
   EXPECT_NSEQ([postData1 dataUsingEncoding:NSUTF8StringEncoding],
-              item_->GetPostData());
+              item_ -> GetPostData());
   EXPECT_NSEQ(state1, item_->GetSerializedStateObject());
   EXPECT_NSEQ([postData0 dataUsingEncoding:NSUTF8StringEncoding],
-              copy.GetPostData());
-  EXPECT_NSEQ(state0, copy.GetSerializedStateObject());
+              clone -> GetPostData());
+  EXPECT_NSEQ(state0, clone->GetSerializedStateObject());
 
   // Ensure that HTTP headers are still mutable after the copying.
-  copy.AddHttpRequestHeaders(@{});
+  clone->AddHttpRequestHeaders(@{});
 }
 
-// Tests whether |NavigationItem::AddHttpRequestHeaders()| adds the passed
+// Tests whether `NavigationItem::AddHttpRequestHeaders()` adds the passed
 // headers to the item's request http headers.
 TEST_F(NavigationItemTest, AddHttpRequestHeaders) {
   EXPECT_NSEQ(@{kHTTPHeaderKey1 : kHTTPHeaderValue1},
@@ -116,7 +119,7 @@ TEST_F(NavigationItemTest, AddHttpRequestHeaders) {
   EXPECT_NSEQ(expected, item_->GetHttpRequestHeaders());
 }
 
-// Tests whether |NavigationItem::AddHttpRequestHeaders()| removes the header
+// Tests whether `NavigationItem::AddHttpRequestHeaders()` removes the header
 // value associated with the passed key from the item's request http headers.
 TEST_F(NavigationItemTest, RemoveHttpRequestHeaderForKey) {
   NSDictionary* httpHeaders = @{
@@ -134,15 +137,15 @@ TEST_F(NavigationItemTest, RemoveHttpRequestHeaderForKey) {
   EXPECT_FALSE(item_->GetHttpRequestHeaders());
 }
 
-// Tests the getter, setter, and copy constructor for the original request URL.
+// Tests the getter, setter, and cloning for the original request URL.
 TEST_F(NavigationItemTest, OriginalURL) {
   GURL original_url = GURL(kItemURLString);
   EXPECT_EQ(original_url, item_->GetOriginalRequestURL());
-  web::NavigationItemImpl copy(*item_);
+  std::unique_ptr<web::NavigationItemImpl> clone = item_->Clone();
   GURL new_url = GURL("http://new_url.test");
   item_->SetOriginalRequestURL(new_url);
   EXPECT_EQ(new_url, item_->GetOriginalRequestURL());
-  EXPECT_EQ(original_url, copy.GetOriginalRequestURL());
+  EXPECT_EQ(original_url, clone->GetOriginalRequestURL());
 }
 
 // Tests the behavior of GetVirtualURL().
@@ -157,6 +160,18 @@ TEST_F(NavigationItemTest, VirtualURLTest) {
   item_->SetVirtualURL(new_virtual_url);
   EXPECT_EQ(new_virtual_url, item_->GetVirtualURL());
   EXPECT_EQ(original_url, item_->GetURL());
+}
+
+// Tests the getter and setter for the text fragment.
+TEST_F(NavigationItemTest, InternalScrollToTextFragment) {
+  EXPECT_FALSE(item_->GetInternalScrollToTextFragment().has_value());
+  std::string fragment = "start,end";
+  item_->SetInternalScrollToTextFragment(fragment);
+  ASSERT_TRUE(item_->GetInternalScrollToTextFragment().has_value());
+  EXPECT_EQ(fragment, item_->GetInternalScrollToTextFragment().value());
+
+  item_->SetInternalScrollToTextFragment(std::nullopt);
+  EXPECT_FALSE(item_->GetInternalScrollToTextFragment().has_value());
 }
 
 // Tests setting title longer than kMaxTitleLength.
@@ -195,32 +210,187 @@ TEST_F(NavigationItemTest, GetTitleForDisplay) {
 TEST_F(NavigationItemTest, RestoreState) {
   NavigationItemImpl other_item;
   other_item.SetUserAgentType(UserAgentType::DESKTOP);
-  PageDisplayState display_state;
-  display_state.set_scroll_state(
-      PageScrollState(CGPointMake(0, 10), UIEdgeInsetsMake(10, 10, 2, 2)));
-  other_item.SetPageDisplayState(display_state);
   other_item.SetURL(GURL("www.otherurl.com"));
   other_item.SetVirtualURL(GURL("www.virtual.com"));
+  NSData* data = [@"data" dataUsingEncoding:NSUTF8StringEncoding];
+  other_item.SetSecurityScopedFileResource(data);
+  other_item.SetReferrer(
+      Referrer(GURL(kReferrerURLString), ReferrerPolicyDefault));
 
   ASSERT_NE(other_item.GetURL(), item_->GetURL());
 
   // With a different URL, only the UserAgent should be restored.
   item_->RestoreStateFromItem(&other_item);
   EXPECT_EQ(other_item.GetUserAgentType(), item_->GetUserAgentType());
-  EXPECT_NE(other_item.GetPageDisplayState(), item_->GetPageDisplayState());
   EXPECT_NE(other_item.GetVirtualURL(), item_->GetVirtualURL());
+  EXPECT_NE(other_item.GetSecurityScopedFileResource(),
+            item_->GetSecurityScopedFileResource());
+  EXPECT_NE(other_item.GetReferrer(), item_->GetReferrer());
 
   NavigationItemImpl other_item2;
   other_item2.SetUserAgentType(UserAgentType::DESKTOP);
-  other_item2.SetPageDisplayState(display_state);
   other_item2.SetURL(item_->GetURL());
   other_item2.SetVirtualURL(GURL("www.virtual.com"));
+  other_item2.SetSecurityScopedFileResource(data);
+  other_item2.SetReferrer(
+      Referrer(GURL(kReferrerURLString), ReferrerPolicyDefault));
 
   // Same URL, everything is restored.
   item_->RestoreStateFromItem(&other_item2);
   EXPECT_EQ(other_item2.GetUserAgentType(), item_->GetUserAgentType());
-  EXPECT_EQ(other_item2.GetPageDisplayState(), item_->GetPageDisplayState());
   EXPECT_EQ(other_item2.GetVirtualURL(), item_->GetVirtualURL());
+  EXPECT_EQ(other_item2.GetSecurityScopedFileResource(),
+            item_->GetSecurityScopedFileResource());
+  EXPECT_EQ(other_item2.GetReferrer(), item_->GetReferrer());
+
+  // Restoring an item with an empty referrer correctly updates the referrer.
+  NavigationItemImpl other_item3;
+  other_item3.SetURL(item_->GetURL());
+  ASSERT_TRUE(other_item3.GetReferrer().url.is_empty());
+  item_->RestoreStateFromItem(&other_item3);
+  EXPECT_EQ(other_item3.GetReferrer(), item_->GetReferrer());
+  EXPECT_TRUE(item_->GetReferrer().url.is_empty());
+}
+
+// Tests that NavigationItemImpl round trip correctly when serialized to proto.
+TEST_F(NavigationItemTest, NavigationItemImplRoundTrip) {
+  NavigationItemImpl original;
+  original.SetURL(GURL("http://url.test"));
+  original.SetVirtualURL(GURL("http://virtual.test"));
+  original.SetReferrer(
+      Referrer(GURL("http://referrer.url"), ReferrerPolicyDefault));
+  original.SetTimestamp(base::Time::Now());
+  original.SetTitle(u"Title");
+  original.SetUserAgentType(UserAgentType::DESKTOP);
+  original.AddHttpRequestHeaders(@{@"HeaderKey" : @"HeaderValue"});
+  original.SetTransitionType(ui::PAGE_TRANSITION_TYPED);
+  original.SetInternalScrollToTextFragment("start,end");
+
+  proto::NavigationItemStorage storage;
+  original.SerializeToProto(storage);
+
+  NavigationItemImpl decoded(storage);
+
+  EXPECT_EQ(original.GetURL(), decoded.GetURL());
+  EXPECT_EQ(original.GetVirtualURL(), decoded.GetVirtualURL());
+  EXPECT_EQ(original.GetReferrer(), decoded.GetReferrer());
+  EXPECT_EQ(original.GetTimestamp(), decoded.GetTimestamp());
+  EXPECT_EQ(original.GetUserAgentType(), decoded.GetUserAgentType());
+  EXPECT_EQ(original.GetInternalScrollToTextFragment(),
+            decoded.GetInternalScrollToTextFragment());
+  EXPECT_NSEQ(original.GetHttpRequestHeaders(),
+              decoded.GetHttpRequestHeaders());
+
+  // The page transition type should be ui::PAGE_TRANSITION_RELOAD.
+  EXPECT_FALSE(ui::PageTransitionCoreTypeIs(original.GetTransitionType(),
+                                            decoded.GetTransitionType()));
+  EXPECT_TRUE(ui::PageTransitionCoreTypeIs(ui::PAGE_TRANSITION_RELOAD,
+                                           decoded.GetTransitionType()));
+}
+
+// Tests that NavigationItemImpl round trip correctly when serialized to proto
+// even when the URL is not an HTTP/HTTPS url.
+TEST_F(NavigationItemTest, NavigationItemImplRoundTripNonHTTPURL) {
+  NavigationItemImpl original;
+  original.SetURL(GURL("file:///path/to/file.pdf"));
+  original.SetVirtualURL(GURL("http://virtual.test"));
+
+  proto::NavigationItemStorage storage;
+  original.SerializeToProto(storage);
+
+  NavigationItemImpl decoded(storage);
+
+  EXPECT_EQ(original.GetURL(), decoded.GetURL());
+  EXPECT_EQ(original.GetVirtualURL(), decoded.GetVirtualURL());
+}
+
+// Tests that NavigationItemImpl round trip correctly when serialized to proto
+// even when the URL is not an HTTP/HTTPS url, in absence of virtual URL.
+TEST_F(NavigationItemTest, NavigationItemImplRoundTripNonHTTPURLNoVirtualURL) {
+  NavigationItemImpl original;
+  original.SetURL(GURL("testwebui://invalid/"));
+
+  proto::NavigationItemStorage storage;
+  original.SerializeToProto(storage);
+
+  NavigationItemImpl decoded(storage);
+
+  EXPECT_EQ(original.GetURL(), decoded.GetURL());
+  EXPECT_EQ(original.GetVirtualURL(), decoded.GetVirtualURL());
+}
+
+// Tests that NavigationItemImpl serialization skips invalid referrer.
+TEST_F(NavigationItemTest, SerializationSkipsInvalidReferrer) {
+  NavigationItemImpl original;
+  original.SetReferrer(Referrer(GURL("invalid"), ReferrerPolicyDefault));
+
+  proto::NavigationItemStorage storage;
+  original.SerializeToProto(storage);
+
+  EXPECT_FALSE(storage.has_referrer());
+}
+
+// Tests that NavigationItemImpl serialization skips HTTP headers if empty.
+TEST_F(NavigationItemTest, SerializationSkipsEmptyHTTPHeaders) {
+  NavigationItemImpl original;
+
+  proto::NavigationItemStorage storage;
+  original.SerializeToProto(storage);
+
+  EXPECT_FALSE(storage.has_http_request_headers());
+}
+
+// Tests that NavigationItemImpl serialization optimizes the serialization
+// of URL and virtual URL when both are equals.
+TEST_F(NavigationItemTest, SerializationOptimizesURLStorage) {
+  NavigationItemImpl original;
+  // Set virtual URL before URL because SetVirtualURL() also optimize the
+  // storage of the URLs in NavigationItemImpl by clearing virtual_url_
+  // if the value set is equal to url_.
+  original.SetVirtualURL(GURL("http://url.test"));
+  original.SetURL(GURL("http://url.test"));
+
+  proto::NavigationItemStorage storage;
+  original.SerializeToProto(storage);
+
+  EXPECT_FALSE(storage.url().empty());
+  EXPECT_TRUE(storage.virtual_url().empty());
+}
+
+// Tests correct decoding of the URL and virtual URL when using http: scheme.
+TEST_F(NavigationItemTest, DecodeHTTPScheme) {
+  web::proto::NavigationItemStorage storage;
+  storage.set_url("http://url.test");
+  storage.set_virtual_url("http://virtual.test");
+  ASSERT_NE(storage.url(), storage.virtual_url());
+
+  NavigationItemImpl navigation_item(storage);
+  EXPECT_EQ(GURL(storage.url()), navigation_item.GetURL());
+  EXPECT_EQ(GURL(storage.virtual_url()), navigation_item.GetVirtualURL());
+}
+
+// Tests correct decoding of the URL and virtual URL when using file: scheme.
+TEST_F(NavigationItemTest, DecodeFileScheme) {
+  web::proto::NavigationItemStorage storage;
+  storage.set_url("file://myfile.test");
+  storage.set_virtual_url("http://virtual.test");
+  ASSERT_NE(storage.url(), storage.virtual_url());
+
+  NavigationItemImpl navigation_item(storage);
+  EXPECT_EQ(GURL(storage.url()), navigation_item.GetURL());
+  EXPECT_EQ(GURL(storage.virtual_url()), navigation_item.GetVirtualURL());
+}
+
+// Tests correct decoding of the URL and virtual URL when using blob: scheme.
+TEST_F(NavigationItemTest, DecodeBlobScheme) {
+  web::proto::NavigationItemStorage storage;
+  storage.set_url("blob:myfile.test");
+  storage.set_virtual_url("http://virtual.test");
+  ASSERT_NE(storage.url(), storage.virtual_url());
+
+  NavigationItemImpl navigation_item(storage);
+  EXPECT_EQ(GURL(storage.url()), navigation_item.GetURL());
+  EXPECT_EQ(GURL(storage.virtual_url()), navigation_item.GetVirtualURL());
 }
 
 }  // namespace

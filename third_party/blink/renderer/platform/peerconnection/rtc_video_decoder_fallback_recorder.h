@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_PEERCONNECTION_RTC_VIDEO_DECODER_FALLBACK_RECORDER_H_
 
 #include "media/base/video_codecs.h"
-#include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace blink {
 
@@ -18,7 +17,11 @@ enum class RTCVideoDecoderFallbackReason {
   kReinitializationFailed = 2,
   kPreviousErrorOnDecode = 3,
   kPreviousErrorOnRegisterCallback = 4,
-  kMaxValue = kPreviousErrorOnRegisterCallback,
+  kConsecutivePendingBufferOverflowDuringInit = 5,
+  kParseErrorOnResolutionCheck = 6,
+  kTooManyInstancesAndSmallResolution = 7,
+  kUnsupportedResolution = 8,
+  kMaxValue = kUnsupportedResolution,
 };
 
 void RecordRTCVideoDecoderFallbackReason(

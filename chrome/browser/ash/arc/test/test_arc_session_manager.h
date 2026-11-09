@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 namespace arc {
 
+class ArcDlcInstaller;
 class ArcSessionManager;
 class ArcSessionRunner;
 
@@ -16,7 +17,8 @@ class ArcSessionRunner;
 // Unlike the regular one, this function's behaves as if the property files
 // has already successfully been done.
 std::unique_ptr<ArcSessionManager> CreateTestArcSessionManager(
-    std::unique_ptr<ArcSessionRunner> arc_session_runner);
+    std::unique_ptr<ArcSessionRunner> arc_session_runner,
+    ArcDlcInstaller* arc_dlc_installer);
 
 // Does something similar to CreateTestArcSessionManager(), but for an existing
 // object. This function is useful for ARC browser_tests where ArcSessionManager
@@ -25,4 +27,4 @@ void ExpandPropertyFilesForTesting(ArcSessionManager* arc_session_manager);
 
 }  // namespace arc
 
-#endif  //  CHROME_BROWSER_ASH_ARC_TEST_TEST_ARC_SESSION_MANAGER_H_
+#endif  // CHROME_BROWSER_ASH_ARC_TEST_TEST_ARC_SESSION_MANAGER_H_

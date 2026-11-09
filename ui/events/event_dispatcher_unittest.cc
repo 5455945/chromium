@@ -1,11 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/events/event_dispatcher.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event.h"
@@ -22,6 +25,10 @@ class TestTarget : public EventTarget,
                    public EventHandler {
  public:
   TestTarget() : parent_(nullptr), valid_(true) { SetTargetHandler(this); }
+
+  TestTarget(const TestTarget&) = delete;
+  TestTarget& operator=(const TestTarget&) = delete;
+
   ~TestTarget() override {}
 
   void set_parent(TestTarget* parent) { parent_ = parent; }
@@ -52,16 +59,17 @@ class TestTarget : public EventTarget,
 
   EventTargeter* GetEventTargeter() override { return nullptr; }
 
-  TestTarget* parent_;
+  raw_ptr<TestTarget> parent_;
   std::vector<int> handler_list_;
   bool valid_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestTarget);
 };
 
 class TestEventHandler : public EventHandler {
  public:
   explicit TestEventHandler(int id) : id_(id) {}
+
+  TestEventHandler(const TestEventHandler&) = delete;
+  TestEventHandler& operator=(const TestEventHandler&) = delete;
 
   ~TestEventHandler() override {
     if (pre_target_)
@@ -109,9 +117,7 @@ class TestEventHandler : public EventHandler {
   bool expect_pre_target_ = false;
   bool expect_post_target_ = false;
   bool received_pre_target_ = false;
-  EventTarget* pre_target_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TestEventHandler);
+  raw_ptr<EventTarget> pre_target_ = nullptr;
 };
 
 typedef CancelModeEvent NonCancelableEvent;
@@ -119,29 +125,36 @@ typedef CancelModeEvent NonCancelableEvent;
 // Destroys the dispatcher-delegate when it receives any event.
 class EventHandlerDestroyDispatcherDelegate : public TestEventHandler {
  public:
-  EventHandlerDestroyDispatcherDelegate(EventDispatcherDelegate* delegate,
-                                        int id)
-      : TestEventHandler(id),
-        dispatcher_delegate_(delegate) {
-  }
+  EventHandlerDestroyDispatcherDelegate(
+      std::unique_ptr<EventDispatcherDelegate> delegate,
+      int id)
+      : TestEventHandler(id), dispatcher_delegate_(std::move(delegate)) {}
+
+  EventHandlerDestroyDispatcherDelegate(
+      const EventHandlerDestroyDispatcherDelegate&) = delete;
+  EventHandlerDestroyDispatcherDelegate& operator=(
+      const EventHandlerDestroyDispatcherDelegate&) = delete;
 
   ~EventHandlerDestroyDispatcherDelegate() override {}
 
  private:
   void ReceivedEvent(Event* event) override {
     TestEventHandler::ReceivedEvent(event);
-    delete dispatcher_delegate_;
+    dispatcher_delegate_.reset();
   }
 
-  EventDispatcherDelegate* dispatcher_delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(EventHandlerDestroyDispatcherDelegate);
+  std::unique_ptr<EventDispatcherDelegate> dispatcher_delegate_;
 };
 
 // Invalidates the target when it receives any event.
 class InvalidateTargetEventHandler : public TestEventHandler {
  public:
   explicit InvalidateTargetEventHandler(int id) : TestEventHandler(id) {}
+
+  InvalidateTargetEventHandler(const InvalidateTargetEventHandler&) = delete;
+  InvalidateTargetEventHandler& operator=(const InvalidateTargetEventHandler&) =
+      delete;
+
   ~InvalidateTargetEventHandler() override {}
 
  private:
@@ -150,46 +163,42 @@ class InvalidateTargetEventHandler : public TestEventHandler {
    TestTarget* target = static_cast<TestTarget*>(event->target());
    target->set_valid(false);
   }
-
-  DISALLOW_COPY_AND_ASSIGN(InvalidateTargetEventHandler);
 };
 
 // Destroys a second event handler when this handler gets an event.
 // Optionally also destroys the dispatcher.
 class EventHandlerDestroyer : public TestEventHandler {
  public:
-  EventHandlerDestroyer(int id, EventHandler* destroy)
-      : TestEventHandler(id),
-        to_destroy_(destroy),
-        dispatcher_delegate_(nullptr) {}
+  EventHandlerDestroyer(int id, std::unique_ptr<EventHandler> destroy)
+      : TestEventHandler(id), to_destroy_(std::move(destroy)) {}
+
+  EventHandlerDestroyer(const EventHandlerDestroyer&) = delete;
+  EventHandlerDestroyer& operator=(const EventHandlerDestroyer&) = delete;
 
   ~EventHandlerDestroyer() override { CHECK(!to_destroy_); }
 
-  void set_dispatcher_delegate(EventDispatcherDelegate* dispatcher_delegate) {
-    dispatcher_delegate_ = dispatcher_delegate;
+  void set_dispatcher_delegate(
+      std::unique_ptr<EventDispatcherDelegate> dispatcher_delegate) {
+   dispatcher_delegate_ = std::move(dispatcher_delegate);
   }
 
  private:
   void ReceivedEvent(Event* event) override {
     TestEventHandler::ReceivedEvent(event);
-    delete to_destroy_;
-    to_destroy_ = nullptr;
-
-    if (dispatcher_delegate_) {
-      delete dispatcher_delegate_;
-      dispatcher_delegate_ = nullptr;
-    }
+    to_destroy_.reset();
+    dispatcher_delegate_.reset();
   }
 
-  EventHandler* to_destroy_;
-  EventDispatcherDelegate* dispatcher_delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(EventHandlerDestroyer);
+  std::unique_ptr<EventHandler> to_destroy_;
+  std::unique_ptr<EventDispatcherDelegate> dispatcher_delegate_;
 };
 
 class TestEventDispatcher : public EventDispatcherDelegate {
  public:
   TestEventDispatcher() {}
+
+  TestEventDispatcher(const TestEventDispatcher&) = delete;
+  TestEventDispatcher& operator=(const TestEventDispatcher&) = delete;
 
   ~TestEventDispatcher() override {}
 
@@ -203,8 +212,6 @@ class TestEventDispatcher : public EventDispatcherDelegate {
     TestTarget* test_target = static_cast<TestTarget*>(target);
     return test_target->valid();
   }
-
-  DISALLOW_COPY_AND_ASSIGN(TestEventDispatcher);
 };
 
 }  // namespace
@@ -239,19 +246,14 @@ TEST(EventDispatcherTest, EventDispatchOrder) {
   h7.set_expect_post_target(true);
   h8.set_expect_post_target(true);
 
-  MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                   ui::EventTimeForNow(), 0, 0);
+  MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                   gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
   Event::DispatcherApi event_mod(&mouse);
   dispatcher.ProcessEvent(&child, &mouse);
   EXPECT_FALSE(mouse.stopped_propagation());
   EXPECT_FALSE(mouse.handled());
 
-  {
-    int expected[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
-    EXPECT_EQ(
-        std::vector<int>(expected, expected + sizeof(expected) / sizeof(int)),
-        child.handler_list());
-  }
+  EXPECT_EQ(std::vector<int>({1, 2, 3, 4, 5, 6, 7, 8}), child.handler_list());
 
   child.Reset();
   event_mod.set_phase(EP_PREDISPATCH);
@@ -262,43 +264,32 @@ TEST(EventDispatcherTest, EventDispatchOrder) {
   EXPECT_EQ(EP_POSTDISPATCH, mouse.phase());
   EXPECT_FALSE(mouse.stopped_propagation());
   EXPECT_TRUE(mouse.handled());
-  {
     // |h1| marks the event as handled. So only the pre-target handlers should
     // receive the event.
-    int expected[] = { 1, 2, 3, 4 };
-    EXPECT_EQ(
-        std::vector<int>(expected, expected + sizeof(expected) / sizeof(int)),
-        child.handler_list());
-  }
+  EXPECT_EQ(std::vector<int>({1, 2, 3, 4}), child.handler_list());
 
   child.Reset();
   event_mod.set_phase(EP_PREDISPATCH);
   event_mod.set_result(ER_UNHANDLED);
 
-  int nexpected[] = { 1, 2, 3, 4, 5 };
   h1.set_event_result(ER_UNHANDLED);
   h5.set_event_result(ER_CONSUMED);
   dispatcher.ProcessEvent(&child, &mouse);
   EXPECT_EQ(EP_POSTDISPATCH, mouse.phase());
   EXPECT_TRUE(mouse.stopped_propagation());
   EXPECT_TRUE(mouse.handled());
-  EXPECT_EQ(
-      std::vector<int>(nexpected, nexpected + sizeof(nexpected) / sizeof(int)),
-      child.handler_list());
+  EXPECT_EQ(std::vector<int>({1, 2, 3, 4, 5}), child.handler_list());
 
   child.Reset();
   event_mod.set_phase(EP_PREDISPATCH);
   event_mod.set_result(ER_UNHANDLED);
 
-  int exp[] = { 1 };
   h1.set_event_result(ER_CONSUMED);
   dispatcher.ProcessEvent(&child, &mouse);
   EXPECT_EQ(EP_POSTDISPATCH, mouse.phase());
   EXPECT_TRUE(mouse.stopped_propagation());
   EXPECT_TRUE(mouse.handled());
-  EXPECT_EQ(
-      std::vector<int>(exp, exp + sizeof(exp) / sizeof(int)),
-      child.handler_list());
+  EXPECT_EQ(std::vector<int>({1}), child.handler_list());
 
   parent.RemovePreTargetHandler(&h1);
   parent.RemovePreTargetHandler(&h2);
@@ -319,16 +310,13 @@ TEST(EventDispatcherTest, EventDispatchPhase) {
   handler.set_expect_pre_target(true);
   handler.set_expect_post_target(true);
 
-  MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                   ui::EventTimeForNow(), 0, 0);
+  MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                   gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
   Event::DispatcherApi event_mod(&mouse);
   dispatcher.ProcessEvent(&target, &mouse);
   EXPECT_EQ(ER_UNHANDLED, mouse.result());
 
-  int handlers[] = { 11, 11 };
-  EXPECT_EQ(
-      std::vector<int>(handlers, handlers + sizeof(handlers) / sizeof(int)),
-      target.handler_list());
+  EXPECT_EQ(std::vector<int>({11, 11}), target.handler_list());
 
   target.RemovePreTargetHandler(&handler);
 }
@@ -338,11 +326,14 @@ TEST(EventDispatcherTest, EventDispatchPhase) {
 TEST(EventDispatcherTest, EventDispatcherDestroyedDuringDispatch) {
   // Test for pre-target first.
   {
-    TestEventDispatcher* dispatcher = new TestEventDispatcher();
-    TestTarget target;
-    EventHandlerDestroyDispatcherDelegate handler(dispatcher, 5);
-    TestEventHandler h1(1), h2(2);
+    auto owned_dispatcher = std::make_unique<TestEventDispatcher>();
+    TestEventDispatcher* dispatcher = owned_dispatcher.get();
+    EventHandlerDestroyDispatcherDelegate handler(std::move(owned_dispatcher),
+                                                  5);
+    TestEventHandler h1(1);
+    TestEventHandler h2(2);
 
+    TestTarget target;
     target.AddPreTargetHandler(&h1);
     target.AddPreTargetHandler(&handler);
     target.AddPreTargetHandler(&h2);
@@ -353,8 +344,8 @@ TEST(EventDispatcherTest, EventDispatcherDestroyedDuringDispatch) {
     // destroyed the dispatcher.
     h2.set_expect_pre_target(false);
 
-    MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                     ui::EventTimeForNow(), 0, 0);
+    MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                     gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
     EventDispatchDetails details = dispatcher->ProcessEvent(&target, &mouse);
     EXPECT_TRUE(details.dispatcher_destroyed);
     EXPECT_EQ(ER_CONSUMED, mouse.result());
@@ -369,11 +360,14 @@ TEST(EventDispatcherTest, EventDispatcherDestroyedDuringDispatch) {
 
   // Test for non-cancelable event.
   {
-    TestEventDispatcher* dispatcher = new TestEventDispatcher();
-    TestTarget target;
-    EventHandlerDestroyDispatcherDelegate handler(dispatcher, 5);
-    TestEventHandler h1(1), h2(2);
+    auto owned_dispatcher = std::make_unique<TestEventDispatcher>();
+    TestEventDispatcher* dispatcher = owned_dispatcher.get();
+    EventHandlerDestroyDispatcherDelegate handler(std::move(owned_dispatcher),
+                                                  5);
+    TestEventHandler h1(1);
+    TestEventHandler h2(2);
 
+    TestTarget target;
     target.AddPreTargetHandler(&h1);
     target.AddPreTargetHandler(&handler);
     target.AddPreTargetHandler(&h2);
@@ -398,11 +392,14 @@ TEST(EventDispatcherTest, EventDispatcherDestroyedDuringDispatch) {
 
   // Now test for post-target.
   {
-    TestEventDispatcher* dispatcher = new TestEventDispatcher();
-    TestTarget target;
-    EventHandlerDestroyDispatcherDelegate handler(dispatcher, 5);
-    TestEventHandler h1(1), h2(2);
+    auto owned_dispatcher = std::make_unique<TestEventDispatcher>();
+    TestEventDispatcher* dispatcher = owned_dispatcher.get();
+    EventHandlerDestroyDispatcherDelegate handler(std::move(owned_dispatcher),
+                                                  5);
+    TestEventHandler h1(1);
+    TestEventHandler h2(2);
 
+    TestTarget target;
     target.AddPostTargetHandler(&h1);
     target.AddPostTargetHandler(&handler);
     target.AddPostTargetHandler(&h2);
@@ -413,8 +410,8 @@ TEST(EventDispatcherTest, EventDispatcherDestroyedDuringDispatch) {
     // destroyed the dispatcher.
     h2.set_expect_post_target(false);
 
-    MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                     ui::EventTimeForNow(), 0, 0);
+    MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                     gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
     EventDispatchDetails details = dispatcher->ProcessEvent(&target, &mouse);
     EXPECT_TRUE(details.dispatcher_destroyed);
     EXPECT_EQ(ER_CONSUMED, mouse.result());
@@ -429,11 +426,14 @@ TEST(EventDispatcherTest, EventDispatcherDestroyedDuringDispatch) {
 
   // Test for non-cancelable event.
   {
-    TestEventDispatcher* dispatcher = new TestEventDispatcher();
-    TestTarget target;
-    EventHandlerDestroyDispatcherDelegate handler(dispatcher, 5);
-    TestEventHandler h1(1), h2(2);
+    auto owned_dispatcher = std::make_unique<TestEventDispatcher>();
+    TestEventDispatcher* dispatcher = owned_dispatcher.get();
+    EventHandlerDestroyDispatcherDelegate handler(std::move(owned_dispatcher),
+                                                  5);
+    TestEventHandler h1(1);
+    TestEventHandler h2(2);
 
+    TestTarget target;
     target.AddPostTargetHandler(&h1);
     target.AddPostTargetHandler(&handler);
     target.AddPostTargetHandler(&h2);
@@ -475,8 +475,8 @@ TEST(EventDispatcherTest, EventDispatcherInvalidateTarget) {
   // |h3| should not receive events as the target will be invalidated.
   h3.set_expect_pre_target(false);
 
-  MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                   ui::EventTimeForNow(), 0, 0);
+  MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                   gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
   EventDispatchDetails details = dispatcher.ProcessEvent(&target, &mouse);
   EXPECT_FALSE(details.dispatcher_destroyed);
   EXPECT_TRUE(details.target_destroyed);
@@ -507,11 +507,12 @@ TEST(EventDispatcherTest, EventDispatcherInvalidateTarget) {
 TEST(EventDispatcherTest, EventHandlerDestroyedDuringDispatch) {
   {
     TestEventDispatcher dispatcher;
-    TestTarget target;
     TestEventHandler h1(1);
-    TestEventHandler* h3 = new TestEventHandler(3);
-    EventHandlerDestroyer handle_destroyer(2, h3);
+    auto owned_h3 = std::make_unique<TestEventHandler>(3);
+    TestEventHandler* h3 = owned_h3.get();
+    EventHandlerDestroyer handle_destroyer(2, std::move(owned_h3));
 
+    TestTarget target;
     target.AddPreTargetHandler(&h1);
     target.AddPreTargetHandler(&handle_destroyer);
     h3->set_pre_target(&target);
@@ -523,8 +524,8 @@ TEST(EventDispatcherTest, EventHandlerDestroyedDuringDispatch) {
     // destroyed it.
     h3->set_expect_pre_target(false);
 
-    MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                     ui::EventTimeForNow(), 0, 0);
+    MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                     gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
     EventDispatchDetails details = dispatcher.ProcessEvent(&target, &mouse);
     EXPECT_FALSE(details.dispatcher_destroyed);
     EXPECT_FALSE(details.target_destroyed);
@@ -540,11 +541,12 @@ TEST(EventDispatcherTest, EventHandlerDestroyedDuringDispatch) {
   // Test for non-cancelable events.
   {
     TestEventDispatcher dispatcher;
-    TestTarget target;
     TestEventHandler h1(1);
-    TestEventHandler* h3 = new TestEventHandler(3);
-    EventHandlerDestroyer handle_destroyer(2, h3);
+    auto owned_h3 = std::make_unique<TestEventHandler>(3);
+    TestEventHandler* h3 = owned_h3.get();
+    EventHandlerDestroyer handle_destroyer(2, std::move(owned_h3));
 
+    TestTarget target;
     target.AddPreTargetHandler(&h1);
     target.AddPreTargetHandler(&handle_destroyer);
     target.AddPreTargetHandler(h3);
@@ -571,26 +573,27 @@ TEST(EventDispatcherTest, EventHandlerDestroyedDuringDispatch) {
 // dispatcher and a handler.
 TEST(EventDispatcherTest, EventHandlerAndDispatcherDestroyedDuringDispatch) {
   {
-    TestEventDispatcher* dispatcher = new TestEventDispatcher();
-    TestTarget target;
+    auto owned_dispatcher = std::make_unique<TestEventDispatcher>();
+    TestEventDispatcher* dispatcher = owned_dispatcher.get();
     TestEventHandler h1(1);
-    TestEventHandler* h3 = new TestEventHandler(3);
-    EventHandlerDestroyer destroyer(2, h3);
+    auto owned_h3 = std::make_unique<TestEventHandler>(3);
+    TestEventHandler* h3 = owned_h3.get();
+    EventHandlerDestroyer destroyer(2, std::move(owned_h3));
 
+    TestTarget target;
     target.AddPreTargetHandler(&h1);
     target.AddPreTargetHandler(&destroyer);
     target.AddPreTargetHandler(h3);
     h3->set_pre_target(&target);
-
     h1.set_expect_pre_target(true);
     destroyer.set_expect_pre_target(true);
-    destroyer.set_dispatcher_delegate(dispatcher);
+    destroyer.set_dispatcher_delegate(std::move(owned_dispatcher));
     // |h3| should not receive events since |destroyer| will have destroyed
     // it.
     h3->set_expect_pre_target(false);
 
-    MouseEvent mouse(ui::ET_MOUSE_MOVED, gfx::Point(3, 4), gfx::Point(3, 4),
-                     ui::EventTimeForNow(), 0, 0);
+    MouseEvent mouse(ui::EventType::kMouseMoved, gfx::Point(3, 4),
+                     gfx::Point(3, 4), ui::EventTimeForNow(), 0, 0);
     EventDispatchDetails details = dispatcher->ProcessEvent(&target, &mouse);
     EXPECT_TRUE(details.dispatcher_destroyed);
     EXPECT_TRUE(mouse.stopped_propagation());
@@ -604,12 +607,14 @@ TEST(EventDispatcherTest, EventHandlerAndDispatcherDestroyedDuringDispatch) {
 
   // Test for non-cancelable events.
   {
-    TestEventDispatcher* dispatcher = new TestEventDispatcher();
-    TestTarget target;
+    auto owned_dispatcher = std::make_unique<TestEventDispatcher>();
+    TestEventDispatcher* dispatcher = owned_dispatcher.get();
     TestEventHandler h1(1);
-    TestEventHandler* h3 = new TestEventHandler(3);
-    EventHandlerDestroyer destroyer(2, h3);
+    auto owned_h3 = std::make_unique<TestEventHandler>(3);
+    TestEventHandler* h3 = owned_h3.get();
+    EventHandlerDestroyer destroyer(2, std::move(owned_h3));
 
+    TestTarget target;
     target.AddPreTargetHandler(&h1);
     target.AddPreTargetHandler(&destroyer);
     target.AddPreTargetHandler(h3);
@@ -617,7 +622,7 @@ TEST(EventDispatcherTest, EventHandlerAndDispatcherDestroyedDuringDispatch) {
 
     h1.set_expect_pre_target(true);
     destroyer.set_expect_pre_target(true);
-    destroyer.set_dispatcher_delegate(dispatcher);
+    destroyer.set_dispatcher_delegate(std::move(owned_dispatcher));
     // |h3| should not receive events since |destroyer| will have destroyed
     // it.
     h3->set_expect_pre_target(false);

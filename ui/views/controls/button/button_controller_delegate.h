@@ -1,19 +1,34 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_BUTTON_BUTTON_CONTROLLER_DELEGATE_H_
 #define UI_VIEWS_CONTROLS_BUTTON_BUTTON_CONTROLLER_DELEGATE_H_
 
+#include "base/memory/raw_ptr.h"
+#include "ui/views/views_export.h"
+
+namespace gfx {
+class Point;
+}
+
+namespace ui {
+class Event;
+}
+
 namespace views {
 
 class Button;
+class InkDrop;
 
 // Captures the Button and View methods required for sharing the logic in
 // ButtonController between different Button types.
 class VIEWS_EXPORT ButtonControllerDelegate {
  public:
   explicit ButtonControllerDelegate(Button* button) : button_(button) {}
+
+  ButtonControllerDelegate(const ButtonControllerDelegate&) = delete;
+  ButtonControllerDelegate& operator=(const ButtonControllerDelegate&) = delete;
 
   virtual ~ButtonControllerDelegate() = default;
 
@@ -36,9 +51,7 @@ class VIEWS_EXPORT ButtonControllerDelegate {
   Button* button() { return button_; }
 
  private:
-  Button* button_;
-
-  DISALLOW_COPY_AND_ASSIGN(ButtonControllerDelegate);
+  raw_ptr<Button> button_;
 };
 
 }  // namespace views

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,10 @@
 #include <vector>
 
 #include "base/containers/queue.h"
-#include "base/macros.h"
-#include "build/chromeos_buildflags.h"
-#include "content/public/browser/browser_thread.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
+#include "build/build_config.h"
+#include "content/public/browser/browser_context.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/common/api/usb.h"
@@ -32,6 +33,11 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
                          public EventRouter::Observer,
                          public device::mojom::UsbDeviceManagerClient {
  public:
+  explicit UsbDeviceManager(content::BrowserContext* context);
+  ~UsbDeviceManager() override;
+  UsbDeviceManager(const UsbDeviceManager&) = delete;
+  UsbDeviceManager& operator=(const UsbDeviceManager&) = delete;
+
   static UsbDeviceManager* Get(content::BrowserContext* browser_context);
 
   // BrowserContextKeyedAPI implementation.
@@ -53,7 +59,7 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
 
   // Looks up a device GUID for a given extensions USB device ID. If the ID is
   // unknown (e.g., the corresponding device was unplugged), this returns
-  // |false|; otherwise it returns |true|.
+  // `false`; otherwise it returns `true`.
   bool GetGuidFromId(int id, std::string* guid);
 
   // Populates an instance of the chrome.usb.Device object from the given
@@ -70,11 +76,11 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
   const device::mojom::UsbDeviceInfo* GetDeviceInfo(const std::string& guid);
   bool UpdateActiveConfig(const std::string& guid, uint8_t config_value);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void CheckAccess(
       const std::string& guid,
       device::mojom::UsbDeviceManager::CheckAccessCallback callback);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   void EnsureConnectionWithDeviceManager();
 
@@ -83,9 +89,6 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
 
  private:
   friend class BrowserContextKeyedAPIFactory<UsbDeviceManager>;
-
-  explicit UsbDeviceManager(content::BrowserContext* context);
-  ~UsbDeviceManager() override;
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "UsbDeviceManager"; }
@@ -109,7 +112,7 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
   void DispatchEvent(const std::string& event_name,
                      const device::mojom::UsbDeviceInfo& device_info);
 
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::BrowserContext> browser_context_;
 
   // Legacy integer IDs are used in USB extensions API so we need to maps USB
   // device GUIDs to integer IDs.
@@ -122,7 +125,7 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
       pending_get_devices_requests_;
   std::map<std::string, device::mojom::UsbDeviceInfoPtr> devices_;
 
-  // Connection to |device_manager_instance_|.
+  // Connection to `device_manager_instance_`.
   mojo::Remote<device::mojom::UsbDeviceManager> device_manager_;
   mojo::AssociatedReceiver<device::mojom::UsbDeviceManagerClient>
       client_receiver_{this};
@@ -130,7 +133,6 @@ class UsbDeviceManager : public BrowserContextKeyedAPI,
   base::ObserverList<Observer> observer_list_;
 
   base::WeakPtrFactory<UsbDeviceManager> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(UsbDeviceManager);
 };
 
 template <>

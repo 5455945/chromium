@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import sys
-
 
 import common
 
@@ -19,7 +18,7 @@ def ParseTestList(test_list_contents):
   fixture = None
   for line in lines:
     if '#' in line:
-      line = line[:line.index('#')]
+      line = line[: line.index('#')]
     line = line.rstrip()
     if line[0] == ' ':
       assert fixture
@@ -37,7 +36,7 @@ def LoadFilterList(filter_file):
   all_filters = []
   for line in lines:
     if '#' in line:
-      line = line[:line.index('#')]
+      line = line[: line.index('#')]
     line = line.strip()
     if not line:
       continue
@@ -56,12 +55,14 @@ def FilterMatchesTest(filter_string, test_string):
 def main_run(args):
   binary_name = args.args[0]
   test_filter_file = args.args[1]
-  base_path = os.path.join(args.paths['checkout'], 'out', args.build_config_fs)
+  base_path = args.build_dir
   list_tests_output = subprocess.check_output(
-      [os.path.join(base_path, binary_name), '--gtest_list_tests'])
+    [os.path.join(base_path, binary_name), '--gtest_list_tests']
+  )
   tests = ParseTestList(list_tests_output)
   negative_filter_list = LoadFilterList(
-      os.path.join(base_path, test_filter_file))
+    os.path.join(base_path, test_filter_file)
+  )
 
   result = {'valid': True, 'failures': []}
   result['total_tests'] = len(tests)

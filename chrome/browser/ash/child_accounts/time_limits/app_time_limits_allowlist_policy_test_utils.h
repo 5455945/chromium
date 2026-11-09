@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 
 #include "base/values.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 class AppId;
 
@@ -25,19 +24,16 @@ class AppTimeLimitsAllowlistPolicyBuilder {
       const AppTimeLimitsAllowlistPolicyBuilder&) = delete;
 
   void SetUp();
-  void Clear();
-  void AppendToAllowlistUrlList(const std::string& scheme);
   void AppendToAllowlistAppList(const AppId& app_id);
 
-  const base::Value& value() const { return value_; }
+  const base::DictValue& dict() const { return dict_; }
 
  private:
-  void AppendToList(const std::string& key, base::Value value);
+  void AppendToList(const std::string& key, base::DictValue dict);
 
-  base::Value value_;
+  base::DictValue dict_;
 };
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_TIME_LIMITS_APP_TIME_LIMITS_ALLOWLIST_POLICY_TEST_UTILS_H_

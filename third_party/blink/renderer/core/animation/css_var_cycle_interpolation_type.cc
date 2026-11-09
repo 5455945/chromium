@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,31 +10,43 @@
 #include "base/memory/ptr_util.h"
 #include "third_party/blink/renderer/core/animation/css_interpolation_environment.h"
 #include "third_party/blink/renderer/core/animation/string_keyframe.h"
-#include "third_party/blink/renderer/core/css/css_custom_property_declaration.h"
+#include "third_party/blink/renderer/core/animation/underlying_value_owner.h"
+#include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
+#include "third_party/blink/renderer/core/css/css_unset_value.h"
 #include "third_party/blink/renderer/core/css/property_registration.h"
 #include "third_party/blink/renderer/core/css/resolver/style_builder.h"
 #include "third_party/blink/renderer/core/css/resolver/style_cascade.h"
-#include "third_party/blink/renderer/core/css/scoped_css_value.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
 namespace blink {
 
 class CycleChecker : public InterpolationType::ConversionChecker {
  public:
-  CycleChecker(const CSSCustomPropertyDeclaration& declaration,
+  CycleChecker(const PropertyHandle& property,
+               const CSSValue& value,
+               const TreeScope* keyframe_tree_scope,
                bool cycle_detected)
-      : declaration_(declaration), cycle_detected_(cycle_detected) {}
+      : property_(property),
+        value_(value),
+        keyframe_tree_scope_(keyframe_tree_scope),
+        cycle_detected_(cycle_detected) {}
+
+  void Trace(Visitor* visitor) const final {
+    InterpolationType::ConversionChecker::Trace(visitor);
+    visitor->Trace(value_);
+    visitor->Trace(keyframe_tree_scope_);
+  }
 
  private:
-  bool IsValid(const InterpolationEnvironment& environment,
+  bool IsValid(const CSSInterpolationEnvironment& environment,
                const InterpolationValue&) const final {
-    const auto& css_environment = To<CSSInterpolationEnvironment>(environment);
-    bool cycle_detected = !css_environment.Resolve(
-        PropertyHandle(declaration_->GetName()), declaration_);
+    bool cycle_detected = !environment.Resolve(value_, keyframe_tree_scope_);
     return cycle_detected == cycle_detected_;
   }
 
-  Persistent<const CSSCustomPropertyDeclaration> declaration_;
+  PropertyHandle property_;
+  Member<const CSSValue> value_;
+  Member<const TreeScope> keyframe_tree_scope_;
   const bool cycle_detected_;
 };
 
@@ -46,28 +58,38 @@ CSSVarCycleInterpolationType::CSSVarCycleInterpolationType(
 }
 
 static InterpolationValue CreateCycleDetectedValue() {
-  return InterpolationValue(std::make_unique<InterpolableList>(0));
+  return InterpolationValue(MakeGarbageCollected<InterpolableList>(0));
 }
 
 InterpolationValue CSSVarCycleInterpolationType::MaybeConvertSingle(
     const PropertySpecificKeyframe& keyframe,
-    const InterpolationEnvironment& environment,
+    const CSSInterpolationEnvironment& environment,
     const InterpolationValue& underlying,
     ConversionCheckers& conversion_checkers) const {
-  const auto& declaration = *To<CSSCustomPropertyDeclaration>(
-      To<CSSPropertySpecificKeyframe>(keyframe).Value());
-  DCHECK_EQ(GetProperty().CustomPropertyName(), declaration.GetName());
-  if ((!declaration.Value() ||
-       !declaration.Value()->NeedsVariableResolution()) &&
-      !declaration.IsRevert()) {
+  const auto& property_specific = To<CSSPropertySpecificKeyframe>(keyframe);
+  const CSSValue* value = property_specific.Value();
+  const TreeScope* keyframe_tree_scope = property_specific.GetTreeScope();
+
+  if (!value) {
+    DCHECK(keyframe.IsNeutral());
     return nullptr;
   }
 
-  const auto& css_environment = To<CSSInterpolationEnvironment>(environment);
+  // It is only possible to form a cycle if the value points to something else.
+  // This is only possible with var(), or with revert-[layer] which may revert
+  // to a value which contains var().
+  if (const auto* declaration = DynamicTo<CSSUnparsedDeclarationValue>(value)) {
+    if (!declaration->VariableDataValue()->NeedsVariableResolution()) {
+      return nullptr;
+    }
+  } else if (!value->IsRevertValue() && !value->IsRevertLayerValue()) {
+    return nullptr;
+  }
 
-  bool cycle_detected = !css_environment.Resolve(GetProperty(), &declaration);
-  conversion_checkers.push_back(
-      std::make_unique<CycleChecker>(declaration, cycle_detected));
+  PropertyHandle property = GetProperty();
+  bool cycle_detected = !environment.Resolve(value, keyframe_tree_scope);
+  conversion_checkers.push_back(MakeGarbageCollected<CycleChecker>(
+      property, *value, keyframe_tree_scope, cycle_detected));
   return cycle_detected ? CreateCycleDetectedValue() : nullptr;
 }
 
@@ -78,7 +100,7 @@ static bool IsCycleDetected(const InterpolationValue& value) {
 PairwiseInterpolationValue CSSVarCycleInterpolationType::MaybeConvertPairwise(
     const PropertySpecificKeyframe& start_keyframe,
     const PropertySpecificKeyframe& end_keyframe,
-    const InterpolationEnvironment& environment,
+    const CSSInterpolationEnvironment& environment,
     const InterpolationValue& underlying,
     ConversionCheckers& conversionCheckers) const {
   InterpolationValue start = MaybeConvertSingle(start_keyframe, environment,
@@ -101,26 +123,30 @@ PairwiseInterpolationValue CSSVarCycleInterpolationType::MaybeConvertPairwise(
 }
 
 InterpolationValue CSSVarCycleInterpolationType::MaybeConvertUnderlyingValue(
-    const InterpolationEnvironment& environment) const {
-  const ComputedStyle& style =
-      To<CSSInterpolationEnvironment>(environment).Style();
+    const CSSInterpolationEnvironment& environment) const {
+  const ComputedStyle& style = environment.BaseStyle();
   DCHECK(!style.GetVariableData(GetProperty().CustomPropertyName()) ||
          !style.GetVariableData(GetProperty().CustomPropertyName())
               ->NeedsVariableResolution());
   return nullptr;
 }
 
+void CSSVarCycleInterpolationType::Composite(
+    UnderlyingValueOwner& underlying_value_owner,
+    double underlying_fraction,
+    const InterpolationValue& value,
+    double interpolation_fraction) const {
+  underlying_value_owner.Set(this, value);
+}
+
 void CSSVarCycleInterpolationType::Apply(
     const InterpolableValue&,
     const NonInterpolableValue*,
-    InterpolationEnvironment& environment) const {
-  StyleBuilder::ApplyProperty(
-      GetProperty().GetCSSPropertyName(),
-      To<CSSInterpolationEnvironment>(environment).GetState(),
-      ScopedCSSValue(
-          *MakeGarbageCollected<CSSCustomPropertyDeclaration>(
-              GetProperty().CustomPropertyName(), CSSValueID::kUnset),
-          nullptr));
+    CSSInterpolationEnvironment& environment,
+    bool is_attr_tainted) const {
+  StyleBuilder::ApplyProperty(GetProperty().GetCSSPropertyName(),
+                              environment.GetState(),
+                              *cssvalue::CSSUnsetValue::Create());
 }
 
 }  // namespace blink

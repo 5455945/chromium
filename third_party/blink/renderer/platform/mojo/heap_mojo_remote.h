@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <utility>
 
+#include "base/gtest_prod_util.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/renderer/platform/context_lifecycle_observer.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
-#include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
 
 namespace blink {
 
@@ -42,6 +45,7 @@ class HeapMojoRemote {
   Proxy* operator->() const { return get(); }
   Proxy* get() const { return wrapper_->remote().get(); }
   bool is_bound() const { return wrapper_->remote().is_bound(); }
+  explicit operator bool() const { return is_bound(); }
   bool is_connected() const { return wrapper_->remote().is_connected(); }
   void reset() { wrapper_->remote().reset(); }
   void ResetWithReason(uint32_t custom_reason, const std::string& description) {
@@ -54,8 +58,11 @@ class HeapMojoRemote {
       mojo::ConnectionErrorWithReasonCallback handler) {
     wrapper_->remote().set_disconnect_with_reason_handler(std::move(handler));
   }
-  mojo::PendingReceiver<Interface> BindNewPipeAndPassReceiver(
-      scoped_refptr<base::SequencedTaskRunner> task_runner) WARN_UNUSED_RESULT {
+  void reset_on_idle_timeout(base::TimeDelta timeout) {
+    wrapper_->remote().reset_on_idle_timeout(timeout);
+  }
+  [[nodiscard]] mojo::PendingReceiver<Interface> BindNewPipeAndPassReceiver(
+      scoped_refptr<base::SequencedTaskRunner> task_runner) {
     DCHECK(task_runner);
     return wrapper_->remote().BindNewPipeAndPassReceiver(
         std::move(task_runner));
@@ -64,6 +71,9 @@ class HeapMojoRemote {
             scoped_refptr<base::SequencedTaskRunner> task_runner) {
     DCHECK(task_runner);
     wrapper_->remote().Bind(std::move(pending_remote), std::move(task_runner));
+  }
+  [[nodiscard]] mojo::PendingRemote<Interface> Unbind() {
+    return wrapper_->remote().Unbind();
   }
   void PauseReceiverUntilFlushCompletes(mojo::PendingFlush flush) {
     wrapper_->remote().PauseReceiverUntilFlushCompletes(std::move(flush));
@@ -74,9 +84,17 @@ class HeapMojoRemote {
   void Trace(Visitor* visitor) const { visitor->Trace(wrapper_); }
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(HeapMojoRemoteGCWithContextObserverTest,
+                           NoResetOnConservativeGC);
+  FRIEND_TEST_ALL_PREFIXES(HeapMojoRemoteGCWithContextObserverTest, ResetsOnGC);
+  FRIEND_TEST_ALL_PREFIXES(HeapMojoRemoteGCWithoutContextObserverTest,
+                           ResetsOnGC);
+
   // Garbage collected wrapper class to add ContextLifecycleObserver.
   class Wrapper final : public GarbageCollected<Wrapper>,
                         public ContextLifecycleObserver {
+    USING_PRE_FINALIZER(Wrapper, Dispose);
+
    public:
     explicit Wrapper(ContextLifecycleNotifier* notifier) {
       SetContextLifecycleNotifier(notifier);
@@ -89,6 +107,8 @@ class HeapMojoRemote {
     void Trace(Visitor* visitor) const override {
       ContextLifecycleObserver::Trace(visitor);
     }
+
+    void Dispose() { remote_.reset(); }
 
     mojo::Remote<Interface>& remote() { return remote_; }
 

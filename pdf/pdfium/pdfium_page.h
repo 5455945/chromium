@@ -1,82 +1,211 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef PDF_PDFIUM_PDFIUM_PAGE_H_
 #define PDF_PDFIUM_PDFIUM_PAGE_H_
 
+#include <stdint.h>
+
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_forward.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "pdf/buildflags.h"
 #include "pdf/page_orientation.h"
-#include "pdf/pdf_engine.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "pdf/ui/thumbnail.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 #include "third_party/pdfium/public/cpp/fpdf_scopers.h"
 #include "third_party/pdfium/public/fpdf_doc.h"
 #include "third_party/pdfium/public/fpdf_formfill.h"
 #include "third_party/pdfium/public/fpdf_text.h"
+#include "third_party/pdfium/public/fpdfview.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
+
+#if BUILDFLAG(ENABLE_PDF_INK2)
+#include "ui/gfx/geometry/size.h"
+#endif
 
 namespace gfx {
 class Point;
-class RectF;
 }  // namespace gfx
 
 namespace chrome_pdf {
 
 class PDFiumEngine;
+class PdfRect;
 class Thumbnail;
+struct AccessibilityCharInfo;
+struct AccessibilityFormGraphicInfo;
 struct AccessibilityHighlightInfo;
 struct AccessibilityImageInfo;
+struct AccessibilityLineSegment;
 struct AccessibilityLinkInfo;
+struct AccessibilityStructureElement;
 struct AccessibilityTextFieldInfo;
 struct AccessibilityTextRunInfo;
 
 // Wrapper around a page from the document.
 class PDFiumPage {
  public:
-  PDFiumPage(PDFiumEngine* engine, int i);
+  // Prevents FPDF_PAGE unloading.
+  class ScopedPageUnloadPreventer {
+   public:
+    explicit ScopedPageUnloadPreventer(PDFiumPage* page);
+    ScopedPageUnloadPreventer(const ScopedPageUnloadPreventer& that);
+    ScopedPageUnloadPreventer& operator=(const ScopedPageUnloadPreventer& that);
+    ~ScopedPageUnloadPreventer();
+
+   private:
+    raw_ptr<PDFiumPage> page_;
+  };
+
+  // Prevents FPDF_TEXTPAGE unloading.
+  class ScopedTextPageUnloadPreventer {
+   public:
+    explicit ScopedTextPageUnloadPreventer(PDFiumPage* page);
+    ScopedTextPageUnloadPreventer(const ScopedTextPageUnloadPreventer&) =
+        delete;
+    ScopedTextPageUnloadPreventer& operator=(
+        const ScopedTextPageUnloadPreventer&) = delete;
+    ~ScopedTextPageUnloadPreventer();
+
+   private:
+    const raw_ptr<PDFiumPage> page_;
+  };
+
+  PDFiumPage(PDFiumEngine* engine, uint32_t i);
   PDFiumPage(const PDFiumPage&) = delete;
   PDFiumPage& operator=(const PDFiumPage&) = delete;
-  PDFiumPage(PDFiumPage&& that);
+  PDFiumPage(PDFiumPage&& that) = delete;
+  PDFiumPage& operator=(PDFiumPage&& that) = delete;
   ~PDFiumPage();
 
-  // Unloads the PDFium data for this page from memory.
-  void Unload();
+  base::WeakPtr<PDFiumPage> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
+  void InvalidateWeakPtrs() { weak_factory_.InvalidateWeakPtrs(); }
+
+  // Unloads the PDFium data for this page from memory. Returns true if the
+  // unload happened, or false if an unload preventer blocked it.
+  bool Unload();
+
   // Gets the FPDF_PAGE for this page, loading and parsing it if necessary.
   FPDF_PAGE GetPage();
 
   // Returns FPDF_TEXTPAGE for the page, loading and parsing it if necessary.
   FPDF_TEXTPAGE GetTextPage();
 
-  // Log overlaps between annotations in the page.
-  void LogOverlappingAnnotations();
-  // See definition of PDFEngine::GetTextRunInfo().
-  absl::optional<AccessibilityTextRunInfo> GetTextRunInfo(int start_char_index);
+  // Gets the number of characters in the page. Returns -1 on error.
+  int GetCharCount();
+
+  // Resets loaded text and loads it again.
+  void ReloadTextPage();
+
+  // Get all the chars from the page.
+  std::vector<AccessibilityCharInfo> GetCharInfo();
+
+  // Returns a copy of the structure tree which describes the logical
+  // organization of the current PDF page, if present.
+  std::unique_ptr<AccessibilityStructureElement> GetStructureTree();
+
+  // Gets all the text runs from the page.
+  std::vector<AccessibilityTextRunInfo> GetTextRunInfo();
+
+  // Returns the text run that contains `char_index`. Return a filled out
+  // AccessibilityTextRunInfo on success or std::nullopt on failure. e.g. When
+  // `char_index` is out of bounds.
+  std::optional<AccessibilityTextRunInfo> GetTextRunInfoAt(int char_index);
+
   // Get a unicode character from the page.
   uint32_t GetCharUnicode(int char_index);
+
+  // Returns whether the char at `char_index` is a line break that PDFium
+  // inserted between lines, i.e. a generated '\r' or '\n'.
+  bool IsSynthesizedNewline(int char_index);
+
   // Get the bounds of a character in page pixels.
   gfx::RectF GetCharBounds(int char_index);
+
+  // Get the bounds of the page with the crop box applied, in page pixels.
+  gfx::RectF GetCroppedRect();
+
+  // Get the bounding box of the page in page pixels. The bounding box is the
+  // largest rectangle containing all visible content in the effective crop box.
+  // If the bounding box can't be calculated, returns the effective crop box.
+  // The resulting bounding box is relative to the effective crop box.
+  gfx::RectF GetBoundingBox();
+
+  // Returns if the character at `char_index` is within `page_bounds`.
+  bool IsCharInPageBounds(int char_index, const gfx::RectF& page_bounds);
+
   // For all the links on the page, get their urls, underlying text ranges and
   // bounding boxes.
-  std::vector<AccessibilityLinkInfo> GetLinkInfo(
-      const std::vector<AccessibilityTextRunInfo>& text_runs);
-  // For all the images on the page, get their alt texts and bounding boxes.
-  std::vector<AccessibilityImageInfo> GetImageInfo(uint32_t text_run_count);
+  std::vector<AccessibilityLinkInfo> GetLinkInfo();
+
+  // For all the images on the page, get their alt texts and bounding boxes. If
+  // the alt text is empty or unavailable, and if the user has requested that
+  // the OCR service tag the PDF so that it is made accessible, transfer the raw
+  // image pixels in the `image_data` field. Otherwise do not populate the
+  // `image_data` field.
+  std::vector<AccessibilityImageInfo> GetImageInfo();
+
+  // Returns the indices of image objects.
+  std::vector<int> GetImageObjectIndices();
+
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+  // Returns if the page has images.
+  bool HasImages();
+
+  // Returns the image as a 32-bit bitmap format for OCR. The image dimensions
+  // will be at most `max_image_dimension`.
+  SkBitmap GetImageForOcr(int page_object_index, int max_image_dimension);
+
+  // Called to inform PDFiumPage that OCR operations performed on this page
+  // added text into the page or not.
+  // May only be called once per PDFiumPage instance.
+  void OnSearchifyGotOcrResult(bool added_text);
+
+  // Returns if Searchify has run on the page, regardless of whether it added
+  // any text to the page or not.
+  bool IsPageSearchified() const;
+
+  // Returns if it is safe to call `ReloadTextPage()`.
+  bool CanReloadTextPage() const;
+#endif  // BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+
   // For all the highlights on the page, get their underlying text ranges and
   // bounding boxes.
-  std::vector<AccessibilityHighlightInfo> GetHighlightInfo(
-      const std::vector<AccessibilityTextRunInfo>& text_runs);
-  // For all the text fields on the page, get their properties like name,
-  // value, bounding boxes, etc.
-  std::vector<AccessibilityTextFieldInfo> GetTextFieldInfo(
-      uint32_t text_run_count);
+  std::vector<AccessibilityHighlightInfo> GetHighlightInfo();
+
+  // For all the graphics (diagrams containing both graphical primitives and
+  // text) on the page, get their underlying text ranges and bounding boxes,
+  // sorted by text run index.
+  std::vector<AccessibilityFormGraphicInfo> GetFormGraphicInfo();
+
+  // Returns the straight line segments stroked by the page's top-level path
+  // objects, such as table borders.
+  std::vector<AccessibilityLineSegment> GetLineSegmentInfo();
+
+  // Returns the bounds of the axis-aligned rectangles filled by the page's
+  // top-level fill-only path objects, such as table borders drawn as thin
+  // filled rectangles, in the same pixel coordinates as text runs.
+  std::vector<gfx::RectF> GetFilledRectInfo();
+
+  // Traverses the entire struct tree of the page recursively and extracts the
+  // text run type or the alt text from struct tree elements corresponding to
+  // the marked content IDs present in `marked_content_id_to_text_runs_map_` or
+  // `marked_content_id_to_images_map_` respectively.
+  void PopulateTextRunTypeAndImageAltText();
 
   enum Area {
     NONSELECTABLE_AREA,
@@ -100,10 +229,10 @@ class PDFiumPage {
     // Valid for DOCLINK_AREA only.
     int page;
     // Valid for DOCLINK_AREA only. From the top-left of the page.
-    absl::optional<float> x_in_pixels;
-    absl::optional<float> y_in_pixels;
+    std::optional<float> x_in_pixels;
+    std::optional<float> y_in_pixels;
     // Valid for DOCLINK_AREA only.
-    absl::optional<float> zoom;
+    std::optional<float> zoom;
   };
 
   // Given a `link_index`, returns the type of underlying area and the link
@@ -115,59 +244,61 @@ class PDFiumPage {
   // NONSELECTABLE_AREA if link detection failed.
   Area GetLinkTarget(FPDF_LINK link, LinkTarget* target);
 
-  // Fills the output params with the in-page coordinates and the zoom value of
-  // the destination.
+  // Fills the output params with the PDF coordinates and the zoom value of the
+  // destination.
   void GetPageDestinationTarget(FPDF_DEST destination,
-                                absl::optional<float>* dest_x,
-                                absl::optional<float>* dest_y,
-                                absl::optional<float>* zoom_value);
+                                std::optional<float>* dest_x,
+                                std::optional<float>* dest_y,
+                                std::optional<float>* zoom_value);
 
-  // For a named destination with "XYZ" view fit type, pre-processes the in-page
+  // For a named destination with "XYZ" view fit type, pre-processes the PDF
   // x/y coordinate in case it's out of the range of the page dimension. Then
   // transform it to a screen coordinate.
   float PreProcessAndTransformInPageCoordX(float x);
   float PreProcessAndTransformInPageCoordY(float y);
 
-  // Transforms an (x, y) position in page coordinates to screen coordinates.
+  // Transforms an (x, y) position in PDF coordinates to screen coordinates.
   gfx::PointF TransformPageToScreenXY(const gfx::PointF& xy);
 
-  // Transforms an in-page x coordinate to its value in screen coordinates.
+  // Transforms an PDF x coordinate to its value in screen coordinates.
   float TransformPageToScreenX(float x);
 
-  // Transforms an in-page y coordinate to its value in screen coordinates.
+  // Transforms an PDF y coordinate to its value in screen coordinates.
   float TransformPageToScreenY(float y);
 
-  // Given a point in the document that's in this page, returns its character
-  // index if it's near a character, and also the type of text.
-  // Target is optional. It will be filled in for WEBLINK_AREA or
-  // DOCLINK_AREA only.
-  Area GetCharIndex(const gfx::Point& point,
-                    PageOrientation orientation,
-                    int* char_index,
-                    int* form_type,
-                    LinkTarget* target);
+  // Given a point in this page in PDF coordinates, returns the area type, or
+  // `NONSELECTABLE_AREA` if the area type cannot be determined.
+  //
+  // Also writes to the following non-optional out-parameters:
+  // - `char_index`, if `point` is near a character.
+  // - `char_bounds`, if `char_index` is valid.
+  // - `form_type, if `point` is over a form.
+  // - `target`, if the area is `WEBLINK_AREA` or `DOCLINK_AREA`.
+  Area GetCharInfo(const gfx::PointF& point,
+                   int* char_index,
+                   PdfRect* char_bounds,
+                   int* form_type,
+                   LinkTarget* target);
 
   // Converts a form type to its corresponding Area.
   static Area FormTypeToArea(int form_type);
-
-  // Gets the character at the given index.
-  char16_t GetCharAtIndex(int index);
-
-  // Gets the number of characters in the page.
-  int GetCharCount();
 
   // Returns true if the given `char_index` lies within the character range
   // of the page.
   bool IsCharIndexInBounds(int char_index);
 
-  // Given a rectangle in page coordinates, computes the range of continuous
+  // Given a rectangle in PDF coordinates, computes the range of continuous
   // characters which lie inside that rectangle. Returns false without
   // modifying the out parameters if no character lies inside the rectangle.
   bool GetUnderlyingTextRangeForRect(const gfx::RectF& rect,
                                      int* start_index,
                                      int* char_len);
 
-  // Converts from page coordinates to screen coordinates.
+  // Converts from PDF coordinates to screen coordinates.
+  gfx::Rect PageToScreen(const gfx::Point& page_point,
+                         double zoom,
+                         const PdfRect& rect,
+                         PageOrientation orientation) const;
   gfx::Rect PageToScreen(const gfx::Point& page_point,
                          double zoom,
                          double left,
@@ -183,7 +314,11 @@ class PDFiumPage {
   // Generates a page thumbnail accommodating a specific `device_pixel_ratio`.
   Thumbnail GenerateThumbnail(float device_pixel_ratio);
 
-  int index() const { return index_; }
+#if BUILDFLAG(ENABLE_PDF_INK2)
+  gfx::Size GetThumbnailSize(float device_pixel_ratio);
+#endif
+
+  uint32_t index() const { return index_; }
 
   const gfx::Rect& rect() const { return rect_; }
   void set_rect(const gfx::Rect& r) { rect_ = r; }
@@ -204,25 +339,29 @@ class PDFiumPage {
   friend class PDFiumPageLinkTest;
   friend class PDFiumTestBase;
 
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageTest, TestCalculateImages);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, TestAnnotLinkGeneration);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageTest, TestImageAltText);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, TestLinkGeneration);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageHighlightTest, TestPopulateHighlights);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageTextFieldTest, TestPopulateTextFields);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageChoiceFieldTest, TestPopulateChoiceFields);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageButtonTest, TestPopulateButtons);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageOverlappingTest, CountPartialOverlaps);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageOverlappingTest, CountCompleteOverlaps);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageHeuristicEnhancementsTest,
+                           AnnotLinkReplacesDuplicateWebLink);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageHighlightTest, PopulateHighlights);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageForOcrTest, LowResolutionImage);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageForOcrTest, HighResolutionImage);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageForOcrTest, RotatedPage);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageForOcrTest, NonImage);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageTest, ImagesWithAltText);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageTest, TextAndImagesWithAltText);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, AnnotLinkGeneration);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, GetLinkTarget);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, GetUTF8LinkTarget);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, LinkGeneration);
 
-  class ScopedUnloadPreventer {
-   public:
-    explicit ScopedUnloadPreventer(PDFiumPage* page);
-    ~ScopedUnloadPreventer();
+  // Key: Marked content id for the text element as specified in the struct
+  //      tree.
+  // Value: A list of indices in the `text_runs_` vector.
+  using MarkedContentIdToTextRunInfoMap = std::map<int, std::vector<size_t>>;
 
-   private:
-    PDFiumPage* const page_;
-  };
+  // Key: Marked content id for the image element as specified in the struct
+  //      tree.
+  // Value: Index of the image in the `images_` vector.
+  using MarkedContentIdToImageMap = std::map<int, size_t>;
 
   struct Link {
     Link();
@@ -244,9 +383,12 @@ class PDFiumPage {
     Image(const Image& other);
     ~Image();
 
-    gfx::Rect bounding_rect;
-    // Alt text is available only for tagged PDFs.
+    // Index of the object in its page.
+    int page_object_index;
+
+    // Alt text is available only for PDFs that are tagged for accessibility.
     std::string alt_text;
+    gfx::Rect bounding_rect;
   };
 
   // Represents a highlight within the page.
@@ -269,68 +411,13 @@ class PDFiumPage {
     std::string note_text;
   };
 
-  // Represents a form field within the page.
-  struct FormField {
-    FormField();
-    FormField(const FormField& other);
-    ~FormField();
+  // Represents a graphic containing both graphical primitives and text.
+  struct Graphic {
+    int32_t start_char_index = -1;
+    int32_t char_count = 0;
 
+    // The bounding rect of the graphic in screen coordinates.
     gfx::Rect bounding_rect;
-    // Represents the name of form field as defined in the field dictionary.
-    std::string name;
-    // Represents the flags of form field as defined in the field dictionary.
-    int flags;
-  };
-
-  // Represents a text field within the page.
-  struct TextField : FormField {
-    TextField();
-    TextField(const TextField& other);
-    ~TextField();
-
-    std::string value;
-  };
-
-  // Represents a choice field option.
-  struct ChoiceFieldOption {
-    ChoiceFieldOption();
-    ChoiceFieldOption(const ChoiceFieldOption& other);
-    ~ChoiceFieldOption();
-
-    std::string name;
-    bool is_selected;
-  };
-
-  // Represents a choice field within the page.
-  struct ChoiceField : FormField {
-    ChoiceField();
-    ChoiceField(const ChoiceField& other);
-    ~ChoiceField();
-
-    std::vector<ChoiceFieldOption> options;
-  };
-
-  // Represents a button within the page.
-  struct Button : FormField {
-    Button();
-    Button(const Button& other);
-    ~Button();
-
-    std::string value;
-    // A button can be of type radio, checkbox or push button.
-    int type;
-    // Represents if the radio button or checkbox is checked.
-    bool is_checked = false;
-    // Represents count of controls in the control group. A group of
-    // interactive form annotations is collectively called a form control
-    // group. Here an interactive form annotation should be either a radio
-    // button or a checkbox.
-    uint32_t control_count = 0;
-    // Represents index of the control in the control group. A group of
-    // interactive form annotations is collectively called a form control
-    // group. Here an interactive form annotation should be either a radio
-    // button or a checkbox. Value of `control_index` is -1 for push button.
-    int control_index = -1;
   };
 
   // Returns a link index if the given character index is over a link, or -1
@@ -344,18 +431,16 @@ class PDFiumPage {
   void PopulateAnnotationLinks();
   // Calculate the locations of images on the page.
   void CalculateImages();
+  // Calculate the locations and character ranges of graphics on the page.
+  void CalculateGraphics();
+  // Returns the straight line segments on the page.
+  std::vector<AccessibilityLineSegment> CalculateLineSegments();
+  // Returns the filled axis-aligned rectangles on the page.
+  std::vector<gfx::RectF> CalculateFilledRects();
   // Populate annotations like highlight and text field on the page.
   void PopulateAnnotations();
   // Populate `highlights_` with `annot`.
   void PopulateHighlight(FPDF_ANNOTATION annot);
-  // Populate `text_fields_` with `annot`.
-  void PopulateTextField(FPDF_ANNOTATION annot);
-  // Populate `choice_fields_` with `annot`.
-  void PopulateChoiceField(FPDF_ANNOTATION annot);
-  // Populate `buttons_` with `annot`.
-  void PopulateButton(FPDF_ANNOTATION annot);
-  // Populate form fields like text field, choice field and button on the page.
-  void PopulateFormField(FPDF_ANNOTATION annot);
   // Returns link type and fills target associated with a destination. Returns
   // NONSELECTABLE_AREA if detection failed.
   Area GetDestinationTarget(FPDF_DEST destination, LinkTarget* target);
@@ -365,60 +450,86 @@ class PDFiumPage {
   // Calculates the set of character indices on which text runs need to be
   // broken for page objects such as links and images.
   void CalculatePageObjectTextRunBreaks();
+  // Calculate and caches all text runs and character information on the page.
+  void CalculateTextRuns();
+  // Calculates and return a text run that starts exactly at `start_char_index`.
+  AccessibilityTextRunInfo CalculateTextRunInfoAt(uint32_t start_char_index,
+                                                  uint32_t chars_count);
 
-  // Key    :  Marked content id for the image element as specified in the
-  //           struct tree.
-  // Value  :  Index of image in the `images_` vector.
-  using MarkedContentIdToImageMap = std::map<int, size_t>;
-  // Traverses the entire struct tree of the page recursively and extracts the
-  // alt text from struct tree elements corresponding to the marked content IDs
-  // present in `marked_content_id_image_map`.
-  void PopulateImageAltText(
-      const MarkedContentIdToImageMap& marked_content_id_image_map);
   // Traverses a struct element and its sub-tree recursively and extracts the
-  // alt text from struct elements corresponding to the marked content IDs
-  // present in `marked_content_id_image_map`. Uses `visited_elements` to guard
-  // against malformed struct trees.
-  void PopulateImageAltTextForStructElement(
-      const MarkedContentIdToImageMap& marked_content_id_image_map,
+  // text run type or the alt text from struct elements corresponding to the
+  // marked content IDs present in `marked_content_id_to_text_runs_map_` or
+  // `marked_content_id_to_images_map_` respectively. Uses `visited_elements` to
+  // guard against malformed struct trees.
+  void PopulateTextRunTypeAndImageAltTextForStructElement(
       FPDF_STRUCTELEMENT current_element,
-      std::set<FPDF_STRUCTELEMENT>* visited_elements);
-  static uint32_t CountLinkHighlightOverlaps(
-      const std::vector<Link>& links,
-      const std::vector<Highlight>& highlights);
-  bool PopulateFormFieldProperties(FPDF_ANNOTATION annot,
-                                   FormField* form_field);
+      std::set<FPDF_STRUCTELEMENT>& visited_elements);
+
+  // Looks up marked content IDs from the structure element and associates the
+  // corresponding text runs and images with the provided tree node.
+  void AssociateMarkedContentWithStructureElement(
+      FPDF_STRUCTELEMENT element,
+      AccessibilityStructureElement* tree_node);
+
+  // Traverses a structure element and its subtree recursively and extracts all
+  // information, storing it in a corresponding hierarchy of
+  // `AccessibilityStructureElement`s. Also, extracts the text run type or the
+  // alt text from structure elements corresponding to the marked content IDs
+  // present in `marked_content_id_to_text_runs_map_` or
+  // `marked_content_id_to_images_map_` respectively. Uses `visited_elements` to
+  // guard against malformed structure trees.
+  std::unique_ptr<AccessibilityStructureElement> GetStructureSubtree(
+      FPDF_STRUCTELEMENT element,
+      std::set<FPDF_STRUCTELEMENT>& visited_elements);
+
   // Generates and sends the thumbnail using `send_callback`.
   void GenerateAndSendThumbnail(float device_pixel_ratio,
                                 SendThumbnailCallback send_callback);
 
-  PDFiumEngine* engine_;
+  raw_ptr<PDFiumEngine> engine_;
   ScopedFPDFPage page_;
   ScopedFPDFTextPage text_page_;
-  int index_;
-  int preventing_unload_count_ = 0;
+  uint32_t index_;
+  int preventing_page_unload_count_ = 0;
+  int preventing_text_page_unload_count_ = 0;
   gfx::Rect rect_;
+  bool calculated_text_runs_ = false;
+  // Text runs are sorted by character index.
+  std::vector<AccessibilityTextRunInfo> text_runs_;
+  MarkedContentIdToTextRunInfoMap marked_content_id_to_text_runs_map_;
+  // Track which text run indices have been associated with a structured node in
+  // order to discover which text runs are unassociated with structured
+  // elements. This information is used to determine how to interleave
+  // structured and unstructured content in the final AXTree.
+  std::set<size_t> associated_text_run_indices_;
   bool calculated_links_ = false;
   std::vector<Link> links_;
   bool calculated_images_ = false;
+  MarkedContentIdToImageMap marked_content_id_to_images_map_;
   std::vector<Image> images_;
+  bool calculated_graphics_ = false;
+  std::vector<Graphic> graphics_;
+  // Null until calculated, since a page may have no line segments.
+  std::optional<std::vector<AccessibilityLineSegment>> line_segments_;
+  // Null until calculated, since a page may have no filled rectangles.
+  std::optional<std::vector<gfx::RectF>> filled_rects_;
   bool calculated_annotations_ = false;
   std::vector<Highlight> highlights_;
-  std::vector<TextField> text_fields_;
-  std::vector<ChoiceField> choice_fields_;
-  std::vector<Button> buttons_;
-  bool logged_overlapping_annotations_ = false;
   bool calculated_page_object_text_run_breaks_ = false;
   // The set of character indices on which text runs need to be broken for page
   // objects.
   std::set<int> page_object_text_run_breaks_;
   base::OnceClosure thumbnail_callback_;
-  bool available_;
-};
+  bool available_ = false;
 
-// Converts page orientations to the PDFium equivalents, as defined by
-// FPDF_RenderPage().
-int ToPDFiumRotation(PageOrientation orientation);
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+  // Indicates whether Searchify added text to this page or not. Note that if
+  // this page has never been Searchified, then this is null.
+  std::optional<bool> has_searchify_added_text_;
+#endif
+
+  base::WeakPtrFactory<PDFiumPage> weak_factory_{this};
+};
 
 constexpr uint32_t MakeARGB(unsigned int a,
                             unsigned int r,

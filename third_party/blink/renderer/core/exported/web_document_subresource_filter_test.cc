@@ -1,14 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/platform/web_document_subresource_filter.h"
 
+#include <algorithm>
+
+#include "base/memory/raw_ptr.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/web_cache.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -16,7 +19,9 @@
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 
 namespace blink {
@@ -29,17 +34,17 @@ class TestDocumentSubresourceFilter : public WebDocumentSubresourceFilter {
       : load_policy_(policy) {}
 
   LoadPolicy GetLoadPolicy(const WebURL& resource_url,
-                           mojom::blink::RequestContextType) override {
-    String resource_path = KURL(resource_url).GetPath();
-    if (std::find(queried_subresource_paths_.begin(),
-                  queried_subresource_paths_.end(),
-                  resource_path) == queried_subresource_paths_.end()) {
+                           network::mojom::RequestDestination,
+                           subresource_filter::ScopedRule* out_rule) override {
+    String resource_path = KURL(resource_url).GetPath().ToString();
+    if (!std::ranges::contains(queried_subresource_paths_, resource_path)) {
       queried_subresource_paths_.push_back(resource_path);
     }
     String resource_string = resource_url.GetString();
     for (const String& suffix : blocklisted_suffixes_) {
-      if (resource_string.EndsWith(suffix))
+      if (resource_string.ends_with(suffix)) {
         return load_policy_;
+      }
     }
     return LoadPolicy::kAllow;
   }
@@ -47,6 +52,24 @@ class TestDocumentSubresourceFilter : public WebDocumentSubresourceFilter {
   LoadPolicy GetLoadPolicyForWebSocketConnect(const WebURL& url) override {
     return kAllow;
   }
+
+  LoadPolicy GetLoadPolicyForWebTransportConnect(const WebURL&) override {
+    return kAllow;
+  }
+
+  void GetDomainSelectors(
+      std::vector<std::string_view>& out_selectors) override {}
+  bool MaybeHasStyleRule(uint32_t hash) override { return false; }
+  void GetSelectorsByClass(
+      std::string_view class_name,
+      uint32_t hash,
+      std::vector<std::string_view>& out_selectors) override {}
+  void GetSelectorsById(std::string_view id_name,
+                        uint32_t hash,
+                        std::vector<std::string_view>& out_selectors) override {
+  }
+  bool IsDryRun() override { return false; }
+  uint64_t GetRulesetId() const override { return 0; }
 
   void ReportDisallowedLoad() override {}
 
@@ -73,7 +96,7 @@ class SubresourceFilteringWebFrameClient
   void DidCommitNavigation(
       WebHistoryCommitType commit_type,
       bool should_reset_browser_interface_broker,
-      const ParsedPermissionsPolicy& permissions_policy_header,
+      const network::ParsedPermissionsPolicy& permissions_policy_header,
       const DocumentPolicyFeatureState& document_policy_header) override {
     subresource_filter_ =
         new TestDocumentSubresourceFilter(load_policy_for_next_load_);
@@ -91,7 +114,9 @@ class SubresourceFilteringWebFrameClient
 
  private:
   // Weak, owned by WebDocumentLoader.
-  TestDocumentSubresourceFilter* subresource_filter_ = nullptr;
+  raw_ptr<TestDocumentSubresourceFilter,
+          UnprotectedInRelease | DanglingUntriaged>
+      subresource_filter_ = nullptr;
   TestDocumentSubresourceFilter::LoadPolicy load_policy_for_next_load_;
 };
 
@@ -112,7 +137,8 @@ class WebDocumentSubresourceFilterTest : public testing::Test {
   }
 
   void ExpectSubresourceWasLoaded(bool loaded) {
-    WebElement web_element = MainFrame()->GetDocument().QuerySelector("img");
+    WebElement web_element =
+        MainFrame()->GetDocument().QuerySelector(AtomicString("img"));
     auto* image_element = To<HTMLImageElement>(web_element.Unwrap<Node>());
     EXPECT_EQ(loaded, !!image_element->naturalWidth());
   }
@@ -136,6 +162,7 @@ class WebDocumentSubresourceFilterTest : public testing::Test {
     url_test_helpers::UnregisterAllURLsAndClearMemoryCache();
   }
 
+  test::TaskEnvironment task_environment_;
   SubresourceFilteringWebFrameClient client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
   String base_url_;

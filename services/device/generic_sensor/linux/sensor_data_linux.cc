@@ -1,17 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/linux/sensor_data_linux.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/system/sys_info.h"
 #include "base/version.h"
-#include "build/chromeos_buildflags.h"
 #include "services/device/generic_sensor/generic_sensor_consts.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
 #include "services/device/public/cpp/generic_sensor/sensor_traits.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 
 namespace device {
 
@@ -34,23 +32,10 @@ void InitAmbientLightSensorData(SensorPathsLinux* data) {
       SensorTraits<SensorType::AMBIENT_LIGHT>::kDefaultFrequency);
 }
 
-void MaybeCheckKernelVersionAndAssignFileNames(
-    const std::vector<std::string>& file_names_x,
-    const std::vector<std::string>& file_names_y,
-    const std::vector<std::string>& file_names_z,
-    SensorPathsLinux* data) {
-  data->sensor_file_names.push_back(file_names_x);
-  data->sensor_file_names.push_back(file_names_y);
-  data->sensor_file_names.push_back(file_names_z);
-}
-
 void InitAccelerometerSensorData(SensorPathsLinux* data) {
-  std::vector<std::string> file_names_x{"in_accel_x_base_raw",
-                                        "in_accel_x_raw"};
-  std::vector<std::string> file_names_y{"in_accel_y_base_raw",
-                                        "in_accel_y_raw"};
-  std::vector<std::string> file_names_z{"in_accel_z_base_raw",
-                                        "in_accel_z_raw"};
+  data->sensor_file_names.push_back({"in_accel_x_base_raw", "in_accel_x_raw"});
+  data->sensor_file_names.push_back({"in_accel_y_base_raw", "in_accel_y_raw"});
+  data->sensor_file_names.push_back({"in_accel_z_base_raw", "in_accel_z_raw"});
 
   data->sensor_scale_name = "in_accel_scale";
   data->sensor_offset_file_name = "in_accel_offset";
@@ -63,19 +48,18 @@ void InitAccelerometerSensorData(SensorPathsLinux* data) {
         reading.accel.z = -scaling_value * (reading.accel.z + offset);
       });
 
-  MaybeCheckKernelVersionAndAssignFileNames(file_names_x, file_names_y,
-                                            file_names_z, data);
   data->default_configuration = PlatformSensorConfiguration(
       SensorTraits<SensorType::ACCELEROMETER>::kDefaultFrequency);
 }
 
 void InitGyroscopeSensorData(SensorPathsLinux* data) {
-  std::vector<std::string> file_names_x{"in_anglvel_x_base_raw",
-                                        "in_anglvel_x_raw"};
-  std::vector<std::string> file_names_y{"in_anglvel_y_base_raw",
-                                        "in_anglvel_y_raw"};
-  std::vector<std::string> file_names_z{"in_anglvel_z_base_raw",
-                                        "in_anglvel_z_raw"};
+  data->sensor_file_names.push_back(
+      {"in_anglvel_x_base_raw", "in_anglvel_x_raw"});
+  data->sensor_file_names.push_back(
+      {"in_anglvel_y_base_raw", "in_anglvel_y_raw"});
+  data->sensor_file_names.push_back(
+      {"in_anglvel_z_base_raw", "in_anglvel_z_raw"});
+
   data->sensor_scale_name = "in_anglvel_scale";
   data->sensor_offset_file_name = "in_anglvel_offset";
   data->sensor_frequency_file_name = "in_anglvel_sampling_frequency";
@@ -86,8 +70,6 @@ void InitGyroscopeSensorData(SensorPathsLinux* data) {
         reading.gyro.z = scaling_value * (reading.gyro.z + offset);
       });
 
-  MaybeCheckKernelVersionAndAssignFileNames(file_names_x, file_names_y,
-                                            file_names_z, data);
   data->default_configuration = PlatformSensorConfiguration(
       SensorTraits<SensorType::GYROSCOPE>::kDefaultFrequency);
 }
@@ -95,9 +77,9 @@ void InitGyroscopeSensorData(SensorPathsLinux* data) {
 // TODO(maksims): Verify magnetometer works correctly on a chromebook when
 // I get one with that sensor onboard.
 void InitMagnetometerSensorData(SensorPathsLinux* data) {
-  std::vector<std::string> file_names_x{"in_magn_x_raw"};
-  std::vector<std::string> file_names_y{"in_magn_y_raw"};
-  std::vector<std::string> file_names_z{"in_magn_z_raw"};
+  data->sensor_file_names.push_back({"in_magn_x_raw"});
+  data->sensor_file_names.push_back({"in_magn_y_raw"});
+  data->sensor_file_names.push_back({"in_magn_z_raw"});
 
   data->sensor_scale_name = "in_magn_scale";
   data->sensor_offset_file_name = "in_magn_offset";
@@ -110,8 +92,6 @@ void InitMagnetometerSensorData(SensorPathsLinux* data) {
         reading.magn.z = scaling * (reading.magn.z + offset);
       });
 
-  MaybeCheckKernelVersionAndAssignFileNames(file_names_x, file_names_y,
-                                            file_names_z, data);
   data->default_configuration = PlatformSensorConfiguration(
       SensorTraits<SensorType::MAGNETOMETER>::kDefaultFrequency);
 }

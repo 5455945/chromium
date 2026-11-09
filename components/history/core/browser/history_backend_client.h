@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "url/gurl.h"
 
 namespace history {
@@ -20,8 +19,12 @@ struct URLAndTitle {
 
 class HistoryBackendClient {
  public:
-  HistoryBackendClient() {}
-  virtual ~HistoryBackendClient() {}
+  HistoryBackendClient() = default;
+
+  HistoryBackendClient(const HistoryBackendClient&) = delete;
+  HistoryBackendClient& operator=(const HistoryBackendClient&) = delete;
+
+  virtual ~HistoryBackendClient() = default;
 
   // Returns true if the specified URL is pinned due to being bookmarked or used
   // by the password manager.
@@ -33,9 +36,6 @@ class HistoryBackendClient {
   // Returns whether `url` should be considered web-safe (see
   // content::ChildProcessSecurityPolicy).
   virtual bool IsWebSafe(const GURL& url) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HistoryBackendClient);
 };
 
 }  // namespace history

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 
 namespace blink {
 
+// Mock for the **remote** (i.e. the browser side of the Mojo connection).
 class MockIDBTransaction
     : public testing::StrictMock<mojom::blink::IDBTransaction> {
  public:
@@ -35,11 +36,12 @@ class MockIDBTransaction
                PutCallback callback),
               (override));
   MOCK_METHOD(void,
-              PutAll,
+              SetIndexKeys,
               (int64_t object_store_id,
-               Vector<mojom::blink::IDBPutParamsPtr> puts,
-               PutAllCallback callback),
+               std::unique_ptr<IDBKey> primary_key,
+               IDBIndexKeys),
               (override));
+  MOCK_METHOD(void, SetIndexKeysDone, (), (override));
   MOCK_METHOD(void, Commit, (int64_t num_errors_handled), (override));
 
   void Bind(mojo::PendingAssociatedReceiver<mojom::blink::IDBTransaction>);
@@ -50,4 +52,4 @@ class MockIDBTransaction
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_INDEXEDDB_MOCK_WEB_IDB_TRANSACTION_H_
+#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_INDEXEDDB_MOCK_IDB_TRANSACTION_H_

@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -50,22 +50,22 @@ def Convert(test_results, base_dir, test_path_format):
     artifacts = result.get('outputArtifacts', {})
     shard = _GetTagValue(result.get('tags', []), 'shard', as_type=int)
     _MergeDict(
-        results['tests'],
-        {
-            benchmark_name: {
-                story_name: {
-                    'actual': actual_status,
-                    'expected': expected_status,
-                    'is_unexpected': not result['expected'],
-                    'times': float(result['runDuration'].rstrip('s')),
-                    'shard': shard,
-                    'artifacts': {
-                        name: _ArtifactPath(artifact, base_dir)
-                        for name, artifact in artifacts.items()
-                    }
-                }
-            }
+      results['tests'],
+      {
+        benchmark_name: {
+          story_name: {
+            'actual': actual_status,
+            'expected': expected_status,
+            'is_unexpected': not result['expected'],
+            'times': float(result['runDuration'].rstrip('s')),
+            'shard': shard,
+            'artifacts': {
+              name: _ArtifactPath(artifact, base_dir)
+              for name, artifact in artifacts.items()
+            },
+          }
         }
+      },
     )
 
   for stories in results['tests'].values():
@@ -80,36 +80,44 @@ def Convert(test_results, base_dir, test_path_format):
 
   # Test results are written in order of execution, so the first test start
   # time is approximately the start time of the whole suite.
-  test_suite_start_time = (test_results[0]['startTime'] if test_results
-                           else datetime.datetime.utcnow().isoformat() + 'Z')
+  test_suite_start_time = (
+    test_results[0]['startTime']
+    if test_results
+    else datetime.datetime.utcnow().isoformat() + 'Z'
+  )
   # If Telemetry stops with a unhandleable error, then remaining stories
   # are marked as unexpectedly skipped.
-  interrupted = any(t['status'] == 'SKIP' and not t['expected']
-                    for t in test_results)
+  interrupted = any(
+    t['status'] == 'SKIP' and not t['expected'] for t in test_results
+  )
   results.update(
-      seconds_since_epoch=util.IsoTimestampToEpoch(test_suite_start_time),
-      interrupted=interrupted,
-      num_failures_by_type=dict(status_counter),
-      path_delimiter='/',
-      version=3,
+    seconds_since_epoch=util.IsoTimestampToEpoch(test_suite_start_time),
+    interrupted=interrupted,
+    num_failures_by_type=dict(status_counter),
+    path_delimiter='/',
+    version=3,
   )
 
   return results
 
 
 def _DedupedStatus(values):
-  # TODO(crbug.com/754825): The following logic is a workaround for how the
+  # TODO(crbug.com/40534832): The following logic is a workaround for how the
   # flakiness dashboard determines whether a test is flaky. As a test_case
   # (i.e. story) may be run multiple times, we squash as sequence of PASS
   # results to a single one. Note this does not affect the total number of
   # passes in num_failures_by_type.
+  # See also crbug.com/1254733 for why we want to report a FAIL in the case
+  # of flaky failures. A failed test run means less perf data so in general we
+  # want to investigate and fix those failures, not dismiss them as flakes.
   deduped = set(values)
   if deduped == {'PASS'}:
     return 'PASS'
-  elif deduped == {'SKIP'}:
+  if deduped == {'SKIP'}:
     return 'SKIP'
-  else:
-    return ' '.join(values)
+  if 'FAIL' in deduped:
+    return 'FAIL'
+  return ' '.join(values)
 
 
 def _GetTagValue(tags, key, default=None, as_type=None):
@@ -123,11 +131,10 @@ def _ArtifactPath(artifact, base_dir):
   """Extract either remote or local path of an artifact."""
   if 'fetchUrl' in artifact:
     return artifact['fetchUrl']
-  else:
-    # The spec calls for paths to be relative to the output directory and
-    # '/'-delimited on all platforms.
-    path = os.path.relpath(artifact['filePath'], base_dir)
-    return path.replace(os.sep, '/')
+  # The spec calls for paths to be relative to the output directory and
+  # '/'-delimited on all platforms.
+  path = os.path.relpath(artifact['filePath'], base_dir)
+  return path.replace(os.sep, '/')
 
 
 def _MergeDict(target, values):

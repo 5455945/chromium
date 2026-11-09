@@ -1,23 +1,32 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/tab_contents/chrome_web_contents_view_delegate_views.h"
 
+#include <memory>
 #include <utility>
 
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/aura/tab_contents/web_drag_bookmark_handler_aura.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/sad_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/chrome_web_contents_menu_helper.h"
 #include "chrome/browser/ui/tab_contents/chrome_web_contents_view_handle_drop.h"
 #include "chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.h"
 #include "chrome/browser/ui/views/sad_tab_view.h"
 #include "chrome/browser/ui/views/tab_contents/chrome_web_contents_view_focus_helper.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/drop_data.h"
+#include "third_party/blink/public/common/context_menu_data/edit_flags.h"
+#include "ui/base/base_window.h"
+#include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/clipboard_constants.h"
+#include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 #include "ui/views/widget/widget.h"
 
 ChromeWebContentsViewDelegateViews::ChromeWebContentsViewDelegateViews(
@@ -30,12 +39,13 @@ ChromeWebContentsViewDelegateViews::~ChromeWebContentsViewDelegateViews() =
     default;
 
 gfx::NativeWindow ChromeWebContentsViewDelegateViews::GetNativeWindow() {
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents_);
-  return browser ? browser->window()->GetNativeWindow() : nullptr;
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents_);
+  return browser ? browser->GetWindow()->GetNativeWindow() : nullptr;
 }
 
 content::WebDragDestDelegate*
-    ChromeWebContentsViewDelegateViews::GetDragDestDelegate() {
+ChromeWebContentsViewDelegateViews::GetDragDestDelegate() {
   // We install a chrome specific handler to intercept bookmark drags for the
   // bookmark manager/extension API.
   bookmark_handler_ = std::make_unique<WebDragBookmarkHandlerAura>();
@@ -46,7 +56,7 @@ ChromeWebContentsViewFocusHelper*
 ChromeWebContentsViewDelegateViews::GetFocusHelper() const {
   ChromeWebContentsViewFocusHelper* helper =
       ChromeWebContentsViewFocusHelper::FromWebContents(web_contents_);
-  DCHECK(helper);
+  CHECK(helper, base::NotFatalUntil::M162);
   return helper;
 }
 
@@ -72,45 +82,132 @@ void ChromeWebContentsViewDelegateViews::ResetStoredFocus() {
 
 std::unique_ptr<RenderViewContextMenuBase>
 ChromeWebContentsViewDelegateViews::BuildMenu(
-    content::WebContents* web_contents,
+    content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params) {
-  std::unique_ptr<RenderViewContextMenuBase> menu;
-  content::RenderFrameHost* focused_frame = web_contents->GetFocusedFrame();
-  // If the frame tree does not have a focused frame at this point, do not
-  // bother creating RenderViewContextMenuViews.
-  // This happens if the frame has navigated to a different page before
-  // ContextMenu message was received by the current RenderFrameHost.
-  if (focused_frame) {
-    menu.reset(RenderViewContextMenuViews::Create(focused_frame, params));
-    menu->Init();
-  }
+  std::unique_ptr<RenderViewContextMenuBase> menu =
+      RenderViewContextMenuViews::Create(render_frame_host, params,
+                                         is_paste_enabled_,
+                                         is_paste_and_match_style_enabled_);
+  menu->Init();
   return menu;
 }
 
 void ChromeWebContentsViewDelegateViews::ShowMenu(
     std::unique_ptr<RenderViewContextMenuBase> menu) {
   context_menu_ = std::move(menu);
-  if (!context_menu_)
+  if (!context_menu_) {
     return;
+  }
 
   context_menu_->Show();
 }
 
 void ChromeWebContentsViewDelegateViews::ShowContextMenu(
-    content::RenderFrameHost* render_frame_host,
+    content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params) {
-  ShowMenu(BuildMenu(
-      content::WebContents::FromRenderFrameHost(render_frame_host),
-      AddContextMenuParamsPropertiesFromPreferences(web_contents_, params)));
+  BuildMenuAsync(render_frame_host, params,
+                 base::BindOnce(&ChromeWebContentsViewDelegateViews::ShowMenu,
+                                weak_ptr_factory_.GetWeakPtr()));
 }
 
-void ChromeWebContentsViewDelegateViews::OnPerformDrop(
+void ChromeWebContentsViewDelegateViews::BuildMenuAsync(
+    content::RenderFrameHost& render_frame_host,
+    const content::ContextMenuParams& params,
+    base::OnceCallback<void(std::unique_ptr<RenderViewContextMenuBase>)>
+        callback) {
+  const uint64_t request_id = ++context_menu_request_id_;
+  const content::ContextMenuParams enriched_params =
+      AddContextMenuParamsPropertiesFromPreferences(web_contents_, params);
+  if (!(enriched_params.edit_flags &
+        blink::ContextMenuDataEditFlags::kCanPaste)) {
+    is_paste_enabled_ = false;
+    is_paste_and_match_style_enabled_ = false;
+    std::move(callback).Run(BuildMenu(render_frame_host, enriched_params));
+    return;
+  }
+
+  std::optional<ui::DataTransferEndpoint> data_dst;
+  if (params.page_url.is_valid()) {
+    data_dst.emplace(
+        params.page_url,
+        ui::DataTransferEndpointOptions{
+            .notify_if_restricted = false,
+            .off_the_record =
+                web_contents_->GetBrowserContext()->IsOffTheRecord(),
+        });
+  }
+  ui::Clipboard::GetForCurrentThread()->ReadAvailableTypes(
+      ui::ClipboardBuffer::kCopyPaste, data_dst,
+      base::BindOnce(&ChromeWebContentsViewDelegateViews::OnReadAvailableTypes,
+                     weak_ptr_factory_.GetWeakPtr(), request_id,
+                     render_frame_host.GetGlobalId(), enriched_params, data_dst,
+                     std::move(callback)));
+}
+
+void ChromeWebContentsViewDelegateViews::OnReadAvailableTypes(
+    uint64_t request_id,
+    content::GlobalRenderFrameHostId render_frame_host_id,
+    const content::ContextMenuParams& params,
+    std::optional<ui::DataTransferEndpoint> data_dst,
+    base::OnceCallback<void(std::unique_ptr<RenderViewContextMenuBase>)>
+        callback,
+    std::vector<std::u16string> types) {
+  if (request_id != context_menu_request_id_) {
+    return;
+  }
+
+  ui::Clipboard::GetForCurrentThread()->GetAllAvailableFormats(
+      ui::ClipboardBuffer::kCopyPaste, std::move(data_dst),
+      base::BindOnce(
+          &ChromeWebContentsViewDelegateViews::OnGetAllAvailableFormats,
+          weak_ptr_factory_.GetWeakPtr(), request_id, render_frame_host_id,
+          params, std::move(callback), !types.empty()));
+}
+
+void ChromeWebContentsViewDelegateViews::OnGetAllAvailableFormats(
+    uint64_t request_id,
+    content::GlobalRenderFrameHostId render_frame_host_id,
+    const content::ContextMenuParams& params,
+    base::OnceCallback<void(std::unique_ptr<RenderViewContextMenuBase>)>
+        callback,
+    bool is_paste_enabled,
+    base::flat_set<ui::ClipboardFormatType> formats) {
+  if (request_id != context_menu_request_id_) {
+    return;
+  }
+
+  content::RenderFrameHost* render_frame_host =
+      content::RenderFrameHost::FromID(render_frame_host_id);
+  if (!render_frame_host) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  is_paste_enabled_ = is_paste_enabled;
+  is_paste_and_match_style_enabled_ =
+      formats.contains(ui::ClipboardFormatType::PlainTextType());
+  std::move(callback).Run(BuildMenu(*render_frame_host, params));
+}
+
+void ChromeWebContentsViewDelegateViews::ExecuteCommandForTesting(
+    int command_id,
+    int event_flags) {
+  CHECK(context_menu_, base::NotFatalUntil::M162);
+  context_menu_->ExecuteCommand(command_id, event_flags);
+  context_menu_.reset();
+}
+
+bool ChromeWebContentsViewDelegateViews::IsContextMenuShowingForTesting() {
+  return !!context_menu_;
+}
+
+void ChromeWebContentsViewDelegateViews::OnPerformingDrop(
     const content::DropData& drop_data,
     DropCompletionCallback callback) {
-  HandleOnPerformDrop(web_contents_, drop_data, std::move(callback));
+  HandleOnPerformingDrop(web_contents_, drop_data, std::move(callback));
 }
 
-content::WebContentsViewDelegate* CreateWebContentsViewDelegate(
+std::unique_ptr<content::WebContentsViewDelegate> CreateWebContentsViewDelegate(
     content::WebContents* web_contents) {
-  return new ChromeWebContentsViewDelegateViews(web_contents);
+  return std::make_unique<ChromeWebContentsViewDelegateViews>(web_contents);
 }

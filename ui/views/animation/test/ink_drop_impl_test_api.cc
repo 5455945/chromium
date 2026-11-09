@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include <utility>
 
+#include "ui/compositor/layer_not_drawn.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/animation/ink_drop_ripple.h"
 #include "ui/views/animation/test/ink_drop_highlight_test_api.h"
 #include "ui/views/animation/test/ink_drop_ripple_test_api.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 
 //
 // AccessFactoryOnExitHighlightState
@@ -148,5 +148,4 @@ std::vector<ui::LayerAnimator*> InkDropImplTestApi::GetLayerAnimators() {
   return animators;
 }
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test

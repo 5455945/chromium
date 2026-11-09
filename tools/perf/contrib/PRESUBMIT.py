@@ -1,8 +1,6 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
-USE_PYTHON3 = True
 
 
 def _CommonChecks(input_api, output_api):
@@ -17,17 +15,17 @@ def _CheckOwnershipForContribSubDir(sub_dir, input_api, output_api):
   results = []
   owner_file = input_api.os_path.join(sub_dir, 'OWNERS')
   if not input_api.os_path.isfile(owner_file):
-    results.append(output_api.PresubmitError(
-        '%s must have an OWNERS file' % sub_dir))
+    results.append(
+      output_api.PresubmitError('%s must have an OWNERS file' % sub_dir)
+    )
   return results
 
 
 def _CheckContribDir(input_api, output_api):
-  """ Check to make sure that:
-    1) tools/perf/contrib/ contains only directories, except __init__.py,
-    README.md, and PRESUBMIT.py file
-    2) Every subdirectory in tools/perf/contrib/ must have an OWNERS file with
-    at least two OWNERS.
+  """Check that:
+  - tools/perf/contrib/ contains only directories (except for
+    __init__.py, README.md, and PRESUBMIT.py)
+  - Each directory under tools/perf/contrib has an OWNERS file.
   """
   results = []
   contrib_dir = input_api.PresubmitLocalPath()
@@ -38,8 +36,9 @@ def _CheckContribDir(input_api, output_api):
   invalid_contrib_files = []
   for f in input_api.AffectedFiles(include_deletes=False):
     file_path = f.AbsoluteLocalPath()
-    if (input_api.os_path.dirname(file_path) == contrib_dir and
-        not file_path in (init, readme, presubmit)):
+    if input_api.os_path.dirname(
+      file_path
+    ) == contrib_dir and file_path not in (init, readme, presubmit):
       invalid_contrib_files.append(file_path)
 
   for f in input_api.os_listdir(contrib_dir):
@@ -48,13 +47,17 @@ def _CheckContribDir(input_api, output_api):
     path = input_api.os_path.join(contrib_dir, f)
     if input_api.os_path.isdir(path):
       results.extend(
-          _CheckOwnershipForContribSubDir(path, input_api, output_api))
+        _CheckOwnershipForContribSubDir(path, input_api, output_api)
+      )
 
   if invalid_contrib_files:
-    results.append(output_api.PresubmitError(
-        'You cannot add files to top level of contrib directory. '
-        'Please moves these files to a sub directory:\n %s' %
-        '\n'.join(invalid_contrib_files)))
+    results.append(
+      output_api.PresubmitError(
+        'You cannot add files to the top level of a contrib directory. '
+        'Please move these files to a sub directory:\n %s'
+        % '\n'.join(invalid_contrib_files)
+      )
+    )
   return results
 
 

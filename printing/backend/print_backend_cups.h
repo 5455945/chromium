@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,12 @@
 
 #include "base/component_export.h"
 #include "base/files/file_path.h"
+#include "printing/backend/cups_deleters.h"
 #include "printing/backend/print_backend.h"
 #include "printing/mojom/print.mojom.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(IS_LINUX));
 
 namespace printing {
 
@@ -34,15 +37,10 @@ class PrintBackendCUPS : public PrintBackend {
   static std::string PrinterDriverInfoFromCUPS(const cups_dest_t& printer);
 
  private:
-  struct DestinationDeleter {
-    void operator()(cups_dest_t* dest) const;
-  };
-  using ScopedDestination = std::unique_ptr<cups_dest_t, DestinationDeleter>;
-
   ~PrintBackendCUPS() override;
 
   // PrintBackend implementation.
-  mojom::ResultCode EnumeratePrinters(PrinterList* printer_list) override;
+  mojom::ResultCode EnumeratePrinters(PrinterList& printer_list) override;
   mojom::ResultCode GetDefaultPrinterName(
       std::string& default_printer) override;
   mojom::ResultCode GetPrinterBasicInfo(
@@ -51,11 +49,11 @@ class PrintBackendCUPS : public PrintBackend {
   mojom::ResultCode GetPrinterSemanticCapsAndDefaults(
       const std::string& printer_name,
       PrinterSemanticCapsAndDefaults* printer_info) override;
-  mojom::ResultCode GetPrinterCapsAndDefaults(
-      const std::string& printer_name,
-      PrinterCapsAndDefaults* printer_info) override;
-  std::string GetPrinterDriverInfo(const std::string& printer_name) override;
+  std::vector<std::string> GetPrinterDriverInfo(
+      const std::string& printer_name) override;
   bool IsValidPrinter(const std::string& printer_name) override;
+
+  std::string GetPrinterCapabilities(const std::string& printer_name);
 
   // The following functions are wrappers around corresponding CUPS functions.
   // <functions>2() are called when print server is specified, and plain version
@@ -67,9 +65,10 @@ class PrintBackendCUPS : public PrintBackend {
   // Wrapper around cupsGetNamedDest().
   ScopedDestination GetNamedDest(const std::string& printer_name);
 
-  GURL print_server_url_;
+  const std::string locale_;
+  const GURL print_server_url_;
   http_encryption_t cups_encryption_;
-  bool blocking_;
+  const bool blocking_;
 };
 
 }  // namespace printing

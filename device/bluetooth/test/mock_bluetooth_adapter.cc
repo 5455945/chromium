@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 
 namespace device {
 
-using testing::Invoke;
 using testing::_;
 
 MockBluetoothAdapter::Observer::Observer(
@@ -27,13 +26,15 @@ MockBluetoothAdapter::Observer::~Observer() {
 
 MockBluetoothAdapter::MockBluetoothAdapter() {
   ON_CALL(*this, AddObserver(_))
-      .WillByDefault(Invoke([this](BluetoothAdapter::Observer* observer) {
+      .WillByDefault([this](BluetoothAdapter::Observer* observer) {
         this->BluetoothAdapter::AddObserver(observer);
-      }));
+      });
   ON_CALL(*this, RemoveObserver(_))
-      .WillByDefault(Invoke([this](BluetoothAdapter::Observer* observer) {
+      .WillByDefault([this](BluetoothAdapter::Observer* observer) {
         this->BluetoothAdapter::RemoveObserver(observer);
-      }));
+      });
+  ON_CALL(*this, GetOsPermissionStatus())
+      .WillByDefault(testing::Return(PermissionStatus::kAllowed));
 }
 
 MockBluetoothAdapter::~MockBluetoothAdapter() = default;
@@ -42,7 +43,7 @@ void MockBluetoothAdapter::Initialize(base::OnceClosure callback) {
   std::move(callback).Run();
 }
 
-#if defined(OS_CHROMEOS) || defined(OS_LINUX)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 void MockBluetoothAdapter::Shutdown() {
 }
 #endif
@@ -108,7 +109,7 @@ void MockBluetoothAdapter::RegisterAdvertisement(
   std::move(callback).Run(new MockBluetoothAdvertisement);
 }
 
-#if defined(OS_CHROMEOS) || defined(OS_LINUX)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 void MockBluetoothAdapter::SetAdvertisingInterval(
     const base::TimeDelta& min,
     const base::TimeDelta& max,

@@ -22,7 +22,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_CIRCLE_ELEMENT_H_
 
 #include "third_party/blink/renderer/core/svg/svg_geometry_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -33,8 +33,12 @@ class SVGCircleElement final : public SVGGeometryElement {
 
  public:
   explicit SVGCircleElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGCircleElement;
+  }
 
   Path AsPath() const override;
+  PathBuilder AsMutablePath() const override;
 
   SVGAnimatedLength* cx() const { return cx_.Get(); }
   SVGAnimatedLength* cy() const { return cy_.Get(); }
@@ -45,14 +49,13 @@ class SVGCircleElement final : public SVGGeometryElement {
  private:
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
-  void CollectStyleForPresentationAttribute(
-      const QualifiedName&,
-      const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
-  bool SelfHasRelativeLengths() const override;
-
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
+  void CollectExtraStyleForPresentationAttribute(
+      HeapVector<CSSPropertyValue, 8>& style) override;
 
   Member<SVGAnimatedLength> cx_;
   Member<SVGAnimatedLength> cy_;

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,56 +29,56 @@ extensions::MessagingDelegate::PolicyPermission IsNativeMessagingHostAllowed(
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistSelective) {
-  base::ListValue blacklist;
-  blacklist.AppendString("host.name");
+  base::ListValue blocklist;
+  blocklist.Append("host.name");
   PolicyMap policies;
   policies.Set(key::kNativeMessagingBlocklist, POLICY_LEVEL_MANDATORY,
-               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, blacklist.Clone(),
-               nullptr);
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+               base::Value(std::move(blocklist)), nullptr);
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::ALLOW_ALL,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistWildcard) {
-  base::ListValue blacklist;
-  blacklist.AppendString("*");
+  base::ListValue blocklist;
+  blocklist.Append("*");
   PolicyMap policies;
   policies.Set(key::kNativeMessagingBlocklist, POLICY_LEVEL_MANDATORY,
-               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, blacklist.Clone(),
-               nullptr);
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+               base::Value(std::move(blocklist)), nullptr);
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingAllowlist) {
-  base::ListValue blacklist;
-  blacklist.AppendString("*");
+  base::ListValue blocklist;
+  blocklist.Append("*");
   base::ListValue allowlist;
-  allowlist.AppendString("host.name");
+  allowlist.Append("host.name");
   PolicyMap policies;
   policies.Set(key::kNativeMessagingBlocklist, POLICY_LEVEL_MANDATORY,
-               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, blacklist.Clone(),
-               nullptr);
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+               base::Value(std::move(blocklist)), nullptr);
   policies.Set(key::kNativeMessagingAllowlist, POLICY_LEVEL_MANDATORY,
-               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, allowlist.Clone(),
-               nullptr);
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+               base::Value(std::move(allowlist)), nullptr);
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::ALLOW_ALL,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 }  // namespace policy

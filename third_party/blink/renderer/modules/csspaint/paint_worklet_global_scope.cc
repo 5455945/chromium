@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,7 +27,6 @@
 #include "third_party/blink/renderer/modules/csspaint/paint_worklet.h"
 #include "third_party/blink/renderer/modules/csspaint/paint_worklet_proxy_client.h"
 #include "third_party/blink/renderer/platform/bindings/callback_method_retriever.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 
@@ -38,31 +37,31 @@ namespace {
 bool ParseInputArguments(v8::Local<v8::Context> context,
                          v8::Local<v8::Object> constructor,
                          Vector<CSSSyntaxDefinition>* input_argument_types,
-                         ExceptionState* exception_state) {
-  v8::Isolate* isolate = context->GetIsolate();
-  v8::TryCatch block(isolate);
+                         ExceptionState& exception_state) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  TryRethrowScope rethrow_scope(isolate, exception_state);
 
   if (RuntimeEnabledFeatures::CSSPaintAPIArgumentsEnabled()) {
     v8::Local<v8::Value> input_argument_type_values;
     if (!constructor->Get(context, V8AtomicString(isolate, "inputArguments"))
              .ToLocal(&input_argument_type_values)) {
-      exception_state->RethrowV8Exception(block.Exception());
       return false;
     }
 
     if (!input_argument_type_values->IsNullOrUndefined()) {
       Vector<String> argument_types =
           NativeValueTraits<IDLSequence<IDLString>>::NativeValue(
-              isolate, input_argument_type_values, *exception_state);
+              isolate, input_argument_type_values, exception_state);
 
-      if (exception_state->HadException())
+      if (exception_state.HadException()) {
         return false;
+      }
 
       for (const auto& type : argument_types) {
-        absl::optional<CSSSyntaxDefinition> syntax_definition =
+        std::optional<CSSSyntaxDefinition> syntax_definition =
             CSSSyntaxStringParser(type).Parse();
         if (!syntax_definition) {
-          exception_state->ThrowTypeError("Invalid argument types.");
+          exception_state.ThrowTypeError("Invalid argument types.");
           return false;
         }
         input_argument_types->push_back(std::move(*syntax_definition));
@@ -75,21 +74,21 @@ bool ParseInputArguments(v8::Local<v8::Context> context,
 PaintRenderingContext2DSettings* ParsePaintRenderingContext2DSettings(
     v8::Local<v8::Context> context,
     v8::Local<v8::Object> constructor,
-    ExceptionState* exception_state) {
-  v8::Isolate* isolate = context->GetIsolate();
-  v8::TryCatch block(isolate);
+    ExceptionState& exception_state) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  TryRethrowScope rethrow_scope(isolate, exception_state);
 
   v8::Local<v8::Value> context_settings_value;
   if (!constructor->Get(context, V8AtomicString(isolate, "contextOptions"))
            .ToLocal(&context_settings_value)) {
-    exception_state->RethrowV8Exception(block.Exception());
     return nullptr;
   }
   auto* context_settings =
       NativeValueTraits<PaintRenderingContext2DSettings>::NativeValue(
-          isolate, context_settings_value, *exception_state);
-  if (exception_state->HadException())
+          isolate, context_settings_value, exception_state);
+  if (exception_state.HadException()) {
     return nullptr;
+  }
   return context_settings;
 }
 
@@ -102,10 +101,11 @@ PaintWorkletGlobalScope* PaintWorkletGlobalScope::Create(
     WorkerReportingProxy& reporting_proxy) {
   auto* global_scope = MakeGarbageCollected<PaintWorkletGlobalScope>(
       frame, std::move(creation_params), reporting_proxy);
-  global_scope->ScriptController()->Initialize(NullURL());
-  MainThreadDebugger::Instance()->ContextCreated(
-      global_scope->ScriptController()->GetScriptState(),
-      global_scope->GetFrame(), global_scope->DocumentSecurityOrigin());
+  global_scope->ScriptController()->Initialize(NullUrl());
+  MainThreadDebugger::Instance(global_scope->GetIsolate())
+      ->ContextCreated(global_scope->ScriptController()->GetScriptState(),
+                       global_scope->GetFrame(),
+                       global_scope->DocumentSecurityOrigin());
   return global_scope;
 }
 
@@ -113,7 +113,6 @@ PaintWorkletGlobalScope* PaintWorkletGlobalScope::Create(
 PaintWorkletGlobalScope* PaintWorkletGlobalScope::Create(
     std::unique_ptr<GlobalScopeCreationParams> creation_params,
     WorkerThread* thread) {
-  DCHECK(RuntimeEnabledFeatures::OffMainThreadCSSPaintEnabled());
   return MakeGarbageCollected<PaintWorkletGlobalScope>(
       std::move(creation_params), thread);
 }
@@ -122,10 +121,7 @@ PaintWorkletGlobalScope::PaintWorkletGlobalScope(
     LocalFrame* frame,
     std::unique_ptr<GlobalScopeCreationParams> creation_params,
     WorkerReportingProxy& reporting_proxy)
-    : WorkletGlobalScope(std::move(creation_params),
-                         reporting_proxy,
-                         frame,
-                         /*create_microtask_queue=*/false) {}
+    : WorkletGlobalScope(std::move(creation_params), reporting_proxy, frame) {}
 
 PaintWorkletGlobalScope::PaintWorkletGlobalScope(
     std::unique_ptr<GlobalScopeCreationParams> creation_params,
@@ -138,15 +134,21 @@ PaintWorkletGlobalScope::~PaintWorkletGlobalScope() = default;
 
 void PaintWorkletGlobalScope::Dispose() {
   DCHECK(IsContextThread());
-  if (!WTF::IsMainThread()) {
+  if (!IsMainThread()) {
     if (PaintWorkletProxyClient* proxy_client =
             PaintWorkletProxyClient::From(Clients()))
       proxy_client->Dispose();
   } else {
-    MainThreadDebugger::Instance()->ContextWillBeDestroyed(
-        ScriptController()->GetScriptState());
+    MainThreadDebugger::Instance(GetIsolate())
+        ->ContextWillBeDestroyed(ScriptController()->GetScriptState());
   }
   WorkletGlobalScope::Dispose();
+
+  if (IsMainThread()) {
+    // For off-the-main-thread paint worklet, this will be called in
+    // WorkerThread::PrepareForShutdownOnWorkerThread().
+    NotifyContextDestroyed();
+  }
 }
 
 void PaintWorkletGlobalScope::registerPaint(const ScriptState* script_state,
@@ -157,7 +159,7 @@ void PaintWorkletGlobalScope::registerPaint(const ScriptState* script_state,
 
   RegisterWithProxyClientIfNeeded();
 
-  if (name.IsEmpty()) {
+  if (name.empty()) {
     exception_state.ThrowTypeError("The empty string is not a valid name.");
     return;
   }
@@ -165,7 +167,7 @@ void PaintWorkletGlobalScope::registerPaint(const ScriptState* script_state,
   if (paint_definitions_.Contains(name)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidModificationError,
-        "A class with name:'" + name + "' is already registered.");
+        StrCat({"A class with name:'", name, "' is already registered."}));
     return;
   }
 
@@ -186,21 +188,23 @@ void PaintWorkletGlobalScope::registerPaint(const ScriptState* script_state,
       ExecutionContext::From(script_state);
 
   if (!V8ObjectParser::ParseCSSPropertyList(
-          context, execution_context, v8_paint_ctor, "inputProperties",
-          &native_invalidation_properties, &custom_invalidation_properties,
-          &exception_state))
+          context, execution_context, v8_paint_ctor,
+          AtomicString("inputProperties"), &native_invalidation_properties,
+          &custom_invalidation_properties, exception_state)) {
     return;
+  }
 
   // Get input argument types. Parse the argument type values only when
   // cssPaintAPIArguments is enabled.
   Vector<CSSSyntaxDefinition> input_argument_types;
   if (!ParseInputArguments(context, v8_paint_ctor, &input_argument_types,
-                           &exception_state))
+                           exception_state)) {
     return;
+  }
 
   PaintRenderingContext2DSettings* context_settings =
       ParsePaintRenderingContext2DSettings(context, v8_paint_ctor,
-                                           &exception_state);
+                                           exception_state);
   if (!context_settings)
     return;
 
@@ -219,10 +223,10 @@ void PaintWorkletGlobalScope::registerPaint(const ScriptState* script_state,
   auto* definition = MakeGarbageCollected<CSSPaintDefinition>(
       ScriptController()->GetScriptState(), paint_ctor, paint,
       native_invalidation_properties, custom_invalidation_properties,
-      input_argument_types, context_settings);
+      input_argument_types, context_settings, this);
   paint_definitions_.Set(name, definition);
 
-  if (!WTF::IsMainThread()) {
+  if (!IsMainThread()) {
     PaintWorkletProxyClient* proxy_client =
         PaintWorkletProxyClient::From(Clients());
     proxy_client->RegisterCSSPaintDefinition(name, definition, exception_state);
@@ -236,11 +240,12 @@ void PaintWorkletGlobalScope::registerPaint(const ScriptState* script_state,
 
 CSSPaintDefinition* PaintWorkletGlobalScope::FindDefinition(
     const String& name) {
-  return paint_definitions_.at(name);
+  auto it = paint_definitions_.find(name);
+  return it != paint_definitions_.end() ? it->value : nullptr;
 }
 
 double PaintWorkletGlobalScope::devicePixelRatio() const {
-  return WTF::IsMainThread()
+  return IsMainThread()
              ? GetFrame()->DevicePixelRatio()
              : PaintWorkletProxyClient::From(Clients())->DevicePixelRatio();
 }
@@ -251,8 +256,9 @@ void PaintWorkletGlobalScope::Trace(Visitor* visitor) const {
 }
 
 void PaintWorkletGlobalScope::RegisterWithProxyClientIfNeeded() {
-  if (registered_ || WTF::IsMainThread())
+  if (registered_ || IsMainThread()) {
     return;
+  }
 
   if (PaintWorkletProxyClient* proxy_client =
           PaintWorkletProxyClient::From(Clients())) {

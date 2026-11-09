@@ -1,22 +1,34 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_TOUCH_SELECTION_TOUCH_SELECTION_CONTROLLER_H_
 #define UI_TOUCH_SELECTION_TOUCH_SELECTION_CONTROLLER_H_
 
-#include "base/macros.h"
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/stack_allocated.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/selection_bound.h"
 #include "ui/touch_selection/longpress_drag_selector.h"
 #include "ui/touch_selection/selection_event_type.h"
 #include "ui/touch_selection/touch_handle.h"
 #include "ui/touch_selection/touch_handle_orientation.h"
 #include "ui/touch_selection/ui_touch_selection_export.h"
+
+#if BUILDFLAG(IS_ANDROID)
+namespace cc::slim {
+class Layer;
+}
+#endif
 
 namespace ui {
 class MotionEvent;
@@ -46,36 +58,37 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
     : public TouchHandleClient,
       public LongPressDragSelectorClient {
  public:
-  enum ActiveStatus {
-    INACTIVE,
-    INSERTION_ACTIVE,
-    SELECTION_ACTIVE,
+  enum class ActiveStatus {
+    kInactive,
+    kInsertionActive,
+    kSelectionActive,
   };
 
   struct UI_TOUCH_SELECTION_EXPORT Config {
-    Config();
-    ~Config();
-
     // Maximum allowed time for handle tap detection. Defaults to 300 ms.
-    base::TimeDelta max_tap_duration;
+    base::TimeDelta max_tap_duration = base::Milliseconds(300);
 
     // Defaults to 8 DIPs.
-    float tap_slop;
+    float tap_slop = 8;
 
     // Controls whether adaptive orientation for selection handles is enabled.
     // Defaults to false.
-    bool enable_adaptive_handle_orientation;
+    bool enable_adaptive_handle_orientation = false;
 
     // Controls whether drag selection after a longpress is enabled.
     // Defaults to false.
-    bool enable_longpress_drag_selection;
+    bool enable_longpress_drag_selection = false;
 
     // Should we hide the active handle.
-    bool hide_active_handle;
+    bool hide_active_handle = false;
   };
 
   TouchSelectionController(TouchSelectionControllerClient* client,
                            const Config& config);
+
+  TouchSelectionController(const TouchSelectionController&) = delete;
+  TouchSelectionController& operator=(const TouchSelectionController&) = delete;
+
   ~TouchSelectionController() override;
 
   // To be called when the selection bounds have changed.
@@ -102,13 +115,36 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
   void HandleLongPressEvent(base::TimeTicks event_time,
                                 const gfx::PointF& location);
 
+  // To be called before forwarding a double press event.
+  void HandleDoublePressEvent(base::TimeTicks event_time,
+                              const gfx::PointF& location);
+
   // To be called before forwarding a gesture scroll begin event to prevent
   // long-press drag.
   void OnScrollBeginEvent();
 
+#if BUILDFLAG(IS_ANDROID)
+  void OnUpdateNativeViewTree(gfx::NativeView parent_native_view,
+                              cc::slim::Layer* parent_layer);
+#endif
+
+// TODO(crbug.com/375388841): Remove once Aura also uses
+// TouchSelectionControllerInputObserver for receiving inputs.
+#if BUILDFLAG(IS_ANDROID)
+  // Called when a scroll event ack is received.
+  void HandleSwipeToMoveCursorGestureAck(
+      ui::EventType type,
+      const gfx::PointF& point,
+      const std::optional<bool>& cursor_control,
+      bool is_in_root_view);
+#endif  // BUILDFLAG(IS_ANDROID)
+
   // Hide the handles and suppress bounds updates until the next explicit
   // showing allowance.
   void HideAndDisallowShowingAutomatically();
+
+  // Hide the touch selection and destroy the handles natively.
+  void HideAndDestroy();
 
   // Override the handle visibility according to |hidden|.
   void SetTemporarilyHidden(bool hidden);
@@ -116,6 +152,12 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
   // Ticks an active animation, as requested to the client by |SetNeedsAnimate|.
   // Returns true if an animation is active and requires further ticking.
   bool Animate(base::TimeTicks animate_time);
+
+  // Returns the current focus bound. For an active selection, this is the
+  // selection bound that has most recently been dragged or updated (defaulting
+  // to the end if neither endpoint has moved). For an active insertion it is
+  // the caret bound. Should only be called when touch selection is active.
+  const gfx::SelectionBound& GetFocusBound() const;
 
   // Returns the rect between the two active selection bounds. If just one of
   // the bounds is visible, or both bounds are visible and on the same line,
@@ -153,7 +195,14 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
  private:
   friend class TouchSelectionControllerTestApi;
 
-  enum InputEventType { TAP, REPEATED_TAP, LONG_PRESS, INPUT_EVENT_TYPE_NONE };
+  enum class InputEventType {
+    kTap,
+    kRepeatedTap,
+    kLongPress,
+    kNone,
+  };
+
+  enum class DragSelectorInitiatingGesture { kNone, kLongPress, kDoublePress };
 
   bool WillHandleTouchEventImpl(const MotionEvent& event);
 
@@ -197,15 +246,34 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
 
   void HideHandles();
 
+  // Client notifications are queued while a public entry point runs and are
+  // delivered after the outermost one has finished its state changes. The
+  // client may synchronously destroy `this` or call back into it, so it must
+  // not run in the middle of a transition.
+  class ScopedNotificationBatch {
+    STACK_ALLOCATED();
+
+   public:
+    explicit ScopedNotificationBatch(TouchSelectionController& controller);
+    ~ScopedNotificationBatch();
+
+   private:
+    TouchSelectionController& controller_;
+  };
+
+  void NotifySelectionEvent(SelectionEventType event);
+  // Delivers queued notifications in order. May destroy `this`.
+  void DispatchNotifications();
+
   gfx::Vector2dF GetStartLineOffset() const;
   gfx::Vector2dF GetEndLineOffset() const;
   bool GetStartVisible() const;
   bool GetEndVisible() const;
   TouchHandle::AnimationStyle GetAnimationStyle(bool was_active) const;
 
-  void LogSelectionEnd();
+  void LogDragType(const TouchSelectionDraggable& draggable);
 
-  TouchSelectionControllerClient* const client_;
+  const raw_ptr<TouchSelectionControllerClient, DanglingUntriaged> client_;
   const Config config_;
 
   InputEventType response_pending_input_event_;
@@ -233,12 +301,17 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
   // between lines.
   bool anchor_drag_to_selection_start_;
 
-  // Longpress drag allows direct manipulation of longpress-initiated selection.
+  // Allows the text selection to be adjusted by touch dragging after a long
+  // press or double press initiated selection.
   LongPressDragSelector longpress_drag_selector_;
+
+  // Used to track whether a selection drag gesture was initiated by a long
+  // press or double press.
+  DragSelectorInitiatingGesture drag_selector_initiating_gesture_ =
+      DragSelectorInitiatingGesture::kNone;
 
   gfx::RectF viewport_rect_;
 
-  base::TimeTicks selection_start_time_;
   // Whether a selection handle was dragged during the current 'selection
   // session' - i.e. since the current selection has been activated.
   bool selection_handle_dragged_;
@@ -248,7 +321,13 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
 
   bool show_touch_handles_;
 
-  DISALLOW_COPY_AND_ASSIGN(TouchSelectionController);
+  // Whether a swipe-to-move-cursor gesture is activated.
+  bool swipe_to_move_cursor_activated_ = false;
+
+  std::vector<SelectionEventType> pending_notifications_;
+  int notification_batch_depth_ = 0;
+
+  base::WeakPtrFactory<TouchSelectionController> weak_factory_{this};
 };
 
 }  // namespace ui

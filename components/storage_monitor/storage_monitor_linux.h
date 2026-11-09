@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,26 +10,23 @@
 #ifndef COMPONENTS_STORAGE_MONITOR_STORAGE_MONITOR_LINUX_H_
 #define COMPONENTS_STORAGE_MONITOR_STORAGE_MONITOR_LINUX_H_
 
-#include "build/chromeos_buildflags.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#error "Use the ChromeOS-specific implementation instead."
-#endif
-
 #include <map>
 #include <memory>
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/component_export.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/storage_monitor/mtab_watcher_linux.h"
 #include "components/storage_monitor/storage_monitor.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#error "Use the ChromeOS-specific implementation instead."
+#endif
 
 namespace base {
 class SequencedTaskRunner;
@@ -37,12 +34,17 @@ class SequencedTaskRunner;
 
 namespace storage_monitor {
 
-class StorageMonitorLinux : public StorageMonitor {
+class COMPONENT_EXPORT(STORAGE_MONITOR) StorageMonitorLinux
+    : public StorageMonitor {
  public:
   // Should only be called by browser start up code.
   // Use StorageMonitor::GetInstance() instead.
   // |mtab_file_path| is the path to a mtab file to watch for mount points.
   explicit StorageMonitorLinux(const base::FilePath& mtab_file_path);
+
+  StorageMonitorLinux(const StorageMonitorLinux&) = delete;
+  StorageMonitorLinux& operator=(const StorageMonitorLinux&) = delete;
+
   ~StorageMonitorLinux() override;
 
   // Must be called for StorageMonitorLinux to work.
@@ -129,8 +131,6 @@ class StorageMonitorLinux : public StorageMonitor {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<StorageMonitorLinux> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(StorageMonitorLinux);
 };
 
 }  // namespace storage_monitor

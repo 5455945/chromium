@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
+#include "base/thread_annotations.h"
 #include "media/audio/audio_debug_recording_helper.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
@@ -59,8 +60,12 @@ class MEDIA_EXPORT AudioDebugRecordingManager {
       uint32_t id,
       base::OnceCallback<void(base::File)> reply_callback)>;
 
-  AudioDebugRecordingManager(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+  AudioDebugRecordingManager();
+
+  AudioDebugRecordingManager(const AudioDebugRecordingManager&) = delete;
+  AudioDebugRecordingManager& operator=(const AudioDebugRecordingManager&) =
+      delete;
+
   virtual ~AudioDebugRecordingManager();
 
   // Enables and disables debug recording.
@@ -74,16 +79,10 @@ class MEDIA_EXPORT AudioDebugRecordingManager {
       const AudioParameters& params);
 
  protected:
-  // Creates a AudioDebugRecordingHelper. Overridden by test.
+  // Creates an AudioDebugRecordingHelper. Overridden by test.
   virtual std::unique_ptr<AudioDebugRecordingHelper>
-  CreateAudioDebugRecordingHelper(
-      const AudioParameters& params,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-      base::OnceClosure on_destruction_closure);
-
-  // The task runner this class lives on. Also handed to
-  // AudioDebugRecordingHelpers.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  CreateAudioDebugRecordingHelper(const AudioParameters& params,
+                                  base::OnceClosure on_destruction_closure);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(AudioDebugRecordingManagerTest,
@@ -104,14 +103,17 @@ class MEDIA_EXPORT AudioDebugRecordingManager {
   bool IsDebugRecordingEnabled();
 
   // Recorders, one per source.
-  DebugRecordingHelperMap debug_recording_helpers_;
+  DebugRecordingHelperMap debug_recording_helpers_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Callback for creating debug recording files. When this is not null, debug
   // recording is enabled.
-  CreateWavFileCallback create_file_callback_;
+  CreateWavFileCallback create_file_callback_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<AudioDebugRecordingManager> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(AudioDebugRecordingManager);
 };
 
 }  // namespace media

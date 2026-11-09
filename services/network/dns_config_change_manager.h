@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #define SERVICES_NETWORK_DNS_CONFIG_CHANGE_MANAGER_H_
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
@@ -20,6 +19,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) DnsConfigChangeManager
       public net::NetworkChangeNotifier::DNSObserver {
  public:
   DnsConfigChangeManager();
+
+  DnsConfigChangeManager(const DnsConfigChangeManager&) = delete;
+  DnsConfigChangeManager& operator=(const DnsConfigChangeManager&) = delete;
+
   ~DnsConfigChangeManager() override;
 
   void AddReceiver(
@@ -35,8 +38,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) DnsConfigChangeManager
 
   mojo::ReceiverSet<mojom::DnsConfigChangeManager> receivers_;
   mojo::RemoteSet<mojom::DnsConfigChangeManagerClient> clients_;
-
-  DISALLOW_COPY_AND_ASSIGN(DnsConfigChangeManager);
 };
 
 }  // namespace network

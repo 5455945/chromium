@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,10 +21,15 @@ public class JsonListener extends RunListener {
         mJsonLogger = jsonLogger;
     }
 
-    /** Called after all tests run.
-     */
+    /** Called after all tests run. */
     @Override
     public void testRunFinished(Result r) throws Exception {
+        for (Failure f : r.getFailures()) {
+            Description d = f.getDescription();
+            if (d.isTest()) continue; // Already handled by testFinished
+
+            mJsonLogger.addTestResultInfo(d, "CRASH", 0);
+        }
         mJsonLogger.writeJsonToFile();
     }
 
@@ -51,4 +56,3 @@ public class JsonListener extends RunListener {
         mCurrentTestPassed = false;
     }
 }
-

@@ -1,42 +1,56 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/widget/widget_base.h"
 
+#include <algorithm>
+
+#include "base/check.h"
 #include "base/command_line.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
+#include "base/task/common/task_annotator.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "cc/animation/animation_host.h"
+#include "cc/animation/animation_id_provider.h"
+#include "cc/base/features.h"
 #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
+#include "cc/raster/categorized_worker_pool.h"
 #include "cc/trees/layer_tree_host.h"
 #include "cc/trees/layer_tree_settings.h"
-#include "cc/trees/ukm_manager.h"
+#include "cc/trees/paint_holding_reason.h"
 #include "components/viz/common/features.h"
-#include "components/viz/common/switches.h"
 #include "gpu/command_buffer/client/shared_memory_limits.h"
 #include "gpu/command_buffer/common/context_creation_attribs.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
+#include "media/base/media_switches.h"
+#include "mojo/public/cpp/bindings/direct_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_input_event_attribution.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_context.mojom-blink.h"
-#include "third_party/blink/public/mojom/page/record_content_to_visible_time_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/widget/visual_properties.mojom-blink.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/public/platform/scheduler/web_render_widget_scheduling_state.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
-#include "third_party/blink/public/platform/scheduler/web_widget_scheduler.h"
 #include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/renderer/platform/graphics/raster_dark_mode_filter_impl.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/scheduler/public/agent_group_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/compositor_thread_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/page_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
+#include "third_party/blink/renderer/platform/scheduler/public/widget_scheduler.h"
+#include "third_party/blink/renderer/platform/widget/compositing/blink_categorized_worker_pool_delegate.h"
 #include "third_party/blink/renderer/platform/widget/compositing/layer_tree_settings.h"
 #include "third_party/blink/renderer/platform/widget/compositing/layer_tree_view.h"
 #include "third_party/blink/renderer/platform/widget/compositing/render_frame_metadata_observer_impl.h"
@@ -46,12 +60,15 @@
 #include "third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h"
 #include "third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h"
 #include "third_party/blink/renderer/platform/widget/widget_base_client.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/base/ime/mojom/text_input_state.mojom-blink.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink-forward.h"
+#include "ui/display/display.h"
 #include "ui/display/screen_info.h"
 #include "ui/gfx/geometry/dip_util.h"
 #include "ui/gfx/presentation_feedback.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "third_party/blink/renderer/platform/widget/compositing/android_webview/synchronous_layer_tree_frame_sink.h"
 #endif
 
@@ -59,7 +76,7 @@ namespace blink {
 
 namespace {
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // Unique identifier for each output surface created.
 uint32_t g_next_layer_tree_frame_sink_id = 1;
 #endif
@@ -73,13 +90,24 @@ const uint32_t kGpuStreamIdDefault = 0;
 
 static const int kInvalidNextPreviousFlagsValue = -1;
 
-static const char kOOPIF[] = "OOPIF";
-static const char kRenderer[] = "Renderer";
-
 void OnDidPresentForceDrawFrame(
     mojom::blink::Widget::ForceRedrawCallback callback,
     const gfx::PresentationFeedback& feedback) {
   std::move(callback).Run();
+}
+
+bool ShouldUpdateCompositorMemoryPolicyOnScreenChange(
+    const display::ScreenInfo& previous,
+    const display::ScreenInfo& current) {
+#if BUILDFLAG(IS_ANDROID)
+  if (Platform::Current()->IsSynchronousCompositingEnabledForAndroidWebView()) {
+    return false;
+  }
+#endif
+  return (previous.rect.size() != current.rect.size() ||
+          previous.device_scale_factor != current.device_scale_factor) &&
+         base::FeatureList::IsEnabled(
+             features::kUpdateCompositorMemoryPolicyOnScreenChange);
 }
 
 bool IsDateTimeInput(ui::TextInputType type) {
@@ -130,7 +158,7 @@ CreateSyntheticBeginFrameSource() {
   base::SingleThreadTaskRunner* compositor_impl_side_task_runner =
       Platform::Current()->CompositorThreadTaskRunner()
           ? Platform::Current()->CompositorThreadTaskRunner().get()
-          : base::ThreadTaskRunnerHandle::Get().get();
+          : base::SingleThreadTaskRunner::GetCurrentDefault().get();
   return std::make_unique<viz::BackToBackBeginFrameSource>(
       std::make_unique<viz::DelayBasedTimeSource>(
           compositor_impl_side_task_runner));
@@ -146,90 +174,121 @@ WidgetBase::WidgetBase(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     bool hidden,
     bool never_composited,
-    bool is_for_child_local_root)
+    bool is_embedded,
+    bool is_for_scalable_page)
     : never_composited_(never_composited),
-      is_for_child_local_root_(is_for_child_local_root),
-      use_zoom_for_dsf_(Platform::Current()->IsUseZoomForDSFEnabled()),
+      is_embedded_(is_embedded),
+      is_for_scalable_page_(is_for_scalable_page),
       client_(client),
       widget_host_(std::move(widget_host), task_runner),
       receiver_(this, std::move(widget), task_runner),
       next_previous_flags_(kInvalidNextPreviousFlagsValue),
       is_hidden_(hidden),
+      task_runner_(task_runner),
       request_animation_after_delay_timer_(
           std::move(task_runner),
           this,
-          &WidgetBase::RequestAnimationAfterDelayTimerFired) {
-  if (auto* main_thread_scheduler =
-          scheduler::WebThreadScheduler::MainThreadScheduler()) {
-    render_widget_scheduling_state_ =
-        main_thread_scheduler->NewRenderWidgetSchedulingState();
-    render_widget_scheduling_state_->SetHidden(is_hidden_);
-  }
-}
+          &WidgetBase::RequestAnimationAfterDelayTimerFired) {}
 
 WidgetBase::~WidgetBase() {
   // Ensure Shutdown was called.
   DCHECK(!layer_tree_view_);
 }
 
+void WidgetBase::SetInitialFrameSink(
+    CrossVariantMojoRemote<viz::mojom::blink::CompositorFrameSinkInterfaceBase>
+        initial_frame_sink,
+    CrossVariantMojoReceiver<
+        viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>
+        initial_frame_sink_client,
+    CrossVariantMojoReceiver<mojom::blink::RenderInputRouterClientInterfaceBase>
+        initial_viz_rir_client) {
+  initial_frame_sink_pipes_.emplace();
+  initial_frame_sink_pipes_->initial_frame_sink = std::move(initial_frame_sink);
+  initial_frame_sink_pipes_->initial_frame_sink_client =
+      std::move(initial_frame_sink_client);
+  initial_frame_sink_pipes_->initial_viz_rir_client =
+      std::move(initial_viz_rir_client);
+}
+
 void WidgetBase::InitializeCompositing(
-    scheduler::WebAgentGroupScheduler& agent_group_scheduler,
-    bool for_child_local_root_frame,
+    PageScheduler& page_scheduler,
     const display::ScreenInfos& screen_infos,
     const cc::LayerTreeSettings* settings,
     base::WeakPtr<mojom::blink::FrameWidgetInputHandler>
-        frame_widget_input_handler) {
+        frame_widget_input_handler,
+    WidgetBase* previous_widget) {
   DCHECK(!initialized_);
-  scheduler::WebThreadScheduler* main_thread_scheduler =
-      &agent_group_scheduler.GetMainThreadScheduler();
+
+  widget_scheduler_ = page_scheduler.CreateWidgetScheduler(this);
+  widget_scheduler_->SetHidden(is_hidden_);
+
   main_thread_compositor_task_runner_ =
-      agent_group_scheduler.CompositorTaskRunner();
+      page_scheduler.GetAgentGroupScheduler().CompositorTaskRunner();
+
+  main_thread_id_ = base::PlatformThread::CurrentId();
 
   auto* compositing_thread_scheduler =
-      scheduler::WebThreadScheduler::CompositorThreadScheduler();
-  layer_tree_view_ =
-      std::make_unique<LayerTreeView>(this, main_thread_scheduler);
+      ThreadScheduler::CompositorThreadScheduler();
 
-  absl::optional<cc::LayerTreeSettings> default_settings;
-  if (!settings) {
-    const display::ScreenInfo& screen_info = screen_infos.current();
-    default_settings = GenerateLayerTreeSettings(
-        compositing_thread_scheduler, for_child_local_root_frame,
-        screen_info.rect.size(), screen_info.device_scale_factor);
-    settings = &default_settings.value();
+  if (previous_widget) {
+    CHECK(previous_widget->layer_tree_view_);
+    CHECK(!settings);
+    AssertAreCompatible(*this, *previous_widget);
+
+    // Preserve `previous_widget`'s `screen_infos_` until `UpdateScreenInfo`
+    // below so that any screen change since `previous_widget` was last updated
+    // is detected.
+    screen_infos_ =
+        ShouldUpdateCompositorMemoryPolicyOnScreenChange(
+            previous_widget->screen_infos_.current(), screen_infos.current())
+            ? previous_widget->screen_infos_
+            : screen_infos;
+
+    // `screen_infos` is applied to this LayerTreeView below.
+    previous_widget->DisconnectLayerTreeView(this, /*delay_release=*/false);
+    CHECK(layer_tree_view_);
+  } else {
+    layer_tree_view_ = std::make_unique<LayerTreeView>(this, widget_scheduler_);
+
+    std::optional<cc::LayerTreeSettings> default_settings;
+    if (!settings) {
+      const display::ScreenInfo& screen_info = screen_infos.current();
+      default_settings = GenerateLayerTreeSettings(
+          compositing_thread_scheduler, is_embedded_, is_for_scalable_page_,
+          screen_info.rect.size(), screen_info.device_scale_factor);
+      settings = &default_settings.value();
+    }
+    layer_tree_view_->Initialize(
+        *settings, main_thread_compositor_task_runner_,
+        compositing_thread_scheduler
+            ? compositing_thread_scheduler->DefaultTaskRunner()
+            : nullptr,
+        cc::CategorizedWorkerPool::GetOrCreate(
+            &BlinkCategorizedWorkerPoolDelegate::Get()));
+    screen_infos_ = screen_infos;
   }
-  screen_infos_ = screen_infos;
-  Platform* platform = Platform::Current();
-  layer_tree_view_->Initialize(
-      *settings, main_thread_compositor_task_runner_,
-      compositing_thread_scheduler
-          ? compositing_thread_scheduler->DefaultTaskRunner()
-          : nullptr,
-      platform->GetTaskGraphRunner(), platform->GetMainThreadPipeline(),
-      platform->GetCompositorThreadPipeline());
 
+  max_render_buffer_bounds_sw_ =
+      LayerTreeHost()->GetSettings().max_render_buffer_bounds_for_sw;
   FrameWidget* frame_widget = client_->FrameWidget();
 
-  scheduler::WebThreadScheduler* compositor_thread_scheduler =
-      scheduler::WebThreadScheduler::CompositorThreadScheduler();
-  scoped_refptr<base::SingleThreadTaskRunner> compositor_input_task_runner;
-  // Use the compositor thread task runner unless this is a popup or other such
-  // non-frame widgets. The |compositor_thread_scheduler| can be null in tests
-  // without a compositor thread.
-  if (frame_widget && compositor_thread_scheduler) {
-    compositor_input_task_runner =
-        compositor_thread_scheduler->DefaultTaskRunner();
-  }
+  // Even if we have a |compositing_thread_scheduler| we do not process input
+  // on the compositor thread for widgets that are not frames. (ie. popups).
+  auto* widget_compositing_thread_scheduler =
+      frame_widget ? compositing_thread_scheduler : nullptr;
 
   // We only use an external input handler for frame widgets because only
   // frames use the compositor for input handling. Other kinds of widgets
   // (e.g.  popups, plugins) must forward their input directly through
   // WidgetBaseInputHandler.
   bool uses_input_handler = frame_widget;
+  base::PlatformThreadId io_thread_id = Platform::Current()->GetIOThreadId();
   widget_input_handler_manager_ = WidgetInputHandlerManager::Create(
       weak_ptr_factory_.GetWeakPtr(), std::move(frame_widget_input_handler),
-      never_composited_, std::move(compositor_input_task_runner),
-      main_thread_scheduler, uses_input_handler);
+      never_composited_, widget_compositing_thread_scheduler, widget_scheduler_,
+      uses_input_handler, client_->AllowsScrollResampling(), io_thread_id,
+      main_thread_id_);
 
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
@@ -246,6 +305,13 @@ void WidgetBase::InitializeCompositing(
   if (!is_hidden_)
     SetCompositorVisible(true);
 
+  if (Platform::Current()->IsThreadedAnimationEnabled()) {
+    DCHECK(AnimationHost());
+    scroll_animation_timeline_ = cc::AnimationTimeline::Create(
+        cc::AnimationIdProvider::NextTimelineId());
+    AnimationHost()->AddAnimationTimeline(scroll_animation_timeline_);
+  }
+
   initialized_ = true;
 }
 
@@ -256,14 +322,88 @@ void WidgetBase::InitializeNonCompositing() {
   initialized_ = true;
 }
 
-void WidgetBase::Shutdown() {
-  scoped_refptr<base::SingleThreadTaskRunner> cleanup_runner =
-      base::ThreadTaskRunnerHandle::Get();
+void WidgetBase::OnFirstContentfulPaint() {
+  if (widget_input_handler_manager_) {
+    widget_input_handler_manager_->OnFirstContentfulPaint();
+  }
+}
+
+void WidgetBase::Shutdown(bool delay_release) {
   // The |input_event_queue_| is refcounted and will live while an event is
   // being handled. This drops the connection back to this WidgetBase which
   // is being destroyed.
   if (widget_input_handler_manager_)
     widget_input_handler_manager_->ClearClient();
+
+  DisconnectLayerTreeView(nullptr, delay_release);
+
+  // The `widget_scheduler_` must be deleted last because the
+  // `widget_input_handler_manager_` may request to post a task on the
+  // InputTaskQueue. The `widget_input_handler_manager_` must outlive
+  // the `layer_tree_view_` because it's `LayerTreeHost` holds a raw ptr to
+  // the `InputHandlerProxy` interface on the compositor thread. The
+  // `LayerTreeHost` destruction is synchronous and will join with the
+  // compositor thread
+  if (widget_scheduler_) {
+    widget_scheduler_->WillShutdown();
+
+    scoped_refptr<base::SingleThreadTaskRunner> cleanup_runner =
+        base::SingleThreadTaskRunner::GetCurrentDefault();
+    base::TimeDelta task_delay(base::Seconds(0));
+    if (delay_release) {
+#if BUILDFLAG(IS_ANDROID)
+      CHECK(!Platform::Current()
+                 ->IsSynchronousCompositingEnabledForAndroidWebView());
+#endif
+      CHECK(base::FeatureList::IsEnabled(
+          blink::features::kDelayLayerTreeViewDeletionOnLocalSwap));
+      task_delay =
+          features::kDelayLayerTreeViewDeletionOnLocalSwapTaskDelayParam.Get();
+    }
+    cleanup_runner->PostNonNestableDelayedTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](scoped_refptr<scheduler::WidgetScheduler> scheduler,
+               scoped_refptr<WidgetInputHandlerManager> manager,
+               std::unique_ptr<LayerTreeView> view) {
+              const bool released_view = !!view;
+              view.reset();
+              manager.reset();
+              scheduler->Shutdown();
+              if (released_view &&
+                  base::FeatureList::IsEnabled(
+                      features::kFlushGpuChannelOnLayerTreeViewRelease)) {
+                // Releasing the LayerTreeView destroyed its SharedImages (e.g.
+                // all of its tile resources). Their destruction requests are
+                // deferred GPU channel messages, which are only sent with the
+                // next flush, or after GpuChannelHost::kDelayForEnsuringFlush.
+                // On an idle page the next flush is often the next
+                // navigation's first raster, and the GPU service then has to
+                // destroy the whole backlog before it can create that
+                // navigation's SharedImages. Send them right away instead.
+                Platform::Current()->FlushGpuChannelIfEstablished();
+              }
+            },
+            std::move(widget_scheduler_),
+            std::move(widget_input_handler_manager_),
+            std::move(layer_tree_view_)),
+        task_delay);
+  }
+
+  if (widget_compositor_) {
+    widget_compositor_->Shutdown();
+    widget_compositor_ = nullptr;
+  }
+}
+
+void WidgetBase::DisconnectLayerTreeView(WidgetBase* new_widget,
+                                         bool delay_release) {
+  will_be_destroyed_ = true;
+
+  if (!layer_tree_view_) {
+    CHECK(!new_widget);
+    return;
+  }
 
   // The LayerTreeHost may already be in the call stack, if this WidgetBase
   // is being destroyed during an animation callback for instance. We can not
@@ -272,40 +412,54 @@ void WidgetBase::Shutdown() {
   // (via the LayerTreeView) from the destroying WidgetBase. The
   // LayerTreeView owns the LayerTreeHost, and is its client, so they are kept
   // alive together for a clean call stack.
-  if (layer_tree_view_) {
-    layer_tree_view_->Disconnect();
-    cleanup_runner->DeleteSoon(FROM_HERE, std::move(layer_tree_view_));
+  if (ScrollAnimationTimeline()) {
+    DCHECK(AnimationHost());
+    AnimationHost()->RemoveAnimationTimeline(ScrollAnimationTimeline());
   }
 
-  // The |widget_input_handler_manager_| needs to outlive the LayerTreeHost,
-  // which is destroyed asynchronously by DeleteSoon(). This needs to be a
-  // NonNestableTask as it needs to occur after DeleteSoon.
-  cleanup_runner->PostNonNestableTask(
-      FROM_HERE,
-      base::BindOnce([](scoped_refptr<WidgetInputHandlerManager> manager) {},
-                     std::move(widget_input_handler_manager_)));
-
-  if (widget_compositor_) {
-    widget_compositor_->Shutdown();
-    widget_compositor_ = nullptr;
+  if (new_widget) {
+    // Reattach to `new_widget`.
+    layer_tree_view_->ClearPreviousDelegateAndReattachIfNeeded(
+        new_widget, widget_scheduler_);
+    new_widget->layer_tree_view_ = std::move(layer_tree_view_);
+    layer_tree_view_ = nullptr;
+  } else if (delay_release) {
+#if BUILDFLAG(IS_ANDROID)
+    CHECK(!Platform::Current()
+               ->IsSynchronousCompositingEnabledForAndroidWebView());
+#endif
+    CHECK(base::FeatureList::IsEnabled(
+        blink::features::kDelayLayerTreeViewDeletionOnLocalSwap));
+    // Detach the LayerTreeView now without attaching it to anything else. The
+    // actual release of the LayerTreeView and its resources will happen later,
+    // see also the task posted in `Shutdown()`.
+    layer_tree_view_->ClearPreviousDelegateAndReattachIfNeeded(nullptr,
+                                                               nullptr);
+  } else {
+    // Disconnect and release now.
+    layer_tree_view_->Disconnect();
   }
 }
 
 cc::LayerTreeHost* WidgetBase::LayerTreeHost() const {
-  return layer_tree_view_->layer_tree_host();
+  return layer_tree_view_ ? layer_tree_view_->layer_tree_host() : nullptr;
 }
 
 cc::AnimationHost* WidgetBase::AnimationHost() const {
-  return layer_tree_view_->animation_host();
+  return layer_tree_view_ ? layer_tree_view_->animation_host() : nullptr;
 }
 
-scheduler::WebRenderWidgetSchedulingState*
-WidgetBase::RendererWidgetSchedulingState() const {
-  return render_widget_scheduling_state_.get();
+cc::AnimationTimeline* WidgetBase::ScrollAnimationTimeline() const {
+  return scroll_animation_timeline_.get();
+}
+
+scheduler::WidgetScheduler* WidgetBase::WidgetScheduler() {
+  return widget_scheduler_.get();
 }
 
 void WidgetBase::ForceRedraw(
     mojom::blink::Widget::ForceRedrawCallback callback) {
+  TRACE_EVENT0("renderer", "WidgetBase::ForceRedraw");
   LayerTreeHost()->RequestPresentationTimeForNextFrame(
       base::BindOnce(&OnDidPresentForceDrawFrame, std::move(callback)));
   LayerTreeHost()->SetNeedsCommitWithForcedRedraw();
@@ -319,9 +473,44 @@ void WidgetBase::ForceRedraw(
 
 void WidgetBase::GetWidgetInputHandler(
     mojo::PendingReceiver<mojom::blink::WidgetInputHandler> request,
-    mojo::PendingRemote<mojom::blink::WidgetInputHandlerHost> host) {
-  widget_input_handler_manager_->AddInterface(std::move(request),
-                                              std::move(host));
+    mojo::PendingRemote<mojom::blink::WidgetInputHandlerHost> host,
+    bool from_viz) {
+  // Viz-initiated request.
+  if (from_viz) {
+    widget_input_handler_manager_->SetVizHost(std::move(host));
+
+    // Hold back binding Viz side receiver until we have processed Browser side
+    // `GetWidgetInputHandler` request.
+    if (!widget_input_handler_manager_->GetWidgetInputHandlerHost()) {
+      pending_viz_widget_input_handler_.emplace(std::move(request));
+      return;
+    }
+    // Proceed with immediate binding since the browser-side
+    // WidgetInputHandlerHost has been bounded.
+    widget_input_handler_manager_->AddInterface(std::move(request));
+  } else {
+    // Browser initiated request.
+    widget_input_handler_manager_->SetHost(std::move(host));
+    widget_input_handler_manager_->AddInterface(std::move(request));
+
+    // If there's a pending Viz-side receiver, bind it now that the browser-side
+    // host is available.
+    if (pending_viz_widget_input_handler_.has_value()) {
+      widget_input_handler_manager_->AddInterface(
+          std::move(*pending_viz_widget_input_handler_));
+      pending_viz_widget_input_handler_.reset();
+    }
+  }
+}
+
+void WidgetBase::ShowContextMenu(ui::mojom::blink::MenuSourceType source_type,
+                                 const gfx::Point& location) {
+  client_->ShowContextMenu(source_type, location);
+}
+
+void WidgetBase::BindInputTargetClient(
+    mojo::PendingReceiver<viz::mojom::blink::InputTargetClient> host) {
+  client_->BindInputTargetClient(std::move(host));
 }
 
 void WidgetBase::UpdateVisualProperties(
@@ -383,12 +572,18 @@ void WidgetBase::UpdateVisualProperties(
   VisualProperties visual_properties = visual_properties_from_browser;
   auto& screen_info = visual_properties.screen_infos.mutable_current();
 
+  // Update the handwriting radius on the input thread since the value read in
+  // the browser proc could have potentially changed.
+  if (screen_info.handwriting_radius > 0) {
+    // TODO(crbug.com/355578906): Turn ScreenInfo::handwriting_radius into an
+    // optional. There's currently no way to differentiate 0 from uninitialized.
+    widget_input_handler_manager_->PostHandwritingRadiusToInputThread(
+        screen_info.handwriting_radius);
+  }
+
   // Web tests can override the device scale factor in the renderer.
   if (auto scale_factor = client_->GetTestingDeviceScaleFactorOverride()) {
     screen_info.device_scale_factor = scale_factor;
-    visual_properties.compositor_viewport_pixel_rect =
-        gfx::Rect(gfx::ScaleToCeiledSize(visual_properties.new_size,
-                                         screen_info.device_scale_factor));
   }
 
   // Inform the rendering thread of the color space indicating the presence of
@@ -404,7 +599,7 @@ void WidgetBase::UpdateVisualProperties(
       visual_properties.browser_controls_params);
 
   LayerTreeHost()->SetVisualDeviceViewportSize(
-      gfx::ScaleToCeiledSize(visual_properties.visible_viewport_size,
+      gfx::ScaleToCeiledSize(visual_properties.visible_viewport_size_device_px,
                              screen_info.device_scale_factor));
 
   client_->UpdateVisualProperties(visual_properties);
@@ -413,6 +608,7 @@ void WidgetBase::UpdateVisualProperties(
 void WidgetBase::UpdateScreenRects(const gfx::Rect& widget_screen_rect,
                                    const gfx::Rect& window_screen_rect,
                                    UpdateScreenRectsCallback callback) {
+  TRACE_EVENT0("renderer", "WidgetBase::UpdateScreenRects");
   if (!client_->UpdateScreenRects(widget_screen_rect, window_screen_rect)) {
     widget_screen_rect_ = widget_screen_rect;
     window_screen_rect_ = window_screen_rect;
@@ -435,32 +631,68 @@ void WidgetBase::WasHidden() {
   client_->WasHidden();
 }
 
-void WidgetBase::WasShown(base::TimeTicks show_request_timestamp,
-                          bool was_evicted,
-                          mojom::blink::RecordContentToVisibleTimeRequestPtr
-                              record_tab_switch_time_request) {
+void WidgetBase::WasShown(
+    bool was_evicted,
+    const std::optional<RecordContentToVisibleTimeRequest>&
+        record_tab_switch_time_request) {
   // The frame must be attached to the frame tree (which makes it no longer
   // provisional) before changing visibility.
   DCHECK(!IsForProvisionalFrame());
 
-  TRACE_EVENT_WITH_FLOW0("renderer", "WidgetBase::WasShown", this,
-                         TRACE_EVENT_FLAG_FLOW_IN);
+  TRACE_EVENT("renderer", "WidgetBase::WasShown",
+              perfetto::TerminatingFlow::FromPointer(this));
 
   SetHidden(false);
 
   if (record_tab_switch_time_request) {
-    LayerTreeHost()->RequestPresentationTimeForNextFrame(
-        tab_switch_time_recorder_.TabWasShown(
-            false /* has_saved_frames */,
-            record_tab_switch_time_request->event_start_time,
-            record_tab_switch_time_request->destination_is_loaded,
-            record_tab_switch_time_request->show_reason_tab_switching,
-            record_tab_switch_time_request->show_reason_unoccluded,
-            record_tab_switch_time_request->show_reason_bfcache_restore,
-            show_request_timestamp));
+    // Requests with saved frames should be sent to the DelegatedFrameHost.
+    CHECK(!record_tab_switch_time_request
+               ->AllEventsAreTabSwitchesWithSavedFrame());
+    LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(
+        tab_switch_time_recorder_.TabWasShown(*record_tab_switch_time_request));
   }
 
   client_->WasShown(was_evicted);
+}
+
+void WidgetBase::RequestSuccessfulPresentationTimeForNextFrame(
+    const RecordContentToVisibleTimeRequest& visible_time_request) {
+  if (is_hidden_) {
+    return;
+  }
+  TRACE_EVENT0("renderer",
+               "WidgetBase::RequestSuccessfulPresentationTimeForNextFrame");
+
+  // Requests with saved frames should be sent to the DelegatedFrameHost.
+  CHECK(!visible_time_request.AllEventsAreTabSwitchesWithSavedFrame());
+
+  // Tab was shown while widget was already painting, eg. due to being
+  // captured.
+  LayerTreeHost()->RequestSuccessfulPresentationTimeForNextFrame(
+      tab_switch_time_recorder_.TabWasShown(visible_time_request));
+}
+
+void WidgetBase::CancelSuccessfulPresentationTimeRequest() {
+  if (is_hidden_) {
+    return;
+  }
+
+  TRACE_EVENT0("renderer",
+               "WidgetBase::CancelSuccessfulPresentationTimeRequest");
+  // Tab was hidden while widget keeps painting, eg. due to being captured.
+  tab_switch_time_recorder_.TabWasHidden();
+}
+
+void WidgetBase::SetupBrowserRenderInputRouterConnections(
+    mojo::PendingReceiver<mojom::blink::RenderInputRouterClient>
+        browser_request) {
+  TRACE_EVENT("renderer",
+              "WidgetBase::SetupBrowserRenderInputRouterConnections");
+
+  // TODO(b/322833330): Investigate binding |browser_input_receiver_| on
+  // RendererCompositor to break dependency on CrRendererMain and avoiding
+  // contention with javascript during method calls.
+  browser_input_receiver_.Bind(std::move(browser_request), task_runner_);
 }
 
 void WidgetBase::ApplyViewportChanges(
@@ -473,13 +705,18 @@ void WidgetBase::UpdateCompositorScrollState(
   client_->UpdateCompositorScrollState(commit_data);
 }
 
+void WidgetBase::UpdateAnimatedImageState(
+    const cc::CompositorCommitData& commit_data) {
+  client_->UpdateAnimatedImageState(commit_data);
+}
+
 void WidgetBase::OnDeferMainFrameUpdatesChanged(bool defer) {
   // LayerTreeHost::CreateThreaded() will defer main frame updates immediately
   // until it gets a LocalSurfaceId. That's before the
   // |widget_input_handler_manager_| is created, so it can be null here.
-  // TODO(schenney): To avoid ping-ponging between defer main frame states
-  // during initialization, and requiring null checks here, we should probably
-  // pass the LocalSurfaceId to the compositor while it is
+  // TODO(rendering-core): To avoid ping-ponging between defer main frame
+  // states during initialization, and requiring null checks here, we should
+  // probably pass the LocalSurfaceId to the compositor while it is
   // initialized so that it doesn't have to immediately switch into deferred
   // mode without being requested to.
   if (!widget_input_handler_manager_)
@@ -490,13 +727,23 @@ void WidgetBase::OnDeferMainFrameUpdatesChanged(bool defer) {
   widget_input_handler_manager_->OnDeferMainFrameUpdatesChanged(defer);
 }
 
-void WidgetBase::OnDeferCommitsChanged(bool defer) {
+void WidgetBase::OnDeferCommitsChanged(bool defer,
+                                       cc::PaintHoldingReason reason) {
   // The input handler wants to know about the commit status for metric purposes
   // and to enable/disable input.
-  widget_input_handler_manager_->OnDeferCommitsChanged(defer);
+  widget_input_handler_manager_->OnDeferCommitsChanged(defer, reason);
+}
+
+void WidgetBase::OnCommitRequested() {
+  client_->OnCommitRequested();
 }
 
 void WidgetBase::DidBeginMainFrame() {
+  base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
+  UpdateTextInputState();
+  if (!weak_this) {
+    return;
+  }
   client_->DidBeginMainFrame();
 }
 
@@ -514,106 +761,189 @@ void WidgetBase::RequestNewLayerTreeFrameSink(
     return;
   }
 
-  KURL url = client_->GetURLForDebugTrace();
-  // The |url| is not always available, fallback to a fixed string.
-  if (url.IsEmpty())
-    url = KURL("chrome://gpu/WidgetBase::RequestNewLayerTreeFrameSink");
-
-  // TODO(danakj): This may not be accurate, depending on the intent. A child
-  // local root could be in the same process as the view, so if the client is
-  // meant to designate the process type, it seems kRenderer would be the
-  // correct choice. If client is meant to designate the widget type, then
-  // kOOPIF would denote that it is not for the main frame. However, kRenderer
-  // would also be used for other widgets such as popups.
-  const char* client_name = is_for_child_local_root_ ? kOOPIF : kRenderer;
   const bool for_web_tests = WebTestMode();
   // Misconfigured bots (eg. crbug.com/780757) could run web tests on a
-  // machine where gpu compositing doesn't work. Don't crash in that case.
-  if (for_web_tests && Platform::Current()->IsGpuCompositingDisabled()) {
-    LOG(FATAL) << "Web tests require gpu compositing, but it is disabled.";
-    return;
+  // machine where gpu compositing doesn't work. LOG(FATAL) in that case.
+  if (for_web_tests && Platform::Current()->IsGpuCompositingDisabled() &&
+      !Platform::Current()->CompositorThreadTaskRunner()) {
+    LOG(FATAL) << "Web tests require gpu compositing in single thread mode, "
+                  "but it is disabled.";
+  }
+
+  NewLayerTreeFrameSinkParams params{
+      .url = client_->GetURLForDebugTrace(),
+      .embedder_params = std::make_unique<
+          cc::mojo_embedder::AsyncLayerTreeFrameSink::InitParams>(),
+      .callback = std::move(callback),
+  };
+
+  // The |url| is not always available, fallback to a fixed string.
+  if (params.url.IsEmpty()) {
+    params.url = KURL("chrome://gpu/WidgetBase::RequestNewLayerTreeFrameSink");
   }
 
   // TODO(jonross): Have this generated by the LayerTreeFrameSink itself, which
   // would then handle binding.
-  mojo::PendingRemote<cc::mojom::blink::RenderFrameMetadataObserver>
-      render_frame_metadata_observer_remote;
   mojo::PendingRemote<cc::mojom::blink::RenderFrameMetadataObserverClient>
       render_frame_metadata_client_remote;
-  mojo::PendingReceiver<cc::mojom::blink::RenderFrameMetadataObserverClient>
-      render_frame_metadata_observer_client_receiver =
-          render_frame_metadata_client_remote.InitWithNewPipeAndPassReceiver();
-  auto render_frame_metadata_observer =
+  params.render_frame_metadata_observer_client_receiver =
+      render_frame_metadata_client_remote.InitWithNewPipeAndPassReceiver();
+  params.render_frame_metadata_observer =
       std::make_unique<RenderFrameMetadataObserverImpl>(
-          render_frame_metadata_observer_remote
+          params.render_frame_metadata_observer_remote
               .InitWithNewPipeAndPassReceiver(),
           std::move(render_frame_metadata_client_remote));
 
-  const base::CommandLine& command_line =
-      *base::CommandLine::ForCurrentProcess();
-  cc::mojo_embedder::AsyncLayerTreeFrameSink::InitParams params;
-  params.compositor_task_runner =
+  params.embedder_params->io_thread_id = Platform::Current()->GetIOThreadId();
+  if (base::FeatureList::IsEnabled(::features::kEnableADPFRendererMain)) {
+    params.embedder_params->main_thread_id = main_thread_id_;
+  }
+
+  params.embedder_params->compositor_task_runner =
       Platform::Current()->CompositorThreadTaskRunner();
-  if (for_web_tests && !params.compositor_task_runner) {
+  if (for_web_tests && !params.embedder_params->compositor_task_runner) {
     // The frame sink provider expects a compositor task runner, but we might
     // not have that if we're running web tests in single threaded mode.
     // Set it to be our thread's task runner instead.
-    params.compositor_task_runner = main_thread_compositor_task_runner_;
+    params.embedder_params->compositor_task_runner =
+        main_thread_compositor_task_runner_;
+  }
+
+  if (!for_web_tests && params.embedder_params->compositor_task_runner &&
+      mojo::IsDirectReceiverSupported()) {
+    params.embedder_params->use_direct_client_receiver = true;
   }
 
   // The renderer runs animations and layout for animate_only BeginFrames.
-  params.wants_animate_only_begin_frames = true;
+  params.embedder_params->wants_animate_only_begin_frames = true;
+  params.embedder_params->no_compositor_frame_acks =
+      base::FeatureList::IsEnabled(::features::kNoCompositorFrameAcks);
 
   // In disable frame rate limit mode, also let the renderer tick as fast as it
   // can. The top level begin frame source will also be running as a back to
   // back begin frame source, but using a synthetic begin frame source here
   // reduces latency when in this mode (at least for frames starting--it
   // potentially increases it for input on the other hand.)
-  if (command_line.HasSwitch(::switches::kDisableFrameRateLimit))
-    params.synthetic_begin_frame_source = CreateSyntheticBeginFrameSource();
-
-  params.client_name = client_name;
-
-  mojo::PendingReceiver<viz::mojom::blink::CompositorFrameSink>
-      compositor_frame_sink_receiver = CrossVariantMojoReceiver<
-          viz::mojom::blink::CompositorFrameSinkInterfaceBase>(
-          params.pipes.compositor_frame_sink_remote
-              .InitWithNewPipeAndPassReceiver());
-  mojo::PendingRemote<viz::mojom::blink::CompositorFrameSinkClient>
-      compositor_frame_sink_client;
-  params.pipes.client_receiver = CrossVariantMojoReceiver<
-      viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>(
-      compositor_frame_sink_client.InitWithNewPipeAndPassReceiver());
-
-  if (Platform::Current()->IsGpuCompositingDisabled()) {
-    DCHECK(!for_web_tests);
-    widget_host_->CreateFrameSink(std::move(compositor_frame_sink_receiver),
-                                  std::move(compositor_frame_sink_client));
-    widget_host_->RegisterRenderFrameMetadataObserver(
-        std::move(render_frame_metadata_observer_client_receiver),
-        std::move(render_frame_metadata_observer_remote));
-    std::move(callback).Run(
-        std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
-            nullptr, nullptr, &params),
-        std::move(render_frame_metadata_observer));
-    return;
+  // TODO(b/221220344): Support dynamically setting the BeginFrameSource per VRR
+  // state changes.
+  const cc::LayerTreeSettings& settings = LayerTreeHost()->GetSettings();
+  if (settings.disable_frame_rate_limit ||
+      settings.enable_variable_refresh_rate) {
+    params.embedder_params->use_begin_frame_presentation_feedback =
+        base::FeatureList::IsEnabled(
+            features::kUseBeginFramePresentationFeedback);
+    params.embedder_params->synthetic_begin_frame_source =
+        CreateSyntheticBeginFrameSource();
   }
 
-  scoped_refptr<gpu::GpuChannelHost> gpu_channel_host =
-      Platform::Current()->EstablishGpuChannelSync();
+  // Don't enable the cc side internal begin frame source if using headless,
+  // since cc won't receive ExternalBeginFrame issued by headless tests when
+  // internal begin frame source is started.
+  const base::CommandLine& command_line =
+      *base::CommandLine::ForCurrentProcess();
+
+  if (base::FeatureList::IsEnabled(::features::kManualBeginFrame) &&
+      !command_line.HasSwitch(switches::kAllowPreCommitInput)) {
+    params.embedder_params->auto_needs_begin_frame = true;
+    params.embedder_params->manual_begin_frame = true;
+  }
+
+  params.compositor_frame_sink_receiver = CrossVariantMojoReceiver<
+      viz::mojom::blink::CompositorFrameSinkInterfaceBase>(
+      params.embedder_params->pipes.compositor_frame_sink_remote
+          .InitWithNewPipeAndPassReceiver());
+  params.embedder_params->pipes.client_receiver = CrossVariantMojoReceiver<
+      viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>(
+      params.compositor_frame_sink_client.InitWithNewPipeAndPassReceiver());
+
+  Platform::EstablishGpuChannelCallback finish_callback =
+      base::BindOnce(&WidgetBase::FinishRequestNewLayerTreeFrameSink,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(params));
+  if (layer_tree_view_ && LayerTreeHost()->in_composite_for_test()) {
+    std::move(finish_callback)
+        .Run(Platform::Current()->EstablishGpuChannelSync());
+  } else {
+    Platform::Current()->EstablishGpuChannel(std::move(finish_callback));
+  }
+}
+
+void WidgetBase::FinishRequestNewLayerTreeFrameSink(
+    NewLayerTreeFrameSinkParams params,
+    scoped_refptr<gpu::GpuChannelHost> gpu_channel_host) {
   if (!gpu_channel_host) {
     // Wait and try again. We may hear that the compositing mode has switched
     // to software in the meantime.
-    std::move(callback).Run(nullptr, nullptr);
+    std::move(params.callback).Run(nullptr, nullptr);
+    return;
+  }
+
+  viz_input_receiver_.reset();
+
+  // If there are initial frame sink pipes already sent by the browser, use
+  // those instead of requesting creation with new pipes.
+  const bool has_initial_sink =
+      initial_frame_sink_pipes_ &&
+      initial_frame_sink_pipes_->initial_frame_sink.is_valid();
+  CHECK_EQ(has_initial_sink,
+           initial_frame_sink_pipes_ &&
+               initial_frame_sink_pipes_->initial_frame_sink_client.is_valid());
+  CHECK_EQ(has_initial_sink,
+           initial_frame_sink_pipes_ &&
+               initial_frame_sink_pipes_->initial_viz_rir_client.is_valid());
+  base::UmaHistogramBoolean("GPU.EarlyInitialFrameSinkUsed", has_initial_sink);
+  // Record the start time to measure wait time until the first BeginFrame.
+  frame_sink_bind_time_ = base::TimeTicks::Now();
+  waiting_for_first_begin_frame_ = true;
+  is_using_early_frame_sink_ = has_initial_sink;
+
+  if (has_initial_sink) {
+    viz_input_receiver_.Bind(
+        std::move(initial_frame_sink_pipes_->initial_viz_rir_client),
+        task_runner_);
+    params.compositor_frame_sink_receiver.reset();
+    params.compositor_frame_sink_client.reset();
+    params.embedder_params->pipes.compositor_frame_sink_remote =
+        ToCrossVariantMojoType(
+            std::move(initial_frame_sink_pipes_->initial_frame_sink));
+    params.embedder_params->pipes.client_receiver = ToCrossVariantMojoType(
+        std::move(initial_frame_sink_pipes_->initial_frame_sink_client));
+    initial_frame_sink_pipes_.reset();
+  }
+
+  if (Platform::Current()->IsGpuCompositingDisabled()) {
+    if (!has_initial_sink) {
+      widget_host_->CreateFrameSink(
+          std::move(params.compositor_frame_sink_receiver),
+          std::move(params.compositor_frame_sink_client),
+          viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
+    }
+    widget_host_->RegisterRenderFrameMetadataObserver(
+        std::move(params.render_frame_metadata_observer_client_receiver),
+        std::move(params.render_frame_metadata_observer_remote));
+    std::move(params.callback)
+        .Run(std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
+                 /*context_provider=*/nullptr,
+                 /*worker_context_provider=*/nullptr,
+                 gpu_channel_host->CreateClientSharedImageInterface(),
+                 params.embedder_params.get()),
+             std::move(params.render_frame_metadata_observer));
     return;
   }
 
   scoped_refptr<viz::RasterContextProvider> worker_context_provider =
-      Platform::Current()->SharedCompositorWorkerContextProvider();
+      Platform::Current()->SharedCompositorWorkerContextProvider(
+          &RasterDarkModeFilterImpl::Instance());
   if (!worker_context_provider) {
     // Cause the compositor to wait and try again.
-    std::move(callback).Run(nullptr, nullptr);
+    std::move(params.callback).Run(nullptr, nullptr);
     return;
+  }
+
+  {
+    viz::RasterContextProvider::ScopedRasterContextLock scoped_context(
+        worker_context_provider.get());
+    max_render_buffer_bounds_gpu_ =
+        worker_context_provider->ContextCapabilities().max_texture_size;
   }
 
   // The renderer compositor context doesn't do a lot of stuff, so we don't
@@ -621,81 +951,136 @@ void WidgetBase::RequestNewLayerTreeFrameSink(
   // uploads happen on the worker context instead.
   gpu::SharedMemoryLimits limits = gpu::SharedMemoryLimits::ForMailboxContext();
 
-  // This is for an offscreen context for the compositor. So the default
-  // framebuffer doesn't need alpha, depth, stencil, antialiasing.
-  gpu::ContextCreationAttribs attributes;
-  attributes.alpha_size = -1;
-  attributes.depth_size = 0;
-  attributes.stencil_size = 0;
-  attributes.samples = 0;
-  attributes.sample_buffers = 0;
-  attributes.bind_generates_resource = false;
-  attributes.lose_context_when_out_of_memory = true;
-  attributes.enable_gles2_interface = true;
-  attributes.enable_raster_interface = false;
-  attributes.enable_oop_rasterization = false;
-
   constexpr bool automatic_flushes = false;
   constexpr bool support_locking = false;
-  constexpr bool support_grcontext = true;
-  gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager =
-      Platform::Current()->GetGpuMemoryBufferManager();
 
-  scoped_refptr<viz::ContextProviderCommandBuffer> context_provider(
-      new viz::ContextProviderCommandBuffer(
-          gpu_channel_host, gpu_memory_buffer_manager, kGpuStreamIdDefault,
-          kGpuStreamPriorityDefault, gpu::kNullSurfaceHandle, url,
-          automatic_flushes, support_locking, support_grcontext, limits,
-          attributes,
-          viz::command_buffer_metrics::ContextType::RENDER_COMPOSITOR));
+  auto context_provider = viz::ContextProviderCommandBuffer::CreateForRaster(
+      gpu_channel_host, kGpuStreamIdDefault, kGpuStreamPriorityDefault,
+      GURL(params.url), automatic_flushes, support_locking, limits,
+      viz::command_buffer_metrics::ContextType::RENDERER_COMPOSITOR);
 
-#if defined(OS_ANDROID)
-  if (Platform::Current()->IsSynchronousCompositingEnabledForAndroidWebView()) {
+#if BUILDFLAG(IS_ANDROID)
+  if (Platform::Current()->IsSynchronousCompositingEnabledForAndroidWebView() &&
+      !is_embedded_) {
     // TODO(ericrk): Collapse with non-webview registration below.
-    if (::features::IsUsingVizFrameSubmissionForWebView()) {
-      widget_host_->CreateFrameSink(std::move(compositor_frame_sink_receiver),
-                                    std::move(compositor_frame_sink_client));
+    if (::features::IsUsingVizFrameSubmissionForWebView() &&
+        !has_initial_sink) {
+      widget_host_->CreateFrameSink(
+          std::move(params.compositor_frame_sink_receiver),
+          std::move(params.compositor_frame_sink_client),
+          viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
     }
     widget_host_->RegisterRenderFrameMetadataObserver(
-        std::move(render_frame_metadata_observer_client_receiver),
-        std::move(render_frame_metadata_observer_remote));
+        std::move(params.render_frame_metadata_observer_client_receiver),
+        std::move(params.render_frame_metadata_observer_remote));
 
-    std::move(callback).Run(
-        std::make_unique<SynchronousLayerTreeFrameSink>(
-            std::move(context_provider), std::move(worker_context_provider),
-            Platform::Current()->CompositorThreadTaskRunner(),
-            gpu_memory_buffer_manager, g_next_layer_tree_frame_sink_id++,
-            std::move(params.synthetic_begin_frame_source),
-            widget_input_handler_manager_->GetSynchronousCompositorRegistry(),
-            CrossVariantMojoRemote<
-                viz::mojom::blink::CompositorFrameSinkInterfaceBase>(
-                std::move(params.pipes.compositor_frame_sink_remote)),
-            CrossVariantMojoReceiver<
-                viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>(
-                std::move(params.pipes.client_receiver))),
-        std::move(render_frame_metadata_observer));
+    std::move(params.callback)
+        .Run(
+            std::make_unique<SynchronousLayerTreeFrameSink>(
+                std::move(context_provider), std::move(worker_context_provider),
+                Platform::Current()->CompositorThreadTaskRunner(),
+                g_next_layer_tree_frame_sink_id++,
+                std::move(params.embedder_params->synthetic_begin_frame_source),
+                widget_input_handler_manager_
+                    ->GetSynchronousCompositorRegistry(),
+                CrossVariantMojoRemote<
+                    viz::mojom::blink::CompositorFrameSinkInterfaceBase>(
+                    std::move(params.embedder_params->pipes
+                                  .compositor_frame_sink_remote)),
+                CrossVariantMojoReceiver<
+                    viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>(
+                    std::move(params.embedder_params->pipes.client_receiver))),
+            std::move(params.render_frame_metadata_observer));
     return;
   }
 #endif
-  widget_host_->CreateFrameSink(std::move(compositor_frame_sink_receiver),
-                                std::move(compositor_frame_sink_client));
+  if (!has_initial_sink) {
+    widget_host_->CreateFrameSink(
+        std::move(params.compositor_frame_sink_receiver),
+        std::move(params.compositor_frame_sink_client),
+        viz_input_receiver_.BindNewPipeAndPassRemote(task_runner_));
+  }
   widget_host_->RegisterRenderFrameMetadataObserver(
-      std::move(render_frame_metadata_observer_client_receiver),
-      std::move(render_frame_metadata_observer_remote));
-  params.gpu_memory_buffer_manager = gpu_memory_buffer_manager;
-  std::move(callback).Run(
-      std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
-          std::move(context_provider), std::move(worker_context_provider),
-          &params),
-      std::move(render_frame_metadata_observer));
+      std::move(params.render_frame_metadata_observer_client_receiver),
+      std::move(params.render_frame_metadata_observer_remote));
+  std::move(params.callback)
+      .Run(std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
+               std::move(context_provider), std::move(worker_context_provider),
+               gpu_channel_host->CreateClientSharedImageInterface(),
+               params.embedder_params.get()),
+           std::move(params.render_frame_metadata_observer));
+}
+
+std::unique_ptr<cc::LayerTreeFrameSink> WidgetBase::CreateUnboundedFrameSink(
+    CrossVariantMojoRemote<viz::mojom::blink::CompositorFrameSinkInterfaceBase>
+        unbounded_sink_remote,
+    CrossVariantMojoReceiver<
+        viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>
+        unbounded_client_receiver) {
+  scoped_refptr<gpu::GpuChannelHost> gpu_channel_host =
+      Platform::Current()->EstablishGpuChannelSync();
+  if (!gpu_channel_host) {
+    return nullptr;
+  }
+
+  auto embedder_params = std::make_unique<
+      cc::mojo_embedder::AsyncLayerTreeFrameSink::InitParams>();
+  embedder_params->compositor_task_runner =
+      Platform::Current()->CompositorThreadTaskRunner();
+  if (!embedder_params->compositor_task_runner) {
+    embedder_params->compositor_task_runner =
+        main_thread_compositor_task_runner_;
+  }
+  embedder_params->io_thread_id = Platform::Current()->GetIOThreadId();
+  if (base::FeatureList::IsEnabled(::features::kEnableADPFRendererMain)) {
+    embedder_params->main_thread_id = main_thread_id_;
+  }
+  embedder_params->wants_animate_only_begin_frames = true;
+  embedder_params->no_compositor_frame_acks =
+      base::FeatureList::IsEnabled(::features::kNoCompositorFrameAcks);
+
+  embedder_params->pipes.compositor_frame_sink_remote =
+      mojo::PendingRemote<viz::mojom::CompositorFrameSink>(
+          std::move(unbounded_sink_remote));
+  embedder_params->pipes.client_receiver =
+      mojo::PendingReceiver<viz::mojom::CompositorFrameSinkClient>(
+          std::move(unbounded_client_receiver));
+
+  if (Platform::Current()->IsGpuCompositingDisabled()) {
+    return std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
+        /*context_provider=*/nullptr,
+        /*worker_context_provider=*/nullptr,
+        gpu_channel_host->CreateClientSharedImageInterface(),
+        embedder_params.get());
+  }
+
+  scoped_refptr<viz::RasterContextProvider> worker_context_provider =
+      Platform::Current()->SharedCompositorWorkerContextProvider(
+          &RasterDarkModeFilterImpl::Instance());
+  if (!worker_context_provider) {
+    return nullptr;
+  }
+
+  gpu::SharedMemoryLimits limits = gpu::SharedMemoryLimits::ForMailboxContext();
+  auto context_provider = viz::ContextProviderCommandBuffer::CreateForRaster(
+      gpu_channel_host, kGpuStreamIdDefault, kGpuStreamPriorityDefault,
+      GURL("chrome://gpu/WidgetBase::CreateUnboundedFrameSink"),
+      /*automatic_flushes=*/false, /*support_locking=*/false, limits,
+      viz::command_buffer_metrics::ContextType::RENDERER_COMPOSITOR);
+  if (!context_provider) {
+    return nullptr;
+  }
+
+  return std::make_unique<cc::mojo_embedder::AsyncLayerTreeFrameSink>(
+      std::move(context_provider), std::move(worker_context_provider),
+      gpu_channel_host->CreateClientSharedImageInterface(),
+      embedder_params.get());
 }
 
 void WidgetBase::DidCommitAndDrawCompositorFrame() {
   // NOTE: Tests may break if this event is renamed or moved. See
   // tab_capture_performancetest.cc.
   TRACE_EVENT0("gpu", "WidgetBase::DidCommitAndDrawCompositorFrame");
-
-  client_->DidCommitAndDrawCompositorFrame();
 }
 
 void WidgetBase::DidObserveFirstScrollDelay(
@@ -709,8 +1094,9 @@ void WidgetBase::WillCommitCompositorFrame() {
   client_->BeginCommitCompositorFrame();
 }
 
-void WidgetBase::DidCommitCompositorFrame(base::TimeTicks commit_start_time) {
-  client_->EndCommitCompositorFrame(commit_start_time);
+void WidgetBase::DidCommitCompositorFrame(base::TimeTicks commit_start_time,
+                                          base::TimeTicks commit_finish_time) {
+  client_->EndCommitCompositorFrame(commit_start_time, commit_finish_time);
 }
 
 void WidgetBase::DidCompletePageScaleAnimation() {
@@ -732,10 +1118,6 @@ WidgetBase::GetBeginMainFrameMetrics() {
   return client_->GetBeginMainFrameMetrics();
 }
 
-std::unique_ptr<cc::WebVitalMetrics> WidgetBase::GetWebVitalMetrics() {
-  return client_->GetWebVitalMetrics();
-}
-
 void WidgetBase::BeginUpdateLayers() {
   client_->BeginUpdateLayers();
 }
@@ -749,11 +1131,6 @@ void WidgetBase::WillBeginMainFrame() {
   client_->SetSuppressFrameRequestsWorkaroundFor704763Only(true);
   client_->WillBeginMainFrame();
   UpdateSelectionBounds();
-
-  // The UpdateTextInputState can result in further layout and possibly
-  // enable GPU acceleration so they need to be called before any painting
-  // is done.
-  UpdateTextInputState();
 }
 
 void WidgetBase::RunPaintBenchmark(int repeat_count,
@@ -765,11 +1142,38 @@ void WidgetBase::ScheduleAnimationForWebTests() {
   client_->ScheduleAnimationForWebTests();
 }
 
+std::unique_ptr<cc::RenderFrameMetadataObserver>
+WidgetBase::CreateRenderFrameObserver() {
+  mojo::PendingRemote<cc::mojom::blink::RenderFrameMetadataObserver>
+      render_frame_metadata_observer_remote;
+  mojo::PendingRemote<cc::mojom::blink::RenderFrameMetadataObserverClient>
+      render_frame_metadata_client_remote;
+  mojo::PendingReceiver<cc::mojom::blink::RenderFrameMetadataObserverClient>
+      render_frame_metadata_observer_client_receiver =
+          render_frame_metadata_client_remote.InitWithNewPipeAndPassReceiver();
+  auto render_frame_metadata_observer =
+      std::make_unique<RenderFrameMetadataObserverImpl>(
+          render_frame_metadata_observer_remote
+              .InitWithNewPipeAndPassReceiver(),
+          std::move(render_frame_metadata_client_remote));
+  widget_host_->RegisterRenderFrameMetadataObserver(
+      std::move(render_frame_metadata_observer_client_receiver),
+      std::move(render_frame_metadata_observer_remote));
+  return render_frame_metadata_observer;
+}
+
 void WidgetBase::SetCompositorVisible(bool visible) {
   if (never_composited_)
     return;
 
   layer_tree_view_->SetVisible(visible);
+}
+
+void WidgetBase::WarmUpCompositor() {
+  if (never_composited_) {
+    return;
+  }
+  layer_tree_view_->SetShouldWarmUp();
 }
 
 void WidgetBase::UpdateVisualState() {
@@ -781,21 +1185,40 @@ void WidgetBase::UpdateVisualState() {
       ShouldRecordBeginMainFrameMetrics()
           ? DocumentUpdateReason::kBeginMainFrame
           : DocumentUpdateReason::kTest;
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   client_->UpdateLifecycle(WebLifecycleUpdate::kAll, lifecycle_reason);
+  if (!weak_this) {
+    return;
+  }
   client_->SetSuppressFrameRequestsWorkaroundFor704763Only(false);
 }
 
-void WidgetBase::BeginMainFrame(base::TimeTicks frame_time) {
+void WidgetBase::BeginMainFrame(const viz::BeginFrameArgs& args) {
+  // Log the wait time from frame sink bind to the first BeginFrame.
+  if (waiting_for_first_begin_frame_) {
+    base::TimeDelta latency = base::TimeTicks::Now() - frame_sink_bind_time_;
+    const char* path_type = is_using_early_frame_sink_ ? "Early" : "Standard";
+    base::UmaHistogramTimes(
+        base::StrCat({"GPU.FrameSink.BindToFirstFrameLatency.", path_type}),
+        latency);
+    waiting_for_first_begin_frame_ = false;
+  }
   base::TimeTicks raf_aligned_input_start_time;
   if (ShouldRecordBeginMainFrameMetrics()) {
     raf_aligned_input_start_time = base::TimeTicks::Now();
   }
+
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   widget_input_handler_manager_->input_event_queue()->DispatchRafAlignedInput(
-      frame_time);
+      args.frame_time);
+  // DispatchRafAlignedInput could have detached the frame.
+  if (!weak_this)
+    return;
+
   if (ShouldRecordBeginMainFrameMetrics()) {
     client_->RecordDispatchRafAlignedInputTime(raf_aligned_input_start_time);
   }
-  client_->BeginMainFrame(frame_time);
+  client_->BeginMainFrame(args);
 }
 
 bool WidgetBase::ShouldRecordBeginMainFrameMetrics() {
@@ -806,9 +1229,18 @@ bool WidgetBase::ShouldRecordBeginMainFrameMetrics() {
 
 void WidgetBase::AddPresentationCallback(
     uint32_t frame_token,
-    base::OnceCallback<void(base::TimeTicks)> callback) {
+    base::OnceCallback<void(const viz::FrameTimingDetails&)> callback) {
   layer_tree_view_->AddPresentationCallback(frame_token, std::move(callback));
 }
+
+#if BUILDFLAG(IS_APPLE)
+void WidgetBase::AddCoreAnimationErrorCodeCallback(
+    uint32_t frame_token,
+    base::OnceCallback<void(gfx::CALayerResult)> callback) {
+  layer_tree_view_->AddCoreAnimationErrorCodeCallback(frame_token,
+                                                      std::move(callback));
+}
+#endif
 
 void WidgetBase::SetCursor(const ui::Cursor& cursor) {
   if (input_handler_.DidChangeCursor(cursor)) {
@@ -819,15 +1251,19 @@ void WidgetBase::SetCursor(const ui::Cursor& cursor) {
 void WidgetBase::UpdateTooltipUnderCursor(const String& tooltip_text,
                                           TextDirection dir) {
   widget_host_->UpdateTooltipUnderCursor(
-      tooltip_text.IsEmpty() ? "" : tooltip_text, ToBaseTextDirection(dir));
+      tooltip_text.empty() ? "" : tooltip_text, ToBaseTextDirection(dir));
 }
 
 void WidgetBase::UpdateTooltipFromKeyboard(const String& tooltip_text,
                                            TextDirection dir,
                                            const gfx::Rect& bounds) {
   widget_host_->UpdateTooltipFromKeyboard(
-      tooltip_text.IsEmpty() ? "" : tooltip_text, ToBaseTextDirection(dir),
+      tooltip_text.empty() ? "" : tooltip_text, ToBaseTextDirection(dir),
       BlinkSpaceToEnclosedDIPs(bounds));
+}
+
+void WidgetBase::ClearKeyboardTriggeredTooltip() {
+  widget_host_->ClearKeyboardTriggeredTooltip();
 }
 
 void WidgetBase::ShowVirtualKeyboard() {
@@ -836,6 +1272,14 @@ void WidgetBase::ShowVirtualKeyboard() {
 
 void WidgetBase::UpdateTextInputState() {
   UpdateTextInputStateInternal(false, false);
+}
+
+// static
+void WidgetBase::AssertAreCompatible(const WidgetBase& a, const WidgetBase& b) {
+  CHECK_EQ(a.is_embedded_, b.is_embedded_);
+  CHECK_EQ(a.is_for_scalable_page_, b.is_for_scalable_page_);
+  CHECK_EQ(a.main_thread_compositor_task_runner_,
+           b.main_thread_compositor_task_runner_);
 }
 
 bool WidgetBase::CanComposeInline() {
@@ -854,7 +1298,11 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
       ime_event_guard_->set_show_virtual_keyboard(true);
     return;
   }
+  base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
   ui::TextInputType new_type = GetTextInputType();
+  if (!weak_this) {
+    return;
+  }
   if (IsDateTimeInput(new_type))
     return;  // Not considered as a text input field in WebKit/Chromium.
 
@@ -863,11 +1311,13 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
   blink::WebTextInputInfo new_info;
   ui::mojom::VirtualKeyboardVisibilityRequest last_vk_visibility_request =
       ui::mojom::VirtualKeyboardVisibilityRequest::NONE;
-  bool always_hide_ime = false;
-  absl::optional<gfx::Rect> control_bounds;
-  absl::optional<gfx::Rect> selection_bounds;
+  std::optional<gfx::Rect> control_bounds;
+  std::optional<gfx::Rect> selection_bounds;
   if (frame_widget) {
     new_info = frame_widget->TextInputInfo();
+    if (!weak_this) {
+      return;
+    }
     // This will be used to decide whether or not to show VK when VK policy is
     // manual.
     last_vk_visibility_request =
@@ -875,9 +1325,14 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
 
     // Check whether the keyboard should always be hidden for the currently
     // focused element.
-    always_hide_ime = frame_widget->ShouldSuppressKeyboardForFocusedElement();
     frame_widget->GetEditContextBoundsInWindow(&control_bounds,
                                                &selection_bounds);
+    // Querying edit context bounds can trigger layout updates or synchronous
+    // events that may result in widget destruction. Ensure WidgetBase is still
+    // alive before proceeding.
+    if (!weak_this) {
+      return;
+    }
   }
   const ui::TextInputMode new_mode =
       ConvertWebTextInputMode(new_info.input_mode);
@@ -891,7 +1346,7 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
       text_input_type_ != new_type || text_input_mode_ != new_mode ||
       text_input_info_ != new_info || !new_info.ime_text_spans.empty() ||
       can_compose_inline_ != new_can_compose_inline ||
-      always_hide_ime_ != always_hide_ime || vk_policy_ != new_vk_policy ||
+      vk_policy_ != new_vk_policy ||
       (new_vk_policy == ui::mojom::VirtualKeyboardPolicy::MANUAL &&
        (last_vk_visibility_request !=
         ui::mojom::VirtualKeyboardVisibilityRequest::NONE)) ||
@@ -909,19 +1364,30 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
     params->edit_context_control_bounds = control_bounds;
     params->edit_context_selection_bounds = selection_bounds;
 
-    if (!new_info.ime_text_spans.empty()) {
+    if (!new_info.ime_text_spans.empty() && frame_widget) {
       params->ime_text_spans_info =
           frame_widget->GetImeTextSpansInfo(new_info.ime_text_spans);
+      // Querying IME text spans info can update layout and destroy the widget.
+      // Ensure WidgetBase is still alive before proceeding.
+      if (!weak_this) {
+        return;
+      }
     }
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     if (next_previous_flags_ == kInvalidNextPreviousFlagsValue) {
       // Due to a focus change, values will be reset by the frame.
       // That case we only need fresh NEXT/PREVIOUS information.
       // Also we won't send WidgetHostMsg_TextInputStateChanged if next/previous
       // focusable status is changed.
       if (frame_widget) {
-        next_previous_flags_ =
+        const int32_t next_previous_flags =
             frame_widget->ComputeWebTextInputNextPreviousFlags();
+        // Computing focus navigation flags can potentially result in widget
+        // destruction. Ensure WidgetBase is still alive before proceeding.
+        if (!weak_this) {
+          return;
+        }
+        next_previous_flags_ = next_previous_flags;
       } else {
         // For safety in case GetInputMethodController() is null, because -1 is
         // invalid value to send to browser process.
@@ -943,7 +1409,6 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
     // TODO(changwan): change instances of show_ime_if_needed to
     // show_virtual_keyboard.
     params->show_ime_if_needed = show_virtual_keyboard;
-    params->always_hide_ime = always_hide_ime;
     params->reply_to_request = reply_to_request;
     widget_host_->TextInputStateChanged(std::move(params));
 
@@ -952,7 +1417,6 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
     text_input_mode_ = new_mode;
     vk_policy_ = new_vk_policy;
     can_compose_inline_ = new_can_compose_inline;
-    always_hide_ime_ = always_hide_ime;
     text_input_flags_ = new_info.flags;
     frame_control_bounds_ = control_bounds.value_or(gfx::Rect());
     // Selection bounds are not populated in non-EditContext scenarios.
@@ -964,10 +1428,14 @@ void WidgetBase::UpdateTextInputStateInternal(bool show_virtual_keyboard,
           ui::mojom::VirtualKeyboardVisibilityRequest::NONE) {
         // Reset the visibility state.
         frame_widget->ResetVirtualKeyboardVisibilityRequest();
+        // Ensure WidgetBase is still alive before proceeding.
+        if (!weak_this) {
+          return;
+        }
       }
     }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // If we send a new TextInputStateChanged message, we must also deliver a
     // new RenderFrameMetadata, as the IME will need this info to be updated.
     // TODO(ericrk): Consider folding the above IPC into RenderFrameMetadata.
@@ -990,18 +1458,25 @@ void WidgetBase::ClearTextInputState() {
 }
 
 void WidgetBase::ShowVirtualKeyboardOnElementFocus() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_IOS_TVOS)
   // On ChromeOS, virtual keyboard is triggered only when users leave the
   // mouse button or the finger and a text input element is focused at that
   // time. Focus event itself shouldn't trigger virtual keyboard.
+  // On tvOS, the system keyboard takes the entire screen, so we want to show
+  // it only when an input field is explicitly tapped rather than when an
+  // element is focused.
   UpdateTextInputState();
 #else
   ShowVirtualKeyboard();
 #endif
+  if (!weak_this) {
+    return;
+  }
 
 // TODO(rouslan): Fix ChromeOS and Windows 8 behavior of autofill popup with
 // virtual keyboard.
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   client_->FocusChangeComplete();
 #endif
 }
@@ -1012,9 +1487,9 @@ void WidgetBase::ProcessTouchAction(cc::TouchAction touch_action) {
   widget_input_handler_manager_->ProcessTouchAction(touch_action);
 }
 
-void WidgetBase::SetFocus(bool enable) {
-  has_focus_ = enable;
-  client_->FocusChanged(enable);
+void WidgetBase::SetFocus(mojom::blink::FocusState focus_state) {
+  has_focus_ = focus_state == mojom::blink::FocusState::kFocused;
+  client_->FocusChanged(focus_state);
 }
 
 void WidgetBase::BindWidgetCompositor(
@@ -1022,7 +1497,7 @@ void WidgetBase::BindWidgetCompositor(
   if (widget_compositor_)
     widget_compositor_->Shutdown();
 
-  widget_compositor_ = base::MakeRefCounted<WidgetCompositor>(
+  widget_compositor_ = WidgetCompositor::Create(
       weak_ptr_factory_.GetWeakPtr(),
       LayerTreeHost()->GetTaskRunnerProvider()->MainThreadTaskRunner(),
       LayerTreeHost()->GetTaskRunnerProvider()->ImplThreadTaskRunner(),
@@ -1033,16 +1508,33 @@ void WidgetBase::UpdateCompositionInfo(bool immediate_request) {
   if (!monitor_composition_info_ && !immediate_request)
     return;  // Do not calculate composition info if not requested.
 
+  FrameWidget* frame_widget = client_->FrameWidget();
+  if (!frame_widget) {
+    return;
+  }
+
   TRACE_EVENT0("renderer", "WidgetBase::UpdateCompositionInfo");
   gfx::Range range;
   Vector<gfx::Rect> character_bounds;
 
-  if (GetTextInputType() == ui::TextInputType::TEXT_INPUT_TYPE_NONE) {
+  base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
+  ui::TextInputType text_input_type = GetTextInputType();
+  if (!weak_this) {
+    return;
+  }
+
+  if (text_input_type == ui::TextInputType::TEXT_INPUT_TYPE_NONE) {
     // Composition information is only available on editable node.
     range = gfx::Range::InvalidRange();
   } else {
     GetCompositionRange(&range);
+    if (!weak_this) {
+      return;
+    }
     GetCompositionCharacterBounds(&character_bounds);
+    if (!weak_this) {
+      return;
+    }
   }
 
   if (!immediate_request &&
@@ -1052,16 +1544,25 @@ void WidgetBase::UpdateCompositionInfo(bool immediate_request) {
   composition_character_bounds_ = character_bounds;
   composition_range_ = range;
 
-  if (mojom::blink::WidgetInputHandlerHost* host =
-          widget_input_handler_manager_->GetWidgetInputHandlerHost()) {
+  // If the new pipeline for CursorAnchorInfo data is available, send data from
+  // the frame widget instead.
+  if (frame_widget->HasImeRenderWidgetHost()) {
+    frame_widget->UpdateCursorAnchorInfo(/*update_requested=*/true);
+    return;
+  }
+  if (auto host = widget_input_handler_manager_->GetWidgetInputHandlerHost()) {
     host->ImeCompositionRangeChanged(composition_range_,
                                      composition_character_bounds_);
   }
 }
 
 void WidgetBase::ForceTextInputStateUpdate() {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  base::WeakPtr<WidgetBase> weak_this = weak_ptr_factory_.GetWeakPtr();
   UpdateSelectionBounds();
+  if (!weak_this) {
+    return;
+  }
   UpdateTextInputStateInternal(false, true /* reply_to_request */);
 #endif
 }
@@ -1101,7 +1602,7 @@ bool WidgetBase::ShouldUpdateCompositionInfo(const gfx::Range& range,
     return true;
   if (bounds.size() != composition_character_bounds_.size())
     return true;
-  for (size_t i = 0; i < bounds.size(); ++i) {
+  for (wtf_size_t i = 0; i < bounds.size(); ++i) {
     if (bounds[i] != composition_character_bounds_[i])
       return true;
   }
@@ -1120,8 +1621,8 @@ void WidgetBase::SetHidden(bool hidden) {
   // throttled acks are released in case frame production ceases.
   is_hidden_ = hidden;
 
-  if (auto* scheduler_state = RendererWidgetSchedulingState())
-    scheduler_state->SetHidden(hidden);
+  if (widget_scheduler_)
+    widget_scheduler_->SetHidden(hidden);
 
   // If the renderer was hidden, resolve any pending synthetic gestures so they
   // aren't blocked waiting for a compositor frame to be generated.
@@ -1192,52 +1693,62 @@ void WidgetBase::CursorVisibilityChange(bool is_visible) {
   client_->SetCursorVisibilityState(is_visible);
 }
 
-void WidgetBase::SetMouseCapture(bool capture) {
-  if (mojom::blink::WidgetInputHandlerHost* host =
-          widget_input_handler_manager_->GetWidgetInputHandlerHost()) {
-    host->SetMouseCapture(capture);
-  }
-}
-
-void WidgetBase::ImeSetComposition(
+gfx::Range WidgetBase::ImeSetComposition(
     const String& text,
     const Vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& replacement_range,
     int selection_start,
-    int selection_end) {
-  if (!ShouldHandleImeEvents())
-    return;
+    int selection_end,
+    mojom::blink::ImeState ime_state,
+    DOMNodeIdType target_dom_node_id) {
+  // If the browser is setting a targeted composition, ignore normal IME focus
+  // requirements.
+  if (target_dom_node_id.is_null() && !ShouldHandleImeEvents()) {
+    return gfx::Range::InvalidRange();
+  }
 
   FrameWidget* frame_widget = client_->FrameWidget();
-  if (!frame_widget)
-    return;
+  if (!frame_widget) {
+    return gfx::Range::InvalidRange();
+  }
   if (frame_widget->ShouldDispatchImeEventsToPlugin()) {
     frame_widget->ImeSetCompositionForPlugin(text, ime_text_spans,
                                              replacement_range, selection_start,
                                              selection_end);
-    return;
+    return gfx::Range::InvalidRange();
   }
 
   ImeEventGuard guard(weak_ptr_factory_.GetWeakPtr());
-  if (!frame_widget->SetComposition(text, ime_text_spans, replacement_range,
-                                    selection_start, selection_end)) {
+  gfx::Range composition_range = gfx::Range::InvalidRange();
+  bool success = frame_widget->SetComposition(
+      text, ime_text_spans, replacement_range, selection_start, selection_end,
+      ime_state, target_dom_node_id, composition_range);
+  if (!guard.IsValid()) {
+    return gfx::Range::InvalidRange();
+  }
+  if (!success) {
     // If we failed to set the composition text, then we need to let the browser
     // process to cancel the input method's ongoing composition session, to make
     // sure we are in a consistent state.
-    if (mojom::blink::WidgetInputHandlerHost* host =
+    if (auto host =
             widget_input_handler_manager_->GetWidgetInputHandlerHost()) {
       host->ImeCancelComposition();
     }
   }
   UpdateCompositionInfo(false /* not an immediate request */);
+  return composition_range;
 }
 
 void WidgetBase::ImeCommitText(const String& text,
                                const Vector<ui::ImeTextSpan>& ime_text_spans,
                                const gfx::Range& replacement_range,
-                               int relative_cursor_pos) {
-  if (!ShouldHandleImeEvents())
+                               int relative_cursor_pos,
+                               DOMNodeIdType target_dom_node_id) {
+  // If the browser is setting a targeted composition, ignore normal IME focus
+  // requirements.
+  if (target_dom_node_id.is_null() && !ShouldHandleImeEvents()) {
     return;
+  }
 
   FrameWidget* frame_widget = client_->FrameWidget();
   if (!frame_widget)
@@ -1251,9 +1762,21 @@ void WidgetBase::ImeCommitText(const String& text,
   ImeEventGuard guard(weak_ptr_factory_.GetWeakPtr());
   input_handler_.set_handling_input_event(true);
   frame_widget->CommitText(text, ime_text_spans, replacement_range,
-                           relative_cursor_pos);
+                           relative_cursor_pos, target_dom_node_id);
+  if (!guard.IsValid()) {
+    return;
+  }
   input_handler_.set_handling_input_event(false);
   UpdateCompositionInfo(false /* not an immediate request */);
+}
+
+void WidgetBase::PasteIntoNode(const String& text,
+                               DOMNodeIdType target_dom_node_id) {
+  FrameWidget* frame_widget = client_->FrameWidget();
+  if (!frame_widget) {
+    return;
+  }
+  frame_widget->PasteIntoNode(text, target_dom_node_id);
 }
 
 void WidgetBase::ImeFinishComposingText(bool keep_selection) {
@@ -1271,6 +1794,9 @@ void WidgetBase::ImeFinishComposingText(bool keep_selection) {
   ImeEventGuard guard(weak_ptr_factory_.GetWeakPtr());
   input_handler_.set_handling_input_event(true);
   frame_widget->FinishComposingText(keep_selection);
+  if (!guard.IsValid()) {
+    return;
+  }
   input_handler_.set_handling_input_event(false);
   UpdateCompositionInfo(false /* not an immediate request */);
 }
@@ -1279,13 +1805,17 @@ void WidgetBase::QueueSyntheticEvent(
     std::unique_ptr<WebCoalescedInputEvent> event) {
   client_->WillQueueSyntheticEvent(*event);
 
+  // Popups, which don't have a threaded input handler, are allowed to queue up
+  // main thread gesture scroll events.
+  bool uses_input_handler = client_->FrameWidget();
+
   // TODO(acomminos): If/when we add support for gesture event attribution on
   //                  the impl thread, have the caller provide attribution.
   WebInputEventAttribution attribution;
   widget_input_handler_manager_->input_event_queue()->HandleEvent(
       std::move(event), MainThreadEventQueue::DispatchType::kNonBlocking,
       mojom::blink::InputEventResultState::kNotConsumed, attribution, nullptr,
-      HandledEventCallback());
+      HandledEventCallback(), !uses_input_handler);
 }
 
 bool WidgetBase::IsForProvisionalFrame() {
@@ -1313,12 +1843,12 @@ void WidgetBase::FlushInputProcessedCallback() {
   widget_input_handler_manager_->InvokeInputProcessedCallback();
 }
 
-void WidgetBase::CancelCompositionForPepper() {
-  if (mojom::blink::WidgetInputHandlerHost* host =
+void WidgetBase::CancelComposition() {
+  if (auto host =
           widget_input_handler_manager_->GetWidgetInputHandlerHost()) {
     host->ImeCancelComposition();
   }
-#if defined(OS_MAC) || defined(USE_AURA)
+#if BUILDFLAG(IS_MAC) || defined(USE_AURA)
   UpdateCompositionInfo(false /* not an immediate request */);
 #endif
 }
@@ -1337,17 +1867,29 @@ void WidgetBase::OnImeEventGuardFinish(ImeEventGuard* guard) {
   // are ignored. These must explicitly be updated once finished handling the
   // ime event.
   UpdateSelectionBounds();
-#if defined(OS_ANDROID)
-  if (guard->show_virtual_keyboard())
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  if (!guard->IsValid()) {
+    return;
+  }
+  if (guard->show_virtual_keyboard()) {
     ShowVirtualKeyboard();
-  else
+  } else {
     UpdateTextInputState();
+  }
 #endif
 }
 
-void WidgetBase::RequestAnimationAfterDelay(const base::TimeDelta& delay) {
+void WidgetBase::RequestAnimationAfterDelay(cc::BeginMainFrameReason reason,
+                                            const base::TimeDelta& delay,
+                                            bool urgent) {
   if (delay.is_zero()) {
-    client_->ScheduleAnimation();
+    // See the comment in MainThreadEventQueue::QueueEvent() explaining why we
+    // use "IsEligibleForThrottleMainFrameTo60Hz()".
+    bool urgent_for_input =
+        input_handler_.handling_input_event() &&
+        ::features::IsEligibleForThrottleMainFrameTo60Hz() &&
+        base::FeatureList::IsEnabled(features::kUrgentMainFrameForInput);
+    client_->ScheduleAnimation(reason, urgent || urgent_for_input);
     return;
   }
 
@@ -1363,7 +1905,15 @@ void WidgetBase::RequestAnimationAfterDelay(const base::TimeDelta& delay) {
 }
 
 void WidgetBase::RequestAnimationAfterDelayTimerFired(TimerBase*) {
-  client_->ScheduleAnimation();
+  bool urgent_for_input =
+      input_handler_.handling_input_event() &&
+      base::FeatureList::IsEnabled(features::kUrgentMainFrameForInput);
+  client_->ScheduleAnimation(cc::BeginMainFrameReason::kDelayedTimerFired,
+                             /*urgent=*/urgent_for_input);
+}
+
+float WidgetBase::GetOriginalDeviceScaleFactor() const {
+  return client_->GetOriginalScreenInfos().current().device_scale_factor;
 }
 
 void WidgetBase::UpdateSurfaceAndScreenInfo(
@@ -1382,34 +1932,57 @@ void WidgetBase::UpdateSurfaceAndScreenInfo(
 
   // RenderWidgetHostImpl::SynchronizeVisualProperties uses similar logic to
   // detect orientation changes on the display currently showing the widget.
-  const display::ScreenInfo& previous_screen_info = screen_infos_.current();
+  const display::ScreenInfos previous_effective_screen_infos = screen_infos_;
+  const display::ScreenInfo& previous_screen_info =
+      previous_effective_screen_infos.current();
   bool orientation_changed =
       previous_screen_info.orientation_angle !=
           new_screen_info.orientation_angle ||
       previous_screen_info.orientation_type != new_screen_info.orientation_type;
-  display::ScreenInfo previous_original_screen_info =
-      client_->GetOriginalScreenInfo();
+  display::ScreenInfos previous_original_screen_infos =
+      client_->GetOriginalScreenInfos();
 
   local_surface_id_from_parent_ = new_local_surface_id;
   screen_infos_ = new_screen_infos;
 
+  const display::ScreenInfo& previous_original_screen_info =
+      previous_original_screen_infos.current();
+  const display::ScreenInfo& new_original_screen_info =
+      client_->GetOriginalScreenInfos().current();
+  if (ShouldUpdateCompositorMemoryPolicyOnScreenChange(
+          previous_original_screen_info, new_original_screen_info)) {
+    LayerTreeHost()->SetMemoryPolicy(GetGpuMemoryPolicy(
+        LayerTreeHost()->memory_policy(), new_original_screen_info.rect.size(),
+        new_original_screen_info.device_scale_factor));
+  }
+
   // Note carefully that the DSF specified in |new_screen_info| is not the
   // DSF used by the compositor during device emulation!
-  LayerTreeHost()->SetViewportRectAndScale(
-      compositor_viewport_pixel_rect,
-      client_->GetOriginalScreenInfo().device_scale_factor,
-      local_surface_id_from_parent_);
+  LayerTreeHost()->SetViewportRectAndScale(compositor_viewport_pixel_rect,
+                                           GetOriginalDeviceScaleFactor(),
+                                           local_surface_id_from_parent_);
   // The VisualDeviceViewportIntersectionRect derives from the LayerTreeView's
   // viewport size, which is set above.
   LayerTreeHost()->SetVisualDeviceViewportIntersectionRect(
       client_->ViewportVisibleRect());
-  LayerTreeHost()->SetDisplayColorSpaces(
-      screen_infos_.current().display_color_spaces);
+  if (display::Display::HasForceRasterColorProfile()) {
+    LayerTreeHost()->SetDisplayColorSpaces(gfx::DisplayColorSpaces(
+        display::Display::GetForcedRasterColorProfile()));
+  } else {
+    LayerTreeHost()->SetDisplayColorSpaces(
+        screen_infos_.current().display_color_spaces);
+  }
 
-  if (orientation_changed)
+  if (orientation_changed) {
+    auto weak_this = weak_ptr_factory_.GetWeakPtr();
     client_->OrientationChanged();
+    if (!weak_this) {
+      return;
+    }
+  }
 
-  client_->DidUpdateSurfaceAndScreen(previous_original_screen_info);
+  client_->DidUpdateSurfaceAndScreen(previous_original_screen_infos,
+                                     previous_effective_screen_infos);
 }
 
 void WidgetBase::UpdateScreenInfo(
@@ -1492,30 +2065,27 @@ gfx::Rect WidgetBase::CompositorViewportRect() const {
   return LayerTreeHost()->device_viewport_rect();
 }
 
-bool WidgetBase::ComputePreferCompositingToLCDText() {
+LCDTextPreference WidgetBase::ComputeLCDTextPreference() const {
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
-  if (command_line.HasSwitch(switches::kDisablePreferCompositingToLCDText))
-    return false;
-#if defined(OS_ANDROID) || BUILDFLAG(IS_CHROMEOS_ASH)
-  // On Android, we never have subpixel antialiasing. On Chrome OS we prefer to
-  // composite all scrollers for better scrolling performance.
-  return true;
-#else
+  if (command_line.HasSwitch(switches::kDisablePreferCompositingToLCDText)) {
+    return LCDTextPreference::kStronglyPreferred;
+  }
+  if (!Platform::Current()->IsLcdTextEnabled()) {
+    return LCDTextPreference::kIgnored;
+  }
   // Prefer compositing if the device scale is high enough that losing subpixel
   // antialiasing won't have a noticeable effect on text quality.
   // Note: We should keep kHighDPIDeviceScaleFactorThreshold in
   // cc/metrics/lcd_text_metrics_reporter.cc the same as the value below.
-  if (screen_infos_.current().device_scale_factor >= 1.5f)
-    return true;
-  if (command_line.HasSwitch(switches::kEnablePreferCompositingToLCDText))
-    return true;
-  if (!Platform::Current()->IsLcdTextEnabled())
-    return true;
-  if (base::FeatureList::IsEnabled(features::kPreferCompositingToLCDText))
-    return true;
-  return false;
-#endif
+  if (screen_infos_.current().device_scale_factor >= 1.5f) {
+    return LCDTextPreference::kIgnored;
+  }
+  if (command_line.HasSwitch(switches::kEnablePreferCompositingToLCDText) ||
+      base::FeatureList::IsEnabled(features::kPreferCompositingToLCDText)) {
+    return LCDTextPreference::kWeaklyPreferred;
+  }
+  return LCDTextPreference::kStronglyPreferred;
 }
 
 void WidgetBase::CountDroppedPointerDownForEventTiming(unsigned count) {
@@ -1523,79 +2093,81 @@ void WidgetBase::CountDroppedPointerDownForEventTiming(unsigned count) {
 }
 
 gfx::PointF WidgetBase::DIPsToBlinkSpace(const gfx::PointF& point) {
-  if (!use_zoom_for_dsf_)
-    return point;
-  // TODO(danakj): Should this be GetScreenInfo() so it changes under emulation?
-  return gfx::ScalePoint(point,
-                         client_->GetOriginalScreenInfo().device_scale_factor);
+  // TODO(danakj): Should this use non-original scale factor so it changes under
+  // emulation?
+  return gfx::ScalePoint(point, GetOriginalDeviceScaleFactor());
 }
 
 gfx::Point WidgetBase::DIPsToRoundedBlinkSpace(const gfx::Point& point) {
-  if (!use_zoom_for_dsf_)
-    return point;
-  // TODO(danakj): Should this be GetScreenInfo() so it changes under emulation?
-  return gfx::ScaleToRoundedPoint(
-      point, client_->GetOriginalScreenInfo().device_scale_factor);
+  // TODO(danakj): Should this use non-original scale factor so it changes under
+  // emulation?
+  return gfx::ScaleToRoundedPoint(point, GetOriginalDeviceScaleFactor());
 }
 
 gfx::PointF WidgetBase::BlinkSpaceToDIPs(const gfx::PointF& point) {
-  if (!use_zoom_for_dsf_)
-    return point;
-  // TODO(danakj): Should this be GetScreenInfo() so it changes under emulation?
-  return gfx::ScalePoint(
-      point, 1.f / client_->GetOriginalScreenInfo().device_scale_factor);
+  // TODO(danakj): Should this use non-original scale factor so it changes under
+  // emulation?
+  return gfx::ScalePoint(point, 1.f / GetOriginalDeviceScaleFactor());
 }
 
 gfx::Point WidgetBase::BlinkSpaceToFlooredDIPs(const gfx::Point& point) {
-  if (!use_zoom_for_dsf_)
-    return point;
-  // TODO(danakj): Should this be GetScreenInfo() so it changes under emulation?
-  // TODO(dtapuska): Determine if this should be a floor vs rounded.
-  float reverse = 1 / client_->GetOriginalScreenInfo().device_scale_factor;
+  // TODO(danakj): Should this use non-original scale factor so it changes under
+  // emulation?
+  float reverse = 1 / GetOriginalDeviceScaleFactor();
   return gfx::ScaleToFlooredPoint(point, reverse);
 }
 
 gfx::Size WidgetBase::DIPsToCeiledBlinkSpace(const gfx::Size& size) {
-  if (!use_zoom_for_dsf_)
-    return size;
-  return gfx::ScaleToCeiledSize(
-      size, client_->GetOriginalScreenInfo().device_scale_factor);
+  return gfx::ScaleToCeiledSize(size, GetOriginalDeviceScaleFactor());
 }
 
 gfx::RectF WidgetBase::DIPsToBlinkSpace(const gfx::RectF& rect) {
-  if (!use_zoom_for_dsf_)
-    return rect;
-  // TODO(danakj): Should this be GetScreenInfo() so it changes under emulation?
-  return gfx::ScaleRect(rect,
-                        client_->GetOriginalScreenInfo().device_scale_factor);
+  // TODO(danakj): Should this use non-original scale factor so it changes under
+  // emulation?
+  return gfx::ScaleRect(rect, GetOriginalDeviceScaleFactor());
 }
 
 float WidgetBase::DIPsToBlinkSpace(float scalar) {
-  if (!use_zoom_for_dsf_)
-    return scalar;
-  // TODO(danakj): Should this be GetScreenInfo() so it changes under emulation?
-  return client_->GetOriginalScreenInfo().device_scale_factor * scalar;
+  // TODO(danakj): Should this use non-original scale factor so it changes under
+  // emulation?
+  return GetOriginalDeviceScaleFactor() * scalar;
 }
 
 gfx::Size WidgetBase::BlinkSpaceToFlooredDIPs(const gfx::Size& size) {
-  if (!use_zoom_for_dsf_)
-    return size;
-  float reverse = 1 / client_->GetOriginalScreenInfo().device_scale_factor;
+  float reverse = 1 / GetOriginalDeviceScaleFactor();
   return gfx::ScaleToFlooredSize(size, reverse);
 }
 
 gfx::Rect WidgetBase::BlinkSpaceToEnclosedDIPs(const gfx::Rect& rect) {
-  if (!use_zoom_for_dsf_)
-    return rect;
-  float reverse = 1 / client_->GetOriginalScreenInfo().device_scale_factor;
+  float reverse = 1 / GetOriginalDeviceScaleFactor();
   return gfx::ScaleToEnclosedRect(rect, reverse);
 }
 
 gfx::RectF WidgetBase::BlinkSpaceToDIPs(const gfx::RectF& rect) {
-  if (!use_zoom_for_dsf_)
-    return rect;
-  float reverse = 1 / client_->GetOriginalScreenInfo().device_scale_factor;
+  float reverse = 1 / GetOriginalDeviceScaleFactor();
   return gfx::ScaleRect(rect, reverse);
+}
+
+std::optional<int> WidgetBase::GetMaxRenderBufferBounds() const {
+  return Platform::Current()->IsGpuCompositingDisabled()
+             ? max_render_buffer_bounds_sw_
+             : max_render_buffer_bounds_gpu_;
+}
+
+void WidgetBase::OnDevToolsSessionConnectionChanged(bool attached) {
+  if (widget_input_handler_manager_) {
+    widget_input_handler_manager_->OnDevToolsSessionConnectionChanged(attached);
+  }
+}
+
+void WidgetBase::RequestBeginMainFrameNotExpected(bool requested) {
+  LayerTreeHost()->RequestBeginMainFrameNotExpected(requested);
+}
+
+bool WidgetBase::AreMainFramesPausedOrDeferred() const {
+  cc::LayerTreeHost* host = LayerTreeHost();
+  CHECK(host);
+  return host->MainFrameUpdatesAreDeferred() || host->IsRenderingPaused();
 }
 
 }  // namespace blink

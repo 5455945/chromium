@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,21 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "content/browser/media/audio_stream_monitor.h"
+#include "content/browser/media/media_devices_util.h"
 #include "content/browser/media/media_power_experiment_manager.h"
 #include "content/browser/media/session/media_session_controllers_manager.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -26,15 +32,15 @@
 #include "media/mojo/mojom/media_player.mojom.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/wake_lock.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "ui/android/view_android.h"
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace blink {
 enum class WebFullscreenVideoStatus;
@@ -57,13 +63,47 @@ namespace content {
 class AudibleMetrics;
 class WebContentsImpl;
 
+// Used to authorize a frame to bypass the browser's audio service for
+// audibility, when using `MediaFoundationRenderer`. This is stored as
+// `DocumentUserData` on the `RenderFrameHost`. The authorization is now tied to
+// a specific player instance and is no longer document-wide for the lifetime of
+// the document.
+class CONTENT_EXPORT AudibilityBypassTracker
+    : public DocumentUserData<AudibilityBypassTracker> {
+ public:
+  ~AudibilityBypassTracker() override;
+
+  using ScopedGrant = base::ScopedClosureRunner;
+
+  static ScopedGrant AddGrant(RenderFrameHost* rfh);
+  static bool ClaimGrant(const MediaPlayerId& id);
+  static void ReleaseGrant(const MediaPlayerId& id);
+
+ private:
+  friend class DocumentUserData<AudibilityBypassTracker>;
+  explicit AudibilityBypassTracker(RenderFrameHost* rfh);
+  DOCUMENT_USER_DATA_KEY_DECL();
+
+  static void RevokeGrant(GlobalRenderFrameHostId rfh_id, int grant_id);
+
+  int next_grant_id_ = 0;
+  base::flat_set<int> pending_grants_;
+  base::flat_map<MediaPlayerId, int> active_grants_;
+};
+
 // This class manages all RenderFrame based media related managers at the
 // browser side. It receives IPC messages from media RenderFrameObservers and
 // forwards them to the corresponding managers. The managers are responsible
 // for sending IPCs back to the RenderFrameObservers at the render side.
-class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
+class CONTENT_EXPORT MediaWebContentsObserver
+    : public WebContentsObserver,
+      public media::mojom::MediaPlayerObserverClient {
  public:
   explicit MediaWebContentsObserver(WebContentsImpl* web_contents);
+
+  MediaWebContentsObserver(const MediaWebContentsObserver&) = delete;
+  MediaWebContentsObserver& operator=(const MediaWebContentsObserver&) = delete;
+
   ~MediaWebContentsObserver() override;
 
   // Called by WebContentsImpl when the audible state may have changed.
@@ -82,19 +122,38 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
   bool IsPictureInPictureAllowedForFullscreenVideo() const;
 
   // Gets the MediaPlayerId of the fullscreen video if it exists.
-  const absl::optional<MediaPlayerId>& GetFullscreenVideoMediaPlayerId() const;
+  const std::optional<MediaPlayerId>& GetFullscreenVideoMediaPlayerId() const;
 
   // WebContentsObserver implementation.
   void WebContentsDestroyed() override;
   void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
-  void MediaPictureInPictureChanged(bool is_picture_in_picture) override;
   void DidUpdateAudioMutingState(bool muted) override;
+  void DidStartNavigation(NavigationHandle* navigation_handle) override;
+  void RenderFrameHostChanged(RenderFrameHost* old_host,
+                              RenderFrameHost* new_host) override;
+
+  // Called when entering/leaving Picture-in-Picture for the given media player.
+  void OnPictureInPictureStateChanged(const MediaPlayerId& player_id,
+                                      bool is_picture_in_picture);
+
+  // Called when an audibility bypass grant is revoked.
+  void OnAudibilityBypassRevoked(const MediaPlayerId& id);
+
+  // MediaPlayerObserverClient implementation.
+  void GetHasPlayedBefore(GetHasPlayedBeforeCallback callback) override;
+
+  void BindMediaPlayerObserverClient(
+      mojo::PendingReceiver<media::mojom::MediaPlayerObserverClient>
+          pending_receiver);
 
   // TODO(zqzhang): this method is temporarily in MediaWebContentsObserver as
   // the effectively fullscreen video code is also here. We need to consider
   // merging the logic of effectively fullscreen, hiding media controls and
   // fullscreening video element to the same place.
   void RequestPersistentVideo(bool value);
+
+  // Returns the number of active players with video content.
+  int GetCurrentlyPlayingVideoCount() const;
 
   // Returns whether or not the given player id is active.
   bool IsPlayerActive(const MediaPlayerId& player_id) const;
@@ -106,9 +165,6 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
   void SetAudibleMetricsForTest(AudibleMetrics* audible_metrics) {
     audible_metrics_ = audible_metrics;
   }
-
-  void OnReceivedTranslatedDeviceId(const MediaPlayerId& player_id,
-                                    const std::string& raw_device_id);
 
   // Returns whether or not to be able to use the MediaPlayer mojo interface.
   bool IsMediaPlayerRemoteAvailable(const MediaPlayerId& player_id);
@@ -153,7 +209,7 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
     ~MediaPlayerHostImpl() override;
 
     // Used to bind receivers via the BrowserInterfaceBroker.
-    void BindMediaPlayerHostReceiver(
+    void AddMediaPlayerHostReceiver(
         mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerHost>
             receiver);
 
@@ -166,7 +222,7 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
 
    private:
     GlobalRenderFrameHostId frame_routing_id_;
-    MediaWebContentsObserver* media_web_contents_observer_;
+    raw_ptr<MediaWebContentsObserver> media_web_contents_observer_;
     mojo::AssociatedReceiverSet<media::mojom::MediaPlayerHost> receivers_;
   };
 
@@ -201,15 +257,24 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
     void OnAudioOutputSinkChanged(const std::string& hashed_device_id) override;
     void OnUseAudioServiceChanged(bool uses_audio_service) override;
     void OnAudioOutputSinkChangingDisabled() override;
-    void OnBufferUnderflow() override;
-    void OnSeek() override;
+    void OnRemotePlaybackMetadataChange(
+        media_session::mojom::RemotePlaybackMetadataPtr
+            remote_playback_metadata) override;
+    void OnVideoVisibilityChanged(bool meets_visibility_threshold) override;
+    void NotifyAudioStreamMonitorIfNeeded();
+    void OnVideoFrameAvailabilityChanged(bool available) override;
 
    private:
     PlayerInfo* GetPlayerInfo();
-    void NotifyAudioStreamMonitorIfNeeded();
+
+    void OnReceivedMediaDeviceSalt(
+        const std::string& hashed_device_id,
+        const content::MediaDeviceSaltAndOrigin& salt_and_origin);
+    void OnReceivedTranslatedDeviceId(
+        const std::optional<std::string>& translated_id);
 
     const MediaPlayerId media_player_id_;
-    MediaWebContentsObserver* const media_web_contents_observer_;
+    const raw_ptr<MediaWebContentsObserver> media_web_contents_observer_;
 
     mojo::AssociatedReceiver<media::mojom::MediaPlayerObserver>
         media_player_observer_receiver_{this};
@@ -218,6 +283,8 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
     bool uses_audio_service_ = true;
     std::unique_ptr<AudioStreamMonitor::AudibleClientRegistration>
         audio_client_registration_;
+
+    base::WeakPtrFactory<MediaPlayerObserverHostImpl> weak_factory_{this};
   };
 
   using MediaPlayerHostImplMap =
@@ -230,7 +297,7 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
       base::flat_map<MediaPlayerId,
                      mojo::AssociatedRemote<media::mojom::MediaPlayer>>;
 
-  // Communicates with the MediaSessionControllerManager to find or create (if
+  // Communicates with the MediaSessionControllersManager to find or create (if
   // needed) a MediaSessionController identified by |player_id|, in order to
   // bind its mojo remote for media::mojom::MediaPlayer.
   void OnMediaPlayerAdded(
@@ -244,15 +311,20 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
   PlayerInfo* GetPlayerInfo(const MediaPlayerId& id) const;
 
   void OnMediaMetadataChanged(const MediaPlayerId& player_id,
-                              bool has_video,
                               bool has_audio,
+                              bool has_video,
                               media::MediaContentType media_content_type);
 
   void OnMediaEffectivelyFullscreenChanged(
       const MediaPlayerId& player_id,
       blink::WebFullscreenVideoStatus fullscreen_status);
-  void OnAudioOutputSinkChanged(const MediaPlayerId& player_id,
-                                std::string hashed_device_id);
+  void OnMediaPlaying();
+  void OnAudioOutputSinkChangedWithRawDeviceId(
+      const MediaPlayerId& player_id,
+      const std::string& raw_device_id);
+  void OnRemotePlaybackMetadataChange(
+      const MediaPlayerId& player_id,
+      media_session::mojom::RemotePlaybackMetadataPtr remote_playback_metadata);
 
   // Used to notify when the renderer -> browser mojo connection via the
   // interface media::mojom::MediaPlayerObserver gets disconnected.
@@ -279,17 +351,22 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
       RenderFrameHost* render_frame_host);
 
   // Helper class for recording audible metrics.
-  AudibleMetrics* audible_metrics_;
+  raw_ptr<AudibleMetrics> audible_metrics_;
+
+  // A boolean indicating whether media has played before.
+  bool has_played_before_ = false;
+
+  mojo::ReceiverSet<media::mojom::MediaPlayerObserverClient> receivers_;
 
   // Tracking variables and associated wake locks for media playback.
   PlayerInfoMap player_info_map_;
   mojo::Remote<device::mojom::WakeLock> audio_wake_lock_;
-  absl::optional<MediaPlayerId> fullscreen_player_;
-  absl::optional<bool> picture_in_picture_allowed_in_fullscreen_;
+  std::optional<MediaPlayerId> fullscreen_player_;
+  std::optional<bool> picture_in_picture_allowed_in_fullscreen_;
   bool has_audio_wake_lock_for_testing_ = false;
 
   std::unique_ptr<MediaSessionControllersManager> session_controllers_manager_;
-  MediaPowerExperimentManager* power_experiment_manager_ = nullptr;
+  raw_ptr<MediaPowerExperimentManager> power_experiment_manager_ = nullptr;
 
   std::map<RenderFrameHost*,
            std::unique_ptr<base::WeakPtrFactory<MediaWebContentsObserver>>>
@@ -303,9 +380,6 @@ class CONTENT_EXPORT MediaWebContentsObserver : public WebContentsObserver {
   // Map of remote endpoints for the media::mojom::MediaPlayer mojo interface,
   // indexed by MediaPlayerId.
   MediaPlayerRemotesMap media_player_remotes_;
-
-  base::WeakPtrFactory<MediaWebContentsObserver> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(MediaWebContentsObserver);
 };
 
 }  // namespace content

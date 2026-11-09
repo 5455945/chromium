@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "base/containers/span.h"
+
 namespace gpu {
 
 // ValueValidator returns true if a value is valid.
@@ -18,9 +20,7 @@ class ValueValidator {
  public:
   ValueValidator() = default;
 
-  ValueValidator(const T* valid_values, int num_values) {
-    AddValues(valid_values, num_values);
-  }
+  ValueValidator(base::span<const T> valid_values) { AddValues(valid_values); }
 
   void AddValue(const T value) {
     if (!IsValid(value)) {
@@ -28,26 +28,24 @@ class ValueValidator {
     }
   }
 
-  void AddValues(const T* valid_values, int num_values) {
-    for (int ii = 0; ii < num_values; ++ii) {
-      AddValue(valid_values[ii]);
+  void AddValues(base::span<const T> valid_values) {
+    for (const T& value : valid_values) {
+      AddValue(value);
     }
   }
 
-  void RemoveValues(const T* invalid_values, int num_values) {
-    for (int ii = 0; ii < num_values; ++ii) {
-      auto iter = std::find(valid_values_.begin(), valid_values_.end(),
-                            invalid_values[ii]);
+  void RemoveValues(base::span<const T> invalid_values) {
+    for (const auto& value : invalid_values) {
+      auto iter = std::ranges::find(valid_values_, value);
       if (iter != valid_values_.end()) {
         valid_values_.erase(iter);
-        DCHECK(!IsValid(invalid_values[ii]));
+        DCHECK(!IsValid(value));
       }
     }
   }
 
   bool IsValid(const T value) const {
-    return std::find(valid_values_.begin(), valid_values_.end(), value) !=
-           valid_values_.end();
+    return std::ranges::contains(valid_values_, value);
   }
 
   const std::vector<T>& GetValues() const { return valid_values_; }

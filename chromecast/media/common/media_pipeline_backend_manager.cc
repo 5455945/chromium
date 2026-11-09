@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,12 @@
 #include <limits>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
 #include "chromecast/chromecast_buildflags.h"
@@ -37,7 +40,7 @@ namespace {
 
 constexpr int kAudioDecoderLimit = std::numeric_limits<int>::max();
 constexpr int kVideoDecoderLimit = 1;
-constexpr base::TimeDelta kPowerSaveWaitTime = base::TimeDelta::FromSeconds(5);
+constexpr base::TimeDelta kPowerSaveWaitTime = base::Seconds(5);
 
 }  // namespace
 
@@ -61,32 +64,42 @@ MediaPipelineBackendManager::MediaPipelineBackendManager(
       backend_wrapper_using_video_decoder_(nullptr),
       buffer_delegate_(nullptr),
       weak_factory_(this) {
-  DCHECK(media_task_runner_);
-  DCHECK_EQ(playing_audio_streams_count_.size(),
-            static_cast<size_t>(AudioContentType::kNumTypes));
-  DCHECK_EQ(playing_noneffects_audio_streams_count_.size(),
-            static_cast<size_t>(AudioContentType::kNumTypes));
+  CHECK(media_task_runner_, base::NotFatalUntil::M163);
+  CHECK_EQ(playing_audio_streams_count_.size(),
+           static_cast<size_t>(AudioContentType::kNumTypes),
+           base::NotFatalUntil::M163);
+  CHECK_EQ(playing_noneffects_audio_streams_count_.size(),
+           static_cast<size_t>(AudioContentType::kNumTypes),
+           base::NotFatalUntil::M163);
   for (int i = 0; i < NUM_DECODER_TYPES; ++i) {
-    decoder_count_[i] = 0;
+    UNSAFE_TODO(decoder_count_[i]) = 0;
   }
 
-  RUN_ON_MEDIA_THREAD(CreateMixerConnection);
+
 }
 
 MediaPipelineBackendManager::~MediaPipelineBackendManager() {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
 }
 
 std::unique_ptr<CmaBackend> MediaPipelineBackendManager::CreateBackend(
     const media::MediaPipelineDeviceParams& params) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
-  return std::make_unique<MediaPipelineBackendWrapper>(params, this,
-                                                       media_resource_tracker_);
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
+  return std::make_unique<MediaPipelineBackendWrapper>(
+      params, weak_factory_.GetWeakPtr(), media_resource_tracker_);
+}
+
+scoped_refptr<base::SequencedTaskRunner>
+MediaPipelineBackendManager::GetMediaTaskRunner() {
+  return media_task_runner_;
 }
 
 void MediaPipelineBackendManager::BackendDestroyed(
     MediaPipelineBackendWrapper* backend_wrapper) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
   if (backend_wrapper_using_video_decoder_ == backend_wrapper) {
     backend_wrapper_using_video_decoder_ = nullptr;
   }
@@ -94,8 +107,9 @@ void MediaPipelineBackendManager::BackendDestroyed(
 
 void MediaPipelineBackendManager::BackendUseVideoDecoder(
     MediaPipelineBackendWrapper* backend_wrapper) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
-  DCHECK(backend_wrapper);
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
+  CHECK(backend_wrapper, base::NotFatalUntil::M163);
   if (backend_wrapper_using_video_decoder_ &&
       backend_wrapper_using_video_decoder_ != backend_wrapper) {
     LOG(INFO) << __func__ << " revoke old backend : "
@@ -106,32 +120,35 @@ void MediaPipelineBackendManager::BackendUseVideoDecoder(
 }
 
 bool MediaPipelineBackendManager::IncrementDecoderCount(DecoderType type) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
-  DCHECK(type < NUM_DECODER_TYPES);
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
+  CHECK(type < NUM_DECODER_TYPES, base::NotFatalUntil::M163);
   const int limit =
       (type == VIDEO_DECODER) ? kVideoDecoderLimit : kAudioDecoderLimit;
-  if (decoder_count_[type] >= limit) {
+  if (UNSAFE_TODO(decoder_count_[type]) >= limit) {
     LOG(WARNING) << "Decoder limit reached for type " << type;
     return false;
   }
 
-  ++decoder_count_[type];
+  UNSAFE_TODO(++decoder_count_[type]);
   return true;
 }
 
 void MediaPipelineBackendManager::DecrementDecoderCount(DecoderType type) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
-  DCHECK(type < NUM_DECODER_TYPES);
-  DCHECK_GT(decoder_count_[type], 0);
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
+  CHECK(type < NUM_DECODER_TYPES, base::NotFatalUntil::M163);
+  UNSAFE_TODO(DCHECK_GT(decoder_count_[type], 0));
 
-  decoder_count_[type]--;
+  UNSAFE_TODO(decoder_count_[type])--;
 }
 
 void MediaPipelineBackendManager::UpdatePlayingAudioCount(
     bool sfx,
     const AudioContentType type,
     int change) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
   DCHECK(change == -1 || change == 1) << "bad count change: " << change;
 
   bool had_playing_audio_streams = (TotalPlayingAudioStreamsCount() > 0);
@@ -139,35 +156,25 @@ void MediaPipelineBackendManager::UpdatePlayingAudioCount(
       (TotalPlayingNoneffectsAudioStreamsCount() > 0);
 
   playing_audio_streams_count_[type] += change;
-  DCHECK_GE(playing_audio_streams_count_[type], 0);
+  CHECK_GE(playing_audio_streams_count_[type], 0, base::NotFatalUntil::M163);
 
   if (!sfx) {
     playing_noneffects_audio_streams_count_[type] += change;
-    DCHECK_GE(playing_noneffects_audio_streams_count_[type], 0);
+    CHECK_GE(playing_noneffects_audio_streams_count_[type], 0,
+             base::NotFatalUntil::M163);
   }
 
   HandlePlayingAudioStreamsChange(had_playing_audio_streams,
                                   had_playing_primary_streams);
 }
 
-void MediaPipelineBackendManager::OnMixerStreamCountChange(int primary_streams,
-                                                           int sfx_streams) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
-  bool had_playing_audio_streams = (TotalPlayingAudioStreamsCount() > 0);
-  bool had_playing_primary_streams =
-      (TotalPlayingNoneffectsAudioStreamsCount() > 0);
 
-  mixer_primary_stream_count_ = primary_streams;
-  mixer_sfx_stream_count_ = sfx_streams;
-
-  HandlePlayingAudioStreamsChange(had_playing_audio_streams,
-                                  had_playing_primary_streams);
-}
 
 void MediaPipelineBackendManager::HandlePlayingAudioStreamsChange(
     bool had_playing_audio_streams,
     bool had_playing_primary_streams) {
-  DCHECK(media_task_runner_->BelongsToCurrentThread());
+  CHECK(media_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M163);
   int new_playing_audio_streams = TotalPlayingAudioStreamsCount();
   if (new_playing_audio_streams == 0) {
     power_save_timer_.Start(FROM_HERE, kPowerSaveWaitTime, this,
@@ -199,7 +206,7 @@ int MediaPipelineBackendManager::TotalPlayingAudioStreamsCount() {
   for (auto entry : playing_audio_streams_count_) {
     total += entry.second;
   }
-  return std::max(total, mixer_primary_stream_count_ + mixer_sfx_stream_count_);
+  return total;
 }
 
 int MediaPipelineBackendManager::TotalPlayingNoneffectsAudioStreamsCount() {
@@ -207,11 +214,11 @@ int MediaPipelineBackendManager::TotalPlayingNoneffectsAudioStreamsCount() {
   for (auto entry : playing_noneffects_audio_streams_count_) {
     total += entry.second;
   }
-  return std::max(total, mixer_primary_stream_count_);
+  return total;
 }
 
 void MediaPipelineBackendManager::EnterPowerSaveMode() {
-  DCHECK_EQ(TotalPlayingAudioStreamsCount(), 0);
+  CHECK_EQ(TotalPlayingAudioStreamsCount(), 0, base::NotFatalUntil::M163);
   if (!VolumeControl::SetPowerSaveMode || !power_save_enabled_) {
     return;
   }
@@ -247,8 +254,8 @@ void MediaPipelineBackendManager::RemoveExtraPlayingStream(
 void MediaPipelineBackendManager::SetBufferDelegate(
     BufferDelegate* buffer_delegate) {
   MAKE_SURE_MEDIA_THREAD(SetBufferDelegate, buffer_delegate);
-  DCHECK(buffer_delegate);
-  DCHECK(!buffer_delegate_);
+  CHECK(buffer_delegate, base::NotFatalUntil::M163);
+  CHECK(!buffer_delegate_, base::NotFatalUntil::M163);
   buffer_delegate_ = buffer_delegate;
 }
 

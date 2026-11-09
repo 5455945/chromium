@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "google_apis/drive/base_requests.h"
-#include "google_apis/drive/dummy_auth_service.h"
-#include "google_apis/drive/request_sender.h"
+#include "google_apis/common/dummy_auth_service.h"
+#include "google_apis/common/request_sender.h"
+#include "google_apis/drive/drive_base_requests.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -94,8 +94,8 @@ class FilesListRequestRunnerTest : public testing::Test {
 
     network::mojom::URLLoaderFactoryParamsPtr params =
         network::mojom::URLLoaderFactoryParams::New();
-    params->process_id = network::mojom::kBrowserProcessId;
-    params->is_corb_enabled = false;
+    params->process_id = network::OriginatingProcessId::browser();
+    params->is_orb_enabled = false;
     network_context_->CreateURLLoaderFactory(
         url_loader_factory_.BindNewPipeAndPassReceiver(), std::move(params));
     test_shared_loader_factory_ =
@@ -129,8 +129,8 @@ class FilesListRequestRunnerTest : public testing::Test {
 
   // Called when the request is completed and no more backoff retries will
   // happen.
-  void OnCompleted(DriveApiErrorCode error, std::unique_ptr<FileList> entry) {
-    response_error_ = std::make_unique<DriveApiErrorCode>(error);
+  void OnCompleted(ApiErrorCode error, std::unique_ptr<FileList> entry) {
+    response_error_ = std::make_unique<ApiErrorCode>(error);
     response_entry_ = std::move(entry);
     std::move(on_completed_callback_).Run();
   }
@@ -157,14 +157,14 @@ class FilesListRequestRunnerTest : public testing::Test {
 
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::IO};
-  std::unique_ptr<RequestSender> request_sender_;
   net::EmbeddedTestServer test_server_;
-  std::unique_ptr<FilesListRequestRunner> runner_;
   std::unique_ptr<network::mojom::NetworkService> network_service_;
   mojo::Remote<network::mojom::NetworkContext> network_context_;
   mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory_;
   scoped_refptr<network::WeakWrapperSharedURLLoaderFactory>
       test_shared_loader_factory_;
+  std::unique_ptr<RequestSender> request_sender_;
+  std::unique_ptr<FilesListRequestRunner> runner_;
   base::OnceClosure on_completed_callback_;
 
   // Response set by test cases to be returned from the HTTP server.
@@ -172,7 +172,7 @@ class FilesListRequestRunnerTest : public testing::Test {
 
   // A requests and a response stored for verification in test cases.
   std::unique_ptr<net::test_server::HttpRequest> http_request_;
-  std::unique_ptr<DriveApiErrorCode> response_error_;
+  std::unique_ptr<ApiErrorCode> response_error_;
   std::unique_ptr<FileList> response_entry_;
 };
 

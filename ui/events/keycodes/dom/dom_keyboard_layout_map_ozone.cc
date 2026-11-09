@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "base/check_op.h"
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/dom_keyboard_layout_map_base.h"
@@ -21,6 +20,11 @@ namespace {
 class DomKeyboardLayoutMapOzone : public DomKeyboardLayoutMapBase {
  public:
   DomKeyboardLayoutMapOzone();
+
+  DomKeyboardLayoutMapOzone(const DomKeyboardLayoutMapOzone&) = delete;
+  DomKeyboardLayoutMapOzone& operator=(const DomKeyboardLayoutMapOzone&) =
+      delete;
+
   ~DomKeyboardLayoutMapOzone() override;
 
  private:
@@ -29,8 +33,6 @@ class DomKeyboardLayoutMapOzone : public DomKeyboardLayoutMapBase {
   ui::DomKey GetDomKeyFromDomCodeForLayout(
       ui::DomCode dom_code,
       uint32_t keyboard_layout_index) override;
-
-  DISALLOW_COPY_AND_ASSIGN(DomKeyboardLayoutMapOzone);
 };
 
 DomKeyboardLayoutMapOzone::DomKeyboardLayoutMapOzone() = default;
@@ -45,8 +47,8 @@ uint32_t DomKeyboardLayoutMapOzone::GetKeyboardLayoutCount() {
 ui::DomKey DomKeyboardLayoutMapOzone::GetDomKeyFromDomCodeForLayout(
     ui::DomCode dom_code,
     uint32_t keyboard_layout_index) {
-  DCHECK_NE(dom_code, ui::DomCode::NONE);
-  DCHECK_EQ(keyboard_layout_index, 0U);
+  CHECK_NE(dom_code, ui::DomCode::NONE, base::NotFatalUntil::M163);
+  CHECK_EQ(keyboard_layout_index, 0U, base::NotFatalUntil::M163);
 
   ui::KeyboardLayoutEngine* const keyboard_layout_engine =
       ui::KeyboardLayoutEngineManager::GetKeyboardLayoutEngine();

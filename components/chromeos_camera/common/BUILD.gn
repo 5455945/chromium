@@ -1,10 +1,11 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("common") {
+  generate_blink = true
   sources = [
     "dmabuf.mojom",
     "jpeg_encode_accelerator.mojom",
@@ -12,7 +13,7 @@ mojom("common") {
   ]
 
   public_deps = [
-    "//media/mojo/mojom",
+    "//media/mojo/mojom:media_types",
     "//mojo/public/mojom/base",
     "//ui/gfx/geometry/mojom",
   ]

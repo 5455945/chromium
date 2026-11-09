@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 #include <cstddef>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "components/prefs/pref_member.h"
 #include "components/renderer_context_menu/render_view_context_menu_observer.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/menus/simple_menu_model.h"
 
 class RenderViewContextMenuProxy;
 
@@ -20,9 +21,17 @@ class RenderViewContextMenuProxy;
 // creates the submenu, adds it to the parent menu, and handles events.
 class SpellingOptionsSubMenuObserver : public RenderViewContextMenuObserver {
  public:
+  static constexpr int kSubMenuPlaceholder = IDC_SPELLCHECK_MENU;
+
   SpellingOptionsSubMenuObserver(RenderViewContextMenuProxy* proxy,
                                  ui::SimpleMenuModel::Delegate* delegate,
                                  int group_id);
+
+  SpellingOptionsSubMenuObserver(const SpellingOptionsSubMenuObserver&) =
+      delete;
+  SpellingOptionsSubMenuObserver& operator=(
+      const SpellingOptionsSubMenuObserver&) = delete;
+
   ~SpellingOptionsSubMenuObserver() override;
 
   // RenderViewContextMenuObserver implementation.
@@ -34,7 +43,7 @@ class SpellingOptionsSubMenuObserver : public RenderViewContextMenuObserver {
 
  private:
   // The interface for adding a submenu to the parent.
-  RenderViewContextMenuProxy* proxy_;
+  raw_ptr<RenderViewContextMenuProxy> proxy_;
 
   // The submenu of the 'spell-checker options'. This class adds items to this
   // submenu and adds it to the parent menu.
@@ -51,8 +60,6 @@ class SpellingOptionsSubMenuObserver : public RenderViewContextMenuObserver {
 
   // Flag indicating whether the server-powered spellcheck service is enabled.
   BooleanPrefMember use_spelling_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpellingOptionsSubMenuObserver);
 };
 
 #endif  // CHROME_BROWSER_RENDERER_CONTEXT_MENU_SPELLING_OPTIONS_SUBMENU_OBSERVER_H_

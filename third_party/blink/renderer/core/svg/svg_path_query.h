@@ -24,10 +24,14 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
+namespace gfx {
+class PointF;
+}
+
 namespace blink {
 
-class FloatPoint;
 class SVGPathByteStream;
+struct PathSegmentData;
 
 class CORE_EXPORT SVGPathQuery {
   STACK_ALLOCATED();
@@ -36,7 +40,8 @@ class CORE_EXPORT SVGPathQuery {
   explicit SVGPathQuery(const SVGPathByteStream&);
 
   float GetTotalLength() const;
-  FloatPoint GetPointAtLength(float length) const;
+  gfx::PointF GetPointAtLength(float length) const;
+  PathSegmentData GetSegmentAtLength(float length) const;
 
  private:
   const SVGPathByteStream& path_byte_stream_;

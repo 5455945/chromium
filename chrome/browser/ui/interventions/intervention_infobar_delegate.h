@@ -1,11 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_INTERVENTIONS_INTERVENTION_INFOBAR_DELEGATE_H_
 #define CHROME_BROWSER_UI_INTERVENTIONS_INTERVENTION_INFOBAR_DELEGATE_H_
 
-#include "base/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "components/infobars/core/infobar_delegate.h"
 
 class InterventionDelegate;
@@ -21,6 +21,11 @@ class InterventionInfoBarDelegate : public infobars::InfoBarDelegate {
   InterventionInfoBarDelegate(
       infobars::InfoBarDelegate::InfoBarIdentifier identifier,
       InterventionDelegate* intervention_delegate);
+
+  InterventionInfoBarDelegate(const InterventionInfoBarDelegate&) = delete;
+  InterventionInfoBarDelegate& operator=(const InterventionInfoBarDelegate&) =
+      delete;
+
   ~InterventionInfoBarDelegate() override;
 
   // infobars::InfoBarDelegate:
@@ -32,9 +37,7 @@ class InterventionInfoBarDelegate : public infobars::InfoBarDelegate {
   const infobars::InfoBarDelegate::InfoBarIdentifier identifier_;
 
   // Weak pointer, the delegate is guaranteed to outlive this object.
-  InterventionDelegate* intervention_delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterventionInfoBarDelegate);
+  raw_ptr<InterventionDelegate> intervention_delegate_;
 };
 
 #endif  // CHROME_BROWSER_UI_INTERVENTIONS_INTERVENTION_INFOBAR_DELEGATE_H_

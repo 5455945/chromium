@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,20 +9,18 @@
 
 #include "base/check.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/policy/schema_registry_service.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/core/common/schema_registry.h"
 #include "content/public/browser/browser_context.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/policy/active_directory/active_directory_policy_manager.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
-#include "chrome/browser/ash/policy/core/device_cloud_policy_manager_chromeos.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+#include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_chromeos.h"
+#include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -30,47 +28,52 @@
 
 namespace policy {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 namespace {
 
 DeviceLocalAccountPolicyBroker* GetBroker(content::BrowserContext* context) {
   Profile* profile = Profile::FromBrowserContext(context);
 
-  if (chromeos::ProfileHelper::IsSigninProfile(profile))
-    return NULL;
+  if (ash::ProfileHelper::IsSigninProfile(profile))
+    return nullptr;
+
+  if (ash::ProfileHelper::IsLockScreenProfile(profile)) {
+    return nullptr;
+  }
 
   if (!user_manager::UserManager::IsInitialized()) {
     // Bail out in unit tests that don't have a UserManager.
-    return NULL;
+    return nullptr;
   }
 
   const user_manager::User* user =
-      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
+      ash::ProfileHelper::Get()->GetUserByProfile(profile);
   if (!user)
-    return NULL;
+    return nullptr;
 
-  BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
+  BrowserPolicyConnectorAsh* connector =
+      g_browser_process->platform_part()->browser_policy_connector_ash();
   DeviceLocalAccountPolicyService* service =
       connector->GetDeviceLocalAccountPolicyService();
   if (!service)
-    return NULL;
+    return nullptr;
 
   return service->GetBrokerForUser(user->GetAccountId().GetUserEmail());
 }
 
 }  // namespace
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::unique_ptr<SchemaRegistryService> BuildSchemaRegistryServiceForProfile(
     content::BrowserContext* context,
     const Schema& chrome_schema,
+    const Schema& extension_install_policy_schema,
     CombinedSchemaRegistry* global_registry) {
-  DCHECK(!context->IsOffTheRecord());
+  CHECK(!context->IsOffTheRecord(), base::NotFatalUntil::M162);
 
   std::unique_ptr<SchemaRegistry> registry;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   DeviceLocalAccountPolicyBroker* broker = GetBroker(context);
   if (broker) {
     // The SchemaRegistry for a device-local account is owned by its
@@ -85,37 +88,37 @@ std::unique_ptr<SchemaRegistryService> BuildSchemaRegistryServiceForProfile(
   if (!registry)
     registry = std::make_unique<SchemaRegistry>();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   Profile* const profile = Profile::FromBrowserContext(context);
-  if (chromeos::ProfileHelper::IsSigninProfile(profile)) {
-    // Pass the SchemaRegistry of the signin profile to the device policy
-    // managers, for being used for fetching the component policies.
-    BrowserPolicyConnectorChromeOS* connector =
-        g_browser_process->platform_part()->browser_policy_connector_chromeos();
+  if (ash::ProfileHelper::IsSigninProfile(profile) ||
+      ash::ProfileHelper::IsLockScreenProfile(profile)) {
+    // Pass the SchemaRegistry of the signin or lock screen profile to the
+    // device policy managers, for being used for fetching the component
+    // policies.
+    BrowserPolicyConnectorAsh* connector =
+        g_browser_process->platform_part()->browser_policy_connector_ash();
 
-    policy::DeviceCloudPolicyManagerChromeOS* cloud_manager =
+    policy::DeviceCloudPolicyManagerAsh* cloud_manager =
         connector->GetDeviceCloudPolicyManager();
-    if (cloud_manager)
-      cloud_manager->SetSigninProfileSchemaRegistry(registry.get());
-
-    policy::DeviceActiveDirectoryPolicyManager* active_directory_manager =
-        connector->GetDeviceActiveDirectoryPolicyManager();
-    if (active_directory_manager) {
-      active_directory_manager->SetSigninProfileSchemaRegistry(registry.get());
+    if (cloud_manager) {
+      cloud_manager->AddAuthScreenSchemaRegistry(registry.get());
     }
   }
 #endif
 
   return BuildSchemaRegistryService(std::move(registry), chrome_schema,
+                                    extension_install_policy_schema,
                                     global_registry);
 }
 
 std::unique_ptr<SchemaRegistryService> BuildSchemaRegistryService(
     std::unique_ptr<SchemaRegistry> registry,
     const Schema& chrome_schema,
+    const Schema& extension_install_policy_schema,
     CombinedSchemaRegistry* global_registry) {
   return std::make_unique<SchemaRegistryService>(
-      std::move(registry), chrome_schema, global_registry);
+      std::move(registry), chrome_schema, extension_install_policy_schema,
+      global_registry);
 }
 
 }  // namespace policy

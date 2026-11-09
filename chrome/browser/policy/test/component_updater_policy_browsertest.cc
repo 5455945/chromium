@@ -1,14 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include <optional>
+#include <string>
 
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/chrome_component_updater_configurator.h"
 #include "chrome/browser/policy/policy_test_utils.h"
+#include "chrome/common/chrome_switches.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/component_updater/component_updater_switches.h"
 #include "components/policy/core/common/policy_map.h"
@@ -21,6 +28,10 @@
 #include "content/public/test/browser_test.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 namespace policy {
 
 // Tests the ComponentUpdater's EnabledComponentUpdates group policy by
@@ -30,9 +41,13 @@ namespace policy {
 class ComponentUpdaterPolicyTest : public PolicyTest {
  public:
   ComponentUpdaterPolicyTest();
+  ComponentUpdaterPolicyTest(const ComponentUpdaterPolicyTest&) = delete;
+  ComponentUpdaterPolicyTest& operator=(const ComponentUpdaterPolicyTest&) =
+      delete;
   ~ComponentUpdaterPolicyTest() override;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
+  void SetUpDefaultCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
 
  protected:
@@ -63,13 +78,14 @@ class ComponentUpdaterPolicyTest : public PolicyTest {
   void BeginTest();
   void EndTest();
 
-  void UpdateComponent(const update_client::CrxComponent& crx_component);
+  void UpdateComponent(
+      const component_updater::ComponentRegistration& crx_component);
   void CallAsync(TestCaseAction action);
   void VerifyExpectations(bool update_disabled);
 
   void SetEnableComponentUpdates(bool enable_component_updates);
 
-  static update_client::CrxComponent MakeCrxComponent(
+  static component_updater::ComponentRegistration MakeComponentRegistration(
       bool supports_group_policy_enable_component_updates);
 
   TestCase cur_test_case_;
@@ -83,22 +99,26 @@ class ComponentUpdaterPolicyTest : public PolicyTest {
   void OnDemandComplete(update_client::Error error);
 
   std::unique_ptr<update_client::URLLoaderPostInterceptor> post_interceptor_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 
   // This member is owned by g_browser_process;
-  component_updater::ComponentUpdateService* cus_ = nullptr;
+  raw_ptr<component_updater::ComponentUpdateService> cus_ = nullptr;
 
   net::EmbeddedTestServer https_server_;
-
-  DISALLOW_COPY_AND_ASSIGN(ComponentUpdaterPolicyTest);
 };
 
 const char ComponentUpdaterPolicyTest::component_id_[] =
     "jebgalgnebhfojomionfpkfelancnnkf";
 
 ComponentUpdaterPolicyTest::ComponentUpdaterPolicyTest()
-    : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+    : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+#if BUILDFLAG(IS_CHROMEOS)
+  scoped_feature_list_.InitAndDisableFeature(
+      ash::features::kGrowthCampaignsInConsumerSession);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
 
-ComponentUpdaterPolicyTest::~ComponentUpdaterPolicyTest() {}
+ComponentUpdaterPolicyTest::~ComponentUpdaterPolicyTest() = default;
 
 void ComponentUpdaterPolicyTest::SetUpCommandLine(
     base::CommandLine* command_line) {
@@ -108,6 +128,13 @@ void ComponentUpdaterPolicyTest::SetUpCommandLine(
       "url-source=%s", https_server_.GetURL("/service/update2").spec().c_str());
   command_line->AppendSwitchASCII(switches::kComponentUpdater, val.c_str());
   PolicyTest::SetUpCommandLine(command_line);
+}
+
+void ComponentUpdaterPolicyTest::SetUpDefaultCommandLine(
+    base::CommandLine* command_line) {
+  PolicyTest::SetUpDefaultCommandLine(command_line);
+  // The test makes update checks against the mock server.
+  command_line->RemoveSwitch(::switches::kDisableComponentUpdate);
 }
 
 void ComponentUpdaterPolicyTest::SetUpOnMainThread() {
@@ -131,11 +158,12 @@ void ComponentUpdaterPolicyTest::SetEnableComponentUpdates(
   UpdateProviderPolicy(policies);
 }
 
-update_client::CrxComponent ComponentUpdaterPolicyTest::MakeCrxComponent(
+component_updater::ComponentRegistration
+ComponentUpdaterPolicyTest::MakeComponentRegistration(
     bool supports_group_policy_enable_component_updates) {
   class MockInstaller : public update_client::CrxInstaller {
    public:
-    MockInstaller() {}
+    MockInstaller() = default;
 
     void Install(const base::FilePath& unpack_path,
                  const std::string& public_key,
@@ -145,44 +173,42 @@ update_client::CrxComponent ComponentUpdaterPolicyTest::MakeCrxComponent(
       DoInstall(unpack_path, public_key, std::move(callback));
     }
 
-    MOCK_METHOD1(OnUpdateError, void(int error));
     MOCK_METHOD3(DoInstall,
                  void(const base::FilePath& unpack_path,
                       const std::string& public_key,
                       const Callback& callback));
-    MOCK_METHOD2(GetInstalledFile,
-                 bool(const std::string& file, base::FilePath* installed_file));
+    MOCK_METHOD1(GetInstalledFile,
+                 std::optional<base::FilePath>(const std::string& file));
     MOCK_METHOD0(Uninstall, bool());
 
    private:
-    ~MockInstaller() override {}
+    ~MockInstaller() override = default;
   };
 
   // component id "jebgalgnebhfojomionfpkfelancnnkf".
-  static const uint8_t jebg_hash[] = {
+  std::vector<uint8_t> jebg_hash = {
       0x94, 0x16, 0x0b, 0x6d, 0x41, 0x75, 0xe9, 0xec, 0x8e, 0xd5, 0xfa,
       0x54, 0xb0, 0xd2, 0xdd, 0xa5, 0x6e, 0x05, 0x6b, 0xe8, 0x73, 0x47,
       0xf6, 0xc4, 0x11, 0x9f, 0xbc, 0xb3, 0x09, 0xb3, 0x5b, 0x40};
 
   // The component uses HTTPS only for network interception purposes.
-  update_client::CrxComponent crx_component;
-  crx_component.pk_hash.assign(std::begin(jebg_hash), std::end(jebg_hash));
-  crx_component.app_id = "jebgalgnebhfojomionfpkfelancnnkf";
-  crx_component.version = base::Version("0.9");
-  crx_component.installer = scoped_refptr<MockInstaller>(new MockInstaller());
-  crx_component.requires_network_encryption = true;
-  crx_component.supports_group_policy_enable_component_updates =
-      supports_group_policy_enable_component_updates;
-
-  return crx_component;
+  return component_updater::ComponentRegistration(
+      "jebgalgnebhfojomionfpkfelancnnkf", {}, jebg_hash, base::Version("0.9"),
+      /*fingerprint=*/{}, /*installer_attributes=*/{},
+      /*action_handler=*/nullptr, base::MakeRefCounted<MockInstaller>(),
+      /*requires_network_encryption=*/true,
+      supports_group_policy_enable_component_updates,
+      /*allow_cached_copies=*/true,
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/true);
 }
 
 void ComponentUpdaterPolicyTest::UpdateComponent(
-    const update_client::CrxComponent& crx_component) {
+    const component_updater::ComponentRegistration& reg) {
   post_interceptor_->Reset();
   EXPECT_TRUE(post_interceptor_->ExpectRequest(
-      std::make_unique<update_client::PartialMatch>("updatecheck")));
-  EXPECT_TRUE(cus_->RegisterComponent(crx_component));
+      std::make_unique<update_client::PartialMatch>(component_id_)));
+  EXPECT_TRUE(cus_->RegisterComponent(reg));
   cus_->GetOnDemandUpdater().OnDemandUpdate(
       component_id_, component_updater::OnDemandUpdater::Priority::FOREGROUND,
       base::BindOnce(&ComponentUpdaterPolicyTest::OnDemandComplete,
@@ -223,10 +249,23 @@ void ComponentUpdaterPolicyTest::EndTest() {
 void ComponentUpdaterPolicyTest::VerifyExpectations(bool update_disabled) {
   EXPECT_EQ(1, post_interceptor_->GetHitCount())
       << post_interceptor_->GetRequestsAsString();
-  ASSERT_EQ(1, post_interceptor_->GetCount())
-      << post_interceptor_->GetRequestsAsString();
 
-  const auto& request = post_interceptor_->GetRequestBody(0);
+  // Find the request for our component. Other components may have been
+  // requested during browser initialization.
+  std::string request;
+  int matching_request_count = 0;
+  for (int i = 0; i < post_interceptor_->GetCount(); ++i) {
+    std::string body = post_interceptor_->GetRequestBody(i);
+    if (body.find(component_id_) != std::string::npos) {
+      matching_request_count++;
+      request = body;
+    }
+  }
+
+  ASSERT_EQ(1, matching_request_count)
+      << "Expected exactly 1 request for " << component_id_ << ", found "
+      << matching_request_count
+      << ". Requests: " << post_interceptor_->GetRequestsAsString();
 
   // Handle XML and JSON protocols.
   if (base::StartsWith(request, "<?xml", base::CompareCase::SENSITIVE)) {
@@ -236,16 +275,18 @@ void ComponentUpdaterPolicyTest::VerifyExpectations(bool update_disabled) {
                   update_disabled ? " updatedisabled=\"true\"" : "")));
   } else if (base::StartsWith(request, R"({"request":{)",
                               base::CompareCase::SENSITIVE)) {
-    const auto root = base::JSONReader::Read(request);
+    const auto root =
+        base::JSONReader::Read(request, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(root);
     const auto* update_check =
-        root->FindKey("request")->FindKey("app")->GetList()[0].FindKey(
-            "updatecheck");
+        (*root->GetDict().FindDict("request")->FindList("apps"))[0]
+            .GetDict()
+            .FindDict("updatecheck");
     ASSERT_TRUE(update_check);
     if (update_disabled) {
-      EXPECT_EQ(true, update_check->FindKey("updatedisabled")->GetBool());
+      EXPECT_EQ(true, update_check->Find("updatedisabled")->GetBool());
     } else {
-      EXPECT_FALSE(update_check->FindKey("updatedisabled"));
+      EXPECT_FALSE(update_check->Find("updatedisabled"));
     }
   } else {
     NOTREACHED();
@@ -253,7 +294,7 @@ void ComponentUpdaterPolicyTest::VerifyExpectations(bool update_disabled) {
 }
 
 void ComponentUpdaterPolicyTest::DefaultPolicy_GroupPolicySupported() {
-  UpdateComponent(MakeCrxComponent(true));
+  UpdateComponent(MakeComponentRegistration(true));
 }
 
 void ComponentUpdaterPolicyTest::FinishDefaultPolicy_GroupPolicySupported() {
@@ -267,7 +308,7 @@ void ComponentUpdaterPolicyTest::FinishDefaultPolicy_GroupPolicySupported() {
 }
 
 void ComponentUpdaterPolicyTest::DefaultPolicy_GroupPolicyNotSupported() {
-  UpdateComponent(MakeCrxComponent(false));
+  UpdateComponent(MakeComponentRegistration(false));
 }
 
 void ComponentUpdaterPolicyTest::FinishDefaultPolicy_GroupPolicyNotSupported() {
@@ -282,7 +323,7 @@ void ComponentUpdaterPolicyTest::FinishDefaultPolicy_GroupPolicyNotSupported() {
 
 void ComponentUpdaterPolicyTest::EnabledPolicy_GroupPolicySupported() {
   SetEnableComponentUpdates(true);
-  UpdateComponent(MakeCrxComponent(true));
+  UpdateComponent(MakeComponentRegistration(true));
 }
 
 void ComponentUpdaterPolicyTest::FinishEnabledPolicy_GroupPolicySupported() {
@@ -297,7 +338,7 @@ void ComponentUpdaterPolicyTest::FinishEnabledPolicy_GroupPolicySupported() {
 
 void ComponentUpdaterPolicyTest::EnabledPolicy_GroupPolicyNotSupported() {
   SetEnableComponentUpdates(true);
-  UpdateComponent(MakeCrxComponent(false));
+  UpdateComponent(MakeComponentRegistration(false));
 }
 
 void ComponentUpdaterPolicyTest::FinishEnabledPolicy_GroupPolicyNotSupported() {
@@ -312,7 +353,7 @@ void ComponentUpdaterPolicyTest::FinishEnabledPolicy_GroupPolicyNotSupported() {
 
 void ComponentUpdaterPolicyTest::DisabledPolicy_GroupPolicySupported() {
   SetEnableComponentUpdates(false);
-  UpdateComponent(MakeCrxComponent(true));
+  UpdateComponent(MakeComponentRegistration(true));
 }
 
 void ComponentUpdaterPolicyTest::FinishDisabled_PolicyGroupPolicySupported() {
@@ -328,7 +369,7 @@ void ComponentUpdaterPolicyTest::FinishDisabled_PolicyGroupPolicySupported() {
 
 void ComponentUpdaterPolicyTest::DisabledPolicy_GroupPolicyNotSupported() {
   SetEnableComponentUpdates(false);
-  UpdateComponent(MakeCrxComponent(false));
+  UpdateComponent(MakeComponentRegistration(false));
 }
 
 void ComponentUpdaterPolicyTest::

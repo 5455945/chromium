@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/payments/installed_payment_apps_finder_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/ptr_util.h"
 #include "base/supports_user_data.h"
 #include "content/browser/payments/payment_app_context_impl.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
@@ -13,7 +14,9 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/permission_controller.h"
-#include "content/public/browser/permission_type.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 
 namespace content {
@@ -21,22 +24,6 @@ namespace {
 
 const char kInstalledPaymentAppsFinderImplName[] =
     "installed_payment_apps_finder_impl";
-
-void DidGetAllPaymentAppsOnCoreThread(
-    InstalledPaymentAppsFinder::GetAllPaymentAppsCallback callback,
-    InstalledPaymentAppsFinder::PaymentApps apps) {
-  GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), std::move(apps)));
-}
-
-void GetAllPaymentAppsOnCoreThread(
-    scoped_refptr<PaymentAppContextImpl> payment_app_context,
-    InstalledPaymentAppsFinder::GetAllPaymentAppsCallback callback) {
-  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
-
-  payment_app_context->payment_app_database()->ReadAllPaymentApps(
-      base::BindOnce(&DidGetAllPaymentAppsOnCoreThread, std::move(callback)));
-}
 
 }  // namespace
 
@@ -49,7 +36,7 @@ InstalledPaymentAppsFinder::GetInstance(BrowserContext* context) {
 // static
 base::WeakPtr<InstalledPaymentAppsFinderImpl>
 InstalledPaymentAppsFinderImpl::GetInstance(BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   base::WeakPtr<InstalledPaymentAppsFinderImpl> result;
   InstalledPaymentAppsFinderImpl* data =
@@ -69,37 +56,37 @@ InstalledPaymentAppsFinderImpl::GetInstance(BrowserContext* context) {
 
 void InstalledPaymentAppsFinderImpl::GetAllPaymentApps(
     GetAllPaymentAppsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   StoragePartitionImpl* partition = static_cast<StoragePartitionImpl*>(
       browser_context_->GetDefaultStoragePartition());
   scoped_refptr<PaymentAppContextImpl> payment_app_context =
       partition->GetPaymentAppContext();
-
-  RunOrPostTaskOnThread(
-      FROM_HERE, ServiceWorkerContext::GetCoreThreadId(),
+  payment_app_context->payment_app_database()->ReadAllPaymentApps(
       base::BindOnce(
-          &GetAllPaymentAppsOnCoreThread, payment_app_context,
-          base::BindOnce(
-              &InstalledPaymentAppsFinderImpl::CheckPermissionForPaymentApps,
-              weak_ptr_factory_.GetWeakPtr(), std::move(callback))));
+          &InstalledPaymentAppsFinderImpl::CheckPermissionForPaymentApps,
+          weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void InstalledPaymentAppsFinderImpl::CheckPermissionForPaymentApps(
     GetAllPaymentAppsCallback callback,
     PaymentApps apps) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   PermissionController* permission_controller =
       browser_context_->GetPermissionController();
-  DCHECK(permission_controller);
+  CHECK(permission_controller, base::NotFatalUntil::M160);
 
   PaymentApps permitted_apps;
   for (auto& app : apps) {
-    GURL origin = app.second->scope.GetOrigin();
-    if (permission_controller->GetPermissionStatus(
-            PermissionType::PAYMENT_HANDLER, origin, origin) ==
-        blink::mojom::PermissionStatus::GRANTED) {
+    GURL origin = app.second->scope.DeprecatedGetOriginAsURL();
+    if (permission_controller
+            ->GetPermissionResultForOriginWithoutContext(
+                content::PermissionDescriptorUtil::
+                    CreatePermissionDescriptorForPermissionType(
+                        blink::PermissionType::PAYMENT_HANDLER),
+                url::Origin::Create(origin))
+            .status == blink::mojom::PermissionStatus::GRANTED) {
       permitted_apps[app.first] = std::move(app.second);
     }
   }

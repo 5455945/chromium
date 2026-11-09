@@ -1,14 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/log/net_log_values.h"
 
 #include "base/base64.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "net/base/escape.h"
 
 namespace net {
 
@@ -41,7 +41,7 @@ base::Value NetLogNumberValueHelper(T num) {
 
 }  // namespace
 
-base::Value NetLogStringValue(base::StringPiece raw) {
+base::Value NetLogStringValue(std::string_view raw) {
   // The common case is that |raw| is ASCII. Represent this directly.
   if (base::IsStringASCII(raw))
     return base::Value(raw);
@@ -53,13 +53,17 @@ base::Value NetLogStringValue(base::StringPiece raw) {
   // is added so the escaped string is not itself also ASCII (otherwise there
   // would be ambiguity for consumers as to when the value needs to be
   // unescaped).
-  return base::Value("%ESCAPED:\xE2\x80\x8B " + EscapeNonASCIIAndPercent(raw));
+  return base::Value("%ESCAPED:\xE2\x80\x8B " +
+                     base::EscapeNonASCIIAndPercent(raw));
+}
+
+base::Value NetLogBinaryValue(base::span<const uint8_t> bytes) {
+  return NetLogBinaryValue(bytes.data(), bytes.size());
 }
 
 base::Value NetLogBinaryValue(const void* bytes, size_t length) {
-  std::string b64;
-  base::Base64Encode(
-      base::StringPiece(reinterpret_cast<const char*>(bytes), length), &b64);
+  std::string b64 = base::Base64Encode(
+      std::string_view(reinterpret_cast<const char*>(bytes), length));
   return base::Value(std::move(b64));
 }
 
@@ -75,28 +79,28 @@ base::Value NetLogNumberValue(uint32_t num) {
   return NetLogNumberValueHelper(num);
 }
 
-base::Value NetLogParamsWithInt(base::StringPiece name, int value) {
-  base::Value params(base::Value::Type::DICTIONARY);
-  params.SetIntKey(name, value);
+base::DictValue NetLogParamsWithInt(std::string_view name, int value) {
+  base::DictValue params;
+  params.Set(name, value);
   return params;
 }
 
-base::Value NetLogParamsWithInt64(base::StringPiece name, int64_t value) {
-  base::Value params(base::Value::Type::DICTIONARY);
-  params.SetKey(name, NetLogNumberValue(value));
+base::DictValue NetLogParamsWithInt64(std::string_view name, int64_t value) {
+  base::DictValue params;
+  params.Set(name, NetLogNumberValue(value));
   return params;
 }
 
-base::Value NetLogParamsWithBool(base::StringPiece name, bool value) {
-  base::Value params(base::Value::Type::DICTIONARY);
-  params.SetBoolKey(name, value);
+base::DictValue NetLogParamsWithBool(std::string_view name, bool value) {
+  base::DictValue params;
+  params.Set(name, value);
   return params;
 }
 
-base::Value NetLogParamsWithString(base::StringPiece name,
-                                   base::StringPiece value) {
-  base::Value params(base::Value::Type::DICTIONARY);
-  params.SetStringKey(name, value);
+base::DictValue NetLogParamsWithString(std::string_view name,
+                                       std::string_view value) {
+  base::DictValue params;
+  params.Set(name, value);
   return params;
 }
 

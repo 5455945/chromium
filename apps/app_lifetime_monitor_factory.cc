@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/app_window/app_window_registry.h"
+#include "extensions/browser/extension_host_registry.h"
 #include "extensions/browser/extensions_browser_client.h"
 
 namespace apps {
@@ -20,7 +21,8 @@ AppLifetimeMonitor* AppLifetimeMonitorFactory::GetForBrowserContext(
 }
 
 AppLifetimeMonitorFactory* AppLifetimeMonitorFactory::GetInstance() {
-  return base::Singleton<AppLifetimeMonitorFactory>::get();
+  static base::NoDestructor<AppLifetimeMonitorFactory> instance;
+  return instance.get();
 }
 
 AppLifetimeMonitorFactory::AppLifetimeMonitorFactory()
@@ -28,13 +30,15 @@ AppLifetimeMonitorFactory::AppLifetimeMonitorFactory()
         "AppLifetimeMonitor",
         BrowserContextDependencyManager::GetInstance()) {
   DependsOn(extensions::AppWindowRegistry::Factory::GetInstance());
+  DependsOn(extensions::ExtensionHostRegistry::GetFactory());
 }
 
 AppLifetimeMonitorFactory::~AppLifetimeMonitorFactory() = default;
 
-KeyedService* AppLifetimeMonitorFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+AppLifetimeMonitorFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new AppLifetimeMonitor(context);
+  return std::make_unique<AppLifetimeMonitor>(context);
 }
 
 bool AppLifetimeMonitorFactory::ServiceIsCreatedWithBrowserContext() const {
@@ -43,8 +47,8 @@ bool AppLifetimeMonitorFactory::ServiceIsCreatedWithBrowserContext() const {
 
 content::BrowserContext* AppLifetimeMonitorFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
-  return extensions::ExtensionsBrowserClient::Get()->
-      GetOriginalContext(context);
+  return extensions::ExtensionsBrowserClient::Get()
+      ->GetContextRedirectedToOriginal(context);
 }
 
 }  // namespace apps

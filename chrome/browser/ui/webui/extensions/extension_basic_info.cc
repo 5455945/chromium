@@ -1,15 +1,19 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/extensions/extension_basic_info.h"
 
 #include "base/values.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/kiosk_mode_info.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/manifest_handlers/offline_enabled_info.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
-#include "extensions/common/manifest_url_handlers.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace {
 
@@ -33,28 +37,23 @@ namespace extensions {
 
 void GetExtensionBasicInfo(const Extension* extension,
                            bool enabled,
-                           base::DictionaryValue* info) {
-  info->SetString(kInfoIdKey, extension->id());
-  info->SetString(kInfoNameKey, extension->name());
-  info->SetBoolean(kEnabledKey, enabled);
-  info->SetBoolean(kKioskEnabledKey,
-                   KioskModeInfo::IsKioskEnabled(extension));
-  info->SetBoolean(kKioskOnlyKey,
-                   KioskModeInfo::IsKioskOnly(extension));
-  info->SetBoolean(kOfflineEnabledKey,
-                   OfflineEnabledInfo::IsOfflineEnabled(extension));
-  info->SetString(kInfoVersionKey, extension->GetVersionForDisplay());
-  info->SetString(kDescriptionKey, extension->description());
-  info->SetString(
-      kOptionsUrlKey,
-      OptionsPageInfo::GetOptionsPage(extension).possibly_invalid_spec());
-  info->SetString(
-      kHomepageUrlKey,
-      ManifestURL::GetHomepageURL(extension).possibly_invalid_spec());
-  info->SetString(
-      kDetailsUrlKey,
-      ManifestURL::GetDetailsURL(extension).possibly_invalid_spec());
-  info->SetBoolean(kPackagedAppKey, extension->is_platform_app());
+                           base::DictValue* info) {
+  info->Set(kInfoIdKey, extension->id());
+  info->Set(kInfoNameKey, extension->name());
+  info->Set(kEnabledKey, enabled);
+  info->Set(kKioskEnabledKey, KioskModeInfo::IsKioskEnabled(extension));
+  info->Set(kKioskOnlyKey, KioskModeInfo::IsKioskOnly(extension));
+  info->Set(kOfflineEnabledKey,
+            OfflineEnabledInfo::IsOfflineEnabled(extension));
+  info->Set(kInfoVersionKey, extension->GetVersionForDisplay());
+  info->Set(kDescriptionKey, DescriptionInfo::GetDescription(*extension));
+  info->Set(kOptionsUrlKey,
+            OptionsPageInfo::GetOptionsPage(extension).possibly_invalid_spec());
+  info->Set(kHomepageUrlKey,
+            ManifestURL::GetHomepageURL(extension).possibly_invalid_spec());
+  info->Set(kDetailsUrlKey,
+            ManifestURL::GetDetailsURL(extension).possibly_invalid_spec());
+  info->Set(kPackagedAppKey, extension->is_platform_app());
 }
 
 }  // namespace extensions

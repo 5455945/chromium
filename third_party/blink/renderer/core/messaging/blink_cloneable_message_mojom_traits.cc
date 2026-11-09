@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,6 @@
 
 namespace mojo {
 
-Vector<scoped_refptr<blink::BlobDataHandle>> StructTraits<
-    blink::mojom::blink::CloneableMessage::DataView,
-    blink::BlinkCloneableMessage>::blobs(blink::BlinkCloneableMessage& input) {
-  Vector<scoped_refptr<blink::BlobDataHandle>> result;
-  result.ReserveInitialCapacity(input.message->BlobDataHandles().size());
-  for (const auto& blob : input.message->BlobDataHandles())
-    result.push_back(blob.value);
-  return result;
-}
-
 bool StructTraits<blink::mojom::blink::CloneableMessage::DataView,
                   blink::BlinkCloneableMessage>::
     Read(blink::mojom::blink::CloneableMessage::DataView data,
@@ -27,15 +17,10 @@ bool StructTraits<blink::mojom::blink::CloneableMessage::DataView,
   mojo_base::BigBufferView message_view;
   if (!data.ReadEncodedMessage(&message_view))
     return false;
-  auto message_data = message_view.data();
-  out->message = blink::SerializedScriptValue::Create(
-      reinterpret_cast<const char*>(message_data.data()), message_data.size());
+  out->message = blink::SerializedScriptValue::Create(message_view.data());
 
-  Vector<scoped_refptr<blink::BlobDataHandle>> blobs;
-  if (!data.ReadBlobs(&blobs))
+  if (!data.ReadBlobs(&out->message->BlobDataHandles())) {
     return false;
-  for (auto& blob : blobs) {
-    out->message->BlobDataHandles().Set(blob->Uuid(), blob);
   }
   if (!data.ReadSenderOrigin(&out->sender_origin)) {
     return false;
@@ -46,12 +31,14 @@ bool StructTraits<blink::mojom::blink::CloneableMessage::DataView,
                      data.stack_trace_debugger_id_second()),
       data.stack_trace_should_pause());
 
-  absl::optional<base::UnguessableToken> locked_agent_cluster_id;
-  if (!data.ReadLockedAgentClusterId(&locked_agent_cluster_id))
+  base::UnguessableToken sender_agent_cluster_id;
+  if (!data.ReadSenderAgentClusterId(&sender_agent_cluster_id))
     return false;
-  out->locked_agent_cluster_id = locked_agent_cluster_id;
+  out->sender_agent_cluster_id = sender_agent_cluster_id;
+  out->locked_to_sender_agent_cluster = data.locked_to_sender_agent_cluster();
 
-  Vector<PendingRemote<blink::mojom::blink::FileSystemAccessTransferToken>>&
+  blink::Vector<
+      PendingRemote<blink::mojom::blink::FileSystemAccessTransferToken>>&
       tokens = out->message->FileSystemAccessTokens();
   if (!data.ReadFileSystemAccessTokens(&tokens)) {
     return false;

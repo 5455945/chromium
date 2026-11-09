@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include "base/memory/ptr_util.h"
 #include "base/task/current_thread.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "services/device/screen_orientation/screen_orientation_jni_headers/ScreenOrientationListener_jni.h"
 
 namespace device {
@@ -34,3 +36,5 @@ void ScreenOrientationListenerAndroid::IsAutoRotateEnabledByUser(
 }
 
 }  // namespace device
+
+DEFINE_JNI(ScreenOrientationListener)

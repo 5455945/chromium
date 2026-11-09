@@ -27,6 +27,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_MEDIA_HTML_AUDIO_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_MEDIA_HTML_AUDIO_ELEMENT_H_
 
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 
@@ -43,6 +44,10 @@ class CORE_EXPORT HTMLAudioElement final : public HTMLMediaElement {
       const AtomicString& src = g_null_atom);
 
   HTMLAudioElement(Document&);
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLAudioElement;
+  }
 
   bool IsHTMLAudioElement() const override { return true; }
 

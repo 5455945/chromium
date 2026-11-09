@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,20 @@
 #include <type_traits>
 #include <vector>
 
+#include "base/debug/stack_trace.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/class_property.h"
 #include "ui/base/metadata/metadata_types.h"
+#include "ui/base/metadata/metadata_utils.h"
 #include "ui/views/debug/debugger_utils.h"
-#include "ui/views/view.h"
 #include "ui/views/views_export.h"
 
 namespace views {
+
+class View;
+
+VIEWS_EXPORT extern const ui::ClassProperty<base::debug::StackTrace*>* const
+    kViewStackTraceKey;
 
 class ViewDebugWrapperImpl : public debug::ViewDebugWrapper {
  public:
@@ -31,27 +39,42 @@ class ViewDebugWrapperImpl : public debug::ViewDebugWrapper {
   bool GetVisible() override;
   bool GetNeedsLayout() override;
   bool GetEnabled() override;
+  bool IsPaintLocked() override;
   std::vector<debug::ViewDebugWrapper*> GetChildren() override;
   void ForAllProperties(PropCallback callback) override;
 
  private:
-  const View* const view_;
+  const raw_ptr<const View> view_;
   std::vector<std::unique_ptr<ViewDebugWrapperImpl>> children_;
 };
 
 template <typename V>
-bool IsViewClass(View* view) {
-  static_assert(std::is_base_of<View, V>::value, "Only View classes supported");
-  ui::metadata::ClassMetaData* parent = V::MetaData();
-  ui::metadata::ClassMetaData* child = view->GetClassMetaData();
-  while (child && child != parent)
-    child = child->parent_class_meta_data();
-  return !!child;
+bool IsViewClass(const View* view) {
+  return ui::metadata::IsClass<V, View>(view);
 }
 
-VIEWS_EXPORT void PrintViewHierarchy(View* view,
-                                     bool verbose = false,
-                                     int depth = -1);
+template <typename V>
+V* AsViewClass(View* view) {
+  return IsViewClass<V>(view) ? static_cast<V*>(view) : nullptr;
+}
+
+template <typename V>
+const V* AsViewClass(const View* view) {
+  return IsViewClass<V>(view) ? static_cast<const V*>(view) : nullptr;
+}
+
+template <typename V>
+std::unique_ptr<V> AsViewClass(std::unique_ptr<View>&& view) {
+  if (IsViewClass<V>(view.get())) {
+    auto* result = static_cast<V*>(view.release());
+    return std::unique_ptr<V>(result);
+  }
+  return nullptr;
+}
+
+VIEWS_EXPORT std::string PrintViewHierarchy(View* view, bool verbose = false);
+
+VIEWS_EXPORT std::string GetViewDebugInfo(View* view);
 
 }  // namespace views
 

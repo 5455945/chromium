@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -49,12 +49,6 @@ std::vector<Range> SelectionModel::GetAllSelections() const {
   return selections;
 }
 
-bool SelectionModel::operator==(const SelectionModel& sel) const {
-  return selection() == sel.selection() &&
-         caret_affinity() == sel.caret_affinity() &&
-         secondary_selections() == sel.secondary_selections();
-}
-
 std::string SelectionModel::ToString() const {
   std::string str = "{";
   if (selection().is_empty())
@@ -66,7 +60,7 @@ std::string SelectionModel::ToString() const {
   for (auto selection : secondary_selections()) {
     str += ",";
     if (selection.is_empty())
-      base::StringAppendF(&str, "%" PRIu32, selection.end());
+      base::StringAppendF(&str, "%" PRIuS, selection.end());
     else
       str += selection.ToString();
   }

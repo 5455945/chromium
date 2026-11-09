@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 
 namespace chrome_apps {
 
-MediaGalleriesPermissionData::MediaGalleriesPermissionData() {}
+MediaGalleriesPermissionData::MediaGalleriesPermissionData() = default;
 
 bool MediaGalleriesPermissionData::Check(
     const extensions::APIPermission::CheckParam* param) const {
@@ -22,20 +22,17 @@ bool MediaGalleriesPermissionData::Check(
   return permission_ == specific_param.permission;
 }
 
-std::unique_ptr<base::Value> MediaGalleriesPermissionData::ToValue() const {
-  return std::make_unique<base::Value>(permission_);
+base::Value MediaGalleriesPermissionData::ToValue() const {
+  return base::Value(permission_);
 }
 
-bool MediaGalleriesPermissionData::FromValue(const base::Value* value) {
-  if (!value)
-    return false;
-
-  std::string raw_permission;
-  if (!value->GetAsString(&raw_permission))
+bool MediaGalleriesPermissionData::FromValue(const base::Value& value) {
+  const std::string* raw_permission = value.GetIfString();
+  if (!raw_permission)
     return false;
 
   std::string permission;
-  base::TrimWhitespaceASCII(raw_permission, base::TRIM_ALL, &permission);
+  base::TrimWhitespaceASCII(*raw_permission, base::TRIM_ALL, &permission);
 
   if (permission == MediaGalleriesPermission::kAllAutoDetectedPermission ||
       permission == MediaGalleriesPermission::kReadPermission ||
@@ -45,16 +42,6 @@ bool MediaGalleriesPermissionData::FromValue(const base::Value* value) {
     return true;
   }
   return false;
-}
-
-bool MediaGalleriesPermissionData::operator<(
-    const MediaGalleriesPermissionData& rhs) const {
-  return permission_ < rhs.permission_;
-}
-
-bool MediaGalleriesPermissionData::operator==(
-    const MediaGalleriesPermissionData& rhs) const {
-  return permission_ == rhs.permission_;
 }
 
 }  // namespace chrome_apps

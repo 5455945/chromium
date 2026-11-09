@@ -1,24 +1,31 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_MENU_TEST_BASE_H_
 #define CHROME_BROWSER_UI_VIEWS_MENU_TEST_BASE_H_
 
+#include <array>
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/views/test/view_event_test_base.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/views/accessibility/ax_event_observer.h"
+#include "ui/views/accessibility/ax_update_observer.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "ui/views/controls/menu/menu_closure_animation_mac.h"
+#endif
+
 namespace views {
+class MenuButton;
 class MenuItemView;
 class MenuRunner;
-}
+}  // namespace views
 
 // This is a convenience base class for menu related tests to provide some
 // common functionality.
@@ -35,13 +42,17 @@ class MenuRunner;
 // MenuItemView prevents repeated activation of a menu by clicks too
 // close in time.
 class MenuTestBase : public ViewEventTestBase,
-                     public views::AXEventObserver,
+                     public views::AXUpdateObserver,
                      public views::MenuDelegate {
  public:
   MenuTestBase();
+
+  MenuTestBase(const MenuTestBase&) = delete;
+  MenuTestBase& operator=(const MenuTestBase&) = delete;
+
   ~MenuTestBase() override;
 
-  // AXEventObserver overrides.
+  // AXUpdateObserver overrides.
   void OnViewEvent(views::View*, ax::mojom::Event event_type) override;
 
   // Generate a mouse click and run |next| once the event has been processed.
@@ -50,15 +61,12 @@ class MenuTestBase : public ViewEventTestBase,
   // Generate a keypress and run |next| once the event has been processed.
   void KeyPress(ui::KeyboardCode keycode, base::OnceClosure next);
 
-  views::MenuItemView* menu() {
-    return menu_;
-  }
+  views::MenuItemView* menu() { return menu_; }
 
-  int last_command() const {
-    return last_command_;
-  }
+  int last_command() const { return last_command_; }
 
  protected:
+  views::MenuButton* button() { return button_; }
   views::MenuRunner* menu_runner() { return menu_runner_.get(); }
 
   // Called to populate the menu.
@@ -86,9 +94,10 @@ class MenuTestBase : public ViewEventTestBase,
  private:
   void ButtonPressed();
 
-  views::MenuButton* button_ = nullptr;
-  views::MenuItemView* menu_ = nullptr;
+  raw_ptr<views::MenuButton> button_ = nullptr;
   std::unique_ptr<views::MenuRunner> menu_runner_;
+  // Owned by `menu_runner_`.
+  raw_ptr<views::MenuItemView> menu_ = nullptr;
 
   // The command id of the last pressed menu item since the menu was opened.
   int last_command_;
@@ -98,7 +107,10 @@ class MenuTestBase : public ViewEventTestBase,
       static_cast<size_t>(ax::mojom::Event::kMaxValue) + 1;
   std::array<int, kNumEvents> ax_event_counts_;
 
-  DISALLOW_COPY_AND_ASSIGN(MenuTestBase);
+#if BUILDFLAG(IS_MAC)
+  views::MenuClosureAnimationMac::ScopedDisableAnimationsForTesting
+      disable_closure_animations_;
+#endif
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_MENU_TEST_BASE_H_

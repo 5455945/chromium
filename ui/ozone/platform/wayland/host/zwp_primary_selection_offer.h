@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
 #include "ui/ozone/platform/wayland/host/wayland_data_offer_base.h"
 
@@ -36,7 +35,7 @@ class ZwpPrimarySelectionOffer : public WaylandDataOfferBase {
   base::ScopedFD Receive(const std::string& mime_type) override;
 
  private:
-  // primary_selection_offer_listener callbacks.
+  // zwp_primary_selection_offer_listener callbacks:
   static void OnOffer(void* data,
                       zwp_primary_selection_offer_v1* data_offer,
                       const char* mime_type);

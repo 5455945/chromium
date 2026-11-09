@@ -1,13 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_THROTTLING_WAKE_UP_BUDGET_POOL_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_THROTTLING_WAKE_UP_BUDGET_POOL_H_
 
-#include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
+#include <optional>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/time/time.h"
+#include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
 
 namespace blink {
 namespace scheduler {
@@ -16,9 +17,7 @@ namespace scheduler {
 // limited time at regular intervals.
 class PLATFORM_EXPORT WakeUpBudgetPool : public BudgetPool {
  public:
-  WakeUpBudgetPool(const char* name,
-                   BudgetPoolController* budget_pool_controller,
-                   base::TimeTicks now);
+  explicit WakeUpBudgetPool(const char* name);
   WakeUpBudgetPool(const WakeUpBudgetPool&) = delete;
   WakeUpBudgetPool& operator=(const WakeUpBudgetPool&) = delete;
   ~WakeUpBudgetPool() override;
@@ -41,22 +40,17 @@ class PLATFORM_EXPORT WakeUpBudgetPool : public BudgetPool {
   void AllowLowerAlignmentIfNoRecentWakeUp(base::TimeDelta alignment);
 
   // BudgetPool implementation:
-  void RecordTaskRunTime(base::sequence_manager::TaskQueue* queue,
-                         base::TimeTicks start_time,
-                         base::TimeTicks end_time) final;
-  bool CanRunTasksAt(base::TimeTicks moment, bool is_wake_up) const final;
-  base::TimeTicks GetTimeTasksCanRunUntil(base::TimeTicks now,
-                                          bool is_wake_up) const final;
+  void RecordTaskRunTime(base::TimeTicks start_time,
+                         base::TimeTicks end_time) final {}
+  bool CanRunTasksAt(base::TimeTicks moment) const final;
+  base::TimeTicks GetTimeTasksCanRunUntil(base::TimeTicks now) const final;
   base::TimeTicks GetNextAllowedRunTime(
       base::TimeTicks desired_run_time) const final;
-  void OnQueueNextWakeUpChanged(base::sequence_manager::TaskQueue* queue,
-                                base::TimeTicks now,
-                                base::TimeTicks desired_run_time) final;
   void OnWakeUp(base::TimeTicks now) final;
   void WriteIntoTrace(perfetto::TracedValue context,
                       base::TimeTicks now) const final;
 
-  absl::optional<base::TimeTicks> last_wake_up_for_testing() const {
+  std::optional<base::TimeTicks> last_wake_up_for_testing() const {
     return last_wake_up_;
   }
 
@@ -68,7 +62,7 @@ class PLATFORM_EXPORT WakeUpBudgetPool : public BudgetPool {
   base::TimeDelta wake_up_duration_;
   base::TimeDelta wake_up_alignment_if_no_recent_wake_up_;
 
-  absl::optional<base::TimeTicks> last_wake_up_;
+  std::optional<base::TimeTicks> last_wake_up_;
 };
 
 }  // namespace scheduler

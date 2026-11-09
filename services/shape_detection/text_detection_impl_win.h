@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/shape_detection/public/mojom/textdetection.mojom.h"
@@ -28,11 +27,16 @@ class TextDetectionImplWin : public mojom::TextDetection {
       Microsoft::WRL::ComPtr<
           ABI::Windows::Graphics::Imaging::ISoftwareBitmapStatics>
           bitmap_factory);
+
+  TextDetectionImplWin(const TextDetectionImplWin&) = delete;
+  TextDetectionImplWin& operator=(const TextDetectionImplWin&) = delete;
+
   ~TextDetectionImplWin() override;
 
   // mojom::TextDetection implementation.
   void Detect(const SkBitmap& bitmap,
               mojom::TextDetection::DetectCallback callback) override;
+  void EnsureReady(mojom::TextDetection::EnsureReadyCallback callback) override;
 
   void SetReceiver(mojo::SelfOwnedReceiverRef<mojom::TextDetection> receiver) {
     receiver_ = std::move(receiver);
@@ -55,8 +59,6 @@ class TextDetectionImplWin : public mojom::TextDetection {
       Microsoft::WRL::ComPtr<ABI::Windows::Media::Ocr::IOcrResult> ocr_result);
 
   base::WeakPtrFactory<TextDetectionImplWin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TextDetectionImplWin);
 };
 
 }  // namespace shape_detection

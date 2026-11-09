@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define COMPONENTS_DOM_DISTILLER_CORE_EXPERIMENTS_H_
 
 namespace dom_distiller {
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.dom_distiller
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.reader_mode
 enum class DistillerHeuristicsType {
   NONE,
   OG_ARTICLE,

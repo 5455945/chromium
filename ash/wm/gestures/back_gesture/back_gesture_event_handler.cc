@@ -1,35 +1,44 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/wm/gestures/back_gesture/back_gesture_event_handler.h"
 
+#include <string_view>
+#include <utility>
+
 #include "ash/app_list/app_list_controller_impl.h"
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
+#include "ash/controls/contextual_tooltip.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/keyboard/keyboard_util.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/session/session_controller_impl.h"
-#include "ash/shelf/contextual_tooltip.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/model/virtual_keyboard_model.h"
+#include "ash/wm/desks/desks_controller.h"
+#include "ash/wm/float/float_controller.h"
 #include "ash/wm/gestures/back_gesture/back_gesture_affordance.h"
 #include "ash/wm/gestures/back_gesture/back_gesture_contextual_nudge_controller_impl.h"
 #include "ash/wm/overview/overview_controller.h"
+#include "ash/wm/screen_pinning_controller.h"
+#include "ash/wm/splitview/split_view_constants.h"
 #include "ash/wm/splitview/split_view_divider.h"
+#include "ash/wm/splitview/split_view_types.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "ash/wm/window_pin_util.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
-#include "base/containers/contains.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/user_metrics.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_pin_type.h"
 #include "chromeos/ui/base/window_properties.h"
-#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
+#include "ui/display/screen.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/core/window_util.h"
 
@@ -44,8 +53,9 @@ constexpr int kDistanceForSplitViewResize = 49;
 // Called by CanStartGoingBack() to check whether we can start swiping from the
 // split view divider to go back.
 bool CanStartGoingBackFromSplitViewDivider(const gfx::Point& screen_location) {
-  if (!IsCurrentScreenOrientationLandscape())
+  if (!IsCurrentScreenOrientationLandscape()) {
     return false;
+  }
 
   // If virtual keyboard is visible when we swipe from the splitview divider
   // area, do not allow go back if the location is inside of the virtual
@@ -59,9 +69,9 @@ bool CanStartGoingBackFromSplitViewDivider(const gfx::Point& screen_location) {
   // Same thing for ARC virtual keyboard as well.
   SystemTrayModel* system_tray_model = Shell::Get()->system_tray_model();
   if (system_tray_model) {
-    auto* arc_keyboard = system_tray_model->virtual_keyboard();
-    if (arc_keyboard->visible() &&
-        arc_keyboard->arc_keyboard_bounds().Contains(screen_location)) {
+    auto* virtual_keyboard = system_tray_model->virtual_keyboard();
+    if (virtual_keyboard->arc_keyboard_visible() &&
+        virtual_keyboard->arc_keyboard_bounds().Contains(screen_location)) {
       return false;
     }
   }
@@ -102,16 +112,14 @@ bool CanStartGoingBackFromSplitViewDivider(const gfx::Point& screen_location) {
   }
 
   if (!base::i18n::IsRTL()) {
-    divider_bounds.set_x(divider_bounds.x() -
-                         SplitViewDivider::kDividerEdgeInsetForTouch);
+    divider_bounds.set_x(divider_bounds.x() - kSplitViewDividerExtraInset);
   } else {
-    divider_bounds.set_x(divider_bounds.x() -
-                         SplitViewDivider::kDividerEdgeInsetForTouch -
+    divider_bounds.set_x(divider_bounds.x() - kSplitViewDividerExtraInset -
                          BackGestureEventHandler::kStartGoingBackLeftEdgeInset);
   }
 
   divider_bounds.set_width(
-      divider_bounds.width() + SplitViewDivider::kDividerEdgeInsetForTouch +
+      divider_bounds.width() + kSplitViewDividerExtraInset +
       BackGestureEventHandler::kStartGoingBackLeftEdgeInset);
   return divider_bounds.Contains(screen_location);
 }
@@ -135,26 +143,32 @@ void ActivateUnderneathWindowInSplitViewMode(
     return;
 
   const bool is_rtl = base::i18n::IsRTL();
-  auto* left_window = is_rtl ? split_view_controller->right_window()
-                             : split_view_controller->left_window();
-  auto* right_window = is_rtl ? split_view_controller->left_window()
-                              : split_view_controller->right_window();
-  const OrientationLockType current_orientation = GetCurrentScreenOrientation();
-  if (current_orientation == OrientationLockType::kLandscapePrimary) {
+  auto* left_window = is_rtl ? split_view_controller->secondary_window()
+                             : split_view_controller->primary_window();
+  auto* right_window = is_rtl ? split_view_controller->primary_window()
+                              : split_view_controller->secondary_window();
+  const chromeos::OrientationType current_orientation =
+      GetCurrentScreenOrientation();
+  if (current_orientation == chromeos::OrientationType::kLandscapePrimary) {
     ActivateWindow(dragged_from_splitview_divider ? right_window : left_window);
-  } else if (current_orientation == OrientationLockType::kLandscapeSecondary) {
+  } else if (current_orientation ==
+             chromeos::OrientationType::kLandscapeSecondary) {
     ActivateWindow(dragged_from_splitview_divider ? left_window : right_window);
   } else {
     if (left_window &&
         split_view_controller
             ->GetSnappedWindowBoundsInScreen(
-                SplitViewController::LEFT, /*window_for_minimum_size=*/nullptr)
+                SnapPosition::kPrimary,
+                /*window_for_minimum_size=*/nullptr,
+                chromeos::kDefaultSnapRatio, /*account_for_divider_width=*/true)
             .Contains(location)) {
       ActivateWindow(left_window);
     } else if (right_window && split_view_controller
                                    ->GetSnappedWindowBoundsInScreen(
-                                       SplitViewController::RIGHT,
-                                       /*window_for_minimum_size=*/nullptr)
+                                       SnapPosition::kSecondary,
+                                       /*window_for_minimum_size=*/nullptr,
+                                       chromeos::kDefaultSnapRatio,
+                                       /*account_for_divider_width=*/true)
                                    .Contains(location)) {
       ActivateWindow(right_window);
     } else if (split_view_controller->split_view_divider()
@@ -172,7 +186,7 @@ void ActivateUnderneathWindowInSplitViewMode(
 }  // namespace
 
 BackGestureEventHandler::BackGestureEventHandler() {
-  if (features::AreContextualNudgesEnabled()) {
+  if (features::IsHideShelfControlsInTabletModeEnabled()) {
     nudge_controller_ =
         std::make_unique<BackGestureContextualNudgeControllerImpl>();
   }
@@ -192,8 +206,7 @@ void BackGestureEventHandler::OnDisplayMetricsChanged(
 
 void BackGestureEventHandler::OnGestureEvent(ui::GestureEvent* event) {
   // Do not handle gesture events that are not generated from |first_touch_id_|.
-  if (base::Contains(other_touch_event_ids_list_,
-                     event->unique_touch_event_id())) {
+  if (other_touch_event_ids_list_.contains(event->unique_touch_event_id())) {
     return;
   }
 
@@ -206,8 +219,9 @@ void BackGestureEventHandler::OnGestureEvent(ui::GestureEvent* event) {
 
     // Reset |should_wait_for_touch_ack_| for the last gesture event in the
     // sequence.
-    if (event->type() == ui::ET_GESTURE_END)
+    if (event->type() == ui::EventType::kGestureEnd) {
       should_wait_for_touch_ack_ = false;
+    }
   }
 }
 
@@ -219,11 +233,11 @@ void BackGestureEventHandler::OnTouchEvent(ui::TouchEvent* event) {
     return;
   }
 
-  // Update |first_touch_id_| on first ET_TOUCH_PRESSED only. ET_TOUCH_PRESSED
-  // type check is needed because there could be ET_TOUCH_CANCELLED after
-  // ET_TOUCH_RELEASED event.
+  // Update |first_touch_id_| on first EventType::kTouchPressed only.
+  // EventType::kTouchPressed type check is needed because there could be
+  // EventType::kTouchCancelled after EventType::kTouchReleased event.
   if (first_touch_id_ == ui::kPointerIdUnknown &&
-      event->type() == ui::ET_TOUCH_PRESSED) {
+      event->type() == ui::EventType::kTouchPressed) {
     first_touch_id_ = event->pointer_details().id;
   }
 
@@ -232,12 +246,12 @@ void BackGestureEventHandler::OnTouchEvent(ui::TouchEvent* event) {
     return;
   }
 
-  if (event->type() == ui::ET_TOUCH_RELEASED) {
+  if (event->type() == ui::EventType::kTouchReleased) {
     first_touch_id_ = ui::kPointerIdUnknown;
     other_touch_event_ids_list_.clear();
   }
 
-  if (event->type() == ui::ET_TOUCH_PRESSED) {
+  if (event->type() == ui::EventType::kTouchPressed) {
     x_drag_amount_ = y_drag_amount_ = 0;
     during_reverse_dragging_ = false;
   } else {
@@ -260,14 +274,14 @@ void BackGestureEventHandler::OnTouchEvent(ui::TouchEvent* event) {
   // from GetAndResetPendingGestures is nullptr. The coordinate conversion is
   // done outside the loop as the previous gesture events in a sequence may
   // invalidate the target, for example given a sequence of
-  // {ET_GESTURE_SCROLL_END, ET_GESTURE_END} on a non-resizable window, the
-  // first gesture will trigger a minimize event which will delete the backdrop,
-  // which was the target. See http://crbug.com/1064618.
+  // {EventType::kGestureScrollEnd, EventType::kGestureEnd} on a non-resizable
+  // window, the first gesture will trigger a minimize event which will delete
+  // the backdrop, which was the target. See http://crbug.com/1064618.
   aura::Window* target = static_cast<aura::Window*>(event->target());
   gfx::Point screen_location = event->location();
   ::wm::ConvertPointToScreen(target, &screen_location);
 
-  if (event->type() == ui::ET_TOUCH_PRESSED &&
+  if (event->type() == ui::EventType::kTouchPressed &&
       ShouldWaitForTouchPressAck(screen_location)) {
     should_wait_for_touch_ack_ = true;
     return;
@@ -291,6 +305,14 @@ void BackGestureEventHandler::OnTouchEvent(ui::TouchEvent* event) {
   }
 }
 
+std::string_view BackGestureEventHandler::GetName() const {
+  return kName;
+}
+
+base::WeakPtr<ui::GestureConsumer> BackGestureEventHandler::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void BackGestureEventHandler::OnGestureEvent(GestureConsumer* consumer,
                                              ui::GestureEvent* event) {
   // Gesture events here are generated by |gesture_provider_|, and they're
@@ -301,13 +323,13 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
     ui::GestureEvent* event,
     const gfx::Point& screen_location) {
   switch (event->type()) {
-    case ui::ET_GESTURE_TAP_DOWN:
+    case ui::EventType::kGestureTapDown:
       going_back_started_ = CanStartGoingBack(screen_location);
       if (!going_back_started_)
         break;
       back_gesture_affordance_ = std::make_unique<BackGestureAffordance>(
           screen_location, dragged_from_splitview_divider_);
-      if (features::AreContextualNudgesEnabled()) {
+      if (features::IsHideShelfControlsInTabletModeEnabled()) {
         // Cancel the in-waiting or in-progress back nudge animation.
         nudge_controller_->OnBackGestureStarted();
         contextual_tooltip::HandleGesturePerformed(
@@ -315,35 +337,32 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
             contextual_tooltip::TooltipType::kBackGesture);
       }
       return true;
-    case ui::ET_GESTURE_SCROLL_BEGIN:
+    case ui::EventType::kGestureScrollBegin:
       if (!going_back_started_)
         break;
       back_start_location_ = screen_location;
 
       base::RecordAction(base::UserMetricsAction("Ash_Tablet_BackGesture"));
-      back_gesture_start_scenario_type_ = GetStartScenarioType(
-          dragged_from_splitview_divider_, back_start_location_);
-      RecordStartScenarioType(back_gesture_start_scenario_type_);
       break;
-    case ui::ET_GESTURE_SCROLL_UPDATE:
+    case ui::EventType::kGestureScrollUpdate:
       if (!going_back_started_)
         break;
-      DCHECK(back_gesture_affordance_);
+      CHECK(back_gesture_affordance_);
       back_gesture_affordance_->Update(x_drag_amount_, y_drag_amount_,
                                        during_reverse_dragging_);
       return true;
-    case ui::ET_GESTURE_SCROLL_END:
-    case ui::ET_SCROLL_FLING_START:
-    case ui::ET_GESTURE_END: {
+    case ui::EventType::kGestureScrollEnd:
+    case ui::EventType::kScrollFlingStart:
+    case ui::EventType::kGestureEnd: {
       if (!going_back_started_)
         break;
-      DCHECK(back_gesture_affordance_);
+      CHECK(back_gesture_affordance_);
       // Complete the back gesture if the affordance is activated or fling
       // with large enough velocity. Note, complete can be different actions
       // while in different scenarios, but always fading out the affordance at
       // the end.
       if (back_gesture_affordance_->IsActivated() ||
-          (event->type() == ui::ET_SCROLL_FLING_START &&
+          (event->type() == ui::EventType::kScrollFlingStart &&
            event->details().velocity_x() >= kFlingVelocityForGoingBack)) {
         auto* shell = Shell::Get();
         if (!keyboard_util::CloseKeyboardIfActive()) {
@@ -362,9 +381,9 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
               // For fullscreen ARC apps, show the hotseat and shelf on the
               // first back swipe, and send a back event on the second back
               // swipe. For other fullscreen apps, exit fullscreen.
-              const bool arc_app = top_window_state->window()->GetProperty(
-                                       aura::client::kAppType) ==
-                                   static_cast<int>(AppType::ARC_APP);
+              const bool arc_app =
+                  top_window_state->window()->GetProperty(
+                      chromeos::kAppTypeKey) == chromeos::AppType::ARC_APP;
               if (arc_app) {
                 // Go back to the previous page if the shelf was already shown,
                 // otherwise record as showing shelf.
@@ -374,47 +393,37 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
                   Shelf::ForWindow(top_window_state->window())
                       ->shelf_layout_manager()
                       ->UpdateVisibilityStateForBackGesture();
-                  RecordEndScenarioType(
-                      BackGestureEndScenarioType::kShowShelfAndHotseat);
                 }
               } else {
                 // Complete as exiting the fullscreen mode of the underneath
                 // window.
-                const WMEvent event(WM_EVENT_TOGGLE_FULLSCREEN);
-                top_window_state->OnWMEvent(&event);
-                RecordEndScenarioType(
-                    BackGestureEndScenarioType::kExitFullscreen);
+                const WMEvent wm_event(WM_EVENT_TOGGLE_FULLSCREEN);
+                top_window_state->OnWMEvent(&wm_event);
               }
             } else if (window_util::ShouldMinimizeTopWindowOnBack()) {
               // Complete as minimizing the underneath window.
               top_window_state->Minimize();
-              RecordEndScenarioType(
-                  GetEndScenarioType(back_gesture_start_scenario_type_,
-                                     BackGestureEndType::kMinimize));
             } else {
               // Complete as going back to the previous page of the underneath
               // window.
               SendBackEvent(screen_location);
             }
-            // |top_window| could be nullptr while in overview mode since back
-            // gesture is allowed in overview mode even no window opens.
-            if (top_window) {
-              RecordUnderneathWindowType(
-                  GetUnderneathWindowType(back_gesture_start_scenario_type_));
-            }
           }
         }
-        back_gesture_affordance_->Complete();
+        // `back_gesture_affordance_` could be reset after receiving the event,
+        // depends on the timing that receives the display rotation
+        // notification.
+        if (back_gesture_affordance_) {
+          back_gesture_affordance_->Complete();
+        }
       } else {
         back_gesture_affordance_->Abort();
-        RecordEndScenarioType(GetEndScenarioType(
-            back_gesture_start_scenario_type_, BackGestureEndType::kAbort));
       }
       going_back_started_ = false;
       dragged_from_splitview_divider_ = false;
 
       return true;
-    } break;
+    }
     default:
       break;
   }
@@ -425,8 +434,14 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
 bool BackGestureEventHandler::CanStartGoingBack(
     const gfx::Point& screen_location) {
   Shell* shell = Shell::Get();
-  if (!shell->tablet_mode_controller()->InTabletMode())
+  // Do not enable back gesture in Kiosk mode, as we are never supposed to leave
+  // fullscreen mode there.
+  if (shell->session_controller()->IsRunningInAppMode())
     return false;
+
+  if (!display::Screen::Get()->InTabletMode()) {
+    return false;
+  }
 
   // Do not enable back gesture if it is not in an ACTIVE session. e.g, login
   // screen, lock screen.
@@ -435,8 +450,34 @@ bool BackGestureEventHandler::CanStartGoingBack(
     return false;
   }
 
+  // Do not enable back gesture in trusted pinned to prevent users from
+  // exiting this mode.
+  const ScreenPinningController* const screen_pinning_controller =
+      shell->screen_pinning_controller();
+  if (screen_pinning_controller->IsPinned() &&
+      GetWindowPinType(screen_pinning_controller->pinned_window()) ==
+          chromeos::WindowPinType::kTrustedPinned) {
+    return false;
+  }
+
+  // Do not enable back gesture if `screen_location` is inside the tuck handle,
+  // let `FloatController` handle the event instead.
+  if (aura::Window* floated_window =
+          window_util::GetFloatedWindowForActiveDesk()) {
+    auto* float_controller = Shell::Get()->float_controller();
+    if (float_controller->IsFloatedWindowTuckedForTablet(floated_window)) {
+      auto* tuck_handle_widget =
+          float_controller->GetTuckHandleWidget(floated_window);
+      if (tuck_handle_widget &&
+          tuck_handle_widget->GetWindowBoundsInScreen().Contains(
+              screen_location)) {
+        return false;
+      }
+    }
+  }
+
   gfx::Rect hit_bounds_in_screen(
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestWindow(
               window_util::GetRootWindowAt(screen_location))
           .work_area());
@@ -444,6 +485,7 @@ bool BackGestureEventHandler::CanStartGoingBack(
     hit_bounds_in_screen.set_x(hit_bounds_in_screen.right() -
                                kStartGoingBackLeftEdgeInset);
   }
+
   hit_bounds_in_screen.set_width(kStartGoingBackLeftEdgeInset);
   const bool hit_in_limited_area =
       hit_bounds_in_screen.Contains(screen_location);
@@ -498,8 +540,6 @@ bool BackGestureEventHandler::CanStartGoingBack(
 
 void BackGestureEventHandler::SendBackEvent(const gfx::Point& screen_location) {
   window_util::SendBackKeyEvent(window_util::GetRootWindowAt(screen_location));
-  RecordEndScenarioType(GetEndScenarioType(back_gesture_start_scenario_type_,
-                                           BackGestureEndType::kBack));
 }
 
 bool BackGestureEventHandler::ShouldWaitForTouchPressAck(

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <stdint.h>
 
-#include "base/cancelable_callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/clock.h"
+#include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
+#include "components/policy/core/common/cloud/cloud_policy_refresh_scheduler_observer.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/policy_export.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
@@ -26,6 +29,32 @@ class CloudPolicyService;
 
 // Observes CloudPolicyClient and CloudPolicyStore to trigger periodic policy
 // fetches and issue retries on error conditions.
+//
+// Refreshing non-managed responses:
+// - If there is a cached non-managed response, make sure to only re-query the
+//   server after kUnmanagedRefreshDelayMs.
+//  - NB: For existing policy, an immediate refresh is intentional.
+//
+// Refreshing on mobile platforms:
+// - if no user is signed-in then the |client_| is never registered.
+// - if the user is signed-in but isn't enterprise then the |client_| is
+//   never registered.
+// - if the user is signed-in but isn't registered for policy yet then the
+//   |client_| isn't registered either; the UserPolicySigninService will try
+//   to register, and OnRegistrationStateChanged() will be invoked later.
+// - if the client is signed-in and has policy then its timestamp is used to
+//   determine when to perform the next fetch, which will be once the cached
+//   version is considered "old enough".
+//
+// If there is an old policy cache then a fetch will be performed "soon"; if
+// that fetch fails then a retry is attempted after a delay, with exponential
+// backoff. If those fetches keep failing then the cached timestamp is *not*
+// updated, and another fetch (and subsequent retries) will be attempted
+// again on the next startup.
+//
+// But if the cached policy is considered fresh enough then we try to avoid
+// fetching again on startup; the Android logic differs from the desktop in
+// this aspect.
 class POLICY_EXPORT CloudPolicyRefreshScheduler
     : public CloudPolicyClient::Observer,
       public CloudPolicyStore::Observer,
@@ -51,6 +80,9 @@ class POLICY_EXPORT CloudPolicyRefreshScheduler
       const scoped_refptr<base::SequencedTaskRunner>& task_runner,
       network::NetworkConnectionTrackerGetter
           network_connection_tracker_getter);
+  CloudPolicyRefreshScheduler(const CloudPolicyRefreshScheduler&) = delete;
+  CloudPolicyRefreshScheduler& operator=(const CloudPolicyRefreshScheduler&) =
+      delete;
   ~CloudPolicyRefreshScheduler() override;
 
   base::Time last_refresh() const { return last_refresh_; }
@@ -66,8 +98,12 @@ class POLICY_EXPORT CloudPolicyRefreshScheduler
   // For testing: get the value randomly assigned to refresh_delay_salt_ms_.
   int64_t GetSaltDelayForTesting() const { return refresh_delay_salt_ms_; }
 
-  // Schedules a refresh to be performed immediately.
-  void RefreshSoon();
+  // Schedules a refresh to be performed immediately if the `client_` is
+  // registered. Otherwise, this is a no-op.
+  //
+  // The |reason| parameter will be used to tag the request to DMServer. This
+  // will allow for more targeted monitoring and alerting.
+  void RefreshSoon(PolicyFetchReason reason);
 
   // The refresh scheduler starts by assuming that invalidations are not
   // available. This call can be used to signal whether the invalidations
@@ -91,9 +127,21 @@ class POLICY_EXPORT CloudPolicyRefreshScheduler
 
   // network::NetworkConnectionTracker::NetworkConnectionObserver:
   // Triggered also when the device wakes up.
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
-  void set_last_refresh_for_testing(base::Time last_refresh);
+  // Overrides clock or tick clock in tests. Returned closure removes the
+  // override when destroyed.
+  static base::ScopedClosureRunner OverrideClockForTesting(
+      base::Clock* clock_for_testing);
+  static base::ScopedClosureRunner OverrideTickClockForTesting(
+      base::TickClock* tick_clock_for_testing);
+
+  // Registers an observer to be notified.
+  void AddObserver(CloudPolicyRefreshSchedulerObserver* observer);
+
+  // Removes the specified observer.
+  void RemoveObserver(CloudPolicyRefreshSchedulerObserver* observer);
 
  private:
   // Initializes |last_refresh_| to the policy timestamp from |store_| in case
@@ -108,12 +156,12 @@ class POLICY_EXPORT CloudPolicyRefreshScheduler
   void ScheduleRefresh();
 
   // Triggers a policy refresh.
-  void PerformRefresh();
+  void PerformRefresh(PolicyFetchReason reason);
 
   // Schedules a policy refresh to happen no later than |delta_ms| +
   // |refresh_delay_salt_ms_| msecs after |last_refresh_| or
   // |last_refresh_ticks_| whichever is sooner.
-  void RefreshAfter(int delta_ms);
+  void RefreshAfter(int delta_ms, PolicyFetchReason reason);
 
   // Cancels the scheduled policy refresh.
   void CancelRefresh();
@@ -127,21 +175,17 @@ class POLICY_EXPORT CloudPolicyRefreshScheduler
   // requested.
   void OnPolicyRefreshed(bool success);
 
-  CloudPolicyClient* client_;
-  CloudPolicyStore* store_;
-  CloudPolicyService* service_;
+  raw_ptr<CloudPolicyClient> client_;
+  raw_ptr<CloudPolicyStore> store_;
+  raw_ptr<CloudPolicyService> service_;
 
   // For scheduling delayed tasks.
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   // For listening for network connection changes.
-  network::NetworkConnectionTracker* network_connection_tracker_;
+  raw_ptr<network::NetworkConnectionTracker> network_connection_tracker_;
 
-  // The delayed refresh callback.
-  base::CancelableOnceClosure refresh_callback_;
-
-  // Whether the refresh is scheduled for soon (using |RefreshSoon| or
-  // |RefreshNow|).
+  // Whether the refresh is scheduled for soon (using |RefreshSoon|).
   bool is_scheduled_for_soon_ = false;
 
   // The last time a policy fetch was attempted or completed.
@@ -166,13 +210,16 @@ class POLICY_EXPORT CloudPolicyRefreshScheduler
   // of policy updates.
   bool invalidations_available_;
 
-  // Used to measure how long it took for the invalidations service to report
-  // its initial status.
-  base::Time creation_time_;
+  // Whether we have retried with key reset or not.
+  bool has_retried_with_key_reset_ = false;
 
+  base::ObserverList<CloudPolicyRefreshSchedulerObserver, true> observers_;
+
+  // WeakPtrFactory used to schedule refresh tasks.
+  base::WeakPtrFactory<CloudPolicyRefreshScheduler> refresh_weak_factory_{this};
+
+  // General purpose WeakPtrFactory.
   base::WeakPtrFactory<CloudPolicyRefreshScheduler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CloudPolicyRefreshScheduler);
 };
 
 }  // namespace policy

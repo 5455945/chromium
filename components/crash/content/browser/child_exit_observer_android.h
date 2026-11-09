@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,19 @@
 
 #include "base/android/application_status_listener.h"
 #include "base/android/child_process_binding_types.h"
-#include "base/lazy_instance.h"
 #include "base/process/process.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/synchronization/lock.h"
 #include "components/crash/content/browser/crash_handler_host_linux.h"
 #include "content/public/browser/browser_child_process_observer.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/common/child_process_host.h"
+#include "content/public/browser/render_process_host_creation_observer.h"
+#include "content/public/browser/render_process_host_observer.h"
+#include "content/public/browser/spare_render_process_host_manager.h"
+#include "content/public/browser/user_level_memory_pressure_metrics.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/process_type.h"
 #include "third_party/blink/public/common/oom_intervention/oom_intervention_types.h"
 
@@ -34,7 +37,8 @@ namespace crash_reporter {
 // purpose of reacting to child process crashes.
 // The ChildExitObserver instance exists on the browser main thread.
 class ChildExitObserver : public content::BrowserChildProcessObserver,
-                          public content::NotificationObserver,
+                          public content::RenderProcessHostCreationObserver,
+                          public content::RenderProcessHostObserver,
                           public crashpad::CrashHandlerHost::Observer {
  public:
   struct TerminationInfo {
@@ -49,7 +53,7 @@ class ChildExitObserver : public content::BrowserChildProcessObserver,
       return crash_signo != kInvalidSigno || threw_exception_during_init;
     }
 
-    int process_host_id = content::ChildProcessHost::kInvalidUniqueID;
+    content::ChildProcessId process_host_id;
     // |pid| may not be valid if termination happens before the process has
     // finished launching.
     base::ProcessHandle pid = base::kNullProcessHandle;
@@ -74,17 +78,6 @@ class ChildExitObserver : public content::BrowserChildProcessObserver,
         base::android::ChildBindingState::UNBOUND;
     bool threw_exception_during_init = false;
     bool was_killed_intentionally_by_browser = false;
-    int remaining_process_with_strong_binding = 0;
-    int remaining_process_with_moderate_binding = 0;
-    int remaining_process_with_waived_binding = 0;
-    int best_effort_reverse_rank = -1;
-
-    // Note this is slightly different |has_oom_protection_bindings|.
-    // This is equivalent to status == TERMINATION_STATUS_NORMAL_TERMINATION,
-    // which historically also checked whether app is in foreground, using
-    // a slightly different implementation than
-    // ApplicationStatusListener::GetState.
-    bool was_oom_protected_status = false;
 
     // Applies to renderer process only. Generally means renderer is hosting
     // one or more visible tabs.
@@ -100,6 +93,26 @@ class ChildExitObserver : public content::BrowserChildProcessObserver,
     // about virtual address space OOM situation, private memory footprint,
     // swap size, vm size and the estimation of blink memory usage.
     blink::OomInterventionMetrics blink_oom_metrics;
+
+    // Applies to renderer process only. Whether the killed process is a
+    // spare renderer.
+    bool is_spare_renderer = false;
+
+    // Applies to renderer process only. Whether there is any spare renderer
+    // in the browser when the process is killed. Always true if the killed
+    // process is a spare renderer.
+    bool has_spare_renderer = false;
+
+    // Information about the last spare renderer creation.
+    // This is populated when a renderer or GPU process terminates.
+    std::optional<content::LastSpareRendererCreationInfo>
+        last_spare_renderer_creation_info;
+
+    // Information about memory pressure metrics.
+    // Only available on experiment with feature
+    // kUserLevelMemoryPressureSignalMetricsOnly on.
+    std::optional<content::UserLevelMemoryPressureMetrics>
+        memory_pressure_metrics;
   };
 
   // ChildExitObserver client interface.
@@ -119,64 +132,76 @@ class ChildExitObserver : public content::BrowserChildProcessObserver,
     // OnChildExit may be called twice for the same process.
     virtual void OnChildExit(const TerminationInfo& info) = 0;
 
-    virtual ~Client() {}
+    virtual ~Client() = default;
   };
+  ChildExitObserver();
+  ~ChildExitObserver() override;
 
-  // The global ChildExitObserver instance is created by calling
-  // Create (on the UI thread), and lives until process exit. Tests
-  // making use of this class should register an AtExitManager.
-  static void Create();
-
-  // Fetch a pointer to the global ChildExitObserver instance. The
-  // global instance must have been created by the time GetInstance is
-  // called.
-  static ChildExitObserver* GetInstance();
+  ChildExitObserver(const ChildExitObserver&) = delete;
+  ChildExitObserver& operator=(const ChildExitObserver&) = delete;
 
   void RegisterClient(std::unique_ptr<Client> client);
 
   // crashpad::CrashHandlerHost::Observer
   void ChildReceivedCrashSignal(base::ProcessId pid, int signo) override;
 
+  // content::RenderProcessHostCreationObserver implementation.
+  void OnRenderProcessLaunched(content::RenderProcessHost* host) override;
+
  private:
-  friend struct base::LazyInstanceTraitsBase<ChildExitObserver>;
-
-  ChildExitObserver();
-  ~ChildExitObserver() override;
-
   // content::BrowserChildProcessObserver implementation:
+  void BrowserChildProcessLaunchedAndConnected(
+      const content::ChildProcessData& data,
+      const base::Process& process) override;
   void BrowserChildProcessHostDisconnected(
       const content::ChildProcessData& data) override;
   void BrowserChildProcessKilled(
       const content::ChildProcessData& data,
       const content::ChildProcessTerminationInfo& info) override;
 
-  // NotificationObserver implementation:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // RenderProcessHostObserver implementation.
+  // RenderProcessHostDestroyed() corresponds to death of an underlying
+  // RenderProcess. RenderProcessExited() corresponds to when the
+  // RenderProcessHost's lifetime is ending. Ideally, we'd only listen to the
+  // former, but if the RenderProcessHost is destroyed before the RenderProcess,
+  // then the former is never observed.
+  void RenderProcessExited(
+      content::RenderProcessHost* host,
+      const content::ChildProcessTerminationInfo& info) override;
+  void RenderProcessHostDestroyed(content::RenderProcessHost* host) override;
+
+  // Processes RenderProcessHost exited and destroyed events. |content_info| is
+  // expected to be null for destroyed events.
+  void ProcessRenderProcessHostLifetimeEndEvent(
+      content::RenderProcessHost* rph,
+      const content::ChildProcessTerminationInfo* content_info);
 
   // Called on child process exit (including crash).
   void OnChildExit(TerminationInfo* info);
-
-  content::NotificationRegistrar notification_registrar_;
 
   base::Lock registered_clients_lock_;
   std::vector<std::unique_ptr<Client>> registered_clients_;
 
   // process_host_id to process id. Only accessed on the UI thread.
-  std::map<int, base::ProcessHandle> process_host_id_to_pid_;
+  std::map<content::ChildProcessId, base::ProcessHandle>
+      process_host_id_to_pid_;
 
   // Key is process_host_id. Only used for BrowserChildProcessHost. Only
   // accessed on the UI thread.
-  std::map<int, TerminationInfo> browser_child_process_info_;
+  std::map<content::ChildProcessId, base::ProcessHandle>
+      browser_child_process_id_to_pid_;
+  std::map<content::ChildProcessId, TerminationInfo>
+      browser_child_process_info_;
+
+  base::ScopedMultiSourceObservation<content::RenderProcessHost,
+                                     content::RenderProcessHostObserver>
+      render_process_host_observation_{this};
 
   base::Lock crash_signals_lock_;
   std::map<base::ProcessId, int> child_pid_to_crash_signal_;
   base::ScopedObservation<crashpad::CrashHandlerHost,
                           crashpad::CrashHandlerHost::Observer>
-      scoped_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ChildExitObserver);
+      scoped_crash_handler_host_observation_{this};
 };
 
 }  // namespace crash_reporter

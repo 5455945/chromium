@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,21 @@
 
 #include <set>
 
-#include "base/callback.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+
+class GlobalBrowserCollection;
 
 namespace metrics {
 
-// BrowserList / TabStripModelObserver used for tracking audio status.
+// BrowserCollectionObserver / TabStripModelObserver used for tracking audio
+// status.
 // TODO(chrisha): Migrate this entire thing to use RecentlyAudibleHelper
 // notifications rather then TabStripModel notifications.
-// https://crbug.com/846374
-class AudibleContentsTracker : public BrowserListObserver,
+// https://crbug.com/41390955
+class AudibleContentsTracker : public BrowserCollectionObserver,
                                public TabStripModelObserver {
  public:
   // Interface for an observer of the AudibleContentsTracker. The only client
@@ -25,8 +29,12 @@ class AudibleContentsTracker : public BrowserListObserver,
   // interface has been created for ease of testing.
   class Observer {
    public:
-    Observer() {}
-    virtual ~Observer() {}
+    Observer() = default;
+
+    Observer(const Observer&) = delete;
+    Observer& operator=(const Observer&) = delete;
+
+    virtual ~Observer() = default;
 
     // Invoked when a first audio source starts playing after a period of no
     // audio sources.
@@ -34,41 +42,44 @@ class AudibleContentsTracker : public BrowserListObserver,
 
     // Invoked when all audio sources stop playing.
     virtual void OnAudioEnd() = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
   };
 
   // Creates an audible contents tracker that dispatches its messages to the
   // provided |observer|.
   explicit AudibleContentsTracker(Observer* observer);
+
+  AudibleContentsTracker(const AudibleContentsTracker&) = delete;
+  AudibleContentsTracker& operator=(const AudibleContentsTracker&) = delete;
+
   ~AudibleContentsTracker() override;
 
  private:
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
 
   // TabStripModelObserver:
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
-  void TabChangedAt(content::WebContents* web_contents,
-                    int index,
-                    TabChangeType change_type) override;
+  void OnTabChangedAt(tabs::TabInterface* tab,
+                      TabChangeType change_type) override;
 
   // Used for managing audible_contents_, and invoking OnAudioStart and
   // OnAudioEnd callbacks.
   void AddAudibleWebContents(content::WebContents* web_contents);
   void RemoveAudibleWebContents(content::WebContents* web_contents);
 
-  Observer* observer_;
+  raw_ptr<Observer> observer_;
 
   // The set of WebContents that are currently playing audio.
-  std::set<content::WebContents*> audible_contents_;
+  std::set<raw_ptr<content::WebContents, SetExperimental>> audible_contents_;
 
-  DISALLOW_COPY_AND_ASSIGN(AudibleContentsTracker);
+  // TODO(crbug.com/495682308): remove when the AudibleContentsTracker is no
+  // longer outliving the GlobalBrowserCollection it observes.
+  base::ScopedObservation<GlobalBrowserCollection,
+                          BrowserCollectionObserver>::LeakedDanglingUntriaged
+      browser_collection_observation_{this};
 };
 
 }  // namespace metrics

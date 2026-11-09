@@ -1,4 +1,12 @@
 <style include="scanning-fonts scanning-shared">
+  :host-context(body.jelly-enabled) #noScannersSubtext {
+    font: var(--cros-body-1-font);
+  }
+
+  :host-context(body.jelly-enabled) h1 {
+    font: var(--cros-display-6-font);
+  }
+
   #loadingContainer {
     align-items: center;
     display: flex;
@@ -29,8 +37,8 @@
   }
 
   paper-progress {
-    --paper-progress-active-color: var(--google-blue-600);
-    --paper-progress-container-color: var(--google-blue-200);
+    --paper-progress-active-color: var(--scanning-progress-bar);
+    --paper-progress-container-color: var(--scanning-progress-bar-track);
     border-radius: 4px;
     height: 4px;
     margin-bottom: 80px;
@@ -43,27 +51,34 @@
     margin-bottom: 32px;
   }
 
-  img {
+  img,
+  svg {
     height: 256px;
   }
 </style>
 <div id="loadingContainer">
-  <div id="loadingDiv" hidden="[[noScannersAvailable_]]">
-    <img src="svg/scanners_loading.svg" alt="[[i18n('scannersLoadingText')]]">
+  <div id="loadingDiv" hidden="[[noScannersAvailable]]">
+    <svg preserveAspectRatio="xMidYMid meet" role="img" viewBox="0 0 257 256">
+      <title>[[i18n('scannersLoadingText')]]</title>
+      <use href="svg/illo_loading_scanner.svg#illo_loading_scanner"></use>
+    </svg>
     <h1>[[i18n('scannersLoadingText')]]</h1>
     <paper-progress indeterminate></paper-progress>
   </div>
-  <div id="noScannersDiv" hidden="[[!noScannersAvailable_]]">
-    <img src="svg/no_scanners.svg" alt="[[i18n('noScannersText')]]">
+  <div id="noScannersDiv" hidden="[[!noScannersAvailable]]">
+    <svg preserveAspectRatio="xMidYMid meet" role="img" viewBox="0 0 257 256">
+      <title>[[i18n('noScannersSubtext')]]</title>
+      <use href="svg/illo_no_scanner.svg#illo_no_scanner"></use>
+    </svg>
     <h1>[[i18n('noScannersText')]]</h1>
     <span id="noScannersSubtext">[[i18n('noScannersSubtext')]]</span>
     <div id="buttonDiv">
       <cr-button id="learnMoreButton" class="cancel-button"
-          on-click="onLearnMoreClick_">
+          on-click="onLearnMoreClick">
         [[i18n('learnMoreButtonLabel')]]
       </cr-button>
       <cr-button id="retryButton" class="action-button"
-          on-click="onRetryClick_">
+          on-click="onRetryClick">
         [[i18n('retryButtonLabel')]]
       </cr-button>
     </div>

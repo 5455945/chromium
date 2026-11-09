@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,32 @@
 // injecting the bookmarks to the bookmark submenu. This is done to support
 // advanced interactions with the menu contents, like right click context menus.
 
-#include "base/macros.h"
-#include "ui/base/models/simple_menu_model.h"
+#include <memory>
 
-class Browser;
+#include "ui/menus/simple_menu_model.h"
+
+class BrowserWindowInterface;
+class ReadingListSubMenuModel;
 
 class BookmarkSubMenuModel : public ui::SimpleMenuModel {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kShowBookmarkBarMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kShowBookmarkSidePanelItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kReadingListMenuItem);
+
   BookmarkSubMenuModel(ui::SimpleMenuModel::Delegate* delegate,
-                       Browser* browser);
+                       BrowserWindowInterface* browser);
+
+  BookmarkSubMenuModel(const BookmarkSubMenuModel&) = delete;
+  BookmarkSubMenuModel& operator=(const BookmarkSubMenuModel&) = delete;
+
   ~BookmarkSubMenuModel() override;
 
  private:
-  void Build(Browser* browser);
+  void Build(BrowserWindowInterface* browser);
 
-  DISALLOW_COPY_AND_ASSIGN(BookmarkSubMenuModel);
+  std::unique_ptr<ui::SimpleMenuModel> bookmark_bar_sub_menu_model_;
+  std::unique_ptr<ReadingListSubMenuModel> reading_list_sub_menu_model_;
 };
 
 #endif  // CHROME_BROWSER_UI_TOOLBAR_BOOKMARK_SUB_MENU_MODEL_H_

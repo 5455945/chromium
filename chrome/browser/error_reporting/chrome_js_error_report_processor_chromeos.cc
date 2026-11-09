@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 
 #include <algorithm>
 
-#include "base/bind_post_task.h"
-#include "base/callback_helpers.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/launch.h"
@@ -20,7 +20,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/error_reporting/constants.h"
@@ -80,8 +80,7 @@ base::File GetMemfdOrTempFile(base::ScopedClosureRunner& cleanup,
                 << output_path.value();
 
   // Need to actually delete the temp file once we're done.
-  cleanup.ReplaceClosure(
-      base::BindOnce(base::GetDeleteFileCallback(), std::move(output_path)));
+  cleanup.ReplaceClosure(base::GetDeleteFileCallback(std::move(output_path)));
   return base::FILEToFile(output_file.release());
 }
 
@@ -96,8 +95,8 @@ void ChromeJsErrorReportProcessor::WaitForCrashReporter(
     base::ScopedClosureRunner file_cleanup,
     base::ScopedClosureRunner external_callback_runner) {
   int return_code = 0;
-  bool process_done = process.WaitForExitWithTimeout(
-      base::TimeDelta::FromSeconds(0), &return_code);
+  bool process_done =
+      process.WaitForExitWithTimeout(base::Seconds(0), &return_code);
 
   if (process_done) {
     if (return_code != 0) {
@@ -121,7 +120,7 @@ ChromeJsErrorReportProcessor::GetCrashReporterArgvStart() {
 
 std::string ChromeJsErrorReportProcessor::ParamsToCrashReporterString(
     const ParameterMap& params,
-    const absl::optional<std::string>& stack_trace) {
+    const std::optional<std::string>& stack_trace) {
   std::string result;
   for (const auto& param : params) {
     std::string key = param.first;
@@ -143,7 +142,7 @@ std::string ChromeJsErrorReportProcessor::ParamsToCrashReporterString(
 
 void ChromeJsErrorReportProcessor::SendReportViaCrashReporter(
     ParameterMap params,
-    absl::optional<std::string> stack_trace,
+    std::optional<std::string> stack_trace,
     base::ScopedClosureRunner callback_runner) {
   base::ScopedClosureRunner cleanup;
   base::File output(GetMemfdOrTempFile(cleanup, force_non_memfd_for_test_));
@@ -153,9 +152,7 @@ void ChromeJsErrorReportProcessor::SendReportViaCrashReporter(
 
   std::string string_to_write =
       ParamsToCrashReporterString(params, stack_trace);
-  if (output.WriteAtCurrentPos(string_to_write.data(),
-                               string_to_write.length()) !=
-      static_cast<int>(string_to_write.length())) {
+  if (!output.WriteAtCurrentPosAndCheck(base::as_byte_span(string_to_write))) {
     PLOG(ERROR) << "Failed to write to crash_reporter pipe";
     return;
   }
@@ -197,7 +194,7 @@ void ChromeJsErrorReportProcessor::SendReportViaCrashReporter(
 
 void ChromeJsErrorReportProcessor::SendReport(
     ParameterMap params,
-    absl::optional<std::string> stack_trace,
+    std::optional<std::string> stack_trace,
     bool send_to_production_servers,
     base::ScopedClosureRunner callback_runner,
     base::Time report_time,

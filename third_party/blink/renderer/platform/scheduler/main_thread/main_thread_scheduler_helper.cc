@@ -1,9 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_helper.h"
 
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/renderer/platform/scheduler/common/task_priority.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.h"
 
 namespace blink {
@@ -24,9 +26,11 @@ MainThreadSchedulerHelper::MainThreadSchedulerHelper(
           NewTaskQueue(MainThreadTaskQueue::QueueCreationParams(
                            MainThreadTaskQueue::QueueType::kControl)
                            .SetShouldNotifyObservers(false))) {
-  InitDefaultQueues(default_task_queue_->GetTaskQueue(),
-                    control_task_queue_->GetTaskQueue(),
-                    TaskType::kMainThreadTaskQueueDefault);
+  control_task_queue_->SetQueuePriority(TaskPriority::kControlPriority);
+  InitDefaultTaskQueue(default_task_queue_->GetTaskQueue(),
+                       default_task_queue_->CreateTaskRunner(
+                           TaskType::kMainThreadTaskQueueDefault));
+
   sequence_manager_->EnableCrashKeys("blink_scheduler_async_stack");
 }
 
@@ -38,11 +42,6 @@ MainThreadSchedulerHelper::~MainThreadSchedulerHelper() {
 scoped_refptr<MainThreadTaskQueue>
 MainThreadSchedulerHelper::DefaultMainThreadTaskQueue() {
   return default_task_queue_;
-}
-
-const scoped_refptr<base::SingleThreadTaskRunner>&
-MainThreadSchedulerHelper::DefaultTaskRunner() {
-  return default_task_runner();
 }
 
 scoped_refptr<MainThreadTaskQueue>
@@ -59,15 +58,13 @@ scoped_refptr<base::SingleThreadTaskRunner>
 MainThreadSchedulerHelper::DeprecatedDefaultTaskRunner() {
   // TODO(hajimehoshi): Introduce a different task queue from the default task
   // queue and return the task runner created from it.
-  return default_task_runner();
+  return DefaultTaskRunner();
 }
 
 scoped_refptr<MainThreadTaskQueue> MainThreadSchedulerHelper::NewTaskQueue(
     const MainThreadTaskQueue::QueueCreationParams& params) {
-  scoped_refptr<MainThreadTaskQueue> task_queue =
-      sequence_manager_->CreateTaskQueueWithType<MainThreadTaskQueue>(
-          params.spec, params, main_thread_scheduler_);
-  return task_queue;
+  return base::MakeRefCounted<MainThreadTaskQueue>(
+      *sequence_manager_, params.spec, params, main_thread_scheduler_);
 }
 
 void MainThreadSchedulerHelper::ShutdownAllQueues() {

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,9 @@ function computeName(entry) {
 function computeId(entry) {
   var fileSystemId = fileSystemNatives.CrackIsolatedFileSystemName(
       entry.filesystem.name);
-  if (!fileSystemId)
+  if (!fileSystemId) {
     return null;
+  }
   // Strip the leading '/' from the path.
   return fileSystemId + ':' + $String.slice(entry.fullPath, 1);
 }
@@ -34,8 +35,9 @@ function getEntryId(entry) {
     return null;
   }
   var id = nameToIds[name];
-  if (id != null)
+  if (id != null) {
     return id;
+  }
 
   // If an entry has not been registered, compute its id and register it.
   id = computeId(entry);

@@ -1,10 +1,13 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/installer/util/beacons.h"
 
 #include <stdint.h>
+
+#include <string_view>
+#include <tuple>
 
 #include "base/notreached.h"
 #include "base/win/registry.h"
@@ -15,7 +18,7 @@
 void UpdateDefaultBrowserBeaconForPath(const base::FilePath& chrome_exe) {
   // Getting Chrome's default state causes the beacon to be updated via a call
   // to UpdateDefaultBrowserBeaconWithState below.
-  ignore_result(ShellUtil::GetChromeDefaultStateFromPath(chrome_exe));
+  std::ignore = ShellUtil::GetChromeDefaultStateFromPath(chrome_exe);
 }
 
 void UpdateDefaultBrowserBeaconWithState(
@@ -57,7 +60,7 @@ std::unique_ptr<Beacon> MakeFirstNotDefaultBeacon() {
 
 // Beacon ----------------------------------------------------------------------
 
-Beacon::Beacon(base::WStringPiece name, BeaconType type, BeaconScope scope)
+Beacon::Beacon(std::wstring_view name, BeaconType type, BeaconScope scope)
     : type_(type),
       root_(install_static::IsSystemInstall() ? HKEY_LOCAL_MACHINE
                                               : HKEY_CURRENT_USER),
@@ -65,7 +68,7 @@ Beacon::Beacon(base::WStringPiece name, BeaconType type, BeaconScope scope)
   Initialize(name);
 }
 
-Beacon::~Beacon() {}
+Beacon::~Beacon() = default;
 
 void Beacon::Update() {
   const REGSAM kAccess = KEY_WOW64_32KEY | KEY_QUERY_VALUE | KEY_SET_VALUE;
@@ -106,7 +109,7 @@ base::Time Beacon::Get() {
   return base::Time::FromInternalValue(now);
 }
 
-void Beacon::Initialize(base::WStringPiece name) {
+void Beacon::Initialize(std::wstring_view name) {
   const install_static::InstallDetails& install_details =
       install_static::InstallDetails::Get();
 
@@ -116,16 +119,17 @@ void Beacon::Initialize(base::WStringPiece name) {
   if (scope_ == BeaconScope::PER_INSTALL ||
       !install_static::IsSystemInstall()) {
     key_path_ = install_details.GetClientStateKeyPath();
-    value_name_.assign(name.data(), name.size());
+    value_name_.assign(name);
   } else {
     key_path_ = install_details.GetClientStateMediumKeyPath();
     key_path_.push_back(L'\\');
-    key_path_.append(name.data(), name.size());
+    key_path_.append(name);
     // This should never fail. If it does, the beacon will be written in the
     // key's default value, which is okay since the majority case is likely a
     // machine with a single user.
-    if (!base::win::GetUserSidString(&value_name_))
+    if (!base::win::GetUserSidString(&value_name_)) {
       NOTREACHED();
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,18 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
-#include "components/arc/mojom/app.mojom-forward.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom-forward.h"
 
 class Profile;
 class SyncTest;
+
+namespace sync_pb {
+class EntitySpecifics;
+}
 
 namespace arc {
 class FakeAppInstance;
@@ -27,15 +31,20 @@ class SyncArcPackageHelper {
  public:
   static SyncArcPackageHelper* GetInstance();
 
+  SyncArcPackageHelper(const SyncArcPackageHelper&) = delete;
+  SyncArcPackageHelper& operator=(const SyncArcPackageHelper&) = delete;
+
   static sync_pb::EntitySpecifics GetTestSpecifics(size_t id);
 
-  void SetupTest(SyncTest* test);
+  void SetupProfile(Profile* profile);
 
   void InstallPackageWithIndex(Profile* profile, size_t id);
 
   void UninstallPackageWithIndex(Profile* profile, size_t id);
 
   void ClearPackages(Profile* profile);
+
+  bool HasOnlyTestPackages(Profile* profile, const std::vector<size_t>& ids);
 
   bool AllProfilesHaveSamePackages();
 
@@ -64,12 +73,9 @@ class SyncArcPackageHelper {
   // informaton as |profile2|.
   bool ArcPackageDetailsMatch(Profile* profile1, Profile* profile2);
 
-  SyncTest* test_;
-  bool setup_completed_;
+  raw_ptr<SyncTest, DanglingUntriaged> test_ = nullptr;
 
   std::unordered_map<Profile*, std::unique_ptr<FakeAppInstance>> instance_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncArcPackageHelper);
 };
 
 }  // namespace arc

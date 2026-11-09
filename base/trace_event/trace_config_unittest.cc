@@ -1,32 +1,35 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/trace_event/trace_config.h"
+
 #include <stddef.h>
+
+#include <optional>
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/trace_event/memory_dump_manager.h"
-#include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_config_memory_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace base {
-namespace trace_event {
+namespace base::trace_event {
 
 namespace {
 
 const char kDefaultTraceConfigString[] =
-  "{"
+    "{"
     "\"enable_argument_filter\":false,"
+    "\"enable_package_name_filter\":false,"
     "\"enable_systrace\":false,"
     "\"record_mode\":\"record-until-full\""
-  "}";
+    "}";
 
 const char kCustomTraceConfigString[] =
     "{"
     "\"enable_argument_filter\":true,"
+    "\"enable_package_name_filter\":true,"
     "\"enable_systrace\":true,"
     "\"event_filters\":["
     "{"
@@ -69,6 +72,7 @@ void CheckDefaultTraceConfigBehavior(const TraceConfig& tc) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
 
   // Default trace config enables every category filter except the
   // disabled-by-default-* ones.
@@ -105,24 +109,28 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(RECORD_UNTIL_FULL, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-until-full", config.ToTraceOptionsString().c_str());
 
   config = TraceConfig("", "record-continuously");
   EXPECT_EQ(RECORD_CONTINUOUSLY, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-continuously", config.ToTraceOptionsString().c_str());
 
   config = TraceConfig("", "trace-to-console");
   EXPECT_EQ(ECHO_TO_CONSOLE, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("trace-to-console", config.ToTraceOptionsString().c_str());
 
   config = TraceConfig("", "record-as-much-as-possible");
   EXPECT_EQ(RECORD_AS_MUCH_AS_POSSIBLE, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-as-much-as-possible",
                config.ToTraceOptionsString().c_str());
 
@@ -130,6 +138,7 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(RECORD_CONTINUOUSLY, config.GetTraceRecordMode());
   EXPECT_TRUE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-continuously,enable-systrace",
                config.ToTraceOptionsString().c_str());
 
@@ -137,24 +146,25 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(RECORD_AS_MUCH_AS_POSSIBLE, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_TRUE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-as-much-as-possible,enable-argument-filter",
                config.ToTraceOptionsString().c_str());
 
   config = TraceConfig(
-    "",
-    "enable-systrace,trace-to-console,enable-argument-filter");
+      "", "enable-systrace,trace-to-console,enable-argument-filter");
   EXPECT_EQ(ECHO_TO_CONSOLE, config.GetTraceRecordMode());
   EXPECT_TRUE(config.IsSystraceEnabled());
   EXPECT_TRUE(config.IsArgumentFilterEnabled());
-  EXPECT_STREQ(
-    "trace-to-console,enable-systrace,enable-argument-filter",
-    config.ToTraceOptionsString().c_str());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
+  EXPECT_STREQ("trace-to-console,enable-systrace,enable-argument-filter",
+               config.ToTraceOptionsString().c_str());
 
   config = TraceConfig(
-    "", "record-continuously, record-until-full, trace-to-console");
+      "", "record-continuously, record-until-full, trace-to-console");
   EXPECT_EQ(ECHO_TO_CONSOLE, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("trace-to-console", config.ToTraceOptionsString().c_str());
 
   // From TraceRecordMode
@@ -162,24 +172,28 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(RECORD_UNTIL_FULL, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-until-full", config.ToTraceOptionsString().c_str());
 
   config = TraceConfig("", RECORD_CONTINUOUSLY);
   EXPECT_EQ(RECORD_CONTINUOUSLY, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-continuously", config.ToTraceOptionsString().c_str());
 
   config = TraceConfig("", ECHO_TO_CONSOLE);
   EXPECT_EQ(ECHO_TO_CONSOLE, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("trace-to-console", config.ToTraceOptionsString().c_str());
 
   config = TraceConfig("", RECORD_AS_MUCH_AS_POSSIBLE);
   EXPECT_EQ(RECORD_AS_MUCH_AS_POSSIBLE, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("record-as-much-as-possible",
                config.ToTraceOptionsString().c_str());
 
@@ -215,6 +229,7 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(ECHO_TO_CONSOLE, config.GetTraceRecordMode());
   EXPECT_TRUE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("included,inc_pattern*,-excluded,-exc_pattern*",
                config.ToCategoryFilterString().c_str());
   EXPECT_STREQ("trace-to-console,enable-systrace",
@@ -226,6 +241,7 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(ECHO_TO_CONSOLE, config.GetTraceRecordMode());
   EXPECT_TRUE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("included,inc_pattern*,-excluded,-exc_pattern*",
                config.ToCategoryFilterString().c_str());
   EXPECT_STREQ("trace-to-console,enable-systrace",
@@ -237,6 +253,7 @@ TEST(TraceConfigTest, TraceConfigFromValidLegacyFormat) {
   EXPECT_EQ(RECORD_CONTINUOUSLY, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("included,inc_pattern*,-excluded,-exc_pattern*",
                config.ToCategoryFilterString().c_str());
   EXPECT_STREQ("record-continuously", config.ToTraceOptionsString().c_str());
@@ -247,6 +264,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidLegacyStrings) {
   EXPECT_EQ(RECORD_UNTIL_FULL, config.GetTraceRecordMode());
   EXPECT_FALSE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", config.ToCategoryFilterString().c_str());
   EXPECT_STREQ("record-until-full", config.ToTraceOptionsString().c_str());
 
@@ -254,6 +272,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidLegacyStrings) {
   EXPECT_EQ(RECORD_UNTIL_FULL, config.GetTraceRecordMode());
   EXPECT_TRUE(config.IsSystraceEnabled());
   EXPECT_FALSE(config.IsArgumentFilterEnabled());
+  EXPECT_FALSE(config.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("arbitrary-category", config.ToCategoryFilterString().c_str());
   EXPECT_STREQ("record-until-full,enable-systrace",
                config.ToTraceOptionsString().c_str());
@@ -276,7 +295,7 @@ TEST(TraceConfigTest, ConstructDefaultTraceConfig) {
                tc_empty_category_filter.ToString().c_str());
   CheckDefaultTraceConfigBehavior(tc_empty_category_filter);
 
-  // Constructor from JSON formated config string.
+  // Constructor from JSON formatted config string.
   TraceConfig tc_empty_json_string("");
   EXPECT_STREQ("", tc_empty_json_string.ToCategoryFilterString().c_str());
   EXPECT_STREQ(kDefaultTraceConfigString,
@@ -284,8 +303,7 @@ TEST(TraceConfigTest, ConstructDefaultTraceConfig) {
   CheckDefaultTraceConfigBehavior(tc_empty_json_string);
 
   // Constructor from dictionary value.
-  DictionaryValue dict;
-  TraceConfig tc_dict(dict);
+  TraceConfig tc_dict(DictValue{});
   EXPECT_STREQ("", tc_dict.ToCategoryFilterString().c_str());
   EXPECT_STREQ(kDefaultTraceConfigString, tc_dict.ToString().c_str());
   CheckDefaultTraceConfigBehavior(tc_dict);
@@ -333,30 +351,31 @@ TEST(TraceConfigTest, DisabledByDefaultCategoryFilterString) {
 
 TEST(TraceConfigTest, TraceConfigFromDict) {
   // Passing in empty dictionary will result in default trace config.
-  DictionaryValue dict;
-  TraceConfig tc(dict);
+  TraceConfig tc(DictValue{});
   EXPECT_STREQ(kDefaultTraceConfigString, tc.ToString().c_str());
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", tc.ToCategoryFilterString().c_str());
 
-  absl::optional<Value> default_value =
-      JSONReader::Read(kDefaultTraceConfigString);
+  std::optional<Value> default_value = JSONReader::Read(
+      kDefaultTraceConfigString, JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(default_value);
   ASSERT_TRUE(default_value->is_dict());
-  TraceConfig default_tc(*default_value);
+  TraceConfig default_tc(default_value->GetDict());
   EXPECT_STREQ(kDefaultTraceConfigString, default_tc.ToString().c_str());
   EXPECT_EQ(RECORD_UNTIL_FULL, default_tc.GetTraceRecordMode());
   EXPECT_FALSE(default_tc.IsSystraceEnabled());
+  EXPECT_FALSE(default_tc.IsEventPackageNameFilterEnabled());
   EXPECT_FALSE(default_tc.IsArgumentFilterEnabled());
   EXPECT_STREQ("", default_tc.ToCategoryFilterString().c_str());
 
-  absl::optional<Value> custom_value =
-      JSONReader::Read(kCustomTraceConfigString);
+  std::optional<Value> custom_value = JSONReader::Read(
+      kCustomTraceConfigString, JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(custom_value);
   ASSERT_TRUE(custom_value->is_dict());
-  TraceConfig custom_tc(*custom_value);
+  TraceConfig custom_tc(custom_value->GetDict());
   std::string custom_tc_str = custom_tc.ToString();
   EXPECT_TRUE(custom_tc_str == kCustomTraceConfigString ||
               custom_tc_str ==
@@ -364,6 +383,7 @@ TEST(TraceConfigTest, TraceConfigFromDict) {
   EXPECT_EQ(RECORD_CONTINUOUSLY, custom_tc.GetTraceRecordMode());
   EXPECT_TRUE(custom_tc.IsSystraceEnabled());
   EXPECT_TRUE(custom_tc.IsArgumentFilterEnabled());
+  EXPECT_TRUE(custom_tc.IsEventPackageNameFilterEnabled());
   EXPECT_EQ(100u, custom_tc.GetTraceBufferSizeInEvents());
   EXPECT_STREQ(
       "included,inc_pattern*,"
@@ -377,6 +397,7 @@ TEST(TraceConfigTest, TraceConfigFromValidString) {
   const char config_string[] =
       "{"
       "\"enable_argument_filter\":true,"
+      "\"enable_package_name_filter\":false,"
       "\"enable_systrace\":true,"
       "\"event_filters\":["
       "{"
@@ -398,6 +419,7 @@ TEST(TraceConfigTest, TraceConfigFromValidString) {
   EXPECT_EQ(RECORD_CONTINUOUSLY, tc.GetTraceRecordMode());
   EXPECT_TRUE(tc.IsSystraceEnabled());
   EXPECT_TRUE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ(
       "included,inc_pattern*,disabled-by-default-cc,-excluded,"
       "-exc_pattern*",
@@ -435,10 +457,10 @@ TEST(TraceConfigTest, TraceConfigFromValidString) {
   EXPECT_EQ(1u, event_filter.category_filter().excluded_categories().size());
   EXPECT_STREQ("unfiltered_cat",
                event_filter.category_filter().excluded_categories()[0].c_str());
-  EXPECT_FALSE(event_filter.filter_args().is_none());
+  EXPECT_FALSE(event_filter.filter_args().empty());
 
-  std::string json_out;
-  base::JSONWriter::Write(event_filter.filter_args(), &json_out);
+  std::string json_out =
+      base::WriteJson(event_filter.filter_args()).value_or("");
   EXPECT_STREQ(json_out.c_str(),
                "{\"event_name_allowlist\":[\"a snake\",\"a dog\"]}");
   std::unordered_set<std::string> filter_values;
@@ -460,9 +482,10 @@ TEST(TraceConfigTest, TraceConfigFromValidString) {
   tc.Clear();
   EXPECT_STREQ(tc.ToString().c_str(),
                "{"
-                 "\"enable_argument_filter\":false,"
-                 "\"enable_systrace\":false,"
-                 "\"record_mode\":\"record-until-full\""
+               "\"enable_argument_filter\":false,"
+               "\"enable_package_name_filter\":false,"
+               "\"enable_systrace\":false,"
+               "\"record_mode\":\"record-until-full\""
                "}");
 }
 
@@ -482,6 +505,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidString) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", tc.ToCategoryFilterString().c_str());
   CheckDefaultTraceConfigBehavior(tc);
 
@@ -490,6 +514,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidString) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", tc.ToCategoryFilterString().c_str());
   CheckDefaultTraceConfigBehavior(tc);
 
@@ -498,6 +523,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidString) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", tc.ToCategoryFilterString().c_str());
   CheckDefaultTraceConfigBehavior(tc);
 
@@ -507,6 +533,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidString) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", tc.ToCategoryFilterString().c_str());
   CheckDefaultTraceConfigBehavior(tc);
 
@@ -514,6 +541,7 @@ TEST(TraceConfigTest, TraceConfigFromInvalidString) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
   EXPECT_STREQ("", tc.ToCategoryFilterString().c_str());
   CheckDefaultTraceConfigBehavior(tc);
 
@@ -528,12 +556,13 @@ TEST(TraceConfigTest, TraceConfigFromInvalidString) {
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
   EXPECT_FALSE(tc.IsArgumentFilterEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
 
   const char invalid_config_string_2[] =
-    "{"
+      "{"
       "\"included_categories\":[\"category\",\"disabled-by-default-pattern\"],"
       "\"excluded_categories\":[\"category\",\"disabled-by-default-pattern\"]"
-    "}";
+      "}";
   tc = TraceConfig(invalid_config_string_2);
   EXPECT_TRUE(tc.category_filter().IsCategoryEnabled("category"));
   EXPECT_TRUE(
@@ -547,13 +576,15 @@ TEST(TraceConfigTest, MergingTraceConfigs) {
   TraceConfig tc;
   TraceConfig tc2("included,-excluded,inc_pattern*,-exc_pattern*", "");
   tc.Merge(tc2);
-  EXPECT_STREQ("{"
-                 "\"enable_argument_filter\":false,"
-                 "\"enable_systrace\":false,"
-                 "\"excluded_categories\":[\"excluded\",\"exc_pattern*\"],"
-                 "\"record_mode\":\"record-until-full\""
-               "}",
-               tc.ToString().c_str());
+  EXPECT_STREQ(
+      "{"
+      "\"enable_argument_filter\":false,"
+      "\"enable_package_name_filter\":false,"
+      "\"enable_systrace\":false,"
+      "\"excluded_categories\":[\"excluded\",\"exc_pattern*\"],"
+      "\"record_mode\":\"record-until-full\""
+      "}",
+      tc.ToString().c_str());
 }
 
 TEST(TraceConfigTest, IsCategoryGroupEnabled) {
@@ -607,12 +638,16 @@ TEST(TraceConfigTest, SetTraceOptionValues) {
   TraceConfig tc;
   EXPECT_EQ(RECORD_UNTIL_FULL, tc.GetTraceRecordMode());
   EXPECT_FALSE(tc.IsSystraceEnabled());
+  EXPECT_FALSE(tc.IsEventPackageNameFilterEnabled());
 
   tc.SetTraceRecordMode(RECORD_AS_MUCH_AS_POSSIBLE);
   EXPECT_EQ(RECORD_AS_MUCH_AS_POSSIBLE, tc.GetTraceRecordMode());
 
   tc.EnableSystrace();
   EXPECT_TRUE(tc.IsSystraceEnabled());
+
+  tc.SetEventPackageNameFilterEnabled(true);
+  EXPECT_TRUE(tc.IsEventPackageNameFilterEnabled());
 }
 
 TEST(TraceConfigTest, TraceConfigFromMemoryConfigString) {
@@ -630,12 +665,12 @@ TEST(TraceConfigTest, TraceConfigFromMemoryConfigString) {
 
   EXPECT_EQ(200u,
             tc1.memory_dump_config().triggers[0].min_time_between_dumps_ms);
-  EXPECT_EQ(MemoryDumpLevelOfDetail::LIGHT,
+  EXPECT_EQ(MemoryDumpLevelOfDetail::kLight,
             tc1.memory_dump_config().triggers[0].level_of_detail);
 
   EXPECT_EQ(2000u,
             tc1.memory_dump_config().triggers[1].min_time_between_dumps_ms);
-  EXPECT_EQ(MemoryDumpLevelOfDetail::DETAILED,
+  EXPECT_EQ(MemoryDumpLevelOfDetail::kDetailed,
             tc1.memory_dump_config().triggers[1].level_of_detail);
   EXPECT_EQ(
       2048u,
@@ -649,7 +684,7 @@ TEST(TraceConfigTest, TraceConfigFromMemoryConfigString) {
   EXPECT_TRUE(tc3.IsCategoryGroupEnabled(MemoryDumpManager::kTraceCategory));
   ASSERT_EQ(1u, tc3.memory_dump_config().triggers.size());
   EXPECT_EQ(1u, tc3.memory_dump_config().triggers[0].min_time_between_dumps_ms);
-  EXPECT_EQ(MemoryDumpLevelOfDetail::BACKGROUND,
+  EXPECT_EQ(MemoryDumpLevelOfDetail::kBackground,
             tc3.memory_dump_config().triggers[0].level_of_detail);
 }
 
@@ -696,5 +731,29 @@ TEST(TraceConfigTest, SystraceEventsSerialization) {
   EXPECT_TRUE(tc2.systrace_events().count("timer:tick_stop"));
 }
 
-}  // namespace trace_event
-}  // namespace base
+TEST(TraceConfigTest, IsConfigEquivalent) {
+  TraceConfig tc1("foo,bar", "");
+  TraceConfig tc2("bar,foo", "");
+  EXPECT_TRUE(tc1.IsEquivalentTo(tc2));
+
+  tc1.EnableHistogram("Foo.Bar1");
+  tc1.EnableHistogram("Foo.Bar2");
+  tc2.EnableHistogram("Foo.Bar2");
+  tc2.EnableHistogram("Foo.Bar1");
+  EXPECT_TRUE(tc1.IsEquivalentTo(tc2));
+
+  tc1.SetEventPackageNameFilterEnabled(true);
+  EXPECT_FALSE(tc1.IsEquivalentTo(tc2));
+
+  // This is an example of a config that comes from Perfetto UI. Check that
+  // it is still equivalent after converting to a string and back (this is
+  // important for startup session adoption).
+  TraceConfig tc3(
+      "{\"record_mode\":\"record-until-full\","
+      "\"included_categories\":[\"foo,bar\"],"
+      "\"excluded_categories\":[\"*\"],\"memory_dump_config\":{}}");
+  TraceConfig tc4(tc3.ToString());
+  EXPECT_TRUE(tc3.IsEquivalentTo(tc4));
+}
+
+}  // namespace base::trace_event

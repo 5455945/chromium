@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,24 @@
 
 #include <memory>
 
-#include "ash/assistant/util/assistant_util.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/palette/palette_tray.h"
+#include "base/command_line.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash {
 
@@ -30,56 +34,44 @@ constexpr int kBubbleContentLabelPreferredWidthDp = 380;
 
 }  // namespace
 
-// Controlled by PaletteWelcomeBubble and anchored to a PaletteTray.
-class PaletteWelcomeBubble::WelcomeBubbleView
-    : public views::BubbleDialogDelegateView {
- public:
-  WelcomeBubbleView(views::View* anchor, views::BubbleBorder::Arrow arrow)
-      : views::BubbleDialogDelegateView(anchor, arrow) {
-    SetTitle(
-        l10n_util::GetStringUTF16(IDS_ASH_STYLUS_WARM_WELCOME_BUBBLE_TITLE));
-    SetShowTitle(true);
-    SetShowCloseButton(true);
-    SetButtons(ui::DIALOG_BUTTON_NONE);
-    set_close_on_deactivate(true);
-    SetCanActivate(false);
-    set_accept_events(true);
-    set_parent_window(
-        anchor_widget()->GetNativeWindow()->GetRootWindow()->GetChildById(
-            kShellWindowId_SettingBubbleContainer));
-    views::BubbleDialogDelegateView::CreateBubble(this);
-  }
+PaletteWelcomeBubbleView::PaletteWelcomeBubbleView(
+    views::View* anchor,
+    views::BubbleBorder::Arrow arrow)
+    : views::BubbleDialogDelegateView(anchor, arrow) {
+  SetTitle(l10n_util::GetStringUTF16(IDS_ASH_STYLUS_WARM_WELCOME_BUBBLE_TITLE));
+  SetShowTitle(true);
+  SetShowCloseButton(true);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+  set_close_on_deactivate(true);
+  SetCanActivate(false);
+  set_accept_events(true);
+  set_parent_window(
+      anchor_widget()->GetNativeWindow()->GetRootWindow()->GetChildById(
+          kShellWindowId_SettingBubbleContainer));
+  views::BubbleDialogDelegateView::CreateBubble(this);
+}
 
-  ~WelcomeBubbleView() override = default;
+void PaletteWelcomeBubbleView::Init() {
+  SetUseDefaultFillLayout(true);
+  views::Builder<views::BubbleDialogDelegateView>(this)
+      .AddChild(views::Builder<views::Label>()
+                    .SetText(l10n_util::GetStringUTF16(
+                        IDS_ASH_STYLUS_WARM_WELCOME_BUBBLE_DESCRIPTION))
+                    .SetHorizontalAlignment(gfx::ALIGN_LEFT)
+                    .SetMultiLine(true)
+                    .SizeToFit(kBubbleContentLabelPreferredWidthDp))
+      .BuildChildren();
+}
 
-  void Init() override {
-    SetLayoutManager(std::make_unique<views::FillLayout>());
-    auto* label = new views::Label(l10n_util::GetStringUTF16(
-        assistant::util::IsGoogleDevice()
-            ? IDS_ASH_STYLUS_WARM_WELCOME_BUBBLE_WITH_ASSISTANT_DESCRIPTION
-            : IDS_ASH_STYLUS_WARM_WELCOME_BUBBLE_DESCRIPTION));
-    label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    label->SetMultiLine(true);
-    label->SizeToFit(kBubbleContentLabelPreferredWidthDp);
-    AddChildView(label);
-  }
-
-  // views::View:
-  const char* GetClassName() const override { return "WelcomeBubbleView"; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WelcomeBubbleView);
-};
+BEGIN_METADATA(PaletteWelcomeBubbleView)
+END_METADATA
 
 PaletteWelcomeBubble::PaletteWelcomeBubble(PaletteTray* tray) : tray_(tray) {
   Shell::Get()->session_controller()->AddObserver(this);
 }
 
 PaletteWelcomeBubble::~PaletteWelcomeBubble() {
-  if (bubble_view_) {
-    bubble_view_->GetWidget()->RemoveObserver(this);
-    Shell::Get()->RemovePreTargetHandler(this);
-  }
+  DisconnectObservers();
   Shell::Get()->session_controller()->RemoveObserver(this);
   CHECK(!views::WidgetObserver::IsInObserverList());
 }
@@ -89,10 +81,9 @@ void PaletteWelcomeBubble::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kShownPaletteWelcomeBubble, false);
 }
 
-void PaletteWelcomeBubble::OnWidgetClosing(views::Widget* widget) {
-  widget->RemoveObserver(this);
-  bubble_view_ = nullptr;
-  Shell::Get()->RemovePreTargetHandler(this);
+void PaletteWelcomeBubble::OnWidgetDestroying(views::Widget* widget) {
+  DCHECK(bubble_view_ && bubble_view_->GetWidget() == widget);
+  DisconnectObservers();
 }
 
 void PaletteWelcomeBubble::OnActiveUserPrefServiceChanged(
@@ -104,15 +95,26 @@ void PaletteWelcomeBubble::ShowIfNeeded() {
   if (!active_user_pref_service_)
     return;
 
-  if (Shell::Get()->session_controller()->GetSessionState() !=
+  // The buble may interfere with some integration tests.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAshNoNudges)) {
+    return;
+  }
+
+  auto* session_controller = Shell::Get()->session_controller();
+  if (session_controller->GetSessionState() !=
       session_manager::SessionState::ACTIVE) {
     return;
   }
 
-  absl::optional<user_manager::UserType> user_type =
-      Shell::Get()->session_controller()->GetUserType();
-  if (user_type && (*user_type == user_manager::USER_TYPE_GUEST ||
-                    *user_type == user_manager::USER_TYPE_PUBLIC_ACCOUNT)) {
+  if (session_controller->IsRunningInAppMode()) {
+    return;
+  }
+
+  std::optional<user_manager::UserType> user_type =
+      session_controller->GetUserType();
+  if (user_type && (*user_type == user_manager::UserType::kGuest ||
+                    *user_type == user_manager::UserType::kPublicAccount)) {
     return;
   }
 
@@ -139,7 +141,7 @@ void PaletteWelcomeBubble::Show() {
   if (!bubble_view_) {
     DCHECK(tray_);
     bubble_view_ =
-        new WelcomeBubbleView(tray_, views::BubbleBorder::BOTTOM_RIGHT);
+        new PaletteWelcomeBubbleView(tray_, views::BubbleBorder::BOTTOM_RIGHT);
   }
   MarkAsShown();
   bubble_view_->GetWidget()->Show();
@@ -148,19 +150,29 @@ void PaletteWelcomeBubble::Show() {
 }
 
 void PaletteWelcomeBubble::Hide() {
-  if (bubble_view_)
+  if (bubble_view_) {
     bubble_view_->GetWidget()->Close();
+    DisconnectObservers();
+  }
+}
+
+void PaletteWelcomeBubble::DisconnectObservers() {
+  if (bubble_view_) {
+    bubble_view_->GetWidget()->RemoveObserver(this);
+    bubble_view_ = nullptr;
+  }
+  Shell::Get()->RemovePreTargetHandler(this);
 }
 
 void PaletteWelcomeBubble::OnMouseEvent(ui::MouseEvent* event) {
-  if (bubble_view_ && event->type() == ui::ET_MOUSE_PRESSED &&
+  if (bubble_view_ && event->type() == ui::EventType::kMousePressed &&
       event->target() != bubble_view_->GetWidget()->GetNativeView()) {
     bubble_view_->GetWidget()->Close();
   }
 }
 
 void PaletteWelcomeBubble::OnTouchEvent(ui::TouchEvent* event) {
-  if (bubble_view_ && event->type() == ui::ET_TOUCH_PRESSED &&
+  if (bubble_view_ && event->type() == ui::EventType::kTouchPressed &&
       event->target() != bubble_view_->GetWidget()->GetNativeView()) {
     bubble_view_->GetWidget()->Close();
   }

@@ -1,10 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_REMOTE_FONT_FACE_SOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_REMOTE_FONT_FACE_SOURCE_H_
 
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/css/css_font_face_source.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/loader/resource/font_resource.h"
@@ -14,19 +16,24 @@ namespace blink {
 
 class CSSFontFace;
 class Document;
-class FontSelector;
 class FontCustomPlatformData;
+class FontSelector;
+class IftFont;
 
 class RemoteFontFaceSource final : public CSSFontFaceSource,
                                    public FontResourceClient {
-  USING_PRE_FINALIZER(RemoteFontFaceSource, Dispose);
-
  public:
-  enum Phase { kNoLimitExceeded, kShortLimitExceeded, kLongLimitExceeded };
+  enum Phase : uint8_t {
+    kNoLimitExceeded,
+    kShortLimitExceeded,
+    kLongLimitExceeded
+  };
 
-  RemoteFontFaceSource(CSSFontFace*, FontSelector*, FontDisplay);
+  RemoteFontFaceSource(CSSFontFace*,
+                       FontSelector*,
+                       FontDisplay,
+                       scoped_refptr<base::SingleThreadTaskRunner>);
   ~RemoteFontFaceSource() override;
-  void Dispose();
 
   bool IsLoading() const override;
   bool IsLoaded() const override;
@@ -34,8 +41,10 @@ class RemoteFontFaceSource final : public CSSFontFaceSource,
 
   String GetURL() const override { return url_; }
 
+  bool IsPendingDataUrl() const override;
+
   const FontCustomPlatformData* GetCustomPlaftormData() const override {
-    return custom_font_data_.get();
+    return custom_font_data_.Get();
   }
 
   void BeginLoadIfNeeded() override;
@@ -49,18 +58,27 @@ class RemoteFontFaceSource final : public CSSFontFaceSource,
   bool IsInBlockPeriod() const override { return period_ == kBlockPeriod; }
   bool IsInFailurePeriod() const override { return period_ == kFailurePeriod; }
 
+  // For UMA reporting and 'font-display: optional' period control.
+  void PaintRequested() override;
+
   // For UMA reporting
   bool HadBlankText() override { return histograms_.HadBlankText(); }
-  void PaintRequested() override { histograms_.FallbackFontPainted(period_); }
+
+  ExecutionContext* GetExecutionContext() const;
+
+  // Replaces the font data with `custom_font_data` and invalidates the font
+  // face. Used by IFT fonts after patches have been applied.
+  void UpdateCustomFontData(const FontCustomPlatformData* custom_font_data);
+  // Invalidates the font face so that text using it is re-laid out.
+  void InvalidateFontFace();
 
   void Trace(Visitor*) const override;
 
  protected:
-  scoped_refptr<SimpleFontData> CreateFontData(
+  const SimpleFontData* CreateFontData(
       const FontDescription&,
       const FontSelectionCapabilities&) override;
-  scoped_refptr<SimpleFontData> CreateLoadingFallbackFontData(
-      const FontDescription&);
+  const SimpleFontData* CreateLoadingFallbackFontData(const FontDescription&);
 
  private:
   // Periods of the Font Display Timeline.
@@ -69,7 +87,7 @@ class RemoteFontFaceSource final : public CSSFontFaceSource,
   // the font is loaded from memory cache synchronously, and hence, made
   // immediately available. As we never need to use a fallback for it, using
   // other DisplayPeriod values seem artificial. So we use a special value.
-  enum DisplayPeriod {
+  enum DisplayPeriod : uint8_t {
     kBlockPeriod,
     kSwapPeriod,
     kFailurePeriod,
@@ -111,8 +129,9 @@ class RemoteFontFaceSource final : public CSSFontFaceSource,
     void MaySetDataSource(DataSource);
 
     static DataSource DataSourceForLoadFinish(const FontResource* font) {
-      if (font->Url().ProtocolIsData())
+      if (font->Url().ProtocolIsData()) {
         return kFromDataURL;
+      }
       return font->GetResponse().WasCached() ? kFromDiskCache : kFromNetwork;
     }
 
@@ -138,32 +157,32 @@ class RemoteFontFaceSource final : public CSSFontFaceSource,
   bool UpdatePeriod() override;
   bool ShouldTriggerWebFontsIntervention();
   bool IsLowPriorityLoadingAllowedForRemoteFont() const override;
-  FontDisplay GetFontDisplayWithDocumentPolicyCheck(FontDisplay,
-                                                    const FontSelector*,
-                                                    ReportOptions) const;
 
   // Our owning font face.
   Member<CSSFontFace> face_;
   Member<FontSelector> font_selector_;
 
   // |nullptr| if font is not loaded or failed to decode.
-  scoped_refptr<FontCustomPlatformData> custom_font_data_;
+  Member<const FontCustomPlatformData> custom_font_data_;
+  // |nullptr| if font is not an IFT font.
+  Member<IftFont> ift_font_;
   // |nullptr| if font is not loaded or failed to decode.
   String url_;
+
+  FontLoadHistograms histograms_;
 
   FontDisplay display_;
   Phase phase_;
   DisplayPeriod period_;
-  FontLoadHistograms histograms_;
   bool is_intervention_triggered_;
   bool finished_before_document_rendering_begin_;
 
-  // Indicates whether FontData has been requested while the font is still being
-  // loaded, in which case a fallback FontData is returned and used. If true, we
-  // will render contents with fallback font, and later if we would switch to
-  // the web font after it loads, there will be a layout shifting. Therefore, we
-  // don't need to worry about layout shifting when it's false.
-  bool has_been_requested_while_pending_;
+  // Indicates whether FontData has been requested for painting while the font
+  // is still being loaded, in which case we will paint with a fallback font. If
+  // true, and later if we would switch to the web font after it loads, there
+  // will be a layout shifting. Therefore, we don't need to worry about layout
+  // shifting when it's false.
+  bool paint_requested_while_pending_;
 
   bool finished_before_lcp_limit_;
 };

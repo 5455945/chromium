@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,14 +25,6 @@ bool BASE_EXPORT GetResourceFromModule(HMODULE module,
                                        LPCTSTR resource_type,
                                        void** data,
                                        size_t* length);
-
-// Function for getting a data resource (BINDATA) from a dll.  Some
-// resources are optional, especially in unit tests, so this returns false
-// but doesn't raise an error if the resource can't be loaded.
-bool BASE_EXPORT GetDataResourceFromModule(HMODULE module,
-                                           int resource_id,
-                                           void** data,
-                                           size_t* length);
 
 }  // namespace win
 }  // namespace base

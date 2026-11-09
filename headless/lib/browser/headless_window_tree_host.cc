@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,18 @@
 #include <memory>
 
 #include "base/containers/flat_set.h"
+#include "base/notimplemented.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "headless/lib/browser/headless_focus_client.h"
 #include "headless/lib/browser/headless_window_parenting_client.h"
 #include "ui/aura/window.h"
 #include "ui/events/keycodes/dom/dom_code.h"
-#include "ui/gfx/icc_profile.h"
 
 namespace headless {
 
 HeadlessWindowTreeHost::HeadlessWindowTreeHost(
     bool use_external_begin_frame_control) {
-  CreateCompositor(false, use_external_begin_frame_control);
+  CreateCompositor(use_external_begin_frame_control);
   OnAcceleratedWidgetAvailable();
 
   focus_client_ = std::make_unique<HeadlessFocusClient>();
@@ -57,13 +57,27 @@ gfx::Rect HeadlessWindowTreeHost::GetBoundsInPixels() const {
 }
 
 void HeadlessWindowTreeHost::SetBoundsInPixels(const gfx::Rect& bounds) {
-  bool origin_changed = bounds_.origin() != bounds.origin();
-  bool size_changed = bounds_.size() != bounds.size();
-  bounds_ = bounds;
-  if (origin_changed)
-    OnHostMovedInPixels(bounds.origin());
-  if (size_changed)
+  window()->SetBounds(bounds);
+
+  if (bounds_ != bounds) {
+    bool origin_changed = bounds_.origin() != bounds.origin();
+
+    bounds_ = bounds;
+
+    if (origin_changed) {
+      auto weak_ptr = GetWeakPtr();
+      OnHostMovedInPixels();
+      // Reporting the move may destroy |this|.
+      if (!weak_ptr) {
+        return;
+      }
+    }
+
+    // Report host size even if it is not changing to ensure the compositor
+    // layers are updated. Optimizing this away causes Page.captureScreenshot()
+    // to hang indefinitely. See https://crbug.com/40571433.
     OnHostResizedInPixels(bounds.size());
+  }
 }
 
 void HeadlessWindowTreeHost::ShowImpl() {}
@@ -71,7 +85,7 @@ void HeadlessWindowTreeHost::ShowImpl() {}
 void HeadlessWindowTreeHost::HideImpl() {}
 
 gfx::Point HeadlessWindowTreeHost::GetLocationOnScreenInPixels() const {
-  return gfx::Point();
+  return bounds_.origin();
 }
 
 void HeadlessWindowTreeHost::SetCapture() {}
@@ -79,7 +93,7 @@ void HeadlessWindowTreeHost::SetCapture() {}
 void HeadlessWindowTreeHost::ReleaseCapture() {}
 
 bool HeadlessWindowTreeHost::CaptureSystemKeyEventsImpl(
-    absl::optional<base::flat_set<ui::DomCode>> codes) {
+    std::optional<base::flat_set<ui::DomCode>> codes) {
   return false;
 }
 

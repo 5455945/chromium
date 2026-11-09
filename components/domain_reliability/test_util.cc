@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "components/domain_reliability/scheduler.h"
+#include "net/base/isolation_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace domain_reliability {
@@ -22,7 +24,7 @@ class MockTimer : public MockableTime::Timer {
     DCHECK(time);
   }
 
-  ~MockTimer() override {}
+  ~MockTimer() override = default;
 
   // MockableTime::Timer implementation:
   void Start(const base::Location& posted_from,
@@ -62,7 +64,7 @@ class MockTimer : public MockableTime::Timer {
     std::move(task_to_run).Run();
   }
 
-  MockTime* time_;
+  raw_ptr<MockTime> time_;
   bool running_;
   int callback_sequence_number_;
   base::OnceClosure user_task_;
@@ -90,14 +92,13 @@ MockUploader::~MockUploader() = default;
 
 bool MockUploader::discard_uploads() const { return discard_uploads_; }
 
-void MockUploader::UploadReport(
-    const std::string& report_json,
-    int max_upload_depth,
-    const GURL& upload_url,
-    const net::NetworkIsolationKey& network_isolation_key,
-    UploadCallback callback) {
-  callback_.Run(report_json, max_upload_depth, upload_url,
-                network_isolation_key, std::move(callback));
+void MockUploader::UploadReport(const std::string& report_json,
+                                int max_upload_depth,
+                                const GURL& upload_url,
+                                const net::IsolationInfo& isolation_info,
+                                UploadCallback callback) {
+  callback_.Run(report_json, max_upload_depth, upload_url, isolation_info,
+                std::move(callback));
 }
 
 void MockUploader::Shutdown() {}
@@ -123,7 +124,7 @@ MockTime::MockTime()
   VLOG(1) << "Creating mock time: T=" << elapsed_sec() << "s";
 }
 
-MockTime::~MockTime() {}
+MockTime::~MockTime() = default;
 
 base::Time MockTime::Now() const {
   return now_;
@@ -174,18 +175,19 @@ void MockTime::AdvanceToInternal(base::TimeTicks target_ticks) {
 
 DomainReliabilityScheduler::Params MakeTestSchedulerParams() {
   DomainReliabilityScheduler::Params params;
-  params.minimum_upload_delay = base::TimeDelta::FromMinutes(1);
-  params.maximum_upload_delay = base::TimeDelta::FromMinutes(5);
-  params.upload_retry_interval = base::TimeDelta::FromSeconds(15);
+  params.minimum_upload_delay = base::Minutes(1);
+  params.maximum_upload_delay = base::Minutes(5);
+  params.upload_retry_interval = base::Seconds(15);
   return params;
 }
 
 std::unique_ptr<DomainReliabilityConfig> MakeTestConfig() {
-  return MakeTestConfigWithOrigin(GURL("https://example/"));
+  return MakeTestConfigWithOrigin(
+      url::Origin::Create(GURL("https://example/")));
 }
 
 std::unique_ptr<DomainReliabilityConfig> MakeTestConfigWithOrigin(
-    const GURL& origin) {
+    const url::Origin& origin) {
   DomainReliabilityConfig* config = new DomainReliabilityConfig();
   config->origin = origin;
   config->collectors.push_back(

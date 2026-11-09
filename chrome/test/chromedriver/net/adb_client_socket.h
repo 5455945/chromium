@@ -1,12 +1,14 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_CHROMEDRIVER_NET_ADB_CLIENT_SOCKET_H_
 #define CHROME_TEST_CHROMEDRIVER_NET_ADB_CLIENT_SOCKET_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include <string>
+#include <string_view>
+
+#include "base/functional/callback.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/socket/stream_socket.h"
@@ -47,12 +49,16 @@ class AdbClientSocket {
                        const CommandCallback& callback);
 
   explicit AdbClientSocket(int port);
+
+  AdbClientSocket(const AdbClientSocket&) = delete;
+  AdbClientSocket& operator=(const AdbClientSocket&) = delete;
+
   ~AdbClientSocket();
 
  protected:
   void Connect(net::CompletionOnceCallback callback);
 
-  void SendCommand(const std::string& command,
+  void SendCommand(std::string_view command,
                    bool has_output,
                    bool has_length,
                    const CommandCallback& response_callback);
@@ -81,6 +87,5 @@ class AdbClientSocket {
   int port_;
 
   friend class AdbClientSocketTest;
-  DISALLOW_COPY_AND_ASSIGN(AdbClientSocket);
 };
 #endif  // CHROME_TEST_CHROMEDRIVER_NET_ADB_CLIENT_SOCKET_H_

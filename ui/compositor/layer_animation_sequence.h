@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -31,18 +30,16 @@ class LayerAnimationObserver;
 //
 // TODO(vollick) Create a 'blended' sequence for transitioning between
 // sequences.
-// TODO(vollick) Eventually, the LayerAnimator will switch to a model where new
-// work is scheduled rather than calling methods directly. This should make it
-// impossible for temporary pointers to running animations to go stale. When
-// this happens, there will be no need for LayerAnimationSequences to support
-// weak pointers.
-class COMPOSITOR_EXPORT LayerAnimationSequence
-    : public base::SupportsWeakPtr<LayerAnimationSequence> {
+class COMPOSITOR_EXPORT LayerAnimationSequence {
  public:
   LayerAnimationSequence();
   // Takes ownership of the given element and adds it to the sequence.
   explicit LayerAnimationSequence(
       std::unique_ptr<LayerAnimationElement> element);
+
+  LayerAnimationSequence(const LayerAnimationSequence&) = delete;
+  LayerAnimationSequence& operator=(const LayerAnimationSequence&) = delete;
+
   virtual ~LayerAnimationSequence();
 
   // Sets the start time for the animation. This must be called before the
@@ -142,6 +139,10 @@ class COMPOSITOR_EXPORT LayerAnimationSequence
 
   std::string ToString() const;
 
+  base::WeakPtr<LayerAnimationSequence> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   friend class LayerAnimatorTestController;
 
@@ -170,6 +171,9 @@ class COMPOSITOR_EXPORT LayerAnimationSequence
   // The currently animating element.
   LayerAnimationElement* CurrentElement() const;
 
+  // Returns the total duration of all `LayerAnimationElement`s in the sequence.
+  base::TimeDelta GetTotalDurationOfAllElements() const;
+
   // The union of all the properties modified by all elements in the sequence.
   LayerAnimationElement::AnimatableProperties properties_;
 
@@ -196,14 +200,21 @@ class COMPOSITOR_EXPORT LayerAnimationSequence
   // group id.
   int animation_group_id_;
 
-  // These parties are notified when layer animations end.
-  base::ObserverList<LayerAnimationObserver>::Unchecked observers_;
+  // It needs to be reentrant as an animation can be aborted from within the
+  // flow of insertion itself.
+  base::ReentrantObserverList<
+      LayerAnimationObserver>::UncheckedAndDanglingUntriaged observers_;
 
   // Tracks the last_progressed_fraction() of the most recently progressed
   // element.
   double last_progressed_fraction_;
 
-  DISALLOW_COPY_AND_ASSIGN(LayerAnimationSequence);
+  // TODO(vollick) Eventually, the LayerAnimator will switch to a model where
+  // new work is scheduled rather than calling methods directly. This should
+  // make it impossible for temporary pointers to running animations to go
+  // stale. When this happens, there will be no need for LayerAnimationSequences
+  // to support weak pointers.
+  base::WeakPtrFactory<LayerAnimationSequence> weak_ptr_factory_{this};
 };
 
 }  // namespace ui

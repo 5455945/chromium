@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -12,13 +12,13 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_job.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 class GURL;
@@ -45,10 +45,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemFactory {
       const base::FilePath& target_path,
       const std::vector<GURL>& url_chain,
       const GURL& referrer_url,
-      const GURL& site_url,
+      const std::string& serialized_embedder_data,
       const GURL& tab_url,
       const GURL& tab_refererr_url,
-      const absl::optional<url::Origin>& initiator_origin,
+      const std::optional<url::Origin>& initiator_origin,
       const std::string& mime_type,
       const std::string& original_mime_type,
       base::Time start_time,
@@ -75,6 +75,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemFactory {
       DownloadItemImplDelegate* delegate,
       uint32_t download_id,
       const base::FilePath& path,
+      const base::FilePath& display_name,
       const GURL& url,
       const std::string& mime_type,
       download::DownloadJob::CancelRequestCallback cancel_request_callback) = 0;

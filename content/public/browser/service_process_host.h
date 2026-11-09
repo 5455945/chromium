@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,52 @@
 #define CONTENT_PUBLIC_BROWSER_SERVICE_PROCESS_HOST_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list_types.h"
+#include "base/process/process.h"
 #include "base/process/process_handle.h"
-#include "base/strings/string_piece.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/service_process_info.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/system/message_pipe.h"
-#include "sandbox/policy/sandbox_type.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
+#include "url/gurl.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/files/file_path.h"
+#include "base/types/pass_key.h"
+#endif  // BUILDFLAG(IS_WIN)
+
+namespace base {
+class Process;
+}  // namespace base
 
 namespace content {
+// Passkeys for service process host Options.
+class ServiceProcessHostGpuClient;
+class ServiceProcessHostPreloadLibraries;
 
 // Sandbox type for ServiceProcessHost::Launch<remote>() is found by
 // template matching on |remote|. Consult security-dev@chromium.org and
-// add to an appropriate |service_sandbox_type.h|.
+// add a [ServiceSandbox=type] mojom attribute.
 template <typename Interface>
-inline sandbox::policy::SandboxType GetServiceSandboxType() = delete;
+inline sandbox::mojom::Sandbox GetServiceSandboxType() {
+  using ProvidedSandboxType = decltype(Interface::kServiceSandbox);
+  static_assert(
+      std::is_same<ProvidedSandboxType, const sandbox::mojom::Sandbox>::value,
+      "This interface does not declare a proper ServiceSandbox attribute. See "
+      "//docs/mojo_and_services.md (Specifying a sandbox).");
+
+  return Interface::kServiceSandbox;
+}
 
 // ServiceProcessHost is used to launch new service processes given basic
 // parameters like sandbox type, as well as a primordial Mojo interface to drive
@@ -39,7 +59,7 @@ inline sandbox::policy::SandboxType GetServiceSandboxType() = delete;
 //
 // Typical usage might look something like:
 //
-//   constexpr auto kFooServiceIdleTimeout = base::TimeDelta::FromSeconds(5);
+//   constexpr auto kFooServiceIdleTimeout = base::Seconds(5);
 //   auto foo_service = ServiceProcessHost::Launch<foo::mojom::FooService>(
 //       ServiceProcessHost::Options()
 //           .WithDisplayName(IDS_FOO_SERVICE_DISPLAY_NAME)
@@ -52,6 +72,9 @@ inline sandbox::policy::SandboxType GetServiceSandboxType() = delete;
 //
 class CONTENT_EXPORT ServiceProcessHost {
  public:
+  // Forward declaration for use in Options.
+  class Observer;
+
   struct CONTENT_EXPORT Options {
     Options();
     ~Options();
@@ -65,6 +88,10 @@ class CONTENT_EXPORT ServiceProcessHost {
     Options& WithDisplayName(const std::u16string& name);
     Options& WithDisplayName(int resource_id);
 
+    // Specifies the site associated with the service process, only needed for
+    // per-site service processes.
+    Options& WithSite(const GURL& url);
+
     // Specifies additional flags to configure the launched process. See
     // ChildProcessHost for flag definitions.
     Options& WithChildFlags(int flags);
@@ -72,21 +99,71 @@ class CONTENT_EXPORT ServiceProcessHost {
     // Specifies extra command line switches to append before launch.
     Options& WithExtraCommandLineSwitches(std::vector<std::string> switches);
 
+    // Specifies extra key/value command line switches to append before launch.
+    // Each pair is appended as "--<key>=<value>". Note that on Windows the key
+    // is lowercased, but the value is passed through as-is (case-preserving).
+    Options& WithExtraCommandLineSwitchKeyValues(
+        std::vector<std::pair<std::string, std::string>> switch_key_values);
+
+    // Specifies a callback to be invoked with service process once it's
+    // launched. Will be on UI thread.
+    Options& WithProcessCallback(
+        base::OnceCallback<void(const base::Process&)>);
+
+    // Specifies a per-instance observer to be notified of lifecycle events
+    // for this specific service process only. May only be called once per
+    // Options instance — CHECK-fails if called again. To fan out to multiple
+    // observers, use a service-specific manager class. The caller must provide
+    // a WeakPtr to ensure memory safety — if the observer is destroyed before
+    // the service process terminates, notifications are silently skipped.
+    // Will be called on the UI thread.
+    Options& WithObserver(base::WeakPtr<Observer> observer);
+
+#if BUILDFLAG(IS_WIN)
+    // Specifies libraries to preload before the sandbox is locked down. Paths
+    // should be absolute paths. Libraries will be preloaded before sandbox
+    // lockdown. They should later be "loaded" in the utility process using the
+    // same paths after lockdown.
+    // Note that preloading does not occur with --no-sandbox - hence the need to
+    // load in the utility with the full path - this api exists to make the
+    // libraries available for later loading in the sandbox.
+    Options& WithPreloadedLibraries(
+        std::vector<base::FilePath> preload_libraries,
+        base::PassKey<ServiceProcessHostPreloadLibraries> passkey);
+#endif  // BUILDFLAG(IS_WIN)
+
+    // Allows the viz.mojom.Gpu client to be bound via the process host on
+    // platforms where that is supported. This option will be removed in future.
+    // Prefer to avoid setting this option and instead bind the client directly
+    // by passing a `pending_receiver<viz.mojom.Gpu>` to the service via mojo.
+    Options& WithGpuClient(base::PassKey<ServiceProcessHostGpuClient> passkey);
+
+    // Specifies the process priority of the launched service process.
+    Options& WithPriority(base::Process::Priority priority);
+
     // Passes the contents of this Options object to a newly returned Options
     // value. This must be called when moving a built Options object into a call
     // to |Launch()|.
     Options Pass();
 
-    sandbox::policy::SandboxType sandbox_type =
-        sandbox::policy::SandboxType::kUtility;
     std::u16string display_name;
-    absl::optional<int> child_flags;
+    std::optional<GURL> site;
+    std::optional<int> child_flags;
     std::vector<std::string> extra_switches;
+    std::vector<std::pair<std::string, std::string>> extra_switch_key_values;
+    base::OnceCallback<void(const base::Process&)> process_callback;
+    base::WeakPtr<Observer> observer;
+#if BUILDFLAG(IS_WIN)
+    std::vector<base::FilePath> preload_libraries;
+#endif  // BUILDFLAG(IS_WIN)
+    std::optional<bool> allow_gpu_client;
+    std::optional<base::Process::Priority> priority;
   };
 
-  // An interface which can be implemented and registered/unregistered with
-  // |Add/RemoveObserver()| below to watch for all service process creation and
-  // and termination events globally. Methods are always called from the UI
+  // An interface which can be implemented and used with
+  // |Add/RemoveObserver()| to watch for all service process creation and
+  // termination events globally, or with |Options::WithObserver()| for
+  // per-instance lifecycle observation. Methods are always called from the
   // UI thread.
   class CONTENT_EXPORT Observer : public base::CheckedObserver {
    public:
@@ -120,9 +197,8 @@ class CONTENT_EXPORT ServiceProcessHost {
   template <typename Interface>
   static void Launch(mojo::PendingReceiver<Interface> receiver,
                      Options options = {}) {
-    options.sandbox_type = content::GetServiceSandboxType<Interface>();
     Launch(mojo::GenericPendingReceiver(std::move(receiver)),
-           std::move(options));
+           std::move(options), content::GetServiceSandboxType<Interface>());
   }
 
   // Same as above but creates a new |Interface| pipe on the caller's behalf and
@@ -131,10 +207,24 @@ class CONTENT_EXPORT ServiceProcessHost {
   // May be called from any thread.
   template <typename Interface>
   static mojo::Remote<Interface> Launch(Options options = {}) {
-    options.sandbox_type = content::GetServiceSandboxType<Interface>();
     mojo::Remote<Interface> remote;
-    Launch(remote.BindNewPipeAndPassReceiver(), std::move(options));
+    Launch(remote.BindNewPipeAndPassReceiver(), std::move(options),
+           content::GetServiceSandboxType<Interface>());
     return remote;
+  }
+
+  // Launches a service process and binds to the given ObservedServiceRemote,
+  // automatically wiring the observer hub. The caller only needs to register
+  // observers on the ObservedServiceRemote before calling this.
+  //
+  // Must be called from the UI thread.
+  template <typename ObservedRemote,
+            typename = typename ObservedRemote::InterfaceType>
+  static void Launch(ObservedRemote& observed, Options options = {}) {
+    using Interface = typename ObservedRemote::InterfaceType;
+    options.WithObserver(observed.AsWeakObserver());
+    Launch(observed.remote().BindNewPipeAndPassReceiver(), std::move(options),
+           GetServiceSandboxType<Interface>());
   }
 
   // Yields information about currently active service processes. Must be called
@@ -149,22 +239,20 @@ class CONTENT_EXPORT ServiceProcessHost {
   // |*observer| is destroyed and must be called from the UI thread only.
   static void RemoveObserver(Observer* observer);
 
+  // Clears any per-instance observer registrations matching |observer|.
+  // Provided for explicit cleanup in observer destructors. Not strictly
+  // required since WeakPtr handles safety, but avoids stale entries.
+  // Must be called from the UI thread only.
+  static void ClearInstanceObserver(Observer* observer);
+
  private:
   // Launches a new service process and asks it to bind a receiver for the
   // service interface endpoint carried by |receiver|, which should be connected
   // to a Remote of the same interface type.
-  static void Launch(mojo::GenericPendingReceiver receiver, Options options);
+  static void Launch(mojo::GenericPendingReceiver receiver,
+                     Options options,
+                     sandbox::mojom::Sandbox sandbox);
 };
-
-// DEPRECATED. DO NOT USE THIS. This is a helper for any remaining service
-// launching code which uses an older code path to launch services in a utility
-// process. All new code must use ServiceProcessHost instead of this API.
-void CONTENT_EXPORT LaunchUtilityProcessServiceDeprecated(
-    const std::string& service_name,
-    const std::u16string& display_name,
-    sandbox::policy::SandboxType sandbox_type,
-    mojo::ScopedMessagePipeHandle service_pipe,
-    base::OnceCallback<void(base::ProcessId)> callback);
 
 }  // namespace content
 

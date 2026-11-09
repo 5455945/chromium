@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/test/scoped_feature_list.h"
 #include "cc/animation/animation_host.h"
 #include "cc/base/math_util.h"
 #include "cc/layers/layer.h"
@@ -20,18 +21,18 @@
 #include "cc/test/fake_layer_tree_frame_sink.h"
 #include "cc/test/fake_layer_tree_host.h"
 #include "cc/test/fake_layer_tree_host_impl.h"
-#include "cc/test/geometry_test_utils.h"
 #include "cc/test/layer_test_common.h"
 #include "cc/test/property_tree_test_utils.h"
 #include "cc/test/test_occlusion_tracker.h"
 #include "cc/test/test_task_graph_runner.h"
 #include "cc/trees/draw_property_utils.h"
 #include "cc/trees/single_thread_proxy.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 namespace {
@@ -96,12 +97,15 @@ class OcclusionTrackerTest : public testing::Test {
   explicit OcclusionTrackerTest(bool opaque_layers)
       : opaque_layers_(opaque_layers),
         layer_tree_frame_sink_(FakeLayerTreeFrameSink::Create3d()),
-        animation_host_(AnimationHost::CreateForTesting(ThreadInstance::MAIN)),
-        host_(FakeLayerTreeHost::Create(&client_,
-                                        &task_graph_runner_,
-                                        animation_host_.get(),
-                                        LayerListSettings())),
+        animation_host_(AnimationHost::CreateForTesting(ThreadInstance::kMain)),
+        host_(
+            FakeLayerTreeHost::Create(&client_,
+                                      &task_graph_runner_,
+                                      animation_host_.get(),
+                                      CommitToPendingTreeLayerListSettings())),
         next_layer_impl_id_(1) {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kAllowUndamagedNonrootRenderPassToSkip);
     host_->CreateFakeLayerTreeHostImpl();
     host_->host_impl()->InitializeFrameSink(layer_tree_frame_sink_.get());
   }
@@ -206,43 +210,49 @@ class OcclusionTrackerTest : public testing::Test {
     LayerImpl* layer = CreateSurface(parent, transform, position, bounds);
     auto* effect_node = GetEffectNode(layer);
     effect_node->render_surface_reason = RenderSurfaceReason::kCopyRequest;
-    effect_node->has_copy_request = true;
     effect_node->closest_ancestor_with_copy_request_id = effect_node->id;
-    auto& effect_tree = GetPropertyTrees(layer)->effect_tree;
+    auto& effect_tree = GetPropertyTrees(layer)->effect_tree_mutable();
     effect_tree.AddCopyRequest(effect_node->id,
                                viz::CopyOutputRequest::CreateStubForTesting());
     // TODO(wangxianzhu): Let EffectTree::UpdateEffects() handle this.
     do {
       effect_node->subtree_has_copy_request = true;
-      effect_node = effect_tree.Node(effect_node->parent_id);
-    } while (effect_node && !effect_node->subtree_has_copy_request);
+      int parent_id = effect_node->parent_id;
+      if (parent_id == kInvalidPropertyNodeId) {
+        break;
+      }
+      effect_node = &effect_tree.MutableNode(parent_id);
+    } while (!effect_node->subtree_has_copy_request);
     return layer;
   }
+
+  // The tree traversed by |layer_iterator_|.
+  LayerTreeImpl& ActiveTree() { return *host_->host_impl()->active_tree(); }
 
   void CalcDrawEtc() {
     LayerTreeImpl* tree = host_->host_impl()->active_tree();
     tree->SetDeviceViewportRect(gfx::Rect(tree->root_layer()->bounds()));
     UpdateDrawProperties(tree);
 
-    layer_iterator_ = std::make_unique<EffectTreeLayerListIterator>(tree);
+    layer_iterator_ = std::make_unique<EffectTreeLayerListIterator>(*tree);
   }
 
 #define ASSERT_EQ_WITH_IDS(a, b) \
   ASSERT_EQ(a, b) << " ids: " << (a)->id() << " vs " << (b)->id()
 
   void EnterLayer(LayerImpl* layer, OcclusionTracker* occlusion) {
-    ASSERT_EQ(EffectTreeLayerListIterator::State::LAYER,
+    ASSERT_EQ(EffectTreeLayerListIterator::State::kLayer,
               layer_iterator_->state());
-    ASSERT_EQ_WITH_IDS(layer, layer_iterator_->current_layer());
-    occlusion->EnterLayer(*layer_iterator_);
+    ASSERT_EQ_WITH_IDS(layer, layer_iterator_->CurrentLayer(ActiveTree()));
+    occlusion->EnterLayer(*layer_iterator_, ActiveTree());
   }
 
   void LeaveLayer(LayerImpl* layer, OcclusionTracker* occlusion) {
-    ASSERT_EQ(EffectTreeLayerListIterator::State::LAYER,
+    ASSERT_EQ(EffectTreeLayerListIterator::State::kLayer,
               layer_iterator_->state());
-    ASSERT_EQ_WITH_IDS(layer, layer_iterator_->current_layer());
-    occlusion->LeaveLayer(*layer_iterator_);
-    ++(*layer_iterator_);
+    ASSERT_EQ_WITH_IDS(layer, layer_iterator_->CurrentLayer(ActiveTree()));
+    occlusion->LeaveLayer(*layer_iterator_, ActiveTree());
+    layer_iterator_->Advance(ActiveTree());
   }
 
   void VisitLayer(LayerImpl* layer, OcclusionTracker* occlusion) {
@@ -251,25 +261,25 @@ class OcclusionTrackerTest : public testing::Test {
   }
 
   void EnterContributingSurface(LayerImpl* layer, OcclusionTracker* occlusion) {
-    ASSERT_EQ(EffectTreeLayerListIterator::State::TARGET_SURFACE,
+    ASSERT_EQ(EffectTreeLayerListIterator::State::kTargetSurface,
               layer_iterator_->state());
     ASSERT_EQ_WITH_IDS(GetRenderSurface(layer),
-                       layer_iterator_->target_render_surface());
-    occlusion->EnterLayer(*layer_iterator_);
-    occlusion->LeaveLayer(*layer_iterator_);
-    ++(*layer_iterator_);
-    ASSERT_EQ(EffectTreeLayerListIterator::State::CONTRIBUTING_SURFACE,
+                       layer_iterator_->TargetRenderSurface(ActiveTree()));
+    occlusion->EnterLayer(*layer_iterator_, ActiveTree());
+    occlusion->LeaveLayer(*layer_iterator_, ActiveTree());
+    layer_iterator_->Advance(ActiveTree());
+    ASSERT_EQ(EffectTreeLayerListIterator::State::kContributingSurface,
               layer_iterator_->state());
-    occlusion->EnterLayer(*layer_iterator_);
+    occlusion->EnterLayer(*layer_iterator_, ActiveTree());
   }
 
   void LeaveContributingSurface(LayerImpl* layer, OcclusionTracker* occlusion) {
-    ASSERT_EQ(EffectTreeLayerListIterator::State::CONTRIBUTING_SURFACE,
+    ASSERT_EQ(EffectTreeLayerListIterator::State::kContributingSurface,
               layer_iterator_->state());
     ASSERT_EQ_WITH_IDS(GetRenderSurface(layer),
-                       layer_iterator_->current_render_surface());
-    occlusion->LeaveLayer(*layer_iterator_);
-    ++(*layer_iterator_);
+                       layer_iterator_->CurrentRenderSurface(ActiveTree()));
+    occlusion->LeaveLayer(*layer_iterator_, ActiveTree());
+    layer_iterator_->Advance(ActiveTree());
   }
 
   void VisitContributingSurface(LayerImpl* layer, OcclusionTracker* occlusion) {
@@ -278,8 +288,7 @@ class OcclusionTrackerTest : public testing::Test {
   }
 
   void ResetLayerIterator() {
-    *layer_iterator_ =
-        EffectTreeLayerListIterator(host_->host_impl()->active_tree());
+    *layer_iterator_ = EffectTreeLayerListIterator(ActiveTree());
   }
 
   const gfx::Transform identity_matrix;
@@ -309,8 +318,9 @@ class OcclusionTrackerTest : public testing::Test {
     }
   }
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   bool opaque_layers_;
-  FakeLayerTreeHostClient client_;
+  FakeLayerTreeHostDelegate client_;
   TestTaskGraphRunner task_graph_runner_;
   std::unique_ptr<LayerTreeFrameSink> layer_tree_frame_sink_;
   std::unique_ptr<AnimationHost> animation_host_;
@@ -1424,16 +1434,16 @@ class OcclusionTrackerTestDontOccludePixelsNeededForBackdropFilter
       gfx::Rect expected_occlusion = occlusion_rect;
       switch (i) {
         case LEFT:
-          expected_occlusion.Inset(0, 0, 30, 0);
+          expected_occlusion.Inset(gfx::Insets::TLBR(0, 0, 0, 30));
           break;
         case RIGHT:
-          expected_occlusion.Inset(30, 0, 0, 0);
+          expected_occlusion.Inset(gfx::Insets::TLBR(0, 30, 0, 0));
           break;
         case TOP:
-          expected_occlusion.Inset(0, 0, 0, 30);
+          expected_occlusion.Inset(gfx::Insets::TLBR(0, 0, 30, 0));
           break;
         case BOTTOM:
-          expected_occlusion.Inset(0, 30, 0, 0);
+          expected_occlusion.Inset(gfx::Insets::TLBR(30, 0, 0, 0));
           break;
       }
 
@@ -1460,8 +1470,8 @@ class OcclusionTrackerTestPixelsNeededForDropShadowBackdropFilter
     scale_by_half.Scale(0.5, 0.5);
 
     FilterOperations filters;
-    filters.Append(FilterOperation::CreateDropShadowFilter(gfx::Point(10, 10),
-                                                           5, SK_ColorBLACK));
+    filters.Append(FilterOperation::CreateDropShadowFilter(
+        gfx::Point(10, 10), 5, SkColors::kBlack));
 
     enum Direction {
       LEFT,

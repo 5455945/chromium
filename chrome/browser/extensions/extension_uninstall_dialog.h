@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/threading/thread_checker.h"
@@ -19,24 +19,26 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/uninstall_reason.h"
+#include "extensions/buildflags/buildflags.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/native_widget_types.h"
-#include "url/gurl.h"
+#include "ui/gfx/native_ui_types.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace ui {
 class NativeWindowTracker;
+}
 
 namespace extensions {
 class Extension;
 
-class ExtensionUninstallDialog
-    : public base::SupportsWeakPtr<ExtensionUninstallDialog>,
-      public ChromeAppIconDelegate,
-      public ExtensionRegistryObserver,
-      public ProfileObserver {
+class ExtensionUninstallDialog : public ChromeAppIconDelegate,
+                                 public ExtensionRegistryObserver,
+                                 public ProfileObserver {
  public:
-  // Implement this callback to handle checking for the dialog's header message.
-  using OnWillShowCallback =
-      base::RepeatingCallback<void(ExtensionUninstallDialog*)>;
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCancelButtonElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kOkButtonElementId);
 
   // The type of action the dialog took at close.
   // Do not reorder this enum as it is used in UMA histograms.
@@ -52,26 +54,23 @@ class ExtensionUninstallDialog
   class Delegate {
    public:
     // Called when the dialog closes.
-    // |did_start_uninstall| indicates whether the uninstall process for the
-    // extension started. If this is false, |error| will contain the reason.
+    // `did_start_uninstall` indicates whether the uninstall process for the
+    // extension started. If this is false, `error` will contain the reason.
     virtual void OnExtensionUninstallDialogClosed(bool did_start_uninstall,
                                                   const std::u16string& error) {
     }
 
    protected:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
   };
 
-  // Creates a platform specific implementation of ExtensionUninstallDialog. The
-  // dialog will be modal to |parent|, or a non-modal dialog if |parent| is
-  // NULL.
+  // Creates the implementation of `ExtensionUninstallDialog`. The dialog
+  // will be modal to `parent`, or a non-modal dialog if `parent` is NULL.
   static std::unique_ptr<ExtensionUninstallDialog>
   Create(Profile* profile, gfx::NativeWindow parent, Delegate* delegate);
 
-  // Create the Views implementation of ExtensionUninstallDialog, for use on
-  // platforms where that is not the native platform implementation.
-  static std::unique_ptr<ExtensionUninstallDialog>
-  CreateViews(Profile* profile, gfx::NativeWindow parent, Delegate* delegate);
+  ExtensionUninstallDialog(const ExtensionUninstallDialog&) = delete;
+  ExtensionUninstallDialog& operator=(const ExtensionUninstallDialog&) = delete;
 
   ~ExtensionUninstallDialog() override;
 
@@ -91,22 +90,18 @@ class ExtensionUninstallDialog
       UninstallReason reason,
       UninstallSource source);
 
-  std::string GetHeadingText();
-
-  GURL GetLaunchURL() const;
-
   // Returns true if a checkbox should be shown in the dialog.
   bool ShouldShowCheckbox() const;
-
-  // Returns the string to be displayed with the checkbox. Must not be called if
-  // ShouldShowCheckbox() returns false.
-  std::u16string GetCheckboxLabel() const;
 
   // Called when the dialog is closing to do any book-keeping.
   void OnDialogClosed(CloseAction action);
 
+  base::WeakPtr<ExtensionUninstallDialog> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
   // Called from unit test to check callbacks in dialog.
-  static void SetOnShownCallbackForTesting(OnWillShowCallback* callback);
+  static void SetOnShownCallbackForTesting(base::RepeatingClosure* callback);
 
  protected:
   // Constructor used by the derived classes.
@@ -115,8 +110,6 @@ class ExtensionUninstallDialog
                            Delegate* delegate);
 
   // Accessors for members.
-  const Profile* profile() const { return profile_; }
-  Delegate* delegate() const { return delegate_; }
   const Extension* extension() const { return extension_.get(); }
   const Extension* triggering_extension() const {
       return triggering_extension_.get(); }
@@ -124,7 +117,7 @@ class ExtensionUninstallDialog
   gfx::NativeWindow parent() { return parent_; }
 
  private:
-  // Uninstalls the extension. Returns true on success, and populates |error| on
+  // Uninstalls the extension. Returns true on success, and populates `error` on
   // failure.
   bool Uninstall(std::u16string* error);
 
@@ -151,13 +144,13 @@ class ExtensionUninstallDialog
   virtual void Close() = 0;
 
   // Resets to nullptr when the Profile is deleted.
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   // The dialog's parent window.
   gfx::NativeWindow parent_;
 
   // The delegate we will call Accepted/Canceled on after confirmation dialog.
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
   // The extension we are showing the dialog for.
   scoped_refptr<const Extension> extension_;
@@ -168,17 +161,14 @@ class ExtensionUninstallDialog
 
   std::unique_ptr<ChromeAppIcon> icon_;
 
-  // Tracks whether |parent_| got destroyed.
-  std::unique_ptr<NativeWindowTracker> parent_window_tracker_;
+  // Tracks whether `parent_` got destroyed.
+  std::unique_ptr<ui::NativeWindowTracker> parent_window_tracker_;
 
   // Indicates that dialog was shown.
   bool dialog_shown_ = false;
 
   // True if a checkbox for reporting abuse is shown.
   bool show_report_abuse_checkbox_ = false;
-
-  // True if a checkbox for removing associated data is shown.
-  bool show_remove_data_checkbox_ = false;
 
   // Whether the extension was uninstalled before the user closed the dialog
   // (e.g. by another source).
@@ -192,7 +182,7 @@ class ExtensionUninstallDialog
 
   base::ThreadChecker thread_checker_;
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionUninstallDialog);
+  base::WeakPtrFactory<ExtensionUninstallDialog> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

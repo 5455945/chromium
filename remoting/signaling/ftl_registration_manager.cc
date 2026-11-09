@@ -1,20 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/signaling/ftl_registration_manager.h"
 
+#include <array>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "remoting/base/http_status.h"
 #include "remoting/base/protobuf_http_client.h"
 #include "remoting/base/protobuf_http_request.h"
 #include "remoting/base/protobuf_http_request_config.h"
-#include "remoting/base/protobuf_http_status.h"
 #include "remoting/proto/ftl/v1/ftl_messages.pb.h"
 #include "remoting/signaling/ftl_device_id_provider.h"
 #include "remoting/signaling/ftl_services_context.h"
@@ -24,20 +25,18 @@ namespace remoting {
 
 namespace {
 
-constexpr remoting::ftl::ChromotingCapability::Feature
-    kChromotingCapabilities[] = {
-        remoting::ftl::ChromotingCapability_Feature_SERIALIZED_XMPP_SIGNALING};
-constexpr size_t kChromotingCapabilityCount =
-    sizeof(kChromotingCapabilities) /
-    sizeof(ftl::ChromotingCapability::Feature);
+constexpr auto kChromotingCapabilities =
+    std::to_array<remoting::ftl::ChromotingCapability::Feature>({
+        remoting::ftl::ChromotingCapability_Feature_SERIALIZED_XMPP_SIGNALING,
+    });
 
-constexpr remoting::ftl::FtlCapability::Feature kFtlCapabilities[] = {
-    remoting::ftl::FtlCapability_Feature_RECEIVE_CALLS_FROM_GAIA,
-    remoting::ftl::FtlCapability_Feature_GAIA_REACHABLE};
-constexpr size_t kFtlCapabilityCount =
-    sizeof(kFtlCapabilities) / sizeof(ftl::FtlCapability::Feature);
+constexpr auto kFtlCapabilities =
+    std::to_array<remoting::ftl::FtlCapability::Feature>({
+        remoting::ftl::FtlCapability_Feature_RECEIVE_CALLS_FROM_GAIA,
+        remoting::ftl::FtlCapability_Feature_GAIA_REACHABLE,
+    });
 
-constexpr base::TimeDelta kRefreshBufferTime = base::TimeDelta::FromHours(1);
+constexpr base::TimeDelta kRefreshBufferTime = base::Hours(1);
 
 constexpr char kSignInGaiaPath[] = "/v1/registration:signingaia";
 
@@ -72,6 +71,10 @@ class FtlRegistrationManager::RegistrationClientImpl final
   RegistrationClientImpl(
       OAuthTokenGetter* token_getter,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
+  RegistrationClientImpl(const RegistrationClientImpl&) = delete;
+  RegistrationClientImpl& operator=(const RegistrationClientImpl&) = delete;
+
   ~RegistrationClientImpl() override;
 
   // RegistrationClient implementations.
@@ -81,8 +84,6 @@ class FtlRegistrationManager::RegistrationClientImpl final
 
  private:
   ProtobufHttpClient http_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(RegistrationClientImpl);
 };
 
 FtlRegistrationManager::RegistrationClientImpl::RegistrationClientImpl(
@@ -103,6 +104,11 @@ void FtlRegistrationManager::RegistrationClientImpl::SignInGaia(
   request_config->path = kSignInGaiaPath;
   request_config->request_message =
       std::make_unique<ftl::SignInGaiaRequest>(request);
+#if !defined(NDEBUG)
+  // Debug builds default to sandbox endpoints which require client certificate
+  // authentication (mTLS) at the edge.
+  request_config->provide_certificate = true;
+#endif
   auto http_request =
       std::make_unique<ProtobufHttpRequest>(std::move(request_config));
   http_request->SetResponseCallback(std::move(on_done));
@@ -174,12 +180,12 @@ void FtlRegistrationManager::DoSignInGaia(DoneCallback on_done) {
   *request.mutable_register_data()->mutable_device_id() =
       device_id_provider_->GetDeviceId();
 
-  for (size_t i = 0; i < kChromotingCapabilityCount; i++) {
-    request.mutable_register_data()->add_caps(kChromotingCapabilities[i]);
+  for (const auto& capability : kChromotingCapabilities) {
+    request.mutable_register_data()->add_caps(capability);
   }
 
-  for (size_t i = 0; i < kFtlCapabilityCount; i++) {
-    request.mutable_register_data()->add_caps(kFtlCapabilities[i]);
+  for (const auto& capability : kFtlCapabilities) {
+    request.mutable_register_data()->add_caps(capability);
   }
 
   registration_client_->SignInGaia(
@@ -189,7 +195,7 @@ void FtlRegistrationManager::DoSignInGaia(DoneCallback on_done) {
 
 void FtlRegistrationManager::OnSignInGaiaResponse(
     DoneCallback on_done,
-    const ProtobufHttpStatus& status,
+    const HttpStatus& status,
     std::unique_ptr<ftl::SignInGaiaResponse> response) {
   registration_id_.clear();
 
@@ -205,8 +211,8 @@ void FtlRegistrationManager::OnSignInGaiaResponse(
   sign_in_backoff_.Reset();
   registration_id_ = response->registration_id();
   if (registration_id_.empty()) {
-    std::move(on_done).Run(ProtobufHttpStatus(ProtobufHttpStatus::Code::UNKNOWN,
-                                              "registration_id is empty."));
+    std::move(on_done).Run(
+        HttpStatus(HttpStatus::Code::UNKNOWN, "registration_id is empty."));
     return;
   }
 
@@ -214,7 +220,7 @@ void FtlRegistrationManager::OnSignInGaiaResponse(
   ftl_auth_token_ = response->auth_token().payload();
   VLOG(1) << "Auth token set on FtlClient";
   base::TimeDelta refresh_delay =
-      base::TimeDelta::FromMicroseconds(response->auth_token().expires_in());
+      base::Microseconds(response->auth_token().expires_in());
   if (refresh_delay > kRefreshBufferTime) {
     refresh_delay -= kRefreshBufferTime;
   } else {
@@ -223,8 +229,7 @@ void FtlRegistrationManager::OnSignInGaiaResponse(
   sign_in_refresh_timer_.Start(
       FROM_HERE, refresh_delay,
       base::BindOnce(&FtlRegistrationManager::SignInGaia,
-                     base::Unretained(this),
-                     base::DoNothing::Once<const ProtobufHttpStatus&>()));
+                     base::Unretained(this), base::DoNothing()));
   VLOG(1) << "Scheduled auth token refresh in: " << refresh_delay;
   std::move(on_done).Run(status);
 }

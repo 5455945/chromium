@@ -1,11 +1,12 @@
 Name: logdog
 Short Name: logdog
 URL: https://chromium.googlesource.com/infra/luci/luci-py/client/libs/logdog
-Version: 9a84af84d3fa62b230569cf1d3abf69cc7c576e2
-Revision: 9a84af84d3fa62b230569cf1d3abf69cc7c576e2
-License: Apache 2.0
-License File: NOT_SHIPPED
+Version: 17ec234f823f7bff6ada6584fdbbee9d54b8fc58
+Revision: 17ec234f823f7bff6ada6584fdbbee9d54b8fc58
+Update Mechanism: Manual
+License: Apache-2.0
 Security Critical: no
+Shipped: no
 
 Description:
 This is used from build/android/pylib/utils/logdog_helper.py

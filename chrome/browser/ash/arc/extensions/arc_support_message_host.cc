@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,11 @@
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/arc/arc_support_host.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 
 namespace arc {
-
-// static
-const char ArcSupportMessageHost::kHostName[] = "com.google.arc_support";
-
-// static
-const char* const ArcSupportMessageHost::kHostOrigin[] = {
-    "chrome-extension://cnbgggchhmkkdmeppjobngjoejnihlei/"};
 
 // static
 std::unique_ptr<extensions::NativeMessageHost> ArcSupportMessageHost::Create(
@@ -36,35 +28,33 @@ ArcSupportMessageHost::~ArcSupportMessageHost() {
   // disconnects to this instance on shutdown already.
   ArcSessionManager* arc_session_manager = ArcSessionManager::Get();
   if (arc_session_manager) {
-    DCHECK(arc_session_manager->support_host());
+    CHECK(arc_session_manager->support_host(), base::NotFatalUntil::M160);
     arc_session_manager->support_host()->UnsetMessageHost(this);
   }
 }
 
-void ArcSupportMessageHost::SendMessage(const base::Value& message) {
+void ArcSupportMessageHost::SendMessage(const base::ValueView& message) {
   if (!client_)
     return;
 
-  std::string message_string;
-  base::JSONWriter::Write(message, &message_string);
-  client_->PostMessageFromNativeHost(message_string);
+  client_->PostMessageFromNativeHost(base::WriteJson(message).value_or(""));
 }
 
 void ArcSupportMessageHost::SetObserver(Observer* observer) {
   // We assume that the observer instance is only ArcSupportHost, which is
   // currently system unique. This is also used to reset the observere,
   // so |observer| xor |observer_| needs to be nullptr.
-  DCHECK(!observer != !observer_);
+  CHECK(!observer != !observer_, base::NotFatalUntil::M160);
   observer_ = observer;
 }
 
 void ArcSupportMessageHost::Start(Client* client) {
-  DCHECK(!client_);
+  CHECK(!client_, base::NotFatalUntil::M160);
   client_ = client;
 
   ArcSessionManager* arc_session_manager = ArcSessionManager::Get();
   if (arc_session_manager) {
-    DCHECK(arc_session_manager->support_host());
+    CHECK(arc_session_manager->support_host(), base::NotFatalUntil::M160);
     arc_session_manager->support_host()->SetMessageHost(this);
   }
 }
@@ -73,12 +63,14 @@ void ArcSupportMessageHost::OnMessage(const std::string& message_string) {
   if (!observer_)
     return;
 
-  std::unique_ptr<base::Value> message_value =
-      base::JSONReader::ReadDeprecated(message_string);
-  base::DictionaryValue* message;
-  if (!message_value || !message_value->GetAsDictionary(&message)) {
+  // |message_string| comes from the ARC support extension via native messaging,
+  // which on Chrome OS runs in the browser process.
+  // Therefore this use of JSONReader does not violate
+  // https://chromium.googlesource.com/chromium/src/+/HEAD/docs/security/rule-of-2.md.
+  std::optional<base::DictValue> message = base::JSONReader::ReadDict(
+      message_string, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!message) {
     NOTREACHED();
-    return;
   }
 
   observer_->OnMessage(*message);
@@ -86,7 +78,7 @@ void ArcSupportMessageHost::OnMessage(const std::string& message_string) {
 
 scoped_refptr<base::SingleThreadTaskRunner> ArcSupportMessageHost::task_runner()
     const {
-  return base::ThreadTaskRunnerHandle::Get();
+  return base::SingleThreadTaskRunner::GetCurrentDefault();
 }
 
 }  // namespace arc

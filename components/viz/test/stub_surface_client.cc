@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,18 @@ StubSurfaceClient::StubSurfaceClient() = default;
 
 StubSurfaceClient::~StubSurfaceClient() = default;
 
-std::vector<PendingCopyOutputRequest> StubSurfaceClient::TakeCopyOutputRequests(
+std::vector<std::unique_ptr<PendingCopyOutputRequest>>
+StubSurfaceClient::TakeCopyOutputRequests(
     const LocalSurfaceId& latest_surface_id) {
-  return std::vector<PendingCopyOutputRequest>();
+  return {};
 }
 
 bool StubSurfaceClient::IsVideoCaptureStarted() {
   return false;
+}
+
+std::vector<Thread> StubSurfaceClient::GetThreads() {
+  return {};
 }
 
 }  // namespace viz

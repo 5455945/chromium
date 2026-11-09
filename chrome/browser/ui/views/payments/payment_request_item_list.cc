@@ -1,13 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/payments/payment_request_item_list.h"
 
-#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/browser/ui/views/payments/payment_request_views_util.h"
@@ -15,16 +14,16 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/color_utils.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/layout/grid_layout.h"
 #include "ui/views/vector_icons.h"
 #include "ui/views/view.h"
 
@@ -34,7 +33,7 @@ namespace {
 
 constexpr SkColor kCheckmarkColor = 0xFF609265;
 
-constexpr gfx::Insets kRowInsets = gfx::Insets(
+constexpr auto kRowInsets = gfx::Insets::TLBR(
     kPaymentRequestRowVerticalInsets,
     kPaymentRequestRowHorizontalInsets,
     kPaymentRequestRowVerticalInsets,
@@ -63,66 +62,53 @@ PaymentRequestItemList::Item::Item(base::WeakPtr<PaymentRequestSpec> spec,
       selected_(selected),
       show_edit_button_(show_edit_button) {}
 
-PaymentRequestItemList::Item::~Item() {}
+PaymentRequestItemList::Item::~Item() = default;
 
 void PaymentRequestItemList::Item::Init() {
-  std::unique_ptr<views::View> content =
-      CreateContentView(&accessible_item_description_);
+  views::BoxLayout* layout =
+      SetLayoutManager(std::make_unique<views::BoxLayout>());
+  layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  views::GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>());
+  views::View* content_view =
+      AddChildView(CreateContentView(&accessible_item_description_));
+  content_view->SetCanProcessEventsWithinSubtree(false);
+  layout->SetFlexForView(content_view, 1);
 
-  // Add a column for the item's content view.
-  views::ColumnSet* columns = layout->AddColumnSet(0);
-  columns->AddColumn(views::GridLayout::FILL, views::GridLayout::LEADING, 1.0,
-                     views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
+  // The container view contains the checkmark shown next to the selected
+  // profile, an optional extra_view and an optional edit_button.
+  views::View* container = AddChildView(std::make_unique<views::View>());
+  views::BoxLayout* container_layout =
+      container->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+          kExtraViewSpacing));
+  container_layout->set_main_axis_alignment(
+      views::BoxLayout::MainAxisAlignment::kEnd);
+  container_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  // Add a column for the checkmark shown next to the selected profile.
-  columns->AddColumn(views::GridLayout::TRAILING, views::GridLayout::CENTER,
-                     views::GridLayout::kFixedSize,
-                     views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
+  container->AddChildView(CreateCheckmark(selected() && GetClickable()));
 
-  std::unique_ptr<views::View> extra_view = CreateExtraView();
-  if (extra_view) {
-    columns->AddPaddingColumn(views::GridLayout::kFixedSize, kExtraViewSpacing);
-    // Add a column for the extra_view, which comes after the checkmark.
-    columns->AddColumn(views::GridLayout::TRAILING, views::GridLayout::CENTER,
-                       views::GridLayout::kFixedSize,
-                       views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
+  if (std::unique_ptr<views::View> extra_view = CreateExtraView()) {
+    container->AddChildView(std::move(extra_view));
   }
-
-  if (show_edit_button_) {
-    columns->AddPaddingColumn(views::GridLayout::kFixedSize, kExtraViewSpacing);
-    // Add a column for the edit_button if it exists.
-    columns->AddColumn(views::GridLayout::TRAILING, views::GridLayout::CENTER,
-                       views::GridLayout::kFixedSize,
-                       views::GridLayout::ColumnSize::kFixed, kEditIconSize,
-                       kEditIconSize);
-  }
-
-  layout->StartRow(views::GridLayout::kFixedSize, 0);
-  content->SetCanProcessEventsWithinSubtree(false);
-  layout->AddView(std::move(content));
-
-  layout->AddView(CreateCheckmark(selected() && GetClickable()));
-
-  if (extra_view)
-    layout->AddView(std::move(extra_view));
 
   if (show_edit_button_) {
     auto edit_button = views::CreateVectorImageButton(
         base::BindRepeating(&Item::EditButtonPressed, base::Unretained(this)));
-    const SkColor icon_color =
-        color_utils::DeriveDefaultIconColor(SK_ColorBLACK);
-    edit_button->SetImage(views::Button::STATE_NORMAL,
-                          gfx::CreateVectorIcon(vector_icons::kEditIcon,
-                                                kEditIconSize, icon_color));
-    views::InkDrop::Get(edit_button.get())->SetBaseColor(icon_color);
+    edit_button->SetBorder(nullptr);
+    edit_button->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kEditFilledIcon
+                                           : vector_icons::kEditOldIcon,
+                                       ui::kColorIcon, kEditIconSize));
+    views::InkDrop::Get(edit_button.get())->SetBaseColor(ui::kColorIcon);
     edit_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     edit_button->SetID(static_cast<int>(DialogViewID::EDIT_ITEM_BUTTON));
-    edit_button->SetAccessibleName(
+    edit_button->GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_PAYMENTS_EDIT));
-    layout->AddView(std::move(edit_button));
+    container->AddChildView(std::move(edit_button));
   }
 
   UpdateAccessibleName();
@@ -131,16 +117,18 @@ void PaymentRequestItemList::Item::Init() {
 void PaymentRequestItemList::Item::SetSelected(bool selected, bool notify) {
   selected_ = selected;
 
-  for (views::View* child : children())
+  for (views::View* child : children()) {
     if (child->GetID() == static_cast<int>(DialogViewID::CHECKMARK_VIEW)) {
       child->SetVisible(selected);
       break;
     }
+  }
 
   UpdateAccessibleName();
 
-  if (notify)
+  if (notify) {
     SelectedStateChanged();
+  }
 }
 
 std::unique_ptr<views::ImageView> PaymentRequestItemList::Item::CreateCheckmark(
@@ -149,8 +137,10 @@ std::unique_ptr<views::ImageView> PaymentRequestItemList::Item::CreateCheckmark(
       std::make_unique<views::ImageView>();
   checkmark->SetID(static_cast<int>(DialogViewID::CHECKMARK_VIEW));
   checkmark->SetCanProcessEventsWithinSubtree(false);
-  checkmark->SetImage(
-      gfx::CreateVectorIcon(views::kMenuCheckIcon, kCheckmarkColor));
+  checkmark->SetImage(ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? views::kCheckIcon
+                                        : views::kMenuCheckOldIcon,
+      kCheckmarkColor));
   checkmark->SetVisible(selected);
   checkmark->SetFocusBehavior(views::View::FocusBehavior::NEVER);
   return checkmark;
@@ -168,14 +158,15 @@ void PaymentRequestItemList::Item::UpdateAccessibleName() {
                 : l10n_util::GetStringFUTF16(
                       IDS_PAYMENTS_ROW_ACCESSIBLE_NAME_FORMAT,
                       GetNameForDataType(), accessible_item_description_);
-  SetAccessibleName(accessible_content);
+  GetViewAccessibility().SetName(accessible_content);
 }
 
 void PaymentRequestItemList::Item::ButtonPressed() {
   if (selected_) {
     // |dialog()| may be null in tests
-    if (list_->dialog())
+    if (list_->dialog()) {
       list_->dialog()->GoBack();
+    }
   } else if (CanBeSelected()) {
     list()->SelectItem(this);
   } else {
@@ -183,21 +174,26 @@ void PaymentRequestItemList::Item::ButtonPressed() {
   }
 }
 
+BEGIN_METADATA(PaymentRequestItemList, Item)
+END_METADATA
+
 PaymentRequestItemList::PaymentRequestItemList(
     base::WeakPtr<PaymentRequestDialogView> dialog)
     : selected_item_(nullptr), dialog_(dialog) {}
 
-PaymentRequestItemList::~PaymentRequestItemList() {}
+PaymentRequestItemList::~PaymentRequestItemList() = default;
 
 void PaymentRequestItemList::AddItem(
     std::unique_ptr<PaymentRequestItemList::Item> item) {
-  DCHECK_EQ(this, item->list());
-  if (!items_.empty())
+  CHECK_EQ(this, item->list(), base::NotFatalUntil::M162);
+  if (!items_.empty()) {
     item->set_previous_row(items_.back()->AsWeakPtr());
+  }
   items_.push_back(std::move(item));
   if (items_.back()->selected()) {
-    if (selected_item_)
+    if (selected_item_) {
       selected_item_->SetSelected(/*selected=*/false, /*notify=*/false);
+    }
     selected_item_ = items_.back().get();
   }
 }
@@ -212,18 +208,20 @@ std::unique_ptr<views::View> PaymentRequestItemList::CreateListView() {
 
   content_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
-      gfx::Insets(kPaymentRequestRowVerticalInsets, 0), 0));
+      gfx::Insets::VH(kPaymentRequestRowVerticalInsets, 0), 0));
 
-  for (auto& item : items_)
-    content_view->AddChildView(item.release());
+  for (auto& item : items_) {
+    content_view->AddChildViewRaw(item.release());
+  }
 
   return content_view;
 }
 
 void PaymentRequestItemList::SelectItem(PaymentRequestItemList::Item* item) {
-  DCHECK_EQ(this, item->list());
-  if (selected_item_ == item)
+  CHECK_EQ(this, item->list(), base::NotFatalUntil::M162);
+  if (selected_item_ == item) {
     return;
+  }
 
   UnselectSelectedItem();
 
@@ -235,8 +233,9 @@ void PaymentRequestItemList::UnselectSelectedItem() {
   // It's possible that no item is currently selected, either during list
   // creation or in the middle of the selection operation when the previously
   // selected item has been deselected but the new one isn't selected yet.
-  if (selected_item_)
+  if (selected_item_) {
     selected_item_->SetSelected(/*selected=*/false, /*notify=*/true);
+  }
 
   selected_item_ = nullptr;
 }

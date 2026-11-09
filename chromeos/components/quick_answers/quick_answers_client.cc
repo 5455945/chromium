@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,15 @@
 
 #include <utility>
 
-#include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
+#include "chromeos/components/quick_answers/public/cpp/quick_answers_state.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_metrics.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
+#include "chromeos/components/quick_answers/utils/spell_checker.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
-namespace chromeos {
 namespace quick_answers {
 namespace {
-
-using network::mojom::URLLoaderFactory;
 
 QuickAnswersClient::ResultLoaderFactoryCallback*
     g_testing_result_factory_callback = nullptr;
@@ -37,11 +35,12 @@ void QuickAnswersClient::SetIntentGeneratorFactoryForTesting(
   g_testing_intent_generator_factory_callback = factory;
 }
 
-QuickAnswersClient::QuickAnswersClient(URLLoaderFactory* url_loader_factory,
-                                       QuickAnswersDelegate* delegate)
+QuickAnswersClient::QuickAnswersClient(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    QuickAnswersDelegate* delegate)
     : url_loader_factory_(url_loader_factory),
-      delegate_(delegate) {
-}
+      delegate_(delegate),
+      spell_checker_(std::make_unique<SpellChecker>(url_loader_factory)) {}
 
 QuickAnswersClient::~QuickAnswersClient() = default;
 
@@ -88,6 +87,7 @@ std::unique_ptr<IntentGenerator> QuickAnswersClient::CreateIntentGenerator(
   if (g_testing_intent_generator_factory_callback)
     return g_testing_intent_generator_factory_callback->Run();
   return std::make_unique<IntentGenerator>(
+      spell_checker_ ? spell_checker_->GetWeakPtr() : nullptr,
       base::BindOnce(&QuickAnswersClient::IntentGeneratorCallback,
                      weak_factory_.GetWeakPtr(), request, skip_fetch));
 }
@@ -98,10 +98,10 @@ void QuickAnswersClient::OnNetworkError() {
 }
 
 void QuickAnswersClient::OnQuickAnswerReceived(
-    std::unique_ptr<QuickAnswer> quick_answer) {
+    std::unique_ptr<QuickAnswersSession> quick_answers_session) {
   DCHECK(delegate_);
   quick_answer_received_time_ = base::TimeTicks::Now();
-  delegate_->OnQuickAnswerReceived(std::move(quick_answer));
+  delegate_->OnQuickAnswerReceived(std::move(quick_answers_session));
 }
 
 void QuickAnswersClient::SendRequestInternal(
@@ -126,7 +126,7 @@ void QuickAnswersClient::IntentGeneratorCallback(
 
   delegate_->OnRequestPreprocessFinished(processed_request);
 
-  if (features::ShouldUseQuickAnswersTextAnnotator()) {
+  if (QuickAnswersState::Get()->ShouldUseQuickAnswersTextAnnotator()) {
     RecordIntentType(intent_info.intent_type);
     if (intent_info.intent_type == IntentType::kUnknown) {
       // Don't fetch answer if no intent is generated.
@@ -152,4 +152,3 @@ base::TimeDelta QuickAnswersClient::GetImpressionDuration() const {
 }
 
 }  // namespace quick_answers
-}  // namespace chromeos

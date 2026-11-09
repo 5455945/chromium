@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -66,7 +66,7 @@ bool IsValidUrlForPayments(const GURL& url,
       return false;
   }
 
-  if (url.has_ref() || url.has_query() || url.path() != "/") {
+  if (url.has_ref() || url.has_query() || url.GetPath() != "/") {
     if (path_query_ref == PathQueryRef::kProhibitedInSupportedOrigins)
       return false;
   }

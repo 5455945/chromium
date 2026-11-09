@@ -1,94 +1,76 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/style/style_variables.h"
 
-#include "third_party/blink/renderer/core/style/data_equivalency.h"
+#include "base/memory/values_equivalent.h"
 
 namespace blink {
 
-namespace {
-
-using OptionalData = StyleVariables::OptionalData;
-using OptionalValue = StyleVariables::OptionalValue;
-
-bool IsEqual(const OptionalData& a, const OptionalData& b) {
-  if (a.has_value() != b.has_value())
-    return false;
-  if (!a.has_value())
-    return true;
-  return DataEquivalent(a.value(), b.value());
-}
-
-bool IsEqual(const OptionalValue& a, const OptionalValue& b) {
-  if (a.has_value() != b.has_value())
-    return false;
-  if (!a.has_value())
-    return true;
-  return DataEquivalent(a.value(), b.value());
-}
-
-}  // namespace
-
-StyleVariables::StyleVariables() : values_(MakeGarbageCollected<ValueMap>()) {}
-
-StyleVariables::StyleVariables(const StyleVariables& other)
-    : data_(other.data_),
-      values_(MakeGarbageCollected<ValueMap>(*other.values_)) {}
-
 bool StyleVariables::operator==(const StyleVariables& other) const {
-  if (data_.size() != other.data_.size())
+  if (data_hash_ != other.data_hash_ || values_hash_ != other.values_hash_) {
     return false;
-
-  for (const auto& pair : data_) {
-    if (!IsEqual(GetData(pair.key), other.GetData(pair.key)))
-      return false;
   }
 
-  if (values_->size() != other.values_->size())
-    return false;
+  // NOTE: If two roots are equal but not the same, we set them
+  // to be the same (we arbitrarily pick the one with the lowest
+  // pointer value, so that we know we'll never flip-flop between
+  // three or more). We could have done this on HashTrieNode
+  // to get partial deduplication, but it doesn't seem to be worth it.
 
-  for (const auto& pair : *values_) {
-    if (!IsEqual(GetValue(pair.key), other.GetValue(pair.key)))
+  if (data_root_ != other.data_root_) {
+    if (*data_root_ == *other.data_root_) {
+      data_root_ = other.data_root_ = std::min(data_root_, other.data_root_);
+      data_root_->MakeShared();
+    } else {
       return false;
+    }
+  }
+
+  if (values_root_ != other.values_root_) {
+    if (*values_root_ == *other.values_root_) {
+      values_root_ = other.values_root_ =
+          std::min(values_root_, other.values_root_);
+      values_root_->MakeShared();
+    } else {
+      return false;
+    }
   }
 
   return true;
 }
 
-StyleVariables::OptionalData StyleVariables::GetData(
-    const AtomicString& name) const {
-  auto i = data_.find(name);
-  if (i != data_.end())
-    return i->value.get();
-  return absl::nullopt;
-}
-
-StyleVariables::OptionalValue StyleVariables::GetValue(
-    const AtomicString& name) const {
-  auto i = values_->find(name);
-  if (i != values_->end())
-    return i->value;
-  return absl::nullopt;
-}
-
-void StyleVariables::SetData(const AtomicString& name,
-                             scoped_refptr<CSSVariableData> data) {
-  data_.Set(name, std::move(data));
+void StyleVariables::SetData(const AtomicString& name, CSSVariableData* data) {
+  data_root_ = data_root_->Set(name, data, data_hash_);
 }
 
 void StyleVariables::SetValue(const AtomicString& name, const CSSValue* value) {
-  values_->Set(name, value);
+  values_root_ = values_root_->Set(name, value, values_hash_);
 }
 
 bool StyleVariables::IsEmpty() const {
-  return data_.IsEmpty() && values_->IsEmpty();
+  return data_hash_ == 0 && values_hash_ == 0 && data_root_->empty() &&
+         values_root_->empty();
 }
 
 void StyleVariables::CollectNames(HashSet<AtomicString>& names) const {
-  for (const auto& pair : data_)
-    names.insert(pair.key);
+  data_root_->CollectNames(names);
+}
+
+std::ostream& operator<<(std::ostream& stream,
+                         const StyleVariables& variables) {
+  stream << "[";
+  variables.data_root_->Serialize(
+      [](const CSSVariableData* data) {
+        return data ? data->Serialize() : "(null)";
+      },
+      stream);
+  stream << "][";
+  variables.values_root_->Serialize(
+      [](const CSSValue* value) { return value ? value->CssText() : "(null)"; },
+      stream);
+  return stream << "]";
 }
 
 }  // namespace blink

@@ -1,16 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+#include <memory>
+
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "build/branding_buildflags.h"
+#include "chrome/browser/ash/input_method/input_method_persistence.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/lock_screen_utils.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
@@ -18,43 +23,47 @@
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/login/test/user_adding_screen_utils.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
-#include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/input_method/input_method_persistence.h"
-#include "chrome/browser/chromeos/language_preferences.h"
-#include "chrome/browser/ui/ash/login_screen_shown_observer.h"
-#include "chrome/browser/ui/webui/chromeos/login/user_creation_screen_handler.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/login/auth/user_context.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
+#include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
+#include "chromeos/ash/components/language_preferences/language_preferences.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/experiences/login/login_screen_shown_observer.h"
+#include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/known_user.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
+#include "google_apis/gaia/gaia_id.h"
 
-namespace em = enterprise_management;
-
-namespace chromeos {
+namespace ash {
 
 namespace {
 
+namespace em = ::enterprise_management;
+
 constexpr char kTestUser1[] = "test-user1@gmail.com";
 constexpr char kTestUser1NonCanonicalDisplayEmail[] = "test-us.e.r1@gmail.com";
-constexpr char kTestUser1GaiaId[] = "1111111111";
+constexpr GaiaId::Literal kTestUser1GaiaId("1111111111");
 constexpr char kTestUser2[] = "test-user2@gmail.com";
-constexpr char kTestUser2GaiaId[] = "2222222222";
+constexpr GaiaId::Literal kTestUser2GaiaId("2222222222");
 constexpr char kTestUser3[] = "test-user3@gmail.com";
-constexpr char kTestUser3GaiaId[] = "3333333333";
+constexpr GaiaId::Literal kTestUser3GaiaId("3333333333");
 
 void Append_en_US_InputMethod(std::vector<std::string>* out) {
   out->push_back("xkb:us::eng");
-  chromeos::input_method::InputMethodManager::Get()->MigrateInputMethods(out);
+  input_method::InputMethodManager::Get()->GetMigratedInputMethodIDs(out);
 }
 
 void Append_en_US_InputMethods(std::vector<std::string>* out) {
@@ -69,12 +78,12 @@ void Append_en_US_InputMethods(std::vector<std::string>* out) {
   out->push_back("xkb:us:colemak:eng");
   out->push_back("xkb:us:workman:eng");
   out->push_back("xkb:us:workman-intl:eng");
-  chromeos::input_method::InputMethodManager::Get()->MigrateInputMethods(out);
+  input_method::InputMethodManager::Get()->GetMigratedInputMethodIDs(out);
 }
 
 }  // anonymous namespace
 
-class LoginUIKeyboardTest : public chromeos::LoginManagerTest {
+class LoginUIKeyboardTest : public LoginManagerTest {
  public:
   LoginUIKeyboardTest() : LoginManagerTest() {
     test_users_.push_back(
@@ -82,13 +91,13 @@ class LoginUIKeyboardTest : public chromeos::LoginManagerTest {
     test_users_.push_back(
         AccountId::FromUserEmailGaiaId(kTestUser2, kTestUser2GaiaId));
   }
-  ~LoginUIKeyboardTest() override {}
+  ~LoginUIKeyboardTest() override = default;
 
   void SetUpOnMainThread() override {
     user_input_methods.push_back("xkb:fr::fra");
     user_input_methods.push_back("xkb:de::ger");
 
-    chromeos::input_method::InputMethodManager::Get()->MigrateInputMethods(
+    input_method::InputMethodManager::Get()->GetMigratedInputMethodIDs(
         &user_input_methods);
 
     LoginManagerTest::SetUpOnMainThread();
@@ -97,10 +106,14 @@ class LoginUIKeyboardTest : public chromeos::LoginManagerTest {
   // Should be called from PRE_ test so that local_state is saved to disk, and
   // reloaded in the main test.
   void InitUserLastInputMethod() {
-    input_method::SetUserLastInputMethodPreferenceForTesting(
-        test_users_[0], user_input_methods[0]);
-    input_method::SetUserLastInputMethodPreferenceForTesting(
-        test_users_[1], user_input_methods[1]);
+    input_method::InputMethodPersistence::
+        SetUserLastInputMethodPreferenceForTesting(
+            *g_browser_process->local_state(), test_users_[0],
+            user_input_methods[0]);
+    input_method::InputMethodPersistence::
+        SetUserLastInputMethodPreferenceForTesting(
+            *g_browser_process->local_state(), test_users_[1],
+            user_input_methods[1]);
   }
 
  protected:
@@ -118,7 +131,7 @@ class LoginUIUserAddingKeyboardTest : public LoginUIKeyboardTest {
 
  protected:
   void FocusUserPod(const AccountId& account_id) {
-    ASSERT_TRUE(ash::LoginScreenTestApi::FocusUser(account_id));
+    ASSERT_TRUE(LoginScreenTestApi::FocusUser(account_id));
   }
 };
 
@@ -127,15 +140,18 @@ IN_PROC_BROWSER_TEST_F(LoginUIUserAddingKeyboardTest, PRE_CheckPODSwitches) {
   RegisterUser(test_users_[1]);
   RegisterUser(test_users_[2]);
   InitUserLastInputMethod();
-  StartupUtils::MarkOobeCompleted();
+  StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
 }
 
 IN_PROC_BROWSER_TEST_F(LoginUIUserAddingKeyboardTest, CheckPODSwitches) {
-  EXPECT_EQ(lock_screen_utils::GetUserLastInputMethod(test_users_[2]),
+  EXPECT_EQ(lock_screen_utils::GetUserLastInputMethodId(
+                CHECK_DEREF(g_browser_process->local_state()), test_users_[2]),
             std::string());
   LoginUser(test_users_[2]);
   const std::string logged_user_input_method =
-      lock_screen_utils::GetUserLastInputMethod(test_users_[2]);
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_users_[2]);
   test::ShowUserAddingScreen();
 
   std::vector<std::string> expected_input_methods;
@@ -145,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(LoginUIUserAddingKeyboardTest, CheckPODSwitches) {
 
   EXPECT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 
   EXPECT_EQ(user_input_methods[0], input_method::InputMethodManager::Get()
                                        ->GetActiveIMEState()
@@ -165,7 +181,8 @@ IN_PROC_BROWSER_TEST_F(LoginUIUserAddingKeyboardTest, CheckPODSwitches) {
                                        .id());
 
   // Check that logged in user settings did not change.
-  EXPECT_EQ(lock_screen_utils::GetUserLastInputMethod(test_users_[2]),
+  EXPECT_EQ(lock_screen_utils::GetUserLastInputMethodId(
+                CHECK_DEREF(g_browser_process->local_state()), test_users_[2]),
             logged_user_input_method);
 }
 
@@ -173,21 +190,22 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, PRE_CheckPODScreenDefault) {
   RegisterUser(test_users_[0]);
   RegisterUser(test_users_[1]);
 
-  StartupUtils::MarkOobeCompleted();
+  StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
 }
 
 // Check default IME initialization, when there is no IME configuration in
 // local_state.
 IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, CheckPODScreenDefault) {
-  EXPECT_EQ(2, ash::LoginScreenTestApi::GetUsersCount());
-  EXPECT_EQ(test_users_[0], ash::LoginScreenTestApi::GetFocusedUser());
+  EXPECT_EQ(2, LoginScreenTestApi::GetUsersCount());
+  EXPECT_EQ(test_users_[0], LoginScreenTestApi::GetFocusedUser());
 
   std::vector<std::string> expected_input_methods;
   Append_en_US_InputMethods(&expected_input_methods);
 
   EXPECT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 }
 
 IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, PRE_CheckPODScreenWithUsers) {
@@ -196,12 +214,13 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, PRE_CheckPODScreenWithUsers) {
 
   InitUserLastInputMethod();
 
-  StartupUtils::MarkOobeCompleted();
+  StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
 }
 
 IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, CheckPODScreenWithUsers) {
-  EXPECT_EQ(2, ash::LoginScreenTestApi::GetUsersCount());
-  EXPECT_EQ(test_users_[0], ash::LoginScreenTestApi::GetFocusedUser());
+  EXPECT_EQ(2, LoginScreenTestApi::GetUsersCount());
+  EXPECT_EQ(test_users_[0], LoginScreenTestApi::GetFocusedUser());
 
   EXPECT_EQ(user_input_methods[0], input_method::InputMethodManager::Get()
                                        ->GetActiveIMEState()
@@ -210,21 +229,21 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, CheckPODScreenWithUsers) {
 
   std::vector<std::string> expected_input_methods;
   Append_en_US_InputMethods(&expected_input_methods);
-  // Active IM for the first user (active user POD).
+  // Enabled IM for the first user (active user POD).
   expected_input_methods.push_back(user_input_methods[0]);
 
   EXPECT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 
-  EXPECT_TRUE(ash::LoginScreenTestApi::FocusUser(test_users_[1]));
+  EXPECT_TRUE(LoginScreenTestApi::FocusUser(test_users_[1]));
 
   EXPECT_EQ(user_input_methods[1], input_method::InputMethodManager::Get()
                                        ->GetActiveIMEState()
                                        ->GetCurrentInputMethod()
                                        .id());
 
-  EXPECT_TRUE(ash::LoginScreenTestApi::FocusUser(test_users_[0]));
+  EXPECT_TRUE(LoginScreenTestApi::FocusUser(test_users_[0]));
 
   EXPECT_EQ(user_input_methods[0], input_method::InputMethodManager::Get()
                                        ->GetActiveIMEState()
@@ -232,21 +251,21 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTest, CheckPODScreenWithUsers) {
                                        .id());
 }
 
-class LoginUIKeyboardTestWithUsersAndOwner : public chromeos::LoginManagerTest {
+class LoginUIKeyboardTestWithUsersAndOwner : public LoginManagerTest {
  public:
   LoginUIKeyboardTestWithUsersAndOwner() = default;
-  ~LoginUIKeyboardTestWithUsersAndOwner() override {}
+  ~LoginUIKeyboardTestWithUsersAndOwner() override = default;
 
   void SetUpOnMainThread() override {
     user_input_methods.push_back("xkb:fr::fra");
     user_input_methods.push_back("xkb:de::ger");
     user_input_methods.push_back("xkb:pl::pol");
 
-    chromeos::input_method::InputMethodManager::Get()->MigrateInputMethods(
+    input_method::InputMethodManager::Get()->GetMigratedInputMethodIDs(
         &user_input_methods);
 
-    scoped_testing_cros_settings_.device_settings()->Set(
-        kDeviceOwner, base::Value(kTestUser3));
+    user_manager::UserManager::Get()->SetOwnerId(
+        AccountId::FromUserEmailGaiaId(kTestUser3, kTestUser3GaiaId));
 
     LoginManagerTest::SetUpOnMainThread();
   }
@@ -254,17 +273,24 @@ class LoginUIKeyboardTestWithUsersAndOwner : public chromeos::LoginManagerTest {
   // Should be called from PRE_ test so that local_state is saved to disk, and
   // reloaded in the main test.
   void InitUserLastInputMethod() {
-    input_method::SetUserLastInputMethodPreferenceForTesting(
-        AccountId::FromUserEmailGaiaId(kTestUser1, kTestUser1GaiaId),
-        user_input_methods[0]);
-    input_method::SetUserLastInputMethodPreferenceForTesting(
-        AccountId::FromUserEmailGaiaId(kTestUser2, kTestUser2GaiaId),
-        user_input_methods[1]);
-    input_method::SetUserLastInputMethodPreferenceForTesting(
-        AccountId::FromUserEmailGaiaId(kTestUser3, kTestUser3GaiaId),
-        user_input_methods[2]);
-
     PrefService* local_state = g_browser_process->local_state();
+
+    input_method::InputMethodPersistence::
+        SetUserLastInputMethodPreferenceForTesting(
+            *local_state,
+            AccountId::FromUserEmailGaiaId(kTestUser1, kTestUser1GaiaId),
+            user_input_methods[0]);
+    input_method::InputMethodPersistence::
+        SetUserLastInputMethodPreferenceForTesting(
+            *local_state,
+            AccountId::FromUserEmailGaiaId(kTestUser2, kTestUser2GaiaId),
+            user_input_methods[1]);
+    input_method::InputMethodPersistence::
+        SetUserLastInputMethodPreferenceForTesting(
+            *local_state,
+            AccountId::FromUserEmailGaiaId(kTestUser3, kTestUser3GaiaId),
+            user_input_methods[2]);
+
     local_state->SetString(language_prefs::kPreferredKeyboardLayout,
                            user_input_methods[2]);
   }
@@ -273,19 +299,20 @@ class LoginUIKeyboardTestWithUsersAndOwner : public chromeos::LoginManagerTest {
 
  protected:
   std::vector<std::string> user_input_methods;
-  ScopedTestingCrosSettings scoped_testing_cros_settings_;
 };
 
 void LoginUIKeyboardTestWithUsersAndOwner::CheckGaiaKeyboard() {
   std::vector<std::string> expected_input_methods;
   // kPreferredKeyboardLayout is now set to last focused POD.
   expected_input_methods.push_back(user_input_methods[0]);
+  // Owner input method.
+  expected_input_methods.push_back(user_input_methods[2]);
   // Locale default input methods (the first one also is hardware IM).
   Append_en_US_InputMethods(&expected_input_methods);
 
   EXPECT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 }
 
 IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTestWithUsersAndOwner,
@@ -296,39 +323,40 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTestWithUsersAndOwner,
 
   InitUserLastInputMethod();
 
-  StartupUtils::MarkOobeCompleted();
+  StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
 }
 
 IN_PROC_BROWSER_TEST_F(LoginUIKeyboardTestWithUsersAndOwner,
                        CheckPODScreenKeyboard) {
-  EXPECT_EQ(3, ash::LoginScreenTestApi::GetUsersCount());
+  EXPECT_EQ(3, LoginScreenTestApi::GetUsersCount());
 
   std::vector<std::string> expected_input_methods;
   // Owner input method.
   expected_input_methods.push_back(user_input_methods[2]);
   // Locale default input methods (the first one also is hardware IM).
   Append_en_US_InputMethods(&expected_input_methods);
-  // Active IM for the first user (active user POD).
+  // Enabled IM for the first user (active user POD).
   expected_input_methods.push_back(user_input_methods[0]);
 
   EXPECT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 
   // Switch to Gaia.
-  ASSERT_TRUE(ash::LoginScreenTestApi::ClickAddUserButton());
+  ASSERT_TRUE(LoginScreenTestApi::ClickAddUserButton());
   OobeScreenWaiter(UserCreationView::kScreenId).Wait();
-  EXPECT_TRUE(ash::LoginScreenTestApi::IsOobeDialogVisible());
+  EXPECT_TRUE(LoginScreenTestApi::IsOobeDialogVisible());
 
   CheckGaiaKeyboard();
 
   // Switch back.
   test::ExecuteOobeJS("$('user-creation').cancel()");
-  EXPECT_FALSE(ash::LoginScreenTestApi::IsOobeDialogVisible());
+  EXPECT_FALSE(LoginScreenTestApi::IsOobeDialogVisible());
 
   EXPECT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 }
 
 class LoginUIKeyboardPolicy : public LoginManagerTest {
@@ -342,7 +370,7 @@ class LoginUIKeyboardPolicy : public LoginManagerTest {
     proto.mutable_login_screen_input_methods()->add_login_screen_input_methods(
         method);
     policy_helper_.RefreshPolicyAndWaitUntilDeviceSettingsUpdated(
-        {chromeos::kDeviceLoginScreenInputMethods});
+        {kDeviceLoginScreenInputMethods});
   }
   LoginManagerMixin login_manager_{&mixin_host_};
   DeviceStateMixin device_state_{
@@ -356,20 +384,20 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardPolicy, RestrictInputMethods) {
   ASSERT_TRUE(imm);
 
   // Check that input methods are default when policy is not set.
-  ASSERT_EQ(imm->GetActiveIMEState()->GetAllowedInputMethods().size(), 0U);
+  ASSERT_EQ(imm->GetActiveIMEState()->GetAllowedInputMethodIds().size(), 0U);
   std::vector<std::string> expected_input_methods;
   Append_en_US_InputMethods(&expected_input_methods);
   EXPECT_EQ(input_method::InputMethodManager::Get()
                 ->GetActiveIMEState()
-                ->GetActiveInputMethodIds(),
+                ->GetEnabledInputMethodIds(),
             expected_input_methods);
 
   std::vector<std::string> allowed_input_method{"xkb:de::ger"};
   SetAllowedInputMethod(allowed_input_method.front());
-  ASSERT_EQ(imm->GetActiveIMEState()->GetAllowedInputMethods().size(), 1U);
-  ASSERT_EQ(imm->GetActiveIMEState()->GetNumActiveInputMethods(), 1U);
+  ASSERT_EQ(imm->GetActiveIMEState()->GetAllowedInputMethodIds().size(), 1U);
+  ASSERT_EQ(imm->GetActiveIMEState()->GetNumEnabledInputMethods(), 1U);
 
-  chromeos::input_method::InputMethodManager::Get()->MigrateInputMethods(
+  input_method::InputMethodManager::Get()->GetMigratedInputMethodIDs(
       &allowed_input_method);
   ASSERT_EQ(imm->GetActiveIMEState()->GetCurrentInputMethod().id(),
             allowed_input_method.front());
@@ -378,24 +406,25 @@ IN_PROC_BROWSER_TEST_F(LoginUIKeyboardPolicy, RestrictInputMethods) {
   // it will be there after the policy is gone.
   expected_input_methods.insert(
       expected_input_methods.begin(),
-      imm->GetActiveIMEState()->GetActiveInputMethodIds()[0]);
+      imm->GetActiveIMEState()->GetEnabledInputMethodIds()[0]);
 
   // Remove the policy again
   em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
   proto.mutable_login_screen_input_methods()
       ->clear_login_screen_input_methods();
   policy_helper_.RefreshPolicyAndWaitUntilDeviceSettingsUpdated(
-      {chromeos::kDeviceLoginScreenInputMethods});
+      {kDeviceLoginScreenInputMethods});
 
-  ASSERT_EQ(imm->GetActiveIMEState()->GetAllowedInputMethods().size(), 0U);
+  ASSERT_EQ(imm->GetActiveIMEState()->GetAllowedInputMethodIds().size(), 0U);
   ASSERT_EQ(expected_input_methods, input_method::InputMethodManager::Get()
                                         ->GetActiveIMEState()
-                                        ->GetActiveInputMethodIds());
+                                        ->GetEnabledInputMethodIds());
 }
 
 class LoginUIDevicePolicyUserAdding : public LoginUIKeyboardPolicy {
  public:
   LoginUIDevicePolicyUserAdding() {
+    set_exit_when_last_browser_closes(false);
     // Need at least two to run user adding screen.
     login_manager_.AppendRegularUsers(2);
   }
@@ -414,7 +443,7 @@ IN_PROC_BROWSER_TEST_F(LoginUIDevicePolicyUserAdding, PolicyNotHonored) {
 
   std::vector<std::string> allowed_input_method{"xkb:de::ger"};
   SetAllowedInputMethod(allowed_input_method.front());
-  chromeos::input_method::InputMethodManager::Get()->MigrateInputMethods(
+  input_method::InputMethodManager::Get()->GetMigratedInputMethodIDs(
       &allowed_input_method);
 
   test::ShowUserAddingScreen();
@@ -426,12 +455,13 @@ IN_PROC_BROWSER_TEST_F(LoginUIDevicePolicyUserAdding, PolicyNotHonored) {
   Append_en_US_InputMethods(&default_input_methods);
   // Input methods should be default because the other user (which is focused)
   // does not have saved last input method.
-  EXPECT_EQ(user_adding_ime_state->GetActiveInputMethodIds(),
+  EXPECT_EQ(user_adding_ime_state->GetEnabledInputMethodIds(),
             default_input_methods);
 
-  EXPECT_EQ(user_adding_ime_state->GetAllowedInputMethods().size(), 0u);
-  EXPECT_FALSE(base::Contains(user_adding_ime_state->GetActiveInputMethodIds(),
-                              allowed_input_method.front()));
+  EXPECT_EQ(user_adding_ime_state->GetAllowedInputMethodIds().size(), 0u);
+  EXPECT_FALSE(
+      std::ranges::contains(user_adding_ime_state->GetEnabledInputMethodIds(),
+                            allowed_input_method.front()));
 }
 
 class FirstLoginKeyboardTest : public LoginManagerTest {
@@ -439,9 +469,18 @@ class FirstLoginKeyboardTest : public LoginManagerTest {
   FirstLoginKeyboardTest() = default;
   ~FirstLoginKeyboardTest() override = default;
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    LoginManagerTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kOobeSkipPostLogin);
+  }
+
  protected:
-  AccountId test_user_{
-      AccountId::FromUserEmailGaiaId(kTestUser1, kTestUser1GaiaId)};
+  const LoginManagerMixin::TestUserInfo test_user_{
+      AccountId::FromUserEmailGaiaId(kTestUser1, kTestUser1GaiaId),
+      test::UserAuthConfig::Create(test::kDefaultAuthSetup)
+          .WithOnlinePassword(kPassword)};
+
+  LoginManagerMixin login_manager_{&mixin_host_, {test_user_}};
   DeviceStateMixin device_state_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED};
 };
@@ -450,31 +489,45 @@ class FirstLoginKeyboardTest : public LoginManagerTest {
 // session unlock.
 IN_PROC_BROWSER_TEST_F(FirstLoginKeyboardTest,
                        UsersLastInputMethodPersistsOnLoginOrUnlock) {
-  EXPECT_TRUE(lock_screen_utils::GetUserLastInputMethod(test_user_).empty());
-
-  WizardController::SkipPostLoginScreensForTesting();
+  EXPECT_TRUE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 
   // Non canonical display email (typed) should not affect input method storage.
   LoginDisplayHost::default_host()->SetDisplayEmail(
       kTestUser1NonCanonicalDisplayEmail);
-  LoginUser(test_user_);
+
+  login_manager_.LoginWithDefaultContext(test_user_);
+  login_manager_.WaitForActiveSession();
 
   // Last input method should be stored.
-  EXPECT_FALSE(lock_screen_utils::GetUserLastInputMethod(test_user_).empty());
+  EXPECT_FALSE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 
   ScreenLockerTester locker_tester;
   locker_tester.Lock();
 
   // Clear user input method.
-  input_method::SetUserLastInputMethodPreferenceForTesting(test_user_,
-                                                           std::string());
-  EXPECT_TRUE(lock_screen_utils::GetUserLastInputMethod(test_user_).empty());
+  input_method::InputMethodPersistence::
+      SetUserLastInputMethodPreferenceForTesting(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id,
+          std::string());
+  EXPECT_TRUE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 
-  locker_tester.UnlockWithPassword(test_user_, "password");
+  locker_tester.UnlockWithPassword(test_user_.account_id, kPassword);
   locker_tester.WaitForUnlock();
 
   // Last input method should be stored.
-  EXPECT_FALSE(lock_screen_utils::GetUserLastInputMethod(test_user_).empty());
+  EXPECT_FALSE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 }
 
 class EphemeralUserKeyboardTest : public LoginManagerTest {
@@ -497,21 +550,24 @@ class EphemeralUserKeyboardTest : public LoginManagerTest {
 
 // Check that ephemeral users have last input method set.
 IN_PROC_BROWSER_TEST_F(EphemeralUserKeyboardTest, PersistToProfile) {
-  WizardController::SkipPostLoginScreensForTesting();
+  login_manager_.SkipPostLoginScreens();
   login_manager_.LoginAsNewRegularUser();
   login_manager_.WaitForActiveSession();
 
-  const AccountId& account_id =
-      user_manager::UserManager::Get()->GetActiveUser()->GetAccountId();
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  const AccountId& account_id = active_session->account_id();
+  user_manager::KnownUser known_user(g_browser_process->local_state());
   // Should be empty because known_user does not persist data for ephemeral
   // users.
-  EXPECT_FALSE(
-      user_manager::known_user::GetUserLastInputMethod(account_id, nullptr));
+  EXPECT_FALSE(known_user.GetUserLastInputMethodId(account_id));
 
   std::vector<std::string> expected_input_method;
   Append_en_US_InputMethod(&expected_input_method);
-  EXPECT_EQ(lock_screen_utils::GetUserLastInputMethod(account_id),
+  EXPECT_EQ(lock_screen_utils::GetUserLastInputMethodId(
+                CHECK_DEREF(g_browser_process->local_state()), account_id),
             expected_input_method[0]);
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -1,14 +1,23 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
 
-#include "base/check.h"
+#import "base/check.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+namespace {
+// Serialization keys
+NSString* const kFaviconImageKey = @"faviconImage";
+NSString* const kFaviconMonogramKey = @"faviconMonogram";
+NSString* const kFaviconTextColorKey = @"faviconTextColor";
+NSString* const kFaviconBackgroundColorKey = @"faviconBackgroundColor";
+NSString* const kFaviconDefaultBackgroundColorKey =
+    @"faviconDefaultBackgroundColor";
+NSString* const kFaviconDefaultImageKey = @"faviconDefaultImage";
+}  // namespace
+
+const CGFloat kFallbackIconDefaultTextColorGrayscale = 0.667;
 
 @implementation FaviconAttributes
 
@@ -16,8 +25,7 @@
                      monogram:(NSString*)monogram
                     textColor:(UIColor*)textColor
               backgroundColor:(UIColor*)backgroundColor
-       defaultBackgroundColor:(BOOL)defaultBackgroundColor
-             usesDefaultImage:(BOOL)defaultImage {
+       defaultBackgroundColor:(BOOL)defaultBackgroundColor {
   DCHECK(image || (monogram && textColor && backgroundColor));
   self = [super init];
   if (self) {
@@ -26,7 +34,6 @@
     _textColor = textColor;
     _backgroundColor = backgroundColor;
     _defaultBackgroundColor = defaultBackgroundColor;
-    _usesDefaultImage = defaultImage;
   }
 
   return self;
@@ -38,8 +45,7 @@
                             monogram:nil
                            textColor:nil
                      backgroundColor:nil
-              defaultBackgroundColor:NO
-                    usesDefaultImage:NO];
+              defaultBackgroundColor:NO];
 }
 
 + (instancetype)attributesWithMonogram:(NSString*)monogram
@@ -50,18 +56,46 @@
                             monogram:monogram
                            textColor:textColor
                      backgroundColor:backgroundColor
-              defaultBackgroundColor:defaultBackgroundColor
-                    usesDefaultImage:NO];
+              defaultBackgroundColor:defaultBackgroundColor];
 }
 
-+ (instancetype)attributesWithDefaultImage {
-  return
-      [[self alloc] initWithImage:[UIImage imageNamed:@"default_world_favicon"]
-                         monogram:nil
-                        textColor:nil
-                  backgroundColor:nil
-           defaultBackgroundColor:NO
-                 usesDefaultImage:YES];
+#pragma mark - NSSecureCoding
+
++ (BOOL)supportsSecureCoding {
+  return YES;
+}
+
+- (instancetype)initWithCoder:(NSCoder*)aDecoder {
+  UIImage* faviconImage =
+      [UIImage imageWithData:[aDecoder decodeObjectOfClass:[NSData class]
+                                                    forKey:kFaviconImageKey]];
+  NSString* monogramString = [aDecoder decodeObjectOfClass:[NSString class]
+                                                    forKey:kFaviconMonogramKey];
+  UIColor* textColor = [aDecoder decodeObjectOfClass:[UIColor class]
+                                              forKey:kFaviconTextColorKey];
+  UIColor* backgroundColor =
+      [aDecoder decodeObjectOfClass:[UIColor class]
+                             forKey:kFaviconBackgroundColorKey];
+  if (faviconImage || (monogramString && textColor && backgroundColor)) {
+    return [self initWithImage:faviconImage
+                      monogram:monogramString
+                     textColor:textColor
+               backgroundColor:backgroundColor
+        defaultBackgroundColor:
+            [aDecoder decodeBoolForKey:kFaviconDefaultBackgroundColorKey]];
+  }
+  return nil;
+}
+
+- (void)encodeWithCoder:(NSCoder*)aCoder {
+  [aCoder
+      encodeObject:_faviconImage ? UIImagePNGRepresentation(_faviconImage) : nil
+            forKey:kFaviconImageKey];
+  [aCoder encodeObject:_monogramString forKey:kFaviconMonogramKey];
+  [aCoder encodeObject:_textColor forKey:kFaviconTextColorKey];
+  [aCoder encodeObject:_backgroundColor forKey:kFaviconBackgroundColorKey];
+  [aCoder encodeBool:_defaultBackgroundColor
+              forKey:kFaviconDefaultBackgroundColorKey];
 }
 
 @end

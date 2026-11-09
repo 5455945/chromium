@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,23 @@
 
 #include <utility>
 
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 // Tests that the returns async schema format behaves similar to how a callback
 // parameter would. See callbacks_unittest.cc for the standard callback
 // behavior.
 TEST(JsonSchemaCompilerReturnsAsyncTest, ReturnsObjectResultCreate) {
   test::api::returns_async::SupportsPromises::Results::SomeObject some_object;
-  some_object.state = test::api::returns_async::ENUMERATION_FOO;
+  some_object.state = test::api::returns_async::Enumeration::kFoo;
   base::Value results(
       test::api::returns_async::SupportsPromises::Results::Create(some_object));
 
-  base::Value expected_dict = base::Value(base::Value::Type::DICTIONARY);
-  expected_dict.SetKey("state", base::Value("foo"));
-  base::Value expected = base::Value(base::Value::Type::LIST);
+  base::DictValue expected_dict;
+  expected_dict.Set("state", "foo");
+  base::ListValue expected;
   expected.Append(std::move(expected_dict));
   EXPECT_EQ(expected, results);
 }

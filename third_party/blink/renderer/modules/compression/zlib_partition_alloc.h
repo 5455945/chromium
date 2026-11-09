@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_COMPRESSION_ZLIB_PARTITION_ALLOC_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_COMPRESSION_ZLIB_PARTITION_ALLOC_H_
 
@@ -6,7 +10,7 @@
 
 namespace blink {
 
-// Use partition alloc for zlib allocations.
+// Use PartitionAlloc for zlib allocations.
 class ZlibPartitionAlloc {
   STATIC_ONLY(ZlibPartitionAlloc);
 

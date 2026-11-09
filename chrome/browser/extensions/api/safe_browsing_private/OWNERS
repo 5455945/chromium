@@ -1,3 +1,8 @@
-drubery@chromium.org
-nparker@chromium.org
-vakh@chromium.org
+# Primary
+file://components/enterprise/connectors/OWNERS
+
+# Secondary
+file://components/safe_browsing/OWNERS
+
+# For password reuse reporting tests
+per-file *unittest.cc=nwokedi@chromium.org

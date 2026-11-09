@@ -28,9 +28,9 @@
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
 #include "third_party/blink/renderer/core/svg/svg_preserve_aspect_ratio.h"
 #include "third_party/blink/renderer/core/svg/svg_rect.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -48,7 +48,6 @@ SVGParsingError SVGAnimatedViewBoxRect::AttributeChanged(const String& value) {
   if (parse_status == SVGParseStatus::kNoError &&
       (BaseValue()->Width() < 0 || BaseValue()->Height() < 0)) {
     parse_status = SVGParseStatus::kNegativeValue;
-    BaseValue()->SetInvalid();
   }
   return parse_status;
 }
@@ -60,8 +59,6 @@ SVGFitToViewBox::SVGFitToViewBox(SVGElement* element)
               element,
               svg_names::kPreserveAspectRatioAttr)) {
   DCHECK(element);
-  element->AddToPropertyMap(view_box_);
-  element->AddToPropertyMap(preserve_aspect_ratio_);
 }
 
 void SVGFitToViewBox::Trace(Visitor* visitor) const {
@@ -70,9 +67,9 @@ void SVGFitToViewBox::Trace(Visitor* visitor) const {
 }
 
 AffineTransform SVGFitToViewBox::ViewBoxToViewTransform(
-    const FloatRect& view_box_rect,
+    const gfx::RectF& view_box_rect,
     const SVGPreserveAspectRatio* preserve_aspect_ratio,
-    const FloatSize& viewport_size) {
+    const gfx::SizeF& viewport_size) {
   if (view_box_rect.IsEmpty() || viewport_size.IsEmpty())
     return AffineTransform();
   return preserve_aspect_ratio->ComputeTransform(view_box_rect, viewport_size);
@@ -81,6 +78,31 @@ AffineTransform SVGFitToViewBox::ViewBoxToViewTransform(
 bool SVGFitToViewBox::IsKnownAttribute(const QualifiedName& attr_name) {
   return attr_name == svg_names::kViewBoxAttr ||
          attr_name == svg_names::kPreserveAspectRatioAttr;
+}
+
+bool SVGFitToViewBox::HasValidViewBox(const SVGRect& value) {
+  return value.IsValid() && value.Width() >= 0 && value.Height() >= 0;
+}
+
+bool SVGFitToViewBox::HasValidViewBox() const {
+  return HasValidViewBox(*view_box_->CurrentValue());
+}
+
+SVGAnimatedPropertyBase* SVGFitToViewBox::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kViewBoxAttr) {
+    return view_box_.Get();
+  } else if (attribute_name == svg_names::kPreserveAspectRatioAttr) {
+    return preserve_aspect_ratio_.Get();
+  } else {
+    return nullptr;
+  }
+}
+
+void SVGFitToViewBox::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{view_box_.Get(),
+                                   preserve_aspect_ratio_.Get()};
+  SVGElement::SynchronizeListOfSVGAttributes(attrs);
 }
 
 }  // namespace blink

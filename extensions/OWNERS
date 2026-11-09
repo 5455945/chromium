@@ -3,20 +3,21 @@
 # Note: This file also serves as OWNERS for
 #   chrome/browser/extensions/OWNERS
 #   chrome/browser/chromeos/extensions/OWNERS
-#   chrome/browser/renderer_host/OWNERS
 #   chrome/browser/resources/webstore_app/OWNERS
 #   chrome/common/extensions/OWNERS
 #   chrome/renderer/extensions/OWNERS
 #   chrome/renderer/resources/extensions/OWNERS
+#   chrome/test/data/extensions/OWNERS
 
 set noparent
 rdevlin.cronin@chromium.org
-lazyboy@chromium.org
-karandeepb@chromium.org
-dbertoni@chromium.org
-benwells@chromium.org
+andreaorru@chromium.org
+evasu@chromium.org
 finnur@chromium.org
-reillyg@chromium.org
+jamescook@chromium.org
+jlulejian@chromium.org
+kelvinjiang@chromium.org
+tjudkins@chromium.org
 
 # Translation artifacts:
-per-file *.xtb=file://tools/translation/TRANSLATION_OWNERS
+per-file ....xtb=file://tools/translation/TRANSLATION_OWNERS

@@ -1,470 +1,162 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.app.appmenu;
 
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
-import android.view.Menu;
-import android.view.MenuItem;
-
-import androidx.test.filters.SmallTest;
+import androidx.test.filters.LargeTest;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Restriction;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.tasks.tab_management.PriceTrackingUtilities;
-import org.chromium.chrome.browser.ui.appmenu.AppMenuTestSupport;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
+import org.chromium.chrome.browser.quick_delete.QuickDeleteMetricsDelegate;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.ui.test.util.UiRestriction;
+import org.chromium.chrome.test.transit.ChromeTabbedActivityEntryPoints;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
+import org.chromium.chrome.test.transit.hub.IncognitoTabSwitcherStation;
+import org.chromium.chrome.test.transit.hub.RegularTabSwitcherStation;
+import org.chromium.chrome.test.transit.hub.TabSwitcherAppMenuFacility;
+import org.chromium.chrome.test.transit.quick_delete.QuickDeleteDialogFacility;
+import org.chromium.components.feature_engagement.Tracker;
 
-/**
- * Tests overview mode app menu popup.
- *
- * TODO(crbug.com/1031958): Add more required tests.
- */
+import java.util.ArrayList;
+import java.util.List;
+
+/** Tests the Tab Switcher app menu. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@Restriction(
-        {UiRestriction.RESTRICTION_TYPE_PHONE, Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE})
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class OverviewAppMenuTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public ReusedCtaTransitTestRule<RegularTabSwitcherStation> mCtaTestRule =
+            ChromeTransitTestRules.customStartReusedActivityRule(
+                    RegularTabSwitcherStation.class,
+                    rule ->
+                            ChromeTabbedActivityEntryPoints.startOnBlankPage(rule)
+                                    .openRegularTabSwitcher());
+
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock Tracker mTracker;
+
+    public RegularTabSwitcherStation mTabSwitcher;
 
     @Before
     public void setUp() {
-        mActivityTestRule.startMainActivityOnBlankPage();
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mActivityTestRule.getActivity().getLayoutManager().showOverview(true); });
+        // Disable IPHs from interfering with tests.
+        when(mTracker.shouldTriggerHelpUi(anyString())).thenReturn(false);
+        TrackerFactory.setTrackerForTests(mTracker);
+
+        mTabSwitcher = mCtaTestRule.start();
     }
 
     @Test
-    @SmallTest
+    @LargeTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    public void testAllMenuItemsWithoutStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    public void testAllMenuItems() {
+        TabSwitcherAppMenuFacility<RegularTabSwitcherStation> menu = mTabSwitcher.openAppMenu();
 
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            int itemGroupId = item.getGroupId();
-            if (itemGroupId == R.id.OVERVIEW_MODE_MENU) {
-                int itemId = item.getItemId();
-                assertTrue(itemId == R.id.new_tab_menu_id
-                        || itemId == R.id.new_incognito_tab_menu_id
-                        || itemId == R.id.close_all_tabs_menu_id
-                        || itemId == R.id.close_all_incognito_tabs_menu_id
-                        || itemId == R.id.menu_group_tabs || itemId == R.id.track_prices_row_menu_id
-                        || itemId == R.id.preferences_id);
-                if (itemId == R.id.close_all_incognito_tabs_menu_id
-                        || itemId == R.id.track_prices_row_menu_id) {
-                    assertFalse(item.isVisible());
-                } else {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
-            }
+        try {
+            List<Integer> expectedItems =
+                    buildExpectedMenuItemIds(/* isIncognitoSwitcher= */ false);
+            menu.verifyModelItems(expectedItems);
+
+            menu.verifyPresentItems();
+        } finally {
+            menu.closeProgrammatically();
         }
-        assertThat(checkedMenuItems, equalTo(7));
     }
 
     @Test
-    @SmallTest
+    @LargeTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    public void testIncognitoAllMenuItemsWithoutStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mActivityTestRule.getActivity().getTabModelSelector().selectModel(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    public void testIncognitoAllMenuItems() {
+        IncognitoTabSwitcherStation incognitoTabSwitcher =
+                mTabSwitcher.openAppMenu().openNewIncognitoTabOrWindow().openIncognitoTabSwitcher();
+        TabSwitcherAppMenuFacility<IncognitoTabSwitcherStation> menu =
+                incognitoTabSwitcher.openAppMenu();
 
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            int itemGroupId = item.getGroupId();
-            if (itemGroupId == R.id.OVERVIEW_MODE_MENU) {
-                int itemId = item.getItemId();
-                assertTrue(itemId == R.id.new_tab_menu_id
-                        || itemId == R.id.new_incognito_tab_menu_id
-                        || itemId == R.id.close_all_tabs_menu_id
-                        || itemId == R.id.close_all_incognito_tabs_menu_id
-                        || itemId == R.id.menu_group_tabs || itemId == R.id.track_prices_row_menu_id
-                        || itemId == R.id.preferences_id);
-                if (itemId == R.id.close_all_tabs_menu_id
-                        || itemId == R.id.track_prices_row_menu_id) {
-                    assertFalse(item.isVisible());
-                } else {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
+        try {
+            List<Integer> expectedItems = buildExpectedMenuItemIds(/* isIncognitoSwitcher= */ true);
+            menu.verifyModelItems(expectedItems);
+
+            menu.verifyPresentItems();
+        } finally {
+            menu.closeProgrammatically();
+            if (!IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+                incognitoTabSwitcher.selectRegularTabsPane();
+            } else {
+                incognitoTabSwitcher.finishActivity();
             }
         }
-        assertThat(checkedMenuItems, equalTo(7));
     }
 
     @Test
-    @SmallTest
+    @LargeTest
     @Feature({"Browser", "Main"})
-    @Features.
-    EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testAllMenuItemsWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    public void testQuickDeleteTabSwitcherMenu_entryFromTabSwitcherMenuItemHistogram() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecords(
+                                QuickDeleteMetricsDelegate.HISTOGRAM_NAME,
+                                QuickDeleteMetricsDelegate.QuickDeleteAction
+                                        .TAB_SWITCHER_MENU_ITEM_CLICKED,
+                                QuickDeleteMetricsDelegate.QuickDeleteAction
+                                        .LAST_15_MINUTES_SELECTED)
+                        .build();
 
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            int itemGroupId = item.getGroupId();
-            if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
-                int itemId = item.getItemId();
-                assertTrue(itemId == R.id.new_tab_menu_id
-                        || itemId == R.id.new_incognito_tab_menu_id
-                        || itemId == R.id.divider_line_id || itemId == R.id.open_history_menu_id
-                        || itemId == R.id.downloads_menu_id || itemId == R.id.all_bookmarks_menu_id
-                        || itemId == R.id.recent_tabs_menu_id
-                        || itemId == R.id.close_all_tabs_menu_id
-                        || itemId == R.id.close_all_incognito_tabs_menu_id
-                        || itemId == R.id.menu_group_tabs || itemId == R.id.track_prices_row_menu_id
-                        || itemId == R.id.preferences_id);
-                if (itemId == R.id.close_all_incognito_tabs_menu_id
-                        || itemId == R.id.track_prices_row_menu_id) {
-                    assertFalse(item.isVisible());
-                } else {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
-            }
+        QuickDeleteDialogFacility dialog = mTabSwitcher.openAppMenu().clearBrowsingData();
+
+        try {
+            histogramWatcher.assertExpected();
+        } finally {
+            dialog.clickCancel();
         }
-        assertThat(checkedMenuItems, equalTo(13));
     }
 
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.
-    EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testIncognitoAllMenuItemsWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mActivityTestRule.getActivity().getTabModelSelector().selectModel(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+    private List<Integer> buildExpectedMenuItemIds(boolean isIncognitoSwitcher) {
+        List<Integer> expectedItems = new ArrayList<>();
 
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            int itemGroupId = item.getGroupId();
-            if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
-                int itemId = item.getItemId();
-                assertTrue(itemId == R.id.new_tab_menu_id
-                        || itemId == R.id.new_incognito_tab_menu_id
-                        || itemId == R.id.divider_line_id || itemId == R.id.open_history_menu_id
-                        || itemId == R.id.downloads_menu_id || itemId == R.id.all_bookmarks_menu_id
-                        || itemId == R.id.recent_tabs_menu_id
-                        || itemId == R.id.close_all_tabs_menu_id
-                        || itemId == R.id.close_all_incognito_tabs_menu_id
-                        || itemId == R.id.menu_group_tabs || itemId == R.id.track_prices_row_menu_id
-                        || itemId == R.id.preferences_id);
-                if (itemId == R.id.close_all_tabs_menu_id || itemId == R.id.recent_tabs_menu_id
-                        || itemId == R.id.track_prices_row_menu_id) {
-                    assertFalse(item.isVisible());
-                } else {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
+        if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+            if (isIncognitoSwitcher) {
+                expectedItems.add(R.id.new_incognito_tab_menu_id);
+                expectedItems.add(R.id.new_window_menu_id);
+                expectedItems.add(R.id.new_incognito_window_menu_id);
+            } else {
+                expectedItems.add(R.id.new_tab_menu_id);
+                expectedItems.add(R.id.new_window_menu_id);
+                expectedItems.add(R.id.new_incognito_window_menu_id);
             }
+        } else {
+            expectedItems.add(R.id.new_tab_menu_id);
+            expectedItems.add(R.id.new_incognito_tab_menu_id);
         }
-        assertThat(checkedMenuItems, equalTo(13));
-    }
 
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.
-    DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testGroupTabsIsDisabled() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
+        expectedItems.add(R.id.new_tab_group_menu_id);
 
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.menu_group_tabs) {
-                assertFalse(item.isVisible());
-                checkedMenuItems++;
-            }
+        if (isIncognitoSwitcher) {
+            expectedItems.add(R.id.close_all_incognito_tabs_menu_id);
+        } else {
+            expectedItems.add(R.id.close_all_tabs_menu_id);
         }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    public void testGroupTabsIsEnabled() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.menu_group_tabs) {
-                int itemGroupId = item.getGroupId();
-                if (itemGroupId == R.id.OVERVIEW_MODE_MENU) {
-                    assertTrue(item.isVisible());
-                }
-                if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
-                    assertFalse(item.isVisible());
-                }
-                checkedMenuItems++;
-            }
+        expectedItems.add(R.id.menu_select_tabs);
+        if (!isIncognitoSwitcher) {
+            expectedItems.add(R.id.quick_delete_menu_id);
         }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    @Features.DisableFeatures({ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testGroupTabsIsDisabledWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.menu_group_tabs) {
-                assertFalse(item.isVisible());
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.
-    EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID, ChromeFeatureList.TAB_GROUPS_ANDROID})
-    public void testGroupTabsIsEnabledWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.menu_group_tabs) {
-                int itemGroupId = item.getGroupId();
-                if (itemGroupId == R.id.OVERVIEW_MODE_MENU) {
-                    assertFalse(item.isVisible());
-                }
-                if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:enable_price_tracking/false"})
-    public void
-    testTrackPriceOnTabsIsDisabled() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PriceTrackingUtilities.setIsSignedInAndSyncEnabledForTesting(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                assertFalse(item.isVisible());
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
-    public void
-    testTrackPriceOnTabsIsEnabled() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PriceTrackingUtilities.setIsSignedInAndSyncEnabledForTesting(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                int itemGroupId = item.getGroupId();
-                // When StartSurface is disabled, we just care about OVERVIEW_MODE_MENU and the
-                // whole START_SURFACE_MODE_MENU group is invisible.
-                if (itemGroupId == R.id.OVERVIEW_MODE_MENU) {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
-    public void
-    testTrackPriceOnTabsIsDisabledInIncognitoMode() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PriceTrackingUtilities.setIsSignedInAndSyncEnabledForTesting(true);
-            mActivityTestRule.getActivity().getTabModelSelector().selectModel(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                assertFalse(item.isVisible());
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
-    @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
-    public void
-    testTrackPriceOnTabsIsDisabledIfSyncDisabledOrNotSignedIn() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PriceTrackingUtilities.setIsSignedInAndSyncEnabledForTesting(false);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                assertFalse(item.isVisible());
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:enable_price_tracking/false"})
-    public void
-    testTrackPriceOnTabsIsDisabledWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PriceTrackingUtilities.setIsSignedInAndSyncEnabledForTesting(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                assertFalse(item.isVisible());
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
-    public void
-    testTrackPriceOnTabsIsEnabledWithStartSurface() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            PriceTrackingUtilities.setIsSignedInAndSyncEnabledForTesting(true);
-            AppMenuTestSupport.showAppMenu(mActivityTestRule.getAppMenuCoordinator(), null, false);
-        });
-
-        int checkedMenuItems = 0;
-        Menu menu = mActivityTestRule.getMenu();
-        for (int i = 0; i < menu.size(); ++i) {
-            MenuItem item = menu.getItem(i);
-            if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                int itemGroupId = item.getGroupId();
-                // When StartSurface is enabled, we just care about START_SURFACE_MODE_MENU and the
-                // whole OVERVIEW_MODE_MENU group is invisible.
-                if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
-                    assertTrue(item.isVisible());
-                }
-                checkedMenuItems++;
-            }
-        }
-        assertThat(checkedMenuItems, equalTo(2));
+        expectedItems.add(R.id.preferences_id);
+        return expectedItems;
     }
 }

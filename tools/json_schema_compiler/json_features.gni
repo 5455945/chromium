@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -32,9 +32,13 @@ template("json_features") {
     sources = invoker.sources
     script = "$compiler_root/feature_compiler.py"
     inputs = [
-      "$compiler_root/code.py",
+      "$compiler_root/code_util.py",
       "$compiler_root/json_parse.py",
+      "//tools/json_comment_eater/json_comment_eater.py",
     ]
+    if (defined(invoker.inputs)) {
+      inputs += invoker.inputs
+    }
     outputs = generated_files
     rebased = rebase_path(sources, root_build_dir)
     args = [
@@ -73,6 +77,9 @@ template("json_features") {
     if (!defined(deps)) {
       deps = []
     }
-    deps += [ "//extensions/common" ]
+    deps += [
+      "//extensions/common",
+      "//printing/buildflags",
+    ]
   }
 }

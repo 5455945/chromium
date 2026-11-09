@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,8 @@ NetworkingPrivateEventRouterFactory::GetForProfile(
 // static
 NetworkingPrivateEventRouterFactory*
 NetworkingPrivateEventRouterFactory::GetInstance() {
-  return base::Singleton<NetworkingPrivateEventRouterFactory>::get();
+  static base::NoDestructor<NetworkingPrivateEventRouterFactory> instance;
+  return instance.get();
 }
 
 NetworkingPrivateEventRouterFactory::NetworkingPrivateEventRouterFactory()
@@ -35,10 +36,8 @@ NetworkingPrivateEventRouterFactory::NetworkingPrivateEventRouterFactory()
   DependsOn(NetworkingPrivateDelegateFactory::GetInstance());
 }
 
-NetworkingPrivateEventRouterFactory::~NetworkingPrivateEventRouterFactory() {
-}
-
-KeyedService* NetworkingPrivateEventRouterFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+NetworkingPrivateEventRouterFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   return NetworkingPrivateEventRouter::Create(context);
 }
@@ -46,7 +45,8 @@ KeyedService* NetworkingPrivateEventRouterFactory::BuildServiceInstanceFor(
 content::BrowserContext*
 NetworkingPrivateEventRouterFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
-  return ExtensionsBrowserClient::Get()->GetOriginalContext(context);
+  return ExtensionsBrowserClient::Get()->GetContextRedirectedToOriginal(
+      context);
 }
 
 bool NetworkingPrivateEventRouterFactory::ServiceIsCreatedWithBrowserContext()

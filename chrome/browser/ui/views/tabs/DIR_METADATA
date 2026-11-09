@@ -1,3 +1,1 @@
-monorail {
-  component: "UI>Browser>TabStrip"
-}
+mixins: "//chrome/browser/ui/views/tabs/COMMON_METADATA"

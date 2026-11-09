@@ -1,10 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <bitset>
 
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -37,7 +37,7 @@ class MainThreadWorkletReportingProxyForTest final
   }
 
  private:
-  std::bitset<static_cast<size_t>(WebFeature::kNumberOfFeatures)>
+  std::bitset<static_cast<size_t>(WebFeature::kMaxValue) + 1>
       reported_features_;
 };
 
@@ -47,7 +47,7 @@ class MainThreadWorkletTest : public PageTestBase {
     SetUpScope("script-src 'self' https://allowed.example.com");
   }
   void SetUpScope(const String& csp_header) {
-    PageTestBase::SetUp(IntSize());
+    PageTestBase::SetUp(gfx::Size());
     KURL url = KURL("https://example.com/");
     NavigateTo(url);
     LocalDOMWindow* window = GetFrame().DomWindow();
@@ -68,25 +68,29 @@ class MainThreadWorkletTest : public PageTestBase {
         window->UserAgent(), window->GetFrame()->Loader().UserAgentMetadata(),
         nullptr /* web_worker_fetch_context */,
         mojo::Clone(window->GetContentSecurityPolicy()->GetParsedPolicies()),
+        /*outside_settings_reporter=*/mojo::NullRemote(),
         window->GetReferrerPolicy(), window->GetSecurityOrigin(),
         window->IsSecureContext(), window->GetHttpsState(),
         nullptr /* worker_clients */, nullptr /* content_settings_client */,
-        window->AddressSpace(), OriginTrialContext::GetTokens(window).get(),
+        OriginTrialContext::GetInheritedTrialFeatures(window).get(),
         base::UnguessableToken::Create(), nullptr /* worker_settings */,
         mojom::blink::V8CacheOptions::kDefault,
         MakeGarbageCollected<WorkletModuleResponsesMap>(),
         mojo::NullRemote() /* browser_interface_broker */,
-        BeginFrameProviderParams(), nullptr /* parent_permissions_policy */,
-        window->GetAgentClusterID(), ukm::kInvalidSourceId,
-        window->GetExecutionContextToken());
+        window->GetFrame()->Loader().CreateWorkerCodeCacheHost(),
+        mojo::NullRemote() /* blob_url_store */, BeginFrameProviderParams(),
+        nullptr /* parent_permissions_policy */, window->GetAgentClusterID(),
+        ukm::kInvalidSourceId, window->GetExecutionContextToken());
     global_scope_ = MakeGarbageCollected<FakeWorkletGlobalScope>(
-        std::move(creation_params), *reporting_proxy_, &GetFrame(),
-        false /* create_microtask_queue */);
+        std::move(creation_params), *reporting_proxy_, &GetFrame());
     EXPECT_TRUE(global_scope_->IsMainThreadWorkletGlobalScope());
     EXPECT_FALSE(global_scope_->IsThreadedWorkletGlobalScope());
   }
 
-  void TearDown() override { global_scope_->Dispose(); }
+  void TearDown() override {
+    global_scope_->Dispose();
+    global_scope_->NotifyContextDestroyed();
+  }
 
  protected:
   std::unique_ptr<MainThreadWorkletReportingProxyForTest> reporting_proxy_;
@@ -148,7 +152,7 @@ TEST_F(MainThreadWorkletTest, UseCounter) {
   UseCounter::Count(global_scope_, kFeature1);
 
   // This feature is randomly selected from Deprecation::deprecationMessage().
-  const WebFeature kFeature2 = WebFeature::kPrefixedStorageInfo;
+  const WebFeature kFeature2 = WebFeature::kPaymentInstruments;
 
   // Deprecated API use on WorkletGlobalScope for the main thread should be
   // recorded in UseCounter on the Document.

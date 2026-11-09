@@ -1,16 +1,15 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 
+#include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/win/registry.h"
 #include "base/win/shlwapi.h"
 #include "chrome/installer/util/create_reg_key_work_item.h"
-#include "chrome/installer/util/install_util.h"
-#include "chrome/installer/util/logging_installer.h"
 
 using base::win::RegKey;
 
@@ -31,7 +30,7 @@ void UpOneDirectoryOrEmpty(std::wstring* dir) {
 
 }  // namespace
 
-CreateRegKeyWorkItem::~CreateRegKeyWorkItem() {}
+CreateRegKeyWorkItem::~CreateRegKeyWorkItem() = default;
 
 CreateRegKeyWorkItem::CreateRegKeyWorkItem(HKEY predefined_root,
                                            const std::wstring& path,
@@ -59,9 +58,10 @@ bool CreateRegKeyWorkItem::DoImpl() {
     DWORD disposition;
     key_path.assign(key_list_[i - 1]);
 
-    if (key.CreateWithDisposition(predefined_root_, key_path.c_str(),
-                                  &disposition,
-                                  KEY_READ | wow64_access_) == ERROR_SUCCESS) {
+    if (LONG result =
+            key.CreateWithDisposition(predefined_root_, key_path.c_str(),
+                                      &disposition, KEY_READ | wow64_access_);
+        result == ERROR_SUCCESS) {
       if (disposition == REG_OPENED_EXISTING_KEY) {
         if (key_created_) {
           // This should not happen. Someone created a subkey under the key
@@ -79,7 +79,8 @@ bool CreateRegKeyWorkItem::DoImpl() {
         return false;
       }
     } else {
-      LOG(ERROR) << "Failed to create " << key_path;
+      ::SetLastError(result);
+      PLOG(ERROR) << "Failed to create " << key_path;
       return false;
     }
   }
@@ -91,13 +92,13 @@ void CreateRegKeyWorkItem::RollbackImpl() {
   if (!key_created_)
     return;
 
-  std::wstring key_path;
   // To delete keys, we iterate from front to back.
-  std::vector<std::wstring>::iterator itr;
-  for (itr = key_list_.begin(); itr != key_list_.end(); ++itr) {
-    key_path.assign(*itr);
-    RegKey key(predefined_root_, L"", KEY_WRITE | wow64_access_);
-    if (key.DeleteEmptyKey(key_path.c_str()) == ERROR_SUCCESS) {
+  for (const auto& key_path : key_list_) {
+    RegKey key(predefined_root_, key_path.c_str(),
+               KEY_QUERY_VALUE | wow64_access_);
+    if (key.GetValueCount().value_or(1) == 0 &&
+        key.DeleteKey(L"", base::win::RegKey::RecursiveDelete(false)) ==
+            ERROR_SUCCESS) {
       VLOG(1) << "rollback: delete " << key_path;
     } else {
       VLOG(1) << "rollback: can not delete " << key_path;

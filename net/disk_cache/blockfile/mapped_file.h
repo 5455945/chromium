@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,11 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "build/build_config.h"
 #include "net/base/net_export.h"
 #include "net/disk_cache/blockfile/file.h"
 #include "net/disk_cache/blockfile/file_block.h"
@@ -27,15 +31,23 @@ namespace disk_cache {
 // time).
 class NET_EXPORT_PRIVATE MappedFile : public File {
  public:
-  MappedFile() : File(true), init_(false) {}
+  MappedFile();
+
+  MappedFile(const MappedFile&) = delete;
+  MappedFile& operator=(const MappedFile&) = delete;
 
   // Performs object initialization. name is the file to use, and size is the
   // amount of data to memory map from the file. If size is 0, the whole file
   // will be mapped in memory.
   void* Init(const base::FilePath& name, size_t size);
 
-  void* buffer() const {
-    return buffer_;
+  void* buffer() { return buffer_; }
+
+  base::span<uint8_t> as_span() {
+    // SAFETY: Class invariant is that a view of `buffer_` of size `view_size_`
+    // is mapped.
+    return UNSAFE_BUFFERS(
+        base::span(reinterpret_cast<uint8_t*>(buffer_), view_size_));
   }
 
   // Loads or stores a given block from the backing file (synchronously).
@@ -44,6 +56,9 @@ class NET_EXPORT_PRIVATE MappedFile : public File {
 
   // Flush the memory-mapped section to disk (synchronously).
   void Flush();
+#if BUILDFLAG(IS_WIN)
+  void EnableFlush();
+#endif
 
   // Heats up the file system cache and make sure the file is fully
   // readable (synchronously).
@@ -52,17 +67,19 @@ class NET_EXPORT_PRIVATE MappedFile : public File {
  private:
   ~MappedFile() override;
 
-  bool init_;
-#if defined(OS_WIN)
+  bool init_ = false;
+
+#if BUILDFLAG(IS_WIN)
+  bool enable_flush_ = false;
   HANDLE section_;
 #endif
-  void* buffer_;  // Address of the memory mapped buffer.
-  size_t view_size_;  // Size of the memory pointed by buffer_.
-#if BUILDFLAG(POSIX_AVOID_MMAP)
-  void* snapshot_;  // Copy of the buffer taken when it was last flushed.
-#endif
 
-  DISALLOW_COPY_AND_ASSIGN(MappedFile);
+  size_t view_size_ = 0;  // Size of the memory pointed by `buffer_`.
+
+  // Address of the memory mapped buffer.
+  // This field is not a raw_ptr<> because it is using mmap or MapViewOfFile
+  // directly.
+  RAW_PTR_EXCLUSION void* buffer_ = nullptr;
 };
 
 // Helper class for calling Flush() on exit from the current scope.
@@ -73,7 +90,7 @@ class ScopedFlush {
     file_->Flush();
   }
  private:
-  MappedFile* file_;
+  raw_ptr<MappedFile> file_;
 };
 
 }  // namespace disk_cache

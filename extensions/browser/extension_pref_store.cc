@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@ ExtensionPrefStore::ExtensionPrefStore(
     bool incognito_pref_store)
     : extension_pref_value_map_(extension_pref_value_map),
       incognito_pref_store_(incognito_pref_store) {
-  extension_pref_value_map_->AddObserver(this);
+  extension_pref_value_map_observation_.Observe(extension_pref_value_map_);
 }
 
 void ExtensionPrefStore::OnInitializationCompleted() {
@@ -24,7 +24,7 @@ void ExtensionPrefStore::OnPrefValueChanged(const std::string& key) {
   const base::Value* winner = extension_pref_value_map_->GetEffectivePrefValue(
       key, incognito_pref_store_, nullptr);
   if (winner) {
-    SetValue(key, base::Value::ToUniquePtrValue(winner->Clone()),
+    SetValue(key, winner->Clone(),
              WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
   } else {
     RemoveValue(key, WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
@@ -33,11 +33,8 @@ void ExtensionPrefStore::OnPrefValueChanged(const std::string& key) {
 
 void ExtensionPrefStore::OnExtensionPrefValueMapDestruction() {
   CHECK(extension_pref_value_map_);
-  extension_pref_value_map_->RemoveObserver(this);
+  extension_pref_value_map_observation_.Reset();
   extension_pref_value_map_ = nullptr;
 }
 
-ExtensionPrefStore::~ExtensionPrefStore() {
-  if (extension_pref_value_map_)
-    extension_pref_value_map_->RemoveObserver(this);
-}
+ExtensionPrefStore::~ExtensionPrefStore() = default;

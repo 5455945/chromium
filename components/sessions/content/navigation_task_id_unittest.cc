@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,12 @@ namespace sessions {
 
 class NavigationTaskIDTest : public testing::Test {
  public:
-  NavigationTaskIDTest() {}
-  ~NavigationTaskIDTest() override {}
+  NavigationTaskIDTest() = default;
+
+  NavigationTaskIDTest(const NavigationTaskIDTest&) = delete;
+  NavigationTaskIDTest& operator=(const NavigationTaskIDTest&) = delete;
+
+  ~NavigationTaskIDTest() override = default;
 
   void SetUp() override {
     navigation_entry_ = content::NavigationEntry::Create();
@@ -21,9 +25,6 @@ class NavigationTaskIDTest : public testing::Test {
 
  protected:
   std::unique_ptr<content::NavigationEntry> navigation_entry_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NavigationTaskIDTest);
 };
 
 TEST_F(NavigationTaskIDTest, TaskIDTest) {

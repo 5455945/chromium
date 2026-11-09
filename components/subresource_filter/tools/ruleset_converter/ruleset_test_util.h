@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "components/subresource_filter/tools/ruleset_converter/rule_stream.h"
 #include "components/subresource_filter/tools/ruleset_converter/ruleset_format.h"
 #include "components/url_pattern_index/proto/rules.pb.h"
@@ -26,7 +25,7 @@ struct TestRulesetContents {
   ~TestRulesetContents();
 
   std::vector<url_pattern_index::proto::UrlRule> url_rules;
-  std::vector<url_pattern_index::proto::CssRule> css_rules;
+  std::vector<url_pattern_index::proto::StyleRule> style_rules;
 
   // Parses |text_rules| and appends them to the |ruleset|.
   void AppendRules(const std::vector<std::string>& text_rules,
@@ -46,6 +45,10 @@ class ScopedTempRulesetFile {
  public:
   // Creates a temporary file of the specified |format|.
   explicit ScopedTempRulesetFile(RulesetFormat format);
+
+  ScopedTempRulesetFile(const ScopedTempRulesetFile&) = delete;
+  ScopedTempRulesetFile& operator=(const ScopedTempRulesetFile&) = delete;
+
   ~ScopedTempRulesetFile();
 
   // Opens the |ruleset_file| and creates an empty rule output stream to this
@@ -69,15 +72,13 @@ class ScopedTempRulesetFile {
   base::ScopedTempDir scoped_dir_;
   base::FilePath ruleset_path_;
   const RulesetFormat format_;  // The format of the |file|.
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedTempRulesetFile);
 };
 
 bool AreUrlRulesEqual(const url_pattern_index::proto::UrlRule& first,
                       const url_pattern_index::proto::UrlRule& second);
 
-bool AreCssRulesEqual(const url_pattern_index::proto::CssRule& first,
-                      const url_pattern_index::proto::CssRule& second);
+bool AreStyleRulesEqual(const url_pattern_index::proto::StyleRule& first,
+                        const url_pattern_index::proto::StyleRule& second);
 
 }  // namespace subresource_filter
 

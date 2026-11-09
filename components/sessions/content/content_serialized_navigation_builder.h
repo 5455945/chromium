@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "components/sessions/core/sessions_export.h"
 
 namespace content {
@@ -58,7 +59,7 @@ class SESSIONS_EXPORT ContentSerializedNavigationBuilder {
   // Converts a set of SerializedNavigationEntrys into a list of
   // NavigationEntrys with the given context.
   static std::vector<std::unique_ptr<content::NavigationEntry>>
-  ToNavigationEntries(const std::vector<SerializedNavigationEntry>& navigations,
+  ToNavigationEntries(base::span<const SerializedNavigationEntry> navigations,
                       content::BrowserContext* browser_context);
 };
 

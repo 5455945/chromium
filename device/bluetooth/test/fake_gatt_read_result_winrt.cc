@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/win/reference.h"
 #include "base/win/winrt_storage_util.h"
 #include "device/bluetooth/bluetooth_remote_gatt_service_winrt.h"
@@ -44,8 +45,7 @@ HRESULT FakeGattReadResultWinrt::get_Status(GattCommunicationStatus* value) {
 
 HRESULT FakeGattReadResultWinrt::get_Value(IBuffer** value) {
   ComPtr<IBuffer> buffer;
-  HRESULT hr =
-      base::win::CreateIBufferFromData(data_.data(), data_.size(), &buffer);
+  HRESULT hr = base::win::CreateIBufferFromData(data_, &buffer);
   if (FAILED(hr))
     return hr;
 

@@ -1,13 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.customtabs;
 
+import static androidx.browser.customtabs.CustomTabsIntent.CLOSE_BUTTON_POSITION_DEFAULT;
+
+import static org.chromium.build.NullUtil.assumeNonNull;
+import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl.EXTRA_REQUESTED_WINDOW_FEATURES;
 import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.BUNDLE_ENTER_ANIMATION_RESOURCE;
 import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.BUNDLE_EXIT_ANIMATION_RESOURCE;
 import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.BUNDLE_PACKAGE_NAME;
 import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.EXTRA_UI_TYPE;
+import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.getClientPackageNameFromSessionOrCallingActivity;
 import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.isTrustedCustomTab;
 
 import android.app.PendingIntent;
@@ -15,22 +20,25 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
-import android.text.TextUtils;
 import android.util.Pair;
 
-import androidx.annotation.Nullable;
 import androidx.browser.customtabs.CustomTabsIntent;
-import androidx.browser.customtabs.CustomTabsSessionToken;
 
 import org.chromium.base.IntentUtils;
+import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeApplicationImpl;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.ColorProvider;
+import org.chromium.chrome.browser.browserservices.intents.CustomTabIntentDataHolder;
+import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
+import org.chromium.chrome.browser.customtabs.CustomTabsFeatureUsage.CustomTabsFeature;
 import org.chromium.chrome.browser.flags.ActivityType;
-import org.chromium.chrome.browser.flags.CachedFeatureFlags;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
+import org.chromium.chrome.browser.util.WindowFeatures;
 import org.chromium.components.browser_ui.widget.TintedDrawable;
 
 import java.util.ArrayList;
@@ -40,59 +48,82 @@ import java.util.List;
  * A model class that parses the incoming intent for incognito Custom Tabs specific customization
  * data.
  *
- * Lifecycle: is activity-scoped, i.e. one instance per CustomTabActivity instance. Must be
+ * <p>Lifecycle: is activity-scoped, i.e. one instance per CustomTabActivity instance. Must be
  * re-created when color scheme changes, which happens automatically since color scheme change leads
  * to activity re-creation.
  */
+@NullMarked
 public class IncognitoCustomTabIntentDataProvider extends BrowserServicesIntentDataProvider {
-    private static final int MAX_CUSTOM_MENU_ITEMS = 5;
-
     private final Intent mIntent;
-    private final CustomTabsSessionToken mSession;
-    private final boolean mIsTrustedIntent;
-    private final Bundle mAnimationBundle;
+    private final CustomTabIntentDataHolder mDataHolder;
     private final ColorProvider mColorProvider;
-    private final int mTitleVisibilityState;
     private final Drawable mCloseButtonIcon;
     private final boolean mShowShareItem;
     private final List<Pair<String, PendingIntent>> mMenuEntries = new ArrayList<>();
 
-    @Nullable
-    private final String mUrlToLoad;
-    private final String mSendersPackageName;
+    private final @Nullable String mUrlToLoad;
 
-    /** Whether this CustomTabActivity was explicitly started by another Chrome Activity. */
-    private final boolean mIsOpenedByChrome;
-
-    private final @CustomTabsUiType int mUiType;
-
-    /**
-     * Constructs a {@link IncognitoCustomTabIntentDataProvider}.
-     */
+    /** Constructs a {@link IncognitoCustomTabIntentDataProvider}. */
     public IncognitoCustomTabIntentDataProvider(Intent intent, Context context, int colorScheme) {
+        this(intent, context, colorScheme, /* dataHolder= */ null);
+    }
+
+    /** Constructs a {@link IncognitoCustomTabIntentDataProvider}. */
+    public IncognitoCustomTabIntentDataProvider(
+            Intent intent,
+            Context context,
+            int colorScheme,
+            @Nullable CustomTabIntentDataHolder dataHolder) {
         assert intent != null;
         mIntent = intent;
-        mUrlToLoad = resolveUrlToLoad(intent);
-        mSendersPackageName = getSendersPackageNameFromIntent(intent);
-        mSession = CustomTabsSessionToken.getSessionTokenFromIntent(intent);
-        mIsTrustedIntent = isTrustedCustomTab(intent, mSession);
-        mAnimationBundle = IntentUtils.safeGetBundleExtra(
-                intent, CustomTabsIntent.EXTRA_EXIT_ANIMATION_BUNDLE);
-        mIsOpenedByChrome = IntentHandler.wasIntentSenderChrome(intent);
-        // Only allow first-parties to change the styling.
-        mColorProvider = new IncognitoCustomTabColorProvider(context);
-        mCloseButtonIcon = TintedDrawable.constructTintedDrawable(context, R.drawable.btn_close);
-        mShowShareItem = IntentUtils.safeGetBooleanExtra(
-                intent, CustomTabsIntent.EXTRA_DEFAULT_SHARE_MENU_ITEM, false);
-        mTitleVisibilityState = IntentUtils.safeGetIntExtra(
-                intent, CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.NO_TITLE);
+        mUrlToLoad = IntentHandler.getUrlFromIntent(intent);
 
-        mUiType = getUiType(intent);
-        updateExtraMenuItemsIfNecessary(intent);
+        if (dataHolder != null) {
+            mDataHolder = dataHolder;
+        } else {
+            var builder = new CustomTabIntentDataHolder.Builder();
+            builder.setActivityType(ActivityType.CUSTOM_TAB);
+            builder.setCustomTabMode(CustomTabProfileType.INCOGNITO);
+            builder.setDisableDownload(true);
+
+            var session = SessionHolder.getSessionHolderFromIntent(intent);
+            builder.setSessionHolder(session);
+            builder.setClientPackageName(
+                    getClientPackageNameFromSessionOrCallingActivity(intent, session));
+            builder.setIsTrustedIntent(isTrustedCustomTab(intent, session));
+            builder.setAnimationBundle(
+                    IntentUtils.safeGetBundleExtra(
+                            intent, CustomTabsIntent.EXTRA_EXIT_ANIMATION_BUNDLE));
+            builder.setIsOpenedByChrome(IntentHandler.wasIntentSenderChrome(intent));
+
+            int intentVisibilityState =
+                    IntentUtils.safeGetIntExtra(
+                            intent,
+                            CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE,
+                            CustomTabsIntent.NO_TITLE);
+            builder.setTitleVisibilityState(
+                    BrowserServicesIntentDataProvider.customTabIntentTitleBarVisibility(
+                            intentVisibilityState, false));
+            int uiType = getUiType(intent);
+            builder.setUiType(uiType);
+            builder.setIsCloseButtonEnabled(true);
+
+            mDataHolder = builder.build();
+        }
+        assert isOffTheRecord();
+
+        mColorProvider = new IncognitoCustomTabColorProvider(context);
+        assert mDataHolder.mCloseButtonIcon == null;
+        mCloseButtonIcon = TintedDrawable.constructTintedDrawable(context, R.drawable.btn_close);
+        mShowShareItem =
+                IntentUtils.safeGetBooleanExtra(
+                        intent, CustomTabsIntent.EXTRA_DEFAULT_SHARE_MENU_ITEM, false);
+
+        logFeatureUsage(intent);
     }
 
     private static @CustomTabsUiType int getUiType(Intent intent) {
-        if (isForReaderMode(intent)) return CustomTabsUiType.READER_MODE;
+        if (isForPopup(intent)) return CustomTabsUiType.POPUP;
 
         return CustomTabsUiType.DEFAULT;
     }
@@ -102,165 +133,161 @@ public class IncognitoCustomTabIntentDataProvider extends BrowserServicesIntentD
                 intent, IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, false);
     }
 
-    private static boolean isForReaderMode(Intent intent) {
+    private static boolean isForPopup(Intent intent) {
         final int requestedUiType =
                 IntentUtils.safeGetIntExtra(intent, EXTRA_UI_TYPE, CustomTabsUiType.DEFAULT);
-        return (isIntentFromChrome(intent) && (requestedUiType == CustomTabsUiType.READER_MODE));
+        return (isIntentFromChrome(intent) && (requestedUiType == CustomTabsUiType.POPUP));
     }
 
     private static boolean isIntentFromThirdPartyAllowed() {
-        return CachedFeatureFlags.isEnabled(
-                ChromeFeatureList.CCT_INCOGNITO_AVAILABLE_TO_THIRD_PARTY);
-    }
-
-    private static boolean isIntentFromFirstParty(Intent intent) {
-        String sendersPackageName = getSendersPackageNameFromIntent(intent);
-        return !TextUtils.isEmpty(sendersPackageName)
-                && ChromeApplicationImpl.getComponent().resolveExternalAuthUtils().isGoogleSigned(
-                        sendersPackageName);
+        return ChromeFeatureList.sCctIncognitoAvailableToThirdParty.isEnabled();
     }
 
     private static boolean isIntentFromChrome(Intent intent) {
         return IntentHandler.wasIntentSenderChrome(intent);
     }
 
-    private static boolean isTrustedIntent(Intent intent) {
-        if (isIntentFromChrome(intent)) return true;
-        return isIntentFromFirstParty(intent) || isIntentFromThirdPartyAllowed();
-    }
+    /**
+     * Logs the usage of intents of all CCT features to a large enum histogram in order to track
+     * usage by apps.
+     *
+     * @param intent The intent used to launch the CCT.
+     */
+    private void logFeatureUsage(Intent intent) {
+        CustomTabsFeatureUsage featureUsage = new CustomTabsFeatureUsage();
 
-    private static boolean isAllowedToAddCustomMenuItem(Intent intent) {
-        // Only READER_MODE is supported for now.
-        return isForReaderMode(intent);
-    }
-
-    private void updateExtraMenuItemsIfNecessary(Intent intent) {
-        if (!isAllowedToAddCustomMenuItem(intent)) return;
-
-        List<Bundle> menuItems =
-                IntentUtils.getParcelableArrayListExtra(intent, CustomTabsIntent.EXTRA_MENU_ITEMS);
-        if (menuItems == null) return;
-
-        for (int i = 0; i < Math.min(MAX_CUSTOM_MENU_ITEMS, menuItems.size()); i++) {
-            Bundle bundle = menuItems.get(i);
-            String title = IntentUtils.safeGetString(bundle, CustomTabsIntent.KEY_MENU_ITEM_TITLE);
-            PendingIntent pendingIntent =
-                    IntentUtils.safeGetParcelable(bundle, CustomTabsIntent.KEY_PENDING_INTENT);
-            if (TextUtils.isEmpty(title) || pendingIntent == null) continue;
-            mMenuEntries.add(new Pair<String, PendingIntent>(title, pendingIntent));
+        // Ordering: Log all the features ordered by enum, when they apply.
+        if (mCloseButtonIcon != null) featureUsage.log(CustomTabsFeature.EXTRA_CLOSE_BUTTON_ICON);
+        if (getCloseButtonPosition() != CLOSE_BUTTON_POSITION_DEFAULT) {
+            featureUsage.log(CustomTabsFeature.EXTRA_CLOSE_BUTTON_POSITION);
+        }
+        if (mDataHolder.mAnimationBundle != null) {
+            featureUsage.log(CustomTabsFeature.EXTRA_EXIT_ANIMATION_BUNDLE);
+        }
+        featureUsage.log(CustomTabsFeature.EXTRA_OPEN_NEW_INCOGNITO_TAB);
+        if (mMenuEntries != null) featureUsage.log(CustomTabsFeature.EXTRA_MENU_ITEMS);
+        if (getClientPackageName() != null) featureUsage.log(CustomTabsFeature.CTF_PACKAGE_NAME);
+        if (IntentUtils.safeHasExtra(intent, IntentHandler.EXTRA_CALLING_ACTIVITY_PACKAGE)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_CALLING_ACTIVITY_PACKAGE);
+        }
+        if (isPartialHeightCustomTab()) featureUsage.log(CustomTabsFeature.CTF_PARTIAL);
+        if (mDataHolder.mIsOpenedByChrome) featureUsage.log(CustomTabsFeature.CTF_SENT_BY_CHROME);
+        if (mShowShareItem) featureUsage.log(CustomTabsFeature.EXTRA_DEFAULT_SHARE_MENU_ITEM);
+        if (mDataHolder.mTitleVisibilityState != CustomTabsIntent.NO_TITLE) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TITLE_VISIBILITY_STATE);
         }
     }
 
-    private static String getSendersPackageNameFromIntent(Intent intent) {
-        CustomTabsSessionToken sessionToken =
-                CustomTabsSessionToken.getSessionTokenFromIntent(intent);
-        return CustomTabsConnection.getInstance().getClientPackageNameForSession(sessionToken);
-    }
-
     public static void addIncognitoExtrasForChromeFeatures(
-            Intent intent, @IntentHandler.IncognitoCCTCallerId int chromeCallerId) {
+            Intent intent, @IncognitoCctCallerId int chromeCallerId) {
         intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, true);
         intent.putExtra(IntentHandler.EXTRA_INCOGNITO_CCT_CALLER_ID, chromeCallerId);
     }
 
-    public @IntentHandler.IncognitoCCTCallerId int getFeatureIdForMetricsCollection() {
+    @Override
+    public @IncognitoCctCallerId int getFeatureIdForMetricsCollection() {
         if (isIntentFromChrome(mIntent)) {
             assert mIntent.hasExtra(IntentHandler.EXTRA_INCOGNITO_CCT_CALLER_ID)
-                : "Intent coming from Chrome features should add the extra "
-                    + "IntentHandler.EXTRA_INCOGNITO_CCT_CALLER_ID.";
+                    : "Intent coming from Chrome features should add the extra "
+                            + "IntentHandler.EXTRA_INCOGNITO_CCT_CALLER_ID.";
 
-            @IntentHandler.IncognitoCCTCallerId
-            int incognitoCCTChromeClientId = IntentUtils.safeGetIntExtra(mIntent,
-                    IntentHandler.EXTRA_INCOGNITO_CCT_CALLER_ID,
-                    IntentHandler.IncognitoCCTCallerId.OTHER_CHROME_FEATURES);
+            @IncognitoCctCallerId
+            int incognitoCctChromeClientId =
+                    IntentUtils.safeGetIntExtra(
+                            mIntent,
+                            IntentHandler.EXTRA_INCOGNITO_CCT_CALLER_ID,
+                            IncognitoCctCallerId.OTHER_CHROME_FEATURES);
 
-            boolean isValidEntry = (incognitoCCTChromeClientId
-                            > IntentHandler.IncognitoCCTCallerId.OTHER_CHROME_FEATURES
-                    && incognitoCCTChromeClientId < IntentHandler.IncognitoCCTCallerId.NUM_ENTRIES);
+            boolean isValidEntry =
+                    (incognitoCctChromeClientId > IncognitoCctCallerId.OTHER_CHROME_FEATURES
+                            && incognitoCctChromeClientId < IncognitoCctCallerId.NUM_ENTRIES);
             assert isValidEntry : "Invalid EXTRA_INCOGNITO_CCT_CALLER_ID value!";
             if (!isValidEntry) {
-                incognitoCCTChromeClientId =
-                        IntentHandler.IncognitoCCTCallerId.OTHER_CHROME_FEATURES;
+                incognitoCctChromeClientId = IncognitoCctCallerId.OTHER_CHROME_FEATURES;
             }
-            return incognitoCCTChromeClientId;
-        } else if (isIntentFromFirstParty(mIntent)) {
-            return IntentHandler.IncognitoCCTCallerId.GOOGLE_APPS;
+            return incognitoCctChromeClientId;
+        } else if (mDataHolder.mIsTrustedIntent) {
+            return IncognitoCctCallerId.GOOGLE_APPS;
         } else {
-            return IntentHandler.IncognitoCCTCallerId.OTHER_APPS;
+            return IncognitoCctCallerId.OTHER_APPS;
         }
     }
 
-    // TODO(https://crbug.com/1023759): Remove this function and enable
-    // incognito CCT request for all apps.
-    public static boolean isValidIncognitoIntent(Intent intent) {
+    public static boolean isValidIncognitoIntent(Intent intent, boolean recordMetrics) {
         if (!isIncognitoRequested(intent)) return false;
-        if (!isTrustedIntent(intent)) return false;
-        return CachedFeatureFlags.isEnabled(ChromeFeatureList.CCT_INCOGNITO);
+        var session = SessionHolder.getSessionHolderFromIntent(intent);
+        if (isIntentFromThirdPartyAllowed()
+                && getClientPackageNameFromSessionOrCallingActivity(intent, session) != null) {
+            return true;
+        }
+        boolean isTrusted = isTrustedCustomTab(intent, session);
+        if (recordMetrics) {
+            RecordHistogram.recordBooleanHistogram(
+                    "CustomTabs.IncognitoCCTCallerIsTrusted", isTrusted);
+        }
+        return isTrusted;
     }
 
-    private String resolveUrlToLoad(Intent intent) {
-        return IntentHandler.getUrlFromIntent(intent);
-    }
-
-    public String getSendersPackageName() {
-        return mSendersPackageName;
+    public @Nullable String getSendersPackageName() {
+        return mDataHolder.mClientPackageName;
     }
 
     @Override
     public @ActivityType int getActivityType() {
-        return ActivityType.CUSTOM_TAB;
+        assert mDataHolder.mActivityType == ActivityType.CUSTOM_TAB;
+        return mDataHolder.mActivityType;
     }
 
     @Override
-    @Nullable
     public Intent getIntent() {
         return mIntent;
     }
 
     @Override
-    @Nullable
-    public CustomTabsSessionToken getSession() {
-        return mSession;
+    public @Nullable SessionHolder getSession() {
+        return mDataHolder.mSessionHolder;
     }
 
     @Override
     public boolean shouldAnimateOnFinish() {
-        return mAnimationBundle != null && getClientPackageName() != null;
+        return mDataHolder.mAnimationBundle != null
+                && mDataHolder.mAnimationBundle.getString(BUNDLE_PACKAGE_NAME) != null;
     }
 
     @Override
-    public String getClientPackageName() {
-        if (mAnimationBundle == null) return null;
-        return mAnimationBundle.getString(BUNDLE_PACKAGE_NAME);
+    public @Nullable String getClientPackageName() {
+        return mDataHolder.mClientPackageName;
     }
 
     @Override
     public int getAnimationEnterRes() {
-        return shouldAnimateOnFinish() ? mAnimationBundle.getInt(BUNDLE_ENTER_ANIMATION_RESOURCE)
-                                       : 0;
+        return shouldAnimateOnFinish()
+                ? assumeNonNull(mDataHolder.mAnimationBundle)
+                        .getInt(BUNDLE_ENTER_ANIMATION_RESOURCE)
+                : 0;
     }
 
     @Override
     public int getAnimationExitRes() {
-        return shouldAnimateOnFinish() ? mAnimationBundle.getInt(BUNDLE_EXIT_ANIMATION_RESOURCE)
-                                       : 0;
+        return shouldAnimateOnFinish()
+                ? assumeNonNull(mDataHolder.mAnimationBundle).getInt(BUNDLE_EXIT_ANIMATION_RESOURCE)
+                : 0;
     }
 
-    @Deprecated
     @Override
     public boolean isTrustedIntent() {
-        return mIsTrustedIntent;
+        return mDataHolder.mIsTrustedIntent;
     }
 
     @Override
-    @Nullable
-    public String getUrlToLoad() {
+    public @Nullable String getUrlToLoad() {
         return mUrlToLoad;
     }
 
     @Override
     public boolean shouldEnableUrlBarHiding() {
-        return false;
+        assert !mDataHolder.mEnableUrlBarHiding;
+        return mDataHolder.mEnableUrlBarHiding;
     }
 
     @Override
@@ -269,8 +296,7 @@ public class IncognitoCustomTabIntentDataProvider extends BrowserServicesIntentD
     }
 
     @Override
-    @Nullable
-    public Drawable getCloseButtonDrawable() {
+    public @Nullable Drawable getCloseButtonDrawable() {
         return mCloseButtonIcon;
     }
 
@@ -280,34 +306,36 @@ public class IncognitoCustomTabIntentDataProvider extends BrowserServicesIntentD
     }
 
     @Override
-    public int getTitleVisibilityState() {
-        return mTitleVisibilityState;
+    public @TitleVisibility int getTitleVisibilityState() {
+        return mDataHolder.mTitleVisibilityState;
     }
 
     @Override
     public boolean isOpenedByChrome() {
-        return mIsOpenedByChrome;
+        return mDataHolder.mIsOpenedByChrome;
     }
 
     @Override
     public boolean shouldShowStarButton() {
-        return true;
+        assert !mDataHolder.mDisableStar;
+        return !mDataHolder.mDisableStar;
     }
 
     @Override
     public boolean shouldShowDownloadButton() {
-        return false;
+        assert mDataHolder.mDisableDownload;
+        return !mDataHolder.mDisableDownload;
     }
 
     @Override
-    public boolean isIncognito() {
-        return true;
+    public @CustomTabProfileType int getCustomTabMode() {
+        assert mDataHolder.mCustomTabMode == CustomTabProfileType.INCOGNITO;
+        return mDataHolder.mCustomTabMode;
     }
 
     @Override
-    @CustomTabsUiType
-    public int getUiType() {
-        return mUiType;
+    public @CustomTabsUiType int getUiType() {
+        return mDataHolder.mUiType;
     }
 
     @Override
@@ -317,5 +345,28 @@ public class IncognitoCustomTabIntentDataProvider extends BrowserServicesIntentD
             list.add(pair.first);
         }
         return list;
+    }
+
+    @Override
+    public boolean isCloseButtonEnabled() {
+        return mDataHolder.mIsCloseButtonEnabled;
+    }
+
+    @Override
+    public @Nullable WindowFeatures getRequestedWindowFeatures() {
+        if (getUiType() != CustomTabsUiType.POPUP) {
+            return null;
+        }
+        final Bundle bundle =
+                IntentUtils.safeGetBundleExtra(getIntent(), EXTRA_REQUESTED_WINDOW_FEATURES);
+        if (bundle == null) {
+            return new WindowFeatures();
+        }
+        return new WindowFeatures(bundle);
+    }
+
+    @Override
+    public CustomTabIntentDataHolder getCustomTabIntentDataHolder() {
+        return mDataHolder;
     }
 }

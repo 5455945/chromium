@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,33 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/containers/heap_array.h"
 #include "base/files/file.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/hash/md5.h"
+#include "base/functional/callback.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/api/image_writer_private/image_writer_utility_client.h"
 #include "chrome/common/extensions/api/image_writer_private.h"
+#include "crypto/obsolete/md5.h"
 #include "extensions/common/extension_id.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/disks/disk_mount_manager.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/disks/disk_mount_manager.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/api/image_writer_private/removable_storage_provider_android.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "services/device/public/mojom/usb_device.mojom-forward.h"
+#include "services/device/public/mojom/usb_manager.mojom-forward.h"
 #endif
 
 namespace image_writer_api = extensions::api::image_writer_private;
@@ -33,12 +44,16 @@ namespace base {
 class FilePath;
 }  // namespace base
 
-namespace extensions {
-namespace image_writer {
+namespace extensions::image_writer {
 
-const int kProgressComplete = 100;
+inline constexpr int kProgressComplete = 100;
 
 class OperationManager;
+class ZstdExtractor;
+
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+class ImageWriterUtilityClient;
+#endif
 
 // Encapsulates an operation being run on behalf of the
 // OperationManager.  Construction of the operation does not start
@@ -56,7 +71,7 @@ class OperationManager;
 // There is probably a better way to organize this so that it can be represented
 // by a WeakPtr, but those are not thread-safe.  Additionally, if destruction is
 // done on the UI thread then that causes problems if any of the fields were
-// allocated/accessed on the blocking thread.  http://crbug.com/344713
+// allocated/accessed on the blocking thread.  http://crbug.com/41090268
 class Operation : public base::RefCountedThreadSafe<Operation> {
  public:
   using StartWriteCallback = base::OnceCallback<void(bool, const std::string&)>;
@@ -67,6 +82,9 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
             const ExtensionId& extension_id,
             const std::string& device_path,
             const base::FilePath& download_folder);
+
+  Operation(const Operation&) = delete;
+  Operation& operator=(const Operation&) = delete;
 
   // Starts the operation.
   void Start();
@@ -83,8 +101,26 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   int GetProgress();
   image_writer_api::Stage GetStage();
 
-  // Posts |task| to Operation's |task_runner_|.
+  // Posts `task` to Operation's `task_runner_`.
   void PostTask(base::OnceClosure task);
+
+#if BUILDFLAG(IS_ANDROID)
+  class UsbSession {
+   public:
+    using CompletionCallback =
+        base::OnceCallback<void(base::expected<void, std::string>)>;
+
+    virtual ~UsbSession() = default;
+    virtual void Start(CompletionCallback callback) = 0;
+  };
+
+  using UsbDeviceManagerBinder = base::RepeatingCallback<void(
+      mojo::PendingReceiver<device::mojom::UsbDeviceManager>)>;
+
+  void SetUsbDeviceManagerBinderForTesting(UsbDeviceManagerBinder binder) {
+    usb_binder_ = std::move(binder);
+  }
+#endif
 
  protected:
   virtual ~Operation();
@@ -96,6 +132,10 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   // This function should be overriden by subclasses to set up the work of the
   // operation.  It will be called from Start().
   virtual void StartImpl() = 0;
+
+  // Returns true if `Write()` over USB Mass Storage should also zero the backup
+  // GPT header and partition entries at the end of the disk.
+  virtual bool ShouldWipeBackupGpt() const;
 
   // Extracts the current file if it's an archive.  The current_file will be set
   // to the extracted file.
@@ -111,14 +151,14 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   void Finish();
 
   // Generates an error.
-  // |error_message| is used to create an OnWriteError event which is
+  // `error_message` is used to create an OnWriteError event which is
   // sent to the extension
   void Error(const std::string& error_message);
 
-  // Set |progress_| and send an event.  Progress should be in the interval
+  // Set `progress_` and send an event.  Progress should be in the interval
   // [0,100]
   void SetProgress(int progress);
-  // Change to a new |stage_| and set |progress_| to zero.  Triggers a progress
+  // Change to a new `stage_` and set `progress_` to zero.  Triggers a progress
   // event.
   void SetStage(image_writer_api::Stage stage);
 
@@ -127,23 +167,16 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
 
   // Adds a callback that will be called during clean-up, whether the operation
   // is aborted, encounters and error, or finishes successfully.  These
-  // functions will be run on |task_runner_|.
+  // functions will be run on `task_runner_`.
   void AddCleanUpFunction(base::OnceClosure callback);
 
   // Completes the current operation (progress set to 100) and runs the
   // continuation.
   void CompleteAndContinue(base::OnceClosure continuation);
 
-  // If |file_size| is non-zero, only |file_size| bytes will be read from file,
-  // otherwise the entire file will be read.
-  // |progress_scale| is a percentage to which the progress will be scale, e.g.
-  // a scale of 50 means it will increment from 0 to 50 over the course of the
-  // sum.  |progress_offset| is an percentage that will be added to the progress
-  // of the MD5 sum before updating |progress_| but after scaling.
-  void GetMD5SumOfFile(const base::FilePath& file,
-                       int64_t file_size,
-                       int progress_offset,
-                       int progress_scale,
+  // Computes the lowercase hex MD5 digest of `file_path` on `task_runner_`,
+  // updating stage progress from 0 to 100, and passes it to `callback`.
+  void GetMD5SumOfFile(const base::FilePath& file_path,
                        base::OnceCallback<void(const std::string&)> callback);
 
   bool IsRunningInCorrectSequence() const;
@@ -163,7 +196,7 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   friend class ImageWriterUtilityClientTest;
   friend class WriteFromUrlOperationForTest;
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
   // Ensures the client is started.  This may be called many times but will only
   // instantiate one client which should exist for the lifetime of the
   // Operation.
@@ -179,12 +212,12 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   scoped_refptr<ImageWriterUtilityClient> image_writer_client_;
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Unmounts all volumes on |device_path_|.
+#if BUILDFLAG(IS_CHROMEOS)
+  // Unmounts all volumes on `device_path_`.
   void UnmountVolumes(base::OnceClosure continuation);
   // Starts the write after unmounting.
   void UnmountVolumesCallback(base::OnceClosure continuation,
-                              chromeos::MountError error_code);
+                              ash::MountError error_code);
   // Starts the ImageBurner write.  Note that target_path is the file path of
   // the device where device_path has been a system device path.
   void StartWriteOnUIThread(const std::string& target_path,
@@ -199,34 +232,58 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   void OnBurnError();
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+  void ConnectToUsbDevice(ParsedDeviceId device_id,
+                          base::OnceClosure continuation);
+  void OnUsbManagerDisconnected();
+  void OnUsbDeviceInfoRefreshed(ParsedDeviceId device_id,
+                                base::OnceClosure continuation,
+                                device::mojom::UsbDeviceInfoPtr info);
+  void OnUsbDeviceConnected(
+      base::OnceClosure continuation,
+      const UsbMassStorageEndpoints& endpoints,
+      mojo::PendingRemote<device::mojom::UsbDevice> device_remote);
+  void OnUsbBotSessionFinished(base::OnceClosure continuation,
+                               base::expected<void, std::string> result);
+#endif
+
   // Incrementally calculates the MD5 sum of a file.
   void MD5Chunk(base::File file,
+                crypto::obsolete::Md5 md5,
+                base::HeapArray<uint8_t> buffer,
                 int64_t bytes_processed,
                 int64_t bytes_total,
-                int progress_offset,
-                int progress_scale,
-                const base::OnceCallback<void(const std::string&)> callback);
+                base::OnceCallback<void(const std::string&)> callback);
 
   // Callbacks for Extractor.
   void OnExtractOpenComplete(const base::FilePath& image_path);
+
+  // Note: `total_bytes` and `progress_bytes` are signed `int64_t `because
+  // `ZipExtractor` and `zip::ZipReader` deal in `int64_t` size values.
+  // TODO(crbug.com/489798713): Consider refactoring ZipReader to use unsigned
+  // values if possible.
+  // Extractors that provide `uint64_t` values (like `TarExtractor`) must
+  // validate they do not exceed `INT64_MAX` before passing them here to prevent
+  // overflow.
   void OnExtractProgress(int64_t total_bytes, int64_t progress_bytes);
+
   void OnExtractFailure(const std::string& error);
 
   // Runs all cleanup functions.
   void CleanUp();
 
-  // |stage_| and |progress_| are owned by the FILE thread, use |SetStage| and
-  // |SetProgress| to update.  Progress should be in the interval [0,100]
-  image_writer_api::Stage stage_;
-  int progress_;
-
-  // MD5 contexts don't play well with smart pointers.  Just going to allocate
-  // memory here.  This requires that we only do one MD5 sum at a time.
-  base::MD5Context md5_context_;
+  // `stage_` and `progress_` are owned by the FILE thread, use `SetStage` and
+  // `SetProgress` to update.  Progress should be in the interval [0,100]
+  image_writer_api::Stage stage_ = image_writer_api::Stage::kUnknown;
+  int progress_ = 0;
 
   // Cleanup operations that must be run.  All these functions are run on
-  // |task_runner_|.
+  // `task_runner_`.
   std::vector<base::OnceClosure> cleanup_functions_;
+
+  // Active Zstandard extractor, owned on `task_runner_` so it is terminated on
+  // cancellation or shutdown.
+  std::unique_ptr<ZstdExtractor> zstd_extractor_;
 
   static constexpr base::TaskTraits blocking_task_traits() {
     return {
@@ -246,10 +303,19 @@ class Operation : public base::RefCountedThreadSafe<Operation> {
   // Most of the methods of this class run in this task runner.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
-  DISALLOW_COPY_AND_ASSIGN(Operation);
+#if BUILDFLAG(IS_ANDROID)
+  UsbDeviceManagerBinder usb_binder_;
+  // `usb_manager_` and `usb_session_` are created, used, and reset exclusively
+  // on `task_runner_`. `CleanUp()` (called on `task_runner_` by `Error()`,
+  // `Cancel()`, and `Abort()`, including `OperationManager::Shutdown()`) resets
+  // both before `this` can be destroyed, and `~Operation()` hands them to
+  // `task_runner_->DeleteSoon()`. Their callbacks therefore safely bind
+  // `base::Unretained(this)`.
+  std::unique_ptr<mojo::Remote<device::mojom::UsbDeviceManager>> usb_manager_;
+  std::unique_ptr<UsbSession> usb_session_;
+#endif
 };
 
-}  // namespace image_writer
-}  // namespace extensions
+}  // namespace extensions::image_writer
 
 #endif  // CHROME_BROWSER_EXTENSIONS_API_IMAGE_WRITER_PRIVATE_OPERATION_H_

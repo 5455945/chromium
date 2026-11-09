@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,33 @@
 #define ASH_IN_SESSION_AUTH_IN_SESSION_AUTH_DIALOG_CONTROLLER_IMPL_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "ash/in_session_auth/in_session_auth_dialog.h"
+#include "ash/in_session_auth/in_session_auth_dialog_contents_view.h"
 #include "ash/public/cpp/in_session_auth_dialog_controller.h"
-#include "base/callback.h"
+#include "ash/public/cpp/in_session_auth_token_provider.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/aura/window_tracker.h"
-
-class AccountId;
-
-namespace aura {
-class Window;
-}
+#include "chromeos/ash/components/auth_panel/public/shared_types.h"
+#include "chromeos/ash/components/osauth/public/auth_attempt_consumer.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
+#include "components/account_id/account_id.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
 
-class InSessionAuthDialogClient;
-class WebAuthnRequestRegistrarImpl;
+class AuthHubConnector;
 
-// InSessionAuthDialogControllerImpl persists as long as UI is running.
-class InSessionAuthDialogControllerImpl : public InSessionAuthDialogController {
+class InSessionAuthDialogControllerImpl : public InSessionAuthDialogController,
+                                          public AuthAttemptConsumer {
  public:
+  enum class State {
+    kNotShown,
+    kShowing,
+    kShown,
+  };
+
   InSessionAuthDialogControllerImpl();
   InSessionAuthDialogControllerImpl(const InSessionAuthDialogControllerImpl&) =
       delete;
@@ -36,53 +41,61 @@ class InSessionAuthDialogControllerImpl : public InSessionAuthDialogController {
   ~InSessionAuthDialogControllerImpl() override;
 
   // InSessionAuthDialogController overrides
-  void SetClient(InSessionAuthDialogClient* client) override;
-  void ShowAuthenticationDialog(aura::Window* source_window,
-                                const std::string& origin_name,
-                                FinishCallback finish_callback) override;
-  void DestroyAuthenticationDialog() override;
-  void AuthenticateUserWithPin(const std::string& pin,
-                               OnAuthenticateCallback callback) override;
-  void AuthenticateUserWithFingerprint(
-      base::OnceCallback<void(bool, FingerprintState)> callback) override;
-  void OpenInSessionAuthHelpPage() override;
-  void Cancel() override;
-  void CheckAvailability(FinishCallback on_availability_checked) const override;
+  void ShowAuthDialog(
+      Reason reason,
+      const std::optional<std::string>& prompt,
+      auth_panel::AuthCompletionCallback on_auth_complete) override;
+
+  void SetTokenProvider(
+      InSessionAuthTokenProvider* auth_token_provider) override;
+
+  void ShowLegacyWebAuthnDialog(
+      const std::string& rp_id,
+      const std::string& window_id,
+      WebAuthNDialogController::FinishCallback on_auth_complete) override;
+
+  // AuthAttemptConsumer:
+  void OnUserAuthAttemptRejected() override;
+  void OnUserAuthAttemptConfirmed(
+      AuthHubConnector* connector,
+      raw_ptr<AuthFactorStatusConsumer>& out_consumer) override;
+  void OnAccountNotFound() override;
+  void OnUserAuthAttemptCancelled() override;
+  void OnFactorAttemptFailed(AshAuthFactor factor) override;
+  void OnUserAuthSuccess(AshAuthFactor factor,
+                         const AuthProofToken& token) override;
 
  private:
-  bool IsFingerprintAvailable(const AccountId& account_id);
-  void OnStartFingerprintAuthSession(AccountId account_id,
-                                     uint32_t auth_methods,
-                                     aura::Window* source_window,
-                                     const std::string& origin_name,
-                                     bool success);
-  void OnPinCanAuthenticate(uint32_t auth_methods,
-                            aura::Window* source_window,
-                            const std::string& origin_name,
-                            bool pin_auth_available);
+  void CreateAndShowAuthPanel(
+      const std::optional<std::string>& prompt,
+      auth_panel::AuthCompletionCallback on_auth_complete,
+      Reason reason,
+      const AccountId& account_id);
 
-  // Callback to execute when auth on ChromeOS side completes.
-  void OnAuthenticateComplete(OnAuthenticateCallback callback, bool success);
+  void OnAuthPanelPreferredSizeChanged();
 
-  void OnFingerprintAuthComplete(
-      base::OnceCallback<void(bool, FingerprintState)> views_callback,
-      bool success,
-      FingerprintState fingerprint_state);
+  // Destroys the authentication dialog.
+  void OnEndAuthentication();
 
-  // Called when auth succeeds to close the dialog and report success.
-  void OnAuthSuccess();
+  void NotifySuccess(const AuthProofToken& token);
+  void NotifyFailure();
 
-  InSessionAuthDialogClient* client_ = nullptr;
+  // Non owning pointer, initialized and owned by
+  // `ChromeBrowserMainExtraPartsAsh`.
+  // `auth_token_provider_` will outlive this controller since the controller
+  // is part of `ash::Shell` and will be destroyed as part of `AshShellInit`
+  // before `auth_token_provider`.
+  raw_ptr<InSessionAuthTokenProvider> auth_token_provider_;
 
-  // Callback to provide result of the entire authentication flow to
-  // UserAuthenticationServiceProvider.
-  FinishCallback finish_callback_;
+  auth_panel::AuthCompletionCallback on_auth_complete_;
 
-  std::unique_ptr<InSessionAuthDialog> dialog_;
+  State state_ = State::kNotShown;
 
-  aura::WindowTracker source_window_tracker_;
+  std::unique_ptr<views::Widget> dialog_;
 
-  std::unique_ptr<WebAuthnRequestRegistrarImpl> webauthn_request_registrar_;
+  std::optional<std::string> prompt_;
+
+  raw_ptr<InSessionAuthDialogContentsView> contents_view_ = nullptr;
 
   base::WeakPtrFactory<InSessionAuthDialogControllerImpl> weak_factory_{this};
 };

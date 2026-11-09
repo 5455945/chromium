@@ -1,10 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/paint/paint_filter.h"
 
-#include "cc/paint/paint_op_buffer.h"
+#include <utility>
+
+#include "cc/paint/image_provider.h"
+#include "cc/paint/paint_image_builder.h"
+#include "cc/paint/paint_op.h"
 #include "cc/test/skia_common.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/effects/SkLumaColorFilter.h"
@@ -29,47 +33,51 @@ class MockImageProvider : public ImageProvider {
 };
 
 sk_sp<PaintFilter> CreateTestFilter(PaintFilter::Type filter_type,
-                                    bool has_discardable_images) {
+                                    bool has_discardable_images,
+                                    bool is_read_back_disallowed = false) {
   PaintImage image;
   if (has_discardable_images)
     image = CreateDiscardablePaintImage(gfx::Size(100, 100));
   else
     image = CreateNonDiscardablePaintImage(gfx::Size(100, 100));
+  if (is_read_back_disallowed) {
+    image = PaintImageBuilder::WithCopy(std::move(image))
+                .set_is_read_back_disallowed(true)
+                .TakePaintImage();
+  }
 
   auto image_filter = sk_make_sp<ImagePaintFilter>(
       image, SkRect::MakeWH(100.f, 100.f), SkRect::MakeWH(100.f, 100.f),
-      kNone_SkFilterQuality);
-  auto record = sk_make_sp<PaintOpBuffer>();
-  record->push<DrawImageOp>(image, 0.f, 0.f);
-  auto record_filter =
-      sk_make_sp<RecordPaintFilter>(record, SkRect::MakeWH(100.f, 100.f));
+      PaintFlags::FilterQuality::kNone);
+  PaintOpBuffer buffer;
+  buffer.push<DrawImageOp>(image, 0.f, 0.f);
+  auto record_filter = sk_make_sp<RecordPaintFilter>(
+      buffer.ReleaseAsRecord(), SkRect::MakeWH(100.f, 100.f));
 
   PaintFilter::CropRect crop_rect(SkRect::MakeWH(100.f, 100.f));
 
   switch (filter_type) {
     case PaintFilter::Type::kNullFilter:
       NOTREACHED();
-      return nullptr;
     case PaintFilter::Type::kColorFilter:
-      return sk_make_sp<ColorFilterPaintFilter>(SkLumaColorFilter::Make(),
+      return sk_make_sp<ColorFilterPaintFilter>(ColorFilter::MakeLuma(),
                                                 image_filter, &crop_rect);
     case PaintFilter::Type::kBlur:
       return sk_make_sp<BlurPaintFilter>(0.1f, 0.2f, SkTileMode::kClamp,
                                          record_filter, &crop_rect);
     case PaintFilter::Type::kDropShadow:
       return sk_make_sp<DropShadowPaintFilter>(
-          0.1, 0.2f, 0.3f, 0.4f, SK_ColorWHITE,
+          0.1, 0.2f, 0.3f, 0.4f, SkColors::kWhite,
           DropShadowPaintFilter::ShadowMode::kDrawShadowOnly, image_filter,
           &crop_rect);
     case PaintFilter::Type::kMagnifier:
-      return sk_make_sp<MagnifierPaintFilter>(SkRect::MakeWH(100.f, 100.f),
+      return sk_make_sp<MagnifierPaintFilter>(SkRect::MakeWH(100.f, 100.f), 2.f,
                                               0.1f, record_filter, &crop_rect);
     case PaintFilter::Type::kCompose:
       return sk_make_sp<ComposePaintFilter>(image_filter, record_filter);
     case PaintFilter::Type::kAlphaThreshold:
       return sk_make_sp<AlphaThresholdPaintFilter>(
-          SkRegion(SkIRect::MakeWH(100, 100)), 0.1f, 0.2f, image_filter,
-          &crop_rect);
+          SkRegion(SkIRect::MakeWH(100, 100)), image_filter, &crop_rect);
     case PaintFilter::Type::kXfermode:
       return sk_make_sp<XfermodePaintFilter>(SkBlendMode::kSrc, image_filter,
                                              record_filter, &crop_rect);
@@ -93,7 +101,7 @@ sk_sp<PaintFilter> CreateTestFilter(PaintFilter::Type filter_type,
       return record_filter;
     case PaintFilter::Type::kMerge: {
       sk_sp<PaintFilter> filters[2] = {image_filter, record_filter};
-      return sk_make_sp<MergePaintFilter>(filters, 2, &crop_rect);
+      return sk_make_sp<MergePaintFilter>(filters, &crop_rect);
     }
     case PaintFilter::Type::kMorphology:
       return sk_make_sp<MorphologyPaintFilter>(
@@ -114,31 +122,27 @@ sk_sp<PaintFilter> CreateTestFilter(PaintFilter::Type filter_type,
       return sk_make_sp<ShaderPaintFilter>(
           PaintShader::MakeImage(image, SkTileMode::kClamp, SkTileMode::kClamp,
                                  nullptr),
-          /*alpha=*/255, kNone_SkFilterQuality, SkImageFilters::Dither::kNo,
-          &crop_rect);
+          /*alpha=*/1.0f, PaintFlags::FilterQuality::kNone,
+          SkImageFilters::Dither::kNo, &crop_rect);
     }
     case PaintFilter::Type::kMatrix:
-      return sk_make_sp<MatrixPaintFilter>(SkMatrix::I(), kNone_SkFilterQuality,
-                                           record_filter);
+      return sk_make_sp<MatrixPaintFilter>(
+          SkMatrix::I(), PaintFlags::FilterQuality::kNone, record_filter);
     case PaintFilter::Type::kLightingDistant:
       return sk_make_sp<LightingDistantPaintFilter>(
           PaintFilter::LightingType::kDiffuse, SkPoint3::Make(0.1f, 0.2f, 0.3f),
-          SK_ColorWHITE, 0.1f, 0.2f, 0.3f, image_filter, &crop_rect);
+          SkColors::kWhite, 0.1f, 0.2f, 0.3f, image_filter, &crop_rect);
     case PaintFilter::Type::kLightingPoint:
       return sk_make_sp<LightingPointPaintFilter>(
           PaintFilter::LightingType::kDiffuse, SkPoint3::Make(0.1f, 0.2f, 0.3f),
-          SK_ColorWHITE, 0.1f, 0.2f, 0.3f, record_filter, &crop_rect);
+          SkColors::kWhite, 0.1f, 0.2f, 0.3f, record_filter, &crop_rect);
     case PaintFilter::Type::kLightingSpot:
       return sk_make_sp<LightingSpotPaintFilter>(
           PaintFilter::LightingType::kDiffuse, SkPoint3::Make(0.1f, 0.2f, 0.3f),
-          SkPoint3::Make(0.4f, 0.5f, 0.6f), 0.1f, 0.2f, SK_ColorWHITE, 0.4f,
+          SkPoint3::Make(0.4f, 0.5f, 0.6f), 0.1f, 0.2f, SkColors::kWhite, 0.4f,
           0.5f, 0.6f, image_filter, &crop_rect);
-    case PaintFilter::Type::kStretch:
-      return sk_make_sp<StretchPaintFilter>(0.1f, 0.2f, 100.f, 200.f,
-                                            image_filter, &crop_rect);
   }
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace
@@ -171,6 +175,30 @@ TEST_P(PaintFilterTest, HasDiscardableImagesNo) {
       << PaintFilter::TypeToString(GetParamType());
 }
 
+TEST_P(PaintFilterTest, HasReadBackDisallowedContentYes) {
+  // TurbulencePaintFilter can not embed images.
+  if (GetParamType() == PaintFilter::Type::kTurbulence) {
+    return;
+  }
+
+  auto filter = CreateTestFilter(GetParamType(), true,
+                                 /*is_read_back_disallowed=*/true);
+  EXPECT_TRUE(filter->has_read_back_disallowed_content())
+      << PaintFilter::TypeToString(GetParamType());
+
+  MockImageProvider image_provider;
+  auto snapshot_filter = filter->SnapshotWithImages(&image_provider);
+  EXPECT_TRUE(snapshot_filter->has_read_back_disallowed_content())
+      << PaintFilter::TypeToString(GetParamType());
+}
+
+TEST_P(PaintFilterTest, HasReadBackDisallowedContentNo) {
+  EXPECT_FALSE(CreateTestFilter(GetParamType(), true,
+                                /*is_read_back_disallowed=*/false)
+                   ->has_read_back_disallowed_content())
+      << PaintFilter::TypeToString(GetParamType());
+}
+
 TEST_P(PaintFilterTest, SnapshotWithImages) {
   auto filter = CreateTestFilter(GetParamType(), true);
   MockImageProvider image_provider;
@@ -180,7 +208,7 @@ TEST_P(PaintFilterTest, SnapshotWithImages) {
     EXPECT_GT(image_provider.image_count_, 0)
         << PaintFilter::TypeToString(GetParamType());
   }
-  EXPECT_EQ(*filter, *snapshot_filter)
+  EXPECT_TRUE(filter->EqualsForTesting(*snapshot_filter))
       << PaintFilter::TypeToString(GetParamType());
 }
 

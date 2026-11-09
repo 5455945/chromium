@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,10 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/time/time.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -38,26 +41,40 @@ class InfoBarContainer : public InfoBarManager::Observer {
   };
 
   explicit InfoBarContainer(Delegate* delegate);
+
+  InfoBarContainer(const InfoBarContainer&) = delete;
+  InfoBarContainer& operator=(const InfoBarContainer&) = delete;
+
   ~InfoBarContainer() override;
 
   // Changes the InfoBarManager for which this container is showing infobars.
   // This will hide all current infobars, remove them from the container, add
   // the infobars from |infobar_manager|, and show them all.  |infobar_manager|
   // may be NULL.
-  void ChangeInfoBarManager(InfoBarManager* infobar_manager);
+  virtual void ChangeInfoBarManager(InfoBarManager* infobar_manager);
+
+  const Delegate* delegate() const { return delegate_; }
+
+  bool ShouldHideInFullscreen() const;
+
+  // Called by |infobar| to request that it be removed from the container.  At
+  // this point, |infobar| should already be hidden.
+  void RemoveInfoBar(InfoBar* infobar);
 
   // Called when a contained infobar has animated or by some other means changed
   // its height, or when it stops animating.  The container is expected to do
   // anything necessary to respond, e.g. re-layout.
   void OnInfoBarStateChanged(bool is_animating);
 
-  // Called by |infobar| to request that it be removed from the container.  At
-  // this point, |infobar| should already be hidden.
-  void RemoveInfoBar(InfoBar* infobar);
-
-  const Delegate* delegate() const { return delegate_; }
-
  protected:
+  typedef std::vector<raw_ptr<InfoBar, VectorExperimental>> InfoBars;
+
+  // InfoBarManager::Observer:
+  void OnInfoBarAdded(InfoBar* infobar) override;
+  void OnInfoBarRemoved(InfoBar* infobar, bool animate) override;
+  void OnInfoBarReplaced(InfoBar* old_infobar, InfoBar* new_infobar) override;
+  void OnManagerWillBeDestroyed(InfoBarManager* manager) override;
+
   // Subclasses must call this during destruction, so that we can remove
   // infobars (which will call the pure virtual functions below) while the
   // subclass portion of |this| has not yet been destroyed.
@@ -76,24 +93,29 @@ class InfoBarContainer : public InfoBarManager::Observer {
                                               InfoBar* new_infobar) {}
   virtual void PlatformSpecificRemoveInfoBar(InfoBar* infobar) = 0;
   virtual void PlatformSpecificInfoBarStateChanged(bool is_animating) {}
-
- private:
-  typedef std::vector<InfoBar*> InfoBars;
-
-  // InfoBarManager::Observer:
-  void OnInfoBarAdded(InfoBar* infobar) override;
-  void OnInfoBarRemoved(InfoBar* infobar, bool animate) override;
-  void OnInfoBarReplaced(InfoBar* old_infobar, InfoBar* new_infobar) override;
-  void OnManagerShuttingDown(InfoBarManager* manager) override;
+  virtual void PlatformSpecificWillRemoveInfoBar(infobars::InfoBar* infobar) {}
+  virtual void PlatformSpecificInfoBarShown(infobars::InfoBar* infobar) {}
 
   // Adds |infobar| to this container before the existing infobar at position
   // |position| and calls Show() on it.  |animate| is passed along to
   // infobar->Show().
   void AddInfoBar(InfoBar* infobar, size_t position, bool animate);
 
-  Delegate* delegate_;
-  InfoBarManager* infobar_manager_;
-  InfoBars infobars_;
+  const InfoBars& infobars() const { return infobars_; }
+  InfoBars& infobars() { return infobars_; }
+
+  // Returns the InfoBarManager that this object is observing.
+  InfoBarManager* manager() { return scoped_observation_.GetSource(); }
+  const InfoBarManager* manager() const {
+    return scoped_observation_.GetSource();
+  }
+
+  // Non-owning pointer to the delegate that manages the view.
+  raw_ptr<Delegate> delegate_;
+
+  // Scoped observation for the InfoBarManager.
+  base::ScopedObservation<InfoBarManager, InfoBarManager::Observer>
+      scoped_observation_{this};
 
   // Normally false.  When true, OnInfoBarStateChanged() becomes a no-op.  We
   // use this to ensure that ChangeInfoBarManager() only executes the
@@ -101,7 +123,9 @@ class InfoBarContainer : public InfoBarManager::Observer {
   // layout and painting.
   bool ignore_infobar_state_changed_;
 
-  DISALLOW_COPY_AND_ASSIGN(InfoBarContainer);
+ private:
+  // The list of infobars currently shown in this container.
+  InfoBars infobars_;
 };
 
 }  // namespace infobars

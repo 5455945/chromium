@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/bookmarks/common/bookmark_metrics.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
 #include "components/bookmarks/test/test_bookmark_client.h"
 #include "content/public/test/browser_task_environment.h"
@@ -22,8 +22,13 @@ using bookmarks::TestBookmarkClient;
 // OnComboboxModelChanged() is invoked.
 class TestComboboxModelObserver : public ui::ComboboxModelObserver {
  public:
-  TestComboboxModelObserver() : changed_(false) {}
-  ~TestComboboxModelObserver() override {}
+  TestComboboxModelObserver() = default;
+
+  TestComboboxModelObserver(const TestComboboxModelObserver&) = delete;
+  TestComboboxModelObserver& operator=(const TestComboboxModelObserver&) =
+      delete;
+
+  ~TestComboboxModelObserver() override = default;
 
   // Returns whether the model changed and clears changed state.
   bool GetAndClearChanged() {
@@ -37,20 +42,23 @@ class TestComboboxModelObserver : public ui::ComboboxModelObserver {
     changed_ = true;
   }
 
- private:
-  bool changed_;
+  void OnComboboxModelDestroying(ui::ComboboxModel* model) override {}
 
-  DISALLOW_COPY_AND_ASSIGN(TestComboboxModelObserver);
+ private:
+  bool changed_ = false;
 };
 
 class RecentlyUsedFoldersComboModelTest : public testing::Test {
  public:
   RecentlyUsedFoldersComboModelTest() = default;
 
+  RecentlyUsedFoldersComboModelTest(const RecentlyUsedFoldersComboModelTest&) =
+      delete;
+  RecentlyUsedFoldersComboModelTest& operator=(
+      const RecentlyUsedFoldersComboModelTest&) = delete;
+
  private:
   content::BrowserTaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(RecentlyUsedFoldersComboModelTest);
 };
 
 // Verifies there are no duplicate nodes in the model.
@@ -61,9 +69,10 @@ TEST_F(RecentlyUsedFoldersComboModelTest, NoDups) {
       bookmark_model->bookmark_bar_node(), 0, u"a", GURL("http://a"));
   RecentlyUsedFoldersComboModel model(bookmark_model.get(), new_node);
   std::set<std::u16string> items;
-  for (int i = 0; i < model.GetItemCount(); ++i) {
-    if (!model.IsItemSeparatorAt(i))
+  for (size_t i = 0; i < model.GetItemCount(); ++i) {
+    if (!model.IsItemSeparatorAt(i)) {
       EXPECT_EQ(0u, items.count(model.GetItemAt(i)));
+    }
   }
 }
 
@@ -80,15 +89,16 @@ TEST_F(RecentlyUsedFoldersComboModelTest, NotifyObserver) {
   TestComboboxModelObserver observer;
   model.AddObserver(&observer);
 
-  const int initial_count = model.GetItemCount();
+  const size_t initial_count = model.GetItemCount();
   // Remove a folder, it should remove an item from the model too.
-  bookmark_model->Remove(sub_folder);
+  bookmark_model->Remove(
+      sub_folder, bookmarks::metrics::BookmarkEditSource::kOther, FROM_HERE);
   EXPECT_TRUE(observer.GetAndClearChanged());
-  const int updated_count = model.GetItemCount();
+  const size_t updated_count = model.GetItemCount();
   EXPECT_LT(updated_count, initial_count);
 
   // Remove all, which should remove a folder too.
-  bookmark_model->RemoveAllUserBookmarks();
+  bookmark_model->RemoveAllUserBookmarks(FROM_HERE);
   EXPECT_TRUE(observer.GetAndClearChanged());
   EXPECT_LT(model.GetItemCount(), updated_count);
 

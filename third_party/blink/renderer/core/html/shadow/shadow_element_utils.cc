@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,5 +46,53 @@ bool IsTextControlPlaceholder(const Node* node) {
     return false;
   return element->GetIdAttribute() == shadow_element_names::kIdPlaceholder;
 }
+
+namespace shadow_element_utils {
+
+const AtomicString& StringForUAShadowPseudoId(PseudoId pseudo_id) {
+  switch (pseudo_id) {
+    case kPseudoIdPlaceholder:
+      return shadow_element_names::kPseudoInputPlaceholder;
+    case kPseudoIdFileSelectorButton:
+      return shadow_element_names::kPseudoFileUploadButton;
+    case kPseudoIdDetailsContent:
+      return shadow_element_names::kIdDetailsContent;
+    case kPseudoIdPermissionIcon:
+      return shadow_element_names::kIdPermissionIcon;
+    case kPseudoIdPickerSelect:
+      return shadow_element_names::kPickerSelect;
+    case kPseudoIdSelectListbox:
+      return shadow_element_names::kSelectListbox;
+    default:
+      return g_null_atom;
+  }
+}
+
+PseudoId PseudoIdForShadowElementName(const AtomicString& shadow_element_name) {
+  if (shadow_element_name == g_null_atom) {
+    return kPseudoIdNone;
+  }
+  if (shadow_element_name == shadow_element_names::kPseudoInputPlaceholder) {
+    return kPseudoIdPlaceholder;
+  }
+  if (shadow_element_name == shadow_element_names::kPseudoFileUploadButton) {
+    return kPseudoIdFileSelectorButton;
+  }
+  if (shadow_element_name == shadow_element_names::kIdDetailsContent) {
+    return kPseudoIdDetailsContent;
+  }
+  if (shadow_element_name == shadow_element_names::kIdPermissionIcon) {
+    return kPseudoIdPermissionIcon;
+  }
+  if (shadow_element_name == shadow_element_names::kPickerSelect) {
+    return kPseudoIdPickerSelect;
+  }
+  if (shadow_element_name == shadow_element_names::kSelectListbox) {
+    return kPseudoIdSelectListbox;
+  }
+  return kPseudoIdNone;
+}
+
+}  // namespace shadow_element_utils
 
 }  // namespace blink

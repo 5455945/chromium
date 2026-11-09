@@ -1,40 +1,47 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/device_api/managed_configuration_service.h"
 
+#include <utility>
+
+#include "base/memory/self_deleting.h"
 #include "chrome/browser/device_api/managed_configuration_api_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/blink/public/common/features.h"
+#include "content/public/browser/render_frame_host.h"
+#include "third_party/blink/public/common/features_generated.h"
 
 // static
-void ManagedConfigurationServiceImpl::Create(
+ManagedConfigurationServiceImpl* ManagedConfigurationServiceImpl::Create(
     content::RenderFrameHost* host,
     mojo::PendingReceiver<blink::mojom::ManagedConfigurationService> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(host);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   if (!base::FeatureList::IsEnabled(blink::features::kManagedConfiguration)) {
     mojo::ReportBadMessage(
         "Managed configuration access while the feature is not enabled.");
-    return;
+    return nullptr;
   }
 
-  // Do not create ManagedConfigurationService for incognito profiles.
-  if (Profile::FromBrowserContext(host->GetBrowserContext())
-          ->IsIncognitoProfile()) {
-    return;
+  // Do not create ManagedConfigurationService for off-the-record profiles,
+  // including Incognito and Enterprise Isolated Mode profiles.
+  if (host->GetBrowserContext()->IsOffTheRecord()) {
+    return nullptr;
   }
 
   // The object is bound to the lifetime of |host| and the mojo
-  // connection. See DocumentServiceBase for details.
-  new ManagedConfigurationServiceImpl(host, std::move(receiver));
+  // connection. See DocumentService for details.
+  return base::MakeSelfDeleting<ManagedConfigurationServiceImpl>(
+      *host, std::move(receiver));
 }
 
 ManagedConfigurationServiceImpl::ManagedConfigurationServiceImpl(
-    content::RenderFrameHost* host,
-    mojo::PendingReceiver<blink::mojom::ManagedConfigurationService> receiver)
-    : DocumentServiceBase(host, std::move(receiver)), host_(host) {
+    content::RenderFrameHost& host,
+    mojo::PendingReceiver<blink::mojom::ManagedConfigurationService> receiver,
+    base::SelfDeletingPassKey key)
+    : DocumentService(host, std::move(receiver), key) {
   managed_configuration_api()->AddObserver(this);
 }
 
@@ -49,34 +56,39 @@ void ManagedConfigurationServiceImpl::GetManagedConfiguration(
       origin(), keys,
       base::BindOnce(
           [](GetManagedConfigurationCallback callback,
-             std::unique_ptr<base::DictionaryValue> result) {
+             std::optional<base::DictValue> result) {
             if (!result) {
-              return std::move(callback).Run(absl::nullopt);
+              std::move(callback).Run(std::nullopt);
+              return;
             }
-            std::vector<std::pair<std::string, std::string>> items;
-            for (auto it : result->DictItems())
-              items.emplace_back(it.first, it.second.GetString());
-            std::move(callback).Run(
-                base::flat_map<std::string, std::string>(std::move(items)));
+            std::move(callback).Run(base::MakeFlatMap<std::string, std::string>(
+                *result, {},
+                [](const auto& item) -> std::pair<std::string, std::string> {
+                  return {item.first, item.second.GetString()};
+                }));
           },
           std::move(callback)));
 }
 
 void ManagedConfigurationServiceImpl::SubscribeToManagedConfiguration(
     mojo::PendingRemote<blink::mojom::ManagedConfigurationObserver> observer) {
+  CHECK(!configuration_subscription_.is_bound());
   configuration_subscription_.Bind(std::move(observer));
+  configuration_subscription_.reset_on_disconnect();
 }
 
 void ManagedConfigurationServiceImpl::OnManagedConfigurationChanged() {
-  configuration_subscription_->OnConfigurationChanged();
+  if (configuration_subscription_.is_bound()) {
+    configuration_subscription_->OnConfigurationChanged();
+  }
 }
 
 ManagedConfigurationAPI*
 ManagedConfigurationServiceImpl::managed_configuration_api() {
   return ManagedConfigurationAPIFactory::GetForProfile(
-      Profile::FromBrowserContext(host_->GetBrowserContext()));
+      Profile::FromBrowserContext(render_frame_host().GetBrowserContext()));
 }
 
-const url::Origin& ManagedConfigurationServiceImpl::GetOrigin() {
+const url::Origin& ManagedConfigurationServiceImpl::GetOrigin() const {
   return origin();
 }

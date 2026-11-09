@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,20 @@ MinidumpParams::MinidumpParams(const uint64_t p_process_uptime,
                                const std::string& p_cast_build_number,
                                const std::string& p_reason,
                                const std::string& p_stadia_session_id,
-                               const std::string& p_extra_info)
+                               const std::string& p_extra_info,
+                               const std::string& p_exec_name,
+                               const std::string& p_signature,
+                               const std::string& p_crash_product_name,
+                               const std::string& p_comments,
+                               const std::string& p_js_engine,
+                               const std::string& p_js_build_label,
+                               const std::string& p_js_exception_category,
+                               const std::string& p_js_exception_details,
+                               const std::string& p_js_exception_signature,
+                               const std::string& p_js_error_app,
+                               const std::string& p_previous_logfile,
+                               const std::string& p_background_apps,
+                               const std::string& p_server_url)
     : process_uptime(p_process_uptime),
       suffix(p_suffix),
       previous_app_name(p_previous_app_name),
@@ -25,7 +38,20 @@ MinidumpParams::MinidumpParams(const uint64_t p_process_uptime,
       cast_build_number(p_cast_build_number),
       reason(p_reason),
       stadia_session_id(p_stadia_session_id),
-      extra_info(p_extra_info) {}
+      extra_info(p_extra_info),
+      exec_name(p_exec_name),
+      signature(p_signature),
+      crash_product_name(p_crash_product_name),
+      comments(p_comments),
+      js_engine(p_js_engine),
+      js_build_label(p_js_build_label),
+      js_exception_category(p_js_exception_category),
+      js_exception_details(p_js_exception_details),
+      js_exception_signature(p_js_exception_signature),
+      js_error_app(p_js_error_app),
+      previous_logfile(p_previous_logfile),
+      background_apps(p_background_apps),
+      server_url(p_server_url) {}
 
 MinidumpParams::MinidumpParams() : process_uptime(0) {}
 

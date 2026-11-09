@@ -35,7 +35,7 @@
 #include "third_party/blink/public/platform/web_common.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 namespace cc {
 class Layer;
@@ -133,11 +133,15 @@ class WebPluginContainer {
   virtual void ReportFindInPageMatchCount(int identifier,
                                           int total,
                                           bool final_update) = 0;
-  virtual void ReportFindInPageSelection(int identifier, int index) = 0;
+  virtual void ReportFindInPageSelection(int identifier,
+                                         int index,
+                                         bool final_update) = 0;
 
-  virtual float DeviceScaleFactor() = 0;
+  // PageScaleFactor represents visual viewport pinch zoom.
   virtual float PageScaleFactor() = 0;
-  virtual float PageZoomFactor() = 0;
+  // LayoutZoomFactor represents hardware device pixel ratio, browser zoom and,
+  // the effect of the CSS "zoom" property applied to ancestors.
+  virtual float LayoutZoomFactor() = 0;
 
   // Sets the layer representing the plugin for compositing. The
   // WebPluginContainer does *not* take ownership.

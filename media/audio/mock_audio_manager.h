@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 #define MEDIA_AUDIO_MOCK_AUDIO_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/functional/callback_forward.h"
 #include "media/audio/audio_debug_recording_manager.h"
 #include "media/audio/audio_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -36,6 +37,10 @@ class MockAudioManager : public AudioManager {
           const std::string& device_id)>;
 
   explicit MockAudioManager(std::unique_ptr<AudioThread> audio_thread);
+
+  MockAudioManager(const MockAudioManager&) = delete;
+  MockAudioManager& operator=(const MockAudioManager&) = delete;
+
   ~MockAudioManager() override;
 
   AudioOutputStream* MakeAudioOutputStream(
@@ -52,8 +57,17 @@ class MockAudioManager : public AudioManager {
       const std::string& device_id,
       const LogCallback& log_callback) override;
 
+  void LogAudioManagerStartup() override {}
+
   void AddOutputDeviceChangeListener(AudioDeviceListener* listener) override;
   void RemoveOutputDeviceChangeListener(AudioDeviceListener* listener) override;
+
+  [[nodiscard]] std::optional<base::CallbackListSubscription>
+  AddInputMuteStateChangeCallback(
+      base::RepeatingCallback<void(bool)> callback) override;
+
+  std::string GetDeviceNameFromCache(const std::string& device_id,
+                                     bool is_input) override;
 
   std::unique_ptr<AudioLog> CreateAudioLog(
       AudioLogFactory::AudioComponent component,
@@ -62,7 +76,10 @@ class MockAudioManager : public AudioManager {
   void InitializeDebugRecording() override;
   AudioDebugRecordingManager* GetAudioDebugRecordingManager() override;
 
-  const char* GetName() override;
+  void SetAecDumpRecordingManager(base::WeakPtr<AecdumpRecordingManager>
+                                      aecdump_recording_manager) override;
+
+  const std::string_view GetName() override;
 
   // Setters to emulate desired in-test behavior.
   void SetMakeOutputStreamCB(MakeOutputStreamCallback cb);
@@ -78,6 +95,8 @@ class MockAudioManager : public AudioManager {
       GetDeviceDescriptionsCallback callback);
   void SetAssociatedOutputDeviceIDCallback(
       GetAssociatedOutputDeviceIDCallback callback);
+  void SetSupportsInputMuteStateChangeNotifications(bool supported);
+  void NotifyInputMuteStateChanged(bool is_muted);
 
  protected:
   void ShutdownOnAudioThread() override;
@@ -92,7 +111,6 @@ class MockAudioManager : public AudioManager {
   void GetAudioOutputDeviceDescriptions(
       media::AudioDeviceDescriptions* device_descriptions) override;
 
-  AudioParameters GetDefaultOutputStreamParameters() override;
   AudioParameters GetOutputStreamParameters(
       const std::string& device_id) override;
   AudioParameters GetInputStreamParameters(
@@ -115,11 +133,11 @@ class MockAudioManager : public AudioManager {
   GetDeviceDescriptionsCallback get_input_device_descriptions_cb_;
   GetDeviceDescriptionsCallback get_output_device_descriptions_cb_;
   GetAssociatedOutputDeviceIDCallback get_associated_output_device_id_cb_;
+  bool supports_input_mute_state_change_notifications_ = false;
+  base::RepeatingCallbackList<void(bool)> input_mute_state_change_callbacks_;
   std::unique_ptr<AudioDebugRecordingManager> debug_recording_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockAudioManager);
 };
 
-}  // namespace media.
+}  // namespace media
 
 #endif  // MEDIA_AUDIO_MOCK_AUDIO_MANAGER_H_

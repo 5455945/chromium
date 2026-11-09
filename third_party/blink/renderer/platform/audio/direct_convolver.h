@@ -29,36 +29,31 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_DIRECT_CONVOLVER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_DIRECT_CONVOLVER_H_
 
-#include <memory>
-
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
-class PLATFORM_EXPORT DirectConvolver {
+class PLATFORM_EXPORT DirectConvolver final {
   USING_FAST_MALLOC(DirectConvolver);
 
  public:
-  DirectConvolver(size_t input_block_size,
-                  std::unique_ptr<AudioFloatArray> convolution_kernel);
+  DirectConvolver(size_t input_block_size, AudioFloatArray convolution_kernel);
   DirectConvolver(const DirectConvolver&) = delete;
   DirectConvolver& operator=(const DirectConvolver&) = delete;
 
-  void Process(const float* source_p,
-               float* dest_p,
-               uint32_t frames_to_process);
+  void Process(base::span<const float> source, base::span<float> destination);
 
   void Reset();
 
-  size_t ConvolutionKernelSize() const { return convolution_kernel_->size(); }
+  size_t ConvolutionKernelSize() const { return convolution_kernel_.size(); }
 
  private:
   size_t input_block_size_;
 
   AudioFloatArray buffer_;
-  std::unique_ptr<AudioFloatArray> convolution_kernel_;
+  AudioFloatArray convolution_kernel_;
   AudioFloatArray prepared_convolution_kernel_;
 };
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "media/cdm/cdm_auxiliary_helper.h"
@@ -20,6 +21,8 @@
 #include "media/mojo/services/media_mojo_export.h"
 #include "media/mojo/services/mojo_cdm_file_io.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/metrics/public/cpp/mojo_ukm_recorder.h"
+#include "services/metrics/public/mojom/ukm_interface.mojom.h"
 
 namespace media {
 
@@ -38,38 +41,52 @@ class MEDIA_MOJO_EXPORT MojoCdmHelper final : public CdmAuxiliaryHelper,
   void SetFileReadCB(FileReadCB file_read_cb) final;
   cdm::FileIO* CreateCdmFileIO(cdm::FileIOClient* client) final;
   url::Origin GetCdmOrigin() final;
+  void RecordUkm(const CdmMetricsData& cdm_metrics_data) final;
   cdm::Buffer* CreateCdmBuffer(size_t capacity) final;
   std::unique_ptr<VideoFrameImpl> CreateCdmVideoFrame() final;
   void QueryStatus(QueryStatusCB callback) final;
   void EnableProtection(uint32_t desired_protection_mask,
                         EnableProtectionCB callback) final;
+#if BUILDFLAG(IS_CHROMEOS)
   void ChallengePlatform(const std::string& service_id,
                          const std::string& challenge,
                          ChallengePlatformCB callback) final;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
   void GetStorageId(uint32_t version, StorageIdCB callback) final;
-#if defined(OS_WIN)
-  void GetCdmOriginId(GetCdmOriginIdCB callback) final;
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
+#if BUILDFLAG(IS_WIN)
+  void GetMediaFoundationCdmData(GetMediaFoundationCdmDataCB callback) final;
+  void OnCdmEvent(CdmEvent event, HRESULT hresult) final;
+  void GetContentProtectionWindow(GetContentProtectionWindowCB callback) final;
+#endif  // BUILDFLAG(IS_WIN)
 
   // MojoCdmFileIO::Delegate implementation.
   void CloseCdmFileIO(MojoCdmFileIO* cdm_file_io) final;
   void ReportFileReadSize(int file_size_bytes) final;
 
  private:
+  // Retrieves instances necessary to recording Ukm from the frame interface.
+  void RetrieveUkmRecordingObjects();
+
   // All services are created lazily.
   void ConnectToOutputProtection();
   void ConnectToCdmDocumentService();
+  void ConnectToUkmRecorderFactory();
 
   CdmAllocator* GetAllocator();
 
   // Provides interfaces when needed.
-  mojom::FrameInterfaceFactory* frame_interfaces_;
+  raw_ptr<mojom::FrameInterfaceFactory> frame_interfaces_;
 
   // Connections to the additional services. Will try to reconnect if
   // disconnected, to handle cases like page refresh, where the document is
   // destroyed but RenderFrameHostImpl is not.
   mojo::Remote<mojom::OutputProtection> output_protection_;
   mojo::Remote<mojom::CdmDocumentService> cdm_document_service_;
+  mojo::Remote<ukm::mojom::UkmRecorderFactory> ukm_recorder_factory_;
+
+  std::unique_ptr<ukm::MojoUkmRecorder> ukm_recorder_;
 
   std::unique_ptr<CdmAllocator> allocator_;
 

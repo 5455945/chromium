@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Unit tests for the rc_header formatter'''
 
 # GRD samples exceed the 80 character limit.
-# pylint: disable-msg=C6310
-
-from __future__ import print_function
 
 import os
 import sys
@@ -44,8 +41,8 @@ class RcHeaderFormatterUnittest(unittest.TestCase):
           <structure type="version" name="VS_VERSION_INFO" file="rc_files/version.rc" />
         </structures>''')
     output = self.FormatAll(grd)
-    self.failUnless(output.count('IDS_GREETING10000'))
-    self.failUnless(output.count('ID_LOGO300'))
+    self.assertTrue(output.count('IDS_GREETING10000'))
+    self.assertTrue(output.count('ID_LOGO300'))
 
   def testOnlyDefineResourcesThatSatisfyOutputCondition(self):
     grd = util.ParseGrdForUnittest('''
@@ -76,10 +73,10 @@ class RcHeaderFormatterUnittest(unittest.TestCase):
           </message>
        </messages>''')
     output = self.FormatAll(grd)
-    self.failUnless(output.count('IDS_FIRSTPRESENTSTRING10000'))
-    self.failIf(output.count('IDS_MISSINGSTRING'))
-    self.failUnless(output.count('IDS_LANGUAGESPECIFICSTRING10002'))
-    self.failUnless(output.count('IDS_THIRDPRESENTSTRING10003'))
+    self.assertTrue(output.count('IDS_FIRSTPRESENTSTRING10000'))
+    self.assertFalse(output.count('IDS_MISSINGSTRING'))
+    self.assertTrue(output.count('IDS_LANGUAGESPECIFICSTRING10002'))
+    self.assertTrue(output.count('IDS_THIRDPRESENTSTRING10003'))
 
   def testEmit(self):
     grd = util.ParseGrdForUnittest('''
@@ -99,7 +96,7 @@ class RcHeaderFormatterUnittest(unittest.TestCase):
             <emit emit_type="prepend">Bingo</emit>
           </output>
         </outputs>''')
-    output = ''.join(rc_header.Format(grd, 'en', '.'))
+    output = ''.join(rc_header.Format(grd, 'en', None, '.'))
     output = util.StripBlankLinesAndComments(output)
     self.assertEqual('#pragma once\nBingo', output)
 
@@ -119,20 +116,30 @@ class RcHeaderFormatterUnittest(unittest.TestCase):
 
     # Using the default settings.
     output = rc_header.FormatDefines(grd)
-    self.assertEqual(('#define IDR_LOGO 300\n'
-                      '#define IDS_GREETING 10000\n'
-                      '#define IDS_BONGO 10001\n'), ''.join(output))
+    self.assertEqual(
+      (
+        '#define IDR_LOGO 300\n'
+        '#define IDS_GREETING 10000\n'
+        '#define IDS_BONGO 10001\n'
+      ),
+      ''.join(output),
+    )
 
     # Using resource allowlist support.
     grd.SetAllowlistSupportEnabled(True)
     output = rc_header.FormatDefines(grd)
-    self.assertEqual(('#define IDR_LOGO '
-                      '(::ui::AllowlistedResource<300>(), 300)\n'
-                      '#define IDS_GREETING '
-                      '(::ui::AllowlistedResource<10000>(), 10000)\n'
-                      '#define IDS_BONGO '
-                      '(::ui::AllowlistedResource<10001>(), 10001)\n'),
-                     ''.join(output))
+    self.assertEqual(
+      (
+        '#define IDR_LOGO '
+        '(::ui::AllowlistedResource<300>(), 300)\n'
+        '#define IDS_GREETING '
+        '(::ui::AllowlistedResource<10000>(), 10000)\n'
+        '#define IDS_BONGO '
+        '(::ui::AllowlistedResource<10001>(), 10001)\n'
+      ),
+      ''.join(output),
+    )
+
 
 if __name__ == '__main__':
   unittest.main()

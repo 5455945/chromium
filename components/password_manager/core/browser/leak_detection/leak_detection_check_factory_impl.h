@@ -1,13 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_LEAK_DETECTION_LEAK_DETECTION_CHECK_FACTORY_IMPL_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_LEAK_DETECTION_LEAK_DETECTION_CHECK_FACTORY_IMPL_H_
 
-#include "base/macros.h"
+#include "build/build_config.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_check_factory.h"
-#include "url/gurl.h"
 
 namespace password_manager {
 
@@ -19,16 +18,17 @@ class LeakDetectionCheckFactoryImpl : public LeakDetectionCheckFactory {
   ~LeakDetectionCheckFactoryImpl() override;
 
   std::unique_ptr<LeakDetectionCheck> TryCreateLeakCheck(
-      LeakDetectionDelegateInterface* delegate,
       signin::IdentityManager* identity_manager,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-      const override;
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      version_info::Channel channel) const override;
 
+#if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<BulkLeakCheck> TryCreateBulkLeakCheck(
       BulkLeakCheckDelegateInterface* delegate,
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
       const override;
+#endif  // !BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace password_manager

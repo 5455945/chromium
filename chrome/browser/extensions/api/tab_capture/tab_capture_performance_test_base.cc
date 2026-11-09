@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,22 @@
 #include <stdint.h>
 
 #include <cmath>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_config.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/tracing.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -28,6 +31,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/unpacked_installer.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
@@ -39,7 +43,7 @@
 #include "ui/gl/gl_switches.h"
 
 namespace {
-constexpr base::StringPiece kFullPerformanceRunSwitch = "full-performance-run";
+constexpr std::string_view kFullPerformanceRunSwitch = "full-performance-run";
 }  // namespace
 
 TabCapturePerformanceTestBase::TabCapturePerformanceTestBase() = default;
@@ -53,7 +57,6 @@ void TabCapturePerformanceTestBase::SetUp() {
   feature_list_.InitWithFeatures(
       {
           features::kAudioServiceSandbox,
-          features::kAudioServiceLaunchOnStartup,
           features::kAudioServiceOutOfProcess,
       },
       {});
@@ -77,16 +80,17 @@ void TabCapturePerformanceTestBase::SetUpCommandLine(
     base::CommandLine* command_line) {
   is_full_performance_run_ = command_line->HasSwitch(kFullPerformanceRunSwitch);
 
+  // MSan and GL do not get along so avoid using the GPU with MSan.
+#if !defined(MEMORY_SANITIZER)
   // Note: The naming "kUseGpuInTests" is very misleading. It actually means
   // "don't use a software OpenGL implementation." Subclasses will either call
   // UseSoftwareCompositing() to use Chrome's software compositor, or else they
   // won't (which means use the default hardware-accelerated compositor).
   command_line->AppendSwitch(switches::kUseGpuInTests);
+#endif
 
   command_line->AppendSwitchASCII(extensions::switches::kAllowlistedExtensionID,
                                   kExtensionId);
-
-  InProcessBrowserTest::SetUpCommandLine(command_line);
 }
 
 void TabCapturePerformanceTestBase::LoadExtension(
@@ -95,13 +99,10 @@ void TabCapturePerformanceTestBase::LoadExtension(
 
   LOG(INFO) << "Loading extension...";
   auto* const extension_registry =
-      extensions::ExtensionRegistry::Get(browser()->profile());
+      extensions::ExtensionRegistry::Get(GetProfile());
   extensions::TestExtensionRegistryObserver registry_observer(
       extension_registry);
-  auto* const extension_service =
-      extensions::ExtensionSystem::Get(browser()->profile())
-          ->extension_service();
-  extensions::UnpackedInstaller::Create(extension_service)->Load(unpacked_dir);
+  extensions::UnpackedInstaller::Create(GetProfile())->Load(unpacked_dir);
   extension_ = registry_observer.WaitForExtensionReady().get();
   CHECK(extension_);
   CHECK_EQ(kExtensionId, extension_->id());
@@ -111,9 +112,9 @@ void TabCapturePerformanceTestBase::NavigateToTestPage(
     const std::string& test_page_html_content) {
   LOG(INFO) << "Navigating to test page...";
   test_page_to_serve_ = test_page_html_content;
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
-      embedded_test_server()->GetURL(kTestWebPageHostname, kTestWebPagePath));
+      embedded_test_server()->GetURL(kTestWebPageHostname, kTestWebPagePath)));
 }
 
 base::Value TabCapturePerformanceTestBase::SendMessageToExtension(
@@ -136,24 +137,23 @@ base::Value TabCapturePerformanceTestBase::SendMessageToExtension(
       extension_->id().c_str(), json.c_str());
   LOG(INFO) << "Sending message to extension: " << json;
   auto* const web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   for (;;) {
-    const auto result = content::EvalJs(web_contents, javascript);
-    if (result.error.empty()) {
-      return result.value.Clone();
+    auto result = content::EvalJs(web_contents, javascript);
+    if (result.is_ok()) {
+      return std::move(result).TakeValue();
     }
     LOG(INFO) << "Race condition: Waiting for extension to come up, before "
                  "'sendMessage' retry...";
     ContinueBrowserFor(kSendMessageRetryPeriod);
   }
   NOTREACHED();
-  return base::Value();
 }
 
 TabCapturePerformanceTestBase::TraceAnalyzerUniquePtr
 TabCapturePerformanceTestBase::TraceAndObserve(
     const std::string& category_patterns,
-    const std::vector<base::StringPiece>& event_names,
+    const std::vector<std::string_view>& event_names,
     int required_event_count) {
   const base::TimeDelta observation_period = is_full_performance_run_
                                                  ? kFullRunObservationPeriod
@@ -213,8 +213,7 @@ std::string TabCapturePerformanceTestBase::MakeBase64EncodedGZippedString(
     const std::string& input) {
   std::string gzipped_input;
   compression::GzipCompress(input, &gzipped_input);
-  std::string result;
-  base::Base64Encode(gzipped_input, &result);
+  std::string result = base::Base64Encode(gzipped_input);
 
   // Break up the string with newlines to make it easier to handle in the
   // console logs.
@@ -233,7 +232,7 @@ std::string TabCapturePerformanceTestBase::MakeBase64EncodedGZippedString(
 void TabCapturePerformanceTestBase::ContinueBrowserFor(
     base::TimeDelta duration) {
   base::RunLoop run_loop;
-  base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), duration);
   run_loop.Run();
 }
@@ -241,12 +240,14 @@ void TabCapturePerformanceTestBase::ContinueBrowserFor(
 // static
 void TabCapturePerformanceTestBase::QueryTraceEvents(
     trace_analyzer::TraceAnalyzer* analyzer,
-    base::StringPiece event_name,
+    std::string_view event_name,
     trace_analyzer::TraceEventVector* events) {
   const trace_analyzer::Query kQuery =
       trace_analyzer::Query::EventNameIs(std::string(event_name)) &&
       (trace_analyzer::Query::EventPhaseIs(TRACE_EVENT_PHASE_BEGIN) ||
        trace_analyzer::Query::EventPhaseIs(TRACE_EVENT_PHASE_ASYNC_BEGIN) ||
+       trace_analyzer::Query::EventPhaseIs(
+           TRACE_EVENT_PHASE_NESTABLE_ASYNC_BEGIN) ||
        trace_analyzer::Query::EventPhaseIs(TRACE_EVENT_PHASE_FLOW_BEGIN) ||
        trace_analyzer::Query::EventPhaseIs(TRACE_EVENT_PHASE_INSTANT) ||
        trace_analyzer::Query::EventPhaseIs(TRACE_EVENT_PHASE_COMPLETE));
@@ -259,7 +260,7 @@ TabCapturePerformanceTestBase::HandleRequest(
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_content_type("text/html");
   const GURL& url = request.GetURL();
-  if (url.path() == kTestWebPagePath) {
+  if (url.GetPath() == kTestWebPagePath) {
     response->set_content(test_page_to_serve_);
   } else {
     response->set_code(net::HTTP_NOT_FOUND);

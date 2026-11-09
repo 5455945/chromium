@@ -1,7 +1,7 @@
 # crbug.com/1196416 Test filter for browser_tests on mac-rel and Mac10.15-Tests
 
 # In order of flakiness
--DomDistillerTabUtilsBrowserTest.FaviconFromOriginalPage*
+-ReaderModeTabUtilsBrowserTest.FaviconFromOriginalPage*
 -ServiceWorkerMessagingTest.TabToWorker_StopWorkerDisconnects*
 -AutomationApiTest.TabsAutomationBooleanActions*
 -AutomationApiTest.CloseTab*
@@ -9,7 +9,6 @@
 -ExtensionSettingsApiTest.ExtensionsSchemas*
 -LazyBackgroundPageApiTest.Messaging*
 -DeclarativeNetRequestBrowserTest.ActionsMatchedCountAsBadgeTextIncognito*
--WebViewNewWindowTest.Shim_TestAddContentScriptsWithNewWindowAPI*
 -WebViewNewWindowTest.UserAgent_NewWindow*
 -NativeAppWindowCocoaBrowserTest.Controls*
 -AutomationApiTest.GetTreeByTabId*
@@ -35,7 +34,6 @@
 -MediaEngagementBrowserTest.SessionMultipleTabsClosingParent*
 -PaymentRequestAutofillInstrumentUseStatsTest.RecordUse*
 -BackgroundFetchBrowserTest.OfflineItemCollection_VerifyResourceDownloadedWhenCorrectDownloadTotalSpecified*
--MediaHistoryBrowserTest.SaveImagesWithDifferentSessions/All.0*
 -WebAppIconManagerBrowserTest.SingleIcon*
 -MediaEngagementBrowserTest.SessionNewTabNavigateSameURLWithOpener_Typed*
 -SaveCardBubbleViewsFullFormBrowserTest.AlertAccessibleEvent*

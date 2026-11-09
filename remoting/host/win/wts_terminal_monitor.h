@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 
 namespace remoting {
@@ -23,6 +22,9 @@ class WtsTerminalMonitor {
  public:
   // The console terminal ID.
   static const char kConsole[];
+
+  WtsTerminalMonitor(const WtsTerminalMonitor&) = delete;
+  WtsTerminalMonitor& operator=(const WtsTerminalMonitor&) = delete;
 
   virtual ~WtsTerminalMonitor();
 
@@ -40,8 +42,10 @@ class WtsTerminalMonitor {
   virtual void RemoveWtsTerminalObserver(WtsTerminalObserver* observer) = 0;
 
   // Returns ID of the terminal connected to |session_id| in |*terminal_id|.
-  // Returns false if |session_id| is not attached to the physical console or
-  // does not have an assigned terminal ID.
+  // Returns false if |session_id| does not have an assigned terminal ID.
+  // |kConsole| is only ever returned for the session that is attached to the
+  // physical console; any other session is identified by the virtual terminal
+  // ID that RdpClient assigned to it.
   static bool LookupTerminalId(uint32_t session_id, std::string* terminal_id);
 
   // Returns ID of the session that |terminal_id| is attached.
@@ -49,11 +53,18 @@ class WtsTerminalMonitor {
   // attahced to |client_endpoint|.
   static uint32_t LookupSessionId(const std::string& terminal_id);
 
+  // Generates a unique ID for a new virtual terminal, i.e. a terminal backed
+  // by an RDP connection created by RdpClient.
+  static std::string GenerateVirtualTerminalId();
+
+  // Returns true if |terminal_id| is a well-formed virtual terminal ID as
+  // produced by GenerateVirtualTerminalId(). |kConsole| is not a virtual
+  // terminal ID: it always identifies the terminal attached to the physical
+  // console.
+  static bool IsVirtualTerminalId(const std::string& terminal_id);
+
  protected:
   WtsTerminalMonitor();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WtsTerminalMonitor);
 };
 
 }  // namespace remoting

@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,24 +9,27 @@ import android.content.Intent;
 import android.database.AbstractCursor;
 import android.database.Cursor;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 
 /**
  * For bookmarks/history suggestions, wrap the cursor returned in one that can feed
  * the data back to global search in the format it wants.
  */
+@NullMarked
 class ChromeBrowserProviderSuggestionsCursor extends AbstractCursor {
 
-    private static final String[] COLS = new String [] {
-        BaseColumns.ID,
-        SearchManager.SUGGEST_COLUMN_INTENT_ACTION,
-        SearchManager.SUGGEST_COLUMN_INTENT_DATA,
-        SearchManager.SUGGEST_COLUMN_TEXT_1,
-        SearchManager.SUGGEST_COLUMN_TEXT_2,
-        SearchManager.SUGGEST_COLUMN_TEXT_2_URL,
-        SearchManager.SUGGEST_COLUMN_ICON_1,
-        SearchManager.SUGGEST_COLUMN_LAST_ACCESS_HINT
-    };
+    private static final String[] COLS =
+            new String[] {
+                BaseColumns.ID,
+                SearchManager.SUGGEST_COLUMN_INTENT_ACTION,
+                SearchManager.SUGGEST_COLUMN_INTENT_DATA,
+                SearchManager.SUGGEST_COLUMN_TEXT_1,
+                SearchManager.SUGGEST_COLUMN_TEXT_2,
+                SearchManager.SUGGEST_COLUMN_TEXT_2_URL,
+                SearchManager.SUGGEST_COLUMN_ICON_1,
+                SearchManager.SUGGEST_COLUMN_LAST_ACCESS_HINT
+            };
 
     private static final int COLUMN_ID = 0;
     private static final int COLUMN_SUGGEST_INTENT_ACTION = 1;
@@ -57,16 +60,16 @@ class ChromeBrowserProviderSuggestionsCursor extends AbstractCursor {
     public String getString(int column) {
         switch (column) {
             case COLUMN_ID:
-                return mCursor.getString(mCursor.getColumnIndex(BookmarkColumns.ID));
+                return mCursor.getString(mCursor.getColumnIndexOrThrow(BookmarkColumns.ID));
             case COLUMN_SUGGEST_INTENT_ACTION:
                 return Intent.ACTION_VIEW;
             case COLUMN_SUGGEST_INTENT_DATA:
-                return mCursor.getString(mCursor.getColumnIndex(BookmarkColumns.URL));
+                return mCursor.getString(mCursor.getColumnIndexOrThrow(BookmarkColumns.URL));
             case COLUMN_SUGGEST_TEXT_1:
-                return mCursor.getString(mCursor.getColumnIndex(BookmarkColumns.TITLE));
+                return mCursor.getString(mCursor.getColumnIndexOrThrow(BookmarkColumns.TITLE));
             case COLUMN_SUGGEST_TEXT_2:
             case COLUMN_SUGGEST_TEXT_2_URL:
-                return mCursor.getString(mCursor.getColumnIndex(BookmarkColumns.URL));
+                return mCursor.getString(mCursor.getColumnIndexOrThrow(BookmarkColumns.URL));
             case COLUMN_SUGGEST_ICON_1:
                 // This is the icon displayed to the left of the result in QSB.
                 return Integer.toString(R.mipmap.app_icon);
@@ -75,8 +78,8 @@ class ChromeBrowserProviderSuggestionsCursor extends AbstractCursor {
                 // time of 0 for all bookmarks. In the Android provider, this will yield a negative
                 // last access time. A negative last access time will cause global search to discard
                 // the result, so fix it up before we return it.
-                long lastAccess = mCursor.getLong(
-                        mCursor.getColumnIndex(BookmarkColumns.DATE));
+                long lastAccess =
+                        mCursor.getLong(mCursor.getColumnIndexOrThrow(BookmarkColumns.DATE));
                 return lastAccess < 0 ? "0" : "" + lastAccess;
             default:
                 throw new UnsupportedOperationException();
@@ -93,8 +96,8 @@ class ChromeBrowserProviderSuggestionsCursor extends AbstractCursor {
         switch (c) {
             case 7:
                 // See comments above in getString() re. negative last access times.
-                long lastAccess = mCursor.getLong(
-                        mCursor.getColumnIndex(BookmarkColumns.DATE));
+                long lastAccess =
+                        mCursor.getLong(mCursor.getColumnIndexOrThrow(BookmarkColumns.DATE));
                 return lastAccess < 0 ? 0 : lastAccess;
             default:
                 throw new UnsupportedOperationException();

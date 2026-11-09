@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include "ash/app_menu/app_menu_model_adapter.h"
 #include "ash/app_menu/notification_menu_view.h"
 #include "ash/public/cpp/app_menu_constants.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/submenu_view.h"
 
@@ -78,8 +78,9 @@ void NotificationMenuController::OnNotificationRemoved(
   // |root_menu_|, and remove the entry from the model.
   root_menu_->RemoveMenuItem(notification_menu_view_->parent());
   app_menu_model_adapter_->model()->RemoveItemAt(
-      app_menu_model_adapter_->model()->GetIndexOfCommandId(
-          NOTIFICATION_CONTAINER));
+      app_menu_model_adapter_->model()
+          ->GetIndexOfCommandId(NOTIFICATION_CONTAINER)
+          .value());
   notification_menu_view_ = nullptr;
 
   // Notify the root MenuItemView so it knows to resize and re-calculate the
@@ -130,9 +131,9 @@ void NotificationMenuController::InitializeNotificationMenuView() {
   views::MenuItemView* container =
       root_menu_->AppendMenuItem(NOTIFICATION_CONTAINER);
   notification_menu_view_ = new NotificationMenuView(this, this, app_id_);
-  container->AddChildView(notification_menu_view_);
+  container->AddChildViewRaw(notification_menu_view_.get());
 
-  for (auto* notification :
+  for (message_center::Notification* notification :
        message_center::MessageCenter::Get()->FindNotificationsByAppId(
            app_id_)) {
     notification_menu_view_->AddNotificationItemView(*notification);

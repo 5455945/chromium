@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,11 @@
 
 #include "base/command_line.h"
 #include "build/build_config.h"
-#include "ui/views/views_touch_selection_controller_factory.h"
+#include "ui/accessibility/accessibility_features.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/native_widget_private.h"
+#include "ui/views/window/default_frame_view.h"
 
 #if defined(USE_AURA)
 #include "ui/views/touchui/touch_selection_menu_runner_views.h"
@@ -23,24 +26,22 @@ ViewsDelegate* views_delegate = nullptr;
 
 }  // namespace
 
-ViewsDelegate::ViewsDelegate()
-    : editing_controller_factory_(new ViewsTouchEditingControllerFactory) {
-  DCHECK(!views_delegate);
+ViewsDelegate::ViewsDelegate() {
+  CHECK(!views_delegate, base::NotFatalUntil::M163);
   views_delegate = this;
 
-  ui::TouchEditingControllerFactory::SetInstance(
-      editing_controller_factory_.get());
-
-#if defined(USE_AURA)
+#if BUILDFLAG(ENABLE_DESKTOP_AURA) || BUILDFLAG(IS_CHROMEOS)
+  // TouchSelectionMenuRunnerViews is not supported on Mac or Cast.
+  // It is also not used on Ash (the ChromeViewsDelegate() for Ash will
+  // immediately replace this). But tests running without the Chrome layer
+  // will not get the replacement.
   touch_selection_menu_runner_ =
       std::make_unique<TouchSelectionMenuRunnerViews>();
 #endif
 }
 
 ViewsDelegate::~ViewsDelegate() {
-  ui::TouchEditingControllerFactory::SetInstance(nullptr);
-
-  DCHECK_EQ(this, views_delegate);
+  CHECK_EQ(this, views_delegate, base::NotFatalUntil::M163);
   views_delegate = nullptr;
 }
 
@@ -51,13 +52,14 @@ ViewsDelegate* ViewsDelegate::GetInstance() {
 void ViewsDelegate::SaveWindowPlacement(const Widget* widget,
                                         const std::string& window_name,
                                         const gfx::Rect& bounds,
-                                        ui::WindowShowState show_state) {}
+                                        ui::mojom::WindowShowState show_state) {
+}
 
 bool ViewsDelegate::GetSavedWindowPlacement(
     const Widget* widget,
     const std::string& window_name,
     gfx::Rect* bounds,
-    ui::WindowShowState* show_state) const {
+    ui::mojom::WindowShowState* show_state) const {
   return false;
 }
 
@@ -77,7 +79,7 @@ bool ViewsDelegate::ShouldCloseMenuIfMouseCaptureLost() const {
   return true;
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 HICON ViewsDelegate::GetDefaultWindowIcon() const {
   return nullptr;
 }
@@ -90,15 +92,15 @@ bool ViewsDelegate::IsWindowInMetro(gfx::NativeWindow window) const {
   return false;
 }
 #elif BUILDFLAG(ENABLE_DESKTOP_AURA) && \
-    (defined(OS_LINUX) || defined(OS_CHROMEOS))
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
 gfx::ImageSkia* ViewsDelegate::GetDefaultWindowIcon() const {
   return nullptr;
 }
 #endif
 
-std::unique_ptr<NonClientFrameView>
-ViewsDelegate::CreateDefaultNonClientFrameView(Widget* widget) {
-  return nullptr;
+std::unique_ptr<FrameView> ViewsDelegate::CreateDefaultFrameView(
+    Widget* widget) {
+  return std::make_unique<DefaultFrameView>(widget);
 }
 
 bool ViewsDelegate::IsShuttingDown() const {
@@ -117,7 +119,7 @@ bool ViewsDelegate::WindowManagerProvidesTitleBar(bool maximized) {
   return false;
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 ui::ContextFactory* ViewsDelegate::GetContextFactory() {
   return nullptr;
 }
@@ -128,7 +130,7 @@ std::string ViewsDelegate::GetApplicationName() {
   return program.BaseName().AsUTF8Unsafe();
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 int ViewsDelegate::GetAppbarAutohideEdges(HMONITOR monitor,
                                           base::OnceClosure callback) {
   return EDGE_BOTTOM;

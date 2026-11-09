@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -17,5 +17,6 @@ base_classes = [story.StorySet]
 
 for base_class in base_classes:
   for cls in discover.DiscoverClasses(
-      start_dir, top_level_dir, base_class).values():
+    start_dir, top_level_dir, base_class
+  ).values():
     setattr(sys.modules[__name__], cls.__name__, cls)

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@ namespace blink {
 
 String ToString(FontWidthVariant variant) {
   switch (variant) {
-    case FontWidthVariant::kRegularWidth:
+    case FontWidthVariant::kRegular:
       return "Regular";
-    case FontWidthVariant::kHalfWidth:
+    case FontWidthVariant::kHalf:
       return "Half";
-    case FontWidthVariant::kThirdWidth:
+    case FontWidthVariant::kThird:
       return "Third";
-    case FontWidthVariant::kQuarterWidth:
+    case FontWidthVariant::kQuarter:
       return "Quarter";
   }
   return "Unknown";

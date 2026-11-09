@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,12 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/timer/timer.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 namespace {
 
@@ -23,7 +22,7 @@ const int kFrameLengthMs = 10;
 const int kSamplesPerFrame = kSamplingRate * kFrameLengthMs / 1000;
 
 constexpr base::TimeDelta kPollInterval =
-    base::TimeDelta::FromMilliseconds(5 * kFrameLengthMs);
+    base::Milliseconds(3 * kFrameLengthMs);
 const int kChannels = 2;
 const int kBytesPerSample = 2;
 
@@ -47,7 +46,6 @@ void WebrtcAudioModule::SetAudioTaskRunner(
 
 int32_t WebrtcAudioModule::ActiveAudioLayer(AudioLayer* audio_layer) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::RegisterAudioCallback(
@@ -114,7 +112,6 @@ int32_t WebrtcAudioModule::SetRecordingDevice(WindowsDeviceType device) {
 
 int32_t WebrtcAudioModule::PlayoutIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::InitPlayout() {
@@ -128,7 +125,6 @@ bool WebrtcAudioModule::PlayoutIsInitialized() const {
 
 int32_t WebrtcAudioModule::RecordingIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::InitRecording() {
@@ -143,8 +139,9 @@ int32_t WebrtcAudioModule::StartPlayout() {
   base::AutoLock auto_lock(lock_);
   if (!playing_ && audio_task_runner_) {
     audio_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&WebrtcAudioModule::StartPlayoutOnAudioThread,
-                                  rtc::scoped_refptr<WebrtcAudioModule>(this)));
+        FROM_HERE,
+        base::BindOnce(&WebrtcAudioModule::StartPlayoutOnAudioThread,
+                       webrtc::scoped_refptr<WebrtcAudioModule>(this)));
     playing_ = true;
   }
   return 0;
@@ -154,8 +151,9 @@ int32_t WebrtcAudioModule::StopPlayout() {
   base::AutoLock auto_lock(lock_);
   if (playing_) {
     audio_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&WebrtcAudioModule::StopPlayoutOnAudioThread,
-                                  rtc::scoped_refptr<WebrtcAudioModule>(this)));
+        FROM_HERE,
+        base::BindOnce(&WebrtcAudioModule::StopPlayoutOnAudioThread,
+                       webrtc::scoped_refptr<WebrtcAudioModule>(this)));
     playing_ = false;
   }
   return 0;
@@ -196,82 +194,66 @@ bool WebrtcAudioModule::MicrophoneIsInitialized() const {
 
 int32_t WebrtcAudioModule::SpeakerVolumeIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetSpeakerVolume(uint32_t volume) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SpeakerVolume(uint32_t* volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MaxSpeakerVolume(uint32_t* max_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MinSpeakerVolume(uint32_t* min_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneVolumeIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetMicrophoneVolume(uint32_t volume) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneVolume(uint32_t* volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MaxMicrophoneVolume(uint32_t* max_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MinMicrophoneVolume(uint32_t* min_volume) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SpeakerMuteIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetSpeakerMute(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SpeakerMute(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneMuteIsAvailable(bool* available) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::SetMicrophoneMute(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::MicrophoneMute(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::StereoPlayoutIsAvailable(bool* available) const {
@@ -286,7 +268,6 @@ int32_t WebrtcAudioModule::SetStereoPlayout(bool enable) {
 
 int32_t WebrtcAudioModule::StereoPlayout(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::StereoRecordingIsAvailable(bool* available) const {
@@ -300,7 +281,6 @@ int32_t WebrtcAudioModule::SetStereoRecording(bool enable) {
 
 int32_t WebrtcAudioModule::StereoRecording(bool* enabled) const {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::PlayoutDelay(uint16_t* delay_ms) const {
@@ -322,35 +302,31 @@ bool WebrtcAudioModule::BuiltInNSIsAvailable() const {
 
 int32_t WebrtcAudioModule::EnableBuiltInAEC(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::EnableBuiltInAGC(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 int32_t WebrtcAudioModule::EnableBuiltInNS(bool enable) {
   NOTREACHED();
-  return -1;
 }
 
 #if defined(WEBRTC_IOS)
 int WebrtcAudioModule::GetPlayoutAudioParameters(
     webrtc::AudioParameters* params) const {
   NOTREACHED();
-  return -1;
 }
 
 int WebrtcAudioModule::GetRecordAudioParameters(
     webrtc::AudioParameters* params) const {
   NOTREACHED();
-  return -1;
 }
 #endif  // WEBRTC_IOS
 
 void WebrtcAudioModule::StartPlayoutOnAudioThread() {
   DCHECK(audio_task_runner_->BelongsToCurrentThread());
+  last_poll_time_ = base::TimeTicks::Now();
   poll_timer_ = std::make_unique<base::RepeatingTimer>();
   poll_timer_->Start(FROM_HERE, kPollInterval,
                      base::BindRepeating(&WebrtcAudioModule::PollFromSource,
@@ -366,10 +342,28 @@ void WebrtcAudioModule::PollFromSource() {
   DCHECK(audio_task_runner_->BelongsToCurrentThread());
 
   base::AutoLock lock(lock_);
-  if (!audio_transport_)
+  base::TimeTicks now = base::TimeTicks::Now();
+  if (!audio_transport_) {
+    last_poll_time_ = now;
     return;
+  }
 
-  for (int i = 0; i < kPollInterval.InMilliseconds() / kFrameLengthMs; i++) {
+  base::TimeDelta elapsed = now - last_poll_time_;
+  int64_t frames_to_pull = elapsed.IntDiv(base::Milliseconds(kFrameLengthMs));
+  if (frames_to_pull <= 0) {
+    return;
+  }
+
+  // Cap `frames_to_pull` to a reasonable maximum (100ms) to protect against
+  // heavy thread delays or deep sleep wakeups. If we hit the cap, we reset
+  // `last_poll_time_` to `now` to safely abandon the accumulated drift.
+  bool capped = false;
+  if (frames_to_pull > 10) {
+    frames_to_pull = 10;
+    capped = true;
+  }
+
+  for (int64_t i = 0; i < frames_to_pull; i++) {
     int64_t elapsed_time_ms = -1;
     int64_t ntp_time_ms = -1;
     char data[kBytesPerSample * kChannels * kSamplesPerFrame];
@@ -377,7 +371,20 @@ void WebrtcAudioModule::PollFromSource() {
                                      kChannels, kSamplesPerFrame, data,
                                      &elapsed_time_ms, &ntp_time_ms);
   }
+
+  if (capped) {
+    last_poll_time_ = now;
+  } else {
+    // We advance `last_poll_time_` by exactly the time corresponding to the
+    // pulled frames rather than setting it to `now`, which may not be the same
+    // due to integer division. This acts as a software phase-locked loop (PLL)
+    // that safely preserves fractional remainders (e.g. if elapsed is 32ms, we
+    // pull 3 frames and leave the 2ms remainder to roll over to the next timer
+    // tick). This ensures that over long durations, the total audio produced
+    // perfectly matches wall-clock time, preventing cumulative starvation
+    // drift.
+    last_poll_time_ += base::Milliseconds(frames_to_pull * kFrameLengthMs);
+  }
 }
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

@@ -1,6 +1,9 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// This interface is deprecated and being removed: https://crbug.com/374310081.
+// New users should use crypto/hash instead.
 
 #ifndef CRYPTO_SECURE_HASH_H_
 #define CRYPTO_SECURE_HASH_H_
@@ -9,7 +12,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "crypto/crypto_export.h"
 
 namespace crypto {
@@ -17,17 +20,25 @@ namespace crypto {
 // A wrapper to calculate secure hashes incrementally, allowing to
 // be used when the full input is not known in advance. The end result will the
 // same as if we have the full input in advance.
+//
+// TODO(https://issues.chromium.org/issues/374310081): Delete this.
 class CRYPTO_EXPORT SecureHash {
  public:
   enum Algorithm {
     SHA256,
+    SHA512,
   };
+
+  SecureHash(const SecureHash&) = delete;
+  SecureHash& operator=(const SecureHash&) = delete;
+
   virtual ~SecureHash() {}
 
   static std::unique_ptr<SecureHash> Create(Algorithm type);
 
-  virtual void Update(const void* input, size_t len) = 0;
-  virtual void Finish(void* output, size_t len) = 0;
+  virtual void Update(base::span<const uint8_t> input) = 0;
+  virtual void Finish(base::span<uint8_t> output) = 0;
+
   virtual size_t GetHashLength() const = 0;
 
   // Create a clone of this SecureHash. The returned clone and this both
@@ -37,9 +48,6 @@ class CRYPTO_EXPORT SecureHash {
 
  protected:
   SecureHash() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SecureHash);
 };
 
 }  // namespace crypto

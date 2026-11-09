@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,24 +9,24 @@
 #include <cmath>
 #include <limits>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
 #include "media/base/media_tracks.h"
+#include "media/base/stream_parser.h"
 #include "media/base/timestamp_constants.h"
 #include "media/filters/chunk_demuxer.h"
 #include "media/filters/source_buffer_parse_warnings.h"
 #include "third_party/blink/public/platform/web_media_player.h"
 #include "third_party/blink/public/platform/web_source_buffer_client.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
-namespace media {
+namespace blink {
 
-static blink::WebSourceBufferClient::ParseWarning ParseWarningToBlink(
-    const SourceBufferParseWarning warning) {
+static WebSourceBufferClient::ParseWarning ParseWarningToBlink(
+    const media::SourceBufferParseWarning warning) {
 #define CHROMIUM_PARSE_WARNING_TO_BLINK_ENUM_CASE(name) \
-  case SourceBufferParseWarning::name:                  \
-    return blink::WebSourceBufferClient::ParseWarning::name
+  case media::SourceBufferParseWarning::name:           \
+    return WebSourceBufferClient::ParseWarning::name
 
   switch (warning) {
     CHROMIUM_PARSE_WARNING_TO_BLINK_ENUM_CASE(
@@ -37,47 +37,61 @@ static blink::WebSourceBufferClient::ParseWarning ParseWarningToBlink(
   }
 
   NOTREACHED();
-  return blink::WebSourceBufferClient::ParseWarning::
-      kKeyframeTimeGreaterThanDependant;
 
 #undef CHROMIUM_PARSE_WARNING_TO_BLINK_ENUM_CASE
 }
+
+static_assert(media::kInfiniteDuration == base::TimeDelta::Max());
+static_assert(media::kNoTimestamp == base::TimeDelta::Min());
 
 static base::TimeDelta DoubleToTimeDelta(double time) {
   DCHECK(!std::isnan(time));
   DCHECK_NE(time, -std::numeric_limits<double>::infinity());
 
-  if (time == std::numeric_limits<double>::infinity())
-    return kInfiniteDuration;
+  // API sometimes needs conceptual +Infinity,
+  if (time == std::numeric_limits<double>::infinity()) {
+    return media::kInfiniteDuration;
+  }
 
-  constexpr double max_time_in_seconds =
-      base::TimeDelta::FiniteMax().InSecondsF();
+  base::TimeDelta converted_time = base::Seconds(time);
 
-  if (time >= max_time_in_seconds)
+  // Avoid saturating finite positive input to kInfiniteDuration.
+  if (converted_time == media::kInfiniteDuration) {
     return base::TimeDelta::FiniteMax();
+  }
 
-  return base::TimeDelta::FromMicroseconds(
-      time * base::Time::kMicrosecondsPerSecond);
+  // Avoid saturating finite negative input to KNoTimestamp.
+  if (converted_time == media::kNoTimestamp) {
+    return base::TimeDelta::FiniteMin();
+  }
+
+  return converted_time;
 }
 
 WebSourceBufferImpl::WebSourceBufferImpl(const std::string& id,
-                                         ChunkDemuxer* demuxer)
+                                         media::ChunkDemuxer* demuxer)
     : id_(id),
       demuxer_(demuxer),
       client_(nullptr),
-      append_window_end_(kInfiniteDuration) {
+      append_window_end_(media::kInfiniteDuration) {
   DCHECK(demuxer_);
+
+  // `HTMLMediaElement` transitively owns both the `MediaSource` (which owns
+  // this) and `Demuxer` and is responsible for shutting both down concurrently.
+  // See `HTMLMediaElement::ClearMediaPlayer`.
   demuxer_->SetTracksWatcher(
-      id, base::BindRepeating(&WebSourceBufferImpl::InitSegmentReceived,
-                              base::Unretained(this)));
+      id, ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
+              &WebSourceBufferImpl::InitSegmentReceived,
+              CrossThreadUnretained(this))));
   demuxer_->SetParseWarningCallback(
-      id, base::BindRepeating(&WebSourceBufferImpl::NotifyParseWarning,
-                              base::Unretained(this)));
+      id, ConvertToBaseRepeatingCallback(
+              CrossThreadBindRepeating(&WebSourceBufferImpl::NotifyParseWarning,
+                                       CrossThreadUnretained(this))));
 }
 
 WebSourceBufferImpl::~WebSourceBufferImpl() = default;
 
-void WebSourceBufferImpl::SetClient(blink::WebSourceBufferClient* client) {
+void WebSourceBufferImpl::SetClient(WebSourceBufferClient* client) {
   DCHECK(client);
   DCHECK(!client_);
   client_ = client;
@@ -101,12 +115,11 @@ bool WebSourceBufferImpl::SetMode(WebSourceBuffer::AppendMode mode) {
   }
 
   NOTREACHED();
-  return false;
 }
 
-blink::WebTimeRanges WebSourceBufferImpl::Buffered() {
-  Ranges<base::TimeDelta> ranges = demuxer_->GetBufferedRanges(id_);
-  blink::WebTimeRanges result(ranges.size());
+WebTimeRanges WebSourceBufferImpl::Buffered() {
+  media::Ranges<base::TimeDelta> ranges = demuxer_->GetBufferedRanges(id_);
+  WebTimeRanges result(ranges.size());
   for (size_t i = 0; i < ranges.size(); i++) {
     result[i].start = ranges.start(i).InSecondsF();
     result[i].end = ranges.end(i).InSecondsF();
@@ -118,20 +131,23 @@ double WebSourceBufferImpl::HighestPresentationTimestamp() {
   return demuxer_->GetHighestPresentationTimestamp(id_).InSecondsF();
 }
 
-bool WebSourceBufferImpl::EvictCodedFrames(double currentPlaybackTime,
-                                           size_t newDataSize) {
-  return demuxer_->EvictCodedFrames(
-      id_,
-      base::TimeDelta::FromSecondsD(currentPlaybackTime),
-      newDataSize);
+bool WebSourceBufferImpl::EvictCodedFrames(double current_playback_time,
+                                           size_t new_data_size) {
+  return demuxer_->EvictCodedFrames(id_, base::Seconds(current_playback_time),
+                                    new_data_size);
 }
 
-bool WebSourceBufferImpl::Append(const unsigned char* data,
-                                 unsigned length,
-                                 double* timestamp_offset) {
+bool WebSourceBufferImpl::AppendToParseBuffer(
+    base::span<const unsigned char> data) {
+  return demuxer_->AppendToParseBuffer(id_, data);
+}
+
+media::StreamParser::ParseStatus WebSourceBufferImpl::RunSegmentParserLoop(
+    double* timestamp_offset) {
   base::TimeDelta old_offset = timestamp_offset_;
-  bool success = demuxer_->AppendData(id_, data, length, append_window_start_,
-                                      append_window_end_, &timestamp_offset_);
+  media::StreamParser::ParseStatus parse_result =
+      demuxer_->RunSegmentParserLoop(id_, append_window_start_,
+                                     append_window_end_, &timestamp_offset_);
 
   // Coded frame processing may update the timestamp offset. If the caller
   // provides a non-nullptr |timestamp_offset| and frame processing changes the
@@ -141,7 +157,7 @@ bool WebSourceBufferImpl::Append(const unsigned char* data,
   if (timestamp_offset && old_offset != timestamp_offset_)
     *timestamp_offset = timestamp_offset_.InSecondsF();
 
-  return success;
+  return parse_result;
 }
 
 bool WebSourceBufferImpl::AppendChunks(
@@ -154,7 +170,7 @@ bool WebSourceBufferImpl::AppendChunks(
 
   // Like in ::Append, timestamp_offset may be updated by coded frame
   // processing.
-  // TODO(crbug.com/1144908): Consider refactoring this common bit into helper.
+  // TODO(crbug.com/40155657): Consider refactoring this common bit into helper.
   if (timestamp_offset && old_offset != timestamp_offset_)
     *timestamp_offset = timestamp_offset_.InSecondsF();
 
@@ -168,22 +184,35 @@ void WebSourceBufferImpl::ResetParserState() {
 
   // TODO(wolenetz): resetParserState should be able to modify the caller
   // timestamp offset (just like WebSourceBufferImpl::append).
-  // See http://crbug.com/370229 for further details.
+  // See http://crbug.com/41105493 for further details.
 }
 
 void WebSourceBufferImpl::Remove(double start, double end) {
   DCHECK_GE(start, 0);
   DCHECK_GE(end, 0);
-  demuxer_->Remove(id_, DoubleToTimeDelta(start), DoubleToTimeDelta(end));
+
+  const auto timedelta_start = DoubleToTimeDelta(start);
+  const auto timedelta_end = DoubleToTimeDelta(end);
+
+  // Since `start - end` may be less than 1 microsecond and base::TimeDelta is
+  // limited to microseconds, treat smaller ranges as zero.
+  //
+  // We could throw an error here, but removing nanosecond ranges is allowed by
+  // the spec and the risk of breaking existing sites is high.
+  if (timedelta_start == timedelta_end) {
+    return;
+  }
+
+  demuxer_->Remove(id_, timedelta_start, timedelta_end);
 }
 
-bool WebSourceBufferImpl::CanChangeType(const blink::WebString& content_type,
-                                        const blink::WebString& codecs) {
+bool WebSourceBufferImpl::CanChangeType(const WebString& content_type,
+                                        const WebString& codecs) {
   return demuxer_->CanChangeType(id_, content_type.Utf8(), codecs.Utf8());
 }
 
-void WebSourceBufferImpl::ChangeType(const blink::WebString& content_type,
-                                     const blink::WebString& codecs) {
+void WebSourceBufferImpl::ChangeType(const WebString& content_type,
+                                     const WebString& codecs) {
   // Caller must first call ResetParserState() to flush any pending frames.
   DCHECK(!demuxer_->IsParsingMediaSegment(id_));
 
@@ -206,11 +235,17 @@ bool WebSourceBufferImpl::SetTimestampOffset(double offset) {
 void WebSourceBufferImpl::SetAppendWindowStart(double start) {
   DCHECK_GE(start, 0);
   append_window_start_ = DoubleToTimeDelta(start);
+  if (demuxer_) {
+    demuxer_->SetAppendWindow(id_, append_window_start_, append_window_end_);
+  }
 }
 
 void WebSourceBufferImpl::SetAppendWindowEnd(double end) {
   DCHECK_GE(end, 0);
   append_window_end_ = DoubleToTimeDelta(end);
+  if (demuxer_) {
+    demuxer_->SetAppendWindow(id_, append_window_start_, append_window_end_);
+  }
 }
 
 void WebSourceBufferImpl::RemovedFromMediaSource() {
@@ -219,43 +254,40 @@ void WebSourceBufferImpl::RemovedFromMediaSource() {
   client_ = nullptr;
 }
 
-blink::WebMediaPlayer::TrackType mediaTrackTypeToBlink(MediaTrack::Type type) {
+WebMediaPlayer::TrackType mediaTrackTypeToBlink(media::MediaTrack::Type type) {
   switch (type) {
-    case MediaTrack::Audio:
-      return blink::WebMediaPlayer::kAudioTrack;
-    case MediaTrack::Text:
-      return blink::WebMediaPlayer::kTextTrack;
-    case MediaTrack::Video:
-      return blink::WebMediaPlayer::kVideoTrack;
+    case media::MediaTrack::Type::kAudio:
+      return WebMediaPlayer::kAudioTrack;
+    case media::MediaTrack::Type::kVideo:
+      return WebMediaPlayer::kVideoTrack;
   }
   NOTREACHED();
-  return blink::WebMediaPlayer::kAudioTrack;
 }
 
 void WebSourceBufferImpl::InitSegmentReceived(
-    std::unique_ptr<MediaTracks> tracks) {
+    std::unique_ptr<media::MediaTracks> tracks) {
   DCHECK(tracks.get());
   DVLOG(1) << __func__ << " tracks=" << tracks->tracks().size();
 
-  std::vector<blink::WebSourceBufferClient::MediaTrackInfo> trackInfoVector;
+  std::vector<WebSourceBufferClient::MediaTrackInfo> track_info_vector;
   for (const auto& track : tracks->tracks()) {
-    blink::WebSourceBufferClient::MediaTrackInfo trackInfo;
-    trackInfo.track_type = mediaTrackTypeToBlink(track->type());
-    trackInfo.id = blink::WebString::FromUTF8(track->id().value());
-    trackInfo.byte_stream_track_id = blink::WebString::FromUTF8(
-        base::NumberToString(track->bytestream_track_id()));
-    trackInfo.kind = blink::WebString::FromUTF8(track->kind().value());
-    trackInfo.label = blink::WebString::FromUTF8(track->label().value());
-    trackInfo.language = blink::WebString::FromUTF8(track->language().value());
-    trackInfoVector.push_back(trackInfo);
+    WebSourceBufferClient::MediaTrackInfo track_info;
+    track_info.track_type = mediaTrackTypeToBlink(track->type());
+    track_info.id = WebString::FromUtf8(track->track_id().value());
+    track_info.byte_stream_track_id =
+        WebString::FromUtf8(base::NumberToString(track->stream_id()));
+    track_info.kind = WebString::FromUtf8(track->kind().value());
+    track_info.label = WebString::FromUtf8(track->label().value());
+    track_info.language = WebString::FromUtf8(track->language().value());
+    track_info_vector.push_back(track_info);
   }
 
-  client_->InitializationSegmentReceived(trackInfoVector);
+  client_->InitializationSegmentReceived(track_info_vector);
 }
 
 void WebSourceBufferImpl::NotifyParseWarning(
-    const SourceBufferParseWarning warning) {
+    const media::SourceBufferParseWarning warning) {
   client_->NotifyParseWarning(ParseWarningToBlink(warning));
 }
 
-}  // namespace media
+}  // namespace blink

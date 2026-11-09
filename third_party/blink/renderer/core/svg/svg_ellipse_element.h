@@ -22,7 +22,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_ELLIPSE_ELEMENT_H_
 
 #include "third_party/blink/renderer/core/svg/svg_geometry_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -33,8 +33,12 @@ class SVGEllipseElement final : public SVGGeometryElement {
 
  public:
   explicit SVGEllipseElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGEllipseElement;
+  }
 
   Path AsPath() const override;
+  PathBuilder AsMutablePath() const override;
 
   SVGAnimatedLength* cx() const { return cx_.Get(); }
   SVGAnimatedLength* cy() const { return cy_.Get(); }
@@ -44,16 +48,15 @@ class SVGEllipseElement final : public SVGGeometryElement {
   void Trace(Visitor*) const override;
 
  private:
-  void CollectStyleForPresentationAttribute(
-      const QualifiedName&,
-      const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
-
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
-  bool SelfHasRelativeLengths() const override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
+  void CollectExtraStyleForPresentationAttribute(
+      HeapVector<CSSPropertyValue, 8>& style) override;
 
   Member<SVGAnimatedLength> cx_;
   Member<SVGAnimatedLength> cy_;

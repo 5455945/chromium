@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,16 +12,19 @@
 # Usage:
 #    stamp_grit_sources.py <directory> <stamp-file> <.d-file>
 
-from __future__ import print_function
 
 import os
 import sys
 
+
 def GritSourceFiles(grit_root_dir):
   files = []
   for root, _, filenames in os.walk(grit_root_dir):
-    grit_src = [os.path.join(root, f) for f in filenames
-                if f.endswith('.py') and not f.endswith('_unittest.py')]
+    grit_src = [
+      os.path.join(root, f)
+      for f in filenames
+      if f.endswith('.py') and not f.endswith('_unittest.py')
+    ]
     files.extend(grit_src)
   files = [f.replace('\\', '/') for f in files]
   return sorted(files)

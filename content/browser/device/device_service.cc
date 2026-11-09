@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/browser/device_service.h"
 
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "build/build_config.h"
@@ -16,11 +16,12 @@
 #include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/device_service.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "content/browser/wake_lock/wake_lock_context_host.h"
@@ -36,6 +37,10 @@ namespace {
 class DeviceServiceURLLoaderFactory : public network::SharedURLLoaderFactory {
  public:
   DeviceServiceURLLoaderFactory() = default;
+
+  DeviceServiceURLLoaderFactory(const DeviceServiceURLLoaderFactory&) = delete;
+  DeviceServiceURLLoaderFactory& operator=(
+      const DeviceServiceURLLoaderFactory&) = delete;
 
   // mojom::URLLoaderFactory implementation:
   void CreateLoaderAndStart(
@@ -71,8 +76,6 @@ class DeviceServiceURLLoaderFactory : public network::SharedURLLoaderFactory {
  private:
   friend class base::RefCounted<DeviceServiceURLLoaderFactory>;
   ~DeviceServiceURLLoaderFactory() override = default;
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceServiceURLLoaderFactory);
 };
 
 void BindDeviceServiceReceiver(
@@ -106,13 +109,13 @@ void BindDeviceServiceReceiver(
   params->custom_location_provider_callback =
       base::BindRepeating(&ContentBrowserClient::OverrideSystemLocationProvider,
                           base::Unretained(GetContentClient()->browser()));
-  params->geolocation_manager =
-      GetContentClient()->browser()->GetGeolocationManager();
+  params->geolocation_system_permission_manager =
+      GetContentClient()->browser()->GetGeolocationSystemPermissionManager();
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   JNIEnv* env = base::android::AttachCurrentThread();
   params->java_nfc_delegate = Java_ContentNfcDelegate_create(env);
-  DCHECK(!params->java_nfc_delegate.is_null());
+  CHECK(!params->java_nfc_delegate.is_null(), base::NotFatalUntil::M159);
 
   params->wake_lock_context_callback =
       base::BindRepeating(&WakeLockContextHost::GetNativeViewForContext);
@@ -145,3 +148,7 @@ device::mojom::DeviceService& GetDeviceService() {
 }
 
 }  // namespace content
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(ContentNfcDelegate)
+#endif

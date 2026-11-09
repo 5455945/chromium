@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,16 +18,18 @@ class SessionAbortedDialog : public views::DialogDelegateView {
  public:
   static void Show(const std::string& user_email);
 
+  SessionAbortedDialog(const SessionAbortedDialog&) = delete;
+  SessionAbortedDialog& operator=(const SessionAbortedDialog&) = delete;
+
   // views::View overrides.
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
  private:
   SessionAbortedDialog();
   ~SessionAbortedDialog() override;
 
   void InitDialog(const std::string& user_email);
-
-  DISALLOW_COPY_AND_ASSIGN(SessionAbortedDialog);
 };
 
 }  // namespace ash

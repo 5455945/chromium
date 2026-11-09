@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,28 +8,39 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/values.h"
-#include "chrome/browser/apps/app_service/app_icon_factory.h"
+#include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/ash/crostini/crostini_simple_types.h"
-#include "chromeos/dbus/vm_applications/apps.pb.h"
+#include "chrome/browser/ash/guest_os/guest_id.h"
+#include "chrome/browser/ash/guest_os/guest_os_external_protocol_handler.h"
+#include "chrome/browser/ash/guest_os/public/types.h"
+#include "chromeos/ash/components/dbus/vm_applications/apps.pb.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/services/app_service/public/mojom/app_service.mojom.h"
-#include "ui/base/resource/scale_factor.h"
+#include "components/services/app_service/public/cpp/icon_types.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/resource/resource_scale_factor.h"
 
-class Profile;
+class ApplicationLocaleStorage;
 class PrefService;
+class Profile;
 
 namespace base {
 class Clock;
 class Time;
 }  // namespace base
+
+namespace apps {
+class SvgIconTranscoder;
+}  // namespace apps
 
 namespace vm_tools {
 namespace apps {
@@ -38,6 +49,9 @@ class ApplicationList;
 }  // namespace vm_tools
 
 namespace guest_os {
+
+using IconContentCallback = base::OnceCallback<void(std::string)>;
+using CanHandleUrlCallback = base::RepeatingCallback<bool(const GURL&)>;
 
 // The GuestOsRegistryService  stores information about Desktop Entries (apps)
 // in Crostini. We store this in prefs so that it is readily available even when
@@ -69,13 +83,15 @@ namespace guest_os {
 // so some care is required.
 class GuestOsRegistryService : public KeyedService {
  public:
-  using VmType = vm_tools::apps::ApplicationList_VmType;
-
   class Registration {
    public:
-    Registration(const std::string app_id, const base::Value pref);
+    Registration(std::string app_locale, std::string app_id, base::Value pref);
     Registration(Registration&& registration) = default;
     Registration& operator=(Registration&& registration) = default;
+
+    Registration(const Registration&) = delete;
+    Registration& operator=(const Registration&) = delete;
+
     ~Registration();
 
     std::string app_id() const { return app_id_; }
@@ -84,14 +100,18 @@ class GuestOsRegistryService : public KeyedService {
     std::string VmName() const;
     std::string ContainerName() const;
 
+    // Returns the localized name based on the process-wide locale at the time
+    // of construction.
     std::string Name() const;
-    std::string Comment() const;
     std::string Exec() const;
     std::string ExecutableFileName() const;
     std::set<std::string> Extensions() const;
     std::set<std::string> MimeTypes() const;
+    // Returns the localized keywords based on the process-wide locale at the
+    // time of construction.
     std::set<std::string> Keywords() const;
     bool NoDisplay() const;
+    bool Terminal() const;
 
     std::string PackageId() const;
 
@@ -100,16 +120,22 @@ class GuestOsRegistryService : public KeyedService {
 
     // Whether this app should scale up when displayed.
     bool IsScaled() const;
-    bool CanUninstall() const;
+
+    guest_os::GuestId ToGuestId() const;
+
+    std::string StartupWmClass() const;
+    bool StartupNotify() const;
 
    private:
-    std::string LocalizedString(base::StringPiece key) const;
-    std::set<std::string> LocalizedList(base::StringPiece key) const;
+    std::string GetString(std::string_view key) const;
+    bool GetBool(std::string_view key) const;
+    base::Time GetTime(std::string_view key) const;
+    std::string GetLocalizedString(std::string_view key) const;
+    std::set<std::string> GetLocalizedList(std::string_view key) const;
 
+    std::string app_locale_;
     std::string app_id_;
     base::Value pref_;
-
-    DISALLOW_COPY_AND_ASSIGN(Registration);
   };
 
   class Observer {
@@ -124,11 +150,25 @@ class GuestOsRegistryService : public KeyedService {
         const std::vector<std::string>& removed_apps,
         const std::vector<std::string>& inserted_apps) {}
 
+    // Called at the end of AppLaunched().
+    virtual void OnAppLastLaunchTimeUpdated(
+        VmType vm_type,
+        const std::string& app_id,
+        const base::Time& last_launch_time) {}
+
    protected:
     virtual ~Observer() = default;
   };
 
-  explicit GuestOsRegistryService(Profile* profile);
+  // `application_locale_storage` and `profile` must be non-null and must
+  // outlive `this`.
+  GuestOsRegistryService(
+      const ApplicationLocaleStorage* application_locale_storage,
+      Profile* profile);
+
+  GuestOsRegistryService(const GuestOsRegistryService&) = delete;
+  GuestOsRegistryService& operator=(const GuestOsRegistryService&) = delete;
+
   ~GuestOsRegistryService() override;
 
   base::WeakPtr<GuestOsRegistryService> GetWeakPtr();
@@ -146,9 +186,20 @@ class GuestOsRegistryService : public KeyedService {
   std::map<std::string, GuestOsRegistryService::Registration> GetRegisteredApps(
       VmType vm_type) const;
 
-  // Return null if |app_id| is not found in the registry.
-  absl::optional<GuestOsRegistryService::Registration> GetRegistration(
+  // Return null if `app_id` is not found in the registry.
+  std::optional<GuestOsRegistryService::Registration> GetRegistration(
       const std::string& app_id) const;
+
+  // Return the preferred handler for the given URL, if any.
+  std::optional<GuestOsUrlHandler> GetHandler(const GURL& url) const;
+
+  // Register a non-app handler of URLs.
+  // Handlers registered here take priority over apps (since they come from
+  // the OS, rather than VMs), and are not persisted to prefs.
+  // `canHandleCallback` should return true when passed a URL that should be
+  // handled by `handler`.
+  void RegisterTransientUrlHandler(GuestOsUrlHandler handler,
+                                   CanHandleUrlCallback canHandleCallback);
 
   // Constructs path to app icon for specific scale factor.
   base::FilePath GetIconPath(const std::string& app_id,
@@ -161,33 +212,33 @@ class GuestOsRegistryService : public KeyedService {
   // 4/ Uses |fallback_icon_resource_id| if it is valid (non-zero).
   // 5/ Returns empty.
   void LoadIcon(const std::string& app_id,
-                apps::mojom::IconKeyPtr icon_key,
-                apps::mojom::IconType icon_type,
+                const apps::IconKey& icon_key,
+                apps::IconType icon_type,
                 int32_t size_hint_in_dip,
                 bool allow_placeholder_icon,
                 int fallback_icon_resource_id,
-                apps::mojom::Publisher::LoadIconCallback callback);
+                apps::LoadIconCallback callback);
 
   void LoadIconFromVM(const std::string& app_id,
-                      apps::mojom::IconType icon_type,
+                      apps::IconType icon_type,
                       int32_t size_hint_in_dip,
                       ui::ResourceScaleFactor scale_factor,
                       apps::IconEffects icon_effects,
                       int fallback_icon_resource_id,
-                      apps::mojom::Publisher::LoadIconCallback callback);
+                      apps::LoadIconCallback callback);
 
   void OnLoadIconFromVM(const std::string& app_id,
-                        apps::mojom::IconType icon_type,
+                        apps::IconType icon_type,
                         int32_t size_hint_in_dip,
                         apps::IconEffects icon_effects,
                         int fallback_icon_resource_id,
-                        apps::mojom::Publisher::LoadIconCallback callback,
+                        apps::LoadIconCallback callback,
                         std::string compressed_icon_data);
 
   // Fetches icons from container.
   void RequestIcon(const std::string& app_id,
                    ui::ResourceScaleFactor scale_factor,
-                   base::OnceCallback<void(std::string)> callback);
+                   IconContentCallback callback);
 
   // Remove all apps from the named VM and container. If |container_name| is an
   // empty string, this function removes all apps associated with the VM,
@@ -205,6 +256,11 @@ class GuestOsRegistryService : public KeyedService {
   // The existing list of apps is replaced by |application_list|.
   void UpdateApplicationList(const vm_tools::apps::ApplicationList& app_list);
 
+  // Inform the registry that the badge color for `container_id` has changed. In
+  // practice, this sends an update notification for all apps associated with
+  // this container, which will prompt the icons to be regenerated.
+  void ContainerBadgeColorChanged(const guest_os::GuestId& container_id);
+
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
@@ -212,7 +268,7 @@ class GuestOsRegistryService : public KeyedService {
   void AppLaunched(const std::string& app_id);
 
   // Serializes the current time and stores it in |dictionary|.
-  void SetCurrentTime(base::Value* dictionary, const char* key) const;
+  void SetCurrentTime(base::DictValue& dictionary, const char* key) const;
 
   // Set the display scaled setting of the |app_id| to |scaled|.
   void SetAppScaled(const std::string& app_id, bool scaled);
@@ -226,9 +282,6 @@ class GuestOsRegistryService : public KeyedService {
                                    const std::string& container_name);
 
  private:
-  // Run start up tasks for the registry (e.g. recording metrics).
-  void RecordStartupMetrics();
-
   // Construct path to app local data.
   base::FilePath GetAppPath(const std::string& app_id) const;
   // Called to request an icon from the container.
@@ -242,17 +295,33 @@ class GuestOsRegistryService : public KeyedService {
   // Removes all the icons installed for an application.
   void RemoveAppData(const std::string& app_id);
 
-  // Migrates terminal from old crosh-based terminal to new Terminal System App.
-  // Old terminal is removed from registry, and launcher position and pinned
-  // attribute is copied to the new terminal.
-  // TODO(crbug.com/1019021):  Keep this code for at least 1 release after
-  // TerminalSystemApp feature is removed.  Current expectation is to remove
-  // feature in M83, this function can then be remoevd after M84.
-  void MigrateTerminal() const;
+  // Call the callbacks |active_icon_requests_| for |app_id|.
+  void InvokeActiveIconCallbacks(std::string app_id,
+                                 ui::ResourceScaleFactor scale_factor,
+                                 std::string icon_content);
+
+  // If a valid .svg file is found at |svg_path|, transcode it to png and save
+  // it to |png_path| and invoke |callback|, otherwise invoke |fallback|.
+  void TranscodeIconFromSvg(
+      base::FilePath svg_path,
+      base::FilePath png_path,
+      apps::IconType icon_type,
+      int32_t size_hint_in_dip,
+      apps::IconEffects icon_effects,
+      base::OnceCallback<void(apps::LoadIconCallback)> fallback,
+      apps::LoadIconCallback callback);
+
+  // Callback for when a saved container icon is svg and was transcoded.
+  void OnSvgIconTranscoded(std::string app_id,
+                           ui::ResourceScaleFactor scale_factor,
+                           std::string svg_icon_content,
+                           std::string png_icon_content);
+
+  const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
 
   // Owned by the Profile.
-  Profile* const profile_;
-  PrefService* const prefs_;
+  const raw_ptr<Profile, DanglingUntriaged> profile_;
+  const raw_ptr<PrefService, DanglingUntriaged> prefs_;
 
   // Keeps root folder where Crostini app icons for different scale factors are
   // stored.
@@ -260,7 +329,9 @@ class GuestOsRegistryService : public KeyedService {
 
   base::ObserverList<Observer>::Unchecked observers_;
 
-  const base::Clock* clock_;
+  raw_ptr<const base::Clock> clock_;
+
+  std::vector<std::pair<GuestOsUrlHandler, CanHandleUrlCallback>> url_handlers_;
 
   // Keeps record for icon request to avoid duplication. Each app may contain
   // several requests for different scale factors. Scale factor is defined by
@@ -270,13 +341,12 @@ class GuestOsRegistryService : public KeyedService {
   // which means there's a good chance the container is online and the request
   // will then succeed.
   std::map<std::pair<std::string, ui::ResourceScaleFactor>,
-           std::vector<base::OnceCallback<void(std::string)>>>
+           std::vector<IconContentCallback>>
       active_icon_requests_;
   std::map<std::string, uint32_t> retry_icon_requests_;
 
+  std::unique_ptr<apps::SvgIconTranscoder> svg_icon_transcoder_;
   base::WeakPtrFactory<GuestOsRegistryService> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(GuestOsRegistryService);
 };
 
 }  // namespace guest_os

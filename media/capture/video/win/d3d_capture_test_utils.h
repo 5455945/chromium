@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 
 #include <d3d11_4.h>
 #include <wrl.h>
+
 #include "base/memory/ref_counted.h"
+#include "media/base/win/dxgi_device_manager.h"
 #include "media/base/win/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -18,6 +20,8 @@ template <class... Interface>
 class MockInterface
     : public base::RefCountedThreadSafe<MockInterface<Interface...>> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   // IUnknown
   IFACEMETHODIMP QueryInterface(REFIID riid, void** object) {
     if (riid == __uuidof(IUnknown)) {
@@ -506,6 +510,52 @@ class MockD3D11DeviceContext final : public MockInterface<ID3D11DeviceContext> {
   ~MockD3D11DeviceContext() override;
 };
 
+// Mock implementation of IDXGIDevice2
+class MockDXGIDevice2 final : public MockInterface<IDXGIDevice2> {
+ public:
+  MockDXGIDevice2();
+
+  // IDXGIDevice2 methods
+  IFACEMETHODIMP EnqueueSetEvent(HANDLE event) override;
+  IFACEMETHODIMP OfferResources(UINT num_resources,
+                                IDXGIResource* const* resources,
+                                DXGI_OFFER_RESOURCE_PRIORITY priority) override;
+  IFACEMETHODIMP ReclaimResources(UINT num_resources,
+                                  IDXGIResource* const* resources,
+                                  BOOL* discarded) override;
+
+  // IDXGIDevice1 methods
+  IFACEMETHODIMP SetMaximumFrameLatency(UINT max_latency) override;
+  IFACEMETHODIMP GetMaximumFrameLatency(UINT* max_latency) override;
+
+  // IDXGIDevice methods
+  IFACEMETHODIMP GetAdapter(IDXGIAdapter** adapter) override;
+  IFACEMETHODIMP CreateSurface(const DXGI_SURFACE_DESC* desc,
+                               UINT num_surfaces,
+                               DXGI_USAGE usage,
+                               const DXGI_SHARED_RESOURCE* shared_resource,
+                               IDXGISurface** surface) override;
+  IFACEMETHODIMP QueryResourceResidency(IUnknown* const* resources,
+                                        DXGI_RESIDENCY* residency_status,
+                                        UINT num_resources) override;
+  IFACEMETHODIMP SetGPUThreadPriority(INT priority) override;
+  IFACEMETHODIMP GetGPUThreadPriority(INT* priority) override;
+
+  // IDXGIObject methods
+  IFACEMETHODIMP SetPrivateData(REFGUID name,
+                                UINT data_size,
+                                const void* data) override;
+  IFACEMETHODIMP SetPrivateDataInterface(REFGUID name,
+                                         const IUnknown* unknown) override;
+  IFACEMETHODIMP GetPrivateData(REFGUID name,
+                                UINT* data_size,
+                                void* data) override;
+  IFACEMETHODIMP GetParent(REFIID riid, void** parent) override;
+
+ private:
+  ~MockDXGIDevice2() override;
+};
+
 class MockD3D11Device final : public MockInterface<ID3D11Device1> {
  public:
   MockD3D11Device();
@@ -514,6 +564,10 @@ class MockD3D11Device final : public MockInterface<ID3D11Device1> {
     if (riid == __uuidof(ID3D11Device)) {
       this->AddRef();
       *object = static_cast<ID3D11Device*>(this);
+      return S_OK;
+    } else if (riid == __uuidof(IDXGIDevice2)) {
+      mock_dxgi_device2_->AddRef();
+      *object = static_cast<IDXGIDevice2*>(mock_dxgi_device2_.get());
       return S_OK;
     }
     return MockInterface::QueryInterface(riid, object);
@@ -676,11 +730,12 @@ class MockD3D11Device final : public MockInterface<ID3D11Device1> {
   Microsoft::WRL::ComPtr<MockD3D11DeviceContext> mock_immediate_context_;
 
  private:
-  ~MockD3D11Device();
+  ~MockD3D11Device() override;
+
+  scoped_refptr<MockDXGIDevice2> mock_dxgi_device2_;
 };
 
-class MockDXGIResource final
-    : public MockInterface<IDXGIResource1, IDXGIKeyedMutex> {
+class MockDXGIResource final : public MockInterface<IDXGIResource1> {
  public:
   // IDXGIResource1
   IFACEMETHODIMP CreateSubresourceSurface(UINT index, IDXGISurface2** surface);
@@ -700,9 +755,6 @@ class MockDXGIResource final
   IFACEMETHODIMP SetPrivateDataInterface(REFGUID name, const IUnknown* unknown);
   IFACEMETHODIMP GetPrivateData(REFGUID name, UINT* data_size, void* data);
   IFACEMETHODIMP GetParent(REFIID riid, void** parent);
-  // IDXGIKeyedMutex
-  IFACEMETHODIMP AcquireSync(UINT64 key, DWORD milliseconds) override;
-  IFACEMETHODIMP ReleaseSync(UINT64 key) override;
 
  private:
   ~MockDXGIResource() override;
@@ -735,6 +787,32 @@ class MockD3D11Texture2D final : public MockInterface<ID3D11Texture2D> {
   ~MockD3D11Texture2D() override;
   D3D11_TEXTURE2D_DESC desc_ = {};
   Microsoft::WRL::ComPtr<ID3D11Device> device_;
+};
+
+// A DXGIDeviceManager handing out a MockD3D11Device, for tests of the capture
+// buffer trackers. Note that CheckDeviceRemovedAndGetDevice() is not
+// overridden, so tests exercise the real device-removed logic against the mock
+// device's GetDeviceRemovedReason().
+class FakeDXGIDeviceManager : public DXGIDeviceManager {
+ public:
+  FakeDXGIDeviceManager();
+
+  // Associates a new D3D device with the DXGI Device Manager and returns it in
+  // the parameter, which can't be nullptr.
+  HRESULT ResetDevice(
+      Microsoft::WRL::ComPtr<ID3D11Device>& d3d_device) override;
+
+  // Directly access the D3D device stored in the DXGI device manager.
+  Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() override;
+
+  Microsoft::WRL::ComPtr<MockD3D11Device> GetMockDevice();
+
+ protected:
+  ~FakeDXGIDeviceManager() override;
+
+ private:
+  Microsoft::WRL::ComPtr<MockD3D11Device> mock_d3d_device_ =
+      MakeComPtrFromRefCounted<MockD3D11Device>();
 };
 
 }  // namespace media

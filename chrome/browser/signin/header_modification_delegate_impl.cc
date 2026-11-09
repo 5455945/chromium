@@ -1,39 +1,144 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/signin/header_modification_delegate_impl.h"
 
+#include <algorithm>
+
+#include "base/feature_list.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
-#include "chrome/browser/extensions/api/identity/web_auth_flow.h"
+#include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/chrome_signin_helper.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/common/pref_names.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
+#include "components/sync/base/features.h"
 #include "components/sync/base/pref_names.h"
-#include "components/sync/driver/sync_service.h"
+#include "components/sync/service/sync_service.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/browser/site_instance.h"
+#include "content/public/browser/security_principal.h"
+#include "content/public/browser/storage_partition.h"
+#include "extensions/buildflags/buildflags.h"
+#include "google_apis/gaia/gaia_auth_util.h"
+#include "net/base/schemeful_site.h"
+#include "net/base/url_util.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/browser/guest_view/web_view/web_view_guest.h"
+#include "content/public/browser/site_instance.h"
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "components/account_manager_core/pref_names.h"
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+#include "base/containers/flat_set.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service_factory.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher_impl.h"
+#include "chrome/browser/signin/bound_session_credentials/unexportable_key_service_factory.h"
+#include "net/base/features.h"
+#include "net/device_bound_sessions/registration_fetcher_param.h"
 #endif
 
 namespace signin {
 
-#if defined(OS_ANDROID)
+namespace {
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+bool IsFirstPartyRequest(ResponseAdapter* response_adapter) {
+  const url::Origin* top_frame_origin =
+      response_adapter->GetRequestTopFrameOrigin();
+  return top_frame_origin &&
+         net::SchemefulSite::IsSameSite(
+             *top_frame_origin,
+             url::Origin::Create(response_adapter->GetUrl()));
+}
+
+void ProcessBoundSessionResponseHeaders(
+    BoundSessionCookieRefreshService* bound_session_cookie_refresh_service,
+    ResponseAdapter* response_adapter) {
+  if (!bound_session_cookie_refresh_service) {
+    return;
+  }
+
+  const net::HttpResponseHeaders* headers = response_adapter->GetHeaders();
+  if (!headers) {
+    return;
+  }
+
+  // Terminate the session if session termination header is set.
+  bound_session_cookie_refresh_service->MaybeTerminateSession(
+      response_adapter->GetUrl(), headers);
+
+  std::vector<net::SchemefulSite> restricted_sites =
+      signin_util::GetDeviceBoundSessionRestrictedSites();
+
+  // If an equivalent standard DBSC session is going to be triggered by the same
+  // response, ignore the session registration.
+  base::flat_set<GURL> ignored_registration_endpoints;
+  if (base::FeatureList::IsEnabled(net::features::kDeviceBoundSessions)) {
+    // Per the spec, a response with a WebSocket scheme should be
+    // rewritten to HTTP(S). See https://crbug.com/379241469.
+    const GURL& url = response_adapter->GetUrl();
+    GURL normalized_url = url.SchemeIsWSOrWSS()
+                              ? net::ChangeWebSocketSchemeToHttpScheme(url)
+                              : url;
+    // We don't need any restricted sites here because this code only
+    // runs on google.com, which is always restricted.
+    std::vector<net::device_bound_sessions::RegistrationFetcherParam>
+        standard_registrations =
+            net::device_bound_sessions::RegistrationFetcherParam::CreateIfValid(
+                normalized_url, headers, restricted_sites);
+    if (standard_registrations.size() > 0 &&
+        base::FeatureList::IsEnabled(
+            net::features::kDeviceBoundSessionsForRestrictedSites)) {
+      for (const auto& standard_registration : standard_registrations) {
+        ignored_registration_endpoints.insert(
+            standard_registration.registration_endpoint());
+      }
+    }
+  }
+
+  for (auto& param : BoundSessionRegistrationFetcherParam::CreateFromHeaders(
+           response_adapter->GetUrl(), headers)) {
+    if (ignored_registration_endpoints.contains(
+            param.registration_endpoint())) {
+      continue;
+    }
+    bound_session_cookie_refresh_service->CreateRegistrationRequest(
+        std::move(param));
+  }
+}
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+
+#if BUILDFLAG(ENABLE_MIRROR)
+// Returns false if adding secondary Google accounts is disallowed by the
+// SecondaryGoogleAccountSigninAllowed policy.
+bool IsSecondaryAccountAdditionAllowed(const PrefService& prefs) {
+#if BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(
+          switches::kSecondaryGoogleAccountsSigninAllowedOnAndroid)) {
+    return true;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+  return prefs.GetBoolean(
+      policy::policy_prefs::kSecondaryGoogleAccountSigninAllowed);
+}
+#endif  // BUILDFLAG(ENABLE_MIRROR)
+}  // namespace
+
+#if BUILDFLAG(IS_ANDROID)
 HeaderModificationDelegateImpl::HeaderModificationDelegateImpl(
     Profile* profile,
     bool incognito_enabled)
@@ -50,12 +155,20 @@ HeaderModificationDelegateImpl::~HeaderModificationDelegateImpl() = default;
 
 bool HeaderModificationDelegateImpl::ShouldInterceptNavigation(
     content::WebContents* contents) {
-  if (profile_->IsOffTheRecord())
+  if (profile_->IsOffTheRecord()) {
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+    if (!BoundSessionCookieRefreshServiceFactory::GetForProfile(profile_)) {
+      return false;
+    }
+#else
     return false;
+#endif
+  }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  if (ShouldIgnoreGuestWebViewRequest(contents))
+  if (ShouldIgnoreGuestWebViewRequest(contents)) {
     return false;
+  }
 #endif
 
   return true;
@@ -64,59 +177,79 @@ bool HeaderModificationDelegateImpl::ShouldInterceptNavigation(
 void HeaderModificationDelegateImpl::ProcessRequest(
     ChromeRequestAdapter* request_adapter,
     const GURL& redirect_url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  const PrefService* prefs = profile_->GetPrefs();
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  if (profile_->IsOffTheRecord()) {
+    // We expect seeing traffic from OTR profiles only if
+    // `BoundSessionCookieRefreshService` exists.
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+    CHECK(BoundSessionCookieRefreshServiceFactory::GetForProfile(profile_));
+    return;
+#else
+    NOTREACHED();
+#endif
+  }
+
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile_);
+
+#if BUILDFLAG(ENABLE_MIRROR)
+  bool is_secondary_account_addition_allowed =
+      IsSecondaryAccountAdditionAllowed(*profile_->GetPrefs());
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  bool is_secondary_account_addition_allowed = true;
-  if (!prefs->GetBoolean(
-          ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed)) {
-    is_secondary_account_addition_allowed = false;
+  ConsentLevel consent_level = ConsentLevel::kSignin;
+#if !BUILDFLAG(IS_ANDROID)
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
+    consent_level = ConsentLevel::kSync;
   }
-#endif
-
-  ConsentLevel consent_level = ConsentLevel::kSync;
-#if defined(OS_ANDROID)
-  consent_level = ConsentLevel::kSignin;
 #endif
 
   IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile_);
   CoreAccountInfo account =
       identity_manager->GetPrimaryAccountInfo(consent_level);
-  absl::optional<bool> is_child_account = absl::nullopt;
-  if (!account.IsEmpty()) {
-    AccountInfo extended_account_info =
-        identity_manager->FindExtendedAccountInfo(account);
-    if (!extended_account_info.IsEmpty()) {
-      is_child_account =
-          absl::make_optional<bool>(extended_account_info.is_child_account);
-    }
-  }
+  signin::Tribool is_child_account =
+      // Defaults to kUnknown if the account is not found.
+      identity_manager->FindExtendedAccountInfo(account).IsChildAccount();
+
+  // The primary account info at kSignin consent level is obtained to get the
+  // sign-in Gaia ID. This is passed to FixAccountConsistencyRequestHeader
+  // to decouple the sign-in account from the sync status (which is handled
+  // internally inside the function for Mirror and DICE).
+  CoreAccountInfo primary_account =
+      identity_manager->GetPrimaryAccountInfo(ConsentLevel::kSignin);
 
   int incognito_mode_availability =
-      prefs->GetInteger(prefs::kIncognitoModeAvailability);
-#if defined(OS_ANDROID)
-  incognito_mode_availability = incognito_enabled_
-                                    ? incognito_mode_availability
-                                    : IncognitoModePrefs::DISABLED;
+      static_cast<int>(IncognitoModePrefs::GetAvailability(profile_));
+#if BUILDFLAG(IS_ANDROID)
+  incognito_mode_availability =
+      incognito_enabled_
+          ? incognito_mode_availability
+          : static_cast<int>(policy::IncognitoModeAvailability::kDisabled);
 #endif
+
+  // SyncService and IdentityManager updates are not atomic. There are edge
+  // cases where SyncService thinks sync is enabled but IdentityManager has
+  // already cleared the primary account (e.g. if another identity observer
+  // gets notified before SyncService and triggers a request).
+  // See `SyncAuthManager::GetActiveAccountInfo()` for details. Primary account
+  // not empty is a requirement for sync.
+  bool is_sync_feature_enabled = sync_service &&
+                                 sync_service->IsSyncFeatureEnabled() &&
+                                 !primary_account.gaia.empty();
 
   FixAccountConsistencyRequestHeader(
       request_adapter, redirect_url, profile_->IsOffTheRecord(),
       incognito_mode_availability,
       AccountConsistencyModeManager::GetMethodForProfile(profile_),
-      account.gaia, is_child_account,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+      primary_account.gaia, consent_level, is_child_account,
+#if BUILDFLAG(ENABLE_MIRROR)
       is_secondary_account_addition_allowed,
 #endif
+      is_sync_feature_enabled,
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-      sync_service && sync_service->IsSyncFeatureEnabled(),
-      prefs->GetString(prefs::kGoogleServicesSigninScopedDeviceId),
+      profile_->GetPrefs()->GetString(
+          prefs::kGoogleServicesSigninScopedDeviceId),
 #endif
       cookie_settings_.get());
 }
@@ -124,7 +257,28 @@ void HeaderModificationDelegateImpl::ProcessRequest(
 void HeaderModificationDelegateImpl::ProcessResponse(
     ResponseAdapter* response_adapter,
     const GURL& redirect_url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+  if (gaia::HasGaiaSchemeHostPort(response_adapter->GetUrl()) &&
+      IsFirstPartyRequest(response_adapter)) {
+    ProcessBoundSessionResponseHeaders(
+        BoundSessionCookieRefreshServiceFactory::GetForProfile(profile_),
+        response_adapter);
+  }
+#endif
+
+  if (profile_->IsOffTheRecord()) {
+    // We expect seeing traffic from OTR profiles only if
+    // `BoundSessionCookieRefreshService` exists.
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+    CHECK(BoundSessionCookieRefreshServiceFactory::GetForProfile(profile_));
+    return;
+#else
+    NOTREACHED();
+#endif
+  }
+
   ProcessAccountConsistencyResponseHeaders(response_adapter, redirect_url,
                                            profile_->IsOffTheRecord());
 }
@@ -133,22 +287,14 @@ void HeaderModificationDelegateImpl::ProcessResponse(
 // static
 bool HeaderModificationDelegateImpl::ShouldIgnoreGuestWebViewRequest(
     content::WebContents* contents) {
-  if (!contents)
+  if (!contents) {
     return true;
+  }
 
   if (extensions::WebViewRendererState::GetInstance()->IsGuest(
-          contents->GetMainFrame()->GetProcess()->GetID())) {
-    GURL identity_api_site =
-        extensions::WebViewGuest::GetSiteForGuestPartitionConfig(
-            extensions::WebAuthFlow::GetWebViewPartitionConfig(
-                extensions::WebAuthFlow::GET_AUTH_TOKEN,
-                contents->GetBrowserContext()));
-    if (contents->GetSiteInstance()->GetSiteURL() != identity_api_site)
-      return true;
-
-    // If the site URL matches, but |contents| is not using a guest
-    // SiteInstance, then there is likely a serious bug.
-    CHECK(contents->GetSiteInstance()->IsGuest());
+          contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID())) {
+    CHECK(contents->GetSiteInstance()->GetSecurityPrincipal().IsGuest());
+    return true;
   }
   return false;
 }

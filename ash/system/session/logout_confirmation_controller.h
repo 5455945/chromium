@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,10 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 
@@ -38,7 +40,18 @@ class ASH_EXPORT LogoutConfirmationController : public SessionObserver {
  public:
   enum class Source { kShelfExitButton, kCloseAllWindows };
 
+  class Observer : public base::CheckedObserver {
+   public:
+    // Will be called right before the logout confirmation dialog is shown.
+    virtual void OnLogoutConfirmationStarted() = 0;
+  };
+
   LogoutConfirmationController();
+
+  LogoutConfirmationController(const LogoutConfirmationController&) = delete;
+  LogoutConfirmationController& operator=(const LogoutConfirmationController&) =
+      delete;
+
   ~LogoutConfirmationController() override;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
@@ -60,6 +73,9 @@ class ASH_EXPORT LogoutConfirmationController : public SessionObserver {
   // Called by the |dialog_| when it is closed.
   void OnDialogClosed();
 
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+
   // Overrides the internal clock for testing. This doesn't take the ownership
   // of the clock. |clock| must outlive the LogoutConfirmationController
   // instance.
@@ -76,18 +92,19 @@ class ASH_EXPORT LogoutConfirmationController : public SessionObserver {
   class LastWindowClosedObserver;
   std::unique_ptr<LastWindowClosedObserver> last_window_closed_observer_;
 
-  const base::TickClock* clock_;
+  raw_ptr<const base::TickClock> clock_;
 
   base::RepeatingCallback<void(Source)> logout_callback_;
   Source source_;
 
   base::TimeTicks logout_time_;
-  LogoutConfirmationDialog* dialog_ = nullptr;  // Owned by the Views hierarchy.
+  raw_ptr<LogoutConfirmationDialog> dialog_ =
+      nullptr;  // Owned by the Views hierarchy.
   base::OneShotTimer logout_timer_;
 
   int confirm_logout_count_for_test_ = 0;
 
-  DISALLOW_COPY_AND_ASSIGN(LogoutConfirmationController);
+  base::ObserverList<Observer> observers_;
 };
 
 }  // namespace ash

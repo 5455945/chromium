@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,16 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/rand_util.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "chrome/installer/util/scoped_token_privilege.h"
@@ -29,6 +30,10 @@ namespace {
 class ScopedUserHive {
  public:
   explicit ScopedUserHive(const base::FilePath& hive_file);
+
+  ScopedUserHive(const ScopedUserHive&) = delete;
+  ScopedUserHive& operator=(const ScopedUserHive&) = delete;
+
   ~ScopedUserHive();
 
   // Returns true if the hive file was loaded.
@@ -44,15 +49,12 @@ class ScopedUserHive {
 
   // The loaded key.
   base::win::RegKey key_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedUserHive);
 };
 
 ScopedUserHive::ScopedUserHive(const base::FilePath& hive_file) {
   // Generate a random name for the key at which the file will be loaded.
-  std::string buffer = base::RandBytesAsString(10);
-  subkey_name_ = base::ASCIIToWide(
-      base32::Base32Encode(buffer, base32::Base32EncodePolicy::OMIT_PADDING));
+  subkey_name_ = base::ASCIIToWide(base32::Base32Encode(
+      base::RandBytesAsVector(10), base32::Base32EncodePolicy::OMIT_PADDING));
   DCHECK_EQ(16U, subkey_name_.size());
 
   LONG result = ::RegLoadKey(HKEY_LOCAL_MACHINE, subkey_name_.c_str(),
@@ -78,8 +80,9 @@ ScopedUserHive::ScopedUserHive(const base::FilePath& hive_file) {
 
 ScopedUserHive::~ScopedUserHive() {
   key_.Close();
-  if (subkey_name_.empty())
+  if (subkey_name_.empty()) {
     return;
+  }
   LONG result = ::RegUnLoadKey(HKEY_LOCAL_MACHINE, subkey_name_.c_str());
   if (result != ERROR_SUCCESS) {
     ::SetLastError(result);
@@ -90,8 +93,9 @@ ScopedUserHive::~ScopedUserHive() {
 bool OpenUserHive(const wchar_t* sid, base::win::RegKey* user_hive) {
   DCHECK(user_hive);
   LONG result = user_hive->Open(HKEY_USERS, sid, KEY_ALL_ACCESS);
-  if (result == ERROR_SUCCESS)
+  if (result == ERROR_SUCCESS) {
     return true;
+  }
   if (result == ERROR_FILE_NOT_FOUND) {
     VLOG(1) << "Hive is not loaded for user \"" << sid << "\"";
     return false;
@@ -120,8 +124,9 @@ void VisitUserHives(const HiveVisitor& visitor) {
     base::win::RegKey key;
     if (OpenUserHive(sid, &key)) {
       VLOG(1) << "Found loaded hive for sid \"" << sid << "\"";
-      if (!visitor.Run(sid, &key))
+      if (!visitor.Run(sid, &key)) {
         break;
+      }
       continue;
     }
 
@@ -144,8 +149,9 @@ void VisitUserHives(const HiveVisitor& visitor) {
                   << profile_key_name << "\"";
     }
     key.Close();
-    if (image_path.empty())
+    if (image_path.empty()) {
       continue;
+    }
 
     base::FilePath hive_file(
         base::FilePath(image_path).Append(FILE_PATH_LITERAL("ntuser.dat")));
@@ -158,8 +164,9 @@ void VisitUserHives(const HiveVisitor& visitor) {
     ScopedUserHive user_hive(hive_file);
     if (user_hive.valid()) {
       VLOG(1) << "Loaded and opened hive for sid \"" << sid << "\"";
-      if (!visitor.Run(sid, user_hive.key()))
+      if (!visitor.Run(sid, user_hive.key())) {
         break;
+      }
     }
   }
 }

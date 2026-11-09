@@ -1,10 +1,9 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/aura/scoped_keyboard_hook.h"
 
-#include "base/macros.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 
@@ -15,7 +14,7 @@ ScopedKeyboardHook::ScopedKeyboardHook() = default;
 ScopedKeyboardHook::ScopedKeyboardHook(
     base::WeakPtr<WindowTreeHost> window_tree_host)
     : window_tree_host_(window_tree_host) {
-  DCHECK(window_tree_host_);
+  CHECK(window_tree_host_, base::NotFatalUntil::M163);
 }
 
 ScopedKeyboardHook::~ScopedKeyboardHook() {

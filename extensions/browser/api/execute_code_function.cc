@@ -1,25 +1,27 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#ifndef EXTENSIONS_BROWSER_API_EXECUTE_CODE_FUNCTION_IMPL_H_
-#define EXTENSIONS_BROWSER_API_EXECUTE_CODE_FUNCTION_IMPL_H_
 
 #include "extensions/browser/api/execute_code_function.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "extensions/browser/api/extension_types_utils.h"
+#include "base/functional/bind.h"
+#include "base/strings/escape.h"
+#include "base/strings/string_util.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/load_and_localize_file.h"
+#include "extensions/browser/safe_browsing_delegate.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/mojom/css_origin.mojom-shared.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "extensions/common/utils/content_script_utils.h"
+#include "extensions/common/utils/extension_types_utils.h"
 
 namespace {
 
@@ -30,7 +32,6 @@ const char kMoreThanOneValuesError[] =
     "at the same time in the second argument.";
 const char kBadFileEncodingError[] =
     "Could not load file '*' for content script. It isn't UTF-8 encoded.";
-const char kLoadFileError[] = "Failed to load file: \"*\". ";
 const char kCSSOriginForNonCSSError[] =
     "CSS origin should be specified only for CSS code.";
 
@@ -48,23 +49,26 @@ ExecuteCodeFunction::~ExecuteCodeFunction() {
 
 void ExecuteCodeFunction::DidLoadAndLocalizeFile(
     const std::string& file,
-    bool success,
-    std::unique_ptr<std::string> data) {
-  if (!success) {
+    std::vector<std::string> data,
+    std::optional<std::string> load_error) {
+  if (load_error) {
     // TODO(viettrungluu): bug: there's no particular reason the path should be
     // UTF-8, in which case this may fail.
-    Respond(Error(ErrorUtils::FormatErrorMessage(kLoadFileError, file)));
+    Respond(Error(std::move(*load_error)));
     return;
   }
 
-  if (!base::IsStringUTF8(*data)) {
+  DCHECK_EQ(1u, data.size());
+  auto& file_data = data.front();
+  if (!base::IsStringUTF8(file_data)) {
     Respond(Error(ErrorUtils::FormatErrorMessage(kBadFileEncodingError, file)));
     return;
   }
 
   std::string error;
-  if (!Execute(*data, &error))
+  if (!Execute(file_data, &error)) {
     Respond(Error(std::move(error)));
+  }
 
   // If Execute() succeeds, the function will respond in
   // OnExecuteCodeFinished().
@@ -83,28 +87,26 @@ bool ExecuteCodeFunction::Execute(const std::string& code_string,
   DCHECK(!(ShouldInsertCSS() && ShouldRemoveCSS()));
 
   ScriptExecutor::FrameScope frame_scope =
-      details_->all_frames.get() && *details_->all_frames
-          ? ScriptExecutor::INCLUDE_SUB_FRAMES
-          : ScriptExecutor::SPECIFIED_FRAMES;
+      details_->all_frames.value_or(false) ? ScriptExecutor::INCLUDE_SUB_FRAMES
+                                           : ScriptExecutor::SPECIFIED_FRAMES;
 
-  root_frame_id_ = details_->frame_id.get()
-                       ? *details_->frame_id
-                       : ExtensionApiFrameIdMap::kTopFrameId;
+  root_frame_id_ = details_->frame_id.value_or(GetRootFrameId());
 
-  ScriptExecutor::MatchAboutBlank match_about_blank =
-      details_->match_about_blank.get() && *details_->match_about_blank
-          ? ScriptExecutor::MATCH_ABOUT_BLANK
-          : ScriptExecutor::DONT_MATCH_ABOUT_BLANK;
+  mojom::MatchOriginAsFallbackBehavior match_about_blank =
+      details_->match_about_blank.value_or(false)
+          ? mojom::MatchOriginAsFallbackBehavior::
+                kMatchForAboutSchemeAndClimbTree
+          : mojom::MatchOriginAsFallbackBehavior::kNever;
 
   mojom::RunLocation run_at = ConvertRunLocation(details_->run_at);
 
   mojom::CSSOrigin css_origin = mojom::CSSOrigin::kAuthor;
   switch (details_->css_origin) {
-    case api::extension_types::CSS_ORIGIN_NONE:
-    case api::extension_types::CSS_ORIGIN_AUTHOR:
+    case api::extension_types::CSSOrigin::kNone:
+    case api::extension_types::CSSOrigin::kAuthor:
       css_origin = mojom::CSSOrigin::kAuthor;
       break;
-    case api::extension_types::CSS_ORIGIN_USER:
+    case api::extension_types::CSSOrigin::kUser:
       css_origin = mojom::CSSOrigin::kUser;
       break;
   }
@@ -112,7 +114,7 @@ bool ExecuteCodeFunction::Execute(const std::string& code_string,
   mojom::CodeInjectionPtr injection;
   bool is_css_injection = ShouldInsertCSS() || ShouldRemoveCSS();
   if (is_css_injection) {
-    absl::optional<std::string> injection_key;
+    std::optional<std::string> injection_key;
     if (host_id_.type == mojom::HostID::HostType::kExtensions) {
       injection_key = ScriptExecutor::GenerateInjectionKey(
           host_id_, script_url_, code_string);
@@ -129,8 +131,16 @@ bool ExecuteCodeFunction::Execute(const std::string& code_string,
     bool wants_result = has_callback();
     std::vector<mojom::JSSourcePtr> sources;
     sources.push_back(mojom::JSSource::New(code_string, script_url_));
+    // tabs.executeScript does not support waiting for promises (only
+    // scripting.executeScript does).
     injection = mojom::CodeInjection::NewJs(mojom::JSInjection::New(
-        std::move(sources), wants_result, user_gesture()));
+        std::move(sources), mojom::ExecutionWorld::kIsolated,
+        /*world_id=*/std::nullopt,
+        wants_result ? blink::mojom::WantResultOption::kWantResult
+                     : blink::mojom::WantResultOption::kNoResult,
+        user_gesture() ? blink::mojom::UserActivationOption::kActivate
+                       : blink::mojom::UserActivationOption::kDoNotActivate,
+        blink::mojom::PromiseResultOption::kDoNotWait));
   }
 
   executor->ExecuteScript(
@@ -155,7 +165,7 @@ ExtensionFunction::ResponseAction ExecuteCodeFunction::Run() {
   if (details_->code && details_->file)
     return RespondNow(Error(kMoreThanOneValuesError));
 
-  if (details_->css_origin != api::extension_types::CSS_ORIGIN_NONE &&
+  if (details_->css_origin != api::extension_types::CSSOrigin::kNone &&
       !ShouldInsertCSS() && !ShouldRemoveCSS()) {
     return RespondNow(Error(kCSSOriginForNonCSSError));
   }
@@ -165,6 +175,13 @@ ExtensionFunction::ResponseAction ExecuteCodeFunction::Run() {
     return RespondNow(Error(std::move(error)));
 
   if (details_->code) {
+    if (!IsWebView() && extension()) {
+      ExtensionsBrowserClient::Get()
+          ->GetSafeBrowsingDelegate()
+          ->NotifyExtensionApiTabExecuteScript(browser_context(),
+                                               extension_id(), *details_->code);
+    }
+
     if (!Execute(*details_->code, &error))
       return RespondNow(Error(std::move(error)));
     return did_respond() ? AlreadyResponded() : RespondLater();
@@ -185,14 +202,27 @@ bool ExecuteCodeFunction::LoadFile(const std::string& file,
     *error = kNoCodeOrFileToExecuteError;
     return false;
   }
-  script_url_ = extension()->GetResourceURL(file);
 
-  bool might_require_localization = ShouldInsertCSS() || ShouldRemoveCSS();
+  bool is_css_injection = ShouldInsertCSS() || ShouldRemoveCSS();
 
-  LoadAndLocalizeResource(
-      *extension(), resource, might_require_localization,
+  if (!script_parsing::ValidateMimeTypeFromFileExtension(
+          resource.relative_path(),
+          is_css_injection ? script_parsing::ContentScriptType::kCss
+                           : script_parsing::ContentScriptType::kJs,
+          error)) {
+    return false;
+  }
+
+  script_url_ = extension()->GetResourceURL(base::EscapePath(file));
+
+  bool might_require_localization = is_css_injection;
+
+  std::string relative_path = resource.relative_path().AsUTF8Unsafe();
+  LoadAndLocalizeResources(
+      *extension(), {std::move(resource)}, might_require_localization,
+      script_parsing::GetMaxScriptLength(),
       base::BindOnce(&ExecuteCodeFunction::DidLoadAndLocalizeFile, this,
-                     resource.relative_path().AsUTF8Unsafe()));
+                     relative_path));
 
   return true;
 }
@@ -201,13 +231,10 @@ void ExecuteCodeFunction::OnExecuteCodeFinished(
     std::vector<ScriptExecutor::FrameResult> results) {
   DCHECK(!results.empty());
 
-  auto root_frame_result =
-      std::find_if(results.begin(), results.end(),
-                   [root_frame_id = root_frame_id_](const auto& frame_result) {
-                     return frame_result.frame_id == root_frame_id;
-                   });
+  auto root_frame_result = std::ranges::find(
+      results, root_frame_id_, &ScriptExecutor::FrameResult::frame_id);
 
-  DCHECK(root_frame_result != results.end());
+  CHECK(root_frame_result != results.end());
 
   // We just error out if we never injected in the root frame.
   // TODO(devlin): That's a bit odd, because other injections may have
@@ -236,15 +263,13 @@ void ExecuteCodeFunction::OnExecuteCodeFinished(
 
   // Place the root frame result at the beginning.
   std::iter_swap(root_frame_result, results.begin());
-  base::Value result_list(base::Value::Type::LIST);
+  base::ListValue result_list;
   for (auto& result : results) {
     if (result.error.empty())
       result_list.Append(std::move(result.value));
   }
 
-  Respond(OneArgument(std::move(result_list)));
+  Respond(WithArguments(std::move(result_list)));
 }
 
 }  // namespace extensions
-
-#endif  // EXTENSIONS_BROWSER_API_EXECUTE_CODE_FUNCTION_IMPL_H_

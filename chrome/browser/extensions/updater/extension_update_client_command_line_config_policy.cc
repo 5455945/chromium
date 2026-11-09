@@ -1,20 +1,22 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/updater/extension_update_client_command_line_config_policy.h"
-
 #include "base/command_line.h"
 #include "build/build_config.h"
+#include "chrome/browser/extensions/updater/extension_update_client_command_line_config_policy.h"
 #include "chrome/browser/extensions/updater/extension_updater_switches.h"
+#include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 ExtensionUpdateClientCommandLineConfigPolicy::
     ExtensionUpdateClientCommandLineConfigPolicy(
         const base::CommandLine* cmdline) {
-  DCHECK(cmdline);
+  CHECK(cmdline, base::NotFatalUntil::M161);
   test_request_ = cmdline->HasSwitch(kSwitchTestRequestParam);
 }
 

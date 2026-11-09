@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,14 @@
 
 #include <utility>
 
-#include "base/unguessable_token.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_service.h"
-#include "components/media_router/browser/media_router.h"
-#include "components/media_router/browser/media_router_factory.h"
-#include "components/media_router/browser/presentation/presentation_service_delegate_impl.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/media_router/common/providers/cast/cast_media_source.h"
 #include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/media_session.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -25,15 +22,19 @@ namespace {
 
 base::WeakPtr<media_router::WebContentsPresentationManager>
 GetActiveWebContentsPresentationManager() {
-  auto* browser = chrome::FindLastActive();
-  if (!browser)
+  auto* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+  if (!browser) {
     return nullptr;
-  auto* tab_strip = browser->tab_strip_model();
-  if (!tab_strip)
+  }
+  auto* tab_strip = browser->GetTabStripModel();
+  if (!tab_strip) {
     return nullptr;
+  }
   auto* web_contents = tab_strip->GetActiveWebContents();
-  if (!web_contents)
+  if (!web_contents) {
     return nullptr;
+  }
   return media_router::WebContentsPresentationManager::Get(web_contents);
 }
 
@@ -53,7 +54,7 @@ class PresentationRequestNotificationProducer::
       PresentationRequestNotificationProducer* notification_producer)
       : content::WebContentsObserver(web_contents),
         notification_producer_(notification_producer) {
-    DCHECK(notification_producer_);
+    CHECK(notification_producer_, base::NotFatalUntil::M162);
   }
 
  private:
@@ -66,63 +67,30 @@ class PresentationRequestNotificationProducer::
     notification_producer_->DeleteItemForPresentationRequest("Dialog closed.");
   }
 
-  void RenderProcessGone(base::TerminationStatus status) override {
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override {
     notification_producer_->DeleteItemForPresentationRequest("Dialog closed.");
   }
 
-  PresentationRequestNotificationProducer* const notification_producer_;
+  const raw_ptr<PresentationRequestNotificationProducer> notification_producer_;
 };
 
 PresentationRequestNotificationProducer::
     PresentationRequestNotificationProducer(
-        MediaNotificationService* notification_service)
-    : notification_service_(notification_service),
-      container_observer_set_(this) {
-  notification_service_->AddObserver(this);
-}
+        base::RepeatingCallback<bool(content::WebContents*)>
+            has_active_notifications_callback,
+        const base::UnguessableToken& source_id)
+    : observer_receiver_(this),
+      has_active_notifications_callback_(
+          std::move(has_active_notifications_callback)),
+      source_id_(source_id) {}
 
 PresentationRequestNotificationProducer::
-    ~PresentationRequestNotificationProducer() {
-  notification_service_->RemoveObserver(this);
-}
-
-base::WeakPtr<media_message_center::MediaNotificationItem>
-PresentationRequestNotificationProducer::GetNotificationItem(
-    const std::string& id) {
-  if (item_ && item_->id() == id) {
-    return item_->GetWeakPtr();
-  } else {
-    return nullptr;
-  }
-}
-
-std::set<std::string>
-PresentationRequestNotificationProducer::GetActiveControllableNotificationIds()
-    const {
-  return (item_ && !should_hide_) ? std::set<std::string>({item_->id()})
-                                  : std::set<std::string>();
-}
-
-void PresentationRequestNotificationProducer::OnItemShown(
-    const std::string& id,
-    MediaNotificationContainerImpl* container) {
-  if (container) {
-    container_observer_set_.Observe(id, container);
-  }
-}
-
-void PresentationRequestNotificationProducer::OnContainerDismissed(
-    const std::string& id) {
-  auto item = GetNotificationItem(id);
-  if (item) {
-    item->Dismiss();
-    DeleteItemForPresentationRequest("Dialog closed.");
-  }
-}
+    ~PresentationRequestNotificationProducer() = default;
 
 void PresentationRequestNotificationProducer::OnStartPresentationContextCreated(
     std::unique_ptr<media_router::StartPresentationContext> context) {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M162);
   const auto& request = context->presentation_request();
   CreateItemForPresentationRequest(request, std::move(context));
 }
@@ -138,73 +106,72 @@ PresentationRequestNotificationProducer::GetNotificationItem() {
   return item_ ? item_->GetWeakPtr() : nullptr;
 }
 
-void PresentationRequestNotificationProducer::OnNotificationListChanged() {
-  ShowOrHideItem();
+void PresentationRequestNotificationProducer::BindProvider(
+    mojo::PendingRemote<global_media_controls::mojom::DevicePickerProvider>
+        pending_provider) {
+  provider_.Bind(std::move(pending_provider));
+  provider_->AddObserver(observer_receiver_.BindNewPipeAndPassRemote());
+  provider_.set_disconnect_handler(base::BindOnce(
+      [](PresentationRequestNotificationProducer* self) {
+        self->item_.reset();
+      },
+      base::Unretained(this)));
 }
+
 void PresentationRequestNotificationProducer::SetTestPresentationManager(
     base::WeakPtr<media_router::WebContentsPresentationManager>
         presentation_manager) {
   test_presentation_manager_ = presentation_manager;
 }
 
-void PresentationRequestNotificationProducer::OnMediaDialogOpened() {
-  // At the point where this method is called, MediaNotificationService is
-  // in a state where it can't accept new notifications.  As a workaround,
-  // we simply defer the handling of the event.
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          &PresentationRequestNotificationProducer::AfterMediaDialogOpened,
-          weak_factory_.GetWeakPtr(),
-          test_presentation_manager_
-              ? test_presentation_manager_
-              : GetActiveWebContentsPresentationManager()));
-}
-
-void PresentationRequestNotificationProducer::OnMediaDialogClosed() {
-  // This event needs to be handled asynchronously the be absolutely certain
-  // it's handled later than a prior call to OnMediaDialogOpened().
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          &PresentationRequestNotificationProducer::AfterMediaDialogClosed,
-          weak_factory_.GetWeakPtr()));
-}
-
-void PresentationRequestNotificationProducer::AfterMediaDialogOpened(
-    base::WeakPtr<media_router::WebContentsPresentationManager>
-        presentation_manager) {
-  presentation_manager_ = presentation_manager;
+void PresentationRequestNotificationProducer::OnMediaUIOpened() {
+  is_dialog_open_ = true;
+  presentation_manager_ = test_presentation_manager_
+                              ? test_presentation_manager_
+                              : GetActiveWebContentsPresentationManager();
   // It's possible the presentation manager was deleted since the call to
   // this method was scheduled.
-  if (!presentation_manager_)
+  if (!presentation_manager_) {
     return;
-
+  }
   presentation_manager_->AddObserver(this);
 
   // Handle any request that was created while we weren't watching, first
   // making sure the dialog hasn't been closed since the we found out it was
   // opening. This is the normal way notifications are created for a default
   // presentation request.
-  if (presentation_manager_->HasDefaultPresentationRequest() &&
-      notification_service_->HasOpenDialog()) {
+  if (presentation_manager_->HasDefaultPresentationRequest()) {
     OnDefaultPresentationChanged(
         &presentation_manager_->GetDefaultPresentationRequest());
   }
 }
 
-void PresentationRequestNotificationProducer::AfterMediaDialogClosed() {
+void PresentationRequestNotificationProducer::OnMediaUIClosed() {
+  is_dialog_open_ = false;
   DeleteItemForPresentationRequest("Dialog closed.");
-  if (presentation_manager_)
+  if (presentation_manager_) {
     presentation_manager_->RemoveObserver(this);
+  }
   presentation_manager_ = nullptr;
 }
 
-void PresentationRequestNotificationProducer::OnMediaRoutesChanged(
-    const std::vector<media_router::MediaRoute>& routes) {
-  if (!routes.empty()) {
-    notification_service_->HideMediaDialog();
-    item_->Dismiss();
+void PresentationRequestNotificationProducer::OnMediaUIUpdated() {
+  ShowOrHideItem();
+}
+
+void PresentationRequestNotificationProducer::OnPickerDismissed() {
+  DeleteItemForPresentationRequest("Dialog closed.");
+}
+
+void PresentationRequestNotificationProducer::OnPresentationsChanged(
+    bool has_presentation) {
+  // If there is a presentation, there would already be an item associated with
+  // that, so `this` doesn't have to provide another item.
+  if (has_presentation && provider_.is_bound()) {
+#if !BUILDFLAG(IS_CHROMEOS)
+    provider_->HideMediaUI();
+#endif
+    provider_->HideItem();
   }
 }
 
@@ -232,45 +199,51 @@ void PresentationRequestNotificationProducer::CreateItemForPresentationRequest(
           GetWebContentsFromPresentationRequest(request), this);
   // This may replace an existing item, which is the right thing to do if
   // we've reached this point.
-  item_.emplace(notification_service_, request, std::move(context));
-
+  item_.emplace(request, std::move(context), provider_);
+  if (provider_.is_bound()) {
+    provider_->CreateItem(source_id_);
+  }
   ShowOrHideItem();
 }
 
 void PresentationRequestNotificationProducer::DeleteItemForPresentationRequest(
     const std::string& message) {
-  if (!item_)
+  if (!item_) {
     return;
+  }
   if (item_->context()) {
     item_->context()->InvokeErrorCallback(blink::mojom::PresentationError(
         blink::mojom::PresentationErrorType::PRESENTATION_REQUEST_CANCELLED,
         message));
   }
-  const auto id{item_->id()};
   item_.reset();
   presentation_request_observer_.reset();
-  notification_service_->HideNotification(id);
+  if (provider_.is_bound()) {
+    provider_->DeleteItem();
+  }
 }
 
 void PresentationRequestNotificationProducer::ShowOrHideItem() {
-  if (!item_) {
-    should_hide_ = true;
+  if (!item_ || !provider_.is_bound()) {
+    should_show_ = false;
     return;
   }
-
+  // If the dialog is open and the item is currently hidden, do not show it.
+  // Otherwise, the item might be shown when the user has dismissed a media
+  // session notification or a cast notification from the same WebContents.
+  if (!should_show_ && is_dialog_open_) {
+    return;
+  }
   auto* web_contents = GetWebContentsFromPresentationRequest(item_->request());
   bool new_visibility =
-      web_contents
-          ? notification_service_->HasActiveNotificationsForWebContents(
-                web_contents)
-          : true;
-  if (should_hide_ == new_visibility)
+      web_contents && !has_active_notifications_callback_.Run(web_contents);
+  if (should_show_ == new_visibility) {
     return;
-
-  should_hide_ = new_visibility;
-  if (should_hide_) {
-    notification_service_->HideNotification(item_->id());
+  }
+  should_show_ = new_visibility;
+  if (should_show_) {
+    provider_->ShowItem();
   } else {
-    notification_service_->ShowNotification(item_->id());
+    provider_->HideItem();
   }
 }

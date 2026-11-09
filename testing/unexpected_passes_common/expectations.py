@@ -1,615 +1,1308 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Methods related to test expectations/expectation files."""
 
-from __future__ import print_function
-
 import collections
 import copy
+import datetime
+import functools
 import logging
 import os
-import sys
+import re
+import subprocess
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, Union
 
-import validate_tag_consistency
-
+# //third_party/catapult/third_party/typ imports.
 from typ import expectations_parser
+
+# //testing imports.
 from unexpected_passes_common import data_types
-from unexpected_passes_common import result_output
 
-EXPECTATIONS_DIR = os.path.realpath(
-    os.path.join(os.path.dirname(__file__), '..', '..', 'content', 'test',
-                 'gpu', 'gpu_tests', 'test_expectations'))
+FINDER_DISABLE_COMMENT_BASE = 'finder:disable'
+FINDER_ENABLE_COMMENT_BASE = 'finder:enable'
+FINDER_COMMENT_SUFFIX_GENERAL = '-general'
+FINDER_COMMENT_SUFFIX_STALE = '-stale'
+FINDER_COMMENT_SUFFIX_UNUSED = '-unused'
+FINDER_COMMENT_SUFFIX_NARROWING = '-narrowing'
 
-FINDER_DISABLE_COMMENT = 'finder:disable'
-FINDER_ENABLE_COMMENT = 'finder:enable'
+FINDER_GROUP_COMMENT_START = 'finder:group-start'
+FINDER_GROUP_COMMENT_END = 'finder:group-end'
 
-FULL_PASS = 1
-NEVER_PASS = 2
-PARTIAL_PASS = 3
+ALL_FINDER_START_ANNOTATION_BASES = frozenset(
+  [
+    FINDER_DISABLE_COMMENT_BASE,
+    FINDER_GROUP_COMMENT_START,
+  ]
+)
+
+ALL_FINDER_END_ANNOTATION_BASES = frozenset(
+  [
+    FINDER_ENABLE_COMMENT_BASE,
+    FINDER_GROUP_COMMENT_END,
+  ]
+)
+
+ALL_FINDER_DISABLE_SUFFIXES = frozenset(
+  [
+    FINDER_COMMENT_SUFFIX_GENERAL,
+    FINDER_COMMENT_SUFFIX_STALE,
+    FINDER_COMMENT_SUFFIX_UNUSED,
+    FINDER_COMMENT_SUFFIX_NARROWING,
+  ]
+)
+
+FINDER_DISABLE_COMMENT_GENERAL = (
+  FINDER_DISABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_GENERAL
+)
+FINDER_DISABLE_COMMENT_STALE = (
+  FINDER_DISABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_STALE
+)
+FINDER_DISABLE_COMMENT_UNUSED = (
+  FINDER_DISABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_UNUSED
+)
+FINDER_DISABLE_COMMENT_NARROWING = (
+  FINDER_DISABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_NARROWING
+)
+FINDER_ENABLE_COMMENT_GENERAL = (
+  FINDER_ENABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_GENERAL
+)
+FINDER_ENABLE_COMMENT_STALE = (
+  FINDER_ENABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_STALE
+)
+FINDER_ENABLE_COMMENT_UNUSED = (
+  FINDER_ENABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_UNUSED
+)
+FINDER_ENABLE_COMMENT_NARROWING = (
+  FINDER_ENABLE_COMMENT_BASE + FINDER_COMMENT_SUFFIX_NARROWING
+)
+
+FINDER_DISABLE_COMMENTS = frozenset(
+  [
+    FINDER_DISABLE_COMMENT_GENERAL,
+    FINDER_DISABLE_COMMENT_STALE,
+    FINDER_DISABLE_COMMENT_UNUSED,
+    FINDER_DISABLE_COMMENT_NARROWING,
+  ]
+)
+
+FINDER_ENABLE_COMMENTS = frozenset(
+  [
+    FINDER_ENABLE_COMMENT_GENERAL,
+    FINDER_ENABLE_COMMENT_STALE,
+    FINDER_ENABLE_COMMENT_UNUSED,
+    FINDER_ENABLE_COMMENT_NARROWING,
+  ]
+)
+
+FINDER_ENABLE_DISABLE_PAIRS = frozenset(
+  [
+    (FINDER_DISABLE_COMMENT_GENERAL, FINDER_ENABLE_COMMENT_GENERAL),
+    (FINDER_DISABLE_COMMENT_STALE, FINDER_ENABLE_COMMENT_STALE),
+    (FINDER_DISABLE_COMMENT_UNUSED, FINDER_ENABLE_COMMENT_UNUSED),
+    (FINDER_DISABLE_COMMENT_NARROWING, FINDER_ENABLE_COMMENT_NARROWING),
+  ]
+)
+
+FINDER_GROUP_COMMENTS = frozenset(
+  [
+    FINDER_GROUP_COMMENT_START,
+    FINDER_GROUP_COMMENT_END,
+  ]
+)
+
+ALL_FINDER_COMMENTS = frozenset(
+  FINDER_DISABLE_COMMENTS | FINDER_ENABLE_COMMENTS | FINDER_GROUP_COMMENTS
+)
+
+GIT_BLAME_REGEX = re.compile(
+  r'^[\w\s]+\(.+(?P<date>\d\d\d\d-\d\d-\d\d)[^\)]+\)(?P<content>.*)$', re.DOTALL
+)
+TAG_GROUP_REGEX = re.compile(r'# tags: \[([^\]]*)\]', re.MULTILINE | re.DOTALL)
+
+# Annotation comment start (with optional leading whitespace) pattern.
+ANNOTATION_COMMENT_START_PATTERN = r' *# '
+# Pattern for matching optional description text after an annotation.
+ANNOTATION_OPTIONAL_TRAILING_TEXT_PATTERN = r'[^\n]*\n'
+# Pattern for matching required description text after an annotation.
+ANNOTATION_REQUIRED_TRAILING_TEXT_PATTERN = r'[^\n]+\n'
+# Pattern for matching blank or comment lines.
+BLANK_OR_COMMENT_LINES_PATTERN = r'(?:\s*| *#[^\n]*\n)*'
+# Looks for cases of the group start and end comments with nothing but optional
+# whitespace between them.
+ALL_STALE_COMMENT_REGEXES = set()
+for start_comment, end_comment in FINDER_ENABLE_DISABLE_PAIRS:
+  ALL_STALE_COMMENT_REGEXES.add(
+    re.compile(
+      ANNOTATION_COMMENT_START_PATTERN
+      + start_comment
+      + ANNOTATION_OPTIONAL_TRAILING_TEXT_PATTERN
+      + BLANK_OR_COMMENT_LINES_PATTERN
+      + ANNOTATION_COMMENT_START_PATTERN
+      + end_comment
+      + r'\n',
+      re.MULTILINE | re.DOTALL,
+    )
+  )
+ALL_STALE_COMMENT_REGEXES.add(
+  re.compile(
+    ANNOTATION_COMMENT_START_PATTERN
+    + FINDER_GROUP_COMMENT_START
+    + ANNOTATION_REQUIRED_TRAILING_TEXT_PATTERN
+    + BLANK_OR_COMMENT_LINES_PATTERN
+    + ANNOTATION_COMMENT_START_PATTERN
+    + FINDER_GROUP_COMMENT_END
+    + r'\n',
+    re.MULTILINE | re.DOTALL,
+  )
+)
+ALL_STALE_COMMENT_REGEXES = frozenset(ALL_STALE_COMMENT_REGEXES)
 
 
-def CreateTestExpectationMap(expectation_file, tests):
-  """Creates an expectation map based off a file or list of tests.
-
-  Args:
-    expectation_file: A filepath to an expectation file to read from, or None.
-        If a filepath is specified, |tests| must be None.
-    tests: An iterable of strings containing test names to check. If specified,
-        |expectation_file| must be None.
-
-  Returns:
-    A data_types.TestExpectationMap, although all its BuilderStepMap contents
-    will be empty.
-  """
-  logging.info('Creating test expectation map')
-  assert expectation_file or tests
-  assert not (expectation_file and tests)
-
-  if expectation_file:
-    with open(expectation_file) as f:
-      content = f.read()
-  else:
-    content = '# results: [ RetryOnFailure ]\n'
-    for t in tests:
-      content += '%s [ RetryOnFailure ]\n' % t
-
-  list_parser = expectations_parser.TaggedTestListParser(content)
-  expectation_map = data_types.TestExpectationMap()
-  logging.debug('Parsed %d expectations', len(list_parser.expectations))
-  for e in list_parser.expectations:
-    if 'Skip' in e.raw_results:
-      continue
-    expectation = data_types.Expectation(e.test, e.tags, e.raw_results,
-                                         e.reason)
-    expectations_for_test = expectation_map.setdefault(
-        e.test, data_types.ExpectationBuilderMap())
-    assert expectation not in expectations_for_test
-    expectations_for_test[expectation] = data_types.BuilderStepMap()
-
-  return expectation_map
+# TODO(crbug.com/358591565): Refactor this to remove the need for global
+# statements.
+_registered_instance = None
 
 
-def FilterOutUnusedExpectations(test_expectation_map):
-  """Filters out any unused Expectations from |test_expectation_map|.
-
-  An Expectation is considered unused if its corresponding dictionary is empty.
-  If removing Expectations results in a top-level test key having an empty
-  dictionary, that test entry will also be removed.
-
-  Args:
-    test_expectation_map: A data_types.TestExpectationMap. Will be modified in
-        place.
-
-  Returns:
-    A list containing any Expectations that were removed.
-  """
-  assert isinstance(test_expectation_map, data_types.TestExpectationMap)
-  logging.info('Filtering out unused expectations')
-  unused_expectations = []
-  for _, expectation, builder_map in test_expectation_map.IterBuilderStepMaps():
-    if not builder_map:
-      unused_expectations.append(expectation)
-  for unused in unused_expectations:
-    for _, expectation_map in test_expectation_map.items():
-      if unused in expectation_map:
-        del expectation_map[unused]
-  logging.debug('Found %d unused expectations', len(unused_expectations))
-
-  empty_tests = []
-  for test_name, expectation_map in test_expectation_map.items():
-    if not expectation_map:
-      empty_tests.append(test_name)
-  for empty in empty_tests:
-    del test_expectation_map[empty]
-  logging.debug('Found %d empty tests: %s', len(empty_tests), empty_tests)
-
-  return unused_expectations
+def GetInstance() -> 'Expectations':
+  return _registered_instance
 
 
-def SplitExpectationsByStaleness(test_expectation_map):
-  """Separates |test_expectation_map| based on expectation staleness.
+def RegisterInstance(instance: 'Expectations') -> None:
+  global _registered_instance
+  assert _registered_instance is None
+  assert isinstance(instance, Expectations)
+  _registered_instance = instance
 
-  Args:
-    test_expectation_map: A data_types.TestExpectationMap with any unused
-        expectations already filtered out.
 
-  Returns:
-    Three data_types.TestExpectationMaps (stale_dict, semi_stale_dict,
-    active_dict). All three combined contain the information of
-    |test_expectation_map|. |stale_dict| contains entries for expectations that
-    are no longer being helpful, |semi_stale_dict| contains entries for
-    expectations that might be removable or modifiable, but have at least one
-    failed test run. |active_dict| contains entries for expectations that are
-    preventing failures on all builders they're active on, and thus shouldn't be
-    removed.
-  """
-  assert isinstance(test_expectation_map, data_types.TestExpectationMap)
+def ClearInstance() -> None:
+  global _registered_instance
+  _registered_instance = None
 
-  stale_dict = data_types.TestExpectationMap()
-  semi_stale_dict = data_types.TestExpectationMap()
-  active_dict = data_types.TestExpectationMap()
 
-  # This initially looks like a good target for using
-  # data_types.TestExpectationMap's iterators since there are many nested loops.
-  # However, we need to reset state in different loops, and the alternative of
-  # keeping all the state outside the loop and resetting under certain
-  # conditions ends up being less readable than just using nested loops.
-  for test_name, expectation_map in test_expectation_map.items():
-    for expectation, builder_map in expectation_map.items():
-      # A temporary map to hold data so we can later determine whether an
-      # expectation is stale, semi-stale, or active.
-      tmp_map = {
-          FULL_PASS: data_types.BuilderStepMap(),
-          NEVER_PASS: data_types.BuilderStepMap(),
-          PARTIAL_PASS: data_types.BuilderStepMap(),
+class RemovalType(object):
+  STALE = FINDER_COMMENT_SUFFIX_STALE
+  UNUSED = FINDER_COMMENT_SUFFIX_UNUSED
+  NARROWING = FINDER_COMMENT_SUFFIX_NARROWING
+
+
+class Expectations(object):
+  def __init__(self):
+    self._cached_tag_groups = {}
+
+  # Overridden by subclasses.
+  def CreateTestExpectationMap(
+    self,
+    expectation_files: Optional[Union[str, List[str]]],
+    tests: Optional[Iterable[str]],
+    grace_period: datetime.timedelta,
+  ) -> data_types.TestExpectationMap:
+    """Creates an expectation map based off a file or list of tests.
+
+    Args:
+      expectation_files: A filepath or list of filepaths to expectation files to
+          read from, or None. If a filepath is specified, |tests| must be None.
+      tests: An iterable of strings containing test names to check. If
+          specified, |expectation_file| must be None.
+      grace_period: A datetime.timedelta specifying how many days old an
+          expectation must be in order to be parsed, i.e. how many days old an
+          expectation must be before it is a candidate for removal/modification.
+
+    Returns:
+      A data_types.TestExpectationMap, although all its BuilderStepMap contents
+      will be empty.
+    """
+
+    def AddContentToMap(
+      content: str,
+      ex_map: data_types.TestExpectationMap,
+      expectation_file_name: str,
+    ) -> None:
+      list_parser = expectations_parser.TaggedTestListParser(content)
+      expectations_for_file = ex_map.setdefault(
+        expectation_file_name, data_types.ExpectationBuilderMap()
+      )
+      logging.debug('Parsed %d expectations', len(list_parser.expectations))
+      for e in list_parser.expectations:
+        if _RawResultsContainUnhandledValue(e):
+          continue
+
+        wildcard_type = WildcardTypeFromTypExpectation(e)
+        expectation = data_types.Expectation(
+          e.test, e.tags, e.raw_results, wildcard_type, e.reason
+        )
+        if expectation in expectations_for_file:
+          # In practice this should never be hit unless the file was somehow
+          # modified, as _RemoveDuplicateExpectations() should have removed all
+          # duplicates already.
+          raise RuntimeError(
+            f'Duplicate expectation {expectation.AsExpectationFileString()}'
+          )
+        expectations_for_file[expectation] = data_types.BuilderStepMap()
+
+    logging.info('Creating test expectation map')
+    assert expectation_files or tests
+    assert not (expectation_files and tests)
+
+    expectation_map = data_types.TestExpectationMap()
+
+    if expectation_files:
+      if not isinstance(expectation_files, list):
+        expectation_files = [expectation_files]
+      for ef in expectation_files:
+        # Remove any duplicate expectations now so that we know for sure which
+        # expectations to modify/remove later.
+        self._RemoveDuplicateExpectations(ef)
+        # Normalize to '/' as the path separator.
+        expectation_file_name = os.path.normpath(ef).replace(os.path.sep, '/')
+        content = _GetNonRecentExpectationContent(
+          expectation_file_name, grace_period
+        )
+        AddContentToMap(content, expectation_map, expectation_file_name)
+    else:
+      expectation_file_name = ''
+      content = '# results: [ RetryOnFailure ]\n'
+      for t in tests:
+        content += '%s [ RetryOnFailure ]\n' % t
+      AddContentToMap(content, expectation_map, expectation_file_name)
+
+    return expectation_map
+
+  def RemoveExpectationsFromFile(
+    self,
+    expectations: List[data_types.Expectation],
+    expectation_file: str,
+    removal_type: str,
+  ) -> Set[str]:
+    """Removes lines corresponding to |expectations| from |expectation_file|.
+
+    Ignores any lines that match but are within a disable block or have an
+    inline disable comment.
+
+    Args:
+      expectations: A list of data_types.Expectations to remove.
+      expectation_file: A filepath pointing to an expectation file to remove
+          lines from.
+      removal_type: A RemovalType enum corresponding to the type of expectations
+          being removed.
+
+    Returns:
+      A set of strings containing URLs of bugs associated with the removed
+      expectations.
+    """
+
+    with open(expectation_file, encoding='utf-8') as f:
+      input_contents = f.read()
+
+    group_to_expectations, expectation_to_group = (
+      self._GetExpectationGroupsFromFileContent(
+        expectation_file, input_contents
+      )
+    )
+    disable_annotated_expectations = (
+      self._GetDisableAnnotatedExpectationsFromFile(
+        expectation_file, input_contents
+      )
+    )
+
+    output_contents = ''
+    removed_urls = set()
+    removed_lines = set()
+    num_removed_lines = 0
+    for line_number, line in enumerate(input_contents.splitlines(True)):
+      # Auto-add any comments or empty lines
+      stripped_line = line.strip()
+      if _IsCommentOrBlankLine(stripped_line):
+        output_contents += line
+        continue
+
+      current_expectation = self._CreateExpectationFromExpectationFileLine(
+        line, expectation_file
+      )
+
+      # Add any lines containing expectations that don't match any of the given
+      # expectations to remove.
+      if any(e for e in expectations if e == current_expectation):
+        # Skip any expectations that match if we're in a disable block or there
+        # is an inline disable comment.
+        disable_block_suffix, disable_block_reason = (
+          disable_annotated_expectations.get(current_expectation, (None, None))
+        )
+        if disable_block_suffix and _DisableSuffixIsRelevant(
+          disable_block_suffix, removal_type
+        ):
+          output_contents += line
+          logging.info(
+            'Would have removed expectation %s, but it is inside a disable '
+            'block or has an inline disable with reason %s',
+            stripped_line,
+            disable_block_reason,
+          )
+        elif _ExpectationPartOfNonRemovableGroup(
+          current_expectation,
+          group_to_expectations,
+          expectation_to_group,
+          expectations,
+        ):
+          output_contents += line
+          logging.info(
+            'Would have removed expectation %s, but it is part of group "%s" '
+            'whose members are not all removable.',
+            stripped_line,
+            expectation_to_group[current_expectation],
+          )
+        else:
+          bug = current_expectation.bug
+          if bug:
+            # It's possible to have multiple whitespace-separated bugs per
+            # expectation, so treat each one separately.
+            removed_urls |= set(bug.split())
+          # Record that we've removed this line. By subtracting the number of
+          # lines we've already removed, we keep the line numbers relative to
+          # the content we're outputting rather than relative to the input
+          # content. This also has the effect of automatically compressing
+          # contiguous blocks of removal into a single line number.
+          removed_lines.add(line_number - num_removed_lines)
+          num_removed_lines += 1
+      else:
+        output_contents += line
+
+    header_length = len(
+      self._GetExpectationFileTagHeader(expectation_file).splitlines(True)
+    )
+    output_contents = _RemoveStaleComments(
+      output_contents, removed_lines, header_length
+    )
+
+    with open(expectation_file, 'w', newline='', encoding='utf-8') as f:
+      f.write(output_contents)
+
+    return removed_urls
+
+  def _RemoveDuplicateExpectations(self, expectation_file_path: str) -> None:
+    """Removes cases of fully duplicate expectations from a file.
+
+    Note that this ignores annotations such as finder:disable since handling
+    those properly here would increase complexity and the likelihood of
+    getting a duplicate expectation affected by an annotation is very low.
+
+    Args:
+      expectation_file_path: A string containing a filepath pointing to an
+          expectation file.
+    """
+    with open(expectation_file_path, encoding='utf-8') as infile:
+      content = infile.read()
+    list_parser = expectations_parser.TaggedTestListParser(content)
+
+    seen_expectations = set()
+    lines_to_remove = set()
+    for e in list_parser.expectations:
+      if _RawResultsContainUnhandledValue(e):
+        continue
+      wildcard_type = WildcardTypeFromTypExpectation(e)
+      expectation = data_types.Expectation(
+        e.test, e.tags, e.raw_results, wildcard_type, e.reason
+      )
+      if expectation in seen_expectations:
+        lines_to_remove.add(e.lineno)
+      else:
+        seen_expectations.add(expectation)
+
+    if not lines_to_remove:
+      return
+
+    trimmed_lines = []
+    for i, line_content in enumerate(content.splitlines(keepends=True)):
+      if i + 1 in lines_to_remove:
+        continue
+      trimmed_lines.append(line_content)
+
+    # Calculate which lines in the new content correspond to where content was
+    # removed. The additional -1 is due to the difference between the 0-based
+    # line numbers used here and the 1-based line numbers provided by the
+    # expectation parser.
+    removed_lines = set()
+    for offset, rl in enumerate(sorted(lines_to_remove)):
+      removed_lines.add(rl - offset - 1)
+
+    # While it's unlikely that an entire block consisted of duplicate
+    # expectations, remove any stale comments now just in case.
+    header_length = len(
+      self._GetExpectationFileTagHeader(expectation_file_path).splitlines(True)
+    )
+    output_contents = _RemoveStaleComments(
+      ''.join(trimmed_lines), removed_lines, header_length
+    )
+
+    with open(expectation_file_path, 'w', encoding='utf-8') as outfile:
+      outfile.write(output_contents)
+
+  def _GetDisableAnnotatedExpectationsFromFile(
+    self, expectation_file: str, content: str
+  ) -> Dict[data_types.Expectation, Tuple[str, str]]:
+    """Extracts expectations which are affected by disable annotations.
+
+    Args:
+      expectation_file: A filepath pointing to an expectation file.
+      content: A string containing the contents of |expectation_file|.
+
+    Returns:
+      A dict mapping data_types.Expectation to (disable_suffix, disable_reason).
+      If an expectation is present in this dict, it is affected by a disable
+      annotation of some sort. |disable_suffix| is a string specifying which
+      type of annotation is applicable, while |disable_reason| is a string
+      containing the comment/reason why the disable annotation is present.
+    """
+    in_disable_block = False
+    disable_block_reason = ''
+    disable_block_suffix = ''
+    disable_annotated_expectations = {}
+    for line in content.splitlines(True):
+      stripped_line = line.strip()
+      # Look for cases of disable/enable blocks.
+      if _IsCommentOrBlankLine(stripped_line):
+        # Only allow one enable/disable per line.
+        assert len([c for c in ALL_FINDER_COMMENTS if c in line]) <= 1
+        if _LineContainsDisableComment(line):
+          if in_disable_block:
+            raise RuntimeError(
+              'Invalid expectation file %s - contains a disable comment "%s" '
+              'that is in another disable block.'
+              % (expectation_file, stripped_line)
+            )
+          in_disable_block = True
+          disable_block_reason = _GetDisableReasonFromComment(line)
+          disable_block_suffix = _GetFinderCommentSuffix(line)
+        elif _LineContainsEnableComment(line):
+          if not in_disable_block:
+            raise RuntimeError(
+              'Invalid expectation file %s - contains an enable comment "%s" '
+              'that is outside of a disable block.'
+              % (expectation_file, stripped_line)
+            )
+          in_disable_block = False
+        continue
+
+      current_expectation = self._CreateExpectationFromExpectationFileLine(
+        line, expectation_file
+      )
+
+      if in_disable_block:
+        disable_annotated_expectations[current_expectation] = (
+          disable_block_suffix,
+          disable_block_reason,
+        )
+      elif _LineContainsDisableComment(line):
+        disable_block_reason = _GetDisableReasonFromComment(line)
+        disable_block_suffix = _GetFinderCommentSuffix(line)
+        disable_annotated_expectations[current_expectation] = (
+          disable_block_suffix,
+          disable_block_reason,
+        )
+    return disable_annotated_expectations
+
+  def _GetExpectationGroupsFromFileContent(
+    self, expectation_file: str, content: str
+  ) -> Tuple[
+    Dict[str, Set[data_types.Expectation]], Dict[data_types.Expectation, str]
+  ]:
+    """Extracts all groups of expectations from an expectationfile.
+
+    Args:
+      expectation_file: A filepath pointing to an expectation file.
+      content: A string containing the contents of |expectation_file|.
+
+    Returns:
+      A tuple (group_to_expectations, expectation_to_group).
+      |group_to_expectations| is a dict of group names to sets of
+      data_type.Expectations that belong to that group. |expectation_to_group|
+      is the same, but mapped the other way from data_type.Expectations to group
+      names.
+    """
+    group_to_expectations = collections.defaultdict(set)
+    expectation_to_group = {}
+    group_name = None
+
+    for line in content.splitlines():
+      stripped_line = line.strip()
+      # Possibly starting/ending a group.
+      if _IsCommentOrBlankLine(stripped_line):
+        if _LineContainsGroupStartComment(stripped_line):
+          # Start of a new group.
+          if group_name:
+            raise RuntimeError(
+              'Invalid expectation file %s - contains a group comment "%s" '
+              'that is inside another group block.'
+              % (expectation_file, stripped_line)
+            )
+          group_name = _GetGroupNameFromCommentLine(stripped_line)
+        elif _LineContainsGroupEndComment(stripped_line):
+          # End of current group.
+          if not group_name:
+            raise RuntimeError(
+              'Invalid expectation file %s - contains a group comment "%s" '
+              'without a group start comment.'
+              % (expectation_file, stripped_line)
+            )
+          group_name = None
+      elif group_name:
+        # Currently in a group.
+        e = self._CreateExpectationFromExpectationFileLine(
+          stripped_line, expectation_file
+        )
+        group_to_expectations[group_name].add(e)
+        expectation_to_group[e] = group_name
+      # If we aren't in a group, do nothing.
+    return group_to_expectations, expectation_to_group
+
+  def _CreateExpectationFromExpectationFileLine(
+    self, line: str, expectation_file: str
+  ) -> data_types.Expectation:
+    """Creates a data_types.Expectation from |line|.
+
+    Args:
+      line: A string containing a single line from an expectation file.
+      expectation_file: A filepath pointing to an expectation file |line| came
+          from.
+
+    Returns:
+      A data_types.Expectation containing the same information as |line|.
+    """
+    typ_expectation = self._CreateTypExpectationFromExpectationFileLine(
+      line, expectation_file
+    )
+    wildcard_type = WildcardTypeFromTypExpectation(typ_expectation)
+    return data_types.Expectation(
+      typ_expectation.test,
+      typ_expectation.tags,
+      typ_expectation.raw_results,
+      wildcard_type,
+      typ_expectation.reason,
+    )
+
+  def _CreateTypExpectationFromExpectationFileLine(
+    self, line: str, expectation_file: str
+  ) -> expectations_parser.Expectation:
+    """Creates a typ expectations_parser.Expectation from |line|.
+
+    Args:
+      line: A string containing a single line from an expectation file.
+      expectation_file: A filepath pointing to an expectation file |line| came
+          from.
+
+    Returns:
+      An expectations_parser.Expectation containing the same information as
+      |line|.
+    """
+    header = self._GetExpectationFileTagHeader(expectation_file)
+    annotations = self._GetExpectationFileAnnotations(expectation_file)
+    single_line_content = header + annotations + line
+    list_parser = expectations_parser.TaggedTestListParser(single_line_content)
+    assert len(list_parser.expectations) == 1
+    return list_parser.expectations[0]
+
+  def _GetExpectationFileTagHeader(self, expectation_file: str) -> str:
+    """Gets the tag header used for expectation files.
+
+    Args:
+      expectation_file: A filepath pointing to an expectation file to get the
+          tag header from.
+
+    Returns:
+      A string containing an expectation file header, i.e. the comment block at
+      the top of the file defining possible tags and expected results.
+    """
+    raise NotImplementedError()
+
+  # Kept as a method so that caching is handled at the object level instead of
+  # at the module level.
+  @functools.cache
+  def _GetExpectationFileAnnotations(self, expectation_file: str) -> str:
+    """Gets all annotations found within the expectation file.
+
+    This assumes that all annotations are specified before any expectations and
+    that there is at most one of each annotation. These assumptions are not
+    strictly enforced by typ's code, but should hold true for any files that
+    are actually used with the UPF.
+
+    Args:
+      expectation_file: A filepath pointing to an expectation file to get the
+          annotations from.
+    """
+    with open(expectation_file, encoding='utf-8') as infile:
+      contents = infile.read()
+
+    all_annotations = [
+      expectations_parser.TaggedTestListParser.CONFLICTS_ALLOWED,
+      expectations_parser.TaggedTestListParser.CONFLICT_RESOLUTION,
+      expectations_parser.TaggedTestListParser.FULL_WILDCARD_SUPPORT,
+    ]
+
+    found_annotation_lines = []
+    for line in contents.splitlines(keepends=True):
+      for annotation in all_annotations:
+        if line.startswith(annotation):
+          if any(a.startswith(annotation) for a in found_annotation_lines):
+            raise RuntimeError(
+              f'Found multiple cases of {annotation} annotation in file '
+              f'{expectation_file}'
+            )
+          found_annotation_lines.append(line)
+          break
+    return ''.join(found_annotation_lines)
+
+  def FilterToKnownTags(self, tags: Iterable[str]) -> Set[str]:
+    """Filters |tags| to only include tags known to expectation files.
+
+    Args:
+      tags: An iterable of strings containing tags.
+
+    Returns:
+      A set containing the elements of |tags| with any tags that are not defined
+      in any expectation files removed.
+    """
+    return self._GetKnownTags() & set(tags)
+
+  def _GetKnownTags(self) -> Set[str]:
+    """Gets all known/defined tags from expectation files.
+
+    Returns:
+      A set of strings containing all known/defined tags from expectation files.
+    """
+    raise NotImplementedError()
+
+  def _FilterToMostSpecificTypTags(
+    self, typ_tags: FrozenSet[str], expectation_file: str
+  ) -> FrozenSet[str]:
+    """Filters |typ_tags| to the most specific set.
+
+    Assumes that the tags in |expectation_file| are ordered from least specific
+    to most specific within each tag group.
+
+    Args:
+      typ_tags: A frozenset of strings containing the typ tags to filter.
+      expectations_file: A string containing a filepath pointing to the
+          expectation file to filter tags with.
+
+    Returns:
+      A frozenset containing the contents of |typ_tags| with only the most
+      specific tag from each group remaining.
+    """
+    # The logic for this function was lifted from the GPU/Blink flake finders,
+    # so there may be room to share code between the two.
+
+    if expectation_file not in self._cached_tag_groups:
+      with open(expectation_file, encoding='utf-8') as infile:
+        contents = infile.read()
+      tag_groups = []
+      for match in TAG_GROUP_REGEX.findall(contents):
+        tag_groups.append(match.lower().strip().replace('#', '').split())
+      self._cached_tag_groups[expectation_file] = tag_groups
+    tag_groups = self._cached_tag_groups[expectation_file]
+
+    num_matches = 0
+    tags_in_same_group = collections.defaultdict(list)
+    for tag in typ_tags:
+      for index, tag_group in enumerate(tag_groups):
+        if tag in tag_group:
+          tags_in_same_group[index].append(tag)
+          num_matches += 1
+          break
+    if num_matches != len(typ_tags):
+      all_tags = set()
+      for group in tag_groups:
+        all_tags |= set(group)
+      raise RuntimeError(
+        'Found tags not in expectation file %s: %s'
+        % (expectation_file, ' '.join(set(typ_tags) - all_tags))
+      )
+
+    filtered_tags = set()
+    for index, tags in tags_in_same_group.items():
+      if len(tags) == 1:
+        filtered_tags.add(tags[0])
+      else:
+        tag_group = tag_groups[index]
+        best_index = -1
+        for t in tags:
+          i = tag_group.index(t)
+          if i > best_index:
+            best_index = i
+        filtered_tags.add(tag_group[best_index])
+    return frozenset(filtered_tags)
+
+  # Overridden by subclasses.
+  def _ConsolidateKnownOverlappingTags(
+    self, typ_tags: FrozenSet[str]
+  ) -> FrozenSet[str]:
+    """Consolidates tags that are known to overlap/cause issues.
+
+    One known example of this would be dual GPU machines that report tags for
+    both GPUs.
+    """
+    return typ_tags
+
+  def NarrowSemiStaleExpectationScope(
+    self, stale_expectation_map: data_types.TestExpectationMap
+  ) -> Set[str]:
+    """Narrows the scope of expectations in |stale_expectation_map|.
+
+    Expectations are modified such that they only apply to configurations that
+    need them, to the best extent possible. If scope narrowing is not possible,
+    e.g. the same hardware/software combination reports fully passing on one bot
+    but reports some failures on another bot, the expectation will not be
+    modified.
+
+    Args:
+      stale_expectation_map: A data_types.TestExpectationMap containing
+          semi-stale expectations.
+
+    Returns:
+      A set of strings containing URLs of bugs associated with the modified
+      expectations.
+    """
+    modified_urls = set()
+    cached_disable_annotated_expectations = {}
+    for (
+      expectation_file,
+      e,
+      builder_map,
+    ) in stale_expectation_map.IterBuilderStepMaps():
+      # Check if the current annotation has scope narrowing disabled.
+      if expectation_file not in cached_disable_annotated_expectations:
+        with open(expectation_file, encoding='utf-8') as infile:
+          disable_annotated_expectations = (
+            self._GetDisableAnnotatedExpectationsFromFile(
+              expectation_file, infile.read()
+            )
+          )
+          cached_disable_annotated_expectations[expectation_file] = (
+            disable_annotated_expectations
+          )
+      disable_block_suffix, disable_block_reason = (
+        cached_disable_annotated_expectations[expectation_file].get(e, ('', ''))
+      )
+      if _DisableSuffixIsRelevant(disable_block_suffix, RemovalType.NARROWING):
+        logging.info(
+          'Skipping semi-stale narrowing check for expectation %s since it '
+          'has a narrowing disable annotation with reason %s',
+          e.AsExpectationFileString(),
+          disable_block_reason,
+        )
+        continue
+
+      skip_to_next_expectation = False
+
+      pass_tag_sets = set()
+      fail_tag_sets = set()
+      # Determine which tags sets failures can occur on vs. tag sets that
+      # don't have any failures.
+      for builder, step, build_stats in builder_map.IterBuildStats():
+        if len(build_stats.tag_sets) > 1:
+          # This shouldn't really be happening during normal operation, but is
+          # expected to happen if a configuration changes, e.g. an OS was
+          # upgraded. In these cases, the old data will eventually age out and
+          # we will stop getting multiple tag sets.
+          logging.warning(
+            'Step %s on builder %s produced multiple tag sets: %s. Not '
+            'narrowing expectation scope for expectation %s.',
+            step,
+            builder,
+            build_stats.tag_sets,
+            e.AsExpectationFileString(),
+          )
+          skip_to_next_expectation = True
+          break
+        if build_stats.NeverNeededExpectation(e):
+          pass_tag_sets |= build_stats.tag_sets
+        else:
+          fail_tag_sets |= build_stats.tag_sets
+      if skip_to_next_expectation:
+        continue
+
+      # Remove all instances of tags that are shared between all sets other than
+      # the tags that were used by the expectation, as they are redundant.
+      common_tags = set()
+      for ts in pass_tag_sets:
+        common_tags |= ts
+        # We only need one initial tag set, but sets do not have a way of
+        # retrieving a single element other than pop(), which removes the
+        # element, which we don't want.
+        break
+      for ts in pass_tag_sets | fail_tag_sets:
+        common_tags &= ts
+      common_tags -= e.tags
+      pass_tag_sets = {ts - common_tags for ts in pass_tag_sets}
+      fail_tag_sets = {ts - common_tags for ts in fail_tag_sets}
+
+      # Calculate new tag sets that should be functionally equivalent to the
+      # single, more broad tag set that we are replacing. This is done by
+      # checking if the intersection between any pairs of fail tag sets are
+      # still distinct from any pass tag sets, i.e. if the intersection between
+      # fail tag sets is still a valid fail tag set. If so, the original sets
+      # are replaced by the intersection.
+      new_tag_sets = set()
+      covered_fail_tag_sets = set()
+      for fail_tags in fail_tag_sets:
+        if any(fail_tags <= pt for pt in pass_tag_sets):
+          logging.warning(
+            'Unable to determine what makes failing configs unique for %s, '
+            'not narrowing expectation scope.',
+            e.AsExpectationFileString(),
+          )
+          skip_to_next_expectation = True
+          break
+        if fail_tags in covered_fail_tag_sets:
+          continue
+        tag_set_to_add = fail_tags
+        for ft in fail_tag_sets:
+          if ft in covered_fail_tag_sets:
+            continue
+          intersection = tag_set_to_add & ft
+          if any(intersection <= pt for pt in pass_tag_sets):
+            # Intersection is too small, as it also covers a passing tag set.
+            continue
+          if any(intersection <= cft for cft in covered_fail_tag_sets):
+            # Both the intersection and some tag set from new_tag_sets
+            # apply to the same original failing tag set,
+            # which means if we add the intersection to new_tag_sets,
+            # they will conflict on the bot from the original failing tag set.
+            # The above check works because new_tag_sets and
+            # covered_fail_tag_sets are updated together below.
+            continue
+          tag_set_to_add = intersection
+        new_tag_sets.add(tag_set_to_add)
+        covered_fail_tag_sets.update(
+          cft for cft in fail_tag_sets if tag_set_to_add <= cft
+        )
+      if skip_to_next_expectation:
+        continue
+
+      # Remove anything we know could be problematic, e.g. causing expectation
+      # file parsing errors.
+      new_tag_sets = {
+        self._ConsolidateKnownOverlappingTags(nts) for nts in new_tag_sets
+      }
+      new_tag_sets = {
+        self._FilterToMostSpecificTypTags(nts, expectation_file)
+        for nts in new_tag_sets
       }
 
-      split_stats_map = builder_map.SplitBuildStatsByPass()
-      for builder_name, (fully_passed, never_passed,
-                         partially_passed) in split_stats_map.items():
-        if fully_passed:
-          tmp_map[FULL_PASS][builder_name] = fully_passed
-        if never_passed:
-          tmp_map[NEVER_PASS][builder_name] = never_passed
-        if partially_passed:
-          tmp_map[PARTIAL_PASS][builder_name] = partially_passed
-
-      def _CopyPassesIntoBuilderMap(builder_map, pass_types):
-        for pt in pass_types:
-          for builder, steps in tmp_map[pt].items():
-            builder_map.setdefault(builder,
-                                   data_types.StepBuildStatsMap()).update(steps)
-
-      # Handle the case of a stale expectation.
-      if not (tmp_map[NEVER_PASS] or tmp_map[PARTIAL_PASS]):
-        builder_map = stale_dict.setdefault(
-            test_name, data_types.ExpectationBuilderMap()).setdefault(
-                expectation, data_types.BuilderStepMap())
-        _CopyPassesIntoBuilderMap(builder_map, [FULL_PASS])
-      # Handle the case of an active expectation.
-      elif not tmp_map[FULL_PASS]:
-        builder_map = active_dict.setdefault(
-            test_name, data_types.ExpectationBuilderMap()).setdefault(
-                expectation, data_types.BuilderStepMap())
-        _CopyPassesIntoBuilderMap(builder_map, [NEVER_PASS, PARTIAL_PASS])
-      # Handle the case of a semi-stale expectation.
-      else:
-        # TODO(crbug.com/998329): Sort by pass percentage so it's easier to find
-        # problematic builders without highlighting.
-        builder_map = semi_stale_dict.setdefault(
-            test_name, data_types.ExpectationBuilderMap()).setdefault(
-                expectation, data_types.BuilderStepMap())
-        _CopyPassesIntoBuilderMap(builder_map,
-                                  [FULL_PASS, PARTIAL_PASS, NEVER_PASS])
-  return stale_dict, semi_stale_dict, active_dict
-
-
-def RemoveExpectationsFromFile(expectations, expectation_file):
-  """Removes lines corresponding to |expectations| from |expectation_file|.
-
-  Ignores any lines that match but are within a disable block or have an inline
-  disable comment.
-
-  Args:
-    expectations: A list of data_types.Expectations to remove.
-    expectation_file: A filepath pointing to an expectation file to remove lines
-        from.
-
-  Returns:
-    A set of strings containing URLs of bugs associated with the removed
-    expectations.
-  """
-
-  with open(expectation_file) as f:
-    input_contents = f.read()
-
-  output_contents = ''
-  in_disable_block = False
-  disable_block_reason = ''
-  removed_urls = set()
-  for line in input_contents.splitlines(True):
-    # Auto-add any comments or empty lines
-    stripped_line = line.strip()
-    if _IsCommentOrBlankLine(stripped_line):
-      output_contents += line
-      assert not (FINDER_DISABLE_COMMENT in line
-                  and FINDER_ENABLE_COMMENT in line)
-      # Handle disable/enable block comments.
-      if FINDER_DISABLE_COMMENT in line:
-        if in_disable_block:
-          raise RuntimeError(
-              'Invalid expectation file %s - contains a disable comment "%s" '
-              'that is in another disable block.' %
-              (expectation_file, stripped_line))
-        in_disable_block = True
-        disable_block_reason = _GetDisableReasonFromComment(line)
-      if FINDER_ENABLE_COMMENT in line:
-        if not in_disable_block:
-          raise RuntimeError(
-              'Invalid expectation file %s - contains an enable comment "%s" '
-              'that is outside of a disable block.' %
-              (expectation_file, stripped_line))
-        in_disable_block = False
-      continue
-
-    current_expectation = _CreateExpectationFromExpectationFileLine(line)
-
-    # Add any lines containing expectations that don't match any of the given
-    # expectations to remove.
-    if any([e for e in expectations if e == current_expectation]):
-      # Skip any expectations that match if we're in a disable block or there
-      # is an inline disable comment.
-      if in_disable_block:
-        output_contents += line
-        logging.info(
-            'Would have removed expectation %s, but inside a disable block '
-            'with reason %s', stripped_line, disable_block_reason)
-      elif FINDER_DISABLE_COMMENT in line:
-        output_contents += line
-        logging.info(
-            'Would have removed expectation %s, but it has an inline disable '
-            'comment with reason %s',
-            stripped_line.split('#')[0], _GetDisableReasonFromComment(line))
-      else:
-        bug = current_expectation.bug
-        if bug:
-          removed_urls.add(bug)
-    else:
-      output_contents += line
-
-  with open(expectation_file, 'w') as f:
-    f.write(output_contents)
-
-  return removed_urls
-
-
-def _IsCommentOrBlankLine(line):
-  return (not line or line.startswith('#'))
-
-
-def _CreateExpectationFromExpectationFileLine(line):
-  """Creates a data_types.Expectation from |line|.
-
-  Args:
-    line: A string containing a single line from an expectation file.
-
-  Returns:
-    A data_types.Expectation containing the same information as |line|.
-  """
-  header = validate_tag_consistency.TAG_HEADER
-  single_line_content = header + line
-  list_parser = expectations_parser.TaggedTestListParser(single_line_content)
-  assert len(list_parser.expectations) == 1
-  typ_expectation = list_parser.expectations[0]
-  return data_types.Expectation(typ_expectation.test, typ_expectation.tags,
-                                typ_expectation.raw_results,
-                                typ_expectation.reason)
-
-
-def ModifySemiStaleExpectations(stale_expectation_map, expectation_file):
-  """Modifies lines from |stale_expectation_map| in |expectation_file|.
-
-  Prompts the user for each modification and provides debug information since
-  semi-stale expectations cannot be blindly removed like fully stale ones.
-
-  Args:
-    stale_expectation_map: A data_types.TestExpectationMap containing stale
-        expectations.
-    expectation_file: A filepath pointing to an expectation file to remove lines
-        from.
-    file_handle: An optional open file-like object to output to. If not
-        specified, stdout will be used.
-
-  Returns:
-    A set of strings containing URLs of bugs associated with the modified
-    (manually modified by the user or removed by the script) expectations.
-  """
-  with open(expectation_file) as infile:
-    file_contents = infile.read()
-
-  expectations_to_remove = []
-  expectations_to_modify = []
-  for _, e, builder_map in stale_expectation_map.IterBuilderStepMaps():
-    line, line_number = _GetExpectationLine(e, file_contents)
-    expectation_str = None
-    if not line:
-      logging.error(
-          'Could not find line corresponding to semi-stale expectation for %s '
-          'with tags %s and expected results %s' % e.test, e.tags,
-          e.expected_results)
-      expectation_str = '[ %s ] %s [ %s ]' % (' '.join(
-          e.tags), e.test, ' '.join(e.expected_results))
-    else:
-      expectation_str = '%s (approx. line %d)' % (line, line_number)
-
-    str_dict = _ConvertBuilderMapToPassOrderedStringDict(builder_map)
-    print('\nSemi-stale expectation:\n%s' % expectation_str)
-    result_output._RecursivePrintToFile(str_dict, 1, sys.stdout)
-
-    response = _WaitForUserInputOnModification()
-    if response == 'r':
-      expectations_to_remove.append(e)
-    elif response == 'm':
-      expectations_to_modify.append(e)
-
-  # It's possible that the user will introduce a typo while manually modifying
-  # an expectation, which will cause a parser error. Catch that now and give
-  # them chances to fix it so that they don't lose all of their work due to an
-  # early exit.
-  while True:
-    try:
-      with open(expectation_file) as infile:
+      # Replace the existing expectation with our new ones.
+      with open(expectation_file, encoding='utf-8') as infile:
         file_contents = infile.read()
-      _ = expectations_parser.TaggedTestListParser(file_contents)
-      break
-    except expectations_parser.ParseError as error:
-      logging.error('Got parser error: %s', error)
-      logging.error('This probably means you introduced a typo, please fix it.')
-      _WaitForAnyUserInput()
+      line, _ = self._GetExpectationLine(e, file_contents, expectation_file)
+      # We grab the original expectation's trailing comment here so that we can
+      # preserve it in the new expectations.
+      original_expectation = self._CreateTypExpectationFromExpectationFileLine(
+        line, expectation_file
+      )
+      trailing_comment = original_expectation.trailing_comments
+      modified_urls |= set(e.bug.split())
+      expectation_strs = []
+      for new_tags in new_tag_sets:
+        expectation_copy = copy.copy(e)
+        expectation_copy.tags = new_tags
+        expectation_strs.append(
+          expectation_copy.AsExpectationFileStringWithTrailingComment(
+            trailing_comment
+          )
+        )
+      expectation_strs.sort()
+      replacement_lines = '\n'.join(expectation_strs)
+      file_contents = file_contents.replace(line, replacement_lines)
+      with open(expectation_file, 'w', newline='', encoding='utf-8') as outfile:
+        outfile.write(file_contents)
 
-  modified_urls = RemoveExpectationsFromFile(expectations_to_remove,
-                                             expectation_file)
-  for e in expectations_to_modify:
-    modified_urls.add(e.bug)
-  return modified_urls
+    return modified_urls
 
+  def _GetExpectationLine(
+    self,
+    expectation: data_types.Expectation,
+    file_contents: str,
+    expectation_file: str,
+  ) -> Union[Tuple[None, None], Tuple[str, int]]:
+    """Gets the line and line number of |expectation| in |file_contents|.
 
-def _GetExpectationLine(expectation, file_contents):
-  """Gets the line and line number of |expectation| in |file_contents|.
+    Args:
+      expectation: A data_types.Expectation.
+      file_contents: A string containing the contents read from an expectation
+          file.
+      expectation_file: A string containing the path to the expectation file
+          that |file_contents| came from.
 
-  Args:
-    expectation: A data_types.Expectation.
-    file_contents: A string containing the contents read from an expectation
-        file.
-
-  Returns:
-    A tuple (line, line_number). |line| is a string containing the exact line
-    in |file_contents| corresponding to |expectation|. |line_number| is an int
-    corresponding to where |line| is in |file_contents|. |line_number| may be
-    off if the file on disk has changed since |file_contents| was read. If a
-    corresponding line cannot be found, both |line| and |line_number| are None.
-  """
-  # We have all the information necessary to recreate the expectation line and
-  # line number can be pulled during the initial expectation parsing. However,
-  # the information we have is not necessarily in the same order as the
-  # text file (e.g. tag ordering), and line numbers can change pretty
-  # dramatically between the initial parse and now due to stale expectations
-  # being removed. So, parse this way in order to improve the user experience.
-  file_lines = file_contents.splitlines()
-  for line_number, line in enumerate(file_lines):
-    if _IsCommentOrBlankLine(line.strip()):
-      continue
-    current_expectation = _CreateExpectationFromExpectationFileLine(line)
-    if expectation == current_expectation:
-      return line, line_number + 1
-  return None, None
-
-
-def _ConvertBuilderMapToPassOrderedStringDict(builder_map):
-  """Converts |builder_map| into an ordered dict split by pass type.
-
-  Args:
-    builder_map: A data_types.BuildStepMap.
-
-  Returns:
-    A collections.OrderedDict in the following format:
-    {
-      result_output.FULL_PASS: {
-        builder_name: [
-          step_name (total passes / total builds)
-        ],
-      },
-      result_output.NEVER_PASS: {
-        builder_name: [
-          step_name (total passes / total builds)
-        ],
-      },
-      result_output.PARTIAL_PASS: {
-        builder_name: [
-          step_name (total passes / total builds): [
-            failure links,
-          ],
-        ],
-      },
-    }
-
-    The ordering and presence of the top level keys is guaranteed.
-  """
-  # This is similar to what we do in
-  # result_output._ConvertTestExpectationMapToStringDict, but we want the
-  # top-level grouping to be by pass type rather than by builder, so we can't
-  # re-use the code from there.
-  # Ordered dict used to ensure that order is guaranteed when printing out.
-  str_dict = collections.OrderedDict()
-  str_dict[result_output.FULL_PASS] = {}
-  str_dict[result_output.NEVER_PASS] = {}
-  str_dict[result_output.PARTIAL_PASS] = {}
-  for builder_name, step_name, stats in builder_map.IterBuildStats():
-    step_str = result_output.AddStatsToStr(step_name, stats)
-    if stats.did_fully_pass:
-      str_dict[result_output.FULL_PASS].setdefault(builder_name,
-                                                   []).append(step_str)
-    elif stats.did_never_pass:
-      str_dict[result_output.NEVER_PASS].setdefault(builder_name,
-                                                    []).append(step_str)
-    else:
-      str_dict[result_output.PARTIAL_PASS].setdefault(
-          builder_name, {})[step_str] = list(stats.failure_links)
-  return str_dict
-
-
-def _WaitForAnyUserInput():
-  """Waits for any user input.
-
-  Split out for testing purposes.
-  """
-  _get_input('Press any key to continue')
-
-
-def _WaitForUserInputOnModification():
-  """Waits for user input on how to modify a semi-stale expectation.
-
-  Returns:
-    One of the following string values:
-      i - Expectation should be ignored and left alone.
-      m - Expectation will be manually modified by the user.
-      r - Expectation should be removed by the script.
-  """
-  valid_inputs = ['i', 'm', 'r']
-  prompt = ('How should this expectation be handled? (i)gnore/(m)anually '
-            'modify/(r)emove: ')
-  response = _get_input(prompt).lower()
-  while response not in valid_inputs:
-    print('Invalid input, valid inputs are %s' % (', '.join(valid_inputs)))
-    response = _get_input(prompt).lower()
-  return response
-
-
-def MergeExpectationMaps(base_map, merge_map, reference_map=None):
-  """Merges |merge_map| into |base_map|.
-
-  Args:
-    base_map: A data_types.TestExpectationMap to be updated with the contents of
-        |merge_map|. Will be modified in place.
-    merge_map: A data_types.TestExpectationMap whose contents will be merged
-        into |base_map|.
-    reference_map: A dict containing the information that was originally in
-        |base_map|. Used for ensuring that a single expectation/builder/step
-        combination is only ever updated once. If None, a copy of |base_map|
-        will be used.
-  """
-  # We only enforce that we're starting with a TestExpectationMap when this is
-  # initially called, not on the recursive calls.
-  if reference_map is None:
-    assert isinstance(base_map, data_types.TestExpectationMap)
-    assert isinstance(merge_map, data_types.TestExpectationMap)
-  # We should only ever encounter a single updated BuildStats for an
-  # expectation/builder/step combination. Use the reference map to determine
-  # if a particular BuildStats has already been updated or not.
-  reference_map = reference_map or copy.deepcopy(base_map)
-  for key, value in merge_map.items():
-    if key not in base_map:
-      base_map[key] = value
-    else:
-      if isinstance(value, dict):
-        MergeExpectationMaps(base_map[key], value, reference_map.get(key, {}))
-      else:
-        assert isinstance(value, data_types.BuildStats)
-        # Ensure we haven't updated this BuildStats already. If the reference
-        # map doesn't have a corresponding BuildStats, then base_map shouldn't
-        # have initially either, and thus it would have been added before
-        # reaching this point. Otherwise, the two values must match, meaning
-        # that base_map's BuildStats hasn't been updated yet.
-        reference_stats = reference_map.get(key, None)
-        assert reference_stats is not None
-        assert reference_stats == base_map[key]
-        base_map[key] = value
-
-
-def AddResultListToMap(expectation_map, builder, results):
-  """Adds |results| to |expectation_map|.
-
-  Args:
-    expectation_map: A data_types.TestExpectationMap. Will be modified in-place.
-    builder: A string containing the builder |results| came from. Should be
-        prefixed with something to distinguish between identically named CI and
-        try builders.
-    results: A list of data_types.Result objects corresponding to the ResultDB
-        data queried for |builder|.
-
-  Returns:
-    A list of data_types.Result objects who did not have a matching expectation
-    in |expectation_map|.
-  """
-  assert isinstance(expectation_map, data_types.TestExpectationMap)
-  failure_results = set()
-  pass_results = set()
-  unmatched_results = []
-  for r in results:
-    if r.actual_result == 'Pass':
-      pass_results.add(r)
-    else:
-      failure_results.add(r)
-
-  # Remove any cases of failure -> pass from the passing set. If a test is
-  # flaky, we get both pass and failure results for it, so we need to remove the
-  # any cases of a pass result having a corresponding, earlier failure result.
-  modified_failing_retry_results = set()
-  for r in failure_results:
-    modified_failing_retry_results.add(
-        data_types.Result(r.test, r.tags, 'Pass', r.step, r.build_id))
-  pass_results -= modified_failing_retry_results
-
-  for r in pass_results | failure_results:
-    found_matching = _AddResultToMap(r, builder, expectation_map)
-    if not found_matching:
-      unmatched_results.append(r)
-
-  return unmatched_results
-
-
-def _AddResultToMap(result, builder, test_expectation_map):
-  """Adds a single |result| to |test_expectation_map|.
-
-  Args:
-    result: A data_types.Result object to add.
-    builder: A string containing the name of the builder |result| came from.
-    test_expectation_map: A data_types.TestExpectationMap. Will be modified
-        in-place.
-
-  Returns:
-    True if an expectation in |test_expectation_map| applied to |result|,
-    otherwise False.
-  """
-  assert isinstance(test_expectation_map, data_types.TestExpectationMap)
-  found_matching_expectation = False
-  # We need to use fnmatch since wildcards are supported, so there's no point in
-  # checking the test name key right now. The AppliesToResult check already does
-  # an fnmatch check.
-  for _, expectation, builder_map in test_expectation_map.IterBuilderStepMaps():
-    if expectation.AppliesToResult(result):
-      found_matching_expectation = True
-      step_map = builder_map.setdefault(builder, data_types.StepBuildStatsMap())
-      stats = step_map.setdefault(result.step, data_types.BuildStats())
-      if result.actual_result == 'Pass':
-        stats.AddPassedBuild()
-      else:
-        stats.AddFailedBuild(result.build_id)
-  return found_matching_expectation
-
-
-def _GetDisableReasonFromComment(line):
-  return line.split(FINDER_DISABLE_COMMENT, 1)[1].strip()
-
-
-def FindOrphanedBugs(affected_urls):
-  """Finds cases where expectations for bugs no longer exist.
-
-  Args:
-    affected_urls: An iterable of affected bug URLs, as returned by functions
-        such as RemoveExpectationsFromFile.
-
-  Returns:
-    A set containing a subset of |affected_urls| who no longer have any
-    associated expectations in any expectation files.
-  """
-  seen_bugs = set()
-
-  for expectation_file in os.listdir(EXPECTATIONS_DIR):
-    if not expectation_file.endswith('_expectations.txt'):
-      continue
-    with open(os.path.join(EXPECTATIONS_DIR, expectation_file)) as infile:
-      contents = infile.read()
-    for url in affected_urls:
-      if url in seen_bugs:
+    Returns:
+      A tuple (line, line_number). |line| is a string containing the exact line
+      in |file_contents| corresponding to |expectation|. |line_number| is an int
+      corresponding to where |line| is in |file_contents|. |line_number| may be
+      off if the file on disk has changed since |file_contents| was read. If a
+      corresponding line cannot be found, both |line| and |line_number| are
+      None.
+    """
+    # We have all the information necessary to recreate the expectation line and
+    # line number can be pulled during the initial expectation parsing. However,
+    # the information we have is not necessarily in the same order as the
+    # text file (e.g. tag ordering), and line numbers can change pretty
+    # dramatically between the initial parse and now due to stale expectations
+    # being removed. So, parse this way in order to improve the user experience.
+    file_lines = file_contents.splitlines()
+    for line_number, line in enumerate(file_lines):
+      if _IsCommentOrBlankLine(line.strip()):
         continue
-      if url in contents:
-        seen_bugs.add(url)
-  return set(affected_urls) - seen_bugs
+      current_expectation = self._CreateExpectationFromExpectationFileLine(
+        line, expectation_file
+      )
+      if expectation == current_expectation:
+        return line, line_number + 1
+    return None, None
+
+  def FindOrphanedBugs(self, affected_urls: Iterable[str]) -> Set[str]:
+    """Finds cases where expectations for bugs no longer exist.
+
+    Args:
+      affected_urls: An iterable of affected bug URLs, as returned by functions
+          such as RemoveExpectationsFromFile.
+
+    Returns:
+      A set containing a subset of |affected_urls| who no longer have any
+      associated expectations in any expectation files.
+    """
+    seen_bugs = set()
+
+    expectation_files = self.GetExpectationFilepaths()
+
+    for ef in expectation_files:
+      with open(ef, encoding='utf-8') as infile:
+        contents = infile.read()
+      for url in affected_urls:
+        if url in seen_bugs:
+          continue
+        if url in contents:
+          seen_bugs.add(url)
+    return set(affected_urls) - seen_bugs
+
+  def GetExpectationFilepaths(self) -> List[str]:
+    """Gets all the filepaths to expectation files of interest.
+
+    Returns:
+      A list of strings, each element being a filepath pointing towards an
+      expectation file.
+    """
+    raise NotImplementedError()
 
 
-def _get_input(prompt):
-  if sys.version_info[0] == 2:
-    return raw_input(prompt)
-  return input(prompt)
+def ParseTaggedTestListContent(
+  content: str,
+) -> expectations_parser.TaggedTestListParser:
+  """Helper to parse typ expectation files.
+
+  This allows subclasses to avoid adding typ to PYTHONPATH.
+  """
+  return expectations_parser.TaggedTestListParser(content)
+
+
+def _LineContainsGroupStartComment(line: str) -> bool:
+  return FINDER_GROUP_COMMENT_START in line
+
+
+def _LineContainsGroupEndComment(line: str) -> bool:
+  return FINDER_GROUP_COMMENT_END in line
+
+
+def _LineContainsDisableComment(line: str) -> bool:
+  return FINDER_DISABLE_COMMENT_BASE in line
+
+
+def _LineContainsEnableComment(line: str) -> bool:
+  return FINDER_ENABLE_COMMENT_BASE in line
+
+
+def _GetGroupNameFromCommentLine(line: str) -> str:
+  """Gets the group name from the finder comment on the given line."""
+  assert FINDER_GROUP_COMMENT_START in line
+  uncommented_line = line.lstrip('#').strip()
+  split_line = uncommented_line.split(maxsplit=1)
+  if len(split_line) != 2:
+    raise RuntimeError('Given line %s did not have a group name.' % line)
+  return split_line[1]
+
+
+def _GetFinderCommentSuffix(line: str) -> str:
+  """Gets the suffix of the finder comment on the given line.
+
+  Examples:
+    'foo  # finder:disable' -> ''
+    'foo  # finder:disable-stale some_reason' -> '-stale'
+  """
+  target_str = None
+  if _LineContainsDisableComment(line):
+    target_str = FINDER_DISABLE_COMMENT_BASE
+  elif _LineContainsEnableComment(line):
+    target_str = FINDER_ENABLE_COMMENT_BASE
+  else:
+    raise RuntimeError('Given line %s did not have a finder comment.' % line)
+  line = line[line.find(target_str) :]
+  line = line.split()[0]
+  suffix = line.replace(target_str, '')
+  assert suffix in ALL_FINDER_DISABLE_SUFFIXES
+  return suffix
+
+
+def _LineContainsRelevantDisableComment(line: str, removal_type: str) -> bool:
+  """Returns whether the given line contains a relevant disable comment.
+
+  Args:
+    line: A string containing the line to check.
+    removal_type: A RemovalType enum corresponding to the type of expectations
+        being removed.
+
+  Returns:
+    A bool denoting whether |line| contains a relevant disable comment given
+    |removal_type|.
+  """
+  if FINDER_DISABLE_COMMENT_GENERAL in line:
+    return True
+  if FINDER_DISABLE_COMMENT_BASE + removal_type in line:
+    return True
+  return False
+
+
+def _DisableSuffixIsRelevant(suffix: str, removal_type: str) -> bool:
+  """Returns whether the given suffix is relevant given the removal type.
+
+  Args:
+    suffix: A string containing a disable comment suffix.
+    removal_type: A RemovalType enum corresponding to the type of expectations
+        being removed.
+
+  Returns:
+    True if suffix is relevant and its disable request should be honored.
+  """
+  if suffix == FINDER_COMMENT_SUFFIX_GENERAL:
+    return True
+  if suffix == removal_type:
+    return True
+  return False
+
+
+def _GetDisableReasonFromComment(line: str) -> str:
+  suffix = _GetFinderCommentSuffix(line)
+  return line.split(FINDER_DISABLE_COMMENT_BASE + suffix, 1)[1].strip()
+
+
+def _IsCommentOrBlankLine(line: str) -> bool:
+  return not line or line.startswith('#')
+
+
+def _ExpectationPartOfNonRemovableGroup(
+  current_expectation: data_types.Expectation,
+  group_to_expectations: Dict[str, Set[data_types.Expectation]],
+  expectation_to_group: Dict[data_types.Expectation, str],
+  removable_expectations: List[data_types.Expectation],
+):
+  """Determines if the given expectation is part of a non-removable group.
+
+  This is the case if the expectation is part of a group, but not all
+  expectations in that group are marked as removable.
+
+  Args:
+    current_expectation: A data_types.Expectation that is being checked.
+    group_to_expectations: A dict mapping group names to sets of expectations
+        contained within that group.
+    expectation_to_group: A dict mapping an expectation to the group name it
+        belongs to.
+    removable_expectations: A list of all expectations that are removable.
+  """
+  # Since we'll only ever be using this to check for inclusion, use a set
+  # for efficiency.
+  removable_expectations = set(removable_expectations)
+
+  group_name = expectation_to_group.get(current_expectation)
+  if not group_name:
+    return False
+
+  all_expectations_in_group = group_to_expectations[group_name]
+  group_removable = all_expectations_in_group <= removable_expectations
+  return not group_removable
+
+
+def _RawResultsContainUnhandledValue(
+  expectation: expectations_parser.Expectation,
+) -> bool:
+  """Determines if a typ expectation contains an unhandled raw result."""
+  # Skip expectations are unhandled since there is no historical data for
+  # skipped tests.
+  if 'Skip' in expectation.raw_results:
+    return True
+
+  # Expectations that only have a Pass expectation (usually used to
+  # override a broader, failing expectation) are not handled by the
+  # unexpected pass finder, so ignore those.
+  if expectation.raw_results == ['Pass']:
+    return True
+
+  return False
+
+
+def _GetNonRecentExpectationContent(
+  expectation_file_path: str, num_days: datetime.timedelta
+) -> str:
+  """Gets content from |expectation_file_path| older than |num_days| days.
+
+  Args:
+    expectation_file_path: A string containing a filepath pointing to an
+        expectation file.
+    num_days: A datetime.timedelta containing how old an expectation in the
+        given expectation file must be to be included.
+
+  Returns:
+    The contents of the expectation file located at |expectation_file_path|
+    as a string with any recent expectations removed.
+  """
+  content = ''
+  # `git blame` output is normally in the format:
+  # revision optional_filename (author date time timezone lineno) line_content
+  # The --porcelain option is meant to be more machine readable, but is much
+  # more difficult to parse for what we need to do here. In order to
+  # guarantee that the filename won't be included in the output (by default,
+  # it will be shown if there is content from a renamed file), pass -c to
+  # use the same format as `git annotate`, which is:
+  # revision (author date time timezone lineno)line_content
+  # (Note the lack of space between the ) and the content).
+  cmd = ['git', 'blame', '-c', expectation_file_path]
+  with open(os.devnull, 'w', newline='', encoding='utf-8') as devnull:
+    blame_output = subprocess.check_output(cmd, stderr=devnull).decode('utf-8')
+  for line in blame_output.splitlines(True):
+    match = GIT_BLAME_REGEX.match(line)
+    assert match
+    date = match.groupdict()['date']
+    line_content = match.groupdict()['content']
+    stripped_line_content = line_content.strip()
+    # Auto-add comments and blank space, otherwise only add if the grace
+    # period has expired.
+    if not stripped_line_content or stripped_line_content.startswith('#'):
+      content += line_content
+    else:
+      date = datetime.date.fromisoformat(date)
+      date_diff = datetime.date.today() - date
+      if date_diff > num_days:
+        content += line_content
+      else:
+        logging.debug(
+          'Omitting expectation %s because it is too new', line_content.rstrip()
+        )
+  return content
+
+
+def _RemoveStaleComments(
+  content: str, removed_lines: Set[int], header_length: int
+) -> str:
+  """Attempts to remove stale contents from the given expectation file content.
+
+  Args:
+    content: A string containing the contents of an expectation file.
+    removed_lines: A set of ints denoting which line numbers were removed in
+        the process of creating |content|.
+    header_length: An int denoting how many lines long the tag header is.
+
+  Returns:
+    A copy of |content| with various stale comments removed, e.g. group blocks
+    if the group has been removed.
+  """
+  # Look for the case where we've removed an entire block of expectations that
+  # were preceded by a comment, which we should remove.
+  comment_line_numbers_to_remove = []
+  split_content = content.splitlines(True)
+  for rl in removed_lines:
+    found_trailing_annotation = False
+    found_starting_annotation = False
+    # Check for the end of the file, a blank line, or a comment after the block
+    # we've removed.
+    if rl < len(split_content):
+      stripped_line = split_content[rl].strip()
+      if stripped_line and not stripped_line.startswith('#'):
+        # We found an expectation, so the entire expectation block wasn't
+        # removed.
+        continue
+      if any(
+        annotation in stripped_line
+        for annotation in ALL_FINDER_END_ANNOTATION_BASES
+      ):
+        found_trailing_annotation = True
+    # Look for a comment block immediately preceding the block we removed.
+    comment_line_number = rl - 1
+    while comment_line_number != header_length - 1:
+      stripped_line = split_content[comment_line_number].strip()
+      if stripped_line.startswith('#'):
+        # If we find what should be a trailing annotation, stop immediately so
+        # we don't accidentally remove it and create an orphan earlier in the
+        # file.
+        if any(
+          annotation in stripped_line
+          for annotation in ALL_FINDER_END_ANNOTATION_BASES
+        ):
+          break
+        if any(
+          annotation in stripped_line
+          for annotation in ALL_FINDER_START_ANNOTATION_BASES
+        ):
+          # If we've already found a starting annotation, skip past this line.
+          # This is to handle the case of nested annotations, e.g. a
+          # disable-narrowing block inside of a group block. We'll find the
+          # inner-most block here and remove it. Any outer blocks will be
+          # removed as part of the lingering stale annotation removal later on.
+          # If we don't skip past these outer annotations, then we get left with
+          # orphaned trailing annotations.
+          if found_starting_annotation:
+            comment_line_number -= 1
+            continue
+          found_starting_annotation = True
+          # If we found a starting annotation but not a trailing annotation, we
+          # shouldn't remove the starting one, as that would cause the trailing
+          # one that is later in the file to be orphaned. We also don't want to
+          # continue and remove comments above that since it is assumedly still
+          # valid.
+          if found_starting_annotation and not found_trailing_annotation:
+            break
+        comment_line_numbers_to_remove.append(comment_line_number)
+        comment_line_number -= 1
+      else:
+        break
+    # In the event that we found both a start and trailing annotation, we need
+    # to also remove the trailing one.
+    if found_trailing_annotation and found_starting_annotation:
+      comment_line_numbers_to_remove.append(rl)
+
+  # Actually remove the comments we found above.
+  for i in comment_line_numbers_to_remove:
+    split_content[i] = ''
+  if comment_line_numbers_to_remove:
+    content = ''.join(split_content)
+
+  # Remove any lingering cases of stale annotations that we can easily detect.
+  for regex in ALL_STALE_COMMENT_REGEXES:
+    for match in regex.findall(content):
+      content = content.replace(match, '')
+
+  return content
+
+
+def WildcardTypeFromTypExpectation(
+  e: expectations_parser.Expectation,
+) -> data_types.WildcardType:
+  """Helper to convert information in a typ expectation to a WildcardType.
+
+  Args:
+    e: The typ Expectation to extract information from.
+
+  Returns:
+    The data_types.WildcardType value that corresponds to the data contained
+    within |e|.
+  """
+  wildcard_type = data_types.WildcardType.NON_WILDCARD
+  if e.is_glob:
+    if e.full_wildcard_support:
+      wildcard_type = data_types.WildcardType.FULL_WILDCARD
+    else:
+      wildcard_type = data_types.WildcardType.SIMPLE_WILDCARD
+  return wildcard_type

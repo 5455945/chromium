@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <set>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/time/time.h"
@@ -59,8 +59,7 @@ class MIDI_EXPORT MidiManagerClient {
   // |length| is the number of bytes in |data|.
   // |timestamp| is the time the data was received, in seconds.
   virtual void ReceiveMidiData(uint32_t port_index,
-                               const uint8_t* data,
-                               size_t length,
+                               base::span<const uint8_t> data,
                                base::TimeTicks timestamp) = 0;
 
   // AccumulateMidiBytesSent() is called to acknowledge when bytes have
@@ -85,6 +84,10 @@ class MIDI_EXPORT MidiManager {
   static const size_t kMaxPendingClientCount = 128;
 
   explicit MidiManager(MidiService* service);
+
+  MidiManager(const MidiManager&) = delete;
+  MidiManager& operator=(const MidiManager&) = delete;
+
   virtual ~MidiManager();
 
   static MidiManager* Create(MidiService* service);
@@ -125,6 +128,8 @@ class MIDI_EXPORT MidiManager {
  protected:
   friend class MidiManagerUsb;
 
+  virtual const char* GetBackendName() const;
+
   // Initializes the platform dependent MIDI system. MidiManager class has a
   // default implementation that synchronously calls CompleteInitialization()
   // with mojom::Result::NOT_SUPPORTED. A derived class for a specific platform
@@ -155,8 +160,7 @@ class MIDI_EXPORT MidiManager {
 
   // Dispatches to all clients. Can be called on any thread.
   void ReceiveMidiData(uint32_t port_index,
-                       const uint8_t* data,
-                       size_t length,
+                       base::span<const uint8_t> data,
                        base::TimeTicks time);
 
   // Only for testing.
@@ -183,10 +187,12 @@ class MIDI_EXPORT MidiManager {
   mojom::Result result_ = mojom::Result::NOT_INITIALIZED;
 
   // Keeps track of all clients who are waiting for CompleteStartSession().
-  std::set<MidiManagerClient*> pending_clients_ GUARDED_BY(lock_);
+  std::set<raw_ptr<MidiManagerClient, SetExperimental>> pending_clients_
+      GUARDED_BY(lock_);
 
   // Keeps track of all clients who wish to receive MIDI data.
-  std::set<MidiManagerClient*> clients_ GUARDED_BY(lock_);
+  std::set<raw_ptr<MidiManagerClient, SetExperimental>> clients_
+      GUARDED_BY(lock_);
 
   // Keeps a SingleThreadTaskRunner of the thread that calls StartSession in
   // order to invoke CompleteStartSession() on the thread. This is touched only
@@ -206,9 +212,7 @@ class MIDI_EXPORT MidiManager {
   base::Lock lock_;
 
   // MidiService outlives MidiManager.
-  MidiService* const service_;
-
-  DISALLOW_COPY_AND_ASSIGN(MidiManager);
+  const raw_ptr<MidiService> service_;
 };
 
 }  // namespace midi

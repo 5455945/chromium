@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <map>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/sequence_checker.h"
 
 enum MediaGalleryFileType {
@@ -30,6 +30,10 @@ class MediaPathFilter {
   static bool ShouldSkip(const base::FilePath& path);
 
   MediaPathFilter();
+
+  MediaPathFilter(const MediaPathFilter&) = delete;
+  MediaPathFilter& operator=(const MediaPathFilter&) = delete;
+
   ~MediaPathFilter();
 
   // Returns true if |path| is a media file.
@@ -52,19 +56,16 @@ class MediaPathFilter {
       const MediaFileExtensionList& extensions_list,
       MediaGalleryFileType type);
   void AddAdditionalExtensionsToMediaFileExtensionMap(
-      const base::FilePath::CharType* const* extensions_list,
-      size_t extensions_list_size,
+      base::span<const base::FilePath::CharType* const> extensions_list,
       MediaGalleryFileType type);
   void AddExtensionToMediaFileExtensionMap(
       const base::FilePath::CharType* extension,
       MediaGalleryFileType type);
 
   // Checks |initialized_| is only accessed on one sequence.
-  base::SequenceChecker sequence_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
   bool initialized_;
   MediaFileExtensionMap media_file_extensions_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaPathFilter);
 };
 
 #endif  // CHROME_BROWSER_MEDIA_GALLERIES_FILEAPI_MEDIA_PATH_FILTER_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
   {
     "namespace": "input.ime",
     "description": "Use the <code>chrome.input.ime</code> API to implement a custom IME for Chrome OS. This allows your extension to handle keystrokes, set the composition, and manage the candidate window.",
+    "platforms": ["chromeos"],
     "types": [
       {
         "id": "KeyboardEventType",
@@ -213,20 +214,19 @@
                 }
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes with a boolean indicating if the text was accepted or not. On failure, $(ref:runtime.lastError) is set.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "description": "Resolves when the operation completes with a boolean indicating if the text was accepted or not. On failure, the promise will be rejected.",
+          "optional": true,
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "clearComposition",
@@ -243,20 +243,19 @@
                 "type": "integer"
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes with a boolean indicating if the text was accepted or not. On failure, $(ref:runtime.lastError) is set.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes with a boolean indicating if the text was accepted or not. On failure, the promise will be rejected.",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "commitText",
@@ -277,20 +276,19 @@
                 "type": "string"
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes with a boolean indicating if the text was accepted or not. On failure, $(ref:runtime.lastError) is set.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes with a boolean indicating if the text was accepted or not. On failure, the promise will be rejected.",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "sendKeyEvents",
@@ -314,15 +312,14 @@
                 }
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": []
+        }
       },
       {
         "name": "hideInputView",
@@ -396,20 +393,19 @@
                 }
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "setCandidates",
@@ -449,20 +445,19 @@
                 }
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "setCursorPosition",
@@ -483,20 +478,19 @@
                 "type": "integer"
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "setAssistiveWindowProperties",
@@ -517,20 +511,19 @@
                 "description": "Properties of the assistive window."
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": [
-              {
-                "name": "success",
-                "type": "boolean"
-              }
-            ]
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": [
+            {
+              "name": "success",
+              "type": "boolean"
+            }
+          ]
+        }
       },
       {
         "name": "setAssistiveWindowButtonHighlighted",
@@ -564,15 +557,14 @@
                 "type": "boolean"
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes. On failure, $(ref:runtime.lastError) is set.",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes. On failure, the promise will be rejected.",
+          "parameters": []
+        }
       },
       {
         "name": "setMenuItems",
@@ -583,15 +575,14 @@
           {
             "name": "parameters",
             "$ref": "MenuParameters"
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "",
+          "parameters": []
+        }
       },
       {
         "name": "updateMenuItems",
@@ -602,15 +593,14 @@
           {
             "name": "parameters",
             "$ref": "MenuParameters"
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes",
+          "parameters": []
+        }
       },
       {
         "name": "deleteSurroundingText",
@@ -640,15 +630,14 @@
                 "minimum": 0
               }
             }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "description": "Called when the operation completes.",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Resolves when the operation completes.",
+          "parameters": []
+        }
       },
       {
         "name": "keyEventHandled",
@@ -719,7 +708,7 @@
           }
         ]
       },
-      // TODO(crbug.com/1148579): Deprecate onInputContextUpdate.
+      // TODO(crbug.com/40157107): Deprecate onInputContextUpdate.
       {
         "name": "onInputContextUpdate",
         "type": "function",

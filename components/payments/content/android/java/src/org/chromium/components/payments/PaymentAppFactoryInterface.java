@@ -1,10 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.payments;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** Interface for factories that create payment apps. */
+@NullMarked
 public interface PaymentAppFactoryInterface {
     /**
      * Creates payment apps for the |delegate|. When this method is invoked, each factory must:
@@ -21,4 +24,9 @@ public interface PaymentAppFactoryInterface {
      * apps.
      */
     void create(PaymentAppFactoryDelegate delegate);
+
+    /** Returns true if this factory creates internal payment apps. */
+    default boolean isInternal() {
+        return false;
+    }
 }

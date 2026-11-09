@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sessions/chrome_serialized_navigation_driver.h"
 
 #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
+#include "content/public/browser/navigation_entry.h"
 #include "services/network/public/mojom/referrer_policy.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
@@ -12,8 +13,14 @@
 
 class ChromeSerializedNavigationDriverTest : public ::testing::Test {
  public:
-  ChromeSerializedNavigationDriverTest() {}
-  ~ChromeSerializedNavigationDriverTest() override {}
+  ChromeSerializedNavigationDriverTest() = default;
+
+  ChromeSerializedNavigationDriverTest(
+      const ChromeSerializedNavigationDriverTest&) = delete;
+  ChromeSerializedNavigationDriverTest& operator=(
+      const ChromeSerializedNavigationDriverTest&) = delete;
+
+  ~ChromeSerializedNavigationDriverTest() override = default;
 
   void SetUp() override {
     sessions::ContentSerializedNavigationDriver::SetInstance(
@@ -23,9 +30,6 @@ class ChromeSerializedNavigationDriverTest : public ::testing::Test {
   void TearDown() override {
     sessions::ContentSerializedNavigationDriver::SetInstance(nullptr);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ChromeSerializedNavigationDriverTest);
 };
 
 // Tests that the input data is left unsanitized when the referrer policy is

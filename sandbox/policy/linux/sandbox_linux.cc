@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,37 +18,46 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/singleton.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/process/set_process_title.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
-#include "base/time/time.h"
+#include "base/threading/platform_thread.h"
+#include "base/threading/thread_id_name_manager.h"
 #include "build/build_config.h"
 #include "sandbox/constants.h"
+#include "sandbox/linux/seccomp-bpf-helpers/sigsys_handlers.h"
 #include "sandbox/linux/services/credentials.h"
 #include "sandbox/linux/services/libc_interceptor.h"
 #include "sandbox/linux/services/namespace_sandbox.h"
 #include "sandbox/linux/services/proc_util.h"
 #include "sandbox/linux/services/resource_limits.h"
+#include "sandbox/linux/services/syscall_wrappers.h"
 #include "sandbox/linux/services/thread_helpers.h"
 #include "sandbox/linux/services/yama.h"
 #include "sandbox/linux/suid/client/setuid_sandbox_client.h"
 #include "sandbox/linux/syscall_broker/broker_client.h"
 #include "sandbox/linux/syscall_broker/broker_command.h"
 #include "sandbox/linux/syscall_broker/broker_process.h"
+#include "sandbox/linux/system_headers/linux_landlock.h"
+#include "sandbox/linux/system_headers/linux_stat.h"
+#include "sandbox/policy/features.h"
 #include "sandbox/policy/linux/bpf_broker_policy_linux.h"
 #include "sandbox/policy/linux/sandbox_seccomp_bpf_linux.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/sandbox.h"
 #include "sandbox/policy/sandbox_type.h"
 #include "sandbox/policy/switches.h"
 #include "sandbox/sandbox_buildflags.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 #if BUILDFLAG(USING_SANITIZER)
 #include <sanitizer/common_interface_defs.h>
@@ -97,9 +106,8 @@ base::ScopedFD OpenProc(int proc_fd) {
 }
 
 bool UpdateProcessTypeAndEnableSandbox(
-    SandboxLinux::PreSandboxHook broker_side_hook,
     SandboxLinux::Options options,
-    syscall_broker::BrokerCommandSet allowed_command_set) {
+    const syscall_broker::BrokerSandboxConfig& policy) {
   base::CommandLine::StringVector exec =
       base::CommandLine::ForCurrentProcess()->GetArgs();
   base::CommandLine::Reset();
@@ -119,11 +127,13 @@ bool UpdateProcessTypeAndEnableSandbox(
           << new_process_type;
   command_line->AppendSwitchASCII(switches::kProcessType, new_process_type);
 
-  if (broker_side_hook)
-    CHECK(std::move(broker_side_hook).Run(options));
+  // Update the process title. The argv was already cached by the call to
+  // SetProcessTitleFromCommandLine in content_main_runner.cc, so we can pass
+  // NULL here (we don't have the original argv at this point).
+  base::SetProcessTitleFromCommandLine(nullptr);
 
   return SandboxSeccompBPF::StartSandboxWithExternalPolicy(
-      std::make_unique<BrokerProcessPolicy>(allowed_command_set),
+      std::make_unique<BrokerProcessPolicy>(policy.allowed_command_set),
       base::ScopedFD());
 }
 
@@ -235,8 +245,8 @@ int SandboxLinux::GetStatus() {
         sandbox_status_flags_ |= kNetNS;
     }
 
-    // We report whether the sandbox will be activated when renderers, workers
-    // and PPAPI plugins go through sandbox initialization.
+    // We report whether the sandbox will be activated when renderers and
+    // workers go through sandbox initialization.
     if (seccomp_bpf_supported()) {
       sandbox_status_flags_ |= kSeccompBPF;
     }
@@ -277,7 +287,7 @@ SetuidSandboxClient* SandboxLinux::setuid_sandbox_client() const {
 }
 
 // For seccomp-bpf, we use the SandboxSeccompBPF class.
-bool SandboxLinux::StartSeccompBPF(SandboxType sandbox_type,
+bool SandboxLinux::StartSeccompBPF(sandbox::mojom::Sandbox sandbox_type,
                                    PreSandboxHook hook,
                                    const Options& options) {
   CHECK(!seccomp_bpf_started_);
@@ -316,7 +326,7 @@ bool SandboxLinux::StartSeccompBPF(SandboxType sandbox_type,
 #endif
 }
 
-bool SandboxLinux::InitializeSandbox(SandboxType sandbox_type,
+bool SandboxLinux::InitializeSandbox(sandbox::mojom::Sandbox sandbox_type,
                                      SandboxLinux::PreSandboxHook hook,
                                      const Options& options) {
   DCHECK(!initialize_sandbox_ran_);
@@ -328,20 +338,17 @@ bool SandboxLinux::InitializeSandbox(SandboxType sandbox_type,
 
   // We need to make absolutely sure that our sandbox is "sealed" before
   // returning.
-  // Unretained() since the current object is a Singleton.
-  base::ScopedClosureRunner sandbox_sealer(
-      base::BindOnce(&SandboxLinux::SealSandbox, base::Unretained(this)));
+  absl::Cleanup sandbox_sealer = [this] { SealSandbox(); };
   // Make sure that this function enables sandboxes as promised by GetStatus().
-  // Unretained() since the current object is a Singleton.
-  base::ScopedClosureRunner sandbox_promise_keeper(
-      base::BindOnce(&SandboxLinux::CheckForBrokenPromises,
-                     base::Unretained(this), sandbox_type));
+  absl::Cleanup sandbox_promise_keeper = [this, sandbox_type] {
+    CheckForBrokenPromises(sandbox_type);
+  };
 
   const bool has_threads = !IsSingleThreaded();
 
-  // For now, restrict the |options.allow_threads_during_sandbox_init| option to
-  // the GPU process
-  DCHECK(process_type == switches::kGpuProcess ||
+  // The `options.allow_threads_during_sandbox_init` option is only used for
+  // the on-device model execution process.
+  DCHECK(sandbox_type == sandbox::mojom::Sandbox::kOnDeviceModelExecution ||
          !options.allow_threads_during_sandbox_init);
   if (has_threads && !options.allow_threads_during_sandbox_init) {
     std::string error_message =
@@ -352,26 +359,51 @@ bool SandboxLinux::InitializeSandbox(SandboxType sandbox_type,
     if (IsRunningTSAN())
       return false;
 
-    // The GPU process is allowed to call InitializeSandbox() with threads.
-    bool sandbox_failure_fatal = process_type != switches::kGpuProcess;
-    // This can be disabled with the '--gpu-sandbox-failures-fatal' flag.
-    // Setting the flag with no value or any value different than 'yes' or 'no'
-    // is equal to setting '--gpu-sandbox-failures-fatal=yes'.
-    if (process_type == switches::kGpuProcess &&
-        command_line->HasSwitch(switches::kGpuSandboxFailuresFatal)) {
-      const std::string switch_value =
-          command_line->GetSwitchValueASCII(switches::kGpuSandboxFailuresFatal);
-      sandbox_failure_fatal = switch_value != "no";
+    bool sandbox_failure_fatal = true;
+    if (process_type == switches::kGpuProcess) {
+      // In the GPU process, bringing up GPU drivers before sandbox
+      // initialization may leave background worker threads running. By default,
+      // this causes InitializeSandbox() to fail non-fatally and skip
+      // seccomp-BPF.
+      //
+      // However, failures can be made fatal using
+      // '--gpu-sandbox-failures-fatal'. Passing the switch without a value (or
+      // with any value other than 'no') makes failures fatal. Passing
+      // '--gpu-sandbox-failures-fatal=no' keeps them non-fatal.
+      const bool switch_is_set_and_not_no =
+          command_line->HasSwitch(switches::kGpuSandboxFailuresFatal) &&
+          command_line->GetSwitchValueASCII(
+              switches::kGpuSandboxFailuresFatal) != "no";
+      if (switch_is_set_and_not_no) {
+        sandbox_failure_fatal = true;
+      } else {
+        sandbox_failure_fatal = false;
+      }
+    } else if (process_type == switches::kUtilityProcess &&
+               sandbox_type ==
+                   sandbox::mojom::Sandbox::kOnDeviceModelExecution) {
+      // When multithreaded sandbox initialization is disabled for on-device
+      // model execution, multiple threads cause sandbox initialization to fail
+      // non-fatally and skip seccomp-BPF.
+      CHECK(!base::FeatureList::IsEnabled(
+          features::kOnDeviceModelExecutionMultiThreadedSandbox));
+      sandbox_failure_fatal = false;
     }
 
-    if (sandbox_failure_fatal) {
+    if (sandbox_failure_fatal && !IsUnsandboxedSandboxType(sandbox_type)) {
       error_message += " Try waiting for /proc to be updated.";
       LOG(ERROR) << error_message;
+
+      for (const auto& id :
+           base::ThreadIdNameManager::GetInstance()->GetIds()) {
+        LOG(ERROR) << "ThreadId=" << id << " name:"
+                   << base::ThreadIdNameManager::GetInstance()->GetName(id);
+      }
       // This will return if /proc/self eventually reports this process is
       // single-threaded, or crash if it does not after a number of retries.
       ThreadHelpers::AssertSingleThreaded();
     } else {
-      LOG(ERROR) << error_message;
+      LOG(WARNING) << error_message;
       return false;
     }
   }
@@ -398,6 +430,20 @@ bool SandboxLinux::InitializeSandbox(SandboxType sandbox_type,
       << "opened. This breaks the security of the setuid sandbox.";
 
   InitLibcLocaltimeFunctions();
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  if (!IsUnsandboxedSandboxType(sandbox_type)) {
+    // No sandboxed process should make use of getaddrinfo() as it is impossible
+    // to sandbox (e.g. glibc loads arbitrary third party DNS resolution
+    // libraries).
+    // On ChromeOS none of these third party libraries are installed, so there
+    // is no need to discourage getaddrinfo().
+    // TODO(crbug.com/40220505): in the future this should depend on the
+    // libraries listed in /etc/nsswitch.conf, and should be a
+    // SandboxLinux::Options option.
+    DiscourageGetaddrinfo();
+  }
+#endif  // BUILDFLAG(IS_LINUX)
 
   // Attempt to limit the future size of the address space of the process.
   // Fine to call with multiple threads as we don't use RLIMIT_STACK.
@@ -428,26 +474,39 @@ bool SandboxLinux::seccomp_bpf_with_tsync_supported() const {
   return seccomp_bpf_with_tsync_supported_;
 }
 
-rlim_t GetProcessDataSizeLimit(SandboxType sandbox_type) {
+rlim_t GetProcessDataSizeLimit(sandbox::mojom::Sandbox sandbox_type) {
 #if defined(ARCH_CPU_64_BITS)
-  if (sandbox_type == SandboxType::kGpu ||
-      sandbox_type == SandboxType::kRenderer) {
-    // Allow the GPU/RENDERER process's sandbox to access more physical memory
-    // if it's available on the system.
+  if (sandbox_type == sandbox::mojom::Sandbox::kGpu ||
+      sandbox_type == sandbox::mojom::Sandbox::kOnDeviceModelExecution ||
+      sandbox_type == sandbox::mojom::Sandbox::kRenderer) {
+    // Allow the GPU/ODML/RENDERER process's sandbox to access more physical
+    // memory if it's available on the system.
     //
-    // Renderer processes are allowed to access 16 GB; the GPU process, up
-    // to 64 GB.
+    // Renderer processes are allowed to access 32 GB; the GPU/ODML processes,
+    // up to 64 GB.
     constexpr rlim_t GB = 1024 * 1024 * 1024;
-    const rlim_t physical_memory = base::SysInfo::AmountOfPhysicalMemory();
-    if (sandbox_type == SandboxType::kGpu && physical_memory > 64 * GB) {
-      return 64 * GB;
-    } else if (sandbox_type == SandboxType::kGpu && physical_memory > 32 * GB) {
-      return 32 * GB;
+    const rlim_t physical_memory =
+        base::SysInfo::AmountOfTotalPhysicalMemory().InBytes();
+    rlim_t limit;
+    if ((sandbox_type == sandbox::mojom::Sandbox::kGpu ||
+         sandbox_type == sandbox::mojom::Sandbox::kOnDeviceModelExecution) &&
+        physical_memory > 64 * GB) {
+      limit = 64 * GB;
+    } else if (physical_memory > 32 * GB) {
+      limit = 32 * GB;
     } else if (physical_memory > 16 * GB) {
-      return 16 * GB;
+      limit = 16 * GB;
     } else {
-      return 8 * GB;
+      limit = 8 * GB;
     }
+
+    if (sandbox_type == sandbox::mojom::Sandbox::kRenderer &&
+        base::FeatureList::IsEnabled(
+            sandbox::policy::features::kHigherRendererMemoryLimit)) {
+      limit *= 2;
+    }
+
+    return limit;
   }
 #endif
 
@@ -458,8 +517,9 @@ bool SandboxLinux::LimitAddressSpace(int* error) {
 #if !defined(ADDRESS_SANITIZER) && !defined(MEMORY_SANITIZER) && \
     !defined(THREAD_SANITIZER) && !defined(LEAK_SANITIZER)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  SandboxType sandbox_type = SandboxTypeFromCommandLine(*command_line);
-  if (sandbox_type == SandboxType::kNoSandbox) {
+  sandbox::mojom::Sandbox sandbox_type =
+      SandboxTypeFromCommandLine(*command_line);
+  if (sandbox_type == sandbox::mojom::Sandbox::kNoSandbox) {
     return false;
   }
 
@@ -487,28 +547,45 @@ bool SandboxLinux::LimitAddressSpace(int* error) {
 void SandboxLinux::StartBrokerProcess(
     const syscall_broker::BrokerCommandSet& allowed_command_set,
     std::vector<syscall_broker::BrokerFilePermission> permissions,
-    PreSandboxHook broker_side_hook,
     const Options& options) {
+  // Use EACCES as the policy's default error number to remain consistent with
+  // other LSMs like AppArmor and Landlock. Some userspace code, such as
+  // glibc's |dlopen|, expect to see EACCES rather than EPERM. See
+  // crbug.com/1233028 for an example.
+  auto policy = std::make_optional<syscall_broker::BrokerSandboxConfig>(
+      allowed_command_set, std::move(permissions), EACCES);
   // Leaked at shutdown, so use bare |new|.
   broker_process_ = new syscall_broker::BrokerProcess(
-      BPFBasePolicy::GetFSDeniedErrno(), allowed_command_set, permissions,
+      std::move(policy),
       syscall_broker::BrokerProcess::BrokerType::SIGNAL_BASED);
 
   // The initialization callback will perform generic initialization and then
   // call broker_sandboxer_callback.
-  CHECK(broker_process_->Init(base::BindOnce(&UpdateProcessTypeAndEnableSandbox,
-                                             std::move(broker_side_hook),
-                                             options, allowed_command_set)));
+  CHECK(broker_process_->Fork(
+      base::BindOnce(&UpdateProcessTypeAndEnableSandbox, options)));
 }
 
 bool SandboxLinux::ShouldBrokerHandleSyscall(int sysno) const {
   return broker_process_->IsSyscallAllowed(sysno);
 }
 
-sandbox::bpf_dsl::ResultExpr SandboxLinux::HandleViaBroker() const {
-  return sandbox::bpf_dsl::Trap(
-      sandbox::syscall_broker::BrokerClient::SIGSYS_Handler,
-      broker_process_->GetBrokerClientSignalBased());
+bpf_dsl::ResultExpr SandboxLinux::HandleViaBroker(int sysno) const {
+  const bpf_dsl::ResultExpr handle_via_broker =
+      bpf_dsl::Trap(syscall_broker::BrokerClient::SIGSYS_Handler,
+                    broker_process_->GetBrokerClientSignalBased());
+  if (sysno == __NR_fstatat_default) {
+    // This may be an fstatat(fd, "", stat_buf, AT_EMPTY_PATH), which should be
+    // rewritten as fstat(fd, stat_buf). This should be consistent with how the
+    // baseline policy handles fstatat().
+    // Note that this will cause some legitimate but strange invocations of
+    // fstatat() to fail, see https://crbug.com/1243290#c8 for details.
+    const bpf_dsl::Arg<int> flags(3);
+    return bpf_dsl::If((flags & AT_EMPTY_PATH) == AT_EMPTY_PATH,
+                       RewriteFstatatSIGSYS(BPFBasePolicy::GetFSDeniedErrno()))
+        .Else(handle_via_broker);
+  } else {
+    return handle_via_broker;
+  }
 }
 
 bool SandboxLinux::HasOpenDirectories() const {
@@ -523,9 +600,9 @@ void SandboxLinux::SealSandbox() {
   }
 }
 
-void SandboxLinux::CheckForBrokenPromises(SandboxType sandbox_type) {
-  if (sandbox_type != SandboxType::kRenderer &&
-      sandbox_type != SandboxType::kPpapi) {
+void SandboxLinux::CheckForBrokenPromises(
+    sandbox::mojom::Sandbox sandbox_type) {
+  if (sandbox_type != sandbox::mojom::Sandbox::kRenderer) {
     return;
   }
   // Make sure that any promise made with GetStatus() wasn't broken.

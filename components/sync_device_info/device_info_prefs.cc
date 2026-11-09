@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #include <algorithm>
 #include <utility>
-#include <vector>
 
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
+#include "base/trace_event/trace_event.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -27,8 +27,7 @@ const char kCacheGuidKey[] = "cache_guid";
 const char kTimestampKey[] = "timestamp";
 
 // The max time a local device's cached GUIDs will be stored.
-constexpr base::TimeDelta kMaxTimeDeltaLocalCacheGuidsStored =
-    base::TimeDelta::FromDays(10);
+constexpr base::TimeDelta kMaxTimeDeltaLocalCacheGuidsStored = base::Days(10);
 
 // The max number of local device most recent cached GUIDs that will be stored
 // in preferences.
@@ -41,7 +40,7 @@ bool MatchesGuidInDictionary(const base::Value& dict,
   if (!dict.is_dict()) {
     return false;
   }
-  const std::string* v_cache_guid = dict.FindStringKey(kCacheGuidKey);
+  const std::string* v_cache_guid = dict.GetDict().FindString(kCacheGuidKey);
   return v_cache_guid && *v_cache_guid == cache_guid;
 }
 
@@ -59,61 +58,57 @@ DeviceInfoPrefs::DeviceInfoPrefs(PrefService* pref_service,
   DCHECK(clock_);
 }
 
-DeviceInfoPrefs::~DeviceInfoPrefs() {}
+DeviceInfoPrefs::~DeviceInfoPrefs() = default;
 
 bool DeviceInfoPrefs::IsRecentLocalCacheGuid(
     const std::string& cache_guid) const {
-  base::Value::ConstListView recent_local_cache_guids =
-      pref_service_->GetList(kDeviceInfoRecentGUIDsWithTimestamps)->GetList();
+  TRACE_EVENT0("sync", "DeviceInfoPrefs::IsRecentLocalCacheGuid");
+  const base::ListValue& recent_local_cache_guids =
+      pref_service_->GetList(kDeviceInfoRecentGUIDsWithTimestamps);
 
-  for (const auto& v : recent_local_cache_guids) {
-    if (MatchesGuidInDictionary(v, cache_guid)) {
-      return true;
-    }
-  }
-
-  return false;
+  return std::any_of(recent_local_cache_guids.begin(),
+                     recent_local_cache_guids.end(),
+                     [&cache_guid](const base::Value& entry) {
+                       return MatchesGuidInDictionary(entry, cache_guid);
+                     });
 }
 
 void DeviceInfoPrefs::AddLocalCacheGuid(const std::string& cache_guid) {
-  ListPrefUpdate update_cache_guids(pref_service_,
-                                    kDeviceInfoRecentGUIDsWithTimestamps);
+  TRACE_EVENT0("sync", "DeviceInfoPrefs::AddLocalCacheGuid");
+  ScopedListPrefUpdate update_cache_guids(pref_service_,
+                                          kDeviceInfoRecentGUIDsWithTimestamps);
+  base::ListValue& update_list = update_cache_guids.Get();
 
-  for (auto it = update_cache_guids->GetList().begin();
-       it != update_cache_guids->GetList().end(); it++) {
-    if (MatchesGuidInDictionary(*it, cache_guid)) {
-      // Remove it from the list, to be reinserted below, in the first
-      // position.
-      update_cache_guids->EraseListIter(it);
-      break;
-    }
-  }
+  // Remove any existing entries for this `cache_guid`, to be reinserted below,
+  // in the first position.
+  update_list.EraseIf([&cache_guid](const base::Value& entry) {
+    return MatchesGuidInDictionary(entry, cache_guid);
+  });
 
-  base::Value new_entry(base::Value::Type::DICTIONARY);
-  new_entry.SetKey(kCacheGuidKey, base::Value(cache_guid));
-  new_entry.SetKey(
-      kTimestampKey,
-      base::Value(clock_->Now().ToDeltaSinceWindowsEpoch().InDays()));
+  base::DictValue new_entry;
+  new_entry.Set(kCacheGuidKey, cache_guid);
+  new_entry.Set(kTimestampKey,
+                clock_->Now().ToDeltaSinceWindowsEpoch().InDays());
 
-  update_cache_guids->Insert(update_cache_guids->GetList().begin(),
-                             std::move(new_entry));
+  update_list.Insert(update_list.begin(), base::Value(std::move(new_entry)));
 
-  while (update_cache_guids->GetList().size() > kMaxLocalCacheGuidsStored) {
-    update_cache_guids->EraseListIter(update_cache_guids->GetList().end() - 1);
+  if (update_list.size() > kMaxLocalCacheGuidsStored) {
+    update_list.erase(update_list.begin() + kMaxLocalCacheGuidsStored,
+                      update_list.end());
   }
 }
 
 void DeviceInfoPrefs::GarbageCollectExpiredCacheGuids() {
-  ListPrefUpdate update_cache_guids(pref_service_,
-                                    kDeviceInfoRecentGUIDsWithTimestamps);
-  update_cache_guids->EraseListValueIf([this](const auto& dict) {
+  ScopedListPrefUpdate update_cache_guids(pref_service_,
+                                          kDeviceInfoRecentGUIDsWithTimestamps);
+  update_cache_guids->EraseIf([this](const auto& dict) {
     // Avoid crashes if the preference contains corrupt entries that are not
     // dictionaries, and meanwhile clean up these corrupt entries.
     if (!dict.is_dict()) {
       return true;
     }
 
-    absl::optional<int> days_since_epoch = dict.FindIntKey(kTimestampKey);
+    std::optional<int> days_since_epoch = dict.GetDict().FindInt(kTimestampKey);
 
     // Avoid crashes if the dictionary contains no timestamp and meanwhile clean
     // up these corrupt entries.
@@ -121,8 +116,8 @@ void DeviceInfoPrefs::GarbageCollectExpiredCacheGuids() {
       return true;
     }
 
-    const base::Time creation_time = base::Time::FromDeltaSinceWindowsEpoch(
-        base::TimeDelta::FromDays(*days_since_epoch));
+    const base::Time creation_time =
+        base::Time::FromDeltaSinceWindowsEpoch(base::Days(*days_since_epoch));
     return creation_time < clock_->Now() - kMaxTimeDeltaLocalCacheGuidsStored;
   });
 }

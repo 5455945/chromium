@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 
 namespace storage {
 
@@ -20,16 +18,16 @@ class BlobStorageContext;
 // state of blob registry.
 class COMPONENT_EXPORT(STORAGE_BROWSER) ViewBlobInternalsJob {
  public:
+  ViewBlobInternalsJob(const ViewBlobInternalsJob&) = delete;
+  ViewBlobInternalsJob& operator=(const ViewBlobInternalsJob&) = delete;
+
   static std::string GenerateHTML(BlobStorageContext* blob_storage_context);
 
  private:
   static void GenerateHTMLForBlobData(const BlobEntry& blob_data,
                                       const std::string& content_type,
-                                      const std::string& content_disposition,
                                       size_t refcount,
                                       std::string* out);
-
-  DISALLOW_COPY_AND_ASSIGN(ViewBlobInternalsJob);
 };
 
 }  // namespace storage

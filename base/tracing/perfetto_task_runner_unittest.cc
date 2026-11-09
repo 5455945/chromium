@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,25 @@
 #include <utility>
 #include <vector>
 
+#include "base/files/scoped_file.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/threading/simple_thread.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace tracing {
+#if BUILDFLAG(IS_POSIX)
+#include <sys/socket.h>
+#include <sys/types.h>
+
+#include "base/posix/eintr_wrapper.h"
+#endif
+
+namespace base::tracing {
 namespace {
 
 class TaskDestination {
@@ -65,7 +75,7 @@ class PosterThread : public base::SimpleThread {
         weak_ptr_(weak_ptr),
         n_(n),
         sequence_number_(sequence_number) {}
-  ~PosterThread() override {}
+  ~PosterThread() override = default;
 
   // base::SimpleThread overrides.
   void BeforeStart() override {}
@@ -75,14 +85,14 @@ class PosterThread : public base::SimpleThread {
     for (int i = 0; i < n_; ++i) {
       auto weak_ptr = weak_ptr_;
       auto sequence_number = sequence_number_;
-      task_runner_->PostTask([weak_ptr, i, sequence_number]() {
+      task_runner_->PostTask([weak_ptr, i, sequence_number] {
         weak_ptr->TestTask(i, sequence_number);
       });
     }
   }
 
  private:
-  PerfettoTaskRunner* task_runner_;
+  raw_ptr<PerfettoTaskRunner> task_runner_;
   base::WeakPtr<TaskDestination> weak_ptr_;
   const int n_;
   const size_t sequence_number_;
@@ -112,6 +122,7 @@ class PerfettoTaskRunnerTest : public testing::Test {
 
   PerfettoTaskRunner* task_runner() { return task_runner_.get(); }
   TaskDestination* destination() { return task_destination_.get(); }
+  base::test::TaskEnvironment& task_environment() { return task_environment_; }
 
  private:
   base::test::TaskEnvironment task_environment_;
@@ -139,6 +150,57 @@ TEST_F(PerfettoTaskRunnerTest, SequentialTasks) {
   wait_for_tasks.Run();
 }
 
+#if BUILDFLAG(IS_POSIX)
+// Tests file descriptor reuse that causes crashes.
+TEST_F(PerfettoTaskRunnerTest, FileDescriptorReuse) {
+  int sockets[2];
+  // Use sockets because we need a FD that supports epoll().
+  ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, sockets));
+  base::ScopedFD fd(sockets[0]), write_fd(sockets[1]);
+  ASSERT_TRUE(fd.is_valid());
+
+  constexpr int data_value = 0x12ab34cd;
+  bool run_callback_1 = false, run_callback_2 = false;
+  int data = data_value;
+  constexpr ssize_t data_size = static_cast<ssize_t>(sizeof(data));
+
+  // Trigger the file descriptor watcher callback.
+  ASSERT_EQ(data_size, HANDLE_EINTR(write(write_fd.get(), &data, data_size)));
+  data = 0;
+
+  base::RunLoop run_loop;
+
+  task_runner()->PostTask([&] {
+    // The 1st add operation posts a task.
+    task_runner()->AddFileDescriptorWatch(fd.get(), [&] {
+      run_callback_1 = true;
+      ASSERT_EQ(data_size, HANDLE_EINTR(read(fd.get(), &data, data_size)));
+      run_loop.Quit();
+    });
+    // Remove so the 2nd add operation can succeed.
+    task_runner()->RemoveFileDescriptorWatch(fd.get());
+
+    // Simulate FD reuse. The 2nd add operation also posts a task.
+    task_runner()->AddFileDescriptorWatch(fd.get(), [&] {
+      run_callback_2 = true;
+      ASSERT_EQ(data_size, HANDLE_EINTR(read(fd.get(), &data, data_size)));
+      run_loop.Quit();
+    });
+  });
+
+  // Make all posted tasks run.
+  run_loop.Run();
+
+  ASSERT_FALSE(run_callback_1);
+  ASSERT_TRUE(run_callback_2);
+  ASSERT_EQ(data, data_value);
+
+  task_runner()->PostTask([&] {
+    // Cleanup the FD watcher.
+    task_runner()->RemoveFileDescriptorWatch(fd.get());
+  });
+  task_environment().RunUntilIdle();
+}
+#endif
 }  // namespace
-}  // namespace tracing
-}  // namespace base
+}  // namespace base::tracing

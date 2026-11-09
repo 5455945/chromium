@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,16 @@ package org.chromium.chrome.browser.merchant_viewer;
 
 import android.app.Activity;
 import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -17,105 +23,214 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.Callback;
+import org.chromium.base.FeatureList;
+import org.chromium.base.FeatureOverrides;
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterAnnotations.ClassParameter;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.browser.merchant_viewer.proto.MerchantTrustSignalsOuterClass.MerchantTrustSignals;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.merchant_viewer.MerchantTrustMessageViewModel.MessageActionsHandler;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
+import org.chromium.components.commerce.core.ShoppingService.MerchantInfo;
 import org.chromium.components.messages.MessageBannerView;
 import org.chromium.components.messages.MessageBannerViewBinder;
-import org.chromium.components.messages.R;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
-import org.chromium.ui.test.util.DummyUiActivityTestCase;
+import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.NightModeTestUtils;
+import org.chromium.url.GURL;
 
 import java.io.IOException;
 import java.util.List;
 
-/**
- * Tests for MerchantTrustMessageView.
- */
+/** Tests for MerchantTrustMessageView. */
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
-public class MerchantTrustMessageViewTest extends DummyUiActivityTestCase {
+@Batch(Batch.PER_CLASS)
+public class MerchantTrustMessageViewTest {
     @ClassParameter
-    private static List<ParameterSet> sClassParams =
+    private static final List<ParameterSet> sClassParams =
             new NightModeTestUtils.NightModeParams().getParameters();
 
-    @Rule
-    public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @ClassRule
+    public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
+            new BaseActivityTestRule<>(BlankUiTestActivity.class);
+
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
-            ChromeRenderTestRule.Builder.withPublicCorpus().build();
+            ChromeRenderTestRule.Builder.withPublicCorpus()
+                    .setBugComponent(
+                            ChromeRenderTestRule.Component.UI_BROWSER_SHOPPING_MERCHANT_TRUST)
+                    .build();
 
     public MerchantTrustMessageViewTest(boolean nightModeEnabled) {
-        NightModeTestUtils.setUpNightModeForDummyUiActivity(nightModeEnabled);
+        NightModeTestUtils.setUpNightModeForBlankUiTestActivity(nightModeEnabled);
         mRenderTestRule.setNightModeEnabled(nightModeEnabled);
     }
 
-    @Mock
-    private Callback<Integer> mMockOnDismissed;
+    @Mock private MessageActionsHandler mMockActionHandler;
 
-    @Mock
-    private Callback<MerchantTrustSignals> mMockOnPrimaryAction;
-
-    private Activity mActivity;
     private MessageBannerView mMessageBannerView;
-    private MerchantTrustSignals mMerchantTrustSignals;
+    private View mMessageBannerContent;
     private LayoutParams mParams;
+    private final MerchantInfo mMerchantInfo =
+            new MerchantInfo(3.51234f, 1640, new GURL("http://dummy/url"), false, 0f, false, false);
 
-    @Override
-    public void setUpTest() throws Exception {
-        super.setUpTest();
-        mActivity = getActivity();
-        mMessageBannerView = (MessageBannerView) LayoutInflater.from(mActivity).inflate(
-                R.layout.message_banner_view, null, false);
-        mMerchantTrustSignals = MerchantTrustSignals.newBuilder()
-                                        .setMerchantStarRating(3.51234f)
-                                        .setMerchantCountRating(1640)
-                                        .setMerchantDetailsPageUrl("http://dummy/url")
-                                        .build();
-        mParams = new LayoutParams(LayoutParams.MATCH_PARENT,
-                mActivity.getResources().getDimensionPixelSize(R.dimen.message_banner_height));
+    @BeforeClass
+    public static void setupSuite() {
+        sActivityTestRule.launchActivity(null);
     }
 
-    @Override
-    public void tearDownTest() throws Exception {
-        NightModeTestUtils.tearDownNightModeForDummyUiActivity();
-        super.tearDownTest();
+    @Before
+    public void setUp() {
+        Activity activity = sActivityTestRule.getActivity();
+        mMessageBannerView =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                (MessageBannerView)
+                                        LayoutInflater.from(activity)
+                                                .inflate(
+                                                        R.layout.message_banner_view, null, false));
+        mParams =
+                new LayoutParams(
+                        LayoutParams.MATCH_PARENT,
+                        activity.getResources()
+                                .getDimensionPixelSize(R.dimen.message_banner_main_content_height));
     }
 
-    private void createModelAndSetView() {
-        PropertyModel propertyModel = MerchantTrustMessageViewModel.create(
-                mActivity, mMerchantTrustSignals, mMockOnDismissed, mMockOnPrimaryAction);
+    @After
+    public void tearDown() throws Exception {
+        NightModeTestUtils.tearDownNightModeForBlankUiTestActivity();
+    }
+
+    private void createModelAndSetView(MerchantInfo merchantInfo) {
+        Activity activity = sActivityTestRule.getActivity();
+        PropertyModel propertyModel =
+                MerchantTrustMessageViewModel.create(
+                        activity, merchantInfo, "fake_url", mMockActionHandler);
         PropertyModelChangeProcessor.create(
                 propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mActivity.setContentView(mMessageBannerView, mParams); });
+        mMessageBannerContent = getMessageBannerMainContent();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> activity.setContentView(mMessageBannerContent, mParams));
     }
 
     @Test
     @MediumTest
     @Feature({"RenderTest"})
     public void testRenderMessage_UseRatingBar() throws IOException {
-        MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_USE_RATING_BAR.setForTesting(true);
-        createModelAndSetView();
-        mRenderTestRule.render(mMessageBannerView, "merchant_trust_message_use_rating_bar");
+        setUseRatingBarParam("true");
+
+        createModelAndSetView(mMerchantInfo);
+        mRenderTestRule.render(mMessageBannerContent, "merchant_trust_message_use_rating_bar");
     }
 
     @Test
     @MediumTest
     @Feature({"RenderTest"})
     public void testRenderMessage_NotUseRatingBar() throws IOException {
-        MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_USE_RATING_BAR.setForTesting(false);
-        createModelAndSetView();
-        mRenderTestRule.render(mMessageBannerView, "merchant_trust_message_not_use_rating_bar");
+        setUseRatingBarParam("false");
+
+        createModelAndSetView(mMerchantInfo);
+        mRenderTestRule.render(mMessageBannerContent, "merchant_trust_message_not_use_rating_bar");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testRenderMessage_NoRatingReviews() throws IOException {
+        setUseRatingBarParam("true");
+
+        MerchantInfo merchantInfo =
+                new MerchantInfo(
+                        3.51234f, 0, new GURL("http://dummy/url"), false, 0f, false, false);
+        createModelAndSetView(merchantInfo);
+        mRenderTestRule.render(mMessageBannerContent, "merchant_trust_message_no_rating_reviews");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testRenderMessage_IntegerRatingValue() throws IOException {
+        setUseRatingBarParam("true");
+
+        MerchantInfo merchantInfo =
+                new MerchantInfo(4f, 1640, new GURL("http://dummy/url"), false, 0f, false, false);
+        createModelAndSetView(merchantInfo);
+        mRenderTestRule.render(
+                mMessageBannerContent, "merchant_trust_message_integer_rating_value");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testRenderMessage_Alternative1() throws IOException {
+        setMessageUiParams("true", "false", "1", "1");
+
+        createModelAndSetView(mMerchantInfo);
+        mRenderTestRule.render(mMessageBannerContent, "merchant_trust_message_alternative1");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testRenderMessage_Alternative2() throws IOException {
+        setMessageUiParams("true", "true", "0", "0");
+
+        createModelAndSetView(mMerchantInfo);
+        mRenderTestRule.render(mMessageBannerContent, "merchant_trust_message_alternative2");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testRenderMessage_Alternative3() throws IOException {
+        setMessageUiParams("true", "false", "1", "2");
+
+        createModelAndSetView(mMerchantInfo);
+        mRenderTestRule.render(mMessageBannerContent, "merchant_trust_message_alternative3");
+    }
+
+    private void setUseRatingBarParam(String useRatingBar) {
+        setMessageUiParams(useRatingBar, "false", "0", "1");
+    }
+
+    private void setMessageUiParams(
+            String useRatingBar, String useGoogleIcon, String titleUi, String descriptionUi) {
+        // TODO: Remove use of setDisableNativeForTesting(), probably needed due to isInitialized()
+        // in MerchantViewerConfig.
+        FeatureList.setDisableNativeForTesting(true);
+        FeatureOverrides.newBuilder()
+                .param(
+                        ChromeFeatureList.COMMERCE_MERCHANT_VIEWER,
+                        MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_USE_RATING_BAR_PARAM,
+                        useRatingBar)
+                .param(
+                        ChromeFeatureList.COMMERCE_MERCHANT_VIEWER,
+                        MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_USE_GOOGLE_ICON_PARAM,
+                        useGoogleIcon)
+                .param(
+                        ChromeFeatureList.COMMERCE_MERCHANT_VIEWER,
+                        MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_TITLE_UI_PARAM,
+                        titleUi)
+                .param(
+                        ChromeFeatureList.COMMERCE_MERCHANT_VIEWER,
+                        MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_DESCRIPTION_UI_PARAM,
+                        descriptionUi)
+                .apply();
+    }
+
+    private View getMessageBannerMainContent() {
+        View mainContent = mMessageBannerView.getMainContentForTesting();
+        ((ViewGroup) mainContent.getParent()).removeView(mainContent);
+        return mainContent;
     }
 }

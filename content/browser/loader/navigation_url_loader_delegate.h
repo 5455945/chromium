@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 #define CONTENT_BROWSER_LOADER_NAVIGATION_URL_LOADER_DELEGATE_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "content/common/content_export.h"
+#include "services/network/public/mojom/early_hints.mojom-forward.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/navigation/navigation_policy.h"
+#include "url/origin.h"
 
 namespace net {
-class NetworkIsolationKey;
+class NetworkAnonymizationKey;
 struct RedirectInfo;
 }
 
@@ -27,6 +28,7 @@ struct URLLoaderCompletionStatus;
 namespace content {
 
 class NavigationEarlyHintsManager;
+struct NavigationEarlyHintsManagerParams;
 struct GlobalRequestID;
 struct SubresourceLoaderParams;
 
@@ -44,22 +46,26 @@ class CONTENT_EXPORT NavigationURLLoaderDelegate {
     EarlyHints(const EarlyHints& other) = delete;
     EarlyHints& operator=(const EarlyHints& other) = delete;
 
-    // True when at least one preload Link header was received during a
-    // main frame navigation.
-    bool was_preload_link_header_received = false;
+    // True when at least one preload or preconnect Link header was received
+    // during a main frame navigation.
+    bool was_resource_hints_received = false;
     // Non-null when at least one preload is actually requested.
     std::unique_ptr<NavigationEarlyHintsManager> manager;
   };
 
+  NavigationURLLoaderDelegate(const NavigationURLLoaderDelegate&) = delete;
+  NavigationURLLoaderDelegate& operator=(const NavigationURLLoaderDelegate&) =
+      delete;
+
   // Called when the request is redirected. Call FollowRedirect to continue
   // processing the request.
   //
-  // |network_isolation_key| is the NetworkIsolationKey associated with the
-  // request that was redirected, not the one that will be used if the redirect
-  // is followed.
+  // |network_anonymization_key| is the NetworkAnonymizationKey associated with
+  // the request that was redirected, not the one that will be used if the
+  // redirect is followed.
   virtual void OnRequestRedirected(
       const net::RedirectInfo& redirect_info,
-      const net::NetworkIsolationKey& network_isolation_key,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
       network::mojom::URLResponseHeadPtr response) = 0;
 
   // Called when the request receives its response. No further calls will be
@@ -68,13 +74,10 @@ class CONTENT_EXPORT NavigationURLLoaderDelegate {
   // |navigation_data| is passed to the NavigationHandle.
   // |subresource_loader_params| is used in the network service only for passing
   // necessary info to create a custom subresource loader in the renderer
-  // process if the navigated context is controlled by a request interceptor
-  // like AppCache or ServiceWorker.
+  // process if the navigated context is controlled by a request interceptor.
   //
   // |is_download| is true if the request must be downloaded, if it isn't
   // disallowed.
-  //
-  // |download_policy| specifies if downloading is disallowed.
   //
   // Invoking this method will delete the URLLoader, so it needs to take all
   // arguments by value.
@@ -84,9 +87,8 @@ class CONTENT_EXPORT NavigationURLLoaderDelegate {
       mojo::ScopedDataPipeConsumerHandle response_body,
       GlobalRequestID request_id,
       bool is_download,
-      blink::NavigationDownloadPolicy download_policy,
-      net::NetworkIsolationKey network_isolation_key,
-      absl::optional<SubresourceLoaderParams> subresource_loader_params,
+      net::NetworkAnonymizationKey network_anonymization_key,
+      SubresourceLoaderParams subresource_loader_params,
       EarlyHints early_hints) = 0;
 
   // Called if the request fails before receving a response. Specific
@@ -98,12 +100,25 @@ class CONTENT_EXPORT NavigationURLLoaderDelegate {
   virtual void OnRequestFailed(
       const network::URLLoaderCompletionStatus& status) = 0;
 
+  // Creates parameters to construct NavigationEarlyHintsManager. Returns
+  // std::nullopt when this delegate cannot create parameters.
+  virtual std::optional<NavigationEarlyHintsManagerParams>
+  CreateNavigationEarlyHintsManagerParams(
+      const network::mojom::EarlyHints& early_hints) = 0;
+
+  // Only for testing purpose (https://crbug.com/434182226).
+  // In non-test cases, use `OnRequestRedirected()` instead, and this method
+  // must do nothing and return `false`.
+  //
+  // Called when `NavigationURLLoaderImpl::OnReceiveRedirect()` is called.
+  // When the return value is `true` (which is only allowed in tests),
+  // `head->parsed_headers` is cleared to enforce and test the async
+  // `ParseHeaders()` path.
+  virtual bool ShouldClearParsedHeadersOnTestReceiveRedirect() = 0;
+
  protected:
   NavigationURLLoaderDelegate() {}
   virtual ~NavigationURLLoaderDelegate() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NavigationURLLoaderDelegate);
 };
 
 }  // namespace content

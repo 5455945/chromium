@@ -1,13 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 const maxRequests = 3;
 
-var searchParams = new URLSearchParams(location.search);
-var url = searchParams.get('url');
-var requestsToMake;
-var expectedFailRequestNum;
+const searchParams = new URLSearchParams(location.search);
+const url = searchParams.get('url');
+let requestsToMake;
+let expectedFailRequestNum;
 if (searchParams.has('expectedFailRequestNum')) {
   expectedFailRequestNum = parseInt(searchParams.get('expectedFailRequestNum'));
   requestsToMake = expectedFailRequestNum;
@@ -16,6 +16,10 @@ if (searchParams.has('expectedFailRequestNum')) {
   requestsToMake = maxRequests;
 }
 
-chrome.runtime.sendMessage({type: 'xhr', method: 'GET', url: url,
-                            requestsToMake: requestsToMake,
-                            expectedFailRequestNum: expectedFailRequestNum});
+chrome.runtime.sendMessage({
+  type: 'xhr',
+  method: 'GET',
+  url: url,
+  requestsToMake: requestsToMake,
+  expectedFailRequestNum: expectedFailRequestNum,
+});

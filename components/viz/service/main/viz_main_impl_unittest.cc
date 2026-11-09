@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_monitor_source.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "components/viz/service/performance_hint/hint_session.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/ipc/service/gpu_init.h"
 #include "services/metrics/public/cpp/mojo_ukm_recorder.h"
@@ -27,6 +30,8 @@ class MockDelegate : public VizMainImpl::Delegate {
  public:
   MOCK_METHOD1(PostCompositorThreadCreated,
                void(base::SingleThreadTaskRunner*));
+  MOCK_METHOD1(PostDisplayCompositorGpuThreadCreated,
+               void(base::SingleThreadTaskRunner*));
   MOCK_METHOD0(OnInitializationFailed, void());
   MOCK_METHOD1(OnGpuServiceConnection, void(GpuServiceImpl*));
   MOCK_METHOD0(QuitMainMessageLoop, void());
@@ -36,9 +41,8 @@ class MockDelegate : public VizMainImpl::Delegate {
 // that the dependency-injected UKM recorder actually gets used.
 class MockUkmRecorder : public ukm::MojoUkmRecorder {
  public:
-  MockUkmRecorder()
-      : ukm::MojoUkmRecorder(
-            mojo::PendingRemote<ukm::mojom::UkmRecorderInterface>()) {}
+  explicit MockUkmRecorder(ukm::mojom::UkmRecorderFactory& factory)
+      : MojoUkmRecorder(factory) {}
 
   MOCK_METHOD1(AddEntry, void(ukm::mojom::UkmEntryPtr));
 };
@@ -49,22 +53,20 @@ class MockVizCompositorThreadRunner : public VizCompositorThreadRunner {
       base::SingleThreadTaskRunner* task_runner)
       : VizCompositorThreadRunner(), task_runner_(task_runner) {}
 
-  base::PlatformThreadId thread_id() override {
-    return base::PlatformThreadId();
-  }
   base::SingleThreadTaskRunner* task_runner() override { return task_runner_; }
-  MOCK_METHOD1(CreateFrameSinkManager, void(mojom::FrameSinkManagerParamsPtr));
-  MOCK_METHOD4(CreateFrameSinkManager,
-               void(mojom::FrameSinkManagerParamsPtr,
-                    gpu::CommandBufferTaskExecutor*,
-                    GpuServiceImpl*,
-                    gfx::RenderingPipeline*));
-#if BUILDFLAG(USE_VIZ_DEVTOOLS)
-  MOCK_METHOD1(CreateVizDevTools, void(mojom::VizDevToolsParamsPtr));
-#endif
+  bool CreateHintSessionFactory(
+      base::flat_set<base::PlatformThreadId> thread_ids,
+      base::RepeatingClosure* wake_up_closure) override {
+    return false;
+  }
+  void SetIOThreadId(base::PlatformThreadId io_thread_id) override {}
+  void SetGpuMainThreadId(base::PlatformThreadId gpu_main_thread_id) override {}
+  void NotifyWorkloadIncrease() override {}
+  MOCK_METHOD2(CreateFrameSinkManager,
+               void(mojom::FrameSinkManagerParamsPtr, GpuServiceImpl*));
 
  private:
-  base::SingleThreadTaskRunner* const task_runner_;
+  const raw_ptr<base::SingleThreadTaskRunner> task_runner_;
 };
 
 class MockPowerMonitorSource : public base::PowerMonitorSource {
@@ -76,40 +78,49 @@ class MockPowerMonitorSource : public base::PowerMonitorSource {
 
   ~MockPowerMonitorSource() override { *leak_guard_ = false; }
 
-  bool IsOnBatteryPower() override { return false; }
+  base::PowerStateObserver::BatteryPowerStatus GetBatteryPowerStatus()
+      const override {
+    return base::PowerStateObserver::BatteryPowerStatus::kUnknown;
+  }
 
  private:
   // An external flag to signal as to whether or not this object is still
   // alive.
-  bool* leak_guard_;
+  raw_ptr<bool> leak_guard_;
 };
 
 TEST(VizMainImplTest, OopVizDependencyInjection) {
   VizMainImpl::ExternalDependencies external_deps;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
-      base::ThreadTaskRunnerHandle::Get();
+      base::SingleThreadTaskRunner::GetCurrentDefault();
 
   // |VizMainImpl| is supposed to use the |UkmRecorder| injected through
   // |ExternalDependencies|.
+
+  mojo::Remote<ukm::mojom::UkmRecorderFactory> factory;
+  std::ignore = factory.BindNewPipeAndPassReceiver();
   std::unique_ptr<MockUkmRecorder> mock_ukm_recorder =
-      std::make_unique<MockUkmRecorder>();
+      std::make_unique<MockUkmRecorder>(*factory);
+
   EXPECT_CALL(*mock_ukm_recorder, AddEntry);
   external_deps.ukm_recorder = std::move(mock_ukm_recorder);
 
+  MockDelegate mock_delegate;
+#if BUILDFLAG(IS_ANDROID)
   // |VizMainImpl| is supposed to use the task runner injected through
   // |ExternalDependencies|. We can check which task runner |VizMainImpl| will
   // use by looking for the task runner reported to the delegate.
-  MockDelegate mock_delegate;
   EXPECT_CALL(mock_delegate, PostCompositorThreadCreated(task_runner.get()));
   MockVizCompositorThreadRunner mock_runner(task_runner.get());
   external_deps.viz_compositor_thread_runner = &mock_runner;
+#endif
 
   bool mock_source_is_alive = false;
   external_deps.power_monitor_source =
       std::make_unique<MockPowerMonitorSource>(&mock_source_is_alive);
   ASSERT_TRUE(mock_source_is_alive);
 
-  auto gpu_init = std::make_unique<gpu::GpuInit>();
+  auto gpu_init = gpu::GpuInit::Create();
   // Need to force GpuInit to request an OOP viz; if |GpuInit| stops owning the
   // |GPUInfo|, this const_cast may break.
   const_cast<gpu::GPUInfo&>(gpu_init->gpu_info()).in_process_gpu = false;
@@ -127,8 +138,9 @@ TEST(VizMainImplTest, OopVizDependencyInjection) {
   builder.Record(recorder);
 
   // Need to shutdown the |PowerMonitor| infrastructure.
-  EXPECT_TRUE(base::PowerMonitor::IsInitialized());
-  base::PowerMonitor::ShutdownForTesting();
+  auto* power_monitor = base::PowerMonitor::GetInstance();
+  EXPECT_TRUE(power_monitor->IsInitialized());
+  power_monitor->ShutdownForTesting();
   // Double-check that we're not leaking the MockPowerMonitorSource
   // instance.
   ASSERT_FALSE(mock_source_is_alive);

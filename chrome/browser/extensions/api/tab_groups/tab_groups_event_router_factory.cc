@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include "base/no_destructor.h"
 #include "chrome/browser/extensions/api/tab_groups/tab_groups_event_router.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/event_router_factory.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -27,23 +28,31 @@ TabGroupsEventRouterFactory* TabGroupsEventRouterFactory::GetInstance() {
 }
 
 TabGroupsEventRouterFactory::TabGroupsEventRouterFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "TabGroupsEventRouter",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              .WithGuest(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
+              .Build()) {
   DependsOn(EventRouterFactory::GetInstance());
 }
 
-KeyedService* TabGroupsEventRouterFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+TabGroupsEventRouterFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new TabGroupsEventRouter(context);
-}
-
-content::BrowserContext* TabGroupsEventRouterFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+  return std::make_unique<TabGroupsEventRouter>(context);
 }
 
 bool TabGroupsEventRouterFactory::ServiceIsCreatedWithBrowserContext() const {
+  return true;
+}
+
+bool TabGroupsEventRouterFactory::ServiceIsNULLWhileTesting() const {
+  // The event router adds tab strip observers on construction, which some
+  // tests cannot tolerate.
   return true;
 }
 

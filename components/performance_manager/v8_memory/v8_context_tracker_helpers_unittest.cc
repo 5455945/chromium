@@ -1,13 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/performance_manager/v8_memory/v8_context_tracker_helpers.h"
 
-#include "components/performance_manager/execution_context/execution_context_registry_impl.h"
+#include "base/memory/raw_ptr.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/worker_node_impl.h"
 #include "components/performance_manager/public/execution_context/execution_context.h"
+#include "components/performance_manager/public/execution_context/execution_context_registry.h"
 #include "components/performance_manager/public/mojom/v8_contexts.mojom.h"
 #include "components/performance_manager/test_support/graph_test_harness.h"
 #include "components/performance_manager/test_support/mock_graphs.h"
@@ -29,31 +30,18 @@ class V8ContextTrackerHelpersTest : public GraphTestHarness {
   ~V8ContextTrackerHelpersTest() override = default;
 
   void OnGraphCreated(GraphImpl* graph_impl) override {
-    registry = graph_impl->PassToGraph(
-        std::make_unique<execution_context::ExecutionContextRegistryImpl>());
+    registry =
+        execution_context::ExecutionContextRegistry::GetFromGraph(graph());
     mock_graph =
         std::make_unique<MockSinglePageWithMultipleProcessesGraph>(graph());
   }
 
-  execution_context::ExecutionContextRegistry* registry = nullptr;
+  raw_ptr<execution_context::ExecutionContextRegistry> registry = nullptr;
   std::unique_ptr<MockSinglePageWithMultipleProcessesGraph> mock_graph;
   mojom::IframeAttributionData fake_iframe_attribution_data;
 };
 
 }  // namespace
-
-TEST_F(V8ContextTrackerHelpersTest, ToExecutionContextToken) {
-  blink::DedicatedWorkerToken dedicated;
-  blink::ServiceWorkerToken service;
-  blink::SharedWorkerToken shared;
-
-  EXPECT_EQ(blink::ExecutionContextToken(dedicated),
-            ToExecutionContextToken(blink::WorkerToken(dedicated)));
-  EXPECT_EQ(blink::ExecutionContextToken(service),
-            ToExecutionContextToken(blink::WorkerToken(service)));
-  EXPECT_EQ(blink::ExecutionContextToken(shared),
-            ToExecutionContextToken(blink::WorkerToken(shared)));
-}
 
 TEST_F(V8ContextTrackerHelpersTest, HasCrossProcessParent) {
   // Fails for a main-frame.
@@ -65,7 +53,7 @@ TEST_F(V8ContextTrackerHelpersTest, HasCrossProcessParent) {
   // Fails for a same-process child frame.
   TestNodeWrapper<FrameNodeImpl> child_frame(graph()->CreateFrameNodeAutoId(
       mock_graph->process.get(), mock_graph->page.get(),
-      mock_graph->frame.get(), 4));
+      mock_graph->frame.get()));
   EXPECT_FALSE(HasCrossProcessParent(child_frame.get()));
 }
 
@@ -107,12 +95,12 @@ TEST_F(V8ContextTrackerHelpersTest, GetExecutionContext) {
 TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionMainWorld) {
   TestNodeWrapper<FrameNodeImpl> child_frame(graph()->CreateFrameNodeAutoId(
       mock_graph->process.get(), mock_graph->page.get(),
-      mock_graph->frame.get(), 4));
+      mock_graph->frame.get()));
 
   // A valid description of a main frame.
   auto desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-      /* world_name */ absl::nullopt, mock_graph->frame->frame_token());
+      /* world_name */ std::nullopt, mock_graph->frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -121,7 +109,7 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionMainWorld) {
   // A valid description of a cross-process child frame.
   desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-      /* world_name */ absl::nullopt, mock_graph->child_frame->frame_token());
+      /* world_name */ std::nullopt, mock_graph->child_frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -130,7 +118,7 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionMainWorld) {
   // A valid description of a same-process child frame.
   desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-      /* world_name */ absl::nullopt, child_frame->frame_token());
+      /* world_name */ std::nullopt, child_frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(true,
@@ -141,41 +129,41 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionMainWorld) {
   // IframeAttributionData should accompany the V8ContextDescription.
   desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-      /* world_name */ absl::nullopt, blink::LocalFrameToken());
-  EXPECT_EQ(absl::nullopt,
+      /* world_name */ std::nullopt, blink::LocalFrameToken());
+  EXPECT_EQ(std::nullopt,
             ExpectIframeAttributionDataForV8ContextDescription(desc, graph()));
 
   // A main-world should not have a world name.
   EXPECT_EQ(V8ContextDescriptionStatus::kUnexpectedWorldName,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-                kWorldName, mock_graph->frame->frame_token())));
+                kWorldName, mock_graph->frame->GetFrameToken())));
 
   // A main world must have an |execution_context_token|.
   EXPECT_EQ(V8ContextDescriptionStatus::kMissingExecutionContextToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-                /* world_name */ absl::nullopt,
-                /* execution_context_token */ absl::nullopt)));
+                /* world_name */ std::nullopt,
+                /* execution_context_token */ std::nullopt)));
 
   // A main world must have an blink::LocalFrameToken.
   blink::ExecutionContextToken worker_token((blink::SharedWorkerToken()));
   EXPECT_EQ(V8ContextDescriptionStatus::kMissingLocalFrameToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kMain,
-                /* world_name */ absl::nullopt, worker_token)));
+                /* world_name */ std::nullopt, worker_token)));
 }
 
 TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionWorkerWorld) {
   blink::DedicatedWorkerToken worker_token;
   auto worker = TestNodeWrapper<WorkerNodeImpl>::Create(
       graph(), WorkerNode::WorkerType::kDedicated, mock_graph->process.get(),
-      "browser_context", worker_token);
+      base::UnguessableToken(), worker_token);
 
   // A valid worker description.
   auto desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kWorkerOrWorklet,
-      /* world_name */ absl::nullopt, worker_token);
+      /* world_name */ std::nullopt, worker_token);
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -193,15 +181,50 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionWorkerWorld) {
       V8ContextDescriptionStatus::kMissingExecutionContextToken,
       ValidateV8ContextDescription(mojom::V8ContextDescription(
           blink::V8ContextToken(), mojom::V8ContextWorldType::kWorkerOrWorklet,
-          /* world_name */ absl::nullopt,
-          /* execution_context_token */ absl::nullopt)));
+          /* world_name */ std::nullopt,
+          /* execution_context_token */ std::nullopt)));
 
   // A worker must have a valid worker token, not a LocalFrameToken.
   EXPECT_EQ(
       V8ContextDescriptionStatus::kUnexpectedLocalFrameToken,
       ValidateV8ContextDescription(mojom::V8ContextDescription(
           blink::V8ContextToken(), mojom::V8ContextWorldType::kWorkerOrWorklet,
-          /* world_name */ absl::nullopt, blink::LocalFrameToken())));
+          /* world_name */ std::nullopt, blink::LocalFrameToken())));
+}
+
+TEST_F(V8ContextTrackerHelpersTest,
+       ValidateV8ContextDescriptionShadowRealmWorld) {
+  // A valid shadow realm description.
+  blink::ShadowRealmToken shadow_realm_token;
+  auto desc = mojom::V8ContextDescription(
+      blink::V8ContextToken(), mojom::V8ContextWorldType::kShadowRealm,
+      /* world_name */ std::nullopt, shadow_realm_token);
+  EXPECT_EQ(V8ContextDescriptionStatus::kValid,
+            ValidateV8ContextDescription(desc));
+  EXPECT_EQ(false,
+            ExpectIframeAttributionDataForV8ContextDescription(desc, graph()));
+
+  // A shadow realm should not have a world name.
+  EXPECT_EQ(
+      V8ContextDescriptionStatus::kUnexpectedWorldName,
+      ValidateV8ContextDescription(mojom::V8ContextDescription(
+          blink::V8ContextToken(), mojom::V8ContextWorldType::kShadowRealm,
+          kWorldName, shadow_realm_token)));
+
+  // A shadow realm must have an |execution_context_token|.
+  EXPECT_EQ(
+      V8ContextDescriptionStatus::kMissingExecutionContextToken,
+      ValidateV8ContextDescription(mojom::V8ContextDescription(
+          blink::V8ContextToken(), mojom::V8ContextWorldType::kShadowRealm,
+          /* world_name */ std::nullopt,
+          /* execution_context_token */ std::nullopt)));
+
+  // A shadow realm must have a valid shadow realm token.
+  EXPECT_EQ(
+      V8ContextDescriptionStatus::kMissingShadowRealmToken,
+      ValidateV8ContextDescription(mojom::V8ContextDescription(
+          blink::V8ContextToken(), mojom::V8ContextWorldType::kShadowRealm,
+          /* world_name */ std::nullopt, blink::LocalFrameToken())));
 }
 
 TEST_F(V8ContextTrackerHelpersTest,
@@ -209,7 +232,7 @@ TEST_F(V8ContextTrackerHelpersTest,
   // A valid extension description.
   auto desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kExtension,
-      kValidExtensionWorldName, mock_graph->frame->frame_token());
+      kValidExtensionWorldName, mock_graph->frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -220,20 +243,21 @@ TEST_F(V8ContextTrackerHelpersTest,
       V8ContextDescriptionStatus::kMissingWorldName,
       ValidateV8ContextDescription(mojom::V8ContextDescription(
           blink::V8ContextToken(), mojom::V8ContextWorldType::kExtension,
-          /* world_name */ absl::nullopt, mock_graph->frame->frame_token())));
+          /* world_name */ std::nullopt, mock_graph->frame->GetFrameToken())));
 
   // An invalid extension name should fail.
-  EXPECT_EQ(V8ContextDescriptionStatus::kInvalidExtensionWorldName,
-            ValidateV8ContextDescription(mojom::V8ContextDescription(
-                blink::V8ContextToken(), mojom::V8ContextWorldType::kExtension,
-                kInvalidExtensionWorldName, mock_graph->frame->frame_token())));
+  EXPECT_EQ(
+      V8ContextDescriptionStatus::kInvalidExtensionWorldName,
+      ValidateV8ContextDescription(mojom::V8ContextDescription(
+          blink::V8ContextToken(), mojom::V8ContextWorldType::kExtension,
+          kInvalidExtensionWorldName, mock_graph->frame->GetFrameToken())));
 
   // An extension must have an |execution_context_token|.
   EXPECT_EQ(V8ContextDescriptionStatus::kMissingExecutionContextToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kExtension,
                 kValidExtensionWorldName,
-                /* execution_context_token */ absl::nullopt)));
+                /* execution_context_token */ std::nullopt)));
 
   // An extension can't inject into a worklet.
   EXPECT_EQ(V8ContextDescriptionStatus::kUnexpectedWorkletToken,
@@ -246,7 +270,7 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionIsolatedWorld) {
   // An isolated world may or may not have a |world_name|.
   auto desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kIsolated,
-      /* world_name */ absl::nullopt, mock_graph->frame->frame_token());
+      /* world_name */ std::nullopt, mock_graph->frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -254,7 +278,7 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionIsolatedWorld) {
 
   desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kIsolated, kWorldName,
-      mock_graph->frame->frame_token());
+      mock_graph->frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -264,14 +288,14 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionIsolatedWorld) {
   EXPECT_EQ(V8ContextDescriptionStatus::kMissingExecutionContextToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kIsolated,
-                /* world_name */ absl::nullopt,
-                /* execution_context_token */ absl::nullopt)));
+                /* world_name */ std::nullopt,
+                /* execution_context_token */ std::nullopt)));
 
   // An isolated world can not inject into a worklet.
   EXPECT_EQ(V8ContextDescriptionStatus::kUnexpectedWorkletToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kIsolated,
-                /* world_name */ absl::nullopt, blink::AudioWorkletToken())));
+                /* world_name */ std::nullopt, blink::AudioWorkletToken())));
 }
 
 TEST_F(V8ContextTrackerHelpersTest,
@@ -279,7 +303,7 @@ TEST_F(V8ContextTrackerHelpersTest,
   // A valid inspector world.
   auto desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kInspector,
-      /* world_name */ absl::nullopt, mock_graph->frame->frame_token());
+      /* world_name */ std::nullopt, mock_graph->frame->GetFrameToken());
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -289,22 +313,22 @@ TEST_F(V8ContextTrackerHelpersTest,
   EXPECT_EQ(V8ContextDescriptionStatus::kMissingExecutionContextToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kInspector,
-                /* world_name */ absl::nullopt,
-                /* execution_context_token */ absl::nullopt)));
+                /* world_name */ std::nullopt,
+                /* execution_context_token */ std::nullopt)));
 
   // An inspector world can not inject into a worklet.
   EXPECT_EQ(V8ContextDescriptionStatus::kUnexpectedWorkletToken,
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kInspector,
-                /* world_name */ absl::nullopt, blink::AudioWorkletToken())));
+                /* world_name */ std::nullopt, blink::AudioWorkletToken())));
 }
 
 TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionRegExpWorld) {
   // A valid regexp world.
   auto desc = mojom::V8ContextDescription(
       blink::V8ContextToken(), mojom::V8ContextWorldType::kRegExp,
-      /* world_name */ absl::nullopt,
-      /* execution_context_token */ absl::nullopt);
+      /* world_name */ std::nullopt,
+      /* execution_context_token */ std::nullopt);
   EXPECT_EQ(V8ContextDescriptionStatus::kValid,
             ValidateV8ContextDescription(desc));
   EXPECT_EQ(false,
@@ -315,14 +339,14 @@ TEST_F(V8ContextTrackerHelpersTest, ValidateV8ContextDescriptionRegExpWorld) {
             ValidateV8ContextDescription(mojom::V8ContextDescription(
                 blink::V8ContextToken(), mojom::V8ContextWorldType::kRegExp,
                 kWorldName,
-                /* execution_context_token */ absl::nullopt)));
+                /* execution_context_token */ std::nullopt)));
 
   // A regexp world must not have an |execution_context_token|.
   EXPECT_EQ(
       V8ContextDescriptionStatus::kUnexpectedExecutionContextToken,
       ValidateV8ContextDescription(mojom::V8ContextDescription(
           blink::V8ContextToken(), mojom::V8ContextWorldType::kRegExp,
-          /* world_name */ absl::nullopt, mock_graph->frame->frame_token())));
+          /* world_name */ std::nullopt, mock_graph->frame->GetFrameToken())));
 }
 
 }  // namespace v8_memory

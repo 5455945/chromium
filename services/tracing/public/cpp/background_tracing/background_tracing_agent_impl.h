@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 #define SERVICES_TRACING_PUBLIC_CPP_BACKGROUND_TRACING_BACKGROUND_TRACING_AGENT_IMPL_H_
 
 #include <stdint.h>
+
 #include <string>
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/time/time.h"
+#include "base/trace_event/named_trigger.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/tracing/public/mojom/background_tracing_agent.mojom.h"
 
@@ -20,42 +21,53 @@ namespace tracing {
 
 // This class sends and receives trace messages on child processes.
 class COMPONENT_EXPORT(BACKGROUND_TRACING_CPP) BackgroundTracingAgentImpl
-    : public mojom::BackgroundTracingAgent {
+    : public mojom::BackgroundTracingAgent,
+      public base::trace_event::NamedTriggerManager {
  public:
   explicit BackgroundTracingAgentImpl(
       mojo::PendingRemote<mojom::BackgroundTracingAgentClient> client);
+
+  BackgroundTracingAgentImpl(const BackgroundTracingAgentImpl&) = delete;
+  BackgroundTracingAgentImpl& operator=(const BackgroundTracingAgentImpl&) =
+      delete;
+
   ~BackgroundTracingAgentImpl() override;
 
   // mojom::BackgroundTracingAgent methods:
-  void SetUMACallback(const std::string& histogram_name,
+  void SetUMACallback(tracing::mojom::BackgroundTracingRulePtr rule,
+                      const std::string& histogram_name,
                       int32_t histogram_lower_value,
-                      int32_t histogram_upper_value,
-                      bool repeat) override;
-  void ClearUMACallback(const std::string& histogram_name) override;
+                      int32_t histogram_upper_value) override;
+  void ClearUMACallback(tracing::mojom::BackgroundTracingRulePtr rule) override;
+
+  // base::trace_event::NamedTriggerManager
+  bool DoEmitNamedTrigger(const std::string& trigger_name,
+                          std::optional<int32_t> value,
+                          uint64_t flow_id) override;
 
  private:
-  static void OnHistogramChanged(
-      base::WeakPtr<BackgroundTracingAgentImpl> weak_self,
-      base::Histogram::Sample reference_lower_value,
-      base::Histogram::Sample reference_upper_value,
-      bool repeat,
-      const char* histogram_name,
-      uint64_t name_hash,
-      base::Histogram::Sample actual_value);
-  void SendTriggerMessage(const std::string& histogram_name);
-  void SendAbortBackgroundTracingMessage();
+  void OnHistogramChanged(const std::string& rule_id,
+                          base::Histogram::Sample32 reference_lower_value,
+                          base::Histogram::Sample32 reference_upper_value,
+                          std::optional<uint64_t> event_id,
+                          std::string_view histogram_name,
+                          uint64_t name_hash,
+                          base::Histogram::Sample32 actual_value);
+
+  void DoEmitNamedTriggerImpl(const std::string& trigger_name,
+                              std::optional<int32_t> value,
+                              uint64_t flow_id);
 
   mojo::Remote<mojom::BackgroundTracingAgentClient> client_;
   base::Time histogram_last_changed_;
   // Tracks histogram names and corresponding registered callbacks.
   std::map<
-      std::string,
+      std::string /*=rule_id*/,
       std::unique_ptr<base::StatisticsRecorder::ScopedHistogramSampleObserver>>
       histogram_callback_map_;
 
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::WeakPtrFactory<BackgroundTracingAgentImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BackgroundTracingAgentImpl);
 };
 
 }  // namespace tracing

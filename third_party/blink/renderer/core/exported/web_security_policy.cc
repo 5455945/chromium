@@ -30,7 +30,9 @@
 
 #include "third_party/blink/public/web/web_security_policy.h"
 
+#include "base/types/pass_key.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
+#include "third_party/blink/public/common/scheme_registry.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -71,6 +73,12 @@ void WebSecurityPolicy::
         const WebString& scheme) {
   SchemeRegistry::RegisterURLSchemeAsFirstPartyWhenTopLevelEmbeddingSecure(
       scheme);
+}
+
+void WebSecurityPolicy::RegisterURLAsFirstPartyWhenTopLevelEmbeddingSecure(
+    const WebURL& url) {
+  SchemeRegistry::RegisterURLAsFirstPartyWhenTopLevelEmbeddingSecure(
+      url, base::PassKey<WebSecurityPolicy>());
 }
 
 void WebSecurityPolicy::RegisterURLSchemeAsAllowingSharedArrayBuffers(
@@ -145,11 +153,31 @@ void WebSecurityPolicy::RegisterURLSchemeAsError(const WebString& scheme) {
 }
 
 void WebSecurityPolicy::RegisterURLSchemeAsExtension(const WebString& scheme) {
-  SchemeRegistry::RegisterURLSchemeAsExtension(scheme);
+  CommonSchemeRegistry::RegisterURLSchemeAsExtension(scheme.Ascii());
+}
+
+void WebSecurityPolicy::RegisterURLSchemeAsIsolatedApp(
+    const WebString& scheme) {
+  CommonSchemeRegistry::RegisterURLSchemeAsIsolatedApp(scheme.Ascii());
 }
 
 void WebSecurityPolicy::RegisterURLSchemeAsWebUI(const WebString& scheme) {
   SchemeRegistry::RegisterURLSchemeAsWebUI(scheme);
+}
+
+void WebSecurityPolicy::RegisterURLSchemeAsCodeCacheWithHashing(
+    const WebString& scheme) {
+  SchemeRegistry::RegisterURLSchemeAsCodeCacheWithHashing(scheme);
+}
+
+void WebSecurityPolicy::RegisterURLSchemeAsWebUIBundledBytecode(
+    const WebString& scheme) {
+  SchemeRegistry::RegisterURLSchemeAsWebUIBundledBytecode(scheme);
+}
+
+void WebSecurityPolicy::RegisterURLSchemeAsDirectLaunch(
+    const WebString& scheme) {
+  SchemeRegistry::RegisterURLSchemeAsDirectLaunch(scheme);
 }
 
 }  // namespace blink

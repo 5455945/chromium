@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,18 +22,17 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/input/input_device_capabilities.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/map_coordinates_flags.h"
 #include "third_party/blink/renderer/core/pointer_type_names.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
-#include "third_party/blink/renderer/platform/geometry/int_point.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -57,25 +56,23 @@ void PopulateMouseEventInitCoordinates(
     LayoutObject* layout_object = element->GetLayoutObject();
     PhysicalOffset center = layout_box->PhysicalBorderBoxRect().Center();
     PhysicalOffset root_frame_center = layout_object->LocalToAncestorPoint(
-        center, nullptr, MapCoordinatesMode::kTraverseDocumentBoundaries);
+        center, nullptr, {MapCoordinatesMode::kTraverseDocumentBoundaries});
     PhysicalOffset frame_center =
         dom_window->GetFrame()->View()->ConvertFromRootFrame(root_frame_center);
-    IntPoint frame_center_point = RoundedIntPoint(frame_center);
+    gfx::Point frame_center_point = ToRoundedPoint(frame_center);
     // We are only interested in the top left corner.
-    IntRect center_rect(frame_center_point.X(), frame_center_point.Y(), 1, 1);
-    IntPoint screen_center = dom_window->GetFrame()
-                                 ->View()
-                                 ->FrameToScreen(center_rect)
-                                 .MinXMinYCorner();
+    gfx::Rect center_rect(frame_center_point.x(), frame_center_point.y(), 1, 1);
+    gfx::Point screen_center =
+        dom_window->GetFrame()->View()->FrameToScreen(center_rect).origin();
 
     initializer->setScreenX(
-        AdjustForAbsoluteZoom::AdjustInt(screen_center.X(), layout_object));
+        AdjustForAbsoluteZoom::AdjustInt(screen_center.x(), layout_object));
     initializer->setScreenY(
-        AdjustForAbsoluteZoom::AdjustInt(screen_center.Y(), layout_object));
+        AdjustForAbsoluteZoom::AdjustInt(screen_center.y(), layout_object));
     initializer->setClientX(AdjustForAbsoluteZoom::AdjustInt(
-        frame_center_point.X(), layout_object));
+        frame_center_point.x(), layout_object));
     initializer->setClientY(AdjustForAbsoluteZoom::AdjustInt(
-        frame_center_point.Y(), layout_object));
+        frame_center_point.y(), layout_object));
   }
 }
 
@@ -94,8 +91,8 @@ void PopulateSimulatedMouseEventInit(
   PopulateMouseEventInitCoordinates(node, initializer, creation_scope);
   LocalDOMWindow* dom_window = node.GetDocument().domWindow();
   if (const auto* mouse_event = DynamicTo<MouseEvent>(underlying_event)) {
-    initializer->setScreenX(mouse_event->screen_location_.X());
-    initializer->setScreenY(mouse_event->screen_location_.Y());
+    initializer->setScreenX(mouse_event->screenX());
+    initializer->setScreenY(mouse_event->screenY());
     initializer->setSourceCapabilities(
         dom_window
             ? dom_window->GetInputDeviceCapabilities()->FiresTouchEvents(false)
@@ -132,33 +129,46 @@ MouseEvent* CreateMouseOrPointerEvent(
                                   ? underlying_event->PlatformTimeStamp()
                                   : base::TimeTicks::Now();
   MouseEvent::SyntheticEventType synthetic_type = MouseEvent::kPositionless;
-  if (const auto* mouse_event = DynamicTo<MouseEvent>(underlying_event)) {
+  if (IsA<MouseEvent>(underlying_event)) {
     synthetic_type = MouseEvent::kRealOrIndistinguishable;
   }
-  if (creation_scope == SimulatedClickCreationScope::kFromAccessibility &&
-      (event_type == event_type_names::kClick ||
-       event_type == event_type_names::kPointerdown ||
-       event_type == event_type_names::kMousedown)) {
-    // Set primary button pressed.
-    initializer->setButton(
-        static_cast<int>(WebPointerProperties::Button::kLeft));
-    initializer->setButtons(MouseEvent::WebInputEventModifiersToButtons(
-        WebInputEvent::Modifiers::kLeftButtonDown));
-  }
-  if (creation_scope == SimulatedClickCreationScope::kFromAccessibility &&
-      event_type == event_type_names::kClick) {
-    // Set number of clicks for click event.
-    initializer->setDetail(1);
+  if (creation_scope == SimulatedClickCreationScope::kFromAccessibility) {
+    if (event_type == event_type_names::kClick ||
+        event_type == event_type_names::kPointerdown ||
+        event_type == event_type_names::kMousedown) {
+      // Set primary button pressed.
+      initializer->setButton(
+          static_cast<int>(WebPointerProperties::Button::kLeft));
+      initializer->setButtons(MouseEvent::WebInputEventModifiersToButtons(
+          WebInputEvent::Modifiers::kLeftButtonDown));
+    }
+    if (event_type == event_type_names::kPointerup ||
+        event_type == event_type_names::kMouseup) {
+      // Set primary button pressed.
+      initializer->setButton(
+          static_cast<int>(WebPointerProperties::Button::kLeft));
+    }
+    if (event_type == event_type_names::kClick) {
+      // Set number of clicks for click event.
+      initializer->setDetail(1);
+    }
   }
 
   MouseEvent* created_event;
   if (event_class_type == EventClassType::kPointer) {
+    initializer->setPointerId(PointerEventFactory::kReservedNonPointerId);
     if (creation_scope == SimulatedClickCreationScope::kFromAccessibility) {
       initializer->setPointerId(PointerEventFactory::kMouseId);
       initializer->setPointerType(pointer_type_names::kMouse);
       initializer->setIsPrimary(true);
-    } else {
-      initializer->setPointerId(PointerEventFactory::kReservedNonPointerId);
+    } else if (creation_scope == SimulatedClickCreationScope::kFromUserAgent) {
+      if (auto* pointer_underlying_event =
+              DynamicTo<PointerEvent>(underlying_event)) {
+        initializer->setPointerId(pointer_underlying_event->pointerId());
+        initializer->setPointerType(pointer_underlying_event->pointerType());
+        initializer->setIsPrimary(pointer_underlying_event->isPrimary());
+        initializer->setDetail(pointer_underlying_event->detail());
+      }
     }
     created_event = MakeGarbageCollected<PointerEvent>(
         event_type, initializer, timestamp, synthetic_type);
@@ -168,13 +178,14 @@ MouseEvent* CreateMouseOrPointerEvent(
   }
 
   created_event->SetTrusted(
-      creation_scope == SimulatedClickCreationScope::kFromUserAgent ||
-      creation_scope == SimulatedClickCreationScope::kFromAccessibility);
+      creation_scope == SimulatedClickCreationScope::kFromAccessibility ||
+      (creation_scope == SimulatedClickCreationScope::kFromUserAgent &&
+       (!underlying_event || underlying_event->isTrusted())));
   created_event->SetUnderlyingEvent(underlying_event);
   if (synthetic_type == MouseEvent::kRealOrIndistinguishable) {
     auto* mouse_event = To<MouseEvent>(created_event->UnderlyingEvent());
-    created_event->InitCoordinates(mouse_event->client_location_.X(),
-                                   mouse_event->client_location_.Y());
+    created_event->InitCoordinates(mouse_event->clientX(),
+                                   mouse_event->clientY());
   }
 
   return created_event;
@@ -194,8 +205,7 @@ Event* SimulatedEventUtil::CreateEvent(
          event_type == event_type_names::kPointerup);
 
   EventClassType event_class_type = EventClassType::kMouse;
-  if ((RuntimeEnabledFeatures::ClickPointerEventEnabled() &&
-       event_type == event_type_names::kClick) ||
+  if (event_type == event_type_names::kClick ||
       event_type == event_type_names::kPointerdown ||
       event_type == event_type_names::kPointerup) {
     event_class_type = EventClassType::kPointer;

@@ -1,38 +1,41 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/extensions/chrome_app_icon.h"
 
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "ash/public/cpp/app_list/app_list_config.h"
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/chrome_app_icon.h"
 #include "chrome/browser/extensions/chrome_app_icon_delegate.h"
 #include "chrome/browser/extensions/chrome_app_icon_loader.h"
 #include "chrome/browser/extensions/chrome_app_icon_service.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_icon_loader_delegate.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/app_icon_loader/app_icon_loader_delegate.h"
+#include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/common/constants.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/public/cpp/app_list/app_list_config.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_test.h"
 #include "chrome/browser/ash/arc/arc_util.h"
-#include "chrome/browser/chromeos/extensions/gfx_utils.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_test.h"
-#include "components/arc/test/fake_app_instance.h"
+#include "chrome/browser/ash/extensions/gfx_utils.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace extensions {
 
@@ -59,6 +62,9 @@ class TestAppIcon : public ChromeAppIconDelegate {
         ChromeAppIconService::Get(context)->CreateIcon(this, app_id, size);
     DCHECK(app_icon_);
   }
+
+  TestAppIcon(const TestAppIcon&) = delete;
+  TestAppIcon& operator=(const TestAppIcon&) = delete;
 
   ~TestAppIcon() override = default;
 
@@ -97,19 +103,24 @@ class TestAppIcon : public ChromeAppIconDelegate {
   size_t icon_update_count_expected_ = 0;
 
   base::OnceClosure icon_updated_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestAppIcon);
 };
 
 // Receives icon image updates from ChromeAppIconLoader.
 class TestAppIconLoader : public AppIconLoaderDelegate {
  public:
   TestAppIconLoader() = default;
+
+  TestAppIconLoader(const TestAppIconLoader&) = delete;
+  TestAppIconLoader& operator=(const TestAppIconLoader&) = delete;
+
   ~TestAppIconLoader() override = default;
 
   // AppIconLoaderDelegate:
-  void OnAppImageUpdated(const std::string& app_id,
-                         const gfx::ImageSkia& image) override {
+  void OnAppImageUpdated(
+      const std::string& app_id,
+      const gfx::ImageSkia& image,
+      bool is_placeholder_icon,
+      const std::optional<gfx::ImageSkia>& badge_image) override {
     image_skia_ = image;
   }
 
@@ -118,8 +129,6 @@ class TestAppIconLoader : public AppIconLoaderDelegate {
 
  private:
   gfx::ImageSkia image_skia_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestAppIconLoader);
 };
 
 // Returns true if provided |image| consists from only empty pixels.
@@ -162,7 +171,7 @@ bool AreEqual(const gfx::ImageSkia& image1, const gfx::ImageSkia& image2) {
   return gfx::test::AreImagesEqual(gfx::Image(image1), gfx::Image(image2));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Returns true if |res| image is the |src| image with badge identified by
 // |badge_type| resource. If |grayscale| is true applies HSL shift for the
 // comparison.
@@ -188,22 +197,22 @@ bool IsBadgeApplied(const gfx::ImageSkia& src,
 class ChromeAppIconTest : public ExtensionServiceTestBase {
  public:
   ChromeAppIconTest() = default;
+
+  ChromeAppIconTest(const ChromeAppIconTest&) = delete;
+  ChromeAppIconTest& operator=(const ChromeAppIconTest&) = delete;
+
   ~ChromeAppIconTest() override = default;
 
   // ExtensionServiceTestBase:
   void SetUp() override {
     ExtensionServiceTestBase::SetUp();
 
-    const base::FilePath source_install_dir =
-        data_dir().AppendASCII("app_list").AppendASCII("Extensions");
-    const base::FilePath pref_path =
-        source_install_dir.DirName().Append(chrome::kPreferencesFilename);
-    InitializeInstalledExtensionService(pref_path, source_install_dir);
-    service_->Init();
+    ExtensionServiceInitParams params;
+    ASSERT_TRUE(params.ConfigureByTestDataDirectory(
+        data_dir().AppendASCII("app_list")));
+    InitializeExtensionService(std::move(params));
+    service()->Init();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ChromeAppIconTest);
 };
 
 TEST_F(ChromeAppIconTest, IconLifeCycle) {
@@ -232,11 +241,12 @@ TEST_F(ChromeAppIconTest, IconLifeCycle) {
   const gfx::ImageSkia image_before_disable = reference_icon.image_skia();
   // Disable extension. This should update icon and provide grayed image inline.
   // Note update might be sent twice in CrOS.
-  service()->DisableExtension(kTestAppId, disable_reason::DISABLE_CORRUPTED);
+  registrar()->DisableExtension(kTestAppId,
+                                {disable_reason::DISABLE_CORRUPTED});
   const size_t update_count_after_disable = reference_icon.icon_update_count();
   EXPECT_NE(2U, update_count_after_disable);
   EXPECT_FALSE(IsBlankImage(reference_icon.image_skia()));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_TRUE(IsBadgeApplied(image_before_disable, reference_icon.image_skia(),
                              ChromeAppIcon::Badge::kBlocked,
                              true /* grayscale */));
@@ -245,7 +255,7 @@ TEST_F(ChromeAppIconTest, IconLifeCycle) {
 #endif
 
   // Reenable extension. It should match previous enabled image
-  service()->EnableExtension(kTestAppId);
+  registrar()->EnableExtension(kTestAppId);
   EXPECT_NE(update_count_after_disable, reference_icon.icon_update_count());
   EXPECT_TRUE(AreEqual(reference_icon.image_skia(), image_before_disable));
 }
@@ -263,15 +273,18 @@ TEST_F(ChromeAppIconTest, IconRelease) {
   test_icon1.Reset();
 
   // Reset after service is stopped.
-  profile_.reset();
+  DeleteProfile();
+
   test_icon2.Reset();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(ChromeAppIconTest, ChromeBadging) {
-  ArcAppTest arc_test;
-  arc_test.SetUp(profile());
+  ArcAppTest arc_app_test;
+  // TODO(crbug.com/454468678): This should be called before profile is created.
+  arc_app_test.PreProfileSetUp();
+  arc_app_test.PostProfileSetUp(profile());
 
   TestAppIcon reference_icon(profile(), kTestAppId,
                              extension_misc::EXTENSION_ICON_MEDIUM);
@@ -284,11 +297,12 @@ TEST_F(ChromeAppIconTest, ChromeBadging) {
   const gfx::ImageSkia image_before_badging = reference_icon.image_skia();
 
   // Badging should be applied once package is installed.
-  std::vector<arc::mojom::AppInfo> fake_apps = arc_test.fake_apps();
-  fake_apps[0].package_name = arc_test.fake_packages()[0]->package_name;
-  arc_test.app_instance()->SendRefreshAppList(fake_apps);
-  arc_test.app_instance()->SendRefreshPackageList(
-      ArcAppTest::ClonePackages(arc_test.fake_packages()));
+  std::vector<arc::mojom::AppInfoPtr> fake_apps =
+      ArcAppTest::CloneApps(arc_app_test.fake_apps());
+  fake_apps[0]->package_name = arc_app_test.fake_packages()[0]->package_name;
+  arc_app_test.app_instance()->SendRefreshAppList(fake_apps);
+  arc_app_test.app_instance()->SendRefreshPackageList(
+      ArcAppTest::ClonePackages(arc_app_test.fake_packages()));
 
   // Expect the package list refresh to generate two icon updates - one called
   // by ArcAppListPrefs, and one called by LaunchExtensionAppUpdate.
@@ -301,10 +315,16 @@ TEST_F(ChromeAppIconTest, ChromeBadging) {
   // Opts out the Play Store. Badge should be gone and icon image is the same
   // as it was before badging.
   arc::SetArcPlayStoreEnabledForProfile(profile(), false);
-  EXPECT_EQ(3U, reference_icon.icon_update_count());
+  // Wait for the asynchronous ArcAppListPrefs::RemoveAllAppsAndPackages to be
+  // called.
+  arc_app_test.WaitForRemoveAllApps();
   EXPECT_TRUE(AreEqual(reference_icon.image_skia(), image_before_badging));
+
+  arc_app_test.PreProfileTearDown();
+  // TODO(crbug.com/454468678): This should be called after profile is deleted.
+  arc_app_test.PostProfileTearDown();
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace extensions

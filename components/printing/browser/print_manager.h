@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,15 @@
 
 #include "build/build_config.h"
 #include "components/printing/common/print.mojom.h"
+#include "content/public/browser/render_frame_host_receiver_set.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_receiver_set.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "printing/buildflags/buildflags.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #endif
 
 namespace printing {
@@ -30,7 +30,11 @@ class PrintManager : public content::WebContentsObserver,
   PrintManager& operator=(const PrintManager&) = delete;
   ~PrintManager() override;
 
-#if defined(OS_ANDROID)
+  void BindReceiver(
+      mojo::PendingAssociatedReceiver<mojom::PrintManagerHost> receiver,
+      content::RenderFrameHost* rfh);
+
+#if BUILDFLAG(IS_ANDROID)
   // TODO(timvolodine): consider introducing PrintManagerAndroid (crbug/500960)
   using PdfWritingDoneCallback =
       base::RepeatingCallback<void(int /* page count */)>;
@@ -42,9 +46,12 @@ class PrintManager : public content::WebContentsObserver,
   void DidGetPrintedPagesCount(int32_t cookie, uint32_t number_pages) override;
   void DidPrintDocument(mojom::DidPrintDocumentParamsPtr params,
                         DidPrintDocumentCallback callback) override;
+  void IsPrintingEnabled(IsPrintingEnabledCallback callback) override;
   void DidShowPrintDialog() override;
-  void ShowInvalidPrinterSettingsError() override;
-  void PrintingFailed(int32_t cookie) override;
+  void PrintingFailed(int32_t cookie,
+                      mojom::PrintFailureReason reason) override;
+
+  void ClearPrintRenderFramesForTesting();
 
  protected:
   explicit PrintManager(content::WebContents* contents);
@@ -59,7 +66,12 @@ class PrintManager : public content::WebContentsObserver,
   GetPrintRenderFrame(content::RenderFrameHost* rfh);
 
   // Returns the RenderFrameHost currently targeted by message dispatch.
-  content::RenderFrameHost* GetCurrentTargetFrame();
+  content::RenderFrameHost& CurrentTargetFrame();
+
+  content::RenderFrameHostReceiverSet<printing::mojom::PrintManagerHost>&
+  print_manager_host_receivers_for_testing() {
+    return print_manager_host_receivers_;
+  }
 
   // Terminates or cancels the print job if one was pending.
   void PrintingRenderFrameDeleted();
@@ -73,7 +85,7 @@ class PrintManager : public content::WebContentsObserver,
   int cookie() const { return cookie_; }
   void set_cookie(int cookie) { cookie_ = cookie; }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   PdfWritingDoneCallback pdf_writing_done_callback() const {
     return pdf_writing_done_callback_;
   }
@@ -86,11 +98,11 @@ class PrintManager : public content::WebContentsObserver,
   uint32_t number_pages_ = 0;  // Number of pages to print in the print job.
   int cookie_ = 0;        // The current document cookie.
 
-  // Holds WebContents associated mojo receivers.
-  content::WebContentsFrameReceiverSet<printing::mojom::PrintManagerHost>
+  // Holds RenderFrameHost-associated mojo receivers.
+  content::RenderFrameHostReceiverSet<printing::mojom::PrintManagerHost>
       print_manager_host_receivers_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Callback to execute when done writing pdf.
   PdfWritingDoneCallback pdf_writing_done_callback_;
 #endif

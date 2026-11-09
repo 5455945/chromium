@@ -1,6 +1,6 @@
-(async function(testRunner) {
-  // The number includes the frame, and the 6 JS files that it loads directly.
-  const numberOfURLs = 7;
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
+  // The number includes the frame, and the 9 JS files that it loads directly.
+  const numberOfURLs = 11;
 
   var {page, session, dp} = await testRunner.startHTML(`
       <head></head>

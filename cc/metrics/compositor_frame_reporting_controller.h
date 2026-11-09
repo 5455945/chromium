@@ -1,29 +1,42 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_METRICS_COMPOSITOR_FRAME_REPORTING_CONTROLLER_H_
 #define CC_METRICS_COMPOSITOR_FRAME_REPORTING_CONTROLLER_H_
 
+#include <array>
 #include <map>
 #include <memory>
-#include <vector>
 
+#include "base/containers/circular_deque.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "cc/cc_export.h"
 #include "cc/metrics/compositor_frame_reporter.h"
 #include "cc/metrics/event_metrics.h"
 #include "cc/metrics/frame_sequence_metrics.h"
+#include "cc/metrics/frame_sequence_tracker_collection.h"
+#include "cc/metrics/frame_sorter.h"
+#include "cc/metrics/predictor_jank_tracker.h"
+#include "cc/metrics/scroll_jank_dropped_frame_tracker.h"
+#include "cc/metrics/scroll_jank_os_reporter.h"
+#include "cc/metrics/scroll_jank_v4_processor.h"
+
+namespace base {
+class ReadOnlySharedMemoryRegion;
+}
 
 namespace viz {
-struct FrameTimingDetails;
+class FrameTimingDetails;
 }
 
 namespace cc {
-class DroppedFrameCounter;
-class UkmManager;
+class ScrollTimingBuffer;
 struct BeginMainFrameMetrics;
+struct FrameInfo;
 
 // This is used for managing simultaneous CompositorFrameReporter instances
 // in the case that the compositor has high latency. Calling one of the
@@ -37,13 +50,18 @@ class CC_EXPORT CompositorFrameReportingController {
   enum PipelineStage {
     kBeginImplFrame = 0,
     kBeginMainFrame,
+    kReadyToCommit,
     kCommit,
     kActivate,
     kNumPipelineStages
   };
 
-  CompositorFrameReportingController(bool should_report_metrics,
-                                     int layer_tree_host_id);
+  CompositorFrameReportingController(
+      bool should_report_histograms,
+      bool report_event_latency_to_custom_recorder,
+      bool should_report_scroll_timing,
+      int layer_tree_host_id,
+      bool is_trees_in_viz_client);
   virtual ~CompositorFrameReportingController();
 
   CompositorFrameReportingController(
@@ -52,7 +70,8 @@ class CC_EXPORT CompositorFrameReportingController {
       const CompositorFrameReportingController&) = delete;
 
   // Events to signal Beginning/Ending of phases.
-  virtual void WillBeginImplFrame(const viz::BeginFrameArgs& args);
+  virtual void WillBeginImplFrame(const viz::BeginFrameArgs& args,
+                                  bool will_throttle_main);
   virtual void WillBeginMainFrame(const viz::BeginFrameArgs& args);
   virtual void BeginMainFrameAborted(const viz::BeginFrameId& id,
                                      CommitEarlyOutReason reason);
@@ -62,47 +81,70 @@ class CC_EXPORT CompositorFrameReportingController {
   virtual void WillActivate();
   virtual void DidActivate();
   virtual void DidSubmitCompositorFrame(
-      uint32_t frame_token,
+      SubmitInfo& submit_info,
       const viz::BeginFrameId& current_frame_id,
-      const viz::BeginFrameId& last_activated_frame_id,
-      EventMetricsSet events_metrics,
-      bool has_missing_content);
+      const viz::BeginFrameId& last_activated_frame_id);
   virtual void DidNotProduceFrame(const viz::BeginFrameId& id,
                                   FrameSkippedReason skip_reason);
-  virtual void OnFinishImplFrame(const viz::BeginFrameId& id);
+  virtual void OnFinishImplFrame(const viz::BeginFrameId& id,
+                                 bool waiting_for_main);
   virtual void DidPresentCompositorFrame(
       uint32_t frame_token,
       const viz::FrameTimingDetails& details);
   void OnStoppedRequestingBeginFrames();
 
-  void NotifyReadyToCommit(std::unique_ptr<BeginMainFrameMetrics> details);
-
-  void SetUkmManager(UkmManager* manager);
-
-  void AddActiveTracker(FrameSequenceTrackerType type);
-  void RemoveActiveTracker(FrameSequenceTrackerType type);
-  void SetScrollingThread(FrameSequenceMetrics::ThreadType thread);
-
-  void SetThreadAffectsSmoothness(FrameSequenceMetrics::ThreadType thread_type,
-                                  bool affects_smoothness);
-  bool is_main_thread_driving_smoothness() const {
-    return is_main_thread_driving_smoothness_;
-  }
+  // Virtual to stub out CFRC in Viz for TreesInViz.
+  virtual void NotifyReadyToCommit(
+      std::unique_ptr<BeginMainFrameMetrics> details);
 
   void set_tick_clock(const base::TickClock* tick_clock) {
     DCHECK(tick_clock);
     tick_clock_ = tick_clock;
   }
 
-  std::unique_ptr<CompositorFrameReporter>* reporters() { return reporters_; }
+  std::array<std::unique_ptr<CompositorFrameReporter>,
+             PipelineStage::kNumPipelineStages>&
+  ReportersForTesting() {
+    return reporters_;
+  }
 
-  void SetDroppedFrameCounter(DroppedFrameCounter* counter) {
-    dropped_frame_counter_ = counter;
+  void SetFrameSorter(FrameSorter* frame_sorter) {
+    frame_sorter_ = frame_sorter;
+  }
+
+  void SetScrollJankOsReporter(base::WeakPtr<ScrollJankOsReporter> os_reporter);
+
+  void SetFrameSequenceTrackerCollection(
+      FrameSequenceTrackerCollection* frame_sequence_trackers) {
+    if (frame_sorter_) {
+      frame_sorter_->AddObserver(frame_sequence_trackers);
+    }
+    frame_sequence_trackers_ = frame_sequence_trackers;
+  }
+
+  void ClearFrameSequenceTrackerCollection() {
+    if (frame_sorter_ && frame_sequence_trackers_) {
+      frame_sorter_->RemoveObserver(frame_sequence_trackers_);
+    }
+    frame_sequence_trackers_ = nullptr;
   }
 
   void BeginMainFrameStarted(base::TimeTicks begin_main_frame_start_time) {
     begin_main_frame_start_time_ = begin_main_frame_start_time;
   }
+
+  void SetNeedsRasterPropertiesAnimated(bool needs_raster_properties_animated) {
+    needs_raster_properties_animated_ = needs_raster_properties_animated;
+  }
+
+  bool HasReporterAt(PipelineStage stage) const;
+
+  bool has_scroll_timing_buffer() const { return !!scroll_timing_buffer_; }
+
+  // Called once during startup; returns an invalid region when unavailable.
+  base::ReadOnlySharedMemoryRegion TakeScrollTimingBufferRegion();
+
+  void SetVisible(bool visible);
 
  protected:
   struct SubmittedCompositorFrame {
@@ -116,20 +158,24 @@ class CC_EXPORT CompositorFrameReportingController {
   };
   base::TimeTicks Now() const;
 
-  bool HasReporterAt(PipelineStage stage) const;
   bool next_activate_has_invalidation() const {
     return next_activate_has_invalidation_;
   }
 
+  void set_trees_in_viz_client_for_testing(bool new_value) {
+    is_trees_in_viz_client_ = new_value;
+  }
+
  private:
+  using SmoothThread = CompositorFrameReporter::SmoothThread;
+  using SmoothEffectDrivingThread =
+      CompositorFrameReporter::SmoothEffectDrivingThread;
+
   void AdvanceReporterStage(PipelineStage start, PipelineStage target);
   bool CanSubmitImplFrame(const viz::BeginFrameId& id) const;
   bool CanSubmitMainFrame(const viz::BeginFrameId& id) const;
   std::unique_ptr<CompositorFrameReporter> RestoreReporterAtBeginImpl(
       const viz::BeginFrameId& id);
-  CompositorFrameReporter::SmoothThread GetSmoothThread() const;
-  CompositorFrameReporter::SmoothThread GetSmoothThreadAtTime(
-      base::TimeTicks timestamp) const;
 
   // Checks whether there are reporters containing updates from the main
   // thread, and returns a pointer to that reporter (if any). Otherwise
@@ -143,62 +189,91 @@ class CC_EXPORT CompositorFrameReportingController {
   // instances should still be created for these frames. The following
   // functions accomplish this.
   void ProcessSkippedFramesIfNecessary(const viz::BeginFrameArgs& args);
-  void CreateReportersForDroppedFrames(
-      const viz::BeginFrameArgs& old_args,
-      const viz::BeginFrameArgs& new_args) const;
+  void MaybePassEventMetricsFromDroppedFrames(
+      CompositorFrameReporter& reporter,
+      uint32_t frame_token,
+      bool next_reporter_from_same_frame);
+  void StoreEventMetricsFromDroppedFrames(CompositorFrameReporter& reporter,
+                                          uint32_t frame_token);
+  void CreateReportersForDroppedFrames(const viz::BeginFrameArgs& old_args,
+                                       const viz::BeginFrameArgs& new_args);
 
   // The arg is a reference to the unique_ptr, because depending on the state
   // that reporter is in, its ownership might be pass or not.
   void SetPartialUpdateDeciderWhenWaitingOnMain(
       std::unique_ptr<CompositorFrameReporter>& reporter);
 
-  const bool should_report_metrics_;
+  // Flushes Scroll Timing after compositor idle if no unresolved frame can
+  // extend the active segment, then drains completed records.
+  void MaybeFlushAndDrainScrollTiming();
+
+  const bool should_report_histograms_;
+  const bool report_event_latency_to_custom_recorder_;  // UI LatencyData
   const int layer_tree_host_id_;
+  bool is_trees_in_viz_client_;
 
   viz::BeginFrameId last_submitted_frame_id_;
 
   bool next_activate_has_invalidation_ = false;
-  ActiveTrackers active_trackers_;
-  FrameSequenceMetrics::ThreadType scrolling_thread_ =
-      FrameSequenceMetrics::ThreadType::kUnknown;
 
-  bool is_compositor_thread_driving_smoothness_ = false;
-  bool is_main_thread_driving_smoothness_ = false;
-  // Sorted history of smooththread. Element i indicating the smooththread
-  // from timestamp of element i-1 until timestamp of element i.
-  std::map<base::TimeTicks, CompositorFrameReporter::SmoothThread>
-      smooth_thread_history_;
+  // The pointee must outlive `reporters_` and `submitted_compositor_frames_`
+  // (which also have reporters), since destroying the reporters can flush
+  // frames to it.
+  raw_ptr<FrameSorter> frame_sorter_ = nullptr;
+  raw_ptr<FrameSequenceTrackerCollection> frame_sequence_trackers_ = nullptr;
 
-  // The latency reporter passed to each CompositorFrameReporter. Owned here
-  // because it must be common among all reporters.
-  // DO NOT reorder this line and the ones below. The latency_ukm_reporter_
-  // must outlive the objects in |submitted_compositor_frames_|.
-  std::unique_ptr<LatencyUkmReporter> latency_ukm_reporter_;
+  // Must precede scroll_jank_v4_processor_, whose initialization reads it.
+  std::unique_ptr<ScrollTimingBuffer> scroll_timing_buffer_;
+  PredictorJankTracker predictor_jank_tracker_;
+  ScrollJankDroppedFrameTracker scroll_jank_dropped_frame_tracker_;
+  ScrollJankV4Processor scroll_jank_v4_processor_;
 
-  std::unique_ptr<CompositorFrameReporter>
-      reporters_[PipelineStage::kNumPipelineStages];
+  std::array<std::unique_ptr<CompositorFrameReporter>,
+             PipelineStage::kNumPipelineStages>
+      reporters_;
 
   // Mapping of frame token to pipeline reporter for submitted compositor
   // frames.
-  // DO NOT reorder this line and the one above. The latency_ukm_reporter_
-  // must outlive the objects in |submitted_compositor_frames_|.
   base::circular_deque<SubmittedCompositorFrame> submitted_compositor_frames_;
 
-  // The latest frame that was started.
-  viz::BeginFrameArgs previous_frame_;
+  // Contains information about the latest frame that was started, and the state
+  // during that frame. This is used to process skipped frames, as well as
+  // making sure a CompositorFrameReporter object for a delayed main-frame is
+  // created with the correct state.
+  struct {
+    viz::BeginFrameArgs args;
+    FrameInfo::SmoothEffectDrivingThread scrolling_thread =
+        FrameInfo::SmoothEffectDrivingThread::kUnknown;
+    ActiveTrackers active_trackers;
+    SmoothThread smooth_thread = SmoothThread::kSmoothNone;
+  } last_started_compositor_frame_;
 
   base::TimeTicks begin_main_frame_start_time_;
 
-  const base::TickClock* tick_clock_ = base::DefaultTickClock::GetInstance();
-
-  DroppedFrameCounter* dropped_frame_counter_ = nullptr;
+  raw_ptr<const base::TickClock> tick_clock_ =
+      base::DefaultTickClock::GetInstance();
 
   // When a frame with events metrics fails to be presented, its events metrics
   // will be added to this map. The first following presented frame will get
-  // these metrics and report them.
-  std::map<viz::BeginFrameId, EventMetrics::List>
-      events_metrics_from_dropped_frames_;
+  // these metrics and report them. The key of map is submission frame token.
+  // Frame token is chosen over BeginFrameId as key due to the fact that frames
+  // can drop while a long running main still eventually presents, in which
+  // cases its more appropriate to check against frame_token instead of
+  // BeginFrameId.
+  std::map<uint32_t, EventMetricsSet> events_metrics_from_dropped_frames_;
+
+  // Reporting controller needs to track transition of the page from invisible
+  // to visible in order to discard EventsMetrics impacted by duration of page
+  // being invisible
+  bool visible_ = true;
+  bool waiting_for_did_present_after_visible_ = false;
+  bool pending_scroll_timing_flush_ = false;
+
+  // Indicates whether or not we expect the next frame to contain an animation
+  // which requires impl invalidation.
+  bool needs_raster_properties_animated_ = false;
 };
+
 }  // namespace cc
 
 #endif  // CC_METRICS_COMPOSITOR_FRAME_REPORTING_CONTROLLER_H_

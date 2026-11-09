@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,7 @@
 #include <stdint.h>
 
 #include <string>
-#include <vector>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "ui/base/page_transition_types.h"
@@ -27,8 +25,8 @@ namespace test_data {
 extern const int kIndex;
 extern const int kUniqueID;
 extern const int kReferrerPolicy;
-extern const std::u16string kTitle;
-extern const std::string kEncodedPageState;
+inline constexpr char16_t kTitle[] = u"title";
+inline constexpr char kEncodedPageState[] = "page state";
 extern const ui::PageTransition kTransitionType;
 extern const bool kHasPostData;
 extern const int64_t kPostID;
@@ -36,10 +34,10 @@ extern const bool kIsOverridingUserAgent;
 extern const base::Time kTimestamp;
 extern const int kHttpStatusCode;
 extern const SerializedNavigationEntry::PasswordState kPasswordState;
-extern const std::string kExtendedInfoKey1;
-extern const std::string kExtendedInfoKey2;
-extern const std::string kExtendedInfoValue1;
-extern const std::string kExtendedInfoValue2;
+inline constexpr char kExtendedInfoKey1[] = "key 1";
+inline constexpr char kExtendedInfoKey2[] = "key 2";
+inline constexpr char kExtendedInfoValue1[] = "value 1";
+inline constexpr char kExtendedInfoValue2[] = "value 2";
 extern const int64_t kParentTaskId;
 extern const int64_t kRootTaskId;
 extern const int64_t kTaskId;
@@ -49,6 +47,12 @@ extern const int64_t kTaskId;
 // Set of test functions to manipulate a SerializedNavigationEntry.
 class SerializedNavigationEntryTestHelper {
  public:
+  SerializedNavigationEntryTestHelper() = delete;
+  SerializedNavigationEntryTestHelper(
+      const SerializedNavigationEntryTestHelper&) = delete;
+  SerializedNavigationEntryTestHelper& operator=(
+      const SerializedNavigationEntryTestHelper&) = delete;
+
   // Compares the two entries. This uses EXPECT_XXX on each member, if your test
   // needs to stop after this wrap calls to this in EXPECT_NO_FATAL_FAILURE.
   static void ExpectNavigationEquals(const SerializedNavigationEntry& expected,
@@ -85,13 +89,6 @@ class SerializedNavigationEntryTestHelper {
 
   static void SetTimestamp(base::Time timestamp,
                            SerializedNavigationEntry* navigation);
-
-  static void SetReplacedEntryData(
-      const SerializedNavigationEntry::ReplacedNavigationEntryData& data,
-      SerializedNavigationEntry* navigation);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(SerializedNavigationEntryTestHelper);
 };
 
 }  // namespace sessions

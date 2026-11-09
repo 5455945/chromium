@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,44 +7,57 @@ package org.chromium.chrome.browser.app.tab_activity_glue;
 import android.content.res.Configuration;
 
 import androidx.test.filters.MediumTest;
+import androidx.test.runner.lifecycle.Stage;
 
+import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CallbackHelper;
-import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.RecreateObserver;
+import org.chromium.chrome.browser.toolbar.ToolbarManager;
+import org.chromium.chrome.tab_ui.R;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxFocusReason;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
-/**
- * Test tablet / phone layout change.
- */
+/** Test tablet / phone layout change. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@EnableFeatures({ChromeFeatureList.ANDROID_LAYOUT_CHANGE_TAB_REPARENT})
+@DoNotBatch(reason = "This class tests activity restart behavior and thus cannot be batched.")
 public class TabletPhoneLayoutChangeTest {
+    private static final long TIMEOUT_MS = 10000;
+
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
     @Before
     public void setUp() {
-        mActivityTestRule.startMainActivityOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
+        mActivityTestRule.waitForActivityCompletelyLoaded();
     }
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/407729913")
     public void testIsRecreatedOnLayoutChange() throws TimeoutException {
         ChromeTabbedActivity cta = mActivityTestRule.getActivity();
         boolean isTestOnTablet = cta.isTablet();
@@ -54,18 +67,127 @@ public class TabletPhoneLayoutChangeTest {
         // Pretend the device is in another mode.
         config.smallestScreenWidthDp =
                 DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP + (isTestOnTablet ? -1 : 1);
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mActivityTestRule.getActivity().getLifecycleDispatcher().register(
-                    (RecreateObserver) helper::notifyCalled);
-            Assert.assertTrue(
-                    "Activity should be ready for tablet mode change.", cta.didChangeTabletMode());
-            cta.getDisplayAndroidObserverForTesting().onCurrentModeChanged(null);
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule
+                            .getActivity()
+                            .getLifecycleDispatcher()
+                            .register((RecreateObserver) helper::notifyCalled);
+                    Assert.assertTrue(
+                            "Activity should be ready for tablet mode change.",
+                            cta.getTabletMode().changed);
+                    cta.getDisplayAndroidObserverForTesting().onCurrentModeChanged(null);
+                    Assert.assertTrue(
+                            "ChromeActivity#mIsRecreatingForTabletModeChange should be true.",
+                            cta.recreatingForTabletModeChangeForTesting());
+                });
 
-        helper.waitForFirst("Activity should be restart");
+        helper.waitForOnly("Activity should be restart");
         Configuration newConfig = cta.getResources().getConfiguration();
         config = cta.getSavedConfigurationForTesting();
-        Assert.assertEquals("Saved config should be updated after recreate.",
-                newConfig.smallestScreenWidthDp, config.smallestScreenWidthDp);
+        Assert.assertEquals(
+                "Saved config should be updated after recreate.",
+                newConfig.smallestScreenWidthDp,
+                config.smallestScreenWidthDp);
+    }
+
+    @Test
+    @MediumTest
+    public void testUrlBarStateRetention() throws TimeoutException {
+        ChromeTabbedActivity cta = mActivityTestRule.getActivity();
+        ToolbarManager toolbarManager = cta.getToolbarManager();
+        String urlBarText = "hello";
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        toolbarManager.beginFuseboxInput(
+                                new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP)
+                                        .setUserText(urlBarText)
+                                        .setSelection(TextSelection.SELECT_ALL)));
+
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    boolean isOmniboxFocused = toolbarManager.isUrlBarFocused();
+                    Criteria.checkThat(isOmniboxFocused, Matchers.is(true));
+                },
+                TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+
+        simulateTabletModeChange();
+        ChromeTabbedActivity newCta = mActivityTestRule.getActivity();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    boolean doesOmniboxStateMatch =
+                            newCta.getToolbarManager() != null
+                                    && newCta.getToolbarManager().isUrlBarFocused()
+                                    && urlBarText.equals(
+                                            newCta.getToolbarManager()
+                                                    .getUrlBarTextWithoutAutocomplete());
+                    Criteria.checkThat(doesOmniboxStateMatch, Matchers.is(true));
+                },
+                TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+    }
+
+    @Test
+    @MediumTest
+    public void testTabSwitcherStateRetention_FlakeCheck() throws TimeoutException {
+        ChromeTabbedActivity cta = mActivityTestRule.getActivity();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    cta.findViewById(R.id.tab_switcher_button).performClick();
+                });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    boolean isTabSwitcherShown =
+                            cta.getLayoutManager().isLayoutVisible(LayoutType.HUB);
+                    Criteria.checkThat(isTabSwitcherShown, Matchers.is(true));
+                },
+                TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+
+        simulateTabletModeChange();
+        ChromeTabbedActivity newCta = mActivityTestRule.getActivity();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    boolean isTabSwitcherShown =
+                            newCta.getCompositorViewHolderSupplier().get() != null
+                                    && newCta.getLayoutManager() != null
+                                    && newCta.getLayoutManager().isLayoutVisible(LayoutType.HUB);
+                    Criteria.checkThat(isTabSwitcherShown, Matchers.is(true));
+                },
+                TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+    }
+
+    private void simulateTabletModeChange() throws TimeoutException {
+        ChromeTabbedActivity cta = mActivityTestRule.getActivity();
+        boolean isTestOnTablet = cta.isTablet();
+        CallbackHelper helper = new CallbackHelper();
+        Configuration config = cta.getSavedConfigurationForTesting();
+        Configuration newConfig = new Configuration(config);
+        config.smallestScreenWidthDp =
+                DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP + (isTestOnTablet ? -1 : 1);
+        ChromeTabbedActivity newCta =
+                ApplicationTestUtils.waitForActivityWithClass(
+                        ChromeTabbedActivity.class,
+                        Stage.RESUMED,
+                        () -> {
+                            mActivityTestRule
+                                    .getActivity()
+                                    .getLifecycleDispatcher()
+                                    .register((DestroyObserver) helper::notifyCalled);
+                            Assert.assertTrue(
+                                    "Activity should be ready for tablet mode change.",
+                                    cta.getTabletMode().changed);
+                            cta.performOnConfigurationChanged(newConfig);
+                            Assert.assertTrue(
+                                    "ChromeActivity#mIsRecreatingForTabletModeChange should be"
+                                            + " true.",
+                                    cta.recreatingForTabletModeChangeForTesting());
+                        });
+        mActivityTestRule.getActivityTestRule().setActivity(newCta);
+        helper.waitForOnly("Wait for old Activity being destroyed.");
     }
 }

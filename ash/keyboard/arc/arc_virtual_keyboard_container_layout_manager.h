@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_KEYBOARD_ARC_ARC_VIRTUAL_KEYBOARD_CONTAINER_LAYOUT_MANAGER_H_
 #define ASH_KEYBOARD_ARC_ARC_VIRTUAL_KEYBOARD_CONTAINER_LAYOUT_MANAGER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/aura/window.h"
 #include "ui/gfx/geometry/rect.h"
@@ -16,6 +16,11 @@ class ArcVirtualKeyboardContainerLayoutManager : public aura::LayoutManager {
  public:
   explicit ArcVirtualKeyboardContainerLayoutManager(
       aura::Window* arc_ime_window_parent_container);
+
+  ArcVirtualKeyboardContainerLayoutManager(
+      const ArcVirtualKeyboardContainerLayoutManager&) = delete;
+  ArcVirtualKeyboardContainerLayoutManager& operator=(
+      const ArcVirtualKeyboardContainerLayoutManager&) = delete;
 
   // aura::LayoutManager:
   void OnWindowResized() override;
@@ -28,9 +33,7 @@ class ArcVirtualKeyboardContainerLayoutManager : public aura::LayoutManager {
                       const gfx::Rect& requested_bounds) override;
 
  private:
-  aura::Window* arc_ime_window_parent_container_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcVirtualKeyboardContainerLayoutManager);
+  raw_ptr<aura::Window> arc_ime_window_parent_container_;
 };
 
 }  // namespace ash

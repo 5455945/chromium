@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,6 +40,7 @@ bool ToFailState(int value, FailState* fail_state) {
     case FailState::USER_CANCELED:
     case FailState::USER_SHUTDOWN:
     case FailState::CRASH:
+    case FailState::LOCAL_DOWNLOAD_BLOCKED:
       *fail_state = static_cast<FailState>(value);
       return true;
   }

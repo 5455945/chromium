@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,16 @@
 #define CONTENT_TEST_MOCK_PLATFORM_NOTIFICATION_SERVICE_H_
 
 #include <stdint.h>
+
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/notification_database_data.h"
 #include "content/public/browser/platform_notification_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace blink {
@@ -31,14 +32,20 @@ class BrowserContext;
 class MockPlatformNotificationService : public PlatformNotificationService {
  public:
   MockPlatformNotificationService(BrowserContext* context);
+
+  MockPlatformNotificationService(const MockPlatformNotificationService&) =
+      delete;
+  MockPlatformNotificationService& operator=(
+      const MockPlatformNotificationService&) = delete;
+
   ~MockPlatformNotificationService() override;
 
   // Simulates a click on the notification titled |title|. |action_index|
   // indicates which action was clicked. |reply| indicates the user reply.
   // Must be called on the UI thread.
   void SimulateClick(const std::string& title,
-                     const absl::optional<int>& action_index,
-                     const absl::optional<std::u16string>& reply);
+                     const std::optional<int>& action_index,
+                     const std::optional<std::u16string>& reply);
 
   // Simulates the closing a notification titled |title|. Must be called on
   // the UI thread.
@@ -61,6 +68,9 @@ class MockPlatformNotificationService : public PlatformNotificationService {
   void ClosePersistentNotification(const std::string& notification_id) override;
   void GetDisplayedNotifications(
       DisplayedNotificationsCallback callback) override;
+  void GetDisplayedNotificationsForOrigin(
+      const GURL& origin,
+      DisplayedNotificationsCallback callback) override;
   void ScheduleTrigger(base::Time timestamp) override;
   base::Time ReadNextTriggerTimestamp() override;
   int64_t ReadNextPersistentNotificationId() override;
@@ -72,7 +82,7 @@ class MockPlatformNotificationService : public PlatformNotificationService {
   // persistent and non-persistent notifications will be considered for this.
   void ReplaceNotificationIfNeeded(const std::string& notification_id);
 
-  BrowserContext* context_;
+  raw_ptr<BrowserContext> context_;
 
   std::unordered_map<std::string, GURL> persistent_notifications_;
   std::unordered_set<std::string> non_persistent_notifications_;
@@ -81,8 +91,6 @@ class MockPlatformNotificationService : public PlatformNotificationService {
   std::unordered_map<std::string, std::string> notification_id_map_;
 
   int64_t next_persistent_notification_id_ = 1;
-
-  DISALLOW_COPY_AND_ASSIGN(MockPlatformNotificationService);
 };
 
 }  // content

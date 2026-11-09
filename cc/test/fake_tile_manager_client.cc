@@ -1,10 +1,10 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/test/fake_tile_manager_client.h"
 
-#include <vector>
+#include "cc/tiles/tiles_with_resource_iterator.h"
 
 namespace cc {
 
@@ -19,17 +19,24 @@ FakeTileManagerClient::BuildRasterQueue(TreePriority tree_priority,
 }
 
 std::unique_ptr<EvictionTilePriorityQueue>
-FakeTileManagerClient::BuildEvictionQueue(TreePriority tree_priority) {
+FakeTileManagerClient::BuildEvictionQueue() {
   return nullptr;
 }
 
-gfx::ColorSpace FakeTileManagerClient::GetRasterColorSpace(
-    gfx::ContentColorUsage /*content_color_usage*/) const {
-  return color_space_;
+std::unique_ptr<TilesWithResourceIterator>
+FakeTileManagerClient::CreateTilesWithResourceIterator() {
+  return nullptr;
 }
 
-float FakeTileManagerClient::GetSDRWhiteLevel() const {
-  return gfx::ColorSpace::kDefaultSDRWhiteLevel;
+viz::SharedImageFormat FakeTileManagerClient::GetTileFormat() const {
+  return viz::SinglePlaneFormat::kRGBA_8888;
+}
+
+TargetColorParams FakeTileManagerClient::GetTargetColorParams(
+    gfx::ContentColorUsage /*content_color_usage*/) const {
+  TargetColorParams result;
+  result.color_space = color_space_;
+  return result;
 }
 
 size_t FakeTileManagerClient::GetFrameIndexForImage(
@@ -39,7 +46,7 @@ size_t FakeTileManagerClient::GetFrameIndexForImage(
 }
 
 int FakeTileManagerClient::GetMSAASampleCountForRaster(
-    const scoped_refptr<DisplayItemList>& display_list) {
+    const DisplayItemList& display_list) const {
   return 0;
 }
 

@@ -1,140 +1,188 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.share.share_sheet;
 
 import static org.junit.Assert.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anySet;
-import static org.mockito.Matchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
-
-import androidx.test.filters.MediumTest;
+import android.content.Context;
+import android.content.pm.PackageManager;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
+import org.robolectric.Shadows;
+import org.robolectric.shadows.ShadowPackageManager;
 
-import org.chromium.base.test.BaseActivityTestRule;
-import org.chromium.base.test.util.CallbackHelper;
-import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
-import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.browser.profiles.TestProfile;
+import org.chromium.chrome.browser.share.ShareContentTypeHelper;
+import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.share.ShareParams;
+import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
+import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
+import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.ui.base.ActivityResultTracker;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.test.util.DummyUiActivity;
+import org.chromium.url.GURL;
+import org.chromium.url.JUnitTestGURLs;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
-/**
- * Tests {@link ShareSheetCoordinator}.
- */
-@RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+/** Tests {@link ShareSheetCoordinator}. */
+@RunWith(BaseRobolectricTestRunner.class)
 public final class ShareSheetCoordinatorTest {
-    @Rule
-    public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
+    private static final String MOCK_URL = JUnitTestGURLs.EXAMPLE_URL.getSpec();
 
-    @Rule
-    public BaseActivityTestRule<DummyUiActivity> mActivityTestRule =
-            new BaseActivityTestRule<>(DummyUiActivity.class);
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Rule
-    public TestRule mFeatureProcessor = new Features.JUnitProcessor();
+    private final TestProfile mProfile = TestProfile.createRegular();
 
-    @Mock
-    private ActivityLifecycleDispatcher mLifecycleDispatcher;
-
-    @Mock
-    private BottomSheetController mController;
-
-    @Mock
-    private ShareSheetPropertyModelBuilder mPropertyModelBuilder;
-
-    @Mock
-    private ShareParams mParams;
+    @Mock private DomDistillerUrlUtils.Natives mDistillerUrlUtilsJniMock;
+    @Mock private ActivityLifecycleDispatcher mLifecycleDispatcher;
+    @Mock private BottomSheetController mController;
+    @Mock private ShareParams.TargetChosenCallback mTargetChosenCallback;
+    @Mock private Supplier<Tab> mTabProvider;
+    @Mock private WindowAndroid mWindow;
+    @Mock Tracker mTracker;
+    @Mock private SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    @Mock private ActivityResultTracker mActivityResultTracker;
+    @Mock private ModalDialogManager mModalDialogManager;
+    @Mock private SnackbarManager mSnackbarManager;
 
     private Activity mActivity;
+    private ShareParams mParams;
     private ShareSheetCoordinator mShareSheetCoordinator;
+    private ShadowPackageManager mShadowPackageManager;
+    private SettableMonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
 
     @Before
     public void setUp() {
-        mActivityTestRule.launchActivity(null);
-        mActivity = mActivityTestRule.getActivity();
+        DomDistillerUrlUtilsJni.setInstanceForTesting(mDistillerUrlUtilsJniMock);
 
-        MockitoAnnotations.initMocks(this);
-        PropertyModel testModel1 = new PropertyModel.Builder(ShareSheetItemViewProperties.ALL_KEYS)
-                                           .with(ShareSheetItemViewProperties.ICON, null)
-                                           .with(ShareSheetItemViewProperties.LABEL, "testModel1")
-                                           .with(ShareSheetItemViewProperties.CLICK_LISTENER, null)
-                                           .build();
-        PropertyModel testModel2 = new PropertyModel.Builder(ShareSheetItemViewProperties.ALL_KEYS)
-                                           .with(ShareSheetItemViewProperties.ICON, null)
-                                           .with(ShareSheetItemViewProperties.LABEL, "testModel2")
-                                           .with(ShareSheetItemViewProperties.CLICK_LISTENER, null)
-                                           .build();
+        Context context = ContextUtils.getApplicationContext();
+        mShadowPackageManager = Shadows.shadowOf(context.getPackageManager());
+
+        mActivity = Robolectric.setupActivity(Activity.class);
+        PropertyModel testModel1 =
+                new PropertyModel.Builder(ShareSheetItemViewProperties.ALL_KEYS)
+                        .with(ShareSheetItemViewProperties.ICON, null)
+                        .with(ShareSheetItemViewProperties.LABEL, "testModel1")
+                        .with(ShareSheetItemViewProperties.CLICK_LISTENER, null)
+                        .build();
+        PropertyModel testModel2 =
+                new PropertyModel.Builder(ShareSheetItemViewProperties.ALL_KEYS)
+                        .with(ShareSheetItemViewProperties.ICON, null)
+                        .with(ShareSheetItemViewProperties.LABEL, "testModel2")
+                        .with(ShareSheetItemViewProperties.CLICK_LISTENER, null)
+                        .build();
 
         ArrayList<PropertyModel> thirdPartyPropertyModels =
                 new ArrayList<>(Arrays.asList(testModel1, testModel2));
-        when(mPropertyModelBuilder.selectThirdPartyApps(
-                     any(), anySet(), any(), anyBoolean(), any(), anyLong(), anyInt()))
-                .thenReturn(thirdPartyPropertyModels);
+        when(mWindow.getActivity()).thenReturn(new WeakReference<>(mActivity));
+        ShareSheetPropertyModelBuilder.setSelectThirdPartyAppsOverrideForTesting(
+                thirdPartyPropertyModels);
+        when(mDistillerUrlUtilsJniMock.getOriginalUrlFromDistillerUrl(anyString()))
+                .thenReturn(new GURL(MOCK_URL));
+        TrackerFactory.setTrackerForTests(mTracker);
 
-        mShareSheetCoordinator = new ShareSheetCoordinator(mController, mLifecycleDispatcher, null,
-                mPropertyModelBuilder, null, null, null, false, null, null);
+        mParams =
+                new ShareParams.Builder(mWindow, "title", MOCK_URL)
+                        .setCallback(mTargetChosenCallback)
+                        .build();
+        mModalDialogManagerSupplier = ObservableSuppliers.createMonotonic(mModalDialogManager);
+        mShareSheetCoordinator =
+                new ShareSheetCoordinator(
+                        mController,
+                        mLifecycleDispatcher,
+                        mTabProvider,
+                        null,
+                        null,
+                        false,
+                        null,
+                        mProfile,
+                        null,
+                        mSigninAndHistorySyncActivityLauncher,
+                        mActivityResultTracker,
+                        mModalDialogManagerSupplier,
+                        mSnackbarManager);
     }
 
     @Test
-    @MediumTest
     public void disableFirstPartyFeatures() {
         mShareSheetCoordinator.disableFirstPartyFeaturesForTesting();
 
-        List<PropertyModel> propertyModels = mShareSheetCoordinator.createFirstPartyPropertyModels(
-                mActivity, mParams, /*chromeShareExtras=*/null,
-                ShareSheetPropertyModelBuilder.ALL_CONTENT_TYPES_FOR_TEST);
+        List<PropertyModel> propertyModels =
+                mShareSheetCoordinator.createFirstPartyPropertyModels(
+                        mActivity,
+                        mParams,
+                        /* chromeShareExtras= */ null,
+                        ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST);
         assertEquals("Property model list should be empty.", 0, propertyModels.size());
     }
 
     @Test
-    @MediumTest
-    public void testCreateThirdPartyPropertyModels() throws TimeoutException {
-        final AtomicReference<List<PropertyModel>> resultPropertyModels =
-                new AtomicReference<List<PropertyModel>>();
-        CallbackHelper helper = new CallbackHelper();
-        mShareSheetCoordinator.createThirdPartyPropertyModels(mActivity, mParams,
-                ShareSheetPropertyModelBuilder.ALL_CONTENT_TYPES_FOR_TEST,
-                /*saveLastUsed=*/false, models -> {
-                    resultPropertyModels.set(models);
-                    helper.notifyCalled();
-                });
-        helper.waitForFirst();
-        List<PropertyModel> propertyModels = resultPropertyModels.get();
+    public void showShareSheet_avoidThirdPartyShareOptionsOnAutomotive() {
+        mShadowPackageManager.setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, /* supported= */ true);
+        mShareSheetCoordinator.disableFirstPartyFeaturesForTesting();
 
-        assertEquals("Incorrect number of property models.", 3, propertyModels.size());
-        assertEquals("First property model isn't testModel1.", "testModel1",
-                propertyModels.get(0).get(ShareSheetItemViewProperties.LABEL));
-        assertEquals("Second property model isn't testModel2.", "testModel2",
-                propertyModels.get(1).get(ShareSheetItemViewProperties.LABEL));
-        assertEquals("Third property model isn't More.",
-                mActivity.getResources().getString(R.string.sharing_more_icon_label),
-                propertyModels.get(2).get(ShareSheetItemViewProperties.LABEL));
+        ShareSheetCoordinator spyShareSheet = spy(mShareSheetCoordinator);
+        doNothing().when(spyShareSheet).finishUpdateShareSheet(any(), any(), any());
+
+        spyShareSheet.updateShareSheet(/* saveLastUsed= */ false, () -> {});
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        verify(spyShareSheet, never())
+                .createThirdPartyPropertyModels(any(), any(), any(), anyBoolean(), any());
+        verify(spyShareSheet, atLeastOnce()).finishUpdateShareSheet(any(), any(), any());
+    }
+
+    @Test
+    public void showShareSheet_createThirdPartyShareOptions() {
+        mShadowPackageManager.setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, /* supported= */ false);
+        mShareSheetCoordinator.disableFirstPartyFeaturesForTesting();
+
+        ShareSheetCoordinator spyShareSheet = spy(mShareSheetCoordinator);
+        doNothing().when(spyShareSheet).finishUpdateShareSheet(any(), any(), any());
+
+        spyShareSheet.updateShareSheet(/* saveLastUsed= */ false, () -> {});
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        verify(spyShareSheet, atLeastOnce())
+                .createThirdPartyPropertyModels(any(), any(), any(), anyBoolean(), any());
+        verify(spyShareSheet, atLeastOnce()).finishUpdateShareSheet(any(), any(), any());
     }
 }

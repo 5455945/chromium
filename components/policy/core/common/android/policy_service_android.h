@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ptr.h"
 #include "components/policy/core/common/android/policy_map_android.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/policy_export.h"
@@ -28,19 +29,13 @@ class POLICY_EXPORT PolicyServiceAndroid : public PolicyService::Observer {
 
   ~PolicyServiceAndroid() override;
 
-  void AddObserver(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& caller);
+  void AddObserver(JNIEnv* env);
 
-  void RemoveObserver(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& caller);
+  void RemoveObserver(JNIEnv* env);
 
-  bool IsInitializationComplete(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller) const;
+  bool IsInitializationComplete(JNIEnv* env) const;
 
-  base::android::ScopedJavaLocalRef<jobject> GetPolicies(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller);
+  base::android::ScopedJavaLocalRef<jobject> GetPolicies(JNIEnv* env);
 
   // PolicyService::Observer implementation.
   // Pass the event to the Java observers.
@@ -52,7 +47,7 @@ class POLICY_EXPORT PolicyServiceAndroid : public PolicyService::Observer {
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
  private:
-  PolicyService* policy_service_;
+  raw_ptr<PolicyService> policy_service_;
 
   // Contains all Chrome policies. The PolicyBundle is not used as there is only
   // one policy namespace supported on Android.

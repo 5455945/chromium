@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
+#include "build/build_config.h"
 #include "content/browser/background_sync/background_sync_launcher.h"
 #include "content/browser/background_sync/background_sync_manager.h"
 #include "content/browser/background_sync/one_shot_background_sync_service_impl.h"
@@ -16,6 +18,7 @@
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/background_sync/background_sync.mojom.h"
 #include "url/origin.h"
 
@@ -26,26 +29,26 @@ BackgroundSyncContextImpl::BackgroundSyncContextImpl()
           {{blink::mojom::BackgroundSyncType::ONE_SHOT, base::TimeDelta::Max()},
            {blink::mojom::BackgroundSyncType::PERIODIC,
             base::TimeDelta::Max()}}) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 BackgroundSyncContextImpl::~BackgroundSyncContextImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  DCHECK(!background_sync_manager_);
-  DCHECK(one_shot_sync_services_.empty());
-  DCHECK(periodic_sync_services_.empty());
+  CHECK(!background_sync_manager_, base::NotFatalUntil::M159);
+  CHECK(one_shot_sync_services_.empty(), base::NotFatalUntil::M159);
+  CHECK(periodic_sync_services_.empty(), base::NotFatalUntil::M159);
 }
 
 // static
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void BackgroundSyncContext::FireBackgroundSyncEventsAcrossPartitions(
     BrowserContext* browser_context,
     blink::mojom::BackgroundSyncType sync_type,
-    const base::android::JavaParamRef<jobject>& j_runnable) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(browser_context);
+    const base::android::JavaRef<jobject>& j_runnable) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(browser_context, base::NotFatalUntil::M159);
   BackgroundSyncLauncher::FireBackgroundSyncEvents(browser_context, sync_type,
                                                    j_runnable);
 }
@@ -53,8 +56,7 @@ void BackgroundSyncContext::FireBackgroundSyncEventsAcrossPartitions(
 
 void BackgroundSyncContextImpl::Init(
     const scoped_refptr<ServiceWorkerContextWrapper>& service_worker_context,
-    const scoped_refptr<DevToolsBackgroundServicesContextImpl>&
-        devtools_context) {
+    DevToolsBackgroundServicesContextImpl& devtools_context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   CreateBackgroundSyncManager(service_worker_context, devtools_context);
@@ -68,42 +70,46 @@ void BackgroundSyncContextImpl::Shutdown() {
 }
 
 void BackgroundSyncContextImpl::CreateOneShotSyncService(
+    const blink::StorageKey& storage_key,
+    RenderProcessHost* render_process_host,
     mojo::PendingReceiver<blink::mojom::OneShotBackgroundSyncService>
         receiver) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(background_sync_manager_);
+  CHECK(background_sync_manager_, base::NotFatalUntil::M159);
   one_shot_sync_services_.insert(
-      std::make_unique<OneShotBackgroundSyncServiceImpl>(this,
-                                                         std::move(receiver)));
+      std::make_unique<OneShotBackgroundSyncServiceImpl>(
+          this, storage_key, render_process_host, std::move(receiver)));
 }
 
 void BackgroundSyncContextImpl::CreatePeriodicSyncService(
+    const blink::StorageKey& storage_key,
+    RenderProcessHost* render_process_host,
     mojo::PendingReceiver<blink::mojom::PeriodicBackgroundSyncService>
         receiver) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(background_sync_manager_);
+  CHECK(background_sync_manager_, base::NotFatalUntil::M159);
   periodic_sync_services_.insert(
-      std::make_unique<PeriodicBackgroundSyncServiceImpl>(this,
-                                                          std::move(receiver)));
+      std::make_unique<PeriodicBackgroundSyncServiceImpl>(
+          this, storage_key, render_process_host, std::move(receiver)));
 }
 
 void BackgroundSyncContextImpl::OneShotSyncServiceHadConnectionError(
     OneShotBackgroundSyncServiceImpl* service) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(service);
+  CHECK(service, base::NotFatalUntil::M159);
 
   auto iter = one_shot_sync_services_.find(service);
-  DCHECK(iter != one_shot_sync_services_.end());
+  CHECK(iter != one_shot_sync_services_.end());
   one_shot_sync_services_.erase(iter);
 }
 
 void BackgroundSyncContextImpl::PeriodicSyncServiceHadConnectionError(
     PeriodicBackgroundSyncServiceImpl* service) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(service);
+  CHECK(service, base::NotFatalUntil::M159);
 
   auto iter = periodic_sync_services_.find(service);
-  DCHECK(iter != periodic_sync_services_.end());
+  CHECK(iter != periodic_sync_services_.end());
   periodic_sync_services_.erase(iter);
 }
 
@@ -167,8 +173,8 @@ void BackgroundSyncContextImpl::FireBackgroundSyncEvents(
     base::OnceClosure done_closure) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!background_sync_manager_) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                  std::move(done_closure));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(done_closure));
     return;
   }
 
@@ -178,12 +184,12 @@ void BackgroundSyncContextImpl::FireBackgroundSyncEvents(
 
 void BackgroundSyncContextImpl::CreateBackgroundSyncManager(
     scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
-    scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context) {
+    DevToolsBackgroundServicesContextImpl& devtools_context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!background_sync_manager_);
+  CHECK(!background_sync_manager_, base::NotFatalUntil::M159);
 
   background_sync_manager_ = BackgroundSyncManager::Create(
-      std::move(service_worker_context), std::move(devtools_context));
+      std::move(service_worker_context), devtools_context);
 }
 
 }  // namespace content

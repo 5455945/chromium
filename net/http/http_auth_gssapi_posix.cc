@@ -1,24 +1,29 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/http/http_auth_gssapi_posix.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <limits>
 #include <string>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/compiler_specific.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_auth.h"
 #include "net/http/http_auth_gssapi_posix.h"
@@ -32,16 +37,32 @@ namespace net {
 
 using DelegationType = HttpAuth::DelegationType;
 
+namespace {
+
+// On x86 macOS, Apple's gssapi.h wraps gss_OID_desc in `#pragma pack(2)`,
+// which places `elements` at a 4-byte-aligned address. A statically
+// initialized pointer that isn't 8-byte aligned can straddle a page boundary,
+// which Mach-O chained fixups can't represent. Pad the descriptor so that
+// `gss_OID_desc::elements` is 8-byte aligned on all platforms.
+struct alignas(8) PaddedOidDesc {
+  uint32_t padding;
+  gss_OID_desc desc;
+};
+static_assert(
+    (offsetof(PaddedOidDesc, desc) + offsetof(gss_OID_desc, elements)) % 8 ==
+    0);
+
 // Exported mechanism for GSSAPI. We always use SPNEGO:
 
 // iso.org.dod.internet.security.mechanism.snego (1.3.6.1.5.5.2)
-gss_OID_desc CHROME_GSS_SPNEGO_MECH_OID_DESC_VAL = {
-  6,
-  const_cast<char*>("\x2b\x06\x01\x05\x05\x02")
-};
+PaddedOidDesc CHROME_GSS_SPNEGO_MECH_OID_DESC_VAL = {
+    0,
+    {6, const_cast<char*>("\x2b\x06\x01\x05\x05\x02")}};
+
+}  // namespace
 
 gss_OID CHROME_GSS_SPNEGO_MECH_OID_DESC =
-    &CHROME_GSS_SPNEGO_MECH_OID_DESC_VAL;
+    &CHROME_GSS_SPNEGO_MECH_OID_DESC_VAL.desc;
 
 OM_uint32 DelegationTypeToFlag(DelegationType delegation_type) {
   switch (delegation_type) {
@@ -62,6 +83,9 @@ class ScopedBuffer {
     DCHECK(gssapi_lib_);
   }
 
+  ScopedBuffer(const ScopedBuffer&) = delete;
+  ScopedBuffer& operator=(const ScopedBuffer&) = delete;
+
   ~ScopedBuffer() {
     if (buffer_ != GSS_C_NO_BUFFER) {
       OM_uint32 minor_status = 0;
@@ -76,9 +100,7 @@ class ScopedBuffer {
 
  private:
   gss_buffer_t buffer_;
-  GSSAPILibrary* gssapi_lib_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedBuffer);
+  raw_ptr<GSSAPILibrary> gssapi_lib_;
 };
 
 // ScopedName releases a gss_name_t when it goes out of scope.
@@ -88,6 +110,9 @@ class ScopedName {
       : name_(name), gssapi_lib_(gssapi_lib) {
     DCHECK(gssapi_lib_);
   }
+
+  ScopedName(const ScopedName&) = delete;
+  ScopedName& operator=(const ScopedName&) = delete;
 
   ~ScopedName() {
     if (name_ != GSS_C_NO_NAME) {
@@ -105,23 +130,15 @@ class ScopedName {
 
  private:
   gss_name_t name_;
-  GSSAPILibrary* gssapi_lib_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedName);
+  raw_ptr<GSSAPILibrary> gssapi_lib_;
 };
 
-bool OidEquals(const gss_OID left, const gss_OID right) {
-  if (left->length != right->length)
-    return false;
-  return 0 == memcmp(left->elements, right->elements, right->length);
-}
+base::DictValue GetGssStatusCodeValue(GSSAPILibrary* gssapi_lib,
+                                      OM_uint32 status,
+                                      OM_uint32 status_code_type) {
+  base::DictValue rv;
 
-base::Value GetGssStatusCodeValue(GSSAPILibrary* gssapi_lib,
-                                  OM_uint32 status,
-                                  OM_uint32 status_code_type) {
-  base::Value rv{base::Value::Type::DICTIONARY};
-
-  rv.SetIntKey("status", status);
+  rv.Set("status", static_cast<int>(status));
 
   // Message lookups aren't performed if there's no library or if the status
   // indicates success.
@@ -146,7 +163,7 @@ base::Value GetGssStatusCodeValue(GSSAPILibrary* gssapi_lib,
   // |kMaxMsgLength|. There's no real documented limit to work with here.
   constexpr size_t kMaxMsgLength = 4096;
 
-  base::Value messages{base::Value::Type::LIST};
+  base::ListValue messages;
   do {
     gss_buffer_desc_struct message_buffer = GSS_C_EMPTY_BUFFER;
     ScopedBuffer message_buffer_releaser(&message_buffer, gssapi_lib);
@@ -161,7 +178,7 @@ base::Value GetGssStatusCodeValue(GSSAPILibrary* gssapi_lib,
       continue;
     }
 
-    base::StringPiece message_string{
+    std::string_view message_string{
         static_cast<const char*>(message_buffer.value),
         std::min(kMaxMsgLength, message_buffer.length)};
 
@@ -172,109 +189,113 @@ base::Value GetGssStatusCodeValue(GSSAPILibrary* gssapi_lib,
     messages.Append(message_string);
   } while (message_context != 0 && ++iterations < kMaxDisplayIterations);
 
-  if (messages.GetList().size() > 0)
-    rv.SetKey("message", std::move(messages));
+  if (!messages.empty())
+    rv.Set("message", std::move(messages));
   return rv;
 }
 
-base::Value GetGssStatusValue(GSSAPILibrary* gssapi_lib,
-                              base::StringPiece method,
-                              OM_uint32 major_status,
-                              OM_uint32 minor_status) {
-  base::Value params{base::Value::Type::DICTIONARY};
-  params.SetStringKey("function", method);
-  params.SetKey("major_status", GetGssStatusCodeValue(gssapi_lib, major_status,
-                                                      GSS_C_GSS_CODE));
-  params.SetKey("minor_status", GetGssStatusCodeValue(gssapi_lib, minor_status,
-                                                      GSS_C_MECH_CODE));
+base::DictValue GetGssStatusValue(GSSAPILibrary* gssapi_lib,
+                                  std::string_view method,
+                                  OM_uint32 major_status,
+                                  OM_uint32 minor_status) {
+  base::DictValue params;
+  params.Set("function", method);
+  params.Set("major_status",
+             GetGssStatusCodeValue(gssapi_lib, major_status, GSS_C_GSS_CODE));
+  params.Set("minor_status",
+             GetGssStatusCodeValue(gssapi_lib, minor_status, GSS_C_MECH_CODE));
   return params;
 }
 
-base::Value OidToValue(gss_OID oid) {
-  base::Value params(base::Value::Type::DICTIONARY);
+base::DictValue OidToValue(gss_OID oid) {
+  base::DictValue params;
 
   if (!oid || oid->length == 0) {
-    params.SetStringKey("oid", "<Empty OID>");
+    params.Set("oid", "<Empty OID>");
     return params;
   }
 
-  params.SetIntKey("length", oid->length);
+  params.Set("length", static_cast<int>(oid->length));
   if (!oid->elements)
     return params;
 
   // Cap OID content at arbitrary limit 1k.
   constexpr OM_uint32 kMaxOidDataSize = 1024;
-  params.SetKey(
-      "bytes",
-      NetLogBinaryValue(oid->elements, std::min(kMaxOidDataSize, oid->length)));
+  params.Set("bytes", NetLogBinaryValue(oid->elements, std::min(kMaxOidDataSize,
+                                                                oid->length)));
 
   // Based on RFC 2744 Appendix A. Hardcoding the OIDs in the list below to
-  // avoid having a static dependency on the library.
+  // avoid having a static dependency on the library. The OIDs are stored as
+  // bytes rather than as gss_OID_desc, see the comment on PaddedOidDesc.
   static const struct {
     const char* symbolic_name;
-    const gss_OID_desc oid_desc;
+    base::span<const char> oid;
   } kWellKnownOIDs[] = {
       {"GSS_C_NT_USER_NAME",
-       {10, const_cast<char*>("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x01")}},
+       base::span_from_cstring("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x01")},
       {"GSS_C_NT_MACHINE_UID_NAME",
-       {10, const_cast<char*>("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x02")}},
+       base::span_from_cstring("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x02")},
       {"GSS_C_NT_STRING_UID_NAME",
-       {10, const_cast<char*>("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x03")}},
+       base::span_from_cstring("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x03")},
       {"GSS_C_NT_HOSTBASED_SERVICE_X",
-       {6, const_cast<char*>("\x2b\x06\x01\x05\x06\x02")}},
+       base::span_from_cstring("\x2b\x06\x01\x05\x06\x02")},
       {"GSS_C_NT_HOSTBASED_SERVICE",
-       {10, const_cast<char*>("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x04")}},
-      {"GSS_C_NT_ANONYMOUS", {6, const_cast<char*>("\x2b\x06\01\x05\x06\x03")}},
+       base::span_from_cstring("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x04")},
+      {"GSS_C_NT_ANONYMOUS",
+       base::span_from_cstring("\x2b\x06\01\x05\x06\x03")},
       {"GSS_C_NT_EXPORT_NAME",
-       {6, const_cast<char*>("\x2b\x06\x01\x05\x06\x04")}}};
+       base::span_from_cstring("\x2b\x06\x01\x05\x06\x04")}};
 
+  // SAFETY: The GSS-API contract is that `elements` points to `length` bytes.
+  auto oid_bytes = UNSAFE_BUFFERS(
+      base::span(static_cast<const char*>(oid->elements), oid->length));
   for (auto& well_known_oid : kWellKnownOIDs) {
-    if (OidEquals(oid, const_cast<const gss_OID>(&well_known_oid.oid_desc)))
-      params.SetStringKey("oid", well_known_oid.symbolic_name);
+    if (well_known_oid.oid == oid_bytes) {
+      params.Set("oid", well_known_oid.symbolic_name);
+    }
   }
 
   return params;
 }
 
-base::Value GetDisplayNameValue(GSSAPILibrary* gssapi_lib,
-                                const gss_name_t gss_name) {
+base::DictValue GetDisplayNameValue(GSSAPILibrary* gssapi_lib,
+                                    const gss_name_t gss_name) {
   OM_uint32 major_status = 0;
   OM_uint32 minor_status = 0;
   gss_buffer_desc_struct name = GSS_C_EMPTY_BUFFER;
   gss_OID name_type = GSS_C_NO_OID;
 
-  base::Value rv{base::Value::Type::DICTIONARY};
+  base::DictValue rv;
   major_status =
       gssapi_lib->display_name(&minor_status, gss_name, &name, &name_type);
   ScopedBuffer scoped_output_name(&name, gssapi_lib);
   if (major_status != GSS_S_COMPLETE) {
-    rv.SetKey("error", GetGssStatusValue(gssapi_lib, "gss_display_name",
-                                         major_status, minor_status));
+    rv.Set("error", GetGssStatusValue(gssapi_lib, "gss_display_name",
+                                      major_status, minor_status));
     return rv;
   }
   auto name_string =
-      base::StringPiece(reinterpret_cast<const char*>(name.value), name.length);
-  rv.SetKey("name", base::IsStringUTF8(name_string)
-                        ? NetLogStringValue(name_string)
-                        : NetLogBinaryValue(name.value, name.length));
-  rv.SetKey("type", OidToValue(name_type));
+      std::string_view(reinterpret_cast<const char*>(name.value), name.length);
+  rv.Set("name", base::IsStringUTF8(name_string)
+                     ? NetLogStringValue(name_string)
+                     : NetLogBinaryValue(name.value, name.length));
+  rv.Set("type", OidToValue(name_type));
   return rv;
 }
 
-base::Value ContextFlagsToValue(OM_uint32 flags) {
-  base::Value rv{base::Value::Type::DICTIONARY};
-  rv.SetStringKey("value", base::StringPrintf("0x%08x", flags));
-  rv.SetBoolKey("delegated", (flags & GSS_C_DELEG_FLAG) == GSS_C_DELEG_FLAG);
-  rv.SetBoolKey("mutual", (flags & GSS_C_MUTUAL_FLAG) == GSS_C_MUTUAL_FLAG);
+base::DictValue ContextFlagsToValue(OM_uint32 flags) {
+  base::DictValue rv;
+  rv.Set("value", base::StringPrintf("0x%08x", flags));
+  rv.Set("delegated", (flags & GSS_C_DELEG_FLAG) == GSS_C_DELEG_FLAG);
+  rv.Set("mutual", (flags & GSS_C_MUTUAL_FLAG) == GSS_C_MUTUAL_FLAG);
   return rv;
 }
 
-base::Value GetContextStateAsValue(GSSAPILibrary* gssapi_lib,
-                                   const gss_ctx_id_t context_handle) {
-  base::Value rv{base::Value::Type::DICTIONARY};
+base::DictValue GetContextStateAsValue(GSSAPILibrary* gssapi_lib,
+                                       const gss_ctx_id_t context_handle) {
+  base::DictValue rv;
   if (context_handle == GSS_C_NO_CONTEXT) {
-    rv.SetKey("error",
-              GetGssStatusValue(nullptr, "<none>", GSS_S_NO_CONTEXT, 0));
+    rv.Set("error", GetGssStatusValue(nullptr, "<none>", GSS_S_NO_CONTEXT, 0));
     return rv;
   }
 
@@ -297,33 +318,33 @@ base::Value GetContextStateAsValue(GSSAPILibrary* gssapi_lib,
                                              &locally_initiated,
                                              &open);
   if (major_status != GSS_S_COMPLETE) {
-    rv.SetKey("error", GetGssStatusValue(gssapi_lib, "gss_inquire_context",
-                                         major_status, minor_status));
+    rv.Set("error", GetGssStatusValue(gssapi_lib, "gss_inquire_context",
+                                      major_status, minor_status));
     return rv;
   }
   ScopedName scoped_src_name(src_name, gssapi_lib);
   ScopedName scoped_targ_name(targ_name, gssapi_lib);
 
-  rv.SetKey("source", GetDisplayNameValue(gssapi_lib, src_name));
-  rv.SetKey("target", GetDisplayNameValue(gssapi_lib, targ_name));
+  rv.Set("source", GetDisplayNameValue(gssapi_lib, src_name));
+  rv.Set("target", GetDisplayNameValue(gssapi_lib, targ_name));
   // lifetime_rec is a uint32, while base::Value only takes ints. On 32 bit
   // platforms uint32 doesn't fit on an int.
-  rv.SetStringKey("lifetime", base::NumberToString(lifetime_rec));
-  rv.SetKey("mechanism", OidToValue(mech_type));
-  rv.SetKey("flags", ContextFlagsToValue(ctx_flags));
-  rv.SetBoolKey("open", !!open);
+  rv.Set("lifetime", base::NumberToString(lifetime_rec));
+  rv.Set("mechanism", OidToValue(mech_type));
+  rv.Set("flags", ContextFlagsToValue(ctx_flags));
+  rv.Set("open", !!open);
   return rv;
 }
 
 namespace {
 
 // Return a NetLog value for the result of loading a library.
-base::Value LibraryLoadResultParams(base::StringPiece library_name,
-                                    base::StringPiece load_result) {
-  base::Value params{base::Value::Type::DICTIONARY};
-  params.SetStringKey("library_name", library_name);
+base::DictValue LibraryLoadResultParams(const base::FilePath& library_name,
+                                        std::string_view load_result) {
+  base::DictValue params;
+  params.Set("library_name", library_name.value());
   if (!load_result.empty())
-    params.SetStringKey("load_result", load_result);
+    params.Set("load_result", load_result);
   return params;
 }
 
@@ -356,49 +377,44 @@ bool GSSAPISharedLibrary::InitImpl(const NetLogWithSource& net_log) {
 
 base::NativeLibrary GSSAPISharedLibrary::LoadSharedLibrary(
     const NetLogWithSource& net_log) {
-  const char* const* library_names;
-  size_t num_lib_names;
-  const char* user_specified_library[1];
+  std::vector<base::FilePath> library_names;
   if (!gssapi_library_name_.empty()) {
-    user_specified_library[0] = gssapi_library_name_.c_str();
-    library_names = user_specified_library;
-    num_lib_names = 1;
+    library_names.emplace_back(gssapi_library_name_);
   } else {
-    static const char* const kDefaultLibraryNames[] = {
-#if defined(OS_APPLE)
-      "/System/Library/Frameworks/GSS.framework/GSS"
-#elif defined(OS_OPENBSD)
-      "libgssapi.so"          // Heimdal - OpenBSD
+#if BUILDFLAG(IS_APPLE)
+    library_names.emplace_back("/System/Library/Frameworks/GSS.framework/GSS");
+#elif BUILDFLAG(IS_OPENBSD)
+    // Heimdal - OpenBSD
+    library_names.emplace_back("libgssapi.so");
 #else
-      "libgssapi_krb5.so.2",  // MIT Kerberos - FC, Suse10, Debian
-      "libgssapi.so.4",       // Heimdal - Suse10, MDK
-      "libgssapi.so.2",       // Heimdal - Gentoo
-      "libgssapi.so.1"        // Heimdal - Suse9, CITI - FC, MDK, Suse10
+    // MIT Kerberos - FC, Suse10, Debian
+    library_names.emplace_back("libgssapi_krb5.so.2");
+    // Heimdal - Suse10, MDK
+    library_names.emplace_back("libgssapi.so.4");
+    // Heimdal - Gentoo
+    library_names.emplace_back("libgssapi.so.2");
+    // Heimdal - Suse9, CITI - FC, MDK, Suse10
+    library_names.emplace_back("libgssapi.so.1");
 #endif
-    };
-    library_names = kDefaultLibraryNames;
-    num_lib_names = base::size(kDefaultLibraryNames);
   }
 
   net_log.BeginEvent(NetLogEventType::AUTH_LIBRARY_LOAD);
 
   // There has to be at least one candidate.
-  DCHECK_NE(0u, num_lib_names);
+  CHECK(!library_names.empty());
 
-  const char* library_name = nullptr;
   base::NativeLibraryLoadError load_error;
 
-  for (size_t i = 0; i < num_lib_names; ++i) {
+  for (const auto& library_name : library_names) {
     load_error = base::NativeLibraryLoadError();
-    library_name = library_names[i];
-    base::FilePath file_path(library_name);
 
     // TODO(asanka): Move library loading to a separate thread.
     //               http://crbug.com/66702
-    base::ThreadRestrictions::ScopedAllowIO allow_io_temporarily;
-    base::NativeLibrary lib = base::LoadNativeLibrary(file_path, &load_error);
+    base::ScopedAllowBlocking scoped_allow_blocking_temporarily;
+    base::NativeLibrary lib =
+        base::LoadNativeLibrary(library_name, &load_error);
     if (lib) {
-      if (BindMethods(lib, library_name, net_log)) {
+      if (BindMethods(lib, library_name.value(), net_log)) {
         net_log.EndEvent(NetLogEventType::AUTH_LIBRARY_LOAD, [&] {
           return LibraryLoadResultParams(library_name, "");
         });
@@ -413,24 +429,24 @@ base::NativeLibrary GSSAPISharedLibrary::LoadSharedLibrary(
   // library. Doing so also always logs the failure when the GSSAPI library
   // name is explicitly specified.
   net_log.EndEvent(NetLogEventType::AUTH_LIBRARY_LOAD, [&] {
-    return LibraryLoadResultParams(library_name, load_error.ToString());
+    return LibraryLoadResultParams(library_names.back(), load_error.ToString());
   });
   return nullptr;
 }
 
 namespace {
 
-base::Value BindFailureParams(base::StringPiece library_name,
-                              base::StringPiece method) {
-  base::Value params{base::Value::Type::DICTIONARY};
-  params.SetStringKey("library_name", library_name);
-  params.SetStringKey("method", method);
+base::DictValue BindFailureParams(std::string_view library_name,
+                                  std::string_view method) {
+  base::DictValue params;
+  params.Set("library_name", library_name);
+  params.Set("method", method);
   return params;
 }
 
 void* BindUntypedMethod(base::NativeLibrary lib,
-                        base::StringPiece library_name,
-                        base::StringPiece method,
+                        std::string_view library_name,
+                        const char* method,
                         const NetLogWithSource& net_log) {
   void* ptr = base::GetFunctionPointerFromNativeLibrary(lib, method);
   if (ptr == nullptr) {
@@ -442,8 +458,8 @@ void* BindUntypedMethod(base::NativeLibrary lib,
 
 template <typename T>
 bool BindMethod(base::NativeLibrary lib,
-                base::StringPiece library_name,
-                base::StringPiece method,
+                std::string_view library_name,
+                const char* method,
                 T* receiver,
                 const NetLogWithSource& net_log) {
   *receiver = reinterpret_cast<T>(
@@ -454,7 +470,7 @@ bool BindMethod(base::NativeLibrary lib,
 }  // namespace
 
 bool GSSAPISharedLibrary::BindMethods(base::NativeLibrary lib,
-                                      base::StringPiece name,
+                                      std::string_view name,
                                       const NetLogWithSource& net_log) {
   bool ok = true;
   // It's unlikely for BindMethods() to fail if LoadNativeLibrary() succeeded. A
@@ -476,8 +492,9 @@ bool GSSAPISharedLibrary::BindMethods(base::NativeLibrary lib,
   ok &=
       BindMethod(lib, name, "gss_wrap_size_limit", &wrap_size_limit_, net_log);
 
-  if (LIKELY(ok))
+  if (ok) [[likely]] {
     return true;
+  }
 
   delete_sec_context_ = nullptr;
   display_name_ = nullptr;
@@ -645,8 +662,13 @@ ScopedSecurityContext::~ScopedSecurityContext() {
   }
 }
 
-HttpAuthGSSAPI::HttpAuthGSSAPI(GSSAPILibrary* library, gss_OID gss_oid)
-    : gss_oid_(gss_oid), library_(library), scoped_sec_context_(library) {
+HttpAuthGSSAPI::HttpAuthGSSAPI(scoped_refptr<GSSAPILibrary> library,
+                               gss_OID gss_oid)
+    : gss_oid_(gss_oid),
+      library_(std::move(library)),
+      // Safe: `library_` is declared before `scoped_sec_context_`, so it
+      // outlives the context it is borrowed by.
+      scoped_sec_context_(library_.get()) {
   DCHECK(library_);
 }
 
@@ -663,7 +685,11 @@ bool HttpAuthGSSAPI::NeedsIdentity() const {
 }
 
 bool HttpAuthGSSAPI::AllowsExplicitCredentials() const {
+#if BUILDFLAG(IS_CHROMEOS)
+  return true;
+#else
   return false;
+#endif
 }
 
 void HttpAuthGSSAPI::SetDelegation(DelegationType delegation_type) {
@@ -673,12 +699,12 @@ void HttpAuthGSSAPI::SetDelegation(DelegationType delegation_type) {
 HttpAuth::AuthorizationResult HttpAuthGSSAPI::ParseChallenge(
     HttpAuthChallengeTokenizer* tok) {
   if (scoped_sec_context_.get() == GSS_C_NO_CONTEXT) {
-    return net::ParseFirstRoundChallenge(HttpAuth::AUTH_SCHEME_NEGOTIATE, tok);
+    return ParseFirstRoundChallenge(HttpAuth::AUTH_SCHEME_NEGOTIATE, tok);
   }
   std::string encoded_auth_token;
-  return net::ParseLaterRoundChallenge(HttpAuth::AUTH_SCHEME_NEGOTIATE, tok,
-                                       &encoded_auth_token,
-                                       &decoded_server_auth_token_);
+  return ParseLaterRoundChallenge(HttpAuth::AUTH_SCHEME_NEGOTIATE, tok,
+                                  &encoded_auth_token,
+                                  &decoded_server_auth_token_);
 }
 
 int HttpAuthGSSAPI::GenerateAuthToken(const AuthCredentials* credentials,
@@ -695,7 +721,7 @@ int HttpAuthGSSAPI::GenerateAuthToken(const AuthCredentials* credentials,
                           ? const_cast<char*>(decoded_server_auth_token_.data())
                           : nullptr;
   gss_buffer_desc output_token = GSS_C_EMPTY_BUFFER;
-  ScopedBuffer scoped_output_token(&output_token, library_);
+  ScopedBuffer scoped_output_token(&output_token, library_.get());
   int rv = GetNextSecurityToken(spn, channel_bindings, &input_token,
                                 &output_token, net_log);
   if (rv != OK)
@@ -704,8 +730,7 @@ int HttpAuthGSSAPI::GenerateAuthToken(const AuthCredentials* credentials,
   // Base64 encode data in output buffer and prepend the scheme.
   std::string encode_input(static_cast<char*>(output_token.value),
                            output_token.length);
-  std::string encode_output;
-  base::Base64Encode(encode_input, &encode_output);
+  std::string encode_output = base::Base64Encode(encode_input);
   *auth_token = "Negotiate " + encode_output;
   return OK;
 }
@@ -799,28 +824,28 @@ int MapInitSecContextStatusToError(OM_uint32 major_status) {
   return ERR_UNDOCUMENTED_SECURITY_LIBRARY_STATUS;
 }
 
-base::Value ImportNameErrorParams(GSSAPILibrary* library,
-                                  base::StringPiece spn,
-                                  OM_uint32 major_status,
-                                  OM_uint32 minor_status) {
-  base::Value params{base::Value::Type::DICTIONARY};
-  params.SetStringKey("spn", spn);
+base::DictValue ImportNameErrorParams(GSSAPILibrary* library,
+                                      std::string_view spn,
+                                      OM_uint32 major_status,
+                                      OM_uint32 minor_status) {
+  base::DictValue params;
+  params.Set("spn", spn);
   if (major_status != GSS_S_COMPLETE)
-    params.SetKey("status", GetGssStatusValue(library, "import_name",
-                                              major_status, minor_status));
+    params.Set("status", GetGssStatusValue(library, "import_name", major_status,
+                                           minor_status));
   return params;
 }
 
-base::Value InitSecContextErrorParams(GSSAPILibrary* library,
-                                      gss_ctx_id_t context,
-                                      OM_uint32 major_status,
-                                      OM_uint32 minor_status) {
-  base::Value params{base::Value::Type::DICTIONARY};
+base::DictValue InitSecContextErrorParams(GSSAPILibrary* library,
+                                          gss_ctx_id_t context,
+                                          OM_uint32 major_status,
+                                          OM_uint32 minor_status) {
+  base::DictValue params;
   if (major_status != GSS_S_COMPLETE)
-    params.SetKey("status", GetGssStatusValue(library, "gss_init_sec_context",
-                                              major_status, minor_status));
+    params.Set("status", GetGssStatusValue(library, "gss_init_sec_context",
+                                           major_status, minor_status));
   if (context != GSS_C_NO_CONTEXT)
-    params.SetKey("context", GetContextStateAsValue(library, context));
+    params.Set("context", GetContextStateAsValue(library, context));
   return params;
 }
 
@@ -835,7 +860,11 @@ int HttpAuthGSSAPI::GetNextSecurityToken(const std::string& spn,
   // pointers. Rather than const casting, let's just leave this as non-const.
   // Even if the OID pointer is const, the inner |elements| pointer is still
   // non-const.
-  static gss_OID_desc kGSS_C_NT_HOSTBASED_SERVICE = {
+  //
+  // This is deliberately not static: a static gss_OID_desc would be statically
+  // initialized data with a 4-byte-aligned pointer on x86 macOS (see the
+  // comment on PaddedOidDesc), while a local is built on the stack by code.
+  gss_OID_desc kGSS_C_NT_HOSTBASED_SERVICE = {
       10, const_cast<char*>("\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x04")};
 
   // Create a name for the principal
@@ -851,12 +880,13 @@ int HttpAuthGSSAPI::GetNextSecurityToken(const std::string& spn,
       library_->import_name(&minor_status, &spn_buffer,
                             &kGSS_C_NT_HOSTBASED_SERVICE, &principal_name);
   net_log.AddEvent(NetLogEventType::AUTH_LIBRARY_IMPORT_NAME, [&] {
-    return ImportNameErrorParams(library_, spn, major_status, minor_status);
+    return ImportNameErrorParams(library_.get(), spn, major_status,
+                                 minor_status);
   });
   int rv = MapImportNameStatusToError(major_status);
   if (rv != OK)
     return rv;
-  ScopedName scoped_name(principal_name, library_);
+  ScopedName scoped_name(principal_name, library_.get());
 
   // Continue creating a security context.
   net_log.BeginEvent(NetLogEventType::AUTH_LIBRARY_INIT_SEC_CTX);
@@ -869,7 +899,7 @@ int HttpAuthGSSAPI::GetNextSecurityToken(const std::string& spn,
       nullptr,  // ret flags
       nullptr);
   net_log.EndEvent(NetLogEventType::AUTH_LIBRARY_INIT_SEC_CTX, [&] {
-    return InitSecContextErrorParams(library_, scoped_sec_context_.get(),
+    return InitSecContextErrorParams(library_.get(), scoped_sec_context_.get(),
                                      major_status, minor_status);
   });
   return MapInitSecContextStatusToError(major_status);

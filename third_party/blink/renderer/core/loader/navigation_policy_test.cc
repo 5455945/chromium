@@ -35,16 +35,21 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/public/web/web_window_features.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mouse_event_init.h"
 #include "third_party/blink/renderer/core/events/current_input_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/page/create_window.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
 class NavigationPolicyTest : public testing::Test {
  protected:
+  void SetUp() override {
+  }
+
   NavigationPolicy GetPolicyForCreateWindow(int modifiers,
                                             WebMouseEvent::Button button,
                                             bool as_popup) {
@@ -52,10 +57,20 @@ class NavigationPolicyTest : public testing::Test {
                         WebInputEvent::GetStaticTimeStampForTests());
     event.button = button;
     if (as_popup)
-      features.tool_bar_visible = false;
+      features.is_popup = true;
     base::AutoReset<const WebInputEvent*> current_event_change(
         &CurrentInputEvent::current_input_event_, &event);
     return NavigationPolicyForCreateWindow(features);
+  }
+
+  bool UserRequestedPolicyForCreateWindow(int modifiers,
+                                          WebMouseEvent::Button button) {
+    WebMouseEvent event(WebInputEvent::Type::kMouseUp, modifiers,
+                        WebInputEvent::GetStaticTimeStampForTests());
+    event.button = button;
+    base::AutoReset<const WebInputEvent*> current_event_change(
+        &CurrentInputEvent::current_input_event_, &event);
+    return UserRequestedNavigationPolicyForCreateWindow();
   }
 
   Event* GetEvent(int modifiers, WebMouseEvent::Button button) {
@@ -126,7 +141,7 @@ TEST_F(NavigationPolicyTest, ShiftLeftClickPopup) {
 }
 
 TEST_F(NavigationPolicyTest, ControlOrMetaLeftClick) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -138,7 +153,7 @@ TEST_F(NavigationPolicyTest, ControlOrMetaLeftClick) {
 }
 
 TEST_F(NavigationPolicyTest, ControlOrMetaLeftClickPopup) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -150,7 +165,7 @@ TEST_F(NavigationPolicyTest, ControlOrMetaLeftClickPopup) {
 }
 
 TEST_F(NavigationPolicyTest, ControlOrMetaAndShiftLeftClick) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -163,7 +178,7 @@ TEST_F(NavigationPolicyTest, ControlOrMetaAndShiftLeftClick) {
 }
 
 TEST_F(NavigationPolicyTest, ControlOrMetaAndShiftLeftClickPopup) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -191,31 +206,41 @@ TEST_F(NavigationPolicyTest, MiddleClickPopup) {
             GetPolicyForCreateWindow(modifiers, button, as_popup));
 }
 
-TEST_F(NavigationPolicyTest, NoToolbarsForcesPopup) {
-  features.tool_bar_visible = false;
+TEST_F(NavigationPolicyTest, ForcePopup) {
+  features.is_popup = true;
   EXPECT_EQ(kNavigationPolicyNewPopup,
             NavigationPolicyForCreateWindow(features));
-  features.tool_bar_visible = true;
+  features.is_popup = false;
   EXPECT_EQ(kNavigationPolicyNewForegroundTab,
             NavigationPolicyForCreateWindow(features));
-}
 
-TEST_F(NavigationPolicyTest, NoStatusBarForcesPopup) {
-  features.status_bar_visible = false;
-  EXPECT_EQ(kNavigationPolicyNewPopup,
-            NavigationPolicyForCreateWindow(features));
-  features.status_bar_visible = true;
-  EXPECT_EQ(kNavigationPolicyNewForegroundTab,
-            NavigationPolicyForCreateWindow(features));
-}
+  static const struct {
+    const char* feature_string;
+    NavigationPolicy policy;
+  } kCases[] = {
+      {"", kNavigationPolicyNewForegroundTab},
+      {"popup", kNavigationPolicyNewPopup},
+      {"location,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewForegroundTab},
+      {"toolbar,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewForegroundTab},
+      {"popup,location,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewPopup},
+      {"menubar,resizable,scrollbars,status", kNavigationPolicyNewPopup},
+      {"location,menubar,resizable,scrollbars", kNavigationPolicyNewPopup},
+      {"location,resizable,scrollbars,status", kNavigationPolicyNewPopup},
+      {"location,menubar,resizable,status", kNavigationPolicyNewPopup},
+      {"location,menubar,scrollbars,status", kNavigationPolicyNewForegroundTab},
+      {"popup=0,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewForegroundTab},
+  };
 
-TEST_F(NavigationPolicyTest, NoMenuBarForcesPopup) {
-  features.menu_bar_visible = false;
-  EXPECT_EQ(kNavigationPolicyNewPopup,
-            NavigationPolicyForCreateWindow(features));
-  features.menu_bar_visible = true;
-  EXPECT_EQ(kNavigationPolicyNewForegroundTab,
-            NavigationPolicyForCreateWindow(features));
+  for (const auto& test : kCases) {
+    EXPECT_EQ(test.policy,
+              NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
+                  test.feature_string, /*dom_window=*/nullptr)))
+        << "Testing '" << test.feature_string << "'";
+  }
 }
 
 TEST_F(NavigationPolicyTest, NoOpener) {
@@ -224,6 +249,14 @@ TEST_F(NavigationPolicyTest, NoOpener) {
     NavigationPolicy policy;
   } kCases[] = {
       {"", kNavigationPolicyNewForegroundTab},
+      {"location,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewForegroundTab},
+      {"popup,location,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewPopup},
+      {"PoPuP,location,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewPopup},
+      {"popupFoo,location,menubar,resizable,scrollbars,status",
+       kNavigationPolicyNewForegroundTab},
       {"something", kNavigationPolicyNewPopup},
       {"something, something", kNavigationPolicyNewPopup},
       {"notnoopener", kNavigationPolicyNewPopup},
@@ -236,7 +269,7 @@ TEST_F(NavigationPolicyTest, NoOpener) {
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, nullptr /* dom_window */)))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -249,17 +282,20 @@ TEST_F(NavigationPolicyTest, NoOpenerAndNoReferrer) {
       {"", kNavigationPolicyNewForegroundTab},
       {"noopener, noreferrer", kNavigationPolicyNewForegroundTab},
       {"noopener, notreferrer", kNavigationPolicyNewPopup},
+      {"noopener, notreferrer, popup", kNavigationPolicyNewPopup},
       {"notopener, noreferrer", kNavigationPolicyNewPopup},
-      {"something, noopener, noreferrer", kNavigationPolicyNewPopup},
-      {"noopener, noreferrer, something", kNavigationPolicyNewPopup},
-      {"noopener, something, noreferrer", kNavigationPolicyNewPopup},
+      {"notopener, noreferrer, popup", kNavigationPolicyNewPopup},
+      {"notopener, noreferrer, popup=0", kNavigationPolicyNewForegroundTab},
+      {"popup, noopener, noreferrer", kNavigationPolicyNewPopup},
+      {"noopener, noreferrer, popup", kNavigationPolicyNewPopup},
+      {"noopener, popup, noreferrer", kNavigationPolicyNewPopup},
       {"NoOpEnEr, NoReFeRrEr", kNavigationPolicyNewForegroundTab},
   };
 
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, nullptr /* dom_window */)))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -270,19 +306,21 @@ TEST_F(NavigationPolicyTest, NoReferrer) {
     NavigationPolicy policy;
   } kCases[] = {
       {"", kNavigationPolicyNewForegroundTab},
-      {"something", kNavigationPolicyNewPopup},
-      {"something, something", kNavigationPolicyNewPopup},
+      {"popup", kNavigationPolicyNewPopup},
+      {"popup, something", kNavigationPolicyNewPopup},
       {"notreferrer", kNavigationPolicyNewPopup},
+      {"notreferrer,popup", kNavigationPolicyNewPopup},
+      {"notreferrer,popup=0", kNavigationPolicyNewForegroundTab},
       {"noreferrer", kNavigationPolicyNewForegroundTab},
-      {"something, noreferrer", kNavigationPolicyNewPopup},
-      {"noreferrer, something", kNavigationPolicyNewPopup},
+      {"popup, noreferrer", kNavigationPolicyNewPopup},
+      {"noreferrer, popup", kNavigationPolicyNewPopup},
       {"NoReFeRrEr", kNavigationPolicyNewForegroundTab},
   };
 
   for (const auto& test : kCases) {
     EXPECT_EQ(test.policy,
               NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
-                  test.feature_string, nullptr /* dom_window */)))
+                  test.feature_string, /*dom_window=*/nullptr)))
         << "Testing '" << test.feature_string << "'";
   }
 }
@@ -294,6 +332,100 @@ TEST_F(NavigationPolicyTest, NotResizableForcesPopup) {
   features.resizable = true;
   EXPECT_EQ(kNavigationPolicyNewForegroundTab,
             NavigationPolicyForCreateWindow(features));
+}
+
+TEST_F(NavigationPolicyTest, SplitNotResizableDoesNotForcePopup) {
+  features.is_split = true;
+  features.resizable = false;
+  EXPECT_EQ(kNavigationPolicyNewForegroundTab,
+            NavigationPolicyForCreateWindow(features));
+  features.is_popup = true;
+  EXPECT_EQ(kNavigationPolicyNewPopup,
+            NavigationPolicyForCreateWindow(features));
+}
+
+// The renderer chooses the fallback policy for a split request. The browser
+// decides whether to create the split.
+TEST_F(NavigationPolicyTest, Split) {
+  ScopedWindowOpenSplitTabForTest split_tab_enabled{true};
+
+  static const struct {
+    const char* feature_string;
+    NavigationPolicy policy;
+  } kCases[] = {
+      {"split", kNavigationPolicyNewForegroundTab},
+      {"split, something", kNavigationPolicyNewForegroundTab},
+      {"split, width=400, height=300", kNavigationPolicyNewForegroundTab},
+      {"split, resizable=0", kNavigationPolicyNewForegroundTab},
+      {"split, location=0, menubar=0", kNavigationPolicyNewForegroundTab},
+      {"split, splitposition=left, splitsize=30",
+       kNavigationPolicyNewForegroundTab},
+      {"split, noopener", kNavigationPolicyNewForegroundTab},
+      {"split, popup", kNavigationPolicyNewPopup},
+      {"popup, split", kNavigationPolicyNewPopup},
+      {"split, popup=0", kNavigationPolicyNewForegroundTab},
+      {"popup=0, split", kNavigationPolicyNewForegroundTab},
+      {"split=0", kNavigationPolicyNewPopup},
+      {"splitposition=left", kNavigationPolicyNewPopup},
+  };
+
+  for (const auto& test : kCases) {
+    EXPECT_EQ(test.policy,
+              NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
+                  test.feature_string, /*dom_window=*/nullptr)))
+        << "Testing '" << test.feature_string << "'";
+  }
+}
+
+TEST_F(NavigationPolicyTest, SplitDisabled) {
+  ScopedWindowOpenSplitTabForTest split_tab_enabled{false};
+
+  static const struct {
+    const char* feature_string;
+    NavigationPolicy policy;
+  } kCases[] = {
+      // Without support, "split" is an unrecognized feature, so the legacy
+      // popup heuristic applies.
+      {"split", kNavigationPolicyNewPopup},
+      {"popup=0, split", kNavigationPolicyNewForegroundTab},
+  };
+
+  for (const auto& test : kCases) {
+    EXPECT_EQ(test.policy,
+              NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
+                  test.feature_string, /*dom_window=*/nullptr)))
+        << "Testing '" << test.feature_string << "'";
+  }
+}
+
+TEST_F(NavigationPolicyTest, UserRequestedPolicyForCreateWindow) {
+#if BUILDFLAG(IS_MAC)
+  const int new_tab_modifier = WebInputEvent::kMetaKey;
+#else
+  const int new_tab_modifier = WebInputEvent::kControlKey;
+#endif
+  const WebMouseEvent::Button left = WebMouseEvent::Button::kLeft;
+
+  // No input event, or no modifiers.
+  EXPECT_FALSE(UserRequestedNavigationPolicyForCreateWindow());
+  EXPECT_FALSE(UserRequestedPolicyForCreateWindow(0, left));
+  // The download modifier is ignored for a new window.
+  EXPECT_FALSE(
+      UserRequestedPolicyForCreateWindow(WebInputEvent::kAltKey, left));
+
+  // Background tab.
+  EXPECT_TRUE(UserRequestedPolicyForCreateWindow(new_tab_modifier, left));
+  EXPECT_TRUE(
+      UserRequestedPolicyForCreateWindow(0, WebMouseEvent::Button::kMiddle));
+  // Foreground tab.
+  EXPECT_TRUE(UserRequestedPolicyForCreateWindow(
+      new_tab_modifier | WebInputEvent::kShiftKey, left));
+  // New window.
+  EXPECT_TRUE(
+      UserRequestedPolicyForCreateWindow(WebInputEvent::kShiftKey, left));
+  // Split view.
+  EXPECT_TRUE(UserRequestedPolicyForCreateWindow(
+      new_tab_modifier | WebInputEvent::kAltKey, left));
 }
 
 TEST_F(NavigationPolicyTest, EventLeftClick) {
@@ -311,7 +443,7 @@ TEST_F(NavigationPolicyTest, EventShiftLeftClick) {
 }
 
 TEST_F(NavigationPolicyTest, EventControlOrMetaLeftClick) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -322,7 +454,7 @@ TEST_F(NavigationPolicyTest, EventControlOrMetaLeftClick) {
 }
 
 TEST_F(NavigationPolicyTest, EventControlOrMetaLeftClickWithUserEvent) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -334,7 +466,7 @@ TEST_F(NavigationPolicyTest, EventControlOrMetaLeftClickWithUserEvent) {
 
 TEST_F(NavigationPolicyTest,
        EventControlOrMetaLeftClickWithDifferentUserEvent) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey;
 #else
   int modifiers = WebInputEvent::kControlKey;
@@ -345,7 +477,7 @@ TEST_F(NavigationPolicyTest,
 }
 
 TEST_F(NavigationPolicyTest, EventShiftControlOrMetaLeftClick) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey | WebInputEvent::kShiftKey;
 #else
   int modifiers = WebInputEvent::kControlKey | WebInputEvent::kShiftKey;
@@ -396,6 +528,28 @@ TEST_F(NavigationPolicyTest, EventAltClickWithDifferentUserEvent) {
   WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
   EXPECT_EQ(kNavigationPolicyCurrentTab,
             GetPolicyFromEvent(modifiers, button, 0, button));
+}
+
+TEST_F(NavigationPolicyTest, EventAltControlOrMetaLeftClick) {
+#if BUILDFLAG(IS_MAC)
+  int modifiers = WebInputEvent::kMetaKey | WebInputEvent::kAltKey;
+#else
+  int modifiers = WebInputEvent::kControlKey | WebInputEvent::kAltKey;
+#endif
+  WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
+  EXPECT_EQ(kNavigationPolicyCurrentTab,
+            NavigationPolicyFromEvent(GetEvent(modifiers, button)));
+}
+
+TEST_F(NavigationPolicyTest, EventAltControlOrMetaLeftClickWithUserEvent) {
+#if BUILDFLAG(IS_MAC)
+  int modifiers = WebInputEvent::kMetaKey | WebInputEvent::kAltKey;
+#else
+  int modifiers = WebInputEvent::kControlKey | WebInputEvent::kAltKey;
+#endif
+  WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
+  EXPECT_EQ(kNavigationPolicySplitView,
+            GetPolicyFromEvent(modifiers, button, modifiers, button));
 }
 
 }  // namespace blink

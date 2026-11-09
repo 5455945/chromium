@@ -1,13 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/test/fake_external_begin_frame_source.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "components/viz/test/begin_frame_args_test.h"
 
@@ -29,9 +30,11 @@ FakeExternalBeginFrameSource::~FakeExternalBeginFrameSource() {
 void FakeExternalBeginFrameSource::SetPaused(bool paused) {
   if (paused != paused_) {
     paused_ = paused;
-    std::set<BeginFrameObserver*> observers(observers_);
-    for (auto* obs : observers)
+    std::set<raw_ptr<BeginFrameObserver, SetExperimental>> observers(
+        observers_);
+    for (BeginFrameObserver* obs : observers) {
       obs->OnBeginFrameSourcePausedChanged(paused_);
+    }
   }
 }
 
@@ -67,10 +70,10 @@ void FakeExternalBeginFrameSource::RemoveObserver(BeginFrameObserver* obs) {
     client_->OnRemoveObserver(obs);
 }
 
-void FakeExternalBeginFrameSource::DidFinishFrame(BeginFrameObserver* obs) {}
-
-bool FakeExternalBeginFrameSource::IsThrottled() const {
-  return true;
+void FakeExternalBeginFrameSource::DidFinishFrame(
+    BeginFrameObserver* obs,
+    DisplaySchedulerDrawResult result) {
+  pending_frames_[obs]--;
 }
 
 BeginFrameArgs FakeExternalBeginFrameSource::CreateBeginFrameArgs(
@@ -86,13 +89,27 @@ BeginFrameArgs FakeExternalBeginFrameSource::CreateBeginFrameArgs(
                                         next_begin_frame_number_++);
 }
 
+BeginFrameArgs FakeExternalBeginFrameSource::CreateBeginFrameArgsWithGenerator(
+    base::TimeTicks frame_time,
+    base::TimeTicks next_frame_time,
+    base::TimeDelta vsync_interval,
+    base::TimeDelta unthrottled_interval) {
+  return begin_frame_args_generator_.GenerateBeginFrameArgs(
+      source_id(), frame_time, next_frame_time, vsync_interval,
+      unthrottled_interval);
+}
+
 void FakeExternalBeginFrameSource::TestOnBeginFrame(
     const BeginFrameArgs& args) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   current_args_ = args;
-  std::set<BeginFrameObserver*> observers(observers_);
-  for (auto* obs : observers)
+  IssueBeginFrameToInputClient(args);
+  std::set<raw_ptr<BeginFrameObserver, SetExperimental>> observers(observers_);
+  for (BeginFrameObserver* obs : observers) {
+    pending_frames_[obs]++;
     obs->OnBeginFrame(current_args_);
+  }
+  IssueBeginFrameToSchedulerClient(args);
   if (tick_automatically_)
     PostTestOnBeginFrame();
 }
@@ -102,10 +119,22 @@ void FakeExternalBeginFrameSource::PostTestOnBeginFrame() {
       base::BindOnce(&FakeExternalBeginFrameSource::TestOnBeginFrame,
                      weak_ptr_factory_.GetWeakPtr(),
                      CreateBeginFrameArgs(BEGINFRAME_FROM_HERE)));
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, begin_frame_task_.callback(),
-      base::TimeDelta::FromMilliseconds(milliseconds_per_frame_));
+      base::Milliseconds(milliseconds_per_frame_));
   next_begin_frame_number_++;
+}
+
+bool FakeExternalBeginFrameSource::AllFramesDidFinish() {
+  bool found_pending_frames = false;
+  for (auto const& entry : pending_frames_) {
+    if (entry.second != 0) {
+      LOG(WARNING) << "Observer " << entry.first << " has " << entry.second
+                   << " pending frame(s)";
+      found_pending_frames = true;
+    }
+  }
+  return !found_pending_frames;
 }
 
 }  // namespace viz

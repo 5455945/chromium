@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,12 +20,16 @@ namespace {
 
 class XRCanvasInputEventListener : public NativeEventListener {
  public:
-  XRCanvasInputEventListener(XRCanvasInputProvider* input_provider)
+  explicit XRCanvasInputEventListener(XRCanvasInputProvider* input_provider)
       : input_provider_(input_provider) {}
 
   void Invoke(ExecutionContext* execution_context, Event* event) override {
     if (!input_provider_->ShouldProcessEvents())
       return;
+
+    if (!event->isTrusted()) {
+      return;
+    }
 
     auto* pointer_event = To<PointerEvent>(event);
     DCHECK(pointer_event);
@@ -55,9 +59,12 @@ XRCanvasInputProvider::XRCanvasInputProvider(XRSession* session,
                                              HTMLCanvasElement* canvas)
     : session_(session), canvas_(canvas) {
   listener_ = MakeGarbageCollected<XRCanvasInputEventListener>(this);
-  canvas->addEventListener(event_type_names::kPointerdown, listener_);
-  canvas->addEventListener(event_type_names::kPointerup, listener_);
-  canvas->addEventListener(event_type_names::kPointercancel, listener_);
+  canvas->addEventListener(event_type_names::kPointerdown, listener_,
+                           /*use_capture=*/false);
+  canvas->addEventListener(event_type_names::kPointerup, listener_,
+                           /*use_capture=*/false);
+  canvas->addEventListener(event_type_names::kPointercancel, listener_,
+                           /*use_capture=*/false);
 }
 
 XRCanvasInputProvider::~XRCanvasInputProvider() {}
@@ -66,9 +73,12 @@ void XRCanvasInputProvider::Stop() {
   if (!listener_) {
     return;
   }
-  canvas_->removeEventListener(event_type_names::kPointerdown, listener_);
-  canvas_->removeEventListener(event_type_names::kPointerup, listener_);
-  canvas_->removeEventListener(event_type_names::kPointercancel, listener_);
+  canvas_->removeEventListener(event_type_names::kPointerdown, listener_,
+                               /*use_capture=*/false);
+  canvas_->removeEventListener(event_type_names::kPointerup, listener_,
+                               /*use_capture=*/false);
+  canvas_->removeEventListener(event_type_names::kPointercancel, listener_,
+                               /*use_capture=*/false);
   canvas_ = nullptr;
   listener_ = nullptr;
 }
@@ -90,7 +100,7 @@ void XRCanvasInputProvider::OnPointerUp(PointerEvent* event) {
 }
 
 XRInputSource* XRCanvasInputProvider::GetInputSource() {
-  return input_source_;
+  return input_source_.Get();
 }
 
 void XRCanvasInputProvider::UpdateInputSource(PointerEvent* event) {
@@ -114,8 +124,9 @@ void XRCanvasInputProvider::UpdateInputSource(PointerEvent* event) {
   // position of the screen interaction and shoves it backwards through the
   // projection matrix to get a 3D point in space, which is then returned in
   // matrix form so we can use it as an XRInputSource's pointerMatrix.
-  XRViewData* view = session_->views()[0];
-  TransformationMatrix viewer_from_pointer = view->UnprojectPointer(
+  XRViewData* view =
+      session_->ViewDataForEye(device::mojom::blink::XREye::kNone);
+  gfx::Transform viewer_from_pointer = view->UnprojectPointer(
       element_x, element_y, canvas_->OffsetWidth(), canvas_->OffsetHeight());
 
   // Update the pointer pose in input space. For screen tapping, input

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,9 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "dbus/dbus_export.h"
 #include "dbus/object_path.h"
 
@@ -84,6 +85,9 @@ class CHROME_DBUS_EXPORT Message {
     UNIX_FD = DBUS_TYPE_UNIX_FD,
   };
 
+  Message(const Message&) = delete;
+  Message& operator=(const Message&) = delete;
+
   // Returns the type of the message. Returns MESSAGE_INVALID if
   // raw_message_ is NULL.
   MessageType GetMessageType();
@@ -136,8 +140,7 @@ class CHROME_DBUS_EXPORT Message {
   std::string ToStringInternal(const std::string& indent,
                                MessageReader* reader);
 
-  DBusMessage* raw_message_;
-  DISALLOW_COPY_AND_ASSIGN(Message);
+  raw_ptr<DBusMessage, AcrossTasksDanglingUntriaged> raw_message_;
 };
 
 // MessageCall is a type of message used for calling a method via D-Bus.
@@ -155,6 +158,9 @@ class CHROME_DBUS_EXPORT MethodCall : public Message {
   // The constructor creates the internal raw message.
   MethodCall(const std::string& interface_name, const std::string& method_name);
 
+  MethodCall(const MethodCall&) = delete;
+  MethodCall& operator=(const MethodCall&) = delete;
+
   // Returns a newly created MethodCall from the given raw message of the
   // type DBUS_MESSAGE_TYPE_METHOD_CALL. Takes the ownership of |raw_message|.
   static std::unique_ptr<MethodCall> FromRawMessage(DBusMessage* raw_message);
@@ -163,8 +169,6 @@ class CHROME_DBUS_EXPORT MethodCall : public Message {
   // Creates a method call message. The internal raw message is NULL.
   // Only used internally.
   MethodCall();
-
-  DISALLOW_COPY_AND_ASSIGN(MethodCall);
 };
 
 // Signal is a type of message used to send a signal.
@@ -182,6 +186,9 @@ class CHROME_DBUS_EXPORT Signal : public Message {
   // The constructor creates the internal raw_message_.
   Signal(const std::string& interface_name, const std::string& method_name);
 
+  Signal(const Signal&) = delete;
+  Signal& operator=(const Signal&) = delete;
+
   // Returns a newly created SIGNAL from the given raw message of the type
   // DBUS_MESSAGE_TYPE_SIGNAL. Takes the ownership of |raw_message|.
   static std::unique_ptr<Signal> FromRawMessage(DBusMessage* raw_message);
@@ -190,8 +197,6 @@ class CHROME_DBUS_EXPORT Signal : public Message {
   // Creates a signal message. The internal raw message is NULL.
   // Only used internally.
   Signal();
-
-  DISALLOW_COPY_AND_ASSIGN(Signal);
 };
 
 // Response is a type of message used for receiving a response from a
@@ -211,12 +216,12 @@ class CHROME_DBUS_EXPORT Response : public Message {
   // Useful for testing.
   static std::unique_ptr<Response> CreateEmpty();
 
+  Response(const Response&) = delete;
+  Response& operator=(const Response&) = delete;
+
  protected:
   // Creates a Response message. The internal raw message is NULL.
   Response();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Response);
 };
 
 // ErrorResponse is a type of message used to return an error to the
@@ -237,11 +242,12 @@ class CHROME_DBUS_EXPORT ErrorResponse : public Response {
       const std::string& error_name,
       const std::string& error_message);
 
+  ErrorResponse(const ErrorResponse&) = delete;
+  ErrorResponse& operator=(const ErrorResponse&) = delete;
+
  private:
   // Creates an ErrorResponse message. The internal raw message is NULL.
   ErrorResponse();
-
-  DISALLOW_COPY_AND_ASSIGN(ErrorResponse);
 };
 
 // MessageWriter is used to write outgoing messages for calling methods
@@ -266,6 +272,10 @@ class CHROME_DBUS_EXPORT MessageWriter {
   // Data added with Append* will be written to |message|, which may be NULL
   // to create a sub-writer for passing to OpenArray, etc.
   explicit MessageWriter(Message* message);
+
+  MessageWriter(const MessageWriter&) = delete;
+  MessageWriter& operator=(const MessageWriter&) = delete;
+
   ~MessageWriter();
 
   // Appends a byte to the message.
@@ -278,6 +288,12 @@ class CHROME_DBUS_EXPORT MessageWriter {
   void AppendInt64(int64_t value);
   void AppendUint64(uint64_t value);
   void AppendDouble(double value);
+  // This function intentionally takes a `std::string` to ensure the data that
+  // should be appended is correctly null-terminated; other data types, e.g.
+  // `std::string_view`, do not necessarily have the same end as the
+  // `std::string` that owns the underlying data. This can result in more data
+  // than intended being appended since the end of the `std::string` is used
+  // instead of the end of the `std::string_view`.
   void AppendString(const std::string& value);
   void AppendObjectPath(const ObjectPath& value);
 
@@ -310,16 +326,16 @@ class CHROME_DBUS_EXPORT MessageWriter {
   // Appends the array of bytes. Arrays of bytes are often used for
   // exchanging binary blobs hence it's worth having a specialized
   // function.
-  void AppendArrayOfBytes(const uint8_t* values, size_t length);
+  void AppendArrayOfBytes(base::span<const uint8_t> values);
 
   // Appends array of int32_ts.
-  void AppendArrayOfInt32s(const int32_t* values, size_t length);
+  void AppendArrayOfInt32s(base::span<const int32_t> values);
 
   // Appends array of uint32_ts.
-  void AppendArrayOfUint32s(const uint32_t* values, size_t length);
+  void AppendArrayOfUint32s(base::span<const uint32_t> values);
 
   // Appends the array of doubles. Used for audio mixer matrix doubles.
-  void AppendArrayOfDoubles(const double* values, size_t length);
+  void AppendArrayOfDoubles(base::span<const double> values);
 
   // Appends the array of strings. Arrays of strings are often used for
   // exchanging lists of names hence it's worth having a specialized
@@ -362,11 +378,9 @@ class CHROME_DBUS_EXPORT MessageWriter {
   // Helper function used to implement AppendVariantOfByte() etc.
   void AppendVariantOfBasic(int dbus_type, const void* value);
 
-  Message* message_;
+  raw_ptr<Message, AcrossTasksDanglingUntriaged> message_;
   DBusMessageIter raw_message_iter_;
   bool container_is_open_;
-
-  DISALLOW_COPY_AND_ASSIGN(MessageWriter);
 };
 
 // MessageReader is used to read incoming messages such as responses for
@@ -379,6 +393,10 @@ class CHROME_DBUS_EXPORT MessageReader {
   // The data will be read from the given |message|, which may be NULL to
   // create a sub-reader for passing to PopArray, etc.
   explicit MessageReader(Message* message);
+
+  MessageReader(const MessageReader&) = delete;
+  MessageReader& operator=(const MessageReader&) = delete;
+
   ~MessageReader();
 
   // Returns true if the reader has more data to read. The function is
@@ -419,19 +437,18 @@ class CHROME_DBUS_EXPORT MessageReader {
   // Arrays of bytes are often used for exchanging binary blobs hence it's
   // worth having a specialized function.
   //
-  // Ownership of the memory pointed to by |bytes| remains with the
-  // MessageReader; |bytes| must be copied if the contents will be referenced
-  // after the MessageReader is destroyed.
-  bool PopArrayOfBytes(const uint8_t** bytes, size_t* length);
+  // The returned span points to memory owned by the message reader. The
+  // caller must not access the span after the message reader is destroyed.
+  bool PopArrayOfBytes(base::span<const uint8_t>* bytes);
 
   // Gets the array of int32_ts at the current iterator position.
-  bool PopArrayOfInt32s(const int32_t** signed_ints, size_t* length);
+  bool PopArrayOfInt32s(base::span<const int32_t>* signed_ints);
 
   // Gets the array of uint32_ts at the current iterator position.
-  bool PopArrayOfUint32s(const uint32_t** unsigned_ints, size_t* length);
+  bool PopArrayOfUint32s(base::span<const uint32_t>* unsigned_ints);
 
   // Gets the array of doubles at the current iterator position.
-  bool PopArrayOfDoubles(const double** doubles, size_t* length);
+  bool PopArrayOfDoubles(base::span<const double>* doubles);
 
   // Gets the array of strings at the current iterator position. |strings| is
   // cleared before being modified. Returns true and advances the iterator on
@@ -502,10 +519,8 @@ class CHROME_DBUS_EXPORT MessageReader {
   // Helper function used to implement PopVariantOfByte() etc.
   bool PopVariantOfBasic(int dbus_type, void* value);
 
-  Message* message_;
+  raw_ptr<Message, AcrossTasksDanglingUntriaged> message_;
   DBusMessageIter raw_message_iter_;
-
-  DISALLOW_COPY_AND_ASSIGN(MessageReader);
 };
 
 }  // namespace dbus

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,29 +9,36 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
+#include "mojo/buildflags.h"
 
 namespace mojo {
 namespace core {
 
-#if defined(OS_POSIX) && !defined(OS_NACL) && !defined(OS_MAC)
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::Feature kMojoLinuxChannelSharedMem;
+BASE_DECLARE_FEATURE(kMojoUseEventFd);
 
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::FeatureParam<int> kMojoLinuxChannelSharedMemPages;
+extern const base::FeatureParam<int> kMojoUseEventFdPages;
 
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::FeatureParam<bool> kMojoLinuxChannelSharedMemEfdZeroOnWake;
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+extern const char kSuppressEventfdUpgradeForWebview[];
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_ANDROID)
 
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::Feature kMojoPosixUseWritev;
-
-#endif  // defined(OS_POSIX) && !defined(OS_NACL) && !defined(OS_MAC)
+BASE_DECLARE_FEATURE(kMojoIpczMemV2);
 
 COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
-extern const base::Feature kMojoInlineMessagePayloads;
+BASE_DECLARE_FEATURE(kMojoFixGeometricBufferGrowth);
+
+COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
+BASE_DECLARE_FEATURE(kMojoFixGeometricBufferGrowth2);
+
+#if BUILDFLAG(IS_WIN)
+COMPONENT_EXPORT(MOJO_CORE_EMBEDDER_FEATURES)
+BASE_DECLARE_FEATURE(kMojoHandleTypeProtections);
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace core
 }  // namespace mojo

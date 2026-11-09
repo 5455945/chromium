@@ -1,15 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/common/api/sockets/sockets_manifest_permission.h"
+
+#include <algorithm>
+#include <iterator>
 #include <set>
 #include <tuple>
 
-#include "base/cxx17_backports.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/values.h"
-#include "extensions/common/api/sockets/sockets_manifest_permission.h"
 #include "extensions/common/manifest_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -39,11 +41,11 @@ static void AssertEmptyPermission(const SocketsManifestPermission* permission) {
   EXPECT_EQ(0u, permission->entries().size());
 }
 
-static std::unique_ptr<base::Value> ParsePermissionJSON(
-    const std::string& json) {
-  std::unique_ptr<base::Value> result(base::JSONReader::ReadDeprecated(json));
+static base::Value ParsePermissionJSON(const std::string& json) {
+  std::optional<base::Value> result =
+      base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_TRUE(result) << "Invalid JSON string: " << json;
-  return result;
+  return std::move(result.value());
 }
 
 static std::unique_ptr<SocketsManifestPermission> PermissionFromValue(
@@ -57,8 +59,8 @@ static std::unique_ptr<SocketsManifestPermission> PermissionFromValue(
 
 static std::unique_ptr<SocketsManifestPermission> PermissionFromJSON(
     const std::string& json) {
-  std::unique_ptr<base::Value> value(ParsePermissionJSON(json));
-  return PermissionFromValue(*value);
+  base::Value value = ParsePermissionJSON(json);
+  return PermissionFromValue(value);
 }
 
 struct CheckFormatEntry {
@@ -66,17 +68,7 @@ struct CheckFormatEntry {
                    std::string host_pattern)
       : operation_type(operation_type), host_pattern(host_pattern) {}
 
-  // operators <, == are needed by container std::set and algorithms
-  // std::set_includes and std::set_differences.
-  bool operator<(const CheckFormatEntry& rhs) const {
-    return std::tie(operation_type, host_pattern) <
-           std::tie(rhs.operation_type, rhs.host_pattern);
-  }
-
-  bool operator==(const CheckFormatEntry& rhs) const {
-    return operation_type == rhs.operation_type &&
-           host_pattern == rhs.host_pattern;
-  }
+  auto operator<=>(const CheckFormatEntry& rhs) const = default;
 
   SocketPermissionRequest::OperationType operation_type;
   std::string host_pattern;
@@ -104,8 +96,7 @@ static testing::AssertionResult CheckFormat(
         CheckFormatEntry(it->pattern().type, it->GetHostPatternAsString()));
   }
 
-  if (!std::equal(
-          permissions.begin(), permissions.end(), parsed_permissions.begin())) {
+  if (!std::ranges::equal(permissions, parsed_permissions)) {
     return testing::AssertionFailure() << "Incorrect socket operations.";
   }
   return testing::AssertionSuccess();
@@ -119,7 +110,7 @@ static testing::AssertionResult CheckFormat(const std::string& json,
                                             const CheckFormatEntry& op1) {
   CheckFormatEntry entries[] = {op1};
   return CheckFormat(
-      std::multiset<CheckFormatEntry>(entries, entries + base::size(entries)),
+      std::multiset<CheckFormatEntry>(std::begin(entries), std::end(entries)),
       json);
 }
 
@@ -128,7 +119,7 @@ static testing::AssertionResult CheckFormat(const std::string& json,
                                             const CheckFormatEntry& op2) {
   CheckFormatEntry entries[] = {op1, op2};
   return CheckFormat(
-      std::multiset<CheckFormatEntry>(entries, entries + base::size(entries)),
+      std::multiset<CheckFormatEntry>(std::begin(entries), std::end(entries)),
       json);
 }
 
@@ -144,7 +135,7 @@ static testing::AssertionResult CheckFormat(const std::string& json,
                                             const CheckFormatEntry& op9) {
   CheckFormatEntry entries[] = {op1, op2, op3, op4, op5, op6, op7, op8, op9};
   return CheckFormat(
-      std::multiset<CheckFormatEntry>(entries, entries + base::size(entries)),
+      std::multiset<CheckFormatEntry>(std::begin(entries), std::end(entries)),
       json);
 }
 
@@ -164,12 +155,11 @@ TEST(SocketsManifestPermissionTest, Empty) {
   EXPECT_TRUE(permission->Equal(clone));
 
   // ToValue()/FromValue()
-  std::unique_ptr<const base::Value> value(permission->ToValue());
-  EXPECT_TRUE(value.get());
+  base::Value value = permission->ToValue();
 
   std::unique_ptr<SocketsManifestPermission> permission2(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission2->FromValue(value.get()));
+  EXPECT_TRUE(permission2->FromValue(&value));
   AssertEmptyPermission(permission2.get());
 
   // Union/Diff/Intersection
@@ -271,63 +261,56 @@ TEST(SocketsManifestPermissionTest, JSONFormats) {
 }
 
 TEST(SocketsManifestPermissionTest, FromToValue) {
-  std::unique_ptr<base::Value> udp_send(
-      ParsePermissionJSON(kUdpBindPermission));
-  std::unique_ptr<base::Value> udp_bind(
-      ParsePermissionJSON(kUdpSendPermission));
-  std::unique_ptr<base::Value> tcp_connect(
-      ParsePermissionJSON(kTcpConnectPermission));
-  std::unique_ptr<base::Value> tcp_server_listen(
-      ParsePermissionJSON(kTcpServerListenPermission));
+  base::Value udp_send = ParsePermissionJSON(kUdpBindPermission);
+  base::Value udp_bind = ParsePermissionJSON(kUdpSendPermission);
+  base::Value tcp_connect = ParsePermissionJSON(kTcpConnectPermission);
+  base::Value tcp_server_listen =
+      ParsePermissionJSON(kTcpServerListenPermission);
 
   // FromValue()
   std::unique_ptr<SocketsManifestPermission> permission1(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission1->FromValue(udp_send.get()));
+  EXPECT_TRUE(permission1->FromValue(&udp_send));
   EXPECT_EQ(2u, permission1->entries().size());
 
   std::unique_ptr<SocketsManifestPermission> permission2(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission2->FromValue(udp_bind.get()));
+  EXPECT_TRUE(permission2->FromValue(&udp_bind));
   EXPECT_EQ(2u, permission2->entries().size());
 
   std::unique_ptr<SocketsManifestPermission> permission3(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission3->FromValue(tcp_connect.get()));
+  EXPECT_TRUE(permission3->FromValue(&tcp_connect));
   EXPECT_EQ(2u, permission3->entries().size());
 
   std::unique_ptr<SocketsManifestPermission> permission4(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission4->FromValue(tcp_server_listen.get()));
+  EXPECT_TRUE(permission4->FromValue(&tcp_server_listen));
   EXPECT_EQ(2u, permission4->entries().size());
 
   // ToValue()
-  std::unique_ptr<base::Value> value1 = permission1->ToValue();
-  EXPECT_TRUE(value1);
+  base::Value value1 = permission1->ToValue();
   std::unique_ptr<SocketsManifestPermission> permission1_1(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission1_1->FromValue(value1.get()));
+  EXPECT_TRUE(permission1_1->FromValue(&value1));
   EXPECT_TRUE(permission1->Equal(permission1_1.get()));
 
-  std::unique_ptr<base::Value> value2 = permission2->ToValue();
-  EXPECT_TRUE(value2);
+  base::Value value2 = permission2->ToValue();
   std::unique_ptr<SocketsManifestPermission> permission2_1(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission2_1->FromValue(value2.get()));
+  EXPECT_TRUE(permission2_1->FromValue(&value2));
   EXPECT_TRUE(permission2->Equal(permission2_1.get()));
 
-  std::unique_ptr<base::Value> value3 = permission3->ToValue();
-  EXPECT_TRUE(value3);
+  base::Value value3 = permission3->ToValue();
   std::unique_ptr<SocketsManifestPermission> permission3_1(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission3_1->FromValue(value3.get()));
+  EXPECT_TRUE(permission3_1->FromValue(&value3));
   EXPECT_TRUE(permission3->Equal(permission3_1.get()));
 
-  std::unique_ptr<base::Value> value4 = permission4->ToValue();
-  EXPECT_TRUE(value4);
+  base::Value value4 = permission4->ToValue();
   std::unique_ptr<SocketsManifestPermission> permission4_1(
       new SocketsManifestPermission());
-  EXPECT_TRUE(permission4_1->FromValue(value4.get()));
+  EXPECT_TRUE(permission4_1->FromValue(&value4));
   EXPECT_TRUE(permission4->Equal(permission4_1.get()));
 }
 

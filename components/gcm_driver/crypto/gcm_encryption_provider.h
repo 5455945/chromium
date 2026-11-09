@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,24 +10,23 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "components/gcm_driver/crypto/gcm_message_cryptographer.h"
+#include "crypto/keypair.h"
 
 namespace base {
 class FilePath;
 class SequencedTaskRunner;
 }  // namespace base
 
-namespace crypto {
-class ECPrivateKey;
-}  // namespace crypto
+namespace fcm {
+enum class FcmDecryptionResult;
+}  // namespace fcm
 
 namespace gcm {
 
-enum class GCMDecryptionResult;
 enum class GCMEncryptionResult;
 class GCMKeyStore;
 struct IncomingMessage;
@@ -44,7 +43,7 @@ class GCMEncryptionProvider {
   // by the |result|. The |message| contains the dispatchable message in success
   // cases, or will be initialized to an empty, default state for failure.
   using DecryptMessageCallback =
-      base::OnceCallback<void(GCMDecryptionResult result,
+      base::OnceCallback<void(fcm::FcmDecryptionResult result,
                               IncomingMessage message)>;
 
   // Callback to be invoked when a message may have been encrypted, as indicated
@@ -59,6 +58,10 @@ class GCMEncryptionProvider {
   static const char kContentCodingAes128Gcm[];
 
   GCMEncryptionProvider();
+
+  GCMEncryptionProvider(const GCMEncryptionProvider&) = delete;
+  GCMEncryptionProvider& operator=(const GCMEncryptionProvider&) = delete;
+
   ~GCMEncryptionProvider();
 
   // Initializes the encryption provider with the |store_path| and the
@@ -116,11 +119,11 @@ class GCMEncryptionProvider {
   void DidGetEncryptionInfo(const std::string& app_id,
                             const std::string& authorized_entity,
                             EncryptionInfoCallback callback,
-                            std::unique_ptr<crypto::ECPrivateKey> key,
+                            std::optional<crypto::keypair::PrivateKey> key,
                             const std::string& auth_secret);
 
   void DidCreateEncryptionInfo(EncryptionInfoCallback callback,
-                               std::unique_ptr<crypto::ECPrivateKey> key,
+                               std::optional<crypto::keypair::PrivateKey> key,
                                const std::string& auth_secret);
 
   void DecryptMessageWithKey(const std::string& message_id,
@@ -132,7 +135,7 @@ class GCMEncryptionProvider {
                              const std::string& ciphertext,
                              GCMMessageCryptographer::Version version,
                              DecryptMessageCallback callback,
-                             std::unique_ptr<crypto::ECPrivateKey> key,
+                             std::optional<crypto::keypair::PrivateKey> key,
                              const std::string& auth_secret);
 
   void EncryptMessageWithKey(const std::string& app_id,
@@ -141,14 +144,12 @@ class GCMEncryptionProvider {
                              const std::string& auth_secret,
                              const std::string& message,
                              EncryptMessageCallback callback,
-                             std::unique_ptr<crypto::ECPrivateKey> key,
+                             std::optional<crypto::keypair::PrivateKey> key,
                              const std::string& sender_auth_secret);
 
   std::unique_ptr<GCMKeyStore> key_store_;
 
   base::WeakPtrFactory<GCMEncryptionProvider> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(GCMEncryptionProvider);
 };
 
 }  // namespace gcm

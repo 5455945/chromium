@@ -1,10 +1,9 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/bluetooth/bluez/metrics_recorder.h"
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 
 namespace bluetooth {
@@ -26,59 +25,189 @@ const char kBlueZAgentNotAvailableError[] = "org.bluez.Error.AgentNotAvailable";
 const char kBlueZNotReadyError[] = "org.bluez.Error.NotReady";
 const char kBlueZFailedError[] = "org.bluez.Error.Failed";
 
+// Note: These values are sourced from the "BR/EDR connection failure reasons"
+// in BlueZ's error.h file, and should be kept in sync.
+const char kBlueZConnectionAlreadyConnected[] =
+    "br-connection-already-connected";
+const char kBlueZPageTimeout[] = "br-connection-page-timeout";
+const char kBlueZProfileUnavailable[] = "br-connection-profile-unavailable";
+const char kBlueZSdpSearch[] = "br-connection-sdp-search";
+const char kBlueZCreateSocket[] = "br-connection-create-socket";
+const char kBlueZInvalidArgument[] = "br-connection-invalid-argument";
+const char kBlueZAdapterNotPowered[] = "br-connection-adapter-not-powered";
+const char kBlueZNotSupported[] = "br-connection-not-supported";
+const char kBlueZBadSocket[] = "br-connection-bad-socket";
+const char kBlueZMemoryAllocation[] = "br-connection-memory-allocation";
+const char kBlueZBusy[] = "br-connection-busy";
+const char kBlueZConcurrentConnectionLimit[] =
+    "br-connection-concurrent-connection-limit";
+const char kBlueZTimeout[] = "br-connection-timeout";
+const char kBlueZRefused[] = "br-connection-refused";
+const char kBlueZAbortedByRemote[] = "br-connection-aborted-by-remote";
+const char kBlueZAbortedByLocal[] = "br-connection-aborted-by-local";
+const char kBlueZLmpProtocolError[] = "br-connection-lmp-protocol-error";
+const char kBlueZCanceled[] = "br-connection-canceled";
+const char kBlueZUnknown[] = "br-connection-unknown";
+
 }  // namespace
 
-absl::optional<ConnectToServiceInsecurelyResult> ExtractResultFromErrorString(
+std::optional<ConnectToServiceInsecurelyResult> ExtractResultFromErrorString(
     const std::string& error_string) {
-  if (base::Contains(error_string, kBlueZInvalidArgumentsError))
+  if (error_string.contains(kBlueZInvalidArgumentsError)) {
     return ConnectToServiceInsecurelyResult::kInvalidArgumentsError;
+  }
 
-  if (base::Contains(error_string, kBlueZInProgressError))
+  if (error_string.contains(kBlueZInProgressError)) {
     return ConnectToServiceInsecurelyResult::kInProgressError;
+  }
 
-  if (base::Contains(error_string, kBlueZAlreadyExistsError))
+  if (error_string.contains(kBlueZAlreadyExistsError)) {
     return ConnectToServiceInsecurelyResult::kAlreadyExistsError;
+  }
 
-  if (base::Contains(error_string, kBlueZNotSupportedError))
+  if (error_string.contains(kBlueZNotSupportedError)) {
     return ConnectToServiceInsecurelyResult::kNotSupportedError;
+  }
 
-  if (base::Contains(error_string, kBlueZNotConnectedError))
+  if (error_string.contains(kBlueZNotConnectedError)) {
     return ConnectToServiceInsecurelyResult::kNotConnectedError;
+  }
 
-  if (base::Contains(error_string, kBlueZAlreadyConnectedError))
+  if (error_string.contains(kBlueZAlreadyConnectedError)) {
     return ConnectToServiceInsecurelyResult::kAlreadyConnectedError;
+  }
 
-  if (base::Contains(error_string, kBlueZNotAvailableError))
+  if (error_string.contains(kBlueZNotAvailableError)) {
     return ConnectToServiceInsecurelyResult::kNotAvailableError;
+  }
 
-  if (base::Contains(error_string, kBlueZDoesNotExistError))
+  if (error_string.contains(kBlueZDoesNotExistError)) {
     return ConnectToServiceInsecurelyResult::kDoesNotExistError;
+  }
 
-  if (base::Contains(error_string, kBlueZNotAuthorizedError))
+  if (error_string.contains(kBlueZNotAuthorizedError)) {
     return ConnectToServiceInsecurelyResult::kNotAuthorizedError;
+  }
 
-  if (base::Contains(error_string, kBlueZNotPermittedError))
+  if (error_string.contains(kBlueZNotPermittedError)) {
     return ConnectToServiceInsecurelyResult::kNotPermittedError;
+  }
 
-  if (base::Contains(error_string, kBlueZNoSuchAdapterError))
+  if (error_string.contains(kBlueZNoSuchAdapterError)) {
     return ConnectToServiceInsecurelyResult::kNoSuchAdapterError;
+  }
 
-  if (base::Contains(error_string, kBlueZAgentNotAvailableError))
+  if (error_string.contains(kBlueZAgentNotAvailableError)) {
     return ConnectToServiceInsecurelyResult::kAgentNotAvailableError;
+  }
 
-  if (base::Contains(error_string, kBlueZNotReadyError))
+  if (error_string.contains(kBlueZNotReadyError)) {
     return ConnectToServiceInsecurelyResult::kNotReadyError;
+  }
 
-  if (base::Contains(error_string, kBlueZFailedError))
+  if (error_string.contains(kBlueZFailedError)) {
     return ConnectToServiceInsecurelyResult::kFailedError;
+  }
 
-  return absl::nullopt;
+  return std::nullopt;
+}
+
+ConnectToServiceFailureReason ExtractFailureReasonFromErrorString(
+    const std::string& error_string) {
+  if (error_string.contains(kBlueZConnectionAlreadyConnected)) {
+    return ConnectToServiceFailureReason::kReasonConnectionAlreadyConnected;
+  }
+
+  if (error_string.contains(kBlueZPageTimeout)) {
+    return ConnectToServiceFailureReason::kReasonPageTimeout;
+  }
+
+  if (error_string.contains(kBlueZProfileUnavailable)) {
+    return ConnectToServiceFailureReason::kReasonProfileUnavailable;
+  }
+
+  if (error_string.contains(kBlueZSdpSearch)) {
+    return ConnectToServiceFailureReason::kReasonSdpSearch;
+  }
+
+  if (error_string.contains(kBlueZCreateSocket)) {
+    return ConnectToServiceFailureReason::kReasonCreateSocket;
+  }
+
+  if (error_string.contains(kBlueZInvalidArgument)) {
+    return ConnectToServiceFailureReason::kReasonInvalidArgument;
+  }
+
+  if (error_string.contains(kBlueZAdapterNotPowered)) {
+    return ConnectToServiceFailureReason::kReasonAdapterNotPowered;
+  }
+
+  if (error_string.contains(kBlueZNotSupported)) {
+    return ConnectToServiceFailureReason::kReasonNotSupported;
+  }
+
+  if (error_string.contains(kBlueZBadSocket)) {
+    return ConnectToServiceFailureReason::kReasonBadSocket;
+  }
+
+  if (error_string.contains(kBlueZMemoryAllocation)) {
+    return ConnectToServiceFailureReason::kReasonMemoryAllocation;
+  }
+
+  if (error_string.contains(kBlueZBusy)) {
+    return ConnectToServiceFailureReason::kReasonBusy;
+  }
+
+  if (error_string.contains(kBlueZConcurrentConnectionLimit)) {
+    return ConnectToServiceFailureReason::kReasonConcurrentConnectionLimit;
+  }
+
+  if (error_string.contains(kBlueZTimeout)) {
+    return ConnectToServiceFailureReason::kReasonTimeout;
+  }
+
+  if (error_string.contains(kBlueZRefused)) {
+    return ConnectToServiceFailureReason::kReasonRefused;
+  }
+
+  if (error_string.contains(kBlueZAbortedByRemote)) {
+    return ConnectToServiceFailureReason::kReasonAbortedByRemote;
+  }
+
+  if (error_string.contains(kBlueZAbortedByLocal)) {
+    return ConnectToServiceFailureReason::kReasonAbortedByLocal;
+  }
+
+  if (error_string.contains(kBlueZLmpProtocolError)) {
+    return ConnectToServiceFailureReason::kReasonLmpProtocolError;
+  }
+
+  if (error_string.contains(kBlueZCanceled)) {
+    return ConnectToServiceFailureReason::kReasonCanceled;
+  }
+
+  if (error_string.contains(kBlueZUnknown)) {
+    return ConnectToServiceFailureReason::kReasonUnknown;
+  }
+
+  return ConnectToServiceFailureReason::kReasonUnknown;
 }
 
 void RecordConnectToServiceInsecurelyResult(
     ConnectToServiceInsecurelyResult result) {
   base::UmaHistogramEnumeration(
       "Bluetooth.Linux.ConnectToServiceInsecurelyResult", result);
+}
+
+void RecordConnectToServiceFailureReason(ConnectToServiceFailureReason reason) {
+  base::UmaHistogramEnumeration(
+      "Bluetooth.Linux.ConnectToService.FailureReason", reason);
+}
+
+void RecordBondedConnectToServiceFailureReason(
+    ConnectToServiceFailureReason reason) {
+  base::UmaHistogramEnumeration(
+      "Bluetooth.Linux.ConnectToService.Bonded.FailureReason", reason);
 }
 
 }  // namespace bluetooth

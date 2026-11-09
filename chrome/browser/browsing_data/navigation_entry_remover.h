@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_BROWSING_DATA_NAVIGATION_ENTRY_REMOVER_H_
 
 #include "components/history/core/browser/history_types.h"
-#include "components/history/core/browser/url_row.h"
 
 class Profile;
 

@@ -1,28 +1,83 @@
 /*
- * Copyright 2020 The Chromium Authors. All rights reserved.
+ * Copyright 2020 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+
+// Most test callers immediately wait on the response from
+// |getStatusForMethodData|. However some tests trigger the UI and then interact
+// with it, and to support those we save the promise for later retrieval.
+let statusPromise = null;
+
+/**
+ * Return the outstanding status promise, if any.
+ * @return {string} - The status field or error message.
+ */
+async function getOutstandingStatusPromise() {
+  return statusPromise;
+}
 
 /**
  * Creates and returns the first parameter to the PaymentRequest constructor for
  * secure payment confirmation.
  * @param {string} credentialIdentifier - An optional base64 encoded credential
  * identifier. If not specified, then 'cred' is used instead.
+ * @param {string} iconUrl - An optional icon URL. If not specified, then
+ * 'window.location.origin/icon.png' is used.
+ * @param {boolean} showOptOut - Whether to show the SPC opt-out experience.
+ * If not specified, the parameter is not set in the input data blob.
+ * @param {Array<string>} locale - An optional list of preferred locales.
+ * If not specified, the parameter is not set in the input data blob.
  * @return {Array<PaymentMethodData>} - Secure payment confirmation method data.
  */
-function getTestMethodData(credentialIdentifier) {
-  return [{
+function getTestMethodData(credentialIdentifier, iconUrl, showOptOut, locale) {
+  return getTestMethodDataWithInstrument(
+      {
+        displayName: 'display_name_for_instrument',
+        icon: iconUrl ? iconUrl : window.location.origin + '/icon.png',
+      },
+      credentialIdentifier, showOptOut, locale);
+}
+
+/**
+ * Creates and returns the first parameter to the PaymentRequest constructor for
+ * secure payment confirmation.
+ * @param {PaymentInstrument} paymentInstrument - Payment instrument details to
+ * be included in the request.
+ * @param {string} credentialIdentifier - An optional base64 encoded credential
+ * identifier. If not specified, then 'cred' is used instead.
+ * @param {boolean} showOptOut - Whether to show the SPC opt-out experience.
+ * If not specified, the parameter is not set in the input data blob.
+ * @param {Array<string>} locale - An optional list of preferred locales.
+ * If not specified, the parameter is not set in the input data blob.
+ * @return {Array<PaymentMethodData>} - Secure payment confirmation method data.
+ */
+function getTestMethodDataWithInstrument(
+    paymentInstrument, credentialIdentifier, showOptOut, locale) {
+  const methodData = {
     supportedMethods: 'secure-payment-confirmation',
     data: {
       action: 'authenticate',
       credentialIds: [Uint8Array.from(
           (credentialIdentifier ? atob(credentialIdentifier) : 'cred'),
           (c) => c.charCodeAt(0))],
-      networkData: Uint8Array.from('network_data', (c) => c.charCodeAt(0)),
+      challenge: Uint8Array.from('challenge', (c) => c.charCodeAt(0)),
+      instrument: paymentInstrument,
       timeout: 60000,
-      fallbackUrl: 'https://fallback.example/url',
-  }}];
+      payeeOrigin: 'https://example-payee-origin.test',
+      rpId: 'a.com',
+    },
+  };
+
+  if (typeof showOptOut !== 'undefined') {
+    methodData.data.showOptOut = showOptOut;
+  }
+
+  if (typeof locale !== 'undefined') {
+    methodData.data.locale = locale;
+  }
+
+  return [methodData];
 }
 
 /**
@@ -30,10 +85,31 @@ function getTestMethodData(credentialIdentifier) {
  * request.
  * @param {string} credentialIdentifier - An optional base64 encoded credential
  * identifier. If not specified, then 'cred' is used instead.
+ * @param {string} iconUrl - An optional icon URL. If not specified, then
+ * 'window.location.origin/icon.png' is used.
+ * @param {boolean} showOptOut - Whether to show the SPC opt-out experience.
+ * If not specified, the parameter is not set in the input data blob.
  * @return {string} - The status field or error message.
  */
-async function getSecurePaymentConfirmationStatus(credentialIdentifier) { // eslint-disable-line no-unused-vars, max-len
-  return getStatusForMethodData(getTestMethodData(credentialIdentifier));
+async function getSecurePaymentConfirmationStatus(
+    credentialIdentifier, iconUrl, showOptOut) {
+  statusPromise = getStatusForMethodData(
+      getTestMethodData(credentialIdentifier, iconUrl, showOptOut));
+  return statusPromise;
+}
+
+/**
+ * Returns the status field of the response to a secure payment confirmation
+ * request with specified locales.
+ * @param {Array<string>} locale - The list of preferred locales.
+ * @return {string} - The status field or error message.
+ */
+async function getSecurePaymentConfirmationStatusWithLocale(locale) {
+  statusPromise = getStatusForMethodData(getTestMethodData(
+      /* credentialIdentifier = */ undefined,
+      /* iconUrl = */ undefined,
+      /* showOptOut = */ undefined, locale));
+  return statusPromise;
 }
 
 /**
@@ -42,17 +118,57 @@ async function getSecurePaymentConfirmationStatus(credentialIdentifier) { // esl
  * request.
  * @return {string} - The status field or error message.
  */
-async function getSecurePaymentConfirmationStatusAfterCanMakePayment() { // eslint-disable-line no-unused-vars, max-len
-  return getStatusForMethodDataAfterCanMakePayment(
+async function getSecurePaymentConfirmationStatusAfterCanMakePayment() {
+  statusPromise = getStatusForMethodDataAfterCanMakePayment(
       getTestMethodData(), /* checkCanMakePaymentFirst = */true);
+  return statusPromise;
+}
+
+/**
+ * Returns the clientDataJSON's payment.instrument.icon value of the response to
+ * a secure payment confirmation request.
+ * @param {PaymentInstrument} paymentInstrument - Payment instrument details to
+ * be included in the request.
+ * @param {string} credentialIdentifier - base64 encoded credential identifier.
+ * @return {string} - Output instrument icon string.
+ */
+async function getSecurePaymentConfirmationResponseIconWithInstrument(
+    paymentInstrument, credentialIdentifier) {
+  const methodData = getTestMethodDataWithInstrument(
+    paymentInstrument, credentialIdentifier);
+  const request = new PaymentRequest(
+    methodData,
+    {total: {label: 'TEST', amount: {currency: 'USD', value: '0.01'}}});
+
+  const response = await request.show();
+  await response.complete();
+  const clientData = JSON.parse(String.fromCharCode(...new Uint8Array(
+    response.details.response.clientDataJSON)));
+  return clientData.payment.instrument.icon;
 }
 
 /**
  * Checks whether secure payment confirmation can make payments.
+ * @param {string} iconUrl - An optional icon URL. If not specified, then
+ * 'window.location.origin/icon.png' is used.
  * @return {string} - 'true', 'false', or error message on failure.
  */
-async function securePaymentConfirmationCanMakePayment() { // eslint-disable-line no-unused-vars, max-len
-  return canMakePaymentForMethodData(getTestMethodData());
+async function securePaymentConfirmationCanMakePayment(iconUrl) {
+  return canMakePaymentForMethodData(getTestMethodData(
+      /* credentialIdentifier = */undefined, iconUrl));
+}
+
+/**
+ * Checks whether secure payment confirmation can make payments with specified
+ * locales.
+ * @param {Array<string>} locale - The list of preferred locales.
+ * @return {string} - 'true', 'false', or error message on failure.
+ */
+async function securePaymentConfirmationCanMakePaymentWithLocale(locale) {
+  return canMakePaymentForMethodData(getTestMethodData(
+      /* credentialIdentifier = */ undefined,
+      /* iconUrl = */ undefined,
+      /* showOptOut = */ undefined, locale));
 }
 
 /**
@@ -60,7 +176,7 @@ async function securePaymentConfirmationCanMakePayment() { // eslint-disable-lin
  * canMakePayment twice, and returns the second value.
  * @return {string} - 'true', 'false', or error message on failure.
  */
-async function securePaymentConfirmationCanMakePaymentTwice() { // eslint-disable-line no-unused-vars, max-len
+async function securePaymentConfirmationCanMakePaymentTwice() {
   return canMakePaymentForMethodDataTwice(getTestMethodData());
 }
 
@@ -68,57 +184,34 @@ async function securePaymentConfirmationCanMakePaymentTwice() { // eslint-disabl
  * Checks whether secure payment confirmation has enrolled instruments.
  * @return {string} - 'true', 'false', or error message on failure.
  */
-async function securePaymentConfirmationHasEnrolledInstrument() { // eslint-disable-line no-unused-vars, max-len
+async function securePaymentConfirmationHasEnrolledInstrument() {
   return hasEnrolledInstrumentForMethodData(getTestMethodData());
 }
 
 /**
- * Creates a secure payment confirmation credential and returns "OK" on success.
- * @param {string} icon - The URL of the icon for the credential.
- * @return {string} - Either "OK" or an error string.
+ * Checks whether secure payment confirmation has enrolled instruments with
+ * specified locales.
+ * @param {Array<string>} locale - The list of preferred locales.
+ * @return {string} - 'true', 'false', or error message on failure.
  */
-async function createPaymentCredential(icon) { // eslint-disable-line no-unused-vars, max-len
-  try {
-    // Intentionally ignore the result.
-    await createAndReturnPaymentCredential(icon);
-    return 'OK';
-  } catch (e) {
-    return e.toString();
-  }
+async function securePaymentConfirmationHasEnrolledInstrumentWithLocale(
+    locale) {
+  return hasEnrolledInstrumentForMethodData(getTestMethodData(
+      /* credentialIdentifier = */ undefined,
+      /* iconUrl = */ undefined,
+      /* showOptOut = */ undefined, locale));
 }
 
 /**
- * Creates a secure payment confirmation credential and returns its identifier.
- * @param {string} icon - The URL of the icon for the credential.
- * @return {string} - The base64 encoded identifier of the new credential.
+ * Creates a secure payment confirmation credential, returning a JSON
+ * blob of information about the created credential.
+ *
+ * @param {string} userId - The user.id for the created credential.
+ * @return {Promise<object>} - Either information about the created credential
+ *     or an error message.
  */
-async function createCredentialAndReturnItsIdentifier(icon) { // eslint-disable-line no-unused-vars, max-len
-  const credential = await createAndReturnPaymentCredential(icon);
-  return btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
-}
-
-/**
- * Creates a secure payment confirmation credential and returns its
- * clientDataJSON.type field.
- * @param {string} icon - The URL of the icon for the credential.
- * @return {string} - The clientDataJson.type field of the new credential.
- */
-async function createCredentialAndReturnClientDataType(icon) { // eslint-disable-line no-unused-vars, max-len
-  const credential = await createAndReturnPaymentCredential(icon);
-  return JSON.parse(String.fromCharCode(...new Uint8Array(
-      credential.response.clientDataJSON))).type;
-}
-
-/**
- * Creates and returns a secure payment confirmation credential.
- * @param {string} icon - The URL of the icon for the credential.
- * @return {PaymentCredential} - The new credential.
- */
-async function createAndReturnPaymentCredential(icon) {
-  const paymentInstrument = {
-    displayName: 'display_name_for_instrument',
-    icon,
-  };
+async function createPaymentCredential(userId) {
+  const textEncoder = new TextEncoder();
   const publicKeyRP = {
       id: 'a.com',
       name: 'Acme',
@@ -127,38 +220,28 @@ async function createAndReturnPaymentCredential(icon) {
       type: 'public-key',
       alg: -7,
   }];
-  const payment = {
-      rp: publicKeyRP,
-      instrument: paymentInstrument,
-      challenge: new TextEncoder().encode('climb a mountain'),
-      pubKeyCredParams: publicKeyParameters,
+  const publicKey = {
+    user: {
+      displayName: 'User',
+      id: textEncoder.encode(userId),
+      name: 'user@acme.com',
+    },
+    rp: publicKeyRP,
+    challenge: textEncoder.encode('climb a mountain'),
+    pubKeyCredParams: publicKeyParameters,
+    extensions: {payment: {isPayment: true}},
   };
-  return navigator.credentials.create({payment});
-}
 
-/**
- * Attempts to create a payment credential that is missing the RP ID.
- * @param {string} icon - The URL of the icon for the credential.
- * @return {PaymentCredential} - The new credential.
- */
-async function createCredentialWithNoRpId(icon) { // eslint-disable-line no-unused-vars, max-len
-  const paymentInstrument = {
-    displayName: 'display_name_for_instrument',
-    icon,
-  };
-  const publicKeyRP = {
-      // id omitted
-      name: 'Acme',
-  };
-  const publicKeyParameters = [{
-      type: 'public-key',
-      alg: -7,
-  }];
-  const payment = {
-      rp: publicKeyRP,
-      instrument: paymentInstrument,
-      challenge: new TextEncoder().encode('climb a mountain'),
-      pubKeyCredParams: publicKeyParameters,
-  };
-  return navigator.credentials.create({payment});
+  try {
+    const credential = await navigator.credentials.create({publicKey});
+    const webIdlType = credential.constructor.name;
+    const type = JSON.parse(String.fromCharCode(...new Uint8Array(
+                                credential.response.clientDataJSON)))
+                     .type;
+    const id = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)));
+
+    return JSON.stringify({webIdlType, type, id});
+  } catch (e) {
+    return e.toString();
+  }
 }

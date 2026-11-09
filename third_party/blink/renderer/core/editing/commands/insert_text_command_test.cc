@@ -1,52 +1,37 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/commands/insert_text_command.h"
 
+#include "build/buildflag.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/editing/testing/selection_sample.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 class InsertTextCommandTest : public EditingTestBase {};
 
-class ParameterizedInsertTextCommandTest
-    : public testing::WithParamInterface<bool>,
-      private ScopedLayoutNGForTest,
-      public InsertTextCommandTest {
- public:
-  ParameterizedInsertTextCommandTest() : ScopedLayoutNGForTest(GetParam()) {}
-
- protected:
-  bool LayoutNGEnabled() const {
-    return RuntimeEnabledFeatures::LayoutNGEnabled();
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         ParameterizedInsertTextCommandTest,
-                         testing::Bool());
-
 // http://crbug.com/714311
 TEST_F(InsertTextCommandTest, WithTypingStyle) {
   SetBodyContent("<div contenteditable=true><option id=sample></option></div>");
-  Element* const sample = GetDocument().getElementById("sample");
+  Element* const sample = GetElementById("sample");
   Selection().SetSelection(
-      SelectionInDOMTree::Builder().Collapse(Position(sample, 0)).Build(),
+      SelectionInDomTree::Builder().Collapse(Position(sample, 0)).Build(),
       SetSelectionOptions());
   // Register typing style to make |InsertTextCommand| to attempt to apply
   // style to inserted text.
   GetDocument().execCommand("fontSizeDelta", false, "+3", ASSERT_NO_EXCEPTION);
-  auto* const command =
-      MakeGarbageCollected<InsertTextCommand>(GetDocument(), "x");
+  auto* const command = MakeGarbageCollected<InsertTextCommand>(
+      GetDocument(), "x", EditCommand::PasswordEchoBehavior::kDoNotEcho);
   command->Apply();
 
   EXPECT_EQ(
       "<div contenteditable=\"true\"><option id=\"sample\">x</option></div>",
-      GetDocument().body()->innerHTML())
+      GetDocument().body()->GetInnerHTMLString())
       << "Content of OPTION is distributed into shadow node as text"
          "without applying typing style.";
 }
@@ -230,8 +215,9 @@ TEST_F(InsertTextCommandTest, WhitespaceFixupAfterParagraph) {
 TEST_F(InsertTextCommandTest, NoVisibleSelectionAfterDeletingSelection) {
   GetDocument().SetCompatibilityMode(Document::kQuirksMode);
   InsertStyleElement(
-      "ruby {display: inline-block; height: 100%}"
-      "navi {float: left}");
+      ":root { font-size: 10px; }"
+      "ruby { display: inline-block; height: 100%; }"
+      "navi { float: left; }");
   Selection().SetSelection(
       SetSelectionTextToBody("<div contenteditable>"
                              "  <ruby><strike>"
@@ -244,26 +230,36 @@ TEST_F(InsertTextCommandTest, NoVisibleSelectionAfterDeletingSelection) {
   // Shouldn't crash inside
   GetDocument().execCommand("insertText", false, "x", ASSERT_NO_EXCEPTION);
   // This is only for recording the current behavior, which can be changed.
-  EXPECT_EQ(
-      "<div contenteditable>"
-      "  <ruby><strike>"
-      "    <navi></navi>"
-      "    ^</strike></ruby>"
-      "|</div>",
-      GetSelectionTextFromBody());
+  if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
+    // Without MostBackwardCaretPosition canonicalization, the insertion point
+    // stays at the <ruby> level instead of descending into <strike>.
+    EXPECT_EQ(
+        "<div contenteditable>"
+        "  <ruby>x|<strike>    <navi></navi>"
+        "    </strike></ruby>"
+        "</div>",
+        GetSelectionTextFromBody());
+  } else {
+    EXPECT_EQ(
+        "<div contenteditable>"
+        "  <ruby><strike>x|<navi></navi>"
+        "    </strike></ruby>"
+        "</div>",
+        GetSelectionTextFromBody());
+  }
 }
 
 // http://crbug.com/778901
 TEST_F(InsertTextCommandTest, CheckTabSpanElementNoCrash) {
   InsertStyleElement(
       "head {-webkit-text-stroke-color: black; display: list-item;}");
-  Element* head = GetDocument().QuerySelector("head");
-  Element* style = GetDocument().QuerySelector("style");
+  Element* head = QuerySelector("head");
+  Element* style = QuerySelector("style");
   Element* body = GetDocument().body();
   body->parentNode()->appendChild(style);
   GetDocument().setDesignMode("on");
 
-  Selection().SetSelection(SelectionInDOMTree::Builder()
+  Selection().SetSelection(SelectionInDomTree::Builder()
                                .Collapse(Position(head, 0))
                                .Extend(Position(body, 0))
                                .Build(),
@@ -279,7 +275,7 @@ TEST_F(InsertTextCommandTest, CheckTabSpanElementNoCrash) {
       "head {-webkit-text-stroke-color: black; display: list-item;}"
       "</style>",
       SelectionSample::GetSelectionText(*GetDocument().documentElement(),
-                                        Selection().GetSelectionInDOMTree()));
+                                        Selection().GetSelectionInDomTree()));
 }
 
 // http://crbug.com/792548
@@ -293,20 +289,20 @@ TEST_F(InsertTextCommandTest, AnchorElementWithBlockCrash) {
   //   </a>
   // </a>
   // Since the HTML parser rejects it as there are nested <a> elements.
-  // We are contructing the remaining DOM manually.
-  Element* const anchor = GetDocument().QuerySelector("a");
+  // We are constructing the remaining DOM manually.
+  Element* const anchor = QuerySelector("a");
   Element* nested_anchor = GetDocument().CreateRawElement(html_names::kATag);
   Element* iElement = GetDocument().CreateRawElement(html_names::kITag);
 
-  nested_anchor->setAttribute("href", "www");
-  iElement->setInnerHTML("home");
+  nested_anchor->setAttribute(html_names::kHrefAttr, AtomicString("www"));
+  iElement->SetInnerHTMLWithoutTrustedTypes("home");
 
   anchor->AppendChild(nested_anchor);
   nested_anchor->AppendChild(iElement);
 
   Node* const iElement_text_node = iElement->firstChild();
   Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(iElement_text_node, 0),
                             Position(iElement_text_node, 4))
           .Build(),
@@ -320,7 +316,7 @@ TEST_F(InsertTextCommandTest, AnchorElementWithBlockCrash) {
 }
 
 // http://crbug.com/1197977
-TEST_P(ParameterizedInsertTextCommandTest, MultilineSelectionCrash) {
+TEST_F(InsertTextCommandTest, MultilineSelectionCrash) {
   // Force line break between A and B.
   InsertStyleElement("body { width: 1px; }");
   Selection().SetSelection(SetSelectionTextToBody("A^<span> B|</span>"),
@@ -329,8 +325,7 @@ TEST_P(ParameterizedInsertTextCommandTest, MultilineSelectionCrash) {
 
   // Shouldn't crash inside.
   GetDocument().execCommand("InsertText", false, "x", ASSERT_NO_EXCEPTION);
-  EXPECT_EQ(LayoutNGEnabled() ? "A<span>x|</span>" : "A<span> x|</span>",
-            GetSelectionTextFromBody());
+  EXPECT_EQ("A<span>x|</span>", GetSelectionTextFromBody());
 }
 
 }  // namespace blink

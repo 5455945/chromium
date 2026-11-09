@@ -1,9 +1,9 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 function logMessage() {
-  console.log('logged message');
+  console.info('logged message');
 }
 
 function warnMessage() {
@@ -13,5 +13,5 @@ function warnMessage() {
 logMessage();
 warnMessage();
 
-var bar = undefined;
+const bar = undefined;
 bar.foo = 'baz';

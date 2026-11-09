@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -67,14 +67,11 @@ String FontVariantNumeric::ToString(SlashedZero slashed) {
 }
 
 String FontVariantNumeric::ToString() const {
-  return String::Format(
-      "numeric_figure=%s, numeric_spacing=%s, numeric_fraction=%s, ordinal=%s, "
-      "slashed_zero=%s",
-      ToString(NumericFigureValue()).Ascii().c_str(),
-      ToString(NumericSpacingValue()).Ascii().c_str(),
-      ToString(NumericFractionValue()).Ascii().c_str(),
-      ToString(OrdinalValue()).Ascii().c_str(),
-      ToString(SlashedZeroValue()).Ascii().c_str());
+  return StrCat({"numeric_figure=", ToString(NumericFigureValue()),
+                 ", numeric_spacing=", ToString(NumericSpacingValue()),
+                 ", numeric_fraction=", ToString(NumericFractionValue()),
+                 ", ordinal=", ToString(OrdinalValue()),
+                 ", slashed_zero=", ToString(SlashedZeroValue())});
 }
 
 }  // namespace blink

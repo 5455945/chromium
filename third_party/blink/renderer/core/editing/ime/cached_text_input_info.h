@@ -1,13 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_IME_CACHED_TEXT_INPUT_INFO_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_IME_CACHED_TEXT_INPUT_INFO_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator_behavior.h"
 #include "third_party/blink/renderer/core/editing/plain_text_range.h"
 #include "third_party/blink/renderer/core/editing/position.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -34,6 +36,7 @@ class CORE_EXPORT CachedTextInputInfo final {
   bool IsValidFor(const ContainerNode& element) const;
 
   // For cache invalidation
+  void DidChangeVisibility(const LayoutObject& layout_object);
   void DidLayoutSubtree(const LayoutObject& layout_object);
   void DidUpdateLayout(const LayoutObject& layout_object);
   void LayoutObjectWillBeDestroyed(const LayoutObject& layout_object);
@@ -61,21 +64,22 @@ class CORE_EXPORT CachedTextInputInfo final {
     // |start_| and |end_| can be disconnected from document.
     mutable Position start_;
     mutable Position end_;
-    mutable unsigned start_offset_ = kNotFound;
-    mutable unsigned end_offset_ = kNotFound;
+    mutable wtf_size_t start_offset_ = kNotFound;
+    mutable wtf_size_t end_offset_ = kNotFound;
   };
 
   static TextIteratorBehavior Behavior();
+  void Clear() const;
   void ClearIfNeeded(const LayoutObject& layout_object);
   PlainTextRange GetPlainTextRangeWithCache(
       const EphemeralRange& range,
       CachedPlainTextRange* text_range) const;
-  unsigned RangeLength(const EphemeralRange& range) const;
+  wtf_size_t RangeLength(const EphemeralRange& range) const;
 
   mutable Member<const ContainerNode> container_;
-  mutable const LayoutObject* layout_object_ = nullptr;
+  mutable WeakMember<const LayoutObject> layout_object_;
   // Records offset of text node from start of |container_|.
-  mutable HeapHashMap<Member<const Text>, unsigned> offset_map_;
+  mutable HeapHashMap<Member<const Text>, wtf_size_t> offset_map_;
   mutable String text_;
   mutable CachedPlainTextRange composition_;
   mutable CachedPlainTextRange selection_;

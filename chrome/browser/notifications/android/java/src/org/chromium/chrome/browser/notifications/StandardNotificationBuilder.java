@@ -1,18 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.notifications;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.notifications.NotificationMetadata;
 import org.chromium.components.browser_ui.notifications.NotificationWrapper;
 import org.chromium.components.browser_ui.notifications.NotificationWrapperBuilder;
 
-/**
- * Builds a notification using the standard Notification.BigTextStyle layout.
- */
+/** Builds a notification using the standard Notification.BigTextStyle layout. */
+@NullMarked
 public class StandardNotificationBuilder extends NotificationBuilderBase {
     private final Context mContext;
 
@@ -25,7 +27,7 @@ public class StandardNotificationBuilder extends NotificationBuilderBase {
     public NotificationWrapper build(NotificationMetadata metadata) {
         NotificationWrapperBuilder builder =
                 NotificationWrapperBuilderFactory.createNotificationWrapperBuilder(
-                        shouldUseCompat(), mChannelId, mRemotePackageForBuilderContext, metadata);
+                        assumeNonNull(mChannelId), metadata);
 
         builder.setContentTitle(mTitle);
         builder.setContentText(mBody);
@@ -38,20 +40,33 @@ public class StandardNotificationBuilder extends NotificationBuilderBase {
         }
         builder.setLargeIcon(getNormalizedLargeIcon());
         setStatusBarIcon(builder, mSmallIconId, mSmallIconBitmapForStatusBar);
+        if (mExtras != null) {
+            builder.addExtras(mExtras);
+        }
         builder.setContentIntent(mContentIntent);
-        builder.setDeleteIntent(mDeleteIntent);
+        if (mDeleteIntentActionType != NotificationUmaTracker.ActionType.UNKNOWN) {
+            builder.setDeleteIntent(mDeleteIntent, mDeleteIntentActionType);
+        } else {
+            builder.setDeleteIntent(mDeleteIntent);
+        }
         for (Action action : mActions) {
             addActionToBuilder(builder, action);
         }
-        if (mSettingsAction != null) {
-            addActionToBuilder(builder, mSettingsAction);
+        for (Action settingsAction : mSettingsActions) {
+            addActionToBuilder(builder, settingsAction);
         }
-        builder.setPriorityBeforeO(mPriority);
         builder.setDefaults(mDefaults);
         if (mVibratePattern != null) builder.setVibrate(mVibratePattern);
         builder.setSilent(mSilent);
-        builder.setWhen(mTimestamp);
-        builder.setShowWhen(true);
+        if (mTimestamp >= 0) {
+            builder.setWhen(mTimestamp);
+            builder.setShowWhen(true);
+        } else {
+            builder.setShowWhen(false);
+        }
+        if (mTimeoutAfterMs > 0) {
+            builder.setTimeoutAfter(mTimeoutAfterMs);
+        }
         builder.setOnlyAlertOnce(!mRenotify);
         setGroupOnBuilder(builder, mOrigin);
         builder.setPublicVersion(createPublicNotification(mContext));

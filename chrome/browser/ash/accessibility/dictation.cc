@@ -1,450 +1,427 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/accessibility/dictation.h"
 
-#include "ash/components/audio/sounds.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "ash/constants/ash_pref_names.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/metrics/metrics_hashes.h"
-#include "base/strings/string_piece.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/timer/timer.h"
-#include "chrome/browser/ash/accessibility/accessibility_manager.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/speech/network_speech_recognizer.h"
-#include "chrome/browser/speech/on_device_speech_recognizer.h"
-#include "chrome/common/pref_names.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/soda/soda_installer.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
-#include "content/public/browser/storage_partition.h"
-#include "services/audio/public/cpp/sounds/sounds_manager.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/accessibility/accessibility_features.h"
-#include "ui/accessibility/accessibility_switches.h"
-#include "ui/base/ime/chromeos/extension_ime_util.h"
-#include "ui/base/ime/chromeos/ime_bridge.h"
-#include "ui/base/ime/chromeos/ime_input_context_handler_interface.h"
-#include "ui/base/ime/chromeos/input_method_util.h"
-#include "ui/base/ime/composition_text.h"
+#include "ui/base/ime/ash/input_method_manager.h"
+#include "ui/base/ime/ash/input_method_util.h"
 
 namespace ash {
 namespace {
 
-// Length of timeout to cancel recognition if there's no speech heard.
-static const base::TimeDelta kNetworkNoSpeechTimeout =
-    base::TimeDelta::FromSeconds(5);
-static const base::TimeDelta kDeviceNoSpeechTimeout =
-    base::TimeDelta::FromSeconds(10);
-
-// Length of timeout to cancel recognition if no different results are received.
-static const base::TimeDelta kNetworkNoNewSpeechTimeout =
-    base::TimeDelta::FromSeconds(2);
-static const base::TimeDelta kDeviceNoNewSpeechTimeout =
-    base::TimeDelta::FromSeconds(5);
-
-const char kDefaultProfileLocale[] = "en-US";
+constexpr base::i18n::LanguageTag kDefaultProfileLocale =
+    base::i18n::GetKnownLanguageTag("en-US");
 
 // Determines the user's language or locale from the system, first trying
 // the current IME language and falling back to the application locale.
-std::string GetUserLangOrLocaleFromSystem(Profile* profile) {
+base::i18n::LanguageTag GetUserLangOrLocaleFromSystem(
+    Profile* profile,
+    const base::i18n::LanguageTag& application_locale) {
   // Convert from the ID used in the pref to a language identifier.
   std::vector<std::string> input_method_ids;
   input_method_ids.push_back(
-      profile->GetPrefs()->GetString(::prefs::kLanguageCurrentInputMethod));
-  std::vector<std::string> languages;
-  chromeos::input_method::InputMethodManager::Get()
-      ->GetInputMethodUtil()
-      ->GetLanguageCodesFromInputMethodIds(input_method_ids, &languages);
-
-  std::string user_language;
-  if (!languages.empty())
-    user_language = languages[0];
+      profile->GetPrefs()->GetString(ash::prefs::kLanguageCurrentInputMethod));
+  const std::vector<base::i18n::LanguageTag> languages =
+      input_method::InputMethodManager::Get()
+          ->GetInputMethodUtil()
+          ->GetLanguageCodesFromInputMethodIds(input_method_ids);
 
   // If we don't find an IME language, fall back to using the application
   // locale.
-  if (user_language.empty())
-    user_language = g_browser_process->GetApplicationLocale();
-
-  return user_language.empty() ? kDefaultProfileLocale : user_language;
-}
-
-std::string GetUserLocale(Profile* profile) {
-  std::string locale;
-  if (switches::IsExperimentalAccessibilityDictationOfflineEnabled()) {
-    // Get the user's chosen dictation locale from their preference in settings.
-    // This is guaranteed to be a supported locale and won't be empty, since
-    // the pref is set using DetermineDefaultSupportedLocale() as soon as
-    // Dictation is enabled, assuming that supported languages are never removed
-    // from this list.
-    locale =
-        profile->GetPrefs()->GetString(prefs::kAccessibilityDictationLocale);
-  } else {
-    locale = GetUserLangOrLocaleFromSystem(profile);
+  if (languages.empty()) {
+    return application_locale;
   }
-
-  DCHECK(!locale.empty());
-  return locale;
+  return languages[0];
 }
 
-std::string GetSupportedLocale(const std::string& lang_or_locale) {
-  if (lang_or_locale.empty())
-    return std::string();
-
+base::i18n::LanguageTag GetSupportedLocale(
+    const base::i18n::LanguageTag& lang_or_locale) {
   // Map of language code to supported locale for the open web API.
   // Chrome OS does not support Chinese languages with "cmn", so this
   // map also includes a map from Open Speech API "cmn" languages to
   // their equivalent default locale.
   static constexpr auto kLangsToDefaultLocales =
-      base::MakeFixedFlatMap<base::StringPiece, base::StringPiece>(
-          {{"af", "af-ZA"},          {"am", "am-ET"},
-           {"ar", "ar-001"},         {"az", "az-AZ"},
-           {"bg", "bg-BG"},          {"bn", "bn-IN"},
-           {"bs", "bs-BA"},          {"ca", "ca-ES"},
-           {"cs", "cs-CZ"},          {"da", "da-DK"},
-           {"de", "de-DE"},          {"el", "el-GR"},
-           {"en", "en-US"},          {"es", "es-ES"},
-           {"et", "et-EE"},          {"eu", "eu-ES"},
-           {"fa", "fa-IR"},          {"fi", "fi-FI"},
-           {"fil", "fil-PH"},        {"fr", "fr-FR"},
-           {"gl", "gl-ES"},          {"gu", "gu-IN"},
-           {"he", "iw-IL"},          {"hi", "hi-IN"},
-           {"hr", "hr-HR"},          {"hu", "hu-HU"},
-           {"hy", "hy-AM"},          {"id", "id-ID"},
-           {"is", "is-IS"},          {"it", "it-IT"},
-           {"iw", "iw-IL"},          {"ja", "ja-JP"},
-           {"jv", "jv-ID"},          {"ka", "ka-GE"},
-           {"kk", "kk-KZ"},          {"km", "km-KH"},
-           {"kn", "kn-IN"},          {"ko", "ko-KR"},
-           {"lo", "lo-LA"},          {"lt", "lt-LT"},
-           {"lv", "lv-LV"},          {"mk", "mk-MK"},
-           {"ml", "ml-IN"},          {"mn", "mn-MN"},
-           {"mo", "ro-RO"},          {"mr", "mr-IN"},
-           {"ms", "ms-MY"},          {"my", "my-MM"},
-           {"ne", "ne-NP"},          {"nl", "nl-NL"},
-           {"no", "no-NO"},          {"pa", "pa-Guru-IN"},
-           {"pl", "pl-PL"},          {"pt", "pt-BR"},
-           {"ro", "ro-RO"},          {"ru", "ru-RU"},
-           {"si", "si-LK"},          {"sk", "sk-SK"},
-           {"sl", "sl-SI"},          {"sq", "sq-AL"},
-           {"sr", "sr-RS"},          {"su", "su-ID"},
-           {"sv", "sv-SE"},          {"sw", "sw-TZ"},
-           {"ta", "ta-IN"},          {"te", "te-IN"},
-           {"tl", "fil-PH"},         {"th", "th-TH"},
-           {"tr", "tr-TR"},          {"uk", "uk-UA"},
-           {"ur", "ur-PK"},          {"uz", "uz-UZ"},
-           {"vi", "vi-VN"},          {"yue", "yue-Hant-HK"},
-           {"zh", "zh-CN"},          {"zu", "zu-ZA"},
-           {"zh-cmn-CN", "zh-CN"},   {"zh-cmn", "zh-CN"},
-           {"zh-cmn-Hans", "zh-CN"}, {"zh-cmn-Hans-CN", "zh-CN"},
-           {"cmn-CN", "zh-CN"},      {"cmn-Hans", "zh-CN"},
-           {"cmn-Hans-CN", "zh-CN"}, {"cmn-Hant-TW", "zh-TW"},
-           {"zh-cmn-TW", "zh-TW"},   {"zh-cmn-Hant-TW", "zh-TW"},
-           {"cmn-TW", "zh-TW"}});
+      base::MakeFixedFlatMap<base::i18n::LanguageTag, base::i18n::LanguageTag>({
+          {base::i18n::GetKnownLanguageTag("af"),
+           base::i18n::GetKnownLanguageTag("af-ZA")},
+          {base::i18n::GetKnownLanguageTag("am"),
+           base::i18n::GetKnownLanguageTag("am-ET")},
+          {base::i18n::GetKnownLanguageTag("ar"),
+           base::i18n::GetKnownLanguageTag("ar-001")},
+          {base::i18n::GetKnownLanguageTag("az"),
+           base::i18n::GetKnownLanguageTag("az-AZ")},
+          {base::i18n::GetKnownLanguageTag("bg"),
+           base::i18n::GetKnownLanguageTag("bg-BG")},
+          {base::i18n::GetKnownLanguageTag("bn"),
+           base::i18n::GetKnownLanguageTag("bn-IN")},
+          {base::i18n::GetKnownLanguageTag("bs"),
+           base::i18n::GetKnownLanguageTag("bs-BA")},
+          {base::i18n::GetKnownLanguageTag("ca"),
+           base::i18n::GetKnownLanguageTag("ca-ES")},
+          {base::i18n::GetKnownLanguageTag("cs"),
+           base::i18n::GetKnownLanguageTag("cs-CZ")},
+          {base::i18n::GetKnownLanguageTag("da"),
+           base::i18n::GetKnownLanguageTag("da-DK")},
+          {base::i18n::GetKnownLanguageTag("de"),
+           base::i18n::GetKnownLanguageTag("de-DE")},
+          {base::i18n::GetKnownLanguageTag("el"),
+           base::i18n::GetKnownLanguageTag("el-GR")},
+          {base::i18n::GetKnownLanguageTag("en"),
+           base::i18n::GetKnownLanguageTag("en-US")},
+          {base::i18n::GetKnownLanguageTag("es"),
+           base::i18n::GetKnownLanguageTag("es-ES")},
+          {base::i18n::GetKnownLanguageTag("et"),
+           base::i18n::GetKnownLanguageTag("et-EE")},
+          {base::i18n::GetKnownLanguageTag("eu"),
+           base::i18n::GetKnownLanguageTag("eu-ES")},
+          {base::i18n::GetKnownLanguageTag("fa"),
+           base::i18n::GetKnownLanguageTag("fa-IR")},
+          {base::i18n::GetKnownLanguageTag("fi"),
+           base::i18n::GetKnownLanguageTag("fi-FI")},
+          {base::i18n::GetKnownLanguageTag("fil"),
+           base::i18n::GetKnownLanguageTag("fil-PH")},
+          {base::i18n::GetKnownLanguageTag("fr"),
+           base::i18n::GetKnownLanguageTag("fr-FR")},
+          {base::i18n::GetKnownLanguageTag("gl"),
+           base::i18n::GetKnownLanguageTag("gl-ES")},
+          {base::i18n::GetKnownLanguageTag("gu"),
+           base::i18n::GetKnownLanguageTag("gu-IN")},
+          {base::i18n::GetKnownLanguageTag("he"),
+           base::i18n::GetKnownLanguageTag("he-IL")},
+          {base::i18n::GetKnownLanguageTag("hi"),
+           base::i18n::GetKnownLanguageTag("hi-IN")},
+          {base::i18n::GetKnownLanguageTag("hr"),
+           base::i18n::GetKnownLanguageTag("hr-HR")},
+          {base::i18n::GetKnownLanguageTag("hu"),
+           base::i18n::GetKnownLanguageTag("hu-HU")},
+          {base::i18n::GetKnownLanguageTag("hy"),
+           base::i18n::GetKnownLanguageTag("hy-AM")},
+          {base::i18n::GetKnownLanguageTag("id"),
+           base::i18n::GetKnownLanguageTag("id-ID")},
+          {base::i18n::GetKnownLanguageTag("is"),
+           base::i18n::GetKnownLanguageTag("is-IS")},
+          {base::i18n::GetKnownLanguageTag("it"),
+           base::i18n::GetKnownLanguageTag("it-IT")},
+          {base::i18n::GetKnownLanguageTag("ja"),
+           base::i18n::GetKnownLanguageTag("ja-JP")},
+          {base::i18n::GetKnownLanguageTag("jv"),
+           base::i18n::GetKnownLanguageTag("jv-ID")},
+          {base::i18n::GetKnownLanguageTag("ka"),
+           base::i18n::GetKnownLanguageTag("ka-GE")},
+          {base::i18n::GetKnownLanguageTag("kk"),
+           base::i18n::GetKnownLanguageTag("kk-KZ")},
+          {base::i18n::GetKnownLanguageTag("km"),
+           base::i18n::GetKnownLanguageTag("km-KH")},
+          {base::i18n::GetKnownLanguageTag("kn"),
+           base::i18n::GetKnownLanguageTag("kn-IN")},
+          {base::i18n::GetKnownLanguageTag("ko"),
+           base::i18n::GetKnownLanguageTag("ko-KR")},
+          {base::i18n::GetKnownLanguageTag("lo"),
+           base::i18n::GetKnownLanguageTag("lo-LA")},
+          {base::i18n::GetKnownLanguageTag("lt"),
+           base::i18n::GetKnownLanguageTag("lt-LT")},
+          {base::i18n::GetKnownLanguageTag("lv"),
+           base::i18n::GetKnownLanguageTag("lv-LV")},
+          {base::i18n::GetKnownLanguageTag("mk"),
+           base::i18n::GetKnownLanguageTag("mk-MK")},
+          {base::i18n::GetKnownLanguageTag("ml"),
+           base::i18n::GetKnownLanguageTag("ml-IN")},
+          {base::i18n::GetKnownLanguageTag("mn"),
+           base::i18n::GetKnownLanguageTag("mn-MN")},
+          {base::i18n::GetKnownLanguageTag("mr"),
+           base::i18n::GetKnownLanguageTag("mr-IN")},
+          {base::i18n::GetKnownLanguageTag("ms"),
+           base::i18n::GetKnownLanguageTag("ms-MY")},
+          {base::i18n::GetKnownLanguageTag("my"),
+           base::i18n::GetKnownLanguageTag("my-MM")},
+          {base::i18n::GetKnownLanguageTag("ne"),
+           base::i18n::GetKnownLanguageTag("ne-NP")},
+          {base::i18n::GetKnownLanguageTag("nl"),
+           base::i18n::GetKnownLanguageTag("nl-NL")},
+          {base::i18n::GetKnownLanguageTag("no"),
+           base::i18n::GetKnownLanguageTag("no-NO")},
+          {base::i18n::GetKnownLanguageTag("pa"),
+           base::i18n::GetKnownLanguageTag("pa-Guru-IN")},
+          {base::i18n::GetKnownLanguageTag("pl"),
+           base::i18n::GetKnownLanguageTag("pl-PL")},
+          {base::i18n::GetKnownLanguageTag("pt"),
+           base::i18n::GetKnownLanguageTag("pt-BR")},
+          {base::i18n::GetKnownLanguageTag("ro"),
+           base::i18n::GetKnownLanguageTag("ro-RO")},
+          {base::i18n::GetKnownLanguageTag("ru"),
+           base::i18n::GetKnownLanguageTag("ru-RU")},
+          {base::i18n::GetKnownLanguageTag("si"),
+           base::i18n::GetKnownLanguageTag("si-LK")},
+          {base::i18n::GetKnownLanguageTag("sk"),
+           base::i18n::GetKnownLanguageTag("sk-SK")},
+          {base::i18n::GetKnownLanguageTag("sl"),
+           base::i18n::GetKnownLanguageTag("sl-SI")},
+          {base::i18n::GetKnownLanguageTag("sq"),
+           base::i18n::GetKnownLanguageTag("sq-AL")},
+          {base::i18n::GetKnownLanguageTag("sr"),
+           base::i18n::GetKnownLanguageTag("sr-RS")},
+          {base::i18n::GetKnownLanguageTag("su"),
+           base::i18n::GetKnownLanguageTag("su-ID")},
+          {base::i18n::GetKnownLanguageTag("sv"),
+           base::i18n::GetKnownLanguageTag("sv-SE")},
+          {base::i18n::GetKnownLanguageTag("sw"),
+           base::i18n::GetKnownLanguageTag("sw-TZ")},
+          {base::i18n::GetKnownLanguageTag("ta"),
+           base::i18n::GetKnownLanguageTag("ta-IN")},
+          {base::i18n::GetKnownLanguageTag("te"),
+           base::i18n::GetKnownLanguageTag("te-IN")},
+          {base::i18n::GetKnownLanguageTag("th"),
+           base::i18n::GetKnownLanguageTag("th-TH")},
+          {base::i18n::GetKnownLanguageTag("tr"),
+           base::i18n::GetKnownLanguageTag("tr-TR")},
+          {base::i18n::GetKnownLanguageTag("uk"),
+           base::i18n::GetKnownLanguageTag("uk-UA")},
+          {base::i18n::GetKnownLanguageTag("ur"),
+           base::i18n::GetKnownLanguageTag("ur-PK")},
+          {base::i18n::GetKnownLanguageTag("uz"),
+           base::i18n::GetKnownLanguageTag("uz-UZ")},
+          {base::i18n::GetKnownLanguageTag("vi"),
+           base::i18n::GetKnownLanguageTag("vi-VN")},
+          {base::i18n::GetKnownLanguageTag("yue"),
+           base::i18n::GetKnownLanguageTag("yue-Hant-HK")},
+          {base::i18n::GetKnownLanguageTag("zh"),
+           base::i18n::GetKnownLanguageTag("zh-Hans")},
+          {base::i18n::GetKnownLanguageTag("zu"),
+           base::i18n::GetKnownLanguageTag("zu-ZA")},
+      });
 
   // First check if this is a language code supported in the map above.
-  auto* iter = kLangsToDefaultLocales.find(lang_or_locale);
-  if (iter != kLangsToDefaultLocales.end())
-    return std::string(iter->second);
+  auto iter = kLangsToDefaultLocales.find(lang_or_locale);
+  if (iter != kLangsToDefaultLocales.end()) {
+    return iter->second;
+  }
 
   // If it's only a language code, we can return early, because no other
   // language-only codes are supported.
-  std::pair<base::StringPiece, base::StringPiece> lang_and_locale_pair =
-      language::SplitIntoMainAndTail(lang_or_locale);
-  if (lang_and_locale_pair.second.size() == 0)
-    return std::string();
+  if (lang_or_locale.region_subtag().empty() &&
+      lang_or_locale.script_subtag().empty() &&
+      lang_or_locale.variant_subtags().empty()) {
+    return kDefaultProfileLocale;
+  }
 
   // The code is a supported locale. Return itself.
   // Note that it doesn't matter if the supported locale is online or offline.
-  if (base::Contains(Dictation::GetAllSupportedLocales(), lang_or_locale))
+  if (Dictation::GetAllSupportedLocales().contains(lang_or_locale)) {
     return lang_or_locale;
+  }
 
   // Finally, get the language code from the locale and try to use it to map
   // to a default locale. For example, "en-XX" should map to "en-US" if "en-XX"
   // does not exist.
-  iter = kLangsToDefaultLocales.find(lang_and_locale_pair.first);
-  if (iter != kLangsToDefaultLocales.end())
-    return std::string(iter->second);
-  return std::string();
-}
-
-// Returns the current input context. This may change during the session, even
-// if the IME engine does not change, because remote mojo applications have
-// their own instance of InputMethodChromeOS. See comment on InputMethodBridge.
-ui::IMEInputContextHandlerInterface* GetInputContext() {
-  return ui::IMEBridge::Get()->GetInputContextHandler();
+  iter = kLangsToDefaultLocales.find(lang_or_locale.WithLanguageSubtagOnly());
+  if (iter != kLangsToDefaultLocales.end()) {
+    return iter->second;
+  }
+  return kDefaultProfileLocale;
 }
 
 }  // namespace
 
 // static
-const base::flat_map<std::string, bool> Dictation::GetAllSupportedLocales() {
-  base::flat_map<std::string, bool> supported_locales;
-  static const char* kWebSpeechSupportedLocales[] = {
-      "af-ZA",       "am-ET",      "ar-AE", "ar-BH", "ar-DZ", "ar-EG", "ar-IL",
-      "ar-IQ",       "ar-JO",      "ar-KW", "ar-LB", "ar-MA", "ar-OM", "ar-PS",
-      "ar-QA",       "ar-SA",      "ar-TN", "ar-YE", "az-AZ", "bg-BG", "bn-BD",
-      "bn-IN",       "bs-BA",      "ca-ES", "cs-CZ", "da-DK", "de-AT", "de-CH",
-      "de-DE",       "el-GR",      "en-AU", "en-CA", "en-GB", "en-GH", "en-HK",
-      "en-IE",       "en-IN",      "en-KE", "en-NG", "en-NZ", "en-PH", "en-PK",
-      "en-SG",       "en-TZ",      "en-US", "en-ZA", "es-AR", "es-BO", "es-CL",
-      "es-CO",       "es-CR",      "es-DO", "es-EC", "es-ES", "es-GT", "es-HN",
-      "es-MX",       "es-NI",      "es-PA", "es-PE", "es-PR", "es-PY", "es-SV",
-      "es-US",       "es-UY",      "es-VE", "et-EE", "eu-ES", "fa-IR", "fi-FI",
-      "fil-PH",      "fr-BE",      "fr-CA", "fr-CH", "fr-FR", "gl-ES", "gu-IN",
-      "hi-IN",       "hr-HR",      "hu-HU", "hy-AM", "id-ID", "is-IS", "it-CH",
-      "it-IT",       "iw-IL",      "ja-JP", "jv-ID", "ka-GE", "kk-KZ", "km-KH",
-      "kn-IN",       "ko-KR",      "lo-LA", "lt-LT", "lv-LV", "mk-MK", "ml-IN",
-      "mn-MN",       "mr-IN",      "ms-MY", "my-MM", "ne-NP", "nl-BE", "nl-NL",
-      "no-NO",       "pa-Guru-IN", "pl-PL", "pt-BR", "pt-PT", "ro-RO", "ru-RU",
-      "si-LK",       "sk-SK",      "sl-SI", "sq-AL", "sr-RS", "su-ID", "sv-SE",
-      "sw-KE",       "sw-TZ",      "ta-IN", "ta-LK", "ta-MY", "ta-SG", "te-IN",
-      "th-TH",       "tr-TR",      "uk-UA", "ur-IN", "ur-PK", "uz-UZ", "vi-VN",
-      "yue-Hant-HK", "zh-CN",      "zh-TW", "zu-ZA", "ar-001"};
+const base::flat_map<base::i18n::LanguageTag, Dictation::LocaleData>
+Dictation::GetAllSupportedLocales() {
+  base::flat_map<base::i18n::LanguageTag, LocaleData> supported_locales;
+  // If new RTL locales are added, ensure that
+  // accessibility_common/dictation/commands.js RTLLocales is updated
+  // appropriately.
+  static constexpr base::i18n::LanguageTag kWebSpeechSupportedLocales[] = {
+      base::i18n::GetKnownLanguageTag("af-ZA"),
+      base::i18n::GetKnownLanguageTag("am-ET"),
+      base::i18n::GetKnownLanguageTag("ar-AE"),
+      base::i18n::GetKnownLanguageTag("ar-BH"),
+      base::i18n::GetKnownLanguageTag("ar-DZ"),
+      base::i18n::GetKnownLanguageTag("ar-EG"),
+      base::i18n::GetKnownLanguageTag("ar-IL"),
+      base::i18n::GetKnownLanguageTag("ar-IQ"),
+      base::i18n::GetKnownLanguageTag("ar-JO"),
+      base::i18n::GetKnownLanguageTag("ar-KW"),
+      base::i18n::GetKnownLanguageTag("ar-LB"),
+      base::i18n::GetKnownLanguageTag("ar-MA"),
+      base::i18n::GetKnownLanguageTag("ar-OM"),
+      base::i18n::GetKnownLanguageTag("ar-PS"),
+      base::i18n::GetKnownLanguageTag("ar-QA"),
+      base::i18n::GetKnownLanguageTag("ar-SA"),
+      base::i18n::GetKnownLanguageTag("ar-TN"),
+      base::i18n::GetKnownLanguageTag("ar-YE"),
+      base::i18n::GetKnownLanguageTag("az-AZ"),
+      base::i18n::GetKnownLanguageTag("bg-BG"),
+      base::i18n::GetKnownLanguageTag("bn-BD"),
+      base::i18n::GetKnownLanguageTag("bn-IN"),
+      base::i18n::GetKnownLanguageTag("bs-BA"),
+      base::i18n::GetKnownLanguageTag("ca-ES"),
+      base::i18n::GetKnownLanguageTag("cs-CZ"),
+      base::i18n::GetKnownLanguageTag("da-DK"),
+      base::i18n::GetKnownLanguageTag("de-AT"),
+      base::i18n::GetKnownLanguageTag("de-CH"),
+      base::i18n::GetKnownLanguageTag("de-DE"),
+      base::i18n::GetKnownLanguageTag("el-GR"),
+      base::i18n::GetKnownLanguageTag("en-AU"),
+      base::i18n::GetKnownLanguageTag("en-CA"),
+      base::i18n::GetKnownLanguageTag("en-GB"),
+      base::i18n::GetKnownLanguageTag("en-GH"),
+      base::i18n::GetKnownLanguageTag("en-HK"),
+      base::i18n::GetKnownLanguageTag("en-IE"),
+      base::i18n::GetKnownLanguageTag("en-IN"),
+      base::i18n::GetKnownLanguageTag("en-KE"),
+      base::i18n::GetKnownLanguageTag("en-NG"),
+      base::i18n::GetKnownLanguageTag("en-NZ"),
+      base::i18n::GetKnownLanguageTag("en-PH"),
+      base::i18n::GetKnownLanguageTag("en-PK"),
+      base::i18n::GetKnownLanguageTag("en-SG"),
+      base::i18n::GetKnownLanguageTag("en-TZ"),
+      base::i18n::GetKnownLanguageTag("en-US"),
+      base::i18n::GetKnownLanguageTag("en-ZA"),
+      base::i18n::GetKnownLanguageTag("es-AR"),
+      base::i18n::GetKnownLanguageTag("es-BO"),
+      base::i18n::GetKnownLanguageTag("es-CL"),
+      base::i18n::GetKnownLanguageTag("es-CO"),
+      base::i18n::GetKnownLanguageTag("es-CR"),
+      base::i18n::GetKnownLanguageTag("es-DO"),
+      base::i18n::GetKnownLanguageTag("es-EC"),
+      base::i18n::GetKnownLanguageTag("es-ES"),
+      base::i18n::GetKnownLanguageTag("es-GT"),
+      base::i18n::GetKnownLanguageTag("es-HN"),
+      base::i18n::GetKnownLanguageTag("es-MX"),
+      base::i18n::GetKnownLanguageTag("es-NI"),
+      base::i18n::GetKnownLanguageTag("es-PA"),
+      base::i18n::GetKnownLanguageTag("es-PE"),
+      base::i18n::GetKnownLanguageTag("es-PR"),
+      base::i18n::GetKnownLanguageTag("es-PY"),
+      base::i18n::GetKnownLanguageTag("es-SV"),
+      base::i18n::GetKnownLanguageTag("es-US"),
+      base::i18n::GetKnownLanguageTag("es-UY"),
+      base::i18n::GetKnownLanguageTag("es-VE"),
+      base::i18n::GetKnownLanguageTag("et-EE"),
+      base::i18n::GetKnownLanguageTag("eu-ES"),
+      base::i18n::GetKnownLanguageTag("fa-IR"),
+      base::i18n::GetKnownLanguageTag("fi-FI"),
+      base::i18n::GetKnownLanguageTag("fil-PH"),
+      base::i18n::GetKnownLanguageTag("fr-BE"),
+      base::i18n::GetKnownLanguageTag("fr-CA"),
+      base::i18n::GetKnownLanguageTag("fr-CH"),
+      base::i18n::GetKnownLanguageTag("fr-FR"),
+      base::i18n::GetKnownLanguageTag("gl-ES"),
+      base::i18n::GetKnownLanguageTag("gu-IN"),
+      base::i18n::GetKnownLanguageTag("hi-IN"),
+      base::i18n::GetKnownLanguageTag("hr-HR"),
+      base::i18n::GetKnownLanguageTag("hu-HU"),
+      base::i18n::GetKnownLanguageTag("hy-AM"),
+      base::i18n::GetKnownLanguageTag("id-ID"),
+      base::i18n::GetKnownLanguageTag("is-IS"),
+      base::i18n::GetKnownLanguageTag("it-CH"),
+      base::i18n::GetKnownLanguageTag("it-IT"),
+      base::i18n::GetKnownLanguageTag("he-IL"),
+      base::i18n::GetKnownLanguageTag("ja-JP"),
+      base::i18n::GetKnownLanguageTag("jv-ID"),
+      base::i18n::GetKnownLanguageTag("ka-GE"),
+      base::i18n::GetKnownLanguageTag("kk-KZ"),
+      base::i18n::GetKnownLanguageTag("km-KH"),
+      base::i18n::GetKnownLanguageTag("kn-IN"),
+      base::i18n::GetKnownLanguageTag("ko-KR"),
+      base::i18n::GetKnownLanguageTag("lo-LA"),
+      base::i18n::GetKnownLanguageTag("lt-LT"),
+      base::i18n::GetKnownLanguageTag("lv-LV"),
+      base::i18n::GetKnownLanguageTag("mk-MK"),
+      base::i18n::GetKnownLanguageTag("ml-IN"),
+      base::i18n::GetKnownLanguageTag("mn-MN"),
+      base::i18n::GetKnownLanguageTag("mr-IN"),
+      base::i18n::GetKnownLanguageTag("ms-MY"),
+      base::i18n::GetKnownLanguageTag("my-MM"),
+      base::i18n::GetKnownLanguageTag("ne-NP"),
+      base::i18n::GetKnownLanguageTag("nl-BE"),
+      base::i18n::GetKnownLanguageTag("nl-NL"),
+      base::i18n::GetKnownLanguageTag("no-NO"),
+      base::i18n::GetKnownLanguageTag("pa-Guru-IN"),
+      base::i18n::GetKnownLanguageTag("pl-PL"),
+      base::i18n::GetKnownLanguageTag("pt-BR"),
+      base::i18n::GetKnownLanguageTag("pt-PT"),
+      base::i18n::GetKnownLanguageTag("ro-RO"),
+      base::i18n::GetKnownLanguageTag("ru-RU"),
+      base::i18n::GetKnownLanguageTag("si-LK"),
+      base::i18n::GetKnownLanguageTag("sk-SK"),
+      base::i18n::GetKnownLanguageTag("sl-SI"),
+      base::i18n::GetKnownLanguageTag("sq-AL"),
+      base::i18n::GetKnownLanguageTag("sr-RS"),
+      base::i18n::GetKnownLanguageTag("su-ID"),
+      base::i18n::GetKnownLanguageTag("sv-SE"),
+      base::i18n::GetKnownLanguageTag("sw-KE"),
+      base::i18n::GetKnownLanguageTag("sw-TZ"),
+      base::i18n::GetKnownLanguageTag("ta-IN"),
+      base::i18n::GetKnownLanguageTag("ta-LK"),
+      base::i18n::GetKnownLanguageTag("ta-MY"),
+      base::i18n::GetKnownLanguageTag("ta-SG"),
+      base::i18n::GetKnownLanguageTag("te-IN"),
+      base::i18n::GetKnownLanguageTag("th-TH"),
+      base::i18n::GetKnownLanguageTag("tr-TR"),
+      base::i18n::GetKnownLanguageTag("uk-UA"),
+      base::i18n::GetKnownLanguageTag("ur-IN"),
+      base::i18n::GetKnownLanguageTag("ur-PK"),
+      base::i18n::GetKnownLanguageTag("uz-UZ"),
+      base::i18n::GetKnownLanguageTag("vi-VN"),
+      base::i18n::GetKnownLanguageTag("yue-Hant-HK"),
+      base::i18n::GetKnownLanguageTag("zh-Hans"),
+      base::i18n::GetKnownLanguageTag("zh-TW"),
+      base::i18n::GetKnownLanguageTag("zu-ZA"),
+      base::i18n::GetKnownLanguageTag("ar-001"),
+  };
 
-  for (const char* locale : kWebSpeechSupportedLocales) {
+  for (const base::i18n::LanguageTag& locale : kWebSpeechSupportedLocales) {
     // By default these languages are not supported offline.
-    supported_locales[locale] = false;
+    supported_locales[locale] = LocaleData();
   }
-  if (switches::IsExperimentalAccessibilityDictationOfflineEnabled()) {
-    std::vector<std::string> offline_languages =
-        speech::SodaInstaller::GetInstance()->GetAvailableLanguages();
-    for (auto language : offline_languages) {
+  if (features::IsDictationOfflineAvailable()) {
+    speech::SodaInstaller* soda_installer =
+        speech::SodaInstaller::GetInstance();
+    std::vector<std::string> offline_locales =
+        soda_installer->GetAvailableLanguages();
+    for (const auto& locale : offline_locales) {
+      std::optional<base::i18n::LanguageTag> locale_tag =
+          base::i18n::GetLanguageTagFromString(locale);
+      if (!locale_tag) {
+        continue;
+      }
       // These are supported offline.
-      supported_locales[language] = true;
+      supported_locales[*locale_tag] = LocaleData();
+      supported_locales[*locale_tag].works_offline = true;
+      supported_locales[*locale_tag].installed =
+          soda_installer->IsSodaInstalled(speech::GetLanguageCode(locale));
     }
   }
   return supported_locales;
 }
 
 // static
-std::string Dictation::DetermineDefaultSupportedLocale(Profile* profile,
-                                                       bool new_user) {
-  std::string lang_or_locale;
-  if (new_user) {
-    // This is the first time this user has enabled Dictation. Pick the default
-    // language preference based on their application locale.
-    lang_or_locale = g_browser_process->GetApplicationLocale();
-  } else {
-    // This user has already had Dictation enabled, but now we need to map
-    // from the language they've previously used to a supported locale.
-    lang_or_locale = GetUserLangOrLocaleFromSystem(profile);
-  }
-  std::string supported_locale = GetSupportedLocale(lang_or_locale);
-  return supported_locale.empty() ? kDefaultProfileLocale : supported_locale;
-}
-
-Dictation::Dictation(Profile* profile)
-    : current_state_(SPEECH_RECOGNIZER_OFF),
-      composition_(std::make_unique<ui::CompositionText>()),
-      profile_(profile),
-      no_speech_timeout_(kNetworkNoSpeechTimeout),
-      no_new_speech_timeout_(kNetworkNoNewSpeechTimeout) {
-  if (GetInputContext() && GetInputContext()->GetInputMethod())
-    GetInputContext()->GetInputMethod()->AddObserver(this);
-}
-
-Dictation::~Dictation() {
-  if (GetInputContext() && GetInputContext()->GetInputMethod())
-    GetInputContext()->GetInputMethod()->RemoveObserver(this);
-}
-
-bool Dictation::OnToggleDictation() {
-  if (speech_recognizer_) {
-    DictationOff();
-    return false;
-  }
-  has_committed_text_ = false;
-  const std::string locale = GetUserLocale(profile_);
-  // Log the locale used with CLD3LanguageCode.
-  base::UmaHistogramSparse("Accessibility.CrosDictation.Language",
-                           base::HashMetricName(locale));
-
-  if (switches::IsExperimentalAccessibilityDictationOfflineEnabled() &&
-      OnDeviceSpeechRecognizer::IsOnDeviceSpeechRecognizerAvailable(locale)) {
-    // On-device recognition is behind a flag and then only available if
-    // SODA is installed on-device.
-    speech_recognizer_ = std::make_unique<OnDeviceSpeechRecognizer>(
-        weak_ptr_factory_.GetWeakPtr(), profile_, locale,
-        /*recognition_mode_ime=*/true, /*enable_formatting=*/false);
-    base::UmaHistogramBoolean("Accessibility.CrosDictation.UsedOnDeviceSpeech",
-                              true);
-    no_speech_timeout_ = kDeviceNoSpeechTimeout;
-    no_new_speech_timeout_ = kDeviceNoNewSpeechTimeout;
-    used_on_device_speech_ = true;
-  } else {
-    speech_recognizer_ = std::make_unique<NetworkSpeechRecognizer>(
-        weak_ptr_factory_.GetWeakPtr(),
-        profile_->GetDefaultStoragePartition()
-            ->GetURLLoaderFactoryForBrowserProcessIOThread(),
-        profile_->GetPrefs()->GetString(language::prefs::kAcceptLanguages),
-        locale);
-    base::UmaHistogramBoolean("Accessibility.CrosDictation.UsedOnDeviceSpeech",
-                              false);
-    no_speech_timeout_ =
-        features::IsExperimentalAccessibilityDictationListeningEnabled()
-            ? kDeviceNoSpeechTimeout
-            : kNetworkNoSpeechTimeout;
-    no_new_speech_timeout_ = kNetworkNoNewSpeechTimeout;
-    used_on_device_speech_ = false;
-  }
-  listening_duration_timer_ = base::ElapsedTimer();
-  return true;
-}
-
-void Dictation::OnSpeechResult(
-    const std::u16string& transcription,
-    bool is_final,
-    const absl::optional<media::SpeechRecognitionResult>& word_offsets) {
-  // If the first character of text isn't a space, add a space before it.
-  // NetworkSpeechRecognizer adds the preceding space but
-  // OnDeviceSpeechRecognizer does not. This is also done in
-  // CaptionBubbleModel::CommitPartialText.
-  // TODO(crbug.com/1055150): This feature is launching for English first.
-  // Make sure spacing is correct for all languages.
-  if (has_committed_text_ && transcription.size() > 0 &&
-      transcription.compare(0, 1, u" ") != 0) {
-    composition_->text = u" " + transcription;
-  } else {
-    composition_->text = transcription;
-  }
-
-  // Restart the timer when we have a final result. If we receive any new or
-  // changed text, restart the timer to give the user more time to speak. (The
-  // timer is recording the amount of time since the most recent utterance.)
-  if (is_final) {
-    StartSpeechTimeout(no_speech_timeout_);
-  } else {
-    StartSpeechTimeout(
-        features::IsExperimentalAccessibilityDictationListeningEnabled()
-            ? no_speech_timeout_
-            : no_new_speech_timeout_);
-    // If ChromeVox is enabled, we don't want to show intermediate results
-    if (AccessibilityManager::Get()->IsSpokenFeedbackEnabled())
-      return;
-
-    ui::IMEInputContextHandlerInterface* input_context = GetInputContext();
-    if (input_context)
-      input_context->UpdateCompositionText(*composition_, 0, true);
-    return;
-  }
-  if (features::IsExperimentalAccessibilityDictationListeningEnabled()) {
-    CommitCurrentText();
-  } else {
-    // Turn off after finalized speech.
-    DictationOff();
-  }
-}
-
-void Dictation::OnSpeechSoundLevelChanged(int16_t level) {}
-
-void Dictation::OnSpeechRecognitionStateChanged(
-    SpeechRecognizerStatus new_state) {
-  SpeechRecognizerStatus next_state = new_state;
-  if (new_state == SPEECH_RECOGNIZER_RECOGNIZING) {
-    // If we are starting to listen to audio, play a tone for the user.
-    audio::SoundsManager::Get()->Play(static_cast<int>(Sound::kDictationStart));
-    // Start a timeout to ensure if no speech happens we will eventually turn
-    // ourselves off.
-    StartSpeechTimeout(no_speech_timeout_);
-  } else if (new_state == SPEECH_RECOGNIZER_ERROR) {
-    DictationOff();
-    next_state = SPEECH_RECOGNIZER_OFF;
-  } else if (new_state == SPEECH_RECOGNIZER_READY) {
-    if (current_state_ == SPEECH_RECOGNIZER_OFF && speech_recognizer_) {
-      // The SpeechRecognizer was initialized after being created, and
-      // is ready to start recognizing speech.
-      speech_recognizer_->Start();
-    } else {
-      // This state is only reached when nothing has been said for a fixed time.
-      // In this case, the expected behavior is for dictation to terminate.
-      DictationOff();
-      next_state = SPEECH_RECOGNIZER_OFF;
-    }
-  }
-  current_state_ = next_state;
-}
-
-void Dictation::OnTextInputStateChanged(const ui::TextInputClient* client) {
-  if (!client)
-    return;
-
-  if (client->GetFocusReason() ==
-      ui::TextInputClient::FocusReason::FOCUS_REASON_NONE)
-    return;
-
-  DictationOff();
-}
-
-void Dictation::DictationOff() {
-  current_state_ = SPEECH_RECOGNIZER_OFF;
-  StopSpeechTimeout();
-  if (!speech_recognizer_)
-    return;
-
-  // Post commit text delayed to avoid a dcheck.
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(&Dictation::CommitCurrentText,
-                                weak_ptr_factory_.GetWeakPtr()));
-  if (!composition_->text.empty()) {
-    audio::SoundsManager::Get()->Play(static_cast<int>(Sound::kDictationEnd));
-  } else {
-    audio::SoundsManager::Get()->Play(
-        static_cast<int>(Sound::kDictationCancel));
-  }
-
-  AccessibilityStatusEventDetails details(
-      AccessibilityNotificationType::kToggleDictation, false /* enabled */);
-  AccessibilityManager::Get()->NotifyAccessibilityStatusChanged(details);
-  speech_recognizer_.reset();
-
-  // Duration matches the lifetime of the speech recognizer.
-  if (used_on_device_speech_) {
-    base::UmaHistogramLongTimes(
-        "Accessibility.CrosDictation.ListeningDuration.OnDeviceRecognition",
-        listening_duration_timer_.Elapsed());
-  } else {
-    base::UmaHistogramLongTimes(
-        "Accessibility.CrosDictation.ListeningDuration.NetworkRecognition",
-        listening_duration_timer_.Elapsed());
-  }
-}
-
-void Dictation::CommitCurrentText() {
-  if (composition_->text.empty()) {
-    return;
-  }
-  has_committed_text_ = true;
-  ui::IMEInputContextHandlerInterface* input_context = GetInputContext();
-  if (input_context) {
-    input_context->CommitText(
-        composition_->text,
-        ui::TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
-  }
-
-  composition_->text = std::u16string();
-}
-
-void Dictation::StartSpeechTimeout(base::TimeDelta timeout_duration) {
-  speech_timeout_.Start(FROM_HERE, timeout_duration,
-                        base::BindOnce(&Dictation::OnSpeechTimeout,
-                                       weak_ptr_factory_.GetWeakPtr()));
-}
-
-void Dictation::StopSpeechTimeout() {
-  speech_timeout_.Stop();
-}
-
-void Dictation::OnSpeechTimeout() {
-  DictationOff();
+base::i18n::LanguageTag Dictation::DetermineDefaultSupportedLocale(
+    Profile* profile,
+    bool new_user,
+    const base::i18n::LanguageTag& application_locale) {
+  base::i18n::LanguageTag lang_or_locale =
+      new_user ? application_locale
+               : GetUserLangOrLocaleFromSystem(profile, application_locale);
+  return GetSupportedLocale(lang_or_locale);
 }
 
 }  // namespace ash

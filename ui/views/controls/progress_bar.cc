@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,45 +11,39 @@
 
 #include "base/check_op.h"
 #include "base/i18n/number_formatting.h"
-#include "base/macros.h"
 #include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/effects/SkGradientShader.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
+#include "third_party/skia/include/core/SkRRect.h"
+#include "third_party/skia/include/effects/SkGradient.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
-#include "ui/gfx/skia_util.h"
-#include "ui/native_theme/native_theme.h"
+#include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/property_effects.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
 
 namespace {
 
-// In DP, the amount to round the corners of the progress bar (both bg and
-// fg, aka slice).
-constexpr int kCornerRadius = 3;
-constexpr int kSmallCornerRadius = 1;
-
-// Adds a rectangle to the path. The corners will be rounded with regular corner
-// radius if the progress bar height is larger than the regular corner radius.
-// Otherwise the corners will be rounded with the small corner radius if there
-// is room for it.
-void AddPossiblyRoundRectToPath(const gfx::Rect& rectangle,
-                                bool allow_round_corner,
-                                SkPath* path) {
-  if (!allow_round_corner || rectangle.height() < kSmallCornerRadius) {
+// Adds a rectangle to the path.
+void AddPossiblyRoundRectToPath(
+    const gfx::Rect& rectangle,
+    const gfx::RoundedCornersF& preferred_corner_radii,
+    SkPathBuilder* path) {
+  if (preferred_corner_radii.IsEmpty() || rectangle.height() == 0) {
     path->addRect(gfx::RectToSkRect(rectangle));
-  } else if (rectangle.height() < kCornerRadius) {
-    path->addRoundRect(gfx::RectToSkRect(rectangle), kSmallCornerRadius,
-                       kSmallCornerRadius);
-  } else {
-    path->addRoundRect(gfx::RectToSkRect(rectangle), kCornerRadius,
-                       kCornerRadius);
+    return;
   }
+  path->addRRect(gfx::RoundedRectToSkRRect(rectangle, preferred_corner_radii));
 }
 
 int RoundToPercent(double fractional_value) {
@@ -58,23 +52,15 @@ int RoundToPercent(double fractional_value) {
 
 }  // namespace
 
-ProgressBar::ProgressBar(int preferred_height, bool allow_round_corner)
-    : preferred_height_(preferred_height),
-      allow_round_corner_(allow_round_corner) {
+ProgressBar::ProgressBar() {
   SetFlipCanvasOnPaintForRTLUI(true);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kProgressIndicator);
 }
 
 ProgressBar::~ProgressBar() = default;
 
-void ProgressBar::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  node_data->role = ax::mojom::Role::kProgressIndicator;
-  if (IsIndeterminate())
-    node_data->RemoveStringAttribute(ax::mojom::StringAttribute::kValue);
-  else
-    node_data->SetValue(base::FormatPercent(RoundToPercent(current_value_)));
-}
-
-gfx::Size ProgressBar::CalculatePreferredSize() const {
+gfx::Size ProgressBar::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
   // The width will typically be ignored.
   gfx::Size pref_size(1, preferred_height_);
   gfx::Insets insets = GetInsets();
@@ -91,37 +77,39 @@ void ProgressBar::AddedToWidget() {
 }
 
 void ProgressBar::OnPaint(gfx::Canvas* canvas) {
-  if (IsIndeterminate())
+  if (IsIndeterminate()) {
     return OnPaintIndeterminate(canvas);
+  }
 
   gfx::Rect content_bounds = GetContentsBounds();
 
   // Draw background.
-  SkPath background_path;
-  AddPossiblyRoundRectToPath(content_bounds, allow_round_corner_,
-                             &background_path);
+  SkPathBuilder background_path;
+  gfx::RoundedCornersF rounded_corners = GetPreferredCornerRadii();
+  AddPossiblyRoundRectToPath(content_bounds, rounded_corners, &background_path);
   cc::PaintFlags background_flags;
   background_flags.setStyle(cc::PaintFlags::kFill_Style);
   background_flags.setAntiAlias(true);
   background_flags.setColor(GetBackgroundColor());
-  canvas->DrawPath(background_path, background_flags);
+  canvas->DrawPath(background_path.detach(), background_flags);
 
   // Draw slice.
-  SkPath slice_path;
+  SkPathBuilder slice_path;
   const int slice_width = static_cast<int>(
       content_bounds.width() * std::min(current_value_, 1.0) + 0.5);
-  if (slice_width < 1)
+  if (slice_width < 1) {
     return;
+  }
 
   gfx::Rect slice_bounds = content_bounds;
   slice_bounds.set_width(slice_width);
-  AddPossiblyRoundRectToPath(slice_bounds, allow_round_corner_, &slice_path);
+  AddPossiblyRoundRectToPath(slice_bounds, rounded_corners, &slice_path);
 
   cc::PaintFlags slice_flags;
   slice_flags.setStyle(cc::PaintFlags::kFill_Style);
   slice_flags.setAntiAlias(true);
   slice_flags.setColor(GetForegroundColor());
-  canvas->DrawPath(slice_path, slice_flags);
+  canvas->DrawPath(slice_path.detach(), slice_flags);
 }
 
 double ProgressBar::GetValue() const {
@@ -131,62 +119,116 @@ double ProgressBar::GetValue() const {
 void ProgressBar::SetValue(double value) {
   double adjusted_value = (value < 0.0 || value > 1.0) ? -1.0 : value;
 
-  if (adjusted_value == current_value_)
+  if (adjusted_value == current_value_) {
     return;
+  }
 
   current_value_ = adjusted_value;
   if (IsIndeterminate()) {
     indeterminate_bar_animation_ = std::make_unique<gfx::LinearAnimation>(this);
-    indeterminate_bar_animation_->SetDuration(base::TimeDelta::FromSeconds(2));
+    indeterminate_bar_animation_->SetDuration(base::Seconds(2));
     indeterminate_bar_animation_->Start();
   } else {
     indeterminate_bar_animation_.reset();
-    OnPropertyChanged(&current_value_, kPropertyEffectsPaint);
+    OnPropertyChanged(&current_value_, PropertyEffects::kPaint);
   }
 
   MaybeNotifyAccessibilityValueChanged();
 }
 
-SkColor ProgressBar::GetForegroundColor() const {
-  if (foreground_color_)
-    return foreground_color_.value();
+void ProgressBar::SetPaused(bool is_paused) {
+  if (is_paused_ == is_paused) {
+    return;
+  }
 
-  return GetNativeTheme()->GetSystemColor(
-      ui::NativeTheme::kColorId_ProminentButtonColor);
+  is_paused_ = is_paused;
+  OnPropertyChanged(&is_paused_, PropertyEffects::kPaint);
 }
 
-void ProgressBar::SetForegroundColor(SkColor color) {
-  if (foreground_color_ == color)
+SkColor ProgressBar::GetForegroundColor() const {
+  if (foreground_color_) {
+    return foreground_color_->ResolveToSkColor(GetColorProvider());
+  }
+
+  return GetColorProvider()->GetColor(GetPaused() ? ui::kColorProgressBarPaused
+                                                  : ui::kColorProgressBar);
+}
+
+void ProgressBar::SetForegroundColor(std::optional<ui::ColorVariant> color) {
+  if (foreground_color_ == color) {
     return;
+  }
 
   foreground_color_ = color;
-  OnPropertyChanged(&foreground_color_, kPropertyEffectsPaint);
+  OnPropertyChanged(&foreground_color_, PropertyEffects::kPaint);
 }
 
 SkColor ProgressBar::GetBackgroundColor() const {
-  return background_color_.value_or(
-      color_utils::BlendTowardMaxContrast(GetForegroundColor(), 0xCC));
+  if (background_color_) {
+    return background_color_->ResolveToSkColor(GetColorProvider());
+  }
+
+  return GetColorProvider()->GetColor(ui::kColorProgressBarBackground);
 }
 
-void ProgressBar::SetBackgroundColor(SkColor color) {
-  if (background_color_ == color)
+void ProgressBar::SetBackgroundColor(std::optional<ui::ColorVariant> color) {
+  if (background_color_ == color) {
     return;
+  }
 
   background_color_ = color;
-  OnPropertyChanged(&background_color_, kPropertyEffectsPaint);
+  OnPropertyChanged(&background_color_, PropertyEffects::kPaint);
+}
+
+int ProgressBar::GetPreferredHeight() const {
+  return preferred_height_;
+}
+
+void ProgressBar::SetPreferredHeight(int preferred_height) {
+  if (preferred_height_ == preferred_height) {
+    return;
+  }
+  preferred_height_ = preferred_height;
+  OnPropertyChanged(&preferred_height_, PropertyEffects::kPreferredSizeChanged);
+}
+
+gfx::RoundedCornersF ProgressBar::GetPreferredCornerRadii() const {
+  if (!preferred_corner_radii_) {
+    return gfx::RoundedCornersF(0);
+  }
+  const float max_radius = GetContentsBounds().height();
+
+  // No corner should have a radius greater than the height of the bar.
+  return gfx::RoundedCornersF(
+      std::min(max_radius, preferred_corner_radii_->upper_left()),
+      std::min(max_radius, preferred_corner_radii_->upper_right()),
+      std::min(max_radius, preferred_corner_radii_->lower_right()),
+      std::min(max_radius, preferred_corner_radii_->lower_left()));
+}
+
+void ProgressBar::SetPreferredCornerRadii(
+    std::optional<gfx::RoundedCornersF> preferred_corner_radii) {
+  if (preferred_corner_radii_ == preferred_corner_radii) {
+    return;
+  }
+  preferred_corner_radii_ = preferred_corner_radii;
+  OnPropertyChanged(&preferred_corner_radii_, PropertyEffects::kPaint);
 }
 
 void ProgressBar::AnimationProgressed(const gfx::Animation* animation) {
-  DCHECK_EQ(animation, indeterminate_bar_animation_.get());
-  DCHECK(IsIndeterminate());
+  CHECK_EQ(animation, indeterminate_bar_animation_.get(),
+           base::NotFatalUntil::M163);
+  CHECK(IsIndeterminate(), base::NotFatalUntil::M163);
   SchedulePaint();
 }
 
 void ProgressBar::AnimationEnded(const gfx::Animation* animation) {
-  DCHECK_EQ(animation, indeterminate_bar_animation_.get());
+  CHECK_EQ(animation, indeterminate_bar_animation_.get(),
+           base::NotFatalUntil::M163);
   // Restarts animation.
-  if (IsIndeterminate())
+  if (IsIndeterminate()) {
     indeterminate_bar_animation_->Start();
+  }
 }
 
 bool ProgressBar::IsIndeterminate() {
@@ -197,17 +239,17 @@ void ProgressBar::OnPaintIndeterminate(gfx::Canvas* canvas) {
   gfx::Rect content_bounds = GetContentsBounds();
 
   // Draw background.
-  SkPath background_path;
-  AddPossiblyRoundRectToPath(content_bounds, allow_round_corner_,
-                             &background_path);
+  SkPathBuilder background_path;
+  gfx::RoundedCornersF rounded_corners = GetPreferredCornerRadii();
+  AddPossiblyRoundRectToPath(content_bounds, rounded_corners, &background_path);
   cc::PaintFlags background_flags;
   background_flags.setStyle(cc::PaintFlags::kFill_Style);
   background_flags.setAntiAlias(true);
   background_flags.setColor(GetBackgroundColor());
-  canvas->DrawPath(background_path, background_flags);
+  canvas->DrawPath(background_path.detach(), background_flags);
 
   // Draw slice.
-  SkPath slice_path;
+  SkPathBuilder slice_path;
   double time = indeterminate_bar_animation_->GetCurrentValue();
 
   // The animation spec corresponds to the material design lite's parameter.
@@ -243,30 +285,39 @@ void ProgressBar::OnPaintIndeterminate(gfx::Canvas* canvas) {
   gfx::Rect slice_bounds = content_bounds;
   slice_bounds.set_x(content_bounds.x() + bar1_start_x);
   slice_bounds.set_width(bar1_end_x - bar1_start_x);
-  AddPossiblyRoundRectToPath(slice_bounds, allow_round_corner_, &slice_path);
+  AddPossiblyRoundRectToPath(slice_bounds, rounded_corners, &slice_path);
   slice_bounds.set_x(content_bounds.x() + bar2_start_x);
   slice_bounds.set_width(bar2_end_x - bar2_start_x);
-  AddPossiblyRoundRectToPath(slice_bounds, allow_round_corner_, &slice_path);
+  AddPossiblyRoundRectToPath(slice_bounds, rounded_corners, &slice_path);
 
   cc::PaintFlags slice_flags;
   slice_flags.setStyle(cc::PaintFlags::kFill_Style);
   slice_flags.setAntiAlias(true);
   slice_flags.setColor(GetForegroundColor());
-  canvas->DrawPath(slice_path, slice_flags);
+  canvas->DrawPath(slice_path.detach(), slice_flags);
 }
 
 void ProgressBar::MaybeNotifyAccessibilityValueChanged() {
+  // Exit early if ProgressBar is Indeterminate or not visible.
+  if (IsIndeterminate()) {
+    GetViewAccessibility().RemoveValue();
+    return;
+  }
   if (!GetWidget() || !GetWidget()->IsVisible() ||
       RoundToPercent(current_value_) == last_announced_percentage_) {
     return;
   }
   last_announced_percentage_ = RoundToPercent(current_value_);
-  NotifyAccessibilityEvent(ax::mojom::Event::kValueChanged, true);
+  GetViewAccessibility().SetValue(
+      base::FormatPercent(last_announced_percentage_));
 }
 
-BEGIN_METADATA(ProgressBar, View)
+BEGIN_METADATA(ProgressBar)
+ADD_PROPERTY_METADATA(int, PreferredHeight)
+ADD_PROPERTY_METADATA(std::optional<gfx::RoundedCornersF>, PreferredCornerRadii)
 ADD_PROPERTY_METADATA(SkColor, ForegroundColor, ui::metadata::SkColorConverter)
 ADD_PROPERTY_METADATA(SkColor, BackgroundColor, ui::metadata::SkColorConverter)
+ADD_PROPERTY_METADATA(bool, Paused)
 END_METADATA
 
 }  // namespace views

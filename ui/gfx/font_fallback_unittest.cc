@@ -1,12 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/gfx/font_fallback_win.h"
-
+#include <algorithm>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <vector>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/i18n/char_iterator.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
@@ -16,12 +21,9 @@
 #include "third_party/icu/source/common/unicode/uscript.h"
 #include "third_party/icu/source/common/unicode/utf16.h"
 #include "third_party/skia/include/core/SkTypeface.h"
+#include "ui/gfx/font_fallback_win.h"
 #include "ui/gfx/platform_font.h"
 #include "ui/gfx/test/font_fallback_test_data.h"
-
-#if defined(OS_WIN)
-#include "base/win/windows_version.h"
-#endif
 
 namespace gfx {
 
@@ -53,10 +55,25 @@ constexpr BaseFontTestOption sans_font = {"sans", 2};
 using FallbackFontTestParamInfo = std::
     tuple<FallbackFontTestCase, FallbackFontTestOption, BaseFontTestOption>;
 
+// Returns ICU's sample text for `script`, or an empty string if it has none.
+std::u16string GetSampleString(UScriptCode script) {
+  char16_t text[8];
+  UErrorCode error_code = U_ZERO_ERROR;
+  int text_length =
+      uscript_getSampleString(script, text, std::size(text), &error_code);
+  if (text_length <= 0 || error_code != U_ZERO_ERROR) {
+    return std::u16string();
+  }
+  return std::u16string(text, text_length);
+}
+
 class GetFallbackFontTest
     : public ::testing::TestWithParam<FallbackFontTestParamInfo> {
  public:
   GetFallbackFontTest() = default;
+
+  GetFallbackFontTest(const GetFallbackFontTest&) = delete;
+  GetFallbackFontTest& operator=(const GetFallbackFontTest&) = delete;
 
   static std::string ParamInfoToString(
       ::testing::TestParamInfo<FallbackFontTestParamInfo> param_info) {
@@ -68,12 +85,12 @@ class GetFallbackFontTest
       font_option += std::string("F") + base_font_option.family_name;
     if (base_font_option.delta || base_font_option.style ||
         base_font_option.style) {
-      font_option +=
-          base::StringPrintf("_d%ds%dw%d", base_font_option.delta,
-                             base_font_option.style, base_font_option.weight);
+      font_option += base::StringPrintf(
+          "_d%ds%dw%d", base_font_option.delta, base_font_option.style,
+          static_cast<int>(base_font_option.weight));
     }
 
-    std::string language_tag = test_case.language_tag;
+    std::string language_tag(test_case.language_tag);
     base::RemoveChars(language_tag, "-", &language_tag);
     return std::string("S") + uscript_getName(test_case.script) + "L" +
            language_tag + font_option;
@@ -81,22 +98,29 @@ class GetFallbackFontTest
 
   void SetUp() override {
     std::tie(test_case_, test_option_, base_font_option_) = GetParam();
+    // The Glyphs cases carry no text; the param can only hold views, so the
+    // ICU sample text is generated here.
+    text_ = test_case_.text.empty() ? GetSampleString(test_case_.script)
+                                    : std::u16string(test_case_.text);
   }
 
  protected:
   bool GetFallbackFont(const Font& font,
-                       const std::string& language_tag,
+                       std::string_view language_tag,
                        Font* result) {
-    return gfx::GetFallbackFont(font, language_tag, test_case_.text, result);
+    // Test cases without a language tag fall back to "und".
+    const base::i18n::LanguageTag tag =
+        base::i18n::GetLanguageTagFromString(language_tag)
+            .value_or(base::i18n::GetKnownLanguageTag("und"));
+    return gfx::GetFallbackFont(font, tag, text_, result);
   }
 
-  bool EnsuresScriptSupportCodePoints(const std::u16string& text,
+  bool EnsuresScriptSupportCodePoints(std::u16string_view text,
                                       UScriptCode script,
                                       const std::string& script_name) {
-    size_t i = 0;
-    while (i < text.length()) {
-      UChar32 code_point;
-      U16_NEXT(text.c_str(), i, text.size(), code_point);
+    base::i18n::UTF16CharIterator iter(text);
+    while (!iter.end()) {
+      UChar32 code_point = iter.get();
       if (!uscript_hasScript(code_point, script)) {
         // Retrieve the appropriate script
         UErrorCode script_error;
@@ -109,11 +133,12 @@ class GetFallbackFontTest
                       << "' detected.";
         return false;
       }
+      iter.Advance();
     }
     return true;
   }
 
-  bool DoesFontSupportCodePoints(Font font, const std::u16string& text) {
+  bool DoesFontSupportCodePoints(Font font, std::u16string_view text) {
     sk_sp<SkTypeface> skia_face = font.platform_font()->GetNativeSkTypeface();
     if (!skia_face) {
       ADD_FAILURE() << "Cannot create typeface for '" << font.GetFontName()
@@ -121,19 +146,20 @@ class GetFallbackFontTest
       return false;
     }
 
-    size_t i = 0;
+    base::i18n::UTF16CharIterator iter(text);
     const SkGlyphID kUnsupportedGlyph = 0;
-    while (i < text.length()) {
-      UChar32 code_point;
-      U16_NEXT(text.c_str(), i, text.size(), code_point);
+    while (!iter.end()) {
+      UChar32 code_point = iter.get();
       SkGlyphID glyph_id = skia_face->unicharToGlyph(code_point);
       if (glyph_id == kUnsupportedGlyph)
         return false;
+      iter.Advance();
     }
     return true;
   }
 
   FallbackFontTestCase test_case_;
+  std::u16string text_;
   FallbackFontTestOption test_option_;
   BaseFontTestOption base_font_option_;
   std::string script_name_;
@@ -142,8 +168,6 @@ class GetFallbackFontTest
   // Needed to bypass DCHECK in GetFallbackFont.
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::UI};
-
-  DISALLOW_COPY_AND_ASSIGN(GetFallbackFontTest);
 };
 
 }  // namespace
@@ -169,28 +193,19 @@ TEST_P(GetFallbackFontTest, GetFallbackFont) {
                          base_font_option_.weight);
   }
 
-#if defined(OS_WIN)
-  // Skip testing this call to GetFallbackFont on older windows versions. Some
-  // fonts only got introduced on windows 10 and the test will fail on previous
-  // versions.
-  const bool is_win10 = base::win::GetVersion() >= base::win::Version::WIN10;
-  if (test_case_.is_win10 && !is_win10)
-    return;
-#endif
-
   // Retrieve the name of the current script.
   script_name_ = uscript_getName(test_case_.script);
 
   // Validate that tested characters are part of the script.
   if (!test_option_.skip_code_point_validation &&
-      !EnsuresScriptSupportCodePoints(test_case_.text, test_case_.script,
-                                      script_name_)) {
+      !EnsuresScriptSupportCodePoints(text_, test_case_.script, script_name_)) {
     return;
   }
 
   // The default font already support it, do not try to find a fallback font.
-  if (DoesFontSupportCodePoints(base_font, test_case_.text))
+  if (DoesFontSupportCodePoints(base_font, text_)) {
     return;
+  }
 
   // Retrieve the fallback font.
   Font fallback_font;
@@ -204,11 +219,8 @@ TEST_P(GetFallbackFontTest, GetFallbackFont) {
 
   // Ensure the fallback font is a part of the validation fallback fonts list.
   if (!test_option_.skip_fallback_fonts_validation) {
-    bool valid = std::find(test_case_.fallback_fonts.begin(),
-                           test_case_.fallback_fonts.end(),
-                           fallback_font.GetFontName()) !=
-                 test_case_.fallback_fonts.end();
-    if (!valid) {
+    if (!std::ranges::contains(test_case_.fallback_fonts,
+                               fallback_font.GetFontName())) {
       ADD_FAILURE() << "GetFallbackFont failed for '" << script_name_
                     << "' invalid fallback font: "
                     << fallback_font.GetFontName()
@@ -218,8 +230,16 @@ TEST_P(GetFallbackFontTest, GetFallbackFont) {
     }
   }
 
+#if BUILDFLAG(IS_IOS)
+  // TODO(crbug.com/40279916): font fallback does not appear to be working
+  // consistently.
+  if (fallback_font.GetFontName() == ".LastResort") {
+    GTEST_SKIP() << ".LastResort is not currently behaving correctly.";
+  }
+#endif
+
   // Ensure that glyphs exists in the fallback font.
-  if (!DoesFontSupportCodePoints(fallback_font, test_case_.text)) {
+  if (!DoesFontSupportCodePoints(fallback_font, text_)) {
     ADD_FAILURE() << "Font '" << fallback_font.GetFontName()
                   << "' does not matched every CodePoints.";
     return;
@@ -233,17 +253,10 @@ std::vector<FallbackFontTestCase> GetSampleFontTestCases() {
   const unsigned int script_max = u_getIntPropertyMaxValue(UCHAR_SCRIPT) + 1;
   for (unsigned int i = 0; i < script_max; i++) {
     const UScriptCode script = static_cast<UScriptCode>(i);
-
-    // Make a sample text to test the script.
-    char16_t text[8];
-    UErrorCode errorCode = U_ZERO_ERROR;
-    int text_length =
-        uscript_getSampleString(script, text, base::size(text), &errorCode);
-    if (text_length <= 0 || errorCode != U_ZERO_ERROR)
-      continue;
-
-    FallbackFontTestCase test_case(script, "", text, {});
-    result.push_back(test_case);
+    // Text is left empty; SetUp() regenerates the sample text.
+    if (!GetSampleString(script).empty()) {
+      result.push_back({script, "", u"", {}});
+    }
   }
   return result;
 }

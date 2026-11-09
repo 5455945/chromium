@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/media_router/common/discovery/media_sink_internal.h"
+
+#include "components/media_router/common/test/test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -34,7 +36,8 @@ media_router::CastSinkExtraData CreateCastSinkExtraData(
   EXPECT_TRUE(ip.AssignFromIPLiteral(ip_address));
   cast_extra_data.ip_endpoint = net::IPEndPoint(ip, 1234);
   cast_extra_data.model_name = model_name;
-  cast_extra_data.capabilities = 2;
+  cast_extra_data.capabilities = {
+      cast_channel::CastDeviceCapability::kVideoOut};
   cast_extra_data.cast_channel_id = 3;
   return cast_extra_data;
 }
@@ -59,7 +62,7 @@ TEST(MediaSinkInternalTest, TestIsValidSinkId) {
 }
 
 TEST(MediaSinkInternalTest, TestConstructorAndAssignment) {
-  MediaSink sink(kSinkId, kSinkName, SinkIconType::CAST);
+  MediaSink sink{CreateCastSink(kSinkId, kSinkName)};
   DialSinkExtraData dial_extra_data = CreateDialSinkExtraData();
   CastSinkExtraData cast_extra_data = CreateCastSinkExtraData();
 
@@ -96,7 +99,7 @@ TEST(MediaSinkInternalTest, TestConstructorAndAssignment) {
 }
 
 TEST(MediaSinkInternalTest, TestSetExtraData) {
-  MediaSink sink(kSinkId, kSinkName, SinkIconType::CAST);
+  MediaSink sink{CreateCastSink(kSinkId, kSinkName)};
   DialSinkExtraData dial_extra_data = CreateDialSinkExtraData();
   CastSinkExtraData cast_extra_data = CreateCastSinkExtraData();
 
@@ -136,6 +139,30 @@ TEST(MediaSinkInternalTest, TestProcessDeviceUUID) {
             MediaSinkInternal::ProcessDeviceUUID(
                 "abc:de51d949-21f1-5f8a-f6db-f65592bb3610"));
   EXPECT_EQ("", MediaSinkInternal::ProcessDeviceUUID(""));
+}
+
+TEST(MediaSinkInternalTest, TestSinkType) {
+  MediaSink sink{CreateCastSink(kSinkId, kSinkName)};
+  DialSinkExtraData dial_extra_data = CreateDialSinkExtraData();
+  CastSinkExtraData cast_extra_data = CreateCastSinkExtraData();
+
+  MediaSinkInternal generic_sink;
+  generic_sink.set_sink(sink);
+  MediaSinkInternal dial_sink(sink, dial_extra_data);
+  MediaSinkInternal cast_sink(sink, cast_extra_data);
+
+  EXPECT_FALSE(generic_sink.is_dial_sink());
+  EXPECT_FALSE(generic_sink.is_cast_sink());
+
+  EXPECT_TRUE(dial_sink.is_dial_sink());
+  EXPECT_FALSE(dial_sink.is_cast_sink());
+
+  EXPECT_FALSE(cast_sink.is_dial_sink());
+  EXPECT_TRUE(cast_sink.is_cast_sink());
+
+  EXPECT_NE(dial_sink, cast_sink);
+  EXPECT_NE(dial_sink, generic_sink);
+  EXPECT_NE(cast_sink, generic_sink);
 }
 
 }  // namespace media_router

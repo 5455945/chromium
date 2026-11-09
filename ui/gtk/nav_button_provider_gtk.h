@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,35 +6,64 @@
 #define UI_GTK_NAV_BUTTON_PROVIDER_GTK_H_
 
 #include <map>
+#include <optional>
 
+#include "base/component_export.h"
+#include "base/containers/flat_map.h"
+#include "base/feature_list.h"
+#include "ui/base/glib/scoped_gsignal.h"
+#include "ui/base/ui_base_types.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/views/controls/button/button.h"
-#include "ui/views/linux_ui/nav_button_provider.h"
+#include "ui/linux/nav_button_provider.h"
+
+typedef struct _GtkParamSpec GtkParamSpec;
+typedef struct _GtkSettings GtkSettings;
 
 namespace gtk {
 
-class NavButtonProviderGtk : public views::NavButtonProvider {
+// On GTK3, sizes window-control buttons without decoding their scalable
+// symbolic icons, and prefetches the icons that the first browser window paints
+// off the UI thread.
+COMPONENT_EXPORT(GTK) BASE_DECLARE_FEATURE(kGtkPrefetchNavButtonIcons);
+
+class COMPONENT_EXPORT(GTK) NavButtonProviderGtk
+    : public ui::NavButtonProvider {
  public:
-  NavButtonProviderGtk();
+  explicit NavButtonProviderGtk(ui::FrameType frame_type);
   ~NavButtonProviderGtk() override;
 
-  // views::NavButtonProvider:
+  static void WaitForPrefetchForTesting();
+
+  // ui::NavButtonProvider:
   void RedrawImages(int top_area_height, bool maximized, bool active) override;
-  gfx::ImageSkia GetImage(views::NavButtonProvider::FrameButtonDisplayType type,
-                          views::Button::ButtonState state) const override;
+  gfx::ImageSkia GetImage(ui::NavButtonProvider::FrameButtonDisplayType type,
+                          ButtonState state) const override;
   gfx::Insets GetNavButtonMargin(
-      views::NavButtonProvider::FrameButtonDisplayType type) const override;
+      ui::NavButtonProvider::FrameButtonDisplayType type) const override;
   gfx::Insets GetTopAreaSpacing() const override;
+  int GetNavButtonHeight(bool maximized) const override;
   int GetInterNavButtonSpacing() const override;
 
  private:
-  std::map<views::NavButtonProvider::FrameButtonDisplayType,
-           gfx::ImageSkia[views::Button::STATE_COUNT]>
+  void OnThemeChanged(GtkSettings* settings, GtkParamSpec* param);
+
+  const ui::FrameType frame_type_;
+
+  std::map<ui::NavButtonProvider::FrameButtonDisplayType,
+           base::flat_map<ui::NavButtonProvider::ButtonState, gfx::ImageSkia>>
       button_images_;
-  std::map<views::NavButtonProvider::FrameButtonDisplayType, gfx::Insets>
+  std::map<ui::NavButtonProvider::FrameButtonDisplayType, gfx::Insets>
       button_margins_;
   gfx::Insets top_area_spacing_;
   int inter_button_spacing_;
+
+  // Cached button height per maximized state, invalidated on theme change.
+  mutable std::optional<int> nav_button_height_restored_;
+  mutable std::optional<int> nav_button_height_maximized_;
+
+  ScopedGSignal theme_name_signal_;
+  ScopedGSignal prefer_dark_signal_;
 };
 
 }  // namespace gtk

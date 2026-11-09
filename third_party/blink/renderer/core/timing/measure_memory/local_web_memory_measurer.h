@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_MEASURE_MEMORY_LOCAL_WEB_MEMORY_MEASURER_H_
 
 #include "components/performance_manager/public/mojom/web_memory.mojom-blink.h"
-
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "v8/include/v8.h"
@@ -40,22 +39,19 @@ class LocalWebMemoryMeasurer : public v8::MeasureMemoryDelegate {
                                WebMemoryMeasurement::Mode,
                                MeasureMemoryController*,
                                WebMemoryAttribution::Scope,
-                               WTF::String attribution_url);
+                               String attribution_url);
 
   // v8::MeasureMemoryDelegate overrides.
   bool ShouldMeasure(v8::Local<v8::Context> context) override;
-  void MeasurementComplete(
-      const std::vector<std::pair<v8::Local<v8::Context>, size_t>>&
-          context_sizes,
-      size_t unattributed_size) override;
+  void MeasurementComplete(v8::MeasureMemoryDelegate::Result result) override;
 
  private:
   LocalWebMemoryMeasurer(MeasureMemoryController*,
                          WebMemoryAttribution::Scope,
-                         WTF::String attribution_url);
+                         String attribution_url);
   Persistent<MeasureMemoryController> controller_;
   WebMemoryAttribution::Scope attribution_scope_;
-  WTF::String attribution_url_;
+  String attribution_url_;
 };
 
 }  // namespace blink

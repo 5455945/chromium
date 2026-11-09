@@ -8,55 +8,43 @@ Before:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV id='green-box' class='center box-container'",
-      "position": [108, 108],
-      "contentsOpaque": true,
-      "drawsContent": false
-    },
-    {
-      "name": "LayoutNGBlockFlow DIV id='camera' class='rotate-3d-start'",
-      "contentsOpaque": true,
-      "drawsContent": false,
-      "transform": 3
-    },
-    {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-1'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-1'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 5
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-2'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-2'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 7
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-3'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-3'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 9
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-4'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-4'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 11
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-5'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-5'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 13
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-6'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-6'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 15
@@ -68,10 +56,9 @@ Before:
       "transform": [
         [1, 0, 0, 0],
         [0, 1, 0, 0],
-        [0, 0, 1, -0.005],
-        [0, 0, 0, 1]
-      ],
-      "origin": [158, 158]
+        [0, 0, 1, 0],
+        [108, 108, 0, 1]
+      ]
     },
     {
       "id": 2,
@@ -79,10 +66,10 @@ Before:
       "transform": [
         [1, 0, 0, 0],
         [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [108, 108, 0, 1]
+        [0, 0, 1, -0.005],
+        [0, 0, 0, 1]
       ],
-      "flattenInheritedTransform": false
+      "origin": [50, 50]
     },
     {
       "id": 3,
@@ -217,70 +204,60 @@ After:
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV id='green-box' class='center box-container'",
-      "position": [108, 108],
-      "contentsOpaque": true,
-      "drawsContent": false
-    },
-    {
-      "name": "LayoutNGBlockFlow DIV id='camera' class='rotate-3d-start rotate-3d-end'",
-      "contentsOpaque": true,
-      "drawsContent": false,
-      "transform": 3
-    },
-    {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-1'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-1'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 5
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-2'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-2'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 7
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-3'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-3'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 9
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-4'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-4'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 11
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-5'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-5'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 13
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='side side-6'",
+      "name": "LayoutBlockFlow (positioned, children-inline) DIV class='side side-6'",
       "bounds": [100, 100],
       "backgroundColor": "#00FF00CC",
       "transform": 15
     },
     {
-      "name": "LayoutNGBlockFlow (positioned) DIV class='box top left'",
+      "name": "LayoutBlockFlow (positioned) DIV class='box top left'",
       "position": [8, 8],
-      "bounds": [100, 150],
+      "bounds": [100, 300],
       "contentsOpaque": true,
       "backgroundColor": "#808080"
     },
     {
-      "name": "Squashing Layer (first squashed layer: LayoutNGBlockFlow (positioned) DIV class='box top right')",
-      "position": [8, 8],
-      "bounds": [300, 300]
+      "name": "LayoutBlockFlow (positioned) DIV class='box top right'",
+      "position": [208, 8],
+      "bounds": [100, 300],
+      "contentsOpaque": true,
+      "backgroundColor": "#808080"
     }
   ],
   "transforms": [
@@ -289,10 +266,9 @@ After:
       "transform": [
         [1, 0, 0, 0],
         [0, 1, 0, 0],
-        [0, 0, 1, -0.005],
-        [0, 0, 0, 1]
-      ],
-      "origin": [158, 158]
+        [0, 0, 1, 0],
+        [108, 108, 0, 1]
+      ]
     },
     {
       "id": 2,
@@ -300,10 +276,10 @@ After:
       "transform": [
         [1, 0, 0, 0],
         [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [108, 108, 0, 1]
+        [0, 0, 1, -0.005],
+        [0, 0, 0, 1]
       ],
-      "flattenInheritedTransform": false
+      "origin": [50, 50]
     },
     {
       "id": 3,

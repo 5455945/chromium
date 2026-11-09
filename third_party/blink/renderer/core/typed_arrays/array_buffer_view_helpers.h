@@ -1,14 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_ARRAY_BUFFER_VIEW_HELPERS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TYPED_ARRAYS_ARRAY_BUFFER_VIEW_HELPERS_H_
 
-#include <type_traits>
+#include <concepts>
 
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/type_traits.h"
 
 namespace blink {
@@ -23,8 +25,8 @@ namespace blink {
 template <typename T>
 class NotShared {
   DISALLOW_NEW();
-  static_assert(WTF::IsSubclass<typename std::remove_const<T>::type,
-                                DOMArrayBufferView>::value,
+  static_assert(IsSubclass<typename std::remove_const<T>::type,
+                           DOMArrayBufferView>::value,
                 "NotShared<T> must have T as subclass of DOMArrayBufferView");
 
  public:
@@ -33,7 +35,8 @@ class NotShared {
   NotShared() = default;
   NotShared(const NotShared<T>& other) = default;
   // Allow implicit upcasts if U inherits from T.
-  template <typename U, std::enable_if_t<std::is_base_of<T, U>::value, int> = 0>
+  template <typename U>
+    requires(std::derived_from<U, T>)
   NotShared(const NotShared<U>& other) : typed_array_(other.Get()) {}
 
   explicit NotShared(std::nullptr_t) {}
@@ -65,7 +68,7 @@ class NotShared {
   void Trace(Visitor* visitor) const { visitor->Trace(typed_array_); }
 
  private:
-  T* GetRaw() const { return typed_array_; }
+  T* GetRaw() const { return typed_array_.Get(); }
 
   Member<T> typed_array_;
 };
@@ -80,8 +83,8 @@ class NotShared {
 template <typename T>
 class MaybeShared {
   DISALLOW_NEW();
-  static_assert(WTF::IsSubclass<typename std::remove_const<T>::type,
-                                DOMArrayBufferView>::value,
+  static_assert(IsSubclass<typename std::remove_const<T>::type,
+                           DOMArrayBufferView>::value,
                 "MaybeShared<T> must have T as subclass of DOMArrayBufferView");
 
  public:
@@ -96,7 +99,7 @@ class MaybeShared {
   explicit MaybeShared(std::nullptr_t) {}
   // [AllowShared] array buffer view may be a view of non-shared array buffer,
   // so we don't check if the buffer is SharedArrayBuffer or not.
-  // https://heycam.github.io/webidl/#AllowShared
+  // https://webidl.spec.whatwg.org/#AllowShared
   explicit MaybeShared(T* typed_array) : typed_array_(typed_array) {}
   template <typename U>
   explicit MaybeShared(const Member<U>& other) : typed_array_(other.Get()) {}
@@ -121,10 +124,18 @@ class MaybeShared {
   void Trace(Visitor* visitor) const { visitor->Trace(typed_array_); }
 
  private:
-  T* GetRaw() const { return typed_array_; }
+  T* GetRaw() const { return typed_array_.Get(); }
 
   Member<T> typed_array_;
 };
+
+// NotShared<T> is essentially Member<T> from the perspective of HeapVector.
+template <typename T>
+struct VectorTraits<NotShared<T>> : VectorTraits<Member<T>> {};
+
+// MaybeShared<T> is essentially Member<T> from the perspective of HeapVector.
+template <typename T>
+struct VectorTraits<MaybeShared<T>> : VectorTraits<Member<T>> {};
 
 }  // namespace blink
 

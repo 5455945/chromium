@@ -22,10 +22,11 @@
 
 #include "third_party/blink/renderer/core/svg/animation/smil_animation_effect_parameters.h"
 #include "third_party/blink/renderer/core/svg/svg_parser_utilities.h"
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/parsing_utilities.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
 
@@ -34,29 +35,33 @@ SVGPointList::SVGPointList() = default;
 SVGPointList::~SVGPointList() = default;
 
 template <typename CharType>
-SVGParsingError SVGPointList::Parse(const CharType* ptr, const CharType* end) {
-  if (!SkipOptionalSVGSpaces(ptr, end))
+SVGParsingError SVGPointList::Parse(base::span<const CharType> span) {
+  const size_t list_start_size = span.size();
+  if (!SkipOptionalSVGSpaces(span)) {
     return SVGParseStatus::kNoError;
+  }
 
-  const CharType* list_start = ptr;
-  for (;;) {
-    float x = 0;
-    float y = 0;
-    if (!ParseNumber(ptr, end, x) ||
-        !ParseNumber(ptr, end, y, kDisallowWhitespace))
-      return SVGParsingError(SVGParseStatus::kExpectedNumber, ptr - list_start);
+  size_t number_count = 0;
+  std::array<float, 2> number_pair;
+  bool seen_comma = false;
+  while (!span.empty()) {
+    float& current_number = number_pair[number_count % 2];
+    if (!ParseNumber(span, current_number, kDisallowWhitespace)) {
+      return SVGParsingError(SVGParseStatus::kExpectedNumber,
+                             list_start_size - span.size());
+    }
+    ++number_count;
 
-    Append(MakeGarbageCollected<SVGPoint>(FloatPoint(x, y)));
+    // Emit a point for every complete pair of numbers.
+    if (number_count % 2 == 0) {
+      Append(MakeGarbageCollected<SVGPoint>(
+          gfx::PointF(number_pair[0], number_pair[1])));
+    }
 
-    if (!SkipOptionalSVGSpaces(ptr, end))
-      break;
-
-    if (*ptr == ',') {
-      ++ptr;
-      SkipOptionalSVGSpaces(ptr, end);
-
-      // ',' requires the list to be continued
-      continue;
+    SkipOptionalSVGSpaces(span);
+    seen_comma = SkipExactly<CharType>(span, ',');
+    if (seen_comma) {
+      SkipOptionalSVGSpaces(span);
     }
   }
   return SVGParseStatus::kNoError;
@@ -65,23 +70,29 @@ SVGParsingError SVGPointList::Parse(const CharType* ptr, const CharType* end) {
 SVGParsingError SVGPointList::SetValueAsString(const String& value) {
   Clear();
 
-  if (value.IsEmpty())
+  if (value.empty()) {
     return SVGParseStatus::kNoError;
-
-  return WTF::VisitCharacters(value, [&](const auto* chars, unsigned length) {
-    return Parse(chars, chars + length);
-  });
+  }
+  SVGParsingError status =
+      VisitCharacters(value, [&](auto chars) { return Parse(chars); });
+  if (status != SVGParseStatus::kNoError) {
+    Clear();
+  }
+  return status;
 }
 
-void SVGPointList::Add(const SVGPropertyBase* other,
+bool SVGPointList::Add(const SVGPropertyBase* other,
                        const SVGElement* context_element) {
   auto* other_list = To<SVGPointList>(other);
 
   if (length() != other_list->length())
-    return;
+    return true;
 
-  for (uint32_t i = 0; i < length(); ++i)
-    at(i)->SetValue(at(i)->Value() + other_list->at(i)->Value());
+  for (uint32_t i = 0; i < length(); ++i) {
+    at(i)->SetValue(at(i)->Value() +
+                    other_list->at(i)->Value().OffsetFromOrigin());
+  }
+  return true;
 }
 
 void SVGPointList::CalculateAnimatedValue(
@@ -107,23 +118,23 @@ void SVGPointList::CalculateAnimatedValue(
       to_at_end_of_duration_list->length();
 
   for (uint32_t i = 0; i < to_point_list_size; ++i) {
-    FloatPoint effective_from;
+    gfx::PointF effective_from;
     if (from_point_list_size)
       effective_from = from_list->at(i)->Value();
-    FloatPoint effective_to = to_list->at(i)->Value();
-    FloatPoint effective_to_at_end;
+    gfx::PointF effective_to = to_list->at(i)->Value();
+    gfx::PointF effective_to_at_end;
     if (i < to_at_end_of_duration_list_size)
       effective_to_at_end = to_at_end_of_duration_list->at(i)->Value();
 
-    FloatPoint result(
+    gfx::PointF result(
         ComputeAnimatedNumber(parameters, percentage, repeat_count,
-                              effective_from.X(), effective_to.X(),
-                              effective_to_at_end.X()),
+                              effective_from.x(), effective_to.x(),
+                              effective_to_at_end.x()),
         ComputeAnimatedNumber(parameters, percentage, repeat_count,
-                              effective_from.Y(), effective_to.Y(),
-                              effective_to_at_end.Y()));
+                              effective_from.y(), effective_to.y(),
+                              effective_to_at_end.y()));
     if (parameters.is_additive)
-      result += at(i)->Value();
+      result += at(i)->Value().OffsetFromOrigin();
 
     at(i)->SetValue(result);
   }

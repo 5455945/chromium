@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,23 +23,15 @@ enum CaptivePortalResult {
   RESULT_COUNT
 };
 
-// Possible causes of a captive portal probe. These values are persisted to
-// logs. Entries should not be renumbered and numeric values should never be
-// reused. Please keep in sync with "CaptivePortalProbeReason" in
-// src/tools/metrics/histograms/enums.xml.
-enum class CaptivePortalProbeReason {
-  kUnspecified = 0,
-  // Timeout
-  kTimeout = 1,
-  // Certificate error
-  kCertificateError = 2,
-  // SSL protocol error
-  kSslProtocolError = 3,
-  // First load of login tab
-  kLoginTabLoad = 4,
-  // Secure DNS error
-  kSecureDnsError = 5,
-  kMaxValue = kSecureDnsError,
+// Captive portal type of a given WebContents.
+enum class CaptivePortalWindowType {
+  // This browser is not used for captive portal resolution, i.e. it's not a
+  // captive portal login window.
+  kNone,
+  // This browser is a popup for captive portal resolution.
+  kPopup,
+  // This browser is a tab for captive portal resolution.
+  kTab,
 };
 
 CAPTIVE_PORTAL_EXPORT extern std::string CaptivePortalResultToString(

@@ -1,30 +1,40 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var shellCommand = 'shell\n';
-var catCommand = 'cat\n';
-var catErrCommand = 'cat 1>&2\n';
+const shellCommand = 'shell\n';
+const catCommand = 'cat\n';
+const catErrCommand = 'cat 1>&2\n';
 
 // Ensure this has all distinct characters.
-var testLine = 'abcdefgh\n';
+const testLine = 'abcdefgh\n';
 
-var startCharacter = '#';
+const croshName = 'crosh';
+const invalidName = 'some name';
 
-var croshName = 'crosh';
-var invalidName = 'some name';
+const invalidNameError = 'Invalid process name: some name';
 
-var invalidNameError = 'Invalid process name: some name';
+const testLineNum = 10;
+const testProcessTotal = 2;
 
-var testLineNum = 10;
-var testProcessTotal = 2;
+let testProcessCount = 0;
+const testProcesses = [];
 
-var testProcessCount = 0;
-var testProcesses = [];
+const decoder = new TextDecoder();
 
 function TestProcess(id, type) {
   this.id_ = id;
-  this.type_= type;
+  this.type_ = type;
+
+  // Start text to receive before we start matching lines.
+  // We receive 2x each of:
+  // type=stdout    | type=stderr
+  // shell\r\n    7 | shell\r\n      7
+  // cat\r\n      5 | cat 1>&2\r\n  10
+  // ---------------------------------
+  // 2 x SUM:    24 |               34
+  this.startText_ = '';
+  this.startTextLength_ = type === 'stdout' ? 24 : 34;
 
   this.lineExpectation_ = '';
   this.linesLeftToCheck_ = -1;
@@ -32,9 +42,8 @@ function TestProcess(id, type) {
   this.checkedStreamEnd_ = [0, 0];
 
   this.closed_ = false;
-  this.startCharactersFound_ = 0;
   this.started_ = false;
-};
+}
 
 // Method to test validity of received input. We will receive two streams of
 // the same data. (input will be echoed twice by the testing process). Each
@@ -45,40 +54,45 @@ function TestProcess(id, type) {
 // against two lines. The lines MUST NOT have two same characters for this
 // algorithm to work.
 TestProcess.prototype.testExpectation = function(text) {
-  chrome.test.assertTrue(this.linesLeftToCheck_ >= 0,
-                         "Test expectations not set.")
-  for (var i = 0; i < text.length; i++) {
-    if (this.processReceivedCharacter_(text[i], 0))
+  chrome.test.assertTrue(
+      this.linesLeftToCheck_ >= 0, 'Test expectations not set.');
+  for (let i = 0; i < text.length; i++) {
+    if (this.processReceivedCharacter_(text[i], 0)) {
       continue;
-    if (this.processReceivedCharacter_(text[i], 1))
+    }
+    if (this.processReceivedCharacter_(text[i], 1)) {
       continue;
-    chrome.test.fail("Received: " + text);
+    }
+    chrome.test.fail('Received: [' + text + ']');
   }
 };
 
 TestProcess.prototype.processReceivedCharacter_ = function(char, stream) {
-  if (this.checkedStreamEnd_[stream] >= this.lineExpectation_.length)
+  if (this.checkedStreamEnd_[stream] >= this.lineExpectation_.length) {
     return false;
+  }
 
-  var expectedChar = this.lineExpectation_[this.checkedStreamEnd_[stream]];
-  if (expectedChar != char)
-    return false
+  const expectedChar = this.lineExpectation_[this.checkedStreamEnd_[stream]];
+  if (expectedChar !== char) {
+    return false;
+  }
 
   this.checkedStreamEnd_[stream]++;
 
-  if (this.checkedStreamEnd_[stream] == this.lineExpectation_.length &&
+  if (this.checkedStreamEnd_[stream] === this.lineExpectation_.length &&
       this.linesLeftToCheck_ > 0) {
     this.checkedStreamEnd_[stream] = 0;
     this.linesLeftToCheck_--;
   }
   return true;
-}
+};
 
 TestProcess.prototype.testOutputType = function(receivedType) {
-  if (receivedType == 'exit')
+  if (receivedType === 'exit') {
     chrome.test.assertTrue(this.done());
-  else
+  } else {
     chrome.test.assertEq('stdout', receivedType);
+  }
 };
 
 TestProcess.prototype.id = function() {
@@ -90,9 +104,9 @@ TestProcess.prototype.started = function() {
 };
 
 TestProcess.prototype.done = function() {
-  return this.checkedStreamEnd_[0] == this.lineExpectation_.length &&
-         this.checkedStreamEnd_[1] == this.lineExpectation_.length &&
-         this.linesLeftToCheck_ == 0;
+  return this.checkedStreamEnd_[0] === this.lineExpectation_.length &&
+      this.checkedStreamEnd_[1] === this.lineExpectation_.length &&
+      this.linesLeftToCheck_ === 0;
 };
 
 TestProcess.prototype.isClosed = function() {
@@ -103,42 +117,26 @@ TestProcess.prototype.setClosed = function() {
   this.closed_ = true;
 };
 
-TestProcess.prototype.canStart = function() {
-  return (this.startCharactersFound_ == 2);
-};
-
-TestProcess.prototype.startCharacterFound = function() {
-  this.startCharactersFound_++;
-};
-
 TestProcess.prototype.getCatCommand = function() {
-  if (this.type_ == "stdout")
+  if (this.type_ === 'stdout') {
     return catCommand;
+  }
   return catErrCommand;
 };
 
 TestProcess.prototype.addLineExpectation = function(line, times) {
-  this.lineExpectation_ = line.replace(/\n/g, "\r\n");
+  this.lineExpectation_ = line.replace(/\n/g, '\r\n');
   this.linesLeftToCheck_ = times - 2;
 };
 
-// Set of commands we use to setup terminal for testing (start cat) will produce
-// some output. We don't care about that output, to avoid having to set that
-// output in test expectations, we will send |startCharacter| right after cat is
-// started. After we detect second |startCharacter|s in output, we know process
-// won't produce any output by itself, so it is safe to start actual test.
+// We first call 'shell' and 'cat' (stdout) / 'cat 1>&2' (stderr) to set up the
+// terminal.  We start testing once we have received this text.
 TestProcess.prototype.maybeKickOffTest = function(text) {
-  var index = 0;
-  while (index != -1) {
-    index = text.indexOf(startCharacter, index);
-    if (index != -1) {
-      this.startCharacterFound();
-      if (this.canStart()) {
-        this.kickOffTest_(testLine, testLineNum);
-        return;
-      }
-      index++;
-    }
+  this.startText_ += text;
+  if (this.startText_.length > this.startTextLength_) {
+    chrome.test.fail('Unexpected start text: [' + this.startText_ + ']');
+  } else if (this.startText_.length === this.startTextLength_) {
+    this.kickOffTest_(testLine, testLineNum);
   }
 };
 
@@ -147,29 +145,36 @@ TestProcess.prototype.kickOffTest_ = function(line, lineNum) {
   // Each line will be echoed twice.
   this.addLineExpectation(line, lineNum * 2);
 
-  for (var i = 0; i < lineNum; i++)
-    chrome.terminalPrivate.sendInput(this.id_, line,
-        function (result) {
+  for (let i = 0; i < lineNum; i++) {
+    chrome.terminalPrivate.sendInput(
+        this.id_,
+        line,
+        function(result) {
           chrome.test.assertTrue(result);
-        }
-  );
+        },
+    );
+  }
 };
 
 
 function getProcessIndexForId(id) {
-  for (var i = 0; i < testProcessTotal; i++) {
-    if (testProcesses[i] && id == testProcesses[i].id())
+  for (let i = 0; i < testProcessTotal; i++) {
+    if (testProcesses[i] && id === testProcesses[i].id()) {
       return i;
+    }
   }
   return undefined;
-};
+}
 
-function processOutputListener(id, type, text) {
-  var processIndex = getProcessIndexForId(id);
-  if (processIndex == undefined)
+function processOutputListener(id, type, data) {
+  const processIndex = getProcessIndexForId(id);
+  if (processIndex === undefined) {
     return;
+  }
 
-  var process = testProcesses[processIndex];
+  const text = decoder.decode(data);
+
+  const process = testProcesses[processIndex];
 
   if (!process.started()) {
     process.maybeKickOffTest(text);
@@ -180,51 +185,42 @@ function processOutputListener(id, type, text) {
 
   process.testExpectation(text);
 
-  if (process.done())
+  if (process.done()) {
     closeTerminal(processIndex);
-};
+  }
+}
 
 function maybeEndTest() {
-  for (var i = 0; i < testProcessTotal; i++) {
-    if (!testProcesses[i] || !testProcesses[i].isClosed())
+  for (let i = 0; i < testProcessTotal; i++) {
+    if (!testProcesses[i] || !testProcesses[i].isClosed()) {
       return;
+    }
   }
 
   chrome.test.succeed();
-};
+}
 
 function closeTerminal(index) {
-  var process = testProcesses[index];
+  const process = testProcesses[index];
   chrome.terminalPrivate.closeTerminalProcess(
       process.id(),
       function(result) {
         chrome.test.assertTrue(result);
         process.setClosed();
         maybeEndTest();
-      }
+      },
   );
-};
+}
 
 function initTest(process) {
-  var sendStartCharacter = function() {
-      chrome.terminalPrivate.sendInput(
-          process.id(),
-          startCharacter + '\n',
-          function(result) {
-              chrome.test.assertTrue(result);
-          }
-      );
-  };
-
-  var startCat = function() {
-      chrome.terminalPrivate.sendInput(
-          process.id(),
-          process.getCatCommand(),
-          function(result) {
-            chrome.test.assertTrue(result);
-            sendStartCharacter();
-          }
-      );
+  const startCat = function() {
+    chrome.terminalPrivate.sendInput(
+        process.id(),
+        process.getCatCommand(),
+        function(result) {
+          chrome.test.assertTrue(result);
+        },
+    );
   };
 
   chrome.terminalPrivate.sendInput(
@@ -233,58 +229,66 @@ function initTest(process) {
       function(result) {
         chrome.test.assertTrue(result);
         startCat();
-      }
+      },
   );
-};
+}
 
 chrome.test.runTests([
   function terminalTest() {
     chrome.terminalPrivate.onProcessOutput.addListener(processOutputListener);
 
-    for (var i = 0; i < testProcessTotal; i++) {
+    for (let i = 0; i < testProcessTotal; i++) {
       chrome.terminalPrivate.openTerminalProcess(croshName, function(result) {
-          chrome.test.assertTrue(typeof result == 'string');
-          // The handled returned is basically a guid, but we don't want to
-          // enforce that API, so just enforce the string contains at least a
-          // certain number of bytes for general randomness/uniqueness.
-          chrome.test.assertTrue(result.length > 18);
-          var type = (testProcessCount % 2) ? 'stderr' : 'stdout';
-          var newProcess = new TestProcess(result, type);
-          testProcesses[testProcessCount] = newProcess;
-          testProcessCount++;
-          initTest(newProcess);
+        chrome.test.assertTrue(typeof result === 'string');
+        // The handled returned is basically a guid, but we don't want to
+        // enforce that API, so just enforce the string contains at least a
+        // certain number of bytes for general randomness/uniqueness.
+        chrome.test.assertTrue(result.length > 18);
+        const type = (testProcessCount % 2) ? 'stderr' : 'stdout';
+        const newProcess = new TestProcess(result, type);
+        testProcesses[testProcessCount] = newProcess;
+        testProcessCount++;
+        initTest(newProcess);
       });
     }
   },
 
   function invalidProcessNameTest() {
-    chrome.terminalPrivate.openTerminalProcess(invalidName,
-        chrome.test.callbackFail(invalidNameError));
+    chrome.terminalPrivate.openTerminalProcess(
+        invalidName, chrome.test.callbackFail(invalidNameError));
   },
 
-  function settingsTest() {
-    chrome.terminalPrivate.onSettingsChanged.addListener((settings) => {
-      // 3. Event is fired - {'k': 'v'}.
-      chrome.test.assertEq(1, Object.keys(settings).length);
-      chrome.test.assertEq('v', settings['k']);
+  function prefsTest() {
+    const pContainers = 'crostini.containers';
+    const pSettings = 'crostini.terminal_settings';
+    const pA11y = 'settings.accessibility';
+    const paths = [pContainers, pSettings, pA11y, 'unknown-ignored'];
+    const validateGetPrefs = (prefs) => {
+      chrome.test.assertEq(3, Object.keys(prefs).length);
+      chrome.test.assertTrue(Array.isArray(prefs[pContainers]));
+      chrome.test.assertEq(0, prefs[pContainers].length);
+      chrome.test.assertEq('object', typeof prefs[pSettings]);
+      chrome.test.assertEq(0, Object.keys(prefs[pSettings]).length);
+      chrome.test.assertEq('boolean', typeof prefs[pA11y]);
+      chrome.test.assertFalse(prefs[pA11y]);
+    };
 
-      // 4. Get settings - {'k': 'v'}.
-      chrome.terminalPrivate.getSettings((settings) => {
-        chrome.test.assertNoLastError();
-        chrome.test.assertEq(1, Object.keys(settings).length);
-        chrome.test.assertEq('v', settings['k']);
-        chrome.test.succeed();
-      });
-    });
-
-    // 1. Get settings - {}.
-    chrome.terminalPrivate.getSettings((settings) => {
+    // 1. Get prefs - 3 valid, plus another unknown (will be ignored).
+    chrome.terminalPrivate.getPrefs(paths, (prefs) => {
       chrome.test.assertNoLastError();
-      chrome.test.assertEq(0, Object.keys(settings).length);
+      validateGetPrefs(prefs);
 
-      // 2. Set {'k': 'v'}.
-      chrome.terminalPrivate.setSettings(
-          {k: 'v'}, () => chrome.test.assertNoLastError());
+      // 2. Set prefs - rejected for extension contexts.
+      chrome.terminalPrivate.setPrefs(
+          {[pSettings]: {k: 'v'}},
+          chrome.test.callbackFail('Unsupported context', () => {
+            // 3. Get prefs - settings unchanged.
+            chrome.terminalPrivate.getPrefs(paths, (prefs) => {
+              chrome.test.assertNoLastError();
+              validateGetPrefs(prefs);
+              chrome.test.succeed();
+            });
+          }));
     });
   },
 

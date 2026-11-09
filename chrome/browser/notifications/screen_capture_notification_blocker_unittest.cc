@@ -1,11 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/notifications/screen_capture_notification_blocker.h"
 
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/browser_features.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/notifications/muted_notification_handler.h"
@@ -19,7 +24,6 @@
 #include "content/public/test/test_web_contents_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "url/gurl.h"
@@ -31,7 +35,7 @@ message_center::Notification CreateNotification(const GURL& origin,
   return message_center::Notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, id,
       /*title=*/std::u16string(),
-      /*message=*/std::u16string(), /*icon=*/gfx::Image(),
+      /*message=*/std::u16string(), /*icon=*/ui::ImageModel(),
       /*display_source=*/std::u16string(), origin, message_center::NotifierId(),
       message_center::RichNotificationData(), /*delegate=*/nullptr);
 }
@@ -40,10 +44,6 @@ message_center::Notification CreateNotification(const GURL& origin) {
   return CreateNotification(origin, /*id=*/"id");
 }
 
-}  // namespace
-
-namespace {
-constexpr int kShowActionIndex = 0;
 }  // namespace
 
 class MockNotificationBlockerObserver : public NotificationBlocker::Observer {
@@ -59,9 +59,18 @@ class MockNotificationBlockerObserver : public NotificationBlocker::Observer {
   MOCK_METHOD(void, OnBlockingStateChanged, (), (override));
 };
 
-class ScreenCaptureNotificationBlockerTest : public testing::Test {
+class ScreenCaptureNotificationBlockerTest
+    : public testing::TestWithParam<bool> {
  public:
   ScreenCaptureNotificationBlockerTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(
+          features::kMuteNotificationSnoozeAction);
+    } else {
+      feature_list_.InitAndDisableFeature(
+          features::kMuteNotificationSnoozeAction);
+    }
+
     notification_service_ =
         std::make_unique<StubNotificationDisplayService>(&profile_);
     auto blocker = std::make_unique<ScreenCaptureNotificationBlocker>(
@@ -89,7 +98,7 @@ class ScreenCaptureNotificationBlockerTest : public testing::Test {
   }
 
   void SimulateClose(bool by_user) {
-    absl::optional<message_center::Notification> notification =
+    std::optional<message_center::Notification> notification =
         GetMutedNotification();
     ASSERT_TRUE(notification);
     notification_service_->RemoveNotification(
@@ -97,17 +106,17 @@ class ScreenCaptureNotificationBlockerTest : public testing::Test {
         by_user, /*silent=*/false);
   }
 
-  void SimulateClick(const absl::optional<int>& action_index) {
-    absl::optional<message_center::Notification> notification =
+  void SimulateClick(const std::optional<int>& action_index) {
+    std::optional<message_center::Notification> notification =
         GetMutedNotification();
     ASSERT_TRUE(notification);
     notification_service_->SimulateClick(
         NotificationHandler::Type::NOTIFICATIONS_MUTED, notification->id(),
         action_index,
-        /*reply=*/absl::nullopt);
+        /*reply=*/std::nullopt);
   }
 
-  absl::optional<message_center::Notification> GetMutedNotification() {
+  std::optional<message_center::Notification> GetMutedNotification() {
     std::vector<message_center::Notification> notifications =
         notification_service_->GetDisplayedNotificationsForType(
             NotificationHandler::Type::NOTIFICATIONS_MUTED);
@@ -115,7 +124,7 @@ class ScreenCaptureNotificationBlockerTest : public testing::Test {
     EXPECT_LE(notifications.size(), 1u);
 
     if (notifications.empty())
-      return absl::nullopt;
+      return std::nullopt;
     return notifications[0];
   }
 
@@ -124,18 +133,19 @@ class ScreenCaptureNotificationBlockerTest : public testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
  private:
+  base::test::ScopedFeatureList feature_list_;
   TestingProfile profile_;
   content::TestWebContentsFactory web_contents_factory_;
   std::unique_ptr<StubNotificationDisplayService> notification_service_;
-  ScreenCaptureNotificationBlocker* blocker_;
+  raw_ptr<ScreenCaptureNotificationBlocker> blocker_;
 };
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShouldNotBlockWhenNotCapturing) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ShouldNotBlockWhenNotCapturing) {
   EXPECT_FALSE(blocker().ShouldBlockNotification(
       CreateNotification(GURL("https://example.com"))));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShouldNotBlockCapturingOrigin) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ShouldNotBlockCapturingOrigin) {
   GURL origin1("https://example1.com");
   GURL origin2("https://example2.com");
   GURL origin3("https://example3.com");
@@ -149,14 +159,14 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShouldNotBlockCapturingOrigin) {
   EXPECT_TRUE(blocker().ShouldBlockNotification(CreateNotification(origin3)));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShouldBlockWhenCapturing) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ShouldBlockWhenCapturing) {
   blocker().OnIsCapturingDisplayChanged(
       CreateWebContents(GURL("https://example1.com")), true);
   EXPECT_TRUE(blocker().ShouldBlockNotification(
       CreateNotification(GURL("https://example2.com"))));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShouldBlockWhenCapturingMutliple) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ShouldBlockWhenCapturingMutliple) {
   content::WebContents* contents_1 =
       CreateWebContents(GURL("https://example1.com"));
   content::WebContents* contents_2 =
@@ -176,7 +186,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShouldBlockWhenCapturingMutliple) {
       CreateNotification(GURL("https://example3.com"))));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, CapturingTwice) {
+TEST_P(ScreenCaptureNotificationBlockerTest, CapturingTwice) {
   content::WebContents* contents =
       CreateWebContents(GURL("https://example1.com"));
 
@@ -191,7 +201,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, CapturingTwice) {
       CreateNotification(GURL("https://example2.com"))));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, StopUnknownContents) {
+TEST_P(ScreenCaptureNotificationBlockerTest, StopUnknownContents) {
   content::WebContents* contents =
       CreateWebContents(GURL("https://example1.com"));
   blocker().OnIsCapturingDisplayChanged(contents, false);
@@ -199,7 +209,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, StopUnknownContents) {
       CreateNotification(GURL("https://example2.com"))));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest,
+TEST_P(ScreenCaptureNotificationBlockerTest,
        ObservesMediaStreamCaptureIndicator) {
   MediaStreamCaptureIndicator* indicator =
       MediaCaptureDevicesDispatcher::GetInstance()
@@ -208,7 +218,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest,
   EXPECT_TRUE(blocker().observation_.IsObservingSource(indicator));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShowsMutedNotification) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ShowsMutedNotification) {
   EXPECT_FALSE(GetMutedNotification());
 
   blocker().OnIsCapturingDisplayChanged(
@@ -216,7 +226,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShowsMutedNotification) {
   blocker().OnBlockedNotification(
       CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
 
-  absl::optional<message_center::Notification> notification =
+  std::optional<message_center::Notification> notification =
       GetMutedNotification();
   ASSERT_TRUE(notification);
 
@@ -227,13 +237,24 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShowsMutedNotification) {
             notification->title());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NOTIFICATION_MUTED_MESSAGE),
             notification->message());
-  ASSERT_EQ(1u, notification->buttons().size());
-  EXPECT_EQ(l10n_util::GetPluralStringFUTF16(IDS_NOTIFICATION_MUTED_ACTION_SHOW,
-                                             /*count=*/1),
-            notification->buttons()[0].title);
+  if (GetParam()) {
+    ASSERT_EQ(2u, notification->buttons().size());
+    EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NOTIFICATION_MUTED_ACTION_SNOOZE),
+              notification->buttons()[0].title);
+    EXPECT_EQ(
+        l10n_util::GetPluralStringFUTF16(IDS_NOTIFICATION_MUTED_ACTION_SHOW,
+                                         /*count=*/1),
+        notification->buttons()[1].title);
+  } else {
+    ASSERT_EQ(1u, notification->buttons().size());
+    EXPECT_EQ(
+        l10n_util::GetPluralStringFUTF16(IDS_NOTIFICATION_MUTED_ACTION_SHOW,
+                                         /*count=*/1),
+        notification->buttons()[0].title);
+  }
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, UpdatesMutedNotification) {
+TEST_P(ScreenCaptureNotificationBlockerTest, UpdatesMutedNotification) {
   constexpr int kCount = 10;
   blocker().OnIsCapturingDisplayChanged(
       CreateWebContents(GURL("https://example1.com")), true);
@@ -243,7 +264,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, UpdatesMutedNotification) {
         CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
   }
 
-  absl::optional<message_center::Notification> notification =
+  std::optional<message_center::Notification> notification =
       GetMutedNotification();
   ASSERT_TRUE(notification);
 
@@ -252,13 +273,9 @@ TEST_F(ScreenCaptureNotificationBlockerTest, UpdatesMutedNotification) {
       notification->title());
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NOTIFICATION_MUTED_MESSAGE),
             notification->message());
-  ASSERT_EQ(1u, notification->buttons().size());
-  EXPECT_EQ(l10n_util::GetPluralStringFUTF16(IDS_NOTIFICATION_MUTED_ACTION_SHOW,
-                                             kCount),
-            notification->buttons()[0].title);
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ClosesMutedNotification) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ClosesMutedNotification) {
   content::WebContents* contents =
       CreateWebContents(GURL("https://example1.com"));
   // No notification initially.
@@ -275,7 +292,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ClosesMutedNotification) {
   EXPECT_FALSE(GetMutedNotification());
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest,
+TEST_P(ScreenCaptureNotificationBlockerTest,
        ClosesMutedNotificationOnBodyClick) {
   blocker().OnIsCapturingDisplayChanged(
       CreateWebContents(GURL("https://example1.com")), true);
@@ -283,11 +300,11 @@ TEST_F(ScreenCaptureNotificationBlockerTest,
       CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
 
   // Expect notification to be closed after clicking on its body.
-  SimulateClick(/*action_index=*/absl::nullopt);
+  SimulateClick(/*action_index=*/std::nullopt);
   EXPECT_FALSE(GetMutedNotification());
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShowsMutedNotificationAfterClose) {
+TEST_P(ScreenCaptureNotificationBlockerTest, ShowsMutedNotificationAfterClose) {
   blocker().OnIsCapturingDisplayChanged(
       CreateWebContents(GURL("https://example1.com")), true);
   blocker().OnBlockedNotification(
@@ -295,11 +312,11 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShowsMutedNotificationAfterClose) {
 
   // Blocking another notification after closing the muted one should show a new
   // one with an updated message.
-  SimulateClick(/*action_index=*/absl::nullopt);
+  SimulateClick(/*action_index=*/std::nullopt);
   blocker().OnBlockedNotification(
       CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
 
-  absl::optional<message_center::Notification> notification =
+  std::optional<message_center::Notification> notification =
       GetMutedNotification();
   ASSERT_TRUE(notification);
   EXPECT_EQ(l10n_util::GetPluralStringFUTF16(IDS_NOTIFICATION_MUTED_TITLE,
@@ -307,7 +324,47 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShowsMutedNotificationAfterClose) {
             notification->title());
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, ShowAction) {
+TEST_P(ScreenCaptureNotificationBlockerTest, SnoozeAction) {
+  if (!GetParam())
+    return;
+
+  blocker().OnIsCapturingDisplayChanged(
+      CreateWebContents(GURL("https://example1.com")), true);
+  blocker().OnBlockedNotification(
+      CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
+
+  // "Snooze" should close and prevent any future notification.
+  SimulateClick(0);
+  EXPECT_FALSE(GetMutedNotification());
+
+  blocker().OnBlockedNotification(
+      CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
+  EXPECT_FALSE(GetMutedNotification());
+}
+
+TEST_P(ScreenCaptureNotificationBlockerTest, SnoozeActionShowOnNextSession) {
+  if (!GetParam())
+    return;
+
+  content::WebContents* contents =
+      CreateWebContents(GURL("https://example1.com"));
+  blocker().OnIsCapturingDisplayChanged(contents, true);
+  blocker().OnBlockedNotification(
+      CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
+  SimulateClick(0);
+  EXPECT_FALSE(GetMutedNotification());
+
+  // After hiding all notifications and stopping and starting capture we should
+  // see notifications again.
+  blocker().OnIsCapturingDisplayChanged(contents, false);
+  blocker().OnIsCapturingDisplayChanged(contents, true);
+
+  blocker().OnBlockedNotification(
+      CreateNotification(GURL("https://example2.com")), /*replaced*/ false);
+  EXPECT_TRUE(GetMutedNotification());
+}
+
+TEST_P(ScreenCaptureNotificationBlockerTest, ShowAction) {
   MockNotificationBlockerObserver observer;
   base::ScopedObservation<NotificationBlocker, NotificationBlocker::Observer>
       scoped_observer(&observer);
@@ -326,94 +383,41 @@ TEST_F(ScreenCaptureNotificationBlockerTest, ShowAction) {
   // Showing should close the "Notifications muted" notification and allow
   // showing future web notifications.
   EXPECT_CALL(observer, OnBlockingStateChanged);
-  SimulateClick(kShowActionIndex);
+  SimulateClick(GetParam() ? 1 : 0);
   testing::Mock::VerifyAndClearExpectations(&observer);
 
   EXPECT_FALSE(GetMutedNotification());
   EXPECT_FALSE(blocker().ShouldBlockNotification(notification));
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, CloseHistogram) {
-  base::HistogramTester histogram_tester;
-  const char kHistogram[] = "Notifications.Blocker.ScreenCapture.Action.Close";
+TEST_P(ScreenCaptureNotificationBlockerTest, SnoozeClickHistogram) {
+  if (!GetParam())
+    return;
 
-  blocker().OnIsCapturingDisplayChanged(
-      CreateWebContents(GURL("https://example1.com")), true);
+  base::HistogramTester histogram_tester;
+
+  content::WebContents* contents =
+      CreateWebContents(GURL("https://example1.com"));
+  blocker().OnIsCapturingDisplayChanged(contents, true);
   message_center::Notification notification =
       CreateNotification(GURL("https://example2.com"));
 
   blocker().OnBlockedNotification(notification, /*replaced*/ false);
 
-  auto action_delay = base::TimeDelta::FromSeconds(5);
+  auto action_delay = base::Seconds(5);
   task_environment_.FastForwardBy(action_delay);
-  SimulateClose(/*by_user=*/true);
+  SimulateClick(0);
 
-  histogram_tester.ExpectBucketCount(kHistogram, /*sample=*/1, /*count=*/1);
-  histogram_tester.ExpectTotalCount(kHistogram, /*count=*/1);
-  histogram_tester.ExpectUniqueTimeSample(
-      "Notifications.Blocker.ScreenCapture.ActionTiming.Close", action_delay,
-      /*count=*/1);
-
+  // Test showing another notification while snoozing.
   blocker().OnBlockedNotification(notification, /*replaced*/ false);
-  SimulateClose(/*by_user=*/true);
-  histogram_tester.ExpectBucketCount(kHistogram, /*sample=*/2, /*count=*/1);
-  histogram_tester.ExpectTotalCount(kHistogram, /*count=*/2);
-
-  blocker().OnBlockedNotification(notification, /*replaced*/ false);
-  SimulateClose(/*by_user=*/false);
-  histogram_tester.ExpectTotalCount(kHistogram, /*count=*/2);
-}
-
-TEST_F(ScreenCaptureNotificationBlockerTest, BodyClickHistogram) {
-  base::HistogramTester histogram_tester;
-  const char kHistogram[] = "Notifications.Blocker.ScreenCapture.Action.Body";
-
-  blocker().OnIsCapturingDisplayChanged(
-      CreateWebContents(GURL("https://example1.com")), true);
-  message_center::Notification notification =
-      CreateNotification(GURL("https://example2.com"));
-
-  blocker().OnBlockedNotification(notification, /*replaced*/ false);
-
-  auto action_delay = base::TimeDelta::FromSeconds(5);
-  task_environment_.FastForwardBy(action_delay);
-  SimulateClick(/*action_index=*/absl::nullopt);
-
-  histogram_tester.ExpectBucketCount(kHistogram, /*sample=*/1, /*count=*/1);
-  histogram_tester.ExpectTotalCount(kHistogram, /*count=*/1);
-  histogram_tester.ExpectUniqueTimeSample(
-      "Notifications.Blocker.ScreenCapture.ActionTiming.Body", action_delay,
-      /*count=*/1);
-
-  blocker().OnBlockedNotification(notification, /*replaced*/ false);
-  SimulateClick(/*action_index=*/absl::nullopt);
-  histogram_tester.ExpectBucketCount(kHistogram, /*sample=*/2, /*count=*/1);
-  histogram_tester.ExpectTotalCount(kHistogram, /*count=*/2);
-}
-
-TEST_F(ScreenCaptureNotificationBlockerTest, ShowClickHistogram) {
-  base::HistogramTester histogram_tester;
-
-  blocker().OnIsCapturingDisplayChanged(
-      CreateWebContents(GURL("https://example1.com")), true);
-  message_center::Notification notification =
-      CreateNotification(GURL("https://example2.com"));
-
-  blocker().OnBlockedNotification(notification, /*replaced*/ false);
-
-  auto action_delay = base::TimeDelta::FromSeconds(5);
-  task_environment_.FastForwardBy(action_delay);
-  SimulateClick(kShowActionIndex);
+  blocker().OnIsCapturingDisplayChanged(contents, false);
 
   histogram_tester.ExpectUniqueSample(
-      "Notifications.Blocker.ScreenCapture.Action.Show", /*sample=*/1,
-      /*count=*/1);
-  histogram_tester.ExpectUniqueTimeSample(
-      "Notifications.Blocker.ScreenCapture.ActionTiming.Show", action_delay,
+      "Notifications.Blocker.ScreenCapture.SnoozedCount", /*sample=*/1,
       /*count=*/1);
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, SessionEndHistograms) {
+TEST_P(ScreenCaptureNotificationBlockerTest, SessionEndHistograms) {
   base::HistogramTester histogram_tester;
 
   content::WebContents* contents =
@@ -449,9 +453,14 @@ TEST_F(ScreenCaptureNotificationBlockerTest, SessionEndHistograms) {
   histogram_tester.ExpectUniqueSample(
       "Notifications.Blocker.ScreenCapture.ClosedCount", /*sample=*/1,
       /*count=*/1);
+  if (GetParam()) {
+    histogram_tester.ExpectUniqueSample(
+        "Notifications.Blocker.ScreenCapture.SnoozedCount", /*sample=*/0,
+        /*count=*/1);
+  }
 }
 
-TEST_F(ScreenCaptureNotificationBlockerTest, SessionTimingHistograms) {
+TEST_P(ScreenCaptureNotificationBlockerTest, SessionTimingHistograms) {
   base::HistogramTester histogram_tester;
 
   content::WebContents* contents =
@@ -462,12 +471,12 @@ TEST_F(ScreenCaptureNotificationBlockerTest, SessionTimingHistograms) {
       CreateNotification(GURL("https://example2.com"));
   blocker().OnBlockedNotification(notification, /*replaced*/ false);
 
-  auto click_delay = base::TimeDelta::FromSeconds(3);
+  auto click_delay = base::Seconds(3);
   task_environment_.FastForwardBy(click_delay);
 
-  SimulateClick(kShowActionIndex);
+  SimulateClick(GetParam() ? 1 : 0);
 
-  auto session_delay = base::TimeDelta::FromSeconds(5);
+  auto session_delay = base::Seconds(5);
   task_environment_.FastForwardBy(session_delay);
 
   blocker().OnIsCapturingDisplayChanged(contents, false);
@@ -480,3 +489,7 @@ TEST_F(ScreenCaptureNotificationBlockerTest, SessionTimingHistograms) {
       click_delay + session_delay,
       /*count=*/1);
 }
+
+INSTANTIATE_TEST_SUITE_P(,
+                         ScreenCaptureNotificationBlockerTest,
+                         testing::Bool());

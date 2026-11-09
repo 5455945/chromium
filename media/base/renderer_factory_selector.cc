@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/renderer_factory_selector.h"
 
 #include "base/logging.h"
+#include "build/build_config.h"
 
 namespace media {
 
@@ -15,7 +16,7 @@ RendererFactorySelector::~RendererFactorySelector() = default;
 void RendererFactorySelector::AddBaseFactory(
     RendererType type,
     std::unique_ptr<RendererFactory> factory) {
-  DVLOG(1) << __func__ << ": type=" << static_cast<int>(type);
+  DVLOG(1) << __func__ << ": type=" << GetRendererName(type);
   DCHECK(!base_renderer_type_) << "At most one base factory!";
 
   AddFactory(type, std::move(factory));
@@ -40,7 +41,7 @@ void RendererFactorySelector::AddFactory(
     std::unique_ptr<RendererFactory> factory) {
   DCHECK(factory);
   DCHECK(!factories_.count(type));
-  DVLOG(2) << __func__ << ": type=" << static_cast<int>(type);
+  DVLOG(2) << __func__ << ": type=" << GetRendererName(type);
   factories_[type] = std::move(factory);
 }
 
@@ -62,14 +63,14 @@ RendererFactory* RendererFactorySelector::GetCurrentFactory() {
   RendererType current_renderer_type = GetCurrentRendererType();
 
   DVLOG(1) << __func__ << " Selecting factory type: "
-           << static_cast<int>(current_renderer_type);
+           << GetRendererName(current_renderer_type);
   auto* current_factory = factories_[current_renderer_type].get();
   DCHECK(current_factory);
 
   return current_factory;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void RendererFactorySelector::StartRequestRemotePlayStateCB(
     RequestRemotePlayStateChangeCB callback_request) {
   DCHECK(!remote_play_state_change_cb_request_);

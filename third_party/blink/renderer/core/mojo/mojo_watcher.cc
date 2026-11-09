@@ -1,15 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/mojo/mojo_watcher.h"
 
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mojo_handle_signals.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mojo_watch_callback.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 
@@ -23,7 +24,7 @@ MojoWatcher* MojoWatcher::Create(mojo::Handle handle,
   MojoWatcher* watcher = MakeGarbageCollected<MojoWatcher>(context, callback);
   MojoResult result = watcher->Watch(handle, signals_dict);
   // TODO(alokp): Consider raising an exception.
-  // Current clients expect to recieve the initial error returned by MojoWatch
+  // Current clients expect to receive the initial error returned by MojoWatch
   // via watch callback.
   //
   // Note that the usage of WrapPersistent is intentional so that the initial
@@ -33,8 +34,8 @@ MojoWatcher* MojoWatcher::Create(mojo::Handle handle,
   if (result != MOJO_RESULT_OK) {
     watcher->task_runner_->PostTask(
         FROM_HERE,
-        WTF::Bind(&V8MojoWatchCallback::InvokeAndReportException,
-                  WrapPersistent(callback), WrapPersistent(watcher), result));
+        BindOnce(&V8MojoWatchCallback::InvokeAndReportException,
+                 WrapPersistent(callback), WrapPersistent(watcher), result));
   }
   return watcher;
 }
@@ -65,7 +66,8 @@ void MojoWatcher::ContextDestroyed() {
 
 MojoWatcher::MojoWatcher(ExecutionContext* context,
                          V8MojoWatchCallback* callback)
-    : ExecutionContextLifecycleObserver(context),
+    : ActiveScriptWrappable<MojoWatcher>({}),
+      ExecutionContextLifecycleObserver(context),
       task_runner_(context->GetTaskRunner(TaskType::kInternalDefault)),
       callback_(callback) {}
 
@@ -105,8 +107,8 @@ MojoResult MojoWatcher::Watch(mojo::Handle handle,
     // We couldn't arm the watcher because the handle is already ready to
     // trigger a success notification. Post a notification manually.
     task_runner_->PostTask(FROM_HERE,
-                           WTF::Bind(&MojoWatcher::RunReadyCallback,
-                                     WrapPersistent(this), ready_result));
+                           BindOnce(&MojoWatcher::RunReadyCallback,
+                                    WrapPersistent(this), ready_result));
     return MOJO_RESULT_OK;
   }
 
@@ -191,8 +193,8 @@ void MojoWatcher::RunReadyCallback(MojoResult result) {
 
   if (arm_result == MOJO_RESULT_FAILED_PRECONDITION) {
     task_runner_->PostTask(FROM_HERE,
-                           WTF::Bind(&MojoWatcher::RunReadyCallback,
-                                     WrapWeakPersistent(this), ready_result));
+                           BindOnce(&MojoWatcher::RunReadyCallback,
+                                    WrapWeakPersistent(this), ready_result));
     return;
   }
 }

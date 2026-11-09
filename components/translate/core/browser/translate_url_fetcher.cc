@@ -1,10 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/translate/core/browser/translate_url_fetcher.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/variations/net/variations_http_headers.h"
@@ -23,19 +27,28 @@ const int kMaxRetry = 16;
 
 }  // namespace
 
-TranslateURLFetcher::TranslateURLFetcher()
-    : state_(IDLE), retry_count_(0), max_retry_on_5xx_(0) {}
+TranslateURLFetcherImpl::TranslateURLFetcherImpl(int max_retry_on_5xx)
+    : state_(IDLE), retry_count_(0), max_retry_on_5xx_(max_retry_on_5xx) {}
 
-TranslateURLFetcher::~TranslateURLFetcher() {}
+TranslateURLFetcherImpl::TranslateURLFetcherImpl(
+    const net::HttpRequestHeaders& extra_request_header)
+    : TranslateURLFetcherImpl(0) {
+  extra_request_header_ = extra_request_header;
+}
 
-bool TranslateURLFetcher::Request(const GURL& url,
-                                  TranslateURLFetcher::Callback callback,
-                                  bool is_incognito) {
+TranslateURLFetcherImpl::~TranslateURLFetcherImpl() = default;
+
+TranslateURLFetcherImpl::State TranslateURLFetcherImpl::state() const {
+  return state_;
+}
+
+bool TranslateURLFetcherImpl::Request(const GURL& url,
+                                      TranslateUrlFetcher::Callback callback,
+                                      bool is_incognito) {
   // This function is not supposed to be called if the previous operation is not
   // finished.
   if (state_ == REQUESTING) {
     NOTREACHED();
-    return false;
   }
 
   if (retry_count_ >= kMaxRetry)
@@ -77,6 +90,7 @@ bool TranslateURLFetcher::Request(const GURL& url,
             "the site to the server to translate it, but this request doesn't "
             "send any words."
           destination: GOOGLE_OWNED_SERVICE
+          api_service_name: "translate.googleapis.com"
         }
         policy {
           cookies_allowed: NO
@@ -96,8 +110,7 @@ bool TranslateURLFetcher::Request(const GURL& url,
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url_;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-  if (!extra_request_header_.empty())
-    resource_request->headers.AddHeaderFromString(extra_request_header_);
+  resource_request->headers.MergeFrom(extra_request_header_);
 
   simple_loader_ =
       variations::CreateSimpleURLLoaderWithVariationsHeaderUnknownSignedIn(
@@ -115,17 +128,15 @@ bool TranslateURLFetcher::Request(const GURL& url,
 
   simple_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
       url_loader_factory,
-      base::BindOnce(&TranslateURLFetcher::OnSimpleLoaderComplete,
+      base::BindOnce(&TranslateURLFetcherImpl::OnSimpleLoaderComplete,
                      base::Unretained(this)));
   return true;
 }
 
-void TranslateURLFetcher::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
-  std::string data;
+void TranslateURLFetcherImpl::OnSimpleLoaderComplete(
+    std::optional<std::string> response_body) {
   if (response_body) {
     DCHECK_EQ(net::OK, simple_loader_->NetError());
-    data = std::move(*response_body);
     state_ = COMPLETED;
   } else {
     state_ = FAILED;
@@ -133,7 +144,8 @@ void TranslateURLFetcher::OnSimpleLoaderComplete(
 
   simple_loader_.reset();
 
-  std::move(callback_).Run(state_ == COMPLETED, data);
+  std::move(callback_).Run(state_ == COMPLETED,
+                           std::move(response_body).value_or(""));
 }
 
 }  // namespace translate

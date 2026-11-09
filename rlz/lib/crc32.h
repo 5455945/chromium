@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,10 +7,16 @@
 #ifndef RLZ_LIB_CRC32_H_
 #define RLZ_LIB_CRC32_H_
 
+#include <stdint.h>
+
+#include <string_view>
+
+#include "base/containers/span.h"
+
 namespace rlz_lib {
 
-int Crc32(const unsigned char* buf, int length);
-bool Crc32(const char* text, int* crc);
+uint32_t Crc32(base::span<const uint8_t> data);
+bool Crc32(std::string_view text, uint32_t* crc);
 
 }  // namespace rlz_lib
 

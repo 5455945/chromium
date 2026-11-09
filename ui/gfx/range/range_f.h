@@ -1,12 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_RANGE_RANGE_F_H_
 #define UI_GFX_RANGE_RANGE_F_H_
 
+#include <iosfwd>
 #include <limits>
-#include <ostream>
 #include <string>
 
 #include "ui/gfx/range/gfx_range_export.h"
@@ -33,8 +33,23 @@ class GFX_RANGE_EXPORT RangeF {
     return RangeF(std::numeric_limits<float>::max());
   }
 
+  // Returns a range representing the closed interval between |start| and
+  // |end|. Since a RangeF excludes its max endpoint, the max is extended to the
+  // next representable float. The direction of the range is preserved.
+  static RangeF ClosedRange(float start, float end);
+
   // Checks if the range is valid through comparison to InvalidRange().
   constexpr bool IsValid() const { return *this != InvalidRange(); }
+
+  // Ensures that the direction of this range matches the direction of the
+  // provided range, reversing this range if necessary. Returns a reference to
+  // `this` to allow method chaining.
+  RangeF& MatchDirection(const RangeF& other) {
+    if (is_reversed() != other.is_reversed()) {
+      std::swap(start_, end_);
+    }
+    return *this;
+  }
 
   // Getters and setters.
   constexpr float start() const { return start_; }
@@ -53,12 +68,8 @@ class GFX_RANGE_EXPORT RangeF {
   constexpr float GetMin() const { return start() < end() ? start() : end(); }
   constexpr float GetMax() const { return start() > end() ? start() : end(); }
 
-  constexpr bool operator==(const RangeF& other) const {
-    return start() == other.start() && end() == other.end();
-  }
-  constexpr bool operator!=(const RangeF& other) const {
-    return !(*this == other);
-  }
+  constexpr bool operator==(const RangeF& other) const = default;
+  constexpr auto operator<=>(const RangeF& other) const = default;
   constexpr bool EqualsIgnoringDirection(const RangeF& other) const {
     return GetMin() == other.GetMin() && GetMax() == other.GetMax();
   }
@@ -85,7 +96,7 @@ class GFX_RANGE_EXPORT RangeF {
   // Computes the intersection of this range with the given |range|.
   // If they don't intersect, it returns an InvalidRange().
   // The returned range is always empty or forward (never reversed).
-  constexpr RangeF Intersect(const RangeF& range) const {
+  [[nodiscard]] constexpr RangeF Intersect(const RangeF& range) const {
     const float min = std::max(GetMin(), range.GetMin());
     const float max = std::min(GetMax(), range.GetMax());
 
@@ -94,7 +105,7 @@ class GFX_RANGE_EXPORT RangeF {
                : InvalidRange();
   }
 
-  RangeF Intersect(const Range& range) const;
+  [[nodiscard]] RangeF Intersect(const Range& range) const;
 
   // Floor/Ceil/Round the start and end values of the given RangeF.
   Range Floor() const;

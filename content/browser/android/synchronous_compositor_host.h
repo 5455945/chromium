@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,9 @@
 #include <memory>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
@@ -25,11 +24,15 @@
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "third_party/blink/public/mojom/input/synchronous_compositor.mojom.h"
 #include "ui/android/view_android.h"
-#include "ui/gfx/geometry/scroll_offset.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size_f.h"
 
 namespace ui {
 struct DidOverscrollParams;
+}
+
+namespace viz {
+class HostFrameSinkManager;
 }
 
 namespace content {
@@ -46,11 +49,18 @@ class CONTENT_EXPORT SynchronousCompositorHost
  public:
   static std::unique_ptr<SynchronousCompositorHost> Create(
       RenderWidgetHostViewAndroid* rwhva,
-      const viz::FrameSinkId& frame_sink_id);
+      const viz::FrameSinkId& frame_sink_id,
+      viz::HostFrameSinkManager* host_frame_sink_manager);
+
+  SynchronousCompositorHost(const SynchronousCompositorHost&) = delete;
+  SynchronousCompositorHost& operator=(const SynchronousCompositorHost&) =
+      delete;
 
   ~SynchronousCompositorHost() override;
 
   // SynchronousCompositor overrides.
+  void OnCompositorVisible() override;
+  void OnCompositorHidden() override;
   scoped_refptr<FrameFuture> DemandDrawHwAsync(
       const gfx::Size& viewport_size,
       const gfx::Rect& viewport_rect_for_tile_priority,
@@ -58,12 +68,15 @@ class CONTENT_EXPORT SynchronousCompositorHost
   bool DemandDrawSw(SkCanvas* canvas, bool software_canvas) override;
   void ReturnResources(uint32_t layer_tree_frame_sink_id,
                        std::vector<viz::ReturnedResource> resources) override;
-  void DidPresentCompositorFrames(viz::FrameTimingDetailsMap timing_details,
-                                  uint32_t frame_token) override;
+  void OnCompositorFrameTransitionDirectiveProcessed(
+      uint32_t layer_tree_frame_sink_id,
+      uint32_t sequence_id) override;
+  void DidPresentCompositorFrames(
+      viz::FrameTimingDetailsMap timing_details) override;
   void SetMemoryPolicy(size_t bytes_limit) override;
+  float GetVelocityInPixelsPerSecond() override;
   void DidBecomeActive() override;
-  void DidChangeRootLayerScrollOffset(
-      const gfx::ScrollOffset& root_offset) override;
+  void DidChangeRootLayerScrollOffset(const gfx::PointF& root_offset) override;
   void SynchronouslyZoomBy(float zoom_delta, const gfx::Point& anchor) override;
   void OnComputeScroll(base::TimeTicks animation_time) override;
   void SetBeginFrameSource(viz::BeginFrameSource* begin_frame_source) override;
@@ -74,8 +87,12 @@ class CONTENT_EXPORT SynchronousCompositorHost
   void DidOverscroll(const ui::DidOverscrollParams& over_scroll_params);
 
   // Called by SynchronousCompositorSyncCallBridge.
-  void UpdateFrameMetaData(uint32_t version,
-                           viz::CompositorFrameMetadata frame_metadata);
+  void UpdateFrameMetaData(
+      uint32_t version,
+      viz::CompositorFrameMetadata frame_metadata,
+      std::optional<viz::LocalSurfaceId> new_local_surface_id);
+  void BeginFrameComplete(
+      blink::mojom::SyncCompositorCommonRendererParamsPtr params);
 
   // Called when the mojo channel should be created.
   void InitMojo();
@@ -88,11 +105,15 @@ class CONTENT_EXPORT SynchronousCompositorHost
 
   void AddBeginFrameCompletionCallback(base::OnceClosure callback);
 
+  const viz::FrameSinkId& GetFrameSinkId() const { return frame_sink_id_; }
+  viz::SurfaceId GetSurfaceId() const;
+
   // blink::mojom::SynchronousCompositorHost overrides.
   void LayerTreeFrameSinkCreated() override;
   void UpdateState(
       blink::mojom::SyncCompositorCommonRendererParamsPtr params) override;
   void SetNeedsBeginFrames(bool needs_begin_frames) override;
+  void SetThreads(const std::vector<viz::Thread>& threads) override;
 
   // viz::BeginFrameObserver implementation.
   void OnBeginFrame(const viz::BeginFrameArgs& args) override;
@@ -115,6 +136,7 @@ class CONTENT_EXPORT SynchronousCompositorHost
 
   SynchronousCompositorHost(RenderWidgetHostViewAndroid* rwhva,
                             const viz::FrameSinkId& frame_sink_id,
+                            viz::HostFrameSinkManager* host_frame_sink_manager,
                             bool use_in_proc_software_draw);
   SynchronousCompositor::Frame DemandDrawHw(
       const gfx::Size& viewport_size,
@@ -128,20 +150,22 @@ class CONTENT_EXPORT SynchronousCompositorHost
   // handle blocking calls.
   bool IsReadyForSynchronousCall();
   void UpdateRootLayerStateOnClient();
-  void UpdatePresentedFrameToken(uint32_t frame_token);
 
   void SendBeginFramePaused();
   void SendBeginFrame(viz::BeginFrameArgs args);
   void AddBeginFrameRequest(BeginFrameRequestType request);
   void ClearBeginFrameRequest(BeginFrameRequestType request);
 
-  RenderWidgetHostViewAndroid* const rwhva_;
-  SynchronousCompositorClient* const client_;
+  const raw_ptr<RenderWidgetHostViewAndroid> rwhva_;
+  const raw_ptr<SynchronousCompositorClient> client_;
   const viz::FrameSinkId frame_sink_id_;
+  const raw_ptr<viz::HostFrameSinkManager> host_frame_sink_manager_;
   const bool use_in_process_zero_copy_software_draw_;
   mojo::AssociatedRemote<blink::mojom::SynchronousCompositor> sync_compositor_;
   mojo::AssociatedReceiver<blink::mojom::SynchronousCompositorHost>
       host_receiver_{this};
+
+  viz::LocalSurfaceId local_surface_id_;
 
   bool registered_with_filter_ = false;
 
@@ -153,19 +177,24 @@ class CONTENT_EXPORT SynchronousCompositorHost
   // to rely on sending a synchronous message first on initialization. So
   // with an abundance of caution, keep that behavior until we are sure this
   // isn't required.
-  bool allow_async_draw_ = false;
+  bool allow_async_draw_;
 
   // Indicates begin frames are paused from the browser.
   bool begin_frame_paused_ = false;
 
-  // Updated by both renderer and browser. This is in physical pixel when
-  // use-zoom-for-dsf is enabled, otherwise in dip.
-  gfx::ScrollOffset root_scroll_offset_;
+  // Updated by both renderer and browser. This is in physical pixels.
+  gfx::PointF root_scroll_offset_;
+
+  float velocity_in_pixels_per_second_ = 0.f;
+  base::TimeDelta last_begin_frame_time_delta_;
 
   // Indicates that whether OnComputeScroll is called or overridden. The
   // fling_controller should advance the fling only when OnComputeScroll is not
   // overridden.
   bool on_compute_scroll_called_ = false;
+
+  // Whether `DemandDrawHwAsync` has ever been called.
+  bool draw_hw_called_ = false;
 
   // From renderer.
   uint32_t renderer_param_version_;
@@ -174,7 +203,7 @@ class CONTENT_EXPORT SynchronousCompositorHost
   uint32_t did_activate_pending_tree_count_;
   uint32_t frame_metadata_version_ = 0u;
   // Physical pixel when use-zoom-for-dsf is enabled, otherwise in dip.
-  gfx::ScrollOffset max_scroll_offset_;
+  gfx::PointF max_scroll_offset_;
   gfx::SizeF scrollable_size_;
   float page_scale_factor_ = 0.f;
   float min_page_scale_factor_ = 0.f;
@@ -189,12 +218,13 @@ class CONTENT_EXPORT SynchronousCompositorHost
   // issued. Used to control action dispatch at the next |OnBeginFrame()| call.
   uint32_t outstanding_begin_frame_requests_ = 0;
 
+  uint32_t num_invalidates_since_last_draw_ = 0u;
+  uint32_t num_begin_frames_to_skip_ = 0u;
+
   // The begin frame source being observed.  Null if none.
-  viz::BeginFrameSource* begin_frame_source_ = nullptr;
+  raw_ptr<viz::BeginFrameSource> begin_frame_source_ = nullptr;
   viz::BeginFrameArgs last_begin_frame_args_;
   viz::FrameTimingDetailsMap timing_details_;
-
-  DISALLOW_COPY_AND_ASSIGN(SynchronousCompositorHost);
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,12 +18,15 @@ BluetoothManifestData::BluetoothManifestData(
   DCHECK(permission_);
 }
 
-BluetoothManifestData::~BluetoothManifestData() {}
+BluetoothManifestData::~BluetoothManifestData() = default;
 
 // static
-BluetoothManifestData* BluetoothManifestData::Get(const Extension* extension) {
-  return static_cast<BluetoothManifestData*>(
-      extension->GetManifestData(manifest_keys::kBluetooth));
+const char* BluetoothManifestData::kManifestDataKey = manifest_keys::kBluetooth;
+
+// static
+const BluetoothManifestData* BluetoothManifestData::Get(
+    const Extension* extension) {
+  return extension->GetManifestData<BluetoothManifestData>();
 }
 
 // static
@@ -72,6 +75,6 @@ BluetoothPermissionRequest::BluetoothPermissionRequest(
     const std::string& uuid)
     : uuid(uuid) {}
 
-BluetoothPermissionRequest::~BluetoothPermissionRequest() {}
+BluetoothPermissionRequest::~BluetoothPermissionRequest() = default;
 
 }  // namespace extensions

@@ -1,139 +1,274 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/page_info/permission_toggle_row_view.h"
 
+#include <string>
+#include <string_view>
+
+#include "base/observer_list.h"
+#include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/file_system_access/file_system_access_features.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
-#include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/page_info/page_info_navigation_handler.h"
-#include "chrome/browser/ui/views/page_info/page_info_row_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
-#include "components/permissions/features.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/page_info/page_info.h"
 #include "components/permissions/permission_util.h"
+#include "components/url_formatter/elide_url.h"
 #include "components/vector_icons/vector_icons.h"
+#include "media/base/media_switches.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
-#include "ui/views/controls/label.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/styled_label.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
+
+namespace {
+
+const ui::ImageModel GetManagedPermissionIcon(
+    const PageInfo::PermissionInfo& info) {
+  const gfx::VectorIcon& managed_vector_icon =
+      info.source == content_settings::SettingSource::kExtension
+          ? features::IsRoundedIconsEnabled()
+                ? vector_icons::kExtensionFilledIcon
+                : vector_icons::kExtensionOldIcon
+      : features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                          : vector_icons::kBusinessOldIcon;
+  return PageInfoViewFactory::GetImageModel(managed_vector_icon);
+}
+
+}  // namespace
+
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionToggleRowView,
+                                      kRowSubTitleCameraElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionToggleRowView,
+                                      kRowSubTitleMicrophoneElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PermissionToggleRowView,
+                                      kSubpageButtonElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+    PermissionToggleRowView,
+    kPermissionDisabledAtSystemLevelElementId);
+
+using content_settings::SettingSource;
 
 PermissionToggleRowView::PermissionToggleRowView(
     ChromePageInfoUiDelegate* delegate,
     PageInfoNavigationHandler* navigation_handler,
-    const PageInfo::PermissionInfo& permission)
-    : permission_(permission), navigation_handler_(navigation_handler) {
+    const PageInfo::PermissionInfo& permission,
+    bool should_show_spacer_view)
+    : permission_(permission),
+      delegate_(delegate),
+      navigation_handler_(navigation_handler) {
   SetUseDefaultFillLayout(true);
-  row_view_ = AddChildView(std::make_unique<PageInfoRowView>());
-  row_view_->SetTitle(PageInfoUI::PermissionTypeToUIString(permission.type));
-  row_view_->SetIcon(PageInfoViewFactory::GetPermissionIcon(permission));
+  row_view_ = AddChildView(std::make_unique<RichControlsContainerView>());
+
+  std::u16string toggle_accessible_name =
+      PageInfoUI::PermissionTypeToUIString(permission.type);
+  row_view_->SetTitle(toggle_accessible_name);
 
   // Add extra details as sublabel.
   std::u16string detail = delegate->GetPermissionDetail(permission.type);
-  if (!detail.empty())
+  if (!detail.empty()) {
     row_view_->AddSecondaryLabel(detail);
+  }
 
-  // Show the permission decision reason, if it was not the user.
-  // TODO(olesiamarukhno): Add correct handling of the managed states: add
-  // showing correct state text "allowed" instead of "allow", "not allowed"
-  // instead of "block"; update tooltip for managed state; update the reason
-  // label to not include managed state, maybe merge it with permission detail.
-  std::u16string reason =
-      PageInfoUI::PermissionDecisionReasonToUIString(delegate, permission);
-  if (!reason.empty())
-    row_view_->AddSecondaryLabel(reason);
+  if (permission.requesting_origin.has_value()) {
+    std::u16string requesting_origin_string;
+    switch (permission.type) {
+      case ContentSettingsType::STORAGE_ACCESS:
+        requesting_origin_string =
+            url_formatter::FormatOriginForSecurityDisplay(
+                *permission.requesting_origin,
+                url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
+        break;
+      default:
+        NOTREACHED();
+    }
+    row_view_->AddSecondaryLabel(requesting_origin_string);
+    toggle_accessible_name = l10n_util::GetStringFUTF16(
+        IDS_CONCAT_TWO_STRINGS_WITH_COMMA, toggle_accessible_name,
+        requesting_origin_string);
+  }
 
-  if (permission.source == content_settings::SETTING_SOURCE_USER) {
-    InitForUserSource();
+  int settings_text_id = 0, settings_link_id = 0;
+  if (delegate->ShouldShowSettingsLinkForPermission(
+          permission.type, &settings_text_id, &settings_link_id)) {
+    permission_blocked_on_system_level_ = true;
+    std::u16string settings_text_for_link =
+        l10n_util::GetStringUTF16(settings_link_id);
+    size_t offset;
+    blocked_on_system_level_label_ =
+        row_view_->AddSecondaryStyledLabel(l10n_util::GetStringFUTF16(
+            settings_text_id, settings_text_for_link, &offset));
+    base::RepeatingClosure clicked = base::BindRepeating(
+        [](PermissionToggleRowView* row, ContentSettingsType type) {
+          row->delegate_->SettingsLinkClicked(type);
+        },
+        base::Unretained(this), permission.type);
+    blocked_on_system_level_label_->AddStyleRange(
+        gfx::Range(offset, offset + settings_text_for_link.length()),
+        views::StyledLabel::RangeStyleInfo::CreateForLink(clicked));
+
+    // Setting the element identifier key to easily get a handle to the label in
+    // tests.
+    blocked_on_system_level_label_->SetProperty(
+        views::kElementIdentifierKey,
+        kPermissionDisabledAtSystemLevelElementId);
+
+    // When permission is blocked on the system level, all control elements are
+    // disabled. The permission row's title should match color with disabled
+    // control elements.
+    row_view_->SetTitleTextStyleAndColor(
+        views::style::STYLE_BODY_3_MEDIUM,
+        kColorPageInfoPermissionBlockedOnSystemLevelDisabled);
+  }
+
+  if (permission.source == SettingSource::kUser) {
+    // If permission is not allowed because of security reasons, show a label
+    // with explanations instead of the controls.
+    std::u16string reason =
+        delegate->GetAutomaticallyBlockedReason(permission_.type);
+    if (!reason.empty()) {
+      views::Label* label =
+          row_view_->AddControl(std::make_unique<views::Label>(
+              delegate->GetAutomaticallyBlockedReason(permission_.type),
+              views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4));
+      label->SetEnabledColor(kColorPageInfoSubtitleForeground);
+    } else {
+      InitForUserSource(should_show_spacer_view, toggle_accessible_name);
+    }
   } else {
     InitForManagedSource(delegate);
   }
+  // Set flex rule, defined in `RichControlsContainerView`, to wrap the subtitle
+  // text but size the parent view to match the content.
+  SetProperty(
+      views::kFlexBehaviorKey,
+      views::FlexSpecification(base::BindRepeating(
+          &RichControlsContainerView::FlexRule, base::Unretained(row_view_))));
+  UpdateUiOnPermissionChanged();
 }
 
 PermissionToggleRowView::~PermissionToggleRowView() = default;
 
 void PermissionToggleRowView::AddObserver(
-    PermissionSelectorRowObserver* observer) {
+    PermissionToggleRowViewObserver* observer) {
   observer_list_.AddObserver(observer);
 }
 
-void PermissionToggleRowView::PermissionChanged(
-    const PageInfo::PermissionInfo& permission) {
-  // Change the permission icon to reflect the selected setting.
-  row_view_->SetIcon(PageInfoViewFactory::GetPermissionIcon(permission));
+void PermissionToggleRowView::PermissionChanged() {
+  UpdateUiOnPermissionChanged();
 
-  for (PermissionSelectorRowObserver& observer : observer_list_) {
-    observer.OnPermissionChanged(permission);
-  }
+  observer_list_.Notify(&PermissionToggleRowViewObserver::OnPermissionChanged,
+                        permission_);
+}
+
+void PermissionToggleRowView::UpdatePermission(
+    const PageInfo::PermissionInfo& permission) {
+  permission_ = permission;
+  UpdateUiOnPermissionChanged();
 }
 
 void PermissionToggleRowView::OnToggleButtonPressed() {
-  switch (permission_.setting) {
-    case CONTENT_SETTING_ALLOW:
-      permission_.setting = permission_.is_one_time ? CONTENT_SETTING_DEFAULT
-                                                    : CONTENT_SETTING_BLOCK;
-      permission_.is_one_time = false;
-      break;
-    case CONTENT_SETTING_BLOCK:
-      permission_.setting = CONTENT_SETTING_ALLOW;
-      permission_.is_one_time = false;
-      break;
-    case CONTENT_SETTING_DEFAULT:
-      permission_.setting = CONTENT_SETTING_ALLOW;
-      // If one-time permissions are supported, permission should go from
-      // default state to allow once state, not directly to allow.
-      if (base::FeatureList::IsEnabled(
-              permissions::features::kOneTimeGeolocationPermission) &&
-          permission_.type == ContentSettingsType::GEOLOCATION) {
-        permission_.is_one_time = true;
-      }
-      break;
-    default:
-      break;
-  }
-  PermissionChanged(permission_);
+  PageInfoUI::ToggleBetweenAllowAndBlock(permission_);
+  PermissionChanged();
 }
 
-void PermissionToggleRowView::InitForUserSource() {
-  const int icon_label_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
-      views::DISTANCE_RELATED_LABEL_HORIZONTAL);
+void PermissionToggleRowView::AddToggleButton(
+    const std::u16string& toggle_accessible_name,
+    int icon_label_spacing) {
+  // This skips adding a toggle for 'CAPTURED_SURFACE_CONTROL' permission type.
+  // We want to use the toggle inside the submenu and not here.
+  if (permission_.type == ContentSettingsType::CAPTURED_SURFACE_CONTROL) {
+    return;
+  }
 
   auto toggle_button = std::make_unique<views::ToggleButton>(
       base::BindRepeating(&PermissionToggleRowView::OnToggleButtonPressed,
                           base::Unretained(this)));
-  toggle_button->SetIsOn(permission_.setting == CONTENT_SETTING_ALLOW);
-  toggle_button->SetPreferredSize({toggle_button->GetPreferredSize().width(),
-                                   row_view_->GetFirstLineHeight()});
+  toggle_button->SetID(
+      PageInfoViewFactory::VIEW_ID_PERMISSION_TOGGLE_ROW_TOGGLE_BUTTON);
+  toggle_button->SetPreferredSize(
+      gfx::Size(toggle_button->GetPreferredSize().width(),
+                row_view_->GetFirstLineHeight()));
   toggle_button->SetProperty(views::kMarginsKey,
-                             gfx::Insets(0, icon_label_spacing));
-  row_view_->AddControl(std::move(toggle_button));
+                             gfx::Insets::VH(0, icon_label_spacing));
+  toggle_button->SetTooltipText(PageInfoUI::PermissionTooltipUiString(
+      permission_.type, permission_.requesting_origin));
+  toggle_button->GetViewAccessibility().SetName(toggle_accessible_name);
 
-  auto subpage_button = views::CreateVectorImageButtonWithNativeTheme(
-      base::BindRepeating(
-          [=](PermissionToggleRowView* row) {
-            row->navigation_handler_->OpenPermissionPage(row->permission_.type);
-          },
-          base::Unretained(this)),
-      vector_icons::kSubmenuArrowIcon);
-  views::InstallCircleHighlightPathGenerator(subpage_button.get());
-  const int icon_size = GetLayoutConstant(PAGE_INFO_ICON_SIZE);
-  subpage_button->SetMinimumImageSize({icon_size, icon_size});
+  toggle_button_ = row_view_->AddControl(std::move(toggle_button));
+}
 
-  // If type isn't supported by the PermissionManager, don't show the button
-  // that opens subpage. Instead, use a spacer view to align this row with
-  // other rows.
-  if (!permissions::PermissionUtil::IsPermission(permission_.type)) {
-    auto spacer_view = std::make_unique<views::View>();
-    spacer_view->SetPreferredSize(subpage_button->GetMinimumImageSize());
-    row_view_->AddControl(std::move(spacer_view));
-    subpage_button->SetVisible(false);
+void PermissionToggleRowView::InitForUserSource(
+    bool should_show_spacer_view,
+    const std::u16string& toggle_accessible_name) {
+  const int icon_label_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
+      views::DISTANCE_RELATED_LABEL_HORIZONTAL);
+  AddToggleButton(toggle_accessible_name, icon_label_spacing);
+
+  const int icon_size = GetLayoutConstant(LayoutConstant::kPageInfoIconSize);
+
+  if (permission_.is_one_time ||
+      permissions::PermissionUtil::DoesSupportTemporaryGrants(
+          permission_.type) ||
+      (permission_.type == ContentSettingsType::FILE_SYSTEM_WRITE_GUARD &&
+       base::FeatureList::IsEnabled(
+           features::kFileSystemAccessPersistentPermissions)) ||
+      (permission_.type == ContentSettingsType::AUTO_PICTURE_IN_PICTURE &&
+       base::FeatureList::IsEnabled(
+           media::kAutoPictureInPicturePageInfoDetails))) {
+    auto subpage_button = views::CreateVectorImageButtonWithNativeTheme(
+        base::BindRepeating(
+            [=](PermissionToggleRowView* row) {
+              row->navigation_handler_->OpenPermissionPage(
+                  row->permission_.type);
+            },
+            base::Unretained(this)),
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kKeyboardArrowRightFlippableIcon
+            : vector_icons::kSubmenuArrowChromeRefreshOldIcon,
+        icon_size);
+    subpage_button->SetProperty(views::kElementIdentifierKey,
+                                kSubpageButtonElementId);
+    subpage_button->SetTooltipText(
+        PageInfoUI::PermissionSubpageButtonTooltipString(permission_.type));
+    views::InstallCircleHighlightPathGenerator(subpage_button.get());
+    subpage_button->SetMinimumImageSize({icon_size, icon_size});
+    subpage_button->SetFlipCanvasOnPaintForRTLUI(false);
+    if (permission_blocked_on_system_level_) {
+      subpage_button->SetEnabled(false);
+    }
+    row_view_->AddControl(std::move(subpage_button));
+  } else {
+    // If there is a permission that supports one time grants, offset all other
+    // permissions to align toggles.
+    if (should_show_spacer_view) {
+      auto spacer_view = std::make_unique<views::View>();
+      spacer_view->SetPreferredSize(gfx::Size(icon_size, icon_size));
+      spacer_view_ = row_view_->AddControl(std::move(spacer_view));
+    } else if (toggle_button_) {
+      // toggle_button_ could be uninitialized if this row represents
+      // 'CAPTURED_SURFACE_CONTROL' permission type and that permission type
+      // is not found in `DoesSupportTemporaryGrants`.
+      toggle_button_->SetProperty(
+          views::kMarginsKey, gfx::Insets::TLBR(0, icon_label_spacing, 0, 0));
+    }
   }
-
-  row_view_->AddControl(std::move(subpage_button));
 }
 
 void PermissionToggleRowView::InitForManagedSource(
@@ -141,20 +276,78 @@ void PermissionToggleRowView::InitForManagedSource(
   const int icon_label_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_RELATED_LABEL_HORIZONTAL);
   auto state_label = std::make_unique<views::Label>(
-      PageInfoUI::PermissionActionToUIString(
-          delegate, permission_.type, permission_.setting,
-          permission_.default_setting, permission_.source,
-          permission_.is_one_time),
-      views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY);
+      PageInfoUI::PermissionStateToUIString(delegate, permission_),
+      views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4);
+  state_label->SetEnabledColor(kColorPageInfoSubtitleForeground);
   state_label->SetProperty(views::kMarginsKey,
-                           gfx::Insets(0, icon_label_spacing));
-  std::u16string reason =
-      PageInfoUI::PermissionDecisionReasonToUIString(delegate, permission_);
-  if (!reason.empty())
-    state_label->SetTooltipText(reason);
+                           gfx::Insets::VH(0, icon_label_spacing));
   row_view_->AddControl(std::move(state_label));
 
-  auto managed_icon = std::make_unique<NonAccessibleImageView>();
-  managed_icon->SetImage(PageInfoViewFactory::GetManagedIcon());
+  auto managed_icon = std::make_unique<views::ImageView>();
+  managed_icon->SetImage(GetManagedPermissionIcon(permission_));
+  std::u16string managed_tooltip =
+      PageInfoUI::PermissionManagedTooltipToUIString(delegate, permission_);
+  managed_icon->SetTooltipText(managed_tooltip);
   row_view_->AddControl(std::move(managed_icon));
 }
+
+void PermissionToggleRowView::UpdateUiOnPermissionChanged() {
+  if (blocked_on_system_level_label_) {
+    if (!permission_.setting) {
+      permission_blocked_on_system_level_ = false;
+      blocked_on_system_level_label_->SetVisible(false);
+    } else {
+      permission_blocked_on_system_level_ = true;
+      blocked_on_system_level_label_->SetVisible(true);
+    }
+  }
+
+  // Change the permission icon to reflect the selected setting.
+  row_view_->SetIcon(PageInfoViewFactory::GetPermissionIcon(
+      permission_, permission_blocked_on_system_level_));
+
+  // Update toggle state if it is used.
+  if (toggle_button_) {
+    toggle_button_->SetEnabled(!permission_blocked_on_system_level_);
+    toggle_button_->AnimateIsOn(PageInfoUI::IsToggleOn(permission_));
+  }
+
+  // Reset |state_label_|, readd it after if needed.
+  if (state_label_) {
+    delete std::exchange(state_label_, nullptr);
+  }
+
+  // Add explanation for the user-managed permission state if needed. This would
+  // be shown if permission is in allowed once or default states or if it is
+  // automatically blocked.
+  if (permission_.source == SettingSource::kUser &&
+      (delegate_->ShouldShowAllow(permission_.type) ||
+       delegate_->ShouldShowAsk(permission_.type))) {
+    std::u16string state_text =
+        PageInfoUI::PermissionMainPageStateToUIString(delegate_, permission_);
+    if (!state_text.empty()) {
+      state_label_ = row_view_->AddSecondaryLabel(state_text);
+      if (permission_.type == ContentSettingsType::MEDIASTREAM_CAMERA) {
+        state_label_->SetProperty(views::kElementIdentifierKey,
+                                  kRowSubTitleCameraElementId);
+      } else if (permission_.type == ContentSettingsType::MEDIASTREAM_MIC) {
+        state_label_->SetProperty(views::kElementIdentifierKey,
+                                  kRowSubTitleMicrophoneElementId);
+      }
+    }
+  }
+}
+
+void PermissionToggleRowView::ResetPermission() {
+  permission_.setting.reset();
+  permission_.is_one_time = false;
+  permission_.is_in_use = false;
+  PermissionChanged();
+}
+
+bool PermissionToggleRowView::GetToggleButtonStateForTesting() const {
+  return toggle_button_->GetIsOn();
+}
+
+BEGIN_METADATA(PermissionToggleRowView)
+END_METADATA

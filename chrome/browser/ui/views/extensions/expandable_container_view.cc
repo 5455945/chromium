@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,69 +7,86 @@
 #include <string>
 #include <utility>
 
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/layout/grid_layout.h"
+#include "ui/views/metadata/view_factory.h"
+#include "ui/views/property_effects.h"
 
 // ExpandableContainerView::DetailsView ----------------------------------------
 ExpandableContainerView::DetailsView::~DetailsView() = default;
 
 ExpandableContainerView::DetailsView::DetailsView(
-    const std::vector<std::u16string>& details) {
+    const std::u16string& visible_details,
+    const std::u16string& collapsed_details)
+    : visible_details_(visible_details),
+      all_details_(base::StrCat({visible_details, u"\n", collapsed_details})) {
+  CHECK(!visible_details.empty(), base::NotFatalUntil::M162);
+  CHECK(!collapsed_details.empty(), base::NotFatalUntil::M162);
+  auto* layout_provider = ChromeLayoutProvider::Get();
   // Spacing between this and the "Hide Details" link.
-  const int bottom_padding = ChromeLayoutProvider::Get()->GetDistanceMetric(
+  const int bottom_padding = layout_provider->GetDistanceMetric(
       views::DISTANCE_RELATED_CONTROL_VERTICAL);
-  SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical,
-      gfx::Insets(0, 0, bottom_padding, 0),
-      ChromeLayoutProvider::Get()->GetDistanceMetric(
-          DISTANCE_RELATED_CONTROL_VERTICAL_SMALL)));
+  const int child_spacing = layout_provider->GetDistanceMetric(
+      DISTANCE_RELATED_CONTROL_VERTICAL_SMALL);
 
-  for (const auto& detail : details) {
-    auto detail_label = std::make_unique<views::Label>(
-        detail, views::style::CONTEXT_DIALOG_BODY_TEXT,
-        views::style::STYLE_SECONDARY);
-    detail_label->SetMultiLine(true);
-    detail_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    AddChildView(std::move(detail_label));
-  }
+  SetOrientation(views::BoxLayout::Orientation::kVertical);
+  SetInsideBorderInsets(gfx::Insets::TLBR(0, 0, bottom_padding, 0));
+  SetBetweenChildSpacing(child_spacing);
+
+  label_ =
+      AddChildView(views::Builder<views::Label>()
+                       .SetText(visible_details_)
+                       .SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT)
+                       .SetTextStyle(views::style::STYLE_SECONDARY)
+                       .SetMultiLine(true)
+                       .SetHorizontalAlignment(gfx::ALIGN_LEFT)
+                       .Build());
 }
 
 void ExpandableContainerView::DetailsView::SetExpanded(bool expanded) {
-  if (expanded == expanded_)
+  if (expanded == expanded_) {
     return;
+  }
   expanded_ = expanded;
-  SetVisible(expanded_);
-  OnPropertyChanged(&expanded_, views::kPropertyEffectsPaint);
+  label_->SetText(expanded_ ? all_details_ : visible_details_);
+  PreferredSizeChanged();
+  OnPropertyChanged(&expanded_, views::PropertyEffects::kPaint);
 }
 
 bool ExpandableContainerView::DetailsView::GetExpanded() const {
   return expanded_;
 }
 
-BEGIN_METADATA(ExpandableContainerView, DetailsView, views::View)
+std::u16string_view ExpandableContainerView::DetailsView::GetText() const {
+  return label_->GetText();
+}
+
+BEGIN_METADATA(ExpandableContainerView, DetailsView)
 ADD_PROPERTY_METADATA(bool, Expanded)
 END_METADATA
 
 // ExpandableContainerView -----------------------------------------------------
 
 ExpandableContainerView::ExpandableContainerView(
-    const std::vector<std::u16string>& details,
-    int available_width) {
-  DCHECK(!details.empty());
+    const std::u16string& visible_details,
+    const std::u16string& collapsed_details) {
+  CHECK(!visible_details.empty(), base::NotFatalUntil::M162);
+  CHECK(!collapsed_details.empty(), base::NotFatalUntil::M162);
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
 
-  details_view_ = AddChildView(std::make_unique<DetailsView>(details));
-  details_view_->SetVisible(false);
+  details_view_ = AddChildView(
+      std::make_unique<DetailsView>(visible_details, collapsed_details));
   auto details_link = std::make_unique<views::Link>(
-      l10n_util::GetStringUTF16(IDS_EXTENSIONS_SHOW_DETAILS));
+      l10n_util::GetStringUTF16(IDS_EXTENSIONS_SHOW_ALL));
   details_link->SetCallback(base::BindRepeating(
       &ExpandableContainerView::ToggleDetailLevel, base::Unretained(this)));
   details_link->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -86,8 +103,12 @@ void ExpandableContainerView::ToggleDetailLevel() {
   const bool expanded = details_view_->GetExpanded();
   details_view_->SetExpanded(!expanded);
   details_link_->SetText(l10n_util::GetStringUTF16(
-      expanded ? IDS_EXTENSIONS_SHOW_DETAILS : IDS_EXTENSIONS_HIDE_DETAILS));
+      expanded ? IDS_EXTENSIONS_SHOW_ALL : IDS_EXTENSIONS_SHOW_LESS));
 }
 
-BEGIN_METADATA(ExpandableContainerView, views::View)
+std::u16string_view ExpandableContainerView::GetDetailsTextForTest() const {
+  return details_view_->GetText();
+}
+
+BEGIN_METADATA(ExpandableContainerView)
 END_METADATA

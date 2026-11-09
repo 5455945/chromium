@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright 2006-2008 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <set>
+#include <utility>
+#include <vector>
 
 #include "base/files/file_util.h"
 #include "base/strings/string_util.h"
@@ -19,7 +21,7 @@ namespace convert_dict {
 namespace {
 
 // Maps each unique word to the unique affix group IDs associated with it.
-typedef std::map<std::string, std::set<int> > WordSet;
+typedef std::map<std::string, std::set<int>> WordSet;
 
 void SplitDicLine(const std::string& line, std::vector<std::string>* output) {
   // We split the line on a slash not preceded by a backslash. A slash at the
@@ -38,7 +40,7 @@ void SplitDicLine(const std::string& line, std::vector<std::string>* output) {
   // convert all escaped slashes ("\/" sequences) to regular slashes.
   std::string word = line.substr(0, slash_index);
   base::ReplaceSubstringsAfterOffset(&word, 0, "\\/", "/");
-  output->push_back(word);
+  output->push_back(std::move(word));
 
   // Everything (if anything) after the slash is the second.
   if (slash_index < line.size() - 1)
@@ -53,8 +55,11 @@ void SplitDicLine(const std::string& line, std::vector<std::string>* output) {
 // parameter to tell this method whether the first non empty line in the file
 // contains the number of words or not. If it does, skip the first line. If it
 // does not, then the first line contains a word.
-bool PopulateWordSet(WordSet* word_set, FILE* file, AffReader* aff_reader,
-                     const char* file_type, const char* encoding,
+bool PopulateWordSet(WordSet* word_set,
+                     FILE* file,
+                     AffReader* aff_reader,
+                     const std::string& file_type,
+                     const std::string& encoding,
                      bool file_has_word_count_in_the_first_line) {
   int line_number = 0;
   while (!feof(file)) {
@@ -75,19 +80,18 @@ bool PopulateWordSet(WordSet* word_set, FILE* file, AffReader* aff_reader,
     SplitDicLine(line, &split);
     if (split.empty() || split.size() > 2) {
       printf("Line %d has extra slashes in the %s file\n", line_number,
-             file_type);
+             file_type.c_str());
       return false;
     }
 
     // The first part is the word, the second (optional) part is the affix. We
     // always use UTF-8 as the encoding to simplify life.
     std::string utf8word;
-    std::string encoding_string(encoding);
-    if (encoding_string == "UTF-8") {
+    if (encoding == "UTF-8") {
       utf8word = split[0];
     } else if (!aff_reader->EncodingToUTF8(split[0], &utf8word)) {
       printf("Unable to convert line %d from %s to UTF-8 in the %s file\n",
-             line_number, encoding, file_type);
+             line_number, encoding.c_str(), file_type.c_str());
       return false;
     }
 
@@ -100,7 +104,7 @@ bool PopulateWordSet(WordSet* word_set, FILE* file, AffReader* aff_reader,
       // generate a nice dump), so we remove it.
       size_t split1_tab_offset = split[1].find('\t');
       if (split1_tab_offset != std::string::npos)
-        split[1] = split[1].substr(0, split1_tab_offset);
+        split[1].erase(split1_tab_offset);
 
       if (aff_reader->has_indexed_affixes())
         affix_index = atoi(split[1].c_str());
@@ -113,14 +117,14 @@ bool PopulateWordSet(WordSet* word_set, FILE* file, AffReader* aff_reader,
     // rules.)
     size_t word_tab_offset = utf8word.find('\t');
     if (word_tab_offset != std::string::npos)
-      utf8word = utf8word.substr(0, word_tab_offset);
+      utf8word.erase(word_tab_offset);
 
     auto found = word_set->find(utf8word);
     std::set<int> affix_vector;
     affix_vector.insert(affix_index);
 
     if (found == word_set->end())
-      word_set->insert(std::make_pair(utf8word, affix_vector));
+      word_set->emplace(std::move(utf8word), std::move(affix_vector));
     else
       found->second.insert(affix_index);
   }
@@ -177,9 +181,8 @@ bool DicReader::Read(AffReader* aff_reader) {
 
     // Double check that the affixes are sorted. This isn't strictly necessary
     // but it's nice for the file to have a fixed layout.
-    std::sort(affixes.begin(), affixes.end());
-    std::reverse(affixes.begin(), affixes.end());
-    words_.push_back(std::make_pair(word->first, affixes));
+    std::ranges::sort(affixes, std::ranges::greater());
+    words_.emplace_back(word->first, std::move(affixes));
   }
 
   // Double-check that the words are sorted.

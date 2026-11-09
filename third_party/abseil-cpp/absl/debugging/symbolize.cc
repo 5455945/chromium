@@ -14,13 +14,21 @@
 
 #include "absl/debugging/symbolize.h"
 
+#include "absl/base/config.h"
+#include "absl/base/internal/low_level_alloc.h"
+#include "absl/debugging/internal/symbolize.h"
+
 #ifdef _WIN32
 #include <winapifamily.h>
-#if !(WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_APP)) || \
-    WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
+#if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
 // UWP doesn't have access to win32 APIs.
 #define ABSL_INTERNAL_HAVE_SYMBOLIZE_WIN32
 #endif
+#endif
+
+// Emscripten symbolization relies on JS. Do not use them in standalone mode.
+#if defined(__EMSCRIPTEN__) && !defined(STANDALONE_WASM)
+#define ABSL_INTERNAL_HAVE_SYMBOLIZE_WASM
 #endif
 
 #if defined(ABSL_INTERNAL_HAVE_ELF_SYMBOLIZE)
@@ -31,6 +39,24 @@
 #include "absl/debugging/symbolize_win32.inc"
 #elif defined(__APPLE__)
 #include "absl/debugging/symbolize_darwin.inc"
+#elif defined(ABSL_INTERNAL_HAVE_SYMBOLIZE_WASM)
+#include "absl/debugging/symbolize_emscripten.inc"
 #else
 #include "absl/debugging/symbolize_unimplemented.inc"
 #endif
+
+
+namespace absl {
+ABSL_NAMESPACE_BEGIN
+
+namespace debugging_internal {
+
+void SymbolDecoratorDeleter::operator()(SymbolDecorator* ptr) {
+  ptr->~SymbolDecorator();
+  base_internal::LowLevelAlloc::Free(ptr);
+}
+
+}  // namespace debugging_internal
+
+ABSL_NAMESPACE_END
+}  // namespace absl

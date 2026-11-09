@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,10 @@ import org.chromium.components.minidump_uploader.util.CrashReportingPermissionMa
 
 import java.io.File;
 
-/**
- * Test-implementation of MinidumpUploaderDelegate.
- */
+/** Test-implementation of MinidumpUploaderDelegate. */
 class TestMinidumpUploaderDelegate implements MinidumpUploaderDelegate {
-    private CrashReportingPermissionManager mPermissionManager;
-    private File mCacheDir;
+    private final CrashReportingPermissionManager mPermissionManager;
+    private final File mCacheDir;
 
     public TestMinidumpUploaderDelegate(
             File cacheDir, CrashReportingPermissionManager permissionManager) {

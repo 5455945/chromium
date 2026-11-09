@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/ref_counted.h"
 #include "content/browser/android/java/java_method.h"
+#include "content/public/browser/global_routing_id.h"
 
 namespace content {
 
@@ -30,23 +31,29 @@ class GinJavaBoundObject
   static GinJavaBoundObject* CreateTransient(
       const JavaObjectWeakGlobalRef& ref,
       const base::android::JavaRef<jclass>& safe_annotation_clazz,
-      int32_t holder);
+      const GlobalRenderFrameHostId& holder);
 
   // The following methods can be called on any thread.
   JavaObjectWeakGlobalRef& GetWeakRef() { return ref_; }
-  base::android::ScopedJavaLocalRef<jobject> GetLocalRef(JNIEnv* env) {
+  base::android::ScopedJavaLocalRef<jobject> GetLocalRef(JNIEnv* env) const {
     return ref_.get(env);
   }
 
-  bool IsNamed() { return names_count_ > 0; }
+  // The following methods access reference-count state shared between the UI
+  // thread and the background thread, and must only be called while holding
+  // GinJavaBridgeDispatcherHost::objects_lock_.
+  bool IsNamed() const { return names_count_ > 0; }
   void AddName() { ++names_count_; }
   void RemoveName() { --names_count_; }
+  bool HasHolders() const { return !holders_.empty(); }
+  void AddHolder(const GlobalRenderFrameHostId& holder) {
+    holders_.insert(holder);
+  }
+  void RemoveHolder(const GlobalRenderFrameHostId& holder) {
+    holders_.erase(holder);
+  }
 
   // The following methods are called on the background thread.
-  bool HasHolders() { return !holders_.empty(); }
-  void AddHolder(int32_t holder) { holders_.insert(holder); }
-  void RemoveHolder(int32_t holder) { holders_.erase(holder); }
-
   std::set<std::string> GetMethodNames();
   bool HasMethod(const std::string& method_name);
   const JavaMethod* FindMethod(const std::string& method_name,
@@ -64,7 +71,7 @@ class GinJavaBoundObject
   GinJavaBoundObject(
       const JavaObjectWeakGlobalRef& ref,
       const base::android::JavaRef<jclass>& safe_annotation_clazz,
-      const std::set<int32_t>& holders);
+      const std::set<GlobalRenderFrameHostId>& holders);
   ~GinJavaBoundObject();
 
   // The following methods are called on the background thread.
@@ -75,7 +82,7 @@ class GinJavaBoundObject
   // An object must be kept in retained_object_set_ either if it has
   // names or if it has a non-empty holders set.
   int names_count_;
-  std::set<int32_t> holders_;
+  std::set<GlobalRenderFrameHostId> holders_;
 
   // The following fields are accessed on the background thread.
   using JavaMethodMap = std::multimap<std::string, std::unique_ptr<JavaMethod>>;

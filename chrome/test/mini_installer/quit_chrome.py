@@ -1,4 +1,5 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Quits Chrome.
@@ -48,7 +49,7 @@ def CloseWindows(process_path):
 
 
 def KillNamedProcess(process_path):
-    """ Kills all running exes with the same name as the exe at |process_path|.
+    """Kills all running exes with the same name as the exe at |process_path|.
 
     Args:
         process_path: The path to an executable.
@@ -56,12 +57,11 @@ def KillNamedProcess(process_path):
     Returns:
         True if running executables were successfully killed. False otherwise.
     """
-    return os.system('taskkill /f /im %s' %
-                     os.path.basename(process_path)) == 0
+    return os.system('taskkill /f /im %s' % os.path.basename(process_path)) == 0
 
 
 def QuitChrome(chrome_path):
-    """ Tries to quit chrome in a safe way. If there is still an open instance
+    """Tries to quit chrome in a safe way. If there is still an open instance
         after a timeout delay, the process is killed the hard way.
 
     Args:
@@ -70,9 +70,10 @@ def QuitChrome(chrome_path):
     if not CloseWindows(chrome_path):
         # TODO(robertshield): Investigate why Chrome occasionally doesn't shut
         # down.
-        sys.stderr.write('Warning: Chrome not responding to window closure. '
-                         'Killing all processes belonging to %s\n' %
-                         chrome_path)
+        sys.stderr.write(
+            'Warning: Chrome not responding to window closure. '
+            'Killing all processes belonging to %s\n' % chrome_path
+        )
         KillNamedProcess(chrome_path)
 
 

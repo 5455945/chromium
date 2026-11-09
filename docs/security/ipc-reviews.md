@@ -2,6 +2,19 @@
 
 [TOC]
 
+## tl;dr
+
+📎 It looks like you’re making a possibly security-sensitive change! 📎
+
+IPC security review isn’t a rubberstamp, so your friendly security reviewer
+will need a fair amount of context to review your CL effectively. Please review
+your CL description and code comments to make sure they provide context for
+someone unfamiliar with your project/area. Pay special attention to where data
+comes from and which processes it flows between (and their privilege levels).
+Feel free to point your security reviewer at design docs, bugs, or other links
+if you can’t reasonably make a self-contained CL description. (Also see
+https://cbea.ms/git-commit/).
+
 ## What is IPC review and why is it needed?
 
 A critical part of Chrome’s security is built on process isolation.
@@ -82,8 +95,16 @@ readers of the code understand the system more easily.
 
 ## Guidelines and Best Practices for IPC
 
-Please see the security team’s [Mojo guide][mojo-best-practices] for specific
-guidelines and recommendations on how to structure IPC.
+IPC reviewers will primarily evaluate a CL using the [IPC Review
+Reference][ipc-review-reference], which contains guidelines and recommendations
+for how to structure Mojo IPC definitions as well as the corresponding C++/JS code.
+
+Additional non-canonical references that may be interesting reading:
+
+- The previous [Mojo best practices guide][mojo-best-practices]: this is
+  somewhat out-of-date and may occasionally conflict with the aforementioned
+  reference. The reference should take priority.
+- [Security Tips for Legacy IPC][legacy-ipc-security]
 
 ## When should IPC review happen?
 
@@ -100,12 +121,6 @@ an IPC reviewer only after receiving all other LGTMs can sometimes be
 frustrating for everyone involved, especially if significant revisions are
 requested.
 
-## Is it OK to TBR a simple change in IPC?
-
-Avoid TBRing CLs with IPC changes. If the change is simple, ping an IPC reviewer
-directly and ask them for a quick LGTM. Erring on the side of safety is
-preferred for security-critical changes.
-
 ## IPC review is slow!
 
 Please reach out to <ipc-security-reviewers@chromium.org> (for public issues)
@@ -115,4 +130,6 @@ can help provide IPC reviewers with better context on the security properties
 of the overall system, making it much easier to evaluate individual changes.
 
 [chrome-security-review]: https://www.chromium.org/Home/chromium-security/security-reviews
+[ipc-review-reference]: https://docs.google.com/document/d/1Kw4aTuISF7csHnjOpDJGc7JYIjlvOAKRprCTBVWw_E4/edit#
 [mojo-best-practices]: https://chromium.googlesource.com/chromium/src/+/main/docs/security/mojo.md
+[legacy-ipc-security]: https://www.chromium.org/Home/chromium-security/education/security-tips-for-ipc/

@@ -30,10 +30,10 @@
 
 #include "third_party/blink/renderer/platform/blob/blob_url.h"
 
+#include "third_party/blink/public/common/blob/blob_url.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/uuid.h"
 
 namespace blink {
 
@@ -41,7 +41,8 @@ const char BlobURL::kBlobProtocol[] = "blob";
 
 KURL BlobURL::CreatePublicURL(const SecurityOrigin* security_origin) {
   DCHECK(security_origin);
-  return CreateBlobURL(security_origin->ToString());
+  return KURL(CreateBlobUrl(security_origin->ToUrlOrigin(),
+                            security_origin->SerializesAsNull()));
 }
 
 String BlobURL::GetOrigin(const KURL& url) {
@@ -49,14 +50,8 @@ String BlobURL::GetOrigin(const KURL& url) {
 
   unsigned start_index = url.PathStart();
   unsigned end_index = url.PathAfterLastSlash();
-  return url.GetString().Substring(start_index, end_index - start_index - 1);
-}
-
-KURL BlobURL::CreateBlobURL(const String& origin_string) {
-  DCHECK(!origin_string.IsEmpty());
-  String url_string =
-      "blob:" + origin_string + '/' + WTF::CreateCanonicalUUIDString();
-  return KURL::CreateIsolated(url_string);
+  return url.GetString().GetString().substr(start_index,
+                                            end_index - start_index - 1);
 }
 
 }  // namespace blink

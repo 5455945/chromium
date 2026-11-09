@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,15 @@
 
 #include <map>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "content/common/gin_java_bridge.mojom.h"
 #include "content/renderer/java/gin_java_bridge_dispatcher.h"
 #include "gin/handle.h"
 #include "gin/interceptor.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "v8/include/cppgc/prefinalizer.h"
 #include "v8/include/v8-util.h"
 
 namespace blink {
@@ -22,14 +24,22 @@ class WebLocalFrame;
 
 namespace content {
 
-class GinJavaBridgeObject : public gin::Wrappable<GinJavaBridgeObject>,
-                            public gin::NamedPropertyInterceptor {
+class GinJavaBridgeObject
+    : public gin::WrappableWithNamedPropertyInterceptor<GinJavaBridgeObject> {
+  CPPGC_USING_PRE_FINALIZER(GinJavaBridgeObject, Dispose);
+
  public:
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {{gin::kEmbedderNativeGin},
+                                                    gin::kGinJavaBridgeObject};
+
+  GinJavaBridgeObject(const GinJavaBridgeObject&) = delete;
+  GinJavaBridgeObject& operator=(const GinJavaBridgeObject&) = delete;
 
   GinJavaBridgeDispatcher::ObjectID object_id() const { return object_id_; }
 
   // gin::Wrappable.
+  const gin::WrapperInfo* wrapper_info() const override;
+
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
 
@@ -45,25 +55,38 @@ class GinJavaBridgeObject : public gin::Wrappable<GinJavaBridgeObject>,
       const std::string& object_name,
       GinJavaBridgeDispatcher::ObjectID object_id);
   static GinJavaBridgeObject* InjectAnonymous(
+      blink::WebLocalFrame* frame,
       const base::WeakPtr<GinJavaBridgeDispatcher>& dispatcher,
       GinJavaBridgeDispatcher::ObjectID object_id);
 
- private:
+  // Returns the bound remote object, nullptr if mojo is disabled.
+  mojom::GinJavaBridgeRemoteObject* GetRemote();
+
+  // Clears cached FunctionTemplates. FunctionTemplates created via gin
+  // embed a wrapper for gin::CallbackHolderBase that references the creation
+  // v8::Context. Because `template_cache_` holds strong v8::Global handles,
+  // this creates an uncollectable reference cycle:
+  //   v8::Global -> FunctionTemplate -> CallbackHolderBase -> Context ->
+  //   Window -> GinJavaBridgeObject wrapper -> GinJavaBridgeObject -> cache.
+  // Clearing this cache severs the roots to allow the context to be GC'ed.
+  void ClearTemplateCache();
+
   GinJavaBridgeObject(v8::Isolate* isolate,
                       const base::WeakPtr<GinJavaBridgeDispatcher>& dispatcher,
                       GinJavaBridgeDispatcher::ObjectID object_id);
   ~GinJavaBridgeObject() override;
+
+ private:
+  void Dispose();
 
   v8::Local<v8::FunctionTemplate> GetFunctionTemplate(v8::Isolate* isolate,
                                                       const std::string& name);
 
   base::WeakPtr<GinJavaBridgeDispatcher> dispatcher_;
   GinJavaBridgeDispatcher::ObjectID object_id_;
-  int frame_routing_id_;
   std::map<std::string, bool> known_methods_;
   v8::StdGlobalValueMap<std::string, v8::FunctionTemplate> template_cache_;
-
-  DISALLOW_COPY_AND_ASSIGN(GinJavaBridgeObject);
+  mojo::Remote<mojom::GinJavaBridgeRemoteObject> remote_;
 };
 
 }  // namespace content

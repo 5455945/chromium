@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,27 @@
 #include <string>
 
 #include "build/build_config.h"
-#include "content/common/content_export.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
+
+class BackForwardTransitionAnimationManager;
 class RenderViewHost;
+class RenderViewHostDelegateView;
 class RenderWidgetHost;
 class RenderWidgetHostViewBase;
+class WebContentsImpl;
+class WebContentsViewDelegate;
 struct DropData;
 
-// The WebContentsView is an interface that is implemented by the platform-
-// dependent web contents views. The WebContents uses this interface to talk to
-// them.
+// The `WebContentsView` is an interface that is implemented by the platform-
+// dependent web contents views. The `WebContents` uses this interface to talk
+// to them.
 class WebContentsView {
  public:
-  virtual ~WebContentsView() {}
+  virtual ~WebContentsView() = default;
 
   // Returns the native widget that contains the contents of the tab.
   virtual gfx::NativeView GetNativeView() const = 0;
@@ -64,14 +68,22 @@ class WebContentsView {
   // Returns the current drop data, if any.
   virtual DropData* GetDropData() const = 0;
 
-  // Get the bounds of the View, relative to the parent.
+  // Get the bounds of the View in the global screen position.
   virtual gfx::Rect GetViewBounds() const = 0;
+
+  // Resizes the view to the new bounds.
+  virtual void Resize(const gfx::Rect& new_bounds) = 0;
+
+  // Returns the size of the view.
+  virtual gfx::Size GetSize() const = 0;
 
   virtual void CreateView(gfx::NativeView context) = 0;
 
   // Sets up the View that holds the rendered web page, receives messages for
   // it and contains page plugins. The host view should be sized to the current
   // size of the WebContents.
+  // Returns null if the view is destroyed while it is being created, e.g. if
+  // the renderer goes away in a nested message loop.
   virtual RenderWidgetHostViewBase* CreateViewForWidget(
       RenderWidgetHost* render_widget_host) = 0;
 
@@ -86,7 +98,8 @@ class WebContentsView {
   // trying to find a specific window.
   virtual void SetPageTitle(const std::u16string& title) = 0;
 
-  // Invoked when the WebContents is notified that the RenderView is ready.
+  // Invoked when the WebContents is notified that the `blink::WebView` is
+  // ready.
   virtual void RenderViewReady() = 0;
 
   // Invoked when the WebContents is notified that the RenderViewHost has been
@@ -97,7 +110,10 @@ class WebContentsView {
   // Invoked to enable/disable overscroll gesture navigation.
   virtual void SetOverscrollControllerEnabled(bool enabled) = 0;
 
-#if defined(OS_MAC)
+  // Called when the capturer-count of the WebContents changes.
+  virtual void OnCapturerCountChanged() = 0;
+
+#if BUILDFLAG(IS_MAC)
   // If we close the tab while a UI control is in an event-tracking loop, the
   // the control may message freed objects and crash. WebContents::Close will
   // call this. If it returns true, then WebContents::Close will early-out, and
@@ -105,7 +121,25 @@ class WebContentsView {
   // loop has ended.
   virtual bool CloseTabAfterEventTrackingIfNeeded() = 0;
 #endif
+
+  virtual void FullscreenStateChanged(bool is_fullscreen) = 0;
+
+  // Returns an animation manager that displays a preview of the history page
+  // during a session history navigation gesture. Only non-null if supported for
+  // the platform.
+  virtual BackForwardTransitionAnimationManager*
+  GetBackForwardTransitionAnimationManager() = 0;
+
+  // Reset the above animation manager.
+  virtual void DestroyBackForwardTransitionAnimationManager() = 0;
 };
+
+// Factory function to create `WebContentsView`s. Implemented in the platform
+// files.
+std::unique_ptr<WebContentsView> CreateWebContentsView(
+    WebContentsImpl* web_contents,
+    std::unique_ptr<WebContentsViewDelegate> delegate,
+    raw_ptr<RenderViewHostDelegateView>* render_view_host_delegate_view);
 
 }  // namespace content
 

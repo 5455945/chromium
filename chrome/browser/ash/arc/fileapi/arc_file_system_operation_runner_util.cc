@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "components/arc/arc_service_manager.h"
+#include "base/functional/bind.h"
+#include "base/task/bind_post_task.h"
+#include "chromeos/ash/experiences/arc/mojom/file_system.mojom-forward.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "url/gurl.h"
@@ -21,22 +23,22 @@ namespace file_system_operation_runner_util {
 
 namespace {
 
-// TODO(crbug.com/745648): Use correct BrowserContext.
+// TODO(crbug.com/206352868): Use correct BrowserContext.
 ArcFileSystemOperationRunner* GetArcFileSystemOperationRunner() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   return ArcFileSystemOperationRunner::GetForBrowserContext(
       ArcServiceManager::Get()->browser_context());
 }
 
 template <typename T>
 void PostToIOThread(base::OnceCallback<void(T)> callback, T result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
 }
 
 void GetFileSizeOnUIThread(const GURL& url, GetFileSizeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   auto* runner = GetArcFileSystemOperationRunner();
   if (!runner) {
     DLOG(ERROR) << "ArcFileSystemOperationRunner unavailable. "
@@ -47,60 +49,83 @@ void GetFileSizeOnUIThread(const GURL& url, GetFileSizeCallback callback) {
   runner->GetFileSize(url, std::move(callback));
 }
 
-void OpenFileToReadOnUIThread(const GURL& url,
-                              OpenFileToReadCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void OpenFileSessionToWriteOnUIThread(const GURL& url,
+                                      OpenFileSessionToWriteCallback callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   auto* runner = GetArcFileSystemOperationRunner();
   if (!runner) {
     DLOG(ERROR) << "ArcFileSystemOperationRunner unavailable. "
                 << "File system operations are dropped.";
-    std::move(callback).Run(mojo::ScopedHandle());
+    std::move(callback).Run(mojom::FileSessionPtr());
     return;
   }
-  runner->OpenFileToRead(url, std::move(callback));
+  runner->OpenFileSessionToWrite(url, std::move(callback));
 }
 
-void OpenFileToWriteOnUIThread(const GURL& url,
-                               OpenFileToWriteCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void OpenFileSessionToReadOnUIThread(const GURL& url,
+                                     OpenFileSessionToReadCallback callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   auto* runner = GetArcFileSystemOperationRunner();
   if (!runner) {
     DLOG(ERROR) << "ArcFileSystemOperationRunner unavailable. "
                 << "File system operations are dropped.";
-    std::move(callback).Run(mojo::ScopedHandle());
+    std::move(callback).Run(mojom::FileSessionPtr());
     return;
   }
-  runner->OpenFileToWrite(url, std::move(callback));
+  runner->OpenFileSessionToRead(url, std::move(callback));
+}
+
+void CloseFileSessionOnUIThread(const std::string& url_id,
+                                const CloseStatus status) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  auto* runner = GetArcFileSystemOperationRunner();
+  if (!runner) {
+    DLOG(ERROR) << "ArcFileSystemOperationRunner unavailable. "
+                << "File system operations are dropped.";
+    return;
+  }
+  std::string message;
+  if (status == CloseStatus::kStatusError) {
+    message = "file operation exited with error";
+  } else if (status == CloseStatus::kStatusCancel) {
+    message = "file operation was cancelled";
+  }
+  runner->CloseFileSession(url_id, message);
 }
 
 }  // namespace
 
 void GetFileSizeOnIOThread(const GURL& url, GetFileSizeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&GetFileSizeOnUIThread, url,
                                 base::BindOnce(&PostToIOThread<int64_t>,
                                                std::move(callback))));
 }
 
-void OpenFileToReadOnIOThread(const GURL& url,
-                              OpenFileToReadCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+void OpenFileSessionToWriteOnIOThread(const GURL& url,
+                                      OpenFileSessionToWriteCallback callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
-      base::BindOnce(&OpenFileToReadOnUIThread, url,
-                     base::BindOnce(&PostToIOThread<mojo::ScopedHandle>,
+      base::BindOnce(&OpenFileSessionToWriteOnUIThread, url,
+                     base::BindPostTask(content::GetIOThreadTaskRunner({}),
+                                        std::move(callback))));
+}
+
+void OpenFileSessionToReadOnIOThread(const GURL& url,
+                                     OpenFileSessionToReadCallback callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&OpenFileSessionToReadOnUIThread, url,
+                     base::BindOnce(&PostToIOThread<mojom::FileSessionPtr>,
                                     std::move(callback))));
 }
 
-void OpenFileToWriteOnIOThread(const GURL& url,
-                               OpenFileToReadCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+void CloseFileSession(const std::string& url_id, const CloseStatus status) {
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&OpenFileToWriteOnUIThread, url,
-                     base::BindOnce(&PostToIOThread<mojo::ScopedHandle>,
-                                    std::move(callback))));
+      FROM_HERE, base::BindOnce(&CloseFileSessionOnUIThread, url_id, status));
 }
 
 }  // namespace file_system_operation_runner_util

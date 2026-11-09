@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <stdlib.h>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/rand_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/gtest_util.h"
@@ -15,8 +15,7 @@
 #include "base/threading/simple_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 namespace {
 
 // Adapted from base::Lock's BasicLockTestThread to make sure
@@ -24,7 +23,10 @@ namespace {
 class BasicLockTestThread : public SimpleThread {
  public:
   explicit BasicLockTestThread(CheckedLock* lock)
-      : SimpleThread("BasicLockTestThread"), lock_(lock), acquired_(0) {}
+      : SimpleThread("BasicLockTestThread"), lock_(lock) {}
+
+  BasicLockTestThread(const BasicLockTestThread&) = delete;
+  BasicLockTestThread& operator=(const BasicLockTestThread&) = delete;
 
   int acquired() const { return acquired_; }
 
@@ -38,15 +40,13 @@ class BasicLockTestThread : public SimpleThread {
     for (int i = 0; i < 10; i++) {
       lock_->Acquire();
       acquired_++;
-      PlatformThread::Sleep(TimeDelta::FromMilliseconds(base::RandInt(0, 19)));
+      PlatformThread::Sleep(Milliseconds(base::RandIntInclusive(0, 19)));
       lock_->Release();
     }
   }
 
-  CheckedLock* const lock_;
-  int acquired_;
-
-  DISALLOW_COPY_AND_ASSIGN(BasicLockTestThread);
+  const raw_ptr<CheckedLock> lock_;
+  int acquired_ = 0;
 };
 
 class BasicLockAcquireAndWaitThread : public SimpleThread {
@@ -60,6 +60,10 @@ class BasicLockAcquireAndWaitThread : public SimpleThread {
                                     WaitableEvent::InitialState::NOT_SIGNALED) {
   }
 
+  BasicLockAcquireAndWaitThread(const BasicLockAcquireAndWaitThread&) = delete;
+  BasicLockAcquireAndWaitThread& operator=(
+      const BasicLockAcquireAndWaitThread&) = delete;
+
   void WaitForLockAcquisition() { lock_acquire_event_.Wait(); }
 
   void ContinueMain() { main_thread_continue_event_.Signal(); }
@@ -72,11 +76,9 @@ class BasicLockAcquireAndWaitThread : public SimpleThread {
     lock_->Release();
   }
 
-  CheckedLock* const lock_;
+  const raw_ptr<CheckedLock> lock_;
   WaitableEvent lock_acquire_event_;
   WaitableEvent main_thread_continue_event_;
-
-  DISALLOW_COPY_AND_ASSIGN(BasicLockAcquireAndWaitThread);
 };
 
 }  // namespace
@@ -96,13 +98,13 @@ TEST(CheckedLockTest, Basic) {
   for (int i = 0; i < 10; i++) {
     lock.Acquire();
     acquired++;
-    PlatformThread::Sleep(TimeDelta::FromMilliseconds(base::RandInt(0, 19)));
+    PlatformThread::Sleep(Milliseconds(base::RandIntInclusive(0, 19)));
     lock.Release();
   }
   for (int i = 0; i < 5; i++) {
     lock.Acquire();
     acquired++;
-    PlatformThread::Sleep(TimeDelta::FromMilliseconds(base::RandInt(0, 19)));
+    PlatformThread::Sleep(Milliseconds(base::RandIntInclusive(0, 19)));
     lock.Release();
   }
 
@@ -445,5 +447,4 @@ TEST(CheckedLockTest, AnnotateAcquiredLockAlias) {
   member_guarded_by_lock.value = 42;  // Doesn't compile without |annotate|.
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

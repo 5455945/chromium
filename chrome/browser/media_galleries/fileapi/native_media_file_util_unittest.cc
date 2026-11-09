@@ -1,34 +1,39 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media_galleries/fileapi/native_media_file_util.h"
 
 #include <stddef.h>
+
+#include <array>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
-#include "storage/browser/blob/shareable_file_reference.h"
+#include "storage/browser/blob/scoped_file.h"
+#include "storage/browser/file_system/copy_or_move_hook_delegate.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "storage/browser/file_system/file_system_backend.h"
 #include "storage/browser/file_system/file_system_context.h"
+#include "storage/browser/file_system/file_system_operation.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/file_system/isolated_context.h"
@@ -37,6 +42,8 @@
 #include "storage/browser/test/mock_special_storage_policy.h"
 #include "storage/browser/test/test_file_system_options.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "url/gurl.h"
 #include "url/origin.h"
 
 #define FPL(x) FILE_PATH_LITERAL(x)
@@ -56,7 +63,7 @@ struct FilteringTestCase {
   const char* content;
 };
 
-const FilteringTestCase kFilteringTestCases[] = {
+const auto kFilteringTestCases = std::to_array<FilteringTestCase>({
     // Directory should always be visible.
     {FPL("hoge"), true, true, false, nullptr},
     {FPL("fuga.jpg"), true, true, false, nullptr},
@@ -74,7 +81,7 @@ const FilteringTestCase kFilteringTestCases[] = {
     {FPL("baz.txt"), false, false, false, "abc"},
     // Unsupported media file.
     {FPL("foobar.cod"), false, false, false, "abc"},
-};
+});
 
 void ExpectEqHelper(const std::string& test_name,
                     base::File::Error expected,
@@ -103,9 +110,10 @@ void DidReadDirectory(std::set<base::FilePath::StringType>* content,
     EXPECT_TRUE(content->insert(entry.name.value()).second);
 }
 
-void PopulateDirectoryWithTestCases(const base::FilePath& dir,
-                                    const FilteringTestCase* test_cases,
-                                    size_t n) {
+void PopulateDirectoryWithTestCases(
+    const base::FilePath& dir,
+    base::span<const FilteringTestCase> test_cases,
+    size_t n) {
   for (size_t i = 0; i < n; ++i) {
     base::FilePath path = dir.Append(test_cases[i].path);
     if (test_cases[i].is_directory) {
@@ -123,6 +131,9 @@ class NativeMediaFileUtilTest : public testing::Test {
  public:
   NativeMediaFileUtilTest() = default;
 
+  NativeMediaFileUtilTest(const NativeMediaFileUtilTest&) = delete;
+  NativeMediaFileUtilTest& operator=(const NativeMediaFileUtilTest&) = delete;
+
   void SetUp() override {
     ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(base::CreateDirectory(root_path()));
@@ -132,12 +143,12 @@ class NativeMediaFileUtilTest : public testing::Test {
 
     std::vector<std::unique_ptr<storage::FileSystemBackend>>
         additional_providers;
-    additional_providers.push_back(std::make_unique<MediaFileSystemBackend>(
-        data_dir_.GetPath(), base::NullCallback()));
+    additional_providers.push_back(
+        std::make_unique<MediaFileSystemBackend>(data_dir_.GetPath()));
 
     file_system_context_ = storage::FileSystemContext::Create(
         content::GetIOThreadTaskRunner({}),
-        base::SequencedTaskRunnerHandle::Get(),
+        base::SequencedTaskRunner::GetCurrentDefault(),
         storage::ExternalMountPoints::CreateRefCounted(),
         std::move(storage_policy),
         /* quota_manager_proxy=*/nullptr, std::move(additional_providers),
@@ -159,8 +170,8 @@ class NativeMediaFileUtilTest : public testing::Test {
 
   FileSystemURL CreateURL(const base::FilePath::CharType* test_case_path) {
     return file_system_context_->CreateCrackedFileSystemURL(
-        url::Origin::Create(origin()), storage::kFileSystemTypeIsolated,
-        GetVirtualPath(test_case_path));
+        blink::StorageKey::CreateFirstParty(url::Origin::Create(origin())),
+        storage::kFileSystemTypeIsolated, GetVirtualPath(test_case_path));
   }
 
   storage::IsolatedContext* isolated_context() {
@@ -194,15 +205,13 @@ class NativeMediaFileUtilTest : public testing::Test {
 
   std::string filesystem_id_;
   storage::IsolatedContext::ScopedFSHandle filesystem_;
-
-  DISALLOW_COPY_AND_ASSIGN(NativeMediaFileUtilTest);
 };
 
 TEST_F(NativeMediaFileUtilTest, DirectoryExistsAndFileExistsFiltering) {
   PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                 base::size(kFilteringTestCases));
+                                 std::size(kFilteringTestCases));
 
-  for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+  for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
     FileSystemURL url = CreateURL(kFilteringTestCases[i].path);
 
     base::File::Error expectation = kFilteringTestCases[i].visible
@@ -224,7 +233,7 @@ TEST_F(NativeMediaFileUtilTest, DirectoryExistsAndFileExistsFiltering) {
 
 TEST_F(NativeMediaFileUtilTest, ReadDirectoryFiltering) {
   PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                 base::size(kFilteringTestCases));
+                                 std::size(kFilteringTestCases));
 
   std::set<base::FilePath::StringType> content;
   FileSystemURL url = CreateURL(FPL(""));
@@ -235,7 +244,7 @@ TEST_F(NativeMediaFileUtilTest, ReadDirectoryFiltering) {
   EXPECT_TRUE(completed);
   EXPECT_EQ(6u, content.size());
 
-  for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+  for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
     base::FilePath::StringType name =
         base::FilePath(kFilteringTestCases[i].path).BaseName().value();
     auto found = content.find(name);
@@ -247,7 +256,7 @@ TEST_F(NativeMediaFileUtilTest, CreateDirectoryFiltering) {
   // Run the loop twice. The second loop attempts to create directories that are
   // pre-existing. Though the result should be the same.
   for (int loop_count = 0; loop_count < 2; ++loop_count) {
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       if (kFilteringTestCases[i].is_directory) {
         FileSystemURL root_url = CreateURL(FPL(""));
         FileSystemURL url = CreateURL(kFilteringTestCases[i].path);
@@ -275,9 +284,9 @@ TEST_F(NativeMediaFileUtilTest, CopySourceFiltering) {
   for (int loop_count = 0; loop_count < 2; ++loop_count) {
     if (loop_count == 1) {
       PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                     base::size(kFilteringTestCases));
+                                     std::size(kFilteringTestCases));
     }
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       // Always start with an empty destination directory.
       // Copying to a non-empty destination directory is an invalid operation.
       ASSERT_TRUE(base::DeletePathRecursively(dest_path));
@@ -297,9 +306,9 @@ TEST_F(NativeMediaFileUtilTest, CopySourceFiltering) {
         expectation = base::File::FILE_ERROR_INVALID_OPERATION;
       }
       operation_runner()->Copy(
-          url, dest_url, storage::FileSystemOperation::OPTION_NONE,
+          url, dest_url, storage::FileSystemOperation::CopyOrMoveOptionSet(),
           storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-          storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+          std::make_unique<storage::CopyOrMoveHookDelegate>(),
           base::BindOnce(&ExpectEqHelper, test_name, expectation));
       content::RunAllTasksUntilIdle();
     }
@@ -316,7 +325,7 @@ TEST_F(NativeMediaFileUtilTest, CopyDestFiltering) {
       ASSERT_TRUE(base::DeletePathRecursively(root_path()));
       ASSERT_TRUE(base::CreateDirectory(root_path()));
       PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                     base::size(kFilteringTestCases));
+                                     std::size(kFilteringTestCases));
     }
 
     // Always create a dummy source data file.
@@ -325,7 +334,7 @@ TEST_F(NativeMediaFileUtilTest, CopyDestFiltering) {
     static const char kDummyData[] = "dummy";
     ASSERT_TRUE(base::WriteFile(src_path, kDummyData));
 
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       if (loop_count == 0 && kFilteringTestCases[i].is_directory) {
         // These directories do not exist in this case, so Copy() will not
         // treat them as directories. Thus invalidating these test cases.
@@ -360,9 +369,9 @@ TEST_F(NativeMediaFileUtilTest, CopyDestFiltering) {
         }
       }
       operation_runner()->Copy(
-          src_url, url, storage::FileSystemOperation::OPTION_NONE,
+          src_url, url, storage::FileSystemOperation::CopyOrMoveOptionSet(),
           storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-          storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+          std::make_unique<storage::CopyOrMoveHookDelegate>(),
           base::BindOnce(&ExpectEqHelper, test_name, expectation));
       content::RunAllTasksUntilIdle();
     }
@@ -377,9 +386,9 @@ TEST_F(NativeMediaFileUtilTest, MoveSourceFiltering) {
   for (int loop_count = 0; loop_count < 2; ++loop_count) {
     if (loop_count == 1) {
       PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                     base::size(kFilteringTestCases));
+                                     std::size(kFilteringTestCases));
     }
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       // Always start with an empty destination directory.
       // Moving to a non-empty destination directory is an invalid operation.
       ASSERT_TRUE(base::DeletePathRecursively(dest_path));
@@ -399,9 +408,9 @@ TEST_F(NativeMediaFileUtilTest, MoveSourceFiltering) {
         expectation = base::File::FILE_ERROR_INVALID_OPERATION;
       }
       operation_runner()->Move(
-          url, dest_url, storage::FileSystemOperation::OPTION_NONE,
+          url, dest_url, storage::FileSystemOperation::CopyOrMoveOptionSet(),
           storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-          storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+          std::make_unique<storage::CopyOrMoveHookDelegate>(),
           base::BindOnce(&ExpectEqHelper, test_name, expectation));
       content::RunAllTasksUntilIdle();
     }
@@ -418,10 +427,10 @@ TEST_F(NativeMediaFileUtilTest, MoveDestFiltering) {
       ASSERT_TRUE(base::DeletePathRecursively(root_path()));
       ASSERT_TRUE(base::CreateDirectory(root_path()));
       PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                     base::size(kFilteringTestCases));
+                                     std::size(kFilteringTestCases));
     }
 
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       if (loop_count == 0 && kFilteringTestCases[i].is_directory) {
         // These directories do not exist in this case, so Copy() will not
         // treat them as directories. Thus invalidating these test cases.
@@ -463,9 +472,9 @@ TEST_F(NativeMediaFileUtilTest, MoveDestFiltering) {
         }
       }
       operation_runner()->Move(
-          src_url, url, storage::FileSystemOperation::OPTION_NONE,
+          src_url, url, storage::FileSystemOperation::CopyOrMoveOptionSet(),
           storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-          storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+          std::make_unique<storage::CopyOrMoveHookDelegate>(),
           base::BindOnce(&ExpectEqHelper, test_name, expectation));
       content::RunAllTasksUntilIdle();
     }
@@ -477,9 +486,9 @@ TEST_F(NativeMediaFileUtilTest, GetMetadataFiltering) {
   for (int loop_count = 0; loop_count < 2; ++loop_count) {
     if (loop_count == 1) {
       PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                     base::size(kFilteringTestCases));
+                                     std::size(kFilteringTestCases));
     }
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       FileSystemURL root_url = CreateURL(FPL(""));
       FileSystemURL url = CreateURL(kFilteringTestCases[i].path);
 
@@ -491,7 +500,7 @@ TEST_F(NativeMediaFileUtilTest, GetMetadataFiltering) {
         expectation = base::File::FILE_ERROR_NOT_FOUND;
       }
       operation_runner()->GetMetadata(
-          url, storage::FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY,
+          url, {storage::FileSystemOperation::GetMetadataField::kIsDirectory},
           base::BindOnce(&ExpectMetadataEqHelper, test_name, expectation,
                          kFilteringTestCases[i].is_directory));
       content::RunAllTasksUntilIdle();
@@ -504,9 +513,9 @@ TEST_F(NativeMediaFileUtilTest, RemoveFileFiltering) {
   for (int loop_count = 0; loop_count < 2; ++loop_count) {
     if (loop_count == 1) {
       PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                     base::size(kFilteringTestCases));
+                                     std::size(kFilteringTestCases));
     }
-    for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+    for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
       FileSystemURL root_url = CreateURL(FPL(""));
       FileSystemURL url = CreateURL(kFilteringTestCases[i].path);
 
@@ -530,14 +539,14 @@ void CreateSnapshotCallback(base::File::Error* error,
                             base::File::Error result,
                             const base::File::Info&,
                             const base::FilePath&,
-                            scoped_refptr<storage::ShareableFileReference>) {
+                            storage::ScopedFile) {
   *error = result;
 }
 
 TEST_F(NativeMediaFileUtilTest, CreateSnapshot) {
   PopulateDirectoryWithTestCases(root_path(), kFilteringTestCases,
-                                 base::size(kFilteringTestCases));
-  for (size_t i = 0; i < base::size(kFilteringTestCases); ++i) {
+                                 std::size(kFilteringTestCases));
+  for (size_t i = 0; i < std::size(kFilteringTestCases); ++i) {
     if (kFilteringTestCases[i].is_directory ||
         !kFilteringTestCases[i].visible) {
       continue;

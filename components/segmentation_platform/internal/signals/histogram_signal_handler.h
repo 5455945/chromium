@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,13 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/statistics_recorder.h"
-#include "components/segmentation_platform/internal/proto/types.pb.h"
-
-namespace base {
-class Clock;
-}  // namespace base
+#include "base/observer_list.h"
+#include "components/segmentation_platform/internal/database/ukm_database.h"
+#include "components/segmentation_platform/public/proto/types.pb.h"
 
 namespace segmentation_platform {
 
@@ -29,7 +28,24 @@ class SignalDatabase;
 // persisting them to the internal database for future processing.
 class HistogramSignalHandler {
  public:
-  HistogramSignalHandler(SignalDatabase* signal_database, base::Clock* clock);
+  using RelevantHistograms =
+      std::set<std::pair<std::string, proto::SignalType>>;
+
+  class Observer : public base::CheckedObserver {
+   public:
+    // Called when a histogram signal tracked by segmentation platform is
+    // updated and written to database.
+    virtual void OnHistogramSignalUpdated(std::string_view histogram_name,
+                                          base::HistogramBase::Sample32) = 0;
+    ~Observer() override = default;
+
+   protected:
+    Observer() = default;
+  };
+
+  HistogramSignalHandler(const std::string& profie_id,
+                         SignalDatabase* signal_database,
+                         UkmDatabase* ukm_database);
   virtual ~HistogramSignalHandler();
 
   // Disallow copy/assign.
@@ -38,33 +54,43 @@ class HistogramSignalHandler {
 
   // Called to notify about a set of histograms which the segmentation models
   // care about.
-  virtual void SetRelevantHistograms(
-      const std::set<std::pair<std::string, proto::SignalType>>& histograms);
+  virtual void SetRelevantHistograms(const RelevantHistograms& histograms);
 
   // Called to enable or disable metrics collection for segmentation platform.
   virtual void EnableMetrics(bool enable_metrics);
 
+  // Add/Remove observer for histogram update events.
+  virtual void AddObserver(Observer* observer);
+  virtual void RemoveObserver(Observer* observer);
+
  private:
   void OnHistogramSample(proto::SignalType signal_type,
-                         const char* histogram_name,
+                         std::string_view histogram_name,
                          uint64_t name_hash,
-                         base::HistogramBase::Sample sample);
+                         base::HistogramBase::Sample32 sample);
+
+  void OnSampleWritten(std::string_view histogram_name,
+                       base::HistogramBase::Sample32 sample,
+                       bool success);
+
+  const std::string profile_id_;
 
   // The database storing relevant histogram samples.
-  SignalDatabase* db_;
-
-  // Used for getting current time.
-  base::Clock* clock_;
+  const raw_ptr<SignalDatabase> db_;
+  const raw_ptr<UkmDatabase> ukm_db_;
 
   // Whether or not the segmentation platform should record metrics events.
   bool metrics_enabled_;
 
   // Tracks the histogram names we are currently listening to along with their
   // corresponding observers.
+  using HistogramSignal = std::pair<std::string, proto::SignalType>;
   std::map<
-      std::string,
+      HistogramSignal,
       std::unique_ptr<base::StatisticsRecorder::ScopedHistogramSampleObserver>>
       histogram_observers_;
+
+  base::ObserverList<Observer> observers_;
 
   base::WeakPtrFactory<HistogramSignalHandler> weak_ptr_factory_{this};
 };

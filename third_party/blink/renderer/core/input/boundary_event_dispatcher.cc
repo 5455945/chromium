@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,43 @@
 
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/frame.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/input/event_handling_util.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
 namespace {
+
+HTMLFrameOwnerElement* FindFrameOwnerIfNested(
+    const ExecutionContext& possible_outer_context,
+    const ExecutionContext& possible_inner_context) {
+  const auto* possible_outer_window =
+      DynamicTo<LocalDOMWindow>(possible_outer_context);
+  const auto* possible_inner_window =
+      DynamicTo<LocalDOMWindow>(possible_inner_context);
+  if (!possible_outer_window || !possible_inner_window) {
+    return nullptr;
+  }
+  const Frame* possible_outer_frame = possible_outer_window->GetFrame();
+  const Frame* possible_inner_frame = possible_inner_window->GetFrame();
+  if (!possible_outer_frame || !possible_inner_frame) {
+    return nullptr;
+  }
+  const Frame* child_frame = possible_inner_frame;
+  while (child_frame && child_frame->Parent() != possible_outer_frame) {
+    child_frame = child_frame->Parent();
+  }
+  if (!child_frame) {
+    return nullptr;
+  }
+  return DynamicTo<HTMLFrameOwnerElement>(child_frame->Owner());
+}
 
 void BuildAncestorChain(EventTarget* target,
                         HeapVector<Member<Node>, 20>* ancestors) {
@@ -55,14 +87,77 @@ void BuildAncestorChainsAndFindCommonAncestors(
 
 }  // namespace
 
-void BoundaryEventDispatcher::SendBoundaryEvents(EventTarget* exited_target,
-                                                 EventTarget* entered_target) {
-  if (exited_target == entered_target)
+void BoundaryEventDispatcher::SendBoundaryEvents(
+    EventTarget* exited_target,
+    bool original_exited_target_removed,
+    EventTarget* entered_target) {
+  if (exited_target == entered_target && !original_exited_target_removed) {
     return;
+  }
+
+  // An EventTarget must never be exposed to a cross-origin ExecutionContext
+  // through `relatedTarget` (e.g. the touch pointer stream is owned by the
+  // local-root frame's PointerEventManager, which hit-tests through every
+  // same-process child frame).
+  // When the contexts have an inner/outer relationship in the frame hierarchy,
+  // the event in the outer document uses the frame owner (e.g. iframe) element
+  // that lives in that context as its relatedTarget. In other cases (e.g. for
+  // the event in the inner document, or sibling/cousin frames), the related
+  // target is null.
+  if (RuntimeEnabledFeatures::ClearCrossOriginRelatedTargetEnabled() &&
+      exited_target && entered_target) {
+    const ExecutionContext* exited_context =
+        exited_target->GetExecutionContext();
+    const ExecutionContext* entered_context =
+        entered_target->GetExecutionContext();
+    bool is_same_origin = false;
+    if (exited_context && entered_context) {
+      if (exited_context == entered_context) {
+        is_same_origin = true;
+      } else {
+        const SecurityOrigin* exited_origin =
+            exited_context->GetSecurityOrigin();
+        const SecurityOrigin* entered_origin =
+            entered_context->GetSecurityOrigin();
+        is_same_origin = exited_origin->CanAccess(entered_origin) &&
+                         entered_origin->CanAccess(exited_origin);
+      }
+    }
+    if (!is_same_origin) {
+      EventTarget* exited_related_target =
+          (exited_context && entered_context)
+              ? FindFrameOwnerIfNested(*exited_context, *entered_context)
+              : nullptr;
+      EventTarget* entered_related_target =
+          (exited_context && entered_context)
+              ? FindFrameOwnerIfNested(*entered_context, *exited_context)
+              : nullptr;
+      SendBoundaryEventsSameOrigin(
+          exited_target, original_exited_target_removed, exited_related_target);
+      SendBoundaryEventsSameOrigin(entered_related_target,
+                                   /*original_exited_target_removed=*/false,
+                                   entered_target);
+      return;
+    }
+  }
+
+  SendBoundaryEventsSameOrigin(exited_target, original_exited_target_removed,
+                               entered_target);
+}
+
+void BoundaryEventDispatcher::SendBoundaryEventsSameOrigin(
+    EventTarget* exited_target,
+    bool original_exited_target_removed,
+    EventTarget* entered_target) {
+  if (exited_target == entered_target && !original_exited_target_removed) {
+    return;
+  }
 
   // Dispatch out event
-  if (event_handling_util::IsInDocument(exited_target))
-    DispatchOut(exited_target, entered_target);
+  if (event_handling_util::IsInDocument(exited_target) &&
+      !original_exited_target_removed) {
+    Dispatch(exited_target, entered_target, out_event_, false);
+  }
 
   // Create lists of all exited/entered ancestors, locate the common ancestor
   // Based on httparchive, in more than 97% cases the depth of DOM is less
@@ -90,6 +185,7 @@ void BoundaryEventDispatcher::SendBoundaryEvents(EventTarget* exited_target,
   // behavior from past only to match Firefox and IE behavior.
   //
   // TODO(mustaq): Confirm spec conformance, double-check with other browsers.
+  // See https://crbug.com/1501368.
 
   BuildAncestorChainsAndFindCommonAncestors(
       exited_target, entered_target, &exited_ancestors, &entered_ancestors,
@@ -97,38 +193,39 @@ void BoundaryEventDispatcher::SendBoundaryEvents(EventTarget* exited_target,
       &entered_ancestors_common_parent_index);
 
   bool exited_node_has_capturing_ancestor = false;
-  const AtomicString& leave_event = GetLeaveEvent();
   for (wtf_size_t j = 0; j < exited_ancestors.size(); j++) {
-    if (exited_ancestors[j]->HasCapturingEventListeners(leave_event)) {
+    if (exited_ancestors[j]->HasCapturingEventListeners(leave_event_)) {
       exited_node_has_capturing_ancestor = true;
       break;
     }
   }
 
   // Dispatch leave events, in child-to-parent order.
-  for (wtf_size_t j = 0; j < exited_ancestors_common_parent_index; j++)
-    DispatchLeave(exited_ancestors[j], entered_target,
-                  !exited_node_has_capturing_ancestor);
+  for (wtf_size_t j = 0; j < exited_ancestors_common_parent_index; j++) {
+    Dispatch(exited_ancestors[j], entered_target, leave_event_,
+             !exited_node_has_capturing_ancestor);
+  }
 
   // Dispatch over event
-  if (event_handling_util::IsInDocument(entered_target))
-    DispatchOver(entered_target, exited_target);
+  if (event_handling_util::IsInDocument(entered_target)) {
+    Dispatch(entered_target, exited_target, over_event_, false);
+  }
 
   // Defer locating capturing enter listener until /after/ dispatching the leave
   // events because the leave handlers might set a capturing enter handler.
   bool entered_node_has_capturing_ancestor = false;
-  const AtomicString& enter_event = GetEnterEvent();
   for (wtf_size_t i = 0; i < entered_ancestors.size(); i++) {
-    if (entered_ancestors[i]->HasCapturingEventListeners(enter_event)) {
+    if (entered_ancestors[i]->HasCapturingEventListeners(enter_event_)) {
       entered_node_has_capturing_ancestor = true;
       break;
     }
   }
 
   // Dispatch enter events, in parent-to-child order.
-  for (wtf_size_t i = entered_ancestors_common_parent_index; i > 0; i--)
-    DispatchEnter(entered_ancestors[i - 1], exited_target,
-                  !entered_node_has_capturing_ancestor);
+  for (wtf_size_t i = entered_ancestors_common_parent_index; i > 0; i--) {
+    Dispatch(entered_ancestors[i - 1], exited_target, enter_event_,
+             !entered_node_has_capturing_ancestor);
+  }
 }
 
 }  // namespace blink

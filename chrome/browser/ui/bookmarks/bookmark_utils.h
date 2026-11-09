@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,21 +11,23 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/window_open_disposition.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/color/color_variant.h"
+#include "ui/gfx/native_ui_types.h"
 
 class GURL;
 class Profile;
+struct BookmarkParentFolder;
 
 namespace bookmarks {
 class BookmarkNode;
+class ManagedBookmarkService;
 struct BookmarkNodeData;
-}
+}  // namespace bookmarks
 
 namespace content {
 class BrowserContext;
 class WebContents;
-}
+}  // namespace content
 
 namespace ui {
 class DropTargetEvent;
@@ -48,21 +50,9 @@ bool GetURLAndTitleToBookmark(content::WebContents* web_contents,
                               GURL* url,
                               std::u16string* title);
 
-// Toggles whether the bookmark bar is shown only on the new tab page or on
-// all tabs. This is a preference modifier, not a visual modifier.
-void ToggleBookmarkBarWhenVisible(content::BrowserContext* browser_context);
-
 // Returns a formatted version of |url| appropriate to display to a user.
 // When re-parsing this URL, clients should call url_formatter::FixupURL().
 std::u16string FormatBookmarkURLForDisplay(const GURL& url);
-
-// Returns whether the Apps shortcut is enabled. If true, then the visibility
-// of the Apps shortcut should be controllable via an item in the bookmark
-// context menu.
-bool IsAppsShortcutEnabled(Profile* profile);
-
-// Returns true if the Apps shortcut should be displayed in the bookmark bar.
-bool ShouldShowAppsShortcutInBookmarkBar(Profile* profile);
 
 // Returns true if the reading list should be displayed in the bookmark bar.
 bool ShouldShowReadingListInBookmarkBar(Profile* profile);
@@ -79,30 +69,36 @@ ui::mojom::DragOperation GetPreferredBookmarkDropOperation(
     int operations);
 
 // Returns the preferred drop operation on a bookmark menu/bar.
-// |parent| is the parent node the drop is to occur on and |index| the index the
+// `parent` is the parent node the drop is to occur on and `index` the index the
 // drop is over.
 ui::mojom::DragOperation GetBookmarkDropOperation(
     Profile* profile,
     const ui::DropTargetEvent& event,
     const bookmarks::BookmarkNodeData& data,
-    const bookmarks::BookmarkNode* parent,
+    const BookmarkParentFolder& parent,
     size_t index);
 
-// Returns true if the bookmark data can be dropped on |drop_parent| at
-// |index|. A drop from a separate profile is always allowed, where as
-// a drop from the same profile is only allowed if none of the nodes in
-// |data| are an ancestor of |drop_parent| and one of the nodes isn't already
-// a child of |drop_parent| at |index|.
-bool IsValidBookmarkDropLocation(Profile* profile,
-                                 const bookmarks::BookmarkNodeData& data,
-                                 const bookmarks::BookmarkNode* drop_parent,
-                                 size_t index);
+// Returns true if all the |nodes| can be edited by the user, which means they
+// aren't enterprise-managed, as per `ManagedBookmarkService::IsNodeManaged()`.
+bool CanAllBeEditedByUser(
+    bookmarks::ManagedBookmarkService* managed_bookmark_service,
+    const std::vector<
+        raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>& nodes);
 
 #if defined(TOOLKIT_VIEWS)
-// |text_color| is the color of associated text and is used to derive the icon's
-// color.
-ui::ImageModel GetBookmarkFolderIcon(SkColor text_color);
-ui::ImageModel GetBookmarkManagedFolderIcon(SkColor text_color);
+enum class BookmarkFolderIconType {
+  kNormal,
+  kManaged,
+};
+
+ui::ImageModel GetBookmarkFolderIcon(BookmarkFolderIconType icon_type,
+                                     ui::ColorVariant color);
+
+// returns the vector image used for bookmarks folder.
+gfx::ImageSkia GetBookmarkFolderImageFromVectorIcon(
+    BookmarkFolderIconType icon_type,
+    ui::ColorVariant color,
+    ui::ColorProvider* color_provider);
 #endif
 
 }  // namespace chrome

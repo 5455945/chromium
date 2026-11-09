@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,21 +12,23 @@
 #include <string.h>
 
 #include "base/check_op.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/compiler_specific.h"
+#include "base/functional/function_ref.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "build/build_config.h"
+#include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 #include "gpu/command_buffer/common/command_buffer.h"
 #include "gpu/command_buffer/common/context_result.h"
-#include "gpu/gpu_export.h"
 
 namespace gpu {
 
 class Buffer;
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #define CMD_HELPER_PERIODIC_FLUSH_CHECK
 const int kCommandsPerFlushCheck = 100;
 const int kPeriodicFlushDelayInMicroseconds = 500;
@@ -50,9 +52,13 @@ const int kAutoFlushBig = 2;     // 1/2 of the buffer
 //
 // helper.WaitForToken(token);  // this doesn't return until the first two
 //                              // commands have been executed.
-class GPU_EXPORT CommandBufferHelper {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT CommandBufferHelper {
  public:
   explicit CommandBufferHelper(CommandBuffer* command_buffer);
+
+  CommandBufferHelper(const CommandBufferHelper&) = delete;
+  CommandBufferHelper& operator=(const CommandBufferHelper&) = delete;
+
   virtual ~CommandBufferHelper();
 
   // Initializes the CommandBufferHelper.
@@ -147,7 +153,7 @@ class GPU_EXPORT CommandBufferHelper {
     DCHECK_LE(entries, immediate_entry_count_);
 
     // Allocate space and advance put_.
-    CommandBufferEntry* space = &entries_[put_];
+    CommandBufferEntry* space = UNSAFE_TODO(&entries_[put_]);
     put_ += entries;
     immediate_entry_count_ -= entries;
 
@@ -229,7 +235,7 @@ class GPU_EXPORT CommandBufferHelper {
         GetImmediateCmdSpace<cmd::SetBucketDataImmediate>(size);
     if (cmd) {
       cmd->Init(bucket_id, offset, size);
-      memcpy(ImmediateDataAddress(cmd), data, size);
+      UNSAFE_TODO(memcpy(ImmediateDataAddress(cmd), data, size));
     }
   }
 
@@ -258,16 +264,33 @@ class GPU_EXPORT CommandBufferHelper {
     }
   }
 
-  void InsertFenceSync(uint64_t release_count) {
-    cmd::InsertFenceSync* c = GetCmdSpace<cmd::InsertFenceSync>();
-    if (c) {
-      c->Init(release_count);
+  uint64_t InsertFenceSync(base::FunctionRef<uint64_t()> sync_token_generator) {
+    cmd::InsertFenceSync* cmd = GetCmdSpace<cmd::InsertFenceSync>();
+
+    // Please note that it is important to generate the sync token after
+    // GetCmdSpace().
+    // 1) If InsertFenceSync command `cmd` is not successfully allocated, a sync
+    //    token shouldn't be created either. Otherwise, it results in waiting
+    //    for a fence sync that is never released.
+    // 2) Even if `cmd` is successfully allocated, we still need to generate the
+    //    sync token afterwards: The GetCmdSpace() call may result in a flush of
+    //    the command buffer. On the other hand, command buffer implementations
+    //    (such as CommandBufferProxyImpl) may assume that when a flush happens,
+    //    the commands releasing the previously-generated sync tokens are
+    //    already in the buffer and thus all flushed.
+    if (cmd) {
+      uint64_t release_count = sync_token_generator();
+      cmd->Init(release_count);
+      return release_count;
     }
+
+    return 0;
   }
 
   CommandBuffer* command_buffer() const { return command_buffer_; }
 
   scoped_refptr<Buffer> get_ring_buffer() const { return ring_buffer_; }
+  int32_t get_ring_buffer_id() const { return ring_buffer_id_; }
 
   uint32_t flush_generation() const { return flush_generation_; }
 
@@ -306,11 +329,11 @@ class GPU_EXPORT CommandBufferHelper {
   // from given command buffer state.
   void UpdateCachedState(const CommandBuffer::State& state);
 
-  CommandBuffer* const command_buffer_;
+  const raw_ptr<CommandBuffer> command_buffer_;
   int32_t ring_buffer_id_ = -1;
   uint32_t ring_buffer_size_ = 0;
   scoped_refptr<gpu::Buffer> ring_buffer_;
-  CommandBufferEntry* entries_ = nullptr;
+  raw_ptr<CommandBufferEntry, AllowPtrArithmetic> entries_ = nullptr;
   int32_t total_entry_count_ = 0;  // the total number of entries
   int32_t immediate_entry_count_ = 0;
   int32_t token_ = 0;
@@ -345,7 +368,6 @@ class GPU_EXPORT CommandBufferHelper {
   uint32_t flush_generation_ = 0;
 
   friend class CommandBufferHelperTest;
-  DISALLOW_COPY_AND_ASSIGN(CommandBufferHelper);
 };
 
 }  // namespace gpu

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,10 @@
 
 namespace blink {
 
-PLATFORM_EXPORT rtc::scoped_refptr<webrtc::AudioEncoderFactory>
+PLATFORM_EXPORT webrtc::scoped_refptr<webrtc::AudioEncoderFactory>
 CreateWebrtcAudioEncoderFactory();
 
-PLATFORM_EXPORT rtc::scoped_refptr<webrtc::AudioDecoderFactory>
+PLATFORM_EXPORT webrtc::scoped_refptr<webrtc::AudioDecoderFactory>
 CreateWebrtcAudioDecoderFactory();
 
 }  // namespace blink

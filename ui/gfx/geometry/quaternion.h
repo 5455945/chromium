@@ -1,19 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_GEOMETRY_QUATERNION_H_
 #define UI_GFX_GEOMETRY_QUATERNION_H_
 
+#include <iosfwd>
 #include <string>
 
-#include "ui/gfx/geometry/geometry_export.h"
+#include "base/component_export.h"
 
 namespace gfx {
 
 class Vector3dF;
 
-class GEOMETRY_EXPORT Quaternion {
+class COMPONENT_EXPORT(GEOMETRY) Quaternion {
  public:
   constexpr Quaternion() = default;
   constexpr Quaternion(double x, double y, double z, double w)
@@ -69,6 +70,11 @@ class GEOMETRY_EXPORT Quaternion {
 
   std::string ToString() const;
 
+  // Returns true if the x, y, z, w values of |lhs| and |rhs| are equal. Note
+  // that two quaternions can represent the same orientation with different
+  // values. This operator will return false in that scenario.
+  friend bool operator==(const Quaternion&, const Quaternion&) = default;
+
  private:
   double x_ = 0.0;
   double y_ = 0.0;
@@ -92,17 +98,10 @@ inline Quaternion operator/(const Quaternion& q, double s) {
   return q * inv;
 }
 
-// Returns true if the x, y, z, w values of |lhs| and |rhs| are equal. Note that
-// two quaternions can represent the same orientation with different values.
-// This operator will return false in that scenario.
-inline bool operator==(const Quaternion& lhs, const Quaternion& rhs) {
-  return lhs.x() == rhs.x() && lhs.y() == rhs.y() && lhs.z() == rhs.z() &&
-         lhs.w() == rhs.w();
-}
-
-inline bool operator!=(const Quaternion& lhs, const Quaternion& rhs) {
-  return !(lhs == rhs);
-}
+// This is declared here for use in gtest-based unit tests but is defined in
+// the //ui/gfx:test_support target. Depend on that to use this in your unit
+// test. This should not be used in production code - call ToString() instead.
+void PrintTo(const Quaternion& transform, ::std::ostream* os);
 
 }  // namespace gfx
 

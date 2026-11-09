@@ -1,12 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/quic/quic_chromium_alarm_factory.h"
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -19,7 +21,7 @@ namespace {
 class QuicChromeAlarm : public quic::QuicAlarm, public base::TickClock {
  public:
   QuicChromeAlarm(const quic::QuicClock* clock,
-                  base::SequencedTaskRunner* task_runner,
+                  scoped_refptr<base::SequencedTaskRunner> task_runner,
                   quic::QuicArenaScopedPtr<quic::QuicAlarm::Delegate> delegate)
       : quic::QuicAlarm(std::move(delegate)),
         clock_(clock),
@@ -28,15 +30,14 @@ class QuicChromeAlarm : public quic::QuicAlarm, public base::TickClock {
         on_alarm_callback_(base::BindRepeating(&QuicChromeAlarm::OnAlarm,
                                                base::Unretained(this))),
         timer_(std::make_unique<base::OneShotTimer>(this)) {
-    timer_->SetTaskRunner(task_runner);
+    timer_->SetTaskRunner(std::move(task_runner));
   }
 
  protected:
   void SetImpl() override {
     DCHECK(deadline().IsInitialized());
     const int64_t delay_us = (deadline() - clock_->Now()).ToMicroseconds();
-    timer_->Start(FROM_HERE, base::TimeDelta::FromMicroseconds(delay_us),
-                  on_alarm_callback_);
+    timer_->Start(FROM_HERE, base::Microseconds(delay_us), on_alarm_callback_);
   }
 
   void CancelImpl() override {
@@ -66,7 +67,7 @@ class QuicChromeAlarm : public quic::QuicAlarm, public base::TickClock {
     return quic::QuicChromiumClock::QuicTimeToTimeTicks(clock_->Now());
   }
 
-  const quic::QuicClock* const clock_;
+  const raw_ptr<const quic::QuicClock> clock_;
   base::RepeatingClosure on_alarm_callback_;
   const std::unique_ptr<base::OneShotTimer> timer_;
 };
@@ -78,7 +79,7 @@ QuicChromiumAlarmFactory::QuicChromiumAlarmFactory(
     const quic::QuicClock* clock)
     : task_runner_(task_runner), clock_(clock) {}
 
-QuicChromiumAlarmFactory::~QuicChromiumAlarmFactory() {}
+QuicChromiumAlarmFactory::~QuicChromiumAlarmFactory() = default;
 
 quic::QuicArenaScopedPtr<quic::QuicAlarm> QuicChromiumAlarmFactory::CreateAlarm(
     quic::QuicArenaScopedPtr<quic::QuicAlarm::Delegate> delegate,

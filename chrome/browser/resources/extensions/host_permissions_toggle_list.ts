@@ -1,52 +1,92 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/shared_style_css.m.js';
-import 'chrome://resources/cr_elements/shared_vars_css.m.js';
-import 'chrome://resources/cr_elements/icons.m.js';
-import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
+import 'chrome://resources/cr_elements/icons.html.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import './restricted_sites_dialog.js';
 import './toggle_row.js';
-import './shared_style.js';
-import './strings.m.js';
+import '/strings.m.js';
 
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {assert} from 'chrome://resources/js/assert.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {ItemDelegate} from './item.js';
-import {UserAction} from './item_util.js';
-import {ExtensionsToggleRowElement} from './toggle_row.js';
+import {getCss} from './host_permissions_toggle_list.css.js';
+import {getHtml} from './host_permissions_toggle_list.html.js';
+import {UserAction} from './metrics_util.js';
+import type {ExtensionsRestrictedSitesDialogElement} from './restricted_sites_dialog.js';
+import {getMatchingUserSpecifiedSites} from './runtime_hosts_dialog.js';
+import {SiteSettingsMixin} from './site_permissions/site_settings_mixin.js';
+import type {ExtensionsToggleRowElement} from './toggle_row.js';
+import {getFaviconUrl} from './url_util.js';
 
-class ExtensionsHostPermissionsToggleListElement extends PolymerElement {
+
+export interface ExtensionsHostPermissionsToggleListElement {
+  $: {
+    allHostsToggle: ExtensionsToggleRowElement,
+    linkIconButton: HTMLAnchorElement,
+  };
+}
+
+const ExtensionsHostPermissionsToggleListElementBase =
+    SiteSettingsMixin(CrLitElement);
+
+export class ExtensionsHostPermissionsToggleListElement extends
+    ExtensionsHostPermissionsToggleListElementBase {
   static get is() {
     return 'extensions-host-permissions-toggle-list';
   }
 
-  static get template() {
-    return html`{__html_template__}`;
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
       /**
        * The underlying permissions data.
        */
-      permissions: Object,
+      permissions: {type: Object},
 
-      itemId: String,
+      itemId: {type: String},
 
-      delegate: Object,
+      /**
+       * This is set as the host the user is trying to toggle on/grant host
+       * permissions for, if the host matches one or more user specified
+       * restricted sites.
+       */
+      selectedHost_: {type: String},
+
+      // The list of restricted sites that match a host the user is toggling on.
+      matchingRestrictedSites_: {type: Array},
+
+      showMatchingRestrictedSitesDialog_: {type: Boolean},
     };
   }
 
-  permissions: chrome.developerPrivate.RuntimeHostPermissions;
-  private itemId: string;
-  delegate: ItemDelegate;
+  accessor permissions: chrome.developerPrivate.RuntimeHostPermissions = {
+    hasAllHosts: true,
+    hostAccess: chrome.developerPrivate.HostAccess.ON_CLICK,
+    hosts: [],
+  };
+  accessor itemId: string = '';
+  protected accessor matchingRestrictedSites_: string[] = [];
+  protected accessor showMatchingRestrictedSitesDialog_: boolean = false;
+  private accessor selectedHost_: string = '';
+
+  getRestrictedSitesDialog(): ExtensionsRestrictedSitesDialogElement|null {
+    return this.shadowRoot.querySelector('extensions-restricted-sites-dialog');
+  }
 
   /**
    * @return Whether the item is allowed to execute on all of its requested
    *     sites.
    */
-  private allowedOnAllHosts_(): boolean {
+  protected allowedOnAllHosts_(): boolean {
     return this.permissions.hostAccess ===
         chrome.developerPrivate.HostAccess.ON_ALL_SITES;
   }
@@ -55,7 +95,7 @@ class ExtensionsHostPermissionsToggleListElement extends PolymerElement {
    * @return A lexicographically-sorted list of the hosts associated with this
    *     item.
    */
-  private getSortedHosts_(): Array<chrome.developerPrivate.SiteControl> {
+  protected getSortedHosts_(): chrome.developerPrivate.SiteControl[] {
     return this.permissions.hosts.sort((a, b) => {
       if (a.host < b.host) {
         return -1;
@@ -67,7 +107,7 @@ class ExtensionsHostPermissionsToggleListElement extends PolymerElement {
     });
   }
 
-  private onAllHostsToggleChanged_(e: CustomEvent<boolean>) {
+  protected onAllHostsToggleChange_(e: CustomEvent<boolean>) {
     // TODO(devlin): In the case of going from all sites to specific sites,
     // we'll withhold all sites (i.e., all specific site toggles will move to
     // unchecked, and the user can check them individually). This is slightly
@@ -88,21 +128,79 @@ class ExtensionsHostPermissionsToggleListElement extends PolymerElement {
     }
   }
 
-  private onHostAccessChanged_(e: CustomEvent<boolean>) {
-    const host = (e.target as unknown as {host: string}).host;
+  protected onHostAccessChange_(e: CustomEvent<boolean>) {
+    const host = (e.target as HTMLElement).dataset['host'] || '';
     const checked = (e.target as ExtensionsToggleRowElement).checked;
 
-    if (checked) {
-      this.delegate.addRuntimeHostPermission(this.itemId, host);
-      this.delegate.recordUserAction(UserAction.SPECIFIC_TOGGLED_ON);
-    } else {
+    if (!checked) {
       this.delegate.removeRuntimeHostPermission(this.itemId, host);
       this.delegate.recordUserAction(UserAction.SPECIFIC_TOGGLED_OFF);
+      return;
     }
+
+    // If the user is about to toggle on `host`, show a dialog if there are
+    // matching user specified restricted sites instead of granting `host`
+    // right away.
+    this.delegate.recordUserAction(UserAction.SPECIFIC_TOGGLED_ON);
+    const matchingRestrictedSites =
+        getMatchingUserSpecifiedSites(this.restrictedSites, host);
+    if (matchingRestrictedSites.length) {
+      this.selectedHost_ = host;
+      this.matchingRestrictedSites_ = matchingRestrictedSites;
+      this.showMatchingRestrictedSitesDialog_ = true;
+      // Flow continues in onRestrictedSitesDialogClose_.
+      return;
+    }
+
+    this.delegate.addRuntimeHostPermission(this.itemId, host);
   }
 
-  private onLearnMoreClick_() {
+  protected isItemChecked_(item: chrome.developerPrivate.SiteControl): boolean {
+    return item.granted || this.selectedHost_ === item.host;
+  }
+
+  protected getAllHostsToggleLabelClass_(): string {
+    return this.enableEnhancedSiteControls ? 'new-all-hosts-toggle-label' : '';
+  }
+
+  protected onLearnMoreClick_() {
     this.delegate.recordUserAction(UserAction.LEARN_MORE);
+  }
+
+  protected getFaviconUrl_(url: string): string {
+    return getFaviconUrl(url);
+  }
+
+  private unselectHost_() {
+    this.showMatchingRestrictedSitesDialog_ = false;
+    this.selectedHost_ = '';
+    this.matchingRestrictedSites_ = [];
+  }
+
+  protected onMatchingRestrictedSitesDialogClose_() {
+    const dialog = this.getRestrictedSitesDialog();
+    assert(dialog);
+    if (dialog.wasConfirmed()) {
+      assert(this.matchingRestrictedSites_.length);
+      this.delegate.addRuntimeHostPermission(this.itemId, this.selectedHost_)
+          .then(() => {
+            this.delegate.removeUserSpecifiedSites(
+                chrome.developerPrivate.SiteSet.USER_RESTRICTED,
+                this.matchingRestrictedSites_);
+          })
+          .finally(() => {
+            this.unselectHost_();
+          });
+    } else {
+      this.unselectHost_();
+    }
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'extensions-host-permissions-toggle-list':
+        ExtensionsHostPermissionsToggleListElement;
   }
 }
 

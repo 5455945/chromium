@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@ package org.chromium.content.app;
 
 import android.os.Process;
 
-import org.chromium.base.BuildInfo;
-import org.chromium.base.annotations.MainDex;
+import org.chromium.base.AndroidInfo;
+import org.chromium.build.annotations.NullMarked;
 
 /**
  * Handler that immediately kills the current process on an uncaught exception.
@@ -19,7 +19,7 @@ import org.chromium.base.annotations.MainDex;
  * This does not have any exception handling or crash reporting. Such handlers should be
  * chained before this handler.
  */
-@MainDex
+@NullMarked
 class KillChildUncaughtExceptionHandler implements Thread.UncaughtExceptionHandler {
     private boolean mCrashing;
 
@@ -30,7 +30,7 @@ class KillChildUncaughtExceptionHandler implements Thread.UncaughtExceptionHandl
         // due to bad user experience. Note this is also the reason the exception stack is not
         // printed here, to avoid the stack being printed twice in release builds where breakpad
         // is also enabled.
-        if (BuildInfo.isDebugAndroid()) return;
+        if (AndroidInfo.isDebugAndroid()) return;
         Thread.setDefaultUncaughtExceptionHandler(new KillChildUncaughtExceptionHandler());
     }
 

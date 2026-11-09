@@ -1,10 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/installer/setup/setup_install_details.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/win/registry.h"
@@ -22,14 +24,27 @@ namespace {
 const install_static::InstallConstants* FindInstallMode(
     const base::CommandLine& command_line) {
   // Search for a mode whose switch is on the command line.
-  for (int i = 1; i < install_static::NUM_INSTALL_MODES; ++i) {
+  for (size_t i = 1; i < install_static::kInstallModes.size(); ++i) {
     const install_static::InstallConstants& mode =
         install_static::kInstallModes[i];
-    if (command_line.HasSwitch(mode.install_switch))
+    if (command_line.HasSwitch(mode.install_switch)) {
       return &mode;
+    }
   }
   // The first mode is always the default if all else fails.
-  return &install_static::kInstallModes[0];
+  return &install_static::kInstallModes.front();
+}
+
+// Returns the value of `switch_name` from `command_line` if it is present, or
+// nullopt otherwise.
+std::optional<std::wstring> GetSwitchValue(
+    const base::CommandLine& command_line,
+    std::string_view switch_name) {
+  std::optional<std::wstring> result;
+  if (command_line.HasSwitch(switch_name)) {
+    result = command_line.GetSwitchValueNative(switch_name);
+  }
+  return result;
 }
 
 }  // namespace
@@ -66,28 +81,28 @@ std::unique_ptr<install_static::PrimaryInstallDetails> MakeInstallDetails(
   // The channel is determined based on the brand and the mode's
   // ChannelStrategy. For brands that do not support Google Update, the channel
   // is an empty string. For modes using the FIXED strategy, the channel is the
-  // default_channel_name in the mode. For modes using the ADDITIONAL_PARAMETERS
-  // strategy, the channel is parsed from the "ap" value in the mode's
-  // ClientState registry key.
+  // default_channel_name in the mode. For modes using the FLOATING strategy,
+  // the channel is dictated by the --channel switch on the command line or the
+  // mode's default if none is provided. An override on the command line will be
+  // written to the "ap" value for the sake of subsequent update checks.
 
   // Cache the ap and cohort name values found in the registry for use in crash
   // keys.
   std::wstring update_ap;
   std::wstring update_cohort_name;
 
-  auto channel_from_cmd_line =
-      command_line.GetSwitchValueNative(installer::switches::kChannel);
+  std::optional<std::wstring> channel_from_cmd_line =
+      GetSwitchValue(command_line, installer::switches::kChannel);
 
   auto channel = install_static::DetermineChannel(
       *mode, system_level,
-      command_line.HasSwitch(installer::switches::kChannel)
-          ? channel_from_cmd_line.c_str()
-          : nullptr,
+      channel_from_cmd_line ? channel_from_cmd_line->c_str() : nullptr,
       &update_ap, &update_cohort_name);
   details->set_channel(channel.channel_name);
   details->set_channel_origin(channel.origin);
-  if (channel.origin == install_static::ChannelOrigin::kPolicy)
-    details->set_channel_override(channel_from_cmd_line);
+  if (channel.origin == install_static::ChannelOrigin::kPolicy) {
+    details->set_channel_override(*channel_from_cmd_line);
+  }
   details->set_is_extended_stable_channel(channel.is_extended_stable);
   details->set_update_ap(update_ap);
   details->set_update_cohort_name(update_cohort_name);

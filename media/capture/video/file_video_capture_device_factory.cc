@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,16 +26,16 @@ base::FilePath GetFilePathFromCommandLine() {
   return command_line_file_path;
 }
 
-std::unique_ptr<VideoCaptureDevice> FileVideoCaptureDeviceFactory::CreateDevice(
+VideoCaptureErrorOrDevice FileVideoCaptureDeviceFactory::CreateDevice(
     const VideoCaptureDeviceDescriptor& device_descriptor) {
   DCHECK(thread_checker_.CalledOnValidThread());
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
-#if defined(OS_WIN)
-  return std::unique_ptr<VideoCaptureDevice>(new FileVideoCaptureDevice(
+#if BUILDFLAG(IS_WIN)
+  return VideoCaptureErrorOrDevice(std::make_unique<FileVideoCaptureDevice>(
       base::FilePath(base::SysUTF8ToWide(device_descriptor.display_name()))));
 #else
-  return std::unique_ptr<VideoCaptureDevice>(new FileVideoCaptureDevice(
+  return VideoCaptureErrorOrDevice(std::make_unique<FileVideoCaptureDevice>(
       base::FilePath(device_descriptor.display_name())));
 #endif
 }
@@ -43,24 +43,29 @@ std::unique_ptr<VideoCaptureDevice> FileVideoCaptureDeviceFactory::CreateDevice(
 void FileVideoCaptureDeviceFactory::GetDevicesInfo(
     GetDevicesInfoCallback callback) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  base::ThreadRestrictions::SetIOAllowed(true);
+  base::ScopedAllowBlocking allow_blocking;
 
   std::vector<VideoCaptureDeviceInfo> devices_info;
 
   auto api =
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
       VideoCaptureApi::WIN_DIRECT_SHOW;
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
       VideoCaptureApi::MACOSX_AVFOUNDATION;
-#elif defined(OS_LINUX) || defined(OS_CHROMEOS)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
       VideoCaptureApi::LINUX_V4L2_SINGLE_PLANE;
 #else
       VideoCaptureApi::UNKNOWN;
 #endif
 
-  devices_info.emplace_back(
-      VideoCaptureDeviceDescriptor(GetFilePathFromCommandLine().AsUTF8Unsafe(),
-                                   kFileVideoCaptureDeviceName, api));
+  VideoCaptureControlSupport control_support;
+  control_support.pan = true;
+  control_support.tilt = true;
+  control_support.zoom = true;
+
+  devices_info.emplace_back(VideoCaptureDeviceDescriptor(
+      GetFilePathFromCommandLine().AsUTF8Unsafe(), kFileVideoCaptureDeviceName,
+      api, control_support));
 
   VideoCaptureFormat capture_format;
   if (!FileVideoCaptureDevice::GetVideoCaptureFormat(

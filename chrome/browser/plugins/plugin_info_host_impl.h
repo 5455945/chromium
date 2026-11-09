@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,14 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner_helpers.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner_helpers.h"
 #include "chrome/browser/plugins/plugin_metadata.h"
-#include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/common/plugin.mojom.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
-#include "components/prefs/pref_member.h"
-#include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "extensions/buildflags/buildflags.h"
 #include "media/media_buildflags.h"
 
@@ -37,10 +32,6 @@ namespace extensions {
 class ExtensionRegistry;
 }
 
-namespace user_prefs {
-class PrefRegistrySyncable;
-}
-
 namespace url {
 class Origin;
 }
@@ -48,16 +39,11 @@ class Origin;
 // Implements PluginInfoHost interface.
 class PluginInfoHostImpl : public chrome::mojom::PluginInfoHost {
  public:
-  struct GetPluginInfo_Params;
-
   // Contains all the information needed by the PluginInfoHostImpl.
   class Context {
    public:
-    Context(int render_process_id, Profile* profile);
-
+    Context(content::GlobalRenderFrameHostToken rfh_token, Profile* profile);
     ~Context();
-
-    int render_process_id() { return render_process_id_; }
 
     void DecidePluginStatus(const GURL& url,
                             const url::Origin& main_frame_origin,
@@ -66,9 +52,7 @@ class PluginInfoHostImpl : public chrome::mojom::PluginInfoHost {
                             const std::string& plugin_identifier,
                             chrome::mojom::PluginStatus* status) const;
     bool FindEnabledPlugin(
-        int render_frame_id,
         const GURL& url,
-        const url::Origin& main_frame_origin,
         const std::string& mime_type,
         chrome::mojom::PluginStatus* status,
         content::WebPluginInfo* plugin,
@@ -76,53 +60,43 @@ class PluginInfoHostImpl : public chrome::mojom::PluginInfoHost {
         std::unique_ptr<PluginMetadata>* plugin_metadata) const;
     void MaybeGrantAccess(chrome::mojom::PluginStatus status,
                           const base::FilePath& path) const;
-    bool IsPluginEnabled(const content::WebPluginInfo& plugin) const;
 
-    void ShutdownOnUIThread();
+    const content::GlobalRenderFrameHostToken& rfh_token() const {
+      return rfh_token_;
+    }
 
    private:
-    int render_process_id_;
+    const content::GlobalRenderFrameHostToken rfh_token_;
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-    extensions::ExtensionRegistry* extension_registry_;
+    raw_ptr<extensions::ExtensionRegistry, DanglingUntriaged>
+        extension_registry_;
 #endif
-    const HostContentSettingsMap* host_content_settings_map_;
-    scoped_refptr<PluginPrefs> plugin_prefs_;
-
-    BooleanPrefMember allow_outdated_plugins_;
+    raw_ptr<const HostContentSettingsMap, AcrossTasksDanglingUntriaged>
+        host_content_settings_map_;
   };
 
-  PluginInfoHostImpl(int render_process_id, Profile* profile);
+  PluginInfoHostImpl(content::GlobalRenderFrameHostToken rfh_token,
+                     Profile* profile);
+
+  PluginInfoHostImpl(const PluginInfoHostImpl&) = delete;
+  PluginInfoHostImpl& operator=(const PluginInfoHostImpl&) = delete;
+
   ~PluginInfoHostImpl() override;
 
-  static void RegisterUserPrefs(user_prefs::PrefRegistrySyncable* registry);
-
- private:
-  void ShutdownOnUIThread();
-
   // chrome::mojom::PluginInfoHost
-  void GetPluginInfo(int32_t render_frame_id,
-                     const GURL& url,
-                     const url::Origin& origin,
+  void GetPluginInfo(const GURL& url,
                      const std::string& mime_type,
                      GetPluginInfoCallback callback) override;
 
-  // |params| wraps the parameters passed to |OnGetPluginInfo|, because
-  // |base::Bind| doesn't support the required arity <http://crbug.com/98542>.
-  void PluginsLoaded(const GetPluginInfo_Params& params,
-                     GetPluginInfoCallback callback,
-                     const std::vector<content::WebPluginInfo>& plugins);
+  static void EnsureFactoryBuilt();
 
-  void GetPluginInfoFinish(const GetPluginInfo_Params& params,
-                           chrome::mojom::PluginInfoPtr output,
-                           GetPluginInfoCallback callback,
-                           std::unique_ptr<PluginMetadata> plugin_metadata);
+ private:
+  void ShutdownOnUIThread();
 
   Context context_;
   base::CallbackListSubscription shutdown_subscription_;
 
   base::WeakPtrFactory<PluginInfoHostImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PluginInfoHostImpl);
 };
 
 #endif  // CHROME_BROWSER_PLUGINS_PLUGIN_INFO_HOST_IMPL_H_

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #endif
-#include "build/chromeos_buildflags.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -47,7 +47,7 @@ class OnStartupHandlerTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(profile_manager_.SetUp());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     auto* fake_user_manager = new ash::FakeChromeUserManager;
     user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
         base::WrapUnique(fake_user_manager));
@@ -70,8 +70,8 @@ class OnStartupHandlerTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   TestingProfileManager profile_manager_;
   std::unique_ptr<TestOnStartupHandler> handler_;
-  Profile* profile_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  raw_ptr<Profile> profile_;
+#if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<user_manager::ScopedUserManager> user_manager_enabler_;
 #endif
   content::TestWebUI web_ui_;
@@ -79,17 +79,16 @@ class OnStartupHandlerTest : public testing::Test {
 
 TEST_F(OnStartupHandlerTest, HandleGetNtpExtension) {
   base::ListValue list_args;
-  list_args.AppendString(kCallbackId);
-  handler()->HandleGetNtpExtension(&list_args);
+  list_args.Append(kCallbackId);
+  handler()->HandleGetNtpExtension(list_args);
 
   EXPECT_EQ(1U, web_ui()->call_data().size());
 
   const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
   EXPECT_EQ("cr.webUIResponse", data.function_name());
 
-  std::string callback_id;
-  ASSERT_TRUE(data.arg1()->GetAsString(&callback_id));
-  EXPECT_EQ(kCallbackId, callback_id);
+  ASSERT_TRUE(data.arg1()->is_string());
+  EXPECT_EQ(kCallbackId, data.arg1()->GetString());
 
   ASSERT_TRUE(data.arg2()->is_bool());
   EXPECT_TRUE(data.arg2()->GetBool());
@@ -97,18 +96,17 @@ TEST_F(OnStartupHandlerTest, HandleGetNtpExtension) {
 
 TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Valid) {
   base::ListValue list_args;
-  list_args.AppendString(kCallbackId);
-  list_args.AppendString("http://example.com");
-  handler()->HandleValidateStartupPage(&list_args);
+  list_args.Append(kCallbackId);
+  list_args.Append("http://example.com");
+  handler()->HandleValidateStartupPage(list_args);
 
   EXPECT_EQ(1U, web_ui()->call_data().size());
 
   const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
   EXPECT_EQ("cr.webUIResponse", data.function_name());
 
-  std::string callback_id;
-  ASSERT_TRUE(data.arg1()->GetAsString(&callback_id));
-  EXPECT_EQ(kCallbackId, callback_id);
+  ASSERT_TRUE(data.arg1()->is_string());
+  EXPECT_EQ(kCallbackId, data.arg1()->GetString());
 
   ASSERT_TRUE(data.arg2()->is_bool());
   EXPECT_TRUE(data.arg2()->GetBool());
@@ -119,18 +117,17 @@ TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Valid) {
 
 TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Invalid) {
   base::ListValue list_args;
-  list_args.AppendString(kCallbackId);
-  list_args.AppendString("@");
-  handler()->HandleValidateStartupPage(&list_args);
+  list_args.Append(kCallbackId);
+  list_args.Append("@");
+  handler()->HandleValidateStartupPage(list_args);
 
   EXPECT_EQ(1U, web_ui()->call_data().size());
 
   const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
   EXPECT_EQ("cr.webUIResponse", data.function_name());
 
-  std::string callback_id;
-  ASSERT_TRUE(data.arg1()->GetAsString(&callback_id));
-  EXPECT_EQ(kCallbackId, callback_id);
+  ASSERT_TRUE(data.arg1()->is_string());
+  EXPECT_EQ(kCallbackId, data.arg1()->GetString());
 
   ASSERT_TRUE(data.arg2()->is_bool());
   EXPECT_TRUE(data.arg2()->GetBool());

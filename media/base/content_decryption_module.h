@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,15 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "media/base/cdm_key_information.h"
 #include "media/base/eme_constants.h"
 #include "media/base/media_export.h"
-#include "url/gurl.h"
 
 namespace base {
 class Time;
@@ -57,17 +56,18 @@ enum class CdmMessageType {
   MESSAGE_TYPE_MAX = INDIVIDUALIZATION_REQUEST
 };
 
+// This enum is reported to UKM. Existing values should NEVER be changed.
 enum class HdcpVersion {
-  kHdcpVersionNone,
-  kHdcpVersion1_0,
-  kHdcpVersion1_1,
-  kHdcpVersion1_2,
-  kHdcpVersion1_3,
-  kHdcpVersion1_4,
-  kHdcpVersion2_0,
-  kHdcpVersion2_1,
-  kHdcpVersion2_2,
-  kHdcpVersion2_3,
+  kHdcpVersionNone = 0,
+  kHdcpVersion1_0 = 1,
+  kHdcpVersion1_1 = 2,
+  kHdcpVersion1_2 = 3,
+  kHdcpVersion1_3 = 4,
+  kHdcpVersion1_4 = 5,
+  kHdcpVersion2_0 = 6,
+  kHdcpVersion2_1 = 7,
+  kHdcpVersion2_2 = 8,
+  kHdcpVersion2_3 = 9,
   kMaxValue = kHdcpVersion2_3
 };
 
@@ -109,6 +109,11 @@ class MEDIA_EXPORT ContentDecryptionModule
     : public base::RefCountedThreadSafe<ContentDecryptionModule,
                                         ContentDecryptionModuleTraits> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
+  ContentDecryptionModule(const ContentDecryptionModule&) = delete;
+  ContentDecryptionModule& operator=(const ContentDecryptionModule&) = delete;
+
   // Provides a server certificate to be used to encrypt messages to the
   // license server.
   virtual void SetServerCertificate(
@@ -183,15 +188,17 @@ class MEDIA_EXPORT ContentDecryptionModule
 
   ContentDecryptionModule();
   virtual ~ContentDecryptionModule();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ContentDecryptionModule);
 };
 
 struct MEDIA_EXPORT ContentDecryptionModuleTraits {
   // Destroys |cdm| on the correct thread.
   static void Destruct(const ContentDecryptionModule* cdm);
 };
+
+// Try to convert `hdcp_version_string` to `HdcpVersion`. Returns std::nullopt
+// on failure.
+MEDIA_EXPORT std::optional<media::HdcpVersion> MaybeHdcpVersionFromString(
+    const std::string& hdcp_version_string);
 
 // CDM session event callbacks.
 
@@ -206,7 +213,7 @@ using SessionMessageCB =
 // CDM may close a session at any point, such as in response to a CloseSession()
 // call, when the session is no longer needed, or when system resources are
 // lost, as specified by `reason`.
-// See http://w3c.github.io/encrypted-media/#session-close
+// See http://w3c.github.io/encrypted-media/#session-closed
 using SessionClosedCB =
     base::RepeatingCallback<void(const std::string& session_id,
                                  CdmSessionClosedReason reason)>;

@@ -1,19 +1,32 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_INFOBARS_INFOBAR_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_INFOBARS_INFOBAR_VIEW_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include <stddef.h>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/types/pass_key.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_container.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/menu/menu_types.h"
 #include "ui/views/focus/external_focus_tracker.h"
 #include "ui/views/view.h"
+#include "ui/views/view_class_properties.h"
 
 namespace views {
 class ImageButton;
@@ -21,42 +34,65 @@ class ImageView;
 class Label;
 class Link;
 class MenuRunner;
+class StyledLabel;
 }  // namespace views
+
+class InfoBarContainerView;
 
 class InfoBarView : public infobars::InfoBar,
                     public views::View,
                     public views::ExternalFocusTracker {
+  METADATA_HEADER(InfoBarView, views::View)
+
  public:
-  METADATA_HEADER(InfoBarView);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kInfoBarElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kDismissButtonElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kLeftBalancerElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kRightSpacerElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kQueuedCountPillElementId);
+
   explicit InfoBarView(std::unique_ptr<infobars::InfoBarDelegate> delegate);
   InfoBarView(const InfoBarView&) = delete;
   InfoBarView& operator=(const InfoBarView&) = delete;
   ~InfoBarView() override;
 
-  // Requests that the infobar recompute its target height.
-  void RecalculateHeight();
-
   // views::View:
-  void Layout() override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
-  gfx::Size CalculatePreferredSize() const override;
-  void ViewHierarchyChanged(
-      const views::ViewHierarchyChangedDetails& details) override;
-  void OnPaint(gfx::Canvas* canvas) override;
+  void Layout(PassKey) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnThemeChanged() override;
 
   // views::ExternalFocusTracker:
   void OnWillChangeFocus(View* focused_before, View* focused_now) override;
 
+  views::ImageView* icon() { return icon_; }
+  views::View* close_button() { return close_button_.get(); }
+
+  // Shows a passive "+N" pill next to the close button, or hides it when
+  // `count` is 0. PassKey-restricted to InfoBarContainerView, which owns
+  // host selection (never a kCriticalSecurity bar).
+  void SetQueuedInfoBarCount(size_t count,
+                             base::PassKey<InfoBarContainerView> key);
+
  protected:
   using Labels = std::vector<views::Label*>;
 
   // Creates a label with the appropriate font and color for an infobar.
-  views::Label* CreateLabel(const std::u16string& text) const;
+  std::unique_ptr<views::Label> CreateLabel(const std::u16string& text) const;
+
+  // Creates a styled label with the appropriate font and color for an infobar.
+  std::unique_ptr<views::StyledLabel> CreateStyledLabel(
+      const std::u16string& text) const;
 
   // Creates a link with the appropriate font and color for an infobar.
-  // NOTE: Subclasses must ignore link clicks if we're unowned.
-  views::Link* CreateLink(const std::u16string& text);
+  // By default, `text` will be used as a accessible text if it's not explicitly
+  // provided. NOTE: Subclasses must ignore link clicks if we're unowned.
+  std::unique_ptr<views::Link> CreateLink(
+      const std::u16string& text,
+      const std::optional<std::u16string>& accessible_text = std::nullopt);
+
+  // Creates the "+N" pill label shown by SetQueuedInfoBarCount().
+  std::unique_ptr<views::Label> CreateQueuedCountPillLabel() const;
 
   // Given |views| and the total |available_width| to display them in, sets
   // each view's size so that the longest view shrinks until it reaches the
@@ -68,6 +104,10 @@ class InfoBarView : public infobars::InfoBar,
   // and the close button) can be shrunk to.  This is used to prevent the close
   // button from overlapping views that cannot be shrunk any further.
   virtual int GetContentMinimumWidth() const;
+
+  // Returns the preferred width the content (that is, everything between the
+  // icon and the close button).
+  virtual int GetContentPreferredWidth() const;
 
   // These return x coordinates delimiting the usable area for subclasses to lay
   // out their controls.
@@ -84,27 +124,41 @@ class InfoBarView : public infobars::InfoBar,
   void PlatformSpecificHide(bool animate) override;
   void PlatformSpecificOnHeightRecalculated() override;
 
+  // Adds `child` to `content_container_` and returns the raw pointer. All
+  // subclasses should call this instead of AddChildView().
+  template <typename ViewClass>
+  ViewClass* AddContentChildView(std::unique_ptr<ViewClass> child) {
+    CHECK(content_container_);
+    return content_container_->AddChildView(std::move(child));
+  }
+  // Allow subclasses to configure the content container.
+  views::View* content_container() { return content_container_.get(); }
+
+  // Adds a view to the infobar's root, placing it just before the
+  // close button.
+  void AddViewBeforeCloseButton(std::unique_ptr<views::View> view);
+
  private:
   FRIEND_TEST_ALL_PREFIXES(InfoBarViewTest, GetDrawSeparator);
+
+  // Recalculates the layout of the infobar's contents, ensuring that views are
+  // balanced to fit within the available space inside the infobar container.
+  void RecalculateLayoutBalancing();
+
+  // Make all AddChildView* overloads private so downstream subclasses
+  // cannot call them directly.
+  using View::AddChildView;
+  using View::AddChildViewAt;
+  using View::AddChildViewRaw;
 
   // Does the actual work for AssignWidths().  Assumes |views| is sorted by
   // decreasing preferred width.
   static void AssignWidthsSorted(Views* views, int available_width);
 
-  // Returns whether this infobar should draw a 1 px separator at its top.
-  bool GetDrawSeparator() const;
-
-  // Returns how much space the container should reserve for a separator between
-  // infobars, in addition to the height of the infobars themselves.
-  int GetSeparatorHeight() const;
-
-  // Returns the current color for the theme property |id|.  Will return the
-  // wrong value if no theme provider is available.
-  SkColor GetColor(int id) const;
-
-  // Sets various attributes on |label| that are common to all child links and
-  // labels.
-  void SetLabelDetails(views::Label* label) const;
+  // Sets various attributes on |view| that are common to all child links,
+  // labels, and styled labels.
+  template <typename T>
+  void AssignLabelDetails(T* view) const;
 
   // Callback used by the link created by CreateLink().
   void LinkClicked(const ui::Event& event);
@@ -112,13 +166,29 @@ class InfoBarView : public infobars::InfoBar,
   void CloseButtonPressed();
 
   // The optional icon at the left edge of the InfoBar.
-  views::ImageView* icon_ = nullptr;
+  raw_ptr<views::ImageView> icon_ = nullptr;
+
+  // Container that owns all views that should appear between `icon_` and
+  // `close_button_`.  Subclasses **must** add their children to this view via
+  // the AddContentChildView() helper; doing so guarantees that the close
+  // button always stays the last child without any explicit re‑ordering.
+  raw_ptr<views::View> content_container_ = nullptr;
 
   // The close button at the right edge of the InfoBar.
-  views::ImageButton* close_button_ = nullptr;
+  raw_ptr<views::ImageButton> close_button_ = nullptr;
+
+  // Lazily created by SetQueuedInfoBarCount(), placed before `close_button_`.
+  raw_ptr<views::Label> queued_count_pill_ = nullptr;
 
   // Used to run the menu.
   std::unique_ptr<views::MenuRunner> menu_runner_;
+
+  // The left balancer view for flex layout.
+  raw_ptr<views::View> left_balancer_ = nullptr;
+  // The right spacer view for flex layout.
+  raw_ptr<views::View> right_spacer_ = nullptr;
+  // The right side container view for flex layout.
+  raw_ptr<views::View> right_side_container_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_INFOBARS_INFOBAR_VIEW_H_

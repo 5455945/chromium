@@ -1,14 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_track_event.h"
 
+#include "base/check.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_track_event_init.h"
+#include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_track.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_receiver.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_transceiver.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
@@ -42,11 +50,11 @@ RTCTrackEvent::RTCTrackEvent(RTCRtpReceiver* receiver,
 }
 
 RTCRtpReceiver* RTCTrackEvent::receiver() const {
-  return receiver_;
+  return receiver_.Get();
 }
 
 MediaStreamTrack* RTCTrackEvent::track() const {
-  return track_;
+  return track_.Get();
 }
 
 const HeapVector<Member<MediaStream>>& RTCTrackEvent::streams() const {
@@ -54,7 +62,7 @@ const HeapVector<Member<MediaStream>>& RTCTrackEvent::streams() const {
 }
 
 RTCRtpTransceiver* RTCTrackEvent::transceiver() const {
-  return transceiver_;
+  return transceiver_.Get();
 }
 
 void RTCTrackEvent::Trace(Visitor* visitor) const {

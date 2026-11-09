@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,15 @@
 
 #include <linux/input.h>
 
+#include "base/command_line.h"
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_chromeos_version_info.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/chromeos_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/ozone/evdev/event_device_info.h"
 #include "ui/events/ozone/evdev/event_device_test_util.h"
 #include "ui/events/ozone/evdev/touch_filter/heuristic_stylus_palm_detection_filter.h"
 #include "ui/events/ozone/evdev/touch_filter/neural_stylus_palm_detection_filter.h"
-#include "ui/events/ozone/evdev/touch_filter/neural_stylus_palm_report_filter.h"
 #include "ui/events/ozone/evdev/touch_filter/open_palm_detection_filter.h"
 #include "ui/events/ozone/evdev/touch_filter/palm_detection_filter.h"
 #include "ui/events/ozone/evdev/touch_filter/shared_palm_detection_filter_state.h"
@@ -26,6 +25,11 @@ namespace ui {
 class PalmDetectionFilterFactoryTest : public testing::Test {
  public:
   PalmDetectionFilterFactoryTest() = default;
+
+  PalmDetectionFilterFactoryTest(const PalmDetectionFilterFactoryTest&) =
+      delete;
+  PalmDetectionFilterFactoryTest& operator=(
+      const PalmDetectionFilterFactoryTest&) = delete;
 
   void SetUp() override {
     EXPECT_TRUE(
@@ -46,14 +50,12 @@ class PalmDetectionFilterFactoryTest : public testing::Test {
       nocturne_touchscreen_info_, nocturne_stylus_info_,
       kohaku_touchscreen_info_;
   SharedPalmDetectionFilterState shared_palm_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(PalmDetectionFilterFactoryTest);
 };
 
 class PalmDetectionFilterFactoryDeathTest
     : public PalmDetectionFilterFactoryTest {};
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(PalmDetectionFilterFactoryTest, RadiusesFromLSBRelease) {
   {
     base::test::ScopedChromeOSVersionInfo version(
@@ -101,8 +103,8 @@ TEST_F(PalmDetectionFilterFactoryTest, AllDisabled) {
 
 TEST_F(PalmDetectionFilterFactoryTest, HeuristicEnabledForEve) {
   scoped_feature_list_->InitWithFeaturesAndParameters(
-      {base::test::ScopedFeatureList::FeatureAndParams(
-          ui::kEnableHeuristicPalmDetectionFilter, {})},
+      {base::test::FeatureRefAndParams(ui::kEnableHeuristicPalmDetectionFilter,
+                                       {})},
       {ui::kEnableNeuralPalmDetectionFilter});
   std::unique_ptr<PalmDetectionFilter> palm_filter =
       CreatePalmDetectionFilter(eve_touchscreen_info_, &shared_palm_state_);
@@ -127,7 +129,7 @@ TEST_F(PalmDetectionFilterFactoryTest, HeuristicEnabledForEve) {
 
 TEST_F(PalmDetectionFilterFactoryTest, HeuristicTimesSet) {
   scoped_feature_list_->InitWithFeaturesAndParameters(
-      {base::test::ScopedFeatureList::FeatureAndParams(
+      {base::test::FeatureRefAndParams(
           ui::kEnableHeuristicPalmDetectionFilter,
           {{"heuristic_palm_cancel_threshold_seconds", "0.8"},
            {"heuristic_palm_hold_threshold_seconds", "15.327"}})},
@@ -139,46 +141,16 @@ TEST_F(PalmDetectionFilterFactoryTest, HeuristicTimesSet) {
             palm_filter->FilterNameForTesting());
   HeuristicStylusPalmDetectionFilter* heuristic_filter =
       static_cast<HeuristicStylusPalmDetectionFilter*>(palm_filter.get());
-  EXPECT_EQ(base::TimeDelta::FromSecondsD(0.8), heuristic_filter->CancelTime());
-  EXPECT_EQ(base::TimeDelta::FromSecondsD(15.327),
-            heuristic_filter->HoldTime());
-}
-TEST_F(PalmDetectionFilterFactoryTest, NeuralReportNoNeuralDetectSet) {
-  scoped_feature_list_->InitWithFeatures(
-      {ui::kEnableNeuralStylusReportFilter},
-      {ui::kEnableHeuristicPalmDetectionFilter,
-       ui::kEnableNeuralPalmDetectionFilter});
-  std::unique_ptr<PalmDetectionFilter> palm_filter = CreatePalmDetectionFilter(
-      nocturne_touchscreen_info_, &shared_palm_state_);
-  ASSERT_EQ(OpenPalmDetectionFilter::kFilterName,
-            palm_filter->FilterNameForTesting());
-  palm_filter =
-      CreatePalmDetectionFilter(nocturne_stylus_info_, &shared_palm_state_);
-  ASSERT_EQ(NeuralStylusReportFilter::kFilterName,
-            palm_filter->FilterNameForTesting());
-}
-
-TEST_F(PalmDetectionFilterFactoryTest, NeuralReportNeuralDetectSet) {
-  scoped_feature_list_->InitWithFeatures(
-      {ui::kEnableNeuralStylusReportFilter,
-       ui::kEnableNeuralPalmDetectionFilter},
-      {ui::kEnableHeuristicPalmDetectionFilter});
-  std::unique_ptr<PalmDetectionFilter> palm_filter = CreatePalmDetectionFilter(
-      nocturne_touchscreen_info_, &shared_palm_state_);
-  ASSERT_EQ(NeuralStylusPalmDetectionFilter::kFilterName,
-            palm_filter->FilterNameForTesting());
-  palm_filter =
-      CreatePalmDetectionFilter(nocturne_stylus_info_, &shared_palm_state_);
-  ASSERT_EQ(NeuralStylusReportFilter::kFilterName,
-            palm_filter->FilterNameForTesting());
+  EXPECT_EQ(base::Seconds(0.8), heuristic_filter->CancelTime());
+  EXPECT_EQ(base::Seconds(15.327), heuristic_filter->HoldTime());
 }
 
 TEST_F(PalmDetectionFilterFactoryTest, NeuralBeatsHeuristic) {
   scoped_feature_list_->InitWithFeaturesAndParameters(
-      {base::test::ScopedFeatureList::FeatureAndParams(
-           ui::kEnableHeuristicPalmDetectionFilter, {}),
-       base::test::ScopedFeatureList::FeatureAndParams(
-           ui::kEnableNeuralPalmDetectionFilter, {})},
+      {base::test::FeatureRefAndParams(ui::kEnableHeuristicPalmDetectionFilter,
+                                       {}),
+       base::test::FeatureRefAndParams(ui::kEnableNeuralPalmDetectionFilter,
+                                       {})},
       {});
   std::unique_ptr<PalmDetectionFilter> palm_filter = CreatePalmDetectionFilter(
       nocturne_touchscreen_info_, &shared_palm_state_);
@@ -202,7 +174,7 @@ TEST_F(PalmDetectionFilterFactoryDeathTest, BadParseRecovery) {
 
 TEST_F(PalmDetectionFilterFactoryDeathTest, BadNeuralParamParse) {
   scoped_feature_list_->InitWithFeaturesAndParameters(
-      {base::test::ScopedFeatureList::FeatureAndParams(
+      {base::test::FeatureRefAndParams(
           ui::kEnableNeuralPalmDetectionFilter,
           {
               {"neural_palm_radius_polynomial", "1.0,chicken"},

@@ -30,7 +30,7 @@
 
 #include "third_party/blink/renderer/core/svg/svg_point.h"
 
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -38,16 +38,10 @@ namespace blink {
 
 SVGPoint::SVGPoint() = default;
 
-SVGPoint::SVGPoint(const FloatPoint& point) : value_(point) {}
+SVGPoint::SVGPoint(const gfx::PointF& point) : value_(point) {}
 
 SVGPoint* SVGPoint::Clone() const {
   return MakeGarbageCollected<SVGPoint>(value_);
-}
-
-SVGPropertyBase* SVGPoint::CloneForAnimation(const String& value) const {
-  // SVGPoint is not animated by itself.
-  NOTREACHED();
-  return nullptr;
 }
 
 String SVGPoint::ValueAsString() const {
@@ -58,7 +52,7 @@ String SVGPoint::ValueAsString() const {
   return builder.ToString();
 }
 
-void SVGPoint::Add(const SVGPropertyBase* other, const SVGElement*) {
+bool SVGPoint::Add(const SVGPropertyBase* other, const SVGElement*) {
   // SVGPoint is not animated by itself.
   NOTREACHED();
 }
@@ -79,7 +73,6 @@ float SVGPoint::CalculateDistance(const SVGPropertyBase* to,
                                   const SVGElement* context_element) const {
   // SVGPoint is not animated by itself.
   NOTREACHED();
-  return 0.0f;
 }
 
 }  // namespace blink

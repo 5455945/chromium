@@ -28,6 +28,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_MARKUP_TOKENIZER_INLINES_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_MARKUP_TOKENIZER_INLINES_H_
 
+#include "base/check_op.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/text/segmented_string.h"
 
@@ -35,19 +37,6 @@ namespace blink {
 
 inline bool IsTokenizerWhitespace(UChar cc) {
   return cc == ' ' || cc == '\x0A' || cc == '\x09' || cc == '\x0C';
-}
-
-inline void AdvanceStringAndASSERTIgnoringCase(
-    SegmentedString& source,
-    const char* expected_characters) {
-  while (*expected_characters)
-    source.AdvanceAndASSERTIgnoringCase(*expected_characters++);
-}
-
-inline void AdvanceStringAndASSERT(SegmentedString& source,
-                                   const char* expected_characters) {
-  while (*expected_characters)
-    source.AdvanceAndASSERT(*expected_characters++);
 }
 
 #if defined(COMPILER_MSVC)
@@ -60,9 +49,7 @@ inline void AdvanceStringAndASSERT(SegmentedString& source,
   case prefix::stateName:              \
   stateName:
 #define BEGIN_STATE_NOLABEL(prefix, stateName) case prefix::stateName:
-#define END_STATE() \
-  NOTREACHED();     \
-  break;
+#define END_STATE() NOTREACHED();
 
 // We use this macro when the HTML5 spec says "reconsume the current input
 // character in the <mumble> state."

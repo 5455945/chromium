@@ -1,14 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_THROBBER_H_
 #define UI_VIEWS_CONTROLS_THROBBER_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "ui/color/color_provider.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -16,9 +16,14 @@ namespace views {
 // Throbbers display an animation, usually used as a status indicator.
 
 class VIEWS_EXPORT Throbber : public View {
+  METADATA_HEADER(Throbber, View)
+
  public:
-  METADATA_HEADER(Throbber);
-  Throbber();
+  explicit Throbber(int diameter = kDefaultDiameter);
+
+  Throbber(const Throbber&) = delete;
+  Throbber& operator=(const Throbber&) = delete;
+
   ~Throbber() override;
 
   // Start and stop the throbber animation.
@@ -31,12 +36,20 @@ class VIEWS_EXPORT Throbber : public View {
   void SetChecked(bool checked);
 
   // Overridden from View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
   void OnPaint(gfx::Canvas* canvas) override;
+
+  int GetDiameter() const { return diameter_; }
+  void SetColorId(ui::ColorId color) { color_id_ = color; }
+  std::optional<ui::ColorId> GetColorId() { return color_id_; }
 
  protected:
   // Specifies whether the throbber is currently animating or not
   bool IsRunning() const;
+
+  // The default diameter of a Throbber.
+  static constexpr int kDefaultDiameter = 16;
 
  private:
   base::TimeTicks start_time_;  // Time when Start was called.
@@ -45,17 +58,31 @@ class VIEWS_EXPORT Throbber : public View {
   // Whether or not we should display a checkmark.
   bool checked_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(Throbber);
+  const int diameter_;
+
+  // Overrides the default color, ui::kColorThrobber, if set.
+  std::optional<ui::ColorId> color_id_;
+
+  base::WeakPtrFactory<Throbber> weak_ptr_factory_{this};
 };
+
+BEGIN_VIEW_BUILDER(VIEWS_EXPORT, Throbber, View)
+VIEW_BUILDER_PROPERTY(bool, Checked)
+END_VIEW_BUILDER
 
 // A SmoothedThrobber is a throbber that is representing potentially short
 // and nonoverlapping bursts of work.  SmoothedThrobber ignores small
 // pauses in the work stops and starts, and only starts its throbber after
 // a small amount of work time has passed.
 class VIEWS_EXPORT SmoothedThrobber : public Throbber {
+  METADATA_HEADER(SmoothedThrobber, Throbber)
+
  public:
-  METADATA_HEADER(SmoothedThrobber);
-  SmoothedThrobber();
+  explicit SmoothedThrobber(int diameter = kDefaultDiameter);
+
+  SmoothedThrobber(const SmoothedThrobber&) = delete;
+  SmoothedThrobber& operator=(const SmoothedThrobber&) = delete;
+
   ~SmoothedThrobber() override;
 
   void Start() override;
@@ -84,10 +111,16 @@ class VIEWS_EXPORT SmoothedThrobber : public Throbber {
 
   base::OneShotTimer start_timer_;
   base::OneShotTimer stop_timer_;
-
-  DISALLOW_COPY_AND_ASSIGN(SmoothedThrobber);
 };
 
+BEGIN_VIEW_BUILDER(VIEWS_EXPORT, SmoothedThrobber, Throbber)
+VIEW_BUILDER_PROPERTY(const base::TimeDelta&, StartDelay)
+VIEW_BUILDER_PROPERTY(const base::TimeDelta&, StopDelay)
+END_VIEW_BUILDER
+
 }  // namespace views
+
+DEFINE_VIEW_BUILDER(VIEWS_EXPORT, Throbber)
+DEFINE_VIEW_BUILDER(VIEWS_EXPORT, SmoothedThrobber)
 
 #endif  // UI_VIEWS_CONTROLS_THROBBER_H_

@@ -1,22 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.browserservices.ui.controller;
 
-import androidx.annotation.Nullable;
-
 import org.chromium.base.Promise;
-import org.chromium.chrome.browser.dependency_injection.ActivityScope;
+import org.chromium.build.annotations.NullMarked;
 
-import javax.inject.Inject;
-
-/**
- * Empty {@link Verifier} implementation.
- */
-@ActivityScope
+/** Empty {@link Verifier} implementation. */
+@NullMarked
 public class EmptyVerifier implements Verifier {
-    @Inject
     public EmptyVerifier() {}
 
     @Override
@@ -29,14 +22,13 @@ public class EmptyVerifier implements Verifier {
         return false;
     }
 
-    @Nullable
     @Override
     public String getVerifiedScope(String url) {
         return url;
     }
 
     @Override
-    public boolean shouldIgnoreExternalIntentHandlers(String url) {
+    public boolean isUrlInVerifiedScope(String url) {
         return false;
     }
 }

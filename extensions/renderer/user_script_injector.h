@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "extensions/common/mojom/css_origin.mojom-shared.h"
 #include "extensions/common/mojom/host_id.mojom.h"
@@ -32,7 +32,12 @@ class UserScriptInjector : public ScriptInjector,
  public:
   UserScriptInjector(const UserScript* user_script,
                      UserScriptSet* user_script_set,
-                     bool is_declarative);
+                     bool is_declarative,
+                     mojom::InjectionType script_type);
+
+  UserScriptInjector(const UserScriptInjector&) = delete;
+  UserScriptInjector& operator=(const UserScriptInjector&) = delete;
+
   ~UserScriptInjector() override;
 
  private:
@@ -42,10 +47,13 @@ class UserScriptInjector : public ScriptInjector,
 
   // ScriptInjector implementation.
   mojom::InjectionType script_type() const override;
-  bool IsUserGesture() const override;
+  blink::mojom::UserActivationOption IsUserGesture() const override;
+  mojom::ExecutionWorld GetExecutionWorld() const override;
+  const std::optional<std::string>& GetExecutionWorldId() const override;
   mojom::CSSOrigin GetCssOrigin() const override;
   mojom::CSSInjection::Operation GetCSSInjectionOperation() const override;
-  bool ExpectsResults() const override;
+  blink::mojom::WantResultOption ExpectsResults() const override;
+  blink::mojom::PromiseResultOption ShouldWaitForPromise() const override;
   bool ShouldInjectJs(
       mojom::RunLocation run_location,
       const std::set<std::string>& executing_scripts) const override;
@@ -59,40 +67,51 @@ class UserScriptInjector : public ScriptInjector,
   std::vector<blink::WebScriptSource> GetJsSources(
       mojom::RunLocation run_location,
       std::set<std::string>* executing_scripts,
-      size_t* num_injected_js_scripts) const override;
+      size_t* num_injected_js_scripts,
+      ExtensionFrameHelper* frame_helper) const override;
   std::vector<CSSSource> GetCssSources(
       mojom::RunLocation run_location,
       std::set<std::string>* injected_stylesheets,
       size_t* num_injected_stylesheets) const override;
-  void OnInjectionComplete(std::unique_ptr<base::Value> execution_result,
+  void OnInjectionComplete(std::optional<base::Value> execution_result,
                            mojom::RunLocation run_location) override;
   void OnWillNotInject(InjectFailureReason reason) override;
 
   // The associated user script. Owned by the UserScriptSet that created this
   // object.
-  const UserScript* script_;
+  raw_ptr<const UserScript, DanglingUntriaged> script_;
 
   // The UserScriptSet that eventually owns the UserScript this
   // UserScriptInjector points to. Outlives `this` unless the UserScriptSet may
   // be destroyed first, and `this` will be destroyed immediately after.
-  UserScriptSet* const user_script_set_;
+  const raw_ptr<UserScriptSet, DanglingUntriaged> user_script_set_;
 
   // The id of the associated user script. We cache this because when we update
-  // the |script_| associated with this injection, the old reference may be
+  // the `script_` associated with this injection, the old reference may be
   // deleted.
   std::string script_id_;
 
-  // The associated host id, preserved for the same reason as |script_id|.
+  // The associated host id, preserved for the same reason as `script_id`.
   mojom::HostID host_id_;
 
   // Indicates whether or not this script is declarative. This influences which
-  // script permissions are checked before injection.
+  // script permissions are checked before injection. This is also true for
+  // extension dynamic scripts (e.g. from `scripting.registerContentScripts()`
+  // or the `userScripts` API), which use host permissions but are still
+  // reported to the browser as `mojom::InjectionType::kContentScript` via
+  // `script_type_`.
   bool is_declarative_;
+
+  // The injection type reported to the browser, e.g. when requesting
+  // permission to inject via
+  // `extensions::mojom::LocalFrameHost::RequestScriptInjectionPermission()`.
+  // Only scripts injected via the `RequestContentScript` action of the
+  // `chrome.declarativeContent` API are reported as
+  // `mojom::InjectionType::kDeclarativeScript`.
+  const mojom::InjectionType script_type_;
 
   base::ScopedObservation<UserScriptSet, UserScriptSet::Observer>
       user_script_set_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UserScriptInjector);
 };
 
 }  // namespace extensions

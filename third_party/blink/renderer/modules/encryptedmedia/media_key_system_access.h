@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,25 +13,33 @@
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
+class MediaKeys;
 
 class MediaKeySystemAccess final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  MediaKeySystemAccess(const String& key_system,
-                       std::unique_ptr<WebContentDecryptionModuleAccess>);
+  explicit MediaKeySystemAccess(
+      std::unique_ptr<WebContentDecryptionModuleAccess>);
   ~MediaKeySystemAccess() override;
 
-  String keySystem() const { return access_->GetKeySystem(); }
+  // This is only used for the JavaScript API.
+  String keySystem() const { return access_->GetRequestedKeySystem(); }
   MediaKeySystemConfiguration* getConfiguration() const;
-  ScriptPromise createMediaKeys(ScriptState*);
+  ScriptPromise<MediaKeys> createMediaKeys(ScriptState*);
 
   bool UseHardwareSecureCodecs() const {
     return access_->UseHardwareSecureCodecs();
   }
 
+  // Used internally and returns the internal key system (base key system if it
+  // exists). Note that this is different from `keySystem()` which returns the
+  // key system that was requested by JS.
+  String GetInternalKeySystem() const {
+    return access_->GetInternalKeySystem();
+  }
+
  private:
-  const String key_system_;
   std::unique_ptr<WebContentDecryptionModuleAccess> access_;
 };
 

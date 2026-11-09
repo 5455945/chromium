@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,24 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <list>
 #include <memory>
 #include <set>
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
@@ -31,58 +33,12 @@
 #include "services/device/usb/webusb_descriptors.h"
 #include "third_party/libusb/src/libusb/libusb.h"
 
-#if defined(OS_WIN)
-#define INITGUID
-#include <devpkey.h>
-#include <setupapi.h>
-#include <usbiodef.h>
-
-#include "base/strings/string_util.h"
-#include "device/base/device_info_query_win.h"
-#endif  // OS_WIN
-
 namespace device {
 
 namespace {
 
 // Standard USB requests and descriptor types:
 const uint16_t kUsbVersion2_1 = 0x0210;
-
-#if defined(OS_WIN)
-
-bool IsWinUsbInterface(const std::wstring& device_path) {
-  DeviceInfoQueryWin device_info_query;
-  if (!device_info_query.device_info_list_valid()) {
-    USB_PLOG(ERROR) << "Failed to create a device information set";
-    return false;
-  }
-
-  // This will add the device so we can query driver info.
-  if (!device_info_query.AddDevice(device_path)) {
-    USB_PLOG(ERROR) << "Failed to get device interface data for "
-                    << device_path;
-    return false;
-  }
-
-  if (!device_info_query.GetDeviceInfo()) {
-    USB_PLOG(ERROR) << "Failed to get device info for " << device_path;
-    return false;
-  }
-
-  std::string buffer;
-  if (!device_info_query.GetDeviceStringProperty(DEVPKEY_Device_Service,
-                                                 &buffer)) {
-    USB_PLOG(ERROR) << "Failed to get device service property";
-    return false;
-  }
-
-  USB_LOG(DEBUG) << "Driver for " << device_path << " is " << buffer << ".";
-  if (base::StartsWith(buffer, "WinUSB", base::CompareCase::INSENSITIVE_ASCII))
-    return true;
-  return false;
-}
-
-#endif  // OS_WIN
 
 scoped_refptr<UsbContext> InitializeUsbContextBlocking() {
   PlatformUsbContext platform_context = nullptr;
@@ -96,21 +52,10 @@ scoped_refptr<UsbContext> InitializeUsbContextBlocking() {
   return nullptr;
 }
 
-absl::optional<std::vector<ScopedLibusbDeviceRef>> GetDeviceListBlocking(
-    const std::wstring& new_device_path,
+std::optional<std::vector<ScopedLibusbDeviceRef>> GetDeviceListBlocking(
     scoped_refptr<UsbContext> usb_context) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
-
-#if defined(OS_WIN)
-  if (!new_device_path.empty()) {
-    if (!IsWinUsbInterface(new_device_path)) {
-      // Wait to call libusb_get_device_list until libusb will be able to find
-      // a WinUSB interface for the device.
-      return absl::nullopt;
-    }
-  }
-#endif  // defined(OS_WIN)
 
   libusb_device** platform_devices = NULL;
   const ssize_t device_count =
@@ -118,13 +63,19 @@ absl::optional<std::vector<ScopedLibusbDeviceRef>> GetDeviceListBlocking(
   if (device_count < 0) {
     USB_LOG(ERROR) << "Failed to get device list: "
                    << ConvertPlatformUsbErrorToString(device_count);
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   std::vector<ScopedLibusbDeviceRef> scoped_devices;
   scoped_devices.reserve(device_count);
-  for (ssize_t i = 0; i < device_count; ++i)
-    scoped_devices.emplace_back(platform_devices[i], usb_context);
+  // SAFETY: `platform_devices` is a raw pointer to a NULL-terminated array of
+  // device pointers returned by `libusb_get_device_list`. libusb guarantees
+  // that this array is of size `device_count` + 1.
+  auto devices_span = UNSAFE_BUFFERS(
+      base::span(platform_devices, static_cast<size_t>(device_count)));
+  for (libusb_device* device : devices_span) {
+    scoped_devices.emplace_back(device, usb_context);
+  }
 
   // Free the list but don't unref the devices because ownership has been
   // been transfered to the elements of |scoped_devices|.
@@ -230,7 +181,7 @@ void OnDeviceOpenedReadDescriptors(
 }  // namespace
 
 UsbServiceImpl::UsbServiceImpl()
-    : task_runner_(base::SequencedTaskRunnerHandle::Get()) {
+    : task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   weak_self_ = weak_factory_.GetWeakPtr();
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, kBlockingTaskTraits,
@@ -241,7 +192,7 @@ UsbServiceImpl::UsbServiceImpl()
 
 UsbServiceImpl::~UsbServiceImpl() {
   NotifyWillDestroyUsbService();
-  if (hotplug_enabled_)
+  if (context_)
     libusb_hotplug_deregister_callback(context_->context(), hotplug_handle_);
 }
 
@@ -255,43 +206,19 @@ void UsbServiceImpl::GetDevices(GetDevicesCallback callback) {
     return;
   }
 
-  if (hotplug_enabled_ && !enumeration_in_progress_) {
-    // The device list is updated live when hotplug events are supported.
-    UsbService::GetDevices(std::move(callback));
-  } else {
+  // Hold requests until the first enumeration has completed so that callers
+  // do not see an empty list while the libusb context is still initializing.
+  if (!enumeration_ready_ || enumeration_in_progress_) {
     pending_enumeration_callbacks_.push_back(std::move(callback));
-    RefreshDevices();
+    return;
   }
+
+  UsbService::GetDevices(std::move(callback));
 }
-
-#if defined(OS_WIN)
-
-void UsbServiceImpl::OnDeviceAdded(const GUID& class_guid,
-                                   const std::wstring& device_path) {
-  // Only the root node of a composite USB device has the class GUID
-  // GUID_DEVINTERFACE_USB_DEVICE but we want to wait until WinUSB is loaded.
-  // This first pass filter will catch anything that's sitting on the USB bus
-  // (including devices on 3rd party USB controllers) to avoid the more
-  // expensive driver check that needs to be done on the FILE thread.
-  if (device_path.find(L"usb") != std::wstring::npos) {
-    pending_path_enumerations_.push(device_path);
-    RefreshDevices();
-  }
-}
-
-void UsbServiceImpl::OnDeviceRemoved(const GUID& class_guid,
-                                     const std::wstring& device_path) {
-  // The root USB device node is removed last.
-  if (class_guid == GUID_DEVINTERFACE_USB_DEVICE) {
-    RefreshDevices();
-  }
-}
-
-#endif  // OS_WIN
 
 void UsbServiceImpl::OnUsbContext(scoped_refptr<UsbContext> context) {
   if (!context) {
-    usb_unavailable_ = true;
+    OnUsbUnavailable();
     return;
   }
 
@@ -304,43 +231,45 @@ void UsbServiceImpl::OnUsbContext(scoped_refptr<UsbContext> context) {
       static_cast<libusb_hotplug_flag>(0), LIBUSB_HOTPLUG_MATCH_ANY,
       LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY,
       &UsbServiceImpl::HotplugCallback, this, &hotplug_handle_);
-  if (rv == LIBUSB_SUCCESS)
-    hotplug_enabled_ = true;
+  if (rv != LIBUSB_SUCCESS) {
+    context_.reset();
+    OnUsbUnavailable();
+    return;
+  }
 
   // This will call any enumeration callbacks queued while initializing.
   RefreshDevices();
+}
 
-#if defined(OS_WIN)
-  DeviceMonitorWin* device_monitor = DeviceMonitorWin::GetForAllInterfaces();
-  if (device_monitor)
-    device_observation_.Observe(device_monitor);
-#endif  // OS_WIN
+void UsbServiceImpl::OnUsbUnavailable() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  usb_unavailable_ = true;
+
+  // Answer any GetDevices() calls that were waiting for initialization.
+  std::vector<GetDevicesCallback> callbacks;
+  callbacks.swap(pending_enumeration_callbacks_);
+  for (GetDevicesCallback& callback : callbacks) {
+    std::move(callback).Run(std::vector<scoped_refptr<UsbDevice>>());
+  }
 }
 
 void UsbServiceImpl::RefreshDevices() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (!context_ || enumeration_in_progress_)
-    return;
+  DCHECK(context_);
+  DCHECK(!enumeration_in_progress_);
 
   enumeration_in_progress_ = true;
   DCHECK(devices_being_enumerated_.empty());
 
-  std::wstring device_path;
-  if (!pending_path_enumerations_.empty()) {
-    device_path = pending_path_enumerations_.front();
-    pending_path_enumerations_.pop();
-  }
-
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, kBlockingTaskTraits,
-      base::BindOnce(&GetDeviceListBlocking, device_path, context_),
+      base::BindOnce(&GetDeviceListBlocking, context_),
       base::BindOnce(&UsbServiceImpl::OnDeviceList,
                      weak_factory_.GetWeakPtr()));
 }
 
 void UsbServiceImpl::OnDeviceList(
-    absl::optional<std::vector<ScopedLibusbDeviceRef>> devices) {
+    std::optional<std::vector<ScopedLibusbDeviceRef>> devices) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!devices) {
     RefreshDevicesComplete();
@@ -352,8 +281,10 @@ void UsbServiceImpl::OnDeviceList(
   // Look for new and existing devices.
   for (auto& device : *devices) {
     // Ignore devices that have failed enumeration previously.
-    if (base::Contains(ignored_devices_, device.get()))
+    if (std::ranges::contains(ignored_devices_, device.get(),
+                              &ScopedLibusbDeviceRef::get)) {
       continue;
+    }
 
     auto it = platform_devices_.find(device.get());
     if (it == platform_devices_.end()) {
@@ -415,10 +346,6 @@ void UsbServiceImpl::RefreshDevicesComplete() {
     for (GetDevicesCallback& callback : callbacks)
       std::move(callback).Run(result);
   }
-
-  if (!pending_path_enumerations_.empty()) {
-    RefreshDevices();
-  }
 }
 
 void UsbServiceImpl::EnumerateDevice(ScopedLibusbDeviceRef platform_device,
@@ -472,14 +399,14 @@ void UsbServiceImpl::EnumerateDevice(ScopedLibusbDeviceRef platform_device,
 }
 
 void UsbServiceImpl::AddDevice(scoped_refptr<UsbDeviceImpl> device) {
-  if (!base::Contains(devices_being_enumerated_, device->platform_device())) {
+  if (!devices_being_enumerated_.contains(device->platform_device())) {
     // Device was removed while being enumerated.
     return;
   }
 
-  DCHECK(!base::Contains(platform_devices_, device->platform_device()));
+  DCHECK(!platform_devices_.contains(device->platform_device()));
   platform_devices_[device->platform_device()] = device;
-  DCHECK(!base::Contains(devices(), device->guid()));
+  DCHECK(!devices().contains(device->guid()));
   devices()[device->guid()] = device;
 
   USB_LOG(USER) << "USB device added: vendor=" << device->vendor_id() << " \""
@@ -539,7 +466,7 @@ int LIBUSB_CALL UsbServiceImpl::HotplugCallback(libusb_context* context,
 void UsbServiceImpl::OnPlatformDeviceAdded(
     ScopedLibusbDeviceRef platform_device) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!base::Contains(platform_devices_, platform_device.get()));
+  DCHECK(!platform_devices_.contains(platform_device.get()));
   EnumerateDevice(std::move(platform_device), base::DoNothing());
 }
 

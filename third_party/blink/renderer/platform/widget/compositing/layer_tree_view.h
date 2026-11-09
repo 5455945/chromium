@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,24 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "cc/input/browser_controls_state.h"
-#include "cc/trees/layer_tree_host_client.h"
-#include "cc/trees/layer_tree_host_single_thread_client.h"
-#include "cc/trees/swap_promise.h"
-#include "cc/trees/swap_promise_monitor.h"
+#include "cc/trees/layer_tree_host_delegate.h"
+#include "cc/trees/layer_tree_host_single_thread_delegate.h"
+#include "cc/trees/paint_holding_reason.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/widget/compositing/layer_tree_view_delegate.h"
+#include "third_party/blink/renderer/platform/wtf/deque.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/ca_layer_result.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace cc {
 class AnimationHost;
-class RasterDarkModeFilter;
 class LayerTreeFrameSink;
 class LayerTreeHost;
 class LayerTreeSettings;
@@ -31,23 +32,19 @@ class RenderFrameMetadataObserver;
 class TaskGraphRunner;
 }  // namespace cc
 
-namespace gfx {
-class RenderingPipeline;
-}  // namespace gfx
-
 namespace blink {
 
 namespace scheduler {
-class WebThreadScheduler;
-}
+class WidgetScheduler;
+}  // namespace scheduler
 
 class PLATFORM_EXPORT LayerTreeView
-    : public cc::LayerTreeHostClient,
-      public cc::LayerTreeHostSingleThreadClient,
-      public cc::LayerTreeHostSchedulingClient {
+    : public cc::LayerTreeHostDelegate,
+      public cc::LayerTreeHostSingleThreadDelegate,
+      public cc::LayerTreeHostSchedulingDelegate {
  public:
   LayerTreeView(LayerTreeViewDelegate* delegate,
-                scheduler::WebThreadScheduler* scheduler);
+                scoped_refptr<scheduler::WidgetScheduler> scheduler);
   LayerTreeView(const LayerTreeView&) = delete;
   LayerTreeView& operator=(const LayerTreeView&) = delete;
   ~LayerTreeView() override;
@@ -61,72 +58,94 @@ class PLATFORM_EXPORT LayerTreeView
   void Initialize(const cc::LayerTreeSettings& settings,
                   scoped_refptr<base::SingleThreadTaskRunner> main_thread,
                   scoped_refptr<base::SingleThreadTaskRunner> compositor_thread,
-                  cc::TaskGraphRunner* task_graph_runner,
-                  gfx::RenderingPipeline* main_thread_pipeline,
-                  gfx::RenderingPipeline* compositor_thread_pipeline);
+                  cc::TaskGraphRunner* task_graph_runner);
 
   // Drops any references back to the delegate in preparation for being
   // destroyed.
   void Disconnect();
 
+  // Drops any references back to the current delegate and attaches to
+  // `delegate` if non-null.
+  void ClearPreviousDelegateAndReattachIfNeeded(
+      LayerTreeViewDelegate* delegate,
+      scoped_refptr<scheduler::WidgetScheduler> scheduler);
+
   cc::AnimationHost* animation_host() { return animation_host_.get(); }
 
   void SetVisible(bool visible);
+  void SetShouldWarmUp();
 
-  // cc::LayerTreeHostClient implementation.
+  // cc::LayerTreeHostDelegate implementation.
+  // NOTE: LayerTreeView allows re-attaching itself to a different delegate.
+  // Since the compositor is threaded, we could receive callbacks from the host
+  // which are tied to content committed by the previous delegate.
+  //
+  // Ensure such callbacks have a `source_frame_number` to ensure callbacks
+  // associated with the previous delegate are safely discarded.
   void WillBeginMainFrame() override;
   void DidBeginMainFrame() override;
   void WillUpdateLayers() override;
   void DidUpdateLayers() override;
   void BeginMainFrame(const viz::BeginFrameArgs& args) override;
   void OnDeferMainFrameUpdatesChanged(bool) override;
-  void OnDeferCommitsChanged(bool) override;
+  void OnDeferCommitsChanged(bool defer_status,
+                             cc::PaintHoldingReason reason) override;
+  void OnCommitRequested() override;
   void BeginMainFrameNotExpectedSoon() override;
   void BeginMainFrameNotExpectedUntil(base::TimeTicks time) override;
   void UpdateLayerTreeHost() override;
   void ApplyViewportChanges(const cc::ApplyViewportChangesArgs& args) override;
   void UpdateCompositorScrollState(
       const cc::CompositorCommitData& commit_data) override;
+  void UpdateAnimatedImageState(
+      const cc::CompositorCommitData& commit_data) override;
   void RequestNewLayerTreeFrameSink() override;
   void DidInitializeLayerTreeFrameSink() override;
   void DidFailToInitializeLayerTreeFrameSink() override;
-  void WillCommit() override;
-  void DidCommit(base::TimeTicks commit_start_time) override;
-  void DidCommitAndDrawFrame() override;
-  void DidReceiveCompositorFrameAck() override {}
-  void DidCompletePageScaleAnimation() override;
+  void WillCommit(const cc::CommitState&) override;
+  void DidCommit(int source_frame_number,
+                 base::TimeTicks commit_start_time,
+                 base::TimeTicks commit_finish_time) override;
+  void DidCommitAndDrawFrame(int source_frame_number) override;
+  void DidCompletePageScaleAnimation(int source_frame_number) override;
   void DidPresentCompositorFrame(
       uint32_t frame_token,
-      const gfx::PresentationFeedback& feedback) override;
+      const viz::FrameTimingDetails& frame_timing_details) override;
   void RecordStartOfFrameMetrics() override;
   void RecordEndOfFrameMetrics(
       base::TimeTicks frame_begin_time,
       cc::ActiveFrameSequenceTrackers trackers) override;
   std::unique_ptr<cc::BeginMainFrameMetrics> GetBeginMainFrameMetrics()
       override;
-  std::unique_ptr<cc::WebVitalMetrics> GetWebVitalMetrics() override;
-  void NotifyThroughputTrackerResults(
+  void NotifyCompositorMetricsTrackerResults(
       cc::CustomTrackerResults results) override;
   void DidObserveFirstScrollDelay(
+      int source_frame_number,
       base::TimeDelta first_scroll_delay,
       base::TimeTicks first_scroll_timestamp) override;
   void RunPaintBenchmark(int repeat_count,
                          cc::PaintBenchmarkResult& result) override;
+  std::string GetPausedDebuggerLocalizedMessage() override;
 
-  // cc::LayerTreeHostSingleThreadClient implementation.
+  // cc::LayerTreeHostSingleThreadDelegate implementation.
   void DidSubmitCompositorFrame() override;
   void DidLoseLayerTreeFrameSink() override;
   void ScheduleAnimationForWebTests() override;
 
-  // cc::LayerTreeHostSchedulingClient implementation.
-  void DidScheduleBeginMainFrame() override;
+  // cc::LayerTreeHostSchedulingDelegate implementation.
   void DidRunBeginMainFrame() override;
 
   // Registers a callback that will be run on the first successful presentation
   // for `frame_token` or a following frame.
   void AddPresentationCallback(
       uint32_t frame_token,
-      base::OnceCallback<void(base::TimeTicks)> callback);
+      base::OnceCallback<void(const viz::FrameTimingDetails&)> callback);
+
+#if BUILDFLAG(IS_APPLE)
+  void AddCoreAnimationErrorCodeCallback(
+      uint32_t frame_token,
+      base::OnceCallback<void(gfx::CALayerResult)> callback);
+#endif
 
   cc::LayerTreeHost* layer_tree_host() { return layer_tree_host_.get(); }
   const cc::LayerTreeHost* layer_tree_host() const {
@@ -142,27 +161,49 @@ class PLATFORM_EXPORT LayerTreeView
       std::unique_ptr<cc::RenderFrameMetadataObserver>
           render_frame_metadata_observer);
 
-  scheduler::WebThreadScheduler* const web_main_thread_scheduler_;
+  template <typename Callback>
+  void AddCallback(uint32_t frame_token,
+                   Callback callback,
+                   Deque<std::pair<uint32_t, Vector<Callback>>>& callbacks);
+
+  scoped_refptr<scheduler::WidgetScheduler> widget_scheduler_;
   const std::unique_ptr<cc::AnimationHost> animation_host_;
-  std::unique_ptr<cc::RasterDarkModeFilter> dark_mode_filter_;
 
   // The delegate_ becomes null when Disconnect() is called. After that, the
   // class should do nothing in calls from the LayerTreeHost, and just wait to
   // be destroyed. It is not expected to be used at all after Disconnect()
   // outside of handling/dropping LayerTreeHost client calls.
-  LayerTreeViewDelegate* delegate_;
+  raw_ptr<LayerTreeViewDelegate> delegate_;
   std::unique_ptr<cc::LayerTreeHost> layer_tree_host_;
 
-  // This class should do nothing and access no pointers once this value becomes
-  // true.
-  bool layer_tree_frame_sink_request_failed_while_invisible_ = false;
+  enum class FrameSinkState {
+    kNoFrameSink,
+    kRequestBufferedInvisible,
+    kRequestPending,
+    kInitializing,
+    kInitialized
+  };
+  FrameSinkState frame_sink_state_ = FrameSinkState::kNoFrameSink;
 
-  base::circular_deque<
-      std::pair<uint32_t,
-                std::vector<base::OnceCallback<void(base::TimeTicks)>>>>
+  Deque<std::pair<
+      uint32_t,
+      Vector<base::OnceCallback<void(const viz::FrameTimingDetails&)>>>>
       presentation_callbacks_;
 
+#if BUILDFLAG(IS_APPLE)
+  Deque<std::pair<
+      uint32_t,
+      Vector<base::OnceCallback<void(gfx::CALayerResult error_code)>>>>
+      core_animation_error_code_callbacks_;
+#endif
+
+  // Tracks the source frame number for the first main frame when a new
+  // delegate is bound to this view. This is used to safely ignore redundant
+  // callbacks which are tied to content produced by the previous delegate.
+  int first_source_frame_for_current_delegate_ = 0;
+
   base::WeakPtrFactory<LayerTreeView> weak_factory_{this};
+  base::WeakPtrFactory<LayerTreeView> weak_factory_for_delegate_{this};
 };
 
 }  // namespace blink

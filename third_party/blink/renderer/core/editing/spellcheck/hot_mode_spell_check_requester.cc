@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,12 +40,13 @@ EphemeralRange AdjacentWordIfExists(const Position& pos) {
 
 EphemeralRange CurrentWordIfTypingInPartialWord(const Element& editable) {
   const LocalFrame& frame = *editable.GetDocument().GetFrame();
-  const SelectionInDOMTree& selection =
-      frame.Selection().GetSelectionInDOMTree();
+  const SelectionInDomTree& selection =
+      frame.Selection().GetSelectionInDomTree();
   if (!selection.IsCaret())
     return EphemeralRange();
-  if (RootEditableElementOf(selection.Base()) != &editable)
+  if (RootEditableElementOf(selection.Anchor()) != &editable) {
     return EphemeralRange();
+  }
 
   CompositeEditCommand* last_command = frame.GetEditor().LastEditCommand();
   if (!last_command || !last_command->IsTypingCommand())
@@ -54,7 +55,7 @@ EphemeralRange CurrentWordIfTypingInPartialWord(const Element& editable) {
     return EphemeralRange();
   if (last_command->EndingSelection().AsSelection() != selection)
     return EphemeralRange();
-  return AdjacentWordIfExists(selection.Base());
+  return AdjacentWordIfExists(selection.Anchor());
 }
 
 EphemeralRange CalculateHotModeCheckingRange(const Element& editable,
@@ -76,9 +77,11 @@ EphemeralRange CalculateHotModeCheckingRange(const Element& editable,
     return paragraph_range;
 
   // Otherwise, check a chunk of text centered at |position|.
-  TextIteratorBehavior behavior = TextIteratorBehavior::Builder()
-                                      .SetEmitsObjectReplacementCharacter(true)
-                                      .Build();
+  TextIteratorBehavior behavior =
+      TextIteratorBehavior::Builder()
+          .SetEmitsObjectReplacementCharacter(true)
+          .SetEmitsPunctuationForReplacedElements(true)
+          .Build();
   BackwardsCharacterIterator backward_iterator(
       EphemeralRange(full_range.StartPosition(), position), behavior);
   if (!backward_iterator.AtEnd())
@@ -107,8 +110,7 @@ void HotModeSpellCheckRequester::CheckSpellingAt(const Position& position) {
     return;
   processed_root_editables_.push_back(root_editable);
 
-  if (!root_editable->IsSpellCheckingEnabled() &&
-      !SpellChecker::IsSpellCheckingEnabledAt(position)) {
+  if (!SpellChecker::IsSpellCheckingEnabledAt(position)) {
     return;
   }
 

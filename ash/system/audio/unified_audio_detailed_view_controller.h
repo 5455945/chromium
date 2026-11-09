@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,13 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "ash/components/audio/cras_audio_handler.h"
 #include "ash/system/unified/detailed_view_controller.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "chromeos/ash/components/audio/cras_audio_handler.h"
 
 namespace ash {
 
-namespace tray {
 class AudioDetailedView;
-}  // namespace tray
-
 class DetailedViewDelegate;
 class UnifiedSystemTrayController;
 
@@ -28,23 +25,32 @@ class ASH_EXPORT UnifiedAudioDetailedViewController
  public:
   explicit UnifiedAudioDetailedViewController(
       UnifiedSystemTrayController* tray_controller);
+
+  UnifiedAudioDetailedViewController(
+      const UnifiedAudioDetailedViewController&) = delete;
+  UnifiedAudioDetailedViewController& operator=(
+      const UnifiedAudioDetailedViewController&) = delete;
+
   ~UnifiedAudioDetailedViewController() override;
 
-  // DetailedViewControllerBase:
-  views::View* CreateView() override;
+  // DetailedViewController:
+  std::unique_ptr<views::View> CreateView() override;
   std::u16string GetAccessibleName() const override;
 
   // CrasAudioHandler::AudioObserver.
   void OnAudioNodesChanged() override;
   void OnActiveOutputNodeChanged() override;
   void OnActiveInputNodeChanged() override;
+  void OnNoiseCancellationStateChanged() override;
+  void OnStyleTransferStateChanged() override;
 
  private:
+  // Used in observers to call `AudioDetailedView::Update` on `view_`.
+  void UpdateView();
+
   const std::unique_ptr<DetailedViewDelegate> detailed_view_delegate_;
 
-  tray::AudioDetailedView* view_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(UnifiedAudioDetailedViewController);
+  raw_ptr<AudioDetailedView, DanglingUntriaged> view_ = nullptr;
 };
 
 }  // namespace ash

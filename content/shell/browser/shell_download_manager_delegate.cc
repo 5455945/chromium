@@ -1,26 +1,33 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/shell/browser/shell_download_manager_delegate.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
-#if defined(OS_WIN)
+#include "base/files/file_path.h"
+#include "base/notimplemented.h"
+#include "build/build_config.h"
+#include "components/download/public/common/download_target_info.h"
+
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include <commdlg.h>
 #endif
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
-#include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -30,7 +37,7 @@
 #include "content/shell/common/shell_switches.h"
 #include "net/base/filename_util.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #endif
@@ -62,23 +69,25 @@ void ShellDownloadManagerDelegate::Shutdown() {
 
 bool ShellDownloadManagerDelegate::DetermineDownloadTarget(
     download::DownloadItem* download,
-    DownloadTargetCallback* callback) {
+    download::DownloadTargetCallback* callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // This assignment needs to be here because even at the call to
   // SetDownloadManager, the system is not fully initialized.
   if (default_download_path_.empty()) {
-    default_download_path_ = download_manager_->GetBrowserContext()->GetPath().
-        Append(FILE_PATH_LITERAL("Downloads"));
+    default_download_path_ = download_manager_->GetBrowserContext()
+                                 ->GetPath()
+#if BUILDFLAG(IS_CHROMEOS)
+                                 .Append(FILE_PATH_LITERAL("MyFiles"))
+#endif
+                                 .Append(FILE_PATH_LITERAL("Downloads"));
   }
 
   if (!download->GetForcedFilePath().empty()) {
-    std::move(*callback).Run(
-        download->GetForcedFilePath(),
-        download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
-        download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-        download::DownloadItem::MixedContentStatus::UNKNOWN,
-        download->GetForcedFilePath(), absl::nullopt /*download_schedule*/,
-        download::DOWNLOAD_INTERRUPT_REASON_NONE);
+    download::DownloadTargetInfo target_info;
+    target_info.target_path = download->GetForcedFilePath();
+    target_info.intermediate_path = download->GetForcedFilePath();
+
+    std::move(*callback).Run(std::move(target_info));
     return true;
   }
 
@@ -134,18 +143,17 @@ void ShellDownloadManagerDelegate::GenerateFilename(
 
 void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
     uint32_t download_id,
-    DownloadTargetCallback callback,
+    download::DownloadTargetCallback callback,
     const base::FilePath& suggested_path) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (suppress_prompting_) {
     // Testing exit.
-    std::move(callback).Run(
-        suggested_path, download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
-        download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-        download::DownloadItem::MixedContentStatus::UNKNOWN,
-        suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload")),
-        absl::nullopt /*download_schedule*/,
-        download::DOWNLOAD_INTERRUPT_REASON_NONE);
+    download::DownloadTargetInfo target_info;
+    target_info.target_path = suggested_path;
+    target_info.intermediate_path =
+        suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload"));
+
+    std::move(callback).Run(std::move(target_info));
     return;
   }
 
@@ -154,7 +162,7 @@ void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
 
 void ShellDownloadManagerDelegate::ChooseDownloadPath(
     uint32_t download_id,
-    DownloadTargetCallback callback,
+    download::DownloadTargetCallback callback,
     const base::FilePath& suggested_path) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   download::DownloadItem* item = download_manager_->GetDownload(download_id);
@@ -162,12 +170,11 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
     return;
 
   base::FilePath result;
-#if defined(OS_WIN)
-  std::wstring file_part = base::FilePath(suggested_path).BaseName().value();
-  wchar_t file_name[MAX_PATH];
-  base::wcslcpy(file_name, file_part.c_str(), base::size(file_name));
-  OPENFILENAME save_as;
-  ZeroMemory(&save_as, sizeof(save_as));
+#if BUILDFLAG(IS_WIN)
+  std::wstring file_name = suggested_path.BaseName().value();
+  file_name.resize(MAX_PATH);
+
+  OPENFILENAME save_as{};
   save_as.lStructSize = sizeof(OPENFILENAME);
   WebContents* web_contents = DownloadItemUtils::GetWebContents(item);
   // |web_contents| could be null if the tab was quickly closed.
@@ -175,8 +182,8 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
     return;
   save_as.hwndOwner =
       web_contents->GetNativeView()->GetHost()->GetAcceleratedWidget();
-  save_as.lpstrFile = file_name;
-  save_as.nMaxFile = base::size(file_name);
+  save_as.lpstrFile = &file_name[0];
+  save_as.nMaxFile = file_name.size();
 
   std::wstring directory;
   if (!suggested_path.empty())
@@ -192,12 +199,13 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
   NOTIMPLEMENTED();
 #endif
 
-  std::move(callback).Run(result,
-                          download::DownloadItem::TARGET_DISPOSITION_PROMPT,
-                          download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-                          download::DownloadItem::MixedContentStatus::UNKNOWN,
-                          result, absl::nullopt /*download_schedule*/,
-                          download::DOWNLOAD_INTERRUPT_REASON_NONE);
+  download::DownloadTargetInfo target_info;
+  target_info.target_path = result;
+  target_info.intermediate_path = result;
+  target_info.target_disposition =
+      download::DownloadItem::TARGET_DISPOSITION_PROMPT;
+
+  std::move(callback).Run(std::move(target_info));
 }
 
 void ShellDownloadManagerDelegate::SetDownloadBehaviorForTesting(

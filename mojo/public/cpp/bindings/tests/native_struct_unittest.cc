@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,16 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
-#include "ipc/ipc_param_traits.h"
+#include "ipc/param_traits.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/wait.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -25,6 +24,10 @@ class NativeStructTest : public BindingsTestBase,
                          public test::NativeTypeTester {
  public:
   NativeStructTest() : receiver_(this, remote_.BindNewPipeAndPassReceiver()) {}
+
+  NativeStructTest(const NativeStructTest&) = delete;
+  NativeStructTest& operator=(const NativeStructTest&) = delete;
+
   ~NativeStructTest() override = default;
 
   test::NativeTypeTester* remote() { return remote_.get(); }
@@ -44,11 +47,9 @@ class NativeStructTest : public BindingsTestBase,
 
   Remote<test::NativeTypeTester> remote_;
   Receiver<test::NativeTypeTester> receiver_;
-
-  DISALLOW_COPY_AND_ASSIGN(NativeStructTest);
 };
 
-TEST_P(NativeStructTest, NativeStruct) {
+TEST_F(NativeStructTest, NativeStruct) {
   test::TestNativeStruct s("hello world", 5, 42);
   base::RunLoop loop;
   remote()->PassNativeStruct(
@@ -64,7 +65,7 @@ TEST_P(NativeStructTest, NativeStruct) {
   loop.Run();
 }
 
-TEST_P(NativeStructTest, NativeStructWithAttachments) {
+TEST_F(NativeStructTest, NativeStructWithAttachments) {
   mojo::MessagePipe pipe;
   const std::string kTestMessage = "hey hi";
   test::TestNativeStructWithAttachments s(kTestMessage,
@@ -93,7 +94,5 @@ TEST_P(NativeStructTest, NativeStructWithAttachments) {
           kTestMessage, std::move(pipe.handle1), &loop));
   loop.Run();
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(NativeStructTest);
 
 }  // namespace mojo

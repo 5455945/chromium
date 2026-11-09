@@ -1,10 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/aura/test/test_cursor_client.h"
 
 #include "ui/aura/client/cursor_client_observer.h"
+#include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/cursor_size.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/display/display.h"
@@ -40,20 +41,32 @@ void TestCursorClient::SetCursorForced(gfx::NativeCursor cursor) {
 
 void TestCursorClient::ShowCursor() {
   visible_ = true;
-  for (aura::client::CursorClientObserver& observer : observers_)
-    observer.OnCursorVisibilityChanged(true);
+  observers_.Notify(
+      &aura::client::CursorClientObserver::OnCursorVisibilityChanged, true);
 }
 
 void TestCursorClient::HideCursor() {
   visible_ = false;
-  for (aura::client::CursorClientObserver& observer : observers_)
-    observer.OnCursorVisibilityChanged(false);
+  observers_.Notify(
+      &aura::client::CursorClientObserver::OnCursorVisibilityChanged, false);
 }
 
 void TestCursorClient::SetCursorSize(ui::CursorSize cursor_size) {}
 
 ui::CursorSize TestCursorClient::GetCursorSize() const {
   return ui::CursorSize::kNormal;
+}
+
+void TestCursorClient::SetLargeCursorSizeInDip(int large_cursor_size_in_dip) {}
+
+int TestCursorClient::GetLargeCursorSizeInDip() const {
+  return ui::kDefaultLargeCursorSize;
+}
+
+void TestCursorClient::SetCursorColor(SkColor color) {}
+
+SkColor TestCursorClient::GetCursorColor() const {
+  return ui::kDefaultCursorColor;
 }
 
 bool TestCursorClient::IsCursorVisible() const {
@@ -75,8 +88,7 @@ bool TestCursorClient::IsMouseEventsEnabled() const {
 void TestCursorClient::SetDisplay(const display::Display& display) {}
 
 const display::Display& TestCursorClient::GetDisplay() const {
-  static const display::Display display;
-  return display;
+  return display_;
 }
 
 void TestCursorClient::LockCursor() {
@@ -106,6 +118,15 @@ void TestCursorClient::RemoveObserver(
 bool TestCursorClient::ShouldHideCursorOnKeyEvent(
     const ui::KeyEvent& event) const {
   return should_hide_cursor_on_key_event_;
+}
+
+bool TestCursorClient::ShouldHideCursorOnTouchEvent(
+    const ui::TouchEvent& event) const {
+  return true;
+}
+
+gfx::Size TestCursorClient::GetSystemCursorSize() const {
+  return gfx::Size(25, 25);
 }
 
 }  // namespace test

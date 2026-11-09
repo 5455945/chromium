@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/wm/window_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -28,40 +29,26 @@ const int kMinSize = 31;
 // After this duration in msec, the mode inicator will be fading out.
 const int kShowingDuration = 500;
 
-class ModeIndicatorFrameView : public views::BubbleFrameView {
- public:
-  METADATA_HEADER(ModeIndicatorFrameView);
-
-  explicit ModeIndicatorFrameView()
-      : views::BubbleFrameView(gfx::Insets(), gfx::Insets()) {}
-  ModeIndicatorFrameView(const ModeIndicatorFrameView&) = delete;
-  ModeIndicatorFrameView& operator=(const ModeIndicatorFrameView&) = delete;
-  ~ModeIndicatorFrameView() override {}
-
- private:
-  // views::BubbleFrameView overrides:
-  gfx::Rect GetAvailableScreenBounds(const gfx::Rect& rect) const override {
-    return display::Screen::GetScreen()
-        ->GetDisplayNearestPoint(rect.CenterPoint())
-        .bounds();
-  }
-};
-
-BEGIN_METADATA(ModeIndicatorFrameView, views::BubbleFrameView)
-END_METADATA
-
 }  // namespace
 
 ImeModeIndicatorView::ImeModeIndicatorView(const gfx::Rect& cursor_bounds,
                                            const std::u16string& label)
     : cursor_bounds_(cursor_bounds), label_view_(new views::Label(label)) {
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetCanActivate(false);
   set_accept_events(false);
-  set_shadow(views::BubbleBorder::STANDARD_SHADOW);
+  set_shadow_config({.shadow_type = views::BubbleBorder::STANDARD_SHADOW});
   SetArrow(views::BubbleBorder::TOP_CENTER);
+  set_frame_margins({.title = gfx::Insets()});
+  set_available_screen_bounds_callback(
+      base::BindRepeating([](const gfx::Rect& rect) {
+        return display::Screen::Get()
+            ->GetDisplayNearestPoint(rect.CenterPoint())
+            .bounds();
+      }));
+
   // Ignore this view for accessibility purposes.
-  SetAccessibleRole(ax::mojom::Role::kNone);
+  SetAccessibleWindowRole(ax::mojom::Role::kNone);
 }
 
 ImeModeIndicatorView::~ImeModeIndicatorView() = default;
@@ -70,8 +57,8 @@ void ImeModeIndicatorView::ShowAndFadeOut() {
   ::wm::SetWindowVisibilityAnimationTransition(GetWidget()->GetNativeView(),
                                                ::wm::ANIMATE_HIDE);
   GetWidget()->Show();
-  timer_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(kShowingDuration),
-               GetWidget(), &views::Widget::Close);
+  timer_.Start(FROM_HERE, base::Milliseconds(kShowingDuration), GetWidget(),
+               &views::Widget::Close);
 }
 
 void ImeModeIndicatorView::OnBeforeBubbleWidgetInit(
@@ -86,30 +73,21 @@ void ImeModeIndicatorView::OnBeforeBubbleWidgetInit(
   }
 }
 
-gfx::Size ImeModeIndicatorView::CalculatePreferredSize() const {
-  gfx::Size size = label_view_->GetPreferredSize();
+gfx::Size ImeModeIndicatorView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  gfx::Size size = label_view_->GetPreferredSize({});
   size.SetToMax(gfx::Size(kMinSize, kMinSize));
   return size;
 }
 
 void ImeModeIndicatorView::Init() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
-  AddChildView(label_view_);
+  AddChildViewRaw(label_view_.get());
 
   SetAnchorRect(cursor_bounds_);
 }
 
-std::unique_ptr<views::NonClientFrameView>
-ImeModeIndicatorView::CreateNonClientFrameView(views::Widget* widget) {
-  auto frame = std::make_unique<ModeIndicatorFrameView>();
-  // arrow adjustment in BubbleDialogDelegateView is unnecessary because arrow
-  // of this bubble is always center.
-  frame->SetBubbleBorder(
-      std::make_unique<views::BubbleBorder>(arrow(), GetShadow(), color()));
-  return frame;
-}
-
-BEGIN_METADATA(ImeModeIndicatorView, views::BubbleDialogDelegateView)
+BEGIN_METADATA(ImeModeIndicatorView)
 END_METADATA
 
 }  // namespace ash

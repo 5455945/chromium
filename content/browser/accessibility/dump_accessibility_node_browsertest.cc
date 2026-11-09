@@ -1,15 +1,18 @@
-// Copyright (c) 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/strings/escape.h"
 #include "content/browser/accessibility/dump_accessibility_browsertest_base.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "net/base/escape.h"
 #include "ui/accessibility/accessibility_switches.h"
+#include "ui/accessibility/platform/inspect/ax_api_type.h"
 
 namespace content {
 
@@ -18,16 +21,12 @@ using ui::AXTreeFormatter;
 
 class DumpAccessibilityNodeTest : public DumpAccessibilityTestBase {
  public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    // kDisableAXMenuList is true on Chrome OS by default. This can cause the
-    // calculation of text alternatives from content to fail in blink tests
-    // which include a select element descendant.
-    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kDisableAXMenuList, "false");
-  }
-
   std::vector<ui::AXPropertyFilter> DefaultFilters() const override {
     std::vector<AXPropertyFilter> property_filters;
+    if (GetParam() == ui::AXApiType::kMac) {
+      return property_filters;
+    }
+
     property_filters.emplace_back("value='*'", AXPropertyFilter::ALLOW);
     property_filters.emplace_back("value='http*'", AXPropertyFilter::DENY);
     property_filters.emplace_back("layout-guess:*", AXPropertyFilter::ALLOW);
@@ -44,42 +43,48 @@ class DumpAccessibilityNodeTest : public DumpAccessibilityTestBase {
     return property_filters;
   }
 
-  std::vector<std::string> Dump(std::vector<std::string>& unused) override {
+  std::vector<std::string> Dump() override {
+    WaitForFinalTreeContents();
+
     std::unique_ptr<AXTreeFormatter> formatter(CreateFormatter());
 
     formatter->SetPropertyFilters(scenario_.property_filters,
                                   AXTreeFormatter::kFiltersDefaultSet);
 
-    BrowserAccessibility* test_node = FindNodeByHTMLAttribute("id", "test");
-    if (!test_node)
-      test_node = FindNodeByHTMLAttribute("class", "test");
-
-    std::string contents =
-        test_node ? formatter->FormatNode(test_node) : "Test node not found.";
-
-    std::string escaped_contents = net::EscapeNonASCII(contents);
-    return base::SplitString(escaped_contents, "\n", base::KEEP_WHITESPACE,
+    std::string contents = FormatWebContentsTestNode(*formatter);
+    return base::SplitString(contents, "\n", base::KEEP_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
   }
 
-  void RunAriaTest(const base::FilePath::CharType* file_path) {
-    base::FilePath test_path = GetTestFilePath("accessibility", "aria");
-    {
-      base::ScopedAllowBlockingForTesting allow_blocking;
-      ASSERT_TRUE(base::PathExists(test_path)) << test_path.LossyDisplayName();
-    }
-    base::FilePath aria_file = test_path.Append(base::FilePath(file_path));
-    RunTest(aria_file, "accessibility/aria", FILE_PATH_LITERAL("node"));
+  void ChooseFeatures(
+      std::vector<base::test::FeatureRef>* enabled_features,
+      std::vector<base::test::FeatureRef>* disabled_features) override {
+    enabled_features->emplace_back(blink::features::kMathMLAnchorElement);
+#if BUILDFLAG(IS_ANDROID)
+    disabled_features->emplace_back(
+        features::kAccessibilityPopulateSupplementalDescriptionApi);
+#endif  // BUILDFLAG(IS_ANDROID)
+    DumpAccessibilityTestBase::ChooseFeatures(enabled_features,
+                                              disabled_features);
   }
 
-  void RunHtmlTest(const base::FilePath::CharType* file_path) {
-    base::FilePath test_path = GetTestFilePath("accessibility", "html");
+  void RunBaseTest(const base::FilePath::CharType* file_path,
+                   const char* qualifier) {
+    base::FilePath test_path = GetTestFilePath("accessibility", qualifier);
     {
       base::ScopedAllowBlockingForTesting allow_blocking;
       ASSERT_TRUE(base::PathExists(test_path)) << test_path.LossyDisplayName();
     }
-    base::FilePath html_file = test_path.Append(base::FilePath(file_path));
-    RunTest(html_file, "accessibility/html", FILE_PATH_LITERAL("node"));
+    base::FilePath full_file_path = test_path.Append(base::FilePath(file_path));
+    std::string dir(std::string() + "accessibility/" + qualifier);
+    RunTest(full_file_path, dir.c_str(), FILE_PATH_LITERAL("node"));
+  }
+
+  void RunAriaTest(const base::FilePath::CharType* file_path) {
+    RunBaseTest(file_path, "aria");
+  }
+  void RunHtmlTest(const base::FilePath::CharType* file_path) {
+    RunBaseTest(file_path, "html");
   }
 };
 
@@ -87,6 +92,10 @@ class DumpAccessibilityAccNameTest : public DumpAccessibilityNodeTest {
  public:
   std::vector<ui::AXPropertyFilter> DefaultFilters() const override {
     std::vector<AXPropertyFilter> property_filters;
+    if (GetParam() == ui::AXApiType::kMac) {
+      return property_filters;
+    }
+
     property_filters.emplace_back("name*", AXPropertyFilter::ALLOW_EMPTY);
     property_filters.emplace_back("description*",
                                   AXPropertyFilter::ALLOW_EMPTY);
@@ -103,21 +112,49 @@ class DumpAccessibilityAccNameTest : public DumpAccessibilityNodeTest {
     return property_filters;
   }
 
-  void RunAccNameTest(const base::FilePath::CharType* file_path) {
-    base::FilePath test_path = GetTestFilePath("accessibility", "accname");
+  void RunAccTest(const base::FilePath::CharType* file_path,
+                  const char* qualifier) {
+    base::FilePath test_path = GetTestFilePath("accessibility", qualifier);
     {
       base::ScopedAllowBlockingForTesting allow_blocking;
       ASSERT_TRUE(base::PathExists(test_path)) << test_path.LossyDisplayName();
     }
     base::FilePath accname_file = test_path.Append(base::FilePath(file_path));
-    RunTest(accname_file, "accessibility/accname");
+
+    std::string dir(std::string() + "accessibility/" + qualifier);
+    RunTest(accname_file, dir.c_str());
+  }
+
+  void RunAccNameTest(const base::FilePath::CharType* file_path) {
+    RunAccTest(file_path, "accname");
+  }
+  void RunAccDescTest(const base::FilePath::CharType* file_path) {
+    RunAccTest(file_path, "accdescription");
+  }
+};
+
+class DumpAccessibilityAccNameTestExceptUIA
+    : public DumpAccessibilityAccNameTest {};
+
+// Revert CL 3721405 once crbug.com/1260585 (implement MathML UIA) is fixed,
+// also see related crbug.com/1272996 (MathML tests fail on UIA).
+class DumpAccessibilityMathMLNodeTest : public DumpAccessibilityNodeTest {
+ public:
+  void RunMathMLTest(const base::FilePath::CharType* file_path) {
+    base::FilePath test_path = GetTestFilePath("accessibility", "mathml");
+    {
+      base::ScopedAllowBlockingForTesting allow_blocking;
+      ASSERT_TRUE(base::PathExists(test_path)) << test_path.LossyDisplayName();
+    }
+    base::FilePath mathml_file = test_path.Append(base::FilePath(file_path));
+    RunTest(mathml_file, "accessibility/mathml", FILE_PATH_LITERAL("node"));
   }
 };
 
 // Parameterize the tests so that each test-pass is run independently.
 struct TestPassToString {
   std::string operator()(
-      const ::testing::TestParamInfo<AXInspectFactory::Type>& i) const {
+      const ::testing::TestParamInfo<ui::AXApiType::Type>& i) const {
     return std::string(i.param);
   }
 };
@@ -125,13 +162,26 @@ struct TestPassToString {
 INSTANTIATE_TEST_SUITE_P(
     All,
     DumpAccessibilityNodeTest,
-    ::testing::ValuesIn(DumpAccessibilityTestHelper::TreeTestPasses()),
+    ::testing::ValuesIn(DumpAccessibilityTestBase::TreeTestPasses()),
+    TestPassToString());
+
+// UIA is excluded due to flakiness. See https://crbug.com/1459215
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DumpAccessibilityAccNameTest,
+    ::testing::ValuesIn(DumpAccessibilityTestBase::TreeTestPassesExceptUIA()),
     TestPassToString());
 
 INSTANTIATE_TEST_SUITE_P(
     All,
-    DumpAccessibilityAccNameTest,
-    ::testing::ValuesIn(DumpAccessibilityTestHelper::TreeTestPasses()),
+    DumpAccessibilityAccNameTestExceptUIA,
+    ::testing::ValuesIn(DumpAccessibilityTestBase::TreeTestPassesExceptUIA()),
+    TestPassToString());
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DumpAccessibilityMathMLNodeTest,
+    ::testing::ValuesIn(DumpAccessibilityTestBase::TreeTestPassesExceptUIA()),
     TestPassToString());
 
 // ARIA tests.
@@ -145,7 +195,125 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityNodeTest,
   RunHtmlTest(FILE_PATH_LITERAL("table-th-colheader.html"));
 }
 
+//
+// MathML tests.
+//
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLAnchor) {
+  RunMathMLTest(FILE_PATH_LITERAL("a.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLAction) {
+  RunMathMLTest(FILE_PATH_LITERAL("maction.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLAnnotation) {
+  RunMathMLTest(FILE_PATH_LITERAL("annotation.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLAnnotationXML) {
+  RunMathMLTest(FILE_PATH_LITERAL("annotation-xml.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLError) {
+  RunMathMLTest(FILE_PATH_LITERAL("merror.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLFraction) {
+  RunMathMLTest(FILE_PATH_LITERAL("mfrac.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLIdentifier) {
+  RunMathMLTest(FILE_PATH_LITERAL("mi.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLIntent) {
+  RunMathMLTest(FILE_PATH_LITERAL("intent.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLMath) {
+  RunMathMLTest(FILE_PATH_LITERAL("math.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLMultiscripts) {
+  RunMathMLTest(FILE_PATH_LITERAL("mmultiscripts.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLNone) {
+  RunMathMLTest(FILE_PATH_LITERAL("none.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLNumber) {
+  RunMathMLTest(FILE_PATH_LITERAL("mn.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLOperator) {
+  RunMathMLTest(FILE_PATH_LITERAL("mo.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLOver) {
+  RunMathMLTest(FILE_PATH_LITERAL("mover.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLPadded) {
+  RunMathMLTest(FILE_PATH_LITERAL("mpadded.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLPhantom) {
+  RunMathMLTest(FILE_PATH_LITERAL("mphantom.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLPrescripts) {
+  RunMathMLTest(FILE_PATH_LITERAL("mprescripts.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLRoot) {
+  RunMathMLTest(FILE_PATH_LITERAL("mroot.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLRow) {
+  RunMathMLTest(FILE_PATH_LITERAL("mrow.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLSemantics) {
+  RunMathMLTest(FILE_PATH_LITERAL("semantics.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLSpace) {
+  RunMathMLTest(FILE_PATH_LITERAL("mspace.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLSquareRoot) {
+  RunMathMLTest(FILE_PATH_LITERAL("msqrt.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLStringLiteral) {
+  RunMathMLTest(FILE_PATH_LITERAL("ms.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLStyle) {
+  RunMathMLTest(FILE_PATH_LITERAL("mstyle.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLSub) {
+  RunMathMLTest(FILE_PATH_LITERAL("msub.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLSubSup) {
+  RunMathMLTest(FILE_PATH_LITERAL("msubsup.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLSup) {
+  RunMathMLTest(FILE_PATH_LITERAL("msup.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLTable) {
+  RunMathMLTest(FILE_PATH_LITERAL("mtable.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLTableCell) {
+  RunMathMLTest(FILE_PATH_LITERAL("mtd.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLTableRow) {
+  RunMathMLTest(FILE_PATH_LITERAL("mtr.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLText) {
+  RunMathMLTest(FILE_PATH_LITERAL("mtext.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLUnder) {
+  RunMathMLTest(FILE_PATH_LITERAL("munder.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLUnderOver) {
+  RunMathMLTest(FILE_PATH_LITERAL("munderover.html"));
+}
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityMathMLNodeTest, MathMLUnknown) {
+  RunMathMLTest(FILE_PATH_LITERAL("unknown.html"));
+}
+
+//
+// AccDescription tests.
+//
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, DescriptionIgnoresSlot) {
+  RunAccDescTest(FILE_PATH_LITERAL("description-ignores-slot.html"));
+}
+
+//
 // AccName tests.
+//
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, DescComboboxFocusable) {
   RunAccNameTest(FILE_PATH_LITERAL("desc-combobox-focusable.html"));
 }
@@ -154,6 +322,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
                        DescFromContentOfDescribedbyElement) {
   RunAccNameTest(
       FILE_PATH_LITERAL("desc-from-content-of-describedby-element.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       DescFromContentOfDescribedbyElementRecursive) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "desc-from-content-of-describedby-element-recursive.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
@@ -180,6 +354,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
                        DescImgAltDescribedbyPresentational) {
   RunAccNameTest(
       FILE_PATH_LITERAL("desc-img-alt-describedby-presentational.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       DescImgAltDescribedbyPresentationalDynamic) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "desc-img-alt-describedby-presentational-dynamic.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, DescImgDescribedby) {
@@ -215,6 +395,11 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
   RunAccNameTest(FILE_PATH_LITERAL("desc-link-with-label-and-title.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameButtonAriaPressedFalse) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-button-aria-pressed-false.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameButtonLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-button-label.html"));
 }
@@ -226,6 +411,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameButtonLabelledby) {
   RunAccNameTest(FILE_PATH_LITERAL("name-button-labelledby.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameButtonLabelledbySelf) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-button-labelledby-self.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
@@ -249,6 +438,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
                        NameCheckboxCssBeforeInLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-checkbox-css-before-in-label.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameCheckboxCssBeforeAndAfterWithWhitespace) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-checkbox-css-before-and-after-with-whitespace.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameCheckboxInputInLabel) {
@@ -339,7 +534,9 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameComboboxFocusable) {
   RunAccNameTest(FILE_PATH_LITERAL("name-combobox-focusable.html"));
 }
 
-IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameDivContentOnly) {
+// TODO(crbug.com/40842662): disabled on UIA
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTestExceptUIA,
+                       NameDivContentOnly) {
   RunAccNameTest(FILE_PATH_LITERAL("name-div-content-only.html"));
 }
 
@@ -359,12 +556,24 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameDivMultipleSources) {
   RunAccNameTest(FILE_PATH_LITERAL("name-div-multiple-sources.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFileAriaLabel) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-file-aria-label.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFileCssAfterInLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-file-css-after-in-label.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFileCssBeforeInLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-file-css-before-in-label.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFileDefault) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-file-default.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFileDefaultRtl) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-file-default-rtl.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFileInLabel) {
@@ -446,6 +655,14 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFromContent) {
   RunAccNameTest(FILE_PATH_LITERAL("name-from-content.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFromContentDfn) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-from-content-dfn.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFromContentOfAddress) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-from-content-of-address.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFromContentOfLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-from-content-of-label.html"));
 }
@@ -462,10 +679,66 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
       "name-from-content-of-labelledby-elements-one-of-which-is-hidden.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFromContentTermRole) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-from-content-term-role.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameFromContentWhitespaceBlockChildren) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-from-content-whitespace-block-children.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    DumpAccessibilityAccNameTest,
+    NameFromContentWhitespaceBlockChildrenCollapsesExtraWhitespace) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-from-content-whitespace-block-children-collapses-"
+                        "extra-whitespace.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameFromContentWhitespaceInlineBlockChildren) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-from-content-whitespace-inline-block-children.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameFromContentWhitespaceInlineChildren) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-from-content-whitespace-inline-children.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameFromContentWhitespaceInlineFlexChildren) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-from-content-whitespace-inline-flex-children.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameFromContentWhitespaceInlineGridChildren) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-from-content-whitespace-inline-grid-children.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameFromContentWhitespaceInlineTableChildren) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-from-content-whitespace-inline-table-children.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameFromListItem) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-from-list-item.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
                        NameHeadingComboboxFocusableAlternative) {
   RunAccNameTest(
       FILE_PATH_LITERAL("name-heading-combobox-focusable-alternative.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameIgnoresSlot) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-ignores-slot.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameImageCssAfterInLabel) {
@@ -504,6 +777,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameImageTitle) {
   RunAccNameTest(FILE_PATH_LITERAL("name-image-title.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameImgEmptyAltTitle) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-img-empty-alt-title.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameImgLabelAltTitle) {
@@ -580,6 +857,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameLinkMixedContent) {
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameLinkMultipleSources) {
   RunAccNameTest(FILE_PATH_LITERAL("name-link-multiple-sources.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameLinkTermDefinition) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-link-term-definition.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
@@ -709,6 +990,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameResetButton) {
   RunAccNameTest(FILE_PATH_LITERAL("name-reset-button.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextContentOfLabelledByElementRecursive) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-text-content-of-labelledby-element-recursive.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameTextCssAfterInLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-text-css-after-in-label.html"));
 }
@@ -722,8 +1009,17 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
   RunAccNameTest(FILE_PATH_LITERAL("name-text-dynamic-labelledby.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextInputLabelledbyDiv) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-text-input-labelledby-div.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameTextInputInLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-text-input-in-label.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameTextInputInOwnLabel) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-text-input-in-own-label.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
@@ -757,8 +1053,38 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
   RunAccNameTest(FILE_PATH_LITERAL("name-text-label-embedded-spinbutton.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelInlineWithWhitespace) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-text-label-inline-with-whitespace.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameTextLabel) {
   RunAccNameTest(FILE_PATH_LITERAL("name-text-label.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelledbyDynamicallyHidden) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-text-labelledby-dynamically-hidden.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelledbyAriaHiddenDifferentVisibilityTypes) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-text-labelledby-aria-hidden-different-visibility-types.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelledbyHiddenDifferentVisibilityTypes) {
+  RunAccNameTest(FILE_PATH_LITERAL(
+      "name-text-labelledby-hidden-different-visibility-types.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelledbyHiddenMultipleLevels) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-text-labelledby-hidden-multiple-levels.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
@@ -777,8 +1103,19 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
   RunAccNameTest(FILE_PATH_LITERAL("name-text-labelledby-self-and-div.html"));
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelledbyWithGeneratedContent) {
+  RunAccNameTest(
+      FILE_PATH_LITERAL("name-text-labelledby-with-generated-content.html"));
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameTextLabelWithInput) {
   RunAccNameTest(FILE_PATH_LITERAL("name-text-label-with-input.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest,
+                       NameTextLabelWithReadonlyInput) {
+  RunAccNameTest(FILE_PATH_LITERAL("name-text-label-with-readonly-input.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityAccNameTest, NameTextSelectInLabel) {

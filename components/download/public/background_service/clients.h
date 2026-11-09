@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 
 #include <map>
 #include <memory>
+#include <string>
 
+#include "base/component_export.h"
 #include "components/download/public/background_service/client.h"
 
 namespace download {
@@ -39,13 +41,22 @@ enum class DownloadClient {
 
   MOUNTAIN_INTERNAL = 4,
 
+  // Deprecated. Do not reuse this value.
   PLUGIN_VM_IMAGE = 5,
 
   OPTIMIZATION_GUIDE_PREDICTION_MODELS = 6,
 
+  BRUSCHETTA = 7,
+
   // New clients should be added above here.
-  BOUNDARY = 7,
+  BOUNDARY = 8,
 };
+
+// Get a string that represents a particular client. Used in histograms and
+// debugging web UI. Must never change existing value and sync value with
+// variants "DownloadClient" in histograms.xml.
+COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
+std::string BackgroundDownloadClientToString(DownloadClient client);
 
 using DownloadClientMap = std::map<DownloadClient, std::unique_ptr<Client>>;
 

@@ -1,37 +1,32 @@
-// Copyright 2011 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.storage.mechanism.PrefixedMechanismTest');
 goog.setTestOnly();
 
 const HTML5LocalStorage = goog.require('goog.storage.mechanism.HTML5LocalStorage');
 const PrefixedMechanism = goog.require('goog.storage.mechanism.PrefixedMechanism');
-/** @suppress {extraRequire} */
-const mechanismSeparationTester = goog.require('goog.storage.mechanism.mechanismSeparationTester');
-/** @suppress {extraRequire} */
-const mechanismSharingTester = goog.require('goog.storage.mechanism.mechanismSharingTester');
+const iterableMechanismTests = goog.require('goog.storage.mechanism.iterableMechanismTests');
+const mechanismSeparationTests = goog.require('goog.storage.mechanism.mechanismSeparationTests');
+const mechanismSharingTests = goog.require('goog.storage.mechanism.mechanismSharingTests');
+const mechanismTests = goog.require('goog.storage.mechanism.mechanismTests');
 const testSuite = goog.require('goog.testing.testSuite');
 
 let submechanism = null;
+let mechanism;
+let mechanismShared;
+let mechanismSeparate;
 
 testSuite({
   setUp() {
     submechanism = new HTML5LocalStorage();
     if (submechanism.isAvailable()) {
       mechanism = new PrefixedMechanism(submechanism, 'test');
-      mechanism_shared = new PrefixedMechanism(submechanism, 'test');
-      mechanism_separate = new PrefixedMechanism(submechanism, 'test2');
+      mechanismShared = new PrefixedMechanism(submechanism, 'test');
+      mechanismSeparate = new PrefixedMechanism(submechanism, 'test2');
     }
   },
 
@@ -40,21 +35,54 @@ testSuite({
       mechanism.clear();
       mechanism = null;
     }
-    if (!!mechanism_shared) {
-      mechanism_shared.clear();
-      mechanism_shared = null;
+    if (!!mechanismShared) {
+      mechanismShared.clear();
+      mechanismShared = null;
     }
-    if (!!mechanism_separate) {
-      mechanism_separate.clear();
-      mechanism_separate = null;
+    if (!!mechanismSeparate) {
+      mechanismSeparate.clear();
+      mechanismSeparate = null;
     }
   },
 
   testAvailability() {
     if (submechanism.isAvailable()) {
       assertNotNull(mechanism);
-      assertNotNull(mechanism_shared);
-      assertNotNull(mechanism_separate);
+      assertNotNull(mechanismShared);
+      assertNotNull(mechanismSeparate);
     }
   },
+
+  ...mechanismTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMinimumQuota: function() {
+      return 0;
+    },
+  }),
+
+  ...iterableMechanismTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+  }),
+
+  ...mechanismSharingTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMechanismShared: function() {
+      return mechanismShared;
+    },
+  }),
+
+  ...mechanismSeparationTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMechanismSeparate: function() {
+      return mechanismSeparate;
+    },
+  }),
 });

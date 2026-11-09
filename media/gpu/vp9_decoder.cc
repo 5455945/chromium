@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,39 +6,50 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "media/base/limit_checks.h"
 #include "media/base/limits.h"
 #include "media/base/media_switches.h"
+#include "media/base/platform_features.h"
 #include "media/gpu/vp9_decoder.h"
 
 namespace media {
 
 namespace {
-std::vector<uint32_t> GetSpatialLayerFrameSize(
-    const DecoderBuffer& decoder_buffer) {
-#if defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS_ASH)
-  const uint32_t* cue_data =
-      reinterpret_cast<const uint32_t*>(decoder_buffer.side_data());
-  if (!cue_data) {
-    return {};
-  }
-  if (!base::FeatureList::IsEnabled(media::kVp9kSVCHWDecoding)) {
-    DLOG(ERROR) << "Vp9Parser doesn't support parsing SVC stream";
-    return {};
+bool GetSpatialLayerFrameSize(const DecoderBuffer& decoder_buffer,
+                              std::vector<uint32_t>& frame_sizes) {
+  frame_sizes.clear();
+
+  if (!decoder_buffer.side_data() ||
+      decoder_buffer.side_data()->spatial_layers.empty()) {
+    return true;
   }
 
-  size_t num_of_layers = decoder_buffer.side_data_size() / sizeof(uint32_t);
+  bool enable_vp9_ksvc =
+  // V4L2 stateless decoder does not support VP9 kSVC streams.
+  // See comments in media::IsVp9kSVCHWDecodingEnabled().
+#if BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_ARM_FAMILY)
+      false;
+#else
+      media::IsVp9kSVCHWDecodingEnabled();
+#endif  // BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_ARM_FAMILY)
+
+  if (!enable_vp9_ksvc) {
+    DLOG(ERROR) << "VP9 k-SVC hardware decoding is disabled";
+    return false;
+  }
+
+  size_t num_of_layers = decoder_buffer.side_data()->spatial_layers.size();
   if (num_of_layers > 3u) {
     DLOG(WARNING) << "The maximum number of spatial layers in VP9 is three";
-    return {};
+    return false;
   }
-  return std::vector<uint32_t>(cue_data, cue_data + num_of_layers);
-#endif  // defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS_ASH)
-  return {};
+
+  frame_sizes = decoder_buffer.side_data()->spatial_layers;
+  return true;
 }
 
 VideoCodecProfile VP9ProfileToVideoCodecProfile(uint8_t profile) {
@@ -67,19 +78,34 @@ bool IsValidBitDepth(uint8_t bit_depth, VideoCodecProfile profile) {
       return bit_depth == 10u || bit_depth == 12u;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
-bool IsYUV420Sequence(const Vp9FrameHeader& frame_header) {
-  // Spec 7.2.2
-  return frame_header.subsampling_x == 1u && frame_header.subsampling_y == 1u;
+VideoChromaSampling GetVP9ChromaSampling(const Vp9FrameHeader& frame_header) {
+  // Spec section 7.2.2
+  uint8_t subsampling_x = frame_header.subsampling_x;
+  uint8_t subsampling_y = frame_header.subsampling_y;
+  if (subsampling_x == 0 && subsampling_y == 0) {
+    return VideoChromaSampling::k444;
+  } else if (subsampling_x == 1u && subsampling_y == 0u) {
+    return VideoChromaSampling::k422;
+  } else if (subsampling_x == 1u && subsampling_y == 1u) {
+    return VideoChromaSampling::k420;
+  } else {
+    DLOG(WARNING) << "Unknown chroma sampling format.";
+    return VideoChromaSampling::kUnknown;
+  }
 }
 }  // namespace
 
 VP9Decoder::VP9Accelerator::VP9Accelerator() {}
 
 VP9Decoder::VP9Accelerator::~VP9Accelerator() {}
+
+scoped_refptr<VP9Picture> VP9Decoder::VP9Accelerator::CreateVP9PictureSecure(
+    uint64_t secure_handle) {
+  return nullptr;
+}
 
 VP9Decoder::VP9Decoder(std::unique_ptr<VP9Accelerator> accelerator,
                        VideoCodecProfile profile,
@@ -88,28 +114,36 @@ VP9Decoder::VP9Decoder(std::unique_ptr<VP9Accelerator> accelerator,
       container_color_space_(container_color_space),
       // TODO(hiroh): Set profile to UNKNOWN.
       profile_(profile),
-      accelerator_(std::move(accelerator)),
-      parser_(accelerator_->IsFrameContextRequired()) {}
+      accelerator_(std::move(accelerator)) {}
 
 VP9Decoder::~VP9Decoder() = default;
 
-void VP9Decoder::SetStream(int32_t id, const DecoderBuffer& decoder_buffer) {
-  const uint8_t* ptr = decoder_buffer.data();
-  const size_t size = decoder_buffer.data_size();
-  const DecryptConfig* decrypt_config = decoder_buffer.decrypt_config();
+void VP9Decoder::SetStream(int32_t id,
+                           scoped_refptr<DecoderBuffer> decoder_buffer) {
+  CHECK(decoder_buffer);
+  // Keep the old buffer alive until the end of this function to ensure
+  // that any active spans in the parser are cleared before the memory is freed.
+  auto outgoing_decoder_buffer = std::move(decoder_buffer_);
+  decoder_buffer_ = std::move(decoder_buffer);
+  const DecryptConfig* decrypt_config = decoder_buffer_->decrypt_config();
 
-  DCHECK(ptr);
-  DCHECK(size);
-  DVLOG(4) << "New input stream id: " << id << " at: " << (void*)ptr
-           << " size: " << size;
+  DVLOG(4) << "New input stream id: " << id
+           << ", buffer: " << decoder_buffer_->AsHumanReadableString();
   stream_id_ = id;
-  if (decrypt_config) {
-    parser_.SetStream(ptr, size, GetSpatialLayerFrameSize(decoder_buffer),
-                      decrypt_config->Clone());
-  } else {
-    parser_.SetStream(ptr, size, GetSpatialLayerFrameSize(decoder_buffer),
-                      nullptr);
+  std::vector<uint32_t> frame_sizes;
+  if (!GetSpatialLayerFrameSize(*decoder_buffer_, frame_sizes)) {
+    SetError();
+    return;
   }
+  if (decoder_buffer_->side_data() &&
+      decoder_buffer_->side_data()->secure_handle) {
+    secure_handle_ = decoder_buffer_->side_data()->secure_handle;
+  } else {
+    secure_handle_ = 0;
+  }
+
+  parser_.SetStream(*decoder_buffer_, frame_sizes,
+                    decrypt_config ? decrypt_config->Clone() : nullptr);
 }
 
 bool VP9Decoder::Flush() {
@@ -126,6 +160,9 @@ void VP9Decoder::Reset() {
   ref_frames_.Clear();
 
   parser_.Reset();
+  decoder_buffer_.reset();
+
+  secure_handle_ = 0;
 
   if (state_ == kDecoding) {
     state_ = kAfterReset;
@@ -134,6 +171,9 @@ void VP9Decoder::Reset() {
 
 VP9Decoder::DecodeResult VP9Decoder::Decode() {
   while (true) {
+    if (state_ == kError)
+      return kDecodeError;
+
     // If we have a pending picture to decode, try that first.
     if (pending_pic_) {
       VP9Accelerator::Status status =
@@ -165,10 +205,6 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
           DVLOG(1) << "Error parsing stream";
           SetError();
           return kDecodeError;
-
-        case Vp9Parser::kAwaitingRefresh:
-          DVLOG(4) << "Awaiting context update";
-          return kNeedContextUpdate;
       }
     }
 
@@ -204,18 +240,13 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
       // correct timestamp.
       scoped_refptr<VP9Picture> pic =
           ref_frames_.GetFrame(frame_to_show)->Duplicate();
-      if (pic == nullptr) {
-        DVLOG(1) << "Failed to duplicate the VP9Picture.";
-        SetError();
-        return kDecodeError;
-      }
       pic->set_bitstream_id(stream_id_);
+      pic->frame_hdr = std::move(curr_frame_hdr_);
       if (!accelerator_->OutputPicture(std::move(pic))) {
         SetError();
         return kDecodeError;
       }
 
-      curr_frame_hdr_.reset();
       decrypt_config_.reset();
       continue;
     }
@@ -223,12 +254,18 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
     gfx::Size new_pic_size = curr_frame_size_;
     gfx::Rect new_render_rect(curr_frame_hdr_->render_width,
                               curr_frame_hdr_->render_height);
-    // For safety, check the validity of render size or leave it as pic size.
-    if (!gfx::Rect(new_pic_size).Contains(new_render_rect)) {
-      DVLOG(1) << "Render size exceeds picture size. render size: "
+    const gfx::Rect frame_size(curr_frame_hdr_->frame_width,
+                               curr_frame_hdr_->frame_height);
+    if (!frame_size.Contains(new_render_rect)) {
+      // For safety, check the validity of render size or leave it as the actual
+      // per-frame decoded size. In the k-SVC path |curr_frame_size_| is the
+      // *maximum* layer size (Vp9Parser::ParseSVCFrame stamps allocate_size
+      // onto every layer), so clamping against it would allow render_rect to
+      // extend into the undecoded region of the surface (b/149727823).
+      DVLOG(1) << "Render size exceeds frame size. render size: "
                << new_render_rect.ToString()
-               << ", picture size: " << new_pic_size.ToString();
-      new_render_rect = gfx::Rect(new_pic_size);
+               << ", frame size: " << frame_size.ToString();
+      new_render_rect = frame_size;
     }
     VideoCodecProfile new_profile =
         VP9ProfileToVideoCodecProfile(curr_frame_hdr_->profile);
@@ -242,18 +279,58 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
                << ", profile=" << GetProfileName(new_profile);
       return kDecodeError;
     }
-    if (!IsYUV420Sequence(*curr_frame_hdr_)) {
+    VideoChromaSampling new_chroma_sampling =
+        GetVP9ChromaSampling(*curr_frame_hdr_);
+    if (new_chroma_sampling != chroma_sampling_) {
+      chroma_sampling_ = new_chroma_sampling;
+    }
+
+    if (chroma_sampling_ != VideoChromaSampling::k420) {
       DVLOG(1) << "Only YUV 4:2:0 is supported";
       return kDecodeError;
     }
 
+    VideoColorSpace new_color_space;
+    // For VP9, container color spaces override video stream color spaces.
+    if (container_color_space_.IsSpecified()) {
+      new_color_space = container_color_space_;
+    } else if (curr_frame_hdr_->GetColorSpace().IsSpecified()) {
+      new_color_space = curr_frame_hdr_->GetColorSpace();
+    }
+
     DCHECK(!new_pic_size.IsEmpty());
-    if (new_pic_size != pic_size_ || new_profile != profile_ ||
-        curr_frame_hdr_->bit_depth != bit_depth_) {
+
+    // Ensure that the `new_pic_size` that comes directly from web-controlled
+    // contents is bounds checked before passing off the the HW decoder.
+    if (!ValidMediaSize(new_pic_size)) [[unlikely]] {
+      DVLOG(1) << "Frame size: " << new_pic_size.ToString()
+               << " exceeds maximum video size limits.";
+      SetError();
+      return kDecodeError;
+    }
+
+    bool is_color_space_change = false;
+    if (base::FeatureList::IsEnabled(kAVDColorSpaceChanges)) {
+      is_color_space_change = new_color_space.IsSpecified() &&
+                              new_color_space != picture_color_space_;
+    }
+
+    const bool is_pic_size_different = new_pic_size != pic_size_;
+    const bool is_pic_size_larger = new_pic_size.width() > pic_size_.width() ||
+                                    new_pic_size.height() > pic_size_.height();
+    const bool is_new_configuration_different_enough =
+        (ignore_resolution_changes_to_smaller_for_testing_
+             ? is_pic_size_larger
+             : is_pic_size_different) ||
+        new_profile != profile_ || curr_frame_hdr_->bit_depth != bit_depth_ ||
+        is_color_space_change;
+
+    if (is_new_configuration_different_enough) {
       DVLOG(1) << "New profile: " << GetProfileName(new_profile)
-               << ", New resolution: " << new_pic_size.ToString()
-               << ", New bit depth: "
-               << base::strict_cast<int>(curr_frame_hdr_->bit_depth);
+               << ", new resolution: " << new_pic_size.ToString()
+               << ", new bit depth: "
+               << base::strict_cast<int>(curr_frame_hdr_->bit_depth)
+               << ", new color space: " << new_color_space.ToString();
 
       if (!curr_frame_hdr_->IsKeyframe() &&
           !(curr_frame_hdr_->IsIntra() && pic_size_.IsEmpty())) {
@@ -283,11 +360,17 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
       visible_rect_ = new_render_rect;
       profile_ = new_profile;
       bit_depth_ = curr_frame_hdr_->bit_depth;
+      picture_color_space_ = new_color_space;
       size_change_failure_counter_ = 0;
       return kConfigChange;
     }
 
-    scoped_refptr<VP9Picture> pic = accelerator_->CreateVP9Picture();
+    scoped_refptr<VP9Picture> pic;
+    if (secure_handle_) {
+      pic = accelerator_->CreateVP9PictureSecure(secure_handle_);
+    } else {
+      pic = accelerator_->CreateVP9Picture();
+    }
     if (!pic) {
       return kRanOutOfSurfaces;
     }
@@ -298,11 +381,11 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
 
     pic->set_decrypt_config(std::move(decrypt_config_));
 
-    // For VP9, container color spaces override video stream color spaces.
-    if (container_color_space_.IsSpecified())
-      pic->set_colorspace(container_color_space_);
-    else if (curr_frame_hdr_)
-      pic->set_colorspace(curr_frame_hdr_->GetColorSpace());
+    // Set the color space for the picture.
+    pic->set_colorspace(picture_color_space_);
+
+    // VP9 only supports HDR metadata from the container.
+    pic->SetDynamicHdrMetadata(decoder_buffer_.get());
 
     pic->frame_hdr = std::move(curr_frame_hdr_);
 
@@ -316,39 +399,14 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
   }
 }
 
-void VP9Decoder::UpdateFrameContext(
-    scoped_refptr<VP9Picture> pic,
-    Vp9Parser::ContextRefreshCallback context_refresh_cb) {
-  DCHECK(context_refresh_cb);
-  Vp9FrameContext frame_ctx;
-  memset(&frame_ctx, 0, sizeof(frame_ctx));
-
-  if (!accelerator_->GetFrameContext(std::move(pic), &frame_ctx)) {
-    SetError();
-    return;
-  }
-
-  std::move(context_refresh_cb).Run(frame_ctx);
-}
-
 VP9Decoder::VP9Accelerator::Status VP9Decoder::DecodeAndOutputPicture(
     scoped_refptr<VP9Picture> pic) {
   DCHECK(!pic_size_.IsEmpty());
   DCHECK(pic->frame_hdr);
 
-  base::OnceClosure done_cb;
-  Vp9Parser::ContextRefreshCallback context_refresh_cb =
-      parser_.GetContextRefreshCb(pic->frame_hdr->frame_context_idx);
-  if (context_refresh_cb) {
-    done_cb =
-        base::BindOnce(&VP9Decoder::UpdateFrameContext, base::Unretained(this),
-                       pic, std::move(context_refresh_cb));
-  }
-
   const Vp9Parser::Context& context = parser_.context();
   VP9Accelerator::Status status = accelerator_->SubmitDecode(
-      pic, context.segmentation(), context.loop_filter(), ref_frames_,
-      std::move(done_cb));
+      pic, context.segmentation(), context.loop_filter(), ref_frames_);
   if (status != VP9Accelerator::Status::kOk) {
     if (status == VP9Accelerator::Status::kTryAgain)
       pending_pic_ = std::move(pic);
@@ -383,6 +441,14 @@ VideoCodecProfile VP9Decoder::GetProfile() const {
 
 uint8_t VP9Decoder::GetBitDepth() const {
   return bit_depth_;
+}
+
+VideoChromaSampling VP9Decoder::GetChromaSampling() const {
+  return chroma_sampling_;
+}
+
+VideoColorSpace VP9Decoder::GetVideoColorSpace() const {
+  return picture_color_space_;
 }
 
 size_t VP9Decoder::GetRequiredNumOfPictures() const {

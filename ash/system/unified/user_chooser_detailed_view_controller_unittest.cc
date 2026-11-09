@@ -1,6 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "ash/system/unified/user_chooser_detailed_view_controller.h"
 
 #include <memory>
 
@@ -9,30 +11,29 @@
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
+#include "ash/system/unified/quick_settings_footer.h"
+#include "ash/system/unified/quick_settings_view.h"
 #include "ash/system/unified/unified_system_tray.h"
+#include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "base/macros.h"
 #include "components/account_id/account_id.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
-
 namespace {
-
-AccountId GetActiveUser() {
-  return Shell::Get()
-      ->session_controller()
-      ->GetUserSession(/*user_index=*/0)
-      ->user_info.account_id;
-}
-
-}  // namespace
 
 class UserChooserDetailedViewControllerTest : public AshTestBase {
  public:
   UserChooserDetailedViewControllerTest() = default;
+  UserChooserDetailedViewControllerTest(
+      const UserChooserDetailedViewControllerTest&) = delete;
+  UserChooserDetailedViewControllerTest& operator=(
+      const UserChooserDetailedViewControllerTest&) = delete;
+
   ~UserChooserDetailedViewControllerTest() override = default;
 
   // AshTestBase
@@ -40,21 +41,43 @@ class UserChooserDetailedViewControllerTest : public AshTestBase {
     AshTestBase::SetUp();
     tray_test_api_ = std::make_unique<SystemTrayTestApi>();
     disable_animations_ =
-        std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+        std::make_unique<gfx::ScopedAnimationDurationScaleMode>(
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+  }
+
+  bool IsBubbleViewVisible(ViewID view_id) const {
+    return tray_test_api_->IsBubbleViewVisible(view_id, /*open_tray=*/false);
+  }
+
+  void ShowUserChooserView() {
+    // Click the power button to show the menu.
+    ASSERT_TRUE(IsBubbleViewVisible(VIEW_ID_QS_POWER_BUTTON));
+    tray_test_api()->ClickBubbleView(VIEW_ID_QS_POWER_BUTTON);
+    PowerButton* power_button = GetPrimaryUnifiedSystemTray()
+                                    ->bubble()
+                                    ->quick_settings_view()
+                                    ->footer_for_testing()
+                                    ->power_button_for_testing();
+    ASSERT_TRUE(power_button->IsMenuShowing());
+
+    // Click the user email address.
+    views::View* email_item =
+        power_button->GetMenuViewForTesting()->GetMenuItemByID(
+            VIEW_ID_QS_POWER_EMAIL_MENU_BUTTON);
+    ASSERT_TRUE(email_item);
+    LeftClickOn(email_item);
   }
 
   SystemTrayTestApi* tray_test_api() { return tray_test_api_.get(); }
 
  private:
-  std::unique_ptr<ui::ScopedAnimationDurationScaleMode> disable_animations_;
+  std::unique_ptr<gfx::ScopedAnimationDurationScaleMode> disable_animations_;
   std::unique_ptr<SystemTrayTestApi> tray_test_api_;
-  DISALLOW_COPY_AND_ASSIGN(UserChooserDetailedViewControllerTest);
 };
 
 TEST_F(UserChooserDetailedViewControllerTest,
        ShowMultiProfileLoginWithOverview) {
-  // Enter ovewview mode.
+  // Enter overview mode.
   EnterOverview();
   ASSERT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
 
@@ -62,10 +85,8 @@ TEST_F(UserChooserDetailedViewControllerTest,
   tray_test_api()->ShowBubble();
   ASSERT_TRUE(tray_test_api()->IsTrayBubbleOpen());
 
-  // Click on user avatar button to start user adding.
-  ASSERT_TRUE(tray_test_api()->IsBubbleViewVisible(VIEW_ID_USER_AVATAR_BUTTON,
-                                                   /*open_tray=*/false));
-  tray_test_api()->ClickBubbleView(VIEW_ID_USER_AVATAR_BUTTON);
+  // Show the user chooser view.
+  ShowUserChooserView();
 
   // Click on add user button to show multi profile login window.
   ASSERT_TRUE(tray_test_api()->IsBubbleViewVisible(VIEW_ID_ADD_USER_BUTTON,
@@ -74,14 +95,18 @@ TEST_F(UserChooserDetailedViewControllerTest,
 }
 
 TEST_F(UserChooserDetailedViewControllerTest, SwitchUserWithOverview) {
-  // Add a secondary user.
-  const AccountId secondary_user =
-      AccountId::FromUserEmail("secondary@gmail.com");
-  GetSessionControllerClient()->AddUserSession(secondary_user.GetUserEmail());
-  ASSERT_FALSE(GetActiveUser() == secondary_user);
+  auto* session_controller = Shell::Get()->session_controller();
+  auto first_user = session_controller->GetActiveAccountId();
+
+  // Add a secondary user then switch back to first user.
+  auto secondary_user = SimulateUserLogin(
+      {.account_id = AccountId::FromUserEmail("secondary@gmail.com")});
+  SwitchActiveUser(first_user);
+  ASSERT_NE(session_controller->GetActiveAccountId(), secondary_user);
 
   // Create an activatable widget.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   // Enter overview mode.
   EnterOverview();
@@ -91,10 +116,8 @@ TEST_F(UserChooserDetailedViewControllerTest, SwitchUserWithOverview) {
   tray_test_api()->ShowBubble();
   ASSERT_TRUE(tray_test_api()->IsTrayBubbleOpen());
 
-  // Click on user avatar button to select user.
-  ASSERT_TRUE(tray_test_api()->IsBubbleViewVisible(VIEW_ID_USER_AVATAR_BUTTON,
-                                                   /*open_tray=*/false));
-  tray_test_api()->ClickBubbleView(VIEW_ID_USER_AVATAR_BUTTON);
+  // Show the user chooser view.
+  ShowUserChooserView();
 
   const int secondary_user_button_id = VIEW_ID_USER_ITEM_BUTTON_START + 1;
   ASSERT_TRUE(tray_test_api()->IsBubbleViewVisible(secondary_user_button_id,
@@ -102,7 +125,21 @@ TEST_F(UserChooserDetailedViewControllerTest, SwitchUserWithOverview) {
   tray_test_api()->ClickBubbleView(secondary_user_button_id);
 
   // Active user is switched.
-  EXPECT_TRUE(GetActiveUser() == secondary_user);
+  EXPECT_EQ(session_controller->GetActiveAccountId(), secondary_user);
 }
 
+TEST_F(UserChooserDetailedViewControllerTest,
+       MultiProfileLoginDisabledForFamilyLinkUsers) {
+  EXPECT_TRUE(UserChooserDetailedViewController::IsUserChooserEnabled());
+
+  ClearLogin();
+
+  // Log in as a child user.
+  SimulateUserLogin({.account_id = AccountId::FromUserEmail("child@gmail.com"),
+                     .user_type = user_manager::UserType::kChild});
+
+  EXPECT_FALSE(UserChooserDetailedViewController::IsUserChooserEnabled());
+}
+
+}  // namespace
 }  // namespace ash

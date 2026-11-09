@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,10 +14,12 @@ class Version;
 
 namespace installer {
 
+class InitialPreferences;
 class InstallerState;
 
 // Sets up the crash reporting system for the installer.
-void ConfigureCrashReporting(const InstallerState& installer_state);
+void ConfigureCrashReporting(const InitialPreferences& initial_prefs,
+                             const InstallerState& installer_state);
 
 // Sets all crash keys that are available during process startup. These do not
 // vary during execution so this function will not need to be called more than

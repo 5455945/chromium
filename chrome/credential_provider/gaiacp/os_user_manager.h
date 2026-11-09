@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,6 +39,21 @@ class [[clang::lto_visibility_public]] OSUserManager {
                           BSTR* sid,
                           DWORD* error);
 
+  // Creates a new windows OS user with the given |base_username|, |fullname|
+  // and |password| on the local machine.  Returns the SID of the new user. If a
+  // user with |base_username| already exists, the function will try to generate
+  // a new indexed username up to |max_attempts| before failing. The actual
+  // username used for the new user will be filled in |final_username| if
+  // successful.
+  HRESULT CreateNewUser(const wchar_t* base_username,
+                        const wchar_t* password,
+                        const wchar_t* fullname,
+                        const wchar_t* comment,
+                        bool add_to_users_group,
+                        int max_attempts,
+                        BSTR* final_username,
+                        BSTR* sid);
+
   // Changes the password of the given OS user.
   virtual HRESULT ChangeUserPassword(
       const wchar_t* domain, const wchar_t* username,
@@ -68,8 +83,10 @@ class [[clang::lto_visibility_public]] OSUserManager {
   // should free it with a call to LocalFree().
   virtual HRESULT GetUserSID(const wchar_t* domain, const wchar_t* username,
                              PSID* sid);
+
   // Gets the SID in string format of the given OS user.
-  HRESULT GetUserSID(const wchar_t* domain, const wchar_t* username,
+  HRESULT GetUserSID(const wchar_t* domain,
+                     const wchar_t* username,
                      std::wstring* sid_string);
 
   // Finds a user created from a gaia account by its SID.  Returns S_OK if a
@@ -81,6 +98,14 @@ class [[clang::lto_visibility_public]] OSUserManager {
   virtual HRESULT FindUserBySID(const wchar_t* sid, wchar_t* username,
                                 DWORD username_size, wchar_t* domain,
                                 DWORD domain_size);
+
+  // Finds the username and domain for the provided user sid. Provided that a
+  // SID mapping exists in the registry, function uses the user properties
+  // registries as a fallback if the user can't be found via a network lookup
+  // call.
+  virtual HRESULT FindUserBySidWithFallback(
+      const wchar_t* sid, wchar_t* username, DWORD username_size,
+      wchar_t* domain, DWORD domain_size);
 
   // Verify if a user with provided sid is domain joined.
   virtual bool IsUserDomainJoined(const std::wstring& sid);
@@ -112,10 +137,21 @@ class [[clang::lto_visibility_public]] OSUserManager {
   virtual bool IsDeviceDomainJoined();
 
  protected:
-  OSUserManager() {}
+  OSUserManager() = default;
 
   // Returns the storage used for the instance pointer.
   static OSUserManager** GetInstanceStorage();
+
+ private:
+  // Gets the account control flags (usri1_flags) of the user.
+  virtual HRESULT GetUserFlags(const wchar_t* domain,
+                               const wchar_t* username,
+                               DWORD* flags);
+
+  // Sets the account control flags (usri1008_flags) of the user.
+  virtual HRESULT SetUserFlags(const wchar_t* domain,
+                               const wchar_t* username,
+                               DWORD flags);
 };
 
 }  // namespace credential_provider

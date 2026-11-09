@@ -1,65 +1,74 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/test/base/chrome_unit_test_suite.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/environment.h"
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/process/process_handle.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_content_browser_client.h"
-#include "chrome/browser/data_use_measurement/chrome_data_use_measurement.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
+#include "chrome/browser/ui/webui/chrome_web_ui_configs.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_controller_factory.h"
 #include "chrome/browser/update_client/chrome_update_query_params_delegate.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "chrome/utility/chrome_content_utility_client.h"
 #include "components/component_updater/component_updater_paths.h"
-#include "components/startup_metric_utils/browser/startup_metric_utils.h"
+#include "components/startup_metric_utils/common/startup_metric_utils.h"
 #include "components/update_client/update_query_params.h"
+#include "content/public/browser/browser_accessibility_state.h"
+#include "content/public/browser/webui_config_map.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/test/scoped_web_ui_controller_factory_registration.h"
 #include "extensions/buildflags/buildflags.h"
 #include "gpu/ipc/service/image_transport_surface.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/accessibility/platform/ax_platform_node.h"
+#include "ui/accessibility/ax_mode.h"
+#include "ui/base/idle/idle.h"
+#include "ui/base/idle/scoped_set_idle_state.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_handle.h"
 #include "ui/base/ui_base_paths.h"
+#include "ui/gfx/font_util.h"
 #include "ui/gl/test/gl_surface_test_support.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_paths.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chromeos/dbus/constants/dbus_paths.h"
+#include "crypto/nss_util_internal.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "ui/base/resource/resource_bundle_android.h"
+#else
+#include "base/auto_reset.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/app_service/publishers/publisher_host_factory_impl.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
+#include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/common/scoped_chrome_extensions_client.h"
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/common/initialize_extensions_client.h"
 #include "extensions/common/extension_paths.h"
-#include "extensions/common/extensions_client.h"
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 namespace {
 
 constexpr char kDefaultLocale[] = "en-US";
-
-class ChromeContentBrowserClientWithoutNetworkServiceInitialization
-    : public ChromeContentBrowserClient {
- public:
-  // content::ContentBrowserClient:
-  // Skip some production Network Service code that doesn't work in unit tests.
-  void OnNetworkServiceCreated(
-      network::mojom::NetworkService* network_service) override {}
-};
 
 // Creates a TestingBrowserProcess for each test.
 class ChromeUnitTestSuiteInitializer : public testing::EmptyTestEventListener {
@@ -72,18 +81,24 @@ class ChromeUnitTestSuiteInitializer : public testing::EmptyTestEventListener {
   ~ChromeUnitTestSuiteInitializer() override = default;
 
   void OnTestStart(const testing::TestInfo& test_info) override {
-    content_client_ = std::make_unique<ChromeContentClient>();
-    content::SetContentClient(content_client_.get());
-
-    browser_content_client_ = std::make_unique<
-        ChromeContentBrowserClientWithoutNetworkServiceInitialization>();
-    content::SetBrowserClientForTesting(browser_content_client_.get());
-    utility_content_client_ = std::make_unique<ChromeContentUtilityClient>();
-    content::SetUtilityClientForTesting(utility_content_client_.get());
-
+    // Report the user as active by default so that unit tests never query the
+    // host's real idle or screen lock state. Without this, on Linux,
+    // global features such as SmartRestartMetricsObserver start
+    // DBusScreenSaverWatcher, whose async session bus calls can reply after
+    // the task environment's final RunUntilIdle() and leave a task pending at
+    // teardown, causing flaky MainThreadIsIdle() failures. Tests that need a
+    // specific state can nest their own ui::ScopedSetIdleState.
+    idle_state_override_.emplace(ui::IDLE_STATE_ACTIVE);
     TestingBrowserProcess::CreateInstance();
+#if !BUILDFLAG(IS_ANDROID)
+    // Injects global publisher factory for unit_tests.
+    // TODO(crbug.com/441649482): Consider better testing approach.
+    publisher_host_factory_resetter_ =
+        apps::AppServiceProxyFactory::GetInstance()->SetPublisherHostFactory(
+            std::make_unique<apps::PublisherHostFactoryImpl>());
+#endif
     // Make sure the loaded locale is "en-US".
-    if (ui::ResourceBundle::GetSharedInstance().GetLoadedLocaleForTesting() !=
+    if (ui::ResourceBundle::GetSharedInstance().GetLoadedLocale() !=
         kDefaultLocale) {
       // Linux uses environment to determine locale.
       std::unique_ptr<base::Environment> env(base::Environment::Create());
@@ -94,37 +109,53 @@ class ChromeUnitTestSuiteInitializer : public testing::EmptyTestEventListener {
   }
 
   void OnTestEnd(const testing::TestInfo& test_info) override {
-    // To ensure that NetworkConnectionTracker doesn't complain in unit_tests
-    // about outstanding listeners.
-    data_use_measurement::ChromeDataUseMeasurement::DeleteInstance();
-
-    browser_content_client_.reset();
-    utility_content_client_.reset();
-    content_client_.reset();
-    content::SetContentClient(nullptr);
-
-    TestingBrowserProcess::DeleteInstance();
+    TestingBrowserProcess::TearDownAndDeleteInstance();
     // Some tests cause ChildThreadImpl to initialize a PowerMonitor.
-    base::PowerMonitor::ShutdownForTesting();
-    DCHECK(ui::AXPlatformNode::GetAccessibilityMode() == 0)
-        << "Please use ScopedAxModeSetter, or add a call to "
-           "AXPlatformNode::ResetAxModeForTesting() at the end of your test.";
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+    base::PowerMonitor::GetInstance()->ShutdownForTesting();
+#if BUILDFLAG(IS_WIN)
+    // Running tests locally on Windows machines with some degree of
+    // accessibility enabled can cause this flag to become implicitly set.
+    constexpr ui::AXMode kAllowedFlags(ui::AXMode::kNativeAPIs);
+#else
+    constexpr ui::AXMode kAllowedFlags(ui::AXMode::kNone);
+#endif
+    if (ui::AXMode disallowed =
+            content::BrowserAccessibilityState::GetInstance()
+                ->GetAccessibilityMode() &
+            ~kAllowedFlags;
+        !disallowed.is_mode_off()) {
+      CHECK_EQ(disallowed, ui::AXMode())
+          << "Use content::ScopedAccessibilityModeOverride or otherwise ensure "
+             "that accessibility is disabled at the end of your test.";
+    }
+#if BUILDFLAG(IS_CHROMEOS)
     arc::ClearArcAllowedCheckForTesting();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+    crypto::ResetTokenManagerForTesting();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
+    web_app::SetTrustedWebBundleIdsForTesting({});
+#endif  // !BUILDFLAG(IS_ANDROID)
+    browser_shutdown::ResetShutdownGlobalsForTesting();
+    chrome::ClearUserDataDirSetByPolicyForTesting();
+#if !BUILDFLAG(IS_ANDROID)
+    publisher_host_factory_resetter_.reset();
+#endif
+    idle_state_override_.reset();
   }
 
- private:
-  // Client implementations for the content module.
-  std::unique_ptr<ChromeContentClient> content_client_;
-  std::unique_ptr<ChromeContentBrowserClient> browser_content_client_;
-  std::unique_ptr<ChromeContentUtilityClient> utility_content_client_;
+#if !BUILDFLAG(IS_ANDROID)
+  std::optional<base::AutoReset<std::unique_ptr<apps::PublisherHostFactory>>>
+      publisher_host_factory_resetter_;
+#endif  // !BUILDFLAG(IS_ANDROID)
+  std::optional<ui::ScopedSetIdleState> idle_state_override_;
 };
 
 }  // namespace
 
 ChromeUnitTestSuite::ChromeUnitTestSuite(int argc, char** argv)
     : ChromeTestSuite(argc, argv) {}
+
+ChromeUnitTestSuite::~ChromeUnitTestSuite() = default;
 
 void ChromeUnitTestSuite::Initialize() {
   // Add an additional listener to do the extra initialization for unit tests.
@@ -133,17 +164,22 @@ void ChromeUnitTestSuite::Initialize() {
   testing::TestEventListeners& listeners =
       testing::UnitTest::GetInstance()->listeners();
   listeners.Append(new ChromeUnitTestSuiteInitializer);
-  listeners.Append(
-      new content::CheckForLeakedWebUIControllerFactoryRegistrations);
+  listeners.Append(new content::CheckForLeakedWebUIRegistrations);
 
   {
     ChromeContentClient content_client;
     RegisterContentSchemes(&content_client);
   }
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  extensions_client_ =
+      std::make_unique<extensions::ScopedChromeExtensionsClient>();
+#endif
   InitializeProviders();
   RegisterInProcessThreads();
 
   ChromeTestSuite::Initialize();
+
+  gfx::InitializeFonts();
 
   // This needs to run after ChromeTestSuite::Initialize which calls content's
   // intialization which calls base's which initializes ICU.
@@ -156,10 +192,14 @@ void ChromeUnitTestSuite::Initialize() {
   // Since RecordApplicationStartTime() would DCHECK if it was invoked from
   // multiple tests in the same process, invoke it once in test suite
   // initialization.
-  startup_metric_utils::RecordApplicationStartTime(base::TimeTicks::Now());
+  startup_metric_utils::GetCommon().RecordApplicationStartTime(
+      base::TimeTicks::Now());
 }
 
 void ChromeUnitTestSuite::Shutdown() {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  extensions_client_.reset();
+#endif
   ui::ResourceBundle::CleanupSharedInstance();
   ChromeTestSuite::Shutdown();
 }
@@ -169,26 +209,24 @@ void ChromeUnitTestSuite::InitializeProviders() {
   content::RegisterPathProvider();
   ui::RegisterPathProvider();
   component_updater::RegisterPathProvider(chrome::DIR_COMPONENTS,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-                                          chromeos::DIR_PREINSTALLED_COMPONENTS,
-#else
-                                          chrome::DIR_INTERNAL_PLUGINS,
-#endif
                                           chrome::DIR_USER_DATA);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  chromeos::RegisterPathProvider();
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::RegisterPathProvider();
+  CHECK(base::PathService::OverrideWithoutCheckForTesting(
+      ash::DIR_USER_DATA,
+      base::PathService::CheckedGet(chrome::DIR_USER_DATA)));
   chromeos::dbus_paths::RegisterPathProvider();
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   extensions::RegisterPathProvider();
-
-  EnsureExtensionsClientInitialized();
 #endif
+
 
   content::WebUIControllerFactory::RegisterFactory(
       ChromeWebUIControllerFactory::GetInstance());
+  RegisterChromeWebUIConfigs();
 
   gl::GLSurfaceTestSupport::InitializeOneOff();
 
@@ -201,14 +239,12 @@ void ChromeUnitTestSuite::InitializeResourceBundle() {
   // output, it'll pass regardless of the system language.
   ui::ResourceBundle::InitSharedInstanceWithLocale(
       kDefaultLocale, nullptr, ui::ResourceBundle::LOAD_COMMON_RESOURCES);
+#if BUILDFLAG(IS_ANDROID)
+  ui::LoadMainAndroidPackFile("assets/resources.pak", base::FilePath());
+#else
   base::FilePath resources_pack_path;
   base::PathService::Get(chrome::FILE_RESOURCES_PACK, &resources_pack_path);
   ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      resources_pack_path, ui::SCALE_FACTOR_NONE);
-
-  base::FilePath unit_tests_pack_path;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_MODULE, &unit_tests_pack_path));
-  unit_tests_pack_path = unit_tests_pack_path.AppendASCII("unit_tests.pak");
-  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      unit_tests_pack_path, ui::SCALE_FACTOR_NONE);
+      resources_pack_path, ui::kScaleFactorNone);
+#endif  // BUILDFLAG(IS_ANDROID)
 }

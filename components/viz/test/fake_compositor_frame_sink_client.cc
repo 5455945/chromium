@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/test/fake_compositor_frame_sink_client.h"
+
+#include <utility>
 
 namespace viz {
 
@@ -16,7 +18,17 @@ void FakeCompositorFrameSinkClient::DidReceiveCompositorFrameAck(
 
 void FakeCompositorFrameSinkClient::OnBeginFrame(
     const BeginFrameArgs& args,
-    const FrameTimingDetailsMap& timing_details) {}
+    const FrameTimingDetailsMap& timing_details,
+    std::vector<ReturnedResource> resources) {
+  begin_frame_count_++;
+
+  if (!resources.empty()) {
+    ReclaimResources(std::move(resources));
+  }
+  for (const auto& [frame_token, timing] : timing_details) {
+    all_frame_timing_details_.insert_or_assign(frame_token, timing);
+  }
+}
 
 void FakeCompositorFrameSinkClient::ReclaimResources(
     std::vector<ReturnedResource> resources) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/containers/queue.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "net/base/io_buffer.h"
+#include "net/base/net_export.h"
 
 namespace net {
 
@@ -20,12 +21,13 @@ class WebSocket;
 
 // A container which has all information of an http connection. It includes
 // id, underlying socket, and pending read/write data.
-class HttpConnection {
+class NET_EXPORT HttpConnection {
  public:
   // IOBuffer for data read.  It's a wrapper around GrowableIOBuffer, with more
   // functions for buffer management.  It moves unconsumed data to the start of
-  // buffer.
-  class ReadIOBuffer : public IOBuffer {
+  // buffer. The data() pointer points to the end of the consumed data, where
+  // the next write to the buffer should occur.
+  class NET_EXPORT ReadIOBuffer : public IOBuffer {
    public:
     static const int kInitialBufSize = 1024;
     static const int kMinimumBufSize = 128;
@@ -34,19 +36,22 @@ class HttpConnection {
 
     ReadIOBuffer();
 
+    ReadIOBuffer(const ReadIOBuffer&) = delete;
+    ReadIOBuffer& operator=(const ReadIOBuffer&) = delete;
+
     // Capacity.
     int GetCapacity() const;
     void SetCapacity(int capacity);
     // Increases capacity and returns true if capacity is not beyond the limit.
     bool IncreaseCapacity();
 
-    // Start of read data.
-    char* StartOfBuffer() const;
-    // Returns the bytes of read data.
-    int GetSize() const;
-    // More read data was appended.
+    // Returns a span containing bytes that have been written to, and thus are
+    // available to be read from.
+    base::span<const uint8_t> readable_bytes() const;
+    // More read data was appended. Increases the size of span_before_offset().
     void DidRead(int bytes);
-    // Capacity for which more read data can be appended.
+    // Capacity for which more read data can be appended. Decreases size of
+    // span_before_offset().
     int RemainingCapacity() const;
 
     // Removes consumed data and moves unconsumed data to the start of buffer.
@@ -62,19 +67,20 @@ class HttpConnection {
     ~ReadIOBuffer() override;
 
     scoped_refptr<GrowableIOBuffer> base_;
-    int max_buffer_size_;
-
-    DISALLOW_COPY_AND_ASSIGN(ReadIOBuffer);
+    int max_buffer_size_ = kDefaultMaxBufferSize;
   };
 
   // IOBuffer of pending data to write which has a queue of pending data. Each
-  // pending data is stored in std::string.  data() is the data of first
-  // std::string stored.
-  class QueuedWriteIOBuffer : public IOBuffer {
+  // pending data is stored in std::string. The IOBuffer's data pointer tracks
+  // the portion of the first write in the queue that has yet to be written.
+  class NET_EXPORT QueuedWriteIOBuffer : public IOBuffer {
    public:
     static const int kDefaultMaxBufferSize = 1 * 1024 * 1024;  // 1 Mbytes.
 
     QueuedWriteIOBuffer();
+
+    QueuedWriteIOBuffer(const QueuedWriteIOBuffer&) = delete;
+    QueuedWriteIOBuffer& operator=(const QueuedWriteIOBuffer&) = delete;
 
     // Whether or not pending data exists.
     bool IsEmpty() const;
@@ -82,7 +88,7 @@ class HttpConnection {
     // Appends new pending data and returns true if total size doesn't exceed
     // the limit, |total_size_limit_|.  It would change data() if new data is
     // the first pending data.
-    bool Append(const std::string& data);
+    bool Append(std::string_view data);
 
     // Consumes data and changes data() accordingly.  It cannot be more than
     // GetSizeToWrite().
@@ -106,13 +112,15 @@ class HttpConnection {
     // This needs to indirect since we need pointer stability for the payload
     // chunks, as they may be handed out via net::IOBuffer::data().
     base::queue<std::unique_ptr<std::string>> pending_data_;
-    int total_size_;
-    int max_buffer_size_;
-
-    DISALLOW_COPY_AND_ASSIGN(QueuedWriteIOBuffer);
+    int total_size_ = 0;
+    int max_buffer_size_ = kDefaultMaxBufferSize;
   };
 
   HttpConnection(int id, std::unique_ptr<StreamSocket> socket);
+
+  HttpConnection(const HttpConnection&) = delete;
+  HttpConnection& operator=(const HttpConnection&) = delete;
+
   ~HttpConnection();
 
   int id() const { return id_; }
@@ -130,8 +138,6 @@ class HttpConnection {
   const scoped_refptr<QueuedWriteIOBuffer> write_buf_;
 
   std::unique_ptr<WebSocket> web_socket_;
-
-  DISALLOW_COPY_AND_ASSIGN(HttpConnection);
 };
 
 }  // namespace net

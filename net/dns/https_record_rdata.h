@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,23 @@
 #define NET_DNS_HTTPS_RECORD_RDATA_H_
 
 #include <stdint.h>
-#include <map>
+
 #include <memory>
-#include <set>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_export.h"
 #include "net/dns/public/dns_protocol.h"
 #include "net/dns/record_rdata.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
+
+using HttpsRecordPriority = uint16_t;
 
 class AliasFormHttpsRecordRdata;
 class ServiceFormHttpsRecordRdata;
@@ -28,7 +31,9 @@ class NET_EXPORT_PRIVATE HttpsRecordRdata : public RecordRdata {
  public:
   static const uint16_t kType = dns_protocol::kTypeHttps;
 
-  static std::unique_ptr<HttpsRecordRdata> Parse(base::StringPiece data);
+  // Returns `nullptr` on malformed input.
+  static std::unique_ptr<HttpsRecordRdata> Parse(
+      base::span<const uint8_t> data);
 
   HttpsRecordRdata(const HttpsRecordRdata& rdata) = delete;
   HttpsRecordRdata& operator=(const HttpsRecordRdata& rdata) = delete;
@@ -45,35 +50,20 @@ class NET_EXPORT_PRIVATE HttpsRecordRdata : public RecordRdata {
   ServiceFormHttpsRecordRdata* AsServiceForm();
   const ServiceFormHttpsRecordRdata* AsServiceForm() const;
 
-  // For experimental query metrics.
-  // TODO(crbug.com/1138620): Remove as HTTPS use becomes non-experimental.
-  virtual bool IsMalformed() const;
-
  protected:
   HttpsRecordRdata() = default;
-};
-
-// For experimental query metrics.
-// TODO(crbug.com/1138620): Remove as HTTPS use becomes non-experimental.
-class NET_EXPORT_PRIVATE MalformedHttpsRecordRdata : public HttpsRecordRdata {
- public:
-  MalformedHttpsRecordRdata();
-
-  bool IsEqual(const HttpsRecordRdata* other) const override;
-  bool IsAlias() const override;
-  bool IsMalformed() const override;
 };
 
 class NET_EXPORT_PRIVATE AliasFormHttpsRecordRdata : public HttpsRecordRdata {
  public:
   explicit AliasFormHttpsRecordRdata(std::string alias_name);
   static std::unique_ptr<AliasFormHttpsRecordRdata> Parse(
-      base::StringPiece data);
+      base::span<const uint8_t> data);
 
   bool IsEqual(const HttpsRecordRdata* other) const override;
   bool IsAlias() const override;
 
-  base::StringPiece alias_name() const { return alias_name_; }
+  std::string_view alias_name() const { return alias_name_; }
 
  private:
   AliasFormHttpsRecordRdata() = default;
@@ -83,44 +73,38 @@ class NET_EXPORT_PRIVATE AliasFormHttpsRecordRdata : public HttpsRecordRdata {
 
 class NET_EXPORT_PRIVATE ServiceFormHttpsRecordRdata : public HttpsRecordRdata {
  public:
-  static constexpr uint16_t kSupportedKeys[] = {
-      dns_protocol::kHttpsServiceParamKeyMandatory,
-      dns_protocol::kHttpsServiceParamKeyAlpn,
-      dns_protocol::kHttpsServiceParamKeyNoDefaultAlpn,
-      dns_protocol::kHttpsServiceParamKeyPort,
-      dns_protocol::kHttpsServiceParamKeyIpv4Hint,
-      dns_protocol::kHttpsServiceParamKeyEchConfig,
-      dns_protocol::kHttpsServiceParamKeyIpv6Hint};
-
-  ServiceFormHttpsRecordRdata(uint16_t priority,
-                              std::string service_name,
-                              std::set<uint16_t> mandatory_keys,
-                              std::vector<std::string> alpn_ids,
-                              bool default_alpn,
-                              absl::optional<uint16_t> port,
-                              std::vector<IPAddress> ipv4_hint,
-                              std::string ech_config,
-                              std::vector<IPAddress> ipv6_hint,
-                              std::map<uint16_t, std::string> unparsed_params);
+  ServiceFormHttpsRecordRdata(
+      uint16_t priority,
+      std::string service_name,
+      base::flat_set<uint16_t> mandatory_keys,
+      std::vector<std::string> alpn_ids,
+      bool default_alpn,
+      std::optional<uint16_t> port,
+      std::vector<IPAddress> ipv4_hint,
+      base::span<const uint8_t> ech_config,
+      std::vector<IPAddress> ipv6_hint,
+      std::vector<std::vector<uint8_t>> trust_anchor_ids);
   static std::unique_ptr<ServiceFormHttpsRecordRdata> Parse(
-      base::StringPiece data);
+      base::span<const uint8_t> data);
 
   ~ServiceFormHttpsRecordRdata() override;
 
   bool IsEqual(const HttpsRecordRdata* other) const override;
   bool IsAlias() const override;
 
-  uint16_t priority() const { return priority_; }
-  base::StringPiece service_name() const { return service_name_; }
-  const std::set<uint16_t>& mandatory_keys() const { return mandatory_keys_; }
+  HttpsRecordPriority priority() const { return priority_; }
+  std::string_view service_name() const { return service_name_; }
+  const base::flat_set<uint16_t>& mandatory_keys() const {
+    return mandatory_keys_;
+  }
   const std::vector<std::string>& alpn_ids() const { return alpn_ids_; }
   bool default_alpn() const { return default_alpn_; }
-  absl::optional<uint16_t> port() const { return port_; }
+  std::optional<uint16_t> port() const { return port_; }
   const std::vector<IPAddress>& ipv4_hint() const { return ipv4_hint_; }
-  base::StringPiece ech_config() const { return ech_config_; }
+  base::span<const uint8_t> ech_config() const { return ech_config_; }
   const std::vector<IPAddress>& ipv6_hint() const { return ipv6_hint_; }
-  const std::map<uint16_t, std::string>& unparsed_params() const {
-    return unparsed_params_;
+  const std::vector<std::vector<uint8_t>>& trust_anchor_ids() const {
+    return trust_anchor_ids_;
   }
 
   // Returns whether or not this rdata parser is considered "compatible" with
@@ -132,19 +116,18 @@ class NET_EXPORT_PRIVATE ServiceFormHttpsRecordRdata : public HttpsRecordRdata {
  private:
   static bool IsSupportedKey(uint16_t key);
 
-  const uint16_t priority_;
+  const HttpsRecordPriority priority_;
   const std::string service_name_;
 
   // Supported service parameters.
-  const std::set<uint16_t> mandatory_keys_;
+  const base::flat_set<uint16_t> mandatory_keys_;
   const std::vector<std::string> alpn_ids_;
   const bool default_alpn_;
-  const absl::optional<uint16_t> port_;
+  const std::optional<uint16_t> port_;
   const std::vector<IPAddress> ipv4_hint_;
-  const std::string ech_config_;
+  std::vector<uint8_t> ech_config_;
   const std::vector<IPAddress> ipv6_hint_;
-
-  const std::map<uint16_t, std::string> unparsed_params_;
+  std::vector<std::vector<uint8_t>> trust_anchor_ids_;
 };
 
 }  // namespace net

@@ -1,10 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "base/base_switches.h"
@@ -12,41 +13,60 @@
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/media/clear_key_cdm_test_helper.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_launcher_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/cdm/common/buildflags.h"
+#include "components/metrics/content/subprocess_metrics_provider.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/media_switches.h"
+#include "media/base/supported_types.h"
 #include "media/base/test_data_util.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "media/media_buildflags.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/widevine/cdm/buildflags.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
-#include "chrome/browser/media/library_cdm_test_helper.h"
-#include "media/cdm/cdm_paths.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/dbus/constants/dbus_switches.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_ANDROID)
+#error This file needs to be updated to run on Android.
 #endif
 
-#if defined(OS_ANDROID)
-#error This file needs to be updated to run on Android.
+#if BUILDFLAG(ENABLE_PLAYREADY)
+#include "base/win/windows_version.h"
+#include "media/base/win/mf_feature_checks.h"
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/profiles/profile.h"
+#include "components/policy/core/common/policy_pref_names.h"
+#include "components/prefs/pref_service.h"
 #endif
 
 namespace {
 
-const char kClearKey[] = "org.w3.clearkey";
-const char kExternalClearKey[] = "org.chromium.externalclearkey";
+const char* kClearKey = media::kClearKeyKeySystem;
+const char* kExternalClearKey = media::kExternalClearKeyKeySystem;
+
 const char kWidevine[] = "com.widevine.alpha";
 
 const char kAudioWebMMimeType[] = "audio/webm";
@@ -73,13 +93,25 @@ const char16_t kUnexpectedResult16[] = u"unexpected result";
 // Any support is acceptable. This can be used around new CDM check-in time
 // where test expectations can change based on the new CDM's capability.
 // For any usage of EXPECT_ANY, add a TODO explaining the plan to fix it.
-#define EXPECT_ANY(test) ignore_result(test)
+#define EXPECT_ANY(test) std::ignore = test
+
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+#define EXPECT_AC3 EXPECT_SUCCESS
+#else
+#define EXPECT_AC3 EXPECT_UNSUPPORTED
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
 
 #if BUILDFLAG(ENABLE_AV1_DECODER)
 #define EXPECT_AV1 EXPECT_SUCCESS
 #else
 #define EXPECT_AV1 EXPECT_UNSUPPORTED
 #endif
+
+#if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+#define EXPECT_DTS EXPECT_SUCCESS
+#else
+#define EXPECT_DTS EXPECT_UNSUPPORTED
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 #define EXPECT_PROPRIETARY EXPECT_SUCCESS
@@ -90,30 +122,86 @@ const char16_t kUnexpectedResult16[] = u"unexpected result";
 // Expectations for External Clear Key.
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
 #define EXPECT_ECK EXPECT_SUCCESS
+#define EXPECT_ECK_AC3 EXPECT_AC3
 #define EXPECT_ECK_AV1 EXPECT_AV1
+#define EXPECT_ECK_DTS EXPECT_DTS
 #define EXPECT_ECK_PROPRIETARY EXPECT_PROPRIETARY
 #else
 #define EXPECT_ECK EXPECT_UNSUPPORTED
+#define EXPECT_ECK_AC3 EXPECT_UNSUPPORTED
 #define EXPECT_ECK_AV1 EXPECT_UNSUPPORTED
+#define EXPECT_ECK_DTS EXPECT_UNSUPPORTED
 #define EXPECT_ECK_PROPRIETARY EXPECT_UNSUPPORTED
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
 // Expectations for Widevine.
 #if BUILDFLAG(BUNDLE_WIDEVINE_CDM)
 #define EXPECT_WV EXPECT_SUCCESS
+#define EXPECT_WV_AC3 EXPECT_AC3
 #define EXPECT_WV_AV1 EXPECT_AV1
+#define EXPECT_WV_DTS EXPECT_DTS
 #define EXPECT_WV_PROPRIETARY EXPECT_PROPRIETARY
 #else
 #define EXPECT_WV EXPECT_UNSUPPORTED
+#define EXPECT_WV_AC3 EXPECT_UNSUPPORTED
 #define EXPECT_WV_AV1 EXPECT_UNSUPPORTED
+#define EXPECT_WV_DTS EXPECT_UNSUPPORTED
 #define EXPECT_WV_PROPRIETARY EXPECT_UNSUPPORTED
 #endif  // BUILDFLAG(BUNDLE_WIDEVINE_CDM)
+
+// For Widevine key system with software secure robustness, persistent license
+// session is only supported on ChromeOS when the protected media identifier
+// permission is allowed. See kUnsafelyAllowProtectedMediaIdentifierForDomain
+// used below.
+#if BUILDFLAG(IS_CHROMEOS)
+#define EXPECT_WV_SW_SECURE_PERSISTENT_SESSION EXPECT_WV
+#else
+#define EXPECT_WV_SW_SECURE_PERSISTENT_SESSION EXPECT_UNSUPPORTED
+#endif
+
+// For Widevine key system with hardware secure robustness, persistent license
+// session is only supported on ChromeOS when the protected media identifier
+// permission is allowed. See kUnsafelyAllowProtectedMediaIdentifierForDomain
+// used below.
+#if BUILDFLAG(IS_CHROMEOS)
+#define EXPECT_WV_HW_SECURE_PERSISTENT_SESSION EXPECT_WV
+#else
+#define EXPECT_WV_HW_SECURE_PERSISTENT_SESSION EXPECT_UNSUPPORTED
+#endif
+
+// These tests are gated on BUILDFLAG(ENABLE_PLAYREADY)
+// (enable_playready = is_win && is_chrome_branded in components/cdm/common/playready.gni),
+// so they only compile on official Chrome-branded Windows builders.
+// Because win64-clang-tests and win64-dcheck-tests run on Windows-10
+// SupportMediaFoundationEncryptedPlayback() returns true (WIN10_22H2 >= WIN10_20H1),
+// so the test does not skip.
+#if BUILDFLAG(ENABLE_PLAYREADY)
+#define SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE()               \
+  if ((base::win::GetVersion() < base::win::Version::WIN11) || \
+      !media::SupportMediaFoundationEncryptedPlayback()) {     \
+    GTEST_SKIP() << "This PlayReady implementation is not "    \
+                 << "available on this version of Windows";    \
+    return;                                                    \
+  }
+
+const char kPlayReadyKeySystemBase[] = "com.microsoft.playready";
+const char kPlayReadyKeySystemRecommendationDefault[] =
+    "com.microsoft.playready.recommendation";
+const char kPlayReadyKeySystemRecommendationHWSecure[] =
+    "com.microsoft.playready.recommendation.3000";
+const char kPlayReadySoftwareSecureRobustness[] = "2000";
+const char kPlayReadyHardwareSecureRobustness[] = "3000";
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)
 
 }  // namespace
 
 class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
  protected:
   EncryptedMediaSupportedTypesTest() {
+#if BUILDFLAG(ENABLE_PLATFORM_HEVC)
+    EnableFeature(media::kPlatformHEVCDecoderSupport);
+#endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
+
     audio_webm_codecs_.push_back("vorbis");
 
     video_webm_codecs_.push_back("vp8");
@@ -131,13 +219,8 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
 
     video_mp4_hi10p_codecs_.push_back("avc1.6E001E");  // Hi10P profile
 
-#if BUILDFLAG(ENABLE_PLATFORM_HEVC)
-    video_mp4_codecs_.push_back("hvc1.1.6.L93.B0");
-    video_mp4_codecs_.push_back("hev1.1.6.L93.B0");
-#else
-    invalid_codecs_.push_back("hvc1.1.6.L93.B0");
-    invalid_codecs_.push_back("hev1.1.6.L93.B0");
-#endif
+    video_mp4_hevc_codecs_.push_back("hvc1.1.6.L93.B0");
+    video_mp4_hevc_codecs_.push_back("hev1.1.6.L93.B0");
 
     // Opus is supported in both MP4 and WebM.
     opus_codecs_.push_back("opus");
@@ -147,12 +230,23 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     vp9_profile0_codecs_.push_back("vp09.00.10.08");
 
     // VP9 profile 2 is supported in WebM/MP4 with ClearKey/ExternalClearKey.
-    // TODO(crbug.com/707128): Add support in Widevine CDM.
     vp9_profile2_codecs_.push_back("vp09.02.10.10");
 
     // AV1 codec string: https://aomediacodec.github.io/av1-isobmff/#codecsparam
     av1_codecs_.push_back("av01.0.04M.08");        // 8 bit
     av1_codecs_.push_back("av01.0.00M.10.0.112");  // 10 bit
+
+    // Dolby Vision codec string:
+    // https://professional.dolby.com/siteassets/content-creation/dolby-vision-for-content-creators/dolby-vision-streams-within-the-http-live-streaming-format-v2.0-13-november-2018.pdf
+    // [Dolby_Vision_fourCC].[Dovi_Profile_ID].[Dovi_Level_ID]
+    // For example: "dvhe.05.07"
+    dolby_vision_codecs_.push_back("dvhe.05.07");
+
+    dts_codecs_.push_back("dtsc");
+    dts_codecs_.push_back("mp4a.a9");
+
+    ac3_codecs_.push_back("ac-3");
+    ac3_codecs_.push_back("mp4a.a5");
 
     // Extended codecs are used, so make sure generic ones fail. These will be
     // tested against all init data types as they should always fail to be
@@ -173,7 +267,7 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     invalid_codecs_.push_back("hvc1");
     invalid_codecs_.push_back("hvc1.");
 
-    // Profile 1 and 3 are not supported by EME. See https://crbug.com/898298.
+    // Profile 1 and 3 are not supported by EME. See https://crbug.com/41422352.
     invalid_codecs_.push_back("vp09.01.10.08");
     invalid_codecs_.push_back("vp09.03.10.10");
   }
@@ -191,6 +285,10 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
   const CodecVector& video_mp4_hi10p_codecs() const {
     return video_mp4_hi10p_codecs_;
   }
+  const CodecVector& video_mp4_hevc_codecs() const {
+    return video_mp4_hevc_codecs_;
+  }
+
   const CodecVector& opus_codecs() const { return opus_codecs_; }
   const CodecVector& vp9_profile0_codecs() const {
     return vp9_profile0_codecs_;
@@ -199,15 +297,35 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     return vp9_profile2_codecs_;
   }
   const CodecVector& av1_codecs() const { return av1_codecs_; }
+  const CodecVector& dolby_vision_codecs() const {
+    return dolby_vision_codecs_;
+  }
+  const CodecVector& ac3_codecs() const { return ac3_codecs_; }
+  const CodecVector& dts_codecs() const { return dts_codecs_; }
+
   const CodecVector& invalid_codecs() const { return invalid_codecs_; }
+
+  // Enables a feature without parameters.
+  void EnableFeature(const base::Feature& feature) {
+    enabled_features_.push_back({feature, {}});
+  }
+
+  // Disable a feature.
+  void DisableFeature(const base::Feature& feature) {
+    disabled_features_.push_back(feature);
+  }
 
   void SetUpDefaultCommandLine(base::CommandLine* command_line) override {
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
-    base::CommandLine default_command_line(base::CommandLine::NO_PROGRAM);
-    InProcessBrowserTest::SetUpDefaultCommandLine(&default_command_line);
-    test_launcher_utils::RemoveCommandLineSwitch(
-        default_command_line, switches::kDisableComponentUpdate, command_line);
+    InProcessBrowserTest::SetUpDefaultCommandLine(command_line);
+    command_line->RemoveSwitch(switches::kDisableComponentUpdate);
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+    // TODO(crbug.com/40787541): WhatsNewUI might be causing timeouts.
+    command_line->AppendSwitch(switches::kNoFirstRun);
+
+    feature_list_.InitWithFeaturesAndParameters(enabled_features_,
+                                                disabled_features_);
   }
 
   void SetUpOnMainThread() override {
@@ -217,7 +335,7 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     http_test_server->ServeFilesFromSourceDirectory(media::GetTestDataPath());
     CHECK(http_test_server->Start());
     GURL gurl = http_test_server->GetURL("/test_key_system_instantiation.html");
-    ui_test_utils::NavigateToURL(browser(), gurl);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), gurl));
   }
 
   // Create a valid JavaScript string for the content type. Format is
@@ -278,14 +396,14 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     content::TitleWatcher title_watcher(contents, kSuccessResult16);
     title_watcher.AlsoWaitForTitle(kUnsupportedResult16);
     title_watcher.AlsoWaitForTitle(kUnexpectedResult16);
-    EXPECT_TRUE(content::ExecuteScript(contents, command));
+    EXPECT_TRUE(content::ExecJs(contents, command));
     std::u16string result = title_watcher.WaitAndGetTitle();
     return base::UTF16ToASCII(result);
   }
 
   enum class SessionType {
-    kTemporary,             // Temporary session
-    kPersistentLicense,     // Persistent license session
+    kTemporary,          // Temporary session
+    kPersistentLicense,  // Persistent license session
   };
 
   std::string GetSessionTypeString(SessionType session_type) {
@@ -297,7 +415,6 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     }
 
     NOTREACHED();
-    return "";
   }
 
   std::string IsSupportedByKeySystem(
@@ -319,8 +436,8 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
       init_data_type = "webm";
     }
 
-    bool is_audio = mime_type.compare(0, 5, "audio") == 0;
-    DCHECK(is_audio || mime_type.compare(0, 5, "video") == 0);
+    bool is_audio = mime_type.starts_with("audio");
+    DCHECK(is_audio || mime_type.starts_with("video"));
     auto capabilities =
         MakeMediaCapabilities(mime_type, codecs, robustness, encryption_scheme);
     auto audio_capabilities = is_audio ? capabilities : "null";
@@ -334,16 +451,18 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     DVLOG(1) << "command: " << command;
 
     auto result = ExecuteCommand(
-        browser()->tab_strip_model()->GetActiveWebContents(), command);
+        browser()->GetTabStripModel()->GetActiveWebContents(), command);
     DVLOG(1) << "result: " << result;
 
     return result;
   }
 
   std::string IsSessionTypeSupported(const std::string& key_system,
-                                     SessionType session_type) {
+                                     SessionType session_type,
+                                     const char* robustness = nullptr) {
     return IsSupportedByKeySystem(key_system, kVideoWebMMimeType,
-                                  video_webm_codecs(), session_type);
+                                  video_webm_codecs(), session_type,
+                                  robustness);
   }
 
   std::string IsAudioRobustnessSupported(const std::string& key_system,
@@ -365,6 +484,13 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
     return IsSupportedByKeySystem(key_system, kVideoMP4MimeType,
                                   video_mp4_codecs(), SessionType::kTemporary,
                                   robustness);
+  }
+
+  std::string IsVideoMp4HevcRobustnessSupported(const std::string& key_system,
+                                                const char* robustness) {
+    return IsSupportedByKeySystem(key_system, kVideoMP4MimeType,
+                                  video_mp4_hevc_codecs(),
+                                  SessionType::kTemporary, robustness);
   }
 
   std::string IsAudioMp4RobustnessSupported(const std::string& key_system,
@@ -392,6 +518,33 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
                                   robustness, encryption_scheme);
   }
 
+  void CheckPlatformHevcSupport(const std::string& key_system) {
+    auto hevc_supported = IsSupportedByKeySystem(key_system, kVideoMP4MimeType,
+                                                 video_mp4_hevc_codecs());
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+    // On Windows & Linux platforms, HEVC support is detected through the GPU
+    // capabilities which won't indicate support when running the tests.
+    // TODO(crbug.com/40226210): Fix this so that we can inject HEVC support on
+    // Windows.
+    EXPECT_UNSUPPORTED(hevc_supported);
+#else
+    // On other platforms, HEVC support should be available if
+    // kPlatformHEVCDecoderSupport is enabled.
+    EXPECT_ECK_PROPRIETARY(hevc_supported);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#else
+    EXPECT_UNSUPPORTED(hevc_supported);
+#endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+  }
+
+ protected:
+  // Features to enable or disable for the test. Must be updated in the test
+  // constructor (before SetUpDefaultCommandLine()) to take effect.
+  std::vector<base::test::FeatureRefAndParams> enabled_features_;
+  std::vector<base::test::FeatureRef> disabled_features_;
+  base::test::ScopedFeatureList feature_list_;
+
  private:
   const CodecVector no_codecs_;
   CodecVector audio_webm_codecs_;
@@ -400,10 +553,14 @@ class EncryptedMediaSupportedTypesTest : public InProcessBrowserTest {
   CodecVector audio_mp4_flac_codecs_;
   CodecVector video_mp4_codecs_;
   CodecVector video_mp4_hi10p_codecs_;
+  CodecVector video_mp4_hevc_codecs_;
   CodecVector opus_codecs_;
   CodecVector vp9_profile0_codecs_;
   CodecVector vp9_profile2_codecs_;
   CodecVector av1_codecs_;
+  CodecVector dolby_vision_codecs_;
+  CodecVector dts_codecs_;
+  CodecVector ac3_codecs_;
   CodecVector invalid_codecs_;
 };
 
@@ -414,25 +571,27 @@ class EncryptedMediaSupportedTypesClearKeyTest
 // For ExternalClearKey tests, ensure that the ClearKey adapter is loaded.
 class EncryptedMediaSupportedTypesExternalClearKeyTest
     : public EncryptedMediaSupportedTypesTest {
-#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
- protected:
-  EncryptedMediaSupportedTypesExternalClearKeyTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        media::kExternalClearKeyForTesting);
-  }
+ public:
+  EncryptedMediaSupportedTypesExternalClearKeyTest(
+      const EncryptedMediaSupportedTypesExternalClearKeyTest&) = delete;
+  EncryptedMediaSupportedTypesExternalClearKeyTest& operator=(
+      const EncryptedMediaSupportedTypesExternalClearKeyTest&) = delete;
 
-  ~EncryptedMediaSupportedTypesExternalClearKeyTest() override {}
+ protected:
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+  EncryptedMediaSupportedTypesExternalClearKeyTest() {
+    EnableFeature(media::kExternalClearKeyForTesting);
+  }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     EncryptedMediaSupportedTypesTest::SetUpCommandLine(command_line);
     RegisterClearKeyCdm(command_line);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+#else
+  EncryptedMediaSupportedTypesExternalClearKeyTest() = default;
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
-  DISALLOW_COPY_AND_ASSIGN(EncryptedMediaSupportedTypesExternalClearKeyTest);
+  ~EncryptedMediaSupportedTypesExternalClearKeyTest() override = default;
 };
 
 // By default, the External Clear Key (ECK) key system is not supported even if
@@ -452,6 +611,12 @@ class EncryptedMediaSupportedTypesExternalClearKeyNotEnabledTest
 
 class EncryptedMediaSupportedTypesWidevineTest
     : public EncryptedMediaSupportedTypesTest {
+ public:
+  EncryptedMediaSupportedTypesWidevineTest(
+      const EncryptedMediaSupportedTypesWidevineTest&) = delete;
+  EncryptedMediaSupportedTypesWidevineTest& operator=(
+      const EncryptedMediaSupportedTypesWidevineTest&) = delete;
+
  protected:
   EncryptedMediaSupportedTypesWidevineTest() = default;
 
@@ -464,43 +629,155 @@ class EncryptedMediaSupportedTypesWidevineTest
     command_line->AppendSwitchASCII(
         switches::kUnsafelyAllowProtectedMediaIdentifierForDomain, "127.0.0.1");
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(EncryptedMediaSupportedTypesWidevineTest);
 };
+
+#if BUILDFLAG(ENABLE_PLAYREADY)
+class EncryptedMediaSupportedTypesPlayReadyTest
+    : public EncryptedMediaSupportedTypesTest {
+ public:
+  EncryptedMediaSupportedTypesPlayReadyTest(
+      const EncryptedMediaSupportedTypesPlayReadyTest&) = delete;
+  EncryptedMediaSupportedTypesPlayReadyTest& operator=(
+      const EncryptedMediaSupportedTypesPlayReadyTest&) = delete;
+
+ protected:
+  EncryptedMediaSupportedTypesPlayReadyTest() = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    EncryptedMediaSupportedTypesTest::SetUpCommandLine(command_line);
+    // Use this switch to always allow the protected media identifier for
+    // testing purpose. Note that the test page is hosted on "127.0.0.1". See
+    // net::EmbeddedTestServer for details.
+    command_line->AppendSwitchASCII(
+        switches::kUnsafelyAllowProtectedMediaIdentifierForDomain, "127.0.0.1");
+  }
+};
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)
+
+#if BUILDFLAG(IS_CHROMEOS)
+class EncryptedMediaSupportedTypesDevModeTest
+    : public EncryptedMediaSupportedTypesTest {
+ public:
+  EncryptedMediaSupportedTypesDevModeTest(
+      const EncryptedMediaSupportedTypesDevModeTest&) = delete;
+  EncryptedMediaSupportedTypesDevModeTest& operator=(
+      const EncryptedMediaSupportedTypesDevModeTest&) = delete;
+
+ protected:
+  EncryptedMediaSupportedTypesDevModeTest() = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    EncryptedMediaSupportedTypesTest::SetUpCommandLine(command_line);
+    // Expect Persistent licences to not be supported since switch for dev mode
+    // is turned on.
+    command_line->AppendSwitch(chromeos::switches::kSystemDevMode);
+  }
+};
+
+class EncryptedMediaSupportedTypesRAAllowedTest
+    : public EncryptedMediaSupportedTypesTest {
+ public:
+  EncryptedMediaSupportedTypesRAAllowedTest(
+      const EncryptedMediaSupportedTypesRAAllowedTest&) = delete;
+  EncryptedMediaSupportedTypesRAAllowedTest& operator=(
+      const EncryptedMediaSupportedTypesRAAllowedTest&) = delete;
+
+ protected:
+  EncryptedMediaSupportedTypesRAAllowedTest() = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    EncryptedMediaSupportedTypesTest::SetUpCommandLine(command_line);
+    // Expect Persistent licences to be supported since switch for dev mode
+    // is turned on alongside the AllowRAinDevMode
+    command_line->AppendSwitch(chromeos::switches::kSystemDevMode);
+    command_line->AppendSwitch(switches::kAllowRAInDevMode);
+  }
+};
+
+class EncryptedMediaSupportedTypesRAForContentBlockedTest
+    : public EncryptedMediaSupportedTypesTest {
+ public:
+  EncryptedMediaSupportedTypesRAForContentBlockedTest(
+      const EncryptedMediaSupportedTypesRAForContentBlockedTest&) = delete;
+  EncryptedMediaSupportedTypesRAForContentBlockedTest& operator=(
+      const EncryptedMediaSupportedTypesRAForContentBlockedTest&) = delete;
+
+ protected:
+  EncryptedMediaSupportedTypesRAForContentBlockedTest() = default;
+};
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 class EncryptedMediaSupportedTypesWidevineHwSecureTest
     : public EncryptedMediaSupportedTypesWidevineTest {
+ public:
+  EncryptedMediaSupportedTypesWidevineHwSecureTest(
+      const EncryptedMediaSupportedTypesWidevineHwSecureTest&) = delete;
+  EncryptedMediaSupportedTypesWidevineHwSecureTest& operator=(
+      const EncryptedMediaSupportedTypesWidevineHwSecureTest&) = delete;
+
  protected:
   EncryptedMediaSupportedTypesWidevineHwSecureTest() {
-    scoped_feature_list_.InitAndEnableFeature(media::kHardwareSecureDecryption);
+    EnableFeature(media::kHardwareSecureDecryption);
+#if BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+    EnableFeature(media::kPlatformEncryptedDolbyVision);
+#endif
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     EncryptedMediaSupportedTypesWidevineTest::SetUpCommandLine(command_line);
-    // Pretend that we support hardware secure decryption for vp8 and vp9, but
-    // not for avc1. This will also pretend that there is support for vorbis
-    // audio.
+    // Pretend that we support hardware secure decryption for vp8, vp9 and
+    // dolbyvision, but not for avc1. This will also pretend that there is
+    // support for vorbis audio.
     command_line->AppendSwitchASCII(
-        switches::kOverrideHardwareSecureCodecsForTesting, "vp8,vp9,vorbis");
+        switches::kOverrideHardwareSecureCodecsForTesting,
+        "vp8,vp9,dolbyvision,vorbis");
+  }
+};
+
+#if BUILDFLAG(ENABLE_PLAYREADY)
+class EncryptedMediaSupportedTypesPlayReadyHwSecureTest
+    : public EncryptedMediaSupportedTypesPlayReadyTest {
+ public:
+  EncryptedMediaSupportedTypesPlayReadyHwSecureTest(
+      const EncryptedMediaSupportedTypesPlayReadyHwSecureTest&) = delete;
+  EncryptedMediaSupportedTypesPlayReadyHwSecureTest& operator=(
+      const EncryptedMediaSupportedTypesPlayReadyHwSecureTest&) = delete;
+
+ protected:
+  EncryptedMediaSupportedTypesPlayReadyHwSecureTest() {
+    EnableFeature(media::kHardwareSecureDecryption);
+#if BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+    EnableFeature(media::kPlatformEncryptedDolbyVision);
+#endif
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(EncryptedMediaSupportedTypesWidevineHwSecureTest);
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    EncryptedMediaSupportedTypesPlayReadyTest::SetUpCommandLine(command_line);
+    // Pretend that we support hardware secure decryption for vp8, vp9 and
+    // dolbyvision, but not for avc1. This will also pretend that there is
+    // support for vorbis audio.
+    command_line->AppendSwitchASCII(
+        switches::kOverrideHardwareSecureCodecsForTesting,
+        "vp8,vp9,av01-no-clearlead,dolbyvision,vorbis");
+  }
 };
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
 // Registers ClearKey CDM with the wrong path (filename).
 class EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest
     : public EncryptedMediaSupportedTypesTest {
+ public:
+  EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest(
+      const EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest&) =
+      delete;
+  EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest& operator=(
+      const EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest&) =
+      delete;
+
  protected:
   EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        media::kExternalClearKeyForTesting);
+    EnableFeature(media::kExternalClearKeyForTesting);
   }
 
   ~EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest()
@@ -510,14 +787,20 @@ class EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest
     EncryptedMediaSupportedTypesTest::SetUpCommandLine(command_line);
     RegisterClearKeyCdm(command_line, true /* use_wrong_cdm_path */);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(
-      EncryptedMediaSupportedTypesClearKeyCdmRegisteredWithWrongPathTest);
 };
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+class EncryptedMediaSupportedTypesWidevinePersistentLicenseNotSupported
+    : public EncryptedMediaSupportedTypesWidevineTest {
+ protected:
+  EncryptedMediaSupportedTypesWidevinePersistentLicenseNotSupported() {
+    DisableFeature(media::kWidevinePersistentLicenseSupport);
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    EncryptedMediaSupportedTypesTest::SetUpCommandLine(command_line);
+  }
+};
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Basic) {
   EXPECT_SUCCESS(IsSupportedByKeySystem(kClearKey, kVideoWebMMimeType,
@@ -602,6 +885,8 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Video_WebM) {
                                             audio_mp4_codecs()));
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kVideoWebMMimeType,
                                             video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kVideoWebMMimeType,
+                                            video_mp4_hevc_codecs()));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Audio_WebM) {
@@ -624,12 +909,24 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Audio_WebM) {
                                             audio_mp4_flac_codecs()));
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kAudioWebMMimeType,
                                             video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kAudioWebMMimeType,
+                                            video_mp4_hevc_codecs()));
 }
 
-IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Video_MP4) {
+// TODO(crbug.com/40915599): Flaky on "Mac12 Tests" builder.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_Video_MP4 DISABLED_Video_MP4
+#else
+#define MAYBE_Video_MP4 Video_MP4
+#endif
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest,
+                       MAYBE_Video_MP4) {
   // Valid video types.
   EXPECT_PROPRIETARY(
       IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType, video_mp4_codecs()));
+
+  CheckPlatformHevcSupport(kClearKey);
+
   EXPECT_SUCCESS(IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType,
                                         vp9_profile0_codecs()));
   EXPECT_SUCCESS(IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType,
@@ -639,13 +936,13 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Video_MP4) {
 
 // High 10-bit Profile is supported when using ClearKey if it is supported for
 // clear content on this platform.
-#if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
-  EXPECT_PROPRIETARY(IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType,
-                                            video_mp4_hi10p_codecs()));
-#else
-  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType,
-                                            video_mp4_hi10p_codecs()));
-#endif
+  if (media::IsDecoderBuiltInVideoCodec(media::VideoCodec::kH264)) {
+    EXPECT_PROPRIETARY(IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType,
+                                              video_mp4_hi10p_codecs()));
+  } else {
+    EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kVideoMP4MimeType,
+                                              video_mp4_hi10p_codecs()));
+  }
 
   // Non-video MP4 codecs.
   EXPECT_UNSUPPORTED(
@@ -670,10 +967,16 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest, Audio_MP4) {
       IsSupportedByKeySystem(kClearKey, kAudioMP4MimeType, opus_codecs()));
   EXPECT_SUCCESS(IsSupportedByKeySystem(kClearKey, kAudioMP4MimeType,
                                         audio_mp4_flac_codecs()));
+  EXPECT_AC3(
+      IsSupportedByKeySystem(kClearKey, kAudioMP4MimeType, ac3_codecs()));
+  EXPECT_DTS(
+      IsSupportedByKeySystem(kClearKey, kAudioMP4MimeType, dts_codecs()));
 
   // Non-audio MP4 codecs.
   EXPECT_UNSUPPORTED(
       IsSupportedByKeySystem(kClearKey, kAudioMP4MimeType, video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kClearKey, kAudioMP4MimeType,
+                                            video_mp4_hevc_codecs()));
 
   // Invalid or non-MP4 codec.
   EXPECT_UNSUPPORTED(
@@ -730,7 +1033,7 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesClearKeyTest,
 // External Clear Key
 //
 
-// When BUILDFLAG(ENABLE_LIBRARY_CDMS), this also tests the Pepper CDM check.
+// When BUILDFLAG(ENABLE_LIBRARY_CDMS), this also tests the library CDM check.
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                        Basic) {
   EXPECT_ECK(IsSupportedByKeySystem(kExternalClearKey, kVideoWebMMimeType,
@@ -743,6 +1046,9 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                                     audio_mp4_flac_codecs()));
   EXPECT_ECK_PROPRIETARY(IsSupportedByKeySystem(
       kExternalClearKey, kVideoMP4MimeType, video_mp4_codecs()));
+
+  CheckPlatformHevcSupport(kExternalClearKey);
+
   EXPECT_ECK_PROPRIETARY(IsSupportedByKeySystem(
       kExternalClearKey, kAudioMP4MimeType, audio_mp4_codecs()));
 }
@@ -785,10 +1091,12 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                                             kVideoWebMMimeType,
                                             video_webm_codecs()));
 
-  // There are no child key systems for External Clear Key.
-  EXPECT_UNSUPPORTED(IsSupportedByKeySystem("org.chromium.externalclearkey.foo",
-                                            kVideoWebMMimeType,
-                                            video_webm_codecs()));
+  // Child key systems for External Clear Key are generally supported except
+  // for the special one explicitly marked as "invalid". See
+  // ExternalClearKeyKeySystemInfo.
+  EXPECT_UNSUPPORTED(
+      IsSupportedByKeySystem("org.chromium.externalclearkey.invalid",
+                             kVideoWebMMimeType, video_webm_codecs()));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
@@ -816,6 +1124,8 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
       kExternalClearKey, kVideoWebMMimeType, audio_mp4_codecs()));
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
       kExternalClearKey, kVideoWebMMimeType, video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kExternalClearKey, kVideoWebMMimeType, video_mp4_hevc_codecs()));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
@@ -839,13 +1149,24 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
       kExternalClearKey, kAudioWebMMimeType, audio_mp4_flac_codecs()));
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
       kExternalClearKey, kAudioWebMMimeType, video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kExternalClearKey, kAudioWebMMimeType, video_mp4_hevc_codecs()));
 }
 
+// TODO(crbug.com/40915599): Flaky on "Mac12 Tests" builder.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_Video_MP4 DISABLED_Video_MP4
+#else
+#define MAYBE_Video_MP4 Video_MP4
+#endif
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
-                       Video_MP4) {
+                       MAYBE_Video_MP4) {
   // Valid video types.
   EXPECT_ECK_PROPRIETARY(IsSupportedByKeySystem(
       kExternalClearKey, kVideoMP4MimeType, video_mp4_codecs()));
+
+  CheckPlatformHevcSupport(kExternalClearKey);
+
   EXPECT_ECK(IsSupportedByKeySystem(kExternalClearKey, kVideoMP4MimeType,
                                     vp9_profile0_codecs()));
   EXPECT_ECK(IsSupportedByKeySystem(kExternalClearKey, kVideoMP4MimeType,
@@ -881,10 +1202,16 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                                     opus_codecs()));
   EXPECT_ECK(IsSupportedByKeySystem(kExternalClearKey, kAudioMP4MimeType,
                                     audio_mp4_flac_codecs()));
+  EXPECT_ECK_AC3(IsSupportedByKeySystem(kExternalClearKey, kAudioMP4MimeType,
+                                        ac3_codecs()));
+  EXPECT_ECK_DTS(IsSupportedByKeySystem(kExternalClearKey, kAudioMP4MimeType,
+                                        dts_codecs()));
 
   // Non-audio MP4 codecs.
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
       kExternalClearKey, kAudioMP4MimeType, video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kExternalClearKey, kAudioMP4MimeType, video_mp4_hevc_codecs()));
 
   // Invalid or Non-MP4 codec.
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
@@ -898,21 +1225,21 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                        SessionType) {
   // Temporary session always supported.
-  EXPECT_SUCCESS(
+  EXPECT_ECK(
       IsSessionTypeSupported(kExternalClearKey, SessionType::kTemporary));
 
   // Persistent sessions always supported by External Clear Key.
-  EXPECT_SUCCESS(IsSessionTypeSupported(kExternalClearKey,
-                                        SessionType::kPersistentLicense));
+  EXPECT_ECK(IsSessionTypeSupported(kExternalClearKey,
+                                    SessionType::kPersistentLicense));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                        Robustness) {
   // External Clear Key doesn't require a robustness string.
-  EXPECT_SUCCESS(IsVideoRobustnessSupported(kExternalClearKey, nullptr));
-  EXPECT_SUCCESS(IsVideoRobustnessSupported(kExternalClearKey, ""));
-  EXPECT_SUCCESS(IsAudioRobustnessSupported(kExternalClearKey, nullptr));
-  EXPECT_SUCCESS(IsAudioRobustnessSupported(kExternalClearKey, ""));
+  EXPECT_ECK(IsVideoRobustnessSupported(kExternalClearKey, nullptr));
+  EXPECT_ECK(IsVideoRobustnessSupported(kExternalClearKey, ""));
+  EXPECT_ECK(IsAudioRobustnessSupported(kExternalClearKey, nullptr));
+  EXPECT_ECK(IsAudioRobustnessSupported(kExternalClearKey, ""));
 
   // Non-empty robustness string will be rejected, including valid Widevine
   // robustness strings.
@@ -928,16 +1255,14 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesExternalClearKeyTest,
                        EncryptionScheme) {
-  EXPECT_SUCCESS(IsAudioEncryptionSchemeSupported(kExternalClearKey, nullptr));
-  EXPECT_SUCCESS(IsAudioEncryptionSchemeSupported(kExternalClearKey, "cenc"));
-  EXPECT_SUCCESS(IsAudioEncryptionSchemeSupported(kExternalClearKey, "cbcs"));
-  EXPECT_SUCCESS(
-      IsAudioEncryptionSchemeSupported(kExternalClearKey, "cbcs-1-9"));
-  EXPECT_SUCCESS(IsVideoEncryptionSchemeSupported(kExternalClearKey, nullptr));
-  EXPECT_SUCCESS(IsVideoEncryptionSchemeSupported(kExternalClearKey, "cenc"));
-  EXPECT_SUCCESS(IsVideoEncryptionSchemeSupported(kExternalClearKey, "cbcs"));
-  EXPECT_SUCCESS(
-      IsVideoEncryptionSchemeSupported(kExternalClearKey, "cbcs-1-9"));
+  EXPECT_ECK(IsAudioEncryptionSchemeSupported(kExternalClearKey, nullptr));
+  EXPECT_ECK(IsAudioEncryptionSchemeSupported(kExternalClearKey, "cenc"));
+  EXPECT_ECK(IsAudioEncryptionSchemeSupported(kExternalClearKey, "cbcs"));
+  EXPECT_ECK(IsAudioEncryptionSchemeSupported(kExternalClearKey, "cbcs-1-9"));
+  EXPECT_ECK(IsVideoEncryptionSchemeSupported(kExternalClearKey, nullptr));
+  EXPECT_ECK(IsVideoEncryptionSchemeSupported(kExternalClearKey, "cenc"));
+  EXPECT_ECK(IsVideoEncryptionSchemeSupported(kExternalClearKey, "cbcs"));
+  EXPECT_ECK(IsVideoEncryptionSchemeSupported(kExternalClearKey, "cbcs-1-9"));
 
   // Invalid encryption schemes will be rejected.
   EXPECT_UNSUPPORTED(
@@ -979,6 +1304,10 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Basic) {
       IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType, audio_mp4_codecs()));
   EXPECT_WV(
       IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType, opus_codecs()));
+
+  // Without hardware support, HEVC is not supported.
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kVideoMP4MimeType,
+                                            video_mp4_hevc_codecs()));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest,
@@ -1047,6 +1376,8 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Video_WebM) {
                                             audio_mp4_flac_codecs()));
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kVideoWebMMimeType,
                                             video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kVideoWebMMimeType,
+                                            video_mp4_hevc_codecs()));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Audio_WebM) {
@@ -1069,6 +1400,8 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Audio_WebM) {
                                             audio_mp4_flac_codecs()));
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kAudioWebMMimeType,
                                             video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kAudioWebMMimeType,
+                                            video_mp4_hevc_codecs()));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Video_MP4) {
@@ -1085,6 +1418,10 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Video_MP4) {
   // High 10-bit Profile is not supported when using Widevine.
   EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kVideoMP4MimeType,
                                             video_mp4_hi10p_codecs()));
+
+  // HEVC is not supported when using Widevine.
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kVideoMP4MimeType,
+                                            video_mp4_hevc_codecs()));
 
   // Non-video MP4 codecs.
   EXPECT_UNSUPPORTED(
@@ -1111,10 +1448,16 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Audio_MP4) {
       IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType, opus_codecs()));
   EXPECT_WV(IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType,
                                    audio_mp4_flac_codecs()));
+  EXPECT_WV_AC3(
+      IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType, ac3_codecs()));
+  EXPECT_WV_DTS(
+      IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType, dts_codecs()));
 
   // Non-audio MP4 codecs.
   EXPECT_UNSUPPORTED(
       IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType, video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(kWidevine, kAudioMP4MimeType,
+                                            video_mp4_hevc_codecs()));
 
   // Invalid or Non-MP4 codec.
   EXPECT_UNSUPPORTED(
@@ -1130,18 +1473,8 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, SessionType) {
   EXPECT_WV(IsSessionTypeSupported(kWidevine, SessionType::kTemporary));
 
   // Persistent license session support varies by platform.
-  auto result =
-      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense);
-
-#if BUILDFLAG(IS_CHROMEOS_ASH) || defined(OS_WIN) || defined(OS_MAC)
-  // Persistent license session supported by Widevine key system on Windows and
-  // Mac. On ChromeOS, it is supported when the protected media identifier
-  // permission is allowed. See kUnsafelyAllowProtectedMediaIdentifierForDomain
-  // used above.
-  EXPECT_WV(result);
-#else
-  EXPECT_UNSUPPORTED(result);
-#endif
+  EXPECT_WV_SW_SECURE_PERSISTENT_SESSION(
+      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense));
 }
 
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Robustness) {
@@ -1153,7 +1486,7 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Robustness) {
   EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
   EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // "HW_SECURE_ALL" supported on ChromeOS when the protected media identifier
   // permission is allowed. See kUnsafelyAllowProtectedMediaIdentifierForDomain
   // used above.
@@ -1169,7 +1502,7 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest, Robustness) {
   EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "Invalid String"));
   EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // "SW_SECURE_DECODE" and "HW_SECURE_ALL" supported on ChromeOS when the
   // protected media identifier permission is allowed. See
   // kUnsafelyAllowProtectedMediaIdentifierForDomain used above.
@@ -1199,7 +1532,52 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest,
   EXPECT_UNSUPPORTED(IsVideoEncryptionSchemeSupported(kWidevine, ""));
 }
 
-//
+#if BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesDevModeTest, SessionType) {
+  // Temporary session always supported.
+  EXPECT_WV(IsSessionTypeSupported(kWidevine, SessionType::kTemporary));
+
+  // Persistent license session should not be supported while system is
+  // on dev mode.
+  EXPECT_UNSUPPORTED(
+      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesRAAllowedTest, SessionType) {
+  // Temporary session always supported.
+  EXPECT_WV(IsSessionTypeSupported(kWidevine, SessionType::kTemporary));
+
+  // Persistent license session should be supported if the flag
+  // `kAllowRAInDevMode` is attached while the system is on dev mode.
+  EXPECT_WV_SW_SECURE_PERSISTENT_SESSION(
+      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesRAForContentBlockedTest,
+                       SessionType) {
+  // Temporary session always supported.
+  EXPECT_WV(IsSessionTypeSupported(kWidevine, SessionType::kTemporary));
+
+  auto settings_helper =
+      std::make_unique<ash::ScopedCrosSettingsTestHelper>(false);
+  settings_helper->ReplaceDeviceSettingsProviderWithStub();
+
+  // Persistent license session should be supported as long as the policy
+  // 'kAttestationForContentProtectionEnabled' is set to true.
+  settings_helper->SetBoolean(ash::kAttestationForContentProtectionEnabled,
+                              true);
+  EXPECT_WV_SW_SECURE_PERSISTENT_SESSION(
+      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense));
+
+  // Persistent license session should be not supported as long as the policy
+  // 'kAttestationForContentProtectionEnabled' is set to false.
+  settings_helper->SetBoolean(ash::kAttestationForContentProtectionEnabled,
+                              false);
+  EXPECT_UNSUPPORTED(
+      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 // EncryptedMediaSupportedTypesWidevineHwSecureTest tests Widevine with hardware
 // secure decryption support.
 // - ChromeOS: HW_SECURE_ALL are supported by default which is not affected by
@@ -1219,13 +1597,13 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
   // Video robustness.
   EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
   EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
-  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
-  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
 
   // Audio robustness.
   EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
-  EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+#if BUILDFLAG(IS_CHROMEOS)
   // "SW_SECURE_DECODE" and "HW_SECURE_ALL" supported on ChromeOS when the
   // protected media identifier permission is allowed. See
   // kUnsafelyAllowProtectedMediaIdentifierForDomain used above.
@@ -1241,7 +1619,7 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
       IsVideoMp4RobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
   EXPECT_WV_PROPRIETARY(
       IsVideoMp4RobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // "SW_SECURE_DECODE" and "HW_SECURE_ALL" supported on ChromeOS when the
   // protected media identifier permission is allowed. See
   // kUnsafelyAllowProtectedMediaIdentifierForDomain used above.
@@ -1256,11 +1634,24 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
   EXPECT_UNSUPPORTED(IsVideoMp4RobustnessSupported(kWidevine, "HW_SECURE_ALL"));
 #endif
 
+  // HEVC codecs. Not supported because either HEVC not supported
+  // (BUILDFLAG(ENABLE_PLATFORM_HEVC)) or HEVC not specified in
+  // kOverrideHardwareSecureCodecsForTesting.
+  // TODO(b/187242911): Add HEVC to kOverrideHardwareSecureCodecsForTesting.
+  EXPECT_UNSUPPORTED(
+      IsVideoMp4HevcRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(
+      IsVideoMp4HevcRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
+  EXPECT_UNSUPPORTED(
+      IsVideoMp4HevcRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(
+      IsVideoMp4HevcRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+
   // Audio proprietary codecs.
   // "SW_SECURE_CRYPTO" is always supported.
   EXPECT_WV_PROPRIETARY(
       IsAudioMp4RobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // "SW_SECURE_DECODE", "HW_SECURE_CRYPTO", and "HW_SECURE_ALL" supported
   // on ChromeOS when the protected media identifier permission is allowed.
   // See kUnsafelyAllowProtectedMediaIdentifierForDomain used above.
@@ -1309,11 +1700,11 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
   // the command line switch kOverrideHardwareSecureCodecsForTesting.
   // ChromeOS has special handling for hardware support, so 'cbcs' is supported
   // on ChromeOS, but not on other platforms.
-  EXPECT_WV(
+  EXPECT_UNSUPPORTED(
       IsAudioEncryptionSchemeSupported(kWidevine, "cenc", "HW_SECURE_CRYPTO"));
-  EXPECT_WV(
+  EXPECT_UNSUPPORTED(
       IsVideoEncryptionSchemeSupported(kWidevine, "cenc", "HW_SECURE_ALL"));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   EXPECT_WV(
       IsAudioEncryptionSchemeSupported(kWidevine, "cbcs", "HW_SECURE_CRYPTO"));
   EXPECT_WV(IsAudioEncryptionSchemeSupported(kWidevine, "cbcs-1-9",
@@ -1334,11 +1725,257 @@ IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
 #endif
 }
 
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
+                       SessionType) {
+  // Temporary session always supported.
+  EXPECT_WV(IsSessionTypeSupported(kWidevine, SessionType::kTemporary,
+                                   "SW_SECURE_CRYPTO"));
+  EXPECT_WV(IsSessionTypeSupported(kWidevine, SessionType::kTemporary,
+                                   "SW_SECURE_DECODE"));
+  EXPECT_UNSUPPORTED(IsSessionTypeSupported(kWidevine, SessionType::kTemporary,
+                                            "HW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(IsSessionTypeSupported(kWidevine, SessionType::kTemporary,
+                                            "HW_SECURE_ALL"));
+
+  // Persistent session for software secure Widevine is platform specific.
+  EXPECT_WV_SW_SECURE_PERSISTENT_SESSION(IsSessionTypeSupported(
+      kWidevine, SessionType::kPersistentLicense, "SW_SECURE_CRYPTO"));
+  EXPECT_WV_SW_SECURE_PERSISTENT_SESSION(IsSessionTypeSupported(
+      kWidevine, SessionType::kPersistentLicense, "SW_SECURE_DECODE"));
+
+  // Persistent session for hardware secure Widevine is only supported on
+  // ChromeOS.
+  EXPECT_WV_HW_SECURE_PERSISTENT_SESSION(IsSessionTypeSupported(
+      kWidevine, SessionType::kPersistentLicense, "HW_SECURE_CRYPTO"));
+  EXPECT_WV_HW_SECURE_PERSISTENT_SESSION(IsSessionTypeSupported(
+      kWidevine, SessionType::kPersistentLicense, "HW_SECURE_ALL"));
+}
+
+#if BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineHwSecureTest,
+                       DolbyVision) {
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kWidevine, kVideoMP4MimeType, dolby_vision_codecs(),
+      SessionType::kTemporary, "HW_SECURE_ALL"));
+}
+#endif  // BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+
+#if BUILDFLAG(ENABLE_PLAYREADY)
+//
+// PlayReady test cases.
+//
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       Robustness_HardwareSecure) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  // com.microsoft.playready.recommendation.3000 does not require a robustness
+  // level to be specified. If a robustness is specified then only "3000" is
+  // allowed.
+  EXPECT_SUCCESS(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, nullptr));
+  EXPECT_SUCCESS(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationHWSecure,
+                                 kPlayReadyHardwareSecureRobustness));
+  EXPECT_SUCCESS(IsAudioRobustnessSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, nullptr));
+  EXPECT_SUCCESS(
+      IsAudioRobustnessSupported(kPlayReadyKeySystemRecommendationHWSecure,
+                                 kPlayReadyHardwareSecureRobustness));
+
+  // This is not a valid keysystem + robustness combination.
+  EXPECT_UNSUPPORTED(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationHWSecure,
+                                 kPlayReadySoftwareSecureRobustness));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       Robustness_RecommendationDefault) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  EXPECT_SUCCESS(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadyHardwareSecureRobustness));
+  EXPECT_SUCCESS(
+      IsAudioRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadyHardwareSecureRobustness));
+
+  // Software secure PlayReady should not be supported.
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemRecommendationDefault, nullptr));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(
+      kPlayReadyKeySystemRecommendationDefault, nullptr));
+  EXPECT_UNSUPPORTED(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadySoftwareSecureRobustness));
+  EXPECT_UNSUPPORTED(
+      IsAudioRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadySoftwareSecureRobustness));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       Robustness_Base) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  // Verify that the base key system is not supported.
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemBase, kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemBase, kPlayReadySoftwareSecureRobustness));
+  EXPECT_UNSUPPORTED(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemBase, nullptr));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(
+      kPlayReadyKeySystemBase, kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(
+      kPlayReadyKeySystemBase, kPlayReadySoftwareSecureRobustness));
+  EXPECT_UNSUPPORTED(
+      IsAudioRobustnessSupported(kPlayReadyKeySystemBase, nullptr));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       SessionType_HardwareSecure) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  // Temporary session is always supported for hardware secure key systems.
+  EXPECT_SUCCESS(IsSessionTypeSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_SUCCESS(IsSessionTypeSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, SessionType::kTemporary));
+
+  // Persistent license is not supported for hardware secure key systems
+  EXPECT_UNSUPPORTED(IsSessionTypeSupported(
+      kPlayReadyKeySystemRecommendationHWSecure,
+      SessionType::kPersistentLicense, kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(
+      IsSessionTypeSupported(kPlayReadyKeySystemRecommendationHWSecure,
+                             SessionType::kPersistentLicense));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       SessionType_RecommendationDefault) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  // Temporary session is always supported for hardware secure key systems.
+  EXPECT_SUCCESS(IsSessionTypeSupported(
+      kPlayReadyKeySystemRecommendationDefault, SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+
+  // Software secure PlayReady is not supported.
+  EXPECT_UNSUPPORTED(IsSessionTypeSupported(
+      kPlayReadyKeySystemRecommendationDefault, SessionType::kTemporary));
+
+  // Persistent license is not supported for hardware secure key systems
+  EXPECT_UNSUPPORTED(IsSessionTypeSupported(
+      kPlayReadyKeySystemRecommendationDefault, SessionType::kPersistentLicense,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(
+      IsSessionTypeSupported(kPlayReadyKeySystemRecommendationDefault,
+                             SessionType::kPersistentLicense));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       SupportedCodecs_HardwareSecure) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  // This test checks that the playready implementation works
+  // as expected with the command line overridden codecs which
+  // are supplied in the EncryptedMediaSupportedTypesPlayReadyHwSecureTest
+  // constructor. AV1 codecs are not supported in this test because
+  // they are marked as not supporting clear lead.
+
+  EXPECT_SUCCESS(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kVideoWebMMimeType, video_webm_codecs()));
+  EXPECT_UNSUPPORTED(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kVideoMP4MimeType, video_mp4_codecs()));
+  EXPECT_UNSUPPORTED(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kAudioMP4MimeType, audio_mp4_codecs()));
+  EXPECT_SUCCESS(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kAudioWebMMimeType, audio_webm_codecs()));
+  EXPECT_UNSUPPORTED(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kAudioMP4MimeType, audio_mp4_flac_codecs()));
+  EXPECT_SUCCESS(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kVideoWebMMimeType, vp9_profile2_codecs()));
+  EXPECT_SUCCESS(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kVideoMP4MimeType, vp9_profile2_codecs()));
+  EXPECT_UNSUPPORTED(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kVideoMP4MimeType, av1_codecs()));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       SupportedCodecs_RecommendationDefault) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  // This test checks that the playready implementation works
+  // as expected with the command line overridden codecs which
+  // are supplied in the EncryptedMediaSupportedTypesPlayReadyHwSecureTest
+  // constructor. AV1 codecs are not supported in this test because
+  // they are marked as not supporting clear lead .
+
+  EXPECT_SUCCESS(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kVideoWebMMimeType,
+      video_webm_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kVideoMP4MimeType,
+      video_mp4_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kAudioMP4MimeType,
+      audio_mp4_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_SUCCESS(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kAudioWebMMimeType,
+      audio_webm_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kAudioMP4MimeType,
+      audio_mp4_flac_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_SUCCESS(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kVideoWebMMimeType,
+      vp9_profile2_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_SUCCESS(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kVideoMP4MimeType,
+      vp9_profile2_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+  EXPECT_UNSUPPORTED(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kVideoMP4MimeType, av1_codecs(),
+      SessionType::kTemporary, kPlayReadyHardwareSecureRobustness));
+}
+
+#if BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       DolbyVision) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  EXPECT_SUCCESS(IsSupportedByKeySystem(
+      kPlayReadyKeySystemRecommendationDefault, kVideoMP4MimeType,
+      dolby_vision_codecs(), SessionType::kTemporary,
+      kPlayReadyHardwareSecureRobustness));
+
+  EXPECT_SUCCESS(
+      IsSupportedByKeySystem(kPlayReadyKeySystemRecommendationHWSecure,
+                             kVideoMP4MimeType, dolby_vision_codecs()));
+}
+#endif  // BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)
+
 //
 // Misc failure test cases.
 //
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
 IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesTest,
                        ClearKeyCdmNotRegistered) {
   // External Clear Key will not be supported because Clear Key CDM is not
@@ -1365,3 +2002,132 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+IN_PROC_BROWSER_TEST_F(
+    EncryptedMediaSupportedTypesWidevinePersistentLicenseNotSupported,
+    Basic) {
+  EXPECT_UNSUPPORTED(
+      IsSessionTypeSupported(kWidevine, SessionType::kPersistentLicense));
+}
+
+// Testing the Enterprise policy kProtectedContentIdentifiersAllowed
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest,
+                       WidevineHWSecureBlockedWhenPolicyBlocked) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      policy::policy_prefs::kProtectedContentIdentifiersAllowed, true);
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, nullptr));
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, ""));
+
+  // Video robustness.
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+
+  // Audio robustness.
+  EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+
+  // Should be unsupported when the protected media identifier is set to be
+  // blocked by enterprise policy.
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesWidevineTest,
+                       WidevineHWSecureAllowedWhenPolicyAllowed) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      policy::policy_prefs::kProtectedContentIdentifiersAllowed, true);
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, nullptr));
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, ""));
+
+  // Video robustness.
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
+  EXPECT_WV(IsVideoRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+
+  // Audio robustness.
+  EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_CRYPTO"));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_CRYPTO"));
+#if BUILDFLAG(IS_CHROMEOS)
+  // "SW_SECURE_DECODE" and "HW_SECURE_ALL" supported on ChromeOS when the
+  // protected media identifier permission is allowed. See
+  // kUnsafelyAllowProtectedMediaIdentifierForDomain used above.
+  EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
+  EXPECT_WV(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+#else
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "SW_SECURE_DECODE"));
+  EXPECT_UNSUPPORTED(IsAudioRobustnessSupported(kWidevine, "HW_SECURE_ALL"));
+#endif
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_PLAYREADY)
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       PlayReadyBlockedWhenPolicyBlocked) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      policy::policy_prefs::kProtectedContentIdentifiersAllowed, false);
+
+  // PlayReady hardware secure key systems should be blocked.
+  EXPECT_UNSUPPORTED(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, nullptr));
+  EXPECT_UNSUPPORTED(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadyHardwareSecureRobustness));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       PlayReadySuccessWhenPolicyAllowed) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      policy::policy_prefs::kProtectedContentIdentifiersAllowed, true);
+
+  // PlayReady hardware secure key systems should succeed.
+  EXPECT_SUCCESS(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, nullptr));
+  EXPECT_SUCCESS(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadyHardwareSecureRobustness));
+}
+
+IN_PROC_BROWSER_TEST_F(EncryptedMediaSupportedTypesPlayReadyHwSecureTest,
+                       PlayReadyUMA) {
+  SKIP_IF_WINDOWS_PLAYREADY_INCOMPATIBLE();
+
+  base::HistogramTester histogram_tester;
+
+  // PlayReady hardware secure key system request should log UMA correctly.
+  EXPECT_SUCCESS(IsVideoRobustnessSupported(
+      kPlayReadyKeySystemRecommendationHWSecure, nullptr));
+
+  // WebEncryptedMediaClientImpl::Reporter reports at most once per frame per
+  // base key system name. Reload the test page so the second key system
+  // variant is reported in a fresh frame.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      embedded_test_server()->GetURL("/test_key_system_instantiation.html")));
+
+  // PlayReady default key system with hardware secure robustness should also
+  // log UMA correctly under the same base key system name.
+  EXPECT_SUCCESS(
+      IsVideoRobustnessSupported(kPlayReadyKeySystemRecommendationDefault,
+                                 kPlayReadyHardwareSecureRobustness));
+
+  content::FetchHistogramsFromChildProcesses();
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histogram_tester.ExpectBucketCount(
+      "Media.EME.RequestMediaKeySystemAccess.PlayReady",
+      /*KEY_SYSTEM_REQUESTED*/ 0, 2);
+  histogram_tester.ExpectBucketCount(
+      "Media.EME.RequestMediaKeySystemAccess.PlayReady",
+      /*KEY_SYSTEM_SUPPORTED*/ 1, 2);
+  histogram_tester.ExpectTotalCount(
+      "Media.EME.RequestMediaKeySystemAccess.PlayReady", 4);
+}
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)

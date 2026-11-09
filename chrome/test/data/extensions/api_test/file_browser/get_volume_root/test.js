@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ function getTestVolumeId() {
 chrome.test.runTests([
   // Checks that we can request read-only access to a file system.
   function testRequestNonexistingFileSystem() {
-    const volumeId = 'no-such-volume-id'
+    const volumeId = 'no-such-volume-id';
     chrome.fileManagerPrivate.getVolumeRoot(
         {
           volumeId: volumeId,
@@ -41,9 +41,10 @@ chrome.test.runTests([
           chrome.test.callbackPass((rootDir) => {
             chrome.test.assertTrue(rootDir.isDirectory);
             chrome.test.assertEq('/', rootDir.fullPath);
-            chrome.test.assertTrue(rootDir.filesystem !== undefined &&
+            chrome.test.assertTrue(
+                rootDir.filesystem !== undefined &&
                 rootDir.filesystem !== null);
           }));
     });
-  }
+  },
 ]);

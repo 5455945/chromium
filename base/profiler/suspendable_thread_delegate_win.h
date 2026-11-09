@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,9 @@
 #define BASE_PROFILER_SUSPENDABLE_THREAD_DELEGATE_WIN_H_
 
 #include <windows.h>
+
+#include <memory>
+#include <vector>
 
 #include "base/base_export.h"
 #include "base/profiler/sampling_profiler_thread_token.h"
@@ -24,6 +27,10 @@ class BASE_EXPORT SuspendableThreadDelegateWin
       : public SuspendableThreadDelegate::ScopedSuspendThread {
    public:
     explicit ScopedSuspendThread(HANDLE thread_handle);
+
+    ScopedSuspendThread(const ScopedSuspendThread&) = delete;
+    ScopedSuspendThread& operator=(const ScopedSuspendThread&) = delete;
+
     ~ScopedSuspendThread() override;
 
     bool WasSuccessful() const override;
@@ -31,8 +38,6 @@ class BASE_EXPORT SuspendableThreadDelegateWin
    private:
     HANDLE thread_handle_;
     bool was_successful_;
-
-    DISALLOW_COPY_AND_ASSIGN(ScopedSuspendThread);
   };
 
   explicit SuspendableThreadDelegateWin(
@@ -50,8 +55,9 @@ class BASE_EXPORT SuspendableThreadDelegateWin
   PlatformThreadId GetThreadId() const override;
   uintptr_t GetStackBaseAddress() const override;
   bool CanCopyStack(uintptr_t stack_pointer) override;
-  std::vector<uintptr_t*> GetRegistersToRewrite(
-      CONTEXT* thread_context) override;
+  std::vector<uintptr_t> GetRegisters(RegisterContext* thread_context) override;
+  void SetRegisters(RegisterContext* thread_context,
+                    const std::vector<uintptr_t>& registers) override;
 
  private:
   const PlatformThreadId thread_id_;

@@ -1,10 +1,13 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SKIA_EXT_SKIA_UTILS_BASE_H_
 #define SKIA_EXT_SKIA_UTILS_BASE_H_
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkFlattenable.h"
 #include "third_party/skia/include/ports/SkFontConfigInterface.h"
 
@@ -15,6 +18,9 @@ class PickleIterator;
 
 class SkBitmap;
 class SkFlattenable;
+class SkColorSpace;
+struct skcms_Matrix3x3;
+struct skcms_TransferFunction;
 
 namespace skia {
 
@@ -54,6 +60,27 @@ SK_API void WriteSkFontStyle(base::Pickle* pickle, SkFontStyle style);
 // code handling the SkBitmap wants to work with an N32 type, rather than
 // delaying this conversion until a later time.
 SK_API bool SkBitmapToN32OpaqueOrPremul(const SkBitmap& in, SkBitmap* out);
+
+// Returns hex string representation for the |color| in "#FFFFFF" format.
+SK_API std::string SkColorToHexString(SkColor color);
+
+// Return a string representation of an SkColorSpace. Accepts nullptr.
+SK_API std::string SkColorSpaceToString(const SkColorSpace* cs);
+
+// Return string representation of skcms matrix and transfer functions.
+SK_API std::string SkcmsMatrix3x3ToString(const skcms_Matrix3x3& m);
+SK_API std::string SkcmsTransferFunctionToString(
+    const skcms_TransferFunction& f);
+
+// Helper for converting a `SkData` into a `base::span<const uint8_t>` (the
+// generic `base::as_byte_span` won't accept an `SkData` as input because it
+// returns `void*` from `SkData::data` accessor).
+SK_API base::span<const uint8_t> as_byte_span(
+    const SkData& sk_data LIFETIME_BOUND);
+
+// Helper for getting a writable (byte) span from a `SkData`. Requires that the
+// SkData only has a single reference.
+SK_API base::span<uint8_t> as_writable_byte_span(SkData& data LIFETIME_BOUND);
 
 }  // namespace skia
 

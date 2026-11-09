@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,15 @@
 #include <memory>
 #include <set>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "build/build_config.h"
+#include "components/feedback/features.h"
 #include "components/feedback/feedback_report.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
@@ -33,16 +32,22 @@ constexpr char kReportThree[] = "three";
 constexpr char kReportFour[] = "four";
 constexpr char kReportFive[] = "five";
 
-constexpr base::TimeDelta kRetryDelayForTest =
-    base::TimeDelta::FromMilliseconds(100);
+constexpr base::TimeDelta kRetryDelayForTest = base::Milliseconds(100);
 
-class MockFeedbackUploader : public FeedbackUploader {
+class MockFeedbackUploader final : public FeedbackUploader {
  public:
   MockFeedbackUploader(
       bool is_off_the_record,
       const base::FilePath& state_path,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
       : FeedbackUploader(is_off_the_record, state_path, url_loader_factory) {}
+
+  MockFeedbackUploader(const MockFeedbackUploader&) = delete;
+  MockFeedbackUploader& operator=(const MockFeedbackUploader&) = delete;
+
+  base::WeakPtr<FeedbackUploader> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
   void RunMessageLoop() {
     if (ProcessingComplete())
@@ -57,7 +62,7 @@ class MockFeedbackUploader : public FeedbackUploader {
         base::BindOnce(
             &FeedbackReport::LoadReportsAndQueue, feedback_reports_path(),
             base::BindRepeating(&MockFeedbackUploader::QueueSingleReport,
-                                base::SequencedTaskRunnerHandle::Get(),
+                                base::SequencedTaskRunner::GetCurrentDefault(),
                                 AsWeakPtr())));
   }
 
@@ -79,7 +84,7 @@ class MockFeedbackUploader : public FeedbackUploader {
 
   // FeedbackUploaderChrome:
   void StartDispatchingReport() override {
-    if (base::Contains(dispatched_reports_, report_being_dispatched()->data()))
+    if (dispatched_reports_.contains(report_being_dispatched()->data()))
       dispatched_reports_[report_being_dispatched()->data()]++;
     else
       dispatched_reports_[report_being_dispatched()->data()] = 1;
@@ -106,8 +111,7 @@ class MockFeedbackUploader : public FeedbackUploader {
   size_t dispatched_reports_count_ = 0;
   size_t expected_reports_ = 0;
   bool simulate_failure_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(MockFeedbackUploader);
+  base::WeakPtrFactory<MockFeedbackUploader> weak_ptr_factory_{this};
 };
 
 }  // namespace
@@ -123,28 +127,51 @@ class FeedbackUploaderTest : public testing::Test {
     RecreateUploader();
   }
 
-  ~FeedbackUploaderTest() override = default;
+  FeedbackUploaderTest(const FeedbackUploaderTest&) = delete;
+  FeedbackUploaderTest& operator=(const FeedbackUploaderTest&) = delete;
+
+  ~FeedbackUploaderTest() override { ResetUploader(); }
 
   void RecreateUploader() {
+    ResetUploader();
     uploader_ = std::make_unique<MockFeedbackUploader>(
         /*is_off_the_record=*/false, scoped_temp_dir_.GetPath(),
         test_shared_loader_factory_);
   }
 
-  void QueueReport(const std::string& data, bool has_email = true) {
-    uploader_->QueueReport(std::make_unique<std::string>(data), has_email);
+  void QueueReport(const std::string& data,
+                   bool has_email = true,
+                   int product_id = 0) {
+    uploader_->QueueReport(std::make_unique<std::string>(data), has_email,
+                           product_id);
   }
 
   MockFeedbackUploader* uploader() const { return uploader_.get(); }
 
+  void SetupTastTestFeature() {
+    scoped_feature_list_.InitWithFeatures(
+        {feedback::features::kSkipSendingFeedbackReportInTastTests}, {});
+  }
+
  private:
+  void ResetUploader() {
+    if (!uploader_) {
+      return;
+    }
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+        uploader_->task_runner();
+    uploader_.reset();
+    base::RunLoop run_loop;
+    task_runner->PostTask(FROM_HERE, run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;
   base::test::TaskEnvironment task_environment_;
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::ScopedTempDir scoped_temp_dir_;
   std::unique_ptr<MockFeedbackUploader> uploader_;
-
-  DISALLOW_COPY_AND_ASSIGN(FeedbackUploaderTest);
 };
 
 TEST_F(FeedbackUploaderTest, QueueMultiple) {
@@ -191,13 +218,7 @@ TEST_F(FeedbackUploaderTest, QueueMultipleWithFailures) {
   EXPECT_EQ(uploader()->dispatched_reports().at(kReportFive), 1u);
 }
 
-#if defined(OS_MAC) && defined(ARCH_CPU_ARM64)
-// https://crbug.com/1222877
-#define MAYBE_SimulateOfflineReports DISABLED_SimulateOfflineReports
-#else
-#define MAYBE_SimulateOfflineReports SimulateOfflineReports
-#endif
-TEST_F(FeedbackUploaderTest, MAYBE_SimulateOfflineReports) {
+TEST_F(FeedbackUploaderTest, SimulateOfflineReports) {
   // Simulate offline reports by failing to upload three reports.
   uploader()->set_simulate_failure(true);
   QueueReport(kReportOne);
@@ -223,6 +244,13 @@ TEST_F(FeedbackUploaderTest, MAYBE_SimulateOfflineReports) {
   // queue is now empty.
   EXPECT_EQ(uploader()->dispatched_reports().size(), 3u);
   EXPECT_TRUE(uploader()->QueueEmpty());
+}
+
+TEST_F(FeedbackUploaderTest, TastTestsDontSendReports) {
+  SetupTastTestFeature();
+  QueueReport(kReportOne);
+
+  EXPECT_EQ(uploader()->dispatched_reports().size(), 0u);
 }
 
 }  // namespace feedback

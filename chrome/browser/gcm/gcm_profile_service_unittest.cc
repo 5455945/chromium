@@ -1,22 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "components/gcm_driver/gcm_profile_service.h"
 
 #include <memory>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/gcm/gcm_product_util.h"
 #include "chrome/browser/gcm/gcm_profile_service_factory.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/gcm_driver/fake_gcm_app_handler.h"
@@ -25,7 +25,7 @@
 #include "components/gcm_driver/gcm_client.h"
 #include "components/gcm_driver/gcm_client_factory.h"
 #include "components/gcm_driver/gcm_driver.h"
-#include "components/gcm_driver/gcm_profile_service.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -39,8 +39,8 @@
 #include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/dbus/concierge/concierge_client.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #endif
 
 namespace gcm {
@@ -55,8 +55,9 @@ void RequestProxyResolvingSocketFactoryOnUIThread(
     base::WeakPtr<gcm::GCMProfileService> service,
     mojo::PendingReceiver<network::mojom::ProxyResolvingSocketFactory>
         receiver) {
-  if (!service)
+  if (!service) {
     return;
+  }
   return profile->GetDefaultStoragePartition()
       ->GetNetworkContext()
       ->CreateProxyResolvingSocketFactory(std::move(receiver));
@@ -73,30 +74,34 @@ void RequestProxyResolvingSocketFactory(
 }
 
 std::unique_ptr<KeyedService> BuildGCMProfileService(
+    os_crypt_async::OSCryptAsync* os_crypt,
     content::BrowserContext* context) {
   Profile* profile = Profile::FromBrowserContext(context);
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner(
       base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
   return std::make_unique<gcm::GCMProfileService>(
-      profile->GetPrefs(), profile->GetPath(),
+      profile->GetPath(),
       base::BindRepeating(&RequestProxyResolvingSocketFactory, profile),
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess(),
       network::TestNetworkConnectionTracker::GetInstance(),
       chrome::GetChannel(),
       gcm::GetProductCategoryForSubtypes(profile->GetPrefs()),
-      IdentityManagerFactory::GetForProfile(profile),
-      std::unique_ptr<gcm::GCMClientFactory>(
-          new gcm::FakeGCMClientFactory(content::GetUIThreadTaskRunner({}),
-                                        content::GetIOThreadTaskRunner({}))),
+      std::make_unique<gcm::FakeGCMClientFactory>(
+          content::GetUIThreadTaskRunner({}),
+          content::GetIOThreadTaskRunner({})),
       content::GetUIThreadTaskRunner({}), content::GetIOThreadTaskRunner({}),
-      blocking_task_runner);
+      blocking_task_runner, os_crypt);
 }
 
 }  // namespace
 
 class GCMProfileServiceTest : public testing::Test {
+ public:
+  GCMProfileServiceTest(const GCMProfileServiceTest&) = delete;
+  GCMProfileServiceTest& operator=(const GCMProfileServiceTest&) = delete;
+
  protected:
   GCMProfileServiceTest();
   ~GCMProfileServiceTest() override;
@@ -133,8 +138,9 @@ class GCMProfileServiceTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
   std::unique_ptr<TestingProfile> profile_;
-  GCMProfileService* gcm_profile_service_;
+  raw_ptr<GCMProfileService, DanglingUntriaged> gcm_profile_service_;
   std::unique_ptr<FakeGCMAppHandler> gcm_app_handler_;
 
   std::string registration_id_;
@@ -142,18 +148,17 @@ class GCMProfileServiceTest : public testing::Test {
   GCMClient::Result unregistration_result_;
   std::string send_message_id_;
   GCMClient::Result send_result_;
-
-  DISALLOW_COPY_AND_ASSIGN(GCMProfileServiceTest);
 };
 
 GCMProfileServiceTest::GCMProfileServiceTest()
-    : gcm_profile_service_(nullptr),
+    : os_crypt_(os_crypt_async::GetTestOSCryptAsyncForTesting(
+          /*is_sync_for_unittests=*/true)),
+      gcm_profile_service_(nullptr),
       gcm_app_handler_(new FakeGCMAppHandler),
       registration_result_(GCMClient::UNKNOWN_ERROR),
       send_result_(GCMClient::UNKNOWN_ERROR) {}
 
-GCMProfileServiceTest::~GCMProfileServiceTest() {
-}
+GCMProfileServiceTest::~GCMProfileServiceTest() = default;
 
 FakeGCMClient* GCMProfileServiceTest::GetGCMClient() const {
   return static_cast<FakeGCMClient*>(
@@ -161,8 +166,8 @@ FakeGCMClient* GCMProfileServiceTest::GetGCMClient() const {
 }
 
 void GCMProfileServiceTest::SetUp() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  chromeos::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
 #endif
   TestingProfile::Builder builder;
   profile_ = builder.Build();
@@ -170,18 +175,19 @@ void GCMProfileServiceTest::SetUp() {
 
 void GCMProfileServiceTest::TearDown() {
   gcm_profile_service_->driver()->RemoveAppHandler(kTestAppID);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   profile_.reset();
-  chromeos::ConciergeClient::Shutdown();
+  ash::ConciergeClient::Shutdown();
 #endif
 }
 
 void GCMProfileServiceTest::CreateGCMProfileService() {
   gcm_profile_service_ = static_cast<GCMProfileService*>(
       GCMProfileServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-          profile_.get(), base::BindRepeating(&BuildGCMProfileService)));
-  gcm_profile_service_->driver()->AddAppHandler(
-      kTestAppID, gcm_app_handler_.get());
+          profile_.get(),
+          base::BindRepeating(&BuildGCMProfileService, os_crypt_.get())));
+  gcm_profile_service_->driver()->AddAppHandler(kTestAppID,
+                                                gcm_app_handler_.get());
 }
 
 void GCMProfileServiceTest::RegisterAndWaitForCompletion(

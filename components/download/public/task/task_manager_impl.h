@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 #define COMPONENTS_DOWNLOAD_PUBLIC_TASK_TASK_MANAGER_IMPL_H_
 
 #include <stdint.h>
+
 #include <map>
 
+#include "base/component_export.h"
 #include "components/download/public/task/task_manager.h"
 #include "components/download/public/task/task_scheduler.h"
 
@@ -20,9 +22,14 @@ using TaskFinishedCallback = base::OnceCallback<void(bool)>;
 // independently of each other as long as they have different |task_type|.
 // Scheduling another task of same |task_type| before the task is started will
 // overwrite the params of the scheduled task.
-class TaskManagerImpl : public TaskManager {
+class COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_TASK) TaskManagerImpl
+    : public TaskManager {
  public:
   explicit TaskManagerImpl(std::unique_ptr<TaskScheduler> task_scheduler);
+
+  TaskManagerImpl(const TaskManagerImpl&) = delete;
+  TaskManagerImpl& operator=(const TaskManagerImpl&) = delete;
+
   ~TaskManagerImpl() override;
 
   // Called to schedule a new task. Overwrites the params if a task of the same
@@ -72,8 +79,6 @@ class TaskManagerImpl : public TaskManager {
   // Contains the callbacks passed through the OnStartScheduledTask(). These
   // will be cleared when the task is completed or stopped by the system.
   std::map<DownloadTaskType, TaskFinishedCallback> task_finished_callbacks_;
-
-  DISALLOW_COPY_AND_ASSIGN(TaskManagerImpl);
 };
 
 }  // namespace download

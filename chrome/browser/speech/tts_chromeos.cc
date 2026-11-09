@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 #include <algorithm>
 #include <utility>
 
+#include "ash/constants/ash_extension_constants.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/mojom/tts.mojom.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/mojom/tts.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/tts_platform.h"
 
@@ -38,7 +40,8 @@ TtsPlatformImplChromeOs::TtsPlatformImplChromeOs() = default;
 TtsPlatformImplChromeOs::~TtsPlatformImplChromeOs() = default;
 
 bool TtsPlatformImplChromeOs::PlatformImplSupported() {
-  // TODO(1133813): Chrome OS Platform should support background initialisation.
+  // TODO(crbug.com/40151186): Chrome OS Platform should support background
+  // initialisation.
   return arc::ArcServiceManager::Get() && arc::ArcServiceManager::Get()
                                               ->arc_bridge_service()
                                               ->tts()
@@ -67,7 +70,7 @@ void TtsPlatformImplChromeOs::Speak(
     const content::VoiceData& voice,
     const content::UtteranceContinuousParameters& params,
     base::OnceCallback<void(bool)> on_speak_finished) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Parse SSML and process speech.
   content::TtsController::GetInstance()->StripSSML(
@@ -111,7 +114,7 @@ void TtsPlatformImplChromeOs::ProcessSpeech(
 }
 
 bool TtsPlatformImplChromeOs::StopSpeaking() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   auto* const arc_service_manager = arc::ArcServiceManager::Get();
   if (!arc_service_manager)
     return false;
@@ -126,8 +129,7 @@ bool TtsPlatformImplChromeOs::StopSpeaking() {
 
 void TtsPlatformImplChromeOs::GetVoices(
     std::vector<content::VoiceData>* out_voices) {
-  for (const auto& voice : voices_)
-    out_voices->push_back(voice);
+  out_voices->insert(out_voices->end(), voices_.begin(), voices_.end());
 }
 
 std::string TtsPlatformImplChromeOs::GetError() {
@@ -146,13 +148,39 @@ bool TtsPlatformImplChromeOs::IsSpeaking() {
   return false;
 }
 
-bool TtsPlatformImplChromeOs::PreferEngineDelegateVoices() {
-  return true;
+void TtsPlatformImplChromeOs::FinalizeVoiceOrdering(
+    std::vector<content::VoiceData>& voices) {
+  // Move all Espeak voices to the end.
+  auto partition_point = std::stable_partition(
+      voices.begin(), voices.end(), [](const content::VoiceData& voice) {
+        return voice.engine_id !=
+               extension_misc::kEspeakSpeechSynthesisExtensionId;
+      });
+
+  // Move all native voices to the end, before Espeak voices.
+  std::stable_partition(
+      voices.begin(), partition_point,
+      [](const content::VoiceData& voice) { return !voice.native; });
+}
+
+void TtsPlatformImplChromeOs::RefreshVoices() {
+  // Android voices can be updated silently.
+  // If it happens, we can't return the latest voices here, but below
+  // eventually calls TtsController::VoicesChanged.
+  auto* const arc_service_manager = arc::ArcServiceManager::Get();
+  if (!arc_service_manager)
+    return;
+
+  arc::mojom::TtsInstance* tts = ARC_GET_INSTANCE_FOR_METHOD(
+      arc_service_manager->arc_bridge_service()->tts(), RefreshVoices);
+  if (!tts)
+    return;
+
+  tts->RefreshVoices();
 }
 
 // static
-TtsPlatformImplChromeOs*
-TtsPlatformImplChromeOs::GetInstance() {
+TtsPlatformImplChromeOs* TtsPlatformImplChromeOs::GetInstance() {
   static base::NoDestructor<TtsPlatformImplChromeOs> tts_platform;
   return tts_platform.get();
 }

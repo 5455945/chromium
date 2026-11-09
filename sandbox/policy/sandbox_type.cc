@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,77 +7,113 @@
 #include <string>
 
 #include "base/check.h"
-#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "build/chromeos_buildflags.h"
-#include "printing/buildflags/buildflags.h"
-#include "sandbox/policy/features.h"
+#include "build/build_config.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/switches.h"
 
-namespace sandbox {
-namespace policy {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#include "media/gpu/buildflags.h"  // nogncheck
+#include "media/media_buildflags.h"  // nogncheck
+#endif
 
-bool IsUnsandboxedSandboxType(SandboxType sandbox_type) {
-  switch (sandbox_type) {
-    case SandboxType::kNoSandbox:
-      return true;
-#if defined(OS_WIN)
-    case SandboxType::kNoSandboxAndElevatedPrivileges:
-      return true;
-    case SandboxType::kXrCompositing:
-      return !base::FeatureList::IsEnabled(features::kXRSandbox);
-    case SandboxType::kProxyResolver:
-    case SandboxType::kPdfConversion:
-    case SandboxType::kIconReader:
-    case SandboxType::kMediaFoundationCdm:
-      return false;
+namespace sandbox::policy {
+
+namespace {
+
+// Switch values that are only accessed in this file.
+constexpr char kNoneSandbox[] = "none";
+constexpr char kNetworkSandbox[] = "network";
+constexpr char kOnDeviceModelExecutionSandbox[] = "on_device_model_execution";
+constexpr char kUtilitySandbox[] = "utility";
+constexpr char kCdmSandbox[] = "cdm";
+constexpr char kPrintCompositorSandbox[] = "print_compositor";
+constexpr char kAudioSandbox[] = "audio";
+constexpr char kServiceSandbox[] = "service";
+constexpr char kServiceSandboxWithJit[] = "service_with_jit";
+constexpr char kSpeechRecognitionSandbox[] = "speech_recognition";
+
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+constexpr char kPrintBackendSandbox[] = "print_backend";
+constexpr char kScreenAISandbox[] = "screen_ai";
+constexpr char kPlatformRuntimeSandbox[] = "platform_runtime";
 #endif
-    case SandboxType::kAudio:
-      return false;
-    case SandboxType::kVideoCapture:
-#if defined(OS_FUCHSIA)
-      return false;
-#else
-      return true;
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+// The XR Device Service hosts the OpenXR runtime; it is sandboxed on Windows
+// and Linux.
+constexpr char kXrCompositingSandbox[] = "xr_compositing";
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+
+#if BUILDFLAG(IS_WIN)
+constexpr char kNoneSandboxAndElevatedPrivileges[] = "none_and_elevated";
+constexpr char kPdfConversionSandbox[] = "pdf_conversion";
+constexpr char kIconReaderSandbox[] = "icon_reader";
+constexpr char kMediaFoundationCdmSandbox[] = "mf_cdm";
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_MAC)
+constexpr char kMirroringSandbox[] = "mirroring";
+#endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+constexpr char kProxyResolverSandbox[] = "proxy_resolver";
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+constexpr char kWebNNModelCompilationSandbox[] = "webnn_model_compilation";
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+
+#if BUILDFLAG(IS_FUCHSIA)
+constexpr char kVideoCaptureSandbox[] = "video_capture";
 #endif
-    case SandboxType::kNetwork:
-      return false;
-    case SandboxType::kRenderer:
-    case SandboxType::kUtility:
-    case SandboxType::kGpu:
-    case SandboxType::kPpapi:
-    case SandboxType::kCdm:
-#if BUILDFLAG(ENABLE_PRINTING)
-    case SandboxType::kPrintBackend:
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+constexpr char kShapeDetectionSandbox[] = "shape_detection";
+// USE_LINUX_VIDEO_ACCELERATION implies IS_LINUX || IS_CHROMEOS, so this double
+// #if is redundant, however, we cannot include "media/gpu/buildflags.h" on all
+// platforms, only one those that need to evaluate the use..., hence this
+// pattern, here and elsewhere. This problem is specific to this file.
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+constexpr char kHardwareVideoDecodingSandbox[] = "hardware_video_decoding";
 #endif
-    case SandboxType::kPrintCompositor:
-#if defined(OS_MAC)
-    case SandboxType::kMirroring:
-    case SandboxType::kNaClLoader:
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+constexpr char kHardwareVideoEncodingSandbox[] = "hardware_video_encoding";
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    case SandboxType::kIme:
-    case SandboxType::kTts:
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-    case SandboxType::kLibassistant:
-#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-#endif  // // BUILDFLAG(IS_CHROMEOS_ASH)
-#if !defined(OS_MAC)
-    case SandboxType::kService:
 #endif
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-    case SandboxType::kZygoteIntermediateSandbox:
-#endif
-    case SandboxType::kSpeechRecognition:
-      return false;
+
+#if BUILDFLAG(IS_CHROMEOS)
+constexpr char kImeSandbox[] = "ime";
+constexpr char kTtsSandbox[] = "tts";
+constexpr char kNearbySandbox[] = "nearby";
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+constexpr char kOnDeviceTranslationSandbox[] = "on_device_translation";
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+
+}  // namespace
+
+using sandbox::mojom::Sandbox;
+
+bool IsUnsandboxedSandboxType(Sandbox sandbox_type) {
+  if (sandbox_type == Sandbox::kNoSandbox) {
+    return true;
   }
+#if BUILDFLAG(IS_WIN)
+  if (sandbox_type == Sandbox::kNoSandboxAndElevatedPrivileges) {
+    return true;
+  }
+#endif
+  return false;
 }
 
 void SetCommandLineFlagsForSandboxType(base::CommandLine* command_line,
-                                       SandboxType sandbox_type) {
+                                       Sandbox sandbox_type) {
   switch (sandbox_type) {
-    case SandboxType::kNoSandbox:
+    case Sandbox::kNoSandbox:
       if (command_line->GetSwitchValueASCII(switches::kProcessType) ==
           switches::kUtilityProcess) {
         DCHECK(!command_line->HasSwitch(switches::kServiceSandboxType));
@@ -87,94 +123,95 @@ void SetCommandLineFlagsForSandboxType(base::CommandLine* command_line,
       } else {
         command_line->AppendSwitch(switches::kNoSandbox);
       }
-      break;
-#if defined(OS_WIN)
-    case SandboxType::kNoSandboxAndElevatedPrivileges:
-      command_line->AppendSwitch(switches::kNoSandboxAndElevatedPrivileges);
-      break;
-#endif
-    case SandboxType::kRenderer:
+      return;
+    case Sandbox::kRenderer:
       DCHECK(command_line->GetSwitchValueASCII(switches::kProcessType) ==
              switches::kRendererProcess);
-      break;
-    case SandboxType::kGpu:
+      return;
+    case Sandbox::kGpu:
       DCHECK(command_line->GetSwitchValueASCII(switches::kProcessType) ==
              switches::kGpuProcess);
-      break;
-    case SandboxType::kPpapi:
-      if (command_line->GetSwitchValueASCII(switches::kProcessType) ==
-          switches::kUtilityProcess) {
-        command_line->AppendSwitchASCII(switches::kServiceSandboxType,
-                                        switches::kPpapiSandbox);
-      } else {
-        DCHECK(command_line->GetSwitchValueASCII(switches::kProcessType) ==
-               switches::kPpapiPluginProcess);
-      }
-      break;
-    case SandboxType::kUtility:
-    case SandboxType::kNetwork:
-    case SandboxType::kCdm:
-#if BUILDFLAG(ENABLE_PRINTING)
-    case SandboxType::kPrintBackend:
+      return;
+    case Sandbox::kService:
+    case Sandbox::kServiceWithJit:
+    case Sandbox::kUtility:
+    case Sandbox::kNetwork:
+    case Sandbox::kOnDeviceModelExecution:
+    case Sandbox::kCdm:
+    case Sandbox::kPrintCompositor:
+    case Sandbox::kAudio:
+#if BUILDFLAG(IS_FUCHSIA)
+    case Sandbox::kVideoCapture:
 #endif
-    case SandboxType::kPrintCompositor:
-    case SandboxType::kAudio:
-    case SandboxType::kVideoCapture:
-#if defined(OS_WIN)
-    case SandboxType::kXrCompositing:
-    case SandboxType::kProxyResolver:
-    case SandboxType::kPdfConversion:
-    case SandboxType::kIconReader:
-    case SandboxType::kMediaFoundationCdm:
-#endif  // defined(OS_WIN)
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    case SandboxType::kIme:
-    case SandboxType::kTts:
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-    case SandboxType::kLibassistant:
-#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if defined(OS_MAC)
-    case SandboxType::kMirroring:
-#endif  // defined(OS_MAC)
-#if !defined(OS_MAC)
-    case SandboxType::kService:
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+    case Sandbox::kXrCompositing:
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN)
+    case Sandbox::kNoSandboxAndElevatedPrivileges:
+    case Sandbox::kPdfConversion:
+    case Sandbox::kIconReader:
+    case Sandbox::kMediaFoundationCdm:
+#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kShapeDetection:
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+    case Sandbox::kHardwareVideoDecoding:
 #endif
-    case SandboxType::kSpeechRecognition:
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+    case Sandbox::kHardwareVideoEncoding:
+#endif
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kIme:
+    case Sandbox::kTts:
+    case Sandbox::kNearby:
+#endif  // BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_MAC)
+    case Sandbox::kMirroring:
+#endif  // BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    case Sandbox::kProxyResolver:
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+    case Sandbox::kWebNNModelCompilation:
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+    case Sandbox::kPrintBackend:
+    case Sandbox::kScreenAI:
+    case Sandbox::kPlatformRuntime:
+#endif
+    case Sandbox::kSpeechRecognition:
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kOnDeviceTranslation:
+#endif
       DCHECK(command_line->GetSwitchValueASCII(switches::kProcessType) ==
              switches::kUtilityProcess);
       DCHECK(!command_line->HasSwitch(switches::kServiceSandboxType));
       command_line->AppendSwitchASCII(
           switches::kServiceSandboxType,
           StringFromUtilitySandboxType(sandbox_type));
-      break;
-#if defined(OS_MAC)
-    case SandboxType::kNaClLoader:
-      break;
-#endif  // defined(OS_MAC)
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-    case SandboxType::kZygoteIntermediateSandbox:
-      break;
+      return;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kZygoteIntermediateSandbox:
+      return;
 #endif
   }
+  NOTREACHED();
 }
 
-SandboxType SandboxTypeFromCommandLine(const base::CommandLine& command_line) {
+sandbox::mojom::Sandbox SandboxTypeFromCommandLine(
+    const base::CommandLine& command_line) {
   if (command_line.HasSwitch(switches::kNoSandbox))
-    return SandboxType::kNoSandbox;
-
-#if defined(OS_WIN)
-  if (command_line.HasSwitch(switches::kNoSandboxAndElevatedPrivileges))
-    return SandboxType::kNoSandboxAndElevatedPrivileges;
-#endif
+    return Sandbox::kNoSandbox;
 
   std::string process_type =
       command_line.GetSwitchValueASCII(switches::kProcessType);
   if (process_type.empty())
-    return SandboxType::kNoSandbox;
+    return Sandbox::kNoSandbox;
 
   if (process_type == switches::kRendererProcess)
-    return SandboxType::kRenderer;
+    return Sandbox::kRenderer;
 
   if (process_type == switches::kUtilityProcess) {
     return UtilitySandboxTypeFromString(
@@ -182,173 +219,255 @@ SandboxType SandboxTypeFromCommandLine(const base::CommandLine& command_line) {
   }
   if (process_type == switches::kGpuProcess) {
     if (command_line.HasSwitch(switches::kDisableGpuSandbox))
-      return SandboxType::kNoSandbox;
-    return SandboxType::kGpu;
+      return Sandbox::kNoSandbox;
+    return Sandbox::kGpu;
   }
 
-  if (process_type == switches::kPpapiPluginProcess)
-    return SandboxType::kPpapi;
-
-  // NaCl tests on all platforms use the loader process.
-  if (process_type == switches::kNaClLoaderProcess) {
-#if defined(OS_MAC)
-    return SandboxType::kNaClLoader;
-#else
-    return SandboxType::kUtility;
-#endif
-  }
-
-  if (process_type == switches::kNaClBrokerProcess)
-    return SandboxType::kNoSandbox;
-
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Intermediate process gains a sandbox later.
   if (process_type == switches::kZygoteProcessType)
-    return SandboxType::kZygoteIntermediateSandbox;
+    return Sandbox::kZygoteIntermediateSandbox;
 #endif
 
-#if defined(OS_MAC)
-  if (process_type == switches::kRelauncherProcessType)
-    return SandboxType::kNoSandbox;
+#if BUILDFLAG(IS_MAC)
+  if (process_type == switches::kRelauncherProcessType ||
+      process_type == switches::kCodeSignCloneCleanupProcessType ||
+      process_type == switches::kAppShimProcessType) {
+    return Sandbox::kNoSandbox;
+  }
+  if (process_type == switches::kNoOpForTestingProcessType) {
+    return Sandbox::kUtility;
+  }
 #endif
 
-  if (process_type == switches::kCloudPrintServiceProcess)
-    return SandboxType::kNoSandbox;
-
-  CHECK(false)
+  NOTREACHED()
       << "Command line does not provide a valid sandbox configuration: "
       << command_line.GetCommandLineString();
-  NOTREACHED();
-  return SandboxType::kNoSandbox;
 }
 
-std::string StringFromUtilitySandboxType(SandboxType sandbox_type) {
+std::string StringFromUtilitySandboxType(Sandbox sandbox_type) {
   switch (sandbox_type) {
-    case SandboxType::kNoSandbox:
-      return switches::kNoneSandbox;
-    case SandboxType::kNetwork:
-      return switches::kNetworkSandbox;
-    case SandboxType::kPpapi:
-      return switches::kPpapiSandbox;
-    case SandboxType::kCdm:
-      return switches::kCdmSandbox;
-#if BUILDFLAG(ENABLE_PRINTING)
-    case SandboxType::kPrintBackend:
-      return switches::kPrintBackendSandbox;
+    case Sandbox::kNoSandbox:
+      return kNoneSandbox;
+#if BUILDFLAG(IS_WIN)
+    case Sandbox::kNoSandboxAndElevatedPrivileges:
+      return kNoneSandboxAndElevatedPrivileges;
+#endif  // BUILDFLAG(IS_WIN)
+    case Sandbox::kNetwork:
+      return kNetworkSandbox;
+    case Sandbox::kOnDeviceModelExecution:
+      return kOnDeviceModelExecutionSandbox;
+    case Sandbox::kCdm:
+      return kCdmSandbox;
+    case Sandbox::kPrintCompositor:
+      return kPrintCompositorSandbox;
+    case Sandbox::kUtility:
+      return kUtilitySandbox;
+    case Sandbox::kAudio:
+      return kAudioSandbox;
+#if BUILDFLAG(IS_FUCHSIA)
+    case Sandbox::kVideoCapture:
+      return kVideoCaptureSandbox;
 #endif
-    case SandboxType::kPrintCompositor:
-      return switches::kPrintCompositorSandbox;
-    case SandboxType::kUtility:
-      return switches::kUtilitySandbox;
-    case SandboxType::kAudio:
-      return switches::kAudioSandbox;
-    case SandboxType::kVideoCapture:
-      return switches::kVideoCaptureSandbox;
-#if !defined(OS_MAC)
-    case SandboxType::kService:
-      return switches::kServiceSandbox;
+    case Sandbox::kService:
+      return kServiceSandbox;
+    case Sandbox::kServiceWithJit:
+      return kServiceSandboxWithJit;
+    case Sandbox::kSpeechRecognition:
+      return kSpeechRecognitionSandbox;
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+    case Sandbox::kPrintBackend:
+      return kPrintBackendSandbox;
+    case Sandbox::kScreenAI:
+      return kScreenAISandbox;
+    case Sandbox::kPlatformRuntime:
+      return kPlatformRuntimeSandbox;
 #endif
-    case SandboxType::kSpeechRecognition:
-      return switches::kSpeechRecognitionSandbox;
-#if defined(OS_WIN)
-    case SandboxType::kXrCompositing:
-      return switches::kXrCompositingSandbox;
-    case SandboxType::kProxyResolver:
-      return switches::kProxyResolverSandbox;
-    case SandboxType::kPdfConversion:
-      return switches::kPdfConversionSandbox;
-    case SandboxType::kIconReader:
-      return switches::kIconReaderSandbox;
-    case SandboxType::kMediaFoundationCdm:
-      return switches::kMediaFoundationCdmSandbox;
-#endif  // defined(OS_WIN)
-#if defined(OS_MAC)
-    case SandboxType::kMirroring:
-      return switches::kMirroringSandbox;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kOnDeviceTranslation:
+      return kOnDeviceTranslationSandbox;
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    case SandboxType::kIme:
-      return switches::kImeSandbox;
-    case SandboxType::kTts:
-      return switches::kTtsSandbox;
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-    case SandboxType::kLibassistant:
-      return switches::kLibassistantSandbox;
-#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+    case Sandbox::kXrCompositing:
+      return kXrCompositingSandbox;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN)
+    case Sandbox::kPdfConversion:
+      return kPdfConversionSandbox;
+    case Sandbox::kIconReader:
+      return kIconReaderSandbox;
+    case Sandbox::kMediaFoundationCdm:
+      return kMediaFoundationCdmSandbox;
+#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC)
+    case Sandbox::kMirroring:
+      return kMirroringSandbox;
+#endif  // BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    case Sandbox::kProxyResolver:
+      return kProxyResolverSandbox;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+    case Sandbox::kWebNNModelCompilation:
+      return kWebNNModelCompilationSandbox;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kShapeDetection:
+      return kShapeDetectionSandbox;
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+    case Sandbox::kHardwareVideoDecoding:
+      return kHardwareVideoDecodingSandbox;
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+    case Sandbox::kHardwareVideoEncoding:
+      return kHardwareVideoEncodingSandbox;
+#endif  // BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kIme:
+      return kImeSandbox;
+    case Sandbox::kTts:
+      return kTtsSandbox;
+    case Sandbox::kNearby:
+      return kNearbySandbox;
+#endif  // BUILDFLAG(IS_CHROMEOS)
       // The following are not utility processes so should not occur.
-    case SandboxType::kRenderer:
-    case SandboxType::kGpu:
-#if defined(OS_WIN)
-    case SandboxType::kNoSandboxAndElevatedPrivileges:
-#endif  // defined(OS_WIN)
-#if defined(OS_MAC)
-    case SandboxType::kNaClLoader:
-#endif  // defined(OS_MAC)
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-    case SandboxType::kZygoteIntermediateSandbox:
+    case Sandbox::kRenderer:
+    case Sandbox::kGpu:
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+    case Sandbox::kZygoteIntermediateSandbox:
 #endif
       NOTREACHED();
-      return std::string();
   }
+  NOTREACHED();
 }
 
-SandboxType UtilitySandboxTypeFromString(const std::string& sandbox_string) {
-  if (sandbox_string == switches::kNoneSandbox)
-    return SandboxType::kNoSandbox;
-  if (sandbox_string == switches::kNoneSandboxAndElevatedPrivileges) {
-#if defined(OS_WIN)
-    return SandboxType::kNoSandboxAndElevatedPrivileges;
-#else
-    return SandboxType::kNoSandbox;
-#endif
+sandbox::mojom::Sandbox UtilitySandboxTypeFromString(
+    const std::string& sandbox_string) {
+  // This function should cover all sandbox types used for utilities, the
+  // CHECK at the end should catch any attempts to forget to add a new type.
+
+  // Most utilities are kUtility or kService so put those first.
+  if (sandbox_string == kUtilitySandbox) {
+    return Sandbox::kUtility;
   }
-  if (sandbox_string == switches::kNetworkSandbox)
-    return SandboxType::kNetwork;
-  if (sandbox_string == switches::kPpapiSandbox)
-    return SandboxType::kPpapi;
-  if (sandbox_string == switches::kCdmSandbox)
-    return SandboxType::kCdm;
-#if BUILDFLAG(ENABLE_PRINTING)
-  if (sandbox_string == switches::kPrintBackendSandbox)
-    return SandboxType::kPrintBackend;
+  if (sandbox_string == kServiceSandbox) {
+    return Sandbox::kService;
+  }
+  if (sandbox_string == kServiceSandboxWithJit) {
+    return Sandbox::kServiceWithJit;
+  }
+
+  if (sandbox_string == kNoneSandbox) {
+    return Sandbox::kNoSandbox;
+  }
+#if BUILDFLAG(IS_WIN)
+  if (sandbox_string == kNoneSandboxAndElevatedPrivileges) {
+    return Sandbox::kNoSandboxAndElevatedPrivileges;
+  }
 #endif
-  if (sandbox_string == switches::kPrintCompositorSandbox)
-    return SandboxType::kPrintCompositor;
-#if defined(OS_WIN)
-  if (sandbox_string == switches::kXrCompositingSandbox)
-    return SandboxType::kXrCompositing;
-  if (sandbox_string == switches::kProxyResolverSandbox)
-    return SandboxType::kProxyResolver;
-  if (sandbox_string == switches::kPdfConversionSandbox)
-    return SandboxType::kPdfConversion;
-  if (sandbox_string == switches::kIconReaderSandbox)
-    return SandboxType::kIconReader;
-  if (sandbox_string == switches::kMediaFoundationCdmSandbox)
-    return SandboxType::kMediaFoundationCdm;
+
+  if (sandbox_string == kNetworkSandbox) {
+    return Sandbox::kNetwork;
+  }
+  if (sandbox_string == kOnDeviceModelExecutionSandbox) {
+    return Sandbox::kOnDeviceModelExecution;
+  }
+  if (sandbox_string == kCdmSandbox) {
+    return Sandbox::kCdm;
+  }
+  if (sandbox_string == kPrintCompositorSandbox) {
+    return Sandbox::kPrintCompositor;
+  }
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  if (sandbox_string == kXrCompositingSandbox) {
+    return Sandbox::kXrCompositing;
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN)
+  if (sandbox_string == kPdfConversionSandbox) {
+    return Sandbox::kPdfConversion;
+  }
+  if (sandbox_string == kIconReaderSandbox) {
+    return Sandbox::kIconReader;
+  }
+  if (sandbox_string == kMediaFoundationCdmSandbox) {
+    return Sandbox::kMediaFoundationCdm;
+  }
 #endif
-#if defined(OS_MAC)
-  if (sandbox_string == switches::kMirroringSandbox)
-    return SandboxType::kMirroring;
+#if BUILDFLAG(IS_MAC)
+  if (sandbox_string == kMirroringSandbox) {
+    return Sandbox::kMirroring;
+  }
 #endif
-  if (sandbox_string == switches::kAudioSandbox)
-    return SandboxType::kAudio;
-  if (sandbox_string == switches::kSpeechRecognitionSandbox)
-    return SandboxType::kSpeechRecognition;
-  if (sandbox_string == switches::kVideoCaptureSandbox)
-    return SandboxType::kVideoCapture;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (sandbox_string == switches::kImeSandbox)
-    return SandboxType::kIme;
-  if (sandbox_string == switches::kTtsSandbox)
-    return SandboxType::kTts;
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-  if (sandbox_string == switches::kLibassistantSandbox)
-    return SandboxType::kLibassistant;
-#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-  return SandboxType::kUtility;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  if (sandbox_string == kProxyResolverSandbox) {
+    return Sandbox::kProxyResolver;
+  }
+#endif
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+  if (sandbox_string == kWebNNModelCompilationSandbox) {
+    return Sandbox::kWebNNModelCompilation;
+  }
+#endif
+  if (sandbox_string == kAudioSandbox) {
+    return Sandbox::kAudio;
+  }
+  if (sandbox_string == kSpeechRecognitionSandbox) {
+    return Sandbox::kSpeechRecognition;
+  }
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+  if (sandbox_string == kPrintBackendSandbox) {
+    return Sandbox::kPrintBackend;
+  }
+  if (sandbox_string == kScreenAISandbox) {
+    return Sandbox::kScreenAI;
+  }
+  if (sandbox_string == kPlatformRuntimeSandbox) {
+    return Sandbox::kPlatformRuntime;
+  }
+#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+  if (sandbox_string == kOnDeviceTranslationSandbox) {
+    return Sandbox::kOnDeviceTranslation;
+  }
+#endif
+#if BUILDFLAG(IS_FUCHSIA)
+  if (sandbox_string == kVideoCaptureSandbox) {
+    return Sandbox::kVideoCapture;
+  }
+#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  if (sandbox_string == kShapeDetectionSandbox) {
+    return Sandbox::kShapeDetection;
+  }
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+  if (sandbox_string == kHardwareVideoDecodingSandbox) {
+    return Sandbox::kHardwareVideoDecoding;
+  }
+#endif
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+  if (sandbox_string == kHardwareVideoEncodingSandbox) {
+    return Sandbox::kHardwareVideoEncoding;
+  }
+#endif
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+  if (sandbox_string == kImeSandbox) {
+    return Sandbox::kIme;
+  }
+  if (sandbox_string == kTtsSandbox) {
+    return Sandbox::kTts;
+  }
+  if (sandbox_string == kNearbySandbox) {
+    return Sandbox::kNearby;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  NOTREACHED()
+      << "Command line does not provide a valid sandbox configuration: "
+      << sandbox_string;
 }
 
-}  // namespace policy
-}  // namespace sandbox
+}  // namespace sandbox::policy

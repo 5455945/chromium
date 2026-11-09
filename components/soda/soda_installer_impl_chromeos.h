@@ -1,13 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SODA_SODA_INSTALLER_IMPL_CHROMEOS_H_
 #define COMPONENTS_SODA_SODA_INSTALLER_IMPL_CHROMEOS_H_
 
+#include <string_view>
+
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
-#include "chromeos/dbus/dlcservice/dlcservice_client.h"
+#include "base/timer/timer.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "components/soda/soda_installer.h"
 
 class PrefService;
@@ -31,18 +36,17 @@ class COMPONENT_EXPORT(SODA_INSTALLER) SodaInstallerImplChromeOS
 
   // Where the SODA language pack DLC was installed for a given language.
   // Cached on completed installation. Empty if not installed yet.
-  base::FilePath GetLanguagePath(const std::string& language) const override;
+  base::FilePath GetLanguagePath(std::string_view language) const override;
 
   // SodaInstaller:
-  void InstallLanguage(const std::string& language,
+  void InstallLanguage(std::string_view language,
                        PrefService* global_prefs) override;
-  bool IsSodaInstalled() const override;
-  bool IsLanguageInstalled(const std::string& language) const override;
+  void UninstallLanguage(std::string_view language,
+                         PrefService* global_prefs) override;
   std::vector<std::string> GetAvailableLanguages() const override;
-
-  void set_soda_installed_for_test(bool installed) {
-    soda_installed_for_test_ = installed;
-  }
+  std::vector<std::string> GetLiveCaptionEnabledLanguages() const override;
+  std::string GetLanguageDlcNameForLocale(
+      std::string_view locale) const override;
 
  private:
   // SodaInstaller:
@@ -55,37 +59,60 @@ class COMPONENT_EXPORT(SODA_INSTALLER) SodaInstallerImplChromeOS
   // DLC is automatically purged from disk.
   void UninstallSoda(PrefService* global_prefs) override;
 
+  void InstallLanguageInternal(std::string_view language);
+
   void SetSodaBinaryPath(base::FilePath new_path);
-  void SetLanguagePath(base::FilePath new_path);
+  void SetLanguagePath(const LanguageCode language, base::FilePath new_path);
+
+  // Initializes language and installs the per-language components.
+  void InitLanguages(PrefService* profile_prefs,
+                     PrefService* global_prefs) override;
 
   // These functions are the InstallCallbacks for DlcserviceClient::Install().
   void OnSodaInstalled(
-      const chromeos::DlcserviceClient::InstallResult& install_result);
+      const base::Time start_time,
+      const ash::DlcserviceClient::InstallResult& install_result);
+  void OnSodaInstallRetry();
+  void OnSodaLanguageInstallRetry();
   void OnLanguageInstalled(
-      const chromeos::DlcserviceClient::InstallResult& install_result);
+      const LanguageCode language_code,
+      const std::string language_name,
+      const base::Time start_time,
+      const ash::DlcserviceClient::InstallResult& install_result);
 
   // These functions are the ProgressCallbacks for DlcserviceClient::Install().
   void OnSodaProgress(double progress);
-  void OnLanguageProgress(double progress);
+  void OnLanguageProgress(const LanguageCode language_code, double progress);
 
   void OnSodaCombinedProgress();
 
   // This is the UninstallCallback for DlcserviceClient::Uninstall().
-  void OnDlcUninstalled(const std::string& dlc_id, const std::string& err);
-
-  // When true, IsSodaInstalled() will return true. This may be used by tests
-  // that need to pretend soda is installed before using
-  // FakeSpeechRecognitionService.
-  bool soda_installed_for_test_ = false;
-
-  bool is_soda_downloading_ = false;
-  bool is_language_downloading_ = false;
+  void OnDlcUninstalled(std::string_view dlc_id, std::string_view err);
 
   double soda_progress_ = 0.0;
-  double language_progress_ = 0.0;
+
+  double soda_backoff_seconds_ = 1.0;
+  // timer only used for soda install retries.
+  base::OneShotTimer soda_install_retry_timer_;
+
+  // timer only used for soda languagepack install retries. We keep them merged
+  // as we don't expect independent failures.
+  double soda_languagepack_backoff_seconds_ = 1.0;
+  base::OneShotTimer languagepack_install_retry_timer_;
+  base::flat_set<std::string> retry_languages_to_install_;
 
   base::FilePath soda_lib_path_;
-  base::FilePath language_path_;
+
+  base::flat_map<LanguageCode, base::FilePath> installed_language_paths_;
+
+  struct LanguageInfo {
+    std::string_view dlc_name;
+    LanguageCode language_code;
+  };
+  base::flat_map<std::string_view, LanguageInfo> ConstructAvailableLanguages()
+      const;
+
+  base::flat_map<std::string_view, LanguageInfo> available_languages_;
 };
 
 }  // namespace speech

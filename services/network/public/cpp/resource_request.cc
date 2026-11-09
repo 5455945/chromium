@@ -1,25 +1,59 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/resource_request.h"
 
-#include "base/stl_util.h"
+#include "base/debug/crash_logging.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/trace_event/typed_macros.h"
+#include "base/types/optional_util.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/load_flags.h"
+#include "net/log/net_log_source.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/mojom/cookie_access_observer.mojom.h"
+#include "services/network/public/mojom/device_bound_sessions.mojom.h"
+#include "services/network/public/mojom/devtools_observer.mojom.h"
+#include "services/network/public/mojom/trust_token_access_observer.mojom.h"
 #include "services/network/public/mojom/url_request.mojom.h"
 #include "services/network/public/mojom/web_bundle_handle.mojom.h"
 
 namespace network {
 
+SharedDataPipeProducerHandle::SharedDataPipeProducerHandle(
+    mojo::ScopedDataPipeProducerHandle pipe)
+    : pipe(std::move(pipe)) {}
+
+SharedDataPipeProducerHandle::~SharedDataPipeProducerHandle() = default;
+
+ResourceRequest::TrustedParams::EnabledClientHints::EnabledClientHints() =
+    default;
+ResourceRequest::TrustedParams::EnabledClientHints::~EnabledClientHints() =
+    default;
+ResourceRequest::TrustedParams::EnabledClientHints::EnabledClientHints(
+    const EnabledClientHints&) = default;
+ResourceRequest::TrustedParams::EnabledClientHints&
+ResourceRequest::TrustedParams::EnabledClientHints::operator=(
+    const EnabledClientHints&) = default;
+
+bool ResourceRequest::TrustedParams::EnabledClientHints::operator==(
+    const EnabledClientHints& other) const {
+  return origin == other.origin &&
+         is_outermost_main_frame == other.is_outermost_main_frame &&
+         hints == other.hints;
+}
+
 namespace {
 
 mojo::PendingRemote<mojom::CookieAccessObserver> Clone(
     mojo::PendingRemote<mojom::CookieAccessObserver>* observer) {
-  if (!*observer)
+  if (!*observer) {
     return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "CookieAccessObserver.copy");
   mojo::Remote<mojom::CookieAccessObserver> remote(std::move(*observer));
   mojo::PendingRemote<mojom::CookieAccessObserver> new_remote;
   remote->Clone(new_remote.InitWithNewPipeAndPassReceiver());
@@ -27,10 +61,25 @@ mojo::PendingRemote<mojom::CookieAccessObserver> Clone(
   return new_remote;
 }
 
+mojo::PendingRemote<mojom::TrustTokenAccessObserver> Clone(
+    mojo::PendingRemote<mojom::TrustTokenAccessObserver>* observer) {
+  if (!*observer) {
+    return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "TrustTokenAccessObserver.copy");
+  mojo::Remote<mojom::TrustTokenAccessObserver> remote(std::move(*observer));
+  mojo::PendingRemote<mojom::TrustTokenAccessObserver> new_remote;
+  remote->Clone(new_remote.InitWithNewPipeAndPassReceiver());
+  *observer = remote.Unbind();
+  return new_remote;
+}
+
 mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver> Clone(
     mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>* observer) {
-  if (!*observer)
+  if (!*observer) {
     return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "URLLoaderNetworkServiceObserver.copy");
   mojo::Remote<mojom::URLLoaderNetworkServiceObserver> remote(
       std::move(*observer));
   mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver> new_remote;
@@ -41,8 +90,10 @@ mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver> Clone(
 
 mojo::PendingRemote<mojom::DevToolsObserver> Clone(
     mojo::PendingRemote<mojom::DevToolsObserver>* observer) {
-  if (!*observer)
+  if (!*observer) {
     return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "DevToolsObserver.copy");
   mojo::Remote<mojom::DevToolsObserver> remote(std::move(*observer));
   mojo::PendingRemote<mojom::DevToolsObserver> new_remote;
   remote->Clone(new_remote.InitWithNewPipeAndPassReceiver());
@@ -50,32 +101,70 @@ mojo::PendingRemote<mojom::DevToolsObserver> Clone(
   return new_remote;
 }
 
+mojo::PendingRemote<mojom::DeviceBoundSessionAccessObserver> Clone(
+    mojo::PendingRemote<mojom::DeviceBoundSessionAccessObserver>* observer) {
+  if (!*observer) {
+    return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "DeviceBoundSessionAccessObserver.copy");
+  mojo::Remote<mojom::DeviceBoundSessionAccessObserver> remote(
+      std::move(*observer));
+  mojo::PendingRemote<mojom::DeviceBoundSessionAccessObserver> new_remote;
+  remote->Clone(new_remote.InitWithNewPipeAndPassReceiver());
+  *observer = remote.Unbind();
+  return new_remote;
+}
+
 mojo::PendingRemote<mojom::AcceptCHFrameObserver> Clone(
     mojo::PendingRemote<mojom::AcceptCHFrameObserver>& observer) {
-  if (!observer)
+  if (!observer) {
     return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "AcceptCHFrameObserver.copy");
   mojo::Remote<mojom::AcceptCHFrameObserver> remote(std::move(observer));
   mojo::PendingRemote<mojom::AcceptCHFrameObserver> new_remote;
   remote->Clone(new_remote.InitWithNewPipeAndPassReceiver());
   observer = remote.Unbind();
   return new_remote;
 }
+
+mojo::PendingRemote<mojom::SharedDictionaryAccessObserver> Clone(
+    mojo::PendingRemote<mojom::SharedDictionaryAccessObserver>& observer) {
+  if (!observer) {
+    return mojo::NullRemote();
+  }
+  TRACE_EVENT("loading", "SharedDictionaryAccessObserver.copy");
+  mojo::Remote<mojom::SharedDictionaryAccessObserver> remote(
+      std::move(observer));
+  mojo::PendingRemote<mojom::SharedDictionaryAccessObserver> new_remote;
+  remote->Clone(new_remote.InitWithNewPipeAndPassReceiver());
+  observer = remote.Unbind();
+  return new_remote;
+}
+
 // Returns true iff either holds true:
 //
 //  - both |lhs| and |rhs| are nullopt, or
 //  - neither is nullopt and they both contain equal values
 //
 bool OptionalTrustedParamsEqualsForTesting(
-    const absl::optional<ResourceRequest::TrustedParams>& lhs,
-    const absl::optional<ResourceRequest::TrustedParams>& rhs) {
+    const std::optional<ResourceRequest::TrustedParams>& lhs,
+    const std::optional<ResourceRequest::TrustedParams>& rhs) {
   return (!lhs && !rhs) || (lhs && rhs && lhs->EqualsForTesting(*rhs));
 }
 
 bool OptionalWebBundleTokenParamsEqualsForTesting(  // IN-TEST
-    const absl::optional<ResourceRequest::WebBundleTokenParams>& lhs,
-    const absl::optional<ResourceRequest::WebBundleTokenParams>& rhs) {
+    const std::optional<ResourceRequest::WebBundleTokenParams>& lhs,
+    const std::optional<ResourceRequest::WebBundleTokenParams>& rhs) {
   return (!lhs && !rhs) ||
          (lhs && rhs && lhs->EqualsForTesting(*rhs));  // IN-TEST
+}
+
+bool OptionalNetLogInfoEqualsForTesting(
+    const std::optional<net::NetLogSource>& lhs,
+    const std::optional<net::NetLogSource>& rhs) {
+  bool equal_members = lhs && rhs && lhs.value() == rhs.value();
+  return (!lhs && !rhs) || equal_members;
 }
 
 base::debug::CrashKeyString* GetRequestUrlCrashKey() {
@@ -107,31 +196,64 @@ ResourceRequest::TrustedParams::TrustedParams(const TrustedParams& other) {
 
 ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
     const TrustedParams& other) {
+  TRACE_EVENT("loading", "ResourceRequest::TrustedParams.copy");
   isolation_info = other.isolation_info;
   disable_secure_dns = other.disable_secure_dns;
   has_user_activation = other.has_user_activation;
+  allow_cookies_from_browser = other.allow_cookies_from_browser;
+  include_request_cookies_with_response =
+      other.include_request_cookies_with_response;
+  enabled_client_hints = other.enabled_client_hints;
   cookie_observer =
       Clone(&const_cast<mojo::PendingRemote<mojom::CookieAccessObserver>&>(
           other.cookie_observer));
+  trust_token_observer =
+      Clone(&const_cast<mojo::PendingRemote<mojom::TrustTokenAccessObserver>&>(
+          other.trust_token_observer));
   url_loader_network_observer = Clone(
       &const_cast<mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>&>(
           other.url_loader_network_observer));
   devtools_observer =
       Clone(&const_cast<mojo::PendingRemote<mojom::DevToolsObserver>&>(
           other.devtools_observer));
+  device_bound_session_observer =
+      Clone(&const_cast<
+            mojo::PendingRemote<mojom::DeviceBoundSessionAccessObserver>&>(
+          other.device_bound_session_observer));
   client_security_state = other.client_security_state.Clone();
   accept_ch_frame_observer =
       Clone(const_cast<mojo::PendingRemote<mojom::AcceptCHFrameObserver>&>(
           other.accept_ch_frame_observer));
+  shared_dictionary_observer = Clone(
+      const_cast<mojo::PendingRemote<mojom::SharedDictionaryAccessObserver>&>(
+          other.shared_dictionary_observer));
+  response_body_stream = other.response_body_stream;
+  expected_response_headers_for_synthetic_response =
+      other.expected_response_headers_for_synthetic_response;
   return *this;
 }
 
+ResourceRequest::TrustedParams::TrustedParams(TrustedParams&& other) = default;
+ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
+    TrustedParams&& other) = default;
+
 bool ResourceRequest::TrustedParams::EqualsForTesting(
-    const TrustedParams& trusted_params) const {
-  return isolation_info.IsEqualForTesting(trusted_params.isolation_info) &&
-         disable_secure_dns == trusted_params.disable_secure_dns &&
-         has_user_activation == trusted_params.has_user_activation &&
-         client_security_state == trusted_params.client_security_state;
+    const TrustedParams& other) const {
+  return isolation_info.IsEqualForTesting(other.isolation_info) &&
+         disable_secure_dns == other.disable_secure_dns &&
+         has_user_activation == other.has_user_activation &&
+         allow_cookies_from_browser == other.allow_cookies_from_browser &&
+         include_request_cookies_with_response ==
+             other.include_request_cookies_with_response &&
+         enabled_client_hints == other.enabled_client_hints &&
+         client_security_state == other.client_security_state &&
+         // `response_body_stream` holds a `mojo::ScopedDataPipeProducerHandle`
+         // which is moved during serialization. Therefore, we only check for
+         // its presence (null or not null) for equality, rather than direct
+         // comparison of the refptrs themselves.
+         (!!response_body_stream == !!other.response_body_stream) &&
+         expected_response_headers_for_synthetic_response ==
+             other.expected_response_headers_for_synthetic_response;
 }
 
 ResourceRequest::WebBundleTokenParams::WebBundleTokenParams() = default;
@@ -187,9 +309,17 @@ ResourceRequest::WebBundleTokenParams::CloneHandle() const {
   return new_remote;
 }
 
-ResourceRequest::ResourceRequest() {}
-ResourceRequest::ResourceRequest(const ResourceRequest& request) = default;
-ResourceRequest::~ResourceRequest() {}
+ResourceRequest::ResourceRequest() = default;
+ResourceRequest::ResourceRequest(const ResourceRequest& request) {
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("loading"),
+              "ResourceRequest::ResourceRequest.copy_constructor");
+  *this = request;
+}
+ResourceRequest& ResourceRequest::operator=(const ResourceRequest& other) =
+    default;
+ResourceRequest::ResourceRequest(ResourceRequest&& other) = default;
+ResourceRequest& ResourceRequest::operator=(ResourceRequest&& other) = default;
+ResourceRequest::~ResourceRequest() = default;
 
 bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
   return method == request.method && url == request.url &&
@@ -206,17 +336,18 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
          load_flags == request.load_flags &&
          resource_type == request.resource_type &&
          priority == request.priority &&
+         priority_incremental == request.priority_incremental &&
          devtools_stack_id == request.devtools_stack_id &&
-         should_reset_appcache == request.should_reset_appcache &&
-         is_external_request == request.is_external_request &&
          cors_preflight_policy == request.cors_preflight_policy &&
          originated_from_service_worker ==
              request.originated_from_service_worker &&
          skip_service_worker == request.skip_service_worker &&
-         corb_detachable == request.corb_detachable && mode == request.mode &&
+         mode == request.mode &&
+         required_ip_address_space == request.required_ip_address_space &&
          credentials_mode == request.credentials_mode &&
          redirect_mode == request.redirect_mode &&
          fetch_integrity == request.fetch_integrity &&
+         expected_public_keys == request.expected_public_keys &&
          destination == request.destination &&
          request_body == request.request_body &&
          keepalive == request.keepalive &&
@@ -224,24 +355,20 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
          enable_load_timing == request.enable_load_timing &&
          enable_upload_progress == request.enable_upload_progress &&
          do_not_prompt_for_login == request.do_not_prompt_for_login &&
-         is_main_frame == request.is_main_frame &&
+         is_outermost_main_frame == request.is_outermost_main_frame &&
          transition_type == request.transition_type &&
-         report_raw_headers == request.report_raw_headers &&
+         is_reload_navigation == request.is_reload_navigation &&
          previews_state == request.previews_state &&
          upgrade_if_insecure == request.upgrade_if_insecure &&
          is_revalidating == request.is_revalidating &&
+         revalidation_etag == request.revalidation_etag &&
+         revalidation_last_modified == request.revalidation_last_modified &&
          throttling_profile_id == request.throttling_profile_id &&
-         custom_proxy_pre_cache_headers.ToString() ==
-             request.custom_proxy_pre_cache_headers.ToString() &&
-         custom_proxy_post_cache_headers.ToString() ==
-             request.custom_proxy_post_cache_headers.ToString() &&
          fetch_window_id == request.fetch_window_id &&
          devtools_request_id == request.devtools_request_id &&
-         is_signed_exchange_prefetch_cache_enabled ==
-             request.is_signed_exchange_prefetch_cache_enabled &&
          is_fetch_like_api == request.is_fetch_like_api &&
+         is_fetch_later_api == request.is_fetch_later_api &&
          is_favicon == request.is_favicon &&
-         obey_origin_policy == request.obey_origin_policy &&
          recursive_prefetch_token == request.recursive_prefetch_token &&
          OptionalTrustedParamsEqualsForTesting(trusted_params,
                                                request.trusted_params) &&
@@ -249,7 +376,17 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
              request.devtools_accepted_stream_types &&
          trust_token_params == request.trust_token_params &&
          OptionalWebBundleTokenParamsEqualsForTesting(  // IN-TEST
-             web_bundle_token_params, request.web_bundle_token_params);
+             web_bundle_token_params, request.web_bundle_token_params) &&
+         OptionalNetLogInfoEqualsForTesting(net_log_create_info,
+                                            request.net_log_create_info) &&
+         OptionalNetLogInfoEqualsForTesting(net_log_reference_info,
+                                            request.net_log_reference_info) &&
+         shared_dictionary_writer_enabled ==
+             request.shared_dictionary_writer_enabled &&
+         socket_tag == request.socket_tag &&
+         allows_device_bound_sessions == request.allows_device_bound_sessions &&
+         permissions_policy == request.permissions_policy &&
+         fetch_retry_options == request.fetch_retry_options;
 }
 
 bool ResourceRequest::SendsCookies() const {
@@ -259,6 +396,20 @@ bool ResourceRequest::SendsCookies() const {
 bool ResourceRequest::SavesCookies() const {
   return credentials_mode == network::mojom::CredentialsMode::kInclude &&
          !(load_flags & net::LOAD_DO_NOT_SAVE_COOKIES);
+}
+
+void ResourceRequest::UpdateOnRedirect(const net::RedirectInfo& redirect_info) {
+  url = redirect_info.new_url;
+  method = redirect_info.new_method;
+  referrer = GURL(redirect_info.new_referrer);
+  referrer_policy = redirect_info.new_referrer_policy;
+  site_for_cookies = redirect_info.new_site_for_cookies;
+
+  if (trusted_params) {
+    trusted_params->isolation_info =
+        trusted_params->isolation_info.CreateForRedirect(
+            url::Origin::Create(url));
+  }
 }
 
 net::ReferrerPolicy ReferrerPolicyForUrlRequest(
@@ -280,13 +431,20 @@ net::ReferrerPolicy ReferrerPolicyForUrlRequest(
       return net::ReferrerPolicy::
           ORIGIN_CLEAR_ON_TRANSITION_FROM_SECURE_TO_INSECURE;
     case mojom::ReferrerPolicy::kDefault:
-      CHECK(false);
-      return net::ReferrerPolicy::NO_REFERRER;
+      NOTREACHED();
     case mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin:
       return net::ReferrerPolicy::REDUCE_GRANULARITY_ON_TRANSITION_CROSS_ORIGIN;
   }
   NOTREACHED();
-  return net::ReferrerPolicy::CLEAR_ON_TRANSITION_FROM_SECURE_TO_INSECURE;
+}
+
+int GetAllowedLoadFlagsForUntrustedRequests() {
+  return net::LOAD_VALIDATE_CACHE | net::LOAD_BYPASS_CACHE |
+         net::LOAD_SKIP_CACHE_VALIDATION | net::LOAD_ONLY_FROM_CACHE |
+         net::LOAD_DISABLE_CACHE | net::LOAD_PREFETCH |
+         net::LOAD_IGNORE_LIMITS | net::LOAD_DO_NOT_USE_EMBEDDED_IDENTITY |
+         net::LOAD_SUPPORT_ASYNC_REVALIDATION |
+         net::LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME;
 }
 
 namespace debug {
@@ -295,7 +453,7 @@ ScopedResourceRequestCrashKeys::ScopedResourceRequestCrashKeys(
     const network::ResourceRequest& request)
     : url_(GetRequestUrlCrashKey(), request.url.possibly_invalid_spec()),
       request_initiator_(GetRequestInitiatorCrashKey(),
-                         base::OptionalOrNullptr(request.request_initiator)),
+                         base::OptionalToPtr(request.request_initiator)),
       resource_type_(GetRequestResourceTypeCrashKey(),
                      base::NumberToString(request.resource_type)) {}
 

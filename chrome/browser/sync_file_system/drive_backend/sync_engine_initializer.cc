@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <stddef.h>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_util.h"
@@ -60,7 +60,7 @@ SyncEngineInitializer::SyncEngineInitializer(
       database_path_(database_path),
       find_sync_root_retry_count_(0),
       largest_change_id_(0) {
-  DCHECK(sync_context);
+  CHECK(sync_context, base::NotFatalUntil::M163);
 }
 
 SyncEngineInitializer::~SyncEngineInitializer() {
@@ -69,13 +69,13 @@ SyncEngineInitializer::~SyncEngineInitializer() {
 }
 
 void SyncEngineInitializer::RunPreflight(std::unique_ptr<SyncTaskToken> token) {
-  util::Log(logging::LOG_VERBOSE, FROM_HERE, "[Initialize] Start.");
-  DCHECK(sync_context_);
-  DCHECK(sync_context_->GetDriveService());
+  util::Log(logging::LOGGING_VERBOSE, FROM_HERE, "[Initialize] Start.");
+  CHECK(sync_context_, base::NotFatalUntil::M163);
+  CHECK(sync_context_->GetDriveService(), base::NotFatalUntil::M163);
 
   // The metadata seems to have been already initialized. Just return with OK.
   if (sync_context_->GetMetadataDatabase()) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Already initialized.");
     SyncTaskManager::NotifyTaskDone(std::move(token), SYNC_STATUS_OK);
     return;
@@ -86,17 +86,17 @@ void SyncEngineInitializer::RunPreflight(std::unique_ptr<SyncTaskToken> token) {
       MetadataDatabase::Create(database_path_, env_override_, &status);
 
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to initialize MetadataDatabase.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
   }
 
-  DCHECK(metadata_database);
+  CHECK(metadata_database, base::NotFatalUntil::M163);
   metadata_database_ = std::move(metadata_database);
   if (metadata_database_->HasSyncRoot() &&
       !metadata_database_->NeedsSyncRootRevalidation()) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Found local cache of sync-root.");
     SyncTaskManager::NotifyTaskDone(std::move(token), SYNC_STATUS_OK);
     return;
@@ -120,29 +120,29 @@ void SyncEngineInitializer::GetAboutResource(
 
 void SyncEngineInitializer::DidGetAboutResource(
     std::unique_ptr<SyncTaskToken> token,
-    google_apis::DriveApiErrorCode error,
+    google_apis::ApiErrorCode error,
     std::unique_ptr<google_apis::AboutResource> about_resource) {
   std::move(cancel_callback_).Reset();
 
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to get AboutResource.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
   }
 
-  DCHECK(about_resource);
+  CHECK(about_resource, base::NotFatalUntil::M163);
   root_folder_id_ = about_resource->root_folder_id();
   largest_change_id_ = about_resource->largest_change_id();
 
-  DCHECK(!root_folder_id_.empty());
+  CHECK(!root_folder_id_.empty(), base::NotFatalUntil::M163);
   FindSyncRoot(std::move(token));
 }
 
 void SyncEngineInitializer::FindSyncRoot(std::unique_ptr<SyncTaskToken> token) {
   if (find_sync_root_retry_count_++ >= kMaxRetry) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Reached max retry count.");
     SyncTaskManager::NotifyTaskDone(std::move(token), SYNC_STATUS_FAILED);
     return;
@@ -158,13 +158,13 @@ void SyncEngineInitializer::FindSyncRoot(std::unique_ptr<SyncTaskToken> token) {
 
 void SyncEngineInitializer::DidFindSyncRoot(
     std::unique_ptr<SyncTaskToken> token,
-    google_apis::DriveApiErrorCode error,
+    google_apis::ApiErrorCode error,
     std::unique_ptr<google_apis::FileList> file_list) {
   std::move(cancel_callback_).Reset();
 
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to find sync root.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
@@ -172,10 +172,6 @@ void SyncEngineInitializer::DidFindSyncRoot(
 
   if (!file_list) {
     NOTREACHED();
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
-              "[Initialize] Got invalid resource list.");
-    SyncTaskManager::NotifyTaskDone(std::move(token), SYNC_STATUS_FAILED);
-    return;
   }
 
   std::vector<std::unique_ptr<google_apis::FileResource>>* items =
@@ -187,7 +183,7 @@ void SyncEngineInitializer::DidFindSyncRoot(
 
     // Pick an orphaned folder or a direct child of the root folder and
     // ignore others.
-    DCHECK(!root_folder_id_.empty());
+    CHECK(!root_folder_id_.empty(), base::NotFatalUntil::M163);
     if (!HasNoParents(*entry) && !HasFolderAsParent(*entry, root_folder_id_))
       continue;
 
@@ -224,7 +220,7 @@ void SyncEngineInitializer::DidFindSyncRoot(
 
 void SyncEngineInitializer::CreateSyncRoot(
     std::unique_ptr<SyncTaskToken> token) {
-  DCHECK(!sync_root_folder_);
+  CHECK(!sync_root_folder_, base::NotFatalUntil::M163);
   set_used_network(true);
   drive::AddNewDirectoryOptions options;
   options.visibility = google_apis::drive::FILE_VISIBILITY_PRIVATE;
@@ -236,14 +232,14 @@ void SyncEngineInitializer::CreateSyncRoot(
 
 void SyncEngineInitializer::DidCreateSyncRoot(
     std::unique_ptr<SyncTaskToken> token,
-    google_apis::DriveApiErrorCode error,
+    google_apis::ApiErrorCode error,
     std::unique_ptr<google_apis::FileResource> entry) {
-  DCHECK(!sync_root_folder_);
+  CHECK(!sync_root_folder_, base::NotFatalUntil::M163);
   std::move(cancel_callback_).Reset();
 
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to create sync root.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
@@ -254,7 +250,7 @@ void SyncEngineInitializer::DidCreateSyncRoot(
 
 void SyncEngineInitializer::DetachSyncRoot(
     std::unique_ptr<SyncTaskToken> token) {
-  DCHECK(sync_root_folder_);
+  CHECK(sync_root_folder_, base::NotFatalUntil::M163);
   set_used_network(true);
   cancel_callback_ =
       sync_context_->GetDriveService()->RemoveResourceFromDirectory(
@@ -265,12 +261,12 @@ void SyncEngineInitializer::DetachSyncRoot(
 
 void SyncEngineInitializer::DidDetachSyncRoot(
     std::unique_ptr<SyncTaskToken> token,
-    google_apis::DriveApiErrorCode error) {
+    google_apis::ApiErrorCode error) {
   std::move(cancel_callback_).Reset();
 
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to detach sync root.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
@@ -281,7 +277,7 @@ void SyncEngineInitializer::DidDetachSyncRoot(
 
 void SyncEngineInitializer::ListAppRootFolders(
     std::unique_ptr<SyncTaskToken> token) {
-  DCHECK(sync_root_folder_);
+  CHECK(sync_root_folder_, base::NotFatalUntil::M163);
   set_used_network(true);
   cancel_callback_ = sync_context_->GetDriveService()->GetFileListInDirectory(
       sync_root_folder_->file_id(),
@@ -291,13 +287,13 @@ void SyncEngineInitializer::ListAppRootFolders(
 
 void SyncEngineInitializer::DidListAppRootFolders(
     std::unique_ptr<SyncTaskToken> token,
-    google_apis::DriveApiErrorCode error,
+    google_apis::ApiErrorCode error,
     std::unique_ptr<google_apis::FileList> file_list) {
   std::move(cancel_callback_).Reset();
 
-  SyncStatusCode status = DriveApiErrorCodeToSyncStatusCode(error);
+  SyncStatusCode status = ApiErrorCodeToSyncStatusCode(error);
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to get initial app-root folders.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
@@ -305,10 +301,6 @@ void SyncEngineInitializer::DidListAppRootFolders(
 
   if (!file_list) {
     NOTREACHED();
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
-              "[Initialize] Got invalid initial app-root list.");
-    SyncTaskManager::NotifyTaskDone(std::move(token), SYNC_STATUS_FAILED);
-    return;
   }
 
   std::vector<std::unique_ptr<google_apis::FileResource>>* new_entries =
@@ -332,18 +324,18 @@ void SyncEngineInitializer::DidListAppRootFolders(
 
 void SyncEngineInitializer::PopulateDatabase(
     std::unique_ptr<SyncTaskToken> token) {
-  DCHECK(sync_root_folder_);
+  CHECK(sync_root_folder_, base::NotFatalUntil::M163);
   SyncStatusCode status = metadata_database_->PopulateInitialData(
       largest_change_id_, *sync_root_folder_, app_root_folders_);
   if (status != SYNC_STATUS_OK) {
-    util::Log(logging::LOG_VERBOSE, FROM_HERE,
+    util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
               "[Initialize] Failed to populate initial data"
               " to MetadataDatabase.");
     SyncTaskManager::NotifyTaskDone(std::move(token), status);
     return;
   }
 
-  util::Log(logging::LOG_VERBOSE, FROM_HERE,
+  util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
             "[Initialize] Completed successfully.");
   SyncTaskManager::NotifyTaskDone(std::move(token), SYNC_STATUS_OK);
 }

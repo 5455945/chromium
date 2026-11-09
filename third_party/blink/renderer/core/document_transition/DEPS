@@ -1,3 +1,0 @@
-include_rules = [
-    "+cc/document_transition/document_transition_request.h"
-]

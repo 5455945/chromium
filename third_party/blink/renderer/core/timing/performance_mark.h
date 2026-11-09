@@ -26,11 +26,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_PERFORMANCE_MARK_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_PERFORMANCE_MARK_H_
 
+#include "base/time/time.h"
 #include "third_party/blink/public/mojom/timing/performance_mark_or_measure.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -58,10 +61,13 @@ class CORE_EXPORT PerformanceMark final : public PerformanceEntry {
                   double start_time,
                   base::TimeTicks unsafe_time_for_traces,
                   scoped_refptr<SerializedScriptValue>,
-                  ExceptionState& exception_state);
+                  ExceptionState& exception_state,
+                  DOMWindow* source,
+                  uint64_t navigation_id);
+
   ~PerformanceMark() override = default;
 
-  AtomicString entryType() const override;
+  const AtomicString& entryType() const override;
   PerformanceEntryType EntryTypeEnum() const override;
   mojom::blink::PerformanceMarkOrMeasurePtr ToMojoPerformanceMarkOrMeasure()
       override;
@@ -74,12 +80,22 @@ class CORE_EXPORT PerformanceMark final : public PerformanceEntry {
     return unsafe_time_for_traces_;
   }
 
+  using UserFeatureNameToWebFeatureMap =
+      HashMap<String, mojom::blink::WebFeature>;
+  static const UserFeatureNameToWebFeatureMap&
+  GetUseCounterMappingForTesting() {
+    return GetUseCounterMapping();
+  }
+  static std::optional<mojom::blink::WebFeature>
+  GetWebFeatureForUserFeatureName(const String& feature_name);
+
  private:
   scoped_refptr<SerializedScriptValue> serialized_detail_;
   // In order to prevent cross-world reference leak, we create a copy of the
   // detail for each world.
   HeapHashMap<WeakMember<ScriptState>, TraceWrapperV8Reference<v8::Value>>
       deserialized_detail_map_;
+  static const UserFeatureNameToWebFeatureMap& GetUseCounterMapping();
   base::TimeTicks unsafe_time_for_traces_;
 };
 

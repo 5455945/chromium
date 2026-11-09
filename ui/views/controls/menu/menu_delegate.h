@@ -1,18 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_MENU_MENU_DELEGATE_H_
 #define UI_VIEWS_CONTROLS_MENU_MENU_DELEGATE_H_
 
+#include <optional>
 #include <set>
 #include <string>
 
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
-#include "ui/base/ui_base_types.h"
-#include "ui/gfx/font_list.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/menu/menu_types.h"
 #include "ui/views/view.h"
@@ -60,12 +59,6 @@ class VIEWS_EXPORT MenuDelegate {
     kOn
   };
 
-  // Used when indicating the style for a given label.
-  struct LabelStyle {
-    gfx::FontList font_list;
-    SkColor foreground;
-  };
-
   virtual ~MenuDelegate();
 
   // Whether or not an item should be shown as checked. This is invoked for
@@ -76,9 +69,9 @@ class VIEWS_EXPORT MenuDelegate {
   // added with an empty label.
   virtual std::u16string GetLabel(int id) const;
 
-  // The style for the label with the given |id|. Implementations may update any
-  // parts of |style| or leave it unmodified.
-  virtual void GetLabelStyle(int id, LabelStyle* style) const;
+  // The font and color for the menu item label.
+  virtual const gfx::FontList* GetLabelFontList(int id) const;
+  virtual std::optional<SkColor> GetLabelColor(int id) const;
 
   // The tooltip shown for the menu item. This is invoked when the user
   // hovers over the item, and no tooltip text has been set for that item.
@@ -100,7 +93,7 @@ class VIEWS_EXPORT MenuDelegate {
   virtual bool ShowContextMenu(MenuItemView* source,
                                int id,
                                const gfx::Point& p,
-                               ui::MenuSourceType source_type);
+                               ui::mojom::MenuSourceType source_type);
 
   // Controller
   virtual bool SupportsCommand(int id) const;
@@ -126,6 +119,11 @@ class VIEWS_EXPORT MenuDelegate {
   // menu open. Default implementation returns false.
   virtual bool ShouldExecuteCommandWithoutClosingMenu(int id,
                                                       const ui::Event& e);
+
+  // Returns true if child buttons embedded in menu items should support
+  // mouse click-and-drag highlighting and release activation across buttons and
+  // menu items. Defaults to false.
+  virtual bool ShouldDragActivateChildButtons() const;
 
   // Returns true if the specified event is one the user can use to trigger, or
   // accept, the item. Defaults to left or right mouse buttons or tap.
@@ -166,16 +164,6 @@ class VIEWS_EXPORT MenuDelegate {
       const ui::DropTargetEvent& event,
       DropPosition* position);
 
-  // Invoked to perform the drop operation. This is ONLY invoked if CanDrop()
-  // returned true for the parent menu item, and GetDropOperation() returned an
-  // operation other than DragOperation::kNone.
-  //
-  // |menu| is the menu the drop occurred on.
-  virtual ui::mojom::DragOperation OnPerformDrop(
-      MenuItemView* menu,
-      DropPosition position,
-      const ui::DropTargetEvent& event);
-
   // Invoked to get a callback to perform the drop operation later. This is ONLY
   // invoked if CanDrop() returned true for the parent menu item, and
   // GetDropOperation() returned an operation other than DragOperation::kNone.
@@ -201,7 +189,7 @@ class VIEWS_EXPORT MenuDelegate {
   // Returns true if the menu should close upon a drag completing. Defaults to
   // true. This is only invoked for drag and drop operations performed on child
   // Views that are not MenuItemViews.
-  virtual bool ShouldCloseOnDragComplete();
+  virtual bool ShouldCloseOnDragDropCompleted();
 
   // Notification the menu has closed. This will not be called if MenuRunner is
   // deleted during calls to ExecuteCommand().
@@ -231,6 +219,12 @@ class VIEWS_EXPORT MenuDelegate {
   // rather than directly above or below it, when the menu is too tall to fit
   // within the screen.
   virtual bool ShouldTryPositioningBesideAnchor() const;
+
+  // Returns true if the delegate has started tearing down its internal state in
+  // preparation for destruction. The delegate should no longer be used once
+  // this occurs. Remove once crash root cause has been addressed
+  // (crbug.com/1283454).
+  virtual bool IsTearingDown() const;
 };
 
 }  // namespace views

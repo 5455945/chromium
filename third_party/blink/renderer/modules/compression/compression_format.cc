@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -15,10 +16,12 @@ CompressionFormat LookupCompressionFormat(const AtomicString& format,
     return CompressionFormat::kGzip;
   } else if (format == "deflate") {
     return CompressionFormat::kDeflate;
+  } else if (format == "deflate-raw") {
+    return CompressionFormat::kDeflateRaw;
   }
 
-  exception_state.ThrowTypeError("Unsupported compression format: '" + format +
-                                 "'");
+  exception_state.ThrowTypeError(
+      StrCat({"Unsupported compression format: '", format, "'"}));
   return CompressionFormat::kGzip;
 }
 

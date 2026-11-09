@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -10,20 +10,16 @@
 #define CHROME_BROWSER_ASH_CHILD_ACCOUNTS_USAGE_TIME_LIMIT_PROCESSOR_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <unordered_map>
 
-#include "base/macros.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/time/time.h"
-#include "chromeos/settings/timezone_settings.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/values.h"
+#include "chromeos/ash/components/settings/timezone_settings.h"
 
-namespace base {
-class Value;
-}  // namespace base
-
-namespace ash {
-namespace usage_time_limit {
+namespace ash::usage_time_limit {
 namespace internal {
 
 enum class Weekday {
@@ -44,10 +40,8 @@ struct TimeWindowLimitBoundaries {
 
 struct TimeWindowLimitEntry {
   TimeWindowLimitEntry();
-  bool operator==(const TimeWindowLimitEntry&) const;
-  bool operator!=(const TimeWindowLimitEntry& rhs) const {
-    return !(*this == rhs);
-  }
+  friend bool operator==(const TimeWindowLimitEntry&,
+                         const TimeWindowLimitEntry&) = default;
 
   // Whether the time window limit entry ends on the following day from its
   // start.
@@ -68,24 +62,25 @@ struct TimeWindowLimitEntry {
 class TimeWindowLimit {
  public:
   explicit TimeWindowLimit(const base::Value& window_limit_dict);
+
+  TimeWindowLimit(const TimeWindowLimit&) = delete;
+  TimeWindowLimit& operator=(const TimeWindowLimit&) = delete;
+
   ~TimeWindowLimit();
   TimeWindowLimit(TimeWindowLimit&&);
   TimeWindowLimit& operator=(TimeWindowLimit&&);
-  bool operator==(const TimeWindowLimit&) const;
-  bool operator!=(const TimeWindowLimit& rhs) const { return !(*this == rhs); }
 
-  std::unordered_map<Weekday, absl::optional<TimeWindowLimitEntry>> entries;
+  friend bool operator==(const TimeWindowLimit&,
+                         const TimeWindowLimit&) = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(TimeWindowLimit);
+  std::unordered_map<Weekday, std::optional<TimeWindowLimitEntry>> entries;
 };
 
 struct TimeUsageLimitEntry {
   TimeUsageLimitEntry();
-  bool operator==(const TimeUsageLimitEntry&) const;
-  bool operator!=(const TimeUsageLimitEntry& rhs) const {
-    return !(*this == rhs);
-  }
+
+  friend bool operator==(const TimeUsageLimitEntry&,
+                         const TimeUsageLimitEntry&) = default;
 
   base::TimeDelta usage_quota;
   base::Time last_updated;
@@ -93,18 +88,20 @@ struct TimeUsageLimitEntry {
 
 class TimeUsageLimit {
  public:
-  explicit TimeUsageLimit(const base::Value& usage_limit_dict);
+  explicit TimeUsageLimit(const base::DictValue& usage_limit_dict);
+
+  TimeUsageLimit(const TimeUsageLimit&) = delete;
+  TimeUsageLimit& operator=(const TimeUsageLimit&) = delete;
+
   ~TimeUsageLimit();
   TimeUsageLimit(TimeUsageLimit&&);
   TimeUsageLimit& operator=(TimeUsageLimit&&);
-  bool operator==(const TimeUsageLimit&) const;
-  bool operator!=(const TimeUsageLimit& rhs) const { return !(*this == rhs); }
 
-  std::unordered_map<Weekday, absl::optional<TimeUsageLimitEntry>> entries;
+  friend bool operator==(const TimeUsageLimit&,
+                         const TimeUsageLimit&) = default;
+
+  std::unordered_map<Weekday, std::optional<TimeUsageLimitEntry>> entries;
   base::TimeDelta resets_at;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TimeUsageLimit);
 };
 }  // namespace internal
 
@@ -160,20 +157,20 @@ struct State {
 // |usage_timestamp| when was |used_time| data collected. Usually differs from
 //                   |current_time| by milliseconds.
 // |previous_state| state previously returned by UsageTimeLimitProcessor.
-State GetState(const base::Value& time_limit,
-               const base::Value* local_override,
+State GetState(const base::DictValue& time_limit,
+               const base::DictValue* local_override,
                const base::TimeDelta& used_time,
                const base::Time& usage_timestamp,
                const base::Time& current_time,
                const icu::TimeZone* const time_zone,
-               const absl::optional<State>& previous_state);
+               const std::optional<State>& previous_state);
 
 // Returns the expected time that the used time stored should be reset.
 // |time_limit| dictionary with UsageTimeLimit policy data.
 // |local_override| dictionary with data of the last local override (authorized
 //                  by parent access code).
-base::Time GetExpectedResetTime(const base::Value& time_limit,
-                                const base::Value* local_override,
+base::Time GetExpectedResetTime(const base::DictValue& time_limit,
+                                const base::DictValue* local_override,
                                 base::Time current_time,
                                 const icu::TimeZone* const time_zone);
 
@@ -182,33 +179,31 @@ base::Time GetExpectedResetTime(const base::Value& time_limit,
 // |local_override| dictionary with data of the last local override (authorized
 //                  by parent access code).
 // |used_time| time used in the current day.
-absl::optional<base::TimeDelta> GetRemainingTimeUsage(
-    const base::Value& time_limit,
-    const base::Value* local_override,
+std::optional<base::TimeDelta> GetRemainingTimeUsage(
+    const base::DictValue& time_limit,
+    const base::DictValue* local_override,
     const base::Time current_time,
     const base::TimeDelta& used_time,
     const icu::TimeZone* const time_zone);
 
 // Returns time of the day when TimeUsageLimit policy is reset, represented by
-// the distance from midnight. |time_limit| needs to be a dictionary.
-base::TimeDelta GetTimeUsageLimitResetTime(const base::Value& time_limit);
+// the distance from midnight.
+base::TimeDelta GetTimeUsageLimitResetTime(const base::DictValue& time_limit);
 
 // Compares two Usage Time Limit policy dictionaries and returns which
 // PolicyTypes changed between the two versions. Changes on simple overrides are
 // not reported, but changes on override with durations are, the reason is that
 // this method is intended for notifications, and the former does not trigger
-// those while the latter does. |old_policy| and |new_policy| need to be
-// dictionaries.
-std::set<PolicyType> UpdatedPolicyTypes(const base::Value& old_policy,
-                                        const base::Value& new_policy);
+// those while the latter does.
+std::set<PolicyType> UpdatedPolicyTypes(const base::DictValue& old_policy,
+                                        const base::DictValue& new_policy);
 
 // Returns the active time limit polices in `time_limit_prefs`.
-// `time_limit_prefs` is the value of prefs::kUsageTimeLimit which stores the
-// usage time limit preference of a user.
+// `time_limit_prefs` is the value of ash::prefs::kUsageTimeLimit which stores
+// the usage time limit preference of a user.
 std::set<PolicyType> GetEnabledTimeLimitPolicies(
-    const base::Value& time_limit_prefs);
+    const base::DictValue& time_limit_prefs);
 
-}  // namespace usage_time_limit
-}  // namespace ash
+}  // namespace ash::usage_time_limit
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_USAGE_TIME_LIMIT_PROCESSOR_H_

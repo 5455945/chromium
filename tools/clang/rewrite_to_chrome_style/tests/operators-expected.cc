@@ -1,11 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 namespace blink {
 
 struct Op {
-  bool operator==(const Op&) { return true; }
+  bool operator==(const Op&) const { return true; }
 };
 
 struct Op2 {};
@@ -14,7 +14,7 @@ inline bool operator==(const Op2&, const Op2) {
   return true;
 }
 
-}  // namespace
+}  // namespace blink
 
 void G() {
   blink::Op a, b;

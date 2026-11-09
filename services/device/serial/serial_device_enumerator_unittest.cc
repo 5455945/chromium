@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,7 +30,7 @@ TEST_F(SerialDeviceEnumeratorTest, GetDevices) {
   auto enumerator = SerialDeviceEnumerator::Create(
       task_environment_.GetMainThreadTaskRunner());
   ASSERT_TRUE(enumerator);
-  std::vector<mojom::SerialPortInfoPtr> devices = enumerator->GetDevices();
+  enumerator->GetDevices();
 }
 
 }  // namespace

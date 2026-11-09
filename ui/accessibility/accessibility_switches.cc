@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,29 +13,10 @@ namespace switches {
 const char kEnableExperimentalAccessibilityAutoclick[] =
     "enable-experimental-accessibility-autoclick";
 
-// Enables the experimental dictation extension on Chrome OS that hasn't
-// launched yet.
-const char kEnableExperimentalAccessibilityDictationExtension[] =
-    "enable-experimental-accessibility-dictation-extension";
-
-// Enables dictation to use on-device speech recognition.
-const char kEnableExperimentalAccessibilityDictationOffline[] =
-    "enable-experimental-accessibility-dictation-offline";
-
 // Enables support for visually debugging the accessibility labels
 // feature, which provides images descriptions for screen reader users.
 const char kEnableExperimentalAccessibilityLabelsDebugging[] =
     "enable-experimental-accessibility-labels-debugging";
-
-// Enables language detection on in-page text content which is then exposed to
-// assistive technology such as screen readers.
-const char kEnableExperimentalAccessibilityLanguageDetection[] =
-    "enable-experimental-accessibility-language-detection";
-
-// Enables language detection for dynamic content which is then exposed to
-// assistive technology such as screen readers.
-const char kEnableExperimentalAccessibilityLanguageDetectionDynamic[] =
-    "enable-experimental-accessibility-language-detection-dynamic";
 
 // Enables in progress Switch Access features for text input.
 const char kEnableExperimentalAccessibilitySwitchAccessText[] =
@@ -45,29 +26,10 @@ const char kEnableExperimentalAccessibilitySwitchAccessText[] =
 // zooming in.
 const char kEnableMagnifierDebugDrawRect[] = "enable-magnifier-debug-draw-rect";
 
-// Enables the Switch Access setup guide that hasn't launched yet.
-const char kEnableExperimentalAccessibilitySwitchAccessSetupGuide[] =
-    "enable-experimental-accessibility-switch-access-setup-guide";
+// Enables the switchover to the newer NSAccessibility property-based API.
+const char kEnableMacAccessibilityAPIMigration[] =
+    "enable-mac-accessibility-api-migration";
 
-bool IsExperimentalAccessibilityDictationExtensionEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableExperimentalAccessibilityDictationExtension);
-}
-
-bool IsExperimentalAccessibilityDictationOfflineEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableExperimentalAccessibilityDictationOffline);
-}
-
-bool IsExperimentalAccessibilityLanguageDetectionEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableExperimentalAccessibilityLanguageDetection);
-}
-
-bool IsExperimentalAccessibilityLanguageDetectionDynamicEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableExperimentalAccessibilityLanguageDetectionDynamic);
-}
 
 bool IsExperimentalAccessibilitySwitchAccessTextEnabled() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -79,23 +41,20 @@ bool IsMagnifierDebugDrawRectEnabled() {
       ::switches::kEnableMagnifierDebugDrawRect);
 }
 
-#if defined(OS_WIN)
-// Enables UI Automation platform API in addition to the IAccessible API.
-const char kEnableExperimentalUIAutomation[] =
-    "enable-experimental-ui-automation";
-#endif
+const char kGenerateAccessibilityTestExpectations[] =
+    "generate-accessibility-test-expectations";
 
-bool IsExperimentalAccessibilityPlatformUIAEnabled() {
-#if defined(OS_WIN)
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableExperimentalUIAutomation);
-#else
-  return false;
-#endif
-}
+// Turns off the accessibility in the renderer.
+const char kDisableRendererAccessibility[] = "disable-renderer-accessibility";
 
-// Optionally disable AXMenuList, which makes the internal pop-up menu
-// UI for a select element directly accessible.
-const char kDisableAXMenuList[] = "disable-ax-menu-list";
+// Force renderer accessibility to be on instead of enabling it on demand when
+// a screen reader is detected. The disable-renderer-accessibility switch
+// overrides this if present.
+// This switch has an optional parameter that forces an AXMode bundle. The three
+// available bundle settings are: 'basic', 'form-controls', and 'complete'. If
+// the bundle argument is invalid, then the forced AXMode will default to
+// 'complete'. If the bundle argument is missing, then the initial AXMode will
+// default to complete but allow changes to the AXMode during execution.
+const char kForceRendererAccessibility[] = "force-renderer-accessibility";
 
 }  // namespace switches

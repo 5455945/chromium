@@ -1,30 +1,37 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.webapk.lib.runtime_library;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.os.Binder;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Log;
 
-import androidx.core.app.NotificationManagerCompat;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * Implements services offered by the WebAPK to Chrome.
- */
+/** Implements services offered by the WebAPK to Chrome. */
+@NullMarked
 public class WebApkServiceImpl extends IWebApkApi.Stub {
+    /**
+     * Keeps these 2 values consistent with {@link
+     * org.chromium.webapk.lib.common.WebApkConstants#DEFAULT_NOTIFICATION_CHANNEL_ID} and {@link
+     * org.chromium.webapk.lib.common.WebApkConstants#HIGH_PRIORITY_NOTIFICATION_CHANNEL_ID}.
+     */
+    private static final String DEFAULT_NOTIFICATION_CHANNEL_ID = "default_channel_id";
+
+    private static final String HIGH_PRIORITY_NOTIFICATION_CHANNEL_ID = "default_channel_id_high";
 
     public static final String KEY_SMALL_ICON_ID = "small_icon_id";
     public static final String KEY_HOST_BROWSER_UID = "host_browser_uid";
@@ -33,9 +40,7 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
 
     private final Context mContext;
 
-    /**
-     * Id of icon to represent WebAPK notifications in status bar.
-     */
+    /** Id of icon to represent WebAPK notifications in status bar. */
     private final int mSmallIconId;
 
     /**
@@ -46,7 +51,7 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
 
     /**
      * Creates an instance of WebApkServiceImpl.
-     * @param context
+     *
      * @param bundle Bundle with additional constructor parameters.
      */
     public WebApkServiceImpl(Context context, Bundle bundle) {
@@ -57,13 +62,17 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
     }
 
     @Override
-    public boolean onTransact(int arg0, Parcel arg1, Parcel arg2, int arg3) throws RemoteException {
+    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+            throws RemoteException {
         int callingUid = Binder.getCallingUid();
         if (mHostUid != callingUid) {
-            throw new RemoteException("Unauthorized caller " + callingUid
-                    + " does not match expected host=" + mHostUid);
+            throw new RemoteException(
+                    "Unauthorized caller "
+                            + callingUid
+                            + " does not match expected host="
+                            + mHostUid);
         }
-        return super.onTransact(arg0, arg1, arg2, arg3);
+        return super.onTransact(code, data, reply, flags);
     }
 
     @Override
@@ -73,7 +82,8 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
 
     @Override
     public void notifyNotification(String platformTag, int platformID, Notification notification) {
-        Log.w(TAG,
+        Log.w(
+                TAG,
                 "Should NOT reach WebApkServiceImpl#notifyNotification(String, int,"
                         + " Notification).");
     }
@@ -85,14 +95,18 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
 
     @Override
     public boolean notificationPermissionEnabled() {
-        return NotificationManagerCompat.from(mContext).areNotificationsEnabled();
+        Log.w(
+                TAG,
+                "Should NOT reach WebApkServiceImpl#notificationPermissionEnabled() because it is"
+                        + " deprecated.");
+        NotificationManager notificationManager =
+                (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        return notificationManager.areNotificationsEnabled();
     }
 
     @SuppressLint("NewApi")
     @Override
     public boolean finishAndRemoveTaskSdk23() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false;
-
         ActivityManager manager =
                 (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
         String webApkPackageName = mContext.getPackageName();
@@ -105,9 +119,24 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
         return false;
     }
 
+    @Override
+    public int checkNotificationPermission() {
+        Log.w(TAG, "Should NOT reach WebApkServiceImpl#checkNotificationPermission().");
+        return -1;
+    }
+
+    @Override
+    public @Nullable PendingIntent requestNotificationPermission(
+            String channelName, String channelId) {
+        Log.w(
+                TAG,
+                "Should NOT reach WebApkServiceImpl#requestNotificationPermission(String,"
+                        + " String).");
+        return null;
+    }
+
     /** Returns the package name of the task's base activity. */
-    @TargetApi(Build.VERSION_CODES.M)
-    private static String getTaskBaseActivityPackageName(ActivityManager.AppTask task) {
+    private static @Nullable String getTaskBaseActivityPackageName(ActivityManager.AppTask task) {
         try {
             ActivityManager.RecentTaskInfo info = task.getTaskInfo();
             if (info != null && info.baseActivity != null) {
@@ -123,10 +152,24 @@ public class WebApkServiceImpl extends IWebApkApi.Stub {
     public void notifyNotificationWithChannel(
             String platformTag, int platformID, Notification notification, String channelName) {
         NotificationManager notificationManager = getNotificationManager();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notification.getChannelId() != null) {
-            NotificationChannel channel = new NotificationChannel(notification.getChannelId(),
-                    channelName, NotificationManager.IMPORTANCE_DEFAULT);
+        String channelId = notification.getChannelId();
+        if (channelId != null) {
+            boolean isHighPriority = HIGH_PRIORITY_NOTIFICATION_CHANNEL_ID.equals(channelId);
+            int importance =
+                    isHighPriority
+                            ? NotificationManager.IMPORTANCE_HIGH
+                            : NotificationManager.IMPORTANCE_DEFAULT;
+            NotificationChannel channel =
+                    new NotificationChannel(channelId, channelName, importance);
             notificationManager.createNotificationChannel(channel);
+
+            // Bidirectional cleanup of old notification channels on upgrade/downgrade.
+            if (HIGH_PRIORITY_NOTIFICATION_CHANNEL_ID.equals(channelId)) {
+                notificationManager.deleteNotificationChannel(DEFAULT_NOTIFICATION_CHANNEL_ID);
+            } else if (DEFAULT_NOTIFICATION_CHANNEL_ID.equals(channelId)) {
+                notificationManager.deleteNotificationChannel(
+                        HIGH_PRIORITY_NOTIFICATION_CHANNEL_ID);
+            }
         }
 
         notificationManager.notify(platformTag, platformID, notification);

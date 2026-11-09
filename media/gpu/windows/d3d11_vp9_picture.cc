@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 namespace media {
 
-D3D11VP9Picture::D3D11VP9Picture(D3D11PictureBuffer* picture_buffer,
-                                 D3D11VideoDecoderClient* client)
+D3D11VP9Picture::D3D11VP9Picture(D3DPictureBuffer* picture_buffer,
+                                 D3DVideoDecoderClient* client)
     : picture_buffer_(picture_buffer),
       client_(client),
       picture_index_(picture_buffer_->picture_index()) {

@@ -1,24 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_SERIAL_SERIAL_PORT_IMPL_H_
 #define SERVICES_DEVICE_SERIAL_SERIAL_PORT_IMPL_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "services/device/public/mojom/serial.mojom.h"
-
-namespace base {
-class SingleThreadTaskRunner;
-}
 
 namespace device {
 
@@ -34,19 +28,14 @@ class SerialPortImpl : public mojom::SerialPort {
       base::OnceCallback<void(mojo::PendingRemote<mojom::SerialPort>)>;
 
   static void Open(
-      const base::FilePath& path,
-      mojom::SerialConnectionOptionsPtr options,
-      mojo::PendingRemote<mojom::SerialPortClient> client,
-      mojo::PendingRemote<mojom::SerialPortConnectionWatcher> watcher,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-      OpenCallback callback);
-
-  static void OpenForTesting(
       scoped_refptr<SerialIoHandler> io_handler,
       mojom::SerialConnectionOptionsPtr options,
       mojo::PendingRemote<mojom::SerialPortClient> client,
       mojo::PendingRemote<mojom::SerialPortConnectionWatcher> watcher,
       OpenCallback callback);
+
+  SerialPortImpl(const SerialPortImpl&) = delete;
+  SerialPortImpl& operator=(const SerialPortImpl&) = delete;
 
  private:
   SerialPortImpl(
@@ -66,14 +55,13 @@ class SerialPortImpl : public mojom::SerialPort {
   void ConfigurePort(mojom::SerialConnectionOptionsPtr options,
                      ConfigurePortCallback callback) override;
   void GetPortInfo(GetPortInfoCallback callback) override;
-  void Close(CloseCallback callback) override;
+  void Close(bool flush, CloseCallback callback) override;
 
   void OpenPort(const mojom::SerialConnectionOptions& options,
                 OpenCallback callback);
   void PortOpened(OpenCallback callback, bool success);
   void WriteToPort(MojoResult result, const mojo::HandleSignalsState& state);
-  void OnWriteToPortCompleted(uint32_t bytes_expected,
-                              uint32_t bytes_sent,
+  void OnWriteToPortCompleted(uint32_t bytes_sent,
                               mojom::SerialSendError error);
   void ReadFromPortAndWriteOut(MojoResult result,
                                const mojo::HandleSignalsState& state);
@@ -102,7 +90,6 @@ class SerialPortImpl : public mojom::SerialPort {
   DrainCallback drain_callback_;
 
   base::WeakPtrFactory<SerialPortImpl> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(SerialPortImpl);
 };
 
 }  // namespace device

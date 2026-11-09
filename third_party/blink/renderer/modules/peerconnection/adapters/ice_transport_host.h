@@ -1,21 +1,26 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_ADAPTERS_ICE_TRANSPORT_HOST_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_ADAPTERS_ICE_TRANSPORT_HOST_H_
 
+#include <memory>
+#include <utility>
+
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/ice_transport_adapter.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/ice_transport_adapter_cross_thread_factory.h"
+#include "third_party/webrtc/api/candidate.h"
+#include "third_party/webrtc/api/transport/enums.h"
+#include "third_party/webrtc/p2p/base/ice_transport_internal.h"
 
 namespace blink {
 
 class IceTransportProxy;
-class QuicTransportHost;
 
 // This class is the host side correspondent to the IceTransportProxy. See the
 // IceTransportProxy documentation for background. This class lives on the host
@@ -52,39 +57,19 @@ class IceTransportHost final : public IceTransportAdapter::Delegate {
   scoped_refptr<base::SingleThreadTaskRunner> proxy_thread() const;
   scoped_refptr<base::SingleThreadTaskRunner> host_thread() const;
 
-  void StartGathering(const cricket::IceParameters& local_parameters,
-                      const cricket::ServerAddresses& stun_servers,
-                      const WebVector<cricket::RelayServerConfig>& turn_servers,
-                      IceTransportPolicy policy);
-  void Start(const cricket::IceParameters& remote_parameters,
-             cricket::IceRole role,
-             const Vector<cricket::Candidate>& initial_remote_candidates);
-  void HandleRemoteRestart(const cricket::IceParameters& new_remote_parameters);
-  void AddRemoteCandidate(const cricket::Candidate& candidate);
-
-  // A QuicTransportHost can be connected to this IceTransportHost. Only one can
-  // be connected at a time, and the caller must ensure that the consumer is
-  // disconnected before destroying the IceTransportHost.
-  // ConnectConsumer returns an implementation of IceTransportAdapter that
-  // should only be used on the host thread.
-  bool HasConsumer() const;
-  IceTransportAdapter* ConnectConsumer(QuicTransportHost* consumer_host);
-  void DisconnectConsumer(QuicTransportHost* consumer_host);
-
  private:
   // IceTransportAdapter::Delegate overrides.
-  void OnGatheringStateChanged(cricket::IceGatheringState new_state) override;
-  void OnCandidateGathered(const cricket::Candidate& candidate) override;
+  void OnGatheringStateChanged(webrtc::IceGatheringState new_state) override;
+  void OnCandidateGathered(const webrtc::Candidate& candidate) override;
   void OnStateChanged(webrtc::IceTransportState new_state) override;
   void OnSelectedCandidatePairChanged(
-      const std::pair<cricket::Candidate, cricket::Candidate>&
+      const std::pair<webrtc::Candidate, webrtc::Candidate>&
           selected_candidate_pair) override;
 
   const scoped_refptr<base::SingleThreadTaskRunner> proxy_thread_;
   const scoped_refptr<base::SingleThreadTaskRunner> host_thread_;
   std::unique_ptr<IceTransportAdapter> transport_;
   base::WeakPtr<IceTransportProxy> proxy_;
-  QuicTransportHost* consumer_host_ = nullptr;
 
   THREAD_CHECKER(thread_checker_);
 };

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "ui/gfx/swap_result.h"
+#include "ui/ozone/public/hardware_capabilities.h"
 #include "ui/ozone/public/overlay_surface_candidate.h"
 
 namespace ui {
@@ -26,6 +28,34 @@ class COMPONENT_EXPORT(OZONE_BASE) OverlayCandidatesOzone {
   // the implementation must also snap |display_rect| to integer coordinates
   // if necessary.
   virtual void CheckOverlaySupport(OverlaySurfaceCandidateList* surfaces);
+
+  // Register `receive_callback` to be called with the latest
+  // HardwareCapbalitites, whenever displays are configured.
+  // `receive_callback` may be called once after OverlayCandidatesOzone is
+  // destroyed if there is an in-flight callback, so it should be bound with a
+  // WeakPtr.
+  virtual void ObserveHardwareCapabilities(
+      ui::HardwareCapabilitiesCallback receive_callback);
+
+  // This should be invoked during overlay processing to indicate if there are
+  // any candidates for this processor that have an overlay requirement.
+  virtual void RegisterOverlayRequirement(bool requires_overlay) {}
+
+  // Invoked on each swap completion. |swap_result| is the result of the last
+  // swap.
+  virtual void OnSwapBuffersComplete(gfx::SwapResult swap_result) {}
+
+  // Invoked once the overlay processor receives hardware capabilities. This
+  // allows to set supported shared image formats in the overlay manager, which
+  // can make a decision whether an overlay candidate is overlay-capable as
+  // early as possible.
+  virtual void SetSupportedSharedImageFormats(
+      base::flat_set<viz::SharedImageFormat> supported_formats) {}
+
+  // Notifies what overlay candidates were actually promoted as overlays.
+  // Can be empty.
+  virtual void NotifyOverlayPromotion(
+      std::vector<gfx::OverlayType> promoted_overlay_types) {}
 
   virtual ~OverlayCandidatesOzone();
 };

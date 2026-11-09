@@ -13,8 +13,7 @@ The install engine is a wrapper around Play Core's
 [split install API](https://developer.android.com/guide/app-bundle/playcore)
 that performs extra setup such as
 [SplitCompat](https://developer.android.com/guide/app-bundle/playcore#access_downloaded_modules),
-collects metrics and provides
-[fake install](android/java/src/org/chromium/components/module_installer/engine/FakeEngine.java).
+and collects metrics.
 You can install a module by name with the following code snippet:
 
 ```java
@@ -37,8 +36,9 @@ building blocks:
 
 * [`@ModuleInterface`](android/java/src/org/chromium/components/module_installer/builder/ModuleInterface.java)
   to annotate the entry point of your module. Using this with the
-  [`module_interface_processor`](android/BUILD.gn) will create a module class
-  such as `FooModule` that lets you install and load a module. See
+  [`module_interface_processor`](android/module_interface_processor.gni)
+  template will create a module class such as `FooModule` that lets you install
+  and load a module. See
   [`Module`](android/java/src/org/chromium/components/module_installer/builder/Module.java)
   for its interface.
 

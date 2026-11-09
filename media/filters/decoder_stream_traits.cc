@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/audio_decoder_config.h"
@@ -46,10 +46,18 @@ void DecoderStreamTraits<DemuxerStream::AUDIO>::SetIsDecryptingDemuxerStream(
   stats_.audio_pipeline_info.has_decrypting_demuxer_stream = is_dds;
 }
 
+void DecoderStreamTraits<DemuxerStream::AUDIO>::SetEncryptionType(
+    EncryptionType encryption_type) {
+  stats_.audio_pipeline_info.encryption_type = encryption_type;
+}
+
 DecoderStreamTraits<DemuxerStream::AUDIO>::DecoderStreamTraits(
     MediaLog* media_log,
-    ChannelLayout initial_hw_layout)
-    : media_log_(media_log), initial_hw_layout_(initial_hw_layout) {
+    ChannelLayoutConfig initial_hw_layout,
+    SampleFormat initial_hw_sample_format)
+    : media_log_(MediaLog::CloneSafely(media_log)),
+      initial_hw_layout_(initial_hw_layout),
+      initial_hw_sample_format_(initial_hw_sample_format) {
   weak_this_ = weak_factory_.GetWeakPtr();
 }
 
@@ -59,6 +67,7 @@ DecoderStreamTraits<DemuxerStream::AUDIO>::GetDecoderConfig(
   auto config = stream->audio_decoder_config();
   // Demuxer is not aware of hw layout, so we set it here.
   config.set_target_output_channel_layout(initial_hw_layout_);
+  config.set_target_output_sample_format(initial_hw_sample_format_);
   return config;
 }
 
@@ -97,7 +106,7 @@ void DecoderStreamTraits<DemuxerStream::AUDIO>::InitializeDecoder(
 void DecoderStreamTraits<DemuxerStream::AUDIO>::OnDecoderInitialized(
     DecoderType* decoder,
     InitCB cb,
-    Status result) {
+    DecoderStatus result) {
   if (result.is_ok())
     stats_.audio_pipeline_info.decoder_type = decoder->GetDecoderType();
   std::move(cb).Run(result);
@@ -109,7 +118,7 @@ void DecoderStreamTraits<DemuxerStream::AUDIO>::OnStreamReset(
   // Stream is likely being seeked to a new timestamp, so make new validator to
   // build new timestamp expectations.
   audio_ts_validator_ = std::make_unique<AudioTimestampValidator>(
-      stream->audio_decoder_config(), media_log_);
+      stream->audio_decoder_config(), media_log_.get());
 }
 
 void DecoderStreamTraits<DemuxerStream::AUDIO>::OnDecode(
@@ -128,7 +137,7 @@ void DecoderStreamTraits<DemuxerStream::AUDIO>::OnConfigChanged(
   // Reset validator with the latest config. Also ensures that we do not attempt
   // to match timestamps across config boundaries.
   audio_ts_validator_ =
-      std::make_unique<AudioTimestampValidator>(config, media_log_);
+      std::make_unique<AudioTimestampValidator>(config, media_log_.get());
 }
 
 void DecoderStreamTraits<DemuxerStream::AUDIO>::OnOutputReady(
@@ -163,6 +172,11 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::SetIsDecryptingDemuxerStream(
   stats_.video_pipeline_info.has_decrypting_demuxer_stream = is_dds;
 }
 
+void DecoderStreamTraits<DemuxerStream::VIDEO>::SetEncryptionType(
+    EncryptionType encryption_type) {
+  stats_.video_pipeline_info.encryption_type = encryption_type;
+}
+
 DecoderStreamTraits<DemuxerStream::VIDEO>::DecoderStreamTraits(
     MediaLog* media_log)
     // Randomly selected number of samples to keep.
@@ -181,9 +195,8 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::ReportStatistics(
     int bytes_decoded) {
   stats_.video_bytes_decoded = bytes_decoded;
 
-  if (keyframe_distance_average_.count()) {
-    stats_.video_keyframe_distance_average =
-        keyframe_distance_average_.Average();
+  if (keyframe_distance_average_.Count()) {
+    stats_.video_keyframe_distance_average = keyframe_distance_average_.Mean();
   } else {
     // Before we have enough keyframes to calculate the average distance, we
     // will assume the average keyframe distance is infinitely large.
@@ -217,7 +230,7 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::InitializeDecoder(
 void DecoderStreamTraits<DemuxerStream::VIDEO>::OnDecoderInitialized(
     DecoderType* decoder,
     InitCB cb,
-    Status result) {
+    DecoderStatus result) {
   if (result.is_ok()) {
     stats_.video_pipeline_info.decoder_type = decoder->GetDecoderType();
     DVLOG(2) << stats_.video_pipeline_info.decoder_type;
@@ -242,9 +255,10 @@ void DecoderStreamTraits<DemuxerStream::VIDEO>::OnDecode(
   }
 
   frame_metadata_[buffer.timestamp()] = {
-      buffer.discard_padding().first == kInfiniteDuration,  // should_drop
-      buffer.duration(),                                    // duration
-      base::TimeTicks::Now(),                               // decode_begin_time
+      buffer.discard_padding().has_value() &&
+          buffer.discard_padding()->first == kInfiniteDuration,  // should_drop
+      buffer.duration(),                                         // duration
+      base::TimeTicks::Now(),  // decode_begin_time
   };
 
   if (!buffer.is_key_frame())
@@ -295,7 +309,9 @@ PostDecodeAction DecoderStreamTraits<DemuxerStream::VIDEO>::OnDecodeDone(
 
 void DecoderStreamTraits<DemuxerStream::VIDEO>::OnOutputReady(
     OutputType* buffer) {
-  buffer->metadata().transformation = transform_;
+  if (!buffer->metadata().transformation.has_value()) {
+    buffer->metadata().transformation = transform_;
+  }
 
   if (!buffer->metadata().decode_begin_time.has_value())
     return;

@@ -1,26 +1,28 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/thumbnail/generator/android/thumbnail_media_parser_impl.h"
 
-#include "base/bind.h"
+#include <tuple>
+
 #include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/task/post_task.h"
+#include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "cc/paint/skia_paint_canvas.h"
-#include "chrome/browser/thumbnail/generator/android/local_media_data_source_factory.h"
+#include "components/media_gallery_util/local_media_data_source_factory.h"
 #include "content/public/browser/android/gpu_video_accelerator_factories_provider.h"
 #include "content/public/browser/media_service.h"
 #include "media/base/overlay_info.h"
 #include "media/base/video_thumbnail_decoder.h"
+#include "media/gfx/paint_canvas_video_renderer.h"
 #include "media/mojo/clients/mojo_video_decoder.h"
 #include "media/mojo/mojom/media_service.mojom.h"
-#include "media/renderers/paint_canvas_video_renderer.h"
 #include "media/video/gpu_video_accelerator_factories.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
@@ -29,7 +31,7 @@
 namespace {
 
 // The maximum duration to parse media file.
-const base::TimeDelta kTimeOut = base::TimeDelta::FromSeconds(8);
+const base::TimeDelta kTimeOut = base::Seconds(8);
 
 // Returns if the mime type is video or audio.
 bool IsSupportedMediaMimeType(const std::string& mime_type) {
@@ -39,18 +41,10 @@ bool IsSupportedMediaMimeType(const std::string& mime_type) {
                           base::CompareCase::INSENSITIVE_ASCII);
 }
 
-void OnRequestOverlayInfo(bool decoder_requires_restart_for_overlay,
-                          media::ProvideOverlayInfoCB overlay_info_cb) {
+void OnRequestOverlayInfo(media::ProvideOverlayInfoCB overlay_info_cb) {
   // No android overlay associated with video thumbnail.
   if (overlay_info_cb)
     std::move(overlay_info_cb).Run(media::OverlayInfo());
-}
-
-int64_t GetFileSize(const base::FilePath& file_path) {
-  int64_t size = 0;
-  if (!base::GetFileSize(file_path, &size))
-    return -1;
-  return size;
 }
 
 }  // namespace
@@ -81,20 +75,20 @@ void ThumbnailMediaParserImpl::Start(ParseCompleteCB parse_complete_cb) {
   }
 
   // Get the size of the file if needed.
-  base::PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&GetFileSize, file_path_),
+  file_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::GetFileSizeCallback(file_path_),
       base::BindOnce(&ThumbnailMediaParserImpl::OnReadFileSize,
                      weak_factory_.GetWeakPtr()));
 }
 
-void ThumbnailMediaParserImpl::OnReadFileSize(int64_t file_size) {
-  if (file_size < 0) {
+void ThumbnailMediaParserImpl::OnReadFileSize(
+    std::optional<int64_t> file_size) {
+  if (!file_size.has_value()) {
     OnError(MediaParserEvent::kReadFileError);
     return;
   }
 
-  size_ = file_size;
+  size_ = file_size.value();
   RetrieveMediaParser();
 }
 
@@ -128,7 +122,7 @@ void ThumbnailMediaParserImpl::OnMediaMetadataParsed(
     return;
   }
   metadata_ = std::move(metadata);
-  DCHECK(metadata_);
+  CHECK(metadata_, base::NotFatalUntil::M163);
   RecordMediaMetadataEvent(MediaMetadataEvent::kMetadataComplete);
 
   // For audio file, we only need metadata and poster.
@@ -138,11 +132,12 @@ void ThumbnailMediaParserImpl::OnMediaMetadataParsed(
     return;
   }
 
-  DCHECK(base::StartsWith(mime_type_, "video/",
-                          base::CompareCase::INSENSITIVE_ASCII));
+  CHECK(base::StartsWith(mime_type_, "video/",
+                         base::CompareCase::INSENSITIVE_ASCII),
+        base::NotFatalUntil::M163);
 
   // Start to retrieve video thumbnail.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&ThumbnailMediaParserImpl::RetrieveEncodedVideoFrame,
                      weak_factory_.GetWeakPtr()));
@@ -167,23 +162,20 @@ void ThumbnailMediaParserImpl::RetrieveEncodedVideoFrame() {
 }
 
 void ThumbnailMediaParserImpl::OnVideoFrameRetrieved(
-    bool success,
-    chrome::mojom::VideoFrameDataPtr video_frame_data,
-    const absl::optional<media::VideoDecoderConfig>& config) {
-  if (!success) {
+    chrome::mojom::ExtractVideoFrameResultPtr result) {
+  if (!result) {
     RecordVideoThumbnailEvent(VideoThumbnailEvent::kVideoFrameExtractionFailed);
     OnError(MediaParserEvent::kVideoThumbnailFailed);
     return;
   }
 
-  video_frame_data_ = std::move(video_frame_data);
-  DCHECK(config.has_value());
-  config_ = config.value();
+  video_frame_data_ = std::move(result->frame_data);
+  config_ = result->config;
 
   // For vp8, vp9 codec, we directly do software decoding in utility process.
   // Render now.
   if (video_frame_data_->which() ==
-      chrome::mojom::VideoFrameData::Tag::DECODED_FRAME) {
+      chrome::mojom::VideoFrameData::Tag::kDecodedFrame) {
     decode_done_ = true;
     RenderVideoFrame(std::move(video_frame_data_->get_decoded_frame()));
     return;
@@ -211,14 +203,18 @@ void ThumbnailMediaParserImpl::OnGpuVideoAcceleratorFactoriesReady(
 
 void ThumbnailMediaParserImpl::DecodeVideoFrame() {
   mojo::PendingRemote<media::mojom::VideoDecoder> video_decoder_remote;
+
+  // Out-of-process video decoding is not intended for Android, so we don't
+  // provide a valid |dst_video_decoder|.
   GetMediaInterfaceFactory()->CreateVideoDecoder(
-      video_decoder_remote.InitWithNewPipeAndPassReceiver());
+      video_decoder_remote.InitWithNewPipeAndPassReceiver(),
+      /*dst_video_decoder=*/{});
 
   // Build and config the decoder.
-  DCHECK(gpu_factories_);
+  CHECK(gpu_factories_, base::NotFatalUntil::M163);
   auto mojo_decoder = std::make_unique<media::MojoVideoDecoder>(
-      base::ThreadTaskRunnerHandle::Get(), gpu_factories_.get(), this,
-      std::move(video_decoder_remote),
+      base::SingleThreadTaskRunner::GetCurrentDefault(), gpu_factories_.get(),
+      this, std::move(video_decoder_remote),
       base::BindRepeating(&OnRequestOverlayInfo), gfx::ColorSpace());
 
   decoder_ = std::make_unique<media::VideoThumbnailDecoder>(
@@ -238,7 +234,7 @@ void ThumbnailMediaParserImpl::OnVideoFrameDecoded(
     return;
   }
 
-  DCHECK(frame->HasTextures());
+  CHECK(frame->HasSharedImage(), base::NotFatalUntil::M163);
   decode_done_ = true;
 
   RenderVideoFrame(std::move(frame));
@@ -269,7 +265,7 @@ ThumbnailMediaParserImpl::GetMediaInterfaceFactory() {
     // ThumbnailMediaParser does not use them, but the Mojo argument is
     // currently marked as required so pass a remote but drop the other end.
     mojo::PendingRemote<media::mojom::FrameInterfaceFactory> interfaces;
-    ignore_result(interfaces.InitWithNewPipeAndPassReceiver());
+    std::ignore = interfaces.InitWithNewPipeAndPassReceiver();
     content::GetMediaService().CreateInterfaceFactory(
         media_interface_factory_.BindNewPipeAndPassReceiver(),
         std::move(interfaces));
@@ -287,24 +283,29 @@ void ThumbnailMediaParserImpl::OnDecoderConnectionError() {
 
 void ThumbnailMediaParserImpl::OnMediaDataReady(
     chrome::mojom::MediaDataSource::ReadCallback callback,
-    std::unique_ptr<std::string> data) {
+    std::string data) {
   // TODO(xingliu): Change media_parser.mojom to move the data instead of copy.
-  if (media_parser())
-    std::move(callback).Run(std::vector<uint8_t>(data->begin(), data->end()));
+  if (media_parser()) {
+    std::move(callback).Run(std::vector<uint8_t>(data.begin(), data.end()));
+  }
 }
 
 void ThumbnailMediaParserImpl::NotifyComplete(SkBitmap bitmap) {
-  DCHECK(metadata_);
-  DCHECK(parse_complete_cb_);
+  CHECK(metadata_, base::NotFatalUntil::M163);
+  CHECK(parse_complete_cb_, base::NotFatalUntil::M163);
   RecordMediaParserEvent(MediaParserEvent::kSuccess);
-  std::move(parse_complete_cb_)
-      .Run(true, std::move(metadata_), std::move(bitmap));
+  if (parse_complete_cb_) {
+    std::move(parse_complete_cb_)
+        .Run(true, std::move(metadata_), std::move(bitmap));
+  }
 }
 
 void ThumbnailMediaParserImpl::OnError(MediaParserEvent event) {
-  DCHECK(parse_complete_cb_);
+  CHECK(parse_complete_cb_, base::NotFatalUntil::M163);
   RecordMediaParserEvent(MediaParserEvent::kFailure);
   RecordMediaParserEvent(event);
-  std::move(parse_complete_cb_)
-      .Run(false, chrome::mojom::MediaMetadata::New(), SkBitmap());
+  if (parse_complete_cb_) {
+    std::move(parse_complete_cb_)
+        .Run(false, chrome::mojom::MediaMetadata::New(), SkBitmap());
+  }
 }

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define IOS_WEB_COMMON_CRW_VIEWPORT_ADJUSTMENT_H_
 
 #import <UIKit/UIKit.h>
+
+#import "ios/web/common/crw_web_view_resizing_type.h"
 
 // Protocol used to update a page's viewport when part of the web view is
 // covered by browser UI (e.g. toolbars).
@@ -15,6 +17,10 @@
 // The viewport's affected viewport edges that are affected by the web view's
 // safe area insets.
 @property(nonatomic, readonly) UIRectEdge viewportEdgesAffectedBySafeArea;
+
+// The preferred resizing strategy for the web view. This is determined by
+// CRWWebController based on the content of the web page.
+@property(nonatomic, assign) WebViewResizingType webViewResizingType;
 
 // Updates maximum and minimum viewport insets for the wrapper.
 - (void)updateMinViewportInsets:(UIEdgeInsets)minInsets

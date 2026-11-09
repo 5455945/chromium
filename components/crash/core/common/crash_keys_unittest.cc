@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include "base/compiler_specific.h"
 #include "base/debug/crash_logging.h"
 #include "base/format_macros.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "components/crash/core/common/crash_key.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -110,4 +110,105 @@ TEST_F(CrashKeysTest, FilterFlags) {
     EXPECT_EQ(switch_value, GetCrashKeyValue(switch_name))
         << "switch_name is " << switch_name;
   }
+}
+
+// Test that command line features are split into individual crash keys, and
+// cleared when re-set with fewer features.
+TEST_F(CrashKeysTest, Features) {
+  {
+    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+    command_line.AppendSwitchASCII("enable-features",
+                                   "FeatureOne,FeatureTwo<Trial");
+    command_line.AppendSwitchASCII("disable-features", "FeatureThree");
+    crash_keys::SetFeaturesFromCommandLine(command_line);
+
+    EXPECT_EQ("FeatureOne", GetCrashKeyValue("commandline-enabled-feature-1"));
+    EXPECT_EQ("FeatureTwo<Trial",
+              GetCrashKeyValue("commandline-enabled-feature-2"));
+    EXPECT_TRUE(GetCrashKeyValue("commandline-enabled-feature-3").empty());
+
+    EXPECT_EQ("FeatureThree",
+              GetCrashKeyValue("commandline-disabled-feature-1"));
+    EXPECT_TRUE(GetCrashKeyValue("commandline-disabled-feature-2").empty());
+  }
+
+  // Set fewer features to ensure old keys are cleared.
+  {
+    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+    command_line.AppendSwitchASCII("enable-features", "OnlyOne");
+    crash_keys::SetFeaturesFromCommandLine(command_line);
+
+    EXPECT_EQ("OnlyOne", GetCrashKeyValue("commandline-enabled-feature-1"));
+    EXPECT_TRUE(GetCrashKeyValue("commandline-enabled-feature-2").empty());
+    EXPECT_TRUE(GetCrashKeyValue("commandline-disabled-feature-1").empty());
+  }
+
+  // ResetCommandLineForTesting clears feature crash keys as well.
+  {
+    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+    command_line.AppendSwitchASCII("enable-features", "OnlyOne");
+    command_line.AppendSwitchASCII("disable-features", "DisabledOne");
+    crash_keys::SetFeaturesFromCommandLine(command_line);
+    EXPECT_EQ("OnlyOne", GetCrashKeyValue("commandline-enabled-feature-1"));
+    EXPECT_EQ("DisabledOne",
+              GetCrashKeyValue("commandline-disabled-feature-1"));
+
+    crash_keys::ResetCommandLineForTesting();
+    EXPECT_TRUE(GetCrashKeyValue("commandline-enabled-feature-1").empty());
+    EXPECT_TRUE(GetCrashKeyValue("commandline-disabled-feature-1").empty());
+  }
+}
+
+// Test default boring switch filter.
+TEST_F(CrashKeysTest, DefaultBoringSwitch) {
+  EXPECT_TRUE(crash_keys::IsDefaultBoringSwitch("--enable-features=Foo,Bar"));
+  EXPECT_TRUE(crash_keys::IsDefaultBoringSwitch("--enable-features"));
+  EXPECT_TRUE(crash_keys::IsDefaultBoringSwitch("--disable-features=Baz"));
+  EXPECT_TRUE(crash_keys::IsDefaultBoringSwitch("--disable-features"));
+  EXPECT_TRUE(crash_keys::IsDefaultBoringSwitch("--flag-switches-begin"));
+  EXPECT_TRUE(crash_keys::IsDefaultBoringSwitch("--flag-switches-end"));
+
+  EXPECT_FALSE(crash_keys::IsDefaultBoringSwitch("--enable-features-foo"));
+  EXPECT_FALSE(crash_keys::IsDefaultBoringSwitch("--not-boring"));
+  EXPECT_FALSE(crash_keys::IsDefaultBoringSwitch("not-a-switch"));
+  EXPECT_FALSE(crash_keys::IsDefaultBoringSwitch("--"));
+}
+
+TEST_F(CrashKeysTest, PrinterInfoReset) {
+  // After ScopedPrinterInfo goes out of scope, printer keys should be reset.
+  {
+    const std::vector<std::string> kPrinterInfoFull{"1", "2", "3", "4"};
+    crash_keys::ScopedPrinterInfo keys("dummy-printer", kPrinterInfoFull);
+    EXPECT_EQ(GetCrashKeyValue("prn-info-1"), "1");
+    EXPECT_EQ(GetCrashKeyValue("prn-info-2"), "2");
+    EXPECT_EQ(GetCrashKeyValue("prn-info-3"), "3");
+    EXPECT_EQ(GetCrashKeyValue("prn-info-4"), "4");
+  }
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-1").empty());
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-2").empty());
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-3").empty());
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-4").empty());
+}
+
+TEST_F(CrashKeysTest, PrinterInfoContainsSemicolon) {
+  // Provided data containing semicolons does not get split between keys.
+  constexpr char kWithoutSemicolon[] = "printer name";
+  constexpr char kWithSemicolon[] = "CUPS version 1.2; OS version 3.4";
+  const std::vector<std::string> kPrinterInfo{kWithoutSemicolon,
+                                              kWithSemicolon};
+  crash_keys::ScopedPrinterInfo keys("dummy-printer", kPrinterInfo);
+  EXPECT_EQ(GetCrashKeyValue("prn-info-1"), kWithoutSemicolon);
+  EXPECT_EQ(GetCrashKeyValue("prn-info-2"), kWithSemicolon);
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-3").empty());
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-4").empty());
+}
+
+TEST_F(CrashKeysTest, PrinterInfoNoData) {
+  // Provided data has no entries, so printer name is used for one key.
+  constexpr char kPrinterName[] = "dummy-printer";
+  crash_keys::ScopedPrinterInfo keys(kPrinterName, std::vector<std::string>());
+  EXPECT_EQ(GetCrashKeyValue("prn-info-1"), kPrinterName);
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-2").empty());
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-3").empty());
+  EXPECT_TRUE(GetCrashKeyValue("prn-info-4").empty());
 }

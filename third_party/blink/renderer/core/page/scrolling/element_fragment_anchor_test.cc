@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/css/css_style_declaration.h"
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -30,6 +32,7 @@ class ElementFragmentAnchorTest : public SimTest {
     SimTest::SetUp();
 
     // Focus handlers aren't run unless the page is focused.
+    GetDocument().GetPage()->GetFocusController().SetActive(true);
     GetDocument().GetPage()->GetFocusController().SetFocused(true);
 
     WebView().MainFrameViewWidget()->Resize(gfx::Size(800, 600));
@@ -73,8 +76,7 @@ TEST_F(ElementFragmentAnchorTest, FocusHandlerRunBeforeRaf) {
   // Click on the anchor element. This will cause a synchronous same-document
   // navigation. The fragment shouldn't activate yet as parsing will be blocked
   // due to the unloaded stylesheet.
-  auto* anchor =
-      To<HTMLAnchorElement>(GetDocument().getElementById("anchorlink"));
+  auto* anchor = To<HTMLAnchorElement>(GetElementById("anchorlink"));
   anchor->click();
   ASSERT_EQ(GetDocument().body(), GetDocument().ActiveElement())
       << "Active element changed while rendering is blocked";
@@ -85,15 +87,14 @@ TEST_F(ElementFragmentAnchorTest, FocusHandlerRunBeforeRaf) {
 
   // Now that the document has fully parsed the anchor should invoke at this
   // point.
-  ASSERT_EQ(GetDocument().getElementById("bottom"),
-            GetDocument().ActiveElement());
+  ASSERT_EQ(GetElementById("bottom"), GetDocument().ActiveElement());
 
   // The background color shouldn't yet be updated.
   ASSERT_EQ(GetDocument()
                 .body()
                 ->GetLayoutObject()
                 ->Style()
-                ->VisitedDependentColor(GetCSSPropertyBackgroundColor())
+                .VisitedDependentColor(GetCSSPropertyBackgroundColor())
                 .NameForLayoutTreeAsText(),
             Color(255, 0, 0).NameForLayoutTreeAsText());
 
@@ -105,7 +106,7 @@ TEST_F(ElementFragmentAnchorTest, FocusHandlerRunBeforeRaf) {
                 .body()
                 ->GetLayoutObject()
                 ->Style()
-                ->VisitedDependentColor(GetCSSPropertyBackgroundColor())
+                .VisitedDependentColor(GetCSSPropertyBackgroundColor())
                 .NameForLayoutTreeAsText(),
             Color(0, 255, 0).NameForLayoutTreeAsText());
 }
@@ -143,15 +144,16 @@ TEST_F(ElementFragmentAnchorTest, IframeFragmentNoLayoutUntilLoad) {
   Compositor().BeginFrame();
 
   HTMLFrameOwnerElement* iframe =
-      To<HTMLFrameOwnerElement>(GetDocument().getElementById("child"));
+      To<HTMLFrameOwnerElement>(GetElementById("child"));
   ScrollableArea* child_viewport =
       iframe->contentDocument()->View()->LayoutViewport();
-  Element* fragment = iframe->contentDocument()->getElementById("fragment");
+  Element* fragment =
+      iframe->contentDocument()->getElementById(AtomicString("fragment"));
 
-  IntRect fragment_rect_in_frame(
-      fragment->GetLayoutObject()->AbsoluteBoundingBoxRect());
-  IntRect viewport_rect(IntPoint(),
-                        child_viewport->VisibleContentRect().Size());
+  gfx::Rect fragment_rect_in_frame =
+      fragment->GetLayoutObject()->AbsoluteBoundingBoxRect();
+  gfx::Rect viewport_rect(
+      child_viewport->VisibleContentRect(kExcludeScrollbars).size());
 
   EXPECT_TRUE(viewport_rect.Contains(fragment_rect_in_frame))
       << "Fragment element at [" << fragment_rect_in_frame.ToString()
@@ -200,19 +202,20 @@ TEST_F(ElementFragmentAnchorTest, IframeFragmentDirtyLayoutAfterLoad) {
     )HTML");
 
   HTMLFrameOwnerElement* iframe =
-      To<HTMLFrameOwnerElement>(GetDocument().getElementById("child"));
-  iframe->setAttribute(html_names::kStyleAttr, "width:100px");
+      To<HTMLFrameOwnerElement>(GetElementById("child"));
+  iframe->setAttribute(html_names::kStyleAttr, AtomicString("width:100px"));
 
   Compositor().BeginFrame();
 
   ScrollableArea* child_viewport =
       iframe->contentDocument()->View()->LayoutViewport();
-  Element* fragment = iframe->contentDocument()->getElementById("fragment");
+  Element* fragment =
+      iframe->contentDocument()->getElementById(AtomicString("fragment"));
 
-  IntRect fragment_rect_in_frame(
-      fragment->GetLayoutObject()->AbsoluteBoundingBoxRect());
-  IntRect viewport_rect(IntPoint(),
-                        child_viewport->VisibleContentRect().Size());
+  gfx::Rect fragment_rect_in_frame =
+      fragment->GetLayoutObject()->AbsoluteBoundingBoxRect();
+  gfx::Rect viewport_rect(
+      child_viewport->VisibleContentRect(kExcludeScrollbars).size());
 
   EXPECT_TRUE(viewport_rect.Contains(fragment_rect_in_frame))
       << "Fragment element at [" << fragment_rect_in_frame.ToString()
@@ -248,7 +251,7 @@ TEST_F(ElementFragmentAnchorTest, AnchorRemovedBeforeBeginFrameCrash) {
                   ->anchor_node_.Get());
 
   // Remove the fragment anchor from the DOM and perform GC.
-  GetDocument().getElementById("anchor")->remove();
+  GetElementById("anchor")->remove();
   ThreadState::Current()->CollectAllGarbageForTesting();
 
   EXPECT_TRUE(GetDocument().View()->GetFragmentAnchor());
@@ -265,6 +268,10 @@ TEST_F(ElementFragmentAnchorTest, AnchorRemovedBeforeBeginFrameCrash) {
   // When the document finishes loading, it does a synchronous layout update,
   // which should clear LocalFrameView::fragment_anchor_ ...
   EXPECT_FALSE(GetDocument().View()->GetFragmentAnchor());
+
+  // Allow any enqueued animation frame tasks to run
+  // so their resources can be cleaned up.
+  Compositor().BeginFrame();
 
   // Non-crash is considered a pass.
 }
@@ -295,7 +302,7 @@ TEST_F(ElementFragmentAnchorTest, SVGDocumentDoesntCreateFragment) {
       </svg>
     )SVG");
 
-  auto* img = To<HTMLImageElement>(GetDocument().getElementById("image"));
+  auto* img = To<HTMLImageElement>(GetElementById("image"));
   auto* svg = To<SVGImage>(img->CachedImage()->GetImage());
   auto* view =
       DynamicTo<LocalFrameView>(svg->GetPageForTesting()->MainFrame()->View());
@@ -335,12 +342,13 @@ TEST_F(ElementFragmentAnchorTest, HasURLEncodedCharacters) {
   Compositor().BeginFrame();
 
   ScrollableArea* viewport = GetDocument().View()->LayoutViewport();
-  Element* fragment = GetDocument().getElementById(u"\u00F6");
+  Element* fragment = GetDocument().getElementById(AtomicString(u"\u00F6"));
   ASSERT_NE(nullptr, fragment);
 
-  IntRect fragment_rect_in_frame(
-      fragment->GetLayoutObject()->AbsoluteBoundingBoxRect());
-  IntRect viewport_rect(IntPoint(), viewport->VisibleContentRect().Size());
+  gfx::Rect fragment_rect_in_frame =
+      fragment->GetLayoutObject()->AbsoluteBoundingBoxRect();
+  gfx::Rect viewport_rect(
+      viewport->VisibleContentRect(kExcludeScrollbars).size());
 
   EXPECT_TRUE(viewport_rect.Contains(fragment_rect_in_frame))
       << "Fragment element at [" << fragment_rect_in_frame.ToString()

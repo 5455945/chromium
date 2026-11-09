@@ -1,18 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/browser_content_setting_bubble_model_delegate.h"
 
+#include "base/check_deref.h"
 #include "chrome/browser/content_settings/chrome_content_settings_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/tab_dialogs.h"
-#include "chrome/common/url_constants.h"
-#include "components/google/core/common/google_util.h"
+#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
+#include "chrome/common/webui_url_constants.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
+#include "ui/base/page_transition_types.h"
 
+namespace {
 // The URL for when the user clicks "Learn more" on the mixed scripting page
 // icon bubble.
 constexpr char kInsecureScriptHelpUrl[] =
@@ -22,31 +24,47 @@ constexpr char kInsecureScriptHelpUrl[] =
 // permission prompt.
 constexpr char kNotificationsHelpUrl[] =
     "https://support.google.com/chrome/answer/3220216";
+}  // namespace
+
+DEFINE_USER_DATA(BrowserContentSettingBubbleModelDelegate);
+
+// static
+BrowserContentSettingBubbleModelDelegate*
+BrowserContentSettingBubbleModelDelegate::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
 
 BrowserContentSettingBubbleModelDelegate::
-    BrowserContentSettingBubbleModelDelegate(Browser* browser)
-    : browser_(browser) {}
+    BrowserContentSettingBubbleModelDelegate(BrowserWindowInterface* browser)
+    : scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this),
+      browser_(CHECK_DEREF(browser)) {}
 
 BrowserContentSettingBubbleModelDelegate::
-    ~BrowserContentSettingBubbleModelDelegate() {}
+    ~BrowserContentSettingBubbleModelDelegate() = default;
 
 void BrowserContentSettingBubbleModelDelegate::ShowCollectedCookiesDialog(
     content::WebContents* web_contents) {
-  TabDialogs::FromWebContents(web_contents)->ShowCollectedCookies();
+  PageSpecificSiteDataDialogController::CreateAndShowForWebContents(
+      web_contents);
 }
 
 void BrowserContentSettingBubbleModelDelegate::ShowMediaSettingsPage() {
   // Microphone and camera settings appear in the content settings menu right
   // next to each other, the microphone section is first.
-  chrome::ShowContentSettings(browser_, ContentSettingsType::MEDIASTREAM_MIC);
+  chrome::ShowContentSettings(&*browser_, ContentSettingsType::MEDIASTREAM_MIC);
 }
 
 void BrowserContentSettingBubbleModelDelegate::ShowContentSettingsPage(
     ContentSettingsType type) {
-  if (type == ContentSettingsType::PROTOCOL_HANDLERS)
-    chrome::ShowSettingsSubPage(browser_, chrome::kHandlerSettingsSubPage);
-  else
-    chrome::ShowContentSettingsExceptions(browser_, type);
+  BrowserWindowInterface* const browser = &*browser_;
+  if (type == ContentSettingsType::PROTOCOL_HANDLERS) {
+    chrome::ShowSettingsSubPage(browser, chrome::kHandlerSettingsSubPage);
+  } else if (type == ContentSettingsType::COOKIES) {
+    chrome::ShowSettingsSubPage(browser, chrome::kCookieSettingsSubPage);
+  } else {
+    chrome::ShowContentSettingsExceptions(browser, type);
+  }
 }
 
 void BrowserContentSettingBubbleModelDelegate::ShowLearnMorePage(
@@ -65,7 +83,6 @@ void BrowserContentSettingBubbleModelDelegate::ShowLearnMorePage(
     default:
       return;
   }
-  DCHECK(!learn_more_url.is_empty());
-  chrome::AddSelectedTabWithURL(browser_, learn_more_url,
+  chrome::AddSelectedTabWithURL(&*browser_, learn_more_url,
                                 ui::PAGE_TRANSITION_LINK);
 }

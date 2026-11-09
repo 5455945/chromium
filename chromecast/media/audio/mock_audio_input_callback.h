@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,8 @@ class MockAudioInputCallback
   ~MockAudioInputCallback() override;
 
   MOCK_METHOD3(OnData, void(const ::media::AudioBus*, base::TimeTicks, double));
-  MOCK_METHOD0(OnError, void());
+  MOCK_METHOD1(OnError,
+               void(::media::AudioInputStream::AudioInputCallback::Error));
 };
 
 inline MockAudioInputCallback::MockAudioInputCallback() = default;

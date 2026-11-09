@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@ extern const char kUseSyncSandboxFlagName[];
 extern const char kUseWalletSandboxFlagName[];
 extern const char kUseWalletSandboxFlagNameEnabled[];
 extern const char kUseWalletSandboxFlagNameDisabled[];
-}  // namespace
+}  // namespace ios_web_view
 
 class PrefService;
 

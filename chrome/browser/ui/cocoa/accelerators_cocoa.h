@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "ui/base/accelerators/accelerator.h"
 
 namespace base {
@@ -37,6 +36,9 @@ class AcceleratorsCocoa {
   typedef std::vector<ui::Accelerator> AcceleratorVector;
   typedef AcceleratorMap::const_iterator const_iterator;
 
+  AcceleratorsCocoa(const AcceleratorsCocoa&) = delete;
+  AcceleratorsCocoa& operator=(const AcceleratorsCocoa&) = delete;
+
   const_iterator const begin() { return accelerators_.begin(); }
   const_iterator const end() { return accelerators_.end(); }
 
@@ -46,18 +48,21 @@ class AcceleratorsCocoa {
   // Returns the singleton instance.
   static AcceleratorsCocoa* GetInstance();
 
+  // Informs AcceleratorsCocoa that it's constructing accelerators for a PWA.
+  static void CreateForPWA(bool flag);
+
  private:
   friend struct base::DefaultSingletonTraits<AcceleratorsCocoa>;
   FRIEND_TEST_ALL_PREFIXES(AcceleratorsCocoaBrowserTest,
                            MappingAcceleratorsInMainMenu);
+  FRIEND_TEST_ALL_PREFIXES(AcceleratorsCocoaBrowserTestRTL,
+                           HistoryAcceleratorsReversedForRTL);
 
   AcceleratorsCocoa();
   ~AcceleratorsCocoa();
 
   // Contains accelerators from both the app menu and the main menu.
   AcceleratorMap accelerators_;
-
-  DISALLOW_COPY_AND_ASSIGN(AcceleratorsCocoa);
 };
 
 #endif  // CHROME_BROWSER_UI_COCOA_ACCELERATORS_COCOA_H_

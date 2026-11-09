@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "chrome/browser/media/webrtc/webrtc_rtp_dump_writer.h"
 
@@ -30,9 +29,9 @@ static size_t g_ongoing_rtp_dumps = 0;
 void FireGenericDoneCallback(WebRtcRtpDumpHandler::GenericDoneCallback callback,
                              bool success,
                              const std::string& error_message) {
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), success, error_message));
 }
 
@@ -63,13 +62,13 @@ WebRtcRtpDumpHandler::~WebRtcRtpDumpHandler() {
   if (incoming_state_ != STATE_NONE && !incoming_dump_path_.empty()) {
     base::ThreadPool::PostTask(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(base::GetDeleteFileCallback(), incoming_dump_path_));
+        base::GetDeleteFileCallback(incoming_dump_path_));
   }
 
   if (outgoing_state_ != STATE_NONE && !outgoing_dump_path_.empty()) {
     base::ThreadPool::PostTask(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(base::GetDeleteFileCallback(), outgoing_dump_path_));
+        base::GetDeleteFileCallback(outgoing_dump_path_));
   }
 }
 
@@ -107,7 +106,8 @@ bool WebRtcRtpDumpHandler::StartDump(RtpDumpType type,
     static const char kSendDumpFilePrefix[] = "rtpdump_send_";
     static const size_t kMaxDumpSize = 5 * 1024 * 1024;  // 5MB
 
-    std::string dump_id = base::NumberToString(base::Time::Now().ToDoubleT());
+    std::string dump_id =
+        base::NumberToString(base::Time::Now().InSecondsFSinceUnixEpoch());
     incoming_dump_path_ =
         dump_dir_.AppendASCII(std::string(kRecvDumpFilePrefix) + dump_id)
             .AddExtension(FILE_PATH_LITERAL(".gz"));
@@ -177,7 +177,7 @@ bool WebRtcRtpDumpHandler::ReadyToRelease() const {
 
 WebRtcRtpDumpHandler::ReleasedDumps WebRtcRtpDumpHandler::ReleaseDumps() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_);
-  DCHECK(ReadyToRelease());
+  CHECK(ReadyToRelease(), base::NotFatalUntil::M161);
 
   base::FilePath incoming_dump, outgoing_dump;
 
@@ -197,8 +197,7 @@ WebRtcRtpDumpHandler::ReleasedDumps WebRtcRtpDumpHandler::ReleaseDumps() {
   return ReleasedDumps(incoming_dump, outgoing_dump);
 }
 
-void WebRtcRtpDumpHandler::OnRtpPacket(const uint8_t* packet_header,
-                                       size_t header_length,
+void WebRtcRtpDumpHandler::OnRtpPacket(base::span<const uint8_t> packet_header,
                                        size_t packet_length,
                                        bool incoming) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_);
@@ -208,13 +207,12 @@ void WebRtcRtpDumpHandler::OnRtpPacket(const uint8_t* packet_header,
     return;
   }
 
-  dump_writer_->WriteRtpPacket(
-      packet_header, header_length, packet_length, incoming);
+  dump_writer_->WriteRtpPacket(packet_header, packet_length, incoming);
 }
 
 void WebRtcRtpDumpHandler::StopOngoingDumps(base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   // No ongoing dumps, return directly.
   if ((incoming_state_ == STATE_NONE || incoming_state_ == STATE_STOPPED) &&
@@ -282,13 +280,13 @@ void WebRtcRtpDumpHandler::OnDumpEnded(base::OnceClosure callback,
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_);
 
   if (DumpTypeContainsIncoming(ended_type)) {
-    DCHECK_EQ(STATE_STOPPING, incoming_state_);
+    CHECK_EQ(STATE_STOPPING, incoming_state_, base::NotFatalUntil::M161);
     incoming_state_ = STATE_STOPPED;
 
     if (!incoming_success) {
       base::ThreadPool::PostTask(
           FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-          base::BindOnce(base::GetDeleteFileCallback(), incoming_dump_path_));
+          base::GetDeleteFileCallback(incoming_dump_path_));
 
       DVLOG(2) << "Deleted invalid incoming dump "
                << incoming_dump_path_.value();
@@ -297,13 +295,13 @@ void WebRtcRtpDumpHandler::OnDumpEnded(base::OnceClosure callback,
   }
 
   if (DumpTypeContainsOutgoing(ended_type)) {
-    DCHECK_EQ(STATE_STOPPING, outgoing_state_);
+    CHECK_EQ(STATE_STOPPING, outgoing_state_, base::NotFatalUntil::M161);
     outgoing_state_ = STATE_STOPPED;
 
     if (!outgoing_success) {
       base::ThreadPool::PostTask(
           FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-          base::BindOnce(base::GetDeleteFileCallback(), outgoing_dump_path_));
+          base::GetDeleteFileCallback(outgoing_dump_path_));
 
       DVLOG(2) << "Deleted invalid outgoing dump "
                << outgoing_dump_path_.value();

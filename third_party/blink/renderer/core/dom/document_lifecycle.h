@@ -32,13 +32,13 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_DOCUMENT_LIFECYCLE_H_
 
 #include "base/auto_reset.h"
+#include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-
-#if DCHECK_IS_ON()
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#endif
 
 namespace blink {
 
@@ -57,17 +57,9 @@ class CORE_EXPORT DocumentLifecycle {
     kInStyleRecalc,
     kStyleClean,
 
-    kInLayoutSubtreeChange,
-    kLayoutSubtreeChangeClean,
-
     kInPerformLayout,
     kAfterPerformLayout,
     kLayoutClean,
-
-    // In InAccessibility step, fire deferred accessibility events which
-    // require layout to be in a clean state.
-    kInAccessibility,
-    kAccessibilityClean,
 
     kInCompositingInputsUpdate,
     kCompositingInputsClean,
@@ -76,9 +68,6 @@ class CORE_EXPORT DocumentLifecycle {
     // Paint property trees are built and paint invalidations are issued.
     kInPrePaint,
     kPrePaintClean,
-
-    kInCompositingAssignmentsUpdate,
-    kCompositingAssignmentsClean,
 
     // In InPaint step, paint artifacts are generated and raster invalidations
     // are issued.
@@ -119,7 +108,8 @@ class CORE_EXPORT DocumentLifecycle {
     LifecycleState To() const { return to_; }
 
    private:
-    DeprecatedTransition* previous_;
+    raw_ptr<DeprecatedTransition, UnprotectedInRelease | DanglingUntriaged>
+        previous_;
     LifecycleState from_;
     LifecycleState to_;
   };
@@ -172,14 +162,15 @@ class CORE_EXPORT DocumentLifecycle {
    public:
     explicit PostponeTransitionScope(DocumentLifecycle& document_lifecycle)
         : document_lifecycle_(document_lifecycle) {
-      document_lifecycle_.SetLifecyclePostponed();
+      document_lifecycle_->SetLifecyclePostponed();
     }
     ~PostponeTransitionScope() {
-      document_lifecycle_.ResetLifecyclePostponed();
+      document_lifecycle_->ResetLifecyclePostponed();
     }
 
    private:
-    DocumentLifecycle& document_lifecycle_;
+    const raw_ref<DocumentLifecycle, UnprotectedInRelease | DanglingUntriaged>
+        document_lifecycle_;
   };
 
   class CheckNoTransitionScope {
@@ -203,7 +194,6 @@ class CORE_EXPORT DocumentLifecycle {
   bool StateAllowsTreeMutations() const;
   bool StateAllowsLayoutTreeMutations() const;
   bool StateAllowsDetach() const;
-  bool StateAllowsLayoutTreeNotifications() const;
 
   void AdvanceTo(LifecycleState);
   void EnsureStateAtMost(LifecycleState);
@@ -225,7 +215,7 @@ class CORE_EXPORT DocumentLifecycle {
   bool LifecyclePostponed() const { return life_cycle_postponed_; }
 
 #if DCHECK_IS_ON()
-  WTF::String ToString() const;
+  String ToString() const;
 #endif
  private:
   friend class PostponeTransitionScope;
@@ -249,25 +239,18 @@ inline bool DocumentLifecycle::StateAllowsTreeMutations() const {
   // TODO: We should not allow mutations in AfterPerformLayout
   // either, but we need to fix MediaList listeners and plugins first.
   return state_ != kInStyleRecalc && state_ != kInPerformLayout &&
-         state_ != kInCompositingAssignmentsUpdate &&
          state_ != kInCompositingInputsUpdate && state_ != kInPrePaint &&
          state_ != kInPaint;
 }
 
 inline bool DocumentLifecycle::StateAllowsLayoutTreeMutations() const {
-  return detach_count_ || state_ == kInStyleRecalc ||
-         state_ == kInLayoutSubtreeChange;
-}
-
-inline bool DocumentLifecycle::StateAllowsLayoutTreeNotifications() const {
-  return state_ == kInLayoutSubtreeChange;
+  return detach_count_ || state_ == kInStyleRecalc;
 }
 
 inline bool DocumentLifecycle::StateAllowsDetach() const {
   return state_ == kVisualUpdatePending || state_ == kInStyleRecalc ||
-         state_ == kStyleClean || state_ == kLayoutSubtreeChangeClean ||
-         state_ == kLayoutClean || state_ == kCompositingInputsClean ||
-         state_ == kCompositingAssignmentsClean || state_ == kPrePaintClean ||
+         state_ == kStyleClean || state_ == kLayoutClean ||
+         state_ == kCompositingInputsClean || state_ == kPrePaintClean ||
          state_ == kPaintClean || state_ == kStopping || state_ == kInactive;
 }
 

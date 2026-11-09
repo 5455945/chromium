@@ -1,105 +1,65 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_SYNC_BRIDGE_UTIL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_SYNC_BRIDGE_UTIL_H_
 
-#include <memory>
-#include <string>
+#include <algorithm>
+#include <functional>
+#include <utility>
+#include <vector>
 
-#include "components/sync/engine/entity_data.h"
-#include "components/sync/model/entity_change.h"
+#include "base/containers/to_vector.h"
 
 namespace autofill {
 
-struct AutofillOfferData;
-class AutofillProfile;
-class AutofillTable;
-class CreditCard;
-struct CreditCardCloudTokenData;
-struct PaymentsCustomerData;
+// Returns true if `old_data` and `new_data` contain different items, ignoring
+// the order of the items. Duplicates are taken into account, e.g. {a, a, b} and
+// {a, b, b} are different.
+//
+// Each item is first mapped with `old_proj` or `new_proj`, and the results are
+// sorted and compared using `comp`. Two items are considered equal if neither
+// is ordered before the other, i.e. `!comp(a, b) && !comp(b, a)`. Separate
+// projections allow comparing vectors of different element types, e.g.
+// `std::vector<std::unique_ptr<T>>` from the database with `std::vector<T>`
+// from sync. Examples:
+//
+//   // Items with comparison operators:
+//   AreAnyItemsDifferent(old_data, new_data);
+//
+//   // Items with a Compare() method, old items owned by std::unique_ptr:
+//   AreAnyItemsDifferent(
+//       old_data, new_data,
+//       [](const T& a, const T& b) { return a.Compare(b) < 0; },
+//       [](const std::unique_ptr<T>& item) -> const T& { return *item; });
+//
+//   // Protos, compared by their serialized representation:
+//   auto serialize = [](const Proto& p) { return p.SerializeAsString(); };
+//   AreAnyItemsDifferent(old_data, new_data, {}, serialize, serialize);
+template <class OldItem,
+          class NewItem,
+          class Comp = std::ranges::less,
+          class OldProj = std::identity,
+          class NewProj = std::identity>
+bool AreAnyItemsDifferent(const std::vector<OldItem>& old_data,
+                          const std::vector<NewItem>& new_data,
+                          Comp comp = {},
+                          OldProj old_proj = {},
+                          NewProj new_proj = {}) {
+  if (old_data.size() != new_data.size()) {
+    return true;
+  }
 
-// Returns the specified |id| encoded in / decoded from base 64.
-std::string GetBase64EncodedId(const std::string& id);
-std::string GetBase64DecodedId(const std::string& id);
-
-// Returns the storage key to be used for wallet metadata for the specified
-// wallet metadata |type| and |specifics_id|.
-std::string GetStorageKeyForWalletMetadataTypeAndSpecificsId(
-    sync_pb::WalletMetadataSpecifics::Type type,
-    const std::string& specifics_id);
-
-// Sets the fields of the |wallet_specifics| based on the the specified
-// |address|. If |enforce_utf8|, ids are encoded into UTF-8.
-void SetAutofillWalletSpecificsFromServerProfile(
-    const AutofillProfile& address,
-    sync_pb::AutofillWalletSpecifics* wallet_specifics,
-    bool enforce_utf8 = false);
-
-// Sets the fields of the |wallet_specifics| based on the the specified |card|.
-// If |enforce_utf8|, ids are encoded into UTF-8.
-void SetAutofillWalletSpecificsFromServerCard(
-    const CreditCard& card,
-    sync_pb::AutofillWalletSpecifics* wallet_specifics,
-    bool enforce_utf8 = false);
-
-// Sets the fields of the |wallet_specifics| based on the specified
-// |customer_data|.
-void SetAutofillWalletSpecificsFromPaymentsCustomerData(
-    const PaymentsCustomerData& customer_data,
-    sync_pb::AutofillWalletSpecifics* wallet_specifics);
-
-// Sets the field of the |wallet_specifics| based on the specified
-// |cloud_token_data|. If |enforce_utf8|, ids are encoded into UTF-8.
-void SetAutofillWalletSpecificsFromCreditCardCloudTokenData(
-    const CreditCardCloudTokenData& cloud_token_data,
-    sync_pb::AutofillWalletSpecifics* wallet_specifics,
-    bool enforce_utf8 = false);
-
-// Sets the fields of the |offer_specifics| based on the specified |offer_data|.
-void SetAutofillOfferSpecificsFromOfferData(
-    const AutofillOfferData& offer_data,
-    sync_pb::AutofillOfferSpecifics* offer_specifics);
-
-// Creates an AutofillOfferData from the specified |offer_specifics|.
-// |offer_specifics| must be valid (as per IsOfferSpecificsValid()).
-AutofillOfferData AutofillOfferDataFromOfferSpecifics(
-    const sync_pb::AutofillOfferSpecifics& offer_specifics);
-
-// Creates an AutofillProfile from the specified |address| specifics.
-AutofillProfile ProfileFromSpecifics(
-    const sync_pb::WalletPostalAddress& address);
-
-// TODO(sebsg): This should probably copy the converted state for the address
-// too.
-// Copies the metadata from the local cards (if present) to the corresponding
-// server cards so that they don't get overwritten. This is because the wallet
-// data does not include those. They are handled by the
-// AutofillWalletMetadataSyncBridge.
-void CopyRelevantWalletMetadataFromDisk(
-    const AutofillTable& table,
-    std::vector<CreditCard>* cards_from_server);
-
-// Populates the wallet datatypes from the sync data and uses the sync data to
-// link the card to its billing address. If |wallet_addresses| is a nullptr,
-// this function will not extract addresses.
-void PopulateWalletTypesFromSyncData(
-    const ::syncer::EntityChangeList& entity_data,
-    std::vector<CreditCard>* wallet_cards,
-    std::vector<AutofillProfile>* wallet_addresses,
-    std::vector<PaymentsCustomerData>* customer_data,
-    std::vector<CreditCardCloudTokenData>* cloud_token_data);
-
-// A helper function to compare two sets of data. Returns true if there is
-// any difference. It uses the Compare() of the Item class instead of comparison
-// operators and does not care about the order of items in the dataset.
-template <class Item>
-bool AreAnyItemsDifferent(const std::vector<std::unique_ptr<Item>>& old_data,
-                          const std::vector<Item>& new_data);
-
-// Returns whether the Wallet Offer |specifics| is valid data.
-bool IsOfferSpecificsValid(const sync_pb::AutofillOfferSpecifics specifics);
+  auto old_sorted = base::ToVector(old_data, std::move(old_proj));
+  auto new_sorted = base::ToVector(new_data, std::move(new_proj));
+  std::ranges::sort(old_sorted, comp);
+  std::ranges::sort(new_sorted, comp);
+  auto equivalent = [&comp](const auto& a, const auto& b) {
+    return !comp(a, b) && !comp(b, a);
+  };
+  return !std::ranges::equal(old_sorted, new_sorted, equivalent);
+}
 
 }  // namespace autofill
 

@@ -1,24 +1,32 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/test_location_bar_model.h"
 
 #include "base/strings/utf_string_conversions.h"
+#include "ui/base/ui_base_features.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
 #endif
 
-TestLocationBarModel::TestLocationBarModel()
-    : security_level_(security_state::NONE),
+TestLocationBarModel::TestLocationBarModel() {
 #if defined(TOOLKIT_VIEWS)
-      icon_(&omnibox::kHttpIcon),
+  icon_ = &(features::IsRoundedIconsEnabled() ? omnibox::kInfoIcon
+                                              : omnibox::kHttpOldIcon);
 #endif
-      should_display_url_(true) {
 }
 
-TestLocationBarModel::~TestLocationBarModel() {}
+TestLocationBarModel::TestLocationBarModel(ui::UnownedUserDataHost& host)
+    : LocationBarModel(host) {
+#if defined(TOOLKIT_VIEWS)
+  icon_ = &(features::IsRoundedIconsEnabled() ? omnibox::kInfoIcon
+                                              : omnibox::kHttpOldIcon);
+#endif
+}
+
+TestLocationBarModel::~TestLocationBarModel() = default;
 
 std::u16string TestLocationBarModel::GetFormattedFullURL() const {
   if (!formatted_full_url_)
@@ -38,13 +46,30 @@ GURL TestLocationBarModel::GetURL() const {
   return url_;
 }
 
+bool TestLocationBarModel::IsContextualTasksPage() const {
+  return is_contextual_tasks_page_;
+}
+
+GURL TestLocationBarModel::GetContextualTasksInnerFrameURL() const {
+  return GURL();
+}
+
 security_state::SecurityLevel TestLocationBarModel::GetSecurityLevel() const {
   return security_level_;
 }
 
+net::CertStatus TestLocationBarModel::GetCertStatus() const {
+  return cert_status_;
+}
+
 metrics::OmniboxEventProto::PageClassification
-TestLocationBarModel::GetPageClassification(OmniboxFocusSource focus_source) {
-  return metrics::OmniboxEventProto::OTHER;
+TestLocationBarModel::GetPageClassification(bool is_prefetch) const {
+  return page_classification_;
+}
+
+metrics::OmniboxEventProto::PageClassification
+TestLocationBarModel::GetOmniboxComposeboxPageClassification() const {
+  return page_classification_;
 }
 
 const gfx::VectorIcon& TestLocationBarModel::GetVectorIcon() const {
@@ -56,7 +81,7 @@ std::u16string TestLocationBarModel::GetSecureDisplayText() const {
 }
 
 std::u16string TestLocationBarModel::GetSecureAccessibilityText() const {
-  return std::u16string();
+  return secure_accessibility_text_;
 }
 
 bool TestLocationBarModel::ShouldDisplayURL() const {

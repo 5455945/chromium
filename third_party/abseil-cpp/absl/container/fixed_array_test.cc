@@ -16,21 +16,28 @@
 
 #include <stdio.h>
 
+#include <array>
+#include <cassert>
+#include <cstdint>
 #include <cstring>
+#include <forward_list>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <numeric>
 #include <scoped_allocator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "absl/base/config.h"
 #include "absl/base/internal/exception_testing.h"
+#include "absl/base/internal/iterator_traits_test_helper.h"
 #include "absl/base/options.h"
-#include "absl/container/internal/counting_allocator.h"
+#include "absl/container/internal/test_allocator.h"
 #include "absl/hash/hash_testing.h"
 #include "absl/memory/memory.h"
 
@@ -109,7 +116,7 @@ TEST(FixedArrayTest, CopyCtor) {
 TEST(FixedArrayTest, MoveCtor) {
   absl::FixedArray<std::unique_ptr<int>, 10> on_stack(5);
   for (int i = 0; i < 5; ++i) {
-    on_stack[i] = absl::make_unique<int>(i);
+    on_stack[i] = std::make_unique<int>(i);
   }
 
   absl::FixedArray<std::unique_ptr<int>, 10> stack_copy = std::move(on_stack);
@@ -118,7 +125,7 @@ TEST(FixedArrayTest, MoveCtor) {
 
   absl::FixedArray<std::unique_ptr<int>, 10> allocated(15);
   for (int i = 0; i < 15; ++i) {
-    allocated[i] = absl::make_unique<int>(i);
+    allocated[i] = std::make_unique<int>(i);
   }
 
   absl::FixedArray<std::unique_ptr<int>, 10> alloced_copy =
@@ -304,7 +311,7 @@ static void TestArrayOfArrays(int n) {
     using InnerArray = ConstructionTester[elements_per_inner_array];
     // Heap-allocate the FixedArray to avoid blowing the stack frame.
     auto array_ptr =
-        absl::make_unique<absl::FixedArray<InnerArray, inline_elements>>(n);
+        std::make_unique<absl::FixedArray<InnerArray, inline_elements>>(n);
     auto& array = *array_ptr;
 
     ASSERT_EQ(array.size(), n);
@@ -356,20 +363,20 @@ static void TestArrayOfArrays(int n) {
 
 TEST(IteratorConstructorTest, NonInline) {
   int const kInput[] = {2, 3, 5, 7, 11, 13, 17};
-  absl::FixedArray<int, ABSL_ARRAYSIZE(kInput) - 1> const fixed(
-      kInput, kInput + ABSL_ARRAYSIZE(kInput));
-  ASSERT_EQ(ABSL_ARRAYSIZE(kInput), fixed.size());
-  for (size_t i = 0; i < ABSL_ARRAYSIZE(kInput); ++i) {
+  absl::FixedArray<int, std::size(kInput) - 1> const fixed(
+      kInput, kInput + std::size(kInput));
+  ASSERT_EQ(std::size(kInput), fixed.size());
+  for (size_t i = 0; i < std::size(kInput); ++i) {
     ASSERT_EQ(kInput[i], fixed[i]);
   }
 }
 
 TEST(IteratorConstructorTest, Inline) {
   int const kInput[] = {2, 3, 5, 7, 11, 13, 17};
-  absl::FixedArray<int, ABSL_ARRAYSIZE(kInput)> const fixed(
-      kInput, kInput + ABSL_ARRAYSIZE(kInput));
-  ASSERT_EQ(ABSL_ARRAYSIZE(kInput), fixed.size());
-  for (size_t i = 0; i < ABSL_ARRAYSIZE(kInput); ++i) {
+  absl::FixedArray<int, std::size(kInput)> const fixed(
+      kInput, kInput + std::size(kInput));
+  ASSERT_EQ(std::size(kInput), fixed.size());
+  for (size_t i = 0; i < std::size(kInput); ++i) {
     ASSERT_EQ(kInput[i], fixed[i]);
   }
 }
@@ -377,10 +384,9 @@ TEST(IteratorConstructorTest, Inline) {
 TEST(IteratorConstructorTest, NonPod) {
   char const* kInput[] = {"red",  "orange", "yellow", "green",
                           "blue", "indigo", "violet"};
-  absl::FixedArray<std::string> const fixed(kInput,
-                                            kInput + ABSL_ARRAYSIZE(kInput));
-  ASSERT_EQ(ABSL_ARRAYSIZE(kInput), fixed.size());
-  for (size_t i = 0; i < ABSL_ARRAYSIZE(kInput); ++i) {
+  absl::FixedArray<std::string> const fixed(kInput, kInput + std::size(kInput));
+  ASSERT_EQ(std::size(kInput), fixed.size());
+  for (size_t i = 0; i < std::size(kInput); ++i) {
     ASSERT_EQ(kInput[i], fixed[i]);
   }
 }
@@ -394,7 +400,7 @@ TEST(IteratorConstructorTest, FromEmptyVector) {
 
 TEST(IteratorConstructorTest, FromNonEmptyVector) {
   int const kInput[] = {2, 3, 5, 7, 11, 13, 17};
-  std::vector<int> const items(kInput, kInput + ABSL_ARRAYSIZE(kInput));
+  std::vector<int> const items(kInput, kInput + std::size(kInput));
   absl::FixedArray<int> const fixed(items.begin(), items.end());
   ASSERT_EQ(items.size(), fixed.size());
   for (size_t i = 0; i < items.size(); ++i) {
@@ -404,9 +410,23 @@ TEST(IteratorConstructorTest, FromNonEmptyVector) {
 
 TEST(IteratorConstructorTest, FromBidirectionalIteratorRange) {
   int const kInput[] = {2, 3, 5, 7, 11, 13, 17};
-  std::list<int> const items(kInput, kInput + ABSL_ARRAYSIZE(kInput));
+  std::list<int> const items(kInput, kInput + std::size(kInput));
   absl::FixedArray<int> const fixed(items.begin(), items.end());
   EXPECT_THAT(fixed, testing::ElementsAreArray(kInput));
+}
+
+TEST(IteratorConstructorTest, FromCpp20ForwardIteratorRange) {
+  std::forward_list<int> const kUnzippedInput = {2, 3, 5, 7, 11, 13, 17};
+  absl::base_internal::Cpp20ForwardZipIterator<
+      std::forward_list<int>::const_iterator> const
+      begin(std::begin(kUnzippedInput), std::begin(kUnzippedInput));
+  absl::base_internal::
+      Cpp20ForwardZipIterator<std::forward_list<int>::const_iterator> const end(
+          std::end(kUnzippedInput), std::end(kUnzippedInput));
+
+  std::forward_list<std::pair<int, int>> const items(begin, end);
+  absl::FixedArray<std::pair<int, int>> const fixed(begin, end);
+  EXPECT_THAT(fixed, testing::ElementsAreArray(items));
 }
 
 TEST(InitListConstructorTest, InitListConstruction) {
@@ -419,7 +439,7 @@ TEST(FillConstructorTest, NonEmptyArrays) {
   EXPECT_THAT(stack_array, testing::ElementsAreArray({1, 1, 1, 1}));
 
   absl::FixedArray<int, 0> heap_array(4, 1);
-  EXPECT_THAT(stack_array, testing::ElementsAreArray({1, 1, 1, 1}));
+  EXPECT_THAT(heap_array, testing::ElementsAreArray({1, 1, 1, 1}));
 }
 
 TEST(FillConstructorTest, EmptyArray) {
@@ -504,6 +524,28 @@ TEST(FixedArrayTest, TooBigInlinedSpace) {
       "default-sized absl::FixedArray should have same alignment as Data.");
 }
 
+#ifndef ABSL_HAVE_ADDRESS_SANITIZER
+TEST(FixedArrayTest, DefaultInlinedSpaceFitsInCacheLine) {
+  struct alignas(32) Aligned32 {
+    char c[32];
+  };
+  struct alignas(64) Aligned64 {
+    char c[64];
+  };
+
+  constexpr size_t kHeaderSize = sizeof(void*) + sizeof(size_t);
+  EXPECT_EQ(sizeof(absl::FixedArray<char>), 48 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<int>), 48 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<void*>), 48 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<ThreeInts>), 48 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<std::array<char, 24>>), 48 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<std::array<char, 40>>), 40 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<std::array<char, 48>>), 48 + kHeaderSize);
+  EXPECT_EQ(sizeof(absl::FixedArray<Aligned32>), size_t{64});
+  EXPECT_EQ(sizeof(absl::FixedArray<Aligned64>), kHeaderSize);
+}
+#endif  // ABSL_HAVE_ADDRESS_SANITIZER
+
 // PickyDelete EXPECTs its class-scope deallocation funcs are unused.
 struct PickyDelete {
   PickyDelete() {}
@@ -518,7 +560,10 @@ struct PickyDelete {
   }
 };
 
-TEST(FixedArrayTest, UsesGlobalAlloc) { absl::FixedArray<PickyDelete, 0> a(5); }
+TEST(FixedArrayTest, UsesGlobalAlloc) {
+  absl::FixedArray<PickyDelete, 0> a(5);
+  EXPECT_EQ(a.size(), 5);
+}
 
 TEST(FixedArrayTest, Data) {
   static const int kInput[] = {2, 3, 5, 7, 11, 13, 17};
@@ -673,7 +718,7 @@ TEST(AllocatorSupportTest, CountOutoflineAllocations) {
     const int ia[] = {0, 1, 2, 3, 4, 5, 6, 7};
     Alloc alloc(&allocated, &active_instances);
 
-    AllocFxdArr arr(ia, ia + ABSL_ARRAYSIZE(ia), alloc);
+    AllocFxdArr arr(ia, ia + std::size(ia), alloc);
 
     EXPECT_EQ(allocated, arr.size() * sizeof(int));
     static_cast<void>(arr);
@@ -768,6 +813,23 @@ TEST(AllocatorSupportTest, SizeValAllocConstructor) {
   }
 }
 
+TEST(AllocatorSupportTest, PropagatesStatefulAllocator) {
+  constexpr size_t inlined_size = 4;
+  using Alloc = absl::container_internal::CountingAllocator<int>;
+  using AllocFxdArr = absl::FixedArray<int, inlined_size, Alloc>;
+
+  auto len = inlined_size * 2;
+  auto val = 0;
+  int64_t allocated = 0;
+  AllocFxdArr arr(len, val, Alloc(&allocated));
+
+  EXPECT_EQ(allocated, len * sizeof(int));
+
+  AllocFxdArr copy = arr;
+  EXPECT_EQ(allocated, len * sizeof(int) * 2);
+  EXPECT_EQ(copy, arr);
+}
+
 #ifdef ABSL_HAVE_ADDRESS_SANITIZER
 TEST(FixedArrayTest, AddressSanitizerAnnotations1) {
   absl::FixedArray<int, 32> a(10);
@@ -801,19 +863,19 @@ TEST(FixedArrayTest, AddressSanitizerAnnotations3) {
 }
 
 TEST(FixedArrayTest, AddressSanitizerAnnotations4) {
-  absl::FixedArray<ThreeInts> a(10);
+  absl::FixedArray<ThreeInts> a(2);
   ThreeInts* raw = a.data();
   raw[0] = ThreeInts();
-  raw[9] = ThreeInts();
+  raw[1] = ThreeInts();
   // Note: raw[-1] is pointing to 12 bytes before the container range. However,
   // there is only a 8-byte red zone before the container range, so we only
   // access the last 4 bytes of the struct to make sure it stays within the red
   // zone.
   EXPECT_DEATH_IF_SUPPORTED(raw[-1].z_ = 0, "container-overflow");
-  EXPECT_DEATH_IF_SUPPORTED(raw[10] = ThreeInts(), "container-overflow");
-  // The actual size of storage is kDefaultBytes=256, 21*12 = 252,
-  // so reading raw[21] should still trigger the correct warning.
-  EXPECT_DEATH_IF_SUPPORTED(raw[21] = ThreeInts(), "container-overflow");
+  EXPECT_DEATH_IF_SUPPORTED(raw[2] = ThreeInts(), "container-overflow");
+  // The actual size of storage is kInlineBytesDefault=48, 4*12 = 48,
+  // so reading raw[4] should still trigger the correct warning.
+  EXPECT_DEATH_IF_SUPPORTED(raw[4] = ThreeInts(), "container-overflow");
 }
 #endif  // ABSL_HAVE_ADDRESS_SANITIZER
 

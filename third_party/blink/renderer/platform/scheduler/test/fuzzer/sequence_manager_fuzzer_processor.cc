@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "third_party/blink/renderer/platform/scheduler/test/fuzzer/sequence_manager_fuzzer_processor.h"
 
 #include "third_party/blink/renderer/platform/scheduler/test/fuzzer/simple_thread_impl.h"
@@ -19,10 +23,10 @@ SequenceManagerFuzzerProcessor::SequenceManagerFuzzerProcessor()
 SequenceManagerFuzzerProcessor::SequenceManagerFuzzerProcessor(
     bool log_for_testing)
     : log_for_testing_(log_for_testing),
-      initial_time_(base::TimeTicks() + base::TimeDelta::FromMilliseconds(1)),
-      thread_pool_manager_(std::make_unique<ThreadPoolManager>(this)),
-      main_thread_manager_(
-          std::make_unique<ThreadManager>(initial_time_, this)) {}
+      initial_time_(base::TimeTicks() + base::Milliseconds(1)),
+      thread_pool_manager_(
+          std::make_unique<ThreadPoolManager>(this, initial_time_)),
+      main_thread_manager_(std::make_unique<ThreadManager>(this)) {}
 
 SequenceManagerFuzzerProcessor::~SequenceManagerFuzzerProcessor() = default;
 
@@ -50,7 +54,7 @@ void SequenceManagerFuzzerProcessor::RunTest(
 }
 
 void SequenceManagerFuzzerProcessor::LogTaskForTesting(
-    Vector<TaskForTest>* ordered_tasks,
+    blink::Vector<TaskForTest>* ordered_tasks,
     uint64_t task_id,
     base::TimeTicks start_time,
     base::TimeTicks end_time) {
@@ -64,7 +68,7 @@ void SequenceManagerFuzzerProcessor::LogTaskForTesting(
 }
 
 void SequenceManagerFuzzerProcessor::LogActionForTesting(
-    Vector<ActionForTest>* ordered_actions,
+    blink::Vector<ActionForTest>* ordered_actions,
     uint64_t action_id,
     ActionForTest::ActionType type,
     base::TimeTicks start_time) {
@@ -75,12 +79,13 @@ void SequenceManagerFuzzerProcessor::LogActionForTesting(
                                 (start_time - initial_time_).InMilliseconds());
 }
 
-const Vector<Vector<SequenceManagerFuzzerProcessor::TaskForTest>>&
+const blink::Vector<blink::Vector<SequenceManagerFuzzerProcessor::TaskForTest>>&
 SequenceManagerFuzzerProcessor::ordered_tasks() const {
   return ordered_tasks_;
 }
 
-const Vector<Vector<SequenceManagerFuzzerProcessor::ActionForTest>>&
+const blink::Vector<
+    blink::Vector<SequenceManagerFuzzerProcessor::ActionForTest>>&
 SequenceManagerFuzzerProcessor::ordered_actions() const {
   return ordered_actions_;
 }

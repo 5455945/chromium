@@ -1,15 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/debug/invalid_access_win.h"
 
-#include <intrin.h>
-#include <stdlib.h>
 #include <windows.h>
 
+#include <intrin.h>
+#include <stdlib.h>
+
 #include "base/check.h"
-#include "base/win/windows_version.h"
+#include "base/compiler_specific.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 
 namespace base {
@@ -42,21 +44,10 @@ void IndirectCall(FuncType* func) {
   (*func)();
 }
 
-void CreateSyntheticHeapCorruption() {
-  EXCEPTION_RECORD record = {};
-  record.ExceptionCode = STATUS_HEAP_CORRUPTION;
-  RaiseFailFastException(&record, nullptr,
-                         FAIL_FAST_GENERATE_EXCEPTION_ADDRESS);
-}
-
 }  // namespace
 
 void TerminateWithHeapCorruption() {
   __try {
-    // Pre-Windows 10, it's hard to trigger a heap corruption fast fail, so
-    // artificially create one instead.
-    if (base::win::GetVersion() < base::win::Version::WIN10)
-      CreateSyntheticHeapCorruption();
     HANDLE heap = ::HeapCreate(0, 0, 0);
     CHECK(heap);
     CHECK(HeapSetInformation(heap, HeapEnableTerminationOnCorruption, nullptr,
@@ -65,13 +56,14 @@ void TerminateWithHeapCorruption() {
     CHECK(addr);
     // Corrupt heap header.
     char* addr_mutable = reinterpret_cast<char*>(addr);
-    memset(addr_mutable - sizeof(addr), 0xCC, sizeof(addr));
+    // SAFETY: intentionally not safe.
+    UNSAFE_BUFFERS(memset(addr_mutable - sizeof(addr), 0xCC, sizeof(addr)));
 
     HeapFree(heap, 0, addr);
     HeapDestroy(heap);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     // Heap corruption exception should never be caught.
-    CHECK(false);
+    NOTREACHED();
   }
   // Should never reach here.
   abort();
@@ -86,7 +78,7 @@ void TerminateWithControlFlowViolation() {
     IndirectCall(&func);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     // CFG fast fail should never be caught.
-    CHECK(false);
+    NOTREACHED();
   }
   // Should only reach here if CFG is disabled.
   abort();

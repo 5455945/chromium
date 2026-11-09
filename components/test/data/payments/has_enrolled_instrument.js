@@ -1,31 +1,38 @@
 /*
- * Copyright 2019 The Chromium Authors. All rights reserved.
+ * Copyright 2019 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
 /**
- * Builds a PaymentRequest for 'basic-card' with the given options.
+ * Builds a PaymentRequest for the given method with the given options.
  * @param {PaymentOptions} options - The payment options to use.
+ * @param {DOMString} method - The payment method to use. Optional. If not
+ * specified, then 'basic-card' is used.
  * @return {PaymentRequest} The new PaymentRequest object.
  */
-function buildPaymentRequest(options) {
+function buildPaymentRequest(options, method) {
+  if (!method) {
+    method = 'basic-card';
+  }
   return new PaymentRequest(
-      [{supportedMethods: 'basic-card'}],
+      [{supportedMethods: method}],
       {total: {label: 'Total', amount: {currency: 'USD', value: '0.01'}}},
       options);
 }
 
 /**
- * Checks the hasEnrolledInstrument() value for 'basic-card' with the given
- * options.
+ * Checks the hasEnrolledInstrument() value for the given payment method with
+ * the given options.
  * @param {PaymentOptions} options - The payment options to use.
+ * @param {DOMString} method - The payment method to use. Optional. If not
+ * specified, then 'basic-card' is used.
  * @return {Promise<boolean|string>} The boolean value of
  * hasEnrolledInstrument() or the error message string.
  */
-async function hasEnrolledInstrument(options) { // eslint-disable-line no-unused-vars,max-len
+async function hasEnrolledInstrument(options, method) {
   try {
-    return await buildPaymentRequest(options).hasEnrolledInstrument();
+    return await buildPaymentRequest(options, method).hasEnrolledInstrument();
   } catch (e) {
     return e.toString();
   }
@@ -36,7 +43,7 @@ async function hasEnrolledInstrument(options) { // eslint-disable-line no-unused
  * @param {PaymentOptions} options - The payment options to use.
  * @return {Promise<string>} The error message string, if any.
  */
-async function show(options) { // eslint-disable-line no-unused-vars
+async function show(options) {
   try {
     await buildPaymentRequest(options).show();
     return '';
@@ -52,8 +59,8 @@ async function show(options) { // eslint-disable-line no-unused-vars
  * @param {PaymentOptions} options - The payment options to use.
  * @return {Promise<string>} The error message string, if any.
  */
-async function delayedShow(options) { // eslint-disable-line no-unused-vars
-  let request = buildPaymentRequest(options);
+async function delayedShow(options) {
+  const request = buildPaymentRequest(options);
 
   try {
     // Block on hasEnrolledInstrument() to make sure when show() is called,

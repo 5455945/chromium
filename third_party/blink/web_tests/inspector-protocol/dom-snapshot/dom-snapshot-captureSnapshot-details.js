@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startURL('../resources/dom-snapshot-captureSnapshot-details.html', 'Tests that DOMSnapshot.captureSnapshot fills document details: title, size, etc.');
 
   var response = await dp.DOMSnapshot.captureSnapshot({computedStyles: []});
@@ -10,7 +10,7 @@
     response.result.strings[response.result.documents[0].frameId] = '';
     testRunner.log(
         response.result, undefined,
-        ['documentURL', 'frameId', 'backendNodeId']);
+        ['documentURL', 'frameId', 'backendNodeId', 'shadowRootType']);
   }
   testRunner.completeTest();
 })

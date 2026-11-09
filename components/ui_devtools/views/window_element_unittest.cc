@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "components/ui_devtools/Protocol.h"
+#include "components/ui_devtools/protocol.h"
 #include "components/ui_devtools/ui_devtools_unittest_utils.h"
 #include "ui/aura/window.h"
 #include "ui/views/test/views_test_base.h"
@@ -17,8 +17,12 @@ using ::testing::_;
 
 class WindowElementTest : public views::ViewsTestBase {
  public:
-  WindowElementTest() {}
-  ~WindowElementTest() override {}
+  WindowElementTest() = default;
+
+  WindowElementTest(const WindowElementTest&) = delete;
+  WindowElementTest& operator=(const WindowElementTest&) = delete;
+
+  ~WindowElementTest() override = default;
 
   void SetUp() override {
     views::ViewsTestBase::SetUp();
@@ -53,8 +57,6 @@ class WindowElementTest : public views::ViewsTestBase {
   std::unique_ptr<aura::Window> window_;
   std::unique_ptr<WindowElement> element_;
   std::unique_ptr<MockUIElementDelegate> delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowElementTest);
 };
 
 TEST_F(WindowElementTest, SettingsBoundsOnWindowCallsDelegate) {
@@ -118,4 +120,18 @@ TEST_F(WindowElementTest, GetAttributes) {
   EXPECT_THAT(attrs,
               testing::ElementsAre("name", window_name, "active", "true"));
 }
+
+TEST_F(WindowElementTest, GetNodeBoundsInScreen) {
+  gfx::Rect test_bounds(10, 20, 300, 400);
+  window()->SetBounds(test_bounds);
+  EXPECT_EQ(window()->GetBoundsInScreen(), element()->GetNodeBoundsInScreen());
+}
+
+TEST_F(WindowElementTest, GetDeviceScaleFactor) {
+  ui::Layer* layer = window()->layer();
+  ASSERT_TRUE(layer);
+  layer->OnDeviceScaleFactorChanged(2.0f);
+  EXPECT_EQ(2.0f, element()->GetDeviceScaleFactor());
+}
+
 }  // namespace ui_devtools

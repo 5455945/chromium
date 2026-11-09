@@ -1,8 +1,7 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from .code_generator_info import CodeGeneratorInfo
 from .composition_parts import WithCodeGeneratorInfo
 from .composition_parts import WithComponent
 from .composition_parts import WithDebugInfo
@@ -13,29 +12,45 @@ from .make_copy import make_copy
 from .user_defined_type import UserDefinedType
 
 
-class CallbackFunction(UserDefinedType, FunctionLike, WithExtendedAttributes,
-                       WithCodeGeneratorInfo, WithComponent, WithDebugInfo):
-    """https://heycam.github.io/webidl/#idl-callback-functions"""
+class CallbackFunction(
+    UserDefinedType,
+    FunctionLike,
+    WithExtendedAttributes,
+    WithCodeGeneratorInfo,
+    WithComponent,
+    WithDebugInfo,
+):
+    """https://webidl.spec.whatwg.org/#idl-callback-functions"""
 
-    class IR(IRMap.IR, FunctionLike.IR, WithExtendedAttributes,
-             WithCodeGeneratorInfo, WithComponent, WithDebugInfo):
-        def __init__(self,
-                     identifier,
-                     arguments,
-                     return_type,
-                     extended_attributes=None,
-                     code_generator_info=None,
-                     component=None,
-                     debug_info=None):
+    class IR(
+        IRMap.IR,
+        FunctionLike.IR,
+        WithExtendedAttributes,
+        WithCodeGeneratorInfo,
+        WithComponent,
+        WithDebugInfo,
+    ):
+        def __init__(
+            self,
+            identifier,
+            arguments,
+            return_type,
+            extended_attributes=None,
+            code_generator_info=None,
+            component=None,
+            debug_info=None,
+        ):
             IRMap.IR.__init__(
                 self,
                 identifier=identifier,
-                kind=IRMap.IR.Kind.CALLBACK_FUNCTION)
+                kind=IRMap.IR.Kind.CALLBACK_FUNCTION,
+            )
             FunctionLike.IR.__init__(
                 self,
                 identifier=identifier,
                 arguments=arguments,
-                return_type=return_type)
+                return_type=return_type,
+            )
             WithExtendedAttributes.__init__(self, extended_attributes)
             WithCodeGeneratorInfo.__init__(self, code_generator_info)
             WithComponent.__init__(self, component)

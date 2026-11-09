@@ -1,20 +1,20 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright 2009 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // This file contains the unit tests for the bit utilities.
 
 #include "base/bits.h"
-#include "build/build_config.h"
 
 #include <stddef.h>
 
 #include <limits>
+#include <tuple>
 
+#include "base/test/gtest_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace bits {
+namespace base::bits {
 
 TEST(BitsTest, Log2Floor) {
   EXPECT_EQ(-1, Log2Floor(0));
@@ -52,14 +52,56 @@ TEST(BitsTest, Log2Ceiling) {
 
 TEST(BitsTest, AlignUp) {
   static constexpr size_t kSizeTMax = std::numeric_limits<size_t>::max();
-  EXPECT_EQ(0ul, AlignUp(0, 4));
-  EXPECT_EQ(4ul, AlignUp(1, 4));
-  EXPECT_EQ(4096ul, AlignUp(1, 4096));
-  EXPECT_EQ(4096ul, AlignUp(4096, 4096));
-  EXPECT_EQ(4096ul, AlignUp(4095, 4096));
-  EXPECT_EQ(8192ul, AlignUp(4097, 4096));
-  EXPECT_EQ(kSizeTMax - 31, AlignUp(kSizeTMax - 62, 32));
-  EXPECT_EQ(kSizeTMax / 2 + 1, AlignUp(1, kSizeTMax / 2 + 1));
+  EXPECT_EQ(0u, AlignUp(0u, 4u));
+  EXPECT_EQ(4u, AlignUp(1u, 4u));
+  EXPECT_EQ(4096u, AlignUp(1u, 4096u));
+  EXPECT_EQ(4096u, AlignUp(4096u, 4096u));
+  EXPECT_EQ(4096u, AlignUp(4095u, 4096u));
+  EXPECT_EQ(8192u, AlignUp(4097u, 4096u));
+  EXPECT_EQ(kSizeTMax - 31, AlignUp(kSizeTMax - 62, size_t{32}));
+  EXPECT_EQ(kSizeTMax / 2 + 1, AlignUp(size_t{1}, kSizeTMax / 2 + 1));
+}
+
+TEST(BitsTest, AlignUpCheckedNumeric) {
+  static constexpr size_t kSizeTMax = std::numeric_limits<size_t>::max();
+  EXPECT_EQ(0u, AlignUp(CheckedNumeric(0u), 4u).ValueOrDie());
+  EXPECT_EQ(4u, AlignUp(CheckedNumeric(1u), 4u).ValueOrDie());
+  EXPECT_EQ(4096u, AlignUp(CheckedNumeric(1u), 4096u).ValueOrDie());
+  EXPECT_EQ(4096u, AlignUp(CheckedNumeric(4096u), 4096u).ValueOrDie());
+  EXPECT_EQ(4096u, AlignUp(CheckedNumeric(4095u), 4096u).ValueOrDie());
+  EXPECT_EQ(8192u, AlignUp(CheckedNumeric(4097u), 4096u).ValueOrDie());
+  EXPECT_EQ(kSizeTMax - 31,
+            AlignUp(CheckedNumeric(kSizeTMax - 62), size_t{32}).ValueOrDie());
+  EXPECT_EQ(kSizeTMax / 2 + 1,
+            AlignUp(CheckedNumeric(size_t{1}), kSizeTMax / 2 + 1).ValueOrDie());
+
+  EXPECT_FALSE(AlignUp(CheckedNumeric(kSizeTMax), size_t{4}).IsValid());
+  EXPECT_FALSE(AlignUp(CheckedNumeric(kSizeTMax - 30), size_t{32}).IsValid());
+  EXPECT_FALSE(
+      AlignUp(CheckedNumeric(kSizeTMax / 2 + 2), kSizeTMax / 2 + 1).IsValid());
+
+  EXPECT_EQ(uint8_t{252},
+            AlignUp(CheckedNumeric(uint8_t{252}), uint8_t{4}).ValueOrDie());
+  EXPECT_FALSE(AlignUp(CheckedNumeric(uint8_t{253}), uint8_t{4}).IsValid());
+
+  EXPECT_EQ(uint16_t{65532},
+            AlignUp(CheckedNumeric(uint16_t{65532}), uint16_t{4}).ValueOrDie());
+  EXPECT_FALSE(AlignUp(CheckedNumeric(uint16_t{65533}), uint16_t{4}).IsValid());
+
+  CheckedNumeric<size_t> invalid = CheckedNumeric(kSizeTMax) + 1;
+  EXPECT_FALSE(AlignUp(invalid, size_t{4}).IsValid());
+
+  EXPECT_EQ(
+      4u, AlignUp(CheckedNumeric(uint32_t{1}), sizeof(uint32_t)).ValueOrDie());
+  EXPECT_EQ(4u, AlignUp<uint32_t>(CheckedNumeric(uint32_t{1}).ValueOrDie(),
+                                  sizeof(uint32_t)));
+
+  static_assert(AlignUp(CheckedNumeric(1u), 4u).ValueOrDie() == 4u);
+  static_assert(!AlignUp(CheckedNumeric(kSizeTMax), size_t{4}).IsValid());
+}
+
+TEST(BitsDeathTest, AlignUpAlignmentTooLarge) {
+  EXPECT_DCHECK_DEATH(std::ignore = AlignUp(CheckedNumeric(uint8_t{1}), 256));
 }
 
 TEST(BitsTest, AlignUpPointer) {
@@ -85,15 +127,53 @@ TEST(BitsTest, AlignUpPointer) {
 
 TEST(BitsTest, AlignDown) {
   static constexpr size_t kSizeTMax = std::numeric_limits<size_t>::max();
-  EXPECT_EQ(0ul, AlignDown(0, 4));
-  EXPECT_EQ(0ul, AlignDown(1, 4));
-  EXPECT_EQ(0ul, AlignDown(1, 4096));
-  EXPECT_EQ(4096ul, AlignDown(4096, 4096));
-  EXPECT_EQ(0ul, AlignDown(4095, 4096));
-  EXPECT_EQ(4096ul, AlignDown(4097, 4096));
-  EXPECT_EQ(kSizeTMax - 63, AlignDown(kSizeTMax - 62, 32));
-  EXPECT_EQ(kSizeTMax - 31, AlignDown(kSizeTMax, 32));
-  EXPECT_EQ(0ul, AlignDown(1, kSizeTMax / 2 + 1));
+  EXPECT_EQ(0u, AlignDown(0u, 4u));
+  EXPECT_EQ(0u, AlignDown(1u, 4u));
+  EXPECT_EQ(0u, AlignDown(1u, 4096u));
+  EXPECT_EQ(4096u, AlignDown(4096u, 4096u));
+  EXPECT_EQ(0u, AlignDown(4095u, 4096u));
+  EXPECT_EQ(4096u, AlignDown(4097u, 4096u));
+  EXPECT_EQ(kSizeTMax - 63, AlignDown(kSizeTMax - 62, size_t{32}));
+  EXPECT_EQ(kSizeTMax - 31, AlignDown(kSizeTMax, size_t{32}));
+  EXPECT_EQ(0ul, AlignDown(size_t{1}, kSizeTMax / 2 + 1));
+}
+
+TEST(BitsTest, AlignDownCheckedNumeric) {
+  static constexpr size_t kSizeTMax = std::numeric_limits<size_t>::max();
+  EXPECT_EQ(0u, AlignDown(CheckedNumeric(0u), 4u).ValueOrDie());
+  EXPECT_EQ(0u, AlignDown(CheckedNumeric(1u), 4u).ValueOrDie());
+  EXPECT_EQ(0u, AlignDown(CheckedNumeric(1u), 4096u).ValueOrDie());
+  EXPECT_EQ(4096u, AlignDown(CheckedNumeric(4096u), 4096u).ValueOrDie());
+  EXPECT_EQ(0u, AlignDown(CheckedNumeric(4095u), 4096u).ValueOrDie());
+  EXPECT_EQ(4096u, AlignDown(CheckedNumeric(4097u), 4096u).ValueOrDie());
+  EXPECT_EQ(kSizeTMax - 63,
+            AlignDown(CheckedNumeric(kSizeTMax - 62), size_t{32}).ValueOrDie());
+  EXPECT_EQ(kSizeTMax - 31,
+            AlignDown(CheckedNumeric(kSizeTMax), size_t{32}).ValueOrDie());
+  EXPECT_EQ(
+      0ul,
+      AlignDown(CheckedNumeric(size_t{1}), kSizeTMax / 2 + 1).ValueOrDie());
+
+  EXPECT_EQ(uint8_t{252},
+            AlignDown(CheckedNumeric(uint8_t{255}), uint8_t{4}).ValueOrDie());
+  EXPECT_EQ(
+      uint16_t{65532},
+      AlignDown(CheckedNumeric(uint16_t{65535}), uint16_t{4}).ValueOrDie());
+
+  CheckedNumeric<size_t> invalid = CheckedNumeric(kSizeTMax) + 1;
+  EXPECT_FALSE(AlignDown(invalid, size_t{4}).IsValid());
+
+  EXPECT_EQ(
+      4u,
+      AlignDown(CheckedNumeric(uint32_t{5}), sizeof(uint32_t)).ValueOrDie());
+  EXPECT_EQ(4u, AlignDown<uint32_t>(CheckedNumeric(uint32_t{5}).ValueOrDie(),
+                                    sizeof(uint32_t)));
+
+  static_assert(AlignDown(CheckedNumeric(5u), 4u).ValueOrDie() == 4u);
+}
+
+TEST(BitsDeathTest, AlignDownAlignmentTooLarge) {
+  EXPECT_DCHECK_DEATH(std::ignore = AlignDown(CheckedNumeric(uint8_t{1}), 256));
 }
 
 TEST(BitsTest, AlignDownPointer) {
@@ -119,136 +199,9 @@ TEST(BitsTest, AlignDownPointer) {
             AlignDown(reinterpret_cast<uint8_t*>(1), kUintPtrTMax / 2 + 1));
 }
 
-TEST(BitsTest, CountLeadingZeroBits8) {
-  EXPECT_EQ(8u, CountLeadingZeroBits(uint8_t{0}));
-  EXPECT_EQ(7u, CountLeadingZeroBits(uint8_t{1}));
-  for (uint8_t shift = 0; shift <= 7; shift++) {
-    EXPECT_EQ(7u - shift,
-              CountLeadingZeroBits(static_cast<uint8_t>(1 << shift)));
-  }
-  EXPECT_EQ(4u, CountLeadingZeroBits(uint8_t{0x0f}));
-}
-
-TEST(BitsTest, CountLeadingZeroBits16) {
-  EXPECT_EQ(16u, CountLeadingZeroBits(uint16_t{0}));
-  EXPECT_EQ(15u, CountLeadingZeroBits(uint16_t{1}));
-  for (uint16_t shift = 0; shift <= 15; shift++) {
-    EXPECT_EQ(15u - shift,
-              CountLeadingZeroBits(static_cast<uint16_t>(1 << shift)));
-  }
-  EXPECT_EQ(4u, CountLeadingZeroBits(uint16_t{0x0f0f}));
-}
-
-TEST(BitsTest, CountLeadingZeroBits32) {
-  EXPECT_EQ(32u, CountLeadingZeroBits(uint32_t{0}));
-  EXPECT_EQ(31u, CountLeadingZeroBits(uint32_t{1}));
-  for (uint32_t shift = 0; shift <= 31; shift++) {
-    EXPECT_EQ(31u - shift, CountLeadingZeroBits(uint32_t{1} << shift));
-  }
-  EXPECT_EQ(4u, CountLeadingZeroBits(uint32_t{0x0f0f0f0f}));
-}
-
-TEST(BitsTest, CountTrailingeZeroBits8) {
-  EXPECT_EQ(8u, CountTrailingZeroBits(uint8_t{0}));
-  EXPECT_EQ(7u, CountTrailingZeroBits(uint8_t{128}));
-  for (uint8_t shift = 0; shift <= 7; shift++) {
-    EXPECT_EQ(shift, CountTrailingZeroBits(static_cast<uint8_t>(1 << shift)));
-  }
-  EXPECT_EQ(4u, CountTrailingZeroBits(uint8_t{0xf0}));
-}
-
-TEST(BitsTest, CountTrailingeZeroBits16) {
-  EXPECT_EQ(16u, CountTrailingZeroBits(uint16_t{0}));
-  EXPECT_EQ(15u, CountTrailingZeroBits(uint16_t{32768}));
-  for (uint16_t shift = 0; shift <= 15; shift++) {
-    EXPECT_EQ(shift, CountTrailingZeroBits(static_cast<uint16_t>(1 << shift)));
-  }
-  EXPECT_EQ(4u, CountTrailingZeroBits(uint16_t{0xf0f0}));
-}
-
-TEST(BitsTest, CountTrailingeZeroBits32) {
-  EXPECT_EQ(32u, CountTrailingZeroBits(uint32_t{0}));
-  EXPECT_EQ(31u, CountTrailingZeroBits(uint32_t{1} << 31));
-  for (uint32_t shift = 0; shift <= 31; shift++) {
-    EXPECT_EQ(shift, CountTrailingZeroBits(uint32_t{1} << shift));
-  }
-  EXPECT_EQ(4u, CountTrailingZeroBits(uint32_t{0xf0f0f0f0}));
-}
-
-TEST(BitsTest, CountLeadingZeroBits64) {
-  EXPECT_EQ(64u, CountLeadingZeroBits(uint64_t{0}));
-  EXPECT_EQ(63u, CountLeadingZeroBits(uint64_t{1}));
-  for (uint64_t shift = 0; shift <= 63; shift++) {
-    EXPECT_EQ(63u - shift, CountLeadingZeroBits(uint64_t{1} << shift));
-  }
-  EXPECT_EQ(4u, CountLeadingZeroBits(uint64_t{0x0f0f0f0f0f0f0f0f}));
-}
-
-TEST(BitsTest, CountTrailingeZeroBits64) {
-  EXPECT_EQ(64u, CountTrailingZeroBits(uint64_t{0}));
-  EXPECT_EQ(63u, CountTrailingZeroBits(uint64_t{1} << 63));
-  for (uint64_t shift = 0; shift <= 31; shift++) {
-    EXPECT_EQ(shift, CountTrailingZeroBits(uint64_t{1} << shift));
-  }
-  EXPECT_EQ(4u, CountTrailingZeroBits(uint64_t{0xf0f0f0f0f0f0f0f0}));
-}
-
-TEST(BitsTest, CountLeadingZeroBitsSizeT) {
-#if defined(ARCH_CPU_64_BITS)
-  EXPECT_EQ(64u, CountLeadingZeroBitsSizeT(size_t{0}));
-  EXPECT_EQ(63u, CountLeadingZeroBitsSizeT(size_t{1}));
-  EXPECT_EQ(32u, CountLeadingZeroBitsSizeT(size_t{1} << 31));
-  EXPECT_EQ(1u, CountLeadingZeroBitsSizeT(size_t{1} << 62));
-  EXPECT_EQ(0u, CountLeadingZeroBitsSizeT(size_t{1} << 63));
-#else
-  EXPECT_EQ(32u, CountLeadingZeroBitsSizeT(size_t{0}));
-  EXPECT_EQ(31u, CountLeadingZeroBitsSizeT(size_t{1}));
-  EXPECT_EQ(1u, CountLeadingZeroBitsSizeT(size_t{1} << 30));
-  EXPECT_EQ(0u, CountLeadingZeroBitsSizeT(size_t{1} << 31));
-#endif  // ARCH_CPU_64_BITS
-}
-
-TEST(BitsTest, CountTrailingZeroBitsSizeT) {
-#if defined(ARCH_CPU_64_BITS)
-  EXPECT_EQ(64u, CountTrailingZeroBitsSizeT(size_t{0}));
-  EXPECT_EQ(63u, CountTrailingZeroBitsSizeT(size_t{1} << 63));
-  EXPECT_EQ(31u, CountTrailingZeroBitsSizeT(size_t{1} << 31));
-  EXPECT_EQ(1u, CountTrailingZeroBitsSizeT(size_t{2}));
-  EXPECT_EQ(0u, CountTrailingZeroBitsSizeT(size_t{1}));
-#else
-  EXPECT_EQ(32u, CountTrailingZeroBitsSizeT(size_t{0}));
-  EXPECT_EQ(31u, CountTrailingZeroBitsSizeT(size_t{1} << 31));
-  EXPECT_EQ(1u, CountTrailingZeroBitsSizeT(size_t{2}));
-  EXPECT_EQ(0u, CountTrailingZeroBitsSizeT(size_t{1}));
-#endif  // ARCH_CPU_64_BITS
-}
-
-TEST(BitsTest, PowerOfTwo) {
-  EXPECT_FALSE(IsPowerOfTwo(-1));
-  EXPECT_FALSE(IsPowerOfTwo(0));
-  EXPECT_TRUE(IsPowerOfTwo(1));
-  EXPECT_TRUE(IsPowerOfTwo(2));
-  // Unsigned 64 bit cases.
-  for (uint32_t i = 2; i < 64; i++) {
-    const uint64_t val = uint64_t{1} << i;
-    EXPECT_FALSE(IsPowerOfTwo(val - 1));
-    EXPECT_TRUE(IsPowerOfTwo(val));
-    EXPECT_FALSE(IsPowerOfTwo(val + 1));
-  }
-  // Signed 64 bit cases.
-  for (uint32_t i = 2; i < 63; i++) {
-    const int64_t val = int64_t{1} << i;
-    EXPECT_FALSE(IsPowerOfTwo(val - 1));
-    EXPECT_TRUE(IsPowerOfTwo(val));
-    EXPECT_FALSE(IsPowerOfTwo(val + 1));
-  }
-  // Signed integers with only the last bit set are negative, not powers of two.
-  EXPECT_FALSE(IsPowerOfTwo(int64_t{1} << 63));
-}
-
 TEST(BitsTest, LeftMostBit) {
   // Construction of a signed type from an unsigned one of the same width
-  // preserves all bits. Explicitily confirming this behavior here to illustrate
+  // preserves all bits. Explicitly confirming this behavior here to illustrate
   // correctness of reusing unsigned literals to test behavior of signed types.
   // Using signed literals does not work with EXPECT_EQ.
   static_assert(int64_t(0xFFFFFFFFFFFFFFFFu) == 0xFFFFFFFFFFFFFFFFl,
@@ -273,5 +226,4 @@ TEST(BitsTest, LeftMostBit) {
   EXPECT_EQ(LeftmostBit<int8_t>(), int8_t(unsigned_byte_value));
 }
 
-}  // namespace bits
-}  // namespace base
+}  // namespace base::bits

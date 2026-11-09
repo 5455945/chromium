@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,33 +6,16 @@
 
 #include <utility>
 
-#include "base/auto_reset.h"
-#include "base/bind.h"
-#include "base/debug/crash_logging.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/plugins/plugin_finder.h"
-#include "chrome/browser/plugins/plugin_infobar_delegates.h"
-#include "chrome/browser/plugins/plugin_installer.h"
-#include "chrome/browser/plugins/plugin_installer_observer.h"
-#include "chrome/browser/plugins/reload_plugin_infobar_delegate.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tab_modal_confirm_dialog.h"
-#include "chrome/browser/ui/tab_modal_confirm_dialog_delegate.h"
+#include "chrome/browser/plugins/plugin_observer_common.h"
 #include "chrome/common/buildflags.h"
-#include "chrome/grit/generated_resources.h"
-#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/download/public/common/download_url_parameters.h"
-#include "components/infobars/content/content_infobar_manager.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
-#include "content/public/browser/browser_thread.h"
-#include "content/public/browser/child_process_security_policy.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_manager.h"
-#include "content/public/browser/plugin_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -42,169 +25,53 @@
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "ppapi/buildflags/buildflags.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
-#include "ui/base/l10n/l10n_util.h"
-
-using content::PluginService;
 
 // PluginObserver -------------------------------------------------------------
 
-class PluginObserver::PluginPlaceholderHost : public PluginInstallerObserver {
- public:
-  PluginPlaceholderHost(
-      PluginObserver* observer,
-      std::u16string plugin_name,
-      PluginInstaller* installer,
-      mojo::PendingRemote<chrome::mojom::PluginRenderer> plugin_renderer_remote)
-      : PluginInstallerObserver(installer),
-        observer_(observer),
-        plugin_renderer_remote_(std::move(plugin_renderer_remote)) {
-    plugin_renderer_remote_.set_disconnect_handler(
-        base::BindOnce(&PluginObserver::RemovePluginPlaceholderHost,
-                       base::Unretained(observer_), this));
-    DCHECK(installer);
+DEFINE_USER_DATA(PluginObserver);
+
+void PluginObserver::BindPluginHost(
+    mojo::PendingAssociatedReceiver<chrome::mojom::PluginHost> receiver,
+    content::RenderFrameHost* rfh) {
+  auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+  if (!web_contents) {
+    return;
   }
-
-  void DownloadFinished() override {
-    plugin_renderer_remote_->FinishedDownloading();
+  auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents);
+  auto* plugin_helper = tab ? PluginObserver::From(tab) : nullptr;
+  if (!plugin_helper) {
+    return;
   }
-
- private:
-  PluginObserver* observer_;
-  mojo::Remote<chrome::mojom::PluginRenderer> plugin_renderer_remote_;
-};
-
-PluginObserver::PluginObserver(content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents),
-      plugin_host_receivers_(web_contents,
-                             this,
-                             content::WebContentsFrameReceiverSetPassKey()) {}
-
-PluginObserver::~PluginObserver() {
-}
-
-void PluginObserver::PluginCrashed(const base::FilePath& plugin_path,
-                                   base::ProcessId plugin_pid) {
-  DCHECK(!plugin_path.value().empty());
-
-  std::u16string plugin_name =
-      PluginService::GetInstance()->GetPluginDisplayNameByPath(plugin_path);
-  std::u16string infobar_text;
-#if defined(OS_WIN)
-  // Find out whether the plugin process is still alive.
-  // Note: Although the chances are slim, it is possible that after the plugin
-  // process died, |plugin_pid| has been reused by a new process. The
-  // consequence is that we will display |IDS_PLUGIN_DISCONNECTED_PROMPT| rather
-  // than |IDS_PLUGIN_CRASHED_PROMPT| to the user, which seems acceptable.
-  base::Process plugin_process =
-      base::Process::OpenWithAccess(plugin_pid,
-                                    PROCESS_QUERY_INFORMATION | SYNCHRONIZE);
-  bool is_running = false;
-  if (plugin_process.IsValid()) {
-    int unused_exit_code = 0;
-    is_running = base::GetTerminationStatus(plugin_process.Handle(),
-                                            &unused_exit_code) ==
-                 base::TERMINATION_STATUS_STILL_RUNNING;
-    plugin_process.Close();
-  }
-
-  if (is_running) {
-    infobar_text = l10n_util::GetStringFUTF16(IDS_PLUGIN_DISCONNECTED_PROMPT,
-                                              plugin_name);
-    UMA_HISTOGRAM_COUNTS_1M("Plugin.ShowDisconnectedInfobar", 1);
-  } else {
-    infobar_text = l10n_util::GetStringFUTF16(IDS_PLUGIN_CRASHED_PROMPT,
-                                              plugin_name);
-    UMA_HISTOGRAM_COUNTS_1M("Plugin.ShowCrashedInfobar", 1);
-  }
-#else
-  // Calling the POSIX version of base::GetTerminationStatus() may affect other
-  // code which is interested in the process termination status. (Please see the
-  // comment of the function.) Therefore, a better way is needed to distinguish
-  // disconnections from crashes.
-  infobar_text = l10n_util::GetStringFUTF16(IDS_PLUGIN_CRASHED_PROMPT,
-                                            plugin_name);
-  UMA_HISTOGRAM_COUNTS_1M("Plugin.ShowCrashedInfobar", 1);
-#endif
-
-  ReloadPluginInfoBarDelegate::Create(
-      infobars::ContentInfoBarManager::FromWebContents(web_contents()),
-      &web_contents()->GetController(), infobar_text);
+  plugin_helper->plugin_host_receivers_.Bind(rfh, std::move(receiver));
 }
 
 // static
-void PluginObserver::CreatePluginObserverInfoBar(
-    infobars::ContentInfoBarManager* infobar_manager,
-    const std::u16string& plugin_name) {
-  CreateSimpleAlertInfoBar(
-      infobar_manager,
-      infobars::InfoBarDelegate::PLUGIN_OBSERVER_INFOBAR_DELEGATE,
-      &kExtensionCrashedIcon,
-      l10n_util::GetStringFUTF16(IDS_PLUGIN_INITIALIZATION_ERROR_PROMPT,
-                                 plugin_name));
+PluginObserver* PluginObserver::From(tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
 }
 
-void PluginObserver::BlockedOutdatedPlugin(
-    mojo::PendingRemote<chrome::mojom::PluginRenderer> plugin_renderer,
-    const std::string& identifier) {
-  PluginFinder* finder = PluginFinder::GetInstance();
-  // Find plugin to update.
-  PluginInstaller* installer = NULL;
-  std::unique_ptr<PluginMetadata> plugin;
-  if (finder->FindPluginWithIdentifier(identifier, &installer, &plugin)) {
-    auto plugin_placeholder = std::make_unique<PluginPlaceholderHost>(
-        this, plugin->name(), installer, std::move(plugin_renderer));
-    plugin_placeholders_[plugin_placeholder.get()] =
-        std::move(plugin_placeholder);
+PluginObserver::PluginObserver(tabs::TabInterface& tab,
+                               content::WebContents* web_contents)
+    : content::WebContentsObserver(web_contents),
+      plugin_host_receivers_(web_contents, this),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {}
 
-    OutdatedPluginInfoBarDelegate::Create(
-        infobars::ContentInfoBarManager::FromWebContents(web_contents()),
-        installer, std::move(plugin));
-  } else {
-    NOTREACHED();
-  }
-}
-
-void PluginObserver::RemovePluginPlaceholderHost(
-    PluginPlaceholderHost* placeholder) {
-  plugin_placeholders_.erase(placeholder);
-}
-
-void PluginObserver::ShowFlashPermissionBubble() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  // TODO(tommycli): This is a no-op now. Delete this method in a followup.
-}
-
-void PluginObserver::CouldNotLoadPlugin(const base::FilePath& plugin_path) {
-  g_browser_process->GetMetricsServicesManager()->OnPluginLoadingError(
-      plugin_path);
-  std::u16string plugin_name =
-      PluginService::GetInstance()->GetPluginDisplayNameByPath(plugin_path);
-  CreatePluginObserverInfoBar(
-      infobars::ContentInfoBarManager::FromWebContents(web_contents()),
-      plugin_name);
-}
+PluginObserver::~PluginObserver() = default;
 
 void PluginObserver::OpenPDF(const GURL& url) {
+  content::RenderFrameHost& render_frame_host =
+      plugin_host_receivers_.CurrentTargetFrame();
   // WebViews should never trigger PDF downloads.
-  if (extensions::WebViewGuest::FromWebContents(web_contents()))
-    return;
-
-  content::RenderFrameHost* render_frame_host =
-      plugin_host_receivers_.GetCurrentTargetFrame();
-
-  if (!content::ChildProcessSecurityPolicy::GetInstance()->CanRequestURL(
-          render_frame_host->GetRoutingID(), url)) {
+  if (extensions::WebViewGuest::FromRenderFrameHost(&render_frame_host)) {
     return;
   }
 
-  content::Referrer referrer = content::Referrer::SanitizeForRequest(
-      url, content::Referrer(web_contents()->GetURL(),
-                             network::mojom::ReferrerPolicy::kDefault));
+  content::Referrer referrer;
+  if (!CanOpenPdfUrl(render_frame_host, url,
+                     web_contents()->GetLastCommittedURL(), &referrer)) {
+    return;
+  }
 
-#if BUILDFLAG(ENABLE_PLUGINS)
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("pdf_plugin_placeholder", R"(
         semantics {
@@ -231,24 +98,11 @@ void PluginObserver::OpenPDF(const GURL& url) {
           }
         })");
   std::unique_ptr<download::DownloadUrlParameters> params =
-      std::make_unique<download::DownloadUrlParameters>(
-          url, render_frame_host->GetRenderViewHost()->GetProcess()->GetID(),
-          render_frame_host->GetRoutingID(), traffic_annotation);
+      render_frame_host.CreateDownloadUrlParameters(url, traffic_annotation);
   params->set_referrer(referrer.url);
   params->set_referrer_policy(
       content::Referrer::ReferrerPolicyForUrlRequest(referrer.policy));
 
   web_contents()->GetBrowserContext()->GetDownloadManager()->DownloadUrl(
       std::move(params));
-
-#else   // !BUILDFLAG(ENABLE_PLUGINS)
-  content::OpenURLParams open_url_params(
-      url, referrer, WindowOpenDisposition::CURRENT_TAB,
-      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
-  // On Android, PDFs downloaded with a user gesture are auto-opened.
-  open_url_params.user_gesture = true;
-  web_contents()->OpenURL(open_url_params);
-#endif  // BUILDFLAG(ENABLE_PLUGINS)
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(PluginObserver)

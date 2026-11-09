@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 TrustedSourcesManager::TrustedSourcesManager() {
   base::CommandLine* command_line(base::CommandLine::ForCurrentProcess());
-  DCHECK(command_line);
+  CHECK(command_line, base::NotFatalUntil::M161);
   matcher_ = net::SchemeHostPortMatcher::FromRawString(
       command_line->GetSwitchValueASCII(switches::kTrustedDownloadSources));
 }

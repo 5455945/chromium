@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,13 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/files/file_error_or.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/types/expected_macros.h"
 #include "storage/browser/file_system/file_system_usage_cache.h"
 #include "storage/browser/quota/quota_client_type.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
@@ -48,8 +50,7 @@ void QuotaBackendImpl::ReserveQuota(const url::Origin& origin,
   }
   DCHECK(quota_manager_proxy_.get());
   quota_manager_proxy_->GetUsageAndQuota(
-      blink::StorageKey(origin), FileSystemTypeToQuotaStorageType(type),
-      file_task_runner_,
+      blink::StorageKey::CreateFirstParty(origin),
       base::BindOnce(&QuotaBackendImpl::DidGetUsageAndQuotaForReserveQuota,
                      weak_ptr_factory_.GetWeakPtr(),
                      QuotaReservationInfo(origin, type, delta),
@@ -75,10 +76,10 @@ void QuotaBackendImpl::CommitQuotaUsage(const url::Origin& origin,
   if (!delta)
     return;
   ReserveQuotaInternal(QuotaReservationInfo(origin, type, delta));
-  base::FilePath path;
-  if (GetUsageCachePath(origin, type, &path) != base::File::FILE_OK)
-    return;
-  bool result = file_system_usage_cache_->AtomicUpdateUsageByDelta(path, delta);
+  ASSIGN_OR_RETURN(base::FilePath path, GetUsageCachePath(origin, type),
+                   [](auto) {});
+  bool result = file_system_usage_cache_->AtomicUpdateUsageByDelta(
+      std::move(path), delta);
   DCHECK(result);
 }
 
@@ -86,22 +87,20 @@ void QuotaBackendImpl::IncrementDirtyCount(const url::Origin& origin,
                                            FileSystemType type) {
   DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!origin.opaque());
-  base::FilePath path;
-  if (GetUsageCachePath(origin, type, &path) != base::File::FILE_OK)
-    return;
+  ASSIGN_OR_RETURN(base::FilePath path, GetUsageCachePath(origin, type),
+                   [](auto) {});
   DCHECK(file_system_usage_cache_);
-  file_system_usage_cache_->IncrementDirty(path);
+  file_system_usage_cache_->IncrementDirty(std::move(path));
 }
 
 void QuotaBackendImpl::DecrementDirtyCount(const url::Origin& origin,
                                            FileSystemType type) {
   DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!origin.opaque());
-  base::FilePath path;
-  if (GetUsageCachePath(origin, type, &path) != base::File::FILE_OK)
-    return;
+  ASSIGN_OR_RETURN(base::FilePath path, GetUsageCachePath(origin, type),
+                   [](auto) {});
   DCHECK(file_system_usage_cache_);
-  file_system_usage_cache_->DecrementDirty(path);
+  file_system_usage_cache_->DecrementDirty(std::move(path));
 }
 
 void QuotaBackendImpl::DidGetUsageAndQuotaForReserveQuota(
@@ -141,24 +140,22 @@ void QuotaBackendImpl::ReserveQuotaInternal(const QuotaReservationInfo& info) {
   DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!info.origin.opaque());
   DCHECK(quota_manager_proxy_.get());
-  quota_manager_proxy_->NotifyStorageModified(
-      QuotaClientType::kFileSystem, blink::StorageKey(info.origin),
-      FileSystemTypeToQuotaStorageType(info.type), info.delta,
-      base::Time::Now());
+  auto bucket = BucketLocator::ForDefaultBucket(
+      blink::StorageKey::CreateFirstParty(info.origin));
+  quota_manager_proxy_->NotifyBucketModified(
+      QuotaClientType::kFileSystem, bucket, info.delta, base::Time::Now(),
+      base::DoNothing());
 }
 
-base::File::Error QuotaBackendImpl::GetUsageCachePath(
+base::FileErrorOr<base::FilePath> QuotaBackendImpl::GetUsageCachePath(
     const url::Origin& origin,
-    FileSystemType type,
-    base::FilePath* usage_file_path) {
+    FileSystemType type) {
   DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!origin.opaque());
-  DCHECK(usage_file_path);
-  base::File::Error error = base::File::FILE_OK;
-  *usage_file_path =
-      SandboxFileSystemBackendDelegate::GetUsageCachePathForOriginAndType(
-          obfuscated_file_util_, origin, type, &error);
-  return error;
+  return SandboxFileSystemBackendDelegate::
+      GetUsageCachePathForStorageKeyAndType(
+          obfuscated_file_util_, blink::StorageKey::CreateFirstParty(origin),
+          type);
 }
 
 QuotaBackendImpl::QuotaReservationInfo::QuotaReservationInfo(

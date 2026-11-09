@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 
 #include <jni.h>
 
+#include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/cronet/cronet_upload_data_stream.h"
 #include "net/base/io_buffer.h"
@@ -35,7 +35,14 @@ class ByteBufferWithIOBuffer;
 // object, since normally reads aren't allowed to fail during an upload.
 class CronetUploadDataStreamAdapter : public CronetUploadDataStream::Delegate {
  public:
-  CronetUploadDataStreamAdapter(JNIEnv* env, jobject jupload_data_stream);
+  CronetUploadDataStreamAdapter(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& jupload_data_stream);
+
+  CronetUploadDataStreamAdapter(const CronetUploadDataStreamAdapter&) = delete;
+  CronetUploadDataStreamAdapter& operator=(
+      const CronetUploadDataStreamAdapter&) = delete;
+
   ~CronetUploadDataStreamAdapter() override;
 
   // CronetUploadDataStream::Delegate implementation.  Called on network thread.
@@ -47,11 +54,9 @@ class CronetUploadDataStreamAdapter : public CronetUploadDataStream::Delegate {
 
   // Callbacks from Java, called on some Java thread.
   void OnReadSucceeded(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& obj,
                        int bytes_read,
                        bool final_chunk);
-  void OnRewindSucceeded(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj);
+  void OnRewindSucceeded(JNIEnv* env);
 
   // Destroys |this|. Can be called from any thread, but needs to be protected
   // by the adapter lock.
@@ -68,8 +73,6 @@ class CronetUploadDataStreamAdapter : public CronetUploadDataStream::Delegate {
 
   // Keeps the net::IOBuffer and Java ByteBuffer alive until the next Read().
   std::unique_ptr<ByteBufferWithIOBuffer> buffer_;
-
-  DISALLOW_COPY_AND_ASSIGN(CronetUploadDataStreamAdapter);
 };
 
 }  // namespace cronet

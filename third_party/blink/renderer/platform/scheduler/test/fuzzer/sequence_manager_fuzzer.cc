@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include <stdlib.h>
 #include <iostream>
 
@@ -17,7 +21,7 @@ DEFINE_BINARY_PROTO_FUZZER(
     std::cout << fuzzer_input.DebugString() << std::endl;
   }
 
-  WTF::Partitions::Initialize();
+  blink::Partitions::Initialize();
   base::sequence_manager::SequenceManagerFuzzerProcessor::ParseAndRun(
       fuzzer_input);
 }

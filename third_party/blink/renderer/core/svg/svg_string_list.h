@@ -31,7 +31,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_STRING_LIST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_STRING_LIST_H_
 
-#include "third_party/blink/renderer/core/svg/properties/svg_property_helper.h"
+#include "base/notreached.h"
+#include "third_party/blink/renderer/core/svg/properties/svg_property.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
 
 namespace blink {
@@ -70,7 +71,7 @@ class SVGStringListBase : public SVGPropertyBase {
   virtual SVGParsingError SetValueAsString(const String&) = 0;
 
   // SVGPropertyBase:
-  void Add(const SVGPropertyBase*, const SVGElement*) override;
+  bool Add(const SVGPropertyBase*, const SVGElement*) override;
   void CalculateAnimatedValue(
       const SMILAnimationEffectParameters&,
       float percentage,
@@ -83,12 +84,6 @@ class SVGStringListBase : public SVGPropertyBase {
                           const SVGElement*) const override;
 
   static AnimatedPropertyType ClassType() { return kAnimatedStringList; }
-
-  SVGPropertyBase* CloneForAnimation(const String& value) const override {
-    NOTREACHED();
-    return nullptr;
-  }
-
   AnimatedPropertyType GetType() const override { return ClassType(); }
 
  protected:
@@ -96,10 +91,8 @@ class SVGStringListBase : public SVGPropertyBase {
                                                 char list_delimiter);
   String ValueAsStringWithDelimiter(char list_delimiter) const;
 
-  template <typename CharType>
-  void ParseInternal(const CharType* ptr,
-                     const CharType* end,
-                     char list_delimiter);
+  void ParseCommaSeparated(const StringView&);
+  void ParseSpaceSeparated(const StringView&);
 
   Vector<String> values_;
 };

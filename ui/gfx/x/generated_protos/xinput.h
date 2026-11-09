@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,19 @@
 //    ../../third_party/xcbproto/src \
 //    gen/ui/gfx/x \
 //    bigreq \
-//    composite \
-//    damage \
-//    dpms \
-//    dri2 \
 //    dri3 \
-//    ge \
 //    glx \
-//    present \
 //    randr \
-//    record \
 //    render \
-//    res \
 //    screensaver \
 //    shape \
 //    shm \
 //    sync \
-//    xc_misc \
-//    xevie \
-//    xf86dri \
-//    xf86vidmode \
 //    xfixes \
-//    xinerama \
 //    xinput \
 //    xkb \
-//    xprint \
 //    xproto \
-//    xselinux \
-//    xtest \
-//    xv \
-//    xvmc
+//    xtest
 
 #ifndef UI_GFX_X_GENERATED_PROTOS_XINPUT_H_
 #define UI_GFX_X_GENERATED_PROTOS_XINPUT_H_
@@ -45,15 +28,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/files/scoped_file.h"
-#include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/x/error.h"
 #include "ui/gfx/x/ref_counted_fd.h"
+#include "ui/gfx/x/xproto_types.h"
 #include "xfixes.h"
 #include "xproto.h"
 
@@ -70,7 +53,7 @@ class Future;
 class COMPONENT_EXPORT(X11) Input {
  public:
   static constexpr unsigned major_version = 2;
-  static constexpr unsigned minor_version = 3;
+  static constexpr unsigned minor_version = 4;
 
   Input(Connection* connection, const x11::QueryExtensionReply& info);
 
@@ -226,6 +209,7 @@ class COMPONENT_EXPORT(X11) Input {
     Valuator = 2,
     Scroll = 3,
     Touch = 8,
+    Gesture = 9,
   };
 
   enum class DeviceType : int {
@@ -279,6 +263,8 @@ class COMPONENT_EXPORT(X11) Input {
     Enter = 2,
     FocusIn = 3,
     TouchBegin = 4,
+    GesturePinchBegin = 5,
+    GestureSwipeBegin = 6,
   };
 
   enum class ModifierMask : int {
@@ -375,12 +361,30 @@ class COMPONENT_EXPORT(X11) Input {
     DeviceIsGrabbed = 1 << 1,
   };
 
+  enum class GesturePinchEventFlags : int {
+    GesturePinchCancelled = 1 << 0,
+  };
+
+  enum class GestureSwipeEventFlags : int {
+    GestureSwipeCancelled = 1 << 0,
+  };
+
   struct Fp3232 {
+    bool operator==(const Fp3232& other) const {
+      return integral == other.integral && frac == other.frac;
+    }
+
     int32_t integral{};
     uint32_t frac{};
   };
 
   struct DeviceInfo {
+    bool operator==(const DeviceInfo& other) const {
+      return device_type == other.device_type && device_id == other.device_id &&
+             num_class_info == other.num_class_info &&
+             device_use == other.device_use;
+    }
+
     Atom device_type{};
     uint8_t device_id{};
     uint8_t num_class_info{};
@@ -388,6 +392,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct KeyInfo {
+    bool operator==(const KeyInfo& other) const {
+      return class_id == other.class_id && len == other.len &&
+             min_keycode == other.min_keycode &&
+             max_keycode == other.max_keycode && num_keys == other.num_keys;
+    }
+
     InputClass class_id{};
     uint8_t len{};
     KeyCode min_keycode{};
@@ -396,18 +406,34 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct ButtonInfo {
+    bool operator==(const ButtonInfo& other) const {
+      return class_id == other.class_id && len == other.len &&
+             num_buttons == other.num_buttons;
+    }
+
     InputClass class_id{};
     uint8_t len{};
     uint16_t num_buttons{};
   };
 
   struct AxisInfo {
+    bool operator==(const AxisInfo& other) const {
+      return resolution == other.resolution && minimum == other.minimum &&
+             maximum == other.maximum;
+    }
+
     uint32_t resolution{};
     int32_t minimum{};
     int32_t maximum{};
   };
 
   struct ValuatorInfo {
+    bool operator==(const ValuatorInfo& other) const {
+      return class_id == other.class_id && len == other.len &&
+             mode == other.mode && motion_size == other.motion_size &&
+             axes == other.axes;
+    }
+
     InputClass class_id{};
     uint8_t len{};
     ValuatorMode mode{};
@@ -430,26 +456,49 @@ class COMPONENT_EXPORT(X11) Input {
       uint32_t motion_size{};
       std::vector<AxisInfo> axes{};
     };
-    absl::optional<Key> key{};
-    absl::optional<Button> button{};
-    absl::optional<Valuator> valuator{};
+    std::optional<Key> key{};
+    std::optional<Button> button{};
+    std::optional<Valuator> valuator{};
   };
 
   struct DeviceName {
+    bool operator==(const DeviceName& other) const {
+      return string == other.string;
+    }
+
     std::string string{};
   };
 
   struct InputClassInfo {
+    bool operator==(const InputClassInfo& other) const {
+      return class_id == other.class_id &&
+             event_type_base == other.event_type_base;
+    }
+
     InputClass class_id{};
     EventTypeBase event_type_base{};
   };
 
   struct DeviceTimeCoord {
+    bool operator==(const DeviceTimeCoord& other) const {
+      return time == other.time && axisvalues == other.axisvalues;
+    }
+
     Time time{};
     std::vector<int32_t> axisvalues{};
   };
 
   struct KbdFeedbackState {
+    bool operator==(const KbdFeedbackState& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && pitch == other.pitch &&
+             duration == other.duration && led_mask == other.led_mask &&
+             led_values == other.led_values &&
+             global_auto_repeat == other.global_auto_repeat &&
+             click == other.click && percent == other.percent &&
+             auto_repeats == other.auto_repeats;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -464,6 +513,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct PtrFeedbackState {
+    bool operator==(const PtrFeedbackState& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && accel_num == other.accel_num &&
+             accel_denom == other.accel_denom && threshold == other.threshold;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -473,6 +528,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct IntegerFeedbackState {
+    bool operator==(const IntegerFeedbackState& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && resolution == other.resolution &&
+             min_value == other.min_value && max_value == other.max_value;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -482,6 +543,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct StringFeedbackState {
+    bool operator==(const StringFeedbackState& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && max_symbols == other.max_symbols &&
+             keysyms == other.keysyms;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -490,6 +557,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct BellFeedbackState {
+    bool operator==(const BellFeedbackState& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && percent == other.percent &&
+             pitch == other.pitch && duration == other.duration;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -499,6 +572,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct LedFeedbackState {
+    bool operator==(const LedFeedbackState& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && led_mask == other.led_mask &&
+             led_values == other.led_values;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -542,15 +621,26 @@ class COMPONENT_EXPORT(X11) Input {
       uint16_t pitch{};
       uint16_t duration{};
     };
-    absl::optional<Keyboard> keyboard{};
-    absl::optional<Pointer> pointer{};
-    absl::optional<String> string{};
-    absl::optional<Integer> integer{};
-    absl::optional<Led> led{};
-    absl::optional<Bell> bell{};
+    std::optional<Keyboard> keyboard{};
+    std::optional<Pointer> pointer{};
+    std::optional<String> string{};
+    std::optional<Integer> integer{};
+    std::optional<Led> led{};
+    std::optional<Bell> bell{};
   };
 
   struct KbdFeedbackCtl {
+    bool operator==(const KbdFeedbackCtl& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && key == other.key &&
+             auto_repeat_mode == other.auto_repeat_mode &&
+             key_click_percent == other.key_click_percent &&
+             bell_percent == other.bell_percent &&
+             bell_pitch == other.bell_pitch &&
+             bell_duration == other.bell_duration &&
+             led_mask == other.led_mask && led_values == other.led_values;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -565,6 +655,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct PtrFeedbackCtl {
+    bool operator==(const PtrFeedbackCtl& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && num == other.num && denom == other.denom &&
+             threshold == other.threshold;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -574,6 +670,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct IntegerFeedbackCtl {
+    bool operator==(const IntegerFeedbackCtl& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && int_to_display == other.int_to_display;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -581,6 +682,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct StringFeedbackCtl {
+    bool operator==(const StringFeedbackCtl& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && keysyms == other.keysyms;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -588,6 +694,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct BellFeedbackCtl {
+    bool operator==(const BellFeedbackCtl& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && percent == other.percent &&
+             pitch == other.pitch && duration == other.duration;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -597,6 +709,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct LedFeedbackCtl {
+    bool operator==(const LedFeedbackCtl& other) const {
+      return class_id == other.class_id && feedback_id == other.feedback_id &&
+             len == other.len && led_mask == other.led_mask &&
+             led_values == other.led_values;
+    }
+
     FeedbackClass class_id{};
     uint8_t feedback_id{};
     uint16_t len{};
@@ -637,15 +755,20 @@ class COMPONENT_EXPORT(X11) Input {
       int16_t pitch{};
       int16_t duration{};
     };
-    absl::optional<Keyboard> keyboard{};
-    absl::optional<Pointer> pointer{};
-    absl::optional<String> string{};
-    absl::optional<Integer> integer{};
-    absl::optional<Led> led{};
-    absl::optional<Bell> bell{};
+    std::optional<Keyboard> keyboard{};
+    std::optional<Pointer> pointer{};
+    std::optional<String> string{};
+    std::optional<Integer> integer{};
+    std::optional<Led> led{};
+    std::optional<Bell> bell{};
   };
 
   struct KeyState {
+    bool operator==(const KeyState& other) const {
+      return class_id == other.class_id && len == other.len &&
+             num_keys == other.num_keys && keys == other.keys;
+    }
+
     InputClass class_id{};
     uint8_t len{};
     uint8_t num_keys{};
@@ -653,6 +776,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct ButtonState {
+    bool operator==(const ButtonState& other) const {
+      return class_id == other.class_id && len == other.len &&
+             num_buttons == other.num_buttons && buttons == other.buttons;
+    }
+
     InputClass class_id{};
     uint8_t len{};
     uint8_t num_buttons{};
@@ -660,6 +788,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct ValuatorState {
+    bool operator==(const ValuatorState& other) const {
+      return class_id == other.class_id && len == other.len &&
+             mode == other.mode && valuators == other.valuators;
+    }
+
     InputClass class_id{};
     uint8_t len{};
     ValuatorStateModeMask mode{};
@@ -680,12 +813,19 @@ class COMPONENT_EXPORT(X11) Input {
       ValuatorStateModeMask mode{};
       std::vector<int32_t> valuators{};
     };
-    absl::optional<Key> key{};
-    absl::optional<Button> button{};
-    absl::optional<Valuator> valuator{};
+    std::optional<Key> key{};
+    std::optional<Button> button{};
+    std::optional<Valuator> valuator{};
   };
 
   struct DeviceResolutionState {
+    bool operator==(const DeviceResolutionState& other) const {
+      return control_id == other.control_id && len == other.len &&
+             resolution_values == other.resolution_values &&
+             resolution_min == other.resolution_min &&
+             resolution_max == other.resolution_max;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     std::vector<uint32_t> resolution_values{};
@@ -694,6 +834,15 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceAbsCalibState {
+    bool operator==(const DeviceAbsCalibState& other) const {
+      return control_id == other.control_id && len == other.len &&
+             min_x == other.min_x && max_x == other.max_x &&
+             min_y == other.min_y && max_y == other.max_y &&
+             flip_x == other.flip_x && flip_y == other.flip_y &&
+             rotation == other.rotation &&
+             button_threshold == other.button_threshold;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     int32_t min_x{};
@@ -707,6 +856,13 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceAbsAreaState {
+    bool operator==(const DeviceAbsAreaState& other) const {
+      return control_id == other.control_id && len == other.len &&
+             offset_x == other.offset_x && offset_y == other.offset_y &&
+             width == other.width && height == other.height &&
+             screen == other.screen && following == other.following;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint32_t offset_x{};
@@ -718,6 +874,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceCoreState {
+    bool operator==(const DeviceCoreState& other) const {
+      return control_id == other.control_id && len == other.len &&
+             status == other.status && iscore == other.iscore;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint8_t status{};
@@ -725,6 +886,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceEnableState {
+    bool operator==(const DeviceEnableState& other) const {
+      return control_id == other.control_id && len == other.len &&
+             enable == other.enable;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint8_t enable{};
@@ -762,14 +928,20 @@ class COMPONENT_EXPORT(X11) Input {
       uint32_t screen{};
       uint32_t following{};
     };
-    absl::optional<Resolution> resolution{};
-    absl::optional<AbsCalib> abs_calib{};
-    absl::optional<Core> core{};
-    absl::optional<Enable> enable{};
-    absl::optional<AbsArea> abs_area{};
+    std::optional<Resolution> resolution{};
+    std::optional<AbsCalib> abs_calib{};
+    std::optional<Core> core{};
+    std::optional<Enable> enable{};
+    std::optional<AbsArea> abs_area{};
   };
 
   struct DeviceResolutionCtl {
+    bool operator==(const DeviceResolutionCtl& other) const {
+      return control_id == other.control_id && len == other.len &&
+             first_valuator == other.first_valuator &&
+             resolution_values == other.resolution_values;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint8_t first_valuator{};
@@ -777,6 +949,15 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceAbsCalibCtl {
+    bool operator==(const DeviceAbsCalibCtl& other) const {
+      return control_id == other.control_id && len == other.len &&
+             min_x == other.min_x && max_x == other.max_x &&
+             min_y == other.min_y && max_y == other.max_y &&
+             flip_x == other.flip_x && flip_y == other.flip_y &&
+             rotation == other.rotation &&
+             button_threshold == other.button_threshold;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     int32_t min_x{};
@@ -790,6 +971,13 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceAbsAreaCtrl {
+    bool operator==(const DeviceAbsAreaCtrl& other) const {
+      return control_id == other.control_id && len == other.len &&
+             offset_x == other.offset_x && offset_y == other.offset_y &&
+             width == other.width && height == other.height &&
+             screen == other.screen && following == other.following;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint32_t offset_x{};
@@ -801,12 +989,22 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DeviceCoreCtrl {
+    bool operator==(const DeviceCoreCtrl& other) const {
+      return control_id == other.control_id && len == other.len &&
+             status == other.status;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint8_t status{};
   };
 
   struct DeviceEnableCtrl {
+    bool operator==(const DeviceEnableCtrl& other) const {
+      return control_id == other.control_id && len == other.len &&
+             enable == other.enable;
+    }
+
     DeviceControl control_id{};
     uint16_t len{};
     uint8_t enable{};
@@ -842,14 +1040,19 @@ class COMPONENT_EXPORT(X11) Input {
       int32_t screen{};
       uint32_t following{};
     };
-    absl::optional<Resolution> resolution{};
-    absl::optional<AbsCalib> abs_calib{};
-    absl::optional<Core> core{};
-    absl::optional<Enable> enable{};
-    absl::optional<AbsArea> abs_area{};
+    std::optional<Resolution> resolution{};
+    std::optional<AbsCalib> abs_calib{};
+    std::optional<Core> core{};
+    std::optional<Enable> enable{};
+    std::optional<AbsArea> abs_area{};
   };
 
   struct GroupInfo {
+    bool operator==(const GroupInfo& other) const {
+      return base == other.base && latched == other.latched &&
+             locked == other.locked && effective == other.effective;
+    }
+
     uint8_t base{};
     uint8_t latched{};
     uint8_t locked{};
@@ -857,6 +1060,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct ModifierInfo {
+    bool operator==(const ModifierInfo& other) const {
+      return base == other.base && latched == other.latched &&
+             locked == other.locked && effective == other.effective;
+    }
+
     uint32_t base{};
     uint32_t latched{};
     uint32_t locked{};
@@ -864,6 +1072,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct AddMaster {
+    bool operator==(const AddMaster& other) const {
+      return type == other.type && len == other.len &&
+             send_core == other.send_core && enable == other.enable &&
+             name == other.name;
+    }
+
     HierarchyChangeType type{};
     uint16_t len{};
     uint8_t send_core{};
@@ -872,6 +1086,13 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct RemoveMaster {
+    bool operator==(const RemoveMaster& other) const {
+      return type == other.type && len == other.len &&
+             deviceid == other.deviceid && return_mode == other.return_mode &&
+             return_pointer == other.return_pointer &&
+             return_keyboard == other.return_keyboard;
+    }
+
     HierarchyChangeType type{};
     uint16_t len{};
     DeviceId deviceid{};
@@ -881,6 +1102,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct AttachSlave {
+    bool operator==(const AttachSlave& other) const {
+      return type == other.type && len == other.len &&
+             deviceid == other.deviceid && master == other.master;
+    }
+
     HierarchyChangeType type{};
     uint16_t len{};
     DeviceId deviceid{};
@@ -888,6 +1114,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct DetachSlave {
+    bool operator==(const DetachSlave& other) const {
+      return type == other.type && len == other.len &&
+             deviceid == other.deviceid;
+    }
+
     HierarchyChangeType type{};
     uint16_t len{};
     DeviceId deviceid{};
@@ -913,18 +1144,28 @@ class COMPONENT_EXPORT(X11) Input {
     struct DetachSlave {
       DeviceId deviceid{};
     };
-    absl::optional<AddMaster> add_master{};
-    absl::optional<RemoveMaster> remove_master{};
-    absl::optional<AttachSlave> attach_slave{};
-    absl::optional<DetachSlave> detach_slave{};
+    std::optional<AddMaster> add_master{};
+    std::optional<RemoveMaster> remove_master{};
+    std::optional<AttachSlave> attach_slave{};
+    std::optional<DetachSlave> detach_slave{};
   };
 
   struct EventMask {
+    bool operator==(const EventMask& other) const {
+      return deviceid == other.deviceid && mask == other.mask;
+    }
+
     DeviceId deviceid{};
     std::vector<XIEventMask> mask{};
   };
 
   struct ButtonClass {
+    bool operator==(const ButtonClass& other) const {
+      return type == other.type && len == other.len &&
+             sourceid == other.sourceid && state == other.state &&
+             labels == other.labels;
+    }
+
     DeviceClassType type{};
     uint16_t len{};
     DeviceId sourceid{};
@@ -933,6 +1174,11 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct KeyClass {
+    bool operator==(const KeyClass& other) const {
+      return type == other.type && len == other.len &&
+             sourceid == other.sourceid && keys == other.keys;
+    }
+
     DeviceClassType type{};
     uint16_t len{};
     DeviceId sourceid{};
@@ -940,6 +1186,13 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct ScrollClass {
+    bool operator==(const ScrollClass& other) const {
+      return type == other.type && len == other.len &&
+             sourceid == other.sourceid && number == other.number &&
+             scroll_type == other.scroll_type && flags == other.flags &&
+             increment == other.increment;
+    }
+
     DeviceClassType type{};
     uint16_t len{};
     DeviceId sourceid{};
@@ -950,6 +1203,12 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct TouchClass {
+    bool operator==(const TouchClass& other) const {
+      return type == other.type && len == other.len &&
+             sourceid == other.sourceid && mode == other.mode &&
+             num_touches == other.num_touches;
+    }
+
     DeviceClassType type{};
     uint16_t len{};
     DeviceId sourceid{};
@@ -957,7 +1216,27 @@ class COMPONENT_EXPORT(X11) Input {
     uint8_t num_touches{};
   };
 
+  struct GestureClass {
+    bool operator==(const GestureClass& other) const {
+      return type == other.type && len == other.len &&
+             sourceid == other.sourceid && num_touches == other.num_touches;
+    }
+
+    DeviceClassType type{};
+    uint16_t len{};
+    DeviceId sourceid{};
+    uint8_t num_touches{};
+  };
+
   struct ValuatorClass {
+    bool operator==(const ValuatorClass& other) const {
+      return type == other.type && len == other.len &&
+             sourceid == other.sourceid && number == other.number &&
+             label == other.label && min == other.min && max == other.max &&
+             value == other.value && resolution == other.resolution &&
+             mode == other.mode;
+    }
+
     DeviceClassType type{};
     uint16_t len{};
     DeviceId sourceid{};
@@ -999,11 +1278,15 @@ class COMPONENT_EXPORT(X11) Input {
       TouchMode mode{};
       uint8_t num_touches{};
     };
-    absl::optional<Key> key{};
-    absl::optional<Button> button{};
-    absl::optional<Valuator> valuator{};
-    absl::optional<Scroll> scroll{};
-    absl::optional<Touch> touch{};
+    struct Gesture {
+      uint8_t num_touches{};
+    };
+    std::optional<Key> key{};
+    std::optional<Button> button{};
+    std::optional<Valuator> valuator{};
+    std::optional<Scroll> scroll{};
+    std::optional<Touch> touch{};
+    std::optional<Gesture> gesture{};
   };
 
   struct XIDeviceInfo {
@@ -1016,32 +1299,38 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct GrabModifierInfo {
+    bool operator==(const GrabModifierInfo& other) const {
+      return modifiers == other.modifiers && status == other.status;
+    }
+
     uint32_t modifiers{};
     GrabStatus status{};
   };
 
   struct BarrierReleasePointerInfo {
+    bool operator==(const BarrierReleasePointerInfo& other) const {
+      return deviceid == other.deviceid && barrier == other.barrier &&
+             eventid == other.eventid;
+    }
+
     DeviceId deviceid{};
     XFixes::Barrier barrier{};
     uint32_t eventid{};
   };
 
   struct DeviceValuatorEvent {
-    static constexpr int type_id = 20;
+    static constexpr uint8_t type_id = 12;
     static constexpr uint8_t opcode = 0;
-    bool send_event{};
     uint8_t device_id{};
     uint16_t sequence{};
     uint16_t device_state{};
     uint8_t num_valuators{};
     uint8_t first_valuator{};
     std::array<int32_t, 6> valuators{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct LegacyDeviceEvent {
-    static constexpr int type_id = 21;
+    static constexpr uint8_t type_id = 13;
     enum Opcode {
       DeviceKeyPress = 1,
       DeviceKeyRelease = 2,
@@ -1051,7 +1340,6 @@ class COMPONENT_EXPORT(X11) Input {
       ProximityIn = 8,
       ProximityOut = 9,
     } opcode{};
-    bool send_event{};
     uint8_t detail{};
     uint16_t sequence{};
     Time time{};
@@ -1065,31 +1353,25 @@ class COMPONENT_EXPORT(X11) Input {
     KeyButMask state{};
     uint8_t same_screen{};
     uint8_t device_id{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&event); }
   };
 
   struct DeviceFocusEvent {
-    static constexpr int type_id = 22;
+    static constexpr uint8_t type_id = 14;
     enum Opcode {
       In = 6,
       Out = 7,
     } opcode{};
-    bool send_event{};
     x11::NotifyDetail detail{};
     uint16_t sequence{};
     Time time{};
     Window window{};
     x11::NotifyMode mode{};
     uint8_t device_id{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&window); }
   };
 
   struct DeviceStateNotifyEvent {
-    static constexpr int type_id = 23;
+    static constexpr uint8_t type_id = 15;
     static constexpr uint8_t opcode = 10;
-    bool send_event{};
     uint8_t device_id{};
     uint16_t sequence{};
     Time time{};
@@ -1100,100 +1382,77 @@ class COMPONENT_EXPORT(X11) Input {
     std::array<uint8_t, 4> buttons{};
     std::array<uint8_t, 4> keys{};
     std::array<uint32_t, 3> valuators{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DeviceMappingNotifyEvent {
-    static constexpr int type_id = 24;
+    static constexpr uint8_t type_id = 16;
     static constexpr uint8_t opcode = 11;
-    bool send_event{};
     uint8_t device_id{};
     uint16_t sequence{};
     Mapping request{};
     KeyCode first_keycode{};
     uint8_t count{};
     Time time{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct ChangeDeviceNotifyEvent {
-    static constexpr int type_id = 25;
+    static constexpr uint8_t type_id = 17;
     static constexpr uint8_t opcode = 12;
-    bool send_event{};
     uint8_t device_id{};
     uint16_t sequence{};
     Time time{};
     ChangeDevice request{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DeviceKeyStateNotifyEvent {
-    static constexpr int type_id = 26;
+    static constexpr uint8_t type_id = 18;
     static constexpr uint8_t opcode = 13;
-    bool send_event{};
     uint8_t device_id{};
     uint16_t sequence{};
     std::array<uint8_t, 28> keys{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DeviceButtonStateNotifyEvent {
-    static constexpr int type_id = 27;
+    static constexpr uint8_t type_id = 19;
     static constexpr uint8_t opcode = 14;
-    bool send_event{};
     uint8_t device_id{};
     uint16_t sequence{};
     std::array<uint8_t, 28> buttons{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DevicePresenceNotifyEvent {
-    static constexpr int type_id = 28;
+    static constexpr uint8_t type_id = 20;
     static constexpr uint8_t opcode = 15;
-    bool send_event{};
     uint16_t sequence{};
     Time time{};
     DeviceChange devchange{};
     uint8_t device_id{};
     uint16_t control{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DevicePropertyNotifyEvent {
-    static constexpr int type_id = 29;
+    static constexpr uint8_t type_id = 21;
     static constexpr uint8_t opcode = 16;
-    bool send_event{};
     Property state{};
     uint16_t sequence{};
     Time time{};
     Atom property{};
     uint8_t device_id{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DeviceChangedEvent {
-    static constexpr int type_id = 30;
+    static constexpr uint8_t type_id = 22;
     static constexpr uint8_t opcode = 1;
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
     DeviceId sourceid{};
     ChangeReason reason{};
     std::vector<DeviceClass> classes{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct DeviceEvent {
-    static constexpr int type_id = 31;
+    static constexpr uint8_t type_id = 23;
     enum Opcode {
       KeyPress = 2,
       KeyRelease = 3,
@@ -1204,7 +1463,6 @@ class COMPONENT_EXPORT(X11) Input {
       TouchUpdate = 19,
       TouchEnd = 20,
     } opcode{};
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
@@ -1223,19 +1481,16 @@ class COMPONENT_EXPORT(X11) Input {
     std::vector<uint32_t> button_mask{};
     std::vector<uint32_t> valuator_mask{};
     std::vector<Fp3232> axisvalues{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&event); }
   };
 
   struct CrossingEvent {
-    static constexpr int type_id = 32;
+    static constexpr uint8_t type_id = 24;
     enum Opcode {
       Enter = 7,
       Leave = 8,
       FocusIn = 9,
       FocusOut = 10,
     } opcode{};
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
@@ -1254,11 +1509,15 @@ class COMPONENT_EXPORT(X11) Input {
     ModifierInfo mods{};
     GroupInfo group{};
     std::vector<uint32_t> buttons{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&event); }
   };
 
   struct HierarchyInfo {
+    bool operator==(const HierarchyInfo& other) const {
+      return deviceid == other.deviceid && attachment == other.attachment &&
+             type == other.type && enabled == other.enabled &&
+             flags == other.flags;
+    }
+
     DeviceId deviceid{};
     DeviceId attachment{};
     DeviceType type{};
@@ -1267,33 +1526,27 @@ class COMPONENT_EXPORT(X11) Input {
   };
 
   struct HierarchyEvent {
-    static constexpr int type_id = 33;
+    static constexpr uint8_t type_id = 25;
     static constexpr uint8_t opcode = 11;
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
     HierarchyMask flags{};
     std::vector<HierarchyInfo> infos{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct PropertyEvent {
-    static constexpr int type_id = 34;
+    static constexpr uint8_t type_id = 26;
     static constexpr uint8_t opcode = 12;
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
     Atom property{};
     PropertyFlag what{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct RawDeviceEvent {
-    static constexpr int type_id = 35;
+    static constexpr uint8_t type_id = 27;
     enum Opcode {
       RawKeyPress = 13,
       RawKeyRelease = 14,
@@ -1304,7 +1557,6 @@ class COMPONENT_EXPORT(X11) Input {
       RawTouchUpdate = 23,
       RawTouchEnd = 24,
     } opcode{};
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
@@ -1314,14 +1566,11 @@ class COMPONENT_EXPORT(X11) Input {
     std::vector<uint32_t> valuator_mask{};
     std::vector<Fp3232> axisvalues{};
     std::vector<Fp3232> axisvalues_raw{};
-
-    x11::Window* GetWindow() { return nullptr; }
   };
 
   struct TouchOwnershipEvent {
-    static constexpr int type_id = 36;
+    static constexpr uint8_t type_id = 28;
     static constexpr uint8_t opcode = 21;
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
@@ -1331,17 +1580,14 @@ class COMPONENT_EXPORT(X11) Input {
     Window child{};
     DeviceId sourceid{};
     TouchOwnershipFlags flags{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&event); }
   };
 
   struct BarrierEvent {
-    static constexpr int type_id = 37;
+    static constexpr uint8_t type_id = 29;
     enum Opcode {
       Hit = 25,
       Leave = 26,
     } opcode{};
-    bool send_event{};
     uint16_t sequence{};
     DeviceId deviceid{};
     Time time{};
@@ -1356,37 +1602,108 @@ class COMPONENT_EXPORT(X11) Input {
     Fp1616 root_y{};
     Fp3232 dx{};
     Fp3232 dy{};
+  };
 
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&event); }
+  struct GesturePinchEvent {
+    static constexpr uint8_t type_id = 30;
+    enum Opcode {
+      Begin = 27,
+      Update = 28,
+      End = 29,
+    } opcode{};
+    uint16_t sequence{};
+    DeviceId deviceid{};
+    Time time{};
+    uint32_t detail{};
+    Window root{};
+    Window event{};
+    Window child{};
+    Fp1616 root_x{};
+    Fp1616 root_y{};
+    Fp1616 event_x{};
+    Fp1616 event_y{};
+    Fp1616 delta_x{};
+    Fp1616 delta_y{};
+    Fp1616 delta_unaccel_x{};
+    Fp1616 delta_unaccel_y{};
+    Fp1616 scale{};
+    Fp1616 delta_angle{};
+    DeviceId sourceid{};
+    ModifierInfo mods{};
+    GroupInfo group{};
+    GesturePinchEventFlags flags{};
+  };
+
+  struct GestureSwipeEvent {
+    static constexpr uint8_t type_id = 31;
+    enum Opcode {
+      Begin = 30,
+      Update = 31,
+      End = 32,
+    } opcode{};
+    uint16_t sequence{};
+    DeviceId deviceid{};
+    Time time{};
+    uint32_t detail{};
+    Window root{};
+    Window event{};
+    Window child{};
+    Fp1616 root_x{};
+    Fp1616 root_y{};
+    Fp1616 event_x{};
+    Fp1616 event_y{};
+    Fp1616 delta_x{};
+    Fp1616 delta_y{};
+    Fp1616 delta_unaccel_x{};
+    Fp1616 delta_unaccel_y{};
+    DeviceId sourceid{};
+    ModifierInfo mods{};
+    GroupInfo group{};
+    GestureSwipeEventFlags flags{};
   };
 
   using EventForSend = std::array<uint8_t, 32>;
   struct DeviceError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct EventError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct ModeError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct DeviceBusyError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct ClassError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
@@ -1848,12 +2165,12 @@ class COMPONENT_EXPORT(X11) Input {
                                      const FeedbackCtl& feedback = {
                                          {},
                                          {},
-                                         absl::nullopt,
-                                         absl::nullopt,
-                                         absl::nullopt,
-                                         absl::nullopt,
-                                         absl::nullopt,
-                                         absl::nullopt});
+                                         std::nullopt,
+                                         std::nullopt,
+                                         std::nullopt,
+                                         std::nullopt,
+                                         std::nullopt,
+                                         std::nullopt});
 
   struct GetDeviceKeyMappingRequest {
     uint8_t device_id{};
@@ -2103,11 +2420,11 @@ class COMPONENT_EXPORT(X11) Input {
       const DeviceControl& control_id = {},
       const uint8_t& device_id = {},
       const DeviceCtl& control = {{},
-                                  absl::nullopt,
-                                  absl::nullopt,
-                                  absl::nullopt,
-                                  absl::nullopt,
-                                  absl::nullopt});
+                                  std::nullopt,
+                                  std::nullopt,
+                                  std::nullopt,
+                                  std::nullopt,
+                                  std::nullopt});
 
   struct ListDevicePropertiesRequest {
     uint8_t device_id{};
@@ -2133,9 +2450,9 @@ class COMPONENT_EXPORT(X11) Input {
     uint8_t device_id{};
     PropMode mode{};
     uint32_t num_items{};
-    absl::optional<std::vector<uint8_t>> data8{};
-    absl::optional<std::vector<uint16_t>> data16{};
-    absl::optional<std::vector<uint32_t>> data32{};
+    std::optional<std::vector<uint8_t>> data8{};
+    std::optional<std::vector<uint16_t>> data16{};
+    std::optional<std::vector<uint32_t>> data32{};
   };
 
   using ChangeDevicePropertyResponse = Response<void>;
@@ -2148,9 +2465,9 @@ class COMPONENT_EXPORT(X11) Input {
       const uint8_t& device_id = {},
       const PropMode& mode = {},
       const uint32_t& num_items = {},
-      const absl::optional<std::vector<uint8_t>>& data8 = absl::nullopt,
-      const absl::optional<std::vector<uint16_t>>& data16 = absl::nullopt,
-      const absl::optional<std::vector<uint32_t>>& data32 = absl::nullopt);
+      const std::optional<std::vector<uint8_t>>& data8 = std::nullopt,
+      const std::optional<std::vector<uint16_t>>& data16 = std::nullopt,
+      const std::optional<std::vector<uint32_t>>& data32 = std::nullopt);
 
   struct DeleteDevicePropertyRequest {
     Atom property{};
@@ -2180,9 +2497,9 @@ class COMPONENT_EXPORT(X11) Input {
     uint32_t bytes_after{};
     uint32_t num_items{};
     uint8_t device_id{};
-    absl::optional<std::vector<uint8_t>> data8{};
-    absl::optional<std::vector<uint16_t>> data16{};
-    absl::optional<std::vector<uint32_t>> data32{};
+    std::optional<std::vector<uint8_t>> data8{};
+    std::optional<std::vector<uint16_t>> data16{};
+    std::optional<std::vector<uint32_t>> data32{};
   };
 
   using GetDevicePropertyResponse = Response<GetDevicePropertyReply>;
@@ -2520,9 +2837,9 @@ class COMPONENT_EXPORT(X11) Input {
     Atom property{};
     Atom type{};
     uint32_t num_items{};
-    absl::optional<std::vector<uint8_t>> data8{};
-    absl::optional<std::vector<uint16_t>> data16{};
-    absl::optional<std::vector<uint32_t>> data32{};
+    std::optional<std::vector<uint8_t>> data8{};
+    std::optional<std::vector<uint16_t>> data16{};
+    std::optional<std::vector<uint32_t>> data32{};
   };
 
   using XIChangePropertyResponse = Response<void>;
@@ -2535,9 +2852,9 @@ class COMPONENT_EXPORT(X11) Input {
       const Atom& property = {},
       const Atom& type = {},
       const uint32_t& num_items = {},
-      const absl::optional<std::vector<uint8_t>>& data8 = absl::nullopt,
-      const absl::optional<std::vector<uint16_t>>& data16 = absl::nullopt,
-      const absl::optional<std::vector<uint32_t>>& data32 = absl::nullopt);
+      const std::optional<std::vector<uint8_t>>& data8 = std::nullopt,
+      const std::optional<std::vector<uint16_t>>& data16 = std::nullopt,
+      const std::optional<std::vector<uint32_t>>& data32 = std::nullopt);
 
   struct XIDeletePropertyRequest {
     DeviceId deviceid{};
@@ -2565,9 +2882,9 @@ class COMPONENT_EXPORT(X11) Input {
     Atom type{};
     uint32_t bytes_after{};
     uint32_t num_items{};
-    absl::optional<std::vector<uint8_t>> data8{};
-    absl::optional<std::vector<uint16_t>> data16{};
-    absl::optional<std::vector<uint32_t>> data32{};
+    std::optional<std::vector<uint8_t>> data8{};
+    std::optional<std::vector<uint16_t>> data16{};
+    std::optional<std::vector<uint32_t>> data32{};
   };
 
   using XIGetPropertyResponse = Response<XIGetPropertyReply>;
@@ -3229,6 +3546,38 @@ inline constexpr x11::Input::BarrierFlags operator&(
   using T = std::underlying_type_t<x11::Input::BarrierFlags>;
   return static_cast<x11::Input::BarrierFlags>(static_cast<T>(l) &
                                                static_cast<T>(r));
+}
+
+inline constexpr x11::Input::GesturePinchEventFlags operator|(
+    x11::Input::GesturePinchEventFlags l,
+    x11::Input::GesturePinchEventFlags r) {
+  using T = std::underlying_type_t<x11::Input::GesturePinchEventFlags>;
+  return static_cast<x11::Input::GesturePinchEventFlags>(static_cast<T>(l) |
+                                                         static_cast<T>(r));
+}
+
+inline constexpr x11::Input::GesturePinchEventFlags operator&(
+    x11::Input::GesturePinchEventFlags l,
+    x11::Input::GesturePinchEventFlags r) {
+  using T = std::underlying_type_t<x11::Input::GesturePinchEventFlags>;
+  return static_cast<x11::Input::GesturePinchEventFlags>(static_cast<T>(l) &
+                                                         static_cast<T>(r));
+}
+
+inline constexpr x11::Input::GestureSwipeEventFlags operator|(
+    x11::Input::GestureSwipeEventFlags l,
+    x11::Input::GestureSwipeEventFlags r) {
+  using T = std::underlying_type_t<x11::Input::GestureSwipeEventFlags>;
+  return static_cast<x11::Input::GestureSwipeEventFlags>(static_cast<T>(l) |
+                                                         static_cast<T>(r));
+}
+
+inline constexpr x11::Input::GestureSwipeEventFlags operator&(
+    x11::Input::GestureSwipeEventFlags l,
+    x11::Input::GestureSwipeEventFlags r) {
+  using T = std::underlying_type_t<x11::Input::GestureSwipeEventFlags>;
+  return static_cast<x11::Input::GestureSwipeEventFlags>(static_cast<T>(l) &
+                                                         static_cast<T>(r));
 }
 
 #endif  // UI_GFX_X_GENERATED_PROTOS_XINPUT_H_

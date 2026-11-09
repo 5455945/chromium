@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,7 +40,8 @@ TEST(SmartDimMlAgentUtilTest, ParseInvalidMetadata) {
   base::flat_map<std::string, int> inputs;
   base::flat_map<std::string, int> outputs;
 
-  const absl::optional<base::Value> root = base::JSONReader::Read(json_string);
+  const std::optional<base::Value> root =
+      base::JSONReader::Read(json_string, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_FALSE(ParseMetaInfoFromJsonObject(root.value(), &metrics_model_name,
                                            &threshold, &expected_feature_size,
                                            &inputs, &outputs));
@@ -62,7 +63,8 @@ TEST(SmartDimMlAgentUtilTest, ParseValidMetadata) {
   base::flat_map<std::string, int> inputs;
   base::flat_map<std::string, int> outputs;
 
-  const absl::optional<base::Value> root = base::JSONReader::Read(json_string);
+  const std::optional<base::Value> root =
+      base::JSONReader::Read(json_string, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   EXPECT_TRUE(ParseMetaInfoFromJsonObject(root.value(), &metrics_model_name,
                                           &threshold, &expected_feature_size,
                                           &inputs, &outputs));

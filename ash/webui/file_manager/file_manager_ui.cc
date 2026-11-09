@@ -1,91 +1,160 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/file_manager/file_manager_ui.h"
 
+#include "ash/session/session_controller_impl.h"
+#include "ash/shell.h"
+#include "ash/webui/common/trusted_types_util.h"
 #include "ash/webui/file_manager/file_manager_page_handler.h"
+#include "ash/webui/file_manager/resource_loader.h"
 #include "ash/webui/file_manager/resources/grit/file_manager_swa_resources.h"
 #include "ash/webui/file_manager/resources/grit/file_manager_swa_resources_map.h"
 #include "ash/webui/file_manager/url_constants.h"
-#include "base/memory/ptr_util.h"
+#include "base/check_op.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
+#include "base/values.h"
+#include "components/user_manager/user_type.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/common/url_constants.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/file_manager/grit/file_manager_gen_resources.h"
 #include "ui/file_manager/grit/file_manager_gen_resources_map.h"
-#include "ui/file_manager/grit/file_manager_resources.h"
 #include "ui/file_manager/grit/file_manager_resources_map.h"
 
-namespace ash {
-namespace file_manager {
+namespace ash::file_manager {
+namespace {
 
-void AddFilesAppResources(content::WebUIDataSource* source,
-                          const webui::ResourcePath* entries,
-                          size_t size) {
-  for (size_t i = 0; i < size; ++i) {
-    std::string path(entries[i].path);
-    // Only load resources for Files app.
-    if (base::StartsWith(path, "file_manager/")) {
-      // Files app UI has all paths relative to //ui/file_manager/file_manager/
-      // so we remove the leading file_manager/ to match the existing paths.
-      base::ReplaceFirstSubstringAfterOffset(&path, 0, "file_manager/", "");
-      source->AddResourcePath(path, entries[i].id);
-    }
+bool IsKioskSession() {
+  auto* session_controller = Shell::Get()->session_controller();
+  auto account_id = session_controller->GetActiveAccountId();
+  auto* session = session_controller->GetUserSessionByAccountId(account_id);
+  if (!session) {
+    return false;
   }
+  const auto user_type = session->user_info.type;
+
+  switch (user_type) {
+    case user_manager::UserType::kRegular:
+    case user_manager::UserType::kChild:
+    case user_manager::UserType::kGuest:
+    case user_manager::UserType::kPublicAccount:
+      return false;
+    case user_manager::UserType::kKioskChromeApp:
+    case user_manager::UserType::kKioskWebApp:
+    case user_manager::UserType::kKioskIWA:
+    case user_manager::UserType::kKioskArcvmApp:
+      return true;
+  }
+}
+
+}  // namespace
+
+FileManagerUIConfig::FileManagerUIConfig(
+    SystemWebAppUIConfig::CreateWebUIControllerFunc create_controller_func)
+    : SystemWebAppUIConfig(ash::file_manager::kChromeUIFileManagerHost,
+                           SystemWebAppType::FILE_MANAGER,
+                           create_controller_func) {}
+
+bool FileManagerUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  // Enable file manager WebUI if enable for SWA config or
+  // for the Kiosk session.
+  return SystemWebAppUIConfig::IsWebUIEnabled(browser_context) ||
+         IsKioskSession();
 }
 
 FileManagerUI::FileManagerUI(content::WebUI* web_ui,
                              std::unique_ptr<FileManagerUIDelegate> delegate)
-    : MojoWebUIController(web_ui), delegate_(std::move(delegate)) {
-  auto* browser_context = web_ui->GetWebContents()->GetBrowserContext();
-  auto* trusted_source = CreateTrustedAppDataSource();
-  content::WebUIDataSource::Add(browser_context, trusted_source);
+    : MojoWebDialogUI(web_ui), delegate_(std::move(delegate)) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  // Count the number of active windows. This is done so that we can tell if
+  // there are any active Files SWA windows.
+  ++instance_count_;
+  DCHECK_GT(instance_count_, 0);
+  DLOG(WARNING) << "Starting FileManagerUI. Open windows: " << instance_count_;
+
+  // Increment the counter each time a window is opened. This is to give a
+  // unique ID to each window.
+  ++window_counter_;
+
+  delegate_->ShouldPollDriveHostedPinStates(true);
+
+  CreateAndAddTrustedAppDataSource(web_ui, window_counter_);
+  // Add ability to request chrome-untrusted: URLs
+  web_ui->AddRequestableScheme(content::kChromeUIUntrustedScheme);
+  // Add a handler to provide pluralized strings.
+  web_ui->AddMessageHandler(delegate_->GetPluralStringHandler());
 }
 
-content::WebUIDataSource* FileManagerUI::CreateTrustedAppDataSource() {
-  content::WebUIDataSource* source =
-      content::WebUIDataSource::Create(kChromeUIFileManagerHost);
+void FileManagerUI::CreateAndAddTrustedAppDataSource(content::WebUI* web_ui,
+                                                     int window_number) {
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      web_ui->GetWebContents()->GetBrowserContext(), kChromeUIFileManagerHost);
 
   // Setup chrome://file-manager main and default page.
-  source->AddResourcePath("", IDR_FILE_MANAGER_SWA_MAIN_HTML);
-
+  source->SetDefaultResource(IDR_FILE_MANAGER_MAIN_HTML);
   // Add chrome://file-manager content.
-  source->AddResourcePaths(
-      base::make_span(kFileManagerSwaResources, kFileManagerSwaResourcesSize));
+  source->AddResourcePaths(kFileManagerSwaResources);
 
-  AddFilesAppResources(source, kFileManagerResources,
-                       kFileManagerResourcesSize);
-  AddFilesAppResources(source, kFileManagerGenResources,
-                       kFileManagerGenResourcesSize);
+  AddFilesAppResources(source, kFileManagerResources);
+  AddFilesAppResources(source, kFileManagerGenResources);
 
   // Load time data: add files app strings and feature flags.
   source->EnableReplaceI18nInJS();
-  delegate_->PopulateLoadTimeData(source);
+  base::DictValue dict = delegate_->GetLoadTimeData();
+  dict.Set("WINDOW_NUMBER", window_number);
+  source->AddLocalizedStrings(dict);
   source->UseStringsJs();
 
   // Script security policy.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ScriptSrc,
-      "script-src chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj "
-      "chrome-extension://pmfjbimdmchhbnneeidfognadeopoehp "
+      "script-src chrome-extension://pmfjbimdmchhbnneeidfognadeopoehp "
       "chrome://resources "
       "'self' ;");
 
   // Metadata Shared Worker security policy.
   source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::WorkerSrc,
-      "worker-src chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj "
-      "'self' ;");
+      network::mojom::CSPDirectiveName::WorkerSrc, "worker-src 'self' ;");
 
-  // TODO(crbug.com/1098685): Trusted Type remaining WebUI.
-  source->DisableTrustedTypesCSP();
+  // Allow using the chrome-untrusted:// scheme in the host.
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::FrameSrc,
+      "frame-src chrome-untrusted://file-manager "
+      "'self';");
 
-  return source;
+  ash::EnableTrustedTypesCSP(source);
 }
 
-FileManagerUI::~FileManagerUI() = default;
+int FileManagerUI::GetNumInstances() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return instance_count_;
+}
+
+FileManagerUI::~FileManagerUI() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  DCHECK_GT(instance_count_, 0);
+  --instance_count_;
+
+  DLOG(WARNING) << "Stopping FileManagerUI. Open windows: " << instance_count_;
+
+  if (!instance_count_) {
+    delegate_->ProgressPausedTasks();
+    delegate_->ShouldPollDriveHostedPinStates(false);
+    // There might be some tasks blocked by policy that already completed, but
+    // still have a notification so notify FPNM to show them if necessary.
+    delegate_->ShowPolicyNotifications();
+  }
+}
 
 void FileManagerUI::BindInterface(
     mojo::PendingReceiver<mojom::PageHandlerFactory> pending_receiver) {
@@ -105,5 +174,4 @@ void FileManagerUI::CreatePageHandler(
 
 WEB_UI_CONTROLLER_TYPE_IMPL(FileManagerUI)
 
-}  // namespace file_manager
-}  // namespace ash
+}  // namespace ash::file_manager

@@ -1,8 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content.browser.webcontents;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import android.annotation.SuppressLint;
 import android.content.Intent;
@@ -16,25 +19,39 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ChildBindingState;
+import org.chromium.base.TerminationStatus;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.process_launcher.ChildProcessConnection;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
+import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content.browser.ChildProcessLauncherHelperImpl;
+import org.chromium.content.browser.navigation_transitions.BackForwardTransitionAnimationManagerImpl;
+import org.chromium.content.browser.navigation_transitions.BackForwardTransitionAnimationManagerImplJni;
+import org.chromium.content_public.browser.BackForwardTransitionAnimationManager;
 import org.chromium.content_public.browser.ChildProcessImportance;
 import org.chromium.content_public.browser.RenderFrameHost;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.browser.WebContentsStatics;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.content_public.browser.back_forward_transition.AnimationStage;
+import org.chromium.content_public.browser.test.util.BackForwardTransitionAnimationManagerTestUtils;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.content_shell.Shell;
 import org.chromium.content_shell_apk.ChildProcessLauncherTestUtils;
 import org.chromium.content_shell_apk.ContentShellActivity;
 import org.chromium.content_shell_apk.ContentShellActivityTestRule;
+import org.chromium.ui.base.BackGestureEventSwipeEdge;
 
+import java.util.List;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Test various Java WebContents specific features.
@@ -54,12 +71,10 @@ public class WebContentsTest {
      * Check that {@link WebContents#isDestroyed()} works as expected.
      * TODO(dtrainor): Test this using {@link WebContents#destroy()} instead once it is possible to
      * build a {@link WebContents} directly in the content/ layer.
-     *
-     * @throws ExecutionException
      */
     @Test
     @SmallTest
-    public void testWebContentsIsDestroyedMethod() throws ExecutionException {
+    public void testWebContentsIsDestroyedMethod() {
         final ContentShellActivity activity =
                 mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
@@ -73,13 +88,64 @@ public class WebContentsTest {
         mActivityTestRule.loadNewShell(TEST_URL_1);
         Assert.assertNotSame("New shell not created", activity.getActiveShell(), originalShell);
 
-        Assert.assertTrue("WebContents incorrectly marked as not destroyed",
+        Assert.assertTrue(
+                "WebContents incorrectly marked as not destroyed",
                 isWebContentsDestroyed(webContents));
+    }
+
+    @Test
+    @SmallTest
+    public void testNativeDestructionInvalidatesRetainedAnimationManager() {
+        mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
+        mActivityTestRule.waitForActiveShellToBeDoneLoading();
+        WebContents webContents = mActivityTestRule.getWebContents();
+        BackForwardTransitionAnimationManager manager =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            BackForwardTransitionAnimationManagerTestUtils
+                                    .setMinRequiredPhysicalRamMbForTesting(0);
+                            var peer = webContents.getBackForwardTransitionAnimationManager();
+                            Assert.assertNotNull(peer);
+                            Assert.assertSame(
+                                    peer, webContents.getBackForwardTransitionAnimationManager());
+                            Assert.assertEquals(
+                                    AnimationStage.NONE, peer.getCurrentAnimationStage());
+                            return peer;
+                        });
+
+        // Creating another shell destroys the original WebContents and its native manager.
+        mActivityTestRule.loadNewShell(TEST_URL_1);
+        WebContents replacement = mActivityTestRule.getWebContents();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Assert.assertTrue(webContents.isDestroyed());
+                    var replacementManager = replacement.getBackForwardTransitionAnimationManager();
+                    Assert.assertNotNull(replacementManager);
+                    Assert.assertNotSame(manager, replacementManager);
+                    Assert.assertEquals(
+                            AnimationStage.NONE, replacementManager.getCurrentAnimationStage());
+
+                    // Mock after real native destruction so a stale pointer fails
+                    // verification without accessing freed native memory.
+                    var nativeMock = mock(BackForwardTransitionAnimationManagerImpl.Natives.class);
+                    BackForwardTransitionAnimationManagerImplJni.setInstanceForTesting(nativeMock);
+                    try {
+                        manager.onGestureStarted(0.2f, BackGestureEventSwipeEdge.LEFT, false);
+                        manager.onGestureProgressed(0.5f);
+                        manager.onGestureCancelled();
+                        manager.onGestureInvoked();
+                        manager.onContentForNavigationEntryShown();
+                        Assert.assertEquals(
+                                AnimationStage.NONE, manager.getCurrentAnimationStage());
+                        verifyNoInteractions(nativeMock);
+                    } finally {
+                        BackForwardTransitionAnimationManagerImplJni.setInstanceForTesting(null);
+                    }
+                });
     }
 
     /**
      * Check that it is possible to serialize and deserialize a WebContents object through Parcels.
-     *
      */
     @Test
     @SmallTest
@@ -96,8 +162,8 @@ public class WebContentsTest {
 
             // Read back the WebContents.
             parcel.setDataPosition(0);
-            WebContents deserializedWebContents = parcel.readParcelable(
-                    WebContents.class.getClassLoader());
+            WebContents deserializedWebContents =
+                    parcel.readParcelable(WebContents.class.getClassLoader());
 
             // Make sure they're equal.
             Assert.assertEquals(
@@ -112,7 +178,7 @@ public class WebContentsTest {
      */
     @Test
     @SmallTest
-    // TODO(crbug.com/635567): Fix this properly.
+    // TODO(crbug.com/40479664): Fix this properly.
     @SuppressLint("ParcelClassLoader")
     public void testWebContentsSerializeDeserializeInBundle() {
         mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
@@ -153,7 +219,7 @@ public class WebContentsTest {
      */
     @Test
     @SmallTest
-    // TODO(crbug.com/635567): Fix this properly.
+    // TODO(crbug.com/40479664): Fix this properly.
     @SuppressLint("ParcelClassLoader")
     public void testWebContentsSerializeDeserializeInIntent() {
         mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
@@ -211,8 +277,8 @@ public class WebContentsTest {
 
             // Try to read back the WebContents.
             parcel.setDataPosition(0);
-            WebContents deserializedWebContents = parcel.readParcelable(
-                    WebContents.class.getClassLoader());
+            WebContents deserializedWebContents =
+                    parcel.readParcelable(WebContents.class.getClassLoader());
 
             // Make sure we weren't able to deserialize the WebContents.
             Assert.assertNull("Unexpectedly deserialized a WebContents", deserializedWebContents);
@@ -224,11 +290,10 @@ public class WebContentsTest {
     /**
      * Check that serializing a destroyed WebContents always results in a null deserialized
      * WebContents.
-     * @throws ExecutionException
      */
     @Test
     @SmallTest
-    public void testSerializingADestroyedWebContentsDoesNotDeserialize() throws ExecutionException {
+    public void testSerializingADestroyedWebContentsDoesNotDeserialize() {
         ContentShellActivity activity = mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         WebContents webContents = activity.getActiveWebContents();
@@ -244,8 +309,8 @@ public class WebContentsTest {
 
             // Try to read back the WebContents.
             parcel.setDataPosition(0);
-            WebContents deserializedWebContents = parcel.readParcelable(
-                    WebContents.class.getClassLoader());
+            WebContents deserializedWebContents =
+                    parcel.readParcelable(WebContents.class.getClassLoader());
 
             // Make sure we weren't able to deserialize the WebContents.
             Assert.assertNull(
@@ -258,12 +323,10 @@ public class WebContentsTest {
     /**
      * Check that destroying a WebContents after serializing it always results in a null
      * deserialized WebContents.
-     * @throws ExecutionException
      */
     @Test
     @SmallTest
-    public void testDestroyingAWebContentsAfterSerializingDoesNotDeserialize()
-            throws ExecutionException {
+    public void testDestroyingAWebContentsAfterSerializingDoesNotDeserialize() {
         ContentShellActivity activity = mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         WebContents webContents = activity.getActiveWebContents();
@@ -280,8 +343,8 @@ public class WebContentsTest {
 
             // Try to read back the WebContents.
             parcel.setDataPosition(0);
-            WebContents deserializedWebContents = parcel.readParcelable(
-                    WebContents.class.getClassLoader());
+            WebContents deserializedWebContents =
+                    parcel.readParcelable(WebContents.class.getClassLoader());
 
             // Make sure we weren't able to deserialize the WebContents.
             Assert.assertNull(
@@ -316,15 +379,17 @@ public class WebContentsTest {
 
             // Try to read back the WebContents.
             parcel.setDataPosition(0);
-            WebContents deserializedWebContents = parcel.readParcelable(
-                    WebContents.class.getClassLoader());
+            WebContents deserializedWebContents =
+                    parcel.readParcelable(WebContents.class.getClassLoader());
 
             // Make sure we weren't able to deserialize the WebContents.
             Assert.assertNull("Unexpectedly deserialized a WebContents", deserializedWebContents);
 
             // Make sure we can properly deserialize the String after the WebContents.
-            Assert.assertEquals("Failing to read the WebContents corrupted the parcel",
-                    PARCEL_STRING_TEST_DATA, parcel.readString());
+            Assert.assertEquals(
+                    "Failing to read the WebContents corrupted the parcel",
+                    PARCEL_STRING_TEST_DATA,
+                    parcel.readString());
         } finally {
             parcel.recycle();
         }
@@ -343,65 +408,113 @@ public class WebContentsTest {
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         final WebContents webContents = activity.getActiveWebContents();
 
-        PostTask.postTask(UiThreadTaskTraits.DEFAULT, new Runnable() {
-            @Override
-            public void run() {
-                RenderFrameHost frameHost = webContents.getMainFrame();
+        PostTask.postTask(
+                TaskTraits.UI_DEFAULT,
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        RenderFrameHost frameHost = webContents.getMainFrame();
 
-                Assert.assertNotNull(frameHost);
+                        Assert.assertNotNull(frameHost);
 
-                Assert.assertEquals("RenderFrameHost has incorrect last committed URL", TEST_URL_2,
-                        frameHost.getLastCommittedURL().getSpec());
+                        Assert.assertEquals(
+                                "RenderFrameHost has incorrect last committed URL",
+                                TEST_URL_2,
+                                frameHost.getLastCommittedURL().getSpec());
 
-                WebContents associatedWebContents =
-                        WebContentsStatics.fromRenderFrameHost(frameHost);
-                Assert.assertEquals("RenderFrameHost associated with different WebContents",
-                        webContents, associatedWebContents);
-            }
-        });
+                        WebContents associatedWebContents =
+                                WebContentsStatics.fromRenderFrameHost(frameHost);
+                        Assert.assertEquals(
+                                "RenderFrameHost associated with different WebContents",
+                                webContents,
+                                associatedWebContents);
+                    }
+                });
+    }
+
+    @Test
+    @SmallTest
+    public void testWebContentsGetAllRenderFrameHosts() {
+        String testUrl =
+                UrlUtils.encodeHtmlDataUri(
+                        "<html><body>"
+                                + "   <iframe srcdoc='<body>frame1</body>'></iframe>"
+                                + "   <iframe srcdoc='<body>frame2</body>'></iframe>"
+                                + "</body></html>");
+
+        final ContentShellActivity activity = mActivityTestRule.launchContentShellWithUrl(testUrl);
+        mActivityTestRule.waitForActiveShellToBeDoneLoading();
+        final WebContentsImpl webContents = ((WebContentsImpl) activity.getActiveWebContents());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    List<RenderFrameHost> frames = webContents.getAllRenderFrameHosts();
+                    Assert.assertEquals(3, frames.size());
+                });
     }
 
     private ChildProcessConnection getSandboxedChildProcessConnection() {
-        Callable<ChildProcessConnection> getConnectionCallable = () -> {
-            for (ChildProcessLauncherHelperImpl process :
-                    ChildProcessLauncherHelperImpl.getAllProcessesForTesting().values()) {
-                ChildProcessConnection connection = process.getChildProcessConnection();
-                if (connection.getServiceName().getClassName().indexOf("Sandbox") != -1) {
-                    return connection;
-                }
-            }
-            Assert.assertTrue(false);
-            return null;
-        };
+        Callable<ChildProcessConnection> getConnectionCallable =
+                () -> {
+                    for (ChildProcessLauncherHelperImpl process :
+                            ChildProcessLauncherHelperImpl.getAllProcessesForTesting().values()) {
+                        ChildProcessConnection connection = process.getChildProcessConnection();
+                        if (connection.getServiceName().getClassName().indexOf("Sandbox") != -1) {
+                            return connection;
+                        }
+                    }
+                    Assert.assertTrue(false);
+                    return null;
+                };
         return ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(getConnectionCallable);
     }
 
     @Test
     @SmallTest
+    // This test may run with --site-per-process or AndroidWarmUpSpareRendererWithTimeout,
+    // which also enables a feature to maintain a spare renderer process.
+    // The test expects only one renderer process and may incorrectly check its
+    // assertions on the spare process instead, so disable it.
+    @CommandLineFlags.Add({
+        "disable-features=SpareRendererForSitePerProcess,AndroidWarmUpSpareRendererWithTimeout"
+    })
     public void testChildProcessImportance() {
         final ContentShellActivity activity =
                 mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         final WebContents webContents = activity.getActiveWebContents();
         // Make sure visibility do not affect bindings.
-        TestThreadUtils.runOnUiThreadBlocking(() -> webContents.onHide());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> webContents.updateWebContentsVisibility(Visibility.HIDDEN));
 
         final ChildProcessConnection connection = getSandboxedChildProcessConnection();
         // Need to poll here because there is an intentional delay for removing binding.
         CriteriaHelper.pollInstrumentationThread(
-                ()
-                        -> ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(
-                                () -> !connection.isModerateBindingBound()),
+                () -> {
+                    return ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(
+                            () -> connection.bindingStateCurrent() < ChildBindingState.VISIBLE);
+                },
                 "Failed to remove moderate binding");
 
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> webContents.setImportance(ChildProcessImportance.MODERATE));
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        webContents.setPrimaryPageImportance(
+                                ChildProcessImportance.MODERATE, ChildProcessImportance.NORMAL));
         ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(
-                () -> Assert.assertTrue(connection.isModerateBindingBound()));
+                () ->
+                        Assert.assertEquals(
+                                ChildBindingState.VISIBLE, connection.bindingStateCurrent()));
     }
 
     @Test
     @SmallTest
+    // This test may run with --site-per-process or AndroidWarmUpSpareRendererWithTimeout,
+    // which also enables a feature to maintain a spare renderer process.
+    // The test expects only one renderer process and may incorrectly check its
+    // assertions on the spare process instead, so disable it.
+    @CommandLineFlags.Add({
+        "disable-features=SpareRendererForSitePerProcess,AndroidWarmUpSpareRendererWithTimeout"
+    })
     public void testVisibilityControlsBinding() {
         final ContentShellActivity activity =
                 mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
@@ -410,26 +523,75 @@ public class WebContentsTest {
 
         final ChildProcessConnection connection = getSandboxedChildProcessConnection();
         ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(
-                () -> Assert.assertTrue(connection.isStrongBindingBound()));
+                () ->
+                        Assert.assertEquals(
+                                ChildBindingState.STRONG, connection.bindingStateCurrent()));
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> webContents.onHide());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> webContents.updateWebContentsVisibility(Visibility.HIDDEN));
         CriteriaHelper.pollInstrumentationThread(
-                ()
-                        -> ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(
-                                () -> !connection.isStrongBindingBound()),
+                () ->
+                        ChildProcessLauncherTestUtils.runOnLauncherAndGetResult(
+                                () -> connection.bindingStateCurrent() < ChildBindingState.STRONG),
                 "Failed to remove strong binding");
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> webContents.onShow());
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> webContents.updateWebContentsVisibility(Visibility.VISIBLE));
         ChildProcessLauncherTestUtils.runOnLauncherThreadBlocking(
-                () -> Assert.assertTrue(connection.isStrongBindingBound()));
+                () ->
+                        Assert.assertEquals(
+                                ChildBindingState.STRONG, connection.bindingStateCurrent()));
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({ContentFeatures.WEB_CONTENTS_DISCARD})
+    public void testWebContentsDiscard() {
+        final ContentShellActivity activity =
+                mActivityTestRule.launchContentShellWithUrl(TEST_URL_1);
+        mActivityTestRule.waitForActiveShellToBeDoneLoading();
+        final WebContents webContents = activity.getActiveWebContents();
+        Assert.assertFalse(isWebContentsDestroyed(webContents));
+
+        final AtomicBoolean onDiscardedCalled = new AtomicBoolean(false);
+        final AtomicBoolean onRenderProcessGone = new AtomicBoolean(false);
+        final AtomicBoolean wasDiscarded = new AtomicBoolean(false);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    WebContentsObserver observer =
+                            new WebContentsObserver(webContents) {
+                                @Override
+                                public void primaryMainFrameRenderProcessGone(
+                                        @TerminationStatus int terminationStatus) {
+                                    onRenderProcessGone.set(true);
+                                }
+
+                                @Override
+                                public void wasDiscarded() {
+                                    wasDiscarded.set(true);
+                                }
+                            };
+                    webContents.discard(() -> onDiscardedCalled.set(true));
+                });
+
+        CriteriaHelper.pollInstrumentationThread(
+                () -> onDiscardedCalled.get(), "onDiscarded not called.");
+        CriteriaHelper.pollInstrumentationThread(
+                () -> onRenderProcessGone.get(), "primaryMainFrameRenderProcessGone not called.");
+        CriteriaHelper.pollInstrumentationThread(
+                () -> wasDiscarded.get(), "wasDiscarded not called.");
+
+        Assert.assertFalse(isWebContentsDestroyed(webContents));
     }
 
     private boolean isWebContentsDestroyed(final WebContents webContents) {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(new Callable<Boolean>() {
-            @Override
-            public Boolean call() {
-                return webContents.isDestroyed();
-            }
-        });
+        return ThreadUtils.runOnUiThreadBlocking(
+                new Callable<Boolean>() {
+                    @Override
+                    public Boolean call() {
+                        return webContents.isDestroyed();
+                    }
+                });
     }
 }

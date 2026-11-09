@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@ package org.chromium.chrome.browser.firstrun;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-import android.accounts.Account;
 import android.app.Activity;
 import android.os.Bundle;
 
@@ -16,110 +17,115 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.android.controller.ActivityController;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.multidex.ShadowMultiDex;
 
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.components.signin.AccountUtils;
-import org.chromium.components.signin.ChildAccountStatus;
-
-import java.util.Collections;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileProvider;
+import org.chromium.chrome.browser.signin.AppRestrictionSupplier;
+import org.chromium.chrome.browser.signin.ChildAccountStatusSupplier;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.chrome.browser.sync.SyncServiceFactory;
+import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
+import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
+import org.chromium.components.signin.AccountManagerFacadeProvider;
+import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.test.util.TestAccounts;
+import org.chromium.components.sync.SyncService;
 
 /**
  * Tests FirstRunFlowSequencer which contains the core logic of what should be shown during the
  * first run.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, shadows = {ShadowMultiDex.class})
+@DisableFeatures(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)
 public class FirstRunFlowSequencerTest {
+
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Rule
-    public TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
+    public final AccountManagerTestRule mAccountManagerTestRule = new AccountManagerTestRule();
 
-    /** Information for Google OS account */
-    private static final Account DEFAULT_ACCOUNT =
-            AccountUtils.createAccountFromName("test@gmail.com");
+    /** Testing version of FirstRunFlowSequencer that allows us to override all needed checks. */
+    private static class TestFirstRunFlowSequencerDelegate
+            extends FirstRunFlowSequencer.FirstRunFlowSequencerDelegate {
+        private final boolean mShouldShowSearchEnginePage;
 
-    /**
-     * Testing version of FirstRunFlowSequencer that allows us to override all needed checks.
-     */
-    public static class TestFirstRunFlowSequencer extends FirstRunFlowSequencer {
-        public Bundle returnedBundle;
-        public boolean calledOnFlowIsKnown;
-        public boolean calledSetFirstRunFlowSignInComplete;
-
-        public boolean isFirstRunFlowComplete;
-        public boolean isSignedIn;
-        public boolean isSyncAllowed;
-        public boolean shouldSkipFirstUseHints;
-        public boolean isFirstRunEulaAccepted;
-        public boolean shouldShowDataReductionPage;
-        public boolean shouldShowSearchEnginePage;
-
-        public TestFirstRunFlowSequencer(Activity activity) {
-            super(activity);
-        }
-
-        @Override
-        public void onFlowIsKnown(Bundle freProperties) {
-            calledOnFlowIsKnown = true;
-            if (freProperties != null) onNativeAndPoliciesInitialized(freProperties);
-            returnedBundle = freProperties;
-        }
-
-        @Override
-        public boolean isFirstRunFlowComplete() {
-            return isFirstRunFlowComplete;
-        }
-
-        @Override
-        public boolean isSignedIn() {
-            return isSignedIn;
-        }
-
-        @Override
-        public boolean isSyncAllowed() {
-            return isSyncAllowed;
-        }
-
-        @Override
-        public boolean shouldSkipFirstUseHints() {
-            return shouldSkipFirstUseHints;
-        }
-
-        @Override
-        public boolean isFirstRunEulaAccepted() {
-            return isFirstRunEulaAccepted;
-        }
-
-        @Override
-        public boolean shouldShowDataReductionPage() {
-            return shouldShowDataReductionPage;
+        TestFirstRunFlowSequencerDelegate(
+                OneshotSupplier<ProfileProvider> profileSupplier,
+                boolean shouldShowSearchEnginePage) {
+            super(profileSupplier);
+            mShouldShowSearchEnginePage = shouldShowSearchEnginePage;
         }
 
         @Override
         public boolean shouldShowSearchEnginePage() {
-            return shouldShowSearchEnginePage;
-        }
-
-        @Override
-        protected void setFirstRunFlowSignInComplete() {
-            calledSetFirstRunFlowSignInComplete = true;
+            return mShouldShowSearchEnginePage;
         }
     }
 
+    private static class TestFirstRunFlowSequencer extends FirstRunFlowSequencer {
+        public Bundle bundle;
+        public boolean calledOnFlowIsKnown;
+
+        public TestFirstRunFlowSequencer(
+                Activity activity, OneshotSupplier<ProfileProvider> profileSupplier) {
+            super(
+                    profileSupplier,
+                    new ChildAccountStatusSupplier(
+                            AccountManagerFacadeProvider.getInstance(),
+                            new AppRestrictionSupplier()));
+        }
+
+        @Override
+        public void onFlowIsKnown(boolean isChild) {
+            calledOnFlowIsKnown = true;
+            Bundle freProperties = new Bundle();
+            updateFirstRunProperties(freProperties);
+            bundle = freProperties;
+        }
+    }
+
+    @Mock private IdentityManager mIdentityManagerMock;
+    @Mock private SyncService mSyncServiceMock;
+    @Mock private HistorySyncHelper mHistorySyncHelperMock;
+
     private ActivityController<Activity> mActivityController;
-    private TestFirstRunFlowSequencer mSequencer;
+    private Activity mActivity;
+    private OneshotSupplierImpl<ProfileProvider> mProfileSupplier;
 
     @Before
     public void setUp() {
+        Profile profile = mock(Profile.class);
+        ProfileProvider profileProvider = mock(ProfileProvider.class);
+
+        IdentityServicesProvider.setInstanceForTests(mock(IdentityServicesProvider.class));
+        when(IdentityServicesProvider.get().getIdentityManager(profile))
+                .thenReturn(mIdentityManagerMock);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(false);
+
+        SyncServiceFactory.setInstanceForTesting(mSyncServiceMock);
+        HistorySyncHelper.setInstanceForTesting(mHistorySyncHelperMock);
+
         mActivityController = Robolectric.buildActivity(Activity.class);
-        mSequencer = new TestFirstRunFlowSequencer(mActivityController.setup().get());
+        mActivity = mActivityController.setup().get();
+        mProfileSupplier = new OneshotSupplierImpl<>();
+        when(profileProvider.getOriginalProfile()).thenReturn(profile);
+        mProfileSupplier.set(profileProvider);
     }
 
     @After
@@ -127,98 +133,207 @@ public class FirstRunFlowSequencerTest {
         mActivityController.pause().stop().destroy();
     }
 
-    @Test
-    @Feature({"FirstRun"})
-    public void testStandardFlowTosNotSeen() {
-        mSequencer.isFirstRunFlowComplete = false;
-        mSequencer.isSignedIn = false;
-        mSequencer.isSyncAllowed = true;
-        mSequencer.shouldSkipFirstUseHints = false;
-        mSequencer.shouldShowDataReductionPage = false;
-        mSequencer.initializeSharedState(ChildAccountStatus.NOT_CHILD, Collections.emptyList());
-
-        mSequencer.processFreEnvironmentPreNative();
-        assertTrue(mSequencer.calledOnFlowIsKnown);
-        assertFalse(mSequencer.calledSetFirstRunFlowSignInComplete);
-
-        Bundle bundle = mSequencer.returnedBundle;
-        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_SIGNIN_PAGE));
-        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_DATA_REDUCTION_PAGE));
-        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
-        assertEquals(ChildAccountStatus.NOT_CHILD,
-                bundle.getInt(SyncConsentFirstRunFragment.CHILD_ACCOUNT_STATUS));
-        assertEquals(4, bundle.size());
+    private void setDelegateFactory(boolean shouldShowSearchEnginePage) {
+        FirstRunFlowSequencer.setDelegateFactoryForTesting(
+                (profileSupplier) -> {
+                    return new TestFirstRunFlowSequencerDelegate(
+                            profileSupplier, shouldShowSearchEnginePage);
+                });
     }
 
     @Test
     @Feature({"FirstRun"})
-    public void testStandardFlowOneChildAccount() {
-        mSequencer.isFirstRunFlowComplete = false;
-        mSequencer.isSignedIn = false;
-        mSequencer.isSyncAllowed = true;
-        mSequencer.shouldSkipFirstUseHints = false;
-        mSequencer.shouldShowDataReductionPage = false;
-        mSequencer.initializeSharedState(
-                ChildAccountStatus.REGULAR_CHILD, Collections.singletonList(DEFAULT_ACCOUNT));
+    public void testFlowOneChildAccount() {
+        mAccountManagerTestRule.addAccount(TestAccounts.CHILD_ACCOUNT);
+        setDelegateFactory(false);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 1);
 
-        mSequencer.processFreEnvironmentPreNative();
-        assertTrue(mSequencer.calledOnFlowIsKnown);
-        assertTrue(mSequencer.calledSetFirstRunFlowSignInComplete);
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
 
-        Bundle bundle = mSequencer.returnedBundle;
-        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_SIGNIN_PAGE));
-        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_DATA_REDUCTION_PAGE));
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+
+        Bundle bundle = sequencer.bundle;
+        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
         assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
-        assertEquals(ChildAccountStatus.REGULAR_CHILD,
-                bundle.getInt(SyncConsentFirstRunFragment.CHILD_ACCOUNT_STATUS));
-        assertEquals(4, bundle.size());
+        assertEquals(2, bundle.size());
     }
 
     @Test
     @Feature({"FirstRun"})
-    public void testStandardFlowShowDataReductionPage() {
-        mSequencer.isFirstRunFlowComplete = false;
-        mSequencer.isSignedIn = false;
-        mSequencer.isSyncAllowed = true;
-        mSequencer.shouldSkipFirstUseHints = false;
-        mSequencer.shouldShowDataReductionPage = true;
-        mSequencer.shouldShowSearchEnginePage = false;
-        mSequencer.initializeSharedState(ChildAccountStatus.NOT_CHILD, Collections.emptyList());
+    public void testFlowOneChildAccount_historySyncManagedByCustodian() {
+        when(mHistorySyncHelperMock.isHistorySyncDisabledByCustodian()).thenReturn(true);
+        mAccountManagerTestRule.addAccount(TestAccounts.CHILD_ACCOUNT);
+        setDelegateFactory(false);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 1);
 
-        mSequencer.processFreEnvironmentPreNative();
-        assertTrue(mSequencer.calledOnFlowIsKnown);
-        assertFalse(mSequencer.calledSetFirstRunFlowSignInComplete);
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
 
-        Bundle bundle = mSequencer.returnedBundle;
-        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_SIGNIN_PAGE));
-        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_DATA_REDUCTION_PAGE));
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+
+        Bundle bundle = sequencer.bundle;
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
         assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
-        assertEquals(ChildAccountStatus.NOT_CHILD,
-                bundle.getInt(SyncConsentFirstRunFragment.CHILD_ACCOUNT_STATUS));
-        assertEquals(4, bundle.size());
+        assertEquals(2, bundle.size());
     }
 
     @Test
     @Feature({"FirstRun"})
-    public void testStandardFlowShowSearchEnginePage() {
-        mSequencer.isFirstRunFlowComplete = false;
-        mSequencer.isSignedIn = false;
-        mSequencer.isSyncAllowed = true;
-        mSequencer.shouldSkipFirstUseHints = false;
-        mSequencer.shouldShowDataReductionPage = true;
-        mSequencer.shouldShowSearchEnginePage = true;
-        mSequencer.initializeSharedState(ChildAccountStatus.NOT_CHILD, Collections.emptyList());
+    public void testFlowShowSearchEnginePage() {
+        setDelegateFactory(true);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 0);
 
-        mSequencer.processFreEnvironmentPreNative();
-        assertTrue(mSequencer.calledOnFlowIsKnown);
-        assertFalse(mSequencer.calledSetFirstRunFlowSignInComplete);
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
 
-        Bundle bundle = mSequencer.returnedBundle;
-        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_SIGNIN_PAGE));
-        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_DATA_REDUCTION_PAGE));
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+
+        Bundle bundle = sequencer.bundle;
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
         assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
-        assertEquals(ChildAccountStatus.NOT_CHILD,
-                bundle.getInt(SyncConsentFirstRunFragment.CHILD_ACCOUNT_STATUS));
-        assertEquals(4, bundle.size());
+        assertEquals(2, bundle.size());
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    public void testFlowHideHistorySyncPageWhenUserIsNotSignedIn() {
+        setDelegateFactory(false);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 0);
+
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+        final Bundle bundle = sequencer.bundle;
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
+        assertEquals(2, bundle.size());
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    public void testFlowShowHistorySyncPageWhenUserIsSignedIn() {
+        mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(true);
+        setDelegateFactory(false);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 1);
+
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+        final Bundle bundle = sequencer.bundle;
+        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
+        assertEquals(2, bundle.size());
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    public void testFlowUserIsSignedIn_historySyncDisabledByPolicy() {
+        when(mHistorySyncHelperMock.isHistorySyncDisabledByPolicy()).thenReturn(true);
+        mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(true);
+        setDelegateFactory(false);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 1);
+
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+        final Bundle bundle = sequencer.bundle;
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
+        assertEquals(2, bundle.size());
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    @EnableFeatures(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)
+    public void testFlowUserIsSignedIn_userAlreadySyncsHistory() {
+        when(mHistorySyncHelperMock.didAlreadyOptIn()).thenReturn(true);
+        mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(true);
+        setDelegateFactory(false);
+        HistogramWatcher numberOfAccountsHistogram =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.AndroidDeviceAccountsNumberWhenEnteringFRE", 1);
+
+        TestFirstRunFlowSequencer sequencer =
+                new TestFirstRunFlowSequencer(mActivity, mProfileSupplier);
+        sequencer.start();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        numberOfAccountsHistogram.assertExpected();
+        assertTrue(sequencer.calledOnFlowIsKnown);
+        final Bundle bundle = sequencer.bundle;
+        // Verify that the history syc page shows even if the user already opted in.
+        assertTrue(bundle.getBoolean(FirstRunActivityBase.SHOW_HISTORY_SYNC_PAGE));
+        assertFalse(bundle.getBoolean(FirstRunActivityBase.SHOW_SEARCH_ENGINE_PAGE));
+        assertEquals(2, bundle.size());
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    public void testFirstRunIsNotNecessaryInRetailDemoModeOnNonDesktop() {
+        DeviceInfo.setIsRetailDemoModeForTesting(true);
+        DeviceInfo.setIsDesktopForTesting(false);
+
+        assertFalse(
+                FirstRunFlowSequencer.checkIfFirstRunIsNecessary(
+                        /* preferLightweightFre= */ false, /* isCct= */ false));
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    public void testFirstRunIsNecessaryInRetailDemoModeOnDesktop() {
+        DeviceInfo.setIsRetailDemoModeForTesting(true);
+        DeviceInfo.setIsDesktopForTesting(true);
+
+        assertTrue(
+                FirstRunFlowSequencer.checkIfFirstRunIsNecessary(
+                        /* preferLightweightFre= */ false, /* isCct= */ false));
+    }
+
+    @Test
+    @Feature({"FirstRun"})
+    public void testFirstRunIsNecessaryOutsideOfRetailDemoMode() {
+        DeviceInfo.setIsRetailDemoModeForTesting(false);
+        DeviceInfo.setIsDesktopForTesting(false);
+
+        assertTrue(
+                FirstRunFlowSequencer.checkIfFirstRunIsNecessary(
+                        /* preferLightweightFre= */ false, /* isCct= */ false));
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,7 @@
 
 #include <string>
 
-#include "base/macros.h"
-#include "ui/gfx/gfx_export.h"
+#include "base/component_export.h"
 
 namespace gfx {
 namespace win {
@@ -25,17 +24,20 @@ class TextAnalysisSource
           IDWriteTextAnalysisSource> {
  public:
   // Factory method to avoid exporting the class and all it derives from.
-  static GFX_EXPORT HRESULT
-  Create(IDWriteTextAnalysisSource** text_analysis_out,
-         const std::wstring& text,
-         const std::wstring& locale_name,
-         IDWriteNumberSubstitution* number_substitution,
-         DWRITE_READING_DIRECTION reading_direction);
+  static COMPONENT_EXPORT(GFX) HRESULT
+      Create(IDWriteTextAnalysisSource** text_analysis_out,
+             const std::wstring& text,
+             const std::wstring& locale_name,
+             IDWriteNumberSubstitution* number_substitution,
+             DWRITE_READING_DIRECTION reading_direction);
 
   // Use Create() to construct these objects. Direct calls to the constructor
   // are an error - it is only public because a WRL helper function creates the
   // objects.
   TextAnalysisSource();
+
+  TextAnalysisSource& operator=(const TextAnalysisSource&) = delete;
+
   // IDWriteTextAnalysisSource:
   HRESULT STDMETHODCALLTYPE GetLocaleName(UINT32 text_position,
                                           UINT32* text_length,
@@ -67,8 +69,6 @@ class TextAnalysisSource
   std::wstring locale_name_;
   Microsoft::WRL::ComPtr<IDWriteNumberSubstitution> number_substitution_;
   DWRITE_READING_DIRECTION reading_direction_;
-
-  DISALLOW_ASSIGN(TextAnalysisSource);
 };
 
 }  // namespace win

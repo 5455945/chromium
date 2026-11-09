@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,38 +8,44 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/syslog_logging.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
-#include "chrome/browser/ash/policy/core/device_policy_decoder_chromeos.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/ash/settings/device_settings_cache.h"
+#include "chrome/browser/ash/policy/core/device_policy_decoder.h"
+#include "chrome/browser/ash/policy/handlers/device_dlc_predownload_list_policy_handler.h"
+#include "chrome/browser/ash/policy/handlers/system_proxy_handler.h"
+#include "chrome/browser/ash/policy/off_hours/off_hours_proto_parser.h"
+#include "chrome/browser/ash/settings/hardware_data_usage_controller.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
-#include "chrome/browser/chromeos/policy/handlers/system_proxy_handler.h"
-#include "chrome/browser/chromeos/policy/off_hours/off_hours_proto_parser.h"
-#include "chrome/browser/chromeos/tpm_firmware_update.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/settings/cros_settings_names.h"
-#include "chromeos/tpm/install_attributes.h"
+#include "chrome/browser/ash/tpm/tpm_firmware_update.h"
+#include "chromeos/ash/components/dbus/dbus_thread_manager.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/device_settings_cache.h"
 #include "components/policy/core/common/chrome_schema.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/user_manager/user_manager.h"
 #include "third_party/re2/src/re2/re2.h"
 
 using google::protobuf::RepeatedField;
@@ -52,7 +58,7 @@ namespace ash {
 namespace {
 
 // List of settings handled by the DeviceSettingsProvider.
-const char* const kKnownSettings[] = {
+constexpr auto kKnownSettings = base::MakeFixedFlatSet<std::string_view>({
     kAccountsPrefAllowGuest,
     kAccountsPrefAllowNewUser,
     kAccountsPrefFamilyLinkAccountsAllowed,
@@ -61,6 +67,7 @@ const char* const kKnownSettings[] = {
     kAccountsPrefDeviceLocalAccountAutoLoginId,
     kAccountsPrefDeviceLocalAccountPromptForNetworkWhenOffline,
     kAccountsPrefDeviceLocalAccounts,
+    kAccountsPrefDeviceMaxUserProfiles,
     kAccountsPrefEphemeralUsersEnabled,
     kAccountsPrefLoginScreenDomainAutoComplete,
     kAccountsPrefShowUserNamesOnSignIn,
@@ -70,17 +77,26 @@ const char* const kKnownSettings[] = {
     kAllowedConnectionTypesForUpdate,
     kAllowRedeemChromeOsRegistrationOffers,
     kAttestationForContentProtectionEnabled,
-    kBorealisAllowedForDevice,
     kCastReceiverName,
+    kDeviceFlexArcPreloadEnabled,
+    kDeviceActivityHeartbeatCollectionRateMs,
+    kDeviceActivityHeartbeatEnabled,
     kDeviceAllowedBluetoothServices,
-    kDeviceAttestationEnabled,
+    kDeviceBluetoothJustWorksPairingEnabled,
     kDeviceAutoUpdateTimeRestrictions,
     kDeviceCrostiniArcAdbSideloadingAllowed,
     kDeviceDisabled,
     kDeviceDisabledMessage,
+    kDeviceDisabledLocationTrackingEnabled,
     kDeviceDisplayResolution,
+    kDeviceDlcPredownloadList,
     kDeviceDockMacAddressSource,
+    kDeviceEncryptedReportingPipelineEnabled,
+    kDeviceExtendedAutoUpdateEnabled,
+    kDeviceExtensionsSystemLogEnabled,
+    kDeviceHindiInscriptLayoutEnabled,
     kDeviceHostnameTemplate,
+    kDeviceHostnameUserConfigurable,
     kDeviceLoginScreenInputMethods,
     kDeviceLoginScreenLocales,
     kDeviceLoginScreenSystemInfoEnforced,
@@ -94,43 +110,56 @@ const char* const kKnownSettings[] = {
     kDevicePrintersAccessMode,
     kDevicePrintersBlocklist,
     kDevicePrintersAllowlist,
+    kDevicePrintingClientNameTemplate,
     kDevicePowerwashAllowed,
     kDeviceQuirksDownloadEnabled,
     kDeviceRebootOnUserSignout,
+    kDeviceRestrictedManagedGuestSessionEnabled,
     kDeviceScheduledReboot,
     kDeviceScheduledUpdateCheck,
     kDeviceSecondFactorAuthenticationMode,
     kDeviceUnaffiliatedCrostiniAllowed,
+    kDeviceUserInitiatedFirmwareUpdatesEnabled,
+    kDeviceUserInitiatedFlexSystemFirmwareUpdatesEnabled,
     kDeviceWebBasedAttestationAllowedUrls,
     kDeviceWiFiAllowed,
-    kDeviceWilcoDtcAllowed,
     kDisplayRotationDefault,
     kExtensionCacheSize,
     kFeatureFlags,
     kHeartbeatEnabled,
     kHeartbeatFrequency,
+    kKioskCRXManifestUpdateURLIgnored,
     kLoginAuthenticationBehavior,
     kLoginVideoCaptureAllowedUrls,
-    kPluginVmAllowed,
     kPolicyMissingMitigationMode,
     kRebootOnShutdown,
     kReleaseChannel,
     kReleaseChannelDelegated,
     kReleaseLtsTag,
     kDeviceChannelDowngradeBehavior,
+    kDeviceSystemAecEnabled,
+    kDeviceReportRuntimeCounters,
+    kDeviceReportRuntimeCountersCheckingRateMs,
     kReportDeviceActivityTimes,
+    kReportDeviceAudioStatus,
+    kReportDeviceAudioStatusCheckingRateMs,
     kReportDeviceBluetoothInfo,
     kReportDeviceBoardStatus,
     kReportDeviceBootMode,
     kReportDeviceCrashReportInfo,
     kReportDeviceCpuInfo,
     kReportDeviceFanInfo,
-    kReportDeviceHardwareStatus,
     kReportDeviceLocation,
+    kReportDevicePeripherals,
     kReportDevicePowerStatus,
     kReportDeviceStorageStatus,
-    kReportDeviceNetworkInterfaces,
+    kReportDeviceNetworkConfiguration,
+    kReportDeviceNetworkStatus,
+    kReportDeviceNetworkTelemetryCollectionRateMs,
+    kReportDeviceNetworkTelemetryEventCheckingRateMs,
     kReportDeviceSessionStatus,
+    kReportDeviceSecurityStatus,
+    kReportDeviceSignalStrengthEventDrivenTelemetry,
     kReportDeviceTimezoneInfo,
     kReportDeviceGraphicsStatus,
     kReportDeviceMemoryInfo,
@@ -142,10 +171,11 @@ const char* const kKnownSettings[] = {
     kReportDeviceSystemInfo,
     kReportDevicePrintJobs,
     kReportDeviceLoginLogout,
+    kReportCRDSessions,
     kReportOsUpdateStatus,
     kReportRunningKioskApp,
     kReportUploadFrequency,
-    kSamlLoginAuthenticationType,
+    kRevenEnableDeviceHWDataUsage,
     kServiceAccountIdentity,
     kSignedDataRoamingEnabled,
     kStatsReportingPref,
@@ -160,23 +190,44 @@ const char* const kKnownSettings[] = {
     kUsbDetachableAllowlist,
     kVariationsRestrictParameter,
     kVirtualMachinesAllowed,
-};
+    kDeviceReportXDREvents,
+    kDeviceReportNetworkEvents,
+});
 
-// Re-use the DecodeJsonStringAndNormalize from device_policy_decoder_chromeos.h
+constexpr char InvalidCombinationsOfAllowedUsersPoliciesHistogram[] =
+    "Login.InvalidCombinationsOfAllowedUsersPolicies";
+
+// Re-use the DecodeJsonStringAndNormalize() from device_policy_decoder.h
 // here to decode the json string and validate it against |policy_name|'s
 // schema. If the json string is valid, the decoded base::Value will be stored
 // as |setting_name| in |pref_value_map|. The error can be ignored here since it
-// is already reported during decoding in device_policy_decoder_chromeos.cc.
+// is already reported during decoding in device_policy_decoder.cc.
 void SetJsonDeviceSetting(const std::string& setting_name,
                           const std::string& policy_name,
                           const std::string& json_string,
                           PrefValueMap* pref_value_map) {
-  std::string error;
-  absl::optional<base::Value> decoded_json =
-      policy::DecodeJsonStringAndNormalize(json_string, policy_name, &error);
-  if (decoded_json.has_value()) {
-    pref_value_map->SetValue(setting_name, std::move(decoded_json.value()));
+  auto decoding_result =
+      policy::DecodeJsonStringAndNormalize(json_string, policy_name);
+  if (decoding_result.has_value()) {
+    pref_value_map->SetValue(setting_name,
+                             std::move(decoding_result->decoded_json));
   }
+}
+
+// Re-use the DecodeDeviceDlcPredownloadListPolicy() from
+// device_policy_decoder.h here to decode the list of DLCs that should be pre
+// downloaded to the device.
+void SetDeviceDlcPredownloadListSetting(
+    const RepeatedPtrField<std::string>& raw_policy_value,
+    PrefValueMap* pref_value_map) {
+  std::string warning;
+  base::ListValue decoded_dlc_list =
+      policy::DeviceDlcPredownloadListPolicyHandler::
+          DecodeDeviceDlcPredownloadListPolicy(raw_policy_value, warning);
+  // The warning can be ignored here since it is already reported during
+  // decoding in device_policy_decoder.cc.
+  pref_value_map->SetValue(kDeviceDlcPredownloadList,
+                           base::Value(std::move(decoded_dlc_list)));
 }
 
 // Puts the policy value into the settings store if only it matches the regex
@@ -189,6 +240,113 @@ void SetSettingWithValidatingRegex(const std::string& policy_name,
     pref_value_map->SetString(policy_name, policy_value);
 }
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class AllowedUsersPoliciesInvalidState {
+  AllowlistNotPresentAndAllowNewUsersTrue = 0,
+  AllowlistNotPresentAndAllowNewUsersFalse = 1,
+  AllowlistEmptyAndAllowNewUsersNotPresent = 2,
+  AllowlistNonEmptyAndAllowNewUsersNotPresent = 3,
+  kMaxValue = AllowlistNonEmptyAndAllowNewUsersNotPresent
+};
+
+// Returns the value of the allow_new_users (DeviceAllowNewUsers) device
+// policy or an empty std::optional if the policy was not set.
+std::optional<bool> GetAllowNewUsers(
+    const em::ChromeDeviceSettingsProto& policy) {
+  if (!policy.has_allow_new_users() ||
+      !policy.allow_new_users().has_allow_new_users())
+    return std::nullopt;
+  return std::optional<bool>{policy.allow_new_users().allow_new_users()};
+}
+
+// Returns:
+// - an empty std::optional if the user_allowlist and user_whitelist
+// outer wrapper message is not present.
+// - true if the user_allowlist outer wrapper message is present and the
+//   user_allowlist inner list is empty, or when it's not present,
+//   if the user_whitelist is non-empty.
+// - false if the user_allowlist outer wrapper message is present and the
+//   user_allowlist inner list has at least one element, or when it's not
+//   present, and the user_whitelist has at least one element.
+std::optional<bool> GetIsEmptyAllowList(
+    const em::ChromeDeviceSettingsProto& policy) {
+  if (policy.has_user_allowlist()) {
+    base::UmaHistogramBoolean(kAllowlistCOILFallbackHistogram, false);
+    return policy.user_allowlist().user_allowlist_size() == 0;
+  }
+
+  // use user_whitelist only if user_allowlist is not present
+  if (policy.has_user_whitelist()) {
+    base::UmaHistogramBoolean(kAllowlistCOILFallbackHistogram, true);
+    return policy.user_whitelist().user_whitelist_size() == 0;
+  }
+
+  return std::nullopt;
+}
+
+// Decodes the allow_new_users (DeviceAllowNewUsers) and user_allowlist
+// (DeviceUserAllowlist) policies and the guest_mode_enabled
+// (DeviceGuestModeEnabled) policy.
+void DecodeAllowedUsers(const em::ChromeDeviceSettingsProto& policy,
+                        PrefValueMap* new_values_cache) {
+  auto allow_new_users = GetAllowNewUsers(policy);
+  auto is_empty_allowlist = GetIsEmptyAllowList(policy);
+
+  if (allow_new_users.has_value() && allow_new_users.value() &&
+      is_empty_allowlist.has_value() && is_empty_allowlist.value()) {
+    // Allow any user to sign in
+    new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, true);
+  } else if (allow_new_users.has_value() && !allow_new_users.value() &&
+             is_empty_allowlist.has_value() && !is_empty_allowlist.value()) {
+    // Restrict sign in to a list of users
+    new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, false);
+  } else if (allow_new_users.has_value() && !allow_new_users.value() &&
+             is_empty_allowlist.has_value() && is_empty_allowlist.value()) {
+    // Do not allow any user to sign in
+    new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, false);
+  } else if (!allow_new_users.has_value() && !is_empty_allowlist.has_value()) {
+    // If policies haven't been touched, behavior is similar
+    // to allow any user to sign in
+    new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, true);
+  } else if (allow_new_users.has_value() && allow_new_users.value() &&
+             is_empty_allowlist.has_value() && !is_empty_allowlist.value()) {
+    // Some consumer devices out there already have this
+    // combination of policies configured, the behavior is
+    // similar to the first case: Allow any user to sign in
+    new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, true);
+  } else {
+    // If for some reason we encounter a combination other than
+    // the 5 above, we simply default to allowing everyone to sign in
+    new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, true);
+
+    // Record which of the 4 invalid states we received
+    if (!is_empty_allowlist.has_value() && allow_new_users.has_value()) {
+      base::UmaHistogramEnumeration(
+          InvalidCombinationsOfAllowedUsersPoliciesHistogram,
+          allow_new_users.value()
+              ? AllowedUsersPoliciesInvalidState::
+                    AllowlistNotPresentAndAllowNewUsersTrue
+              : AllowedUsersPoliciesInvalidState::
+                    AllowlistNotPresentAndAllowNewUsersFalse);
+    } else if (is_empty_allowlist.has_value() && !allow_new_users.has_value()) {
+      base::UmaHistogramEnumeration(
+          InvalidCombinationsOfAllowedUsersPoliciesHistogram,
+          is_empty_allowlist.value()
+              ? AllowedUsersPoliciesInvalidState::
+                    AllowlistEmptyAndAllowNewUsersNotPresent
+              : AllowedUsersPoliciesInvalidState::
+                    AllowlistNonEmptyAndAllowNewUsersNotPresent);
+    }
+  }
+
+  new_values_cache->SetBoolean(
+      kAccountsPrefAllowGuest,
+      !policy.has_guest_mode_enabled() ||
+          !policy.guest_mode_enabled().has_guest_mode_enabled() ||
+          policy.guest_mode_enabled().guest_mode_enabled());
+}
+
 void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
                          PrefValueMap* new_values_cache) {
   // For all our boolean settings the following is applicable:
@@ -197,38 +355,20 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
   //   kAccountsPrefEphemeralUsersEnabled has a default value of false.
   //   kAccountsPrefTransferSAMLCookies has a default value of false.
   //   kAccountsPrefFamilyLinkAccountsAllowed has a default value of false.
-  if (policy.has_allow_new_users() &&
-      policy.allow_new_users().has_allow_new_users()) {
-    if (policy.allow_new_users().allow_new_users()) {
-      // New users allowed, user whitelist ignored.
-      new_values_cache->SetBoolean(kAccountsPrefAllowNewUser, true);
-    } else {
-      // New users not allowed, enforce user allowlist if present.
-      new_values_cache->SetBoolean(
-          kAccountsPrefAllowNewUser,
-          !policy.has_user_whitelist() && !policy.has_user_allowlist());
-    }
-  } else {
-    // No configured allow-new-users value, enforce whitelist if non-empty.
-    new_values_cache->SetBoolean(
-        kAccountsPrefAllowNewUser,
-        policy.user_whitelist().user_whitelist_size() == 0 &&
-            policy.user_allowlist().user_allowlist_size() == 0);
-  }
 
   // Value of DeviceFamilyLinkAccountsAllowed policy does not affect
   // |kAccountsPrefAllowNewUser| setting. Family Link accounts are only
   // allowed if user allowlist is enforced.
+  DecodeAllowedUsers(policy, new_values_cache);
+
   bool user_allowlist_enforced =
-      ((policy.has_user_whitelist() &&
-        policy.user_whitelist().user_whitelist_size() > 0) ||
+      ((policy.has_user_whitelist() &&                         // nocheck
+        policy.user_whitelist().user_whitelist_size() > 0) ||  // nocheck
        (policy.has_user_allowlist() &&
         policy.user_allowlist().user_allowlist_size() > 0));
   new_values_cache->SetBoolean(
       kAccountsPrefFamilyLinkAccountsAllowed,
-      features::IsFamilyLinkOnSchoolDeviceEnabled() &&
-          user_allowlist_enforced &&
-          policy.has_family_link_accounts_allowed() &&
+      user_allowlist_enforced && policy.has_family_link_accounts_allowed() &&
           policy.family_link_accounts_allowed()
               .has_family_link_accounts_allowed() &&
           policy.family_link_accounts_allowed().family_link_accounts_allowed());
@@ -238,12 +378,6 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
       policy.has_reboot_on_shutdown() &&
           policy.reboot_on_shutdown().has_reboot_on_shutdown() &&
           policy.reboot_on_shutdown().reboot_on_shutdown());
-
-  new_values_cache->SetBoolean(
-      kAccountsPrefAllowGuest,
-      !policy.has_guest_mode_enabled() ||
-          !policy.guest_mode_enabled().has_guest_mode_enabled() ||
-          policy.guest_mode_enabled().guest_mode_enabled());
 
   new_values_cache->SetBoolean(
       kAccountsPrefShowUserNamesOnSignIn,
@@ -257,93 +391,129 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
           policy.ephemeral_users_enabled().has_ephemeral_users_enabled() &&
           policy.ephemeral_users_enabled().ephemeral_users_enabled());
 
-  std::vector<base::Value> list;
-  const em::UserAllowlistProto& allowlist_proto = policy.user_allowlist();
-  if (policy.user_allowlist().user_allowlist_size() > 0) {
-    const RepeatedPtrField<std::string>& allowlist =
-        allowlist_proto.user_allowlist();
-    for (const std::string& value : allowlist) {
-      list.push_back(base::Value(value));
-    }
-  } else {
-    const em::UserWhitelistProto& whitelist_proto = policy.user_whitelist();
-    const RepeatedPtrField<std::string>& whitelist =
-        whitelist_proto.user_whitelist();
-    for (const std::string& value : whitelist) {
-      list.push_back(base::Value(value));
-    }
+  if (policy.has_devicemaxuserprofiles() &&
+      policy.devicemaxuserprofiles().has_value()) {
+    new_values_cache->SetInteger(kAccountsPrefDeviceMaxUserProfiles,
+                                 policy.devicemaxuserprofiles().value());
   }
 
-  new_values_cache->SetValue(kAccountsPrefUsers, base::Value(std::move(list)));
+  {
+    base::ListValue list;
+    const em::UserAllowlistProto& allowlist_proto = policy.user_allowlist();
+    if (policy.user_allowlist().user_allowlist_size() > 0) {
+      const RepeatedPtrField<std::string>& allowlist =
+          allowlist_proto.user_allowlist();
+      for (const std::string& value : allowlist) {
+        list.Append(value);
+      }
+    } else {
+      const em::UserWhitelistProto& whitelist_proto =   // nocheck
+          policy.user_whitelist();                      // nocheck
+      const RepeatedPtrField<std::string>& whitelist =  // nocheck
+          whitelist_proto.user_whitelist();             // nocheck
+      for (const std::string& value : whitelist) {      // nocheck
+        list.Append(value);
+      }
+    }
+    new_values_cache->SetValue(kAccountsPrefUsers,
+                               base::Value(std::move(list)));
+  }
 
-  std::vector<base::Value> account_list;
+  base::ListValue account_list;
   const em::DeviceLocalAccountsProto device_local_accounts_proto =
       policy.device_local_accounts();
   const RepeatedPtrField<em::DeviceLocalAccountInfoProto>& accounts =
       device_local_accounts_proto.account();
-  RepeatedPtrField<em::DeviceLocalAccountInfoProto>::const_iterator entry;
   for (const em::DeviceLocalAccountInfoProto& entry : accounts) {
-    base::Value entry_dict(base::Value::Type::DICTIONARY);
+    base::DictValue entry_dict;
     if (entry.has_type()) {
       if (entry.has_account_id()) {
-        entry_dict.SetKey(kAccountsPrefDeviceLocalAccountsKeyId,
-                          base::Value(entry.account_id()));
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyId,
+                       entry.account_id());
       }
-      entry_dict.SetKey(kAccountsPrefDeviceLocalAccountsKeyType,
-                        base::Value(entry.type()));
+      entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyType, entry.type());
       if (entry.kiosk_app().has_app_id()) {
-        entry_dict.SetKey(kAccountsPrefDeviceLocalAccountsKeyKioskAppId,
-                          base::Value(entry.kiosk_app().app_id()));
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyKioskAppId,
+                       entry.kiosk_app().app_id());
       }
       if (entry.kiosk_app().has_update_url()) {
-        entry_dict.SetKey(kAccountsPrefDeviceLocalAccountsKeyKioskAppUpdateURL,
-                          base::Value(entry.kiosk_app().update_url()));
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyKioskAppUpdateURL,
+                       entry.kiosk_app().update_url());
       }
-      if (entry.android_kiosk_app().has_package_name()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyArcKioskPackage,
-            base::Value(entry.android_kiosk_app().package_name()));
-      }
-      if (entry.android_kiosk_app().has_class_name()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyArcKioskClass,
-            base::Value(entry.android_kiosk_app().class_name()));
-      }
-      if (entry.android_kiosk_app().has_action()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyArcKioskAction,
-            base::Value(entry.android_kiosk_app().action()));
-      }
-      if (entry.android_kiosk_app().has_display_name()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyArcKioskDisplayName,
-            base::Value(entry.android_kiosk_app().display_name()));
+      if (ash::features::IsHeliumArcvmKioskEnabled()) {
+        if (entry.arcvm_kiosk_app().has_package_name()) {
+          entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyArcvmKioskPackage,
+                         entry.arcvm_kiosk_app().package_name());
+        }
+        if (entry.arcvm_kiosk_app().has_class_name()) {
+          entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyArcvmKioskClass,
+                         entry.arcvm_kiosk_app().class_name());
+        }
+        if (entry.arcvm_kiosk_app().has_action()) {
+          entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyArcvmKioskAction,
+                         entry.arcvm_kiosk_app().action());
+        }
+        if (entry.arcvm_kiosk_app().has_display_name()) {
+          entry_dict.Set(
+              kAccountsPrefDeviceLocalAccountsKeyArcvmKioskDisplayName,
+              entry.arcvm_kiosk_app().display_name());
+        }
       }
       if (entry.web_kiosk_app().has_url()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyWebKioskUrl,
-            base::Value(entry.web_kiosk_app().url()));
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyWebKioskUrl,
+                       entry.web_kiosk_app().url());
       }
       if (entry.web_kiosk_app().has_title()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyWebKioskTitle,
-            base::Value(entry.web_kiosk_app().title()));
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyWebKioskTitle,
+                       entry.web_kiosk_app().title());
       }
       if (entry.web_kiosk_app().has_icon_url()) {
-        entry_dict.SetKey(
-            chromeos::kAccountsPrefDeviceLocalAccountsKeyWebKioskIconUrl,
-            base::Value(entry.web_kiosk_app().icon_url()));
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyWebKioskIconUrl,
+                       entry.web_kiosk_app().icon_url());
+      }
+      if (entry.has_ephemeral_mode()) {
+        entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
+                       static_cast<int>(entry.ephemeral_mode()));
+      } else {
+        entry_dict.Set(
+            kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
+            static_cast<int>(
+                em::DeviceLocalAccountInfoProto::EPHEMERAL_MODE_UNSET));
+      }
+      if (entry.has_isolated_kiosk_app()) {
+        if (entry.isolated_kiosk_app().has_web_bundle_id()) {
+          entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyIwaKioskBundleId,
+                         entry.isolated_kiosk_app().web_bundle_id());
+        }
+        if (entry.isolated_kiosk_app().has_update_manifest_url()) {
+          entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyIwaKioskUpdateUrl,
+                         entry.isolated_kiosk_app().update_manifest_url());
+        }
+        if (entry.isolated_kiosk_app().has_update_channel()) {
+          entry_dict.Set(
+              kAccountsPrefDeviceLocalAccountsKeyIwaKioskUpdateChannel,
+              entry.isolated_kiosk_app().update_channel());
+        }
+        if (entry.isolated_kiosk_app().has_pinned_version()) {
+          entry_dict.Set(
+              kAccountsPrefDeviceLocalAccountsKeyIwaKioskPinnedVersion,
+              entry.isolated_kiosk_app().pinned_version());
+        }
+        if (entry.isolated_kiosk_app().has_allow_downgrades()) {
+          entry_dict.Set(
+              kAccountsPrefDeviceLocalAccountsKeyIwaKioskAllowDowngrades,
+              entry.isolated_kiosk_app().allow_downgrades());
+        }
       }
     } else if (entry.has_deprecated_public_session_id()) {
       // Deprecated public session specification.
-      entry_dict.SetKey(kAccountsPrefDeviceLocalAccountsKeyId,
-                        base::Value(entry.deprecated_public_session_id()));
-      entry_dict.SetKey(
+      entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyId,
+                     entry.deprecated_public_session_id());
+      entry_dict.Set(
           kAccountsPrefDeviceLocalAccountsKeyType,
-          base::Value(
-              em::DeviceLocalAccountInfoProto::ACCOUNT_TYPE_PUBLIC_SESSION));
+          em::DeviceLocalAccountInfoProto::ACCOUNT_TYPE_PUBLIC_SESSION);
     }
-    account_list.push_back(std::move(entry_dict));
+    account_list.Append(std::move(entry_dict));
   }
   new_values_cache->SetValue(kAccountsPrefDeviceLocalAccounts,
                              base::Value(std::move(account_list)));
@@ -369,9 +539,9 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
       policy.device_local_accounts().prompt_for_network_when_offline());
 
   if (policy.has_feature_flags()) {
-    std::vector<base::Value> feature_flags_list;
+    base::ListValue feature_flags_list;
     for (const std::string& entry : policy.feature_flags().feature_flags()) {
-      feature_flags_list.push_back(base::Value(entry));
+      feature_flags_list.Append(entry);
     }
     if (!feature_flags_list.empty()) {
       new_values_cache->SetValue(kFeatureFlags,
@@ -409,34 +579,34 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
   }
 
   if (policy.has_login_video_capture_allowed_urls()) {
-    std::vector<base::Value> list;
+    base::ListValue list;
     const em::LoginVideoCaptureAllowedUrlsProto&
         login_video_capture_allowed_urls_proto =
             policy.login_video_capture_allowed_urls();
     for (const auto& value : login_video_capture_allowed_urls_proto.urls()) {
-      list.push_back(base::Value(value));
+      list.Append(value);
     }
     new_values_cache->SetValue(kLoginVideoCaptureAllowedUrls,
                                base::Value(std::move(list)));
   }
 
   if (policy.has_login_screen_locales()) {
-    std::vector<base::Value> locales;
+    base::ListValue locales;
     const em::LoginScreenLocalesProto& login_screen_locales(
         policy.login_screen_locales());
     for (const auto& locale : login_screen_locales.login_screen_locales())
-      locales.push_back(base::Value(locale));
+      locales.Append(locale);
     new_values_cache->SetValue(kDeviceLoginScreenLocales,
                                base::Value(std::move(locales)));
   }
 
   if (policy.has_login_screen_input_methods()) {
-    std::vector<base::Value> input_methods;
+    base::ListValue input_methods;
     const em::LoginScreenInputMethodsProto& login_screen_input_methods(
         policy.login_screen_input_methods());
     for (const auto& input_method :
          login_screen_input_methods.login_screen_input_methods())
-      input_methods.push_back(base::Value(input_method));
+      input_methods.Append(input_method);
     new_values_cache->SetValue(kDeviceLoginScreenInputMethods,
                                base::Value(std::move(input_methods)));
   }
@@ -455,25 +625,27 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
         policy.device_show_numeric_keyboard_for_password().value());
   }
 
-  if (policy.has_saml_login_authentication_type() &&
-      policy.saml_login_authentication_type()
-          .has_saml_login_authentication_type()) {
-    new_values_cache->SetInteger(kSamlLoginAuthenticationType,
-                                 policy.saml_login_authentication_type()
-                                     .saml_login_authentication_type());
-  }
-
   if (policy.has_device_web_based_attestation_allowed_urls()) {
     const em::StringListPolicyProto& container(
         policy.device_web_based_attestation_allowed_urls());
 
-    base::Value urls(base::Value::Type::LIST);
+    base::ListValue urls;
     for (const std::string& entry : container.value().entries()) {
       urls.Append(entry);
     }
 
     new_values_cache->SetValue(kDeviceWebBasedAttestationAllowedUrls,
-                               std::move(urls));
+                               base::Value(std::move(urls)));
+  }
+
+  if (policy.has_kiosk_crx_manifest_update_url_ignored()) {
+    const em::BooleanPolicyProto& container(
+        policy.kiosk_crx_manifest_update_url_ignored());
+
+    if (container.has_value()) {
+      new_values_cache->SetValue(kKioskCRXManifestUpdateURLIgnored,
+                                 base::Value(container.value()));
+    }
   }
 }
 
@@ -485,7 +657,6 @@ void DecodeNetworkPolicies(const em::ChromeDeviceSettingsProto& policy,
       policy.has_data_roaming_enabled() &&
           policy.data_roaming_enabled().has_data_roaming_enabled() &&
           policy.data_roaming_enabled().data_roaming_enabled());
-
   if (policy.has_system_proxy_settings()) {
     const em::SystemProxySettingsProto& settings_proto(
         policy.system_proxy_settings());
@@ -514,9 +685,9 @@ void DecodeAutoUpdatePolicies(const em::ChromeDeviceSettingsProto& policy,
 
     const RepeatedField<int>& allowed_connection_types =
         au_settings_proto.allowed_connection_types();
-    std::vector<base::Value> list;
+    base::ListValue list;
     for (int value : allowed_connection_types) {
-      list.push_back(base::Value(value));
+      list.Append(value);
     }
     if (!list.empty()) {
       new_values_cache->SetValue(kAllowedConnectionTypesForUpdate,
@@ -549,6 +720,15 @@ void DecodeAutoUpdatePolicies(const em::ChromeDeviceSettingsProto& policy,
                            new_values_cache);
     }
   }
+
+  if (policy.has_deviceextendedautoupdateenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceextendedautoupdateenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(kDeviceExtendedAutoUpdateEnabled,
+                                 base::Value(container.value()));
+    }
+  }
 }
 
 void DecodeReportingPolicies(const em::ChromeDeviceSettingsProto& policy,
@@ -564,6 +744,14 @@ void DecodeReportingPolicies(const em::ChromeDeviceSettingsProto& policy,
       new_values_cache->SetBoolean(kReportDeviceActivityTimes,
                                    reporting_policy.report_activity_times());
     }
+    if (reporting_policy.has_report_audio_status()) {
+      new_values_cache->SetBoolean(kReportDeviceAudioStatus,
+                                   reporting_policy.report_audio_status());
+    }
+    if (reporting_policy.has_report_runtime_counters()) {
+      new_values_cache->SetBoolean(kDeviceReportRuntimeCounters,
+                                   reporting_policy.report_runtime_counters());
+    }
     if (reporting_policy.has_report_boot_mode()) {
       new_values_cache->SetBoolean(kReportDeviceBootMode,
                                    reporting_policy.report_boot_mode());
@@ -572,22 +760,26 @@ void DecodeReportingPolicies(const em::ChromeDeviceSettingsProto& policy,
       new_values_cache->SetBoolean(kReportDeviceCrashReportInfo,
                                    reporting_policy.report_crash_report_info());
     }
-    if (reporting_policy.has_report_network_interfaces()) {
+    if (reporting_policy.has_report_network_configuration()) {
       new_values_cache->SetBoolean(
-          kReportDeviceNetworkInterfaces,
-          reporting_policy.report_network_interfaces());
+          kReportDeviceNetworkConfiguration,
+          reporting_policy.report_network_configuration());
+    }
+    if (reporting_policy.has_report_network_status()) {
+      new_values_cache->SetBoolean(kReportDeviceNetworkStatus,
+                                   reporting_policy.report_network_status());
     }
     if (reporting_policy.has_report_users()) {
       new_values_cache->SetBoolean(kReportDeviceUsers,
                                    reporting_policy.report_users());
     }
-    if (reporting_policy.has_report_hardware_status()) {
-      new_values_cache->SetBoolean(kReportDeviceHardwareStatus,
-                                   reporting_policy.report_hardware_status());
-    }
     if (reporting_policy.has_report_session_status()) {
       new_values_cache->SetBoolean(kReportDeviceSessionStatus,
                                    reporting_policy.report_session_status());
+    }
+    if (reporting_policy.has_report_security_status()) {
+      new_values_cache->SetBoolean(kReportDeviceSecurityStatus,
+                                   reporting_policy.report_security_status());
     }
     if (reporting_policy.has_report_graphics_status()) {
       new_values_cache->SetBoolean(kReportDeviceGraphicsStatus,
@@ -600,6 +792,10 @@ void DecodeReportingPolicies(const em::ChromeDeviceSettingsProto& policy,
     if (reporting_policy.has_report_running_kiosk_app()) {
       new_values_cache->SetBoolean(kReportRunningKioskApp,
                                    reporting_policy.report_running_kiosk_app());
+    }
+    if (reporting_policy.has_report_peripherals()) {
+      new_values_cache->SetBoolean(kReportDevicePeripherals,
+                                   reporting_policy.report_peripherals());
     }
     if (reporting_policy.has_report_power_status()) {
       new_values_cache->SetBoolean(kReportDevicePowerStatus,
@@ -661,6 +857,57 @@ void DecodeReportingPolicies(const em::ChromeDeviceSettingsProto& policy,
       new_values_cache->SetBoolean(kReportDeviceLoginLogout,
                                    reporting_policy.report_login_logout());
     }
+    if (reporting_policy.has_report_crd_sessions()) {
+      new_values_cache->SetBoolean(kReportCRDSessions,
+                                   reporting_policy.report_crd_sessions());
+    }
+    if (reporting_policy.has_report_network_telemetry_collection_rate_ms()) {
+      new_values_cache->SetInteger(
+          kReportDeviceNetworkTelemetryCollectionRateMs,
+          reporting_policy.report_network_telemetry_collection_rate_ms());
+    }
+    if (reporting_policy
+            .has_report_network_telemetry_event_checking_rate_ms()) {
+      new_values_cache->SetInteger(
+          kReportDeviceNetworkTelemetryEventCheckingRateMs,
+          reporting_policy.report_network_telemetry_event_checking_rate_ms());
+    }
+    if (reporting_policy.has_report_device_audio_status_checking_rate_ms()) {
+      new_values_cache->SetInteger(
+          kReportDeviceAudioStatusCheckingRateMs,
+          reporting_policy.report_device_audio_status_checking_rate_ms());
+    }
+    if (reporting_policy
+            .has_device_report_runtime_counters_checking_rate_ms()) {
+      new_values_cache->SetInteger(
+          kDeviceReportRuntimeCountersCheckingRateMs,
+          reporting_policy.device_report_runtime_counters_checking_rate_ms());
+    }
+    if (reporting_policy.has_report_signal_strength_event_driven_telemetry()) {
+      base::ListValue signal_strength_telemetry_list;
+      for (const std::string& telemetry_entry :
+           reporting_policy.report_signal_strength_event_driven_telemetry()
+               .entries()) {
+        signal_strength_telemetry_list.Append(telemetry_entry);
+      }
+      new_values_cache->SetValue(
+          kReportDeviceSignalStrengthEventDrivenTelemetry,
+          base::Value(std::move(signal_strength_telemetry_list)));
+    }
+    if (reporting_policy.has_device_activity_heartbeat_enabled()) {
+      new_values_cache->SetBoolean(
+          kDeviceActivityHeartbeatEnabled,
+          reporting_policy.device_activity_heartbeat_enabled());
+    }
+    if (reporting_policy.has_device_activity_heartbeat_collection_rate_ms()) {
+      new_values_cache->SetInteger(
+          kDeviceActivityHeartbeatCollectionRateMs,
+          reporting_policy.device_activity_heartbeat_collection_rate_ms());
+    }
+    if (reporting_policy.has_report_network_events()) {
+      new_values_cache->SetBoolean(kDeviceReportNetworkEvents,
+                                   reporting_policy.report_network_events());
+    }
   }
 }
 
@@ -689,10 +936,16 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
                                  policy.metrics_enabled().metrics_enabled());
   } else {
     // If the policy is missing, default to reporting enabled on enterprise-
-    // enrolled devices, c.f. crbug/456186.
+    // enrolled devices, c.f. crbug.com/41156165.
     new_values_cache->SetBoolean(
-        kStatsReportingPref,
-        chromeos::InstallAttributes::Get()->IsEnterpriseManaged());
+        kStatsReportingPref, InstallAttributes::Get()->IsEnterpriseManaged());
+  }
+
+  if (policy.has_device_system_aec_enabled() &&
+      policy.device_system_aec_enabled().has_device_system_aec_enabled()) {
+    new_values_cache->SetBoolean(
+        kDeviceSystemAecEnabled,
+        policy.device_system_aec_enabled().device_system_aec_enabled());
   }
 
   if (!policy.has_release_channel() ||
@@ -745,10 +998,6 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
                                 policy.variations_parameter().parameter());
   }
 
-  new_values_cache->SetBoolean(
-      kDeviceAttestationEnabled,
-      policy.attestation_settings().attestation_enabled());
-
   if (policy.has_attestation_settings() &&
       policy.attestation_settings().has_content_protection_enabled()) {
     new_values_cache->SetBoolean(
@@ -793,7 +1042,7 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
     // Set empty value if policy is missing, to make sure that webui
     // will receive setting update.
     new_values_cache->SetValue(kDeviceDisplayResolution,
-                               base::Value(base::Value::Type::DICTIONARY));
+                               base::Value(base::Value::Type::DICT));
   }
 
   if (policy.has_allow_bluetooth() &&
@@ -822,17 +1071,16 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
   if (policy.has_device_off_hours()) {
     auto off_hours_policy = policy::off_hours::ConvertOffHoursProtoToValue(
         policy.device_off_hours());
-    if (off_hours_policy)
-      new_values_cache->SetValue(
-          kDeviceOffHours,
-          base::Value::FromUniquePtrValue(std::move(off_hours_policy)));
+    if (off_hours_policy) {
+      new_values_cache->SetValue(kDeviceOffHours,
+                                 base::Value(std::move(*off_hours_policy)));
+    }
   }
 
   if (policy.has_tpm_firmware_update_settings()) {
     new_values_cache->SetValue(kTPMFirmwareUpdateSettings,
-                               base::Value::FromUniquePtrValue(
-                                   tpm_firmware_update::DecodeSettingsProto(
-                                       policy.tpm_firmware_update_settings())));
+                               tpm_firmware_update::DecodeSettingsProto(
+                                   policy.tpm_firmware_update_settings()));
   }
 
   if (policy.has_device_minimum_version()) {
@@ -871,12 +1119,31 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
     }
   }
 
+  if (policy.has_deviceflexarcpreloadenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceflexarcpreloadenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(kDeviceFlexArcPreloadEnabled,
+                                 base::Value(container.value()));
+    }
+  }
+
   if (policy.has_network_hostname()) {
     const em::NetworkHostnameProto& container(policy.network_hostname());
     if (container.has_device_hostname_template() &&
         !container.device_hostname_template().empty()) {
       new_values_cache->SetString(kDeviceHostnameTemplate,
                                   container.device_hostname_template());
+    }
+  }
+
+  if (policy.has_hostname_user_configurable()) {
+    const em::HostnameUserConfigurableProto& container(
+        policy.hostname_user_configurable());
+    if (container.has_device_hostname_user_configurable()) {
+      new_values_cache->SetBoolean(
+          kDeviceHostnameUserConfigurable,
+          container.device_hostname_user_configurable());
     }
   }
 
@@ -893,14 +1160,6 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
       new_values_cache->SetValue(
           kDeviceUnaffiliatedCrostiniAllowed,
           base::Value(container.device_unaffiliated_crostini_allowed()));
-    }
-  }
-
-  if (policy.has_plugin_vm_allowed()) {
-    const em::PluginVmAllowedProto& container(policy.plugin_vm_allowed());
-    if (container.has_plugin_vm_allowed()) {
-      new_values_cache->SetValue(kPluginVmAllowed,
-                                 base::Value(container.plugin_vm_allowed()));
     }
   }
 
@@ -928,38 +1187,35 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
   }
   new_values_cache->SetInteger(kDevicePrintersAccessMode, access_mode);
 
-  // Use Blocklist policy if present, otherwise Blacklist version.
+  // Use Blocklist policy if present, otherwise Blacklist version.  // nocheck
   if (policy.has_device_printers_blocklist()) {
-    base::Value list(base::Value::Type::LIST);
+    base::ListValue list;
     const em::DevicePrintersBlocklistProto& proto(
         policy.device_printers_blocklist());
     for (const auto& id : proto.blocklist())
       list.Append(id);
-    new_values_cache->SetValue(kDevicePrintersBlocklist, std::move(list));
-  } else if (policy.has_native_device_printers_blacklist()) {
-    base::Value list(base::Value::Type::LIST);
-    const em::DeviceNativePrintersBlacklistProto& proto(
-        policy.native_device_printers_blacklist());
-    for (const auto& id : proto.blacklist())
-      list.Append(id);
-    new_values_cache->SetValue(kDevicePrintersBlocklist, std::move(list));
+    new_values_cache->SetValue(kDevicePrintersBlocklist,
+                               base::Value(std::move(list)));
   }
 
-  // Use Allowlist policy if present, otherwise Whitelist version.
+  // Use Allowlist policy if present, otherwise Whitelist version.  // nocheck
   if (policy.has_device_printers_allowlist()) {
-    base::Value list(base::Value::Type::LIST);
+    base::ListValue list;
     const em::DevicePrintersAllowlistProto& proto(
         policy.device_printers_allowlist());
     for (const auto& id : proto.allowlist())
       list.Append(id);
-    new_values_cache->SetValue(kDevicePrintersAllowlist, std::move(list));
-  } else if (policy.has_native_device_printers_whitelist()) {
-    base::Value list(base::Value::Type::LIST);
-    const em::DeviceNativePrintersWhitelistProto& proto(
-        policy.native_device_printers_whitelist());
-    for (const auto& id : proto.whitelist())
-      list.Append(id);
-    new_values_cache->SetValue(kDevicePrintersAllowlist, std::move(list));
+    new_values_cache->SetValue(kDevicePrintersAllowlist,
+                               base::Value(std::move(list)));
+  }
+
+  if (policy.has_device_printing_client_name_template()) {
+    const em::StringPolicyProto& container(
+        policy.device_printing_client_name_template());
+    if (container.has_value() && !container.value().empty()) {
+      new_values_cache->SetString(kDevicePrintingClientNameTemplate,
+                                  container.value());
+    }
   }
 
   if (policy.has_device_reboot_on_user_signout()) {
@@ -972,22 +1228,14 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
     }
   }
 
-  if (policy.has_device_wilco_dtc_allowed()) {
-    const em::DeviceWilcoDtcAllowedProto& container(
-        policy.device_wilco_dtc_allowed());
-    if (container.has_device_wilco_dtc_allowed()) {
-      new_values_cache->SetValue(
-          kDeviceWilcoDtcAllowed,
-          base::Value(container.device_wilco_dtc_allowed()));
-    }
-  }
-
+  int dock_mac_address_source =
+      em::DeviceDockMacAddressSourceProto::DOCK_NIC_MAC_ADDRESS;
   if (policy.has_device_dock_mac_address_source() &&
       policy.device_dock_mac_address_source().has_source()) {
-    new_values_cache->SetInteger(
-        kDeviceDockMacAddressSource,
-        policy.device_dock_mac_address_source().source());
+    dock_mac_address_source = policy.device_dock_mac_address_source().source();
   }
+  new_values_cache->SetInteger(kDeviceDockMacAddressSource,
+                               dock_mac_address_source);
 
   if (policy.has_device_second_factor_authentication() &&
       policy.device_second_factor_authentication().has_mode()) {
@@ -1019,7 +1267,7 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
   // Default value of the policy in case it's missing.
   bool show_low_disk_space_notification = true;
   // Disable the notification by default for enrolled devices.
-  if (chromeos::InstallAttributes::Get()->IsEnterpriseManaged())
+  if (InstallAttributes::Get()->IsEnterpriseManaged())
     show_low_disk_space_notification = false;
   if (policy.has_device_show_low_disk_space_notification()) {
     const em::DeviceShowLowDiskSpaceNotificationProto& container(
@@ -1036,48 +1284,34 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
       policy.usb_detachable_allowlist().id_size() > 0) {
     const em::UsbDetachableAllowlistProto& container =
         policy.usb_detachable_allowlist();
-    base::Value allowlist(base::Value::Type::LIST);
+    base::ListValue allowlist;
     for (const auto& entry : container.id()) {
-      base::Value ids(base::Value::Type::DICTIONARY);
+      base::DictValue ids;
       if (entry.has_vendor_id() && entry.has_product_id()) {
-        ids.SetIntKey(kUsbDetachableAllowlistKeyVid, entry.vendor_id());
-        ids.SetIntKey(kUsbDetachableAllowlistKeyPid, entry.product_id());
+        ids.Set(kUsbDetachableAllowlistKeyVid, entry.vendor_id());
+        ids.Set(kUsbDetachableAllowlistKeyPid, entry.product_id());
       }
       allowlist.Append(std::move(ids));
     }
-    new_values_cache->SetValue(kUsbDetachableAllowlist, std::move(allowlist));
-  } else if (policy.has_usb_detachable_whitelist()) {
-    const em::UsbDetachableWhitelistProto& container =
-        policy.usb_detachable_whitelist();
-    base::Value allowlist(base::Value::Type::LIST);
-    for (const auto& entry : container.id()) {
-      base::Value ids(base::Value::Type::DICTIONARY);
-      if (entry.has_vendor_id() && entry.has_product_id()) {
-        ids.SetIntKey(kUsbDetachableAllowlistKeyVid, entry.vendor_id());
-        ids.SetIntKey(kUsbDetachableAllowlistKeyPid, entry.product_id());
-      }
-      allowlist.Append(std::move(ids));
-    }
-    new_values_cache->SetValue(kUsbDetachableAllowlist, std::move(allowlist));
-  }
-
-  if (policy.has_device_borealis_allowed()) {
-    const em::DeviceBorealisAllowedProto& container(
-        policy.device_borealis_allowed());
-    if (container.has_allowed()) {
-      new_values_cache->SetValue(kBorealisAllowedForDevice,
-                                 base::Value(container.allowed()));
-    }
+    new_values_cache->SetValue(kUsbDetachableAllowlist,
+                               base::Value(std::move(allowlist)));
   }
 
   if (policy.has_device_allowed_bluetooth_services()) {
-    base::Value list(base::Value::Type::LIST);
+    base::ListValue list;
     const em::DeviceAllowedBluetoothServicesProto& container(
         policy.device_allowed_bluetooth_services());
     for (const auto& service_uuid : container.allowlist())
       list.Append(service_uuid);
     new_values_cache->SetValue(kDeviceAllowedBluetoothServices,
-                               std::move(list));
+                               base::Value(std::move(list)));
+  }
+  if (policy.has_devicebluetoothjustworkspairingenabled()) {
+    base::ListValue list;
+    const em::BooleanPolicyProto& container(
+        policy.devicebluetoothjustworkspairingenabled());
+    new_values_cache->SetValue(kDeviceBluetoothJustWorksPairingEnabled,
+                               base::Value(container.value()));
   }
 
   if (policy.has_device_scheduled_reboot()) {
@@ -1088,6 +1322,83 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
           kDeviceScheduledReboot, policy::key::kDeviceScheduledReboot,
           scheduled_reboot_policy.device_scheduled_reboot_settings(),
           new_values_cache);
+    }
+  }
+
+  if (policy.has_device_restricted_managed_guest_session_enabled()) {
+    const em::DeviceRestrictedManagedGuestSessionEnabledProto& container(
+        policy.device_restricted_managed_guest_session_enabled());
+    if (container.has_enabled()) {
+      new_values_cache->SetValue(kDeviceRestrictedManagedGuestSessionEnabled,
+                                 base::Value(container.enabled()));
+    }
+  }
+
+  bool reven_enable_device_hw_data_usage =
+      policy.has_hardware_data_usage_enabled() &&
+      policy.hardware_data_usage_enabled().has_hardware_data_usage_enabled() &&
+      policy.hardware_data_usage_enabled().hardware_data_usage_enabled();
+  new_values_cache->SetBoolean(kRevenEnableDeviceHWDataUsage,
+                               reven_enable_device_hw_data_usage);
+
+  if (policy.has_device_encrypted_reporting_pipeline_enabled()) {
+    const em::EncryptedReportingPipelineConfigurationProto& container(
+        policy.device_encrypted_reporting_pipeline_enabled());
+    if (container.has_enabled()) {
+      new_values_cache->SetValue(kDeviceEncryptedReportingPipelineEnabled,
+                                 base::Value(container.enabled()));
+    }
+  }
+
+  if (policy.has_device_report_xdr_events()) {
+    const em::DeviceReportXDREventsProto& container(
+        policy.device_report_xdr_events());
+    if (container.has_enabled()) {
+      new_values_cache->SetValue(kDeviceReportXDREvents,
+                                 base::Value(container.enabled()));
+    }
+  }
+
+  if (policy.has_device_hindi_inscript_layout_enabled()) {
+    const em::DeviceHindiInscriptLayoutEnabledProto& container(
+        policy.device_hindi_inscript_layout_enabled());
+    if (container.has_enabled()) {
+      new_values_cache->SetValue(kDeviceHindiInscriptLayoutEnabled,
+                                 base::Value(container.enabled()));
+    }
+  }
+
+  if (policy.has_deviceuserinitiatedfirmwareupdatesenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceuserinitiatedfirmwareupdatesenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(kDeviceUserInitiatedFirmwareUpdatesEnabled,
+                                 base::Value(container.value()));
+    }
+  }
+
+  if (policy.has_deviceuserinitiatedflexsystemfirmwareupdatesenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceuserinitiatedflexsystemfirmwareupdatesenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(
+          kDeviceUserInitiatedFlexSystemFirmwareUpdatesEnabled,
+          base::Value(container.value()));
+    }
+  }
+
+  if (policy.has_device_dlc_predownload_list()) {
+    SetDeviceDlcPredownloadListSetting(
+        policy.device_dlc_predownload_list().value().entries(),
+        new_values_cache);
+  }
+
+  if (policy.has_deviceextensionssystemlogenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceextensionssystemlogenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(kDeviceExtensionsSystemLogEnabled,
+                                 base::Value(container.value()));
     }
   }
 }
@@ -1112,8 +1423,15 @@ void DecodeDeviceState(const em::PolicyData& policy_data,
 
   const em::DeviceState& device_state = policy_data.device_state();
 
-  if (device_state.device_mode() == em::DeviceState::DEVICE_MODE_DISABLED)
+  if (device_state.device_mode() == em::DeviceState::DEVICE_MODE_DISABLED) {
     new_values_cache->SetBoolean(kDeviceDisabled, true);
+    if (device_state.has_disabled_state() &&
+        device_state.disabled_state().has_location_tracking_enabled()) {
+      new_values_cache->SetBoolean(
+          kDeviceDisabledLocationTrackingEnabled,
+          device_state.disabled_state().location_tracking_enabled());
+    }
+  }
   if (device_state.has_disabled_state() &&
       device_state.disabled_state().has_message()) {
     new_values_cache->SetString(kDeviceDisabledMessage,
@@ -1146,8 +1464,8 @@ DeviceSettingsProvider::~DeviceSettingsProvider() {
 }
 
 // static
-bool DeviceSettingsProvider::IsDeviceSetting(const std::string& name) {
-  return base::Contains(kKnownSettings, name);
+bool DeviceSettingsProvider::IsDeviceSetting(std::string_view name) {
+  return kKnownSettings.contains(name);
 }
 
 // static
@@ -1168,7 +1486,8 @@ void DeviceSettingsProvider::DoSet(const std::string& path,
   // Make sure that either the current user is the device owner or the
   // device doesn't have an owner yet.
   if (!(device_settings_service_->HasPrivateOwnerKey() ||
-        ownership_status_ == DeviceSettingsService::OWNERSHIP_NONE)) {
+        ownership_status_ ==
+            DeviceSettingsService::OwnershipStatus::kOwnershipNone)) {
     LOG(WARNING) << "Changing settings from non-owner, setting=" << path;
 
     // Revert UI change.
@@ -1178,7 +1497,6 @@ void DeviceSettingsProvider::DoSet(const std::string& path,
 
   if (!IsDeviceSetting(path)) {
     NOTREACHED() << "Try to set unhandled cros setting " << path;
-    return;
   }
 
   if (device_settings_service_->HasPrivateOwnerKey()) {
@@ -1221,12 +1539,14 @@ void DeviceSettingsProvider::OwnershipStatusChanged() {
   // cache to device settings proper. It is important that writing only happens
   // in this case, as during normal operation, the contents of the cache should
   // never overwrite actual device settings.
-  if (new_ownership_status == DeviceSettingsService::OWNERSHIP_TAKEN &&
-      ownership_status_ == DeviceSettingsService::OWNERSHIP_NONE) {
+  if (new_ownership_status ==
+          DeviceSettingsService::OwnershipStatus::kOwnershipTaken &&
+      ownership_status_ ==
+          DeviceSettingsService::OwnershipStatus::kOwnershipNone) {
     if (device_settings_service_->HasPrivateOwnerKey()) {
       // There shouldn't be any pending writes, since the cache writes are all
       // immediate.
-      DCHECK(!store_callback_factory_.HasWeakPtrs());
+      CHECK(!store_callback_factory_.HasWeakPtrs(), base::NotFatalUntil::M160);
 
       trusted_status_ = TEMPORARILY_UNTRUSTED;
       // Apply the locally-accumulated device settings on top of the initial
@@ -1246,20 +1566,23 @@ void DeviceSettingsProvider::OwnershipStatusChanged() {
         LOG(ERROR) << "Can't store policy";
       }
 
-      // TODO(https://crbug.com/433840): Some of the above code can be
+      // TODO(crbug.com/41143265): Some of the above code can be
       // simplified or removed, once the DoSet function is removed - then there
-      // will be no pending writes. This is because the only value that needs to
-      // be written as a pending write is kStatsReportingPref, and this is now
-      // handled by the StatsReportingController - see below. Once DoSet is
-      // removed and there are no pending writes that are being maintained by
-      // DeviceSettingsProvider, this code for updating the signed settings for
-      // the new owner should probably be moved outside of
-      // DeviceSettingsProvider.
+      // will be no pending writes. This is because the only values that need to
+      // be written as a pending write is kStatsReportingPref and
+      // kEnableDeviceHWDataUsage, and those are now handled by the Controllers
+      // - see below. Once DoSet is removed and there are no pending writes that
+      // are being maintained by DeviceSettingsProvider, this code for updating
+      // the signed settings for the new owner should probably be moved outside
+      // of DeviceSettingsProvider.
 
       StatsReportingController::Get()->OnOwnershipTaken(
           device_settings_service_->GetOwnerSettingsService());
-    } else if (chromeos::InstallAttributes::Get()->IsEnterpriseManaged()) {
+      HWDataUsageController::Get()->OnOwnershipTaken(
+          device_settings_service_->GetOwnerSettingsService());
+    } else if (InstallAttributes::Get()->IsEnterpriseManaged()) {
       StatsReportingController::Get()->ClearPendingValue();
+      HWDataUsageController::Get()->ClearPendingValue();
     }
   }
 
@@ -1348,8 +1671,7 @@ void DeviceSettingsProvider::UpdateValuesCache(
 bool DeviceSettingsProvider::MitigateMissingPolicy() {
   // First check if the device has been owned already and if not exit
   // immediately.
-  if (chromeos::InstallAttributes::Get()->GetMode() !=
-      policy::DEVICE_MODE_CONSUMER)
+  if (InstallAttributes::Get()->GetMode() != policy::DEVICE_MODE_CONSUMER)
     return false;
 
   // If we are here the policy file were corrupted or missing. This can happen
@@ -1361,11 +1683,10 @@ bool DeviceSettingsProvider::MitigateMissingPolicy() {
   LOG(ERROR) << "Corruption of the policy data has been detected."
              << "Switching to \"safe-mode\" policies until the owner logs in "
              << "to regenerate the policy data.";
-  base::UmaHistogramBoolean("Enterprise.DeviceSettings.MissingPolicyMitigated",
-                            true);
 
   device_settings_.Clear();
   device_settings_.mutable_allow_new_users()->set_allow_new_users(true);
+  device_settings_.mutable_user_allowlist()->clear_user_allowlist();
   device_settings_.mutable_guest_mode_enabled()->set_guest_mode_enabled(true);
   em::PolicyData empty_policy_data;
   UpdateValuesCache(empty_policy_data, device_settings_, TRUSTED);
@@ -1374,7 +1695,7 @@ bool DeviceSettingsProvider::MitigateMissingPolicy() {
   return true;
 }
 
-const base::Value* DeviceSettingsProvider::Get(const std::string& path) const {
+const base::Value* DeviceSettingsProvider::Get(std::string_view path) const {
   if (IsDeviceSetting(path)) {
     const base::Value* value;
     if (values_cache_.GetValue(path, &value))
@@ -1383,7 +1704,7 @@ const base::Value* DeviceSettingsProvider::Get(const std::string& path) const {
     NOTREACHED() << "Trying to get non cros setting.";
   }
 
-  return NULL;
+  return nullptr;
 }
 
 DeviceSettingsProvider::TrustedStatus
@@ -1394,14 +1715,16 @@ DeviceSettingsProvider::PrepareTrustedValues(base::OnceClosure* callback) {
   return status;
 }
 
-bool DeviceSettingsProvider::HandlesSetting(const std::string& path) const {
+bool DeviceSettingsProvider::HandlesSetting(std::string_view path) const {
   return IsDeviceSetting(path);
 }
 
 DeviceSettingsProvider::TrustedStatus
 DeviceSettingsProvider::RequestTrustedEntity() {
-  if (ownership_status_ == DeviceSettingsService::OWNERSHIP_NONE)
+  if (ownership_status_ ==
+      DeviceSettingsService::OwnershipStatus::kOwnershipNone) {
     return TRUSTED;
+  }
   return trusted_status_;
 }
 
@@ -1412,7 +1735,7 @@ void DeviceSettingsProvider::UpdateAndProceedStoring() {
 
 bool DeviceSettingsProvider::UpdateFromService() {
   bool settings_loaded = false;
-  base::UmaHistogramEnumeration("Enterprise.DeviceSettings.UpdatedStatus",
+  base::UmaHistogramEnumeration("Enterprise.DeviceSettings.UpdatedStatus2",
                                 device_settings_service_->status());
   switch (device_settings_service_->status()) {
     case DeviceSettingsService::STORE_SUCCESS: {
@@ -1437,10 +1760,20 @@ bool DeviceSettingsProvider::UpdateFromService() {
     case DeviceSettingsService::STORE_NO_POLICY:
       if (MitigateMissingPolicy())
         break;
-      FALLTHROUGH;
+      [[fallthrough]];
     case DeviceSettingsService::STORE_KEY_UNAVAILABLE:
-      VLOG(1) << "No policies present yet, will use the temp storage.";
-      trusted_status_ = PERMANENTLY_UNTRUSTED;
+    case DeviceSettingsService::STORE_KEY_UNAVAILABLE_NOT_INITIALIZED:
+    case DeviceSettingsService::STORE_KEY_UNAVAILABLE_NOT_LOCKED:
+    case DeviceSettingsService::STORE_KEY_UNAVAILABLE_MANAGED:
+      if (user_manager::UserManager::Get()->GetOwnerEmail().has_value()) {
+        // On the consumer owned device Chrome is responsible for generating a
+        // new key and/or policy if they are missing (which happens after the
+        // user session starts).
+        trusted_status_ = TEMPORARILY_UNTRUSTED;
+      } else {
+        VLOG(1) << "No policies present yet, will use the temp storage.";
+        trusted_status_ = PERMANENTLY_UNTRUSTED;
+      }
       break;
     case DeviceSettingsService::STORE_VALIDATION_ERROR:
     case DeviceSettingsService::STORE_INVALID_POLICY:

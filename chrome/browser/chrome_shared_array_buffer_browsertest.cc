@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/network_session_configurator/common/network_switches.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -34,7 +34,6 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
         // Disabled:
         {
             features::kSharedArrayBuffer,
-            features::kSharedArrayBufferOnDesktop,
         });
   }
 
@@ -44,7 +43,7 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
 
   void SetPolicyAndRestartBrowser() {
     // The preference is false by default.
-    EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+    EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
         prefs::kSharedArrayBufferUnrestrictedAccessAllowed));
 
     PolicyMap policies;
@@ -54,20 +53,23 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
     UpdateProviderPolicy(policies);
 
     // Now the preference should be true.
-    EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+    EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
         prefs::kSharedArrayBufferUnrestrictedAccessAllowed));
 
     // The old browser has already created the ContentBrowserClient which reads
     // the preference, so it can't create renderers with SABs enabled by policy.
     // Create a new browser that will pick up the preference and enable SABs for
     // new renderer processes.
-    Browser* new_browser = CreateBrowser(browser()->profile());
+    BrowserWindowInterface* const new_browser =
+        CreateBrowser(browser()->GetProfile());
     CloseBrowserSynchronously(browser());
-    SelectFirstBrowser();
+    SetBrowser(new_browser);
     ASSERT_EQ(browser(), new_browser);
 
-    // Navigate the new browser to 'localhost', so the tests will get new
-    // renderer processes when they navigate to xxx.com origins.
+    // Clear existing spares and navigate the new browser to 'localhost', so the
+    // tests will get new renderer processes when they navigate to xxx.com
+    // origins.
+    content::SpareRenderProcessHostManager::Get().CleanupSparesForTesting();
     GURL local_host = embedded_test_server()->GetURL("/empty.html");
     EXPECT_TRUE(NavigateToURL(web_contents(), local_host));
   }
@@ -79,13 +81,6 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
     ASSERT_TRUE(embedded_test_server()->Start());
 
     ASSERT_FALSE(base::FeatureList::IsEnabled(features::kSharedArrayBuffer));
-    ASSERT_FALSE(
-        base::FeatureList::IsEnabled(features::kSharedArrayBufferOnDesktop));
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) final {
-    PolicyTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
   }
 
   base::test::ScopedFeatureList feature_list_;
@@ -117,7 +112,8 @@ IN_PROC_BROWSER_TEST_F(ChromeSharedArrayBufferBrowserTest,
   GURL sub_url = embedded_test_server()->GetURL("a.com", "/empty.html");
 
   EXPECT_TRUE(content::NavigateToURL(web_contents(), main_url));
-  content::RenderFrameHost* main_document = web_contents()->GetMainFrame();
+  content::RenderFrameHost* main_document =
+      web_contents()->GetPrimaryMainFrame();
 
   EXPECT_TRUE(content::ExecJs(main_document, content::JsReplace(R"(
     g_sab_size = new Promise(resolve => {
@@ -130,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSharedArrayBufferBrowserTest,
   )",
                                                                 sub_url)));
   WaitForLoadStop(web_contents());
-  content::RenderFrameHost* sub_document = web_contents()->GetAllFrames()[1];
+  content::RenderFrameHost* sub_document = ChildFrameAt(main_document, 0);
 
   EXPECT_EQ(false, EvalJs(main_document, "self.crossOriginIsolated"));
   EXPECT_EQ(false, EvalJs(sub_document, "self.crossOriginIsolated"));
@@ -148,7 +144,8 @@ IN_PROC_BROWSER_TEST_F(ChromeSharedArrayBufferBrowserTest, NoPolicyNoSharing) {
   GURL sub_url = embedded_test_server()->GetURL("a.com", "/empty.html");
 
   EXPECT_TRUE(content::NavigateToURL(web_contents(), main_url));
-  content::RenderFrameHost* main_document = web_contents()->GetMainFrame();
+  content::RenderFrameHost* main_document =
+      web_contents()->GetPrimaryMainFrame();
 
   EXPECT_TRUE(content::ExecJs(web_contents(), content::JsReplace(R"(
     g_sab_size = new Promise(resolve => {
@@ -161,7 +158,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSharedArrayBufferBrowserTest, NoPolicyNoSharing) {
   )",
                                                                  sub_url)));
   WaitForLoadStop(web_contents());
-  content::RenderFrameHost* sub_document = web_contents()->GetAllFrames()[1];
+  content::RenderFrameHost* sub_document = ChildFrameAt(main_document, 0);
 
   EXPECT_EQ(false, EvalJs(main_document, "self.crossOriginIsolated"));
   EXPECT_EQ(false, EvalJs(sub_document, "self.crossOriginIsolated"));
@@ -172,9 +169,9 @@ IN_PROC_BROWSER_TEST_F(ChromeSharedArrayBufferBrowserTest, NoPolicyNoSharing) {
         new WebAssembly.Memory({ shared:true, initial:1, maximum:1 }).buffer;
     g_iframe.contentWindow.postMessage(sab,"*");
   )");
-  EXPECT_THAT(
-      postSharedArrayBuffer.error,
-      testing::HasSubstr("Failed to execute 'postMessage' on 'Window': "));
+  EXPECT_THAT(postSharedArrayBuffer,
+              content::EvalJsResult::ErrorIs(testing::HasSubstr(
+                  "Failed to execute 'postMessage' on 'Window': ")));
 }
 
 }  // namespace policy

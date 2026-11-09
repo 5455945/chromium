@@ -1,14 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_VIZ_PUBLIC_CPP_HIT_TEST_AGGREGATED_HIT_TEST_REGION_MOJOM_TRAITS_H_
 #define SERVICES_VIZ_PUBLIC_CPP_HIT_TEST_AGGREGATED_HIT_TEST_REGION_MOJOM_TRAITS_H_
 
+#include "base/types/expected.h"
 #include "components/viz/common/hit_test/aggregated_hit_test_region.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/cpp/compositing/frame_sink_id_mojom_traits.h"
 #include "services/viz/public/mojom/hit_test/aggregated_hit_test_region.mojom-shared.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
+#include "ui/gfx/mojom/rrect_f_mojom_traits.h"
 #include "ui/gfx/mojom/transform_mojom_traits.h"
 
 namespace mojo {
@@ -30,7 +33,7 @@ struct StructTraits<viz::mojom::AggregatedHitTestRegionDataView,
     return region.async_hit_test_reasons;
   }
 
-  static const gfx::Rect& rect(const viz::AggregatedHitTestRegion& region) {
+  static const gfx::RRectF& rect(const viz::AggregatedHitTestRegion& region) {
     return region.rect;
   }
 
@@ -38,12 +41,15 @@ struct StructTraits<viz::mojom::AggregatedHitTestRegionDataView,
     return region.child_count;
   }
 
-  static gfx::Transform transform(const viz::AggregatedHitTestRegion& region) {
-    return region.transform();
+  // NOLINTNEXTLINE(build/include_what_you_use). See crbug.com/1301129.
+  static const gfx::Transform& transform(
+      const viz::AggregatedHitTestRegion& region) {
+    return region.transform;
   }
 
-  static bool Read(viz::mojom::AggregatedHitTestRegionDataView data,
-                   viz::AggregatedHitTestRegion* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::AggregatedHitTestRegionDataView data,
+      viz::AggregatedHitTestRegion* out);
 };
 
 }  // namespace mojo

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "components/security_state/core/features.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
 #include "net/ssl/ssl_connection_status_flags.h"
@@ -30,7 +28,6 @@ const char kHttpUrl[] = "http://foo.test/";
 const char kLocalhostUrl[] = "http://localhost";
 const char kFileOrigin[] = "file://example_file";
 const char kWssUrl[] = "wss://foo.test/";
-const char kFtpUrl[] = "ftp://example.test/";
 const char kDataUrl[] = "data:text/html,<html>test</html>";
 
 // This list doesn't include data: URL, as data: URLs will be explicitly marked
@@ -54,9 +51,9 @@ class TestSecurityStateHelper {
         malicious_content_status_(MALICIOUS_CONTENT_STATUS_NONE),
         is_error_page_(false),
         is_view_source_(false),
-        has_policy_certificate_(false),
-        safety_tip_info_({security_state::SafetyTipStatus::kUnknown, GURL()}) {}
-  virtual ~TestSecurityStateHelper() {}
+        safety_tip_info_({security_state::SafetyTipStatus::kUnknown, GURL()}),
+        is_https_only_mode_upgraded_(false) {}
+  virtual ~TestSecurityStateHelper() = default;
 
   void SetCertificate(scoped_refptr<net::X509Certificate> cert) {
     cert_ = std::move(cert);
@@ -93,14 +90,15 @@ class TestSecurityStateHelper {
     is_view_source_ = is_view_source;
   }
 
-  void set_has_policy_certificate(bool has_policy_cert) {
-    has_policy_certificate_ = has_policy_cert;
-  }
   void SetUrl(const GURL& url) { url_ = url; }
 
   void set_safety_tip_status(
       security_state::SafetyTipStatus safety_tip_status) {
     safety_tip_info_.status = safety_tip_status;
+  }
+
+  void set_is_https_only_mode_upgraded(bool is_https_only_mode_upgraded) {
+    is_https_only_mode_upgraded_ = is_https_only_mode_upgraded;
   }
 
   std::unique_ptr<VisibleSecurityState> GetVisibleSecurityState() const {
@@ -117,12 +115,12 @@ class TestSecurityStateHelper {
     state->is_error_page = is_error_page_;
     state->is_view_source = is_view_source_;
     state->safety_tip_info = safety_tip_info_;
+    state->is_https_only_mode_upgraded = is_https_only_mode_upgraded_;
     return state;
   }
 
   security_state::SecurityLevel GetSecurityLevel() const {
-    return security_state::GetSecurityLevel(*GetVisibleSecurityState(),
-                                            has_policy_certificate_);
+    return security_state::GetSecurityLevel(*GetVisibleSecurityState());
   }
 
   bool HasMajorCertificateError() const {
@@ -140,8 +138,8 @@ class TestSecurityStateHelper {
   MaliciousContentStatus malicious_content_status_;
   bool is_error_page_;
   bool is_view_source_;
-  bool has_policy_certificate_;
   security_state::SafetyTipInfo safety_tip_info_;
+  bool is_https_only_mode_upgraded_;
 };
 
 }  // namespace
@@ -154,22 +152,12 @@ TEST(SecurityStateTest, SHA1Blocked) {
   helper.AddCertStatus(net::CERT_STATUS_SHA1_SIGNATURE_PRESENT);
   EXPECT_TRUE(security_state::IsSHA1InChain(*helper.GetVisibleSecurityState()));
   EXPECT_EQ(DANGEROUS, helper.GetSecurityLevel());
-
-  // Ensure that policy-installed certificates do not interfere.
-  helper.set_has_policy_certificate(true);
-  EXPECT_TRUE(security_state::IsSHA1InChain(*helper.GetVisibleSecurityState()));
-  EXPECT_EQ(DANGEROUS, helper.GetSecurityLevel());
 }
 
 // Tests that SHA1-signed certificates, when allowed by policy, downgrade the
 // security state of the page to NONE.
 TEST(SecurityStateTest, SHA1Warning) {
   TestSecurityStateHelper helper;
-  EXPECT_TRUE(security_state::IsSHA1InChain(*helper.GetVisibleSecurityState()));
-  EXPECT_EQ(NONE, helper.GetSecurityLevel());
-
-  // Ensure that policy-installed certificates do not interfere.
-  helper.set_has_policy_certificate(true);
   EXPECT_TRUE(security_state::IsSHA1InChain(*helper.GetVisibleSecurityState()));
   EXPECT_EQ(NONE, helper.GetSecurityLevel());
 }
@@ -228,13 +216,6 @@ TEST(SecurityStateTest, AlwaysWarnOnDataUrls) {
   EXPECT_EQ(WARNING, helper.GetSecurityLevel());
 }
 
-// Tests that FTP URLs always cause an WARNING to be shown.
-TEST(SecurityStateTest, AlwaysWarnOnFtpUrls) {
-  TestSecurityStateHelper helper;
-  helper.SetUrl(GURL(kFtpUrl));
-  EXPECT_EQ(WARNING, helper.GetSecurityLevel());
-}
-
 // Tests that the security level is downgraded to WARNING on
 // pseudo URLs.
 TEST(SecurityStateTest, WarningOnPseudoUrls) {
@@ -277,35 +258,6 @@ TEST(SecurityStateTest, MixedForm) {
   EXPECT_EQ(DANGEROUS, helper.GetSecurityLevel());
 }
 
-// Tests that policy-installed-certificates do not interfere with mixed content
-// notifications.
-TEST(SecurityStateTest, MixedContentWithPolicyCertificate) {
-  TestSecurityStateHelper helper;
-
-  helper.set_has_policy_certificate(true);
-  helper.set_cert_status(0);
-
-  // Verify that if no mixed content is present, the policy-installed
-  // certificate is recorded.
-  EXPECT_EQ(SECURE_WITH_POLICY_INSTALLED_CERT, helper.GetSecurityLevel());
-
-  // Verify that a mixed form downgrades the security level.
-  helper.set_contained_mixed_form(true);
-  EXPECT_EQ(NONE, helper.GetSecurityLevel());
-
-  // Verify that passive mixed content downgrades the security level.
-  helper.set_contained_mixed_form(false);
-  helper.set_displayed_mixed_content(true);
-  SecurityLevel expected_passive_level = WARNING;
-  EXPECT_EQ(expected_passive_level, helper.GetSecurityLevel());
-
-  // Ensure that active mixed content downgrades the security level.
-  helper.set_contained_mixed_form(false);
-  helper.set_displayed_mixed_content(false);
-  helper.set_ran_mixed_content(true);
-  EXPECT_EQ(DANGEROUS, helper.GetSecurityLevel());
-}
-
 // Tests that HTTP URLs cause a WARNING security level.
 TEST(SecurityStateTest, WarningOnHttp) {
   TestSecurityStateHelper helper;
@@ -326,14 +278,8 @@ TEST(SecurityStateTest, SafetyTipSometimesRemovesSecure) {
   const SafetyTipCase kTestCases[] = {
       {SafetyTipStatus::kUnknown, SECURE},
       {SafetyTipStatus::kNone, SECURE},
-      {SafetyTipStatus::kBadReputation, NONE},
       {SafetyTipStatus::kLookalike, SECURE},
-      {SafetyTipStatus::kBadKeyword, SECURE},
   };
-
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      security_state::features::kSafetyTipUI);
 
   for (auto testcase : kTestCases) {
     TestSecurityStateHelper helper;
@@ -366,8 +312,6 @@ TEST(SecurityStateTest, LocalhostOrFileUrl) {
 // Tests IsSslCertificateValid function.
 TEST(SecurityStateTest, SslCertificateValid) {
   EXPECT_TRUE(IsSslCertificateValid(SecurityLevel::SECURE));
-  EXPECT_TRUE(
-      IsSslCertificateValid(SecurityLevel::SECURE_WITH_POLICY_INSTALLED_CERT));
 
   EXPECT_FALSE(IsSslCertificateValid(SecurityLevel::NONE));
   EXPECT_FALSE(IsSslCertificateValid(SecurityLevel::DANGEROUS));
@@ -426,9 +370,6 @@ TEST(SecurityStateTest, NonCryptoHasNoCertificateErrors) {
   helper.SetUrl(GURL(kHttpUrl));
   EXPECT_FALSE(helper.HasMajorCertificateError());
 
-  helper.SetUrl(GURL(kFtpUrl));
-  EXPECT_FALSE(helper.HasMajorCertificateError());
-
   helper.SetUrl(GURL(kDataUrl));
   EXPECT_FALSE(helper.HasMajorCertificateError());
 }
@@ -467,6 +408,38 @@ TEST(SecurityStateTest, MajorCertificateErrors) {
   helper.set_cert_status(net::CERT_STATUS_SHA1_SIGNATURE_PRESENT |
                          net::CERT_STATUS_PINNED_KEY_MISSING);
   EXPECT_TRUE(helper.HasMajorCertificateError());
+}
+
+// Tests that if a page was upgraded by HTTPS-Only Mode it takes precedence
+// over net errors where connection info is not set.
+TEST(SecurityStateTest, HttpsOnlyModeOverridesNetError) {
+  TestSecurityStateHelper helper;
+  helper.SetUrl(GURL("https://nonexistent.test"));
+  helper.set_is_error_page(true);
+  helper.set_is_https_only_mode_upgraded(true);
+  EXPECT_EQ(SecurityLevel::WARNING, helper.GetSecurityLevel());
+}
+
+// Tests that if a page was upgraded by HTTPS-Only Mode it takes precedence
+// over the page having certificate errors.
+TEST(SecurityStateTest, HttpsOnlyModeOverridesCertificateError) {
+  TestSecurityStateHelper helper;
+  helper.set_cert_status(net::CERT_STATUS_SHA1_SIGNATURE_PRESENT |
+                         net::CERT_STATUS_UNABLE_TO_CHECK_REVOCATION);
+  EXPECT_TRUE(helper.HasMajorCertificateError());
+  helper.set_is_error_page(true);
+  helper.set_is_https_only_mode_upgraded(true);
+  EXPECT_EQ(SecurityLevel::WARNING, helper.GetSecurityLevel());
+}
+
+// Tests that malicious content status takes precedence over HTTPS-Only Mode.
+TEST(SecurityStateTest, MaliciousContentOverridesHttpsOnlyMode) {
+  TestSecurityStateHelper helper;
+  helper.set_malicious_content_status(
+      MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING);
+  helper.set_is_error_page(true);
+  helper.set_is_https_only_mode_upgraded(true);
+  EXPECT_EQ(DANGEROUS, helper.GetSecurityLevel());
 }
 
 }  // namespace security_state

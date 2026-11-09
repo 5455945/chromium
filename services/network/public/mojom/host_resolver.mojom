@@ -1,25 +1,28 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 module network.mojom;
 
 import "mojo/public/mojom/base/time.mojom";
+import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/address_list.mojom";
+import "services/network/public/mojom/host_resolver_endpoint_result.mojom";
+import "services/network/public/mojom/ip_address.mojom";
 import "services/network/public/mojom/ip_endpoint.mojom";
-import "services/network/public/mojom/network_isolation_key.mojom";
+import "services/network/public/mojom/network_anonymization_key.mojom";
 import "services/network/public/mojom/network_param.mojom";
-import "services/network/public/mojom/url_request.mojom";
+import "services/network/public/mojom/request_priority.mojom";
+import "url/mojom/scheme_host_port.mojom";
 
-// An HTTPS server to send DNS queries to, per the DNS Queries over HTTPS spec.
-// spec:  https://tools.ietf.org/html/draft-ietf-doh-dns-over-https-12
-struct DnsOverHttpsServer {
-  // DNS over HTTPS server URI template. Must be HTTPS.
+struct DnsOverHttpsServerConfig {
   string server_template;
+  array<array<network.mojom.IPAddress>> endpoints;
+};
 
-  // Whether to use POST to do DNS lookups. Otherwise, GET is used. See spec
-  // for more details.
-  bool use_post = false;
+// The DNS over HTTPS configuration, containing zero or more servers.
+struct DnsOverHttpsConfig {
+  array<DnsOverHttpsServerConfig> servers;
 };
 
 // The secure DNS mode specifies what types of lookups (secure/insecure) should
@@ -40,10 +43,26 @@ enum SecureDnsMode {
   SECURE,
 };
 
+// This enum corresponds to net::InsecureDnsMode.
+enum InsecureDnsMode {
+  DISABLED,
+  ENABLED_BUILT_IN,
+  ENABLED_PLATFORM,
+  ENABLED_PLATFORM_NO_SYSTEM,
+};
+
 // This enum corresponds to net::SecureDnsPolicy
 enum SecureDnsPolicy {
   ALLOW,
   DISABLE,
+  // The "bootstrap" policy is only used within the network process, so it is
+  // not exposed via Mojo.
+};
+
+// The target host of ResolveHost method.
+union HostResolverHost {
+  url.mojom.SchemeHostPort scheme_host_port;
+  HostPortPair host_port_pair;
 };
 
 // Overridable DNS configuration values for host resolution. All fields default
@@ -85,9 +104,8 @@ struct DnsConfigOverrides {
   // as it may cause them to return incorrect results.
   Tristate use_local_ipv6 = Tristate.NO_OVERRIDE;
 
-  // List of servers to query over HTTPS, queried in order
-  // (https://tools.ietf.org/id/draft-ietf-doh-dns-over-https-12.txt).
-  array<DnsOverHttpsServer>? dns_over_https_servers;
+  // DNS over HTTPS configuration, containing servers to query.
+  DnsOverHttpsConfig? dns_over_https_config;
 
   // The SecureDnsMode to use when resolving queries. If set, it overrides
   // the resolver's current configured mode, and can in turn be overridden by
@@ -97,31 +115,18 @@ struct DnsConfigOverrides {
   // Whether automatic upgrade to DNS over HTTPS servers is permitted.
   Tristate allow_dns_over_https_upgrade = Tristate.NO_OVERRIDE;
 
-  // List of providers to exclude from upgrade mapping. See the
-  // mapping in net/dns/dns_util.cc for provider ids.
-  array<string>? disabled_upgrade_providers;
+  // See net::DnsConfig::fallback_doh_nameservers.
+  array<IPEndPoint>? fallback_doh_nameservers;
 
   // Whether to clear data read from the system HOSTS file.
   bool clear_hosts = false;
-};
-
-// Host resolution error info.
-struct ResolveErrorInfo {
-  // Underlying network error code. See net/base/net_error_list.h for error
-  // descriptions.
-  int32 error;
-
-  // Whether |error| came from a DNS-over-HTTPS lookup. This will be false if
-  // the answer was obtained from the cache or if |error| is net::OK since this
-  // field is intended to identify secure DNS *network* failures.
-  bool is_secure_network_error = false;
 };
 
 // Control handle used to control outstanding NetworkContext::ResolveHost
 // requests. Handle is optional for all requests, and may be closed at any time
 // without affecting the request.
 //
-// TODO(crbug.com/821021): Add support to change priority.
+// TODO(crbug.com/41375980): Add support to change priority.
 interface ResolveHostHandle {
   // Requests cancellation of the resolution request. Doing so may have no
   // effect if a result was already sent. If successful, cancellation results in
@@ -146,16 +151,26 @@ interface ResolveHostClient {
   // |result| should be used when less specific error information (i.e. OK vs
   // ERR_NAME_NOT_RESOLVED) is sufficient.
   //
+  // If results are not in address form, e.g. for a TXT request,
+  // `resolved_addresses` and `alternative_endpoints` will be empty.
+  //
   // Always called last to signal completion of the ResolveHost() request.
   // Unless the ResolveHostClient is closed, this method will always be called
   // exactly once, and afterwards, no more methods in the interface will be
   // called.
+  //
+  // TODO(ericorth@chromium.org): HostResolverEndpointResult is intended to be
+  // a full replacement for AddressList, so it should be modified to include all
+  // results, not just alternative endpoints, and be renamed accordingly. Maybe
+  // just delete the AddressList result entirely while at it to avoid any
+  // concerns of passing redundant data.
   OnComplete(int32 result,
              ResolveErrorInfo resolve_error_info,
-             AddressList? resolved_addresses);
+             AddressList resolved_addresses,
+             array<HostResolverEndpointResult> alternative_endpoints);
 
   // One or more On...Results() methods may be called when non-address results
-  // are available. Always called before OnComplete().
+  // are available and non-empty. Always called before OnComplete().
   OnTextResults(array<string> text_results);
   OnHostnameResults(array<HostPortPair> hosts);
 };
@@ -245,6 +260,10 @@ struct ResolveHostParameters {
   // hosts.
   bool loopback_only = false;
 
+  // Set |true| iff the host resolve request should be skipped if a proxy is
+  // configured for the requested host, instead returning ERR_DNS_DIRECT_ONLY.
+  bool direct_only = false;
+
   // Set |true| iff the host resolve request is only being made speculatively
   // to fill the cache and the result addresses will not be used. The request
   // will receive special logging/observer treatment, and
@@ -253,6 +272,25 @@ struct ResolveHostParameters {
 
   // Controls the resolver's Secure DNS behavior for this request.
   SecureDnsPolicy secure_dns_policy = SecureDnsPolicy.ALLOW;
+
+  // Enumeration for specifying the purpose of a host resolve request.
+  // These values are used for UMA. Entries should not be reordered. Keep this
+  // in sync with tools/metrics/histograms/enums.xml.
+  // TODO(crbug.com/40191203): Consider adding more values if kPreconnect isn't
+  // a majority of the purpose of host resolve requests.
+  enum Purpose {
+    kUnspecified,
+    kPreconnect,
+  };
+
+  // Specifies the purpose of the request.
+  Purpose purpose = Purpose.kUnspecified;
+
+  // Identifier for network requests that the network service may block via the
+  // Connection Allowlist API. Defaults to empty, meaning no DNS requests will
+  // be blocked. See https://github.com/WICG/connection-allowlists for more
+  // info on the Connection Allowlist API.
+  mojo_base.mojom.UnguessableToken? network_restrictions_id;
 };
 
 // Response interface used to receive notifications from
@@ -288,15 +326,15 @@ interface MdnsListenClient {
 interface HostResolver {
   // Resolves the given hostname (or IP address literal). Results are a network
   // error code, and on success (network error code OK), an AddressList. All
-  // results are sent via the passed |response_client|.
+  // results are sent via the passed `response_client`.
   //
-  // |network_isolation_key| specifies what NetworkIsolationKey to use as an
-  // index into the host cache. This both allows a URLLoader created with the
-  // same NetworkIsolationKey to access the host cache entry populated by a
+  // `network_anonymization_key` specifies what NetworkAnonymizationKey to use
+  // as index into the host cache. This both allows a URLLoader created with the
+  // same NetworkAnonymizationKey to access the host cache entry populated by a
   // call to the HostResolver, and prevents the result from being leaked to
-  // URLLoaders made using a different NetworkIsolationKey.
+  // URLLoaders made using a different NetworkAnonymizationKey.
   //
-  // Additional optional parameters may be set using |optional_parameters|. If
+  // Additional optional parameters may be set using `optional_parameters`. If
   // unset, reasonable defaults will be used, equivalent to using a
   // ResolveHostParameters struct without changing any fields from their default
   // values.
@@ -306,9 +344,18 @@ interface HostResolver {
   //
   // All outstanding requests are cancelled if the HostResolver or parent
   // NetworkContext are destroyed. Such requests will receive ERR_FAILED via
-  // |response_client|.
-  ResolveHost(HostPortPair host,
-              NetworkIsolationKey network_isolation_key,
+  // `response_client`.
+  //
+  // When `host` is a SchemeHostPort, behaves under the assumption that the
+  // resolution is being done for the purpose of making a connection with the
+  // specified scheme to the specified host and port. This could result in
+  // scheme-specific DNS queries, e.g. for HTTPS resource records, and special
+  // errors if DNS indicates a connection should not be made using the
+  // specified scheme, e.g. ERR_DNS_NAME_HTTPS_ONLY indicates that a connection
+  // should not be made without first redirecting an http or ws request to an
+  // https or wss request.
+  ResolveHost(HostResolverHost host,
+              NetworkAnonymizationKey network_anonymization_key,
               ResolveHostParameters? optional_parameters,
               pending_remote<ResolveHostClient> response_client);
 

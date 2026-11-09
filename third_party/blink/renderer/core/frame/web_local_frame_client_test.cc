@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -9,10 +9,12 @@
 
 #include <utility>
 
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -34,7 +36,7 @@ class CallTrackingTestWebLocalFrameClient
   void DidCommitNavigation(
       WebHistoryCommitType commit_type,
       bool should_reset_browser_interface_broker,
-      const ParsedPermissionsPolicy& permissions_policy_header,
+      const network::ParsedPermissionsPolicy& permissions_policy_header,
       const DocumentPolicyFeatureState& document_policy_header) override {
     calls_.push_back("DidCommitNavigation");
     TestWebFrameClient::DidCommitNavigation(
@@ -52,9 +54,9 @@ class CallTrackingTestWebLocalFrameClient
     TestWebFrameClient::RunScriptsAtDocumentElementAvailable();
   }
 
-  void DidFinishDocumentLoad() override {
-    calls_.push_back("DidFinishDocumentLoad");
-    TestWebFrameClient::DidFinishDocumentLoad();
+  void DidDispatchDOMContentLoadedEvent() override {
+    calls_.push_back("DidDispatchDOMContentLoadedEvent");
+    TestWebFrameClient::DidDispatchDOMContentLoadedEvent();
   }
 
   void RunScriptsAtDocumentReady() override {
@@ -84,6 +86,7 @@ class CallTrackingTestWebLocalFrameClient
 };
 
 TEST(WebLocalFrameClientTest, Basic) {
+  test::TaskEnvironment task_environment;
   CallTrackingTestWebLocalFrameClient client;
   frame_test_helpers::WebViewHelper web_view_helper;
 
@@ -98,18 +101,18 @@ TEST(WebLocalFrameClientTest, Basic) {
   frame_test_helpers::LoadHTMLString(web_view_helper.LocalMainFrame(),
                                      "<p>Hello world!</p>",
                                      ToKURL("https://example.com/"));
-  EXPECT_THAT(
-      client.TakeCalls(),
-      testing::ElementsAre(
-          // TODO(https://crbug.com/1057229): RunScriptsAtDocumentIdle really
-          // should not be here, but there might be a bug where a truly empty
-          // initial document doesn't fire document_idle due to an early return
-          // in FrameLoader::FinishedParsing()...
-          "RunScriptsAtDocumentIdle", "DidCreateDocumentLoader",
-          "DidCommitNavigation", "DidCreateDocumentElement",
-          "RunScriptsAtDocumentElementAvailable", "DidFinishDocumentLoad",
-          "RunScriptsAtDocumentReady", "RunScriptsAtDocumentIdle",
-          "DidHandleOnloadEvents", "DidFinishLoad"));
+  EXPECT_THAT(client.TakeCalls(),
+              testing::ElementsAre(
+                  // TODO(https://crbug.com/1057229): RunScriptsAtDocumentIdle
+                  // really should not be here, but there might be a bug where a
+                  // truly empty initial document doesn't fire document_idle due
+                  // to an early return in FrameLoader::FinishedParsing()...
+                  "RunScriptsAtDocumentIdle", "DidCreateDocumentLoader",
+                  "DidCommitNavigation", "DidCreateDocumentElement",
+                  "RunScriptsAtDocumentElementAvailable",
+                  "DidDispatchDOMContentLoadedEvent",
+                  "RunScriptsAtDocumentReady", "RunScriptsAtDocumentIdle",
+                  "DidHandleOnloadEvents", "DidFinishLoad"));
 }
 
 // TODO(dcheng): Add test cases for iframes (i.e. iframe with no source, iframe

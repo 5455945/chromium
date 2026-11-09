@@ -1,9 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_EXO_GAMING_SEAT_DELEGATE_H_
 #define COMPONENTS_EXO_GAMING_SEAT_DELEGATE_H_
+
+#include "base/memory/weak_ptr.h"
 
 namespace exo {
 class Surface;
@@ -25,9 +27,10 @@ class GamingSeatDelegate {
   // When a new gamepad is connected, gaming seat call this to assign a
   // gamepad delegate to the gamepad.
   virtual void GamepadAdded(Gamepad& gamepad) = 0;
+  virtual base::WeakPtr<GamingSeatDelegate> GetWeakPtr() = 0;
 
  protected:
-  virtual ~GamingSeatDelegate() {}
+  virtual ~GamingSeatDelegate() = default;
 };
 
 }  // namespace exo

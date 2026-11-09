@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
+#include "base/time/time.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "sql/database.h"
@@ -51,7 +52,7 @@ class ShortcutsDatabase : public base::RefCountedThreadSafe<ShortcutsDatabase> {
                 const std::u16string& description,
                 const std::string& description_class,
                 ui::PageTransition transition,
-                AutocompleteMatchType::Type type,
+                omnibox::AutocompleteMatchType type,
                 const std::u16string& keyword);
       MatchCore(const MatchCore& other);
       ~MatchCore();
@@ -67,7 +68,7 @@ class ShortcutsDatabase : public base::RefCountedThreadSafe<ShortcutsDatabase> {
       std::u16string description;
       std::string description_class;
       ui::PageTransition transition;
-      AutocompleteMatchType::Type type;
+      omnibox::AutocompleteMatchType type;
       std::u16string keyword;
     };
 

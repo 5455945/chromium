@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,10 +33,6 @@ bool operator==(const AXEventIntent& a, const AXEventIntent& b) {
   return a.command == b.command && a.input_event_type == b.input_event_type &&
          a.text_boundary == b.text_boundary &&
          a.move_direction == b.move_direction;
-}
-
-bool operator!=(const AXEventIntent& a, const AXEventIntent& b) {
-  return !(a == b);
 }
 
 std::string AXEventIntent::ToString() const {

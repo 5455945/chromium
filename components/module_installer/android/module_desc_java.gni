@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -24,6 +24,7 @@ template("module_desc_java") {
   _target_name = target_name
 
   _libraries_file = "${target_gen_dir}/${_target_name}.libraries"
+
   generated_file("${_target_name}__libraries") {
     if (defined(invoker.shared_libraries)) {
       deps = invoker.shared_libraries
@@ -36,6 +37,7 @@ template("module_desc_java") {
   }
 
   _srcjar = "$target_gen_dir/${_target_name}__srcjar.srcjar"
+
   action_with_pydeps("${_target_name}__srcjar") {
     script = "//components/module_installer/android/module_desc_java.py"
     outputs = [ _srcjar ]
@@ -70,10 +72,7 @@ template("module_desc_java") {
   }
 
   android_library(_target_name) {
-    deps = [
-      "//base:base_java",
-      "//components/module_installer/android:module_installer_java",
-    ]
+    deps = [ "//components/module_installer/android:module_installer_java" ]
     srcjar_deps = [ ":${_target_name}__srcjar" ]
   }
 }

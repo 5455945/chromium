@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 package org.chromium.android_webview.metrics;
@@ -9,57 +9,86 @@ import org.chromium.android_webview.proto.MetricsBridgeRecords.HistogramRecord;
 import org.chromium.android_webview.proto.MetricsBridgeRecords.HistogramRecord.RecordType;
 import org.chromium.base.Log;
 import org.chromium.base.metrics.UmaRecorderHolder;
+import org.chromium.build.annotations.NullMarked;
 
 /**
  * Replay the recorded method calls recorded by {@link AwProcessUmaRecorder}.
  *
- * Should be used in processes which have initialized Uma, such as the browser process.
+ * <p>Should be used in processes which have initialized Uma, such as the browser process.
  */
+@NullMarked
 public class AwNonembeddedUmaReplayer {
     private static final String TAG = "AwNonembedUmaReplay";
 
     /**
-     * Extract method arguments from the given {@link HistogramRecord} and call
-     * {@link org.chromium.base.metrics.UmaRecorder#recordBooleanHistogram}.
+     * Extract method arguments from the given {@link HistogramRecord} and call {@link
+     * org.chromium.base.metrics.UmaRecorder#recordBooleanHistogram}.
      */
     private static void replayBooleanHistogram(HistogramRecord proto) {
         assert proto.getRecordType() == RecordType.HISTOGRAM_BOOLEAN;
 
         int sample = proto.getSample();
         if (sample != 0 && sample != 1) {
-            Log.d(TAG, "Expected BooleanHistogram to have sample of 0 or 1, but was " + sample);
+            Log.d(TAG, "Expected BooleanHistogram to have sample of 0 or 1, but was %d", sample);
             return;
         }
 
-        UmaRecorderHolder.get().recordBooleanHistogram(
-                proto.getHistogramName(), proto.getSample() != 0);
+        UmaRecorderHolder.get()
+                .recordBooleanHistogram(proto.getHistogramName(), proto.getSample() != 0);
+    }
+
+    private static boolean hasAllRangeHistogramFields(HistogramRecord proto) {
+        return proto.hasHistogramName()
+                && proto.hasMin()
+                && proto.hasMax()
+                && proto.hasNumBuckets();
     }
 
     /**
-     * Extract method arguments from the given {@link HistogramRecord} and call
-     * {@link org.chromium.base.metrics.UmaRecorder#recordExponentialHistogram}.
+     * Extract method arguments from the given {@link HistogramRecord} and call {@link
+     * org.chromium.base.metrics.UmaRecorder#recordExponentialHistogram}.
      */
     private static void replayExponentialHistogram(HistogramRecord proto) {
         assert proto.getRecordType() == RecordType.HISTOGRAM_EXPONENTIAL;
 
-        UmaRecorderHolder.get().recordExponentialHistogram(proto.getHistogramName(),
-                proto.getSample(), proto.getMin(), proto.getMax(), proto.getNumBuckets());
+        if (!hasAllRangeHistogramFields(proto)) {
+            Log.d(TAG, "Missing histogram fields for %s", proto.getHistogramName());
+            return;
+        }
+
+        UmaRecorderHolder.get()
+                .recordExponentialHistogram(
+                        proto.getHistogramName(),
+                        proto.getSample(),
+                        proto.getMin(),
+                        proto.getMax(),
+                        proto.getNumBuckets());
     }
 
     /**
-     * Extract method arguments from the given {@link HistogramRecord} and call
-     * {@link org.chromium.base.metrics.UmaRecorder#recordLinearHistogram}.
+     * Extract method arguments from the given {@link HistogramRecord} and call {@link
+     * org.chromium.base.metrics.UmaRecorder#recordLinearHistogram}.
      */
     private static void replayLinearHistogram(HistogramRecord proto) {
         assert proto.getRecordType() == RecordType.HISTOGRAM_LINEAR;
 
-        UmaRecorderHolder.get().recordLinearHistogram(proto.getHistogramName(), proto.getSample(),
-                proto.getMin(), proto.getMax(), proto.getNumBuckets());
+        if (!hasAllRangeHistogramFields(proto)) {
+            Log.d(TAG, "Missing histogram fields for %s", proto.getHistogramName());
+            return;
+        }
+
+        UmaRecorderHolder.get()
+                .recordLinearHistogram(
+                        proto.getHistogramName(),
+                        proto.getSample(),
+                        proto.getMin(),
+                        proto.getMax(),
+                        proto.getNumBuckets());
     }
 
     /**
-     * Extract method arguments from the given {@link HistogramRecord} and call
-     * {@link org.chromium.base.metrics.UmaRecorder#recordSparseHistogram}.
+     * Extract method arguments from the given {@link HistogramRecord} and call {@link
+     * org.chromium.base.metrics.UmaRecorder#recordSparseHistogram}.
      */
     private static void replaySparseHistogram(HistogramRecord proto) {
         assert proto.getRecordType() == RecordType.HISTOGRAM_SPARSE;
@@ -68,14 +97,14 @@ public class AwNonembeddedUmaReplayer {
     }
 
     /**
-     * Extract method arguments from the given {@link HistogramRecord} and call
-     * {@link org.chromium.base.metrics.UmaRecorder#recordUserAction}.
+     * Extract method arguments from the given {@link HistogramRecord} and call {@link
+     * org.chromium.base.metrics.UmaRecorder#recordUserAction}.
      */
     private static void replayUserAction(HistogramRecord proto) {
         assert proto.getRecordType() == RecordType.USER_ACTION;
 
-        UmaRecorderHolder.get().recordUserAction(
-                proto.getHistogramName(), proto.getElapsedRealtimeMillis());
+        UmaRecorderHolder.get()
+                .recordUserAction(proto.getHistogramName(), proto.getElapsedRealtimeMillis());
     }
 
     /**

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_request_match_params.h"
@@ -35,6 +35,9 @@ class MatchRequestsTask : public DatabaseTask {
       std::unique_ptr<BackgroundFetchRequestMatchParams> match_params,
       SettledFetchesCallback callback);
 
+  MatchRequestsTask(const MatchRequestsTask&) = delete;
+  MatchRequestsTask& operator=(const MatchRequestsTask&) = delete;
+
   ~MatchRequestsTask() override;
 
   // DatabaseTask implementation:
@@ -44,14 +47,12 @@ class MatchRequestsTask : public DatabaseTask {
   void DidOpenCache(int64_t trace_id, blink::mojom::CacheStorageError error);
   void DidGetAllMatchedEntries(
       int64_t trace_id,
-      blink::mojom::GetAllMatchedEntriesResultPtr result);
+      blink::mojom::CacheStorageCache::GetAllMatchedEntriesResult result);
 
   // Checks whether |request| shuld be matched given the provided query params.
   bool ShouldMatchRequest(const blink::mojom::FetchAPIRequestPtr& request);
 
   void FinishWithError(blink::mojom::BackgroundFetchError error) override;
-
-  std::string HistogramName() const override;
 
   BackgroundFetchRegistrationId registration_id_;
   std::unique_ptr<BackgroundFetchRequestMatchParams> match_params_;
@@ -60,8 +61,6 @@ class MatchRequestsTask : public DatabaseTask {
   std::vector<blink::mojom::BackgroundFetchSettledFetchPtr> settled_fetches_;
 
   base::WeakPtrFactory<MatchRequestsTask> weak_factory_{this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(MatchRequestsTask);
 };
 
 }  // namespace background_fetch

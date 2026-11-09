@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 #include "ui/gfx/animation/keyframe/animation_curve.h"
 #include "ui/gfx/animation/keyframe/keyframed_animation_curve.h"
 #include "ui/gfx/animation/keyframe/test/animation_utils.h"
-#include "ui/gfx/geometry/test/size_test_util.h"
-#include "ui/gfx/test/gfx_util.h"
+#include "ui/gfx/geometry/test/geometry_util.h"
 
 namespace gfx {
 
@@ -439,7 +438,8 @@ TEST(KeyframeAnimationTest, TransformTransitions) {
   EXPECT_GT(to.at(0).translate.x, target.operations().at(0).translate.x);
 
   animator.Tick(start_time + MicrosecondsToDelta(10000));
-  EXPECT_TRUE(to.ApproximatelyEqual(target.operations(), tolerance));
+  EXPECT_TRUE(
+      to.Apply().ApproximatelyEqual(target.operations().Apply(), tolerance));
 }
 
 TEST(KeyframeAnimationTest, ReversedTransformTransitions) {
@@ -476,11 +476,12 @@ TEST(KeyframeAnimationTest, ReversedTransformTransitions) {
       &target, start_time + MicrosecondsToDelta(1000), kTransformPropertyId,
       target.operations(), from);
   animator.Tick(start_time + MicrosecondsToDelta(1000));
-  EXPECT_TRUE(value_before_reversing.ApproximatelyEqual(target.operations(),
-                                                        tolerance));
+  EXPECT_TRUE(value_before_reversing.Apply().ApproximatelyEqual(
+      target.operations().Apply(), tolerance));
 
   animator.Tick(start_time + MicrosecondsToDelta(2000));
-  EXPECT_TRUE(from.ApproximatelyEqual(target.operations(), tolerance));
+  EXPECT_TRUE(
+      from.Apply().ApproximatelyEqual(target.operations().Apply(), tolerance));
 }
 
 TEST(KeyframeAnimationTest, RetargetTransformTransition) {
@@ -545,7 +546,7 @@ TEST(KeyframeAnimationTest, BoundsTransitions) {
 
   animator.TransitionSizeTo(&target, start_time, kBoundsPropertyId, from, to);
 
-  EXPECT_FLOAT_SIZE_EQ(from, target.size());
+  EXPECT_SIZEF_EQ(from, target.size());
   animator.Tick(start_time);
 
   // Scheduling a redundant, approximately equal transition should be ignored.
@@ -563,7 +564,7 @@ TEST(KeyframeAnimationTest, BoundsTransitions) {
   EXPECT_GT(to.height(), target.size().height());
 
   animator.Tick(start_time + MicrosecondsToDelta(10000));
-  EXPECT_FLOAT_SIZE_EQ(to, target.size());
+  EXPECT_SIZEF_EQ(to, target.size());
 }
 
 TEST(KeyframeAnimationTest, RetargetSizeTransition) {
@@ -588,7 +589,7 @@ TEST(KeyframeAnimationTest, RetargetSizeTransition) {
   EXPECT_EQ(from, target.size());
   animator.Tick(start_time + MicrosecondsToDelta(5000));
 
-  EXPECT_FLOAT_SIZE_EQ(SizeF(6, 12), target.size());
+  EXPECT_SIZEF_EQ(SizeF(6, 12), target.size());
 
   SizeF new_to(600, 1200);
 
@@ -596,10 +597,10 @@ TEST(KeyframeAnimationTest, RetargetSizeTransition) {
       ->Retarget(start_time + MicrosecondsToDelta(5000), kRectPropertyId,
                  new_to);
   animator.Tick(start_time + MicrosecondsToDelta(5000));
-  EXPECT_FLOAT_SIZE_EQ(SizeF(6, 12), target.size());
+  EXPECT_SIZEF_EQ(SizeF(6, 12), target.size());
 
   animator.Tick(start_time + MicrosecondsToDelta(7500));
-  EXPECT_FLOAT_SIZE_EQ(SizeF(303, 606), target.size());
+  EXPECT_SIZEF_EQ(SizeF(303, 606), target.size());
 }
 
 TEST(KeyframeAnimationTest, ReversedBoundsTransitions) {
@@ -617,7 +618,7 @@ TEST(KeyframeAnimationTest, ReversedBoundsTransitions) {
 
   animator.TransitionSizeTo(&target, start_time, kBoundsPropertyId, from, to);
 
-  EXPECT_FLOAT_SIZE_EQ(from, target.size());
+  EXPECT_SIZEF_EQ(from, target.size());
   animator.Tick(start_time);
 
   animator.Tick(start_time + MicrosecondsToDelta(1000));
@@ -630,10 +631,10 @@ TEST(KeyframeAnimationTest, ReversedBoundsTransitions) {
   animator.TransitionSizeTo(&target, start_time + MicrosecondsToDelta(1000),
                             kBoundsPropertyId, target.size(), from);
   animator.Tick(start_time + MicrosecondsToDelta(1000));
-  EXPECT_FLOAT_SIZE_EQ(value_before_reversing, target.size());
+  EXPECT_SIZEF_EQ(value_before_reversing, target.size());
 
   animator.Tick(start_time + MicrosecondsToDelta(2000));
-  EXPECT_FLOAT_SIZE_EQ(from, target.size());
+  EXPECT_SIZEF_EQ(from, target.size());
 }
 
 TEST(KeyframeAnimationTest, BackgroundColorTransitions) {

@@ -1,10 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -12,7 +12,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/public/renderer/render_view.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -107,9 +106,8 @@ IN_PROC_BROWSER_TEST_F(VisualStateTest, DISABLED_CallbackDoesNotDeadlock) {
   // discouraged (see https://codereview.chromium.org/939673002).
   EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
   CommitObserver observer(
-      RenderFrame::FromRoutingID(
-          shell()->web_contents()->GetMainFrame()->GetRoutingID())
-          ->GetWebFrame()
+      blink::WebLocalFrame::FromFrameToken(
+          shell()->web_contents()->GetPrimaryMainFrame()->GetFrameToken())
           ->View());
 
   // Wait for the commit corresponding to the load.
@@ -122,7 +120,7 @@ IN_PROC_BROWSER_TEST_F(VisualStateTest, DISABLED_CallbackDoesNotDeadlock) {
       base::BindOnce(&VisualStateTest::AssertIsIdle, base::Unretained(this)));
 
   // Insert a visual state callback.
-  shell()->web_contents()->GetMainFrame()->InsertVisualStateCallback(
+  shell()->web_contents()->GetPrimaryMainFrame()->InsertVisualStateCallback(
       base::BindOnce(&VisualStateTest::InvokeVisualStateCallback,
                      base::Unretained(this)));
 

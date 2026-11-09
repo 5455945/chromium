@@ -1,14 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_RENDERER_CONTENT_SECURITY_POLICY_UTIL_H_
 #define CONTENT_RENDERER_CONTENT_SECURITY_POLICY_UTIL_H_
 
+#include <vector>
+
 #include "content/common/content_export.h"
 #include "services/network/public/mojom/content_security_policy.mojom-forward.h"
 #include "third_party/blink/public/platform/web_content_security_policy_struct.h"
-#include "third_party/blink/public/platform/web_vector.h"
 
 namespace content {
 
@@ -26,12 +27,12 @@ network::mojom::ContentSecurityPolicyPtr BuildContentSecurityPolicy(
 // in blink.
 CONTENT_EXPORT
 blink::WebContentSecurityPolicy ToWebContentSecurityPolicy(
-    network::mojom::ContentSecurityPolicyPtr);
+    const network::mojom::ContentSecurityPolicyPtr&);
 
 // Helper function to perform ToWebContentSecurityPolicy on an array.
 CONTENT_EXPORT
-blink::WebVector<blink::WebContentSecurityPolicy> ToWebContentSecurityPolicies(
-    std::vector<network::mojom::ContentSecurityPolicyPtr>);
+std::vector<blink::WebContentSecurityPolicy> ToWebContentSecurityPolicies(
+    const std::vector<network::mojom::ContentSecurityPolicyPtr>&);
 
 }  // namespace content
 

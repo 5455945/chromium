@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,6 +18,13 @@ It will attempt to upload the image anyways.
 
 from __future__ import print_function
 
+try:
+  # In Python2, override input with raw_input for compatibility.
+  input = raw_input
+
+except NameError:
+  pass
+
 import argparse
 import sys
 import os
@@ -29,22 +36,22 @@ import helper.git_helper as git_helper
 here = os.path.dirname(os.path.realpath(__file__))
 src_path = os.path.normpath(os.path.join(here, '..', '..'))
 
-depot_tools_path = os.path.normpath(
-    os.path.join(src_path, 'third_party', 'depot_tools'))
-sys.path.insert(0, depot_tools_path)
+# To keep cog workspaces clean by not creatiing .pyc files
+if here.startswith('/google/cog/cloud') and not os.environ.get(
+  'PYTHONPYCACHEPREFIX'
+):
+  os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
 
-import upload_to_google_storage
-import download_from_google_storage
-
-sys.path.remove(depot_tools_path)
 
 # Translation expectations file for the clank repo.
 INTERNAL_TRANSLATION_EXPECTATIONS_PATH = os.path.join(
-    'clank', 'tools', 'translation_expectations.pyl')
+  'clank', 'tools', 'translation_expectations.pyl'
+)
 
 # Translation expectations file for the Chromium repo.
-TRANSLATION_EXPECTATIONS_PATH = os.path.join('tools', 'gritsettings',
-                                             'translation_expectations.pyl')
+TRANSLATION_EXPECTATIONS_PATH = os.path.join(
+  'tools', 'gritsettings', 'translation_expectations.pyl'
+)
 
 # URL of the bucket used for storing screenshots.
 # This is writable by @google.com accounts, readable by everyone.
@@ -58,7 +65,7 @@ else:
 
 
 def query_yes_no(question, default='no'):
-  """Ask a yes/no question via raw_input() and return their answer.
+  """Ask a yes/no question via input() and return their answer.
 
   "question" is a string that is presented to the user.
   "default" is the presumed answer if the user just hits <Enter>.
@@ -79,20 +86,22 @@ def query_yes_no(question, default='no'):
   valid = {'yes': True, 'y': True, 'ye': True, 'no': False, 'n': False}
   while True:
     print(question, prompt)
-    choice = raw_input().lower()
+    choice = input().lower()
     if default is not None and choice == '':
       return valid[default]
-    elif choice in valid:
+    if choice in valid:
       return valid[choice]
-    else:
-      print("Please respond with 'yes' or 'no' (or 'y' or 'n').")
+    print("Please respond with 'yes' or 'no' (or 'y' or 'n').")
 
 
-def find_screenshots(repo_root, translation_expectations):
+def find_screenshots(repo_root, translation_expectations, is_cog):
   """Returns a list of translation related .png files in the repository."""
+  all_grds = []
+  if not is_cog:
+    all_grds = git_helper.list_grds_in_repository(repo_root)
   translatable_grds = translation_helper.get_translatable_grds(
-      repo_root, git_helper.list_grds_in_repository(repo_root),
-      translation_expectations)
+    repo_root, all_grds, translation_expectations, is_cog
+  )
 
   # Add the paths of grds and any files they include. This includes grdp files
   # and files included via <structure> elements.
@@ -103,15 +112,19 @@ def find_screenshots(repo_root, translation_expectations):
     src_paths.extend(grd.structure_paths)
 
   screenshots = []
+  rename_to_lowercase_png = None
   for grd_path in src_paths:
     # Convert grd_path.grd to grd_path_grd/ directory.
     name, ext = os.path.splitext(os.path.basename(grd_path))
     relative_screenshots_dir = os.path.relpath(
-        os.path.dirname(grd_path), repo_root)
+      os.path.dirname(grd_path), repo_root
+    )
     screenshots_dir = os.path.realpath(
-        os.path.join(repo_root,
-                     os.path.join(relative_screenshots_dir,
-                                  name + ext.replace('.', '_'))))
+      os.path.join(
+        repo_root,
+        os.path.join(relative_screenshots_dir, name + ext.replace('.', '_')),
+      )
+    )
     # Grab all the .png files under the screenshot directory. On a clean
     # checkout this should be an empty list, as the repo should only contain
     # .sha1 files of previously uploaded screenshots.
@@ -120,6 +133,21 @@ def find_screenshots(repo_root, translation_expectations):
     for f in os.listdir(screenshots_dir):
       if f in ('OWNERS', 'README.md', 'DIR_METADATA') or f.endswith('.sha1'):
         continue
+
+      # Rename any files ending in .PNG to .png. File extensions on some
+      # platforms are case-sensitive, so renaming to .png ensures that created
+      # .png.sha1 files are the same type on all platforms.
+      if f.endswith('.PNG'):
+        if rename_to_lowercase_png is None:
+          rename_to_lowercase_png = query_yes_no(
+            '.PNG file(s) found, rename to .png for upload?'
+          )
+        if rename_to_lowercase_png:
+          f_path = os.path.join(screenshots_dir, f)
+          f = os.path.splitext(f)[0] + '.png'
+          f_path_lowercase_png = os.path.join(screenshots_dir, f)
+          os.rename(f_path, f_path_lowercase_png)
+
       if not f.endswith('.png'):
         print('File with unexpected extension: %s in %s' % (f, screenshots_dir))
         continue
@@ -127,53 +155,110 @@ def find_screenshots(repo_root, translation_expectations):
   return screenshots
 
 
+def maybe_add_files_to_cl(signatures, is_cog):
+  if is_cog:
+    return
+
+  # Always ask if the .sha1 files should be added to the CL, even if they are
+  # already part of the CL. If the files are not modified, adding again is a
+  # no-op.
+  if not query_yes_no(
+    'Do you want to add these files to your CL?', default='yes'
+  ):
+    return
+
+  git_helper.git_add(signatures, src_path)
+
+
 def main():
+  default_depot_tools_path = os.path.normpath(
+    os.path.join(src_path, 'third_party', 'depot_tools')
+  )
+
   parser = argparse.ArgumentParser(
-      description='Upload translation screenshots to Google Cloud Storage')
+    description='Upload translation screenshots to Google Cloud Storage'
+  )
   parser.add_argument(
-      '-n',
-      '--dry-run',
-      action='store_true',
-      help='Don\'t actually upload the images')
+    '-n',
+    '--dry-run',
+    action='store_true',
+    help='Don\'t actually upload the images',
+  )
   parser.add_argument(
-      '-c',
-      '--clank_internal',
-      action='store_true',
-      help='Upload screenshots for strings in the downstream clank directory')
+    '-c',
+    '--clank_internal',
+    action='store_true',
+    help='Upload screenshots for strings in the downstream clank directory',
+  )
+  parser.add_argument(
+    '--depot_tools_path',
+    default=default_depot_tools_path,
+    help='Path to the depot_tools directory.',
+  )
   args = parser.parse_args()
+
+  # Temporarily add the depot tools path to our system path, so that we can
+  # import the appropriate modules, since its location is user-dependent.
+  sys.path.insert(0, args.depot_tools_path)
+  import upload_to_google_storage
+  import download_from_google_storage
+  import gclient_utils
+
+  sys.path.remove(args.depot_tools_path)
+
+  is_cog = gclient_utils.IsEnvCog()
+  if is_cog and args.depot_tools_path == default_depot_tools_path:
+    if not query_yes_no(
+      "WARNING: uploading screenshots with third_party/depot_tools "
+      "in a cog environment may add extraneous files to the cog workspace. "
+      "You can specify a local depot_tools version with "
+      "`--depot_tools_path`. Continue anyway?"
+    ):
+      sys.exit(1)
+
   if args.clank_internal:
     screenshots = find_screenshots(
-        os.path.join(src_path, "clank"),
-        os.path.join(src_path, INTERNAL_TRANSLATION_EXPECTATIONS_PATH))
+      os.path.join(src_path, "clank"),
+      os.path.join(src_path, INTERNAL_TRANSLATION_EXPECTATIONS_PATH),
+      is_cog,
+    )
 
   else:
     screenshots = find_screenshots(
-        src_path, os.path.join(src_path, TRANSLATION_EXPECTATIONS_PATH))
+      src_path, os.path.join(src_path, TRANSLATION_EXPECTATIONS_PATH), is_cog
+    )
   if not screenshots:
-    print ("No screenshots found.\n\n"
-           "- Screenshots must be located in the correct directory.\n"
-           "  E.g. For IDS_HELLO_WORLD message in path/to/file.grd, save the "
-           "screenshot at path/to/file_grd/IDS_HELLO_WORLD.png.\n"
-           "- If you added a new, uncommitted .grd file, `git add` it so that "
-           "this script can pick up its screenshot directory.")
-    exit(0)
+    print(
+      "No screenshots found.\n\n"
+      "- Screenshots must be located in the correct directory.\n"
+      "  E.g. For IDS_HELLO_WORLD message in path/to/file.grd, save the "
+      "screenshot at path/to/file_grd/IDS_HELLO_WORLD.png.\n"
+      "- If you added a new, uncommitted .grd file, `git add` it so that "
+      "this script can pick up its screenshot directory."
+    )
+    sys.exit(0)
 
   print('Found %d updated screenshot(s): ' % len(screenshots))
   for s in screenshots:
     print('  %s' % s)
   print()
   if not query_yes_no(
-      'Do you want to upload these to Google Cloud Storage?\n\n'
-      'FILES WILL BE PUBLIC, DO NOT UPLOAD ANYTHING CONFIDENTIAL.'):
-    exit(0)
+    'Do you want to upload these to Google Cloud Storage?\n\n'
+    'FILES WILL BE VISIBLE TO A LARGE NUMBER OF PEOPLE. '
+    'DO NOT UPLOAD ANYTHING CONFIDENTIAL.'
+  ):
+    sys.exit(0)
 
   # Creating a standard gsutil object, assuming there are depot_tools
   # and everything related is set up already.
-  gsutil_path = os.path.abspath(os.path.join(depot_tools_path, 'gsutil.py'))
+  gsutil_path = os.path.abspath(
+    os.path.join(args.depot_tools_path, 'gsutil.py')
+  )
   gsutil = download_from_google_storage.Gsutil(gsutil_path, boto_path=None)
 
   if not args.dry_run:
-    if upload_to_google_storage.upload_to_google_storage(
+    if (
+      upload_to_google_storage.upload_to_google_storage(
         input_filenames=screenshots,
         base_url=BUCKET_URL,
         gsutil=gsutil,
@@ -181,10 +266,15 @@ def main():
         use_md5=False,
         num_threads=10,
         skip_hashing=False,
-        gzip=None) != 0:
-      print ('Error uploading screenshots. Try running '
-             '`download_from_google_storage --config`.')
-      exit(1)
+        gzip=None,
+      )
+      != 0
+    ):
+      print(
+        'Error uploading screenshots. Try running '
+        '`download_from_google_storage --config`.'
+      )
+      sys.exit(1)
 
   print()
   print('Images are uploaded and their signatures are calculated:')
@@ -194,15 +284,8 @@ def main():
     print('  %s' % s)
   print()
 
-  # Always ask if the .sha1 files should be added to the CL, even if they are
-  # already part of the CL. If the files are not modified, adding again is a
-  # no-op.
-  if not query_yes_no('Do you want to add these files to your CL?',
-                      default='yes'):
-    exit(0)
-
   if not args.dry_run:
-    git_helper.git_add(signatures, src_path)
+    maybe_add_files_to_cl(signatures, is_cog)
 
   print('DONE.')
 

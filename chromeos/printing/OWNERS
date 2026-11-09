@@ -1,4 +1,7 @@
-skau@chromium.org
+# Primary OWNERS
+bmgordon@chromium.org
+pawliczek@chromium.org
+
+# Backup OWNERS
 thestig@chromium.org
-zentaro@chromium.org
-luum@chromium.org
+jimmyxgong@chromium.org

@@ -1,17 +1,17 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 
-#include "base/cxx17_backports.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/extensions/extension_prefs_unittest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/media_galleries/media_galleries_preferences.h"
-#include "chrome/browser/media_galleries/media_galleries_test_util.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/storage_monitor/test_storage_monitor.h"
 #include "extensions/browser/extension_prefs.h"
@@ -34,8 +34,8 @@ void AddGalleryPermission(MediaGalleryPrefId gallery,
 // Test the MediaGalleries permissions functions.
 class MediaGalleriesPermissionsTest : public extensions::ExtensionPrefsTest {
  protected:
-  MediaGalleriesPermissionsTest() {}
-  ~MediaGalleriesPermissionsTest() override {}
+  MediaGalleriesPermissionsTest() = default;
+  ~MediaGalleriesPermissionsTest() override = default;
 
   // This is the same implementation as ExtensionPrefsTest::TearDown(), except
   // for also resetting the ExtensionPrefs used by |gallery_prefs_| after
@@ -111,15 +111,17 @@ class MediaGalleriesPermissionsTest : public extensions::ExtensionPrefsTest {
 
   void Verify() override {
     struct TestData {
-      std::string* id;
-      std::vector<MediaGalleryPermission>* expectation;
+      raw_ptr<std::string> id;
+      raw_ptr<std::vector<MediaGalleryPermission>> expectation;
     };
 
-    const TestData test_data[] = {{&extension1_id_, &extension1_expectation_},
-                                  {&extension2_id_, &extension2_expectation_},
-                                  {&extension3_id_, &extension3_expectation_},
-                                  {&extension4_id_, &extension4_expectation_}};
-    for (size_t i = 0; i < base::size(test_data); i++) {
+    const auto test_data = std::to_array<TestData>({
+        {&extension1_id_, &extension1_expectation_},
+        {&extension2_id_, &extension2_expectation_},
+        {&extension3_id_, &extension3_expectation_},
+        {&extension4_id_, &extension4_expectation_},
+    });
+    for (size_t i = 0; i < std::size(test_data); i++) {
       std::vector<MediaGalleryPermission> actual =
           gallery_prefs_->GetGalleryPermissionsFromPrefs(*test_data[i].id);
       EXPECT_EQ(test_data[i].expectation->size(), actual.size());
@@ -144,9 +146,6 @@ class MediaGalleriesPermissionsTest : public extensions::ExtensionPrefsTest {
   std::vector<MediaGalleryPermission> extension2_expectation_;
   std::vector<MediaGalleryPermission> extension3_expectation_;
   std::vector<MediaGalleryPermission> extension4_expectation_;
-
-  // Needed for |gallery_prefs_| to initialize correctly.
-  EnsureMediaDirectoriesExists ensure_media_directories_exists_;
 
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<MediaGalleriesPreferences> gallery_prefs_;

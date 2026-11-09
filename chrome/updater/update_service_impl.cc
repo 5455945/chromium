@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,265 +8,219 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/containers/queue.h"
-#include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "base/version.h"
-#include "chrome/updater/check_for_updates_task.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
+#include "base/task/bind_post_task.h"
+#include "chrome/updater/activity.h"
 #include "chrome/updater/configurator.h"
 #include "chrome/updater/constants.h"
-#include "chrome/updater/installer.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/persisted_data.h"
-#include "chrome/updater/policy/service.h"
-#include "chrome/updater/prefs.h"
-#include "chrome/updater/registration_data.h"
+#include "chrome/updater/remove_uninstalled_apps_task.h"
 #include "chrome/updater/update_service.h"
-#include "chrome/updater/updater_version.h"
-#include "components/prefs/pref_service.h"
-#include "components/update_client/crx_update_item.h"
-#include "components/update_client/update_client.h"
-#include "components/update_client/update_client_errors.h"
+#include "chrome/updater/update_service_impl_impl.h"
+#include "chrome/updater/util/util.h"
+#include "components/policy/core/common/policy_types.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "chrome/updater/util/win_util.h"
+#endif
 
 namespace updater {
 
-namespace {
-
-// The functions below are various adaptors between |update_client| and
-// |UpdateService| types.
-update_client::Callback MakeUpdateClientCallback(
-    UpdateService::Callback callback) {
-  return base::BindOnce(
-      [](UpdateService::Callback callback, update_client::Error error) {
-        std::move(callback).Run(static_cast<UpdateService::Result>(error));
-      },
-      std::move(callback));
-}
-
-UpdateService::UpdateState::State ToUpdateState(
-    update_client::ComponentState component_state) {
-  switch (component_state) {
-    case update_client::ComponentState::kNew:
-      return UpdateService::UpdateState::State::kNotStarted;
-
-    case update_client::ComponentState::kChecking:
-      return UpdateService::UpdateState::State::kCheckingForUpdates;
-
-    case update_client::ComponentState::kDownloading:
-    case update_client::ComponentState::kDownloadingDiff:
-    case update_client::ComponentState::kDownloaded:
-      return UpdateService::UpdateState::State::kDownloading;
-
-    case update_client::ComponentState::kCanUpdate:
-      return UpdateService::UpdateState::State::kUpdateAvailable;
-
-    case update_client::ComponentState::kUpdating:
-    case update_client::ComponentState::kUpdatingDiff:
-      return UpdateService::UpdateState::State::kInstalling;
-
-    case update_client::ComponentState::kUpdated:
-      return UpdateService::UpdateState::State::kUpdated;
-
-    case update_client::ComponentState::kUpToDate:
-      return UpdateService::UpdateState::State::kNoUpdate;
-
-    case update_client::ComponentState::kUpdateError:
-      return UpdateService::UpdateState::State::kUpdateError;
-
-    case update_client::ComponentState::kUninstalled:
-    case update_client::ComponentState::kRegistration:
-    case update_client::ComponentState::kRun:
-    case update_client::ComponentState::kLastStatus:
-      NOTREACHED();
-      return UpdateService::UpdateState::State::kUnknown;
-  }
-}
-
-UpdateService::ErrorCategory ToErrorCategory(
-    update_client::ErrorCategory error_category) {
-  switch (error_category) {
-    case update_client::ErrorCategory::kNone:
-      return UpdateService::ErrorCategory::kNone;
-    case update_client::ErrorCategory::kDownload:
-      return UpdateService::ErrorCategory::kDownload;
-    case update_client::ErrorCategory::kUnpack:
-      return UpdateService::ErrorCategory::kUnpack;
-    case update_client::ErrorCategory::kInstall:
-      return UpdateService::ErrorCategory::kInstall;
-    case update_client::ErrorCategory::kService:
-      return UpdateService::ErrorCategory::kService;
-    case update_client::ErrorCategory::kUpdateCheck:
-      return UpdateService::ErrorCategory::kUpdateCheck;
-  }
-}
-
-update_client::UpdateClient::CrxStateChangeCallback
-MakeUpdateClientCrxStateChangeCallback(
-    scoped_refptr<update_client::Configurator> config,
-    UpdateService::StateChangeCallback callback) {
-  return base::BindRepeating(
-      [](scoped_refptr<update_client::Configurator> config,
-         UpdateService::StateChangeCallback callback,
-         update_client::CrxUpdateItem crx_update_item) {
-        UpdateService::UpdateState update_state;
-        update_state.app_id = crx_update_item.id;
-        update_state.state = ToUpdateState(crx_update_item.state);
-        update_state.next_version = crx_update_item.next_version;
-        update_state.downloaded_bytes = crx_update_item.downloaded_bytes;
-        update_state.total_bytes = crx_update_item.total_bytes;
-        update_state.install_progress = crx_update_item.install_progress;
-        update_state.error_category =
-            ToErrorCategory(crx_update_item.error_category);
-        update_state.error_code = crx_update_item.error_code;
-        update_state.extra_code1 = crx_update_item.extra_code1;
-
-        // Commit the prefs values written by |update_client| when the
-        // update has completed, such as `pv` and `fingerprint`.
-        if (update_state.state == UpdateService::UpdateState::State::kUpdated) {
-          config->GetPrefService()->CommitPendingWrite();
-        }
-
-        callback.Run(update_state);
-      },
-      config, callback);
-}
-
-std::vector<absl::optional<update_client::CrxComponent>> GetComponents(
-    scoped_refptr<Configurator> config,
-    scoped_refptr<PersistedData> persisted_data,
-    const std::vector<std::string>& ids) {
-  std::vector<absl::optional<update_client::CrxComponent>> components;
-  for (const auto& id : ids) {
-    components.push_back(
-        base::MakeRefCounted<Installer>(
-            id,
-            [&config, &id]() {
-              std::string component_channel;
-              return config->GetPolicyService()->GetTargetChannel(
-                         id, nullptr, &component_channel)
-                         ? component_channel
-                         : std::string();
-            }(),
-            persisted_data)
-            ->MakeCrxComponent());
-  }
-  return components;
-}
-
-}  // namespace
-
-UpdateServiceImpl::UpdateServiceImpl(scoped_refptr<Configurator> config)
-    : config_(config),
-      persisted_data_(
-          base::MakeRefCounted<PersistedData>(config_->GetPrefService())),
-      main_task_runner_(base::SequencedTaskRunnerHandle::Get()),
-      update_client_(update_client::UpdateClientFactory(config)) {}
+UpdateServiceImpl::UpdateServiceImpl(UpdaterScope scope,
+                                     scoped_refptr<Configurator> config)
+    : scope_(scope),
+      config_(config),
+      delegate_(base::MakeRefCounted<UpdateServiceImplImpl>(config)) {}
 
 void UpdateServiceImpl::GetVersion(
-    base::OnceCallback<void(const base::Version&)> callback) const {
+    base::OnceCallback<void(const base::Version&)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  main_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(std::move(callback), base::Version(kUpdaterVersion)));
+  delegate_->GetVersion(std::move(callback));
 }
 
-void UpdateServiceImpl::RegisterApp(
-    const RegistrationRequest& request,
-    base::OnceCallback<void(const RegistrationResponse&)> callback) {
+void UpdateServiceImpl::FetchPolicies(policy::PolicyFetchReason reason,
+                                      base::OnceCallback<void(int)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  main_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback),
-                                RegistrationResponse(DoRegistration(request))));
+  delegate_->FetchPolicies(reason, std::move(callback));
 }
 
-int UpdateServiceImpl::DoRegistration(const RegistrationRequest& request) {
+void UpdateServiceImpl::RegisterApp(const RegistrationRequest& request,
+                                    base::OnceCallback<void(int)> callback) {
+  // Registering apps with the updater is always allowed.
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Version current_version =
-      persisted_data_->GetProductVersion(request.app_id);
-  if (current_version.IsValid() &&
-      current_version.CompareTo(request.version) == 1) {
-    return kRegistrationAlreadyRegistered;
-  }
-  persisted_data_->RegisterApp(request);
-  update_client_->SendRegistrationPing(request.app_id, request.version,
-                                       base::DoNothing());
-  return kRegistrationSuccess;
+  delegate_->RegisterApp(request, std::move(callback));
+}
+
+void UpdateServiceImpl::GetAppStates(
+    base::OnceCallback<void(const std::vector<AppState>&)> callback) {
+  // Asking the updater for app status is always allowed.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  delegate_->GetAppStates(std::move(callback));
 }
 
 void UpdateServiceImpl::RunPeriodicTasks(base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  // The installer should make an updater registration, but in case it halts
-  // before it does, synthesize a registration if necessary here.
-  if (!base::Contains(persisted_data_->GetAppIds(), kUpdaterAppId)) {
-    RegistrationRequest updater_request;
-    updater_request.app_id = kUpdaterAppId;
-    updater_request.version = base::Version(kUpdaterVersion);
-    RegisterApp(updater_request, base::DoNothing());
+  if (!IsEulaAccepted() || IsOemMode()) {
+    VLOG(1) << __func__ << " rejected (EULA required or OEM mode).";
+    base::MakeRefCounted<RemoveUninstalledAppsTask>(
+        config_, scope_,
+        base::BindRepeating(&UpdateServiceImplImpl::IsInstalling, delegate_))
+        ->Run(std::move(callback));
+    return;
   }
-
-  tasks_.push(base::MakeRefCounted<CheckForUpdatesTask>(
-      config_,
-      base::BindOnce(&UpdateServiceImpl::UpdateAll, this, base::DoNothing()),
-      base::BindOnce(&UpdateServiceImpl::TaskDone, this, std::move(callback))));
-  if (tasks_.size() == 1)
-    TaskStart();
+  delegate_->RunPeriodicTasks(std::move(callback));
 }
 
-void UpdateServiceImpl::TaskStart() {
+void UpdateServiceImpl::CheckForUpdate(
+    const std::string& app_id,
+    Priority priority,
+    PolicySameVersionUpdate policy_same_version_update,
+    const std::string& language,
+    base::RepeatingCallback<void(const UpdateState&)> state_update,
+    base::OnceCallback<void(Result)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!tasks_.empty()) {
-    tasks_.front()->Run();
+  if (!IsEulaAccepted() || IsOemMode()) {
+    VLOG(1) << __func__ << " rejected (EULA required or OEM mode).";
+    std::move(callback).Run(Result::kEulaRequiredOrOemMode);
+    return;
   }
+  delegate_->FetchPolicies(
+      policy::PolicyFetchReason::kUserRequest,
+      base::BindPostTaskToCurrentDefault(base::BindOnce(
+          [](scoped_refptr<UpdateServiceImplImpl> delegate,
+             const std::string& app_id, Priority priority,
+             PolicySameVersionUpdate policy_same_version_update,
+             const std::string& language,
+             base::RepeatingCallback<void(const UpdateState&)> state_update,
+             base::OnceCallback<void(Result)> callback,
+             int policy_fetch_result) {
+            VLOG(1) << "Policy fetch result: " << policy_fetch_result;
+            delegate->CheckForUpdate(app_id, priority,
+                                     policy_same_version_update, language,
+                                     state_update, std::move(callback));
+          },
+          delegate_, app_id, priority, policy_same_version_update, language,
+          state_update, std::move(callback))));
 }
 
-void UpdateServiceImpl::TaskDone(base::OnceClosure callback) {
+void UpdateServiceImpl::Update(
+    const std::string& app_id,
+    const std::string& install_data_index,
+    Priority priority,
+    PolicySameVersionUpdate policy_same_version_update,
+    const std::string& language,
+    base::RepeatingCallback<void(const UpdateState&)> state_update,
+    base::OnceCallback<void(Result)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run();
-  tasks_.pop();
-  TaskStart();
+  if (!IsEulaAccepted() || IsOemMode()) {
+    VLOG(1) << __func__ << " rejected (EULA required or OEM mode).";
+    std::move(callback).Run(Result::kEulaRequiredOrOemMode);
+    return;
+  }
+  delegate_->Update(app_id, install_data_index, priority,
+                    policy_same_version_update, language, state_update,
+                    std::move(callback));
 }
 
-void UpdateServiceImpl::UpdateAll(StateChangeCallback state_update,
-                                  Callback callback) {
+void UpdateServiceImpl::UpdateAll(
+    base::RepeatingCallback<void(const UpdateState&)> state_update,
+    base::OnceCallback<void(Result)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  const auto app_ids = persisted_data_->GetAppIds();
-  DCHECK(base::Contains(app_ids, kUpdaterAppId));
-
-  update_client_->Update(
-      app_ids, base::BindOnce(&GetComponents, config_, persisted_data_),
-      MakeUpdateClientCrxStateChangeCallback(config_, state_update), false,
-      MakeUpdateClientCallback(std::move(callback)));
+  if (!IsEulaAccepted() || IsOemMode()) {
+    VLOG(1) << __func__ << " rejected (EULA required or OEM mode).";
+    std::move(callback).Run(Result::kEulaRequiredOrOemMode);
+    return;
+  }
+  delegate_->UpdateAll(state_update, std::move(callback));
 }
 
-void UpdateServiceImpl::Update(const std::string& app_id,
-                               Priority priority,
-                               StateChangeCallback state_update,
-                               Callback callback) {
+void UpdateServiceImpl::Install(
+    const RegistrationRequest& registration,
+    const std::string& client_install_data,
+    const std::string& install_data_index,
+    Priority priority,
+    const std::string& language,
+    base::RepeatingCallback<void(const UpdateState&)> state_update,
+    base::OnceCallback<void(Result)> callback) {
+  // Online installers can only be downloaded after ToS acceptance.
+  AcceptEula();
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  update_client_->Update(
-      {app_id}, base::BindOnce(&GetComponents, config_, persisted_data_),
-      MakeUpdateClientCrxStateChangeCallback(config_, state_update),
-      priority == Priority::kForeground,
-      MakeUpdateClientCallback(std::move(callback)));
+  delegate_->Install(registration, client_install_data, install_data_index,
+                     priority, language, state_update, std::move(callback));
 }
 
-void UpdateServiceImpl::Uninitialize() {
+void UpdateServiceImpl::CancelInstalls(const std::string& app_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  PrefsCommitPendingWrites(config_->GetPrefService());
+  delegate_->CancelInstalls(app_id);
+}
+
+void UpdateServiceImpl::RunInstaller(
+    const std::string& app_id,
+    const base::FilePath& installer_path,
+    const std::string& install_args,
+    const std::string& install_data,
+    const std::string& install_settings,
+    const std::string& language,
+    base::RepeatingCallback<void(const UpdateState&)> state_update,
+    base::OnceCallback<void(Result)> callback) {
+  // Offline installs are always permitted, to support OEM cases.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  delegate_->RunInstaller(app_id, installer_path, install_args, install_data,
+                          install_settings, language, state_update,
+                          std::move(callback));
+}
+
+void UpdateServiceImpl::GetUpdaterState(
+    base::OnceCallback<void(const UpdaterState&)> callback) {
+  // Asking the updater for updater state is always allowed.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  delegate_->GetUpdaterState(std::move(callback));
+}
+
+void UpdateServiceImpl::GetPoliciesJson(
+    base::OnceCallback<void(const std::string&)> callback) {
+  // Asking the updater for policies is always allowed.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  delegate_->GetPoliciesJson(std::move(callback));
+}
+
+void UpdateServiceImpl::AcceptEula() {
+  base::MakeRefCounted<PersistedData>(scope_, config_->GetPrefService(),
+                                      nullptr)
+      ->SetEulaRequired(false);
+}
+
+bool UpdateServiceImpl::IsEulaAccepted() {
+  scoped_refptr<PersistedData> persisted_data =
+      base::MakeRefCounted<PersistedData>(scope_, config_->GetPrefService(),
+                                          nullptr);
+  if (!persisted_data->GetEulaRequired()) {
+    return true;
+  }
+  if (EulaAccepted(persisted_data->GetAppIds())) {
+    // Mark the acceptance for future queries.
+    AcceptEula();
+    return true;
+  }
+  return false;
+}
+
+bool UpdateServiceImpl::IsOemMode() {
+#if BUILDFLAG(IS_WIN)
+  return IsSystemInstall() && IsOemInstalling();
+#else
+  return false;
+#endif
 }
 
 UpdateServiceImpl::~UpdateServiceImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  config_->GetPrefService()->SchedulePendingLossyWrites();
 }
 
 }  // namespace updater

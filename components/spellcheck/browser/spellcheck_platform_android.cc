@@ -1,12 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/spellcheck/browser/spellcheck_platform.h"
 
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/notreached.h"
+#include "base/functional/callback.h"
+#include "base/notimplemented.h"
 #include "components/spellcheck/common/spellcheck_features.h"
 
 class PlatformSpellChecker;
@@ -77,6 +77,11 @@ void AddWord(PlatformSpellChecker* spell_checker_instance,
 
 void RemoveWord(PlatformSpellChecker* spell_checker_instance,
                 const std::u16string& word) {}
+
+bool IsUserAddedWord(PlatformSpellChecker* spell_checker_instance,
+                     const std::u16string& word) {
+  return false;
+}
 
 int GetDocumentTag() {
   return 1;

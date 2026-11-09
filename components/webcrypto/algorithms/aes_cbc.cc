@@ -1,5 +1,4 @@
-
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +7,12 @@
 
 #include <memory>
 
+#include "base/bits.h"
 #include "base/check.h"
-#include "base/numerics/safe_math.h"
+#include "base/compiler_specific.h"
 #include "components/webcrypto/algorithms/aes.h"
 #include "components/webcrypto/algorithms/util.h"
 #include "components/webcrypto/blink_key_handle.h"
-#include "components/webcrypto/crypto_data.h"
 #include "components/webcrypto/status.h"
 #include "crypto/openssl_util.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
@@ -39,7 +38,7 @@ const EVP_CIPHER* GetAESCipherByKeyLength(size_t key_length_bytes) {
 Status AesCbcEncryptDecrypt(EncryptOrDecrypt cipher_operation,
                             const blink::WebCryptoAlgorithm& algorithm,
                             const blink::WebCryptoKey& key,
-                            const CryptoData& data,
+                            base::span<const uint8_t> data,
                             std::vector<uint8_t>* buffer) {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
@@ -49,50 +48,41 @@ Status AesCbcEncryptDecrypt(EncryptOrDecrypt cipher_operation,
   if (params->Iv().size() != 16)
     return Status::ErrorIncorrectSizeAesCbcIv();
 
-  // According to the openssl docs, the amount of data written may be as large
-  // as (data_size + cipher_block_size - 1), constrained to a multiple of
-  // cipher_block_size.
-  base::CheckedNumeric<int> output_max_len = data.byte_length();
-  output_max_len += AES_BLOCK_SIZE - 1;
-  if (!output_max_len.IsValid())
-    return Status::ErrorDataTooLarge();
-
-  const unsigned remainder =
-      base::ValueOrDieForType<unsigned>(output_max_len % AES_BLOCK_SIZE);
-  if (remainder != 0)
-    output_max_len += AES_BLOCK_SIZE - remainder;
-  if (!output_max_len.IsValid())
-    return Status::ErrorDataTooLarge();
-
   // Note: PKCS padding is enabled by default
   const EVP_CIPHER* const cipher = GetAESCipherByKeyLength(raw_key.size());
   DCHECK(cipher);
 
   bssl::ScopedEVP_CIPHER_CTX context;
   if (!EVP_CipherInit_ex(context.get(), cipher, nullptr, &raw_key[0],
-                         params->Iv().Data(), cipher_operation)) {
+                         params->Iv().data(), cipher_operation)) {
     return Status::OperationError();
   }
 
-  buffer->resize(base::ValueOrDieForType<size_t>(output_max_len));
+  if (cipher_operation == ENCRYPT) {
+    // CBC encryption is padded by at least one byte, up to a block boundary.
+    // (This cannot overflow because `data.size()` is at most `PTRDIFF_MAX`. If
+    // it did wraparound, `EVP_CipherUpdate_ex` and `EVP_CipherFinal_ex2` will
+    // check the provided bounds and cleanly fail.)
+    buffer->resize(
+        base::bits::AlignUp(data.size() + 1, size_t{AES_BLOCK_SIZE}));
+  } else {
+    // CBC decryption will output at most the input size.
+    buffer->resize(data.size());
+  }
 
-  int output_len = 0;
-  if (!EVP_CipherUpdate(context.get(), buffer->data(), &output_len,
-                        data.bytes(), data.byte_length())) {
+  size_t output_len = 0;
+  if (!EVP_CipherUpdate_ex(context.get(), buffer->data(), &output_len,
+                           buffer->size(), data.data(), data.size())) {
     return Status::OperationError();
   }
-  int final_output_chunk_len = 0;
-  if (!EVP_CipherFinal_ex(context.get(), buffer->data() + output_len,
-                          &final_output_chunk_len)) {
+  auto remainder = base::span(*buffer).subspan(output_len);
+  size_t final_output_chunk_len = 0;
+  if (!EVP_CipherFinal_ex2(context.get(), remainder.data(),
+                           &final_output_chunk_len, remainder.size())) {
     return Status::OperationError();
   }
 
-  const unsigned int final_output_len =
-      static_cast<unsigned int>(output_len) +
-      static_cast<unsigned int>(final_output_chunk_len);
-
-  buffer->resize(final_output_len);
-
+  buffer->resize(output_len + final_output_chunk_len);
   return Status::Success();
 }
 
@@ -102,16 +92,28 @@ class AesCbcImplementation : public AesAlgorithm {
 
   Status Encrypt(const blink::WebCryptoAlgorithm& algorithm,
                  const blink::WebCryptoKey& key,
-                 const CryptoData& data,
+                 base::span<const uint8_t> data,
                  std::vector<uint8_t>* buffer) const override {
     return AesCbcEncryptDecrypt(ENCRYPT, algorithm, key, data, buffer);
   }
 
   Status Decrypt(const blink::WebCryptoAlgorithm& algorithm,
                  const blink::WebCryptoKey& key,
-                 const CryptoData& data,
+                 base::span<const uint8_t> data,
                  std::vector<uint8_t>* buffer) const override {
     return AesCbcEncryptDecrypt(DECRYPT, algorithm, key, data, buffer);
+  }
+
+  bool Supports(blink::WebCryptoOperation op,
+                const blink::WebCryptoAlgorithm& algorithm,
+                std::optional<unsigned int> length_bits) const override {
+    if (op == blink::kWebCryptoOperationEncrypt ||
+        op == blink::kWebCryptoOperationDecrypt) {
+      const blink::WebCryptoAesCbcParams* params = algorithm.AesCbcParams();
+      return params->Iv().size() == 16;
+    } else {
+      return AesAlgorithm::Supports(op, algorithm, length_bits);
+    }
   }
 };
 

@@ -1,14 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/task_manager/providers/fallback_task_provider.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <vector>
+
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/process/process.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/task_manager/providers/render_process_host_task_provider.h"
 #include "chrome/browser/task_manager/providers/web_contents/web_contents_task_provider.h"
 #include "content/public/browser/browser_thread.h"
@@ -19,13 +23,13 @@ namespace task_manager {
 
 namespace {
 
-constexpr base::TimeDelta kTimeDelayForPendingTask =
-    base::TimeDelta::FromMilliseconds(750);
+constexpr base::TimeDelta kTimeDelayForPendingTask = base::Milliseconds(750);
 
 // Returns a task that is in the vector if the task in the vector shares a Pid
 // with the other task.
-Task* GetTaskByPidFromVector(base::ProcessId process_id,
-                             std::vector<Task*>* which_vector) {
+Task* GetTaskByPidFromVector(
+    base::ProcessId process_id,
+    std::vector<raw_ptr<Task, VectorExperimental>>* which_vector) {
   for (Task* candidate : *which_vector) {
     if (candidate->process_id() == process_id)
       return candidate;
@@ -41,7 +45,7 @@ FallbackTaskProvider::FallbackTaskProvider(
     : secondary_source_(std::make_unique<SubproviderSource>(
           this,
           std::move(secondary_subprovider))) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   for (auto& provider : primary_subproviders) {
     primary_sources_.push_back(
@@ -49,10 +53,10 @@ FallbackTaskProvider::FallbackTaskProvider(
   }
 }
 
-FallbackTaskProvider::~FallbackTaskProvider() {}
+FallbackTaskProvider::~FallbackTaskProvider() = default;
 
 Task* FallbackTaskProvider::GetTaskOfUrlRequest(int child_id, int route_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   for (const auto& source : primary_sources_) {
     Task* task = source->subprovider()->GetTaskOfUrlRequest(child_id, route_id);
@@ -65,20 +69,20 @@ Task* FallbackTaskProvider::GetTaskOfUrlRequest(int child_id, int route_id) {
 }
 
 void FallbackTaskProvider::StartUpdating() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(shown_tasks_.empty());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(shown_tasks_.empty(), base::NotFatalUntil::M162);
 
   for (auto& source : primary_sources_) {
-    DCHECK(source->tasks()->empty());
+    CHECK(source->tasks()->empty(), base::NotFatalUntil::M162);
     source->subprovider()->SetObserver(source.get());
   }
 
-  DCHECK(secondary_source_->tasks()->empty());
+  CHECK(secondary_source_->tasks()->empty(), base::NotFatalUntil::M162);
   secondary_source_->subprovider()->SetObserver(secondary_source_.get());
 }
 
 void FallbackTaskProvider::StopUpdating() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   for (auto& source : primary_sources_) {
     source->subprovider()->ClearObserver();
@@ -100,10 +104,9 @@ void FallbackTaskProvider::ShowTaskLater(Task* task) {
                                            std::forward_as_tuple(this));
   } else {
     NOTREACHED();
-    it->second.InvalidateWeakPtrs();
   }
 
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&FallbackTaskProvider::ShowPendingTask,
                      it->second.GetWeakPtr(), task),
@@ -114,12 +117,17 @@ void FallbackTaskProvider::ShowPendingTask(Task* task) {
   // Pending tasks belong to the secondary source, and showing one means that
   // Chromium is missing a primary task provider.
   if (!allow_fallback_for_testing_) {
-    // TODO(avi): Turn this into a DCHECK once there are providers for all known
-    // processes. https://crbug.com/1083509
+    // Log when we use the secondary task provider, to help drive this count to
+    // zero and have providers for all known processes.
+    // TODO(avi): Turn this into a DCHECK and remove the log once there are
+    // providers for all known processes. See https://crbug.com/40131424.
+    base::UmaHistogramBoolean("BrowserRenderProcessHost.LabeledInTaskManager",
+                              false);
     LOG(ERROR)
         << "Every renderer should have at least one task provided by a primary "
-        << "task provider. If a fallback task is shown, it is a bug. Please "
-        << "file a new bug and tag it as a dependency of crbug.com/739782.";
+        << "task provider. If a \"Renderer\" fallback task is shown, it is a "
+        << "bug. If you have repro steps, please file a new bug and tag it as "
+        << "a dependency of crbug.com/40528867.";
   }
 
   pending_shown_tasks_.erase(task);
@@ -132,10 +140,8 @@ void FallbackTaskProvider::ShowTask(Task* task) {
 }
 
 void FallbackTaskProvider::HideTask(Task* task) {
-  auto it = std::remove(shown_tasks_.begin(), shown_tasks_.end(), task);
   pending_shown_tasks_.erase(task);
-  if (it != shown_tasks_.end()) {
-    shown_tasks_.erase(it, shown_tasks_.end());
+  if (std::erase(shown_tasks_, task) > 0) {
     NotifyObserverTaskRemoved(task);
   }
 }
@@ -155,6 +161,12 @@ void FallbackTaskProvider::OnTaskAddedBySource(Task* task,
     ShowTaskLater(task);
     return;
   }
+
+  // Log when a primary task is shown instead, to provide a point of comparison
+  // for cases the secondary task is shown. Remove when there are providers for
+  // for all known processes. See https://crbug.com/40131424.
+  base::UmaHistogramBoolean("BrowserRenderProcessHost.LabeledInTaskManager",
+                            true);
 
   // If we get a primary task that has a secondary task that is both known and
   // shown we then hide the secondary task and then show the primary task.
@@ -186,9 +198,10 @@ void FallbackTaskProvider::OnTaskRemovedBySource(Task* task,
 }
 
 void FallbackTaskProvider::OnTaskUnresponsive(Task* task) {
-  DCHECK(task);
-  if (base::Contains(shown_tasks_, task))
+  CHECK(task, base::NotFatalUntil::M162);
+  if (std::ranges::contains(shown_tasks_, task)) {
     NotifyObserverTaskUnresponsive(task);
+  }
 }
 
 FallbackTaskProvider::SubproviderSource::SubproviderSource(
@@ -197,18 +210,18 @@ FallbackTaskProvider::SubproviderSource::SubproviderSource(
     : fallback_task_provider_(fallback_task_provider),
       subprovider_(std::move(subprovider)) {}
 
-FallbackTaskProvider::SubproviderSource::~SubproviderSource() {}
+FallbackTaskProvider::SubproviderSource::~SubproviderSource() = default;
 
 void FallbackTaskProvider::SubproviderSource::TaskAdded(Task* task) {
-  DCHECK(task);
+  CHECK(task, base::NotFatalUntil::M162);
   tasks_.push_back(task);
   fallback_task_provider_->OnTaskAddedBySource(task, this);
 }
 
 void FallbackTaskProvider::SubproviderSource::TaskRemoved(Task* task) {
-  DCHECK(task);
+  CHECK(task, base::NotFatalUntil::M162);
 
-  base::Erase(tasks_, task);
+  std::erase(tasks_, task);
   fallback_task_provider_->OnTaskRemovedBySource(task, this);
 }
 

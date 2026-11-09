@@ -27,7 +27,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_EVENTS_WINDOW_EVENT_CONTEXT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_EVENTS_WINDOW_EVENT_CONTEXT_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 
 namespace blink {
 
@@ -35,6 +36,7 @@ class EventTarget;
 class Event;
 class LocalDOMWindow;
 class NodeEventContext;
+class TouchEventContext;
 
 class WindowEventContext : public GarbageCollected<WindowEventContext> {
  public:
@@ -53,6 +55,7 @@ class WindowEventContext : public GarbageCollected<WindowEventContext> {
   Member<LocalDOMWindow> window_;
   Member<EventTarget> target_;
   Member<EventTarget> related_target_;
+  Member<TouchEventContext> touch_event_context_;
 };
 
 inline LocalDOMWindow* WindowEventContext::Window() const {

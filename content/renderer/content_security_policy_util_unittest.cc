@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "services/network/public/mojom/integrity_algorithm.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
@@ -20,7 +21,7 @@ TEST(ContentSecurityPolicyUtilTest, BackAndForthConversion) {
                                      false),
       base::flat_map<CSPDirectiveName, std::string>(),
       base::flat_map<CSPDirectiveName, network::mojom::CSPSourceListPtr>(),
-      false, false, false, network::mojom::WebSandboxFlags::kNone,
+      false, false, network::mojom::WebSandboxFlags::kNone,
       ContentSecurityPolicyHeader::New(
           "my-csp", network::mojom::ContentSecurityPolicyType::kEnforce,
           network::mojom::ContentSecurityPolicySource::kHTTP),
@@ -42,7 +43,6 @@ TEST(ContentSecurityPolicyUtilTest, BackAndForthConversion) {
             " http://www.example.org:443/path 'self' invalid ";
       },
       [](ContentSecurityPolicy& csp) { csp.upgrade_insecure_requests = true; },
-      [](ContentSecurityPolicy& csp) { csp.treat_as_public_address = true; },
       [](ContentSecurityPolicy& csp) { csp.block_all_mixed_content = true; },
       [](ContentSecurityPolicy& csp) {
         csp.sandbox = network::mojom::WebSandboxFlags::kPointerLock |
@@ -84,8 +84,7 @@ TEST(ContentSecurityPolicyUtilTest, BackAndForthConversion) {
   for (const auto& modify_csp : test_cases) {
     auto test_csp = basic_csp.Clone();
     (*modify_csp)(*test_csp);
-    EXPECT_EQ(BuildContentSecurityPolicy(
-                  ToWebContentSecurityPolicy(test_csp.Clone())),
+    EXPECT_EQ(BuildContentSecurityPolicy(ToWebContentSecurityPolicy(test_csp)),
               test_csp);
   }
 }
@@ -100,7 +99,7 @@ TEST(ContentSecurityPolicyUtilTest, BackAndForthConversionForCSPSourceList) {
       CSPSource::New("http", "www.example.org", 80, "", false, false),
       base::flat_map<CSPDirectiveName, std::string>(),
       base::flat_map<CSPDirectiveName, network::mojom::CSPSourceListPtr>(),
-      false, false, false, network::mojom::WebSandboxFlags::kNone,
+      false, false, network::mojom::WebSandboxFlags::kNone,
       network::mojom::ContentSecurityPolicyHeader::New(
           "my-csp", network::mojom::ContentSecurityPolicyType::kEnforce,
           network::mojom::ContentSecurityPolicySource::kHTTP),
@@ -128,18 +127,26 @@ TEST(ContentSecurityPolicyUtilTest, BackAndForthConversionForCSPSourceList) {
         source_list.nonces.emplace_back("nonce-cde");
       },
       [](CSPSourceList& source_list) {
-        source_list.hashes.emplace_back(network::mojom::CSPHashSource::New(
-            network::mojom::CSPHashAlgorithm::SHA256,
-            std::vector<uint8_t>({'a', 'd'})));
-        source_list.hashes.emplace_back(network::mojom::CSPHashSource::New(
-            network::mojom::CSPHashAlgorithm::SHA384,
-            std::vector<uint8_t>({'c', 'd', 'e'})));
+        source_list.hashes.emplace_back(
+            network::mojom::IntegrityAlgorithm::kSha256,
+            std::vector<uint8_t>({'a', 'd'}));
+        source_list.hashes.emplace_back(
+            network::mojom::IntegrityAlgorithm::kSha384,
+            std::vector<uint8_t>({'c', 'd', 'e'}));
+      },
+      [](CSPSourceList& source_list) {
+        source_list.hashes.emplace_back(
+            network::mojom::IntegrityAlgorithm::kSha256,
+            std::vector<uint8_t>({'a', 'd'}));
+        source_list.url_hashes.emplace_back(
+            network::mojom::IntegrityAlgorithm::kSha384,
+            std::vector<uint8_t>({'c', 'd', 'e'}));
+        source_list.eval_hashes.emplace_back(
+            network::mojom::IntegrityAlgorithm::kSha384,
+            std::vector<uint8_t>({'f', 'g', 'h'}));
       },
       [](CSPSourceList& source_list) { source_list.allow_self = true; },
       [](CSPSourceList& source_list) { source_list.allow_star = true; },
-      [](CSPSourceList& source_list) {
-        source_list.allow_response_redirects = true;
-      },
       [](CSPSourceList& source_list) { source_list.allow_inline = true; },
       [](CSPSourceList& source_list) { source_list.allow_eval = true; },
       [](CSPSourceList& source_list) { source_list.allow_wasm_eval = true; },
@@ -157,8 +164,7 @@ TEST(ContentSecurityPolicyUtilTest, BackAndForthConversionForCSPSourceList) {
     auto test_csp = basic_csp.Clone();
     test_csp->directives[CSPDirectiveName::ScriptSrc] = CSPSourceList::New();
     (*modify_csp)(*test_csp->directives[CSPDirectiveName::ScriptSrc]);
-    EXPECT_EQ(BuildContentSecurityPolicy(
-                  ToWebContentSecurityPolicy(test_csp.Clone())),
+    EXPECT_EQ(BuildContentSecurityPolicy(ToWebContentSecurityPolicy(test_csp)),
               test_csp);
   }
 }

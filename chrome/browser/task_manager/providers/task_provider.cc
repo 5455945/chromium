@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,14 @@ TaskProvider::TaskProvider()
 TaskProvider::~TaskProvider() = default;
 
 void TaskProvider::SetObserver(TaskProviderObserver* observer) {
-  DCHECK(observer);
-  DCHECK(!observer_);
+  CHECK(observer, base::NotFatalUntil::M162);
+  CHECK(!observer_, base::NotFatalUntil::M162);
   observer_ = observer;
   StartUpdating();
 }
 
 void TaskProvider::ClearObserver() {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M162);
   observer_ = nullptr;
   StopUpdating();
 }
@@ -30,17 +30,17 @@ bool TaskProvider::IsUpdating() const {
 }
 
 void TaskProvider::NotifyObserverTaskAdded(Task* task) const {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M162);
   observer_->TaskAdded(task);
 }
 
 void TaskProvider::NotifyObserverTaskRemoved(Task* task) const {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M162);
   observer_->TaskRemoved(task);
 }
 
 void TaskProvider::NotifyObserverTaskUnresponsive(Task* task) const {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M162);
   observer_->TaskUnresponsive(task);
 }
 
@@ -48,16 +48,16 @@ void TaskProvider::UpdateTaskProcessInfoAndNotifyObserver(
     Task* existing_task,
     base::ProcessHandle new_process_handle,
     base::ProcessId new_process_id) const {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M162);
   existing_task->UpdateProcessInfo(new_process_handle, new_process_id,
                                    observer_);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void TaskProvider::NotifyObserverTaskIdsListToBeInvalidated() const {
-  DCHECK(observer_);
+  CHECK(observer_, base::NotFatalUntil::M162);
   observer_->TaskIdsListToBeInvalidated();
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace task_manager

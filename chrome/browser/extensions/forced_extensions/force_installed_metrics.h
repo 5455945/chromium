@@ -1,18 +1,22 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_FORCED_EXTENSIONS_FORCE_INSTALLED_METRICS_H_
 #define CHROME_BROWSER_EXTENSIONS_FORCED_EXTENSIONS_FORCE_INSTALLED_METRICS_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_tracker.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/updater/extension_downloader_delegate.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -49,11 +53,13 @@ class ForceInstalledMetrics : public ForceInstalledTracker::Observer {
     // USER_TYPE_SUPERVISED_DEPRECATED = 4,
     USER_TYPE_KIOSK_APP = 5,
     USER_TYPE_CHILD = 6,
-    USER_TYPE_ARC_KIOSK_APP = 7,
+    // USER_TYPE_ARC_KIOSK_APP_DEPRECATED = 7,
     USER_TYPE_ACTIVE_DIRECTORY = 8,
     USER_TYPE_WEB_KIOSK_APP = 9,
+    USER_TYPE_KIOSK_IWA = 10,
+    USER_TYPE_KIOSK_ARCVM_APP = 11,
     // Maximum histogram value.
-    kMaxValue = USER_TYPE_WEB_KIOSK_APP
+    kMaxValue = USER_TYPE_KIOSK_ARCVM_APP
   };
 
   // ForceInstalledTracker::Observer overrides:
@@ -73,12 +79,18 @@ class ForceInstalledMetrics : public ForceInstalledTracker::Observer {
       ExtensionDownloaderDelegate::CacheStatus cache_status) override;
 
  private:
-
   // Reports disable reasons for the extensions which are installed but not
   // loaded.
   void ReportDisableReason(const ExtensionId& extension_id);
 
-  // If |kInstallationTimeout| report time elapsed for extensions load,
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  // Reports whether the greylisted force-installed extensions are enabled in
+  // high/low trust environments.
+  void ReportGreylistedStateByTrustLevel(const ExtensionId& extension_id,
+                                         bool is_low_trust_environment);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+
+  // If `kInstallationTimeout` report time elapsed for extensions load,
   // otherwise amount of not yet loaded extensions and reasons
   // why they were not installed.
   void ReportMetrics();
@@ -87,11 +99,12 @@ class ForceInstalledMetrics : public ForceInstalledTracker::Observer {
   // for use.
   void ReportMetricsOnExtensionsReady();
 
-  ExtensionRegistry* const registry_;
-  Profile* const profile_;
-  ForceInstalledTracker* const tracker_;
+  const raw_ptr<ExtensionRegistry> registry_;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<ForceInstalledTracker> tracker_;
 
-  // Moment when the class was initialized.
+  // Tracks the moment when the class was initialized and used as timer start
+  // for reporting metrics related to extensions not loaded after 5 minutes.
   base::Time start_time_;
 
   // Tracks whether extensions load stats were already for the session.

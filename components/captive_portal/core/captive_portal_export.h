@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,7 @@
 #endif  // defined(CAPTIVE_PORTAL_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(CAPTIVE_PORTAL_IMPLEMENTATION)
 #define CAPTIVE_PORTAL_EXPORT __attribute__((visibility("default")))
-#else
-#define CAPTIVE_PORTAL_EXPORT
-#endif
 #endif
 
 #else  // defined(COMPONENT_BUILD)

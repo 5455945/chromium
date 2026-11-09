@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/gfx/linux/gbm_buffer.h"
 #include "ui/gfx/native_pixmap.h"
 #include "ui/ozone/platform/drm/gpu/drm_framebuffer.h"
@@ -24,6 +25,9 @@ class GbmPixmap : public gfx::NativePixmap {
             std::unique_ptr<GbmBuffer> buffer,
             scoped_refptr<DrmFramebuffer> framebuffer);
 
+  GbmPixmap(const GbmPixmap&) = delete;
+  GbmPixmap& operator=(const GbmPixmap&) = delete;
+
   // NativePixmap:
   bool AreDmaBufFdsValid() const override;
   int GetDmaBufFd(size_t plane) const override;
@@ -31,19 +35,15 @@ class GbmPixmap : public gfx::NativePixmap {
   size_t GetDmaBufOffset(size_t plane) const override;
   size_t GetDmaBufPlaneSize(size_t plane) const override;
   size_t GetNumberOfPlanes() const override;
-  uint64_t GetBufferFormatModifier() const override;
-  gfx::BufferFormat GetBufferFormat() const override;
+  bool SupportsZeroCopyWebGPUImport() const override;
+  uint64_t GetFormatModifier() const override;
+  viz::SharedImageFormat GetSharedImageFormat() const override;
   gfx::Size GetBufferSize() const override;
   uint32_t GetUniqueId() const override;
   bool ScheduleOverlayPlane(gfx::AcceleratedWidget widget,
-                            int plane_z_order,
-                            gfx::OverlayTransform plane_transform,
-                            const gfx::Rect& display_bounds,
-                            const gfx::RectF& crop_rect,
-                            bool enable_blend,
-                            std::vector<gfx::GpuFence> acquire_fences,
-                            std::vector<gfx::GpuFence> release_fences) override;
-  gfx::NativePixmapHandle ExportHandle() override;
+                            const gfx::OverlayPlaneData& overlay_plane_data,
+                            gfx::GpuFenceHandle acquire_fence) override;
+  gfx::NativePixmapHandle ExportHandle() const override;
 
   GbmBuffer* buffer() const { return buffer_.get(); }
   const scoped_refptr<DrmFramebuffer>& framebuffer() const {
@@ -53,11 +53,9 @@ class GbmPixmap : public gfx::NativePixmap {
  private:
   ~GbmPixmap() override;
 
-  GbmSurfaceFactory* const surface_manager_;
+  const raw_ptr<GbmSurfaceFactory> surface_manager_;
   const std::unique_ptr<GbmBuffer> buffer_;
   const scoped_refptr<DrmFramebuffer> framebuffer_;
-
-  DISALLOW_COPY_AND_ASSIGN(GbmPixmap);
 };
 
 }  // namespace ui

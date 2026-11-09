@@ -1,12 +1,8 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web_view/internal/cwv_ssl_util.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 CWVCertStatus CWVCertStatusFromNetCertStatus(net::CertStatus cert_status) {
   CWVCertStatus cwv_status = 0;
@@ -52,14 +48,8 @@ CWVCertStatus CWVCertStatusFromNetCertStatus(net::CertStatus cert_status) {
   if (cert_status & net::CERT_STATUS_CERTIFICATE_TRANSPARENCY_REQUIRED) {
     cwv_status |= CWVCertStatusCertificateTransparencyRequired;
   }
-  if (cert_status & net::CERT_STATUS_SYMANTEC_LEGACY) {
-    cwv_status |= CWVCertStatusSymantecLegacy;
-  }
   if (cert_status & net::CERT_STATUS_KNOWN_INTERCEPTION_BLOCKED) {
     cwv_status |= CWVCertStatusKnownInterceptionBlocked;
-  }
-  if (cert_status & net::CERT_STATUS_LEGACY_TLS) {
-    cwv_status |= CWVCertStatusLegacyTLS;
   }
   return cwv_status;
 }

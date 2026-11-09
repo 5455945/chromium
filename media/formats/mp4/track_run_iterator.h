@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
 #include "media/base/media_log.h"
@@ -38,6 +39,10 @@ class MEDIA_EXPORT TrackRunIterator {
   // Create a new TrackRunIterator. A reference to |moov| will be retained for
   // the lifetime of this object.
   TrackRunIterator(const Movie* moov, MediaLog* media_log);
+
+  TrackRunIterator(const TrackRunIterator&) = delete;
+  TrackRunIterator& operator=(const TrackRunIterator&) = delete;
+
   ~TrackRunIterator();
 
   // Sets up the iterator to handle all the runs from the current fragment.
@@ -61,7 +66,7 @@ class MEDIA_EXPORT TrackRunIterator {
   // Caches the CENC data from the given buffer. |buf| must be a buffer starting
   // at the offset given by cenc_offset(), with a |size| of at least
   // cenc_size(). Returns true on success, false on error.
-  bool CacheAuxInfo(const uint8_t* buf, int size);
+  bool CacheAuxInfo(base::span<const uint8_t> buf);
 
   // Returns the maximum buffer location at which no data earlier in the stream
   // will be required in order to read the current or any subsequent sample. You
@@ -75,9 +80,9 @@ class MEDIA_EXPORT TrackRunIterator {
   int64_t aux_info_offset() const;
   int aux_info_size() const;
   bool is_encrypted() const;
-  bool is_audio() const;
-  // Only one is valid, based on the value of is_audio().
+  // This will CHECK if the current track is not audio.
   const AudioSampleEntry& audio_description() const;
+  // This will CHECK if the current track is not video.
   const VideoSampleEntry& video_description() const;
 
   // Properties of the current sample. Only valid if IsSampleValid().
@@ -106,18 +111,16 @@ class MEDIA_EXPORT TrackRunIterator {
   const std::vector<uint8_t>& GetKeyId(size_t sample_index) const;
   bool ApplyConstantIv(size_t sample_index, SampleEncryptionEntry* entry) const;
 
-  const Movie* moov_;
-  MediaLog* media_log_;
+  raw_ptr<const Movie, DanglingUntriaged> moov_;
+  const std::unique_ptr<MediaLog> media_log_;
 
   std::vector<TrackRunInfo> runs_;
   std::vector<TrackRunInfo>::const_iterator run_itr_;
   std::vector<SampleInfo>::const_iterator sample_itr_;
 
-  int64_t sample_dts_;
-  int64_t sample_cts_;
-  int64_t sample_offset_;
-
-  DISALLOW_COPY_AND_ASSIGN(TrackRunIterator);
+  int64_t sample_dts_ = 0;
+  int64_t sample_cts_ = 0;
+  int64_t sample_offset_ = 0;
 };
 
 }  // namespace mp4

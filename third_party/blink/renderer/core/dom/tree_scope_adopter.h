@@ -28,6 +28,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_TREE_SCOPE_ADOPTER_H_
 
 #include "base/dcheck_is_on.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 
 namespace blink {
@@ -52,15 +53,22 @@ class CORE_EXPORT TreeScopeAdopter {
  private:
   void UpdateTreeScope(Node&) const;
   void MoveTreeToNewScope(Node&) const;
-  void MoveTreeToNewDocument(Node&,
-                             Document& old_document,
-                             Document& new_document) const;
-  void MoveShadowTreeToNewDocument(ShadowRoot&,
-                                   Document& old_document,
-                                   Document& new_document) const;
-  void MoveNodeToNewDocument(Node&,
-                             Document& old_document,
-                             Document& new_document) const;
+  void MoveTreeToNewDocument(
+      Node&,
+      Document& old_document,
+      Document& new_document,
+      bool is_document_unmodified_and_uninteracted) const;
+  void MoveShadowTreeToNewDocument(
+      ShadowRoot&,
+      Document& old_document,
+      Document& new_document,
+      bool is_document_unmodified_and_uninteracted) const;
+  void MoveNodeToNewDocument(
+      Node&,
+      Document& old_document,
+      bool is_document_unmodified_and_uninteracted) const;
+  void WillMoveTreeToNewDocument(Node& root) const;
+  bool IsDocumentEligibleForFastAdoption(Document& old_document) const;
   TreeScope& OldScope() const { return *old_scope_; }
   TreeScope& NewScope() const { return *new_scope_; }
 

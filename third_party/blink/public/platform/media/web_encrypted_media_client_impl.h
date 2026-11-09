@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,48 +9,44 @@
 #include <string>
 #include <unordered_map>
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "third_party/blink/public/platform/media/key_system_config_selector.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_encrypted_media_client.h"
 
-namespace blink {
-
-class WebContentDecryptionModuleResult;
-struct WebMediaKeySystemConfiguration;
-class WebSecurityOrigin;
-
-}  // namespace blink
-
 namespace media {
-
-struct CdmConfig;
 class CdmFactory;
+class KeySystems;
 class MediaPermission;
+struct CdmConfig;
+}  // namespace media
+
+namespace blink {
+class WebContentDecryptionModuleResult;
+class WebSecurityOrigin;
+struct WebMediaKeySystemConfiguration;
 
 class BLINK_PLATFORM_EXPORT WebEncryptedMediaClientImpl
-    : public blink::WebEncryptedMediaClient {
+    : public WebEncryptedMediaClient {
  public:
   WebEncryptedMediaClientImpl(
-      CdmFactory* cdm_factory,
-      MediaPermission* media_permission,
+      media::KeySystems* key_systems,
+      media::CdmFactory* cdm_factory,
+      media::MediaPermission* media_permission,
       std::unique_ptr<KeySystemConfigSelector::WebLocalFrameDelegate>
           web_frame_delegate);
   ~WebEncryptedMediaClientImpl() override;
 
   // WebEncryptedMediaClient implementation.
-  void RequestMediaKeySystemAccess(
-      blink::WebEncryptedMediaRequest request) override;
+  void RequestMediaKeySystemAccess(WebEncryptedMediaRequest request) override;
 
-  // Create the CDM for |key_system| and |security_origin|. The caller owns
+  // Create the CDM for |security_origin| and |cdm_config|. The caller owns
   // the created cdm (passed back using |result|).
-  void CreateCdm(
-      const blink::WebString& key_system,
-      const blink::WebSecurityOrigin& security_origin,
-      const CdmConfig& cdm_config,
-      std::unique_ptr<blink::WebContentDecryptionModuleResult> result);
+  void CreateCdm(const WebSecurityOrigin& security_origin,
+                 const media::CdmConfig& cdm_config,
+                 std::unique_ptr<WebContentDecryptionModuleResult> result);
 
  private:
   // Report usage of key system to UMA. There are 2 different counts logged:
@@ -59,27 +55,34 @@ class BLINK_PLATFORM_EXPORT WebEncryptedMediaClientImpl
   // Each stat is only reported once per renderer frame per key system.
   class Reporter;
 
+  // Helper function to call `KeySystemConfigSelector::SelectConfig()`.
+  void SelectConfig(WebEncryptedMediaRequest request);
+
   // Callback for `KeySystemConfigSelector::SelectConfig()`.
   // `accumulated_configuration` and `cdm_config` are non-null iff `status` is
-  // `kSupported`.
+  // `kSupported`. `cdm_config->key_system` is the same as the requested key
+  // system in most cases unless a sub key system is queried and the base key
+  // system should be used.
   void OnConfigSelected(
-      blink::WebEncryptedMediaRequest request,
+      WebEncryptedMediaRequest request,
       KeySystemConfigSelector::Status status,
-      blink::WebMediaKeySystemConfiguration* accumulated_configuration,
-      CdmConfig* cdm_config);
+      WebMediaKeySystemConfiguration* accumulated_configuration,
+      media::CdmConfig* cdm_config);
 
   // Gets the Reporter for |key_system|. If it doesn't already exist,
   // create one.
-  Reporter* GetReporter(const blink::WebString& key_system);
+  Reporter* GetReporter(const WebString& key_system);
 
   // Reporter singletons.
   std::unordered_map<std::string, std::unique_ptr<Reporter>> reporters_;
 
-  CdmFactory* cdm_factory_;
+  const raw_ptr<media::KeySystems> key_systems_;
+  const raw_ptr<media::CdmFactory> cdm_factory_;
   KeySystemConfigSelector key_system_config_selector_;
+
   base::WeakPtrFactory<WebEncryptedMediaClientImpl> weak_factory_{this};
 };
 
-}  // namespace media
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_PUBLIC_PLATFORM_MEDIA_WEB_ENCRYPTED_MEDIA_CLIENT_IMPL_H_

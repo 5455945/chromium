@@ -1,13 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.support_lib_boundary;
 
-/**
- * Boundary interface for WebResourceErrorCompat.
- */
+import org.jspecify.annotations.NullMarked;
+
+/** Boundary interface for WebResourceErrorCompat. */
+@NullMarked
 public interface WebResourceErrorBoundaryInterface {
     int getErrorCode();
+
+    int getDebugCode();
+
     CharSequence getDescription();
 }

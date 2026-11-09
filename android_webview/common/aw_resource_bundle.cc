@@ -1,42 +1,46 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/common/aw_resource_bundle.h"
 
 #include "android_webview/common/aw_descriptors.h"
-#include "base/android/locale_utils.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
-#include "base/i18n/rtl.h"
+#include "base/i18n/android_locale.h"
+#include "base/i18n/icubridge/default_icu_locale.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/logging.h"
-#include "base/path_service.h"
 #include "base/posix/global_descriptors.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_bundle_android.h"
-#include "ui/base/ui_base_paths.h"
 
 namespace android_webview {
+
+using ::base::i18n::GetKnownLanguageTag;
+using ::base::i18n::GetLanguageTagFromString;
+using ::base::i18n::LanguageTag;
+using ::base::i18n::SetDefaultIcuLocale;
 
 void InitIcuAndResourceBundleBrowserSide() {
   TRACE_EVENT0("startup", "InitIcuAndResourceBundleBrowserSide");
   ui::SetLocalePaksStoredInApk(true);
-  std::string locale = ui::ResourceBundle::InitSharedInstanceWithLocale(
-      base::android::GetDefaultLocaleString(), NULL,
+  std::string locale_string = ui::ResourceBundle::InitSharedInstanceWithLocale(
+      std::string(base::i18n::GetAndroidDefaultLocale().tag_string()), nullptr,
       ui::ResourceBundle::LOAD_COMMON_RESOURCES);
-  if (locale.empty()) {
+  std::optional<LanguageTag> locale_tag =
+      GetLanguageTagFromString(locale_string);
+  if (!locale_tag) {
     LOG(WARNING) << "Failed to load locale .pak from apk.";
   }
-  base::i18n::SetICUDefaultLocale(locale);
+  SetDefaultIcuLocale(base::i18n::DefaultIcuLocaleSetterKey(),
+                      locale_tag.value_or(GetKnownLanguageTag("en-US")));
 
-  // Try to directly mmap the resources.pak from the apk. Fall back to load
-  // from file, using PATH_SERVICE, otherwise.
-  base::FilePath pak_file_path;
-  base::PathService::Get(ui::DIR_RESOURCE_PAKS_ANDROID, &pak_file_path);
-  pak_file_path = pak_file_path.AppendASCII("resources.pak");
-  ui::LoadMainAndroidPackFile("assets/resources.pak", pak_file_path);
+  // We only load the resources.pak from the apk.
+  ui::LoadMainAndroidPackFile("assets/resources.pak", base::FilePath());
 }
 
 void InitResourceBundleRendererSide() {
@@ -48,8 +52,8 @@ void InitResourceBundleRendererSide() {
                                                           pak_region);
 
   std::pair<int, ui::ResourceScaleFactor> extra_paks[] = {
-      {kAndroidWebViewMainPakDescriptor, ui::SCALE_FACTOR_NONE},
-      {kAndroidWebView100PercentPakDescriptor, ui::SCALE_FACTOR_100P}};
+      {kAndroidWebViewMainPakDescriptor, ui::kScaleFactorNone},
+      {kAndroidWebView100PercentPakDescriptor, ui::k100Percent}};
 
   for (const auto& pak_info : extra_paks) {
     pak_fd = global_descriptors->Get(pak_info.first);

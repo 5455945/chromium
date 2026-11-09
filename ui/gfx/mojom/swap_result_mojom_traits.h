@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_MOJOM_SWAP_RESULT_MOJOM_TRAITS_H_
 #define UI_GFX_MOJOM_SWAP_RESULT_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "ui/gfx/mojom/swap_result.mojom-shared.h"
 #include "ui/gfx/swap_result.h"
@@ -25,26 +26,20 @@ struct EnumTraits<gfx::mojom::SwapResult, gfx::SwapResult> {
         return gfx::mojom::SwapResult::NAK_RECREATE_BUFFERS;
     }
     NOTREACHED();
-    return gfx::mojom::SwapResult::FAILED;
   }
 
-  static bool FromMojom(gfx::mojom::SwapResult input, gfx::SwapResult* out) {
+  static gfx::SwapResult FromMojom(gfx::mojom::SwapResult input) {
     switch (input) {
       case gfx::mojom::SwapResult::ACK:
-        *out = gfx::SwapResult::SWAP_ACK;
-        return true;
+        return gfx::SwapResult::SWAP_ACK;
       case gfx::mojom::SwapResult::FAILED:
-        *out = gfx::SwapResult::SWAP_FAILED;
-        return true;
+        return gfx::SwapResult::SWAP_FAILED;
       case gfx::mojom::SwapResult::SKIPPED:
-        *out = gfx::SwapResult::SWAP_SKIPPED;
-        return true;
+        return gfx::SwapResult::SWAP_SKIPPED;
       case gfx::mojom::SwapResult::NAK_RECREATE_BUFFERS:
-        *out = gfx::SwapResult::SWAP_NAK_RECREATE_BUFFERS;
-        return true;
+        return gfx::SwapResult::SWAP_NAK_RECREATE_BUFFERS;
     }
     NOTREACHED();
-    return false;
   }
 };
 

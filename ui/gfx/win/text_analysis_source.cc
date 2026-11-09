@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gfx/win/text_analysis_source.h"
+
+#include <string_view>
 
 #include "base/check.h"
 
@@ -58,8 +60,10 @@ HRESULT TextAnalysisSource::GetTextAtPosition(UINT32 text_position,
     *text_length = 0;
     return S_OK;
   }
-  *text_string = text_.c_str() + text_position;
-  *text_length = text_.length() - text_position;
+  std::wstring_view view(text_);
+  std::wstring_view substring = view.substr(text_position);
+  *text_string = substring.data();
+  *text_length = substring.length();
   return S_OK;
 }
 

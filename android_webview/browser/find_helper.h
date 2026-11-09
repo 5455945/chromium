@@ -1,17 +1,26 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_BROWSER_FIND_HELPER_H_
 #define ANDROID_WEBVIEW_BROWSER_FIND_HELPER_H_
 
-#include "base/macros.h"
+#include <string>
+
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/web_contents_user_data.h"
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 namespace android_webview {
 
 // Handles the WebView find-in-page API requests.
-class FindHelper : public content::WebContentsObserver {
+// Lifetime: WebView
+class FindHelper : public content::WebContentsUserData<FindHelper>,
+                   public content::WebContentsObserver {
  public:
   class Listener {
    public:
@@ -24,7 +33,9 @@ class FindHelper : public content::WebContentsObserver {
     virtual ~Listener() {}
   };
 
-  explicit FindHelper(content::WebContents* web_contents);
+  FindHelper(const FindHelper&) = delete;
+  FindHelper& operator=(const FindHelper&) = delete;
+
   ~FindHelper() override;
 
   // Sets the listener to receive find result updates.
@@ -33,41 +44,48 @@ class FindHelper : public content::WebContentsObserver {
 
   // Asynchronous API.
   void FindAllAsync(const std::u16string& search_string);
-  void HandleFindReply(int request_id,
-                       int match_count,
-                       int active_ordinal,
-                       bool finished);
 
   // Methods valid in both synchronous and asynchronous modes.
   void FindNext(bool forward);
   void ClearMatches();
 
  private:
+  friend class content::WebContentsUserData<FindHelper>;
+
+  explicit FindHelper(content::WebContents* web_contents);
+
+  // content::WebContentsObserver:
+  void DidReceiveFindReply(int request_id,
+                           int number_of_matches,
+                           const gfx::Rect& selection_rect,
+                           int active_match_ordinal,
+                           bool final_update) override;
+
   void StartNewSession(const std::u16string& search_string);
   bool MaybeHandleEmptySearch(const std::u16string& search_string);
   void NotifyResults(int active_ordinal, int match_count, bool finished);
 
   // Listener results are reported to.
-  Listener* listener_;
+  raw_ptr<Listener> listener_ = nullptr;
 
   // Used to check the validity of FindNext operations.
-  bool async_find_started_;
+  bool async_find_started_ = false;
 
-  // Used to provide different IDs to each request and for result
-  // verification in asynchronous calls.
-  int find_request_id_counter_;
-  int current_request_id_;
+  // Used for result verification in asynchronous calls. IDs themselves come
+  // from WebContents::Find(), shared with every other caller of Find() on
+  // this WebContents.
+  int current_request_id_ = 0;
 
   // Used to mark the beginning of the current find session. This is the ID of
   // the first find request in the current session.
-  int current_session_id_;
+  int current_session_id_ = 0;
 
   // Required by FindNext and the incremental find replies.
   std::u16string last_search_string_;
-  int last_match_count_;
-  int last_active_ordinal_;
+  int last_match_count_ = -1;
+  int last_active_ordinal_ = -1;
 
-  DISALLOW_COPY_AND_ASSIGN(FindHelper);
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 }  // namespace android_webview

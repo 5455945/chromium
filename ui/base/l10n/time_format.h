@@ -1,14 +1,15 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_L10N_TIME_FORMAT_H_
 #define UI_BASE_L10N_TIME_FORMAT_H_
 
+#include <optional>
 #include <string>
 
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "build/build_config.h"
 
 namespace base {
 class Time;
@@ -24,7 +25,11 @@ class COMPONENT_EXPORT(UI_BASE) TimeFormat {
     FORMAT_DURATION,   // Plain duration, e.g. in English: "2 minutes".
     FORMAT_REMAINING,  // Remaining time, e.g. in English: "2 minutes left".
     FORMAT_ELAPSED,    // Elapsed time, e.g. in English: "2 minutes ago".
-    FORMAT_COUNT       // Enum size counter, not a format.  Must be last.
+#if BUILDFLAG(IS_IOS)
+    FORMAT_TITLE_CASE_ELAPSED,  // Elapsed time in title case, e.g. in English:
+                                // "2 Minutes Ago".
+#endif
+    FORMAT_COUNT  // Enum size counter, not a format.  Must be last.
   };
 
   enum Length {
@@ -32,6 +37,10 @@ class COMPONENT_EXPORT(UI_BASE) TimeFormat {
     LENGTH_LONG,   // Long format, e.g. in English: second/minute/hour/day.
     LENGTH_COUNT   // Enum size counter, not a length.  Must be last.
   };
+
+  TimeFormat() = delete;
+  TimeFormat(const TimeFormat&) = delete;
+  TimeFormat& operator=(const TimeFormat&) = delete;
 
   // Equivalent to SimpleWithMonthAndYear(format, length, delta, false);
   static std::u16string Simple(Format format,
@@ -106,14 +115,12 @@ class COMPONENT_EXPORT(UI_BASE) TimeFormat {
   //
   // The second parameter is optional, it is midnight of "Now" for relative day
   // computations: Time::Now().LocalMidnight()
-  // If NULL, the current day's midnight will be retrieved, which can be
+  // If std::nullopt, the current day's midnight will be retrieved, which can be
   // slow. If many items are being processed, it is best to get the current
   // time once at the beginning and pass it for each computation.
-  static std::u16string RelativeDate(const base::Time& time,
-                                     const base::Time* optional_midnight_today);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(TimeFormat);
+  static std::u16string RelativeDate(
+      base::Time time,
+      std::optional<base::Time> optional_midnight_today);
 };
 
 }  // namespace ui

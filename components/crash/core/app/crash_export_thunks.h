@@ -1,19 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CRASH_CORE_APP_CRASH_EXPORT_THUNKS_H_
 #define COMPONENTS_CRASH_CORE_APP_CRASH_EXPORT_THUNKS_H_
 
-#include <stddef.h>
-#include <time.h>
 #include <windows.h>
+
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
 
 #include "build/build_config.h"
 
 namespace crash_reporter {
+struct ProductInfo;
 struct Report;
-}
+}  // namespace crash_reporter
 
 extern "C" {
 
@@ -51,6 +54,15 @@ int CrashForException_ExportThunk(EXCEPTION_POINTERS* info);
 // not enforced to avoid blocking startup code on synchronizing them.
 void SetUploadConsent_ExportThunk(bool consent);
 
+// Returns the current upload consent state.
+// This function is used by JS Error reporting which lives in chrome.dll.
+bool GetUploadConsent_ExportThunk();
+
+// Returns a textual description of the product info (product name, version,
+// etc.) to include in the crash report.
+// This function is used by JS Error reporting which lives in chrome.dll.
+void GetProductInfo_ExportThunk(crash_reporter::ProductInfo* product_info);
+
 // Injects a thread into a remote process to dump state when there is no crash.
 // |process| that represents serialized crash keys sent from the browser.
 // This method is used solely to classify hung input.
@@ -63,10 +75,12 @@ const wchar_t* GetCrashpadDatabasePath_ExportThunk();
 // within the time range. See crash_reporter::ClearReportsBetween.
 void ClearReportsBetween_ExportThunk(time_t begin, time_t end);
 
-// Immediately dump |process| to a crash dump adorned with |ptype|.
-// Takes ownership of |process|, does not kill nor affect the exit code of
-// |process|.
-bool DumpHungProcessWithPtype_ExportThunk(HANDLE process, const char* ptype);
+// This function may be invoked across module boundaries to write into an
+// embedder-managed user stream. `data` may only be `nullptr` when `size` is 0.
+// See `crash_reporter::WriteUserStreamData()`.
+bool WriteUserStreamData_ExportThunk(uint32_t user_stream_type,
+                                     const void* data,
+                                     size_t size);
 
 }  // extern "C"
 

@@ -35,7 +35,7 @@
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_state_observer.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
@@ -47,7 +47,7 @@ class ExecutionContext;
 // Implementation of the AbstractWorker interface defined in the WebWorker HTML
 // spec: https://html.spec.whatwg.org/C/#abstractworker
 class CORE_EXPORT AbstractWorker
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public ExecutionContextLifecycleStateObserver {
  public:
   // EventTarget APIs
@@ -57,7 +57,7 @@ class CORE_EXPORT AbstractWorker
 
   void ContextDestroyed() override {}
 
-  DEFINE_STATIC_ATTRIBUTE_EVENT_LISTENER(error, kError)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError)
 
   explicit AbstractWorker(ExecutionContext*);
   ~AbstractWorker() override;
@@ -68,6 +68,26 @@ class CORE_EXPORT AbstractWorker
   // Helper function that converts a URL to an absolute URL and checks the
   // result for validity.
   static KURL ResolveURL(ExecutionContext*, const String& url, ExceptionState&);
+
+  // Check whether the |script_url| is allowed by CSP.
+  // When kNoThrowForCSPBlockedWorker is disabled, this method is no-op and
+  // returns true. The CSP check is done in ResolveURL() instead.
+  // When kNoThrowForCSPBlockedWorker is enabled, if it is allowed, the
+  // function returns true. Otherwise, the function posts a task to dispatch
+  // an error event to the worker and returns false.
+  bool CheckAllowedByCSPForNoThrow(const KURL& script_url);
+
+  // Check whether the |script_url| is allowed by the same-origin check
+  // (SecurityOrigin::CanReadContent()).
+  // When NoSynchronousThrowForCrossOriginBlockedWorker is disabled, this
+  // method is a no-op and returns true. The check is done in ResolveURL()
+  // instead.
+  // When NoSynchronousThrowForCrossOriginBlockedWorker is enabled, if the
+  // URL is allowed, the function returns true. Otherwise, the function posts
+  // a task to dispatch an error event to the worker and returns false.
+  bool CheckCanReadScriptURLForNoThrow(const KURL& script_url);
+
+  void DispatchErrorEvent();
 };
 
 }  // namespace blink

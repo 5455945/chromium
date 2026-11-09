@@ -1,17 +1,18 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "chrome/test/chromedriver/chrome/heap_snapshot_taker.h"
 
 #include <stddef.h>
 
+#include <array>
 #include <list>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/chrome/stub_devtools_client.h"
@@ -19,11 +20,10 @@
 
 namespace {
 
-const char* const chunks[] = {"{\"a\": 1,", "\"b\": 2}"};
+constexpr auto chunks = std::to_array<const char*>({"{\"a\": 1,", "\"b\": 2}"});
 
-std::unique_ptr<base::Value> GetSnapshotAsValue() {
-  std::string str_snapshot = "{\"a\": 1,\"b\": 2}";
-  return std::make_unique<base::Value>(std::move(str_snapshot));;
+base::Value GetSnapshotAsValue() {
+  return base::Value("{\"a\": 1,\"b\": 2}");
 }
 
 class DummyDevToolsClient : public StubDevToolsClient {
@@ -33,15 +33,15 @@ class DummyDevToolsClient : public StubDevToolsClient {
         error_after_events_(error_after_events),
         uid_(1),
         disabled_(false) {}
-  ~DummyDevToolsClient() override {}
+  ~DummyDevToolsClient() override = default;
 
   bool IsDisabled() { return disabled_; }
 
   Status SendAddHeapSnapshotChunkEvent() {
-    base::DictionaryValue event_params;
-    event_params.SetInteger("uid", uid_);
-    for (size_t i = 0; i < base::size(chunks); ++i) {
-      event_params.SetString("chunk", chunks[i]);
+    base::DictValue event_params;
+    event_params.Set("uid", uid_);
+    for (size_t i = 0; i < std::size(chunks); ++i) {
+      event_params.Set("chunk", chunks[i]);
       Status status = listeners_.front()->OnEvent(
           this, "HeapProfiler.addHeapSnapshotChunk", event_params);
       if (status.IsError())
@@ -52,7 +52,7 @@ class DummyDevToolsClient : public StubDevToolsClient {
 
   // Overridden from DevToolsClient:
   Status SendCommand(const std::string& method,
-                     const base::DictionaryValue& params) override {
+                     const base::DictValue& params) override {
     if (!disabled_)
       disabled_ = method == "Debugger.disable";
     if (method == method_ && !error_after_events_)
@@ -84,7 +84,7 @@ TEST(HeapSnapshotTaker, SuccessfulCase) {
   std::unique_ptr<base::Value> snapshot;
   Status status = taker.TakeSnapshot(&snapshot);
   ASSERT_EQ(kOk, status.code());
-  ASSERT_TRUE(GetSnapshotAsValue()->Equals(snapshot.get()));
+  ASSERT_EQ(GetSnapshotAsValue(), *snapshot);
   ASSERT_TRUE(client.IsDisabled());
 }
 
@@ -117,4 +117,3 @@ TEST(HeapSnapshotTaker, ErrorBeforeWhenReceivingSnapshot) {
   ASSERT_FALSE(snapshot.get());
   ASSERT_TRUE(client.IsDisabled());
 }
-

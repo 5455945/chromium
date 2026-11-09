@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
 #include "content/browser/loader/navigation_loader_interceptor.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 namespace network {
@@ -27,7 +27,6 @@ class URLLoaderThrottle;
 namespace content {
 
 class SignedExchangeLoader;
-class SignedExchangePrefetchMetricRecorder;
 
 class SignedExchangeRequestHandler final : public NavigationLoaderInterceptor {
  public:
@@ -38,12 +37,16 @@ class SignedExchangeRequestHandler final : public NavigationLoaderInterceptor {
 
   SignedExchangeRequestHandler(
       uint32_t url_loader_options,
-      int frame_tree_node_id,
+      FrameTreeNodeId frame_tree_node_id,
       const base::UnguessableToken& devtools_navigation_token,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       URLLoaderThrottlesGetter url_loader_throttles_getter,
-      scoped_refptr<SignedExchangePrefetchMetricRecorder> metric_recorder,
       std::string accept_langs);
+
+  SignedExchangeRequestHandler(const SignedExchangeRequestHandler&) = delete;
+  SignedExchangeRequestHandler& operator=(const SignedExchangeRequestHandler&) =
+      delete;
+
   ~SignedExchangeRequestHandler() override;
 
   // NavigationLoaderInterceptor implementation
@@ -53,14 +56,13 @@ class SignedExchangeRequestHandler final : public NavigationLoaderInterceptor {
       LoaderCallback callback,
       FallbackCallback fallback_callback) override;
   bool MaybeCreateLoaderForResponse(
+      const network::URLLoaderCompletionStatus& status,
       const network::ResourceRequest& request,
       network::mojom::URLResponseHeadPtr* response_head,
       mojo::ScopedDataPipeConsumerHandle* response_body,
-      mojo::PendingRemote<network::mojom::URLLoader>* loader,
       mojo::PendingReceiver<network::mojom::URLLoaderClient>* client_receiver,
       blink::ThrottlingURLLoader* url_loader,
-      bool* skip_other_interceptors,
-      bool* will_return_unsafe_redirect) override;
+      bool* skip_other_interceptors) override;
 
  private:
   void StartResponse(
@@ -74,17 +76,14 @@ class SignedExchangeRequestHandler final : public NavigationLoaderInterceptor {
   std::unique_ptr<SignedExchangeLoader> signed_exchange_loader_;
 
   const uint32_t url_loader_options_;
-  const int frame_tree_node_id_;
+  const FrameTreeNodeId frame_tree_node_id_;
   const base::UnguessableToken devtools_navigation_token_;
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   URLLoaderThrottlesGetter url_loader_throttles_getter_;
-  scoped_refptr<SignedExchangePrefetchMetricRecorder> metric_recorder_;
   const std::string accept_langs_;
 
   base::WeakPtrFactory<SignedExchangeRequestHandler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SignedExchangeRequestHandler);
 };
 
 }  // namespace content

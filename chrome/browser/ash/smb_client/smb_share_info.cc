@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include "base/check.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 SmbShareInfo::SmbShareInfo(const SmbUrl& share_url,
                            const std::string& display_name,
@@ -21,6 +20,8 @@ SmbShareInfo::SmbShareInfo(const SmbUrl& share_url,
       workgroup_(workgroup),
       use_kerberos_(use_kerberos),
       password_salt_(password_salt) {
+  // TODO(crbug.com/573528876): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(share_url_.IsValid());
   DCHECK(!display_name.empty());
 }
@@ -31,5 +32,4 @@ SmbShareInfo::SmbShareInfo(const SmbShareInfo&) = default;
 
 SmbShareInfo& SmbShareInfo::operator=(const SmbShareInfo&) = default;
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

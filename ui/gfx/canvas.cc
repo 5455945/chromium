@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,31 +6,55 @@
 
 #include <cmath>
 #include <limits>
+#include <string_view>
 
+#include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_shader.h"
 #include "cc/paint/skottie_wrapper.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/skia/include/effects/SkDashPathEffect.h"
-#include "third_party/skia/include/effects/SkGradientShader.h"
+#include "third_party/skia/include/effects/SkGradient.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_rep.h"
+#include "ui/gfx/platform_font.h"
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/gfx/skia_paint_util.h"
-#include "ui/gfx/skia_util.h"
 #include "ui/gfx/switches.h"
-#include "ui/gfx/transform.h"
 
 namespace gfx {
+
+namespace {
+
+// The maximum number of entries in the cache.
+constexpr size_t kMaxStringWidthCacheSize = 32;
+
+// Maximum string length for which we'll cache the width lookup.
+constexpr size_t kMaxStringWidthCacheStringLength = 4;
+
+Canvas::StringWidthCache& GetStringWidthCache() {
+  static base::NoDestructor<Canvas::StringWidthCache> cache(
+      kMaxStringWidthCacheSize);
+  return *cache;
+}
+
+}  // namespace
 
 Canvas::Canvas(const Size& size, float image_scale, bool is_opaque)
     : image_scale_(image_scale) {
@@ -64,7 +88,7 @@ void Canvas::RecreateBackingCanvas(const Size& size,
 }
 
 // static
-void Canvas::SizeStringInt(const std::u16string& text,
+void Canvas::SizeStringInt(std::u16string_view text,
                            const FontList& font_list,
                            int* width,
                            int* height,
@@ -79,18 +103,53 @@ void Canvas::SizeStringInt(const std::u16string& text,
 }
 
 // static
-int Canvas::GetStringWidth(const std::u16string& text,
+int Canvas::GetStringWidth(std::u16string_view text,
                            const FontList& font_list) {
-  int width = 0, height = 0;
-  SizeStringInt(text, font_list, &width, &height, 0, NO_ELLIPSIS);
-  return width;
+  return base::ClampCeil(GetStringWidthF(text, font_list));
 }
 
 // static
-float Canvas::GetStringWidthF(const std::u16string& text,
+Canvas::StringWidthCache& Canvas::GetStringWidthCacheForTesting() {
+  return GetStringWidthCache();
+}
+
+// static
+float Canvas::GetStringWidthF(std::u16string_view text,
                               const FontList& font_list) {
+  if (text.empty()) {
+    return 0;
+  }
+
+  scoped_refptr<const gfx::PlatformFont> platform_font_ref(
+      font_list.GetPrimaryFont().platform_font());
+
+  // Cache only if there is one single Font, and that Font is already
+  // initialized (has a non-null PlatformFont and a non-zero
+  // typeface_unique_id). Otherwise, unstable font state during initialization
+  // could lead to incorrect cache matches or misses.
+  const bool use_cache =
+      base::FeatureList::IsEnabled(features::kStringWidthCache) &&
+      text.length() <= kMaxStringWidthCacheStringLength &&
+      font_list.GetFonts().size() == 1 && platform_font_ref &&
+      platform_font_ref->typeface_unique_id() != 0u;
+
+  if (use_cache) {
+    const StringWidthCacheKey key(std::u16string(text), platform_font_ref);
+    StringWidthCache& cache = GetStringWidthCache();
+
+    auto it = cache.Get(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+  }
+
   float width = 0, height = 0;
   SizeStringFloat(text, font_list, &width, &height, 0, NO_ELLIPSIS);
+
+  if (use_cache) {
+    const StringWidthCacheKey key(std::u16string(text), platform_font_ref);
+    GetStringWidthCache().Put(key, width);
+  }
   return width;
 }
 
@@ -110,16 +169,15 @@ void Canvas::Save() {
 }
 
 void Canvas::SaveLayerAlpha(uint8_t alpha) {
-  canvas_->saveLayerAlpha(NULL, alpha);
+  canvas_->saveLayerAlphaf(alpha / 255.0f);
 }
 
 void Canvas::SaveLayerAlpha(uint8_t alpha, const Rect& layer_bounds) {
-  SkRect bounds(RectToSkRect(layer_bounds));
-  canvas_->saveLayerAlpha(&bounds, alpha);
+  canvas_->saveLayerAlphaf(RectToSkRect(layer_bounds), alpha / 255.0f);
 }
 
 void Canvas::SaveLayerWithFlags(const cc::PaintFlags& flags) {
-  canvas_->saveLayer(nullptr /* bounds */, &flags);
+  canvas_->saveLayer(flags);
 }
 
 void Canvas::Restore() {
@@ -134,8 +192,8 @@ void Canvas::ClipRect(const RectF& rect, SkClipOp op) {
   canvas_->clipRect(RectFToSkRect(rect), op);
 }
 
-void Canvas::ClipPath(const SkPath& path, bool do_anti_alias) {
-  canvas_->clipPath(path, SkClipOp::kIntersect, do_anti_alias);
+void Canvas::ClipPath(const SkPath& path, bool do_anti_alias, SkClipOp op) {
+  canvas_->clipPath(path, op, do_anti_alias);
 }
 
 bool Canvas::GetClipBounds(Rect* bounds) {
@@ -161,7 +219,7 @@ void Canvas::DrawColor(SkColor color) {
 }
 
 void Canvas::DrawColor(SkColor color, SkBlendMode mode) {
-  canvas_->drawColor(color, mode);
+  canvas_->drawColor(SkColor4f::FromColor(color), mode);
 }
 
 void Canvas::FillRect(const Rect& rect, SkColor color) {
@@ -300,7 +358,7 @@ void Canvas::DrawImageInt(const ImageSkia& image, int x, int y) {
 
 void Canvas::DrawImageInt(const ImageSkia& image, int x, int y, uint8_t a) {
   cc::PaintFlags flags;
-  flags.setAlpha(a);
+  flags.setAlphaf(a / 255.0f);
   DrawImageInt(image, x, y, flags);
 }
 
@@ -318,7 +376,7 @@ void Canvas::DrawImageInt(const ImageSkia& image,
                  SkFloatToScalar(1.0f / bitmap_scale));
   canvas_->translate(SkFloatToScalar(std::round(x * bitmap_scale)),
                      SkFloatToScalar(std::round(y * bitmap_scale)));
-  canvas_->saveLayer(nullptr, &flags);
+  canvas_->saveLayer(flags);
   canvas_->drawPicture(image_rep.GetPaintRecord());
   canvas_->restore();
 }
@@ -394,11 +452,15 @@ void Canvas::DrawImageInPath(const ImageSkia& image,
 
 void Canvas::DrawSkottie(scoped_refptr<cc::SkottieWrapper> skottie,
                          const Rect& dst,
-                         float t) {
-  canvas_->drawSkottie(std::move(skottie), RectToSkRect(dst), t);
+                         float t,
+                         cc::SkottieFrameDataMap images,
+                         const cc::SkottieColorMap& color_map,
+                         cc::SkottieTextPropertyValueMap text_map) {
+  canvas_->drawSkottie(std::move(skottie), RectToSkRect(dst), t,
+                       std::move(images), color_map, std::move(text_map));
 }
 
-void Canvas::DrawStringRect(const std::u16string& text,
+void Canvas::DrawStringRect(std::u16string_view text,
                             const FontList& font_list,
                             SkColor color,
                             const Rect& display_rect) {
@@ -467,7 +529,7 @@ bool Canvas::InitPaintFlagsForTiling(const ImageSkia& image,
 }
 
 void Canvas::Transform(const gfx::Transform& transform) {
-  canvas_->concat(SkMatrix(transform.matrix()));
+  canvas_->concat(TransformToSkM44(transform));
 }
 
 SkBitmap Canvas::GetBitmap() const {
@@ -475,7 +537,7 @@ SkBitmap Canvas::GetBitmap() const {
   return bitmap_.value();
 }
 
-bool Canvas::IntersectsClipRect(const SkRect& rect) {
+bool Canvas::IntersectsClipRect(const SkRect& rect) const {
   SkRect clip;
   return canvas_->getLocalClipBounds(&clip) && clip.intersects(rect);
 }
@@ -495,7 +557,8 @@ void Canvas::DrawImageIntHelper(const ImageSkiaRep& image_rep,
   DLOG_ASSERT(src_x + src_w < std::numeric_limits<int16_t>::max() &&
               src_y + src_h < std::numeric_limits<int16_t>::max());
   if (src_w <= 0 || src_h <= 0) {
-    NOTREACHED() << "Attempting to draw bitmap from an empty rect!";
+    DUMP_WILL_BE_NOTREACHED()
+        << "Attempting to draw bitmap from an empty rect!";
     return;
   }
 
@@ -517,10 +580,24 @@ void Canvas::DrawImageIntHelper(const ImageSkiaRep& image_rep,
   shader_scale.setScale(SkFloatToScalar(user_scale_x),
                         SkFloatToScalar(user_scale_y));
   shader_scale.preTranslate(SkIntToScalar(-src_x), SkIntToScalar(-src_y));
-  shader_scale.postTranslate(SkIntToScalar(dest_x), SkIntToScalar(dest_y));
+  // In non pixel-canvas mode, the scaling and rounding is performed in cc side.
+  // In pixel canvas mode, we need to translate so that the position is pixel
+  // aligned at the target space, because drawing at subpixel position can
+  // result in pixelated image. Use `std::round` to be consistent with pixel
+  // canvas' rounding logic.
+  // TODO(crbug.com/41344902): Using image_scale_ isn't 100% accurate. It should
+  // use the scale applied to the canvas instead (which isn't available now).
+  if (features::IsPixelCanvasRecordingEnabled()) {
+    shader_scale.postTranslate(
+        SkFloatToScalar(std::round(dest_x * image_scale_) / image_scale_),
+        SkFloatToScalar(std::round(dest_y * image_scale_) / image_scale_));
+  } else {
+    shader_scale.postTranslate(SkIntToScalar(dest_x), SkIntToScalar(dest_y));
+  }
 
   cc::PaintFlags flags(original_flags);
-  flags.setFilterQuality(filter ? kLow_SkFilterQuality : kNone_SkFilterQuality);
+  flags.setFilterQuality(filter ? cc::PaintFlags::FilterQuality::kLow
+                                : cc::PaintFlags::FilterQuality::kNone);
   flags.setShader(CreateImageRepShaderForScale(
       image_rep, SkTileMode::kRepeat, SkTileMode::kRepeat, shader_scale,
       remove_image_scale ? image_rep.scale() : 1.f));
@@ -540,7 +617,7 @@ cc::PaintCanvas* Canvas::CreateOwnedCanvas(const Size& size, bool is_opaque) {
   bitmap_.emplace();
   bitmap_->allocPixels(info);
   // Ensure that the bitmap is zeroed, since the code expects that.
-  memset(bitmap_->getPixels(), 0, bitmap_->computeByteSize());
+  bitmap_->eraseColor(SkColors::kTransparent);
 
   owned_canvas_.emplace(bitmap_.value());
   return &owned_canvas_.value();

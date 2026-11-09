@@ -1,30 +1,29 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/command_updater_impl.h"
 
 #include <algorithm>
+#include <optional>
 
 #include "base/check.h"
 #include "base/observer_list.h"
 #include "chrome/browser/command_observer.h"
 #include "chrome/browser/command_updater_delegate.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 
-class CommandUpdaterImpl::Command {
- public:
-  bool enabled;
-  base::ObserverList<CommandObserver>::Unchecked observers;
-
-  Command() : enabled(true) {}
+struct CommandUpdaterImpl::Command {
+  // Empty optional means not specified yet and thus implicitly disabled.
+  std::optional<bool> enabled;
+  base::ObserverList<CommandObserver>::UncheckedAndDanglingUntriaged observers;
 };
 
 CommandUpdaterImpl::CommandUpdaterImpl(CommandUpdaterDelegate* delegate)
     : delegate_(delegate) {
 }
 
-CommandUpdaterImpl::~CommandUpdaterImpl() {
-}
+CommandUpdaterImpl::~CommandUpdaterImpl() = default;
 
 bool CommandUpdaterImpl::SupportsCommand(int id) const {
   return commands_.find(id) != commands_.end();
@@ -32,22 +31,19 @@ bool CommandUpdaterImpl::SupportsCommand(int id) const {
 
 bool CommandUpdaterImpl::IsCommandEnabled(int id) const {
   auto command = commands_.find(id);
-  if (command == commands_.end())
+  if (command == commands_.end() || command->second->enabled == std::nullopt) {
     return false;
-  return command->second->enabled;
+  }
+  return *command->second->enabled;
 }
 
-bool CommandUpdaterImpl::ExecuteCommand(int id, base::TimeTicks time_stamp) {
-  return ExecuteCommandWithDisposition(id, WindowOpenDisposition::CURRENT_TAB,
-                                       time_stamp);
-}
-
-bool CommandUpdaterImpl::ExecuteCommandWithDisposition(
+bool CommandUpdaterImpl::ExecuteCommandWithDispositionAndContext(
     int id,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
+    std::optional<actions::ActionInvocationContext> context,
     base::TimeTicks time_stamp) {
   if (SupportsCommand(id) && IsCommandEnabled(id)) {
-    delegate_->ExecuteCommandWithDisposition(id, disposition);
+    delegate_->HandleCommandWithDisposition(id, disposition, time_stamp);
     return true;
   }
   return false;
@@ -72,7 +68,7 @@ void CommandUpdaterImpl::RemoveCommandObserver(CommandObserver* observer) {
 
 bool CommandUpdaterImpl::UpdateCommandEnabled(int id, bool enabled) {
   Command* command = GetCommand(id, true);
-  if (command->enabled == enabled)
+  if (command->enabled.has_value() && *command->enabled == enabled)
     return true;  // Nothing to do.
   command->enabled = enabled;
   for (auto& observer : command->observers)
@@ -85,7 +81,7 @@ void CommandUpdaterImpl::DisableAllCommands() {
     UpdateCommandEnabled(command_pair.first, false);
 }
 
-std::vector<int> CommandUpdaterImpl::GetAllIds() {
+std::vector<int> CommandUpdaterImpl::GetAllIds() const {
   std::vector<int> result;
   for (const auto& command_pair : commands_)
     result.push_back(command_pair.first);
@@ -98,7 +94,7 @@ CommandUpdaterImpl::GetCommand(int id, bool create) {
   if (supported)
     return commands_[id].get();
 
-  DCHECK(create);
+  CHECK(create, base::NotFatalUntil::M162);
   std::unique_ptr<Command>& entry = commands_[id];
   entry = std::make_unique<Command>();
   return entry.get();

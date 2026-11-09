@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,13 +24,15 @@ namespace extensions {
 // The parsed form of the "sockets" manifest entry.
 class SocketsManifestData : public Extension::ManifestData {
  public:
+  static const char* kManifestDataKey;
+
   explicit SocketsManifestData(
       std::unique_ptr<SocketsManifestPermission> permission);
   ~SocketsManifestData() override;
 
   // Gets the SocketsManifestData for |extension|, or NULL if none was
   // specified.
-  static SocketsManifestData* Get(const Extension* extension);
+  static const SocketsManifestData* Get(const Extension* extension);
 
   static bool CheckRequest(const Extension* extension,
                            const content::SocketPermissionRequest& request);

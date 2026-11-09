@@ -1,19 +1,26 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/position.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 
 namespace blink {
 
 class PositionTest : public EditingTestBase {};
 
+TEST_F(PositionTest, AtStartOfTreeWithAfterChildren) {
+  ASSERT_TRUE(GetDocument().firstChild()) << "We should have <html>.";
+  EXPECT_TRUE(Position(GetDocument(), 0).AtStartOfTree());
+  EXPECT_FALSE(Position::LastPositionInNode(GetDocument()).AtStartOfTree());
+}
+
 TEST_F(PositionTest, IsEquivalent) {
   SetBodyContent("<a id=sample>0<b>1</b>2</a>");
 
-  Element* sample = GetDocument().getElementById("sample");
+  Element* sample = GetElementById("sample");
 
   EXPECT_TRUE(Position(sample, 0).IsEquivalent(Position(sample, 0)));
 
@@ -46,7 +53,7 @@ TEST_F(PositionTest, editingPositionOfWithEditingIgnoresContent) {
   const char* body_content =
       "<textarea id=textarea></textarea><a id=child1>1</a><b id=child2>2</b>";
   SetBodyContent(body_content);
-  Node* textarea = GetDocument().getElementById("textarea");
+  Node* textarea = GetElementById("textarea");
 
   EXPECT_EQ(Position::BeforeNode(*textarea),
             Position::EditingPositionOf(textarea, 0));
@@ -57,8 +64,8 @@ TEST_F(PositionTest, editingPositionOfWithEditingIgnoresContent) {
 
   // Change DOM tree to
   // <textarea id=textarea><a id=child1>1</a><b id=child2>2</b></textarea>
-  Node* child1 = GetDocument().getElementById("child1");
-  Node* child2 = GetDocument().getElementById("child2");
+  Node* child1 = GetElementById("child1");
+  Node* child2 = GetElementById("child2");
   textarea->appendChild(child1);
   textarea->appendChild(child2);
 
@@ -72,13 +79,30 @@ TEST_F(PositionTest, editingPositionOfWithEditingIgnoresContent) {
             Position::EditingPositionOf(textarea, 3));
 }
 
+// http://crbug.com/1248760
+TEST_F(PositionTest, LastPositionInOrAfterNodeNotInFlatTree) {
+  SetBodyContent("<option><select>A</select></option>");
+  const Element& document_element = *GetDocument().documentElement();
+  const Element& select = *QuerySelector("select");
+
+  EXPECT_EQ(Position::LastPositionInNode(document_element),
+            Position::LastPositionInOrAfterNode(document_element));
+  EXPECT_EQ(PositionInFlatTree::LastPositionInNode(document_element),
+            PositionInFlatTree::LastPositionInOrAfterNode(document_element));
+
+  EXPECT_EQ(Position::AfterNode(select),
+            Position::LastPositionInOrAfterNode(select));
+  EXPECT_NE(PositionInFlatTree::LastPositionInNode(select),
+            PositionInFlatTree::LastPositionInOrAfterNode(select));
+}
+
 TEST_F(PositionTest, NodeAsRangeLastNode) {
   const char* body_content =
       "<p id='p1'>11</p><p id='p2'></p><p id='p3'>33</p>";
   SetBodyContent(body_content);
-  Node* p1 = GetDocument().getElementById("p1");
-  Node* p2 = GetDocument().getElementById("p2");
-  Node* p3 = GetDocument().getElementById("p3");
+  Node* p1 = GetElementById("p1");
+  Node* p2 = GetElementById("p2");
+  Node* p3 = GetElementById("p3");
   Node* body = EditingStrategy::Parent(*p1);
   Node* t1 = EditingStrategy::FirstChild(*p1);
   Node* t3 = EditingStrategy::FirstChild(*p3);
@@ -116,14 +140,14 @@ TEST_F(PositionTest, DISABLED_NodeAsRangeLastNodeShadow) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* host = GetDocument().getElementById("host");
-  Node* n1 = GetDocument().getElementById("one");
-  Node* n2 = GetDocument().getElementById("two");
+  Node* host = GetElementById("host");
+  Node* n1 = GetElementById("one");
+  Node* n2 = GetElementById("two");
   Node* t0 = EditingStrategy::FirstChild(*host);
   Node* t1 = EditingStrategy::FirstChild(*n1);
   Node* t2 = EditingStrategy::FirstChild(*n2);
   Node* t3 = EditingStrategy::LastChild(*host);
-  Node* a = shadow_root->getElementById("a");
+  Node* a = shadow_root->getElementById(AtomicString("a"));
 
   EXPECT_EQ(t0, Position::InParentBeforeNode(*n1).NodeAsRangeLastNode());
   EXPECT_EQ(t1, Position::InParentBeforeNode(*n2).NodeAsRangeLastNode());
@@ -157,7 +181,7 @@ TEST_F(PositionTest, ToPositionInFlatTreeWithActiveInsertionPoint) {
       "<a id='a'><slot name=#one id='content'></slot><slot></slot></a>";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
-  Element* anchor = shadow_root->getElementById("a");
+  Element* anchor = shadow_root->getElementById(AtomicString("a"));
 
   EXPECT_EQ(PositionInFlatTree(anchor, 0),
             ToPositionInFlatTree(Position(anchor, 0)));
@@ -170,7 +194,7 @@ TEST_F(PositionTest, ToPositionInFlatTreeWithActiveInsertionPoint) {
 TEST_F(PositionTest, ToPositionInFlatTreeWithInactiveInsertionPoint) {
   const char* body_content = "<p id='p'><slot></slot></p>";
   SetBodyContent(body_content);
-  Element* anchor = GetDocument().getElementById("p");
+  Element* anchor = GetElementById("p");
 
   EXPECT_EQ(PositionInFlatTree(anchor, 0),
             ToPositionInFlatTree(Position(anchor, 0)));
@@ -181,7 +205,7 @@ TEST_F(PositionTest, ToPositionInFlatTreeWithInactiveInsertionPoint) {
 // This test comes from "editing/style/block-style-progress-crash.html".
 TEST_F(PositionTest, ToPositionInFlatTreeWithNotDistributed) {
   SetBodyContent("<progress id=sample>foo</progress>");
-  Element* sample = GetDocument().getElementById("sample");
+  Element* sample = GetElementById("sample");
 
   EXPECT_EQ(PositionInFlatTree::FirstPositionInNode(*sample),
             ToPositionInFlatTree(Position(sample, 0)));
@@ -193,7 +217,7 @@ TEST_F(PositionTest, ToPositionInFlatTreeWithShadowRoot) {
   const char* shadow_content = "<a><slot name=#one></slot></a>";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
 
   EXPECT_EQ(PositionInFlatTree(host, 0),
             ToPositionInFlatTree(Position(shadow_root, 0)));
@@ -212,7 +236,7 @@ TEST_F(PositionTest,
   const char* shadow_content = "<slot name=#one></slot>";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
 
   EXPECT_EQ(PositionInFlatTree(host, 0),
             ToPositionInFlatTree(Position(shadow_root, 0)));
@@ -225,7 +249,7 @@ TEST_F(PositionTest, ToPositionInFlatTreeWithEmptyShadowRoot) {
   const char* shadow_content = "";
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
 
   EXPECT_EQ(PositionInFlatTree::FirstPositionInNode(*host),
             ToPositionInFlatTree(Position(shadow_root, 0)));
@@ -256,22 +280,22 @@ TEST_F(PositionTest, IsConnectedInFlatTree) {
 TEST_F(PositionTest, FirstPositionInShadowHost) {
   SetBodyContent("<p id=host>foo</p>");
   SetShadowContent("bar", "host");
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
 
   Position dom = Position::FirstPositionInNode(*host);
   PositionInFlatTree flat = PositionInFlatTree::FirstPositionInNode(*host);
-  EXPECT_EQ(dom, ToPositionInDOMTree(flat));
+  EXPECT_EQ(dom, ToPositionInDomTree(flat));
   EXPECT_EQ(flat, ToPositionInFlatTree(dom));
 }
 
 TEST_F(PositionTest, LastPositionInShadowHost) {
   SetBodyContent("<p id=host>foo</p>");
   SetShadowContent("bar", "host");
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
 
   Position dom = Position::LastPositionInNode(*host);
   PositionInFlatTree flat = PositionInFlatTree::LastPositionInNode(*host);
-  EXPECT_EQ(dom, ToPositionInDOMTree(flat));
+  EXPECT_EQ(dom, ToPositionInDomTree(flat));
   EXPECT_EQ(flat, ToPositionInFlatTree(dom));
 }
 
@@ -279,20 +303,20 @@ TEST_F(PositionTest, ComparePositionsAcrossShadowBoundary) {
   SetBodyContent("<p id=host>foo</p>");
   ShadowRoot* shadow_root = SetShadowContent("<div>bar</div>", "host");
   Element* body = GetDocument().body();
-  Element* host = GetDocument().getElementById("host");
+  Element* host = GetElementById("host");
   Node* child = shadow_root->firstChild();
   Node* grandchild = child->firstChild();
   std::array<Node*, 4> nodes = {body, host, child, grandchild};
-  unsigned size = nodes.size();
-  for (unsigned i = 0; i < size; ++i) {
-    for (unsigned j = 0; j < i; ++j) {
+  wtf_size_t size = nodes.size();
+  for (wtf_size_t i = 0; i < size; ++i) {
+    for (wtf_size_t j = 0; j < i; ++j) {
       EXPECT_LT(Position(nodes[j], 0), Position(nodes[i], 0));
       EXPECT_LT(PositionInFlatTree(nodes[j], 0),
                 PositionInFlatTree(nodes[i], 0));
     }
     EXPECT_EQ(Position(nodes[i], 0), Position(nodes[i], 0));
     EXPECT_EQ(PositionInFlatTree(nodes[i], 0), PositionInFlatTree(nodes[i], 0));
-    for (unsigned j = i + 1; j < size; ++j) {
+    for (wtf_size_t j = i + 1; j < size; ++j) {
       EXPECT_GT(Position(nodes[j], 0), Position(nodes[i], 0));
       EXPECT_GT(PositionInFlatTree(nodes[j], 0),
                 PositionInFlatTree(nodes[i], 0));

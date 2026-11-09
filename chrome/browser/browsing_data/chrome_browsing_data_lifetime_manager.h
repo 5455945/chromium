@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,18 @@
 #define CHROME_BROWSER_BROWSING_DATA_CHROME_BROWSING_DATA_LIFETIME_MANAGER_H_
 
 #include <stdint.h>
+
+#include <optional>
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/sync/base/user_selectable_type.h"
 #include "content/public/browser/browsing_data_remover.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class BrowserContext;
@@ -23,18 +26,6 @@ class BrowserContext;
 class Profile;
 
 namespace browsing_data {
-
-// The data types values of the BrowsingDataSettings policy.
-namespace policy_data_types {
-extern const char kBrowsingHistory[];
-extern const char kDownloadHistory[];
-extern const char kCookiesAndOtherSiteData[];
-extern const char kCachedImagesAndFiles[];
-extern const char kPasswordSignin[];
-extern const char kAutofill[];
-extern const char kSiteSettings[];
-extern const char kHostedAppData[];
-}  // namespace policy_data_types
 
 // The fields of each item defined in the BrowsingDataSettings policy.
 namespace policy_fields {
@@ -67,7 +58,7 @@ class ChromeBrowsingDataLifetimeManager : public KeyedService {
   // Sets the end time of the period for which data must be deleted, for all
   // configurations. If this is |end_time_for_testing| has no value, use the
   // computed end time from each configuration.
-  void SetEndTimeForTesting(absl::optional<base::Time> end_time_for_testing) {
+  void SetEndTimeForTesting(std::optional<base::Time> end_time_for_testing) {
     end_time_for_testing_ = std::move(end_time_for_testing);
   }
   void SetBrowsingDataRemoverObserverForTesting(
@@ -99,12 +90,18 @@ class ChromeBrowsingDataLifetimeManager : public KeyedService {
 
   std::vector<ScheduledRemovalSettings> scheduled_removals_settings_;
   PrefChangeRegistrar pref_change_registrar_;
-  Profile* profile_;
-  content::BrowsingDataRemover::Observer* testing_data_remover_observer_ =
-      nullptr;
-  absl::optional<base::Time> end_time_for_testing_;
+  raw_ptr<Profile> profile_;
+  raw_ptr<content::BrowsingDataRemover::Observer, DanglingUntriaged>
+      testing_data_remover_observer_ = nullptr;
+  std::optional<base::Time> end_time_for_testing_;
   base::WeakPtrFactory<ChromeBrowsingDataLifetimeManager> weak_ptr_factory_{
       this};
+
+  // Checks that the conditions needed to clear the browsing data types are
+  // satisfied. 'sync_types' are checked if neither sync nor
+  // browser sign in are disabled.
+  bool IsConditionSatisfiedForBrowsingDataRemoval(
+      const syncer::UserSelectableTypeSet sync_types);
 };
 
 #endif  // CHROME_BROWSER_BROWSING_DATA_CHROME_BROWSING_DATA_LIFETIME_MANAGER_H_

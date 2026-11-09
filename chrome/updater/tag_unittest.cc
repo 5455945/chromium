@@ -1,17 +1,38 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/updater/tag.h"
 
-#include "base/strings/string_piece.h"
+#include <stdint.h>
+
+#include <array>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/strings/string_number_conversions.h"
+#include "chrome/updater/certificate_tag.h"
+#include "chrome/updater/pkg_tag.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/zlib/zlib.h"
 
 namespace {
 
-using updater::tagging::AppArgs;
-using updater::tagging::ErrorCode;
-using updater::tagging::TagArgs;
+using ::updater::tagging::AppArgs;
+using ::updater::tagging::ErrorCode;
+using ::updater::tagging::NeedsAdmin;
+using ::updater::tagging::RuntimeModeArgs;
+using ::updater::tagging::TagArgs;
 
 // Builder pattern helper to construct the TagArgs struct.
 class TagArgsBuilder {
@@ -62,6 +83,14 @@ class TagArgsBuilder {
     this->inner_.apps.push_back(std::move(app));
     return *this;
   }
+  TagArgsBuilder& WithRuntimeMode(RuntimeModeArgs runtime_mode) {
+    this->inner_.runtime_mode = runtime_mode;
+    return *this;
+  }
+  TagArgsBuilder& WithEnrollmentToken(const std::string& enrollment_token) {
+    this->inner_.enrollment_token = enrollment_token;
+    return *this;
+  }
 
  private:
   TagArgs inner_;
@@ -78,7 +107,7 @@ class AppArgsBuilder {
     this->inner_.app_name = app_name;
     return *this;
   }
-  AppArgsBuilder& WithNeedsAdmin(AppArgs::NeedsAdmin needs_admin) {
+  AppArgsBuilder& WithNeedsAdmin(NeedsAdmin needs_admin) {
     this->inner_.needs_admin = needs_admin;
     return *this;
   }
@@ -108,45 +137,37 @@ class AppArgsBuilder {
   AppArgs inner_;
 };
 
+// Builder pattern helper to construct the RuntimeModeArgs struct.
+class RuntimeModeArgsBuilder {
+ public:
+  RuntimeModeArgsBuilder() = default;
+
+  RuntimeModeArgs Build() { return std::move(inner_); }
+
+  RuntimeModeArgsBuilder& WithNeedsAdmin(NeedsAdmin needs_admin) {
+    this->inner_.needs_admin = needs_admin;
+    return *this;
+  }
+
+ private:
+  RuntimeModeArgs inner_;
+};
+
 void VerifyTagParseSuccess(
-    base::StringPiece tag,
-    absl::optional<base::StringPiece> app_installer_data_args,
+    std::string_view tag,
+    std::optional<std::string_view> app_installer_data_args,
     const TagArgs& expected) {
   TagArgs actual;
-  ASSERT_EQ(ErrorCode::kSuccess, Parse(tag, app_installer_data_args, &actual));
+  ASSERT_EQ(ErrorCode::kSuccess, Parse(tag, app_installer_data_args, actual));
 
-  EXPECT_EQ(expected.bundle_name, actual.bundle_name);
-  EXPECT_EQ(expected.installation_id, actual.installation_id);
-  EXPECT_EQ(expected.brand_code, actual.brand_code);
-  EXPECT_EQ(expected.client_id, actual.client_id);
-  EXPECT_EQ(expected.experiment_labels, actual.experiment_labels);
-  EXPECT_EQ(expected.referral_id, actual.referral_id);
-  EXPECT_EQ(expected.language, actual.language);
-  EXPECT_EQ(expected.browser_type, actual.browser_type);
-  EXPECT_EQ(expected.usage_stats_enable, actual.usage_stats_enable);
-
-  EXPECT_EQ(expected.apps.size(), actual.apps.size());
-  for (size_t i = 0; i < actual.apps.size(); ++i) {
-    const AppArgs& app_expected = expected.apps[i];
-    const AppArgs& app_actual = actual.apps[i];
-
-    EXPECT_EQ(app_expected.app_id, app_actual.app_id);
-    EXPECT_EQ(app_expected.app_name, app_actual.app_name);
-    EXPECT_EQ(app_expected.needs_admin, app_actual.needs_admin);
-    EXPECT_EQ(app_expected.ap, app_actual.ap);
-    EXPECT_EQ(app_expected.encoded_installer_data,
-              app_actual.encoded_installer_data);
-    EXPECT_EQ(app_expected.install_data_index, app_actual.install_data_index);
-    EXPECT_EQ(app_expected.experiment_labels, app_actual.experiment_labels);
-  }
+  updater::test::ExpectTagArgsEqual(actual, expected);
 }
 
-void VerifyTagParseFail(
-    base::StringPiece tag,
-    absl::optional<base::StringPiece> app_installer_data_args,
-    ErrorCode expected) {
+void VerifyTagParseFail(std::string_view tag,
+                        std::optional<std::string_view> app_installer_data_args,
+                        ErrorCode expected) {
   TagArgs args;
-  ASSERT_EQ(expected, Parse(tag, app_installer_data_args, &args));
+  ASSERT_EQ(expected, Parse(tag, app_installer_data_args, args));
 }
 
 }  // namespace
@@ -162,28 +183,28 @@ TEST(TagParserTest, InvalidValueNameIsSupersetOfValidName) {
   VerifyTagParseFail(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname1=Hello",
-      absl::nullopt, ErrorCode::kUnrecognizedName);
+      std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, AppNameSpaceForValue) {
   VerifyTagParseFail(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname= ",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, AppNameEncodedSpaceForValue) {
   VerifyTagParseFail(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname=%20",
-      absl::nullopt, ErrorCode::kApp_AppNameCannotBeWhitespace);
+      std::nullopt, ErrorCode::kApp_AppNameCannotBeWhitespace);
 }
 
 TEST(TagParserTest, AppNameValid) {
   VerifyTagParseSuccess(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname=Test",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithBundleName("Test")
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -197,7 +218,7 @@ TEST(TagParserTest, AppNameWithSpace) {
   VerifyTagParseSuccess(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname=Test App",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithBundleName("Test App")
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -210,7 +231,7 @@ TEST(TagParserTest, AppNameWithSpaceAtEnd) {
   VerifyTagParseSuccess(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname= T Ap p ",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithBundleName("T Ap p")
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -223,7 +244,7 @@ TEST(TagParserTest, AppNameWithEncodedSpacesAtEnd) {
   VerifyTagParseSuccess(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname=%20T%20Ap%20p%20",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithBundleName("T Ap p")
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -236,7 +257,7 @@ TEST(TagParserTest, AppNameWithMultipleSpaces) {
   VerifyTagParseSuccess(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname= T Ap p",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithBundleName("T Ap p")
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -250,7 +271,7 @@ TEST(TagParserTest, AppNameUnicode) {
   VerifyTagParseSuccess(
       "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
       "appname=%E0%A4%B0%E0%A4%B9%E0%A4%BE",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithBundleName(non_ascii_name)
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -270,7 +291,7 @@ TEST(TagParserTest, AppNameUnicode2) {
   tag << "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&";
   tag << "appname=" << escaped;
   VerifyTagParseSuccess(
-      tag.str(), absl::nullopt,
+      tag.str(), std::nullopt,
       TagArgsBuilder()
           .WithBundleName(non_ascii_name)
           .WithApp(AppArgsBuilder("d0324988-da8a-49e5-bce5-925fcd04eab7")
@@ -281,7 +302,7 @@ TEST(TagParserTest, AppNameUnicode2) {
 
 TEST(TagParserTest, AppIdValid) {
   VerifyTagParseSuccess(
-      "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B", absl::nullopt,
+      "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B", std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -289,7 +310,7 @@ TEST(TagParserTest, AppIdValid) {
 }
 
 TEST(TagParserTest, AppIdNotASCII) {
-  VerifyTagParseFail("appguid=रहा", absl::nullopt,
+  VerifyTagParseFail("appguid=रहा", std::nullopt,
                      ErrorCode::kApp_AppIdIsNotValid);
 }
 
@@ -297,40 +318,45 @@ TEST(TagParserTest, AppIdNotASCII) {
 // strings.
 TEST(TagParserTest, AppIdNotAGuid) {
   VerifyTagParseSuccess(
-      "appguid=non-guid-id", absl::nullopt,
+      "appguid=non-guid-id", std::nullopt,
       TagArgsBuilder().WithApp(AppArgsBuilder("non-guid-id").Build()).Build());
 }
 
 TEST(TagParserTest, AppIdCaseInsensitive) {
   VerifyTagParseSuccess(
-      "appguid=ShouldBeCaseInsensitive", absl::nullopt,
+      "appguid=ShouldBeCaseInsensitive", std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("shouldbecaseinsensitive").Build())
           .Build());
+}
+
+TEST(TagParserTest, NoRuntimeModeOrAppOnlyNeedsAdminValue) {
+  VerifyTagParseFail("needsadmin=true", std::nullopt,
+                     ErrorCode::kApp_AppIdNotSpecified);
 }
 
 TEST(TagParserTest, NeedsAdminInvalid) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "needsadmin=Hello",
-      absl::nullopt, ErrorCode::kApp_NeedsAdminValueIsInvalid);
+      std::nullopt, ErrorCode::kApp_NeedsAdminValueIsInvalid);
 }
 
 TEST(TagParserTest, NeedsAdminSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "needsadmin= ",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, NeedsAdminTrueUpperCaseT) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "needsadmin=True",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kYes)
+                       .WithNeedsAdmin(NeedsAdmin::kYes)
                        .Build())
           .Build());
 }
@@ -339,10 +365,10 @@ TEST(TagParserTest, NeedsAdminTrueLowerCaseT) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "needsadmin=true",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kYes)
+                       .WithNeedsAdmin(NeedsAdmin::kYes)
                        .Build())
           .Build());
 }
@@ -351,10 +377,10 @@ TEST(TagParserTest, NeedsFalseUpperCaseF) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "needsadmin=False",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kNo)
+                       .WithNeedsAdmin(NeedsAdmin::kNo)
                        .Build())
           .Build());
 }
@@ -363,10 +389,10 @@ TEST(TagParserTest, NeedsAdminFalseLowerCaseF) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "needsadmin=false",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kNo)
+                       .WithNeedsAdmin(NeedsAdmin::kNo)
                        .Build())
           .Build());
 }
@@ -376,42 +402,42 @@ TEST(TagParserTest, NeedsAdminFalseLowerCaseF) {
 //
 
 TEST(TagParserTest, AssignmentOnly) {
-  VerifyTagParseFail("=", absl::nullopt, ErrorCode::kUnrecognizedName);
+  VerifyTagParseFail("=", std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, ExtraAssignment1) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1=",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, ExtraAssignment2) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "=usagestats=1",
-      absl::nullopt, ErrorCode::kUnrecognizedName);
+      std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, ExtraAssignment3) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1&=",
-      absl::nullopt, ErrorCode::kUnrecognizedName);
+      std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, ExtraAssignment4) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "=&usagestats=1",
-      absl::nullopt, ErrorCode::kUnrecognizedName);
+      std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, ValueWithoutName) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "=hello",
-      absl::nullopt, ErrorCode::kUnrecognizedName);
+      std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 // Also tests ending extra arguments with '='.
@@ -419,28 +445,28 @@ TEST(TagParserTest, NameWithoutValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, NameWithoutValueBeforeNextArgument) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=&client=hello",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, NameWithoutArgumentSeparatorAfterIntValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1client=hello",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, NameWithoutArgumentSeparatorAfterStringValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=yesclient=hello",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, TagHasDoubleAmpersand) {
@@ -459,14 +485,14 @@ TEST(TagParserTest, TagHasDoubleAmpersand) {
 }
 
 TEST(TagParserTest, TagAmpersandOnly) {
-  VerifyTagParseSuccess("&", absl::nullopt, TagArgsBuilder().Build());
+  VerifyTagParseSuccess("&", std::nullopt, TagArgsBuilder().Build());
 }
 
 TEST(TagParserTest, TagBeginsInAmpersand) {
   VerifyTagParseSuccess(
       "&appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -478,7 +504,7 @@ TEST(TagParserTest, TagEndsInAmpersand) {
   VerifyTagParseSuccess(
       "&appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1&",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -487,8 +513,8 @@ TEST(TagParserTest, TagEndsInAmpersand) {
 }
 
 TEST(TagParserTest, WhitespaceOnly) {
-  for (const auto* whitespace : {"", " ", "\t", "\r", "\n", "\r\n"}) {
-    VerifyTagParseSuccess(whitespace, absl::nullopt, TagArgsBuilder().Build());
+  for (const auto& whitespace : {"", " ", "\t", "\r", "\n", "\r\n"}) {
+    VerifyTagParseSuccess(whitespace, std::nullopt, TagArgsBuilder().Build());
   }
 }
 
@@ -500,7 +526,7 @@ TEST(TagParserTest, OneValidAttribute) {
   VerifyTagParseSuccess(
       "&appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -512,7 +538,7 @@ TEST(TagParserTest, TwoValidAttributes) {
   VerifyTagParseSuccess(
       "&appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1&client=hello",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -525,49 +551,49 @@ TEST(TagParserTest, TagHasSwitchInTheMiddle) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1/other_value=9",
-      absl::nullopt, ErrorCode::kTagIsInvalid);
+      std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, TagHasDoubleQuoteInTheMiddle) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1\"/other_value=9",
-      absl::nullopt, ErrorCode::kTagIsInvalid);
+      std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, TagHasDoubleQuoteInTheMiddleAndNoForwardSlash) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1\"other_value=9",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, TagHasSpaceAndForwardSlashBeforeQuote) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1 /other_value=9",
-      absl::nullopt, ErrorCode::kTagIsInvalid);
+      std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, TagHasForwardSlashBeforeQuote) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1/other_value=9",
-      absl::nullopt, ErrorCode::kTagIsInvalid);
+      std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, AttributeSpecifiedTwice) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1\" \"client=10",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, WhiteSpaceBeforeArgs1) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       " usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617EE50-F91C-4DC1-B937-0969EEF59B0B").Build())
@@ -579,7 +605,7 @@ TEST(TagParserTest, WhiteSpaceBeforeArgs2) {
   VerifyTagParseSuccess(
       "\tappguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617EE50-F91C-4DC1-B937-0969EEF59B0B").Build())
@@ -591,7 +617,7 @@ TEST(TagParserTest, WhiteSpaceBeforeArgs3) {
   VerifyTagParseSuccess(
       "\rappguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617EE50-F91C-4DC1-B937-0969EEF59B0B").Build())
@@ -603,7 +629,7 @@ TEST(TagParserTest, WhiteSpaceBeforeArgs4) {
   VerifyTagParseSuccess(
       "\nappguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B"
       "&usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617EE50-F91C-4DC1-B937-0969EEF59B0B").Build())
@@ -612,42 +638,42 @@ TEST(TagParserTest, WhiteSpaceBeforeArgs4) {
 }
 
 TEST(TagParserTest, WhiteSpaceBeforeArgs5) {
-  VerifyTagParseSuccess("\r\nusagestats=1", absl::nullopt,
+  VerifyTagParseSuccess("\r\nusagestats=1", std::nullopt,
                         TagArgsBuilder().WithUsageStatsEnable(true).Build());
 }
 
 TEST(TagParserTest, ForwardSlash1) {
-  VerifyTagParseFail("/", absl::nullopt, ErrorCode::kTagIsInvalid);
+  VerifyTagParseFail("/", std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, ForwardSlash2) {
   VerifyTagParseFail("/ appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B",
-                     absl::nullopt, ErrorCode::kTagIsInvalid);
+                     std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, BackwardSlash1) {
-  VerifyTagParseFail("\\", absl::nullopt, ErrorCode::kUnrecognizedName);
+  VerifyTagParseFail("\\", std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, BackwardSlash2) {
   VerifyTagParseFail("\\appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B",
-                     absl::nullopt, ErrorCode::kUnrecognizedName);
+                     std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, BackwardSlash3) {
   VerifyTagParseFail("\\ appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B",
-                     absl::nullopt, ErrorCode::kUnrecognizedName);
+                     std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, AppArgsMustHaveValue) {
-  for (const auto* tag :
+  for (const auto& tag :
        {"appguid", "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&ap",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&experiments",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&appname",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&needsadmin",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&installdataindex",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&untrusteddata"}) {
-    VerifyTagParseFail(tag, absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+    VerifyTagParseFail(tag, std::nullopt, ErrorCode::kAttributeMustHaveValue);
   }
 }
 
@@ -659,14 +685,14 @@ TEST(TagParserTest, UsageStatsOutsideExtraCommand) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "/usagestats",
-      absl::nullopt, ErrorCode::kTagIsInvalid);
+      std::nullopt, ErrorCode::kTagIsInvalid);
 }
 
 TEST(TagParserTest, UsageStatsOn) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=1",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -678,7 +704,7 @@ TEST(TagParserTest, UsageStatsOff) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=0",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -690,7 +716,7 @@ TEST(TagParserTest, UsageStatsNone) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=2",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -701,28 +727,28 @@ TEST(TagParserTest, UsageStatsInvalidPositiveValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=3",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, UsageStatsInvalidNegativeValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=-1",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, UsageStatsValueIsString) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "usagestats=true",
-      absl::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
+      std::nullopt, ErrorCode::kGlobal_UsageStatsValueIsInvalid);
 }
 
 TEST(TagParserTest, BundleNameValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "bundlename=Google%20Bundle",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -735,21 +761,21 @@ TEST(TagParserTest, BundleNameSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "bundlename= ",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, BundleNameEncodedSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "bundlename=%20",
-      absl::nullopt, ErrorCode::kGlobal_BundleNameCannotBeWhitespace);
+      std::nullopt, ErrorCode::kGlobal_BundleNameCannotBeWhitespace);
 }
 
 TEST(TagParserTest, BundleNameNotPresentButAppNameIs) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "appname=Google%20Chrome",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
                        .WithAppName("Google Chrome")
@@ -759,7 +785,7 @@ TEST(TagParserTest, BundleNameNotPresentButAppNameIs) {
 }
 TEST(TagParserTest, BundleNameNorAppNamePresent) {
   VerifyTagParseSuccess(
-      "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&", absl::nullopt,
+      "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&", std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -768,7 +794,7 @@ TEST(TagParserTest, BundleNameNorAppNamePresent) {
 
 TEST(TagParserTest, BundleNameNotPresentAndNoApp) {
   VerifyTagParseSuccess(
-      "browser=0", absl::nullopt,
+      "browser=0", std::nullopt,
       TagArgsBuilder().WithBrowserType(TagArgs::BrowserType::kUnknown).Build());
 }
 
@@ -776,7 +802,7 @@ TEST(TagParserTest, InstallationIdValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "iid=98CEC468-9429-4984-AEDE-4F53C6A14869",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -788,7 +814,7 @@ TEST(TagParserTest, InstallationIdContainsNonASCII) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "iid=रहा",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -800,11 +826,20 @@ TEST(TagParserTest, BrandCodeValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "brand=GOOG",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
           .WithBrandCode("GOOG")
+          .Build());
+  VerifyTagParseSuccess(
+      "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
+      "brand=GOOGLE",
+      std::nullopt,
+      TagArgsBuilder()
+          .WithApp(
+              AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
+          .WithBrandCode("GOOGLE")
           .Build());
 }
 
@@ -812,7 +847,7 @@ TEST(TagParserTest, ClientIdValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "client=some_partner",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -824,7 +859,7 @@ TEST(TagParserTest, UpdaterExperimentIdValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "omahaexperiments=experiment%3DgroupA%7Cexpir",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -836,21 +871,21 @@ TEST(TagParserTest, UpdaterExperimentIdSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "omahaexperiments= ",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, UpdaterExperimentIdEncodedSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "omahaexperiments=%20",
-      absl::nullopt, ErrorCode::kGlobal_ExperimentLabelsCannotBeWhitespace);
+      std::nullopt, ErrorCode::kGlobal_ExperimentLabelsCannotBeWhitespace);
 }
 
 TEST(TagParserTest, AppExperimentIdValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "experiments=experiment%3DgroupA%7Cexpir",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
                        .WithExperimentLabels("experiment=groupA|expir")
@@ -862,21 +897,21 @@ TEST(TagParserTest, AppExperimentIdSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "experiments= ",
-      absl::nullopt, ErrorCode::kAttributeMustHaveValue);
+      std::nullopt, ErrorCode::kAttributeMustHaveValue);
 }
 
 TEST(TagParserTest, AppExperimentIdEncodedSpaceForValue) {
   VerifyTagParseFail(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "experiments=%20",
-      absl::nullopt, ErrorCode::kApp_ExperimentLabelsCannotBeWhitespace);
+      std::nullopt, ErrorCode::kApp_ExperimentLabelsCannotBeWhitespace);
 }
 
 TEST(TagParserTest, ReferralIdValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "referral=ABCD123",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -888,7 +923,7 @@ TEST(TagParserTest, ApValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "ap=developer",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
                        .WithAp("developer")
@@ -928,14 +963,14 @@ TEST(TagParserTest, InstallerDataNotAllowedInTag) {
       "appname=TestApp2&"
       "needsadmin=true&"
       "installerdata=Hello%20World",
-      absl::nullopt, ErrorCode::kUnrecognizedName);
+      std::nullopt, ErrorCode::kUnrecognizedName);
 }
 
 TEST(TagParserTest, InstallDataIndexValid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "installdataindex=foobar",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
                        .WithInstallDataIndex("foobar")
@@ -944,8 +979,8 @@ TEST(TagParserTest, InstallDataIndexValid) {
 }
 
 TEST(TagParserTest, BrowserTypeValid) {
-  std::tuple<base::StringPiece, TagArgs::BrowserType>
-      pairs[static_cast<int>(TagArgs::BrowserType::kMax)] = {
+  std::tuple<std::string_view, TagArgs::BrowserType>
+      pairs[std::to_underlying(TagArgs::BrowserType::kMax)] = {
           {"0", TagArgs::BrowserType::kUnknown},
           {"1", TagArgs::BrowserType::kDefault},
           {"2", TagArgs::BrowserType::kInternetExplorer},
@@ -953,16 +988,16 @@ TEST(TagParserTest, BrowserTypeValid) {
           {"4", TagArgs::BrowserType::kChrome},
       };
 
-  for (const auto& pair : pairs) {
+  for (const auto& [browser, browser_type] : pairs) {
     std::stringstream tag;
     tag << "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&";
-    tag << "browser=" << std::get<0>(pair);
+    tag << "browser=" << browser;
     VerifyTagParseSuccess(
-        tag.str(), absl::nullopt,
+        tag.str(), std::nullopt,
         TagArgsBuilder()
             .WithApp(
                 AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
-            .WithBrowserType(std::get<1>(pair))
+            .WithBrowserType(browser_type)
             .Build());
   }
 }
@@ -975,7 +1010,7 @@ TEST(TagParserTest, BrowserTypeInvalid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "browser=5",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -985,7 +1020,7 @@ TEST(TagParserTest, BrowserTypeInvalid) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "browser=9",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -997,7 +1032,7 @@ TEST(TagParserTest, ValidLang) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "lang=en",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -1010,7 +1045,7 @@ TEST(TagParserTest, UnsupportedLang) {
   VerifyTagParseSuccess(
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "lang=foobar",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(
               AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b").Build())
@@ -1023,7 +1058,7 @@ TEST(TagParserTest, AppNameSpecifiedTwice) {
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "appname=TestApp&"
       "appname=TestApp2&",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617EE50-F91C-4DC1-B937-0969EEF59B0B")
                        .WithAppName("TestApp2")
@@ -1036,9 +1071,22 @@ TEST(TagParserTest, CaseInsensitiveAttributeNames) {
   VerifyTagParseSuccess(
       "APPguID=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "APPNAME=TestApp&",
-      absl::nullopt,
+      std::nullopt,
       TagArgsBuilder()
           .WithApp(AppArgsBuilder("8617EE50-F91C-4DC1-B937-0969EEF59B0B")
+                       .WithAppName("TestApp")
+                       .Build())
+          .WithBundleName("TestApp")
+          .Build());
+}
+
+TEST(TagParserTest, BracesEncoding) {
+  VerifyTagParseSuccess(
+      "appguid=%7B8617EE50-F91C-4DC1-B937-0969EEF59B0B%7D&"
+      "appname=TestApp&",
+      std::nullopt,
+      TagArgsBuilder()
+          .WithApp(AppArgsBuilder("{8617EE50-F91C-4DC1-B937-0969EEF59B0B}")
                        .WithAppName("TestApp")
                        .Build())
           .WithBundleName("TestApp")
@@ -1058,13 +1106,14 @@ TEST(TagParserTestMultipleEntries, TestNotStartingWithAppId) {
       "ap=test_ap&"
       "usagestats=1&"
       "browser=2&",
-      absl::nullopt, ErrorCode::kApp_AppIdNotSpecified);
+      std::nullopt, ErrorCode::kApp_AppIdNotSpecified);
 }
 
 // This also tests that the last occurrence of a global extra arg is the one
 // that is saved.
 TEST(TagParserTestMultipleEntries, ThreeApplications) {
   VerifyTagParseSuccess(
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac&"
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "appname=TestApp&"
       "needsadmin=false&"
@@ -1096,6 +1145,7 @@ TEST(TagParserTestMultipleEntries, ThreeApplications) {
        "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
        "installerdata=installerdata_app1"},
       TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
           .WithBundleName("TestApp")
           .WithInstallationId("98CEC468-9429-4984-AEDE-4F53C6A14869")
           .WithBrandCode("g00g")
@@ -1105,7 +1155,7 @@ TEST(TagParserTestMultipleEntries, ThreeApplications) {
           .WithUsageStatsEnable(false)
           .WithApp(AppArgsBuilder("8617ee50-f91c-4dc1-b937-0969eef59b0b")
                        .WithAppName("TestApp")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kNo)
+                       .WithNeedsAdmin(NeedsAdmin::kNo)
                        .WithAp("test_ap")
                        .WithEncodedInstallerData("installerdata_app1")
                        .WithExperimentLabels("_experiment_a")
@@ -1113,7 +1163,7 @@ TEST(TagParserTestMultipleEntries, ThreeApplications) {
                        .Build())
           .WithApp(AppArgsBuilder("5e46de36-737d-4271-91c1-c062f9fe21d9")
                        .WithAppName("TestApp2")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kYes)
+                       .WithNeedsAdmin(NeedsAdmin::kYes)
                        .WithAp("test_ap2")
                        .WithExperimentLabels("_experiment_b")
                        .WithUntrustedData("X=5")
@@ -1121,9 +1171,1000 @@ TEST(TagParserTestMultipleEntries, ThreeApplications) {
           .WithApp(AppArgsBuilder("5f46de36-737d-4271-91c1-c062f9fe21d9")
                        .WithAppName("TestApp3")
                        .WithEncodedInstallerData("installerdata_app3")
-                       .WithNeedsAdmin(AppArgs::NeedsAdmin::kPrefers)
+                       .WithNeedsAdmin(NeedsAdmin::kPrefers)
                        .Build())
           .Build());
+}
+
+TEST(TagParserTest, RuntimeModeBeforeApp) {
+  VerifyTagParseFail(
+      "runtime=true&appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
+      "appname1=Hello",
+      std::nullopt, ErrorCode::kUnrecognizedName);
+}
+
+TEST(TagParserTest, RuntimeModeAfterApp) {
+  VerifyTagParseFail(
+      "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&appname1=Hello&runtime="
+      "true",
+      std::nullopt, ErrorCode::kUnrecognizedName);
+}
+
+TEST(TagParserTest, RuntimeModeIncorrectValue) {
+  VerifyTagParseFail("runtime=foo", std::nullopt,
+                     ErrorCode::kGlobal_RuntimeModeValueIsInvalid);
+}
+
+TEST(TagParserTest, RuntimeModeIncorrectNeedsAdminValue) {
+  VerifyTagParseFail("runtime=true&needsadmin=foo", std::nullopt,
+                     ErrorCode::kRuntimeMode_NeedsAdminValueIsInvalid);
+}
+
+TEST(TagParserTest, RuntimeModeValid) {
+  VerifyTagParseSuccess("runtime=true", std::nullopt,
+                        TagArgsBuilder()
+                            .WithRuntimeMode(RuntimeModeArgsBuilder().Build())
+                            .Build());
+}
+
+TEST(TagParserTest, RuntimeModeValidSystem) {
+  VerifyTagParseSuccess(
+      "runtime=true&needsadmin=true", std::nullopt,
+      TagArgsBuilder()
+          .WithRuntimeMode(
+              RuntimeModeArgsBuilder().WithNeedsAdmin(NeedsAdmin::kYes).Build())
+          .Build());
+}
+
+TEST(TagParserTest, RuntimeModeValidUser) {
+  VerifyTagParseSuccess(
+      "runtime=true&needsadmin=false", std::nullopt,
+      TagArgsBuilder()
+          .WithRuntimeMode(
+              RuntimeModeArgsBuilder().WithNeedsAdmin(NeedsAdmin::kNo).Build())
+          .Build());
+}
+
+TEST(TagParserTest, EnrollmentTokenBeforeApp) {
+  VerifyTagParseSuccess(
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac&"
+      "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
+      "appname=Hello",
+      std::nullopt,
+      TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
+          .WithBundleName("Hello")
+          .WithApp(AppArgsBuilder("D0324988-DA8A-49e5-BCE5-925FCD04EAB7")
+                       .WithAppName("Hello")
+                       .Build())
+          .Build());
+}
+
+TEST(TagParserTest, EnrollmentTokenAfterApp) {
+  VerifyTagParseSuccess(
+      "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
+      "appname=Hello&"
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac",
+      std::nullopt,
+      TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
+          .WithBundleName("Hello")
+          .WithApp(AppArgsBuilder("D0324988-DA8A-49e5-BCE5-925FCD04EAB7")
+                       .WithAppName("Hello")
+                       .Build())
+          .Build());
+}
+
+TEST(TagParserTest, EnrollmentTokenInvalidValue) {
+  VerifyTagParseFail("etoken=5d086552-4514-____-8a3e-337024ec35ac",
+                     std::nullopt,
+                     ErrorCode::kGlobal_EnrollmentTokenValueIsInvalid);
+}
+
+TEST(TagParserTest, EnrollmentTokenValid) {
+  VerifyTagParseSuccess(
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac", std::nullopt,
+      TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
+          .Build());
+}
+
+TEST(TagExtractorTest, AdvanceIt) {
+  const std::vector<uint8_t> empty_binary;
+  ASSERT_TRUE(tagging::internal::AdvanceIt(empty_binary.begin(), 0,
+                                           empty_binary.end()) ==
+              empty_binary.end());
+
+  const std::vector<uint8_t> binary(5);
+  std::vector<uint8_t>::const_iterator it = binary.begin();
+  ASSERT_TRUE(tagging::internal::AdvanceIt(it, 0, binary.end()) == it);
+  ASSERT_TRUE(tagging::internal::AdvanceIt(it, 4, binary.end()) == (it + 4));
+  ASSERT_TRUE(tagging::internal::AdvanceIt(it, 5, binary.end()) ==
+              binary.end());
+  ASSERT_TRUE(tagging::internal::AdvanceIt(it, 6, binary.end()) ==
+              binary.end());
+}
+
+TEST(TagExtractorTest, CheckRange) {
+  const std::vector<uint8_t> empty_binary;
+  ASSERT_FALSE(
+      tagging::internal::CheckRange(empty_binary.end(), 1, empty_binary.end()));
+
+  const std::vector<uint8_t> binary(5);
+
+  std::vector<uint8_t>::const_iterator it = binary.begin();
+  ASSERT_FALSE(tagging::internal::CheckRange(it, 0, binary.end()));
+  ASSERT_TRUE(tagging::internal::CheckRange(it, 1, binary.end()));
+  ASSERT_TRUE(tagging::internal::CheckRange(it, 5, binary.end()));
+  ASSERT_FALSE(tagging::internal::CheckRange(it, 6, binary.end()));
+
+  it = binary.begin() + 2;
+  ASSERT_TRUE(tagging::internal::CheckRange(it, 3, binary.end()));
+  ASSERT_FALSE(tagging::internal::CheckRange(it, 4, binary.end()));
+
+  it = binary.begin() + 5;
+  ASSERT_FALSE(tagging::internal::CheckRange(it, 0, binary.end()));
+  ASSERT_FALSE(tagging::internal::CheckRange(it, 1, binary.end()));
+}
+
+TEST(ExeTagTest, FileNotFound) {
+  ASSERT_TRUE(
+      tagging::BinaryReadTagString(test::GetTestFilePath("FileNotFound.exe"))
+          .empty());
+}
+
+TEST(ExeTagTest, UntaggedExe) {
+  ASSERT_TRUE(tagging::BinaryReadTagString(test::GetTestFilePath("signed.exe"))
+                  .empty());
+}
+
+TEST(ExeTagTest, TaggedExeEncodeUtf8) {
+  ASSERT_EQ(tagging::BinaryReadTagString(
+                test::GetTestFilePath("tagged_encode_utf8.exe")),
+            "TestTag123");
+}
+
+struct ExeTagTestExeWriteTagTestCase {
+  const std::string exe_file_name;
+  const std::string tag_string;
+  const bool expected_success;
+};
+
+class ExeTagTestExeWriteTagTest
+    : public ::testing::TestWithParam<ExeTagTestExeWriteTagTestCase> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    ExeTagTestExeWriteTagTestCases,
+    ExeTagTestExeWriteTagTest,
+    ::testing::ValuesIn(std::vector<ExeTagTestExeWriteTagTestCase>{
+        // single tag parameter.
+        {"signed.exe", "brand=QAQA", true},
+
+        // single tag parameter ending in an ampersand.
+        {"signed.exe", "brand=QAQA&", true},
+
+        // multiple tag parameters.
+        {"signed.exe",
+         "appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}&iid={2D8C18E9-8D3A-"
+         "4EFC-"
+         "6D61-AE23E3530EA2}&lang=en&browser=4&usagestats=0&appname=Google%"
+         "20Chrome&needsadmin=prefers&brand=CHMB&installdataindex="
+         "defaultbrowser",
+         true},
+
+        // already tagged.
+        {"tagged_encode_utf8.exe", "brand=QAQA", true},
+
+        // empty tag string.
+        {"signed.exe", "", true},
+
+        // unknown tag argument `unknowntagarg`.
+        {"signed.exe",
+         "appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}&iid={2D8C18E9-8D3A-"
+         "4EFC-"
+         "6D61-AE23E3530EA2}&unknowntagarg=foo",
+         false},
+
+        // tag string of exactly `kMaxTagStringBytes`.
+        {"signed.exe",
+         "brand=" + std::string(tagging::kMaxTagStringBytes - 6, 'A'), true},
+
+        // tag string longer than `kMaxTagStringBytes`.
+        {"signed.exe", "brand=" + std::string(tagging::kMaxTagStringBytes, 'A'),
+         false},
+    }));
+
+TEST_P(ExeTagTestExeWriteTagTest, TestCases) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath out_file;
+  ASSERT_TRUE(CreateTemporaryFileInDir(temp_dir.GetPath(), &out_file));
+
+  ASSERT_EQ(
+      tagging::BinaryWriteTag(
+          test::GetTestFilePath(GetParam().exe_file_name.c_str()),
+          GetParam().tag_string, tagging::kDefaultBinaryTagBytes, out_file),
+      GetParam().expected_success)
+      << GetParam().exe_file_name << ": " << GetParam().tag_string;
+  if (GetParam().expected_success) {
+    EXPECT_EQ(tagging::BinaryReadTagString(out_file), GetParam().tag_string);
+  }
+}
+
+struct MsiTagTestMsiReadTagTestCase {
+  const std::string msi_file_name;
+  const std::optional<tagging::TagArgs> expected_tag_args;
+};
+
+class MsiTagTestMsiReadTagTest
+    : public ::testing::TestWithParam<MsiTagTestMsiReadTagTestCase> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    MsiTagTestMsiReadTagTestCases,
+    MsiTagTestMsiReadTagTest,
+    ::testing::ValuesIn(std::vector<MsiTagTestMsiReadTagTestCase>{
+        // tag:BRAND=QAQA.
+        {"GUH-brand-only.msi",
+         [] {
+           tagging::TagArgs tag_args;
+           tag_args.brand_code = "QAQA";
+           return tag_args;
+         }()},
+
+        // tag:BRAND=QAQA&.
+        {"GUH-ampersand-ending.msi",
+         [] {
+           tagging::TagArgs tag_args;
+           tag_args.brand_code = "QAQA";
+           return tag_args;
+         }()},
+
+        // tag:
+        //   appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}&
+        //   iid={2D8C18E9-8D3A-4EFC-6D61-AE23E3530EA2}&
+        //   lang=en&browser=4&usagestats=0&appname=Google%20Chrome&
+        //   needsadmin=prefers&brand=CHMB&
+        //   installdataindex=defaultbrowser.
+        {"GUH-multiple.msi",
+         [] {
+           tagging::TagArgs tag_args;
+           tag_args.bundle_name = "Google Chrome";
+           tag_args.installation_id = "{2D8C18E9-8D3A-4EFC-6D61-AE23E3530EA2}";
+           tag_args.brand_code = "CHMB";
+           tag_args.language = "en";
+           tag_args.browser_type = tagging::TagArgs::BrowserType::kChrome;
+           tag_args.usage_stats_enable = false;
+
+           tagging::AppArgs app_args("{8A69D345-D564-463C-AFF1-A69D9E530F96}");
+           app_args.app_name = "Google Chrome";
+           app_args.install_data_index = "defaultbrowser";
+           app_args.needs_admin = tagging::NeedsAdmin::kPrefers;
+           tag_args.apps = {app_args};
+
+           return tag_args;
+         }()},
+
+        // MSI file size greater than `kMaxBufferLength` of 80KB.
+        {"GUH-size-greater-than-max.msi",
+         [] {
+           tagging::TagArgs tag_args;
+           tag_args.bundle_name = "Google Chrome Beta";
+           tag_args.brand_code = "GGLL";
+
+           tagging::AppArgs app_args("{8237E44A-0054-442C-B6B6-EA0509993955}");
+           app_args.app_name = "Google Chrome Beta";
+           app_args.needs_admin = tagging::NeedsAdmin::kYes;
+           tag_args.apps = {app_args};
+
+           return tag_args;
+         }()},
+
+        // special character in the tag value.
+        {"GUH-special-value.msi",
+         [] {
+           tagging::TagArgs tag_args;
+           tag_args.brand_code = "QA*A";
+           return tag_args;
+         }()},
+
+        // tag: =value&BRAND=QAQA.
+        {"GUH-empty-key.msi", {}},
+
+        // tag: BRAND=.
+        {"GUH-empty-value.msi", {}},
+
+        // tag:(empty string).
+        {"GUH-empty-tag.msi", {}},
+
+        // invalid magic signature "Gact2.0Foo".
+        {"GUH-invalid-marker.msi", {}},
+
+        // invalid characters in the tag key.
+        {"GUH-invalid-key.msi", {}},
+
+        // invalid tag format.
+        {"GUH-bad-format.msi", {}},
+
+        // invalid tag format.
+        {"GUH-bad-format2.msi", {}},
+
+        // untagged.
+        {"GUH-untagged.msi", {}},
+    }));
+
+TEST_P(MsiTagTestMsiReadTagTest, TestCases) {
+  const auto tag_args = tagging::BinaryReadTag(
+      test::GetTestFilePath("tagged_msi").AppendUTF8(GetParam().msi_file_name));
+  EXPECT_EQ(tag_args.has_value(), GetParam().expected_tag_args.has_value());
+  if (GetParam().expected_tag_args) {
+    test::ExpectTagArgsEqual(*tag_args, *GetParam().expected_tag_args);
+  }
+}
+
+struct MsiTagTestMsiWriteTagTestCase {
+  const std::string msi_file_name;
+  const std::string tag_string;
+  const bool expected_success;
+};
+
+class MsiTagTestMsiWriteTagTest
+    : public ::testing::TestWithParam<MsiTagTestMsiWriteTagTestCase> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    MsiTagTestMsiWriteTagTestCases,
+    MsiTagTestMsiWriteTagTest,
+    ::testing::ValuesIn(std::vector<MsiTagTestMsiWriteTagTestCase>{
+        // single tag parameter.
+        {"GUH-untagged.msi", "brand=QAQA", true},
+
+        // single tag parameter ending in an ampersand.
+        {"GUH-untagged.msi", "brand=QAQA&", true},
+
+        // multiple tag parameters.
+        {"GUH-untagged.msi",
+         "appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}&iid={2D8C18E9-8D3A-"
+         "4EFC-"
+         "6D61-AE23E3530EA2}&lang=en&browser=4&usagestats=0&appname=Google%"
+         "20Chrome&needsadmin=prefers&brand=CHMB&installdataindex="
+         "defaultbrowser",
+         true},
+
+        // empty tag string.
+        {"GUH-untagged.msi", "", true},
+
+        // already tagged.
+        {"GUH-brand-only.msi", "brand=QAQA", true},
+
+        // unknown tag argument `unknowntagarg`.
+        {"GUH-untagged.msi",
+         "appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}&iid={2D8C18E9-8D3A-"
+         "4EFC-"
+         "6D61-AE23E3530EA2}&unknowntagarg=foo",
+         false},
+    }));
+
+TEST_P(MsiTagTestMsiWriteTagTest, TestCases) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath out_file;
+  ASSERT_TRUE(CreateTemporaryFileInDir(temp_dir.GetPath(), &out_file));
+  const base::FilePath in_out_file = out_file.AddExtensionUTF8(".msi");
+  const base::FilePath msi_file_path =
+      test::GetTestFilePath("tagged_msi").AppendUTF8(GetParam().msi_file_name);
+  ASSERT_TRUE(base::CopyFile(msi_file_path, in_out_file));
+
+  for (const auto& [msi_file, out_msi_file] :
+       {std::make_pair(msi_file_path, out_file),
+        std::make_pair(in_out_file, base::FilePath())}) {
+    ASSERT_EQ(
+        tagging::BinaryWriteTag(msi_file, GetParam().tag_string,
+                                tagging::kDefaultBinaryTagBytes, out_msi_file),
+        GetParam().expected_success);
+    if (GetParam().expected_success && !GetParam().tag_string.empty()) {
+      tagging::TagArgs tag_args;
+      ASSERT_EQ(tagging::Parse(GetParam().tag_string, {}, tag_args),
+                tagging::ErrorCode::kSuccess);
+      test::ExpectTagArgsEqual(
+          tagging::BinaryReadTag(!out_msi_file.empty() ? out_msi_file
+                                                       : msi_file)
+              .value(),
+          tag_args);
+    }
+  }
+}
+
+namespace {
+
+std::vector<uint8_t> ZlibCompress(base::span<const uint8_t> input) {
+  uLongf dest_len = compressBound(input.size());
+  std::vector<uint8_t> output(dest_len);
+  int zerr = compress(output.data(), &dest_len, input.data(), input.size());
+  EXPECT_EQ(zerr, Z_OK);
+  if (zerr != Z_OK) {
+    return {};
+  }
+  output.resize(dest_len);
+  return output;
+}
+
+std::vector<uint8_t> CreateXarPkgBufferWithToc(
+    std::string_view toc_xml,
+    base::span<const uint8_t> heap_data,
+    base::span<const uint8_t> tag = {},
+    bool include_trailer = true) {
+  std::vector<uint8_t> compressed_toc =
+      ZlibCompress(base::as_byte_span(toc_xml));
+  if (compressed_toc.empty()) {
+    return {};
+  }
+
+  std::vector<uint8_t> buffer;
+  buffer.append_range(
+      std::to_array<uint8_t>({'x', 'a', 'r', '!', 0, 28, 0, 1}));
+  uint64_t toc_c_len = compressed_toc.size();
+  for (int i = 7; i >= 0; --i) {
+    buffer.push_back(static_cast<uint8_t>((toc_c_len >> (i * 8)) & 0xFF));
+  }
+  uint64_t toc_u_len = toc_xml.size();
+  for (int i = 7; i >= 0; --i) {
+    buffer.push_back(static_cast<uint8_t>((toc_u_len >> (i * 8)) & 0xFF));
+  }
+  buffer.append_range(std::to_array<uint8_t>({0, 0, 0, 1}));
+
+  buffer.append_range(compressed_toc);
+  buffer.append_range(heap_data);
+  buffer.append_range(tag);
+
+  if (include_trailer) {
+    // Terminator trailer: version 1, type 1 (terminator), length 0.
+    buffer.append_range(std::to_array<uint8_t>(
+        {'t', '8', 'l', 'r', 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+    // Ticket trailer: version 1, type 2 (ticket), length 0.
+    buffer.append_range(std::to_array<uint8_t>(
+        {'t', '8', 'l', 'r', 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+  }
+
+  return buffer;
+}
+
+std::vector<uint8_t> CreateMockXarPkgBuffer(base::span<const uint8_t> heap_data,
+                                            base::span<const uint8_t> tag = {},
+                                            bool include_trailer = true) {
+  std::string toc_xml =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+      "<xar><toc>\n"
+      "  <checksum style=\"sha1\">\n"
+      "    <offset>0</offset>\n"
+      "    <size>" +
+      base::NumberToString(heap_data.size()) +
+      "</size>\n"
+      "  </checksum>\n"
+      "</toc></xar>";
+  return CreateXarPkgBufferWithToc(toc_xml, heap_data, tag, include_trailer);
+}
+
+}  // namespace
+
+TEST(PkgBinaryTest, InvalidXarHeader) {
+  std::vector<uint8_t> invalid_buffer = {'n', 'o', 't', 'x', 'a', 'r'};
+  EXPECT_EQ(tagging::CreatePkgBinary(invalid_buffer), nullptr);
+}
+
+TEST(PkgBinaryTest, NoTagFound) {
+  std::vector<uint8_t> heap = {'a', 'b', 'c', 'd'};
+  std::vector<uint8_t> buffer = CreateMockXarPkgBuffer(heap);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), std::nullopt);
+
+  std::vector<uint8_t> tag = tagging::GetTagFromTagString("brand=QAQA");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer, CreateMockXarPkgBuffer(heap, tag));
+}
+
+TEST(PkgBinaryTest, ValidTagOverwrites) {
+  std::vector<uint8_t> heap = {'a', 'b', 'c', 'd'};
+  std::vector<uint8_t> old_tag = tagging::GetTagFromTagString("brand=QAQA");
+  std::vector<uint8_t> buffer = CreateMockXarPkgBuffer(heap, old_tag);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), old_tag);
+
+  std::vector<uint8_t> new_tag = tagging::GetTagFromTagString("brand=QAQB");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(new_tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer, CreateMockXarPkgBuffer(heap, new_tag));
+}
+
+TEST(PkgBinaryTest, ValidEmptyTagOverwrites) {
+  std::vector<uint8_t> heap = {'a', 'b', 'c', 'd'};
+  std::vector<uint8_t> empty_tag = tagging::GetTagFromTagString("");
+  std::vector<uint8_t> buffer = CreateMockXarPkgBuffer(heap, empty_tag);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), empty_tag);
+
+  std::vector<uint8_t> new_tag = tagging::GetTagFromTagString("brand=QAQA");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(new_tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer, CreateMockXarPkgBuffer(heap, new_tag));
+}
+
+TEST(PkgBinaryTest, InvalidTagOverwrites) {
+  std::vector<uint8_t> heap = {'a', 'b', 'c', 'd'};
+  std::vector<uint8_t> invalid_tag = base::ToVector(tagging::kTagMagicUtf8);
+  invalid_tag.append_range(std::to_array<uint8_t>({0, 5, 'x', 'y'}));
+
+  std::vector<uint8_t> buffer = CreateMockXarPkgBuffer(heap, invalid_tag);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), std::nullopt);
+
+  std::vector<uint8_t> new_tag = tagging::GetTagFromTagString("brand=QAQA");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(new_tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer, CreateMockXarPkgBuffer(heap, new_tag));
+}
+
+TEST(PkgBinaryTest, ValidTagOverwritesShorterShrinks) {
+  std::vector<uint8_t> heap = {'a', 'b', 'c', 'd'};
+  std::vector<uint8_t> old_tag =
+      tagging::GetTagFromTagString("brand=LONGTAGDATA12345");
+  std::vector<uint8_t> buffer = CreateMockXarPkgBuffer(heap, old_tag);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), old_tag);
+
+  std::vector<uint8_t> new_tag = tagging::GetTagFromTagString("brand=SHORT");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(new_tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer, CreateMockXarPkgBuffer(heap, new_tag));
+  EXPECT_LT(updated_buffer->size(), buffer.size());
+}
+
+TEST(PkgBinaryTest, UnstapledPkgTagging) {
+  std::vector<uint8_t> heap = {'1', '2', '3'};
+  std::vector<uint8_t> buffer =
+      CreateMockXarPkgBuffer(heap, /*tag=*/{}, /*include_trailer=*/false);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), std::nullopt);
+
+  std::vector<uint8_t> tag = tagging::GetTagFromTagString("brand=UNSTAPLED");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer,
+            CreateMockXarPkgBuffer(heap, tag, /*include_trailer=*/false));
+}
+
+TEST(PkgBinaryTest, TagContainingTrailerMagic) {
+  std::vector<uint8_t> heap = {'1', '2', '3', '4'};
+  std::vector<uint8_t> tag =
+      tagging::GetTagFromTagString("brand=t8lr_test_brand");
+  std::vector<uint8_t> buffer = CreateMockXarPkgBuffer(heap, tag);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), tag);
+
+  std::vector<uint8_t> new_tag =
+      tagging::GetTagFromTagString("brand=t8lr_new_brand");
+  std::optional<std::vector<uint8_t>> updated_buffer = bin->SetTag(new_tag);
+  ASSERT_TRUE(updated_buffer.has_value());
+
+  EXPECT_EQ(*updated_buffer, CreateMockXarPkgBuffer(heap, new_tag));
+}
+
+TEST(PkgBinaryTest, XmlSelfClosingAndPrefixTags) {
+  std::vector<uint8_t> heap = {'h', 'e', 'a', 'p'};
+  std::string toc_xml =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+      "<xar><toc>\n"
+      "  <database name=\"test\"><entry>value</entry></database>\n"
+      "  <file id=\"1\">\n"
+      "    <data/>\n"
+      "    <data>\n"
+      "      <offset>0</offset>\n"
+      "      <length>4</length>\n"
+      "      <size>4</size>\n"
+      "    </data>\n"
+      "  </file>\n"
+      "</toc></xar>";
+
+  std::vector<uint8_t> tag = tagging::GetTagFromTagString("brand=ROBUST");
+  std::vector<uint8_t> buffer =
+      CreateXarPkgBufferWithToc(toc_xml, heap, tag, /*include_trailer=*/false);
+
+  std::unique_ptr<tagging::BinaryInterface> bin =
+      tagging::CreatePkgBinary(buffer);
+  ASSERT_TRUE(bin);
+  EXPECT_EQ(bin->tag(), tag);
+}
+
+TEST(PkgBinaryTest, MissingHeapDescriptorNodesFail) {
+  std::vector<uint8_t> heap = {'h', 'e', 'a', 'p'};
+  std::vector<uint8_t> tag = tagging::GetTagFromTagString("brand=FAIL");
+
+  // <data> missing <offset>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <length>4</length>\n"
+        "      <size>4</size>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <data> missing <length>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <offset>0</offset>\n"
+        "      <size>4</size>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <data> missing <size>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <offset>0</offset>\n"
+        "      <length>4</length>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <checksum> missing <offset>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <checksum style=\"sha1\">\n"
+        "    <size>4</size>\n"
+        "  </checksum>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <checksum> missing <size>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <checksum style=\"sha1\">\n"
+        "    <offset>0</offset>\n"
+        "  </checksum>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <data> with duplicate <offset>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <offset>0</offset>\n"
+        "      <offset>0</offset>\n"
+        "      <length>4</length>\n"
+        "      <size>4</size>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <data> with duplicate <size>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <offset>0</offset>\n"
+        "      <length>4</length>\n"
+        "      <size>4</size>\n"
+        "      <size>4</size>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <data> with duplicate <length>
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <offset>0</offset>\n"
+        "      <length>4</length>\n"
+        "      <length>4</length>\n"
+        "      <size>4</size>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+
+  // <data> with sub-element inside descriptor tag
+  {
+    std::string toc_xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<xar><toc>\n"
+        "  <file id=\"1\">\n"
+        "    <data>\n"
+        "      <offset>0<nested>1</nested></offset>\n"
+        "      <length>4</length>\n"
+        "      <size>4</size>\n"
+        "    </data>\n"
+        "  </file>\n"
+        "</toc></xar>";
+    std::vector<uint8_t> buffer = CreateXarPkgBufferWithToc(toc_xml, heap, tag);
+    EXPECT_EQ(tagging::CreatePkgBinary(buffer), nullptr);
+  }
+}
+
+TEST(PkgBinaryTest, BinaryWriteTagEmptyAndDynamicOverwrite) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  const std::vector<uint8_t> heap = {'1', '2', '3', '4'};
+  const std::vector<uint8_t> initial_pkg_data =
+      CreateMockXarPkgBuffer(heap, /*tag=*/{}, /*include_trailer=*/true);
+
+  const base::FilePath pkg_path = temp_dir.GetPath().AppendASCII("test.pkg");
+  ASSERT_TRUE(base::WriteFile(pkg_path, initial_pkg_data));
+  EXPECT_EQ(tagging::BinaryReadTagString(pkg_path), "");
+
+  const base::FilePath injected_pkg_path =
+      temp_dir.GetPath().AppendASCII("injected.pkg");
+  ASSERT_TRUE(tagging::BinaryWriteTag(pkg_path, /*tag_string=*/"",
+                                      tagging::kDefaultBinaryTagBytes,
+                                      injected_pkg_path));
+  EXPECT_EQ(tagging::BinaryReadTagString(injected_pkg_path), "");
+
+  const int64_t initial_size = static_cast<int64_t>(initial_pkg_data.size());
+  EXPECT_EQ(
+      base::GetFileSize(injected_pkg_path),
+      initial_size + static_cast<int64_t>(tagging::kDefaultBinaryTagBytes));
+
+  const base::FilePath tagged_pkg_path =
+      temp_dir.GetPath().AppendASCII("tagged.pkg");
+  constexpr char kDynamicTag[] =
+      "brand=GGLZ&appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}";
+  constexpr int64_t kDynamicTagDataBytes = static_cast<int64_t>(
+      tagging::kTagHeaderBytes + std::string_view(kDynamicTag).size());
+  ASSERT_TRUE(tagging::BinaryWriteTag(injected_pkg_path, kDynamicTag,
+                                      tagging::kDefaultBinaryTagBytes,
+                                      tagged_pkg_path));
+
+  EXPECT_EQ(tagging::BinaryReadTagString(tagged_pkg_path), kDynamicTag);
+  EXPECT_EQ(
+      base::GetFileSize(tagged_pkg_path),
+      initial_size + static_cast<int64_t>(tagging::kDefaultBinaryTagBytes));
+
+  const base::FilePath tagged_pad0_path =
+      temp_dir.GetPath().AppendASCII("tagged_pad0.pkg");
+  ASSERT_TRUE(tagging::BinaryWriteTag(injected_pkg_path, kDynamicTag,
+                                      /*padded_length=*/0, tagged_pad0_path));
+  EXPECT_EQ(tagging::BinaryReadTagString(tagged_pad0_path), kDynamicTag);
+  EXPECT_EQ(base::GetFileSize(tagged_pad0_path),
+            initial_size + kDynamicTagDataBytes);
+
+  const base::FilePath tagged_custom_path =
+      temp_dir.GetPath().AppendASCII("tagged_custom.pkg");
+  constexpr int kCustomPaddedLength = 100;
+  ASSERT_TRUE(tagging::BinaryWriteTag(injected_pkg_path, kDynamicTag,
+                                      kCustomPaddedLength, tagged_custom_path));
+  EXPECT_EQ(tagging::BinaryReadTagString(tagged_custom_path), kDynamicTag);
+  EXPECT_EQ(base::GetFileSize(tagged_custom_path),
+            initial_size + kCustomPaddedLength);
+
+  const base::FilePath tagged_short_padded_path =
+      temp_dir.GetPath().AppendASCII("tagged_short_padded.pkg");
+  // padded_length of 50 is shorter than the 71-byte tag data.
+  static_assert(kDynamicTagDataBytes == 71);
+  constexpr int kShortPaddedLength = 50;
+  static_assert(kShortPaddedLength < kDynamicTagDataBytes);
+  ASSERT_TRUE(tagging::BinaryWriteTag(injected_pkg_path, kDynamicTag,
+                                      kShortPaddedLength,
+                                      tagged_short_padded_path));
+  EXPECT_EQ(tagging::BinaryReadTagString(tagged_short_padded_path),
+            kDynamicTag);
+  EXPECT_EQ(base::GetFileSize(tagged_short_padded_path),
+            initial_size + kDynamicTagDataBytes);
+}
+
+struct PkgTagTestCase {
+  std::string test_name;
+  std::string untagged_file;
+  std::string empty_tag_file;
+  std::string brand_tagged_file;
+};
+
+class PkgTagTest : public ::testing::TestWithParam<PkgTagTestCase> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    PkgTagTestCases,
+    PkgTagTest,
+    ::testing::Values(
+        PkgTagTestCase{"NoNotarizationTrailer",
+                       "sample_no_notarization_trailer_untagged.pkg",
+                       "sample_no_notarization_trailer_empty_tag.pkg",
+                       "sample_no_notarization_trailer_brand_tagged.pkg"},
+        PkgTagTestCase{"WithNotarizationTrailer",
+                       "sample_with_notarization_trailer_untagged.pkg",
+                       "sample_with_notarization_trailer_empty_tag.pkg",
+                       "sample_with_notarization_trailer_brand_tagged.pkg"}),
+    [](const ::testing::TestParamInfo<PkgTagTestCase>& info) {
+      return info.param.test_name;
+    });
+
+TEST_P(PkgTagTest, WriteAndReadPkgTag) {
+  const base::FilePath tagged_pkg_dir = test::GetTestFilePath("tagged_pkg");
+  const base::FilePath untagged_path =
+      tagged_pkg_dir.AppendASCII(GetParam().untagged_file);
+  const base::FilePath empty_tag_path =
+      tagged_pkg_dir.AppendASCII(GetParam().empty_tag_file);
+  const base::FilePath brand_tagged_path =
+      tagged_pkg_dir.AppendASCII(GetParam().brand_tagged_file);
+
+  ASSERT_TRUE(base::PathExists(untagged_path));
+  ASSERT_TRUE(base::PathExists(empty_tag_path));
+  ASSERT_TRUE(base::PathExists(brand_tagged_path));
+
+  EXPECT_EQ(tagging::BinaryReadTagString(untagged_path), "");
+  EXPECT_EQ(tagging::BinaryReadTagString(empty_tag_path), "");
+  EXPECT_EQ(tagging::BinaryReadTagString(brand_tagged_path), "brand=GGLZ");
+
+  const std::optional<int64_t> untagged_size = base::GetFileSize(untagged_path);
+  ASSERT_TRUE(untagged_size.has_value());
+  constexpr int64_t kBrandTagDataBytes = static_cast<int64_t>(
+      tagging::kTagHeaderBytes + std::string_view("brand=GGLZ").size());
+
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  {
+    const base::FilePath out_empty =
+        temp_dir.GetPath().AppendASCII("out_empty.pkg");
+    ASSERT_TRUE(tagging::BinaryWriteTag(untagged_path, /*tag_string=*/"",
+                                        tagging::kDefaultBinaryTagBytes,
+                                        out_empty));
+    EXPECT_TRUE(base::ContentsEqual(out_empty, empty_tag_path));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_empty), "");
+  }
+
+  {
+    const base::FilePath out_brand =
+        temp_dir.GetPath().AppendASCII("out_brand.pkg");
+    ASSERT_TRUE(tagging::BinaryWriteTag(empty_tag_path, "brand=GGLZ",
+                                        /*padded_length=*/0, out_brand));
+    EXPECT_TRUE(base::ContentsEqual(out_brand, brand_tagged_path));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_brand), "brand=GGLZ");
+    EXPECT_EQ(base::GetFileSize(out_brand),
+              *untagged_size + kBrandTagDataBytes);
+  }
+
+  {
+    const base::FilePath out_brand_from_untagged =
+        temp_dir.GetPath().AppendASCII("out_brand_from_untagged.pkg");
+    ASSERT_TRUE(tagging::BinaryWriteTag(untagged_path, "brand=GGLZ",
+                                        /*padded_length=*/0,
+                                        out_brand_from_untagged));
+    EXPECT_TRUE(
+        base::ContentsEqual(out_brand_from_untagged, brand_tagged_path));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_brand_from_untagged),
+              "brand=GGLZ");
+  }
+
+  {
+    const base::FilePath out_brand_padded =
+        temp_dir.GetPath().AppendASCII("out_brand_padded.pkg");
+    ASSERT_TRUE(tagging::BinaryWriteTag(empty_tag_path, "brand=GGLZ",
+                                        tagging::kDefaultBinaryTagBytes,
+                                        out_brand_padded));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_brand_padded), "brand=GGLZ");
+    EXPECT_EQ(
+        base::GetFileSize(out_brand_padded),
+        *untagged_size + static_cast<int64_t>(tagging::kDefaultBinaryTagBytes));
+  }
+
+  {
+    const base::FilePath out_empty_again =
+        temp_dir.GetPath().AppendASCII("out_empty_again_padded.pkg");
+    ASSERT_TRUE(tagging::BinaryWriteTag(empty_tag_path, /*tag_string=*/"",
+                                        tagging::kDefaultBinaryTagBytes,
+                                        out_empty_again));
+    EXPECT_TRUE(base::ContentsEqual(out_empty_again, empty_tag_path));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_empty_again), "");
+  }
+
+  {
+    const base::FilePath out_empty_again_pad0 =
+        temp_dir.GetPath().AppendASCII("out_empty_again_pad0.pkg");
+    ASSERT_TRUE(tagging::BinaryWriteTag(empty_tag_path, /*tag_string=*/"",
+                                        /*padded_length=*/0,
+                                        out_empty_again_pad0));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_empty_again_pad0), "");
+    EXPECT_EQ(base::GetFileSize(out_empty_again_pad0),
+              *untagged_size + static_cast<int64_t>(tagging::kTagHeaderBytes));
+  }
+
+  {
+    const base::FilePath out_custom_padded =
+        temp_dir.GetPath().AppendASCII("out_custom_padded.pkg");
+    constexpr int kCustomPaddedLength = 100;
+    ASSERT_TRUE(tagging::BinaryWriteTag(
+        empty_tag_path, "brand=GGLZ", kCustomPaddedLength, out_custom_padded));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_custom_padded), "brand=GGLZ");
+    EXPECT_EQ(base::GetFileSize(out_custom_padded),
+              *untagged_size + kCustomPaddedLength);
+  }
+
+  {
+    const base::FilePath out_longer_than_padded =
+        temp_dir.GetPath().AppendASCII("out_longer_than_padded.pkg");
+    // padded_length of 20 is smaller than the tag data. It must not be
+    // truncated.
+    constexpr int kShortPaddedLength = 20;
+    static_assert(kBrandTagDataBytes == 24);
+    static_assert(kShortPaddedLength < kBrandTagDataBytes);
+    ASSERT_TRUE(tagging::BinaryWriteTag(empty_tag_path, "brand=GGLZ",
+                                        kShortPaddedLength,
+                                        out_longer_than_padded));
+    EXPECT_EQ(tagging::BinaryReadTagString(out_longer_than_padded),
+              "brand=GGLZ");
+    EXPECT_EQ(base::GetFileSize(out_longer_than_padded),
+              *untagged_size + kBrandTagDataBytes);
+  }
 }
 
 }  // namespace updater

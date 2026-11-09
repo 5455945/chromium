@@ -28,7 +28,7 @@
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/svg/svg_unit_types.h"
 #include "third_party/blink/renderer/core/svg/svg_uri_reference.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -45,6 +45,10 @@ class CORE_EXPORT SVGFilterElement final : public SVGElement,
 
   explicit SVGFilterElement(Document&);
   ~SVGFilterElement() override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kSVGFilterElement;
+  }
 
   SVGAnimatedLength* x() const { return x_.Get(); }
   SVGAnimatedLength* y() const { return y_.Get(); }
@@ -70,10 +74,15 @@ class CORE_EXPORT SVGFilterElement final : public SVGElement,
  private:
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
   void ChildrenChanged(const ChildrenChange&) override;
+  void DidChangeIsInCanvasSubtree(CanvasSubtreePropagation) final;
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
   bool SelfHasRelativeLengths() const override;
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
   Member<SVGAnimatedLength> x_;
   Member<SVGAnimatedLength> y_;

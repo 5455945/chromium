@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/policy/linux/bpf_broker_policy_linux.h"
 
 #include "sandbox/linux/bpf_dsl/bpf_dsl.h"
+#include "sandbox/linux/syscall_broker/broker_command.h"
 #include "sandbox/linux/system_headers/linux_syscalls.h"
 
 using sandbox::bpf_dsl::Allow;
@@ -29,6 +30,11 @@ ResultExpr BrokerProcessPolicy::EvaluateSyscall(int sysno) const {
 #endif
 #if defined(__NR_faccessat)
     case __NR_faccessat:
+#endif
+#if defined(__NR_faccessat2)
+    case __NR_faccessat2:
+#endif
+#if defined(__NR_faccessat) || defined(__NR_faccessat2)
       if (allowed_command_set_.test(syscall_broker::COMMAND_ACCESS))
         return Allow();
       break;
@@ -93,8 +99,8 @@ ResultExpr BrokerProcessPolicy::EvaluateSyscall(int sysno) const {
         return Allow();
       break;
 #endif
-#if defined(__NR_fstatat)
-    case __NR_fstatat:
+#if defined(__NR_fstatat64)
+    case __NR_fstatat64:
       if (allowed_command_set_.test(syscall_broker::COMMAND_STAT))
         return Allow();
       break;
@@ -137,6 +143,30 @@ ResultExpr BrokerProcessPolicy::EvaluateSyscall(int sysno) const {
       // NOTE: Open() uses unlink() to make "temporary" files.
       if (allowed_command_set_.test(syscall_broker::COMMAND_OPEN) ||
           allowed_command_set_.test(syscall_broker::COMMAND_UNLINK)) {
+        return Allow();
+      }
+      break;
+#endif
+#if defined(__NR_inotify_add_watch)
+    case __NR_inotify_add_watch:
+      if (allowed_command_set_.test(
+              syscall_broker::COMMAND_INOTIFY_ADD_WATCH)) {
+        return Allow();
+      }
+      break;
+#endif
+#if defined(__NR_connect)
+    case __NR_connect:
+      // ConnectForIPC() connects the sandboxed process's socket on its behalf.
+      if (allowed_command_set_.test(syscall_broker::COMMAND_CONNECT)) {
+        return Allow();
+      }
+      break;
+#endif
+#if defined(__NR_bind)
+    case __NR_bind:
+      // BindForIPC() binds the sandboxed process's socket on its behalf.
+      if (allowed_command_set_.test(syscall_broker::COMMAND_BIND)) {
         return Allow();
       }
       break;

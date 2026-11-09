@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,45 +10,35 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/unsafe_shared_memory_region.h"
-#include "build/chromeos_buildflags.h"
-#include "components/exo/seat.h"
-
-#if defined(USE_OZONE)
 #include "base/files/scoped_file.h"
+#include "base/memory/unsafe_shared_memory_region.h"
+#include "components/exo/seat.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_pixmap_handle.h"
-#endif
 
 namespace gfx {
 class ClientNativePixmapFactory;
-}
+}  // namespace gfx
 
 namespace exo {
+class Buffer;
 class ClientControlledShellSurface;
 class DataDevice;
 class DataDeviceDelegate;
 class DataExchangeDelegate;
 class InputMethodSurfaceManager;
+class InputMethodSurface;
 class NotificationSurface;
 class NotificationSurfaceManager;
 class SharedMemory;
+class ShellSurface;
 class SubSurface;
 class Surface;
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-class InputMethodSurface;
-class ShellSurface;
 class ToastSurface;
 class ToastSurfaceManager;
 class XdgShellSurface;
-#endif
-
-#if defined(USE_OZONE)
-class Buffer;
-#endif
 
 // The core display class. This class provides functions for creating surfaces
 // and is in charge of combining the contents of multiple surfaces into one
@@ -56,14 +46,17 @@ class Buffer;
 class Display {
  public:
   Display();
+  explicit Display(
+      std::unique_ptr<DataExchangeDelegate> data_exchange_delegate);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   Display(
       std::unique_ptr<NotificationSurfaceManager> notification_surface_manager,
       std::unique_ptr<InputMethodSurfaceManager> input_method_surface_manager,
       std::unique_ptr<ToastSurfaceManager> toast_surface_manager,
       std::unique_ptr<DataExchangeDelegate> data_exchange_delegate);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+  Display(const Display&) = delete;
+  Display& operator=(const Display&) = delete;
 
   ~Display();
 
@@ -77,16 +70,13 @@ class Display {
   std::unique_ptr<SharedMemory> CreateSharedMemory(
       base::UnsafeSharedMemoryRegion shared_memory_region);
 
-#if defined(USE_OZONE)
   // Creates a buffer for a Linux DMA-buf file descriptor.
   std::unique_ptr<Buffer> CreateLinuxDMABufBuffer(
       const gfx::Size& size,
-      gfx::BufferFormat format,
+      viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle,
       bool y_invert);
-#endif  // defined(USE_OZONE)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   // Creates a shell surface for an existing surface.
   std::unique_ptr<ShellSurface> CreateShellSurface(Surface* surface);
 
@@ -99,8 +89,8 @@ class Display {
   std::unique_ptr<ClientControlledShellSurface>
   CreateOrGetClientControlledShellSurface(Surface* surface,
                                           int container,
-                                          double default_device_scale_factor,
-                                          bool default_scale_cancellation);
+                                          bool default_scale_cancellation,
+                                          bool supports_floated_state);
 
   // Creates a notification surface for a surface and notification id.
   std::unique_ptr<NotificationSurface> CreateNotificationSurface(
@@ -110,15 +100,12 @@ class Display {
   // Creates a input method surface for a surface.
   std::unique_ptr<InputMethodSurface> CreateInputMethodSurface(
       Surface* surface,
-      double default_device_scale_factor,
       bool default_scale_cancellation);
 
   // Creates a toast surface for a surface.
   std::unique_ptr<ToastSurface> CreateToastSurface(
       Surface* surface,
-      double default_device_scale_factor,
       bool default_scale_cancellation);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // Creates a sub-surface for an existing surface. The sub-surface will be
   // a child of |parent|.
@@ -131,28 +118,20 @@ class Display {
   // Obtains seat instance.
   Seat* seat() { return &seat_; }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   InputMethodSurfaceManager* input_method_surface_manager() {
     return input_method_surface_manager_.get();
   }
-#endif
 
  private:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   std::unique_ptr<NotificationSurfaceManager> notification_surface_manager_;
   std::unique_ptr<InputMethodSurfaceManager> input_method_surface_manager_;
   std::unique_ptr<ToastSurfaceManager> toast_surface_manager_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   Seat seat_;
 
   bool shutdown_ = false;
 
-#if defined(USE_OZONE)
   std::unique_ptr<gfx::ClientNativePixmapFactory> client_native_pixmap_factory_;
-#endif  // defined(USE_OZONE)
-
-  DISALLOW_COPY_AND_ASSIGN(Display);
 };
 
 }  // namespace exo

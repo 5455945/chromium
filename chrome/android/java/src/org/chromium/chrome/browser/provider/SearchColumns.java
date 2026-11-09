@@ -1,16 +1,15 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.provider;
 
-/**
- * Copy of android.provider.Browser.SearchColumns.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Copy of android.provider.Browser.SearchColumns. */
+@NullMarked
 public class SearchColumns implements BaseColumns {
-    /**
-     * The user entered search term.
-     */
+    /** The user entered search term. */
     public static final String SEARCH = "search";
 
     /**

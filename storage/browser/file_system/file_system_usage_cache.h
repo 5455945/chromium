@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@
 #include <memory>
 
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
 
@@ -22,6 +22,10 @@ namespace storage {
 class COMPONENT_EXPORT(STORAGE_BROWSER) FileSystemUsageCache {
  public:
   FileSystemUsageCache(bool is_incognito);
+
+  FileSystemUsageCache(const FileSystemUsageCache&) = delete;
+  FileSystemUsageCache& operator=(const FileSystemUsageCache&) = delete;
+
   ~FileSystemUsageCache();
 
   // Gets the size described in the .usage file even if dirty > 0 or
@@ -56,9 +60,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) FileSystemUsageCache {
   void CloseCacheFiles();
 
   static const base::FilePath::CharType kUsageFileName[];
-  static const char kUsageFileHeader[];
   static const int kUsageFileSize;
-  static const int kUsageFileHeaderSize;
 
  private:
   // Read the size, validity and the "dirty" entry described in the .usage file.
@@ -75,12 +77,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) FileSystemUsageCache {
 
   base::File* GetFile(const base::FilePath& file_path);
 
-  bool ReadBytes(const base::FilePath& file_path,
-                 char* buffer,
-                 int64_t buffer_size);
+  bool ReadBytes(const base::FilePath& file_path, base::span<uint8_t> buffer);
   bool WriteBytes(const base::FilePath& file_path,
-                  const char* buffer,
-                  int64_t buffer_size);
+                  base::span<const uint8_t> buffer);
   bool FlushFile(const base::FilePath& file_path);
   void ScheduleCloseTimer();
 
@@ -94,13 +93,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) FileSystemUsageCache {
 
   // Incognito usages are kept in memory and are not written to disk.
   bool is_incognito_;
-  // TODO(https://crbug.com/955905): Stop using base::FilePath as the key in
+  // TODO(crbug.com/41454722): Stop using base::FilePath as the key in
   // this API as the paths are not necessarily actual on-disk locations.
   std::map<base::FilePath, std::vector<uint8_t>> incognito_usages_;
 
   std::map<base::FilePath, std::unique_ptr<base::File>> cache_files_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileSystemUsageCache);
 };
 
 }  // namespace storage

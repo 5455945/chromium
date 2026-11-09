@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,52 +13,50 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/time/time.h"
 #include "base/tuple.h"
-#include "components/gcm_driver/crypto/gcm_decryption_result.h"
+#include "components/fcm/engine/chrome_build_info.h"
 #include "components/gcm_driver/gcm_client.h"
 #include "components/gcm_driver/gcm_connection_observer.h"
 #include "components/gcm_driver/gcm_driver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/mojom/proxy_resolving_socket.mojom.h"
 
-class PrefService;
-
 namespace base {
 class FilePath;
 class SequencedTaskRunner;
-}
+}  // namespace base
 
 namespace network {
 class NetworkConnectionTracker;
 class SharedURLLoaderFactory;
-}
+}  // namespace network
+
+namespace fcm {
+enum class FcmDecryptionResult;
+}  // namespace fcm
+
+namespace os_crypt_async {
+class Encryptor;
+class OSCryptAsync;
+}  // namespace os_crypt_async
 
 namespace gcm {
 
-class GCMAccountMapper;
 class GCMAppHandler;
 class GCMClientFactory;
-enum class GCMDecryptionResult;
 class GCMDelayedTaskController;
 
 // GCMDriver implementation for desktop and Chrome OS, using GCMClient.
-class GCMDriverDesktop : public GCMDriver,
-                         protected InstanceIDHandler {
+class GCMDriverDesktop : public GCMDriver, protected InstanceIDHandler {
  public:
-  // |remove_account_mappings_with_email_key| indicates whether account mappings
-  // having email as account key should be removed while loading. This is
-  // required during the migration of account identifier from email to Gaia ID.
   GCMDriverDesktop(
       std::unique_ptr<GCMClientFactory> gcm_client_factory,
-      const GCMClient::ChromeBuildInfo& chrome_build_info,
-      const std::string& user_agent,
-      PrefService* prefs,
+      const fcm::ChromeBuildInfo& chrome_build_info,
       const base::FilePath& store_path,
-      bool remove_account_mappings_with_email_key,
       base::RepeatingCallback<void(
           mojo::PendingReceiver<network::mojom::ProxyResolvingSocketFactory>)>
           get_socket_factory_callback,
@@ -66,7 +64,12 @@ class GCMDriverDesktop : public GCMDriver,
       network::NetworkConnectionTracker* network_connection_tracker,
       const scoped_refptr<base::SequencedTaskRunner>& ui_thread,
       const scoped_refptr<base::SequencedTaskRunner>& io_thread,
-      const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner,
+      os_crypt_async::OSCryptAsync* os_crypt_async);
+
+  GCMDriverDesktop(const GCMDriverDesktop&) = delete;
+  GCMDriverDesktop& operator=(const GCMDriverDesktop&) = delete;
+
   ~GCMDriverDesktop() override;
 
   // GCMDriver implementation:
@@ -75,8 +78,6 @@ class GCMDriverDesktop : public GCMDriver,
                             const std::string& registration_id,
                             ValidateRegistrationCallback callback) override;
   void Shutdown() override;
-  void OnSignedIn() override;
-  void OnSignedOut() override;
   void AddAppHandler(const std::string& app_id,
                      GCMAppHandler* handler) override;
   void RemoveAppHandler(const std::string& app_id) override;
@@ -89,15 +90,7 @@ class GCMDriverDesktop : public GCMDriver,
                         ClearActivityLogs clear_logs) override;
   void SetGCMRecording(const GCMStatisticsRecordingCallback& callback,
                        bool recording) override;
-  void SetAccountTokens(
-      const std::vector<GCMClient::AccountTokenInfo>& account_tokens) override;
-  void UpdateAccountMapping(const AccountMapping& account_mapping) override;
-  void RemoveAccountMapping(const CoreAccountId& account_id) override;
-  base::Time GetLastTokenFetchTime() override;
-  void SetLastTokenFetchTime(const base::Time& time) override;
   InstanceIDHandler* GetInstanceIDHandlerInternal() override;
-  void AddHeartbeatInterval(const std::string& scope, int interval_ms) override;
-  void RemoveHeartbeatInterval(const std::string& scope) override;
 
  protected:
   // GCMDriver implementation:
@@ -109,7 +102,7 @@ class GCMDriverDesktop : public GCMDriver,
                 const std::string& receiver_id,
                 const OutgoingMessage& message) override;
   void RecordDecryptionFailure(const std::string& app_id,
-                               GCMDecryptionResult result) override;
+                               fcm::FcmDecryptionResult result) override;
 
   // InstanceIDHandler implementation:
   void GetToken(const std::string& app_id,
@@ -140,6 +133,11 @@ class GCMDriverDesktop : public GCMDriver,
   struct TokenTupleComparer {
     bool operator()(const TokenTuple& a, const TokenTuple& b) const;
   };
+
+  void OnOsCryptReady(
+      base::OnceCallback<void(scoped_refptr<os_crypt_async::Encryptor>)>
+          io_callback,
+      scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   void DoValidateRegistration(scoped_refptr<RegistrationInfo> registration_info,
                               const std::string& registration_id,
@@ -176,10 +174,7 @@ class GCMDriverDesktop : public GCMDriver,
   void MessagesDeleted(const std::string& app_id);
   void MessageSendError(const std::string& app_id,
                         const GCMClient::SendErrorDetails& send_error_details);
-  void SendAcknowledged(const std::string& app_id,
-                        const std::string& message_id);
-  void GCMClientReady(const std::vector<AccountMapping>& account_mappings,
-                      const base::Time& last_token_fetch_time);
+  void GCMClientReady();
   void OnConnected(const net::IPEndPoint& ip_endpoint);
   void OnDisconnected();
   void OnStoreReset();
@@ -198,9 +193,6 @@ class GCMDriverDesktop : public GCMDriver,
                            const std::string& scope,
                            GCMClient::Result result);
 
-  // Flag to indicate whether the user is signed in to a GAIA account.
-  bool signed_in_;
-
   // Flag to indicate if GCM is started.
   bool gcm_started_;
 
@@ -212,12 +204,6 @@ class GCMDriverDesktop : public GCMDriver,
   // List of observers to notify when connection state changes.
   base::ObserverList<GCMConnectionObserver, false>::Unchecked
       connection_observer_list_;
-
-  // Account mapper. Only works when user is signed in.
-  std::unique_ptr<GCMAccountMapper> account_mapper_;
-
-  // Time of last token fetching.
-  base::Time last_token_fetch_time_;
 
   scoped_refptr<base::SequencedTaskRunner> ui_thread_;
   scoped_refptr<base::SequencedTaskRunner> io_thread_;
@@ -250,8 +236,6 @@ class GCMDriverDesktop : public GCMDriver,
 
   // Used to pass a weak pointer to the IO worker.
   base::WeakPtrFactory<GCMDriverDesktop> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(GCMDriverDesktop);
 };
 
 }  // namespace gcm

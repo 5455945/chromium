@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,19 @@
 
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "url/gurl.h"
 
 NewTabPageNavigationThrottle::NewTabPageNavigationThrottle(
-    content::NavigationHandle* navigation_handle)
-    : content::NavigationThrottle(navigation_handle) {}
+    content::NavigationThrottleRegistry& registry)
+    : content::NavigationThrottle(registry) {}
 
 NewTabPageNavigationThrottle::~NewTabPageNavigationThrottle() = default;
 
@@ -27,30 +27,33 @@ const char* NewTabPageNavigationThrottle::GetNameForLogging() {
 }
 
 // static
-std::unique_ptr<content::NavigationThrottle>
-NewTabPageNavigationThrottle::MaybeCreateThrottleFor(
-    content::NavigationHandle* handle) {
-  content::WebContents* web_contents = handle->GetWebContents();
+void NewTabPageNavigationThrottle::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  content::WebContents* web_contents = handle.GetWebContents();
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  if (web_contents->GetVisibleURL() != chrome::kChromeUINewTabURL ||
-      !search::IsInstantNTPURL(handle->GetURL(), profile)) {
-    return nullptr;
+  if (web_contents->GetVisibleURL() != chrome::ChromeUINewTabURLAsGURL() ||
+      !search::IsInstantNTPURL(handle.GetURL(), profile)) {
+    return;
   }
 
-  return std::make_unique<NewTabPageNavigationThrottle>(handle);
+  registry.AddThrottle(
+      std::make_unique<NewTabPageNavigationThrottle>(registry));
 }
 
 content::NavigationThrottle::ThrottleCheckResult
 NewTabPageNavigationThrottle::WillProcessResponse() {
   const net::HttpResponseHeaders* headers =
       navigation_handle()->GetResponseHeaders();
-  if (!headers)
+  if (!headers) {
     return content::NavigationThrottle::PROCEED;
+  }
 
   int response_code = headers->response_code();
-  if (response_code < 400 && response_code != net::HTTP_NO_CONTENT)
+  if (response_code < 400 && response_code != net::HTTP_NO_CONTENT) {
     return content::NavigationThrottle::PROCEED;
+  }
 
   return OpenLocalNewTabPage();
 }
@@ -66,6 +69,7 @@ NewTabPageNavigationThrottle::OpenLocalNewTabPage() {
       content::OpenURLParams::FromNavigationHandle(navigation_handle());
   params.url = GURL(chrome::kChromeUINewTabPageThirdPartyURL);
   params.is_renderer_initiated = false;
-  navigation_handle()->GetWebContents()->OpenURL(std::move(params));
+  navigation_handle()->GetWebContents()->OpenURL(
+      std::move(params), /*navigation_handle_callback=*/{});
   return content::NavigationThrottle::CANCEL_AND_IGNORE;
 }

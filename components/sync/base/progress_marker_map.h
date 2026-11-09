@@ -1,27 +1,24 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SYNC_BASE_PROGRESS_MARKER_MAP_H_
 #define COMPONENTS_SYNC_BASE_PROGRESS_MARKER_MAP_H_
 
-#include <map>
 #include <memory>
 #include <string>
 
-#include "components/sync/base/model_type.h"
-
-namespace base {
-class DictionaryValue;
-}
+#include "base/containers/flat_map.h"
+#include "base/values.h"
+#include "components/sync/base/data_type.h"
 
 namespace syncer {
 
-// A container that maps ModelType to serialized
+// A container that maps DataType to serialized
 // DataTypeProgressMarkers.
-using ProgressMarkerMap = std::map<ModelType, std::string>;
+using ProgressMarkerMap = base::flat_map<DataType, std::string>;
 
-std::unique_ptr<base::DictionaryValue> ProgressMarkerMapToValue(
+base::DictValue ProgressMarkerMapToValueDict(
     const ProgressMarkerMap& marker_map);
 
 }  // namespace syncer

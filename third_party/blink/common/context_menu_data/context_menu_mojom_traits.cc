@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 
 namespace mojo {
 
+
+
 // static
 bool StructTraits<blink::mojom::UntrustworthyContextMenuParamsDataView,
                   blink::UntrustworthyContextMenuParams>::
@@ -17,9 +19,9 @@ bool StructTraits<blink::mojom::UntrustworthyContextMenuParamsDataView,
   if (!data.ReadMediaType(&out->media_type) ||
       !data.ReadLinkUrl(&out->link_url) ||
       !data.ReadLinkText(&out->link_text) ||
-      !data.ReadImpression(&out->impression) ||
       !data.ReadUnfilteredLinkUrl(&out->unfiltered_link_url) ||
       !data.ReadSrcUrl(&out->src_url) ||
+      !data.ReadImageBounds(&out->image_bounds) ||
       !data.ReadSelectionText(&out->selection_text) ||
       !data.ReadTitleText(&out->title_text) ||
       !data.ReadAltText(&out->alt_text) ||
@@ -31,13 +33,19 @@ bool StructTraits<blink::mojom::UntrustworthyContextMenuParamsDataView,
       !data.ReadLinkFollowed(&out->link_followed) ||
       !data.ReadCustomItems(&out->custom_items) ||
       !data.ReadSourceType(&out->source_type) ||
-      !data.ReadInputFieldType(&out->input_field_type) ||
-      !data.ReadSelectionRect(&out->selection_rect))
+      !data.ReadSelectionRect(&out->selection_rect) ||
+      !data.ReadFormControlType(&out->form_control_type) ||
+      !data.ReadFormRendererId(&out->form_renderer_id) ||
+      !data.ReadFieldRendererId(&out->field_renderer_id) ||
+      !data.ReadImageReplacementFrameToken(
+          &out->image_replacement_frame_token)) {
     return false;
+  }
 
   out->x = data.x();
   out->y = data.y();
   out->has_image_contents = data.has_image_contents();
+  out->is_image_media_plugin_document = data.is_image_media_plugin_document();
   out->media_flags = data.media_flags();
   out->spellcheck_enabled = data.spellcheck_enabled();
   out->is_editable = data.is_editable();
@@ -46,7 +54,11 @@ bool StructTraits<blink::mojom::UntrustworthyContextMenuParamsDataView,
   out->writing_direction_right_to_left = data.writing_direction_right_to_left();
   out->edit_flags = data.edit_flags();
   out->selection_start_offset = data.selection_start_offset();
-  out->opened_from_highlight = data.opened_from_highlight();
+  out->annotation_type = data.annotation_type();
+  out->opened_from_interest_for = data.opened_from_interest_for();
+  out->interest_for_node_id = data.interest_for_node_id();
+  out->is_content_editable_for_autofill =
+      data.is_content_editable_for_autofill();
   return true;
 }
 

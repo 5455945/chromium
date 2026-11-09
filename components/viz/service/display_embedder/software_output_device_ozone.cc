@@ -1,12 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/service/display_embedder/software_output_device_ozone.h"
 
 #include <memory>
+#include <utility>
 
-#include "ui/gfx/skia_util.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/vsync_provider.h"
 #include "ui/ozone/public/platform_window_surface.h"
 #include "ui/ozone/public/surface_ozone_canvas.h"
@@ -21,7 +22,7 @@ SoftwareOutputDeviceOzone::SoftwareOutputDeviceOzone(
   vsync_provider_ = surface_ozone_->CreateVSyncProvider();
 }
 
-SoftwareOutputDeviceOzone::~SoftwareOutputDeviceOzone() {}
+SoftwareOutputDeviceOzone::~SoftwareOutputDeviceOzone() = default;
 
 void SoftwareOutputDeviceOzone::Resize(const gfx::Size& viewport_pixel_size,
                                        float scale_factor) {
@@ -49,15 +50,23 @@ void SoftwareOutputDeviceOzone::EndPaint() {
 }
 
 void SoftwareOutputDeviceOzone::OnSwapBuffers(
-    SwapBuffersCallback swap_ack_callback) {
-  if (surface_ozone_->SupportsAsyncBufferSwap())
-    surface_ozone_->OnSwapBuffers(std::move(swap_ack_callback));
-  else
-    SoftwareOutputDevice::OnSwapBuffers(std::move(swap_ack_callback));
+    SwapBuffersCallback swap_ack_callback,
+    gfx::FrameData data) {
+  if (surface_ozone_->SupportsAsyncBufferSwap()) {
+    surface_ozone_->OnSwapBuffers(std::move(swap_ack_callback),
+                                  std::move(data));
+  } else {
+    SoftwareOutputDevice::OnSwapBuffers(std::move(swap_ack_callback),
+                                        std::move(data));
+  }
 }
 
 int SoftwareOutputDeviceOzone::MaxFramesPending() const {
   return surface_ozone_->MaxFramesPending();
+}
+
+bool SoftwareOutputDeviceOzone::SupportsOverridePlatformSize() const {
+  return surface_ozone_->SupportsOverridePlatformSize();
 }
 
 }  // namespace viz

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,34 @@
 
 #include <memory>
 
+#include "ash/ash_export.h"
 #include "ash/webui/file_manager/file_manager_ui_delegate.h"
 #include "ash/webui/file_manager/mojom/file_manager.mojom.h"
+#include "ash/webui/system_apps/public/system_web_app_ui_config.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "ui/webui/mojo_web_ui_controller.h"
+#include "ui/web_dialogs/web_dialog_ui.h"
 
 namespace ash {
 namespace file_manager {
 
 class FileManagerPageHandler;
+class FileManagerUI;
 
-// WebUI controller for chrome://file-manager.
-class FileManagerUI : public ui::MojoWebUIController,
+// The WebUIConfig for chrome://file-manager.
+class FileManagerUIConfig : public SystemWebAppUIConfig<FileManagerUI> {
+ public:
+  explicit FileManagerUIConfig(
+      SystemWebAppUIConfig::CreateWebUIControllerFunc create_controller_func);
+
+  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+};
+
+// The WebUI for chrome://file-manager.
+class FileManagerUI : public ui::MojoWebDialogUI,
                       public mojom::PageHandlerFactory {
  public:
   FileManagerUI(content::WebUI* web_ui,
@@ -35,10 +47,13 @@ class FileManagerUI : public ui::MojoWebUIController,
   void BindInterface(
       mojo::PendingReceiver<mojom::PageHandlerFactory> pending_receiver);
 
-  const FileManagerUIDelegate* delegate() { return delegate_.get(); }
+  // Get the number of open File Manager windows.
+  // Should be called on UI thread.
+  static int GetNumInstances();
 
  private:
-  content::WebUIDataSource* CreateTrustedAppDataSource();
+  void CreateAndAddTrustedAppDataSource(content::WebUI* web_ui,
+                                        int window_number);
 
   // mojom::PageHandlerFactory:
   void CreatePageHandler(
@@ -49,6 +64,14 @@ class FileManagerUI : public ui::MojoWebUIController,
 
   mojo::Receiver<mojom::PageHandlerFactory> page_factory_receiver_{this};
   std::unique_ptr<FileManagerPageHandler> page_handler_;
+
+  // Counts the number of active Files SWA instances. This counter goes up every
+  // time a new window is opened and down every time a window is closed.
+  ASH_EXPORT static inline int instance_count_ = 0;
+
+  // Counts the total number of windows opened. Unlike the instance_count_ this
+  // counter never is decremented.
+  ASH_EXPORT static inline int window_counter_ = 0;
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

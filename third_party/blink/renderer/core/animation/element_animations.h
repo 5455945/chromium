@@ -31,13 +31,19 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_ELEMENT_ANIMATIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_ELEMENT_ANIMATIONS_H_
 
-#include "base/memory/scoped_refptr.h"
+#include "base/gtest_prod_util.h"
 #include "third_party/blink/renderer/core/animation/css/css_animations.h"
+#include "third_party/blink/renderer/core/animation/css/css_image_animations.h"
 #include "third_party/blink/renderer/core/animation/effect_stack.h"
+#include "third_party/blink/renderer/core/animation/native_paint_worklet_data.h"
 #include "third_party/blink/renderer/core/animation/worklet_animation_base.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/properties/css_bitset.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
+#include "third_party/blink/renderer/core/style/animated_source_properties_bitset.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_counted_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/hash_counted_set.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
 
@@ -47,12 +53,15 @@ using AnimationCountedSet = HeapHashCountedSet<WeakMember<Animation>>;
 using WorkletAnimationSet = HeapHashSet<WeakMember<WorkletAnimationBase>>;
 
 class CORE_EXPORT ElementAnimations final
-    : public GarbageCollected<ElementAnimations> {
+    : public GarbageCollected<ElementAnimations>,
+      public NodeRareDataField {
  public:
   ElementAnimations();
   ElementAnimations(const ElementAnimations&) = delete;
   ElementAnimations& operator=(const ElementAnimations&) = delete;
   ~ElementAnimations();
+
+  using CompositedPaintStatus = NativePaintWorkletData::CompositedPaintStatus;
 
   // Animations that are currently active for this element, their effects will
   // be applied during a style recalc. CSS Transitions are included in this
@@ -72,33 +81,114 @@ class CORE_EXPORT ElementAnimations final
 
   bool IsEmpty() const {
     return effect_stack_.IsEmpty() && css_animations_.IsEmpty() &&
-           animations_.IsEmpty();
+           animations_.empty() && worklet_animations_.empty();
+  }
+
+  // True while some animation or transition has an effect on this element's
+  // style, or while a CSS animation update is pending for it. A pending update
+  // is not necessarily a new effect (it can cancel one, or start one with a
+  // delay), so this can be true for an element with no active effect; it is
+  // never false for one that has an active effect. Unlike !IsEmpty(), this
+  // becomes false once every animation has finished without filling forwards,
+  // even though the ElementAnimations and the finished Animation objects stay
+  // around.
+  bool MayHaveActiveEffects() const {
+    return !effect_stack_.IsEmpty() ||
+           !css_animations_.PendingUpdate().IsEmpty();
+  }
+
+  CSSImageAnimations& CssImageAnimations() { return css_image_animations_; }
+  const CSSImageAnimations& CssImageAnimations() const {
+    return css_image_animations_;
   }
 
   void RestartAnimationOnCompositor();
 
-  void UpdateAnimationFlags(ComputedStyle&);
   void SetAnimationStyleChange(bool animation_style_change) {
     animation_style_change_ = animation_style_change;
   }
   bool IsAnimationStyleChange() const { return animation_style_change_; }
 
-  const ComputedStyle* BaseComputedStyle() const;
-  const CSSBitset* BaseImportantSet() const;
-  void UpdateBaseComputedStyle(const ComputedStyle*,
-                               std::unique_ptr<CSSBitset> base_important_set);
-  void ClearBaseComputedStyle();
-
-  bool UpdateBoxSizeAndCheckTransformAxisAlignment(const FloatSize& box_size);
+  bool UpdateBoxSizeAndCheckTransformAxisAlignment(const gfx::SizeF& box_size);
   bool IsIdentityOrTranslation() const;
 
-  void Trace(Visitor*) const;
+  bool HasCompositedPaintWorkletAnimation();
+
+  void RecalcCompositedStatusForKeyframeChange(
+      Element& element,
+      const ComputedStyle& new_style,
+      Animation::NativePaintWorkletReasons properties,
+      bool force_update);
+  void RecalcCompositedStatus(Element* element,
+                              Animation::CompositorPendingReason reason);
+
+  // TODO(crbug.com/1301961): Consider converting to an array or flat map of
+  // fields for paint properties that can be composited.
+
+  NativePaintWorkletData* EnsureBackgroundColorNpwData(Element* element);
+  NativePaintWorkletData* GetBackgroundColorNpwData() {
+    return background_color_npw_data_;
+  }
+
+  CompositedPaintStatus CompositedBackgroundColorStatus() {
+    return background_color_npw_data_
+               ? background_color_npw_data_->GetCompositedPaintStatus()
+               : CompositedPaintStatus::kNoAnimation;
+  }
+
+  bool SetCompositedBackgroundColorStatus(CompositedPaintStatus status);
+
+  Animation* PaintWorkletClipPathAnimation() {
+    return clip_path_npw_data_ ? clip_path_npw_data_->GetAnimation() : nullptr;
+  }
+
+  CompositedPaintStatus CompositedClipPathStatus() {
+    return clip_path_npw_data_ ? clip_path_npw_data_->GetCompositedPaintStatus()
+                               : CompositedPaintStatus::kNoAnimation;
+  }
+
+  bool SetCompositedClipPathStatus(CompositedPaintStatus status);
+
+  NativePaintWorkletData* EnsureClipPathNpwData(Element* element);
+  NativePaintWorkletData* GetClipPathNpwData() { return clip_path_npw_data_; }
+
+  // Properties whose animated value a descendant inherits, which the
+  // compositor cannot keep in sync.
+  const AnimatedSourceBitset& UnsupportedInheritedProperties() const {
+    return unsupported_inherited_properties_;
+  }
+  AnimatedSourceBitset& UnsupportedInheritedProperties() {
+    return unsupported_inherited_properties_;
+  }
+
+  // Animations affecting properties marked as important cannot be composited.
+  // An animation running on the compositor must be cancelled once the affected
+  // property is added to the important set. Note that a animation affecting
+  // an important property still continues to run on the main thread, but the
+  // property value will not applied by the style cascade.
+  void CancelCompositedAnimationsAffectingProperties(
+      const CSSBitset& property_bitset);
+
+  // Downgrades composited animations affecting any of `properties` to run on
+  // the main thread, at the next PreCommit.
+  void DowngradeCompositedAnimationsAffectingProperties(
+      const AnimatedSourceBitset& properties);
+
+  void Trace(Visitor*) const override;
+
+ protected:
+  bool SetCompositedPaintStatus(Member<NativePaintWorkletData>& data,
+                                CompositedPaintStatus status);
 
  private:
   EffectStack effect_stack_;
   CSSAnimations css_animations_;
+  CSSImageAnimations css_image_animations_;
   AnimationCountedSet animations_;
   WorkletAnimationSet worklet_animations_;
+  Member<NativePaintWorkletData> background_color_npw_data_;
+  Member<NativePaintWorkletData> clip_path_npw_data_;
+  AnimatedSourceBitset unsupported_inherited_properties_;
 
   // When an Element is being animated, its entire style will be dirtied every
   // frame by the running animation - even if the animation is only changing a
@@ -106,22 +196,9 @@ class CORE_EXPORT ElementAnimations final
   // style, we store a cached value of the 'base' computed style (e.g. with no
   // change from the running animations) and use that during style recalc,
   // applying only the animation changes on top of it.
-  bool animation_style_change_;
-  scoped_refptr<ComputedStyle> base_computed_style_;
-  // Keeps track of the !important declarations used to build the base
-  // computed style. These declarations must not be overwritten by animation
-  // effects, hence we have to disable the base computed style optimization when
-  // !important declarations conflict with active animations.
   //
-  // If there were no !important declarations in the base style, this field
-  // will be nullptr.
-  //
-  // TODO(andruud): We should be able to simply skip applying the animation
-  // for properties in this set instead of disabling the optimization.
-  // However, we currently need the cascade to handle the case where
-  // an !important declaration appears in a :visited selector.
-  // See https://crbug.com/1062217.
-  std::unique_ptr<CSSBitset> base_important_set_;
+  // See also StyleBaseData.
+  bool animation_style_change_ : 1;
 
   FRIEND_TEST_ALL_PREFIXES(StyleEngineTest, PseudoElementBaseComputedStyle);
 };

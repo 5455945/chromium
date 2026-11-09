@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,9 @@
 
 #include <fuzzer/FuzzedDataProvider.h>
 
+#include <vector>
+
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -27,8 +30,22 @@ class FuzzedDataProvider {
   // Returns a String containing all remaining bytes of the input data.
   std::string ConsumeRemainingBytes();
 
+  // Generic version of `ConsumeRemainingBytes()` above.
+  template <typename T>
+  std::vector<T> ConsumeRemainingBytesAs() {
+    return provider_.ConsumeRemainingBytes<T>();
+  }
+
   // Returns a bool, or false when no data remains.
   bool ConsumeBool() { return provider_.ConsumeBool(); }
+
+  // Returns an enum value. The enum must start at 0 and be contiguous. It must
+  // also contain |kMaxValue| aliased to its largest (inclusive) value. Such as:
+  // enum class Foo { SomeValue, OtherValue, kMaxValue = OtherValue };
+  template <typename T>
+  T ConsumeEnum() {
+    return provider_.ConsumeEnum<T>();
+  }
 
   // Returns a number in the range [min, max] by consuming bytes from the input
   // data. The value might not be uniformly distributed in the given range. If
@@ -51,7 +68,9 @@ class FuzzedDataProvider {
   // |array| must be a fixed-size array.
   template <typename T, size_t size>
   T PickValueInArray(T (&array)[size]) {
-    return array[provider_.ConsumeIntegralInRange<size_t>(0, size - 1)];
+    // SAFETY: size deduced by compiler during template expansion.
+    return UNSAFE_BUFFERS(
+        array[provider_.ConsumeIntegralInRange<size_t>(0, size - 1)]);
   }
 
   // Reports the remaining bytes available for fuzzed input.

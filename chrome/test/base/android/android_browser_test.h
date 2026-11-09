@@ -1,13 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_BASE_ANDROID_ANDROID_BROWSER_TEST_H_
 #define CHROME_TEST_BASE_ANDROID_ANDROID_BROWSER_TEST_H_
 
-#include "base/macros.h"
+#include <optional>
+
+#include "base/auto_reset.h"
+#include "base/callback_list.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/profiles/profile.h"
 #include "content/public/test/browser_test_base.h"
+#include "extensions/buildflags/buildflags.h"
+
+class BrowserWindowInterface;
+class PrefService;
+class TabListInterface;
 
 // A base class for browser tests run on Android. It exposes very little API
 // since the majority of the Android UI is accessed through static methods,
@@ -26,7 +36,14 @@
 class AndroidBrowserTest : public content::BrowserTestBase {
  public:
   AndroidBrowserTest();
+
+  AndroidBrowserTest(const AndroidBrowserTest&) = delete;
+  AndroidBrowserTest& operator=(const AndroidBrowserTest&) = delete;
+
   ~AndroidBrowserTest() override;
+
+  // Returns the currently running AndroidBrowserTest.
+  static AndroidBrowserTest* GetCurrent();
 
   // Sets up default command line that will be visible to the code under test.
   // Called by SetUp() after SetUpCommandLine() to add default command line
@@ -35,21 +52,72 @@ class AndroidBrowserTest : public content::BrowserTestBase {
   // method.
   virtual void SetUpDefaultCommandLine(base::CommandLine* command_line);
 
+  // Initializes the contents of the user data directory. Called by SetUp()
+  // after creating the user data directory, but before any browser is launched.
+  // If a test wishes to set up some initial non-empty state in the user data
+  // directory before the browser starts up, it can do so here. Returns true if
+  // successful. To set initial prefs, see SetUpLocalStatePrefService.
+  [[nodiscard]] virtual bool SetUpUserDataDirectory();
+
+  // Called just before BrowserContextKeyedService creation is started
+  // for each Profile creation.
+  // Test fixtures inheriting AndroidBrowserTest can inject some fake/test
+  // BrowserContextKeyedService as necessary for testing.
+  virtual void SetUpBrowserContextKeyedServices(
+      content::BrowserContext* context) {}
+
+  // Tests can override this to customize the initial local_state.
+  virtual void SetUpLocalStatePrefService(PrefService* local_state) {}
+
   // content::BrowserTestBase implementation.
   void SetUp() override;
+  void TearDown() override;
+  void CreatedBrowserMainParts(content::BrowserMainParts* parts) override;
   void PreRunTestOnMainThread() override;
   void PostRunTestOnMainThread() override;
+
+  // Counts the number of "PRE_" prefixes in the test name. This is used to
+  // differentiate between different PRE tests in browser test constructors
+  // and setup functions.
+  static size_t GetTestPreCount();
+
+  // Returns the test data path used by the embedded test server.
+  base::FilePath GetChromeTestDataDir() const;
+
+  // Returns the BrowserWindowInterface for the initially-created browser.
+  BrowserWindowInterface* GetBrowserWindowInterface() const;
+
+  // Returns the profile. If there are multiple profiles, it's not determined
+  // what profile is returned.
+  Profile* GetProfile() const;
+
+  // Returns the TabListInterface for the test. On Android this will return the
+  // TabModel associated with GetProfile().
+  TabListInterface* GetTabListInterface() const;
+
+  // By default, Android browser tests use a TestNetworkConnectionTracker that
+  // reports an online network. Tests that simulate network changes (e.g. with
+  // content::NetworkConnectionChangeSimulator) need the real tracker. Must be
+  // called from the constructor.
+  void set_use_test_network_connection_tracker(bool use) {
+    use_test_network_connection_tracker_ = use;
+  }
 
  private:
   // Temporary user data directory. Used only when a user data directory is not
   // specified in the command line.
   base::ScopedTempDir temp_user_data_dir_;
 
-  DISALLOW_COPY_AND_ASSIGN(AndroidBrowserTest);
-};
+  // Used to set up test factories for each browser context.
+  base::CallbackListSubscription create_services_subscription_;
 
-// When including either android_browser_test.h or in_process_browser_test.h
-// depending on the platform, use this type alias as the test base class.
-using PlatformBrowserTest = AndroidBrowserTest;
+  base::test::ScopedFeatureList scoped_feature_list_;
+
+  bool use_test_network_connection_tracker_ = true;
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  std::optional<base::AutoReset<bool>> allow_unpacked_without_developer_mode_;
+#endif
+};
 
 #endif  // CHROME_TEST_BASE_ANDROID_ANDROID_BROWSER_TEST_H_

@@ -1,45 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_GEOMETRY_MAPPER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_GEOMETRY_MAPPER_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
 #include "third_party/blink/renderer/platform/graphics/overlay_scrollbar_clip_behavior.h"
 #include "third_party/blink/renderer/platform/graphics/paint/float_clip_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/property_tree_state.h"
-#include "third_party/blink/renderer/platform/transforms/transformation_matrix.h"
+#include "third_party/blink/renderer/platform/graphics/visual_rect_flags.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace blink {
-
-// Clips can use FloatRect::Intersect or FloatRect::InclusiveIntersect.
-enum InclusiveIntersectOrNot { kNonInclusiveIntersect, kInclusiveIntersect };
-
-// When performing overlap testing during compositing, we may need to expand the
-// visual rect in two cases when mapping from descendant state to ancestor
-// state: mapping through a fixed transform node to the viewport it is attached
-// to, and mapping through an animating transform or filter.
-//
-// This allows for a more conservative overlap test that assumes potentially
-// more overlap than we'd encounter otherwise, in order to reduce the need to
-// re-run overlap testing in response to things like scrolling.
-//
-// The expansion for fixed covers all coordinates where the fixed content may
-// end up when the scroller is at the end of the extents.
-//
-// For animation, the visual or clip rect is expanded to infinity when we meet
-// any animating transform or filter when walking from a descendant state to an
-// ancestor state, when mapping a visual rect or getting the accumulated clip
-// rect. After we expanded the rect, we will still apply ancestor clips when
-// continuing walking up the tree. TODO(crbug.com/1026653): Consider animation
-// bounds instead of using infinite rect.
-enum ExpandVisualRectForCompositingOverlapOrNot {
-  kDontExpandVisualRectForCompositingOverlap,
-  kExpandVisualRectForCompositingOverlap,
-};
 
 // GeometryMapper is a helper class for fast computations of transformed and
 // visual rects in different PropertyTreeStates. The design document has a
@@ -54,94 +30,6 @@ class PLATFORM_EXPORT GeometryMapper {
   STATIC_ONLY(GeometryMapper);
 
  public:
-  // The return value of SourceToDestinationProjection. If the result is known
-  // to be accumulation of 2d translations, |matrix| is nullptr, and
-  // |translation_2d| is the accumulated 2d translation. Otherwise |matrix|
-  // points to the accumulated projection, and |translation_2d| is zero.
-  class Translation2DOrMatrix {
-    DISALLOW_NEW();
-
-   public:
-    Translation2DOrMatrix() { DCHECK(IsIdentity()); }
-    explicit Translation2DOrMatrix(const FloatSize& translation_2d)
-        : translation_2d_(translation_2d) {
-      DCHECK(IsIdentityOr2DTranslation());
-    }
-    explicit Translation2DOrMatrix(const TransformationMatrix& matrix)
-        : matrix_(matrix) {
-      DCHECK(!IsIdentityOr2DTranslation());
-    }
-
-    bool IsIdentity() const { return !matrix_ && translation_2d_.IsZero(); }
-    bool IsIdentityOr2DTranslation() const { return !matrix_; }
-    const FloatSize& Translation2D() const {
-      DCHECK(IsIdentityOr2DTranslation());
-      return translation_2d_;
-    }
-    const TransformationMatrix& Matrix() const {
-      DCHECK(!IsIdentityOr2DTranslation());
-      return *matrix_;
-    }
-
-    template <typename Rect>
-    void MapRect(Rect& rect) const {
-      if (LIKELY(IsIdentityOr2DTranslation()))
-        MoveRect(rect, Translation2D());
-      else
-        rect = Matrix().MapRect(rect);
-    }
-
-    void MapQuad(FloatQuad& quad) const {
-      if (LIKELY(IsIdentityOr2DTranslation()))
-        quad.Move(Translation2D());
-      else
-        quad = Matrix().MapQuad(quad);
-    }
-
-    void MapFloatClipRect(FloatClipRect& rect) const {
-      if (LIKELY(IsIdentityOr2DTranslation()))
-        rect.MoveBy(FloatPoint(Translation2D()));
-      else
-        rect.Map(Matrix());
-    }
-
-    FloatPoint MapPoint(const FloatPoint& point) const {
-      if (LIKELY(IsIdentityOr2DTranslation()))
-        return point + Translation2D();
-      return Matrix().MapPoint(point);
-    }
-
-    void PostTranslate(float x, float y) {
-      if (LIKELY(IsIdentityOr2DTranslation()))
-        translation_2d_.Expand(x, y);
-      else
-        matrix_->PostTranslate(x, y);
-    }
-
-    SkM44 ToSkM44() const { return TransformationMatrix::ToSkM44(Matrix()); }
-
-    SkMatrix ToSkMatrix() const {
-      if (LIKELY(IsIdentityOr2DTranslation())) {
-        return SkMatrix::Translate(Translation2D().Width(),
-                                   Translation2D().Height());
-      }
-      return SkMatrix(TransformationMatrix::ToSkMatrix44(Matrix()));
-    }
-
-    bool operator==(const Translation2DOrMatrix& other) {
-      return translation_2d_ == other.translation_2d_ &&
-             matrix_ == other.matrix_;
-    }
-
-    bool operator!=(const Translation2DOrMatrix& other) {
-      return !(*this == other);
-    }
-
-   private:
-    FloatSize translation_2d_;
-    absl::optional<TransformationMatrix> matrix_;
-  };
-
   // Returns the matrix that is suitable to map geometries on the source plane
   // to some backing in the destination plane.
   // Formal definition:
@@ -152,20 +40,35 @@ class PLATFORM_EXPORT GeometryMapper {
   // 2. Both nodes are co-planar to a common singular ancestor:
   // Not every cases outlined above are supported!
   // Read implementation comments for specific restrictions.
-  static Translation2DOrMatrix SourceToDestinationProjection(
+  static gfx::Transform SourceToDestinationProjection(
       const TransformPaintPropertyNodeOrAlias& source,
       const TransformPaintPropertyNodeOrAlias& destination) {
     return SourceToDestinationProjection(source.Unalias(),
                                          destination.Unalias());
   }
-  static Translation2DOrMatrix SourceToDestinationProjection(
+  static gfx::Transform SourceToDestinationProjection(
       const TransformPaintPropertyNode& source,
       const TransformPaintPropertyNode& destination);
 
+  // The function is the same as gfx::Transform SourceToDestinationProjection
+  // but uses an out-param for the transform, and returns a bool indicating
+  // success
+  static bool SourceToDestinationProjection(
+      const TransformPaintPropertyNodeOrAlias& source,
+      const TransformPaintPropertyNodeOrAlias& destination,
+      gfx::Transform& projection) {
+    return SourceToDestinationProjection(source.Unalias(),
+                                         destination.Unalias(), projection);
+  }
+  static bool SourceToDestinationProjection(
+      const TransformPaintPropertyNode& source,
+      const TransformPaintPropertyNode& destination,
+      gfx::Transform& projection);
+
   // Same as SourceToDestinationProjection() except that it maps the rect
   // rather than returning the matrix.
-  // |mapping_rect| is both input and output. Its type can be FloatRect,
-  // LayoutRect or IntRect.
+  // |mapping_rect| is both input and output. Its type can be gfx::RectF,
+  // gfx::Rect, gfx::Rect or gfx::RectF.
   template <typename Rect>
   static void SourceToDestinationRect(
       const TransformPaintPropertyNodeOrAlias& source,
@@ -179,34 +82,13 @@ class PLATFORM_EXPORT GeometryMapper {
       const TransformPaintPropertyNode& source,
       const TransformPaintPropertyNode& destination,
       Rect& mapping_rect) {
-    if (&source == &destination)
-      return;
-
-    // Fast-path optimization for mapping through just |source| when |source| is
-    // a 2d translation.
-    if (&destination == source.Parent() && source.IsIdentityOr2DTranslation()) {
-      MoveRect(mapping_rect, source.Translation2D());
-      return;
-    }
-
-    // Fast-path optimization for mapping through just |destination| when
-    // |destination| is a 2d translation.
-    if (&source == destination.Parent() &&
-        destination.IsIdentityOr2DTranslation()) {
-      MoveRect(mapping_rect, -destination.Translation2D());
-      return;
-    }
-
-    bool has_animation = false;
-    bool has_fixed = false;
-    bool success = false;
-    const auto& source_to_destination = SourceToDestinationProjectionInternal(
-        source, destination, has_animation, has_fixed, success);
-    if (!success)
-      mapping_rect = Rect();
-    else
-      source_to_destination.MapRect(mapping_rect);
+    mapping_rect = SourceToDestinationProjection(source, destination)
+                       .MapRect(mapping_rect);
   }
+
+  static float SourceToDestinationApproximateMinimumScale(
+      const TransformPaintPropertyNode& source,
+      const TransformPaintPropertyNode& destination);
 
   // Returns the clip rect between |local_state| and |ancestor_state|. The clip
   // rect is the total clip rect that should be applied when painting contents
@@ -214,8 +96,7 @@ class PLATFORM_EXPORT GeometryMapper {
   // on contents of |local_state|, it's not affected by any effect nodes between
   // |local_state| and |ancestor_state|.
   //
-  // The UnsnappedClipRect of any clip nodes is used, *not* the
-  // PixelSnappedClipRect.
+  // The LayoutClipRect of any clip nodes is used, *not* the PaintClipRect.
   //
   // Note that the clip of |ancestor_state| is *not* applied.
   //
@@ -260,99 +141,133 @@ class PLATFORM_EXPORT GeometryMapper {
   // meaning in the presence of inclusive intersection.)
   //
   // Note: if inclusive intersection is specified, then the
-  // GeometryMapperClipCache is bypassed (the GeometryMapperTRansformCache is
+  // GeometryMapperClipCache is bypassed (the GeometryMapperTransformCache is
   // still used, however).
   //
   // If kInclusiveIntersect is set, clipping operations will
-  // use FloatRect::InclusiveIntersect, and the return value of
+  // use gfx::RectF::InclusiveIntersect, and the return value of
   // InclusiveIntersect will be propagated to the return value of this method.
-  // Otherwise, clipping operations will use LayoutRect::intersect, and the
+  // Otherwise, clipping operations will use gfx::RectF::Intersect, and the
   // return value will be true only if the clipped rect has non-zero area.
-  // See the documentation for FloatRect::InclusiveIntersect for more
+  // See the documentation for gfx::RectF::InclusiveIntersect for more
   // information.
   static bool LocalToAncestorVisualRect(
       const PropertyTreeStateOrAlias& local_state,
       const PropertyTreeStateOrAlias& ancestor_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior clip = kIgnoreOverlayScrollbarSize,
-      InclusiveIntersectOrNot intersect = kNonInclusiveIntersect,
-      ExpandVisualRectForCompositingOverlapOrNot expand =
-          kDontExpandVisualRectForCompositingOverlap) {
+      VisualRectFlags flags = {}) {
     return LocalToAncestorVisualRect(local_state.Unalias(),
                                      ancestor_state.Unalias(), mapping_rect,
-                                     clip, intersect, expand);
+                                     clip, flags);
   }
   static bool LocalToAncestorVisualRect(
       const PropertyTreeState& local_state,
       const PropertyTreeState& ancestor_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
-      InclusiveIntersectOrNot = kNonInclusiveIntersect,
-      ExpandVisualRectForCompositingOverlapOrNot =
-          kDontExpandVisualRectForCompositingOverlap);
+      VisualRectFlags flags = {});
+  // Maps |local_state| to the local root's viewport using the GeometryMapper
+  // fast path. This stops at the remote boundary; callers must perform any
+  // remote-frame mapping (e.g. MapToVisualRectInRemoteRootFrame) to reach the
+  // embedder's viewport.
+  static bool LocalToLocalRootViewportRect(
+      const PropertyTreeState& local_state,
+      FloatClipRect& mapping_rect,
+      OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
+      VisualRectFlags flags = {});
+
+  static bool MightOverlapForCompositing(const gfx::RectF& rect1,
+                                         const PropertyTreeState& state1,
+                                         const gfx::RectF& rect2,
+                                         const PropertyTreeState& state2);
+
+  // Returns a clip rect that limits the visibility of painted contents under
+  // the given PropertyTreeState. For now only the following simple cases
+  // are considered:
+  // 1. The clip rect of `state`, if the clip's local transform space is the
+  //    same as that of the state.
+  // 2. The scrolling contents rect, if the transform is a scroll translation.
+  //
+  // The clip rect can be applied to the result of LocalToAncestorVisualRect()
+  // to exclude areas that are never visible in the compositor without a
+  // blink-side compositing update. MightOverlapForCompositing() uses this
+  // function.
+  //
+  // TODO(wangxianzhu): Investigate if this can be integrated into
+  // LocalToAncestorVisualRect().
+  static std::optional<gfx::RectF> VisibilityLimit(
+      const PropertyTreeState& state);
 
   static void ClearCache();
 
  private:
-  // The internal methods do the same things as their public counterparts, but
-  // take an extra |success| parameter which indicates if the function is
-  // successful on return. See comments of the public functions for failure
-  // conditions.
+  struct ExtraProjectionResult {
+    bool has_animation = false;
+    bool has_sticky_or_anchor_position = false;
+    STACK_ALLOCATED();
+  };
 
-  static Translation2DOrMatrix SourceToDestinationProjectionInternal(
+  static gfx::Transform SourceToDestinationProjectionInternal(
       const TransformPaintPropertyNode& source,
       const TransformPaintPropertyNode& destination,
-      bool& has_animation,
-      bool& has_fixed,
+      ExtraProjectionResult&,
       bool& success);
 
+  enum class ForCompositingOverlap { kNo, kYes };
+
+  template <ForCompositingOverlap>
   static FloatClipRect LocalToAncestorClipRectInternal(
       const ClipPaintPropertyNode& descendant,
       const ClipPaintPropertyNode& ancestor_clip,
       const TransformPaintPropertyNode& ancestor_transform,
       OverlayScrollbarClipBehavior,
-      InclusiveIntersectOrNot,
-      ExpandVisualRectForCompositingOverlapOrNot,
-      bool& success);
+      VisualRectFlags flags = {});
 
   // The return value has the same meaning as that for
   // LocalToAncestorVisualRect.
+  template <ForCompositingOverlap>
   static bool LocalToAncestorVisualRectInternal(
       const PropertyTreeState& local_state,
       const PropertyTreeState& ancestor_state,
       FloatClipRect& mapping_rect,
-      OverlayScrollbarClipBehavior,
-      InclusiveIntersectOrNot,
-      ExpandVisualRectForCompositingOverlapOrNot,
-      bool& success);
+      OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
+      VisualRectFlags flags = {});
 
-  // The return value has the same meaning as that for
-  // LocalToAncestorVisualRect.
-  static bool SlowLocalToAncestorVisualRectWithEffects(
+  template <ForCompositingOverlap>
+  static bool SlowLocalToAncestorVisualRectWithPixelMovingFilters(
       const PropertyTreeState& local_state,
       const PropertyTreeState& ancestor_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior,
-      InclusiveIntersectOrNot,
-      ExpandVisualRectForCompositingOverlapOrNot,
-      bool& success);
+      VisualRectFlags flags);
 
-  static void MoveRect(FloatRect& rect, const FloatSize& delta) {
-    rect.Move(delta.Width(), delta.Height());
-  }
+  static bool MightOverlapForCompositingInternal(
+      const PropertyTreeState& common_ancestor,
+      const gfx::RectF& rect1,
+      const PropertyTreeState& state1,
+      const gfx::RectF& rect2,
+      const PropertyTreeState& state2);
 
-  static void MoveRect(LayoutRect& rect, const FloatSize& delta) {
-    rect.Move(LayoutSize(delta.Width(), delta.Height()));
-  }
+  static gfx::RectF VisualRectForCompositingOverlap(
+      const gfx::RectF& local_rect,
+      const PropertyTreeState& local_state,
+      const PropertyTreeState& ancestor_state);
 
-  static void MoveRect(IntRect& rect, const FloatSize& delta) {
-    auto float_rect = FloatRect(rect);
-    MoveRect(float_rect, delta);
-    rect = EnclosingIntRect(float_rect);
-  }
+  static void MapVisualRectAboveScrollForCompositingOverlap(
+      const TransformPaintPropertyNode& scroll_translation,
+      gfx::RectF& rect,
+      PropertyTreeState& state);
 
   friend class GeometryMapperTest;
-  friend class PaintLayerClipperTest;
+  static bool LocalToAncestorVisualRectInternalForTesting(
+      const PropertyTreeState& local_state,
+      const PropertyTreeState& ancestor_state,
+      FloatClipRect& mapping_rect);
+  static bool LocalToAncestorVisualRectInternalForCompositingOverlapForTesting(
+      const PropertyTreeState& local_state,
+      const PropertyTreeState& ancestor_state,
+      FloatClipRect& mapping_rect);
 };
 
 }  // namespace blink

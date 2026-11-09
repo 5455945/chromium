@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,32 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/json/json_writer.h"
-#include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
 #include "services/tracing/public/cpp/perfetto/flow_event_utils.h"
 #include "services/tracing/public/cpp/perfetto/macros.h"
-#include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_latency_info.pbzero.h"
 
 namespace {
 
-using perfetto::protos::pbzero::ChromeLatencyInfo;
-using perfetto::protos::pbzero::TrackEvent;
+using ::perfetto::protos::pbzero::ChromeLatencyInfo2;
+using ::perfetto::protos::pbzero::TrackEvent;
 
 const size_t kMaxLatencyInfoNumber = 100;
 
-ChromeLatencyInfo::LatencyComponentType GetComponentProtoEnum(
+ChromeLatencyInfo2::LatencyComponentType GetComponentProtoEnum(
     ui::LatencyComponentType type) {
 #define CASE_TYPE(t)      \
   case ui::t##_COMPONENT: \
-    return ChromeLatencyInfo::COMPONENT_##t
+    return ChromeLatencyInfo2::LatencyComponentType::COMPONENT_##t
   switch (type) {
     CASE_TYPE(INPUT_EVENT_LATENCY_BEGIN_RWH);
     CASE_TYPE(INPUT_EVENT_LATENCY_SCROLL_UPDATE_ORIGINAL);
@@ -39,7 +41,6 @@ ChromeLatencyInfo::LatencyComponentType GetComponentProtoEnum(
     CASE_TYPE(INPUT_EVENT_LATENCY_UI);
     CASE_TYPE(INPUT_EVENT_LATENCY_RENDERING_SCHEDULED_MAIN);
     CASE_TYPE(INPUT_EVENT_LATENCY_RENDERING_SCHEDULED_IMPL);
-    CASE_TYPE(INPUT_EVENT_LATENCY_SCROLL_UPDATE_LAST_EVENT);
     CASE_TYPE(INPUT_EVENT_LATENCY_RENDERER_MAIN);
     CASE_TYPE(INPUT_EVENT_LATENCY_RENDERER_SWAP);
     CASE_TYPE(DISPLAY_COMPOSITOR_RECEIVED_FRAME);
@@ -47,7 +48,6 @@ ChromeLatencyInfo::LatencyComponentType GetComponentProtoEnum(
     CASE_TYPE(INPUT_EVENT_LATENCY_FRAME_SWAP);
     default:
       NOTREACHED() << "Unhandled LatencyComponentType: " << type;
-      return ChromeLatencyInfo::COMPONENT_UNSPECIFIED;
   }
 #undef CASE_TYPE
 }
@@ -56,90 +56,33 @@ bool IsInputLatencyBeginComponent(ui::LatencyComponentType type) {
   return type == ui::INPUT_EVENT_LATENCY_BEGIN_RWH_COMPONENT;
 }
 
-// This class is for converting latency info to trace buffer friendly format.
-class LatencyInfoTracedValue
-    : public base::trace_event::ConvertableToTraceFormat {
- public:
-  static std::unique_ptr<ConvertableToTraceFormat> FromValue(
-      std::unique_ptr<base::Value> value);
-
-  void AppendAsTraceFormat(std::string* out) const override;
-
- private:
-  explicit LatencyInfoTracedValue(base::Value* value);
-  ~LatencyInfoTracedValue() override;
-
-  std::unique_ptr<base::Value> value_;
-
-  DISALLOW_COPY_AND_ASSIGN(LatencyInfoTracedValue);
-};
-
-std::unique_ptr<base::trace_event::ConvertableToTraceFormat>
-LatencyInfoTracedValue::FromValue(std::unique_ptr<base::Value> value) {
-  return std::unique_ptr<base::trace_event::ConvertableToTraceFormat>(
-      new LatencyInfoTracedValue(value.release()));
-}
-
-LatencyInfoTracedValue::~LatencyInfoTracedValue() {
-}
-
-void LatencyInfoTracedValue::AppendAsTraceFormat(std::string* out) const {
-  std::string tmp;
-  base::JSONWriter::Write(*value_, &tmp);
-  *out += tmp;
-}
-
-LatencyInfoTracedValue::LatencyInfoTracedValue(base::Value* value)
-    : value_(value) {
-}
-
 constexpr const char kTraceCategoriesForAsyncEvents[] =
-    "benchmark,latencyInfo,rail";
+    "benchmark,latencyInfo,rail,input.scrolling";
 
-struct LatencyInfoEnabledInitializer {
-  LatencyInfoEnabledInitializer() :
-      latency_info_enabled(TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(
-          kTraceCategoriesForAsyncEvents)) {
-  }
+perfetto::NamedTrack CreateInputLatencyParentTrack() {
+  return perfetto::NamedTrack("InputLatency", 0, perfetto::Track::Global(0));
+}
 
-  const unsigned char* latency_info_enabled;
-};
-
-static base::LazyInstance<LatencyInfoEnabledInitializer>::Leaky
-  g_latency_info_enabled = LAZY_INSTANCE_INITIALIZER;
+perfetto::Track GetInputLatencyTrack(int64_t trace_id) {
+  static const base::NoDestructor<
+      base::trace_event::TrackRegistration<perfetto::NamedTrack>>
+      parent_track(CreateInputLatencyParentTrack());
+  return perfetto::Track(trace_id, parent_track->track());
+}
 
 }  // namespace
 
 namespace ui {
 
-LatencyInfo::LatencyInfo() : LatencyInfo(SourceEventType::UNKNOWN) {}
-
-LatencyInfo::LatencyInfo(SourceEventType type)
-    : trace_id_(-1),
-      ukm_source_id_(ukm::kInvalidSourceId),
-      coalesced_(false),
-      began_(false),
-      terminated_(false),
-      source_event_type_(type),
-      scroll_update_delta_(0),
-      predicted_scroll_update_delta_(0),
-      gesture_scroll_id_(0) {}
+LatencyInfo::LatencyInfo() = default;
 
 LatencyInfo::LatencyInfo(const LatencyInfo& other) = default;
 LatencyInfo::LatencyInfo(LatencyInfo&& other) = default;
 
-LatencyInfo::~LatencyInfo() {}
+LatencyInfo::~LatencyInfo() = default;
 
 LatencyInfo::LatencyInfo(int64_t trace_id, bool terminated)
-    : trace_id_(trace_id),
-      ukm_source_id_(ukm::kInvalidSourceId),
-      coalesced_(false),
-      began_(false),
-      terminated_(terminated),
-      source_event_type_(SourceEventType::UNKNOWN),
-      scroll_update_delta_(0),
-      predicted_scroll_update_delta_(0),
-      gesture_scroll_id_(0) {}
+    : trace_id_(trace_id), terminated_(terminated) {}
 
 LatencyInfo& LatencyInfo::operator=(const LatencyInfo& other) = default;
 
@@ -148,68 +91,42 @@ bool LatencyInfo::Verify(const std::vector<LatencyInfo>& latency_info,
   if (latency_info.size() > kMaxLatencyInfoNumber) {
     LOG(ERROR) << referring_msg << ", LatencyInfo vector size "
                << latency_info.size() << " is too big.";
-    TRACE_EVENT_INSTANT1("input,benchmark", "LatencyInfo::Verify Fails",
-                         TRACE_EVENT_SCOPE_GLOBAL,
+    TRACE_EVENT_INSTANT1("input,benchmark,latencyInfo",
+                         "LatencyInfo::Verify Fails", TRACE_EVENT_SCOPE_GLOBAL,
                          "size", latency_info.size());
     return false;
   }
   return true;
 }
 
-void LatencyInfo::TraceIntermediateFlowEvents(
-    const std::vector<LatencyInfo>& latency_info,
-    perfetto::protos::pbzero::ChromeLatencyInfo::Step step) {
-  for (auto& latency : latency_info) {
-    if (latency.trace_id() == -1)
-      continue;
+ChromeLatencyInfo2* LatencyInfo::FillTraceEvent(
+    perfetto::EventContext& ctx,
+    int64_t latency_trace_id,
+    ChromeLatencyInfo2::Step step,
+    std::optional<ChromeLatencyInfo2::InputType> input_type,
+    std::optional<ChromeLatencyInfo2::InputResultState> input_result_state) {
+  // The flow id needs to be written first. Due to ProtoZero write semantics, we
+  // need to write to submessages in one go, so we write the flow id first and
+  // then can write fields of `ChromeLatencyInfo2`.
+  ctx.event()->add_flow_ids(latency_trace_id);
 
-    TRACE_EVENT(
-        "input,benchmark", "LatencyInfo.Flow",
-        [&latency, &step](perfetto::EventContext ctx) {
-          ChromeLatencyInfo* info = ctx.event()->set_chrome_latency_info();
-          info->set_step(step);
-          info->set_trace_id(latency.trace_id());
-          tracing::FillFlowEvent(ctx, TrackEvent::LegacyEvent::FLOW_INOUT,
-                                 latency.trace_id());
-        });
+  auto* info = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
+                   ->set_chrome_latency_info();
+  info->set_trace_id(latency_trace_id);
+  info->set_step(step);
+  if (input_type.has_value()) {
+    info->set_input_type(input_type.value());
   }
-}
-
-void LatencyInfo::CopyLatencyFrom(const LatencyInfo& other,
-                                  LatencyComponentType type) {
-  // Don't clobber an existing trace_id_ or ukm_source_id_.
-  if (trace_id_ == -1) {
-    DCHECK_EQ(ukm_source_id_, ukm::kInvalidSourceId);
-    DCHECK(latency_components().empty());
-    trace_id_ = other.trace_id();
-    ukm_source_id_ = other.ukm_source_id();
-  } else {
-    DCHECK_NE(ukm_source_id_, ukm::kInvalidSourceId);
+  if (input_result_state.has_value()) {
+    info->set_input_result_state(input_result_state.value());
   }
-
-  for (const auto& lc : other.latency_components()) {
-    if (lc.first == type) {
-      AddLatencyNumberWithTimestamp(lc.first, lc.second);
-    }
-  }
-
-  coalesced_ = other.coalesced();
-  gesture_scroll_id_ = other.gesture_scroll_id();
-  scroll_update_delta_ = other.scroll_update_delta();
-  // TODO(tdresser): Ideally we'd copy |began_| here as well, but |began_|
-  // isn't very intuitive, and we can actually begin multiple times across
-  // copied events.
-  terminated_ = other.terminated();
+  return info;
 }
 
 void LatencyInfo::AddNewLatencyFrom(const LatencyInfo& other) {
-  // Don't clobber an existing trace_id_ or ukm_source_id_.
+  // Don't clobber an existing trace_id_.
   if (trace_id_ == -1) {
     trace_id_ = other.trace_id();
-  }
-
-  if (ukm_source_id_ == ukm::kInvalidSourceId) {
-    ukm_source_id_ = other.ukm_source_id();
   }
 
   for (const auto& lc : other.latency_components()) {
@@ -220,7 +137,7 @@ void LatencyInfo::AddNewLatencyFrom(const LatencyInfo& other) {
 
   coalesced_ = other.coalesced();
   gesture_scroll_id_ = other.gesture_scroll_id();
-  scroll_update_delta_ = other.scroll_update_delta();
+  touch_trace_id_ = other.touch_trace_id();
   // TODO(tdresser): Ideally we'd copy |began_| here as well, but |began_| isn't
   // very intuitive, and we can actually begin multiple times across copied
   // events.
@@ -231,11 +148,10 @@ void LatencyInfo::AddLatencyNumber(LatencyComponentType component) {
   AddLatencyNumberWithTimestampImpl(component, base::TimeTicks::Now(), nullptr);
 }
 
-void LatencyInfo::AddLatencyNumberWithTraceName(
-    LatencyComponentType component,
-    const char* trace_name_str) {
-  AddLatencyNumberWithTimestampImpl(component, base::TimeTicks::Now(),
-                                    trace_name_str);
+void LatencyInfo::AddLatencyNumberWithTraceName(LatencyComponentType component,
+                                                const char* trace_name_str,
+                                                base::TimeTicks now) {
+  AddLatencyNumberWithTimestampImpl(component, now, trace_name_str);
 }
 
 void LatencyInfo::AddLatencyNumberWithTimestamp(LatencyComponentType component,
@@ -247,17 +163,14 @@ void LatencyInfo::AddLatencyNumberWithTimestampImpl(
     LatencyComponentType component,
     base::TimeTicks time,
     const char* trace_name_str) {
-  const unsigned char* latency_info_enabled =
-      g_latency_info_enabled.Get().latency_info_enabled;
-
   if (IsInputLatencyBeginComponent(component)) {
     // Should only ever add begin component once.
     CHECK(!began_);
     began_ = true;
     // We should have a trace ID assigned by now.
-    DCHECK(trace_id_ != -1);
+    CHECK(trace_id_ != -1, base::NotFatalUntil::M163);
 
-    if (*latency_info_enabled) {
+    if (TRACE_EVENT_CATEGORY_ENABLED(kTraceCategoriesForAsyncEvents)) {
       // The timestamp for ASYNC_BEGIN trace event is used for drawing the
       // beginning of the trace event in trace viewer. For better visualization,
       // for an input event, we want to draw the beginning as when the event is
@@ -272,24 +185,14 @@ void LatencyInfo::AddLatencyNumberWithTimestampImpl(
       } else {
         ts = base::TimeTicks::Now();
       }
-
       TRACE_EVENT_BEGIN(kTraceCategoriesForAsyncEvents,
                         perfetto::StaticString{trace_name_str},
-                        perfetto::Track::Global(trace_id_), ts);
+                        GetInputLatencyTrack(trace_id_), ts);
     }
-
-    TRACE_EVENT("input,benchmark", "LatencyInfo.Flow",
-                [this](perfetto::EventContext ctx) {
-                  ChromeLatencyInfo* info =
-                      ctx.event()->set_chrome_latency_info();
-                  info->set_trace_id(trace_id_);
-                  tracing::FillFlowEvent(ctx, TrackEvent::LegacyEvent::FLOW_OUT,
-                                         trace_id_);
-                });
   }
 
   auto it = latency_components_.find(component);
-  DCHECK(it == latency_components_.end());
+  CHECK(it == latency_components_.end(), base::NotFatalUntil::M163);
   latency_components_[component] = time;
 
   if (component == INPUT_EVENT_LATENCY_FRAME_SWAP_COMPONENT)
@@ -304,19 +207,19 @@ void LatencyInfo::Terminate() {
   CHECK(!terminated_);
   terminated_ = true;
 
-  if (*g_latency_info_enabled.Get().latency_info_enabled) {
+  if (TRACE_EVENT_CATEGORY_ENABLED(kTraceCategoriesForAsyncEvents)) {
     base::TimeTicks gpu_swap_end_timestamp;
     if (!this->FindLatency(INPUT_EVENT_LATENCY_FRAME_SWAP_COMPONENT,
                            &gpu_swap_end_timestamp)) {
       gpu_swap_end_timestamp = base::TimeTicks::Now();
     }
     TRACE_EVENT_END(
-        kTraceCategoriesForAsyncEvents, perfetto::Track::Global(trace_id_),
+        kTraceCategoriesForAsyncEvents, GetInputLatencyTrack(trace_id_),
         gpu_swap_end_timestamp, [this](perfetto::EventContext ctx) {
-          ChromeLatencyInfo* info = ctx.event()->set_chrome_latency_info();
+          auto* info = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
+                           ->set_chrome_latency_info();
           for (const auto& lc : latency_components_) {
-            ChromeLatencyInfo::ComponentInfo* component =
-                info->add_component_info();
+            auto* component = info->add_component_info();
 
             component->set_component_type(GetComponentProtoEnum(lc.first));
             component->set_time_us(lc.second.since_origin().InMicroseconds());
@@ -325,41 +228,14 @@ void LatencyInfo::Terminate() {
           if (gesture_scroll_id_ > 0) {
             info->set_gesture_scroll_id(gesture_scroll_id_);
           }
+          if (touch_trace_id_ > 0) {
+            info->set_touch_id(touch_trace_id_);
+          }
 
           info->set_trace_id(trace_id_);
           info->set_is_coalesced(coalesced_);
         });
   }
-
-  TRACE_EVENT("input,benchmark", "LatencyInfo.Flow",
-              [this](perfetto::EventContext ctx) {
-                ChromeLatencyInfo* info =
-                    ctx.event()->set_chrome_latency_info();
-                info->set_trace_id(trace_id_);
-                tracing::FillFlowEvent(ctx, TrackEvent::LegacyEvent::FLOW_IN,
-                                       trace_id_);
-              });
-}
-
-void LatencyInfo::CoalesceScrollUpdateWith(const LatencyInfo& other) {
-  base::TimeTicks other_timestamp;
-  if (other.FindLatency(INPUT_EVENT_LATENCY_SCROLL_UPDATE_LAST_EVENT_COMPONENT,
-                        &other_timestamp)) {
-    latency_components_
-        [INPUT_EVENT_LATENCY_SCROLL_UPDATE_LAST_EVENT_COMPONENT] =
-            other_timestamp;
-  }
-
-  scroll_update_delta_ += other.scroll_update_delta();
-  predicted_scroll_update_delta_ += other.predicted_scroll_update_delta();
-}
-
-LatencyInfo LatencyInfo::ScaledBy(float scale) const {
-  ui::LatencyInfo scaled_latency_info(*this);
-  scaled_latency_info.set_scroll_update_delta(scroll_update_delta_ * scale);
-  scaled_latency_info.set_predicted_scroll_update_delta(
-      predicted_scroll_update_delta_ * scale);
-  return scaled_latency_info;
 }
 
 bool LatencyInfo::FindLatency(LatencyComponentType type,

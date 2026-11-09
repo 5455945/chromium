@@ -1,22 +1,45 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_JS_INJECTION_BROWSER_WEB_MESSAGE_REPLY_PROXY_H_
 #define COMPONENTS_JS_INJECTION_BROWSER_WEB_MESSAGE_REPLY_PROXY_H_
 
+#include <optional>
+
+#include "components/js_injection/common/enum.mojom-forward.h"
+#include "components/js_injection/common/interfaces.mojom-forward.h"
+#include "third_party/blink/public/common/messaging/string_message_codec.h"
+
+namespace content {
+class Page;
+}
+
 namespace js_injection {
 
-struct WebMessage;
+using ExecuteJavaScriptResultCallback = base::OnceCallback<void(
+    base::expected<base::Value, js_injection::mojom::JavaScriptExecutionError>
+        result)>;
 
 // Used to send messages to the page.
 class WebMessageReplyProxy {
  public:
-  virtual void PostMessage(std::unique_ptr<WebMessage> message) = 0;
+  // To match the JavaScript call, this function would ideally be named
+  // PostMessage(), but that conflicts with a Windows macro, so PostWebMessage()
+  // is used.
+  virtual void PostWebMessage(blink::WebMessagePayload message) = 0;
 
-  // Returns true if the page associated with the channel is in the back
-  // forward cache.
-  virtual bool IsInBackForwardCache() = 0;
+  virtual void ExecuteJavaScript(const std::u16string& java_script,
+                                 bool wants_result,
+                                 ExecuteJavaScriptResultCallback callback) = 0;
+
+  // Returns the page the messages are sent to.
+  virtual content::Page& GetPage() = 0;
+
+  // Returns whether the document messages are sent to is cross-origin isolated,
+  // or nullopt if there is no such document, i.e. if messages posted through
+  // this proxy would be dropped rather than delivered.
+  virtual std::optional<bool> IsCrossOriginIsolated() = 0;
 
  protected:
   virtual ~WebMessageReplyProxy() = default;

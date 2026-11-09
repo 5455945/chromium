@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -51,8 +51,9 @@ class EnumTest(MojomParserTestCase):
     a_mojom = 'a.mojom'
     self.WriteFile(a_mojom, 'module a; enum E { kFoo=42, kBar };')
     b_mojom = 'b.mojom'
-    self.WriteFile(b_mojom,
-                   'module b; import "a.mojom"; enum F { kFoo = a.E.kBar };')
+    self.WriteFile(
+      b_mojom, 'module b; import "a.mojom"; enum F { kFoo = a.E.kBar };'
+    )
     self.ParseMojoms([a_mojom, b_mojom])
     b = self.LoadModule(b_mojom)
 
@@ -69,11 +70,11 @@ class EnumTest(MojomParserTestCase):
   def testInvalidConstantReference(self):
     """Verifies that enum values cannot be assigned from the value of
     non-integral constants."""
-    with self.assertRaisesRegexp(ValueError, 'not an integer'):
+    with self.assertRaisesRegex(ValueError, 'not an integer'):
       self.ExtractTypes('const float kFoo = 1.0; enum E { kA = kFoo };')
-    with self.assertRaisesRegexp(ValueError, 'not an integer'):
+    with self.assertRaisesRegex(ValueError, 'not an integer'):
       self.ExtractTypes('const double kFoo = 1.0; enum E { kA = kFoo };')
-    with self.assertRaisesRegexp(ValueError, 'not an integer'):
+    with self.assertRaisesRegex(ValueError, 'not an integer'):
       self.ExtractTypes('const string kFoo = "lol"; enum E { kA = kFoo };')
 
   def testImportedConstantReference(self):
@@ -82,11 +83,42 @@ class EnumTest(MojomParserTestCase):
     a_mojom = 'a.mojom'
     self.WriteFile(a_mojom, 'module a; const int32 kFoo = 37;')
     b_mojom = 'b.mojom'
-    self.WriteFile(b_mojom,
-                   'module b; import "a.mojom"; enum F { kFoo = a.kFoo };')
+    self.WriteFile(
+      b_mojom, 'module b; import "a.mojom"; enum F { kFoo = a.kFoo };'
+    )
     self.ParseMojoms([a_mojom, b_mojom])
     b = self.LoadModule(b_mojom)
 
     self.assertEqual('F', b.enums[0].mojom_name)
     self.assertEqual('kFoo', b.enums[0].fields[0].mojom_name)
     self.assertEqual(37, b.enums[0].fields[0].numeric_value)
+
+  def testEnumAttributesAreEnums(self):
+    """Verifies that enum values in attributes are really enum types."""
+    a_mojom = 'a.mojom'
+    self.WriteFile(a_mojom, 'module a; enum E { kFoo, kBar };')
+    b_mojom = 'b.mojom'
+    self.WriteFile(
+      b_mojom,
+      'module b;import "a.mojom";[MooCow=a.E.kFoo]interface Foo { Foo(); };',
+    )
+    self.ParseMojoms([a_mojom, b_mojom])
+    b = self.LoadModule(b_mojom)
+    self.assertEqual(b.interfaces[0].attributes['MooCow'].mojom_name, 'kFoo')
+
+  def testConstantAttributes(self):
+    """Verifies that constants as attributes are translated to the constant."""
+    a_mojom = 'a.mojom'
+    self.WriteFile(
+      a_mojom,
+      'module a;'
+      'enum E { kFoo, kBar };'
+      'const E kB = E.kFoo;'
+      '[Attr=kB] interface Hello { Foo(); };',
+    )
+    self.ParseMojoms([a_mojom])
+    a = self.LoadModule(a_mojom)
+    self.assertEqual(a.interfaces[0].attributes['Attr'].mojom_name, 'kB')
+    self.assertEqual(
+      a.interfaces[0].attributes['Attr'].value.mojom_name, 'kFoo'
+    )

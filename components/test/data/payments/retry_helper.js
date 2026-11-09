@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 The Chromium Authors. All rights reserved.
+ * Copyright 2018 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -11,9 +11,22 @@
  * @param {PaymentOptions?} options Payment options
  * @return {Promise<PaymentResponse>} Payment response
  */
-function getPaymentResponse(options) { // eslint-disable-line no-unused-vars
-  var methodData = [{supportedMethods: 'basic-card'}];
-  var details = {
+function getPaymentResponse(options) {
+  return getPaymentResponseWithMethod(
+      options, [{supportedMethods: 'basic-card'}]);
+}
+
+/**
+ * Pops up a payment sheet, allowing options to be
+ * passed in if particular values are needed.
+ *
+ * @param {PaymentOptions?} options Payment options
+ * @param {Array<Object>} methodData An array of payment method objects used as
+ *        the first parameter of the PaymentRequest API.
+ * @return {Promise<PaymentResponse>} Payment response
+ */
+function getPaymentResponseWithMethod(options, methodData) {
+  const details = {
     total: {
       label: 'Total',
       amount: {
@@ -32,7 +45,7 @@ function getPaymentResponse(options) { // eslint-disable-line no-unused-vars
     }],
   };
 
-  var request = new PaymentRequest(methodData, details, options);
+  const request = new PaymentRequest(methodData, details, options);
   request.onshippingaddresschange = function(e) {
     e.updateWith(details);
   };

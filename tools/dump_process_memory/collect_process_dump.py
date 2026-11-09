@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -21,10 +21,15 @@ from devil.android import device_utils
 
 def _CreateArgumentParser():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--package', type=str, required=True,
-                      help='Chrome package')
-  parser.add_argument('--output-directory', type=str, required=True,
-                      help='Dumps destination directory')
+  parser.add_argument(
+    '--package', type=str, required=True, help='Chrome package'
+  )
+  parser.add_argument(
+    '--output-directory',
+    type=str,
+    required=True,
+    help='Dumps destination directory',
+  )
   return parser
 
 
@@ -53,8 +58,9 @@ def main():
 
   logging.info('Dumping the renderer\'s memory')
   command = (
-      'mkdir -p %(path)s && cd %(path)s && /data/local/tmp/dump_process %(pid)d'
-      % {'path': dumps_path, 'pid': pid})
+    'mkdir -p %(path)s && cd %(path)s && /data/local/tmp/dump_process %(pid)d'
+    % {'path': dumps_path, 'pid': pid}
+  )
   device.RunShellCommand(command, shell=True)
 
   logging.info('Pulling results')

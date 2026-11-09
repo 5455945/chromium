@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CHROMEOS_CAMERA_GPU_JPEG_ENCODE_ACCELERATOR_FACTORY_H_
 #define COMPONENTS_CHROMEOS_CAMERA_GPU_JPEG_ENCODE_ACCELERATOR_FACTORY_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/chromeos_camera/jpeg_encode_accelerator.h"
 
 namespace base {

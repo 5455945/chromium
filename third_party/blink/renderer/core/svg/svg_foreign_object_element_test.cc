@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ namespace blink {
 class SVGForeignObjectElementTest : public PageTestBase {};
 
 TEST_F(SVGForeignObjectElementTest, NoLayoutObjectInNonRendered) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <svg>
       <pattern>
         <foreignObject id="fo"></foreignObject>
@@ -25,18 +25,16 @@ TEST_F(SVGForeignObjectElementTest, NoLayoutObjectInNonRendered) {
 
   UpdateAllLifecyclePhasesForTest();
 
-  Element* foreign_object = GetDocument().getElementById("fo");
+  Element* foreign_object = GetElementById("fo");
   EXPECT_FALSE(foreign_object->GetLayoutObject());
 
-  scoped_refptr<ComputedStyle> style =
-      GetDocument().GetStyleResolver().CreateComputedStyle();
-  LayoutObject* layout_object =
-      foreign_object->CreateLayoutObject(*style, LegacyLayout::kAuto);
+  const ComputedStyle& style = GetDocument().GetStyleResolver().InitialStyle();
+  LayoutObject* layout_object = foreign_object->CreateLayoutObject(style);
   EXPECT_FALSE(layout_object);
 }
 
 TEST_F(SVGForeignObjectElementTest, ReferenceForeignObjectInNonRenderedCrash) {
-  GetDocument().body()->setInnerHTML(R"HTML(
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       div { writing-mode: vertical-rl; }
       div > svg { float: right; }

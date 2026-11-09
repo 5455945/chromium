@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "device/gamepad/hid_writer.h"
 #include "device/gamepad/public/mojom/gamepad.mojom.h"
@@ -89,7 +91,7 @@ constexpr double kStrongMagnitude = 1.0;  // 100% intensity
 constexpr double kWeakMagnitude = 0.5;    // 50% intensity
 
 constexpr base::TimeDelta kPendingTaskDuration =
-    base::TimeDelta::FromMillisecondsD(kDurationMillis);
+    base::Milliseconds(kDurationMillis);
 
 class FakeHidWriter : public HidWriter {
  public:
@@ -109,16 +111,10 @@ class FakeHidWriter : public HidWriter {
 class Dualshock4ControllerTest : public testing::Test {
  public:
   Dualshock4ControllerTest()
-      : usb_start_vibration_report_(kUsbStartVibration,
-                                    kUsbStartVibration + kUsbReportLength),
-        usb_stop_vibration_report_(kUsbStopVibration,
-                                   kUsbStopVibration + kUsbReportLength),
-        bluetooth_start_vibration_report_(
-            kBtStartVibration,
-            kBtStartVibration + kBluetoothReportLength),
-        bluetooth_stop_vibration_report_(
-            kBtStopVibration,
-            kBtStopVibration + kBluetoothReportLength),
+      : usb_start_vibration_report_(base::ToVector(kUsbStartVibration)),
+        usb_stop_vibration_report_(base::ToVector(kUsbStopVibration)),
+        bluetooth_start_vibration_report_(base::ToVector(kBtStartVibration)),
+        bluetooth_stop_vibration_report_(base::ToVector(kBtStopVibration)),
         callback_count_(0),
         callback_result_(
             mojom::GamepadHapticsResult::GamepadHapticsResultError) {
@@ -136,6 +132,9 @@ class Dualshock4ControllerTest : public testing::Test {
         std::move(bluetooth_writer));
   }
 
+  Dualshock4ControllerTest(const Dualshock4ControllerTest&) = delete;
+  Dualshock4ControllerTest& operator=(const Dualshock4ControllerTest&) = delete;
+
   void TearDown() override {
     ds4_usb_->Shutdown();
     ds4_bluetooth_->Shutdown();
@@ -149,16 +148,17 @@ class Dualshock4ControllerTest : public testing::Test {
       mojom::GamepadHapticsManager::PlayVibrationEffectOnceCallback callback) {
     gamepad->PlayEffect(
         mojom::GamepadHapticEffectType::GamepadHapticEffectTypeDualRumble,
-        mojom::GamepadEffectParameters::New(kDurationMillis, start_delay,
-                                            strong_magnitude, weak_magnitude),
-        std::move(callback), base::ThreadTaskRunnerHandle::Get());
+        mojom::GamepadEffectParameters::New(
+            kDurationMillis, start_delay, strong_magnitude, weak_magnitude,
+            /*left_trigger=*/0, /*right_trigger=*/0),
+        std::move(callback), base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 
   void PostResetVibration(
       Dualshock4Controller* gamepad,
       mojom::GamepadHapticsManager::ResetVibrationActuatorCallback callback) {
     gamepad->ResetVibration(std::move(callback),
-                            base::ThreadTaskRunnerHandle::Get());
+                            base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 
   // Callback for PlayEffect or ResetVibration.
@@ -173,14 +173,12 @@ class Dualshock4ControllerTest : public testing::Test {
   const std::vector<uint8_t> bluetooth_stop_vibration_report_;
   int callback_count_;
   mojom::GamepadHapticsResult callback_result_;
-  FakeHidWriter* usb_writer_;
-  FakeHidWriter* bluetooth_writer_;
+  raw_ptr<FakeHidWriter, DanglingUntriaged> usb_writer_;
+  raw_ptr<FakeHidWriter, DanglingUntriaged> bluetooth_writer_;
   std::unique_ptr<Dualshock4Controller> ds4_usb_;
   std::unique_ptr<Dualshock4Controller> ds4_bluetooth_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-
-  DISALLOW_COPY_AND_ASSIGN(Dualshock4ControllerTest);
 };
 
 TEST_F(Dualshock4ControllerTest, PlayEffectUsb) {
@@ -275,6 +273,29 @@ TEST_F(Dualshock4ControllerTest, ResetVibrationBluetooth) {
   EXPECT_EQ(mojom::GamepadHapticsResult::GamepadHapticsResultComplete,
             callback_result_);
   EXPECT_EQ(task_environment_.GetPendingMainThreadTaskCount(), 0u);
+}
+
+TEST_F(Dualshock4ControllerTest, ProcessInputReportUsbTouch) {
+  // 63-byte report payload (64-byte USB report excluding 1-byte report ID
+  // 0x01).
+  std::array<uint8_t, 63> report_data;
+  std::ranges::fill(report_data, 0);
+
+  // Set touches_count = 1 at offset 32.
+  report_data[32] = 1;
+  // Set first touch packet (offset 33) timestamp = 100.
+  report_data[33] = 100;
+  // Set first finger touch data valid (is_invalid bit = 0, id = 1).
+  report_data[34] = 1;
+
+  Gamepad pad;
+  bool result = ds4_usb_->ProcessInputReport(0x01, report_data, &pad,
+                                             /*ignore_button_axis=*/false,
+                                             /*is_multitouch_enabled=*/true);
+
+  EXPECT_TRUE(result);
+  EXPECT_TRUE(pad.supports_touch_events_);
+  EXPECT_EQ(pad.touch_events_length, 2u);
 }
 
 }  // namespace

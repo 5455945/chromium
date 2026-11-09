@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/unguessable_token.h"
 #include "content/renderer/service_worker/service_worker_provider_context.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -18,10 +17,13 @@
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom-forward.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-forward.h"
+#include "third_party/blink/public/mojom/frame/policy_container.mojom.h"
+#include "third_party/blink/public/mojom/frame/reporting_observer.mojom.h"
 #include "third_party/blink/public/mojom/renderer_preference_watcher.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/controller_service_worker.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_provider.mojom-forward.h"
@@ -32,7 +34,6 @@
 #include "third_party/blink/public/mojom/worker/worker_main_script_load_params.mojom.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/web/web_shared_worker_client.h"
-#include "url/gurl.h"
 
 namespace blink {
 class ChildURLLoaderFactoryBundle;
@@ -58,7 +59,9 @@ class EmbeddedSharedWorkerStub : public blink::WebSharedWorkerClient,
   EmbeddedSharedWorkerStub(
       blink::mojom::SharedWorkerInfoPtr info,
       const blink::SharedWorkerToken& token,
-      const url::Origin& constructor_origin,
+      const blink::StorageKey& constructor_key,
+      const url::Origin& origin,
+      bool is_constructor_secure_context,
       const std::string& user_agent,
       const blink::UserAgentMetadata& ua_metadata,
       bool pause_on_start,
@@ -70,17 +73,27 @@ class EmbeddedSharedWorkerStub : public blink::WebSharedWorkerClient,
           content_settings,
       blink::mojom::ServiceWorkerContainerInfoForClientPtr
           service_worker_container_info,
-      const base::UnguessableToken& appcache_host_id,
       blink::mojom::WorkerMainScriptLoadParamsPtr main_script_load_params,
       std::unique_ptr<blink::PendingURLLoaderFactoryBundle>
           pending_subresource_loader_factory_bundle,
       blink::mojom::ControllerServiceWorkerInfoPtr controller_info,
+      blink::mojom::PolicyContainerPtr policy_container,
       mojo::PendingRemote<blink::mojom::SharedWorkerHost> host,
       mojo::PendingReceiver<blink::mojom::SharedWorker> receiver,
       mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker>
           browser_interface_broker,
       ukm::SourceId ukm_source_id,
-      const std::vector<std::string>& cors_exempt_header_list);
+      bool require_cross_site_request_for_cookies,
+      mojo::PendingReceiver<blink::mojom::ReportingObserver>
+          coep_reporting_observer,
+      mojo::PendingReceiver<blink::mojom::ReportingObserver>
+          dip_reporting_observer,
+      const std::vector<std::string>& cors_exempt_header_list,
+      bool cross_origin_isolated);
+
+  EmbeddedSharedWorkerStub(const EmbeddedSharedWorkerStub&) = delete;
+  EmbeddedSharedWorkerStub& operator=(const EmbeddedSharedWorkerStub&) = delete;
+
   ~EmbeddedSharedWorkerStub() override;
 
   // blink::WebSharedWorkerClient implementation.
@@ -92,13 +105,16 @@ class EmbeddedSharedWorkerStub : public blink::WebSharedWorkerClient,
   void Connect(int connection_request_id,
                blink::MessagePortDescriptor port) override;
   void Terminate() override;
+  void Freeze() override;
+  void Resume() override;
 
   scoped_refptr<blink::WebWorkerFetchContext> CreateWorkerFetchContext(
-      const GURL& url,
+      const blink::StorageKey& constructor_key,
       const blink::RendererPreferences& renderer_preferences,
       mojo::PendingReceiver<blink::mojom::RendererPreferenceWatcher>
           preference_watcher_receiver,
-      const std::vector<std::string>& cors_exempt_header_list);
+      const std::vector<std::string>& cors_exempt_header_list,
+      bool require_cross_site_request_for_cookies);
 
   mojo::Receiver<blink::mojom::SharedWorker> receiver_;
   std::unique_ptr<blink::WebSharedWorker> impl_;
@@ -114,8 +130,6 @@ class EmbeddedSharedWorkerStub : public blink::WebSharedWorkerClient,
   // used by this worker (typically the network service).
   mojo::Remote<network::mojom::URLLoaderFactory>
       default_factory_disconnect_handler_holder_;
-
-  DISALLOW_COPY_AND_ASSIGN(EmbeddedSharedWorkerStub);
 };
 
 }  // namespace content

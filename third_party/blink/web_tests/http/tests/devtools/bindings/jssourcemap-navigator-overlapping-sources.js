@@ -1,14 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-(async function() {
-  TestRunner.addResult(`Verify that JavaScript SourceMap handle different sourcemaps with overlapping sources.`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadTestModule('bindings_test_runner');
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {BindingsTestRunner} from 'bindings_test_runner';
 
-  var sourcesNavigator = new Sources.NetworkNavigatorView();
-  sourcesNavigator.show(UI.inspectorView.element);
+import * as Sources from 'devtools/panels/sources/sources.js';
+import * as UI from 'devtools/ui/legacy/legacy.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
+
+(async function () {
+  TestRunner.addResult(`Verify that JavaScript SourceMap handle different sourcemaps with overlapping sources.`);
+
+  var sourcesNavigator = new Sources.SourcesNavigator.NetworkNavigatorView(Main.MainImpl.MainImpl.universeForTest.networkProjectManager);
+  sourcesNavigator.show(UI.InspectorView.InspectorView.instance().element);
 
   TestRunner.markStep('dumpInitialNavigator');
   SourcesTestRunner.dumpNavigatorView(sourcesNavigator, false);
@@ -36,14 +42,17 @@
 
   TestRunner.markStep('detachAnotherFrame1');
   await BindingsTestRunner.detachFrame('anotherFrame1', '_test_detach-anotherFrame1.js');
+  await BindingsTestRunner.GC();
   SourcesTestRunner.dumpNavigatorView(sourcesNavigator, false);
 
   TestRunner.markStep('detachFrame2');
   await BindingsTestRunner.detachFrame('frame2', '_test_detachFrame2.js');
+  await BindingsTestRunner.GC();
   SourcesTestRunner.dumpNavigatorView(sourcesNavigator, false);
 
   TestRunner.markStep('detachFrame1');
   await BindingsTestRunner.detachFrame('frame1', '_test_detachFrame1.js');
+  await BindingsTestRunner.GC();
   SourcesTestRunner.dumpNavigatorView(sourcesNavigator, false);
 
   TestRunner.completeTest();

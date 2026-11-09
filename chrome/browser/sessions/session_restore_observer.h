@@ -1,13 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SESSIONS_SESSION_RESTORE_OBSERVER_H_
 #define CHROME_BROWSER_SESSIONS_SESSION_RESTORE_OBSERVER_H_
 
-namespace content {
-class WebContents;
-}
+#include <vector>
+
+class Profile;
+namespace sessions {
+struct SessionWindow;
+}  // namespace sessions
 
 // Observer of events during session restore. This observer does not cover
 // SessionRestoreImpl::RestoreForeignTab() which restores a single foreign tab.
@@ -27,9 +30,27 @@ class SessionRestoreObserver {
   // multiple concurrent session restores (on all profiles) occur.
   virtual void OnSessionRestoreFinishedLoadingTabs() {}
 
-  // OnWillRestoreTab() is called right after a tab is created by session
-  // restore.
-  virtual void OnWillRestoreTab(content::WebContents* web_contents) {}
+  // OnGotSession() is called right after windows are read from the last session
+  // restore file. If windows are read by AppSessionService for app windows,
+  // `for_app` is true. Otherwise, `for_app` is false. This function is used
+  // for debug only.
+  virtual void OnGotSession(
+      Profile* profile,
+      bool for_app,
+      const std::vector<const sessions::SessionWindow*>& windows) {}
+
+  // OnProfileSessionRestored() is called when a session restore for `profile`
+  // finishes (either after creating the restored windows and starting tab
+  // loading, or when cancelled), reporting how many normal and app windows were
+  // restored. Both counts are 0 if there was nothing to restore or if the
+  // restore was cancelled. At the point this is called, SessionRestore no
+  // longer reports `profile` as restoring, though concurrent restores of other
+  // profiles may still be in flight (see
+  // SessionRestore::IsAnySessionCurrentlyRestoring()). Restores of a session
+  // from another device do not call this.
+  virtual void OnProfileSessionRestored(Profile* profile,
+                                        int normal_windows,
+                                        int app_windows) {}
 };
 
 #endif  // CHROME_BROWSER_SESSIONS_SESSION_RESTORE_OBSERVER_H_

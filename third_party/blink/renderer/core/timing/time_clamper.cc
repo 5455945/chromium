@@ -1,13 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/timing/time_clamper.h"
 
+#include <cmath>
+
 #include "base/bit_cast.h"
 #include "base/rand_util.h"
-
-#include <cmath>
 
 namespace blink {
 
@@ -28,7 +28,8 @@ base::TimeDelta TimeClamper::ClampTimeResolution(
   // that.
   if (time_microseconds < 0) {
     was_negative = true;
-    time_microseconds = -time_microseconds;
+    time_microseconds =
+        -std::max(-std::numeric_limits<int64_t>::max(), time_microseconds);
   }
 
   // Split the time_microseconds to lower and upper digits to prevent uniformity
@@ -53,16 +54,20 @@ base::TimeDelta TimeClamper::ClampTimeResolution(
   // As such it remains a double, in order to guarantee that distribution,
   // and the clamping's uniformity.
   double tick_threshold = ThresholdFor(clamped_time, resolution);
-  if (time_lower_digits >= tick_threshold)
+  if (time_lower_digits >= tick_threshold) {
     clamped_time += resolution;
+  }
 
-  // Add back the upper digits portion.
+  // Add back the upper digits portion while avoiding signed integer overflow.
+  time_upper_digits = std::min(
+      time_upper_digits, std::numeric_limits<int64_t>::max() - clamped_time);
   clamped_time += time_upper_digits;
 
   // Flip the number back to being negative if it started that way.
-  if (was_negative)
+  if (was_negative) {
     clamped_time = -clamped_time;
-  return base::TimeDelta::FromMicroseconds(clamped_time);
+  }
+  return base::Microseconds(clamped_time);
 }
 
 inline double TimeClamper::ThresholdFor(int64_t clamped_time,
@@ -77,7 +82,7 @@ inline double TimeClamper::ToDouble(uint64_t value) {
   static const uint64_t kExponentBits = uint64_t{0x3FF0000000000000};
   static const uint64_t kMantissaMask = uint64_t{0x000FFFFFFFFFFFFF};
   uint64_t random = (value & kMantissaMask) | kExponentBits;
-  return bit_cast<double>(random) - 1;
+  return base::bit_cast<double>(random) - 1;
 }
 
 // static

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,77 +9,63 @@ import android.net.Uri;
 
 import org.chromium.base.Log;
 import org.chromium.base.PackageManagerUtils;
-import org.chromium.chrome.browser.ChromeApplicationImpl;
-import org.chromium.chrome.browser.browserservices.BrowserServicesMetrics;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.embedder_support.util.Origin;
-
-import javax.inject.Inject;
-import javax.inject.Singleton;
 
 /**
  * This class updates the permission for an Origin based on the permission that the linked TWA has
  * in Android. It also reverts the permission back to that the Origin had before a TWA was installed
  * in the case of TWA uninstallation.
  */
-@Singleton
+@NullMarked
 public class PermissionUpdater {
-    private static final String TAG = "TWAPermission";
+    private static final String TAG = "PermissionUpdater";
 
-    private final TrustedWebActivityPermissionManager mPermissionManager;
-
-    private final NotificationPermissionUpdater mNotificationPermissionUpdater;
-    private final LocationPermissionUpdater mLocationPermissionUpdater;
-
-    @Inject
-    public PermissionUpdater(TrustedWebActivityPermissionManager permissionManager,
-            NotificationPermissionUpdater notificationPermissionUpdater,
-            LocationPermissionUpdater locationPermissionUpdater) {
-        mPermissionManager = permissionManager;
-        mNotificationPermissionUpdater = notificationPermissionUpdater;
-        mLocationPermissionUpdater = locationPermissionUpdater;
-    }
-
-    public static PermissionUpdater get() {
-        return ChromeApplicationImpl.getComponent().resolveTwaPermissionUpdater();
-    }
+    private PermissionUpdater() {}
 
     /**
      * To be called when an origin is verified with a package. It add the delegate app and update
      * the Notification and Location delegation state for that origin if the package handles
      * browsable intents for the origin; otherwise, it does nothing.
      */
-    public void onOriginVerified(Origin origin, String packageName) {
+    public static void onOriginVerified(Origin origin, String url, String packageName) {
         // If the client doesn't handle browsable Intents for the URL, we don't do anything special
         // for the origin.
-        if (!appHandlesBrowsableIntent(packageName, origin.uri())) {
+        if (!appHandlesBrowsableIntent(packageName, Uri.parse(url))) {
             Log.d(TAG, "Package does not handle Browsable Intents for the origin.");
             return;
         }
 
-        mPermissionManager.addDelegateApp(origin, packageName);
+        InstalledWebappPermissionManager.addDelegateApp(origin, packageName);
 
-        mNotificationPermissionUpdater.onOriginVerified(origin, packageName);
+        NotificationPermissionUpdater.onOriginVerified(origin, url, packageName);
     }
 
-    public void onClientAppUninstalled(Origin origin) {
-        mNotificationPermissionUpdater.onClientAppUninstalled(origin);
-        mLocationPermissionUpdater.onClientAppUninstalled(origin);
+    public static void onWebApkLaunch(Origin origin, String packageName) {
+        NotificationPermissionUpdater.onWebApkLaunch(origin, packageName);
     }
 
-    private boolean appHandlesBrowsableIntent(String packageName, Uri uri) {
+    public static void onClientAppUninstalled(Origin origin) {
+        NotificationPermissionUpdater.onClientAppUninstalled(origin);
+        LocationPermissionUpdater.onClientAppUninstalled(origin);
+    }
+
+    private static boolean appHandlesBrowsableIntent(String packageName, Uri uri) {
         Intent browsableIntent = new Intent();
         browsableIntent.setPackage(packageName);
         browsableIntent.setData(uri);
         browsableIntent.setAction(Intent.ACTION_VIEW);
         browsableIntent.addCategory(Intent.CATEGORY_BROWSABLE);
 
-        try (BrowserServicesMetrics.TimingMetric unused =
-                        BrowserServicesMetrics.getBrowsableIntentResolutionTimingContext()) {
-            return PackageManagerUtils.resolveActivity(browsableIntent, 0) != null;
-        }
+        return PackageManagerUtils.resolveActivity(browsableIntent, 0) != null;
     }
 
-    void getLocationPermission(Origin origin, long callback) {
-        mLocationPermissionUpdater.checkPermission(origin, callback);
+    static void getLocationPermission(Origin origin, String lastCommittedUrl, long callback) {
+        LocationPermissionUpdater.checkPermission(origin, lastCommittedUrl, callback);
+    }
+
+    static void requestNotificationPermission(
+            Origin origin, String lastCommittedUrl, long callback) {
+        NotificationPermissionUpdater.requestPermission(origin, lastCommittedUrl, callback);
     }
 }

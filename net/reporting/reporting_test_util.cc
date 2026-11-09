@@ -1,23 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/reporting/reporting_test_util.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/timer/mock_timer.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/isolation_info.h"
+#include "net/base/network_anonymization_key.h"
 #include "net/reporting/reporting_cache.h"
 #include "net/reporting/reporting_context.h"
 #include "net/reporting/reporting_delegate.h"
@@ -38,13 +41,13 @@ class PendingUploadImpl : public TestReportingUploader::PendingUpload {
  public:
   PendingUploadImpl(const url::Origin& report_origin,
                     const GURL& url,
-                    const NetworkIsolationKey& network_isolation_key,
+                    const IsolationInfo& isolation_info,
                     const std::string& json,
                     ReportingUploader::UploadCallback callback,
                     base::OnceCallback<void(PendingUpload*)> complete_callback)
       : report_origin_(report_origin),
         url_(url),
-        network_isolation_key_(network_isolation_key),
+        isolation_info_(isolation_info),
         json_(json),
         callback_(std::move(callback)),
         complete_callback_(std::move(complete_callback)) {}
@@ -55,8 +58,8 @@ class PendingUploadImpl : public TestReportingUploader::PendingUpload {
   const url::Origin& report_origin() const override { return report_origin_; }
   const GURL& url() const override { return url_; }
   const std::string& json() const override { return json_; }
-  std::unique_ptr<base::Value> GetValue() const override {
-    return base::JSONReader::ReadDeprecated(json_);
+  std::optional<base::Value> GetValue() const override {
+    return base::JSONReader::Read(json_, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   }
 
   void Complete(ReportingUploader::Outcome outcome) override {
@@ -68,7 +71,7 @@ class PendingUploadImpl : public TestReportingUploader::PendingUpload {
  private:
   url::Origin report_origin_;
   GURL url_;
-  NetworkIsolationKey network_isolation_key_;
+  IsolationInfo isolation_info_;
   std::string json_;
   ReportingUploader::UploadCallback callback_;
   base::OnceCallback<void(PendingUpload*)> complete_callback_;
@@ -103,15 +106,15 @@ TestReportingUploader::PendingUpload::PendingUpload() = default;
 TestReportingUploader::TestReportingUploader() = default;
 TestReportingUploader::~TestReportingUploader() = default;
 
-void TestReportingUploader::StartUpload(
-    const url::Origin& report_origin,
-    const GURL& url,
-    const NetworkIsolationKey& network_isolation_key,
-    const std::string& json,
-    int max_depth,
-    UploadCallback callback) {
+void TestReportingUploader::StartUpload(const url::Origin& report_origin,
+                                        const GURL& url,
+                                        const IsolationInfo& isolation_info,
+                                        const std::string& json,
+                                        int max_depth,
+                                        bool eligible_for_credentials,
+                                        UploadCallback callback) {
   pending_uploads_.push_back(std::make_unique<PendingUploadImpl>(
-      report_origin, url, network_isolation_key, json, std::move(callback),
+      report_origin, url, isolation_info, json, std::move(callback),
       base::BindOnce(&ErasePendingUpload, &pending_uploads_)));
 }
 
@@ -176,12 +179,13 @@ TestReportingContext::TestReportingContext(
                        TestReportingRandIntCallback(),
                        std::make_unique<TestReportingUploader>(),
                        std::make_unique<TestReportingDelegate>(),
-                       store),
-      delivery_timer_(new base::MockOneShotTimer()),
-      garbage_collection_timer_(new base::MockOneShotTimer()) {
-  garbage_collector()->SetTimerForTesting(
-      base::WrapUnique(garbage_collection_timer_));
-  delivery_agent()->SetTimerForTesting(base::WrapUnique(delivery_timer_));
+                       store) {
+  auto delivery_timer = std::make_unique<base::MockOneShotTimer>();
+  delivery_timer_ = delivery_timer.get();
+  auto garbage_collection_timer = std::make_unique<base::MockOneShotTimer>();
+  garbage_collection_timer_ = garbage_collection_timer.get();
+  garbage_collector()->SetTimerForTesting(std::move(garbage_collection_timer));
+  delivery_agent()->SetTimerForTesting(std::move(delivery_timer));
 }
 
 TestReportingContext::~TestReportingContext() {
@@ -189,7 +193,7 @@ TestReportingContext::~TestReportingContext() {
   garbage_collection_timer_ = nullptr;
 }
 
-ReportingTestBase::ReportingTestBase() : store_(nullptr) {
+ReportingTestBase::ReportingTestBase() {
   // For tests, disable jitter.
   ReportingPolicy policy;
   policy.endpoint_backoff_policy.jitter_factor = 0.0;
@@ -204,9 +208,13 @@ void ReportingTestBase::UsePolicy(const ReportingPolicy& new_policy) {
 }
 
 void ReportingTestBase::UseStore(
-    ReportingCache::PersistentReportingStore* store) {
-  store_ = store;
-  CreateContext(policy(), clock()->Now(), tick_clock()->NowTicks());
+    std::unique_ptr<ReportingCache::PersistentReportingStore> store) {
+  // Must destroy old context, if there is one, before destroying old store.
+  // Need to copy policy first, since the context owns it.
+  ReportingPolicy policy_copy = policy();
+  context_.reset();
+  store_ = std::move(store);
+  CreateContext(policy_copy, clock()->Now(), tick_clock()->NowTicks());
 }
 
 const ReportingEndpoint ReportingTestBase::FindEndpointInCache(
@@ -228,6 +236,21 @@ bool ReportingTestBase::SetEndpointInCache(
   return endpoint.is_valid();
 }
 
+void ReportingTestBase::SetV1EndpointInCache(
+    const ReportingEndpointGroupKey& group_key,
+    const base::UnguessableToken& reporting_source,
+    const IsolationInfo& isolation_info,
+    const GURL& url) {
+  cache()->SetV1EndpointForTesting(group_key, reporting_source, isolation_info,
+                                   url);
+}
+
+void ReportingTestBase::SetEnterpriseEndpointInCache(
+    const ReportingEndpointGroupKey& group_key,
+    const GURL& url) {
+  cache()->SetEnterpriseEndpointForTesting(group_key, url);
+}
+
 bool ReportingTestBase::EndpointExistsInCache(
     const ReportingEndpointGroupKey& group_key,
     const GURL& url) {
@@ -238,7 +261,13 @@ bool ReportingTestBase::EndpointExistsInCache(
 ReportingEndpoint::Statistics ReportingTestBase::GetEndpointStatistics(
     const ReportingEndpointGroupKey& group_key,
     const GURL& url) {
-  ReportingEndpoint endpoint = cache()->GetEndpointForTesting(group_key, url);
+  ReportingEndpoint endpoint;
+  if (group_key.IsDocumentEndpoint()) {
+    endpoint = cache()->GetV1EndpointForTesting(
+        group_key.reporting_source.value(), group_key.group_name);
+  } else {
+    endpoint = cache()->GetEndpointForTesting(group_key, url);
+  }
   if (endpoint)
     return endpoint.stats;
   return ReportingEndpoint::Statistics();
@@ -272,13 +301,13 @@ void ReportingTestBase::CreateContext(const ReportingPolicy& policy,
                                       base::Time now,
                                       base::TimeTicks now_ticks) {
   context_ = std::make_unique<TestReportingContext>(&clock_, &tick_clock_,
-                                                    policy, store_);
+                                                    policy, store_.get());
   clock()->SetNow(now);
   tick_clock()->SetNowTicks(now_ticks);
 }
 
 base::TimeTicks ReportingTestBase::yesterday() {
-  return tick_clock()->NowTicks() - base::TimeDelta::FromDays(1);
+  return tick_clock()->NowTicks() - base::Days(1);
 }
 
 base::TimeTicks ReportingTestBase::now() {
@@ -286,7 +315,7 @@ base::TimeTicks ReportingTestBase::now() {
 }
 
 base::TimeTicks ReportingTestBase::tomorrow() {
-  return tick_clock()->NowTicks() + base::TimeDelta::FromDays(1);
+  return tick_clock()->NowTicks() + base::Days(1);
 }
 
 TestReportingService::Report::Report() = default;
@@ -295,14 +324,14 @@ TestReportingService::Report::Report(Report&& other) = default;
 
 TestReportingService::Report::Report(
     const GURL& url,
-    const NetworkIsolationKey& network_isolation_key,
+    const NetworkAnonymizationKey& network_anonymization_key,
     const std::string& user_agent,
     const std::string& group,
     const std::string& type,
     std::unique_ptr<const base::Value> body,
     int depth)
     : url(url),
-      network_isolation_key(network_isolation_key),
+      network_anonymization_key(network_anonymization_key),
       user_agent(user_agent),
       group(group),
       type(type),
@@ -317,26 +346,29 @@ TestReportingService::~TestReportingService() = default;
 
 void TestReportingService::QueueReport(
     const GURL& url,
-    const NetworkIsolationKey& network_isolation_key,
+    const std::optional<base::UnguessableToken>& reporting_source,
+    const NetworkAnonymizationKey& network_anonymization_key,
     const std::string& user_agent,
     const std::string& group,
     const std::string& type,
-    std::unique_ptr<const base::Value> body,
-    int depth) {
-  reports_.emplace_back(Report(url, network_isolation_key, user_agent, group,
-                               type, std::move(body), depth));
+    base::DictValue body,
+    int depth,
+    ReportingTargetType target_type) {
+  reports_.emplace_back(
+      Report(url, network_anonymization_key, user_agent, group, type,
+             std::make_unique<base::Value>(std::move(body)), depth));
 }
 
 void TestReportingService::ProcessReportToHeader(
-    const GURL& url,
-    const NetworkIsolationKey& network_isolation_key,
+    const url::Origin& origin,
+    const NetworkAnonymizationKey& network_anonymization_key,
     const std::string& header_value) {
   NOTREACHED();
 }
 
 void TestReportingService::RemoveBrowsingData(
     uint64_t data_type_mask,
-    const base::RepeatingCallback<bool(const GURL&)>& origin_filter) {
+    const base::RepeatingCallback<bool(const url::Origin&)>& origin_filter) {
   NOTREACHED();
 }
 
@@ -348,12 +380,30 @@ void TestReportingService::OnShutdown() {}
 
 const ReportingPolicy& TestReportingService::GetPolicy() const {
   NOTREACHED();
-  return dummy_policy_;
 }
 
 ReportingContext* TestReportingService::GetContextForTesting() const {
   NOTREACHED();
-  return nullptr;
+}
+
+std::vector<raw_ptr<const ReportingReport, VectorExperimental>>
+TestReportingService::GetReports() const {
+  NOTREACHED();
+}
+
+base::flat_map<url::Origin, std::vector<ReportingEndpoint>>
+TestReportingService::GetV1ReportingEndpointsByOrigin() const {
+  NOTREACHED();
+}
+
+void TestReportingService::AddReportingCacheObserver(
+    ReportingCacheObserver* observer) {
+  NOTREACHED();
+}
+
+void TestReportingService::RemoveReportingCacheObserver(
+    ReportingCacheObserver* observer) {
+  NOTREACHED();
 }
 
 }  // namespace net

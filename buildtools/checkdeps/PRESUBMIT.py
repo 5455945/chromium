@@ -1,20 +1,25 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-"""Presubmit script for checkdeps tool.
-"""
-
-USE_PYTHON3 = True
+"""Presubmit script for checkdeps tool."""
 
 
 def CheckChange(input_api, output_api):
-  results = []
-  results.extend(input_api.canned_checks.RunUnitTests(
-      input_api, output_api,
-      [input_api.os_path.join(input_api.PresubmitLocalPath(),
-                              'checkdeps_test.py')]))
-  return results
+  if not (
+    input_api.HasAffectedFiles(extensions='.py')
+    or input_api.HasAffectedFiles(path='testdata')
+  ):
+    return []
+  return input_api.canned_checks.RunUnitTests(
+    input_api,
+    output_api,
+    [
+      input_api.os_path.join(
+        input_api.PresubmitLocalPath(), 'checkdeps_test.py'
+      )
+    ],
+  )
 
 
 # Mandatory entrypoint.

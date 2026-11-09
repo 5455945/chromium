@@ -1,10 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/trace_event/memory_allocator_dump.h"
 
 #include <stdint.h>
+
+#include <memory>
 
 #include "base/format_macros.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
@@ -16,13 +18,12 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using testing::ByRef;
 using testing::ElementsAre;
 using testing::Eq;
-using testing::ByRef;
 using testing::IsEmpty;
 
-namespace base {
-namespace trace_event {
+namespace base::trace_event {
 
 namespace {
 
@@ -74,14 +75,14 @@ void CheckScalar(const MemoryAllocatorDump* dump,
 }  // namespace
 
 TEST(MemoryAllocatorDumpTest, GuidGeneration) {
-  std::unique_ptr<MemoryAllocatorDump> mad(new MemoryAllocatorDump(
-      "foo", MemoryDumpLevelOfDetail::FIRST, MemoryAllocatorDumpGuid(0x42u)));
+  auto mad = std::make_unique<MemoryAllocatorDump>(
+      "foo", MemoryDumpLevelOfDetail::kFirst, MemoryAllocatorDumpGuid(0x42u));
   ASSERT_EQ("42", mad->guid().ToString());
 }
 
 TEST(MemoryAllocatorDumpTest, DumpIntoProcessMemoryDump) {
   FakeMemoryAllocatorDumpProvider fmadp;
-  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::DETAILED};
+  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::kDetailed};
   ProcessMemoryDump pmd(dump_args);
 
   fmadp.OnMemoryDump(dump_args, &pmd);
@@ -115,12 +116,12 @@ TEST(MemoryAllocatorDumpTest, DumpIntoProcessMemoryDump) {
   EXPECT_THAT(empty_sub_heap->entries(), IsEmpty());
 
   // Check that calling serialization routines doesn't cause a crash.
-  std::unique_ptr<TracedValue> traced_value(new TracedValue);
+  auto traced_value = std::make_unique<TracedValue>();
   pmd.SerializeAllocatorDumpsInto(traced_value.get());
 }
 
 TEST(MemoryAllocatorDumpTest, GetSize) {
-  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::DETAILED};
+  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::kDetailed};
   ProcessMemoryDump pmd(dump_args);
   MemoryAllocatorDump* dump = pmd.CreateAllocatorDump("allocator_for_size");
   dump->AddScalar(MemoryAllocatorDump::kNameSize,
@@ -130,7 +131,7 @@ TEST(MemoryAllocatorDumpTest, GetSize) {
 }
 
 TEST(MemoryAllocatorDumpTest, ReadValues) {
-  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::DETAILED};
+  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::kDetailed};
   ProcessMemoryDump pmd(dump_args);
   MemoryAllocatorDump* dump = pmd.CreateAllocatorDump("allocator_for_size");
   dump->AddScalar("one", "byte", 1);
@@ -150,11 +151,11 @@ TEST(MemoryAllocatorDumpTest, MovingAnEntry) {
 }
 
 // DEATH tests are not supported in Android/iOS/Fuchsia.
-#if !defined(NDEBUG) && !defined(OS_ANDROID) && !defined(OS_IOS) && \
-    !defined(OS_FUCHSIA)
+#if !defined(NDEBUG) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS) && \
+    !BUILDFLAG(IS_FUCHSIA)
 TEST(MemoryAllocatorDumpTest, ForbidDuplicatesDeathTest) {
   FakeMemoryAllocatorDumpProvider fmadp;
-  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::DETAILED};
+  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::kDetailed};
   ProcessMemoryDump pmd(dump_args);
   pmd.CreateAllocatorDump("foo_allocator");
   pmd.CreateAllocatorDump("bar_allocator/heap");
@@ -164,12 +165,11 @@ TEST(MemoryAllocatorDumpTest, ForbidDuplicatesDeathTest) {
 }
 
 TEST(MemoryAllocatorDumpTest, ForbidStringsInBackgroundModeDeathTest) {
-  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::BACKGROUND};
+  MemoryDumpArgs dump_args = {MemoryDumpLevelOfDetail::kBackground};
   ProcessMemoryDump pmd(dump_args);
   MemoryAllocatorDump* dump = pmd.CreateAllocatorDump("malloc");
   ASSERT_DEATH(dump->AddString("foo", "bar", "baz"), "");
 }
 #endif
 
-}  // namespace trace_event
-}  // namespace base
+}  // namespace base::trace_event

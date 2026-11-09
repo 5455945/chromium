@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -61,6 +61,11 @@ const ExpectedCacheControl kExpectedCacheControlForBypassingReload = {
 
 // Tests end to end behaviors between Blink and content around reload variants.
 class ReloadCacheControlBrowserTest : public ContentBrowserTest {
+ public:
+  ReloadCacheControlBrowserTest(const ReloadCacheControlBrowserTest&) = delete;
+  ReloadCacheControlBrowserTest& operator=(
+      const ReloadCacheControlBrowserTest&) = delete;
+
  protected:
   ReloadCacheControlBrowserTest() {}
   ~ReloadCacheControlBrowserTest() override = default;
@@ -86,10 +91,11 @@ class ReloadCacheControlBrowserTest : public ContentBrowserTest {
     base::AutoLock lock(request_log_lock_);
     EXPECT_EQ(4u, request_log_.size());
     for (const auto& log : request_log_) {
-      if (log.relative_url == kReloadTestPath)
+      if (log.relative_url == kReloadTestPath) {
         EXPECT_EQ(expectation.top_main, log.cache_control);
-      else
+      } else {
         EXPECT_EQ(expectation.others, log.cache_control);
+      }
     }
     request_log_.clear();
   }
@@ -108,8 +114,6 @@ class ReloadCacheControlBrowserTest : public ContentBrowserTest {
     base::AutoLock lock(request_log_lock_);
     request_log_.push_back(log);
   }
-
-  DISALLOW_COPY_AND_ASSIGN(ReloadCacheControlBrowserTest);
 };
 
 // Test if reload issues requests with proper cache control flags.
@@ -159,19 +163,20 @@ IN_PROC_BROWSER_TEST_F(ReloadCacheControlBrowserTest, NavigateToSame) {
   EXPECT_TRUE(NavigateToURL(shell(), url));
   CheckCacheControl(kExpectedCacheControlForNormalLoad);
 
-  // The second navigation is the same page navigation. This should be handled
-  // as a reload, revalidating the main resource, but following cache protocols
-  // for others.
+  // The second navigation is the same page navigation from address bar. This
+  // should be handled as a replacement navigation, with normal load cache
+  // protocols. See https://github.com/whatwg/html/issues/10597 for spec
+  // discussion.
   EXPECT_TRUE(NavigateToURL(shell(), url));
-  CheckCacheControl(kExpectedCacheControlForReload);
+  CheckCacheControl(kExpectedCacheControlForNormalLoad);
 
   shell()->ShowDevTools();
   EXPECT_TRUE(NavigateToURL(shell(), url));
-  CheckCacheControl(kExpectedCacheControlForReload);
+  CheckCacheControl(kExpectedCacheControlForNormalLoad);
 
   shell()->CloseDevTools();
   EXPECT_TRUE(NavigateToURL(shell(), url));
-  CheckCacheControl(kExpectedCacheControlForReload);
+  CheckCacheControl(kExpectedCacheControlForNormalLoad);
 }
 
 // Reloading with ReloadType::NORMAL should respect service workers.

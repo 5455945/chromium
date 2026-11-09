@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,20 @@
 #include <stdint.h>
 
 #include <string>
-#include <unordered_set>
 
-#include "base/macros.h"
 #include "media/base/content_decryption_module.h"
 #include "media/base/media_export.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace media {
 
 class MEDIA_EXPORT CdmSessionTracker {
  public:
   CdmSessionTracker();
+
+  CdmSessionTracker(const CdmSessionTracker&) = delete;
+  CdmSessionTracker& operator=(const CdmSessionTracker&) = delete;
+
   ~CdmSessionTracker();
 
   // Adds `session_id` to the list of sessions being tracked.
@@ -36,9 +39,7 @@ class MEDIA_EXPORT CdmSessionTracker {
   bool HasRemainingSessions() const;
 
  private:
-  std::unordered_set<std::string> session_ids_;
-
-  DISALLOW_COPY_AND_ASSIGN(CdmSessionTracker);
+  absl::flat_hash_set<std::string> session_ids_;
 };
 
 }  // namespace media

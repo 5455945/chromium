@@ -1,15 +1,18 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/android/keystore.h"
 
+#include <string_view>
 #include <vector>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/check.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "net/net_jni_headers/AndroidKeyStore_jni.h"
 
 using base::android::AttachCurrentThread;
@@ -21,8 +24,7 @@ using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using base::android::ToJavaByteArray;
 
-namespace net {
-namespace android {
+namespace net::android {
 
 std::string GetPrivateKeyClassName(const JavaRef<jobject>& key) {
   JNIEnv* env = AttachCurrentThread();
@@ -32,33 +34,33 @@ std::string GetPrivateKeyClassName(const JavaRef<jobject>& key) {
 }
 
 bool PrivateKeySupportsSignature(const base::android::JavaRef<jobject>& key,
-                                 base::StringPiece algorithm) {
+                                 std::string_view algorithm) {
   JNIEnv* env = AttachCurrentThread();
 
   ScopedJavaLocalRef<jstring> algorithm_ref =
       ConvertUTF8ToJavaString(env, algorithm);
   DCHECK(!algorithm_ref.is_null());
 
-  jboolean result =
+  bool result =
       Java_AndroidKeyStore_privateKeySupportsSignature(env, key, algorithm_ref);
   return !HasException(env) && result;
 }
 
 bool PrivateKeySupportsCipher(const base::android::JavaRef<jobject>& key,
-                              base::StringPiece algorithm) {
+                              std::string_view algorithm) {
   JNIEnv* env = AttachCurrentThread();
 
   ScopedJavaLocalRef<jstring> algorithm_ref =
       ConvertUTF8ToJavaString(env, algorithm);
   DCHECK(!algorithm_ref.is_null());
 
-  jboolean result =
+  bool result =
       Java_AndroidKeyStore_privateKeySupportsCipher(env, key, algorithm_ref);
   return !HasException(env) && result;
 }
 
 bool SignWithPrivateKey(const JavaRef<jobject>& private_key_ref,
-                        base::StringPiece algorithm,
+                        std::string_view algorithm,
                         base::span<const uint8_t> input,
                         std::vector<uint8_t>* signature) {
   JNIEnv* env = AttachCurrentThread();
@@ -68,8 +70,7 @@ bool SignWithPrivateKey(const JavaRef<jobject>& private_key_ref,
   DCHECK(!algorithm_ref.is_null());
 
   // Convert message to byte[] array.
-  ScopedJavaLocalRef<jbyteArray> input_ref =
-      ToJavaByteArray(env, input.data(), input.size());
+  ScopedJavaLocalRef<jbyteArray> input_ref = ToJavaByteArray(env, input);
   DCHECK(!input_ref.is_null());
 
   // Invoke platform API
@@ -85,7 +86,7 @@ bool SignWithPrivateKey(const JavaRef<jobject>& private_key_ref,
 }
 
 bool EncryptWithPrivateKey(const JavaRef<jobject>& private_key_ref,
-                           base::StringPiece algorithm,
+                           std::string_view algorithm,
                            base::span<const uint8_t> input,
                            std::vector<uint8_t>* ciphertext) {
   JNIEnv* env = AttachCurrentThread();
@@ -95,8 +96,7 @@ bool EncryptWithPrivateKey(const JavaRef<jobject>& private_key_ref,
   DCHECK(!algorithm_ref.is_null());
 
   // Convert message to byte[] array.
-  ScopedJavaLocalRef<jbyteArray> input_ref =
-      ToJavaByteArray(env, input.data(), input.size());
+  ScopedJavaLocalRef<jbyteArray> input_ref = ToJavaByteArray(env, input);
   DCHECK(!input_ref.is_null());
 
   // Invoke platform API
@@ -111,5 +111,6 @@ bool EncryptWithPrivateKey(const JavaRef<jobject>& private_key_ref,
   return true;
 }
 
-}  // namespace android
-}  // namespace net
+}  // namespace net::android
+
+DEFINE_JNI(AndroidKeyStore)

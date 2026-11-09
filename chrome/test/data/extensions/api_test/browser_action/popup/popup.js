@@ -1,11 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 function run_tests() {
-  // Compute the size of the popup.
-  var width = 0;
-  var height = 0;
+  // Compute the size of the popup, which will decrease each time.
+  let width = 1000;
+  let height = 1000;
   if (localStorage.height) {
     height = parseInt(localStorage.height);
   }
@@ -13,19 +13,20 @@ function run_tests() {
     width = parseInt(localStorage.width);
   }
 
-  // Set the div's size.
-  var test = document.getElementById("test");
-  test.style.width = width + "px";
-  test.style.height = height + "px";
-  chrome.test.log("height: " + test.offsetHeight);
-  chrome.test.log("width: " + test.offsetWidth);
+  // Write the new size for next time before generating the resize event.
+  const newWidth = width - 500;
+  const newHeight = height - 500;
+  localStorage.width = JSON.stringify(newWidth);
+  localStorage.height = JSON.stringify(newHeight);
 
-  height += 500;
-  width += 500;
-  localStorage.height = JSON.stringify(height);
-  localStorage.width = JSON.stringify(width);
+  // Set the div's size.
+  const test = document.getElementById('test');
+  test.style.width = `${width}px`;
+  test.style.height = `${height}px`;
+  chrome.test.log(`height: ${test.offsetHeight}`);
+  chrome.test.log(`width: ${test.offsetWidth}`);
 }
 
-window.addEventListener("load", function() {
-    window.setTimeout(run_tests, 0)
+window.addEventListener('load', function() {
+  window.setTimeout(run_tests, 0);
 }, false);

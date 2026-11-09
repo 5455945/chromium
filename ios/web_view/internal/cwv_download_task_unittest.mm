@@ -1,32 +1,26 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/web_view/internal/cwv_download_task_internal.h"
-
 #import <Foundation/Foundation.h>
 
-#include "base/bind.h"
-#include "base/files/file_path.h"
-#include "base/strings/sys_string_conversions.h"
-#include "base/strings/utf_string_conversions.h"
+#import "base/files/file_path.h"
+#import "base/functional/bind.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
-#include "base/test/task_environment.h"
+#import "base/test/task_environment.h"
 #import "ios/web/public/test/fakes/fake_download_task.h"
-#include "net/base/net_errors.h"
-#include "net/url_request/url_fetcher_response_writer.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#import "ios/web_view/internal/cwv_download_task_internal.h"
+#import "net/base/net_errors.h"
+#import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
-#include "testing/platform_test.h"
+#import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 
-using base::test::ios::WaitUntilConditionOrTimeout;
 using base::test::ios::kWaitForFileOperationTimeout;
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+using base::test::ios::WaitUntilConditionOrTimeout;
 
 namespace ios_web_view {
 
@@ -51,24 +45,11 @@ class CWVDownloadTaskTest : public PlatformTest {
   CWVDownloadTask* cwv_task_ = nil;
 
   // Waits until fake_internal_task_->Start() is called.
-  bool WaitUntilTaskStarts() WARN_UNUSED_RESULT {
+  [[nodiscard]] bool WaitUntilTaskStarts() {
     return WaitUntilConditionOrTimeout(kWaitForFileOperationTimeout, ^{
       task_environment_.RunUntilIdle();
       return fake_internal_task_->GetState() ==
              web::DownloadTask::State::kInProgress;
-    });
-  }
-
-  // Finishes the response writer and waits for its completion.
-  bool FinishResponseWriter() WARN_UNUSED_RESULT {
-    __block int error_code = net::ERR_IO_PENDING;
-    error_code = fake_internal_task_->GetResponseWriter()->Finish(
-        net::OK, base::BindOnce(^(int block_error_code) {
-          error_code = block_error_code;
-        }));
-    return WaitUntilConditionOrTimeout(kWaitForFileOperationTimeout, ^{
-      task_environment_.RunUntilIdle();
-      return error_code == net::OK;
     });
   }
 };
@@ -81,16 +62,11 @@ TEST_F(CWVDownloadTaskTest, SuccessfulFlow) {
   ASSERT_TRUE(WaitUntilTaskStarts());
   EXPECT_OCMOCK_VERIFY((id)mock_delegate_);
 
-  EXPECT_EQ(
-      base::FilePath(valid_local_file_path_),
-      fake_internal_task_->GetResponseWriter()->AsFileWriter()->file_path());
-
   OCMExpect([mock_delegate_ downloadTaskProgressDidChange:cwv_task_]);
   fake_internal_task_->SetPercentComplete(50);
   EXPECT_OCMOCK_VERIFY((id)mock_delegate_);
 
   OCMExpect([mock_delegate_ downloadTask:cwv_task_ didFinishWithError:nil]);
-  ASSERT_TRUE(FinishResponseWriter());
   fake_internal_task_->SetDone(true);
   EXPECT_OCMOCK_VERIFY((id)mock_delegate_);
 }
@@ -106,7 +82,6 @@ TEST_F(CWVDownloadTaskTest, FailedFlow) {
       didFinishWithError:[OCMArg checkWithBlock:^(NSError* error) {
         return error.code == CWVDownloadErrorFailed;
       }]]);
-  ASSERT_TRUE(FinishResponseWriter());
   fake_internal_task_->SetErrorCode(net::ERR_FAILED);
   fake_internal_task_->SetDone(true);
   EXPECT_OCMOCK_VERIFY((id)mock_delegate_);
@@ -124,7 +99,6 @@ TEST_F(CWVDownloadTaskTest, CancelledFlow) {
         return error.code == CWVDownloadErrorAborted;
       }]]);
 
-  ASSERT_TRUE(FinishResponseWriter());
   [cwv_task_ cancel];
   EXPECT_EQ(web::DownloadTask::State::kCancelled,
             fake_internal_task_->GetState());
@@ -149,11 +123,13 @@ TEST_F(CWVDownloadTaskTest, WriteFailure) {
   NSString* path =
       base::SysUTF8ToNSString(testing::TempDir() + "/non_existent_dir/foo.txt");
   [cwv_task_ startDownloadToLocalFileAtPath:path];
+  // Simulate behavior of a real web::DownloadTask which transitions to state
+  // net::ERR_ABORTED when a nonexistent directory is used as the path to write
+  // to
+  fake_internal_task_->SetErrorCode(net::ERR_ABORTED);
+  fake_internal_task_->SetDone(true);
 
-  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForFileOperationTimeout, ^{
-    task_environment_.RunUntilIdle();
-    return did_finish_called;
-  }));
+  EXPECT_TRUE(did_finish_called);
 }
 
 // Tests properties of CWVDownloadTask.
@@ -163,7 +139,8 @@ TEST_F(CWVDownloadTaskTest, Properties) {
               cwv_task_.originalURL);
   EXPECT_NSEQ(@"text/plain", cwv_task_.MIMEType);
 
-  fake_internal_task_->SetSuggestedFilename(u"foo.txt");
+  fake_internal_task_->SetGeneratedFileName(
+      base::FilePath(FILE_PATH_LITERAL("foo.txt")));
   EXPECT_NSEQ(@"foo.txt", cwv_task_.suggestedFileName);
 
   fake_internal_task_->SetTotalBytes(1024);

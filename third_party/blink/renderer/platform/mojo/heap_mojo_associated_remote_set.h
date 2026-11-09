@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 
 #include <utility>
 
+#include "base/gtest_prod_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "third_party/blink/renderer/platform/context_lifecycle_observer.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
 
@@ -77,6 +80,11 @@ class HeapMojoAssociatedRemoteSet {
  private:
   FRIEND_TEST_ALL_PREFIXES(HeapMojoAssociatedRemoteSetGCWithContextObserverTest,
                            NoClearOnConservativeGC);
+  FRIEND_TEST_ALL_PREFIXES(HeapMojoAssociatedRemoteSetGCWithContextObserverTest,
+                           ResetsOnGC);
+  FRIEND_TEST_ALL_PREFIXES(
+      HeapMojoAssociatedRemoteSetGCWithoutContextObserverTest,
+      ResetsOnGC);
 
   // Garbage collected wrapper class to add a prefinalizer.
   class Wrapper final : public GarbageCollected<Wrapper>,

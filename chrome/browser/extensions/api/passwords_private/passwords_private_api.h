@@ -1,106 +1,37 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_PASSWORDS_PRIVATE_PASSWORDS_PRIVATE_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_PASSWORDS_PRIVATE_PASSWORDS_PRIVATE_API_H_
 
+#include <optional>
 #include <string>
 
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
-#include "components/password_manager/core/browser/bulk_leak_check_service.h"
 #include "extensions/browser/extension_function.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace extensions {
 
-class PasswordsPrivateRecordPasswordsPageAccessInSettingsFunction
-    : public ExtensionFunction {
+class PasswordsPrivateChangeCredentialFunction : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION(
-      "passwordsPrivate.recordPasswordsPageAccessInSettings",
-      PASSWORDSPRIVATE_RECORDPASSWORDSPAGEACCESSINSETTINGS)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.changeCredential",
+                             PASSWORDSPRIVATE_CHANGECREDENTIAL)
 
  protected:
-  ~PasswordsPrivateRecordPasswordsPageAccessInSettingsFunction() override =
-      default;
+  ~PasswordsPrivateChangeCredentialFunction() override = default;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
 };
 
-class PasswordsPrivateChangeSavedPasswordFunction : public ExtensionFunction {
+class PasswordsPrivateRemoveCredentialFunction : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.changeSavedPassword",
-                             PASSWORDSPRIVATE_CHANGESAVEDPASSWORD)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.removeCredential",
+                             PASSWORDSPRIVATE_REMOVECREDENTIAL)
 
  protected:
-  ~PasswordsPrivateChangeSavedPasswordFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateRemoveSavedPasswordFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.removeSavedPassword",
-                             PASSWORDSPRIVATE_REMOVESAVEDPASSWORD)
-
- protected:
-  ~PasswordsPrivateRemoveSavedPasswordFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateRemoveSavedPasswordsFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.removeSavedPasswords",
-                             PASSWORDSPRIVATE_REMOVESAVEDPASSWORDS)
-
- protected:
-  ~PasswordsPrivateRemoveSavedPasswordsFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateRemovePasswordExceptionFunction
-    : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.removePasswordException",
-                             PASSWORDSPRIVATE_REMOVEPASSWORDEXCEPTION)
-
- protected:
-  ~PasswordsPrivateRemovePasswordExceptionFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateRemovePasswordExceptionsFunction
-    : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.removePasswordExceptions",
-                             PASSWORDSPRIVATE_REMOVEPASSWORDEXCEPTIONS)
-
- protected:
-  ~PasswordsPrivateRemovePasswordExceptionsFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateUndoRemoveSavedPasswordOrExceptionFunction
-    : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION(
-      "passwordsPrivate.undoRemoveSavedPasswordOrException",
-      PASSWORDSPRIVATE_UNDOREMOVESAVEDPASSWORDOREXCEPTION)
-
- protected:
-  ~PasswordsPrivateUndoRemoveSavedPasswordOrExceptionFunction() override =
-      default;
+  ~PasswordsPrivateRemoveCredentialFunction() override = default;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
@@ -119,7 +50,22 @@ class PasswordsPrivateRequestPlaintextPasswordFunction
   ResponseAction Run() override;
 
  private:
-  void GotPassword(absl::optional<std::u16string> password);
+  void GotPassword(std::optional<std::u16string> password);
+};
+
+class PasswordsPrivateRequestCredentialsDetailsFunction
+    : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.requestCredentialsDetails",
+                             PASSWORDSPRIVATE_REQUESTCREDENTIALSDETAILS)
+ protected:
+  ~PasswordsPrivateRequestCredentialsDetailsFunction() override = default;
+
+  // ExtensionFunction overrides.
+  ResponseAction Run() override;
+
+ private:
+  void GotPasswords(const PasswordsPrivateDelegate::UiEntries& entries);
 };
 
 class PasswordsPrivateGetSavedPasswordListFunction : public ExtensionFunction {
@@ -134,8 +80,19 @@ class PasswordsPrivateGetSavedPasswordListFunction : public ExtensionFunction {
   ResponseAction Run() override;
 
  private:
-  void GetList();
   void GotList(const PasswordsPrivateDelegate::UiEntries& entries);
+};
+
+class PasswordsPrivateGetCredentialGroupsFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.getCredentialGroups",
+                             PASSWORDSPRIVATE_GETCREDENTIALGROUPS)
+
+ protected:
+  ~PasswordsPrivateGetCredentialGroupsFunction() override = default;
+
+  // ExtensionFunction overrides.
+  ResponseAction Run() override;
 };
 
 class PasswordsPrivateGetPasswordExceptionListFunction
@@ -151,18 +108,32 @@ class PasswordsPrivateGetPasswordExceptionListFunction
   ResponseAction Run() override;
 
  private:
-  void GetList();
   void GotList(const PasswordsPrivateDelegate::ExceptionEntries& entries);
 };
 
-class PasswordsPrivateMovePasswordsToAccountFunction
-    : public ExtensionFunction {
+class PasswordsPrivateFetchFamilyMembersFunction : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.movePasswordsToAccount",
-                             PASSWORDSPRIVATE_MOVEPASSWORDSTOACCOUNT)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.fetchFamilyMembers",
+                             PASSWORDSPRIVATE_FETCHFAMILYMEMBERS)
 
  protected:
-  ~PasswordsPrivateMovePasswordsToAccountFunction() override = default;
+  ~PasswordsPrivateFetchFamilyMembersFunction() override = default;
+
+  // ExtensionFunction overrides.
+  ResponseAction Run() override;
+
+ private:
+  void FamilyFetchCompleted(
+      const api::passwords_private::FamilyFetchResults& results);
+};
+
+class PasswordsPrivateSharePasswordFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.sharePassword",
+                             PASSWORDSPRIVATE_SHAREPASSWORD)
+
+ protected:
+  ~PasswordsPrivateSharePasswordFunction() override = default;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
@@ -178,164 +149,75 @@ class PasswordsPrivateImportPasswordsFunction : public ExtensionFunction {
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
+
+ private:
+  void ImportRequestCompleted(
+      const api::passwords_private::ImportResults& results);
 };
 
-class PasswordsPrivateExportPasswordsFunction : public ExtensionFunction {
+class PasswordsPrivateContinueImportFunction : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.exportPasswords",
-                             PASSWORDSPRIVATE_EXPORTPASSWORDS)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.continueImport",
+                             PASSWORDSPRIVATE_CONTINUEIMPORT)
 
  protected:
-  ~PasswordsPrivateExportPasswordsFunction() override = default;
+  ~PasswordsPrivateContinueImportFunction() override = default;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
 
  private:
-  void ExportRequestCompleted(const std::string& error);
+  void ImportCompleted(const api::passwords_private::ImportResults& results);
 };
 
-class PasswordsPrivateCancelExportPasswordsFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.cancelExportPasswords",
-                             PASSWORDSPRIVATE_CANCELEXPORTPASSWORDS)
-
- protected:
-  ~PasswordsPrivateCancelExportPasswordsFunction() override = default;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateRequestExportProgressStatusFunction
+class PasswordsPrivateGetInsecureCredentialsFunction
     : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.requestExportProgressStatus",
-                             PASSWORDSPRIVATE_REQUESTEXPORTPROGRESSSTATUS)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.getInsecureCredentials",
+                             PASSWORDSPRIVATE_GETINSECURECREDENTIALS)
 
  protected:
-  ~PasswordsPrivateRequestExportProgressStatusFunction() override = default;
+  ~PasswordsPrivateGetInsecureCredentialsFunction() override;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
 };
 
-class PasswordsPrivateIsOptedInForAccountStorageFunction
+class PasswordsPrivateGetCredentialsWithReusedPasswordFunction
     : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.isOptedInForAccountStorage",
-                             PASSWORDSPRIVATE_ISOPTEDINFORACCOUNTSTORAGE)
+  DECLARE_EXTENSION_FUNCTION(
+      "passwordsPrivate.getCredentialsWithReusedPassword",
+      PASSWORDSPRIVATE_GETCREDENTIALSWITHREUSEDPASSWORD)
 
  protected:
-  ~PasswordsPrivateIsOptedInForAccountStorageFunction() override = default;
+  ~PasswordsPrivateGetCredentialsWithReusedPasswordFunction() override;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
 };
 
-class PasswordsPrivateOptInForAccountStorageFunction
+class PasswordsPrivateMuteInsecureCredentialFunction
     : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.optInForAccountStorage",
-                             PASSWORDSPRIVATE_OPTINFORACCOUNTSTORAGE)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.muteInsecureCredential",
+                             PASSWORDSPRIVATE_MUTEINSECURECREDENTIAL)
 
  protected:
-  ~PasswordsPrivateOptInForAccountStorageFunction() override = default;
+  ~PasswordsPrivateMuteInsecureCredentialFunction() override;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
 };
 
-class PasswordsPrivateGetCompromisedCredentialsFunction
+class PasswordsPrivateUnmuteInsecureCredentialFunction
     : public ExtensionFunction {
  public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.getCompromisedCredentials",
-                             PASSWORDSPRIVATE_GETCOMPROMISEDCREDENTIALS)
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.unmuteInsecureCredential",
+                             PASSWORDSPRIVATE_UNMUTEINSECURECREDENTIAL)
 
  protected:
-  ~PasswordsPrivateGetCompromisedCredentialsFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateGetWeakCredentialsFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.getWeakCredentials",
-                             PASSWORDSPRIVATE_GETWEAKCREDENTIALS)
-
- protected:
-  ~PasswordsPrivateGetWeakCredentialsFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateGetPlaintextInsecurePasswordFunction
-    : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.getPlaintextInsecurePassword",
-                             PASSWORDSPRIVATE_GETPLAINTEXTINSECUREPASSWORD)
-
- protected:
-  ~PasswordsPrivateGetPlaintextInsecurePasswordFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-
- private:
-  void GotCredential(
-      absl::optional<api::passwords_private::InsecureCredential> credential);
-};
-
-class PasswordsPrivateChangeInsecureCredentialFunction
-    : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.changeInsecureCredential",
-                             PASSWORDSPRIVATE_CHANGEINSECURECREDENTIAL)
-
- protected:
-  ~PasswordsPrivateChangeInsecureCredentialFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateRemoveInsecureCredentialFunction
-    : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.removeInsecureCredential",
-                             PASSWORDSPRIVATE_REMOVEINSECURECREDENTIAL)
-
- protected:
-  ~PasswordsPrivateRemoveInsecureCredentialFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-};
-
-class PasswordsPrivateStartPasswordCheckFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.startPasswordCheck",
-                             PASSWORDSPRIVATE_STARTPASSWORDCHECK)
-
- protected:
-  ~PasswordsPrivateStartPasswordCheckFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-
- private:
-  void OnStarted(password_manager::BulkLeakCheckService::State state);
-};
-
-class PasswordsPrivateStopPasswordCheckFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.stopPasswordCheck",
-                             PASSWORDSPRIVATE_STOPPASSWORDCHECK)
-
- protected:
-  ~PasswordsPrivateStopPasswordCheckFunction() override;
+  ~PasswordsPrivateUnmuteInsecureCredentialFunction() override;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;
@@ -349,6 +231,30 @@ class PasswordsPrivateGetPasswordCheckStatusFunction
 
  protected:
   ~PasswordsPrivateGetPasswordCheckStatusFunction() override;
+
+  // ExtensionFunction overrides.
+  ResponseAction Run() override;
+};
+
+class PasswordsPrivateGetUrlCollectionFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.getUrlCollection",
+                             PASSWORDSPRIVATE_GETURLCOLLECTION)
+
+ protected:
+  ~PasswordsPrivateGetUrlCollectionFunction() override = default;
+
+  // ExtensionFunction overrides.
+  ResponseAction Run() override;
+};
+
+class PasswordsPrivateAddPasswordFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("passwordsPrivate.addPassword",
+                             PASSWORDSPRIVATE_ADDPASSWORD)
+
+ protected:
+  ~PasswordsPrivateAddPasswordFunction() override = default;
 
   // ExtensionFunction overrides.
   ResponseAction Run() override;

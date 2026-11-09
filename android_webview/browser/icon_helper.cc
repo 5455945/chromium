@@ -1,13 +1,14 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/icon_helper.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/hash/hash.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "components/favicon_base/select_favicon_frames.h"
 #include "content/public/browser/browser_thread.h"
@@ -65,7 +66,6 @@ void IconHelper::DownloadFaviconCallback(
     SelectFaviconFrameIndices(original_bitmap_sizes,
                               std::vector<int>(1U, kLargestIconSize),
                               &best_indices, nullptr);
-
     listener_->OnReceivedIcon(
         image_url,
         bitmaps[best_indices.size() == 0 ? 0 : best_indices.front()]);
@@ -74,7 +74,8 @@ void IconHelper::DownloadFaviconCallback(
 
 void IconHelper::DidUpdateFaviconURL(
     content::RenderFrameHost* render_frame_host,
-    const std::vector<blink::mojom::FaviconURLPtr>& candidates) {
+    const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+    blink::mojom::FaviconUpdateReason reason) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   for (const auto& candidate : candidates) {
     if (!candidate->icon_url.is_valid())
@@ -82,15 +83,18 @@ void IconHelper::DidUpdateFaviconURL(
 
     switch (candidate->icon_type) {
       case blink::mojom::FaviconIconType::kFavicon:
-        if ((listener_ &&
-             !listener_->ShouldDownloadFavicon(candidate->icon_url)) ||
+        if ((listener_ && !listener_->ShouldDownloadFavicon()) ||
             WasUnableToDownloadFavicon(candidate->icon_url)) {
+          base::UmaHistogramBoolean(
+              "Android.WebView.Navigation.DidDownloadFavicon", false);
           break;
         }
+        base::UmaHistogramBoolean(
+            "Android.WebView.Navigation.DidDownloadFavicon", true);
         web_contents()->DownloadImage(
             candidate->icon_url,
             true,              // Is a favicon
-            0,                 // No preferred size
+            gfx::Size(),       // No preferred size
             kLargestIconSize,  // Max bitmap size
             false,             // Normal cache policy
             base::BindOnce(&IconHelper::DownloadFaviconCallback,
@@ -109,14 +113,15 @@ void IconHelper::DidUpdateFaviconURL(
         break;
       default:
         NOTREACHED();
-        break;
     }
   }
 }
 
 void IconHelper::DidStartNavigation(content::NavigationHandle* navigation) {
-  if (navigation->GetReloadType() == content::ReloadType::BYPASSING_CACHE)
+  if (navigation->IsInPrimaryMainFrame() &&
+      navigation->GetReloadType() == content::ReloadType::BYPASSING_CACHE) {
     ClearUnableToDownloadFavicons();
+  }
 }
 
 void IconHelper::MarkUnableToDownloadFavicon(const GURL& icon_url) {
@@ -126,7 +131,7 @@ void IconHelper::MarkUnableToDownloadFavicon(const GURL& icon_url) {
 
 bool IconHelper::WasUnableToDownloadFavicon(const GURL& icon_url) const {
   MissingFaviconURLHash url_hash = base::FastHash(icon_url.spec());
-  return missing_favicon_urls_.find(url_hash) != missing_favicon_urls_.end();
+  return missing_favicon_urls_.contains(url_hash);
 }
 
 void IconHelper::ClearUnableToDownloadFavicons() {

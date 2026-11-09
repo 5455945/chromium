@@ -1,10 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/service_worker/payment_handler_support.h"
 
-#include "base/bind.h"
+#include <optional>
+
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/storage_partition_impl.h"
@@ -42,26 +45,28 @@ class ShowPaymentHandlerWindowReplier {
       : callback_(std::move(callback)),
         fallback_(std::move(fallback)),
         response_callback_(std::move(response_callback)) {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   }
 
+  ShowPaymentHandlerWindowReplier(const ShowPaymentHandlerWindowReplier&) =
+      delete;
+  ShowPaymentHandlerWindowReplier& operator=(
+      const ShowPaymentHandlerWindowReplier&) = delete;
+
   ~ShowPaymentHandlerWindowReplier() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
     if (response_callback_) {
-      DCHECK(fallback_);
-      BrowserThread::GetTaskRunnerForThread(
-          ServiceWorkerContext::GetCoreThreadId())
-          ->PostTask(FROM_HERE, base::BindOnce(std::move(fallback_),
-                                               std::move(response_callback_)));
+      CHECK(fallback_, base::NotFatalUntil::M159);
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(fallback_), std::move(response_callback_)));
     }
   }
 
   void Run(bool success, int render_process_id, int render_frame_id) {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    RunOrPostTaskOnThread(
-        FROM_HERE, ServiceWorkerContext::GetCoreThreadId(),
-        base::BindOnce(std::move(callback_), std::move(response_callback_),
-                       success, render_process_id, render_frame_id));
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+    std::move(callback_).Run(std::move(response_callback_), success,
+                             render_process_id, render_frame_id);
   }
 
  private:
@@ -69,43 +74,28 @@ class ShowPaymentHandlerWindowReplier {
   PaymentHandlerSupport::OpenWindowFallback fallback_;
   blink::mojom::ServiceWorkerHost::OpenPaymentHandlerWindowCallback
       response_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShowPaymentHandlerWindowReplier);
 };
-
-void ShowPaymentHandlerWindowOnUI(
-    scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
-    const GURL& url,
-    PaymentHandlerSupport::ShowPaymentHandlerWindowCallback callback,
-    PaymentHandlerSupport::OpenWindowFallback fallback,
-    blink::mojom::ServiceWorkerHost::OpenPaymentHandlerWindowCallback
-        response_callback) {
-  GetContentClient()->browser()->ShowPaymentHandlerWindow(
-      context_wrapper->storage_partition()->browser_context(), url,
-      base::BindOnce(&ShowPaymentHandlerWindowReplier::Run,
-                     std::make_unique<ShowPaymentHandlerWindowReplier>(
-                         std::move(callback), std::move(fallback),
-                         std::move(response_callback))));
-}
 
 }  // namespace
 
 // static
 void PaymentHandlerSupport::ShowPaymentHandlerWindow(
     const GURL& url,
+    const std::optional<gfx::Size>& preferred_web_contents_size,
     ServiceWorkerContextCore* context,
     ShowPaymentHandlerWindowCallback callback,
     OpenWindowFallback fallback,
     blink::mojom::ServiceWorkerHost::OpenPaymentHandlerWindowCallback
         response_callback) {
-  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
-  DCHECK(context);
-  RunOrPostTaskOnThread(
-      FROM_HERE, BrowserThread::UI,
-      base::BindOnce(&ShowPaymentHandlerWindowOnUI,
-                     base::WrapRefCounted(context->wrapper()), url,
-                     std::move(callback), std::move(fallback),
-                     std::move(response_callback)));
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(context, base::NotFatalUntil::M159);
+  GetContentClient()->browser()->ShowPaymentHandlerWindow(
+      context->wrapper()->storage_partition()->browser_context(), url,
+      preferred_web_contents_size,
+      base::BindOnce(&ShowPaymentHandlerWindowReplier::Run,
+                     std::make_unique<ShowPaymentHandlerWindowReplier>(
+                         std::move(callback), std::move(fallback),
+                         std::move(response_callback))));
 }
 
 }  // namespace content

@@ -1,23 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "ui/base/ime/win/tsf_bridge.h"
 
 #include <msctf.h>
 
 #include <map>
 
-#include "base/cxx17_backports.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/no_destructor.h"
 #include "base/task/current_thread.h"
-#include "base/threading/thread_local_storage.h"
+#include "base/threading/thread_local.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/scoped_variant.h"
-#include "ui/base/ime/input_method_delegate.h"
+#include "ui/base/ime/ime_key_event_dispatcher.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/ime/win/mock_tsf_bridge.h"
-#include "ui/base/ime/win/tsf_bridge.h"
 #include "ui/base/ime/win/tsf_text_store.h"
 #include "ui/base/ui_base_features.h"
 
@@ -31,6 +32,10 @@ namespace {
 class TSFBridgeImpl : public TSFBridge {
  public:
   TSFBridgeImpl();
+
+  TSFBridgeImpl(const TSFBridgeImpl&) = delete;
+  TSFBridgeImpl& operator=(const TSFBridgeImpl&) = delete;
+
   ~TSFBridgeImpl() override;
 
   HRESULT Initialize();
@@ -42,11 +47,14 @@ class TSFBridgeImpl : public TSFBridge {
   bool ConfirmComposition() override;
   void SetFocusedClient(HWND focused_window, TextInputClient* client) override;
   void RemoveFocusedClient(TextInputClient* client) override;
-  void SetInputMethodDelegate(internal::InputMethodDelegate* delegate) override;
-  void RemoveInputMethodDelegate() override;
+  void SetImeKeyEventDispatcher(
+      ImeKeyEventDispatcher* ime_key_event_dispatcher) override;
+  void RemoveImeKeyEventDispatcher(
+      ImeKeyEventDispatcher* ime_key_event_dispatcher) override;
   bool IsInputLanguageCJK() override;
   Microsoft::WRL::ComPtr<ITfThreadMgr> GetThreadManager() override;
   TextInputClient* GetFocusedTextInputClient() const override;
+  void OnUrlChanged() override;
 
  private:
   // Returns S_OK if |tsf_document_map_| is successfully initialized. This
@@ -66,7 +74,9 @@ class TSFBridgeImpl : public TSFBridge {
   HRESULT CreateDocumentManager(TSFTextStore* text_store,
                                 ITfDocumentMgr** document_manager,
                                 ITfContext** context,
-                                DWORD* source_cookie);
+                                DWORD* source_cookie,
+                                DWORD* key_trace_sink_cookie,
+                                DWORD* language_profile_cookie);
 
   // Returns true if |document_manager| is the focused document manager.
   bool IsFocused(ITfDocumentMgr* document_manager);
@@ -97,12 +107,20 @@ class TSFBridgeImpl : public TSFBridge {
   // minimum working set of an editable document in TSF.
   struct TSFDocument {
    public:
-    TSFDocument() : cookie(TF_INVALID_COOKIE) {}
+    TSFDocument()
+        : source_cookie(TF_INVALID_COOKIE),
+          key_trace_sink_cookie(TF_INVALID_COOKIE),
+          language_profile_cookie(TF_INVALID_COOKIE) {}
     TSFDocument(const TSFDocument& src)
-        : document_manager(src.document_manager), cookie(src.cookie) {}
+        : document_manager(src.document_manager),
+          source_cookie(src.source_cookie),
+          key_trace_sink_cookie(src.key_trace_sink_cookie),
+          language_profile_cookie(src.language_profile_cookie) {}
     Microsoft::WRL::ComPtr<ITfDocumentMgr> document_manager;
     scoped_refptr<TSFTextStore> text_store;
-    DWORD cookie;
+    DWORD source_cookie;
+    DWORD key_trace_sink_cookie;
+    DWORD language_profile_cookie;
   };
 
   // Returns a pointer to TSFDocument that is associated with the current
@@ -131,7 +149,7 @@ class TSFBridgeImpl : public TSFBridge {
   TfClientId client_id_ = TF_CLIENTID_NULL;
 
   // Current focused text input client. Do not free |client_|.
-  TextInputClient* client_ = nullptr;
+  raw_ptr<TextInputClient> client_ = nullptr;
 
   // Input Type of current focused text input client.
   TextInputType input_type_ = TEXT_INPUT_TYPE_NONE;
@@ -139,42 +157,37 @@ class TSFBridgeImpl : public TSFBridge {
   // Represents the window that is currently owns text input focus.
   HWND attached_window_handle_ = nullptr;
 
-  // Handle to ITfKeyTraceEventSink.
-  DWORD key_trace_sink_cookie_ = 0;
-
-  // Handle to ITfLanguageProfileNotifySink
-  DWORD language_profile_cookie_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(TSFBridgeImpl);
+  // Tracks Windows OS support for empty TSF text stores, available on win11+.
+  bool empty_tsf_support_ = false;
 };
 
 TSFBridgeImpl::TSFBridgeImpl() = default;
 
 TSFBridgeImpl::~TSFBridgeImpl() {
-  DCHECK(base::CurrentUIThread::IsSet());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
   if (!IsInitialized())
     return;
 
-  if (thread_manager_ != nullptr) {
-    Microsoft::WRL::ComPtr<ITfSource> source;
-    if (SUCCEEDED(thread_manager_->QueryInterface(IID_PPV_ARGS(&source)))) {
-      source->UnadviseSink(key_trace_sink_cookie_);
-    }
-    Microsoft::WRL::ComPtr<ITfSource> language_source;
-    if (SUCCEEDED(input_processor_profiles_->QueryInterface(
-            IID_PPV_ARGS(&language_source)))) {
-      language_source->UnadviseSink(language_profile_cookie_);
-    }
-  }
-
-  for (TSFDocumentMap::iterator it = tsf_document_map_.begin();
-       it != tsf_document_map_.end(); ++it) {
+  for (auto& pair : tsf_document_map_) {
+    TSFDocument& document = pair.second;
     Microsoft::WRL::ComPtr<ITfContext> context;
     Microsoft::WRL::ComPtr<ITfSource> source;
-    if (it->second.cookie != TF_INVALID_COOKIE &&
-        SUCCEEDED(it->second.document_manager->GetBase(&context)) &&
+    if (document.source_cookie != TF_INVALID_COOKIE &&
+        SUCCEEDED(document.document_manager->GetBase(&context)) &&
         SUCCEEDED(context.As(&source))) {
-      source->UnadviseSink(it->second.cookie);
+      source->UnadviseSink(document.source_cookie);
+    }
+    if (thread_manager_ != nullptr) {
+      Microsoft::WRL::ComPtr<ITfSource> key_trace_sink_source;
+      if (document.key_trace_sink_cookie != TF_INVALID_COOKIE &&
+          SUCCEEDED(thread_manager_.As(&key_trace_sink_source))) {
+        key_trace_sink_source->UnadviseSink(document.key_trace_sink_cookie);
+      }
+      Microsoft::WRL::ComPtr<ITfSource> language_profile_source;
+      if (document.language_profile_cookie != TF_INVALID_COOKIE &&
+          SUCCEEDED(input_processor_profiles_.As(&language_profile_source))) {
+        language_profile_source->UnadviseSink(document.language_profile_cookie);
+      }
     }
   }
   tsf_document_map_.clear();
@@ -183,7 +196,7 @@ TSFBridgeImpl::~TSFBridgeImpl() {
 }
 
 HRESULT TSFBridgeImpl::Initialize() {
-  DCHECK(base::CurrentUIThread::IsSet());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
   if (client_id_ != TF_CLIENTID_NULL) {
     DVLOG(1) << "Already initialized.";
     return S_OK;  // shouldn't return error code in this case.
@@ -245,8 +258,8 @@ HRESULT TSFBridgeImpl::Initialize() {
 }
 
 void TSFBridgeImpl::OnTextInputTypeChanged(const TextInputClient* client) {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(IsInitialized());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
 
   if (client != client_) {
     // Called from not focusing client. Do nothing.
@@ -258,7 +271,24 @@ void TSFBridgeImpl::OnTextInputTypeChanged(const TextInputClient* client) {
   // prepare the TSF document for reuse by clearing focus first.
   if (input_type_ != TEXT_INPUT_TYPE_NONE &&
       input_type_ == client_->GetTextInputType()) {
-    thread_manager_->SetFocus(nullptr);
+    if (empty_tsf_support_) {
+      // Switch focus to empty doc. This optimizes the reuse, since here TSF
+      // changes the text store's edit context state. So switching
+      // the focus back to the edit context helps to reuse the TSF document.
+      // It also reduces focus noise to TSF's default document which is only
+      // there for app compat with embedded controls.
+      TSFDocumentMap::iterator it =
+          tsf_document_map_.find(TEXT_INPUT_TYPE_NONE);
+      if (it != tsf_document_map_.end()) {
+        thread_manager_->SetFocus(it->second.document_manager.Get());
+      } else {
+        // If we don't have an empty document, set focus to TSF default
+        // document.
+        thread_manager_->SetFocus(nullptr);
+      }
+    } else {
+      thread_manager_->SetFocus(nullptr);
+    }
   }
   input_type_ = client_->GetTextInputType();
   TSFDocument* document = GetAssociatedDocument();
@@ -286,8 +316,8 @@ void TSFBridgeImpl::OnTextLayoutChanged() {
 }
 
 bool TSFBridgeImpl::CancelComposition() {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(IsInitialized());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
 
   TSFDocument* document = GetAssociatedDocument();
   if (!document)
@@ -299,8 +329,8 @@ bool TSFBridgeImpl::CancelComposition() {
 }
 
 bool TSFBridgeImpl::ConfirmComposition() {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(IsInitialized());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
 
   TSFDocument* document = GetAssociatedDocument();
   if (!document)
@@ -313,9 +343,9 @@ bool TSFBridgeImpl::ConfirmComposition() {
 
 void TSFBridgeImpl::SetFocusedClient(HWND focused_window,
                                      TextInputClient* client) {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(client);
-  DCHECK(IsInitialized());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(client, base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
   if (attached_window_handle_ != focused_window)
     ClearAssociateFocus();
   client_ = client;
@@ -333,8 +363,8 @@ void TSFBridgeImpl::SetFocusedClient(HWND focused_window,
 }
 
 void TSFBridgeImpl::RemoveFocusedClient(TextInputClient* client) {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(IsInitialized());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
   if (client_ != client)
     return;
   ClearAssociateFocus();
@@ -348,29 +378,31 @@ void TSFBridgeImpl::RemoveFocusedClient(TextInputClient* client) {
   }
 }
 
-void TSFBridgeImpl::SetInputMethodDelegate(
-    internal::InputMethodDelegate* delegate) {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(delegate);
-  DCHECK(IsInitialized());
+void TSFBridgeImpl::SetImeKeyEventDispatcher(
+    ImeKeyEventDispatcher* ime_key_event_dispatcher) {
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(ime_key_event_dispatcher, base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
 
   for (TSFDocumentMap::iterator it = tsf_document_map_.begin();
        it != tsf_document_map_.end(); ++it) {
     if (it->second.text_store.get() == nullptr)
       continue;
-    it->second.text_store->SetInputMethodDelegate(delegate);
+    it->second.text_store->SetImeKeyEventDispatcher(ime_key_event_dispatcher);
   }
 }
 
-void TSFBridgeImpl::RemoveInputMethodDelegate() {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(IsInitialized());
+void TSFBridgeImpl::RemoveImeKeyEventDispatcher(
+    ImeKeyEventDispatcher* ime_key_event_dispatcher) {
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
 
   for (TSFDocumentMap::iterator it = tsf_document_map_.begin();
        it != tsf_document_map_.end(); ++it) {
     if (it->second.text_store.get() == nullptr)
       continue;
-    it->second.text_store->RemoveInputMethodDelegate();
+    it->second.text_store->RemoveImeKeyEventDispatcher(
+        ime_key_event_dispatcher);
   }
 }
 
@@ -387,24 +419,36 @@ TextInputClient* TSFBridgeImpl::GetFocusedTextInputClient() const {
   return client_;
 }
 
+void TSFBridgeImpl::OnUrlChanged() {
+  TSFDocument* document = GetAssociatedDocument();
+  if (!document || !document->text_store) {
+    return;
+  }
+  document->text_store->MaybeSendOnUrlChanged();
+}
+
 Microsoft::WRL::ComPtr<ITfThreadMgr> TSFBridgeImpl::GetThreadManager() {
-  DCHECK(base::CurrentUIThread::IsSet());
-  DCHECK(IsInitialized());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
+  CHECK(IsInitialized(), base::NotFatalUntil::M163);
   return thread_manager_;
 }
 
 HRESULT TSFBridgeImpl::CreateDocumentManager(TSFTextStore* text_store,
                                              ITfDocumentMgr** document_manager,
                                              ITfContext** context,
-                                             DWORD* source_cookie) {
+                                             DWORD* source_cookie,
+                                             DWORD* key_trace_sink_cookie,
+                                             DWORD* language_profile_cookie) {
   HRESULT hr = thread_manager_->CreateDocumentMgr(document_manager);
   if (FAILED(hr)) {
     DVLOG(1) << "Failed to create Document Manager.";
     return hr;
   }
 
-  if (!text_store || !source_cookie)
+  if (!text_store || !source_cookie || !key_trace_sink_cookie ||
+      !language_profile_cookie) {
     return S_OK;
+  }
 
   DWORD edit_cookie = TF_INVALID_EDIT_COOKIE;
   hr = (*document_manager)
@@ -446,7 +490,7 @@ HRESULT TSFBridgeImpl::CreateDocumentManager(TSFTextStore* text_store,
 
   hr = source_ITfThreadMgr->AdviseSink(
       IID_ITfKeyTraceEventSink, static_cast<ITfKeyTraceEventSink*>(text_store),
-      &key_trace_sink_cookie_);
+      key_trace_sink_cookie);
   if (FAILED(hr)) {
     DVLOG(1) << "AdviseSink for ITfKeyTraceEventSink failed.";
     return hr;
@@ -462,7 +506,7 @@ HRESULT TSFBridgeImpl::CreateDocumentManager(TSFTextStore* text_store,
 
   hr = language_source->AdviseSink(IID_ITfLanguageProfileNotifySink,
                                    static_cast<ITfTextEditSink*>(text_store),
-                                   &language_profile_cookie_);
+                                   language_profile_cookie);
   if (FAILED(hr)) {
     DVLOG(1) << "AdviseSink for language profile notify sink failed.";
     return hr;
@@ -481,36 +525,67 @@ HRESULT TSFBridgeImpl::InitializeDocumentMapInternal() {
       TEXT_INPUT_TYPE_PASSWORD,  TEXT_INPUT_TYPE_SEARCH,
       TEXT_INPUT_TYPE_EMAIL,     TEXT_INPUT_TYPE_NUMBER,
       TEXT_INPUT_TYPE_TELEPHONE, TEXT_INPUT_TYPE_URL,
+      TEXT_INPUT_TYPE_TEXT_AREA,
   };
-  for (size_t i = 0; i < base::size(kTextInputTypes); ++i) {
-    const TextInputType input_type = kTextInputTypes[i];
+  // Query TSF for empty TSF text store support, introduced with Windows 11.
+  // If support is present, as indicated by successful return of an interface
+  // for the IID value GUID_COMPARTMENT_EMPTYCONTEXT, we use a dummy/empty Text
+  // store when there is no text.
+  Microsoft::WRL::ComPtr<IUnknown> flag_empty_context;
+  HRESULT res = thread_manager_->QueryInterface(GUID_COMPARTMENT_EMPTYCONTEXT,
+                                                &flag_empty_context);
+  if (SUCCEEDED(res)) {
+    empty_tsf_support_ = true;
+  }
+
+  for (const TextInputType input_type : kTextInputTypes) {
     Microsoft::WRL::ComPtr<ITfContext> context;
     Microsoft::WRL::ComPtr<ITfDocumentMgr> document_manager;
-    DWORD cookie = TF_INVALID_COOKIE;
-    const bool use_null_text_store = (input_type == TEXT_INPUT_TYPE_NONE);
-    DWORD* cookie_ptr = use_null_text_store ? nullptr : &cookie;
+    DWORD source_cookie = TF_INVALID_COOKIE;
+    DWORD key_trace_sink_cookie = TF_INVALID_COOKIE;
+    DWORD language_profile_cookie = TF_INVALID_COOKIE;
+    // Use a null text store if empty tsf text store is not supported.
+    const bool use_null_text_store =
+        (input_type == TEXT_INPUT_TYPE_NONE && !empty_tsf_support_);
+    DWORD* source_cookie_ptr = use_null_text_store ? nullptr : &source_cookie;
+    DWORD* key_trace_sink_cookie_ptr =
+        use_null_text_store ? nullptr : &key_trace_sink_cookie;
+    DWORD* language_profile_cookie_ptr =
+        use_null_text_store ? nullptr : &language_profile_cookie;
     scoped_refptr<TSFTextStore> text_store =
         use_null_text_store ? nullptr : new TSFTextStore();
-    HRESULT hr = S_OK;
-    if (text_store) {
+    if (text_store && input_type != TEXT_INPUT_TYPE_NONE) {
+      // No need to initialize for TEXT_INPUT_TYPE_NONE.
       HRESULT hr = text_store->Initialize();
       if (FAILED(hr))
         return hr;
     }
-    hr = CreateDocumentManager(text_store.get(), &document_manager, &context,
-                               cookie_ptr);
+    HRESULT hr = CreateDocumentManager(
+        text_store.get(), &document_manager, &context, source_cookie_ptr,
+        key_trace_sink_cookie_ptr, language_profile_cookie_ptr);
     if (FAILED(hr))
       return hr;
-    if (input_type == TEXT_INPUT_TYPE_PASSWORD) {
+    if (input_type == TEXT_INPUT_TYPE_PASSWORD ||
+        (empty_tsf_support_ && input_type == TEXT_INPUT_TYPE_NONE)) {
+      // Disable context for TEXT_INPUT_TYPE_NONE, if empty text store is
+      // supported.
       hr = InitializeDisabledContext(context.Get());
       if (FAILED(hr))
         return hr;
     }
     tsf_document_map_[input_type].text_store = text_store;
     tsf_document_map_[input_type].document_manager = document_manager;
-    tsf_document_map_[input_type].cookie = cookie;
+    tsf_document_map_[input_type].source_cookie = source_cookie;
+    tsf_document_map_[input_type].key_trace_sink_cookie = key_trace_sink_cookie;
+    tsf_document_map_[input_type].language_profile_cookie =
+        language_profile_cookie;
     if (text_store)
       text_store->OnContextInitialized(context.Get());
+
+    // Set the flag for empty text store.
+    if (text_store && input_type == TEXT_INPUT_TYPE_NONE) {
+      text_store->UseEmptyTextStore(empty_tsf_support_);
+    }
   }
   return S_OK;
 }
@@ -622,29 +697,15 @@ TSFBridgeImpl::TSFDocument* TSFBridgeImpl::GetAssociatedDocument() {
   return &it->second;
 }
 
-void Finalize(void* data) {
-  TSFBridgeImpl* delegate = static_cast<TSFBridgeImpl*>(data);
-  delete delegate;
-}
-
-base::ThreadLocalStorage::Slot& TSFBridgeTLS() {
-  static base::NoDestructor<base::ThreadLocalStorage::Slot> tsf_bridge_tls(
-      &Finalize);
-  return *tsf_bridge_tls;
-}
-
-// Get the TSFBridge from the thread-local storage without its ownership.
-TSFBridgeImpl* GetThreadLocalTSFBridge() {
-  return static_cast<TSFBridgeImpl*>(TSFBridgeTLS().Get());
+base::ThreadLocalOwnedPointer<TSFBridge>& GetThreadLocalTSFBridge() {
+  static base::NoDestructor<base::ThreadLocalOwnedPointer<TSFBridge>>
+      tsf_bridge;
+  return *tsf_bridge;
 }
 
 }  // namespace
 
 // TsfBridge  -----------------------------------------------------------------
-
-TSFBridge::TSFBridge() {}
-
-TSFBridge::~TSFBridge() {}
 
 // static
 HRESULT TSFBridge::Initialize() {
@@ -653,19 +714,14 @@ HRESULT TSFBridge::Initialize() {
     return E_FAIL;
   }
 
-  TSFBridgeImpl* delegate = static_cast<TSFBridgeImpl*>(TSFBridgeTLS().Get());
-  if (delegate)
+  if (GetThreadLocalTSFBridge().Get()) {
     return S_OK;
-  // If we aren't supporting TSF early out.
-  if (!base::FeatureList::IsEnabled(features::kTSFImeSupport))
-    return E_FAIL;
+  }
 
-  delegate = new TSFBridgeImpl();
-  ReplaceThreadLocalTSFBridge(delegate);
+  auto delegate = std::make_unique<TSFBridgeImpl>();
   HRESULT hr = delegate->Initialize();
-  if (FAILED(hr)) {
-    // reset the TSFBridge as the initialization has failed.
-    ReplaceThreadLocalTSFBridge(nullptr);
+  if (SUCCEEDED(hr)) {
+    ReplaceThreadLocalTSFBridge(std::move(delegate));
   }
   return hr;
 }
@@ -675,42 +731,28 @@ void TSFBridge::InitializeForTesting() {
   if (!base::CurrentUIThread::IsSet()) {
     return;
   }
-
-  TSFBridgeImpl* delegate = GetThreadLocalTSFBridge();
-  if (delegate)
-    return;
-  if (!base::FeatureList::IsEnabled(features::kTSFImeSupport))
-    return;
-  ReplaceThreadLocalTSFBridge(new MockTSFBridge());
+  ReplaceThreadLocalTSFBridge(std::make_unique<MockTSFBridge>());
 }
 
 // static
-void TSFBridge::ReplaceThreadLocalTSFBridge(TSFBridge* new_instance) {
+void TSFBridge::ReplaceThreadLocalTSFBridge(
+    std::unique_ptr<TSFBridge> new_instance) {
   if (!base::CurrentUIThread::IsSet()) {
     return;
   }
-
-  TSFBridgeImpl* old_instance = GetThreadLocalTSFBridge();
-  TSFBridgeTLS().Set(new_instance);
-  delete old_instance;
+  GetThreadLocalTSFBridge().Set(std::move(new_instance));
 }
 
 // static
 void TSFBridge::Shutdown() {
   TRACE_EVENT0("ime", "TSFBridge::Shutdown");
-  if (!base::CurrentUIThread::IsSet()) {
-  }
   ReplaceThreadLocalTSFBridge(nullptr);
 }
 
 // static
 TSFBridge* TSFBridge::GetInstance() {
-  if (!base::CurrentUIThread::IsSet()) {
-    return nullptr;
-  }
-
-  TSFBridgeImpl* delegate = GetThreadLocalTSFBridge();
-  return delegate;
+  return base::CurrentUIThread::IsSet() ? GetThreadLocalTSFBridge().Get()
+                                        : nullptr;
 }
 
 }  // namespace ui

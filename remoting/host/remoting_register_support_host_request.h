@@ -1,15 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_HOST_REMOTING_REGISTER_SUPPORT_HOST_REQUEST_H_
 #define REMOTING_HOST_REMOTING_REGISTER_SUPPORT_HOST_REQUEST_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "remoting/host/register_support_host_request.h"
-#include "remoting/signaling/signal_strategy.h"
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "remoting/host/chromeos/chromeos_enterprise_params.h"
+#include "remoting/host/register_support_host_request_base.h"
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -26,28 +27,28 @@ class RegisterSupportHostResponse;
 }  // namespace v1
 }  // namespace apis
 
+class HttpStatus;
 class OAuthTokenGetter;
-class ProtobufHttpStatus;
 
 // A RegisterSupportHostRequest implementation that uses Remoting API to
 // register the host.
 class RemotingRegisterSupportHostRequest final
-    : public RegisterSupportHostRequest,
-      public SignalStrategy::Listener {
+    : public RegisterSupportHostRequestBase {
  public:
   RemotingRegisterSupportHostRequest(
       std::unique_ptr<OAuthTokenGetter> token_getter,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
-  ~RemotingRegisterSupportHostRequest() override;
 
-  // RegisterSupportHostRequest implementation.
-  void StartRequest(SignalStrategy* signal_strategy,
-                    scoped_refptr<RsaKeyPair> key_pair,
-                    RegisterCallback callback) override;
+  RemotingRegisterSupportHostRequest(
+      const RemotingRegisterSupportHostRequest&) = delete;
+  RemotingRegisterSupportHostRequest& operator=(
+      const RemotingRegisterSupportHostRequest&) = delete;
+
+  ~RemotingRegisterSupportHostRequest() override;
 
  private:
   using RegisterSupportHostResponseCallback = base::OnceCallback<void(
-      const ProtobufHttpStatus&,
+      const HttpStatus&,
       std::unique_ptr<apis::v1::RegisterSupportHostResponse>)>;
 
   friend class RemotingRegisterSupportHostTest;
@@ -63,35 +64,16 @@ class RemotingRegisterSupportHostRequest final
 
   class RegisterSupportHostClientImpl;
 
-  enum class State {
-    NOT_STARTED,
-    REGISTERING,
-    REGISTERED,
-  };
+  void Initialize(
+      std::unique_ptr<net::ClientCertStore> client_cert_store) override;
+  void RegisterHost(
+      const internal::RemoteSupportHostStruct& host,
+      const std::optional<ChromeOsEnterpriseParams>& enterprise_params,
+      RegisterHostCallback callback) override;
+  void CancelPendingRequests() override;
 
-  // SignalStrategy::Listener interface.
-  void OnSignalStrategyStateChange(SignalStrategy::State state) override;
-  bool OnSignalStrategyIncomingStanza(
-      const jingle_xmpp::XmlElement* stanza) override;
-
-  void RegisterHost();
-  void OnRegisterHostResult(
-      const ProtobufHttpStatus& status,
-      std::unique_ptr<apis::v1::RegisterSupportHostResponse> response);
-
-  void RunCallback(const std::string& support_id,
-                   base::TimeDelta lifetime,
-                   protocol::ErrorCode error_code);
-
-  SignalStrategy* signal_strategy_ = nullptr;
-  scoped_refptr<RsaKeyPair> key_pair_;
-  RegisterCallback callback_;
   std::unique_ptr<OAuthTokenGetter> token_getter_;
   std::unique_ptr<RegisterSupportHostClient> register_host_client_;
-
-  State state_ = State::NOT_STARTED;
-
-  DISALLOW_COPY_AND_ASSIGN(RemotingRegisterSupportHostRequest);
 };
 
 }  // namespace remoting

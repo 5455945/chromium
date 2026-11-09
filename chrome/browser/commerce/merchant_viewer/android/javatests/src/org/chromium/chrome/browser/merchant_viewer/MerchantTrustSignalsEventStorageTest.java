@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,6 @@ import androidx.test.filters.MediumTest;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -22,11 +20,9 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,21 +30,11 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests related to {@link MerchantTrustSignalsEventStorage}.
- */
+/** Tests related to {@link MerchantTrustSignalsEventStorage}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 public class MerchantTrustSignalsEventStorageTest {
-    @ClassRule
-    public static ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
-
-    @Rule
-    public BlankCTATabInitialStateRule mBlankCTATabInitialStateRule =
-            new BlankCTATabInitialStateRule(sActivityTestRule, false);
-
     private static final String KEY_1 = "www.amazon.com";
     private static final String KEY_2 = "www.costco.com";
     private static final String KEY_3 = "www.cvs.com";
@@ -66,9 +52,13 @@ public class MerchantTrustSignalsEventStorageTest {
 
     @Before
     public void setUp() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mStorage = new MerchantTrustSignalsEventStorage(Profile.getLastUsedRegularProfile());
-        });
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mStorage =
+                            new MerchantTrustSignalsEventStorage(
+                                    ProfileManager.getLastUsedRegularProfile());
+                });
 
         mEvent1 = new MerchantTrustSignalsEvent(KEY_1, TIMESTAMP_1);
         mEvent2 = new MerchantTrustSignalsEvent(KEY_2, TIMESTAMP_2);
@@ -77,10 +67,11 @@ public class MerchantTrustSignalsEventStorageTest {
 
     @After
     public void tearDown() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mStorage.deleteAll();
-            mStorage.destroy();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mStorage.deleteAll();
+                    mStorage.destroy();
+                });
     }
 
     @MediumTest
@@ -124,42 +115,50 @@ public class MerchantTrustSignalsEventStorageTest {
     private void save(MerchantTrustSignalsEvent event) throws TimeoutException {
         CallbackHelper ch = new CallbackHelper();
         int chCount = ch.getCallCount();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mStorage.saveWithCallback(event, new Runnable() {
-                @Override
-                public void run() {
-                    ch.notifyCalled();
-                }
-            });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mStorage.saveWithCallback(
+                            event,
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ch.notifyCalled();
+                                }
+                            });
+                });
         ch.waitForCallback(chCount);
     }
 
     private void delete(MerchantTrustSignalsEvent event) throws TimeoutException {
         CallbackHelper ch = new CallbackHelper();
         int chCount = ch.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(() -> {
-            mStorage.deleteForTesting(event, new Runnable() {
-                @Override
-                public void run() {
-                    ch.notifyCalled();
-                }
-            });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mStorage.deleteForTesting(
+                            event,
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ch.notifyCalled();
+                                }
+                            });
+                });
         ch.waitForCallback(chCount);
     }
 
     private void deleteAll() throws TimeoutException {
         CallbackHelper ch = new CallbackHelper();
         int chCount = ch.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(() -> {
-            mStorage.deleteAllForTesting(new Runnable() {
-                @Override
-                public void run() {
-                    ch.notifyCalled();
-                }
-            });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mStorage.deleteAllForTesting(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ch.notifyCalled();
+                                }
+                            });
+                });
         ch.waitForCallback(chCount);
     }
 

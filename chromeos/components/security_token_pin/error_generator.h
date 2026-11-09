@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,13 +22,5 @@ std::u16string GenerateErrorMessage(ErrorLabel error_label,
 
 }  // namespace security_token_pin
 }  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove when //c/comp/security_token_pin
-// is moved th ash
-namespace ash {
-namespace security_token_pin {
-using ::chromeos::security_token_pin::GenerateErrorMessage;
-}  // namespace security_token_pin
-}  // namespace ash
 
 #endif  // CHROMEOS_COMPONENTS_SECURITY_TOKEN_PIN_ERROR_GENERATOR_H_

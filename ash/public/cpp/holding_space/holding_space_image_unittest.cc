@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,24 @@
 #include <utility>
 #include <vector>
 
-#include "ash/public/cpp/file_icon_util.h"
+#include "ash/public/cpp/holding_space/holding_space_file.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "chromeos/ui/base/file_icon_util.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/gfx/paint_vector_icon.h"
 
@@ -35,13 +39,6 @@ constexpr int kFileTypeIconSize = 20;
 
 // Helpers ---------------------------------------------------------------------
 
-SkBitmap CreateBitmap(int width, int height, SkColor color) {
-  SkBitmap bitmap;
-  bitmap.allocN32Pixels(width, height);
-  bitmap.eraseColor(color);
-  return bitmap;
-}
-
 gfx::ImageSkia ExtractFileTypeIcon(const gfx::ImageSkia& image) {
   gfx::Rect file_type_icon_bounds(image.size());
   file_type_icon_bounds.ClampToCenteredSize(
@@ -53,14 +50,14 @@ bool ContainsFileTypeIcon(const gfx::ImageSkia& image,
                           const base::FilePath& file_path) {
   gfx::ImageSkia actual = ExtractFileTypeIcon(image);
   gfx::ImageSkia expected =
-      GetIconForPath(file_path, /*dark_background=*/false);
+      chromeos::GetIconForPath(file_path, /*dark_background=*/false);
   return gfx::test::AreImagesEqual(gfx::Image(actual), gfx::Image(expected));
 }
 
 bool ContainsFolderTypeIcon(const gfx::ImageSkia& image) {
   gfx::ImageSkia actual = ExtractFileTypeIcon(image);
-  gfx::ImageSkia expected = gfx::CreateVectorIcon(
-      chromeos::kFiletypeFolderIcon, kFileTypeIconSize, gfx::kGoogleGrey700);
+  gfx::ImageSkia expected = chromeos::GetIconFromType(
+      chromeos::IconType::kFolder, /*dark_background=*/false);
   return gfx::test::AreImagesEqual(gfx::Image(actual), gfx::Image(expected));
 }
 
@@ -90,11 +87,10 @@ class ImageGenerator {
 
   size_t NumberOfPendingRequests() const { return pending_requests_.size(); }
 
-  const base::FilePath& GetPendingRequestFilePath(size_t index) const {
+  base::FilePath GetPendingRequestFilePath(size_t index) const {
     if (index >= pending_requests_.size()) {
       ADD_FAILURE() << "Invalid index " << index;
-      static base::FilePath kEmptyPath;
-      return kEmptyPath;
+      return base::FilePath();
     }
     return pending_requests_[index]->file_path;
   }
@@ -103,8 +99,8 @@ class ImageGenerator {
     ASSERT_LT(index, pending_requests_.size());
 
     auto it = pending_requests_.begin() + index;
-    SkBitmap result =
-        CreateBitmap((*it)->size.width(), (*it)->size.height(), color);
+    SkBitmap result = gfx::test::CreateBitmap((*it)->size.width(),
+                                              (*it)->size.height(), color);
     HoldingSpaceImage::BitmapCallback callback = std::move((*it)->callback);
 
     pending_requests_.erase(it);
@@ -157,8 +153,10 @@ class TestImageClient {
     return result;
   }
 
+  void reset() { image_ = nullptr; }
+
  private:
-  const HoldingSpaceImage* const image_;
+  raw_ptr<const HoldingSpaceImage> image_;
   base::CallbackListSubscription image_subscription_;
   size_t image_change_count_ = 0;
 };
@@ -167,9 +165,10 @@ std::unique_ptr<HoldingSpaceItem> CreateTestItem(
     const base::FilePath& file_path,
     ImageGenerator* image_generator,
     const gfx::Size& image_size) {
-  const GURL file_system_url("filesystem:file_system_url");
   return HoldingSpaceItem::CreateFileBackedItem(
-      HoldingSpaceItem::Type::kPinnedFile, file_path, file_system_url,
+      HoldingSpaceItem::Type::kPinnedFile,
+      HoldingSpaceFile(file_path, HoldingSpaceFile::FileSystemType::kTest,
+                       GURL("filesystem:file_system_url")),
       base::BindLambdaForTesting([&](HoldingSpaceItem::Type type,
                                      const base::FilePath& file_path) {
         return std::make_unique<HoldingSpaceImage>(
@@ -534,7 +533,9 @@ TEST_F(HoldingSpaceImageTest, ImageRequestsAfterItemDestruction) {
   EXPECT_EQ(kImageSize, image.size());
   EXPECT_EQ(SK_ColorBLUE, image.bitmap()->getColor(5, 5));
 
-  // Reset the holding space item, and request 2x representation.
+  // Reset the holding space item, and image_client, and request 2x
+  // representation.
+  image_client.reset();
   holding_space_item.reset();
   const SkBitmap bitmap_2x = image.GetRepresentation(2.0f).GetBitmap();
 
@@ -562,7 +563,8 @@ TEST_F(HoldingSpaceImageTest, ItemDestructionDuringImageLoad) {
   EXPECT_EQ(kImageSize, image.size());
   EXPECT_EQ(SK_ColorTRANSPARENT, image.bitmap()->getColor(5, 5));
 
-  // Reset the item, and then simulate image request response.
+  // Reset the item, and image_client, and then simulate image request response.
+  image_client.reset();
   holding_space_item.reset();
   image_generator.FulfillRequest(0, SK_ColorBLUE);
 
@@ -591,7 +593,9 @@ TEST_F(HoldingSpaceImageTest, ItemDestructionDuringFailedImageLoad) {
   EXPECT_EQ(kImageSize, image.size());
   EXPECT_EQ(SK_ColorTRANSPARENT, image.bitmap()->getColor(5, 5));
 
-  // Reset the item, and then simulate a failed image request response.
+  // Reset the item, and image_client, and then simulate a failed image request
+  // response.
+  image_client.reset();
   holding_space_item.reset();
   image_generator.FailRequest(0);
 
@@ -626,7 +630,8 @@ TEST_F(HoldingSpaceImageTest, ItemDestructionDuringImageRefresh) {
   EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
   EXPECT_EQ(1u, image_client.GetAndResetImageChangeCount());
 
-  // Reset the item before image load request completes.
+  // Reset the item, and image_client, before image load request completes.
+  image_client.reset();
   holding_space_item.reset();
   image_generator.FulfillRequest(0, SK_ColorGREEN);
 
@@ -651,8 +656,9 @@ TEST_F(HoldingSpaceImageTest, HandleBackingFilePathChange) {
   // Update the backing file path before any image representations are
   // requested.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
 
   // Create test image client to issue an image request.
   TestImageClient image_client(&holding_space_item->image());
@@ -705,8 +711,9 @@ TEST_F(HoldingSpaceImageTest, HandleBackingFilePathChangeFor2xBitmap) {
   // Update the backing file path, and verify requests for 2x bitmap will use
   // the new file path.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
   EXPECT_EQ(0u, image_generator.NumberOfPendingRequests());
 
   gfx::ImageSkia image = holding_space_item->image().GetImageSkia();
@@ -740,8 +747,9 @@ TEST_F(HoldingSpaceImageTest, RetryFailedImageRequestsOnFilePathChange) {
 
   // Update the backing file path, and simulate image load failure.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
   EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
   image_generator.FailRequest(0);
 
@@ -782,8 +790,9 @@ TEST_F(HoldingSpaceImageTest,
   // Update the backing file path, and verify the failed request was not
   // retried.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
 
   // Verify that image load is retried using the new file path.
   EXPECT_EQ(0u, image_generator.NumberOfPendingRequests());
@@ -807,8 +816,9 @@ TEST_F(HoldingSpaceImageTest, DontRetryImageRequestsFailedAfterPathChange) {
   // Update the backing file path before creating a client that requests an
   // image representation.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
 
   // Create test image client, and simulate image load failure.
   TestImageClient image_client(&holding_space_item->image());
@@ -848,8 +858,9 @@ TEST_F(HoldingSpaceImageTest, DontRetryImageLoadOnBackingFileChange) {
   // Update the backing file path, and verify the image load is not requested
   // again.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
 
   image = holding_space_item->image().GetImageSkia();
   EXPECT_EQ(kImageSize, image.size());
@@ -878,8 +889,9 @@ TEST_F(HoldingSpaceImageTest,
   // Update the backing file path, and verify the image load is not requested
   // again.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
   EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
 
   // Finish initial load request.
@@ -920,8 +932,9 @@ TEST_F(HoldingSpaceImageTest, ItemPathMovedAndModifiedDuringInitialLoad) {
 
   // Update the backing file path, and then invalidate the image.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->SetBackingFile(
-      kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
+  holding_space_item->SetBackingFile(HoldingSpaceFile(
+      kUpdatedTestFile, HoldingSpaceFile::FileSystemType::kTest,
+      GURL("filesystem:updated_file_system_url")));
   holding_space_item->InvalidateImage();
   ASSERT_TRUE(
       holding_space_item->image_for_testing().FireInvalidateTimerForTesting());
@@ -950,6 +963,77 @@ TEST_F(HoldingSpaceImageTest, ItemPathMovedAndModifiedDuringInitialLoad) {
   EXPECT_EQ(kImageSize, image.size());
   EXPECT_EQ(SK_ColorGREEN, image.bitmap()->getColor(5, 5));
 
+  EXPECT_EQ(0u, image_generator.NumberOfPendingRequests());
+  EXPECT_EQ(0u, image_client.GetAndResetImageChangeCount());
+}
+
+// After failure, holding space images will continue to serve placeholders in
+// response to `GetImageSkia()` invocations. Requests to `Invalidate()` the
+// image should result in a new attempt to resolve the appropriate bitmap.
+TEST_F(HoldingSpaceImageTest, InvalidationAfterFailure) {
+  // Create a `holding_space_item` whose image is associated with a fake
+  // `image_generator` for testing.
+  const base::FilePath kTestFile("test_file.test");
+  ImageGenerator image_generator;
+  std::unique_ptr<HoldingSpaceItem> holding_space_item =
+      CreateTestItem(kTestFile, &image_generator, kImageSize);
+  EXPECT_EQ(0u, image_generator.NumberOfPendingRequests());
+
+  // Create an `image_client` to handle image requests. Note that this will
+  // result in an image request being pended immediately.
+  TestImageClient image_client(&holding_space_item->image());
+  EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
+  EXPECT_EQ(kTestFile, image_generator.GetPendingRequestFilePath(0));
+
+  // While the request is still pending, the image should use a placeholder.
+  EXPECT_EQ(0u, image_client.GetAndResetImageChangeCount());
+  gfx::ImageSkia image = holding_space_item->image().GetImageSkia();
+  EXPECT_EQ(kImageSize, image.size());
+  EXPECT_EQ(SK_ColorTRANSPARENT, image.bitmap()->getColor(5, 5));
+
+  // Fail the pending image request.
+  EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
+  EXPECT_EQ(kTestFile, image_generator.GetPendingRequestFilePath(0));
+  image_generator.FailRequest(0);
+
+  // The image should use a placeholder corresponding to the file type of the
+  // associated backing file. Note that image subscribers should have been
+  // notified of the change.
+  EXPECT_EQ(1u, image_client.GetAndResetImageChangeCount());
+  image = holding_space_item->image().GetImageSkia();
+  EXPECT_EQ(kImageSize, image.size());
+  EXPECT_TRUE(ContainsFileTypeIcon(image, kTestFile));
+
+  // Invalidate the image. Because the previous request failed, this should
+  // result in a new pending image request but no event to image subscribers.
+  holding_space_item->InvalidateImage();
+  ASSERT_TRUE(
+      holding_space_item->image_for_testing().FireInvalidateTimerForTesting());
+  EXPECT_EQ(0u, image_client.GetAndResetImageChangeCount());
+  EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
+  EXPECT_EQ(kTestFile, image_generator.GetPendingRequestFilePath(0));
+
+  // While the request is still pending, the image should still use a
+  // placeholder corresponding to the file type of the associated backing file.
+  EXPECT_EQ(0u, image_client.GetAndResetImageChangeCount());
+  image = holding_space_item->image().GetImageSkia();
+  EXPECT_EQ(kImageSize, image.size());
+  EXPECT_TRUE(ContainsFileTypeIcon(image, kTestFile));
+
+  // Fulfill the pending image request.
+  EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
+  EXPECT_EQ(kTestFile, image_generator.GetPendingRequestFilePath(0));
+  image_generator.FulfillRequest(0, SK_ColorBLUE);
+
+  // Verify the image is now using the fulfilled image. Note that image
+  // subscribers should have been notified of the change.
+  EXPECT_EQ(1u, image_client.GetAndResetImageChangeCount());
+  image = holding_space_item->image().GetImageSkia();
+  EXPECT_EQ(kImageSize, image.size());
+  EXPECT_EQ(SK_ColorBLUE, image.bitmap()->getColor(5, 5));
+
+  // Absent any new requests to `Invalidate()` the image, future images
+  // returned from invoking `GetImageSkia()` should be served from cache.
   EXPECT_EQ(0u, image_generator.NumberOfPendingRequests());
   EXPECT_EQ(0u, image_client.GetAndResetImageChangeCount());
 }

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,16 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/extension_file_task_runner.h"
@@ -35,87 +35,8 @@ constexpr char kBase64edInvalidPng[] =
     "Rw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd"
     "1PeAAAADElEQVQI12P4//8/AAX+Av7czFnnAAAAAElFTkSuQmCC";
 
-class RefCountedSanitizerCallback
-    : public base::RefCountedThreadSafe<RefCountedSanitizerCallback> {
+class TestClient : public ImageSanitizer::Client {
  public:
-  explicit RefCountedSanitizerCallback(bool* deleted) : deleted_(deleted) {}
-
-  void ImageSanitizationDone(ImageSanitizer::Status status,
-                             const base::FilePath& path) {
-    if (done_callback_)
-      std::move(done_callback_).Run();
-  }
-  void ImageSanitizerDecodedImage(const base::FilePath& path, SkBitmap image) {}
-
-  void WaitForSanitizationDone() {
-    ASSERT_FALSE(done_callback_);
-    base::RunLoop run_loop;
-    done_callback_ = run_loop.QuitClosure();
-    run_loop.Run();
-  }
-
- private:
-  friend class base::RefCountedThreadSafe<RefCountedSanitizerCallback>;
-  ~RefCountedSanitizerCallback() {
-    if (deleted_)
-      *deleted_ = true;
-  }
-
-  base::OnceClosure done_callback_;
-  bool* deleted_;
-};
-
-class ImageSanitizerTest : public testing::Test {
- public:
-  ImageSanitizerTest() = default;
-
- protected:
-  void CreateValidImage(const base::FilePath::StringPieceType& file_name) {
-    ASSERT_TRUE(WriteBase64DataToFile(kBase64edValidPng, file_name));
-  }
-
-  void CreateInvalidImage(const base::FilePath::StringPieceType& file_name) {
-    ASSERT_TRUE(WriteBase64DataToFile(kBase64edInvalidPng, file_name));
-  }
-
-  const base::FilePath& GetImagePath() const { return temp_dir_.GetPath(); }
-
-  void WaitForSanitizationDone() {
-    ASSERT_FALSE(done_callback_);
-    base::RunLoop run_loop;
-    done_callback_ = run_loop.QuitClosure();
-    run_loop.Run();
-  }
-
-  void CreateAndStartSanitizer(
-      const std::set<base::FilePath>& image_relative_paths) {
-    CreateAndStartSanitizerWithCallbacks(
-        image_relative_paths,
-        base::BindRepeating(&ImageSanitizerTest::ImageSanitizerDecodedImage,
-                            base::Unretained(this)),
-        base::BindOnce(&ImageSanitizerTest::ImageSanitizationDone,
-                       base::Unretained(this)));
-  }
-
-  void TestDontHoldOnToCallback(const base::FilePath& image_path) {
-    bool callback_deleted = false;
-    scoped_refptr<RefCountedSanitizerCallback> sanitizer_callback =
-        base::MakeRefCounted<RefCountedSanitizerCallback>(&callback_deleted);
-    CreateAndStartSanitizerWithCallbacks(
-        {image_path},
-        base::BindRepeating(
-            &RefCountedSanitizerCallback::ImageSanitizerDecodedImage,
-            sanitizer_callback),
-        base::BindOnce(&RefCountedSanitizerCallback::ImageSanitizationDone,
-                       sanitizer_callback));
-
-    sanitizer_callback->WaitForSanitizationDone();
-    sanitizer_callback = nullptr;
-
-    // The sanitizer should have cleared its reference to |sanitizer_callback|.
-    EXPECT_TRUE(callback_deleted);
-  }
-
   ImageSanitizer::Status last_reported_status() const { return last_status_; }
 
   const base::FilePath& last_reported_path() const {
@@ -126,69 +47,108 @@ class ImageSanitizerTest : public testing::Test {
     return &decoded_images_;
   }
 
-  void ClearSanitizer() { sanitizer_.reset(); }
-
   bool done_callback_called() const { return done_callback_called_; }
 
   bool decoded_image_callback_called() const {
     return decoded_image_callback_called_;
   }
 
+  void SetSanitizationDoneCallback(base::OnceClosure done_callback) {
+    ASSERT_FALSE(done_callback_);
+    done_callback_ = std::move(done_callback);
+  }
+
+ private:
+  ~TestClient() override = default;
+
+  data_decoder::DataDecoder* GetDataDecoder() override {
+    return &data_decoder_;
+  }
+
+  void OnImageSanitizationDone(ImageSanitizer::Status status,
+                               const base::FilePath& path) override {
+    done_callback_called_ = true;
+    last_status_ = status;
+    last_reported_path_ = path;
+    if (done_callback_) {
+      std::move(done_callback_).Run();
+    }
+  }
+
+  void OnImageDecoded(const base::FilePath& path, SkBitmap image) override {
+    EXPECT_EQ(0u, decoded_images_.count(path));
+    decoded_images_[path] = image;
+    decoded_image_callback_called_ = true;
+  }
+
+  data_decoder::DataDecoder data_decoder_;
+
+  ImageSanitizer::Status last_status_ = ImageSanitizer::Status::kSuccess;
+  base::FilePath last_reported_path_;
+  base::OnceClosure done_callback_;
+  std::map<base::FilePath, SkBitmap> decoded_images_;
+  bool done_callback_called_ = false;
+  bool decoded_image_callback_called_ = false;
+};
+
+class ImageSanitizerTest : public testing::Test {
+ public:
+  ImageSanitizerTest() = default;
+
+  ImageSanitizerTest(const ImageSanitizerTest&) = delete;
+  ImageSanitizerTest& operator=(const ImageSanitizerTest&) = delete;
+
+ protected:
+  void CreateValidImage(const base::FilePath::StringViewType& file_name) {
+    ASSERT_TRUE(WriteBase64DataToFile(kBase64edValidPng, file_name));
+  }
+
+  void CreateInvalidImage(const base::FilePath::StringViewType& file_name) {
+    ASSERT_TRUE(WriteBase64DataToFile(kBase64edInvalidPng, file_name));
+  }
+
+  const base::FilePath& GetImagePath() const { return temp_dir_.GetPath(); }
+
+  void WaitForSanitizationDone() {
+    base::RunLoop run_loop;
+    client_->SetSanitizationDoneCallback(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  void CreateAndStartSanitizer(
+      const std::set<base::FilePath>& image_relative_paths) {
+    sanitizer_ = ImageSanitizer::CreateAndStart(client_, temp_dir_.GetPath(),
+                                                image_relative_paths,
+                                                GetExtensionFileTaskRunner());
+  }
+
+  void ClearSanitizer() { sanitizer_.reset(); }
+
+  TestClient* client() { return client_.get(); }
+
   data_decoder::test::InProcessDataDecoder& in_process_data_decoder() {
     return in_process_data_decoder_;
   }
 
  private:
-  void CreateAndStartSanitizerWithCallbacks(
-      const std::set<base::FilePath>& image_relative_paths,
-      ImageSanitizer::ImageDecodedCallback image_decoded_callback,
-      ImageSanitizer::SanitizationDoneCallback done_callback) {
-    sanitizer_ = ImageSanitizer::CreateAndStart(
-        &data_decoder_, temp_dir_.GetPath(), image_relative_paths,
-        std::move(image_decoded_callback), std::move(done_callback),
-        GetExtensionFileTaskRunner());
-  }
-
   bool WriteBase64DataToFile(const std::string& base64_data,
-                             const base::FilePath::StringPieceType& file_name) {
+                             const base::FilePath::StringViewType& file_name) {
     std::string binary;
-    if (!base::Base64Decode(base64_data, &binary))
+    if (!base::Base64Decode(base64_data, &binary)) {
       return false;
+    }
 
     base::FilePath path = temp_dir_.GetPath().Append(file_name);
-    return base::WriteFile(path, binary.data(), binary.size());
+    return base::WriteFile(path, binary);
   }
 
   void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
 
-  void ImageSanitizationDone(ImageSanitizer::Status status,
-                             const base::FilePath& path) {
-    done_callback_called_ = true;
-    last_status_ = status;
-    last_reported_path_ = path;
-    if (done_callback_)
-      std::move(done_callback_).Run();
-  }
-
-  void ImageSanitizerDecodedImage(const base::FilePath& path, SkBitmap image) {
-    EXPECT_EQ(decoded_images()->find(path), decoded_images()->end());
-    (*decoded_images())[path] = image;
-    decoded_image_callback_called_ = true;
-  }
-
   content::BrowserTaskEnvironment task_environment_;
-  ImageSanitizer::Status last_status_ = ImageSanitizer::Status::kSuccess;
-  base::FilePath last_reported_path_;
-  base::OnceClosure done_callback_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
-  data_decoder::DataDecoder data_decoder_;
   std::unique_ptr<ImageSanitizer> sanitizer_;
+  scoped_refptr<TestClient> client_ = base::MakeRefCounted<TestClient>();
   base::ScopedTempDir temp_dir_;
-  std::map<base::FilePath, SkBitmap> decoded_images_;
-  bool done_callback_called_ = false;
-  bool decoded_image_callback_called_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ImageSanitizerTest);
 };
 
 }  // namespace
@@ -196,23 +156,24 @@ class ImageSanitizerTest : public testing::Test {
 TEST_F(ImageSanitizerTest, NoImagesProvided) {
   CreateAndStartSanitizer(std::set<base::FilePath>());
   WaitForSanitizationDone();
-  EXPECT_TRUE(done_callback_called());
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kSuccess);
-  EXPECT_FALSE(decoded_image_callback_called());
-  EXPECT_TRUE(last_reported_path().empty());
+  EXPECT_TRUE(client()->done_callback_called());
+  EXPECT_EQ(client()->last_reported_status(), ImageSanitizer::Status::kSuccess);
+  EXPECT_FALSE(client()->decoded_image_callback_called());
+  EXPECT_TRUE(client()->last_reported_path().empty());
 }
 
 TEST_F(ImageSanitizerTest, InvalidPathAbsolute) {
   base::FilePath normal_path(FILE_PATH_LITERAL("hello.png"));
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::FilePath absolute_path(FILE_PATH_LITERAL("c:\\Windows\\win32"));
 #else
   base::FilePath absolute_path(FILE_PATH_LITERAL("/usr/bin/root"));
 #endif
   CreateAndStartSanitizer({normal_path, absolute_path});
   WaitForSanitizationDone();
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kImagePathError);
-  EXPECT_EQ(last_reported_path(), absolute_path);
+  EXPECT_EQ(client()->last_reported_status(),
+            ImageSanitizer::Status::kImagePathError);
+  EXPECT_EQ(client()->last_reported_path(), absolute_path);
 }
 
 TEST_F(ImageSanitizerTest, InvalidPathReferenceParent) {
@@ -225,8 +186,9 @@ TEST_F(ImageSanitizerTest, InvalidPathReferenceParent) {
                  .Append(FILE_PATH_LITERAL("bin"));
   CreateAndStartSanitizer({good_path, bad_path});
   WaitForSanitizationDone();
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kImagePathError);
-  EXPECT_EQ(last_reported_path(), bad_path);
+  EXPECT_EQ(client()->last_reported_status(),
+            ImageSanitizer::Status::kImagePathError);
+  EXPECT_EQ(client()->last_reported_path(), bad_path);
 }
 
 TEST_F(ImageSanitizerTest, ValidCase) {
@@ -243,22 +205,22 @@ TEST_F(ImageSanitizerTest, ValidCase) {
   }
   CreateAndStartSanitizer(paths);
   WaitForSanitizationDone();
-  EXPECT_TRUE(done_callback_called());
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kSuccess);
-  EXPECT_TRUE(last_reported_path().empty());
+  EXPECT_TRUE(client()->done_callback_called());
+  EXPECT_EQ(client()->last_reported_status(), ImageSanitizer::Status::kSuccess);
+  EXPECT_TRUE(client()->last_reported_path().empty());
   // Make sure the image files are there and non empty, and that the
   // ImageSanitizerDecodedImage callback was invoked for every image.
   for (const auto& path : paths) {
-    int64_t file_size = 0;
     base::FilePath full_path = GetImagePath().Append(path);
-    EXPECT_TRUE(base::GetFileSize(full_path, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(full_path);
+    EXPECT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
 
-    ASSERT_TRUE(base::Contains(*decoded_images(), path));
-    EXPECT_FALSE((*decoded_images())[path].drawsNothing());
+    ASSERT_TRUE(client()->decoded_images()->contains(path));
+    EXPECT_FALSE((*client()->decoded_images())[path].drawsNothing());
   }
   // No extra images should have been reported.
-  EXPECT_EQ(decoded_images()->size(), 10U);
+  EXPECT_EQ(client()->decoded_images()->size(), 10U);
 }
 
 TEST_F(ImageSanitizerTest, MissingImage) {
@@ -271,8 +233,9 @@ TEST_F(ImageSanitizerTest, MissingImage) {
   base::FilePath bad_png(kNonExistingName);
   CreateAndStartSanitizer({good_png, bad_png});
   WaitForSanitizationDone();
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kFileReadError);
-  EXPECT_EQ(last_reported_path(), bad_png);
+  EXPECT_EQ(client()->last_reported_status(),
+            ImageSanitizer::Status::kFileReadError);
+  EXPECT_EQ(client()->last_reported_path(), bad_png);
 }
 
 TEST_F(ImageSanitizerTest, InvalidImage) {
@@ -286,8 +249,9 @@ TEST_F(ImageSanitizerTest, InvalidImage) {
   base::FilePath bad_png(kBadPngName);
   CreateAndStartSanitizer({good_png, bad_png});
   WaitForSanitizationDone();
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kDecodingError);
-  EXPECT_EQ(last_reported_path(), bad_png);
+  EXPECT_EQ(client()->last_reported_status(),
+            ImageSanitizer::Status::kDecodingError);
+  EXPECT_EQ(client()->last_reported_path(), bad_png);
 }
 
 TEST_F(ImageSanitizerTest, NoCallbackAfterDelete) {
@@ -300,12 +264,11 @@ TEST_F(ImageSanitizerTest, NoCallbackAfterDelete) {
   ClearSanitizer();
   // Wait a bit and ensure no callback has been called.
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, run_loop.QuitClosure(),
-      base::TimeDelta::FromMilliseconds(200));
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(200));
   run_loop.Run();
-  EXPECT_FALSE(done_callback_called());
-  EXPECT_FALSE(decoded_image_callback_called());
+  EXPECT_FALSE(client()->done_callback_called());
+  EXPECT_FALSE(client()->decoded_image_callback_called());
 }
 
 // Ensures the sanitizer does not keep a reference to the callbacks to prevent
@@ -316,26 +279,37 @@ TEST_F(ImageSanitizerTest, DontHoldOnToCallbacksOnFailure) {
   constexpr base::FilePath::CharType kBadPngName[] =
       FILE_PATH_LITERAL("bad.png");
   CreateInvalidImage(kBadPngName);
-  TestDontHoldOnToCallback(base::FilePath(kBadPngName));
+  CreateAndStartSanitizer({base::FilePath(kBadPngName)});
+  WaitForSanitizationDone();
+
+  // The image sanitizer shouldn't hold any ref-counts at this point (i.e.
+  // ImageSanitizerTest::client_ should be the only remaining ref-count).
+  EXPECT_TRUE(client()->HasOneRef());
 }
 
 TEST_F(ImageSanitizerTest, DontHoldOnToCallbacksOnSuccess) {
   constexpr base::FilePath::CharType kGoodPngName[] =
       FILE_PATH_LITERAL("good.png");
   CreateValidImage(kGoodPngName);
-  TestDontHoldOnToCallback(base::FilePath(kGoodPngName));
+  CreateAndStartSanitizer({base::FilePath(kGoodPngName)});
+  WaitForSanitizationDone();
+
+  // The image sanitizer shouldn't hold any ref-counts at this point (i.e.
+  // ImageSanitizerTest::client_ should be the only remaining ref-count).
+  EXPECT_TRUE(client()->HasOneRef());
 }
 
 // Tests that the callback is invoked if the data decoder service crashes.
 TEST_F(ImageSanitizerTest, DataDecoderServiceCrashes) {
   constexpr base::FilePath::CharType kGoodPngName[] =
       FILE_PATH_LITERAL("good.png");
-  in_process_data_decoder().service().SimulateImageDecoderCrashForTesting(true);
+  in_process_data_decoder().SimulateImageDecoderCrash(true);
   CreateValidImage(kGoodPngName);
   base::FilePath good_png(kGoodPngName);
   CreateAndStartSanitizer({good_png});
   WaitForSanitizationDone();
-  EXPECT_EQ(last_reported_status(), ImageSanitizer::Status::kServiceError);
+  EXPECT_EQ(client()->last_reported_status(),
+            ImageSanitizer::Status::kDecodingError);
 }
 
 }  // namespace extensions

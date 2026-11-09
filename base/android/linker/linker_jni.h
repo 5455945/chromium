@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,10 +19,10 @@
 
 #include <android/log.h>
 #include <jni.h>
-#include <stddef.h>
 #include <stdlib.h>
 
 #include "build/build_config.h"
+#include "third_party/jni_zero/jni_zero.h"
 
 // Set this to 1 to enable debug traces to the Android log.
 // Note that LOG() from "base/logging.h" cannot be used, since it is
@@ -44,18 +44,6 @@
 #define PLOG_ERROR(FORMAT, ...) \
   LOG_ERROR(FORMAT ": %s", ##__VA_ARGS__, strerror(errno))
 
-#define UNUSED __attribute__((unused))
-
-#if defined(ARCH_CPU_X86)
-// Dalvik JIT generated code doesn't guarantee 16-byte stack alignment on
-// x86 - use force_align_arg_pointer to realign the stack at the JNI
-// boundary. https://crbug.com/655248
-#define JNI_GENERATOR_EXPORT \
-  extern "C" __attribute__((visibility("default"), force_align_arg_pointer))
-#else
-#define JNI_GENERATOR_EXPORT extern "C" __attribute__((visibility("default")))
-#endif
-
 #if defined(__arm__) && defined(__ARM_ARCH_7A__)
 #define CURRENT_ABI "armeabi-v7a"
 #elif defined(__arm__)
@@ -68,17 +56,11 @@
 #define CURRENT_ABI "x86_64"
 #elif defined(__aarch64__)
 #define CURRENT_ABI "arm64-v8a"
+#elif defined(__riscv) && (__riscv_xlen == 64)
+#define CURRENT_ABI "riscv64"
 #else
 #error "Unsupported target abi"
 #endif
-
-#if !defined(PAGE_SIZE)
-#define PAGE_SIZE (1 << 12)
-#define PAGE_MASK (~(PAGE_SIZE - 1))
-#endif
-
-#define PAGE_START(x) ((x)&PAGE_MASK)
-#define PAGE_END(x) PAGE_START((x) + (PAGE_SIZE - 1))
 
 // Copied from //base/posix/eintr_wrapper.h to avoid depending on //base.
 #define HANDLE_EINTR(x)                                     \
@@ -97,24 +79,43 @@ static const size_t kAddressSpaceReservationSize = 192 * 1024 * 1024;
 
 // A simple scoped UTF String class that can be initialized from
 // a Java jstring handle. Modeled like std::string, which cannot
-// be used here.
+// be used here. Employs Small String Optimization (SSO) with an inline
+// buffer to avoid heap allocations and ART memory copies.
 class String {
  public:
   String(JNIEnv* env, jstring str);
+  String(const String&) = delete;
+  String& operator=(const String&) = delete;
 
-  inline ~String() { ::free(ptr_); }
+  inline ~String() {
+    if (ptr_ != buffer_) {
+      ::free(ptr_);
+    }
+  }
 
   inline const char* c_str() const { return ptr_ ? ptr_ : ""; }
   inline size_t size() const { return size_; }
 
  private:
+  // Sized to hold the paths of apks and .so files as this is the only
+  // application of this string.
+  static constexpr size_t kInlineBufferSize = 512;
   char* ptr_;
   size_t size_;
+  char buffer_[kInlineBufferSize];
 };
+
+inline uintptr_t PageStart(size_t page_size, uintptr_t x) {
+  return x & ~(page_size - 1);
+}
+
+inline uintptr_t PageEnd(size_t page_size, uintptr_t x) {
+  return PageStart(page_size, x + page_size - 1);
+}
 
 // Returns true iff casting a java-side |address| to uintptr_t does not lose
 // bits.
-bool IsValidAddress(jlong address);
+bool IsValidAddress(int64_t address);
 
 // Find the jclass JNI reference corresponding to a given |class_name|.
 // |env| is the current JNI environment handle.
@@ -195,9 +196,11 @@ struct LibInfo_class {
                    uintptr_t* load_address,
                    size_t* load_size) {
     if (load_address) {
-      jlong java_address = env->GetLongField(library_info_obj, load_address_id);
-      if (!IsValidAddress(java_address))
+      int64_t java_address =
+          env->GetLongField(library_info_obj, load_address_id);
+      if (!IsValidAddress(java_address)) {
         return false;
+      }
       *load_address = static_cast<uintptr_t>(java_address);
     }
     if (load_size) {
@@ -228,10 +231,156 @@ struct LibInfo_class {
   }
 };
 
-// Variable containing LibInfo accessors for the loaded library.
-extern LibInfo_class s_lib_info_fields;
+// Used to find out whether RELRO sharing is often rejected due to mismatch of
+// the contents.
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. Must be kept in sync with the enum
+// in enums.xml. A java @IntDef is generated from this.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.base.library_loader
+enum class RelroSharingStatus {
+  NOT_ATTEMPTED = 0,
+  SHARED = 1,
+  NOT_IDENTICAL = 2,
+  EXTERNAL_RELRO_FD_NOT_PROVIDED = 3,
+  EXTERNAL_RELRO_NOT_FOUND = 4,
+  NO_SHMEM_FUNCTIONS = 5,
+  REMAP_FAILED = 6,
+  CORRUPTED_IN_JAVA = 7,
+  EXTERNAL_LOAD_ADDRESS_RESET = 8,
+  COUNT = 9,
+};
 
-jint JNI_OnLoad(JavaVM* vm, void* reserved);
+// Holds address ranges of the loaded native library, its RELRO region, along
+// with the RELRO FD identifying the shared memory region. Carries the same
+// members as the Java-side LibInfo (without mLibFilePath), allowing to
+// internally import/export the member values from/to the Java-side counterpart.
+//
+// Does *not* own the RELRO FD as soon as the latter gets exported to Java
+// (as a result of 'spawning' the RELRO region as shared memory.
+//
+// *Not* threadsafe.
+class NativeLibInfo {
+ public:
+  // Constructs an empty instance. The |java_object| indicates the handle to
+  // import and export member fields.
+  //
+  // Having |env| as |nullptr| disables export to java for the lifetime of the
+  // instance. This is useful as a scratch info that is gradually populated for
+  // comparison with another NativeLibInfo, and then discarded.
+  NativeLibInfo(JNIEnv* env, jobject java_object);
+
+  // Copies the java-side object state to this native instance. Returns false
+  // iff an imported value is invalid.
+  bool CopyFromJavaObject();
+
+  void set_load_address(uintptr_t a) { load_address_ = a; }
+
+  uintptr_t load_address() const { return load_address_; }
+
+  // Loads the native library using android_dlopen_ext and invokes JNI_OnLoad().
+  //
+  // On a successful load exports the address range of the library to the
+  // Java-side LibInfo.
+  //
+  // Iff |spawn_relro_region| is true, also finds the RELRO region in the
+  // library (PT_GNU_RELRO), converts it to be backed by a shared memory region
+  // (here referred as "RELRO FD") and exports the RELRO information to Java
+  // (the address range and the RELRO FD).
+  //
+  // When spawned, the shared memory region is exported only after sealing as
+  // read-only and without writable memory mappings. This allows any process to
+  // provide RELRO FD before it starts processing arbitrary input. For example,
+  // an App Zygote can create a RELRO FD in a sufficiently trustworthy way to
+  // make the Browser/Privileged processes share the region with it.
+  bool LoadLibrary(const String& library_path, bool spawn_relro_region);
+
+  // Finds the RELRO region in the native library identified by
+  // |this->load_address()| and replaces it with the shared memory region
+  // identified by |other_lib_info|.
+  //
+  // The external NativeLibInfo can arrive from a different process.
+  //
+  // Note on security: The RELRO region is treated as *trusted* because the App
+  // Zygote does not host untrusted code/data before it sends the RELRO FD. The
+  // Linker does not check write protection of the region for simplicity. See
+  // //docs/security/android-sandbox.md#zygote.
+  bool CompareRelroAndReplaceItBy(const NativeLibInfo& other_lib_info);
+
+  void set_relro_info_for_testing(uintptr_t start, size_t size) {
+    relro_start_ = start;
+    relro_size_ = size;
+  }
+
+  // Creates a shared RELRO region as it normally would during LoadLibrary()
+  // with |spawn_relro_region=true|. Exposed here because it is difficult to
+  // unittest LoadLibrary() directly.
+  bool CreateSharedRelroFdForTesting();
+
+  void set_relro_fd_for_testing(int fd) { relro_fd_ = fd; }
+  int get_relro_fd_for_testing() const { return relro_fd_; }
+  size_t get_relro_start_for_testing() const { return relro_start_; }
+  size_t get_load_size_for_testing() const { return load_size_; }
+
+  bool FindRelroAndLibraryRangesInElfForTesting() {
+    return FindRelroAndLibraryRangesInElf();
+  }
+
+ private:
+  NativeLibInfo() = delete;
+
+  // Not copyable or movable.
+  NativeLibInfo(const NativeLibInfo&) = delete;
+  NativeLibInfo& operator=(const NativeLibInfo&) = delete;
+
+  // Exports the address range of the library described by |this| to the
+  // Java-side LibInfo.
+  void ExportLoadInfoToJava() const;
+
+  // Exports the address range of the RELRO region and RELRO FD described by
+  // |this| to the Java-side LibInfo.
+  void ExportRelroInfoToJava() const;
+
+  void CloseRelroFd();
+
+  // Determines the minimal address ranges for the union of all the loadable
+  // (and RELRO) segments by parsing ELF starting at |load_address()|. May fail
+  // or return incorrect results for some creative ELF libraries.
+  bool FindRelroAndLibraryRangesInElf();
+
+  // Loads and initializes the load address ranges: |load_address_|,
+  // |load_size_|. Assumes that the memory range is reserved (in Linker.java).
+  bool LoadWithDlopenExt(const String& path, void** handle);
+
+  // Initializes |relro_fd_| with a newly created read-only shared memory region
+  // sized as the library's RELRO and with identical data.
+  bool CreateSharedRelroFd();
+
+  // Assuming that RELRO-related information is populated, memory-maps the
+  // first |size| bytes of the RELRO FD on top of the library's RELRO.
+  bool ReplaceRelroWithSharedOne(size_t size) const;
+
+  // Returns the size of the identical prefix between the current RELRO region
+  // and the one provided by |other_lib_info|. Truncates to page boundary.
+  // Returns 0 if |other_lib_info| cannot provide a useful region for sharing.
+  size_t FindRelroCommonPrefix(const NativeLibInfo& other_lib_info) const;
+
+  static constexpr int kInvalidFd = -1;
+  uintptr_t load_address_ = 0;
+  size_t load_size_ = 0;
+  uintptr_t relro_start_ = 0;
+  size_t relro_size_ = 0;
+  int relro_fd_ = kInvalidFd;
+  JNIEnv* const env_;
+  const jobject java_object_;
+};
+
+// JNI_OnLoad() initialization hook for the linker.
+// Sets up JNI and other initializations for native linker code.
+// |vm| is the Java VM handle passed to JNI_OnLoad().
+// |env| is the current JNI environment handle.
+// On success, returns true.
+bool LinkerJNIInit(JavaVM* vm, JNIEnv* env);
 
 }  // namespace chromium_android_linker
 

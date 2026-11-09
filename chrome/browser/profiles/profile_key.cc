@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include "build/build_config.h"
 #include "components/leveldb_proto/public/proto_database_provider.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/profiles/profile_key_android.h"
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)
 
 ProfileKey::ProfileKey(const base::FilePath& path, ProfileKey* original_key)
     : SimpleFactoryKey(path, original_key != nullptr /* is_off_the_record */),
@@ -25,17 +25,17 @@ ProfileKey* ProfileKey::GetOriginalKey() {
 }
 
 PrefService* ProfileKey::GetPrefs() {
-  DCHECK(prefs_);
+  CHECK(prefs_, base::NotFatalUntil::M162);
   return prefs_;
 }
 
 void ProfileKey::SetPrefs(PrefService* prefs) {
-  DCHECK(!prefs_);
+  CHECK(!prefs_, base::NotFatalUntil::M162);
   prefs_ = prefs;
 }
 
 leveldb_proto::ProtoDatabaseProvider* ProfileKey::GetProtoDatabaseProvider() {
-  DCHECK(db_provider_);
+  CHECK(db_provider_, base::NotFatalUntil::M162);
   return db_provider_;
 }
 
@@ -43,7 +43,8 @@ void ProfileKey::SetProtoDatabaseProvider(
     leveldb_proto::ProtoDatabaseProvider* db_provider) {
   // If started from reduced mode on Android, the db provider is set by
   // both StartupData and ProfileImpl.
-  DCHECK(!db_provider_ || db_provider_ == db_provider);
+  CHECK(!db_provider_ || db_provider_ == db_provider,
+        base::NotFatalUntil::M162);
   db_provider_ = db_provider;
 }
 
@@ -52,10 +53,10 @@ ProfileKey* ProfileKey::FromSimpleFactoryKey(SimpleFactoryKey* key) {
   return key ? static_cast<ProfileKey*>(key) : nullptr;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 ProfileKeyAndroid* ProfileKey::GetProfileKeyAndroid() {
   if (!profile_key_android_)
     profile_key_android_ = std::make_unique<ProfileKeyAndroid>(this);
   return profile_key_android_.get();
 }
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)

@@ -1,8 +1,8 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "cc/layers/solid_color_layer.h"
 #include "cc/layers/texture_layer.h"
@@ -16,8 +16,10 @@
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "components/viz/test/buildflags.h"
 #include "components/viz/test/paths.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
+#include "gpu/command_buffer/client/raster_interface.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 
 namespace cc {
 namespace {
@@ -53,9 +55,7 @@ class LayerTreeHostReadbackPixelTest
     : public LayerTreePixelTest,
       public testing::WithParamInterface<ReadbackTestConfig> {
  protected:
-  LayerTreeHostReadbackPixelTest()
-      : LayerTreePixelTest(renderer_type()),
-        insert_copy_request_after_frame_count_(0) {}
+  LayerTreeHostReadbackPixelTest() : LayerTreePixelTest(renderer_type()) {}
 
   viz::RendererType renderer_type() const { return GetParam().renderer_type; }
 
@@ -66,14 +66,16 @@ class LayerTreeHostReadbackPixelTest
 
     if (readback_type() == TestReadBackType::kBitmap) {
       request = std::make_unique<viz::CopyOutputRequest>(
-          viz::CopyOutputRequest::ResultFormat::RGBA_BITMAP,
+          viz::CopyOutputRequest::ResultFormat::RGBA,
+          viz::CopyOutputRequest::ResultDestination::kSystemMemory,
           base::BindOnce(
               &LayerTreeHostReadbackPixelTest::ReadbackResultAsBitmap,
               base::Unretained(this)));
     } else {
       DCHECK_NE(renderer_type_, viz::RendererType::kSoftware);
       request = std::make_unique<viz::CopyOutputRequest>(
-          viz::CopyOutputRequest::ResultFormat::RGBA_TEXTURE,
+          viz::CopyOutputRequest::ResultFormat::RGBA,
+          viz::CopyOutputRequest::ResultDestination::kSharedImage,
           base::BindOnce(
               &LayerTreeHostReadbackPixelTest::ReadbackResultAsTexture,
               base::Unretained(this)));
@@ -84,20 +86,39 @@ class LayerTreeHostReadbackPixelTest
     return request;
   }
 
+  std::unique_ptr<TestLayerTreeFrameSink> CreateLayerTreeFrameSink(
+      const viz::RendererSettings& renderer_settings,
+      double refresh_rate,
+      scoped_refptr<viz::RasterContextProvider> compositor_context_provider,
+      scoped_refptr<viz::RasterContextProvider> worker_context_provider)
+      override {
+    auto frame_sink = LayerTreePixelTest::CreateLayerTreeFrameSink(
+        renderer_settings, refresh_rate, std::move(compositor_context_provider),
+        std::move(worker_context_provider));
+    context_provider_ = frame_sink->worker_context_provider();
+    return frame_sink;
+  }
+
   void BeginTest() override {
     if (insert_copy_request_after_frame_count_ == 0) {
-      Layer* const target =
-          readback_target_ ? readback_target_ : layer_tree_host()->root_layer();
+      Layer* const target = readback_target_ ? readback_target_.get()
+                                             : layer_tree_host()->root_layer();
       target->RequestCopyOfOutput(CreateCopyOutputRequest());
     }
     PostSetNeedsCommitToMainThread();
   }
 
+  void AfterTest() override {
+    // Avoid extending the lifetime of the context.
+    context_provider_.reset();
+    LayerTreePixelTest::AfterTest();
+  }
+
   void DidCommitAndDrawFrame() override {
     if (insert_copy_request_after_frame_count_ ==
         layer_tree_host()->SourceFrameNumber()) {
-      Layer* const target =
-          readback_target_ ? readback_target_ : layer_tree_host()->root_layer();
+      Layer* const target = readback_target_ ? readback_target_.get()
+                                             : layer_tree_host()->root_layer();
       target->RequestCopyOfOutput(CreateCopyOutputRequest());
     }
   }
@@ -112,18 +133,42 @@ class LayerTreeHostReadbackPixelTest
     EndTest();
   }
 
+  SkBitmap CopyMailboxToBitmap(const gfx::Size& size,
+                               const gpu::Mailbox& mailbox,
+                               const gfx::ColorSpace& color_space) {
+    DCHECK(context_provider_);
+    viz::RasterContextProvider::ScopedRasterContextLock lock(
+        context_provider_.get());
+    auto* ri = context_provider_->RasterInterface();
+
+    SkBitmap bitmap;
+    bitmap.allocPixels(SkImageInfo::MakeN32Premul(
+        size.width(), size.height(), color_space.ToSkColorSpace()));
+
+    ri->ReadbackImagePixels(mailbox, size, bitmap.info(), bitmap.rowBytes(), 0,
+                            0, /*plane_index=*/0, bitmap.getPixels());
+    EXPECT_EQ(ri->GetError(), static_cast<unsigned>(GL_NO_ERROR));
+
+    return bitmap;
+  }
+
   void ReadbackResultAsTexture(std::unique_ptr<viz::CopyOutputResult> result) {
     EXPECT_TRUE(task_runner_provider()->IsMainThread());
-    ASSERT_EQ(result->format(), viz::CopyOutputResult::Format::RGBA_TEXTURE);
+    ASSERT_FALSE(result->IsEmpty());
+    ASSERT_EQ(result->format(), viz::CopyOutputResult::Format::RGBA);
+    ASSERT_EQ(result->destination(),
+              viz::CopyOutputResult::Destination::kSharedImage);
 
-    gpu::Mailbox mailbox = result->GetTextureResult()->mailbox;
-    gpu::SyncToken sync_token = result->GetTextureResult()->sync_token;
-    gfx::ColorSpace color_space = result->GetTextureResult()->color_space;
-    EXPECT_EQ(result->GetTextureResult()->color_space, output_color_space_);
-    viz::ReleaseCallback release_callback = result->TakeTextureOwnership();
+    scoped_refptr<gpu::ClientSharedImage> shared_image =
+        result->GetSharedImage();
+    gpu::Mailbox mailbox = shared_image->mailbox();
+    gfx::ColorSpace color_space = shared_image->color_space();
+    EXPECT_EQ(color_space, output_color_space_);
 
-    SkBitmap bitmap =
-        CopyMailboxToBitmap(result->size(), mailbox, sync_token, color_space);
+    viz::ReleaseCallback release_callback = result->TakeSharedImageOwnership();
+    ASSERT_TRUE(release_callback);
+
+    SkBitmap bitmap = CopyMailboxToBitmap(result->size(), mailbox, color_space);
     std::move(release_callback).Run(gpu::SyncToken(), false);
 
     ReadbackResultAsBitmap(std::make_unique<viz::CopyOutputSkBitmapResult>(
@@ -132,7 +177,8 @@ class LayerTreeHostReadbackPixelTest
 
   gfx::Rect copy_subrect_;
   gfx::ColorSpace output_color_space_ = gfx::ColorSpace::CreateSRGB();
-  int insert_copy_request_after_frame_count_;
+  int insert_copy_request_after_frame_count_ = 0;
+  scoped_refptr<viz::RasterContextProvider> context_provider_;
 };
 
 TEST_P(LayerTreeHostReadbackPixelTest, ReadbackRootLayer) {
@@ -427,13 +473,11 @@ TEST_P(LayerTreeHostReadbackPixelTest, MultipleReadbacksOnLayer) {
       base::FilePath(FILE_PATH_LITERAL("green.png")));
 }
 
-// TODO(crbug.com/971257): Enable these tests for Skia Vulkan using texture
+// TODO(crbug.com/41463412): Enable these tests for Skia Vulkan using texture
 // readback.
 ReadbackTestConfig const kTestConfigs[] = {
     ReadbackTestConfig{viz::RendererType::kSoftware, TestReadBackType::kBitmap},
 #if BUILDFLAG(ENABLE_GL_BACKEND_TESTS)
-    ReadbackTestConfig{viz::RendererType::kGL, TestReadBackType::kTexture},
-    ReadbackTestConfig{viz::RendererType::kGL, TestReadBackType::kBitmap},
     ReadbackTestConfig{viz::RendererType::kSkiaGL, TestReadBackType::kTexture},
     ReadbackTestConfig{viz::RendererType::kSkiaGL, TestReadBackType::kBitmap},
 #endif  // BUILDFLAG(ENABLE_GL_BACKEND_TESTS)
@@ -441,9 +485,10 @@ ReadbackTestConfig const kTestConfigs[] = {
     ReadbackTestConfig{viz::RendererType::kSkiaVk, TestReadBackType::kBitmap},
     ReadbackTestConfig{viz::RendererType::kSkiaVk, TestReadBackType::kTexture},
 #endif  // BUILDFLAG(ENABLE_VULKAN_BACKEND_TESTS)
-#if BUILDFLAG(ENABLE_DAWN_BACKEND_TESTS)
-    ReadbackTestConfig{viz::RendererType::kSkiaDawn, TestReadBackType::kBitmap},
-#endif  // BUILDFLAG(ENABLE_DAWN_BACKEND_TESTS)
+#if BUILDFLAG(ENABLE_SKIA_GRAPHITE_TESTS)
+    ReadbackTestConfig{viz::RendererType::kSkiaGraphiteDawn,
+                       TestReadBackType::kBitmap},
+#endif  // BUILDFLAG(ENABLE_SKIA_GRAPHITE_TESTS)
 };
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -547,7 +592,7 @@ class LayerTreeHostReadbackColorSpacePixelTest
   std::unique_ptr<TestLayerTreeFrameSink> CreateLayerTreeFrameSink(
       const viz::RendererSettings& renderer_settings,
       double refresh_rate,
-      scoped_refptr<viz::ContextProvider> compositor_context_provider,
+      scoped_refptr<viz::RasterContextProvider> compositor_context_provider,
       scoped_refptr<viz::RasterContextProvider> worker_context_provider)
       override {
     std::unique_ptr<TestLayerTreeFrameSink> frame_sink =
@@ -555,6 +600,7 @@ class LayerTreeHostReadbackColorSpacePixelTest
             renderer_settings, refresh_rate, compositor_context_provider,
             worker_context_provider);
     frame_sink->SetDisplayColorSpace(output_color_space_);
+    context_provider_ = frame_sink->worker_context_provider();
     return frame_sink;
   }
 
@@ -580,4 +626,4 @@ INSTANTIATE_TEST_SUITE_P(All,
 }  // namespace
 }  // namespace cc
 
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)

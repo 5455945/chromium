@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 #define CHROME_BROWSER_UI_VIEWS_LOGIN_VIEW_H_
 
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/login/login_handler.h"
 #include "components/password_manager/core/browser/http_auth_observer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -24,8 +26,9 @@ class HttpAuthManager;
 // for HTTP/FTP authentication.
 class LoginView : public views::View,
                   public password_manager::HttpAuthObserver {
+  METADATA_HEADER(LoginView, views::View)
+
  public:
-  METADATA_HEADER(LoginView);
   // |login_model_data->model| is observed for the entire lifetime of the
   // LoginView. Therefore |login_model_data->model| should not be destroyed
   // before the LoginView object. |login_model_data| may be null.
@@ -37,12 +40,12 @@ class LoginView : public views::View,
   ~LoginView() override;
 
   // Access the data in the username/password text fields.
-  const std::u16string& GetUsername() const;
-  const std::u16string& GetPassword() const;
+  std::u16string_view GetUsername() const;
+  std::u16string_view GetPassword() const;
 
   // password_manager::HttpAuthObserver:
-  void OnAutofillDataAvailable(const std::u16string& username,
-                               const std::u16string& password) override;
+  void OnAutofillDataAvailable(std::u16string_view username,
+                               std::u16string_view password) override;
   void OnLoginModelDestroying() override;
 
   // Used by LoginHandlerViews to set the initial focus.
@@ -50,12 +53,12 @@ class LoginView : public views::View,
 
  private:
   // Non-owning refs to the input text fields.
-  views::Textfield* username_field_;
-  views::Textfield* password_field_;
+  raw_ptr<views::Textfield> username_field_;
+  raw_ptr<views::Textfield> password_field_;
 
   // If not null, points to a model we need to notify of our own destruction
   // so it doesn't try and access this when its too late.
-  password_manager::HttpAuthManager* http_auth_manager_;
+  raw_ptr<password_manager::HttpAuthManager> http_auth_manager_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_LOGIN_VIEW_H_

@@ -18,6 +18,9 @@
  * This header is "private" to stacktrace.cc.
  * DO NOT include it into any other files.
 */
+
+// SKIP_ABSL_INLINE_NAMESPACE_CHECK
+
 #ifndef ABSL_DEBUGGING_INTERNAL_STACKTRACE_CONFIG_H_
 #define ABSL_DEBUGGING_INTERNAL_STACKTRACE_CONFIG_H_
 
@@ -35,7 +38,20 @@
 // Thread local support required for UnwindImpl.
 #define ABSL_STACKTRACE_INL_HEADER \
   "absl/debugging/internal/stacktrace_generic-inl.inc"
-#endif
+#endif  // defined(ABSL_HAVE_THREAD_LOCAL)
+
+// Emscripten stacktraces rely on JS. Do not use them in standalone mode.
+#elif defined(__EMSCRIPTEN__) && !defined(STANDALONE_WASM)
+#define ABSL_STACKTRACE_INL_HEADER \
+  "absl/debugging/internal/stacktrace_emscripten-inl.inc"
+
+#elif defined(__ANDROID__) && __ANDROID_API__ >= 33
+#ifdef ABSL_HAVE_THREAD_LOCAL
+// Use the generic implementation for Android 33+ (Android T+). This is the
+// first version of Android for which <execinfo.h> implements backtrace().
+#define ABSL_STACKTRACE_INL_HEADER \
+  "absl/debugging/internal/stacktrace_generic-inl.inc"
+#endif  // defined(ABSL_HAVE_THREAD_LOCAL)
 
 #elif defined(__linux__) && !defined(__ANDROID__)
 
@@ -46,12 +62,12 @@
 #define ABSL_STACKTRACE_INL_HEADER \
   "absl/debugging/internal/stacktrace_libunwind-inl.inc"
 #define STACKTRACE_USES_LIBUNWIND 1
-#elif defined(NO_FRAME_POINTER) && defined(__has_include)
-#if __has_include(<execinfo.h>)
+#elif defined(NO_FRAME_POINTER)
+#if __has_include(<execinfo.h>) && defined(ABSL_HAVE_THREAD_LOCAL)
 // Note: When using glibc this may require -funwind-tables to function properly.
 #define ABSL_STACKTRACE_INL_HEADER \
   "absl/debugging/internal/stacktrace_generic-inl.inc"
-#endif
+#endif  // __has_include(<execinfo.h>) && defined(ABSL_HAVE_THREAD_LOCAL)
 #elif defined(__i386__) || defined(__x86_64__)
 #define ABSL_STACKTRACE_INL_HEADER \
   "absl/debugging/internal/stacktrace_x86-inl.inc"
@@ -61,15 +77,18 @@
 #elif defined(__aarch64__)
 #define ABSL_STACKTRACE_INL_HEADER \
   "absl/debugging/internal/stacktrace_aarch64-inl.inc"
-#elif defined(__has_include)
-#if __has_include(<execinfo.h>)
+#elif defined(__riscv)
+#define ABSL_STACKTRACE_INL_HEADER \
+  "absl/debugging/internal/stacktrace_riscv-inl.inc"
+#else
+#if __has_include(<execinfo.h>) && defined(ABSL_HAVE_THREAD_LOCAL)
 // Note: When using glibc this may require -funwind-tables to function properly.
 #define ABSL_STACKTRACE_INL_HEADER \
   "absl/debugging/internal/stacktrace_generic-inl.inc"
-#endif
+#endif  // __has_include(<execinfo.h>) && defined(ABSL_HAVE_THREAD_LOCAL)
 #endif
 
-#endif
+#endif  // defined(__linux__) && !defined(__ANDROID__)
 
 // Fallback to the empty implementation.
 #if !defined(ABSL_STACKTRACE_INL_HEADER)

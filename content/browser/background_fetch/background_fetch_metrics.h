@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,22 +13,20 @@ class StorageKey;
 }  // namespace blink
 
 namespace content {
+class RenderFrameHostImpl;
+
 namespace background_fetch {
 
-// Records the number of registrations that have unfinished fetches found on
-// start-up.
-void RecordRegistrationsOnStartup(int num_registrations);
-
 // Records the BackgroundFetch UKM event. Must be called before a Background
-// Fetch registration has been created. Will be a no-op if |frame_tree_node_id|
-// does not identify a valid, live frame.
+// Fetch registration has been created. Will be a no-op if `rfh` is null or
+// inactive.
 void RecordBackgroundFetchUkmEvent(
     const blink::StorageKey& storage_key,
     int requests_size,
     blink::mojom::BackgroundFetchOptionsPtr options,
     const SkBitmap& icon,
     blink::mojom::BackgroundFetchUkmDataPtr ukm_data,
-    int frame_tree_node_id,
+    RenderFrameHostImpl* rfh,
     BackgroundFetchPermission permission);
 
 }  // namespace background_fetch

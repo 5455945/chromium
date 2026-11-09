@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define CHROME_BROWSER_ASH_POWER_ML_IDLE_EVENT_NOTIFIER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -18,7 +19,6 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/viz/public/mojom/compositing/video_detector_observer.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/user_activity/user_activity_detector.h"
 #include "ui/base/user_activity/user_activity_observer.h"
 
@@ -35,19 +35,17 @@ using TimeOfDay = base::TimeDelta;
 // IdleEventNotifier listens to signals and notifies its observers when
 // ScreenDimImminent is received from PowerManagerClient. This generates an idle
 // event.
-class IdleEventNotifier : public PowerManagerClient::Observer,
+class IdleEventNotifier : public chromeos::PowerManagerClient::Observer,
                           public ui::UserActivityObserver,
                           public viz::mojom::VideoDetectorObserver {
  public:
   // If suspend duration is greater than this, we reset timestamps used to calc
   // |ActivityData::recent_time_active|. We also merge video-playing sessions
   // that have a pause shorter than this.
-  static constexpr base::TimeDelta kIdleDelay =
-      base::TimeDelta::FromSeconds(30);
+  static constexpr base::TimeDelta kIdleDelay = base::Seconds(30);
 
   // Count number of key, mouse and touch events in the past hour.
-  static constexpr auto kUserInputEventsDuration =
-      base::TimeDelta::FromHours(1);
+  static constexpr auto kUserInputEventsDuration = base::Hours(1);
 
   // Granularity of input events is per minute.
   static constexpr int kNumUserInputEventsBuckets =
@@ -68,7 +66,7 @@ class IdleEventNotifier : public PowerManagerClient::Observer,
     // activity. It could be different from |last_activity_time_of_day|
     // if the last activity is not a user activity (e.g. video). It is unset if
     // there is no user activity before the idle event is fired.
-    absl::optional<TimeOfDay> last_user_activity_time_of_day;
+    std::optional<TimeOfDay> last_user_activity_time_of_day;
 
     // Duration of activity up to the last activity.
     base::TimeDelta recent_time_active;
@@ -76,14 +74,16 @@ class IdleEventNotifier : public PowerManagerClient::Observer,
     // Duration from the last key/mouse/touch to the time when idle event is
     // generated.  It is unset if there is no key/mouse/touch activity before
     // the idle event.
-    absl::optional<base::TimeDelta> time_since_last_key;
-    absl::optional<base::TimeDelta> time_since_last_mouse;
-    absl::optional<base::TimeDelta> time_since_last_touch;
+    std::optional<base::TimeDelta> time_since_last_key;
+    std::optional<base::TimeDelta> time_since_last_mouse;
+    std::optional<base::TimeDelta> time_since_last_touch;
     // How long recent video has been playing.
     base::TimeDelta video_playing_time;
     // Duration from when video ended. It is unset if video did not play
     // (|video_playing_time| = 0).
-    absl::optional<base::TimeDelta> time_since_video_ended;
+    std::optional<base::TimeDelta> time_since_video_ended;
+    // True if video is currently playing. False otherwise.
+    bool is_video_playing = false;
 
     int key_events_in_last_hour = 0;
     int mouse_events_in_last_hour = 0;
@@ -91,9 +91,13 @@ class IdleEventNotifier : public PowerManagerClient::Observer,
   };
 
   IdleEventNotifier(
-      PowerManagerClient* power_client,
+      chromeos::PowerManagerClient* power_client,
       ui::UserActivityDetector* detector,
       mojo::PendingReceiver<viz::mojom::VideoDetectorObserver> receiver);
+
+  IdleEventNotifier(const IdleEventNotifier&) = delete;
+  IdleEventNotifier& operator=(const IdleEventNotifier&) = delete;
+
   ~IdleEventNotifier() override;
 
   // chromeos::PowerManagerClient::Observer overrides:
@@ -153,7 +157,7 @@ class IdleEventNotifier : public PowerManagerClient::Observer,
       user_activity_observation_{this};
 
   // Last-received external power state. Changes are treated as user activity.
-  absl::optional<power_manager::PowerSupplyProperties_ExternalPower>
+  std::optional<power_manager::PowerSupplyProperties_ExternalPower>
       external_power_;
 
   base::ObserverList<Observer>::Unchecked observers_;
@@ -169,8 +173,6 @@ class IdleEventNotifier : public PowerManagerClient::Observer,
   std::unique_ptr<RecentEventsCounter> key_counter_;
   std::unique_ptr<RecentEventsCounter> mouse_counter_;
   std::unique_ptr<RecentEventsCounter> touch_counter_;
-
-  DISALLOW_COPY_AND_ASSIGN(IdleEventNotifier);
 };
 
 }  // namespace ml

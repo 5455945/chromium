@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/macros.h"
+#import "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/security_interstitials/core/controller_client.h"
 #include "ios/web/public/web_state_observer.h"
@@ -30,6 +30,12 @@ class IOSBlockingPageControllerClient
       web::WebState* web_state,
       std::unique_ptr<security_interstitials::MetricsHelper> metrics_helper,
       const std::string& app_locale);
+
+  IOSBlockingPageControllerClient(const IOSBlockingPageControllerClient&) =
+      delete;
+  IOSBlockingPageControllerClient& operator=(
+      const IOSBlockingPageControllerClient&) = delete;
+
   ~IOSBlockingPageControllerClient() override;
 
   // security_interstitials::ControllerClient implementation.
@@ -43,6 +49,9 @@ class IOSBlockingPageControllerClient
 
   const std::string& GetApplicationLocale() const override;
 
+  // security_interstitials::ControllerClient implementation.
+  void OpenUrlInNewForegroundTab(const GURL& url) override;
+
  protected:
   // The WebState passed on initialization.
   web::WebState* web_state() const { return web_state_; }
@@ -54,7 +63,6 @@ class IOSBlockingPageControllerClient
   void GoBackAfterNavigationCommitted() override;
   void Reload() override;
   void OpenUrlInCurrentTab(const GURL& url) override;
-  void OpenUrlInNewForegroundTab(const GURL& url) override;
   PrefService* GetPrefService() override;
   const std::string GetExtendedReportingPrefName() const override;
 
@@ -63,12 +71,10 @@ class IOSBlockingPageControllerClient
   // it's not possible to go back.
   void Close();
 
-  web::WebState* web_state_;
+  raw_ptr<web::WebState> web_state_;
   const std::string app_locale_;
 
   base::WeakPtrFactory<IOSBlockingPageControllerClient> weak_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOSBlockingPageControllerClient);
 };
 
 }  // namespace security_interstitials

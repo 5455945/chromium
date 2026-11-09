@@ -1,9 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -14,36 +16,38 @@
 #include "ash/shelf/shelf_view_test_api.h"
 #include "ash/shell.h"
 #include "ash/system/status_area_widget_test_helper.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
+#include "chrome/browser/ash/app_list/app_list_client_impl.h"
+#include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
+#include "chrome/browser/ash/app_list/app_list_syncable_service.h"
+#include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_service_launcher.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/ui/app_list/app_list_client_impl.h"
-#include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
-#include "chrome/browser/ui/app_list/app_list_syncable_service.h"
-#include "chrome/browser/ui/app_list/app_list_syncable_service_factory.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_shelf_id.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_test_util.h"
+#include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/metrics/arc_metrics_constants.h"
-#include "components/arc/session/arc_bridge_service.h"
-#include "components/arc/test/arc_util_test_support.h"
-#include "components/arc/test/fake_app_instance.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/exo/shell_surface.h"
 #include "components/exo/shell_surface_util.h"
 #include "components/exo/test/shell_surface_builder.h"
 #include "components/exo/wm_helper.h"
-#include "components/exo/wm_helper_chromeos.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "ui/display/types/display_constants.h"
@@ -142,7 +146,7 @@ class AppAnimatedWaiter {
 
   void Wait() {
     const base::TimeDelta threshold =
-        base::TimeDelta::FromMilliseconds(kAppAnimatedThresholdMs);
+        base::Milliseconds(kAppAnimatedThresholdMs);
     ShelfSpinnerController* controller =
         ChromeShelfController::instance()->GetShelfSpinnerController();
     while (controller->GetActiveTime(app_id_) < threshold) {
@@ -170,18 +174,24 @@ TestParameter build_test_parameter[] = {
     TestParameter(TEST_ACTION_START, true),
 };
 
-std::string CreateIntentUriWithShelfGroup(const std::string& shelf_group_id) {
-  return base::StringPrintf("#Intent;S.org.chromium.arc.shelf_group_id=%s;end",
-                            shelf_group_id.c_str());
+std::string CreateIntentUriWithShelfGroup(std::string_view shelf_group_id) {
+  return base::StrCat({
+      "#Intent;S.org.chromium.arc.shelf_group_id=",
+      shelf_group_id,
+      ";end",
+  });
 }
 
 std::string CreateIntentUriWithShelfGroupAndLogicalWindow(
-    const std::string& shelf_group_id,
-    const std::string& logical_window_id) {
-  return base::StringPrintf(
-      "#Intent;S.org.chromium.arc.logical_window_id=%s;"
-      "S.org.chromium.arc.shelf_group_id=%s;end",
-      logical_window_id.c_str(), shelf_group_id.c_str());
+    std::string_view shelf_group_id,
+    std::string_view logical_window_id) {
+  return base::StrCat({
+      "#Intent;S.org.chromium.arc.logical_window_id=",
+      logical_window_id,
+      ";S.org.chromium.arc.shelf_group_id=",
+      shelf_group_id,
+      ";end",
+  });
 }
 
 ash::ShelfItemDelegate::AppMenuItems GetAppMenuItems(
@@ -195,6 +205,10 @@ ash::ShelfItemDelegate::AppMenuItems GetAppMenuItems(
 class ArcAppShelfBrowserTest : public extensions::ExtensionBrowserTest {
  public:
   ArcAppShelfBrowserTest() = default;
+
+  ArcAppShelfBrowserTest(const ArcAppShelfBrowserTest&) = delete;
+  ArcAppShelfBrowserTest& operator=(const ArcAppShelfBrowserTest&) = delete;
+
   ~ArcAppShelfBrowserTest() override = default;
 
  protected:
@@ -218,7 +232,7 @@ class ArcAppShelfBrowserTest : public extensions::ExtensionBrowserTest {
     run_loop.Run();
 
     // Allows creation of windows.
-    wm_helper_ = std::make_unique<exo::WMHelperChromeOS>();
+    wm_helper_ = std::make_unique<exo::WMHelper>();
   }
 
   void TearDownOnMainThread() override { wm_helper_.reset(); }
@@ -244,7 +258,7 @@ class ArcAppShelfBrowserTest : public extensions::ExtensionBrowserTest {
     shortcut.name = name;
     shortcut.package_name = kTestAppPackage;
     shortcut.intent_uri = CreateIntentUriWithShelfGroup(shelf_group);
-    const std::string shortcut_id =
+    std::string shortcut_id =
         ArcAppListPrefs::GetAppId(shortcut.package_name, shortcut.intent_uri);
     app_host()->OnInstallShortcut(arc::mojom::ShortcutInfo::From(shortcut));
     base::RunLoop().RunUntilIdle();
@@ -266,7 +280,6 @@ class ArcAppShelfBrowserTest : public extensions::ExtensionBrowserTest {
     package_info.last_backup_android_id = 1;
     package_info.last_backup_time = 1;
     package_info.sync = package_synced;
-    package_info.system = false;
     app_host()->OnPackageAdded(arc::mojom::ArcPackageInfo::From(package_info));
 
     base::RunLoop().RunUntilIdle();
@@ -307,15 +320,17 @@ class ArcAppShelfBrowserTest : public extensions::ExtensionBrowserTest {
       // StopInstance().
       // TODO(hidehiko): The emulation is not implemented correctly. Fix it.
       arc_session_manager()->SetProfile(profile());
-      arc::ArcServiceLauncher::Get()->OnPrimaryUserProfilePrepared(profile());
+      arc::ArcServiceLauncher::Get()->OnPrimaryUserProfilePrepared(
+          profile(), ConsentAuditorFactory::GetForProfile(profile()));
     }
     app_instance_ = std::make_unique<arc::FakeAppInstance>(app_host());
     arc_brige_service()->app()->SetInstance(app_instance_.get());
   }
 
   void StopInstance() {
-    if (app_instance_)
+    if (app_instance_) {
       arc_brige_service()->app()->CloseInstance(app_instance_.get());
+    }
     arc_session_manager()->Shutdown();
   }
 
@@ -351,20 +366,29 @@ class ArcAppShelfBrowserTest : public extensions::ExtensionBrowserTest {
 
   arc::FakeAppInstance* arc_instance() { return app_instance_.get(); }
 
+  void SetTaskDescription(int32_t task_id, std::string_view label) {
+    app_host()->OnTaskDescriptionChanged(
+        task_id, std::string(label),
+        arc_instance()->GenerateIconResponse(kGeneratedIconSize,
+                                             /*app_icon=*/false),
+        0, 0);
+  }
+
  private:
   std::unique_ptr<arc::FakeAppInstance> app_instance_;
   std::unique_ptr<exo::WMHelper> wm_helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcAppShelfBrowserTest);
 };
 
 class ArcAppDeferredShelfBrowserTest : public ArcAppShelfBrowserTest {
  public:
   ArcAppDeferredShelfBrowserTest() = default;
-  ~ArcAppDeferredShelfBrowserTest() override = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(ArcAppDeferredShelfBrowserTest);
+  ArcAppDeferredShelfBrowserTest(const ArcAppDeferredShelfBrowserTest&) =
+      delete;
+  ArcAppDeferredShelfBrowserTest& operator=(
+      const ArcAppDeferredShelfBrowserTest&) = delete;
+
+  ~ArcAppDeferredShelfBrowserTest() override = default;
 };
 
 IN_PROC_BROWSER_TEST_F(ArcAppDeferredShelfBrowserTest,
@@ -379,7 +403,7 @@ IN_PROC_BROWSER_TEST_F(ArcAppDeferredShelfBrowserTest,
 
   ChromeShelfController* const controller = ChromeShelfController::instance();
   const std::string app_id = GetTestApp1Id(kTestAppPackage);
-  controller->PinAppWithID(app_id);
+  PinAppWithIDToShelf(app_id);
 
   aura::Window* const root_window = ash::Shell::GetPrimaryRootWindow();
   ash::ShelfViewTestAPI test_api(
@@ -419,15 +443,18 @@ class ArcAppDeferredShelfWithParamsBrowserTest
       public testing::WithParamInterface<TestParameter> {
  public:
   ArcAppDeferredShelfWithParamsBrowserTest() = default;
+
+  ArcAppDeferredShelfWithParamsBrowserTest(
+      const ArcAppDeferredShelfWithParamsBrowserTest&) = delete;
+  ArcAppDeferredShelfWithParamsBrowserTest& operator=(
+      const ArcAppDeferredShelfWithParamsBrowserTest&) = delete;
+
   ~ArcAppDeferredShelfWithParamsBrowserTest() override = default;
 
  protected:
   bool is_pinned() const { return std::get<1>(GetParam()); }
 
   TestAction test_action() const { return std::get<0>(GetParam()); }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ArcAppDeferredShelfWithParamsBrowserTest);
 };
 
 // This tests simulates normal workflow for starting ARC app in deferred mode.
@@ -442,7 +469,7 @@ IN_PROC_BROWSER_TEST_P(ArcAppDeferredShelfWithParamsBrowserTest,
   const std::string app_id = GetTestApp1Id(kTestAppPackage);
   const ash::ShelfID shelf_id(app_id);
   if (is_pinned()) {
-    controller->PinAppWithID(app_id);
+    PinAppWithIDToShelf(app_id);
     const ash::ShelfItem* item = controller->GetItem(shelf_id);
     EXPECT_EQ(kTestAppName16, item->title);
   } else {
@@ -466,7 +493,7 @@ IN_PROC_BROWSER_TEST_P(ArcAppDeferredShelfWithParamsBrowserTest,
   if (is_pinned()) {
     EXPECT_EQ(
         ash::SHELF_ACTION_NEW_WINDOW_CREATED,
-        SelectShelfItem(shelf_id, ui::ET_MOUSE_PRESSED,
+        SelectShelfItem(shelf_id, ui::EventType::kMousePressed,
                         display::kInvalidDisplayId, ash::LAUNCH_FROM_SHELF));
   } else {
     arc::LaunchApp(profile(), app_id, ui::EF_LEFT_MOUSE_BUTTON,
@@ -524,8 +551,8 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, PinOnPackageUpdateAndRemove) {
   const ash::ShelfID shelf_id1(GetTestApp1Id(kTestAppPackage));
   const ash::ShelfID shelf_id2(GetTestApp2Id(kTestAppPackage));
   ChromeShelfController* controller = ChromeShelfController::instance();
-  controller->PinAppWithID(shelf_id1.app_id);
-  controller->PinAppWithID(shelf_id2.app_id);
+  PinAppWithIDToShelf(shelf_id1.app_id);
+  PinAppWithIDToShelf(shelf_id2.app_id);
   EXPECT_TRUE(controller->GetItem(shelf_id1));
   EXPECT_TRUE(controller->GetItem(shelf_id2));
 
@@ -648,6 +675,11 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, ShelfGroup) {
 
   // Disable ARC, this removes app and as result kills shelf group 3.
   arc::SetArcPlayStoreEnabledForProfile(profile(), false);
+  // Wait for the asynchronous ArcAppListPrefs::RemoveAllAppsAndPackages to be
+  // called.
+  base::RunLoop run_loop;
+  app_prefs()->SetRemoveAllCallbackForTesting(run_loop.QuitClosure());
+  run_loop.Run();
   EXPECT_FALSE(GetShelfItemDelegate(shelf_id3));
 }
 
@@ -671,38 +703,44 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, LogicalWindow) {
 
   // We will use the following 7 windows. Index 0 is skipped because task_ids
   // start at 1.
-  const char* kTestWindowTitles[8] = {"",
-                                      kTestWindowTitle,
-                                      kTestWindowTitle2,
-                                      kTestWindowTitle,
-                                      kTestWindowTitle2,
-                                      kTestWindowTitle3,
-                                      kTestWindowTitle,
-                                      kTestWindowTitle2};
-  const char* kTestShelfGroups[8] = {"",
-                                     kTestShelfGroup,
-                                     kTestShelfGroup,
-                                     kTestShelfGroup,
-                                     kTestShelfGroup,
-                                     kTestShelfGroup,
-                                     kTestShelfGroup2,
-                                     kTestShelfGroup2};
-  const char* kTestLogicalWindows[8] = {"",
-                                        kTestLogicalWindow,
-                                        kTestLogicalWindow,
-                                        kTestLogicalWindow2,
-                                        kTestLogicalWindow2,
-                                        kTestLogicalWindow2,
-                                        kTestLogicalWindow,
-                                        kTestLogicalWindow};
+  constexpr std::array<std::string_view, 8> kTestWindowTitles = {
+      "",
+      kTestWindowTitle,
+      kTestWindowTitle2,
+      kTestWindowTitle,
+      kTestWindowTitle2,
+      kTestWindowTitle3,
+      kTestWindowTitle,
+      kTestWindowTitle2,
+  };
+  constexpr std::array<std::string_view, 8> kTestShelfGroups = {
+      "",
+      kTestShelfGroup,
+      kTestShelfGroup,
+      kTestShelfGroup,
+      kTestShelfGroup,
+      kTestShelfGroup,
+      kTestShelfGroup2,
+      kTestShelfGroup2,
+  };
+  constexpr std::array<std::string_view, 8> kTestLogicalWindows = {
+      "",
+      kTestLogicalWindow,
+      kTestLogicalWindow,
+      kTestLogicalWindow2,
+      kTestLogicalWindow2,
+      kTestLogicalWindow2,
+      kTestLogicalWindow,
+      kTestLogicalWindow,
+  };
   // Create windows that will be associated with the tasks. Without this,
   // GetAppMenuItems() will only return an empty list.
-  std::vector<std::unique_ptr<exo::ShellSurface>> test_windows;
+  std::vector<std::unique_ptr<exo::ClientControlledShellSurface>> test_windows;
 
   for (int task_id = 1; task_id <= 7; task_id++) {
     test_windows.push_back(exo::test::ShellSurfaceBuilder({640, 480})
                                .SetCentered()
-                               .BuildShellSurface());
+                               .BuildClientControlledShellSurface());
 
     aura::Window* aura_window =
         test_windows[task_id - 1]->GetWidget()->GetNativeWindow();
@@ -719,11 +757,7 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, LogicalWindow) {
                             0 /* session_id */);
   arc_instance()->set_icon_response_type(
       arc::FakeAppInstance::IconResponseType::ICON_RESPONSE_SEND_EMPTY);
-  app_host()->OnTaskDescriptionChanged(
-      1, kTestWindowTitles[1],
-      arc_instance()->GenerateIconResponse(kGeneratedIconSize,
-                                           false /* app_icon */),
-      0, 0);
+  SetTaskDescription(1, kTestWindowTitles[1]);
   WaitForDecompressTask();
   ash::ShelfItemDelegate* delegate1 = GetShelfItemDelegate(shelf_id1);
 
@@ -735,11 +769,7 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, LogicalWindow) {
                             CreateIntentUriWithShelfGroupAndLogicalWindow(
                                 kTestShelfGroups[2], kTestLogicalWindows[2]),
                             0 /* session_id */);
-  app_host()->OnTaskDescriptionChanged(
-      2, kTestWindowTitles[2],
-      arc_instance()->GenerateIconResponse(kGeneratedIconSize,
-                                           false /* app_icon */),
-      0, 0);
+  SetTaskDescription(2, kTestWindowTitles[2]);
 
   WaitForDecompressTask();
   ASSERT_EQ(delegate1, GetShelfItemDelegate(shelf_id1));
@@ -753,11 +783,7 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, LogicalWindow) {
         CreateIntentUriWithShelfGroupAndLogicalWindow(
             kTestShelfGroups[task_id], kTestLogicalWindows[task_id]),
         0 /* session_id */);
-    app_host()->OnTaskDescriptionChanged(
-        task_id, kTestWindowTitles[task_id],
-        arc_instance()->GenerateIconResponse(kGeneratedIconSize,
-                                             false /* app_icon */),
-        0, 0);
+    SetTaskDescription(task_id, kTestWindowTitles[task_id]);
   }
 
   WaitForDecompressTask();
@@ -771,11 +797,7 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, LogicalWindow) {
                             CreateIntentUriWithShelfGroupAndLogicalWindow(
                                 kTestShelfGroups[6], kTestLogicalWindows[6]),
                             0 /* session_id */);
-  app_host()->OnTaskDescriptionChanged(
-      6, kTestWindowTitles[6],
-      arc_instance()->GenerateIconResponse(kGeneratedIconSize,
-                                           false /* app_icon */),
-      0, 0);
+  SetTaskDescription(6, kTestWindowTitles[6]);
   ash::ShelfItemDelegate* delegate2 = GetShelfItemDelegate(shelf_id2);
 
   WaitForDecompressTask();
@@ -788,11 +810,7 @@ IN_PROC_BROWSER_TEST_F(ArcAppShelfBrowserTest, LogicalWindow) {
                             CreateIntentUriWithShelfGroupAndLogicalWindow(
                                 kTestShelfGroups[7], kTestLogicalWindows[7]),
                             0 /* session_id */);
-  app_host()->OnTaskDescriptionChanged(
-      7, kTestWindowTitles[7],
-      arc_instance()->GenerateIconResponse(kGeneratedIconSize,
-                                           false /* app_icon */),
-      0, 0);
+  SetTaskDescription(7, kTestWindowTitles[7]);
 
   WaitForDecompressTask();
   ASSERT_EQ(delegate2, GetShelfItemDelegate(shelf_id2));

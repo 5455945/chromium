@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,130 +7,81 @@
 
 #include <memory>
 
-#include "base/feature_list.h"
-#include "build/chromeos_buildflags.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
+#include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/connectors_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/connectors_manager_base.h"
+#include "components/enterprise/connectors/core/connectors_service_base.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/policy/core/common/policy_types.h"
-#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/browser_context.h"
 
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
+namespace storage {
+class FileSystemURL;
 }
 
 namespace enterprise_connectors {
 
-// Controls whether the Enterprise Connectors policies should be read by
-// ConnectorsManager.
-extern const base::Feature kEnterpriseConnectorsEnabled;
-
-// Controls whether per-profile Enterprise Connector policies are applied.
-extern const base::Feature kPerProfileConnectorsEnabled;
-
-// For the moment, service provider configurations are static and only support
-// google endpoints.  Therefore the configuration is placed here directly.
-// Once the configuration becomes more dynamic this static string will be
-// removed and replaced with a service to keep it up to date.
-extern const char kServiceProviderConfig[];
-
-// Accessor for the ServiceProviderConfig.
-ServiceProviderConfig* GetServiceProviderConfig();
-
 // A keyed service to access ConnectorsManager, which tracks Connector policies.
-class ConnectorsService : public KeyedService {
+class ConnectorsService : public ConnectorsServiceBase, public KeyedService {
  public:
+  using ConnectorsServiceBase::GetAnalysisSettings;
+
   ConnectorsService(content::BrowserContext* context,
-                    std::unique_ptr<ConnectorsManager> manager);
+                    std::unique_ptr<ConnectorsManagerBase> manager);
   ~ConnectorsService() override;
 
-  // Accessors that check kEnterpriseConnectorsEnabled is enabled, and then call
-  // the corresponding method in ConnectorsManager.
-  absl::optional<ReportingSettings> GetReportingSettings(
-      ReportingConnector connector);
-  absl::optional<AnalysisSettings> GetAnalysisSettings(
-      const GURL& url,
+  // Accessors that call the corresponding method in ConnectorsManager.
+  std::optional<ReportingSettings> GetReportingSettings() override;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  std::optional<AnalysisSettings> GetAnalysisSettings(
+      const storage::FileSystemURL& source_url,
+      const storage::FileSystemURL& destination_url,
       AnalysisConnector connector);
-  absl::optional<FileSystemSettings> GetFileSystemSettings(
-      const GURL& url,
-      FileSystemConnector connector);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  bool IsConnectorEnabled(AnalysisConnector connector) const;
-  bool IsConnectorEnabled(ReportingConnector connector) const;
-  bool IsConnectorEnabled(FileSystemConnector connector) const;
+  // Returns the CBCM domain or profile domain that enables connector policies.
+  // If both set Connector policies, the CBCM domain is returned as it has
+  // precedence.
+  std::string GetManagementDomain();
 
-  bool DelayUntilVerdict(AnalysisConnector connector);
-  absl::optional<std::u16string> GetCustomMessage(AnalysisConnector connector,
-                                                  const std::string& tag);
-  absl::optional<GURL> GetLearnMoreUrl(AnalysisConnector connector,
-                                       const std::string& tag);
-  bool HasCustomInfoToDisplay(AnalysisConnector connector,
-                              const std::string& tag);
-
-  std::vector<std::string> GetAnalysisServiceProviderNames(
-      AnalysisConnector connector);
-  std::vector<std::string> GetReportingServiceProviderNames(
-      ReportingConnector connector);
-
-  // DM token accessor function for real-time URL checks. Returns a profile or
-  // browser DM token depending on the policy scope, and absl::nullopt if there
-  // is no token to use.
-  absl::optional<std::string> GetDMTokenForRealTimeUrlCheck() const;
-
-  // Returns the value to used by the enterprise real-time URL check Connector
-  // if it is set and if the scope it's set at has a valid browser-profile
-  // affiliation.
-  safe_browsing::EnterpriseRealTimeUrlCheckMode GetAppliedRealTimeUrlCheck()
-      const;
-
-  // Testing functions.
-  ConnectorsManager* ConnectorsManagerForTesting();
+  // ConnectorsServiceBase:
+  std::optional<std::string> GetBrowserDmToken() const override;
+  std::unique_ptr<ClientMetadata> BuildClientMetadata(bool is_cloud) override;
 
  private:
-  struct DmToken {
-    DmToken(const std::string& value, policy::PolicyScope scope);
-    DmToken(DmToken&&);
-    DmToken& operator=(DmToken&&);
-    ~DmToken();
+  FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceProfileTypeBrowserTest, IsEnabled);
+  FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceProfileTypeBrowserTest,
+                           GetProfileEmail);
+  FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceReportingFeatureTest,
+                           ChromeOsManagedGuestSessionFlagSetInMgs);
+  FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceReportingFeatureTest,
+                           ChromeOsManagedGuestSessionFlagNotSetInUserSession);
 
-    // The value of the token to use.
-    std::string value;
-
-    // The scope of the token. This is determined by the scope of the Connector
-    // policy used to get a DM token.
-    policy::PolicyScope scope;
-  };
-
-  // Returns the DM token to use with the given |scope_pref|. That pref should
-  // contain either POLICY_SCOPE_MACHINE or POLICY_SCOPE_USER.
-  absl::optional<DmToken> GetDmToken(const char* scope_pref) const;
-  absl::optional<DmToken> GetBrowserDmToken() const;
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  absl::optional<DmToken> GetProfileDmToken() const;
-
-  // Returns true if the browser isn't managed by CBCM, otherwise this checks if
-  // the affiliations IDs from the profile and browser policy fetching responses
-  // indicate that the same customer manages both.
-  bool CanUseProfileDmToken() const;
-#endif
+  // ConnectorsServiceBase:
+  std::optional<DmToken> GetDmToken(const char* scope_pref) const override;
+  bool ConnectorsEnabled() const override;
+  PrefService* GetPrefs() override;
+  const PrefService* GetPrefs() const override;
+  policy::CloudPolicyManager* GetManagedUserCloudPolicyManager() const override;
+  bool IsURLExemptFromAnalysis(const GURL& url,
+                               AnalysisConnector connector) override;
+  bool IsProfileAffiliated() const override;
+  std::string GetProfileEmail() const override;
+  std::string GetDeviceClientId() const override;
 
   // Returns the policy::PolicyScope stored in the given |scope_pref|.
-  policy::PolicyScope GetPolicyScope(const char* scope_pref) const;
+  policy::PolicyScope GetPolicyScope(const char* scope_pref) const override;
 
-  // Returns whether Connectors are enabled at all. This can be false if:
-  // - The kEnterpriseConnectorsEnabled feature is disabled
-  // - The profile is incognito
-  bool ConnectorsEnabled() const;
+  // Returns ClientMetadata populated with minimum required information
+  std::unique_ptr<ClientMetadata> GetBasicClientMetadata(Profile* profile);
 
-  // Obtain a ClientMetadata instance corresponding to the current
-  // OnSecurityEvent policy value.
-  std::unique_ptr<ClientMetadata> BuildClientMetadata();
-
-  content::BrowserContext* context_;
-  std::unique_ptr<ConnectorsManager> connectors_manager_;
+  raw_ptr<content::BrowserContext> context_;
 };
 
 class ConnectorsServiceFactory : public BrowserContextKeyedServiceFactory {
@@ -142,10 +93,10 @@ class ConnectorsServiceFactory : public BrowserContextKeyedServiceFactory {
  private:
   ConnectorsServiceFactory();
   ~ConnectorsServiceFactory() override;
-  friend struct base::DefaultSingletonTraits<ConnectorsServiceFactory>;
+  friend base::NoDestructor<ConnectorsServiceFactory>;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;

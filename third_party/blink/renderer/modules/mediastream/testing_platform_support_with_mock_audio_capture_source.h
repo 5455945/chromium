@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,8 +17,6 @@
 
 namespace blink {
 
-namespace {
-
 class MockAudioCapturerSource : public media::AudioCapturerSource {
  public:
   MockAudioCapturerSource() = default;
@@ -28,14 +26,13 @@ class MockAudioCapturerSource : public media::AudioCapturerSource {
   MOCK_METHOD0(Start, void());
   MOCK_METHOD0(Stop, void());
   MOCK_METHOD1(SetAutomaticGainControl, void(bool enable));
+  MOCK_METHOD1(SetOutputDeviceForAec,
+               void(const std::string& output_device_id));
   void SetVolume(double volume) override {}
-  void SetOutputDeviceForAec(const std::string& output_device_id) override {}
 
- protected:
+ private:
   ~MockAudioCapturerSource() override = default;
 };
-
-}  // namespace
 
 // Test Platform implementation that overrides the known methods needed
 // by the tests, including creation of AudioCapturerSource instances.

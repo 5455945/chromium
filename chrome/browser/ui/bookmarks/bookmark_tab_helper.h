@@ -1,11 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_BOOKMARKS_BOOKMARK_TAB_HELPER_H_
 #define CHROME_BROWSER_UI_BOOKMARKS_BOOKMARK_TAB_HELPER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -14,8 +15,9 @@
 class BookmarkTabHelperObserver;
 
 namespace bookmarks {
+class BookmarkModel;
 struct BookmarkNodeData;
-}
+}  // namespace bookmarks
 
 namespace content {
 class WebContents;
@@ -36,8 +38,11 @@ class BookmarkTabHelper
     virtual void OnDrop(const bookmarks::BookmarkNodeData& data) = 0;
 
    protected:
-    virtual ~BookmarkDrag() {}
+    virtual ~BookmarkDrag() = default;
   };
+
+  BookmarkTabHelper(const BookmarkTabHelper&) = delete;
+  BookmarkTabHelper& operator=(const BookmarkTabHelper&) = delete;
 
   ~BookmarkTabHelper() override;
 
@@ -51,8 +56,6 @@ class BookmarkTabHelper
 
   bool is_starred() const { return is_starred_; }
 
-  bool ShouldShowBookmarkBar() const;
-
   void AddObserver(BookmarkTabHelperObserver* observer);
   void RemoveObserver(BookmarkTabHelperObserver* observer);
   bool HasObserver(BookmarkTabHelperObserver* observer) const;
@@ -64,24 +67,23 @@ class BookmarkTabHelper
 
   // Updates the starred state from the BookmarkModel. If the state has changed,
   // the delegate is notified.
-  void UpdateStarredStateForCurrentURL();
+  void UpdateStarredStateForCurrentURL(
+      bool is_bookmark_added_or_removed = false);
 
   // Overridden from bookmarks::BaseBookmarkModelObserver:
   void BookmarkModelChanged() override;
-  void BookmarkModelLoaded(bookmarks::BookmarkModel* model,
-                           bool ids_reassigned) override;
-  void BookmarkNodeAdded(bookmarks::BookmarkModel* model,
-                         const bookmarks::BookmarkNode* parent,
-                         size_t index) override;
-  void BookmarkNodeRemoved(bookmarks::BookmarkModel* model,
-                           const bookmarks::BookmarkNode* parent,
+  void BookmarkModelLoaded(bool ids_reassigned) override;
+  void BookmarkNodeAdded(const bookmarks::BookmarkNode* parent,
+                         size_t index,
+                         bool added_by_user) override;
+  void BookmarkNodeRemoved(const bookmarks::BookmarkNode* parent,
                            size_t old_index,
                            const bookmarks::BookmarkNode* node,
-                           const std::set<GURL>& removed_urls) override;
-  void BookmarkAllUserNodesRemoved(bookmarks::BookmarkModel* model,
-                                   const std::set<GURL>& removed_urls) override;
-  void BookmarkNodeChanged(bookmarks::BookmarkModel* model,
-                           const bookmarks::BookmarkNode* node) override;
+                           const std::set<GURL>& removed_urls,
+                           const base::Location& location) override;
+  void BookmarkAllUserNodesRemoved(const std::set<GURL>& removed_urls,
+                                   const base::Location& location) override;
+  void BookmarkNodeChanged(const bookmarks::BookmarkNode* node) override;
 
   // Overridden from content::WebContentsObserver:
   void DidStartNavigation(
@@ -92,18 +94,16 @@ class BookmarkTabHelper
   // Whether the current URL is starred.
   bool is_starred_;
 
-  bookmarks::BookmarkModel* bookmark_model_;
+  raw_ptr<bookmarks::BookmarkModel, DanglingUntriaged> bookmark_model_;
 
   // A list of observers notified when when the url starred changed.
   base::ObserverList<BookmarkTabHelperObserver>::Unchecked observers_;
 
   // The BookmarkDrag is used to forward bookmark drag and drop events to
   // extensions.
-  BookmarkDrag* bookmark_drag_;
+  raw_ptr<BookmarkDrag, AcrossTasksDanglingUntriaged> bookmark_drag_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(BookmarkTabHelper);
 };
 
 #endif  // CHROME_BROWSER_UI_BOOKMARKS_BOOKMARK_TAB_HELPER_H_

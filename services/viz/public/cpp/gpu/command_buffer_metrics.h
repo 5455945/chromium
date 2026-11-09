@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,12 +19,16 @@ namespace command_buffer_metrics {
 enum class ContextType {
   BROWSER_COMPOSITOR,
   BROWSER_MAIN_THREAD,
-  BROWSER_WORKER,
-  RENDER_COMPOSITOR,
-  RENDER_WORKER,
+  BROWSER_RASTER_WORKER,
+  RENDERER_BLINK_WORKER,
+  RENDERER_COMPOSITOR,
+  RENDERER_RASTER_WORKER,
   RENDERER_MAIN_THREAD,
+  RENDERER_MEDIA_WORKER,
   VIDEO_ACCELERATOR,
   VIDEO_CAPTURE,
+  VIDEO_TRACK_RECORDER,
+  WEBCODECS_READBACK,
   WEBGL,
   WEBGPU,
   MEDIA,

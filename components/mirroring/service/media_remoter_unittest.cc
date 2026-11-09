@@ -1,34 +1,53 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/mirroring/service/media_remoter.h"
 
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/default_tick_clock.h"
-#include "components/mirroring/service/message_dispatcher.h"
+#include "components/mirroring/mojom/cast_message_channel.mojom.h"
+#include "components/mirroring/mojom/session_parameters.mojom.h"
 #include "components/mirroring/service/mirror_settings.h"
-#include "media/cast/cast_environment.h"
+#include "components/mirroring/service/remoting_sender.h"
+#include "components/mirroring/service/rpc_dispatcher.h"
+#include "components/openscreen_platform/task_runner.h"
+#include "media/base/audio_codecs.h"
+#include "media/base/video_codecs.h"
+#include "media/cast/test/openscreen_test_helpers.h"
+#include "media/cast/test/test_with_cast_environment.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using ::testing::InvokeWithoutArgs;
-using ::testing::_;
-using ::testing::Mock;
 using media::mojom::RemotingSinkMetadata;
 using media::mojom::RemotingStopReason;
-using media::cast::RtpPayloadType;
-using media::cast::Codec;
+using mirroring::mojom::SessionType;
+using ::testing::_;
+using ::testing::InvokeWithoutArgs;
+using ::testing::Mock;
 
 namespace mirroring {
 
 namespace {
 
-class MockRemotingSource final : public media::mojom::RemotingSource {
+// Mojo handles used for managing the remoting data streams.
+struct DataStreamHandles {
+  mojo::ScopedDataPipeProducerHandle audio_producer_handle;
+  mojo::ScopedDataPipeProducerHandle video_producer_handle;
+
+  mojo::PendingRemote<media::mojom::RemotingDataStreamSender>
+      audio_stream_sender;
+  mojo::PendingRemote<media::mojom::RemotingDataStreamSender>
+      video_stream_sender;
+};
+
+class MockRemotingSource : public media::mojom::RemotingSource {
  public:
   MockRemotingSource() = default;
   ~MockRemotingSource() override = default;
@@ -36,6 +55,8 @@ class MockRemotingSource final : public media::mojom::RemotingSource {
   void Bind(mojo::PendingReceiver<media::mojom::RemotingSource> receiver) {
     receiver_.Bind(std::move(receiver));
   }
+
+  void FlushForTesting() { receiver_.FlushForTesting(); }
 
   MOCK_METHOD0(OnSinkGone, void());
   MOCK_METHOD0(OnStarted, void());
@@ -50,6 +71,16 @@ class MockRemotingSource final : public media::mojom::RemotingSource {
 
  private:
   mojo::Receiver<media::mojom::RemotingSource> receiver_{this};
+};
+
+class MockRpcDispatcher : public RpcDispatcher {
+ public:
+  MockRpcDispatcher() = default;
+  ~MockRpcDispatcher() override = default;
+
+  MOCK_METHOD2(Subscribe, void(ResponseCallback, ErrorCallback));
+  MOCK_METHOD0(Unsubscribe, void());
+  MOCK_METHOD1(SendOutboundMessage, bool(base::span<const uint8_t> message));
 };
 
 RemotingSinkMetadata DefaultSinkMetadata() {
@@ -67,19 +98,19 @@ RemotingSinkMetadata DefaultSinkMetadata() {
 
 class MediaRemoterTest : public mojom::CastMessageChannel,
                          public MediaRemoter::Client,
-                         public ::testing::Test {
+                         public media::cast::TestWithCastEnvironment {
  public:
-  MediaRemoterTest()
-      : message_dispatcher_(receiver_.BindNewPipeAndPassRemote(),
-                            inbound_channel_.BindNewPipeAndPassReceiver(),
-                            error_callback_.Get()),
-        sink_metadata_(DefaultSinkMetadata()) {}
+  MediaRemoterTest() : sink_metadata_(DefaultSinkMetadata()) {}
+
+  MediaRemoterTest(MediaRemoterTest&&) = delete;
   MediaRemoterTest(const MediaRemoterTest&) = delete;
   MediaRemoterTest& operator=(const MediaRemoterTest&) = delete;
-  ~MediaRemoterTest() override { task_environment_.RunUntilIdle(); }
+  MediaRemoterTest& operator=(MediaRemoterTest&&) = delete;
+  ~MediaRemoterTest() override = default;
 
  protected:
-  MOCK_METHOD1(Send, void(mojom::CastMessagePtr));
+  // mojom::CastMessageChannel mock implementation (inbound messages).
+  MOCK_METHOD1(OnMessage, void(mojom::CastMessagePtr));
   MOCK_METHOD0(OnConnectToRemotingSource, void());
   MOCK_METHOD0(RequestRemotingStreaming, void());
   MOCK_METHOD0(RestartMirroringStreaming, void());
@@ -94,13 +125,37 @@ class MediaRemoterTest : public mojom::CastMessageChannel,
     OnConnectToRemotingSource();
   }
 
+  std::unique_ptr<media::mojom::RemotingDataStreamSender>
+  CreateRemotingDataStreamSender(
+      bool is_audio,
+      mojo::ScopedDataPipeConsumerHandle pipe,
+      mojo::PendingReceiver<media::mojom::RemotingDataStreamSender> receiver,
+      base::OnceClosure error_callback) override {
+    if (!openscreen_test_senders_) {
+      return nullptr;
+    }
+    auto& sender = is_audio ? openscreen_test_senders_->audio_sender
+                            : openscreen_test_senders_->video_sender;
+    if (!sender) {
+      return nullptr;
+    }
+
+    MirrorSettings mirror_settings(/*target_playout_delay=*/std::nullopt);
+    auto config =
+        is_audio ? mirror_settings.GetAudioConfig(media::AudioCodec::kUnknown)
+                 : mirror_settings.GetVideoConfig(media::VideoCodec::kUnknown);
+    return std::make_unique<RemotingSender>(
+        cast_environment(), std::move(sender), config, std::move(pipe),
+        std::move(receiver), std::move(error_callback));
+  }
+
   void CreateRemoter() {
     EXPECT_FALSE(media_remoter_);
-    EXPECT_CALL(*this, OnConnectToRemotingSource()).Times(1);
-    EXPECT_CALL(remoting_source_, OnSinkAvailable(_)).Times(1);
-    media_remoter_ = std::make_unique<MediaRemoter>(this, sink_metadata_,
-                                                    &message_dispatcher_);
-    task_environment_.RunUntilIdle();
+    EXPECT_CALL(*this, OnConnectToRemotingSource());
+    EXPECT_CALL(remoting_source_, OnSinkAvailable(_));
+    media_remoter_ =
+        std::make_unique<MediaRemoter>(*this, sink_metadata_, rpc_dispatcher_);
+    RunUntilIdle();
     Mock::VerifyAndClear(this);
     Mock::VerifyAndClear(&remoting_source_);
   }
@@ -108,21 +163,21 @@ class MediaRemoterTest : public mojom::CastMessageChannel,
   // Requests to start a remoting session.
   void StartRemoting() {
     ASSERT_TRUE(remoter_);
-    EXPECT_CALL(*this, RequestRemotingStreaming()).Times(1);
+    EXPECT_CALL(*this, RequestRemotingStreaming());
     remoter_->Start();
-    task_environment_.RunUntilIdle();
+    RunUntilIdle();
     Mock::VerifyAndClear(this);
   }
 
   // Stops the current remoting session.
   void StopRemoting() {
     ASSERT_TRUE(remoter_);
-    EXPECT_CALL(remoting_source_, OnStopped(RemotingStopReason::USER_DISABLED))
-        .Times(1);
-    EXPECT_CALL(remoting_source_, OnSinkGone()).Times(1);
-    EXPECT_CALL(*this, RestartMirroringStreaming()).Times(1);
+    EXPECT_CALL(remoting_source_, OnStopped(RemotingStopReason::USER_DISABLED));
+    EXPECT_CALL(remoting_source_, OnSinkGone());
+    EXPECT_CALL(rpc_dispatcher_, Unsubscribe());
+    EXPECT_CALL(*this, RestartMirroringStreaming());
     remoter_->Stop(media::mojom::RemotingStopReason::USER_DISABLED);
-    task_environment_.RunUntilIdle();
+    RunUntilIdle();
     Mock::VerifyAndClear(this);
     Mock::VerifyAndClear(&remoting_source_);
   }
@@ -130,58 +185,136 @@ class MediaRemoterTest : public mojom::CastMessageChannel,
   // Signals that a remoting streaming session starts successfully.
   void RemotingStreamingStarted() {
     ASSERT_TRUE(media_remoter_);
-    scoped_refptr<media::cast::CastEnvironment> cast_environment =
-        new media::cast::CastEnvironment(
-            base::DefaultTickClock::GetInstance(),
-            task_environment_.GetMainThreadTaskRunner(),
-            task_environment_.GetMainThreadTaskRunner(),
-            task_environment_.GetMainThreadTaskRunner());
-    EXPECT_CALL(remoting_source_, OnStarted()).Times(1);
-    media_remoter_->StartRpcMessaging(
-        cast_environment, nullptr, media::cast::FrameSenderConfig(),
-        MirrorSettings::GetDefaultVideoConfig(RtpPayloadType::REMOTE_VIDEO,
-                                              Codec::CODEC_VIDEO_REMOTE));
-    task_environment_.RunUntilIdle();
+
+    // Cannot have two instances of test senders at once.
+    openscreen_test_senders_.reset();
+    openscreen_test_senders_ =
+        std::make_unique<media::cast::OpenscreenTestSenders>(
+            media::cast::OpenscreenTestSenders::Config(
+                base::SequencedTaskRunner::GetCurrentDefault(),
+                GetMockTickClock(),
+                openscreen::cast::RtpPayloadType::kAudioVarious,
+                openscreen::cast::RtpPayloadType::kVideoVarious));
+    media_remoter_->OnRemotingStarted();
+    RunUntilIdle();
     Mock::VerifyAndClear(&remoting_source_);
   }
 
   // Signals that mirroring is resumed successfully.
-  void MirroringResumed() {
-    EXPECT_CALL(remoting_source_, OnSinkAvailable(_)).Times(1);
+  void MirroringResumed(bool is_remoting_disabled) {
+    // When MediaRemoter is in the REMOTING_DISABLED state, it should not notify
+    // its remoting_source_ about available sinks.
+    EXPECT_CALL(remoting_source_, OnSinkAvailable(_))
+        .Times(is_remoting_disabled ? 0 : 1);
     media_remoter_->OnMirroringResumed();
-    task_environment_.RunUntilIdle();
+    RunUntilIdle();
     Mock::VerifyAndClear(&remoting_source_);
   }
 
   // Signals that remoting session failed to start.
   void RemotingStartFailed() {
     ASSERT_TRUE(media_remoter_);
-    EXPECT_CALL(remoting_source_, OnStartFailed(_)).Times(1);
-    EXPECT_CALL(remoting_source_, OnSinkGone()).Times(1);
-    EXPECT_CALL(*this, RestartMirroringStreaming()).Times(1);
+    EXPECT_CALL(remoting_source_, OnStartFailed(_));
+    EXPECT_CALL(remoting_source_, OnSinkGone());
+    EXPECT_CALL(*this, RestartMirroringStreaming());
     media_remoter_->OnRemotingFailed();
-    task_environment_.RunUntilIdle();
+    RunUntilIdle();
     Mock::VerifyAndClear(this);
     Mock::VerifyAndClear(&remoting_source_);
   }
 
+  void StartDataStreams(SessionType session_type) {
+    static constexpr int kDataPipeCapacity = 1000;
+    data_stream_handles_ = std::make_unique<DataStreamHandles>();
+    mojo::ScopedDataPipeConsumerHandle audio_consumer_handle;
+    mojo::ScopedDataPipeConsumerHandle video_consumer_handle;
+
+    if (session_type != SessionType::VIDEO_ONLY) {
+      EXPECT_EQ(MOJO_RESULT_OK, mojo::CreateDataPipe(
+                                    kDataPipeCapacity,
+                                    data_stream_handles_->audio_producer_handle,
+                                    audio_consumer_handle));
+    }
+
+    if (session_type != SessionType::AUDIO_ONLY) {
+      EXPECT_EQ(MOJO_RESULT_OK, mojo::CreateDataPipe(
+                                    kDataPipeCapacity,
+                                    data_stream_handles_->video_producer_handle,
+                                    video_consumer_handle));
+    }
+
+    remoter_->StartDataStreams(std::move(audio_consumer_handle),
+                               std::move(video_consumer_handle),
+                               (session_type != SessionType::VIDEO_ONLY)
+                                   ? data_stream_handles_->audio_stream_sender
+                                         .InitWithNewPipeAndPassReceiver()
+                                   : mojo::NullReceiver(),
+                               (session_type != SessionType::AUDIO_ONLY)
+                                   ? data_stream_handles_->video_stream_sender
+                                         .InitWithNewPipeAndPassReceiver()
+                                   : mojo::NullReceiver());
+  }
+
+  testing::StrictMock<MockRemotingSource>& remoting_source() {
+    return remoting_source_;
+  }
+
+  testing::StrictMock<MockRpcDispatcher>& rpc_dispatcher() {
+    return rpc_dispatcher_;
+  }
+
+  mojo::Remote<media::mojom::Remoter>& remoter() { return remoter_; }
+
  private:
-  base::test::TaskEnvironment task_environment_;
+  base::test::ScopedFeatureList feature_list_;
   mojo::Receiver<mojom::CastMessageChannel> receiver_{this};
-  base::MockCallback<MessageDispatcher::ErrorCallback> error_callback_;
   mojo::Remote<mojom::CastMessageChannel> inbound_channel_;
-  MessageDispatcher message_dispatcher_;
+  testing::StrictMock<MockRpcDispatcher> rpc_dispatcher_;
   const media::mojom::RemotingSinkMetadata sink_metadata_;
-  MockRemotingSource remoting_source_;
+  testing::StrictMock<MockRemotingSource> remoting_source_;
   mojo::Remote<media::mojom::Remoter> remoter_;
+
+  // Configured for use by the media remoter.
+  std::unique_ptr<media::cast::OpenscreenTestSenders> openscreen_test_senders_;
+  std::unique_ptr<DataStreamHandles> data_stream_handles_;
   std::unique_ptr<MediaRemoter> media_remoter_;
 };
 
 TEST_F(MediaRemoterTest, StartAndStopRemoting) {
   CreateRemoter();
   StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _));
   RemotingStreamingStarted();
+  StartDataStreams(SessionType::AUDIO_AND_VIDEO);
   StopRemoting();
+}
+
+TEST_F(MediaRemoterTest, StartAndStopRemotingAudioOnly) {
+  CreateRemoter();
+  StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _));
+  RemotingStreamingStarted();
+  StartDataStreams(SessionType::AUDIO_ONLY);
+  StopRemoting();
+}
+
+TEST_F(MediaRemoterTest, StartAndStopRemotingVideoOnly) {
+  CreateRemoter();
+  StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _));
+  RemotingStreamingStarted();
+  StartDataStreams(SessionType::VIDEO_ONLY);
+  StopRemoting();
+}
+
+TEST_F(MediaRemoterTest, StartRemotingWithoutCallingStart) {
+  CreateRemoter();
+  // Should fail since we didn't call `StartRemoting().`
+  EXPECT_CALL(remoting_source(), OnStarted()).Times(0);
+  RemotingStreamingStarted();
 }
 
 TEST_F(MediaRemoterTest, StopRemotingWhileStarting) {
@@ -192,15 +325,20 @@ TEST_F(MediaRemoterTest, StopRemotingWhileStarting) {
   StopRemoting();
 
   // Signals that successfully switch to mirroring.
-  MirroringResumed();
+  MirroringResumed(/* is_remoting_disabled */ false);
   // Now remoting can be started again.
   StartRemoting();
+  EXPECT_CALL(*this, RestartMirroringStreaming());
+
+  // Called when MediaRemoter is destroyed.
+  EXPECT_CALL(rpc_dispatcher(), Unsubscribe());
 }
 
 TEST_F(MediaRemoterTest, RemotingStartFailed) {
   CreateRemoter();
   StartRemoting();
   RemotingStartFailed();
+  MirroringResumed(/* is_remoting_disabled */ true);
 }
 
 TEST_F(MediaRemoterTest, SwitchBetweenMultipleSessions) {
@@ -208,19 +346,80 @@ TEST_F(MediaRemoterTest, SwitchBetweenMultipleSessions) {
 
   // Start a remoting session.
   StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _));
   RemotingStreamingStarted();
+  StartDataStreams(SessionType::AUDIO_AND_VIDEO);
 
   // Stop the remoting session and switch to mirroring.
   StopRemoting();
-  MirroringResumed();
+  MirroringResumed(/* is_remoting_disabled */ false);
 
   // Switch to remoting again.
   StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _));
   RemotingStreamingStarted();
+  StartDataStreams(SessionType::AUDIO_AND_VIDEO);
 
   // Switch to mirroring again.
   StopRemoting();
-  MirroringResumed();
+  MirroringResumed(/* is_remoting_disabled */ false);
+}
+
+TEST_F(MediaRemoterTest, ReceivesRpcMessagesAndSendsOutboundMessages) {
+  CreateRemoter();
+  StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  RpcDispatcher::ResponseCallback response_callback;
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _))
+      .WillOnce(
+          [&response_callback](RpcDispatcher::ResponseCallback cb,
+                               RpcDispatcher::ErrorCallback /*error_cb*/) {
+            response_callback = std::move(cb);
+          });
+  RemotingStreamingStarted();
+
+  ASSERT_TRUE(response_callback);
+  const std::vector<uint8_t> kInboundMessage{1, 2, 3, 4};
+  EXPECT_CALL(remoting_source(), OnMessageFromSink(kInboundMessage));
+  response_callback.Run(kInboundMessage);
+  remoting_source().FlushForTesting();
+
+  const std::vector<uint8_t> kOutboundMessage{5, 6, 7, 8};
+  EXPECT_CALL(rpc_dispatcher(),
+              SendOutboundMessage(testing::ElementsAre(5, 6, 7, 8)))
+      .WillOnce(testing::Return(true));
+  remoter()->SendMessageToSink(kOutboundMessage);
+  remoter().FlushForTesting();
+
+  StopRemoting();
+}
+
+TEST_F(MediaRemoterTest, RpcErrorStopsRemoting) {
+  CreateRemoter();
+  StartRemoting();
+  EXPECT_CALL(remoting_source(), OnStarted());
+  RpcDispatcher::ErrorCallback error_callback;
+  EXPECT_CALL(rpc_dispatcher(), Subscribe(_, _))
+      .WillOnce([&error_callback](RpcDispatcher::ResponseCallback /*cb*/,
+                                  RpcDispatcher::ErrorCallback error_cb) {
+        error_callback = std::move(error_cb);
+      });
+  RemotingStreamingStarted();
+  StartDataStreams(SessionType::AUDIO_AND_VIDEO);
+
+  ASSERT_TRUE(error_callback);
+  EXPECT_CALL(remoting_source(),
+              OnStopped(RemotingStopReason::MESSAGE_SEND_FAILED));
+  EXPECT_CALL(remoting_source(), OnSinkGone());
+  EXPECT_CALL(rpc_dispatcher(), Unsubscribe());
+  EXPECT_CALL(*this, RestartMirroringStreaming());
+  error_callback.Run();
+  remoting_source().FlushForTesting();
+
+  // Mirroring is resumed, but remoting should remain disabled.
+  MirroringResumed(/* is_remoting_disabled */ true);
 }
 
 }  // namespace mirroring
